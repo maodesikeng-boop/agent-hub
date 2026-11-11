@@ -99,6 +99,8 @@ export interface RouterDispatcher {
     commandId: RouterCommandId,
     payload: RouterAgentDispatchInput,
   ): Promise<{ text: string; data: unknown }>;
+  /** 有没有规划中、排队等槽位或在途分派的指令（热重启等全库空闲时看，daemon/self-reload.ts）。 */
+  busy(): boolean;
   close(): Promise<void>;
 }
 
@@ -1288,6 +1290,10 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
         state.inflight.delete(run);
         if (isMutating) state.pendingMutations--;
       }
+    },
+
+    busy(): boolean {
+      return runningPipelines.size > 0 || activeStates.size > 0 || trackBWaiters.length > 0 || runningTrackB > 0;
     },
 
     async close(): Promise<void> {

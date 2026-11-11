@@ -1149,6 +1149,51 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
     });
   });
 
+  describe("hub self-reload", () => {
+    it("项目经理登记成功立即返回；--build 原样带上；Worker 调被拒（退出码 rejected）；多余参数是用法错", async () => {
+      const calls: Array<{ sessionId: number; build: boolean }> = [];
+      const runDir2 = join(dir, "run-sr");
+      const api2 = await startAgentApi({
+        ledger,
+        tokens,
+        runDir: runDir2,
+        hubSock: join(runDir2, "hub.sock"),
+        selfReload: (input) => {
+          calls.push(input);
+          return { text: "已登记空闲排空热重启", data: null };
+        },
+      });
+      try {
+        ledger.sessionRoles.set(951, "pm");
+        ledger.sessionRoles.set(952, "worker");
+        const pmEnv = { [ENV_HUB_TOKEN]: tokens.issue(951), [ENV_HUB_SOCK]: api2.socketPath, HOME: home };
+        const workerEnv = { [ENV_HUB_TOKEN]: tokens.issue(952), [ENV_HUB_SOCK]: api2.socketPath, HOME: home };
+
+        const r1 = await hub(["self-reload"], { env: pmEnv });
+        expect(r1.code).toBe(HUB_EXIT.ok);
+        expect(r1.stdout).toBe("已登记空闲排空热重启\n");
+        const r2 = await hub(["self-reload", "--build"], { env: pmEnv });
+        expect(r2.code).toBe(HUB_EXIT.ok);
+        expect(calls).toEqual([
+          { sessionId: 951, build: false },
+          { sessionId: 951, build: true },
+        ]);
+
+        const denied = await hub(["self-reload"], { env: workerEnv });
+        expect(denied.code).toBe(HUB_EXIT.rejected);
+        expect(denied.stderr).toContain("只有项目经理");
+        expect(calls).toHaveLength(2);
+
+        const usage = await hub(["self-reload", "now"], { env: pmEnv });
+        expect(usage.code).toBe(HUB_EXIT.usage);
+        expect(usage.stderr).toContain("self-reload [--build]");
+        expect(HUB_USAGE).toContain("self-reload [--build]");
+      } finally {
+        await api2.close();
+      }
+    });
+  });
+
   describe("hub dispatch (Router Track B dedicated CLI)", () => {
     it("routes all 7 dispatch subcommands to /v1/router.dispatch without touching stdin on --verbatim", async () => {
       const dispatches: Array<{ sessionId: number; commandId: number; payload: unknown }> = [];

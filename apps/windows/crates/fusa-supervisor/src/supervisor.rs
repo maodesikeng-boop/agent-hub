@@ -1643,7 +1643,39 @@ where
             self.stop_owned_entry(entry);
         }
 
+        // 守护进程空闲排空后主动请求热重启（hub self-reload）：立即拉起新进程，不记崩溃、不退避、不计入熔断窗口
+        if proxy_exit_code == Some(self.contract.reload_exit_code) {
+            self.relaunch_after_reload(generation);
+            return;
+        }
+
         let _ = self.record_crash_and_maybe_schedule_restart(generation, proxy_exit_code);
+    }
+
+    fn relaunch_after_reload(self: &Arc<Self>, expected_gen: u64) {
+        let next_gen = {
+            let mut g = self.inner.lock().unwrap();
+            if g.shutdown_requested || !g.auto_restart_enabled || g.restart_generation != expected_gen
+            {
+                return;
+            }
+            g.ownership = DaemonOwnership::None;
+            g.session_cookie = None;
+            g.restart_generation = g.restart_generation.wrapping_add(1);
+            g.restart_generation
+        };
+        self.log_supervisor_event("自有守护进程空闲排空后请求热重启，立即拉起新进程");
+        let sup = Arc::clone(self);
+        thread::spawn(move || {
+            if !sup.is_generation_active(next_gen) {
+                return;
+            }
+            let _op_guard = sup.lifecycle_op_lock.lock().unwrap();
+            if !sup.is_generation_active(next_gen) {
+                return;
+            }
+            let _ = sup.start_for_generation_locked(next_gen);
+        });
     }
 
     fn record_crash_and_maybe_schedule_restart(

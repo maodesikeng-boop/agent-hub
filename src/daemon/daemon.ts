@@ -40,6 +40,7 @@ import {
 import type { HubPaths } from "../shared/paths.ts";
 import { LOG_PREFIX } from "../shared/names.ts";
 import { startWorkerRetention } from "./db-retention.ts";
+import { createBusySessions, createSelfReload, createStagedWebBuild, type SelfReloadController } from "./self-reload.ts";
 import { startFileCleanup } from "./file-cleanup.ts";
 import { createHandoverRunner, type HandoverRunner } from "./handover/runner.ts";
 import { startWorktreeCleanup, type WorktreeCleanup } from "./worktree-cleanup.ts";
@@ -115,6 +116,10 @@ import {
 
 /** 网页打包产物（pnpm build 的输出）。 */
 export const DEFAULT_STATIC_DIR = fileURLToPath(new URL("../../dist/web", import.meta.url));
+/** 仓库根目录（hub self-reload --build 在这里跑 pnpm build）。 */
+const REPO_DIR = fileURLToPath(new URL("../..", import.meta.url));
+/** 热重启构建网页的日志（state/logs/ 下）。 */
+const SELF_RELOAD_BUILD_LOG = "self-reload-build.log";
 
 export interface DaemonOptions {
   env?: Record<string, string | undefined>;
@@ -127,6 +132,11 @@ export interface DaemonOptions {
   autoRenew?: LedgerOptions["autoRenew"];
   /** 联机：认本机回环网址当设备网址（同机两个守护进程互相配对）。只给测试入口 test/e2e/loopback-daemon.ts，正式入口不传、没有环境变量开关。 */
   allowLoopbackPeers?: boolean;
+  /**
+   * 空闲排空热重启（hub self-reload、POST /api/self-reload）排空到点后调它：entry.ts 正常关机，以 apps/desktop/contract.json 的
+   * reloadExitCode 退出，由外壳（Fusa.app、Windows 桌面端、systemd）立即拉起。不给 = 没有外壳监管，不接受热重启（409）。
+   */
+  onSelfReload?: () => void;
 }
 
 export interface RunningDaemon {
@@ -191,6 +201,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     stopFileCleanup?: () => void;
     stopWorkerRetention?: () => void;
     sleepInhibitor?: SleepInhibitor;
+    selfReload?: SelfReloadController;
     unsubscribe: Unsubscribe[];
   } = { unsubscribe: [] };
   const step = async (what: string, fn: () => unknown) => {
@@ -202,6 +213,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
   };
   const shutdown = async () => {
     const { scheduler, autoRenew, archiveCleanup, worktreeCleanup, handoverRunner, setup, executor, driver, models, commands, ui, peers, tunnel, tunnelAdmin, agentApi, db, lock } = parts;
+    // 热重启的定时器、构建先停（关机由它触发时它已在 restarting，只清订阅）
+    parts.selfReload?.close();
     if (scheduler) clearInterval(scheduler);
     if (autoRenew) clearInterval(autoRenew);
     if (archiveCleanup) clearInterval(archiveCleanup);
@@ -333,9 +346,12 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     // 有会话在干活时起 caffeinate 防闲置睡眠，全部闲下来过宽限期再结束（daemon/platform/sleep.ts）
     const sleepInhibitor = createSleepInhibitor();
     parts.sleepInhibitor = sleepInhibitor;
+    // 热重启等全库空闲：正在干活的会话按同一串 session.status 记（daemon/self-reload.ts）
+    const busySessions = createBusySessions();
     parts.unsubscribe.push(
       ledger.onChange((change) => {
         if (change.type === "session.status") sleepInhibitor.onSessionStatus(change.data.session);
+        if (change.type === "session.status" || change.type === "session.created") busySessions.onSessionStatus(change.data.session);
       }),
     );
     // 3. agent 接口（run/ 0700、删残留 socket、hub.sock 0600）和 hub 外壳，在执行器之前起。
@@ -355,6 +371,15 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       vendorUsable: (vendor) => models.ensureUsable(vendor),
       deviceName: () => device.name,
       sandboxGuard,
+      ...(options.onSelfReload
+        ? {
+            selfReload: ({ sessionId, build }: { sessionId: number; build: boolean }) => {
+              if (!parts.selfReload) throw new LedgerRequestError("conflict", "守护进程还没启动完，稍后再试");
+              const result = parts.selfReload.request({ build, by: `项目经理会话 ${sessionId}` });
+              return { text: result.text, data: result.status };
+            },
+          }
+        : {}),
       onRouterDispatch: async (sessionId, commandId, payload) => {
         if (!parts.routerDispatcher) throw new LedgerRequestError("conflict", "总助分派引擎尚未就绪");
         return parts.routerDispatcher.handleAgentDispatch(sessionId, commandId, payload);
@@ -645,6 +670,28 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       log,
     });
     parts.routerDispatcher = routerDispatcher;
+    // 空闲排空热重启：有外壳监管（entry.ts 给了 onSelfReload）才建；带 --build 时网页构建到暂存目录，重启前才换上线
+    if (options.onSelfReload) {
+      const onSelfReload = options.onSelfReload;
+      const webBuild = createStagedWebBuild({ repoDir: REPO_DIR, staticDir, logPath: join(paths.logsDir, SELF_RELOAD_BUILD_LOG) });
+      parts.selfReload = createSelfReload({
+        busyReasons: () => {
+          const reasons: string[] = [];
+          const sessionsBusy = busySessions.count();
+          if (sessionsBusy > 0) reasons.push(`${sessionsBusy} 个会话还在跑、停止中、准备中或等后台命令`);
+          if (routerDispatcher.busy()) reasons.push("总助分派引擎有规划中或在途分派");
+          if (handoverRunner.busy()) reasons.push("后台在写交接");
+          if (db.get("SELECT 1 AS x FROM actions WHERE status = 'running' OR (status = 'pending' AND next_attempt_at <= ?) LIMIT 1", Date.now()) !== undefined) {
+            reasons.push("执行器有待执行的动作");
+          }
+          return reasons;
+        },
+        subscribe: (listener) => ledger.onChange(listener),
+        ...(webBuild ? { build: (signal: AbortSignal) => webBuild.build(signal), applyBuild: () => webBuild.apply() } : {}),
+        restart: onSelfReload,
+        log,
+      });
+    }
     parts.ui = await startUiServer({
       ledger,
       token,
@@ -665,6 +712,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       tunnel,
       routerDispatcher,
       routerLocalPort,
+      ...(parts.selfReload ? { selfReload: parts.selfReload } : {}),
       publicSock: paths.publicSock,
       publicEntryFile: paths.publicEntryFile,
       peerEntry: {

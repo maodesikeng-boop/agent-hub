@@ -11,6 +11,8 @@
   "crashBackoffMs": [1000, 2000, 4000, 8000, 16000, 30000],
   "crashWindowMs": 60000,
   "maxCrashesInWindow": 5,
+  "reloadExitCode": 75,
+  "supervisedEnv": "AGENT_HUB_SUPERVISED",
   "logRelativePath": "state/logs/desktop-daemon.log",
   "logMaxBytes": 2097152,
   "logRotatedFiles": 1,

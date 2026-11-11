@@ -13,6 +13,7 @@ import {
   type Attachment,
   type WorkerPick,
 } from "../shared/index.ts";
+import { registerDraftSource, takeRestoredDraft, trackUpload } from "./auto-reload.ts";
 import { localClient, type HubClient } from "./client.ts";
 import { ErrorNotice, errorText, newClientId, type ErrorLike } from "./format.ts";
 
@@ -264,6 +265,8 @@ export function useStagingStore<K extends string | number>() {
         track: (result) => {
           update(key, (s) => (s.notice === null ? s : { ...s, notice: null }));
           if (result === undefined) return;
+          // 上传、发送没结束前不自动刷新（auto-reload.ts）
+          trackUpload(result);
           update(key, (s) => ({ ...s, busy: true }));
           result
             .catch((err: unknown) => {
@@ -326,8 +329,10 @@ export function useDraftStore<K extends string | number>() {
     for (const [k, prev] of slotsRef.current) {
       if (k !== key) prev.gc();
     }
-    const store = createStore<string>(() => "");
-    const pick = createStore<WorkerPick | null>(() => null);
+    // 守护进程热重启后自动刷新前存下的草稿（auto-reload.ts）：建槽时认领回来
+    const restored = takeRestoredDraft(String(key));
+    const store = createStore<string>(() => restored?.text ?? "");
+    const pick = createStore<WorkerPick | null>(() => restored?.pick ?? null);
     const focusRev = createStore<number>(() => 0);
     let subs = 0;
     const gc = () => {
@@ -387,6 +392,15 @@ export function useDraftStore<K extends string | number>() {
     slotsRef.current.set(key, entry);
     return slot;
   }, []);
+
+  // 自动刷新、关页面前把所有草稿槽交给 auto-reload.ts 存进 sessionStorage
+  useEffect(
+    () =>
+      registerDraftSource(() =>
+        [...slotsRef.current].map(([key, { slot }]) => [String(key), { text: slot.get(), pick: slot.getPick() }] as const),
+      ),
+    [],
+  );
 
   /** 对话删除后清掉它的草稿和标签。 */
   const retain = useCallback((keep: (key: K) => boolean) => {

@@ -505,6 +505,8 @@ enum SupervisorTestsMain {
             crashBackoffMs: decodedContract.crashBackoffMs,
             crashWindowMs: decodedContract.crashWindowMs,
             maxCrashesInWindow: decodedContract.maxCrashesInWindow,
+            reloadExitCode: decodedContract.reloadExitCode,
+            supervisedEnv: decodedContract.supervisedEnv,
             logRelativePath: decodedContract.logRelativePath,
             logMaxBytes: decodedContract.logMaxBytes,
             logRotatedFiles: decodedContract.logRotatedFiles,
@@ -540,6 +542,55 @@ enum SupervisorTestsMain {
         check(waitUntil(timeout: 2.0) { kill(hungPid, 0) != 0 }, "hungPid must be killed after stopGraceMs")
         check(kill(mockServerPid, 0) == 0, "unrelated external mock server must still be untouched!")
 
+        // MARK: - 3b. 热重启退出码（hub self-reload）：立即拉起新进程，不记崩溃、不进退避
+
+        let reloadPort = findFreePort()
+        let reloadEntry = (tempRoot as NSString).appendingPathComponent("reload-once.mjs")
+        let reloadMarker = (tempRoot as NSString).appendingPathComponent("reload-marker.txt")
+        try! """
+        import { createServer } from "node:http";
+        import { randomUUID } from "node:crypto";
+        import { appendFileSync, existsSync } from "node:fs";
+
+        setInterval(() => { if (process.ppid === 1) process.exit(0); }, 100).unref();
+        const marker = process.env.FAKE_RELOAD_MARKER;
+        const first = !existsSync(marker);
+        appendFileSync(marker, `start:${process.pid}:${process.env.\(decodedContract.supervisedEnv) ?? ""}\\n`);
+        const instanceId = randomUUID();
+        const server = createServer((req, res) => {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ status: "unauthenticated", product: "fusa", protocolVersion: 1, instanceId }));
+        });
+        server.listen(Number(process.env.AGENT_HUB_PORT), "127.0.0.1");
+        if (first) setTimeout(() => server.close(() => process.exit(\(decodedContract.reloadExitCode))), 300);
+        process.on("SIGTERM", () => server.close(() => process.exit(0)));
+        """.write(toFile: reloadEntry, atomically: true, encoding: .utf8)
+        setenv("AGENT_HUB_PORT", String(reloadPort), 1)
+        setenv("AGENT_HUB_DAEMON_ENTRY", reloadEntry, 1)
+        setenv("FAKE_RELOAD_MARKER", reloadMarker, 1)
+
+        let reloadSup = DaemonSupervisor(homeDir: (tempRoot as NSString).appendingPathComponent("home-reload"), port: reloadPort)
+        var reloadSawCrashState = false
+        reloadSup.onStateChange = { state, _ in
+            if case .running = state { return }
+            reloadSawCrashState = true
+        }
+        var reloadStarted = false
+        reloadSup.ensureRunning { if case .success = $0 { reloadStarted = true } }
+        check(waitUntil(timeout: 10.0) { reloadStarted }, "reloadSup initial start failed")
+        let reloadFirstPid = reloadSup.currentPid!
+        check(waitUntil(timeout: 10.0) {
+            if let pid = reloadSup.currentPid, pid != reloadFirstPid, case .owned = reloadSup.currentOwnership { return true }
+            return false
+        }, "supervisor must relaunch immediately after reload exit code")
+        let reloadLines = (try? String(contentsOfFile: reloadMarker, encoding: .utf8))?.split(separator: "\n") ?? []
+        check(reloadLines.count == 2, "reload entry should start exactly twice, got \(reloadLines)")
+        check(reloadLines.allSatisfy { $0.hasSuffix(":fusa-macos") }, "supervised env must be set for the daemon: \(reloadLines)")
+        check(!reloadSawCrashState, "reload exit must not be reported as crash / backoff")
+        var reloadStopped = false
+        reloadSup.stopOwned { reloadStopped = true }
+        check(waitUntil(timeout: 5.0) { reloadStopped }, "reloadSup stop failed")
+
         // MARK: - 4. 快速连续崩溃退避序列与窗口上限
 
         let crashPort = findFreePort()
@@ -567,6 +618,8 @@ enum SupervisorTestsMain {
             crashBackoffMs: [100, 200, 400, 800, 1600, 3000],
             crashWindowMs: 60_000,
             maxCrashesInWindow: 5,
+            reloadExitCode: decodedContract.reloadExitCode,
+            supervisedEnv: decodedContract.supervisedEnv,
             logRelativePath: decodedContract.logRelativePath,
             logMaxBytes: decodedContract.logMaxBytes,
             logRotatedFiles: decodedContract.logRotatedFiles,

@@ -29,6 +29,7 @@ import {
   type WorkspaceProbe,
 } from "../../shared/index.ts";
 import { API_ERRORS } from "../../shared/errors.ts";
+import { SELF_RELOAD_AGENT_PATH, SELF_RELOAD_UNSUPPORTED_MESSAGE } from "../../shared/hub.ts";
 import { MAX_UNIX_SOCKET_PATH_BYTES } from "../../shared/paths.ts";
 import { createModelCatalogs } from "../driver/model-catalog.ts";
 import { FakeHubLedger } from "./fake-ledger.ts";
@@ -997,6 +998,53 @@ describe("startAgentApi on a unix socket", () => {
       expect(expiredRes.statusCode).toBe(403);
     } finally {
       await app.close();
+    }
+  });
+
+  it("hub self-reload：只放行项目经理，Worker（含只读）与总助一律 403；没有外壳监管时 409；--build 原样交给守护进程", async () => {
+    const calls: Array<{ sessionId: number; build: boolean }> = [];
+    const app = createAgentApi({
+      ledger,
+      tokens,
+      selfReload: (input) => {
+        calls.push(input);
+        return { text: "已登记空闲排空热重启", data: { state: "draining" } };
+      },
+    });
+    await app.ready();
+    try {
+      const pmToken = tokens.issue(201);
+      const workerToken = tokens.issue(202);
+      const assistantToken = tokens.issue(203);
+      ledger.sessionRoles.set(201, "pm");
+      ledger.sessionRoles.set(202, "worker");
+      ledger.sessionRoles.set(203, "assistant");
+      for (const bad of [workerToken, assistantToken]) {
+        const res = await app.inject({ method: "POST", url: SELF_RELOAD_AGENT_PATH, headers: { authorization: `Bearer ${bad}` }, payload: {} });
+        expect(res.statusCode).toBe(403);
+        expect(res.json().code).toBe("forbidden");
+      }
+      expect(calls).toEqual([]);
+      const ok = await app.inject({ method: "POST", url: SELF_RELOAD_AGENT_PATH, headers: { authorization: `Bearer ${pmToken}` }, payload: { build: true } });
+      expect(ok.statusCode).toBe(200);
+      expect(ok.json()).toEqual({ ok: true, text: "已登记空闲排空热重启", data: { state: "draining" } });
+      expect(calls).toEqual([{ sessionId: 201, build: true }]);
+      const extra = await app.inject({ method: "POST", url: SELF_RELOAD_AGENT_PATH, headers: { authorization: `Bearer ${pmToken}` }, payload: { force: true } });
+      expect(extra.statusCode).toBe(400);
+    } finally {
+      await app.close();
+    }
+
+    const unsupported = createAgentApi({ ledger, tokens });
+    await unsupported.ready();
+    try {
+      const pmToken = tokens.issue(204);
+      ledger.sessionRoles.set(204, "pm");
+      const res = await unsupported.inject({ method: "POST", url: SELF_RELOAD_AGENT_PATH, headers: { authorization: `Bearer ${pmToken}` }, payload: {} });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ ok: false, code: "conflict", message: SELF_RELOAD_UNSUPPORTED_MESSAGE });
+    } finally {
+      await unsupported.close();
     }
   });
 });

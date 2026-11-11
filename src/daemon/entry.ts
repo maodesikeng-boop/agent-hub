@@ -3,7 +3,10 @@
 // 不认识的异常打一句话 + 日志路径，堆栈和原文写进 state/logs/daemon.log，不上终端。
 // 运行期 uncaughtException / unhandledRejection：把完整错误写进 state/logs/daemon.log 和标准错误，再试着正常关机（最多 FATAL_SHUTDOWN_MS，
 // 好让 Worker / 项目经理的子进程被停掉，不留孤儿），然后以退出码 1 退出，由外壳（Mac 应用、systemd Restart=on-failure）拉起，不吞错继续跑。
-import { appendFileSync, mkdirSync, renameSync, statSync } from "node:fs";
+// 空闲排空热重启（hub self-reload，daemon/self-reload.ts）：只有被外壳监管时才接受（Fusa.app / Windows 桌面端设 contract.json 的
+// supervisedEnv，systemd 服务有 INVOCATION_ID）；排空到点正常关机，以 contract.json 的 reloadExitCode 退出，外壳不当崩溃、立即拉起
+// （systemd 的 Restart=on-failure 对非 0 退出码照常拉起）。
+import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { inspect } from "node:util";
 import { LOCAL_ERRORS } from "../shared/errors.ts";
@@ -15,6 +18,24 @@ import { StartupError } from "./startup-error.ts";
 import { DaemonAlreadyRunningError } from "./store/index.ts";
 
 const DAEMON_LOG_FILE = "daemon.log";
+
+/** 桌面外壳与守护进程共用的监管约定里热重启用到的两项（apps/desktop/contract.json，单一来源）。 */
+interface ReloadContract {
+  reloadExitCode: number;
+  supervisedEnv: string;
+}
+
+export const DESKTOP_CONTRACT: ReloadContract = JSON.parse(
+  readFileSync(new URL("../../apps/desktop/contract.json", import.meta.url), "utf8"),
+) as ReloadContract;
+
+/** systemd 给每个服务进程设的环境变量（systemd.exec(5)）：有它就是 systemd 拉起的，Restart=on-failure 会把热重启退出码拉起来。 */
+const SYSTEMD_INVOCATION_ENV = "INVOCATION_ID";
+
+/** 退出后有没有外壳把守护进程拉起来：Fusa.app、Windows 桌面端（设 supervisedEnv）或 systemd 服务（INVOCATION_ID）。 */
+export function isSupervised(env: Record<string, string | undefined>): boolean {
+  return (env[DESKTOP_CONTRACT.supervisedEnv] ?? "") !== "" || (env[SYSTEMD_INVOCATION_ENV] ?? "") !== "";
+}
 
 export type FatalErrorOrigin = "uncaughtException" | "unhandledRejection";
 
@@ -87,13 +108,26 @@ export async function runDaemonProcess(options: DaemonOptions): Promise<void> {
   let stopping = false; // 已经在关机（收到信号或致命错误），关机只开始一次
   let fatalSummary: string | undefined; // 见过致命错误：不管关得怎么样，退出码都是 1；这一行在退出前最后打到标准错误（关机日志会排在错误详情后面，Mac 应用取标准错误最后一行做崩溃原因）
 
-  const stopThenExit = (limitMs: number) => {
+  const stopThenExit = (limitMs: number, reload = false) => {
     stopping = true;
     void stopWithinLimit(() => daemon!.stop(), limitMs, (line) => console.error(line)).then((code) => {
       if (fatalSummary !== undefined) console.error(fatalSummary);
-      else if (code === 0) console.error(`${LOG_PREFIX} 已关闭。`);
-      process.exit(fatalSummary === undefined ? code : 1);
+      else if (code === 0) console.error(`${LOG_PREFIX} ${reload ? "已关闭，交给外壳热重启。" : "已关闭。"}`);
+      // 热重启：关机出错也照样用热重启退出码，外壳立即拉起新进程（不是崩溃）；致命错误优先报 1
+      process.exit(fatalSummary !== undefined ? 1 : reload ? DESKTOP_CONTRACT.reloadExitCode : code);
     });
+  };
+  // 有外壳监管才接受热重启：排空到点后正常关机，以热重启退出码退出
+  const supervised = isSupervised(options.env ?? process.env);
+  // 读完就摘掉：不传给 agent 子进程，免得 Worker 在 shell 里另起的守护进程（测试、手动 pnpm start）误以为有外壳拉起
+  for (const key of [DESKTOP_CONTRACT.supervisedEnv, SYSTEMD_INVOCATION_ENV]) {
+    delete process.env[key];
+    if (options.env !== undefined && options.env !== process.env) delete options.env[key];
+  }
+  const onSelfReload = () => {
+    if (stopping) return;
+    console.error(`${LOG_PREFIX} 空闲排空完成，正在关闭并热重启……`);
+    stopThenExit(SHUTDOWN_TOTAL_MS, true);
   };
   const handleFatal = (error: unknown, origin: FatalErrorOrigin) => {
     fatalSummary ??= `${LOG_PREFIX} 因 ${origin} 退出：${summarizeError(error)}`;
@@ -113,7 +147,7 @@ export async function runDaemonProcess(options: DaemonOptions): Promise<void> {
   process.on("unhandledRejection", onUnhandledRejection);
 
   try {
-    daemon = await startDaemon(options);
+    daemon = await startDaemon({ ...options, ...(supervised && options.onSelfReload === undefined ? { onSelfReload } : {}) });
   } catch (error) {
     process.off("uncaughtException", onUncaughtException);
     process.off("unhandledRejection", onUnhandledRejection);

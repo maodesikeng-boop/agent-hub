@@ -18,6 +18,7 @@ import {
   userMessageDedupeKey,
   workerPickOf,
 } from "../shared/index.ts";
+import { createAutoReloader, installAutoReloadListeners, type AutoReloadEnv, type AutoReloader } from "./auto-reload.ts";
 import { byteLength } from "./format.ts";
 import { ApiError, createClient, fetchDevices, localClient, onUnauthorized, type HubClient } from "./client.ts";
 import { openChangeStream, reconnectDelay, type ConnectionStatus } from "./connection.ts";
@@ -63,12 +64,15 @@ export class DeviceHub {
   readonly client: HubClient;
   private readonly onChange: () => void;
   private readonly onResync: (() => void) | undefined;
+  /** 入口本机：每次拿到这台守护进程这次启动的标识（快照、重连后）交给它（auto-reload.ts）。别的设备不接，重启了也不刷本机页面。 */
+  private readonly onBoot: ((bootId: string | undefined) => void) | undefined;
 
-  constructor(key: DeviceKey, client: HubClient, onChange: () => void, onResync?: () => void) {
+  constructor(key: DeviceKey, client: HubClient, onChange: () => void, onResync?: () => void, onBoot?: (bootId: string | undefined) => void) {
     this.key = key;
     this.client = client;
     this.onChange = onChange;
     this.onResync = onResync;
+    this.onBoot = key === LOCAL_DEVICE ? onBoot : undefined;
   }
 
   get state(): HubState {
@@ -153,6 +157,7 @@ export class DeviceHub {
       this.loadAttempt = 0;
       this.seq = snapshot.seq;
       this.dispatch({ type: "loaded", snapshot });
+      this.onBoot?.(snapshot.bootId);
     } catch (err) {
       if (!this.alive) return;
       const unauthorized = err instanceof ApiError && err.status === 401;
@@ -182,6 +187,7 @@ export class DeviceHub {
         this.dispatch({ type: "loaded", snapshot });
         for (const change of queued.toSorted((a, b) => a.seq - b.seq)) this.applyChange(change);
         this.dispatch({ type: "connection", status: this.streamStatus });
+        this.onBoot?.(snapshot.bootId);
         return;
       } catch (err) {
         if (!this.alive) return;
@@ -206,6 +212,14 @@ export class DeviceHub {
       reportPresence: !this.remote,
       getSince: () => this.seq,
       onStatus: (status) => {
+        // 断开后重新连上：守护进程可能重启过，但 seq 接得上时不会 resync，单独问一次这次启动的标识
+        if (status === "open" && this.streamStatus === "reconnecting" && this.onBoot) {
+          const onBoot = this.onBoot;
+          void this.client.fetchBootId().then(
+            (bootId) => this.alive && onBoot(bootId),
+            () => {},
+          );
+        }
         this.streamStatus = status;
         // 重新拉快照的过程中一直显示“重连中”，拉完再按连接的真实状态显示
         this.dispatch({ type: "connection", status: this.buffer ? "reconnecting" : status });
@@ -411,18 +425,30 @@ export class DevicesStore {
   private listAttempt = 0;
 
   private readonly clientFor: (key: DeviceKey) => HubClient;
+  /** 入口本机守护进程重启后（bootId 变了）保存草稿、找合适的时机刷新整页（auto-reload.ts）。 */
+  private readonly autoReload: AutoReloader;
 
   /**
    * routed：网址里写的别的设备（打开网页时）。不等设备清单回来就开它的连接、拉它的快照，和清单同时拉；
    * 清单回来里面没有它（编号不对、已经移除）就关掉（setDevices）。清单回来之前界面里不出现它（没有设备信息）。
    */
-  constructor(clientFor: (key: DeviceKey) => HubClient = defaultClientFor, routed?: DeviceKey) {
+  constructor(clientFor: (key: DeviceKey) => HubClient = defaultClientFor, routed?: DeviceKey, autoReloadEnv?: Partial<AutoReloadEnv>) {
     this.clientFor = clientFor;
+    this.autoReload = createAutoReloader({
+      isStreaming: () => this.hubs.get(LOCAL_DEVICE)?.state.sessions.some((s) => s.streamingText != null) ?? false,
+      ...autoReloadEnv,
+    });
     this.hubs.set(
       LOCAL_DEVICE,
-      new DeviceHub(LOCAL_DEVICE, this.clientFor(LOCAL_DEVICE), this.changed, () => {
-        if (this.running) void this.refresh();
-      }),
+      new DeviceHub(
+        LOCAL_DEVICE,
+        this.clientFor(LOCAL_DEVICE),
+        this.changed,
+        () => {
+          if (this.running) void this.refresh();
+        },
+        (bootId) => this.autoReload.observeBoot(bootId),
+      ),
     );
     if (routed !== undefined && routed !== LOCAL_DEVICE) this.hubs.set(routed, new DeviceHub(routed, this.clientFor(routed), this.changed));
     this.store = createStore<DevicesSnapshot>(() => this.build());
@@ -461,6 +487,7 @@ export class DevicesStore {
 
   start(): void {
     this.running = true;
+    installAutoReloadListeners();
     for (const hub of this.hubs.values()) hub.start();
     void this.refresh();
   }
@@ -468,6 +495,7 @@ export class DevicesStore {
   dispose(): void {
     this.running = false;
     clearTimeout(this.listTimer);
+    this.autoReload.dispose();
     for (const hub of this.hubs.values()) hub.dispose();
   }
 

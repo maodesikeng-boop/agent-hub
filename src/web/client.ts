@@ -192,6 +192,8 @@ export function createClient(device: DeviceId | null) {
     url: at,
     /** 快照在手机上可能要传一会儿：用长一点的超时。 */
     fetchState: () => request<StateSnapshot>(at(API_PATHS.state), undefined, SLOW_API_REQUEST_TIMEOUT_MS),
+    /** 这台守护进程这次启动的标识（instanceId，重启就变）：入口本机重连后比对，见 auto-reload.ts。 */
+    fetchBootId: () => request<{ instanceId?: string }>(at(API_PATHS.authStatus)).then((r) => r.instanceId),
     fetchOlderMessages: (conversationId: ConversationId, before: MessageId) =>
       request<MessagesPage>(`${at(API_PATHS.messages(conversationId))}?before=${before}`),
     postMessage: (conversationId: ConversationId, body: PostMessageRequest) => postJson<PostMessageResponse>(at(API_PATHS.messages(conversationId)), body),

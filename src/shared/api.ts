@@ -110,6 +110,11 @@ export const API_PATHS = {
   files: (conversationId: ConversationId, q: string) => `/api/conversations/${conversationId}/files?q=${encodeURIComponent(q)}`,
   /** WebSocket，?since=<seq>。服务端 → 网页是 WsServerMessage；网页 → 服务端是 WsClientMessage（联机 P4 起）。 */
   ws: "/api/ws",
+  /**
+   * POST（SelfReloadRequestBody → SelfReloadResponse）：登记空闲排空热重启（同 hub self-reload，立即返回）；GET → SelfReloadStatus。
+   * 只有入口本机的浏览器能调（别的设备的令牌碰不到，见 ENTRY_ONLY_API_PREFIXES）；守护进程没有外壳监管时 409。
+   */
+  selfReload: "/api/self-reload",
 
   // ---- Router（总助）与持久化任务图（Task DAG）----
   routerDigest: "/api/router/digest",
@@ -239,10 +244,15 @@ export interface StateSnapshot {
   tunnel?: TunnelStatus | null;
   /** 公网入口（run/public.sock）状态与 Funnel 命令（界面服务补上的）。 */
   publicEntry?: PublicEntryStatus;
+  /**
+   * 这次启动的唯一标识（界面服务补上的，同 /api/auth/status 的 instanceId）：守护进程重启就变。
+   * 网页（只看入口本机这台）发现它变了，保存草稿后自动刷新拿新网页（web/auto-reload.ts）。老服务端没带是 undefined。
+   */
+  bootId?: string;
 }
 
 /** 账本给出的快照：界面服务在 /api/state 里再补上 server、tunnel、publicEntry。 */
-export type LedgerSnapshot = Omit<StateSnapshot, "server" | "tunnel" | "publicEntry">;
+export type LedgerSnapshot = Omit<StateSnapshot, "server" | "tunnel" | "publicEntry" | "bootId">;
 
 /** GET /api/conversations/:id/messages?before=<消息编号>：更早的 100 条，从小到大。 */
 export interface MessagesPage {
@@ -581,7 +591,7 @@ export const PEER_DEVICE_HEADER = "x-agent-hub-device";
  * 只给浏览器用、设备令牌不能访问的接口（入口自己的：设备管理、浏览器登录、推送订阅）。新加这类接口要加进来。
  * 设备令牌也不能访问 /d/（不能借别的设备的转发去第三台）和 /auth。
  */
-export const ENTRY_ONLY_API_PREFIXES: readonly string[] = ["/api/devices", "/api/sessions", "/api/login-links", "/api/push/", "/api/auth/"];
+export const ENTRY_ONLY_API_PREFIXES: readonly string[] = ["/api/devices", "/api/sessions", "/api/login-links", "/api/push/", "/api/auth/", "/api/self-reload"];
 
 /** 入口转发的 WebSocket 因为对方连不上（握手失败、心跳没回）被关时的状态码和原因。网页按断线重连处理。 */
 export const DEVICE_OFFLINE_WS_CLOSE_CODE = 4502;
@@ -836,4 +846,30 @@ export interface CancelTaskGraphRequest {
 export interface CancelTaskGraphResponse {
   graph: TaskGraph;
   messageId: MessageId | null;
+}
+
+// ---- 空闲排空热重启（daemon/self-reload.ts） ----
+
+/** idle：没登记；building：在后台构建网页；draining：等全库空闲 + 静默窗口；restarting：正在关机重启。 */
+export type SelfReloadState = "idle" | "building" | "draining" | "restarting";
+
+export interface SelfReloadStatus {
+  state: SelfReloadState;
+  /** 这次带不带构建。 */
+  build: boolean;
+  /** 第一次登记的时间；没登记是 null。 */
+  requestedAt: number | null;
+  /** 现在还在忙的（给人看的原因），空的 = 全库空闲。 */
+  busy: string[];
+  /** 最近一次被取消（构建失败、换产物失败）的原因；之后再登记就清掉。 */
+  lastFailure: string | null;
+}
+
+export interface SelfReloadRequestBody {
+  build?: boolean;
+}
+
+export interface SelfReloadResponse {
+  text: string;
+  status: SelfReloadStatus;
 }

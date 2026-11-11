@@ -9,6 +9,7 @@ import {
   API_PATHS,
   DAEMON_LOG_MAX_BYTES,
   DEFAULT_UI_PORT,
+  ENTRY_ONLY_API_PREFIXES,
   SHUTDOWN_TOTAL_MS,
   uiCookieName,
 } from "../../shared/index.ts";
@@ -17,6 +18,7 @@ import { FakeLedger } from "./fake-ledger.ts";
 import { createUiServer, DESKTOP_PRODUCT, DESKTOP_PROTOCOL_VERSION } from "./server.ts";
 import { createBrowserSessions } from "./sessions.ts";
 import { testLogin } from "./test-login.ts";
+import { DESKTOP_CONTRACT, isSupervised } from "../entry.ts";
 
 interface DesktopContract {
   product: string;
@@ -31,6 +33,8 @@ interface DesktopContract {
   crashBackoffMs: number[];
   crashWindowMs: number;
   maxCrashesInWindow: number;
+  reloadExitCode: number;
+  supervisedEnv: string;
   logRelativePath: string;
   logMaxBytes: number;
   logRotatedFiles: number;
@@ -89,6 +93,15 @@ describe("桌面壳共用监管契约与 /api/auth/status 轻量身份响应", (
     expect(contract.crashBackoffMs).toEqual([1_000, 2_000, 4_000, 8_000, 16_000, 30_000]);
     expect(contract.crashWindowMs).toBe(60_000);
     expect(contract.maxCrashesInWindow).toBe(5);
+    // 热重启退出码：EX_TEMPFAIL，非 0（systemd Restart=on-failure 照样拉起），不与崩溃的 1 撞
+    expect(contract.reloadExitCode).toBe(75);
+    expect(contract.reloadExitCode).toBe(DESKTOP_CONTRACT.reloadExitCode);
+    expect(contract.supervisedEnv).toBe("AGENT_HUB_SUPERVISED");
+    expect(isSupervised({ AGENT_HUB_SUPERVISED: "fusa-macos" })).toBe(true);
+    expect(isSupervised({ INVOCATION_ID: "abc" })).toBe(true);
+    expect(isSupervised({})).toBe(false);
+    // Windows 桌面端：WSL 里的起停脚本导出同一个变量
+    expect(readFileSync(new URL("../../../scripts/wsl-daemon-ctl.sh", import.meta.url), "utf8")).toContain(`export ${contract.supervisedEnv}=`);
     expect(contract.logRelativePath).toBe("state/logs/desktop-daemon.log");
     expect(contract.logMaxBytes).toBe(2 * 1024 * 1024);
     expect(contract.logMaxBytes).toBe(DAEMON_LOG_MAX_BYTES);
@@ -199,6 +212,55 @@ describe("桌面壳共用监管契约与 /api/auth/status 轻量身份响应", (
     } finally {
       await app2.close();
       db2.close();
+    }
+  });
+
+  it("/api/state 带 bootId（= instanceId）；POST /api/self-reload 登记热重启，没有外壳监管时 409；别的设备的令牌碰不到", async () => {
+    const requests: Array<{ build: boolean; by: string }> = [];
+    const db3 = openTestDb();
+    const app3 = createUiServer({
+      ledger: new FakeLedger().asLedger(),
+      token: TOKEN,
+      staticDir: join(root, "no-static"),
+      uploadsDir: join(root, "uploads"),
+      sentFilesDir: join(root, "sent-files"),
+      port: PORT,
+      db: db3,
+      selfReload: {
+        request: (input) => {
+          requests.push(input);
+          return { text: "已登记空闲排空热重启", status: { state: "draining", build: input.build, requestedAt: 1, busy: [], lastFailure: null } };
+        },
+        status: () => ({ state: "draining", build: false, requestedAt: 1, busy: ["1 个会话还在跑"], lastFailure: null }),
+      },
+    });
+    await app3.ready();
+    try {
+      const cookie = testLogin(db3, PORT).cookie();
+      const origin = `http://${HOST}`;
+      const instanceId = (await app3.inject({ method: "GET", url: API_PATHS.authStatus, headers: { host: HOST } })).json().instanceId;
+      const state = await app3.inject({ method: "GET", url: API_PATHS.state, headers: { host: HOST, cookie } });
+      expect(state.json().bootId).toBe(instanceId);
+
+      const ok = await app3.inject({ method: "POST", url: API_PATHS.selfReload, headers: { host: HOST, cookie, origin }, payload: { build: true } });
+      expect(ok.statusCode).toBe(200);
+      expect(ok.json()).toMatchObject({ text: "已登记空闲排空热重启", status: { state: "draining", build: true } });
+      expect(requests).toEqual([{ build: true, by: "网页" }]);
+      const status = await app3.inject({ method: "GET", url: API_PATHS.selfReload, headers: { host: HOST, cookie } });
+      expect(status.json()).toMatchObject({ state: "draining", busy: ["1 个会话还在跑"] });
+      const bad = await app3.inject({ method: "POST", url: API_PATHS.selfReload, headers: { host: HOST, cookie, origin }, payload: { force: 1 } });
+      expect(bad.statusCode).toBe(400);
+      const anonymous = await app3.inject({ method: "POST", url: API_PATHS.selfReload, headers: { host: HOST, origin }, payload: {} });
+      expect(anonymous.statusCode).toBe(401);
+      expect(requests).toHaveLength(1);
+      expect(ENTRY_ONLY_API_PREFIXES.some((prefix) => API_PATHS.selfReload.startsWith(prefix))).toBe(true);
+
+      const plainCookie = testLogin(db, PORT).cookie();
+      const unsupported = await app.inject({ method: "POST", url: API_PATHS.selfReload, headers: { host: HOST, cookie: plainCookie, origin }, payload: {} });
+      expect(unsupported.statusCode).toBe(409);
+    } finally {
+      await app3.close();
+      db3.close();
     }
   });
 

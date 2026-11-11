@@ -216,6 +216,7 @@ function buildHubUsagePrompt(vendors: readonly AgentVendor[] = AGENT_VENDORS): s
   - \`${HUB} project create --folder <文件夹路径> [--name <项目名>] [--description <说明>]\`：建项目（文件夹须已存在）
   - \`${HUB} project attach <文件夹路径>\` / \`${HUB} project detach <文件夹路径>\`：挂上或移除附加文件夹
   - \`${HUB} project setup --stdin\` / \`${HUB} project setup --clear\`：设置或清除新 worktree 开工前自动跑的准备脚本（如 \`pnpm install\`；可用 \`$${ENV_SETUP_ROOT_PATH}\`、\`$${ENV_SETUP_WORKTREE_PATH}\`，勿写密钥）
+  - \`${HUB} self-reload [--build]\`：${PRODUCT_ID} 自身代码合进来后让守护进程热重启（立即返回；等所有会话这一轮收尾、全库空闲后自动重启，你这一轮也要先结束；\`--build\` 先在后台构建网页，失败就取消、不重启）
 - **性格与模式**
   - \`${HUB} persona show\`：查看当前的性格设定和模式
   - \`${HUB} persona edit [--mode ${PM_MODES.join("|")}] [--reason <理由>] --stdin\`：修改模式或性格设定（正文传入修改后的**完整**性格设定）

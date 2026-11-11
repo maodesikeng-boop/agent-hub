@@ -38,6 +38,8 @@ export interface HandoverRunner {
   wake(): void;
   /** 关机：不再领；在做的 abort（报 shutdown），清理完才返回。多次调用返回同一个 Promise。 */
   stop(): Promise<void>;
+  /** 有没有在写的交接（热重启等全库空闲时看，daemon/self-reload.ts）。 */
+  busy(): boolean;
 }
 
 type AbortReason = "timeout" | "shutdown";
@@ -231,6 +233,9 @@ export function createHandoverRunner(options: HandoverRunnerOptions): HandoverRu
       tick = setInterval(pump, tickMs);
       track(cleanLeftovers());
       this.wake();
+    },
+    busy() {
+      return running.size > 0;
     },
     wake() {
       if (stopping || wakePending) return;

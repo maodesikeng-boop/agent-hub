@@ -16,6 +16,10 @@ struct DesktopContract: Codable, Equatable {
     let crashBackoffMs: [Int]
     let crashWindowMs: Int
     let maxCrashesInWindow: Int
+    /// 守护进程空闲排空后请求热重启时用的退出码（`hub self-reload`）：立即拉起新进程，不算崩溃、不进退避和熔断计数。
+    let reloadExitCode: Int
+    /// 外壳拉起守护进程时设的环境变量名：守护进程据此知道退出后有人拉起，才接受热重启请求。
+    let supervisedEnv: String
     let logRelativePath: String
     let logMaxBytes: Int
     let logRotatedFiles: Int
@@ -939,6 +943,7 @@ final class DaemonSupervisor {
         var env = ProcessInfo.processInfo.environment
         env["AGENT_HUB_HOME"] = homeDir
         env["AGENT_HUB_PORT"] = String(port)
+        env[contract.supervisedEnv] = "fusa-macos"
         let nodeBinDir = (nodePath as NSString).deletingLastPathComponent
         let home = NSHomeDirectory()
         let extraPaths = [
@@ -1130,6 +1135,30 @@ final class DaemonSupervisor {
         let wasIntentional = intentionalStopPids.remove(pid) != nil || isShuttingDown
         if wasIntentional {
             lock.unlock()
+            return
+        }
+
+        // 守护进程空闲排空后主动请求热重启（hub self-reload）：立即拉起新进程，不记崩溃、不退避、不计入熔断窗口
+        if process.terminationReason == .exit && Int(process.terminationStatus) == contract.reloadExitCode {
+            pendingRestartWorkItem?.cancel()
+            pendingRestartWorkItem = nil
+            let generation = UUID()
+            restartGeneration = generation
+            let currentOwn = ownership
+            lock.unlock()
+            let isoTime = ISO8601DateFormatter().string(from: now)
+            appendToLogFile("\(isoTime) [agent-hub] 后台服务（pid \(pid)）空闲排空后请求热重启，立即拉起新进程。\n")
+            notifyOwnershipChange(currentOwn)
+            DispatchQueue.global().async { [weak self] in
+                guard let self = self else { return }
+                self.lock.lock()
+                if self.isShuttingDown || self.isRestarting || self.restartGeneration != generation {
+                    self.lock.unlock()
+                    return
+                }
+                self.lock.unlock()
+                self.ensureRunning { _ in }
+            }
             return
         }
 

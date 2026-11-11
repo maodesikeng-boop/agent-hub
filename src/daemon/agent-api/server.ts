@@ -26,6 +26,8 @@ import {
   PM_MODES,
   ROUTER_DISPATCH_AGENT_PATH,
   ROUTER_PM_BRIEF_MAX_CHARS,
+  SELF_RELOAD_AGENT_PATH,
+  SELF_RELOAD_UNSUPPORTED_MESSAGE,
   TASK_GRAPH_STATUSES,
   hubCommandAllowed,
   hubPath,
@@ -86,6 +88,11 @@ export interface AgentApiOptions {
     commandId: RouterCommandId,
     payload: RouterAgentDispatchInput,
   ) => Promise<{ text: string; data: unknown }>;
+  /**
+   * `hub self-reload [--build]`：登记空闲排空热重启（daemon/self-reload.ts），立即返回。只放行项目经理的会话。
+   * 不给 = 这台守护进程不支持（没有外壳监管，退出后没人拉起），回 conflict。
+   */
+  selfReload?: (input: { sessionId: SessionId; build: boolean }) => { text: string; data: unknown };
   tokens: SessionTokens;
   logger?: boolean;
   /** 守护进程的日志（组装代码给）：500 和 reportHealth 出错各写一行。不给就只走 Fastify 的 logger。 */
@@ -605,6 +612,18 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
       return send(reply, { ok: true, text: result.text, data: result.data });
     });
   }
+
+  const selfReloadSchema = { type: "object", additionalProperties: false, properties: { build: { type: "boolean" } } };
+  app.post(SELF_RELOAD_AGENT_PATH, { schema: { body: selfReloadSchema } }, async (req, reply) => {
+    const auth = authOf.get(req);
+    if (auth === undefined) throw new Error("agent-api: request reached self.reload without a session");
+    // 只有项目经理能让整个守护进程重启：Worker（含只读）、总助一律 forbidden
+    if (ledger.sessionRole(auth.sessionId) !== "pm") throw new LedgerRequestError("forbidden", "只有项目经理可以调用 hub self-reload");
+    if (!opts.selfReload) throw new LedgerRequestError("conflict", SELF_RELOAD_UNSUPPORTED_MESSAGE);
+    const result = opts.selfReload({ sessionId: auth.sessionId, build: (req.body as { build?: boolean }).build === true });
+    reportHealth(null);
+    return reply.code(200).send({ ok: true, text: result.text, data: result.data });
+  });
 
   const routerDispatchSchema = {
     type: "object",

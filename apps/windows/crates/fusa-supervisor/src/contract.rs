@@ -24,6 +24,10 @@ pub struct DesktopContract {
     pub crash_backoff_ms: Vec<u64>,
     pub crash_window_ms: u64,
     pub max_crashes_in_window: usize,
+    /// 守护进程空闲排空后请求热重启（`hub self-reload`）用的退出码：立即拉起新进程，不算崩溃、不进退避与熔断计数。
+    pub reload_exit_code: i32,
+    /// 外壳拉起守护进程时设的环境变量名（WSL 内由 `wsl-daemon-ctl.sh run` 导出）：守护进程据此才接受热重启请求。
+    pub supervised_env: String,
     pub log_relative_path: String,
     pub log_max_bytes: u64,
     pub log_rotated_files: usize,
@@ -64,6 +68,9 @@ impl DesktopContract {
             || self.crash_backoff_ms.is_empty()
             || self.crash_window_ms == 0
             || self.max_crashes_in_window == 0
+            || self.reload_exit_code <= 0
+            || self.reload_exit_code > 255
+            || self.supervised_env.trim().is_empty()
             || self.log_max_bytes == 0
             || self.stderr_tail_max_bytes == 0
             || self.stderr_summary_max_lines == 0

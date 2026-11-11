@@ -146,6 +146,14 @@ export function hubCommandAllowed(role: AgentRole, command: HubCommand): boolean
   return HUB_COMMAND_ROLES[command].includes(role);
 }
 
+/**
+ * `hub self-reload [--build]`：登记空闲排空热重启（daemon/self-reload.ts），立即返回。守护进程级的操作，不进账本的 hubCall，
+ * 所以不在 HUB_COMMANDS 里（同 hub dispatch）；agent 接口单独一条路由，只放行项目经理的会话，别的角色 forbidden（403）。
+ */
+export const SELF_RELOAD_AGENT_PATH = "/v1/self.reload";
+/** 守护进程不是由外壳（Fusa.app、Windows 桌面端、systemd）拉起的：退出后没人重启，不接受热重启（hub、POST /api/self-reload 都回 409）。 */
+export const SELF_RELOAD_UNSUPPORTED_MESSAGE = "这台守护进程不是由 Fusa 应用或 systemd 拉起的，退出后没人自动重启，不能热重启；请手动重启";
+
 export function hubPath(command: HubCommand): string {
   return `/v1/${command}`;
 }
