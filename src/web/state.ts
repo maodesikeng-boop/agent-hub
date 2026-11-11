@@ -1,6 +1,8 @@
 // 网页的数据：/api/state 的快照 + WebSocket 推来的变化，合成一份界面要用的状态。
 // 全是纯函数，方便测试；网络和定时器在 device-hub.ts。
 import {
+  MAX_REWOUND_PENDING_KEYS,
+  isRewoundMessage,
   isWorkerEndLine,
   serverInfoFor,
   userMessageDedupeKey,
@@ -94,6 +96,8 @@ export interface HubState {
   olderLoaded?: Record<ConversationId, boolean | undefined>;
   /** 点过“重试”的失败消息；消息不再是失败就清掉。 */
   retry: Record<MessageId, RetryPhase | undefined>;
+  /** 乐观待发阶段已被二次 Esc 回退的去重键（最多保留最近 MAX_REWOUND_PENDING_KEYS 个）：服务端随后推回 message.created 时直接补上 rewound。 */
+  rewoundKeys?: readonly string[];
 }
 
 /** 未主动翻页的对话在内存中保留的最近消息上限（与 shared/reminders.ts 的 MIRROR_MESSAGES_PER_CONVERSATION 对齐），超出后标记 hasMore 供向上翻页，防止长时间运行无限膨胀。 */
@@ -128,16 +132,24 @@ export type HubAction =
   | { type: "olderFailed"; conversationId: ConversationId }
   | { type: "pendingAdd"; pending: PendingMessage }
   | { type: "pendingPhase"; clientId: string; phase: PendingMessage["phase"]; failure?: PendingMessage["failure"]; reason?: ErrorInfo }
+  | { type: "pendingRewind"; clientId: string }
+  | { type: "messageRewind"; conversationId: ConversationId; messageId: MessageId }
   | { type: "retryStart"; messageId: MessageId }
   | { type: "retryFailed"; messageId: MessageId };
 
-/** 按编号插入或替换一条消息，保持从小到大。 */
+function withRewoundMeta(message: Message): Message {
+  if (isRewoundMessage(message)) return message;
+  return { ...message, meta: { ...(message.meta ?? {}), rewound: true } };
+}
+
+/** 按编号插入或替换一条消息，保持从小到大；已标记 rewound 的消息不会被乱序晚到的旧状态抹掉 rewound。 */
 export function upsertMessage(messages: Message[], message: Message): Message[] {
   const last = messages.at(-1);
   if (last === undefined || message.id > last.id) return [...messages, message];
-  if (message.id === last.id) return messages.with(messages.length - 1, message);
+  if (message.id === last.id) return messages.with(messages.length - 1, isRewoundMessage(last) ? withRewoundMeta(message) : message);
   const index = messages.findIndex((m) => m.id >= message.id);
-  if (messages[index]?.id === message.id) return messages.with(index, message);
+  const existing = messages[index];
+  if (existing?.id === message.id) return messages.with(index, isRewoundMessage(existing) ? withRewoundMeta(message) : message);
   return messages.toSpliced(index, 0, message);
 }
 
@@ -178,13 +190,27 @@ function advanceWorkerLine(
   return { ...conversations, [line.workerConversationId]: { ...target, workerLine } };
 }
 
+function clearConversationStreaming(sessions: SessionState[], conversationId: ConversationId): SessionState[] {
+  if (!sessions.some((s) => s.conversationId === conversationId && s.streamingText !== undefined)) return sessions;
+  return sessions.map((s) => {
+    if (s.conversationId !== conversationId || s.streamingText === undefined) return s;
+    const { streamingText: _, ...clean } = s;
+    return clean;
+  });
+}
+
 export function applyChange(state: HubState, change: Change): HubState {
   if (change.seq <= state.seq) return state;
   const next = { ...state, seq: change.seq };
   switch (change.type) {
     case "message.created":
     case "message.updated": {
-      const { message } = change.data;
+      const raw = change.data.message;
+      const wasRewoundPending = state.rewoundKeys?.includes(raw.dedupeKey) === true;
+      const message = wasRewoundPending ? withRewoundMeta(raw) : raw;
+      const nextBase = wasRewoundPending
+        ? { ...next, rewoundKeys: state.rewoundKeys!.filter((k) => k !== raw.dedupeKey) }
+        : next;
       const sessions =
         change.type === "message.created" &&
         message.sender === "agent" &&
@@ -197,7 +223,7 @@ export function applyChange(state: HubState, change: Change): HubState {
             })
           : state.sessions;
       const view = state.conversations[message.conversationId];
-      if (!view) return { ...next, sessions }; // 不认识的对话，device-hub.ts 会重新拉快照
+      if (!view) return { ...nextBase, sessions }; // 不认识的对话，device-hub.ts 会重新拉快照
       // 初始快照未加载消息的 Worker 对话（messages 为空且 hasMore 为 true）：没点开加载前不往空列表里塞单条实时消息，等点开时一次拉齐最新一页
       if (
         view.conversation.kind === "worker" &&
@@ -206,7 +232,7 @@ export function applyChange(state: HubState, change: Change): HubState {
         state.older[message.conversationId] !== "loading"
       ) {
         return {
-          ...next,
+          ...nextBase,
           sessions,
           pending: dropConfirmed(state.pending, [message]),
           retry: dropRetryIfSettled(state.retry, message),
@@ -215,7 +241,7 @@ export function applyChange(state: HubState, change: Change): HubState {
       // 比已带的最早一条还早（快照、实时只带最近一段）：插进来会和往上翻页拉的那一段接不上，留给翻页时拉
       if (view.hasMore && view.messages.length > 0 && message.id < view.messages[0]!.id) {
         const conversations = advanceWorkerLine(state.conversations, message);
-        return { ...next, sessions, conversations, pending: dropConfirmed(state.pending, [message]), retry: dropRetryIfSettled(state.retry, message) };
+        return { ...nextBase, sessions, conversations, pending: dropConfirmed(state.pending, [message]), retry: dropRetryIfSettled(state.retry, message) };
       }
       const updated = upsertMessage(view.messages, message);
       const trim =
@@ -231,7 +257,7 @@ export function applyChange(state: HubState, change: Change): HubState {
         message,
       );
       return {
-        ...next,
+        ...nextBase,
         sessions,
         conversations,
         pending: dropConfirmed(state.pending, [message]),
@@ -424,6 +450,33 @@ export function reducer(state: HubState, action: HubAction): HubState {
           return { ...rest, phase: action.phase, ...(action.failure ? { failure: action.failure } : {}), ...(action.reason ? { reason: action.reason } : {}) };
         }),
       };
+    case "pendingRewind": {
+      const target = state.pending.find((p) => p.clientId === action.clientId);
+      if (!target) return state;
+      const key = userMessageDedupeKey(target.conversationId, target.clientId);
+      const keys = [...(state.rewoundKeys ?? []).filter((k) => k !== key), key].slice(-MAX_REWOUND_PENDING_KEYS);
+      const pending =
+        target.attachments.length === 0
+          ? state.pending.filter((p) => p.clientId !== action.clientId)
+          : state.pending.map((p) => {
+              if (p.clientId !== action.clientId) return p;
+              const { workerPick: _pick, ...rest } = p;
+              return { ...rest, text: "" };
+            });
+      return { ...state, pending, rewoundKeys: keys, sessions: clearConversationStreaming(state.sessions, target.conversationId) };
+    }
+    case "messageRewind": {
+      const view = state.conversations[action.conversationId];
+      if (!view) return state;
+      const idx = view.messages.findIndex((m) => m.id === action.messageId);
+      if (idx === -1 || isRewoundMessage(view.messages[idx]!)) return state;
+      const messages = view.messages.with(idx, withRewoundMeta(view.messages[idx]!));
+      return {
+        ...state,
+        sessions: clearConversationStreaming(state.sessions, action.conversationId),
+        conversations: { ...state.conversations, [action.conversationId]: { ...view, messages } },
+      };
+    }
   }
 }
 

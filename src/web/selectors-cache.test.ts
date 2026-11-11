@@ -1,9 +1,9 @@
 // 网页 selector 的缓存守卫：按“跑了一个月”的规模（300 个 Worker、3 万条消息）算，重算要快，输入没变要返回同一个引用，
 // 相关数据变了要跟着变。规矩见 AGENTS.md“缓存和状态快照”那一条。
 import { describe, expect, it } from "vitest";
-import { workerEventOf, workerLineSummaries, type Message, type PersonaChangeId, type SessionState } from "../shared/index.ts";
+import { MAX_REWOUND_PENDING_KEYS, workerEventOf, workerLineSummaries, type Message, type PersonaChangeId, type SessionState } from "../shared/index.ts";
 import { revertedChangeIds } from "./components/Messages.tsx";
-import { groupMessages, listConversations, quotaResetTimes, quotaUsage, workersOf } from "./selectors.ts";
+import { groupMessages, listConversations, previewText, quotaResetTimes, quotaUsage, workersOf } from "./selectors.ts";
 import { applyChange, initialState, reducer, type ConversationView, type HubState } from "./state.ts";
 import { changeOf, makeConversation, makeMessage, makePm, makeProject, makeSession, makeSystemMessage, makeToolMessage, makeUserMessage, makeWorkerLine, messageChange, sessionChange } from "./test-utils.ts";
 
@@ -197,5 +197,31 @@ describe("selector 缓存：300 个 Worker、3 万条消息", () => {
     expect(listConversations(next)).toBe(entriesBefore);
     expect(quotaUsage(next, 0)).toBe(quotaBefore);
     expect(quotaResetTimes(next)).toBe(resetsBefore);
+  });
+
+  it("二次 Esc 回退：pendingRewind 不击穿 conversations/workers 缓存且 rewoundKeys 严格受上限约束；messageRewind 立即失效左栏预览并保持后续引用稳定", () => {
+    let state = monthState();
+    const workers = workersOf(state, 1);
+    const entries = listConversations(state);
+    for (let i = 0; i < MAX_REWOUND_PENDING_KEYS + 10; i++) {
+      state = reducer(state, {
+        type: "pendingAdd",
+        pending: { clientId: `p${i}`, conversationId: PM_CONVERSATION, text: `草稿 ${i}`, attachments: [], phase: "sending", createdAt: i },
+      });
+      state = reducer(state, { type: "pendingRewind", clientId: `p${i}` });
+    }
+    expect(state.rewoundKeys).toHaveLength(MAX_REWOUND_PENDING_KEYS);
+    expect(workersOf(state, 1)).toBe(workers);
+    expect(listConversations(state)).toBe(entries);
+
+    const withStopped = applyChange(
+      state,
+      messageChange(state.seq + 1, "message.created", makeUserMessage({ id: 9_999_999, conversationId: PM_CONVERSATION, text: "刚暂停的话", status: "stopped" })),
+    );
+    expect(previewText(listConversations(withStopped)[0]!)).toBe("刚暂停的话");
+    const rewound = reducer(withStopped, { type: "messageRewind", conversationId: PM_CONVERSATION, messageId: 9_999_999 });
+    const nextEntries = listConversations(rewound);
+    expect(previewText(nextEntries[0]!)).not.toBe("刚暂停的话");
+    expect(listConversations(rewound)).toBe(nextEntries);
   });
 });

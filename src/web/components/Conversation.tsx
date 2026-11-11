@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import { HUB_COMPOSER_COMMANDS, type ConversationId, type MessageId, type PmId } from "../../shared/index.ts";
+import { HUB_COMPOSER_COMMANDS, type ConversationId, type MessageId, type PmId, type WorkerPick } from "../../shared/index.ts";
 import { errorText, formatArchiveRemaining, type ErrorLike } from "../format.ts";
 import { visibleMessages, type ConversationEntry } from "../selectors.ts";
 import type { ConversationView, OlderState, PendingMessage } from "../state.ts";
@@ -68,6 +68,7 @@ export function Conversation({
   onSend,
   onRetry,
   onStop,
+  onRewind,
   onLoadOlder,
   actions,
   link = null,
@@ -96,6 +97,7 @@ export function Conversation({
   onSend: (conversationId: ConversationId, text: string, files: File[]) => void | Promise<void>;
   onRetry: (clientId: string) => void;
   onStop: (conversationId: ConversationId) => Promise<void>;
+  onRewind?: (conversationId: ConversationId, stopping: boolean, draftText: string) => { text: string; workerPick: WorkerPick | null } | null;
   onLoadOlder: (conversationId: ConversationId) => void;
   actions: MessageActions;
   /** 对话所在的设备连不上时输入框怎么办（见 Composer 的 link）。 */
@@ -106,7 +108,20 @@ export function Conversation({
   onOpenProfile: (pmId: PmId) => void;
 }) {
   const id = view.conversation.id;
-  const stop = useStop(session, () => onStop(id));
+  const hasQueuedUser = useMemo(
+    () => pending.some((p) => p.phase === "sending") || view.messages.some((m) => m.sender === "user" && m.status === "queued"),
+    [pending, view.messages],
+  );
+  const stop = useStop(session, () => onStop(id), hasQueuedUser);
+  const handleRewind = useCallback(
+    (stopping: boolean): boolean => {
+      const res = onRewind?.(id, stopping, draft.store.getState()) ?? null;
+      if (res === null) return false;
+      draft.restore(res.text, res.workerPick);
+      return true;
+    },
+    [onRewind, id, draft],
+  );
   const client = useClient();
   // agent-hub 自己的命令（/hub:worker）只在项目经理对话里有
   const isPm = view.conversation.kind === "pm";
@@ -175,6 +190,7 @@ export function Conversation({
             placeholder={mobile ? "Message…" : `Message ${entry.name}…`}
             staging={staging}
             stop={stop}
+            onRewind={onRewind ? handleRewind : undefined}
             link={link}
             source={source}
             onSend={handleSend}

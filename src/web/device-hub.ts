@@ -5,6 +5,9 @@ import { useEffect, useState } from "react";
 import { createStore, useStore, type StoreApi } from "zustand";
 import {
   ATTACHMENTS_MISSING_MESSAGE,
+  MAX_MESSAGE_BYTES,
+  MAX_REWOUND_PENDING_KEYS,
+  findRewindableMessage,
   type Attachment,
   type Change,
   type ConversationId,
@@ -13,7 +16,9 @@ import {
   type PostMessageRequest,
   type WorkerPick,
   userMessageDedupeKey,
+  workerPickOf,
 } from "../shared/index.ts";
+import { byteLength } from "./format.ts";
 import { ApiError, createClient, fetchDevices, localClient, onUnauthorized, type HubClient } from "./client.ts";
 import { openChangeStream, reconnectDelay, type ConnectionStatus } from "./connection.ts";
 import { LOCAL_DEVICE, OFFLINE_AFTER_MS, deviceStatus, placeholderSelf, type DeviceKey, type DeviceView, type LinkHistory } from "./devices.ts";
@@ -42,6 +47,11 @@ export class DeviceHub {
   private buffer: Change[] | null = null;
   private streamStatus: ConnectionStatus = "connecting";
   private readonly olderInFlight = new Set<ConversationId>();
+  /** POST /messages 还在路上的记录：若用户在请求返回前就按了 Esc 停止或二次 Esc 回退，等入库返回后再补一次 stop / rewind。 */
+  private readonly inFlightPosts = new Map<string, { conversationId: ConversationId; after: "none" | "stop" | "rewind" }>();
+  // 待发气泡删除后，旧历史不能变成下一次 Esc 的候选。只保留有上限的消息 id 边界。
+  private readonly rewindBarriers = new Map<ConversationId, number>();
+  private readonly stopRequests = new Map<ConversationId, Promise<void>>();
   private alive = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private offlineTimer: ReturnType<typeof setTimeout> | undefined;
@@ -80,6 +90,9 @@ export class DeviceHub {
     this.state = reducer(this.state, action);
     if (this.state.phase === "ready" && before.phase !== "ready") this.openStream();
     if (this.state.phase !== "ready" && before.phase === "ready") this.stopStream();
+    for (const id of this.rewindBarriers.keys()) {
+      if (!this.state.conversations[id] || this.state.conversations[id]?.conversation.purgedAt !== undefined) this.rewindBarriers.delete(id);
+    }
     this.trackLink();
     this.onChange();
   }
@@ -115,6 +128,9 @@ export class DeviceHub {
 
   dispose(): void {
     this.alive = false;
+    this.inFlightPosts.clear();
+    this.stopRequests.clear();
+    this.rewindBarriers.clear();
     this.offUnauthorized?.();
     this.offUnauthorized = null;
     clearTimeout(this.timer);
@@ -215,15 +231,21 @@ export class DeviceHub {
   }
 
   private async submit(conversationId: ConversationId, clientId: string, text: string, attachmentIds: string[], workerPick: WorkerPick | null): Promise<void> {
+    const flight = { conversationId, after: "none" as "none" | "stop" | "rewind" };
+    this.inFlightPosts.set(clientId, flight);
     try {
       await this.client.postMessage(conversationId, messageBody(clientId, text, attachmentIds, workerPick));
+      if (this.alive) {
+        if (flight.after === "rewind") void this.stop(conversationId).then(() => this.client.postRewind(conversationId)).catch(() => {});
+        else if (flight.after === "stop") void this.client.postStop(conversationId).catch(() => {});
+      }
     } catch (err) {
       // 400：服务端拒绝了这条消息（同一个 clientId 重发还是会被拦，重试永远不会成功）：带的文件找不到了要重新添加，
       // 别的原因（比如手打了不能用的命令）把服务端的 error 原样显示
       const rejected = err instanceof ApiError && err.status === 400;
       const reason = errorText(err);
       const missing = rejected && reason.text === ATTACHMENTS_MISSING_MESSAGE;
-      if (this.alive) {
+      if (this.alive && flight.after !== "rewind") {
         this.dispatch({
           type: "pendingPhase",
           clientId,
@@ -231,6 +253,8 @@ export class DeviceHub {
           ...(missing ? { failure: "attachments_missing" as const } : rejected ? { failure: "rejected" as const, reason } : {}),
         });
       }
+    } finally {
+      this.inFlightPosts.delete(clientId);
     }
   }
 
@@ -294,7 +318,56 @@ export class DeviceHub {
     }
   };
 
-  stop = (conversationId: ConversationId): Promise<void> => this.client.postStop(conversationId);
+  stop = (conversationId: ConversationId): Promise<void> => {
+    for (const flight of this.inFlightPosts.values()) {
+      if (flight.conversationId === conversationId && flight.after === "none") flight.after = "stop";
+    }
+    const request = this.client.postStop(conversationId);
+    this.stopRequests.set(conversationId, request);
+    void request.finally(() => {
+      if (this.stopRequests.get(conversationId) === request) this.stopRequests.delete(conversationId);
+    }).catch(() => {});
+    return request;
+  };
+
+  /**
+   * 二次 Esc 回退当前对话最后一轮被中断、已取消或正在停止中的用户消息：
+   * 返回要恢复进输入框的 { text, workerPick }；没有符合条件的消息（幂等、已完成、失败或已被后续消息越过）返回 null。
+   */
+  rewind = (conversationId: ConversationId, stopping: boolean, draftText = ""): { text: string; workerPick: WorkerPick | null } | null => {
+    const fits = (text: string): boolean => {
+      const merged = draftText.trim() === "" || draftText === text ? text : `${text}\n${draftText}`;
+      return byteLength(merged) <= MAX_MESSAGE_BYTES;
+    };
+    const persist = () => {
+      const stopped = this.stopRequests.get(conversationId) ?? Promise.resolve();
+      void stopped.then(() => this.client.postRewind(conversationId)).catch(() => {});
+    };
+    const pending = this.state.pending.findLast((p) => p.conversationId === conversationId);
+    if (pending !== undefined) {
+      if (!stopping || pending.phase !== "sending" || (pending.text === "" && pending.workerPick === undefined)) return null;
+      if (!fits(pending.text)) return null;
+      const flight = this.inFlightPosts.get(pending.clientId);
+      if (flight) flight.after = "rewind";
+      const lastId = this.state.conversations[conversationId]?.messages.at(-1)?.id ?? 0;
+      this.rewindBarriers.delete(conversationId);
+      this.rewindBarriers.set(conversationId, lastId);
+      if (this.rewindBarriers.size > MAX_REWOUND_PENDING_KEYS) this.rewindBarriers.delete(this.rewindBarriers.keys().next().value!);
+      this.dispatch({ type: "pendingRewind", clientId: pending.clientId });
+      if (!flight) persist();
+      return { text: pending.text, workerPick: pending.workerPick ?? null };
+    }
+    const view = this.state.conversations[conversationId];
+    if (!view) return null;
+    const target = findRewindableMessage(view.messages, { stopping });
+    if (target === null || !fits(target.text)) return null;
+    const barrier = this.rewindBarriers.get(conversationId);
+    if (barrier !== undefined && target.id <= barrier) return null;
+    this.rewindBarriers.delete(conversationId);
+    this.dispatch({ type: "messageRewind", conversationId, messageId: target.id });
+    persist();
+    return { text: target.text, workerPick: workerPickOf(target) };
+  };
 
   loadOlder = async (conversationId: ConversationId): Promise<void> => {
     const view = this.state.conversations[conversationId];

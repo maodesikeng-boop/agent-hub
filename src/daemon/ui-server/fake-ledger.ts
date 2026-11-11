@@ -2,6 +2,7 @@
 import {
   CHANGE_BUFFER_SIZE,
   ConversationNotFoundError,
+  findRewindableMessage,
   MESSAGE_PAGE_SIZE,
   userMessageDedupeKey,
   type Change,
@@ -111,6 +112,7 @@ export class FakeLedger {
   messages: Message[] = [];
   readonly posted: PostUserMessageInput[] = [];
   readonly stopped: ConversationId[] = [];
+  readonly rewoundConversations: ConversationId[] = [];
   readonly messagesBeforeCalls: Array<{ conversationId: ConversationId; before: MessageId }> = [];
   readonly changesSinceCalls: number[] = [];
   readonly createdPms: CreatePmInput[] = [];
@@ -195,6 +197,20 @@ export class FakeLedger {
     this.check();
     this.requireConversation(conversationId);
     this.stopped.push(conversationId);
+  }
+
+  rewindLastUserMessage(conversationId: ConversationId): Message | null {
+    this.check();
+    this.requireConversation(conversationId);
+    this.rewoundConversations.push(conversationId);
+    const convMessages = this.messages.filter((m) => m.conversationId === conversationId);
+    const target = findRewindableMessage(convMessages);
+    if (target === null) return null;
+    const updated: Message = { ...target, meta: { ...target.meta, rewound: true } };
+    const idx = this.messages.findIndex((m) => m.id === target.id);
+    if (idx !== -1) this.messages[idx] = updated;
+    this.emitChange("message.updated", { message: updated });
+    return updated;
   }
 
   createPm(input: CreatePmInput): CreatePmResult {
@@ -322,6 +338,7 @@ export class FakeLedger {
     return {
       postUserMessage: (i) => this.postUserMessage(i),
       requestStop: (c) => this.requestStop(c),
+      rewindLastUserMessage: (c) => this.rewindLastUserMessage(c),
       // 输入框的 commands、files 接口走 UiServerOptions.composer（daemon/composer.ts），界面服务自己不调
       composerTarget: unused("composerTarget"),
       snapshot: () => this.snapshot(),

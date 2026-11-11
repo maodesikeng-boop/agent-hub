@@ -215,6 +215,7 @@ export function App() {
             onSend={send}
             onRetry={hub.retrySend}
             onStop={hub.stop}
+            onRewind={hub.rewind}
             onLoadOlder={handleLoadOlder}
             actions={actions}
             link={link}
@@ -237,6 +238,7 @@ export function App() {
             onSend={send}
             onRetry={hub.retrySend}
             onStop={hub.stop}
+            onRewind={hub.rewind}
             onLoadOlder={handleLoadOlder}
             actions={actions}
             focus={focus}

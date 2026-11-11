@@ -180,6 +180,11 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       workers.clearMaxTime(conversationId);
       messages.requestStop(conversationId);
     },
+    rewindLastUserMessage(conversationId) {
+      const rewound = messages.rewindLastUserMessage(conversationId);
+      if (rewound !== null) workers.clearMaxTime(conversationId);
+      return rewound;
+    },
     composerTarget: (conversationId) => messages.composerTarget(conversationId, files.worktreesDir),
 
     snapshot(): LedgerSnapshot {

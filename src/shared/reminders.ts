@@ -2,7 +2,9 @@
 // “等你”（对话停稳 3 秒）、“等你确定”（hub ask 一来就提醒）、通知的 tag。网页（标签页标题、左栏、浏览器通知）和
 // 守护进程（Web Push）用同一份，规则只改这里。
 import { DEVICE_PROXY_PREFIX, type Change, type DeviceId, type LedgerSnapshot, type PushPayload } from "./api.ts";
+import { attachmentsOf } from "./attachments.ts";
 import { askOf, isHandoverTraffic, isSilentTriggerMessage, systemEventOf, type Conversation, type ConversationId, type Message, type MessageId, type Pm, type PmId, type SessionId, type SessionState } from "./domain.ts";
+import { isRewoundMessage } from "./rewind.ts";
 
 /** 对话要持续满足“等你”的条件这么久才算，避开 Worker 刚汇报、项目经理还没开始处理的那一瞬间。 */
 export const WAITING_SETTLE_MS = 3_000;
@@ -36,6 +38,7 @@ export function isInFlight(message: Pick<Message, "status">): boolean {
  * 用户没说话、项目经理也没对用户说话，不进左栏预览、不改排序、不算未读。见 shared/domain.ts 的 isHandoverTraffic 与 isSilentTriggerMessage。
  */
 export function isQuietMessage(message: Message): boolean {
+  if (isRewoundMessage(message) && attachmentsOf(message).length === 0) return true;
   return isHandoverTraffic(message) || isSilentTriggerMessage(message) || systemEventOf(message)?.event === "session.renewed";
 }
 

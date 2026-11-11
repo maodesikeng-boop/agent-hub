@@ -143,6 +143,19 @@ describe("ledger 流式文字（agent.text_delta）", () => {
     expect(ledger.snapshot().sessions.find((s) => s.sessionId === sessionId)?.streamingText).toBeUndefined();
   });
 
+  it("停止并 rewind 后迟到增量和待发定时器都不能恢复旧预览", () => {
+    const id = ledger.postUserMessage({ conversationId, clientId: "rewind-stream", text: "查一下" }).messageId;
+    ev({ type: "message.processing", messageIds: [id], at: now });
+    ev({ type: "agent.text_delta", delta: "首块", at: now });
+    ev({ type: "agent.text_delta", delta: "尾块", at: ++now });
+    ledger.requestStop(conversationId);
+    expect(ledger.rewindLastUserMessage(conversationId)?.id).toBe(id);
+    ev({ type: "agent.text_delta", delta: "迟到旧回复", at: ++now });
+    vi.advanceTimersByTime(STREAMING_TEXT_THROTTLE_MS * 2);
+    expect(ledger.snapshot().sessions.find((s) => s.sessionId === sessionId)?.streamingText).toBeUndefined();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("彻底删除会话立即取消待发流式定时器", () => {
     const pmId = ledger.snapshot().pms[0]!.id;
     ledger.archivePm(pmId);

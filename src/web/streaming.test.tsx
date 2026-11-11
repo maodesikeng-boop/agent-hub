@@ -10,7 +10,7 @@ import * as ComposerMod from "./components/Composer.tsx";
 import * as MessagesMod from "./components/Messages.tsx";
 import * as RightRailMod from "./components/RightRail.tsx";
 import * as SidebarMod from "./components/Sidebar.tsx";
-import { applyChange, initialState, type HubState } from "./state.ts";
+import { applyChange, initialState, reducer, type HubState } from "./state.ts";
 import {
   FakeApi,
   FakeWebSocket,
@@ -66,6 +66,18 @@ describe("网页流式文字渲染与无重影衔接", () => {
     );
     expect(state.sessions[0]?.streamingText).toBeUndefined();
     expect(state.conversations[1]?.messages.at(-1)?.text).toBe("正在生成的完整段落");
+  });
+
+  it("乐观 rewind 在停止状态帧到达前立即清掉本对话流式预览", () => {
+    const state: HubState = {
+      ...initialState,
+      phase: "ready",
+      conversations: { 1: makeConvSnapshot([makeUserMessage({ id: 1, conversationId: 1, status: "processing" })], { conversation: { id: 1 } }) },
+      sessions: [makeSession({ sessionId: 10, conversationId: 1, activity: "working", streamingText: "旧回复草稿" })],
+      pending: [{ clientId: "pending-1", conversationId: 1, text: "待发问题", attachments: [], phase: "sending", createdAt: 1 }],
+    };
+    expect(reducer(state, { type: "messageRewind", conversationId: 1, messageId: 1 }).sessions[0]?.streamingText).toBeUndefined();
+    expect(reducer(state, { type: "pendingRewind", clientId: "pending-1" }).sessions[0]?.streamingText).toBeUndefined();
   });
 
   it("实时显示流式 Markdown，落库切换时零双份重影、零 .message-enter 重播，且多步工具后继续流式共用同一轮头像", async () => {

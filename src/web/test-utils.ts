@@ -288,6 +288,7 @@ export class FakeApi {
     body: { messageId: 999 },
   });
   stop: (conversationId: number) => Reply | Promise<Reply> = () => ({ status: 202 });
+  rewind: (conversationId: number) => Reply | Promise<Reply> = () => ({ status: 200, body: { message: null } });
   older: (conversationId: number, before: number) => Reply | Promise<Reply> = () => ({
     status: 200,
     body: { messages: [], hasMore: false } satisfies MessagesPage,
@@ -388,7 +389,7 @@ export class FakeApi {
     if (method === "GET" && url.pathname === "/api/state") return jsonResponse(await this.state());
     if (method === "GET" && url.pathname === "/api/models") return jsonResponse(await this.models());
     if (method === "GET" && url.pathname === "/api/quota") return jsonResponse(await this.quota());
-    const m = /^\/api\/conversations\/(\d+)\/(messages|stop)$/.exec(url.pathname);
+    const m = /^\/api\/conversations\/(\d+)\/(messages|stop|rewind)$/.exec(url.pathname);
     if (m) {
       const id = Number(m[1]);
       if (m[2] === "messages" && method === "POST") return jsonResponse(await this.postMessage(id, body));
@@ -396,6 +397,7 @@ export class FakeApi {
         return jsonResponse(await this.older(id, Number(url.searchParams.get("before"))));
       }
       if (m[2] === "stop" && method === "POST") return jsonResponse(await this.stop(id));
+      if (m[2] === "rewind" && method === "POST") return jsonResponse(await this.rewind(id));
     }
     if (method === "GET" && url.pathname === API_PATHS.authStatus) return jsonResponse(await this.authStatus());
     if (method === "GET" && url.pathname === "/api/sessions") return jsonResponse(await this.browserSessions());

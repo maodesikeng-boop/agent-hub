@@ -26,6 +26,8 @@ export interface UserMessageMeta {
   workerPick?: WorkerPick;
   /** 服务端驱动确认已交给 agent；执行失败不撤销送达回执，重发时清空。 */
   deliveryConfirmed?: true;
+  /** 用户在暂停后按第二次 Esc 把文字与 workerPick 退回了输入框；幂等标记，刷新后仍一致。 */
+  rewound?: true;
 }
 
 const IMAGE_MIME_BY_EXTENSION: Readonly<Record<string, string>> = {

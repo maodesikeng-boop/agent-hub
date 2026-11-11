@@ -1,6 +1,7 @@
 // W5 端到端（m1-plan 第 4 节“W5 组装 + 端到端”）：真守护进程 + 假 claude，临时数据目录。
 import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { API_PATHS, CRASH_RECOVERY_NOTE, RESEND_NOTE, RESTART_RECOVERY_NOTE, isDeviceId, type Attachment } from "../../src/shared/index.ts";
 import { AGENTS_NOTE, DEFAULT_PM_NAME, HUB_USAGE_PROMPT, PM_MODE_PROMPTS } from "../../src/daemon/prompt.ts";
@@ -201,6 +202,17 @@ describe("W5 组装 + 端到端", () => {
     await waitForStatus(client, first, "processing");
     const a = await client.post(conversationId, "补充一");
     const b = await client.post(conversationId, "补充二");
+    // HTTP 返回只证明消息已入库；执行器稍后才会交给驱动层。
+    // 两个 session.send 都执行过并安排了忙时重查，才能保证下一轮合并。
+    const db = new DatabaseSync(join(env.home, "state", "hub.sqlite"), { readOnly: true });
+    try {
+      await waitUntil("两条补充都已进入驱动队列", () => {
+        const rows = db.prepare("SELECT json_extract(params, '$.messageId') AS id FROM actions WHERE type = 'session.send' AND status = 'pending' AND next_attempt_at > updated_at").all();
+        return rows.some((r) => r.id === a) && rows.some((r) => r.id === b) ? true : undefined;
+      });
+    } finally {
+      db.close();
+    }
     writeFileSync(gate, "");
     await waitForStatus(client, first, "replied");
     await waitForStatus(client, a, "replied");

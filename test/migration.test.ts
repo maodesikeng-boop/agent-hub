@@ -1158,7 +1158,13 @@ describe("0011_message_cancelled：从 0010 的库升级", () => {
     expect(db.get("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'session_steps'")).toEqual({ n: 1 });
     expect(
       db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'messages' AND name NOT LIKE 'sqlite_%' ORDER BY name"),
-    ).toEqual([{ name: "messages_conversation" }, { name: "messages_session" }, { name: "messages_worker" }, { name: "messages_worker_lines" }]);
+    ).toEqual([
+      { name: "messages_conversation" },
+      { name: "messages_conversation_non_agent" },
+      { name: "messages_session" },
+      { name: "messages_worker" },
+      { name: "messages_worker_lines" },
+    ]);
     expect(db.get("SELECT seq FROM sqlite_sequence WHERE name = 'messages'")).toEqual({ seq });
     expect(db.get("SELECT count(*) AS n FROM sqlite_sequence WHERE name = 'messages_new'")).toEqual({ n: 0 });
 
@@ -1370,13 +1376,32 @@ describe("0020_conversation_purges：从 0018 / 0019 的旧库升级", () => {
 // ---- 0021_message_delivery_receipt ----
 
 describe("0021_message_delivery_receipt：从 0020 的旧库升级", () => {
-  it("只跑 0021；最新版本就是 0021；没碰过的表一个字不变", () => {
+  it("只跑 0021；没碰过的表一个字不变", () => {
     const db = m3Db();
     migrate(db, migrationsUpTo(20));
     const before = db.all("SELECT * FROM conversations ORDER BY rowid");
-    expect(migrate(db, migrationsDir)).toMatchObject({ from: 20, to: LATEST_VERSION, applied: [21] });
-    expect(LATEST_VERSION).toBe(21);
+    expect(migrate(db, migrationsUpTo(21))).toMatchObject({ from: 20, to: 21, applied: [21] });
     expect(db.all("SELECT * FROM conversations ORDER BY rowid")).toEqual(before);
     expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+});
+
+// ---- 0022_rewind_index ----
+
+describe("0022_rewind_index：从 0021 的旧库升级", () => {
+  it("只跑 0022；最新版本就是 0022；建好 messages_conversation_non_agent 部分索引；老数据一个字不变；再跑一遍也行", () => {
+    const db = m3Db();
+    migrate(db, migrationsUpTo(21));
+    const tables = db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name");
+    const dump = Object.fromEntries(tables.map(({ name }) => [name, db.all<Record<string, unknown>>(`SELECT * FROM ${name} ORDER BY rowid`)]));
+    expect(migrate(db, migrationsDir)).toMatchObject({ from: 21, to: LATEST_VERSION, applied: [22] });
+    expect(LATEST_VERSION).toBe(22);
+    for (const { name } of tables) expect(db.all(`SELECT * FROM ${name} ORDER BY rowid`)).toEqual(dump[name]);
+    expect(
+      db.get("SELECT count(*) AS n FROM sqlite_master WHERE type = 'index' AND tbl_name = 'messages' AND name = 'messages_conversation_non_agent'"),
+    ).toEqual({ n: 1 });
+    expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+    db.exec("PRAGMA user_version = 21");
+    expect(() => migrate(db, migrationsDir)).not.toThrow();
   });
 });
