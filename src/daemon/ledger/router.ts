@@ -68,7 +68,7 @@ import type {
   RouterSettings,
   RouterSlice,
 } from "../../shared/router.ts";
-import { AGENT_VENDORS, checkEffort, checkModel, isAgentVendor } from "../../shared/vendors.ts";
+import { AGENT_VENDORS, DEFAULT_AGENT_VENDOR, checkEffort, checkModel, isAgentVendor } from "../../shared/vendors.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
 import { fail } from "./context.ts";
 import type { LedgerContext, Pending } from "./context.ts";
@@ -1402,7 +1402,7 @@ export function createLedgerRouter(
         status: w.status,
         activity: ws === null ? "idle" : sessions.liveOf(ws.id).activity,
         readonly: w.readonly === 1,
-        vendor: ws?.vendor ?? "claude",
+        vendor: ws?.vendor ?? DEFAULT_AGENT_VENDOR,
         model: ws?.model ?? null,
       };
     });
