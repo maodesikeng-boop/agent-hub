@@ -69,7 +69,8 @@ export interface RouterDeviceBriefings {
   online: boolean;
   briefings: readonly RouterBriefingEntry[];
   oldestCursor: string | null;
-  liveReportCount: number;
+  oldestReportAt: number | null;
+  hasMore: boolean;
   pmById: ReadonlyMap<PmId, Pm>;
   projectById: ReadonlyMap<ProjectId, Project>;
 }
@@ -77,10 +78,12 @@ export interface RouterDeviceBriefings {
 export interface DeviceRouterStreamSlice {
   commands: readonly RouterCommandRecord[];
   oldestCommandCursor: string | null;
-  liveCommandCount: number;
+  oldestCommandAt: number | null;
+  commandsHasMore: boolean;
   reports: readonly RouterReportItem[];
   oldestReportCursor: string | null;
-  liveReportCount: number;
+  oldestReportAt: number | null;
+  briefingsHasMore: boolean;
   pmById: ReadonlyMap<PmId, Pm>;
   projectById: ReadonlyMap<ProjectId, Project>;
 }
@@ -96,7 +99,8 @@ export interface RouterStreamDeviceInput {
 export interface FleetRouterStream {
   turns: readonly RouterTurnEntry[];
   oldestCommandCursor: string | null;
-  liveCommandCount: number;
+  oldestCommandAt: number | null;
+  commandsHasMore: boolean;
   devices: readonly RouterDeviceBriefings[];
   multiDevice: boolean;
 }
@@ -263,13 +267,15 @@ export function briefingEntryOfReport(
 interface CommandsSlice {
   commands: readonly RouterCommandRecord[];
   oldestCommandCursor: string | null;
-  liveCommandCount: number;
+  oldestCommandAt: number | null;
+  commandsHasMore: boolean;
 }
 
 interface ReportsSlice {
   reports: readonly RouterReportItem[];
   oldestReportCursor: string | null;
-  liveReportCount: number;
+  oldestReportAt: number | null;
+  briefingsHasMore: boolean;
   pmById: ReadonlyMap<PmId, Pm>;
   projectById: ReadonlyMap<ProjectId, Project>;
 }
@@ -281,9 +287,16 @@ const reportsSliceCache = new WeakMap<
 >();
 const deviceStreamCache = new WeakMap<CommandsSlice, WeakMap<ReportsSlice, DeviceRouterStreamSlice>>();
 
-function commandsSliceOf(rawCommands: HubState["router"]["commands"]): CommandsSlice {
+function commandsSliceOf(router: HubState["router"]): CommandsSlice {
+  const rawCommands = router.commands;
+  const commandsHasMore = Boolean(router.commandsHasMore);
   const hit = commandsSliceCache.get(rawCommands);
-  if (hit !== undefined) return hit;
+  if (hit !== undefined) {
+    if (hit.commandsHasMore === commandsHasMore) return hit;
+    const updated: CommandsSlice = { ...hit, commandsHasMore };
+    commandsSliceCache.set(rawCommands, updated);
+    return updated;
+  }
   let oldestCmd: RouterCommandRecord | null = null;
   const commands: RouterCommandRecord[] = [];
   for (const cmd of rawCommands) {
@@ -300,13 +313,15 @@ function commandsSliceOf(rawCommands: HubState["router"]["commands"]): CommandsS
   const slice: CommandsSlice = {
     commands,
     oldestCommandCursor: oldestCmd ? `${oldestCmd.createdAt}:${oldestCmd.id}` : null,
-    liveCommandCount: rawCommands.length,
+    oldestCommandAt: oldestCmd ? oldestCmd.createdAt : null,
+    commandsHasMore,
   };
   commandsSliceCache.set(rawCommands, slice);
   return slice;
 }
 
 function reportsSliceOf(state: HubState): ReportsSlice {
+  const briefingsHasMore = Boolean(state.router.briefingsHasMore);
   let byPms = reportsSliceCache.get(state.router.items);
   if (byPms === undefined) {
     byPms = new WeakMap();
@@ -318,7 +333,12 @@ function reportsSliceOf(state: HubState): ReportsSlice {
     byPms.set(state.pms, byProjects);
   }
   const hit = byProjects.get(state.projects);
-  if (hit !== undefined) return hit;
+  if (hit !== undefined) {
+    if (hit.briefingsHasMore === briefingsHasMore) return hit;
+    const updated: ReportsSlice = { ...hit, briefingsHasMore };
+    byProjects.set(state.projects, updated);
+    return updated;
+  }
 
   const pmById = new Map<PmId, Pm>();
   for (const pm of state.pms) pmById.set(pm.id, pm);
@@ -326,11 +346,9 @@ function reportsSliceOf(state: HubState): ReportsSlice {
   for (const proj of state.projects) projectById.set(proj.id, proj);
 
   let oldestRep: RouterReportItem | null = null;
-  let liveReportCount = 0;
   const reports: RouterReportItem[] = [];
   for (const item of state.router.items) {
     if (item.kind !== "report") continue;
-    liveReportCount++;
     if (
       oldestRep === null ||
       item.createdAt < oldestRep.createdAt ||
@@ -346,7 +364,8 @@ function reportsSliceOf(state: HubState): ReportsSlice {
   const slice: ReportsSlice = {
     reports,
     oldestReportCursor: oldestRep ? `${oldestRep.createdAt}:${oldestRep.id}` : null,
-    liveReportCount,
+    oldestReportAt: oldestRep ? oldestRep.createdAt : null,
+    briefingsHasMore,
     pmById,
     projectById,
   };
@@ -354,9 +373,9 @@ function reportsSliceOf(state: HubState): ReportsSlice {
   return slice;
 }
 
-/** 单台设备的近窗时间流切片（按旧→新排好指令与简报，记住各自最旧一条的分页游标）。 */
+/** 单台设备的近窗时间流切片（按旧→新排好指令与简报，记住各自最旧一条的分页游标与更早记录标记）。 */
 export function routerStreamOf(state: HubState): DeviceRouterStreamSlice {
-  const cSlice = commandsSliceOf(state.router.commands);
+  const cSlice = commandsSliceOf(state.router);
   const rSlice = reportsSliceOf(state);
   let byReports = deviceStreamCache.get(cSlice);
   if (byReports === undefined) {
@@ -369,10 +388,12 @@ export function routerStreamOf(state: HubState): DeviceRouterStreamSlice {
   const slice: DeviceRouterStreamSlice = {
     commands: cSlice.commands,
     oldestCommandCursor: cSlice.oldestCommandCursor,
-    liveCommandCount: cSlice.liveCommandCount,
+    oldestCommandAt: cSlice.oldestCommandAt,
+    commandsHasMore: cSlice.commandsHasMore,
     reports: rSlice.reports,
     oldestReportCursor: rSlice.oldestReportCursor,
-    liveReportCount: rSlice.liveReportCount,
+    oldestReportAt: rSlice.oldestReportAt,
+    briefingsHasMore: rSlice.briefingsHasMore,
     pmById: rSlice.pmById,
     projectById: rSlice.projectById,
   };
@@ -444,7 +465,8 @@ let lastFleetStreamMemo: {
   multiDevice: boolean;
   localCommands: readonly RouterCommandRecord[] | null;
   oldestCommandCursor: string | null;
-  liveCommandCount: number;
+  oldestCommandAt: number | null;
+  commandsHasMore: boolean;
   readyDeps: ReadyDeviceStreamDep[];
   deviceByKey: Map<string, RouterDeviceBriefings>;
   value: FleetRouterStream;
@@ -462,7 +484,8 @@ export function fleetRouterStream(
   const multiDevice = devices.length > 1;
   let localCommands: readonly RouterCommandRecord[] | null = null;
   let oldestCommandCursor: string | null = null;
-  let liveCommandCount = 0;
+  let oldestCommandAt: number | null = null;
+  let commandsHasMore = false;
   const readyDeps: ReadyDeviceStreamDep[] = [];
 
   for (let i = 0; i < devices.length; i++) {
@@ -472,7 +495,8 @@ export function fleetRouterStream(
     if (d.self) {
       localCommands = slice.commands;
       oldestCommandCursor = slice.oldestCommandCursor;
-      liveCommandCount = slice.liveCommandCount;
+      oldestCommandAt = slice.oldestCommandAt;
+      commandsHasMore = slice.commandsHasMore;
     }
     readyDeps.push({
       key: d.self ? "" : d.key,
@@ -489,7 +513,8 @@ export function fleetRouterStream(
     lastFleetStreamMemo.multiDevice === multiDevice &&
     lastFleetStreamMemo.localCommands === localCommands &&
     lastFleetStreamMemo.oldestCommandCursor === oldestCommandCursor &&
-    lastFleetStreamMemo.liveCommandCount === liveCommandCount &&
+    lastFleetStreamMemo.oldestCommandAt === oldestCommandAt &&
+    lastFleetStreamMemo.commandsHasMore === commandsHasMore &&
     lastFleetStreamMemo.readyDeps.length === readyDeps.length &&
     readyDeps.every((cur, idx) => {
       const prev = lastFleetStreamMemo!.readyDeps[idx]!;
@@ -522,7 +547,8 @@ export function fleetRouterStream(
       prev.online === dep.online &&
       prev.briefings === briefings &&
       prev.oldestCursor === dep.slice.oldestReportCursor &&
-      prev.liveReportCount === dep.slice.liveReportCount &&
+      prev.oldestReportAt === dep.slice.oldestReportAt &&
+      prev.hasMore === dep.slice.briefingsHasMore &&
       prev.pmById === dep.slice.pmById &&
       prev.projectById === dep.slice.projectById
         ? prev
@@ -533,7 +559,8 @@ export function fleetRouterStream(
             online: dep.online,
             briefings,
             oldestCursor: dep.slice.oldestReportCursor,
-            liveReportCount: dep.slice.liveReportCount,
+            oldestReportAt: dep.slice.oldestReportAt,
+            hasMore: dep.slice.briefingsHasMore,
             pmById: dep.slice.pmById,
             projectById: dep.slice.projectById,
           };
@@ -554,16 +581,18 @@ export function fleetRouterStream(
     prevValue.turns === turns &&
     prevValue.devices === devicesOut &&
     prevValue.oldestCommandCursor === oldestCommandCursor &&
-    prevValue.liveCommandCount === liveCommandCount &&
+    prevValue.oldestCommandAt === oldestCommandAt &&
+    prevValue.commandsHasMore === commandsHasMore &&
     prevValue.multiDevice === multiDevice
       ? prevValue
-      : { turns, oldestCommandCursor, liveCommandCount, devices: devicesOut, multiDevice };
+      : { turns, oldestCommandCursor, oldestCommandAt, commandsHasMore, devices: devicesOut, multiDevice };
   lastFleetStreamMemo = {
     selfKey,
     multiDevice,
     localCommands,
     oldestCommandCursor,
-    liveCommandCount,
+    oldestCommandAt,
+    commandsHasMore,
     readyDeps,
     deviceByKey,
     value,

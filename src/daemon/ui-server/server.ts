@@ -1227,8 +1227,8 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     routes.get(API_PATHS.state, async (req): Promise<StateSnapshot> => {
       const snap = ledger.snapshot();
       const router =
-        peerOf(req) !== undefined && snap.router.commands.length > 0
-          ? { ...snap.router, commands: [] }
+        peerOf(req) !== undefined && (snap.router.commands.length > 0 || snap.router.commandsHasMore)
+          ? { ...snap.router, commands: [], commandsHasMore: false }
           : snap.router;
       return {
         ...snap,

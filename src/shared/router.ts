@@ -193,9 +193,13 @@ export interface RouterSlice {
    * 上限 ROUTER_STREAM_BRIEFINGS_SNAPSHOT_MAX 条、ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES 字节），合并后按 createdAt DESC, id DESC。
    */
   items: RouterItem[];
+  /** 比 items 里最早一条简报更早的简报还有没有（条数或字节截断时为 true）。 */
+  briefingsHasMore: boolean;
   notes: RouterPmNote[];
   /** 本机最近 ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX 条（另守 ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES）；经 deviceToken 跨机访问时为空数组。 */
   commands: RouterCommandRecord[];
+  /** 本机比 commands 里最早一条更早的指令还有没有（条数或字节截断时为 true）；经 deviceToken 跨机访问时为 false。 */
+  commandsHasMore: boolean;
 }
 
 export interface PmDigestActiveWorker {
@@ -243,8 +247,10 @@ export function emptyRouterSlice(): RouterSlice {
   return {
     settings: defaultRouterSettings(),
     items: [],
+    briefingsHasMore: false,
     notes: [],
     commands: [],
+    commandsHasMore: false,
   };
 }
 

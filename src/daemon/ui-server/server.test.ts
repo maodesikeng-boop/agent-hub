@@ -2118,6 +2118,8 @@ describe("Router 与 TaskGraph 轨道 A 接口", () => {
       ...ledger.snapshotValue,
       router: {
         ...ledger.snapshotValue.router,
+        briefingsHasMore: true,
+        commandsHasMore: true,
         commands: [
           {
             id: 1,
@@ -2141,6 +2143,8 @@ describe("Router 与 TaskGraph 轨道 A 接口", () => {
     const localRes = await call("GET", "/api/state");
     expect(localRes.statusCode).toBe(200);
     expect(localRes.json().router.commands).toHaveLength(1);
+    expect(localRes.json().router.commandsHasMore).toBe(true);
+    expect(localRes.json().router.briefingsHasMore).toBe(true);
 
     const peerId = "11111111-2222-3333-4444-555555555555";
     const peerApp = createUiServer({
@@ -2180,6 +2184,8 @@ describe("Router 与 TaskGraph 轨道 A 接口", () => {
       });
       expect(peerRes.statusCode).toBe(200);
       expect(peerRes.json().router.commands).toEqual([]);
+      expect(peerRes.json().router.commandsHasMore).toBe(false);
+      expect(peerRes.json().router.briefingsHasMore).toBe(true);
     } finally {
       await peerApp.close();
     }

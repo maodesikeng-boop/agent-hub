@@ -178,21 +178,27 @@ function upsertBy<T>(list: T[], item: T, same: (a: T, b: T) => boolean): T[] {
 }
 
 /** 分开按类型裁剪近窗：待拍板最多留 ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX 条，简报最多留 ROUTER_STREAM_LIVE_MAX 条，简报再多也不挤掉待拍板。 */
-function capRouterItems(items: RouterItem[]): RouterItem[] {
+function capRouterItems(items: RouterItem[]): { items: RouterItem[]; reportsTrimmed: boolean } {
   let decisions = 0;
   let reports = 0;
-  let needsTrim = false;
+  let decisionsTrimmed = false;
+  let reportsTrimmed = false;
   for (const x of items) {
     if (x.kind === "decision") {
-      if (++decisions > ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX) needsTrim = true;
+      if (++decisions > ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX) decisionsTrimmed = true;
     } else if (++reports > ROUTER_STREAM_LIVE_MAX) {
-      needsTrim = true;
+      reportsTrimmed = true;
     }
   }
-  if (!needsTrim) return items;
+  if (!decisionsTrimmed && !reportsTrimmed) return { items, reportsTrimmed: false };
   decisions = 0;
   reports = 0;
-  return items.filter((x) => (x.kind === "decision" ? ++decisions <= ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX : ++reports <= ROUTER_STREAM_LIVE_MAX));
+  return {
+    items: items.filter((x) =>
+      x.kind === "decision" ? ++decisions <= ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX : ++reports <= ROUTER_STREAM_LIVE_MAX,
+    ),
+    reportsTrimmed,
+  };
 }
 
 /** 消息不再是失败了（重试成功排进队了），就不用再记它的重试状态。 */
@@ -381,17 +387,28 @@ export function applyChange(state: HubState, change: Change): HubState {
           };
         }
         const items =
-          existingIndex === -1 ? capRouterItems([item, ...state.router.items]) : state.router.items.with(existingIndex, item);
+          existingIndex === -1
+            ? capRouterItems([item, ...state.router.items]).items
+            : state.router.items.with(existingIndex, item);
         return { ...next, router: { ...state.router, items } };
       }
-      // 简报（unread / archived）都在时间流近窗里：created 插到最前并按上限裁剪；updated 只改近窗里已有的记录，不把老记录塞回近窗挖出空洞。
+      // 简报（unread / archived）都在时间流近窗里：created 插到最前并按上限裁剪（挤出旧简报时标上 briefingsHasMore）；updated 只改近窗里已有的记录，不把老记录塞回近窗挖出空洞。
       if (change.type === "router.item.updated") {
         if (existingIndex === -1) return next;
         return { ...next, router: { ...state.router, items: state.router.items.with(existingIndex, item) } };
       }
-      const items =
-        existingIndex === -1 ? capRouterItems([item, ...state.router.items]) : state.router.items.with(existingIndex, item);
-      return { ...next, router: { ...state.router, items } };
+      if (existingIndex !== -1) {
+        return { ...next, router: { ...state.router, items: state.router.items.with(existingIndex, item) } };
+      }
+      const capped = capRouterItems([item, ...state.router.items]);
+      return {
+        ...next,
+        router: {
+          ...state.router,
+          items: capped.items,
+          ...(capped.reportsTrimmed && !state.router.briefingsHasMore ? { briefingsHasMore: true } : {}),
+        },
+      };
     }
     case "router.reports.archived_all": {
       const archived = new Set(change.data.archivedIds);
@@ -422,11 +439,20 @@ export function applyChange(state: HubState, change: Change): HubState {
     case "router.command.created": {
       const { command } = change.data;
       const existingIndex = state.router.commands.findIndex((c) => c.id === command.id);
-      const commands =
-        existingIndex === -1
-          ? [command, ...state.router.commands].slice(0, ROUTER_STREAM_LIVE_MAX)
-          : state.router.commands.with(existingIndex, command);
-      return { ...next, router: { ...state.router, commands } };
+      if (existingIndex !== -1) {
+        return { ...next, router: { ...state.router, commands: state.router.commands.with(existingIndex, command) } };
+      }
+      const combined = [command, ...state.router.commands];
+      const trimmed = combined.length > ROUTER_STREAM_LIVE_MAX;
+      const commands = trimmed ? combined.slice(0, ROUTER_STREAM_LIVE_MAX) : combined;
+      return {
+        ...next,
+        router: {
+          ...state.router,
+          commands,
+          ...(trimmed && !state.router.commandsHasMore ? { commandsHasMore: true } : {}),
+        },
+      };
     }
     case "router.command.updated": {
       const { command } = change.data;
@@ -481,6 +507,19 @@ function endedBefore(state: HubState, conversationId: ConversationId): boolean {
   return sessions.length > 0 && sessions.every((s) => s.status === "ended");
 }
 
+/** 兼容还没升级的旧版远端守护进程（快照里没有 commandsHasMore / briefingsHasMore）：已有字段时零分配原样返回。 */
+function normalizeRouterSlice(router: RouterSlice): RouterSlice {
+  const raw = router as Partial<Pick<RouterSlice, "commandsHasMore" | "briefingsHasMore">> & RouterSlice;
+  if (typeof raw.commandsHasMore === "boolean" && typeof raw.briefingsHasMore === "boolean") {
+    return router;
+  }
+  return {
+    ...router,
+    commandsHasMore: raw.commandsHasMore ?? router.commands.length > 0,
+    briefingsHasMore: raw.briefingsHasMore ?? router.items.some((x) => x.kind === "report"),
+  };
+}
+
 function fromSnapshot(state: HubState, snapshot: StateSnapshot): HubState {
   const conversations: Record<ConversationId, ConversationView> = {};
   for (const c of snapshot.conversations) {
@@ -507,7 +546,7 @@ function fromSnapshot(state: HubState, snapshot: StateSnapshot): HubState {
     sessions: snapshot.sessions,
     health: snapshot.health,
     schedules: snapshot.schedules,
-    router: snapshot.router,
+    router: normalizeRouterSlice(snapshot.router),
     activeTaskGraphs: snapshot.activeTaskGraphs,
     server: snapshot.server,
     ...(snapshot.tunnel !== undefined ? { tunnel: snapshot.tunnel } : {}),

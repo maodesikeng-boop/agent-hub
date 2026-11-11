@@ -235,7 +235,7 @@ export interface StateSnapshot {
   health: HealthEntry[];
   /** 所有项目经理的定时任务（M6），按编号从小到大；ScheduleRecord.pmId 认是谁的。 */
   schedules: ScheduleRecord[];
-  /** Router（总助）切片：配置、活跃待决/未读汇报、PM 备忘与本机最近指令。 */
+  /** Router（总助）切片：配置、待拍板项与最近简报（含 briefingsHasMore）、PM 备忘与本机最近指令（含 commandsHasMore）。 */
   router: RouterSlice;
   /** 所有进行中项目的活跃任务图（status = 'active'）。 */
   activeTaskGraphs: TaskGraph[];

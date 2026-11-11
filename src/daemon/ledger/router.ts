@@ -157,16 +157,30 @@ function takeWithinBytes<T>(items: readonly T[], maxBytes: number): T[] {
 }
 
 /**
+ * 窗口切片：rows 是按 created_at DESC, id DESC 多取 1 条的结果（最多 take + 1 条），map 只转换前 take 条。
+ * 条数和 maxBytes 哪个先到按哪个截；无论超了条数还是超了字节，hasMore 都为 true。
+ */
+function sliceWindow<R, T>(
+  rows: readonly R[],
+  take: number,
+  maxBytes: number,
+  map: (row: R) => T,
+): { kept: T[]; hasMore: boolean } {
+  const page = rows.slice(0, take).map(map);
+  const kept = takeWithinBytes(page, maxBytes);
+  return { kept, hasMore: rows.length > take || kept.length < page.length };
+}
+
+/**
  * 一页历史：rows 是按 created_at DESC, id DESC 多取 1 条的结果。条数和 ROUTER_STREAM_PAGE_MAX_BYTES 哪个先到按哪个截，
  * 提前截了也算还有更多，游标指向最后一条已给出的记录。
  */
-function pageOf<T extends { createdAt: number; id: number }>(
-  rows: readonly T[],
+function pageOf<R, T extends { createdAt: number; id: number }>(
+  rows: readonly R[],
   take: number,
+  map: (row: R) => T,
 ): { kept: T[]; nextCursor: string | null; hasMore: boolean } {
-  const page = rows.slice(0, take);
-  const kept = takeWithinBytes(page, ROUTER_STREAM_PAGE_MAX_BYTES - PAGE_ENVELOPE_BYTES);
-  const hasMore = rows.length > take || kept.length < page.length;
+  const { kept, hasMore } = sliceWindow(rows, take, ROUTER_STREAM_PAGE_MAX_BYTES - PAGE_ENVELOPE_BYTES, map);
   const last = kept[kept.length - 1];
   return { kept, nextCursor: hasMore && last !== undefined ? `${last.createdAt}:${last.id}` : null, hasMore };
 }
@@ -819,7 +833,7 @@ export function createLedgerRouter(
         take + 1,
       );
     }
-    const { kept, nextCursor, hasMore } = pageOf(rows.map(toRouterItem), take);
+    const { kept, nextCursor, hasMore } = pageOf(rows, take, toRouterItem);
     return { items: kept, nextCursor, hasMore };
   };
 
@@ -837,8 +851,8 @@ export function createLedgerRouter(
   /**
    * 供 ledger.snapshot() 内嵌的首屏轻量切片（docs/router-workbench-v2-design.md 第 3.2 节第 6 项），每类各有条数和字节上限：
    * - 待拍板项：全部 pending，上限 ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX；条件原样写出部分索引 router_items_active 的 WHERE，SQLite 才肯用它；
-   * - 简报：不分已读未读取最近 ROUTER_STREAM_BRIEFINGS_SNAPSHOT_MAX 条，再按 ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES 从新到旧截；
-   * - 指令：最近 ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX 条，再按 ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES 从新到旧截。
+   * - 简报：不分已读未读取最近 ROUTER_STREAM_BRIEFINGS_SNAPSHOT_MAX 条（多取 1 条探底），再按 ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES 从新到旧截，标出 briefingsHasMore；
+   * - 指令：最近 ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX 条（多取 1 条探底），再按 ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES 从新到旧截，标出 commandsHasMore。
    * 简报再多也挤不掉待拍板项；读过的简报留在近窗里。
    */
   const snapshotSlice = (): RouterSlice => {
@@ -855,9 +869,14 @@ export function createLedgerRouter(
         WHERE kind = 'report'
         ORDER BY created_at DESC, id DESC
         LIMIT ?`,
-      ROUTER_STREAM_BRIEFINGS_SNAPSHOT_MAX,
+      ROUTER_STREAM_BRIEFINGS_SNAPSHOT_MAX + 1,
     );
-    const briefings = takeWithinBytes(briefingRows.map(toRouterItem), ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES);
+    const { kept: briefings, hasMore: briefingsHasMore } = sliceWindow(
+      briefingRows,
+      ROUTER_STREAM_BRIEFINGS_SNAPSHOT_MAX,
+      ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES,
+      toRouterItem,
+    );
     const items = [...pendingRows.map(toRouterItem), ...briefings].sort(
       (a, b) => b.createdAt - a.createdAt || b.id - a.id,
     );
@@ -871,13 +890,21 @@ export function createLedgerRouter(
       `SELECT * FROM router_commands
         ORDER BY created_at DESC, id DESC
         LIMIT ?`,
+      ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX + 1,
+    );
+    const { kept: commands, hasMore: commandsHasMore } = sliceWindow(
+      commandRows,
       ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX,
+      ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES,
+      toRouterCommand,
     );
     return {
       settings,
       items,
+      briefingsHasMore,
       notes: noteRows.map((n) => ({ pmId: n.pm_id, text: n.text, updatedAt: n.updated_at })),
-      commands: takeWithinBytes(commandRows.map(toRouterCommand), ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES),
+      commands,
+      commandsHasMore,
     };
   };
 
@@ -1268,7 +1295,7 @@ export function createLedgerRouter(
         take + 1,
       );
     }
-    const { kept, nextCursor, hasMore } = pageOf(rows.map(toRouterCommand), take);
+    const { kept, nextCursor, hasMore } = pageOf(rows, take, toRouterCommand);
     return { commands: kept, nextCursor, hasMore };
   };
 
