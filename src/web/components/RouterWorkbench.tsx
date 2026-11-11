@@ -242,8 +242,8 @@ export function RouterWorkbench({
   leading?: ReactNode;
   notices?: ReactNode;
   view: FleetRouterView;
-  devices?: readonly DeviceView[];
-  selfId?: string | null;
+  devices: readonly DeviceView[];
+  selfId: string | null;
   draft: DraftSlot;
   staging: StagedFiles;
   clientForDevice: (deviceKey: string) => HubClient;
@@ -333,28 +333,15 @@ export function RouterWorkbench({
 
   // 时间流切片（WeakMap 四级缓存：流式打字期间严格 ===）
   const stream = useMemo<FleetRouterStream>(() => {
-    if (devices !== undefined) {
-      const inputs: RouterStreamDeviceInput[] = devices.map((d) => ({
-        key: d.key === LOCAL_DEVICE ? "" : d.key,
-        name: d.info.name,
-        self: d.key === LOCAL_DEVICE,
-        online: d.key === LOCAL_DEVICE ? true : !isReadOnly(d.status),
-        state: d.state,
-      }));
-      return fleetRouterStream(inputs, resolvedSelfId);
-    }
-    const turns = view.commands
-      .filter((c) => c.status !== "cancelled")
-      .toSorted((a, b) => a.createdAt - b.createdAt || a.id - b.id)
-      .map((c) => turnEntryOfCommand(c, resolvedSelfId, true));
-    return {
-      turns,
-      oldestCommandCursor: null,
-      liveCommandCount: view.commands.length,
-      devices: [],
-      multiDevice: view.multiDevice,
-    };
-  }, [devices, resolvedSelfId, view.commands, view.multiDevice]);
+    const inputs: RouterStreamDeviceInput[] = devices.map((d) => ({
+      key: d.key,
+      name: d.info.name,
+      self: d.key === LOCAL_DEVICE,
+      online: d.key === LOCAL_DEVICE || !isReadOnly(d.status),
+      state: d.state,
+    }));
+    return fleetRouterStream(inputs, resolvedSelfId);
+  }, [devices, resolvedSelfId]);
 
   // 统一走 postRouterCommand 的发送 mutation（缓存在 QueryClient，切走再回来仍在；只结构出稳定的 mutate 以免击穿 RouterStream 的 memo）
   const { mutate: mutateSend } = useMutation<PostRouterCommandResponse, unknown, RouterCommandVariables>(

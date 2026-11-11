@@ -639,8 +639,6 @@ export const ROUTER_STREAM_LIVE_MAX = 200;
 /** Router 时间流历史每页条数，和每个来源最多往回翻几页（到了就不再出 Load earlier）。 */
 export const ROUTER_STREAM_PAGE_SIZE = 30;
 export const ROUTER_STREAM_MAX_PAGES = 10;
-/** 兼容别名：src/daemon/ledger/router.ts 还按旧名引用，后端契约 PR 合入后随它一起删。 */
-export const ROUTER_ARCHIVED_PAGE_SIZE = ROUTER_STREAM_PAGE_SIZE;
 /** Digest 中 PM 性格摘要最多取前几行、最多多少字。 */
 export const ROUTER_PERSONA_SUMMARY_LINES = 4;
 export const ROUTER_PERSONA_SUMMARY_MAX_CHARS = 200;

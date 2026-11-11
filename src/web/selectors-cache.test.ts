@@ -309,7 +309,7 @@ describe("selector 缓存：300 个 Worker、3 万条消息", () => {
     const firstFleet = fleetRouterView(makeDevices(localWithRouter));
     expect(fleetRouterView(makeDevices(localWithRouter))).toBe(firstFleet);
     expect(firstFleet.decisions).toHaveLength(1);
-    expect(firstFleet.reports).toHaveLength(1);
+    expect(firstFleet.summary.unreadReportCount).toBe(1);
 
     // 流式增量文字更新与 Worker 消息到达都不换 deviceRouterView / fleetRouterView 引用
     const pmSession = makeSession({
@@ -451,6 +451,8 @@ describe("selector 缓存：300 个 Worker、3 万条消息", () => {
     expect(changedTurns.map((t) => t.command?.id)).toEqual([100]);
     expect(after.devices[0]!.briefings).toBe(first.devices[0]!.briefings);
     expect(after.devices[1]).toBe(first.devices[1]);
+    // 只变指令：设备数组本身也沿用（下游“标已读”、简报分页按它做依赖，不该跟着重跑）
+    expect(after.devices).toBe(first.devices);
 
     // 来一条简报：回合列表还是原来的那个数组，另一台设备的简报也不动
     const briefed = applyChange(changed, changeOf(++seq, "router.item.created", { item: report(900, 1, PM_CONVERSATION, 99_000) }));

@@ -21,6 +21,7 @@ import {
 } from "react";
 import {
   ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX,
+  ROUTER_STREAM_BRIEFINGS_SNAPSHOT_MAX,
   ROUTER_STREAM_LIVE_MAX,
   ROUTER_STREAM_MAX_PAGES,
   ROUTER_STREAM_PAGE_SIZE,
@@ -43,7 +44,6 @@ import {
   type FleetRouterStream,
   type RouterBriefingEntry,
   type RouterDeviceBriefings,
-  type RouterPlanExtras,
   type RouterStreamEntry,
   type RouterStreamSource,
   type RouterTurnDestination,
@@ -214,7 +214,6 @@ const TurnRow = memo(function TurnRow({
   const isSendFailed = effectiveStatus === "send_failed";
   const command = entry.command;
   const plan = command?.plan ?? null;
-  const extras = plan as (typeof plan & RouterPlanExtras) | null;
   const rawReply = plan?.reply ?? "";
   // 轨道 A 成功投递后去向行已经把目标和状态交代清楚，不再重复画那句模板回执
   const showReply = rawReply.trim() !== "" && !(plan?.track === "A" && effectiveStatus === "dispatched");
@@ -241,7 +240,7 @@ const TurnRow = memo(function TurnRow({
   const failReason =
     retryError !== undefined ? errorLine(retryError) : (command?.error ?? "总助这次没能完成，请重试");
   const failRaw =
-    retryError !== undefined ? errorTitle(retryError) : (extras?.errorRaw && extras.errorRaw !== failReason ? extras.errorRaw : undefined);
+    retryError !== undefined ? errorTitle(retryError) : (plan?.errorRaw !== undefined && plan.errorRaw !== failReason ? plan.errorRaw : undefined);
 
   return (
     <div data-stream-entry className="chat-column w-full">
@@ -287,7 +286,7 @@ const TurnRow = memo(function TurnRow({
                 </div>
               )}
 
-              {extras?.replyTruncated && (
+              {plan?.replyTruncated === true && (
                 <p className="text-xs text-muted-foreground">Reply truncated</p>
               )}
 
@@ -691,18 +690,27 @@ export const RouterStream = memo(function RouterStream({
   }
   const newDividerKey = newDividerCaptureRef.current.key;
 
-  // 看到即标已读：页面可见时，每台有未读简报的在线设备按未读编号集合去重各调一次 archive-all
+  // 看到即标已读：页面可见时，每台有未读简报的在线设备按未读编号集合去重各调一次 archive-all。
+  // 失败了集合照样记着（不改界面），只在页面重新可见或未读集合变了（来了新简报）时再试，别的流更新不重发。
   const sentUnreadSigRef = useRef(new Map<string, string>());
+  const failedReadRef = useRef(new Set<string>());
   useEffect(() => {
     const flushRead = () => {
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       const acked = getAckedBriefings(qc);
       const activeDeviceKeys = new Set(stream.devices.map((d) => d.key));
       for (const key of sentUnreadSigRef.current.keys()) {
-        if (!activeDeviceKeys.has(key)) sentUnreadSigRef.current.delete(key);
+        if (!activeDeviceKeys.has(key)) {
+          sentUnreadSigRef.current.delete(key);
+          failedReadRef.current.delete(key);
+        }
       }
       for (const dev of stream.devices) {
-        if (!dev.online) continue;
+        if (!dev.online) {
+          // 掉线期间失败过的，重新连上就再试一次
+          if (failedReadRef.current.delete(dev.key)) sentUnreadSigRef.current.delete(dev.key);
+          continue;
+        }
         const unreadIds: number[] = [];
         const unreadKeys: string[] = [];
         for (const b of dev.briefings) {
@@ -715,28 +723,31 @@ export const RouterStream = memo(function RouterStream({
         }
         if (unreadIds.length === 0) {
           sentUnreadSigRef.current.delete(dev.key);
+          failedReadRef.current.delete(dev.key);
           continue;
         }
         unreadIds.sort((a, b) => a - b);
         const sig = unreadIds.join(",");
         if (sentUnreadSigRef.current.get(dev.key) === sig) continue;
         sentUnreadSigRef.current.set(dev.key, sig);
+        failedReadRef.current.delete(dev.key);
         clientForDevice(dev.key)
           .postArchiveAllRouterReports()
           .then(() => {
             for (const k of unreadKeys) addAckedBriefing(acked, k);
           })
           .catch(() => {
-            if (sentUnreadSigRef.current.get(dev.key) === sig) {
-              sentUnreadSigRef.current.delete(dev.key);
-            }
+            if (sentUnreadSigRef.current.get(dev.key) === sig) failedReadRef.current.add(dev.key);
           });
       }
     };
     flushRead();
     if (typeof document === "undefined") return;
     const onVisibility = () => {
-      if (document.visibilityState !== "hidden") flushRead();
+      if (document.visibilityState === "hidden") return;
+      for (const key of failedReadRef.current) sentUnreadSigRef.current.delete(key);
+      failedReadRef.current.clear();
+      flushRead();
     };
     document.addEventListener("visibilitychange", onVisibility);
     return () => document.removeEventListener("visibilitychange", onVisibility);
@@ -767,12 +778,17 @@ export const RouterStream = memo(function RouterStream({
     const persistedTurns = olderTurns.length > 0 ? [...olderTurns, ...stream.turns] : stream.turns;
     const allTurns = activePending.length > 0 ? [...persistedTurns, ...activePending] : persistedTurns;
 
+    // 快照近窗除了条数还有字节上限（ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES），几条长回答就能把它截到不满 10 条，
+    // 所以没翻过之前只要近窗里有东西就给 Load earlier，第一页回来再以服务端的 hasMore 为准。
+    // 水位线只在近窗满了条数上限（大概率被截过）或已经翻过还有更多时才挡，免得一边只有几条新内容就把另一边全挡住。
     const cmdNeverFetched = commandsQuery.data === undefined && !commandsQuery.isError;
-    const cmdHasMore = cmdNeverFetched
-      ? stream.liveCommandCount >= ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX && stream.oldestCommandCursor !== null
-      : commandsQuery.isError ||
-        (Boolean(commandsQuery.hasNextPage) && cmdPages.length < ROUTER_STREAM_MAX_PAGES);
-    const cmdLoadedDownTo = cmdHasMore && persistedTurns.length > 0 ? persistedTurns[0]!.createdAt : null;
+    const cmdHasMore =
+      stream.oldestCommandCursor !== null &&
+      (cmdNeverFetched ||
+        commandsQuery.isError ||
+        (Boolean(commandsQuery.hasNextPage) && cmdPages.length < ROUTER_STREAM_MAX_PAGES));
+    const cmdGuards = cmdNeverFetched ? stream.liveCommandCount >= ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX : cmdHasMore;
+    const cmdLoadedDownTo = cmdHasMore && cmdGuards && persistedTurns.length > 0 ? persistedTurns[0]!.createdAt : null;
 
     const sources: RouterStreamSource<RouterStreamEntry>[] = [
       { entries: allTurns, loadedDownTo: cmdLoadedDownTo, hasMore: cmdHasMore },
@@ -816,20 +832,16 @@ export const RouterStream = memo(function RouterStream({
       olderBriefings.sort((a, b) => a.createdAt - b.createdAt || a.report.id - b.report.id);
 
       const allBriefings = olderBriefings.length > 0 ? [...olderBriefings, ...dev.briefings] : dev.briefings;
+      // 和指令同一个口径：没翻过之前有就给 Load earlier；近窗满了快照条数上限才挡水位线
       const repNeverFetched = snap === undefined || (snap.data === undefined && !snap.isError);
       const repHasMore =
         dev.online &&
         dev.oldestCursor !== null &&
-        (repNeverFetched
-          ? dev.liveReportCount > 0
-          : Boolean(snap?.isError) || (Boolean(snap?.hasNextPage) && repPages.length < ROUTER_STREAM_MAX_PAGES));
-      const repLoadedDownTo = repNeverFetched
-        ? dev.online && dev.liveReportCount >= ROUTER_STREAM_PAGE_SIZE && allBriefings.length > 0
-          ? allBriefings[0]!.createdAt
-          : null
-        : repHasMore && allBriefings.length > 0
-          ? allBriefings[0]!.createdAt
-          : null;
+        (repNeverFetched ||
+          Boolean(snap?.isError) ||
+          (Boolean(snap?.hasNextPage) && repPages.length < ROUTER_STREAM_MAX_PAGES));
+      const repGuards = repNeverFetched ? dev.liveReportCount >= ROUTER_STREAM_BRIEFINGS_SNAPSHOT_MAX : repHasMore;
+      const repLoadedDownTo = repHasMore && repGuards && allBriefings.length > 0 ? allBriefings[0]!.createdAt : null;
 
       sources.push({ entries: allBriefings, loadedDownTo: repLoadedDownTo, hasMore: repHasMore });
       if (repHasMore) {

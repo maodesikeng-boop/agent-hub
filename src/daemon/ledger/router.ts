@@ -29,7 +29,7 @@ import type { HubArgs, HubResult } from "../../shared/hub.ts";
 import {
   MAX_DECISION_NOTE_CHARS,
   ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX,
-  ROUTER_ARCHIVED_PAGE_SIZE,
+  ROUTER_STREAM_PAGE_SIZE,
   ROUTER_AUDIT_LOG_MAX_ROWS,
   ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES,
   ROUTER_COMMANDS_RETENTION_MAX,
@@ -764,7 +764,7 @@ export function createLedgerRouter(
     if (kind !== undefined && kind !== "report") throw fail("invalid", "kind 只能是 report");
     // 固定的两段 SQL 条件，不拼任何外部输入
     const scope = kind === "report" ? "kind = 'report'" : "status IN ('resolved', 'superseded', 'archived')";
-    const take = Math.max(1, Math.min(limit ?? ROUTER_ARCHIVED_PAGE_SIZE, 100));
+    const take = Math.max(1, Math.min(limit ?? ROUTER_STREAM_PAGE_SIZE, 100));
     let rows: RouterItemDbRow[];
     const trimmed = beforeCursor?.trim() ?? "";
     if (trimmed === "") {
@@ -1216,7 +1216,7 @@ export function createLedgerRouter(
 
   /** GET /api/router/commands：按 <createdAt>:<id>（或纯 <id>）游标倒序分页读取历史指令，单页另守 ROUTER_STREAM_PAGE_MAX_BYTES。 */
   const listCommands = (beforeCursor?: string, limit?: number): RouterCommandsPage => {
-    const take = Math.max(1, Math.min(limit ?? ROUTER_ARCHIVED_PAGE_SIZE, 100));
+    const take = Math.max(1, Math.min(limit ?? ROUTER_STREAM_PAGE_SIZE, 100));
     let rows: RouterCommandDbRow[];
     const trimmed = beforeCursor?.trim() ?? "";
     if (trimmed === "") {

@@ -568,8 +568,7 @@ describe("时间流：指令回合", () => {
       clientId: "c-truncated",
       inputText: "把所有项目的状态都列出来",
       status: "answered",
-      // replyTruncated 是后端契约 PR 加的可选字段，网页按结构读
-      plan: { intent: "answer", reply: "太长被截了", actions: [], track: "B", replyTruncated: true } as RouterCommandRecord["plan"],
+      plan: { intent: "answer", reply: "太长被截了", actions: [], track: "B", replyTruncated: true },
       dispatched: null,
       createdAt: Date.now() - 10_000,
     });
@@ -694,8 +693,7 @@ describe("时间流：指令回合", () => {
       inputText: "把刚才那个停掉",
       status: "failed",
       error: "总助这次没能完成，请重试",
-      // errorRaw 是后端契约 PR 加的可选字段
-      plan: { intent: "ambiguous", reply: "", actions: [], track: "B", errorRaw: "session_ended: session 512 has been ended" } as RouterCommandRecord["plan"],
+      plan: { intent: "ambiguous", reply: "", actions: [], track: "B", errorRaw: "session_ended: session 512 has been ended" },
       dispatched: null,
       createdAt: now - 20_000,
     });
@@ -1097,6 +1095,99 @@ describe("时间流：简报、已读、贴底和历史", () => {
     expect(within(historyFailed).getByText("模型响应超时，请稍后重试")).toBeInTheDocument();
     expect(within(historyFailed).queryByRole("button", { name: "Retry" })).toBeNull();
     expect(within(timeline()).queryByRole("button", { name: /Load earlier|Couldn't load/ })).toBeNull();
+  });
+
+  it("长回答把指令快照截到不满 10 条（字节上限）时照样能 Load earlier；附件按 plan.attachments 画在气泡下面", async () => {
+    const now = Date.now();
+    const longReply = `第一段：${"很长的回答".repeat(400)}\n\n第二段：收尾`;
+    const commands = [
+      makeCommandRecord({ id: 702, clientId: "t-2", inputText: "最近一条", status: "answered", plan: { intent: "answer", reply: longReply, actions: [], track: "B" }, dispatched: null, createdAt: now - 60_000 }),
+      makeCommandRecord({
+        id: 701,
+        clientId: "t-1",
+        inputText: "带附件的一条",
+        status: "answered",
+        plan: { intent: "answer", reply: longReply, actions: [], track: "B", attachments: [{ id: "u-1", name: "spec.pdf", mime: "application/pdf", size: 2048 }] },
+        dispatched: null,
+        createdAt: now - 120_000,
+      }),
+    ];
+    const localSnap = makeSnapshot({
+      pms: [makePm({ id: 1, name: "小林" })],
+      conversations: [makeConvSnapshot([], { conversation: { id: 1, pmId: 1, title: "小林" } })],
+      router: { ...emptyRouterSlice(), commands },
+    });
+    const older = makeCommandRecord({ id: 650, clientId: "t-0", inputText: "被字节上限挤出快照的指令", status: "answered", plan: { intent: "answer", reply: "更早的回答", actions: [], track: "B" }, dispatched: null, createdAt: now - 3_600_000 });
+    const { commandPageCalls } = installFleet({
+      local: localSnap,
+      commandsPage: () => ({ commands: [older], nextCursor: null, hasMore: false }),
+    });
+    const user = userEvent.setup();
+    await openRouter();
+    await waitFor(() => expect(turns()).toHaveLength(2));
+    expect(within(turnOf("带附件的一条")).getByText("spec.pdf")).toBeInTheDocument();
+
+    await user.click(within(timeline()).getByRole("button", { name: "Load earlier" }));
+    await waitFor(() => expect(commandPageCalls).toHaveLength(1));
+    expect(commandPageCalls[0]!.get("cursor")).toBe(`${commands[1]!.createdAt}:${commands[1]!.id}`);
+    expect(await within(timeline()).findByText("被字节上限挤出快照的指令")).toBeInTheDocument();
+    expect(turns()[0]).toBe(turnOf("被字节上限挤出快照的指令"));
+    // 服务端说到头了：不再出 Load earlier
+    expect(within(timeline()).queryByRole("button", { name: /Load earlier|Couldn't load/ })).toBeNull();
+  });
+
+  it("标已读失败：不因为别的流更新（指令变了、项目经理改了）重发，页面重新可见或来了新简报才再试", async () => {
+    const now = Date.now();
+    const unread = makeReportItem({ id: 230, summary: "一条未读简报", links: [], createdAt: now - 30_000 });
+    const planning = makeCommandRecord({ id: 720, clientId: "v-1", inputText: "跑一下回归", status: "planning", plan: null, dispatched: null, createdAt: now - 20_000 });
+    const localSnap = makeSnapshot({
+      pms: [makePm({ id: 1, name: "小林" })],
+      projects: [makeProject({ id: 10, name: "agent-hub", pmId: 1, conversationId: 1 })],
+      conversations: [makeConvSnapshot([], { conversation: { id: 1, pmId: 1, projectId: 10, title: "小林" } })],
+      router: { ...emptyRouterSlice(), items: [unread], commands: [planning] },
+    });
+    const { localApi } = installFleet({ local: localSnap });
+    let failing = true;
+    localApi.archiveAllRouterReports = () =>
+      failing
+        ? { status: 500, body: { error: "内部错误", code: "internal" } }
+        : { status: 200, body: { archivedIds: [], updatedAt: Date.now() } };
+    const archiveCalls = () => localApi.callsTo("POST", /^\/api\/router\/reports\/archive-all$/);
+    let visibility: DocumentVisibilityState = "visible";
+    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+
+    await openRouter();
+    await waitFor(() => expect(archiveCalls()).toHaveLength(1));
+    // 让失败的那次请求落地
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // 流在更新（指令出结果、项目经理改名），未读集合没变：不重发
+    act(() =>
+      localSocket().push(
+        changeOf(11, "router.command.updated", { command: { ...planning, status: "answered", plan: { intent: "answer", reply: "回归全绿", actions: [], track: "B" }, updatedAt: now } }),
+      ),
+    );
+    expect(await within(timeline()).findByText("回归全绿")).toBeInTheDocument();
+    act(() => localSocket().push(changeOf(12, "pm.updated", { pm: makePm({ id: 1, name: "小林二号" }) })));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(archiveCalls()).toHaveLength(1);
+
+    // 切到后台不发；回到前台再试一次
+    failing = false;
+    visibility = "hidden";
+    act(() => void document.dispatchEvent(new Event("visibilitychange")));
+    expect(archiveCalls()).toHaveLength(1);
+    visibility = "visible";
+    act(() => void document.dispatchEvent(new Event("visibilitychange")));
+    await waitFor(() => expect(archiveCalls()).toHaveLength(2));
+
+    // 来了新简报：未读集合变了，照常发
+    act(() => localSocket().push(changeOf(13, "router.item.created", { item: makeReportItem({ id: 231, summary: "又一条", links: [], createdAt: now }) })));
+    await waitFor(() => expect(archiveCalls()).toHaveLength(3));
   });
 
   it("渲染次数守卫（第 5.3 节）：100 次无关的流式更新期间时间流 0 次重画；更新一条指令时只有那一个回合重画一次", async () => {

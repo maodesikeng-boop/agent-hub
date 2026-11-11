@@ -18,13 +18,6 @@ import type { HubState } from "./state.ts";
 
 type RouterDispatchOp = NonNullable<RouterCommandRecord["dispatched"]>[number]["op"];
 
-/** 后端契约 PR 在 RouterAgentPlan 上新增的可选字段（网页按结构兼容读取，不改 shared/router.ts）。 */
-export interface RouterPlanExtras {
-  attachments?: readonly { id: string; name: string; mime?: string; size: number }[];
-  replyTruncated?: boolean;
-  errorRaw?: string;
-}
-
 export interface RouterTurnDestination {
   key: string;
   deviceKey: string;
@@ -141,16 +134,11 @@ function opLabelOf(op: RouterDispatchOp | undefined): string | null {
   }
 }
 
+/** plan.attachments 是守护进程建指令时按上传编号解析的显示信息（没有磁盘路径，网页只拿来画附件行）。 */
 function attachmentsFromPlan(plan: RouterCommandRecord["plan"]): Attachment[] {
-  const raw = (plan as (RouterCommandRecord["plan"] & RouterPlanExtras) | null)?.attachments;
-  if (!raw || raw.length === 0) return NO_ATTACHMENTS;
-  return raw.map((a) => ({
-    id: a.id,
-    name: a.name,
-    mime: a.mime ?? "application/octet-stream",
-    size: a.size,
-    path: "",
-  }));
+  const list = plan?.attachments;
+  if (!list || list.length === 0) return NO_ATTACHMENTS;
+  return list.map((a) => ({ id: a.id, name: a.name, mime: a.mime, size: a.size, path: "" }));
 }
 
 function buildDestinations(command: RouterCommandRecord, selfId: string | undefined): readonly RouterTurnDestination[] {
@@ -163,7 +151,8 @@ function buildDestinations(command: RouterCommandRecord, selfId: string | undefi
     const worker = d.workerConversationId !== undefined;
     const conversationId = d.workerConversationId ?? d.conversationId;
     if (conversationId === undefined) continue;
-    const deviceKey = deviceKeyOf(d.deviceId === "local" ? undefined : d.deviceId, selfId ?? null);
+    // 守护进程记的是真实设备编号（本机也是），和入口本机的编号一样就是本机的键 ""
+    const deviceKey = deviceKeyOf(d.deviceId, selfId ?? null);
     const self = deviceKey === "";
     const name = worker
       ? (d.title ?? d.pmName ?? `Piece #${d.workerId ?? conversationId}`)
@@ -552,13 +541,23 @@ export function fleetRouterStream(
     deviceStreams.push(resolved);
   }
 
-  const value: FleetRouterStream = {
-    turns,
-    oldestCommandCursor,
-    liveCommandCount,
-    devices: deviceStreams,
-    multiDevice,
-  };
+  // 只变了指令（或别的设备没变的切片）时，设备数组沿用上一份：下游按它做依赖的“标已读”和简报分页不该跟着重跑
+  const prevValue = lastFleetStreamMemo?.value;
+  const devicesOut =
+    prevValue !== undefined &&
+    prevValue.devices.length === deviceStreams.length &&
+    deviceStreams.every((d, i) => d === prevValue.devices[i])
+      ? prevValue.devices
+      : deviceStreams;
+  const value: FleetRouterStream =
+    prevValue !== undefined &&
+    prevValue.turns === turns &&
+    prevValue.devices === devicesOut &&
+    prevValue.oldestCommandCursor === oldestCommandCursor &&
+    prevValue.liveCommandCount === liveCommandCount &&
+    prevValue.multiDevice === multiDevice
+      ? prevValue
+      : { turns, oldestCommandCursor, liveCommandCount, devices: devicesOut, multiDevice };
   lastFleetStreamMemo = {
     selfKey,
     multiDevice,

@@ -60,6 +60,7 @@ import {
   type RouterCommandId,
   type RouterCommandsPage,
   type RouterItemId,
+  type RouterItemsKind,
   type RouterItemsPage,
   type SetPublicEntryRequest,
   type SkipTaskNodeRequest,
@@ -257,7 +258,7 @@ export function createClient(device: DeviceId | null) {
       return postJson<FileActionResponse>(at(path));
     },
     fetchRouterDigest: () => request<DeviceRouterDigest>(at(API_PATHS.routerDigest)),
-    fetchRouterItems: (options: { cursor?: string | null; limit?: number; kind?: "decision" | "report" } = {}) => {
+    fetchRouterItems: (options: { cursor?: string | null; limit?: number; kind?: RouterItemsKind } = {}) => {
       // 查询参数用对象键名拼，不写字符串字面量（参数名 cursor 与厂商编号同名，会被 vendor-guard 当成点名厂商）。
       const query: Record<string, string> = {};
       if (options.cursor) query.cursor = options.cursor;
