@@ -1,44 +1,24 @@
 import { Monitor, Settings, Shield, type LucideIcon } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import type { NotifySettings } from "../notify.ts";
-import { readUiScale, saveUiScale, UI_SCALE_LABELS, UI_SCALES, type UiScale } from "../ui-scale.ts";
+import { NOTIFY_BLOCKED, isNotifyBlocked, useUiScaleSetting, type DeviceSettings } from "../settings-model.ts";
 import { Dialog, DialogContent } from "../ui/dialog.tsx";
 import { Segmented } from "../ui/segmented.tsx";
 import { Switch } from "../ui/switch.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs.tsx";
 import { BrowserSessionsSettings } from "./BrowserSessions.tsx";
-import { ComputersSection, PublicEntrySection, type DeviceSettings } from "./DeviceSettings.tsx";
+import { ComputersSection, PublicEntrySection } from "./DeviceSettings.tsx";
 import { SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 import { VendorSyncSettings } from "./VendorSyncSettings.tsx";
 
 export type { DeviceSettings };
 
-/** 开关打不开的原因，能打开的没有。 */
-const NOTIFY_BLOCKED: Partial<Record<NotifySettings["permission"], string>> = {
-  denied: "Blocked by the browser. Allow notifications in site settings",
-  unsupported: "This browser doesn't support notifications",
-  install: "In Safari, tap Add to Home Screen, then open the app from its icon",
-};
-
-const UI_SCALE_OPTIONS = UI_SCALES.map((value) => ({ value, label: UI_SCALE_LABELS[value] }));
-
 /** 界面大小：点了马上整页跟着变（字号、头像、间距），记在这台浏览器上。 */
 function UiScaleRow() {
-  const [scale, setScale] = useState<UiScale>(readUiScale);
+  const { scale, options, setScale } = useUiScaleSetting();
   return (
     <SettingsRow label="Interface scale">
-      {(id) => (
-        <Segmented
-          id={id}
-          label="Interface scale"
-          value={scale}
-          options={UI_SCALE_OPTIONS}
-          onChange={(next) => {
-            setScale(next);
-            saveUiScale(next);
-          }}
-        />
-      )}
+      {(id) => <Segmented id={id} label="Interface scale" value={scale} options={options} onChange={setScale} />}
     </SettingsRow>
   );
 }
@@ -82,7 +62,7 @@ export function SettingsDialog({
                 id={id}
                 aria-label="Notifications"
                 checked={notify.enabled}
-                disabled={NOTIFY_BLOCKED[notify.permission] !== undefined}
+                disabled={isNotifyBlocked(notify)}
                 onCheckedChange={(on) => void notify.setEnabled(on)}
               />
             )}

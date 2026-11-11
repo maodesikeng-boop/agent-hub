@@ -89,6 +89,7 @@ export function App() {
     compact,
     created,
     creating,
+    deviceSettings,
     drafts,
     focus,
     groups,
@@ -113,7 +114,6 @@ export function App() {
     railOpen,
     railProjectId,
     railWorkers,
-    refreshFleet,
     reminders,
     routerActive,
     routerView,
@@ -171,17 +171,7 @@ export function App() {
       waiting={reminders.waiting}
       asking={reminders.asking}
       notify={reminders.notify}
-      devices={
-        fleet.managed
-          ? {
-              devices: fleet.devices,
-              ...(local.state.tunnel !== undefined ? { tunnel: local.state.tunnel } : {}),
-              ...(local.state.publicEntry !== undefined ? { publicEntry: local.state.publicEntry } : {}),
-              ...(local.state.server.repoDir !== undefined ? { repoDir: local.state.server.repoDir } : {}),
-              onChanged: refreshFleet,
-            }
-          : null
-      }
+      devices={deviceSettings}
       quota={quotaUsage(state)}
       quotaFetchable={quotaFetchable}
       layout={mobile ? "page" : narrow ? "rail" : "wide"}

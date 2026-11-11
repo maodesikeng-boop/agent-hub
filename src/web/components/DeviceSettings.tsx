@@ -1,68 +1,38 @@
 // 设置 → 电脑（docs/multi-device-design.md 第 3.2、4.2 节，docs/hub-tunnel-design.md 第 8 节）：你的电脑（本机名字、系统、中心隧道）与已连上的电脑（名字、系统、连法、在线状态）、连到中心、邀请、添加、改名、移除；
 // 设置 → 登录与安全里的“公网入口”也在这里（没开时收起）。
-// 这些都是入口自己的接口（不转发），一律走 client.ts 里入口本机的那几个函数；改完让外面重新拉设备清单。
+// 底层状态与入口本机接口调用统一由 settings-model.ts 提供，桌面弹窗与手机设置子页共用。
 import { Loader2, Pencil, Trash2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import {
-  PEER_TRANSPORT_SPECS,
-  normalizeName,
-  type DeviceId,
-  type DeviceInviteResponse,
-  type PublicEntryStatus,
-  type TunnelState,
-  type TunnelStatus,
-} from "../../shared/index.ts";
-import { deleteDevice, patchDevice, postAddDevice, postDeviceInvite, postTunnelConnect, postTunnelRetry, putPublicEntry } from "../client.ts";
+import { useState } from "react";
+import { PEER_TRANSPORT_SPECS, type PublicEntryStatus, type TunnelStatus } from "../../shared/index.ts";
 import { platformLabel, type DeviceView } from "../devices.ts";
-import { errorText, nameError, type ErrorLike } from "../format.ts";
+import {
+  TUNNEL_STATE_SPECS,
+  useAddDevice,
+  useDeviceInvite,
+  useDeviceRemove,
+  useDeviceRename,
+  usePublicEntrySetting,
+  useTunnelConnect,
+  useTunnelRetry,
+  type DeviceSettings,
+} from "../settings-model.ts";
 import { Button } from "../ui/button.tsx";
 import { Input } from "../ui/input.tsx";
-import { COPIED_RESET_MS, copyText } from "./CodeBlock.tsx";
 import { PlatformIcon, StatusDot, StatusText } from "./DeviceBadges.tsx";
 import { CollapsibleGroup, RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
-/** 设置弹窗要的：所有设备（入口本机第一）、本机隧道状态、公网入口状态与仓库路径，改了之后重新拉清单。 */
-export interface DeviceSettings {
-  devices: readonly DeviceView[];
-  tunnel?: TunnelStatus | null;
-  publicEntry?: PublicEntryStatus;
-  repoDir?: string;
-  onChanged: () => void;
-}
-
-const TUNNEL_STATE_SPECS: Record<TunnelState, { text: string; canRetry: boolean }> = {
-  connecting: { text: "Connecting…", canRetry: false },
-  connected: { text: "Connected", canRetry: false },
-  retrying: { text: "Retrying…", canRetry: true },
-  auth_failed: { text: "Key rejected", canRetry: true },
-  hostkey_mismatch: { text: "Server fingerprint changed", canRetry: true },
-};
+export type { DeviceSettings };
 
 function RenameRow({ device, onDone }: { device: DeviceView; onDone: (changed: boolean) => void }) {
-  const [name, setName] = useState(device.info.name);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<ErrorLike | null>(null);
-  const clean = normalizeName(name);
-  const problem = nameError(name);
-  const save = async () => {
-    if (clean === null || busy) return;
-    if (clean === device.info.name) return onDone(false);
-    setBusy(true);
-    setError(null);
-    try {
-      await patchDevice(device.info.id, { name: clean });
-      onDone(true);
-    } catch (err) {
-      setError(errorText(err));
-      setBusy(false);
-    }
-  };
+  const { name, setName, clean, problem, busy, error, save } = useDeviceRename(device, () => onDone(true));
   return (
     <form
       className="px-4 py-2"
       onSubmit={(e) => {
         e.preventDefault();
-        void save();
+        void save().then((res) => {
+          if (res === "unchanged") onDone(false);
+        });
       }}
     >
       <div className="flex min-h-9 items-center gap-2">
@@ -97,8 +67,7 @@ function RenameRow({ device, onDone }: { device: DeviceView; onDone: (changed: b
 function DeviceRow({ device, onChanged }: { device: DeviceView; onChanged: () => void }) {
   const [renaming, setRenaming] = useState(false);
   const [confirming, setConfirming] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<ErrorLike | null>(null);
+  const { busy, error, remove } = useDeviceRemove(device, onChanged);
   const { info } = device;
   if (renaming) {
     return (
@@ -113,18 +82,6 @@ function DeviceRow({ device, onChanged }: { device: DeviceView; onChanged: () =>
       </div>
     );
   }
-  const remove = async (id: DeviceId) => {
-    setBusy(true);
-    setError(null);
-    try {
-      await deleteDevice(id);
-      onChanged();
-    } catch (err) {
-      setError(errorText(err));
-      setBusy(false);
-      setConfirming(false);
-    }
-  };
   return (
     <div data-testid="device-row">
       <SettingsRow
@@ -150,7 +107,15 @@ function DeviceRow({ device, onChanged }: { device: DeviceView; onChanged: () =>
               <Button variant="outline" size="sm" disabled={busy} onClick={() => setConfirming(false)}>
                 Cancel
               </Button>
-              <Button size="sm" disabled={busy} onClick={() => void remove(info.id)}>
+              <Button
+                size="sm"
+                disabled={busy}
+                onClick={() =>
+                  void remove().then((ok) => {
+                    if (!ok) setConfirming(false);
+                  })
+                }
+              >
                 {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
                 Remove
               </Button>
@@ -173,32 +138,22 @@ function DeviceRow({ device, onChanged }: { device: DeviceView; onChanged: () =>
   );
 }
 
-/** 邀请别的设备：拿一个邀请码（10 分钟、只能用一次），到另一台的“添加设备”里填。 */
+/** 邀请别的设备：拿一个邀请码（10 分钟、只能用一次），支持一键复制邀请码与本机 URL。 */
 function InvitePanel() {
-  const [invite, setInvite] = useState<DeviceInviteResponse | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<ErrorLike | null>(null);
-  const create = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      setInvite(await postDeviceInvite());
-    } catch (err) {
-      setError(errorText(err));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const { invite, busy, error, generate, codeCopied, copyCode, urlCopied, copyUrl } = useDeviceInvite();
   return (
     <SettingsGroup title="Invite a computer">
       <SettingsRow label="Invite code" error={error}>
         {(id) =>
           invite ? (
-            <span id={id} className="font-mono text-body select-all">
-              {invite.code}
-            </span>
+            <>
+              <span className="font-mono text-body select-all">{invite.code}</span>
+              <Button id={id} type="button" size="sm" variant="outline" aria-label={codeCopied ? "Copied" : "Copy code"} onClick={copyCode}>
+                {codeCopied ? "Copied" : "Copy code"}
+              </Button>
+            </>
           ) : (
-            <Button id={id} size="sm" variant="outline" disabled={busy} onClick={() => void create()}>
+            <Button id={id} size="sm" variant="outline" aria-label="Generate" disabled={busy} onClick={() => void generate()}>
               {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
               Generate
             </Button>
@@ -206,12 +161,22 @@ function InvitePanel() {
         }
       </SettingsRow>
       {invite && (
-        <SettingsRow label="This computer's URL" wide>
-          {(id) => (
-            <span id={id} className="truncate font-mono text-minor text-muted-foreground select-all" title={invite.url ?? undefined}>
-              {invite.url ?? "Tailscale isn't installed"}
-            </span>
-          )}
+        <SettingsRow
+          label="This computer's URL"
+          detail={invite.url ? <span className="block break-all font-mono text-minor select-all">{invite.url}</span> : undefined}
+          wide={!invite.url}
+        >
+          {(id) =>
+            invite.url ? (
+              <Button id={id} type="button" size="sm" variant="outline" aria-label={urlCopied ? "Copied" : "Copy URL"} onClick={copyUrl}>
+                {urlCopied ? "Copied" : "Copy URL"}
+              </Button>
+            ) : (
+              <span id={id} className="truncate font-mono text-minor text-muted-foreground">
+                Tailscale isn't installed
+              </span>
+            )
+          }
         </SettingsRow>
       )}
     </SettingsGroup>
@@ -220,26 +185,7 @@ function InvitePanel() {
 
 /** 添加设备：填那台的网址和它给的邀请码。 */
 function AddPanel({ onAdded }: { onAdded: () => void }) {
-  const [url, setUrl] = useState("");
-  const [code, setCode] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<ErrorLike | null>(null);
-  const ready = url.trim() !== "" && code.trim() !== "" && !busy;
-  const submit = async () => {
-    if (!ready) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await postAddDevice({ url: url.trim(), code: code.trim() });
-      setUrl("");
-      setCode("");
-      onAdded();
-    } catch (err) {
-      setError(errorText(err));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const { url, setUrl, code, setCode, ready, busy, error, submit } = useAddDevice(onAdded);
   return (
     <form
       onSubmit={(e) => {
@@ -267,21 +213,8 @@ function AddPanel({ onAdded }: { onAdded: () => void }) {
 
 /** 本机到中心的 ssh 隧道状态行（docs/hub-tunnel-design.md 第 8 节）。报错英文原文只放 title。 */
 function TunnelRow({ tunnel, onChanged }: { tunnel: TunnelStatus; onChanged: () => void }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<ErrorLike | null>(null);
+  const { busy, error, retry } = useTunnelRetry(onChanged);
   const spec = TUNNEL_STATE_SPECS[tunnel.state];
-  const retry = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      await postTunnelRetry();
-      onChanged();
-    } catch (err) {
-      setError(errorText(err));
-    } finally {
-      setBusy(false);
-    }
-  };
   return (
     <div data-testid="tunnel-row">
       <SettingsRow
@@ -304,39 +237,7 @@ function TunnelRow({ tunnel, onChanged }: { tunnel: TunnelStatus; onChanged: () 
 
 /** 连到中心（SSH 隧道）：给出带本机仓库路径的 join 命令，或贴入 ahtun1_ 连接码连接。 */
 function TunnelPanel({ repoDir, onConnected }: { repoDir?: string; onConnected: () => void }) {
-  const [code, setCode] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<ErrorLike | null>(null);
-  const [copied, setCopied] = useState(false);
-  const copyTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  useEffect(() => () => clearTimeout(copyTimer.current), []);
-
-  const command = `node ${repoDir ?? "~/agent-hub"}/src/tunnel/main.ts join -i ~/.ssh/<key> ubuntu@<server-ip>`;
-  const ready = code.trim() !== "" && !busy;
-
-  const copy = () => {
-    void copyText(command).then(() => {
-      setCopied(true);
-      clearTimeout(copyTimer.current);
-      copyTimer.current = setTimeout(() => setCopied(false), COPIED_RESET_MS);
-    });
-  };
-
-  const submit = async () => {
-    if (!ready) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await postTunnelConnect(code.trim());
-      setCode("");
-      onConnected();
-    } catch (err) {
-      setError(errorText(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
+  const { command, code, setCode, ready, busy, error, copied, copyCommand, submit } = useTunnelConnect(repoDir, onConnected);
   return (
     <form
       onSubmit={(e) => {
@@ -350,7 +251,7 @@ function TunnelPanel({ repoDir, onConnected }: { repoDir?: string; onConnected: 
           detail={<code className="block break-all font-mono text-minor select-all">{command}</code>}
         >
           {(id) => (
-            <Button id={id} type="button" variant="outline" size="sm" onClick={copy}>
+            <Button id={id} type="button" variant="outline" size="sm" aria-label={copied ? "Copied" : "Copy"} onClick={copyCommand}>
               {copied ? "Copied" : "Copy"}
             </Button>
           )}
@@ -379,61 +280,11 @@ function TunnelPanel({ repoDir, onConnected }: { repoDir?: string; onConnected: 
   );
 }
 
-const DEFAULT_PUBLIC_ENTRY: PublicEntryStatus = {
-  enabled: false,
-  hostname: null,
-  funnelCommand: "sudo tailscale funnel --bg unix:/home/ubuntu/.agent-hub/run/public.sock",
-};
-
 /** 公网入口开关与 Tailscale Funnel 命令向导（docs/mac-app-and-mobile-design.md 第 2.2 节）：没开、也没填过域名时收起成一行。 */
 export function PublicEntrySection({ publicEntry, onChanged }: { publicEntry?: PublicEntryStatus; onChanged: () => void }) {
-  const initial = publicEntry ?? DEFAULT_PUBLIC_ENTRY;
-  const [entry, setEntry] = useState<PublicEntryStatus>(initial);
-  const [hostname, setHostname] = useState(initial.hostname ?? "");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<ErrorLike | null>(null);
-  const [copied, setCopied] = useState(false);
-  const copyTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  useEffect(() => () => clearTimeout(copyTimer.current), []);
-
-  useEffect(() => {
-    if (publicEntry !== undefined) {
-      setEntry(publicEntry);
-      setHostname(publicEntry.hostname ?? "");
-    }
-  }, [publicEntry]);
-
-  const toggle = async () => {
-    if (busy) return;
-    const nextEnabled = !entry.enabled;
-    const trimmed = hostname.trim();
-    setBusy(true);
-    setError(null);
-    try {
-      const next = await putPublicEntry({
-        enabled: nextEnabled,
-        ...(trimmed !== "" ? { hostname: trimmed } : {}),
-      });
-      setEntry(next);
-      if (next.hostname !== null) setHostname(next.hostname);
-      onChanged();
-    } catch (err) {
-      setError(errorText(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const copy = () => {
-    void copyText(entry.funnelCommand).then(() => {
-      setCopied(true);
-      clearTimeout(copyTimer.current);
-      copyTimer.current = setTimeout(() => setCopied(false), COPIED_RESET_MS);
-    });
-  };
-
+  const { entry, summary, hostname, setHostname, busy, error, copied, toggle, copyCommand } = usePublicEntrySetting(publicEntry, onChanged);
   return (
-    <CollapsibleGroup title="Public access" summary={entry.enabled ? "On" : "Off"} defaultOpen={entry.enabled || entry.hostname !== null}>
+    <CollapsibleGroup title="Public access" summary={summary} defaultOpen={entry.enabled || entry.hostname !== null}>
       <SettingsRow
         label="Public domain"
         detail={
@@ -472,7 +323,7 @@ export function PublicEntrySection({ publicEntry, onChanged }: { publicEntry?: P
           detail={<code className="block break-all font-mono text-minor select-all">{entry.funnelCommand}</code>}
         >
           {(id) => (
-            <Button id={id} type="button" variant="outline" size="sm" aria-label={copied ? "Copied" : "Copy command"} onClick={copy}>
+            <Button id={id} type="button" variant="outline" size="sm" aria-label={copied ? "Copied" : "Copy command"} onClick={copyCommand}>
               {copied ? "Copied" : "Copy command"}
             </Button>
           )}
