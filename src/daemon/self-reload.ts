@@ -4,7 +4,7 @@
 // 以 apps/desktop/contract.json 的 reloadExitCode 退出，Fusa.app / Windows 外壳 / systemd Restart=on-failure 立即拉起新进程）。
 // 带 build：登记时就在后台把网页构建到暂存目录（不碰正在用的 dist/web），构建失败取消本次重启；重启前一刻才把暂存产物原子换上线。
 // 多次登记合并成同一次；关机（close）清掉定时器、取消构建。
-import { existsSync, renameSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, renameSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import {
   LedgerRequestError,
@@ -277,7 +277,7 @@ export function createStagedWebBuild(options: StagedWebBuildOptions): StagedWebB
     apply() {
       if (!existsSync(join(staging, "index.html"))) throw new Error(`暂存目录没有构建产物：${staging}`);
       rmSync(previous, { recursive: true, force: true });
-      const hadCurrent = existsSync(options.staticDir);
+      const hadCurrent = lstatSync(options.staticDir, { throwIfNoEntry: false }) !== undefined;
       if (hadCurrent) renameSync(options.staticDir, previous);
       try {
         renameSync(staging, options.staticDir);

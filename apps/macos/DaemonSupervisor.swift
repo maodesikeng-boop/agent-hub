@@ -226,6 +226,7 @@ final class DaemonSupervisor {
     private var intentionalStopPids: Set<Int32> = []
     private var isShuttingDown = false
     private var recentCrashTimestamps: [Date] = []
+    private var recentReloadTimestamps: [Date] = []
     private var lastCrashRecord: DaemonCrashRecord?
     private var state: DaemonSupervisorState = .running
     private var pendingRestartWorkItem: DispatchWorkItem?
@@ -495,6 +496,7 @@ final class DaemonSupervisor {
         pendingRestartWorkItem?.cancel()
         pendingRestartWorkItem = nil
         recentCrashTimestamps.removeAll()
+        recentReloadTimestamps.removeAll()
         let proc = spawnedProcess
         let expectedInstanceId = ownedInstanceId
         guard let ownedProc = proc else {
@@ -1138,8 +1140,14 @@ final class DaemonSupervisor {
             return
         }
 
-        // 守护进程空闲排空后主动请求热重启（hub self-reload）：立即拉起新进程，不记崩溃、不退避、不计入熔断窗口
-        if process.terminationReason == .exit && Int(process.terminationStatus) == contract.reloadExitCode {
+        // 正常热重启立即拉起；窗口内反复请求则走已有退避与熔断，避免退出码 75 绕过保护。
+        recentReloadTimestamps = recentReloadTimestamps.filter {
+            now.timeIntervalSince($0) <= contract.crashWindowSeconds
+        }
+        let reloadRequested = process.terminationReason == .exit && Int(process.terminationStatus) == contract.reloadExitCode
+        let reloadAllowed = recentReloadTimestamps.count < contract.maxCrashesInWindow
+        if reloadRequested && reloadAllowed {
+            recentReloadTimestamps.append(now)
             pendingRestartWorkItem?.cancel()
             pendingRestartWorkItem = nil
             let generation = UUID()

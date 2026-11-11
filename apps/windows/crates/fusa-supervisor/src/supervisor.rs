@@ -731,6 +731,7 @@ struct SupervisorInner {
     auto_restart_enabled: bool,
     shutdown_requested: bool,
     recent_crash_timestamps_ms: Vec<u64>,
+    recent_reload_timestamps_ms: Vec<u64>,
     last_crash: Option<CrashRecord>,
     session_cookie: Option<SessionCookie>,
     owned: Option<OwnedDaemonEntry>,
@@ -828,6 +829,7 @@ where
                 auto_restart_enabled: true,
                 shutdown_requested: false,
                 recent_crash_timestamps_ms: Vec::new(),
+                recent_reload_timestamps_ms: Vec::new(),
                 last_crash: None,
                 session_cookie: None,
                 owned: None,
@@ -946,6 +948,7 @@ where
             }
             g.auto_restart_enabled = false;
             g.recent_crash_timestamps_ms.clear();
+            g.recent_reload_timestamps_ms.clear();
             g.restart_generation = g.restart_generation.wrapping_add(1);
             let gen = g.restart_generation;
             let has_owned = g.owned.is_some();
@@ -1643,13 +1646,25 @@ where
             self.stop_owned_entry(entry);
         }
 
-        // 守护进程空闲排空后主动请求热重启（hub self-reload）：立即拉起新进程，不记崩溃、不退避、不计入熔断窗口
-        if proxy_exit_code == Some(self.contract.reload_exit_code) {
+        // 正常热重启立即拉起；窗口内反复请求则走已有退避与熔断，避免退出码 75 绕过保护。
+        if proxy_exit_code == Some(self.contract.reload_exit_code) && self.allow_immediate_reload() {
             self.relaunch_after_reload(generation);
             return;
         }
 
         let _ = self.record_crash_and_maybe_schedule_restart(generation, proxy_exit_code);
+    }
+
+    fn allow_immediate_reload(&self) -> bool {
+        let now = self.clock.now_epoch_ms();
+        let mut g = self.inner.lock().unwrap();
+        g.recent_reload_timestamps_ms
+            .retain(|&ts| now.saturating_sub(ts) <= self.contract.crash_window_ms);
+        if g.recent_reload_timestamps_ms.len() >= self.contract.max_crashes_in_window {
+            return false;
+        }
+        g.recent_reload_timestamps_ms.push(now);
+        true
     }
 
     fn relaunch_after_reload(self: &Arc<Self>, expected_gen: u64) {
@@ -1860,6 +1875,27 @@ mod review_tests {
             1,
             "starting lease must receive TERM"
         );
+    }
+
+    #[test]
+    fn repeated_reload_requests_cannot_bypass_restart_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let contract = DesktopContract::embedded().unwrap();
+        let budget = contract.max_crashes_in_window;
+        let sup = DaemonSupervisor::new(
+            contract,
+            4317,
+            dir.path(),
+            Runtime(Arc::new(AtomicUsize::new(0))),
+            UreqHostHttpClient,
+            SystemClock,
+        )
+        .unwrap();
+        for _ in 0..budget {
+            assert!(sup.allow_immediate_reload());
+        }
+        assert!(!sup.allow_immediate_reload());
+        assert!(!sup.allow_immediate_reload());
     }
 
     #[test]

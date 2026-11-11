@@ -15,7 +15,7 @@ import {
 import type { HubClient } from "./client.ts";
 import { DeviceHub, DevicesStore } from "./device-hub.ts";
 import { LOCAL_DEVICE } from "./devices.ts";
-import { FakeWebSocket, installFakeWebSocket, makeSnapshot } from "./test-utils.ts";
+import { FakeWebSocket, installFakeWebSocket, makeSession, makeSnapshot } from "./test-utils.ts";
 import { useDraftStore } from "./upload.ts";
 
 const PICK = { vendor: "claude", model: null, effort: "high" } as const;
@@ -79,6 +79,16 @@ describe("草稿存进 sessionStorage、刷新后认领回来", () => {
     resetAutoReloadForTests();
     expect(takeRestoredDraft("ok")).toBeNull();
     expect(window.sessionStorage.getItem(DRAFTS_STORAGE_KEY)).toBeNull();
+  });
+
+  it("未认领草稿在页面长期开着后过期，不再恢复", () => {
+    vi.useFakeTimers();
+    source({ a: { text: "a", pick: null }, b: { text: "b", pick: null } });
+    saveDrafts();
+    resetAutoReloadForTests();
+    expect(takeRestoredDraft("a")?.text).toBe("a");
+    vi.advanceTimersByTime(AUTO_RELOAD_DRAFT_TTL_MS + 1);
+    expect(takeRestoredDraft("b")).toBeNull();
   });
 
   it("条数、字节有上限：最近的优先", () => {
@@ -233,6 +243,37 @@ describe("入口本机 / 别的设备的守护进程重启", () => {
     await vi.waitFor(() => expect(fetchBootId).toHaveBeenCalled());
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(reload).not.toHaveBeenCalled();
+    store.dispose();
+  });
+
+  it("本机重启时远端仍在流式输出：等待远端输出结束再刷新", async () => {
+    installFakeWebSocket();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 503 })));
+    let boot = "boot-1";
+    let streaming: string | null = "输出中";
+    const reload = vi.fn();
+    const store = new DevicesStore(
+      (key) => fakeClient("", () => makeSnapshot({
+        seq: 1, bootId: key === LOCAL_DEVICE ? boot : "peer",
+        sessions: key === LOCAL_DEVICE ? [] : [makeSession({ streamingText: streaming })],
+      }), () => boot),
+      "peer-device", { reload, recheckMs: 10 },
+    );
+    store.start();
+    await vi.waitFor(() => expect(store.hub("peer-device").state.phase).toBe("ready"));
+    await vi.waitFor(() => expect(store.hub(LOCAL_DEVICE).state.phase).toBe("ready"));
+    // 重新加载快照，相当于本机重连后发现启动标识变化。
+    boot = "boot-2";
+    const localStream = FakeWebSocket.instances[0]!;
+    localStream.open();
+    localStream.push({ type: "resync" });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(reload).not.toHaveBeenCalled();
+    streaming = null;
+    const peerStream = FakeWebSocket.instances[1]!;
+    peerStream.open();
+    peerStream.push({ type: "resync" });
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
     store.dispose();
   });
 

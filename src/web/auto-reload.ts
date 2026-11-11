@@ -82,12 +82,16 @@ function loadRestored(now: number): Map<string, StoredDraft> {
     if (raw === null) return map;
     const parsed = JSON.parse(raw) as { drafts?: unknown };
     const list = Array.isArray(parsed.drafts) ? parsed.drafts.slice(0, AUTO_RELOAD_MAX_DRAFTS) : [];
+    let bytes = 0;
     for (const item of list as Record<string, unknown>[]) {
       if (typeof item !== "object" || item === null) continue;
       const { key, text, savedAt } = item;
       const pick = validPick(item.pick);
       if (typeof key !== "string" || typeof text !== "string" || typeof savedAt !== "number" || pick === undefined) continue;
       if (now - savedAt > AUTO_RELOAD_DRAFT_TTL_MS || (text === "" && pick === null)) continue;
+      const size = byteLength(JSON.stringify({ key, text, pick, savedAt }));
+      if (bytes + size > AUTO_RELOAD_MAX_DRAFT_BYTES) continue;
+      bytes += size;
       map.set(key, { key, text, pick, savedAt });
     }
     writeDrafts(store, [...map.values()]);
@@ -115,6 +119,7 @@ export function takeRestoredDraft(key: string): DraftValue | null {
   const found = map.get(key);
   if (found === undefined) return null;
   map.delete(key);
+  if (Date.now() - found.savedAt > AUTO_RELOAD_DRAFT_TTL_MS) return null;
   return { text: found.text, pick: found.pick };
 }
 

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, readlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -228,6 +228,39 @@ writeFileSync(out + "/index.html", "new");`,
     expect(readFileSync(join(root, "dist", "web", "index.html"), "utf8")).toBe("new");
     expect(existsSync(join(root, "dist", ".web-reload-next"))).toBe(false);
     expect(existsSync(join(root, "dist", ".web-reload-prev"))).toBe(false);
+  });
+
+  it("原目录不存在时可首次部署", async () => {
+    rmSync(join(root, "dist"), { recursive: true });
+    const build = make()!;
+    expect(await build.build(new AbortController().signal)).toEqual({ ok: true });
+    build.apply();
+    expect(readFileSync(join(root, "dist", "web", "index.html"), "utf8")).toBe("new");
+  });
+
+  it("原目录是有效软链时只替换链接，不删目标", async () => {
+    const target = join(root, "external");
+    mkdirSync(target);
+    writeFileSync(join(target, "index.html"), "external");
+    rmSync(join(root, "dist", "web"), { recursive: true });
+    symlinkSync(target, join(root, "dist", "web"));
+    const build = make()!;
+    expect(await build.build(new AbortController().signal)).toEqual({ ok: true });
+    build.apply();
+    expect(readFileSync(join(root, "dist", "web", "index.html"), "utf8")).toBe("new");
+    expect(readFileSync(join(target, "index.html"), "utf8")).toBe("external");
+  });
+
+  it("原目录是失效软链时仍可切换，不触碰软链目标", async () => {
+    const target = join(root, "missing-target");
+    rmSync(join(root, "dist", "web"), { recursive: true });
+    symlinkSync(target, join(root, "dist", "web"));
+    const build = make()!;
+    expect(await build.build(new AbortController().signal)).toEqual({ ok: true });
+    expect(readlinkSync(join(root, "dist", "web"))).toBe(target);
+    build.apply();
+    expect(readFileSync(join(root, "dist", "web", "index.html"), "utf8")).toBe("new");
+    expect(existsSync(target)).toBe(false);
   });
 
   it("构建失败：返回原因（含日志路径和最后几行），正在用的网页原样，没有可换上的产物", async () => {

@@ -657,6 +657,23 @@ enum SupervisorTestsMain {
         check(recordedDelays == [0.1, 0.2, 0.4, 0.8], "expected backoff delays [0.1, 0.2, 0.4, 0.8], got \(recordedDelays)")
         check(crashSup.currentPid == nil, "no daemon should remain running after .failed")
 
+        // 连续 75 退出也必须最终熔断，不能无限绕过崩溃预算。
+        let loopPort = findFreePort()
+        let loopEntry = (tempRoot as NSString).appendingPathComponent("reload-loop.mjs")
+        let loopSource = try! String(contentsOfFile: reloadEntry, encoding: .utf8)
+        try! loopSource.replacingOccurrences(of: "if (first) setTimeout", with: "setTimeout")
+            .write(toFile: loopEntry, atomically: true, encoding: .utf8)
+        setenv("AGENT_HUB_PORT", String(loopPort), 1)
+        setenv("AGENT_HUB_DAEMON_ENTRY", loopEntry, 1)
+        let loopSup = DaemonSupervisor(contract: fastCrashContract, homeDir: (tempRoot as NSString).appendingPathComponent("home-loop"), port: loopPort)
+        var loopFailed = false
+        loopSup.onStateChange = { state, _ in
+            if case .failed = state { loopFailed = true }
+        }
+        loopSup.ensureRunning { _ in }
+        check(waitUntil(timeout: 20.0) { loopFailed }, "repeated reload exits must eventually trip the circuit breaker")
+        check(loopSup.currentPid == nil, "reload loop must leave no owned daemon")
+
         mockServerProc.terminate()
         _ = waitUntil(timeout: 2.0) { !mockServerProc.isRunning }
         cleanupAll()

@@ -435,7 +435,7 @@ export class DevicesStore {
   constructor(clientFor: (key: DeviceKey) => HubClient = defaultClientFor, routed?: DeviceKey, autoReloadEnv?: Partial<AutoReloadEnv>) {
     this.clientFor = clientFor;
     this.autoReload = createAutoReloader({
-      isStreaming: () => this.hubs.get(LOCAL_DEVICE)?.state.sessions.some((s) => s.streamingText != null) ?? false,
+      isStreaming: () => [...this.hubs.values()].some((hub) => hub.state.sessions.some((s) => s.streamingText != null)),
       ...autoReloadEnv,
     });
     this.hubs.set(
