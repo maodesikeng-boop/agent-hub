@@ -43,6 +43,7 @@ export default defineVendor({
     customModel: true,
     customModelExample: "如 gpt-6.1-sol",
     efforts: EFFORTS,
+    routerDefault: { model: "gpt-6-luna", effort: "low" },
     flags: { model: "--model", effort: "-c" },
     shortName: (model) => {
       const gpt = /^gpt-(\d+(?:\.\d+)?)(?:-([a-z0-9]+(?:-[a-z0-9]+)*))?$/i.exec(model);

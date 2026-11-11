@@ -5,7 +5,17 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseSync } from "oxc-parser";
 import { describe, expect, it } from "vitest";
-import { VENDOR_FAILURE_SIGNS, agentLaunchArgs, checkModel, vendorFailureOf, type AgentVendor } from "../shared/vendors.ts";
+import {
+  VENDOR_FAILURE_SIGNS,
+  agentLaunchArgs,
+  bundledModelCatalog,
+  checkAgentSetting,
+  checkModel,
+  effortsFor,
+  splitModelEffort,
+  vendorFailureOf,
+  type AgentVendor,
+} from "../shared/vendors.ts";
 import { VENDOR_LIST } from "./registry.ts";
 import type { VendorSpec } from "./types.ts";
 
@@ -137,8 +147,8 @@ export function describeSpecContract(specFileOf: (id: string) => string): void {
       expect(spec.cli.envVar).toBe(`AGENT_HUB_${id.toUpperCase()}`);
     });
 
-    it("S4 打包模型都过 checkModel；efforts 非空；默认设置不传参数", () => {
-      const { bundled, efforts } = spec.models;
+    it("S4 打包模型都过 checkModel；efforts 非空；默认设置不传参数；routerDefault 合法匹配", () => {
+      const { bundled, efforts, routerDefault } = spec.models;
       expect(bundled.length).toBeGreaterThan(0);
       for (const m of bundled) {
         expect(checkModel(vendor, m.id), m.id).toBeNull();
@@ -146,6 +156,21 @@ export function describeSpecContract(specFileOf: (id: string) => string): void {
       }
       expect(efforts.length).toBeGreaterThan(0);
       expect(agentLaunchArgs({ vendor, model: null, effort: null })).toEqual([]);
+
+      expect(routerDefault.model.trim(), `${id} routerDefault.model`).not.toBe("");
+      expect(routerDefault.effort.trim(), `${id} routerDefault.effort`).not.toBe("");
+      expect(checkModel(vendor, routerDefault.model), `${id} routerDefault.model 校验`).toBeNull();
+      expect(efforts, `${id} routerDefault.effort 须在厂商 efforts 内`).toContain(routerDefault.effort);
+      if (spec.models.effortInModelId) {
+        expect(splitModelEffort(vendor, routerDefault.model, null).effort, `${id} routerDefault.model 不应预拼档位后缀`).toBeNull();
+      }
+      const bundledHit = bundled.find((m) => m.id === routerDefault.model);
+      if (bundledHit !== undefined) {
+        const modelEfforts = bundledHit.efforts ?? efforts;
+        expect(modelEfforts, `${id} routerDefault.effort 须在模型 ${bundledHit.id} 支持的 efforts 内`).toContain(routerDefault.effort);
+        expect(effortsFor(bundledModelCatalog(vendor), routerDefault.model)).toContain(routerDefault.effort);
+      }
+      expect(checkAgentSetting({ vendor, model: routerDefault.model, effort: routerDefault.effort })).toBeNull();
     });
 
     it("S5 readonlySecrets、catalogWatchPaths 都在 dirs 里面", () => {

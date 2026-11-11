@@ -43,6 +43,7 @@ export default defineVendor({
     customModel: true,
     customModelExample: "如 gemini-4-argon",
     efforts: EFFORTS,
+    routerDefault: { model: "gemini-3.8-flash", effort: "low" },
     effortInModelId: true,
     flags: { model: "--model", effort: "--effort" },
     // 不带档位的模型名（档位另外显示）：gemini-4-argon、gemini-3.8-flash、claude-opus-5-5、gpt-oss-120b → Gemini 4 Argon、Gemini 3.8 Flash、Claude Opus 5.5、GPT-OSS 120B

@@ -51,6 +51,36 @@ export type ToolAction =
   | "tool_search"
   | "connector";
 
+/** 该厂商跑 Router 轨道 B 单轮极速分派时的默认快模型预设（docs/router-design.md 6.1 节）。 */
+export interface RouterModelPreset {
+  /** 该厂商跑 Router 轨道 B 单轮分派时的默认极快模型 ID。 */
+  readonly model: string;
+  /** 该厂商对应的最低思考档位（须在该模型支持的 efforts 内）。 */
+  readonly effort: string;
+}
+
+export interface VendorModelsSpec {
+  /** 打包的模型名单（问不到厂商时用）：id 原样传给 flags.model，label 是界面上的名字。 */
+  bundled: readonly { id: string; label: string; efforts?: readonly string[] }[];
+  /** 能不能填完整模型名（下拉里的“自定义”）。 */
+  customModel: boolean;
+  /** 自定义模型名输入框里的示例。 */
+  customModelExample: string;
+  /** 思考程度，原样传给 flags.effort（effortInModelId 的厂商拼进模型 ID）。 */
+  efforts: readonly string[];
+  /** Router 轨道 B 单轮分派默认极快模型与最低思考档位预设。 */
+  readonly routerDefault: RouterModelPreset;
+  /**
+   * 思考程度写在模型 ID 末尾（agy：gemini-4-argon-high）。界面把它拆成“模型 + 思考程度”（和 Antigravity 软件一致），
+   * 启动时再拼回完整 ID 传给 flags.model，不再传 flags.effort（agy 对两个都传且对不上会报错）。
+   */
+  effortInModelId?: boolean;
+  /** 模型、思考程度的命令行参数名（ACP 等通过会话协议传模型与档位的厂商不写）。 */
+  flags?: { model: string; effort: string };
+  /** 完整模型名（名单里没有的）在列表里显示的短名，认不出来返回 null（原样显示）。 */
+  shortName?: (model: string) => string | null;
+}
+
 interface VendorCapabilities {
   /**
    * 能不能把长命令放后台跑、跑完自动开新一轮叫醒 agent（见 docs/mid-turn-messages.md 第 10 节）。
@@ -95,25 +125,7 @@ export interface VendorSpec<Id extends string = string> {
     catalogWatchPaths: readonly string[];
     configHome?: { rel: string; env: string };
   };
-  models: {
-    /** 打包的模型名单（问不到厂商时用）：id 原样传给 flags.model，label 是界面上的名字。 */
-    bundled: readonly { id: string; label: string; efforts?: readonly string[] }[];
-    /** 能不能填完整模型名（下拉里的“自定义”）。 */
-    customModel: boolean;
-    /** 自定义模型名输入框里的示例。 */
-    customModelExample: string;
-    /** 思考程度，原样传给 flags.effort（effortInModelId 的厂商拼进模型 ID）。 */
-    efforts: readonly string[];
-    /**
-     * 思考程度写在模型 ID 末尾（agy：gemini-4-argon-high）。界面把它拆成“模型 + 思考程度”（和 Antigravity 软件一致），
-     * 启动时再拼回完整 ID 传给 flags.model，不再传 flags.effort（agy 对两个都传且对不上会报错）。
-     */
-    effortInModelId?: boolean;
-    /** 模型、思考程度的命令行参数名（ACP 等通过会话协议传模型与档位的厂商不写）。 */
-    flags?: { model: string; effort: string };
-    /** 完整模型名（名单里没有的）在列表里显示的短名，认不出来返回 null（原样显示）。 */
-    shortName?: (model: string) => string | null;
-  };
+  models: VendorModelsSpec;
   /**
    * 额度（左下角）：厂商在事件里报的用量窗口（QUOTA_WINDOWS 的键，也是 RateLimitInfo.windows 里的键），按显示顺序。
    * warningStatus：厂商自己报“快用完”时的状态值，不报的不写。fetched：要另起进程问的。没有额度数据的厂商整个不写。

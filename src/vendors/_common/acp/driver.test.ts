@@ -261,6 +261,7 @@ describe("VendorSpec models.flags 可选适配", () => {
         customModel: true,
         customModelExample: "m-custom",
         efforts: ["low", "high"],
+        routerDefault: { model: "m-1", effort: "low" },
       },
       composer: {
         commandPrefix: "/",
