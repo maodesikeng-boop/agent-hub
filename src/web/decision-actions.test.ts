@@ -72,9 +72,9 @@ describe("recommendedIndexOf 与 cleanOptionLabel", () => {
 describe("submitDecision：三合一拍板提交", () => {
   it("router_item：一键纯点选秒定（note 为空时不传 note）", async () => {
     const postResolveRouterItem = vi.fn().mockResolvedValue({ item: {}, messageId: 301 });
-    const postDecideTaskNode = vi.fn();
+    const postTaskGraphDecide = vi.fn();
     await submitDecision(
-      { postResolveRouterItem, postDecideTaskNode },
+      { postResolveRouterItem, postTaskGraphDecide },
       makeRouterDecision(),
       { optionIndex: 1, note: "   ", clientId: "cid-1" },
     );
@@ -82,14 +82,14 @@ describe("submitDecision：三合一拍板提交", () => {
       clientId: "cid-1",
       optionIndex: 1,
     });
-    expect(postDecideTaskNode).not.toHaveBeenCalled();
+    expect(postTaskGraphDecide).not.toHaveBeenCalled();
   });
 
   it("router_item：点选 + 附带单行补充备注", async () => {
     const postResolveRouterItem = vi.fn().mockResolvedValue({ item: {}, messageId: 302 });
-    const postDecideTaskNode = vi.fn();
+    const postTaskGraphDecide = vi.fn();
     await submitDecision(
-      { postResolveRouterItem, postDecideTaskNode },
+      { postResolveRouterItem, postTaskGraphDecide },
       makeRouterDecision(),
       { optionIndex: 0, note: "  加上容量上限守卫  ", clientId: "cid-2" },
     );
@@ -102,9 +102,9 @@ describe("submitDecision：三合一拍板提交", () => {
 
   it("router_item：不点选项、纯文字回车自定义答复（optionIndex: null）", async () => {
     const postResolveRouterItem = vi.fn().mockResolvedValue({ item: {}, messageId: 303 });
-    const postDecideTaskNode = vi.fn();
+    const postTaskGraphDecide = vi.fn();
     await submitDecision(
-      { postResolveRouterItem, postDecideTaskNode },
+      { postResolveRouterItem, postTaskGraphDecide },
       makeRouterDecision(),
       { optionIndex: null, note: "先缓一缓，等压测结果", clientId: "cid-3" },
     );
@@ -117,26 +117,26 @@ describe("submitDecision：三合一拍板提交", () => {
 
   it("gate：点选方案（保留原始选项文本）+ 备注，以及纯文字意见（choice: null）", async () => {
     const postResolveRouterItem = vi.fn();
-    const postDecideTaskNode = vi.fn().mockResolvedValue({ graph: {}, messageId: 401 });
+    const postTaskGraphDecide = vi.fn().mockResolvedValue({ graph: {}, messageId: 401 });
     const gate = makeGateDecision();
 
     await submitDecision(
-      { postResolveRouterItem, postDecideTaskNode },
+      { postResolveRouterItem, postTaskGraphDecide },
       gate,
       { optionIndex: 0, note: "同步加上 busy_timeout", clientId: "cid-4" },
     );
-    expect(postDecideTaskNode).toHaveBeenCalledWith(7, "pick-db", {
+    expect(postTaskGraphDecide).toHaveBeenCalledWith(7, "pick-db", {
       clientId: "cid-4",
       choice: "开启 WAL",
       note: "同步加上 busy_timeout",
     });
 
     await submitDecision(
-      { postResolveRouterItem, postDecideTaskNode },
+      { postResolveRouterItem, postTaskGraphDecide },
       gate,
       { optionIndex: null, note: "先只读压测一轮", clientId: "cid-5" },
     );
-    expect(postDecideTaskNode).toHaveBeenLastCalledWith(7, "pick-db", {
+    expect(postTaskGraphDecide).toHaveBeenLastCalledWith(7, "pick-db", {
       clientId: "cid-5",
       choice: null,
       note: "先只读压测一轮",
@@ -145,7 +145,7 @@ describe("submitDecision：三合一拍板提交", () => {
   });
 
   it("既没选方案也没填文字、或下标越界时直接拒绝", async () => {
-    const client = { postResolveRouterItem: vi.fn(), postDecideTaskNode: vi.fn() };
+    const client = { postResolveRouterItem: vi.fn(), postTaskGraphDecide: vi.fn() };
     await expect(submitDecision(client, makeRouterDecision(), { optionIndex: null, note: "   " })).rejects.toThrow();
     await expect(submitDecision(client, makeRouterDecision(), { optionIndex: 9, note: "" })).rejects.toThrow();
     expect(client.postResolveRouterItem).not.toHaveBeenCalled();

@@ -16,7 +16,7 @@ const RECOMMENDED_PREFIX = /^(?:\(\s*(?:recommended|推荐)\s*\)|（\s*推荐\s*
 
 export interface DecisionSubmitClient {
   postResolveRouterItem(id: RouterItemId, body: ResolveRouterItemRequest): Promise<ResolveRouterItemResponse>;
-  postDecideTaskNode(graphId: TaskGraphId, nodeKey: TaskNodeKey, body: DecideTaskNodeRequest): Promise<DecideTaskNodeResponse>;
+  postTaskGraphDecide(graphId: TaskGraphId, nodeKey: TaskNodeKey, body: DecideTaskNodeRequest): Promise<DecideTaskNodeResponse>;
 }
 
 export interface DecisionSubmissionInput {
@@ -68,7 +68,7 @@ export async function submitDecision(
   }
 
   const choice = optionIndex === null ? null : (decision.options[optionIndex] ?? null);
-  await client.postDecideTaskNode(decision.source.graphId, decision.source.nodeKey, {
+  await client.postTaskGraphDecide(decision.source.graphId, decision.source.nodeKey, {
     clientId,
     choice,
     ...(trimmedNote.length > 0 ? { note: trimmedNote } : {}),
