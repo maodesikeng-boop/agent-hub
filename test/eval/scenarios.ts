@@ -140,7 +140,7 @@ export const SCENARIOS: readonly Scenario[] = [
     workers: [trayWorker()],
     fallbackReport: GENERIC_REPORT,
     gh: ghReplay([PR_286, trayPr([{ status: "pass" }])]),
-    shots: { dir: "tray/shots", preludeDir: "tray/prelude-shots" },
+    shots: { dir: "tray/report-shots", preludeDir: "tray/prelude-shots" },
     answer: answerByRecommendation,
     checks: TRAY_CHECKS,
   },
@@ -161,7 +161,7 @@ export const SCENARIOS: readonly Scenario[] = [
       ]),
       CI_PR,
     ]),
-    shots: { dir: "tray/shots", preludeDir: "tray/prelude-shots" },
+    shots: { dir: "tray/report-shots", preludeDir: "tray/prelude-shots" },
     answer(ask) {
       // 真实定案（消息 #49842）：“加缓存和备用源（推荐）：装过一次就缓存，镜像出问题时自动改用官方源，派一个小 Worker 改 CI 配置”
       const pick = ask.options.find((o) => /缓存|备用源|官方源/.test(o));
@@ -187,7 +187,7 @@ export const SCENARIOS: readonly Scenario[] = [
     workers: [trayWorker(true)],
     fallbackReport: GENERIC_REPORT,
     gh: ghReplay([PR_286, trayPr([{ status: "pass" }])]),
-    shots: { dir: "tray/shots", preludeDir: "tray/prelude-shots" },
+    shots: { dir: "tray/report-shots", preludeDir: "tray/prelude-shots" },
     answer: answerByRecommendation,
     // 托盘 Worker 开工后、汇报之前（设计 3.5 的 T3），经资料页的接口在性格设定里加上 11-11 23:17 真实加的那一条
     injectOnWorkerStart: { worker: "托盘", personaAppend: read("habit/persona-line.md") },
