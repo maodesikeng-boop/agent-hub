@@ -76,6 +76,7 @@ const VALID_ARGS: { [C in HubCommand]: HubArgsMap[C] } = {
   "graph.decide": { nodeKey: "gate-1", graphId: 1, choice: "A", note: "同意" },
   "graph.skip": { nodeKey: "n1", graphId: 1, reason: "不再需要" },
   "graph.cancel": { graphId: 1, reason: "取消任务图" },
+  "graph.finish": { graphId: 1, unmergedOk: true, summary: "里程碑已合并交付" },
 };
 
 describe("agent api over inject", () => {
@@ -417,6 +418,29 @@ describe("agent api over inject", () => {
       await call("worker.log", { workerId: 5 });
       expect(probes).toBe(1);
       expect(ledger.contexts).toEqual([{ transcript: null }, { transcript: null }, {}]);
+    });
+
+    it("hub graph finish：按 graphPrTargets 并行查各分支 PR 并作为 context.graphPrs 传给账本；unavailable 与报错静默忽略不硬拦", async () => {
+      ledger.graphTargets = [
+        { cwd: "/repo", branch: "hub/1-open" },
+        { cwd: "/repo", branch: "hub/2-none" },
+        { cwd: "/repo", branch: "hub/3-unavail" },
+      ];
+      await app.close();
+      app = createAgentApi({
+        ledger,
+        tokens,
+        probePr: async (_cwd, branch) => {
+          if (branch === "hub/1-open") return pr;
+          if (branch === "hub/2-none") return null;
+          return { unavailable: "没装 gh" };
+        },
+      });
+      await app.ready();
+
+      const res = await call("graph.finish", { graphId: 2, summary: "验收完成" });
+      expect(res.statusCode).toBe(200);
+      expect(ledger.contexts).toEqual([{ graphPrs: { "hub/1-open": pr } }]);
     });
   });
 

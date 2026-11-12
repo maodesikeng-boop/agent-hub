@@ -274,6 +274,8 @@ export function createLedgerHubCommands(
         return taskGraphs.skipIn(p, caller, args as HubArgs<"graph.skip">);
       case "graph.cancel":
         return taskGraphs.cancelIn(p, caller, args as HubArgs<"graph.cancel">);
+      case "graph.finish":
+        return taskGraphs.finishIn(p, caller, args as HubArgs<"graph.finish">, context);
     }
   };
 

@@ -374,6 +374,8 @@ export function systemMessageDedupeKey(conversationId: ConversationId, meta: Sys
         return `${meta.sessionId}:${meta.uuid}`;
       case "worker.max_time_exceeded":
         return `${meta.workerId}:${meta.maxTimeMs}`;
+      case "task_graph.ready_to_finish":
+        return `${meta.graphId}:${meta.seq}`;
     }
   })();
   return `system:${conversationId}:${meta.event}:${ref}`;
@@ -398,6 +400,7 @@ export const SYSTEM_EVENTS = [
   "context.compacted",
   "driver.warning",
   "worker.max_time_exceeded",
+  "task_graph.ready_to_finish",
 ] as const;
 
 /**
@@ -441,7 +444,8 @@ export type SystemMessageMeta =
   | { event: "schedule.run"; scheduleId: ScheduleId; name: string; scheduledAt: number; catchUp: boolean }
   | { event: "schedule.failed"; scheduleId: ScheduleId; name: string; messageId: MessageId; rawReason?: string }
   | { event: "context.compacted"; sessionId: SessionId; uuid: string; trigger: string | null }
-  | { event: "worker.max_time_exceeded"; workerId: WorkerId; workerConversationId: ConversationId; maxTimeMs: number };
+  | { event: "worker.max_time_exceeded"; workerId: WorkerId; workerConversationId: ConversationId; maxTimeMs: number }
+  | { event: "task_graph.ready_to_finish"; graphId: TaskGraphId; seq: number; diffProbed?: boolean };
 
 export interface GateRef {
   graphId: TaskGraphId;
@@ -613,10 +617,12 @@ export function isHandoverTraffic(message: Pick<Message, "sender" | "meta">): bo
 
 /**
  * 静默唤醒项目经理的内部触发消息本身（网页聊天流里只隐藏这条触发消息本身，不隐藏项目经理随后的正常回复！）：
- * - worker.max_time_exceeded：Worker 这一轮超过最大时间仍未结束时发给项目经理的静默唤醒消息。
+ * - worker.max_time_exceeded：Worker 这一轮超过最大时间仍未结束时发给项目经理的静默唤醒消息；
+ * - task_graph.ready_to_finish：任务图全部节点到达终态时发给项目经理的交付单通知。
  */
 export function isSilentTriggerMessage(message: Pick<Message, "sender" | "meta">): boolean {
-  return systemEventOf(message)?.event === "worker.max_time_exceeded";
+  const ev = systemEventOf(message)?.event;
+  return ev === "worker.max_time_exceeded" || ev === "task_graph.ready_to_finish";
 }
 
 /** 网页显示系统消息时去掉开头的【系统】。 */
@@ -1018,6 +1024,15 @@ export interface TaskGraph {
   createdAt: number;
   updatedAt: number;
   completedAt: number | null;
+}
+
+/** 图仍为 active 且所有节点均处于终态（done / skipped）：派生为“待交付（Ready to finish）”。 */
+export function isTaskGraphReadyToFinish(graph: Pick<TaskGraph, "status" | "nodes">): boolean {
+  return (
+    graph.status === "active" &&
+    graph.nodes.length > 0 &&
+    graph.nodes.every((n) => n.status === "done" || n.status === "skipped")
+  );
 }
 
 // ---- 项目经理专属记忆目录子文件（state/pm-memory/<pmId>/<topic>.md）----

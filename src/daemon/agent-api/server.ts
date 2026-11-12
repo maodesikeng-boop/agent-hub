@@ -44,7 +44,7 @@ import { API_ERRORS } from "../../shared/errors.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
 import { listenOnRunSocket } from "../run-socket.ts";
 import type { RouterSandboxGuard } from "../router/sandbox.ts";
-import type { WorkerPrProbeResult } from "../../shared/hub.ts";
+import type { WorkerPr, WorkerPrProbeResult } from "../../shared/hub.ts";
 import type { HubCallContext, WorkspaceProbe } from "../../shared/ledger.ts";
 import { isAgentVendor, type AgentVendor, type ModelCatalog, type VendorAvailability } from "../../shared/vendors.ts";
 import { vendorTranscriptPath } from "../driver/transcript.ts";
@@ -53,7 +53,7 @@ import { probePr as defaultProbePr, probeWorkspace as defaultProbeWorkspace } fr
 
 export interface AgentApiOptions {
   /** reportHealth：500 记一次 "agent-api" 失败，成功一次清零；400–409 不算。 */
-  ledger: Pick<Ledger, "hubCall" | "sessionRole" | "reportHealth" | "workerStartFolder" | "workerPrTarget" | "workerTranscriptTarget">;
+  ledger: Pick<Ledger, "hubCall" | "sessionRole" | "reportHealth" | "workerStartFolder" | "workerPrTarget" | "graphPrTargets" | "workerTranscriptTarget">;
   /**
    * hub worker start 之前异步探主文件夹的 git（m3-plan 第 2.6 节），结果作为 HubCallContext.workspace 交给 hubCall：
    * 账本的事务里不做 I/O，git 卡住也不会停住整个守护进程。默认 daemon/git 的 probeWorkspace（每次 git 最多 GIT_PROBE_TIMEOUT_MS）。
@@ -362,6 +362,16 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
       reason: { type: "string", maxLength: MAX_REASON_CHARS * 2 },
     },
   },
+  "graph.finish": {
+    type: "object",
+    additionalProperties: false,
+    required: ["summary"],
+    properties: {
+      graphId: workerIdField,
+      unmergedOk: { type: "boolean" },
+      summary: { type: "string", minLength: 1, maxLength: MAX_TASK_BYTES },
+    },
+  },
 };
 
 /** 要查字符的字段：path 必须是绝对路径、不含 NUL；name 不含 NUL 和控制字符。 */
@@ -388,6 +398,7 @@ const BYTE_LIMITS: Partial<Record<HubCommand, Record<string, number>>> = {
   "schedule.add": { prompt: MAX_TASK_BYTES },
   "graph.create": { specJson: MAX_GRAPH_SPEC_BYTES },
   "graph.patch": { specJson: MAX_GRAPH_SPEC_BYTES },
+  "graph.finish": { summary: MAX_TASK_BYTES },
 };
 
 class HubError extends Error {
@@ -515,6 +526,21 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
       const ref = ledger.workerTranscriptTarget(sessionId, body.workerId as number);
       const transcript = ref === null ? null : findTranscript(ref);
       return { ...(pr === null ? {} : { pr }), transcript };
+    }
+    if (command === "graph.finish") {
+      const targets = ledger.graphPrTargets?.(sessionId, body.graphId as number | undefined) ?? [];
+      if (targets.length === 0) return {};
+      const entries = await Promise.all(
+        targets.map(async (t) => {
+          const res = await probePr(t.cwd, t.branch).catch(() => null);
+          return res !== null && !("unavailable" in res) ? ([t.branch, res] as const) : null;
+        }),
+      );
+      const graphPrs: Record<string, WorkerPr> = {};
+      for (const entry of entries) {
+        if (entry !== null) graphPrs[entry[0]] = entry[1];
+      }
+      return { graphPrs };
     }
     if (command !== "worker.start") return {};
     const context: HubCallContext = {};

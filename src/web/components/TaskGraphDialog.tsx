@@ -1,7 +1,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { Check, Loader2 } from "lucide-react";
 import { memo, useMemo, useRef, useState } from "react";
-import type { ConversationId, TaskGraph, TaskNode } from "../../shared/index.ts";
+import { isTaskGraphReadyToFinish, type ConversationId, type TaskGraph, type TaskNode } from "../../shared/index.ts";
 import { useClient } from "../device-scope.tsx";
 import { errorLine, errorText, errorTitle, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
@@ -155,7 +155,9 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                 ? "Completed"
                 : graph.status === "cancelled"
                   ? "Cancelled"
-                  : "Task Graph"}
+                  : isTaskGraphReadyToFinish(graph)
+                    ? "Ready to finish"
+                    : "Task Graph"}
             </span>
           </div>
           {graph.status === "active" && (

@@ -433,3 +433,51 @@ describe("endedOnRevokedTokens：给 prepareLaunch 的令牌", () => {
     expect(() => tokens.issue(1)).toThrow(boom);
   });
 });
+
+describe("session.send 处理函数：任务图交付单发送前异步补齐 diff 与 PR", () => {
+  it("命中 graphDeliveryProbeTarget 时并行探 diff 与 PR、写回正文后再送入 driver.send；探测抛错也不阻断投递", async () => {
+    let stored = message({
+      sender: "system",
+      text: "【任务图 #3 · 改造 待交付】\n原始正文",
+      meta: { event: "task_graph.ready_to_finish", graphId: 3, seq: 1, diffProbed: false },
+    });
+    const { d, send } = deps();
+    d.ledger.getMessage = vi.fn(() => (send.mock.calls.length > 0 ? { ...stored, status: "delivered" as const } : stored));
+    d.ledger.graphDeliveryProbeTarget = vi.fn(() => ({
+      graphId: 3,
+      repoFolder: "/repo",
+      branches: [
+        { branch: "hub/1-a", cwd: "/repo", baseCommit: "base1" },
+        { branch: "hub/2-b", cwd: "/repo", baseCommit: "base2" },
+      ],
+    }));
+    const enrich = vi.fn((_id: number, input: unknown) => {
+      const typed = input as { files?: ReadonlyArray<{ file: string; added: number | null; deleted: number | null }>; prs?: Record<string, { number: number }> };
+      stored = {
+        ...stored,
+        text: `${stored.text}\n文件数=${typed.files?.length ?? 0} PR=${typed.prs?.["hub/1-a"]?.number ?? "none"}`,
+      };
+    });
+    d.ledger.enrichDeliveryNoteMessage = enrich;
+    d.probeDiffNumstat = vi.fn(async (_repo, branch) => {
+      if (branch === "hub/2-b") throw new Error("git timeout");
+      return [{ file: "src/a.ts", added: 10, deleted: 2 }];
+    });
+    d.probePr = vi.fn(async (_cwd, branch) =>
+      branch === "hub/1-a" ? { number: 42, state: "MERGED", url: "https://github.com/o/r/pull/42" } : { unavailable: "gh missing" },
+    );
+
+    expect(await createSessionSendHandler(d)(action("session.send", { sessionId: 1, messageId: 7, source: "system" }))).toEqual({
+      kind: "done",
+    });
+    expect(enrich).toHaveBeenCalledWith(7, {
+      files: [{ file: "src/a.ts", added: 10, deleted: 2 }],
+      prs: { "hub/1-a": { number: 42, state: "MERGED", url: "https://github.com/o/r/pull/42" } },
+    });
+    expect(send).toHaveBeenCalledWith(1, {
+      messageIds: [7],
+      source: "system",
+      text: "【任务图 #3 · 改造 待交付】\n原始正文\n文件数=1 PR=42",
+    });
+  });
+});

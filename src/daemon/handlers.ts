@@ -23,17 +23,31 @@ import {
   type SessionStore,
   type SessionTokens,
   type WorkerId,
+  type WorkerPr,
+  type WorkerPrProbeResult,
 } from "../shared/index.ts";
-import type { AddWorktreeOptions, AddWorktreeResult } from "./git/index.ts";
+import type { AddWorktreeOptions, AddWorktreeResult, DiffFileStat } from "./git/index.ts";
 import type { SetupRunner } from "./setup/index.ts";
 
 
 export interface HandlerDeps {
   driver: Pick<Driver, "start" | "send" | "end">;
-  ledger: Pick<Ledger, "getMessage" | "onActionFailed" | "refreshSessionState" | "stopMessage" | "waitsForFirstTurn" | "waitsForHandover">;
+  ledger: Pick<
+    Ledger,
+    | "getMessage"
+    | "onActionFailed"
+    | "refreshSessionState"
+    | "stopMessage"
+    | "waitsForFirstTurn"
+    | "waitsForHandover"
+    | "graphDeliveryProbeTarget"
+    | "enrichDeliveryNoteMessage"
+  >;
   sessions: Pick<SessionStore, "get">;
   /** 和 agent 接口、prepareLaunch 用的是同一个实例。 */
   tokens: Pick<SessionTokens, "revoke">;
+  probeDiffNumstat?: (repoFolder: string, branch: string, options?: { baseCommit?: string | null }) => Promise<readonly DiffFileStat[] | null>;
+  probePr?: (cwd: string, branch: string) => Promise<WorkerPrProbeResult>;
   now?: () => number;
 }
 
@@ -64,7 +78,7 @@ function rateLimitWaitMs(deps: Pick<HandlerDeps, "sessions" | "now">, sessionId:
 export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"session.send"> {
   return async (action): Promise<ActionResult> => {
     const { sessionId, messageId, source, resend, recovery } = action.params;
-    const message = deps.ledger.getMessage(messageId);
+    let message = deps.ledger.getMessage(messageId);
     // 消息没了，或者已经有结果（已回复、已停止、已取消）：没什么可发的
     if (message === null || message.status === "replied" || message.status === "stopped" || message.status === "cancelled") return { kind: "done" };
     // Worker 还没开工（建 worktree、跑准备命令）或任务说明还没写进去：先等，别让这条把会话提前拉起来（第一轮要是任务说明）
@@ -73,6 +87,50 @@ export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"sess
     if (deps.ledger.waitsForHandover(messageId)) return { kind: "later", delayMs: QUEUED_RECHECK_MS, reason: "handover" };
     const wait = rateLimitWaitMs(deps, sessionId);
     if (wait !== null) return { kind: "later", delayMs: Math.min(wait + RATE_LIMIT_RECHECK_PAD_MS, RATE_LIMIT_RECHECK_MAX_MS), reason: "rate_limited" };
+    // 任务图待交付通知（task_graph.ready_to_finish）真正送入 PM 前，在事务外补探一次 git diff --numstat 与 PR 状态（探测失败不阻断）
+    const probeTarget = deps.ledger.graphDeliveryProbeTarget?.(messageId) ?? null;
+    if (probeTarget !== null && (deps.probeDiffNumstat || deps.probePr)) {
+      const fileMap = new Map<string, DiffFileStat>();
+      let probedAnyDiff = false;
+      const prs: Record<string, WorkerPr> = {};
+      await Promise.all(
+        probeTarget.branches.map(async (b) => {
+          const [diffStats, prRes] = await Promise.all([
+            probeTarget.repoFolder !== null && deps.probeDiffNumstat
+              ? deps.probeDiffNumstat(probeTarget.repoFolder, b.branch, { baseCommit: b.baseCommit }).catch(() => null)
+              : Promise.resolve(null),
+            deps.probePr ? deps.probePr(b.cwd, b.branch).catch(() => null) : Promise.resolve(null),
+          ]);
+          if (diffStats !== null) {
+            probedAnyDiff = true;
+            for (const item of diffStats) {
+              const prev = fileMap.get(item.file);
+              if (!prev) {
+                fileMap.set(item.file, { ...item });
+              } else {
+                fileMap.set(item.file, {
+                  file: item.file,
+                  added: prev.added === null || item.added === null ? null : prev.added + item.added,
+                  deleted: prev.deleted === null || item.deleted === null ? null : prev.deleted + item.deleted,
+                });
+              }
+            }
+          }
+          if (prRes !== null && !("unavailable" in prRes)) {
+            prs[b.branch] = prRes;
+          }
+        }),
+      );
+      deps.ledger.enrichDeliveryNoteMessage?.(messageId, {
+        ...(probedAnyDiff ? { files: [...fileMap.values()] } : {}),
+        prs,
+      });
+      const refreshed = deps.ledger.getMessage(messageId);
+      if (refreshed === null || refreshed.status === "replied" || refreshed.status === "stopped" || refreshed.status === "cancelled") {
+        return { kind: "done" };
+      }
+      message = refreshed;
+    }
     let result;
     // 用户写的字 + 附件的完整路径；Worker 对话里用户直接说的话另带标签，驱动层放在原文前面单独一块（shared/worker.ts）
     const { prefixes, text } = deliveryParts(message);

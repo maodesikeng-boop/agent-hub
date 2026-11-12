@@ -93,7 +93,7 @@ describe("任务图技能正文", () => {
     expect(PM_REVIEW_REDLINES_BRIEF.split("；")).toHaveLength(4);
   });
 
-  it("图里怎么跟进：graph show 为准、收工自动标完成、给下一个节点给路径不转述、换人 --incomplete 再 --node、计划变了 patch、补审查赶在收工前", () => {
+  it("图里怎么跟进：graph show 为准、收工自动标完成、给下一个节点给路径不转述、换人 --incomplete 再 --node、计划变了 patch、全部节点完成后待交付发交付单并用 finish 结束", () => {
     const body = taskGraphSkillBody();
     for (const word of [
       `进度以 \`${hub} graph show\` 为准。`,
@@ -102,10 +102,12 @@ describe("任务图技能正文", () => {
       `**换人**：\`${hub} worker end <编号> --incomplete\`，再 \`${hub} worker start --node <节点>\` 新派一个接手`,
       `**计划变了**：随时 \`${hub} graph patch\`，加节点、改还没开工的节点、跳过不需要的。`,
       "原本没建图、做着发现要分段或加审查的，随时补建一张图。",
-      `先 \`${hub} graph patch\` 补一个，再让最后一个节点的 Worker 收工；所有节点都完成后整张图自动结束，不能再改。`,
+      "**全部节点完成后图不会自动结束**：最后一个节点完成时图保持待交付，你会收到交付单（各节点结果和改动文件名单）。",
+      `仍可 \`${hub} graph patch\` 补节点或打回重做；验收合并后用 \`${hub} graph finish\` 结束整张图（交付摘要自动同步给总助）。`,
     ]) {
       expect(body, word).toContain(word);
     }
+    expect(body).not.toContain("所有节点都完成后整张图自动结束，不能再改");
     // 规矩在命令前面（claude 压缩后只重新挂每个技能的前 5,000 个 token）
     expect(body.indexOf("## 建图")).toBeLessThan(body.indexOf("## 跟进"));
     expect(body.indexOf("## 跟进")).toBeLessThan(body.indexOf("## 命令"));

@@ -305,7 +305,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     action: "done",
     cli: "graph done",
     usage: `  ${hub} graph done <节点> [--graph <图编号>] [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要> | --stdin]
-                                                          把没有 Worker 在干的阶段节点标完成并解锁下游，或给节点补记 PR 等结果（图已完成时加 --graph <图编号>）；
+                                                          把没有 Worker 在干的阶段节点标完成并解锁下游，或给节点补记 PR 等结果（图已结束时加 --graph <图编号>）；
                                                           有 Worker 在干（running）的节点会被拒绝：先 ${hub} worker end 让它收工`,
   },
   {
@@ -321,7 +321,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     group: "graph",
     action: "skip",
     cli: "graph skip",
-    usage: `  ${hub} graph skip <节点> [--reason <原因>] [--graph <图编号>]  跳过任务图节点并重算下游`,
+    usage: `  ${hub} graph skip <节点> [--reason <原因>] [--graph <图编号>]  跳过单个任务图节点（不连带跳过下游）并重算下游`,
   },
   {
     command: "graph.cancel",
@@ -329,6 +329,13 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     action: "cancel",
     cli: "graph cancel",
     usage: `  ${hub} graph cancel [<图编号>] [--reason <原因>]             取消未完结的任务图`,
+  },
+  {
+    command: "graph.finish",
+    group: "graph",
+    action: "finish",
+    cli: "graph finish",
+    usage: `  ${hub} graph finish [<图编号>] [--unmerged-ok] --stdin        所有节点完成后结束任务图，正文是交付摘要（自动同步给总助；有未合并 PR 时默认拦下提醒）`,
   },
 ];
 
@@ -423,6 +430,7 @@ type Options = {
   node?: string;
   graph?: string;
   incomplete?: boolean;
+  "unmerged-ok"?: boolean;
   question?: string;
   context?: string;
   replace?: string;
@@ -542,6 +550,7 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
         node: { type: "string" },
         graph: { type: "string" },
         incomplete: { type: "boolean" },
+        "unmerged-ok": { type: "boolean" },
         question: { type: "string" },
         context: { type: "string" },
         replace: { type: "string" },
@@ -1010,6 +1019,14 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     if (rest[0] !== undefined) body.graphId = idOf(rest[0], "graph cancel", "任务图");
     if (values.reason !== undefined) body.reason = values.reason;
     return { command: "graph.cancel", body, textSource: null };
+  }
+  if (group === "graph" && action === "finish") {
+    allowOnly(values, ["unmerged-ok", "stdin"], "graph finish");
+    if (rest.length > 1) throw new UsageError(`${hub} graph finish 的参数个数不对`);
+    const body: Record<string, unknown> = {};
+    if (rest[0] !== undefined) body.graphId = idOf(rest[0], "graph finish", "任务图");
+    if (values["unmerged-ok"] === true) body.unmergedOk = true;
+    return { command: "graph.finish", body, textSource: requireStdin(values, "graph finish"), textField: "summary" };
   }
   if (group === "dispatch") {
     const requireDevice = (what: string): string => {

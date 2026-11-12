@@ -66,15 +66,16 @@ ${PM_REVIEW_REDLINES.map((line) => `  - ${line}`).join("\n")}
 - **节点的 Worker 做完了**：验收通过就 \`${HUB} worker end <编号>\` 收工，节点自动标完成，后面的节点轮到。给下一个节点派 Worker 时，任务说明里给上一步的分支、PR 和文件路径，让它自己去读，不要转述内容。
 - **换人**：\`${HUB} worker end <编号> --incomplete\`，再 \`${HUB} worker start --node <节点>\` 新派一个接手，任务说明里写清分支、已有的提交、还要改的点。
 - **计划变了**：随时 \`${HUB} graph patch\`，加节点、改还没开工的节点、跳过不需要的。原本没建图、做着发现要分段或加审查的，随时补建一张图。
-- **补审查要赶在收工前**：改动碰了上面的红线而图里没有审查节点，先 \`${HUB} graph patch\` 补一个，再让最后一个节点的 Worker 收工；所有节点都完成后整张图自动结束，不能再改。
+- **全部节点完成后图不会自动结束**：最后一个节点完成时图保持待交付，你会收到交付单（各节点结果和改动文件名单）。改动碰了上面的红线而图里没有审查节点，或证据不够，仍可 \`${HUB} graph patch\` 补节点或打回重做；验收合并后用 \`${HUB} graph finish\` 结束整张图（交付摘要自动同步给总助）。
 
 ## 命令
 \`<节点>\` 是节点的 key，它在几张活跃的图里重名时加 \`--graph <图编号>\`。
 - \`${HUB} graph create [--title <标题>] --stdin\`：建图，正文 JSON 形如 \`${TASK_GRAPH_CREATE_JSON_HINT}\`（\`kind\` 不写是 \`piece\`，要用户拍板的写 \`gate\`；\`deps\` 写前置节点的 key，不写就是一开始就轮到）
 - \`${HUB} graph show [<图编号>]\` / \`${HUB} graph list [--all | --status active|completed|cancelled]\`：看一张图的进度和每个节点的结果（分支、PR、摘要、定案）/ 列出任务图
 - \`${HUB} graph patch [<图编号>] --stdin\`：改图，正文 JSON 按需取 \`${TASK_GRAPH_PATCH_JSON_HINT}\`；已经结束的图不能改
-- \`${HUB} graph done <节点> [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要> | --stdin]\`：把没有 Worker 在干的节点标完成（比如你自己做完的），或给节点补记 PR 等结果（图已完成时加 \`--graph <图编号>\`）；有 Worker 在干的会被拒绝，先让它收工
-- \`${HUB} graph skip <节点> [--reason <原因>]\` / \`${HUB} graph cancel [<图编号>] [--reason <原因>]\`：跳过一个节点 / 取消整张图
+- \`${HUB} graph done <节点> [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要> | --stdin]\`：把没有 Worker 在干的节点标完成（比如你自己做完的），或给节点补记 PR 等结果（图已结束时加 \`--graph <图编号>\`）；有 Worker 在干的会被拒绝，先让它收工
+- \`${HUB} graph skip <节点> [--reason <原因>]\` / \`${HUB} graph cancel [<图编号>] [--reason <原因>]\`：跳过一个节点（只跳过它自己，下游照常解锁）/ 取消整张图
+- \`${HUB} graph finish [<图编号>] [--unmerged-ok] --stdin\`：所有节点完成后结束这张图，正文是交付摘要（自动同步给总助）；分支上有未合并的 PR 时默认拦下提醒，确认不合并加 \`--unmerged-ok\`
 - \`${HUB} graph ask <节点> [--question <问题>] [--option <选项>...] [--recommended <选项>] [--stdin]\`：给轮到的 \`gate\` 节点填上问题、选项和推荐，交给用户拍板；正文是给用户看的背景摘要
 - \`${HUB} graph decide <节点> --choice <选项> [--note <说明>]\`：用户没点选项、在聊天里口头答复时，用它记下来
 - \`${HUB} worker start --node <节点> …\`：把 Worker 绑到图里轮到的节点上，其余参数和不带 \`--node\` 时一样

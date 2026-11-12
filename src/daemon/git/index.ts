@@ -7,6 +7,8 @@ export {
   hasUncommittedChanges,
   isBranchMergedToMain,
   isRepoWithCommit,
+  parseDiffNumstatZ,
+  probeDiffNumstat,
   probeWorkspace,
   probeWorktreeForRemoval,
   pruneWorktrees,
@@ -14,4 +16,4 @@ export {
   removeWorktree,
 } from "./git.ts";
 export { probePr } from "./pr.ts";
-export type { AddWorktreeOptions, AddWorktreeResult, GitOptions } from "./git.ts";
+export type { AddWorktreeOptions, AddWorktreeResult, DiffFileStat, GitOptions } from "./git.ts";
