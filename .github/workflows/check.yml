@@ -64,11 +64,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/apt-debs
-          key: apt-debs-v1-fbtest-${{ runner.os }}-${{ runner.arch }}-${{ steps.runner-image.outputs.version }}
-
-      - name: TEMP simulate azure mirror outage
-        run: |
-          echo "192.0.2.1 azure.archive.ubuntu.com" | sudo tee -a /etc/hosts
+          key: apt-debs-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.runner-image.outputs.version }}
 
       - name: Install sandbox apt packages (cache, then apt with fallback mirror)
         env:
