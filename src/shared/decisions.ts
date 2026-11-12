@@ -20,6 +20,7 @@ import {
 } from "./domain.ts";
 import type { ConversationSnapshot } from "./api.ts";
 import type { RouterItem, RouterSlice } from "./router.ts";
+import { normalizeTaskGraphs } from "./task-graph-compat.ts";
 
 export type PendingDecisionSource =
   | {
@@ -142,7 +143,7 @@ const decisionsCache = new WeakMap<readonly RouterItem[], CacheByGraphs>();
  */
 export function pendingDecisionsOf(snapshot: DecisionSnapshotInput, deviceId = "local"): PendingDecision[] {
   const routerItems = snapshot.router?.items ?? EMPTY_ROUTER_ITEMS;
-  const graphs = snapshot.activeTaskGraphs ?? EMPTY_TASK_GRAPHS;
+  const graphs = normalizeTaskGraphs(snapshot.activeTaskGraphs ?? EMPTY_TASK_GRAPHS);
   const pms = snapshot.pms;
   const projects = snapshot.projects ?? EMPTY_PROJECTS;
 

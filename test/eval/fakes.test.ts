@@ -5,7 +5,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { shortTmp } from "../e2e/harness.ts";
-import { readJsonl } from "./facts.ts";
+import { openDatabase } from "../../src/daemon/store/db.ts";
+import { migrate } from "../../src/daemon/store/migrate.ts";
+import { createLedger } from "../../src/daemon/ledger/index.ts";
+import { readFacts, readJsonl } from "./facts.ts";
 import { route, settingsWithoutOwnSandbox, type RouterConfig } from "./fakes/claude-router.ts";
 import { RECORD_ONLY_TOOLS, claudeEnvScript, isolationEnv, pmSandboxProfile, realGitPath, scrubbedEnvNames, writeShims } from "./isolation.ts";
 import { REPLAY_DIR, SCENARIOS, scenarioById } from "./scenarios.ts";
@@ -263,5 +266,44 @@ describe("回放假 Worker 超出预设轮次", () => {
     }
     const fast = workerSessions(plan(0), scenario, ctx, "/g").filter((s) => s.promptIncludes !== undefined);
     expect(fast[0]!.script.defaultTurn?.steps?.[0]).toHaveProperty("text");
+  });
+});
+
+describe("readFacts：0025 task_graph_steps 新表读取", () => {
+  it("不查已删除的 kind 列；挂拍板卡的步骤标成 gate，普通步骤标成 piece", () => {
+    const dir = mkdtempSync(join(root, "facts-0025-"));
+    const dbFile = join(dir, "hub.sqlite");
+    const projDir = join(dir, "repo");
+    mkdirSync(projDir, { recursive: true });
+    const db = openDatabase(dbFile);
+    migrate(db);
+    const ledger = createLedger(db, { pmHomeRoot: join(dir, "pm-home"), dataHome: join(dir, "data") });
+    const pm = ledger.createPm({ name: "PM", mode: "manage_only", persona: "", folder: projDir });
+    ledger.hubCall(pm.sessionId, "graph.create", {
+      specJson: JSON.stringify({
+        title: "测试事实读取",
+        nodes: [
+          { key: "impl", title: "实现" },
+          { key: "ok-plan", title: "确认方案", deps: ["impl"], question: "确认吗？", options: ["确认", "重来"] },
+        ],
+      }),
+    });
+    ledger.close();
+    db.close();
+
+    const facts = readFacts({
+      dbFile,
+      pmConversationId: pm.conversation.id,
+      ghCallsFile: join(dir, "none.jsonl"),
+      recordFile: join(dir, "none-rec.jsonl"),
+      injected: [],
+      startedAt: 1,
+      endedAt: 2,
+    });
+    expect(facts.graphs).toHaveLength(1);
+    expect(facts.graphs[0]!.nodes.map((n) => [n.key, n.kind, n.status])).toEqual([
+      ["impl", "piece", "waiting"],
+      ["ok-plan", "gate", "pending"],
+    ]);
   });
 });

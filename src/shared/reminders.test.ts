@@ -10,7 +10,7 @@ import {
   makeUserMessage,
   makeWorkerConversation,
 } from "./test-helpers.ts";
-import type { Change, Message, SessionState, StateSnapshot } from "./index.ts";
+import { pendingDecisionsOf, type Change, type Message, type SessionState, type StateSnapshot, type TaskGraph } from "./index.ts";
 import {
   ReminderTracker,
   WAITING_SETTLE_MS,
@@ -365,6 +365,97 @@ describe("Router 跨设备汇总：PendingDecision 与未读 Router 汇报", () 
       pendingCount: 0,
       unreadReportCount: 0,
       subtitle: "All clear",
+    });
+  });
+
+  it("跨端旧版本 Peer 兼容：未升级远端推来 waiting_user / skipped 旧节点时，提醒与待拍板投影正常识别且保持 === 引用稳定", () => {
+    const legacyRemoteGraph = {
+      id: 77,
+      projectId: 1,
+      pmId: 1,
+      conversationId: 1,
+      title: "远端旧版流水线",
+      status: "active" as const,
+      originMsgId: null,
+      nodes: [
+        {
+          key: "gate-old",
+          title: "远端旧门禁",
+          kind: "gate",
+          status: "waiting_user",
+          sortOrder: 0,
+          activeWorkerId: null,
+          workerIds: [],
+          artifact: null,
+          gateQuestion: "远端旧门禁要不要放行？",
+          gateOptions: ["放行", "暂缓"],
+          gateSummaryMd: null,
+          gateRecommended: "放行",
+          gateAskMessageId: null,
+          decision: null,
+          createdAt: T0,
+          updatedAt: T0,
+        },
+        {
+          key: "skip-old",
+          title: "已跳过的下游",
+          kind: "piece",
+          status: "skipped",
+          sortOrder: 1,
+          activeWorkerId: null,
+          workerIds: [],
+          artifact: null,
+          gateQuestion: null,
+          gateOptions: [],
+          gateSummaryMd: null,
+          gateRecommended: null,
+          gateAskMessageId: null,
+          decision: null,
+          createdAt: T0,
+          updatedAt: T0,
+        },
+        {
+          key: "next-old",
+          title: "真正受阻的下游",
+          kind: "piece",
+          status: "pending",
+          sortOrder: 2,
+          activeWorkerId: null,
+          workerIds: [],
+          artifact: null,
+          gateQuestion: null,
+          gateOptions: [],
+          gateSummaryMd: null,
+          gateRecommended: null,
+          gateAskMessageId: null,
+          decision: null,
+          createdAt: T0,
+          updatedAt: T0,
+        },
+      ] as unknown as TaskGraph["nodes"],
+      edges: [
+        { fromKey: "gate-old", toKey: "skip-old" },
+        { fromKey: "gate-old", toKey: "next-old" },
+      ],
+      createdAt: T0,
+      updatedAt: T0,
+      completedAt: null,
+    };
+    const rawSnap = makeSnapshot({ ...snapshot(), activeTaskGraphs: [legacyRemoteGraph] });
+    const firstDirect = pendingDecisionsOf(rawSnap, DEVICE);
+    expect(pendingDecisionsOf(rawSnap, DEVICE)).toBe(firstDirect);
+    expect(firstDirect).toHaveLength(1);
+    expect(firstDirect[0]).toMatchObject({
+      question: "远端旧门禁要不要放行？",
+      source: { kind: "gate", blockedNodeCount: 1, nextNodeTitles: ["真正受阻的下游"] },
+    });
+
+    const state = reminderStateFrom(rawSnap);
+    expect(askingConversations(state, DEVICE).has(1)).toBe(true);
+    expect(routerReminderSummary([{ deviceId: DEVICE, state }])).toEqual({
+      pendingCount: 1,
+      unreadReportCount: 0,
+      subtitle: "远端旧门禁要不要放行？",
     });
   });
 });

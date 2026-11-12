@@ -1103,6 +1103,140 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     expect(preamble).toContain("[完了] db-mig");
     expect(preamble).toContain("[等你处理] api-impl");
   });
+
+  it("Worker 未按格式输出汇报块（unformatted）时步骤转 waiting:pm：支持 PM 直接 graph done 放行，也支持 worker send 打回继续", () => {
+    const graph = ledger.hubCall(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({
+        title: "汇报未格式化兜底",
+        nodes: [
+          { key: "s1", title: "第一步" },
+          { key: "s2", title: "第二步", deps: ["s1"] },
+        ],
+      }),
+    }).data.graph;
+
+    const w1 = ledger.hubCall(lin.sessionId, "worker.start", {
+      title: "做 s1",
+      task: "实现 s1",
+      noWorktree: true,
+      node: "s1",
+    }).data.worker;
+
+    const workerSession = db.get<{ id: number; conversation_id: number }>(
+      "SELECT id, conversation_id FROM agent_sessions WHERE worker_id = ? ORDER BY generation DESC LIMIT 1",
+      w1.id,
+    )!;
+    const msg = db.get<{ id: number }>(
+      "SELECT id FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT 1",
+      workerSession.conversation_id,
+    )!;
+    ledger.applyDriverEvent(workerSession.id, { type: "message.delivered", messageIds: [msg.id], at: now });
+    ledger.applyDriverEvent(workerSession.id, { type: "message.processing", messageIds: [msg.id], at: now });
+    ledger.applyDriverEvent(workerSession.id, {
+      type: "agent.text",
+      uuid: `u-raw-${++now}`,
+      text: "我已经改好提交了，忘了贴汇报块。",
+      at: now,
+    });
+    ledger.applyDriverEvent(workerSession.id, {
+      type: "turn.ended",
+      ok: true,
+      interrupted: false,
+      messageIds: [msg.id],
+      durationMs: 12,
+      at: now,
+    });
+
+    let shown = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph;
+    expect(stateOf(shown, "s1")).toBe("waiting:pm");
+    expect(shown.nodes.find((n) => n.key === "s1")?.activeWorkerId).toBe(w1.id);
+
+    // PM 用 worker send 让它补汇报：步骤先回到 running；再次未按格式回复后 PM 直接用 graph done 放行
+    ledger.hubCall(lin.sessionId, "worker.send", { workerId: w1.id, text: "补一下汇报" });
+    shown = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph;
+    expect(stateOf(shown, "s1")).toBe("running");
+
+    const msg2 = db.get<{ id: number }>(
+      "SELECT id FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT 1",
+      workerSession.conversation_id,
+    )!;
+    ledger.applyDriverEvent(workerSession.id, { type: "message.delivered", messageIds: [msg2.id], at: now });
+    ledger.applyDriverEvent(workerSession.id, { type: "message.processing", messageIds: [msg2.id], at: now });
+    ledger.applyDriverEvent(workerSession.id, {
+      type: "agent.text",
+      uuid: `u-raw-${++now}`,
+      text: "还是没按格式",
+      at: now,
+    });
+    ledger.applyDriverEvent(workerSession.id, {
+      type: "turn.ended",
+      ok: true,
+      interrupted: false,
+      messageIds: [msg2.id],
+      durationMs: 10,
+      at: now,
+    });
+    expect(stateOf(ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph, "s1")).toBe("waiting:pm");
+
+    const released = ledger.hubCall(lin.sessionId, "graph.done", {
+      graphId: graph.id,
+      nodeKey: "s1",
+      summary: "PM 核对后手动放行",
+    });
+    expect(released.text).toContain("轮到了：s2 [等你处理]");
+    expect(stateOf(released.data.graph, "s1")).toBe("done");
+    expect(stateOf(released.data.graph, "s2")).toBe("waiting:pm");
+  });
+
+  it("hub graph patch 拍板卡与依赖联动：给 waiting:pm 补问题立即出卡，加未完前置自动收起旧卡退回 pending，全员跳过回执提示待交付", () => {
+    const graph = ledger.hubCall(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({
+        title: "动态改卡与改边",
+        nodes: [{ key: "approve", title: "确认方案" }],
+      }),
+    }).data.graph;
+    expect(stateOf(graph, "approve")).toBe("waiting:pm");
+
+    // 1) 给已轮到的 waiting:pm 步骤通过 patch 补上问题与选项 -> 立即变 waiting:user 并补发 AskMeta 卡片
+    const withCard = ledger.hubCall(lin.sessionId, "graph.patch", {
+      graphId: graph.id,
+      specJson: JSON.stringify({
+        updateNodes: [{ key: "approve", question: "用哪个存储？", options: ["SQLite", "JSON"], recommended: "SQLite" }],
+      }),
+    }).data.graph;
+    expect(stateOf(withCard, "approve")).toBe("waiting:user");
+    const firstMsgId = withCard.nodes[0]!.gateAskMessageId!;
+    expect(firstMsgId).toBeTypeOf("number");
+    expect(askOf(ledger.getMessage(firstMsgId)!)).toMatchObject({ needsUser: true });
+
+    // 2) 通过 patch 在 approve 前插入未完成前置 prep -> 旧卡片自动标已答收起，approve 退回 pending
+    const withPrep = ledger.hubCall(lin.sessionId, "graph.patch", {
+      graphId: graph.id,
+      specJson: JSON.stringify({
+        addNodes: [{ key: "prep", title: "压测对比" }],
+        addEdges: [{ from: "prep", to: "approve" }],
+      }),
+    }).data.graph;
+    expect(stateOf(withPrep, "prep")).toBe("waiting:pm");
+    expect(stateOf(withPrep, "approve")).toBe("pending");
+    expect(withPrep.nodes.find((n) => n.key === "approve")?.gateAskMessageId).toBeNull();
+    expect(askOf(ledger.getMessage(firstMsgId)!)).toMatchObject({ answered: true });
+
+    // 3) prep 完成后，approve 重新出新拍板卡；再用 patch skipNodes 跳过 approve 时回执提示待交付
+    ledger.hubCall(lin.sessionId, "graph.done", { graphId: graph.id, nodeKey: "prep" });
+    const rearmed = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph;
+    expect(stateOf(rearmed, "approve")).toBe("waiting:user");
+    const secondMsgId = rearmed.nodes.find((n) => n.key === "approve")!.gateAskMessageId!;
+    expect(secondMsgId).not.toBe(firstMsgId);
+
+    const allSettledPatch = ledger.hubCall(lin.sessionId, "graph.patch", {
+      graphId: graph.id,
+      specJson: JSON.stringify({ skipNodes: ["approve"] }),
+    });
+    expect(allSettledPatch.text).toContain("全部节点已完成（待交付），验收合并后用 hub graph finish 结束任务图");
+    expect(isTaskGraphReadyToFinish(allSettledPatch.data.graph)).toBe(true);
+    expect(askOf(ledger.getMessage(secondMsgId)!)).toMatchObject({ answered: true });
+  });
 });
 
 describe("防漏读任务图手册（docs/orchestration-skill-design.md 第 7 节）：只提醒、不拦", () => {

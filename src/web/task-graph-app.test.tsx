@@ -176,6 +176,9 @@ describe("桌面右栏：App 接通果皮轨与切面轮", () => {
     const graphs = await waitFor(() => within(sidePanel()).getByRole("region", { name: /^Task Graph$/ }));
     await user.click(within(graphs).getByRole("button", { name: "Zoom" }));
     const zoom = await screen.findByRole("dialog", { name: "发布流水线" });
+    // running 节点展示同色系果皮浅晕圆环，且滚动视口不带 -mx-6 防止贴边裁切
+    expect(zoom.querySelector("[data-running-ring]")).not.toBeNull();
+    expect(zoom.querySelector("[data-slot='dialog-body']")?.className).not.toContain("-mx-6");
 
     await user.click(within(zoom).getByRole("button", { name: "Cancel graph" }));
     const confirm = await screen.findByRole("dialog", { name: "Cancel this task graph?" });

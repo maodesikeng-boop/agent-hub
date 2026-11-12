@@ -99,4 +99,20 @@ describe("任务图读入处的新旧状态映射", () => {
       ["done", true],
     ]);
   });
+
+  it("防御兜底：新状态缺附带字段或残留 kind 时自动修复为合法 TaskNodeState 且保持幂等", () => {
+    const malformed = graphOf(
+      [
+        { ...legacyNode("w", "gate", "waiting"), waitingFor: null, skipped: true } as unknown as TaskNode,
+        { ...legacyNode("d", "piece", "done"), waitingFor: "pm", skipped: false } as unknown as TaskNode,
+      ],
+      9,
+    );
+    const fixed = normalizeTaskGraph(malformed);
+    expect(fixed.nodes.map((n) => ({ status: n.status, waitingFor: n.waitingFor, skipped: n.skipped, hasKind: "kind" in n }))).toEqual([
+      { status: "waiting", waitingFor: "pm", skipped: false, hasKind: false },
+      { status: "done", waitingFor: null, skipped: false, hasKind: false },
+    ]);
+    expect(normalizeTaskGraph(fixed)).toBe(fixed);
+  });
 });

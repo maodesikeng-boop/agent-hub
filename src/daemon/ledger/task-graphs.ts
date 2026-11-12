@@ -907,17 +907,25 @@ export function createLedgerTaskGraphs(
       const node = byKey.get(key)!;
       const upsDone = (incoming.get(key) ?? []).every((u) => byKey.get(u)?.status === "done");
 
-      // 轮到了但还没人干过、也没挂卡的等人步骤：前置又有没完的了，退回没轮到（还没人碰过，退回不丢任何东西）
+      // 轮到了但还没人干过、也还没定案的等人步骤（含等项目经理与刚出卡等用户的步骤）：前置又有没完的了，收起旧卡并退回没轮到
       if (
         !upsDone &&
         node.status === "waiting" &&
-        node.waiting_for === "pm" &&
         node.active_worker_id === null &&
-        parseJsonOr<WorkerId[]>(node.worker_ids_json, []).length === 0
+        parseJsonOr<WorkerId[]>(node.worker_ids_json, []).length === 0 &&
+        node.decision_json === null
       ) {
+        if (node.gate_ask_message_id !== null) {
+          messages.markAskAnsweredIn(p, node.gate_ask_message_id);
+        }
         node.status = "pending";
         node.waiting_for = null;
-        db.run("UPDATE task_graph_steps SET status = 'pending', waiting_for = NULL, updated_at = ? WHERE id = ?", t, node.id);
+        node.gate_ask_message_id = null;
+        db.run(
+          "UPDATE task_graph_steps SET status = 'pending', waiting_for = NULL, gate_ask_message_id = NULL, updated_at = ? WHERE id = ?",
+          t,
+          node.id,
+        );
         continue;
       }
 
@@ -1155,9 +1163,10 @@ export function createLedgerTaskGraphs(
     const turned = recomputeGraphProgressIn(p, graphRow, caller);
     const graph = loadGraph(graphRow.id)!;
     p.changes.push({ type: "task_graph.created", data: { graph } });
+    const progressNote = unlockedNoteOf(turned, graph).replace(/^；/u, "");
 
     return {
-      text: `已创建${formatGraphText(graph)}${turned.length > 0 ? `\n${unlockedNoteOf(turned, graph).replace(/^；/u, "")}` : ""}`,
+      text: `已创建${formatGraphText(graph)}${progressNote !== "" ? `\n${progressNote}` : ""}`,
       data: { graph },
     };
   };
@@ -1429,7 +1438,7 @@ export function createLedgerTaskGraphs(
       const cur = nodesByKey.get(uk)!;
       const nextTitle = u.title !== undefined ? validateNodeTitle(u.title) : cur.title;
       if (u.question !== undefined || u.options !== undefined || u.summaryMd !== undefined || u.recommended !== undefined) {
-        // 改拍板卡的内容只改还没出卡或还没开工的步骤；已经出了卡的要重发，用 hub graph ask
+        // 改拍板卡的内容只允许改没人在干、还没完的步骤；若此前已出过旧卡先收起，再交由 recomputeGraphProgressIn 重算激活或退回
         if (cur.status === "running" || cur.status === "done" || cur.active_worker_id !== null) {
           throw fail("conflict", `步骤「${uk}」${taskNodeStatusText(toTaskNode(cur), "pm")}，不能改它的拍板卡`);
         }
@@ -1439,9 +1448,20 @@ export function createLedgerTaskGraphs(
           summaryMd: u.summaryMd ?? cur.gate_summary_md ?? undefined,
           recommended: u.recommended ?? cur.gate_recommended ?? undefined,
         });
+        if (cur.gate_ask_message_id !== null) {
+          messages.markAskAnsweredIn(p, cur.gate_ask_message_id);
+        }
         db.run(
           `UPDATE task_graph_steps
-              SET title = ?, gate_question = ?, gate_options_json = ?, gate_summary_md = ?, gate_recommended = ?, updated_at = ?
+              SET title = ?,
+                  gate_question = ?,
+                  gate_options_json = ?,
+                  gate_summary_md = ?,
+                  gate_recommended = ?,
+                  gate_ask_message_id = NULL,
+                  status = CASE WHEN status = 'waiting' THEN 'pending' ELSE status END,
+                  waiting_for = NULL,
+                  updated_at = ?
             WHERE id = ?`,
           nextTitle,
           gate.question,
@@ -1485,8 +1505,9 @@ export function createLedgerTaskGraphs(
     syncDeliveryNoteAfterProgressIn(p, refreshedRow, wasAllSettled);
     const graph = loadGraph(graphRow.id)!;
     p.changes.push({ type: "task_graph.updated", data: { graph } });
+    const progressNote = unlockedNoteOf(turned, graph).replace(/^；/u, "");
     return {
-      text: `已更新${formatGraphText(graph)}${turned.length > 0 ? `\n${unlockedNoteOf(turned, graph).replace(/^；/u, "")}` : ""}`,
+      text: `已更新${formatGraphText(graph)}${progressNote !== "" ? `\n${progressNote}` : ""}`,
       data: { graph },
     };
   };

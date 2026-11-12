@@ -80,10 +80,14 @@ export function readFacts(input: FactsInput): Facts {
       id: num(g.id),
       title: str(g.title),
       createdAt: num(g.created_at),
-      nodes: all("SELECT node_key, title, kind, status, worker_ids_json, created_at FROM task_graph_steps WHERE graph_id = ? ORDER BY sort_order, id", num(g.id)).map((n) => ({
+      // 0025 起节点类型只剩步骤一种，挂着拍板卡（写了问题、等用户拍板或已有定案）的步骤在评测事实里标成 gate 供 G6 检查
+      nodes: all(
+        "SELECT node_key, title, status, waiting_for, gate_question, decision_json, worker_ids_json, created_at FROM task_graph_steps WHERE graph_id = ? ORDER BY sort_order, id",
+        num(g.id),
+      ).map((n) => ({
         key: str(n.node_key),
         title: str(n.title),
-        kind: str(n.kind),
+        kind: n.gate_question !== null || n.waiting_for === "user" || n.decision_json !== null ? "gate" : "piece",
         status: str(n.status),
         workerIds: parse<number[]>(str(n.worker_ids_json), []),
         createdAt: num(n.created_at),

@@ -19,7 +19,7 @@ import { Button } from "../ui/button.tsx";
 import { Dialog, DialogBody, DialogClose, DialogContent, DialogFooter } from "../ui/dialog.tsx";
 import { KnifeAvatar } from "./KnifeAvatar.tsx";
 import { GateDecisionCard, resolveBoundWorker } from "./PeelTrack.tsx";
-import { SliceWheelIcon } from "./SliceWheelIcon.tsx";
+import { fruitTrackVars, SliceWheelIcon } from "./SliceWheelIcon.tsx";
 
 function readRootFontSizePx(): number {
   if (typeof document === "undefined" || typeof getComputedStyle !== "function") {
@@ -203,10 +203,10 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
             {errorLine(actionError)}
           </p>
         )}
-        <DialogBody className="overflow-auto">
+        <DialogBody className="mx-0 block overflow-auto px-0">
           <div
             data-rankdir={layout.rankdir}
-            style={{ width: `${layout.width}px`, minHeight: `${layout.height}px` }}
+            style={{ ...fruitTrackVars(colorKey), width: `${layout.width}px`, minHeight: `${layout.height}px` }}
             className="relative"
           >
             <svg
@@ -247,6 +247,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
               const isPending = node.status === "pending";
               const isSkipped = node.status === "done" && node.skipped;
               const isDone = node.status === "done" && !node.skipped;
+              const isRunning = node.status === "running";
               const isWaitingPm = isTaskNodeWaitingPm(node);
               // 没轮到、等项目经理（没有 Worker 挂着）的步骤能跳过；在干、等用户、完了的不行
               const canSkip = graph.status === "active" && (isPending || (isWaitingPm && node.activeWorkerId === null));
@@ -299,11 +300,17 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                   <div className="flex items-center justify-between gap-2">
                     <span className="flex min-w-0 items-center gap-1.5">
                       {isDone && <Check className="size-3.5 shrink-0 text-success" aria-hidden="true" />}
+                      {isRunning && (
+                        <svg data-running-ring viewBox="0 0 16 16" className="size-3.5 shrink-0" aria-hidden="true">
+                          <circle cx="8" cy="8" r="7" fill="var(--pulp-pale)" />
+                          <circle cx="8" cy="8" r="4.6" fill="var(--background)" stroke="var(--peel)" strokeWidth="2.2" />
+                        </svg>
+                      )}
                       {isWaitingPm && <span className="size-2 shrink-0 rounded-full bg-caution" aria-hidden="true" />}
                       <span
                         className={cn(
                           "min-w-0 truncate text-minor font-medium",
-                          node.status === "running" && "status-shimmer",
+                          isRunning && "status-shimmer",
                           isSkipped && "text-muted-foreground opacity-60",
                         )}
                       >

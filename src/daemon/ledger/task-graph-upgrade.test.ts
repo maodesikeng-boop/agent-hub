@@ -179,4 +179,57 @@ describe("迁移 0025 前在跑的旧图：升级后接着走完", () => {
     const finished = ledger.hubCall(lin.sessionId, "graph.finish", { graphId: graph.id, summary: "编排简化第 1～5 步都合并了" }).data.graph;
     expect(finished.status).toBe("completed");
   });
+
+  it("过渡期真实拓扑重放（任务图 #6：多路历史 done 合流 + s4-review 在干 -> s5 -> s6）：升级 0025 后全链路无断裂走完", () => {
+    const graph = ledger.hubCall(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({
+        title: "编排简化实现（方案 PR 290，按 6 步）",
+        nodes: [
+          { key: "s1", title: "提示词重排" },
+          { key: "eval-approve", title: "拍板验证方案", question: "基准集规模？", options: ["12 个", "6 个"], recommended: "12 个" },
+          { key: "s2", title: "唯一结束出口", deps: ["s1", "eval-approve"] },
+          { key: "s3", title: "出错接手", deps: ["s2"] },
+          { key: "s4", title: "四个状态与迁移", deps: ["s3"] },
+          { key: "s4-review", title: "审查 PR 310", deps: ["s4"] },
+          { key: "s5", title: "自动开工和交棒", deps: ["s4-review"] },
+          { key: "s6", title: "等用户与检查点", deps: ["s5"] },
+        ],
+      }),
+    }).data.graph;
+    ledger.hubCall(lin.sessionId, "graph.done", { graphId: graph.id, nodeKey: "s1", summary: "s1 已合入" });
+    ledger.decideTaskNode(graph.id, "eval-approve", { clientId: "u-eval", choice: "12 个" });
+    for (const k of ["s2", "s3", "s4"]) {
+      ledger.hubCall(lin.sessionId, "graph.done", { graphId: graph.id, nodeKey: k, summary: `${k} 已合入` });
+    }
+    const wReview = startOn("s4-review", graph.id);
+
+    ledger.close();
+    downgradeToOldSchema({
+      s1: "done",
+      "eval-approve": "done",
+      s2: "done",
+      s3: "done",
+      s4: "done",
+      "s4-review": "running",
+      s5: "pending",
+      s6: "pending",
+    });
+    expect(migrate(db)).toMatchObject({ from: 24, applied: [25] });
+    ledger = createLedger(db, options());
+
+    expect(ledger.hubCall(lin.sessionId, "status", {}).text).toContain("进度 5/8；在干：s4-review");
+
+    finishWorkerTurn(wReview.id, "审查通过并补齐回归用例");
+    expect(ledger.hubCall(lin.sessionId, "worker.end", { workerId: wReview.id }).text).toContain("轮到了：s5 [等你处理]");
+
+    for (const k of ["s5", "s6"]) {
+      const w = startOn(k, graph.id);
+      finishWorkerTurn(w.id, `${k} 完成`);
+      ledger.hubCall(lin.sessionId, "worker.end", { workerId: w.id });
+    }
+    const doneGraph = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph;
+    expect(isTaskGraphReadyToFinish(doneGraph)).toBe(true);
+    const finished = ledger.hubCall(lin.sessionId, "graph.finish", { graphId: graph.id, summary: "编排简化 6 步全部完成" }).data.graph;
+    expect(finished.status).toBe("completed");
+  });
 });

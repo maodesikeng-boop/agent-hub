@@ -14,6 +14,29 @@
 --   pending → pending；ready → waiting/pm；running → running；attention → waiting/pm；
 --   waiting_user → waiting/user；done → done；skipped → done，skipped = 1。
 -- kind 列删掉：gate 的问题、选项、摘要、推荐、卡片消息、定案（gate_* 与 decision_json）原样保留，就是挂在步骤上的拍板卡。
+
+-- 若从 user_version = 24 单独重跑本文件（未经过 0023 重建空旧表），先兜底建出空旧表再拷 0 行并删掉，保证任意版本起重跑均幂等
+CREATE TABLE IF NOT EXISTS task_graph_nodes (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  graph_id            INTEGER NOT NULL,
+  node_key            TEXT    NOT NULL,
+  title               TEXT    NOT NULL,
+  kind                TEXT    NOT NULL,
+  status              TEXT    NOT NULL,
+  sort_order          INTEGER NOT NULL DEFAULT 0,
+  active_worker_id    INTEGER,
+  worker_ids_json     TEXT    NOT NULL DEFAULT '[]',
+  artifact_json       TEXT,
+  gate_question       TEXT,
+  gate_options_json   TEXT,
+  gate_summary_md     TEXT,
+  gate_recommended    TEXT,
+  gate_ask_message_id INTEGER,
+  decision_json       TEXT,
+  created_at          INTEGER NOT NULL,
+  updated_at          INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS task_graph_steps (
   id                  INTEGER PRIMARY KEY AUTOINCREMENT,
   graph_id            INTEGER NOT NULL REFERENCES task_graphs(id) ON DELETE CASCADE,
@@ -66,7 +89,8 @@ SELECT
   active_worker_id, worker_ids_json, artifact_json,
   gate_question, gate_options_json, gate_summary_md, gate_recommended, gate_ask_message_id, decision_json,
   created_at, updated_at
-FROM task_graph_nodes;
+FROM task_graph_nodes
+WHERE id NOT IN (SELECT id FROM task_graph_steps);
 
 -- 编号接着旧表往下发（旧表删过行时它的计数可能比现存最大编号大），不复用删掉的节点编号
 UPDATE sqlite_sequence

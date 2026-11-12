@@ -23,6 +23,7 @@ import {
 import { ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX, ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX } from "./limits.ts";
 import { isRewoundMessage } from "./rewind.ts";
 import { emptyRouterSlice, type RouterItem, type RouterReportItem, type RouterSlice } from "./router.ts";
+import { normalizeTaskGraph, normalizeTaskGraphs } from "./task-graph-compat.ts";
 
 /** 对话要持续满足“等你”的条件这么久才算，避开 Worker 刚汇报、项目经理还没开始处理的那一瞬间。 */
 export const WAITING_SETTLE_MS = 3_000;
@@ -375,7 +376,7 @@ export function reminderStateFrom(
     ),
     sessions: snapshot.sessions.map(({ streamingText: _, ...s }) => s),
     router: snapshot.router ?? emptyRouterSlice(),
-    activeTaskGraphs: snapshot.activeTaskGraphs ?? [],
+    activeTaskGraphs: snapshot.activeTaskGraphs === undefined ? [] : normalizeTaskGraphs(snapshot.activeTaskGraphs),
     pending: [],
   };
 }
@@ -497,7 +498,7 @@ export function applyReminderChange(state: ReminderState, change: Change): Remin
     }
     case "task_graph.created":
     case "task_graph.updated": {
-      const { graph } = change.data;
+      const graph = normalizeTaskGraph(change.data.graph);
       const existingIndex = curGraphs.findIndex((g) => g.id === graph.id);
       if (graph.status !== "active") {
         if (existingIndex === -1) return next;
