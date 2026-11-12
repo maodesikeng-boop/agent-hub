@@ -375,6 +375,20 @@ export interface PreflightResult {
 }
 
 /**
+ * 要探“必须权限拒绝”的禁读路径。真账本 ~/.agent-hub、~/.ssh、HANDOVER.md、真仓库是必在的，照常严查；
+ * readDenied 里的是可选路径（被测 checkout 的 test/eval/replay、评测结果目录……）：旧提交（比如 9b87864^1）的工作树里
+ * 还没有 test/eval/replay，探它得到的是 ENOENT 而不是权限拒绝，会把整次对比误拦在预检。这类路径先在沙箱外看存在不存在，
+ * 不存在就跳过探测（沙箱规则里照样禁，以后它被建出来也读不了）。
+ */
+export function readDenyProbes(input: PmSandboxInput, exists: (path: string) => boolean = existsSync): Array<{ path: string; skip: boolean }> {
+  const required = [join(input.mainRepo ?? input.realRepo, "HANDOVER.md"), join(input.home, ".agent-hub"), join(input.home, ".ssh"), input.realRepo];
+  return [
+    ...required.map((path) => ({ path, skip: false })),
+    ...(input.readDenied ?? []).map((path) => ({ path, skip: !exists(path) })),
+  ];
+}
+
+/**
  * 在真沙箱里逐条试：该挡的挡住了、该放的放了（不花模型的钱）。只在 macOS 上跑；有一条不对就不跑评测。
  * probeDir：评测自己的目录（要能写）；evalPid：沙箱外的一个进程（发信号要被拒）。
  */
@@ -401,7 +415,10 @@ export function preflight(profileFile: string, input: PmSandboxInput, opts: { pr
     ok &&= good;
     lines.push(`${good ? "✓" : "✗"} 禁读（必须权限拒绝） ${path}`);
   };
-  for (const path of [join(input.mainRepo ?? input.realRepo, "HANDOVER.md"), join(input.home, ".agent-hub"), join(input.home, ".ssh"), input.realRepo, ...(input.readDenied ?? [])]) mustDenyRead(path);
+  for (const probe of readDenyProbes(input)) {
+    if (probe.skip) lines.push(`- 跳过禁读探测（路径不存在，被测版本里没有这个目录；规则照禁） ${probe.path}`);
+    else mustDenyRead(probe.path);
+  }
   const outside = join(input.home, ".eval-outside-probe-" + process.pid);
   const writeProbe = spawnSync(SANDBOX_EXEC, ["-f", profileFile, process.execPath, "-e",
     "try{require('fs').writeFileSync(process.argv[1],'probe');process.exit(2)}catch(e){process.exit(e.code==='EPERM'||e.code==='EACCES'?0:3)}", outside], { encoding: "utf8", timeout: 30_000 });

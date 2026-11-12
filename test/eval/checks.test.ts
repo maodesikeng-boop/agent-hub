@@ -61,6 +61,25 @@ describe("codeReadOf：验收时读代码", () => {
     expect(codeReadOf(read("/repo/AGENTS.md"), worktrees, changed)).toBeNull();
     expect(codeReadOf(bash("git diff --stat main...hub/1-x"), worktrees, changed)).toBeNull();
   });
+  it("H2 真机：读 docs/*.md、README、AGENTS.md 等文档核对数字不算读代码（哪怕在 worktree 里、哪怕是改动名单里的）", () => {
+    const withDoc = [...changed, "docs/ui-standard.md"];
+    expect(codeReadOf(read("/data/worktrees/1/1/docs/ui-standard.md"), worktrees, withDoc)).toBeNull();
+    expect(codeReadOf(read("/repo/docs/ui-standard.md"), worktrees, withDoc)).toBeNull();
+    expect(codeReadOf(read("/data/worktrees/1/1/README.md"), worktrees, changed)).toBeNull();
+    expect(codeReadOf(read("/data/worktrees/1/1/AGENTS.md"), worktrees, changed)).toBeNull();
+    expect(codeReadOf(bash("cat /data/worktrees/1/1/docs/ui-standard.md"), worktrees, withDoc)).toBeNull();
+    expect(codeReadOf(bash("sed -n '1,40p' /data/worktrees/1/1/docs/ui-standard.md"), worktrees, withDoc)).toBeNull();
+    expect(codeReadOf(bash("git diff --name-only main...hub/1-x"), worktrees, changed)).toBeNull();
+  });
+  it("源码仍严判：.ts .tsx .js .rs .swift .css（在 worktree 里或在改动名单里），不带 --stat/--name-only 的 git diff", () => {
+    for (const f of ["src/a.ts", "src/b.tsx", "scripts/c.js", "apps/windows/crates/x/src/lib.rs", "apps/macos/D.swift", "src/web/styles.css"]) {
+      expect(codeReadOf(read(`/data/worktrees/1/1/${f}`), worktrees, changed), f).toContain("读文件");
+      expect(codeReadOf(bash(`cat /data/worktrees/1/1/${f}`), worktrees, changed), f).toContain("读代码");
+    }
+    expect(codeReadOf(read("/repo/src/web/styles.css"), worktrees, ["src/web/styles.css"])).toContain("读文件");
+    expect(codeReadOf(bash("git diff main...hub/1-x"), worktrees, changed)).toContain("读 diff");
+    expect(codeReadOf(bash("gh pr diff 288"), worktrees, changed)).toContain("读 diff");
+  });
 });
 
 describe("evidenceOf：看证据", () => {
