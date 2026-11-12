@@ -52,6 +52,80 @@ jobs:
         if: matrix.shard == '1/4'
         run: pnpm typecheck
 
+      # 沙箱依赖（bubblewrap/socat）的安装：先走 actions/cache 缓存的 .deb，缓存没命中再 apt 在线装；
+      # runner 默认的 Azure 镜像连不上时自动切到 Ubuntu 官方源重试。装好后 scripts/linux-sandbox-setup.sh
+      # 看到 bwrap/socat 已存在就会跳过它自己的 apt 步骤（脚本本身不用改，用户机器上的行为不变）。
+      - name: Runner image version (apt cache key)
+        id: runner-image
+        run: echo "version=${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache apt debs (bubblewrap, socat)
+        id: cache-apt-debs
+        uses: actions/cache@v4
+        with:
+          path: ~/apt-debs
+          key: apt-debs-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.runner-image.outputs.version }}
+
+      - name: Install sandbox apt packages (cache, then apt with fallback mirror)
+        env:
+          APT_DEBS_CACHE_HIT: ${{ steps.cache-apt-debs.outputs.cache-hit }}
+        run: |
+          set -uo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          DEBS="$HOME/apt-debs"
+
+          echo "::group::apt 源诊断（runner 实际用的源）"
+          cat /etc/apt/apt-mirrors.txt 2>&1 || true
+          for f in /etc/apt/sources.list /etc/apt/sources.list.d/*; do
+            [ -f "$f" ] && { echo "--- $f"; cat "$f"; }
+          done
+          echo "::endgroup::"
+
+          if command -v bwrap >/dev/null 2>&1 && command -v socat >/dev/null 2>&1; then
+            echo "bwrap/socat 已存在，跳过安装"
+            exit 0
+          fi
+
+          # 1) 缓存命中：直接用缓存的 .deb 离线安装，不碰任何镜像
+          if [ "$APT_DEBS_CACHE_HIT" = "true" ] && ls "$DEBS"/*.deb >/dev/null 2>&1; then
+            if sudo dpkg -i "$DEBS"/*.deb; then
+              echo "apt-debs 缓存命中，已离线安装 bubblewrap/socat"
+              exit 0
+            fi
+            echo "::warning::缓存的 .deb 安装失败，改走在线安装"
+          fi
+
+          # 2) 在线安装；失败时把源切到 Ubuntu 官方源再试
+          # 每次 apt 调用都套硬超时：镜像不通时 apt 可能一直挂着不返回（不报错），
+          # 不超时就永远走不到下面的换源重试。
+          APT_OPTS="-o Acquire::Retries=2 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 -o APT::Keep-Downloaded-Packages=true"
+          apt_install() {
+            sudo timeout 120 apt-get $APT_OPTS update -y &&
+              sudo timeout 180 apt-get $APT_OPTS install -y bubblewrap socat
+          }
+
+          if ! apt_install; then
+            echo "::warning::默认镜像（mirror+file:/etc/apt/apt-mirrors.txt → azure.archive.ubuntu.com）不可用，切换到 Ubuntu 官方源 archive.ubuntu.com 重试"
+            # 24.04 是 deb822 的 *.sources，22.04 及以前是 sources.list；两种都改。
+            # mirror+file:... 与 azure.archive 一律换成官方 archive.ubuntu.com（security 段同样指向它，archive 也托管 noble-security）。
+            sudo sed -i -E \
+              -e 's#mirror\+file:/etc/apt/apt-mirrors\.txt#http://archive.ubuntu.com/ubuntu/#g' \
+              -e 's#https?://azure\.archive\.ubuntu\.com/ubuntu/?#http://archive.ubuntu.com/ubuntu/#g' \
+              /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list 2>/dev/null || true
+            echo "::group::改写后的源"
+            grep -rhE '^(URIs|deb )' /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null || true
+            echo "::endgroup::"
+            sudo rm -rf /var/lib/apt/lists/*
+            apt_install || { echo "::error::官方源也装不上 bubblewrap/socat"; exit 1; }
+            echo "已通过官方源（archive.ubuntu.com）装好 bubblewrap/socat"
+          fi
+
+          # 3) 装成功后把下载过的 .deb 留给 actions/cache 保存（job 成功才会保存）
+          mkdir -p "$DEBS"
+          sudo cp -n /var/cache/apt/archives/*.deb "$DEBS"/ 2>/dev/null || true
+          sudo chown -R "$(id -u):$(id -g)" "$DEBS"
+          ls -l "$DEBS"
+
       - name: Setup Linux bubblewrap sandbox
         run: sudo bash scripts/linux-sandbox-setup.sh
 
