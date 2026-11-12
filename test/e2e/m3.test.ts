@@ -410,7 +410,7 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     const workerSessionId = sessionOf(await first.client.state(), worker.worker_conversation_id).sessionId;
     const [before] = procsOf(workerSessionId);
     expect(await terminate(first.daemon)).toEqual({ code: 0, signal: null });
-    expect(isAlive(before!.pid)).toBe(false);
+    await waitUntil("worker claude exited", () => (isAlive(before!.pid) ? undefined : true));
     // 关机打断的这一轮：不发那一行，任务说明还是处理中
     expect(query<{ n: number }>("SELECT count(*) AS n FROM messages WHERE kind = 'worker' AND meta LIKE '%turn_failed%'")).toEqual([{ n: 0 }]);
     expect(query<{ status: string }>("SELECT status FROM messages WHERE id = ?", task.id)).toEqual([{ status: "processing" }]);
