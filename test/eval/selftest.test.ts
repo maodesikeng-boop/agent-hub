@@ -46,8 +46,10 @@ async function selfTrial(scenario: Scenario, kind: SelfTestKind): Promise<TrialR
 
 const show = (r: TrialResult) => JSON.stringify({ envError: r.envError, checks: r.checks.map((c) => `${c.id}:${c.status} ${c.reason}`), workDir: r.workDir }, null, 2);
 
+const positiveNeedsWorkerSandbox = (id: Scenario["id"]) => id !== "k2-local-config" && id !== "k3-merge";
+
 describe.each(SCENARIOS)("编排验证自测 $id", { timeout: EVAL_SCRIPTED_TRIAL_TIMEOUT_MS + 30_000 }, (scenario) => {
-  it.skipIf(!canSpawnWorkers)("正例：全部检查都过", async () => {
+  it.skipIf(!canSpawnWorkers && positiveNeedsWorkerSandbox(scenario.id))("正例：全部检查都过", async () => {
     const r = await selfTrial(scenario, "positive");
     expect(r.envError, show(r)).toBeNull();
     const kindOf = (id: string) => scenario.checks.find((d) => d.id === id)?.kind;

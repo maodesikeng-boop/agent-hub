@@ -1,35 +1,43 @@
 {
- "magpie": [
+ "pi-bridge": [
   {
-   "match": "visible",
+   "match": "filter",
    "outputs": [
     {
-     "stdout": "✓ saved\n  Antigravity\n  antigravity/gemini-4-carbon\n  antigravity/gemini-4-argon\n  antigravity/gemini-3.8-flash\n  antigravity/claude-opus-5-5\n  antigravity/claude-sonnet-5-5\n  antigravity/gpt-oss-120b-medium\n  antigravity/gemini-2.5-flash\n  antigravity/gemini-2.5-flash-lite\n  antigravity/gemini-3-flash\n  antigravity/gemini-3.1-flash-image\n  antigravity/gemini-3.1-flash-lite\n  antigravity/gemini-3.5-flash-lite\n  antigravity/gemini-3.8-flash-tiered\n  pi is shown antigravity\n  ! 54 kept from pi, in none of those:\n    no family · auto-claude-sonnet-5-5: auto/claude-sonnet-5-5\n    no family · auto-claude-opus-5-5: auto/claude-opus-5-5\n    no family · claude: claude/claude-fable-5-2, claude/claude-haiku-5-5, claude/claude-sonnet-5-5, claude/claude-opus-5-5 +14\n    no family · codex: codex/gpt-6.1-sol, codex/gpt-6-astra, codex/gpt-6.1-terra, codex/gpt-6-sol +4\n    no family · cursor: cursor/auto, cursor/grok-4.7@256k, cursor/grok-4.7@500k, cursor/grok-4.6 +20\n  http://127.0.0.1:3425/v1\n"
+     "stdout": "✓ saved filter rule: pi -> group:coder (14 models)\n  openrouter/qwen3-coder\n  openrouter/qwen3-coder-flash\n  openrouter/deepseek-v3.2\n  openrouter/deepseek-r1\n  openrouter/codestral-2508\n  openrouter/devstral-medium +8\n  ! 110 hidden from pi (non-coder groups)\n  note: ~/.pi/agent/models.json still holds cached list until next 'pi-bridge sync pi' or 'pi-bridge connect pi ...'\n  http://127.0.0.1:18080/v1\n"
     }
    ]
   },
   {
-   "match": "pi antigravity/",
+   "match": "sync",
    "outputs": [
     {
-     "stdout": "✓ Pi model magpie/antigravity/gemini-3.8-flash\n"
+     "stdout": "✓ wrote 14 filtered models to ~/.pi/agent/models.json\n"
     }
    ]
   },
   {
-   "match": "pi anthropic/claude-opus-5-5",
+   "match": "connect pi openrouter/",
+   "outputs": [
+    {
+     "stdout": "✓ Pi model pi-bridge/openrouter/qwen3-coder (rewrote ~/.pi/agent/models.json: 14 models)\n"
+    }
+   ]
+  },
+  {
+   "match": "connect pi anthropic/claude-opus-5-5",
    "afterCall": {
-    "tool": "magpie",
-    "match": "pi antigravity/"
+    "tool": "pi-bridge",
+    "match": "connect pi openrouter/"
    },
    "outputs": [
     {
-     "stdout": "✓ Pi model anthropic/claude-opus-5-5\n  disconnected from magpie: anthropic/claude-opus-5-5 is Pi's own, sent to the endpoint it had before magpie; magpie pi <model> with one of magpie's models connects it again\n"
+     "stdout": "✓ Pi model anthropic/claude-opus-5-5 (kept pi-bridge provider: 14 models)\n"
     }
    ]
   },
   {
-   "match": "pi anthropic/claude-opus-5-5",
+   "match": "connect pi anthropic/claude-opus-5-5",
    "outputs": [
     {
      "stdout": "✓ Pi model anthropic/claude-opus-5-5 (unchanged)\n"

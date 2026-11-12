@@ -99,13 +99,13 @@ export const SELF_TEST_SCRIPTS: Record<ScenarioId, Record<SelfTestKind, (ctx: Sc
   },
   // ---- 防过度建图（docs/orchestration-skill-design.md 第 8 节）----
   "k1-install": {
-    // 正例：一个 Worker 从安装做到冒烟测试；它交回“等你登录”的汇报，转给用户，用户登录后转回给它
+    // 正例：一个 Worker 从安装做到冒烟测试；它交回“等你授权”的汇报，转给用户，用户授权后转回给它
     positive: () => ({
       turns: [
-        { steps: [{ bash: heredoc(`${hub} worker start --title "装 magpie 并把 Pi 接到 Antigravity"`, "用户要试：装 magpie 和 Antigravity 插件，用户登录后把 Pi 接上并冒烟测试。要用户点的地方写进汇报。") }, { text: "派了一个 Worker 从安装做到冒烟测试。" }] },
-        say("装好了，请打开汇报里的链接登录 Google，登录完告诉我。"),
-        { steps: [{ bash: heredoc(`${hub} worker send 1`, "用户已登录成功；网关临时用 magpie serve 跑。接着把 Pi 接上并冒烟测试。") }, { text: "转给它接着做。" }] },
-        say("接好了：Pi 能用 Antigravity 的 Gemini。"),
+        { steps: [{ bash: heredoc(`${hub} worker start --title "装 pi-bridge 并把 Pi 接到 OpenRouter"`, "用户要试：装 pi-bridge 和 OpenRouter 插件，用户完成浏览器授权后把 Pi 接上并冒烟测试。要用户点的地方写进汇报。") }, { text: "派了一个 Worker 从安装做到冒烟测试。" }] },
+        say("装好了，请打开汇报里的链接完成浏览器授权，完成后告诉我。"),
+        { steps: [{ bash: heredoc(`${hub} worker send 1`, "用户已登录成功；服务临时用 pi-bridge serve 跑。接着把 Pi 接上并冒烟测试。") }, { text: "转给它接着做。" }] },
+        say("接好了：Pi 能通过 pi-bridge 用 OpenRouter 的 qwen3-coder。"),
       ],
       defaultTurn: say("好的。"),
     }),
@@ -114,9 +114,9 @@ export const SELF_TEST_SCRIPTS: Record<ScenarioId, Record<SelfTestKind, (ctx: Sc
       turns: [
         {
           steps: [
-            { bash: bigGraph("Pi 接入 Antigravity 模型（经 magpie）", ["ok-approve", "setup", "ok-login", "ok-login2", "connect"]) },
-            { bash: heredoc(`${hub} worker start --title "安装 magpie 与 Antigravity 插件"`, "装 magpie 和 Antigravity 插件，发起 Google 登录。") },
-            { bash: heredoc(`${hub} worker start --title "Pi 接 Antigravity 模型并冒烟测试"`, "把 Pi 接到 magpie 的 Antigravity 模型并冒烟测试。") },
+            { bash: bigGraph("Pi 接入 OpenRouter 模型（经 pi-bridge）", ["ok-approve", "setup", "ok-login", "ok-login2", "connect"]) },
+            { bash: heredoc(`${hub} worker start --title "安装 pi-bridge 与 OpenRouter 插件"`, "装 pi-bridge 和 OpenRouter 插件，发起浏览器授权。") },
+            { bash: heredoc(`${hub} worker start --title "Pi 接 OpenRouter 模型并冒烟测试"`, "把 Pi 接到 pi-bridge 的 OpenRouter 模型并冒烟测试。") },
             { text: "建了图，派了两个 Worker。" },
           ],
         },
@@ -130,11 +130,10 @@ export const SELF_TEST_SCRIPTS: Record<ScenarioId, Record<SelfTestKind, (ctx: Sc
       turns: [
         {
           steps: [
-            { bash: "magpie visible pi antigravity" },
-            { bash: "magpie pi anthropic/claude-opus-5-5" },
-            { bash: "magpie pi antigravity/gemini-3.8-flash && magpie pi anthropic/claude-opus-5-5" },
+            { bash: "pi-bridge filter pi coder" },
+            { bash: "pi-bridge sync pi" },
             { bash: `${hub} models --vendor pi --refresh` },
-            { text: "改好了：Pi 只显示 Antigravity 的模型，hub 的列表也刷新了。" },
+            { text: "改好了：Pi 只显示 coder 分组的模型，hub 的列表也刷新了。" },
           ],
         },
       ],
@@ -142,7 +141,7 @@ export const SELF_TEST_SCRIPTS: Record<ScenarioId, Record<SelfTestKind, (ctx: Sc
     }),
     // 反例：本机配置也派 Worker、建图（T1、T2、L1），自己一条命令都没跑（E1）
     negative: () => ({
-      turns: [{ steps: [{ bash: bigGraph("只给 Pi 显示 Antigravity", ["visible", "refresh"]) }, { bash: heredoc(`${hub} worker start --title "magpie 只给 Pi 显示 Antigravity" --no-worktree`, "跑 magpie visible pi antigravity，再刷新 hub 的模型列表。") }, { text: "派了。" }] }],
+      turns: [{ steps: [{ bash: bigGraph("只给 Pi 显示 coder 分组", ["filter", "refresh"]) }, { bash: heredoc(`${hub} worker start --title "pi-bridge 只给 Pi 显示 coder 模型" --no-worktree`, "跑 pi-bridge filter pi coder，再刷新 hub 的模型列表。") }, { text: "派了。" }] }],
       defaultTurn: say("好的。"),
     }),
     nothing: () => ({ defaultTurn: say("好的。") }),

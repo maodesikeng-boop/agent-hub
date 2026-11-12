@@ -9,7 +9,7 @@ import { readJsonl } from "./facts.ts";
 import { route, settingsWithoutOwnSandbox, type RouterConfig } from "./fakes/claude-router.ts";
 import { RECORD_ONLY_TOOLS, claudeEnvScript, isolationEnv, pmSandboxProfile, realGitPath, scrubbedEnvNames, writeShims } from "./isolation.ts";
 import { REPLAY_DIR, SCENARIOS, scenarioById } from "./scenarios.ts";
-import { writeGhReplay } from "./trial.ts";
+import { writeGhReplay, writeStubs } from "./trial.ts";
 import type { GhCall, RecordedCall, ScenarioId } from "./types.ts";
 
 const root = mkdtempSync(join(shortTmp(), "ah-evalfake-"));
@@ -115,6 +115,40 @@ describe("只记录的替身", () => {
     expect(r.status).toBe(0);
     expect(r.stdout).toBe("");
     expect(t.recorded()).toEqual([expect.objectContaining({ tool, argv: ["tokyo", "echo", "hi"] })]);
+  });
+
+  it("K1、K2 命令替身：按表回放输出、writeArgAfter 写文件、afterCall 状态推进，且 CLAUDE_ENV_FILE 清理同名别名", () => {
+    const dir = mkdtempSync(join(root, "stubs-"));
+    const stubsFile = writeStubs(dir, scenarioById("k1-install"))!;
+    const paths = { binDir: join(dir, "bin"), ghDir: join(dir, "gh"), recordFile: join(dir, "recorded.jsonl"), stubsFile };
+    writeShims(paths, { node: process.execPath, realGit: realGitPath() });
+    const env = { ...process.env, PATH: `${paths.binDir}:${process.env.PATH}`, EVAL_GH_DIR: paths.ghDir, EVAL_RECORD_FILE: paths.recordFile, EVAL_STUBS_FILE: stubsFile };
+    const run = (cmd: string, args: string[]) => spawnSync(cmd, args, { cwd: dir, env, encoding: "utf8" });
+
+    const scriptFile = join(dir, "install.sh");
+    expect(run("curl", ["-fsSL", "https://pi-bridge.example.dev/install.sh", "-o", scriptFile]).status).toBe(0);
+    expect(readFileSync(scriptFile, "utf8")).toContain("pi-bridge 0.4.2");
+    expect(run("pi-bridge", ["status"]).stdout).toContain("not running");
+    expect(run("pi-bridge", ["serve"]).status).toBe(0);
+    expect(run("pi-bridge", ["status"]).stdout).toContain("listening on 127.0.0.1:18080");
+
+    const iso = isolationEnv({
+      workDir: dir,
+      ...paths,
+      originBare: join(dir, "origin.git"),
+      repo: "o/r",
+      routerConfig: { mode: "scripted", node: "/n", fakeClaude: "/f", settingsDir: dir },
+      jq: null,
+    });
+    expect(readFileSync(iso.CLAUDE_ENV_FILE!, "utf8")).toContain("pi-bridge");
+
+    const dir2 = mkdtempSync(join(root, "stubs2-"));
+    const stubs2 = writeStubs(dir2, scenarioById("k2-local-config"))!;
+    const paths2 = { binDir: join(dir2, "bin"), ghDir: join(dir2, "gh"), recordFile: join(dir2, "recorded.jsonl"), stubsFile: stubs2 };
+    writeShims(paths2, { node: process.execPath, realGit: realGitPath() });
+    const env2 = { ...process.env, PATH: `${paths2.binDir}:${process.env.PATH}`, EVAL_GH_DIR: paths2.ghDir, EVAL_RECORD_FILE: paths2.recordFile, EVAL_STUBS_FILE: stubs2 };
+    expect(spawnSync("pi-bridge", ["filter", "pi", "coder"], { cwd: dir2, env: env2, encoding: "utf8" }).stdout).toContain("group:coder");
+    expect(spawnSync("pi-bridge", ["sync", "pi"], { cwd: dir2, env: env2, encoding: "utf8" }).stdout).toContain("models.json");
   });
 });
 

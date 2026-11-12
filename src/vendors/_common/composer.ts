@@ -2,6 +2,7 @@
 // 各家的 composer 在它上面改；daemon.ts 没写 composer 的厂商直接用 createSpecComposer（命令列表只有压缩命令）。
 // `@path` 带空格写 `@"a b"`；我们加的字各放一个 text 块在前面，用户原文单独放最后一块（daemon/driver/protocol.ts 的 userContent）。
 import {
+  isInternalSkillCommand,
   MAX_COMMANDS,
   MAX_COMMAND_DESCRIPTION_CHARS,
   MAX_COMMAND_HINT_CHARS,
@@ -35,7 +36,8 @@ export function createSpecComposerBase(vendor: AgentVendor): VendorComposerBase 
   return {
     vendor,
     parseCommands: parseComposerCommands,
-    isHiddenCommand: (command) => command.builtin === true && blockedReasonOf(command.name) !== null,
+    isHiddenCommand: (command) =>
+      isInternalSkillCommand(command.name) || (command.builtin === true && blockedReasonOf(command.name) !== null),
     isCommand: (text) => commandNameOf(text) !== null,
     isCompactCommand: (text) => commandNameOf(text) === spec.compactCommand,
     blockReason(text, known) {

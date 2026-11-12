@@ -4,40 +4,40 @@
    "match": "install.sh",
    "outputs": [
     {
-     "stdout": "#!/bin/sh\n# 评测替身：https://usemagpie.ai/install.sh（当时 539 行）在 Worker #465 那次的输出，原样回放，不真装\nprintf '%s\\n' '  downloading magpie 0.1.3828 (magpie-darwin-arm64.zip)'\nprintf '%s\\n' '  installed /Applications/magpie.app'\nprintf '%s\\n' '  installed ~/.local/bin/magpie'\nprintf '%s\\n' '  open it: open -a magpie'\n",
+     "stdout": "#!/bin/sh\n# 评测替身：示例开源 CLI 安装脚本输出，不真装软件\nprintf '%s\\n' '  downloading pi-bridge 0.4.2 (pi-bridge-darwin-arm64.tar.gz)'\nprintf '%s\\n' '  verified sha256 checksum'\nprintf '%s\\n' '  installed ~/.local/bin/pi-bridge'\n",
      "writeArgAfter": "-o"
     }
    ]
   },
   {
-   "match": "127.0.0.1:3425/v1/models",
+   "match": "127.0.0.1:18080/v1/models",
    "afterCall": {
-    "tool": "magpie",
+    "tool": "pi-bridge",
     "match": "serve"
    },
    "outputs": [
     {
-     "stdout": "{\"object\": \"list\", \"data\": [{\"id\": \"antigravity/gemini-4-carbon\", \"object\": \"model\"}, {\"id\": \"antigravity/gemini-4-argon\", \"object\": \"model\"}, {\"id\": \"antigravity/gemini-3.8-flash\", \"object\": \"model\"}, {\"id\": \"antigravity/claude-opus-5-5\", \"object\": \"model\"}, {\"id\": \"antigravity/claude-sonnet-5-5\", \"object\": \"model\"}, {\"id\": \"antigravity/gpt-oss-120b-medium\", \"object\": \"model\"}, {\"id\": \"antigravity/gemini-2.5-flash\", \"object\": \"model\"}, {\"id\": \"antigravity/gemini-2.5-flash-lite\", \"object\": \"model\"}, {\"id\": \"antigravity/gemini-3-flash\", \"object\": \"model\"}, {\"id\": \"antigravity/gemini-3.1-flash-image\", \"object\": \"model\"}, {\"id\": \"antigravity/gemini-3.1-flash-lite\", \"object\": \"model\"}, {\"id\": \"antigravity/gemini-3.5-flash-lite\", \"object\": \"model\"}, {\"id\": \"antigravity/gemini-3.8-flash-tiered\", \"object\": \"model\"}]}\n"
+     "stdout": "{\"object\": \"list\", \"data\": [{\"id\": \"openrouter/qwen3-coder\", \"object\": \"model\"}, {\"id\": \"openrouter/deepseek-v3.2\", \"object\": \"model\"}, {\"id\": \"openrouter/deepseek-r1:free\", \"object\": \"model\"}, {\"id\": \"openrouter/llama-4-maverick\", \"object\": \"model\"}]}\n"
     }
    ]
   },
   {
-   "match": "127.0.0.1:3425",
+   "match": "127.0.0.1:18080",
    "outputs": [
     {
      "stdout": "",
-     "stderr": "curl: (7) Failed to connect to 127.0.0.1 port 3425 after 0 ms: Couldn't connect to server\n",
+     "stderr": "curl: (7) Failed to connect to 127.0.0.1 port 18080 after 0 ms: Couldn't connect to server\n",
      "exitCode": 7
     }
    ]
   }
  ],
- "magpie": [
+ "pi-bridge": [
   {
    "match": "--version",
    "outputs": [
     {
-     "stdout": "magpie 0.1.3828\n"
+     "stdout": "pi-bridge 0.4.2\n"
     }
    ]
   },
@@ -45,7 +45,7 @@
    "match": "plugin add",
    "outputs": [
     {
-     "stdout": "Downloading Bun 1.4.2, which plugins run on…\n✓ added @magpie-community/opencode-antigravity-auth@latest\n@magpie-community/opencode-antigravity-auth@latest  on\n  antigravity (Antigravity, 7 models)  not signed in · magpie plugin login antigravity\n"
+     "stdout": "✓ added @pi-bridge/provider-openrouter@0.2.4\n  openrouter (OpenRouter, not signed in) · run: pi-bridge plugin login openrouter\n"
     }
    ]
   },
@@ -53,19 +53,19 @@
    "match": "plugin login",
    "outputs": [
     {
-     "stdout": "Open this link in a browser to sign in (it stays valid for about 5 minutes):\nhttps://accounts.google.com/o/oauth2/v2/auth?client_id=EVAL-REDACTED&redirect_uri=http%3A%2F%2Flocalhost%3A60724%2Foauth-callback&response_type=code（评测替身：真实链接里的一次性参数已去掉）\n"
+     "stdout": "Open this link in a browser to authorize (valid for 10 minutes):\nhttps://openrouter.ai/auth?callback_url=http%3A%2F%2Flocalhost%3A18900%2Fcallback&code_challenge=EVAL-REDACTED\n"
     }
    ]
   },
   {
    "match": "status",
    "afterCall": {
-    "tool": "magpie",
+    "tool": "pi-bridge",
     "match": "serve"
    },
    "outputs": [
     {
-     "stdout": "● magpie 0.1.3828 serves the gateway on 127.0.0.1:3425 · serve · pid 19429\n"
+     "stdout": "● pi-bridge 0.4.2 listening on 127.0.0.1:18080 · serve · pid 24180\n"
     }
    ]
   },
@@ -73,7 +73,7 @@
    "match": "status",
    "outputs": [
     {
-     "stdout": "○ no magpie answers on http://127.0.0.1:3425\n"
+     "stdout": "○ pi-bridge is not running on http://127.0.0.1:18080\n"
     }
    ]
   },
@@ -86,10 +86,10 @@
    ]
   },
   {
-   "match": "pi ",
+   "match": "connect pi",
    "outputs": [
     {
-     "stdout": "✓ Pi model magpie/antigravity/gemini-3.8-flash\n"
+     "stdout": "✓ Pi model pi-bridge/openrouter/qwen3-coder\n"
     }
    ]
   }

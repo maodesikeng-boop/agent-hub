@@ -1,5 +1,5 @@
 // 只记录、不执行的替身（ssh、scp、sftp、rsync、git push、launchctl、osascript、pkill、killall、open），
-// 和按场景回放真实输出的命令替身（K1、K2、K4 的 magpie、curl、pi、npm……，场景里的 CommandStubs）：
+// 和按场景回放真实输出的命令替身（K1、K2、K4 的 pi-bridge、curl、pi、npm……，场景里的 CommandStubs）：
 // 放在评测 PATH 的最前面，被调用时把参数记一行到 EVAL_RECORD_FILE。只记录的什么都不做，退出码 0；命令替身按 EVAL_STUBS_FILE 里的表
 // 回放那条命令当时的输出，对不上的照“成功、没有输出”回（不真跑：装软件、改本机配置不能在评测里真做）。
 // 拷进每次试跑的 bin/lib/record.mts 单独运行：只用 node 自带模块。第一个参数是替身的名字，后面是原样的参数。

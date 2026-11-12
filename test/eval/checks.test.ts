@@ -98,7 +98,7 @@ const SKILL_FILE = "/data/state/launch/7/skills/fusa-task-graph/SKILL.md";
 describe("T1 简单活不建图、T2 Worker 数上限", () => {
   it("什么都没做是不适用；动了手没建图过；建了图不过", () => {
     expect(noGraph().run(facts()).status).toBe("na");
-    expect(noGraph().run(facts({ tools: [bash("magpie visible pi antigravity")] })).status).toBe("pass");
+    expect(noGraph().run(facts({ tools: [bash("pi-bridge filter pi coder")] })).status).toBe("pass");
     const built = noGraph().run(facts({ hubCalls: [hubCall(3, "graph.create", 5)] }));
     expect(built.status).toBe("fail");
     expect(built.evidence[0]).toContain("hub_calls#3 graph.create");
@@ -154,18 +154,18 @@ describe("L1 建图前加载了手册、L2 简单活加载次数", () => {
 describe("简单活做成了没有：D1、E1、K3 的 M1、R6、A1", () => {
   const rec = (toolName: string, argv: string[], at = 1) => ({ tool: toolName, argv, cwd: "/", at, stub: 0 });
   it("D1：派了做这件事的 Worker，或者自己跑了其中一条命令", () => {
-    const def = jobDone("装上了", { keywords: ["magpie"], commands: [{ tool: "curl", match: "install.sh" }] });
+    const def = jobDone("装上了", { keywords: ["pi-bridge"], commands: [{ tool: "curl", match: "install.sh" }] });
     expect(def.run(facts()).status).toBe("fail");
-    expect(def.run(facts({ recorded: [rec("curl", ["-fsSL", "https://usemagpie.ai/install.sh"])] })).status).toBe("pass");
-    const worker = { id: 1, title: "装 magpie", task: "", vendor: "claude", model: null, readonly: false, branch: null, worktreePath: null, status: "running", createdAt: 1 };
+    expect(def.run(facts({ recorded: [rec("curl", ["-fsSL", "https://pi-bridge.example.dev/install.sh"])] })).status).toBe("pass");
+    const worker = { id: 1, title: "装 pi-bridge", task: "", vendor: "claude", model: null, readonly: false, branch: null, worktreePath: null, status: "running", createdAt: 1 };
     expect(def.run(facts({ workers: [worker] })).reason).toBe("派了 Worker 去做");
   });
 
   it("E1：替身记录和 hub 调用里都要有", () => {
-    const def = ranCommands([{ tool: "magpie", match: "visible pi antigravity" }], [{ command: "models", args: { vendor: "pi", refresh: true } }]);
+    const def = ranCommands([{ tool: "pi-bridge", match: "filter pi coder" }], [{ command: "models", args: { vendor: "pi", refresh: true } }]);
     expect(def.run(facts()).status).toBe("fail");
-    expect(def.run(facts({ recorded: [rec("magpie", ["visible", "pi", "antigravity"])] })).status).toBe("fail");
-    expect(def.run(facts({ recorded: [rec("magpie", ["visible", "pi", "antigravity"])], hubCalls: [hubCall(1, "models", 2, { vendor: "pi", refresh: true })] })).status).toBe("pass");
+    expect(def.run(facts({ recorded: [rec("pi-bridge", ["filter", "pi", "coder"])] })).status).toBe("fail");
+    expect(def.run(facts({ recorded: [rec("pi-bridge", ["filter", "pi", "coder"])], hubCalls: [hubCall(1, "models", 2, { vendor: "pi", refresh: true })] })).status).toBe("pass");
   });
 
   it("K3：先查检查再合（M1）、合并时是绿的（R6）、合并前不读 diff（A1）", () => {

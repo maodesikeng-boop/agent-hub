@@ -4,13 +4,13 @@
 //   消息 #49679、#49726、#49842；run 43040062881 两次的真实失败日志）；
 // - H2 验收不读代码：11-11 23:17 真实的那次习惯改动（性格设定改动记录 #118 新加的那一条）。
 // 防过度建图的 5 个场景（docs/orchestration-skill-design.md 第 8 节：简单活不建图、一段活只派一个 Worker、复杂活会加载任务图手册）：
-// - K1 装软件并接上（项目经理“magpie”11-12 10:32～10:43，消息 #50482，任务图 #7，Worker 465、466）；
-// - K2 改本机配置（同一个对话 11-12 10:48，消息 #50729，PM 自己做完）；
+// - K1 装命令行工具并接上（复现真实案例：装 CLI 与插件、等浏览器授权、接 Pi 冒烟测试；已脱敏为开源示例工具 pi-bridge）；
+// - K2 改本机配置（复现同一个对话里过滤暴露给 Pi 的模型并刷新 hub 列表；PM 自己做完）；
 // - K3 合 PR（11-10 17:33:14，消息 #34762，PR 238）；
 // - K4 升级本机的命令行工具（11-11 09:46，消息 #40114，Worker 388）；
 // - K5 修一个界面 bug（11-12 09:59，消息 #50200，Worker 463，PR 295）。
-// 现有三个场景挂上 L1（建了图就要先加载手册），S3a 再挂 T1（不建图）。装软件、改本机配置不能真做：magpie、curl、pi、npm……
-// 用命令替身回放当时的真实输出（replay/*/stubs.json，取自账本和那几次会话的原始记录，登录链接、账号这类一次性或个人信息已去掉）。
+// 现有三个场景挂上 L1（建了图就要先加载手册），S3a 再挂 T1（不建图）。装软件、改本机配置不能真做：pi-bridge、curl、pi、npm……
+// 用命令替身回放输出（replay/*/stubs.json；真实案例中的私有桥接细节与一次性授权参数均已脱敏为公开开源示例）。
 // 被测项目经理的性格设定一律是中性的空设定（NEUTRAL_PERSONA）：用户 11-12 说“肯定不能你来跑，你有我们的上下文”，
 // 现任项目经理的性格设定里已经写着考点，不能拿来用；用户的习惯只由场景在考的时候注入（H2 用资料页的接口改性格设定）。
 import { readFileSync } from "node:fs";
@@ -162,16 +162,16 @@ const TRAY_CHECKS = [
 
 const stubs = (rel: string) => JSON.parse(read(rel)) as CommandStubs;
 
-/** 当时的主干提交（K1、K2 的项目是 magpie 仓库，评测拿本仓库当主文件夹：这两件事都不改项目文件）。 */
+/** 当时的主干提交（K1、K2 不改项目文件，评测拿本仓库当主文件夹）。 */
 const MAIN_1112 = "a26be7e681dd75756f438eb05c2749525272a971";
 const MAIN_1111 = "d7e542e0b1d95a563bae78872b6ce1086f553cdb";
 /** PR 238 的 base、Worker #463 的 base_commit。 */
 const PR238_BASE = "6aade5cb647e6c534bdb6c655628297b45960994";
 const W463_BASE = "03473c6fab1eeb054300b8e4b3a1113c25c8eda5";
 
-/** 用户当时在卡片和对话里的原话（消息 #50501 的定案、#50586）。 */
+/** 用户在审批卡与授权完成后的回复原话（已脱敏为 pi-bridge 示例）。 */
 const K1_APPROVE = "批准，按计划装";
-const K1_LOGGED_IN = "已登录成功；网关临时用 magpie serve 跑";
+const K1_LOGGED_IN = "已登录成功；服务临时用 pi-bridge serve 跑";
 
 const passChecks = (runId: number, firstJob: number) => ({
   runId,
@@ -233,21 +233,21 @@ const K_SCENARIOS: Scenario[] = [
   {
     id: "k1-install",
     title: "K1 装软件并接上（简单活不建图）",
-    source: "项目经理“magpie”11-12 10:32～10:43，消息 #50482；当时建了任务图 #7（5 个节点、3 道门禁）、派了 Worker 465、466。用户 11-12 10:44“比如一个安装软件，就不需要拆的很复杂”",
+    source: "11-12 10:32～10:43 装 CLI 工具并接入 Pi 的真实反例（当时建了 5 节点、3 道门禁的任务图并拆成 2 个 Worker；软件细节已脱敏为开源示例 pi-bridge）。用户 11-12 10:44“比如一个安装软件，就不需要拆的很复杂”",
     baseCommit: MAIN_1112,
     demand: () => `${read("install/prelude.md")}接一下试试`,
-    // 一个 Worker 从安装做到冒烟测试：第一轮交回 465 的汇报（装好了、等用户登录），用户登录后被叫醒交回 466 的汇报
-    workers: [{ name: "装 magpie 并接 Pi", promptIncludes: ["magpie", "Antigravity", "antigravity"], reportFile: "install/report-465.md", laterReportFiles: ["install/report-466.md"] }],
+    // 一个 Worker 从安装做到冒烟测试：第一轮交回装好等浏览器授权的汇报，用户授权后被叫醒交回接入与冒烟测试的汇报
+    workers: [{ name: "装 pi-bridge 并接 Pi", promptIncludes: ["pi-bridge", "OpenRouter", "openrouter"], reportFile: "install/report-1.md", laterReportFiles: ["install/report-2.md"] }],
     fallbackReport: GENERIC_REPORT,
     gh: ghReplay([]),
     stubs: stubs("install/stubs.json"),
     answer: answerInstall,
-    // 项目经理把登录链接交给用户后（Worker 交回了汇报，或者它自己发起了登录），用户答当时的原话
-    followUp: { text: K1_LOGGED_IN, afterTool: { tool: "magpie", match: "plugin login" } },
+    // 项目经理把授权链接交给用户后（Worker 交回了汇报，或者它自己发起了登录），用户答已授权
+    followUp: { text: K1_LOGGED_IN, afterTool: { tool: "pi-bridge", match: "plugin login" } },
     checks: [
       noGraph(),
       workerCap({ max: 1 }),
-      jobDone("装上了（派了 Worker 或自己装）", { keywords: ["magpie", "Antigravity", "antigravity"], commands: [{ tool: "curl", match: "install.sh" }, { tool: "magpie", match: "plugin add" }] }),
+      jobDone("装上了（派了 Worker 或自己装）", { keywords: ["pi-bridge", "OpenRouter", "openrouter"], commands: [{ tool: "curl", match: "install.sh" }, { tool: "pi-bridge", match: "plugin add" }] }),
       loadedBeforeGraph(),
       manualLoadsRecorded(),
     ],
@@ -255,9 +255,9 @@ const K_SCENARIOS: Scenario[] = [
   {
     id: "k2-local-config",
     title: "K2 改本机配置（自己做，不派 Worker）",
-    source: "同一个对话 11-12 10:48，消息 #50729；当时 PM 自己跑命令做完（53 秒、7 次工具调用），第一次 magpie visible 后模型文件没重写，切一下默认模型才生效。用户 11-12 10:44“变量很少…步骤大概率会成功，不用创造新的上下文”",
+    source: "同一个对话 11-12 10:48 改本机工具配置并刷新 hub 模型列表的真实正例（软件细节已脱敏为 pi-bridge）；当时 PM 自己跑命令做完（53 秒、7 次工具调用）。用户 11-12 10:44“变量很少…步骤大概率会成功，不用创造新的上下文”",
     baseCommit: MAIN_1112,
-    demand: () => `${read("local-config/prelude.md")}A. 只给 Pi 显示 Antigravity 的模型（magpie visible pi antigravity），再刷新 hub 的模型列表`,
+    demand: () => `${read("local-config/prelude.md")}A. 只给 Pi 显示 coder 分组的模型（pi-bridge filter pi coder），再刷新 hub 的模型列表`,
     workers: [],
     fallbackReport: GENERIC_REPORT,
     gh: ghReplay([]),
@@ -267,7 +267,7 @@ const K_SCENARIOS: Scenario[] = [
       noGraph(),
       // 第 11.1 节定的 A：“只管理”的 PM 直接做，只要不改项目里的文件
       workerCap({ max: 0 }),
-      ranCommands([{ tool: "magpie", match: "visible pi antigravity" }], [{ command: "models", args: { vendor: "pi", refresh: true } }]),
+      ranCommands([{ tool: "pi-bridge", match: "filter pi coder" }], [{ command: "models", args: { vendor: "pi", refresh: true } }]),
       loadedBeforeGraph(),
       manualLoadsRecorded(),
     ],

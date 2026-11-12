@@ -6,10 +6,24 @@
 // - 基础提示词（daemon/prompt.ts）里只留三档判断、一句四类审查红线和指路的那句话。
 // 前后端都能引（不用 node:path）；cli.ts 也引它，所以只引 names.ts、hub.ts。
 import { TASK_GRAPH_CREATE_JSON_HINT, TASK_GRAPH_PATCH_JSON_HINT } from "./hub.ts";
-import { HUB_COMMAND as HUB } from "./names.ts";
+import { HUB_COMMAND as HUB, PRODUCT_PLUGIN_NAME } from "./names.ts";
 
 /** 技能名（目录名、frontmatter 的 name 都是它）。带 fusa 和 task-graph：本机已有别家的 orchestration 技能，撞名会加载错手册。 */
 export const TASK_GRAPH_SKILL_NAME = "fusa-task-graph";
+
+/**
+ * 仅供项目经理模型后台按需加载的内部技能命令名（裸名、claude 插件前缀 `fusa:fusa-task-graph`、pi 前缀 `skill:fusa-task-graph`）：
+ * 网页 `/` 斜杠命令弹窗过滤隐藏，不影响模型自身的原生技能清单加载。
+ */
+const INTERNAL_SKILL_COMMAND_NAMES: ReadonlySet<string> = new Set([
+  TASK_GRAPH_SKILL_NAME,
+  `${PRODUCT_PLUGIN_NAME}:${TASK_GRAPH_SKILL_NAME}`,
+  `skill:${TASK_GRAPH_SKILL_NAME}`,
+]);
+
+export function isInternalSkillCommand(name: string): boolean {
+  return INTERNAL_SKILL_COMMAND_NAMES.has(name.trim().replace(/^[/\$]+/u, "").toLowerCase());
+}
 
 /** 技能的说明：各家靠它决定要不要加载，先写什么时候加载，再写什么时候不用（上限 TASK_GRAPH_SKILL_DESCRIPTION_MAX_CHARS）。 */
 export const TASK_GRAPH_SKILL_DESCRIPTION =

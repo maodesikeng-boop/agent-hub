@@ -11,6 +11,7 @@ import { HUB_COMMAND_SPECS, runHub } from "../hub/cli.ts";
 import {
   AGENT_VENDORS,
   HUB_COMMANDS,
+  isInternalSkillCommand,
   PM_REVIEW_REDLINES,
   PM_REVIEW_REDLINES_BRIEF,
   TASK_GRAPH_CREATE_JSON_HINT,
@@ -142,6 +143,13 @@ describe("任务图技能正文", () => {
     // 内容只随版本变：不带时间、会话号、路径（各会话、各次启动逐字节一样，缓存稳定）
     expect(taskGraphSkillMarkdown()).toBe(md);
     expect(md).not.toMatch(/\/Users\/|\/launch\/|\d{4}-\d{2}-\d{2}/);
+    // 网页 `/` 菜单隐藏三种命令名形式，不误伤普通技能
+    expect(isInternalSkillCommand("fusa-task-graph")).toBe(true);
+    expect(isInternalSkillCommand("fusa:fusa-task-graph")).toBe(true);
+    expect(isInternalSkillCommand("skill:fusa-task-graph")).toBe(true);
+    expect(isInternalSkillCommand("/fusa:fusa-task-graph")).toBe(true);
+    expect(isInternalSkillCommand("fusa-other")).toBe(false);
+    expect(isInternalSkillCommand("skill:review")).toBe(false);
   });
 
   it("hub help graph 打印同一份正文（读不到文件时的入口）；hub help 里列了这一条", async () => {

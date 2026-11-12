@@ -255,7 +255,7 @@ function transcript(facts: Facts): string {
   const how = (r: Facts["recorded"][number]) => (r.stub === undefined ? "只记录，没执行" : r.stub === -1 ? "命令替身：表里没有这条，照成功回" : `命令替身：回放第 ${r.stub + 1} 条`);
   const rec = facts.recorded.map((r) => `- ${new Date(r.at).toISOString()} \`${r.tool} ${r.argv.join(" ")}\`（${how(r)}）`);
   const inj = facts.injected.map((e) => `- ${new Date(e.at).toISOString()} ${e.kind}：${clip(e.detail, EVAL_EVIDENCE_MAX_CHARS)}`);
-  return [`# 试跑过程\n`, `## 评测注入的事件\n${inj.join("\n") || "（无）"}\n`, `## gh 替身记录\n${gh.join("\n") || "（无）"}\n`, `## 只记录的替身和命令替身（ssh、rsync、git push、magpie……）\n${rec.join("\n") || "（无）"}\n`, `## 项目经理对话\n`, ...lines].join("\n");
+  return [`# 试跑过程\n`, `## 评测注入的事件\n${inj.join("\n") || "（无）"}\n`, `## gh 替身记录\n${gh.join("\n") || "（无）"}\n`, `## 只记录的替身和命令替身（ssh、rsync、git push、pi-bridge……）\n${rec.join("\n") || "（无）"}\n`, `## 项目经理对话\n`, ...lines].join("\n");
 }
 
 export async function runTrial(plan: TrialPlan): Promise<TrialResult> {
