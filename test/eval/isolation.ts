@@ -245,9 +245,12 @@ export function pmSandboxProfile(input: PmSandboxInput): string {
     ";; 不出 ssh（部署、推代码）",
     `(deny network-outbound (remote tcp "*:22"))`,
     ";; 真的 ssh、rsync、gh、launchctl……不许执行（PATH 里的替身之外的第二道）",
-    `(deny process-exec ${input.denyExec.map((p) => `(literal ${sbString(p)})`).join(" ")})`,
-    ";; 只能给自己这一棵进程发信号：杀不到真守护进程、Fusa.app、评测自己的守护进程",
-    "(deny signal (target others))",
+    // 列表为空时不能写：`(deny process-exec )` 不带过滤条件等于禁掉所有 exec，sandbox-exec 连 /bin/sh 都起不来（退出码 71）
+    ...(input.denyExec.length ? [`(deny process-exec ${input.denyExec.map((p) => `(literal ${sbString(p)})`).join(" ")})`] : []),
+    ";; 只能给同一个沙箱里的进程发信号：杀不到真守护进程、Fusa.app、评测自己的守护进程。",
+    ";; 不能只拒 others 这一类：others 不含同进程组的进程，而评测进程和沙箱里的 sh 同组（spawnSync 不 detached），",
+    ";; 那样信号还是发得出去。先整条 deny，再只放同沙箱。",
+    "(deny signal)",
     "(allow signal (target same-sandbox))",
     "",
   ];
@@ -323,7 +326,21 @@ export function preflight(profileFile: string, input: PmSandboxInput, opts: { pr
   if (existsSync(join(input.realRepo, "node_modules"))) trySh("真仓库的 node_modules 能读", `ls ${sq(join(input.realRepo, "node_modules"))} >/dev/null`, true);
   // sh 执行不了（沙箱拒绝 exec）时退出码是 126：只认这个，不靠命令自己的退出码
   for (const exe of input.denyExec.filter((p) => existsSync(p))) trySh(`不许执行 ${exe}`, `${sq(exe)} --version >/dev/null 2>&1; [ $? -eq 126 ]`, true);
-  trySh("不能给沙箱外的进程发信号", `kill -0 ${opts.evalPid}`, false);
+  // 用真信号（SIGURG 默认忽略，万一漏了也不伤人）试：评测进程（和沙箱里的 sh 同进程组）、另起进程组的沙箱外靶子；信号 0 也走同一道检查
+  const outsider = spawn("/bin/sleep", ["30"], { detached: true, stdio: "ignore" });
+  try {
+    if (outsider.pid) {
+      for (const [who, pid] of [["评测进程（同进程组）", opts.evalPid], ["另一进程组的进程", outsider.pid]] as const) {
+        trySh(`不能给沙箱外的${who}发信号 0`, `kill -0 ${pid}`, false);
+        trySh(`不能给沙箱外的${who}发 SIGURG`, `kill -URG ${pid}`, false);
+      }
+      const alive = (() => { try { process.kill(outsider.pid, 0); return true; } catch { return false; } })();
+      ok &&= alive;
+      lines.push(`${alive ? "✓" : "✗"} 沙箱外的靶子进程还活着`);
+    }
+  } finally { if (outsider.pid) try { process.kill(-outsider.pid, "SIGKILL"); } catch { /* 已退出 */ } }
+  // 反向对照：沙箱里自己这一棵（含兄弟进程）发信号必须正常，否则回收子进程会出事
+  trySh("沙箱里的进程能给同沙箱的进程发信号", `sleep 30 & p=$!; /bin/sh -c "kill -TERM $p"; wait $p; [ $? -eq 143 ]`, true);
   for (const d of input.realDataDirs) {
     const sock = join(d, "run", "hub.sock");
     if (existsSync(sock) && existsSync("/usr/bin/nc")) trySh(`连不上真守护进程的 ${sock}`, `/usr/bin/nc -U ${sq(sock)} </dev/null >/dev/null 2>&1`, false);
