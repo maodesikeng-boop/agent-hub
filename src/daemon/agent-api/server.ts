@@ -152,7 +152,8 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
   "worker.start": {
     type: "object",
     additionalProperties: false,
-    required: ["title", "task"],
+    // 换人接手（带 node、节点上已有前任）时标题、正文都可以不给，由账本按节点判断；不带 node 的两样都要
+    anyOf: [{ required: ["title", "task"] }, { required: ["node"] }],
     properties: {
       // 太长不拒，账本用 normalizeWorkerTitle 截断到 MAX_WORKER_TITLE_CHARS
       title: { type: "string", minLength: 1 },

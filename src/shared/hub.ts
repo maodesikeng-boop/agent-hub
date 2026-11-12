@@ -183,10 +183,13 @@ export interface HubArgsMap {
    * maxTimeMs：本轮最大容忍时间（毫秒，默认 DEFAULT_WORKER_MAX_TIME_MS = 30m），超时静默唤醒项目经理。
    * 账本同步判断在哪干活：主文件夹是有提交的 git 仓库、又没给 noWorktree → worktree，登记 worktree.create；
    * 否则 main，直接登记 Worker 的 session.start 和第一条 session.send。
+   * 带 node、节点上已经有经手过的 Worker 时是换人接手（docs/orchestration-simplify-design.md 第 5.2 节）：title、task 都可以不给
+   * （标题沿用最近的前任；task 给了是项目经理的补充），后台先把节点上还挂着的旧 Worker 按“没做完”收工，接着用前任的 worktree 和分支，
+   * 第一条消息是“【系统 · 接手】”带前任的记录。别的情况 title、task 必须给。
    */
   "worker.start": {
-    title: string;
-    task: string;
+    title?: string;
+    task?: string;
     vendor?: AgentVendor;
     model?: string;
     effort?: string;

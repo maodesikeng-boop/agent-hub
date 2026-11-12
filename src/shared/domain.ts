@@ -257,6 +257,11 @@ export interface WorkerRecord {
   worktreePath: string | null;
   /** worktree：建 worktree 时 HEAD 的提交，建好之前是 null；main：null。 */
   baseCommit: string | null;
+  /**
+   * 换人接手同一步（hub worker start --node）时接着用的是哪个前任的 worktree 和分支：这时 branch、worktreePath、baseCommit 都是前任的，
+   * 目录名是前任的编号。自己新建 worktree 或在主文件夹里干的没有这一项。
+   */
+  takeoverOf?: WorkerId;
   status: WorkerStatus;
   createdAt: number;
   updatedAt: number;

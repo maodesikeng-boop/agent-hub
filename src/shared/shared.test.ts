@@ -727,6 +727,7 @@ describe("M3：Worker 的记录", () => {
       | "branch"
       | "worktreePath"
       | "baseCommit"
+      | "takeoverOf"
       | "status"
       | "createdAt"
       | "updatedAt"

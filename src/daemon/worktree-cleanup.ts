@@ -3,7 +3,10 @@
 // 1. 已合并进主分支（origin/main、main 等）：登记的分支，或 worktree 当前实际的 HEAD（detached 在 PR 提交上、review-* 临时分支、
 //    一个提交都没新增的 0 提交探索目录——HEAD 就在 main 历史里——都算，不用白留 3 天）；
 // 2. Worker 已收工满 WORKTREE_RETENTION_DAYS（3 天）。
-// 任何情况下：还在跑（未收工）的不删；有未提交改动（含未跟踪文件）的不删（PR 已合并也不删，留给人看）；
+// 任何情况下：还在跑（未收工）的不删；同一个目录被换人接手的后任接着用（还开着、还在跑）的不删，共用这个目录的 Worker 经手过的
+// 任务图还 active 的也不删（随时可能再换人接着用，docs/orchestration-simplify-design.md 第 4.4 节；判断在账本的 isWorkerCleanable，
+// 注册 worktree 和孤儿目录两条路径都在动手前复核）；共用同一目录时“收工满 3 天”按末任收工时间算（账本 endedAt 取该目录全部 Worker 的最晚时间）；
+// 有未提交改动（含未跟踪文件）的不删（PR 已合并也不删，留给人看）；
 // rebase / merge / cherry-pick / bisect 进行到一半的不删；不用 worktree 的跳过；路径不在 worktreesDir 下（含符号链接）的绝不删。
 // detached HEAD 且 HEAD 没合入主分支：满 3 天才删，删之前先建 hub/detached-<Worker>-<提交号> 分支保住提交。
 // 已被外部 git worktree remove / prune 解绑、只剩壳的孤儿目录：同样条件下（且没有未被忽略的文件）直接 fs.rm 回收。
@@ -37,6 +40,7 @@ import type { EndedWorktreeCandidate } from "./ledger/index.ts";
 
 export interface WorktreeCleanupLedger {
   listEndedWorktreeWorkers(): EndedWorktreeCandidate[];
+  /** 这个 Worker 的 worktree 目录现在能不能删：它已收工、没在跑，共用这个目录的都已收工没在跑，经手的任务图都结束了。 */
   isWorkerCleanable(workerId: WorkerId): boolean;
 }
 

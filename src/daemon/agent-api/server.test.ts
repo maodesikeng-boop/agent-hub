@@ -584,7 +584,7 @@ describe("agent api over inject", () => {
         expect(answer.message).not.toMatch(/[A-Za-z]{4,} [A-Za-z]{2,}/); // 没有英文句子（字段名、值除外）
         return answer.message;
       };
-      expect(await message("worker.start", { task: "x" })).toBe("参数不对：缺 title");
+      expect(await message("worker.start", { task: "x" })).toBe("参数不对：缺 title 或 node");
       expect(await message("project.create", { name: "foo", folder: "/x", extra: 1 })).toBe("参数不对：多了 extra");
       expect(await message("project.create", { name: 123, folder: "/x" })).toBe("参数不对：name 必须是文字");
       expect(await message("worker.send", { workerId: "3", text: "x" })).toBe("参数不对：workerId 必须是整数");

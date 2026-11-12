@@ -161,7 +161,7 @@ ${doItYourself}
 Worker 每干完一轮，你会收到 \`【Worker #编号 · 标题 的汇报】\`（出错、超时、被停止也会告诉你原因）。
 - **Worker 做完了**：按第 5 步验收，通过就 \`${HUB} worker end <编号>\` 收工。
 - **Worker 有问题**：能答的直接答（\`${HUB} worker send\`）。要用户定的，用 \`${HUB} ask\` 提问并写上选项和你的推荐，答复回来再转给 Worker。不要只在回复里问一句就停下等。
-- **Worker 出错、额度用完、超时、放弃**：先用 \`${HUB} worker show <编号>\`、再用 \`${HUB} worker log <编号>\` 看原因，原始记录只取要看的那一段。超时只是提醒，Worker 还在跑：在正常推进就用 \`${HUB} worker max-time\` 续时。能接着干就 \`${HUB} worker send\`；对话超过 ${WORKER_SEND_MAX_TOKENS / 1_000}K 或该换一家，就收工后新派一个接手，任务说明里写清分支、已有的提交、还要改的点。用户亲手停的，用户没说继续就别叫醒它。
+- **Worker 出错、额度用完、超时、放弃**：先用 \`${HUB} worker show <编号>\`、再用 \`${HUB} worker log <编号>\` 看原因，原始记录只取要看的那一段。超时只是提醒，Worker 还在跑：在正常推进就用 \`${HUB} worker max-time\` 续时。能接着干就 \`${HUB} worker send\`；对话超过 ${WORKER_SEND_MAX_TOKENS / 1_000}K 或该换一家，就收工后新派一个接手，任务说明里写清分支、已有的提交、还要改的点；图里的节点按任务图手册一条命令换人（旧 Worker 自动收工，新的接着用它的目录和分支，前任的记录自动带上）。用户亲手停的，用户没说继续就别叫醒它。
 
 ## 5. 交付
 - **验收只看证据**：汇报、PR 的改动文件名单和检查结果、截图或实测输出。不读代码 diff，代码质量由审查负责。证据不够就打回让 Worker 补（\`${HUB} worker send\`）。
@@ -389,7 +389,7 @@ function workerRoleSection(ctx: LaunchContext, worker: WorkerRecord): string {
 - 不带标签的消息来自项目经理：第一条是任务说明，之后是它的打回意见或者对你问题的回答。
 - 带有“${USER_TO_WORKER_TAG}”标签的是用户在网页上直接对你说的话：照着做，这一轮的汇报照样交给项目经理（项目经理也会知道用户说了什么）。
 - 你忙的时候收到的几条会拼成一条，开头写“【用户连发了 N 条】”并编号，每一条是谁说的看那一条带不带“${USER_TO_WORKER_TAG}”标签；每一条都回应到。
-- 别的以“【…】”开头的是系统发的消息。
+- 别的以“【…】”开头的是系统发的消息。以“【系统 · 接手】”开头的第一条，说明你是换人接手这一步：里面是前任没做完时留下的汇报、最后的文字、最后几步操作和原始记录路径。先看 git status 和 git log，接着前任的进度做，不要从头再来。
 ${SHARE_FILES_NOTE}
 - 回复用中文，简洁。`;
 }
@@ -399,9 +399,11 @@ function workerWorkspaceSection(project: ProjectCard, worker: WorkerRecord): str
   const lines = [`# 在哪干活`, ``, `- 项目：${project.name}`];
   if (project.description) lines.push(`- 说明：${project.description}`);
   if (worker.workspace === "worktree") {
+    lines.push(`- 工作目录：${worker.worktreePath}，是项目主文件夹 ${project.mainFolder} 的一个 git worktree，分支：${worker.branch}。`);
     lines.push(
-      `- 工作目录：${worker.worktreePath}，是项目主文件夹 ${project.mainFolder} 的一个 git worktree，分支：${worker.branch}。`,
-      `- 它是从主文件夹最后一次提交开出来的，看不到主文件夹里没提交的改动；依赖可能要重新装（比如 \`pnpm install\`）。`,
+      worker.takeoverOf === undefined
+        ? `- 它是从主文件夹最后一次提交开出来的，看不到主文件夹里没提交的改动；依赖可能要重新装（比如 \`pnpm install\`）。`
+        : `- 它是前任 Worker #${worker.takeoverOf} 的工作目录和分支，你接着用：前任没提交的改动、装好的依赖都还在，先看 git status 和 git log。`,
     );
   } else {
     lines.push(

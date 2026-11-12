@@ -105,7 +105,7 @@ describe("worktree 自动清理", () => {
     git(repo, "merge", "--no-ff", "-q", "-m", "Merge PR", w.branch!);
 
     const endText = endWorker(w.id);
-    expect(endText).toContain("PR 合并后或收工满 3 天且没有未提交改动时会自动清理 worktree（分支保留）");
+    expect(endText).toContain("PR 合并后或收工满 3 天且没有未提交改动时会自动清理 worktree（分支保留；");
 
     // 刚收工 1 分钟（远未满 3 天）
     now += 60_000;
@@ -667,5 +667,102 @@ describe("worktree 自动清理", () => {
     expect(existsSync(w2.worktreePath!)).toBe(true);
     expect(existsSync(w3.worktreePath!)).toBe(false);
     expect(existsSync(w4.worktreePath!)).toBe(false);
+  });
+
+  it("换人共享同一个 worktree：0 提交已收工的前任（注册 worktree / 孤儿目录）不能靠“0 提交秒清”或“前任满 3 天”删掉后任还在用或未到期的目录", async () => {
+    const graph = ledger.hubCall(pm.sessionId, "graph.create", {
+      title: "共享目录边界",
+      specJson: JSON.stringify({ nodes: [{ key: "s1", title: "实现" }] }),
+    }).data.graph;
+    const w1 = ledger.hubCall(
+      pm.sessionId,
+      "worker.start",
+      { title: "实现", task: "做功能", vendor: "claude", node: "s1" },
+      { workspace: { kind: "ok", isRepoWithCommit: true, hasUncommittedChanges: false } },
+    ).data.worker;
+    const wt = await addWorktree({ repoFolder: repo, worktreePath: w1.worktreePath!, branch: w1.branch! });
+    ledger.onWorktreeCreated(w1.id, wt.baseCommit);
+    // 前任 0 提交、目录干净就收工（HEAD === baseCommit，单独看会被“0 提交秒清”）
+    ledger.hubCall(pm.sessionId, "worker.end", { workerId: w1.id, incomplete: true });
+
+    // 前任收工满 3 天后，后任接手同一目录，仍开着
+    now += WORKTREE_RETENTION_MS + 1_000;
+    const w2 = ledger.hubCall(
+      pm.sessionId,
+      "worker.start",
+      { node: "s1", vendor: "codex" },
+      { workspace: { kind: "ok", isRepoWithCommit: true, hasUncommittedChanges: false } },
+    ).data.worker;
+    expect(w2.worktreePath).toBe(w1.worktreePath);
+    const dir = w1.worktreePath!;
+
+    const cleanup = createWorktreeCleanup({ ledger, worktreesDir, log: (l) => logs.push(l), now: () => now });
+    // 1. 注册 worktree：后任还开着，前任的 0 提交 / 已满 3 天都不能删
+    expect(await cleanup.runOnce()).toEqual([]);
+    expect(existsSync(dir)).toBe(true);
+
+    // 2. 后任提交了未合并的活后，目录被外部解绑成孤儿：后任还开着，同样不能删
+    writeFileSync(join(dir, "successor.txt"), "后任的活\n");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-q", "-m", "successor");
+    const linkName = readFileSync(join(dir, ".git"), "utf8").trim().split("/").pop()!;
+    rmSync(join(repo, ".git", "worktrees", linkName), { recursive: true, force: true });
+    git(repo, "worktree", "prune");
+    expect(await cleanup.runOnce()).toEqual([]);
+    expect(existsSync(dir)).toBe(true);
+
+    // 3. 后任收工、取消任务图：分支有未合并提交，且按末任收工时间算还没满 3 天（前任早已满 3 天也不行）
+    now += 60_000;
+    ledger.hubCall(pm.sessionId, "worker.end", { workerId: w2.id, incomplete: true });
+    ledger.hubCall(pm.sessionId, "graph.cancel", { graphId: graph.id });
+    expect(await cleanup.runOnce()).toEqual([]);
+    expect(existsSync(dir)).toBe(true);
+
+    // 4. 末任收工也满 3 天后才回收
+    now += WORKTREE_RETENTION_MS;
+    expect(await cleanup.runOnce()).toEqual([w1.id]);
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  it("换人共享同一个 worktree：前任已满 3 天但后任刚收工且分支未合并时不删，等后任收工也满 3 天才删", async () => {
+    const graph = ledger.hubCall(pm.sessionId, "graph.create", {
+      title: "接力清理",
+      specJson: JSON.stringify({ nodes: [{ key: "s1", title: "实现" }] }),
+    }).data.graph;
+    const w1 = ledger.hubCall(
+      pm.sessionId,
+      "worker.start",
+      { title: "实现", task: "做功能", vendor: "claude", node: "s1" },
+      { workspace: { kind: "ok", isRepoWithCommit: true, hasUncommittedChanges: false } },
+    ).data.worker;
+    const wt = await addWorktree({ repoFolder: repo, worktreePath: w1.worktreePath!, branch: w1.branch! });
+    ledger.onWorktreeCreated(w1.id, wt.baseCommit);
+    writeFileSync(join(w1.worktreePath!, "step1.txt"), "progress\n");
+    git(w1.worktreePath!, "add", "-A");
+    git(w1.worktreePath!, "commit", "-q", "-m", "wip");
+    ledger.hubCall(pm.sessionId, "worker.end", { workerId: w1.id, incomplete: true });
+
+    // 4 天后 w2 接手同一个 worktree，随即收工并取消任务图（分支未合并）
+    now += WORKTREE_RETENTION_MS + 86_400_000;
+    const w2 = ledger.hubCall(
+      pm.sessionId,
+      "worker.start",
+      { node: "s1", vendor: "codex" },
+      { workspace: { kind: "ok", isRepoWithCommit: true, hasUncommittedChanges: false } },
+    ).data.worker;
+    expect(w2.worktreePath).toBe(w1.worktreePath);
+    now += 60_000;
+    ledger.hubCall(pm.sessionId, "worker.end", { workerId: w2.id, incomplete: true });
+    ledger.hubCall(pm.sessionId, "graph.cancel", { graphId: graph.id });
+
+    const cleanup = createWorktreeCleanup({ ledger, worktreesDir, log: (l) => logs.push(l), now: () => now });
+    // 后任刚收工 0 秒：不能按前任 4 天前的收工时刻提前删掉共享目录
+    expect(await cleanup.runOnce()).toEqual([]);
+    expect(existsSync(w1.worktreePath!)).toBe(true);
+
+    // 等后任收工也满 3 天后，正常清理一次
+    now += WORKTREE_RETENTION_MS + 1_000;
+    expect(await cleanup.runOnce()).toEqual([w1.id]);
+    expect(existsSync(w1.worktreePath!)).toBe(false);
   });
 });
