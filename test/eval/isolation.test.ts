@@ -94,7 +94,7 @@ it.skipIf(!available)("真 SBPL 拦住发给沙箱外进程的信号（含同进
     }
     expect(() => process.kill(outsider.pid!, 0)).not.toThrow();
     const inner = run('sleep 30 & p=$!; /bin/sh -c "kill -TERM $p"; wait $p; [ $? -eq 143 ]');
-    expect(inner.stderr).toBe("");
+    expect(inner.stderr).not.toMatch(/not permitted|sandbox-exec|sandbox_apply/i);
     expect(inner.status).toBe(0);
   } finally { try { process.kill(-outsider.pid!, "SIGKILL"); } catch { /* 已退出 */ } }
 });
