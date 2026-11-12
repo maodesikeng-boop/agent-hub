@@ -1,5 +1,6 @@
 // 提示词（设计第 7.2 节）：buildLaunchPrompt 按会话的角色拼 prompt.md。
-// - 项目经理（结构照参考稿）：角色与环境、项目、默认做法（模式）、怎么记事情、怎么带 Worker、hub 用法（软件定的，agent 改不了）
+// - 项目经理：角色与环境、项目、怎么干活（按“拿到需求 → 分析 → 建图 → 跟进反馈 → 交付”五步排，每条规矩只出现一次，
+//   见 docs/orchestration-simplify-design.md 第 9 节）、怎么记事情、hub 用法（软件定的，agent 改不了）
 //   + 它的项目和文件夹（11-03 起一个项目经理只管一个项目）+ 性格设定（最后）+（按情况）“先读 AGENTS.md”；
 // - Worker（M3）：buildWorkerPrompt，角色、任务、在哪干活、汇报格式、Worker 的规矩（含按厂商写的长命令怎么等）、只有 hub status 的用法。
 // 写成文件、配上设置文件和环境变量交给驱动层的是 launch.ts 的 createLaunchPreparer。命令名、产品名用 shared/names.ts 的。
@@ -9,7 +10,7 @@
 //   性格设定、模式改了（不重启）的说明在这个文件的 personaUpdateNote，驱动层经 launch.ts 的 createPersonaNoter 拿；
 // - shared/worker.ts 的 WORKER_REPORT_FORMAT：Worker 的汇报格式（和解析函数放在一起），这里原样放进 Worker 的提示词；
 //   USER_TO_WORKER_TAG、userToWorkerHeader：用户直接对 Worker 说的话写给 Worker、交给项目经理时的标签；
-//   workerPickNote（WORKER_PICK_NOTE_START）：用户在输入框指定这条消息里派的 Worker 用什么，交给项目经理时加在原文前面的参数句子（提示词里“用户指定 Worker 用的模型”那条说怎么对待它）；
+//   workerPickNote（WORKER_PICK_NOTE_START）：用户在输入框指定这条消息里派的 Worker 用什么，交给项目经理时加在原文前面的参数句子（提示词里“选模型”那条说怎么对待它）；
 // - ledger/hub-commands.ts：hub 命令回给 agent 的话；
 // - ledger/messages.ts 的 insertSystemMessage：系统消息（只给人看），具体文字在调用它的 persona.ts、projects.ts 里；
 // - ledger/projects.ts 的 ONE_PROJECT_PER_PM：已经有项目又要建时的回答；
@@ -24,10 +25,7 @@ import {
   vendorSpec,
   ALL_EFFORTS,
   DEFAULT_AGENT_VENDOR,
-  ENV_SETUP_ROOT_PATH,
-  ENV_SETUP_WORKTREE_PATH,
   HUB_COMMAND as HUB,
-  MIN_SCHEDULE_EVERY_MINUTES,
   PM_MODES,
   PM_MODE_LABELS,
   PRODUCT_ID,
@@ -67,8 +65,9 @@ function specOf(vendor: string): VendorSpec {
 }
 
 // ---- 项目经理 ----
-// 提示词的结构和措辞照用户给的参考稿（11-05，基本照搬，保持它的长度和粒度）：角色与环境 → 你的项目 → 怎么干活（模式）→ 怎么记事情 → 怎么带 Worker → 系统命令 → 性格设定。
-// 里面的数、名字、可选值都从 shared 的常量拼，不手写；事实以代码为准。别往里堆细节：细节在命令回的话里（ledger/hub-commands.ts）。
+// 结构：角色与环境 → 你的项目 → 怎么干活（五步 + 通用规矩）→ 怎么记事情 → 系统命令 → 性格设定。
+// 里面的数、名字、可选值都从 shared 的常量拼，不手写；事实以代码为准。别往里堆细节：细节在命令回的话里（ledger/hub-commands.ts）和 hub help 里。
+// 加规矩先想它属于五步里的哪一步，放进那一步；同一条规矩不要在两个地方各写一遍。
 
 /** 长命令放后台（项目经理的；Worker 的是 WORKER_BACKGROUND_COMMAND_NOTE。spec 的 capabilities.backgroundWake 为 true 时用）：等一分钟以上的命令放后台跑，让这一轮先结束。 */
 function buildPmBackgroundCommandNote(tool: string = specOf(DEFAULT_AGENT_VENDOR).prompt.backgroundCommandTool): string {
@@ -80,20 +79,28 @@ export const PM_BACKGROUND_COMMAND_NOTE = buildPmBackgroundCommandNote();
 export const PM_DELEGATE_LONG_COMMAND_NOTE =
   "- **长命令派给 Worker**：要等很久的活（等 CI、跑全量测试）派给 Worker 去等，你这一轮先结束，用户能接着说话。";
 
-/** 需要调工具或多步处理时先给一句简短反馈（不写死特定厂商或工具名；一步直答不加套话）。 */
+/** 第 1 步第一条：需要调工具或多步处理时先给一句简短反馈（不写死特定厂商或工具名；一步直答不加套话）。 */
 export const PM_OPENING_FEEDBACK_NOTE =
   "- **先回应再动手**：需要调工具、查代码或派活等多步处理时，开头先用一句简短的话告诉用户正在做什么，再继续思考和调工具；一步就能直接回答的直接答，不加套话。";
 
-/** 事先建任务图、门禁拍板与抗意外恢复（对全部厂商与两种模式统一生效，零厂商硬编码）。 */
-export const PM_TASK_GRAPH_WORKFLOW_NOTE = [
-  `- **多步或并行先建任务图**：包含两步及以上阶段或需要并行派多个 Worker 的任务，开工先调 \`${HUB} graph create\` 规划节点与依赖，派 Worker 时传 \`--node <key>\`；单步简单查询或直接回答的小事不要强行建 1 节点假图。`,
-  `- **先亮骨架图再深读**：接到多步或并行任务，第一件事就用粗粒度节点把骨架图建出来，让界面立刻亮起果皮轨，再去读长文档、写任务单；细节有变用 \`${HUB} graph patch\` 增量调整。`,
-  `- **一张图只装一件事**：互不依赖的独立事项不要硬塞进同一张大杂烩图——单步小活直接派普通 Worker（不绑图），多条互不相干的多步任务各自建独立的图。`,
-  `- **拍板分水岭必挂门禁（禁口头问）**：需用户拍板确认方案、选路线或批风险的分水岭，必须在任务图里挂 \`gate\` 节点并调 \`${HUB} graph ask\` 激活（无图的简单单问调 \`${HUB} ask\`），**严禁只在回复正文口头问**一句就停等。`,
-  `- **抗意外恢复与增量改图**：审查/CI 返工、增删步骤或拆细节点时用 \`${HUB} graph patch\` 增量改图；Worker 报错、超额度或超过上下文上限（${WORKER_SEND_MAX_TOKENS / 1_000}K）时，先用 \`${HUB} worker end <编号> --incomplete\` 结束旧会话，再新派 Worker 重绑同一 \`--node <key>\` 接手。`,
-].join("\n");
+/** 第 3 步的红线：碰到任意一条就在实现后面加审查节点（第 5 步“补审查”指的也是这四条）。 */
+const PM_REVIEW_REDLINES = [
+  "撤不回来的副作用或安全边界：数据迁移、覆写用户配置、杀进程、沙箱、鉴权；",
+  "异步、并发、生命周期；",
+  "会随时间变多的缓存、快照、分页，或多方共用的数据格式；",
+  "本地草稿和远端状态互相覆盖的交互。",
+];
 
-/** 按模式和厂商能不能把长命令放后台拼“# 怎么干活”一节（不在提示词里写死厂商名，由 spec 的 capabilities.backgroundWake 与 prompt.backgroundCommandTool 决定）。 */
+/**
+ * “# 怎么干活”一节（docs/orchestration-simplify-design.md 第 9.1 节）：一个需求按“拿到需求 → 分析 → 建图 → 跟进反馈 → 交付”五步走，
+ * 每条规矩只在它所属的那一步出现一次；最后是“通用规矩”里跟模式、跟厂商能不能把长命令放后台有关的几条
+ * （不在提示词里写死厂商名，由 spec 的 capabilities.backgroundWake 与 prompt.backgroundCommandTool 决定）。
+ * 这一节不带厂商名单：模式改了不重启，驱动层把它整节发给项目经理（personaUpdateNote）；跟厂商名单有关的两条通用规矩在 buildPmCommonRules，
+ * buildLaunchPrompt 接在这一节后面。
+ * 只写现有命令做得到的事：建图后要自己给轮到的节点派 Worker、任务说明自己写、一步做完要自己收工再派下一步。
+ * 自动开工、交棒、hub graph finish、hub ask --node、confirm 等后台机制上线后再换成设计第 9.1 节的终稿（第 13 节第 2～6 步）。
+ * 两种模式只差四处：标题里的模式名、第 2 步的“自己做”和“建图”两条、通用规矩里的“用户说了算 / 拿不准先问”。
+ */
 export function buildPmModePrompt(mode: PmMode, vendorOrBackgroundCommands: AgentVendor | string | boolean = DEFAULT_AGENT_VENDOR): string {
   const commandNote =
     typeof vendorOrBackgroundCommands === "boolean"
@@ -104,29 +111,65 @@ export function buildPmModePrompt(mode: PmMode, vendorOrBackgroundCommands: Agen
           const spec = specOf(vendorOrBackgroundCommands);
           return spec.capabilities.backgroundWake ? buildPmBackgroundCommandNote(spec.prompt.backgroundCommandTool) : PM_DELEGATE_LONG_COMMAND_NOTE;
         })();
-  if (mode === "manage_only") {
-    return `# 怎么干活（当前模式：${PM_MODE_LABELS.manage_only}）
+  const handsOn = mode === "hands_on";
+  const doItYourself = handsOn
+    ? "- **自己做**：不复杂的事自己动手，包括改文件；做完告诉用户做了什么、改了哪些文件。"
+    : "- **自己做**：查资料、看代码、跑只读命令，几分钟内能有结果的。";
+  const buildGraph = handsOn
+    ? "- **建图**：活大、想和主文件夹隔开，或者碰到第 3 步红线的。"
+    : "- **建图**：其余要改文件、要交付结果的活，只有一步也建图。";
+  const modeRules = handsOn
+    ? `- **拿不准先问**：改动大、要删东西、拿不准用户要什么的，先问一句。
+- **用户说了算**：用户希望以后先商量再动手，用 \`${HUB} persona edit --mode manage_only\` 切换模式。`
+    : `- **用户说了算**：用户让你亲自改你就直接改；如果用户希望以后都由你直接动手，用 \`${HUB} persona edit --mode hands_on\` 切换模式。`;
+  return `# 怎么干活（当前模式：${PM_MODE_LABELS[mode]}）
 
-${PM_OPENING_FEEDBACK_NOTE}
-- **先对齐再推进**：先和用户讨论清楚目标，把大活拆成小步，说清楚先做哪个、为什么。
-- **读写分工**：查资料、看代码、跑只读命令自己直接做；改文件、跑会改动环境的命令派 Worker 去干（\`${HUB} worker start\`），你负责写清任务、验收结果、向用户汇报。耗时短、花 token 少、需要及时反馈的任务自己直接做；相反（耗时久、花 token 多、不需要当场秒回的）派给 Worker 做。
-${PM_TASK_GRAPH_WORKFLOW_NOTE}
-${commandNote}
-- **用户说了算**：用户让你亲自改你就直接改；如果用户希望以后都由你直接动手，用 \`${HUB} persona edit --mode hands_on\` 切换模式。`;
-  }
-  return `# 怎么干活（当前模式：${PM_MODE_LABELS.hands_on}）
+一个需求从头到尾走五步：拿到需求 → 分析 → 建图 → 跟进反馈 → 交付。
 
+## 1. 拿到需求
 ${PM_OPENING_FEEDBACK_NOTE}
-- **能直接做就直接做**：不复杂的事自己动手，做完告诉用户做了什么、改了哪些文件。
-- **活大了再派 Worker**：活大、能拆开同时做，或者想和主文件夹隔开的，派 Worker 去干（\`${HUB} worker start\`），你负责写清任务、验收结果、向用户汇报。
-${PM_TASK_GRAPH_WORKFLOW_NOTE}
+- **没弄清就先问**：用户要做成什么、为什么、怎么算做完。
+
+## 2. 分析
+先定这件事怎么走，三选一：
+${doItYourself}
+- **派临时 Worker**（\`${HUB} worker start\`，不带 \`--node\`）：没有改动要交付的跑腿活，比如从上千行代码、日志里读出结论（加 \`--readonly\`，任务说明里规定只回结论和出处）。
+${buildGraph}
+
+分析要快。深读代码和长文档是 Worker 的事，你要想清的只有三样：目标、步骤、怎么验收。
+
+## 3. 建图
+用 \`${HUB} graph create\` 把这件事排成一串节点，然后给轮到的节点派 Worker（\`${HUB} worker start --node <节点>\`）。
+- **一张图只装一件事**：互不相干的几件事各建一张图。
+- **按先后步骤拆，不按模块拆**：不要把一个需求切成前端、后端各一个 Worker。写测试、改代码、截图、提 PR 是同一步，一个 Worker 一口气做完。只在三种时候另起一个节点：要等用户拍板、要换一个模型独立审查、一步的上下文装不下。
+- **默认一条线**：用 \`deps\` 把节点按先后串起来，前一个完成后一个才轮到。互不依赖的活才并行（比如同时探索几个方向再汇总）。
+- **任务说明要写全**：Worker 看不到你和用户的聊天，只靠任务说明对齐方向。写上用户原话、背景、不做什么、怎么算做完；“怎么算做完”写成能核对的证据（测试命令、截图、实测输出、PR 检查全绿）。长材料存成文件，任务说明里给路径。
+- **用户明说要先看的地方**（比如“先给我看方案”）挂一个 \`gate\` 节点：轮到时用 \`${HUB} graph ask\` 填上问题、选项和你的推荐，用户点了才往下走。别的拍板不用预先安排，撞上了再问（见第 4 步）。
+- **碰到下面任意一条，就在实现后面加一个审查节点**（派给另一家厂商的 Worker，任务说明里写清实现的分支和 PR、你最担心的地方，发现问题让它直接修）：
+${PM_REVIEW_REDLINES.map((line) => `  - ${line}`).join("\n")}
+
+  纯文案、纯展示、局部纯函数、薄胶水层不用审查，靠测试和截图兜底。
+
+## 4. 跟进反馈
+Worker 每干完一轮，你会收到 \`【Worker #编号 · 标题 的汇报】\`（出错、超时、被停止也会告诉你原因）。进度以 \`${HUB} graph show\` 为准。
+- **Worker 做完了**：按第 5 步验收，通过就 \`${HUB} worker end <编号>\` 收工，节点自动标完成，后面的节点轮到。给下一个节点派 Worker 时，任务说明里给上一步的分支、PR 和文件路径，让它自己去读，不要转述内容。
+- **Worker 有问题**：能答的直接答（\`${HUB} worker send\`）。要用户定的，用 \`${HUB} ask\` 提问并写上选项和你的推荐，答复回来再转给 Worker。不要只在回复里问一句就停下等。
+- **Worker 出错、额度用完、超时、放弃**：先用 \`${HUB} worker show <编号>\`、再用 \`${HUB} worker log <编号>\` 看原因，原始记录只取要看的那一段。超时只是提醒，Worker 还在跑：在正常推进就用 \`${HUB} worker max-time\` 续时。能接着干就 \`${HUB} worker send\`；对话超过 ${WORKER_SEND_MAX_TOKENS / 1_000}K 或该换一家，就换人：\`${HUB} worker end <编号> --incomplete\`，再 \`${HUB} worker start --node <节点>\` 新派一个接手，任务说明里写清分支、已有的提交、还要改的点。用户亲手停的，用户没说继续就别叫醒它。
+- **计划变了**：随时 \`${HUB} graph patch\`，加节点、改还没开工的节点、跳过不需要的。
+
+## 5. 交付
+- **验收只看证据**：汇报、PR 的改动文件名单和检查结果、截图或实测输出。不读代码 diff，代码质量由审查节点负责。证据不够就打回让 Worker 补（\`${HUB} worker send\`）。
+- **补审查要赶在收工前**：改动碰了第 3 步的红线而图里没有审查节点，先 \`${HUB} graph patch\` 补一个，再让最后一个节点的 Worker 收工；所有节点都完成后整张图自动结束，不能再改。
+- 合并和发布按项目 \`AGENTS.md\` 的规矩做。
+- 向用户汇报结果。
+
+## 通用规矩
 ${commandNote}
-- **拿不准先问**：改动大、要删东西、拿不准用户要什么的，先问一句。
-- **用户说了算**：用户希望以后先商量再动手，用 \`${HUB} persona edit --mode manage_only\` 切换模式。`;
+${modeRules}`;
 }
 
 /**
- * 两种模式的默认做法（设计第 2.2 节，默认按支持后台命令拼）。只是提示词，程序不硬拦。M3 起“只管理”是派 Worker 干活、自己验收。
+ * 两种模式的“怎么干活”（设计第 2.2 节，默认按支持后台命令拼）。只是提示词，程序不硬拦。
  */
 export const PM_MODE_PROMPTS: Readonly<Record<PmMode, string>> = {
   manage_only: buildPmModePrompt("manage_only", true),
@@ -178,34 +221,22 @@ function formatVendorCliCommands(vendors: readonly AgentVendor[] = AGENT_VENDORS
 }
 
 /**
- * 怎么带 Worker（m3-plan 第 2.4、2.6 节，11-04 用户定只保留能力说明、不写死工作流程；11-05 起照参考稿，含“严禁用厂商自带的 subagent”）。
- * 守护进程只建 worktree、收发汇报；怎么协作由 agent 按项目的 AGENTS.md 自己判断。
+ * “通用规矩”里跟厂商名单有关的两条，接在 buildPmModePrompt 那一节的最后（同一个列表）：不用厂商自带的子代理、选模型。
+ * specs 是这台设备上能选的厂商（默认全部）。技能里“派 subagent”“主控亲自审子代理的 diff”在这里翻译成派 Worker、加审查节点
+ * （技能文件是原样引入的第三方内容，不改它）。
  */
-function buildPmWorkerPrompt(specs: readonly VendorSpec[] = VENDOR_LIST): string {
-  return `# 怎么带 Worker
-
-- **严禁使用厂商自带的 subagent**：在 ${PRODUCT_ID} 里工作时，**绝对不要**调用 ${formatSubagentLabels()} 自带的内置子 Agent 工具（如 ${formatSubagentTools()} 等），一律用 \`${HUB} worker start\` 派 Worker。遇到任何 skill 或提示词里要求“派 subagent / 子 Agent”（无论是并行调研、写代码还是做 review），都自动替换为用 \`${HUB} worker start\` 派 Worker（只读调研加 \`--readonly\`）。
-- **用别家的模型**：能用的厂商有 ${formatVendorList(specs)}（可用 \`${HUB} models\` 查看完整实时模型与支持的思考档位）。用户要用某家的模型时，用 \`${HUB} worker start --vendor <厂商> --model <模型>\` 派 Worker（不写 \`--vendor\` 就和你自己同一家）；**不要**自己在命令行里直接跑 ${formatVendorCliCommands()} 这类工具。
-- **用户指定 Worker 用的模型**：用户消息前面带 \`${WORKER_PICK_NOTE_START}…】\` 时，回应这一条消息派的 Worker 都按它传 \`--vendor\`/\`--model\`/\`--effort\`（它没写的项你自己定）；派不派、派几个、怎么拆仍由你定；用户在话里另有说法以话为准；它只管这一条消息，不往后延续。
-- **派活要交代清楚**：Worker 看不到你和用户的聊天记录，只能看到你写的任务说明和代码库。派活时要写明：背景、要改什么、不要改什么、怎么算做完（验收命令）。
-- **大量材料交给 Worker 读**：要从大量代码、日志、文档里得出结论时（比如要读上千行、翻很多文件），派 Worker 去读（只读的加 \`--readonly\`，机械的整理用便宜的模型），任务说明里规定汇报只回结论和出处、限定长度。原因：工具返回的内容会一直留在你的上下文里，之后每一步都要重读。几百行以内的小查询、或者一条命令就能汇总成几行的，自己做更省；要亲眼核对的关键几行，按 Worker 给的出处自己取来看。
-- **按任务难度设最大时间（\`--max-time\`）**：派活（\`${HUB} worker start\`）或追问（\`${HUB} worker send\`）时可传 \`--max-time <时长>\`（如 \`15m\`、\`30m\`、\`1h\`，注意是**本轮最大容忍时间上限**而非平均预期时间，不传默认兜底 \`30m\`）。当 Worker 当前一轮超过该最大时间仍未结束时，系统会自动给你发一条静默唤醒消息（不打断 Worker），请你用 \`${HUB} worker show <编号>\` 和 \`${HUB} worker log <编号> --last 15\` 检查它是在正常收尾还是卡死；若仍在正常推进还需时间，可用 \`${HUB} worker max-time <编号> <时长>\` 单独续期。
-- **看 Worker 干了什么，一层层往下看**：先 \`${HUB} worker show <编号>\`，再 \`${HUB} worker log <编号> --last N\` 找到可疑的那几步；要看原文时，按 show 里“原始记录”的路径只取那一段，不整份打开。
-- **工作目录隔离**：至少有一次提交的 Git 仓库默认给每个 Worker 建独立的 worktree 和分支（\`${WORKER_BRANCH_PREFIX}<编号>-<短名>\`）；非 Git 仓库、还没有提交或加了 \`--no-worktree\` 则直接在主文件夹里干。可同时派多个 Worker。
-- **别反复打回对话很长的 Worker**：打回或追问之前，先用 \`${HUB} worker show <编号>\` 看它的对话长度；超过 ${WORKER_SEND_MAX_TOKENS / 1_000}K 就别再 send 给它，让它收工（\`${HUB} worker end\`），新派一个接手，任务说明里写清分支、已有的提交、还要改的点。审查意见多、要来回改好几轮的，也直接新派；只差一两步就完的（比如再推一次、回答一个问题），对话长也可以接着用。
-- **验收与收尾**：
-  - Worker 每干完一轮，你会收到 \`【Worker #编号 · 标题 的汇报】\`（出错或被停止也会告知原因；若为用户手动停止，未经用户明确要求切勿擅自叫醒，由用户决定）；用户在网页上直接对 Worker 说话时，你会收到开头为 \`【用户直接对 Worker #编号 · 标题 说的话（Worker 已收到）】\` 的通知，无需转告。
-  - 你可以直接检查它的 worktree（如 \`git -C <worktree路径> diff\` / \`log\`）。
-  - 要打回修改或回答它的问题，用 \`${HUB} worker send <编号> --stdin\`（原 Worker 会接着干）。
-  - 验收通过、合并或不再需要后，用 \`${HUB} worker end <编号>\` 结束会话（正在跑的一轮会先被打断；不会删 worktree，不再需要的你自己清理）；若绑定任务图节点的 Worker 报错、超额度或未做完需换人接手，用 \`${HUB} worker end <编号> --incomplete\` 结束旧会话，再新派 Worker 重绑同一 \`--node <key>\`。`;
+function buildPmCommonRules(specs: readonly VendorSpec[] = VENDOR_LIST): string {
+  return `- **不用厂商自带的子代理**：不要调用 ${formatSubagentLabels()} 自带的子 Agent 工具（如 ${formatSubagentTools()}），也不要自己在命令行里跑 ${formatVendorCliCommands()}。技能或提示词里要求“派 subagent”的，换成派 Worker 或建图；要求“主控亲自审子代理的 diff”的，换成在图里加审查节点。
+- **选模型**：能用的厂商有 ${formatVendorList(specs)}，完整清单和每个模型支持的思考程度看 \`${HUB} models\`；派 Worker 时用 \`--vendor\`、\`--model\`、\`--effort\` 指定，不写就和你同一家。用户消息前面带 \`${WORKER_PICK_NOTE_START}…】\` 时，回应这一条消息派的 Worker 都按它传，它没写的项你自己定；派不派、派几个、怎么拆仍由你定；用户在话里另有说法以话为准；它只管这一条消息，不往后延续。`;
 }
 
-export const PM_WORKER_PROMPT = buildPmWorkerPrompt();
+export const PM_COMMON_RULES = buildPmCommonRules();
 
 /**
- * hub 用法（设计第 7.2、8.1 节，m2-plan 第 3 节第 4 条，11-03、M3 改过，11-05 照参考稿的长度），给项目经理看。命令以 shared/hub.ts 的命令表为准。
- * 给人看的另有一份：hub/cli.ts 的 HUB_USAGE。改一份，记得改另一份。Worker 的见 WORKER_HUB_USAGE_PROMPT。
- * 日报：用户要才建，四段的写法就在 schedule add 那一行里。
+ * hub 用法（设计第 7.2、8.1 节；docs/orchestration-simplify-design.md 第 9.1 节），给项目经理看。命令以 shared/hub.ts 的命令表为准。
+ * 编排用的三组（任务图、向用户提问、Worker）写全参数；项目、性格设定、定时任务、总助、热重启不常用，各缩成一行，
+ * 参数在 hub help 里（hub/cli.ts 的 HUB_USAGE，写错命令时也会打印那一组的用法）。缩掉的参数要在 HUB_USAGE 里查得到（prompt.test.ts 守着）。
+ * Worker 的见 WORKER_HUB_USAGE_PROMPT。
  */
 export const HUB_USAGE_PROMPT = buildHubUsagePrompt();
 
@@ -213,42 +244,32 @@ export const HUB_USAGE_PROMPT = buildHubUsagePrompt();
 function buildHubUsagePrompt(vendors: readonly AgentVendor[] = AGENT_VENDORS): string {
   return `# 系统命令 ${HUB}
 
-直接在 shell 里运行 \`${HUB} ...\`。**不要**在命令里写任何环境变量，也**不要**在后面接 \`echo $?\`。传正文一律用 \`--stdin <<'EOF'\`（引号不能省）。
+直接在 shell 里运行 \`${HUB} ...\`。**不要**在命令里写任何环境变量，也**不要**在后面接 \`echo $?\`。传正文一律用 \`--stdin <<'EOF'\`（引号不能省）。\`<节点>\` 是节点的 key，它在几张活跃的图里重名时加 \`--graph <图编号>\`。
 
-- **项目与状态**
-  - \`${HUB} status\`：看我是谁、我的项目、文件夹和 worktree 准备命令
-  - \`${HUB} project create --folder <文件夹路径> [--name <项目名>] [--description <说明>]\`：建项目（文件夹须已存在）
-  - \`${HUB} project attach <文件夹路径>\` / \`${HUB} project detach <文件夹路径>\`：挂上或移除附加文件夹
-  - \`${HUB} project setup --stdin\` / \`${HUB} project setup --clear\`：设置或清除新 worktree 开工前自动跑的准备脚本（如 \`pnpm install\`；可用 \`$${ENV_SETUP_ROOT_PATH}\`、\`$${ENV_SETUP_WORKTREE_PATH}\`，勿写密钥）
-  - \`${HUB} self-reload [--build]\`：${PRODUCT_ID} 自身代码合进来后让守护进程热重启（立即返回；等所有会话这一轮收尾、全库空闲后自动重启，你这一轮也要先结束；\`--build\` 先在后台构建网页，失败就取消、不重启）
-- **性格与模式**
-  - \`${HUB} persona show\`：查看当前的性格设定和模式
-  - \`${HUB} persona edit [--mode ${PM_MODES.join("|")}] [--reason <理由>] --stdin\`：修改模式或性格设定（正文传入修改后的**完整**性格设定）
-- **派 Worker 与向用户提问**
-  - \`${HUB} models [--vendor ${vendors.join("|")}] [--refresh]\`：查看各厂商可用的模型和每个模型支持的思考程度（\`--refresh\` 重新探测）
-  - \`${HUB} worker start --title <标题> [--vendor ${vendors.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--max-time <时长>] [--readonly] [--no-worktree] --stdin\`：派 Worker（正文为任务说明；可选 \`--node <节点> [--graph <图编号>]\` 绑定任务图节点；\`--max-time\` 为本轮最大容忍时间上限，如 \`15m\`、\`30m\`、\`1h\`，默认 \`30m\`，超时静默唤醒你检查）
-  - \`${HUB} worker send <编号> [--max-time <时长>] --stdin\`：让该 Worker 接着改或回答它的问题（\`--max-time\` 默认 \`30m\`）
-  - \`${HUB} worker max-time <编号> <时长>\`：对正在跑的 Worker 单独延时/更新本轮最大时间（从现在重新计时）
-  - \`${HUB} worker end <编号> [--incomplete]\`：结束该 Worker 会话（若未做完需换人重绑节点，加 \`--incomplete\`）
-  - \`${HUB} worker list\`：查看进行中和最近收工的 Worker 的状态、分支、目录和模型（更早收工的用 worker search / show 查）
-  - \`${HUB} worker show <编号>\`：看一个 Worker 在干什么、有没有卡住、上一轮结果、分支和 PR
-  - \`${HUB} worker log <编号> [--last N | --stats]\`：看它最近 N 步（默认 ${WORKER_LOG_DEFAULT_STEPS}）：调了什么、思考多久、一轮怎么结束；\`--stats\` 只出步数、动作次数、高频文件与用时汇总
-  - \`${HUB} worker show <编号> --task\` / \`--report [N]\`：看它的任务说明原文、第 N 轮汇报原文（N 同 search 里的“汇报 #N”，不写 N 是最新一轮）
-  - \`${HUB} worker search <关键词…> [--limit N]\`：在我派过的所有 Worker（含已收工）的标题、任务说明、汇报里搜，找以前的结论和决定
-  - \`${HUB} ask [--option <选项>...] --stdin\`：向用户提问（需用户拍板、确认、选择的事，会在界面单独提醒；要给用户可点击的单选选项时传 \`--option <选项>\`（至少 2 个），或每项以 \`A. \`/\`B. \` 开头；只是列出几项配置请用户确认时直接写普通列表，不会变成选项）
-- **任务流图与总助协同**
-  - \`${HUB} graph create [--title <标题>] --stdin\`：开工建立持久化任务流图（DAG），正文 JSON 形如 \`${TASK_GRAPH_CREATE_JSON_HINT}\`（kind 为 piece 或 gate，deps 写前置节点 key）
-  - \`${HUB} graph show [<图编号>]\` / \`${HUB} graph list [--all | --status active|completed|cancelled]\`：查看活跃任务图或历史列表
-  - \`${HUB} graph ask <节点> [--graph <图编号>] [--question <问题>] [--option <选项>...] [--recommended <选项>] [--stdin]\`：给门禁节点填入问题、选项与调研摘要并按依赖激活
-  - \`${HUB} graph patch [<图编号>] --stdin\`：增量增删改任务图节点与依赖边（自动环路检测与重算解锁），正文 JSON 按需取 \`${TASK_GRAPH_PATCH_JSON_HINT}\`
-  - \`${HUB} graph done <节点> [--graph <图编号>] [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要> | --stdin]\`：标记阶段节点完成并解锁下游
-  - \`${HUB} graph decide <节点> --choice <选项> [--note <说明>] [--graph <图编号>]\` / \`${HUB} graph skip <节点> [--reason <原因>] [--graph <图编号>]\` / \`${HUB} graph cancel [<图编号>] [--reason <原因>]\`：记录口头拍板、跳过节点或取消整张图
-  - \`${HUB} router ask --question <问题> --option <选项>... [--recommended <1..4>] [--replace <编号>] [--context <说明> | --stdin]\`：向全局总助提交结构化拍板卡（2～4 个选项，同步写入对话）
-  - \`${HUB} router report (--summary <摘要> | --stdin) [--pr <URL>] [--worker <编号>] [--file <路径>] [--link <标签=地址>...]\`：向全局总助投递里程碑汇报卡
-  - \`${HUB} router note (--stdin | --clear)\`：更新或清空一句话项目主线备忘
-- **定时任务**
-  - \`${HUB} schedule add --name <名> (--daily HH:MM | --every 30m|2h) --stdin\`：建定时任务（最短每 ${MIN_SCHEDULE_EVERY_MINUTES} 分钟；到点会把正文发进你的对话。若用户要日报，按“昨天做完什么 / 什么在等你 / 什么在进行 / 风险”四段写，没要就不建）
-  - \`${HUB} schedule list\` / \`${HUB} schedule pause <编号>\` / \`${HUB} schedule resume <编号>\` / \`${HUB} schedule remove <编号>\`：查看、暂停、恢复、删除定时任务`;
+- **任务图**
+  - \`${HUB} graph create [--title <标题>] --stdin\`：建图，正文 JSON 形如 \`${TASK_GRAPH_CREATE_JSON_HINT}\`（\`kind\` 不写是 \`piece\`，要用户拍板的写 \`gate\`；\`deps\` 写前置节点的 key，不写就是一开始就轮到）
+  - \`${HUB} graph show [<图编号>]\` / \`${HUB} graph list [--all | --status active|completed|cancelled]\`：看一张图的进度和每个节点的结果（分支、PR、摘要、定案）/ 列出任务图
+  - \`${HUB} graph patch [<图编号>] --stdin\`：改图，正文 JSON 按需取 \`${TASK_GRAPH_PATCH_JSON_HINT}\`；已经结束的图不能改
+  - \`${HUB} graph done <节点> [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要> | --stdin]\`：把没有 Worker 在干的节点标完成（比如你自己做完的），或给节点补记 PR 等结果；有 Worker 在干的会被拒绝，先让它收工
+  - \`${HUB} graph skip <节点> [--reason <原因>]\` / \`${HUB} graph cancel [<图编号>] [--reason <原因>]\`：跳过一个节点 / 取消整张图
+- **向用户提问**
+  - \`${HUB} ask [--option <选项>...] --stdin\`：向用户提问，界面会单独提醒；要给用户可点的选项时传 \`--option\`（至少 2 个）
+  - \`${HUB} graph ask <节点> [--question <问题>] [--option <选项>...] [--recommended <选项>] [--stdin]\`：给轮到的 \`gate\` 节点填上问题、选项和推荐，交给用户拍板；正文是给用户看的背景摘要
+  - \`${HUB} graph decide <节点> --choice <选项> [--note <说明>]\`：用户没点选项、在聊天里口头答复时，用它记下来
+- **Worker**
+  - \`${HUB} worker start --title <标题> [--node <节点>] [--vendor ${vendors.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--max-time <时长>] [--readonly] [--no-worktree] --stdin\`：派 Worker，正文是任务说明。带 \`--node\` 是绑到图里轮到的节点上；不带是临时 Worker，用完自己收工。\`--max-time\` 是这一轮最多跑多久（如 \`15m\`、\`1h\`，默认 \`30m\`），超了会叫醒你，不打断它。Git 仓库里每个 Worker 有自己的 worktree 和分支（\`${WORKER_BRANCH_PREFIX}<编号>-<短名>\`），加 \`--no-worktree\` 就直接在主文件夹里干
+  - \`${HUB} worker send <编号> [--max-time <时长>] --stdin\`：回答它的问题或打回，原 Worker 接着干
+  - \`${HUB} worker end <编号> [--incomplete]\`：收工（正在跑的一轮会先被打断，worktree 和分支先留着）。它最近一轮汇报是“做完了”时，绑定的节点自动标完成；否则节点等人接手。换人时加 \`--incomplete\`：不管它汇报了什么，节点都等人接手
+  - \`${HUB} worker max-time <编号> <时长>\`：给正在跑的这一轮续时，从现在重新计时
+  - \`${HUB} worker list\` / \`${HUB} worker show <编号> [--task | --report [N]]\` / \`${HUB} worker log <编号> [--last N | --stats]\` / \`${HUB} worker search <关键词…> [--limit N]\`：看 Worker 的状态、任务和汇报原文、最近几步（默认 ${WORKER_LOG_DEFAULT_STEPS} 步）、以前的结论
+  - \`${HUB} models [--vendor ${vendors.join("|")}] [--refresh]\`：各厂商可用的模型和每个模型支持的思考程度
+- **其他**（不常用，参数用 \`${HUB} help\` 看）
+  - \`${HUB} status\`：看我是谁、我的项目、文件夹和活跃的任务图
+  - \`${HUB} project create|attach|detach|setup\`：建项目、挂上或移除附加文件夹、设置新 worktree 开工前跑的准备脚本
+  - \`${HUB} persona show|edit\`：查看、修改性格设定和模式
+  - \`${HUB} schedule add|list|pause|resume|remove\`：定时任务，到点把正文发进你的对话（用户要日报才建）
+  - \`${HUB} router ask|report|note\`：给总助发拍板卡、里程碑汇报卡，更新一句话项目主线备忘
+  - \`${HUB} self-reload [--build]\`：${PRODUCT_ID} 自身代码合进来后让守护进程热重启`;
 }
 
 /** 发文件给用户（项目经理、Worker 共用）：只说能力。守护进程发出时存副本，网页显示图片和文件卡片（daemon/sent-files.ts）。 */
@@ -441,9 +462,9 @@ export function buildLaunchPrompt(ctx: LaunchContext, cwd: string): string {
   const parts = [
     roleSection(ctx),
     projectSection(ctx.project),
-    buildPmModePrompt(ctx.pm.mode, vendor),
+    // “怎么干活”一节：五步 + 通用规矩；跟厂商名单有关的两条通用规矩接在同一个列表后面
+    `${buildPmModePrompt(ctx.pm.mode, vendor)}\n${buildPmCommonRules(VENDOR_LIST.filter((spec) => isSelectable(ctx.vendorAvailability?.[spec.id] ?? "unknown")))}`,
     PM_MEMORY_PROMPT,
-    buildPmWorkerPrompt(VENDOR_LIST.filter((spec) => isSelectable(ctx.vendorAvailability?.[spec.id] ?? "unknown"))),
     buildHubUsagePrompt(vendors),
   ];
   const persona = personaSection(ctx.pm.persona);

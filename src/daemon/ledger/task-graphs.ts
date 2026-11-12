@@ -960,7 +960,7 @@ export function createLedgerTaskGraphs(
     const parsed = patchSpecSchema.safeParse(rawObj);
     if (!parsed.success) throw fail("invalid", "patch 字段格式不正确");
     const { addNodes: rawAddNodes, ...restPatch } = parsed.data;
-    const patch: PatchTaskGraphSpecInput & { skipNodes?: string[] } = {
+    const patch: PatchTaskGraphSpecInput = {
       ...restPatch,
       ...(rawAddNodes
         ? {

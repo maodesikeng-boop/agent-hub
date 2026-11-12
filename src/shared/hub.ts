@@ -356,6 +356,8 @@ export interface PatchTaskGraphSpecInput {
   addNodes?: CreateTaskGraphNodeInput[];
   updateNodes?: PatchTaskGraphNodeInput[];
   removeNodes?: TaskNodeKey[];
+  /** 跳过还没开工的节点（同 hub graph skip，可以一次跳几个）。 */
+  skipNodes?: TaskNodeKey[];
   addEdges?: CreateTaskGraphEdgeInput[];
   removeEdges?: CreateTaskGraphEdgeInput[];
 }
@@ -364,9 +366,9 @@ export interface PatchTaskGraphSpecInput {
 export const TASK_GRAPH_CREATE_JSON_HINT =
   '{"title":"…","nodes":[{"key":"plan","title":"…","kind":"piece"},{"key":"ok","title":"…","kind":"gate","deps":["plan"]}]}';
 
-/** `hub graph patch` 正文 JSON 一行字段示例（五个字段按需取用；updateNodes 的 deps 整体替换该节点前置依赖）。 */
+/** `hub graph patch` 正文 JSON 一行字段示例（提示词与 `hub help` 共用，只此一份；六个字段按需取用；updateNodes 的 deps 整体替换该节点前置依赖；skipNodes 跳过还没开工的节点）。 */
 export const TASK_GRAPH_PATCH_JSON_HINT =
-  '{"addNodes":[{"key":"qa","title":"…","deps":["ok"]}],"updateNodes":[{"key":"ok","title":"…"}],"removeNodes":["old"],"addEdges":[{"from":"plan","to":"qa"}],"removeEdges":[{"from":"a","to":"b"}]}';
+  '{"addNodes":[{"key":"qa","title":"…","deps":["ok"]}],"updateNodes":[{"key":"ok","title":"…"}],"removeNodes":["old"],"skipNodes":["qa"],"addEdges":[{"from":"plan","to":"qa"}],"removeEdges":[{"from":"a","to":"b"}]}';
 
 export type HubArgs<C extends HubCommand> = HubArgsMap[C];
 
