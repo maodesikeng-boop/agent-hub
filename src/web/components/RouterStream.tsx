@@ -20,8 +20,6 @@ import {
   type CSSProperties,
 } from "react";
 import {
-  ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX,
-  ROUTER_STREAM_BRIEFINGS_SNAPSHOT_MAX,
   ROUTER_STREAM_LIVE_MAX,
   ROUTER_STREAM_MAX_PAGES,
   ROUTER_STREAM_PAGE_SIZE,
@@ -44,7 +42,7 @@ import {
   type FleetRouterStream,
   type RouterBriefingEntry,
   type RouterDeviceBriefings,
-  type RouterStreamEntry,
+  type RouterStreamPos,
   type RouterStreamSource,
   type RouterTurnDestination,
   type RouterTurnEntry,
@@ -424,13 +422,11 @@ function makeBriefingOptions(
     queryKey: ["router-stream", "briefings", deviceKey, oldestCursor] as const,
     initialPageParam: oldestCursor,
     queryFn: ({ pageParam }: { pageParam: string | null }) =>
-      pageParam
-        ? clientForDevice(deviceKey).fetchRouterItems({
-            cursor: pageParam,
-            limit: ROUTER_STREAM_PAGE_SIZE,
-            kind: "report",
-          })
-        : Promise.resolve({ items: [], nextCursor: null, hasMore: false }),
+      clientForDevice(deviceKey).fetchRouterItems({
+        cursor: pageParam,
+        limit: ROUTER_STREAM_PAGE_SIZE,
+        kind: "report",
+      }),
     getNextPageParam: (lastPage: RouterItemsPage) =>
       lastPage.hasMore && lastPage.nextCursor ? lastPage.nextCursor : undefined,
     getPreviousPageParam: () => undefined,
@@ -591,9 +587,7 @@ export const RouterStream = memo(function RouterStream({
       queryKey: ["router-stream", "commands", stream.oldestCommandCursor] as const,
       initialPageParam: stream.oldestCommandCursor,
       queryFn: ({ pageParam }) =>
-        pageParam
-          ? localClient.fetchRouterCommands({ cursor: pageParam, limit: ROUTER_STREAM_PAGE_SIZE })
-          : Promise.resolve({ commands: [], nextCursor: null, hasMore: false }),
+        localClient.fetchRouterCommands({ cursor: pageParam, limit: ROUTER_STREAM_PAGE_SIZE }),
       getNextPageParam: (lastPage) => (lastPage.hasMore && lastPage.nextCursor ? lastPage.nextCursor : undefined),
       getPreviousPageParam: () => undefined,
       maxPages: ROUTER_STREAM_MAX_PAGES,
@@ -764,40 +758,42 @@ export const RouterStream = memo(function RouterStream({
     }
     const olderTurns: RouterTurnEntry[] = [];
     const cmdPages = commandsQuery.data?.pages ?? [];
+    // 翻出来的页都比近窗更早；最早一条原始记录（含已取消的）就是这个来源的分页位置
+    let oldestCmd: { createdAt: number; id: number } | null = stream.oldestCommand;
     for (const page of cmdPages) {
       for (const cmd of page.commands) {
+        if (oldestCmd === null || cmd.createdAt < oldestCmd.createdAt || (cmd.createdAt === oldestCmd.createdAt && cmd.id < oldestCmd.id)) {
+          oldestCmd = cmd;
+        }
         if (cmd.status === "cancelled" || liveCmdIds.has(cmd.id)) continue;
         liveCmdIds.add(cmd.id);
         if (cmd.clientId) liveClientIds.add(cmd.clientId);
         olderTurns.push(turnEntryOfCommand(cmd, selfId, false));
       }
     }
-    olderTurns.sort((a, b) => a.createdAt - b.createdAt || (a.command?.id ?? 0) - (b.command?.id ?? 0));
 
     const activePending = pendingTurns.filter((p) => !liveClientIds.has(p.clientId));
     const persistedTurns = olderTurns.length > 0 ? [...olderTurns, ...stream.turns] : stream.turns;
     const allTurns = activePending.length > 0 ? [...persistedTurns, ...activePending] : persistedTurns;
 
-    // 快照近窗除了条数还有字节上限（ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES），几条长回答就能把它截到不满 10 条，
-    // 所以没翻过之前只要近窗里有东西就给 Load earlier，第一页回来再以服务端的 hasMore 为准。
-    // 水位线只在近窗满了条数上限（大概率被截过）或已经翻过还有更多时才挡，免得一边只有几条新内容就把另一边全挡住。
+    // 快照按条数和字节双上限截断后分别给出 commandsHasMore / briefingsHasMore：
+    // 没翻过之前直接以快照标记决定要不要翻、要不要拦水位线（即使长内容截到只剩一两条也能拦住另一类的更早记录不提前露出）；
+    // 翻过之后以分页接口返回的 hasMore（及 ROUTER_STREAM_MAX_PAGES 上限）为准。
     const cmdNeverFetched = commandsQuery.data === undefined && !commandsQuery.isError;
-    const cmdHasMore =
-      stream.oldestCommandCursor !== null &&
-      (cmdNeverFetched ||
-        commandsQuery.isError ||
-        (Boolean(commandsQuery.hasNextPage) && cmdPages.length < ROUTER_STREAM_MAX_PAGES));
-    const cmdGuards = cmdNeverFetched ? stream.liveCommandCount >= ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX : cmdHasMore;
-    const cmdLoadedDownTo = cmdHasMore && cmdGuards && persistedTurns.length > 0 ? persistedTurns[0]!.createdAt : null;
+    const cmdHasMore = cmdNeverFetched
+      ? stream.commandsHasMore
+      : commandsQuery.isError || (Boolean(commandsQuery.hasNextPage) && cmdPages.length < ROUTER_STREAM_MAX_PAGES);
+    const cmdLoadedDownTo: RouterStreamPos | null =
+      cmdHasMore && oldestCmd !== null ? { createdAt: oldestCmd.createdAt, kind: "turn", deviceKey: "", id: oldestCmd.id } : null;
 
-    const sources: RouterStreamSource<RouterStreamEntry>[] = [
+    const sources: RouterStreamSource[] = [
       { entries: allTurns, loadedDownTo: cmdLoadedDownTo, hasMore: cmdHasMore },
     ];
     const nextTargets: Array<
       | { kind: "commands"; isError: boolean }
       | { kind: "device"; deviceKey: string; isError: boolean }
     > = [];
-    if (cmdHasMore && stream.oldestCommandCursor !== null) {
+    if (cmdHasMore) {
       nextTargets.push({ kind: "commands", isError: commandsQuery.isError });
     }
 
@@ -813,8 +809,12 @@ export const RouterStream = memo(function RouterStream({
 
       const olderBriefings: RouterBriefingEntry[] = [];
       const repPages = snap?.data?.pages ?? [];
+      let oldestRep: { createdAt: number; id: number } | null = dev.oldestReport;
       for (const page of repPages) {
         for (const item of page.items) {
+          if (oldestRep === null || item.createdAt < oldestRep.createdAt || (item.createdAt === oldestRep.createdAt && item.id < oldestRep.id)) {
+            oldestRep = item;
+          }
           // 旧版守护进程不认识 kind=report，网页再按 kind === "report" 滤一次
           if (item.kind !== "report" || liveRepIds.has(item.id)) continue;
           liveRepIds.add(item.id);
@@ -829,19 +829,18 @@ export const RouterStream = memo(function RouterStream({
           if (entry !== null) olderBriefings.push(entry);
         }
       }
-      olderBriefings.sort((a, b) => a.createdAt - b.createdAt || a.report.id - b.report.id);
 
       const allBriefings = olderBriefings.length > 0 ? [...olderBriefings, ...dev.briefings] : dev.briefings;
-      // 和指令同一个口径：没翻过之前有就给 Load earlier；近窗满了快照条数上限才挡水位线
       const repNeverFetched = snap === undefined || (snap.data === undefined && !snap.isError);
       const repHasMore =
         dev.online &&
-        dev.oldestCursor !== null &&
-        (repNeverFetched ||
-          Boolean(snap?.isError) ||
-          (Boolean(snap?.hasNextPage) && repPages.length < ROUTER_STREAM_MAX_PAGES));
-      const repGuards = repNeverFetched ? dev.liveReportCount >= ROUTER_STREAM_BRIEFINGS_SNAPSHOT_MAX : repHasMore;
-      const repLoadedDownTo = repHasMore && repGuards && allBriefings.length > 0 ? allBriefings[0]!.createdAt : null;
+        (repNeverFetched
+          ? dev.hasMore
+          : Boolean(snap?.isError) || (Boolean(snap?.hasNextPage) && repPages.length < ROUTER_STREAM_MAX_PAGES));
+      const repLoadedDownTo: RouterStreamPos | null =
+        repHasMore && oldestRep !== null
+          ? { createdAt: oldestRep.createdAt, kind: "briefing", deviceKey: dev.key, id: oldestRep.id }
+          : null;
 
       sources.push({ entries: allBriefings, loadedDownTo: repLoadedDownTo, hasMore: repHasMore });
       if (repHasMore) {

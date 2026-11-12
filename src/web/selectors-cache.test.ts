@@ -464,7 +464,17 @@ describe("selector 缓存：300 个 Worker、3 万条消息", () => {
 
     // 项目经理改名：那台设备的简报跟着变（缓存按 pms 失效）
     const renamed = applyChange(briefed, changeOf(++seq, "pm.updated", { pm: makePm({ id: 1, name: "小林" }) }));
-    expect(fleetRouterStream(devices(renamed), SELF_ID).devices[0]!.briefings.at(-1)!.pmName).toBe("小林");
+    const afterRename = fleetRouterStream(devices(renamed), SELF_ID);
+    expect(afterRename.devices[0]!.briefings.at(-1)!.pmName).toBe("小林");
+
+    // commandsHasMore / briefingsHasMore 翻转时立即失效，且未变的条目数组保持 === 引用稳定
+    const withCmdMore: HubState = { ...renamed, router: { ...renamed.router, commandsHasMore: true } };
+    const afterCmdMore = fleetRouterStream(devices(withCmdMore), SELF_ID);
+    expect(afterCmdMore).not.toBe(afterRename);
+    expect(afterCmdMore.commandsHasMore).toBe(true);
+    expect(afterCmdMore.turns).toBe(afterRename.turns);
+    expect(afterCmdMore.devices).toBe(afterRename.devices);
+    expect(fleetRouterStream(devices(withCmdMore), SELF_ID)).toBe(afterCmdMore);
   });
 
   it("activeGraphsOf、unboundWorkersOf、pendingDecisionsOf：1 个月规模下中位数 < 2 ms，流式打字与无关更新严格 === 引用稳定，变更即时失效", () => {

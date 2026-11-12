@@ -602,10 +602,13 @@ describe("v2 快照与简报历史（docs/router-workbench-v2-design.md 第 3.2 
       now += 1;
       fullReport(lin, i);
     }
-    const briefings = ledger.snapshot().router.items.filter((x) => x.kind === "report");
+    const router = ledger.snapshot().router;
+    const briefings = router.items.filter((x) => x.kind === "report");
     expect(briefings.length).toBeGreaterThanOrEqual(1);
     expect(briefings.length).toBeLessThan(ROUTER_STREAM_BRIEFINGS_SNAPSHOT_MAX);
     expect(briefings.reduce((n, b) => n + jsonBytes(b), 0)).toBeLessThanOrEqual(ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES);
+    expect(router.briefingsHasMore).toBe(true);
+    expect(router.commandsHasMore).toBe(false);
     // 留下的是最新的那一段
     const newest = ledger.listRouterItems(undefined, 1, "report").items[0]!;
     expect(briefings[0]!.id).toBe(newest.id);
@@ -617,11 +620,36 @@ describe("v2 快照与简报历史（docs/router-workbench-v2-design.md 第 3.2 
       now += 1;
       made.push(fullCommand(i));
     }
-    const commands = ledger.snapshot().router.commands;
+    const router = ledger.snapshot().router;
+    const commands = router.commands;
     expect(commands.length).toBeGreaterThanOrEqual(1);
     expect(commands.length).toBeLessThan(ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX);
     expect(commands.reduce((n, c) => n + jsonBytes(c), 0)).toBeLessThanOrEqual(ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES);
+    expect(router.commandsHasMore).toBe(true);
+    expect(router.briefingsHasMore).toBe(false);
     expect(commands.map((c) => c.id)).toEqual(made.reverse().slice(0, commands.length).map((c) => c.id));
+  });
+
+  it("快照分别标记 briefingsHasMore 与 commandsHasMore：全空与正好满条数上限时为 false，超出条数上限时各自独立翻为 true", () => {
+    expect(ledger.snapshot().router).toMatchObject({ briefingsHasMore: false, commandsHasMore: false });
+
+    for (let i = 0; i < ROUTER_STREAM_BRIEFINGS_SNAPSHOT_MAX; i++) {
+      now += 1;
+      ledger.hubCall(lin.sessionId, "router.report", { summary: `短简报 ${i}` });
+    }
+    for (let i = 0; i < ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX; i++) {
+      now += 1;
+      ledger.createRouterCommand({ clientId: `exact-${i}`, inputText: `短指令 ${i}`, vendor: "claude", status: "answered" });
+    }
+    expect(ledger.snapshot().router).toMatchObject({ briefingsHasMore: false, commandsHasMore: false });
+
+    now += 1;
+    ledger.hubCall(lin.sessionId, "router.report", { summary: "第 31 条简报" });
+    expect(ledger.snapshot().router).toMatchObject({ briefingsHasMore: true, commandsHasMore: false });
+
+    now += 1;
+    ledger.createRouterCommand({ clientId: "exact-extra", inputText: "第 11 条指令", vendor: "claude", status: "answered" });
+    expect(ledger.snapshot().router).toMatchObject({ briefingsHasMore: true, commandsHasMore: true });
   });
 
   it("listRouterItems 带 kind=report：任意状态的简报，不含拍板项，能按游标翻页；不带时行为不变", () => {
