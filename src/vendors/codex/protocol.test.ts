@@ -273,6 +273,46 @@ describe("parseCodexTokenUsage：扣除已含缓存的 inputTokens，避免 cont
     });
   });
 
+  it("线程累计 total 回退到已记录基线以下（服务端重置等）：按 total - last 重新校准基线，后续步骤不被截成 0", () => {
+    const highWater = { input_tokens: 50_000, cache_read_input_tokens: 450_000, cache_creation_input_tokens: 0, output_tokens: 3_000 };
+    const reset = parseCodexTokenUsage(
+      {
+        last: { inputTokens: 30_000, cachedInputTokens: 20_000, outputTokens: 100 },
+        total: { inputTokens: 30_000, cachedInputTokens: 20_000, outputTokens: 100 },
+      },
+      "t9",
+      { lastThreadTotal: highWater, turnResultUsage: null, stepSeq: 0 },
+    )!;
+    expect(reset.duplicate).toBe(false);
+    expect(reset.resultUsage).toEqual({ input_tokens: 10_000, cache_read_input_tokens: 20_000, cache_creation_input_tokens: 0, output_tokens: 100 });
+    expect(reset.nextState.lastThreadTotal).toEqual(reset.resultUsage);
+
+    const next = parseCodexTokenUsage(
+      {
+        last: { inputTokens: 35_000, cachedInputTokens: 30_000, outputTokens: 50 },
+        total: { inputTokens: 65_000, cachedInputTokens: 50_000, outputTokens: 150 },
+      },
+      "t9",
+      reset.nextState,
+    )!;
+    expect(next.resultUsage).toEqual({ input_tokens: 15_000, cache_read_input_tokens: 50_000, cache_creation_input_tokens: 0, output_tokens: 150 });
+    expect(next.context).toBe(35_000);
+  });
+
+  it("codex 自带压缩后那条 total 不变、last 全 0 的通知按重复跳过，不把 context 冲成 0 也不加用量", () => {
+    const before = { input_tokens: 318_000, cache_read_input_tokens: 2_996_614, cache_creation_input_tokens: 0, output_tokens: 12_492 };
+    const parsed = parseCodexTokenUsage(
+      {
+        last: { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 },
+        total: { inputTokens: 3_314_614, cachedInputTokens: 2_996_614, outputTokens: 12_492 },
+      },
+      "t10",
+      { lastThreadTotal: before, turnResultUsage: null, stepSeq: 0 },
+    )!;
+    expect(parsed.duplicate).toBe(true);
+    expect(parsed.nextState.lastThreadTotal).toEqual(before);
+  });
+
   it("跨步、重复通知、跨轮与冷恢复（lastThreadTotal=null）差值计算准确", () => {
     const turn1 = new TurnUsage();
     const step1 = parseCodexTokenUsage(

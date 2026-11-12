@@ -58,6 +58,7 @@ import {
   isCodexToolItemType,
   parseCodexRateLimits,
   parseCodexTokenUsage,
+  parseCodexThreadTotal,
   parseCodexToolStarted,
   readCodexLaunchConfig,
   type CodexLaunchConfig,
@@ -901,6 +902,16 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       }
 
       case "thread/tokenUsage/updated": {
+        // thread/resume 后 app-server 会带着恢复前那一轮的 turnId 原样重放 rollout 里最后一条 total/last（codex-cli 0.167.1 实测；
+        // 进程崩在最后一步落盘前时，重放的还会比已记录的基线旧）。不属于正在跑的这一轮的通知只把线程累计基线校准到它的 total，
+        // 不计入任何一轮（本地 rollout 里 token_count 从不出现在一轮结束和下一轮开始之间）。
+        // total 是单条线程的累计：同一连接上别的线程（如子 agent）的通知既不计入本会话，也不能拿来当本线程的基线
+        if (typeof params.threadId === "string" && params.threadId !== "" && proc.threadId !== null && params.threadId !== proc.threadId) return;
+        const notifTurnId = typeof params.turnId === "string" && params.turnId !== "" ? params.turnId : null;
+        if (notifTurnId !== null ? notifTurnId !== st.activeTurnId : st.activeTurnId === null) {
+          st.lastThreadTotal = parseCodexThreadTotal(params.tokenUsage) ?? st.lastThreadTotal;
+          return;
+        }
         const parsed = parseCodexTokenUsage(params.tokenUsage, st.activeTurnId, {
           lastThreadTotal: st.lastThreadTotal,
           turnResultUsage: st.lastTurnResultUsage,

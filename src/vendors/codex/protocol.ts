@@ -533,6 +533,13 @@ function regressedCodexUsageCounts(cur: CodexUsageCounts, prev: CodexUsageCounts
   );
 }
 
+/** thread/tokenUsage/updated 里的线程累计 total（Claude 口径）；没有 total 返回 null。 */
+export function parseCodexThreadTotal(tokenUsage: unknown): CodexUsageCounts | null {
+  if (typeof tokenUsage !== "object" || tokenUsage === null) return null;
+  const total = (tokenUsage as { total?: unknown }).total;
+  return typeof total === "object" && total !== null ? toCodexUsageCounts(total as Record<string, unknown>) : null;
+}
+
 /**
  * 解析 thread/tokenUsage/updated 的 tokenUsage：
  * - Codex 的 inputTokens 已含 cachedInputTokens，转换成 Claude 口径时先扣掉 cachedInputTokens，避免 context 翻倍；
