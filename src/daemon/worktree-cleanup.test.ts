@@ -404,4 +404,46 @@ describe("worktree 自动清理", () => {
     expect(existsSync(w3.worktreePath!)).toBe(false);
     expect(existsSync(w4.worktreePath!)).toBe(false);
   });
+
+  it("换人共享同一个 worktree：前任已满 3 天但后任刚收工且分支未合并时不删，等后任收工也满 3 天才删", async () => {
+    const graph = ledger.hubCall(pm.sessionId, "graph.create", {
+      title: "接力清理",
+      specJson: JSON.stringify({ nodes: [{ key: "s1", title: "实现" }] }),
+    }).data.graph;
+    const w1 = ledger.hubCall(
+      pm.sessionId,
+      "worker.start",
+      { title: "实现", task: "做功能", vendor: "claude", node: "s1" },
+      { workspace: { kind: "ok", isRepoWithCommit: true, hasUncommittedChanges: false } },
+    ).data.worker;
+    const wt = await addWorktree({ repoFolder: repo, worktreePath: w1.worktreePath!, branch: w1.branch! });
+    ledger.onWorktreeCreated(w1.id, wt.baseCommit);
+    writeFileSync(join(w1.worktreePath!, "step1.txt"), "progress\n");
+    git(w1.worktreePath!, "add", "-A");
+    git(w1.worktreePath!, "commit", "-q", "-m", "wip");
+    ledger.hubCall(pm.sessionId, "worker.end", { workerId: w1.id, incomplete: true });
+
+    // 4 天后 w2 接手同一个 worktree，随即收工并取消任务图（分支未合并）
+    now += WORKTREE_RETENTION_MS + 86_400_000;
+    const w2 = ledger.hubCall(
+      pm.sessionId,
+      "worker.start",
+      { node: "s1", vendor: "codex" },
+      { workspace: { kind: "ok", isRepoWithCommit: true, hasUncommittedChanges: false } },
+    ).data.worker;
+    expect(w2.worktreePath).toBe(w1.worktreePath);
+    now += 60_000;
+    ledger.hubCall(pm.sessionId, "worker.end", { workerId: w2.id, incomplete: true });
+    ledger.hubCall(pm.sessionId, "graph.cancel", { graphId: graph.id });
+
+    const cleanup = createWorktreeCleanup({ ledger, worktreesDir, log: (l) => logs.push(l), now: () => now });
+    // 后任刚收工 0 秒：不能按前任 4 天前的收工时刻提前删掉共享目录
+    expect(await cleanup.runOnce()).toEqual([]);
+    expect(existsSync(w1.worktreePath!)).toBe(true);
+
+    // 等后任收工也满 3 天后，正常清理一次
+    now += WORKTREE_RETENTION_MS + 1_000;
+    expect(await cleanup.runOnce()).toEqual([w1.id]);
+    expect(existsSync(w1.worktreePath!)).toBe(false);
+  });
 });

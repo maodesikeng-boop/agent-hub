@@ -434,16 +434,27 @@ export function createLedgerWorkers(
 
   /**
    * 重启恢复（在 recoverAfterRestart 里调）：还开着、在计时、这一轮还没提醒过的 Worker 按库里的截止时刻重新挂定时器，
-   * 已经过了的马上触发一次（触发时还在跑才提醒）。已收工的残留计时清掉。返回重新挂了哪些 Worker。
+   * 已经过了的马上触发一次（触发时还在跑才提醒）。已收工或重启后已无在途轮次的残留计时清掉（避免空闲残留 notified=1 导致下一轮漏挂计时）。返回重新挂了哪些 Worker。
    */
   const recoverTurnTimeouts = (): WorkerId[] => {
     db.run("DELETE FROM worker_turn_timeouts WHERE worker_id IN (SELECT id FROM workers WHERE status = 'ended')");
-    const rows = db.all<{ id: number; worker_conversation_id: number; max_time_ms: number; deadline_at: number }>(
-      `SELECT w.id, w.worker_conversation_id, t.max_time_ms, t.deadline_at FROM worker_turn_timeouts t JOIN workers w ON w.id = t.worker_id
-        WHERE w.status = 'open' AND t.notified = 0 ORDER BY w.id`,
+    const rows = db.all<{ id: number; worker_conversation_id: number; max_time_ms: number; deadline_at: number; notified: number }>(
+      `SELECT w.id, w.worker_conversation_id, t.max_time_ms, t.deadline_at, t.notified FROM worker_turn_timeouts t JOIN workers w ON w.id = t.worker_id
+        WHERE w.status = 'open' ORDER BY w.id`,
     );
-    for (const row of rows) armTimer(row, row.max_time_ms, row.deadline_at);
-    return rows.map((r) => r.id);
+    const armed: WorkerId[] = [];
+    for (const row of rows) {
+      const worker = workerRow(row.id);
+      if (worker === null || (!notStarted(worker) && !isWorkerInFlight(worker))) {
+        clearMaxTime(row.worker_conversation_id);
+        continue;
+      }
+      if (row.notified === 0) {
+        armTimer(row, row.max_time_ms, row.deadline_at);
+        armed.push(row.id);
+      }
+    }
+    return armed;
   };
 
   /**
@@ -552,8 +563,15 @@ export function createLedgerWorkers(
     const predecessors = allNewestFirst.slice(0, TAKEOVER_PREDECESSORS_MAX);
     const inherit = noWorktree ? null : (allNewestFirst.find((w) => reusableWorktree(w, projectId)) ?? null);
     const first = allNewestFirst.at(-1) ?? null;
-    const active = target.activeWorkerId === null ? null : workerRow(target.activeWorkerId);
-    return { predecessors, inherit, originalTask: first?.task ?? null, active: active !== null && active.status === "open" ? active : null };
+    const openById = new Map<WorkerId, WorkerDbRow>();
+    if (target.activeWorkerId !== null) {
+      const active = workerRow(target.activeWorkerId);
+      if (active !== null && active.status === "open") openById.set(active.id, active);
+    }
+    for (const w of allNewestFirst) {
+      if (w.status === "open") openById.set(w.id, w);
+    }
+    return { predecessors, inherit, originalTask: first?.task ?? null, openOld: [...openById.values()] };
   };
 
   const startIn = (
@@ -620,16 +638,16 @@ export function createLedgerWorkers(
 
     // 换人：前任的记录先按现在的样子取出来（还挂着的旧 Worker 收工前），再把旧 Worker 按“没做完”收工（同 --incomplete，节点不标完成）
     let takeoverText: string | null = null;
-    let endedOld: { ended: WorkerDbRow; interrupted: boolean } | null = null;
+    const endedOldList: Array<{ ended: WorkerDbRow; interrupted: boolean }> = [];
     if (takeover !== null && bindTarget !== undefined) {
-      const active = takeover.active;
-      const activeInFlight = active !== null && !notStarted(active) && isWorkerInFlight(active);
+      const openIds = new Set(takeover.openOld.map((w) => w.id));
+      const inFlightIds = new Set(takeover.openOld.filter((w) => !notStarted(w) && isWorkerInFlight(w)).map((w) => w.id));
       const predecessors: TakeoverPredecessor[] = takeover.predecessors.map((w) => ({
         worker: w,
         session: workerSession(w),
         endedNote:
-          active !== null && w.id === active.id
-            ? activeInFlight
+          openIds.has(w.id)
+            ? inFlightIds.has(w.id)
               ? "换人时它还在跑这一轮，后台已打断它，并按“没做完”把它收工（节点不标完成）。"
               : "换人时它还开着（没在跑），后台已按“没做完”把它收工（节点不标完成）。"
             : "它已经收工了。",
@@ -652,7 +670,9 @@ export function createLedgerWorkers(
           workspaceNote,
           pmNote,
         }) ?? null;
-      if (active !== null) endedOld = endWorkerIn(p, active, { incomplete: true });
+      for (const old of takeover.openOld) {
+        endedOldList.push(endWorkerIn(p, old, { incomplete: true }));
+      }
     }
     const t = now();
 
@@ -732,7 +752,10 @@ export function createLedgerWorkers(
 
     const notes: string[] = [];
     if (takeover !== null && bindTarget !== undefined) {
-      const old = endedOld === null ? "" : `已先把节点上还挂着的 Worker #${endedOld.ended.id} 收工${endedOld.interrupted ? "（打断了它正在跑的那一轮）" : ""}，节点不标完成；`;
+      const old =
+        endedOldList.length === 0
+          ? ""
+          : `已先把节点上还挂着的 ${endedOldList.map((e) => `Worker #${e.ended.id}${e.interrupted ? "（打断了它正在跑的那一轮）" : ""}`).join("、")} 收工，节点不标完成；`;
       notes.push(
         `${old}已派出 Worker #${id}“${title}”接手任务图 #${bindTarget.graphId} 的节点「${bindTarget.nodeKey}」，${describeWorkspace(worker, card.mainFolder)}` +
           `。前任（最近 ${takeover.predecessors.length} 个）的汇报、最后的文字、最后几步操作和原始记录路径已自动放进它的第一条消息${pmNote === null ? "" : "，你的正文作为补充放在最后"}`,
@@ -1074,6 +1097,10 @@ export function createLedgerWorkers(
     }
     if (event.type === "message.cancelled" || event.type === "message.requeued") {
       for (const id of event.messageIds) midTurnWaiting.delete(id);
+      if (event.type === "message.cancelled") {
+        const worker = workerRow(session.workerId);
+        if (worker !== null && !notStarted(worker) && !isWorkerInFlight(worker)) clearMaxTime(worker.worker_conversation_id);
+      }
       return;
     }
     if (event.type === "turn.started") {
@@ -1082,7 +1109,14 @@ export function createLedgerWorkers(
       return;
     }
     const outcome = turnOutcome(event);
-    if (outcome === null) return;
+    if (outcome === null) {
+      if (event.type === "session.exited" && event.reason !== "shutdown") {
+        turnStarts.delete(session.id);
+        const worker = workerRow(session.workerId);
+        if (worker !== null && !notStarted(worker) && !isWorkerInFlight(worker)) clearMaxTime(worker.worker_conversation_id);
+      }
+      return;
+    }
     const worker = workerRow(session.workerId);
     if (worker === null) return;
     // 自己开的一轮（没有消息编号）只认 turn.started 开的头；游离的 turn.ended 不处理
@@ -1137,6 +1171,7 @@ export function createLedgerWorkers(
       db.run("DELETE FROM worker_background_waits");
       for (const wait of waits) {
         const worker = wait.worker_id === null ? null : workerRow(wait.worker_id);
+        if (worker !== null) clearMaxTime(worker.worker_conversation_id);
         if (worker === null || worker.status === "ended") continue;
         const turnMessageId = lastAgentMessageId(wait.session_id, wait.turn_start);
         if (turnMessageId === null) continue;
@@ -1177,8 +1212,8 @@ export function createLedgerWorkers(
     });
 
   /**
-   * 同一个 worktree 目录还有别的 Worker 的会话没结束（换人接手时前任刚被收工、进程还没退）：还开着的 Worker 的会话没结束，
-   * 或已收工的 Worker 的进程还在。接手的新 Worker 等它们都结束才开工，同一个目录里不会有两个 Worker 同时在写。
+   * 同一个 worktree 目录还有别的 Worker 或它的会话没彻底结束（换人接手时前任刚被收工、session.end 还没跑完或进程还没退）：
+   * 别的 Worker 还开着、会话状态还不是 ended、或 pid 还在，接手的新 Worker 都等它们彻底结束才开工，绝不双写同一个目录。
    */
   const worktreeBusyByOthers = (worker: WorkerDbRow): boolean =>
     worker.workspace === "worktree" &&
@@ -1186,7 +1221,8 @@ export function createLedgerWorkers(
     worker.worktree_path !== "" &&
     db.get(
       `SELECT 1 AS x FROM workers o JOIN agent_sessions s ON s.worker_id = o.id
-        WHERE o.worktree_path = ? AND o.id != ? AND s.status != 'ended' AND (o.status = 'open' OR s.pid IS NOT NULL)
+        WHERE o.worktree_path = ? AND o.id != ?
+          AND (o.status != 'ended' OR s.status != 'ended' OR s.pid IS NOT NULL)
         LIMIT 1`,
       worker.worktree_path,
       worker.id,
@@ -1313,14 +1349,17 @@ export function createLedgerWorkers(
         branch: string;
         worktree_path: string;
         base_commit: string | null;
-        updated_at: number;
+        ended_at: number;
         repo_folder: string;
       }>(
-        `SELECT w.id, w.project_id, w.branch, w.worktree_path, w.base_commit, w.updated_at, f.path AS repo_folder
+        `SELECT w.id, w.project_id, w.branch, w.worktree_path, w.base_commit,
+                (SELECT max(o.updated_at) FROM workers o WHERE o.worktree_path = w.worktree_path) AS ended_at,
+                f.path AS repo_folder
          FROM workers w
          JOIN project_folders f ON f.project_id = w.project_id AND f.is_main = 1 AND f.removed_at IS NULL
          WHERE w.status = 'ended' AND w.workspace = 'worktree'
-           AND w.worktree_path IS NOT NULL AND w.branch IS NOT NULL
+           AND w.worktree_path IS NOT NULL AND w.worktree_path != '' AND w.branch IS NOT NULL
+           AND w.id = (SELECT min(o.id) FROM workers o WHERE o.worktree_path = w.worktree_path AND o.status = 'ended')
          ORDER BY w.id`,
       )
       .map((r) => ({
@@ -1330,20 +1369,36 @@ export function createLedgerWorkers(
         branch: r.branch,
         worktreePath: r.worktree_path,
         baseCommit: r.base_commit,
-        endedAt: r.updated_at,
+        endedAt: r.ended_at,
       }));
 
   /**
    * 清理前再次确认能删这个 Worker 的 worktree 目录（docs/orchestration-simplify-design.md 第 4.4 节）：
    * - 它仍已收工、没有正在跑的一轮；
-   * - 同一个目录（换人接手时前后几个 Worker 共用）没有还开着的 Worker，也没有哪个的一轮还在跑；
+   * - 同一个目录（换人接手时前后几个 Worker 共用）没有还开着的 Worker，也没有哪个的一轮还在跑或进程未退；
    * - 共用这个目录的 Worker 经手过的任务图都已经结束（图还 active 时随时可能换人接着用这个目录）。
    */
   const isWorkerCleanable = (workerId: WorkerId): boolean => {
     const worker = workerRow(workerId);
-    if (worker === null || worker.status !== "ended" || worker.workspace !== "worktree" || worker.worktree_path === null) return false;
+    if (
+      worker === null ||
+      worker.status !== "ended" ||
+      worker.workspace !== "worktree" ||
+      worker.worktree_path === null ||
+      worker.worktree_path === ""
+    ) {
+      return false;
+    }
     const sharing = db.all<WorkerDbRow>("SELECT * FROM workers WHERE worktree_path = ?", worker.worktree_path);
-    if (sharing.some((w) => w.status !== "ended" || isWorkerInFlight(w))) return false;
+    if (
+      sharing.some((w) => {
+        if (w.status !== "ended" || isWorkerInFlight(w)) return true;
+        const s = currentSession(w.worker_conversation_id);
+        return s !== null && (s.pid !== null || liveOf(s.id).activity === "stopping");
+      })
+    ) {
+      return false;
+    }
     return !inActiveGraph(sharing.map((w) => w.id));
   };
 

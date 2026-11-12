@@ -60,6 +60,12 @@ function keepHead(text: string, max: number): string {
 }
 
 const charLength = (text: string) => [...text].length;
+const REPORT_SEP = "\n\n---\n\n";
+const REPORT_SEP_CHARS = charLength(REPORT_SEP);
+const TAIL_SEP = "\n\n";
+const TAIL_SEP_CHARS = charLength(TAIL_SEP);
+const REASON_SUMMARY_MAX_CHARS = 300;
+const oneLineSummary = (text: string): string => keepHead(text.replace(/\s+/g, " ").trim(), REASON_SUMMARY_MAX_CHARS);
 
 const STATUS_LABELS: Readonly<Record<string, string>> = { ...WORKER_REPORT_STATUS_LABELS, unformatted: UNFORMATTED_LABEL };
 
@@ -84,13 +90,14 @@ export function createLedgerTakeover(ctx: Pick<LedgerContext, "db" | "now">, ste
   /** 为什么停：最后一行汇报 / 没做完 / 建 worktree 失败，加上收工的情况。 */
   const reasonOf = (p: TakeoverPredecessor): string => {
     const last = outcomeLines(p.worker, ["report", "turn_failed", "worktree_failed"], 1)[0];
+    const summary = last?.summary ? oneLineSummary(last.summary) : null;
     let why: string;
     if (last === undefined) why = "它还没交过汇报";
-    else if (last.event === "turn_failed") why = `最后一轮没做完：${last.summary ?? "没有给出原因"}`;
-    else if (last.event === "worktree_failed") why = `建 worktree 失败：${last.summary ?? "没有给出原因"}`;
+    else if (last.event === "turn_failed") why = `最后一轮没做完：${summary ?? "没有给出原因"}`;
+    else if (last.event === "worktree_failed") why = `建 worktree 失败：${summary ?? "没有给出原因"}`;
     else {
       const label = STATUS_LABELS[last.status ?? ""] ?? (last.status as WorkerReportStatus | null) ?? UNFORMATTED_LABEL;
-      why = `最后一轮汇报“${label}”${last.summary ? `：${last.summary}` : ""}`;
+      why = `最后一轮汇报“${label}”${summary ? `：${summary}` : ""}`;
     }
     return `${why}。${p.endedNote}`;
   };
@@ -103,17 +110,20 @@ export function createLedgerTakeover(ctx: Pick<LedgerContext, "db" | "now">, ste
     const parts: string[] = [];
     let skipped = 0;
     for (const row of rows) {
-      if (budget.left <= 0) {
+      const sepCost = parts.length === 0 ? 0 : REPORT_SEP_CHARS;
+      if (budget.left <= sepCost) {
         skipped++;
         continue;
       }
       const body = (row.text.startsWith(header) ? row.text.slice(header.length) : row.text).trim();
-      const shown = keepHead(body, budget.left);
-      budget.left -= charLength(shown);
+      const shown = keepHead(body, budget.left - sepCost);
+      budget.left -= sepCost + charLength(shown);
       parts.push(shown);
     }
-    if (skipped > 0) parts.push(`（更早的 ${skipped} 份汇报放不下了，没带上；要看去翻原始记录）`);
-    return parts.join("\n\n---\n\n");
+    const joined = parts.join(REPORT_SEP);
+    if (skipped === 0) return joined;
+    const omittedNote = `（更早的 ${skipped} 份汇报放不下了，没带上；要看去翻原始记录）`;
+    return joined === "" ? omittedNote : `${joined}${REPORT_SEP}${omittedNote}`;
   };
 
   /** 最后一行汇报之后它写的文字（还没来得及汇报的），从旧到新，留最后 budget 个字。 */
@@ -129,14 +139,15 @@ export function createLedgerTakeover(ctx: Pick<LedgerContext, "db" | "now">, ste
     );
     const kept: string[] = [];
     for (const row of rows) {
-      if (budget.left <= 0) break;
       const text = row.text.trim();
       if (text === "") continue;
-      const shown = keepTail(text, budget.left);
-      budget.left -= charLength(shown);
+      const sepCost = kept.length === 0 ? 0 : TAIL_SEP_CHARS;
+      if (budget.left <= sepCost) break;
+      const shown = keepTail(text, budget.left - sepCost);
+      budget.left -= sepCost + charLength(shown);
       kept.unshift(shown);
     }
-    return kept.length === 0 ? "（最后一份汇报之后它没再写什么）" : kept.join("\n\n");
+    return kept.length === 0 ? "（最后一份汇报之后它没再写什么）" : kept.join(TAIL_SEP);
   };
 
   /** 最后 TAKEOVER_STEPS_MAX 步操作，hub worker log 的写法（从旧到新）。 */

@@ -15,11 +15,13 @@ import type { HubArgs, HubCommand } from "../../shared/hub.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
 import type { HubCallContext, WorkspaceProbe } from "../../shared/ledger.ts";
 import {
+  DEFAULT_WORKER_MAX_TIME_MS,
   TAKEOVER_PREDECESSORS_MAX,
   TAKEOVER_REPORTS_MAX_CHARS,
   TAKEOVER_STEPS_MAX,
   TAKEOVER_TAIL_TEXT_MAX_CHARS,
   WORKER_RETENTION_MS,
+  WORKTREE_RETENTION_MS,
 } from "../../shared/limits.ts";
 import { workerWorktreePath } from "../../shared/paths.ts";
 import { REPORT_END, REPORT_START } from "../../shared/worker.ts";
@@ -210,8 +212,39 @@ describe("换人接手同一步：重放 441", () => {
 
     // 旧会话还没结束（进程在）：新 Worker 的第一条先等；旧会话结束后才发
     expect(ledger.waitsForFirstTurn(w2Session, firstMessage(w2).id)).toBe(true);
+    // 哪怕旧会话当时 pid 还是 NULL（例如正在 #spawn 启动前半段、session.end 还没把 status 标成 ended），也绝不提前放行双写
+    db.run("UPDATE agent_sessions SET pid = NULL, status = 'idle' WHERE id = ?", sessionIdOf(w1.id));
+    expect(ledger.waitsForFirstTurn(w2Session, firstMessage(w2).id)).toBe(true);
+    // 反过来：归档等路径先把 status 标成了 ended，但旧进程 pid 还没退完，同样要等
+    db.run("UPDATE agent_sessions SET pid = 4242, status = 'ended' WHERE id = ?", sessionIdOf(w1.id));
+    expect(ledger.waitsForFirstTurn(w2Session, firstMessage(w2).id)).toBe(true);
     db.run("UPDATE agent_sessions SET status = 'ended', pid = NULL WHERE id = ?", sessionIdOf(w1.id));
     expect(ledger.waitsForFirstTurn(w2Session, firstMessage(w2).id)).toBe(false);
+  });
+
+  it("前任还在跑准备命令（base_commit 还是 null）就换人：不复用未就绪目录，新开独立 worktree，旧人收工；经 graph done 放行后再打回重派也会把仍 open 的前任自动收工", () => {
+    const graph = createGraph();
+    const wPrep = start({ title: "准备阶段", task: "原始任务 P", node: "s1" });
+    mkdirSync(wPrep.worktreePath!, { recursive: true });
+    // base_commit 尚未登记（setup 仍在跑）
+    const wNext = hub("worker.start", { node: "s1" }, { workspace: repoProbe }).data.worker;
+    expect(workerRow(wPrep.id).status).toBe("ended");
+    expect(wNext.worktreePath).toBe(workerWorktreePath(worktreesDir, projectId, wNext.id));
+    expect(wNext.worktreePath).not.toBe(wPrep.worktreePath);
+
+    // wNext 建成目录后汇报“有问题”，PM 先用 graph.done 放行（清空了 active_worker_id，但 wNext 自身仍 open），再重派 w3
+    worktreeReady(wNext);
+    turn(wNext, firstMessage(wNext).id, ["pnpm lint"], report("有问题", "卡在一半"), "ok");
+    hub("graph.done", { nodeKey: "s1", graphId: graph.id });
+    expect(nodeOf(graph.id, "s1")).toMatchObject({ status: "done", activeWorkerId: null });
+    expect(workerRow(wNext.id).status).toBe("open");
+
+    const w3 = hub("worker.start", { node: "s1" }, { workspace: repoProbe }).data.worker;
+    // 仍 open 的前任 wNext 已被自动收工，等其 session 结束后 w3 即可顺利开工，不会永久卡在 waitsForFirstTurn
+    expect(workerRow(wNext.id).status).toBe("ended");
+    expect(w3.worktreePath).toBe(wNext.worktreePath);
+    db.run("UPDATE agent_sessions SET status = 'ended', pid = NULL WHERE id = ?", sessionIdOf(wNext.id));
+    expect(ledger.waitsForFirstTurn(sessionIdOf(w3.id), firstMessage(w3).id)).toBe(false);
   });
 
   it("前任还在跑这一轮：直接 --node 换人会先打断并收工它；正文是项目经理的补充，任务说明 = 原始任务 + 补充", () => {
@@ -287,6 +320,46 @@ describe("换人接手同一步：重放 441", () => {
     // 整条消息有上限（各项上限加起来），不会随前任数量和汇报长度无限变长
     expect([...first].length).toBeLessThan(TAKEOVER_REPORTS_MAX_CHARS + TAKEOVER_TAIL_TEXT_MAX_CHARS + TAKEOVER_PREDECESSORS_MAX * TAKEOVER_STEPS_MAX * 140 + 3_000);
   });
+
+  it("单前任多份汇报与多段未汇报文字：连同段落分隔符在内总码点数严格不超过 8000 / 6000，多行失败原因收敛为单行", () => {
+    createGraph();
+    const w = start({ title: "多轮", task: "原始任务", node: "s1" });
+    worktreeReady(w);
+    for (let r = 0; r < 6; r++) {
+      const msgId = r === 0 ? firstMessage(w).id : hub("worker.send", { workerId: w.id, text: `第 ${r} 次继续` }).data.messageId;
+      turn(w, msgId, [], report("有问题", `第 ${r} 轮`, "报".repeat(2_000)), "ok");
+    }
+    const lastMsg = hub("worker.send", { workerId: w.id, text: "最后一次" }).data.messageId;
+    const sid = sessionIdOf(w.id);
+    ledger.applyDriverEvent(sid, { type: "message.delivered", messageIds: [lastMsg], at: now });
+    ledger.applyDriverEvent(sid, { type: "message.processing", messageIds: [lastMsg], at: now });
+    for (let p = 0; p < 10; p++) {
+      ledger.applyDriverEvent(sid, { type: "agent.text", uuid: `multi-tail-${p}`, text: "段".repeat(1_000), at: now });
+    }
+    ledger.applyDriverEvent(sid, {
+      type: "turn.ended",
+      ok: false,
+      interrupted: false,
+      messageIds: [lastMsg],
+      durationMs: 10,
+      at: now,
+      error: { subtype: "error_during_execution", message: `第一行报错\n第二行堆栈\n${"错".repeat(800)}` },
+    });
+
+    const next = hub("worker.start", { node: "s1" }, { workspace: repoProbe }).data.worker;
+    const first = firstMessage(next).text;
+    const reasonSec = first.split("## 它的汇报（从新到旧）")[0]!.split("停下的原因\n\n")[1]!.trim();
+    expect(reasonSec.includes("\n")).toBe(false);
+
+    const reportsSec = first
+      .split("## 它的汇报（从新到旧）\n\n")[1]!
+      .split("\n\n## 它最后说的话\n\n")[0]!
+      .replace(/\n\n---\n\n（更早的 \d+ 份汇报放不下了.*$/, "");
+    expect([...reportsSec].length).toBeLessThanOrEqual(TAKEOVER_REPORTS_MAX_CHARS);
+
+    const tailSec = first.split("## 它最后说的话\n\n")[1]!.split("\n\n## 它最后 ")[0]!;
+    expect([...tailSec].length).toBeLessThanOrEqual(TAKEOVER_TAIL_TEXT_MAX_CHARS);
+  });
 });
 
 describe("清理保护：同一个目录后任还在用、或所属任务图还 active", () => {
@@ -338,6 +411,36 @@ describe("清理保护：同一个目录后任还在用、或所属任务图还 
     db.run("UPDATE workers SET worktree_path = ? WHERE id = ?", w1.worktreePath, w2.id);
     expect(ledger.isWorkerCleanable(w1.id)).toBe(false);
     expect(existsSync(w1.worktreePath!)).toBe(true);
+  });
+
+  it("共享目录的 3 天到期按最后一个用它的 Worker 算（前任 4 天前收工、后任刚收工时不提前误判到期），退出中的 pid 也挡住清理", () => {
+    const graph = createGraph();
+    const w1 = start({ title: "实现", task: "原始任务", node: "s1" });
+    worktreeReady(w1);
+    turn(w1, firstMessage(w1).id, ["pnpm test"], report("有问题", "卡住"), "ok");
+    const w1EndedAt = now;
+    hub("worker.end", { workerId: w1.id, incomplete: true });
+    db.run("UPDATE agent_sessions SET status = 'ended', pid = NULL WHERE worker_id = ?", w1.id);
+
+    // 4 天后后任 w2 接手并在同一天收工，图取消结束
+    now += WORKTREE_RETENTION_MS + 86_400_000;
+    const w2 = hub("worker.start", { node: "s1" }, { workspace: repoProbe }).data.worker;
+    const w2EndedAt = now + 60_000;
+    now = w2EndedAt;
+    hub("worker.end", { workerId: w2.id, incomplete: true });
+    hub("graph.cancel", { graphId: graph.id });
+
+    // 后任进程 pid 还没退完时不可清理
+    db.run("UPDATE agent_sessions SET status = 'idle', pid = 9999 WHERE worker_id = ?", w2.id);
+    expect(ledger.isWorkerCleanable(w1.id)).toBe(false);
+    db.run("UPDATE agent_sessions SET status = 'ended', pid = NULL WHERE worker_id = ?", w2.id);
+    expect(ledger.isWorkerCleanable(w1.id)).toBe(true);
+
+    // 候选按目录去重，且 endedAt 是后任 w2 的收工时刻（不是 4 天前 w1 的时刻）
+    const candidates = ledger.listEndedWorktreeWorkers();
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]!.endedAt).toBe(w2EndedAt);
+    expect(candidates[0]!.endedAt).toBeGreaterThan(w1EndedAt + WORKTREE_RETENTION_MS);
   });
 });
 
@@ -417,5 +520,41 @@ describe("单轮超时计时落盘：守护进程重启后照常提醒", () => {
     expect(timeoutRow(w.id)).toBeUndefined();
     advance(60 * 60_000);
     expect(wakes()).toEqual([]);
+  });
+
+  it("已超时提醒过的一轮在等后台命令时重启，或自发轮异常退出：残留计时行被清掉，用户直接发下一轮消息时照常重新计时并提醒", () => {
+    const w = start({ title: "修后台", task: "修", noWorktree: true, maxTimeMs: 10 * 60_000 });
+    const sid = sessionIdOf(w.id);
+    const firstId = firstMessage(w).id;
+    ledger.applyDriverEvent(sid, { type: "message.delivered", messageIds: [firstId], at: now });
+    ledger.applyDriverEvent(sid, { type: "message.processing", messageIds: [firstId], at: now });
+    // 本轮先触发了一次超时提醒（notified = 1）
+    advance(10 * 60_000);
+    expect(wakes()).toHaveLength(1);
+    expect(timeoutRow(w.id)?.notified).toBe(1);
+
+    // 随后进入等后台命令（awaitingBackground），期间守护进程重启：recoverBackgroundWaits 结算本轮且清空计时死行
+    ledger.applyDriverEvent(sid, { type: "background.changed", count: 1, at: now });
+    ledger.applyDriverEvent(sid, { type: "agent.text", uuid: "bg-1", text: "放后台了", at: now });
+    ledger.applyDriverEvent(sid, { type: "turn.ended", ok: true, interrupted: false, messageIds: [firstId], durationMs: 10, at: now });
+    expect(timeoutRow(w.id)?.notified).toBe(1);
+    restart();
+    expect(timeoutRow(w.id)).toBeUndefined();
+
+    // 用户直接在网页发下一轮消息（靠 ensureTurnMaxTime 兜底挂默认计时）：不会因残留 notified=1 而漏挂计时
+    const { messageId: userMsgId } = ledger.postUserMessage({ conversationId: w.workerConversationId, clientId: "c-1", text: "继续查" });
+    ledger.applyDriverEvent(sid, { type: "message.delivered", messageIds: [userMsgId], at: now });
+    ledger.applyDriverEvent(sid, { type: "message.processing", messageIds: [userMsgId], at: now });
+    expect(timeoutRow(w.id)).toEqual({ max_time_ms: DEFAULT_WORKER_MAX_TIME_MS, deadline_at: now + DEFAULT_WORKER_MAX_TIME_MS, notified: 0 });
+    advance(DEFAULT_WORKER_MAX_TIME_MS);
+    expect(wakes()).toHaveLength(2);
+    ledger.applyDriverEvent(sid, { type: "turn.ended", ok: false, interrupted: true, messageIds: [userMsgId], durationMs: 1, at: now });
+    expect(timeoutRow(w.id)).toBeUndefined();
+
+    // 自发轮（turn.started）中途进程异常退出（session.exited 无在途消息）：同样清掉计时无死行
+    ledger.applyDriverEvent(sid, { type: "turn.started", at: now });
+    expect(timeoutRow(w.id)).toBeDefined();
+    ledger.applyDriverEvent(sid, { type: "session.exited", reason: "crash", exitCode: 1, signal: null, hadResult: false, messageIds: [], at: now });
+    expect(timeoutRow(w.id)).toBeUndefined();
   });
 });
