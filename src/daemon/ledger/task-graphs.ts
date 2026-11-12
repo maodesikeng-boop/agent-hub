@@ -1737,7 +1737,8 @@ export function createLedgerTaskGraphs(
       );
       const unlocked = recomputeGraphProgressIn(p, graphRow);
       const after = loadGraph(graphRow.id);
-      note = `它绑定的${where}已标记为 done（它最近一轮汇报是“做完了”）${after === null ? "" : unlockedNoteOf(unlocked, after)}。`;
+      const tail = after === null ? "" : unlockedNoteOf(unlocked, after);
+      note = `它绑定的${where}已标记为 done（它最近一轮汇报是“做完了”）${tail}${tail.endsWith("！") ? "" : "。"}`;
     } else {
       db.run(
         `UPDATE task_graph_nodes

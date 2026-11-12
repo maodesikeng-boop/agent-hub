@@ -1060,7 +1060,7 @@ describe("性格设定、模式改了的说明（不重启，驱动层加在下�
         // graph create / patch 旁直接给出一行 JSON 字段契约（patch 的示例里有 skipNodes）
         expect(fullPrompt).toContain(TASK_GRAPH_CREATE_JSON_HINT);
         expect(fullPrompt).toContain(TASK_GRAPH_PATCH_JSON_HINT);
-        expect(TASK_GRAPH_PATCH_JSON_HINT).toContain('"skipNodes":["qa"]');
+        expect(TASK_GRAPH_PATCH_JSON_HINT).toContain('"skipNodes":["polish"]');
         expect(HUB_USAGE).toContain(TASK_GRAPH_PATCH_JSON_HINT);
 
         // 2. 拍板：用户明说要先看的挂 gate 并 hub graph ask；撞上的用 hub ask；不只在回复里口头问

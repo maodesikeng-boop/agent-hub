@@ -368,7 +368,7 @@ export const TASK_GRAPH_CREATE_JSON_HINT =
 
 /** `hub graph patch` 正文 JSON 一行字段示例（提示词与 `hub help` 共用，只此一份；六个字段按需取用；updateNodes 的 deps 整体替换该节点前置依赖；skipNodes 跳过还没开工的节点）。 */
 export const TASK_GRAPH_PATCH_JSON_HINT =
-  '{"addNodes":[{"key":"qa","title":"…","deps":["ok"]}],"updateNodes":[{"key":"ok","title":"…"}],"removeNodes":["old"],"skipNodes":["qa"],"addEdges":[{"from":"plan","to":"qa"}],"removeEdges":[{"from":"a","to":"b"}]}';
+  '{"addNodes":[{"key":"qa","title":"…","deps":["ok"]}],"updateNodes":[{"key":"ok","title":"…"}],"removeNodes":["old"],"skipNodes":["polish"],"addEdges":[{"from":"plan","to":"qa"}],"removeEdges":[{"from":"a","to":"b"}]}';
 
 export type HubArgs<C extends HubCommand> = HubArgsMap[C];
 
