@@ -874,6 +874,8 @@ describe("审查回归（PR #274）：几何边界、编号不混用、防重入
 describe("果皮轨按真实连通关系排布：独立子图不假连、多起点合流无断头线", () => {
   const GUTTER_H = 32;
   const GUTTER_CY = 16;
+  const GATE_TOP_Y = GUTTER_CY - 9;
+  const GATE_BOT_Y = GUTTER_CY + 11;
 
   /** 解析果皮轨槽里每段轨道两端的坐标（M…V… 直线或 M…C… 弧线）。 */
   function pathEnds(d: string): Array<[number, number]> {
@@ -883,11 +885,27 @@ describe("果皮轨按真实连通关系排布：独立子图不假连、多起�
     return [start, [nums.at(-2)!, nums.at(-1)!]];
   }
 
-  /** 一行轨道槽的上口、下口（线段触到行顶 / 行底的 x）与悬空端点（既不在行边也不在圆点上）。 */
+  /** 一行轨道槽的上口、下口（线段触到行顶 / 行底的 x）与悬空端点（既不在行边也不在圆点/刀口上）。 */
   function gutterPorts(svg: Element) {
     const kind = svg.getAttribute("data-peel-gutter")!;
-    if (kind === "coil") return { kind, top: [] as number[], bottom: [11], loose: [] as string[] };
+    const dotAttr = svg.getAttribute("data-dot-x");
+    const dotX = dotAttr !== null ? Number(dotAttr) : null;
+    if (kind === "coil") {
+      const coilX = dotX ?? 11;
+      const bottom = [...svg.querySelectorAll("path")]
+        .flatMap((p) => (p.getAttribute("d") === null || p.getAttribute("stroke-linejoin") === "round" ? [] : pathEnds(p.getAttribute("d")!)))
+        .filter(([, y]) => y === GUTTER_H)
+        .map(([x]) => x);
+      return {
+        kind,
+        dotX: coilX,
+        top: [] as number[],
+        bottom: bottom.length > 0 ? [...new Set([coilX, ...bottom])].toSorted((a, b) => a - b) : [coilX],
+        loose: [] as string[],
+      };
+    }
     const dots = [...svg.querySelectorAll("circle")].map((c) => Number(c.getAttribute("cx")));
+    if (dotX !== null && !dots.includes(dotX)) dots.push(dotX);
     const top = new Set<number>();
     const bottom = new Set<number>();
     const loose: string[] = [];
@@ -895,10 +913,17 @@ describe("果皮轨按真实连通关系排布：独立子图不假连、多起�
       for (const [x, y] of pathEnds(p.getAttribute("d")!)) {
         if (y === 0) top.add(x);
         else if (y === GUTTER_H) bottom.add(x);
+        else if (kind === "gate" && dotX !== null && x === dotX && (y === GATE_TOP_Y || y === GATE_BOT_Y)) continue;
         else if (!(y === GUTTER_CY && dots.includes(x))) loose.push(`${x},${y}`);
       }
     }
-    return { kind, top: [...top].toSorted(), bottom: [...bottom].toSorted(), loose };
+    return {
+      kind,
+      dotX: dots[0] ?? null,
+      top: [...top].toSorted((a, b) => a - b),
+      bottom: [...bottom].toSorted((a, b) => a - b),
+      loose,
+    };
   }
 
   /** 子图内上下相邻两行的轨道口逐一对上，首行无进入线、末行无伸出线，任何线段都不悬空。 */
@@ -912,6 +937,116 @@ describe("果皮轨按真实连通关系排布：独立子图不假连、多起�
       if (i > 0) expect(row.top, `第 ${i} 行与第 ${i + 1} 行的轨道没接上`).toEqual(rows[i - 1]!.bottom);
     });
     return rows;
+  }
+
+  /**
+   * 严格验证紧凑果皮轨的 SVG 有向可达性与真实任务图 DAG 完全一致：
+   * 任何两条可见节点 (u, v) 之间，沿着渲染出的竖向/贝塞尔轨道自上而下能走通 ⇔ 真实图里存在有向路径 u ->+ v。
+   */
+  function expectExactSvgDependencies(component: Element, graph: Pick<TaskGraph, "nodes" | "edges">) {
+    const stageEls = [...component.querySelectorAll("[data-node-key]")];
+    const adjSvg = new Map<string, Set<string>>();
+    const addDir = (from: string, to: string) => {
+      let set = adjSvg.get(from);
+      if (!set) {
+        set = new Set();
+        adjSvg.set(from, set);
+      }
+      set.add(to);
+    };
+    const pt = (row: number, x: number, y: number) => `${row}:${x}:${y}`;
+
+    const rowBottoms: number[][] = [];
+    const nodeAnchor = new Map<string, string>();
+
+    stageEls.forEach((rowEl, rowIdx) => {
+      const nodeKey = rowEl.getAttribute("data-node-key")!;
+      const svg = rowEl.querySelector("svg[data-peel-gutter]")!;
+      const kind = svg.getAttribute("data-peel-gutter")!;
+      const dotAttr = svg.getAttribute("data-dot-x");
+      const circleCx = svg.querySelector("circle")?.getAttribute("cx");
+      const dotX = dotAttr !== null ? Number(dotAttr) : circleCx !== null && circleCx !== undefined ? Number(circleCx) : 11;
+      nodeAnchor.set(nodeKey, pt(rowIdx, dotX, GUTTER_CY));
+
+      const bottom = new Set<number>();
+      for (const p of svg.querySelectorAll("path")) {
+        const d = p.getAttribute("d")!;
+        if (kind === "coil" && p.getAttribute("stroke-linejoin") === "round") continue;
+        const [[x1, y1], [x2, y2]] = pathEnds(d) as [[number, number], [number, number]];
+        const [sx, sy, ex, ey] = y1 <= y2 ? [x1, y1, x2, y2] : [x2, y2, x1, y1];
+        addDir(pt(rowIdx, sx, sy), pt(rowIdx, ex, ey));
+        if (ey === GUTTER_H) bottom.add(ex);
+      }
+
+      if (kind === "gate") {
+        addDir(pt(rowIdx, dotX, GATE_TOP_Y), pt(rowIdx, dotX, GUTTER_CY));
+        addDir(pt(rowIdx, dotX, GUTTER_CY), pt(rowIdx, dotX, GATE_BOT_Y));
+        if (rowIdx < stageEls.length - 1 && bottom.size > 0) {
+          const extSvg = rowEl.querySelector("svg[data-peel-gate-ext]") as HTMLElement | null;
+          expect(extSvg).not.toBeNull();
+          expect(extSvg!.style.height).toBe("calc(100% - 2rem)");
+          const extLines = extSvg!.querySelectorAll("line");
+          expect(extLines).toHaveLength(bottom.size);
+        }
+      }
+      rowBottoms.push([...bottom].toSorted((a, b) => a - b));
+    });
+
+    for (let i = 0; i < stageEls.length - 1; i++) {
+      for (const x of rowBottoms[i]!) {
+        addDir(pt(i, x, GUTTER_H), pt(i + 1, x, 0));
+      }
+    }
+
+    const svgCanReach = (fromAnchor: string, toAnchor: string): boolean => {
+      const seen = new Set<string>([fromAnchor]);
+      const queue = [fromAnchor];
+      while (queue.length > 0) {
+        const cur = queue.shift()!;
+        for (const nxt of adjSvg.get(cur) ?? []) {
+          if (nxt === toAnchor) return true;
+          if (!seen.has(nxt)) {
+            seen.add(nxt);
+            queue.push(nxt);
+          }
+        }
+      }
+      return false;
+    };
+
+    const dagAdj = new Map<string, string[]>();
+    for (const n of graph.nodes) dagAdj.set(n.key, []);
+    for (const e of graph.edges) {
+      if (e.fromKey !== e.toKey && dagAdj.has(e.fromKey) && dagAdj.has(e.toKey)) {
+        dagAdj.get(e.fromKey)!.push(e.toKey);
+      }
+    }
+    const dagCanReach = (u: string, v: string): boolean => {
+      const seen = new Set<string>([u]);
+      const queue = [u];
+      while (queue.length > 0) {
+        const cur = queue.shift()!;
+        for (const nxt of dagAdj.get(cur) ?? []) {
+          if (nxt === v) return true;
+          if (!seen.has(nxt)) {
+            seen.add(nxt);
+            queue.push(nxt);
+          }
+        }
+      }
+      return false;
+    };
+
+    const renderedKeys = stageEls.map((el) => el.getAttribute("data-node-key")!);
+    for (const u of renderedKeys) {
+      for (const v of renderedKeys) {
+        if (u === v) continue;
+        expect(svgCanReach(nodeAnchor.get(u)!, nodeAnchor.get(v)!), `SVG 连线可达性与真实依赖不符: ${u} -> ${v}`).toBe(
+          dagCanReach(u, v),
+        );
+      }
+    }
+    return renderedKeys;
   }
 
   function renderRail(graph: TaskGraph, workers: WorkerEntry[] = []) {
@@ -964,8 +1099,10 @@ describe("果皮轨按真实连通关系排布：独立子图不假连、多起�
       expect.stringMatching(/^手机软键盘避让与新建弹窗适配#432抽离共用设置模型层与原语#433手机二级钻取设置页与验收$/),
     ]);
 
-    const kinds = components.map((c) => expectClosedTrack(c).map((r) => r.kind));
-    expect(kinds).toEqual([["station"], ["station", "station", "station"], ["parA", "parB", "station"]]);
+    for (const c of components) {
+      expectClosedTrack(c);
+      expectExactSvgDependencies(c, graph);
+    }
     // 独立单步只有一颗圆点，上下都不连线
     expect(components[0]!.querySelectorAll("path")).toHaveLength(0);
 
@@ -974,7 +1111,7 @@ describe("果皮轨按真实连通关系排布：独立子图不假连、多起�
     expect(wheel.querySelectorAll("[data-cut-joined='true']")).toHaveLength(1);
   });
 
-  it.each([2, 3])("首层 %i 个无上游并行起点合流到同一下游：右轨逐行接上、无断头悬空线", (roots) => {
+  it.each([2, 3])("首层 %i 个无上游并行起点合流到同一下游：分道并行、无断头悬空线、无假串联", (roots) => {
     const nodes = [
       ...Array.from({ length: roots }, (_, i) =>
         makeNode({ key: `r${i}`, title: `起点 ${i}`, status: "running", sortOrder: i }),
@@ -982,55 +1119,156 @@ describe("果皮轨按真实连通关系排布：独立子图不假连、多起�
       makeNode({ key: "join", title: "合流验收", status: "pending", sortOrder: roots }),
     ];
     const edges = nodes.slice(0, roots).map((n) => ({ fromKey: n.key, toKey: "join" }));
-    const graphGroup = renderRail(makeGraph({ id: 500 + roots, title: "多起点合流", nodes, edges }));
+    const graph = makeGraph({ id: 500 + roots, title: "多起点合流", nodes, edges });
+    const graphGroup = renderRail(graph);
 
     const components = graphGroup.querySelectorAll("[data-peel-component]");
     expect(components).toHaveLength(1);
     const rows = expectClosedTrack(components[0]!);
-    expect(rows.map((r) => r.kind)).toEqual(
-      roots === 2 ? ["parA", "parB", "station"] : ["parA", "parMid", "parB", "station"],
-    );
-    // 没有共同上游：首行不画分叉弧线，第二个起点的右轨上方也没有进入线
+    expectExactSvgDependencies(components[0]!, graph);
+    // 没有共同上游：首行上方无进入线，每个无上游起点各自占据独立平行泳道，汇合行上方接收全部起点的泳道
     expect(rows[0]!.top).toEqual([]);
-    expect(rows[1]!.top).toEqual([11]);
-    // 每个起点都合流进主轨，最后一行从右轨弯回主轨接上下游
-    expect(rows[roots - 1]!.bottom).toEqual([11]);
+    const rootLanes = rows.slice(0, roots).map((r) => r.dotX);
+    expect(new Set(rootLanes).size).toBe(roots);
+    expect(rows[roots]!.top).toHaveLength(roots);
   });
 
   it.each([
-    [
-      "标准分叉合流菱形",
-      [["a", "b"], ["a", "c"], ["b", "d"], ["c", "d"]],
-      ["station", "parA", "parB", "station"],
-      true,
-    ],
-    ["分叉后两股都收尾（无下游）", [["a", "b"], ["a", "c"]], ["station", "parA", "parB"], false],
-    ["分叉后右股收尾、左股接下游", [["a", "b"], ["a", "c"], ["b", "d"]], ["station", "parA", "parB", "station"], false],
-    ["分叉后左股收尾、右股接下游", [["a", "b"], ["a", "c"], ["c", "d"]], ["station", "parA", "parB", "station"], true],
-    [
-      "一分三股再合流",
-      [["a", "b"], ["a", "c"], ["a", "e"], ["b", "d"], ["c", "d"], ["e", "d"]],
-      ["station", "parA", "parMid", "parB", "station"],
-      true,
-    ],
-  ] as const)("单连通子图：%s 照常分轨，轨道逐行接上不悬空", (_name, pairs, expectedKinds, parLaneMerges) => {
+    ["标准分叉合流菱形", [["a", "b"], ["a", "c"], ["b", "d"], ["c", "d"]]],
+    ["分叉后两股都收尾（无下游）", [["a", "b"], ["a", "c"]]],
+    ["分叉后右股收尾、左股接下游", [["a", "b"], ["a", "c"], ["b", "d"]]],
+    ["分叉后左股收尾、右股接下游", [["a", "b"], ["a", "c"], ["c", "d"]]],
+    ["一分三股再合流", [["a", "b"], ["a", "c"], ["a", "e"], ["b", "d"], ["c", "d"], ["e", "d"]]],
+  ] as const)("单连通子图：%s 严格按真实依赖分轨合流，无假连线、无悬空线", (_name, pairs) => {
     const keys = [...new Set(pairs.flat())].toSorted();
     const nodes = keys.map((key, i) =>
       makeNode({ key, title: `阶段 ${key}`, status: key === "a" ? "done" : key === "d" ? "pending" : "running", sortOrder: i }),
     );
     const edges = pairs.map(([fromKey, toKey]) => ({ fromKey, toKey }));
-    const graphGroup = renderRail(makeGraph({ id: 600, title: "单连通", nodes, edges }));
+    const graph = makeGraph({ id: 600, title: "单连通", nodes, edges });
+    const graphGroup = renderRail(graph);
 
     const components = graphGroup.querySelectorAll("[data-peel-component]");
     expect(components).toHaveLength(1);
-    const rows = expectClosedTrack(components[0]!);
-    expect(rows.map((r) => r.kind)).toEqual(expectedKinds);
-    // 有共同上游：首个并行行从主轨顶部弧线分出右轨
-    const parA = components[0]!.querySelector("[data-peel-gutter='parA']")!;
-    expect([...parA.querySelectorAll("path")].some((p) => p.getAttribute("d")!.startsWith("M11 0C"))).toBe(true);
-    // 右轨上的阶段都收尾（出度 0）时，不画弯回主轨的假合流弧线
-    const parB = components[0]!.querySelector("[data-peel-gutter='parB']")!;
-    const parBMerges = [...parB.querySelectorAll("path")].some((p) => p.getAttribute("d")!.startsWith("M29 16C"));
-    expect(parBMerges).toBe(parLaneMerges);
+    expectClosedTrack(components[0]!);
+    expectExactSvgDependencies(components[0]!, graph);
+  });
+
+  it("任务图 #6 真实形状：两条多步并行链在汇合前各自连续排布并分道并行，任何连线都对应真实依赖（含 waiting_user 门禁）", async () => {
+    const user = userEvent.setup();
+    const graph = makeGraph({
+      id: 6,
+      title: "编排简化与验证流水线",
+      nodes: [
+        makeNode({ key: "s1", title: "第 1 步", status: "running", sortOrder: 0, activeWorkerId: 461, workerIds: [461] }),
+        makeNode({ key: "eval-plan", title: "验证方案", status: "done", sortOrder: 1, workerIds: [459] }),
+        makeNode({ key: "s1-review", title: "第 1 步审查", status: "pending", sortOrder: 2 }),
+        makeNode({
+          key: "eval-approve",
+          title: "用户拍板验证方案",
+          kind: "gate",
+          status: "waiting_user",
+          sortOrder: 3,
+          gateQuestion: "验证基准集与打分口径是否按此落地？",
+          gateOptions: ["按 12 个真实场景建基准集", "仅跑核心 6 个场景"],
+          gateRecommended: "按 12 个真实场景建基准集",
+        }),
+        makeNode({ key: "eval-build", title: "搭验证工具", status: "pending", sortOrder: 4 }),
+        makeNode({ key: "s2", title: "第 2 步", status: "pending", sortOrder: 5 }),
+      ],
+      edges: [
+        { fromKey: "s1", toKey: "s1-review" },
+        { fromKey: "eval-plan", toKey: "eval-approve" },
+        { fromKey: "eval-approve", toKey: "eval-build" },
+        { fromKey: "s1", toKey: "s2" },
+        { fromKey: "s1-review", toKey: "s2" },
+        { fromKey: "eval-build", toKey: "s2" },
+      ],
+    });
+    const workers = [
+      makeWorker(561, { workerId: 461 }),
+      makeWorker(559, { workerId: 459, ended: true, activity: "idle" }),
+    ];
+    const graphGroup = renderRail(graph, workers);
+    const component = graphGroup.querySelector("[data-peel-component]")!;
+
+    // 默认折叠尾部 2 next 时，轨道同样完全闭合，且已完成「验证方案」到门禁刀口为实线果皮轨
+    expectClosedTrack(component);
+    const gateRow = component.querySelector("[data-node-key='eval-approve']")!;
+    const gateSvg = gateRow.querySelector("svg[data-peel-gutter='gate']")!;
+    expect([...gateSvg.querySelectorAll("path")].some((p) => p.getAttribute("stroke") === "var(--peel)")).toBe(true);
+
+    // 展开 2 next 查看全部 6 个阶段：链 A（s1 -> s1-review）与链 B（eval-plan -> eval-approve -> eval-build）各自挨着排，最后在 s2 汇合
+    await user.click(within(graphGroup).getByRole("button", { name: /2 next/ }));
+    expectClosedTrack(component);
+    const orderedKeys = expectExactSvgDependencies(component, graph);
+    expect(orderedKeys).toEqual(["s1", "s1-review", "eval-plan", "eval-approve", "eval-build", "s2"]);
+  });
+
+  it("三路不等长并行链再汇总：分三道并行且多步子链连续排布，无假串联，轨槽自适应加宽仍走 rem", () => {
+    const graph = makeGraph({
+      id: 7,
+      title: "全端三路并行改造与验收",
+      nodes: [
+        makeNode({ key: "kickoff", title: "统一接口契约", status: "done", sortOrder: 0, workerIds: [401] }),
+        makeNode({ key: "mac", title: "macOS 守护进程", status: "done", sortOrder: 1, workerIds: [402] }),
+        makeNode({ key: "linux", title: "Linux 守护进程", status: "running", sortOrder: 2, activeWorkerId: 403, workerIds: [403] }),
+        makeNode({ key: "win", title: "Windows 桌面端", status: "running", sortOrder: 3, activeWorkerId: 404, workerIds: [404] }),
+        makeNode({ key: "mac-test", title: "macOS 沙箱验证", status: "running", sortOrder: 4, activeWorkerId: 405, workerIds: [405] }),
+        makeNode({ key: "join", title: "三端联调汇总验收", status: "pending", sortOrder: 5 }),
+      ],
+      edges: [
+        { fromKey: "kickoff", toKey: "mac" },
+        { fromKey: "mac", toKey: "mac-test" },
+        { fromKey: "kickoff", toKey: "linux" },
+        { fromKey: "kickoff", toKey: "win" },
+        { fromKey: "mac-test", toKey: "join" },
+        { fromKey: "linux", toKey: "join" },
+        { fromKey: "win", toKey: "join" },
+      ],
+    });
+    const graphGroup = renderRail(graph);
+    const component = graphGroup.querySelector("[data-peel-component]")!;
+
+    const rows = expectClosedTrack(component);
+    const orderedKeys = expectExactSvgDependencies(component, graph);
+    expect(orderedKeys).toEqual(["kickoff", "mac", "mac-test", "linux", "win", "join"]);
+    // join 汇合行上方同时接收 3 条独立泳道
+    expect(rows.at(-1)!.top).toHaveLength(3);
+    const firstSvg = component.querySelector("svg[data-peel-gutter]") as HTMLElement;
+    expect(firstSvg.style.width).toMatch(/rem$/);
+  });
+
+  it("N done 折叠边界守卫：链 A 已完成但链 B 仍在等待拍板时，只把链 A 卷成 2 done，不把链 B 的已完成起点吞进同一个果皮卷", () => {
+    const graph = makeGraph({
+      id: 606,
+      title: "单链先完不误吞旁链",
+      nodes: [
+        makeNode({ key: "s1", title: "第 1 步", status: "done", sortOrder: 0 }),
+        makeNode({ key: "eval-plan", title: "验证方案", status: "done", sortOrder: 1 }),
+        makeNode({ key: "s1-review", title: "第 1 步审查", status: "done", sortOrder: 2 }),
+        makeNode({
+          key: "eval-approve",
+          title: "用户拍板验证方案",
+          kind: "gate",
+          status: "waiting_user",
+          sortOrder: 3,
+          gateOptions: ["通过", "打回"],
+        }),
+        makeNode({ key: "s2", title: "第 2 步", status: "pending", sortOrder: 4 }),
+      ],
+      edges: [
+        { fromKey: "s1", toKey: "s1-review" },
+        { fromKey: "eval-plan", toKey: "eval-approve" },
+        { fromKey: "s1-review", toKey: "s2" },
+        { fromKey: "eval-approve", toKey: "s2" },
+      ],
+    });
+    const graphGroup = renderRail(graph);
+    const component = graphGroup.querySelector("[data-peel-component]")!;
+
+    expect(within(graphGroup).getByRole("button", { name: /2 done/ })).toBeInTheDocument();
+    expect(within(graphGroup).getByText("验证方案")).toBeInTheDocument();
+    expectClosedTrack(component);
   });
 });

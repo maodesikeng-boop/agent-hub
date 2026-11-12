@@ -427,4 +427,69 @@ describe("task-graph-layout（Dagre 自动分层拓扑布局与 LRU 缓存引擎
     expect(medianOf(hit32RailMs)).toBeLessThan(1);
     expect(medianOf(hit32DialogMs)).toBeLessThan(1);
   });
+
+  it("放大弹窗（dialog LR）：任务图 #6 跨层长边 s1->s2 沿 Dagre 哑节点绕开中间卡片 s1-review，不横穿卡片正文", () => {
+    const nodes: LayoutInputNode[] = [
+      { key: "s1", kind: "piece", status: "running", position: 0 },
+      { key: "eval-plan", kind: "piece", status: "done", position: 1 },
+      { key: "s1-review", kind: "piece", status: "pending", position: 2 },
+      { key: "eval-approve", kind: "gate", status: "waiting_user", optionCount: 2, position: 3 },
+      { key: "eval-build", kind: "piece", status: "pending", position: 4 },
+      { key: "s2", kind: "piece", status: "pending", position: 5 },
+    ];
+    const edges: LayoutInputEdge[] = [
+      { from: "s1", to: "s1-review" },
+      { from: "eval-plan", to: "eval-approve" },
+      { from: "eval-approve", to: "eval-build" },
+      { from: "s1", to: "s2" },
+      { from: "s1-review", to: "s2" },
+      { from: "eval-build", to: "s2" },
+    ];
+
+    const dialog = computeTaskGraphLayout({ nodes, edges, viewportMode: "dialog", rootFontSizePx: 17.5 });
+    assertNoCollisions(dialog.nodes, dialog.width, dialog.height);
+
+    const reviewBox = dialog.nodes.find((b) => b.id === "s1-review")!;
+    const chordEdge = dialog.edges.find((e) => e.from === "s1" && e.to === "s2")!;
+    expect(chordEdge).toBeDefined();
+
+    // 解析 M x0 y0 C x1 y1, x2 y2, x3 y3 (C ...) 并采样验证整条曲线不穿过 s1-review 卡片内部
+    const tokens = chordEdge.d.match(/[MC]|-?\d+(?:\.\d+)?/g) ?? [];
+    let cx = 0;
+    let cy = 0;
+    const samples: Array<[number, number]> = [];
+    for (let i = 0; i < tokens.length; ) {
+      const cmd = tokens[i++]!;
+      if (cmd === "M") {
+        cx = Number(tokens[i++]!);
+        cy = Number(tokens[i++]!);
+        samples.push([cx, cy]);
+      } else if (cmd === "C") {
+        const x1 = Number(tokens[i++]!);
+        const y1 = Number(tokens[i++]!);
+        const x2 = Number(tokens[i++]!);
+        const y2 = Number(tokens[i++]!);
+        const x3 = Number(tokens[i++]!);
+        const y3 = Number(tokens[i++]!);
+        for (let step = 1; step <= 40; step++) {
+          const t = step / 40;
+          const mt = 1 - t;
+          const px = mt * mt * mt * cx + 3 * mt * mt * t * x1 + 3 * mt * t * t * x2 + t * t * t * x3;
+          const py = mt * mt * mt * cy + 3 * mt * mt * t * y1 + 3 * mt * t * t * y2 + t * t * t * y3;
+          samples.push([px, py]);
+        }
+        cx = x3;
+        cy = y3;
+      }
+    }
+
+    const hitsInsideReview = samples.filter(
+      ([px, py]) =>
+        px > reviewBox.x + 1 &&
+        px < reviewBox.x + reviewBox.width - 1 &&
+        py > reviewBox.y + 1 &&
+        py < reviewBox.y + reviewBox.height - 1,
+    );
+    expect(hitsInsideReview).toEqual([]);
+  });
 });
