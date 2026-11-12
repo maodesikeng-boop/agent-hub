@@ -41,3 +41,6 @@ export const EVAL_TRANSCRIPT_MAX_CHARS = 4_000;
 export const EVAL_EVIDENCE_MAX_ITEMS = 8;
 /** gh 替身回放失败日志时一次最多输出多少字节（真日志约 136KB，原样给）。 */
 export const EVAL_GH_LOG_MAX_BYTES = 512 * 1024;
+
+/** 单次落盘文本的 UTF-8 字节上限。 */
+export const EVAL_TEXT_MAX_BYTES = 2 * 1024 * 1024;

@@ -1,17 +1,19 @@
 // 编排验证的入口（docs/orchestration-eval-design.md 第 6 节）。用户在自己的终端里一条命令跑完：
 //   pnpm eval compare --base 9b87864^1 --head main
-// 1. 准备隔离环境：导出两个版本的源码、生成真模型项目经理的 macOS 沙箱规则，并在真沙箱里逐条自检（不花钱）；
+// 1. 准备隔离环境：导出两个版本的源码、生成真模型项目经理的 macOS 沙箱规则，并在真沙箱里逐条自检，再运行最小 Claude 工具轮次；
 // 2. 用 vitest（vitest.eval.config.ts，不进 pnpm test、不进 CI）跑 场景 × 版本 的每次试跑：真 claude 当项目经理，Worker 回放；
 // 3. 在终端打印对照表（每个场景每条检查过 / 不过，附原因和证据），同时写 summary.md、summary.json。
 // 只需要 macOS（沙箱）和本机已登录的 claude；不依赖项目经理会话里的任何东西。
 //   pnpm eval preflight          只做第 1 步的隔离自检
 //   pnpm eval compare --help     参数说明
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { randomBytes } from "node:crypto";
+import { boundedText, killGroup, markActive, onExit } from "./lifecycle.ts";
 import { parseArgs } from "node:util";
-import { assertRealEvaluationSafe, pmSandboxInput, pmSandboxProfile, preflight, probeClaudeShimPath, scrubProcessEnv, SANDBOX_EXEC, whichFirst } from "./isolation.ts";
+import { type PmSandboxInput, pmSandboxInput, pmSandboxProfile, preflight, probeClaudeShimPath, scrubProcessEnv, SANDBOX_EXEC, whichFirst } from "./isolation.ts";
 import { EVAL_DEFAULT_PARALLEL, EVAL_MAX_PARALLEL } from "./limits.ts";
 import { pruneFailedWork, pruneRuns, renderSummary, runIdOf, type Summary, type VersionInfo } from "./report.ts";
 import { SCENARIOS, scenarioById } from "./scenarios.ts";
@@ -25,7 +27,7 @@ export interface PlanFile {
   sourceRepo: string;
   keepWork: boolean;
   /** real：真 claude；scripted：剧本项目经理（自测用，selftest-scripts.ts 的那一种），主文件夹用合成的小仓库。 */
-  pm: { mode: "real"; realClaude: string; model: string | null; effort: string | null; sandbox: { exec: string; profile: string } | null } | { mode: "scripted"; kind: SelfTestKind };
+  pm: { mode: "real"; realClaude: string; model: string | null; effort: string | null; sandbox: { exec: string; profile: string; input?: PmSandboxInput } | null } | { mode: "scripted"; kind: SelfTestKind };
   trials: Array<{ scenario: ScenarioId; version: { label: string; commit: string; daemonMain: string }; resultDir: string }>;
 }
 
@@ -79,15 +81,16 @@ async function main(): Promise<void> {
   const scripted = values.scripted as SelfTestKind | undefined;
   if (scripted !== undefined && !["positive", "negative", "nothing"].includes(scripted)) fail(`--scripted 只能是 positive、negative、nothing`);
   if (scripted === undefined && process.platform !== "darwin") fail("评测要在 macOS 上跑：真模型项目经理要包进 macOS 沙箱（sandbox-exec）。");
-  if (scripted === undefined) assertRealEvaluationSafe();
   const root = values.root ?? join(homedir(), ".agent-hub-eval");
   const workRoot = join(root, "w");
   const versionsDir = join(root, "v");
   const runsDir = join(root, "runs");
   const startedAt = new Date();
-  const runId = runIdOf(startedAt);
+  const runId = runIdOf(startedAt) + "-" + String(startedAt.getMilliseconds()).padStart(3, "0") + "-" + randomBytes(3).toString("hex");
   const runDir = join(runsDir, runId);
   mkdirSync(runDir, { recursive: true });
+  const release = markActive(runDir);
+  onExit(release);
   mkdirSync(workRoot, { recursive: true });
   const log = (line: string) => process.stdout.write(`${line}\n`);
 
@@ -100,18 +103,23 @@ async function main(): Promise<void> {
     const realClaude = originalEnv.AGENT_HUB_CLAUDE || whichFirst("claude", originalEnv.PATH);
     if (!realClaude) fail("找不到 claude：先装好并登录 Claude Code。");
     const input = pmSandboxInput(SOURCE_REPO, originalEnv);
+    const probeDir = join(runDir, "probe");
+    mkdirSync(probeDir, { recursive: true });
+    input.writableDirs = [probeDir];
+    input.projectDirs = [probeDir];
     const profile = join(runDir, "pm-sandbox.sb");
     writeFileSync(profile, pmSandboxProfile(input));
     log(`隔离自检（真沙箱里逐条试）：`);
-    const check = preflight(profile, input, { probeDir: runDir, evalPid: process.pid, realClaude });
+    const check = preflight(profile, input, { probeDir: probeDir, evalPid: process.pid, realClaude });
     for (const line of check.lines) log(`  ${line}`);
     if (!check.ok) fail("隔离自检没通过，不跑评测。规则文件：" + profile);
-    const probe = probeClaudeShimPath(profile, { realClaude, dir: join(runDir, "probe"), model: PROBE_MODEL });
+    const probe = await probeClaudeShimPath(profile, { realClaude, dir: join(runDir, "probe"), model: PROBE_MODEL });
     log(`  ${probe.line}`);
     if (!probe.ok) fail("真 claude 的 Bash 里 gh 不是替身：替身会被绕过，不跑评测。");
-    pm = { mode: "real", realClaude, model: values.model ?? null, effort: values.effort ?? "xhigh", sandbox: { exec: SANDBOX_EXEC, profile } };
+    pm = { mode: "real", realClaude, model: values.model ?? null, effort: values.effort ?? "xhigh", sandbox: { exec: SANDBOX_EXEC, profile, input } };
   }
   if (command === "preflight") {
+    release();
     pruneRuns(runsDir);
     return;
   }
@@ -144,11 +152,20 @@ async function main(): Promise<void> {
   log(`结果目录：${runDir}\n`);
 
   // ---- 用 vitest 跑 ----
-  const vitest = spawnSync("pnpm", ["exec", "vitest", "run", "--config", join(SOURCE_REPO, "vitest.eval.config.ts")], {
+  const vitest = spawn("pnpm", ["exec", "vitest", "run", "--config", join(SOURCE_REPO, "vitest.eval.config.ts")], {
+    detached: true,
     cwd: SOURCE_REPO,
     stdio: "inherit",
     env: { ...process.env, EVAL_PLAN: planFile, EVAL_PARALLEL: String(parallel) },
   });
+
+  const unregisterVitest = onExit(() => { if (vitest.pid) killGroup(vitest.pid, "SIGTERM"); });
+  const vitestStatus = await new Promise<number | null>((resolve, reject) => {
+    vitest.once("error", reject);
+    vitest.once("exit", resolve);
+  });
+  unregisterVitest();
+  if (vitest.pid) killGroup(vitest.pid);
 
   for (const p of pruneFailedWork(workRoot)) log(`清掉过期的：${p}`);
 
@@ -166,10 +183,10 @@ async function main(): Promise<void> {
     trials,
   };
   writeFileSync(join(runDir, "summary.json"), JSON.stringify(summary, null, 2));
-  writeFileSync(join(runDir, "summary.md"), renderSummary(summary));
+  writeFileSync(join(runDir, "summary.md"), boundedText(renderSummary(summary)));
   log(`\n${renderSummary(summary, { terminal: true })}`);
   log(`对照表：${join(runDir, "summary.md")}\n明细：${join(runDir, "summary.json")}`);
-  if (trials.length < plan.trials.length) log(`有 ${plan.trials.length - trials.length} 次试跑没出结果（vitest 退出码 ${vitest.status}），看上面的输出。`);
+  if (trials.length < plan.trials.length) log(`有 ${plan.trials.length - trials.length} 次试跑没出结果（vitest 退出码 ${vitestStatus}），看上面的输出。`);
   process.exitCode = trials.length === plan.trials.length && trials.every((t) => t.envError === null) ? 0 : 1;
 }
 

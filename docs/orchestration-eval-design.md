@@ -607,26 +607,35 @@ pnpm eval compare --base main --head hub/457-编排简化第-1-步-pm-提示词�
 用户 11-12 拍板：3 个真实场景（S3a 托盘、S5a CI 镜像故障、H2 验收不读代码）、只跑 claude、只用确定性检查。另按用户 11-12 的补充（“肯定不能你来跑，你有我们的上下文”）：被测项目经理的性格设定一律是空的中性设定，习惯只由场景注入；评测由用户本人在终端运行。
 
 ```sh
-pnpm eval preflight                                   # 只做隔离自检（不花钱）
+pnpm eval preflight                                   # 隔离探针 + 真 Claude 极简工具自检（消耗少量 API 用量）
 pnpm eval compare --base 9b87864^1 --head main        # 对照：自检 → 两个版本各跑 3 个场景 → 终端打印对照表
 ```
 
 - 代码在 `test/eval/`：`cli.ts` 入口，`trial.ts` 一次试跑，`scenarios.ts` 场景和用户原话出处，`checks.ts` 确定性检查，`isolation.ts` 隔离，`fakes/` 替身，`replay/` 回放包，`limits.ts` 上限。
 - 真模型部分用 `vitest.eval.config.ts`，不进 `pnpm test`、不进 CI；自测 `test/eval/*.test.ts`（剧本项目经理的正例、反例、什么都不做，替身、沙箱规则、回放包守卫）进 `pnpm test` 和 CI。
 - 结果在 `~/.agent-hub-eval/runs/<时间>/`：`summary.md`（对照表）、`summary.json`，每次试跑一个目录（`transcript.md` 完整过程、`pm-prompt.md` 当时的提示词）。保留最近 20 次或 30 天；没通过的现场在 `~/.agent-hub-eval/w/`，最多 10 个。
-- 隔离：见 `test/eval/isolation.ts` 文件头。每次运行开头在真沙箱里逐条自检，再让真 claude 用最小模型跑一次 `command -v gh` 确认走的是替身，有一条不对就不跑。
+- 隔离：见 `test/eval/isolation.ts` 文件头。每次运行开头在真沙箱里逐条自检，再让真 claude 用最小模型跑一次 `gh --version` 确认走的是替身，有一条不对就不跑。
 - 和本文前面的出入：H2 只跑“任务中途经资料页改性格设定”（T3）一种，对照组就是 S3a（同样的需求、空性格设定）；注入的是 #118 新加那一条里和验收有关的部分，去掉了指向 poteto-mode 那条旧条目的半句。S3a、H2 的 `gh` 回放里 PR 288 检查全绿，S5a 两次都挂（run 43040062881 两次的真实日志）。
 
-## PR #294 独立审查（Worker 471）
+## PR #294 隔离审查与收口（Worker 471 / 474）
 
-**当前不可运行真模型评测。** `preflight`、真模型 `compare`、直接调用 `runTrial` 和真模型路由均已加不可绕过的代码安全门。`--scripted` 自测仍可用。下面的安全边界未完成前，不应删除安全门或让用户在宿主机试跑真 PM。
+471 的临时安全门已由实测门禁替换。每次 compare 先运行 preflight；每次试跑再生成专属规则并重跑权限探针，失败立即停止该试跑。
 
-1. 隔离未通过：`allow default` 仅列举少数拒绝项，宿主机其他位置仍可写；绝对路径 git/curl 或复制后的工具能绕过 PATH 和执行路径黑名单，HTTPS 推送/生产调用仍畅通。当前只传入运行评测的 worktree，未覆盖 git common-dir 所在主仓库及其 HANDOVER；`realOr` 在目标不存在时不会规范化已存在的软链祖先；会话规则只匹配规范化后仓库名与部分 worktree 前缀，别名路径的历史仍可见。端口仅屏蔽默认值和环境值，其他本机端口/socket 不受保护。信号规则静态意图正确，尚无宿主机攻击测试证明。SBPL 生成后的括号平衡；本轮补上路径控制字符拒绝与 regex 字面量的引号转义。
-2. 真机可行性未验收：默认放行使二进制、Node/Bun、临时目录、Keychain、DNS/HTTPS 大体可达，但这恰好也是外部副作用缺口；`claude --version` 不能证明 OAuth、API 请求和工具轮次可用。需要明确每次试跑可写目录、API 出站代理白名单、试跑自己的 hub socket，并在非嵌套宿主机跑允许/拒绝两组测试后才能放行。不要通过放开全部 HTTPS 来解决登录/API 连通性。
-3. 公平性部分通过：两边的任务仓库均取相同场景基准提交和前 50 个祖先，性格设定均为空，daemon 各用指定提交；任务仓库的 AGENTS/CLAUDE 文件来自场景基准。但 PM 仍可读评测运行目录中的 replay、结果、另一个版本源码，以及未封住的其他 Claude 历史/用户级指令，因而尚不能宣称防泄题公平。依赖也可能从当前 checkout 软链共享。
-4. 清理部分通过：正常目录的 20 次/30 天、10 个淘汰算法可用，原先只在开跑前清理，新增完成后的现场清理和 preflight 结果清理。仍需解决多实例互删活跃运行、秒级 runId 碰撞、单次日志字节上限，以及中断/异常时的清理。当前 daemon 非独立进程组，`stopDaemon` 只给 daemon PID 发信号；强杀或 Ctrl-C 时不能证明真 Claude、后台命令全部回收。这也是保留真模型安全门的原因。
-5. 判停修复：慢思考期间 `working` 原本会阻止安静计时，无需仅增加 30 秒阈值。真正缺口是 `background` 不算忙；本轮把后台等待、API 重试、额度等待纳入忙态。R5 原先将所有 `worker.send` 都视作因 CI 打回，正常同步也会误判；现在有发送时给出“不适用”并附证据，交人工判断，不再声称确定性地理解自然语言责任归因。对应反例不再要求 R5 必失败。
+- 写入默认拒绝，仅放行当前试跑目录、专属 TMPDIR、系统设备、Claude 当前试跑会话目录与 todos/statsig/debug 状态目录，以及 ~/.claude.json 和它的临时文件。Claude 全局 CLAUDE.md、settings.json、settings.local.json、hooks* 明确禁写。
+- 路径同时覆盖原路径与 realpath；不存在的子路径从最近存在的祖先解析软链。git common-dir 定位真主仓库，主仓库、运行评测的 worktree、真数据目录、SSH/GitHub/AWS/Kube 等凭据路径均禁读。node_modules 原路径和真实目标在仓库禁读之后单独放行读取。
+- Claude projects 默认禁读，只放行当前试跑路径编码后的会话目录。标准 replay、其他运行结果及其他试跑现场禁读。替身只复制场景日志，不复制标准汇报或补丁。
+- SSH_AUTH_SOCK 清空，Git 禁止交互和系统配置，专属 gitconfig 清空 credential.helper 并重写场景 GitHub URL 到本地裸仓库。GH_TOKEN/GITHUB_TOKEN 为假哨兵。真实 gh、ssh 等执行路径受 SBPL 拒绝。
+- daemon 独立进程组，路由在模型禁读写的结果目录登记各会话进程组；沙箱规则、路由配置与替身程序也对模型禁写；正常结束、超时、退出与 SIGINT/SIGTERM 回收进程组。运行 ID 带毫秒和随机串；runs/、试跑结果与 w/ 目录写 PID 活跃标记，淘汰跳过仍存活的运行。transcript.md、pm-prompt.md 等文本最多 2 MiB，截断有明确标记。
+- 保留 471 对后台忙态与 R5 的修正。R5 有 worker.send 时交人工判断，不假装能确定自然语言责任归因。
 
-后续验收应补进程组/子进程登记与退出清理、活跃运行租约、专用可写目录和 API 白名单代理、源/回放/用户级上下文的读取隔离，再在宿主机跑真实 Claude 最小工具轮次及攻击探针。当前提交是止损与已确认局部修复，不是原目标的真机放行证明。
+preflight 在真实 SBPL 内检查主仓库 HANDOVER.md、真数据目录、SSH 目录、replay 和历史结果禁读，且必须得到权限拒绝，不能以文件不存在冒充成功；同时检查沙箱外禁写、真实 gh/ssh 禁执行、外部进程禁发信号。之后让真实 Claude 请求 API 并用 Bash 执行替身 gh --version，输出和替身落盘记录都成功才放行。该步骤验证本机登录凭据、API 和工具路径，消耗少量模型用量。
 
-本轮验证：`pnpm typecheck` 通过；`pnpm vitest run test/eval/ src/shared/write-scope.test.ts --maxWorkers=1`：8 个文件通过、72 项通过、6 项因嵌套沙箱限制跳过。未运行真 Claude，也未触碰 `src/`。
+宿主机验收：
+
+1. 在用户终端进入合入后的仓库，确认 Claude Code 已登录。
+2. 运行 `pnpm typecheck` 和 `pnpm vitest run test/eval/ src/shared/write-scope.test.ts`。
+3. 运行 `pnpm eval preflight`。所有权限探针与真实 Claude 工具自检均须为 ✓；任一失败先修复报出的路径或运行条件。
+4. 运行 `pnpm eval compare --base 9b87864^1 --head main`，检查 summary.md、各试跑结果及文本截断标记。
+5. 中途 Ctrl-C 后检查没有该运行的 daemon/Claude 进程残留；并发运行时确认旧目录清理保留活跃 PID 的目录。
+
+当前 Worker 环境不能嵌套 macOS 沙箱，因此真实 SBPL 测试按环境跳过；未在此会话运行真实 Claude。宿主机 OAuth/API 与实际 CLI 最小写目录的兼容性由上述 preflight 现场验证，失败会阻断 compare。未实现 HTTPS 白名单代理；此方案通过文件权限和假令牌隔离外部凭据，不限制所有 HTTPS 流量，也不声称隔离任意可访问的生产 API。SIGKILL 无法执行退出钩子，活跃标记探活后会自然失效。

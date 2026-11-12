@@ -89,10 +89,10 @@ describe("只记录的替身", () => {
 describe("claude 分流", () => {
   const base: RouterConfig = { mode: "real", node: "/n", fakeClaude: "/fake.ts", realClaude: "/real/claude", sandbox: { exec: "/usr/bin/sandbox-exec", profile: "/p.sb" }, settingsDir: root };
 
-  it("Worker（有 Worker 才设的环境变量）给假 claude，真项目经理在隔离完成前拒绝启动", () => {
+  it("Worker（有 Worker 才设的环境变量）给假 claude，真项目经理必须经过沙箱", () => {
     expect(route(base, ["-p", "x"], { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" })).toEqual({ file: "/n", argv: ["/n", "/fake.ts", "-p", "x"] });
-    expect(() => route(base, ["-p", "x"], {})).toThrow("真模型评测已停用");
-    expect(() => route({ ...base, sandbox: null }, [], {})).toThrow("真模型评测已停用");
+    expect(route(base, ["-p", "x"], {}).file).toBe("/usr/bin/sandbox-exec");
+    expect(() => route({ ...base, sandbox: null }, [], {})).toThrow("preflight 沙箱");
   });
 
   it("剧本模式两种角色都给假 claude", () => {
@@ -119,10 +119,10 @@ describe("隔离规则", () => {
       denyExec: ["/usr/bin/ssh", "/opt/homebrew/bin/gh"],
       daemonPorts: [4317],
     });
-    expect(profile).toContain('(deny file-read* file-write* (subpath "/Users/u/.agent-hub") (subpath "/Users/u/agent-hub"))');
+    expect(profile).toContain("(deny file-write*)");
+    expect(profile).toContain('(subpath "/Users/u/.agent-hub")');
+    expect(profile).toContain('(subpath "/Users/u/.claude/projects")');
     expect(profile).toContain('(allow file-read* (subpath "/Users/u/agent-hub/node_modules"))');
-    expect(profile).toContain('(subpath "/Users/u/.claude/projects/-Users-u-agent-hub")');
-    expect(profile).toContain('(regex #"^/Users/u/\\.claude/projects/-Users-u--agent-hub-worktrees")');
     expect(profile).toContain('(remote unix-socket (path-literal "/Users/u/.agent-hub/run/hub.sock"))');
     expect(profile).toContain('(remote ip "localhost:4317")');
     expect(profile).toContain('(deny network-outbound (remote tcp "*:22"))');
@@ -145,7 +145,7 @@ describe("隔离规则", () => {
       jq: null,
     });
     expect(env.PATH!.startsWith(`${join(dir, "bin")}:`)).toBe(true);
-    expect(env).toMatchObject({ GH_TOKEN: "", GITHUB_TOKEN: "", SSH_AUTH_SOCK: "", GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0" });
+    expect(env).toMatchObject({ GH_TOKEN: "eval-fake-token", GITHUB_TOKEN: "eval-fake-token", SSH_AUTH_SOCK: "", GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0" });
     // claude 每条 Bash 前 source 它：用户 shell 的 PATH 改动之后，替身目录还在最前面
     expect(readFileSync(env.CLAUDE_ENV_FILE!, "utf8")).toBe(`export PATH='${join(dir, "bin")}':"$PATH"\n`);
     const gitconfig = readFileSync(env.GIT_CONFIG_GLOBAL!, "utf8");

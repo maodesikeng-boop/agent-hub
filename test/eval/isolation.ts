@@ -8,23 +8,19 @@
 // 4. 现任项目经理的上下文：被测项目经理的性格设定是中性的空设定（scenarios/），沙箱里禁读真仓库（node_modules 除外）、
 //    ~/.agent-hub（性格设定、记忆目录、pm-notes）、claude 给真仓库和真 worktree 存的会话记录与自动记忆。
 // 每次运行开头 preflight 在真沙箱里逐条试一遍，有一条没挡住就不跑。
-import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join } from "node:path";
+import { basename, dirname, delimiter, join, resolve } from "node:path";
 import { claudeProjectDirName } from "../../src/vendors/claude/transcript.ts";
 import { DEFAULT_UI_PORT, ENV_HOME, ENV_HUB_SOCK, ENV_HUB_TOKEN, ENV_PORT } from "../../src/shared/index.ts";
+import { killGroup, onExit, boundedText } from "./lifecycle.ts";
 import type { RouterConfig } from "./fakes/claude-router.ts";
 
 const FAKES_DIR = new URL("./fakes/", import.meta.url).pathname;
 export const ROUTER = join(FAKES_DIR, "claude-router.ts");
 export const FAKE_CLAUDE = new URL("../fake-claude/fake-claude.ts", import.meta.url).pathname;
 export const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
-
-/** 真模型必须等隔离边界通过宿主机攻击测试后才能启用，不能用 PATH 替身充当安全边界。 */
-export function assertRealEvaluationSafe(): void {
-  throw new Error("真模型评测已停用：当前沙箱默认允许宿主机写入及 HTTPS 出站，无法阻止绕过替身直推、访问生产服务；尚未验证凭据访问、进程回收与防泄题。请使用 --scripted，见 docs/orchestration-eval-design.md 的 PR #294 审查记录。");
-}
 
 /** 换成“只记录、不执行”的替身的命令。 */
 export const RECORD_ONLY_TOOLS = ["ssh", "scp", "sftp", "rsync", "launchctl", "osascript", "pkill", "killall", "open"] as const;
@@ -41,12 +37,23 @@ export function scrubProcessEnv(): void {
   for (const name of scrubbedEnvNames(process.env)) delete process.env[name];
 }
 
-function realOr(path: string): string {
-  try {
-    return realpathSync.native(path);
-  } catch {
-    return path;
+export function realOr(path: string): string {
+  const tail: string[] = [];
+  let parent = resolve(path);
+  for (;;) {
+    try { return join(realpathSync.native(parent), ...tail); }
+    catch {
+      const next = dirname(parent);
+      if (next === parent) throw new Error(`无法规范化路径：${path}`);
+      tail.unshift(basename(parent));
+      parent = next;
+    }
   }
+}
+const aliases = (paths: string[]) => [...new Set(paths.flatMap((p) => [resolve(p), realOr(p)]))];
+export function mainRepoRoot(repo: string): string {
+  const common = execFileSync("git", ["-C", repo, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" }).trim();
+  return dirname(realOr(common));
 }
 
 /** PATH 里所有叫 name 的可执行文件（除了 skipDir 里的替身），连同它们的真实路径。 */
@@ -90,7 +97,7 @@ export function writeShims(paths: ShimPaths, opts: { node: string; realGit: stri
     writeFileSync(file, `#!/bin/sh\n${body}\n`);
     chmodSync(file, 0o755);
   };
-  write("gh", `exec ${sq(opts.node)} ${sq(join(lib, "gh.mts"))} "$@"`);
+  write("gh", `if [ "$1" = --version ]; then echo eval-gh-shim; exec ${sq(opts.node)} ${sq(join(lib, "record.mts"))} gh-probe; fi\nexec ${sq(opts.node)} ${sq(join(lib, "gh.mts"))} "$@"`);
   for (const tool of RECORD_ONLY_TOOLS) write(tool, `exec ${sq(opts.node)} ${sq(join(lib, "record.mts"))} ${tool} "$@"`);
   // git：找出子命令（跳过 -C、-c 这类带值的全局参数），push 只记录，别的原样交给真 git
   write(
@@ -122,6 +129,7 @@ export interface IsolationInput extends ShimPaths {
 
 /** 给守护进程的环境变量（项目经理、Worker 都从它继承）：替身在 PATH 最前面，真 gh、真 git 远端、ssh 代理都断开。 */
 export function isolationEnv(input: IsolationInput): Record<string, string> {
+  mkdirSync(join(input.workDir, "tmp"), { recursive: true });
   const ghConfig = join(input.workDir, "gh-config");
   mkdirSync(ghConfig, { recursive: true });
   const gitconfig = join(input.workDir, "gitconfig");
@@ -129,6 +137,7 @@ export function isolationEnv(input: IsolationInput): Record<string, string> {
   writeFileSync(
     gitconfig,
     [
+      "[credential]", "\thelper =",
       "[user]",
       "\tname = eval",
       "\temail = eval@example.invalid",
@@ -144,10 +153,11 @@ export function isolationEnv(input: IsolationInput): Record<string, string> {
   const routerConfigFile = join(input.workDir, "router.json");
   writeFileSync(routerConfigFile, JSON.stringify(input.routerConfig));
   return {
+    TMPDIR: join(input.workDir, "tmp"),
     PATH: `${input.binDir}${delimiter}${process.env.PATH ?? ""}`,
     GH_CONFIG_DIR: ghConfig,
-    GH_TOKEN: "",
-    GITHUB_TOKEN: "",
+    GH_TOKEN: "eval-fake-token",
+    GITHUB_TOKEN: "eval-fake-token",
     GH_ENTERPRISE_TOKEN: "",
     GITHUB_ENTERPRISE_TOKEN: "",
     GH_PROMPT_DISABLED: "1",
@@ -169,6 +179,11 @@ export function isolationEnv(input: IsolationInput): Record<string, string> {
 export interface PmSandboxInput {
   /** 用户主目录（realpath 过）。 */
   home: string;
+  writableDirs?: string[];
+  projectDirs?: string[];
+  readDenied?: string[];
+  dependencies?: string[];
+  mainRepo?: string;
   /** 真的 Fusa 数据目录（默认 ~/.agent-hub，用户设了 AGENT_HUB_HOME 也算上）。 */
   realDataDirs: string[];
   /** 跑评测的这份仓库（用户的主文件夹）：禁读禁写，node_modules 放行读（被测版本的 node_modules 软链到这里）。 */
@@ -194,20 +209,35 @@ function sbRegex(s: string): string {
 }
 const sbRegexLiteral = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** macOS sandbox-exec 规则（SBPL）：默认放行，后写的规则优先。 */
+/** macOS sandbox-exec 规则（SBPL）：默认禁写，专属目录放行；后写的规则优先。 */
 export function pmSandboxProfile(input: PmSandboxInput): string {
   const projects = join(input.claudeConfigDir, "projects");
+  const subpaths = (paths: string[]) => aliases(paths).map((p) => `(subpath ${sbString(p)})`).join(" ");
+  const projectDirs = (input.projectDirs ?? []).flatMap((p) => aliases([p]).map((a) => join(projects, claudeProjectDirName(a))));
+  const writable = [...(input.writableDirs ?? []), ...projectDirs,
+    ...["todos", "statsig", "debug"].map((p) => join(input.claudeConfigDir, p))];
+  const denied = [...input.realDataDirs, input.realRepo, ...(input.mainRepo ? [input.mainRepo] : []),
+    ...[".ssh", ".config/gh", ".netrc", ".npmrc", ".aws", ".kube"].map((p) => join(input.home, p)),
+    projects, join(input.claudeConfigDir, "CLAUDE.md"), ...(input.readDenied ?? [])];
   const lines = [
     "(version 1)",
     "(allow default)",
-    ";; 真数据目录（账本、性格设定、记忆目录、pm-notes、worktree）和真仓库：禁读禁写",
-    `(deny file-read* file-write* ${[...input.realDataDirs, input.realRepo].map((p) => `(subpath ${sbString(p)})`).join(" ")})`,
-    ";; 被测版本的 node_modules 软链到真仓库的 node_modules：只放行读",
-    `(allow file-read* (subpath ${sbString(join(input.realRepo, "node_modules"))}))`,
-    ";; claude 给真仓库、真 worktree 存的会话记录和自动记忆：禁读禁写",
-    `(deny file-read* file-write* (subpath ${sbString(join(projects, claudeProjectDirName(input.realRepo)))})${input.realDataDirs
-      .map((d) => ` (regex ${sbRegex(`^${sbRegexLiteral(join(projects, claudeProjectDirName(join(d, "worktrees"))))}`)})`)
-      .join("")})`,
+    "(deny file-write*)",
+    ...(writable.length ? [`(allow file-write* ${subpaths(writable)})`] : []),
+    '(allow file-write* (literal "/dev/null") (literal "/dev/zero") (literal "/dev/random") (literal "/dev/urandom") (literal "/dev/dtracehelper") (regex #"^/dev/tty") (regex #"^/dev/fd/"))',
+    `(allow file-write* (literal ${sbString(join(input.home, ".claude.json"))}) (regex ${sbRegex("^" + sbRegexLiteral(join(input.home, ".claude.json")) + "[.].*")}))`,
+    `(deny file-read* ${subpaths(denied)})`,
+    `(allow file-read* ${subpaths(input.dependencies ?? [join(input.realRepo, "node_modules")])})`,
+    ...((input.writableDirs ?? []).length ? [`(allow file-read* ${subpaths(input.writableDirs ?? [])})`] : []),
+    ...(projectDirs.length ? [
+      `(allow file-read* file-write* ${subpaths(projectDirs)} ${projectDirs.map((p) => `(regex ${sbRegex("^" + sbRegexLiteral(p) + "-")})`).join(" ")})`,
+    ] : []),
+    ...((input.writableDirs ?? []).length ? [
+      `(deny file-write* ${subpaths((input.writableDirs ?? []).flatMap((d) => ["bin", "fake", "router.json", "router-settings", "pm-sandbox.sb", "claude-env.sh", "gitconfig"].map((p) => join(d, p))))})`,
+      `(deny file-read* ${subpaths((input.writableDirs ?? []).map((d) => join(d, "fake")))})`,
+    ] : []),
+    // 全局配置始终不可写，即使未来扩大了状态目录白名单。
+    `(deny file-write* ${subpaths(["CLAUDE.md", "settings.json", "settings.local.json"].map((p) => join(input.claudeConfigDir, p)))} (regex ${sbRegex("^" + sbRegexLiteral(join(input.claudeConfigDir, "hooks")))}))`,
     ";; 连不上真守护进程：它的几个 unix socket 和本机端口",
     `(deny network-outbound ${input.realDataDirs
       .flatMap((d) => DAEMON_SOCKETS.map((rel) => `(remote unix-socket (path-literal ${sbString(join(d, rel))}))`))
@@ -238,7 +268,10 @@ export function pmSandboxInput(realRepo: string, originalEnv: NodeJS.ProcessEnv,
   return {
     home,
     realDataDirs: [...dataDirs],
-    realRepo: realOr(realRepo),
+    realRepo: realRepo,
+    mainRepo: mainRepoRoot(realRepo),
+    dependencies: aliases([join(realRepo, "node_modules")]),
+    readDenied: [join(realRepo, "test/eval/replay"), join(home, ".agent-hub-eval/runs")],
     claudeConfigDir: realOr(originalEnv.CLAUDE_CONFIG_DIR ?? join(home, ".claude")),
     denyExec: [...denyExec],
     daemonPorts: [...ports],
@@ -269,6 +302,23 @@ export function preflight(profileFile: string, input: PmSandboxInput, opts: { pr
     if (existsSync(d)) trySh(`禁读真数据目录 ${d}`, `ls ${sq(d)} >/dev/null`, false);
     if (existsSync(d)) trySh(`禁写真数据目录 ${d}`, `touch ${sq(join(d, ".eval-probe"))}`, false);
   }
+  const mustDenyRead = (path: string) => {
+    const r = spawnSync(SANDBOX_EXEC, ["-f", profileFile, process.execPath, "-e",
+      "const fs=require('fs');try{fs.openSync(process.argv[1],'r');process.exit(2)}catch(e){process.exit(e.code==='EPERM'||e.code==='EACCES'?0:3)}", path],
+      { encoding: "utf8", timeout: 30_000 });
+    const good = r.status === 0;
+    ok &&= good;
+    lines.push(`${good ? "✓" : "✗"} 禁读（必须权限拒绝） ${path}`);
+  };
+  for (const path of [join(input.mainRepo ?? input.realRepo, "HANDOVER.md"), join(input.home, ".agent-hub"), join(input.home, ".ssh"), ...(input.readDenied ?? [])]) mustDenyRead(path);
+  const outside = join(input.home, ".eval-outside-probe-" + process.pid);
+  const writeProbe = spawnSync(SANDBOX_EXEC, ["-f", profileFile, process.execPath, "-e",
+    "try{require('fs').writeFileSync(process.argv[1],'probe');process.exit(2)}catch(e){process.exit(e.code==='EPERM'||e.code==='EACCES'?0:3)}", outside], { encoding: "utf8", timeout: 30_000 });
+  const writeDenied = writeProbe.status === 0;
+  ok &&= writeDenied;
+  lines.push(`${writeDenied ? "✓" : "✗"} 禁写沙箱外目录（必须权限拒绝）`);
+  if (!writeDenied && existsSync(outside)) rmSync(outside);
+
   trySh(`禁读真仓库 ${input.realRepo}`, `cat ${sq(join(input.realRepo, "package.json"))} >/dev/null`, false);
   if (existsSync(join(input.realRepo, "node_modules"))) trySh("真仓库的 node_modules 能读", `ls ${sq(join(input.realRepo, "node_modules"))} >/dev/null`, true);
   // sh 执行不了（沙箱拒绝 exec）时退出码是 126：只认这个，不靠命令自己的退出码
@@ -284,24 +334,40 @@ export function preflight(profileFile: string, input: PmSandboxInput, opts: { pr
 
 /**
  * 用真 claude 走一遍真实路径（不是靠推断）：在同一个沙箱里、带着和评测一样的 PATH 与 CLAUDE_ENV_FILE，让它用 Bash 跑
- * `command -v gh`，答案必须是替身。用户 shell 的配置（.zprofile 把 ~/.local/bin 提前）会不会压住替身，只有这样才看得出来。
+ * `gh --version`，答案和落盘记录必须来自替身。用户 shell 的配置（.zprofile 把 ~/.local/bin 提前）会不会压住替身，只有这样才看得出来。
  * 用最小的模型、不存会话，约 1 美分。
  */
-export function probeClaudeShimPath(profileFile: string, opts: { realClaude: string; dir: string; model: string }): { ok: boolean; line: string } {
-  assertRealEvaluationSafe();
+export async function probeClaudeShimPath(profileFile: string, opts: { realClaude: string; dir: string; model: string }): Promise<{ ok: boolean; line: string }> {
   const binDir = join(opts.dir, "bin");
   writeShims({ binDir, ghDir: join(opts.dir, "gh"), recordFile: join(opts.dir, "recorded.jsonl") }, { node: process.execPath, realGit: realGitPath() });
+  mkdirSync(join(opts.dir, "tmp"), { recursive: true });
   const envFile = join(opts.dir, "claude-env.sh");
   writeFileSync(envFile, `export PATH=${sq(binDir)}:"$PATH"\n`);
-  const prompt = "Use the Bash tool to run exactly this command: command -v gh ; then reply with only its output, nothing else.";
-  const r = spawnSync(
+  const gitConfig = join(opts.dir, "gitconfig");
+  writeFileSync(gitConfig, "[credential]\n\thelper =\n");
+  const prompt = "Use the Bash tool to run exactly: gh --version ; then reply with only its output.";
+  rmSync(join(opts.dir, "recorded.jsonl"), { force: true });
+  const child = spawn(
     SANDBOX_EXEC,
-    ["-f", profileFile, opts.realClaude, "-p", prompt, "--model", opts.model, "--allowedTools", "Bash(command -v gh:*)", "--max-turns", "4", "--no-session-persistence", "--settings", JSON.stringify({ sandbox: { enabled: false } })],
-    { cwd: opts.dir, encoding: "utf8", timeout: 180_000, env: { ...process.env, PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`, CLAUDE_ENV_FILE: envFile } },
+    ["-f", profileFile, opts.realClaude, "-p", prompt, "--model", opts.model, "--allowedTools", "Bash(gh --version:*)", "--max-turns", "4", "--no-session-persistence", "--settings", JSON.stringify({ sandbox: { enabled: false } })],
+    { detached: true, cwd: opts.dir, env: { ...process.env, GIT_CONFIG_GLOBAL: gitConfig, EVAL_RECORD_FILE: join(opts.dir, "recorded.jsonl"), GH_TOKEN: "eval-fake-token", GITHUB_TOKEN: "eval-fake-token", SSH_AUTH_SOCK: "", GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", TMPDIR: join(opts.dir, "tmp"), PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`, CLAUDE_ENV_FILE: envFile } },
   );
-  const out = `${r.stdout ?? ""}`.trim();
-  const ok = r.status === 0 && out.includes(join(binDir, "gh"));
-  return { ok, line: `${ok ? "✓" : "✗"} 真 claude 的 Bash 里 gh 是替身${ok ? "" : `（实际：${(out || r.stderr || r.error?.message || "").trim().slice(0, 300)}）`}` };
+  let out = "";
+  let err = "";
+  child.stdout.setEncoding("utf8").on("data", (chunk: string) => { out = boundedText(out + chunk); });
+  child.stderr.setEncoding("utf8").on("data", (chunk: string) => { err = boundedText(err + chunk); });
+  const cleanup = () => { if (child.pid) killGroup(child.pid); };
+  const unregister = onExit(cleanup);
+  const timer = setTimeout(cleanup, 180_000);
+  let status: number | null;
+  try {
+    status = await new Promise<number | null>((resolve, reject) => {
+      child.once("error", reject); child.once("close", resolve);
+    });
+  } finally { clearTimeout(timer); cleanup(); unregister(); }
+  const record = join(opts.dir, "recorded.jsonl");
+  const ok = status === 0 && out.includes("eval-gh-shim") && existsSync(record) && readFileSync(record, "utf8").includes('"tool":"gh-probe"');
+  return { ok, line: `${ok ? "✓" : "✗"} 真 claude 的 Bash 里 gh 是替身${ok ? "" : `（实际：${(out || err || "超时或进程启动失败").trim().slice(0, 300)}）`}` };
 }
 
 /** 这台机器上真 git 的路径（替身转给它）。 */

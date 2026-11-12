@@ -3,17 +3,18 @@
 // 真模型和剧本项目经理走同一条路，只差分流脚本的 mode（fakes/claude-router.ts）。
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { cpSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { isQuotaExhausted, askOf, extractAskCard, type Message, type RateLimitInfo } from "../../src/shared/domain.ts";
 import { API_PATHS, type PersonaView } from "../../src/shared/index.ts";
 import type { FakeScript, FakeSessionScript, FakeStep } from "../fake-claude/fake-claude.ts";
 import { Client, makeEnv, messagesOf, sleep, type RunningDaemon } from "../e2e/harness.ts";
 import { removeOwnClaudeProjects, removeOwnVendorRecords } from "../smoke/kit.ts";
+import { boundedText, killGroup, markActive, onExit } from "./lifecycle.ts";
 import { runChecks } from "./checks.ts";
 import { countPmTurns, listWorkers, readFacts, readMetrics } from "./facts.ts";
 import type { RouterConfig } from "./fakes/claude-router.ts";
-import { assertRealEvaluationSafe, FAKE_CLAUDE, ROUTER, isolationEnv, realGitPath, whichFirst, writeShims } from "./isolation.ts";
+import { type PmSandboxInput, pmSandboxInput, pmSandboxProfile, preflight, FAKE_CLAUDE, ROUTER, isolationEnv, realGitPath, whichFirst, writeShims } from "./isolation.ts";
 import { EVAL_EVIDENCE_MAX_CHARS, EVAL_GH_LOG_MAX_BYTES, EVAL_MAX_PM_TURNS, EVAL_TRANSCRIPT_MAX_CHARS } from "./limits.ts";
 import { NEUTRAL_PERSONA, REPLAY_DIR } from "./scenarios.ts";
 import type { Facts, Scenario, ScenarioContext, TrialResult } from "./types.ts";
@@ -25,7 +26,7 @@ export interface TrialTimings {
 }
 
 export type PmPlan =
-  | { mode: "real"; realClaude: string; model: string | null; effort: string | null; sandbox: { exec: string; profile: string } | null }
+  | { mode: "real"; realClaude: string; model: string | null; effort: string | null; sandbox: { exec: string; profile: string; input?: PmSandboxInput } | null }
   /** 剧本项目经理：按这次试跑的路径拼剧本（自测用）。 */
   | { mode: "scripted"; script: (ctx: ScenarioContext) => FakeScript };
 
@@ -100,7 +101,8 @@ function workerSessions(plan: TrialPlan, scenario: Scenario, ctx: ScenarioContex
 /** gh 回放：回放文件的路径换成绝对路径，日志输出上限写进去（替身不读仓库里的 limits）。 */
 function writeGhReplay(ghDir: string, scenario: Scenario): void {
   mkdirSync(ghDir, { recursive: true });
-  writeFileSync(join(ghDir, "replay.json"), JSON.stringify({ ...scenario.gh, baseDir: REPLAY_DIR, logMaxBytes: EVAL_GH_LOG_MAX_BYTES }));
+  cpSync(REPLAY_DIR, join(ghDir, "replay"), { recursive: true, filter: (p) => statSync(p).isDirectory() || p.endsWith(".log") });
+  writeFileSync(join(ghDir, "replay.json"), JSON.stringify({ ...scenario.gh, baseDir: join(ghDir, "replay"), logMaxBytes: EVAL_GH_LOG_MAX_BYTES }));
 }
 
 function copyShots(scenario: Scenario, ctx: ScenarioContext): void {
@@ -180,11 +182,12 @@ async function eventLoop(
 }
 
 async function stopDaemon(daemon: RunningDaemon): Promise<void> {
-  if (daemon.child.exitCode !== null || daemon.child.signalCode !== null) return;
-  daemon.child.kill("SIGTERM");
-  const timer = setTimeout(() => daemon.child.kill("SIGKILL"), 30_000);
+  if (daemon.child.pid) killGroup(daemon.child.pid, "SIGTERM");
+  const timer = setTimeout(() => { if (daemon.child.pid) killGroup(daemon.child.pid); }, 5_000);
   await daemon.exited;
   clearTimeout(timer);
+  if (daemon.child.pid) killGroup(daemon.child.pid);
+
 }
 
 /** 环境出的错（不算项目经理的分，设计 4.4）：真 gh 被调到、那一轮直接失败。 */
@@ -208,12 +211,23 @@ function transcript(facts: Facts): string {
 }
 
 export async function runTrial(plan: TrialPlan): Promise<TrialResult> {
-  if (plan.pm.mode === "real") assertRealEvaluationSafe();
   const { scenario } = plan;
   mkdirSync(plan.workRoot, { recursive: true });
   mkdirSync(plan.resultDir, { recursive: true });
-  const env = makeEnv({ root: plan.workRoot, prefix: "ah-eval-" });
+  const env = makeEnv({ root: plan.workRoot, prefix: "ah-eval-", detached: true });
   const workDir = env.dir;
+  const release = markActive(workDir);
+  const releaseResult = markActive(plan.resultDir);
+  const pidFile = join(plan.resultDir, "process-groups");
+  const cleanup = (releaseMarkers = false) => {
+    if (daemon?.child.pid) killGroup(daemon.child.pid);
+    if (existsSync(pidFile)) for (const line of readFileSync(pidFile, "utf8").split("\n")) {
+      const pid = Number(line);
+      if (Number.isSafeInteger(pid) && pid > 1) killGroup(pid);
+    }
+    if (releaseMarkers) { release(); releaseResult(); }
+  };
+  const unregister = onExit(() => cleanup(true));
   const ctx: ScenarioContext = { workDir, shotsDir: join(workDir, "shots"), preludeShotsDir: join(workDir, "prelude-shots") };
   const gateFile = join(workDir, "gate-report");
   const ghDir = join(workDir, "gh");
@@ -230,11 +244,24 @@ export async function runTrial(plan: TrialPlan): Promise<TrialResult> {
     const { repo, bare } = prepareProject(plan, scenario, workDir);
     writeGhReplay(ghDir, scenario);
     writeShims({ binDir, ghDir, recordFile }, { node: process.execPath, realGit: realGitPath() });
+    let sandbox = plan.pm.mode === "real" ? plan.pm.sandbox : null;
+    if (plan.pm.mode === "real") {
+      if (!sandbox) throw new Error("真模型必须使用通过 preflight 的沙箱");
+      const input = { ...(sandbox.input ?? pmSandboxInput(new URL("../../", import.meta.url).pathname, process.env)) };
+      input.writableDirs = [workDir];
+      input.projectDirs = [workDir, repo];
+      input.readDenied = [...(input.readDenied ?? []), dirname(dirname(plan.resultDir)), plan.workRoot, join(plan.version.daemonMain, "../../../test/eval/replay")];
+      const profile = join(workDir, "pm-sandbox.sb");
+      writeFileSync(profile, pmSandboxProfile(input));
+      const check = preflight(profile, input, { probeDir: workDir, evalPid: process.pid, realClaude: plan.pm.realClaude });
+      if (!check.ok) throw new Error(check.lines.join("\n"));
+      sandbox = { ...sandbox, profile };
+    }
     const routerConfig: RouterConfig =
       plan.pm.mode === "real"
-        ? { mode: "real", node: process.execPath, fakeClaude: FAKE_CLAUDE, realClaude: plan.pm.realClaude, sandbox: plan.pm.sandbox, settingsDir: join(workDir, "router-settings") }
+        ? { mode: "real", node: process.execPath, fakeClaude: FAKE_CLAUDE, realClaude: plan.pm.realClaude, sandbox, settingsDir: join(workDir, "router-settings") }
         : { mode: "scripted", node: process.execPath, fakeClaude: FAKE_CLAUDE, settingsDir: join(workDir, "router-settings") };
-    const isoEnv = isolationEnv({ workDir, binDir, ghDir, recordFile, originBare: bare, repo: scenario.gh.repo, routerConfig, jq: whichFirst("jq") });
+    const isoEnv = { EVAL_PROCESS_GROUPS: pidFile, ...isolationEnv({ workDir, binDir, ghDir, recordFile, originBare: bare, repo: scenario.gh.repo, routerConfig, jq: whichFirst("jq") }) };
     const pmSessions: FakeSessionScript[] = plan.pm.mode === "scripted" ? [{ role: "pm", script: plan.pm.script(ctx) }] : [];
     env.setScript({ sessions: [...pmSessions, ...workerSessions(plan, scenario, ctx, gateFile)] });
     daemon = await env.start({ vendorPath: ROUTER, main: plan.version.daemonMain, env: isoEnv });
@@ -257,6 +284,7 @@ export async function runTrial(plan: TrialPlan): Promise<TrialResult> {
     envError = `试跑出错：${error instanceof Error ? error.message : String(error)}`;
   } finally {
     if (daemon) await stopDaemon(daemon);
+    cleanup();
   }
   const endedAt = Date.now();
   let result: TrialResult;
@@ -267,7 +295,7 @@ export async function runTrial(plan: TrialPlan): Promise<TrialResult> {
     envError ??= isolationErrors(facts);
     const checks = runChecks(scenario.checks, facts);
     const promptSha256 = savePrompt(env.home, facts.pmSessionIds[0], plan.resultDir);
-    writeFileSync(join(plan.resultDir, "transcript.md"), transcript(facts));
+    writeFileSync(join(plan.resultDir, "transcript.md"), boundedText(transcript(facts)));
     result = { scenario: scenario.id, version: plan.version.label, commit: plan.version.commit, envError, checks, metrics: readMetrics(dbFile, facts), promptSha256, resultDir: plan.resultDir, workDir };
   }
   const passed = result.envError === null && result.checks.every((c) => c.status !== "fail");
@@ -277,6 +305,7 @@ export async function runTrial(plan: TrialPlan): Promise<TrialResult> {
   await env.cleanup({ keepDir: keep });
   result.workDir = keep ? workDir : null;
   writeFileSync(join(plan.resultDir, "result.json"), JSON.stringify(result, null, 2));
+  cleanup(true); unregister();
   return result;
 }
 
@@ -285,7 +314,7 @@ function savePrompt(home: string, pmSessionId: number | undefined, resultDir: st
   if (pmSessionId === undefined) return null;
   const file = join(home, "state", "launch", String(pmSessionId), "prompt.md");
   if (!existsSync(file)) return null;
-  copyFileSync(file, join(resultDir, "pm-prompt.md"));
+  writeFileSync(join(resultDir, "pm-prompt.md"), boundedText(readFileSync(file, "utf8")));
   return createHash("sha256").update(readFileSync(file)).digest("hex");
 }
 

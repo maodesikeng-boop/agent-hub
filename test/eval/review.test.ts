@@ -4,25 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { blameRight } from "./checks.ts";
-import { assertRealEvaluationSafe, pmSandboxProfile, sbString } from "./isolation.ts";
+import { pmSandboxProfile, sbString } from "./isolation.ts";
 import { sessionIsBusy } from "./trial.ts";
 import type { Facts } from "./types.ts";
 
 const root = mkdtempSync(join(tmpdir(), "eval-review-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
-
-describe("真模型隔离未完成时拒绝启动", () => {
-  it("安全门不能通过环境变量打开", () => {
-    expect(() => assertRealEvaluationSafe()).toThrow("真模型评测已停用");
-  });
-  it.each(["compare", "preflight"])("%s 在创建目录和运行 claude 前退出", (command) => {
-    const target = join(root, command);
-    const r = spawnSync(process.execPath, [new URL("./cli.ts", import.meta.url).pathname, command, "--root", target], { encoding: "utf8" });
-    expect(r.status).not.toBe(0);
-    expect(r.stderr).toMatch(/真模型评测已停用|评测要在 macOS 上跑/);
-    expect(existsSync(target)).toBe(false);
-  });
-});
 
 it("SBPL 路径转义引号、反斜线，拒绝控制字符", () => {
   expect(sbString('a"b\\c')).toBe('"a\\"b\\\\c"');

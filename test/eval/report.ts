@@ -1,5 +1,6 @@
 // 对照表（设计 4.4、第 6 节）：每个场景每条检查，旧版本、新版本各是过 / 不过 / 不适用，附原因和证据；另列每次试跑的用量。
 // 不报总分（总分会把“不读 diff 变好了”和“多挂了一个门禁”抵消掉）。结果目录的上限和保留期（设计第 7 节）也在这里。
+import { isActive } from "./lifecycle.ts";
 import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { EVAL_KEEP_FAILED_WORK, EVAL_KEEP_RUN_DAYS, EVAL_KEEP_RUNS } from "./limits.ts";
@@ -89,12 +90,13 @@ export function runIdOf(date: Date): string {
 export function pruneRuns(runsDir: string, now = Date.now()): string[] {
   if (!existsSync(runsDir)) return [];
   const runs = readdirSync(runsDir)
-    .filter((n) => /^\d{8}-\d{6}$/.test(n))
+    .filter((n) => /^\d{8}-\d{6}(?:-\d{3}(?:-[a-f0-9]+)?)?$/.test(n))
     .sort()
     .reverse();
   const removed: string[] = [];
   for (const [i, name] of runs.entries()) {
     const path = join(runsDir, name);
+    if (isActive(path)) continue;
     const tooOld = now - statSync(path).mtimeMs > EVAL_KEEP_RUN_DAYS * 86_400_000;
     if (i < EVAL_KEEP_RUNS && !tooOld) continue;
     rmSync(path, { recursive: true, force: true });
@@ -112,6 +114,7 @@ export function pruneFailedWork(workRoot: string): string[] {
     .sort((a, b) => b.mtime - a.mtime);
   const removed: string[] = [];
   for (const d of dirs.slice(EVAL_KEEP_FAILED_WORK)) {
+    if (isActive(d.path)) continue;
     rmSync(d.path, { recursive: true, force: true });
     removed.push(d.path);
   }

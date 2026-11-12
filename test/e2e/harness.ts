@@ -132,7 +132,7 @@ export interface E2eEnv {
 }
 
 /** root：临时目录建在哪（默认 shortTmp()）；prefix：目录名前缀（默认 ah-e2e-，要 ah-<字母数字>- 的形状，removeOwnClaudeProjects 才认）。 */
-export function makeEnv(options: { root?: string; prefix?: string } = {}): E2eEnv {
+export function makeEnv(options: { root?: string; prefix?: string; detached?: boolean } = {}): E2eEnv {
   const dir = mkdtempSync(join(options.root ?? shortTmp(), options.prefix ?? "ah-e2e-"));
   const home = join(dir, "home");
   const fakeDir = join(dir, "fake");
@@ -159,7 +159,7 @@ export function makeEnv(options: { root?: string; prefix?: string } = {}): E2eEn
   });
 
   const spawnDaemon = (vendorPath: string, extra?: Record<string, string>, main = MAIN) => {
-    const child = spawn(process.execPath, [main], { env: baseEnv(vendorPath, extra), stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(process.execPath, [main], { detached: options.detached ?? false, env: baseEnv(vendorPath, extra), stdio: ["ignore", "pipe", "pipe"] });
     running.add(child);
     let out = "";
     let err = "";
