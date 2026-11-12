@@ -140,8 +140,8 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
 
   return (
     <Collapsible asChild open={!collapsed} onOpenChange={(open) => setCollapsed(!open)}>
-      <section aria-label="Needs You" className="chat-column w-full shrink-0">
-        {/* 下边线只和对话列一样宽（不横贯整个主区），时间流往上滚的字在它下面 2rem 内渐隐（.router-timeline） */}
+      <section aria-label="Needs You" className="chat-column w-full shrink-0 pb-3">
+        {/* 下边线只和对话列一样宽（不横贯整个主区），线下留 12px 空白再接时间流；时间流往上滚的字在视口上边 2rem 内渐隐（.router-timeline） */}
         <div className="border-b border-border pt-2.5">
           <CollapsibleTrigger
             type="button"

@@ -192,6 +192,11 @@ code {
 [data-decision-context] .markdown > :last-child {
   margin-bottom: 0;
 }
+/* Router 时间流里的表格（总助的状态表：PM、项目、状态说明）：前几列是短词，不在连字符、汉字中间折开，
+   窄屏只让最后一列的长说明在列内折行（表格最宽是消息列，见下面 .markdown table） */
+.router-timeline .markdown :is(th, td):not(:last-child) {
+  white-space: nowrap;
+}
 .decision-context-clamp {
   --decision-context-lines: 5;
   max-height: calc(var(--decision-context-lines) * 1.65em);
@@ -463,6 +468,9 @@ code {
   text-decoration: none;
 }
 .markdown code {
+  /* 行内代码折到下一行时，每一段都有自己的圆角和内边距，不在折行处平切 */
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
   padding: 0.12em 0.4em;
   border-radius: 6px;
   background: var(--muted);
@@ -563,8 +571,11 @@ code {
   max-width: 100%;
   overflow-x: auto;
 }
+/* 宽度跟内容走，但最宽是消息列（max-width: 100%）：窄屏（手机）放不下时先让长单元格在列内折行，不在滚动边上把字切成半个；
+   每列都折到最窄（min-content）还放不下的表格，才在 [data-md-table] 里横向滚动 */
 .markdown table {
   width: max-content;
+  max-width: 100%;
   border-collapse: collapse;
 }
 .markdown th,

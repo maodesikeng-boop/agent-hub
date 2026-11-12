@@ -1,4 +1,5 @@
 // Router 工作台 v2（docs/ui-standard.md 第 21 条、docs/router-workbench-v2-design.md）：待拍板托盘 + 指令与简报时间流的端到端行为与守卫测试。
+import { readFileSync } from "node:fs";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement } from "react";
 import { userEvent } from "@testing-library/user-event";
@@ -614,12 +615,19 @@ describe("Needs You 托盘", () => {
       // 托盘本身不画横贯主区的线：线在对话列宽的内层；滚动区上下留出渐隐带的内边距，卡片底边不贴着裁剪边
       expect(tray.className).not.toMatch(/\bborder-b\b/);
       expect(tray.firstElementChild!.className).toContain("border-b");
+      // 线下留 12px 空白再接时间流的视口，滚上来的字不贴着线
+      expect(tray.className).toContain("pb-3");
       const scrollBox = tray.querySelector<HTMLElement>(".router-tray-scroll")!;
       expect(scrollBox.className).toContain("pb-5");
       expect(scrollBox.className).toContain("pt-2");
       // 时间流顶边渐隐，内容上内边距和渐隐带一样高
       expect(timeline().className).toContain("router-timeline");
       expect(timeline().firstElementChild!.className).toContain("pt-8");
+      // 窄屏表格：最宽是消息列（长说明在列内折行，不在滚动边上切半个字），时间流里前几列短词不折；行内代码折行时两段各自带圆角
+      const css = readFileSync("src/web/styles.css", "utf8");
+      expect(css).toMatch(/\n\.markdown table\s*\{[^}]*max-width:\s*100%/);
+      expect(css).toMatch(/\.router-timeline \.markdown :is\(th, td\):not\(:last-child\)\s*\{[^}]*white-space:\s*nowrap/);
+      expect(css).toMatch(/\n\.markdown code\s*\{[^}]*(?<!-webkit-)box-decoration-break:\s*clone/);
 
       const card = tray.querySelector("article")!;
       const context = card.querySelector<HTMLElement>("[data-decision-context]")!;
