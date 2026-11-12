@@ -16,6 +16,7 @@ import { assistantContext, buildChildEnv, parseUsage } from "../../daemon/driver
 import { killFreshGroup, termGroupAfterExit } from "../../daemon/driver/process.ts";
 import { trackChild } from "../../daemon/process-ledger.ts";
 import { ForkUnsupportedError } from "../../daemon/handover/forker.ts";
+import { ensureClaudeSkillPlugin } from "./skills.ts";
 import type { ForkHandle, ForkSource, ForkWriteResult, SessionForker } from "../../daemon/handover/forker.ts";
 
 /** 这个办法在 fork_ref 里的名字，发布后不改。 */
@@ -46,6 +47,8 @@ function buildClaudeForkArgs(src: ForkSource, forkId: string, persist: boolean, 
   if (!persist) args.push(NO_PERSISTENCE_ARG);
   args.push(...agentLaunchArgs({ vendor: src.vendor, model: src.model, effort: src.effort }));
   args.push("--append-system-prompt-file", src.launch.promptFile, "--settings", settings);
+  // 产品技能跟主会话一样挂上：技能清单一样，前缀缓存吃得上（插件目录一般是主会话起进程时写好的，没有就补上，内容一样不重写）
+  if (src.launch.skillsDir) args.push("--plugin-dir", ensureClaudeSkillPlugin(src.launch.skillsDir));
   for (const dir of src.addDirs) args.push("--add-dir", dir);
   return args;
 }

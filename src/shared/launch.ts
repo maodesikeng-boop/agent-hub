@@ -13,11 +13,14 @@ export interface LaunchContents {
   settings: string | null;
   /** 只读 Worker 的策略（LaunchFiles.readonly）；不是只读不给。给了才算进去，没给的算出来跟以前一样。 */
   readonly?: ReadonlyPolicy;
+  /** 产品自带技能的名字和说明（项目经理会话才有，shared/task-graph-skill.ts 的 taskGraphSkillCatalogEntry）：各家在会话开头读进技能清单，改了要重启。没给的算出来跟以前一样。 */
+  skills?: string;
 }
 
 /** sha256 十六进制。两段先按 JSON 数组编码再算，内容挪到另一段算不一样。同样的输入一定得到同样的结果。 */
 export function launchFingerprint(contents: LaunchContents): string {
   const parts: unknown[] = [contents.prompt, contents.settings];
   if (contents.readonly !== undefined) parts.push(contents.readonly);
+  if (contents.skills !== undefined) parts.push({ skills: contents.skills });
   return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
 }

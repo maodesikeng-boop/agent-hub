@@ -106,6 +106,17 @@ export function buildDeepSeekSystemPromptPatch(prompt: string): readonly DeepSee
   ];
 }
 
+/**
+ * 产品技能的会话级入口（spec 的 capabilities.skills 是 "native"，docs/orchestration-skill-design.md 第 6.2 节）：给 dsh-skill-filesystem
+ * （profile 里那一行的 id 是 skill-filesystem）设 customSkillDirs，dsh-tool-skill 在第一次请求前把它列进给模型的技能目录（一条用户角色的
+ * 持久消息），模型调 skill 工具拿正文。2026-11-12 dsh 0.2.2-rc.1 实测：带这个补丁的会话记录里技能目录有 fusa-task-graph，不带的没有。
+ * acp profile 里这一行本来没有 config，整行替换不丢默认值（同 buildDeepSeekSystemPromptPatch 那里记的坑）；不改 includeDefaultRoots，
+ * 项目和用户自己的技能照常扫。只对带这个 --patch 的进程生效，不写 $DSH_HOME/skills、~/.agents/skills 和仓库。
+ */
+export function buildDeepSeekSkillsPatch(skillsDir: string): readonly DeepSeekCordisPatchEntry[] {
+  return [{ id: "skill-filesystem", config: { customSkillDirs: [skillsDir] } }];
+}
+
 /** 生成供 daemon.ts launchFiles 写入 settings.json 的 Cordis patch JSON。 */
 export function buildDeepSeekPatchSettings(): string {
   return `${JSON.stringify(DEEPSEEK_SANDBOX_PATCH_ENTRIES, null, 2)}\n`;
@@ -292,6 +303,14 @@ function buildDeepSeekLaunchArgs(ctx: AcpLaunchContext): string[] {
     args.push("--patch", promptPatchPath);
   } else {
     rmSync(promptPatchPath, { force: true });
+  }
+  // 产品技能（只有项目经理会话有）：给 skill-filesystem 加一个技能根，进模型看到的技能目录（buildDeepSeekSkillsPatch）
+  const skillsPatchPath = join(launchDir, "dsh-skills.patch.json");
+  if (ctx.files.skillsDir) {
+    writeFileSync(skillsPatchPath, `${JSON.stringify(buildDeepSeekSkillsPatch(ctx.files.skillsDir), null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    args.push("--patch", skillsPatchPath);
+  } else {
+    rmSync(skillsPatchPath, { force: true });
   }
   const rawModel = ctx.row.model?.trim() ?? "";
   if (rawModel !== "") {

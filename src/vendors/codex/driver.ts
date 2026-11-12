@@ -38,6 +38,7 @@ import {
   buildCodexArgs,
   buildInitializeRequest,
   buildInitializedNotification,
+  buildSkillsExtraRootsRequest,
   buildJsonRpcResponse,
   buildThreadResumeRequest,
   buildThreadStartRequest,
@@ -85,7 +86,7 @@ interface Steer {
   resolve: (outcome: SteerOutcome) => void;
 }
 
-type RpcPhase = "initialize" | "thread_resume" | "thread_start" | "turn_start" | "turn_interrupt" | "turn_steer";
+type RpcPhase = "initialize" | "skills_extra_roots" | "thread_resume" | "thread_start" | "turn_start" | "turn_interrupt" | "turn_steer";
 
 interface Proc extends BaseProc<StartupOutcome> {
   launchConfig: CodexLaunchConfig;
@@ -486,6 +487,24 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     return proc;
   }
 
+  /** 握手第 3 步：建立或恢复线程。 */
+  #openThread(st: SessionState, proc: Proc): void {
+    const row = this.row(st);
+    const sessionInfo = {
+      vendorSessionId: row?.vendorSessionId ?? proc.threadId ?? "",
+      cwd: row?.cwd ?? proc.launched.cwd,
+      model: row?.model ?? proc.launched.model ?? proc.defaultModel,
+    };
+    const nextId = ++this.requestSeq;
+    if (proc.resume) {
+      proc.pendingRpcs.set(nextId, "thread_resume");
+      proc.child.stdin.write(buildThreadResumeRequest(nextId, sessionInfo, proc.launchConfig) + "\n");
+    } else {
+      proc.pendingRpcs.set(nextId, "thread_start");
+      proc.child.stdin.write(buildThreadStartRequest(nextId, sessionInfo, proc.launchConfig) + "\n");
+    }
+  }
+
   // --- JSON-RPC 2.0 输出处理 ---
 
   protected onParsedLine(
@@ -547,21 +566,24 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         }
         // 第 2 步：发 initialized 通知
         proc.child.stdin.write(buildInitializedNotification() + "\n");
-        // 第 3 步：建立或恢复线程
-        const row = this.row(st);
-        const sessionInfo = {
-          vendorSessionId: row?.vendorSessionId ?? proc.threadId ?? "",
-          cwd: row?.cwd ?? proc.launched.cwd,
-          model: row?.model ?? proc.launched.model ?? proc.defaultModel,
-        };
-        const nextId = ++this.requestSeq;
-        if (proc.resume) {
-          proc.pendingRpcs.set(nextId, "thread_resume");
-          proc.child.stdin.write(buildThreadResumeRequest(nextId, sessionInfo, proc.launchConfig) + "\n");
-        } else {
-          proc.pendingRpcs.set(nextId, "thread_start");
-          proc.child.stdin.write(buildThreadStartRequest(nextId, sessionInfo, proc.launchConfig) + "\n");
+        // 项目经理会话：先挂产品技能目录，回了再建线程（线程开头就看得到技能清单）
+        if (proc.launchConfig.skillRoots.length > 0) {
+          const skillsId = ++this.requestSeq;
+          proc.pendingRpcs.set(skillsId, "skills_extra_roots");
+          proc.child.stdin.write(buildSkillsExtraRootsRequest(skillsId, proc.launchConfig.skillRoots) + "\n");
+          return;
         }
+        this.#openThread(st, proc);
+        return;
+      }
+
+      case "skills_extra_roots": {
+        // 挂不上（老版本 codex 没有这个实验接口）不拦启动：提示词里有技能文件的路径，agent 照样能读
+        if (errorObj) {
+          const message = typeof errorObj.message === "string" ? errorObj.message : JSON.stringify(errorObj);
+          this.opts.log?.(`[codex] session ${st.id} skills/extraRoots/set 失败，任务图手册只能按路径读：${message}`);
+        }
+        this.#openThread(st, proc);
         return;
       }
 

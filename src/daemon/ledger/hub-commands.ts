@@ -116,8 +116,21 @@ export function createLedgerHubCommands(
   workerView: ReturnType<typeof createLedgerWorkerView>,
   router: LedgerRouter,
   taskGraphs: LedgerTaskGraphs,
+  /** 任务图手册那一行（task-graph-skill.ts 的 taskGraphManualNote，按调用的会话填路径）。 */
+  taskGraphManual: (sessionId: SessionId) => string = () => "",
 ) {
   const { db, now, write } = ctx;
+  /** hub graph create、patch：回执带手册路径，出错的报错也带（第 7 节第 2 条）。 */
+  const withManual = <T extends { text: string }>(sessionId: SessionId, run: () => T): T => {
+    const note = taskGraphManual(sessionId);
+    try {
+      const result = run();
+      return note === "" ? result : { ...result, text: `${result.text}\n\n${note}` };
+    } catch (error) {
+      if (note !== "" && error instanceof LedgerRequestError) throw new LedgerRequestError(error.code, `${error.message}\n${note}`);
+      throw error;
+    }
+  };
   const { pmRow, pmSession, getPersona, editPersonaChecked, assertPmNotArchived } = persona;
   const { activeProjectOf, projectCard, createProjectIn, attachIn, detachIn, setupIn } = projects;
 
@@ -135,8 +148,10 @@ export function createLedgerHubCommands(
         const project = row === null ? null : projectCard(row);
         const setupCommand = row?.setup_command ?? null;
         const { summaries, textBlock } = taskGraphs.pmStatusGraphs(pm.id);
+        // 手里有图时带上手册路径：换了会话、厂商压缩丢了前文之后靠这一行找回来（第 7 节第 3 条）
+        const manual = summaries.length > 0 ? taskGraphManual(caller.id) : "";
         return {
-          text: `你是项目经理“${pm.name}”（${PM_MODE_LABELS[pm.mode as PmMode]}），${describeProject(project)}${describeSetup(project, setupCommand)}${textBlock}`,
+          text: `你是项目经理“${pm.name}”（${PM_MODE_LABELS[pm.mode as PmMode]}），${describeProject(project)}${describeSetup(project, setupCommand)}${textBlock}${manual === "" ? "" : `\n${manual}`}`,
           data: {
             role: "pm",
             pm: { id: pm.id, name: pm.name, mode: pm.mode as PmMode },
@@ -242,7 +257,7 @@ export function createLedgerHubCommands(
       case "router.note":
         return router.noteIn(p, caller, args as HubArgs<"router.note">);
       case "graph.create":
-        return taskGraphs.createIn(p, caller, args as HubArgs<"graph.create">);
+        return withManual(caller.id, () => taskGraphs.createIn(p, caller, args as HubArgs<"graph.create">));
       case "graph.show":
         return taskGraphs.show(caller, args as HubArgs<"graph.show">);
       case "graph.list":
@@ -250,7 +265,7 @@ export function createLedgerHubCommands(
       case "graph.ask":
         return taskGraphs.askIn(p, caller, args as HubArgs<"graph.ask">);
       case "graph.patch":
-        return taskGraphs.patchIn(p, caller, args as HubArgs<"graph.patch">);
+        return withManual(caller.id, () => taskGraphs.patchIn(p, caller, args as HubArgs<"graph.patch">));
       case "graph.done":
         return taskGraphs.doneIn(p, caller, args as HubArgs<"graph.done">);
       case "graph.decide":

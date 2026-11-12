@@ -3,12 +3,29 @@
 // - S5a CI 镜像故障：同一个托盘 PR 的 4 路检查在装 bubblewrap、socat 时解析不了 Ubuntu 软件源（11-11 22:42～23:15，
 //   消息 #49679、#49726、#49842；run 43040062881 两次的真实失败日志）；
 // - H2 验收不读代码：11-11 23:17 真实的那次习惯改动（性格设定改动记录 #118 新加的那一条）。
+// 防过度建图的 5 个场景（docs/orchestration-skill-design.md 第 8 节：简单活不建图、一段活只派一个 Worker、复杂活会加载任务图手册）：
+// - K1 装软件并接上（项目经理“magpie”11-12 10:32～10:43，消息 #50482，任务图 #7，Worker 465、466）；
+// - K2 改本机配置（同一个对话 11-12 10:48，消息 #50729，PM 自己做完）；
+// - K3 合 PR（11-10 17:33:14，消息 #34762，PR 238）；
+// - K4 升级本机的命令行工具（11-11 09:46，消息 #40114，Worker 388）；
+// - K5 修一个界面 bug（11-12 09:59，消息 #50200，Worker 463，PR 295）。
+// 现有三个场景挂上 L1（建了图就要先加载手册），S3a 再挂 T1（不建图）。装软件、改本机配置不能真做：magpie、curl、pi、npm……
+// 用命令替身回放当时的真实输出（replay/*/stubs.json，取自账本和那几次会话的原始记录，登录链接、账号这类一次性或个人信息已去掉）。
 // 被测项目经理的性格设定一律是中性的空设定（NEUTRAL_PERSONA）：用户 11-12 说“肯定不能你来跑，你有我们的上下文”，
 // 现任项目经理的性格设定里已经写着考点，不能拿来用；用户的习惯只由场景在考的时候注入（H2 用资料页的接口改性格设定）。
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   askBeforeScope,
+  checkedThenMerged,
+  jobDone,
+  loadedBeforeGraph,
+  manualLoadsRecorded,
+  mergedGreen,
+  noDiffBeforeMerge,
+  noGraph,
+  ranCommands,
+  workerCap,
   askedWithCard,
   blameRight,
   cardRecommends,
@@ -25,7 +42,7 @@ import {
   smallGraph,
   type TraySpec,
 } from "./checks.ts";
-import type { AskSeen, GhAttempt, GhPr, GhReplay, Scenario, ScenarioContext, WorkerReplay } from "./types.ts";
+import type { AskSeen, CommandStubs, GhAttempt, GhPr, GhReplay, Scenario, ScenarioContext, WorkerReplay } from "./types.ts";
 
 export const REPLAY_DIR = new URL("./replay/", import.meta.url).pathname;
 const read = (rel: string) => readFileSync(join(REPLAY_DIR, rel), "utf8");
@@ -128,7 +145,178 @@ function answerByRecommendation(ask: AskSeen): { text: string; scripted: boolean
   return { text: recommended ?? "按你的推荐来", scripted: false };
 }
 
-const TRAY_CHECKS = [dispatched(TRAY_SPEC), noReview(TRAY_SPEC), noPreGate(TRAY_SPEC), smallGraph(TRAY_SPEC), quotesKept(TRAY_SPEC), noDiffRead(TRAY_SPEC), lookedAtEvidence(TRAY_SPEC)];
+const TRAY_CHECKS = [
+  dispatched(TRAY_SPEC),
+  noReview(TRAY_SPEC),
+  noPreGate(TRAY_SPEC),
+  smallGraph(TRAY_SPEC),
+  quotesKept(TRAY_SPEC),
+  noDiffRead(TRAY_SPEC),
+  lookedAtEvidence(TRAY_SPEC),
+  // 一段活：不建图（docs/orchestration-skill-design.md 第 8.2 节）；建了的话建图前要加载手册
+  noGraph(),
+  loadedBeforeGraph(),
+];
+
+// ---- 防过度建图（K1～K5）----
+
+const stubs = (rel: string) => JSON.parse(read(rel)) as CommandStubs;
+
+/** 当时的主干提交（K1、K2 的项目是 magpie 仓库，评测拿本仓库当主文件夹：这两件事都不改项目文件）。 */
+const MAIN_1112 = "a26be7e681dd75756f438eb05c2749525272a971";
+const MAIN_1111 = "d7e542e0b1d95a563bae78872b6ce1086f553cdb";
+/** PR 238 的 base、Worker #463 的 base_commit。 */
+const PR238_BASE = "6aade5cb647e6c534bdb6c655628297b45960994";
+const W463_BASE = "03473c6fab1eeb054300b8e4b3a1113c25c8eda5";
+
+/** 用户当时在卡片和对话里的原话（消息 #50501 的定案、#50586）。 */
+const K1_APPROVE = "批准，按计划装";
+const K1_LOGGED_IN = "已登录成功；网关临时用 magpie serve 跑";
+
+const passChecks = (runId: number, firstJob: number) => ({
+  runId,
+  workflow: "check",
+  jobs: JOBS.map((j, i) => ({ ...j, databaseId: firstJob + i })),
+  attempts: [{ status: "pass" as const }],
+});
+
+const PR_238: GhPr = {
+  number: 238,
+  title: "docs: rewrite README opening around managing a project in one conversation",
+  body: "README 开头改成 Fusa：一个会话管住整个项目；安全说明、Linux 文档同步改名。",
+  headRefName: "hub/340-重写-readme-开头-突出-一个会话管住整个项目",
+  headRefOid: "227e024da6a4b3bb0ee62aa4165f1202123f8c9e",
+  state: "OPEN",
+  files: [
+    { path: "README.md", additions: 99, deletions: 19 },
+    { path: "SECURITY.md", additions: 4, deletions: 4 },
+    { path: "docs/linux.md", additions: 2, deletions: 2 },
+    { path: "docs/screenshots/readme-home.png", additions: 0, deletions: 0 },
+  ],
+  checks: passChecks(42850000001, 130100000000),
+};
+
+const PR_295: GhPr = {
+  number: 295,
+  title: "修复果皮轨多步并行链交错排布假连线与全览长边穿卡",
+  body: "紧凑果皮轨同链连续排布，并行链在汇合前不再交错；全览长边绕开卡片。",
+  headRefName: "hub/463-果皮轨-并行链在汇合前交错排布导致假连线",
+  headRefOid: "d67d224774aa971827d5f8452788691f22d4d9a9",
+  state: "OPEN",
+  files: [
+    { path: "docs/ui-standard.md", additions: 6, deletions: 6 },
+    { path: "src/web/components/PeelTrack.tsx", additions: 656, deletions: 198 },
+    { path: "src/web/task-graph-layout.test.ts", additions: 65, deletions: 0 },
+    { path: "src/web/task-graph-layout.ts", additions: 100, deletions: 3 },
+    { path: "src/web/task-graph-rail.test.tsx", additions: 278, deletions: 40 },
+  ],
+  checks: passChecks(43060000001, 130700000000),
+};
+
+/** K5 那件事：认 Worker 的关键词、要逐字带的原话、PR 295 改的文件。 */
+const UI_BUG_SPEC: TraySpec = {
+  keywords: ["果皮轨", "连线", "验证方案", "拍板", "拍版"],
+  quotes: ["验证方案不应该直接连接用户拍版"],
+  changedFiles: PR_295.files.map((f) => f.path),
+  maxNodes: 1,
+};
+
+/** K1：批准跑外部安装脚本按当时的定案答；问登录按用户当时的原话答；别的按推荐。 */
+function answerInstall(ask: AskSeen): { text: string; scripted: boolean } {
+  const all = `${ask.text}\n${ask.options.join("\n")}`;
+  if (/登录|授权|链接|sign in/i.test(all)) return { text: K1_LOGGED_IN, scripted: true };
+  if (/批准|安装|脚本|install/i.test(all)) return { text: ask.options.find((o) => o.includes("批准")) ?? K1_APPROVE, scripted: true };
+  return answerByRecommendation(ask);
+}
+
+const K_SCENARIOS: Scenario[] = [
+  {
+    id: "k1-install",
+    title: "K1 装软件并接上（简单活不建图）",
+    source: "项目经理“magpie”11-12 10:32～10:43，消息 #50482；当时建了任务图 #7（5 个节点、3 道门禁）、派了 Worker 465、466。用户 11-12 10:44“比如一个安装软件，就不需要拆的很复杂”",
+    baseCommit: MAIN_1112,
+    demand: () => `${read("install/prelude.md")}接一下试试`,
+    // 一个 Worker 从安装做到冒烟测试：第一轮交回 465 的汇报（装好了、等用户登录），用户登录后被叫醒交回 466 的汇报
+    workers: [{ name: "装 magpie 并接 Pi", promptIncludes: ["magpie", "Antigravity", "antigravity"], reportFile: "install/report-465.md", laterReportFiles: ["install/report-466.md"] }],
+    fallbackReport: GENERIC_REPORT,
+    gh: ghReplay([]),
+    stubs: stubs("install/stubs.json"),
+    answer: answerInstall,
+    // 项目经理把登录链接交给用户后（Worker 交回了汇报，或者它自己发起了登录），用户答当时的原话
+    followUp: { text: K1_LOGGED_IN, afterTool: { tool: "magpie", match: "plugin login" } },
+    checks: [
+      noGraph(),
+      workerCap({ max: 1 }),
+      jobDone("装上了（派了 Worker 或自己装）", { keywords: ["magpie", "Antigravity", "antigravity"], commands: [{ tool: "curl", match: "install.sh" }, { tool: "magpie", match: "plugin add" }] }),
+      loadedBeforeGraph(),
+      manualLoadsRecorded(),
+    ],
+  },
+  {
+    id: "k2-local-config",
+    title: "K2 改本机配置（自己做，不派 Worker）",
+    source: "同一个对话 11-12 10:48，消息 #50729；当时 PM 自己跑命令做完（53 秒、7 次工具调用），第一次 magpie visible 后模型文件没重写，切一下默认模型才生效。用户 11-12 10:44“变量很少…步骤大概率会成功，不用创造新的上下文”",
+    baseCommit: MAIN_1112,
+    demand: () => `${read("local-config/prelude.md")}A. 只给 Pi 显示 Antigravity 的模型（magpie visible pi antigravity），再刷新 hub 的模型列表`,
+    workers: [],
+    fallbackReport: GENERIC_REPORT,
+    gh: ghReplay([]),
+    stubs: stubs("local-config/stubs.json"),
+    answer: answerByRecommendation,
+    checks: [
+      noGraph(),
+      // 第 11.1 节定的 A：“只管理”的 PM 直接做，只要不改项目里的文件
+      workerCap({ max: 0 }),
+      ranCommands([{ tool: "magpie", match: "visible pi antigravity" }], [{ command: "models", args: { vendor: "pi", refresh: true } }]),
+      loadedBeforeGraph(),
+      manualLoadsRecorded(),
+    ],
+  },
+  {
+    id: "k3-merge",
+    title: "K3 合 PR（看检查就合，不读 diff）",
+    source: "本项目 PM 11-10 17:33:14，消息 #34762“可以合吧”；当时 11 秒后合并命令已经发出。用户 11-12 10:44“简单的需求也拆得很复杂”",
+    baseCommit: PR238_BASE,
+    demand: () => `${read("merge/prelude.md")}可以合吧`,
+    workers: [],
+    fallbackReport: GENERIC_REPORT,
+    gh: { repo: REPO, prs: [PR_238], nextPr: 239 },
+    answer: answerByRecommendation,
+    checks: [noGraph(), workerCap({ max: 0 }), checkedThenMerged(238), mergedGreen(238), noDiffBeforeMerge(238), loadedBeforeGraph(), manualLoadsRecorded()],
+  },
+  {
+    id: "k4-upgrade",
+    title: "K4 升级本机的命令行工具（不建图，最多一个 Worker）",
+    source: "本项目 PM 11-11 09:46，消息 #40114；当时派了一个不建图、不开 worktree 的 Worker #388（9 分钟、43 次工具调用）。用户 11-12 10:44“什么事情是有必要拆的呢”",
+    baseCommit: MAIN_1111,
+    demand: () => `${read("upgrade/prelude.md")}更新一下本机的这些agent`,
+    workers: [{ name: "升级命令行", promptIncludes: ["升级", "更新", "CLI", "命令行"], reportFile: "upgrade/report-388.md" }],
+    fallbackReport: GENERIC_REPORT,
+    gh: ghReplay([]),
+    stubs: stubs("upgrade/stubs.json"),
+    answer: answerByRecommendation,
+    checks: [
+      noGraph(),
+      workerCap({ max: 1 }),
+      jobDone("升级了（派了 Worker 或自己升）", { keywords: ["升级", "更新"], commands: [{ tool: "npm", match: "install" }, { tool: "claude", match: "update" }, { tool: "cursor-agent", match: "update" }] }),
+      loadedBeforeGraph(),
+      manualLoadsRecorded(),
+    ],
+  },
+  {
+    id: "k5-ui-bug",
+    title: "K5 修一个界面 bug（正好一个 Worker，不建图、不审查）",
+    source: "本项目 PM 11-12 09:59，消息 #50200（果皮轨连线画错）；当时派了一个不建图的 Worker #463，提了 PR 295。用户 11-12 10:44“写代码，写方案，需要在一个专属的空间内完成”",
+    baseCommit: W463_BASE,
+    // 当时还附了一张截图，回放包里不带（判定不看它）
+    demand: () => `${read("ui-bug/prelude.md")}这个图是不是还是有问题，验证方案不应该直接连接用户拍版吗，`,
+    workers: [{ name: "果皮轨", promptIncludes: [...UI_BUG_SPEC.keywords], reportFile: "ui-bug/report-463.md" }],
+    fallbackReport: GENERIC_REPORT,
+    gh: { repo: REPO, prs: [PR_295], nextPr: 296 },
+    answer: answerByRecommendation,
+    checks: [noGraph(), workerCap({ exact: 1 }), noReview(UI_BUG_SPEC), noDiffRead(UI_BUG_SPEC), lookedAtEvidence(UI_BUG_SPEC), loadedBeforeGraph(), manualLoadsRecorded()],
+  },
+];
 
 export const SCENARIOS: readonly Scenario[] = [
   {
@@ -176,6 +364,7 @@ export const SCENARIOS: readonly Scenario[] = [
       askBeforeScope(TRAY_SPEC),
       askedWithCard(TRAY_SPEC),
       cardRecommends(TRAY_SPEC),
+      loadedBeforeGraph(),
     ],
   },
   {
@@ -191,8 +380,9 @@ export const SCENARIOS: readonly Scenario[] = [
     answer: answerByRecommendation,
     // 托盘 Worker 开工后、汇报之前（设计 3.5 的 T3），经资料页的接口在性格设定里加上 11-11 23:17 真实加的那一条
     injectOnWorkerStart: { worker: "托盘", personaAppend: read("habit/persona-line.md") },
-    checks: [dispatched(TRAY_SPEC), personaReachedPm(), noDiffRead(TRAY_SPEC), lookedAtEvidence(TRAY_SPEC)],
+    checks: [dispatched(TRAY_SPEC), personaReachedPm(), noDiffRead(TRAY_SPEC), lookedAtEvidence(TRAY_SPEC), loadedBeforeGraph()],
   },
+  ...K_SCENARIOS,
 ];
 
 export function scenarioById(id: string): Scenario {
@@ -201,4 +391,4 @@ export function scenarioById(id: string): Scenario {
   return s;
 }
 
-export { TRAY_SPEC };
+export { TRAY_SPEC, UI_BUG_SPEC };

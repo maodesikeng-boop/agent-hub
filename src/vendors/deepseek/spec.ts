@@ -128,5 +128,7 @@ export default defineVendor({
     // dsh 的 ACP 没有 systemPrompt 能力，但 --patch 能改 system-prompt 行的 personaSuffix：进 system 消息（会话第 0 个节点），
     // dsh 压缩只缩历史、不动系统提示词（2026-11-11 dsh 0.2.2-rc.1 + 假 DeepSeek 接口实测）。驱动层写补丁文件（driver.ts）
     systemPrompt: "resident",
+    // 任务图手册：--patch 给 skill-filesystem 设 customSkillDirs，进模型看到的技能目录（2026-11-12 dsh 0.2.2-rc.1 实测）
+    skills: "native",
   },
 });

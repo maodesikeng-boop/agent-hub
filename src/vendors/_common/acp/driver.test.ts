@@ -282,6 +282,7 @@ describe("VendorSpec models.flags 可选适配", () => {
         backgroundWake: false,
         readonly: "os_sandbox",
         systemPrompt: "first_message",
+        skills: "read_file",
       },
     });
     expect(acpLikeSpec.models.flags).toBeUndefined();

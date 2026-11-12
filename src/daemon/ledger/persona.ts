@@ -47,7 +47,7 @@ import {
   vendorLabel,
 } from "../../shared/vendors.ts";
 import type { AgentSetting, AgentVendor } from "../../shared/vendors.ts";
-import { personaFilePath, pmMemoryDirPath } from "../../shared/paths.ts";
+import { personaFilePath, pmMemoryDirPath, sessionLaunchDir } from "../../shared/paths.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
 import {
   deletePmMemoryFile as deleteMemorySubfile,
@@ -806,7 +806,7 @@ export function createLedgerPersona(
           }
           if (files.launchDir !== undefined) {
             for (const sid of sessionIds) {
-              rmSync(join(files.launchDir, `session-${sid}`), { recursive: true, force: true });
+              rmSync(sessionLaunchDir(files.launchDir, sid), { recursive: true, force: true });
             }
           }
           if (files.setupLogsDir !== undefined) {

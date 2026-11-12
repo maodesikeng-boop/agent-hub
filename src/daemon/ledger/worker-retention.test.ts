@@ -7,7 +7,7 @@ import type { Change } from "../../shared/api.ts";
 import type { ConversationId, PmId, SessionId, WorkerId } from "../../shared/domain.ts";
 import type { DriverEvent } from "../../shared/driver.ts";
 import { PM_ARCHIVE_RETENTION_MS, WORKER_PURGE_BATCH_ROWS, WORKER_RETENTION_DAYS, WORKER_RETENTION_MS } from "../../shared/limits.ts";
-import { workerSetupLogPath } from "../../shared/paths.ts";
+import { sessionLaunchDir, workerSetupLogPath } from "../../shared/paths.ts";
 import { enqueueAction, listActions } from "../actions/index.ts";
 import { createSessionStore } from "../store/index.ts";
 import type { Db } from "../store/index.ts";
@@ -97,8 +97,8 @@ function startWorker(title: string, extraMessages = 0): WorkerId {
     now,
   );
   db.run("INSERT INTO worker_background_waits (session_id, turn_start, background, created_at) VALUES (?, 1, 1, ?)", sessionOf(w), now);
-  mkdirSync(join(launchDir, `session-${sessionOf(w)}`), { recursive: true });
-  writeFileSync(join(launchDir, `session-${sessionOf(w)}`, "settings.json"), "{}");
+  mkdirSync(sessionLaunchDir(launchDir, sessionOf(w)), { recursive: true });
+  writeFileSync(join(sessionLaunchDir(launchDir, sessionOf(w)), "settings.json"), "{}");
   mkdirSync(setupLogsDir, { recursive: true });
   writeFileSync(workerSetupLogPath(setupLogsDir, w), "setup log");
   return w;
@@ -144,7 +144,7 @@ describe("已收工 Worker 的对话保留期", () => {
     expect(count("handovers", "conversation_id = ?", conv)).toBe(0);
     expect(count("worker_background_waits", "session_id = ?", sid)).toBe(0);
     expect(listActions(db).filter((a) => JSON.stringify(a.params).includes(`"workerId":${w}`) || JSON.stringify(a.params).includes(`"sessionId":${sid}`))).toEqual([]);
-    expect(existsSync(join(launchDir, `session-${sid}`))).toBe(false);
+    expect(existsSync(sessionLaunchDir(launchDir, sid))).toBe(false);
     expect(existsSync(workerSetupLogPath(setupLogsDir, w))).toBe(false);
     expect(purgedAt(w)).toBe(endedAt + WORKER_RETENTION_MS);
     expect(changes).toEqual([expect.objectContaining({ type: "conversation.purged", data: { conversationId: conv, purgedAt: endedAt + WORKER_RETENTION_MS } })]);

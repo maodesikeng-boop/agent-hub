@@ -13,7 +13,7 @@ import {
   PM_ARCHIVE_RETENTION_DAYS,
   PM_ARCHIVE_RETENTION_MS,
 } from "../../shared/limits.ts";
-import { personaFilePath, projectWorktreesDir, workerSetupLogPath, workerWorktreePath } from "../../shared/paths.ts";
+import { personaFilePath, projectWorktreesDir, sessionLaunchDir, workerSetupLogPath, workerWorktreePath } from "../../shared/paths.ts";
 import { enqueueAction, listActions } from "../actions/index.ts";
 import { createSessionStore, migrate } from "../store/index.ts";
 import type { Db } from "../store/index.ts";
@@ -417,8 +417,8 @@ describe("purgeExpiredArchivedPms（7 天到期彻底清理）", () => {
     const pmHomePath = join(pmHomeRoot, String(lin.pmId));
     const personaPath = personaFilePath(personasDir, lin.pmId);
     const worktreePath = workerWorktreePath(worktreesDir, projLin.id, workerId);
-    const pmLaunchPath = join(launchDir, `session-${lin.sessionId}`);
-    const workerLaunchPath = join(launchDir, `session-${workerSessionId}`);
+    const pmLaunchPath = sessionLaunchDir(launchDir, lin.sessionId);
+    const workerLaunchPath = sessionLaunchDir(launchDir, workerSessionId);
     const setupLogPath = workerSetupLogPath(setupLogsDir, workerId);
     mkdirSync(worktreePath, { recursive: true });
     writeFileSync(join(worktreePath, "temp.txt"), "worktree file");

@@ -487,6 +487,13 @@ export interface LaunchFiles {
    */
   settingsFile?: string;
   /**
+   * 产品自带技能的根目录（launch/<会话>/skills，一个技能一个子目录，目前只有任务图手册 fusa-task-graph；daemon/task-graph-skill.ts）。
+   * 只有项目经理会话有，Worker、总助没有。spec 的 capabilities.skills 为 "native" 的厂商由驱动层挂进只对这次会话生效的原生技能入口
+   * （claude --plugin-dir、codex skills/extraRoots/set、agy 的规则目录、pi --skill、deepseek customSkillDirs），没有的不管
+   * （提示词里写了路径，agent 自己读）。名字和说明算进 fingerprint，正文不算（加载时才读文件，改了不用重启）。
+   */
+  skillsDir?: string;
+  /**
    * 这一次启动额外的环境变量（M2）：ENV_HUB_TOKEN、ENV_HUB_SOCK、PATH（hub 外壳所在的 run/bin 放最前面，后面接守护进程自己的 PATH）。
    * 合并顺序：守护进程的 process.env < DriverOptions.env < 这里，同名的后者覆盖前者（PATH 整个替换）。
    * 不参与是否重启的判断（见上面“两轮之间自动重启”）。

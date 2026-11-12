@@ -336,6 +336,14 @@ export function workerWorktreePath(worktreesDir: string, projectId: number, work
   return join(projectWorktreesDir(worktreesDir, projectId), String(workerId));
 }
 
+/**
+ * 一个会话的启动目录 state/launch/<会话编号>/（prompt.md、设置文件、产品自带技能、agy 的规则目录……）：
+ * 写的（daemon/launch.ts、router/sandbox.ts）和删的（项目经理彻底删除、Worker 保留期清理）都用这一个函数，名字对不上就删不掉。
+ */
+export function sessionLaunchDir(launchDir: string, sessionId: number): string {
+  return join(launchDir, String(sessionId));
+}
+
 /** 一个 Worker 的准备命令日志：每跑一次追加一段（重启后重跑也在同一个文件里）。 */
 export function workerSetupLogPath(setupLogsDir: string, workerId: number): string {
   return join(setupLogsDir, `worker-${workerId}.log`);

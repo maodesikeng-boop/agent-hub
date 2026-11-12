@@ -16,6 +16,7 @@ import type {
   RateLimitWindow,
 } from "../../shared/index.ts";
 import { runPs } from "../../daemon/driver/process.ts";
+import { claudePluginDirOf } from "./skills.ts";
 import { StreamingToolPreviewTracker, lineUuid, pickStepInput, userContent } from "../../daemon/driver/protocol.ts";
 
 /**
@@ -338,6 +339,8 @@ export function buildClaudeArgs(session: AgentSessionRow, files: LaunchFiles, re
   args.push(...agentLaunchArgs({ vendor: session.vendor as AgentVendor, model: session.model, effort: session.effort }));
   args.push("--append-system-prompt-file", files.promptFile);
   if (files.settingsFile) args.push("--settings", files.settingsFile);
+  // 产品技能（只有项目经理会话有）：插件目录由驱动层起进程前写好（skills.ts 的 ensureClaudeSkillPlugin）
+  if (files.skillsDir) args.push("--plugin-dir", claudePluginDirOf(files.skillsDir));
   // 只读 Worker：default 模式下要批准的工具发 can_use_tool 控制请求给我们（src/vendors/claude/readonly.ts 的 ClaudeReadonlyGate 回话）
   if (files.readonly) args.push("--permission-prompt-tool", CLAUDE_PERMISSION_PROMPT_TOOL);
   for (const dir of session.addDirs) args.push("--add-dir", dir);

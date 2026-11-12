@@ -61,7 +61,7 @@ export interface HandoverOptions {
   /** 有交接可以领了（shared/handover.ts 的 claimHandover）：守护进程接到跑腿的 wake。默认什么都不做。 */
   onHandoverClaimable?: () => void;
   /** 新会话首次启动时实时读取该 PM 未完结的任务图摘要（账本实时状态，不走静态快照防过期）。 */
-  liveActiveGraphsSection?: (pmId: PmId) => string | null;
+  liveActiveGraphsSection?: (pmId: PmId, sessionId: SessionId) => string | null;
 }
 
 const SEARCH_COMMANDS = `\`${HUB_COMMAND} worker search\`、\`${HUB_COMMAND} worker show --task / --report\``;
@@ -979,7 +979,7 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
       });
     }
     if (base === null) return null;
-    const liveGraphs = session.pmId === null ? null : (options.liveActiveGraphsSection?.(session.pmId) ?? null);
+    const liveGraphs = session.pmId === null ? null : (options.liveActiveGraphsSection?.(session.pmId, session.id) ?? null);
     return liveGraphs === null || liveGraphs === ""
       ? base
       : `${base}\n\n## 未完结的任务图（账本实时状态）\n\n${liveGraphs}`;

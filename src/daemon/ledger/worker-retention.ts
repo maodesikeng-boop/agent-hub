@@ -11,10 +11,9 @@
 // 分批：每批一个事务（BEGIN IMMEDIATE），最多删 maxRows 行，没删完的下一批（下一轮）接着删，所以锁库的时间有上限；
 // 一个 Worker 的数据删完的那一批才记进 conversation_purges、推 conversation.purged，中途失败回滚后下次接着来。
 import { rmSync } from "node:fs";
-import { join } from "node:path";
 import type { ConversationId, SessionId, WorkerId } from "../../shared/domain.ts";
 import { WORKER_PURGE_BATCH_ROWS, WORKER_PURGE_CANDIDATES_PER_BATCH, WORKER_RETENTION_MS } from "../../shared/limits.ts";
-import { workerSetupLogPath } from "../../shared/paths.ts";
+import { sessionLaunchDir, workerSetupLogPath } from "../../shared/paths.ts";
 import type { LedgerContext, LedgerFiles, Pending } from "./context.ts";
 
 export interface WorkerPurgeBatch {
@@ -138,7 +137,7 @@ export function createLedgerWorkerRetention(ctx: LedgerContext, files: Pick<Ledg
     db.run("INSERT INTO conversation_purges (conversation_id, purged_at) VALUES (?, ?)", c.conv, purgedAt);
     p.changes.push({ type: "conversation.purged", data: { conversationId: c.conv, purgedAt } });
     p.after.push(() => {
-      if (files.launchDir !== undefined) for (const sid of sessionIds) rmSync(join(files.launchDir, `session-${sid}`), { recursive: true, force: true });
+      if (files.launchDir !== undefined) for (const sid of sessionIds) rmSync(sessionLaunchDir(files.launchDir, sid), { recursive: true, force: true });
       if (files.setupLogsDir !== undefined) rmSync(workerSetupLogPath(files.setupLogsDir, c.id), { force: true });
     });
     return { rows, finished: true };

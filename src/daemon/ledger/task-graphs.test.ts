@@ -13,6 +13,7 @@ import type { Db } from "../store/index.ts";
 import { migrate } from "../store/migrate.ts";
 import { createResolveFolder } from "./files.ts";
 import { createLedger, type LedgerOptions, type SqliteLedger } from "./index.ts";
+import { taskGraphManualNote } from "../task-graph-skill.ts";
 
 let root: string;
 let dbFile: string;
@@ -96,7 +97,13 @@ function liveGraphsSection(): string | null {
   const preamble = ledger.sessionPreamble(next.id)!;
   const heading = "## 未完结的任务图（账本实时状态）\n\n";
   const at = preamble.indexOf(heading);
-  return at === -1 ? null : preamble.slice(at + heading.length);
+  if (at === -1) return null;
+  // 最后一段是任务图手册那一行（换了会话手里有图却没有手册时靠它找回来），不算在图的摘要里
+  const section = preamble.slice(at + heading.length);
+  const manual = section.lastIndexOf("\n\n任务图手册（");
+  expect(manual).toBeGreaterThan(0);
+  expect(section.slice(manual + 2)).toBe(taskGraphManualNote(undefined, next.id));
+  return section.slice(0, manual);
 }
 
 describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", () => {
@@ -754,5 +761,42 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     expect(preamble).toContain("跨代长任务");
     expect(preamble).toContain("[done] db-mig");
     expect(preamble).toContain("[ready] api-impl");
+  });
+});
+
+describe("防漏读任务图手册（docs/orchestration-skill-design.md 第 7 节）：只提醒、不拦", () => {
+  it("hub graph create、patch 的回执带这个会话启动目录里的手册路径，出错的报错也带；没加载手册照样建得了图", () => {
+    ledger.close();
+    const launchDir = join(root, ".agent-hub", "state", "launch");
+    ledger = createLedger(db, options({ launchDir }));
+    const note = taskGraphManualNote(launchDir, lin.sessionId);
+    expect(note).toContain(join(launchDir, String(lin.sessionId), "skills", "fusa-task-graph", "SKILL.md"));
+    const created = ledger.hubCall(lin.sessionId, "graph.create", { specJson: JSON.stringify({ title: "导出", nodes: [{ key: "a", title: "实现" }, { key: "b", title: "审查", deps: ["a"] }] }) });
+    expect(created.text.endsWith(`\n\n${note}`)).toBe(true);
+    expect(created.text.split(note)).toHaveLength(2);
+    const patched = ledger.hubCall(lin.sessionId, "graph.patch", { graphId: created.data.graph.id, specJson: JSON.stringify({ addNodes: [{ key: "c", title: "发布", deps: ["b"] }] }) });
+    expect(patched.text.endsWith(`\n\n${note}`)).toBe(true);
+    let message = "";
+    try {
+      ledger.hubCall(lin.sessionId, "graph.create", { specJson: JSON.stringify({ title: "环", nodes: [{ key: "x", title: "x", deps: ["y"] }, { key: "y", title: "y", deps: ["x"] }] }) });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toContain("环");
+    expect(message.endsWith(`\n${note}`)).toBe(true);
+    // 别的 graph 命令不带（只在建图、改图的当下提醒）
+    expect(ledger.hubCall(lin.sessionId, "graph.show", { graphId: created.data.graph.id }).text).not.toContain(note);
+  });
+
+  it("hub status：手里有活跃的图才带手册路径（换了会话、压缩丢了前文之后靠它找回来）", () => {
+    ledger.close();
+    const launchDir = join(root, ".agent-hub", "state", "launch");
+    ledger = createLedger(db, options({ launchDir }));
+    const note = taskGraphManualNote(launchDir, lin.sessionId);
+    expect(ledger.hubCall(lin.sessionId, "status", {}).text).not.toContain("任务图手册");
+    ledger.hubCall(lin.sessionId, "graph.create", { specJson: JSON.stringify({ title: "导出", nodes: [{ key: "a", title: "实现" }, { key: "b", title: "审查", deps: ["a"] }] }) });
+    const status = ledger.hubCall(lin.sessionId, "status", {}).text;
+    expect(status).toContain("活跃任务图：");
+    expect(status.endsWith(`\n${note}`)).toBe(true);
   });
 });

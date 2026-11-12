@@ -1,6 +1,6 @@
 # 按需拆分与任务图技能方案
 
-状态：方案，等用户拍板。本文只是文档，没有改任何代码。行号对应 main `a26be7e`。真实记录取自本机账本 `~/.agent-hub/state/hub.sqlite`（只读打开），“消息 #编号”“Worker #编号”“任务图 #编号”都能在账本里查到原文。厂商能力在本机实测（2026-11-12）：claude 2.1.322、codex-cli 0.167.1、agy 1.5.6、pi 1.5.2、dsh 0.2.2-rc.1、cursor-agent 2026.11.10-731fb78。
+状态：第一阶段（三档判断，PR 298）、第二阶段（技能、六家挂载、K1～K5 验证）都已落地，落地时和方案不一样的地方、附 B 的实测结果见第 12 节。下面各节的行号对应写方案时的 main `a26be7e`。真实记录取自本机账本 `~/.agent-hub/state/hub.sqlite`（只读打开），“消息 #编号”“Worker #编号”“任务图 #编号”都能在账本里查到原文。厂商能力在本机实测（2026-11-12）：claude 2.1.322、codex-cli 0.167.1、agy 1.5.6、pi 1.5.2、dsh 0.2.2-rc.1、cursor-agent 2026.11.10-731fb78。
 
 用户的要求（11-12 10:44，消息 #50677）：
 
@@ -311,7 +311,7 @@ frontmatter 里的 `name` 按目标填：claude 插件里是 `task-graph`，加�
 | codex | 能。先看名字、说明和路径，决定用时再读 `SKILL.md` | app-server 的 `skills/extraRoots/set` | 本机实测通过；接口在官方文档里没写 | 读文件 |
 | agy | 能。每轮看到技能清单，相关就读正文 | 放进已有的 `--add-dir <启动目录>/agy-rules` 里的 `.agents/skills/` | 本机实测通过 | 读文件 |
 | pi | 能。名字、说明、路径进系统提示词，模型自己读文件 | `--skill <目录>` | 本机实测通过 | 读文件 |
-| deepseek | 能。会话开头给一份技能目录，模型调 `skill` 工具加载 | `--patch` 里设 `customSkillDirs` | 按包内文档可行，**未实测** | 读文件 |
+| deepseek | 能。会话开头给一份技能目录，模型调 `skill` 工具加载 | `--patch` 里设 `customSkillDirs` | 本机实测通过（第 12.2 节） | 读文件 |
 | cursor | 能，但只认项目目录和用户目录里的技能 | **没有**。ACP 下 `--plugin-dir`、`--add-dir` 里的技能都读不到 | 本机实测没有 | 只有读文件 |
 
 “读文件”兜底六家都一样：基础提示词里写着正文的绝对路径，模型用读文件工具或 `cat` 读它。这和 Fusa 记忆的做法是同一个思路：`MEMORY.md` 这份薄索引常驻在提示词里，专题子文件用到时再读（`src/daemon/pm-memory.ts:40-41`）。
@@ -673,3 +673,29 @@ cursor-agent --trust --approve-mcps --add-dir "$P/agy-add" acp
 ```
 
 提示词字数：一个小脚本 `import` 现在的 `src/daemon/prompt.ts`，调 `buildLaunchPrompt`（claude、`manage_only`、空性格设定），按一级标题和二级标题切开数字符数和 UTF-8 字节数；改后的稿子存成文本用同一段代码数。
+
+## 12. 落地记录（第二阶段，2026-11-12）
+
+### 12.1 和方案不一样的地方
+
+| 方案 | 落地 | 为什么 |
+|---|---|---|
+| claude 里叫 `fusa:task-graph`，其余叫 `fusa-task-graph`，三种目录形状各放一份 | 只有一份文件 `launch/<会话>/skills/fusa-task-graph/SKILL.md`，名字六家都是 `fusa-task-graph`；claude 显示成 `fusa:fusa-task-graph` | 用户定“唯一一份”。claude 插件目录 `claude-plugin/skills` 是指向 `../skills` 的软链（claude 跟软链）；agy 规则目录里放的是硬链接（agy 不跟软链，见 12.2），同一个 inode |
+| codex、deepseek 实测通过后再接原生入口 | 两家都接了 | 用户定“实测通的全接”；codex 握手后发 `skills/extraRoots/set`，老版本报错就照常建线程、只记一行日志 |
+| 正文和 `hub help graph` 共用一个函数，`hub help` 里“任务图”那一组也换成它 | `hub help graph` 打印正文；`hub help` 原来那组用法不动 | 那组用法写错命令时也会打印，命令行要的是参数表，不是手册 |
+| 第 4 步留“计划变了”一条 | 删了，“原本没建图、做着发现要分段的随时补建一张图”挪进手册 | 第 2 步已经有“做着发现比想的复杂再升档” |
+| 启动目录清理“跟 prompt.md 一样” | 顺手修了清理一直没生效的问题 | 写的是 `launch/<编号>/`，PM 删除和 Worker 保留期清理删的是 `launch/session-<编号>/`，名字对不上，本机已经积了 567 个启动目录。现在写、删都用 `sessionLaunchDir` |
+| K1、K2 的 `curl`、`magpie`、`pi` 是替身，回放真实输出 | 加了“命令替身”：场景声明一张回放表（`test/eval/replay/*/stubs.json`），PATH 最前面放同名外壳，只记录、按表回放 | K2 那次“第一次 `magpie visible` 没生效、切一下默认模型才生效”靠表里的 `afterCall` 回放出来。K4 的 Worker #388 是 agy 跑的，原始记录在 agy 的 sqlite 里没有逐条输出，版本号取自它的真实汇报，升级命令的回显是按汇报重建的 |
+
+### 12.2 附 B 探针实测（本机，2026-11-12；claude 2.1.322、codex-cli 0.167.1、agy 1.5.6、pi 1.5.2、dsh 0.2.2-rc.1、cursor-agent 2026.11.10-731fb78）
+
+探针技能放在临时目录，形状和落地的一样：`$P/skills/fusa-task-graph/SKILL.md`。
+
+| 厂商 | 怎么测 | 结果 |
+|---|---|---|
+| claude | `--plugin-dir $P/claude-plugin`（`.claude-plugin/plugin.json` 名字 `fusa`，`skills` 软链到 `../skills`），只发 `initialize` | 通过：命令里有 `fusa:fusa-task-graph`，说明是 `(fusa) …` |
+| codex | `codex app-server`：`initialize`、`initialized`、`skills/extraRoots/set {extraRoots:[$P/skills]}`、`skills/list` | 通过：`skills/extraRoots/set` 回 `{}`；之后的 `skills/list` 里有 `fusa-task-graph`，`scope: "user"`、`enabled: true`，路径是探针目录 |
+| agy | `agy -p "/skills" --output-format json --add-dir <目录>` | 软链（目录或文件）**不认**：11 项，没有探针；普通文件、硬链接都认：12 项，`fusa-task-graph` 在清单里。所以落地用硬链接 |
+| pi | `pi --mode rpc --no-session --offline --no-mcp --no-approve --skill $P/skills`，发 `get_commands` | 通过：`skill:fusa-task-graph`，`scope: "temporary"` |
+| deepseek | `dsh --profile acp --patch <补丁>`，补丁 `[{"id":"skill-filesystem","config":{"customSkillDirs":["$P/skills"]}}]`（会话记录另指到临时目录、模型指到不存在的名字：第一次请求在调模型前就失败，不花额度），`session/new` 后发一条 `session/prompt`，再解开会话记录看第一次请求前写进去的技能目录 | **通过**：带补丁的会话记录里技能目录有 `{"name":"fusa-task-graph","description":…}`；不带补丁的对照没有。acp profile 里 `skill-filesystem` 那一行本来没有 config，整行替换不丢默认值。ACP 下 10 秒内没有 `available_commands_update`，所以要看会话记录 |
+| cursor | ACP `initialize`、`session/new` 后等 14 秒收 `available_commands_update`：不带参数、`--plugin-dir`、`--add-dir` 各一次 | 三次都是 62 项，探针都不在：没有会话级入口，只能按路径读文件 |

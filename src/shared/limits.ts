@@ -731,6 +731,13 @@ export const MAX_DECISION_CHOICE_BYTES = 4 * MAX_DECISION_CHOICE_CHARS;
 /** 门禁/拍板自由补充说明字数上限。 */
 export const MAX_DECISION_NOTE_CHARS = 2_000;
 export const MAX_DECISION_NOTE_BYTES = 4 * MAX_DECISION_NOTE_CHARS;
+/**
+ * 任务图技能 fusa-task-graph（shared/task-graph-skill.ts）的 SKILL.md 全文最多多少字节：约 4,000 个 token，在 claude 压缩对话后
+ * 每个技能重新挂上的前 5,000 个 token 以内（docs/orchestration-skill-design.md 第 9.4 节；守卫测试在 daemon/task-graph-skill.test.ts）。
+ */
+export const TASK_GRAPH_SKILL_MAX_BYTES = 12_000;
+/** 任务图技能说明（description）最多多少字：各家技能清单按它决定要不要加载，技能多时清单预算会裁说明。 */
+export const TASK_GRAPH_SKILL_DESCRIPTION_MAX_CHARS = 200;
 /** hub graph create / patch 输入 JSON 最大字节数（64 KB 充裕容纳 32 节点 + 摘要）。 */
 export const MAX_GRAPH_SPEC_BYTES = 64 * 1024;
 /** 节点完成产物摘要字数上限。 */

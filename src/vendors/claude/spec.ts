@@ -1,5 +1,5 @@
 // claude（Claude Code）的声明：纯数据 + 纯函数，网页、hub 命令行、守护进程都引。不许 import node:*、src/daemon、别家文件夹（契约测试 S2）。
-import { PRODUCT_NAME } from "../../shared/names.ts";
+import { PRODUCT_NAME, PRODUCT_PLUGIN_NAME } from "../../shared/names.ts";
 import { blockedCommands, capitalize, defineVendor } from "../types.ts";
 
 // 隐藏命令：按“为什么拦”分组，原因是给用户看的一句（docs/composer-commands.md 的 T1、T2、T7）
@@ -82,6 +82,8 @@ export default defineVendor({
     // 两个都有时 claude 只读 CLAUDE.md（M0 实测）
     instructionFile: "CLAUDE.md",
     vendorOnlyTools: "claude 的后台任务",
+    // 插件技能带插件名前缀（--plugin-dir 的插件名是 PRODUCT_PLUGIN_NAME）
+    skillNamePrefix: `${PRODUCT_PLUGIN_NAME}:`,
   },
   failure: {
     serviceName: "Claude",
@@ -113,5 +115,7 @@ export default defineVendor({
     readonly: "settings",
     // --append-system-prompt-file <prompt.md>（protocol.ts）：进 claude 的系统提示词，压缩不裁
     systemPrompt: "resident",
+    // 任务图手册：--plugin-dir 启动目录里的 claude-plugin（技能目录软链到 skills/），显示成 fusa:fusa-task-graph（2026-11-12 claude 2.1.322 实测）
+    skills: "native",
   },
 });

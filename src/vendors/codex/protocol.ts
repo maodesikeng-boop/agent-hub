@@ -62,6 +62,8 @@ export interface CodexLaunchConfig {
   /** 只读策略（files.readonly）；elicitation 兜底用。不是只读 null。 */
   readonlyPolicy: ReadonlyPolicy | null;
   config: Record<string, unknown>;
+  /** 产品技能的根目录（files.skillsDir，只有项目经理会话有）：握手后用 skills/extraRoots/set 挂上。没有是空数组。 */
+  skillRoots: string[];
 }
 
 /** 只读 Worker 的 codex 权限 profile 名（config 里 default_permissions 指向它）。 */
@@ -97,6 +99,16 @@ export function buildInitializeRequest(id: number | string): string {
   });
 }
 
+/**
+ * 握手后、建线程前：把产品技能目录加进这个 app-server 的技能根（docs/orchestration-skill-design.md 第 6.2 节）。
+ * codex app-server generate-ts 生成的协议里有 skills/extraRoots/set（参数 extraRoots: AbsolutePathBuf[]），官方文档没写、app-server 标着
+ * experimental；2026-11-12 codex-cli 0.167.1 实测发过之后 skills/list 多出这个技能（scope: "user"、enabled: true）。
+ * 每个会话一个 app-server 进程（buildCodexArgs），只影响这一个会话；不写 ~/.agents/skills、~/.codex 和仓库。
+ */
+export function buildSkillsExtraRootsRequest(id: number, extraRoots: readonly string[]): string {
+  return serializeJsonRpcLine({ jsonrpc: "2.0", id, method: "skills/extraRoots/set", params: { extraRoots: [...extraRoots] } });
+}
+
 /** 第 2 步握手：收到 initialize 响应后发送 initialized 通知。 */
 export function buildInitializedNotification(): string {
   return serializeJsonRpcLine({
@@ -121,7 +133,7 @@ export function readCodexLaunchConfig(files: LaunchFiles): CodexLaunchConfig {
     config["shell_environment_policy.set"] = { ...files.env };
   }
   if (files.readonly !== undefined) Object.assign(config, codexReadonlyConfig(files.readonly));
-  return { developerInstructions, readonly, readonlyPolicy: files.readonly ?? null, config };
+  return { developerInstructions, readonly, readonlyPolicy: files.readonly ?? null, config, skillRoots: files.skillsDir ? [files.skillsDir] : [] };
 }
 
 /** config 里的键段：只有字母数字下划线横杠的原样，其余（点、空格……）加引号。 */

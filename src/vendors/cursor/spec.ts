@@ -148,5 +148,7 @@ export default defineVendor({
     // cursor-agent 的 ACP 没有 systemPrompt 能力，只读会话工作目录里的规则（--add-dir、--plugin-dir 在 ACP 下都不读，
     // 2026-11-11 实测）；规则文件又不能写进用户的项目目录，所以只能拼进首条消息，收到压缩信号后重新拼
     systemPrompt: "first_message",
+    // 任务图手册：ACP 下 --plugin-dir、--add-dir 里的技能都读不到（2026-11-12 cursor-agent 2026.11.10 实测），项目和用户目录又不能写，只能按路径读文件
+    skills: "read_file",
   },
 });

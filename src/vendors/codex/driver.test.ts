@@ -117,6 +117,8 @@ export interface FakeCodexScript {
   startThreadId?: string;
   /** thread/resume 是否报错（模拟 not found / no rollout found）。 */
   failResumeWith?: string;
+  /** skills/extraRoots/set 是否报错（模拟没有这个实验接口的老版本 codex）。 */
+  failSkillsRootsWith?: string;
   /** 每轮剧本（按顺序取，取完用最后一个或默认成功）。 */
   turns?: FakeCodexTurnScript[];
 }
@@ -386,6 +388,13 @@ function handleMessage(msg) {
     return;
   }
 
+  if (msg.method === "skills/extraRoots/set") {
+    send(script.failSkillsRootsWith
+      ? { jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: script.failSkillsRootsWith } }
+      : { jsonrpc: "2.0", id: msg.id, result: {} });
+    return;
+  }
+
   if (msg.method === "thread/start") {
     currentThreadId = script.startThreadId || "thread-new-1";
     send({
@@ -528,6 +537,8 @@ function makeCodexHarness(
     dataDirName?: string;
     /** 假 codex 启动时试着往数据目录里写这个文件（FAKE_CODEX_PROBE），结果记进日志。 */
     probeInDataDir?: string;
+    /** 项目经理会话带产品技能目录（LaunchFiles.skillsDir = 启动目录/skills）。 */
+    skills?: boolean;
   } = {},
 ): CodexTestHarness {
   const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "agent-hub-codex-driver-")));
@@ -566,6 +577,7 @@ function makeCodexHarness(
         fingerprint: `fp-${session.role}-${readonly ? "ro" : "rw"}`,
       };
       if (options.personaRevision) files.personaRevision = options.personaRevision();
+      if (options.skills && session.role === "pm") files.skillsDir = join(launchDir, "skills");
       // 数据目录默认是临时目录本身：state/、别的会话的 workspace/<编号> 都在里面（和 launch.ts 一样用 workerWriteScope）
       const writeScope = workerWriteScope({ role: session.role, dataDir, cwd: session.cwd });
       if (writeScope !== null) files.writeScope = writeScope;
@@ -863,6 +875,36 @@ describe("CodexDriver 首次启动握手与完整一轮事件流", () => {
       },
     });
     expect(t.of("rate_limit").at(-1)!.info).toEqual(updatedRow.rateLimit);
+  });
+});
+
+describe("CodexDriver 项目经理会话的产品技能（skills/extraRoots/set）", () => {
+  it("有 skillsDir：initialized 之后先发 skills/extraRoots/set（只这一个目录），回了再 thread/start", async () => {
+    const t = makeCodexHarness({ skills: true });
+    const s = t.addSession();
+    await expect(t.driver.send(s.id, user(10, "你好"))).resolves.toEqual({ kind: "written" });
+    await t.waitFor("turn.ended");
+    const rpcs = t.rpcIn();
+    expect(rpcs.map((r) => r.method)).toEqual(["initialize", "initialized", "skills/extraRoots/set", "thread/start", "turn/start"]);
+    expect(rpcs[2]).toMatchObject({ params: { extraRoots: [join(t.stateDir, "launch", String(s.id), "skills")] } });
+  });
+
+  it("老版本 codex 没有这个接口（报错）：照常建线程、开工，只记一行日志（提示词里有路径，照样能读）", async () => {
+    const lines: string[] = [];
+    const t = makeCodexHarness({ skills: true, script: { failSkillsRootsWith: "unknown method" }, driver: { log: (l) => lines.push(l) } });
+    const s = t.addSession();
+    await expect(t.driver.send(s.id, user(10, "你好"))).resolves.toEqual({ kind: "written" });
+    await t.waitFor("turn.ended");
+    expect(t.rpcIn().map((r) => r.method)).toEqual(["initialize", "initialized", "skills/extraRoots/set", "thread/start", "turn/start"]);
+    expect(lines.some((l) => l.includes("skills/extraRoots/set 失败"))).toBe(true);
+  });
+
+  it("Worker（没有 skillsDir）：不发 skills/extraRoots/set", async () => {
+    const t = makeCodexHarness({ skills: true });
+    const s = t.addSession({ role: "worker", pmId: null, workerId: 3 });
+    await expect(t.driver.send(s.id, user(10, "你好"))).resolves.toEqual({ kind: "written" });
+    await t.waitFor("turn.ended");
+    expect(t.rpcIn().map((r) => r.method)).not.toContain("skills/extraRoots/set");
   });
 });
 

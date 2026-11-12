@@ -61,11 +61,37 @@ export interface RecordedCall {
   argv: string[];
   cwd: string;
   at: number;
+  /** 命令替身（CommandStubs）这次用的是第几条回放（没对上任何一条是 -1；只记录的替身没有）。 */
+  stub?: number;
 }
+
+// ---- 命令替身（K1、K2、K4：装软件、改本机配置、升级命令行工具，docs/orchestration-skill-design.md 第 8.1 节）----
+
+/** 替身的一次输出：当时真实命令的输出（取自账本和会话原始记录，出处写在场景里）。 */
+export interface StubOutput {
+  stdout?: string;
+  stderr?: string;
+  exitCode?: number;
+  /** 参数里有这个开关（curl 的 -o）时，stdout 写进它后面那个路径，不打印（下载到文件、再 sh 它的写法）。 */
+  writeArgAfter?: string;
+}
+
+/**
+ * 一条回放：参数拼成一行后包含 match（不写 = 都对上）、而且 afterCall 那条命令之前被调过（不写 = 不管）时用它。
+ * 同一条第 n 次被调到取 outputs[n]，取完停在最后一个（“第一次没生效、再同步一次才生效”这种）。按顺序取第一条对上的。
+ */
+export interface StubReply {
+  match?: string;
+  afterCall?: { tool: string; match: string };
+  outputs: StubOutput[];
+}
+
+/** 命令名 → 回放表。放在 PATH 最前面，只记录、按表回放，不真跑；对不上的照“成功、没有输出”回。 */
+export type CommandStubs = Readonly<Record<string, readonly StubReply[]>>;
 
 // ---- 场景 ----
 
-export type ScenarioId = "s3a-tray" | "s5a-ci-mirror" | "h2-no-diff";
+export type ScenarioId = "s3a-tray" | "s5a-ci-mirror" | "h2-no-diff" | "k1-install" | "k2-local-config" | "k3-merge" | "k4-upgrade" | "k5-ui-bug";
 
 /** 场景里一类 Worker 怎么回放：按提示词里的关键词认（任务说明在 Worker 的系统提示词里）。 */
 export interface WorkerReplay {
@@ -77,6 +103,8 @@ export interface WorkerReplay {
   patch?: { file: string; committer: { name: string; email: string; date: string } };
   /** 第一轮最后一段文字（真实汇报原文，相对回放目录，{SHOTS} 等占位符在试跑时换掉）。 */
   reportFile?: string;
+  /** 之后几轮（被 hub worker send 叫醒后）依次交回的真实汇报（相对回放目录）；用完了回通用汇报。 */
+  laterReportFiles?: string[];
   /** 没有原文时的汇报正文。 */
   reportText?: string;
   /** 第一轮开工前等这个闸门（习惯场景：先改性格设定再放汇报）。 */
@@ -117,6 +145,13 @@ export interface Scenario {
   answer(ask: AskSeen): { text: string; scripted: boolean };
   /** 习惯场景：某类 Worker 开工后注入的改动（改性格设定），做完再放闸门。 */
   injectOnWorkerStart?: { worker: string; personaAppend: string };
+  /** 命令替身（装软件、改本机配置这类不能真跑的命令）：按表回放当时的真实输出。 */
+  stubs?: CommandStubs;
+  /**
+   * 安静下来以后用户再说一句（K1：项目经理把登录链接交给用户后，用户答“已登录成功”）。只说一次；
+   * 等到有 Worker 交回汇报、或者 afterTool 那条命令被调过才说；用户已经在卡片上答过同一句的不再说。
+   */
+  followUp?: { text: string; afterTool?: { tool: string; match: string } };
   checks: CheckDef[];
 }
 
@@ -209,6 +244,12 @@ export interface CheckDef {
   title: string;
   /** “要求有”的检查：什么都不做的项目经理必须不过（设计 4.5）。 */
   requiresAction: boolean;
+  /**
+   * 不写：正例必须过。
+   * guard：前提成立才判（L1：建了图才看建图前加载了手册没有），正例里前提不成立是“不适用”，但不能是“不过”；
+   * record：只记录、不判对错（L2：简单活加载了几次手册），永远是“不适用”，原因里写次数。
+   */
+  kind?: "guard" | "record";
   run(facts: Facts): Omit<CheckResult, "id" | "title">;
 }
 

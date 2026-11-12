@@ -33,6 +33,7 @@ import {
 } from "../shared/limits.ts";
 import { ROUTER_DISPATCH_AGENT_PATH, type RouterReportLink } from "../shared/router.ts";
 import { HUB_COMMAND, PRODUCT_ID } from "../shared/names.ts";
+import { taskGraphSkillBody } from "../shared/task-graph-skill.ts";
 import { checkEveryMinutes, parseDailyTime, parseEvery, parseWorkerMaxTime } from "../shared/schedule.ts";
 import { AGENT_VENDORS, ALL_EFFORTS, isAgentVendor } from "../shared/vendors.ts";
 
@@ -342,6 +343,7 @@ const SELF_RELOAD_USAGE = `  ${hub} self-reload [--build]                       
 export const HUB_USAGE = `用法：
 ${HUB_COMMAND_SPECS.map((s) => s.usage).join("\n")}
 ${SELF_RELOAD_USAGE}
+  ${hub} help graph                                        打印任务图手册：建图、改图、换人、审查的做法和全部 graph 命令
 
 长文本用 --stdin 从标准输入读，例如：
   ${hub} persona edit --stdin <<'EOF'
@@ -514,7 +516,7 @@ function textSourceOf(values: Options): Parsed["textSource"] {
   return null;
 }
 
-function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | "help" {
+function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | "help" | "help-graph" {
   let parsed;
   try {
     parsed = parseArgs({
@@ -578,6 +580,8 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
   }
   const values = parsed.values as Options;
   const [group, action, ...rest] = parsed.positionals;
+  // hub help graph：打印任务图手册（和项目经理会话启动目录里的 fusa-task-graph 技能同一份正文，读不到文件时用）
+  if (group === "help" && action === "graph") return "help-graph";
   if (values.help === true || group === "help") return "help";
   if (group === undefined) throw new UsageError("缺子命令");
 
@@ -1260,6 +1264,10 @@ export async function runHub(io: HubIo): Promise<number> {
     const result = parseCommand(io.argv, io.env, io.cwd);
     if (result === "help") {
       io.stdout.write(HUB_USAGE);
+      return HUB_EXIT.ok;
+    }
+    if (result === "help-graph") {
+      io.stdout.write(taskGraphSkillBody());
       return HUB_EXIT.ok;
     }
     parsed = result;

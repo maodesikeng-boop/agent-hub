@@ -101,5 +101,7 @@ export default defineVendor({
     explicitDefaultModel: true,
     // app-server 协议的 developerInstructions（protocol.ts）：开发者指令，压缩不裁
     systemPrompt: "resident",
+    // 任务图手册：app-server 握手后发 skills/extraRoots/set（每个会话一个 app-server 进程，只影响这个会话；2026-11-12 codex-cli 0.167.1 实测）
+    skills: "native",
   },
 });

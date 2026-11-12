@@ -133,5 +133,7 @@ export default defineVendor({
     readonly: "os_sandbox",
     // --append-system-prompt <prompt.md>（protocol.ts）：进 pi 的系统提示词，压缩不裁
     systemPrompt: "resident",
+    // 任务图手册：--skill <启动目录>/skills（scope: temporary；2026-11-12 pi 1.5.2 实测）
+    skills: "native",
   },
 });
