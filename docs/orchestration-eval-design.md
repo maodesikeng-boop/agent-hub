@@ -1,6 +1,6 @@
 # 编排验证方案
 
-状态：方案，等用户拍板。本文只是文档，没有改任何代码。行号对应 main `d9d67a2`。真实记录取自本机账本 `~/.agent-hub/state/hub.sqlite`（只读打开），对话是这个项目的项目经理（下文写 PM）对话，`conversation_id=205`；“消息 #编号”“Worker #编号”都能在账本里查到原文。
+状态：用户 11-12 已拍板（三点全按推荐）；第一版已实现，怎么跑见第 10 节。行号对应 main `d9d67a2`。真实记录取自本机账本 `~/.agent-hub/state/hub.sqlite`（只读打开），对话是这个项目的项目经理（下文写 PM）对话，`conversation_id=205`；“消息 #编号”“Worker #编号”都能在账本里查到原文。
 
 用户的要求（11-12 09:39，消息 #50031）：
 
@@ -601,3 +601,18 @@ pnpm eval compare --base main --head hub/457-编排简化第-1-步-pm-提示词�
 - vitest-evals，<https://github.com/getsentry/vitest-evals>；Evalite，<https://www.evalite.dev/>。印证用 vitest 跑评测是通行做法。
 - 模型牌价取自 Anthropic 价目（2026-11-03 的缓存）。
 - 本仓库：`docs/orchestration-simplify-design.md`（PR 290，被验证的方案）、`docs/system-prompt-channels.md`、`docs/task-graph-design.md`。
+
+## 10. 第一版怎么跑（第 1、2 步，PR 294）
+
+用户 11-12 拍板：3 个真实场景（S3a 托盘、S5a CI 镜像故障、H2 验收不读代码）、只跑 claude、只用确定性检查。另按用户 11-12 的补充（“肯定不能你来跑，你有我们的上下文”）：被测项目经理的性格设定一律是空的中性设定，习惯只由场景注入；评测由用户本人在终端运行。
+
+```sh
+pnpm eval preflight                                   # 只做隔离自检（不花钱）
+pnpm eval compare --base 9b87864^1 --head main        # 对照：自检 → 两个版本各跑 3 个场景 → 终端打印对照表
+```
+
+- 代码在 `test/eval/`：`cli.ts` 入口，`trial.ts` 一次试跑，`scenarios.ts` 场景和用户原话出处，`checks.ts` 确定性检查，`isolation.ts` 隔离，`fakes/` 替身，`replay/` 回放包，`limits.ts` 上限。
+- 真模型部分用 `vitest.eval.config.ts`，不进 `pnpm test`、不进 CI；自测 `test/eval/*.test.ts`（剧本项目经理的正例、反例、什么都不做，替身、沙箱规则、回放包守卫）进 `pnpm test` 和 CI。
+- 结果在 `~/.agent-hub-eval/runs/<时间>/`：`summary.md`（对照表）、`summary.json`，每次试跑一个目录（`transcript.md` 完整过程、`pm-prompt.md` 当时的提示词）。保留最近 20 次或 30 天；没通过的现场在 `~/.agent-hub-eval/w/`，最多 10 个。
+- 隔离：见 `test/eval/isolation.ts` 文件头。每次运行开头在真沙箱里逐条自检，再让真 claude 用最小模型跑一次 `command -v gh` 确认走的是替身，有一条不对就不跑。
+- 和本文前面的出入：H2 只跑“任务中途经资料页改性格设定”（T3）一种，对照组就是 S3a（同样的需求、空性格设定）；注入的是 #118 新加那一条里和验收有关的部分，去掉了指向 poteto-mode 那条旧条目的半句。S3a、H2 的 `gh` 回放里 PR 288 检查全绿，S5a 两次都挂（run 43040062881 两次的真实日志）。
