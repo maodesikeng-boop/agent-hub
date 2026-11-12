@@ -43,7 +43,7 @@ import type {
   PmActiveGraphSummary,
   WorkerPr,
 } from "../../shared/hub.ts";
-import type { HubCallContext } from "../../shared/ledger.ts";
+import type { GraphPrTarget, HubCallContext } from "../../shared/ledger.ts";
 import {
   COMPLETED_GRAPH_RETENTION_MS,
   DELIVERY_FILES_MAX,
@@ -601,6 +601,28 @@ export function createLedgerTaskGraphs(
     return out;
   };
 
+  /**
+   * 已完成节点上手工补记的 PR 网址（hub graph done --pr）：没有分支记录的节点只能按网址查，否则 finish 会漏查还开着的 PR。
+   * 只收 http(s) 网址（交给 gh pr view，不会被当成参数）；查询目录用项目主文件夹，没有就不查（不拦）。
+   */
+  const collectGraphPrUrls = (graphRow: TaskGraphDbRow): Array<{ prUrl: string; nodeKey: TaskNodeKey; cwd: string }> => {
+    const mainFolder = mainFolderOf(graphRow.project_id);
+    if (mainFolder === null) return [];
+    const nodeRows = db.all<Pick<TaskNodeDbRow, "node_key" | "artifact_json">>(
+      "SELECT node_key, artifact_json FROM task_graph_nodes WHERE graph_id = ? AND status = 'done' ORDER BY sort_order ASC, id ASC",
+      graphRow.id,
+    );
+    const seen = new Set<string>();
+    const out: Array<{ prUrl: string; nodeKey: TaskNodeKey; cwd: string }> = [];
+    for (const node of nodeRows) {
+      const prUrl = parseJsonOr<TaskArtifact | null>(node.artifact_json, null)?.prUrl?.trim() ?? "";
+      if (!/^https?:\/\/\S+$/iu.test(prUrl) || seen.has(prUrl)) continue;
+      seen.add(prUrl);
+      out.push({ prUrl, nodeKey: node.node_key, cwd: mainFolder });
+    }
+    return out;
+  };
+
   const prStateLabelZh = (state: string): string => {
     switch (state.toUpperCase()) {
       case "OPEN":
@@ -715,13 +737,19 @@ export function createLedgerTaskGraphs(
     return `${truncateChars(lines.join("\n"), bodyBudget)}${footer}`;
   };
 
+  /**
+   * 一张图的全部交付单的 dedupe_key 匹配式（systemMessageDedupeKey：system:<对话>:task_graph.ready_to_finish:<图>:<序号>）。
+   * 用 GLOB 前缀而不是 LIKE：dedupe_key 是 BINARY 排序的 UNIQUE 列，GLOB 前缀能走它的索引做区间查找；
+   * LIKE 默认不区分大小写，用不上索引，会把项目经理对话里的全部消息（跑一个月上万条）扫一遍，而每次节点推进都要查。
+   */
+  const deliveryNoteKeyGlob = (conversationId: ConversationId, graphId: TaskGraphId): string =>
+    `system:${conversationId}:task_graph.ready_to_finish:${graphId}:*`;
+
   /** 图退出“待交付”（补了新节点、打回重做、finish 或 cancel）时，收起尚未发出的排队交付单，避免过时叫醒。 */
   const stopQueuedDeliveryNotesIn = (p: Pending, conversationId: ConversationId, graphId: TaskGraphId): void => {
-    const prefix = `system:${conversationId}:task_graph.ready_to_finish:${graphId}:%`;
     const queuedRows = db.all<{ id: number }>(
-      "SELECT id FROM messages WHERE conversation_id = ? AND status = 'queued' AND dedupe_key LIKE ?",
-      conversationId,
-      prefix,
+      "SELECT id FROM messages WHERE dedupe_key GLOB ? AND status = 'queued'",
+      deliveryNoteKeyGlob(conversationId, graphId),
     );
     for (const r of queuedRows) {
       messages.transition(p, r.id, "stopped");
@@ -754,11 +782,10 @@ export function createLedgerTaskGraphs(
     const text = formatDeliveryNote(graph);
     const t = now();
 
-    const prefix = `system:${freshRow.conversation_id}:task_graph.ready_to_finish:${freshRow.id}:%`;
+    const keyGlob = deliveryNoteKeyGlob(freshRow.conversation_id, freshRow.id);
     const existingQueued = db.get<MessageDbRow>(
-      "SELECT * FROM messages WHERE conversation_id = ? AND status = 'queued' AND dedupe_key LIKE ? ORDER BY id DESC LIMIT 1",
-      freshRow.conversation_id,
-      prefix,
+      "SELECT * FROM messages WHERE dedupe_key GLOB ? AND status = 'queued' ORDER BY id DESC LIMIT 1",
+      keyGlob,
     );
     if (existingQueued !== undefined) {
       const prevMeta = parseJsonOr<Record<string, unknown>>(existingQueued.meta, {});
@@ -783,9 +810,8 @@ export function createLedgerTaskGraphs(
 
     const prevCount =
       db.get<{ cnt: number }>(
-        "SELECT count(*) AS cnt FROM messages WHERE conversation_id = ? AND dedupe_key LIKE ?",
-        freshRow.conversation_id,
-        prefix,
+        "SELECT count(*) AS cnt FROM messages WHERE dedupe_key GLOB ?",
+        keyGlob,
       )?.cnt ?? 0;
     const meta: SystemMessageMeta = {
       event: "task_graph.ready_to_finish",
@@ -1721,13 +1747,16 @@ export function createLedgerTaskGraphs(
     const branches = collectGraphBranches(graphRow);
     const graphPrs = context?.graphPrs;
     if (args.unmergedOk !== true && graphPrs !== undefined) {
-      const openPrs = branches
-        .map((b) => ({ ...b, pr: graphPrs[b.branch] }))
-        .filter((item): item is typeof item & { pr: WorkerPr } => item.pr !== undefined && item.pr.state.toUpperCase() === "OPEN");
-      if (openPrs.length > 0) {
-        const listText = openPrs
-          .map((item) => `节点「${item.nodeKey}」分支 ${item.branch}：PR #${item.pr.number}（${item.pr.url}）`)
-          .join("；");
+      // 按分支查到的和按手工补记网址查到的可能是同一个 PR，按网址去重后一起列出
+      const openPrs = new Map<string, string>();
+      const noteOpen = (pr: WorkerPr | undefined, where: string) => {
+        if (pr === undefined || pr.state.toUpperCase() !== "OPEN" || openPrs.has(pr.url)) return;
+        openPrs.set(pr.url, `${where}：PR #${pr.number}（${pr.url}）`);
+      };
+      for (const b of branches) noteOpen(graphPrs[b.branch], `节点「${b.nodeKey}」分支 ${b.branch}`);
+      for (const u of collectGraphPrUrls(graphRow)) noteOpen(graphPrs[u.prUrl], `节点「${u.nodeKey}」补记的 PR`);
+      if (openPrs.size > 0) {
+        const listText = [...openPrs.values()].join("；");
         throw fail(
           "conflict",
           `任务图 #${graphRow.id} 还有未合并（OPEN）的 PR：${listText}。请合并后再调 ${HUB_COMMAND} graph finish ${graphRow.id} --stdin；若确认不合并直接结束，请加 --unmerged-ok`,
@@ -1780,11 +1809,11 @@ export function createLedgerTaskGraphs(
     };
   };
 
-  /** agent 接口在 graph.finish 前只读查询需要探 PR 的分支列表。 */
+  /** agent 接口在 graph.finish 前只读查询需要探 PR 的目标：各分支（gh pr list --head），以及手工补记的 PR 网址（gh pr view）。 */
   const graphPrTargets = (
     caller: AgentSessionRow | null,
     graphId?: TaskGraphId,
-  ): Array<{ cwd: string; branch: string }> => {
+  ): GraphPrTarget[] => {
     if (caller === null || caller.role !== "pm" || caller.pmId === null) return [];
     let graphRow: TaskGraphDbRow | undefined;
     if (graphId !== undefined) {
@@ -1799,7 +1828,10 @@ export function createLedgerTaskGraphs(
       if (activeRows.length !== 1) return [];
       graphRow = activeRows[0]!;
     }
-    return collectGraphBranches(graphRow).map(({ cwd, branch }) => ({ cwd, branch }));
+    return [
+      ...collectGraphBranches(graphRow).map(({ cwd, branch }) => ({ cwd, branch })),
+      ...collectGraphPrUrls(graphRow).map(({ cwd, prUrl }) => ({ cwd, prUrl })),
+    ];
   };
 
   /** session.send 处理函数在发送交付单前只读查询需异步探测 git diff 与 PR 的目标。 */
@@ -1833,9 +1865,10 @@ export function createLedgerTaskGraphs(
   ): void => {
     write((p) => {
       const msg = db.get<MessageDbRow>("SELECT * FROM messages WHERE id = ?", messageId);
-      if (msg === undefined || msg.sender !== "system") return;
+      // 探测在事务外跑，期间图可能已 finish / cancel / 打回（交付单被收起），这时不再改写已收起的消息
+      if (msg === undefined || msg.sender !== "system" || msg.status !== "queued") return;
       const meta = parseJsonOr<Record<string, unknown> | null>(msg.meta, null);
-      if (meta?.event !== "task_graph.ready_to_finish" || typeof meta.graphId !== "number") return;
+      if (meta?.event !== "task_graph.ready_to_finish" || meta.diffProbed === true || typeof meta.graphId !== "number") return;
       const graph = loadGraph(meta.graphId);
       if (graph === null) return;
       const nextText = formatDeliveryNote(graph, input);
@@ -2207,7 +2240,8 @@ export function createLedgerTaskGraphs(
       const artifact: TaskArtifact = {
         ...prevArtifact,
         ...(opts.branch ? { branch: opts.branch } : {}),
-        ...(opts.commit && !prevArtifact.commit ? { commit: opts.commit } : {}),
+        // 打回重做后由新 Worker 收工：用这一轮汇报的提交号覆盖上一轮的，交付单不能还显示旧提交
+        ...(opts.commit ? { commit: opts.commit } : {}),
         ...(opts.summary ? { summary: opts.summary } : {}),
       };
       db.run(

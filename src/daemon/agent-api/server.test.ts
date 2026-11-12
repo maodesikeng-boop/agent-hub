@@ -442,6 +442,36 @@ describe("agent api over inject", () => {
       expect(res.statusCode).toBe(200);
       expect(ledger.contexts).toEqual([{ graphPrs: { "hub/1-open": pr } }]);
     });
+
+    it("hub graph finish：手工补记的 PR 网址用 probePrByUrl 按网址查，结果以网址为键；分支仍走 probePr", async () => {
+      const url = "https://github.com/o/r/pull/301";
+      ledger.graphTargets = [
+        { cwd: "/repo", branch: "hub/1-open" },
+        { cwd: "/repo", prUrl: url },
+      ];
+      const byUrl: string[] = [];
+      const byBranch: string[] = [];
+      await app.close();
+      app = createAgentApi({
+        ledger,
+        tokens,
+        probePr: async (_cwd, branch) => {
+          byBranch.push(branch);
+          return null;
+        },
+        probePrByUrl: async (_cwd, u) => {
+          byUrl.push(u);
+          return { number: 301, state: "OPEN", url: u };
+        },
+      });
+      await app.ready();
+
+      const res = await call("graph.finish", { graphId: 2, summary: "验收完成" });
+      expect(res.statusCode).toBe(200);
+      expect(byBranch).toEqual(["hub/1-open"]);
+      expect(byUrl).toEqual([url]);
+      expect(ledger.contexts).toEqual([{ graphPrs: { [url]: { number: 301, state: "OPEN", url } } }]);
+    });
   });
 
   describe("hub worker show：调 hubCall 之前找厂商那边的原始记录", () => {

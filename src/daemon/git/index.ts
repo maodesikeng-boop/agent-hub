@@ -15,5 +15,5 @@ export {
   realpathLoose,
   removeWorktree,
 } from "./git.ts";
-export { probePr } from "./pr.ts";
+export { probePr, probePrByUrl } from "./pr.ts";
 export type { AddWorktreeOptions, AddWorktreeResult, DiffFileStat, GitOptions } from "./git.ts";
