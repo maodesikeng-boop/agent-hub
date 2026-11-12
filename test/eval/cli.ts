@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { pmSandboxInput, pmSandboxProfile, preflight, probeClaudeShimPath, scrubProcessEnv, SANDBOX_EXEC, whichFirst } from "./isolation.ts";
+import { assertRealEvaluationSafe, pmSandboxInput, pmSandboxProfile, preflight, probeClaudeShimPath, scrubProcessEnv, SANDBOX_EXEC, whichFirst } from "./isolation.ts";
 import { EVAL_DEFAULT_PARALLEL, EVAL_MAX_PARALLEL } from "./limits.ts";
 import { pruneFailedWork, pruneRuns, renderSummary, runIdOf, type Summary, type VersionInfo } from "./report.ts";
 import { SCENARIOS, scenarioById } from "./scenarios.ts";
@@ -79,6 +79,7 @@ async function main(): Promise<void> {
   const scripted = values.scripted as SelfTestKind | undefined;
   if (scripted !== undefined && !["positive", "negative", "nothing"].includes(scripted)) fail(`--scripted 只能是 positive、negative、nothing`);
   if (scripted === undefined && process.platform !== "darwin") fail("评测要在 macOS 上跑：真模型项目经理要包进 macOS 沙箱（sandbox-exec）。");
+  if (scripted === undefined) assertRealEvaluationSafe();
   const root = values.root ?? join(homedir(), ".agent-hub-eval");
   const workRoot = join(root, "w");
   const versionsDir = join(root, "v");
@@ -110,7 +111,10 @@ async function main(): Promise<void> {
     if (!probe.ok) fail("真 claude 的 Bash 里 gh 不是替身：替身会被绕过，不跑评测。");
     pm = { mode: "real", realClaude, model: values.model ?? null, effort: values.effort ?? "xhigh", sandbox: { exec: SANDBOX_EXEC, profile } };
   }
-  if (command === "preflight") return;
+  if (command === "preflight") {
+    pruneRuns(runsDir);
+    return;
+  }
 
   if (!values.base || !values.head) fail(`compare 要给 --base 和 --head。\n\n${HELP}`);
   const parallel = Math.min(EVAL_MAX_PARALLEL, Math.max(1, Number(values.parallel ?? EVAL_DEFAULT_PARALLEL) || EVAL_DEFAULT_PARALLEL));
@@ -145,6 +149,8 @@ async function main(): Promise<void> {
     stdio: "inherit",
     env: { ...process.env, EVAL_PLAN: planFile, EVAL_PARALLEL: String(parallel) },
   });
+
+  for (const p of pruneFailedWork(workRoot)) log(`清掉过期的：${p}`);
 
   // ---- 对照表 ----
   const trials: TrialResult[] = plan.trials.flatMap((t) => {

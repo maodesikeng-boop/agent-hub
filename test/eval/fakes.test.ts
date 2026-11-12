@@ -89,9 +89,10 @@ describe("只记录的替身", () => {
 describe("claude 分流", () => {
   const base: RouterConfig = { mode: "real", node: "/n", fakeClaude: "/fake.ts", realClaude: "/real/claude", sandbox: { exec: "/usr/bin/sandbox-exec", profile: "/p.sb" }, settingsDir: root };
 
-  it("Worker（有 Worker 才设的环境变量）给假 claude，项目经理给包进沙箱的真 claude", () => {
+  it("Worker（有 Worker 才设的环境变量）给假 claude，真项目经理在隔离完成前拒绝启动", () => {
     expect(route(base, ["-p", "x"], { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" })).toEqual({ file: "/n", argv: ["/n", "/fake.ts", "-p", "x"] });
-    expect(route(base, ["-p", "x"], {})).toEqual({ file: "/usr/bin/sandbox-exec", argv: ["/usr/bin/sandbox-exec", "-f", "/p.sb", "/real/claude", "-p", "x"] });
+    expect(() => route(base, ["-p", "x"], {})).toThrow("真模型评测已停用");
+    expect(() => route({ ...base, sandbox: null }, [], {})).toThrow("真模型评测已停用");
   });
 
   it("剧本模式两种角色都给假 claude", () => {

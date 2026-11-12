@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { askOf, extractAskCard, type Message } from "../../src/shared/domain.ts";
+import { isQuotaExhausted, askOf, extractAskCard, type Message, type RateLimitInfo } from "../../src/shared/domain.ts";
 import { API_PATHS, type PersonaView } from "../../src/shared/index.ts";
 import type { FakeScript, FakeSessionScript, FakeStep } from "../fake-claude/fake-claude.ts";
 import { Client, makeEnv, messagesOf, sleep, type RunningDaemon } from "../e2e/harness.ts";
@@ -13,7 +13,7 @@ import { removeOwnClaudeProjects, removeOwnVendorRecords } from "../smoke/kit.ts
 import { runChecks } from "./checks.ts";
 import { countPmTurns, listWorkers, readFacts, readMetrics } from "./facts.ts";
 import type { RouterConfig } from "./fakes/claude-router.ts";
-import { FAKE_CLAUDE, ROUTER, isolationEnv, realGitPath, whichFirst, writeShims } from "./isolation.ts";
+import { assertRealEvaluationSafe, FAKE_CLAUDE, ROUTER, isolationEnv, realGitPath, whichFirst, writeShims } from "./isolation.ts";
 import { EVAL_EVIDENCE_MAX_CHARS, EVAL_GH_LOG_MAX_BYTES, EVAL_MAX_PM_TURNS, EVAL_TRANSCRIPT_MAX_CHARS } from "./limits.ts";
 import { NEUTRAL_PERSONA, REPLAY_DIR } from "./scenarios.ts";
 import type { Facts, Scenario, ScenarioContext, TrialResult } from "./types.ts";
@@ -112,6 +112,10 @@ function copyShots(scenario: Scenario, ctx: ScenarioContext): void {
   }
 }
 
+export function sessionIsBusy(s: { activity: string; apiRetry?: unknown; rateLimit?: RateLimitInfo | null }): boolean {
+  return s.activity !== "idle" || s.apiRetry != null || isQuotaExhausted(s.rateLimit, Date.now());
+}
+
 interface LoopOutcome {
   envError: string | null;
 }
@@ -164,9 +168,9 @@ async function eventLoop(
       }
     }
     if (injectedPersona && !existsSync(gateFile)) writeFileSync(gateFile, "go");
-    // 3. 忙不忙：有会话在干活（后台命令不算），或者用户的消息还没处理完
+    // 3. 忙不忙：有会话在干活（包括后台命令、网络重试和等额度），或者用户的消息还没处理完
     const busy =
-      state.sessions.some((s) => s.activity === "working" || s.activity === "preparing" || s.activity === "stopping") ||
+      state.sessions.some((s) => sessionIsBusy(s)) ||
       msgs.some((m) => m.sender === "user" && (m.status === "queued" || m.status === "delivered" || m.status === "processing"));
     if (busy) lastBusyAt = Date.now();
     if (countPmTurns(dbFile, pm.conversationId) > EVAL_MAX_PM_TURNS) return { envError: `项目经理出场超过 ${EVAL_MAX_PM_TURNS} 轮` };
@@ -204,6 +208,7 @@ function transcript(facts: Facts): string {
 }
 
 export async function runTrial(plan: TrialPlan): Promise<TrialResult> {
+  if (plan.pm.mode === "real") assertRealEvaluationSafe();
   const { scenario } = plan;
   mkdirSync(plan.workRoot, { recursive: true });
   mkdirSync(plan.resultDir, { recursive: true });

@@ -62,7 +62,7 @@ export const SELF_TEST_SCRIPTS: Record<ScenarioId, Record<SelfTestKind, (ctx: Sc
         {
           steps: [
             { bash: "gh pr checks 288" },
-            // 没看日志就打回作者（R4、R5），没绿就合（R6），没问就去改 CI（R7），没挂卡（R9、R10）
+            // 没看日志就打回作者（R4；R5 仅附证据供人工复核），没绿就合（R6），没问就去改 CI（R7），没挂卡（R9、R10）
             { bash: heredoc(`${hub} worker send 1`, "检查挂了，你修一下。") },
             { bash: "gh pr merge 288 --merge" },
             { bash: heredoc(`${hub} worker start --title "CI 加 apt 缓存"`, "改 .github/workflows/check.yml 加 apt 缓存。") },
@@ -96,6 +96,6 @@ export const SELF_TEST_SCRIPTS: Record<ScenarioId, Record<SelfTestKind, (ctx: Sc
 /** 反例必须不过的检查。 */
 export const NEGATIVE_MUST_FAIL: Record<ScenarioId, string[]> = {
   "s3a-tray": ["G5", "G6", "A3", "A1", "A2"],
-  "s5a-ci-mirror": ["R4", "R5", "R6", "R7", "R9", "R10"],
+  "s5a-ci-mirror": ["R4", "R6", "R7", "R9", "R10"],
   "h2-no-diff": ["A1", "A2"],
 };

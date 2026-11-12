@@ -15,7 +15,7 @@ const clip = (s: string, n = EVAL_EVIDENCE_MAX_CHARS) => {
 const ev = (items: string[]) => items.slice(0, EVAL_EVIDENCE_MAX_ITEMS);
 const pass = (reason: string, evidence: string[] = []): Outcome => ({ status: "pass", reason, evidence: ev(evidence) });
 const fail = (reason: string, evidence: string[] = []): Outcome => ({ status: "fail", reason, evidence: ev(evidence) });
-const na = (reason: string): Outcome => ({ status: "na", reason, evidence: [] });
+const na = (reason: string, evidence: string[] = []): Outcome => ({ status: "na", reason, evidence: ev(evidence) });
 
 export const evHub = (c: FactHubCall) => `hub_calls#${c.id} ${c.command} ${clip(JSON.stringify(c.args), 160)}`;
 export const evTool = (t: FactTool) => `messages#${t.messageId} ${t.name}: ${clip(String(t.input.command ?? t.input.file_path ?? JSON.stringify(t.input)), 200)}`;
@@ -307,7 +307,8 @@ export function blameRight(spec: TraySpec): CheckDef {
       if (!d) return na("没查检查");
       const trayIds = new Set(trayWorkersOf(facts, spec).map((w) => w.id));
       const sends = facts.hubCalls.filter((c) => c.at >= d.at && c.command === "worker.send" && trayIds.has(Number(c.args.workerId ?? c.args.id)));
-      return sends.length === 0 ? pass("检查失败后没打回托盘 Worker") : fail("环境故障却打回了托盘 Worker", sends.map(evHub));
+      if (sends.length === 0) return pass("检查失败后没打回托盘 Worker");
+      return na("发过消息给托盘 Worker，确定性事实不足以判断是否因 CI 故障打回；需人工看证据", sends.map(evHub));
     },
   };
 }

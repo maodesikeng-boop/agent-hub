@@ -21,6 +21,11 @@ export const ROUTER = join(FAKES_DIR, "claude-router.ts");
 export const FAKE_CLAUDE = new URL("../fake-claude/fake-claude.ts", import.meta.url).pathname;
 export const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
 
+/** 真模型必须等隔离边界通过宿主机攻击测试后才能启用，不能用 PATH 替身充当安全边界。 */
+export function assertRealEvaluationSafe(): void {
+  throw new Error("真模型评测已停用：当前沙箱默认允许宿主机写入及 HTTPS 出站，无法阻止绕过替身直推、访问生产服务；尚未验证凭据访问、进程回收与防泄题。请使用 --scripted，见 docs/orchestration-eval-design.md 的 PR #294 审查记录。");
+}
+
 /** 换成“只记录、不执行”的替身的命令。 */
 export const RECORD_ONLY_TOOLS = ["ssh", "scp", "sftp", "rsync", "launchctl", "osascript", "pkill", "killall", "open"] as const;
 /** 真模型项目经理的沙箱里不许执行的真命令（替身之外的第二道）。gh 另按 PATH 里找到的真 gh 加。 */
@@ -179,7 +184,14 @@ export interface PmSandboxInput {
 /** 真守护进程在数据目录 run/ 下的 socket（src/shared/paths.ts）。 */
 const DAEMON_SOCKETS = ["run/hub.sock", "run/admin.sock", "run/ui.sock", "run/public.sock", "run/peer.sock", "run/tunnel/hub.sock"];
 
-const sbString = (s: string) => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+export function sbString(s: string): string {
+  if (/[\x00-\x1f\x7f]/.test(s)) throw new Error("SBPL 路径含控制字符");
+  return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+function sbRegex(s: string): string {
+  if (/[\x00-\x1f\x7f]/.test(s)) throw new Error("SBPL 路径含控制字符");
+  return `#"${s.replace(/"/g, '\\"')}"`;
+}
 const sbRegexLiteral = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** macOS sandbox-exec 规则（SBPL）：默认放行，后写的规则优先。 */
@@ -194,7 +206,7 @@ export function pmSandboxProfile(input: PmSandboxInput): string {
     `(allow file-read* (subpath ${sbString(join(input.realRepo, "node_modules"))}))`,
     ";; claude 给真仓库、真 worktree 存的会话记录和自动记忆：禁读禁写",
     `(deny file-read* file-write* (subpath ${sbString(join(projects, claudeProjectDirName(input.realRepo)))})${input.realDataDirs
-      .map((d) => ` (regex #"^${sbRegexLiteral(join(projects, claudeProjectDirName(join(d, "worktrees"))))}")`)
+      .map((d) => ` (regex ${sbRegex(`^${sbRegexLiteral(join(projects, claudeProjectDirName(join(d, "worktrees"))))}`)})`)
       .join("")})`,
     ";; 连不上真守护进程：它的几个 unix socket 和本机端口",
     `(deny network-outbound ${input.realDataDirs
@@ -276,6 +288,7 @@ export function preflight(profileFile: string, input: PmSandboxInput, opts: { pr
  * 用最小的模型、不存会话，约 1 美分。
  */
 export function probeClaudeShimPath(profileFile: string, opts: { realClaude: string; dir: string; model: string }): { ok: boolean; line: string } {
+  assertRealEvaluationSafe();
   const binDir = join(opts.dir, "bin");
   writeShims({ binDir, ghDir: join(opts.dir, "gh"), recordFile: join(opts.dir, "recorded.jsonl") }, { node: process.execPath, realGit: realGitPath() });
   const envFile = join(opts.dir, "claude-env.sh");

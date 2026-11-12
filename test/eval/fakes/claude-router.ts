@@ -6,6 +6,7 @@
 //   real 模式给真 claude，并包进 macOS 沙箱（isolation.ts 生成的规则：真数据目录、真仓库读写都拦，ssh/rsync/真 gh 不能执行，
 //   不能给别的进程发信号，连不上真守护进程），再把 --settings 里 claude 自带的沙箱关掉（macOS 沙箱不能嵌套）。
 // 配置在 EVAL_ROUTER_CONFIG 指的 JSON 文件里（RouterConfig）。用 process.execve 换掉自己：进程号不变，守护进程按进程组管它照常管得住。
+import { assertRealEvaluationSafe } from "../isolation.ts";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -49,6 +50,7 @@ export function route(config: RouterConfig, args: string[], env: NodeJS.ProcessE
   if (config.mode === "scripted" || isWorkerEnv(env)) {
     return { file: config.node, argv: [config.node, config.fakeClaude, ...args] };
   }
+  assertRealEvaluationSafe();
   if (!config.realClaude) throw new Error("claude 分流：real 模式没有 realClaude");
   if (!config.sandbox) return { file: config.realClaude, argv: [config.realClaude, ...args] };
   const patched = settingsWithoutOwnSandbox(args, config.settingsDir);
