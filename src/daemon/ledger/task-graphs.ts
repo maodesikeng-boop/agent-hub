@@ -382,8 +382,11 @@ function nodeWorkerNote(node: TaskNode): string {
   return ` · 经手${node.workerIds.length > recent.length ? "（最近的）" : ""} Worker ${recent.map((id) => `#${id}`).join("、")}`;
 }
 
-/** hub graph show、hub graph patch 的回执、换新会话的交接摘要共用的一张图的文本：每个节点一行状态，下面是它的结果（nodeResultLines）。 */
-function formatGraphText(graph: TaskGraph): string {
+/**
+ * hub graph show、hub graph patch 的回执、换新会话的交接摘要共用的一张图的文本：每个节点一行状态，下面是它的结果（nodeResultLines）。
+ * results 为 false 时只列状态那一行（交接摘要放不下全文时用）。
+ */
+function formatGraphText(graph: TaskGraph, results = true): string {
   const depMap = new Map<string, string[]>();
   for (const e of graph.edges) {
     let list = depMap.get(e.toKey);
@@ -398,12 +401,12 @@ function formatGraphText(graph: TaskGraph): string {
     const deps = depMap.get(n.key);
     const depNote = deps && deps.length > 0 ? ` ← [${deps.join(", ")}]` : "";
     const kindNote = n.kind === "gate" ? " [门禁]" : "";
-    lines.push(`  - [${n.status}] ${n.key}：${n.title}${kindNote}${nodeWorkerNote(n)}${depNote}`, ...nodeResultLines(n));
+    lines.push(`  - [${n.status}] ${n.key}：${n.title}${kindNote}${nodeWorkerNote(n)}${depNote}`, ...(results ? nodeResultLines(n) : []));
   }
   return lines.join("\n");
 }
 
-/** 一张图只留一行进度（交接摘要超过总字数上限时用）。 */
+/** 一张图只留一行进度（交接摘要里连只列状态都放不下时用）。 */
 function formatGraphBrief(graph: TaskGraph): string {
   const settled = graph.nodes.filter((n) => n.status === "done" || n.status === "skipped").length;
   return `任务图 #${graph.id}「${graph.title}」（状态：${graph.status}，进度 ${settled}/${graph.nodes.length}；详情用 ${HUB_COMMAND} graph show ${graph.id} 看）`;
@@ -871,7 +874,8 @@ export function createLedgerTaskGraphs(
       };
     }
     return {
-      text: graphs.map(formatGraphText).join("\n\n"),
+      // 列表最多 HUB_GRAPH_LIST_LIMIT 张图，只列各节点的状态；节点的结果（分支、PR、摘要、定案）用 hub graph show <图编号> 看
+      text: graphs.map((g) => formatGraphText(g, false)).join("\n\n"),
       data: { graphs },
     };
   };
@@ -1815,14 +1819,16 @@ export function createLedgerTaskGraphs(
     );
     if (rows.length === 0) return null;
     const graphs = hydrateGraphs(rows);
-    // 每个节点带着分支、PR、摘要、定案（formatGraphText）；总字数有上限：按最近动过的先给全文，放不下的只留一行进度
+    // 每个节点带着分支、PR、摘要、定案（formatGraphText）；总字数有上限：按最近动过的先给全文，
+    // 放不下的退一档只列各节点的状态，还放不下的只留一行进度（用 hub graph show 看）
     const byRecent = [...graphs].sort((a, b) => b.updatedAt - a.updatedAt || b.id - a.id);
     const texts = new Map<TaskGraphId, string>();
     let used = 0;
     for (const graph of byRecent) {
+      const fits = (text: string) => used + charLen(text) <= HANDOVER_GRAPHS_MAX_CHARS;
       const full = formatGraphText(graph);
-      const fits = used + charLen(full) <= HANDOVER_GRAPHS_MAX_CHARS;
-      const text = fits ? full : formatGraphBrief(graph);
+      const statusOnly = fits(full) ? full : formatGraphText(graph, false);
+      const text = fits(statusOnly) ? statusOnly : formatGraphBrief(graph);
       used += charLen(text);
       texts.set(graph.id, text);
     }

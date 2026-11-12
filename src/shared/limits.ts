@@ -740,7 +740,11 @@ export const MAX_NODE_ARTIFACT_BYTES = 4 * MAX_NODE_ARTIFACT_SUMMARY_CHARS;
 export const GRAPH_TEXT_NODE_NOTE_CHARS = 160;
 /** 同上，每个节点最多列几个经手过的 Worker（换过很多次人的只列最近几个）。 */
 export const GRAPH_TEXT_NODE_WORKERS_MAX = 3;
-/** 换新会话的交接摘要里“未完结的任务图”一节的总字数上限（最多 MAX_ACTIVE_GRAPHS_PER_PROJECT 张图）：超了的图只留一行进度，详情用 hub graph show 看。 */
+/**
+ * 换新会话的交接摘要里“未完结的任务图”一节的字数上限（最多 MAX_ACTIVE_GRAPHS_PER_PROJECT 张图 × MAX_GRAPH_NODES 个节点）：
+ * 按最近动过的先给全文（带节点结果），放不下的只列各节点状态，还放不下的每张只留一行进度，详情用 hub graph show 看。
+ * 一行进度不计在内（每张不到 200 字）。
+ */
 export const HANDOVER_GRAPHS_MAX_CHARS = 8_000;
 /** 历史任务图分页大小与 CLI 列表默认条数。 */
 export const GRAPH_HISTORY_PAGE_SIZE = 20;

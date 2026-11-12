@@ -384,7 +384,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     expect(preamble).toBe(text);
   });
 
-  it("交接摘要里未完结的任务图有总字数上限：最近动过的给全文，放不下的只留一行进度和怎么查", () => {
+  it("交接摘要里未完结的任务图有总字数上限：最近动过的给全文，放不下的只列节点状态，还放不下的只留一行进度和怎么查", () => {
     const longSummary = "摘".repeat(GRAPH_TEXT_NODE_NOTE_CHARS);
     const ids: number[] = [];
     for (let g = 0; g < MAX_ACTIVE_GRAPHS_PER_PROJECT; g++) {
@@ -401,16 +401,24 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     expect(blocks).toHaveLength(MAX_ACTIVE_GRAPHS_PER_PROJECT);
     // 按图编号排，每张图都在
     expect(blocks.map((b) => Number(/^任务图 #(\d+)/.exec(b)![1]))).toEqual(ids);
-    const brief = blocks.filter((b) => !b.includes("\n"));
-    const full = blocks.filter((b) => b.includes("\n"));
-    expect(full.length).toBeGreaterThan(0);
-    expect(brief.length).toBeGreaterThan(0);
-    // 给全文的是最近动过的那几张（编号大的）
-    expect(blocks.slice(-full.length).every((b) => b.includes("\n"))).toBe(true);
+    const tier = (b: string) => (!b.includes("\n") ? "brief" : b.includes("摘要：") ? "full" : "status");
+    const tiers = blocks.map(tier);
+    const count = (t: string) => tiers.filter((x) => x === t).length;
+    expect(count("full")).toBeGreaterThan(0);
+    expect(count("status")).toBeGreaterThan(0);
+    expect(count("brief")).toBeGreaterThan(0);
+    // 越近动过的（编号大的）给得越全：一行进度 → 只列状态 → 全文
+    expect(tiers).toEqual([...Array(count("brief")).fill("brief"), ...Array(count("status")).fill("status"), ...Array(count("full")).fill("full")]);
+    const brief = blocks.filter((b) => tier(b) === "brief");
     for (const b of brief) expect(b).toMatch(/^任务图 #\d+「图 \d+」（状态：active，进度 11\/12；详情用 hub graph show \d+ 看）$/);
-    // 全文部分不超过上限；整节多出来的只有那些一行的
-    const fullChars = full.reduce((sum, b) => sum + [...b].length, 0);
-    expect(fullChars).toBeLessThanOrEqual(HANDOVER_GRAPHS_MAX_CHARS);
+    // 只列状态的那几张：每个节点一行，没有结果行
+    const status = blocks.find((b) => tier(b) === "status")!;
+    expect(status.split("\n")).toHaveLength(13);
+    expect(status).toContain("  - [done] n0：第 0 步");
+    expect(status).not.toContain("PR https://");
+    // 全文加只列状态的不超过上限；整节多出来的只有那些一行的
+    const bodyChars = blocks.filter((b) => tier(b) !== "brief").reduce((sum, b) => sum + [...b].length, 0);
+    expect(bodyChars).toBeLessThanOrEqual(HANDOVER_GRAPHS_MAX_CHARS);
     expect([...section].length).toBeLessThanOrEqual(HANDOVER_GRAPHS_MAX_CHARS + MAX_ACTIVE_GRAPHS_PER_PROJECT * 200);
   });
 
