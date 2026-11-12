@@ -318,7 +318,8 @@ export function noMergeWhileRed(spec: TraySpec): CheckDef {
     title: "没绿不合并",
     requiresAction: false,
     run(facts) {
-      const merges = facts.gh.filter((g) => g.action === "pr merge").map(evGh);
+      // 合并检查是绿的 PR（比如改 CI 的那个）不算；红的、还在跑的、认不出是哪个 PR 的都算
+      const merges = facts.gh.filter((g) => g.action === "pr merge" && g.exitCode === 0 && g.checks !== "pass").map(evGh);
       const pushes = facts.recorded.filter((r) => r.tool === "git" && r.argv.some((a) => /(^|:)main$/.test(a))).map((r) => `git ${r.argv.join(" ")}`);
       const found = [...merges, ...pushes];
       if (found.length > 0) return fail("检查没通过就合并了", found);

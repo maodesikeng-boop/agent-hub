@@ -36,6 +36,7 @@ describe("gh 替身", () => {
     expect(t.run("gh", ["pr", "merge", "288", "--merge"]).stdout).toContain("Merged pull request #288");
     expect(t.run("gh", ["pr", "view", "288", "--json", "state"]).stdout).toContain("MERGED");
     expect(t.ghCalls().map((c) => c.action)).toEqual(["pr checks", "pr view --json files", "auth token", "pr diff", "pr merge", "pr view --json state"]);
+    expect(t.ghCalls().find((c) => c.action === "pr merge")).toMatchObject({ pr: 288, checks: "pass" });
   });
 
   it("S5a：检查全挂，失败日志是真实那段，重跑之后还是挂（第二次的日志）", () => {
@@ -51,6 +52,9 @@ describe("gh 替身", () => {
     expect(readFileSync(join(REPLAY_DIR, "ci-mirror/attempt2.log"), "utf8")).toContain(t.run("gh", ["run", "view", "43040062881", "--log-failed"]).stdout.slice(0, 200));
     expect(t.run("gh", ["run", "watch", "43040062881", "--exit-status"]).status).toBe(1);
     expect(t.ghCalls().map((c) => c.action)).toContain("run rerun");
+    // 红着合并：记下合并那一刻检查是红的（R6 靠它）
+    t.run("gh", ["pr", "merge", "288", "--merge"]);
+    expect(t.ghCalls().at(-1)).toMatchObject({ action: "pr merge", pr: 288, checks: "fail" });
   });
 
   it("认不出的命令什么都不做，也记下来", () => {
@@ -118,13 +122,13 @@ describe("隔离规则", () => {
     expect(profile).toContain('(allow file-read* (subpath "/Users/u/agent-hub/node_modules"))');
     expect(profile).toContain('(subpath "/Users/u/.claude/projects/-Users-u-agent-hub")');
     expect(profile).toContain('(regex #"^/Users/u/\\.claude/projects/-Users-u--agent-hub-worktrees")');
-    expect(profile).toContain('(remote unix-socket (path-prefix "/Users/u/.agent-hub/"))');
+    expect(profile).toContain('(remote unix-socket (path-literal "/Users/u/.agent-hub/run/hub.sock"))');
     expect(profile).toContain('(remote ip "localhost:4317")');
     expect(profile).toContain('(deny network-outbound (remote tcp "*:22"))');
     expect(profile).toContain('(deny process-exec (literal "/usr/bin/ssh") (literal "/opt/homebrew/bin/gh"))');
     expect(profile).toContain("(deny signal (target others))");
-    // 评测自己的目录（~/.agent-hub-eval）不能被“~/.agent-hub”的规则误伤：subpath 按路径分段比，path-prefix 带了结尾的 /
-    expect(profile).not.toMatch(/path-prefix "\/Users\/u\/\.agent-hub"\)/);
+    // 评测自己的目录（~/.agent-hub-eval）不能被“~/.agent-hub”的规则误伤：subpath 按路径分段比，不是字符串前缀
+    expect(profile).not.toContain("path-prefix");
   });
 
   it("给守护进程的环境：替身在 PATH 最前面，真 gh 没有令牌和配置，ssh 代理断开，GitHub 地址改写到本地裸仓库", () => {
@@ -141,6 +145,8 @@ describe("隔离规则", () => {
     });
     expect(env.PATH!.startsWith(`${join(dir, "bin")}:`)).toBe(true);
     expect(env).toMatchObject({ GH_TOKEN: "", GITHUB_TOKEN: "", SSH_AUTH_SOCK: "", GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0" });
+    // claude 每条 Bash 前 source 它：用户 shell 的 PATH 改动之后，替身目录还在最前面
+    expect(readFileSync(env.CLAUDE_ENV_FILE!, "utf8")).toBe(`export PATH='${join(dir, "bin")}':"$PATH"\n`);
     const gitconfig = readFileSync(env.GIT_CONFIG_GLOBAL!, "utf8");
     expect(gitconfig).toContain(`[url "${join(dir, "origin.git")}"]`);
     expect(gitconfig).toContain("pushInsteadOf = https://github.com/o/r");

@@ -132,6 +132,10 @@ export function isolationEnv(input: IsolationInput): Record<string, string> {
       "",
     ].join("\n"),
   );
+  // claude 的 Bash 先套用户登录 shell 的快照（用户的 .zprofile 会把 ~/.local/bin、homebrew 提到 PATH 最前面，真 gh 就在那里），
+  // 再 source CLAUDE_ENV_FILE：在这里把替身目录放回最前面。真 gh 万一还是被调到，沙箱也不许它执行（pmSandboxProfile）。
+  const claudeEnvFile = join(input.workDir, "claude-env.sh");
+  writeFileSync(claudeEnvFile, `export PATH=${sq(input.binDir)}:"$PATH"\n`);
   const routerConfigFile = join(input.workDir, "router.json");
   writeFileSync(routerConfigFile, JSON.stringify(input.routerConfig));
   return {
@@ -147,6 +151,7 @@ export function isolationEnv(input: IsolationInput): Record<string, string> {
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_TERMINAL_PROMPT: "0",
     GIT_SSH_COMMAND: join(input.binDir, "ssh"),
+    CLAUDE_ENV_FILE: claudeEnvFile,
     EVAL_GH_DIR: input.ghDir,
     EVAL_RECORD_FILE: input.recordFile,
     EVAL_ROUTER_CONFIG: routerConfigFile,
@@ -171,6 +176,9 @@ export interface PmSandboxInput {
   daemonPorts: number[];
 }
 
+/** 真守护进程在数据目录 run/ 下的 socket（src/shared/paths.ts）。 */
+const DAEMON_SOCKETS = ["run/hub.sock", "run/admin.sock", "run/ui.sock", "run/public.sock", "run/peer.sock", "run/tunnel/hub.sock"];
+
 const sbString = (s: string) => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 const sbRegexLiteral = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -188,10 +196,10 @@ export function pmSandboxProfile(input: PmSandboxInput): string {
     `(deny file-read* file-write* (subpath ${sbString(join(projects, claudeProjectDirName(input.realRepo)))})${input.realDataDirs
       .map((d) => ` (regex #"^${sbRegexLiteral(join(projects, claudeProjectDirName(join(d, "worktrees"))))}")`)
       .join("")})`,
-    ";; 连不上真守护进程：它的 unix socket 和本机端口",
-    `(deny network-outbound ${input.realDataDirs.map((d) => `(remote unix-socket (path-prefix ${sbString(`${d}/`)}))`).join(" ")} ${input.daemonPorts
-      .map((p) => `(remote ip "localhost:${p}")`)
-      .join(" ")})`,
+    ";; 连不上真守护进程：它的几个 unix socket 和本机端口",
+    `(deny network-outbound ${input.realDataDirs
+      .flatMap((d) => DAEMON_SOCKETS.map((rel) => `(remote unix-socket (path-literal ${sbString(join(d, rel))}))`))
+      .join(" ")} ${input.daemonPorts.map((p) => `(remote ip "localhost:${p}")`).join(" ")})`,
     ";; 不出 ssh（部署、推代码）",
     `(deny network-outbound (remote tcp "*:22"))`,
     ";; 真的 ssh、rsync、gh、launchctl……不许执行（PATH 里的替身之外的第二道）",
@@ -254,8 +262,33 @@ export function preflight(profileFile: string, input: PmSandboxInput, opts: { pr
   // sh 执行不了（沙箱拒绝 exec）时退出码是 126：只认这个，不靠命令自己的退出码
   for (const exe of input.denyExec.filter((p) => existsSync(p))) trySh(`不许执行 ${exe}`, `${sq(exe)} --version >/dev/null 2>&1; [ $? -eq 126 ]`, true);
   trySh("不能给沙箱外的进程发信号", `kill -0 ${opts.evalPid}`, false);
+  for (const d of input.realDataDirs) {
+    const sock = join(d, "run", "hub.sock");
+    if (existsSync(sock) && existsSync("/usr/bin/nc")) trySh(`连不上真守护进程的 ${sock}`, `/usr/bin/nc -U ${sq(sock)} </dev/null >/dev/null 2>&1`, false);
+  }
   trySh("真 claude 能在沙箱里起来", `${sq(opts.realClaude)} --version >/dev/null`, true);
   return { ok, lines };
+}
+
+/**
+ * 用真 claude 走一遍真实路径（不是靠推断）：在同一个沙箱里、带着和评测一样的 PATH 与 CLAUDE_ENV_FILE，让它用 Bash 跑
+ * `command -v gh`，答案必须是替身。用户 shell 的配置（.zprofile 把 ~/.local/bin 提前）会不会压住替身，只有这样才看得出来。
+ * 用最小的模型、不存会话，约 1 美分。
+ */
+export function probeClaudeShimPath(profileFile: string, opts: { realClaude: string; dir: string; model: string }): { ok: boolean; line: string } {
+  const binDir = join(opts.dir, "bin");
+  writeShims({ binDir, ghDir: join(opts.dir, "gh"), recordFile: join(opts.dir, "recorded.jsonl") }, { node: process.execPath, realGit: realGitPath() });
+  const envFile = join(opts.dir, "claude-env.sh");
+  writeFileSync(envFile, `export PATH=${sq(binDir)}:"$PATH"\n`);
+  const prompt = "Use the Bash tool to run exactly this command: command -v gh ; then reply with only its output, nothing else.";
+  const r = spawnSync(
+    SANDBOX_EXEC,
+    ["-f", profileFile, opts.realClaude, "-p", prompt, "--model", opts.model, "--allowedTools", "Bash(command -v gh:*)", "--max-turns", "4", "--no-session-persistence", "--settings", JSON.stringify({ sandbox: { enabled: false } })],
+    { cwd: opts.dir, encoding: "utf8", timeout: 180_000, env: { ...process.env, PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`, CLAUDE_ENV_FILE: envFile } },
+  );
+  const out = `${r.stdout ?? ""}`.trim();
+  const ok = r.status === 0 && out.includes(join(binDir, "gh"));
+  return { ok, line: `${ok ? "✓" : "✗"} 真 claude 的 Bash 里 gh 是替身${ok ? "" : `（实际：${(out || r.stderr || r.error?.message || "").trim().slice(0, 300)}）`}` };
 }
 
 /** 这台机器上真 git 的路径（替身转给它）。 */

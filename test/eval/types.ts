@@ -50,6 +50,9 @@ export interface GhCall {
   /** 替身认出来的动作（"pr checks"、"run view --log-failed"……），没认出来是 "unknown"。 */
   action: string;
   exitCode: number;
+  /** 这次调用落在哪个 PR 上、那一刻它的检查是什么状态（R6 看合并时绿没绿）。 */
+  pr?: number;
+  checks?: GhAttempt["status"];
 }
 
 /** ssh、rsync、git push 这些替身每次被调用记一行（只记录，不外发）。 */

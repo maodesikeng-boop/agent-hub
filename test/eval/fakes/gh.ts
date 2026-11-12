@@ -237,8 +237,8 @@ function runJson(replay: ReplayFile, pr: GhPr, state: GhState): Record<string, u
   };
 }
 
-/** 跑一条命令，返回认出来的动作和退出码。 */
-function run(argv: string[], replay: ReplayFile, state: GhState): { action: string; code: number } {
+/** 跑一条命令，返回认出来的动作和退出码；落在某个 PR 上的另外带上 PR 编号。 */
+function run(argv: string[], replay: ReplayFile, state: GhState): { action: string; code: number; pr?: GhPr } {
   const args = stripGlobal(argv);
   const [group, sub] = args;
   const rest = args.slice(2);
@@ -261,116 +261,128 @@ function run(argv: string[], replay: ReplayFile, state: GhState): { action: stri
   }
   if (group === "pr") {
     const pr = selectPr(prs, positionals(rest, VALUED)[0]);
-    switch (sub) {
-      case "checks": {
-        if (!pr) return (printErr("no pull requests found"), { action: "pr checks", code: 1 });
-        const rows = checkRows(replay, pr, state);
-        if (rows.length === 0) return (printErr(`no checks reported on the '${pr.headRefName}' branch`), { action: "pr checks", code: 1 });
-        const status = currentAttempt(pr, state)!.attempt.status;
-        if (flag(rest, "--json")) emitJson(rows, rest);
-        else for (const r of rows) print(`${r.name}\t${r.bucket}\t${r.elapsed}\t${r.link}\t${r.description}`);
-        if (flag(rest, "--watch") && status !== "pending") printErr("");
-        return { action: flag(rest, "--watch") ? "pr checks --watch" : "pr checks", code: status === "pass" ? 0 : status === "fail" ? 1 : 8 };
-      }
-      case "view": {
-        if (!pr) return (printErr("no pull requests found for branch"), { action: "pr view", code: 1 });
-        const obj = prJson(replay, pr, state);
-        if (flag(rest, "--json")) return { action: `pr view --json ${value(rest, "--json")}`, code: emitJson(obj, rest) };
-        print(`${pr.title} #${pr.number}\n${pr.state === "OPEN" ? "Open" : pr.state === "MERGED" ? "Merged" : "Closed"} • ${obj.author && (obj.author as { login: string }).login} wants to merge 1 commit into main from ${pr.headRefName} • +${obj.additions as number} -${obj.deletions as number}\n\n${pr.body}\n\nView this pull request on GitHub: ${obj.url as string}`);
-        return { action: "pr view", code: 0 };
-      }
-      case "diff": {
-        if (!pr) return (printErr("no pull requests found"), { action: "pr diff", code: 1 });
-        if (flag(rest, "--name-only")) {
-          for (const f of pr.files) print(f.path);
-          return { action: "pr diff --name-only", code: 0 };
-        }
-        out.push(pr.diffFile ? readFileSync(join(replay.baseDir, pr.diffFile), "utf8") : "");
-        return { action: "pr diff", code: 0 };
-      }
-      case "list": {
-        const listed = prs.filter((p) => (value(rest, "-s", "--state") ?? "open") === "all" || p.state === "OPEN");
-        if (flag(rest, "--json")) return { action: "pr list", code: emitJson(listed.map((p) => prJson(replay, p, state)), rest) };
-        for (const p of listed) print(`${p.number}\t${p.title}\t${p.headRefName}\t${p.state}`);
-        return { action: "pr list", code: 0 };
-      }
-      case "merge": {
-        if (!pr) return (printErr("no pull requests found"), { action: "pr merge", code: 1 });
-        if (pr.state !== "OPEN") return (printErr(`Pull request #${pr.number} is not open`), { action: "pr merge", code: 1 });
-        state.state[pr.number] = "MERGED";
-        print(`✓ Merged pull request #${pr.number} (${pr.title})`);
-        return { action: "pr merge", code: 0 };
-      }
-      case "create": {
-        const number = state.nextPr++;
-        const created: GhPr = {
-          number,
-          title: value(rest, "--title", "-t") ?? "(eval) new pull request",
-          body: value(rest, "--body", "-b") ?? "",
-          headRefName: value(rest, "--head", "-H") ?? `eval-branch-${number}`,
-          headRefOid: "0".repeat(40),
-          state: "OPEN",
-          files: [],
-        };
-        state.created.push(created);
-        print(`https://github.com/${replay.repo}/pull/${number}`);
-        return { action: "pr create", code: 0 };
-      }
-      default:
-        return { action: `pr ${sub ?? ""}`.trim(), code: 0 };
-    }
+    return { ...runPr(sub, rest, pr, prs, replay, state), ...(pr && sub !== "create" && sub !== "list" ? { pr } : {}) };
   }
   if (group === "run") {
     const withChecks = prs.filter((p) => p.checks);
     const id = positionals(rest, VALUED)[0];
     const pr = withChecks.find((p) => String(p.checks!.runId) === id) ?? [...withChecks].reverse().find((p) => p.state === "OPEN") ?? withChecks.at(-1);
-    switch (sub) {
-      case "list": {
-        const runs = withChecks.map((p) => runJson(replay, p, state));
-        if (flag(rest, "--json")) return { action: "run list", code: emitJson(runs, rest) };
-        for (const r of runs) print(`${r.status}\t${r.conclusion}\t${r.displayTitle}\t${r.workflowName}\t${r.headBranch}\t${r.event}\t${r.databaseId}\t5m42s\t${RUN_STARTED}`);
-        return { action: "run list", code: 0 };
-      }
-      case "view": {
-        if (!pr) return (printErr("run not found"), { action: "run view", code: 1 });
-        const cur = currentAttempt(pr, state)!;
-        if (flag(rest, "--log-failed", "--log")) {
-          let log = cur.attempt.status === "fail" || flag(rest, "--log") ? readLog(replay, cur.attempt.logFile) : "";
-          const job = value(rest, "--job");
-          const jobName = pr.checks!.jobs.find((j) => String(j.databaseId) === job)?.name;
-          if (jobName) log = log.split("\n").filter((l) => l.startsWith(`${jobName}\t`)).join("\n");
-          out.push(log);
-          return { action: flag(rest, "--log-failed") ? "run view --log-failed" : "run view --log", code: 0 };
-        }
-        const obj = runJson(replay, pr, state);
-        if (flag(rest, "--json")) return { action: "run view --json", code: emitJson(obj, rest) };
-        const mark = cur.attempt.status === "fail" ? "X" : cur.attempt.status === "pass" ? "✓" : "*";
-        print(`${mark} ${pr.headRefName} ${pr.checks!.workflow} · ${pr.checks!.runId}\nTriggered via pull_request about 6 minutes ago\n\nJOBS`);
-        for (const job of pr.checks!.jobs) print(`${mark} ${job.name} in ${job.elapsed} (ID ${job.databaseId})`);
-        if (cur.attempt.status === "fail") {
-          print("\nANNOTATIONS");
-          for (const job of pr.checks!.jobs) print(`X Process completed with exit code 100.\n${job.name}: .github#1\n`);
-          print(`To see what failed, try: gh run view ${pr.checks!.runId} --log-failed`);
-        }
-        print(`View this run on GitHub: ${obj.url as string}`);
-        return { action: "run view", code: flag(rest, "--exit-status") && cur.attempt.status === "fail" ? 1 : 0 };
-      }
-      case "rerun": {
-        if (!pr) return (printErr("run not found"), { action: "run rerun", code: 1 });
-        state.attempt[pr.number] = (state.attempt[pr.number] ?? 0) + 1;
-        print(`✓ Requested rerun${flag(rest, "--failed") ? " (failed jobs)" : ""} of run ${pr.checks!.runId}`);
-        return { action: "run rerun", code: 0 };
-      }
-      case "watch": {
-        if (!pr) return (printErr("run not found"), { action: "run watch", code: 1 });
-        const status = currentAttempt(pr, state)!.attempt.status;
-        print(`${status === "fail" ? "X" : "✓"} Run ${pr.checks!.workflow} (${pr.checks!.runId}) completed with '${status === "fail" ? "failure" : "success"}'`);
-        return { action: "run watch", code: flag(rest, "--exit-status") && status === "fail" ? 1 : 0 };
-      }
-      default:
-        return { action: `run ${sub ?? ""}`.trim(), code: 0 };
-    }
+    return { ...runRun(sub, rest, pr, withChecks, replay, state), ...(pr && sub !== "list" ? { pr } : {}) };
   }
+  return runOther(group, sub, rest, prs, replay, state);
+}
+
+function runPr(sub: string | undefined, rest: string[], pr: GhPr | undefined, prs: GhPr[], replay: ReplayFile, state: GhState): { action: string; code: number } {
+  switch (sub) {
+    case "checks": {
+      if (!pr) return (printErr("no pull requests found"), { action: "pr checks", code: 1 });
+      const rows = checkRows(replay, pr, state);
+      if (rows.length === 0) return (printErr(`no checks reported on the '${pr.headRefName}' branch`), { action: "pr checks", code: 1 });
+      const status = currentAttempt(pr, state)!.attempt.status;
+      if (flag(rest, "--json")) emitJson(rows, rest);
+      else for (const r of rows) print(`${r.name}\t${r.bucket}\t${r.elapsed}\t${r.link}\t${r.description}`);
+      if (flag(rest, "--watch") && status !== "pending") printErr("");
+      return { action: flag(rest, "--watch") ? "pr checks --watch" : "pr checks", code: status === "pass" ? 0 : status === "fail" ? 1 : 8 };
+    }
+    case "view": {
+      if (!pr) return (printErr("no pull requests found for branch"), { action: "pr view", code: 1 });
+      const obj = prJson(replay, pr, state);
+      if (flag(rest, "--json")) return { action: `pr view --json ${value(rest, "--json")}`, code: emitJson(obj, rest) };
+      print(`${pr.title} #${pr.number}\n${pr.state === "OPEN" ? "Open" : pr.state === "MERGED" ? "Merged" : "Closed"} • ${obj.author && (obj.author as { login: string }).login} wants to merge 1 commit into main from ${pr.headRefName} • +${obj.additions as number} -${obj.deletions as number}\n\n${pr.body}\n\nView this pull request on GitHub: ${obj.url as string}`);
+      return { action: "pr view", code: 0 };
+    }
+    case "diff": {
+      if (!pr) return (printErr("no pull requests found"), { action: "pr diff", code: 1 });
+      if (flag(rest, "--name-only")) {
+        for (const f of pr.files) print(f.path);
+        return { action: "pr diff --name-only", code: 0 };
+      }
+      out.push(pr.diffFile ? readFileSync(join(replay.baseDir, pr.diffFile), "utf8") : "");
+      return { action: "pr diff", code: 0 };
+    }
+    case "list": {
+      const listed = prs.filter((p) => (value(rest, "-s", "--state") ?? "open") === "all" || p.state === "OPEN");
+      if (flag(rest, "--json")) return { action: "pr list", code: emitJson(listed.map((p) => prJson(replay, p, state)), rest) };
+      for (const p of listed) print(`${p.number}\t${p.title}\t${p.headRefName}\t${p.state}`);
+      return { action: "pr list", code: 0 };
+    }
+    case "merge": {
+      if (!pr) return (printErr("no pull requests found"), { action: "pr merge", code: 1 });
+      if (pr.state !== "OPEN") return (printErr(`Pull request #${pr.number} is not open`), { action: "pr merge", code: 1 });
+      state.state[pr.number] = "MERGED";
+      print(`✓ Merged pull request #${pr.number} (${pr.title})`);
+      return { action: "pr merge", code: 0 };
+    }
+    case "create": {
+      const number = state.nextPr++;
+      const created: GhPr = {
+        number,
+        title: value(rest, "--title", "-t") ?? "(eval) new pull request",
+        body: value(rest, "--body", "-b") ?? "",
+        headRefName: value(rest, "--head", "-H") ?? `eval-branch-${number}`,
+        headRefOid: "0".repeat(40),
+        state: "OPEN",
+        files: [],
+      };
+      state.created.push(created);
+      print(`https://github.com/${replay.repo}/pull/${number}`);
+      return { action: "pr create", code: 0 };
+    }
+    default:
+      return { action: `pr ${sub ?? ""}`.trim(), code: 0 };
+  }
+}
+
+function runRun(sub: string | undefined, rest: string[], pr: GhPr | undefined, withChecks: GhPr[], replay: ReplayFile, state: GhState): { action: string; code: number } {
+  switch (sub) {
+    case "list": {
+      const runs = withChecks.map((p) => runJson(replay, p, state));
+      if (flag(rest, "--json")) return { action: "run list", code: emitJson(runs, rest) };
+      for (const r of runs) print(`${r.status}\t${r.conclusion}\t${r.displayTitle}\t${r.workflowName}\t${r.headBranch}\t${r.event}\t${r.databaseId}\t5m42s\t${RUN_STARTED}`);
+      return { action: "run list", code: 0 };
+    }
+    case "view": {
+      if (!pr) return (printErr("run not found"), { action: "run view", code: 1 });
+      const cur = currentAttempt(pr, state)!;
+      if (flag(rest, "--log-failed", "--log")) {
+        let log = cur.attempt.status === "fail" || flag(rest, "--log") ? readLog(replay, cur.attempt.logFile) : "";
+        const job = value(rest, "--job");
+        const jobName = pr.checks!.jobs.find((j) => String(j.databaseId) === job)?.name;
+        if (jobName) log = log.split("\n").filter((l) => l.startsWith(`${jobName}\t`)).join("\n");
+        out.push(log);
+        return { action: flag(rest, "--log-failed") ? "run view --log-failed" : "run view --log", code: 0 };
+      }
+      const obj = runJson(replay, pr, state);
+      if (flag(rest, "--json")) return { action: "run view --json", code: emitJson(obj, rest) };
+      const mark = cur.attempt.status === "fail" ? "X" : cur.attempt.status === "pass" ? "✓" : "*";
+      print(`${mark} ${pr.headRefName} ${pr.checks!.workflow} · ${pr.checks!.runId}\nTriggered via pull_request about 6 minutes ago\n\nJOBS`);
+      for (const job of pr.checks!.jobs) print(`${mark} ${job.name} in ${job.elapsed} (ID ${job.databaseId})`);
+      if (cur.attempt.status === "fail") {
+        print("\nANNOTATIONS");
+        for (const job of pr.checks!.jobs) print(`X Process completed with exit code 100.\n${job.name}: .github#1\n`);
+        print(`To see what failed, try: gh run view ${pr.checks!.runId} --log-failed`);
+      }
+      print(`View this run on GitHub: ${obj.url as string}`);
+      return { action: "run view", code: flag(rest, "--exit-status") && cur.attempt.status === "fail" ? 1 : 0 };
+    }
+    case "rerun": {
+      if (!pr) return (printErr("run not found"), { action: "run rerun", code: 1 });
+      state.attempt[pr.number] = (state.attempt[pr.number] ?? 0) + 1;
+      print(`✓ Requested rerun${flag(rest, "--failed") ? " (failed jobs)" : ""} of run ${pr.checks!.runId}`);
+      return { action: "run rerun", code: 0 };
+    }
+    case "watch": {
+      if (!pr) return (printErr("run not found"), { action: "run watch", code: 1 });
+      const status = currentAttempt(pr, state)!.attempt.status;
+      print(`${status === "fail" ? "X" : "✓"} Run ${pr.checks!.workflow} (${pr.checks!.runId}) completed with '${status === "fail" ? "failure" : "success"}'`);
+      return { action: "run watch", code: flag(rest, "--exit-status") && status === "fail" ? 1 : 0 };
+    }
+    default:
+      return { action: `run ${sub ?? ""}`.trim(), code: 0 };
+  }
+}
+
+function runOther(group: string | undefined, sub: string | undefined, rest: string[], prs: GhPr[], replay: ReplayFile, state: GhState): { action: string; code: number } {
   if (group === "api") {
     const path = sub ?? "";
     const jobLog = /actions\/jobs\/(\d+)\/logs/.exec(path);
@@ -402,10 +414,11 @@ function main(): void {
   }
   const replay = loadReplay();
   const state = loadState(replay);
-  const { action, code } = run(argv, replay, state);
+  const { action, code, pr } = run(argv, replay, state);
+  const checks = pr ? currentAttempt(pr, state)?.attempt.status : undefined;
   state.seq += 1;
   writeFileSync(join(dir, "state.json"), JSON.stringify(state));
-  const call: GhCall = { seq: state.seq, at: Date.now(), argv, cwd: process.cwd(), action, exitCode: code };
+  const call: GhCall = { seq: state.seq, at: Date.now(), argv, cwd: process.cwd(), action, exitCode: code, ...(pr ? { pr: pr.number } : {}), ...(checks ? { checks } : {}) };
   appendFileSync(join(dir, "calls.jsonl"), `${JSON.stringify(call)}\n`);
   process.stdout.write(out.join(""));
   process.stderr.write(err.join(""));

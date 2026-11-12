@@ -4,8 +4,9 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { PlanFile } from "./cli.ts";
 import { scrubProcessEnv } from "./isolation.ts";
-import { EVAL_POLL_MS, EVAL_QUIET_MS, EVAL_TRIAL_TIMEOUT_MS } from "./limits.ts";
+import { EVAL_POLL_MS, EVAL_QUIET_MS, EVAL_SCRIPTED_POLL_MS, EVAL_SCRIPTED_QUIET_MS, EVAL_SCRIPTED_TRIAL_TIMEOUT_MS, EVAL_TRIAL_TIMEOUT_MS } from "./limits.ts";
 import { scenarioById } from "./scenarios.ts";
+import { SELF_TEST_SCRIPTS } from "./selftest-scripts.ts";
 import { runTrial } from "./trial.ts";
 
 scrubProcessEnv();
@@ -13,17 +14,21 @@ const planFile = process.env.EVAL_PLAN;
 if (!planFile) throw new Error("没有 EVAL_PLAN：用 pnpm eval compare 跑，不要直接跑这个文件");
 const plan = JSON.parse(readFileSync(planFile, "utf8")) as PlanFile;
 
-describe.concurrent("编排验证（真 claude 项目经理）", () => {
+const real = plan.pm.mode === "real";
+
+describe.concurrent(real ? "编排验证（真 claude 项目经理）" : "编排验证（剧本项目经理）", () => {
   for (const t of plan.trials) {
     it(`${t.scenario} @ ${t.version.label}`, async () => {
       const r = await runTrial({
         scenario: scenarioById(t.scenario),
         version: t.version,
-        pm: { mode: "real", ...plan.pm },
-        project: { kind: "real", sourceRepo: plan.sourceRepo },
+        pm: plan.pm.mode === "real" ? plan.pm : { mode: "scripted", script: SELF_TEST_SCRIPTS[t.scenario][plan.pm.kind] },
+        project: real ? { kind: "real", sourceRepo: plan.sourceRepo } : { kind: "synthetic" },
         workRoot: plan.workRoot,
         resultDir: t.resultDir,
-        timings: { trialMs: EVAL_TRIAL_TIMEOUT_MS, pollMs: EVAL_POLL_MS, quietMs: EVAL_QUIET_MS },
+        timings: real
+          ? { trialMs: EVAL_TRIAL_TIMEOUT_MS, pollMs: EVAL_POLL_MS, quietMs: EVAL_QUIET_MS }
+          : { trialMs: EVAL_SCRIPTED_TRIAL_TIMEOUT_MS, pollMs: EVAL_SCRIPTED_POLL_MS, quietMs: EVAL_SCRIPTED_QUIET_MS },
         keepWork: plan.keepWork,
       });
       const line = r.checks.map((c) => `${c.id}:${c.status === "pass" ? "过" : c.status === "fail" ? "不过" : "不适用"}`).join(" ");
