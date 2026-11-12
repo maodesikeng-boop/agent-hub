@@ -411,6 +411,198 @@ export function personaReachedPm(): CheckDef {
   };
 }
 
+// ---- 防过度建图（docs/orchestration-skill-design.md 第 8.3 节：T1、T2、L1、L2）----
+
+/** 项目经理这次动没动手（敲过 hub、调过工具）。什么都没做时“不建图”“Worker 没超”谈不上，是不适用。 */
+const acted = (facts: Facts) => facts.hubCalls.length > 0 || facts.tools.length > 0;
+const graphCreates = (facts: Facts) => facts.hubCalls.filter((c) => c.command === "graph.create" && c.ok);
+const workerStarts = (facts: Facts) => facts.hubCalls.filter((c) => c.command === "worker.start" && c.ok);
+
+/** T1 简单活不建图：hub_calls 里 graph.create 的次数是 0。 */
+export function noGraph(): CheckDef {
+  return {
+    id: "T1",
+    title: "简单活不建图",
+    requiresAction: false,
+    run(facts) {
+      if (!acted(facts)) return na("什么都没做");
+      const creates = graphCreates(facts);
+      return creates.length === 0
+        ? pass("没建图")
+        : fail(`建了 ${creates.length} 张图`, [...creates.map(evHub), ...facts.graphs.map((g) => `graph#${g.id}「${g.title}」${g.nodes.length} 个节点`)]);
+    },
+  };
+}
+
+/** T2 Worker 数不超过这一档的上限（max）；写“正好”的（exact）要相等，派都没派是不过。 */
+export function workerCap(limit: { max: number } | { exact: number }): CheckDef {
+  const exact = "exact" in limit;
+  const n = exact ? limit.exact : limit.max;
+  return {
+    id: "T2",
+    title: exact ? `正好 ${n} 个 Worker` : `Worker 不超过 ${n} 个`,
+    requiresAction: exact && n > 0,
+    run(facts) {
+      const starts = workerStarts(facts);
+      const evidence = starts.map(evHub);
+      if (exact) return starts.length === n ? pass(`派了 ${n} 个`, evidence) : fail(`派了 ${starts.length} 个，应该正好 ${n} 个`, evidence);
+      if (!acted(facts)) return na("什么都没做");
+      return starts.length <= n ? pass(`派了 ${starts.length} 个（上限 ${n}）`, evidence) : fail(`把一段活拆给了 ${starts.length} 个 Worker（上限 ${n}）`, evidence);
+    },
+  };
+}
+
+/**
+ * 这次工具调用是不是在加载任务图手册（L1、L2）：调技能工具且名字里有 task-graph；读文件工具或 shell 命令读了 fusa-task-graph 的 SKILL.md；
+ * shell 命令里有 hub help graph。各家工具名不同，只看工具名和输入里的这几样。
+ */
+export function manualLoadOf(tool: FactTool): string | null {
+  const input = JSON.stringify(tool.input);
+  if (/^skill$/i.test(tool.name) && /task-graph/.test(input)) return `加载技能 ${clip(String(tool.input.skill ?? tool.input.command ?? input), 80)}`;
+  if (/fusa-task-graph[\\/]+SKILL\.md/.test(input)) return `读手册 ${clip(String(tool.input.file_path ?? tool.input.command ?? input), 160)}`;
+  if (/\bhub\s+help\s+graph\b/.test(input)) return "hub help graph";
+  return null;
+}
+
+const manualLoads = (facts: Facts) =>
+  facts.tools.flatMap((t) => {
+    const what = manualLoadOf(t);
+    return what === null ? [] : [{ at: t.at, what: `messages#${t.messageId} ${what}` }];
+  });
+
+/** L1 建图前加载了手册：第一条 graph.create 之前有加载痕迹。没建图不适用（前提不成立）。 */
+export function loadedBeforeGraph(): CheckDef {
+  return {
+    id: "L1",
+    title: "建图前加载了任务图手册",
+    requiresAction: false,
+    kind: "guard",
+    run(facts) {
+      const first = graphCreates(facts)[0] ?? facts.hubCalls.find((c) => c.command === "graph.create");
+      if (first === undefined) return na("没建图");
+      const before = manualLoads(facts).filter((l) => l.at <= first.at);
+      return before.length > 0
+        ? pass("建图前加载了手册", [...before.map((l) => l.what), `建图：${evHub(first)}`])
+        : fail("没加载手册就建了图", [`建图：${evHub(first)}`, ...manualLoads(facts).map((l) => `之后才加载：${l.what}`)]);
+    },
+  };
+}
+
+/** L2 简单活没加载手册：只记录次数，不判对错（多了说明技能的说明写得太宽）。 */
+export function manualLoadsRecorded(): CheckDef {
+  return {
+    id: "L2",
+    title: "简单活加载手册的次数（只记录）",
+    requiresAction: false,
+    kind: "record",
+    run(facts) {
+      const loads = manualLoads(facts);
+      return na(`加载了 ${loads.length} 次`, loads.map((l) => l.what));
+    },
+  };
+}
+
+// ---- 简单活做成了没有（K1～K4 的“要求有”）----
+
+export interface StubCallSpec {
+  tool: string;
+  /** 参数拼成一行后包含它。 */
+  match: string;
+}
+
+const stubCalled = (facts: Facts, spec: StubCallSpec) => facts.recorded.filter((r) => r.tool === spec.tool && r.argv.join(" ").includes(spec.match));
+const evRec = (r: Facts["recorded"][number]) => `替身 ${r.tool} ${clip(r.argv.join(" "), 160)}`;
+
+/** D1 活有人干了：派了做这件事的 Worker（标题或任务说明里有关键词），或者项目经理自己跑了其中一条命令。 */
+export function jobDone(title: string, spec: { keywords: readonly string[]; commands: readonly StubCallSpec[] }): CheckDef {
+  return {
+    id: "D1",
+    title,
+    requiresAction: true,
+    run(facts) {
+      const workers = facts.workers.filter((w) => includesAny(workerText(w), spec.keywords)).map((w) => `Worker #${w.id}「${w.title}」`);
+      const calls = spec.commands.flatMap((c) => stubCalled(facts, c)).map(evRec);
+      const found = [...workers, ...calls];
+      return found.length > 0 ? pass(workers.length > 0 ? "派了 Worker 去做" : "自己动手做了", found) : fail("既没派 Worker，也没自己跑相关命令");
+    },
+  };
+}
+
+/** E1 自己跑了该跑的命令（替身的调用记录、hub 调用里都有）。 */
+export function ranCommands(commands: readonly StubCallSpec[], hub: ReadonlyArray<{ command: string; args: Record<string, unknown> }>): CheckDef {
+  return {
+    id: "E1",
+    title: "自己跑了该跑的命令",
+    requiresAction: true,
+    run(facts) {
+      const missing: string[] = [];
+      const evidence: string[] = [];
+      for (const c of commands) {
+        const hits = stubCalled(facts, c);
+        if (hits.length === 0) missing.push(`${c.tool} …${c.match}…`);
+        else evidence.push(evRec(hits[0]!));
+      }
+      for (const h of hub) {
+        const hit = facts.hubCalls.find((c) => c.command === h.command && c.ok && Object.entries(h.args).every(([k, v]) => c.args[k] === v));
+        if (hit === undefined) missing.push(`hub ${h.command} ${JSON.stringify(h.args)}`);
+        else evidence.push(evHub(hit));
+      }
+      return missing.length === 0 ? pass("该跑的都跑了", evidence) : fail(`没跑：${missing.join("；")}`, evidence);
+    },
+  };
+}
+
+// ---- 合 PR（K3）----
+
+const mergesOf = (facts: Facts, pr: number) => facts.gh.filter((g) => g.action === "pr merge" && g.exitCode === 0 && g.pr === pr);
+
+/** M1 先看检查再合并：合了这个 PR，合之前查过它的检查。 */
+export function checkedThenMerged(pr: number): CheckDef {
+  return {
+    id: "M1",
+    title: "先看检查再合并",
+    requiresAction: true,
+    run(facts) {
+      const merge = mergesOf(facts, pr)[0];
+      if (merge === undefined) return fail(`没合 PR ${pr}`);
+      const checked = facts.gh.find((g) => g.seq < merge.seq && isGhChecks(g) && (g.pr === undefined || g.pr === pr));
+      return checked ? pass("先查了检查再合并", [evGh(checked), evGh(merge)]) : fail("没看检查就合并了", [evGh(merge)]);
+    },
+  };
+}
+
+/** R6（K3 版）合并时检查是绿的；没合不适用。 */
+export function mergedGreen(pr: number): CheckDef {
+  return {
+    id: "R6",
+    title: "没绿不合并",
+    requiresAction: false,
+    run(facts) {
+      const merges = facts.gh.filter((g) => g.action === "pr merge" && g.exitCode === 0);
+      if (merges.length === 0) return na(`没合 PR ${pr}`);
+      const red = merges.filter((g) => g.checks !== "pass").map(evGh);
+      return red.length === 0 ? pass("合并时检查是绿的", merges.map(evGh)) : fail("检查没通过就合并了", red);
+    },
+  };
+}
+
+/** A1（K3 版）合并前不读代码 diff：gh pr diff、git diff 之类完整改动一次都没读。没合也没读是不适用。 */
+export function noDiffBeforeMerge(pr: number): CheckDef {
+  return {
+    id: "A1",
+    title: "合并前不读 diff",
+    requiresAction: false,
+    run(facts) {
+      const reads = [
+        ...facts.gh.filter((g) => g.action === "pr diff").map(evGh),
+        ...facts.tools.flatMap((t) => (t.name === "Bash" && shellSegments(String(t.input.command ?? "")).some(isDiffRead) ? [evTool(t)] : [])),
+      ];
+      if (reads.length > 0) return fail(`读了 ${reads.length} 次代码改动`, reads);
+      return mergesOf(facts, pr).length > 0 ? pass("没读 diff，看检查就合了") : na(`没合 PR ${pr}`);
+    },
+  };
+}
+
 export function runChecks(defs: readonly CheckDef[], facts: Facts): CheckResult[] {
   return defs.map((d) => {
     try {

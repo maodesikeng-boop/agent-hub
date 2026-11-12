@@ -34,6 +34,7 @@ import {
   type StartupOutcome,
 } from "../../daemon/driver/base-driver.ts";
 import { ClaudeReadonlyGate } from "./readonly.ts";
+import { ensureClaudeSkillPlugin } from "./skills.ts";
 import { personaSeenAtStart } from "../../daemon/driver/persona-note.ts";
 import {
   MID_TURN_CAPABILITIES,
@@ -360,6 +361,7 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
 
   async #spawn(st: SessionState, resume: boolean, prepared: LaunchFiles | null): Promise<Proc> {
     const { row, files } = await this.resolveLaunchFiles(st, prepared);
+    if (files.skillsDir) ensureClaudeSkillPlugin(files.skillsDir);
     const launch = spawnInWriteScope(
       "claude",
       { command: this.#claudePath, args: buildClaudeArgs(row, files, resume) },

@@ -264,6 +264,11 @@ rl.on("line", (line) => {
     out({ jsonrpc: "2.0", id: req.id, result: { account: { type: "chatgpt", email: "fake@example.com" }, requiresOpenaiAuth: true } });
     return;
   }
+  // 项目经理会话握手后先挂产品技能目录（任务图手册，codex/driver.ts），回了才建线程
+  if (req.method === "skills/extraRoots/set") {
+    out({ jsonrpc: "2.0", id: req.id, result: {} });
+    return;
+  }
   if (req.method === "skills/list") {
     out({
       jsonrpc: "2.0",

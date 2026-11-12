@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { API_PATHS, CRASH_RECOVERY_NOTE, RESEND_NOTE, RESTART_RECOVERY_NOTE, isDeviceId, type Attachment } from "../../src/shared/index.ts";
-import { AGENTS_NOTE, DEFAULT_PM_NAME, HUB_USAGE_PROMPT, PM_MODE_PROMPTS } from "../../src/daemon/prompt.ts";
+import { AGENTS_NOTE, DEFAULT_PM_NAME, HUB_USAGE_PROMPT, buildPmModePrompt } from "../../src/daemon/prompt.ts";
+import { taskGraphSkillMarkdown } from "../../src/shared/task-graph-skill.ts";
 import {
   Client,
   agentTexts,
@@ -99,7 +100,11 @@ describe("W5 组装 + 端到端", () => {
     expect(promptFile).toBe(join(env.home, "state", "launch", String(state.sessions[0]!.sessionId), "prompt.md"));
     const prompt = readFileSync(promptFile, "utf8");
     expect(prompt).toContain(`你是用户的项目经理“${DEFAULT_PM_NAME}”`);
-    expect(prompt).toContain(PM_MODE_PROMPTS.manage_only);
+    // 模式那一节：第 2 步“建图”那条写着这个会话启动目录里的任务图手册路径（launch.ts 给的）
+    const skillFile = join(env.home, "state", "launch", String(state.sessions[0]!.sessionId), "skills", "fusa-task-graph", "SKILL.md");
+    expect(prompt).toContain(buildPmModePrompt("manage_only", "claude", skillFile));
+    expect(readFileSync(skillFile, "utf8")).toBe(taskGraphSkillMarkdown());
+    expect(argv[argv.indexOf("--plugin-dir") + 1]).toBe(join(env.home, "state", "launch", String(state.sessions[0]!.sessionId), "claude-plugin"));
     // hub 用法里 --vendor 只列这台设备上能用的厂商（看机器装了哪些），比到那里为止
     expect(prompt).toContain(HUB_USAGE_PROMPT.slice(0, HUB_USAGE_PROMPT.indexOf("[--vendor ")));
     expect(prompt).not.toContain("# 性格设定");

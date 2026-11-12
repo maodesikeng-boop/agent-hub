@@ -417,7 +417,7 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
   async #spawn(st: SessionState, resume: boolean, prepared: LaunchFiles | null): Promise<Proc> {
     const { row, files } = await this.resolveLaunchFiles(st, prepared);
     // 产品提示词写成规则目录、--add-dir 进 agy 的系统提示词（<user_rules>），压缩后还在；每次起进程按最新的 prompt.md 重写
-    const promptRulesDir = writeAgyPromptRules(files.promptFile);
+    const promptRulesDir = writeAgyPromptRules(files.promptFile, files.skillsDir);
     let warning: string | null;
     try {
       warning = agyRuleBudgetWarning(this.#homeDir ?? homedir(), [row.cwd, ...row.addDirs, ...(promptRulesDir === null ? [] : [promptRulesDir])]);

@@ -10,6 +10,12 @@ const heredoc = (cmd: string, body: string) => `${cmd} --stdin <<'EOF'\n${body}\
 const startTray = (task = "用户已拍板：手机上 Needs You 托盘降到约三分之一屏，超出部分托盘内滚动；桌面不变。提 PR，汇报里给截图路径和改动文件名单。", title = "手机 Needs You 托盘降到约三分之一屏") =>
   heredoc(`${hub} worker start --title "${title}"`, task);
 const readShot = (ctx: ScenarioContext): FakeTurn["steps"] => [{ tool: { name: "Read", input: { file_path: `${ctx.shotsDir}/mobile-router-390x844.png` }, result: "[image]" } }];
+/** 反例：把一件事拆成 n 个节点的图（K1 当时那样：带门禁），不先加载手册（T1、L1 必须不过）。 */
+const bigGraph = (title: string, keys: string[]) =>
+  heredoc(
+    `${hub} graph create --title "${title}"`,
+    JSON.stringify({ nodes: keys.map((key, i) => ({ key, title: key, ...(key.startsWith("ok") ? { kind: "gate" } : {}), ...(i > 0 ? { deps: [keys[i - 1]] } : {}) })) }),
+  );
 
 export type SelfTestKind = "positive" | "negative" | "nothing";
 
@@ -91,6 +97,115 @@ export const SELF_TEST_SCRIPTS: Record<ScenarioId, Record<SelfTestKind, (ctx: Sc
     }),
     nothing: () => ({ defaultTurn: say("好的。") }),
   },
+  // ---- 防过度建图（docs/orchestration-skill-design.md 第 8 节）----
+  "k1-install": {
+    // 正例：一个 Worker 从安装做到冒烟测试；它交回“等你授权”的汇报，转给用户，用户授权后转回给它
+    positive: () => ({
+      turns: [
+        { steps: [{ bash: heredoc(`${hub} worker start --title "装 pi-bridge 并把 Pi 接到 OpenRouter"`, "用户要试：装 pi-bridge 和 OpenRouter 插件，用户完成浏览器授权后把 Pi 接上并冒烟测试。要用户点的地方写进汇报。") }, { text: "派了一个 Worker 从安装做到冒烟测试。" }] },
+        say("装好了，请打开汇报里的链接完成浏览器授权，完成后告诉我。"),
+        { steps: [{ bash: heredoc(`${hub} worker send 1`, "用户已登录成功；服务临时用 pi-bridge serve 跑。接着把 Pi 接上并冒烟测试。") }, { text: "转给它接着做。" }] },
+        say("接好了：Pi 能通过 pi-bridge 用 OpenRouter 的 qwen3-coder。"),
+      ],
+      defaultTurn: say("好的。"),
+    }),
+    // 反例：当时那样建 5 个节点、3 道门禁的图，派 2 个 Worker，没加载手册（T1、T2、L1）
+    negative: () => ({
+      turns: [
+        {
+          steps: [
+            { bash: bigGraph("Pi 接入 OpenRouter 模型（经 pi-bridge）", ["ok-approve", "setup", "ok-login", "ok-login2", "connect"]) },
+            { bash: heredoc(`${hub} worker start --title "安装 pi-bridge 与 OpenRouter 插件"`, "装 pi-bridge 和 OpenRouter 插件，发起浏览器授权。") },
+            { bash: heredoc(`${hub} worker start --title "Pi 接 OpenRouter 模型并冒烟测试"`, "把 Pi 接到 pi-bridge 的 OpenRouter 模型并冒烟测试。") },
+            { text: "建了图，派了两个 Worker。" },
+          ],
+        },
+      ],
+      defaultTurn: say("好的。"),
+    }),
+    nothing: () => ({ defaultTurn: say("好的。") }),
+  },
+  "k2-local-config": {
+    positive: () => ({
+      turns: [
+        {
+          steps: [
+            { bash: "pi-bridge filter pi coder" },
+            { bash: "pi-bridge sync pi" },
+            { bash: `${hub} models --vendor pi --refresh` },
+            { text: "改好了：Pi 只显示 coder 分组的模型，hub 的列表也刷新了。" },
+          ],
+        },
+      ],
+      defaultTurn: say("好的。"),
+    }),
+    // 反例：本机配置也派 Worker、建图（T1、T2、L1），自己一条命令都没跑（E1）
+    negative: () => ({
+      turns: [{ steps: [{ bash: bigGraph("只给 Pi 显示 coder 分组", ["filter", "refresh"]) }, { bash: heredoc(`${hub} worker start --title "pi-bridge 只给 Pi 显示 coder 模型" --no-worktree`, "跑 pi-bridge filter pi coder，再刷新 hub 的模型列表。") }, { text: "派了。" }] }],
+      defaultTurn: say("好的。"),
+    }),
+    nothing: () => ({ defaultTurn: say("好的。") }),
+  },
+  "k3-merge": {
+    positive: () => ({
+      turns: [{ steps: [{ bash: "gh pr checks 238" }, { bash: "gh pr merge 238 --merge" }, { text: "检查全绿，已合并 PR 238。" }] }],
+      defaultTurn: say("好的。"),
+    }),
+    // 反例：派 Worker 去合（T2），读完整 diff（A1），不看检查就合（M1）
+    negative: () => ({
+      turns: [{ steps: [{ bash: "gh pr diff 238" }, { bash: "gh pr merge 238 --merge" }, { bash: heredoc(`${hub} worker start --title "收尾 README 改名" --no-worktree`, "检查 README 改名后有没有漏的。") }, { text: "合了，另派了一个检查。" }] }],
+      defaultTurn: say("好的。"),
+    }),
+    nothing: () => ({ defaultTurn: say("好的。") }),
+  },
+  "k4-upgrade": {
+    positive: () => ({
+      turns: [
+        { steps: [{ bash: heredoc(`${hub} worker start --title "升级本机的 6 家 Agent CLI" --no-worktree`, "把本机 6 家 Agent CLI 升级到最新，汇报里列出升级前后的版本。") }, { text: "派了一个 Worker 去升级。" }] },
+        { steps: [{ bash: `${hub} models --refresh` }, { text: "都升好了，模型列表也刷新了。" }] },
+      ],
+      defaultTurn: say("好的。"),
+    }),
+    // 反例：六个工具各一个节点、各一个 Worker（T1、T2、L1）
+    negative: () => ({
+      turns: [
+        {
+          steps: [
+            { bash: bigGraph("升级本机的 6 家 CLI", ["claude", "agy", "codex", "pi", "dsh", "cursor"]) },
+            ...["claude", "agy", "codex"].map((tool) => ({ bash: heredoc(`${hub} worker start --title "升级 ${tool}" --no-worktree`, `把本机的 ${tool} 升级到最新。`) })),
+            { text: "每家一个 Worker。" },
+          ],
+        },
+      ],
+      defaultTurn: say("好的。"),
+    }),
+    nothing: () => ({ defaultTurn: say("好的。") }),
+  },
+  "k5-ui-bug": {
+    positive: () => ({
+      turns: [
+        { steps: [{ bash: heredoc(`${hub} worker start --title "果皮轨：验证方案应直接连到用户拍板"`, "用户原话：“验证方案不应该直接连接用户拍版吗”。修果皮轨连线，提 PR，汇报里给截图和检查结果。") }, { text: "派了一个 Worker。" }] },
+        { steps: [{ bash: "gh pr checks 295" }, { bash: "gh pr view 295 --json files" }, { text: "检查全绿，改动文件对得上。" }] },
+      ],
+      defaultTurn: say("好的。"),
+    }),
+    // 反例：纯展示的修复建图、另挂审查（T1、T2、G5），验收读 diff、不看证据（A1、A2）
+    negative: () => ({
+      turns: [
+        {
+          steps: [
+            { bash: bigGraph("修果皮轨连线", ["impl", "review"]) },
+            { bash: heredoc(`${hub} worker start --title "果皮轨连线修复"`, "修果皮轨连线：验证方案不应该直接连接用户拍版。") },
+            { bash: heredoc(`${hub} worker start --title "审查果皮轨连线修复"`, "审查果皮轨连线修复的 PR。") },
+            { text: "派了实现和审查。" },
+          ],
+        },
+        { steps: [{ bash: "gh pr diff 295" }, { text: "代码我看过了。" }] },
+      ],
+      defaultTurn: say("好的。"),
+    }),
+    nothing: () => ({ defaultTurn: say("好的。") }),
+  },
 };
 
 /** 反例必须不过的检查。 */
@@ -98,4 +213,9 @@ export const NEGATIVE_MUST_FAIL: Record<ScenarioId, string[]> = {
   "s3a-tray": ["G5", "G6", "A3", "A1", "A2"],
   "s5a-ci-mirror": ["R4", "R6", "R7", "R9", "R10"],
   "h2-no-diff": ["A1", "A2"],
+  "k1-install": ["T1", "T2", "L1"],
+  "k2-local-config": ["T1", "T2", "E1", "L1"],
+  "k3-merge": ["T2", "M1", "A1"],
+  "k4-upgrade": ["T1", "T2", "L1"],
+  "k5-ui-bug": ["T1", "T2", "G5", "A1", "A2", "L1"],
 };

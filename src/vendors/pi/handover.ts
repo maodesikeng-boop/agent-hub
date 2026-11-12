@@ -58,6 +58,7 @@ function buildPiForkArgs(src: ForkSource, forkId: string, forkTarget: string): s
     args.push("--append-system-prompt", src.launch.promptFile);
   }
   args.push(...PI_NO_PROJECT_TRUST_ARGS, ...buildPiSkillArgs(src.cwd, src.addDirs));
+  if (src.launch.skillsDir) args.push("--skill", src.launch.skillsDir);
   args.push(...agentLaunchArgs({ vendor: src.vendor, model: src.model, effort: src.effort }));
   // 写交接禁止一切文件修改、命令执行与外部 MCP 调用
   args.push("--exclude-tools", "edit,write,bash,powershell", "--no-mcp");

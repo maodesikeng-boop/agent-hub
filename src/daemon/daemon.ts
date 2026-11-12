@@ -402,7 +402,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       vendorAvailability: () => Object.fromEntries(AGENT_VENDORS.map((vendor) => [vendor, models.availability(vendor)])),
     });
     // 性格设定、模式改了不重启，下一条消息前加说明（driver.ts 的“两轮之间自动重启”）
-    const personaNote = createPersonaNoter((sessionId, since) => ledger.personaUpdate(sessionId, since));
+    const personaNote = createPersonaNoter((sessionId, since) => ledger.personaUpdate(sessionId, since), paths.launchDir);
     // 换代后的新会话：开场说明 + 交接 + 最近原话拼在第一条写给它的消息前面（ledger/handover.ts）
     const launch = { store: sessions, log, prepareLaunch, personaNote, pmMemoryDir, sessionPreamble: (sessionId: number) => ledger.sessionPreamble(sessionId) };
     const driver = createMultiVendorDriver({

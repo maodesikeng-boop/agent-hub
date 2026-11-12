@@ -26,12 +26,13 @@ import {
   ALL_EFFORTS,
   DEFAULT_AGENT_VENDOR,
   HUB_COMMAND as HUB,
+  HUB_COMMANDS,
   PM_MODES,
   PM_MODE_LABELS,
+  PM_REVIEW_REDLINES_BRIEF,
   PRODUCT_ID,
   SETUP_TIMEOUT_MS,
-  TASK_GRAPH_CREATE_JSON_HINT,
-  TASK_GRAPH_PATCH_JSON_HINT,
+  TASK_GRAPH_SKILL_NAME,
   USER_TO_WORKER_TAG,
   VENDOR_LIST,
   WORKER_BRANCH_PREFIX,
@@ -83,13 +84,24 @@ export const PM_DELEGATE_LONG_COMMAND_NOTE =
 export const PM_OPENING_FEEDBACK_NOTE =
   "- **先回应再动手**：需要调工具、查代码或派活等多步处理时，开头先用一句简短的话告诉用户正在做什么，再继续思考和调工具；一步就能直接回答的直接答，不加套话。";
 
-/** 审查红线：碰到任意一条就在实现后面加审查节点（第 2 步定档、第 3 步建图、第 5 步补审查共用这四条）。 */
-const PM_REVIEW_REDLINES = [
-  "撤不回来的副作用或安全边界：数据迁移、覆写用户配置、杀进程、沙箱、鉴权；",
-  "异步、并发、生命周期；",
-  "会随时间变多的缓存、快照、分页，或多方共用的数据格式；",
-  "本地草稿和远端状态互相覆盖的交互。",
-];
+/** 这家原生技能入口里任务图手册叫什么（claude 带插件前缀 fusa:）。 */
+export function taskGraphSkillDisplayName(vendor: AgentVendor | string = DEFAULT_AGENT_VENDOR): string {
+  return `${specOf(vendor).prompt.skillNamePrefix ?? ""}${TASK_GRAPH_SKILL_NAME}`;
+}
+
+/**
+ * 第 2 步“建图”那一条里指路的话（docs/orchestration-skill-design.md 第 4.1、7 节，防漏读的主要手段）：按这家 spec 的
+ * capabilities.skills 写。有原生入口的“先加载 <名字> 技能，清单里没有就读 <路径>”，没有的“先读 <路径>”。
+ * skillFile 是这次会话启动目录里的 SKILL.md（launch.ts 写的）；没给（测试、没有启动目录时）就指到 hub help graph，它打印同一份正文。
+ */
+export function taskGraphSkillPointer(vendor: AgentVendor | string = DEFAULT_AGENT_VENDOR, skillFile?: string): string {
+  const fallback = skillFile === undefined ? `运行 \`${HUB} help graph\`` : `直接读 \`${skillFile}\``;
+  if (specOf(vendor).capabilities.skills === "native") {
+    return `**建图前先加载 \`${taskGraphSkillDisplayName(vendor)}\` 技能**，建图、改图、换人、审查的做法都在里面；技能清单里没有它，就${fallback}。`;
+  }
+  const read = skillFile === undefined ? `运行 \`${HUB} help graph\` 读任务图手册` : `读任务图手册 \`${skillFile}\``;
+  return `**建图前先${read}**，建图、改图、换人、审查的做法都在里面。`;
+}
 
 /**
  * “# 怎么干活”一节（docs/orchestration-simplify-design.md 第 9.1 节、docs/orchestration-skill-design.md 第 3、4 节）：
@@ -98,12 +110,13 @@ const PM_REVIEW_REDLINES = [
  * （不在提示词里写死厂商名，由 spec 的 capabilities.backgroundWake 与 prompt.backgroundCommandTool 决定）。
  * 这一节不带厂商名单：模式改了不重启，驱动层把它整节发给项目经理（personaUpdateNote）；跟厂商名单有关的两条通用规矩在 buildPmCommonRules，
  * buildLaunchPrompt 接在这一节后面。
- * 只写现有命令做得到的事：建图后要自己给轮到的节点派 Worker、任务说明自己写、一步做完要自己收工再派下一步；
- * 建图规矩暂留在本节（待任务图技能落地后再按 orchestration-skill-design.md 第 5 节拆入技能文件）。
+ * 建图的规矩、图里怎么跟进、全部 hub graph 命令在任务图技能 fusa-task-graph 里（shared/task-graph-skill.ts，按需加载）；
+ * 这里只留三档判断、一句压缩的四类审查红线和指路的那句话（taskGraphSkillPointer，skillFile 是这次会话启动目录里的 SKILL.md）。
  * 自动开工、交棒、hub graph finish、hub ask --node、confirm 等后台机制上线后再换成设计第 9.1 节的终稿（第 13 节第 2～6 步）。
  * 两种模式只差三处：标题里的模式名、第 2 步的“直接做”、通用规矩里的“用户说了算 / 拿不准先问”。
  */
-export function buildPmModePrompt(mode: PmMode, vendorOrBackgroundCommands: AgentVendor | string | boolean = DEFAULT_AGENT_VENDOR): string {
+export function buildPmModePrompt(mode: PmMode, vendorOrBackgroundCommands: AgentVendor | string | boolean = DEFAULT_AGENT_VENDOR, skillFile?: string): string {
+  const vendor = typeof vendorOrBackgroundCommands === "boolean" ? DEFAULT_AGENT_VENDOR : vendorOrBackgroundCommands;
   const commandNote =
     typeof vendorOrBackgroundCommands === "boolean"
       ? vendorOrBackgroundCommands
@@ -133,9 +146,9 @@ ${PM_OPENING_FEEDBACK_NOTE}
 先定这件事走哪一档。看它会不会产生大量新上下文（要读很多代码、要反复试、要写长东西），不看它有几步：
 ${doItYourself}
 - **派一个 Worker，不建图**（\`${HUB} worker start\`，不带 \`--node\`）：一段就能做完，但中间过程多的。比如修 bug、写一份方案、做一个小的界面改动、从上千行代码和日志里读出结论（只读的加 \`--readonly\`，任务说明里规定只回结论和出处）。
-- **建图**：有两段以上、每段各要一个独立会话的。比如先出方案、用户看过再实现；实现后换一家模型审查；几个方向并行探索再汇总。只是中间要等用户拍板的用 \`${HUB} ask\` 提问即可，不算建图理由。
+- **建图**：有两段以上、每段各要一个独立会话的。比如先出方案、用户看过再实现；实现后换一家模型审查；几个方向并行探索再汇总。只是中间要等用户拍板的用 \`${HUB} ask\` 提问即可，不算建图理由。${taskGraphSkillPointer(vendor, skillFile)}
 
-改动碰到下面任意一类，实现后面要换一家模型审查，所以走建图：撤不回来的副作用或安全边界；异步、并发、生命周期；会随时间变多的缓存、快照、分页，或多方共用的数据格式；本地草稿和远端状态互相覆盖。
+改动碰到下面任意一类，实现后面要换一家模型审查，所以走建图：${PM_REVIEW_REDLINES_BRIEF}。
 
 这是默认判断，不是死规定：拿不准选轻的一档，做着发现比想的复杂再升档；用户点名怎么做的，照用户说的。
 
@@ -144,26 +157,15 @@ ${doItYourself}
 ## 3. 派活
 - **任务说明要写全**：Worker 看不到你和用户的聊天，只靠任务说明对齐方向。写上用户原话、背景、不做什么、怎么算做完；“怎么算做完”写成能核对的证据（测试命令、截图、实测输出、PR 检查全绿）。长材料存成文件，任务说明里给路径。
 
-一段就能做完的活直接 \`${HUB} worker start\`（不带 \`--node\`）。走建图那一档时，用 \`${HUB} graph create\` 把这件事排成一串节点，然后给轮到的节点派 Worker（\`${HUB} worker start --node <节点>\`）：
-- **一张图只装一件事**：互不相干的几件事各建一张图。
-- **按先后步骤拆，不按模块拆**：不要把一个需求切成前端、后端各一个 Worker。写测试、改代码、截图、提 PR 是同一步，一个 Worker 一口气做完。只在三种时候另起一个节点：用户明说要先看、要换一个模型独立审查、一步的上下文装不下。
-- **默认一条线**：用 \`deps\` 把节点按先后串起来，前一个完成后一个才轮到。互不依赖的活才并行（比如同时探索几个方向再汇总）。
-- **用户明说要先看的地方**（比如“先给我看方案”）挂一个 \`gate\` 节点：轮到时用 \`${HUB} graph ask\` 填上问题、选项和你的推荐，用户点了才往下走。别的拍板不用预先安排，撞上了再问（见第 4 步）。
-- **碰到下面任意一条，就在实现后面加一个审查节点**（派给另一家厂商的 Worker，任务说明里写清实现的分支和 PR、你最担心的地方，发现问题让它直接修）：
-${PM_REVIEW_REDLINES.map((line) => `  - ${line}`).join("\n")}
-
-  纯文案、纯展示、局部纯函数、薄胶水层不用审查，靠测试和截图兜底。
-
 ## 4. 跟进反馈
-Worker 每干完一轮，你会收到 \`【Worker #编号 · 标题 的汇报】\`（出错、超时、被停止也会告诉你原因）。建了图的进度以 \`${HUB} graph show\` 为准。
-- **Worker 做完了**：按第 5 步验收，通过就 \`${HUB} worker end <编号>\` 收工（绑了图节点的会自动标完成，后面的节点轮到；给下一个节点派 Worker 时，任务说明里给上一步的分支、PR 和文件路径，让它自己去读，不要转述内容）。
+Worker 每干完一轮，你会收到 \`【Worker #编号 · 标题 的汇报】\`（出错、超时、被停止也会告诉你原因）。
+- **Worker 做完了**：按第 5 步验收，通过就 \`${HUB} worker end <编号>\` 收工。
 - **Worker 有问题**：能答的直接答（\`${HUB} worker send\`）。要用户定的，用 \`${HUB} ask\` 提问并写上选项和你的推荐，答复回来再转给 Worker。不要只在回复里问一句就停下等。
-- **Worker 出错、额度用完、超时、放弃**：先用 \`${HUB} worker show <编号>\`、再用 \`${HUB} worker log <编号>\` 看原因，原始记录只取要看的那一段。超时只是提醒，Worker 还在跑：在正常推进就用 \`${HUB} worker max-time\` 续时。能接着干就 \`${HUB} worker send\`；对话超过 ${WORKER_SEND_MAX_TOKENS / 1_000}K 或该换一家，就换人：先 \`${HUB} worker end <编号>\` 收工（绑了图节点的加 \`--incomplete\`），再 \`${HUB} worker start\` 新派一个接手（绑了图节点的带 \`--node <节点>\`），任务说明里写清分支、已有的提交、还要改的点。用户亲手停的，用户没说继续就别叫醒它。
-- **计划变了**：建了图的随时 \`${HUB} graph patch\`，加节点、改还没开工的节点、跳过不需要的；原本没建图、做着发现要分段或加审查的，随时补建一张图。
+- **Worker 出错、额度用完、超时、放弃**：先用 \`${HUB} worker show <编号>\`、再用 \`${HUB} worker log <编号>\` 看原因，原始记录只取要看的那一段。超时只是提醒，Worker 还在跑：在正常推进就用 \`${HUB} worker max-time\` 续时。能接着干就 \`${HUB} worker send\`；对话超过 ${WORKER_SEND_MAX_TOKENS / 1_000}K 或该换一家，就收工后新派一个接手，任务说明里写清分支、已有的提交、还要改的点。用户亲手停的，用户没说继续就别叫醒它。
 
 ## 5. 交付
 - **验收只看证据**：汇报、PR 的改动文件名单和检查结果、截图或实测输出。不读代码 diff，代码质量由审查负责。证据不够就打回让 Worker 补（\`${HUB} worker send\`）。
-- **补审查要赶在收工前**：改动碰了审查红线却没有审查的——建了图的先 \`${HUB} graph patch\` 补一个审查节点，再让最后一个节点的 Worker 收工（所有节点都完成后整张图自动结束，不能再改）；没建图的补建图挂审查，或直接派另一家厂商的 Worker 按第 3 步审查。
+- **该审查而没审查的，收工前补上**：改动碰了第 2 步那四类，就按任务图手册里的做法补一个审查。
 - 合并和发布按项目 \`AGENTS.md\` 的规矩做。
 - 向用户汇报结果。
 
@@ -236,9 +238,13 @@ function buildPmCommonRules(specs: readonly VendorSpec[] = VENDOR_LIST): string 
 
 export const PM_COMMON_RULES = buildPmCommonRules();
 
+/** hub graph 的子命令（命令表里任务图那一行按 shared/hub.ts 的 HUB_COMMANDS 拼，加命令不用改这里）。 */
+const TASK_GRAPH_ACTIONS = HUB_COMMANDS.filter((c) => c.startsWith("graph.")).map((c) => c.slice("graph.".length));
+
 /**
  * hub 用法（设计第 7.2、8.1 节；docs/orchestration-simplify-design.md 第 9.1 节），给项目经理看。命令以 shared/hub.ts 的命令表为准。
- * 编排用的三组（任务图、向用户提问、Worker）写全参数；项目、性格设定、定时任务、总助、热重启不常用，各缩成一行，
+ * 向用户提问、Worker 两组写全参数；任务图缩成一行，用法在任务图手册（技能 fusa-task-graph、hub help graph）里，
+ * Worker 的 --node、--incomplete 也只写在手册里（hub help 照旧查得到）；项目、性格设定、定时任务、总助、热重启不常用，各缩成一行，
  * 参数在 hub help 里（hub/cli.ts 的 HUB_USAGE，写错命令时也会打印那一组的用法）。缩掉的参数要在 HUB_USAGE 里查得到（prompt.test.ts 守着）。
  * Worker 的见 WORKER_HUB_USAGE_PROMPT。
  */
@@ -248,22 +254,15 @@ export const HUB_USAGE_PROMPT = buildHubUsagePrompt();
 function buildHubUsagePrompt(vendors: readonly AgentVendor[] = AGENT_VENDORS): string {
   return `# 系统命令 ${HUB}
 
-直接在 shell 里运行 \`${HUB} ...\`。**不要**在命令里写任何环境变量，也**不要**在后面接 \`echo $?\`。传正文一律用 \`--stdin <<'EOF'\`（引号不能省）。\`<节点>\` 是节点的 key，它在几张活跃的图里重名时加 \`--graph <图编号>\`。
+直接在 shell 里运行 \`${HUB} ...\`。**不要**在命令里写任何环境变量，也**不要**在后面接 \`echo $?\`。传正文一律用 \`--stdin <<'EOF'\`（引号不能省）。
 
-- **任务图**
-  - \`${HUB} graph create [--title <标题>] --stdin\`：建图，正文 JSON 形如 \`${TASK_GRAPH_CREATE_JSON_HINT}\`（\`kind\` 不写是 \`piece\`，要用户拍板的写 \`gate\`；\`deps\` 写前置节点的 key，不写就是一开始就轮到）
-  - \`${HUB} graph show [<图编号>]\` / \`${HUB} graph list [--all | --status active|completed|cancelled]\`：看一张图的进度和每个节点的结果（分支、PR、摘要、定案）/ 列出任务图
-  - \`${HUB} graph patch [<图编号>] --stdin\`：改图，正文 JSON 按需取 \`${TASK_GRAPH_PATCH_JSON_HINT}\`；已经结束的图不能改
-  - \`${HUB} graph done <节点> [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要> | --stdin]\`：把没有 Worker 在干的节点标完成（比如你自己做完的），或给节点补记 PR 等结果（图已完成时加 \`--graph <图编号>\`）；有 Worker 在干的会被拒绝，先让它收工
-  - \`${HUB} graph skip <节点> [--reason <原因>]\` / \`${HUB} graph cancel [<图编号>] [--reason <原因>]\`：跳过一个节点 / 取消整张图
+- **任务图**：\`${HUB} graph ${TASK_GRAPH_ACTIONS.join("|")}\`，用法在任务图手册里（第 2 步“建图”那一条写了去哪看，也可以 \`${HUB} help graph\`）
 - **向用户提问**
   - \`${HUB} ask [--option <选项>...] --stdin\`：向用户提问，界面会单独提醒；要给用户可点的选项时传 \`--option\`（至少 2 个）
-  - \`${HUB} graph ask <节点> [--question <问题>] [--option <选项>...] [--recommended <选项>] [--stdin]\`：给轮到的 \`gate\` 节点填上问题、选项和推荐，交给用户拍板；正文是给用户看的背景摘要
-  - \`${HUB} graph decide <节点> --choice <选项> [--note <说明>]\`：用户没点选项、在聊天里口头答复时，用它记下来
 - **Worker**
-  - \`${HUB} worker start --title <标题> [--node <节点>] [--vendor ${vendors.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--max-time <时长>] [--readonly] [--no-worktree] --stdin\`：派 Worker，正文是任务说明。带 \`--node\` 是绑到图里轮到的节点上；不带是不绑图的独立 Worker。\`--max-time\` 是这一轮最多跑多久（如 \`15m\`、\`1h\`，默认 \`30m\`），超了会叫醒你，不打断它。Git 仓库里每个 Worker 有自己的 worktree 和分支（\`${WORKER_BRANCH_PREFIX}<编号>-<短名>\`），加 \`--no-worktree\` 就直接在主文件夹里干
+  - \`${HUB} worker start --title <标题> [--vendor ${vendors.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--max-time <时长>] [--readonly] [--no-worktree] --stdin\`：派 Worker，正文是任务说明。\`--max-time\` 是这一轮最多跑多久（如 \`15m\`、\`1h\`，默认 \`30m\`），超了会叫醒你，不打断它。Git 仓库里每个 Worker 有自己的 worktree 和分支（\`${WORKER_BRANCH_PREFIX}<编号>-<短名>\`），加 \`--no-worktree\` 就直接在主文件夹里干
   - \`${HUB} worker send <编号> [--max-time <时长>] --stdin\`：回答它的问题或打回，原 Worker 接着干
-  - \`${HUB} worker end <编号> [--incomplete]\`：收工（正在跑的一轮会先被打断，worktree 和分支先留着）。它最近一轮汇报是“做完了”时，绑定的节点自动标完成；否则节点等人接手。换人时加 \`--incomplete\`：不管它汇报了什么，节点都等人接手
+  - \`${HUB} worker end <编号>\`：收工（正在跑的一轮会先被打断，worktree 和分支先留着）
   - \`${HUB} worker max-time <编号> <时长>\`：给正在跑的这一轮续时，从现在重新计时
   - \`${HUB} worker list\` / \`${HUB} worker show <编号> [--task | --report [N]]\` / \`${HUB} worker log <编号> [--last N | --stats]\` / \`${HUB} worker search <关键词…> [--limit N]\`：看 Worker 的状态、任务和汇报原文、最近几步（默认 ${WORKER_LOG_DEFAULT_STEPS} 步）、以前的结论
   - \`${HUB} models [--vendor ${vendors.join("|")}] [--refresh]\`：各厂商可用的模型和每个模型支持的思考程度
@@ -323,13 +322,13 @@ function personaSection(persona: string): string | null {
  * 性格设定、模式改了之后不重启（driver.ts 的“两轮之间自动重启”），驱动层加在下一条消息前的【系统】说明。都没变是 null。
  * 用户（资料页、撤销、手改文件）改的给完整的新内容；项目经理自己 hub persona edit 改的它知道内容，只说一句已生效。
  */
-export function personaUpdateNote(update: PersonaUpdate): string | null {
+export function personaUpdateNote(update: PersonaUpdate, skillFile?: string): string | null {
   const { persona, mode } = update;
   const self: string[] = [];
   const full: Array<{ what: string; body: string }> = [];
   if (mode !== null) {
     if (mode.bySelf) self.push("模式");
-    else full.push({ what: "模式", body: buildPmModePrompt(mode.mode, update.vendor) });
+    else full.push({ what: "模式", body: buildPmModePrompt(mode.mode, update.vendor, skillFile) });
   }
   if (persona !== null) {
     if (persona.bySelf) self.push("性格设定");
@@ -449,17 +448,23 @@ export function buildWorkerPrompt(ctx: LaunchContext, cwd: string): string {
 /**
  * 算 fingerprint 用的提示词：性格设定、模式换成固定的、厂商状态不算（它们变了不重启，见 driver.ts 的“两轮之间自动重启”），别的同 buildLaunchPrompt。
  */
-export function buildFingerprintPrompt(ctx: LaunchContext, cwd: string): string {
+export function buildFingerprintPrompt(ctx: LaunchContext, cwd: string, options: PmPromptOptions = {}): string {
   if (ctx.role === "worker") return buildWorkerPrompt(ctx, cwd);
   // 这台设备上厂商的状态也不算：登录一下不该打断正在干活的项目经理（没登录的靠 hub worker start 的报错兜底）
-  return buildLaunchPrompt({ ...ctx, pm: { ...ctx.pm, persona: "", mode: PM_MODES[0] }, vendorAvailability: undefined }, cwd);
+  return buildLaunchPrompt({ ...ctx, pm: { ...ctx.pm, persona: "", mode: PM_MODES[0] }, vendorAvailability: undefined }, cwd, options);
+}
+
+/** 项目经理提示词里跟这次会话的启动目录有关的东西（launch.ts 给）。 */
+export interface PmPromptOptions {
+  /** 这次会话启动目录里任务图技能的 SKILL.md（daemon/task-graph-skill.ts 写的）：第 2 步“建图”那一条里写它的路径，作读文件兜底。 */
+  taskGraphSkillFile?: string;
 }
 
 /**
  * 提示词（设计第 7.2 节），按角色分：Worker 走 buildWorkerPrompt，其余按项目经理拼。
  * 只用 ctx 和 cwd 里的文件，不放时间、令牌这类每次都变的东西，否则 fingerprint 每次都变。
  */
-export function buildLaunchPrompt(ctx: LaunchContext, cwd: string): string {
+export function buildLaunchPrompt(ctx: LaunchContext, cwd: string, options: PmPromptOptions = {}): string {
   if (ctx.role === "worker") return buildWorkerPrompt(ctx, cwd);
   const vendor = ctx.pm.vendor ?? DEFAULT_AGENT_VENDOR;
   const vendors = selectableVendors(ctx.vendorAvailability);
@@ -467,7 +472,7 @@ export function buildLaunchPrompt(ctx: LaunchContext, cwd: string): string {
     roleSection(ctx),
     projectSection(ctx.project),
     // “怎么干活”一节：五步 + 通用规矩；跟厂商名单有关的两条通用规矩接在同一个列表后面
-    `${buildPmModePrompt(ctx.pm.mode, vendor)}\n${buildPmCommonRules(VENDOR_LIST.filter((spec) => isSelectable(ctx.vendorAvailability?.[spec.id] ?? "unknown")))}`,
+    `${buildPmModePrompt(ctx.pm.mode, vendor, options.taskGraphSkillFile)}\n${buildPmCommonRules(VENDOR_LIST.filter((spec) => isSelectable(ctx.vendorAvailability?.[spec.id] ?? "unknown")))}`,
     PM_MEMORY_PROMPT,
     buildHubUsagePrompt(vendors),
   ];

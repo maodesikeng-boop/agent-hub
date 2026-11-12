@@ -7,7 +7,7 @@ import type { Change } from "../../shared/api.ts";
 import type { ConversationId, PmId, SessionId, WorkerId } from "../../shared/domain.ts";
 import type { DriverEvent } from "../../shared/driver.ts";
 import { PM_ARCHIVE_RETENTION_MS, WORKER_PURGE_BATCH_ROWS, WORKER_RETENTION_DAYS, WORKER_RETENTION_MS } from "../../shared/limits.ts";
-import { workerSetupLogPath } from "../../shared/paths.ts";
+import { sessionLaunchDir, workerSetupLogPath } from "../../shared/paths.ts";
 import { enqueueAction, listActions } from "../actions/index.ts";
 import { createSessionStore } from "../store/index.ts";
 import type { Db } from "../store/index.ts";
@@ -97,8 +97,8 @@ function startWorker(title: string, extraMessages = 0): WorkerId {
     now,
   );
   db.run("INSERT INTO worker_background_waits (session_id, turn_start, background, created_at) VALUES (?, 1, 1, ?)", sessionOf(w), now);
-  mkdirSync(join(launchDir, `session-${sessionOf(w)}`), { recursive: true });
-  writeFileSync(join(launchDir, `session-${sessionOf(w)}`, "settings.json"), "{}");
+  mkdirSync(sessionLaunchDir(launchDir, sessionOf(w)), { recursive: true });
+  writeFileSync(join(sessionLaunchDir(launchDir, sessionOf(w)), "settings.json"), "{}");
   mkdirSync(setupLogsDir, { recursive: true });
   writeFileSync(workerSetupLogPath(setupLogsDir, w), "setup log");
   return w;
@@ -144,7 +144,7 @@ describe("已收工 Worker 的对话保留期", () => {
     expect(count("handovers", "conversation_id = ?", conv)).toBe(0);
     expect(count("worker_background_waits", "session_id = ?", sid)).toBe(0);
     expect(listActions(db).filter((a) => JSON.stringify(a.params).includes(`"workerId":${w}`) || JSON.stringify(a.params).includes(`"sessionId":${sid}`))).toEqual([]);
-    expect(existsSync(join(launchDir, `session-${sid}`))).toBe(false);
+    expect(existsSync(sessionLaunchDir(launchDir, sid))).toBe(false);
     expect(existsSync(workerSetupLogPath(setupLogsDir, w))).toBe(false);
     expect(purgedAt(w)).toBe(endedAt + WORKER_RETENTION_MS);
     expect(changes).toEqual([expect.objectContaining({ type: "conversation.purged", data: { conversationId: conv, purgedAt: endedAt + WORKER_RETENTION_MS } })]);
@@ -300,5 +300,65 @@ describe("已收工 Worker 的对话保留期", () => {
     const w = startWorker("修登录");
     expect(ledger.hubCall(lin.sessionId, "worker.show", { workerId: w }, {}).text).not.toContain("保留期");
     expect(ledger.hubCall(lin.sessionId, "worker.log", { workerId: w }, {}).text).not.toContain("保留期");
+  });
+
+  it("启动目录闭环清理：换代退役的旧 PM 会话、已删孤儿目录、历史 session-<id> 格式均被清理，活跃会话与未到期 Worker 目录保留", () => {
+    // 1. 未满 30 天的已收工 Worker 会话目录 + 行已不存在的孤儿目录
+    const recentW = startWorker("刚收工的");
+    const endedAt = endWorker(recentW);
+    const recentWorkerDir = sessionLaunchDir(launchDir, sessionOf(recentW));
+    const orphanDir = sessionLaunchDir(launchDir, 999_999);
+    mkdirSync(orphanDir, { recursive: true });
+
+    // 2. 活跃 PM 会话目录 + 历史遗留 session-<id> 目录
+    const activePmDir = sessionLaunchDir(launchDir, lin.sessionId);
+    const legacyPmDir = join(launchDir, `session-${lin.sessionId}`);
+    mkdirSync(activePmDir, { recursive: true });
+    mkdirSync(legacyPmDir, { recursive: true });
+
+    // 3. 换会话淘汰下来的已结束旧 PM 会话（status = 'ended', pid = null）
+    const retiredPmSid = Number(
+      db.run(
+        `INSERT INTO agent_sessions (role, conversation_id, pm_id, vendor, vendor_session_id, cwd, add_dirs, generation, status, pid, created_at, updated_at)
+         VALUES ('pm', ?, ?, 'claude', 'retired-pm-uuid', '/tmp', '[]', 10, 'ended', NULL, ?, ?)`,
+        lin.conversationId,
+        lin.pmId,
+        now,
+        now,
+      ).lastInsertRowid,
+    );
+    const retiredPmDir = sessionLaunchDir(launchDir, retiredPmSid);
+    mkdirSync(retiredPmDir, { recursive: true });
+
+    // 4. 刚换代但 session.end 动作还在排队的旧 PM 会话：等动作跑完再清
+    const stoppingPmSid = Number(
+      db.run(
+        `INSERT INTO agent_sessions (role, conversation_id, pm_id, vendor, vendor_session_id, cwd, add_dirs, generation, status, pid, created_at, updated_at)
+         VALUES ('pm', ?, ?, 'claude', 'stopping-pm-uuid', '/tmp', '[]', 11, 'ended', NULL, ?, ?)`,
+        lin.conversationId,
+        lin.pmId,
+        now,
+        now,
+      ).lastInsertRowid,
+    );
+    const stoppingPmDir = sessionLaunchDir(launchDir, stoppingPmSid);
+    mkdirSync(stoppingPmDir, { recursive: true });
+    enqueueAction(db, { type: "session.end", params: { sessionId: stoppingPmSid, generation: 11 } }, now);
+
+    // 此时没有任何满 30 天的到期 Worker，但仍会顺手清掉退役 PM、孤儿与旧命名目录
+    expect(ledger.purgeExpiredWorkerConversations(endedAt + 1_000)).toEqual({ rows: 0, purged: [], more: false });
+    expect(existsSync(retiredPmDir)).toBe(false);
+    expect(existsSync(orphanDir)).toBe(false);
+    expect(existsSync(legacyPmDir)).toBe(false);
+    expect(existsSync(activePmDir)).toBe(true);
+    expect(existsSync(stoppingPmDir)).toBe(true);
+    expect(existsSync(recentWorkerDir)).toBe(true);
+
+    // stoppingPmSid 的 session.end 跑完后，再清一次就会把它的启动目录也清掉
+    db.run("UPDATE actions SET status = 'done' WHERE status IN ('pending', 'running')");
+    ledger.purgeExpiredWorkerConversations(endedAt + 2_000);
+    expect(existsSync(stoppingPmDir)).toBe(false);
+    expect(existsSync(activePmDir)).toBe(true);
+    expect(existsSync(recentWorkerDir)).toBe(true);
   });
 });

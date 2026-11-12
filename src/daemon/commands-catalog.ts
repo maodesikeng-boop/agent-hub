@@ -3,13 +3,14 @@
 // - 没在跑：按（厂商、目录）缓存，第一次另起一个进程问（厂商实现的 queryCommands，约 0.9 秒）；
 //   超过 COMMANDS_FRESH_MS 先给旧的，后台再问；没问到给空列表，COMMANDS_RETRY_MS 之后有人要时再问；
 // - 会话中途推来的完整名单（驱动层的 commands.changed）直接更新缓存。
-// 返回前去掉厂商的隐藏名单（isHiddenCommand，只藏厂商自带的）。问不到一律空列表，不报错。
+// 返回前去掉厂商的隐藏名单（isHiddenCommand，只藏厂商自带的）和产品内部按需技能（如 fusa-task-graph）。问不到一律空列表，不报错。
 // - 另起的进程同一时间最多 MAX_CONCURRENT_COMMAND_QUERIES 个，多的排队；缓存最多 MAX_COMMAND_CACHE_ENTRIES 份，多了淘汰最旧的；
 // - cached：只看缓存、不问（账本手打拦命令时用：缓存里这个名字是用户自己的就放行）。
 import { LRUCache } from "lru-cache";
 import {
   COMMANDS_FRESH_MS,
   COMMANDS_RETRY_MS,
+  isInternalSkillCommand,
   KILL_WAIT_MS,
   MAX_COMMAND_CACHE_ENTRIES,
   MAX_CONCURRENT_COMMAND_QUERIES,
@@ -134,7 +135,7 @@ export function createCommandCatalogs(options: CommandCatalogsOptions): CommandC
   };
 
   const visible = (vendor: VendorComposer, commands: ComposerCommand[] | null) =>
-    (commands ?? []).filter((c) => !vendor.isHiddenCommand(c));
+    (commands ?? []).filter((c) => !vendor.isHiddenCommand(c) && !isInternalSkillCommand(c.name));
 
   return {
     async list(request) {

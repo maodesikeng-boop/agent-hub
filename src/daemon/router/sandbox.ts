@@ -22,6 +22,7 @@ import {
   type VendorAvailabilityMap,
 } from "../../shared/index.ts";
 import { launchFingerprint } from "../../shared/launch.ts";
+import { removeSessionLaunchDir, sessionLaunchDir } from "../../shared/paths.ts";
 import { VENDOR_DAEMONS } from "../../vendors/daemon-registry.ts";
 import { osSandboxAvailable } from "../driver/write-scope.ts";
 import { buildRouterSystemPrompt } from "./prompt.ts";
@@ -106,7 +107,7 @@ export function prepareRouterSandboxLaunch(
       : undefined;
 
   const settings = vendorFiles?.settings;
-  const dir = join(options.launchDir, String(session.id));
+  const dir = sessionLaunchDir(options.launchDir, session.id);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const promptFile = join(dir, "prompt.md");
   writeFileSync(promptFile, prompt, { mode: 0o600 });
@@ -138,7 +139,7 @@ export function prepareRouterSandboxLaunch(
 
 /** 清理轨道 B 会话生成的临时启动目录。 */
 export function cleanupRouterLaunchDir(launchDir: string, sessionId: SessionId): void {
-  rmSync(join(launchDir, String(sessionId)), { recursive: true, force: true });
+  removeSessionLaunchDir(launchDir, sessionId);
 }
 
 export interface RouterSandboxGuard {

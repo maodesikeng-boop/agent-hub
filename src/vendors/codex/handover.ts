@@ -233,6 +233,8 @@ export function createCodexForker(options: CodexForkerOptions = {}): SessionFork
       try {
         if (signal.aborted) throw new Error("复制被取消");
         const launch = readCodexLaunchConfig(withoutHubEnv(src.launch));
+        // 产品技能跟主会话一样挂上（技能清单一样）；挂不上不影响写交接
+        if (launch.skillRoots.length > 0) await rpc.request("skills/extraRoots/set", { extraRoots: launch.skillRoots }).catch(() => undefined);
         const result = await rpc.request("thread/fork", {
           threadId: src.vendorSessionId,
           cwd: src.cwd,

@@ -3,7 +3,7 @@
 // 放进系统提示词的 <user_rules> 区，agy 内部压缩对话（/compact、自动压缩）只换掉历史、这一区每个请求都重新带上（2026-11-11 实测）。
 // 所以每次起进程前把 prompt.md 切块写进启动目录（守护进程自己的 ~/.agent-hub/state/launch/<会话>/）下的规则目录，再 --add-dir 它：
 // 不写用户的项目目录和 worktree，git status 不多东西；只读 Worker 的沙箱哪里都能读（密钥除外），也读得到。
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, realpathSync } from "node:fs";
+import { copyFileSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, rmSync, realpathSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import writeFileAtomic from "write-file-atomic";
 import { AGY_RULE_FILE_MAX_BYTES, AGY_RULE_FILES_MAX, AGY_RULE_TOTAL_BUDGET_BYTES, AGY_RULE_SINGLE_BUDGET_BYTES } from "./limits.ts";
@@ -12,6 +12,8 @@ import { AGY_RULE_FILE_MAX_BYTES, AGY_RULE_FILES_MAX, AGY_RULE_TOTAL_BUDGET_BYTE
 export const AGY_RULES_WORKSPACE_DIR = "agy-rules";
 /** 工作区里规则文件的相对目录（agy 的工作区自定义根是 .agents，规则在它的 rules/ 下）。 */
 const RULES_SUBDIR = join(".agents", "rules");
+/** 工作区里技能的相对目录（agy 每轮把工作区 .agents/skills/ 下的技能名字和说明列给模型，相关时读正文）。 */
+const SKILLS_SUBDIR = join(".agents", "skills");
 /** 规则文件名：fusa-01.md、fusa-02.md……agy 按文件名顺序拼，两位数保证 01..08 的顺序。 */
 const RULE_FILE_RE = /^fusa-\d{2}\.md$/;
 const ruleFileName = (index: number) => `fusa-${String(index + 1).padStart(2, "0")}.md`;
@@ -52,8 +54,9 @@ export function splitPromptForRules(prompt: string, maxBytes = AGY_RULE_FILE_MAX
 /**
  * 按 prompt.md 重写这个会话的规则目录，返回要 --add-dir 的工作区目录；提示词空白返回 null（不加 --add-dir）。
  * 每次起进程都调：内容跟着 prompt.md（性格设定改了下次起进程就是新的）；块数变少时删掉多出来的旧块，目录里的文件数不会越变越多。
+ * skillsDir（LaunchFiles.skillsDir，只有项目经理会话有）：产品技能也放进这个工作区的 .agents/skills/（linkAgySkills），不多加参数。
  */
-export function writeAgyPromptRules(promptFile: string): string | null {
+export function writeAgyPromptRules(promptFile: string, skillsDir?: string): string | null {
   let prompt = "";
   try {
     prompt = readFileSync(promptFile, "utf8");
@@ -76,7 +79,37 @@ export function writeAgyPromptRules(promptFile: string): string | null {
     // 原子替换：上一个进程（或后台写交接复制的那份）可能正在读规则，不能让它读到写了一半的文件
     writeFileAtomic.sync(join(rulesDir, ruleFileName(i)), `${RULE_FRONTMATTER}${chunk}`, { mode: 0o600 });
   });
+  linkAgySkills(workspace, skillsDir);
   return workspace;
+}
+
+/**
+ * 把 skillsDir 里每个技能的 SKILL.md 硬链接进工作区的 .agents/skills/<名字>/：agy 不跟软链（2026-11-12 agy 1.5.6 实测，
+ * 软链的目录和文件都不进技能清单，硬链接和普通文件都进），硬链接和守护进程写的是同一个文件，不多一份内容。
+ * 已经指向同一个文件的不动；源文件被原子替换过（守护进程升级换了正文）就重新链；跨文件系统链不上时复制。
+ * skillsDir 里没有的（或没给 skillsDir）删掉，目录里不会越积越多。
+ */
+function linkAgySkills(workspace: string, skillsDir: string | undefined): void {
+  const target = join(workspace, SKILLS_SUBDIR);
+  const wanted = new Set<string>();
+  if (skillsDir !== undefined && existsSync(skillsDir)) {
+    for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
+      const source = join(skillsDir, entry.name, "SKILL.md");
+      if (!entry.isDirectory() || !existsSync(source)) continue;
+      wanted.add(entry.name);
+      const dest = join(target, entry.name, "SKILL.md");
+      if (existsSync(dest) && statSync(dest).ino === statSync(source).ino) continue;
+      mkdirSync(dirname(dest), { recursive: true, mode: 0o700 });
+      rmSync(dest, { force: true });
+      try {
+        linkSync(source, dest);
+      } catch {
+        copyFileSync(source, dest);
+      }
+    }
+  }
+  if (!existsSync(target)) return;
+  for (const name of readdirSync(target)) if (!wanted.has(name)) rmSync(join(target, name), { recursive: true, force: true });
 }
 
 /**

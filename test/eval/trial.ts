@@ -91,9 +91,12 @@ function workerSessions(plan: TrialPlan, scenario: Scenario, ctx: ScenarioContex
             : `git commit -q --allow-empty -m ${sq(`replay: ${w.name}`)}`,
       });
     }
+    const fill = (text: string) => text.replaceAll("{SHOTS}", ctx.shotsDir).replaceAll("{PRELUDE_SHOTS}", ctx.preludeShotsDir).trimEnd();
     const report = w.reportFile ? readFileSync(join(REPLAY_DIR, w.reportFile), "utf8") : (w.reportText ?? scenario.fallbackReport);
-    steps.push({ text: report.replaceAll("{SHOTS}", ctx.shotsDir).replaceAll("{PRELUDE_SHOTS}", ctx.preludeShotsDir).trimEnd() });
-    return { role: "worker", promptIncludes: w.promptIncludes, script: { turns: [{ steps }], defaultTurn: generic.defaultTurn } };
+    steps.push({ text: fill(report) });
+    // 被 hub worker send 叫醒后的几轮：依次交回之后的真实汇报（K1：用户登录以后，接 Pi、冒烟测试的那份）
+    const later = (w.laterReportFiles ?? []).map((f) => ({ steps: [{ text: fill(readFileSync(join(REPLAY_DIR, f), "utf8")) }] }));
+    return { role: "worker", promptIncludes: w.promptIncludes, script: { turns: [{ steps }, ...later], defaultTurn: generic.defaultTurn } };
   });
   return [...sessions, { role: "worker", script: generic }];
 }
@@ -115,6 +118,28 @@ export function writeGhReplay(ghDir: string, scenario: Scenario): void {
     copyFileSync(join(REPLAY_DIR, rel), dst);
   }
   writeFileSync(join(ghDir, "replay.json"), JSON.stringify({ ...scenario.gh, baseDir: replayDir, logMaxBytes: EVAL_GH_LOG_MAX_BYTES }));
+}
+
+/** 命令替身表写进试跑自己的目录（真模型沙箱禁读仓库里的 test/eval/）；没有替身返回 undefined。 */
+export function writeStubs(workDir: string, scenario: Scenario): string | undefined {
+  if (scenario.stubs === undefined) return undefined;
+  const file = join(workDir, "stubs.json");
+  writeFileSync(file, JSON.stringify(scenario.stubs));
+  return file;
+}
+
+/** followUp 说出口的时机：有 Worker 交回了汇报，或者 afterTool 那条命令被调过；用户在卡片上答过同一句的不再说。 */
+function followUpDue(scenario: Scenario, msgs: Message[], recordFile: string, injected: Facts["injected"]): boolean {
+  const followUp = scenario.followUp;
+  if (followUp === undefined || injected.some((e) => e.detail.includes(followUp.text))) return false;
+  if (msgs.some((m) => m.kind === "worker" && (m.meta as { event?: string } | null)?.event === "report")) return true;
+  const after = followUp.afterTool;
+  if (after === undefined || !existsSync(recordFile)) return false;
+  return readFileSync(recordFile, "utf8").split("\n").some((line) => {
+    if (line === "") return false;
+    const call = JSON.parse(line) as { tool: string; argv: string[] };
+    return call.tool === after.tool && call.argv.join(" ").includes(after.match);
+  });
 }
 
 function copyShots(scenario: Scenario, ctx: ScenarioContext): void {
@@ -143,6 +168,7 @@ async function eventLoop(
   dbFile: string,
   gateFile: string,
   injected: Facts["injected"],
+  recordFile: string,
 ): Promise<LoopOutcome> {
   const { scenario, timings } = plan;
   const deadline = Date.now() + timings.trialMs;
@@ -188,7 +214,16 @@ async function eventLoop(
       msgs.some((m) => m.sender === "user" && (m.status === "queued" || m.status === "delivered" || m.status === "processing"));
     if (busy) lastBusyAt = Date.now();
     if (countPmTurns(dbFile, pm.conversationId) > EVAL_MAX_PM_TURNS) return { envError: `项目经理出场超过 ${EVAL_MAX_PM_TURNS} 轮` };
-    if (!busy && Date.now() - lastBusyAt >= timings.quietMs) return { envError: null };
+    if (!busy && Date.now() - lastBusyAt >= timings.quietMs) {
+      // 4. 安静了：到时机的话用户再说一句（只一次），接着等
+      if (followUpDue(scenario, msgs as Message[], recordFile, injected)) {
+        injected.push({ at: Date.now(), kind: "follow-up", detail: scenario.followUp!.text });
+        await client.post(pm.conversationId, scenario.followUp!.text);
+        lastBusyAt = Date.now();
+        continue;
+      }
+      return { envError: null };
+    }
     await sleep(timings.pollMs);
   }
 }
@@ -217,9 +252,10 @@ function transcript(facts: Facts): string {
     return `${head}\n${clip(body, EVAL_TRANSCRIPT_MAX_CHARS)}\n`;
   });
   const gh = facts.gh.map((g) => `- gh#${g.seq} ${new Date(g.at).toISOString()} \`gh ${g.argv.join(" ")}\` → ${g.action}（退出码 ${g.exitCode}）`);
-  const rec = facts.recorded.map((r) => `- ${new Date(r.at).toISOString()} \`${r.tool} ${r.argv.join(" ")}\`（只记录，没执行）`);
+  const how = (r: Facts["recorded"][number]) => (r.stub === undefined ? "只记录，没执行" : r.stub === -1 ? "命令替身：表里没有这条，照成功回" : `命令替身：回放第 ${r.stub + 1} 条`);
+  const rec = facts.recorded.map((r) => `- ${new Date(r.at).toISOString()} \`${r.tool} ${r.argv.join(" ")}\`（${how(r)}）`);
   const inj = facts.injected.map((e) => `- ${new Date(e.at).toISOString()} ${e.kind}：${clip(e.detail, EVAL_EVIDENCE_MAX_CHARS)}`);
-  return [`# 试跑过程\n`, `## 评测注入的事件\n${inj.join("\n") || "（无）"}\n`, `## gh 替身记录\n${gh.join("\n") || "（无）"}\n`, `## 只记录的替身（ssh、rsync、git push……）\n${rec.join("\n") || "（无）"}\n`, `## 项目经理对话\n`, ...lines].join("\n");
+  return [`# 试跑过程\n`, `## 评测注入的事件\n${inj.join("\n") || "（无）"}\n`, `## gh 替身记录\n${gh.join("\n") || "（无）"}\n`, `## 只记录的替身和命令替身（ssh、rsync、git push、pi-bridge……）\n${rec.join("\n") || "（无）"}\n`, `## 项目经理对话\n`, ...lines].join("\n");
 }
 
 export async function runTrial(plan: TrialPlan): Promise<TrialResult> {
@@ -255,7 +291,8 @@ export async function runTrial(plan: TrialPlan): Promise<TrialResult> {
     copyShots(scenario, ctx);
     const { repo, bare } = prepareProject(plan, scenario, workDir);
     writeGhReplay(ghDir, scenario);
-    writeShims({ binDir, ghDir, recordFile }, { node: process.execPath, realGit: realGitPath() });
+    const stubsFile = writeStubs(workDir, scenario);
+    writeShims({ binDir, ghDir, recordFile, stubsFile }, { node: process.execPath, realGit: realGitPath() });
     let sandbox = plan.pm.mode === "real" ? plan.pm.sandbox : null;
     if (plan.pm.mode === "real") {
       if (!sandbox) throw new Error("真模型必须使用通过 preflight 的沙箱");
@@ -273,7 +310,7 @@ export async function runTrial(plan: TrialPlan): Promise<TrialResult> {
       plan.pm.mode === "real"
         ? { mode: "real", node: process.execPath, fakeClaude: FAKE_CLAUDE, realClaude: plan.pm.realClaude, sandbox, settingsDir: join(workDir, "router-settings") }
         : { mode: "scripted", node: process.execPath, fakeClaude: FAKE_CLAUDE, settingsDir: join(workDir, "router-settings") };
-    const isoEnv = { EVAL_PROCESS_GROUPS: pidFile, ...isolationEnv({ workDir, binDir, ghDir, recordFile, originBare: bare, repo: scenario.gh.repo, routerConfig, jq: whichFirst("jq") }) };
+    const isoEnv = { EVAL_PROCESS_GROUPS: pidFile, ...isolationEnv({ workDir, binDir, ghDir, recordFile, stubsFile, originBare: bare, repo: scenario.gh.repo, routerConfig, jq: whichFirst("jq") }) };
     const pmSessions: FakeSessionScript[] = plan.pm.mode === "scripted" ? [{ role: "pm", script: plan.pm.script(ctx) }] : [];
     env.setScript({ sessions: [...pmSessions, ...workerSessions(plan, scenario, ctx, gateFile)] });
     daemon = await env.start({ vendorPath: ROUTER, main: plan.version.daemonMain, env: isoEnv });
@@ -291,7 +328,7 @@ export async function runTrial(plan: TrialPlan): Promise<TrialResult> {
     const demand = scenario.demand(ctx);
     injected.push({ at: startedAt, kind: "demand", detail: demand });
     await client.post(created.conversationId, demand);
-    envError = (await eventLoop(plan, client, daemon, created, dbFile, gateFile, injected)).envError;
+    envError = (await eventLoop(plan, client, daemon, created, dbFile, gateFile, injected, recordFile)).envError;
   } catch (error) {
     envError = `试跑出错：${error instanceof Error ? error.message : String(error)}`;
   } finally {

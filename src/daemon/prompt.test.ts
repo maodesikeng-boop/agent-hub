@@ -10,7 +10,9 @@ import {
   MIN_SCHEDULE_EVERY_MINUTES,
   PM_MODES,
   PM_MODE_LABELS,
+  PM_REVIEW_REDLINES_BRIEF,
   PRODUCT_ID,
+  TASK_GRAPH_SKILL_NAME,
   VENDOR_LIST,
   vendorSpec,
   WORKER_BRANCH_PREFIX,
@@ -229,9 +231,9 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
       const names = section.split("\n").flatMap((l) => /^\s*- \*\*(.+?)\*\*/.exec(l)?.[1] ?? []);
       expect(names.length).toBeGreaterThan(12);
       expect(new Set(names).size, names.join(" | ")).toBe(names.length);
-      // 换人接手只有一种写法（以前一处说 worker end，一处说 worker end --incomplete）
-      expect(section.split("--incomplete")).toHaveLength(2);
-      expect(section.split(`${hub} worker end`)).toHaveLength(3); // 做完了收工、换人各一处
+      // 换人接手只有一种写法；绑节点的 --incomplete、--node 在任务图手册里，基础提示词不出现
+      expect(section).not.toContain("--incomplete");
+      expect(section.split(`${hub} worker end`)).toHaveLength(2); // 只有做完了收工一处
       expect(section.split("验收只看证据")).toHaveLength(2);
       expect(section.split("不要只在回复里问一句就停下等")).toHaveLength(2);
     }
@@ -251,7 +253,7 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
     expect(buildPmModePrompt("hands_on", true)).toContain("做完告诉用户做了什么、改了哪些文件");
   });
 
-  it("只写现有命令做得到的事：自动开工、交棒、finish、ask --node、confirm、review 标记及未落地的任务图技能文件等不出现，且撤掉“一步也建图”", () => {
+  it("只写现有命令做得到的事：自动开工、交棒、finish、ask --node、confirm、review 标记等不出现，且撤掉“一步也建图”；建图手册不常驻，只留指路", () => {
     for (const mode of PM_MODES) {
       const prompt = buildLaunchPrompt(projectContext({ pm: { id: 1, name: "小林", mode, persona: "" } }), dir);
       for (const gone of [
@@ -271,16 +273,23 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
         "只有一步也建图",
         "一步也建图",
         "临时 Worker",
-        "fusa-task-graph",
-        "fusa:task-graph",
-        "SKILL.md",
+        // 建图手册挪进了 fusa-task-graph 技能（docs/orchestration-skill-design.md 第 4.2 节），基础提示词里一条都不留
+        "一张图只装一件事",
+        "按先后步骤拆",
+        "默认一条线",
+        "`gate`",
+        "--node <节点>",
+        "--incomplete",
+        `${hub} graph patch`,
+        `${hub} graph ask`,
+        `${hub} graph decide`,
+        `${hub} graph show`,
+        "所有节点都完成后整张图自动结束",
+        "纯文案、纯展示、局部纯函数、薄胶水层不用审查",
       ]) {
         expect(prompt, gone).not.toContain(gone);
       }
-      // 现有机制下的等价说法：建完图自己给轮到的节点派 Worker，做完了自己收工
-      expect(prompt).toContain(`给轮到的节点派 Worker（\`${hub} worker start --node <节点>\`）`);
-      expect(prompt).toContain(`通过就 \`${hub} worker end <编号>\` 收工（绑了图节点的会自动标完成`);
-      expect(prompt).toContain("所有节点都完成后整张图自动结束，不能再改");
+      expect(prompt).toContain(`通过就 \`${hub} worker end <编号>\` 收工。`);
     }
   });
 
@@ -448,11 +457,12 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
         if (vendorSpec(vendor).capabilities.backgroundWake) {
           expect(prompt).toContain(PM_BACKGROUND_COMMAND_NOTE);
           expect(prompt).not.toContain(PM_DELEGATE_LONG_COMMAND_NOTE);
-          expect(prompt).toContain(buildPmModePrompt(mode, true));
+          expect(prompt).toContain(buildPmModePrompt(mode, vendor));
         } else {
           expect(prompt).toContain(PM_DELEGATE_LONG_COMMAND_NOTE);
           expect(prompt).not.toContain(PM_BACKGROUND_COMMAND_NOTE);
-          expect(prompt).toContain(buildPmModePrompt(mode, false));
+          expect(prompt).toContain(buildPmModePrompt(mode, vendor));
+          expect(buildPmModePrompt(mode, vendor)).toContain(PM_DELEGATE_LONG_COMMAND_NOTE);
         }
       }
     }
@@ -534,7 +544,7 @@ describe("提示词：数值和事实以代码为准", () => {
     expect(HUB_USAGE).toContain(`[--effort ${ALL_EFFORTS.join("|")}]`);
     expect(HUB_USAGE_PROMPT).toContain(`${WORKER_BRANCH_PREFIX}<编号>-<短名>`);
     expect(WORKER_SEND_MAX_TOKENS).toBe(200_000);
-    for (const mode of PM_MODES) expect(PM_MODE_PROMPTS[mode]).toContain(`对话超过 ${WORKER_SEND_MAX_TOKENS / 1_000}K 或该换一家，就换人`);
+    for (const mode of PM_MODES) expect(PM_MODE_PROMPTS[mode]).toContain(`对话超过 ${WORKER_SEND_MAX_TOKENS / 1_000}K 或该换一家，就收工后新派一个接手`);
   });
 
   it("消息写法和驱动层、账本发的一致：汇报标题、连发合并；用户直接对 Worker 说的话不用在提示词里再讲（通知的标题自己写明了 Worker 已收到）", () => {
@@ -571,7 +581,9 @@ describe("提示词：项目经理（M3）", () => {
       expect(analyze).toContain(`- **派一个 Worker，不建图**（\`${hub} worker start\`，不带 \`--node\`）：一段就能做完，但中间过程多的。比如修 bug、写一份方案、做一个小的界面改动`);
       expect(analyze).toContain("- **建图**：有两段以上、每段各要一个独立会话的。比如先出方案、用户看过再实现；实现后换一家模型审查；几个方向并行探索再汇总。");
       expect(analyze).toContain(`只是中间要等用户拍板的用 \`${hub} ask\` 提问即可，不算建图理由。`);
-      expect(analyze).toContain("改动碰到下面任意一类，实现后面要换一家模型审查，所以走建图：");
+      expect(analyze).toContain(`改动碰到下面任意一类，实现后面要换一家模型审查，所以走建图：${PM_REVIEW_REDLINES_BRIEF}。`);
+      // 建图前先加载任务图技能（默认厂商 claude 有原生入口，带插件前缀）；没给启动目录时兜底指到 hub help graph
+      expect(analyze).toContain(`**建图前先加载 \`fusa:${TASK_GRAPH_SKILL_NAME}\` 技能**，建图、改图、换人、审查的做法都在里面；技能清单里没有它，就运行 \`${hub} help graph\`。`);
       expect(analyze).toContain("这是默认判断，不是死规定：拿不准选轻的一档，做着发现比想的复杂再升档；用户点名怎么做的，照用户说的。");
       expect(analyze).toContain("分析要快。深读代码和长文档是 Worker 的事，你要想清的只有三样：目标、步骤、怎么验收。");
     }
@@ -604,7 +616,7 @@ describe("提示词：项目经理（M3）", () => {
     }
   });
 
-  it("验收只看证据（第 5 步）：汇报、PR 的改动文件名单和检查结果、截图或实测输出；不读代码 diff，代码质量由审查负责；补审查兼容已建图和单派不绑图", () => {
+  it("验收只看证据（第 5 步）：汇报、PR 的改动文件名单和检查结果、截图或实测输出；不读代码 diff，代码质量由审查负责；该审查没审查的收工前补上（做法在手册里）", () => {
     for (const mode of PM_MODES) {
       const section = PM_MODE_PROMPTS[mode];
       const delivery = section.slice(section.indexOf("## 5. 交付"), section.indexOf("## 通用规矩"));
@@ -612,8 +624,7 @@ describe("提示词：项目经理（M3）", () => {
         "**验收只看证据**：汇报、PR 的改动文件名单和检查结果、截图或实测输出。",
         "不读代码 diff，代码质量由审查负责。",
         `证据不够就打回让 Worker 补（\`${hub} worker send\`）`,
-        `**补审查要赶在收工前**：改动碰了审查红线却没有审查的——建了图的先 \`${hub} graph patch\` 补一个审查节点，再让最后一个节点的 Worker 收工`,
-        "没建图的补建图挂审查，或直接派另一家厂商的 Worker 按第 3 步审查。",
+        "**该审查而没审查的，收工前补上**：改动碰了第 2 步那四类，就按任务图手册里的做法补一个审查。",
         "合并和发布按项目 `AGENTS.md` 的规矩做。",
         "向用户汇报结果。",
       ]) {
@@ -622,7 +633,7 @@ describe("提示词：项目经理（M3）", () => {
     }
   });
 
-  it("派活（第 3 步）：先写全任务说明，兼容单派不绑图与建图绑节点；保留完整建图规矩（一图一事、按步骤拆、默认一条线、用户明说要先看的挂 gate、四条红线加审查节点）", () => {
+  it("派活（第 3 步）：只留“任务说明要写全”（派单个 Worker 也要用）；建图规矩挪进任务图手册", () => {
     for (const mode of PM_MODES) {
       const section = PM_MODE_PROMPTS[mode];
       const dispatch = section.slice(section.indexOf("## 3. 派活"), section.indexOf("## 4. 跟进反馈"));
@@ -630,25 +641,10 @@ describe("提示词：项目经理（M3）", () => {
         "**任务说明要写全**：Worker 看不到你和用户的聊天，只靠任务说明对齐方向。",
         "“怎么算做完”写成能核对的证据（测试命令、截图、实测输出、PR 检查全绿）",
         "长材料存成文件，任务说明里给路径。",
-        `一段就能做完的活直接 \`${hub} worker start\`（不带 \`--node\`）。`,
-        `走建图那一档时，用 \`${hub} graph create\` 把这件事排成一串节点`,
-        "**一张图只装一件事**：互不相干的几件事各建一张图。",
-        "**按先后步骤拆，不按模块拆**：不要把一个需求切成前端、后端各一个 Worker。",
-        "写测试、改代码、截图、提 PR 是同一步，一个 Worker 一口气做完。",
-        "只在三种时候另起一个节点：用户明说要先看、要换一个模型独立审查、一步的上下文装不下。",
-        "**默认一条线**：用 `deps` 把节点按先后串起来",
-        "互不依赖的活才并行（比如同时探索几个方向再汇总）",
-        `**用户明说要先看的地方**（比如“先给我看方案”）挂一个 \`gate\` 节点：轮到时用 \`${hub} graph ask\` 填上问题、选项和你的推荐`,
-        "别的拍板不用预先安排，撞上了再问（见第 4 步）",
-        "**碰到下面任意一条，就在实现后面加一个审查节点**（派给另一家厂商的 Worker，任务说明里写清实现的分支和 PR、你最担心的地方，发现问题让它直接修）",
-        "  - 撤不回来的副作用或安全边界：数据迁移、覆写用户配置、杀进程、沙箱、鉴权；",
-        "  - 异步、并发、生命周期；",
-        "  - 会随时间变多的缓存、快照、分页，或多方共用的数据格式；",
-        "  - 本地草稿和远端状态互相覆盖的交互。",
-        "纯文案、纯展示、局部纯函数、薄胶水层不用审查，靠测试和截图兜底。",
       ]) {
         expect(dispatch, word).toContain(word);
       }
+      expect(dispatch.split("\n").filter((l) => l.startsWith("- "))).toHaveLength(1);
     }
   });
 
@@ -667,39 +663,35 @@ describe("提示词：项目经理（M3）", () => {
     expect(workerPrompt).not.toContain("原始记录只取要看的那一段");
   });
 
-  it("跟进反馈（第 4 步）：兼容单派不绑图与绑图节点——做完了收工（绑节点的自动标完成）、有问题能答就答否则 hub ask、出错换人兼顾单派和绑节点、计划变了 patch 或补图", () => {
+  it("跟进反馈（第 4 步）：做完了收工、有问题能答就答否则 hub ask、出错先 show 再 log 再续时或换人；图里怎么跟进在手册里", () => {
     expect(WORKER_SEND_MAX_TOKENS).toBe(200_000);
     const limitK = `${WORKER_SEND_MAX_TOKENS / 1_000}K`;
     for (const mode of PM_MODES) {
       const section = PM_MODE_PROMPTS[mode];
       const follow = section.slice(section.indexOf("## 4. 跟进反馈"), section.indexOf("## 5. 交付"));
-      const order = ["**Worker 做完了**", "**Worker 有问题**", "**Worker 出错、额度用完、超时、放弃**", "**计划变了**"];
+      const order = ["**Worker 做完了**", "**Worker 有问题**", "**Worker 出错、额度用完、超时、放弃**"];
       const positions = order.map((title) => follow.indexOf(title));
       expect(positions.every((p) => p >= 0)).toBe(true);
       expect([...positions].sort((a, b) => a - b)).toEqual(positions);
       for (const word of [
-        `建了图的进度以 \`${hub} graph show\` 为准`,
-        "绑了图节点的会自动标完成，后面的节点轮到；给下一个节点派 Worker 时，任务说明里给上一步的分支、PR 和文件路径，让它自己去读，不要转述内容",
+        `按第 5 步验收，通过就 \`${hub} worker end <编号>\` 收工。`,
         `能答的直接答（\`${hub} worker send\`）`,
         `要用户定的，用 \`${hub} ask\` 提问并写上选项和你的推荐，答复回来再转给 Worker`,
         "不要只在回复里问一句就停下等",
         `能接着干就 \`${hub} worker send\``,
-        `对话超过 ${limitK} 或该换一家，就换人：先 \`${hub} worker end <编号>\` 收工（绑了图节点的加 \`--incomplete\`），再 \`${hub} worker start\` 新派一个接手（绑了图节点的带 \`--node <节点>\`）`,
-        "任务说明里写清分支、已有的提交、还要改的点",
+        `对话超过 ${limitK} 或该换一家，就收工后新派一个接手，任务说明里写清分支、已有的提交、还要改的点`,
         "用户亲手停的，用户没说继续就别叫醒它",
-        `建了图的随时 \`${hub} graph patch\`，加节点、改还没开工的节点、跳过不需要的；原本没建图、做着发现要分段或加审查的，随时补建一张图`,
       ]) {
         expect(follow, word).toContain(word);
       }
+      for (const gone of ["**计划变了**", "graph show", "绑了图节点", "--incomplete"]) expect(follow, gone).not.toContain(gone);
     }
-    // 命令表里 worker end 那一行把带不带 --incomplete 的区别说清楚，和上面是同一个说法
-    const endLine = HUB_USAGE_PROMPT.split("\n").find((l) => l.includes(`${hub} worker end <编号> [--incomplete]`))!;
-    expect(endLine).toContain("它最近一轮汇报是“做完了”时，绑定的节点自动标完成；否则节点等人接手");
-    expect(endLine).toContain("换人时加 `--incomplete`：不管它汇报了什么，节点都等人接手");
+    // 命令表里 worker end 只剩收工本身；--incomplete 的区别写在任务图手册里（task-graph-skill.test.ts）
+    const endLine = HUB_USAGE_PROMPT.split("\n").find((l) => l.includes(`${hub} worker end <编号>`))!;
+    expect(endLine).toContain("收工（正在跑的一轮会先被打断，worktree 和分支先留着）");
+    expect(endLine).not.toContain("--incomplete");
     expect(buildWorkerPrompt(workerContext(), dir)).not.toContain("--incomplete");
   });
-
-
 
   it("不替项目定流程（11-04）：没有合并步骤（合并和发布按项目 AGENTS.md）、没有利弊表、没有先问用户清单", () => {
     const prompt = buildLaunchPrompt(projectContext(), dir);
@@ -724,26 +716,18 @@ describe("提示词：项目经理（M3）", () => {
   it("hub 用法有任务图、提问、Worker 的命令，和 shared/hub.ts、hub/cli.ts 的 HUB_COMMAND_SPECS 及关键参数对得上", () => {
     for (const sub of [
       `\`${hub} models [--vendor ${AGENT_VENDORS.join("|")}] [--refresh]\`：各厂商可用的模型和每个模型支持的思考程度`,
-      `${hub} worker start --title <标题> [--node <节点>] [--vendor ${AGENT_VENDORS.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--max-time <时长>] [--readonly] [--no-worktree] --stdin`,
+      `${hub} worker start --title <标题> [--vendor ${AGENT_VENDORS.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--max-time <时长>] [--readonly] [--no-worktree] --stdin`,
       `${hub} worker send <编号> [--max-time <时长>] --stdin`,
       `${hub} worker max-time <编号> <时长>`,
-      `${hub} worker end <编号> [--incomplete]`,
+      `${hub} worker end <编号>\`：收工`,
       `${hub} worker list`,
       `${hub} worker show <编号> [--task | --report [N]]`,
       `${hub} worker log <编号> [--last N | --stats]`,
       `${hub} worker search <关键词…> [--limit N]`,
       `最近几步（默认 ${WORKER_LOG_DEFAULT_STEPS} 步）`,
       `${hub} ask [--option <选项>...] --stdin`,
-      `${hub} graph create [--title <标题>] --stdin`,
-      `${hub} graph show [<图编号>]`,
-      `${hub} graph list [--all | --status active|completed|cancelled]`,
-      `${hub} graph patch [<图编号>] --stdin`,
-      `${hub} graph done <节点> [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要> | --stdin]`,
-      `${hub} graph skip <节点> [--reason <原因>]`,
-      `${hub} graph cancel [<图编号>] [--reason <原因>]`,
-      `${hub} graph ask <节点> [--question <问题>] [--option <选项>...] [--recommended <选项>] [--stdin]`,
-      `${hub} graph decide <节点> --choice <选项> [--note <说明>]`,
-      "它在几张活跃的图里重名时加 `--graph <图编号>`",
+      // 任务图缩成一行，用法在任务图手册里（全部子命令按 HUB_COMMANDS 拼）
+      `- **任务图**：\`${hub} graph create|show|list|ask|patch|done|decide|skip|cancel\`，用法在任务图手册里（第 2 步“建图”那一条写了去哪看，也可以 \`${hub} help graph\`）`,
     ]) {
       expect(HUB_USAGE_PROMPT, sub).toContain(sub);
     }
@@ -752,7 +736,7 @@ describe("提示词：项目经理（M3）", () => {
     for (const m of HUB_USAGE_PROMPT.matchAll(new RegExp(`\`${HUB_COMMAND} ([a-z-]+) ([a-z-]+(?:\\|[a-z-]+)+)\``, "g"))) {
       compressed.set(m[1]!, m[2]!.split("|"));
     }
-    expect([...compressed.keys()].sort()).toEqual(["persona", "project", "router", "schedule"]);
+    expect([...compressed.keys()].sort()).toEqual(["graph", "persona", "project", "router", "schedule"]);
     const inPrompt = (cli: string): boolean => {
       if (HUB_USAGE_PROMPT.includes(`${HUB_COMMAND} ${cli}`)) return true;
       const [group, action] = cli.split(" ");
@@ -767,9 +751,14 @@ describe("提示词：项目经理（M3）", () => {
     for (const [group, actions] of compressed) {
       for (const action of actions) expect(HUB_COMMANDS as readonly string[], `${group} ${action}`).toContain(`${group}.${action}`);
     }
-    for (const flag of ["--stdin", "--title", "--vendor", "--refresh", "--model", "--effort", "--readonly", "--no-worktree", "--task", "--report", "--limit", "--last", "--stats", "--option", "--node", "--incomplete"]) {
+    for (const flag of ["--stdin", "--title", "--vendor", "--refresh", "--model", "--effort", "--readonly", "--no-worktree", "--task", "--report", "--limit", "--last", "--stats", "--option"]) {
       expect(HUB_USAGE, flag).toContain(flag);
       expect(HUB_USAGE_PROMPT, flag).toContain(flag);
+    }
+    // 绑图节点的参数只在 hub help 和任务图手册里
+    for (const flag of ["--node", "--incomplete", "--graph"]) {
+      expect(HUB_USAGE, flag).toContain(flag);
+      expect(HUB_USAGE_PROMPT, flag).not.toContain(flag);
     }
   });
 
@@ -992,7 +981,10 @@ describe("性格设定、模式改了的说明（不重启，驱动层加在下�
       `【系统】你的模式刚更新了，以下面这份为准：\n\n${buildPmModePrompt("hands_on", vendorSpec("claude").capabilities.backgroundWake)}`,
     );
     const agy = personaUpdateNote(update({ vendor: "agy", mode: { mode: "manage_only", bySelf: false } }))!;
-    expect(agy).toContain(buildPmModePrompt("manage_only", vendorSpec("agy").capabilities.backgroundWake));
+    expect(agy).toContain(buildPmModePrompt("manage_only", "agy"));
+    // 给了这个会话的任务图手册路径（launch.ts 的 createPersonaNoter）：模式那一节里指路的那句写同一个路径
+    const withFile = personaUpdateNote(update({ vendor: "cursor", mode: { mode: "manage_only", bySelf: false } }), "/launch/9/skills/fusa-task-graph/SKILL.md")!;
+    expect(withFile).toContain("**建图前先读任务图手册 `/launch/9/skills/fusa-task-graph/SKILL.md`**");
   });
 
   it("两样都是用户改的：一段说明，模式在前、性格设定在后（同提示词里的顺序）", () => {
@@ -1058,40 +1050,35 @@ describe("性格设定、模式改了的说明（不重启，驱动层加在下�
     }
   });
 
-  it("建图、拍板、换人接手的规矩：6 家厂商与两种模式统一生效，模式那一节零厂商硬编码，Worker 提示词不混入", () => {
-    const limitK = `${WORKER_SEND_MAX_TOKENS / 1_000}K`;
+  it("任务图手册指路（第 2 步“建图”那一条）：6 家厂商与两种模式都有，按 spec 的 capabilities.skills 写；模式那一节零厂商硬编码，Worker 提示词不混入", () => {
+    const skillFile = "/data/state/launch/7/skills/fusa-task-graph/SKILL.md";
     for (const mode of PM_MODES) {
       for (const vendor of AGENT_VENDORS) {
-        const fullPrompt = buildLaunchPrompt(projectContext({ pm: { id: 1, name: "小林", mode, vendor, persona: "x" } }), dir);
-        const modePrompt = buildPmModePrompt(mode, vendor);
-
-        // 1. 建图：hub graph create 排节点，给轮到的节点派 Worker 传 --node；一张图只装一件事
-        expect(modePrompt).toContain(`${hub} graph create`);
-        expect(modePrompt).toContain("--node <节点>");
-        expect(modePrompt).toContain("一张图只装一件事");
+        const fullPrompt = buildLaunchPrompt(projectContext({ pm: { id: 1, name: "小林", mode, vendor, persona: "x" } }), dir, { taskGraphSkillFile: skillFile });
+        const modePrompt = buildPmModePrompt(mode, vendor, skillFile);
+        expect(fullPrompt).toContain(modePrompt);
+        // 指路的那句只出现一次，带名字（有原生入口的）和绝对路径（六家都有的读文件兜底）
+        const analyze = modePrompt.slice(modePrompt.indexOf("## 2. 分析"), modePrompt.indexOf("## 3. 派活"));
+        expect(fullPrompt.split(skillFile)).toHaveLength(2);
+        expect(analyze).toContain(skillFile);
+        const spec = vendorSpec(vendor);
+        if (spec.capabilities.skills === "native") {
+          expect(analyze).toContain(`**建图前先加载 \`${spec.prompt.skillNamePrefix ?? ""}${TASK_GRAPH_SKILL_NAME}\` 技能**`);
+          expect(analyze).toContain(`技能清单里没有它，就直接读 \`${skillFile}\`。`);
+        } else {
+          expect(analyze).toContain(`**建图前先读任务图手册 \`${skillFile}\`**，建图、改图、换人、审查的做法都在里面。`);
+          expect(analyze).not.toContain("技能清单");
+        }
+        // 建图手册、JSON 契约、拍板和换人的做法不常驻（在 fusa-task-graph 里，task-graph-skill.test.ts 守着）
+        for (const gone of [TASK_GRAPH_CREATE_JSON_HINT, TASK_GRAPH_PATCH_JSON_HINT, "`gate`", "--incomplete", "--node <节点>"]) {
+          expect(fullPrompt, gone).not.toContain(gone);
+        }
+        // 撞上要拍板的照样 hub ask，不只在回复里口头问
+        expect(modePrompt).toContain(`${hub} ask`);
+        expect(modePrompt).toContain("不要只在回复里问一句就停下等");
         // 以前“小事不建 1 节点假图”“先亮骨架图再深读”改掉了
         expect(modePrompt).not.toContain("假图");
         expect(modePrompt).not.toContain("骨架图");
-        // graph create / patch 旁直接给出一行 JSON 字段契约（patch 的示例里有 skipNodes）
-        expect(fullPrompt).toContain(TASK_GRAPH_CREATE_JSON_HINT);
-        expect(fullPrompt).toContain(TASK_GRAPH_PATCH_JSON_HINT);
-        expect(TASK_GRAPH_PATCH_JSON_HINT).toContain('"skipNodes":["polish"]');
-        expect(HUB_USAGE).toContain(TASK_GRAPH_PATCH_JSON_HINT);
-
-        // 2. 拍板：用户明说要先看的挂 gate 并 hub graph ask；撞上的用 hub ask；不只在回复里口头问
-        expect(modePrompt).toContain("`gate`");
-        expect(modePrompt).toContain(`${hub} graph ask`);
-        expect(modePrompt).toContain(`${hub} ask`);
-        expect(modePrompt).toContain("不要只在回复里问一句就停下等");
-
-        // 3. 计划变了用 hub graph patch；换人兼顾单派不绑图与绑节点（worker end <编号> / --incomplete 再 worker start / --node <节点>）
-        expect(modePrompt).toContain(`${hub} graph patch`);
-        expect(modePrompt).toContain("--incomplete");
-        expect(modePrompt).toContain(limitK);
-        expect(modePrompt).toMatch(/worker end <编号>.*--incomplete.*再.*worker start.*新派一个接手.*--node <节点>/);
-
-        expect(fullPrompt).toContain(modePrompt);
-
         // 模式那一节零厂商硬编码（厂商名单在后面接的两条通用规矩里）
         for (const id of AGENT_VENDORS) {
           expect(modePrompt.toLowerCase()).not.toContain(id);
@@ -1099,10 +1086,13 @@ describe("性格设定、模式改了的说明（不重启，驱动层加在下�
         }
       }
     }
+    // cursor 没有原生入口（实测），claude 带插件前缀
+    expect(vendorSpec("cursor").capabilities.skills).toBe("read_file");
+    expect(buildPmModePrompt("manage_only", "claude", skillFile)).toContain(`\`fusa:${TASK_GRAPH_SKILL_NAME}\``);
+    expect(buildPmModePrompt("manage_only", "codex", skillFile)).toContain(`\`${TASK_GRAPH_SKILL_NAME}\` 技能`);
 
     const workerPrompt = buildWorkerPrompt(workerContext(), dir);
-    expect(workerPrompt).not.toContain(`${hub} graph create`);
-    expect(workerPrompt).not.toContain(`${hub} graph patch`);
+    for (const gone of [`${hub} graph`, TASK_GRAPH_SKILL_NAME, "SKILL.md", "任务图手册"]) expect(workerPrompt, gone).not.toContain(gone);
   });
 
 });

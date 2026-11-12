@@ -95,10 +95,11 @@ export const SHIM_NAMES = ["gh", "git", ...RECORD_ONLY_TOOLS] as const;
  * 3. 清命令路径缓存（hash -r），之前解析出的真 gh 路径不再生效。
  * 真 gh 万一还是被调到（比如命令里又起了一个登录 shell，path_helper 重排了 PATH），沙箱也不许它执行（pmSandboxProfile 的 denyExec）。
  */
-export function claudeEnvScript(binDir: string): string {
+export function claudeEnvScript(binDir: string, extraShims: readonly string[] = []): string {
+  const names = [...new Set([...SHIM_NAMES, ...extraShims.filter((n) => /^[a-z][a-z0-9-]*$/.test(n))])];
   return [
     `export PATH=${sq(binDir)}:"$PATH"`,
-    `for __eval_shim in ${SHIM_NAMES.join(" ")}; do unalias "$__eval_shim" 2>/dev/null; unset -f "$__eval_shim" 2>/dev/null; done`,
+    `for __eval_shim in ${names.join(" ")}; do unalias "$__eval_shim" 2>/dev/null; unset -f "$__eval_shim" 2>/dev/null; done`,
     "unset __eval_shim",
     "hash -r 2>/dev/null",
     ":",
@@ -110,10 +111,15 @@ export interface ShimPaths {
   binDir: string;
   ghDir: string;
   recordFile: string;
+  /** 场景的命令替身表（CommandStubs，写成 JSON）：有就给这些命令各放一个替身（record.mts 按表回放）。 */
+  stubsFile?: string;
 }
 
+/** 替身不能顶替的命令：评测自己要用它们（gh、git 另有替身；node 跑替身本身；sh 跑外壳）。 */
+const UNSTUBBABLE = new Set(["gh", "git", "node", "sh", "bash", "zsh", "env", "hub"]);
+
 /**
- * 在 binDir 里放替身：gh（回放）、git（push 只记录，别的转给真 git）、RECORD_ONLY_TOOLS（只记录）。
+ * 在 binDir 里放替身：gh（回放）、git（push 只记录，别的转给真 git）、RECORD_ONLY_TOOLS（只记录）、场景的命令替身（按表回放）。
  * 替身的程序拷进 binDir/lib/（.mts 单独跑），不引用仓库里的文件：真模型项目经理的沙箱禁读真仓库。
  */
 export function writeShims(paths: ShimPaths, opts: { node: string; realGit: string }): void {
@@ -129,6 +135,13 @@ export function writeShims(paths: ShimPaths, opts: { node: string; realGit: stri
   };
   write("gh", `if [ "$1" = --version ]; then echo eval-gh-shim; exec ${sq(opts.node)} ${sq(join(lib, "record.mts"))} gh-probe; fi\nexec ${sq(opts.node)} ${sq(join(lib, "gh.mts"))} "$@"`);
   for (const tool of RECORD_ONLY_TOOLS) write(tool, `exec ${sq(opts.node)} ${sq(join(lib, "record.mts"))} ${tool} "$@"`);
+  if (paths.stubsFile !== undefined) {
+    const stubs = JSON.parse(readFileSync(paths.stubsFile, "utf8")) as Record<string, unknown>;
+    for (const tool of Object.keys(stubs)) {
+      if (UNSTUBBABLE.has(tool) || !/^[a-z][a-z0-9-]*$/.test(tool)) throw new Error(`命令替身不能顶替 ${tool}`);
+      write(tool, `exec ${sq(opts.node)} ${sq(join(lib, "record.mts"))} ${tool} "$@"`);
+    }
+  }
   // git：找出子命令（跳过 -C、-c 这类带值的全局参数），push 只记录，别的原样交给真 git
   write(
     "git",
@@ -178,8 +191,11 @@ export function isolationEnv(input: IsolationInput): Record<string, string> {
   );
   // claude 的 Bash 先套用户登录 shell 的快照（用户的 .zprofile 会把 ~/.local/bin、homebrew 提到 PATH 最前面，真 gh 就在那里），
   // 再 source CLAUDE_ENV_FILE：在这里把替身目录放回最前面（claudeEnvScript）。
+  const extraShims = input.stubsFile !== undefined && existsSync(input.stubsFile)
+    ? Object.keys(JSON.parse(readFileSync(input.stubsFile, "utf8")) as Record<string, unknown>)
+    : [];
   const claudeEnvFile = join(input.workDir, "claude-env.sh");
-  writeFileSync(claudeEnvFile, claudeEnvScript(input.binDir));
+  writeFileSync(claudeEnvFile, claudeEnvScript(input.binDir, extraShims));
   const routerConfigFile = join(input.workDir, "router.json");
   writeFileSync(routerConfigFile, JSON.stringify(input.routerConfig));
   return {
@@ -199,6 +215,7 @@ export function isolationEnv(input: IsolationInput): Record<string, string> {
     CLAUDE_ENV_FILE: claudeEnvFile,
     EVAL_GH_DIR: input.ghDir,
     EVAL_RECORD_FILE: input.recordFile,
+    ...(input.stubsFile ? { EVAL_STUBS_FILE: input.stubsFile } : {}),
     EVAL_ROUTER_CONFIG: routerConfigFile,
     ...(input.jq ? { EVAL_JQ: input.jq } : {}),
   };
@@ -306,7 +323,7 @@ export function pmSandboxProfile(input: PmSandboxInput): string {
       `(allow file-read* file-write* ${subpaths(projectDirs)} ${projectDirs.map((p) => `(regex ${sbRegex("^" + sbRegexLiteral(p) + "-")})`).join(" ")})`,
     ] : []),
     ...((input.writableDirs ?? []).length ? [
-      `(deny file-write* ${subpaths((input.writableDirs ?? []).flatMap((d) => ["bin", "fake", "router.json", "router-settings", "pm-sandbox.sb", "claude-env.sh", "gitconfig"].map((p) => join(d, p))))})`,
+      `(deny file-write* ${subpaths((input.writableDirs ?? []).flatMap((d) => ["bin", "fake", "router.json", "router-settings", "pm-sandbox.sb", "claude-env.sh", "gitconfig", "stubs.json"].map((p) => join(d, p))))})`,
       `(deny file-read* ${subpaths((input.writableDirs ?? []).map((d) => join(d, "fake")))})`,
     ] : []),
     // 全局配置始终不可写，即使未来扩大了状态目录白名单：CLAUDE.md、settings*.json（含 settings.local.json、备份）、hooks。

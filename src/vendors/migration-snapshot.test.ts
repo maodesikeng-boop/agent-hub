@@ -6,8 +6,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { buildLaunchPrompt, buildWorkerPrompt } from "../daemon/prompt.ts";
+import { taskGraphSkillFile } from "../daemon/task-graph-skill.ts";
 import { projectContext, workerContext } from "../daemon/test-helpers.ts";
-import { VENDOR_FALLBACK_PATHS } from "../shared/paths.ts";
+import { VENDOR_FALLBACK_PATHS, sessionLaunchDir } from "../shared/paths.ts";
 import { HANDOVER_TOKEN_THRESHOLD } from "../shared/limits.ts";
 import { AGENT_VENDORS, VENDOR_FAILURE_SIGNS, agentLaunchArgs, type AgentVendor } from "../shared/vendors.ts";
 import { VENDOR_LIST } from "./registry.ts";
@@ -129,7 +130,10 @@ describe("迁移前快照：agentLaunchArgs", () => {
 describe("迁移前快照：提示词（每家 × 项目经理、Worker）", () => {
   it.each(AGENT_VENDORS)("%s 的项目经理", (vendor) => {
     const base = projectContext();
-    const prompt = buildLaunchPrompt({ ...base, pm: { ...base.pm, vendor } }, CWD);
+    // 带上这个会话启动目录里任务图手册的路径（launch.ts 给的）：六家都要在第 2 步“建图”那一条里有它（读文件兜底）
+    const skillFile = taskGraphSkillFile(sessionLaunchDir("/data/state/launch", base.sessionId));
+    const prompt = buildLaunchPrompt({ ...base, pm: { ...base.pm, vendor } }, CWD, { taskGraphSkillFile: skillFile });
+    expect(prompt).toContain(skillFile);
     expect(portable(prompt)).toMatchSnapshot();
   });
 

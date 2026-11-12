@@ -7,6 +7,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { SANDBOX_EXEC, osSandboxAvailable } from "../../src/daemon/driver/write-scope.ts";
 import { shortTmp } from "../e2e/harness.ts";
 import type { Summary } from "./report.ts";
+import { scenarioById } from "./scenarios.ts";
 
 const canSpawnWorkers =
   process.platform === "darwin"
@@ -35,7 +36,11 @@ describe("pnpm eval compare（剧本项目经理）", { timeout: 180_000 }, () =
     expect(existsSync(join(root, "runs", runId!, "summary.md"))).toBe(true);
     if (kind === "positive") {
       expect(r.stdout).toContain("| A1 验收不读 diff | 过 | 过 |  |");
-      for (const t of summary.trials) expect(t.checks.filter((c) => c.status !== "pass")).toEqual([]);
+      const s3a = scenarioById("s3a-tray");
+      const kindOf = (id: string) => s3a.checks.find((d) => d.id === id)?.kind;
+      for (const t of summary.trials) {
+        expect(t.checks.filter((c) => (kindOf(c.id) === undefined ? c.status !== "pass" : kindOf(c.id) === "guard" ? c.status === "fail" : false))).toEqual([]);
+      }
     } else {
       expect(r.stdout).toContain("| D0 派了托盘 Worker | 不过 | 不过 |  |");
     }

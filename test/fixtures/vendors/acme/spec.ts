@@ -44,5 +44,6 @@ export default defineVendor({
     backgroundWake: false,
     readonly: "os_sandbox",
     systemPrompt: "first_message",
+    skills: "read_file",
   },
 });

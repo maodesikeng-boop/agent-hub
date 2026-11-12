@@ -1,0 +1,181 @@
+{
+ "claude": [
+  {
+   "match": "--version",
+   "afterCall": {
+    "tool": "claude",
+    "match": "update"
+   },
+   "outputs": [
+    {
+     "stdout": "2.1.322 (Claude Code)\n"
+    }
+   ]
+  },
+  {
+   "match": "--version",
+   "outputs": [
+    {
+     "stdout": "2.1.314 (Claude Code)\n"
+    }
+   ]
+  },
+  {
+   "match": "update",
+   "outputs": [
+    {
+     "stdout": "claude: updated to 2.1.322 (Claude Code)\n"
+    }
+   ]
+  }
+ ],
+ "agy": [
+  {
+   "match": "--version",
+   "afterCall": {
+    "tool": "agy",
+    "match": "update"
+   },
+   "outputs": [
+    {
+     "stdout": "1.5.5\n"
+    }
+   ]
+  },
+  {
+   "match": "--version",
+   "outputs": [
+    {
+     "stdout": "1.5.5\n"
+    }
+   ]
+  },
+  {
+   "match": "update",
+   "outputs": [
+    {
+     "stdout": "agy: already up to date (1.5.5)\n"
+    }
+   ]
+  }
+ ],
+ "codex": [
+  {
+   "match": "--version",
+   "afterCall": {
+    "tool": "npm",
+    "match": "install"
+   },
+   "outputs": [
+    {
+     "stdout": "codex-cli 0.167.1\n"
+    }
+   ]
+  },
+  {
+   "match": "--version",
+   "outputs": [
+    {
+     "stdout": "",
+     "stderr": "command not found: codex\n",
+     "exitCode": 127
+    }
+   ]
+  }
+ ],
+ "pi": [
+  {
+   "match": "--version",
+   "afterCall": {
+    "tool": "npm",
+    "match": "install"
+   },
+   "outputs": [
+    {
+     "stdout": "1.5.2\n"
+    }
+   ]
+  },
+  {
+   "match": "--version",
+   "outputs": [
+    {
+     "stdout": "1.5.0\n"
+    }
+   ]
+  }
+ ],
+ "dsh": [
+  {
+   "match": "--version",
+   "afterCall": {
+    "tool": "npm",
+    "match": "install"
+   },
+   "outputs": [
+    {
+     "stdout": "0.2.2-rc.1\n"
+    }
+   ]
+  },
+  {
+   "match": "--version",
+   "outputs": [
+    {
+     "stdout": "",
+     "stderr": "command not found: dsh\n",
+     "exitCode": 127
+    }
+   ]
+  }
+ ],
+ "cursor-agent": [
+  {
+   "match": "--version",
+   "afterCall": {
+    "tool": "cursor-agent",
+    "match": "update"
+   },
+   "outputs": [
+    {
+     "stdout": "2026.11.10-731fb78\n"
+    }
+   ]
+  },
+  {
+   "match": "--version",
+   "outputs": [
+    {
+     "stdout": "2026.10.22-27dcf5f\n"
+    }
+   ]
+  },
+  {
+   "match": "update",
+   "outputs": [
+    {
+     "stdout": "cursor-agent: updated to 2026.11.10-731fb78\n"
+    }
+   ]
+  }
+ ],
+ "npm": [
+  {
+   "match": "view",
+   "outputs": [
+    {
+     "stdout": "@openai/codex@0.167.1\n@earendil-works/pi@1.5.2\n@deepseek-ai/dsh@0.2.2-rc.1\n"
+    }
+   ]
+  },
+  {
+   "match": "install",
+   "outputs": [
+    {
+     "stdout": "changed 1 package in 6s\n",
+     "stderr": "npm warn install scripts were skipped (npm 11 default)\n"
+    }
+   ]
+  }
+ ]
+}

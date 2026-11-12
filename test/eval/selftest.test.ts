@@ -1,6 +1,6 @@
 // 编排验证的自测（docs/orchestration-eval-design.md 4.5）：剧本项目经理走和真模型同一条试跑路径（起真守护进程、假 Worker 回放、
 // gh 替身、查账本），不花模型的钱，进 CI。
-// - 正例：全部检查必须过（不适用也不行）；
+// - 正例：全部检查必须过（不适用也不行）；只在前提成立时判的（kind: guard，如 L1）可以不适用、不能不过，只记录的（kind: record，如 L2）不看；
 // - 反例：对应的检查必须不过；
 // - 什么都不做：“要求有”的检查必须不过，其余不能是“过”。
 // 派 Worker 要系统沙箱，macOS 沙箱不能嵌套：在 Worker 里跑时，要派 Worker 的几条跳过（CI 的 Ubuntu 上全跑）。
@@ -46,11 +46,14 @@ async function selfTrial(scenario: Scenario, kind: SelfTestKind): Promise<TrialR
 
 const show = (r: TrialResult) => JSON.stringify({ envError: r.envError, checks: r.checks.map((c) => `${c.id}:${c.status} ${c.reason}`), workDir: r.workDir }, null, 2);
 
+const positiveNeedsWorkerSandbox = (id: Scenario["id"]) => id !== "k2-local-config" && id !== "k3-merge";
+
 describe.each(SCENARIOS)("编排验证自测 $id", { timeout: EVAL_SCRIPTED_TRIAL_TIMEOUT_MS + 30_000 }, (scenario) => {
-  it.skipIf(!canSpawnWorkers)("正例：全部检查都过", async () => {
+  it.skipIf(!canSpawnWorkers && positiveNeedsWorkerSandbox(scenario.id))("正例：全部检查都过", async () => {
     const r = await selfTrial(scenario, "positive");
     expect(r.envError, show(r)).toBeNull();
-    expect(r.checks.filter((c) => c.status !== "pass"), show(r)).toEqual([]);
+    const kindOf = (id: string) => scenario.checks.find((d) => d.id === id)?.kind;
+    expect(r.checks.filter((c) => (kindOf(c.id) === undefined ? c.status !== "pass" : kindOf(c.id) === "guard" ? c.status === "fail" : false)), show(r)).toEqual([]);
     expect(r.workDir, "全过的试跑现场要删掉").toBeNull();
   });
 

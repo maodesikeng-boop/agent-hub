@@ -11,6 +11,9 @@ export const PRODUCT_ID = "agent-hub";
 /** 产品显示名：给人看的界面标题、PWA 名字、登录页等用。 */
 export const PRODUCT_NAME = "Fusa";
 
+/** 给项目经理会话挂产品技能的 claude 插件名（--plugin-dir，技能显示成 `<插件名>:<技能名>`；shared/task-graph-skill.ts）。 */
+export const PRODUCT_PLUGIN_NAME = "fusa";
+
 /** 日志、报错开头的“agent-hub:”。 */
 export const LOG_PREFIX = `${PRODUCT_ID}:`;
 

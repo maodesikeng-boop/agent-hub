@@ -28,6 +28,8 @@ describe("回放包", () => {
     const emails = text.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) ?? [];
     expect(emails.filter((e) => !e.endsWith("@users.noreply.github.com"))).toEqual([]);
     expect(text).not.toMatch(/\b(gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9-]{20,}|github_pat_[A-Za-z0-9_]{20,})/);
+    // K1/K2 公开仓库脱敏：不含本机私有订阅桥接示例
+    expect(text).not.toMatch(/\b(magpie|usemagpie)\b/i);
   });
 
   it("截图里没有本机路径", () => {

@@ -95,6 +95,7 @@ node $E/cursor-first-message.ts /tmp/p/launch/9444 /tmp/p/cur-cwd
 
 ## 6. 生命周期与权限审查
 
-规则和补丁与同目录的 prompt.md 一起保留：重启原地更新，Worker 保留期清理和 PM 删除清理整个会话启动目录；Router 每轮清理启动目录。会话 ID 隔离，后台交接只读主会话规则，不重写它。
+规则和补丁与同目录的 prompt.md 一起保留：重启原地更新，Worker 保留期清理和 PM 删除清理整个会话启动目录（目录名是会话编号，写的和删的都用 `src/shared/paths.ts` 的 `sessionLaunchDir`；以前删的是 `session-<编号>`，和写的对不上，从来没删掉过）；Router 每轮清理启动目录。
+项目经理会话的启动目录里还有产品自带的任务图手册 `skills/fusa-task-graph/SKILL.md`（只有这一份文件；claude 的 `claude-plugin/skills` 软链到它，agy 规则目录里的 `.agents/skills/fusa-task-graph/SKILL.md` 是它的硬链接），见 `docs/orchestration-skill-design.md` 第 6 节；Worker、Router 的启动目录里没有。会话 ID 隔离，后台交接只读主会话规则，不重写它。
 性格设定在进程内变更走现有 personaNote，下一次起进程重新生成规则。每会话最多三个规则文件和一个补丁，没有跨会话内存缓存。
 规则目录权限为 0700，文件 0600。普通 Worker 的 writeScope 不因 `--add-dir` 扩大，只读策略也不增加可写路径；项目经理无 OS 写范围限制，同一用户身份仍能修改这些文件，目录权限不能阻止它。

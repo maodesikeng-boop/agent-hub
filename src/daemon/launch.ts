@@ -10,14 +10,15 @@
 import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { ENV_HUB_SOCK, ENV_HUB_TOKEN, WORKER_BACKGROUND_HOLD_MAX_MS, buildReadonlyPolicy, isAgentVendor, vendorSpec, workerWriteScope } from "../shared/index.ts";
+import { ENV_HUB_SOCK, ENV_HUB_TOKEN, WORKER_BACKGROUND_HOLD_MAX_MS, buildReadonlyPolicy, isAgentVendor, taskGraphSkillCatalogEntry, vendorSpec, workerWriteScope } from "../shared/index.ts";
 import type { AgentSessionRow, LaunchContext, LaunchFiles, PersonaNote, PersonaUpdate, SessionId, SessionRole, SessionTokens, VendorAvailabilityMap } from "../shared/index.ts";
 import { VENDOR_DAEMONS } from "../vendors/daemon-registry.ts";
 import { launchFingerprint } from "../shared/launch.ts";
 import { osSandboxAvailable } from "./driver/write-scope.ts";
 import { truncatePmMemoryForPrompt } from "./pm-memory.ts";
-import { projectWorktreesDir } from "../shared/paths.ts";
+import { projectWorktreesDir, sessionLaunchDir } from "../shared/paths.ts";
 import { buildFingerprintPrompt, buildLaunchPrompt, personaUpdateNote } from "./prompt.ts";
+import { removeProductSkills, taskGraphSkillFile, writeProductSkills } from "./task-graph-skill.ts";
 import { prepareRouterSandboxLaunch } from "./router/sandbox.ts";
 
 export interface LaunchPreparerOptions {
@@ -95,7 +96,10 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
     };
     const role = sessionRole(ctx);
     if (ctx.project !== null) mkdirSync(projectWorktreesDir(worktreesDir, ctx.project.id), { recursive: true });
-    const prompt = buildLaunchPrompt(ctx, session.cwd);
+    const dir = sessionLaunchDir(launchDir, session.id);
+    // 任务图手册只给项目经理（docs/orchestration-skill-design.md 第 6.4 节）：提示词里写它在这次会话启动目录里的路径
+    const promptOptions = role === "pm" ? { taskGraphSkillFile: taskGraphSkillFile(dir) } : {};
+    const prompt = buildLaunchPrompt(ctx, session.cwd, promptOptions);
     const readonly = role === "worker" && ctx.worker !== null && ctx.worker.readonly;
     // 只读不再让 agy、codex 去反读 claude 设置文件里的权限档：统一定义放 LaunchFiles.readonly（shared/readonly-policy.ts）
     const readonlyPolicy = readonly ? buildReadonlyPolicy({ homeDir, stateDir }) : undefined;
@@ -113,7 +117,6 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
         })
       : undefined;
     const settings = vendorFiles?.settings;
-    const dir = join(launchDir, String(session.id));
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const promptFile = join(dir, "prompt.md");
     writeFileSync(promptFile, prompt, { mode: 0o600 });
@@ -122,10 +125,14 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
       settingsFile = join(dir, "settings.json");
       writeFileSync(settingsFile, settings, { mode: 0o600 });
     }
+    let skillsDir: string | undefined;
+    if (role === "pm") skillsDir = writeProductSkills(dir);
+    else removeProductSkills(dir);
     const writeScope = nativeReadonly ? null : workerWriteScope({ role, dataDir, cwd: session.cwd });
     return {
       promptFile,
       ...(settingsFile === undefined ? {} : { settingsFile }),
+      ...(skillsDir === undefined ? {} : { skillsDir }),
       env: {
         [ENV_HUB_TOKEN]: tokens.issue(session.id),
         [ENV_HUB_SOCK]: hubSock,
@@ -133,7 +140,12 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
         ...vendorFiles?.env,
       },
       // 性格设定、模式不进指纹：变了不重启，驱动层按 personaRevision 在下一条消息前加说明（createPersonaNoter）
-      fingerprint: launchFingerprint({ prompt: buildFingerprintPrompt(ctx, session.cwd), settings: settings ?? "", readonly: readonlyPolicy }),
+      fingerprint: launchFingerprint({
+        prompt: buildFingerprintPrompt(ctx, session.cwd, promptOptions),
+        settings: settings ?? "",
+        readonly: readonlyPolicy,
+        ...(skillsDir === undefined ? {} : { skills: taskGraphSkillCatalogEntry() }),
+      }),
       personaRevision: role === "pm" ? ctx.pm.personaRevision : undefined,
       ...(writeScope === null ? {} : { writeScope }),
       ...(readonlyPolicy === undefined ? {} : { readonly: readonlyPolicy }),
@@ -145,10 +157,11 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
 
 /**
  * 给驱动层的 personaNote（DriverOptions.personaNote）：问账本 sinceRevision 之后性格设定、模式改了什么，拼成说明（prompt.ts 的 personaUpdateNote）。
- * 不是项目经理的会话、版本号没变返回 null。
+ * 不是项目经理的会话、版本号没变返回 null。launchDir 给了，模式那一节里的任务图手册路径写成这个会话启动目录里的（同 createLaunchPreparer）。
  */
 export function createPersonaNoter(
   personaUpdate: (sessionId: SessionId, sinceRevision: number) => PersonaUpdate | null,
+  launchDir?: string,
 ): (sessionId: SessionId, sinceRevision: number) => PersonaNote | null {
   return (sessionId, sinceRevision) => {
     const update = personaUpdate(sessionId, sinceRevision);
@@ -163,6 +176,7 @@ export function createPersonaNoter(
               text: truncatePmMemoryForPrompt(update.persona.text).text,
             },
           };
-    return { revision: update.revision, note: personaUpdateNote(truncatedUpdate) };
+    const skillFile = launchDir === undefined ? undefined : taskGraphSkillFile(sessionLaunchDir(launchDir, sessionId));
+    return { revision: update.revision, note: personaUpdateNote(truncatedUpdate, skillFile) };
   };
 }

@@ -1,0 +1,48 @@
+{
+ "pi-bridge": [
+  {
+   "match": "filter",
+   "outputs": [
+    {
+     "stdout": "✓ saved filter rule: pi -> group:coder (14 models)\n  openrouter/qwen3-coder\n  openrouter/qwen3-coder-flash\n  openrouter/deepseek-v3.2\n  openrouter/deepseek-r1\n  openrouter/codestral-2508\n  openrouter/devstral-medium +8\n  ! 110 hidden from pi (non-coder groups)\n  note: ~/.pi/agent/models.json still holds cached list until next 'pi-bridge sync pi' or 'pi-bridge connect pi ...'\n  http://127.0.0.1:18080/v1\n"
+    }
+   ]
+  },
+  {
+   "match": "sync",
+   "outputs": [
+    {
+     "stdout": "✓ wrote 14 filtered models to ~/.pi/agent/models.json\n"
+    }
+   ]
+  },
+  {
+   "match": "connect pi openrouter/",
+   "outputs": [
+    {
+     "stdout": "✓ Pi model pi-bridge/openrouter/qwen3-coder (rewrote ~/.pi/agent/models.json: 14 models)\n"
+    }
+   ]
+  },
+  {
+   "match": "connect pi anthropic/claude-opus-5-5",
+   "afterCall": {
+    "tool": "pi-bridge",
+    "match": "connect pi openrouter/"
+   },
+   "outputs": [
+    {
+     "stdout": "✓ Pi model anthropic/claude-opus-5-5 (kept pi-bridge provider: 14 models)\n"
+    }
+   ]
+  },
+  {
+   "match": "connect pi anthropic/claude-opus-5-5",
+   "outputs": [
+    {
+     "stdout": "✓ Pi model anthropic/claude-opus-5-5 (unchanged)\n"
+    }
+   ]
+  }
+ ]
+}

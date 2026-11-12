@@ -15,7 +15,7 @@
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ConversationSnapshot, LedgerSnapshot } from "../../shared/api.ts";
-import type { ConversationId, MessageKind, Pm, PmId, WorkerId } from "../../shared/domain.ts";
+import type { ConversationId, MessageKind, Pm, PmId, SessionId, WorkerId } from "../../shared/domain.ts";
 import type { CreatePmInput, CreatePmResult, Ledger, ResolveFolder } from "../../shared/ledger.ts";
 import { MESSAGE_PAGE_SIZE, WORKER_PURGE_BATCH_ROWS } from "../../shared/limits.ts";
 import { snapshotWindowStart, workerLineSummaries } from "../../shared/snapshot.ts";
@@ -41,6 +41,7 @@ import { createLedgerSentFiles } from "./sent-files.ts";
 import { createLedgerSessions } from "./sessions.ts";
 import { createLedgerSteps } from "./steps.ts";
 import { createLedgerTaskGraphs } from "./task-graphs.ts";
+import { taskGraphManualNote } from "../task-graph-skill.ts";
 import { createLedgerWorkerRetention } from "./worker-retention.ts";
 import type { WorkerPurgeBatch } from "./worker-retention.ts";
 import { createLedgerWorkerView } from "./worker-view.ts";
@@ -99,7 +100,7 @@ export interface LedgerOptions {
    * 默认 <dataHome>/worktrees（同 HubPaths 的布局），守护进程（W5）显式传。
    */
   worktreesDir?: string;
-  /** state/launch/（HubPaths.launchDir）：清理到期归档 PM 时删除 session-<sessionId> 目录。 */
+  /** state/launch/（HubPaths.launchDir）：清理到期归档 PM、到期 Worker 与退役旧会话时删除启动目录。 */
   launchDir?: string;
   /** state/logs/setup/（HubPaths.setupLogsDir）：清理到期归档 PM 时删除 worker-<workerId>.log。 */
   setupLogsDir?: string;
@@ -142,6 +143,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     resolveFolder: options.resolveFolder ?? createResolveFolder({ dataHome, userHome }),
     writeFile: options.writeFileAtomic ?? defaultWriteFileAtomic,
   };
+  const taskGraphManual = (sessionId: SessionId) => taskGraphManualNote(files.launchDir, sessionId);
   const sessions = createLedgerSessions(ctx);
   const { sessionState } = sessions;
   const sentFiles = createLedgerSentFiles(db, {
@@ -183,7 +185,11 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     autoRenew: options.autoRenew,
     log: options.log,
     onHandoverClaimable: options.onHandoverClaimable,
-    liveActiveGraphsSection: (pmId) => taskGraphs.liveHandoverSection(pmId),
+    // 未完结的图后面带一行手册路径（新会话的启动目录里的），换了会话手里有图却没有手册时靠它找回来
+    liveActiveGraphsSection: (pmId, sessionId) => {
+      const section = taskGraphs.liveHandoverSection(pmId);
+      return section === null ? null : `${section}\n\n${taskGraphManual(sessionId)}`;
+    },
   });
   const schedules = createLedgerSchedules(ctx, sessions, messages, persona);
   const steps = createLedgerSteps(ctx);
@@ -196,7 +202,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     turnMaxTimeOf: workers.turnMaxTimeOf,
     isWorktreeCleaned: workers.isWorktreeCleaned,
   });
-  const hub = createLedgerHubCommands(ctx, persona, projects, workers, messages, schedules, workerView, router, taskGraphs);
+  const hub = createLedgerHubCommands(ctx, persona, projects, workers, messages, schedules, workerView, router, taskGraphs, taskGraphManual);
   const launch = createLedgerLaunchContext(db, persona, projects, workers);
 
   /** 建项目经理；给了主文件夹就在同一个事务里给它建项目（同 hub project create）。 */

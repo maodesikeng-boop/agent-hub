@@ -1,5 +1,6 @@
 // Pi RPC 常驻协议纯函数与辅助解析（docs/vendors/pi.md 第 4 节）：
 // - 启动参数组装：`--mode rpc --session-id <id>`、`--append-system-prompt <promptFile>`、`--no-approve` 加显式 `--skill <dir>/.agents/skills`、
+//   项目经理会话的产品技能 `--skill <launch>/skills`（LaunchFiles.skillsDir）、
 //   只读 Worker 附加 `--exclude-tools edit,write --no-mcp`、模型与思考档位 `agentLaunchArgs`；
 // - RPC 请求行构造：`get_state`、`prompt`（含中途插话 `streamingBehavior: "steer"`）、`clear_queue`、`abort`、`compact`、`get_commands`、`get_session_stats`、
 //   阻塞扩展弹窗取消回应 `extension_ui_response`；
@@ -29,7 +30,7 @@ export function isValidPiSessionId(id: string): boolean {
 
 export interface BuildPiArgsInput {
   row: Pick<AgentSessionRow, "cwd" | "addDirs" | "model" | "effort">;
-  files: Pick<LaunchFiles, "promptFile" | "readonly">;
+  files: Pick<LaunchFiles, "promptFile" | "readonly" | "skillsDir">;
   sessionId: string;
   /** 若会话文件位于别的编码子目录，恢复时可直接传 `--session <path>`；默认传 `--session-id <sessionId>`。 */
   sessionFile?: string | null;
@@ -48,6 +49,8 @@ export function buildPiArgs(input: BuildPiArgsInput): string[] {
     args.push("--append-system-prompt", files.promptFile);
   }
   args.push(...PI_NO_PROJECT_TRUST_ARGS, ...buildPiSkillArgs(row.cwd, row.addDirs));
+  // 产品技能（只有项目经理会话有）：--skill 只对这次进程生效（get_commands 里 scope: "temporary"，2026-11-12 pi 1.5.2 实测）
+  if (files.skillsDir) args.push("--skill", files.skillsDir);
   args.push(...agentLaunchArgs({ vendor: "pi", model: row.model, effort: row.effort }));
   if (files.readonly !== undefined) {
     args.push(...PI_READONLY_CLI_ARGS);

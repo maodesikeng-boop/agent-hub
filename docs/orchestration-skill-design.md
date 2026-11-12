@@ -1,6 +1,6 @@
 # 按需拆分与任务图技能方案
 
-状态：方案，等用户拍板。本文只是文档，没有改任何代码。行号对应 main `a26be7e`。真实记录取自本机账本 `~/.agent-hub/state/hub.sqlite`（只读打开），“消息 #编号”“Worker #编号”“任务图 #编号”都能在账本里查到原文。厂商能力在本机实测（2026-11-12）：claude 2.1.322、codex-cli 0.167.1、agy 1.5.6、pi 1.5.2、dsh 0.2.2-rc.1、cursor-agent 2026.11.10-731fb78。
+状态：第一阶段（三档判断，PR 298）、第二阶段（技能、六家挂载、K1～K5 验证）都已落地，落地时和方案不一样的地方、附 B 的实测结果见第 12 节。下面各节的行号对应写方案时的 main `a26be7e`。真实记录取自本机账本 `~/.agent-hub/state/hub.sqlite`（只读打开），“消息 #编号”“Worker #编号”“任务图 #编号”都能在账本里查到原文。厂商能力在本机实测（2026-11-12）：claude 2.1.322、codex-cli 0.167.1、agy 1.5.6、pi 1.5.2、dsh 0.2.2-rc.1、cursor-agent 2026.11.10-731fb78。
 
 用户的要求（11-12 10:44，消息 #50677）：
 
@@ -55,14 +55,14 @@ flowchart TD
 
 ### 2.1 装软件被建成 5 个节点
 
-项目经理“magpie”（claude，“只管理”模式，性格设定是空的，所以行为完全来自产品提示词）。11-12 10:32:56 用户说“接一下试试”（消息 #50482，意思是装 magpie、把 Antigravity 的模型接到 Pi）。它的第一句话是“先建个任务图，再看 README 里怎么安装”（#50483）。
+某外部工具项目的项目经理（claude，“只管理”模式，性格设定是空的，所以行为完全来自产品提示词）。11-12 10:32:56 用户说“接一下试试”（消息 #50482，意思是装本地模型路由 CLI 工具并把公开模型目录接到 Pi；公开仓库中统一以示例工具 `pi-bridge` 代称）。它的第一句话是“先建个任务图，再看 README 里怎么安装”（#50483）。
 
 任务图 #7 最后的样子：
 
 | 节点 | 类型 | 做了什么 |
 |---|---|---|
 | `approve` | 门禁 | 让用户批准运行外部安装脚本 |
-| `setup` | 活 | Worker #465：装 magpie 和插件，发起 Google 登录 |
+| `setup` | 活 | Worker #465：装 CLI 工具和插件，发起浏览器授权登录 |
 | `login` | 门禁 | 等用户登录 |
 | `login2` | 门禁 | 用户说链接过期，补的第二道 |
 | `connect` | 活 | Worker #466：把 Pi 接上，冒烟测试 |
@@ -81,7 +81,7 @@ flowchart TD
 
 | 案例 | 账本 | 怎么做的 | 花了什么 |
 |---|---|---|---|
-| 改本机配置 | 同一个 PM、同一个会话，消息 #50729“A. 只给 Pi 显示 Antigravity 的模型…再刷新 hub 的模型列表” | 自己跑 `magpie visible pi antigravity`，发现没生效，查了两处源码，再刷新模型列表 | 53 秒，7 次工具调用，没有图，没有 Worker |
+| 改本机配置 | 同一个 PM、同一个会话，消息 #50729“A. 只给 Pi 显示指定分组的模型…再刷新 hub 的模型列表” | 自己跑过滤命令（如 `pi-bridge filter pi coder`），发现列表缓存没同步，顺手触发同步后再刷新模型列表 | 53 秒，7 次工具调用，没有图，没有 Worker |
 | 合 PR | 本项目 PM，11-10 17:33:14，消息 #34762“可以合吧” | 自己查了 PR 238 的检查结果，然后 `gh pr merge` | 11 秒后合并命令已经发出 |
 | 升级本机 6 家命令行 | 本项目 PM，11-11 09:46，消息 #40114“更新一下本机的这些agent” | 派了一个不建图、不开 worktree 的 Worker #388 | 9 分钟，43 次工具调用，没有图 |
 | 修 bug | 本项目 PM，11-12 09:59，消息 #50200（果皮轨连线画错） | 派了一个不建图的 Worker #463，提了 PR 295 | 48 分钟，105 次工具调用，没有图 |
@@ -311,7 +311,7 @@ frontmatter 里的 `name` 按目标填：claude 插件里是 `task-graph`，加�
 | codex | 能。先看名字、说明和路径，决定用时再读 `SKILL.md` | app-server 的 `skills/extraRoots/set` | 本机实测通过；接口在官方文档里没写 | 读文件 |
 | agy | 能。每轮看到技能清单，相关就读正文 | 放进已有的 `--add-dir <启动目录>/agy-rules` 里的 `.agents/skills/` | 本机实测通过 | 读文件 |
 | pi | 能。名字、说明、路径进系统提示词，模型自己读文件 | `--skill <目录>` | 本机实测通过 | 读文件 |
-| deepseek | 能。会话开头给一份技能目录，模型调 `skill` 工具加载 | `--patch` 里设 `customSkillDirs` | 按包内文档可行，**未实测** | 读文件 |
+| deepseek | 能。会话开头给一份技能目录，模型调 `skill` 工具加载 | `--patch` 里设 `customSkillDirs` | 本机实测通过（第 12.2 节） | 读文件 |
 | cursor | 能，但只认项目目录和用户目录里的技能 | **没有**。ACP 下 `--plugin-dir`、`--add-dir` 里的技能都读不到 | 本机实测没有 | 只有读文件 |
 
 “读文件”兜底六家都一样：基础提示词里写着正文的绝对路径，模型用读文件工具或 `cat` 读它。这和 Fusa 记忆的做法是同一个思路：`MEMORY.md` 这份薄索引常驻在提示词里，专题子文件用到时再读（`src/daemon/pm-memory.ts:40-41`）。
@@ -429,9 +429,9 @@ flowchart LR
 
 | | |
 |---|---|
-| 来源 | 11-12 10:32～10:43，项目经理“magpie”的对话（`conversation_id=476`），消息 #50482；任务图 #7；Worker 465、466 |
-| 需求原文 | 接一下试试<br>（前情：PM 10:25 的回复原文 #50433“可以接…操作步骤”，和 10:32 的回复原文 #50477“很新，基本是两天内才出来的东西…”） |
-| 注入事件 | ① PM 挂卡问能不能跑外部安装脚本 → 用户点真实定案“批准，按计划装”。② PM 派了 Worker → 交回 465 的真实汇报（装好了，登录链接已生成，等用户授权）；PM 把链接交给用户后 → 用户答真实原话“已登录成功；网关临时用 magpie serve 跑”；之后交回 466 的真实汇报，停。③ PM 自己动手 → `curl`、`magpie`、`pi` 都是替身，回放 465、466 当时的真实输出，不真装；到 PM 向用户汇报时停 |
+| 来源 | 11-12 10:32～10:43，装 CLI 工具并接入 Pi 的真实对话（`conversation_id=476`），消息 #50482；任务图 #7；Worker 465、466（回放素材已脱敏为开源示例 `pi-bridge`） |
+| 需求原文 | 接一下试试<br>（前情：PM 说明安装与接入步骤的两段回复原文） |
+| 注入事件 | ① PM 挂卡问能不能跑外部安装脚本 → 用户点定案“批准，按计划装”。② PM 派了 Worker → 交回第一阶段汇报（装好了，授权链接已生成，等用户确认）；PM 把链接交给用户后 → 用户答“已登录成功；服务临时用 pi-bridge serve 跑”；之后交回第二阶段汇报，停。③ PM 自己动手 → `curl`、`pi-bridge`、`pi` 都是替身，按表回放输出，不真装；到 PM 向用户汇报时停 |
 | 期望行为 | 不建图。最多 1 个 Worker（一个 Worker 从安装做到冒烟测试，或者 PM 自己做，两种都算对）。没有门禁节点。要用户批准或登录时用提问卡或直接说，不建节点 |
 | 判定方法 | T1、T2（上限 1）、L2；问不问批准不判，问了就查 R9、R10 |
 | 对应原话 | [11-12 10:44] “比如一个安装软件，就不需要拆的很复杂” |
@@ -442,11 +442,11 @@ flowchart LR
 
 | | |
 |---|---|
-| 来源 | 11-12 10:48，同一个对话，消息 #50729；PM 自己做完，没有图，没有 Worker |
-| 需求原文 | A. 只给 Pi 显示 Antigravity 的模型（magpie visible pi antigravity），再刷新 hub 的模型列表<br>（前情：PM 10:47 的拍板卡原文 #50715 和回复原文 #50716） |
-| 注入事件 | `magpie`、`pi` 是替身，回放消息 #50731～#50747 里的真实输出：第一次 `magpie visible` 之后模型文件没有重写，要再同步一次才生效 |
-| 期望行为 | 不建图，不派 Worker，PM 自己跑命令；第一次没生效时自己查原因，不因此改派。最后告诉用户做了什么 |
-| 判定方法 | T1、T2（上限 0，见下）、L2；替身的调用记录里有 `magpie visible pi antigravity` 和 `hub models --vendor pi --refresh` |
+| 来源 | 11-12 10:48，同一个对话，消息 #50729；PM 自己做完，没有图，没有 Worker（回放素材已脱敏为 `pi-bridge`） |
+| 需求原文 | A. 只给 Pi 显示 coder 分组的模型（pi-bridge filter pi coder），再刷新 hub 的模型列表<br>（前情：PM 的诊断与确认卡回复） |
+| 注入事件 | `pi-bridge` 是替身，回放输出：第一次 `pi-bridge filter` 之后 `models.json` 需再 `sync` 或重连一次才重写生效 |
+| 期望行为 | 不建图，不派 Worker，PM 自己跑命令；第一次没重写模型文件时顺手同步，不因此改派。最后告诉用户做了什么 |
+| 判定方法 | T1、T2（上限 0，见下）、L2；替身的调用记录里有 `pi-bridge filter pi coder` 和 `hub models --vendor pi --refresh` |
 | 对应原话 | [11-12 10:44] “变量很少…步骤大概率会成功，不用创造新的上下文” |
 
 T2 的上限取决于第 11.1 节怎么定：选 A 是 0；选 B 时“只管理”模式是 1。
@@ -673,3 +673,29 @@ cursor-agent --trust --approve-mcps --add-dir "$P/agy-add" acp
 ```
 
 提示词字数：一个小脚本 `import` 现在的 `src/daemon/prompt.ts`，调 `buildLaunchPrompt`（claude、`manage_only`、空性格设定），按一级标题和二级标题切开数字符数和 UTF-8 字节数；改后的稿子存成文本用同一段代码数。
+
+## 12. 落地记录（第二阶段，2026-11-12）
+
+### 12.1 和方案不一样的地方
+
+| 方案 | 落地 | 为什么 |
+|---|---|---|
+| claude 里叫 `fusa:task-graph`，其余叫 `fusa-task-graph`，三种目录形状各放一份 | 只有一份文件 `launch/<会话>/skills/fusa-task-graph/SKILL.md`，名字六家都是 `fusa-task-graph`；claude 显示成 `fusa:fusa-task-graph` | 用户定“唯一一份”。claude 插件目录 `claude-plugin/skills` 是指向 `../skills` 的软链（claude 跟软链）；agy 规则目录里放的是硬链接（agy 不跟软链，见 12.2），同一个 inode |
+| codex、deepseek 实测通过后再接原生入口 | 两家都接了 | 用户定“实测通的全接”；codex 握手后发 `skills/extraRoots/set`，老版本报错就照常建线程、只记一行日志 |
+| 正文和 `hub help graph` 共用一个函数，`hub help` 里“任务图”那一组也换成它 | `hub help graph` 打印正文；`hub help` 原来那组用法不动 | 那组用法写错命令时也会打印，命令行要的是参数表，不是手册 |
+| 第 4 步留“计划变了”一条 | 删了，“原本没建图、做着发现要分段的随时补建一张图”挪进手册 | 第 2 步已经有“做着发现比想的复杂再升档” |
+| 启动目录清理“跟 prompt.md 一样” | 顺手修了清理一直没生效的问题 | 写的是 `launch/<编号>/`，PM 删除和 Worker 保留期清理删的是 `launch/session-<编号>/`，名字对不上，本机已经积了 567 个启动目录。现在写、删都用 `sessionLaunchDir` |
+| K1、K2 的 `curl`、`pi-bridge`、`pi` 是替身，按表回放输出 | 加了“命令替身”：场景声明一张回放表（`test/eval/replay/*/stubs.json`），PATH 最前面放同名外壳，只记录、按表回放 | K1/K2 公开仓库回放素材已脱敏为开源示例 CLI `pi-bridge`，并通过 `afterCall` 保留“先过滤再同步生效”的真实交互结构。K4 的 Worker #388 是 agy 跑的，原始记录在 agy 的 sqlite 里没有逐条输出，版本号取自它的真实汇报，升级命令的回显是按汇报重建的 |
+
+### 12.2 附 B 探针实测（本机，2026-11-12；claude 2.1.322、codex-cli 0.167.1、agy 1.5.6、pi 1.5.2、dsh 0.2.2-rc.1、cursor-agent 2026.11.10-731fb78）
+
+探针技能放在临时目录，形状和落地的一样：`$P/skills/fusa-task-graph/SKILL.md`。
+
+| 厂商 | 怎么测 | 结果 |
+|---|---|---|
+| claude | `--plugin-dir $P/claude-plugin`（`.claude-plugin/plugin.json` 名字 `fusa`，`skills` 软链到 `../skills`），只发 `initialize` | 通过：命令里有 `fusa:fusa-task-graph`，说明是 `(fusa) …` |
+| codex | `codex app-server`：`initialize`、`initialized`、`skills/extraRoots/set {extraRoots:[$P/skills]}`、`skills/list` | 通过：`skills/extraRoots/set` 回 `{}`；之后的 `skills/list` 里有 `fusa-task-graph`，`scope: "user"`、`enabled: true`，路径是探针目录 |
+| agy | `agy -p "/skills" --output-format json --add-dir <目录>` | 软链（目录或文件）**不认**：11 项，没有探针；普通文件、硬链接都认：12 项，`fusa-task-graph` 在清单里。所以落地用硬链接 |
+| pi | `pi --mode rpc --no-session --offline --no-mcp --no-approve --skill $P/skills`，发 `get_commands` | 通过：`skill:fusa-task-graph`，`scope: "temporary"` |
+| deepseek | `dsh --profile acp --patch <补丁>`，补丁 `[{"id":"skill-filesystem","config":{"customSkillDirs":["$P/skills"]}}]`（会话记录另指到临时目录、模型指到不存在的名字：第一次请求在调模型前就失败，不花额度），`session/new` 后发一条 `session/prompt`，再解开会话记录看第一次请求前写进去的技能目录 | **通过**：带补丁的会话记录里技能目录有 `{"name":"fusa-task-graph","description":…}`；不带补丁的对照没有。acp profile 里 `skill-filesystem` 那一行本来没有 config，整行替换不丢默认值。ACP 下 10 秒内没有 `available_commands_update`，所以要看会话记录 |
+| cursor | ACP `initialize`、`session/new` 后等 14 秒收 `available_commands_update`：不带参数、`--plugin-dir`、`--add-dir` 各一次 | 三次都是 62 项，探针都不在：没有会话级入口，只能按路径读文件 |

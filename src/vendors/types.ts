@@ -99,6 +99,15 @@ interface VendorCapabilities {
    *   （ACP 的 compaction_update，即 context.compacted）后，在下一条消息最前面再拼一次完整提示词。
    */
   systemPrompt: "resident" | "first_message";
+  /**
+   * 产品自带技能（任务图手册 fusa-task-graph，只给项目经理；docs/orchestration-skill-design.md 第 6 节）交给 agent 的入口。
+   * 守护进程把它写成启动目录里的 skills/fusa-task-graph/SKILL.md（LaunchFiles.skillsDir），各家：
+   * - "native"：这家有只对这次会话生效的原生技能入口，驱动层把 skillsDir 翻译成自己的参数（claude --plugin-dir、codex
+   *   skills/extraRoots/set、agy 已有的规则目录、pi --skill、deepseek --patch customSkillDirs）；提示词写“先加载 <名字> 技能，清单里没有就读 <路径>”；
+   * - "read_file"：没有（cursor：ACP 下 --plugin-dir、--add-dir 里的技能都读不到，2026-11-12 实测），提示词只写“先读 <路径>”。
+   * 两种都不写用户的技能目录和仓库。
+   */
+  skills: "native" | "read_file";
   /** 未选模型时把名单里的默认模型（ModelCatalog.defaultModelId）显式传给驱动。不写 = false。 */
   explicitDefaultModel?: boolean;
   /**
@@ -155,6 +164,8 @@ export interface VendorSpec<Id extends string = string> {
     instructionFile?: string;
     /** 换厂商写交接时举例“别写只有这家才有的工具用法”（daemon/ledger/handover.ts）。不写就不举例。 */
     vendorOnlyTools?: string;
+    /** 原生技能入口里产品技能名前面带的前缀（capabilities.skills 为 "native" 时用；claude 插件技能显示成 `<插件名>:<技能名>`）。不写 = 不带。 */
+    skillNamePrefix?: string;
   };
   failure: {
     /** 出错的话里称呼这家的服务：“Claude 服务繁忙”。 */

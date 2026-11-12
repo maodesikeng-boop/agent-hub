@@ -51,6 +51,7 @@ import {
   DEEPSEEK_SANDBOX_PATCH_ENTRIES,
   DEEPSEEK_WRITE_TOOL_NAMES,
   buildDeepSeekPatchSettings,
+  buildDeepSeekSkillsPatch,
   buildDeepSeekSystemPromptPatch,
   classifyDeepSeekTurnError,
   createDeepSeekDriver,
@@ -134,6 +135,8 @@ function makeDeepSeekHarness(options: {
   systemPrompt?: string;
   osSandboxed?: boolean;
   driverOptions?: Partial<AcpDriverOptions>;
+  /** 项目经理会话带产品技能目录（LaunchFiles.skillsDir = 启动目录/skills）。 */
+  skills?: boolean;
 } = {}): DeepSeekHarness {
   const rawDir = mkdtempSync(join(tmpdir(), "agent-hub-deepseek-test-"));
   const dir = realpathSync(rawDir);
@@ -209,6 +212,7 @@ function makeDeepSeekHarness(options: {
           FAKE_ACP_STATE: stateDir,
         },
         ...(readonlyPolicy ? { readonly: readonlyPolicy } : {}),
+        ...(options.skills && row.role === "pm" ? { skillsDir: join(sDir, "skills") } : {}),
       };
     },
     ...options.driverOptions,
@@ -347,6 +351,8 @@ describe("deepseek 声明（spec.ts）与路径/凭据边界（paths.ts）", () 
       readonly: "os_sandbox",
       // 提示词走 --patch 的 system-prompt.personaSuffix（system 消息，压缩不裁）
       systemPrompt: "resident",
+      // 任务图手册：--patch 给 skill-filesystem 设 customSkillDirs（buildDeepSeekSkillsPatch）
+      skills: "native",
     });
     expect(deepseekSpec.models.flags).toBeUndefined();
     expect(agentLaunchArgs({ vendor: "deepseek", model: "deepseek-v4-pro", effort: "max" })).toEqual([]);
@@ -456,6 +462,33 @@ describe("deepseek 声明（spec.ts）与路径/凭据边界（paths.ts）", () 
 });
 
 describe("deepseek 驱动（driver.ts + daemon.ts）：--patch 启动配置、续接、模型档位、只读沙箱与错误分类", () => {
+  it("项目经理会话的产品技能：多一个 --patch 给 skill-filesystem 设 customSkillDirs（只这一个目录，不关默认的项目、用户技能根）；没有 skillsDir 不带、旧补丁删掉", async () => {
+    const h = track(makeDeepSeekHarness({ skills: true, script: { turns: [{ textChunks: ["好"] }] } }));
+    const row = h.addSession({ role: "pm", pmId: 1 as never, workerId: null, model: null });
+    await h.driver.send(row.id, { messageIds: [1 as never], source: "user", text: "你好" });
+    await h.waitFor("turn.ended");
+    const launchDir = h.launchDirOf(row.id);
+    const skillsPatchPath = join(launchDir, "dsh-skills.patch.json");
+    const spawnLog = h.logs().find((e) => e.event === "spawn");
+    expect(spawnLog?.argv).toEqual([
+      "--profile", "acp",
+      "--patch", join(launchDir, "settings.json"),
+      "--patch", join(launchDir, "dsh-system-prompt.patch.json"),
+      "--patch", skillsPatchPath,
+    ]);
+    expect(JSON.parse(readFileSync(skillsPatchPath, "utf8"))).toEqual([{ id: "skill-filesystem", config: { customSkillDirs: [join(launchDir, "skills")] } }]);
+    expect(buildDeepSeekSkillsPatch("/x/skills")).toEqual([{ id: "skill-filesystem", config: { customSkillDirs: ["/x/skills"] } }]);
+
+    const w = track(makeDeepSeekHarness({ script: { turns: [{ textChunks: ["好"] }] } }));
+    const workerRow = w.addSession({ role: "worker", pmId: null, workerId: 2 as never, model: null });
+    mkdirSync(w.launchDirOf(workerRow.id), { recursive: true });
+    writeFileSync(join(w.launchDirOf(workerRow.id), "dsh-skills.patch.json"), "[]");
+    await w.driver.send(workerRow.id, { messageIds: [1 as never], source: "user", text: "你好" });
+    await w.waitFor("turn.ended");
+    expect(w.logs().find((e) => e.event === "spawn")?.argv).not.toContain(join(w.launchDirOf(workerRow.id), "dsh-skills.patch.json"));
+    expect(existsSync(join(w.launchDirOf(workerRow.id), "dsh-skills.patch.json"))).toBe(false);
+  });
+
   it("launchFiles 生成关闭自带沙箱的 danger-full-access patch 文件，并屏蔽 dsh-acp 不支持的 additionalDirectories", async () => {
     const h = track(
       makeDeepSeekHarness({

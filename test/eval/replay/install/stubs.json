@@ -1,0 +1,115 @@
+{
+ "curl": [
+  {
+   "match": "install.sh",
+   "outputs": [
+    {
+     "stdout": "#!/bin/sh\n# 评测替身：示例开源 CLI 安装脚本输出，不真装软件\nprintf '%s\\n' '  downloading pi-bridge 0.4.2 (pi-bridge-darwin-arm64.tar.gz)'\nprintf '%s\\n' '  verified sha256 checksum'\nprintf '%s\\n' '  installed ~/.local/bin/pi-bridge'\n",
+     "writeArgAfter": "-o"
+    }
+   ]
+  },
+  {
+   "match": "127.0.0.1:18080/v1/models",
+   "afterCall": {
+    "tool": "pi-bridge",
+    "match": "serve"
+   },
+   "outputs": [
+    {
+     "stdout": "{\"object\": \"list\", \"data\": [{\"id\": \"openrouter/qwen3-coder\", \"object\": \"model\"}, {\"id\": \"openrouter/deepseek-v3.2\", \"object\": \"model\"}, {\"id\": \"openrouter/deepseek-r1:free\", \"object\": \"model\"}, {\"id\": \"openrouter/llama-4-maverick\", \"object\": \"model\"}]}\n"
+    }
+   ]
+  },
+  {
+   "match": "127.0.0.1:18080",
+   "outputs": [
+    {
+     "stdout": "",
+     "stderr": "curl: (7) Failed to connect to 127.0.0.1 port 18080 after 0 ms: Couldn't connect to server\n",
+     "exitCode": 7
+    }
+   ]
+  }
+ ],
+ "pi-bridge": [
+  {
+   "match": "--version",
+   "outputs": [
+    {
+     "stdout": "pi-bridge 0.4.2\n"
+    }
+   ]
+  },
+  {
+   "match": "plugin add",
+   "outputs": [
+    {
+     "stdout": "✓ added @pi-bridge/provider-openrouter@0.2.4\n  openrouter (OpenRouter, not signed in) · run: pi-bridge plugin login openrouter\n"
+    }
+   ]
+  },
+  {
+   "match": "plugin login",
+   "outputs": [
+    {
+     "stdout": "Open this link in a browser to authorize (valid for 10 minutes):\nhttps://openrouter.ai/auth?callback_url=http%3A%2F%2Flocalhost%3A18900%2Fcallback&code_challenge=EVAL-REDACTED\n"
+    }
+   ]
+  },
+  {
+   "match": "status",
+   "afterCall": {
+    "tool": "pi-bridge",
+    "match": "serve"
+   },
+   "outputs": [
+    {
+     "stdout": "● pi-bridge 0.4.2 listening on 127.0.0.1:18080 · serve · pid 24180\n"
+    }
+   ]
+  },
+  {
+   "match": "status",
+   "outputs": [
+    {
+     "stdout": "○ pi-bridge is not running on http://127.0.0.1:18080\n"
+    }
+   ]
+  },
+  {
+   "match": "serve",
+   "outputs": [
+    {
+     "stdout": ""
+    }
+   ]
+  },
+  {
+   "match": "connect pi",
+   "outputs": [
+    {
+     "stdout": "✓ Pi model pi-bridge/openrouter/qwen3-coder\n"
+    }
+   ]
+  }
+ ],
+ "pi": [
+  {
+   "match": "--version",
+   "outputs": [
+    {
+     "stdout": "1.5.2\n"
+    }
+   ]
+  },
+  {
+   "match": "-p",
+   "outputs": [
+    {
+     "stdout": "1 + 1 等于 2。\n"
+    }
+   ]
+  }
+ ]
+}

@@ -1,12 +1,23 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ENV_HUB_SOCK, ENV_HUB_TOKEN, WORKER_BACKGROUND_HOLD_MAX_MS, buildReadonlyPolicy, type AgentSessionRow, type LaunchContext } from "../shared/index.ts";
+import {
+  ENV_HUB_SOCK,
+  ENV_HUB_TOKEN,
+  TASK_GRAPH_SKILL_NAME,
+  WORKER_BACKGROUND_HOLD_MAX_MS,
+  buildReadonlyPolicy,
+  taskGraphSkillCatalogEntry,
+  taskGraphSkillMarkdown,
+  type AgentSessionRow,
+  type LaunchContext,
+} from "../shared/index.ts";
 import { WORKER_ENV, buildSessionSettings, stateDirDenyRule } from "../vendors/claude/settings.ts";
 import { launchFingerprint } from "../shared/launch.ts";
 import { projectWorktreesDir } from "../shared/paths.ts";
 import { createLaunchPreparer } from "./launch.ts";
+import { taskGraphSkillFile } from "./task-graph-skill.ts";
 import { buildFingerprintPrompt, buildLaunchPrompt, buildWorkerPrompt } from "./prompt.ts";
 import { noProjectContext, projectContext, workerContext } from "./test-helpers.ts";
 
@@ -89,9 +100,12 @@ describe("prepareLaunch（M2、M3）", () => {
     });
     const prompt = readFileSync(files.promptFile, "utf8");
     const settings = readFileSync(files.settingsFile!, "utf8");
-    expect(prompt).toBe(buildLaunchPrompt(projectContext(), dir));
+    const promptOptions = { taskGraphSkillFile: taskGraphSkillFile(base) };
+    expect(prompt).toBe(buildLaunchPrompt(projectContext(), dir, promptOptions));
     expect(JSON.parse(settings)).toEqual(buildSessionSettings({ role: "pm", hubSock, stateDir: join(dir, "state"), osSandboxed: true }));
-    expect(files.fingerprint).toBe(launchFingerprint({ prompt: buildFingerprintPrompt(projectContext(), dir), settings }));
+    expect(files.fingerprint).toBe(
+      launchFingerprint({ prompt: buildFingerprintPrompt(projectContext(), dir, promptOptions), settings, skills: taskGraphSkillCatalogEntry() }),
+    );
     expect(files.personaRevision).toBe(projectContext().pm.personaRevision);
     // 项目经理不受可写范围限制
     expect(files.writeScope).toBeUndefined();
@@ -131,8 +145,60 @@ describe("prepareLaunch（M2、M3）", () => {
       const files = await prepare(row(7));
       expect(files.fingerprint).toBe(base.fingerprint);
       expect(files.personaRevision).toBe(v.pm.personaRevision);
-      expect(readFileSync(files.promptFile, "utf8")).toBe(buildLaunchPrompt(v, dir));
+      expect(readFileSync(files.promptFile, "utf8")).toBe(buildLaunchPrompt(v, dir, { taskGraphSkillFile: taskGraphSkillFile(join(launchDir, "7")) }));
     }
+  });
+
+  it("项目经理：启动目录里写唯一一份任务图技能 skills/fusa-task-graph/SKILL.md（0600），LaunchFiles.skillsDir 指向它的根；提示词里写它的绝对路径", async () => {
+    const files = await make()(row(7));
+    const base = join(launchDir, "7");
+    expect(files.skillsDir).toBe(join(base, "skills"));
+    const file = taskGraphSkillFile(base);
+    expect(file).toBe(join(base, "skills", TASK_GRAPH_SKILL_NAME, "SKILL.md"));
+    expect(readFileSync(file, "utf8")).toBe(taskGraphSkillMarkdown());
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(statSync(join(base, "skills", TASK_GRAPH_SKILL_NAME)).mode & 0o777).toBe(0o700);
+    expect(readdirSync(join(base, "skills"))).toEqual([TASK_GRAPH_SKILL_NAME]);
+    expect(readFileSync(files.promptFile, "utf8")).toContain(file);
+  });
+
+  it("任务图技能内容没变就不重写（inode、mtime 不变：agy 的硬链接和各家缓存都还有效）；被改坏了下次启动写回", async () => {
+    const prepare = make();
+    const first = await prepare(row(7));
+    const file = taskGraphSkillFile(join(launchDir, "7"));
+    const before = statSync(file);
+    const second = await prepare(row(7));
+    const after = statSync(file);
+    expect(after.ino).toBe(before.ino);
+    expect(after.mtimeMs).toBe(before.mtimeMs);
+    expect(second.fingerprint).toBe(first.fingerprint);
+    writeFileSync(file, "被改坏了");
+    const third = await prepare(row(7));
+    expect(readFileSync(file, "utf8")).toBe(taskGraphSkillMarkdown());
+    // 正文不进 fingerprint（加载时才读文件，改了不用重启）
+    expect(third.fingerprint).toBe(first.fingerprint);
+  });
+
+  it("任务图技能的名字和说明进 fingerprint（各家在会话开头读进技能清单）；正文不进", () => {
+    const base = { prompt: "p", settings: "s" };
+    expect(launchFingerprint({ ...base, skills: "a\nb" })).not.toBe(launchFingerprint(base));
+    expect(launchFingerprint({ ...base, skills: "a\nb" })).not.toBe(launchFingerprint({ ...base, skills: "a\nc" }));
+    expect(launchFingerprint({ ...base, skills: taskGraphSkillCatalogEntry() })).toBe(launchFingerprint({ ...base, skills: taskGraphSkillCatalogEntry() }));
+    expect(taskGraphSkillCatalogEntry()).not.toContain("## 建图");
+  });
+
+  it("Worker：不写、不挂任务图技能（没有 skillsDir，提示词里没有路径）；启动目录里残留的也删掉", async () => {
+    contexts.set(9, workerContext());
+    const stale = join(launchDir, "9", "skills", TASK_GRAPH_SKILL_NAME);
+    mkdirSync(stale, { recursive: true });
+    writeFileSync(join(stale, "SKILL.md"), "旧的");
+    const files = await make()(row(9, dir, "worker"));
+    expect(files.skillsDir).toBeUndefined();
+    expect(existsSync(join(launchDir, "9", "skills"))).toBe(false);
+    const prompt = readFileSync(files.promptFile, "utf8");
+    expect(prompt).not.toContain("SKILL.md");
+    expect(prompt).not.toContain(TASK_GRAPH_SKILL_NAME);
+    expect(files.fingerprint).toBe(launchFingerprint({ prompt: buildFingerprintPrompt(workerContext(), dir), settings: readFileSync(files.settingsFile!, "utf8") }));
   });
 
   it("Worker 的会话不带性格设定的版本号", async () => {

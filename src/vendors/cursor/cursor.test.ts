@@ -109,6 +109,8 @@ describe("cursor spec 与 paths 声明边界", () => {
       ownSandboxOffArgs: ["--sandbox", "disabled"],
       // ACP 下没有常驻入口（只读工作目录里的规则），拼进首条消息、压缩后重新拼
       systemPrompt: "first_message",
+      // ACP 下 --plugin-dir、--add-dir 里的技能都读不到：任务图手册只能按提示词里的路径读
+      skills: "read_file",
     });
     expect(cursorSpec.models.shortName?.("auto")).toBe("Auto");
     expect(cursorSpec.models.shortName?.("default[]")).toBe("Auto");
