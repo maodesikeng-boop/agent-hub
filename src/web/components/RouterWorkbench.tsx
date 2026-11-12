@@ -97,6 +97,7 @@ function pruneRouterCommandMutations(qc: QueryClient, confirmedClientIds: Readon
 
 const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
   decisions,
+  mobile,
   multiDevice,
   decisionNotes,
   decisionErrors,
@@ -107,6 +108,7 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
   onSelectKey,
 }: {
   decisions: readonly FleetDecisionEntry[];
+  mobile: boolean;
   multiDevice: boolean;
   decisionNotes: Readonly<Record<string, string>>;
   decisionErrors: Readonly<Record<string, ErrorLike>>;
@@ -153,7 +155,12 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
           <span className="text-muted-foreground tabular-nums">{decisions.length}</span>
         </CollapsibleTrigger>
 
-        <CollapsibleContent className="mt-2 max-h-[50dvh] space-y-2 overflow-y-auto overscroll-y-contain">
+        <CollapsibleContent
+          className={cn(
+            "mt-2 space-y-2 overflow-y-auto overscroll-y-contain",
+            mobile ? "max-h-[33dvh]" : "max-h-[50dvh]",
+          )}
+        >
           <RouterDecisionCard
             entry={expandedEntry}
             multiDevice={multiDevice}
@@ -591,6 +598,7 @@ export function RouterWorkbench({
 
       <RouterNeedsYouTray
         decisions={visibleDecisions}
+        mobile={mobile}
         multiDevice={view.multiDevice}
         decisionNotes={decisionNotes}
         decisionErrors={decisionErrors}

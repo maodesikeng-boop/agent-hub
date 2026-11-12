@@ -453,9 +453,10 @@ describe("Needs You 托盘", () => {
     // 数量在托盘标题上，顶栏不再重复
     expect(within(tray).getByRole("button", { name: /Needs You/ })).toHaveTextContent("4");
     expect(screen.getByRole("heading", { level: 1, name: "Router" }).closest("header")!.textContent).toBe("Router");
-    // 托盘和时间流、输入框左右对齐，最高半屏，超出在里面滚
+    // 托盘和时间流、输入框左右对齐，桌面最高半屏（50dvh），超出在里面滚
     expect(tray.className).toMatch(/chat-column/);
     expect(tray.querySelector("[class*='max-h-[50dvh]']")).not.toBeNull();
+    expect(tray.querySelector("[class*='max-h-[33dvh]']")).toBeNull();
 
     // 只有第一张是卡片，其余每张一行（问题第一行截断，全文在 title）
     expect(tray.querySelectorAll("article")).toHaveLength(1);
@@ -549,6 +550,42 @@ describe("Needs You 托盘", () => {
     });
     await waitFor(() => expect(localApi.callsTo("POST", /^\/api\/router\/items\/111\/resolve$/)).toHaveLength(1));
     await act(async () => releaseResolve!());
+  });
+
+  it("手机外壳下托盘上限降为 33dvh 并保持内部纵向滚动，第一张卡完整展开、其余收成单行", async () => {
+    installViewport("mobile");
+    window.history.replaceState(null, "", "#/router");
+    const now = Date.now();
+    const decisions = [
+      makeDecisionItem({ id: 101, question: "缓存层选哪种淘汰策略？", options: ["(Recommended) WeakMap + 容量上限", "纯定时清理"], createdAt: now - 60_000 }),
+      makeDecisionItem({ id: 102, question: "文档站搜索用 Algolia 还是自建索引？", options: ["Algolia", "自建索引"], createdAt: now - 120_000 }),
+      makeDecisionItem({ id: 103, question: "健康检查间隔改成多少？", options: ["10 秒", "30 秒"], createdAt: now - 180_000 }),
+    ];
+    const localSnap = makeSnapshot({
+      pms: [makePm({ id: 1, name: "小林" })],
+      projects: [makeProject({ id: 10, name: "agent-hub", pmId: 1, conversationId: 1 })],
+      conversations: [makeConvSnapshot([], { conversation: { id: 1, pmId: 1, projectId: 10, title: "小林" } })],
+      router: { ...emptyRouterSlice(), items: decisions, commands: [makeCommandRecord()] },
+    });
+    installFleet({ local: localSnap });
+    await openRouter();
+
+    const tray = await screen.findByRole("region", { name: "Needs You" });
+    const scrollBox = tray.querySelector<HTMLElement>("[class*='max-h-[33dvh]']");
+    expect(scrollBox).not.toBeNull();
+    expect(scrollBox!.className).toContain("overflow-y-auto");
+    expect(scrollBox!.className).toContain("overscroll-y-contain");
+    expect(tray.querySelector("[class*='max-h-[50dvh]']")).toBeNull();
+
+    // 第一张照常完整展开，其余两条保持单行
+    expect(tray.querySelectorAll("article")).toHaveLength(1);
+    expect(within(tray.querySelector("article")!).getByText("缓存层选哪种淘汰策略？")).toBeInTheDocument();
+    const rows = within(tray).getAllByRole("button", { expanded: false });
+    expect(rows.map((r) => r.querySelector("[title]")?.getAttribute("title"))).toEqual([
+      "文档站搜索用 Algolia 还是自建索引？",
+      "健康检查间隔改成多少？",
+    ]);
+    expect(turnOf("让小林检查一下缓存上限")).toBeInTheDocument();
   });
 });
 
