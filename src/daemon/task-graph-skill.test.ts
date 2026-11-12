@@ -19,6 +19,7 @@ import {
   TASK_GRAPH_SKILL_DESCRIPTION,
   TASK_GRAPH_SKILL_DESCRIPTION_MAX_CHARS,
   TASK_GRAPH_SKILL_MAX_BYTES,
+  TAKEOVER_PREDECESSORS_MAX,
   TASK_GRAPH_SKILL_NAME,
   taskGraphSkillBody,
   taskGraphSkillMarkdown,
@@ -93,13 +94,16 @@ describe("任务图技能正文", () => {
     expect(PM_REVIEW_REDLINES_BRIEF.split("；")).toHaveLength(4);
   });
 
-  it("图里怎么跟进：graph show 为准、收工自动标完成、给下一个节点给路径不转述、换人 --incomplete 再 --node、计划变了 patch、全部节点完成后待交付发交付单并用 finish 结束", () => {
+  it("图里怎么跟进：graph show 为准、收工自动标完成、给下一个节点给路径不转述、换人一条 --node 命令（旧 Worker 自动收工、接着用前任目录、自动带前任记录）、计划变了 patch、全部节点完成后待交付发交付单并用 finish 结束", () => {
     const body = taskGraphSkillBody();
     for (const word of [
       `进度以 \`${hub} graph show\` 为准。`,
       `验收通过就 \`${hub} worker end <编号>\` 收工，节点自动标完成，后面的节点轮到。`,
       "任务说明里给上一步的分支、PR 和文件路径，让它自己去读，不要转述内容。",
-      `**换人**：\`${hub} worker end <编号> --incomplete\`，再 \`${hub} worker start --node <节点>\` 新派一个接手`,
+      `**换人**（出错、额度用完、对话太长、该换一家）：直接 \`${hub} worker start --node <节点> [--vendor …]\``,
+      "节点上还挂着的旧 Worker 自动按“没做完”收工",
+      "新 Worker 接着用前任的工作目录和分支",
+      `最近 ${TAKEOVER_PREDECESSORS_MAX} 个前任的汇报、最后的文字、最后几步操作和原始记录路径`,
       `**计划变了**：随时 \`${hub} graph patch\`，加节点、改还没开工的节点、跳过不需要的。`,
       "原本没建图、做着发现要分段或加审查的，随时补建一张图。",
       "**全部节点完成后图不会自动结束**：最后一个节点完成时图保持待交付，你会收到交付单（各节点结果和改动文件名单）。",

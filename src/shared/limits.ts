@@ -757,6 +757,14 @@ export const HANDOVER_GRAPHS_MAX_CHARS = 8_000;
 export const DELIVERY_NOTE_MAX_CHARS = 6_000;
 /** 交付单里列出的相对主干改动文件条数上限（超过显示“另有 N 个文件省略”）。 */
 export const DELIVERY_FILES_MAX = 60;
+/** 换人接手同一步（hub worker start --node 给已有前任的节点派人）时最多带最近几个前任的记录（docs/orchestration-simplify-design.md 第 5.2、11.2 节）。 */
+export const TAKEOVER_PREDECESSORS_MAX = 3;
+/** 换人接手时带的前任汇报原文，从新到旧、各前任合计的字数上限（按 Unicode 码点）。 */
+export const TAKEOVER_REPORTS_MAX_CHARS = 8_000;
+/** 换人接手时带的前任还没来得及汇报的最后几段文字，各前任合计的字数上限。 */
+export const TAKEOVER_TAIL_TEXT_MAX_CHARS = 6_000;
+/** 换人接手时每个前任最多带最后几步操作（hub worker log 的格式，每步一行，单行仍按 WORKER_VIEW_TEXT_MAX_CHARS 截）。 */
+export const TAKEOVER_STEPS_MAX = 40;
 /** 历史任务图分页大小与 CLI 列表默认条数。 */
 export const GRAPH_HISTORY_PAGE_SIZE = 20;
 export const HUB_GRAPH_LIST_LIMIT = 20;

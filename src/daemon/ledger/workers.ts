@@ -11,6 +11,11 @@
 // - 建 worktree 的回调（getWorktreeTask、onSetupStarted、onWorktreeCreated）和彻底失败（worktree_failed）；
 //   配了准备命令的，跑的时候 Worker 会话显示“准备中”，跑完的结果加在任务说明前面，重启后没开工的重新登记建 worktree；
 // - Worker 会话的启动上下文。
+// - 换人接手同一步（hub worker start --node 给已有前任的节点派人，docs/orchestration-simplify-design.md 第 4.4、5.2 节）：
+//   先把节点上还挂着的旧 Worker 按“没做完”收工，新 Worker 接着用最近一个 worktree 还在的前任的目录和分支（不建 worktree、不跑准备命令，
+//   旧会话结束前不开工：waitsForFirstTurn），第一条消息是“【系统 · 接手】”带前任的记录（takeover.ts 现取现拼）；
+// - 单轮超时计时落盘（worker_turn_timeouts，迁移 0024），重启后按库里的截止时刻重新挂（recoverTurnTimeouts）；
+// - worktree 自动清理前按目录判断还有没有人在用、所属任务图结束没有（isWorkerCleanable）。
 // 汇报格式、解析、那一行的写法、分支名在 shared/worker.ts；按角色放行的表在 shared/hub.ts；git 在 daemon/git/。
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -38,6 +43,7 @@ import {
   DEFAULT_WORKER_MAX_TIME_MS,
   GIT_REASON_MAX_CHARS,
   MAX_TASK_BYTES,
+  TAKEOVER_PREDECESSORS_MAX,
   WORKER_BACKGROUND_HOLD_MAX_MS,
   WORKER_LIST_RECENT_ENDED,
   WORKTREE_RETENTION_DAYS,
@@ -64,6 +70,8 @@ import type { ConversationDbRow, MessageDbRow, ProjectDbRow, WorkerDbRow } from 
 import { idle } from "./sessions.ts";
 import type { LedgerSessions } from "./sessions.ts";
 import type { WorkerBindTarget } from "./task-graphs.ts";
+import { newestFirst } from "./takeover.ts";
+import type { LedgerTakeover, TakeoverPredecessor } from "./takeover.ts";
 
 /** 主文件夹有没提交的改动、又用 worktree 时，start 返回的话里的提醒（m3-plan 第 2.6 节）。 */
 const WORKTREE_DIRTY_NOTE = "注意：主文件夹里有没提交的改动，Worker 是从最后一次提交开始的，看不到这些改动。";
@@ -198,7 +206,7 @@ export function createLedgerWorkers(
   messages: LedgerMessages,
   persona: LedgerPersona,
   projects: LedgerProjects,
-  options: { worktreesDir: string; taskGraphs?: LedgerWorkersTaskGraphHooks },
+  options: { worktreesDir: string; taskGraphs?: LedgerWorkersTaskGraphHooks; takeover?: LedgerTakeover },
 ) {
   const { db, now, write, enqueue } = ctx;
   const { currentSession, insertSession, liveOf, updateLive } = sessions;
@@ -223,14 +231,16 @@ export function createLedgerWorkers(
    */
   const endInterrupted = new Set<SessionId>();
   /**
-   * 每个 Worker 当前轮次的超时定时器（`Map<ConversationId, { timer: ReturnType<typeof setTimeout>; maxTimeMs: number; startedAt: number }>`）。
-   * - 启动/重置：`hub worker start` 启动第一轮、`hub worker send` 发起新一轮、`hub worker max-time` 续期、或排队消息开始执行新一轮时按指定的 `maxTimeMs`（默认 `DEFAULT_WORKER_MAX_TIME_MS`）启动；
-   * - 立即销毁：当该 Worker 这一轮结束（`report`、`turn_failed`）、被 `hub worker end` / 归档停止、或守护进程 `close()` 时，立即 `clearTimeout` 并从 Map 移除；
-   * - 超时触发：到点若该 Worker 仍处于运行中（in-flight），向所属项目经理对话发送一条静默唤醒消息（`worker.max_time_exceeded`），同一轮只触发一次，不打断 Worker。
+   * 每个 Worker 当前轮次的超时定时器（只有定时器本身在内存里；时长、截止时刻、提醒发过没有落在 worker_turn_timeouts，迁移 0024）。
+   * - 启动/重置：`hub worker start` 派活、`hub worker send` 发起新一轮、`hub worker max-time` 续期、或排队消息开始执行新一轮时
+   *   按指定的 `maxTimeMs`（默认 `DEFAULT_WORKER_MAX_TIME_MS`）从现在起算，同时写库；
+   * - 立即销毁：这一轮结束（`report`、`turn_failed`）、被 `hub worker end` / 归档停止时 `clearTimeout`、从 Map 移除、库里清空；
+   *   守护进程 `close()` 只停定时器，不动库（重启后 recoverTurnTimeouts 按库里的截止时刻重新挂，已过期的马上提醒一次）；
+   * - 超时触发：到点若该 Worker 仍处于运行中（in-flight），向所属项目经理对话发送一条静默唤醒消息（`worker.max_time_exceeded`），
+   *   库里记下这一轮已提醒过（重启后也不再提醒），不打断 Worker。
    */
   const maxTimeTimers = new Map<ConversationId, { timer: ReturnType<typeof setTimeout>; maxTimeMs: number; startedAt: number }>();
-  /** 当前轮次设定的最大时间（含已触发但本轮尚未结束的，供 hub worker show 展示；一轮结束或收工时立即随定时器一起移除）。 */
-  const turnMaxTimes = new Map<ConversationId, { maxTimeMs: number; startedAt: number }>();
+
   /**
    * 一轮正常结束时还有后台命令在跑（驱动层的 background.changed 记在 live.backgroundTasks，只有 claude 有）的 Worker 会话，
    * 记在 worker_background_waits（0014）。这一轮不算汇报（不然项目经理会先收到一份“做完了”），会话显示在等后台命令；
@@ -289,19 +299,24 @@ export function createLedgerWorkers(
     return raw as number;
   };
 
-  const clearMaxTime = (workerConversationId: ConversationId) => {
+  const stopTimer = (workerConversationId: ConversationId) => {
     const existing = maxTimeTimers.get(workerConversationId);
     if (existing !== undefined) {
       clearTimeout(existing.timer);
       maxTimeTimers.delete(workerConversationId);
     }
-    turnMaxTimes.delete(workerConversationId);
   };
 
+  /** 这一轮结束、收工：停定时器，库里的计时清空。 */
+  const clearMaxTime = (workerConversationId: ConversationId) => {
+    stopTimer(workerConversationId);
+    db.run("DELETE FROM worker_turn_timeouts WHERE worker_id = (SELECT id FROM workers WHERE worker_conversation_id = ?)", workerConversationId);
+  };
+
+  /** 守护进程关：只停定时器，库里的计时留着给重启后恢复。 */
   const clearAllMaxTime = () => {
     for (const entry of maxTimeTimers.values()) clearTimeout(entry.timer);
     maxTimeTimers.clear();
-    turnMaxTimes.clear();
   };
 
   const isWorkerInFlight = (worker: WorkerDbRow): boolean => {
@@ -328,15 +343,17 @@ export function createLedgerWorkers(
   ) => {
     const current = maxTimeTimers.get(workerConversationId);
     if (current?.timer !== timer) return;
-    clearTimeout(timer);
-    maxTimeTimers.delete(workerConversationId);
+    stopTimer(workerConversationId);
     try {
       write((p) => {
         const worker = workerRow(workerId);
-        if (worker === null || worker.status !== "open" || !isWorkerInFlight(worker)) {
-          turnMaxTimes.delete(workerConversationId);
+        if (worker === null) return;
+        if (worker.status !== "open" || !isWorkerInFlight(worker)) {
+          clearMaxTime(workerConversationId);
           return;
         }
+        // 同一轮只提醒一次（重启前已经提醒过的，恢复时就不会再挂定时器；这里再挡一次）
+        if (turnTimeoutOf(worker.id)?.notified === 1) return;
         const pmSession = currentSession(worker.pm_conversation_id);
         if (pmSession === null) return;
         const t = now();
@@ -364,28 +381,81 @@ export function createLedgerWorkers(
           t,
           t,
         );
+        db.run("UPDATE worker_turn_timeouts SET notified = 1 WHERE worker_id = ?", worker.id);
         if (row === undefined) return;
         p.changes.push({ type: "message.created", data: { message: toMessage(row) } });
         enqueue(p, { type: "session.send", params: { sessionId: pmSession.id, messageId: row.id, source: "system" } });
       });
     } catch {
-      turnMaxTimes.delete(workerConversationId);
+      // 库写不进去（关机中等）：不再重试，重启后按库里还没提醒的状态重新挂
     }
   };
 
-  const startMaxTime = (worker: Pick<WorkerDbRow, "id" | "worker_conversation_id">, maxTimeMs: number = DEFAULT_WORKER_MAX_TIME_MS) => {
-    clearMaxTime(worker.worker_conversation_id);
-    const startedAt = now();
+  /** 挂定时器：到 deadline 触发（已过的马上触发）。 */
+  const armTimer = (worker: Pick<WorkerDbRow, "id" | "worker_conversation_id">, maxTimeMs: number, deadline: number) => {
+    stopTimer(worker.worker_conversation_id);
+    const startedAt = deadline - maxTimeMs;
     const timer = setTimeout(() => {
       onMaxTimeExceeded(worker.id, worker.worker_conversation_id, timer, maxTimeMs, startedAt);
-    }, maxTimeMs);
+    }, Math.max(0, deadline - now()));
     timer.unref?.();
     maxTimeTimers.set(worker.worker_conversation_id, { timer, maxTimeMs, startedAt });
-    turnMaxTimes.set(worker.worker_conversation_id, { maxTimeMs, startedAt });
   };
 
-  const turnMaxTimeOf = (workerConversationId: ConversationId): { maxTimeMs: number; startedAt: number } | null =>
-    turnMaxTimes.get(workerConversationId) ?? null;
+  /** 这一轮从现在起计时：写库（时长、截止时刻、还没提醒），挂定时器。 */
+  const startMaxTime = (worker: Pick<WorkerDbRow, "id" | "worker_conversation_id">, maxTimeMs: number = DEFAULT_WORKER_MAX_TIME_MS) => {
+    const deadline = now() + maxTimeMs;
+    db.run(
+      `INSERT INTO worker_turn_timeouts (worker_id, max_time_ms, deadline_at, notified) VALUES (?, ?, ?, 0)
+       ON CONFLICT (worker_id) DO UPDATE SET max_time_ms = excluded.max_time_ms, deadline_at = excluded.deadline_at, notified = 0`,
+      worker.id,
+      maxTimeMs,
+      deadline,
+    );
+    armTimer(worker, maxTimeMs, deadline);
+  };
+
+  /** 这个 Worker 这一轮在库里的计时；没在计时是 null。 */
+  const turnTimeoutOf = (workerId: WorkerId) =>
+    db.get<{ max_time_ms: number; deadline_at: number; notified: number }>(
+      "SELECT max_time_ms, deadline_at, notified FROM worker_turn_timeouts WHERE worker_id = ?",
+      workerId,
+    ) ?? null;
+
+  /** 当前这一轮的最大时间和开始计时的时刻（hub worker show 用，从库里读）；没有在计时的是 null。 */
+  const turnMaxTimeOf = (workerConversationId: ConversationId): { maxTimeMs: number; startedAt: number } | null => {
+    const row = db.get<{ max_time_ms: number; deadline_at: number }>(
+      `SELECT t.max_time_ms, t.deadline_at FROM worker_turn_timeouts t JOIN workers w ON w.id = t.worker_id
+        WHERE w.worker_conversation_id = ?`,
+      workerConversationId,
+    );
+    return row === undefined ? null : { maxTimeMs: row.max_time_ms, startedAt: row.deadline_at - row.max_time_ms };
+  };
+
+  /**
+   * 重启恢复（在 recoverAfterRestart 里调）：还开着、在计时、这一轮还没提醒过的 Worker 按库里的截止时刻重新挂定时器，
+   * 已经过了的马上触发一次（触发时还在跑才提醒）。已收工或重启后已无在途轮次的残留计时清掉（避免空闲残留 notified=1 导致下一轮漏挂计时）。返回重新挂了哪些 Worker。
+   */
+  const recoverTurnTimeouts = (): WorkerId[] => {
+    db.run("DELETE FROM worker_turn_timeouts WHERE worker_id IN (SELECT id FROM workers WHERE status = 'ended')");
+    const rows = db.all<{ id: number; worker_conversation_id: number; max_time_ms: number; deadline_at: number; notified: number }>(
+      `SELECT w.id, w.worker_conversation_id, t.max_time_ms, t.deadline_at, t.notified FROM worker_turn_timeouts t JOIN workers w ON w.id = t.worker_id
+        WHERE w.status = 'open' ORDER BY w.id`,
+    );
+    const armed: WorkerId[] = [];
+    for (const row of rows) {
+      const worker = workerRow(row.id);
+      if (worker === null || (!notStarted(worker) && !isWorkerInFlight(worker))) {
+        clearMaxTime(row.worker_conversation_id);
+        continue;
+      }
+      if (row.notified === 0) {
+        armTimer(row, row.max_time_ms, row.deadline_at);
+        armed.push(row.id);
+      }
+    }
+    return armed;
+  };
 
   /**
    * 项目经理对话里那一行（WorkerMessageMeta）。deliver：要交给项目经理（report、turn_failed、worktree_failed、user_message），
@@ -475,6 +545,35 @@ export function createLedgerWorkers(
   const gitFailed = (output: string) =>
     fail("git_failed", `git 没跑成：${gitReasonLine(output)}。可以重试；或者加 --no-worktree，明确让 Worker 在主文件夹里干。`);
 
+  /** 这个 worktree 目录还能接着用：是建好了的 worktree（有起点提交），目录还在，同一个项目。 */
+  const reusableWorktree = (w: WorkerDbRow, projectId: number): boolean =>
+    w.workspace === "worktree" && w.project_id === projectId && w.base_commit !== null && w.worktree_path !== null && w.worktree_path !== "" && w.branch !== null && existsSync(w.worktree_path);
+
+  /**
+   * 换人接手同一步（hub worker start --node，节点上已经有经手过的 Worker；docs/orchestration-simplify-design.md 第 4.4、5.2 节）要的东西：
+   * - predecessors：最近 TAKEOVER_PREDECESSORS_MAX 个前任，从新到旧；
+   * - inherit：最近一个 worktree 还在的前任（没给 --no-worktree 时），新 Worker 接着用它的目录和分支，不新建、不重跑准备命令；
+   * - originalTask：这一步第一个 Worker 收到的任务说明（第 5 步把职责存到节点上之前，靠它不丢原始任务）；
+   * - active：节点上还挂着、没收工的旧 Worker（派新的之前先按“没做完”把它收工）。
+   */
+  const planTakeover = (target: WorkerBindTarget, projectId: number, noWorktree: boolean) => {
+    const allNewestFirst = newestFirst(target.workerIds, target.workerIds.length)
+      .map((id) => workerRow(id))
+      .filter((w): w is WorkerDbRow => w !== null);
+    const predecessors = allNewestFirst.slice(0, TAKEOVER_PREDECESSORS_MAX);
+    const inherit = noWorktree ? null : (allNewestFirst.find((w) => reusableWorktree(w, projectId)) ?? null);
+    const first = allNewestFirst.at(-1) ?? null;
+    const openById = new Map<WorkerId, WorkerDbRow>();
+    if (target.activeWorkerId !== null) {
+      const active = workerRow(target.activeWorkerId);
+      if (active !== null && active.status === "open") openById.set(active.id, active);
+    }
+    for (const w of allNewestFirst) {
+      if (w.status === "open") openById.set(w.id, w);
+    }
+    return { predecessors, inherit, originalTask: first?.task ?? null, openOld: [...openById.values()] };
+  };
+
   const startIn = (
     p: Pending,
     caller: AgentSessionRow & { pmId: PmId },
@@ -484,9 +583,27 @@ export function createLedgerWorkers(
     assertPmNotArchived(caller.pmId);
     const project = activeProjectOf(caller.pmId);
     if (project === null) throw fail("invalid", `你还没有项目，没法派 Worker：先用 ${HUB_COMMAND} project create --folder <主文件夹> 建一个`);
-    const title = typeof args.title === "string" ? normalizeWorkerTitle(args.title) : null;
+    const bindTarget =
+      args.node !== undefined && args.node.trim() !== ""
+        ? options.taskGraphs?.prepareWorkerBind(caller.pmId, args.node, args.graphId)
+        : undefined;
+    // 节点上已经有经手过的 Worker：换人接手。标题、正文可以不给（正文给了就是项目经理的补充）
+    const takeover = bindTarget !== undefined && bindTarget.workerIds.length > 0 ? planTakeover(bindTarget, project.id, args.noWorktree === true) : null;
+    const latest = takeover?.predecessors[0] ?? null;
+    const rawTitle = typeof args.title === "string" && args.title.trim() !== "" ? args.title : (latest?.title ?? args.title);
+    const title = typeof rawTitle === "string" ? normalizeWorkerTitle(rawTitle) : null;
     if (title === null) throw fail("invalid", "Worker 的标题不能是空的，也不能带换行等控制字符");
-    const task = validTask(args.task, "任务说明");
+    let task: string;
+    let pmNote: string | null = null;
+    if (takeover !== null && takeover.originalTask !== null) {
+      pmNote = typeof args.task === "string" && args.task.trim() !== "" ? validTask(args.task, "项目经理的补充") : null;
+      task = pmNote === null ? takeover.originalTask : `${takeover.originalTask.trimEnd()}\n\n## 项目经理的补充（换人接手时）\n\n${pmNote.trim()}`;
+      if (utf8Bytes(task) > MAX_TASK_BYTES) {
+        throw fail("invalid", `原始任务说明加上补充超过 ${MAX_TASK_BYTES} 字节：补充写短一点，长材料存成文件给路径`);
+      }
+    } else {
+      task = validTask(args.task, "任务说明");
+    }
     const maxTimeMs = validMaxTimeMs(args.maxTimeMs);
     // 模型、思考程度按目标厂商清单查；同厂商不给就用项目经理会话现在的，换厂商不给就用 null
     let vendor = caller.vendor as AgentVendor;
@@ -509,18 +626,54 @@ export function createLedgerWorkers(
     // Worker（不论普通还是只读、不论哪家厂商）一律要求 OS 沙箱就绪；起不来直接报错拒绝派活，不退回规则兜底（docs/linux-sandbox-design.md 第 3.2 节）
     if (!ctx.osSandboxed()) throw fail("invalid", WORKER_NEEDS_OS_SANDBOX_MESSAGE);
     const card = projectCard(project);
-    const bindTarget =
-      args.node !== undefined && args.node.trim() !== ""
-        ? options.taskGraphs?.prepareWorkerBind(caller.pmId, args.node, args.graphId)
-        : undefined;
+    const inherit = takeover?.inherit ?? null;
     let probe = { isRepoWithCommit: false, hasUncommittedChanges: false };
-    if (args.noWorktree !== true) {
+    if (args.noWorktree !== true && inherit === null) {
       const workspaceProbe = context.workspace;
       if (workspaceProbe === undefined) throw new Error("worker.start without noWorktree needs context.workspace (probe the main folder first)");
       if (workspaceProbe.kind === "failed") throw gitFailed(workspaceProbe.error);
       probe = workspaceProbe;
     }
-    const workspace = probe.isRepoWithCommit ? "worktree" : "main";
+    const workspace = inherit !== null || probe.isRepoWithCommit ? "worktree" : "main";
+
+    // 换人：前任的记录先按现在的样子取出来（还挂着的旧 Worker 收工前），再把旧 Worker 按“没做完”收工（同 --incomplete，节点不标完成）
+    let takeoverText: string | null = null;
+    const endedOldList: Array<{ ended: WorkerDbRow; interrupted: boolean }> = [];
+    if (takeover !== null && bindTarget !== undefined) {
+      const openIds = new Set(takeover.openOld.map((w) => w.id));
+      const inFlightIds = new Set(takeover.openOld.filter((w) => !notStarted(w) && isWorkerInFlight(w)).map((w) => w.id));
+      const predecessors: TakeoverPredecessor[] = takeover.predecessors.map((w) => ({
+        worker: w,
+        session: workerSession(w),
+        endedNote:
+          openIds.has(w.id)
+            ? inFlightIds.has(w.id)
+              ? "换人时它还在跑这一轮，后台已打断它，并按“没做完”把它收工（节点不标完成）。"
+              : "换人时它还开着（没在跑），后台已按“没做完”把它收工（节点不标完成）。"
+            : "它已经收工了。",
+      }));
+      const branches = [...new Set(takeover.predecessors.map((w) => w.branch).filter((b): b is string => b !== null && b !== ""))];
+      const branchNote = branches.length === 0 ? "" : `前任的分支 ${branches.join("、")} 还在，要的话自己合进来。`;
+      const workspaceNote =
+        inherit !== null
+          ? `你就在前任 Worker #${inherit.id} 的工作目录 ${inherit.worktree_path} 和分支 ${inherit.branch} 上，没提交的改动都还在，先看 git status 和 git log。`
+          : args.noWorktree === true
+            ? `这次按项目经理的要求直接在项目主文件夹 ${card.mainFolder} 里干（--no-worktree），没有接手前任的工作目录。${branchNote}`
+            : workspace === "main"
+              ? `你在项目主文件夹 ${card.mainFolder} 里干活，和前任是同一个目录，前任没提交的改动也都还在，先看 git status。`
+              : `前任没有还能接手的工作目录（已清理或没建成），你在新开的 worktree 里，从主文件夹最后一次提交开始。${branchNote}`;
+      takeoverText =
+        options.takeover?.takeoverMessage({
+          graph: { id: bindTarget.graphId, title: bindTarget.graphTitle },
+          node: { key: bindTarget.nodeKey, title: bindTarget.nodeTitle, index: bindTarget.index, total: bindTarget.total },
+          predecessors,
+          workspaceNote,
+          pmNote,
+        }) ?? null;
+      for (const old of takeover.openOld) {
+        endedOldList.push(endWorkerIn(p, old, { incomplete: true }));
+      }
+    }
     const t = now();
 
     const conversation = toConversation(
@@ -533,11 +686,11 @@ export function createLedgerWorkers(
       )!,
     );
     p.changes.push({ type: "conversation.created", data: { conversation } });
-    // 编号要先有才能定分支和目录：worktree 的先占个空串（满足 CHECK），马上改成真的
+    // 编号要先有才能定分支和目录：新建 worktree 的先占个空串（满足 CHECK），马上改成真的；接手前任的直接用前任的目录、分支和起点提交
     const id = db.run(
       `INSERT INTO workers (project_id, pm_id, pm_conversation_id, worker_conversation_id, title, task, model, effort, readonly, workspace,
-                            branch, worktree_path, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                            branch, worktree_path, base_commit, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       project.id,
       caller.pmId,
       project.conversation_id,
@@ -548,12 +701,13 @@ export function createLedgerWorkers(
       effort,
       readonly ? 1 : 0,
       workspace,
-      workspace === "worktree" ? "" : null,
-      workspace === "worktree" ? "" : null,
+      inherit !== null ? inherit.branch : workspace === "worktree" ? "" : null,
+      inherit !== null ? inherit.worktree_path : workspace === "worktree" ? "" : null,
+      inherit !== null ? inherit.base_commit : null,
       t,
       t,
     ).lastInsertRowid;
-    if (workspace === "worktree") {
+    if (workspace === "worktree" && inherit === null) {
       db.run(
         "UPDATE workers SET branch = ?, worktree_path = ? WHERE id = ?",
         workerBranchName(id, title),
@@ -565,6 +719,7 @@ export function createLedgerWorkers(
     const sameVendor = vendor === caller.vendor;
     // 没给的沿用项目经理现在的（也按 模型 + 思考程度 拆开：老数据里存的可能是带档位的完整 ID）
     const inherited = sameVendor ? splitModelEffort(vendor, caller.model, caller.effort) : { model: null, effort: null };
+    // 会话的工作目录就是要干活的目录（接手的是前任的 worktree）：可写范围按它放行（launch.ts 的 workerWriteScope 用 session.cwd）
     const session = insertSession(p, {
       role: "worker",
       conversationId: conversation.id,
@@ -577,12 +732,16 @@ export function createLedgerWorkers(
       model: model ?? inherited.model,
       effort: effort ?? inherited.effort,
     });
-    insertPmMessage(p, worker, session, task, taskDedupeKey(id));
+    insertPmMessage(p, worker, session, takeoverText ?? task, taskDedupeKey(id));
     insertLine(p, worker, { event: "started", status: null, summary: null, turnMessageId: null, deliver: null });
     if (bindTarget !== undefined) {
       options.taskGraphs?.bindWorkerStartedIn(p, bindTarget, id);
     }
-    if (workspace === "worktree") {
+    if (inherit !== null) {
+      // 不建 worktree、不跑准备命令；只登记第一条消息，送之前等用这个目录的旧会话都结束（waitsForFirstTurn），会话由这条消息拉起
+      const first = db.get<{ id: number }>("SELECT id FROM messages WHERE dedupe_key = ?", taskDedupeKey(id))!;
+      enqueue(p, { type: "session.send", params: { sessionId: session.id, messageId: first.id, source: "user" } });
+    } else if (workspace === "worktree") {
       enqueue(p, { type: "worktree.create", params: { workerId: id } });
       // 项目经理的会话带上 worktrees/<项目编号>/，验收时能看 Worker 的改动（下一条消息前自动重启生效）
       syncSessionFolders(project);
@@ -591,12 +750,25 @@ export function createLedgerWorkers(
     }
     startMaxTime(worker, maxTimeMs);
 
-    const notes = [`已派出 Worker #${id}“${title}”，${describeWorkspace(worker, card.mainFolder)}`];
+    const notes: string[] = [];
+    if (takeover !== null && bindTarget !== undefined) {
+      const old =
+        endedOldList.length === 0
+          ? ""
+          : `已先把节点上还挂着的 ${endedOldList.map((e) => `Worker #${e.ended.id}${e.interrupted ? "（打断了它正在跑的那一轮）" : ""}`).join("、")} 收工，节点不标完成；`;
+      notes.push(
+        `${old}已派出 Worker #${id}“${title}”接手任务图 #${bindTarget.graphId} 的节点「${bindTarget.nodeKey}」，${describeWorkspace(worker, card.mainFolder)}` +
+          `。前任（最近 ${takeover.predecessors.length} 个）的汇报、最后的文字、最后几步操作和原始记录路径已自动放进它的第一条消息${pmNote === null ? "" : "，你的正文作为补充放在最后"}`,
+      );
+      if (inherit !== null) notes.push(`；它接着用前任 Worker #${inherit.id} 的工作目录和分支，前任会话结束后它才开工`);
+    } else {
+      notes.push(`已派出 Worker #${id}“${title}”，${describeWorkspace(worker, card.mainFolder)}`);
+    }
     if (workspace === "main" && args.noWorktree !== true) notes.push("（主文件夹不是有提交的 git 仓库，所以没建 worktree）");
     if (readonly) notes.push("。它是只读的，只看不改");
     notes.push(`。它每做完一轮，汇报会自动发给你；打回用 ${HUB_COMMAND} worker send ${id} --stdin，收工用 ${HUB_COMMAND} worker end ${id}。`);
-    if (workspace === "worktree" && project.setup_command !== null) notes.push(SETUP_RECEIPT_NOTE);
-    if (workspace === "worktree" && probe.hasUncommittedChanges) notes.push(WORKTREE_DIRTY_NOTE);
+    if (workspace === "worktree" && inherit === null && project.setup_command !== null) notes.push(SETUP_RECEIPT_NOTE);
+    if (workspace === "worktree" && inherit === null && probe.hasUncommittedChanges) notes.push(WORKTREE_DIRTY_NOTE);
     return { text: notes.join(""), data: { worker: toWorkerRecord(worker) } };
   };
 
@@ -642,13 +814,13 @@ export function createLedgerWorkers(
     };
   };
 
-  const endIn = (p: Pending, caller: AgentSessionRow & { pmId: PmId }, args: HubArgs<"worker.end">): HubResult<"worker.end"> => {
-    assertPmNotArchived(caller.pmId);
-    const worker = ownWorker(caller.pmId, args.workerId);
+  /**
+   * 收工一个还开着的 Worker（hub worker end；换人时 startIn 收工节点上还挂着的旧 Worker，incomplete 恒为 true）：
+   * 正在跑就先打断，标 ended，登记 session.end（这一轮回完、进程退了才算结束，接手的新 Worker 等它结束才开工，见 waitsForFirstTurn），
+   * 排队的话标停止，项目经理对话里一行“已收工”，绑定的图节点按 incomplete 标完成或等人接手。返回打断了没有、节点那句回执。
+   */
+  const endWorkerIn = (p: Pending, worker: WorkerDbRow, opts: { incomplete: boolean }): { ended: WorkerDbRow; interrupted: boolean; nodeNote: string | null } => {
     clearMaxTime(worker.worker_conversation_id);
-    if (worker.status === "ended") {
-      return { text: `Worker #${worker.id}“${worker.title}”已经收工了，什么也没做。`, data: { worker: toWorkerRecord(worker) } };
-    }
     const session = workerSession(worker);
     // 正在跑（一轮没结束、或有排队待送的消息）：先走和网页“停止”同一条打断路径（messages.ts 的 stopIn）。还没开工的在准备中，没有这一轮
     const interrupted = !notStarted(worker) && stopIn(p, { ...session, conversationId: worker.worker_conversation_id });
@@ -679,14 +851,25 @@ export function createLedgerWorkers(
     // 收工会顺带改任务图：绑定的节点标完成或变成等接手。回执里写明（nodeNote），不让项目经理事后才从 hub graph show 发现
     const nodeNote = options.taskGraphs?.onWorkerEndedIn(p, ended.id, {
       hadLatestDoneReport: !interrupted && latestOutcome?.event === "report" && latestOutcome.status === "done" && latestOutcome.id > latestInputId,
-      incomplete: args.incomplete === true,
+      incomplete: opts.incomplete,
       summary: latestOutcome?.summary ?? null,
       branch: ended.branch,
       commit: parsedLatest?.kind === "ok" ? parsedLatest.report.commit : null,
     }) ?? null;
+    return { ended, interrupted, nodeNote };
+  };
+
+  const endIn = (p: Pending, caller: AgentSessionRow & { pmId: PmId }, args: HubArgs<"worker.end">): HubResult<"worker.end"> => {
+    assertPmNotArchived(caller.pmId);
+    const worker = ownWorker(caller.pmId, args.workerId);
+    if (worker.status === "ended") {
+      clearMaxTime(worker.worker_conversation_id);
+      return { text: `Worker #${worker.id}“${worker.title}”已经收工了，什么也没做。`, data: { worker: toWorkerRecord(worker) } };
+    }
+    const { ended, interrupted, nodeNote } = endWorkerIn(p, worker, { incomplete: args.incomplete === true });
     const cleanup =
       ended.workspace === "worktree"
-        ? ` worktree ${ended.worktree_path} 和分支 ${ended.branch} 还在：PR 合并后或收工满 ${WORKTREE_RETENTION_DAYS} 天且没有未提交改动时会自动清理 worktree（分支保留）。`
+        ? ` worktree ${ended.worktree_path} 和分支 ${ended.branch} 还在：PR 合并后或收工满 ${WORKTREE_RETENTION_DAYS} 天且没有未提交改动时会自动清理 worktree（分支保留；还有 Worker 接着用这个目录、或它经手的任务图还没结束时不清）。`
         : "";
     const interruptNote = interrupted ? "已打断正在跑的那一轮。" : "";
     return {
@@ -872,12 +1055,11 @@ export function createLedgerWorkers(
     insertReport(p, worker, turnMessageId, lastAgentText(session.id, awaiting.turnStart), awaiting.background ? backgroundKilledNote(event.reason) : null);
   };
 
+  /** 一轮开始了却没在计时（用户直接发的话、claude 自己开的一轮）：按默认时长计时。已经在计时的（含重启后恢复的）不动。 */
   const ensureTurnMaxTime = (workerId: WorkerId) => {
     const worker = workerRow(workerId);
     if (worker === null || worker.status !== "open") return;
-    if (!maxTimeTimers.has(worker.worker_conversation_id) && !turnMaxTimes.has(worker.worker_conversation_id)) {
-      startMaxTime(worker, DEFAULT_WORKER_MAX_TIME_MS);
-    }
+    if (turnTimeoutOf(worker.id) === null) startMaxTime(worker, DEFAULT_WORKER_MAX_TIME_MS);
   };
 
   const afterDriverEvent = (p: Pending, session: AgentSessionRow, event: DriverEvent) => {
@@ -915,6 +1097,10 @@ export function createLedgerWorkers(
     }
     if (event.type === "message.cancelled" || event.type === "message.requeued") {
       for (const id of event.messageIds) midTurnWaiting.delete(id);
+      if (event.type === "message.cancelled") {
+        const worker = workerRow(session.workerId);
+        if (worker !== null && !notStarted(worker) && !isWorkerInFlight(worker)) clearMaxTime(worker.worker_conversation_id);
+      }
       return;
     }
     if (event.type === "turn.started") {
@@ -923,7 +1109,14 @@ export function createLedgerWorkers(
       return;
     }
     const outcome = turnOutcome(event);
-    if (outcome === null) return;
+    if (outcome === null) {
+      if (event.type === "session.exited" && event.reason !== "shutdown") {
+        turnStarts.delete(session.id);
+        const worker = workerRow(session.workerId);
+        if (worker !== null && !notStarted(worker) && !isWorkerInFlight(worker)) clearMaxTime(worker.worker_conversation_id);
+      }
+      return;
+    }
     const worker = workerRow(session.workerId);
     if (worker === null) return;
     // 自己开的一轮（没有消息编号）只认 turn.started 开的头；游离的 turn.ended 不处理
@@ -978,6 +1171,7 @@ export function createLedgerWorkers(
       db.run("DELETE FROM worker_background_waits");
       for (const wait of waits) {
         const worker = wait.worker_id === null ? null : workerRow(wait.worker_id);
+        if (worker !== null) clearMaxTime(worker.worker_conversation_id);
         if (worker === null || worker.status === "ended") continue;
         const turnMessageId = lastAgentMessageId(wait.session_id, wait.turn_start);
         if (turnMessageId === null) continue;
@@ -1018,6 +1212,23 @@ export function createLedgerWorkers(
     });
 
   /**
+   * 同一个 worktree 目录还有别的 Worker 或它的会话没彻底结束（换人接手时前任刚被收工、session.end 还没跑完或进程还没退）：
+   * 别的 Worker 还开着、会话状态还不是 ended、或 pid 还在，接手的新 Worker 都等它们彻底结束才开工，绝不双写同一个目录。
+   */
+  const worktreeBusyByOthers = (worker: WorkerDbRow): boolean =>
+    worker.workspace === "worktree" &&
+    worker.worktree_path !== null &&
+    worker.worktree_path !== "" &&
+    db.get(
+      `SELECT 1 AS x FROM workers o JOIN agent_sessions s ON s.worker_id = o.id
+        WHERE o.worktree_path = ? AND o.id != ?
+          AND (o.status != 'ended' OR s.status != 'ended' OR s.pid IS NOT NULL)
+        LIMIT 1`,
+      worker.worktree_path,
+      worker.id,
+    ) !== undefined;
+
+  /**
    * session.send 处理函数问（兜底，不管消息从哪来）：这条消息要不要先等着，免得 Worker 的会话被它提前拉起来、第一轮不是任务说明。
    * Worker 的会话、Worker 还开着时：还没开工（worktree 没建好、准备命令在跑）→ 什么都等；开工了、任务说明还在排队 → 除了任务说明都等。
    */
@@ -1026,6 +1237,7 @@ export function createLedgerWorkers(
     const worker = workerId === null ? null : workerRow(workerId);
     if (worker === null || worker.status === "ended") return false;
     if (notStarted(worker)) return true;
+    if (worktreeBusyByOthers(worker)) return true;
     const task = db.get<{ id: number; status: string }>("SELECT id, status FROM messages WHERE dedupe_key = ?", taskDedupeKey(worker.id));
     return task !== undefined && task.status === "queued" && task.id !== messageId;
   };
@@ -1056,7 +1268,7 @@ export function createLedgerWorkers(
         p.changes.push({ type: "message.updated", data: { message: toMessage(row) } });
       }
       enqueueFirstTurn(p, worker);
-      const maxTimeMs = turnMaxTimes.get(worker.worker_conversation_id)?.maxTimeMs ?? DEFAULT_WORKER_MAX_TIME_MS;
+      const maxTimeMs = turnTimeoutOf(worker.id)?.max_time_ms ?? DEFAULT_WORKER_MAX_TIME_MS;
       startMaxTime(worker, maxTimeMs);
     });
   };
@@ -1137,14 +1349,17 @@ export function createLedgerWorkers(
         branch: string;
         worktree_path: string;
         base_commit: string | null;
-        updated_at: number;
+        ended_at: number;
         repo_folder: string;
       }>(
-        `SELECT w.id, w.project_id, w.branch, w.worktree_path, w.base_commit, w.updated_at, f.path AS repo_folder
+        `SELECT w.id, w.project_id, w.branch, w.worktree_path, w.base_commit,
+                (SELECT max(o.updated_at) FROM workers o WHERE o.worktree_path = w.worktree_path) AS ended_at,
+                f.path AS repo_folder
          FROM workers w
          JOIN project_folders f ON f.project_id = w.project_id AND f.is_main = 1 AND f.removed_at IS NULL
          WHERE w.status = 'ended' AND w.workspace = 'worktree'
-           AND w.worktree_path IS NOT NULL AND w.branch IS NOT NULL
+           AND w.worktree_path IS NOT NULL AND w.worktree_path != '' AND w.branch IS NOT NULL
+           AND w.id = (SELECT min(o.id) FROM workers o WHERE o.worktree_path = w.worktree_path AND o.status = 'ended')
          ORDER BY w.id`,
       )
       .map((r) => ({
@@ -1154,15 +1369,48 @@ export function createLedgerWorkers(
         branch: r.branch,
         worktreePath: r.worktree_path,
         baseCommit: r.base_commit,
-        endedAt: r.updated_at,
+        endedAt: r.ended_at,
       }));
 
-  /** 清理前再次确认 Worker 仍已收工且没有正在跑的一轮。 */
+  /**
+   * 清理前再次确认能删这个 Worker 的 worktree 目录（docs/orchestration-simplify-design.md 第 4.4 节）：
+   * - 它仍已收工、没有正在跑的一轮；
+   * - 同一个目录（换人接手时前后几个 Worker 共用）没有还开着的 Worker，也没有哪个的一轮还在跑或进程未退；
+   * - 共用这个目录的 Worker 经手过的任务图都已经结束（图还 active 时随时可能换人接着用这个目录）。
+   */
   const isWorkerCleanable = (workerId: WorkerId): boolean => {
     const worker = workerRow(workerId);
-    if (worker === null || worker.status !== "ended" || worker.workspace !== "worktree") return false;
-    return !isWorkerInFlight(worker);
+    if (
+      worker === null ||
+      worker.status !== "ended" ||
+      worker.workspace !== "worktree" ||
+      worker.worktree_path === null ||
+      worker.worktree_path === ""
+    ) {
+      return false;
+    }
+    const sharing = db.all<WorkerDbRow>("SELECT * FROM workers WHERE worktree_path = ?", worker.worktree_path);
+    if (
+      sharing.some((w) => {
+        if (w.status !== "ended" || isWorkerInFlight(w)) return true;
+        const s = currentSession(w.worker_conversation_id);
+        return s !== null && (s.pid !== null || liveOf(s.id).activity === "stopping");
+      })
+    ) {
+      return false;
+    }
+    return !inActiveGraph(sharing.map((w) => w.id));
   };
+
+  /** 这些 Worker 里有没有经手过还 active 的任务图节点的（节点的 worker_ids_json 里有它）。 */
+  const inActiveGraph = (workerIds: readonly WorkerId[]): boolean =>
+    workerIds.length > 0 &&
+    db.get(
+      `SELECT 1 AS x FROM task_graphs g JOIN task_graph_nodes n ON n.graph_id = g.id, json_each(n.worker_ids_json) j
+        WHERE g.status = 'active' AND j.value IN (${workerIds.map(() => "?").join(", ")})
+        LIMIT 1`,
+      ...workerIds,
+    ) !== undefined;
 
   /**
    * agent 接口在 worker.show 之前找“原始记录”用：这个 Worker 当前会话在厂商那边的三样索引（agent_sessions 的 vendor、vendor_session_id、cwd）。
@@ -1185,6 +1433,17 @@ export function createLedgerWorkers(
 
   // ---- 启动上下文 ----
 
+  /**
+   * WorkerRecord 加上 takeoverOf：换人接手时接着用的是哪个前任的 worktree。目录按 Worker 编号建（paths.ts 的 workerWorktreePath），
+   * 所以就是同一个目录里最早的那个 Worker；自己建的（最早的就是自己）、在主文件夹里干的没有。
+   */
+  const withTakeoverOf = (worker: WorkerDbRow): WorkerRecord => {
+    const record = toWorkerRecord(worker);
+    if (worker.workspace !== "worktree" || worker.worktree_path === null || worker.worktree_path === "") return record;
+    const owner = db.get<{ id: number }>("SELECT min(id) AS id FROM workers WHERE worktree_path = ?", worker.worktree_path)?.id ?? worker.id;
+    return owner === worker.id ? record : { ...record, takeoverOf: owner };
+  };
+
   /** Worker 会话的 LaunchContext（见 shared/ledger.ts）；不是 Worker 的会话返回 null。 */
   const launchContextFor = (session: AgentSessionRow): LaunchContext | null => {
     if (session.role !== "worker" || session.workerId === null) return null;
@@ -1197,7 +1456,7 @@ export function createLedgerWorkers(
       conversationId: worker.worker_conversation_id,
       pm: { id: pm.id, name: pm.name, mode: pm.mode as PmMode, persona: pm.persona ?? "" },
       project: projectCard(projectRow(worker.project_id)),
-      worker: toWorkerRecord(worker),
+      worker: withTakeoverOf(worker),
       ...(isAgentVendor(session.vendor) ? { vendor: session.vendor } : {}),
     };
   };
@@ -1227,6 +1486,7 @@ export function createLedgerWorkers(
     clearMaxTime,
     clearAllMaxTime,
     turnMaxTimeOf,
+    recoverTurnTimeouts,
     maxTimeTimers,
     isWorktreeCleaned,
     listEndedWorktreeWorkers,

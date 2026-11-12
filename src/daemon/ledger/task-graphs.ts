@@ -448,6 +448,15 @@ function unlockedNoteOf(unlocked: ReadonlyArray<{ key: TaskNodeKey; status: Task
 export interface WorkerBindTarget {
   graphId: TaskGraphId;
   nodeKey: TaskNodeKey;
+  graphTitle: string;
+  nodeTitle: string;
+  /** 这一步在图里排第几（按节点顺序，从 1 起）、一共几步。 */
+  index: number;
+  total: number;
+  /** 节点上还挂着的 Worker（换人时后台先把它收工）；没有是 null。 */
+  activeWorkerId: WorkerId | null;
+  /** 经手过这个节点的 Worker，从旧到新；不是空的就是换人接手（docs/orchestration-simplify-design.md 第 5.2 节）。 */
+  workerIds: WorkerId[];
 }
 
 export type LedgerTaskGraphs = ReturnType<typeof createLedgerTaskGraphs>;
@@ -2068,7 +2077,10 @@ export function createLedgerTaskGraphs(
 
   // ---- Worker 绑定与状态联动钩子 ----
 
-  /** hub worker start --node 派活前校验目标节点处于 ready、attention 或 done（支持待交付时打回重派）且无在跑 Worker。 */
+  /**
+   * hub worker start --node 派活前校验目标节点：是任务节点，处于 ready、attention、done（支持待交付时打回重派），
+   * 或者还有 Worker 挂着在干（running）——这时是换人：workers.ts 先把挂着的那个按“没做完”收工（同 --incomplete），再派新的。
+   */
   const prepareWorkerBind = (
     pmId: PmId,
     rawNodeKey: TaskNodeKey,
@@ -2076,25 +2088,33 @@ export function createLedgerTaskGraphs(
   ): WorkerBindTarget => {
     const nodeKey = validateNodeKey(rawNodeKey);
     const graphRow = resolveGraphForPm(pmId, { graphId, nodeKey, requireActive: true });
-    const node = db.get<TaskNodeDbRow>(
-      "SELECT * FROM task_graph_nodes WHERE graph_id = ? AND node_key = ?",
+    const nodes = db.all<TaskNodeDbRow>(
+      "SELECT * FROM task_graph_nodes WHERE graph_id = ? ORDER BY sort_order ASC, id ASC",
       graphRow.id,
-      nodeKey,
     );
+    const index = nodes.findIndex((n) => n.node_key === nodeKey);
+    const node = nodes[index];
     if (node === undefined) throw fail("not_found", `任务图 #${graphRow.id} 中没有节点「${nodeKey}」`);
     if (node.kind !== "piece") {
       throw fail("invalid", `节点「${nodeKey}」是门禁（gate）节点，不能派 Worker 执行`);
     }
-    if (node.active_worker_id !== null || node.status === "running") {
-      throw fail("conflict", `节点「${nodeKey}」已有正在运行的 Worker #${node.active_worker_id}`);
-    }
-    if (node.status !== "ready" && node.status !== "attention" && node.status !== "done") {
+    const replacing = node.active_worker_id !== null;
+    if (!replacing && node.status !== "ready" && node.status !== "attention" && node.status !== "done") {
       throw fail(
         "conflict",
-        `节点「${nodeKey}」当前状态为 ${node.status}（需处于 ready、attention 或 done 才能派 Worker）`,
+        `节点「${nodeKey}」当前状态为 ${node.status}（需处于 ready、attention 或 done，或者有 Worker 在干要换人，才能派 Worker）`,
       );
     }
-    return { graphId: graphRow.id, nodeKey };
+    return {
+      graphId: graphRow.id,
+      nodeKey,
+      graphTitle: graphRow.title,
+      nodeTitle: node.title,
+      index: index + 1,
+      total: nodes.length,
+      activeWorkerId: node.active_worker_id,
+      workerIds: parseJsonOr<WorkerId[]>(node.worker_ids_json, []),
+    };
   };
 
   /** Worker 已入库：绑定到节点并置为 running，保留完整历史 workerIds 轨迹；若从 done 打回重派则重算下游并停掉排队中的旧交付单。 */

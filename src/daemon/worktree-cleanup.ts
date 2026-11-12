@@ -2,7 +2,8 @@
 // 满足任一条件就自动删 worktree（分支 hub/<id>-<slug> 保留）：
 // 1. 这个 Worker 的分支已合并进主分支（origin/main、main 等）；
 // 2. Worker 已收工满 WORKTREE_RETENTION_DAYS（3 天）。
-// 任何情况下：还在跑（未收工）的不删；有未提交改动（含未跟踪文件）的不删（PR 已合并也不删，留给人看）；
+// 任何情况下：还在跑（未收工）的不删；同一个目录被换人接手的后任接着用（还开着、还在跑）的不删，共用这个目录的 Worker 经手过的
+// 任务图还 active 的也不删（随时可能再换人接着用，docs/orchestration-simplify-design.md 第 4.4 节；判断在账本的 isWorkerCleanable）；有未提交改动（含未跟踪文件）的不删（PR 已合并也不删，留给人看）；
 // HEAD 不在分支上（detached、rebase 到一半）的不删；不用 worktree 的跳过；路径不在 worktreesDir 下的绝不删。
 // 被 .gitignore 忽略的文件（node_modules、.env、截图等）不算改动，随目录一起删。
 // 每轮最多检查 WORKTREE_CLEANUP_BATCH_LIMIT 个：先判条件（不到期才查合并，git 引用很便宜），满足了才跑 git status；
@@ -28,6 +29,7 @@ import type { EndedWorktreeCandidate } from "./ledger/index.ts";
 
 export interface WorktreeCleanupLedger {
   listEndedWorktreeWorkers(): EndedWorktreeCandidate[];
+  /** 这个 Worker 的 worktree 目录现在能不能删：它已收工、没在跑，共用这个目录的都已收工没在跑，经手的任务图都结束了。 */
   isWorkerCleanable(workerId: WorkerId): boolean;
 }
 

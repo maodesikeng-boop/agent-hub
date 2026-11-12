@@ -136,7 +136,11 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     cli: "worker start",
     usage: `  ${hub} worker start --title <标题> [--vendor ${AGENT_VENDORS.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--max-time <时长>] [--readonly] [--no-worktree] [--node <节点> [--graph <图编号>]] --stdin
                                                           派一个 Worker，任务说明从标准输入读（--max-time 本轮最大容忍时间，默认 30m，超了叫醒项目经理、不打断 Worker；
-                                                          --node 绑到任务图里轮到的（ready）或等人接手的（attention）节点上，不带就是不绑图的临时 Worker）`,
+                                                          --node 绑到任务图里的节点上，不带就是不绑图的临时 Worker）
+  ${hub} worker start --node <节点> [--graph <图编号>] [--vendor …] [--model …] [--stdin]
+                                                          换人接手：节点上已经有经手过的 Worker 时，--title 和正文都可以不给（正文给了是补充说明）；
+                                                          节点上还挂着没收工的旧 Worker 会先按“没做完”收工，新 Worker 接着用前任的 worktree 和分支，
+                                                          第一条消息自动带最近几个前任的汇报、最后的文字、最后几步操作和原始记录路径`,
   },
   {
     command: "worker.send",
@@ -472,6 +476,8 @@ interface Parsed {
   textSource: { kind: "stdin" } | { kind: "inline"; value: string } | null;
   /** 正文放进 body 的哪个字段。 */
   textField?: "text" | "task" | "command" | "prompt" | "context" | "summary" | "specJson" | "summaryMd" | "question";
+  /** 正文可以不给、给空的也行（换人接手时的 hub worker start --node）：读到空的就不带这个字段，由守护进程按情况判断。 */
+  textOptional?: boolean;
   /** 若同时给了行内首句与 --stdin，拼在 stdin 前面。 */
   textPrefix?: string;
 }
@@ -664,7 +670,9 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
       "worker start",
     );
     expectPositionals(rest, 0, "worker start");
-    if (values.title === undefined) throw new UsageError(`${hub} worker start 要 --title <标题>`);
+    // 带 --node 时可能是换人接手：标题、正文可以不给（第一次给节点派人时守护进程会要求补上）
+    const takeover = values.node !== undefined;
+    if (values.title === undefined && !takeover) throw new UsageError(`${hub} worker start 要 --title <标题>`);
     if (values.vendor !== undefined && !isAgentVendor(values.vendor)) {
       throw new UsageError(`--vendor 只能是 ${AGENT_VENDORS.join("、")}`);
     }
@@ -674,7 +682,7 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     if (values.graph !== undefined && values.node === undefined) {
       throw new UsageError(`${hub} worker start 传 --graph 时要同时传 --node <节点>`);
     }
-    const body: Record<string, unknown> = { title: values.title };
+    const body: Record<string, unknown> = values.title === undefined ? {} : { title: values.title };
     if (values.vendor !== undefined) body.vendor = values.vendor;
     if (values.model !== undefined) body.model = values.model;
     if (values.effort !== undefined) body.effort = values.effort;
@@ -686,6 +694,9 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
       body.node = values.node.trim();
     }
     if (values.graph !== undefined) body.graphId = idOf(values.graph, "worker start", "任务图");
+    if (takeover) {
+      return { command: "worker.start", body, textSource: values.stdin === true ? { kind: "stdin" } : null, textField: "task", textOptional: true };
+    }
     const textSource = requireStdin(values, "worker start");
     return { command: "worker.start", body, textSource, textField: "task" };
   }
@@ -1308,10 +1319,11 @@ export async function runHub(io: HubIo): Promise<number> {
       if (err instanceof UsageError) return usage(err.message);
       throw err;
     }
-    if (text.trim() === "") {
+    if (text.trim() === "" && parsed.textOptional !== true) {
       return usage(parsed.textSource.kind === "stdin" ? "标准输入读到的正文是空的" : `--${parsed.textField} 的正文是空的`);
     }
-    body[parsed.textField] = parsed.textPrefix !== undefined ? `${parsed.textPrefix}\n${text}` : text;
+    // 可以不给正文的（换人接手）读到空的就不带这个字段
+    if (text.trim() !== "") body[parsed.textField] = parsed.textPrefix !== undefined ? `${parsed.textPrefix}\n${text}` : text;
   }
 
   const routePath =

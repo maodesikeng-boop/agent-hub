@@ -1408,7 +1408,7 @@ describe("0022_rewind_index：从 0021 的旧库升级", () => {
 // ---- 0023_router_and_task_graphs ----
 
 describe("0023_router_and_task_graphs：从 0022 的旧库升级与幂等重跑", () => {
-  it("最新版本为 23；零 ALTER TABLE、全部 STRICT + IF NOT EXISTS；建齐 6 张 Router 表与 3 张任务图表及部分索引", () => {
+  it("升到 23（最新版本不低于 23）；零 ALTER TABLE、全部 STRICT + IF NOT EXISTS；建齐 6 张 Router 表与 3 张任务图表及部分索引", () => {
     const rawSql = readFileSync(join(migrationsDir, "0023_router_and_task_graphs.sql"), "utf8");
     const sql = rawSql.replace(/--[^\n]*/g, "");
     expect(sql).not.toMatch(/\bALTER\s+TABLE\b/i);
@@ -1424,8 +1424,8 @@ describe("0023_router_and_task_graphs：从 0022 的旧库升级与幂等重跑"
     const beforeTables = tableNames(db);
     const dump = Object.fromEntries(beforeTables.map((name) => [name, db.all<Record<string, unknown>>(`SELECT * FROM ${name} ORDER BY rowid`)]));
 
-    expect(migrate(db, migrationsDir)).toMatchObject({ from: 22, to: LATEST_VERSION, applied: [23] });
-    expect(LATEST_VERSION).toBe(23);
+    expect(migrate(db, migrationsUpTo(23))).toMatchObject({ from: 22, to: 23, applied: [23] });
+    expect(LATEST_VERSION).toBeGreaterThanOrEqual(23);
     for (const name of beforeTables) expect(db.all(`SELECT * FROM ${name} ORDER BY rowid`)).toEqual(dump[name]);
 
     const expectedNewTables = [
@@ -1465,7 +1465,7 @@ describe("0023_router_and_task_graphs：从 0022 的旧库升级与幂等重跑"
 
     db.exec("PRAGMA user_version = 8");
     expect(() => migrate(db, migrationsDir)).not.toThrow();
-    expect(userVersion(db)).toBe(23);
+    expect(userVersion(db)).toBe(LATEST_VERSION);
     expect(db.get<{ n: number }>("SELECT count(*) AS n FROM router_items")!.n).toBe(1);
     expect(db.get<{ n: number }>("SELECT count(*) AS n FROM task_graphs")!.n).toBe(1);
     expect(db.get<{ n: number }>("SELECT count(*) AS n FROM task_graph_nodes")!.n).toBe(1);
@@ -1577,5 +1577,42 @@ describe("0023 关联记录删除安全", () => {
       expect(db.get("SELECT session_id FROM router_items")).toEqual({ session_id: null });
       expect(db.get("SELECT session_id FROM router_pm_notes")).toEqual({ session_id: null });
     }
+  });
+});
+
+// ---- 0024_worker_turn_timeout ----
+
+describe("0024_worker_turn_timeout：Worker 单轮超时计时落盘、按 worktree 目录找共用的 Worker", () => {
+  it("从 0023 升级：零 ALTER TABLE、可重复执行；只多一张 STRICT 的 worker_turn_timeouts 和一个部分索引，老数据一行不少", () => {
+    const sql = readFileSync(join(migrationsDir, "0024_worker_turn_timeout.sql"), "utf8").replace(/--[^\n]*/g, "");
+    expect(sql).not.toMatch(/\bALTER\s+TABLE\b/i);
+    expect(sql).toMatch(/CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+worker_turn_timeouts\b/i);
+    expect(sql).toMatch(/\)\s*STRICT\s*;/i);
+    for (const raw of sql.match(/CREATE\s+INDEX\b[^\n]*/gi) ?? []) expect(raw).toMatch(/CREATE\s+INDEX\s+IF\s+NOT\s+EXISTS\b/i);
+
+    const db = m3Db();
+    migrate(db, migrationsUpTo(23));
+    const beforeTables = tableNames(db);
+    const dump = Object.fromEntries(beforeTables.map((name) => [name, db.all<Record<string, unknown>>(`SELECT * FROM ${name} ORDER BY rowid`)]));
+    expect(migrate(db, migrationsUpTo(24))).toMatchObject({ from: 23, to: 24, applied: [24] });
+    for (const name of beforeTables) expect(db.all(`SELECT * FROM ${name} ORDER BY rowid`)).toEqual(dump[name]);
+    expect(tableNames(db)).toEqual([...beforeTables, "worker_turn_timeouts"].sort());
+
+    // 重跑幂等
+    db.exec("PRAGMA user_version = 8");
+    expect(() => migrate(db, migrationsDir)).not.toThrow();
+    expect(userVersion(db)).toBe(LATEST_VERSION);
+  });
+
+  it("约束：notified 只能 0/1，Worker 删了它的计时跟着删；按 worktree_path 查走索引", () => {
+    const db = m3Db();
+    migrate(db, migrationsDir);
+    const workerId = db.get<{ id: number }>("SELECT id FROM workers ORDER BY id LIMIT 1")!.id;
+    db.run("INSERT INTO worker_turn_timeouts (worker_id, max_time_ms, deadline_at) VALUES (?, 60000, 1000)", workerId);
+    expect(db.get("SELECT notified FROM worker_turn_timeouts WHERE worker_id = ?", workerId)).toEqual({ notified: 0 });
+    expect(() => db.run("UPDATE worker_turn_timeouts SET notified = 2 WHERE worker_id = ?", workerId)).toThrow(/CHECK/);
+    expect(() => db.run("INSERT INTO worker_turn_timeouts (worker_id, max_time_ms, deadline_at) VALUES (999999, 1, 1)")).toThrow(/FOREIGN KEY/);
+    const plan = db.all<{ detail: string }>("EXPLAIN QUERY PLAN SELECT id FROM workers WHERE worktree_path = ?", "/x").map((r) => r.detail).join("\n");
+    expect(plan).toContain("workers_worktree_path");
   });
 });

@@ -5,7 +5,7 @@
 // - workers 行：编号、标题、任务说明、分支、worktree、状态、收工时间；
 // - conversations 行（conversation_purges 里记着清的时间）和 agent_sessions 行：模型、思考程度、用量；
 // - 项目经理对话里的消息：Worker 每一轮的汇报（kind worker、meta.event 是 report）、已收工那一行——那是项目经理的对话，不删。
-// 不碰：项目经理的对话（归档到期的清理见 persona.ts 的 purgeExpiredArchivedPms，不变）、还没收工的 Worker、会话还在跑或还有没做完的动作的 Worker、
+// 不碰：项目经理的对话（归档到期的清理见 persona.ts 的 purgeExpiredArchivedPms，不变）、还没收工的 Worker、经手过还 active 的任务图的 Worker（换人接手要用它的记录）、会话还在跑或还有没做完的动作的 Worker、
 // worktree 目录和分支（可能有没合的活，用户自己 git worktree remove）、uploads/ 和 sent-files/（文件按编号存、不按 Worker 分，
 // 由 daemon/file-cleanup.ts 按目录修改时间满 FILE_RETENTION_DAYS 天清；它和本保留期同样是 30 天，Worker 对话里的文件到本清理时早已过期）。
 // 分批：每批一个事务（BEGIN IMMEDIATE），最多删 maxRows 行，没删完的下一批（下一轮）接着删，所以锁库的时间有上限；
@@ -30,6 +30,14 @@ interface Candidate {
   id: WorkerId;
   conv: ConversationId;
 }
+
+/**
+ * 经手过还 active 的任务图节点的 Worker（节点的 worker_ids_json 里有它）不参与清理：图没结束随时可能换人接手，
+ * 接手时要从账本取它的汇报、最后的文字、最后几步操作（takeover.ts，docs/orchestration-simplify-design.md 第 11.1 节）。
+ * 活跃的图最多 MAX_ACTIVE_GRAPHS_PER_PROJECT 张 × MAX_GRAPH_NODES 个节点，展开很便宜。
+ */
+const IN_ACTIVE_GRAPH = `SELECT 1 FROM task_graphs g JOIN task_graph_nodes n ON n.graph_id = g.id, json_each(n.worker_ids_json) j
+             WHERE g.status = 'active' AND j.value = w.id`;
 
 const placeholders = (ids: readonly number[]) => (ids.length === 0 ? "(NULL)" : `(${ids.map(() => "?").join(",")})`);
 
@@ -73,6 +81,7 @@ export function createLedgerWorkerRetention(ctx: LedgerContext, files: Pick<Ledg
         WHERE w.status = 'ended' AND w.updated_at <= ?
           AND w.worker_conversation_id != w.pm_conversation_id
           AND NOT EXISTS (SELECT 1 FROM conversation_purges x WHERE x.conversation_id = w.worker_conversation_id)
+          AND NOT EXISTS (${IN_ACTIVE_GRAPH})
         LIMIT 1`,
       cutoff,
     ) !== undefined;
@@ -86,6 +95,7 @@ export function createLedgerWorkerRetention(ctx: LedgerContext, files: Pick<Ledg
         WHERE w.status = 'ended' AND w.updated_at <= ?
           AND w.worker_conversation_id != w.pm_conversation_id
           AND NOT EXISTS (SELECT 1 FROM conversation_purges x WHERE x.conversation_id = w.worker_conversation_id)
+          AND NOT EXISTS (${IN_ACTIVE_GRAPH})
           ${busy.length === 0 ? "" : `AND w.id NOT IN ${placeholders(busy)}`}
           AND NOT EXISTS (
             SELECT 1 FROM agent_sessions s
@@ -123,6 +133,7 @@ export function createLedgerWorkerRetention(ctx: LedgerContext, files: Pick<Ledg
         params: [c.conv, ...sessionIds, ...sessionIds],
       },
       { table: "worker_background_waits", where: `session_id IN ${placeholders(sessionIds)}`, params: sessionIds },
+      { table: "worker_turn_timeouts", where: "worker_id = ?", params: [c.id] },
       { table: "session_persona_seen", where: `session_id IN ${placeholders(sessionIds)}`, params: sessionIds },
     ];
     let rows = 0;

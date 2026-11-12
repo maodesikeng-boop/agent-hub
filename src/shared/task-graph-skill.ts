@@ -4,8 +4,9 @@
 //   和“按路径读文件”兜底都指向这一个文件；
 // - hub help graph 打印同一份正文（hub/cli.ts），读不到文件时还有这条路；
 // - 基础提示词（daemon/prompt.ts）里只留三档判断、一句四类审查红线和指路的那句话。
-// 前后端都能引（不用 node:path）；cli.ts 也引它，所以只引 names.ts、hub.ts。
+// 前后端都能引（不用 node:path）；cli.ts 也引它，所以只引 names.ts、hub.ts、limits.ts。
 import { TASK_GRAPH_CREATE_JSON_HINT, TASK_GRAPH_PATCH_JSON_HINT } from "./hub.ts";
+import { TAKEOVER_PREDECESSORS_MAX } from "./limits.ts";
 import { HUB_COMMAND as HUB, PRODUCT_PLUGIN_NAME } from "./names.ts";
 
 /** 技能名（目录名、frontmatter 的 name 都是它）。带 fusa 和 task-graph：本机已有别家的 orchestration 技能，撞名会加载错手册。 */
@@ -64,7 +65,7 @@ ${PM_REVIEW_REDLINES.map((line) => `  - ${line}`).join("\n")}
 ## 跟进
 进度以 \`${HUB} graph show\` 为准。
 - **节点的 Worker 做完了**：验收通过就 \`${HUB} worker end <编号>\` 收工，节点自动标完成，后面的节点轮到。给下一个节点派 Worker 时，任务说明里给上一步的分支、PR 和文件路径，让它自己去读，不要转述内容。
-- **换人**：\`${HUB} worker end <编号> --incomplete\`，再 \`${HUB} worker start --node <节点>\` 新派一个接手，任务说明里写清分支、已有的提交、还要改的点。
+- **换人**（出错、额度用完、对话太长、该换一家）：直接 \`${HUB} worker start --node <节点> [--vendor …]\`。节点上还挂着的旧 Worker 自动按“没做完”收工；新 Worker 接着用前任的工作目录和分支，第一条消息自动带最近 ${TAKEOVER_PREDECESSORS_MAX} 个前任的汇报、最后的文字、最后几步操作和原始记录路径。正文可以不写，写了就是你的补充。
 - **计划变了**：随时 \`${HUB} graph patch\`，加节点、改还没开工的节点、跳过不需要的。原本没建图、做着发现要分段或加审查的，随时补建一张图。
 - **全部节点完成后图不会自动结束**：最后一个节点完成时图保持待交付，你会收到交付单（各节点结果和改动文件名单）。改动碰了上面的红线而图里没有审查节点，或证据不够，仍可 \`${HUB} graph patch\` 补节点或打回重做；验收合并后用 \`${HUB} graph finish\` 结束整张图（交付摘要自动同步给总助）。
 
@@ -78,7 +79,7 @@ ${PM_REVIEW_REDLINES.map((line) => `  - ${line}`).join("\n")}
 - \`${HUB} graph finish [<图编号>] [--unmerged-ok] --stdin\`：所有节点完成后结束这张图，正文是交付摘要（自动同步给总助）；分支上有未合并的 PR 时默认拦下提醒，确认不合并加 \`--unmerged-ok\`
 - \`${HUB} graph ask <节点> [--question <问题>] [--option <选项>...] [--recommended <选项>] [--stdin]\`：给轮到的 \`gate\` 节点填上问题、选项和推荐，交给用户拍板；正文是给用户看的背景摘要
 - \`${HUB} graph decide <节点> --choice <选项> [--note <说明>]\`：用户没点选项、在聊天里口头答复时，用它记下来
-- \`${HUB} worker start --node <节点> …\`：把 Worker 绑到图里轮到的节点上，其余参数和不带 \`--node\` 时一样
+- \`${HUB} worker start --node <节点> …\`：把 Worker 绑到图里轮到的节点上，其余参数和不带 \`--node\` 时一样；节点上已经有经手过的 Worker 时就是换人，\`--title\` 和正文都可以不给
 - \`${HUB} worker end <编号> [--incomplete]\`：它最近一轮汇报是“做完了”时，绑定的节点自动标完成；否则节点等人接手。加 \`--incomplete\`：不管它汇报了什么，节点都等人接手
 `;
 }
