@@ -5,10 +5,11 @@
 // 所以不能在外层事务里调（那样关不了外键检查），调了直接报错。
 // 已有数据的库升级前先备份一份：<库文件>.bak-<升级前的版本>-<UTC 时间>（VACUUM INTO，是个完整的库文件）。
 // 新备份写好后，只留最近 MAX_DB_BACKUPS 份，更早的删掉。
+// 增量回收模式下迁移删表、删索引留下的空闲页，在全部迁移事务提交后顺手回收（最多一批 DB_INCREMENTAL_VACUUM_PAGES 页，不动升级前原有的空闲页）。
 import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { MAX_DB_BACKUPS } from "../../shared/limits.ts";
+import { DB_INCREMENTAL_VACUUM_PAGES, MAX_DB_BACKUPS } from "../../shared/limits.ts";
 import type { Db } from "./db.ts";
 
 export const DEFAULT_MIGRATIONS_DIR = fileURLToPath(new URL("../../../migrations/", import.meta.url));
@@ -34,6 +35,8 @@ interface MigrationFile {
 
 /** 外键检查报错里最多列几行。 */
 const MAX_REPORTED_FK_ROWS = 10;
+/** SQLite PRAGMA auto_vacuum = INCREMENTAL 的取值。 */
+const AUTO_VACUUM_INCREMENTAL = 2;
 
 function listMigrations(dir: string): MigrationFile[] {
   const files: MigrationFile[] = [];
@@ -53,6 +56,10 @@ function listMigrations(dir: string): MigrationFile[] {
 
 export function userVersion(db: Db): number {
   return db.get<{ user_version: number }>("PRAGMA user_version")?.user_version ?? 0;
+}
+
+function freelistCount(db: Db): number {
+  return db.get<{ freelist_count: number }>("PRAGMA freelist_count")?.freelist_count ?? 0;
 }
 
 /** 2026-11-03T09:08:07.123Z → 20261103T090807Z */
@@ -138,6 +145,10 @@ export function migrate(db: Db, dir: string = DEFAULT_MIGRATIONS_DIR, options: M
   }
   const pending = migrations.filter((m) => m.version > from);
   const backupFile = from > 0 && pending.length > 0 ? backupDatabase(db, from, options.now ?? Date.now) : undefined;
+  const freeBefore =
+    pending.length > 0 && db.get<{ auto_vacuum: number }>("PRAGMA auto_vacuum")?.auto_vacuum === AUTO_VACUUM_INCREMENTAL
+      ? freelistCount(db)
+      : undefined;
   const applied: number[] = [];
   for (const { version, file } of pending) {
     const sql = readFileSync(join(dir, file), "utf8");
@@ -155,6 +166,10 @@ export function migrate(db: Db, dir: string = DEFAULT_MIGRATIONS_DIR, options: M
       if (foreignKeys) db.exec("PRAGMA foreign_keys = ON");
     }
     applied.push(version);
+  }
+  if (freeBefore !== undefined) {
+    const addedFree = Math.min(freelistCount(db) - freeBefore, DB_INCREMENTAL_VACUUM_PAGES);
+    if (addedFree > 0) db.exec(`PRAGMA incremental_vacuum(${addedFree})`);
   }
   return { from, to: userVersion(db), applied, ...(backupFile !== undefined ? { backupFile } : {}) };
 }

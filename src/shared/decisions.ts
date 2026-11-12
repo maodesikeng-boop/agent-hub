@@ -1,8 +1,9 @@
-// 同源待决拍板投影（PendingDecision）：统一汇聚活跃任务图中的 waiting_user 门禁节点与 Router 独立待决项，
+// 同源待决拍板投影（PendingDecision）：统一汇聚活跃任务图中挂着拍板卡等用户的步骤（status waiting、waitingFor user）与 Router 独立待决项，
 // 不造割裂双轨；按底层数据切片引用做多级 WeakMap 缓存，保证 StateSnapshot 与 HubState（含流式更新）均能返回同一数组引用。
 
 import {
   askOf,
+  isTaskNodeWaitingUser,
   type Conversation,
   type ConversationId,
   type Message,
@@ -19,6 +20,7 @@ import {
 } from "./domain.ts";
 import type { ConversationSnapshot } from "./api.ts";
 import type { RouterItem, RouterSlice } from "./router.ts";
+import { normalizeTaskGraphs } from "./task-graph-compat.ts";
 
 export type PendingDecisionSource =
   | {
@@ -70,7 +72,7 @@ const EMPTY_ROUTER_ITEMS: readonly RouterItem[] = [];
 const EMPTY_TASK_GRAPHS: readonly TaskGraph[] = [];
 const EMPTY_PROJECTS: readonly Project[] = [];
 
-/** 计算一个门禁节点当前阻塞的下游节点总数与直接下游节点标题预览（最多 3 个）。 */
+/** 计算一个挂卡步骤当前阻塞的下游节点总数与直接下游节点标题预览（最多 3 个）。 */
 export function computeGateImpact(
   graph: Pick<TaskGraph, "nodes" | "edges">,
   nodeKey: TaskNodeKey,
@@ -88,7 +90,7 @@ export function computeGateImpact(
   const directKeys = outgoing.get(nodeKey) ?? [];
   const directNodes = directKeys
     .map((k) => nodeByKey.get(k))
-    .filter((n): n is TaskNode => n !== undefined && n.status !== "done" && n.status !== "skipped")
+    .filter((n): n is TaskNode => n !== undefined && n.status !== "done")
     .toSorted((a, b) => a.sortOrder - b.sortOrder || a.key.localeCompare(b.key));
   const nextNodeTitles = directNodes.slice(0, 3).map((n) => n.title);
 
@@ -101,7 +103,7 @@ export function computeGateImpact(
     visited.add(cur);
     const target = nodeByKey.get(cur);
     if (!target) continue;
-    if (target.status !== "done" && target.status !== "skipped") {
+    if (target.status !== "done") {
       blockedNodeCount++;
     }
     for (const next of outgoing.get(cur) ?? []) {
@@ -141,7 +143,7 @@ const decisionsCache = new WeakMap<readonly RouterItem[], CacheByGraphs>();
  */
 export function pendingDecisionsOf(snapshot: DecisionSnapshotInput, deviceId = "local"): PendingDecision[] {
   const routerItems = snapshot.router?.items ?? EMPTY_ROUTER_ITEMS;
-  const graphs = snapshot.activeTaskGraphs ?? EMPTY_TASK_GRAPHS;
+  const graphs = normalizeTaskGraphs(snapshot.activeTaskGraphs ?? EMPTY_TASK_GRAPHS);
   const pms = snapshot.pms;
   const projects = snapshot.projects ?? EMPTY_PROJECTS;
 
@@ -196,7 +198,7 @@ export function pendingDecisionsOf(snapshot: DecisionSnapshotInput, deviceId = "
     const archived = pm?.archivedAt != null;
     for (const node of graph.nodes) {
       if (node.gateAskMessageId !== null) gateMessageIds.add(node.gateAskMessageId);
-      if (archived || node.kind !== "gate" || node.status !== "waiting_user") continue;
+      if (archived || !isTaskNodeWaitingUser(node)) continue;
       const { blockedNodeCount, nextNodeTitles } = computeGateImpact(graph, node.key);
       result.push({
         key: `gate:${deviceId}:${graph.id}:${node.key}`,

@@ -42,16 +42,16 @@ function assertNoCollisions(boxes: readonly LayoutNodeBox[], canvasWidth: number
 /** 构造 10 节点典型任务图（含已完成调研、激活态 gate 门禁、4 路并行实现、交叉审查、二轮门禁与收尾 step）。 */
 function buildTenNodeGraph(): { nodes: LayoutInputNode[]; edges: LayoutInputEdge[] } {
   const nodes: LayoutInputNode[] = [
-    { key: "research-cli", kind: "piece", status: "done", position: 0 },
-    { key: "research-ide", kind: "piece", status: "done", position: 1 },
-    { key: "confirm-mcp", kind: "gate", status: "waiting_user", optionCount: 3, hasSummary: true, position: 0 },
-    { key: "impl-core", kind: "piece", status: "pending", position: 0 },
-    { key: "impl-sync", kind: "piece", status: "pending", position: 1 },
-    { key: "impl-ui", kind: "piece", status: "pending", position: 2 },
-    { key: "impl-docs", kind: "piece", status: "pending", position: 3 },
-    { key: "cross-review", kind: "piece", status: "pending", position: 0 },
-    { key: "final-gate", kind: "gate", status: "pending", optionCount: 2, position: 0 },
-    { key: "merge-release", kind: "step", status: "pending", position: 0 },
+    { key: "research-cli", status: "done", position: 0 },
+    { key: "research-ide", status: "done", position: 1 },
+    { key: "confirm-mcp", hasCard: true, status: "waiting", waitingFor: "user", optionCount: 3, hasSummary: true, position: 0 },
+    { key: "impl-core", status: "pending", position: 0 },
+    { key: "impl-sync", status: "pending", position: 1 },
+    { key: "impl-ui", status: "pending", position: 2 },
+    { key: "impl-docs", status: "pending", position: 3 },
+    { key: "cross-review", status: "pending", position: 0 },
+    { key: "final-gate", hasCard: true, status: "pending", optionCount: 2, position: 0 },
+    { key: "merge-release", status: "pending", position: 0 },
   ];
   const edges: LayoutInputEdge[] = [
     { from: "research-cli", to: "confirm-mcp" },
@@ -82,14 +82,15 @@ function buildThirtyTwoNodeGraph(): { nodes: LayoutInputNode[]; edges: LayoutInp
         layer < 2
           ? "done"
           : isGate
-            ? "waiting_user"
+            ? "waiting"
             : layer === 2
               ? "running"
               : "pending";
       nodes.push({
         key,
-        kind: isGate ? "gate" : layer === 7 ? "step" : "piece",
+        hasCard: isGate,
         status,
+        waitingFor: status === "waiting" ? "user" : null,
         position: lane,
         optionCount: isGate ? 3 : undefined,
         hasSummary: isGate,
@@ -117,10 +118,10 @@ describe("task-graph-layout（Dagre 自动分层拓扑布局与 LRU 缓存引擎
   });
 
   it("节点 rem 宽高估算：激活态 waiting_user 门禁随 optionCount / hasSummary / noteExpanded 动态增高", () => {
-    const pieceRem = estimateNodeSizeRem({ key: "p", kind: "piece", status: "running" }, "rail", 1);
-    const gate2Rem = estimateNodeSizeRem({ key: "g2", kind: "gate", status: "waiting_user", optionCount: 2 }, "rail", 1);
+    const pieceRem = estimateNodeSizeRem({ key: "p", status: "running" }, "rail", 1);
+    const gate2Rem = estimateNodeSizeRem({ key: "g2", hasCard: true, status: "waiting", waitingFor: "user", optionCount: 2 }, "rail", 1);
     const gate4Rem = estimateNodeSizeRem(
-      { key: "g4", kind: "gate", status: "waiting_user", optionCount: 4, hasSummary: true, noteExpanded: true },
+      { key: "g4", hasCard: true, status: "waiting", waitingFor: "user", optionCount: 4, hasSummary: true, noteExpanded: true },
       "rail",
       1,
     );
@@ -185,12 +186,12 @@ describe("task-graph-layout（Dagre 自动分层拓扑布局与 LRU 缓存引擎
 
   it("右栏 k >= 3 折叠分组：若同层末尾存在 waiting_user 门禁节点，优先保留在可见的 2 张卡中不被折叠隐藏", () => {
     const nodes: LayoutInputNode[] = [
-      { key: "start", kind: "piece", status: "done" },
-      { key: "p1", kind: "piece", status: "ready", position: 0 },
-      { key: "p2", kind: "piece", status: "running", position: 1 },
-      { key: "p3", kind: "piece", status: "ready", position: 2 },
-      { key: "gate-late", kind: "gate", status: "waiting_user", optionCount: 2, position: 3 },
-      { key: "end", kind: "step", status: "pending" },
+      { key: "start", status: "done" },
+      { key: "p1", status: "waiting", waitingFor: "pm", position: 0 },
+      { key: "p2", status: "running", position: 1 },
+      { key: "p3", status: "waiting", waitingFor: "pm", position: 2 },
+      { key: "gate-late", hasCard: true, status: "waiting", waitingFor: "user", optionCount: 2, position: 3 },
+      { key: "end", status: "pending" },
     ];
     const edges: LayoutInputEdge[] = [
       { from: "start", to: "p1" },
@@ -222,12 +223,12 @@ describe("task-graph-layout（Dagre 自动分层拓扑布局与 LRU 缓存引擎
     // 额外构造带长跨度松弛边（Start -> 高门禁 Gate -> End 与 Start -> A -> B -> C -> End 并行）的不对称图
     const slackGraph: { nodes: LayoutInputNode[]; edges: LayoutInputEdge[] } = {
       nodes: [
-        { key: "s", kind: "piece", status: "done" },
-        { key: "a", kind: "piece", status: "done" },
-        { key: "b", kind: "piece", status: "running" },
-        { key: "c", kind: "piece", status: "pending" },
-        { key: "tall-gate", kind: "gate", status: "waiting_user", optionCount: 5, hasSummary: true, noteExpanded: true },
-        { key: "e", kind: "step", status: "pending" },
+        { key: "s", status: "done" },
+        { key: "a", status: "done" },
+        { key: "b", status: "running" },
+        { key: "c", status: "pending" },
+        { key: "tall-gate", hasCard: true, status: "waiting", waitingFor: "user", optionCount: 5, hasSummary: true, noteExpanded: true },
+        { key: "e", status: "pending" },
       ],
       edges: [
         { from: "s", to: "a" },
@@ -260,7 +261,7 @@ describe("task-graph-layout（Dagre 自动分层拓扑布局与 LRU 缓存引擎
       n.key === "impl-core"
         ? { ...n, status: "running" as const }
         : n.key === "impl-sync"
-          ? { ...n, status: "attention" as const }
+          ? { ...n, status: "waiting" as const, waitingFor: "pm" as const }
           : { ...n },
     );
     const second = computeTaskGraphLayout({
@@ -292,7 +293,7 @@ describe("task-graph-layout（Dagre 自动分层拓扑布局与 LRU 缓存引擎
     const keptOriginal = computeTaskGraphLayout(keepKeyInput);
     const firstBatchInput: TaskGraphLayoutInput = {
       graphId: "evict-0",
-      nodes: [{ key: "n0", kind: "piece", status: "ready" }],
+      nodes: [{ key: "n0", status: "waiting", waitingFor: "pm" }],
       edges: [],
       viewportMode: "rail",
       rootFontSizePx: 16,
@@ -307,8 +308,8 @@ describe("task-graph-layout（Dagre 自动分层拓扑布局与 LRU 缓存引擎
       computeTaskGraphLayout({
         graphId: `evict-${i}`,
         nodes: [
-          { key: `a-${i}`, kind: "piece", status: "ready" },
-          { key: `b-${i}`, kind: "step", status: "pending" },
+          { key: `a-${i}`, status: "waiting", waitingFor: "pm" },
+          { key: `b-${i}`, status: "pending" },
         ],
         edges: [{ from: `a-${i}`, to: `b-${i}` }],
         viewportMode: "rail",
@@ -430,12 +431,12 @@ describe("task-graph-layout（Dagre 自动分层拓扑布局与 LRU 缓存引擎
 
   it("放大弹窗（dialog LR）：任务图 #6 跨层长边 s1->s2 沿 Dagre 哑节点绕开中间卡片 s1-review，不横穿卡片正文", () => {
     const nodes: LayoutInputNode[] = [
-      { key: "s1", kind: "piece", status: "running", position: 0 },
-      { key: "eval-plan", kind: "piece", status: "done", position: 1 },
-      { key: "s1-review", kind: "piece", status: "pending", position: 2 },
-      { key: "eval-approve", kind: "gate", status: "waiting_user", optionCount: 2, position: 3 },
-      { key: "eval-build", kind: "piece", status: "pending", position: 4 },
-      { key: "s2", kind: "piece", status: "pending", position: 5 },
+      { key: "s1", status: "running", position: 0 },
+      { key: "eval-plan", status: "done", position: 1 },
+      { key: "s1-review", status: "pending", position: 2 },
+      { key: "eval-approve", hasCard: true, status: "waiting", waitingFor: "user", optionCount: 2, position: 3 },
+      { key: "eval-build", status: "pending", position: 4 },
+      { key: "s2", status: "pending", position: 5 },
     ];
     const edges: LayoutInputEdge[] = [
       { from: "s1", to: "s1-review" },

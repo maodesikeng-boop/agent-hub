@@ -32,8 +32,9 @@ import {
 
 function makeNode(over: Partial<TaskNode> & Pick<TaskNode, "key" | "title">): TaskNode {
   return {
-    kind: "piece",
     status: "pending",
+    waitingFor: null,
+    skipped: false,
     sortOrder: 0,
     activeWorkerId: null,
     workerIds: [],
@@ -106,7 +107,7 @@ describe("SliceWheelIcon：小水果切面进度轮", () => {
         makeNode({ key: "s1", title: "调研", status: "done", sortOrder: 0 }),
         makeNode({ key: "s2", title: "前端", status: "running", sortOrder: 1 }),
         makeNode({ key: "s3", title: "接口", status: "running", sortOrder: 2 }),
-        makeNode({ key: "s4", title: "拍板", kind: "gate", status: "waiting_user", sortOrder: 3 }),
+        makeNode({ key: "s4", title: "拍板", status: "waiting", waitingFor: "user", skipped: false, sortOrder: 3 }),
         makeNode({ key: "s5", title: "回归", status: "pending", sortOrder: 4 }),
       ],
       edges: [
@@ -131,7 +132,7 @@ describe("SliceWheelIcon：小水果切面进度轮", () => {
       "done",
       "running",
       "running",
-      "waiting_user",
+      "waiting-user",
       "pending",
     ]);
     // 同层并行阶段 s2 与 s3 之间只切半刀（果心相连）
@@ -232,8 +233,8 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
           makeNode({
             key: "gate-sync",
             title: "确认同步范围",
-            kind: "gate",
-            status: decidedChoice === null ? "waiting_user" : "done",
+            status: decidedChoice === null ? "waiting" : "done",
+            waitingFor: decidedChoice === null ? "user" : null,
             sortOrder: 1,
             gateQuestion: "冲突的两个配置项如何处理？",
             gateSummaryMd: "其中 4 项完全一致，2 项存在参数差异。",
@@ -340,8 +341,9 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
         makeNode({
           key: "g",
           title: "确认权限模型",
-          kind: "gate",
-          status: "waiting_user",
+          status: "waiting",
+          waitingFor: "user",
+          skipped: false,
           gateOptions: ["RBAC", "ABAC"],
         }),
       ],
@@ -396,8 +398,9 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
         makeNode({
           key: "gate-1",
           title: "确认门禁",
-          kind: "gate",
-          status: "waiting_user",
+          status: "waiting",
+          waitingFor: "user",
+          skipped: false,
           gateOptions: ["A", "B"],
           gateAskMessageId: 101,
         }),
@@ -442,8 +445,9 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
         makeNode({
           key: "h2",
           title: "上线前门禁",
-          kind: "gate",
           status: "done",
+          waitingFor: null,
+          skipped: false,
           sortOrder: 1,
           decision: { choice: "立即灰度", note: null, decidedBy: "user", decidedAt: 19_000 },
         }),
@@ -574,8 +578,9 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
         makeNode({
           key: "n2",
           title: "确认范围",
-          kind: "gate",
-          status: "waiting_user",
+          status: "waiting",
+          waitingFor: "user",
+          skipped: false,
           sortOrder: 1,
           gateOptions: ["继续", "暂停"],
           gateRecommended: "继续",
@@ -764,8 +769,9 @@ describe("审查回归（PR #274）：几何边界、编号不混用、防重入
         makeNode({
           key: "g",
           title: "确认",
-          kind: "gate",
-          status: "waiting_user",
+          status: "waiting",
+          waitingFor: "user",
+          skipped: false,
           gateOptions: ["甲", "乙"],
           gateRecommended: "甲",
         }),
@@ -809,7 +815,7 @@ describe("审查回归（PR #274）：几何边界、编号不混用、防重入
       id: 90,
       title: "跳过检测",
       nodes: [
-        makeNode({ key: "a", title: "第一步", status: "ready", sortOrder: 0 }),
+        makeNode({ key: "a", title: "第一步", status: "waiting", waitingFor: "pm", sortOrder: 0 }),
         makeNode({ key: "b", title: "第二步", status: "pending", sortOrder: 1 }),
       ],
       edges: [{ fromKey: "a", toKey: "b" }],
@@ -1075,7 +1081,7 @@ describe("果皮轨按真实连通关系排布：独立子图不假连、多起�
         makeNode({ key: "p431", title: "Fable 5.2 重规划总助面板", status: "running", sortOrder: 1, activeWorkerId: 431, workerIds: [431] }),
         makeNode({ key: "p432", title: "手机软键盘避让与新建弹窗适配", status: "running", sortOrder: 2, activeWorkerId: 432, workerIds: [432] }),
         makeNode({ key: "p433", title: "抽离共用设置模型层与原语", status: "running", sortOrder: 3, activeWorkerId: 433, workerIds: [433] }),
-        makeNode({ key: "ok", title: "确认总助面板重设计方案", kind: "gate", status: "pending", sortOrder: 4 }),
+        makeNode({ key: "ok", title: "确认总助面板重设计方案", status: "pending", waitingFor: null, skipped: false, sortOrder: 4 }),
         makeNode({ key: "mobile", title: "手机二级钻取设置页与验收", status: "pending", sortOrder: 5 }),
         makeNode({ key: "impl", title: "实现新版总助工作台", status: "pending", sortOrder: 6 }),
       ],
@@ -1166,8 +1172,9 @@ describe("果皮轨按真实连通关系排布：独立子图不假连、多起�
         makeNode({
           key: "eval-approve",
           title: "用户拍板验证方案",
-          kind: "gate",
-          status: "waiting_user",
+          status: "waiting",
+          waitingFor: "user",
+          skipped: false,
           sortOrder: 3,
           gateQuestion: "验证基准集与打分口径是否按此落地？",
           gateOptions: ["按 12 个真实场景建基准集", "仅跑核心 6 个场景"],
@@ -1250,8 +1257,9 @@ describe("果皮轨按真实连通关系排布：独立子图不假连、多起�
         makeNode({
           key: "eval-approve",
           title: "用户拍板验证方案",
-          kind: "gate",
-          status: "waiting_user",
+          status: "waiting",
+          waitingFor: "user",
+          skipped: false,
           sortOrder: 3,
           gateOptions: ["通过", "打回"],
         }),

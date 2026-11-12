@@ -145,7 +145,9 @@ PM 什么时候被叫醒只看状态，不看是谁点的。现在网页“跳�
 
 ### 3.4 旧数据怎么迁移
 
-`task_graph_nodes` 的 `kind` 和 `status` 都有 CHECK 约束（`migrations/0023_router_and_task_graphs.sql:146-155`）。SQLite 改不了 CHECK，所以新迁移 `0024` 要按“建新表、拷数据、删旧表、改名、重建索引”来做，同一个事务。`task_graphs` 加一列 `goal`，用 `ALTER TABLE ADD COLUMN` 就行。
+`task_graph_nodes` 的 `kind` 和 `status` 都有 CHECK 约束（`migrations/0023_router_and_task_graphs.sql:146-155`）。SQLite 改不了 CHECK，所以新迁移 `0024` 要按“建新表、拷数据、删旧表、改名、重建索引”来做，同一个事务。
+
+> 实现时（第 4 步）：`0024` 已被第 3 步占用，迁移是 `migrations/0025_task_graph_steps.sql`。迁移必须能重复执行（几个测试把 `user_version` 退回 8 重跑全部迁移），改回原名后重跑时 0023 的 `CREATE TABLE IF NOT EXISTS` 会跳过、0025 再按旧列读就报错，所以新表不改回原名，叫 `task_graph_steps`；旧表拷完就删，重跑时 0023 重建的空旧表也在 0025 里删掉。`goal` 列留到第 5 步（和步骤职责一起加）。`task_graphs` 加一列 `goal`，用 `ALTER TABLE ADD COLUMN` 就行。
 
 状态映射是全量的，没有留给旧数据的特殊分支：
 

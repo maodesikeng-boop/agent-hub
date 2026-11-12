@@ -158,7 +158,7 @@ describe("换人接手同一步：重放 441", () => {
     turn(w1, again, ["claude -p 测第二轮", "codex exec 测第三轮"], "测到第 48 分钟：claude 压缩后提示词还在，codex 丢了。", "failed");
     // 进程还在（还没退）
     db.run("UPDATE agent_sessions SET pid = 4242 WHERE id = ?", sessionIdOf(w1.id));
-    expect(nodeOf(graph.id, "s1")).toMatchObject({ status: "attention", activeWorkerId: w1.id });
+    expect(nodeOf(graph.id, "s1")).toMatchObject({ status: "waiting", waitingFor: "pm", activeWorkerId: w1.id });
 
     enqueued = [];
     // 不给标题、不给正文

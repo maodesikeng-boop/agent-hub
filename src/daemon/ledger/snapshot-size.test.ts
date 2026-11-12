@@ -108,12 +108,13 @@ function seedMonth(options: { full?: boolean } = {}): { pmConversation: number }
     );
     for (let n = 1; n <= 8; n++) {
       db.run(
-        `INSERT INTO task_graph_nodes (graph_id, node_key, title, kind, status, sort_order, created_at, updated_at)
-         VALUES (?, ?, ?, 'piece', ?, ?, ?, ?)`,
+        `INSERT INTO task_graph_steps (graph_id, node_key, title, status, waiting_for, sort_order, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         gid,
         `node-${n}`,
         `模块节点 ${n}`,
-        isActive ? (n === 1 ? "ready" : "pending") : "done",
+        isActive ? (n === 1 ? "waiting" : "pending") : "done",
+        isActive && n === 1 ? "pm" : null,
         n,
         at,
         at,

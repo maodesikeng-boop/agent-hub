@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { isAgentVendor, type ConversationId, type Message, type MessageId, type PersonaChangeId, type PmId } from "../shared/index.ts";
+import { isAgentVendor, isTaskNodeWaitingUser, type ConversationId, type Message, type MessageId, type PersonaChangeId, type PmId } from "../shared/index.ts";
 import type { SidebarGroup, SidebarRouterEntry } from "./components/Sidebar.tsx";
 import type { SettingsDialogSection } from "./components/SettingsDialog.tsx";
 import type { DeviceSettings } from "./settings-model.ts";
@@ -305,7 +305,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   // 右栏的果皮轨：当前项目经理那个项目的活跃任务图（activeGraphsOf 按 state.activeTaskGraphs 的 WeakMap 缓存，流式帧里引用不变）
   const railProjectId = active?.project?.id ?? null;
   const railGraphs = useMemo(() => activeGraphsOf(state, railProjectId), [state.activeTaskGraphs, railProjectId]);
-  const railGraphNeedsYou = useMemo(() => railGraphs.some((g) => g.nodes.some((n) => n.status === "waiting_user")), [railGraphs]);
+  const railGraphNeedsYou = useMemo(() => railGraphs.some((g) => g.nodes.some(isTaskNodeWaitingUser)), [railGraphs]);
   // 别的设备连不上（联机第 4.3 节）：离线时提示显示的是多久以前的内容、只读；重连中照常显示，发送等连上。入口本机照旧
   const { offline, link: rawLink } = deviceNotices(current);
   const link = useMemo(

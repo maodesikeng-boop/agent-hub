@@ -20,7 +20,6 @@ import type {
   TaskGraph,
   TaskGraphId,
   TaskGraphStatus,
-  TaskNodeKind,
   TaskNodeKey,
   WorkerRecord,
   WorkerId,
@@ -205,7 +204,7 @@ export interface HubArgsMap {
   "worker.send": { workerId: WorkerId; text: string; maxTimeMs?: number };
   /** `hub worker max-time <编号> <时长>`：单独延时或更新正在运行的 Worker 本轮最大时间（从现在重新计时）。 */
   "worker.max-time": { workerId: WorkerId; maxTimeMs: number };
-  /** `hub worker end <编号> [--incomplete]`：结束 Worker 会话（登记 session.end），Worker 标 ended；incomplete 为 true 时绑定节点置为 attention 供接力重绑。 */
+  /** `hub worker end <编号> [--incomplete]`：结束 Worker 会话（登记 session.end），Worker 标 ended；incomplete 为 true 时绑定节点变等人（等项目经理）供接力重绑。 */
   "worker.end": { workerId: WorkerId; incomplete?: boolean };
   /** `hub worker list`：我派出去的 Worker。 */
   "worker.list": Record<string, never>;
@@ -280,7 +279,7 @@ export interface HubArgsMap {
     all?: boolean;
     status?: TaskGraphStatus;
   };
-  /** `hub graph ask <nodeKey>`：填入或更新门禁节点问题、选项与调研摘要，上游就绪时自动激活为 waiting_user。 */
+  /** `hub graph ask <nodeKey>`：给还没开工的步骤挂上（或改）拍板卡：问题、选项、推荐与背景摘要，前置都完了时等用户拍板。 */
   "graph.ask": {
     nodeKey: TaskNodeKey;
     graphId?: TaskGraphId;
@@ -294,7 +293,7 @@ export interface HubArgsMap {
     graphId?: TaskGraphId;
     specJson: string;
   };
-  /** `hub graph done <nodeKey>`：标记 piece 节点完成并记录产物摘要，解锁下游。 */
+  /** `hub graph done <nodeKey>`：放行：把没人在干的步骤标完了并记录产物摘要，下游轮到。 */
   "graph.done": {
     nodeKey: TaskNodeKey;
     graphId?: TaskGraphId;
@@ -303,7 +302,7 @@ export interface HubArgsMap {
     branch?: string;
     summary?: string;
   };
-  /** `hub graph decide <nodeKey>`：PM 代填用户在对话中口头拍板的门禁结论并解锁下游。 */
+  /** `hub graph decide <nodeKey>`：PM 代填用户在对话中口头拍板的结论，步骤完了，下游轮到。 */
   "graph.decide": {
     nodeKey: TaskNodeKey;
     graphId?: TaskGraphId;
@@ -332,8 +331,8 @@ export interface HubArgsMap {
 export interface CreateTaskGraphNodeInput {
   key: TaskNodeKey;
   title: string;
-  kind?: TaskNodeKind;
   deps?: TaskNodeKey[];
+  /** 写了问题就是挂着拍板卡的步骤：轮到时等用户拍板。 */
   question?: string;
   options?: string[];
   summaryMd?: string;
@@ -373,9 +372,9 @@ export interface PatchTaskGraphSpecInput {
   removeEdges?: CreateTaskGraphEdgeInput[];
 }
 
-/** `hub graph create` 正文 JSON 一行字段示例（提示词与 `hub --help` 共用；顶层 title 可改用 --title 传，kind 缺省为 piece，gate 可再带 question / options / recommended / summaryMd）。 */
+/** `hub graph create` 正文 JSON 一行字段示例（提示词与 `hub --help` 共用；顶层 title 可改用 --title 传；要用户先看的步骤带 question / options，还可带 recommended / summaryMd）。 */
 export const TASK_GRAPH_CREATE_JSON_HINT =
-  '{"title":"…","nodes":[{"key":"plan","title":"…","kind":"piece"},{"key":"ok","title":"…","kind":"gate","deps":["plan"]}]}';
+  '{"title":"…","nodes":[{"key":"plan","title":"…"},{"key":"ok","title":"…","deps":["plan"],"question":"…","options":["…","…"]}]}';
 
 /** `hub graph patch` 正文 JSON 一行字段示例（提示词与 `hub help` 共用，只此一份；六个字段按需取用；updateNodes 的 deps 整体替换该节点前置依赖；skipNodes 跳过还没开工的节点）。 */
 export const TASK_GRAPH_PATCH_JSON_HINT =
@@ -399,11 +398,13 @@ export interface PmActiveGraphSummary {
   id: TaskGraphId;
   title: string;
   totalNodes: number;
+  /** 完了（含跳过的）。 */
   doneCount: number;
   runningCount: number;
-  readyCount: number;
+  /** 等项目经理处理的。 */
+  waitingPmCount: number;
+  /** 挂着拍板卡等用户的。 */
   waitingUserCount: number;
-  attentionCount: number;
   readyToFinish: boolean;
 }
 

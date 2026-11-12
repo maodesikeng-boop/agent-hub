@@ -162,7 +162,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     action: "end",
     cli: "worker end",
     usage: `  ${hub} worker end <编号> [--incomplete]                     收工：结束这个 Worker 的会话（正在跑的一轮先被打断）。绑了任务图节点的：
-                                                          它最近一轮汇报是“做完了”，节点自动标完成并解锁下游；否则节点变成 attention 等人接手。
+                                                          它最近一轮汇报是“做完了”，节点自动标完了、下游轮到；否则节点变成等你处理，等人接手。
                                                           换人时加 --incomplete：不管它汇报了什么，节点都等人接手。回执里会写明节点变成了什么`,
   },
   {
@@ -293,7 +293,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     action: "ask",
     cli: "graph ask",
     usage: `  ${hub} graph ask <节点> [--graph <图编号>] [--question <问题>] [--option <选项>...] [--recommended <选项>] [--stdin]
-                                                          给门禁节点填入问题、选项与调研摘要并按依赖激活`,
+                                                          给没人在干、还没完的节点挂上拍板卡（问题、选项、推荐与背景摘要），前置都完了就等用户拍板`,
   },
   {
     command: "graph.patch",
@@ -309,7 +309,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     action: "done",
     cli: "graph done",
     usage: `  ${hub} graph done <节点> [--graph <图编号>] [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要> | --stdin]
-                                                          把没有 Worker 在干的阶段节点标完成并解锁下游，或给节点补记 PR 等结果（图已结束时加 --graph <图编号>）；
+                                                          放行：把没有 Worker 在干的节点标完了、下游轮到，或给节点补记 PR 等结果（图已结束时加 --graph <图编号>）；
                                                           有 Worker 在干（running）的节点会被拒绝：先 ${hub} worker end 让它收工`,
   },
   {
@@ -318,14 +318,14 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     action: "decide",
     cli: "graph decide",
     usage: `  ${hub} graph decide <节点> --choice <选项> [--note <说明>] [--graph <图编号>]
-                                                          记录用户在对话中的口头拍板并解锁门禁下游`,
+                                                          记录用户在对话中的口头拍板，节点完了、下游轮到`,
   },
   {
     command: "graph.skip",
     group: "graph",
     action: "skip",
     cli: "graph skip",
-    usage: `  ${hub} graph skip <节点> [--reason <原因>] [--graph <图编号>]  跳过单个任务图节点（不连带跳过下游）并重算下游`,
+    usage: `  ${hub} graph skip <节点> [--reason <原因>] [--graph <图编号>]  跳过单个任务图节点（跳过也算完了，不连带跳过下游）并重算下游`,
   },
   {
     command: "graph.cancel",

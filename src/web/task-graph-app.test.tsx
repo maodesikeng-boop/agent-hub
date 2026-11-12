@@ -30,8 +30,9 @@ const CANCEL_PATH = new RegExp(`^/api/task-graphs/${GRAPH_ID}/cancel$`);
 
 function makeNode(over: Partial<TaskNode> & Pick<TaskNode, "key" | "title">): TaskNode {
   return {
-    kind: "piece",
     status: "pending",
+    waitingFor: null,
+    skipped: false,
     sortOrder: 0,
     activeWorkerId: null,
     workerIds: [],
@@ -62,8 +63,9 @@ function graph(): TaskGraph {
       makeNode({
         key: "gate",
         title: "确认上线",
-        kind: "gate",
-        status: "waiting_user",
+        status: "waiting",
+        waitingFor: "user",
+        skipped: false,
         sortOrder: 1,
         gateQuestion: "现在上线吗？",
         gateOptions: ["上线", "再等等"],
@@ -174,6 +176,9 @@ describe("桌面右栏：App 接通果皮轨与切面轮", () => {
     const graphs = await waitFor(() => within(sidePanel()).getByRole("region", { name: /^Task Graph$/ }));
     await user.click(within(graphs).getByRole("button", { name: "Zoom" }));
     const zoom = await screen.findByRole("dialog", { name: "发布流水线" });
+    // running 节点展示同色系果皮浅晕圆环，且滚动视口不带 -mx-6 防止贴边裁切
+    expect(zoom.querySelector("[data-running-ring]")).not.toBeNull();
+    expect(zoom.querySelector("[data-slot='dialog-body']")?.className).not.toContain("-mx-6");
 
     await user.click(within(zoom).getByRole("button", { name: "Cancel graph" }));
     const confirm = await screen.findByRole("dialog", { name: "Cancel this task graph?" });
@@ -351,7 +356,7 @@ describe("待交付状态展示（Ready to finish）", () => {
             ...graph(),
             nodes: [
               makeNode({ key: "build", title: "构建产物", status: "done", sortOrder: 0, workerIds: [3] }),
-              makeNode({ key: "gate", title: "确认上线", kind: "gate", status: "skipped", sortOrder: 1 }),
+              makeNode({ key: "gate", title: "确认上线", status: "done", waitingFor: null, skipped: true, sortOrder: 1 }),
             ],
           },
         },

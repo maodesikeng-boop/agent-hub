@@ -963,19 +963,75 @@ export interface HealthEntry {
 export const TASK_GRAPH_STATUSES = ["active", "completed", "cancelled"] as const;
 export type TaskGraphStatus = (typeof TASK_GRAPH_STATUSES)[number];
 
-export const TASK_NODE_KINDS = ["piece", "gate"] as const;
-export type TaskNodeKind = (typeof TASK_NODE_KINDS)[number];
-
-export const TASK_NODE_STATUSES = [
-  "pending",
-  "ready",
-  "running",
-  "waiting_user",
-  "attention",
-  "done",
-  "skipped",
-] as const;
+/**
+ * 步骤的四个状态（docs/orchestration-simplify-design.md 第 3.1 节）：没轮到、在干、等人、完了。
+ * “等谁”（waitingFor）和“是不是跳过的”（skipped）是状态上的附带信息，不是新状态。节点类型只剩一种（步骤）。
+ */
+export const TASK_NODE_STATUSES = ["pending", "running", "waiting", "done"] as const;
 export type TaskNodeStatus = (typeof TASK_NODE_STATUSES)[number];
+
+/** 等人的步骤在等谁：user 有拍板卡等用户点，pm 等项目经理处理（派人、换人、放行、改图）。 */
+export const TASK_NODE_WAITING_FOR = ["user", "pm"] as const;
+export type TaskNodeWaitingFor = (typeof TASK_NODE_WAITING_FOR)[number];
+
+/** 一个步骤的完整状态：status 加两项附带信息。 */
+export interface TaskNodeState {
+  status: TaskNodeStatus;
+  /** 只在 status 是 waiting 时有，其余是 null。 */
+  waitingFor: TaskNodeWaitingFor | null;
+  /** 只在 status 是 done 时可能为真。 */
+  skipped: boolean;
+}
+
+/**
+ * 旧的 7 个状态到新状态（第 3.4 节那张表，全量）。迁移 0025 用 SQL 写了同一张表（测试逐行对照）；
+ * 多台设备版本不一致时网页可能收到旧值，网页读入时也用它（web/task-graph-compat.ts）。认不出的值当等项目经理。
+ */
+export function taskNodeStateFromLegacy(status: string): TaskNodeState {
+  switch (status) {
+    case "pending":
+      return { status: "pending", waitingFor: null, skipped: false };
+    case "running":
+      return { status: "running", waitingFor: null, skipped: false };
+    case "done":
+      return { status: "done", waitingFor: null, skipped: false };
+    case "skipped":
+      return { status: "done", waitingFor: null, skipped: true };
+    case "waiting_user":
+      return { status: "waiting", waitingFor: "user", skipped: false };
+    default:
+      // ready、attention，以及认不出的值
+      return { status: "waiting", waitingFor: "pm", skipped: false };
+  }
+}
+
+/**
+ * 步骤状态的中文说法：hub graph show 等给项目经理看的文字用 viewer = "pm"，网页给用户看的用 viewer = "user"
+ * （等人时说清等谁：给项目经理看是“等你处理”，给用户看是“等你拍板”）。
+ */
+export function taskNodeStatusText(node: Pick<TaskNode, "status" | "waitingFor" | "skipped">, viewer: "pm" | "user"): string {
+  switch (node.status) {
+    case "pending":
+      return "没轮到";
+    case "running":
+      return "在干";
+    case "waiting":
+      if (node.waitingFor === "user") return viewer === "user" ? "等你拍板" : "等用户拍板";
+      return viewer === "user" ? "等项目经理" : "等你处理";
+    case "done":
+      return node.skipped ? "跳过" : "完了";
+  }
+}
+
+/** 等用户拍板的步骤（挂着拍板卡）。 */
+export function isTaskNodeWaitingUser(node: Pick<TaskNode, "status" | "waitingFor">): boolean {
+  return node.status === "waiting" && node.waitingFor === "user";
+}
+
+/** 等项目经理处理的步骤。 */
+export function isTaskNodeWaitingPm(node: Pick<TaskNode, "status" | "waitingFor">): boolean {
+  return node.status === "waiting" && node.waitingFor === "pm";
+}
 
 export interface TaskArtifact {
   prUrl?: string;
@@ -1000,8 +1056,11 @@ export interface TaskEdge {
 export interface TaskNode {
   key: TaskNodeKey;
   title: string;
-  kind: TaskNodeKind;
   status: TaskNodeStatus;
+  /** 等谁：只在 status 是 waiting 时有。 */
+  waitingFor: TaskNodeWaitingFor | null;
+  /** 是不是跳过的：只在 status 是 done 时可能为真。 */
+  skipped: boolean;
   sortOrder: number;
   activeWorkerId: WorkerId | null;
   workerIds: WorkerId[];
@@ -1031,13 +1090,9 @@ export interface TaskGraph {
   completedAt: number | null;
 }
 
-/** 图仍为 active 且所有节点均处于终态（done / skipped）：派生为“待交付（Ready to finish）”。 */
+/** 图仍为 active 且所有步骤都完了（跳过也算完了）：派生为“待交付（Ready to finish）”，不入库。 */
 export function isTaskGraphReadyToFinish(graph: Pick<TaskGraph, "status" | "nodes">): boolean {
-  return (
-    graph.status === "active" &&
-    graph.nodes.length > 0 &&
-    graph.nodes.every((n) => n.status === "done" || n.status === "skipped")
-  );
+  return graph.status === "active" && graph.nodes.length > 0 && graph.nodes.every((n) => n.status === "done");
 }
 
 // ---- 项目经理专属记忆目录子文件（state/pm-memory/<pmId>/<topic>.md）----

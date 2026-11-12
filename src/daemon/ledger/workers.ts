@@ -1032,7 +1032,8 @@ export function createLedgerWorkers(
       turnMessageId,
       deliver: note === null ? body : `${note}\n\n${body}`,
     });
-    if (parsed.kind === "ok" && (parsed.report.status === "problem" || parsed.report.status === "gave_up")) {
+    // 第 3.2 节第 6 行：汇报“有问题”“放弃了”或没按格式时，绑定的步骤变等人（等项目经理处理或放行）
+    if (parsed.kind !== "ok" || parsed.report.status === "problem" || parsed.report.status === "gave_up") {
       options.taskGraphs?.onWorkerAttentionIn(p, worker.id, { clearActiveWorker: false });
     }
   };
@@ -1406,7 +1407,7 @@ export function createLedgerWorkers(
   const inActiveGraph = (workerIds: readonly WorkerId[]): boolean =>
     workerIds.length > 0 &&
     db.get(
-      `SELECT 1 AS x FROM task_graphs g JOIN task_graph_nodes n ON n.graph_id = g.id, json_each(n.worker_ids_json) j
+      `SELECT 1 AS x FROM task_graphs g JOIN task_graph_steps n ON n.graph_id = g.id, json_each(n.worker_ids_json) j
         WHERE g.status = 'active' AND j.value IN (${workerIds.map(() => "?").join(", ")})
         LIMIT 1`,
       ...workerIds,

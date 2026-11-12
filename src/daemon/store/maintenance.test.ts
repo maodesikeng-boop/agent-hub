@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { DB_INCREMENTAL_VACUUM_PAGES } from "../../shared/limits.ts";
 import { openDatabase } from "./db.ts";
 import type { Db } from "./db.ts";
 import { autoVacuumMode, ensureIncrementalVacuum, freePages, reclaimFreePages } from "./maintenance.ts";
@@ -198,5 +199,51 @@ describe("reclaimFreePages：空闲页分批还给文件系统", () => {
     const free = freePages(db);
     expect(free).toBeGreaterThan(0);
     expect(await reclaimFreePages(db)).toMatchObject({ pages: 0, remaining: free });
+  });
+
+  it("迁移删表产生空闲页：顺手清掉新库与重跑残留，不动升级前历史空闲页且受单批上限保护", () => {
+    db = openDatabase(file);
+    migrate(db);
+    expect(freePages(db)).toBe(0);
+    // 退回 24 单独重跑 0025、退回 8 重跑全部迁移：每次跑完都不留孤儿空闲页
+    for (const rewindTo of [24, 8]) {
+      db.exec(`PRAGMA user_version = ${rewindTo}`);
+      migrate(db);
+      expect(freePages(db)).toBe(0);
+    }
+    db.close();
+
+    // 已有历史空闲页的大库升级：只回收本次迁移新增的空闲页，历史空闲页与超单批上限部分留给后台分批回收
+    rmSync(file);
+    const migDir = join(dir, "mig-cap");
+    mkdirSync(migDir, { recursive: true });
+    writeFileSync(
+      join(migDir, "0001_init.sql"),
+      "CREATE TABLE history_free (id INTEGER PRIMARY KEY, body TEXT NOT NULL); CREATE TABLE old_big (id INTEGER PRIMARY KEY, body TEXT NOT NULL);",
+    );
+    db = openDatabase(file);
+    migrate(db, migDir);
+    db.transaction(() => {
+      for (let i = 0; i < 50; i++) db!.run("INSERT INTO history_free (body) VALUES (?)", "h".repeat(4_000));
+      for (let i = 0; i < DB_INCREMENTAL_VACUUM_PAGES + 200; i++) db!.run("INSERT INTO old_big (body) VALUES (?)", "b".repeat(4_000));
+    });
+    db.run("DELETE FROM history_free");
+    const historyFree = freePages(db);
+    expect(historyFree).toBeGreaterThan(40);
+
+    // 0002 不删表：原有的 historyFree 页一页不动
+    writeFileSync(join(migDir, "0002_noop.sql"), "SELECT 1;");
+    migrate(db, migDir);
+    expect(freePages(db)).toBe(historyFree);
+
+    // 0003 删掉超过 DB_INCREMENTAL_VACUUM_PAGES 页的大旧表：最多顺手回收 1 个 chunk，不无上限阻塞启动
+    const pagesBeforeDrop = pagesOf(db);
+    writeFileSync(join(migDir, "0003_drop_big.sql"), "DROP TABLE old_big;");
+    migrate(db, migDir, { now: () => Date.UTC(2026, 10, 10, 8, 5, 0) });
+    const shrunk = pagesBeforeDrop - pagesOf(db);
+    // SQLite 跨过 pointer-map 页边界时会顺带截断尾部不再需要的 ptrmap 页（每 ~814 页 1 页）
+    expect(shrunk).toBeGreaterThanOrEqual(DB_INCREMENTAL_VACUUM_PAGES);
+    expect(shrunk).toBeLessThanOrEqual(DB_INCREMENTAL_VACUUM_PAGES + 2);
+    expect(freePages(db)).toBeGreaterThan(historyFree + 150);
   });
 });

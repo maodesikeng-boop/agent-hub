@@ -70,8 +70,10 @@ const row = (cwd: string): AgentSessionRow => ({
 });
 
 describe("任务图技能正文", () => {
-  it("从基础提示词搬过来的建图规矩一条不少：一图一事、按步骤拆、默认一条线、明说要先看的挂 gate、四条红线加审查节点、纯文案不审", () => {
+  it("从基础提示词搬过来的建图规矩一条不少：一图一事、按步骤拆、默认一条线、明说要先看的单独一步挂拍板卡、四条红线加审查节点、纯文案不审", () => {
     const body = taskGraphSkillBody();
+    // 编排简化第 4 步：节点类型只剩一种、状态只剩四个，手册里不再出现 gate 节点、kind 和旧状态
+    expect(taskGraphSkillMarkdown()).not.toMatch(/\bgate\b|\bkind\b|\bready\b|attention|waiting_user|门禁/u);
     for (const word of [
       "一件事有两段以上、每段各要一个独立会话时才建图。一段就能做完的活不建图，直接派一个 Worker。",
       `用 \`${hub} graph create\` 把这件事排成一串节点，然后给轮到的节点派 Worker（\`${hub} worker start --node <节点>\`）。`,
@@ -81,8 +83,9 @@ describe("任务图技能正文", () => {
       "只在三种时候另起一个节点：用户明说要先看、要换一个模型独立审查、一步的上下文装不下。",
       "**默认一条线**：用 `deps` 把节点按先后串起来",
       "互不依赖的活才并行（比如同时探索几个方向再汇总）",
-      `**用户明说要先看的地方**（比如“先给我看方案”）挂一个 \`gate\` 节点：轮到时用 \`${hub} graph ask\` 填上问题、选项和你的推荐`,
-      `别的拍板不预先挂门禁，撞上了用 \`${hub} ask\` 问。`,
+      `**用户明说要先看的地方**（比如“先给我看方案”）单独加一个节点，带上 \`question\`、\`options\` 和你的推荐 \`recommended\`：轮到时自动给用户出拍板卡`,
+      "节点只有四个状态：没轮到、在干、等人（等你处理，或等用户拍板）、完了（跳过也算完了）。",
+      `别的拍板不预先挂卡，撞上了用 \`${hub} ask\` 问。`,
       "**碰到下面任意一条，就在实现后面加一个审查节点**（派给另一家厂商的 Worker，任务说明里写清实现的分支和 PR、你最担心的地方，发现问题让它直接修）",
       ...PM_REVIEW_REDLINES.map((line) => `  - ${line}`),
       "纯文案、纯展示、局部纯函数、薄胶水层不用审查，靠测试和截图兜底。",
@@ -127,7 +130,7 @@ describe("任务图技能正文", () => {
     expect(commands).toContain(TASK_GRAPH_CREATE_JSON_HINT);
     expect(commands).toContain(TASK_GRAPH_PATCH_JSON_HINT);
     expect(commands).toContain("`<节点>` 是节点的 key，它在几张活跃的图里重名时加 `--graph <图编号>`。");
-    expect(commands).toContain(`\`${hub} worker start --node <节点> …\`：把 Worker 绑到图里轮到的节点上`);
+    expect(commands).toContain(`\`${hub} worker start --node <节点> …\`：把 Worker 绑到等你处理的节点上`);
     expect(commands).toContain(`\`${hub} worker end <编号> [--incomplete]\`：它最近一轮汇报是“做完了”时，绑定的节点自动标完成；否则节点等人接手。`);
     expect(commands).toContain("加 `--incomplete`：不管它汇报了什么，节点都等人接手");
   });

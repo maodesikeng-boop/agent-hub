@@ -1,7 +1,16 @@
 import { useMutation } from "@tanstack/react-query";
 import { ChevronRight, Loader2, Maximize2 } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { isTaskGraphReadyToFinish, type ConversationId, type TaskGraph, type TaskGraphId, type TaskNode, type WorkerId } from "../../shared/index.ts";
+import {
+  isTaskGraphReadyToFinish,
+  isTaskNodeWaitingPm,
+  isTaskNodeWaitingUser,
+  type ConversationId,
+  type TaskGraph,
+  type TaskGraphId,
+  type TaskNode,
+  type WorkerId,
+} from "../../shared/index.ts";
 import type { HubClient } from "../client.ts";
 import { useClient } from "../device-scope.tsx";
 import { cleanPieceTitle, errorLine, errorText, errorTitle, type ErrorLike } from "../format.ts";
@@ -16,7 +25,7 @@ import { computeGraphComponents, fruitTrackVars, SliceWheelIcon } from "./SliceW
 
 type GutterKind = "station" | "parA" | "parB" | "coil" | "gate";
 type LineStyle = "solid" | "dash" | "none";
-type DotTone = "done" | "run" | "ready" | "warn" | "blocked";
+type DotTone = "done" | "run" | "warn" | "blocked";
 
 const GUTTER_H = 32;
 const GUTTER_CY = GUTTER_H / 2;
@@ -108,9 +117,6 @@ function TrackDot({ x, tone }: { x: number; tone: DotTone }) {
       </>
     );
   }
-  if (tone === "ready") {
-    return <circle cx={x} cy={GUTTER_CY} r="4.8" fill="var(--cut)" stroke="var(--peel)" strokeWidth="2" />;
-  }
   if (tone === "warn") {
     return (
       <>
@@ -168,15 +174,16 @@ function PeelGutter({
   );
 }
 
+/** 完了（跳过也算完了）。 */
 function isNodeSettled(node: TaskNode): boolean {
-  return node.status === "done" || node.status === "skipped";
+  return node.status === "done";
 }
 
+/** 四个状态的圆点：完了实心果皮（跳过的留淡轮廓）、在干果肉浅晕、等项目经理琥珀色、没轮到淡轮廓（等用户的是水果刀，不画圆点）。 */
 function dotToneOf(node: TaskNode): DotTone {
-  if (node.status === "done") return "done";
+  if (node.status === "done") return node.skipped ? "blocked" : "done";
   if (node.status === "running") return "run";
-  if (node.status === "ready") return "ready";
-  if (node.status === "attention") return "warn";
+  if (isTaskNodeWaitingPm(node)) return "warn";
   return "blocked";
 }
 
@@ -188,7 +195,7 @@ function makeClientId(): string {
 }
 
 /**
- * 激活态门禁（waiting_user）浅果冻拍板卡：
+ * 等用户拍板的步骤（status waiting、waitingFor user）的浅果冻拍板卡：
  * 支持一键点选推荐/普通项、点选选项+附言、或直接输入自定义备注提交（POST /api/task-graphs/:graphId/nodes/:nodeKey/decide）。
  */
 export function GateDecisionCard({
@@ -368,7 +375,7 @@ function PeelStageRow({
   client: HubClient;
   onOpenWorker: (id: ConversationId) => void;
 }) {
-  if (node.kind === "gate" && node.status === "waiting_user") {
+  if (isTaskNodeWaitingUser(node)) {
     const gutterRem = `${gutterWidth / 16}rem`;
     const knifeLeftRem = `${(dotX - 15) / 16}rem`;
     return (
@@ -428,12 +435,9 @@ function PeelStageRow({
   const { workerId, worker } = resolveBoundWorker(node, workerByKey);
   const active = worker !== null && worker.conversationId === openWorkerId;
   const isBlocked = node.status === "pending";
-  const isSkipped = node.status === "skipped";
+  const isSkipped = node.status === "done" && node.skipped;
   const isRunning = node.status === "running";
-  const gateChoice =
-    node.kind === "gate" && node.status === "done"
-      ? (node.decision?.choice ?? node.decision?.note ?? "Done")
-      : null;
+  const gateChoice = node.status === "done" && node.decision !== null ? (node.decision.choice ?? node.decision.note ?? "Done") : null;
 
   const rightLabel =
     gateChoice !== null ? (
@@ -442,8 +446,8 @@ function PeelStageRow({
       <span className="shrink-0 text-xs text-muted-foreground tabular-nums">#{workerId}</span>
     ) : isSkipped ? (
       <span className="shrink-0 text-xs text-muted-foreground">Skipped</span>
-    ) : node.status === "attention" ? (
-      <span className="shrink-0 text-xs text-caution">Needs attention</span>
+    ) : isTaskNodeWaitingPm(node) ? (
+      <span className="shrink-0 text-xs text-caution">Waiting on PM</span>
     ) : null;
 
   const content = (
@@ -944,14 +948,13 @@ function PeelComponentTrack({ component, ctx }: { component: TrackComponent; ctx
   const [doneExpanded, setDoneExpanded] = useState(false);
   const [nextExpanded, setNextExpanded] = useState(false);
 
-  // 计算连续已完成的上游前缀（至少保留最后一项不折叠，刚拍板通过的 gate 留在前沿上方展示简称，且不把尚未汇合的独立旁链混进同一个卷）
+  // 计算连续已完成的上游前缀（至少保留最后一项不折叠，刚拍板通过的步骤留在前沿上方展示简称，且不把尚未汇合的独立旁链混进同一个卷）
   let rawPrefixEnd = 0;
   while (rawPrefixEnd < orderedNodes.length - 1 && isNodeSettled(orderedNodes[rawPrefixEnd]!)) {
     rawPrefixEnd++;
   }
   while (
     rawPrefixEnd > 0 &&
-    orderedNodes[rawPrefixEnd - 1]!.kind === "gate" &&
     orderedNodes[rawPrefixEnd - 1]!.decision !== null
   ) {
     rawPrefixEnd--;
@@ -1003,7 +1006,7 @@ function PeelComponentTrack({ component, ctx }: { component: TrackComponent; ctx
       const node = orderedNodes[i]!;
       mappedKey.set(node.key, node.key);
       items.push({
-        itemKind: node.kind === "gate" && node.status === "waiting_user" ? "gate" : "node",
+        itemKind: isTaskNodeWaitingUser(node) ? "gate" : "node",
         key: node.key,
         node,
         walked: walkedByKey.get(node.key) ?? false,
@@ -1121,7 +1124,7 @@ function PeelTrackBody({
 
 /**
  * 单个项目的活跃任务流图列表（PeelTrackList）：
- * - waiting_user / attention 紧急任务排在最前并默认展开；
+ * - 有步骤等用户、等项目经理的任务排在最前并默认展开；
  * - 其余后台进行中任务在多任务并存时默认收成带 SliceWheelIcon 的单行标题，点击手风琴式展开/收起；
  * - 每个任务头右上角配 Zoom（Maximize2）按钮打开横向全览弹窗。
  */

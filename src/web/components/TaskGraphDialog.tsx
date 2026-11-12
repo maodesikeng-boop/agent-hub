@@ -1,7 +1,14 @@
 import { useMutation } from "@tanstack/react-query";
 import { Check, Loader2 } from "lucide-react";
 import { memo, useMemo, useRef, useState } from "react";
-import { isTaskGraphReadyToFinish, type ConversationId, type TaskGraph, type TaskNode } from "../../shared/index.ts";
+import {
+  isTaskGraphReadyToFinish,
+  isTaskNodeWaitingPm,
+  isTaskNodeWaitingUser,
+  type ConversationId,
+  type TaskGraph,
+  type TaskNode,
+} from "../../shared/index.ts";
 import { useClient } from "../device-scope.tsx";
 import { errorLine, errorText, errorTitle, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
@@ -12,7 +19,7 @@ import { Button } from "../ui/button.tsx";
 import { Dialog, DialogBody, DialogClose, DialogContent, DialogFooter } from "../ui/dialog.tsx";
 import { KnifeAvatar } from "./KnifeAvatar.tsx";
 import { GateDecisionCard, resolveBoundWorker } from "./PeelTrack.tsx";
-import { SliceWheelIcon } from "./SliceWheelIcon.tsx";
+import { fruitTrackVars, SliceWheelIcon } from "./SliceWheelIcon.tsx";
 
 function readRootFontSizePx(): number {
   if (typeof document === "undefined" || typeof getComputedStyle !== "function") {
@@ -22,20 +29,15 @@ function readRootFontSizePx(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_ROOT_FONT_SIZE_PX;
 }
 
+/** 四个状态的英文状态词（docs/ui-standard.md 第 3 条的词表）：等人按等谁分开，完了按是不是跳过的分开。 */
 function statusLabelOf(node: TaskNode): string {
   switch (node.status) {
     case "done":
-      return "Done";
+      return node.skipped ? "Skipped" : "Done";
     case "running":
       return "Working…";
-    case "ready":
-      return "Ready";
-    case "waiting_user":
-      return "Waiting on you";
-    case "attention":
-      return "Needs attention";
-    case "skipped":
-      return "Skipped";
+    case "waiting":
+      return node.waitingFor === "user" ? "Waiting on you" : "Waiting on PM";
     case "pending":
       return "Blocked";
   }
@@ -89,8 +91,9 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
       graphId: graph.id,
       nodes: graph.nodes.map((n) => ({
         key: n.key,
-        kind: n.kind,
         status: n.status,
+        waitingFor: n.waitingFor,
+        hasCard: n.gateQuestion !== null || n.decision !== null,
         position: n.sortOrder,
         optionCount: n.gateOptions.length,
         hasSummary: Boolean(n.gateSummaryMd || n.artifact?.summary || n.decision),
@@ -200,10 +203,10 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
             {errorLine(actionError)}
           </p>
         )}
-        <DialogBody className="overflow-auto">
+        <DialogBody className="mx-0 block overflow-auto px-0">
           <div
             data-rankdir={layout.rankdir}
-            style={{ width: `${layout.width}px`, minHeight: `${layout.height}px` }}
+            style={{ ...fruitTrackVars(colorKey), width: `${layout.width}px`, minHeight: `${layout.height}px` }}
             className="relative"
           >
             <svg
@@ -240,12 +243,14 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
               const node = nodeByKey.get(box.nodeKey);
               if (!node) return null;
               const { workerId, worker } = resolveBoundWorker(node, workerByKey);
-              const isWaitingGate = node.kind === "gate" && node.status === "waiting_user";
+              const isWaitingGate = isTaskNodeWaitingUser(node);
               const isPending = node.status === "pending";
-              const isDone = node.status === "done";
-              const canSkip =
-                graph.status === "active" &&
-                (node.status === "ready" || node.status === "pending" || node.status === "attention");
+              const isSkipped = node.status === "done" && node.skipped;
+              const isDone = node.status === "done" && !node.skipped;
+              const isRunning = node.status === "running";
+              const isWaitingPm = isTaskNodeWaitingPm(node);
+              // 没轮到、等项目经理（没有 Worker 挂着）的步骤能跳过；在干、等用户、完了的不行
+              const canSkip = graph.status === "active" && (isPending || (isWaitingPm && node.activeWorkerId === null));
 
               if (isWaitingGate) {
                 return (
@@ -295,14 +300,18 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                   <div className="flex items-center justify-between gap-2">
                     <span className="flex min-w-0 items-center gap-1.5">
                       {isDone && <Check className="size-3.5 shrink-0 text-success" aria-hidden="true" />}
-                      {node.status === "attention" && (
-                        <span className="size-2 shrink-0 rounded-full bg-caution" aria-hidden="true" />
+                      {isRunning && (
+                        <svg data-running-ring viewBox="0 0 16 16" className="size-3.5 shrink-0" aria-hidden="true">
+                          <circle cx="8" cy="8" r="7" fill="var(--pulp-pale)" />
+                          <circle cx="8" cy="8" r="4.6" fill="var(--background)" stroke="var(--peel)" strokeWidth="2.2" />
+                        </svg>
                       )}
+                      {isWaitingPm && <span className="size-2 shrink-0 rounded-full bg-caution" aria-hidden="true" />}
                       <span
                         className={cn(
                           "min-w-0 truncate text-minor font-medium",
-                          node.status === "running" && "status-shimmer",
-                          node.status === "skipped" && "opacity-60",
+                          isRunning && "status-shimmer",
+                          isSkipped && "text-muted-foreground opacity-60",
                         )}
                       >
                         {node.title}
