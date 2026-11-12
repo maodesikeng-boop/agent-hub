@@ -505,16 +505,18 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
   - `viewBox="0 0 44 44"`，45° 斜置削皮水果刀，尺寸同 `Avatar.tsx` 换算为 `${size / 16}rem` 跟随第 0 条四档界面大小缩放，`aria-hidden="true"`、`data-slot="knife-avatar"`。
   - **唯一渐变 ID 铁律**：SVG `<defs>` 内的 `<linearGradient>` ID 必须用 `React.useId()` 生成实例级唯一 ID，严禁写死静态 `id="knife-blade"`（防止左栏置顶刀与顶栏刀同屏渲染后卸载其一时导致另一处 `url(#...)` 失效变黑）。
   - **配色与 WCAG 1.4.11 图形对比度**：刀身拉丝钢线性渐变（`#f4f4f6` → `#d4d4d8`）配白色刃口高光 `#ffffff`；刀背与外轮廓用 `1.5px` 深钢灰 `#3f3f46`（对白底 `#ffffff` 与侧栏 `#f6f6f7` 对比度均 ≥ 3:1，实测 > 9:1）；金属护手 `#71717a`；碳黑刀柄 `#18181b` 嵌双银色铆钉 `#d4d4d8`。
-- **`Needs You` 托盘**：只放待拍板项。没有待拍板项时不渲染。套 `.chat-column`，下边 1px `border-border`，桌面最高 `50dvh`、手机外壳最高 `33dvh`，超出在里面滚。组标题照第 12 条（12px、500、灰，高 32px，右边数量），整行可点收起。第一张用 `RouterDecisionCard` 完整展开，其余每张一行（来源头像 20px、名字、问题第一行 `truncate`、时间、`ChevronRight`，行的尺寸照第 12 条），点一行换它展开，收起的行超过 3 条出 `Show more`。
+- **`Needs You` 托盘**：只放待拍板项。没有待拍板项时不渲染。套 `.chat-column`；下边 1px `border-border` 画在列里那一层，**只和对话列一样宽，不横贯整个主区**。滚动区桌面最高 `50dvh`、手机外壳最高 `33dvh`，超出在里面滚，上下边渐隐（`.router-tray-scroll`，同左栏列表的 8px / 20px），渐隐带落在滚动区的 `pt-2` / `pb-5` 里：没滚动时不淡，滚到底卡片的底边和圆角完整、下面留 20px。左右各外扩 10px（`-mx-2.5 px-2.5`），收起的行的果冻底不被裁。组标题照第 12 条（12px、500、灰，高 32px，右边数量），整行可点收起。第一张用 `RouterDecisionCard` 完整展开，其余每张一行（来源头像 20px、名字、问题第一行 `truncate`、时间、`ChevronRight`，行的尺寸照第 12 条），点一行换它展开，收起的行超过 3 条出 `Show more`。
 - **待拍板卡（`RouterDecisionCard`）**：
-  - 卡片容器 `rounded-2xl border border-border bg-background p-4`；一句话问题用 `text-body font-medium`，补充依据用 `text-minor text-muted-foreground`；预设选项行用 `rounded-xl border border-border px-3 py-2`（左放 `A` / `B` 键帽徽标，推荐项右侧标 `Recommended`）。
+  - 卡片容器 `rounded-2xl border border-border bg-background p-4`；一句话问题用 `text-body font-medium`，补充依据用 `text-minor text-muted-foreground`。
+  - **补充依据是 Markdown**（`hub router ask` / `hub graph ask` 传来的段落、编号、子列表、行内代码）：用共用的 `<Markdown>`（第 15 条）渲染，不压成一段纯文本；卡片里是紧凑排版，段落、列表之间 0.375em（消息里的一半），不加框线。超过 5 行（`.decision-context-clamp`，行数只在 `styles.css` 改）默认收起、最后一行渐隐，下面一个 `Show more` / `Show less`（`text-minor` 灰字按钮，`aria-expanded`、`aria-controls`）；没超过不出按钮。换一张卡展开时收起状态不带过去。
+  - **预设选项行**：`rounded-xl border border-border px-3 py-2.5`，`items-start`、行高 `leading-6`（单行正好 44px）；左放 `A` / `B` 键帽徽标（和第一行文字对齐），推荐项标 `Recommended`（12px 灰）。文字和 `Recommended` 在一个 `flex-wrap` 里：文字放得下 20rem（`basis-80`）时 `Recommended` 在右边、和第一行对齐、离文字 16px；放不下（手机）换到文字下面，不把选项挤成一条窄列。
   - **常驻单行补充框（零二级展开按钮、零悬停隐藏操作）**：卡片底部直接内嵌单行 `<Input>`（`h-9 rounded-xl`，占位 `Add a note, or type a custom reply…`）+ 右侧同高 `Button size="icon"`（`size-9`，`ArrowUp` 图标，空输入时 `disabled` 中性灰），触屏热区均 ≥ 44px。
   - **三合一拍板路径**：
     1. **一键纯点选秒定**：补充框为空时点击任一选项按钮，立即提交该选项并乐观收起卡片（全程 1 次点击，无需二次点确认）；
     2. **点选 + 附备注**：先在补充框输入文字再点任一选项按钮，同时提交所选选项与补充说明；
     3. **纯文字自定义决定**：不点预设选项，直接在补充框输入决定后按 `Enter` 或点右侧发送按钮提交。
   - **离线态**：卡片所属远端设备离线时整卡 `opacity-60`、右上角标 `Offline`（`text-xs text-muted-foreground`），选项与发送按钮禁用，重连后自动恢复。
-- **时间流**：从上到下按时间排，贴底，滚动规则照第 17 条“贴底”。里面只有两种条目，都没有边框、底色和关闭键。
+- **时间流**：从上到下按时间排，贴底，滚动规则照第 17 条“贴底”。上边 2rem 渐隐（`.router-timeline`，内容上内边距 `pt-8` 一样高）：往上滚的字在顶栏或托盘下面慢慢淡掉，不贴着一条线被腰斩。里面只有两种条目，都没有边框、底色和关闭键。
   - 指令回合：用户说的话是靠右的气泡（第 17 条的用户气泡）。总助的结果靠左，开头一次水果刀头像 26px 和 `Router`（13.5px、500、灰），下面依次是去向行、Markdown 正文（第 15 条，全文不截断）、结尾一行复制键和时间（12px 灰，`tabular-nums`）。
   - 去向行：一个投递成功的目标一行。目标头像 20px、名字 15px、500，项目名和设备名 12px 灰，`gap-3`，最右 `ChevronRight`；启动、暂停、结束、新建时箭头前有 12px 灰的状态词。整行可点，尺寸和果冻底照第 12 条的行。不用“·”“|”“/”。
   - 简报：开头来源项目经理的水果头像 26px 和名字（13.5px、500、灰），项目名、设备名 12px 灰。正文 Markdown。链接是正文下面一行普通行内链接，`gap-3`，不用胶囊。结尾是时间。同一个项目经理连着几条只有第一条带头像。

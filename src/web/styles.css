@@ -167,10 +167,39 @@ code {
   overflow-x: hidden;
   overscroll-behavior-y: contain;
 }
-/* 左栏对话列表边缘渐变遮罩（docs/ui-standard.md 第 16 条）：滚动经过顶部搜索栏和底部栏时柔和渐隐，不硬切头像 */
-.sidebar-list {
+/* 左栏对话列表、Router 的 Needs You 托盘滚动区的边缘渐变遮罩（docs/ui-standard.md 第 16、21 条）：滚动经过上下边时柔和渐隐，不硬切头像、卡片边框。
+   渐隐带正好落在滚动区的上下内边距里（托盘 pt-2 / pb-5），没滚动时什么都不淡 */
+.sidebar-list,
+.router-tray-scroll {
   -webkit-mask-image: linear-gradient(to bottom, transparent, #000 8px, #000 calc(100% - 20px), transparent);
   mask-image: linear-gradient(to bottom, transparent, #000 8px, #000 calc(100% - 20px), transparent);
+}
+/* Router 时间流的上边（docs/ui-standard.md 第 21 条）：往上滚的消息在顶栏或托盘下面 2rem 内渐隐消失，不贴着一条线被腰斩；
+   和内容的上内边距（RouterStream 的 pt-8）一样高，没滚动时第一条不淡 */
+.router-timeline {
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 2rem);
+  mask-image: linear-gradient(to bottom, transparent, #000 2rem);
+}
+/* 待拍板卡的补充依据（RouterDecisionCard 的 DecisionContext，第 21 条）：收起时最多 5 行（Markdown 行高 1.65em），
+   超出的那一段最后一行渐隐，下面出 Show more。行数只在这里改 */
+/* 卡片里是紧凑排版：段落、列表之间比消息里收一半（消息里 0.75em） */
+[data-decision-context] .markdown :is(p, ul, ol, blockquote, [data-md-code], [data-md-table]) {
+  margin-block: 0.375em;
+}
+[data-decision-context] .markdown > :first-child {
+  margin-top: 0;
+}
+[data-decision-context] .markdown > :last-child {
+  margin-bottom: 0;
+}
+.decision-context-clamp {
+  --decision-context-lines: 5;
+  max-height: calc(var(--decision-context-lines) * 1.65em);
+  overflow: hidden;
+}
+.decision-context-clamp[data-overflowing] {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.65em), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 1.65em), transparent);
 }
 /* 在忙的状态词（Working…、Thinking…，docs/ui-standard.md 第 14 条）：照 Claude desktop 的 “Thinking” 流光，一道变淡的光从左往右扫过字。
    只用文字本身的颜色（currentColor，右栏是强调色、消息流是灰），不加别的颜色；字用 -webkit-text-fill-color 透明，color 不动，

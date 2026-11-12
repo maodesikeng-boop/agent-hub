@@ -914,9 +914,9 @@ export const RouterStream = memo(function RouterStream({
         role="log"
         aria-label="Router timeline"
         onScroll={onScroll}
-        className="messages min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain"
+        className="messages router-timeline min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain"
       >
-        <div ref={contentRef} className="flex min-h-full flex-col pt-4 pb-12">
+        <div ref={contentRef} className="flex min-h-full flex-col pt-8 pb-12">
           {hasMore && (
             <button
               type="button"

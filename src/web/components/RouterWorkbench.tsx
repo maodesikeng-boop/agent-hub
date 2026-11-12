@@ -140,95 +140,98 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
 
   return (
     <Collapsible asChild open={!collapsed} onOpenChange={(open) => setCollapsed(!open)}>
-      <section aria-label="Needs You" className="chat-column w-full shrink-0 border-b border-border py-2.5">
-        <CollapsibleTrigger
-          type="button"
-          className="touch-target flex h-8 w-full cursor-pointer items-center justify-between gap-2 rounded-xl text-left text-xs font-medium text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
-        >
-          <span className="inline-flex items-center gap-1.5">
-            <ChevronRight
-              className={cn("size-3.5 shrink-0 transition-transform", !collapsed && "rotate-90")}
-              aria-hidden="true"
+      <section aria-label="Needs You" className="chat-column w-full shrink-0">
+        {/* 下边线只和对话列一样宽（不横贯整个主区），时间流往上滚的字在它下面 2rem 内渐隐（.router-timeline） */}
+        <div className="border-b border-border pt-2.5">
+          <CollapsibleTrigger
+            type="button"
+            className="touch-target flex h-8 w-full cursor-pointer items-center justify-between gap-2 rounded-xl text-left text-xs font-medium text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+          >
+            <span className="inline-flex items-center gap-1.5">
+              <ChevronRight
+                className={cn("size-3.5 shrink-0 transition-transform", !collapsed && "rotate-90")}
+                aria-hidden="true"
+              />
+              <span>Needs You</span>
+            </span>
+            <span className="text-muted-foreground tabular-nums">{decisions.length}</span>
+          </CollapsibleTrigger>
+
+          <CollapsibleContent
+            className={cn(
+              "router-tray-scroll -mx-2.5 space-y-2 overflow-y-auto overscroll-y-contain px-2.5 pt-2 pb-5",
+              mobile ? "max-h-[33dvh]" : "max-h-[50dvh]",
+            )}
+          >
+            <RouterDecisionCard
+              entry={expandedEntry}
+              multiDevice={multiDevice}
+              busy={false}
+              note={decisionNotes[expandedEntry.decision.key] ?? ""}
+              error={decisionErrors[expandedEntry.decision.key] ?? null}
+              onNoteChange={onNoteChange}
+              onSubmit={onSubmit}
+              onOpenConversation={onOpenConversation}
             />
-            <span>Needs You</span>
-          </span>
-          <span className="text-muted-foreground tabular-nums">{decisions.length}</span>
-        </CollapsibleTrigger>
 
-        <CollapsibleContent
-          className={cn(
-            "mt-2 space-y-2 overflow-y-auto overscroll-y-contain",
-            mobile ? "max-h-[33dvh]" : "max-h-[50dvh]",
-          )}
-        >
-          <RouterDecisionCard
-            entry={expandedEntry}
-            multiDevice={multiDevice}
-            busy={false}
-            note={decisionNotes[expandedEntry.decision.key] ?? ""}
-            error={decisionErrors[expandedEntry.decision.key] ?? null}
-            onNoteChange={onNoteChange}
-            onSubmit={onSubmit}
-            onOpenConversation={onOpenConversation}
-          />
-
-          {shownRows.length > 0 && (
-            <div className="-mx-2.5 flex flex-col gap-0.5 pt-0.5">
-              {shownRows.map((entry) => {
-                const firstLine =
-                  entry.decision.question.split(/\r?\n/, 1)[0]?.trim() || entry.decision.question;
-                const showDevice = multiDevice || !entry.self;
-                return (
-                  <button
-                    key={entry.decision.key}
-                    type="button"
-                    aria-expanded={false}
-                    style={{ "--jelly": paletteOf(entry.avatarKey).accent } as CSSProperties}
-                    className={cn(
-                      "flex w-full pointer-coarse:min-h-11 cursor-pointer items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors outline-none hover:bg-jelly-hover focus-visible:ring-2 focus-visible:ring-ring/50",
-                      !entry.online && "opacity-60",
-                    )}
-                    onClick={() => onSelectKey(entry.decision.key)}
-                  >
-                    <Avatar colorKey={entry.avatarKey} size={20} />
-                    <span className="shrink-0 text-minor font-medium text-foreground">
-                      {entry.decision.pmName}
-                    </span>
-                    <span
-                      className="min-w-0 flex-1 truncate text-body text-foreground"
-                      title={entry.decision.question}
+            {shownRows.length > 0 && (
+              <div className="-mx-2.5 flex flex-col gap-0.5 pt-0.5">
+                {shownRows.map((entry) => {
+                  const firstLine =
+                    entry.decision.question.split(/\r?\n/, 1)[0]?.trim() || entry.decision.question;
+                  const showDevice = multiDevice || !entry.self;
+                  return (
+                    <button
+                      key={entry.decision.key}
+                      type="button"
+                      aria-expanded={false}
+                      style={{ "--jelly": paletteOf(entry.avatarKey).accent } as CSSProperties}
+                      className={cn(
+                        "flex w-full pointer-coarse:min-h-11 cursor-pointer items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors outline-none hover:bg-jelly-hover focus-visible:ring-2 focus-visible:ring-ring/50",
+                        !entry.online && "opacity-60",
+                      )}
+                      onClick={() => onSelectKey(entry.decision.key)}
                     >
-                      {firstLine}
-                    </span>
-                    {showDevice && (
-                      <span className="shrink-0 text-xs text-muted-foreground">{entry.deviceName}</span>
-                    )}
-                    {!entry.online && (
-                      <span className="shrink-0 rounded-full bg-sidebar px-2 py-0.5 text-xs font-medium text-muted-foreground">
-                        Offline
+                      <Avatar colorKey={entry.avatarKey} size={20} />
+                      <span className="shrink-0 text-minor font-medium text-foreground">
+                        {entry.decision.pmName}
                       </span>
-                    )}
-                    <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-                      {formatTime(entry.decision.createdAt)}
-                    </span>
-                    <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                  </button>
-                );
-              })}
-            </div>
-          )}
+                      <span
+                        className="min-w-0 flex-1 truncate text-body text-foreground"
+                        title={entry.decision.question}
+                      >
+                        {firstLine}
+                      </span>
+                      {showDevice && (
+                        <span className="shrink-0 text-xs text-muted-foreground">{entry.deviceName}</span>
+                      )}
+                      {!entry.online && (
+                        <span className="shrink-0 rounded-full bg-sidebar px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                          Offline
+                        </span>
+                      )}
+                      <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+                        {formatTime(entry.decision.createdAt)}
+                      </span>
+                      <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    </button>
+                  );
+                })}
+              </div>
+            )}
 
-          {hasMoreRows && (
-            <button
-              type="button"
-              aria-expanded={rowsExpanded}
-              className="touch-target inline-flex cursor-pointer items-center gap-1 rounded-full px-1 py-1 text-minor text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
-              onClick={() => setRowsExpanded((v) => !v)}
-            >
-              {rowsExpanded ? "Show less" : "Show more"}
-            </button>
-          )}
-        </CollapsibleContent>
+            {hasMoreRows && (
+              <button
+                type="button"
+                aria-expanded={rowsExpanded}
+                className="touch-target inline-flex cursor-pointer items-center gap-1 rounded-full px-1 py-1 text-minor text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+                onClick={() => setRowsExpanded((v) => !v)}
+              >
+                {rowsExpanded ? "Show less" : "Show more"}
+              </button>
+            )}
+          </CollapsibleContent>
+        </div>
       </section>
     </Collapsible>
   );

@@ -562,6 +562,106 @@ describe("Needs You 托盘", () => {
     await act(async () => releaseResolve!());
   });
 
+  it("补充依据按 Markdown 渲染（段落、编号、子列表、行内代码），超过 5 行默认收起并给 Show more / Show less；托盘不画全宽分割线、滚动区留底边、时间流顶边渐隐；长选项和 Recommended 分开排", async () => {
+    const longContext = [
+      "方案文档：`docs/orchestration-skill-design.md`",
+      "",
+      "核心结论：",
+      "",
+      "1. 拆不拆只看会不会产生大量新上下文，分三档：",
+      "   - 直接做",
+      "   - 派 1 个 Worker 不建图",
+      "2. 建图手册拆成 `fusa-task-graph`",
+    ].join("\n");
+    const longOption = "按推荐采纳：先打小补丁撤掉一步也建图并上三档判断，等验证第一版合入后落地技能与 5 个防过度建图场景";
+    const now = Date.now();
+    const localSnap = makeSnapshot({
+      pms: [makePm({ id: 1, name: "小林" })],
+      projects: [makeProject({ id: 10, name: "agent-hub", pmId: 1, conversationId: 1 })],
+      conversations: [makeConvSnapshot([], { conversation: { id: 1, pmId: 1, projectId: 10, title: "小林" } })],
+      router: {
+        ...emptyRouterSlice(),
+        items: [
+          makeDecisionItem({ id: 101, question: "方案怎么推进？", context: longContext, options: [`(Recommended) ${longOption}`, "合并成一步做"], createdAt: now - 60_000 }),
+          makeDecisionItem({ id: 102, question: "要不要覆盖手机？", context: "只差手机外壳", options: ["要", "不要"], createdAt: now - 120_000 }),
+        ],
+        commands: [makeCommandRecord()],
+      },
+    });
+    installFleet({ local: localSnap });
+    // jsdom 不排版：补充依据框的内容高度按正文行数算（每行 22px），框高 5 行（收起时）
+    const proto = HTMLElement.prototype;
+    const lines = (el: HTMLElement) => (el.textContent ?? "").length / 12 + el.querySelectorAll("p, li").length;
+    Object.defineProperty(proto, "scrollHeight", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.hasAttribute("data-decision-context") ? Math.ceil(lines(this)) * 22 : 0;
+      },
+    });
+    Object.defineProperty(proto, "clientHeight", {
+      configurable: true,
+      get(this: HTMLElement) {
+        if (!this.hasAttribute("data-decision-context")) return 0;
+        const full = Math.ceil(lines(this)) * 22;
+        return this.classList.contains("decision-context-clamp") ? Math.min(full, 5 * 22) : full;
+      },
+    });
+    try {
+      const user = userEvent.setup();
+      await openRouter();
+      const tray = await screen.findByRole("region", { name: "Needs You" });
+
+      // 托盘本身不画横贯主区的线：线在对话列宽的内层；滚动区上下留出渐隐带的内边距，卡片底边不贴着裁剪边
+      expect(tray.className).not.toMatch(/\bborder-b\b/);
+      expect(tray.firstElementChild!.className).toContain("border-b");
+      const scrollBox = tray.querySelector<HTMLElement>(".router-tray-scroll")!;
+      expect(scrollBox.className).toContain("pb-5");
+      expect(scrollBox.className).toContain("pt-2");
+      // 时间流顶边渐隐，内容上内边距和渐隐带一样高
+      expect(timeline().className).toContain("router-timeline");
+      expect(timeline().firstElementChild!.className).toContain("pt-8");
+
+      const card = tray.querySelector("article")!;
+      const context = card.querySelector<HTMLElement>("[data-decision-context]")!;
+      // Markdown：段落、编号列表、子列表、行内代码都是真的元素，不是一坨纯文本
+      expect(context.querySelector("ol > li")).toHaveTextContent(/拆不拆只看/);
+      expect(context.querySelectorAll("ol > li > ul > li")).toHaveLength(2);
+      expect([...context.querySelectorAll("code")].map((c) => c.textContent)).toEqual(["docs/orchestration-skill-design.md", "fusa-task-graph"]);
+      expect(context.className).toContain("text-minor");
+      expect(context.className).toContain("text-muted-foreground");
+
+      // 长：默认收起（5 行、底部渐隐），Show more 展开、Show less 收回
+      expect(context.className).toContain("decision-context-clamp");
+      expect(context).toHaveAttribute("data-overflowing");
+      const more = within(card).getByRole("button", { name: "Show more" });
+      expect(more).toHaveAttribute("aria-expanded", "false");
+      expect(more).toHaveAttribute("aria-controls", context.id);
+      await user.click(more);
+      expect(context.className).not.toContain("decision-context-clamp");
+      expect(context).not.toHaveAttribute("data-overflowing");
+      await user.click(within(card).getByRole("button", { name: "Show less" }));
+      expect(context.className).toContain("decision-context-clamp");
+
+      // 长选项：键帽、文字、Recommended 顶对齐，Recommended 和文字分开（放得下在右边，放不下换到下面）
+      const recOption = within(card).getByRole("button", { name: new RegExp(longOption) });
+      expect(recOption.className).toContain("items-start");
+      const rec = within(recOption).getByText("Recommended");
+      expect(rec.parentElement!.className).toContain("flex-wrap");
+      expect(rec.previousElementSibling).toHaveTextContent(longOption);
+
+      // 短的不收起、不出按钮；换一张卡展开状态不带过去
+      await user.click(within(tray).getByRole("button", { name: /要不要覆盖手机？/ }));
+      const shortCard = tray.querySelector("article")!;
+      expect(within(shortCard).getByText("只差手机外壳")).toBeInTheDocument();
+      expect(within(shortCard).queryByRole("button", { name: /Show (more|less)/ })).toBeNull();
+      expect(shortCard.querySelector("[data-decision-context]")).not.toHaveAttribute("data-overflowing");
+    } finally {
+      // 两个 getter 原本在 Element.prototype 上，删掉 HTMLElement.prototype 上的这层就还原了
+      Reflect.deleteProperty(proto, "scrollHeight");
+      Reflect.deleteProperty(proto, "clientHeight");
+    }
+  });
+
   it("手机外壳下托盘上限降为 33dvh 并保持内部纵向滚动，第一张卡完整展开、其余收成单行", async () => {
     installViewport("mobile");
     window.history.replaceState(null, "", "#/router");
