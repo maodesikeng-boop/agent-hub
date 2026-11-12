@@ -372,6 +372,56 @@ function computeRailWidthsForRow(rowNodes: readonly VirtualNode[], fontPx: numbe
   return [colW, colW, RAIL_MAX_CONTENT_WIDTH_PX - 2 * gap - 2 * colW];
 }
 
+function sampleCubicPoint(
+  p0: LayoutPoint,
+  c1: LayoutPoint,
+  c2: LayoutPoint,
+  p3: LayoutPoint,
+  t: number,
+): LayoutPoint {
+  const mt = 1 - t;
+  return {
+    x: mt * mt * mt * p0.x + 3 * mt * mt * t * c1.x + 3 * mt * t * t * c2.x + t * t * t * p3.x,
+    y: mt * mt * mt * p0.y + 3 * mt * mt * t * c1.y + 3 * mt * t * t * c2.y + t * t * t * p3.y,
+  };
+}
+
+function directLrCurveHitsBox(start: LayoutPoint, end: LayoutPoint, box: LayoutNodeBox, pad = 4): boolean {
+  const span = Math.max(16, Math.abs(end.x - start.x) * 0.5);
+  const c1: LayoutPoint = { x: start.x + span, y: start.y };
+  const c2: LayoutPoint = { x: end.x - span, y: end.y };
+  for (let i = 1; i < 32; i++) {
+    const pt = sampleCubicPoint(start, c1, c2, end, i / 32);
+    if (
+      pt.x >= box.x - pad &&
+      pt.x <= box.x + box.width + pad &&
+      pt.y >= box.y - pad &&
+      pt.y <= box.y + box.height + pad
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function buildMultiPointLrSplineAndArrow(points: readonly LayoutPoint[]): { d: string; arrowD: string } {
+  const first = points[0]!;
+  const last = points[points.length - 1]!;
+  const segs: string[] = [`M ${round2(first.x)} ${round2(first.y)}`];
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i]!;
+    const b = points[i + 1]!;
+    const span = Math.max(12, Math.abs(b.x - a.x) * 0.45);
+    segs.push(
+      `C ${round2(a.x + span)} ${round2(a.y)}, ${round2(b.x - span)} ${round2(b.y)}, ${round2(b.x)} ${round2(b.y)}`,
+    );
+  }
+  const ex = round2(last.x);
+  const ey = round2(last.y);
+  const arrowD = `M ${round2(ex - 3.5)} ${round2(ey - 3)} L ${ex} ${ey} L ${round2(ex - 3.5)} ${round2(ey + 3)}`;
+  return { d: segs.join(" "), arrowD };
+}
+
 function buildCubicBezierAndArrow(
   start: LayoutPoint,
   end: LayoutPoint,
@@ -603,6 +653,7 @@ export function computeTaskGraphLayoutUncached(input: TaskGraphLayoutInput): Tas
   let canvasWidth = 0;
   let canvasHeight = 0;
 
+  let dialogShiftY = 0;
   if (input.viewportMode === "rail") {
     // 按 Dagre 实际计算出的中心 y 坐标聚类同排节点（容差 1px），若某排因松弛滑移超过 3 项则自动切分子排
     const withDagre = virtualNodes.map((vn) => {
@@ -718,6 +769,7 @@ export function computeTaskGraphLayoutUncached(input: TaskGraphLayoutInput): Tas
 
     const shiftX = marginPx - (Number.isFinite(minX) ? minX : 0);
     const shiftY = marginPx - (Number.isFinite(minY) ? minY : 0);
+    dialogShiftY = shiftY;
 
     for (const { vn, x, y, dagreRank } of rawCoords) {
       const bx = round2(x + shiftX);
@@ -745,6 +797,7 @@ export function computeTaskGraphLayoutUncached(input: TaskGraphLayoutInput): Tas
   }
 
   // ─── 生成平滑三次贝塞尔 SVG 有向连线 ──────────────────────────────────────
+  const allBoxes = [...positionedBoxes.values()];
   const edgePaths: LayoutEdgePath[] = [];
   for (const ve of virtualEdges) {
     const fromBox = positionedBoxes.get(ve.from);
@@ -761,14 +814,58 @@ export function computeTaskGraphLayoutUncached(input: TaskGraphLayoutInput): Tas
         ? Object.freeze({ x: round2(toBox.x + toBox.width / 2), y: round2(toBox.y) })
         : Object.freeze({ x: round2(toBox.x), y: round2(toBox.y + toBox.height / 2) });
 
-    const { d, arrowD } = buildCubicBezierAndArrow(start, end, rankdir);
+    let built = buildCubicBezierAndArrow(start, end, rankdir);
+    if (rankdir === "LR" && end.x > start.x + 24) {
+      const obstacles = allBoxes
+        .filter(
+          (b) =>
+            b.id !== ve.from &&
+            b.id !== ve.to &&
+            b.x + b.width > start.x + 2 &&
+            b.x < end.x - 2 &&
+            directLrCurveHitsBox(start, end, b),
+        )
+        .sort((a, b) => a.x - b.x);
+
+      if (obstacles.length > 0) {
+        const dagrePts: ReadonlyArray<{ x: number; y: number }> = g.edge(ve.from, ve.to)?.points ?? [];
+        const midYs = dagrePts.slice(1, -1).map((p) => p.y + dialogShiftY);
+        const hintY = midYs.length > 0 ? midYs.reduce((s, v) => s + v, 0) / midYs.length : (start.y + end.y) / 2;
+
+        const waypoints: LayoutPoint[] = [start];
+        let lastX = start.x + 8;
+        for (const obs of obstacles) {
+          const obsMidY = obs.y + obs.height / 2;
+          const aboveY = round2(obs.y - 14);
+          const belowY = round2(obs.y + obs.height + 14);
+          const clearY = hintY <= obsMidY && aboveY >= 6 ? aboveY : belowY;
+          if (clearY + 8 > canvasHeight) canvasHeight = round2(clearY + 8);
+
+          const xEnter = round2(Math.max(lastX, obs.x - 6));
+          const xExit = round2(Math.min(end.x - 8, obs.x + obs.width + 6));
+          if (xEnter < end.x - 8) {
+            waypoints.push({ x: xEnter, y: clearY });
+            lastX = xEnter + 4;
+          }
+          if (xExit > lastX && xExit < end.x - 8) {
+            waypoints.push({ x: xExit, y: clearY });
+            lastX = xExit + 4;
+          }
+        }
+        waypoints.push(end);
+        if (waypoints.length >= 3) {
+          built = buildMultiPointLrSplineAndArrow(waypoints);
+        }
+      }
+    }
+
     edgePaths.push(
       Object.freeze({
         id: `${ve.from}->${ve.to}`,
         from: ve.from,
         to: ve.to,
-        d,
-        arrowD,
+        d: built.d,
+        arrowD: built.arrowD,
         start,
         end,
         solid: ve.solid,

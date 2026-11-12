@@ -12,18 +12,43 @@ import { Button } from "../ui/button.tsx";
 import { Input } from "../ui/input.tsx";
 import { KnifeAvatar } from "./KnifeAvatar.tsx";
 import { Markdown } from "./Markdown.tsx";
-import { computeGraphComponents, computeGraphLayers, fruitTrackVars, SliceWheelIcon } from "./SliceWheelIcon.tsx";
+import { computeGraphComponents, fruitTrackVars, SliceWheelIcon } from "./SliceWheelIcon.tsx";
 
-type GutterKind = "station" | "parA" | "parMid" | "parB" | "coil" | "gate";
+type GutterKind = "station" | "parA" | "parB" | "coil" | "gate";
 type LineStyle = "solid" | "dash" | "none";
 type DotTone = "done" | "run" | "ready" | "warn" | "blocked";
 
 const GUTTER_H = 32;
 const GUTTER_CY = GUTTER_H / 2;
+const GATE_TOP_Y = GUTTER_CY - 9;
+const GATE_BOT_Y = GUTTER_CY + 11;
+const DEFAULT_GUTTER_W = 40;
+const MAX_GUTTER_W = 96;
 const LANE_MAIN_X = 11;
 const LANE_PAR_X = 29;
+const MULTI_LANE_PAD_X = 10;
+const MULTI_LANE_STEP_X = 14;
 
-const COIL_PATH_D = (() => {
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+function computeGutterGeometry(maxLanes: number): { gutterWidth: number; laneX: (lane: number) => number } {
+  if (maxLanes <= 2) {
+    return {
+      gutterWidth: DEFAULT_GUTTER_W,
+      laneX: (lane: number) => (lane <= 0 ? LANE_MAIN_X : LANE_PAR_X),
+    };
+  }
+  const gutterWidth = Math.min(MAX_GUTTER_W, 2 * MULTI_LANE_PAD_X + (maxLanes - 1) * MULTI_LANE_STEP_X);
+  const step = (gutterWidth - 2 * MULTI_LANE_PAD_X) / (maxLanes - 1);
+  return {
+    gutterWidth,
+    laneX: (lane: number) => round2(MULTI_LANE_PAD_X + lane * step),
+  };
+}
+
+function buildCoilPathD(baseX: number): string {
   const pts: string[] = [];
   const turns = 1.6;
   const r0 = 7.6;
@@ -32,12 +57,22 @@ const COIL_PATH_D = (() => {
     const t = i / 48;
     const r = r0 - 5.8 * t;
     const a = Math.PI + t * turns * 2 * Math.PI;
-    const x = Number((LANE_MAIN_X + r0 + r * Math.cos(a)).toFixed(2));
-    const y = Number((cyc + r * Math.sin(a)).toFixed(2));
+    const x = round2(baseX + r0 + r * Math.cos(a));
+    const y = round2(cyc + r * Math.sin(a));
     pts.push(`${x} ${y}`);
   }
-  return `M${LANE_MAIN_X} ${GUTTER_H}V${cyc}L${pts.join("L")}`;
-})();
+  return `M${baseX} ${GUTTER_H}V${cyc}L${pts.join("L")}`;
+}
+
+interface GutterSegment {
+  readonly d: string;
+  readonly style: "solid" | "dash";
+}
+
+interface LaneExit {
+  readonly x: number;
+  readonly style: "solid" | "dash";
+}
 
 function TrackPath({ style, d }: { style: LineStyle; d: string }) {
   if (style === "none") return null;
@@ -89,58 +124,38 @@ function TrackDot({ x, tone }: { x: number; tone: DotTone }) {
 
 function PeelGutter({
   kind,
+  gutterWidth,
+  dotX,
   tone = "done",
-  inn = "solid",
-  out = "solid",
-  thru = inn,
+  segments,
 }: {
   kind: GutterKind;
+  gutterWidth: number;
+  dotX: number;
   tone?: DotTone;
-  inn?: LineStyle;
-  out?: LineStyle;
-  thru?: LineStyle;
+  segments: readonly GutterSegment[];
 }) {
+  const dashSegments = segments.filter((s) => s.style === "dash");
+  const solidSegments = segments.filter((s) => s.style === "solid");
+
   return (
     <svg
       data-peel-gutter={kind}
-      viewBox={`0 0 40 ${GUTTER_H}`}
+      data-dot-x={dotX}
+      viewBox={`0 0 ${gutterWidth} ${GUTTER_H}`}
+      style={{ width: `${gutterWidth / 16}rem`, height: "2rem" }}
       aria-hidden="true"
-      className="block h-8 w-10 shrink-0 select-none"
+      className="block shrink-0 select-none"
     >
-      {kind === "station" && (
-        <>
-          <TrackPath style={inn} d={`M${LANE_MAIN_X} 0V${GUTTER_CY}`} />
-          <TrackPath style={out} d={`M${LANE_MAIN_X} ${GUTTER_CY}V${GUTTER_H}`} />
-          <TrackDot x={LANE_MAIN_X} tone={tone} />
-        </>
-      )}
-      {kind === "parA" && (
-        <>
-          <TrackPath style={inn} d={`M${LANE_MAIN_X} 0V${GUTTER_CY}`} />
-          <TrackPath style={out} d={`M${LANE_MAIN_X} ${GUTTER_CY}V${GUTTER_H}`} />
-          <TrackPath style={inn} d={`M${LANE_MAIN_X} 0C${LANE_MAIN_X} 15 ${LANE_PAR_X} 13 ${LANE_PAR_X} ${GUTTER_H}`} />
-          <TrackDot x={LANE_MAIN_X} tone={tone} />
-        </>
-      )}
-      {kind === "parMid" && (
-        <>
-          <TrackPath style={thru} d={`M${LANE_MAIN_X} 0V${GUTTER_H}`} />
-          <TrackPath style={inn} d={`M${LANE_PAR_X} 0V${GUTTER_CY}`} />
-          <TrackPath style={out} d={`M${LANE_PAR_X} ${GUTTER_CY}V${GUTTER_H}`} />
-          <TrackDot x={LANE_PAR_X} tone={tone} />
-        </>
-      )}
-      {kind === "parB" && (
-        <>
-          <TrackPath style={thru} d={`M${LANE_MAIN_X} 0V${GUTTER_H}`} />
-          <TrackPath style={inn} d={`M${LANE_PAR_X} 0V${GUTTER_CY}`} />
-          <TrackPath style={out} d={`M${LANE_PAR_X} ${GUTTER_CY}C${LANE_PAR_X} 30 ${LANE_MAIN_X} 22 ${LANE_MAIN_X} ${GUTTER_H}`} />
-          <TrackDot x={LANE_PAR_X} tone={tone} />
-        </>
-      )}
+      {dashSegments.map((seg, idx) => (
+        <TrackPath key={`d-${idx}`} style="dash" d={seg.d} />
+      ))}
+      {solidSegments.map((seg, idx) => (
+        <TrackPath key={`s-${idx}`} style="solid" d={seg.d} />
+      ))}
       {kind === "coil" && (
         <path
-          d={COIL_PATH_D}
+          d={buildCoilPathD(dotX)}
           fill="none"
           stroke="var(--peel)"
           strokeWidth="3.2"
@@ -148,18 +163,13 @@ function PeelGutter({
           strokeLinejoin="round"
         />
       )}
-      {kind === "gate" && (
-        <>
-          <TrackPath style={inn} d={`M${LANE_MAIN_X} 0V${GUTTER_CY - 9}`} />
-          <TrackPath style={out} d={`M${LANE_MAIN_X} ${GUTTER_CY + 11}V${GUTTER_H}`} />
-        </>
-      )}
+      {kind !== "coil" && kind !== "gate" && <TrackDot x={dotX} tone={tone} />}
     </svg>
   );
 }
 
-function isLayerCompleted(layer: readonly TaskNode[]): boolean {
-  return layer.length > 0 && layer.every((n) => n.status === "done" || n.status === "skipped");
+function isNodeSettled(node: TaskNode): boolean {
+  return node.status === "done" || node.status === "skipped";
 }
 
 function dotToneOf(node: TaskNode): DotTone {
@@ -335,9 +345,10 @@ function PeelStageRow({
   graphId,
   node,
   gutterKind,
-  inn,
-  out,
-  thru,
+  gutterWidth,
+  dotX,
+  segments,
+  exitLanes,
   hasBelow,
   workerByKey,
   openWorkerId,
@@ -347,9 +358,10 @@ function PeelStageRow({
   graphId: TaskGraphId;
   node: TaskNode;
   gutterKind: GutterKind;
-  inn: LineStyle;
-  out: LineStyle;
-  thru: LineStyle;
+  gutterWidth: number;
+  dotX: number;
+  segments: readonly GutterSegment[];
+  exitLanes: readonly LaneExit[];
   hasBelow: boolean;
   workerByKey: ReadonlyMap<WorkerId, WorkerEntry>;
   openWorkerId: ConversationId | null;
@@ -357,18 +369,51 @@ function PeelStageRow({
   onOpenWorker: (id: ConversationId) => void;
 }) {
   if (node.kind === "gate" && node.status === "waiting_user") {
+    const gutterRem = `${gutterWidth / 16}rem`;
+    const knifeLeftRem = `${(dotX - 15) / 16}rem`;
     return (
-      <div className="relative flex items-start">
-        {hasBelow && (
-          <span
+      <div data-node-key={node.key} className="relative flex items-start">
+        {hasBelow && exitLanes.length > 0 && (
+          <svg
+            data-peel-gate-ext
             aria-hidden="true"
-            style={{ left: "0.6875rem" }}
-            className="pointer-events-none absolute top-8 bottom-0 border-l border-dashed border-line"
-          />
+            style={{ width: gutterRem, height: "calc(100% - 2rem)" }}
+            className="pointer-events-none absolute top-8 left-0 block select-none"
+          >
+            {exitLanes.map((lane, idx) => {
+              const xPct = `${round2((lane.x / gutterWidth) * 100)}%`;
+              return lane.style === "solid" ? (
+                <line
+                  key={`ext-${idx}`}
+                  x1={xPct}
+                  y1="0"
+                  x2={xPct}
+                  y2="100%"
+                  stroke="var(--peel)"
+                  strokeWidth="3.6"
+                  strokeLinecap="round"
+                />
+              ) : (
+                <line
+                  key={`ext-${idx}`}
+                  x1={xPct}
+                  y1="0"
+                  x2={xPct}
+                  y2="100%"
+                  stroke="var(--ghost-line)"
+                  strokeWidth="1.6"
+                  strokeDasharray="2 4"
+                  strokeLinecap="round"
+                />
+              );
+            })}
+          </svg>
         )}
-        <div className="relative flex h-8 w-10 shrink-0 items-center">
-          <PeelGutter kind="gate" inn={inn} out="none" />
-          <KnifeAvatar size={30} className="pointer-events-none absolute -left-1 top-0" />
+        <div style={{ width: gutterRem, height: "2rem" }} className="relative flex shrink-0 items-center">
+          <PeelGutter kind="gate" gutterWidth={gutterWidth} dotX={dotX} segments={segments} />
+          <span style={{ left: knifeLeftRem }} className="pointer-events-none absolute top-0 inline-flex">
+            <KnifeAvatar size={30} />
+          </span>
         </div>
         <div className="min-w-0 flex-1 pb-2">
           <div className="flex min-h-8 items-center text-body font-semibold text-primary">
@@ -403,7 +448,13 @@ function PeelStageRow({
 
   const content = (
     <>
-      <PeelGutter kind={gutterKind} tone={dotToneOf(node)} inn={inn} out={out} thru={thru} />
+      <PeelGutter
+        kind={gutterKind}
+        gutterWidth={gutterWidth}
+        dotX={dotX}
+        tone={dotToneOf(node)}
+        segments={segments}
+      />
       <span className="flex min-h-8 min-w-0 flex-1 items-center justify-between gap-2">
         <span
           className={cn(
@@ -425,6 +476,7 @@ function PeelStageRow({
     return (
       <button
         type="button"
+        data-node-key={node.key}
         aria-current={active ? "true" : undefined}
         aria-label={node.title}
         title={node.title}
@@ -440,85 +492,441 @@ function PeelStageRow({
   }
 
   return (
-    <div title={node.title} className="flex min-h-8 pointer-coarse:min-h-11 items-center">
+    <div data-node-key={node.key} title={node.title} className="flex min-h-8 pointer-coarse:min-h-11 items-center">
       {content}
     </div>
   );
 }
 
-const walked = (done: boolean): LineStyle => (done ? "solid" : "dash");
-
-/** 同一段轨道同时承载几股流（上游分下来的、往下游合流的）：都没有就不画，有一股未走通就画虚线。 */
-function carry(...flows: LineStyle[]): LineStyle {
-  const live = flows.filter((f) => f !== "none");
-  if (live.length === 0) return "none";
-  return live.every((f) => f === "solid") ? "solid" : "dash";
-}
-
-interface RowPlan {
-  node: TaskNode;
-  gutterKind: GutterKind;
-  inn: LineStyle;
-  out: LineStyle;
-  thru: LineStyle;
-  hasBelow: boolean;
+interface DirectedEdge {
+  readonly fromKey: string;
+  readonly toKey: string;
 }
 
 /**
- * 把连通子图里的一层排成果皮轨行：第一个阶段在主轨，其余在右侧并行副轨。
- * - feed：上一层分下来的流（子图首层没有上游，为 none——多起点合流层不画分叉弧线，右轨上方也没有进入线）；
- * - merge：本层往下一层合流的流（子图末层为 none）；只有真正有下游（出度 > 0）的阶段才把自己那一股接进主轨，
- *   右轨每一段只在它确实承载上游分流或上方兄弟的合流时才画，保证逐行首尾相接、无断头悬空线。
+ * 传递约简（Hasse 图）：若已存在 u ->+ ... ->+ v 的更长有向路径且不存在反向环路，
+ * 则去掉跨层冗余弦边 (u, v)，避免紧凑轨道额外分出无意义的旁路，同时 100% 保持全部真实依赖可达性。
  */
-function planLayerRows(
-  layer: readonly TaskNode[],
-  feed: LineStyle,
-  merge: LineStyle,
-  hasLayerBelow: boolean,
-  outDegree: ReadonlyMap<string, number>,
-): RowPlan[] {
-  const flows = (node: TaskNode): LineStyle => ((outDegree.get(node.key) ?? 0) > 0 ? merge : "none");
-  const head = layer[0]!;
-  if (layer.length === 1) {
-    return [{ node: head, gutterKind: "station", inn: feed, out: flows(head), thru: feed, hasBelow: hasLayerBelow }];
+function reduceTransitiveEdges(keys: readonly string[], edges: readonly DirectedEdge[]): DirectedEdge[] {
+  const keySet = new Set(keys);
+  const adj = new Map<string, Set<string>>();
+  for (const k of keys) adj.set(k, new Set());
+
+  const uniqueEdges: DirectedEdge[] = [];
+  const seen = new Set<string>();
+  for (const e of edges) {
+    if (e.fromKey === e.toKey || !keySet.has(e.fromKey) || !keySet.has(e.toKey)) continue;
+    const id = `${e.fromKey}->${e.toKey}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    uniqueEdges.push(e);
+    adj.get(e.fromKey)!.add(e.toKey);
   }
-  const thru = flows(head);
-  const rows: RowPlan[] = [{ node: head, gutterKind: "parA", inn: feed, out: thru, thru: feed, hasBelow: true }];
-  // 右轨上已经汇入的合流（第 1..i 个并行阶段里有任一往下走，右轨就得一路接到最后一行弯回主轨）
-  let parMerge: LineStyle = "none";
-  for (let i = 1; i < layer.length; i++) {
-    const node = layer[i]!;
-    const isLast = i === layer.length - 1;
-    const inn = carry(feed, parMerge);
-    parMerge = carry(parMerge, flows(node));
-    rows.push({
-      node,
-      gutterKind: isLast ? "parB" : "parMid",
-      inn,
-      // 中间行的右轨下半段还要把上游分流继续送给下面的兄弟；最后一行只剩弯回主轨的合流
-      out: isLast ? parMerge : carry(feed, parMerge),
-      thru,
-      hasBelow: hasLayerBelow || !isLast,
-    });
+
+  const canReach = (start: string, target: string, skipDirectFrom?: string, skipDirectTo?: string): boolean => {
+    const visited = new Set<string>([start]);
+    const queue = [start];
+    while (queue.length > 0) {
+      const cur = queue.shift()!;
+      for (const nxt of adj.get(cur) ?? []) {
+        if (cur === skipDirectFrom && nxt === skipDirectTo) continue;
+        if (nxt === target) return true;
+        if (!visited.has(nxt)) {
+          visited.add(nxt);
+          queue.push(nxt);
+        }
+      }
+    }
+    return false;
+  };
+
+  for (const e of uniqueEdges) {
+    if (canReach(e.fromKey, e.toKey, e.fromKey, e.toKey) && !canReach(e.toKey, e.fromKey)) {
+      adj.get(e.fromKey)!.delete(e.toKey);
+    }
   }
-  return rows;
+
+  return uniqueEdges.filter((e) => adj.get(e.fromKey)!.has(e.toKey));
+}
+
+/**
+ * 链优先拓扑序（照 git log --graph --topo-order）：
+ * 汇合之前尽量沿着刚解锁的子节点一路往下排，把同一条多步分支链紧凑排在一起；
+ * 遇到多上游汇合屏障时再切去排另一条待汇合的分支链，避免跨链交错穿插。
+ */
+function orderComponentNodes(nodes: readonly TaskNode[], reducedEdges: readonly DirectedEdge[]): TaskNode[] {
+  const indexByKey = new Map<string, number>();
+  const nodeByKey = new Map<string, TaskNode>();
+  nodes.forEach((n, idx) => {
+    if (!nodeByKey.has(n.key)) {
+      nodeByKey.set(n.key, n);
+      indexByKey.set(n.key, idx);
+    }
+  });
+  const unique = [...nodeByKey.values()];
+  const compareDecl = (a: TaskNode, b: TaskNode): number => {
+    if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+    return (indexByKey.get(a.key) ?? 0) - (indexByKey.get(b.key) ?? 0);
+  };
+
+  const children = new Map<string, TaskNode[]>();
+  const remInDeg = new Map<string, number>();
+  for (const n of unique) {
+    children.set(n.key, []);
+    remInDeg.set(n.key, 0);
+  }
+  for (const e of reducedEdges) {
+    children.get(e.fromKey)!.push(nodeByKey.get(e.toKey)!);
+    remInDeg.set(e.toKey, (remInDeg.get(e.toKey) ?? 0) + 1);
+  }
+  for (const list of children.values()) list.sort(compareDecl);
+
+  const canReachNode = (start: string, targets: ReadonlySet<string>): boolean => {
+    if (targets.size === 0) return false;
+    const seen = new Set<string>([start]);
+    const queue = [start];
+    while (queue.length > 0) {
+      const cur = queue.shift()!;
+      for (const nxt of children.get(cur) ?? []) {
+        if (targets.has(nxt.key)) return true;
+        if (!seen.has(nxt.key)) {
+          seen.add(nxt.key);
+          queue.push(nxt.key);
+        }
+      }
+    }
+    return false;
+  };
+
+  const visited = new Set<string>();
+  const ordered: TaskNode[] = [];
+  const chainStack: TaskNode[] = [];
+
+  while (ordered.length < unique.length) {
+    let picked: TaskNode | undefined;
+    while (chainStack.length > 0) {
+      const top = chainStack.pop()!;
+      if (!visited.has(top.key)) {
+        picked = top;
+        break;
+      }
+    }
+
+    if (picked === undefined) {
+      const ready = unique.filter((n) => !visited.has(n.key) && (remInDeg.get(n.key) ?? 0) === 0).sort(compareDecl);
+      if (ready.length > 0) {
+        // 若已有前序分支停在汇合屏障前等待，优先挑能通向该汇合节点的就绪分支，尽早闭合占用的泳道
+        const waitingMerges = new Set<string>();
+        for (const doneNode of ordered) {
+          for (const ch of children.get(doneNode.key) ?? []) {
+            if (!visited.has(ch.key)) waitingMerges.add(ch.key);
+          }
+        }
+        picked = ready.find((r) => canReachNode(r.key, waitingMerges)) ?? ready[0]!;
+      } else {
+        picked = unique.filter((n) => !visited.has(n.key)).sort(compareDecl)[0]!;
+      }
+    }
+
+    visited.add(picked.key);
+    ordered.push(picked);
+
+    const unlocked: TaskNode[] = [];
+    for (const ch of children.get(picked.key) ?? []) {
+      const nextDeg = (remInDeg.get(ch.key) ?? 1) - 1;
+      remInDeg.set(ch.key, nextDeg);
+      if (nextDeg === 0 && !visited.has(ch.key)) unlocked.push(ch);
+    }
+    unlocked.sort(compareDecl);
+    for (let i = unlocked.length - 1; i >= 0; i--) {
+      chainStack.push(unlocked[i]!);
+    }
+  }
+
+  return ordered;
 }
 
 interface TrackComponent {
-  key: string;
-  layers: TaskNode[][];
-  outDegree: ReadonlyMap<string, number>;
+  readonly key: string;
+  readonly orderedNodes: readonly TaskNode[];
+  readonly reducedEdges: readonly DirectedEdge[];
+  readonly childrenByKey: ReadonlyMap<string, readonly string[]>;
+  readonly walkedByKey: ReadonlyMap<string, boolean>;
 }
 
 function computeTrackComponents(graph: Pick<TaskGraph, "nodes" | "edges">): TrackComponent[] {
   return computeGraphComponents(graph).map((component) => {
-    const layers = computeGraphLayers(component);
-    const outDegree = new Map<string, number>();
-    for (const edge of component.edges) {
-      if (edge.fromKey !== edge.toKey) outDegree.set(edge.fromKey, (outDegree.get(edge.fromKey) ?? 0) + 1);
+    const rawKeys = [...new Set(component.nodes.map((n) => n.key))];
+    const reducedEdges = reduceTransitiveEdges(rawKeys, component.edges);
+    const orderedNodes = orderComponentNodes(component.nodes, reducedEdges);
+
+    const parentsByKey = new Map<string, string[]>();
+    const childrenByKey = new Map<string, string[]>();
+    for (const n of orderedNodes) {
+      parentsByKey.set(n.key, []);
+      childrenByKey.set(n.key, []);
     }
-    return { key: layers[0]![0]!.key, layers, outDegree };
+    for (const e of reducedEdges) {
+      parentsByKey.get(e.toKey)!.push(e.fromKey);
+      childrenByKey.get(e.fromKey)!.push(e.toKey);
+    }
+
+    const walkedByKey = new Map<string, boolean>();
+    for (const n of orderedNodes) {
+      const parents = parentsByKey.get(n.key) ?? [];
+      const allParentsWalked = parents.every((p) => walkedByKey.get(p) === true);
+      walkedByKey.set(n.key, isNodeSettled(n) && allParentsWalked);
+    }
+
+    return {
+      key: orderedNodes[0]!.key,
+      orderedNodes,
+      reducedEdges,
+      childrenByKey,
+      walkedByKey,
+    };
   });
+}
+
+type DisplayItem =
+  | { readonly itemKind: "coil"; readonly key: string; readonly count: number; readonly walked: true }
+  | { readonly itemKind: "node" | "gate"; readonly key: string; readonly node: TaskNode; readonly walked: boolean }
+  | { readonly itemKind: "next"; readonly key: string; readonly count: number; readonly walked: false };
+
+interface RenderedTrackRow {
+  readonly item: DisplayItem;
+  readonly gutterKind: GutterKind;
+  readonly dotX: number;
+  readonly segments: readonly GutterSegment[];
+  readonly exitLanes: readonly LaneExit[];
+  readonly hasBelow: boolean;
+}
+
+function lowestFreeLane(lanes: readonly (string | null)[]): number {
+  const idx = lanes.indexOf(null);
+  return idx >= 0 ? idx : lanes.length;
+}
+
+/**
+ * 源点独占多泳道布线：
+ * 任意行边界处，每个尚未走完下游的已渲染节点独占一条平行泳道；
+ * 仅当存在真实有向依赖 u -> w 时才从 u 的泳道连入 w 的圆点/刀口，确保画出的每条线段都 1:1 对应真实依赖。
+ */
+function layoutDisplayTrack(
+  items: readonly DisplayItem[],
+  rawDisplayEdges: readonly DirectedEdge[],
+): { gutterWidth: number; rows: RenderedTrackRow[] } {
+  const itemKeys = items.map((it) => it.key);
+  const edges = reduceTransitiveEdges(itemKeys, rawDisplayEdges);
+
+  const parentsMap = new Map<string, string[]>();
+  const remOutDeg = new Map<string, number>();
+  const styleByKey = new Map<string, "solid" | "dash">();
+  for (const it of items) {
+    parentsMap.set(it.key, []);
+    remOutDeg.set(it.key, 0);
+    styleByKey.set(it.key, it.walked ? "solid" : "dash");
+  }
+  for (const e of edges) {
+    parentsMap.get(e.toKey)!.push(e.fromKey);
+    remOutDeg.set(e.fromKey, (remOutDeg.get(e.fromKey) ?? 0) + 1);
+  }
+
+  type LogicalOp =
+    | { kind: "thru"; lane: number; style: "solid" | "dash" }
+    | { kind: "in"; fromLane: number; toLane: number; target: "dot" | "gate"; style: "solid" | "dash" }
+    | { kind: "fork"; fromLane: number; toLane: number; style: "solid" | "dash" }
+    | { kind: "out"; lane: number; source: "dot" | "gate" | "coil"; style: "solid" | "dash" };
+
+  interface LogicalRow {
+    item: DisplayItem;
+    dotLane: number;
+    ops: LogicalOp[];
+    exits: Array<{ lane: number; style: "solid" | "dash" }>;
+    bottomLaneCount: number;
+  }
+
+  const activeLanes: Array<string | null> = [];
+  const setLane = (lane: number, key: string | null) => {
+    while (activeLanes.length <= lane) activeLanes.push(null);
+    activeLanes[lane] = key;
+  };
+
+  let maxLaneUsed = 0;
+  const logicalRows: LogicalRow[] = [];
+
+  for (const item of items) {
+    const parents = parentsMap.get(item.key) ?? [];
+    const parentSet = new Set(parents);
+    const beforeLaneOf = new Map<string, number>();
+    activeLanes.forEach((k, l) => {
+      if (k !== null) beforeLaneOf.set(k, l);
+    });
+
+    for (const p of parents) {
+      remOutDeg.set(p, (remOutDeg.get(p) ?? 1) - 1);
+    }
+
+    const termParents = parents
+      .filter((p) => (remOutDeg.get(p) ?? 0) === 0)
+      .sort((a, b) => (beforeLaneOf.get(a) ?? 0) - (beforeLaneOf.get(b) ?? 0));
+    const contParents = parents
+      .filter((p) => (remOutDeg.get(p) ?? 0) > 0)
+      .sort((a, b) => (beforeLaneOf.get(a) ?? 0) - (beforeLaneOf.get(b) ?? 0));
+
+    let dotLane: number;
+    let singleContForkLane: number | null = null;
+
+    if (termParents.length > 0) {
+      dotLane = beforeLaneOf.get(termParents[0]!) ?? 0;
+      for (const p of termParents) {
+        const l = beforeLaneOf.get(p);
+        if (l !== undefined) setLane(l, null);
+      }
+    } else if (contParents.length === 1) {
+      const p = contParents[0]!;
+      dotLane = beforeLaneOf.get(p) ?? 0;
+      singleContForkLane = lowestFreeLane(activeLanes);
+      setLane(dotLane, null);
+      setLane(singleContForkLane, p);
+    } else {
+      dotLane = lowestFreeLane(activeLanes);
+    }
+
+    const ops: LogicalOp[] = [];
+
+    for (const [k, l] of beforeLaneOf) {
+      if (!parentSet.has(k)) {
+        ops.push({ kind: "thru", lane: l, style: styleByKey.get(k) ?? "dash" });
+      }
+    }
+
+    const targetKind = item.itemKind === "gate" ? "gate" : "dot";
+    for (const p of parents) {
+      const fromLane = beforeLaneOf.get(p) ?? 0;
+      const pStyle = styleByKey.get(p) ?? "dash";
+      ops.push({ kind: "in", fromLane, toLane: dotLane, target: targetKind, style: pStyle });
+      if ((remOutDeg.get(p) ?? 0) > 0) {
+        if (singleContForkLane !== null && fromLane === dotLane) {
+          ops.push({ kind: "fork", fromLane: dotLane, toLane: singleContForkLane, style: pStyle });
+        } else {
+          ops.push({ kind: "thru", lane: fromLane, style: pStyle });
+        }
+      }
+    }
+
+    if ((remOutDeg.get(item.key) ?? 0) > 0) {
+      setLane(dotLane, item.key);
+      const outSource = item.itemKind === "coil" ? "coil" : item.itemKind === "gate" ? "gate" : "dot";
+      ops.push({ kind: "out", lane: dotLane, source: outSource, style: styleByKey.get(item.key) ?? "dash" });
+    }
+
+    const exits: Array<{ lane: number; style: "solid" | "dash" }> = [];
+    activeLanes.forEach((k, l) => {
+      if (k !== null) {
+        exits.push({ lane: l, style: styleByKey.get(k) ?? "dash" });
+        if (l > maxLaneUsed) maxLaneUsed = l;
+      }
+    });
+    if (dotLane > maxLaneUsed) maxLaneUsed = dotLane;
+
+    logicalRows.push({
+      item,
+      dotLane,
+      ops,
+      exits,
+      bottomLaneCount: exits.length,
+    });
+  }
+
+  const { gutterWidth, laneX } = computeGutterGeometry(maxLaneUsed + 1);
+
+  const rows: RenderedTrackRow[] = logicalRows.map((row, idx) => {
+    const dotX = laneX(row.dotLane);
+    const segments: GutterSegment[] = [];
+
+    for (const op of row.ops) {
+      if (op.kind === "thru") {
+        const x = laneX(op.lane);
+        segments.push({ style: op.style, d: `M${x} 0V${GUTTER_H}` });
+      } else if (op.kind === "in") {
+        const xFrom = laneX(op.fromLane);
+        const xTo = laneX(op.toLane);
+        if (op.target === "gate") {
+          segments.push({
+            style: op.style,
+            d: xFrom === xTo ? `M${xTo} 0V${GATE_TOP_Y}` : `M${xFrom} 0C${xFrom} 4 ${xTo} 3 ${xTo} ${GATE_TOP_Y}`,
+          });
+        } else {
+          segments.push({
+            style: op.style,
+            d: xFrom === xTo ? `M${xTo} 0V${GUTTER_CY}` : `M${xFrom} 0C${xFrom} 10 ${xTo} 6 ${xTo} ${GUTTER_CY}`,
+          });
+        }
+      } else if (op.kind === "fork") {
+        const xFrom = laneX(op.fromLane);
+        const xTo = laneX(op.toLane);
+        segments.push({
+          style: op.style,
+          d: `M${xFrom} 0C${xFrom} 15 ${xTo} 13 ${xTo} ${GUTTER_H}`,
+        });
+      } else if (op.kind === "out") {
+        if (op.source === "coil") continue;
+        const x = laneX(op.lane);
+        const y0 = op.source === "gate" ? GATE_BOT_Y : GUTTER_CY;
+        segments.push({ style: op.style, d: `M${x} ${y0}V${GUTTER_H}` });
+      }
+    }
+
+    const gutterKind: GutterKind =
+      row.item.itemKind === "coil"
+        ? "coil"
+        : row.item.itemKind === "gate"
+          ? "gate"
+          : row.dotLane > 0
+            ? "parB"
+            : row.bottomLaneCount >= 2
+              ? "parA"
+              : "station";
+
+    return {
+      item: row.item,
+      gutterKind,
+      dotX,
+      segments,
+      exitLanes: row.exits.map((e) => ({ x: laneX(e.lane), style: e.style })),
+      hasBelow: idx < logicalRows.length - 1,
+    };
+  });
+
+  return { gutterWidth, rows };
+}
+
+/** 判断已完成前缀 P = orderedNodes[0..k-1] 能否安全卷成一个 N done 而不把独立旁链混为一谈。 */
+function canFoldDonePrefix(
+  orderedNodes: readonly TaskNode[],
+  k: number,
+  childrenByKey: ReadonlyMap<string, readonly string[]>,
+): boolean {
+  if (k < 2) return false;
+  const prefixSet = new Set<string>();
+  for (let i = 0; i < k; i++) prefixSet.add(orderedNodes[i]!.key);
+
+  let commonTargetSignature: string | null = null;
+  let exitNodeCount = 0;
+  for (let i = 0; i < k; i++) {
+    const u = orderedNodes[i]!.key;
+    const outs = (childrenByKey.get(u) ?? []).filter((v) => !prefixSet.has(v)).toSorted();
+    if (outs.length === 0) continue;
+    exitNodeCount++;
+    const sig = outs.join("\0");
+    if (commonTargetSignature === null) {
+      commonTargetSignature = sig;
+    } else if (commonTargetSignature !== sig) {
+      return false;
+    }
+  }
+  return exitNodeCount <= 1 || commonTargetSignature !== null;
 }
 
 interface PeelRowContext {
@@ -531,101 +939,151 @@ interface PeelRowContext {
 
 /** 一个连通子图的果皮轨：已完成卷与 N next 折叠只在本子图内生效，首尾不与别的子图相连。 */
 function PeelComponentTrack({ component, ctx }: { component: TrackComponent; ctx: PeelRowContext }) {
-  const { layers, outDegree } = component;
+  const { orderedNodes, reducedEdges, childrenByKey, walkedByKey } = component;
   const { openWorkerId, workerByKey } = ctx;
   const [doneExpanded, setDoneExpanded] = useState(false);
   const [nextExpanded, setNextExpanded] = useState(false);
 
-  // 计算连续已完成的上游层数（至少保留最后一层不折叠，且折叠节点数 >= 2 才卷成果皮卷）
-  let prefixEnd = 0;
-  while (prefixEnd < layers.length - 1 && isLayerCompleted(layers[prefixEnd]!)) {
-    prefixEnd++;
+  // 计算连续已完成的上游前缀（至少保留最后一项不折叠，刚拍板通过的 gate 留在前沿上方展示简称，且不把尚未汇合的独立旁链混进同一个卷）
+  let rawPrefixEnd = 0;
+  while (rawPrefixEnd < orderedNodes.length - 1 && isNodeSettled(orderedNodes[rawPrefixEnd]!)) {
+    rawPrefixEnd++;
   }
-  // 若已完成前缀最末一层是刚拍板通过的 gate（带 decision），留在当前前沿上方展示所选简称（见 06-peel-track-states“拍板之后”）
-  if (prefixEnd > 0 && layers[prefixEnd - 1]!.some((n) => n.kind === "gate" && n.decision !== null)) {
+  while (
+    rawPrefixEnd > 0 &&
+    orderedNodes[rawPrefixEnd - 1]!.kind === "gate" &&
+    orderedNodes[rawPrefixEnd - 1]!.decision !== null
+  ) {
+    rawPrefixEnd--;
+  }
+  let prefixEnd = rawPrefixEnd;
+  while (prefixEnd >= 2 && !canFoldDonePrefix(orderedNodes, prefixEnd, childrenByKey)) {
     prefixEnd--;
   }
-  const prefixLayers = layers.slice(0, prefixEnd);
-  const prefixDoneCount = prefixLayers.reduce((sum, l) => sum + l.length, 0);
+  if (prefixEnd < 2) prefixEnd = 0;
+
+  const prefixNodes = orderedNodes.slice(0, prefixEnd);
   const openInPrefix =
     openWorkerId !== null &&
-    prefixLayers.some((layer) =>
-      layer.some((n) => resolveBoundWorker(n, workerByKey).worker?.conversationId === openWorkerId),
-    );
+    prefixNodes.some((n) => resolveBoundWorker(n, workerByKey).worker?.conversationId === openWorkerId);
   useEffect(() => {
     if (openInPrefix) setDoneExpanded(true);
   }, [openInPrefix]);
 
-  const foldDone = prefixDoneCount >= 2 && !doneExpanded;
+  const foldDone = prefixEnd >= 2 && !doneExpanded;
   const visibleStart = foldDone ? prefixEnd : 0;
 
-  // 计算尾部连续未解锁（pending）的下游层数（>= 2 层且前面有已开始/已完成层时折叠为 N next）
-  let suffixStart = layers.length;
+  // 计算尾部连续未解锁（pending）且内部拓扑深度 >= 2 的下游链路（折叠为 N next）
+  let suffixStart = orderedNodes.length;
   while (
     suffixStart - 1 > visibleStart &&
     suffixStart - 1 > 0 &&
-    layers[suffixStart - 1]!.every((n) => n.status === "pending")
+    orderedNodes[suffixStart - 1]!.status === "pending"
   ) {
     suffixStart--;
   }
-  const suffixLayers = layers.slice(suffixStart);
-  const suffixLayerCount = suffixLayers.length;
-  const suffixNodeCount = suffixLayers.reduce((sum, l) => sum + l.length, 0);
-  const foldNext = suffixLayerCount >= 2 && suffixNodeCount >= 2 && !nextExpanded;
-  const visibleEnd = foldNext ? suffixStart : layers.length;
+  const suffixNodes = orderedNodes.slice(suffixStart);
+  const suffixSet = new Set(suffixNodes.map((n) => n.key));
+  const suffixHasInternalChain =
+    suffixNodes.length >= 2 && reducedEdges.some((e) => suffixSet.has(e.fromKey) && suffixSet.has(e.toKey));
+  const foldNext = suffixHasInternalChain && !nextExpanded;
+  const visibleEnd = foldNext ? suffixStart : orderedNodes.length;
 
-  const rows = layers.slice(visibleStart, visibleEnd).flatMap((layer, idx) => {
-    const layerIdx = visibleStart + idx;
-    const hasLayerBelow = layerIdx < layers.length - 1;
-    // 子图首层没有上游（入度 0 的起点），上方不画进入线；折叠卷之后的首个可见层由果皮卷接上
-    const feed: LineStyle = layerIdx === 0 ? "none" : walked(isLayerCompleted(layers[layerIdx - 1]!));
-    const merge: LineStyle = hasLayerBelow ? walked(isLayerCompleted(layer)) : "none";
-    return planLayerRows(layer, feed, merge, hasLayerBelow, outDegree);
-  });
+  const { gutterWidth, rows } = useMemo(() => {
+    const DONE_KEY = "__peel_done__";
+    const NEXT_KEY = "__peel_next__";
+    const items: DisplayItem[] = [];
+    const mappedKey = new Map<string, string>();
+
+    if (foldDone) {
+      items.push({ itemKind: "coil", key: DONE_KEY, count: prefixEnd, walked: true });
+      for (let i = 0; i < prefixEnd; i++) mappedKey.set(orderedNodes[i]!.key, DONE_KEY);
+    }
+    for (let i = visibleStart; i < visibleEnd; i++) {
+      const node = orderedNodes[i]!;
+      mappedKey.set(node.key, node.key);
+      items.push({
+        itemKind: node.kind === "gate" && node.status === "waiting_user" ? "gate" : "node",
+        key: node.key,
+        node,
+        walked: walkedByKey.get(node.key) ?? false,
+      });
+    }
+    if (foldNext) {
+      items.push({ itemKind: "next", key: NEXT_KEY, count: suffixNodes.length, walked: false });
+      for (let i = visibleEnd; i < orderedNodes.length; i++) mappedKey.set(orderedNodes[i]!.key, NEXT_KEY);
+    }
+
+    const projectedEdges: DirectedEdge[] = [];
+    for (const e of reducedEdges) {
+      const u = mappedKey.get(e.fromKey);
+      const v = mappedKey.get(e.toKey);
+      if (u !== undefined && v !== undefined && u !== v) {
+        projectedEdges.push({ fromKey: u, toKey: v });
+      }
+    }
+
+    return layoutDisplayTrack(items, projectedEdges);
+  }, [foldDone, foldNext, orderedNodes, prefixEnd, reducedEdges, suffixNodes.length, visibleEnd, visibleStart, walkedByKey]);
 
   return (
     <div data-peel-component={component.key}>
-      {foldDone && (
-        <button
-          type="button"
-          onClick={() => setDoneExpanded(true)}
-          className="-mx-2.5 flex min-h-8 pointer-coarse:min-h-11 w-[calc(100%+1.25rem)] cursor-pointer items-center rounded-xl px-2.5 text-left text-minor text-muted-foreground transition-colors outline-none hover:bg-jelly-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
-        >
-          <PeelGutter kind="coil" out="solid" />
-          <span>{prefixDoneCount} done</span>
-        </button>
-      )}
-      {rows.map((row) => (
-        <PeelStageRow
-          key={row.node.key}
-          graphId={ctx.graphId}
-          node={row.node}
-          gutterKind={row.gutterKind}
-          inn={row.inn}
-          out={row.out}
-          thru={row.thru}
-          hasBelow={row.hasBelow}
-          workerByKey={workerByKey}
-          openWorkerId={openWorkerId}
-          client={ctx.client}
-          onOpenWorker={ctx.onOpenWorker}
-        />
-      ))}
-      {foldNext && (
-        <button
-          type="button"
-          onClick={() => setNextExpanded(true)}
-          className="-mx-2.5 flex min-h-8 pointer-coarse:min-h-11 w-[calc(100%+1.25rem)] cursor-pointer items-center rounded-xl px-2.5 text-left text-minor text-muted-foreground transition-colors outline-none hover:bg-jelly-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
-        >
-          <PeelGutter
-            kind="station"
-            tone="blocked"
-            inn={visibleEnd > 0 && isLayerCompleted(layers[visibleEnd - 1]!) ? "solid" : "dash"}
-            out="none"
+      {rows.map((row) => {
+        if (row.item.itemKind === "coil") {
+          return (
+            <button
+              key={row.item.key}
+              type="button"
+              onClick={() => setDoneExpanded(true)}
+              className="-mx-2.5 flex min-h-8 pointer-coarse:min-h-11 w-[calc(100%+1.25rem)] cursor-pointer items-center rounded-xl px-2.5 text-left text-minor text-muted-foreground transition-colors outline-none hover:bg-jelly-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+            >
+              <PeelGutter
+                kind="coil"
+                gutterWidth={gutterWidth}
+                dotX={row.dotX}
+                segments={row.segments}
+              />
+              <span>{row.item.count} done</span>
+            </button>
+          );
+        }
+        if (row.item.itemKind === "next") {
+          return (
+            <button
+              key={row.item.key}
+              type="button"
+              onClick={() => setNextExpanded(true)}
+              className="-mx-2.5 flex min-h-8 pointer-coarse:min-h-11 w-[calc(100%+1.25rem)] cursor-pointer items-center rounded-xl px-2.5 text-left text-minor text-muted-foreground transition-colors outline-none hover:bg-jelly-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+            >
+              <PeelGutter
+                kind={row.gutterKind}
+                gutterWidth={gutterWidth}
+                dotX={row.dotX}
+                tone="blocked"
+                segments={row.segments}
+              />
+              <span>{row.item.count} next</span>
+            </button>
+          );
+        }
+        return (
+          <PeelStageRow
+            key={row.item.node.key}
+            graphId={ctx.graphId}
+            node={row.item.node}
+            gutterKind={row.gutterKind}
+            gutterWidth={gutterWidth}
+            dotX={row.dotX}
+            segments={row.segments}
+            exitLanes={row.exitLanes}
+            hasBelow={row.hasBelow}
+            workerByKey={workerByKey}
+            openWorkerId={openWorkerId}
+            client={ctx.client}
+            onOpenWorker={ctx.onOpenWorker}
           />
-          <span>{suffixNodeCount} next</span>
-        </button>
-      )}
+        );
+      })}
     </div>
   );
 }

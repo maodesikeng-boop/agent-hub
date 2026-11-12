@@ -305,17 +305,17 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
   - 任务标题行右侧配放大全览按钮（`Maximize2`，`aria-label="Zoom"`）与手风琴箭头（`ChevronRight`）。
   - **多活跃任务优先级与折叠**：单项目同时有多个活跃任务图时，含 `waiting_user` 或 `attention` 节点的任务排在最前并默认展开；其余后台进行中任务默认收成带小切面进度轮的单行标题（无紧急任务时排第一的任务默认展开，其余收起），点击任务标题手风琴式展开/收起。
 - **果皮轨（Peel Track）纵向阶段与多股并行轨道**：
-  - 普通阶段节点去掉外框，每行左侧固定 `2.5rem`（标准档 `40px`）纵向果皮轨道槽 `<svg aria-hidden="true">`，右侧为单行紧凑标题（`text-minor`，进行中挂 `.status-shimmer` 流光，未解锁 `text-muted-foreground`）与绑定 `#编号`（`text-xs text-muted-foreground tabular-nums`，点击整行打开对应 Piece 对话）；严禁用 `·`、`|`、`/` 拼接，触屏热区满足 `pointer-coarse:min-h-11`。
-  - **轨道实虚与并行分合**：已走通阶段画实心果皮圆点与圆头果皮实线（`var(--peel)`）；进行中阶段画果肉浅晕圆环；需处理阶段画琥珀色圆点（`var(--color-caution)`）；同层并行阶段从主轨自然弧线分出并行副轨再合回主轨；未解锁阶段画空心圆与细虚线（`stroke-dasharray="2 4"`）。
-  - **按真实依赖排布**：先按弱连通分量（`computeGraphComponents`）把图拆成互不相连的子图，按各子图最靠前节点的 `sortOrder` 排序，子图之间留 `space-y-1.5` 呼吸间距、绝不画跨子图连线，`N done` / `N next` 折叠只在本子图内生效；子图首层没有上游（多起点合流）时不画分叉弧线，右轨只在确实承载上游分流或上方兄弟合流时才画；出度为 0 的收尾阶段不画合回主轨的假合流线。小切面进度轮同理，只有同一子图同一并行层的相邻瓣果心相连。
-  - **已完成 / 未轮到折叠卷**：连续已完成的上游节点数 `>= 2` 且后面仍有未完阶段时，默认卷成一行螺旋果皮小卷 `N done`（点击展开全部已完成步骤；若用户正打开其中某个 Piece 对话则自动展开）；尾部连续 `>= 2` 层的未解锁 `pending` 链路默认折成一行 `N next`（点击展开全部下游步骤）。
+  - 普通阶段节点去掉外框，每行左侧配纵向果皮轨道槽 `<svg aria-hidden="true">`（1～2 股泳道时固定 `2.5rem` 即标准档 `40px`；3 股及以上并行泳道时按每多一股 `+0.875rem` 自适应加宽，封顶 `6rem` 即 `96px`，全程用 `rem` 随界面字号缩放，保住右侧标题净宽且零横向滚动条），右侧为单行紧凑标题（`text-minor`，进行中挂 `.status-shimmer` 流光，未解锁 `text-muted-foreground`）与绑定 `#编号`（`text-xs text-muted-foreground tabular-nums`，点击整行打开对应 Piece 对话）；严禁用 `·`、`|`、`/` 拼接，触屏热区满足 `pointer-coarse:min-h-11`。
+  - **轨道实虚与并行分合**：已走通阶段画实心果皮圆点，且沿全链路均已走通的泳道画圆头果皮实线（`var(--peel)`）；进行中阶段画果肉浅晕圆环；需处理阶段画琥珀色圆点（`var(--color-caution)`）；未解锁或受上游未完阻塞的泳道画空心圆与细虚线（`stroke-dasharray="2 4"`）。
+  - **按真实依赖排布（`git log --graph --topo-order` 分道连续布局）**：先按弱连通分量（`computeGraphComponents`）把图拆成互不相连的子图，按各子图最靠前节点的 `sortOrder` 排序，子图之间留 `space-y-1.5` 呼吸间距、绝不画跨子图连线；同一连通子图内先做传递约简（去掉已有更长有向路径覆盖的跨层弦边），再按链优先拓扑序（`--topo-order`）把汇合前的同一条多步链连续排在一起，并按源点独占多泳道规则为每条尚未走完下游的分支分配独立平行泳道——**画出来的任何一条线段都严格对应真实依赖**，汇合行上方把各上游泳道平滑弧线汇入汇合点，多起点无共同上游时不画分叉弧线，出度为 0 的收尾阶段不画假合流线。小切面进度轮同理，只有同一子图同一并行层的相邻瓣果心相连。
+  - **已完成 / 未轮到折叠卷**：连续已完成的上游前缀节点数 `>= 2`、后面仍有未完阶段、且折叠不会把尚未汇合的独立旁链混进同一个卷时，默认卷成一行螺旋果皮小卷 `N done`（点击展开全部已完成步骤；若用户正打开其中某个 Piece 对话则自动展开）；尾部连续未解锁 `pending` 且内部拓扑深度 `>= 2` 的链路默认折成一行 `N next`（点击展开全部下游步骤）。
 - **水果刀门禁焦点（`waiting_user` 的 `gate` 节点）**：
-  - 处于 `waiting_user` 的门禁节点在左侧轨道卡住一把微缩水果刀（直接复用 `KnifeAvatar`，刀身 `<linearGradient>` 由 `useId()` 生成实例级唯一 ID），刀下方延伸受阻虚线直通底部，直观表达后续步骤被刀卡住。
+  - 处于 `waiting_user` 的门禁节点在所属泳道卡住一把微缩水果刀（直接复用 `KnifeAvatar`，刀身 `<linearGradient>` 由 `useId()` 生成实例级唯一 ID），刀下方沿本泳道延伸受阻虚线直通底部，同时旁路并行泳道在拍板卡左侧原样穿过不断线。
   - 右侧挂出整张图唯一一张浅果冻拍板卡（`rounded-2xl border border-primary bg-jelly px-3.5 py-3`）：标题用 `text-body font-semibold text-primary`，摘要支持 Markdown（`text-minor`）；推荐主选项按钮用 `rounded-xl bg-primary text-primary-foreground`（右标 `Recommended`），其余选项按钮用 `rounded-xl border border-border bg-background hover:bg-jelly-hover`；底部 `Add note` 展开补充输入框（`placeholder="Add a note, or type a custom reply…"`），同时支持**一键点选选项**、**输入备注后点选选项（选项 + 备注）**、以及**不选预设项直接 `Send` 自定义备注**，统一调用 `POST /api/task-graphs/:graphId/nodes/:nodeKey/decide`。
   - 拍板通过（`done`）后水果刀收起、果冻卡收合，该节点变回紧凑果皮轨单行，并在右侧显示所选简称（`text-xs text-foreground`）。
 - **放大全览弹窗（`TaskGraphDialog`）**：
   - 点击任务头右上角 `Maximize2`（或 `Completed` 列表中的历史任务图行）打开 `Dialog`（复用第 15 条放大窗规格 `h-[90dvh] w-[min(96vw,1400px)] max-w-none`，`overflow-auto` 原生双向滚动）。
-  - 调用 `src/web/task-graph-layout.ts` 的 `computeTaskGraphLayout(..., viewportMode: "dialog")`（横向 `rankdir: "LR"`，`lru-cache` 容量 64），底层单张 `<svg aria-hidden="true">` 绘制 `1.5px` 三次贝塞尔有向连线与 `3px` 轻量折角箭头（上游 `done` 实线，其余 `stroke-dasharray="4 3"` 虚线），上层渲染完整阶段卡片、绑定 Piece 跳转、产物摘要、内联拍板/跳过节点（`Skip step`）/取消任务图（`Cancel graph`）及历史拍板记录。
+  - 调用 `src/web/task-graph-layout.ts` 的 `computeTaskGraphLayout(..., viewportMode: "dialog")`（横向 `rankdir: "LR"`，`lru-cache` 容量 64），底层单张 `<svg aria-hidden="true">` 绘制 `1.5px` 三次贝塞尔有向连线与 `3px` 轻量折角箭头（上游 `done` 实线，其余 `stroke-dasharray="4 3"` 虚线；跨多层且直连会擦碰中间卡片的长边沿 Dagre 分层拐点平滑绕行，绝不横穿中间卡片正文），上层渲染完整阶段卡片、绑定 Piece 跳转、产物摘要、内联拍板/跳过节点（`Skip step`）/取消任务图（`Cancel graph`）及历史拍板记录。
   - **`Cancel graph` 要二次确认**（取消会结束整张多阶段任务图，误触代价大）：全览弹窗右上角的 `Cancel graph`（ghost `sm`，灰字，悬停 `text-danger`）点一下**不发请求**，先叠一个第 10 条的窄确认弹窗（`DialogContent` `className="max-w-110"`，标题 `Cancel this task graph?`，正文一句写清后果，15px 前景色）；底部 `DialogFooter`：左 `outline` 的 `Keep going`（`DialogClose`，默认聚焦，Esc、点遮罩同样是不取消），右主按钮 `Cancel graph`，点了才发 `POST /api/task-graphs/:graphId/cancel`，请求中主按钮前转圈、两个按钮都不能点；成功后确认弹窗和全览弹窗一起关掉，失败时确认弹窗关掉、错误照常显示在全览弹窗顶部（`role="alert"`，`text-danger`）。`Skip step` 只跳一个节点，不加确认。
   - **跨设备**：果皮轨、全览弹窗、拍板卡、`Completed` 历史拉取一律用 `DeviceScope`（`src/web/device-scope.tsx` 的 `useClient()`）给的当前设备接口，不自己按设备编号另建 client；看远端项目经理时请求走那台的 `/d/<设备>/...`。
 
