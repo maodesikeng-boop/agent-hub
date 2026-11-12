@@ -83,9 +83,22 @@ export interface FakeCodexTurnScript {
   skipMessageCompleted?: boolean;
   /** token 用量通知。 */
   tokenUsage?: {
-    last: { inputTokens: number; cachedInputTokens: number; outputTokens: number };
-    total: { inputTokens: number; cachedInputTokens: number; outputTokens: number };
+    last: { inputTokens: number; cachedInputTokens: number; cacheWriteInputTokens?: number; outputTokens: number };
+    total: { inputTokens: number; cachedInputTokens: number; cacheWriteInputTokens?: number; outputTokens: number };
   };
+  /** holdFile 放行前依次发出的多条 tokenUsage 通知（用于验证轮中实时 observe）。 */
+  preHoldTokenUsages?: Array<{
+    /** 换成别的线程 / 轮次发（模拟子 agent 线程的用量通知）。 */
+    threadId?: string;
+    turnId?: string;
+    last?: { inputTokens: number; cachedInputTokens: number; cacheWriteInputTokens?: number; outputTokens: number };
+    total?: { inputTokens: number; cachedInputTokens: number; cacheWriteInputTokens?: number; outputTokens: number };
+  }>;
+  /** 收尾阶段依次发出的多条 tokenUsage 通知。 */
+  tokenUsages?: Array<{
+    last?: { inputTokens: number; cachedInputTokens: number; cacheWriteInputTokens?: number; outputTokens: number };
+    total?: { inputTokens: number; cachedInputTokens: number; cacheWriteInputTokens?: number; outputTokens: number };
+  }>;
   /** 额度通知。 */
   rateLimits?: {
     primary?: { usedPercent: number; windowDurationMins: number; resetsAt: number };
@@ -117,6 +130,11 @@ export interface FakeCodexScript {
   startThreadId?: string;
   /** thread/resume 是否报错（模拟 not found / no rollout found）。 */
   failResumeWith?: string;
+  /**
+   * thread/resume 回执后立刻补发的一条 thread/tokenUsage/updated（真机 codex-cli 0.167.1 实测：恢复后会带着恢复前最后一轮的 turnId
+   * 原样重放那一轮最后一条 total/last）。
+   */
+  resumeReplayTokenUsage?: { turnId: string; tokenUsage: Record<string, unknown> };
   /** skills/extraRoots/set 是否报错（模拟没有这个实验接口的老版本 codex）。 */
   failSkillsRootsWith?: string;
   /** 每轮剧本（按顺序取，取完用最后一个或默认成功）。 */
@@ -295,6 +313,13 @@ function runTurn(turnId, threadId, turnScript, input) {
         params: { threadId, turnId, tokenUsage: turnScript.tokenUsage },
       });
     }
+    for (const tu of turnScript.tokenUsages || []) {
+      send({
+        jsonrpc: "2.0",
+        method: "thread/tokenUsage/updated",
+        params: { threadId, turnId, tokenUsage: tu },
+      });
+    }
 
     if (turnScript.rateLimits) {
       send({
@@ -343,6 +368,14 @@ function runTurn(turnId, threadId, turnScript, input) {
   };
 
   stepReasoning();
+  for (const tu of turnScript.preHoldTokenUsages || []) {
+    const { threadId: otherThreadId, turnId: otherTurnId, ...usage } = tu;
+    send({
+      jsonrpc: "2.0",
+      method: "thread/tokenUsage/updated",
+      params: { threadId: otherThreadId || threadId, turnId: otherTurnId || turnId, tokenUsage: usage },
+    });
+  }
   if (turnScript.holdFile) {
     const hold = { id: "hold-" + turnId, type: "commandExecution", command: "sleep 8", cwd: process.cwd() };
     send({ jsonrpc: "2.0", method: "item/started", params: { threadId, turnId, item: { ...hold, status: "inProgress" } } });
@@ -425,6 +458,13 @@ function handleMessage(msg) {
       id: msg.id,
       result: { thread: { id: currentThreadId, model: msg.params?.model || "gpt-5.4" } },
     });
+    if (script.resumeReplayTokenUsage) {
+      send({
+        jsonrpc: "2.0",
+        method: "thread/tokenUsage/updated",
+        params: { threadId: currentThreadId, ...script.resumeReplayTokenUsage },
+      });
+    }
     return;
   }
 
@@ -828,11 +868,11 @@ describe("CodexDriver 首次启动握手与完整一轮事件流", () => {
 
     // 7. tokenUsage 与 rateLimits
     expect(updatedRow.usage).toEqual({
-      input: 120,
+      input: 90,
       cacheRead: 30,
       cacheWrite: 0,
       output: 45,
-      context: 150,
+      context: 120,
     });
     expect(updatedRow.rateLimit).toEqual({
       status: "allowed",
@@ -2048,5 +2088,381 @@ describe("CodexDriver 流式补丁文件路径早捕获", () => {
     await t.driver.send(s.id, user(1, "改"));
     await t.waitFor("turn.ended");
     expect(t.of("agent.tool_preview")).toEqual([]);
+  });
+});
+
+describe("CodexDriver tokenUsage 口径与跨轮/恢复累计", () => {
+  it("含大额缓存命中时 context 等于真实 inputTokens（118111），绝不把 cachedInputTokens 再加一遍", async () => {
+    const t = makeCodexHarness({
+      script: {
+        turns: [
+          {
+            messageDeltas: ["收到"],
+            tokenUsage: {
+              last: { inputTokens: 118_111, cachedInputTokens: 115_250, outputTokens: 500 },
+              total: { inputTokens: 118_111, cachedInputTokens: 115_250, outputTokens: 500 },
+            },
+          },
+        ],
+      },
+    });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "开始"));
+    await t.waitFor("turn.ended");
+    expect(t.store.get(s.id)!.usage).toEqual({
+      input: 2_861,
+      cacheRead: 115_250,
+      cacheWrite: 0,
+      output: 500,
+      context: 118_111,
+    });
+  });
+
+  it("同一轮多次 thread/tokenUsage/updated（含重复相同 total）：实时 observe 与轮末 finish 口径完全一致", async () => {
+    const t = makeCodexHarness();
+    const holdFile = join(t.dir, "release-turn");
+    writeFileSync(
+      join(t.dir, "script.json"),
+      JSON.stringify({
+        turns: [
+          {
+            holdFile,
+            preHoldTokenUsages: [
+              {
+                last: { inputTokens: 60_000, cachedInputTokens: 50_000, outputTokens: 200 },
+                total: { inputTokens: 60_000, cachedInputTokens: 50_000, outputTokens: 200 },
+              },
+              {
+                last: { inputTokens: 65_000, cachedInputTokens: 60_000, outputTokens: 300 },
+                total: { inputTokens: 125_000, cachedInputTokens: 110_000, outputTokens: 500 },
+              },
+              {
+                last: { inputTokens: 65_000, cachedInputTokens: 60_000, outputTokens: 300 },
+                total: { inputTokens: 125_000, cachedInputTokens: 110_000, outputTokens: 500 },
+              },
+            ],
+            messageDeltas: ["完成"],
+          },
+        ],
+      }),
+    );
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "多步执行"));
+    await t.waitFor("agent.tool", (e) => e.toolUseId === "hold-turn-1");
+
+    const deadline = Date.now() + 2_500;
+    while (t.store.get(s.id)!.usage.context !== 65_000 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 40));
+    }
+    const liveUsage = { ...t.store.get(s.id)!.usage };
+    expect(liveUsage).toEqual({
+      input: 15_000,
+      cacheRead: 110_000,
+      cacheWrite: 0,
+      output: 500,
+      context: 65_000,
+    });
+
+    writeFileSync(holdFile, "go");
+    await t.waitFor("turn.ended");
+    expect(t.store.get(s.id)!.usage).toEqual(liveUsage);
+  });
+
+  it("同进程连续多轮、空闲关进程后 thread/resume 续跑、以及新建驱动实例冷恢复续跑：均只加当轮增量，不重复叠加历史 total", async () => {
+    const t = makeCodexHarness({
+      driver: { idleCloseMs: 60 },
+      script: {
+        startThreadId: "thr_multi_1",
+        turns: [
+          {
+            messageDeltas: ["第一轮"],
+            tokenUsage: {
+              last: { inputTokens: 80_000, cachedInputTokens: 60_000, outputTokens: 400 },
+              total: { inputTokens: 80_000, cachedInputTokens: 60_000, outputTokens: 400 },
+            },
+          },
+          {
+            messageDeltas: ["第二轮"],
+            tokenUsage: {
+              last: { inputTokens: 95_000, cachedInputTokens: 80_000, outputTokens: 600 },
+              total: { inputTokens: 175_000, cachedInputTokens: 140_000, outputTokens: 1_000 },
+            },
+          },
+        ],
+      },
+    });
+
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "第一问"));
+    await t.waitFor("turn.ended", undefined, 1);
+    expect(t.store.get(s.id)!.usage).toEqual({
+      input: 20_000,
+      cacheRead: 60_000,
+      cacheWrite: 0,
+      output: 400,
+      context: 80_000,
+    });
+
+    await t.driver.send(s.id, user(2, "第二问"));
+    await t.waitFor("turn.ended", undefined, 2);
+    expect(t.store.get(s.id)!.usage).toEqual({
+      input: 35_000,
+      cacheRead: 140_000,
+      cacheWrite: 0,
+      output: 1_000,
+      context: 95_000,
+    });
+
+    // 等空闲关闭进程，走同一驱动实例下的 thread/resume 跑第三轮
+    await t.waitFor("session.exited", undefined, 1);
+    writeFileSync(
+      join(t.dir, "script.json"),
+      JSON.stringify({
+        turns: [
+          {
+            messageDeltas: ["第三轮"],
+            tokenUsage: {
+              last: { inputTokens: 110_000, cachedInputTokens: 100_000, outputTokens: 500 },
+              total: { inputTokens: 285_000, cachedInputTokens: 240_000, outputTokens: 1_500 },
+            },
+          },
+        ],
+      }),
+    );
+    await t.driver.send(s.id, user(3, "第三问"));
+    await t.waitFor("turn.ended", undefined, 3);
+    expect(t.rpcIn().filter((r) => r.method === "thread/resume")).toHaveLength(1);
+    expect(t.store.get(s.id)!.usage).toEqual({
+      input: 45_000,
+      cacheRead: 240_000,
+      cacheWrite: 0,
+      output: 1_500,
+      context: 110_000,
+    });
+
+    // 模拟守护进程重启：用全新驱动实例读取已有会话行（含历史 usage）并走 thread/resume 跑第四轮（两步 + 重复通知）
+    const cold = makeCodexHarness({
+      script: {
+        turns: [
+          {
+            messageDeltas: ["第四轮"],
+            tokenUsages: [
+              {
+                last: { inputTokens: 115_000, cachedInputTokens: 110_000, outputTokens: 300 },
+                total: { inputTokens: 400_000, cachedInputTokens: 350_000, outputTokens: 1_800 },
+              },
+              {
+                last: { inputTokens: 118_111, cachedInputTokens: 115_250, outputTokens: 200 },
+                total: { inputTokens: 518_111, cachedInputTokens: 465_250, outputTokens: 2_000 },
+              },
+              {
+                last: { inputTokens: 118_111, cachedInputTokens: 115_250, outputTokens: 200 },
+                total: { inputTokens: 518_111, cachedInputTokens: 465_250, outputTokens: 2_000 },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const persisted = t.store.get(s.id)!;
+    const sCold = cold.addSession({
+      vendorSessionId: persisted.vendorSessionId,
+      hasCompletedTurn: true,
+      usage: { ...persisted.usage },
+    });
+    await cold.driver.send(sCold.id, user(4, "第四问"));
+    await cold.waitFor("turn.ended");
+    expect(cold.rpcIn().filter((r) => r.method === "thread/resume")).toHaveLength(1);
+    expect(cold.store.get(sCold.id)!.usage).toEqual({
+      input: 52_861,
+      cacheRead: 465_250,
+      cacheWrite: 0,
+      output: 2_000,
+      context: 118_111,
+    });
+  });
+
+  it("thread/resume 失败自动回退 thread/start 开启新线程时：保留历史 usage 并累加新线程增量，不倒退不出负数", async () => {
+    const t = makeCodexHarness({
+      script: {
+        failResumeWith: "no rollout found for thr_old",
+        startThreadId: "thr_reborn",
+        turns: [
+          {
+            messageDeltas: ["新线程首轮"],
+            tokenUsage: {
+              last: { inputTokens: 12_000, cachedInputTokens: 2_000, outputTokens: 150 },
+              total: { inputTokens: 12_000, cachedInputTokens: 2_000, outputTokens: 150 },
+            },
+          },
+        ],
+      },
+    });
+    const s = t.addSession({
+      vendorSessionId: "thr_old",
+      hasCompletedTurn: true,
+      usage: {
+        input: 30_000,
+        cacheRead: 90_000,
+        cacheWrite: 0,
+        output: 800,
+        context: 95_000,
+      },
+    });
+    await t.driver.send(s.id, user(1, "继续"));
+    await t.waitFor("turn.ended");
+    expect(t.store.get(s.id)!.usage).toEqual({
+      input: 40_000,
+      cacheRead: 92_000,
+      cacheWrite: 0,
+      output: 950,
+      context: 12_000,
+    });
+  });
+
+  it("守护进程重启后冷 thread/resume：app-server 重放的恢复前最后一条用量只校准基线，不把上一轮最后一步再算进本轮", async () => {
+    const t = makeCodexHarness();
+    const holdFile = join(t.dir, "release-cold-turn");
+    // 恢复前线程累计：total=285000/240000/1500，最后一步 last=110000/100000/500（对应会话行已持久化的 usage）
+    writeFileSync(
+      join(t.dir, "script.json"),
+      JSON.stringify({
+        resumeReplayTokenUsage: {
+          turnId: "turn-before-restart",
+          tokenUsage: {
+            last: { inputTokens: 110_000, cachedInputTokens: 100_000, outputTokens: 500 },
+            total: { inputTokens: 285_000, cachedInputTokens: 240_000, outputTokens: 1_500 },
+          },
+        },
+        turns: [
+          {
+            holdFile,
+            preHoldTokenUsages: [
+              {
+                last: { inputTokens: 115_000, cachedInputTokens: 110_000, outputTokens: 300 },
+                total: { inputTokens: 400_000, cachedInputTokens: 350_000, outputTokens: 1_800 },
+              },
+            ],
+            messageDeltas: ["恢复后第一轮"],
+          },
+        ],
+      }),
+    );
+    const s = t.addSession({
+      vendorSessionId: "thr_cold_replay",
+      hasCompletedTurn: true,
+      usage: { input: 45_000, cacheRead: 240_000, cacheWrite: 0, output: 1_500, context: 110_000 },
+    });
+    await t.driver.send(s.id, user(1, "继续"));
+    await t.waitFor("agent.tool", (e) => e.toolUseId === "hold-turn-1");
+
+    const expected = { input: 50_000, cacheRead: 350_000, cacheWrite: 0, output: 1_800, context: 115_000 };
+    const deadline = Date.now() + 2_500;
+    while (t.store.get(s.id)!.usage.context !== 115_000 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 40));
+    }
+    // 轮中实时：只加本轮第一步（5000 未缓存 + 110000 缓存读 + 300 输出），不含重放的 110000/100000/500
+    expect(t.store.get(s.id)!.usage).toEqual(expected);
+
+    writeFileSync(holdFile, "go");
+    await t.waitFor("turn.ended");
+    expect(t.rpcIn().filter((r) => r.method === "thread/resume")).toHaveLength(1);
+    expect(t.store.get(s.id)!.usage).toEqual(expected);
+  });
+
+  it("同一驱动实例热恢复时重放的 total 比已记录基线还旧（崩溃前最后一步没落进 rollout）：只把基线校准到重放值，不把旧 last 再算一遍", async () => {
+    const t = makeCodexHarness({
+      driver: { idleCloseMs: 60 },
+      script: {
+        startThreadId: "thr_hot_regress",
+        turns: [
+          {
+            messageDeltas: ["第一轮"],
+            tokenUsages: [
+              {
+                last: { inputTokens: 80_000, cachedInputTokens: 60_000, outputTokens: 400 },
+                total: { inputTokens: 80_000, cachedInputTokens: 60_000, outputTokens: 400 },
+              },
+              {
+                last: { inputTokens: 95_000, cachedInputTokens: 80_000, outputTokens: 600 },
+                total: { inputTokens: 175_000, cachedInputTokens: 140_000, outputTokens: 1_000 },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "第一问"));
+    await t.waitFor("turn.ended", undefined, 1);
+    const afterFirst = { input: 35_000, cacheRead: 140_000, cacheWrite: 0, output: 1_000, context: 95_000 };
+    expect(t.store.get(s.id)!.usage).toEqual(afterFirst);
+    await t.waitFor("session.exited", undefined, 1);
+
+    // codex 只落盘到第一步：恢复后重放的是第一步的 total/last
+    writeFileSync(
+      join(t.dir, "script.json"),
+      JSON.stringify({
+        resumeReplayTokenUsage: {
+          turnId: "turn-1",
+          tokenUsage: {
+            last: { inputTokens: 80_000, cachedInputTokens: 60_000, outputTokens: 400 },
+            total: { inputTokens: 80_000, cachedInputTokens: 60_000, outputTokens: 400 },
+          },
+        },
+        turns: [
+          {
+            messageDeltas: ["第二轮"],
+            tokenUsage: {
+              last: { inputTokens: 90_000, cachedInputTokens: 85_000, outputTokens: 200 },
+              total: { inputTokens: 170_000, cachedInputTokens: 145_000, outputTokens: 600 },
+            },
+          },
+        ],
+      }),
+    );
+    await t.driver.send(s.id, user(2, "第二问"));
+    await t.waitFor("turn.ended", undefined, 2);
+    expect(t.rpcIn().filter((r) => r.method === "thread/resume")).toHaveLength(1);
+    expect(t.store.get(s.id)!.usage).toEqual({ input: 40_000, cacheRead: 225_000, cacheWrite: 0, output: 1_200, context: 90_000 });
+  });
+
+  it("同一连接上别的线程（如子 agent）的 thread/tokenUsage/updated 不计入本会话，也不改本线程的累计基线", async () => {
+    const t = makeCodexHarness();
+    const holdFile = join(t.dir, "release-foreign");
+    writeFileSync(
+      join(t.dir, "script.json"),
+      JSON.stringify({
+        startThreadId: "thr_main",
+        turns: [
+          {
+            holdFile,
+            preHoldTokenUsages: [
+              {
+                last: { inputTokens: 60_000, cachedInputTokens: 50_000, outputTokens: 200 },
+                total: { inputTokens: 60_000, cachedInputTokens: 50_000, outputTokens: 200 },
+              },
+              {
+                threadId: "thr_subagent",
+                turnId: "turn-sub-1",
+                last: { inputTokens: 9_000, cachedInputTokens: 0, outputTokens: 50 },
+                total: { inputTokens: 9_000, cachedInputTokens: 0, outputTokens: 50 },
+              },
+            ],
+            tokenUsage: {
+              last: { inputTokens: 65_000, cachedInputTokens: 60_000, outputTokens: 300 },
+              total: { inputTokens: 125_000, cachedInputTokens: 110_000, outputTokens: 500 },
+            },
+            messageDeltas: ["完成"],
+          },
+        ],
+      }),
+    );
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "开始"));
+    await t.waitFor("agent.tool", (e) => e.toolUseId === "hold-turn-1");
+    writeFileSync(holdFile, "go");
+    await t.waitFor("turn.ended");
+    expect(t.store.get(s.id)!.usage).toEqual({ input: 15_000, cacheRead: 110_000, cacheWrite: 0, output: 500, context: 65_000 });
   });
 });

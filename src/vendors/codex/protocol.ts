@@ -456,16 +456,101 @@ export function parseCodexToolStarted(
 
 const numOrZero = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
 
+export interface CodexUsageCounts {
+  input_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
+  output_tokens: number;
+}
+
+export const ZERO_CODEX_USAGE_COUNTS: CodexUsageCounts = {
+  input_tokens: 0,
+  cache_read_input_tokens: 0,
+  cache_creation_input_tokens: 0,
+  output_tokens: 0,
+};
+
+export interface CodexTokenUsageState {
+  lastThreadTotal: CodexUsageCounts | null;
+  turnResultUsage: CodexUsageCounts | null;
+  stepSeq: number;
+}
+
+export interface ParsedCodexTokenUsage {
+  observeObj: Record<string, unknown>;
+  resultUsage: CodexUsageCounts;
+  context: number;
+  nextState: CodexTokenUsageState;
+  duplicate: boolean;
+}
+
+function toCodexUsageCounts(raw: Record<string, unknown>): CodexUsageCounts {
+  const inputTotal = numOrZero(raw.inputTokens ?? raw.input_tokens);
+  const cacheRead = numOrZero(raw.cachedInputTokens ?? raw.cached_input_tokens);
+  const cacheWrite = numOrZero(raw.cacheWriteInputTokens ?? raw.cache_write_input_tokens);
+  const output = numOrZero(raw.outputTokens ?? raw.output_tokens);
+  return {
+    input_tokens: Math.max(0, inputTotal - cacheRead),
+    cache_read_input_tokens: cacheRead,
+    cache_creation_input_tokens: cacheWrite,
+    output_tokens: output,
+  };
+}
+
+function subtractCodexUsageCounts(cur: CodexUsageCounts, prev: CodexUsageCounts): CodexUsageCounts {
+  return {
+    input_tokens: Math.max(0, cur.input_tokens - prev.input_tokens),
+    cache_read_input_tokens: Math.max(0, cur.cache_read_input_tokens - prev.cache_read_input_tokens),
+    cache_creation_input_tokens: Math.max(0, cur.cache_creation_input_tokens - prev.cache_creation_input_tokens),
+    output_tokens: Math.max(0, cur.output_tokens - prev.output_tokens),
+  };
+}
+
+function addCodexUsageCounts(a: CodexUsageCounts, b: CodexUsageCounts): CodexUsageCounts {
+  return {
+    input_tokens: a.input_tokens + b.input_tokens,
+    cache_read_input_tokens: a.cache_read_input_tokens + b.cache_read_input_tokens,
+    cache_creation_input_tokens: a.cache_creation_input_tokens + b.cache_creation_input_tokens,
+    output_tokens: a.output_tokens + b.output_tokens,
+  };
+}
+
+function sameCodexUsageCounts(a: CodexUsageCounts, b: CodexUsageCounts): boolean {
+  return (
+    a.input_tokens === b.input_tokens &&
+    a.cache_read_input_tokens === b.cache_read_input_tokens &&
+    a.cache_creation_input_tokens === b.cache_creation_input_tokens &&
+    a.output_tokens === b.output_tokens
+  );
+}
+
+function regressedCodexUsageCounts(cur: CodexUsageCounts, prev: CodexUsageCounts): boolean {
+  return (
+    cur.input_tokens < prev.input_tokens ||
+    cur.cache_read_input_tokens < prev.cache_read_input_tokens ||
+    cur.cache_creation_input_tokens < prev.cache_creation_input_tokens ||
+    cur.output_tokens < prev.output_tokens
+  );
+}
+
+/** thread/tokenUsage/updated 里的线程累计 total（Claude 口径）；没有 total 返回 null。 */
+export function parseCodexThreadTotal(tokenUsage: unknown): CodexUsageCounts | null {
+  if (typeof tokenUsage !== "object" || tokenUsage === null) return null;
+  const total = (tokenUsage as { total?: unknown }).total;
+  return typeof total === "object" && total !== null ? toCodexUsageCounts(total as Record<string, unknown>) : null;
+}
+
 /**
- * 解析 thread/tokenUsage/updated 的 tokenUsage，转成 TurnUsage 所需的 Claude 风格 usage 对象。
- * 返回：
- * - observeObj：传给 TurnUsage.observe(observeObj, current) 的伪 assistant 对象（带 message.id 与 message.usage）
- * - resultUsage：传给 TurnUsage.finish(current, resultUsage) 的单轮汇总 usage
+ * 解析 thread/tokenUsage/updated 的 tokenUsage：
+ * - Codex 的 inputTokens 已含 cachedInputTokens，转换成 Claude 口径时先扣掉 cachedInputTokens，避免 context 翻倍；
+ * - tokenUsage.total 是整条 Codex 线程生命周期累计值，按上一条已知线程累计做差求本次单步增量，并去重相同 total 的重复推送；
+ * - 冷启动 thread/resume 首条通知尚无已知 lastThreadTotal 时，用 total - last 反推恢复前的线程累计基线。
  */
 export function parseCodexTokenUsage(
   tokenUsage: unknown,
   turnId: string | null,
-): { observeObj: Record<string, unknown>; resultUsage: Record<string, number> } | null {
+  state?: CodexTokenUsageState,
+): ParsedCodexTokenUsage | null {
   if (typeof tokenUsage !== "object" || tokenUsage === null) return null;
   const tu = tokenUsage as { last?: unknown; total?: unknown };
   const rawLast = typeof tu.last === "object" && tu.last !== null ? (tu.last as Record<string, unknown>) : null;
@@ -473,28 +558,68 @@ export function parseCodexTokenUsage(
   const source = rawLast ?? rawTotal;
   if (!source) return null;
 
-  const usageForContext = {
-    input_tokens: numOrZero(source.inputTokens),
-    cache_read_input_tokens: numOrZero(source.cachedInputTokens),
-    cache_creation_input_tokens: 0,
-    output_tokens: numOrZero(source.outputTokens),
-  };
-  const totalSource = rawTotal ?? source;
-  const resultUsage = {
-    input_tokens: numOrZero(totalSource.inputTokens),
-    cache_read_input_tokens: numOrZero(totalSource.cachedInputTokens),
-    cache_creation_input_tokens: 0,
-    output_tokens: numOrZero(totalSource.outputTokens),
-  };
+  const lastUsage = toCodexUsageCounts(source);
+  const context =
+    lastUsage.input_tokens + lastUsage.cache_read_input_tokens + lastUsage.cache_creation_input_tokens;
+  const totalUsage = rawTotal ? toCodexUsageCounts(rawTotal) : null;
+
+  const prevTotal = state ? state.lastThreadTotal : ZERO_CODEX_USAGE_COUNTS;
+  const prevTurnResult = state?.turnResultUsage ?? null;
+  const prevStepSeq = state?.stepSeq ?? 0;
+
+  if (totalUsage && prevTotal && sameCodexUsageCounts(totalUsage, prevTotal)) {
+    return {
+      observeObj: {
+        message: {
+          id: `${turnId ?? "codex-turn"}:${prevStepSeq || 1}`,
+          usage: ZERO_CODEX_USAGE_COUNTS,
+        },
+      },
+      resultUsage: prevTurnResult ?? ZERO_CODEX_USAGE_COUNTS,
+      context,
+      nextState: {
+        lastThreadTotal: totalUsage,
+        turnResultUsage: prevTurnResult,
+        stepSeq: prevStepSeq,
+      },
+      duplicate: true,
+    };
+  }
+
+  let stepUsage: CodexUsageCounts;
+  let nextThreadTotal: CodexUsageCounts | null;
+  if (totalUsage) {
+    const baseline =
+      prevTotal && !regressedCodexUsageCounts(totalUsage, prevTotal)
+        ? prevTotal
+        : rawLast
+          ? subtractCodexUsageCounts(totalUsage, lastUsage)
+          : ZERO_CODEX_USAGE_COUNTS;
+    stepUsage = subtractCodexUsageCounts(totalUsage, baseline);
+    nextThreadTotal = totalUsage;
+  } else {
+    stepUsage = lastUsage;
+    nextThreadTotal = prevTotal;
+  }
+
+  const nextStepSeq = prevStepSeq + 1;
+  const resultUsage = prevTurnResult ? addCodexUsageCounts(prevTurnResult, stepUsage) : stepUsage;
 
   return {
     observeObj: {
       message: {
-        id: turnId ?? "codex-turn",
-        usage: usageForContext,
+        id: `${turnId ?? "codex-turn"}:${nextStepSeq}`,
+        usage: stepUsage,
       },
     },
     resultUsage,
+    context,
+    nextState: {
+      lastThreadTotal: nextThreadTotal,
+      turnResultUsage: resultUsage,
+      stepSeq: nextStepSeq,
+    },
+    duplicate: false,
   };
 }
 

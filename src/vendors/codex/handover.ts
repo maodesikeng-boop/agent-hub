@@ -266,14 +266,23 @@ export function createCodexForker(options: CodexForkerOptions = {}): SessionFork
       if (!rpc || rpc.exited) throw new Error(`复制那份的 codex 进程不在了：${fork.forkId}`);
       const texts: string[] = [];
       let usage: TokenUsage = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, context: 0 };
+      let prevTotalKey: string | null = null;
       let turnId: string | null = null;
       let unlisten = (): void => {};
       const done = new Promise<void>((resolve, reject) => {
         unlisten = rpc.listen((method, params) => {
           if (method === "turn/started") turnId = textOf((params.turn as Json | undefined)?.id) || turnId;
           else if (method === "thread/tokenUsage/updated") {
-            const last = (params.tokenUsage as Json | undefined)?.last;
-            if (typeof last === "object" && last !== null) usage = addUsage(usage, last as Json);
+            const tu = params.tokenUsage as Json | undefined;
+            const rawTotal = typeof tu?.total === "object" && tu.total !== null ? (tu.total as Json) : null;
+            const totalKey = rawTotal
+              ? `${numberOf(rawTotal.inputTokens)}:${numberOf(rawTotal.cachedInputTokens)}:${numberOf(rawTotal.cacheWriteInputTokens)}:${numberOf(rawTotal.outputTokens)}`
+              : null;
+            if (totalKey === null || totalKey !== prevTotalKey) {
+              prevTotalKey = totalKey;
+              const last = tu?.last;
+              if (typeof last === "object" && last !== null) usage = addUsage(usage, last as Json);
+            }
           } else if (method === "item/completed") {
             const item = (params.item as Json | undefined) ?? {};
             if (item.type === "agentMessage") texts.push(textOf(item.text));

@@ -106,7 +106,7 @@ export const HANDOVER_STOP_GRACE_MS = 3_000;
  * 项目经理的对话长到多少 token（会话的 usage.context：最近一次请求的上下文大小，各家驱动都写）就自动换新会话：这一轮结束时进队列（ledger/handover.ts）。
  * 只对项目经理；Worker 的会话不自动换。
  */
-export const HANDOVER_TOKEN_THRESHOLD = 200_000;
+export const HANDOVER_TOKEN_THRESHOLD = 240_000;
 export const AUTO_RENEW_CONTEXT_TOKENS = HANDOVER_TOKEN_THRESHOLD;
 /** 本会话写交接（兜底，厂商复制不了时）：自动的要空闲这么久才发交接请求；期间来了新消息（用户的、Worker 汇报）就等下一次空闲。后台写交接不用等。 */
 export const AUTO_RENEW_IDLE_MS = 20_000;
