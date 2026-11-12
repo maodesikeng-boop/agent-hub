@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   DEFAULT_AGENT_VENDOR,
+  ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES,
+  ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES,
   ROUTER_STREAM_PAGE_SIZE,
   emptyRouterSlice,
   type DeviceInfo,
@@ -18,6 +20,14 @@ import {
 } from "../shared/index.ts";
 import { App } from "./App.tsx";
 import { OFFLINE_AFTER_MS } from "./devices.ts";
+import {
+  briefingEntryOfReport,
+  mergeRouterStream,
+  routerStreamPosOf,
+  turnEntryOfCommand,
+  type RouterStreamEntry,
+  type RouterStreamSource,
+} from "./router-stream.ts";
 import { resetQueryClient } from "./query-client.ts";
 import { MOBILE_SHELL_QUERY, NARROW_QUERY } from "./useMediaQuery.ts";
 import {
@@ -1065,7 +1075,7 @@ describe("时间流：简报、已读、贴底和历史", () => {
       pms: [makePm({ id: 1, name: "小林" })],
       projects: [makeProject({ id: 10, name: "agent-hub", pmId: 1, conversationId: 1 })],
       conversations: [makeConvSnapshot([], { conversation: { id: 1, pmId: 1, projectId: 10, title: "小林" } })],
-      router: { ...emptyRouterSlice(), items: [oldBriefing], commands },
+      router: { ...emptyRouterSlice(), items: [oldBriefing], briefingsHasMore: true, commands, commandsHasMore: true },
     });
     const olderFailed = makeCommandRecord({ id: 480, clientId: "h-failed", inputText: "更早的失败指令", status: "failed", error: "模型响应超时，请稍后重试", plan: null, dispatched: null, createdAt: now - 1_800_000 });
     const olderAnswered = makeCommandRecord({ id: 470, clientId: "h-ok", inputText: "两小时前的指令", status: "answered", plan: { intent: "answer", reply: "两小时前的回答", actions: [], track: "B" }, dispatched: null, createdAt: now - 7_200_000 });
@@ -1152,7 +1162,7 @@ describe("时间流：简报、已读、贴底和历史", () => {
     const localSnap = makeSnapshot({
       pms: [makePm({ id: 1, name: "小林" })],
       conversations: [makeConvSnapshot([], { conversation: { id: 1, pmId: 1, title: "小林" } })],
-      router: { ...emptyRouterSlice(), commands },
+      router: { ...emptyRouterSlice(), commands, commandsHasMore: true },
     });
     const older = makeCommandRecord({ id: 650, clientId: "t-0", inputText: "被字节上限挤出快照的指令", status: "answered", plan: { intent: "answer", reply: "更早的回答", actions: [], track: "B" }, dispatched: null, createdAt: now - 3_600_000 });
     const { commandPageCalls } = installFleet({
@@ -1171,6 +1181,214 @@ describe("时间流：简报、已读、贴底和历史", () => {
     expect(turns()[0]).toBe(turnOf("被字节上限挤出快照的指令"));
     // 服务端说到头了：不再出 Load earlier
     expect(within(timeline()).queryByRole("button", { name: /Load earlier|Couldn't load/ })).toBeNull();
+  });
+
+  it("按字节截断的快照（一类被截断、另一类未截断）：水位线挡住更早简报，Load earlier 只翻被截断的一类，翻页不插进已显示记录中间且整个时间流按时间排序", async () => {
+    const now = Date.now();
+    const longReply = "答".repeat(4_800);
+    // 4 条指令按时间从新到旧排列：前 2 条占满 ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES（32 KB），后 2 条被字节上限截在快照外
+    const allCommandsNewestFirst = [
+      makeCommandRecord({
+        id: 714,
+        clientId: "b-4",
+        inputText: "一分钟前的长指令",
+        status: "answered",
+        plan: { intent: "answer", reply: longReply, actions: [], track: "B" },
+        dispatched: null,
+        createdAt: now - 60_000,
+      }),
+      makeCommandRecord({
+        id: 713,
+        clientId: "b-3",
+        inputText: "两分钟前的长指令",
+        status: "answered",
+        plan: { intent: "answer", reply: longReply, actions: [], track: "B" },
+        dispatched: null,
+        createdAt: now - 120_000,
+      }),
+      makeCommandRecord({
+        id: 712,
+        clientId: "b-2",
+        inputText: "三分钟前的指令",
+        status: "answered",
+        plan: { intent: "answer", reply: longReply, actions: [], track: "B" },
+        dispatched: null,
+        createdAt: now - 180_000,
+      }),
+      makeCommandRecord({
+        id: 711,
+        clientId: "b-1",
+        inputText: "五分钟前的指令",
+        status: "answered",
+        plan: { intent: "answer", reply: "最早的回答", actions: [], track: "B" },
+        dispatched: null,
+        createdAt: now - 300_000,
+      }),
+    ];
+    const utf8 = new TextEncoder();
+    const snapshotCommands: RouterCommandRecord[] = [];
+    let usedBytes = 2;
+    for (const cmd of allCommandsNewestFirst) {
+      const bytes = utf8.encode(JSON.stringify(cmd)).byteLength + (snapshotCommands.length > 0 ? 1 : 0);
+      if (snapshotCommands.length > 0 && usedBytes + bytes > ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES) break;
+      snapshotCommands.push(cmd);
+      usedBytes += bytes;
+    }
+    // 确认确实是按字节截断（只留下 2 条 < 10 条），而后 2 条在快照外
+    expect(snapshotCommands).toHaveLength(2);
+    const truncatedCommands = allCommandsNewestFirst.slice(snapshotCommands.length);
+
+    // 简报共 2 条，既没超条数也没超字节（未截断）：一条在快照指令时间窗内（-90s），一条比快照最老指令更早（-240s）
+    const briefings = [
+      makeReportItem({ id: 242, status: "archived", summary: "九十秒前的简报", links: [], createdAt: now - 90_000 }),
+      makeReportItem({ id: 241, status: "archived", summary: "四分钟前的简报", links: [], createdAt: now - 240_000 }),
+    ];
+
+    const localSnap = makeSnapshot({
+      pms: [makePm({ id: 1, name: "小林" })],
+      projects: [makeProject({ id: 10, name: "agent-hub", pmId: 1, conversationId: 1 })],
+      conversations: [makeConvSnapshot([], { conversation: { id: 1, pmId: 1, projectId: 10, title: "小林" } })],
+      router: {
+        ...emptyRouterSlice(),
+        items: briefings,
+        briefingsHasMore: false,
+        commands: snapshotCommands,
+        commandsHasMore: true,
+      },
+    });
+    const { localApi, commandPageCalls } = installFleet({
+      local: localSnap,
+      commandsPage: () => ({ commands: truncatedCommands, nextCursor: null, hasMore: false }),
+    });
+    const user = userEvent.setup();
+    await openRouter();
+    await waitFor(() => expect(turns()).toHaveLength(2));
+
+    const entryLabels = () =>
+      [...timeline().querySelectorAll<HTMLElement>("[data-stream-entry]")].map(
+        (e) => e.querySelector("[data-bubble]")?.textContent ?? e.querySelector(".markdown")?.textContent,
+      );
+    const itemCalls = () => localApi.callsTo("GET", /^\/api\/router\/items$/);
+
+    // 首屏已显示的记录（比最老指令 -120s 更早的「四分钟前的简报」被水位线拦住，绝不提前露出导致翻页后插队）
+    const shownBefore = entryLabels();
+    expect(shownBefore).toEqual(["两分钟前的长指令", "九十秒前的简报", "一分钟前的长指令"]);
+
+    await user.click(within(timeline()).getByRole("button", { name: "Load earlier" }));
+    await waitFor(() => expect(commandPageCalls).toHaveLength(1));
+    await waitFor(() => expect(within(timeline()).getByText("五分钟前的指令")).toBeInTheDocument());
+
+    const shownAfter = entryLabels();
+    const expectedChronological = [
+      "五分钟前的指令",
+      "四分钟前的简报",
+      "三分钟前的指令",
+      "两分钟前的长指令",
+      "九十秒前的简报",
+      "一分钟前的长指令",
+    ];
+    // 1) 翻页新加载出的更早记录拼在首屏已显示记录顶部后，整个时间流仍严格按时间从早到晚排序（无插队）
+    const newlyPrepended = shownAfter.filter((label) => !shownBefore.includes(label));
+    expect([...newlyPrepended, ...shownBefore]).toEqual(expectedChronological);
+    expect(shownAfter).toEqual(expectedChronological);
+    // 2) 简报没有被截断：不发简报翻页请求；两类都没有更早记录了，翻页结束
+    expect(itemCalls()).toHaveLength(0);
+    expect(within(timeline()).queryByRole("button", { name: /Load earlier|Couldn't load/ })).toBeNull();
+  });
+
+  it("按字节截断的快照（简报被截断、指令未截断，及两类都未截断）：对称翻简报不翻指令，两类都没有更早时不出 Load earlier", async () => {
+    const now = Date.now();
+    const longSummary = `简报详情：${"里程碑进展".repeat(600)}`;
+    const allBriefingsNewestFirst = [
+      makeReportItem({ id: 264, status: "archived", summary: `一分钟前的长简报 ${longSummary}`, links: [], createdAt: now - 60_000 }),
+      makeReportItem({ id: 263, status: "archived", summary: `两分钟前的长简报 ${longSummary}`, links: [], createdAt: now - 120_000 }),
+      makeReportItem({ id: 262, status: "archived", summary: `三分钟前的简报 ${longSummary}`, links: [], createdAt: now - 180_000 }),
+      makeReportItem({ id: 261, status: "archived", summary: "五分钟前的简报", links: [], createdAt: now - 300_000 }),
+    ];
+    const utf8 = new TextEncoder();
+    const snapshotBriefings: RouterReportItem[] = [];
+    let usedBytes = 2;
+    for (const rep of allBriefingsNewestFirst) {
+      const bytes = utf8.encode(JSON.stringify(rep)).byteLength + (snapshotBriefings.length > 0 ? 1 : 0);
+      if (snapshotBriefings.length > 0 && usedBytes + bytes > ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES) break;
+      snapshotBriefings.push(rep);
+      usedBytes += bytes;
+    }
+    expect(snapshotBriefings).toHaveLength(2);
+    const truncatedBriefings = allBriefingsNewestFirst.slice(snapshotBriefings.length);
+
+    const commands = [
+      makeCommandRecord({ id: 732, clientId: "c-90", inputText: "九十秒前的指令", status: "answered", plan: { intent: "answer", reply: "好", actions: [], track: "B" }, dispatched: null, createdAt: now - 90_000 }),
+      makeCommandRecord({ id: 731, clientId: "c-240", inputText: "四分钟前的指令", status: "answered", plan: { intent: "answer", reply: "好", actions: [], track: "B" }, dispatched: null, createdAt: now - 240_000 }),
+    ];
+
+    const localSnap = makeSnapshot({
+      pms: [makePm({ id: 1, name: "小林" })],
+      projects: [makeProject({ id: 10, name: "agent-hub", pmId: 1, conversationId: 1 })],
+      conversations: [makeConvSnapshot([], { conversation: { id: 1, pmId: 1, projectId: 10, title: "小林" } })],
+      router: {
+        ...emptyRouterSlice(),
+        items: snapshotBriefings,
+        briefingsHasMore: true,
+        commands,
+        commandsHasMore: false,
+      },
+    });
+    const { localApi, commandPageCalls } = installFleet({ local: localSnap });
+    localApi.routerItems = () => ({
+      status: 200,
+      body: { items: truncatedBriefings, nextCursor: null, hasMore: false },
+    });
+    const user = userEvent.setup();
+    const { unmount } = await openRouter();
+    await waitFor(() => expect(turns()).toHaveLength(1));
+
+    const entryPrefix = () =>
+      [...timeline().querySelectorAll<HTMLElement>("[data-stream-entry]")].map((e) => {
+        const text = e.querySelector("[data-bubble]")?.textContent ?? e.querySelector(".markdown")?.textContent ?? "";
+        return text.slice(0, 8);
+      });
+    const itemCalls = () => localApi.callsTo("GET", /^\/api\/router\/items$/);
+
+    // 首屏：比最老简报 -120s 更早的「四分钟前的指令」先被简报水位线拦住
+    expect(entryPrefix()).toEqual(["两分钟前的长简报", "九十秒前的指令", "一分钟前的长简报"]);
+
+    await user.click(within(timeline()).getByRole("button", { name: "Load earlier" }));
+    await waitFor(() => expect(itemCalls()).toHaveLength(1));
+    expect(commandPageCalls).toHaveLength(0);
+    await waitFor(() => expect(within(timeline()).getByText("五分钟前的简报")).toBeInTheDocument());
+
+    expect(entryPrefix()).toEqual([
+      "五分钟前的简报",
+      "四分钟前的指令",
+      "三分钟前的简报 ",
+      "两分钟前的长简报",
+      "九十秒前的指令",
+      "一分钟前的长简报",
+    ]);
+    expect(within(timeline()).queryByRole("button", { name: /Load earlier|Couldn't load/ })).toBeNull();
+    unmount();
+    resetQueryClient();
+
+    // 两类都未截断（commandsHasMore: false, briefingsHasMore: false）：直接完整展示，不出 Load earlier
+    installFleet({
+      local: makeSnapshot({
+        pms: [makePm({ id: 1, name: "小林" })],
+        projects: [makeProject({ id: 10, name: "agent-hub", pmId: 1, conversationId: 1 })],
+        conversations: [makeConvSnapshot([], { conversation: { id: 1, pmId: 1, projectId: 10, title: "小林" } })],
+        router: {
+          ...emptyRouterSlice(),
+          items: [allBriefingsNewestFirst[3]!],
+          briefingsHasMore: false,
+          commands,
+          commandsHasMore: false,
+        },
+      }),
+    });
+    await openRouter();
+    await waitFor(() => expect(turns()).toHaveLength(2));
+    expect(within(timeline()).getByText("五分钟前的简报")).toBeInTheDocument();
+    expect(within(timeline()).queryByRole("button", { name: "Load earlier" })).toBeNull();
   });
 
   it("标已读失败：不因为别的流更新（指令变了、项目经理改了）重发，页面重新可见或来了新简报才再试", async () => {
@@ -1261,5 +1479,132 @@ describe("时间流：简报、已读、贴底和历史", () => {
     expect(await within(timeline()).findByText("改过的回答")).toBeInTheDocument();
     expect(renders.markdown.slice(markdownBefore)).toEqual(["改过的回答"]);
     expect(renders.stream - streamBefore).toBe(1);
+  });
+});
+
+describe("mergeRouterStream：多来源分别截断、连续翻页不插队", () => {
+  /** 一个来源：服务端按 created_at DESC, id DESC 排好的全部原始记录，近窗取前 window 条，之后每页 page 条。 */
+  interface SimSource {
+    rows: Array<{ createdAt: number; id: number; cancelled: boolean }>;
+    toEntry: (row: { createdAt: number; id: number; cancelled: boolean }) => RouterStreamEntry | null;
+    kind: "turn" | "briefing";
+    deviceKey: string;
+    loaded: number;
+  }
+
+  function rng(seed: number) {
+    let x = seed >>> 0 || 1;
+    return (n: number) => {
+      x ^= x << 13;
+      x ^= x >>> 17;
+      x ^= x << 5;
+      return (x >>> 0) % n;
+    };
+  }
+
+  function sourceOf(sim: SimSource): RouterStreamSource {
+    const loaded = sim.rows.slice(0, sim.loaded);
+    const entries: RouterStreamEntry[] = [];
+    for (const row of loaded) {
+      const e = sim.toEntry(row);
+      if (e !== null) entries.push(e);
+    }
+    const hasMore = sim.loaded < sim.rows.length;
+    const oldest = loaded.at(-1);
+    return {
+      entries,
+      hasMore,
+      loadedDownTo:
+        hasMore && oldest !== undefined ? { createdAt: oldest.createdAt, kind: sim.kind, deviceKey: sim.deviceKey, id: oldest.id } : null,
+    };
+  }
+
+  it("同一毫秒挤满指令和多台设备的简报（id 跨位数、含已取消指令）：每页更早记录只接在顶部，整体按时间→类别→设备→id 排序，翻到底按钮消失", () => {
+    const pms = new Map();
+    const projects = new Map();
+    for (let seed = 1; seed <= 300; seed++) {
+      const r = rng(seed);
+      const page = 1 + r(4);
+      const sims: SimSource[] = [];
+      const makeRows = (n: number, withCancelled: boolean) => {
+        // 时间只取 0..4 毫秒，逼出大量同一毫秒；id 从 1 起到两位数，旧比较按字符串会把 10 排在 9 前面
+        const rows = Array.from({ length: n }, (_, i) => ({ createdAt: 0, id: i + 1, cancelled: withCancelled && r(5) === 0 }));
+        let t = 0;
+        for (const row of rows) {
+          t += r(3) === 0 ? 1 : 0;
+          row.createdAt = Math.min(t, 4);
+        }
+        return rows.sort((a, b) => b.createdAt - a.createdAt || b.id - a.id);
+      };
+      const cmdRows = makeRows(r(16), true);
+      sims.push({
+        rows: cmdRows,
+        kind: "turn",
+        deviceKey: "",
+        // 近窗：0 条（该类为空）、部分（被条数或字节截断）、全部（没截断）都会抽到
+        loaded: r(cmdRows.length + 1),
+        toEntry: (row) =>
+          row.cancelled
+            ? null
+            : turnEntryOfCommand(
+                makeCommandRecord({ id: row.id, clientId: `c-${seed}-${row.id}`, createdAt: row.createdAt, status: "answered" }),
+                undefined,
+                false,
+              ),
+      });
+      for (const deviceKey of ["", "peer-b"]) {
+        const rows = makeRows(r(16), false);
+        sims.push({
+          rows,
+          kind: "briefing",
+          deviceKey,
+          loaded: r(rows.length + 1),
+          toEntry: (row) =>
+            briefingEntryOfReport(makeReportItem({ id: row.id, createdAt: row.createdAt }), {
+              deviceKey,
+              deviceName: deviceKey || "local",
+              self: deviceKey === "",
+              pmById: pms,
+              projectById: projects,
+              live: false,
+            }),
+        });
+      }
+      // 近窗为 0 条却还有更多的情况服务端不会给（快照至少留 1 条），这里也不造
+      for (const sim of sims) if (sim.loaded === 0) sim.loaded = sim.rows.length === 0 ? 0 : Math.min(1, sim.rows.length);
+
+      const keysOf = (entries: RouterStreamEntry[]) => entries.map((e) => e.key);
+      let prev = mergeRouterStream(sims.map(sourceOf));
+      for (let click = 0; prev.hasMore; click++) {
+        expect(click).toBeLessThan(40);
+        for (const sim of sims) if (sim.loaded < sim.rows.length) sim.loaded = Math.min(sim.rows.length, sim.loaded + page);
+        const next = mergeRouterStream(sims.map(sourceOf));
+        // 已显示的记录原样留在尾部，新翻出来的只拼在顶部
+        expect(keysOf(next.entries).slice(next.entries.length - prev.entries.length)).toEqual(keysOf(prev.entries));
+        prev = next;
+      }
+      // 翻到底：全部未取消记录都在，且按 时间 → 指令在前 → 设备 → 数字 id 排好
+      const all: RouterStreamEntry[] = [];
+      for (const sim of sims) {
+        for (const row of sim.rows) {
+          const e = sim.toEntry(row);
+          if (e !== null) all.push(e);
+        }
+      }
+      const order = (e: RouterStreamEntry) => routerStreamPosOf(e);
+      all.sort((a, b) => {
+        const pa = order(a);
+        const pb = order(b);
+        return (
+          pa.createdAt - pb.createdAt ||
+          (pa.kind === pb.kind ? 0 : pa.kind === "turn" ? -1 : 1) ||
+          (pa.deviceKey === pb.deviceKey ? 0 : pa.deviceKey < pb.deviceKey ? -1 : 1) ||
+          pa.id - pb.id
+        );
+      });
+      expect(prev.hasMore).toBe(false);
+      expect(prev.watermark).toBeNull();
+      expect(prev.entries.map((e) => routerStreamPosOf(e))).toEqual(all.map((e) => routerStreamPosOf(e)));
+    }
   });
 });

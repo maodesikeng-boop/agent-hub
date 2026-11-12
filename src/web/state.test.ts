@@ -782,6 +782,7 @@ describe("Router 与 TaskGraph 增量状态演进", () => {
 
     // 简报：已读的更新留在原位；近窗外的更新不加进来（否则近窗中间出空洞，历史的边界也会错）
     s = applyChange(s, changeOf(++seq, "router.item.created", { item: report(2) }));
+    expect(s.router.briefingsHasMore).toBe(false);
     s = applyChange(s, changeOf(++seq, "router.item.updated", { item: report(2, { status: "archived", updatedAt: 9_000 }) }));
     expect(s.router.items.map((x) => [x.id, x.status])).toEqual([
       [2, "archived"],
@@ -791,17 +792,20 @@ describe("Router 与 TaskGraph 增量状态演进", () => {
     s = applyChange(s, changeOf(++seq, "router.item.updated", { item: report(999, { status: "archived" }) }));
     expect(s.router.items).toBe(before);
 
-    // 简报再多也只留最新的 ROUTER_STREAM_LIVE_MAX 条，而且挤不掉待拍板项
+    // 简报再多也只留最新的 ROUTER_STREAM_LIVE_MAX 条，而且挤不掉待拍板项；被裁掉最旧简报后 briefingsHasMore 置为 true
     for (let id = 3; id < 3 + ROUTER_STREAM_LIVE_MAX + 5; id++) s = applyChange(s, changeOf(++seq, "router.item.created", { item: report(id) }));
     const reports = s.router.items.filter((x) => x.kind === "report");
     expect(reports).toHaveLength(ROUTER_STREAM_LIVE_MAX);
+    expect(s.router.briefingsHasMore).toBe(true);
     expect(reports[0]!.id).toBe(3 + ROUTER_STREAM_LIVE_MAX + 4);
     expect(reports.at(-1)!.id).toBe(8);
     expect(s.router.items.filter((x) => x.kind === "decision").map((x) => x.id)).toEqual([1]);
 
-    // 指令：created 插前并裁剪；updated 原位替换；近窗外的 updated 忽略
+    // 指令：created 插前并裁剪（裁剪后 commandsHasMore 置为 true）；updated 原位替换；近窗外的 updated 忽略
+    expect(s.router.commandsHasMore).toBe(false);
     for (let id = 1; id <= ROUTER_STREAM_LIVE_MAX + 3; id++) s = applyChange(s, changeOf(++seq, "router.command.created", { command: command(id) }));
     expect(s.router.commands).toHaveLength(ROUTER_STREAM_LIVE_MAX);
+    expect(s.router.commandsHasMore).toBe(true);
     expect(s.router.commands[0]!.id).toBe(ROUTER_STREAM_LIVE_MAX + 3);
     expect(s.router.commands.at(-1)!.id).toBe(4);
     s = applyChange(s, changeOf(++seq, "router.command.updated", { command: command(10, { status: "answered" }) }));
@@ -810,5 +814,18 @@ describe("Router 与 TaskGraph 增量状态演进", () => {
     const commandsBefore = s.router.commands;
     s = applyChange(s, changeOf(++seq, "router.command.updated", { command: command(2, { status: "failed" }) }));
     expect(s.router.commands).toBe(commandsBefore);
+
+    // 快照兼容：新版快照原样保留引用；未升级的旧版远端守护进程缺字段时按内容兜底补齐布尔值
+    const modernSnap = makeSnapshot({ router: { ...s.router, briefingsHasMore: false, commandsHasMore: true } });
+    expect(reducer(initialState, { type: "loaded", snapshot: modernSnap }).router).toBe(modernSnap.router);
+    const legacyRouter = {
+      settings: s.router.settings,
+      items: [report(2)],
+      notes: [],
+      commands: [],
+    } as unknown as HubState["router"];
+    const legacyLoaded = reducer(initialState, { type: "loaded", snapshot: makeSnapshot({ router: legacyRouter }) });
+    expect(legacyLoaded.router.briefingsHasMore).toBe(true);
+    expect(legacyLoaded.router.commandsHasMore).toBe(false);
   });
 });

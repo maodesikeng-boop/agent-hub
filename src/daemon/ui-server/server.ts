@@ -1226,10 +1226,8 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
 
     routes.get(API_PATHS.state, async (req): Promise<StateSnapshot> => {
       const snap = ledger.snapshot();
-      const router =
-        peerOf(req) !== undefined && snap.router.commands.length > 0
-          ? { ...snap.router, commands: [] }
-          : snap.router;
+      // 对等设备看不到本机指令：连同“还有更早指令”的标记一起抹掉
+      const router = peerOf(req) !== undefined ? { ...snap.router, commands: [], commandsHasMore: false } : snap.router;
       return {
         ...snap,
         router,
