@@ -127,11 +127,13 @@ export interface E2eEnv {
   stdinTextsOf(pid: number): string[];
   /** 用某个假 claude 进程拿到的 HUB_TOKEN、HUB_SOCK 跑一次 run/bin/hub（就像 agent 自己敲的）。 */
   runHub(pid: number, args: string[], options?: { stdin?: string }): Promise<{ code: number | null; stdout: string; stderr: string }>;
-  cleanup(): Promise<void>;
+  /** 结束还在的子进程、删掉临时目录；keepDir 时只结束进程、目录留着（编排验证没通过的试跑留现场查）。 */
+  cleanup(options?: { keepDir?: boolean }): Promise<void>;
 }
 
-export function makeEnv(): E2eEnv {
-  const dir = mkdtempSync(join(shortTmp(), "ah-e2e-"));
+/** root：临时目录建在哪（默认 shortTmp()）；prefix：目录名前缀（默认 ah-e2e-，要 ah-<字母数字>- 的形状，removeOwnClaudeProjects 才认）。 */
+export function makeEnv(options: { root?: string; prefix?: string; detached?: boolean } = {}): E2eEnv {
+  const dir = mkdtempSync(join(options.root ?? shortTmp(), options.prefix ?? "ah-e2e-"));
   const home = join(dir, "home");
   const fakeDir = join(dir, "fake");
   mkdirSync(fakeDir, { recursive: true });
@@ -157,7 +159,7 @@ export function makeEnv(): E2eEnv {
   });
 
   const spawnDaemon = (vendorPath: string, extra?: Record<string, string>, main = MAIN) => {
-    const child = spawn(process.execPath, [main], { env: baseEnv(vendorPath, extra), stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(process.execPath, [main], { detached: options.detached ?? false, env: baseEnv(vendorPath, extra), stdio: ["ignore", "pipe", "pipe"] });
     running.add(child);
     let out = "";
     let err = "";
@@ -221,7 +223,7 @@ export function makeEnv(): E2eEnv {
       child.stdin.end(options.stdin ?? "");
       return new Promise((resolve) => child.once("close", (code) => resolve({ code, stdout, stderr })));
     },
-    async cleanup() {
+    async cleanup(cleanupOptions = {}) {
       for (const child of running) child.kill("SIGKILL");
       await sleep(50);
       // 万一有假 claude 留下（测试失败时），也结束掉
@@ -235,7 +237,7 @@ export function makeEnv(): E2eEnv {
           }
         }
       }
-      rmSync(dir, { recursive: true, force: true });
+      if (!cleanupOptions.keepDir) rmSync(dir, { recursive: true, force: true });
     },
   };
 }

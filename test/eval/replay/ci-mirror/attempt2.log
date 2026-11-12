@@ -1,0 +1,1184 @@
+check (ubuntu 4/4)	UNKNOWN STEP	﻿2026-11-11T14:43:05.7114195Z Current runner version: '2.338.2'
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:05.7134236Z ##[group]Runner Image Provisioner
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:05.7135014Z Hosted Compute Agent
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:05.7135533Z Version: 20261028.624
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:05.7136100Z Commit: 54898b74c23fde5556c9b3c3a2290865feef0dfe
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:05.7136754Z Build Date: 2026-10-28T21:51:42Z
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:05.7137347Z Worker ID: {d5d75895-6fb0-404b-8c68-53e70c0154c8}
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:05.7137934Z Region: northcentralus
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:05.7138487Z Cloud: Azure
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:05.7138985Z ##[endgroup]
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:05.7140731Z ##[group]Operating System
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:05.7141358Z Ubuntu
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:05.7141865Z 24.04.5
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:05.7142320Z LTS
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:05.7142802Z ##[endgroup]
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:05.7143324Z ##[group]Runner Image
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:05.7143842Z Image: ubuntu-24.04
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:05.7144305Z Version: 20261101.360.1
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:05.7145425Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261101.360/images/ubuntu/Ubuntu2404-Readme.md
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:05.7146709Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261101.360
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:05.7147524Z ##[endgroup]
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:05.7148518Z ##[group]GITHUB_TOKEN Permissions
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:05.7150503Z Contents: read
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:05.7151006Z Metadata: read
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:05.7151570Z ##[endgroup]
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:05.7153873Z Secret source: Actions
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:05.7154737Z Cache mode: write
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:05.7155382Z Prepare workflow directory
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:05.7437000Z Prepare all required actions
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:05.7491955Z Getting action download info
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:05.9953903Z Download action repository 'actions/checkout@v5' (SHA:fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09)
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:06.0868933Z Download action repository 'pnpm/action-setup@v4' (SHA:b906affcce14559ad1aafd4ab0e942779e9f58b1)
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:06.3887303Z Download action repository 'actions/setup-node@v5' (SHA:a0853c24544627f65ddf259abe73b1d18a591444)
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:06.5629174Z Download action repository 'actions/cache@v4' (SHA:0057852bfaa89a56745cba8c7296529d2fc39830)
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:06.7051129Z Download action repository 'actions/upload-artifact@v4' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.1415033Z Complete job name: check (ubuntu 4/4)
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.2219485Z ##[group]Run actions/checkout@v5
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.2221056Z with:
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.2221997Z   repository: maodesikeng-boop/agent-hub
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.2229899Z   token: ***
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.2230806Z   ssh-strict: true
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.2231691Z   ssh-user: git
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.2232589Z   persist-credentials: true
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.2233556Z   clean: true
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.2234456Z   sparse-checkout-cone-mode: true
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.2235530Z   fetch-depth: 1
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.2236407Z   fetch-tags: false
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.2237298Z   show-progress: true
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.2238212Z   lfs: false
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.2239025Z   submodules: false
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.2240345Z   set-safe-directory: true
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.2241371Z   allow-unsafe-pr-checkout: false
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.2242616Z ##[endgroup]
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.4262442Z Syncing repository: maodesikeng-boop/agent-hub
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.4264803Z ##[group]Getting Git version info
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.4266100Z Working directory is '/home/runner/work/agent-hub/agent-hub'
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.4267842Z [command]/usr/bin/git version
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.4317724Z git version 2.56.0
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.4342285Z ##[endgroup]
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.4349694Z Temporarily overriding HOME='/home/runner/work/_temp/53ed2116-16cf-471c-b19f-178c89dae90b' before making global git config changes
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.4353809Z Adding repository directory to the temporary git global config as a safe directory
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.4357567Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/agent-hub/agent-hub
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.4392036Z Deleting the contents of '/home/runner/work/agent-hub/agent-hub'
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.4395678Z ##[group]Initializing the repository
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.4398677Z [command]/usr/bin/git init /home/runner/work/agent-hub/agent-hub
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.4921591Z hint: Using 'master' as the name for the initial branch. This default branch name
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.4924138Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.4926448Z hint: to use in all of your new repositories, which will suppress this warning,
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.4928251Z hint: call:
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.4929208Z hint:
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.4930556Z hint: 	git config --global init.defaultBranch <name>
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.4932091Z hint:
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.4933631Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.4935873Z hint: 'development'. The just-created branch can be renamed via this command:
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.4937610Z hint:
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.4938561Z hint: 	git branch -m <name>
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.4939662Z hint:
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.4941341Z hint: Disable this message with "git config set advice.defaultBranchName false"
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.5085843Z Initialized empty Git repository in /home/runner/work/agent-hub/agent-hub/.git/
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.5096282Z [command]/usr/bin/git remote add origin https://github.com/maodesikeng-boop/agent-hub
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.5523736Z ##[endgroup]
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.5525898Z ##[group]Disabling automatic garbage collection
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.5527870Z [command]/usr/bin/git config --local gc.auto 0
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.5565365Z ##[endgroup]
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.5567163Z ##[group]Setting up auth
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.5571686Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.5612169Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.5952061Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.5988037Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.6189073Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.6224981Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.6425110Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.6466216Z ##[endgroup]
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.6467477Z ##[group]Fetching the repository
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:07.6476247Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +9b551dad458c14abcdb176beaf816008180ac26f:refs/remotes/pull/288/merge
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:08.8805691Z From https://github.com/maodesikeng-boop/agent-hub
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:08.8807057Z  * [new ref]         9b551dad458c14abcdb176beaf816008180ac26f -> pull/288/merge
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:08.8809166Z ##[endgroup]
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:08.8809591Z ##[group]Determining the checkout info
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:08.8811067Z ##[endgroup]
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:08.8822467Z [command]/usr/bin/git sparse-checkout disable
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:08.8930502Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:08.8963674Z ##[group]Checking out the ref
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:08.8966783Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/288/merge
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.0276641Z Note: switching to 'refs/remotes/pull/288/merge'.
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.0277040Z 
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.0277263Z You are in 'detached HEAD' state. You can look around, make experimental
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.0277671Z changes and commit them, and you can discard any commits you make in this
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.0278336Z state without impacting any branches by switching back to a branch.
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.0278593Z 
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.0278783Z If you want to create a new branch to retain commits you create, you may
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.0279141Z do so (now or later) by using -c with the switch command. Example:
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.0279336Z 
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.0279453Z   git switch -c <new-branch-name>
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.0279596Z 
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.0279692Z Or undo this operation with:
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.0280066Z 
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.0280176Z   git switch -
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.0280384Z 
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.0280848Z Turn off this advice by setting config variable advice.detachedHead to false
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.0281278Z 
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.0281729Z HEAD is now at 9b551da Merge da36ed775e9c3b4e63e8606cdf14c7e903e63f41 into d9d67a21985eaca5355a1d6320e0e5f50afb855d
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.0292526Z ##[endgroup]
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.0339256Z [command]/usr/bin/git log -1 --format=%H
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.0367935Z 9b551dad458c14abcdb176beaf816008180ac26f
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.0576464Z ##[group]Run pnpm/action-setup@v4
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.0576744Z with:
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.0576934Z   dest: ~/setup-pnpm
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.0577129Z   run_install: null
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.0577312Z   cache: false
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.0577521Z   cache_dependency_path: pnpm-lock.yaml
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.0577776Z   package_json_file: package.json
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.0578022Z   standalone: false
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.0578200Z ##[endgroup]
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.1732369Z ##[group]Running self-installer...
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.4859909Z (node:2104) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.4861172Z (Use `node --trace-deprecation ...` to show where the warning was created)
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.6030098Z Progress: resolved 1, reused 0, downloaded 0, added 0
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.6100861Z Packages: +1
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.6104757Z +
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.9419119Z Progress: resolved 1, reused 0, downloaded 1, added 1, done
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.9804022Z 
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.9804171Z dependencies:
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.9804462Z + pnpm 10.34.5 (12.18.0 is available)
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.9804691Z 
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.9823068Z Done in 669ms
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.9996731Z ##[endgroup]
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:09.9997157Z Installation Completed!
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:10.0557713Z ##[group]Run actions/setup-node@v5
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:10.0557937Z with:
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:10.0558100Z   node-version: 24
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:10.0558274Z   cache: pnpm
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:10.0558442Z   always-auth: false
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:10.0558614Z   check-latest: false
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:10.0560802Z   token: ***
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:10.0560991Z   package-manager-cache: true
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:10.0561195Z env:
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:10.0561412Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:10.0561669Z ##[endgroup]
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:10.1789117Z (node:2118) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:10.1790050Z (Use `node --trace-deprecation ...` to show where the warning was created)
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:10.1792288Z Found in cache @ /opt/hostedtoolcache/node/24.22.2/x64
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:10.1792958Z ##[group]Environment details
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:10.5109358Z node: v24.22.2
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:10.5110120Z npm: 11.19.1
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:10.5110385Z yarn: 1.22.22
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:10.5111034Z ##[endgroup]
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:10.5131502Z [command]/home/runner/setup-pnpm/node_modules/.bin/pnpm store path --silent
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:10.8524773Z /home/runner/setup-pnpm/node_modules/.bin/store/v10
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:10.9915401Z Cache hit for: node-cache-Linux-x64-pnpm-2935756344f806a13509f6639087b8b9148798aa720d14c768f0894ffcb6523a
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:10.9996726Z (node:2118) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:11.8305711Z Received 109340233 of 109340233 (100.0%), 139.8 MBs/sec
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:11.8306177Z Cache Size: ~104 MB (109340233 B)
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:11.8351842Z [command]/usr/bin/tar -xf /home/runner/work/_temp/6ff2077e-db5c-46f6-9be8-c91f2319cba3/cache.tzst -P -C /home/runner/work/agent-hub/agent-hub --use-compress-program unzstd
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:12.9680778Z Cache restored successfully
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:12.9724897Z Cache restored from key: node-cache-Linux-x64-pnpm-2935756344f806a13509f6639087b8b9148798aa720d14c768f0894ffcb6523a
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:13.0723398Z ##[group]Run actions/cache@v4
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:13.0723625Z with:
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:13.0723809Z   path: node_modules
+check (ubuntu 4/4)	UNKNOWN STEP	!node_modules/.vite
+check (ubuntu 4/4)	UNKNOWN STEP	
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:13.0724229Z   key: node-modules-v2-Linux-node24-2935756344f806a13509f6639087b8b9148798aa720d14c768f0894ffcb6523a
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:13.0724636Z   enableCrossOsArchive: false
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:13.0724867Z   fail-on-cache-miss: false
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:13.0725067Z   lookup-only: false
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:13.0725263Z   save-always: false
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:13.0725430Z env:
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:13.0725638Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:13.0725890Z ##[endgroup]
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:13.1594529Z (node:2185) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:13.1595369Z (Use `node --trace-deprecation ...` to show where the warning was created)
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:13.2811398Z Cache hit for: node-modules-v2-Linux-node24-2935756344f806a13509f6639087b8b9148798aa720d14c768f0894ffcb6523a
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:13.2895435Z (node:2185) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:14.4951444Z Received 87766002 of 96154610 (91.3%), 75.5 MBs/sec
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:15.4944710Z Received 91960306 of 96154610 (95.6%), 41.6 MBs/sec
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:16.3209999Z Received 96154610 of 96154610 (100.0%), 31.3 MBs/sec
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:16.3211185Z Cache Size: ~92 MB (96154610 B)
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:16.3241957Z [command]/usr/bin/tar -xf /home/runner/work/_temp/596ea9bf-ac12-49e9-b5bb-7823a6773411/cache.tzst -P -C /home/runner/work/agent-hub/agent-hub --use-compress-program unzstd
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:18.0077808Z Cache restored successfully
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:18.0179376Z Cache restored from key: node-modules-v2-Linux-node24-2935756344f806a13509f6639087b8b9148798aa720d14c768f0894ffcb6523a
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:18.0390469Z ##[group]Run sudo bash scripts/linux-sandbox-setup.sh
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:18.0390887Z ^[[36;1msudo bash scripts/linux-sandbox-setup.sh^[[0m
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:18.0414380Z shell: /usr/bin/bash -e {0}
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:18.0414613Z env:
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:18.0414839Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:18.0415106Z ##[endgroup]
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:18.1241978Z Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:18.1487846Z Get:6 https://packages.microsoft.com/ubuntu/24.04/prod noble InRelease [3600 B]
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:18.1991713Z Get:7 https://packages.microsoft.com/ubuntu/24.04/prod noble/main armhf Packages [12.6 kB]
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:18.2204726Z Get:8 https://packages.microsoft.com/ubuntu/24.04/prod noble/main arm64 Packages [690 kB]
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:18.2278908Z Get:9 https://packages.microsoft.com/ubuntu/24.04/prod noble/main amd64 Packages [760 kB]
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:38.1545896Z Ign:2 http://azure.archive.ubuntu.com/ubuntu noble InRelease
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:43:58.1894721Z Ign:3 http://azure.archive.ubuntu.com/ubuntu noble-updates InRelease
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:44:18.2139585Z Ign:4 http://azure.archive.ubuntu.com/ubuntu noble-backports InRelease
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:44:38.2335157Z Ign:5 http://azure.archive.ubuntu.com/ubuntu noble-security InRelease
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:44:58.2554858Z Ign:2 http://azure.archive.ubuntu.com/ubuntu noble InRelease
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:45:18.2769972Z Ign:3 http://azure.archive.ubuntu.com/ubuntu noble-updates InRelease
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:45:18.2936158Z Ign:2 https://archive.ubuntu.com/ubuntu noble InRelease
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:45:38.2976307Z Ign:4 http://azure.archive.ubuntu.com/ubuntu noble-backports InRelease
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:45:38.3160085Z Ign:3 https://archive.ubuntu.com/ubuntu noble-updates InRelease
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:45:38.3235142Z Err:2 https://security.ubuntu.com/ubuntu noble InRelease
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:45:38.3235915Z   Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:45:58.3238037Z Ign:5 http://azure.archive.ubuntu.com/ubuntu noble-security InRelease
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:45:58.3397065Z Ign:4 https://archive.ubuntu.com/ubuntu noble-backports InRelease
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:45:58.3565006Z Err:3 https://security.ubuntu.com/ubuntu noble-updates InRelease
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:45:58.3565560Z   Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:46:18.3668618Z Ign:5 https://archive.ubuntu.com/ubuntu noble-security InRelease
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:46:18.3845210Z Err:4 https://security.ubuntu.com/ubuntu noble-backports InRelease
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:46:18.3845663Z   Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:46:38.4003098Z Err:5 https://security.ubuntu.com/ubuntu noble-security InRelease
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:46:38.4003592Z   Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:46:41.2155760Z Fetched 1467 kB in 3min 20s (7322 B/s)
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:46:42.1515360Z Reading package lists...
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:46:42.1645103Z W: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/dists/noble/InRelease  Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:46:42.1646035Z W: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/dists/noble-updates/InRelease  Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:46:42.1646898Z W: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/dists/noble-backports/InRelease  Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:46:42.1647738Z W: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/dists/noble-security/InRelease  Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:46:42.1648440Z W: Some index files failed to download. They have been ignored, or old ones used instead.
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:46:42.1784052Z Reading package lists...
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:46:42.4019276Z Building dependency tree...
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:46:42.4025239Z Reading state information...
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:46:42.5488258Z The following NEW packages will be installed:
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:46:42.5492910Z   bubblewrap socat
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:46:42.5657527Z 0 upgraded, 2 newly installed, 0 to remove and 3 not upgraded.
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:46:42.5658370Z Need to get 425 kB of archives.
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:46:42.5658737Z After this operation, 1786 kB of additional disk space will be used.
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:46:42.5659142Z Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:47:02.6006537Z Ign:2 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 bubblewrap amd64 0.9.0-1ubuntu0.3
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:47:22.6265266Z Ign:3 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 socat amd64 1.8.0.0-4ubuntu0.1
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:47:42.6652003Z Ign:2 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 bubblewrap amd64 0.9.0-1ubuntu0.3
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:02.6935904Z Ign:3 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 socat amd64 1.8.0.0-4ubuntu0.1
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:02.6992099Z Ign:2 https://archive.ubuntu.com/ubuntu noble-updates/main amd64 bubblewrap amd64 0.9.0-1ubuntu0.3
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:22.7222733Z Ign:2 https://security.ubuntu.com/ubuntu noble-updates/main amd64 bubblewrap amd64 0.9.0-1ubuntu0.3
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:22.7224181Z Err:2 mirror+file:/etc/apt/apt-mirrors.txt noble-updates/main amd64 bubblewrap amd64 0.9.0-1ubuntu0.3
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:22.7225184Z   Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:22.7247787Z Ign:3 https://archive.ubuntu.com/ubuntu noble-updates/main amd64 socat amd64 1.8.0.0-4ubuntu0.1
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:42.7317052Z Ign:3 https://security.ubuntu.com/ubuntu noble-updates/main amd64 socat amd64 1.8.0.0-4ubuntu0.1
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:42.7318599Z Err:3 mirror+file:/etc/apt/apt-mirrors.txt noble-updates/main amd64 socat amd64 1.8.0.0-4ubuntu0.1
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:42.7319122Z   Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:42.7370838Z E: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/pool/main/b/bubblewrap/bubblewrap_0.9.0-1ubuntu0.3_amd64.deb  Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:42.7371940Z E: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/pool/main/s/socat/socat_1.8.0.0-4ubuntu0.1_amd64.deb  Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:42.7372709Z E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:42.7403599Z ##[error]Process completed with exit code 100.
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:42.7465692Z ##[group]Run actions/upload-artifact@v4
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:42.7465941Z with:
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:42.7466120Z   name: vitest-junit-ubuntu-3
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:42.7466360Z   path: vitest-junit.xml
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:42.7466562Z   if-no-files-found: ignore
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:42.7466763Z   compression-level: 6
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:42.7466957Z   overwrite: false
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:42.7467143Z   include-hidden-files: false
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:42.7467338Z env:
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:42.7467550Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:42.7467805Z ##[endgroup]
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:42.8881955Z (node:2488) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:42.8883053Z (Use `node --trace-deprecation ...` to show where the warning was created)
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:42.8894546Z No files were found with the provided path: vitest-junit.xml. No artifacts will be uploaded.
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:42.9088904Z Post job cleanup.
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:43.0443768Z Pruning is unnecessary.
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:43.0621481Z Post job cleanup.
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:43.1360908Z [command]/usr/bin/git version
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:43.1396358Z git version 2.56.0
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:43.1435797Z Temporarily overriding HOME='/home/runner/work/_temp/9633888b-f878-488d-bc70-b74963cd6389' before making global git config changes
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:43.1438407Z Adding repository directory to the temporary git global config as a safe directory
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:43.1452188Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/agent-hub/agent-hub
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:43.1534217Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:43.1591374Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:43.1883984Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:43.1906971Z http.https://github.com/.extraheader
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:43.1924664Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:43.1956369Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:43.2183803Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:43.2221520Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:43.2560985Z Cleaning up orphan processes
+check (ubuntu 4/4)	UNKNOWN STEP	2026-11-11T14:48:43.2863516Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@v4, actions/upload-artifact@v4, pnpm/action-setup@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+check (ubuntu 1/4)	UNKNOWN STEP	﻿2026-11-11T14:43:05.2779126Z Current runner version: '2.338.2'
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:05.2800059Z ##[group]Runner Image Provisioner
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:05.2800737Z Hosted Compute Agent
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:05.2801513Z Version: 20261028.624
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:05.2802043Z Commit: 54898b74c23fde5556c9b3c3a2290865feef0dfe
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:05.2802601Z Build Date: 2026-10-28T21:51:42Z
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:05.2803197Z Worker ID: {92cbffa5-5dad-4ad9-bb9d-6f572b23586a}
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:05.2803763Z Region: centralus
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:05.2804320Z Cloud: Azure
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:05.2804740Z ##[endgroup]
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:05.2806073Z ##[group]Operating System
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:05.2806612Z Ubuntu
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:05.2807022Z 24.04.5
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:05.2807429Z LTS
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:05.2807863Z ##[endgroup]
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:05.2808288Z ##[group]Runner Image
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:05.2808761Z Image: ubuntu-24.04
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:05.2809256Z Version: 20261101.360.1
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:05.2810295Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261101.360/images/ubuntu/Ubuntu2404-Readme.md
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:05.2811669Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261101.360
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:05.2812453Z ##[endgroup]
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:05.2813325Z ##[group]GITHUB_TOKEN Permissions
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:05.2815080Z Contents: read
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:05.2815531Z Metadata: read
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:05.2815990Z ##[endgroup]
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:05.2817561Z Secret source: Actions
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:05.2818254Z Cache mode: write
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:05.2819011Z Prepare workflow directory
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:05.3087794Z Prepare all required actions
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:05.3127847Z Getting action download info
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:05.5893363Z Download action repository 'actions/checkout@v5' (SHA:fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09)
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:05.6718975Z Download action repository 'pnpm/action-setup@v4' (SHA:b906affcce14559ad1aafd4ab0e942779e9f58b1)
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:06.0688028Z Download action repository 'actions/setup-node@v5' (SHA:a0853c24544627f65ddf259abe73b1d18a591444)
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:06.2275921Z Download action repository 'actions/cache@v4' (SHA:0057852bfaa89a56745cba8c7296529d2fc39830)
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:06.4946259Z Download action repository 'actions/upload-artifact@v4' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:06.7237136Z Complete job name: check (ubuntu 1/4)
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:06.7830718Z ##[group]Run actions/checkout@v5
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:06.7831708Z with:
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:06.7832205Z   repository: maodesikeng-boop/agent-hub
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:06.7835400Z   token: ***
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:06.7835834Z   ssh-strict: true
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:06.7836266Z   ssh-user: git
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:06.7836683Z   persist-credentials: true
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:06.7837164Z   clean: true
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:06.7837603Z   sparse-checkout-cone-mode: true
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:06.7838153Z   fetch-depth: 1
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:06.7838588Z   fetch-tags: false
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:06.7839024Z   show-progress: true
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:06.7839432Z   lfs: false
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:06.7839870Z   submodules: false
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:06.7840337Z   set-safe-directory: true
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:06.7840829Z   allow-unsafe-pr-checkout: false
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:06.7841620Z ##[endgroup]
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0076372Z Syncing repository: maodesikeng-boop/agent-hub
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0078224Z ##[group]Getting Git version info
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0079487Z Working directory is '/home/runner/work/agent-hub/agent-hub'
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0081006Z [command]/usr/bin/git version
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0142600Z git version 2.56.0
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0157219Z ##[endgroup]
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0175812Z Temporarily overriding HOME='/home/runner/work/_temp/fb917837-d7af-4853-a512-dcd49049ff99' before making global git config changes
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0177482Z Adding repository directory to the temporary git global config as a safe directory
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0179859Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/agent-hub/agent-hub
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0222538Z Deleting the contents of '/home/runner/work/agent-hub/agent-hub'
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0224626Z ##[group]Initializing the repository
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0226274Z [command]/usr/bin/git init /home/runner/work/agent-hub/agent-hub
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0310468Z hint: Using 'master' as the name for the initial branch. This default branch name
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0312132Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0313290Z hint: to use in all of your new repositories, which will suppress this warning,
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0314189Z hint: call:
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0314768Z hint:
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0315460Z hint: 	git config --global init.defaultBranch <name>
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0316200Z hint:
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0316968Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0318073Z hint: 'development'. The just-created branch can be renamed via this command:
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0319000Z hint:
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0319629Z hint: 	git branch -m <name>
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0320261Z hint:
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0321479Z hint: Disable this message with "git config set advice.defaultBranchName false"
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0322993Z Initialized empty Git repository in /home/runner/work/agent-hub/agent-hub/.git/
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0326974Z [command]/usr/bin/git remote add origin https://github.com/maodesikeng-boop/agent-hub
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0367435Z ##[endgroup]
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0368641Z ##[group]Disabling automatic garbage collection
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0369581Z [command]/usr/bin/git config --local gc.auto 0
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0393657Z ##[endgroup]
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0394840Z ##[group]Setting up auth
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0398755Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0425267Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0727650Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0754120Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0918906Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.0945702Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.1093009Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.1126941Z ##[endgroup]
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.1128124Z ##[group]Fetching the repository
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:07.1138155Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +9b551dad458c14abcdb176beaf816008180ac26f:refs/remotes/pull/288/merge
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.4409244Z From https://github.com/maodesikeng-boop/agent-hub
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.4411386Z  * [new ref]         9b551dad458c14abcdb176beaf816008180ac26f -> pull/288/merge
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.4414792Z ##[endgroup]
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.4416071Z ##[group]Determining the checkout info
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.4417570Z ##[endgroup]
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.4429019Z [command]/usr/bin/git sparse-checkout disable
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.4475794Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.4500539Z ##[group]Checking out the ref
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.4502645Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/288/merge
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.5759702Z Note: switching to 'refs/remotes/pull/288/merge'.
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.5760474Z 
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.5761310Z You are in 'detached HEAD' state. You can look around, make experimental
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.5762870Z changes and commit them, and you can discard any commits you make in this
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.5764754Z state without impacting any branches by switching back to a branch.
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.5765670Z 
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.5766259Z If you want to create a new branch to retain commits you create, you may
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.5767983Z do so (now or later) by using -c with the switch command. Example:
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.5768816Z 
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.5769184Z   git switch -c <new-branch-name>
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.5769778Z 
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.5770249Z Or undo this operation with:
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.5770987Z 
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.5771630Z   git switch -
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.5772204Z 
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.5773014Z Turn off this advice by setting config variable advice.detachedHead to false
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.5774147Z 
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.5775428Z HEAD is now at 9b551da Merge da36ed775e9c3b4e63e8606cdf14c7e903e63f41 into d9d67a21985eaca5355a1d6320e0e5f50afb855d
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.5779701Z ##[endgroup]
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.5802827Z [command]/usr/bin/git log -1 --format=%H
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.5824159Z 9b551dad458c14abcdb176beaf816008180ac26f
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.6106397Z ##[group]Run pnpm/action-setup@v4
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.6107426Z with:
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.6108226Z   dest: ~/setup-pnpm
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.6109049Z   run_install: null
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.6109817Z   cache: false
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.6110622Z   cache_dependency_path: pnpm-lock.yaml
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.6111915Z   package_json_file: package.json
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.6112836Z   standalone: false
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.6113597Z ##[endgroup]
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:08.7281428Z ##[group]Running self-installer...
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:09.0359804Z (node:2097) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:09.0364660Z (Use `node --trace-deprecation ...` to show where the warning was created)
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:09.2496811Z Progress: resolved 1, reused 0, downloaded 0, added 0
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:09.2578072Z Packages: +1
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:09.2580148Z +
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:09.6136218Z Progress: resolved 1, reused 0, downloaded 1, added 1, done
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:09.6534884Z 
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:09.6538155Z dependencies:
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:09.6538512Z + pnpm 10.34.5 (12.18.0 is available)
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:09.6538754Z 
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:09.6554848Z Done in 793ms
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:09.6675181Z ##[endgroup]
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:09.6675549Z Installation Completed!
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:09.6825228Z ##[group]Run actions/setup-node@v5
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:09.6825552Z with:
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:09.6825774Z   node-version: 24
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:09.6826004Z   cache: pnpm
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:09.6826234Z   always-auth: false
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:09.6826477Z   check-latest: false
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:09.6828349Z   token: ***
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:09.6828580Z   package-manager-cache: true
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:09.6828826Z env:
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:09.6829102Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:09.6829413Z ##[endgroup]
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:09.7956318Z (node:2113) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:09.7957022Z (Use `node --trace-deprecation ...` to show where the warning was created)
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:09.7957785Z Found in cache @ /opt/hostedtoolcache/node/24.22.2/x64
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:09.7958523Z ##[group]Environment details
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:10.0996601Z node: v24.22.2
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:10.0997076Z npm: 11.19.1
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:10.0997280Z yarn: 1.22.22
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:10.0997927Z ##[endgroup]
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:10.1018866Z [command]/home/runner/setup-pnpm/node_modules/.bin/pnpm store path --silent
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:10.4074837Z /home/runner/setup-pnpm/node_modules/.bin/store/v10
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:10.5697450Z Cache hit for: node-cache-Linux-x64-pnpm-2935756344f806a13509f6639087b8b9148798aa720d14c768f0894ffcb6523a
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:10.5787158Z (node:2113) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:11.6700157Z Received 109340233 of 109340233 (100.0%), 109.2 MBs/sec
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:11.6700536Z Cache Size: ~104 MB (109340233 B)
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:11.6760638Z [command]/usr/bin/tar -xf /home/runner/work/_temp/2a0b1c30-f764-40f9-a1b6-625fb59a0a1b/cache.tzst -P -C /home/runner/work/agent-hub/agent-hub --use-compress-program unzstd
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:12.3652449Z Cache restored successfully
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:12.3690807Z Cache restored from key: node-cache-Linux-x64-pnpm-2935756344f806a13509f6639087b8b9148798aa720d14c768f0894ffcb6523a
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:12.4295176Z ##[group]Run actions/cache@v4
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:12.4295365Z with:
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:12.4295527Z   path: node_modules
+check (ubuntu 1/4)	UNKNOWN STEP	!node_modules/.vite
+check (ubuntu 1/4)	UNKNOWN STEP	
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:12.4295891Z   key: node-modules-v2-Linux-node24-2935756344f806a13509f6639087b8b9148798aa720d14c768f0894ffcb6523a
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:12.4296242Z   enableCrossOsArchive: false
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:12.4296427Z   fail-on-cache-miss: false
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:12.4296617Z   lookup-only: false
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:12.4296784Z   save-always: false
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:12.4296931Z env:
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:12.4297132Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:12.4297351Z ##[endgroup]
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:12.5012246Z (node:2180) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:12.5012877Z (Use `node --trace-deprecation ...` to show where the warning was created)
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:12.6689761Z Cache hit for: node-modules-v2-Linux-node24-2935756344f806a13509f6639087b8b9148798aa720d14c768f0894ffcb6523a
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:12.7616628Z (node:2180) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:13.7997204Z Received 96154610 of 96154610 (100.0%), 103.5 MBs/sec
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:13.7998626Z Cache Size: ~92 MB (96154610 B)
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:13.8100746Z [command]/usr/bin/tar -xf /home/runner/work/_temp/0fcabb95-3fca-43c9-91ef-6624bab02b00/cache.tzst -P -C /home/runner/work/agent-hub/agent-hub --use-compress-program unzstd
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:14.7582394Z Cache restored successfully
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:14.7671863Z Cache restored from key: node-modules-v2-Linux-node24-2935756344f806a13509f6639087b8b9148798aa720d14c768f0894ffcb6523a
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:14.7789751Z ##[group]Run pnpm typecheck
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:14.7790021Z ^[[36;1mpnpm typecheck^[[0m
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:14.7807964Z shell: /usr/bin/bash -e {0}
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:14.7808173Z env:
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:14.7808368Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:14.7808600Z ##[endgroup]
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:15.0000449Z 
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:15.0001541Z > agent-hub@0.0.0 typecheck /home/runner/work/agent-hub/agent-hub
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:15.0002569Z > tsc --noEmit -p tsconfig.json && tsc --noEmit -p src/web/tsconfig.json && tsc --noEmit -p src/web/tsconfig.sw.json
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:15.0003164Z 
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:18.0191417Z ##[group]Run sudo bash scripts/linux-sandbox-setup.sh
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:18.0191757Z ^[[36;1msudo bash scripts/linux-sandbox-setup.sh^[[0m
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:18.0202364Z shell: /usr/bin/bash -e {0}
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:18.0202576Z env:
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:18.0202780Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:18.0203002Z ##[endgroup]
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:18.0752995Z Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:18.1267272Z Get:6 https://packages.microsoft.com/ubuntu/24.04/prod noble InRelease [3600 B]
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:18.1718913Z Get:7 https://packages.microsoft.com/ubuntu/24.04/prod noble/main armhf Packages [12.6 kB]
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:18.1925612Z Get:8 https://packages.microsoft.com/ubuntu/24.04/prod noble/main arm64 Packages [690 kB]
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:18.2117308Z Get:9 https://packages.microsoft.com/ubuntu/24.04/prod noble/main amd64 Packages [760 kB]
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:38.1138513Z Ign:2 http://azure.archive.ubuntu.com/ubuntu noble InRelease
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:43:58.1440908Z Ign:3 http://azure.archive.ubuntu.com/ubuntu noble-updates InRelease
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:44:18.1732478Z Ign:4 http://azure.archive.ubuntu.com/ubuntu noble-backports InRelease
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:44:38.2029746Z Ign:5 http://azure.archive.ubuntu.com/ubuntu noble-security InRelease
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:44:58.2377830Z Ign:2 http://azure.archive.ubuntu.com/ubuntu noble InRelease
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:45:18.2627137Z Ign:3 http://azure.archive.ubuntu.com/ubuntu noble-updates InRelease
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:45:18.2631660Z Ign:2 https://archive.ubuntu.com/ubuntu noble InRelease
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:45:37.7089759Z Ign:3 https://archive.ubuntu.com/ubuntu noble-updates InRelease
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:45:38.2797092Z Ign:4 http://azure.archive.ubuntu.com/ubuntu noble-backports InRelease
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:45:38.2937024Z Err:2 https://security.ubuntu.com/ubuntu noble InRelease
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:45:38.2937465Z   Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:45:58.3047812Z Ign:4 https://archive.ubuntu.com/ubuntu noble-backports InRelease
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:45:58.3133040Z Ign:5 http://azure.archive.ubuntu.com/ubuntu noble-security InRelease
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:45:58.3202534Z Err:3 https://security.ubuntu.com/ubuntu noble-updates InRelease
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:45:58.3203010Z   Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:46:18.3422037Z Ign:5 https://archive.ubuntu.com/ubuntu noble-security InRelease
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:46:18.3436011Z Err:4 https://security.ubuntu.com/ubuntu noble-backports InRelease
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:46:18.3436496Z   Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:46:38.3688925Z Err:5 https://security.ubuntu.com/ubuntu noble-security InRelease
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:46:38.3689723Z   Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:46:40.6988215Z Fetched 1467 kB in 3min 20s (7322 B/s)
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:46:41.4977270Z Reading package lists...
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:46:41.5076006Z W: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/dists/noble/InRelease  Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:46:41.5076813Z W: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/dists/noble-updates/InRelease  Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:46:41.5077569Z W: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/dists/noble-backports/InRelease  Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:46:41.5078290Z W: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/dists/noble-security/InRelease  Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:46:41.5079025Z W: Some index files failed to download. They have been ignored, or old ones used instead.
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:46:41.5212311Z Reading package lists...
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:46:41.6679649Z Building dependency tree...
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:46:41.6685555Z Reading state information...
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:46:41.8082165Z The following NEW packages will be installed:
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:46:41.8088409Z   bubblewrap socat
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:46:41.8236837Z 0 upgraded, 2 newly installed, 0 to remove and 3 not upgraded.
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:46:41.8237708Z Need to get 425 kB of archives.
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:46:41.8238137Z After this operation, 1786 kB of additional disk space will be used.
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:46:41.8238583Z Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:47:01.8830871Z Ign:2 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 bubblewrap amd64 0.9.0-1ubuntu0.3
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:47:21.9171279Z Ign:3 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 socat amd64 1.8.0.0-4ubuntu0.1
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:47:41.9472418Z Ign:2 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 bubblewrap amd64 0.9.0-1ubuntu0.3
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:01.9841257Z Ign:2 https://archive.ubuntu.com/ubuntu noble-updates/main amd64 bubblewrap amd64 0.9.0-1ubuntu0.3
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:01.9889705Z Ign:3 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 socat amd64 1.8.0.0-4ubuntu0.1
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:22.0179323Z Ign:2 https://security.ubuntu.com/ubuntu noble-updates/main amd64 bubblewrap amd64 0.9.0-1ubuntu0.3
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:22.0180396Z Err:2 mirror+file:/etc/apt/apt-mirrors.txt noble-updates/main amd64 bubblewrap amd64 0.9.0-1ubuntu0.3
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:22.0180807Z   Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:22.0243170Z Ign:3 https://archive.ubuntu.com/ubuntu noble-updates/main amd64 socat amd64 1.8.0.0-4ubuntu0.1
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.0613313Z Ign:3 https://security.ubuntu.com/ubuntu noble-updates/main amd64 socat amd64 1.8.0.0-4ubuntu0.1
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.0613891Z Err:3 mirror+file:/etc/apt/apt-mirrors.txt noble-updates/main amd64 socat amd64 1.8.0.0-4ubuntu0.1
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.0615973Z   Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.0661459Z E: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/pool/main/b/bubblewrap/bubblewrap_0.9.0-1ubuntu0.3_amd64.deb  Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.0662435Z E: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/pool/main/s/socat/socat_1.8.0.0-4ubuntu0.1_amd64.deb  Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.0663102Z E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.0692568Z ##[error]Process completed with exit code 100.
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.0753965Z ##[group]Run actions/upload-artifact@v4
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.0754218Z with:
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.0754388Z   name: vitest-junit-ubuntu-0
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.0754599Z   path: vitest-junit.xml
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.0754795Z   if-no-files-found: ignore
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.0754990Z   compression-level: 6
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.0755175Z   overwrite: false
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.0755350Z   include-hidden-files: false
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.0755545Z env:
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.0755745Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.0755980Z ##[endgroup]
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.1962563Z (node:2562) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.1963128Z (Use `node --trace-deprecation ...` to show where the warning was created)
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.1974712Z No files were found with the provided path: vitest-junit.xml. No artifacts will be uploaded.
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.2110361Z Post job cleanup.
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.3180438Z Pruning is unnecessary.
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.3316940Z Post job cleanup.
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.4115583Z [command]/usr/bin/git version
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.4159948Z git version 2.56.0
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.4192938Z Temporarily overriding HOME='/home/runner/work/_temp/2dbeb9f5-9e63-411d-8c3f-726da793b6c5' before making global git config changes
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.4194284Z Adding repository directory to the temporary git global config as a safe directory
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.4196578Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/agent-hub/agent-hub
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.4228253Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.4259166Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.4542527Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.4579265Z http.https://github.com/.extraheader
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.4612211Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.4643589Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.4842595Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.4864417Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.5145824Z Cleaning up orphan processes
+check (ubuntu 1/4)	UNKNOWN STEP	2026-11-11T14:48:42.5396498Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@v4, actions/upload-artifact@v4, pnpm/action-setup@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+check (ubuntu 3/4)	UNKNOWN STEP	﻿2026-11-11T14:43:05.6332970Z Current runner version: '2.338.2'
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:05.6352249Z ##[group]Runner Image Provisioner
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:05.6352813Z Hosted Compute Agent
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:05.6353248Z Version: 20261028.624
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:05.6353677Z Commit: 54898b74c23fde5556c9b3c3a2290865feef0dfe
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:05.6354109Z Build Date: 2026-10-28T21:51:42Z
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:05.6354573Z Worker ID: {988efa2a-e26a-434c-990c-0b00c32808f6}
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:05.6355008Z Region: centralus
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:05.6355374Z Cloud: Azure
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:05.6355762Z ##[endgroup]
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:05.6356812Z ##[group]Operating System
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:05.6357253Z Ubuntu
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:05.6357580Z 24.04.5
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:05.6357922Z LTS
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:05.6358293Z ##[endgroup]
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:05.6358634Z ##[group]Runner Image
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:05.6359157Z Image: ubuntu-24.04
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:05.6359510Z Version: 20261101.360.1
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:05.6360365Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261101.360/images/ubuntu/Ubuntu2404-Readme.md
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:05.6361274Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261101.360
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:05.6361877Z ##[endgroup]
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:05.6362567Z ##[group]GITHUB_TOKEN Permissions
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:05.6363877Z Contents: read
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:05.6364235Z Metadata: read
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:05.6364663Z ##[endgroup]
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:05.6366070Z Secret source: Actions
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:05.6366606Z Cache mode: write
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:05.6367137Z Prepare workflow directory
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:05.6614730Z Prepare all required actions
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:05.6647699Z Getting action download info
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:05.9605254Z Download action repository 'actions/checkout@v5' (SHA:fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09)
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:06.0355633Z Download action repository 'pnpm/action-setup@v4' (SHA:b906affcce14559ad1aafd4ab0e942779e9f58b1)
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:06.5159891Z Download action repository 'actions/setup-node@v5' (SHA:a0853c24544627f65ddf259abe73b1d18a591444)
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:06.6350286Z Download action repository 'actions/cache@v4' (SHA:0057852bfaa89a56745cba8c7296529d2fc39830)
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:06.7584730Z Download action repository 'actions/upload-artifact@v4' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:06.9526050Z Complete job name: check (ubuntu 3/4)
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.0065116Z ##[group]Run actions/checkout@v5
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.0065708Z with:
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.0066046Z   repository: maodesikeng-boop/agent-hub
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.0068378Z   token: ***
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.0068712Z   ssh-strict: true
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.0069346Z   ssh-user: git
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.0069714Z   persist-credentials: true
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.0070069Z   clean: true
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.0070386Z   sparse-checkout-cone-mode: true
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.0070801Z   fetch-depth: 1
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.0071149Z   fetch-tags: false
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.0071500Z   show-progress: true
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.0071884Z   lfs: false
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.0072201Z   submodules: false
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.0072600Z   set-safe-directory: true
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.0072990Z   allow-unsafe-pr-checkout: false
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.0073680Z ##[endgroup]
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2482060Z Syncing repository: maodesikeng-boop/agent-hub
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2483223Z ##[group]Getting Git version info
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2483707Z Working directory is '/home/runner/work/agent-hub/agent-hub'
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2484245Z [command]/usr/bin/git version
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2630598Z git version 2.56.0
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2644766Z ##[endgroup]
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2655890Z Temporarily overriding HOME='/home/runner/work/_temp/dfb68d1c-b483-4f38-a8f2-b60c113c5a4a' before making global git config changes
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2657144Z Adding repository directory to the temporary git global config as a safe directory
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2662103Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/agent-hub/agent-hub
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2714050Z Deleting the contents of '/home/runner/work/agent-hub/agent-hub'
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2724386Z ##[group]Initializing the repository
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2727915Z [command]/usr/bin/git init /home/runner/work/agent-hub/agent-hub
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2835050Z hint: Using 'master' as the name for the initial branch. This default branch name
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2836020Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2836733Z hint: to use in all of your new repositories, which will suppress this warning,
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2837651Z hint: call:
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2838063Z hint:
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2838700Z hint: 	git config --global init.defaultBranch <name>
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2839394Z hint:
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2839907Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2840741Z hint: 'development'. The just-created branch can be renamed via this command:
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2841396Z hint:
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2841761Z hint: 	git branch -m <name>
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2842216Z hint:
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2842780Z hint: Disable this message with "git config set advice.defaultBranchName false"
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2846388Z Initialized empty Git repository in /home/runner/work/agent-hub/agent-hub/.git/
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2856783Z [command]/usr/bin/git remote add origin https://github.com/maodesikeng-boop/agent-hub
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2907926Z ##[endgroup]
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2908606Z ##[group]Disabling automatic garbage collection
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2911399Z [command]/usr/bin/git config --local gc.auto 0
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2949501Z ##[endgroup]
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2950228Z ##[group]Setting up auth
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2951502Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.2987286Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.3329200Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.3367504Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.3561144Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.3598071Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.3795764Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.3841091Z ##[endgroup]
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.3841818Z ##[group]Fetching the repository
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:07.3851468Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +9b551dad458c14abcdb176beaf816008180ac26f:refs/remotes/pull/288/merge
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.8007630Z From https://github.com/maodesikeng-boop/agent-hub
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.8008102Z  * [new ref]         9b551dad458c14abcdb176beaf816008180ac26f -> pull/288/merge
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.8009933Z ##[endgroup]
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.8010348Z ##[group]Determining the checkout info
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.8012195Z ##[endgroup]
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.8016668Z [command]/usr/bin/git sparse-checkout disable
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.8076023Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.8110495Z ##[group]Checking out the ref
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.8113043Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/288/merge
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.9316607Z Note: switching to 'refs/remotes/pull/288/merge'.
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.9316995Z 
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.9317227Z You are in 'detached HEAD' state. You can look around, make experimental
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.9317562Z changes and commit them, and you can discard any commits you make in this
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.9318480Z state without impacting any branches by switching back to a branch.
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.9318936Z 
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.9319181Z If you want to create a new branch to retain commits you create, you may
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.9319637Z do so (now or later) by using -c with the switch command. Example:
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.9319893Z 
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.9320047Z   git switch -c <new-branch-name>
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.9320241Z 
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.9320368Z Or undo this operation with:
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.9320536Z 
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.9320641Z   git switch -
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.9320797Z 
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.9321032Z Turn off this advice by setting config variable advice.detachedHead to false
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.9321328Z 
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.9321712Z HEAD is now at 9b551da Merge da36ed775e9c3b4e63e8606cdf14c7e903e63f41 into d9d67a21985eaca5355a1d6320e0e5f50afb855d
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.9329178Z ##[endgroup]
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.9377980Z [command]/usr/bin/git log -1 --format=%H
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.9410071Z 9b551dad458c14abcdb176beaf816008180ac26f
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.9605980Z ##[group]Run pnpm/action-setup@v4
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.9606189Z with:
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.9606353Z   dest: ~/setup-pnpm
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.9606507Z   run_install: null
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.9606654Z   cache: false
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.9606812Z   cache_dependency_path: pnpm-lock.yaml
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.9607011Z   package_json_file: package.json
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.9607220Z   standalone: false
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:08.9607371Z ##[endgroup]
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:09.0549707Z ##[group]Running self-installer...
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:09.3366388Z (node:2143) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:09.3367236Z (Use `node --trace-deprecation ...` to show where the warning was created)
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:09.5813187Z Progress: resolved 1, reused 0, downloaded 0, added 0
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:09.5877639Z Packages: +1
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:09.5879887Z +
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:09.9424519Z Progress: resolved 1, reused 0, downloaded 1, added 1, done
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:09.9778183Z 
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:09.9778572Z dependencies:
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:09.9778913Z + pnpm 10.34.5 (12.18.0 is available)
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:09.9779040Z 
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:09.9797365Z Done in 810ms
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:10.0004107Z ##[endgroup]
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:10.0004353Z Installation Completed!
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:10.0167828Z ##[group]Run actions/setup-node@v5
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:10.0167991Z with:
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:10.0168105Z   node-version: 24
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:10.0168219Z   cache: pnpm
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:10.0168329Z   always-auth: false
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:10.0168449Z   check-latest: false
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:10.0170201Z   token: ***
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:10.0170328Z   package-manager-cache: true
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:10.0170465Z env:
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:10.0170616Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:10.0170787Z ##[endgroup]
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:10.1331738Z Found in cache @ /opt/hostedtoolcache/node/24.22.2/x64
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:10.1334394Z (node:2158) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:10.1334972Z (Use `node --trace-deprecation ...` to show where the warning was created)
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:10.1336829Z ##[group]Environment details
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:10.4854971Z node: v24.22.2
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:10.4855340Z npm: 11.19.1
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:10.4855543Z yarn: 1.22.22
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:10.4856617Z ##[endgroup]
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:10.4876076Z [command]/home/runner/setup-pnpm/node_modules/.bin/pnpm store path --silent
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:10.7619274Z /home/runner/setup-pnpm/node_modules/.bin/store/v10
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:10.9183649Z Cache hit for: node-cache-Linux-x64-pnpm-2935756344f806a13509f6639087b8b9148798aa720d14c768f0894ffcb6523a
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:10.9251880Z (node:2158) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:11.9712293Z Received 109340233 of 109340233 (100.0%), 115.9 MBs/sec
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:11.9713429Z Cache Size: ~104 MB (109340233 B)
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:11.9759580Z [command]/usr/bin/tar -xf /home/runner/work/_temp/980946a1-939b-43dc-b1a7-475dfa41d5ac/cache.tzst -P -C /home/runner/work/agent-hub/agent-hub --use-compress-program unzstd
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:12.9626581Z Cache restored successfully
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:12.9678150Z Cache restored from key: node-cache-Linux-x64-pnpm-2935756344f806a13509f6639087b8b9148798aa720d14c768f0894ffcb6523a
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:13.0320870Z ##[group]Run actions/cache@v4
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:13.0321031Z with:
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:13.0321165Z   path: node_modules
+check (ubuntu 3/4)	UNKNOWN STEP	!node_modules/.vite
+check (ubuntu 3/4)	UNKNOWN STEP	
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:13.0321468Z   key: node-modules-v2-Linux-node24-2935756344f806a13509f6639087b8b9148798aa720d14c768f0894ffcb6523a
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:13.0321769Z   enableCrossOsArchive: false
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:13.0321921Z   fail-on-cache-miss: false
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:13.0322073Z   lookup-only: false
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:13.0322197Z   save-always: false
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:13.0322320Z env:
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:13.0322468Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:13.0322648Z ##[endgroup]
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:13.1063791Z (node:2224) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:13.1064588Z (Use `node --trace-deprecation ...` to show where the warning was created)
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:13.2402296Z Cache hit for: node-modules-v2-Linux-node24-2935756344f806a13509f6639087b8b9148798aa720d14c768f0894ffcb6523a
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:13.2462769Z (node:2224) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:14.2480100Z Received 96154610 of 96154610 (100.0%), 103.5 MBs/sec
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:14.2480939Z Cache Size: ~92 MB (96154610 B)
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:14.2569328Z [command]/usr/bin/tar -xf /home/runner/work/_temp/94642f50-5e9e-4d3d-a6ef-12e0107a0f5c/cache.tzst -P -C /home/runner/work/agent-hub/agent-hub --use-compress-program unzstd
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:15.6132957Z Cache restored successfully
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:15.6225587Z Cache restored from key: node-modules-v2-Linux-node24-2935756344f806a13509f6639087b8b9148798aa720d14c768f0894ffcb6523a
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:15.6398304Z ##[group]Run sudo bash scripts/linux-sandbox-setup.sh
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:15.6398592Z ^[[36;1msudo bash scripts/linux-sandbox-setup.sh^[[0m
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:15.6422952Z shell: /usr/bin/bash -e {0}
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:15.6423112Z env:
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:15.6423265Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:15.6423451Z ##[endgroup]
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:15.7052665Z Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:15.7354062Z Get:6 https://packages.microsoft.com/ubuntu/24.04/prod noble InRelease [3600 B]
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:15.7916256Z Get:7 https://packages.microsoft.com/ubuntu/24.04/prod noble/main amd64 Packages [760 kB]
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:15.8096426Z Get:8 https://packages.microsoft.com/ubuntu/24.04/prod noble/main armhf Packages [12.6 kB]
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:15.8143564Z Get:9 https://packages.microsoft.com/ubuntu/24.04/prod noble/main arm64 Packages [690 kB]
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:35.7434867Z Ign:2 http://azure.archive.ubuntu.com/ubuntu noble InRelease
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:43:55.7700264Z Ign:3 http://azure.archive.ubuntu.com/ubuntu noble-updates InRelease
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:44:15.5764963Z Ign:4 http://azure.archive.ubuntu.com/ubuntu noble-backports InRelease
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:44:35.6097267Z Ign:5 http://azure.archive.ubuntu.com/ubuntu noble-security InRelease
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:44:55.6367400Z Ign:2 http://azure.archive.ubuntu.com/ubuntu noble InRelease
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:45:15.6641893Z Ign:3 http://azure.archive.ubuntu.com/ubuntu noble-updates InRelease
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:45:15.6646619Z Ign:2 https://archive.ubuntu.com/ubuntu noble InRelease
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:45:35.6902192Z Err:2 https://security.ubuntu.com/ubuntu noble InRelease
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:45:35.6902645Z   Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:45:35.6903130Z Ign:4 http://azure.archive.ubuntu.com/ubuntu noble-backports InRelease
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:45:35.6928582Z Ign:3 https://archive.ubuntu.com/ubuntu noble-updates InRelease
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:45:55.7183404Z Ign:4 https://archive.ubuntu.com/ubuntu noble-backports InRelease
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:45:55.7221353Z Ign:5 http://azure.archive.ubuntu.com/ubuntu noble-security InRelease
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:45:55.7221848Z Err:3 https://security.ubuntu.com/ubuntu noble-updates InRelease
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:45:55.7222232Z   Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:46:15.7500360Z Ign:5 https://archive.ubuntu.com/ubuntu noble-security InRelease
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:46:15.7523072Z Err:4 https://security.ubuntu.com/ubuntu noble-backports InRelease
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:46:15.7524250Z   Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:46:35.7843166Z Err:5 https://security.ubuntu.com/ubuntu noble-security InRelease
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:46:35.7845306Z   Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:46:37.8465902Z Fetched 1467 kB in 3min 20s (7330 B/s)
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:46:38.5461608Z Reading package lists...
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:46:38.5599506Z W: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/dists/noble/InRelease  Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:46:38.5600155Z W: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/dists/noble-updates/InRelease  Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:46:38.5600738Z W: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/dists/noble-backports/InRelease  Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:46:38.5601306Z W: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/dists/noble-security/InRelease  Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:46:38.5601772Z W: Some index files failed to download. They have been ignored, or old ones used instead.
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:46:38.5729360Z Reading package lists...
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:46:38.7285813Z Building dependency tree...
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:46:38.7291620Z Reading state information...
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:46:38.8515606Z The following NEW packages will be installed:
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:46:38.8516910Z   bubblewrap socat
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:46:38.8668069Z 0 upgraded, 2 newly installed, 0 to remove and 3 not upgraded.
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:46:38.8669948Z Need to get 425 kB of archives.
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:46:38.8670207Z After this operation, 1786 kB of additional disk space will be used.
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:46:38.8670488Z Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:46:58.9098297Z Ign:2 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 bubblewrap amd64 0.9.0-1ubuntu0.3
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:47:18.9355307Z Ign:3 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 socat amd64 1.8.0.0-4ubuntu0.1
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:47:38.9648105Z Ign:2 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 bubblewrap amd64 0.9.0-1ubuntu0.3
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:47:58.9555492Z Ign:3 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 socat amd64 1.8.0.0-4ubuntu0.1
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:47:59.0216345Z Ign:2 https://archive.ubuntu.com/ubuntu noble-updates/main amd64 bubblewrap amd64 0.9.0-1ubuntu0.3
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:18.7162688Z Ign:3 https://archive.ubuntu.com/ubuntu noble-updates/main amd64 socat amd64 1.8.0.0-4ubuntu0.1
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:19.0647484Z Ign:2 https://security.ubuntu.com/ubuntu noble-updates/main amd64 bubblewrap amd64 0.9.0-1ubuntu0.3
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:19.0648009Z Err:2 mirror+file:/etc/apt/apt-mirrors.txt noble-updates/main amd64 bubblewrap amd64 0.9.0-1ubuntu0.3
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:19.0648593Z   Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.0953968Z Ign:3 https://security.ubuntu.com/ubuntu noble-updates/main amd64 socat amd64 1.8.0.0-4ubuntu0.1
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.0954459Z Err:3 mirror+file:/etc/apt/apt-mirrors.txt noble-updates/main amd64 socat amd64 1.8.0.0-4ubuntu0.1
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.0955250Z   Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.1001592Z E: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/pool/main/b/bubblewrap/bubblewrap_0.9.0-1ubuntu0.3_amd64.deb  Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.1004087Z E: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/pool/main/s/socat/socat_1.8.0.0-4ubuntu0.1_amd64.deb  Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.1004914Z E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.1033699Z ##[error]Process completed with exit code 100.
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.1084679Z ##[group]Run actions/upload-artifact@v4
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.1084848Z with:
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.1084977Z   name: vitest-junit-ubuntu-2
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.1085132Z   path: vitest-junit.xml
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.1085272Z   if-no-files-found: ignore
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.1085416Z   compression-level: 6
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.1085561Z   overwrite: false
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.1085690Z   include-hidden-files: false
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.1085827Z env:
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.1085973Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.1086153Z ##[endgroup]
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.2158939Z (node:2503) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.2159484Z (Use `node --trace-deprecation ...` to show where the warning was created)
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.2169431Z No files were found with the provided path: vitest-junit.xml. No artifacts will be uploaded.
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.2361705Z Post job cleanup.
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.3325029Z Pruning is unnecessary.
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.3510711Z Post job cleanup.
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.4143103Z [command]/usr/bin/git version
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.4199413Z git version 2.56.0
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.4219889Z Temporarily overriding HOME='/home/runner/work/_temp/7dfd9f89-f71c-494a-a9b3-9f99ebd9ab0e' before making global git config changes
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.4220784Z Adding repository directory to the temporary git global config as a safe directory
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.4221521Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/agent-hub/agent-hub
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.4240947Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.4270741Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.4480025Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.4504921Z http.https://github.com/.extraheader
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.4514734Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.4560409Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.4788380Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.4829395Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.5150967Z Cleaning up orphan processes
+check (ubuntu 3/4)	UNKNOWN STEP	2026-11-11T14:48:39.5385296Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@v4, actions/upload-artifact@v4, pnpm/action-setup@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+check (ubuntu 2/4)	UNKNOWN STEP	﻿2026-11-11T14:43:05.4992904Z Current runner version: '2.338.2'
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:05.5015072Z ##[group]Runner Image Provisioner
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:05.5015817Z Hosted Compute Agent
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:05.5016399Z Version: 20261028.624
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:05.5016936Z Commit: 54898b74c23fde5556c9b3c3a2290865feef0dfe
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:05.5017600Z Build Date: 2026-10-28T21:51:42Z
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:05.5018189Z Worker ID: {ab3ab330-5e3f-4f5b-a85e-4730d5bbee19}
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:05.5018779Z Region: eastus2
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:05.5019295Z Cloud: Azure
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:05.5019756Z ##[endgroup]
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:05.5021251Z ##[group]Operating System
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:05.5021837Z Ubuntu
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:05.5022510Z 24.04.5
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:05.5023068Z LTS
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:05.5023515Z ##[endgroup]
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:05.5024000Z ##[group]Runner Image
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:05.5024570Z Image: ubuntu-24.04
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:05.5025049Z Version: 20261101.360.1
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:05.5026148Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261101.360/images/ubuntu/Ubuntu2404-Readme.md
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:05.5027427Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261101.360
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:05.5028304Z ##[endgroup]
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:05.5029230Z ##[group]GITHUB_TOKEN Permissions
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:05.5031132Z Contents: read
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:05.5031675Z Metadata: read
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:05.5032211Z ##[endgroup]
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:05.5034340Z Secret source: Actions
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:05.5035153Z Cache mode: write
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:05.5035929Z Prepare workflow directory
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:05.5297336Z Prepare all required actions
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:05.5336130Z Getting action download info
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:05.7603731Z Download action repository 'actions/checkout@v5' (SHA:fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09)
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:05.8639198Z Download action repository 'pnpm/action-setup@v4' (SHA:b906affcce14559ad1aafd4ab0e942779e9f58b1)
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.0973947Z Download action repository 'actions/setup-node@v5' (SHA:a0853c24544627f65ddf259abe73b1d18a591444)
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.2078292Z Download action repository 'actions/cache@v4' (SHA:0057852bfaa89a56745cba8c7296529d2fc39830)
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.3559499Z Download action repository 'actions/upload-artifact@v4' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.6568436Z Complete job name: check (ubuntu 2/4)
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.7373708Z ##[group]Run actions/checkout@v5
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.7375070Z with:
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.7375894Z   repository: maodesikeng-boop/agent-hub
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.7384167Z   token: ***
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.7384959Z   ssh-strict: true
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.7385843Z   ssh-user: git
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.7386695Z   persist-credentials: true
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.7387600Z   clean: true
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.7388469Z   sparse-checkout-cone-mode: true
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.7389422Z   fetch-depth: 1
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.7390228Z   fetch-tags: false
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.7391167Z   show-progress: true
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.7392039Z   lfs: false
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.7393056Z   submodules: false
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.7393929Z   set-safe-directory: true
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.7394869Z   allow-unsafe-pr-checkout: false
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.7396196Z ##[endgroup]
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9524499Z Syncing repository: maodesikeng-boop/agent-hub
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9526974Z ##[group]Getting Git version info
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9528560Z Working directory is '/home/runner/work/agent-hub/agent-hub'
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9530780Z [command]/usr/bin/git version
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9588268Z git version 2.56.0
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9604613Z ##[endgroup]
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9617060Z Temporarily overriding HOME='/home/runner/work/_temp/aa3fc20a-31e1-46a5-9edb-3118a672a439' before making global git config changes
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9620387Z Adding repository directory to the temporary git global config as a safe directory
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9623308Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/agent-hub/agent-hub
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9680761Z Deleting the contents of '/home/runner/work/agent-hub/agent-hub'
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9684167Z ##[group]Initializing the repository
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9686404Z [command]/usr/bin/git init /home/runner/work/agent-hub/agent-hub
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9755693Z hint: Using 'master' as the name for the initial branch. This default branch name
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9758014Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9759837Z hint: to use in all of your new repositories, which will suppress this warning,
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9761543Z hint: call:
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9762861Z hint:
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9763999Z hint: 	git config --global init.defaultBranch <name>
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9765415Z hint:
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9766720Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9768928Z hint: 'development'. The just-created branch can be renamed via this command:
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9770638Z hint:
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9771513Z hint: 	git branch -m <name>
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9773034Z hint:
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9774511Z hint: Disable this message with "git config set advice.defaultBranchName false"
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9776934Z Initialized empty Git repository in /home/runner/work/agent-hub/agent-hub/.git/
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9780751Z [command]/usr/bin/git remote add origin https://github.com/maodesikeng-boop/agent-hub
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9819673Z ##[endgroup]
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9821487Z ##[group]Disabling automatic garbage collection
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9823230Z [command]/usr/bin/git config --local gc.auto 0
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9854293Z ##[endgroup]
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9855987Z ##[group]Setting up auth
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9861060Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:06.9896570Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:07.0212748Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:07.0251379Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:07.0461107Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:07.0502235Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:07.0705219Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:07.0746512Z ##[endgroup]
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:07.0756228Z ##[group]Fetching the repository
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:07.0758428Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +9b551dad458c14abcdb176beaf816008180ac26f:refs/remotes/pull/288/merge
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.1152055Z From https://github.com/maodesikeng-boop/agent-hub
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.1152809Z  * [new ref]         9b551dad458c14abcdb176beaf816008180ac26f -> pull/288/merge
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.1156017Z ##[endgroup]
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.1156415Z ##[group]Determining the checkout info
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.1158421Z ##[endgroup]
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.1170619Z [command]/usr/bin/git sparse-checkout disable
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.1221813Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.1254487Z ##[group]Checking out the ref
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.1257829Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/288/merge
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.2567050Z Note: switching to 'refs/remotes/pull/288/merge'.
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.2567436Z 
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.2567742Z You are in 'detached HEAD' state. You can look around, make experimental
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.2568372Z changes and commit them, and you can discard any commits you make in this
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.2569132Z state without impacting any branches by switching back to a branch.
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.2569387Z 
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.2569608Z If you want to create a new branch to retain commits you create, you may
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.2570034Z do so (now or later) by using -c with the switch command. Example:
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.2570359Z 
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.2570490Z   git switch -c <new-branch-name>
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.2570669Z 
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.2570785Z Or undo this operation with:
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.2570946Z 
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.2571062Z   git switch -
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.2571223Z 
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.2571423Z Turn off this advice by setting config variable advice.detachedHead to false
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.2571687Z 
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.2571988Z HEAD is now at 9b551da Merge da36ed775e9c3b4e63e8606cdf14c7e903e63f41 into d9d67a21985eaca5355a1d6320e0e5f50afb855d
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.2579341Z ##[endgroup]
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.2625329Z [command]/usr/bin/git log -1 --format=%H
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.2654268Z 9b551dad458c14abcdb176beaf816008180ac26f
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.2867572Z ##[group]Run pnpm/action-setup@v4
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.2867872Z with:
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.2868085Z   dest: ~/setup-pnpm
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.2868313Z   run_install: null
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.2868519Z   cache: false
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.2868750Z   cache_dependency_path: pnpm-lock.yaml
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.2869024Z   package_json_file: package.json
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.2869363Z   standalone: false
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.2869575Z ##[endgroup]
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.4061001Z ##[group]Running self-installer...
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.7519152Z (node:2162) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.7519961Z (Use `node --trace-deprecation ...` to show where the warning was created)
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.8937432Z Progress: resolved 1, reused 0, downloaded 0, added 0
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.9010391Z Packages: +1
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:08.9010886Z +
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:09.2369781Z Progress: resolved 1, reused 0, downloaded 1, added 1, done
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:09.2744711Z 
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:09.2745169Z dependencies:
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:09.2745494Z + pnpm 10.34.5 (12.18.0 is available)
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:09.2745715Z 
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:09.2993430Z Done in 740ms
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:09.3175718Z ##[endgroup]
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:09.3176027Z Installation Completed!
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:09.3343970Z ##[group]Run actions/setup-node@v5
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:09.3344195Z with:
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:09.3344362Z   node-version: 24
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:09.3344533Z   cache: pnpm
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:09.3344699Z   always-auth: false
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:09.3344876Z   check-latest: false
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:09.3346914Z   token: ***
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:09.3347105Z   package-manager-cache: true
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:09.3347310Z env:
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:09.3347520Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:09.3347772Z ##[endgroup]
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:09.4528957Z (node:2177) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:09.4529777Z (Use `node --trace-deprecation ...` to show where the warning was created)
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:09.4530734Z Found in cache @ /opt/hostedtoolcache/node/24.22.2/x64
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:09.4531591Z ##[group]Environment details
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:09.7599403Z node: v24.22.2
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:09.7599796Z npm: 11.19.1
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:09.7600067Z yarn: 1.22.22
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:09.7600710Z ##[endgroup]
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:09.7621227Z [command]/home/runner/setup-pnpm/node_modules/.bin/pnpm store path --silent
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:10.1163099Z /home/runner/setup-pnpm/node_modules/.bin/store/v10
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:10.2188473Z Cache hit for: node-cache-Linux-x64-pnpm-2935756344f806a13509f6639087b8b9148798aa720d14c768f0894ffcb6523a
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:10.2301809Z (node:2177) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:10.7260927Z Received 109340233 of 109340233 (100.0%), 229.2 MBs/sec
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:10.7261733Z Cache Size: ~104 MB (109340233 B)
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:10.7369718Z [command]/usr/bin/tar -xf /home/runner/work/_temp/2974ad46-e92d-42a1-b961-f5ac480a4733/cache.tzst -P -C /home/runner/work/agent-hub/agent-hub --use-compress-program unzstd
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:11.8389652Z Cache restored successfully
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:11.8439276Z Cache restored from key: node-cache-Linux-x64-pnpm-2935756344f806a13509f6639087b8b9148798aa720d14c768f0894ffcb6523a
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:11.9091556Z ##[group]Run actions/cache@v4
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:11.9091783Z with:
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:11.9091969Z   path: node_modules
+check (ubuntu 2/4)	UNKNOWN STEP	!node_modules/.vite
+check (ubuntu 2/4)	UNKNOWN STEP	
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:11.9092724Z   key: node-modules-v2-Linux-node24-2935756344f806a13509f6639087b8b9148798aa720d14c768f0894ffcb6523a
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:11.9093236Z   enableCrossOsArchive: false
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:11.9093452Z   fail-on-cache-miss: false
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:11.9093662Z   lookup-only: false
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:11.9093850Z   save-always: false
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:11.9094015Z env:
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:11.9094218Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:11.9094470Z ##[endgroup]
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:11.9982555Z (node:2243) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:11.9983365Z (Use `node --trace-deprecation ...` to show where the warning was created)
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:12.0825181Z Cache hit for: node-modules-v2-Linux-node24-2935756344f806a13509f6639087b8b9148798aa720d14c768f0894ffcb6523a
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:12.0913843Z (node:2243) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:12.5464009Z Received 96154610 of 96154610 (100.0%), 218.9 MBs/sec
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:12.5464621Z Cache Size: ~92 MB (96154610 B)
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:12.5490181Z [command]/usr/bin/tar -xf /home/runner/work/_temp/c98b5d45-5566-4619-bc43-697caff3d150/cache.tzst -P -C /home/runner/work/agent-hub/agent-hub --use-compress-program unzstd
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:14.4708277Z Cache restored successfully
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:14.4805660Z Cache restored from key: node-modules-v2-Linux-node24-2935756344f806a13509f6639087b8b9148798aa720d14c768f0894ffcb6523a
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:14.6294133Z ##[group]Run sudo bash scripts/linux-sandbox-setup.sh
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:14.6294557Z ^[[36;1msudo bash scripts/linux-sandbox-setup.sh^[[0m
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:14.7123569Z shell: /usr/bin/bash -e {0}
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:14.7123836Z env:
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:14.7124073Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:14.7124345Z ##[endgroup]
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:14.8173154Z Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:14.8397256Z Get:6 https://packages.microsoft.com/ubuntu/24.04/prod noble InRelease [3600 B]
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:14.8939916Z Get:7 https://packages.microsoft.com/ubuntu/24.04/prod noble/main arm64 Packages [690 kB]
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:14.9183967Z Get:8 https://packages.microsoft.com/ubuntu/24.04/prod noble/main armhf Packages [12.6 kB]
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:14.9204805Z Get:9 https://packages.microsoft.com/ubuntu/24.04/prod noble/main amd64 Packages [760 kB]
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:34.8477793Z Ign:2 http://azure.archive.ubuntu.com/ubuntu noble InRelease
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:43:54.8731607Z Ign:3 http://azure.archive.ubuntu.com/ubuntu noble-updates InRelease
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:44:14.8978001Z Ign:4 http://azure.archive.ubuntu.com/ubuntu noble-backports InRelease
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:44:34.9346697Z Ign:5 http://azure.archive.ubuntu.com/ubuntu noble-security InRelease
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:44:54.9551552Z Ign:2 http://azure.archive.ubuntu.com/ubuntu noble InRelease
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:45:14.9792417Z Ign:3 http://azure.archive.ubuntu.com/ubuntu noble-updates InRelease
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:45:14.9795047Z Ign:2 https://archive.ubuntu.com/ubuntu noble InRelease
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:45:35.0035952Z Ign:3 https://archive.ubuntu.com/ubuntu noble-updates InRelease
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:45:35.0065100Z Ign:4 http://azure.archive.ubuntu.com/ubuntu noble-backports InRelease
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:45:35.0131974Z Err:2 https://security.ubuntu.com/ubuntu noble InRelease
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:45:35.0132557Z   Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:45:55.0271506Z Ign:5 http://azure.archive.ubuntu.com/ubuntu noble-security InRelease
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:45:55.0302620Z Err:3 https://security.ubuntu.com/ubuntu noble-updates InRelease
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:45:55.0303069Z   Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:45:55.0306331Z Ign:4 https://archive.ubuntu.com/ubuntu noble-backports InRelease
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:46:15.0551208Z Ign:5 https://archive.ubuntu.com/ubuntu noble-security InRelease
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:46:15.0773973Z Err:4 https://security.ubuntu.com/ubuntu noble-backports InRelease
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:46:15.0774487Z   Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:46:35.1023106Z Err:5 https://security.ubuntu.com/ubuntu noble-security InRelease
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:46:35.1025596Z   Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:46:38.1146419Z Fetched 1467 kB in 3min 20s (7322 B/s)
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:46:39.0372028Z Reading package lists...
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:46:39.0496471Z W: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/dists/noble/InRelease  Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:46:39.0497412Z W: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/dists/noble-updates/InRelease  Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:46:39.0498308Z W: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/dists/noble-backports/InRelease  Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:46:39.0499194Z W: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/dists/noble-security/InRelease  Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:46:39.0499913Z W: Some index files failed to download. They have been ignored, or old ones used instead.
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:46:39.0634983Z Reading package lists...
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:46:39.2827724Z Building dependency tree...
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:46:39.2833754Z Reading state information...
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:46:39.4269349Z The following NEW packages will be installed:
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:46:39.4274574Z   bubblewrap socat
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:46:39.4443934Z 0 upgraded, 2 newly installed, 0 to remove and 3 not upgraded.
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:46:39.4444662Z Need to get 425 kB of archives.
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:46:39.4445214Z After this operation, 1786 kB of additional disk space will be used.
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:46:39.4445831Z Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:46:59.4909173Z Ign:2 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 bubblewrap amd64 0.9.0-1ubuntu0.3
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:47:19.5075649Z Ign:3 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 socat amd64 1.8.0.0-4ubuntu0.1
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:47:39.5281945Z Ign:2 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 bubblewrap amd64 0.9.0-1ubuntu0.3
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:47:59.5656014Z Ign:2 https://archive.ubuntu.com/ubuntu noble-updates/main amd64 bubblewrap amd64 0.9.0-1ubuntu0.3
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:47:59.5709447Z Ign:3 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 socat amd64 1.8.0.0-4ubuntu0.1
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:19.5976525Z Ign:3 https://archive.ubuntu.com/ubuntu noble-updates/main amd64 socat amd64 1.8.0.0-4ubuntu0.1
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:19.5988358Z Ign:2 https://security.ubuntu.com/ubuntu noble-updates/main amd64 bubblewrap amd64 0.9.0-1ubuntu0.3
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:19.5989058Z Err:2 mirror+file:/etc/apt/apt-mirrors.txt noble-updates/main amd64 bubblewrap amd64 0.9.0-1ubuntu0.3
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:19.5989909Z   Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:39.6180707Z Ign:3 https://security.ubuntu.com/ubuntu noble-updates/main amd64 socat amd64 1.8.0.0-4ubuntu0.1
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:39.6181379Z Err:3 mirror+file:/etc/apt/apt-mirrors.txt noble-updates/main amd64 socat amd64 1.8.0.0-4ubuntu0.1
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:39.6182419Z   Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:39.6229491Z E: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/pool/main/b/bubblewrap/bubblewrap_0.9.0-1ubuntu0.3_amd64.deb  Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:39.6231132Z E: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/pool/main/s/socat/socat_1.8.0.0-4ubuntu0.1_amd64.deb  Temporary failure resolving 'azure.archive.ubuntu.com'
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:39.6231915Z E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:39.6265295Z ##[error]Process completed with exit code 100.
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:39.6328108Z ##[group]Run actions/upload-artifact@v4
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:39.6328361Z with:
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:39.6328538Z   name: vitest-junit-ubuntu-1
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:39.6328760Z   path: vitest-junit.xml
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:39.6328960Z   if-no-files-found: ignore
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:39.6329161Z   compression-level: 6
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:39.6329367Z   overwrite: false
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:39.6329550Z   include-hidden-files: false
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:39.6329747Z env:
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:39.6329958Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:39.6330210Z ##[endgroup]
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:39.7718684Z (node:2509) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:39.7719734Z (Use `node --trace-deprecation ...` to show where the warning was created)
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:39.7731082Z No files were found with the provided path: vitest-junit.xml. No artifacts will be uploaded.
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:39.7919304Z Post job cleanup.
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:39.9126794Z Pruning is unnecessary.
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:39.9308783Z Post job cleanup.
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:40.0194933Z [command]/usr/bin/git version
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:40.0241046Z git version 2.56.0
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:40.0283538Z Temporarily overriding HOME='/home/runner/work/_temp/6e8423ae-8a7a-437c-b9e3-7bc61779403d' before making global git config changes
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:40.0284992Z Adding repository directory to the temporary git global config as a safe directory
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:40.0287323Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/agent-hub/agent-hub
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:40.0331399Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:40.0383559Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:40.0708854Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:40.0742065Z http.https://github.com/.extraheader
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:40.0754414Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:40.0801599Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:40.1085425Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:40.1129025Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:40.1495883Z Cleaning up orphan processes
+check (ubuntu 2/4)	UNKNOWN STEP	2026-11-11T14:48:40.1790748Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@v4, actions/upload-artifact@v4, pnpm/action-setup@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

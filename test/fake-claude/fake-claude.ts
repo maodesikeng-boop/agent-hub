@@ -150,6 +150,8 @@ export interface FakeSessionScript {
   cwd?: string;
   /** 工作目录是它或在它下面，比如 Worker 的 worktree 都在 <数据目录>/worktrees/ 下。 */
   cwdUnder?: string;
+  /** 系统提示词（--append-system-prompt-file 指的文件，Worker 的任务说明在里面）里出现其中任意一个（编排验证按任务认 Worker，test/eval/）。 */
+  promptIncludes?: string[];
   script: FakeScript;
 }
 
@@ -229,9 +231,24 @@ function realOrSelf(path: string): string {
   }
 }
 
+/** 系统提示词文件的内容（--append-system-prompt-file）；没有或读不了是空串。只在剧本要按提示词选时读一次。 */
+let promptText: string | undefined;
+function systemPromptText(): string {
+  if (promptText === undefined) {
+    const i = process.argv.indexOf("--append-system-prompt-file");
+    try {
+      promptText = i >= 0 && process.argv[i + 1] ? readFileSync(process.argv[i + 1]!, "utf8") : "";
+    } catch {
+      promptText = "";
+    }
+  }
+  return promptText;
+}
+
 function sessionScriptMatches(entry: FakeSessionScript): boolean {
   const cwd = realOrSelf(process.cwd());
   if (entry.role !== undefined && entry.role !== role) return false;
+  if (entry.promptIncludes !== undefined && !entry.promptIncludes.some((s) => systemPromptText().includes(s))) return false;
   if (entry.cwd !== undefined && realOrSelf(entry.cwd) !== cwd) return false;
   if (entry.cwdUnder !== undefined) {
     const root = realOrSelf(entry.cwdUnder);

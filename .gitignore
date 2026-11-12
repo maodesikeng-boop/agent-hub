@@ -6,3 +6,6 @@ dist/
 build/
 coverage/
 vitest-junit.xml
+
+# 编排验证（pnpm eval）的结果默认在 ~/.agent-hub-eval，不在仓库里；用 --root 指到仓库里时也不提交
+.agent-hub-eval/
