@@ -32,7 +32,7 @@ export function mermaidThemeVariables(theme: ChartTheme): Record<string, string>
     titleColor: foreground,
     lineColor: mutedForeground,
     primaryColor: background,
-    // 节点描边用次要文字色而不是 --border：#ececef 在白底上只有 1.2:1，看不清形状（图形元素要 ≥ 3:1）
+    // 节点描边用次要文字色而不是 --border：#e8e6e1 在和纸底上只有 1.2:1，看不清形状（图形元素要 ≥ 3:1）
     primaryBorderColor: mutedForeground,
     primaryTextColor: foreground,
     secondaryColor: muted,

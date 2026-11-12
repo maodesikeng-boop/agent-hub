@@ -119,12 +119,12 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
 
 - **强调色（`--primary` / `--primary-foreground`）跟着当前会话的项目经理走，没有固定的粉色。**
   - **来源**：`src/web/lib/palette.ts` 的 `PALETTE`（8 种水果配色）一处，项目经理的完整水果横切面头像（`slice`）、Worker 的自然果瓣头像（`wedge`）、水果主色（`blob`）和强调色（`accent` + 文字色 `accentForeground`）共用这一份，按项目经理的编号（头像的 `colorKey`）轮着取。别处不写颜色值。
-  - **谁在里面**：项目经理的对话、它的 Worker 的对话、它的资料页、右栏，外面包一层 `AccentScope`（`lib/accent-scope.tsx`，`display: contents`），在这层上设好 `--primary` 和 `--primary-foreground`，里面的组件照常写 `bg-primary text-primary-foreground`，不自己算颜色。会话里打开的弹窗（如资料页的“开新会话？”）也渲染进这层，颜色跟着。**左栏、Router 工作台（`#/router`）、设置弹窗、新建项目经理弹窗、加载页不在里面**，`:root` 里的 `--primary` 是中性的前景色 `#18181b`，所以不用单独处理。
+  - **谁在里面**：项目经理的对话、它的 Worker 的对话、它的资料页、右栏，外面包一层 `AccentScope`（`lib/accent-scope.tsx`，`display: contents`），在这层上设好 `--primary` 和 `--primary-foreground`，里面的组件照常写 `bg-primary text-primary-foreground`，不自己算颜色。会话里打开的弹窗（如资料页的“开新会话？”）也渲染进这层，颜色跟着。**左栏、Router 工作台（`#/router`）、设置弹窗、新建项目经理弹窗、加载页不在里面**，`:root` 里的 `--primary` 是中性的墨色前景 `#1c1b19`（字是和纸白 `#fcfbf9`），所以不用单独处理。
   - **用在哪（实心强调色只用在这几处）**：主按钮（一屏最多一个：创建、保存、发送、停止；以及激活态任务图门禁节点 `gate` 的推荐主选项按钮；悬停用 `hover:brightness-90` 变深，不用透明度，对比度只升不降）、选中态（单选行的勾、开关打开）、右栏“等你确定”组标题前的小圆点和收起时右栏开关上的圆点、拖文件进输入框时的虚线框。对话里就是**发送键和小圆点**。
-  - **用户自己的气泡是浅果冻底**（`bg-bubble-me text-bubble-me-foreground`）：底色是当前强调色掺白 `color-mix(in srgb, var(--primary) var(--mix-bubble-me), #ffffff)`（12%），字是前景色（深色），不是白字压实心强调色；8 种水果的气泡底配前景色字对比度都 ≥ 4.5:1（`lib/palette.test.ts` 按 `--mix-bubble-me` 逐色校验）。`#/router` 下用户气泡照常用 `bg-bubble-me`，因为 `--primary` 是碳黑，气泡是浅中性灰，不单独写颜色。气泡的形状、圆角、内边距不变（第 17 条）。
-  - **不用强调色的**：灰色的文字按钮（系统行里的“撤销”、总助失败回合的 `Retry` 这类行内小操作）：`text-muted-foreground`，悬停 `text-foreground`。没有彩色底的提示条、没有彩色边框——仅三处例外：拖文件进输入框时的虚线框、右栏激活态 `gate`（`Waiting on you`）门禁卡片的 `border-primary`（第 12.1 条），以及聊天输入框外框 `.composer-frame` 聚焦态（`:focus-within` 阴影光晕掺当前会话 `--primary` 水果色，边框自身颜色与粗细仍保持中性 `border-border` 不变，见第 7 条；在 `#/router` 下 `--primary` 为中性碳黑，自然退回冷灰光晕）。
+  - **用户自己的气泡是浅果冻底**（`bg-bubble-me text-bubble-me-foreground`）：底色是当前强调色掺和纸底 `color-mix(in srgb, var(--primary) var(--mix-bubble-me), var(--background))`（12%，不写死纯白，不在和纸底上露白斑），字是前景色（深色），不是白字压实心强调色；8 种水果的气泡底配前景色字对比度都 ≥ 4.5:1（`lib/palette.test.ts` 按 `--mix-bubble-me` 逐色校验）。`#/router` 下用户气泡照常用 `bg-bubble-me`，因为 `--primary` 是墨色，气泡是浅暖灰，不单独写颜色。气泡的形状、圆角、内边距不变（第 17 条）。
+  - **不用强调色的**：灰色的文字按钮（系统行里的“撤销”、总助失败回合的 `Retry` 这类行内小操作）：`text-muted-foreground`，悬停 `text-foreground`。没有彩色底的提示条、没有彩色边框——仅三处例外：拖文件进输入框时的虚线框、右栏激活态 `gate`（`Waiting on you`）门禁卡片的 `border-primary`（第 12.1 条），以及聊天输入框外框 `.composer-frame` 聚焦态（`:focus-within` 阴影光晕掺当前会话 `--primary` 水果色，边框自身颜色与粗细仍保持中性 `border-border` 不变，见第 7 条；在 `#/router` 下 `--primary` 为中性墨色，自然退回暖灰光晕）。
   - **左栏的标注使用清爽的绿色提醒**：“等你确定”与“等你”均统一为绿色（`bg-status-active` / `text-status-active`）。在 72px 窄栏收紧态下，头像右下角用绿色小圆点（`size-2 rounded-full bg-status-active ring-2 ring-sidebar`）；在展开态左栏下，“等你确定”和“等你”都只是一颗绿色小圆点（`size-2 shrink-0 rounded-full bg-status-active`），**不写“等你”两个字**，名字只放在圆点的 `aria-label` / `title` 上给读屏和悬停用，干净克制，不用原来的深色胶囊样式。
-  - **对比度**：强调色同时当“白字的底色”和“白底上的文字色”，所以每种颜色对白色的对比度都要 ≥ 4.5:1，按 WCAG 2.x 1.4.3（AA，普通文字，https://www.w3.org/TR/WCAG21/#contrast-minimum ，公式 https://www.w3.org/TR/WCAG21/#dfn-contrast-ratio ）。水果主色 `blob` 是明亮的原色（不放文字），`accent` 是与水果同色系深一档（黄、橙、绿原色配白字不到 3:1，所以必须深一档）。新加颜色必须过 `lib/palette.test.ts` 的对比度校验（含悬停变深之后）。
+  - **对比度**：强调色同时当“和纸白字的底色”和“和纸底上的文字色”，所以每种颜色对纯白 `#ffffff` 和和纸白 `#fcfbf9` 的对比度都要 ≥ 4.5:1，按 WCAG 2.x 1.4.3（AA，普通文字，https://www.w3.org/TR/WCAG21/#contrast-minimum ，公式 https://www.w3.org/TR/WCAG21/#dfn-contrast-ratio ）。水果主色 `blob` 是熟果的和色（曙色、蜜柑、鶸萌黄、茜、若竹、柚子、琥珀、常磐：比美式荧光原色收半档饱和，不放文字），`accent` 是与水果同色系深一档（黄、橙、绿原色配白字不到 3:1，所以必须深一档）。新加颜色必须过 `lib/palette.test.ts` 的对比度校验（含悬停变深之后）。
 - **水果果冻底（列表项的选中、悬停）**：左栏的项目经理行（宽栏的行和 72px 窄栏的头像方块）、右栏的行（Piece、Needs You 的提问、任务流图节点卡片），选中是 `bg-jelly`、悬停是 `hover:bg-jelly-hover`——水果强调色掺透明的极淡底（选中 10%、悬停 5%，`color-mix(in srgb, <accent> 10%, transparent)`），和头像、右上角果瓣同一色系，清透不抢字。
   - **颜色从哪来**：浓度和写法只在 `styles.css` 的 `--color-jelly` / `--color-jelly-hover` 一处；颜色取行上的 `--jelly`，没设就用 `--primary`。右栏在 `AccentScope` 里，不用设，跟着当前项目经理；左栏不在任何会话里，每个项目经理行用 `style` 设 `--jelly` 为这个项目经理的 `paletteOf(avatarKey).accent`（`Sidebar.tsx` 的 `jellyOf`）。
   - 只用在“一行代表一个项目经理 / Piece / 提问 / 任务节点”的列表项或节点卡上；**左栏置顶的 Router 行不设 `--jelly`**，与设置弹窗的分类、分组框里的行、下拉、分段选择、组标题和 Show more 这类控件一样照旧用中性灰（悬停 `hover:bg-sidebar-hover`、选中 `bg-sidebar-active`）。选中只靠底色，字重不变。
@@ -135,14 +135,18 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
 - **水果三元视觉与 Router 水果刀中性色规则**：
   - **项目经理（PM，`Avatar.tsx`）**：完整水果横切面（`PALETTE.slice`），配彩色果冻行底 `--jelly` 与会话彩色 `--fruit` / `--primary`。
   - **Worker（Piece，`Avatar.tsx`）**：从所属项目经理那片水果上顺着果络剥下的一瓣（`PALETTE.wedge`，`neutral` 为 `true`，`colorKey` 传所属项目经理的 `avatarKey`）。
-  - **Router（`<KnifeAvatar>`，`KnifeAvatar.tsx`）**：切开与调度所有水果的 45° 水果刀矢量图标，**不设 `--fruit`、不设彩色 `--jelly`**。打开 `#/router` 时，`FruitTint` 与 `AccentScope` 均传 `null`：外壳平滑退回纯白工作台 `--background`（`#ffffff`）与中性冷灰侧栏 `--sidebar`（`#f6f6f7`），`--primary` 保持碳黑刀锋色 `#18181b`（白字 `#ffffff`）；左栏置顶 Router 行选中态固定用 `bg-sidebar-active`、悬停态固定用 `hover:bg-sidebar-hover`；而在纯白中性的 Router 工作台内，托盘里的待拍板卡和时间流里的简报，开头展示来源项目经理的彩色水果切片头像以一眼识别所属项目。
+  - **Router（`<KnifeAvatar>`，`KnifeAvatar.tsx`）**：切开与调度所有水果的 45° 日式和柄小刀（和ペティ）矢量图标，**不设 `--fruit`、不设彩色 `--jelly`**。打开 `#/router` 时，`FruitTint` 与 `AccentScope` 均传 `null`：外壳平滑退回和纸暖白工作台 `--background`（`#fcfbf9`）与暖石灰侧栏 `--sidebar`（`#f4f3ef`），`--primary` 保持墨色 `#1c1b19`（和纸白字 `#fcfbf9`）；左栏置顶 Router 行选中态固定用 `bg-sidebar-active`、悬停态固定用 `hover:bg-sidebar-hover`；而在和纸中性的 Router 工作台内，托盘里的待拍板卡和时间流里的简报，开头展示来源项目经理的彩色水果切片头像以一眼识别所属项目。
+- **中性色是和纸暖白 + 墨色**（`styles.css` 的 `:root`，只在那里改）：照白練 / 生成り往暖处退半步，不发黄（底色和线的 R ≥ G ≥ B、最大最小通道差 ≤ 10，`lib/palette.test.ts` 守着）。
+  - 底 `--background` `#fcfbf9`，字 `--foreground` `#1c1b19`（墨色）；左栏 `--sidebar` `#f4f3ef`（暖石灰）、悬停 `--sidebar-hover` `#eceae4`、选中 `--sidebar-active` `#e4e2db`；`--secondary` / `--muted` `#f1efe9`、`--accent` `#efede7`、agent 气泡 `--bubble-agent` `#f0eee8`；线 `--border` `#e8e6e1`、深一档的线 `--strong-border` `#d6d3cb`（Markdown 引用竖线、表头下线）；焦点圈 `--ring` `#9e9b93`。
+  - 次要文字 `--muted-foreground` `#66635c`：在上面每一种底上都 ≥ 4.5:1（最低的 `--sidebar-active` 上 4.62:1）。墨色正文同样逐一校验。
+  - 跟着页面底走的颜色写 `var(--background)`，不写死 `#ffffff`：用户气泡的掺色底、主屏 App 的 `theme-color`（`pwa-manifest.ts` 的 `THEME_COLOR`，`pwa.test.ts` 校验和 `--background` 同色）。
 - 其余一律中性色：
-  - 页面底色 `bg-background`（白，外壳的对话区和右栏是上面的 `bg-surface-chat`）；左栏 `bg-surface-sidebar`，设置弹窗的分类栏 `bg-sidebar`；分组框白底 + 1px `border-border`（第 9 条）；悬停 `bg-sidebar-hover`；选中、凹进去的输入框（左栏搜索）`bg-sidebar-active`（左栏的项目经理行、右栏的列表项除外，用上面的果冻底）。
+  - 页面底色 `bg-background`（和纸白，外壳的对话区和右栏是上面的 `bg-surface-chat`）；左栏 `bg-surface-sidebar`，设置弹窗的分类栏 `bg-sidebar`；分组框白底 + 1px `border-border`（第 9 条）；悬停 `bg-sidebar-hover`；选中、凹进去的输入框（左栏搜索）`bg-sidebar-active`（左栏的项目经理行、右栏的列表项除外，用上面的果冻底）。
   - 分隔线分两种：**外壳**（三栏之间、右栏组之间、窄屏头像栏右边、左栏置顶 Router 入口下方）用 1px `border-line` / `divide-line`（中性边框掺 8% 水果色，跟着项目经理变；Router 下无 `--fruit` 自然退回中性 `--border`）；**白底的框和弹窗**（分组框、弹窗、popover、卡片、输入框，框里行与行之间）仍用 1px `border-border` / `divide-border`（纯中性色，不掺水果色）。
   - 次要文字 `text-muted-foreground`；错误 `text-danger`；警告 `bg-warn text-warn-foreground`。
   - 状态色（Worker 汇报头像右下角的小圆点，第 17 条）：做完了 `--success`、有问题 `--caution`、放弃了和出错 `--danger`，不用主色。
 - 不能点的主按钮换成中性灰（`bg-sidebar-active text-muted-foreground`，`Button` 自带），不显示半透明的强调色。
-- 不用渐变（`<KnifeAvatar>` 矢量刀身金属光泽属头像素材，控件背景与卡片严禁用渐变）、阴影（聊天输入框那一处轻阴影除外）、毛玻璃。在忙状态词、右栏在跑的 Piece 名字的流光（第 14 条）是同一颜色深浅扫过，不算渐变文字。提示条（“重连中”、健康问题）也只用底色，不加阴影和描边。
+- 不用渐变（`<KnifeAvatar>` 矢量刀身的钢色微渐变属头像素材，控件背景与卡片严禁用渐变）、阴影（聊天输入框那一处轻阴影除外）、毛玻璃。在忙状态词、右栏在跑的 Piece 名字的流光（第 14 条）是同一颜色深浅扫过，不算渐变文字。提示条（“重连中”、健康问题）也只用底色，不加阴影和描边。
 
 ## 5. 图标
 
@@ -301,7 +305,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 右栏 `Task Graph` 摒弃笨重的全框节点卡片堆叠，采用 **纵向果皮轨（Peel Track，`src/web/components/PeelTrack.tsx`）为主体 + 任务级小切面进度轮图标（`src/web/components/SliceWheelIcon.tsx`）+ 全屏横向拓扑弹窗（`src/web/components/TaskGraphDialog.tsx`）** 的双层视图，确保 `280px` 右栏净宽内呼吸通透、零横向滚动条：
 
 - **任务级小切面进度轮（`SliceWheelIcon`）与多任务手风琴**：
-  - 每个多阶段任务标题左侧配一枚小水果切面轮（默认 `20px` 换算为 `1.25rem`，随界面四档字号缩放）：取所属项目经理的水果配色（`paletteOf(avatarKey)`），按任务阶段数切瓣——已完成（`done`）果肉饱满，进行中（`running` / `ready`）外圈柔淡、果心向生长，等你拍板（`waiting_user`）强调色微凸，需关注（`attention`）琥珀色，未解锁（`pending`）留淡轮廓；同层相邻并行阶段刀口只切到果肉外半圈，果心相连。
+  - 每个多阶段任务标题左侧配一枚小水果切面轮（默认 `20px` 换算为 `1.25rem`，随界面四档字号缩放）：取所属项目经理的水果配色（`paletteOf(avatarKey)`），按任务阶段数切瓣——已完成（`done`）果肉饱满，进行中（`running` / `ready`）外圈柔淡、果心向生长，等你拍板（`waiting_user`）强调色微凸，需关注（`attention`）琥珀色，未解锁（`pending`）留淡轮廓；同层相邻并行阶段刀口只切到果肉外半圈，果心相连。几何照家纹（橘紋）的平面秩序：外圈果皮像纹章的“丸”，与果肉之间留一道细缝（直径的 3%，至少 0.7px）；瓣等分、刀口等宽；中心留一枚轴心圆（`data-part="hub"`，半径 16%，用切口同一个底色 `--cut`），瓣不在圆心挤成尖点；不加高光、阴影和渐变。小于 18px 时细缝和轴心都省掉。比例只在 `SliceWheelIcon.tsx` 的 `WHEEL_*_RATIO` 改。应用图标（`scripts/render-icons.ts` 的果房纹）是同一套几何。
   - 任务标题行右侧配放大全览按钮（`Maximize2`，`aria-label="Zoom"`）与手风琴箭头（`ChevronRight`）。
   - **多活跃任务优先级与折叠**：单项目同时有多个活跃任务图时，含 `waiting_user` 或 `attention` 节点的任务排在最前并默认展开；其余后台进行中任务默认收成带小切面进度轮的单行标题（无紧急任务时排第一的任务默认展开，其余收起），点击任务标题手风琴式展开/收起。
 - **果皮轨（Peel Track）纵向阶段与多股并行轨道**：
@@ -322,7 +326,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 ## 13. 字体、数字、列表行
 
 - **字体栈只在 `styles.css` 的 `--font-ui` / `--font-code` 定义**，组件里不写 `font-family`，用 `font-sans` / `font-mono`。
-  - 界面：**系统字体**（照 Claude desktop 和 t3code，不打包字体）：`-apple-system`、`BlinkMacSystemFont`、`"SF Pro Text"`、`"Helvetica Neue"` → 中文字体（`"PingFang SC"`、`"Hiragino Sans GB"`、`"Microsoft YaHei"`）→ `sans-serif`。**英文字体一律排在中文字体前面**：英文字母和数字在中文字体里有字形，排前面就会落到中文字体上，样子不一致；汉字在英文字体里没有字形，会自动落到后面的中文字体。
+  - 界面：**系统字体**（照 Claude desktop 和 t3code，不打包字体）：`-apple-system`、`BlinkMacSystemFont`、`"SF Pro Text"`、`"Helvetica Neue"` → 中文字体（`"PingFang SC"`、`"Hiragino Sans GB"`、`"Microsoft YaHei"`）→ 日文字体（`"Hiragino Kaku Gothic ProN"`、`"Hiragino Sans"`、`"Yu Gothic UI"`）→ `sans-serif`。日文字体排在中文字体后面：中文照旧落到苹方、雅黑（排前面的话 Windows 上的汉字会变成游ゴシック的日式字形），中文字体缺的假名和日文汉字才落到它们。**英文字体一律排在中文字体前面**：英文字母和数字在中文字体里有字形，排前面就会落到中文字体上，样子不一致；汉字在英文字体里没有字形，会自动落到后面的中文字体。
   - 代码：`"SF Mono"`、`ui-monospace`、`Menlo`、`Consolas`，后面补中文字体，最后 `monospace`。
 - **计量用英文单位**：token、用量、文件大小这类数用 K / M（token）、KB / MB（文件大小），不用“万”“亿”。token 写“820 tokens”“291K tokens”“6.48M tokens”（1 个是“1 token”）；Worker 行里的对话长度写“158K context”（`formatContext`，数字同样用 K / M）；不到 1000 原样，之上取 3 位有效数字并去掉多余的 0，999.5K 以上进到 1M（`formatCount` / `formatTokens`，`src/web/format.ts`）。悬停明细的标签也用英文（Input、Cache read…）。没有数据（老数据没记录）显示“—”，不显示 0。
 - **数字对齐**：列表、表格、行右边的数字（计数、时间、百分比、token）一律 `tabular-nums`。
@@ -501,10 +505,11 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 
 `#/router` 由三部分组成：顶栏下面的 `Needs You` 托盘、中间的时间流、底部的输入框。方案见 `docs/router-workbench-v2-design.md`。
 
-- **水果刀矢量头像（`<KnifeAvatar>`，`src/web/components/KnifeAvatar.tsx`）**：
-  - `viewBox="0 0 44 44"`，45° 斜置削皮水果刀，尺寸同 `Avatar.tsx` 换算为 `${size / 16}rem` 跟随第 0 条四档界面大小缩放，`aria-hidden="true"`、`data-slot="knife-avatar"`。
+- **日式和柄小刀矢量头像（`<KnifeAvatar>`，`src/web/components/KnifeAvatar.tsx`）**：
+  - `viewBox="0 0 44 44"`，45° 斜置的和ペティ（刀柄在左下、切先指向右上），尺寸同 `Avatar.tsx` 换算为 `${size / 16}rem` 跟随第 0 条四档界面大小缩放，`aria-hidden="true"`、`data-slot="knife-avatar"`。
   - **唯一渐变 ID 铁律**：SVG `<defs>` 内的 `<linearGradient>` ID 必须用 `React.useId()` 生成实例级唯一 ID，严禁写死静态 `id="knife-blade"`（防止左栏置顶刀与顶栏刀同屏渲染后卸载其一时导致另一处 `url(#...)` 失效变黑）。
-  - **配色与 WCAG 1.4.11 图形对比度**：刀身拉丝钢线性渐变（`#f4f4f6` → `#d4d4d8`）配白色刃口高光 `#ffffff`；刀背与外轮廓用 `1.5px` 深钢灰 `#3f3f46`（对白底 `#ffffff` 与侧栏 `#f6f6f7` 对比度均 ≥ 3:1，实测 > 9:1）；金属护手 `#71717a`；碳黑刀柄 `#18181b` 嵌双银色铆钉 `#d4d4d8`。
+  - **器物结构**（`data-part` 依次是 `blade`、`hamon`、`handle`、`handle-facet`、`ferrule`）：刀身刀背笔直、近切先缓缓落下，刃口直线后微微上扬到切先，刀根先露一小段颈再落到刃口；刀身上一道顺着刃口的刃纹线；浅白木八角直柄（和柄），向光面与背光面一亮一暗出棱，柄尾倒角；柄与刀身之间一小段墨黑水牛角口金（桂）。**没有西式铆钉和金属护手**。路径画在“刀水平放”的局部坐标里，整组 `rotate(-45 22 22)`。
+  - **配色与 WCAG 1.4.11 图形对比度**：刀身暖钢微渐变（`#f7f6f3` → `#d3d0c8`，刀背到刃口）配 `0.7px` 刃纹线 `#a19d94`；刀身、刀柄外轮廓用深墨钢 `#3a3935`（刀身 `1.3px`、柄和口金 `1.2px`）；和柄向光面 `#e8dcc2`、背光面 `#d2c19e`；口金 `#272623`。刀身轮廓、柄轮廓、口金对和纸底 `#fcfbf9` 和左栏各态底（`--sidebar` / `--sidebar-hover` / `--sidebar-active`）都 ≥ 3:1（实测 > 8:1，`ui/knife-avatar.test.tsx` 校验）。浅木柄本身不靠填充色过对比度，靠墨色轮廓。
 - **`Needs You` 托盘**：只放待拍板项。没有待拍板项时不渲染。套 `.chat-column`；下边 1px `border-border` 画在列里那一层，**只和对话列一样宽，不横贯整个主区**，线下留 12px（`pb-3`）空白再接时间流的视口。滚动区桌面最高 `50dvh`、手机外壳最高 `33dvh`，超出在里面滚，上下边渐隐（`.router-tray-scroll`，同左栏列表的 8px / 20px），渐隐带落在滚动区的 `pt-2` / `pb-5` 里：没滚动时不淡，滚到底卡片的底边和圆角完整、下面留 20px。左右各外扩 10px（`-mx-2.5 px-2.5`），收起的行的果冻底不被裁。组标题照第 12 条（12px、500、灰，高 32px，右边数量），整行可点收起。第一张用 `RouterDecisionCard` 完整展开，其余每张一行（来源头像 20px、名字、问题第一行 `truncate`、时间、`ChevronRight`，行的尺寸照第 12 条），点一行换它展开，收起的行超过 3 条出 `Show more`。
 - **待拍板卡（`RouterDecisionCard`）**：
   - 卡片容器 `rounded-2xl border border-border bg-background p-4`；一句话问题用 `text-body font-medium`，补充依据用 `text-minor text-muted-foreground`。

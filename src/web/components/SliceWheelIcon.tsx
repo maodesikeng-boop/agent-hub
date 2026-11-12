@@ -110,6 +110,11 @@ export function computeGraphComponents(graph: GraphShape): GraphShape[] {
 
 const round2 = (n: number) => Number(n.toFixed(2));
 
+/** 切面轮的家纹比例（相对直径 / 半径）：果皮厚度、果皮与果肉之间的细缝、中心轴心圆的半径。 */
+const WHEEL_PEEL_RATIO = 0.06;
+const WHEEL_GAP_RATIO = 0.03;
+const WHEEL_HUB_RATIO = 0.16;
+
 function polar(r: number, deg: number): [number, number] {
   const rad = ((deg - 90) * Math.PI) / 180;
   return [round2(r * Math.cos(rad)), round2(r * Math.sin(rad))];
@@ -132,6 +137,8 @@ function arcPath(r: number, a0: number, a1: number): string {
 /**
  * 任务级小切面进度轮图标（docs/ui-standard.md 第 12.1 条）：
  * 按当前项目经理水果色，将多阶段任务切分成对应瓣数的横切面；同一连通子图同层相邻并行阶段刀口只切到果肉外半圈（果心相连）。
+ * 几何照家纹（橘紋）的平面秩序：外圈果皮像纹章的“丸”，和果肉之间留一道细缝；瓣与瓣等分、刀口等宽；中心留一枚轴心圆（果心留白），
+ * 瓣不在圆心挤成一个尖点。不加高光、阴影和渐变。比例只在下面几个常数里调。
  * 尺寸以 rem 输出，跟随界面四档缩放。
  */
 export const SliceWheelIcon = memo(function SliceWheelIcon({
@@ -161,9 +168,13 @@ export const SliceWheelIcon = memo(function SliceWheelIcon({
 
   const rem = `${size / 16}rem`;
   const R = size / 2;
-  const peelW = Math.max(1.6, size * 0.06);
+  const peelW = Math.max(1.6, size * WHEEL_PEEL_RATIO);
   const cutW = size >= 30 ? 1.8 : 1.4;
   const tiny = size < 18;
+  // 果皮与果肉之间的细缝、中心的轴心圆：太小（< 18px）时放不下，省掉
+  const gapW = tiny ? 0 : Math.max(0.7, size * WHEEL_GAP_RATIO);
+  const hubR = tiny ? 0 : Math.max(1.4, R * WHEEL_HUB_RATIO);
+  const pulpR = R - peelW - gapW;
   const pop = tiny ? 0 : size * 0.08;
   const count = petals.length;
   const span = count > 0 ? 360 / count : 360;
@@ -214,10 +225,9 @@ export const SliceWheelIcon = memo(function SliceWheelIcon({
                 ) : (
                   <>
                     <path d={sectorPath(R, a0, a1)} fill={peelFill} />
-                    <path d={sectorPath(R - peelW, a0, a1)} fill={pulpFill} />
-                    {isRun && !tiny && (
-                      <path d={sectorPath((R - peelW) * 0.6, a0, a1)} fill="var(--pulp)" />
-                    )}
+                    {gapW > 0 && <path d={sectorPath(R - peelW, a0, a1)} fill="var(--cut)" />}
+                    <path d={sectorPath(pulpR, a0, a1)} fill={pulpFill} />
+                    {isRun && !tiny && <path d={sectorPath(pulpR * 0.6, a0, a1)} fill="var(--pulp)" />}
                   </>
                 )}
               </g>
@@ -242,6 +252,7 @@ export const SliceWheelIcon = memo(function SliceWheelIcon({
               />
             );
           })}
+        {count > 0 && hubR > 0 && <circle data-part="hub" r={round2(hubR)} fill="var(--cut)" />}
       </svg>
     </span>
   );

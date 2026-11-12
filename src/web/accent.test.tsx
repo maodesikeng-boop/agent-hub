@@ -48,11 +48,11 @@ describe("强调色跟着项目经理", () => {
     await waitFor(() => expect(scopeOf(screen.getByRole("main"))!.style.getPropertyValue("--primary")).toBe(PALETTE[2]!.accent));
   });
 
-  it(":root 的 --primary 是中性色（前景黑），不是粉色；用户气泡是强调色掺白的浅果冻底 + 前景色字（不是实心强调色）", () => {
+  it(":root 的 --primary 是中性色（墨色），不是粉色；用户气泡是强调色掺和纸白的浅果冻底 + 前景色字（不是实心强调色）", () => {
     const css = readFileSync("src/web/styles.css", "utf8");
     expect(css).not.toMatch(/d6336c/i);
-    expect(css).toMatch(/--primary: #18181b;/);
-    expect(css).toMatch(/--color-bubble-me: color-mix\(in srgb, var\(--primary\) var\(--mix-bubble-me\), #ffffff\);/);
+    expect(css).toMatch(/--primary: #1c1b19;/);
+    expect(css).toMatch(/--color-bubble-me: color-mix\(in srgb, var\(--primary\) var\(--mix-bubble-me\), var\(--background\)\);/);
     expect(css).toMatch(/--color-bubble-me-foreground: var\(--foreground\);/);
   });
 

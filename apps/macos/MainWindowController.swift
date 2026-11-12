@@ -106,7 +106,8 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = false
-        window.backgroundColor = NSColor.white
+        // 和网页的 --background（和纸白 #fcfbf9，src/web/styles.css）同色：网页还没画出来、透明标题栏底下都不露冷白
+        window.backgroundColor = NSColor(srgbRed: 0xfc / 255.0, green: 0xfb / 255.0, blue: 0xf9 / 255.0, alpha: 1)
         window.minSize = NSSize(width: 480, height: 560)
         window.delegate = self
         window.contentView = webView
@@ -209,9 +210,9 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
         <head>
         <meta charset="utf-8">
         <style>
-          body { margin: 0; height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; font: 15px/1.6 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif; color: #18181b; background: #ffffff; padding: 24px; box-sizing: border-box; text-align: center; }
+          body { margin: 0; height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; font: 15px/1.6 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif; color: #1c1b19; background: #fcfbf9; padding: 24px; box-sizing: border-box; text-align: center; }
           p { margin: 0; max-width: 520px; }
-          .muted { font-size: 13.5px; color: #71717a; word-break: break-all; }
+          .muted { font-size: 13.5px; color: #66635c; word-break: break-all; }
         </style>
         </head>
         <body>

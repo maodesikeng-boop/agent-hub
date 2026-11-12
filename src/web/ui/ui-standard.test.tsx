@@ -134,17 +134,28 @@ describe("界面标准：共用组件", () => {
     expect(avatars[1]!.querySelector("img")?.getAttribute("src")).toBe(PALETTE[0]!.wedge);
   });
 
-  it("--ring 是中性灰，不是主色", () => {
+  it("--ring 是中性暖灰，不是主色", () => {
     const css = readFileSync("src/web/styles.css", "utf8");
     expect(css).toMatch(/--color-ring: var\(--ring\);/);
-    expect(css).toMatch(/--ring: #a1a1aa;/);
+    expect(css).toMatch(/--ring: #9e9b93;/);
   });
 
-  it("界面字体用系统字体（-apple-system、SF Pro Text 在前，中文字体在后），不打包 Inter", () => {
+  it("界面字体用系统字体（-apple-system、SF Pro Text 在前，中文字体在后，日文字体再后），不打包 Inter", () => {
     const css = readFileSync("src/web/styles.css", "utf8");
     const stack = /--font-ui:\s*([^;]+);/.exec(css)![1]!;
     expect(stack).not.toMatch(/Inter/);
-    const order = ["-apple-system", "BlinkMacSystemFont", '"SF Pro Text"', '"PingFang SC"', "sans-serif"].map((f) => stack.indexOf(f));
+    // 日文字体排在所有中文字体后面：中文照旧落到苹方、雅黑，Windows 上的汉字不会变成游ゴシック的日式字形
+    const order = [
+      "-apple-system",
+      "BlinkMacSystemFont",
+      '"SF Pro Text"',
+      '"PingFang SC"',
+      '"Microsoft YaHei"',
+      '"Hiragino Kaku Gothic ProN"',
+      '"Hiragino Sans"',
+      '"Yu Gothic UI"',
+      "sans-serif",
+    ].map((f) => stack.indexOf(f));
     expect(order.every((i) => i >= 0)).toBe(true);
     expect(order).toEqual(order.toSorted((a, b) => a - b));
     expect(readFileSync("src/web/main.tsx", "utf8")).not.toMatch(/fontsource/);

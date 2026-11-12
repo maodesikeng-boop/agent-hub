@@ -4,6 +4,8 @@
 
 **Manage an entire project through a single conversation.**
 
+<sub>Fusa · 房 (ふさ) — Japanese for citrus segments gathered into one fruit: the Router cuts, each PM is a whole fruit, Pieces are its segments.</sub>
+
 Fusa is a desktop-first personal multi-agent coding app built around one idea: **for each project, you only talk to one Project Manager (PM) agent.** You align on goals and make decisions with the PM in one conversation. The PM breaks down the work, dispatches **Worker** agents (called **Pieces** in the UI) into isolated git worktrees in parallel, reviews their diffs and test results, and merges their PRs. Every role, PM or Worker, can independently run any supported command-line agent (`claude`, `agy`, `codex`, `pi`, `dsh`, or `cursor-agent`) under your own account or API key.
 
 ![Fusa home screen](docs/screenshots/readme-home.png)
@@ -223,6 +225,8 @@ Workers edit files and execute shell commands on your machine with your OS user'
 [English](#fusa) | **中文**
 
 **通过一个会话管理整个项目。**
+
+<sub>Fusa · 房（ふさ）：日语里聚成一轮的柑橘果瓣——总助切分调度，项目经理是一整颗果，Piece 是它的一瓣。</sub>
 
 Fusa 是一个以桌面应用为主的个人多 Agent 协作工具，核心设计只有一件事：**每个项目你只需要跟一个项目经理（PM）聊。** 你在一个对话里和项目经理对齐目标、拍板决策；拆任务、调度多个 **Worker**（界面里叫 **Pieces**）到各自独立的 git worktree 里并行写代码、审代码跑测试、合 PR，都由项目经理去做。项目经理和每个 Worker 都可以各自任选已支持的命令行 Agent（`claude`、`agy`、`codex`、`pi`、`dsh` 或 `cursor-agent`），使用你自己的账号或 API 密钥运行。
 

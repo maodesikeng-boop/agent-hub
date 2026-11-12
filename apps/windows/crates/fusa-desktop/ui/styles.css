@@ -1,20 +1,20 @@
 /* 严格对齐 docs/ui-standard.md 与 src/web/styles.css：
- * - 中性白/浅灰配色，无渐变、无毛玻璃、无装饰阴影、不用 · 拼接；
+ * - 和纸暖白 + 墨色中性配色（与 src/web/styles.css 的 :root 同一组值），无渐变、无毛玻璃、无装饰阴影、不用 · 拼接；
  * - 界面字号严格 4 档（--text-xs / --text-minor / --text-body / --text-title），字重仅 400 / 500 / 600；
  * - 圆角严格 3 档（rounded-2xl=1rem, rounded-xl=0.75rem, rounded-full=9999px）；
  * - 控件高度两档（默认 2.25rem=36px，小号 2rem=32px），键盘聚焦中性环。
  */
 :root {
-  --background: #ffffff;
-  --foreground: #18181b;
-  --primary: #18181b;
-  --primary-foreground: #ffffff;
-  --muted-foreground: #71717a;
-  --border: #e4e4e7;
-  --sidebar: #f4f4f5;
-  --sidebar-hover: #ededf0;
-  --sidebar-active: #e4e4e7;
-  --ring: #a1a1aa;
+  --background: #fcfbf9;
+  --foreground: #1c1b19;
+  --primary: #1c1b19;
+  --primary-foreground: #fcfbf9;
+  --muted-foreground: #66635c;
+  --border: #e8e6e1;
+  --sidebar: #f4f3ef;
+  --sidebar-hover: #eceae4;
+  --sidebar-active: #e4e2db;
+  --ring: #9e9b93;
   --danger: #dc2626;
   --success: #16a34a;
   --caution: #d97706;

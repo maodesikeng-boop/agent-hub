@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { KnifeAvatar } from "../components/KnifeAvatar.tsx";
 import { contrastRatio } from "../lib/palette.ts";
 
-describe("KnifeAvatar（水果刀矢量头像，docs/ui-standard.md 第 4、21 条）", () => {
+describe("KnifeAvatar（日式和柄小刀矢量头像，docs/ui-standard.md 第 4、21 条）", () => {
   it("尺寸换算为 size / 16 rem（默认 44 -> 2.75rem），与 Avatar.tsx 完全对齐跟随四档界面缩放", () => {
     const { container, rerender } = render(<KnifeAvatar />);
     const root = container.querySelector<HTMLElement>("[data-slot='knife-avatar']");
@@ -72,7 +72,19 @@ describe("KnifeAvatar（水果刀矢量头像，docs/ui-standard.md 第 4、21 �
     expect(remainingGrad.getAttribute("id")).toBe(id1);
   });
 
-  it("刀背轮廓描边与碳黑刀柄对工作台白底及侧栏各态底色对比度均满足 WCAG 1.4.11 >= 3:1", () => {
+  it("日式和柄小刀的器物结构：刀身 + 刃纹线 + 八角和柄（两面明暗）+ 口金，没有西式铆钉和金属护手", () => {
+    const { container } = render(<KnifeAvatar />);
+    const parts = [...container.querySelectorAll("[data-part]")].map((el) => el.getAttribute("data-part"));
+    expect(parts).toEqual(["blade", "hamon", "handle", "handle-facet", "ferrule"]);
+    expect(container.querySelector("circle")).toBeNull();
+    expect(container.querySelector("[data-part='bolster']")).toBeNull();
+    // 浅白木柄的向光面比背光面亮
+    const light = container.querySelector("[data-part='handle']")!.getAttribute("fill")!;
+    const shade = container.querySelector("[data-part='handle-facet']")!.getAttribute("fill")!;
+    expect(contrastRatio(light, "#000000")).toBeGreaterThan(contrastRatio(shade, "#000000"));
+  });
+
+  it("刀背轮廓、和柄轮廓和墨黑口金对和纸底及侧栏各态底色对比度均满足 WCAG 1.4.11 >= 3:1", () => {
     const css = readFileSync("src/web/styles.css", "utf8");
     const cssHex = (varName: string) => {
       const m = new RegExp(`--${varName}:\\s*(#[0-9a-fA-F]{6});`).exec(css);
@@ -89,15 +101,12 @@ describe("KnifeAvatar（水果刀矢量头像，docs/ui-standard.md 第 4、21 �
     const { container } = render(<KnifeAvatar />);
     const blade = container.querySelector("[data-part='blade']")!;
     const handle = container.querySelector("[data-part='handle']")!;
-    const spineStroke = blade.getAttribute("stroke")!;
-    const handleFill = handle.getAttribute("fill")!;
+    const ferrule = container.querySelector("[data-part='ferrule']")!;
+    const graphics = [blade.getAttribute("stroke")!, handle.getAttribute("stroke")!, ferrule.getAttribute("fill")!];
 
-    expect(spineStroke).toMatch(/^#[0-9a-f]{6}$/i);
-    expect(handleFill).toMatch(/^#[0-9a-f]{6}$/i);
-
-    for (const bg of surfaces) {
-      expect(contrastRatio(spineStroke, bg)).toBeGreaterThanOrEqual(3);
-      expect(contrastRatio(handleFill, bg)).toBeGreaterThanOrEqual(3);
+    for (const color of graphics) {
+      expect(color).toMatch(/^#[0-9a-f]{6}$/i);
+      for (const bg of surfaces) expect(contrastRatio(color, bg)).toBeGreaterThanOrEqual(3);
     }
   });
 });

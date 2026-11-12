@@ -6,15 +6,15 @@ import { TEST_THEME } from "./test-theme.ts";
 describe("mermaid 主题：白底节点、1px 描边、前景色字，连线灰；不用默认的紫色", () => {
   it("节点底 = background，描边和连线 = muted-foreground，字 = foreground，字号 13.5px；分组和注释的边 = border", () => {
     expect(mermaidThemeVariables(TEST_THEME)).toMatchObject({
-      background: "#ffffff",
-      primaryColor: "#ffffff",
-      primaryBorderColor: "#71717a",
-      nodeBorder: "#71717a",
-      clusterBorder: "#ececef",
-      clusterBkg: "#f3f3f5",
-      primaryTextColor: "#18181b",
-      lineColor: "#71717a",
-      textColor: "#18181b",
+      background: "#fcfbf9",
+      primaryColor: "#fcfbf9",
+      primaryBorderColor: "#66635c",
+      nodeBorder: "#66635c",
+      clusterBorder: "#e8e6e1",
+      clusterBkg: "#f1efe9",
+      primaryTextColor: "#1c1b19",
+      lineColor: "#66635c",
+      textColor: "#1c1b19",
       fontFamily: "sans-serif",
       fontSize: "13.5px",
     });

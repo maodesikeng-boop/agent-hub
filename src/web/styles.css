@@ -17,7 +17,7 @@
   --color-border: var(--border);
   --color-ring: var(--ring);
   /* 用户气泡（docs/ui-standard.md 第 4 条）：当前强调色掺白的浅果冻底 + 前景色字，强调色本身只留给发送键和小圆点 */
-  --color-bubble-me: color-mix(in srgb, var(--primary) var(--mix-bubble-me), #ffffff);
+  --color-bubble-me: color-mix(in srgb, var(--primary) var(--mix-bubble-me), var(--background));
   --color-bubble-me-foreground: var(--foreground);
   /* 外壳底色掺一点当前项目经理的水果色（第 4 条“外壳底色”）：--fruit 由 lib/accent-scope.tsx 的 FruitTint 设在整个外壳上（左栏也在里面），
      没有当前项目经理时没设，退回原来的中性色。浓度只在 :root 的 --mix-* 改 */
@@ -68,27 +68,32 @@ html[data-ui-scale="xl"] {
 
 :root {
   /* 字体栈只在这里定义（docs/ui-standard.md 第 13 条，照 Claude desktop 和 t3code 用系统字体）：英文字体全排在中文字体前面，
-     英文和数字不会落到中文字体上，汉字在英文字体里没有字形，自动落到后面的苹方 / 冬青 / 雅黑。代码用等宽栈。 */
-  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+     英文和数字不会落到中文字体上，汉字在英文字体里没有字形，自动落到后面的苹方 / 冬青 / 雅黑。
+     日文字体（ヒラギノ角ゴ / 游ゴシック）排在中文字体后面：中文照旧落到苹方、雅黑，中文字体缺的假名和日文汉字才落到它们。代码用等宽栈。 */
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Yu Gothic UI", sans-serif;
   --font-code: "SF Mono", ui-monospace, Menlo, Consolas, "PingFang SC", "Microsoft YaHei", monospace;
 
-  --background: #ffffff;
-  --foreground: #18181b;
-  --sidebar: #f6f6f7;
-  --sidebar-active: #e9e9ec;
-  --sidebar-hover: #efeff1;
+  /* 中性色是和纸的暖白（白練 / 生成り微退半步）+ 墨色字（docs/ui-standard.md 第 4 条）：不发黄，只比冷白多一口暖气；
+     次要文字在 --background / --sidebar / --sidebar-hover / --sidebar-active / --muted 上都 ≥ 4.5:1（lib/palette.test.ts 守着） */
+  --background: #fcfbf9;
+  --foreground: #1c1b19;
+  --sidebar: #f4f3ef;
+  --sidebar-active: #e4e2db;
+  --sidebar-hover: #eceae4;
   /* 不属于任何项目经理的地方（左栏、设置、新建弹窗）用中性色；项目经理的会话里会被外层容器覆盖（lib/accent-scope.tsx） */
-  --primary: #18181b;
-  --primary-foreground: #ffffff;
-  --secondary: #f3f3f5;
-  --secondary-foreground: #18181b;
-  --muted: #f3f3f5;
-  --muted-foreground: #71717a;
-  --accent: #f1f1f3;
-  --border: #ececef;
+  --primary: #1c1b19;
+  --primary-foreground: #fcfbf9;
+  --secondary: #f1efe9;
+  --secondary-foreground: #1c1b19;
+  --muted: #f1efe9;
+  --muted-foreground: #66635c;
+  --accent: #efede7;
+  --border: #e8e6e1;
+  /* 再深一档的线：Markdown 引用块左边的竖线、表头下的线 */
+  --strong-border: #d6d3cb;
   /* 键盘焦点的圈：中性灰，不用主色（docs/ui-standard.md 第 7 条） */
-  --ring: #a1a1aa;
-  --bubble-agent: #f2f2f4;
+  --ring: #9e9b93;
+  --bubble-agent: #f0eee8;
   --warn: #fff4e0;
   --warn-foreground: #8a4b00;
   --danger: #d92d20;
@@ -479,7 +484,7 @@ code {
 }
 .markdown blockquote {
   padding-left: 1em;
-  border-left: 3px solid #d4d4d8;
+  border-left: 3px solid var(--strong-border);
   color: color-mix(in srgb, var(--foreground) 70%, transparent);
 }
 .markdown blockquote > :first-child {
@@ -588,7 +593,7 @@ code {
   text-align: left;
 }
 .markdown th {
-  border-bottom-color: #d4d4d8;
+  border-bottom-color: var(--strong-border);
   color: var(--muted-foreground);
   font-size: var(--text-minor);
   font-weight: 500;

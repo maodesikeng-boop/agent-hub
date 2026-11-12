@@ -31,6 +31,11 @@ describe("manifest", () => {
     expect(html).toContain(`<link rel="apple-touch-icon" href="${APP_ICONS.appleTouch}" />`);
     expect(html).toContain(`<meta name="theme-color" content="${THEME_COLOR}" />`);
   });
+
+  it("主题色和页面底色（styles.css 的 --background，和纸白）是同一个色，主屏 App 顶栏不露一条冷白边", () => {
+    const css = readFileSync("src/web/styles.css", "utf8");
+    expect(/--background: (#[0-9a-f]{6});/.exec(css)?.[1]).toBe(THEME_COLOR);
+  });
 });
 
 describe("Service Worker：只缓存网页外壳，不缓存接口", () => {
