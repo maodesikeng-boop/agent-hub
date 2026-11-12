@@ -5,15 +5,29 @@ export {
   GIT_READONLY_ENV,
   GitError,
   hasUncommittedChanges,
+  inspectWorktreeLink,
   isBranchMergedToMain,
+  isCommitMergedToMain,
   isRepoWithCommit,
   parseDiffNumstatZ,
+  pinDetachedHead,
   probeDiffNumstat,
+  probeOrphanContent,
   probeWorkspace,
   probeWorktreeForRemoval,
   pruneWorktrees,
   realpathLoose,
   removeWorktree,
+  resolveCommit,
 } from "./git.ts";
 export { probePr, probePrByUrl } from "./pr.ts";
-export type { AddWorktreeOptions, AddWorktreeResult, DiffFileStat, GitOptions } from "./git.ts";
+export type {
+  AddWorktreeOptions,
+  AddWorktreeResult,
+  DiffFileStat,
+  GitOptions,
+  OrphanContentProbe,
+  ProbeOrphanOptions,
+  WorktreeLink,
+  WorktreeRemovalProbe,
+} from "./git.ts";
