@@ -2,8 +2,8 @@
 // 打包时 vite.config.ts 用它生成 /manifest.webmanifest；图标文件在 public/icons/（scripts/render-icons.ts 从 icon.svg 画出来）。
 import { PRODUCT_NAME } from "../shared/names.ts";
 
-/** 主屏 App 的顶栏、启动画面的颜色：和页面背景一样的白（styles.css 的 --background）。 */
-export const THEME_COLOR = "#ffffff";
+/** 主屏 App 的顶栏、启动画面的颜色：和页面背景一样的和纸白（styles.css 的 --background，pwa.test.ts 校验两边一致）。 */
+export const THEME_COLOR = "#fcfbf9";
 
 export const APP_ICONS = {
   /** iOS 加到主屏用的（180×180，不透明，系统自己切圆角）。 */

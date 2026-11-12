@@ -136,6 +136,8 @@ describe("SliceWheelIcon：小水果切面进度轮", () => {
     ]);
     // 同层并行阶段 s2 与 s3 之间只切半刀（果心相连）
     expect(root.querySelectorAll("[data-cut-joined='true']")).toHaveLength(1);
+    // 家纹式的轴心留白：中心一枚果心圆，用切口同一个底色
+    expect(root.querySelector("[data-part='hub']")).toHaveAttribute("fill", "var(--cut)");
   });
 });
 

@@ -11,11 +11,11 @@ import * as vegaLite from "vega-lite";
 
 const theme: ChartTheme = {
   version: "test",
-  foreground: "#18181b",
-  mutedForeground: "#71717a",
-  border: "#ececef",
-  muted: "#f3f3f5",
-  background: "#ffffff",
+  foreground: "#1c1b19",
+  mutedForeground: "#66635c",
+  border: "#e8e6e1",
+  muted: "#f1efe9",
+  background: "#fcfbf9",
   fontFamily: "-apple-system, sans-serif",
   fontSize: 13.5,
   axisFontSize: 12,
