@@ -623,7 +623,7 @@ pnpm eval compare --base 9b87864^1 --head main        # 对照：自检 → 两�
 
 - 写入默认拒绝，仅放行当前试跑目录、专属 TMPDIR、系统设备、Claude 当前试跑会话目录与 todos/statsig/debug 状态目录，以及 ~/.claude.json 和它的临时文件。Claude 全局 CLAUDE.md、settings.json、settings.local.json、hooks* 明确禁写。
 - 路径同时覆盖原路径与 realpath；不存在的子路径从最近存在的祖先解析软链。git common-dir 定位真主仓库，主仓库、运行评测的 worktree、真数据目录、SSH/GitHub/AWS/Kube 等凭据路径均禁读。node_modules 原路径和真实目标在仓库禁读之后单独放行读取。
-- Claude projects 默认禁读，只放行当前试跑路径编码后的会话目录。标准 replay、其他运行结果及其他试跑现场禁读。替身只复制场景日志，不复制标准汇报或补丁。
+- Claude projects 默认禁读，只放行当前试跑路径编码后的会话目录。标准 replay、其他运行结果及其他试跑现场禁读。替身只复制场景声明的日志与 PR diff，不复制标准汇报、前情或性格设定注入文本。
 - SSH_AUTH_SOCK 清空，Git 禁止交互和系统配置，专属 gitconfig 清空 credential.helper 并重写场景 GitHub URL 到本地裸仓库。GH_TOKEN/GITHUB_TOKEN 为假哨兵。真实 gh、ssh 等执行路径受 SBPL 拒绝。
 - daemon 独立进程组，路由在模型禁读写的结果目录登记各会话进程组；沙箱规则、路由配置与替身程序也对模型禁写；正常结束、超时、退出与 SIGINT/SIGTERM 回收进程组。运行 ID 带毫秒和随机串；runs/、试跑结果与 w/ 目录写 PID 活跃标记，淘汰跳过仍存活的运行。transcript.md、pm-prompt.md 等文本最多 2 MiB，截断有明确标记。
 - 保留 471 对后台忙态与 R5 的修正。R5 有 worker.send 时交人工判断，不假装能确定自然语言责任归因。

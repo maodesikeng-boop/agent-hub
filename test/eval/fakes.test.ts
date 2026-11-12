@@ -1,24 +1,25 @@
 // 隔离零件的自测（不起守护进程、不派 Worker，Worker 沙箱里也能跑）：gh 替身回放和记录、git push 只记录、ssh 等只记录、
 // claude 分流脚本按角色分、沙箱规则里该挡的都在、给守护进程的环境变量断开了真 GitHub。
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { shortTmp } from "../e2e/harness.ts";
 import { readJsonl } from "./facts.ts";
 import { route, settingsWithoutOwnSandbox, type RouterConfig } from "./fakes/claude-router.ts";
 import { RECORD_ONLY_TOOLS, isolationEnv, pmSandboxProfile, realGitPath, scrubbedEnvNames, writeShims } from "./isolation.ts";
-import { REPLAY_DIR, scenarioById } from "./scenarios.ts";
-import type { GhCall, RecordedCall } from "./types.ts";
+import { REPLAY_DIR, SCENARIOS, scenarioById } from "./scenarios.ts";
+import { writeGhReplay } from "./trial.ts";
+import type { GhCall, RecordedCall, ScenarioId } from "./types.ts";
 
 const root = mkdtempSync(join(shortTmp(), "ah-evalfake-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
-function setup(scenarioId: "s3a-tray" | "s5a-ci-mirror") {
+function setup(scenarioId: ScenarioId) {
   const dir = mkdtempSync(join(root, "t-"));
   const paths = { binDir: join(dir, "bin"), ghDir: join(dir, "gh"), recordFile: join(dir, "recorded.jsonl") };
   writeShims(paths, { node: process.execPath, realGit: realGitPath() });
-  writeFileSync(join(paths.ghDir, "replay.json"), JSON.stringify({ ...scenarioById(scenarioId).gh, baseDir: REPLAY_DIR, logMaxBytes: 512 * 1024 }));
+  writeGhReplay(paths.ghDir, scenarioById(scenarioId));
   const env = { ...process.env, PATH: `${paths.binDir}:${process.env.PATH}`, EVAL_GH_DIR: paths.ghDir, EVAL_RECORD_FILE: paths.recordFile };
   const run = (cmd: string, args: string[], cwd = dir) => spawnSync(cmd, args, { cwd, env, encoding: "utf8" });
   return { dir, paths, run, ghCalls: () => readJsonl<GhCall>(join(paths.ghDir, "calls.jsonl")), recorded: () => readJsonl<RecordedCall>(paths.recordFile) };
@@ -61,6 +62,37 @@ describe("gh 替身", () => {
     const t = setup("s3a-tray");
     expect(t.run("gh", ["release", "create", "v1"]).status).toBe(0);
     expect(t.ghCalls()[0]).toMatchObject({ action: "unknown", argv: ["release", "create", "v1"] });
+  });
+
+  it.each(SCENARIOS)("writeGhReplay 拷齐 $id 的 diffFile 与 logFile（不读仓库 replay 目录、不漏记 calls.jsonl）", (scenario) => {
+    const t = setup(scenario.id);
+    const replayJson = JSON.parse(readFileSync(join(t.paths.ghDir, "replay.json"), "utf8")) as { baseDir: string };
+    expect(replayJson.baseDir).toBe(join(t.paths.ghDir, "replay"));
+    expect(existsSync(join(replayJson.baseDir, "habit/persona-line.md"))).toBe(false);
+    expect(existsSync(join(replayJson.baseDir, "tray/prelude.md"))).toBe(false);
+    let expectedCalls = 0;
+    for (const pr of scenario.gh.prs) {
+      if (pr.diffFile) {
+        const diff = t.run("gh", ["pr", "diff", String(pr.number)]);
+        expectedCalls++;
+        expect(diff.status, diff.stderr).toBe(0);
+        expect(diff.stdout).toBe(readFileSync(join(REPLAY_DIR, pr.diffFile), "utf8"));
+      }
+      const attempts = pr.checks?.attempts ?? [];
+      for (let i = 0; i < attempts.length; i++) {
+        if (i > 0) {
+          expect(t.run("gh", ["run", "rerun", String(pr.checks!.runId), "--failed"]).status).toBe(0);
+          expectedCalls++;
+        }
+        if (attempts[i]!.logFile) {
+          const log = t.run("gh", ["run", "view", String(pr.checks!.runId), "--log-failed"]);
+          expectedCalls++;
+          expect(log.status, log.stderr).toBe(0);
+          expect(log.stdout.length).toBeGreaterThan(0);
+        }
+      }
+    }
+    expect(t.ghCalls()).toHaveLength(expectedCalls);
   });
 });
 

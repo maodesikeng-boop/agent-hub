@@ -3,7 +3,7 @@
 // 真模型和剧本项目经理走同一条路，只差分流脚本的 mode（fakes/claude-router.ts）。
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { isQuotaExhausted, askOf, extractAskCard, type Message, type RateLimitInfo } from "../../src/shared/domain.ts";
 import { API_PATHS, type PersonaView } from "../../src/shared/index.ts";
@@ -98,11 +98,23 @@ function workerSessions(plan: TrialPlan, scenario: Scenario, ctx: ScenarioContex
   return [...sessions, { role: "worker", script: generic }];
 }
 
-/** gh 回放：回放文件的路径换成绝对路径，日志输出上限写进去（替身不读仓库里的 limits）。 */
-function writeGhReplay(ghDir: string, scenario: Scenario): void {
-  mkdirSync(ghDir, { recursive: true });
-  cpSync(REPLAY_DIR, join(ghDir, "replay"), { recursive: true, filter: (p) => statSync(p).isDirectory() || p.endsWith(".log") });
-  writeFileSync(join(ghDir, "replay.json"), JSON.stringify({ ...scenario.gh, baseDir: join(ghDir, "replay"), logMaxBytes: EVAL_GH_LOG_MAX_BYTES }));
+/** gh 回放：按场景引用的 diffFile 与 logFile 拷进试跑自己的 gh/replay/（真模型沙箱禁读仓库里的 test/eval/replay/）。 */
+export function writeGhReplay(ghDir: string, scenario: Scenario): void {
+  const replayDir = join(ghDir, "replay");
+  mkdirSync(replayDir, { recursive: true });
+  const files = new Set<string>();
+  for (const pr of scenario.gh.prs) {
+    if (pr.diffFile) files.add(pr.diffFile);
+    for (const attempt of pr.checks?.attempts ?? []) {
+      if (attempt.logFile) files.add(attempt.logFile);
+    }
+  }
+  for (const rel of files) {
+    const dst = join(replayDir, rel);
+    mkdirSync(dirname(dst), { recursive: true });
+    copyFileSync(join(REPLAY_DIR, rel), dst);
+  }
+  writeFileSync(join(ghDir, "replay.json"), JSON.stringify({ ...scenario.gh, baseDir: replayDir, logMaxBytes: EVAL_GH_LOG_MAX_BYTES }));
 }
 
 function copyShots(scenario: Scenario, ctx: ScenarioContext): void {
