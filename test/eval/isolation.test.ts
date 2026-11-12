@@ -5,7 +5,7 @@ import { createServer } from "node:http";
 import { installHubShim } from "../../src/daemon/agent-api/shim.ts";
 import { join } from "node:path";
 import { afterAll, expect, it } from "vitest";
-import { CLAUDE_CONFIG_STATE_DIRS, claudeEnvScript, claudeScratchRules, mainRepoRoot, pmSandboxInput, pmSandboxProfile, realOr, SANDBOX_EXEC, SHIM_NAMES, writeShims } from "./isolation.ts";
+import { CLAUDE_CONFIG_STATE_DIRS, claudeEnvScript, claudeScratchRules, mainRepoRoot, pmSandboxInput, pmSandboxProfile, readDenyProbes, realOr, SANDBOX_EXEC, SHIM_NAMES, writeShims } from "./isolation.ts";
 import { boundedText, markActive } from "./lifecycle.ts";
 import { pruneFailedWork, pruneRuns } from "./report.ts";
 const root = mkdtempSync(join(tmpdir(), "eval-isolation-"));
@@ -309,3 +309,26 @@ for (const sandboxed of [false, true]) {
     }
   }, 30_000);
 }
+
+it("旧提交的被测目录没有 test/eval/replay：这条可选禁读探测跳过（不因 ENOENT 误拦），真账本、~/.ssh、HANDOVER.md、真仓库仍必探", () => {
+  const home = join(root, "old-home");
+  const oldCheckout = join(root, "old-checkout"); // 像 9b87864^1：还没有 test/eval/replay
+  mkdirSync(oldCheckout, { recursive: true });
+  execFileSync("git", ["-C", oldCheckout, "init", "-q"]);
+  const input = pmSandboxInput(oldCheckout, { HOME: home });
+  const replay = join(oldCheckout, "test/eval/replay");
+  expect(input.readDenied).toContain(replay);
+  const probes = readDenyProbes({ ...input, readDenied: [...(input.readDenied ?? []), join(input.home, ".agent-hub-eval/runs")] });
+  const byPath = new Map(probes.map((p) => [p.path, p.skip]));
+  expect(byPath.get(replay)).toBe(true);
+  for (const required of [join(input.home, ".agent-hub"), join(input.home, ".ssh"), join(input.mainRepo ?? input.realRepo, "HANDOVER.md"), input.realRepo]) {
+    expect(byPath.get(required), required).toBe(false);
+  }
+  // 被测目录有 replay（新提交）时照常严查
+  mkdirSync(replay, { recursive: true });
+  expect(readDenyProbes(input).find((p) => p.path === replay)?.skip).toBe(false);
+  // 路径不存在时规则里照样禁（以后被建出来也读不了），且整份规则能编译
+  const profile = pmSandboxProfile({ ...input, readDenied: [join(root, "never-created/test/eval/replay")] });
+  expect(profile).toContain(`(subpath "${join(root, "never-created/test/eval/replay")}")`);
+  if (canCompile) expect(compileSbpl(profile).status).toBe(0);
+});

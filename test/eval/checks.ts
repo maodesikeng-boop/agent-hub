@@ -72,11 +72,13 @@ export function isDiffRead(segment: string): boolean {
 }
 
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp)$/i;
+/** 纯文档（设计文档、README、AGENTS.md 之类）：读它们核对数字、规矩不算“读代码”；源码（.ts .tsx .js .rs .swift .css…）仍算。 */
+const DOC_EXT = /\.(?:md|mdx|markdown)$/i;
 const READ_COMMANDS = /^(?:cat|sed|head|tail|less|more|bat|nl|awk)\b/;
 
-/** 这次工具调用是不是在读代码：Read 了 Worker worktree 里的文件、或改动名单里的文件；Bash 用 cat/sed… 读它们；完整 diff。 */
+/** 这次工具调用是不是在读代码：Read 了 Worker worktree 里的文件（.md 文档除外）、或改动名单里的文件；Bash 用 cat/sed… 读它们；完整 diff。 */
 export function codeReadOf(tool: FactTool, worktrees: readonly string[], changedFiles: readonly string[]): string | null {
-  const touches = (path: string) => worktrees.some((w) => path.startsWith(w)) || changedFiles.some((f) => path.endsWith(f));
+  const touches = (path: string) => !DOC_EXT.test(path) && (worktrees.some((w) => path.startsWith(w)) || changedFiles.some((f) => path.endsWith(f)));
   if (tool.name === "Read") {
     const path = String(tool.input.file_path ?? "");
     return !IMAGE_EXT.test(path) && touches(path) ? `读文件 ${path}` : null;
