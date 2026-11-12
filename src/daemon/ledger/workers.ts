@@ -189,7 +189,7 @@ export interface LedgerWorkersTaskGraphHooks {
     p: Pending,
     workerId: WorkerId,
     opts: { hadLatestDoneReport: boolean; incomplete: boolean; summary?: string | null; branch?: string | null },
-  ) => void;
+  ) => string | null;
 }
 
 export function createLedgerWorkers(
@@ -675,18 +675,22 @@ export function createLedgerWorkers(
       "SELECT max(id) AS id FROM messages WHERE conversation_id = ? AND sender IN ('pm', 'user')",
       ended.worker_conversation_id,
     )?.id ?? 0;
-    options.taskGraphs?.onWorkerEndedIn(p, ended.id, {
+    // 收工会顺带改任务图：绑定的节点标完成或变成等接手。回执里写明（nodeNote），不让项目经理事后才从 hub graph show 发现
+    const nodeNote = options.taskGraphs?.onWorkerEndedIn(p, ended.id, {
       hadLatestDoneReport: !interrupted && latestOutcome?.event === "report" && latestOutcome.status === "done" && latestOutcome.id > latestInputId,
       incomplete: args.incomplete === true,
       summary: latestOutcome?.summary ?? null,
       branch: ended.branch,
-    });
+    }) ?? null;
     const cleanup =
       ended.workspace === "worktree"
         ? ` worktree ${ended.worktree_path} 和分支 ${ended.branch} 还在：PR 合并后或收工满 ${WORKTREE_RETENTION_DAYS} 天且没有未提交改动时会自动清理 worktree（分支保留）。`
         : "";
     const interruptNote = interrupted ? "已打断正在跑的那一轮。" : "";
-    return { text: `Worker #${ended.id}“${ended.title}”已收工。${interruptNote}${cleanup}`, data: { worker: toWorkerRecord(ended) } };
+    return {
+      text: `Worker #${ended.id}“${ended.title}”已收工。${interruptNote}${nodeNote === null ? "" : ` ${nodeNote}`}${cleanup}`,
+      data: { worker: toWorkerRecord(ended) },
+    };
   };
 
   /** 归档项目经理时结束它下面所有 status = 'open' 的 Worker。 */

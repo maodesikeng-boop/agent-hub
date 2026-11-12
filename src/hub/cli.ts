@@ -20,6 +20,8 @@ import {
 import {
   HUB_CLI_STDIN_IDLE_MS,
   HUB_CLI_TIMEOUT_MS,
+  ENV_SETUP_ROOT_PATH,
+  ENV_SETUP_WORKTREE_PATH,
   HUB_MAX_BODY_BYTES,
   MIN_SCHEDULE_EVERY_MINUTES,
   ROUTER_OPTION_MAX_COUNT,
@@ -70,7 +72,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     command: "status",
     group: "status",
     cli: "status",
-    usage: `  ${hub} status                                              我是谁、我的项目和文件夹`,
+    usage: `  ${hub} status                                              我是谁、我的项目、文件夹、worktree 准备命令和活跃的任务图`,
   },
   {
     command: "project.create",
@@ -78,7 +80,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     action: "create",
     cli: "project create",
     usage: `  ${hub} project create --folder <主文件夹> [--name <名>] [--description <说明>]
-                                                          建项目（一个项目经理只管一个项目）`,
+                                                          建项目（文件夹要已经存在；一个项目经理只管一个项目）`,
   },
   {
     command: "project.attach",
@@ -102,7 +104,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     usage: `  ${hub} project setup --stdin | --clear                     设置（从标准输入读）或清除 worktree 准备命令：
                                                           给 Worker 建好 worktree 后先在里面跑它，跑完 Worker 再开工。
                                                           用守护进程的 $SHELL -c 跑，标准输入是空的，最多 ${SETUP_TIMEOUT_MS / 60_000} 分钟；
-                                                          能用 AGENT_HUB_ROOT_PATH（主文件夹）、AGENT_HUB_WORKTREE_PATH。
+                                                          能用 $${ENV_SETUP_ROOT_PATH}（主文件夹）、$${ENV_SETUP_WORKTREE_PATH}。
                                                           别把密钥写进命令：原文会出现在日志和失败附注里`,
   },
   {
@@ -110,14 +112,15 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     group: "persona",
     action: "show",
     cli: "persona show",
-    usage: `  ${hub} persona show`,
+    usage: `  ${hub} persona show                                        查看现在的性格设定和模式`,
   },
   {
     command: "persona.edit",
     group: "persona",
     action: "edit",
     cli: "persona edit",
-    usage: `  ${hub} persona edit [--mode ${PM_MODES.join("|")}] [--reason <理由>] [--stdin | --text <新的完整性格设定>]`,
+    usage: `  ${hub} persona edit [--mode ${PM_MODES.join("|")}] [--reason <理由>] [--stdin | --text <新的完整性格设定>]
+                                                          改模式或性格设定（正文是改完以后的完整性格设定，不是增量）；改完马上生效`,
   },
   {
     command: "models",
@@ -131,7 +134,8 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     action: "start",
     cli: "worker start",
     usage: `  ${hub} worker start --title <标题> [--vendor ${AGENT_VENDORS.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--max-time <时长>] [--readonly] [--no-worktree] [--node <节点> [--graph <图编号>]] --stdin
-                                                          派一个 Worker，任务说明从标准输入读（--max-time 本轮最大容忍时间，默认 30m；--node 绑定任务图节点）`,
+                                                          派一个 Worker，任务说明从标准输入读（--max-time 本轮最大容忍时间，默认 30m，超了叫醒项目经理、不打断 Worker；
+                                                          --node 绑到任务图里轮到的（ready）或等人接手的（attention）节点上，不带就是不绑图的临时 Worker）`,
   },
   {
     command: "worker.send",
@@ -152,7 +156,9 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     group: "worker",
     action: "end",
     cli: "worker end",
-    usage: `  ${hub} worker end <编号> [--incomplete]                     收工：结束这个 Worker 的会话（--incomplete 标记节点未完成待接手）`,
+    usage: `  ${hub} worker end <编号> [--incomplete]                     收工：结束这个 Worker 的会话（正在跑的一轮先被打断）。绑了任务图节点的：
+                                                          它最近一轮汇报是“做完了”，节点自动标完成并解锁下游；否则节点变成 attention 等人接手。
+                                                          换人时加 --incomplete：不管它汇报了什么，节点都等人接手。回执里会写明节点变成了什么`,
   },
   {
     command: "worker.list",
@@ -199,7 +205,8 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     cli: "schedule add",
     usage: `  ${hub} schedule add --name <名> (--daily HH:MM | --every 30m|2h) --stdin
                                                           建定时任务：到点把任务说明（从标准输入读）发到我自己的对话里。
-                                                          --daily 是每天几点（本机时间），--every 是每隔多久（最短 ${MIN_SCHEDULE_EVERY_MINUTES} 分钟）`,
+                                                          --daily 是每天几点（本机时间），--every 是每隔多久（最短 ${MIN_SCHEDULE_EVERY_MINUTES} 分钟）。
+                                                          用户要日报才建，任务说明按“昨天做完什么 / 什么在等你 / 什么在进行 / 风险”四段写`,
   },
   {
     command: "schedule.list",
@@ -265,7 +272,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     group: "graph",
     action: "show",
     cli: "graph show",
-    usage: `  ${hub} graph show [<图编号>]                                查看当前活跃任务图或指定编号任务图`,
+    usage: `  ${hub} graph show [<图编号>]                                查看当前活跃任务图或指定编号任务图：每个节点的状态、Worker 和结果（分支、提交、PR、摘要、定案）`,
   },
   {
     command: "graph.list",
@@ -288,7 +295,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     group: "graph",
     action: "patch",
     cli: "graph patch",
-    usage: `  ${hub} graph patch [<图编号>] --stdin                       从标准输入 JSON 增量增删改任务图节点与依赖边
+    usage: `  ${hub} graph patch [<图编号>] --stdin                       从标准输入 JSON 增量增删改任务图节点与依赖边、跳过还没开工的节点（已经结束的图不能改）
                                                           JSON：${TASK_GRAPH_PATCH_JSON_HINT}`,
   },
   {
@@ -297,7 +304,8 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     action: "done",
     cli: "graph done",
     usage: `  ${hub} graph done <节点> [--graph <图编号>] [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要> | --stdin]
-                                                          标记阶段节点完成并解锁下游`,
+                                                          把没有 Worker 在干的阶段节点标完成并解锁下游，或给节点补记 PR 等结果（图已完成时加 --graph <图编号>）；
+                                                          有 Worker 在干（running）的节点会被拒绝：先 ${hub} worker end 让它收工`,
   },
   {
     command: "graph.decide",
@@ -324,9 +332,13 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
 ];
 
 /** 守护进程级命令（不进账本的 hubCall，单独一条路由）。 */
-const SELF_RELOAD_USAGE = `  ${hub} self-reload [--build]                              等全库空闲后热重启守护进程（立即返回；--build 先构建网页，失败就取消）`;
+const SELF_RELOAD_USAGE = `  ${hub} self-reload [--build]                              ${PRODUCT_ID} 自身代码合进来后热重启守护进程：立即返回，等所有会话这一轮收尾、
+                                                          全库空闲后自动重启（调它的这一轮也要先结束）；--build 先在后台构建网页，失败就取消、不重启`;
 
-/** hub 用法，给人看（hub help、未知顶层命令或环境变量缺失时打印）。给 agent 看的另有一份：daemon/prompt.ts 的 HUB_USAGE_PROMPT。改一份，记得改另一份。 */
+/**
+ * hub 用法（hub help、未知顶层命令或环境变量缺失时打印），人和 agent 都看。给项目经理的提示词里另有一份精简的：daemon/prompt.ts 的 HUB_USAGE_PROMPT，
+ * 那里项目、性格设定、定时任务、总助、热重启各只留一行，参数让它用 hub help 查；所以这几组的参数和注意事项要在这里写全。改一份，记得看另一份。
+ */
 export const HUB_USAGE = `用法：
 ${HUB_COMMAND_SPECS.map((s) => s.usage).join("\n")}
 ${SELF_RELOAD_USAGE}

@@ -4,7 +4,7 @@
 // 新起的进程算不算“按最新的拼过了”看厂商（personaSeenAtStart 的 rebaked）：
 // - claude --resume 沿用会话最初的系统提示词（2.1.314 实测：transcript 里存了第一次请求的 shape，换了 --append-system-prompt-file
 //   也不用）；codex thread/resume 也沿用最初的 developerInstructions（0.162 实测，冒烟 S30）：恢复的进程不算，接着用之前看到的；
-// - 新会话（--session-id、thread/start）、agy 每个新进程（第一条消息前面重新带系统指令）算。
+// - 新会话（--session-id、thread/start）、agy 每个新进程（起进程时按最新的 prompt.md 重写规则目录，见 vendors/agy/rules.ts）算。
 // 实测记录见 docs/persona-updates.md。
 import type { AgentSessionRow, DriverOptions, SessionId } from "../../shared/index.ts";
 

@@ -1,6 +1,6 @@
 // Antigravity (agy) 驱动层：每个会话一个 agy 进程（--input-format stream-json --output-format stream-json --print ""），
 // 公共会话状态机（待发队列合并与取消、用量节流、启动/空闲/打断定时器、前缀说明注入与回退、后台任务跟踪与空闲保活等）继承自 BaseSessionDriver；
-// 本文件负责 agy 专有协议：首条消息系统提示词注入、init 会话 ID 持久化与 --conversation 恢复、step_update 流式事件与后台任务状态映射、
+// 本文件负责 agy 专有协议：系统提示词写成规则目录并用 --add-dir 挂上（rules.ts，不拼进首条消息）、init 会话 ID 持久化与 --conversation 恢复、step_update 流式事件与后台任务状态映射、
 // 只读 Worker 连接器拦截与沙箱包装、被拒后自动补一轮。
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
