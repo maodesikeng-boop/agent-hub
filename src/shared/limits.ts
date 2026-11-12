@@ -736,6 +736,12 @@ export const MAX_GRAPH_SPEC_BYTES = 64 * 1024;
 /** 节点完成产物摘要字数上限。 */
 export const MAX_NODE_ARTIFACT_SUMMARY_CHARS = 500;
 export const MAX_NODE_ARTIFACT_BYTES = 4 * MAX_NODE_ARTIFACT_SUMMARY_CHARS;
+/** hub graph show、换新会话的交接摘要里，每个节点的产物摘要、定案说明各最多显示多少字（完整内容在库里；一张图最多 MAX_GRAPH_NODES 个节点，每个不把上下文塞满）。 */
+export const GRAPH_TEXT_NODE_NOTE_CHARS = 160;
+/** 同上，每个节点最多列几个经手过的 Worker（换过很多次人的只列最近几个）。 */
+export const GRAPH_TEXT_NODE_WORKERS_MAX = 3;
+/** 换新会话的交接摘要里“未完结的任务图”一节的总字数上限（最多 MAX_ACTIVE_GRAPHS_PER_PROJECT 张图）：超了的图只留一行进度，详情用 hub graph show 看。 */
+export const HANDOVER_GRAPHS_MAX_CHARS = 8_000;
 /** 历史任务图分页大小与 CLI 列表默认条数。 */
 export const GRAPH_HISTORY_PAGE_SIZE = 20;
 export const HUB_GRAPH_LIST_LIMIT = 20;

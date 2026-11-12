@@ -9,7 +9,7 @@ import type {
   SkipTaskNodeResponse,
   TaskGraphsPage,
 } from "../../shared/api.ts";
-import { userMessageDedupeKey, validateAskOptions } from "../../shared/domain.ts";
+import { truncateChars, userMessageDedupeKey, validateAskOptions } from "../../shared/domain.ts";
 import type {
   AgentSessionRow,
   ConversationId,
@@ -38,6 +38,9 @@ import type {
 import {
   COMPLETED_GRAPH_RETENTION_MS,
   GRAPH_HISTORY_PAGE_SIZE,
+  GRAPH_TEXT_NODE_NOTE_CHARS,
+  GRAPH_TEXT_NODE_WORKERS_MAX,
+  HANDOVER_GRAPHS_MAX_CHARS,
   HUB_GRAPH_LIST_LIMIT,
   MAX_ACTIVE_GRAPHS_PER_PROJECT,
   MAX_DECISION_CHOICE_CHARS,
@@ -348,6 +351,38 @@ function toTaskNode(row: TaskNodeDbRow): TaskNode {
   };
 }
 
+/** 压成一行并截到 GRAPH_TEXT_NODE_NOTE_CHARS 个字：节点结果里的自由文本（摘要、定案说明、分支、PR）都过它。 */
+const clipNote = (text: string): string => truncateChars(text.replace(/\s+/g, " ").trim(), GRAPH_TEXT_NODE_NOTE_CHARS);
+
+/**
+ * 节点下面的结果行：分支、提交、PR 一行，摘要一行，定案一行；什么都没有就不出。
+ * 换人接手、换新会话后不用再去翻旧汇报抄分支和 PR。每项都截断（clipNote），一个节点最多三行。
+ */
+function nodeResultLines(node: TaskNode): string[] {
+  const lines: string[] = [];
+  const { artifact, decision } = node;
+  const refs: string[] = [];
+  if (artifact?.branch) refs.push(`分支 ${clipNote(artifact.branch)}`);
+  if (artifact?.commit) refs.push(`提交 ${clipNote(artifact.commit)}`);
+  if (artifact?.prUrl) refs.push(`PR ${clipNote(artifact.prUrl)}`);
+  if (refs.length > 0) lines.push(`      ${refs.join(" · ")}`);
+  if (artifact?.summary) lines.push(`      摘要：${clipNote(artifact.summary)}`);
+  if (decision !== null) {
+    const note = decision.note ? `（${clipNote(decision.note)}）` : "";
+    lines.push(`      定案：${decision.choice === null ? "没选选项" : clipNote(decision.choice)}${note}`);
+  }
+  return lines;
+}
+
+/** 节点那一行后面的 Worker：在干的写“Worker #N”；没人在干但有人干过的写“经手 Worker #a、#b”（最近 GRAPH_TEXT_NODE_WORKERS_MAX 个）。 */
+function nodeWorkerNote(node: TaskNode): string {
+  if (node.activeWorkerId !== null) return ` · Worker #${node.activeWorkerId}`;
+  if (node.workerIds.length === 0) return "";
+  const recent = node.workerIds.slice(-GRAPH_TEXT_NODE_WORKERS_MAX);
+  return ` · 经手${node.workerIds.length > recent.length ? "（最近的）" : ""} Worker ${recent.map((id) => `#${id}`).join("、")}`;
+}
+
+/** hub graph show、hub graph patch 的回执、换新会话的交接摘要共用的一张图的文本：每个节点一行状态，下面是它的结果（nodeResultLines）。 */
 function formatGraphText(graph: TaskGraph): string {
   const depMap = new Map<string, string[]>();
   for (const e of graph.edges) {
@@ -362,11 +397,22 @@ function formatGraphText(graph: TaskGraph): string {
   for (const n of graph.nodes) {
     const deps = depMap.get(n.key);
     const depNote = deps && deps.length > 0 ? ` ← [${deps.join(", ")}]` : "";
-    const workerNote = n.activeWorkerId !== null ? ` · Worker #${n.activeWorkerId}` : "";
     const kindNote = n.kind === "gate" ? " [门禁]" : "";
-    lines.push(`  - [${n.status}] ${n.key}：${n.title}${kindNote}${workerNote}${depNote}`);
+    lines.push(`  - [${n.status}] ${n.key}：${n.title}${kindNote}${nodeWorkerNote(n)}${depNote}`, ...nodeResultLines(n));
   }
   return lines.join("\n");
+}
+
+/** 一张图只留一行进度（交接摘要超过总字数上限时用）。 */
+function formatGraphBrief(graph: TaskGraph): string {
+  const settled = graph.nodes.filter((n) => n.status === "done" || n.status === "skipped").length;
+  return `任务图 #${graph.id}「${graph.title}」（状态：${graph.status}，进度 ${settled}/${graph.nodes.length}；详情用 ${HUB_COMMAND} graph show ${graph.id} 看）`;
+}
+
+/** 改图的命令回执里共用的一段：这次自动解锁了哪些节点，或者整张图是不是完结了。 */
+function unlockedNoteOf(unlocked: ReadonlyArray<{ key: TaskNodeKey; status: TaskNodeStatus }>, graph: TaskGraph): string {
+  if (unlocked.length > 0) return `；已自动解锁：${unlocked.map((u) => `${u.key} [${u.status}]`).join("、")}`;
+  return graph.status === "completed" ? "；整张任务图已全部完结！" : "";
 }
 
 export interface WorkerBindTarget {
@@ -1111,7 +1157,7 @@ export function createLedgerTaskGraphs(
     return { text: `已更新${formatGraphText(graph)}`, data: { graph } };
   };
 
-  /** hub graph done <nodeKey>：PM 标记 piece 节点完成并记录产物摘要。 */
+  /** hub graph done <nodeKey>：PM 标记 piece 节点完成并记录产物摘要；有 Worker 在干（running）的节点拒绝，先收工。 */
   const doneIn = (
     p: Pending,
     caller: AgentSessionRow & { pmId: PmId },
@@ -1127,6 +1173,15 @@ export function createLedgerTaskGraphs(
     );
     if (node === undefined) throw fail("not_found", `任务图 #${graphRow.id} 中没有节点「${nodeKey}」`);
     if (node.kind !== "piece") throw fail("invalid", `门禁节点「${nodeKey}」请通过用户拍板或 ${HUB_COMMAND} graph decide 完成`);
+    // 在干的节点不能绕过 Worker 直接标完成（它还在改东西，下游会基于没做完的结果开工）：先让 Worker 收工，节点由收工时的汇报决定
+    if (node.status === "running") {
+      const who = node.active_worker_id === null ? "Worker" : `Worker #${node.active_worker_id}`;
+      const end = node.active_worker_id === null ? `${HUB_COMMAND} worker end <编号>` : `${HUB_COMMAND} worker end ${node.active_worker_id}`;
+      throw fail(
+        "conflict",
+        `节点「${nodeKey}」正在由 ${who} 执行，不能直接标完成。先用 ${end} 让它收工：它最近一轮汇报是“做完了”时节点会自动标完成；要补记 PR 等结果，收工后再调 ${HUB_COMMAND} graph done`,
+      );
+    }
 
     const summary = args.summary?.trim();
     if (summary !== undefined && charLen(summary) > MAX_NODE_ARTIFACT_SUMMARY_CHARS) {
@@ -1158,14 +1213,8 @@ export function createLedgerTaskGraphs(
     const graph = loadGraph(graphRow.id)!;
     p.changes.push({ type: "task_graph.updated", data: { graph } });
 
-    const unlockedNote =
-      unlocked.length > 0
-        ? `；已自动解锁：${unlocked.map((u) => `${u.key} [${u.status}]`).join("、")}`
-        : graph.status === "completed"
-          ? "；整张任务图已全部完结！"
-          : "";
     return {
-      text: `节点「${nodeKey}」已标记为 done${unlockedNote}`,
+      text: `节点「${nodeKey}」已标记为 done${unlockedNoteOf(unlocked, graph)}`,
       data: { graph },
     };
   };
@@ -1650,20 +1699,23 @@ export function createLedgerTaskGraphs(
    * Worker 收工（hub worker end 或归档收工）：
    * - 仅当 !incomplete 且最近一轮汇报状态为“做完了”时，置为 done 并自动解锁下游；
    * - 传了 --incomplete（如对话超过 WORKER_SEND_MAX_TOKENS 的 200K 上限换人接力）或未汇报“做完了”即收工时，置为 attention 且清空 active_worker_id，等待接力 Worker 重绑。
+   * 返回给 hub worker end 回执用的一句话：它绑定的节点变成了什么、解锁了谁、接下来怎么办；没绑节点（或图已结束）返回 null。
    */
   const onWorkerEndedIn = (
     p: Pending,
     workerId: WorkerId,
     opts: { hadLatestDoneReport: boolean; incomplete: boolean; summary?: string | null; branch?: string | null },
-  ): void => {
+  ): string | null => {
     const node = db.get<TaskNodeDbRow>(
       "SELECT * FROM task_graph_nodes WHERE active_worker_id = ?",
       workerId,
     );
-    if (node === undefined) return;
+    if (node === undefined) return null;
     const graphRow = getGraphRow(node.graph_id);
-    if (graphRow === undefined || graphRow.status !== "active") return;
+    if (graphRow === undefined || graphRow.status !== "active") return null;
     const t = now();
+    const where = `任务图 #${graphRow.id} 的节点「${node.node_key}」`;
+    let note: string;
 
     if (!opts.incomplete && opts.hadLatestDoneReport) {
       const prevArtifact = parseJsonOr<TaskArtifact>(node.artifact_json, {});
@@ -1683,7 +1735,9 @@ export function createLedgerTaskGraphs(
         t,
         node.id,
       );
-      recomputeGraphProgressIn(p, graphRow);
+      const unlocked = recomputeGraphProgressIn(p, graphRow);
+      const after = loadGraph(graphRow.id);
+      note = `它绑定的${where}已标记为 done（它最近一轮汇报是“做完了”）${after === null ? "" : unlockedNoteOf(unlocked, after)}。`;
     } else {
       db.run(
         `UPDATE task_graph_nodes
@@ -1695,10 +1749,13 @@ export function createLedgerTaskGraphs(
         node.id,
       );
       db.run("UPDATE task_graphs SET updated_at = ? WHERE id = ?", t, graphRow.id);
+      const why = opts.incomplete ? "带了 --incomplete" : "它最近一轮没有汇报“做完了”";
+      note = `它绑定的${where}变成 attention，等人接手（${why}）：用 ${HUB_COMMAND} worker start --node ${node.node_key} 新派 Worker 接手，不需要了用 ${HUB_COMMAND} graph skip ${node.node_key}。`;
     }
 
     const graph = loadGraph(graphRow.id);
     if (graph !== null) p.changes.push({ type: "task_graph.updated", data: { graph } });
+    return note;
   };
 
   // ---- 快照、status 摘要、交接实时注入与保留期清理 ----
@@ -1749,7 +1806,7 @@ export function createLedgerTaskGraphs(
     };
   };
 
-  /** 供 handover.ts 的 sessionPreamble 实时注入：PM 换新会话时一眼看清当前全部活跃图与各节点实时状态。 */
+  /** 供 handover.ts 的 sessionPreamble 实时注入：PM 换新会话时一眼看清当前全部活跃图、各节点实时状态和已有的结果（分支、PR、摘要、定案）。 */
   const liveHandoverSection = (pmId: PmId): string | null => {
     const rows = db.all<TaskGraphDbRow>(
       "SELECT * FROM task_graphs WHERE pm_id = ? AND status = 'active' ORDER BY id ASC",
@@ -1757,7 +1814,18 @@ export function createLedgerTaskGraphs(
     );
     if (rows.length === 0) return null;
     const graphs = hydrateGraphs(rows);
-    return graphs.map(formatGraphText).join("\n\n");
+    // 每个节点带着分支、PR、摘要、定案（formatGraphText）；总字数有上限：按最近动过的先给全文，放不下的只留一行进度
+    const byRecent = [...graphs].sort((a, b) => b.updatedAt - a.updatedAt || b.id - a.id);
+    const texts = new Map<TaskGraphId, string>();
+    let used = 0;
+    for (const graph of byRecent) {
+      const full = formatGraphText(graph);
+      const fits = used + charLen(full) <= HANDOVER_GRAPHS_MAX_CHARS;
+      const text = fits ? full : formatGraphBrief(graph);
+      used += charLen(text);
+      texts.set(graph.id, text);
+    }
+    return graphs.map((g) => texts.get(g.id)!).join("\n\n");
   };
 
   /** 定期清理：删除已完成/已取消满 COMPLETED_GRAPH_RETENTION_MS（90 天）的任务图（外键 CASCADE 自动删节点与边）。 */
