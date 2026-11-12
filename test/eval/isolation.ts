@@ -76,6 +76,28 @@ export function whichFirst(name: string, pathEnv = process.env.PATH ?? ""): stri
 
 const sq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
+/** 替身的名字：gh、git 和只记录的那几个。 */
+export const SHIM_NAMES = ["gh", "git", ...RECORD_ONLY_TOOLS] as const;
+
+/**
+ * CLAUDE_ENV_FILE 的内容。claude 每条 Bash 的拼法是：source 用户登录 shell 的快照 → source 这个文件 → 再跑命令（claude 2.1.x 实测），
+ * 所以这里是最后一道：
+ * 1. 把替身目录放回 PATH 最前面（快照里的 PATH 是用户 .zprofile、/etc/zprofile 的 path_helper 排过的，真 gh 在 /opt/homebrew/bin、~/.local/bin）。
+ * 2. 快照里用户的同名别名、函数（`alias gh=…`、`gh() {…}`）优先级比 PATH 高，`command -v gh` 会先命中它们：一并去掉。
+ * 3. 清命令路径缓存（hash -r），之前解析出的真 gh 路径不再生效。
+ * 真 gh 万一还是被调到（比如命令里又起了一个登录 shell，path_helper 重排了 PATH），沙箱也不许它执行（pmSandboxProfile 的 denyExec）。
+ */
+export function claudeEnvScript(binDir: string): string {
+  return [
+    `export PATH=${sq(binDir)}:"$PATH"`,
+    `for __eval_shim in ${SHIM_NAMES.join(" ")}; do unalias "$__eval_shim" 2>/dev/null; unset -f "$__eval_shim" 2>/dev/null; done`,
+    "unset __eval_shim",
+    "hash -r 2>/dev/null",
+    ":",
+    "",
+  ].join("\n");
+}
+
 export interface ShimPaths {
   binDir: string;
   ghDir: string;
@@ -147,9 +169,9 @@ export function isolationEnv(input: IsolationInput): Record<string, string> {
     ].join("\n"),
   );
   // claude 的 Bash 先套用户登录 shell 的快照（用户的 .zprofile 会把 ~/.local/bin、homebrew 提到 PATH 最前面，真 gh 就在那里），
-  // 再 source CLAUDE_ENV_FILE：在这里把替身目录放回最前面。真 gh 万一还是被调到，沙箱也不许它执行（pmSandboxProfile）。
+  // 再 source CLAUDE_ENV_FILE：在这里把替身目录放回最前面（claudeEnvScript）。
   const claudeEnvFile = join(input.workDir, "claude-env.sh");
-  writeFileSync(claudeEnvFile, `export PATH=${sq(input.binDir)}:"$PATH"\n`);
+  writeFileSync(claudeEnvFile, claudeEnvScript(input.binDir));
   const routerConfigFile = join(input.workDir, "router.json");
   writeFileSync(routerConfigFile, JSON.stringify(input.routerConfig));
   return {
@@ -194,6 +216,31 @@ export interface PmSandboxInput {
   denyExec: string[];
   /** 真守护进程可能听的本机端口。 */
   daemonPorts: number[];
+  /** 当前用户的 uid（claude 的临时目录叫 claude-<uid>）；默认 process.getuid?.()，取不到就放行任意 claude-<数字>。 */
+  uid?: number;
+}
+
+/**
+ * claude 在 claudeConfigDir 下跑多轮工具调用必须写的状态目录（别的一概不放行）：
+ * todos、tasks（待办）、statsig、telemetry（统计）、debug（日志）、shell-snapshots（Bash 的 shell 快照）、session-env（会话环境）、
+ * file-history（编辑前备份）、backups（.claude.json 的备份）、cache。
+ * 不含：CLAUDE.md、settings*.json、hooks（pmSandboxProfile 末尾再显式禁一遍）、projects（只放行被测项目自己的）、plugins、skills。
+ */
+export const CLAUDE_CONFIG_STATE_DIRS = ["todos", "tasks", "statsig", "telemetry", "debug", "shell-snapshots", "session-env", "file-history", "backups", "cache"] as const;
+/** claude 写在用户主目录下的缓存、锁（相对 home）。不含 ~/.local/share/claude：那里是 claude 程序本体（versions/）。 */
+export const CLAUDE_HOME_STATE_DIRS = [".cache/claude", ".local/state/claude", "Library/Caches/claude-cli-nodejs"] as const;
+
+/**
+ * claude 的 Bash 工具即使设了 TMPDIR 也会在 /tmp/claude-<uid>/ 下建任务目录（输出文件、cwd 记录；macOS 上 /tmp 是 /private/tmp 的软链），
+ * 目录太长（>44 字节）时子进程的临时目录也退回这里；Bash 每条命令还在 /tmp/claude-<id>-cwd 记工作目录。
+ * 真 Worker 的写沙箱（daemon/driver/write-scope.ts 的 seatbeltProfile）是“默认放行、只禁数据目录”，/tmp 本来就能写，所以它没碰过这个 EPERM；
+ * 这里是“默认禁写”，必须按 claude 的写法放行。
+ */
+export function claudeScratchRules(uid: number | undefined): string[] {
+  const dirs = uid === undefined
+    ? [`(regex ${sbRegex("^/private/tmp/claude-[0-9]+(/|$)")})`]
+    : aliases([`/tmp/claude-${uid}`, `/private/tmp/claude-${uid}`]).map((p) => `(subpath ${sbString(p)})`);
+  return [...dirs, `(regex ${sbRegex("^/private/tmp/claude-[-A-Za-z0-9_]+-cwd$")})`];
 }
 
 /** 真守护进程在数据目录 run/ 下的 socket（src/shared/paths.ts）。 */
@@ -215,7 +262,8 @@ export function pmSandboxProfile(input: PmSandboxInput): string {
   const subpaths = (paths: string[]) => aliases(paths).map((p) => `(subpath ${sbString(p)})`).join(" ");
   const projectDirs = (input.projectDirs ?? []).flatMap((p) => aliases([p]).map((a) => join(projects, claudeProjectDirName(a))));
   const writable = [...(input.writableDirs ?? []), ...projectDirs,
-    ...["todos", "statsig", "debug"].map((p) => join(input.claudeConfigDir, p))];
+    ...CLAUDE_CONFIG_STATE_DIRS.map((p) => join(input.claudeConfigDir, p)),
+    ...CLAUDE_HOME_STATE_DIRS.map((p) => join(input.home, p))];
   const denied = [...input.realDataDirs, input.realRepo, ...(input.mainRepo ? [input.mainRepo] : []),
     ...[".ssh", ".config/gh", ".netrc", ".npmrc", ".aws", ".kube"].map((p) => join(input.home, p)),
     projects, join(input.claudeConfigDir, "CLAUDE.md"), ...(input.readDenied ?? [])];
@@ -226,6 +274,7 @@ export function pmSandboxProfile(input: PmSandboxInput): string {
     ...(writable.length ? [`(allow file-write* ${subpaths(writable)})`] : []),
     '(allow file-write* (literal "/dev/null") (literal "/dev/zero") (literal "/dev/random") (literal "/dev/urandom") (literal "/dev/dtracehelper") (regex #"^/dev/tty") (regex #"^/dev/fd/"))',
     `(allow file-write* (literal ${sbString(join(input.home, ".claude.json"))}) (regex ${sbRegex("^" + sbRegexLiteral(join(input.home, ".claude.json")) + "[.].*")}))`,
+    `(allow file-write* ${claudeScratchRules(input.uid ?? process.getuid?.()).join(" ")})`,
     `(deny file-read* ${subpaths(denied)})`,
     `(allow file-read* ${subpaths(input.dependencies ?? [join(input.realRepo, "node_modules")])})`,
     ...((input.writableDirs ?? []).length ? [`(allow file-read* ${subpaths(input.writableDirs ?? [])})`] : []),
@@ -236,8 +285,8 @@ export function pmSandboxProfile(input: PmSandboxInput): string {
       `(deny file-write* ${subpaths((input.writableDirs ?? []).flatMap((d) => ["bin", "fake", "router.json", "router-settings", "pm-sandbox.sb", "claude-env.sh", "gitconfig"].map((p) => join(d, p))))})`,
       `(deny file-read* ${subpaths((input.writableDirs ?? []).map((d) => join(d, "fake")))})`,
     ] : []),
-    // 全局配置始终不可写，即使未来扩大了状态目录白名单。
-    `(deny file-write* ${subpaths(["CLAUDE.md", "settings.json", "settings.local.json"].map((p) => join(input.claudeConfigDir, p)))} (regex ${sbRegex("^" + sbRegexLiteral(join(input.claudeConfigDir, "hooks")))}))`,
+    // 全局配置始终不可写，即使未来扩大了状态目录白名单：CLAUDE.md、settings*.json（含 settings.local.json、备份）、hooks。
+    `(deny file-write* ${subpaths([join(input.claudeConfigDir, "CLAUDE.md")])} (regex ${sbRegex("^" + sbRegexLiteral(join(input.claudeConfigDir, "settings")) + "[^/]*$")}) (regex ${sbRegex("^" + sbRegexLiteral(join(input.claudeConfigDir, "hooks")))}))`,
     ";; 连不上真守护进程：它的几个 unix socket 和本机端口",
     `(deny network-outbound ${input.realDataDirs
       .flatMap((d) => DAEMON_SOCKETS.map((rel) => `(remote unix-socket (path-literal ${sbString(join(d, rel))}))`))
@@ -322,6 +371,23 @@ export function preflight(profileFile: string, input: PmSandboxInput, opts: { pr
   lines.push(`${writeDenied ? "✓" : "✗"} 禁写沙箱外目录（必须权限拒绝）`);
   if (!writeDenied && existsSync(outside)) rmSync(outside);
 
+  // claude 的 Bash 工具、状态目录要写的地方放行了：不放行，真 claude 在 Bash 里就是 EPERM: mkdir '/private/tmp/claude-<uid>/…'（只试能写，不碰别人的文件）
+  const uid = input.uid ?? process.getuid?.();
+  const tag = `.eval-probe-${process.pid}`;
+  if (uid !== undefined) {
+    const scratch = `/private/tmp/claude-${uid}`;
+    trySh(`放行 claude 的 Bash 临时目录 ${scratch}`,
+      `d=${sq(scratch)}; [ -d "$d" ] || mkdir -m 700 "$d" || exit 1; mkdir -p "$d/${tag}/tasks" && touch "$d/${tag}/tasks/x" && touch ${sq(`/private/tmp/claude-${tag.slice(1)}-cwd`)}; r=$?; rm -rf "$d/${tag}" ${sq(`/private/tmp/claude-${tag.slice(1)}-cwd`)}; exit $r`, true);
+  }
+  for (const dir of CLAUDE_CONFIG_STATE_DIRS.filter((d) => ["shell-snapshots", "session-env", "telemetry"].includes(d))) {
+    const target = join(input.claudeConfigDir, dir);
+    trySh(`放行 claude 的状态目录 ${target}`, `d=${sq(target)}; mkdir -p "$d" && touch "$d/${tag}"; r=$?; rm -f "$d/${tag}"; exit $r`, true);
+  }
+  const settingsProbe = join(input.claudeConfigDir, `settings${tag}.json`);
+  if (existsSync(input.claudeConfigDir)) {
+    trySh(`禁写 claude 全局配置 ${join(input.claudeConfigDir, "settings*.json")}`, `touch ${sq(settingsProbe)}`, false);
+    rmSync(settingsProbe, { force: true });
+  }
   trySh(`禁读真仓库 ${input.realRepo}`, `cat ${sq(join(input.realRepo, "package.json"))} >/dev/null`, false);
   if (existsSync(join(input.realRepo, "node_modules"))) trySh("真仓库的 node_modules 能读", `ls ${sq(join(input.realRepo, "node_modules"))} >/dev/null`, true);
   // sh 执行不了（沙箱拒绝 exec）时退出码是 126：只认这个，不靠命令自己的退出码
@@ -359,7 +425,7 @@ export async function probeClaudeShimPath(profileFile: string, opts: { realClaud
   writeShims({ binDir, ghDir: join(opts.dir, "gh"), recordFile: join(opts.dir, "recorded.jsonl") }, { node: process.execPath, realGit: realGitPath() });
   mkdirSync(join(opts.dir, "tmp"), { recursive: true });
   const envFile = join(opts.dir, "claude-env.sh");
-  writeFileSync(envFile, `export PATH=${sq(binDir)}:"$PATH"\n`);
+  writeFileSync(envFile, claudeEnvScript(binDir));
   const gitConfig = join(opts.dir, "gitconfig");
   writeFileSync(gitConfig, "[credential]\n\thelper =\n");
   const prompt = "Use the Bash tool to run exactly: gh --version ; then reply with only its output.";
