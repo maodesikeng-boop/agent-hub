@@ -50,7 +50,15 @@ export function realOr(path: string): string {
     }
   }
 }
-const aliases = (paths: string[]) => [...new Set(paths.flatMap((p) => [resolve(p), realOr(p)]))];
+/**
+ * 路径的所有写法：字面路径、完全展开软链的真实路径，以及“只展开父目录、末级保留原名”的路径。
+ * 第三种必须有：macOS 上 /tmp 是 /private/tmp 的软链，Node 的 realpath 会逐级 lstat /private/tmp/…/node_modules（末级本身是软链），
+ * 完全展开后末级已是别处，/private/tmp 这一侧的路径就没有任何写法对得上。
+ */
+const aliases = (paths: string[]) => [...new Set(paths.flatMap((p) => {
+  const abs = resolve(p);
+  return [abs, realOr(abs), join(realOr(dirname(abs)), basename(abs))];
+}))];
 export function mainRepoRoot(repo: string): string {
   const common = execFileSync("git", ["-C", repo, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" }).trim();
   return dirname(realOr(common));

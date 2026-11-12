@@ -213,6 +213,25 @@ it("祖先 metadata 规则覆盖逻辑路径与真实路径，不放开 data；�
   if (canCompile) expect(compileSbpl(profile).status).toBe(0);
 });
 
+it("依赖是软链且父目录路径经软链别名（/tmp → /private/tmp）时，被禁目录的真实侧祖先也放行 metadata，且在 deny file-read* 之后", () => {
+  const real = join(root, "alias-real"); const link = join(root, "alias-link");
+  mkdirSync(join(real, "source"), { recursive: true }); mkdirSync(join(root, "alias-deps/node_modules"), { recursive: true });
+  symlinkSync(real, link); symlinkSync(join(root, "alias-deps/node_modules"), join(real, "source/node_modules"));
+  const repo = join(link, "source");
+  const profile = pmSandboxProfile({ home: root, realRepo: repo, realDataDirs: [], daemonPorts: [], denyExec: [],
+    claudeConfigDir: join(root, ".claude"), dependencies: [join(repo, "node_modules")] });
+  // Node realpath 走“真实父目录 + 软链末级”：source 的 metadata 与 source/node_modules 本身都要对得上
+  const realSource = join(realOr(real), "source");
+  expect(profile).toContain(`(literal "${realSource}")`);
+  expect(profile).toContain(`(literal "${join(link, "source")}")`);
+  expect(profile).toContain(`(subpath "${join(realSource, "node_modules")}")`);
+  expect(profile.lastIndexOf("(allow file-read-metadata")).toBeGreaterThan(profile.lastIndexOf("(deny file-read* (subpath"));
+  if (canCompile) expect(compileSbpl(profile).status).toBe(0);
+  if (!available) return;
+  const r = spawnSync(SANDBOX_EXEC, ["-p", profile, process.execPath, "-e", "const fs=require('fs');fs.realpathSync(process.argv[1]);try{fs.readdirSync(process.argv[2]);process.exit(2)}catch(e){process.exit(e.code==='EPERM'?0:3)}", join(repo, "node_modules"), repo], { encoding: "utf8" });
+  expect({ status: r.status, stderr: r.stderr }).toEqual({ status: 0, stderr: "" });
+});
+
 // 同一夹具也在 Worker 无嵌套沙箱时裸跑，保证宿主机专用测试的命令、回放和假服务不会腐烂。
 for (const sandboxed of [false, true]) {
   it.skipIf(sandboxed && !available)(`${sandboxed ? "真沙箱" : "夹具自检"}：runs 父目录封锁下的 Bash、Node gh/git/hub 与评测 socket 全链路`, async () => {
