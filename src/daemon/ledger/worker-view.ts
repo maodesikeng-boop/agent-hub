@@ -243,68 +243,7 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
     return { text: lines.join("\n"), data: { worker: toWorkerRecord(worker) as WorkerRecord } };
   };
 
-  /** log 的一行：时间 + 动作。 */
-  const logSteps = (rows: StepRow[], open: boolean): WorkerLogStep[] => {
-    const t = now();
-    const resultsByUseId = new Map<string | null, Array<{ row: StepRow; index: number }>>();
-    let lastTurnEndedIndex = -1;
-    for (let i = 0; i < rows.length; i++) {
-      const r = rows[i]!;
-      if (r.kind === "tool_result") {
-        let list = resultsByUseId.get(r.tool_use_id);
-        if (list === undefined) {
-          list = [];
-          resultsByUseId.set(r.tool_use_id, list);
-        }
-        list.push({ row: r, index: i });
-      } else if (r.kind === "turn_ended") {
-        lastTurnEndedIndex = i;
-      }
-    }
-    const out: WorkerLogStep[] = [];
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i]!;
-      switch (row.kind) {
-        case "tool": {
-          const back = resultsByUseId.get(row.tool_use_id)?.find((m) => m.index > i)?.row;
-          const what = clipText(row.summary ?? row.name ?? "");
-          let tail = "";
-          if (back !== undefined) {
-            const ms = back.at - row.at;
-            if (ms >= 1_000) tail = `（用了 ${formatDuration(ms)}）`;
-          } else if (open && i > lastTurnEndedIndex) {
-            tail = `（还在跑，已 ${formatDuration(t - row.at)}）`;
-          } else {
-            tail = "（没等到结果）";
-          }
-          out.push({ at: row.at, kind: "tool", text: `${what}${tail}` });
-          break;
-        }
-        case "thinking": {
-          // 连着的几次思考合成一行：到下一步出现为止
-          let j = i;
-          while (j + 1 < rows.length && rows[j + 1]!.kind === "thinking") j++;
-          const next = rows[j + 1];
-          if (next === undefined) {
-            out.push({ at: row.at, kind: "thinking", text: open ? `在思考，已 ${formatDuration(t - row.at)}` : "思考" });
-          } else {
-            out.push({ at: row.at, kind: "thinking", text: `思考了 ${formatDuration(next.at - row.at)}` });
-          }
-          i = j;
-          break;
-        }
-        case "text":
-          out.push({ at: row.at, kind: "text", text: `回复了一段：${clipText(row.summary ?? "")}` });
-          break;
-        case "turn_ended":
-          out.push({ at: row.at, kind: "turn_ended", text: `这一轮结束：${outcomeText(row)}` });
-          break;
-        default:
-          break;
-      }
-    }
-    return out;
-  };
+  const logSteps = (rows: StepRow[], open: boolean): WorkerLogStep[] => formatLogSteps(rows, open, now());
 
   /** --stats：所有换过代的会话里账本留着的全部步骤，汇成几行。 */
   const stats = (worker: WorkerDbRow, args: HubArgs<"worker.log">): HubResult<"worker.log"> => {
@@ -343,6 +282,71 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
   };
 
   return { show, log, search: workerSearch.search };
+}
+
+/**
+ * hub worker log 的一行一行：时间 + 动作（open：这一轮还在跑，没回来的工具写“还在跑”）。t 是现在。
+ * 换人接手时带前任最后几步操作（takeover.ts）也用它，和 hub worker log 看到的一样。
+ */
+export function formatLogSteps(rows: StepRow[], open: boolean, t: number): WorkerLogStep[] {
+  const resultsByUseId = new Map<string | null, Array<{ row: StepRow; index: number }>>();
+  let lastTurnEndedIndex = -1;
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i]!;
+    if (r.kind === "tool_result") {
+      let list = resultsByUseId.get(r.tool_use_id);
+      if (list === undefined) {
+        list = [];
+        resultsByUseId.set(r.tool_use_id, list);
+      }
+      list.push({ row: r, index: i });
+    } else if (r.kind === "turn_ended") {
+      lastTurnEndedIndex = i;
+    }
+  }
+  const out: WorkerLogStep[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]!;
+    switch (row.kind) {
+      case "tool": {
+        const back = resultsByUseId.get(row.tool_use_id)?.find((m) => m.index > i)?.row;
+        const what = clipText(row.summary ?? row.name ?? "");
+        let tail = "";
+        if (back !== undefined) {
+          const ms = back.at - row.at;
+          if (ms >= 1_000) tail = `（用了 ${formatDuration(ms)}）`;
+        } else if (open && i > lastTurnEndedIndex) {
+          tail = `（还在跑，已 ${formatDuration(t - row.at)}）`;
+        } else {
+          tail = "（没等到结果）";
+        }
+        out.push({ at: row.at, kind: "tool", text: `${what}${tail}` });
+        break;
+      }
+      case "thinking": {
+        // 连着的几次思考合成一行：到下一步出现为止
+        let j = i;
+        while (j + 1 < rows.length && rows[j + 1]!.kind === "thinking") j++;
+        const next = rows[j + 1];
+        if (next === undefined) {
+          out.push({ at: row.at, kind: "thinking", text: open ? `在思考，已 ${formatDuration(t - row.at)}` : "思考" });
+        } else {
+          out.push({ at: row.at, kind: "thinking", text: `思考了 ${formatDuration(next.at - row.at)}` });
+        }
+        i = j;
+        break;
+      }
+      case "text":
+        out.push({ at: row.at, kind: "text", text: `回复了一段：${clipText(row.summary ?? "")}` });
+        break;
+      case "turn_ended":
+        out.push({ at: row.at, kind: "turn_ended", text: `这一轮结束：${outcomeText(row)}` });
+        break;
+      default:
+        break;
+    }
+  }
+  return out;
 }
 
 const PR_STATE_LABELS: Readonly<Record<string, string>> = { OPEN: "开着", MERGED: "已合并", CLOSED: "已关闭" };

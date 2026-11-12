@@ -903,7 +903,7 @@ describe("收工", () => {
     expect(workerEventOf(line)).toMatchObject({ event: "ended", status: null, summary: null });
     expect(line).toMatchObject({ status: null, text: "Worker「修 X」已收工" });
     // worktree 自动清理规则写进收工提示
-    expect(result.text).toContain("PR 合并后或收工满 3 天且没有未提交改动时会自动清理 worktree（分支保留）");
+    expect(result.text).toContain("PR 合并后或收工满 3 天且没有未提交改动时会自动清理 worktree（分支保留；");
 
     const before = tableCounts();
     enqueued = [];

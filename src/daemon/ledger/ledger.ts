@@ -41,6 +41,7 @@ import { createLedgerSentFiles } from "./sent-files.ts";
 import { createLedgerSessions } from "./sessions.ts";
 import { createLedgerSteps } from "./steps.ts";
 import { createLedgerTaskGraphs } from "./task-graphs.ts";
+import { createLedgerTakeover } from "./takeover.ts";
 import { taskGraphManualNote } from "../task-graph-skill.ts";
 import { createLedgerWorkerRetention } from "./worker-retention.ts";
 import type { WorkerPurgeBatch } from "./worker-retention.ts";
@@ -176,9 +177,12 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   const projects = createLedgerProjects(ctx, sessions, messages, persona, files);
   const router = createLedgerRouter(ctx, sessions, messages, persona, projects);
   const taskGraphs = createLedgerTaskGraphs(ctx, sessions, messages, persona, projects, router);
+  const steps = createLedgerSteps(ctx);
   const workers = createLedgerWorkers(ctx, sessions, messages, persona, projects, {
     worktreesDir: files.worktreesDir,
     taskGraphs,
+    // 换人接手时新 Worker 的第一条消息：前任的汇报、最后的文字、最后几步操作、原始记录路径，从账本现取（takeover.ts）
+    takeover: createLedgerTakeover(ctx, steps, { findTranscript: options.findTranscript }),
   });
   const handover = createLedgerHandover(ctx, sessions, messages, persona, {
     findTranscript: options.findTranscript,
@@ -192,7 +196,6 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     },
   });
   const schedules = createLedgerSchedules(ctx, sessions, messages, persona);
-  const steps = createLedgerSteps(ctx);
   const workerRetention = createLedgerWorkerRetention(ctx, files);
   const workerView = createLedgerWorkerView(ctx, steps, {
     ownWorker: workers.ownWorker,
@@ -327,6 +330,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       const recovered = sessions.recoverAfterRestart();
       workers.recoverWorktrees();
       workers.recoverBackgroundWaits();
+      // Worker 这一轮的超时计时按库里的截止时刻重新挂（迁移 0024；已过期的马上提醒一次，提醒过的不再提醒）
+      workers.recoverTurnTimeouts();
       handover.recoverAfterRestart();
       router.recoverAfterRestart();
       return recovered;

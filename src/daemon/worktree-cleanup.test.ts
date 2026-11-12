@@ -105,7 +105,7 @@ describe("worktree 自动清理", () => {
     git(repo, "merge", "--no-ff", "-q", "-m", "Merge PR", w.branch!);
 
     const endText = endWorker(w.id);
-    expect(endText).toContain("PR 合并后或收工满 3 天且没有未提交改动时会自动清理 worktree（分支保留）");
+    expect(endText).toContain("PR 合并后或收工满 3 天且没有未提交改动时会自动清理 worktree（分支保留；");
 
     // 刚收工 1 分钟（远未满 3 天）
     now += 60_000;

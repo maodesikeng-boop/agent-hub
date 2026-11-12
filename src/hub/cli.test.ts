@@ -390,6 +390,22 @@ describe("hub cli", () => {
       expect(badGraph.code).toBe(HUB_EXIT.usage);
       expect(ledger.calls).toHaveLength(0);
     });
+
+    it("worker start --node 换人：--title、--stdin 都可以不给；给了 --stdin 读到空的也不报错、不带 task", async () => {
+      expect((await hub(["worker", "start", "--node", "s1", "--vendor", "codex"])).code).toBe(HUB_EXIT.ok);
+      expect((await hub(["worker", "start", "--node", "s1", "--stdin"], { stdin: stdinOf("") })).code).toBe(HUB_EXIT.ok);
+      expect((await hub(["worker", "start", "--node", "s1", "--stdin"], { stdin: stdinOf("先跑 X\n") })).code).toBe(HUB_EXIT.ok);
+      expect(ledger.calls).toEqual([
+        { sessionId: 42, command: "worker.start", args: { vendor: "codex", node: "s1" } },
+        { sessionId: 42, command: "worker.start", args: { node: "s1" } },
+        { sessionId: 42, command: "worker.start", args: { node: "s1", task: "先跑 X" } },
+      ]);
+      // 不带 --node 的照旧要 --title、--stdin、非空正文
+      ledger.calls.length = 0;
+      expect((await hub(["worker", "start", "--stdin"], { stdin: stdinOf("x") })).code).toBe(HUB_EXIT.usage);
+      expect((await hub(["worker", "start", "--title", "修 X", "--stdin"], { stdin: stdinOf("") })).code).toBe(HUB_EXIT.usage);
+      expect(ledger.calls).toHaveLength(0);
+    });
   });
 
   describe("hub router & hub graph", () => {
