@@ -267,6 +267,21 @@ export function pmSandboxProfile(input: PmSandboxInput): string {
   const denied = [...input.realDataDirs, input.realRepo, ...(input.mainRepo ? [input.mainRepo] : []),
     ...[".ssh", ".config/gh", ".netrc", ".npmrc", ".aws", ".kube"].map((p) => join(input.home, p)),
     projects, join(input.claudeConfigDir, "CLAUDE.md"), ...(input.readDenied ?? [])];
+  // Node realpath 逐级 lstat 祖先；只恢复目录节点的 metadata，不恢复列目录或读取兄弟项。
+  const readable = aliases([...(input.dependencies ?? [join(input.realRepo, "node_modules")]),
+    ...(input.writableDirs ?? []), ...projectDirs]);
+  const deniedAliases = aliases(denied);
+  const metadata = new Set<string>();
+  for (const path of readable) {
+    for (let parent = dirname(path); ; parent = dirname(parent)) {
+      if (deniedAliases.some((d) => parent === d || parent.startsWith(d + "/"))) metadata.add(parent);
+      if (parent === dirname(parent)) break;
+    }
+  }
+  const blockedRemotes = [
+    ...aliases(input.realDataDirs).flatMap((d) => DAEMON_SOCKETS.map((rel) => `(remote unix-socket (path-literal ${sbString(join(d, rel))}))`)),
+    ...input.daemonPorts.map((p) => `(remote ip "localhost:${p}")`),
+  ];
   const lines = [
     "(version 1)",
     "(allow default)",
@@ -276,6 +291,7 @@ export function pmSandboxProfile(input: PmSandboxInput): string {
     `(allow file-write* (literal ${sbString(join(input.home, ".claude.json"))}) (regex ${sbRegex("^" + sbRegexLiteral(join(input.home, ".claude.json")) + "[.].*")}))`,
     `(allow file-write* ${claudeScratchRules(input.uid ?? process.getuid?.()).join(" ")})`,
     `(deny file-read* ${subpaths(denied)})`,
+    ...(metadata.size ? [`(allow file-read-metadata ${[...metadata].map((p) => `(literal ${sbString(p)})`).join(" ")})`] : []),
     `(allow file-read* ${subpaths(input.dependencies ?? [join(input.realRepo, "node_modules")])})`,
     ...((input.writableDirs ?? []).length ? [`(allow file-read* ${subpaths(input.writableDirs ?? [])})`] : []),
     ...(projectDirs.length ? [
@@ -288,9 +304,7 @@ export function pmSandboxProfile(input: PmSandboxInput): string {
     // 全局配置始终不可写，即使未来扩大了状态目录白名单：CLAUDE.md、settings*.json（含 settings.local.json、备份）、hooks。
     `(deny file-write* ${subpaths([join(input.claudeConfigDir, "CLAUDE.md")])} (regex ${sbRegex("^" + sbRegexLiteral(join(input.claudeConfigDir, "settings")) + "[^/]*$")}) (regex ${sbRegex("^" + sbRegexLiteral(join(input.claudeConfigDir, "hooks")))}))`,
     ";; 连不上真守护进程：它的几个 unix socket 和本机端口",
-    `(deny network-outbound ${input.realDataDirs
-      .flatMap((d) => DAEMON_SOCKETS.map((rel) => `(remote unix-socket (path-literal ${sbString(join(d, rel))}))`))
-      .join(" ")} ${input.daemonPorts.map((p) => `(remote ip "localhost:${p}")`).join(" ")})`,
+    ...(blockedRemotes.length ? [`(deny network-outbound ${blockedRemotes.join(" ")})`] : []),
     ";; 不出 ssh（部署、推代码）",
     `(deny network-outbound (remote tcp "*:22"))`,
     ";; 真的 ssh、rsync、gh、launchctl……不许执行（PATH 里的替身之外的第二道）",
@@ -356,13 +370,13 @@ export function preflight(profileFile: string, input: PmSandboxInput, opts: { pr
   }
   const mustDenyRead = (path: string) => {
     const r = spawnSync(SANDBOX_EXEC, ["-f", profileFile, process.execPath, "-e",
-      "const fs=require('fs');try{fs.openSync(process.argv[1],'r');process.exit(2)}catch(e){process.exit(e.code==='EPERM'||e.code==='EACCES'?0:3)}", path],
+      "const fs=require('fs');try{if(fs.statSync(process.argv[1]).isDirectory())fs.readdirSync(process.argv[1]);else fs.readFileSync(process.argv[1]);process.exit(2)}catch(e){process.exit(e.code==='EPERM'||e.code==='EACCES'?0:3)}", path],
       { encoding: "utf8", timeout: 30_000 });
     const good = r.status === 0;
     ok &&= good;
     lines.push(`${good ? "✓" : "✗"} 禁读（必须权限拒绝） ${path}`);
   };
-  for (const path of [join(input.mainRepo ?? input.realRepo, "HANDOVER.md"), join(input.home, ".agent-hub"), join(input.home, ".ssh"), ...(input.readDenied ?? [])]) mustDenyRead(path);
+  for (const path of [join(input.mainRepo ?? input.realRepo, "HANDOVER.md"), join(input.home, ".agent-hub"), join(input.home, ".ssh"), input.realRepo, ...(input.readDenied ?? [])]) mustDenyRead(path);
   const outside = join(input.home, ".eval-outside-probe-" + process.pid);
   const writeProbe = spawnSync(SANDBOX_EXEC, ["-f", profileFile, process.execPath, "-e",
     "try{require('fs').writeFileSync(process.argv[1],'probe');process.exit(2)}catch(e){process.exit(e.code==='EPERM'||e.code==='EACCES'?0:3)}", outside], { encoding: "utf8", timeout: 30_000 });
@@ -390,6 +404,7 @@ export function preflight(profileFile: string, input: PmSandboxInput, opts: { pr
   }
   trySh(`禁读真仓库 ${input.realRepo}`, `cat ${sq(join(input.realRepo, "package.json"))} >/dev/null`, false);
   if (existsSync(join(input.realRepo, "node_modules"))) trySh("真仓库的 node_modules 能读", `ls ${sq(join(input.realRepo, "node_modules"))} >/dev/null`, true);
+  trySh("Node 能解析评测工作目录与依赖的祖先 metadata", `${sq(process.execPath)} -e ${sq("const fs=require('fs');for(const p of process.argv.slice(1))fs.realpathSync(p)")} ${[opts.probeDir, ...(input.dependencies ?? [join(input.realRepo, "node_modules")])].filter(existsSync).map(sq).join(" ")}`, true);
   // sh 执行不了（沙箱拒绝 exec）时退出码是 126：只认这个，不靠命令自己的退出码
   for (const exe of input.denyExec.filter((p) => existsSync(p))) trySh(`不许执行 ${exe}`, `${sq(exe)} --version >/dev/null 2>&1; [ $? -eq 126 ]`, true);
   // 用真信号（SIGURG 默认忽略，万一漏了也不伤人）试：评测进程（和沙箱里的 sh 同进程组）、另起进程组的沙箱外靶子；信号 0 也走同一道检查
