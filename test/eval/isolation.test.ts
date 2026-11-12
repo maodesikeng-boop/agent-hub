@@ -70,15 +70,31 @@ it("信号规则整条先拒、只放同沙箱（others 不含同进程组，不
   expect(signalProfile).toContain("(deny signal)\n(allow signal (target same-sandbox))");
   expect(signalProfile).not.toContain("(target others)");
 });
+it("禁止执行的列表为空时不输出无过滤条件的 deny process-exec（那会禁掉所有 exec）", () => {
+  expect(signalProfile).not.toMatch(/\(deny process-exec\s*\)/);
+  expect(pmSandboxProfile({ home: root, realRepo: join(root, "source"), realDataDirs: [], claudeConfigDir: join(root, ".claude"), denyExec: ["/usr/bin/ssh"], daemonPorts: [] })).toContain('(deny process-exec (literal "/usr/bin/ssh"))');
+});
 it.skipIf(!available)("真 SBPL 拦住发给沙箱外进程的信号（含同进程组的父进程），沙箱内部照常", () => {
   const outsider = spawn("/bin/sleep", ["30"], { detached: true, stdio: "ignore" });
   const run = (script: string) => spawnSync(SANDBOX_EXEC, ["-p", signalProfile, "/bin/sh", "-c", script], { encoding: "utf8" });
+  // sandbox-exec 自己出错（规则写错 65、起不来 71）时 status 也非 0，会让“被拦”断言空转：先确认里面的 sh 真跑了
+  const ran = run("echo alive");
+  expect(ran.stderr).not.toMatch(/sandbox-exec|sandbox_apply/);
+  expect(ran.status).toBe(0);
+  expect(ran.stdout.trim()).toBe("alive");
   try {
     for (const pid of [process.pid, outsider.pid!]) {
-      expect(run("kill -0 " + pid).status).not.toBe(0);
-      expect(run("kill -URG " + pid).status).not.toBe(0);
+      for (const sig of ["-0", "-URG"]) {
+        // 必须是 sh 里的 kill 被沙箱拒绝：退出码 1 + Operation not permitted，不是 sandbox-exec 的 65/71
+        const r = run("kill " + sig + " " + pid);
+        expect(r.stderr).toMatch(/not permitted/i);
+        expect(r.stderr).not.toMatch(/sandbox-exec|sandbox_apply/);
+        expect(r.status).toBe(1);
+      }
     }
     expect(() => process.kill(outsider.pid!, 0)).not.toThrow();
-    expect(run('sleep 30 & p=$!; /bin/sh -c "kill -TERM $p"; wait $p; [ $? -eq 143 ]').status).toBe(0);
+    const inner = run('sleep 30 & p=$!; /bin/sh -c "kill -TERM $p"; wait $p; [ $? -eq 143 ]');
+    expect(inner.stderr).toBe("");
+    expect(inner.status).toBe(0);
   } finally { try { process.kill(-outsider.pid!, "SIGKILL"); } catch { /* 已退出 */ } }
 });

@@ -245,7 +245,8 @@ export function pmSandboxProfile(input: PmSandboxInput): string {
     ";; 不出 ssh（部署、推代码）",
     `(deny network-outbound (remote tcp "*:22"))`,
     ";; 真的 ssh、rsync、gh、launchctl……不许执行（PATH 里的替身之外的第二道）",
-    `(deny process-exec ${input.denyExec.map((p) => `(literal ${sbString(p)})`).join(" ")})`,
+    // 列表为空时不能写：`(deny process-exec )` 不带过滤条件等于禁掉所有 exec，sandbox-exec 连 /bin/sh 都起不来（退出码 71）
+    ...(input.denyExec.length ? [`(deny process-exec ${input.denyExec.map((p) => `(literal ${sbString(p)})`).join(" ")})`] : []),
     ";; 只能给同一个沙箱里的进程发信号：杀不到真守护进程、Fusa.app、评测自己的守护进程。",
     ";; 不能只拒 others 这一类：others 不含同进程组的进程，而评测进程和沙箱里的 sh 同组（spawnSync 不 detached），",
     ";; 那样信号还是发得出去。先整条 deny，再只放同沙箱。",
