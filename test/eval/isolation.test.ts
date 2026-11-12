@@ -1,9 +1,9 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, expect, it } from "vitest";
-import { mainRepoRoot, pmSandboxInput, pmSandboxProfile, realOr, SANDBOX_EXEC } from "./isolation.ts";
+import { CLAUDE_CONFIG_STATE_DIRS, claudeEnvScript, claudeScratchRules, mainRepoRoot, pmSandboxInput, pmSandboxProfile, realOr, SANDBOX_EXEC, SHIM_NAMES } from "./isolation.ts";
 import { boundedText, markActive } from "./lifecycle.ts";
 import { pruneFailedWork, pruneRuns } from "./report.ts";
 const root = mkdtempSync(join(tmpdir(), "eval-isolation-"));
@@ -98,3 +98,74 @@ it.skipIf(!available)("真 SBPL 拦住发给沙箱外进程的信号（含同进
     expect(inner.status).toBe(0);
   } finally { try { process.kill(-outsider.pid!, "SIGKILL"); } catch { /* 已退出 */ } }
 });
+
+// ---- claude 的 Bash 工具写 /private/tmp/claude-<uid>：默认禁写的沙箱要按 claude 的写法放行 ----
+const claudeProfile = (extra: { uid?: number } = {}) =>
+  pmSandboxProfile({ home: join(root, "user"), realRepo: join(root, "source"), realDataDirs: [join(root, "user/.agent-hub")], claudeConfigDir: join(root, "user/.claude"), denyExec: [], daemonPorts: [4317], ...extra });
+it("放行 claude 的 Bash 临时目录 /tmp/claude-<uid>（/tmp 与 /private/tmp 两种写法）和 claude-<id>-cwd，不放行整个 /tmp", () => {
+  const profile = claudeProfile({ uid: 502 });
+  expect(profile).toContain('(subpath "/private/tmp/claude-502")');
+  expect(profile).toContain('(regex #"^/private/tmp/claude-[A-Za-z0-9_-]+-cwd$")');
+  expect(profile).not.toMatch(/\(subpath "\/(private\/)?tmp"\)/);
+  expect(claudeScratchRules(502).join(" ")).toContain('(subpath "/tmp/claude-502")'.replace("/tmp/", realOr("/tmp") + "/"));
+});
+it("取不到 uid 时放行任意 claude-<数字>，仍不放行整个 /tmp", () => {
+  const rules = claudeScratchRules(undefined).join(" ");
+  expect(rules).toContain('(regex #"^/private/tmp/claude-[0-9]+(/|$)")');
+  expect(rules).not.toContain("subpath");
+});
+it("claude 多轮工具调用要写的状态目录放行；CLAUDE.md、settings*.json、hooks、真数据目录始终禁写", () => {
+  const profile = claudeProfile({ uid: 502 });
+  const cfg = join(root, "user/.claude");
+  for (const dir of ["shell-snapshots", "session-env", "telemetry", "todos", "statsig", "debug"]) {
+    expect(CLAUDE_CONFIG_STATE_DIRS).toContain(dir);
+    expect(profile).toContain(`(subpath "${join(cfg, dir)}")`);
+  }
+  expect(profile).toContain(`(subpath "${join(root, "user/.cache/claude")}")`);
+  // 不放行的：配置本身、会话记录（projects 只放行被测项目自己的）、claude 程序本体
+  for (const forbidden of [cfg, join(cfg, "CLAUDE.md"), join(cfg, "settings.json"), join(cfg, "projects"), join(cfg, "hooks"), join(root, "user/.local/share/claude"), join(root, "user/.agent-hub")]) {
+    const allowLines = profile.split("\n").filter((l) => l.startsWith("(allow file-write*"));
+    expect(allowLines.some((l) => l.includes(`(subpath "${forbidden}")`))).toBe(false);
+  }
+  const lines = profile.split("\n");
+  const lastAllow = lines.map((l, i) => (l.startsWith("(allow file-write*") ? i : -1)).reduce((a, b) => Math.max(a, b), -1);
+  const denySettings = lines.findIndex((l) => l.startsWith("(deny file-write*") && l.includes("settings"));
+  expect(denySettings).toBeGreaterThan(lastAllow);
+  expect(lines[denySettings]).toContain(`(subpath "${join(cfg, "CLAUDE.md")}")`);
+  expect(lines[denySettings]).toContain(`#"^${join(cfg, "settings").replace(/\./g, "\\.")}[^/]*$"`);
+});
+it.skipIf(!available)("真 SBPL：真 claude 的 Bash 在 /private/tmp/claude-<uid> 下建任务目录、写 cwd 记录能成；写别的 /tmp、配置、真数据目录仍被拒", () => {
+  const uid = 9_000_000 + (process.pid % 1000);
+  const scratch = `/private/tmp/claude-${uid}`;
+  const home = realOr(join(root, "user")); const cfg = join(home, ".claude");
+  mkdirSync(join(home, ".agent-hub"), { recursive: true }); mkdirSync(cfg, { recursive: true }); writeFileSync(join(cfg, "settings.json"), "{}"); writeFileSync(join(cfg, "CLAUDE.md"), "x");
+  const profile = pmSandboxProfile({ home, realRepo: join(root, "source"), realDataDirs: [join(home, ".agent-hub")], claudeConfigDir: cfg, denyExec: [], daemonPorts: [4317], uid });
+  const run = (script: string) => spawnSync(SANDBOX_EXEC, ["-p", profile, "/bin/sh", "-c", script], { encoding: "utf8" });
+  const probeCwd = `/private/tmp/claude-evalcwd${process.pid}-cwd`; const other = `/private/tmp/eval-other-${process.pid}`;
+  try {
+    // 跟 claude 一样：先建 claude-<uid>（0700）、再 mkdir -p 项目目录/会话/tasks、写 cwd 文件（用 /tmp 的写法）
+    const ok = run(`mkdir -p -m 700 /tmp/claude-${uid} && mkdir -p ${scratch}/-proj-probe/sess/tasks && echo hi > ${scratch}/-proj-probe/sess/tasks/t.output && pwd -P >| /tmp/claude-evalcwd${process.pid}-cwd && chmod 700 ${scratch}`);
+    expect(ok.stderr).toBe(""); expect(ok.status).toBe(0);
+    for (const bad of [`mkdir ${other}`, `touch /private/tmp/claude-${uid + 1}-x`, `mkdir -p /private/tmp/claude-${uid + 1}/a`, `touch ${join(cfg, "settings.json")}`, `touch ${join(cfg, "settings.local.json")}`, `touch ${join(cfg, "CLAUDE.md")}`, `touch ${join(home, ".agent-hub/x")}`, `mkdir ${join(cfg, "hooks")}`, `mkdir ${join(cfg, "projects")}`]) {
+      const r = run(bad); expect(r.stderr, bad).toMatch(/not permitted|denied/i); expect(r.status, bad).not.toBe(0);
+    }
+    for (const good of ["shell-snapshots", "session-env", "telemetry", "todos", "statsig", "debug"]) expect(run(`mkdir -p ${join(cfg, good)} && touch ${join(cfg, good, "x")}`).status, good).toBe(0);
+  } finally { rmSync(scratch, { recursive: true, force: true }); rmSync(probeCwd, { force: true }); rmSync(other, { recursive: true, force: true }); }
+});
+
+// ---- CLAUDE_ENV_FILE：用户 shell 快照里怎么排 PATH、有没有同名别名函数，替身都在最前面 ----
+for (const shell of ["/bin/bash", "/bin/zsh"].filter((p) => existsSync(p))) {
+  it(`CLAUDE_ENV_FILE 在 ${shell} 里压过快照：真 gh 在 PATH 前面、同名别名和函数都不能抢在替身前面`, () => {
+    const dir = mkdtempSync(join(root, "envfile-")); const bin = join(dir, "bin"); const real = join(dir, "homebrew");
+    mkdirSync(bin); mkdirSync(real);
+    for (const [d, tag] of [[bin, "shim"], [real, "real"]] as const) for (const name of SHIM_NAMES) { writeFileSync(join(d, name), `#!/bin/sh\necho ${tag}\n`); chmodSync(join(d, name), 0o755); }
+    const envFile = join(dir, "claude-env.sh"); writeFileSync(envFile, claudeEnvScript(bin));
+    // 模拟 claude 的拼法：source 快照（用户 .zprofile 把真目录提前、定义同名函数）→ source CLAUDE_ENV_FILE → 命令
+    const snapshot = join(dir, "snapshot.sh");
+    writeFileSync(snapshot, `export PATH='${real}':'${bin}':/usr/bin:/bin\n${SHIM_NAMES.map((n) => `${n}() { echo function-${n}; }`).join("\n")}\n${shell.endsWith("bash") ? "shopt -s expand_aliases\n" : ""}${SHIM_NAMES.map((n) => `alias ${n}='echo alias-${n}'`).join("\n")}\nhash -r\n`);
+    const script = `. '${snapshot}'\n. '${envFile}'\n:\n${SHIM_NAMES.map((n) => `command -v ${n}`).join("\n")}\ngh --version\n`;
+    const r = spawnSync(shell, ["-c", script], { encoding: "utf8", env: { PATH: "/usr/bin:/bin", HOME: dir } });
+    expect(r.stderr).toBe("");
+    expect(r.stdout.trim().split("\n")).toEqual([...SHIM_NAMES.map((n) => join(bin, n)), "shim"]);
+  });
+}

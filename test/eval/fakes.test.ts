@@ -7,7 +7,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { shortTmp } from "../e2e/harness.ts";
 import { readJsonl } from "./facts.ts";
 import { route, settingsWithoutOwnSandbox, type RouterConfig } from "./fakes/claude-router.ts";
-import { RECORD_ONLY_TOOLS, isolationEnv, pmSandboxProfile, realGitPath, scrubbedEnvNames, writeShims } from "./isolation.ts";
+import { RECORD_ONLY_TOOLS, claudeEnvScript, isolationEnv, pmSandboxProfile, realGitPath, scrubbedEnvNames, writeShims } from "./isolation.ts";
 import { REPLAY_DIR, SCENARIOS, scenarioById } from "./scenarios.ts";
 import { writeGhReplay } from "./trial.ts";
 import type { GhCall, RecordedCall, ScenarioId } from "./types.ts";
@@ -180,7 +180,8 @@ describe("隔离规则", () => {
     expect(env.PATH!.startsWith(`${join(dir, "bin")}:`)).toBe(true);
     expect(env).toMatchObject({ GH_TOKEN: "eval-fake-token", GITHUB_TOKEN: "eval-fake-token", SSH_AUTH_SOCK: "", GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0" });
     // claude 每条 Bash 前 source 它：用户 shell 的 PATH 改动之后，替身目录还在最前面
-    expect(readFileSync(env.CLAUDE_ENV_FILE!, "utf8")).toBe(`export PATH='${join(dir, "bin")}':"$PATH"\n`);
+    expect(readFileSync(env.CLAUDE_ENV_FILE!, "utf8")).toBe(claudeEnvScript(join(dir, "bin")));
+    expect(readFileSync(env.CLAUDE_ENV_FILE!, "utf8").startsWith(`export PATH='${join(dir, "bin")}':"$PATH"\n`)).toBe(true);
     const gitconfig = readFileSync(env.GIT_CONFIG_GLOBAL!, "utf8");
     expect(gitconfig).toContain(`[url "${join(dir, "origin.git")}"]`);
     expect(gitconfig).toContain("pushInsteadOf = https://github.com/o/r");
