@@ -2,7 +2,7 @@
 // 用 execFile 直接调 git，不经过 shell；每次调用都有超时；拿不到的错误转成 GitError（中文信息 + kind）。
 import { execFile } from "node:child_process";
 import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { WorkspaceProbe } from "../../shared/ledger.ts";
@@ -13,7 +13,7 @@ import { GIT_MAX_BUFFER_BYTES, GIT_PROBE_TIMEOUT_MS, GIT_TIMEOUT_MS } from "../.
  * 仓库配置里的 `core.fsmonitor` 指到脚本的话，git 读索引时会执行它（审查实测），所以每次都用 `-c core.fsmonitor=false` 盖掉；
  * GIT_OPTIONAL_LOCKS=0 不去抢可选的锁（不刷新索引、不挡用户自己的 git 操作）。
  */
-export const GIT_READONLY_ARGS: readonly string[] = ["-c", "core.fsmonitor=false"];
+export const GIT_READONLY_ARGS: readonly string[] = ["-c", "core.fsmonitor=false", "-c", "gc.auto=0"];
 export const GIT_READONLY_ENV: Readonly<Record<string, string>> = { GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" };
 
 export interface GitOptions {
@@ -65,12 +65,24 @@ interface GitRun {
  * 跑一次 git。退出码非 0 不抛，交给调用方判断；找不到 git、超时才抛 GitError。
  * 一律 `git -C <folder>`：文件夹不存在也只是退出码 128，不会和“找不到 git”混在一起。
  */
-function runGit(folder: string, args: string[], timeoutMs: number, extraEnv: Record<string, string> = {}): Promise<GitRun> {
+function runGit(
+  folder: string,
+  args: string[],
+  timeoutMs: number,
+  extraEnv: Record<string, string> = {},
+  stdin?: string,
+): Promise<GitRun> {
   return new Promise((resolvePromise, reject) => {
-    execFile(
+    const child = execFile(
       "git",
       ["-C", folder, ...args],
-      { timeout: timeoutMs, killSignal: "SIGKILL", maxBuffer: GIT_MAX_BUFFER_BYTES, encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...extraEnv } },
+      {
+        timeout: timeoutMs,
+        killSignal: "SIGKILL",
+        maxBuffer: GIT_MAX_BUFFER_BYTES,
+        encoding: "utf8",
+        env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...extraEnv },
+      },
       (error, stdout, stderr) => {
         if (!error) return resolvePromise({ code: 0, stdout, stderr });
         const err = error as NodeJS.ErrnoException & { killed?: boolean };
@@ -80,6 +92,10 @@ function runGit(folder: string, args: string[], timeoutMs: number, extraEnv: Rec
         reject(new GitError("git_failed", `git 没能运行：${err.message}`));
       },
     );
+    if (stdin !== undefined && child.stdin) {
+      child.stdin.on("error", () => {});
+      child.stdin.end(stdin);
+    }
   });
 }
 
@@ -351,17 +367,22 @@ async function hasOperationInProgress(worktreePath: string, timeoutMs: number): 
     .some((path) => path !== "" && existsSync(path));
 }
 
-/** 解析一个引用到完整提交号；引用不存在（或文件夹不是仓库）返回 null。 */
+/** 解析一个引用到完整提交号；引用不存在（或文件夹不是仓库）返回 null，其他 git 故障抛 GitError。 */
 export async function resolveCommit(folder: string, ref: string, options: GitOptions = {}): Promise<string | null> {
+  if (ref.trim() === "" || ref.startsWith("-")) return null;
   const run = await runGit(
     folder,
-    [...GIT_READONLY_ARGS, "rev-parse", "--verify", "--quiet", `${ref}^{commit}`],
+    [...GIT_READONLY_ARGS, "rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`],
     options.timeoutMs ?? GIT_PROBE_TIMEOUT_MS,
     { ...GIT_READONLY_ENV, LC_ALL: "C" },
   );
-  if (run.code !== 0) return null;
-  const sha = run.stdout.trim();
-  return sha === "" ? null : sha;
+  if (run.code === 0) {
+    const sha = run.stdout.trim();
+    return sha === "" ? null : sha;
+  }
+  if ((run.code === 1 || run.code === 128) && run.stderr.trim() === "") return null;
+  if (run.code === 128 && /not a git repository/i.test(run.stderr)) return null;
+  throw failed("git rev-parse", run);
 }
 
 /**
@@ -383,16 +404,20 @@ export async function isCommitMergedToMain(repoFolder: string, commit: string, o
 }
 
 /**
- * 保证 detached HEAD 上的提交不会随 worktree 一起丢：已经被某个本地分支包含就什么都不做，
+ * 保证 detached HEAD 上的提交不会随 worktree 一起丢：已经被本地分支或主分支（含 origin/main）包含就什么都不做，
  * 否则建分支 `hub/detached-<标签>-<提交号前 8 位>`（名字带提交号，不会覆盖别的分支）。返回保底分支名，不需要时返回 null。
  */
 export async function pinDetachedHead(repoFolder: string, head: string, label: string, options: GitOptions = {}): Promise<string | null> {
   const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
-  const containing = await runGit(repoFolder, ["for-each-ref", "--contains", head, "--count=1", "--format=%(refname)", "refs/heads"], timeoutMs);
+  const containing = await runGit(
+    repoFolder,
+    ["for-each-ref", "--contains", head, "--count=1", "--format=%(refname)", "refs/heads", ...MAIN_TARGET_REFS],
+    timeoutMs,
+  );
   if (containing.code !== 0) throw failed("git for-each-ref --contains", containing);
   if (containing.stdout.trim() !== "") return null;
   const name = `hub/detached-${label}-${head.slice(0, 8)}`;
-  const created = await runGit(repoFolder, ["branch", name, head], timeoutMs, { LC_ALL: "C" });
+  const created = await runGit(repoFolder, ["branch", "--", name, head], timeoutMs, { LC_ALL: "C" });
   if (created.code !== 0) {
     // 上一轮建好了、后面一步失败：分支已经指在这个提交上就算成功
     if ((await resolveCommit(repoFolder, `refs/heads/${name}`, options)) !== head) throw failed("git branch", created);
@@ -425,49 +450,233 @@ export function inspectWorktreeLink(worktreePath: string): WorktreeLink {
   const match = /^gitdir:\s*(.+?)\s*$/m.exec(text);
   if (match === null) return "linked";
   const target = isAbsolute(match[1]!) ? match[1]! : resolve(worktreePath, match[1]!);
-  return existsSync(target) ? "linked" : "orphan";
+  return existsSync(join(target, "HEAD")) ? "linked" : "orphan";
 }
 
 export type OrphanContentProbe = { kind: "ok"; hasContent: boolean } | { kind: "failed"; error: string };
 
+export interface ProbeOrphanOptions extends GitOptions {
+  /** Worker 登记的起点提交；当分支已删且主分支在合并后继续演进时，孤儿目录里未改动的旧文件仍停在起点，并入基准避免误判。 */
+  baseCommit?: string | null;
+}
+
+const ORPHAN_PATHSPEC_CHUNK = 500;
+const ORPHAN_HISTORY_COMMIT_LIMIT = 16;
+
+function lstatExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 从 porcelain=v2 的普通变更行（`1 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <path>`）取出末尾路径。 */
+function parsePorcelainV2OrdinaryPath(record: string): string | null {
+  let pos = 0;
+  for (let i = 0; i < 8; i++) {
+    pos = record.indexOf(" ", pos);
+    if (pos === -1) return null;
+    pos++;
+  }
+  return pos < record.length ? record.slice(pos) : null;
+}
+
 /**
- * 孤儿目录（已经不是有效 worktree、没有 .git 可用）里有没有“值得留”的东西：用主仓的对象库和 `ref`（分支或起点）的提交做基准，
- * 把目录当工作区、用临时索引跑一次 `git status`，.gitignore 取 `ref` 里的根 .gitignore（外加主仓的 info/exclude）。
- * 未跟踪且没被忽略的文件、与 `ref` 内容不同的已跟踪文件算“有内容”；node_modules、.codegraph 这类被忽略的和缺失的已跟踪文件不算。
- * 没有 `ref` 时只能用主仓 HEAD 的 .gitignore、空索引（所有未忽略的文件都算内容）。
+ * 孤儿目录（已经不是有效 worktree、没有 .git 可用）里有没有“值得留”的东西：
+ * - 用主仓对象库与临时索引跑 `git status --porcelain=v2 -z --no-renames --untracked-files=normal`（命中忽略目录时在目录层级直接跳过，不遍历 node_modules 里的上万文件）；
+ * - 若磁盘上的 `.gitignore`（含子目录）已被中断的 `git worktree remove` 删掉，把缺失项标为 `--skip-worktree` 让 git 原生从临时索引按各自子目录作用域读取，同时保留主仓 `info/exclude` 与用户全局 `core.excludesFile`；
+ * - 依次用 `ref`（分支）、主分支（`origin/main` / `main` / `HEAD`，兜住 PR 已合并且分支被 `git branch -D` 删掉的场景）、`baseCommit`（及 `baseCommit..main` 中触碰过剩余路径的已合入提交）渐进消解已入库文件；
+ * - 任何基准都解释不了的未忽略文件或被改写文件才算“有内容”（缺失的已跟踪文件 `.D` 不算）。
  */
-export async function probeOrphanContent(repoFolder: string, orphanPath: string, ref: string | null, options: GitOptions = {}): Promise<OrphanContentProbe> {
+export async function probeOrphanContent(
+  repoFolder: string,
+  orphanPath: string,
+  ref: string | null,
+  options: ProbeOrphanOptions = {},
+): Promise<OrphanContentProbe> {
   const timeoutMs = options.timeoutMs ?? GIT_PROBE_TIMEOUT_MS;
   let tmp: string | null = null;
   try {
-    const common = await runGit(repoFolder, [...GIT_READONLY_ARGS, "rev-parse", "--path-format=absolute", "--git-common-dir"], timeoutMs, { ...GIT_READONLY_ENV, LC_ALL: "C" });
+    const common = await runGit(
+      repoFolder,
+      [...GIT_READONLY_ARGS, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+      timeoutMs,
+      { ...GIT_READONLY_ENV, LC_ALL: "C" },
+    );
     if (common.code !== 0) throw failed("git rev-parse --git-common-dir", common);
     const gitDir = common.stdout.trim();
-    tmp = await mkdtemp(join(tmpdir(), "agent-hub-orphan-"));
-    const ignoreText = await runGit(repoFolder, [...GIT_READONLY_ARGS, "show", `${ref ?? "HEAD"}:.gitignore`], timeoutMs, { ...GIT_READONLY_ENV, LC_ALL: "C" });
-    const excludesFile = join(tmp, "excludes");
-    await writeFile(excludesFile, ignoreText.code === 0 ? ignoreText.stdout : "");
-    const env = { ...GIT_READONLY_ENV, LC_ALL: "C", GIT_DIR: gitDir, GIT_WORK_TREE: orphanPath, GIT_INDEX_FILE: join(tmp, "index") };
+
+    const commits: string[] = [];
+    const seenCommits = new Set<string>();
+    const addCommit = (sha: string | null) => {
+      if (sha !== null && sha !== "" && !seenCommits.has(sha)) {
+        seenCommits.add(sha);
+        commits.push(sha);
+      }
+    };
+
     if (ref !== null) {
-      const read = await runGit(orphanPath, [...GIT_READONLY_ARGS, "read-tree", ref], timeoutMs, env);
-      if (read.code !== 0) throw failed("git read-tree", read);
+      const resolvedRef = await resolveCommit(repoFolder, ref, { timeoutMs });
+      if (resolvedRef === null) throw new GitError("git_failed", `git read-tree 失败：找不到基准引用 ${ref}`);
+      addCommit(resolvedRef);
     }
-    const status = await runGit(
-      orphanPath,
-      [...GIT_READONLY_ARGS, "-c", `core.excludesFile=${excludesFile}`, "status", "--porcelain=v2", "--untracked-files=normal", "--ignore-submodules=none"],
+
+    const mainRefsRun = await runGit(
+      repoFolder,
+      [...GIT_READONLY_ARGS, "for-each-ref", "--format=%(objectname)", ...MAIN_TARGET_REFS],
       timeoutMs,
-      env,
+      { ...GIT_READONLY_ENV, LC_ALL: "C" },
     );
-    if (status.code !== 0) throw failed("git status", status);
-    const hasContent = status.stdout.split("\n").some((line) => {
-      if (line === "") return false;
-      if (line === "? .git") return false; // 指向已不存在的 gitdir 的残留链接文件
-      // 已跟踪文件只看“工作区 vs 索引”这一侧（XY 的第二个字符）：没变（.）、缺失（D，目录被清空过）都不是用户内容；
-      // 第一个字符是“索引 vs 主仓 HEAD”，主仓 HEAD 不是基准，不看。
-      if (line.startsWith("1 ") || line.startsWith("2 ")) return line[3] !== "." && line[3] !== "D";
-      return true;
-    });
-    return { kind: "ok", hasContent };
+    if (mainRefsRun.code !== 0) throw failed("git for-each-ref", mainRefsRun);
+    const mainCommits: string[] = [];
+    for (const line of mainRefsRun.stdout.split("\n")) {
+      const sha = line.trim();
+      if (sha !== "" && !mainCommits.includes(sha)) mainCommits.push(sha);
+    }
+    const repoHead = await resolveCommit(repoFolder, "HEAD", { timeoutMs });
+    if (repoHead !== null && !mainCommits.includes(repoHead)) mainCommits.push(repoHead);
+    for (const sha of mainCommits) addCommit(sha);
+
+    const resolvedBase = options.baseCommit ? await resolveCommit(repoFolder, options.baseCommit, { timeoutMs }) : null;
+    addCommit(resolvedBase);
+
+    tmp = await mkdtemp(join(tmpdir(), "agent-hub-orphan-"));
+    const env = { ...GIT_READONLY_ENV, LC_ALL: "C", GIT_DIR: gitDir, GIT_WORK_TREE: orphanPath, GIT_INDEX_FILE: join(tmp, "index") };
+
+    const checkAgainst = async (commit: string | null, filterPaths: string[] | null): Promise<{ unknownFormat: boolean; paths: string[] }> => {
+      if (commit !== null) {
+        const read = await runGit(orphanPath, [...GIT_READONLY_ARGS, "read-tree", commit], timeoutMs, env);
+        if (read.code !== 0) throw failed("git read-tree", read);
+        const lsIgnores = await runGit(
+          orphanPath,
+          [...GIT_READONLY_ARGS, "ls-files", "-z", "--", ".gitignore", ":(glob)**/.gitignore"],
+          timeoutMs,
+          env,
+        );
+        if (lsIgnores.code !== 0) throw failed("git ls-files", lsIgnores);
+        const missingIgnores = lsIgnores.stdout
+          .split("\0")
+          .filter((relPath) => relPath !== "" && !lstatExists(join(orphanPath, relPath)));
+        if (missingIgnores.length > 0) {
+          const skip = await runGit(
+            orphanPath,
+            [...GIT_READONLY_ARGS, "update-index", "--skip-worktree", "-z", "--stdin"],
+            timeoutMs,
+            env,
+            `${missingIgnores.join("\0")}\0`,
+          );
+          if (skip.code !== 0) throw failed("git update-index", skip);
+        }
+      }
+
+      const chunks: Array<string[] | null> = [];
+      if (filterPaths === null) {
+        chunks.push(null);
+      } else {
+        for (let i = 0; i < filterPaths.length; i += ORPHAN_PATHSPEC_CHUNK) {
+          chunks.push(filterPaths.slice(i, i + ORPHAN_PATHSPEC_CHUNK));
+        }
+      }
+
+      const remaining: string[] = [];
+      const seenPaths = new Set<string>();
+      for (const chunk of chunks) {
+        const status = await runGit(
+          orphanPath,
+          [
+            ...GIT_READONLY_ARGS,
+            ...(chunk === null ? [] : ["--literal-pathspecs"]),
+            "status",
+            "--porcelain=v2",
+            "-z",
+            "--no-renames",
+            "--untracked-files=normal",
+            "--ignore-submodules=none",
+            ...(chunk === null ? [] : ["--", ...chunk]),
+          ],
+          timeoutMs,
+          env,
+        );
+        if (status.code !== 0) throw failed("git status", status);
+        for (const record of status.stdout.split("\0")) {
+          if (record === "" || record === "? .git") continue;
+          if (record.startsWith("? ")) {
+            const p = record.slice(2);
+            if (!seenPaths.has(p)) {
+              seenPaths.add(p);
+              remaining.push(p);
+            }
+            continue;
+          }
+          // 已跟踪文件只看“工作区 vs 索引”这一侧（XY 的第二个字符）：没变（.）、缺失（D，目录被清空过）都不是用户内容；
+          // 第一个字符是“索引 vs 主仓 HEAD”，主仓 HEAD 不是基准，不看。
+          if (record.startsWith("1 ")) {
+            if (record[3] === "." || record[3] === "D") continue;
+            const p = parsePorcelainV2OrdinaryPath(record);
+            if (p === null) return { unknownFormat: true, paths: [] };
+            if (!seenPaths.has(p)) {
+              seenPaths.add(p);
+              remaining.push(p);
+            }
+            continue;
+          }
+          return { unknownFormat: true, paths: [] };
+        }
+      }
+      return { unknownFormat: false, paths: remaining };
+    };
+
+    if (commits.length === 0) {
+      const res = await checkAgainst(null, null);
+      return { kind: "ok", hasContent: res.unknownFormat || res.paths.length > 0 };
+    }
+
+    let suspectPaths: string[] | null = null;
+    for (const commit of commits) {
+      const res = await checkAgainst(commit, suspectPaths);
+      if (res.unknownFormat) return { kind: "ok", hasContent: true };
+      suspectPaths = res.paths;
+      if (suspectPaths.length === 0) return { kind: "ok", hasContent: false };
+    }
+
+    if (
+      suspectPaths !== null &&
+      suspectPaths.length > 0 &&
+      resolvedBase !== null &&
+      mainCommits.length > 0 &&
+      suspectPaths.length <= ORPHAN_PATHSPEC_CHUNK
+    ) {
+      const revRun = await runGit(
+        repoFolder,
+        [
+          ...GIT_READONLY_ARGS,
+          "--literal-pathspecs",
+          "rev-list",
+          `--max-count=${ORPHAN_HISTORY_COMMIT_LIMIT}`,
+          `^${resolvedBase}`,
+          ...mainCommits,
+          "--",
+          ...suspectPaths,
+        ],
+        timeoutMs,
+        { ...GIT_READONLY_ENV, LC_ALL: "C" },
+      );
+      if (revRun.code === 0) {
+        for (const rawSha of revRun.stdout.split("\n")) {
+          const sha = rawSha.trim();
+          if (sha === "" || seenCommits.has(sha)) continue;
+          seenCommits.add(sha);
+          const res = await checkAgainst(sha, suspectPaths);
+          if (res.unknownFormat) return { kind: "ok", hasContent: true };
+          suspectPaths = res.paths;
+          if (suspectPaths.length === 0) return { kind: "ok", hasContent: false };
+        }
+      }
+    }
+
+    return { kind: "ok", hasContent: true };
   } catch (error) {
     return { kind: "failed", error: error instanceof Error ? error.message : String(error) };
   } finally {

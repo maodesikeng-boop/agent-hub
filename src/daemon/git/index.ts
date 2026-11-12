@@ -21,4 +21,13 @@ export {
   resolveCommit,
 } from "./git.ts";
 export { probePr, probePrByUrl } from "./pr.ts";
-export type { AddWorktreeOptions, AddWorktreeResult, DiffFileStat, GitOptions, OrphanContentProbe, WorktreeLink, WorktreeRemovalProbe } from "./git.ts";
+export type {
+  AddWorktreeOptions,
+  AddWorktreeResult,
+  DiffFileStat,
+  GitOptions,
+  OrphanContentProbe,
+  ProbeOrphanOptions,
+  WorktreeLink,
+  WorktreeRemovalProbe,
+} from "./git.ts";

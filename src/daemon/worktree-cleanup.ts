@@ -123,7 +123,10 @@ export function createWorktreeCleanup(options: WorktreeCleanupOptions): Worktree
       log(`${LOG_PREFIX} 清理孤儿 worktree 目录：检查分支合并状态失败（${tag}）：${error instanceof Error ? error.message : String(error)}`);
       return false;
     }
-    const content = await probeOrphanContent(candidate.repoFolder, candidate.worktreePath, tip ?? candidate.baseCommit, git);
+    const content = await probeOrphanContent(candidate.repoFolder, candidate.worktreePath, tip, {
+      ...git,
+      baseCommit: candidate.baseCommit,
+    });
     if (content.kind !== "ok") {
       log(`${LOG_PREFIX} 清理孤儿 worktree 目录：检查内容失败（${tag}）：${content.error}`);
       return false;
@@ -145,7 +148,9 @@ export function createWorktreeCleanup(options: WorktreeCleanupOptions): Worktree
       log(`${LOG_PREFIX} 清理孤儿 worktree 目录：删除后目录仍在，下轮再试（${tag}）`);
       return false;
     }
-    log(`${LOG_PREFIX} 已清理孤儿 worktree 目录：worker #${candidate.workerId}（${candidate.worktreePath}，分支 ${candidate.branch} 保留）`);
+    log(
+      `${LOG_PREFIX} 已清理孤儿 worktree 目录：worker #${candidate.workerId}（${candidate.worktreePath}，${tip === null ? `分支 ${candidate.branch} 已不在` : `分支 ${candidate.branch} 保留`}）`,
+    );
     return true;
   };
 
@@ -206,17 +211,19 @@ export function createWorktreeCleanup(options: WorktreeCleanupOptions): Worktree
         log(`${LOG_PREFIX} 清理 worktree：检查状态失败（worker #${candidate.workerId}，${candidate.worktreePath}）：${probe.error}`);
         continue;
       }
-      if (!probe.isRepoWithCommit || !probe.clean || probe.inProgress) continue;
+      if (!probe.isRepoWithCommit || !probe.clean || probe.inProgress || probe.head === null) continue;
 
-      // 2b. HEAD 不在分支上（detached）：HEAD 已在主分支历史里就没东西会丢；否则只有收工满 3 天才删，并先给它建个分支引用，提交对象不丢
+      // 2b. 未满保留期时，worktree 当前实际的 HEAD 也必须在主分支历史里（防登记分支已合入但工作区切到了别的未合并提交）；
+      //     HEAD 不在分支上（detached）且没合入主分支时：满 3 天才删，并先给它建个分支引用，建失败绝不继续删目录丢提交。
       let pinned: string | null = null;
-      if (!probe.onBranch) {
-        if (probe.head === null) continue;
+      if (!expired || !probe.onBranch) {
         try {
           const headMerged = await isCommitMergedToMain(candidate.repoFolder, probe.head, git);
           if (!headMerged) {
             if (!expired) continue;
-            pinned = await pinDetachedHead(candidate.repoFolder, probe.head, String(candidate.workerId), git);
+            if (!probe.onBranch) {
+              pinned = await pinDetachedHead(candidate.repoFolder, probe.head, String(candidate.workerId), git);
+            }
           }
         } catch (error) {
           log(`${LOG_PREFIX} 清理 worktree：保全 detached HEAD 失败（worker #${candidate.workerId}）：${error instanceof Error ? error.message : String(error)}`);
