@@ -159,7 +159,8 @@ describe("隔离规则", () => {
     expect(profile).toContain('(remote ip "localhost:4317")');
     expect(profile).toContain('(deny network-outbound (remote tcp "*:22"))');
     expect(profile).toContain('(deny process-exec (literal "/usr/bin/ssh") (literal "/opt/homebrew/bin/gh"))');
-    expect(profile).toContain("(deny signal (target others))");
+    expect(profile).toContain("(deny signal)\n(allow signal (target same-sandbox))");
+    expect(profile).not.toContain("(target others)");
     // 评测自己的目录（~/.agent-hub-eval）不能被“~/.agent-hub”的规则误伤：subpath 按路径分段比，不是字符串前缀
     expect(profile).not.toContain("path-prefix");
   });
