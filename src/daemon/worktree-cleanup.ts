@@ -1,13 +1,17 @@
 // Worker 的 git worktree 自动清理：
 // 满足任一条件就自动删 worktree（分支 hub/<id>-<slug> 保留）：
-// 1. 这个 Worker 的分支已合并进主分支（origin/main、main 等）；
+// 1. 已合并进主分支（origin/main、main 等）：登记的分支，或 worktree 当前实际的 HEAD（detached 在 PR 提交上、review-* 临时分支、
+//    一个提交都没新增的 0 提交探索目录——HEAD 就在 main 历史里——都算，不用白留 3 天）；
 // 2. Worker 已收工满 WORKTREE_RETENTION_DAYS（3 天）。
 // 任何情况下：还在跑（未收工）的不删；有未提交改动（含未跟踪文件）的不删（PR 已合并也不删，留给人看）；
-// HEAD 不在分支上（detached、rebase 到一半）的不删；不用 worktree 的跳过；路径不在 worktreesDir 下的绝不删。
+// rebase / merge / cherry-pick / bisect 进行到一半的不删；不用 worktree 的跳过；路径不在 worktreesDir 下（含符号链接）的绝不删。
+// detached HEAD 且 HEAD 没合入主分支：满 3 天才删，删之前先建 hub/detached-<Worker>-<提交号> 分支保住提交。
+// 已被外部 git worktree remove / prune 解绑、只剩壳的孤儿目录：同样条件下（且没有未被忽略的文件）直接 fs.rm 回收。
 // 被 .gitignore 忽略的文件（node_modules、.env、截图等）不算改动，随目录一起删。
 // 每轮最多检查 WORKTREE_CLEANUP_BATCH_LIMIT 个：先判条件（不到期才查合并，git 引用很便宜），满足了才跑 git status；
 // 用 git worktree remove（不带 --force），失败只记日志下轮再试，删完跑 git worktree prune。
-import { lstatSync } from "node:fs";
+import { existsSync, lstatSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { WorkerId } from "../shared/domain.ts";
 import {
@@ -17,11 +21,16 @@ import {
   WORKTREE_RETENTION_MS,
 } from "../shared/index.ts";
 import {
+  inspectWorktreeLink,
   isBranchMergedToMain,
+  isCommitMergedToMain,
+  pinDetachedHead,
+  probeOrphanContent,
   probeWorktreeForRemoval,
   pruneWorktrees,
   realpathLoose,
   removeWorktree,
+  resolveCommit,
   type GitOptions,
 } from "./git/index.ts";
 import type { EndedWorktreeCandidate } from "./ledger/index.ts";
@@ -99,6 +108,47 @@ export function createWorktreeCleanup(options: WorktreeCleanupOptions): Worktree
     return batch;
   };
 
+  /**
+   * 孤儿目录（已不是有效 worktree）：登记的分支已合并 / 已不存在 / 收工满保留期之一成立，
+   * 且目录里没有未被忽略的用户文件（node_modules、.codegraph 这类忽略目录随目录一起收回），才物理删除。返回是否删掉了。
+   */
+  const cleanOrphan = async (candidate: EndedWorktreeCandidate): Promise<boolean> => {
+    const tag = `worker #${candidate.workerId}，${candidate.worktreePath}`;
+    const expired = now() - candidate.endedAt >= retentionMs;
+    let tip: string | null;
+    try {
+      tip = await resolveCommit(candidate.repoFolder, `refs/heads/${candidate.branch}`, git);
+      if (!expired && tip !== null && !(await isCommitMergedToMain(candidate.repoFolder, tip, git))) return false;
+    } catch (error) {
+      log(`${LOG_PREFIX} 清理孤儿 worktree 目录：检查分支合并状态失败（${tag}）：${error instanceof Error ? error.message : String(error)}`);
+      return false;
+    }
+    const content = await probeOrphanContent(candidate.repoFolder, candidate.worktreePath, tip ?? candidate.baseCommit, git);
+    if (content.kind !== "ok") {
+      log(`${LOG_PREFIX} 清理孤儿 worktree 目录：检查内容失败（${tag}）：${content.error}`);
+      return false;
+    }
+    if (content.hasContent) {
+      log(`${LOG_PREFIX} 清理孤儿 worktree 目录：目录里有没被忽略的文件，保留（${tag}）`);
+      return false;
+    }
+    // 动手前再核一次：路径仍是 worktreesDir 下的真目录（不是符号链接）、Worker 没重新跑起来
+    if (stopped || !isUnderWorktreesDir(candidate.worktreePath, worktreesDir) || !ledger.isWorkerCleanable(candidate.workerId)) return false;
+    try {
+      // 不跟随符号链接；codegraph 守护进程刚退出时文件可能还在被释放，让 fs.rm 自己重试几次
+      await rm(candidate.worktreePath, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+    } catch (error) {
+      log(`${LOG_PREFIX} 清理孤儿 worktree 目录失败（${tag}）：${error instanceof Error ? error.message : String(error)}`);
+      return false;
+    }
+    if (existsSync(candidate.worktreePath)) {
+      log(`${LOG_PREFIX} 清理孤儿 worktree 目录：删除后目录仍在，下轮再试（${tag}）`);
+      return false;
+    }
+    log(`${LOG_PREFIX} 已清理孤儿 worktree 目录：worker #${candidate.workerId}（${candidate.worktreePath}，分支 ${candidate.branch} 保留）`);
+    return true;
+  };
+
   const doRunOnce = async (): Promise<WorkerId[]> => {
     if (stopped) return [];
     let all: EndedWorktreeCandidate[];
@@ -122,12 +172,27 @@ export function createWorktreeCleanup(options: WorktreeCleanupOptions): Worktree
       if (stopped) break;
       if (!isUnderWorktreesDir(candidate.worktreePath, worktreesDir) || !ledger.isWorkerCleanable(candidate.workerId)) continue;
 
-      // 1. 满足“收工满 3 天”或“分支已合并进主分支”任一条件才往下走（不满足的不跑 git status）
+      // 0. 已经不是有效 git worktree 的残留目录（外部 git worktree remove / prune 之后剩下的壳）：走孤儿流程，不跑 git status
+      if (inspectWorktreeLink(candidate.worktreePath) === "orphan") {
+        if (await cleanOrphan(candidate)) {
+          cleaned.push(candidate.workerId);
+          prunedRepos.add(candidate.repoFolder);
+        }
+        continue;
+      }
+
+      // 1. 满足“收工满 3 天”或“已合并进主分支”任一条件才往下走（不满足的不跑 git status）。
+      //    “已合并”看两处：登记的分支，和 worktree 当前实际的 HEAD（审查 Worker 常 detached 在 PR 提交上，
+      //    或停在 review-* 临时分支；一个提交都没新增、HEAD 还在 main 历史里的探索目录也算，没有任何东西会丢）。
       const expired = now() - candidate.endedAt >= retentionMs;
+      let merged = false;
       if (!expired) {
-        let merged: boolean;
         try {
           merged = await isBranchMergedToMain(candidate.repoFolder, candidate.branch, candidate.baseCommit, git);
+          if (!merged) {
+            const head = await resolveCommit(candidate.worktreePath, "HEAD", git);
+            merged = head !== null && (await isCommitMergedToMain(candidate.repoFolder, head, git));
+          }
         } catch (error) {
           log(`${LOG_PREFIX} 清理 worktree：检查分支合并状态失败（worker #${candidate.workerId}）：${error instanceof Error ? error.message : String(error)}`);
           continue;
@@ -135,13 +200,29 @@ export function createWorktreeCleanup(options: WorktreeCleanupOptions): Worktree
         if (!merged) continue;
       }
 
-      // 2. 有未提交改动（含未跟踪文件）、HEAD 不在分支上的一律不删（即使 PR 已合并也留给人看）
+      // 2. 有未提交改动（含未跟踪文件）、rebase / merge / cherry-pick / bisect 进行到一半的一律不删（即使 PR 已合并也留给人看）
       const probe = await probeWorktreeForRemoval(candidate.worktreePath, git);
       if (probe.kind !== "ok") {
         log(`${LOG_PREFIX} 清理 worktree：检查状态失败（worker #${candidate.workerId}，${candidate.worktreePath}）：${probe.error}`);
         continue;
       }
-      if (!probe.isRepoWithCommit || !probe.clean || !probe.onBranch) continue;
+      if (!probe.isRepoWithCommit || !probe.clean || probe.inProgress) continue;
+
+      // 2b. HEAD 不在分支上（detached）：HEAD 已在主分支历史里就没东西会丢；否则只有收工满 3 天才删，并先给它建个分支引用，提交对象不丢
+      let pinned: string | null = null;
+      if (!probe.onBranch) {
+        if (probe.head === null) continue;
+        try {
+          const headMerged = await isCommitMergedToMain(candidate.repoFolder, probe.head, git);
+          if (!headMerged) {
+            if (!expired) continue;
+            pinned = await pinDetachedHead(candidate.repoFolder, probe.head, String(candidate.workerId), git);
+          }
+        } catch (error) {
+          log(`${LOG_PREFIX} 清理 worktree：保全 detached HEAD 失败（worker #${candidate.workerId}）：${error instanceof Error ? error.message : String(error)}`);
+          continue;
+        }
+      }
 
       // 3. 动手删之前再核一次路径和 Worker 状态，确保未重新跑起来
       if (stopped || !isUnderWorktreesDir(candidate.worktreePath, worktreesDir) || !ledger.isWorkerCleanable(candidate.workerId)) continue;
@@ -149,6 +230,12 @@ export function createWorktreeCleanup(options: WorktreeCleanupOptions): Worktree
       try {
         await removeWorktree(candidate.repoFolder, candidate.worktreePath, git);
       } catch (error) {
+        // 探到删除之间被外部解绑了：照孤儿处理（里面还有没忽略的文件就保留）
+        if (inspectWorktreeLink(candidate.worktreePath) === "orphan" && (await cleanOrphan(candidate))) {
+          cleaned.push(candidate.workerId);
+          prunedRepos.add(candidate.repoFolder);
+          continue;
+        }
         log(
           `${LOG_PREFIX} 清理 worktree 失败（worker #${candidate.workerId}，${candidate.worktreePath}）：${error instanceof Error ? error.message : String(error)}`,
         );
@@ -156,7 +243,9 @@ export function createWorktreeCleanup(options: WorktreeCleanupOptions): Worktree
       }
       cleaned.push(candidate.workerId);
       prunedRepos.add(candidate.repoFolder);
-      log(`${LOG_PREFIX} 已自动清理 worktree：worker #${candidate.workerId}（${candidate.worktreePath}，分支 ${candidate.branch} 保留）`);
+      log(
+        `${LOG_PREFIX} 已自动清理 worktree：worker #${candidate.workerId}（${candidate.worktreePath}，分支 ${candidate.branch} 保留${pinned === null ? "" : `，detached HEAD 已保底到分支 ${pinned}`}）`,
+      );
     }
 
     for (const repoFolder of prunedRepos) {

@@ -1,6 +1,6 @@
 // 真 git、临时目录：判断仓库、没提交的改动、建 worktree（M3 W1，计划的测试表）。
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,11 +8,16 @@ import {
   addWorktree,
   GitError,
   hasUncommittedChanges,
+  inspectWorktreeLink,
   isBranchMergedToMain,
+  isCommitMergedToMain,
   isRepoWithCommit,
   parseDiffNumstatZ,
+  pinDetachedHead,
   probeDiffNumstat,
+  probeOrphanContent,
   probeWorkspace,
+  probeWorktreeForRemoval,
   pruneWorktrees,
   removeWorktree,
 } from "./index.ts";
@@ -407,5 +412,92 @@ describe("isBranchMergedToMain、removeWorktree、pruneWorktrees", () => {
       { file: "中文 文件.txt", added: 2, deleted: 0 },
     ]);
     expect(await probeDiffNumstat(repo, "hub/not-exist", { baseCommit })).toBeNull();
+  });
+});
+
+describe("自动清理用的探测：中间状态、detached HEAD 保底、孤儿目录", () => {
+  it("probeWorktreeForRemoval 带出 head / onBranch / inProgress；merge 冲突停在一半算 inProgress", async () => {
+    const repo = makeRepo("probe");
+    const wt = join(root, "wt", "p");
+    const { baseCommit } = await addWorktree({ repoFolder: repo, worktreePath: wt, branch: "hub/p" });
+    const probe = await probeWorktreeForRemoval(wt);
+    expect(probe).toMatchObject({ kind: "ok", clean: true, onBranch: true, head: baseCommit, inProgress: false });
+
+    git(wt, "checkout", "-q", "--detach");
+    expect(await probeWorktreeForRemoval(wt)).toMatchObject({ onBranch: false, head: baseCommit });
+
+    // 制造 merge 冲突并停在一半
+    writeFileSync(join(repo, "a.txt"), "main\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "main a");
+    git(wt, "checkout", "-q", "hub/p");
+    writeFileSync(join(wt, "a.txt"), "wt\n");
+    git(wt, "add", "-A");
+    git(wt, "commit", "-q", "-m", "wt a");
+    expect(() => git(wt, "merge", "main")).toThrow();
+    expect(await probeWorktreeForRemoval(wt)).toMatchObject({ kind: "ok", inProgress: true, clean: false });
+  });
+
+  it("isCommitMergedToMain：main 历史里的提交（含 main 本身）是 true，没合入的是 false", async () => {
+    const repo = makeRepo("merged-commit");
+    const wt = join(root, "wt", "m");
+    const { baseCommit } = await addWorktree({ repoFolder: repo, worktreePath: wt, branch: "hub/m" });
+    expect(await isCommitMergedToMain(repo, baseCommit)).toBe(true);
+    writeFileSync(join(wt, "n.txt"), "1\n");
+    git(wt, "add", "-A");
+    git(wt, "commit", "-q", "-m", "n");
+    const sha = git(wt, "rev-parse", "HEAD");
+    expect(await isCommitMergedToMain(repo, sha)).toBe(false);
+    git(repo, "merge", "--ff-only", "-q", sha);
+    expect(await isCommitMergedToMain(repo, sha)).toBe(true);
+  });
+
+  it("pinDetachedHead：已被本地分支包含不建；孤悬提交建 hub/detached-… 分支，重复调用幂等", async () => {
+    const repo = makeRepo("pin");
+    const wt = join(root, "wt", "pin");
+    await addWorktree({ repoFolder: repo, worktreePath: wt, branch: "hub/pin" });
+    const onBranch = git(wt, "rev-parse", "HEAD");
+    expect(await pinDetachedHead(repo, onBranch, "7")).toBeNull();
+
+    git(wt, "checkout", "-q", "--detach");
+    writeFileSync(join(wt, "d.txt"), "1\n");
+    git(wt, "add", "-A");
+    git(wt, "commit", "-q", "-m", "d");
+    const sha = git(wt, "rev-parse", "HEAD");
+    const name = await pinDetachedHead(repo, sha, "7");
+    expect(name).toBe(`hub/detached-7-${sha.slice(0, 8)}`);
+    expect(git(repo, "rev-parse", name!)).toBe(sha);
+    // 分支已经包含它了，第二次不再建
+    expect(await pinDetachedHead(repo, sha, "7")).toBeNull();
+  });
+
+  it("inspectWorktreeLink：有效 worktree 是 linked；.git 没了或登记目录被删是 orphan", async () => {
+    const repo = makeRepo("link");
+    const wt = join(root, "wt", "l");
+    await addWorktree({ repoFolder: repo, worktreePath: wt, branch: "hub/l" });
+    expect(inspectWorktreeLink(wt)).toBe("linked");
+    const registry = readFileSync(join(wt, ".git"), "utf8").replace("gitdir:", "").trim();
+    rmSync(registry, { recursive: true, force: true });
+    expect(inspectWorktreeLink(wt)).toBe("orphan");
+    rmSync(join(wt, ".git"));
+    expect(inspectWorktreeLink(wt)).toBe("orphan");
+  });
+
+  it("probeOrphanContent：只有被忽略的目录和与分支一致的已跟踪文件 → 没内容；多出未忽略的文件或改了已跟踪文件 → 有内容", async () => {
+    const repo = makeRepo("orphan-content");
+    writeFileSync(join(repo, ".gitignore"), "node_modules/\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "ignore");
+    const wt = join(root, "wt", "o");
+    await addWorktree({ repoFolder: repo, worktreePath: wt, branch: "hub/o" });
+    mkdirSync(join(wt, "node_modules", "x"), { recursive: true });
+    writeFileSync(join(wt, "node_modules", "x", "a.js"), "1\n");
+    rmSync(join(wt, ".git"));
+    expect(await probeOrphanContent(repo, wt, "hub/o")).toEqual({ kind: "ok", hasContent: false });
+    writeFileSync(join(wt, "notes.md"), "mine\n");
+    expect(await probeOrphanContent(repo, wt, "hub/o")).toEqual({ kind: "ok", hasContent: true });
+    rmSync(join(wt, "notes.md"));
+    writeFileSync(join(wt, "README.md"), "edited\n");
+    expect(await probeOrphanContent(repo, wt, "hub/o")).toEqual({ kind: "ok", hasContent: true });
   });
 });

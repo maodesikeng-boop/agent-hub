@@ -1,8 +1,10 @@
 // git 操作（M3 W1）：判断主文件夹是不是有提交的仓库、有没有没提交的改动、给 Worker 建 worktree。
 // 用 execFile 直接调 git，不经过 shell；每次调用都有超时；拿不到的错误转成 GitError（中文信息 + kind）。
 import { execFile } from "node:child_process";
-import { realpathSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { WorkspaceProbe } from "../../shared/ledger.ts";
 import { GIT_MAX_BUFFER_BYTES, GIT_PROBE_TIMEOUT_MS, GIT_TIMEOUT_MS } from "../../shared/limits.ts";
 
@@ -273,15 +275,37 @@ export async function isBranchMergedToMain(
 }
 
 export type WorktreeRemovalProbe =
-  | { kind: "ok"; isRepoWithCommit: boolean; clean: boolean; onBranch: boolean }
+  | {
+      kind: "ok";
+      isRepoWithCommit: boolean;
+      clean: boolean;
+      onBranch: boolean;
+      /** HEAD 当前指向的完整提交号；还没有提交或不是仓库时是 null。 */
+      head: string | null;
+      /** rebase / merge / cherry-pick / revert / bisect 进行到一半（这些中间状态下的 HEAD 和工作区不能当成“干净”）。 */
+      inProgress: boolean;
+    }
   | { kind: "failed"; error: string };
 
+/** 这些 git 内部文件或目录存在，说明有一个多步操作停在中途（rebase、merge、cherry-pick、revert、bisect）。 */
+const IN_PROGRESS_GIT_PATHS = [
+  "rebase-merge",
+  "rebase-apply",
+  "MERGE_HEAD",
+  "CHERRY_PICK_HEAD",
+  "REVERT_HEAD",
+  "sequencer",
+  "BISECT_LOG",
+] as const;
+
 /**
- * 自动清理删 worktree 之前探一次（一个 `git status --porcelain=v2 --branch` 子进程）：
+ * 自动清理删 worktree 之前探一次（一个 `git status --porcelain=v2 --branch` 子进程，外加一次 `git rev-parse --git-path` 查中间状态）：
  * - clean：没有已跟踪文件的改动、暂存、未跟踪文件、子模块改动。显式 `--untracked-files=normal`：
  *   仓库配了 `status.showUntrackedFiles=no` 时默认的 status 看不到未跟踪文件，而 `git worktree remove` 也照删不误（实测）。
- * - onBranch：HEAD 指在某个分支上。detached HEAD（含 rebase、bisect 进行到一半）上的新提交不在任何分支里，
- *   `git worktree remove` 不拦，删了 worktree 连同它的 HEAD reflog 一起没了（实测），所以不在分支上的不删。
+ * - onBranch：HEAD 指在某个分支上；head：HEAD 的提交号。detached HEAD 上的新提交不在任何分支里，
+ *   `git worktree remove` 不拦，删了 worktree 连同它的 HEAD reflog 一起没了（实测），所以调用方要先确认 head 已合入主分支，
+ *   或者先给它建一个分支引用（见 pinDetachedHead），才能删。
+ * - inProgress：rebase、merge、cherry-pick、bisect 进行到一半，任何时候都不删。
  * - 不是 git 仓库（目录还在但 .git 没了）返回 isRepoWithCommit: false，不算失败。
  * 被 .gitignore 忽略的文件（node_modules、.env、截图）不算改动，`git worktree remove` 会连目录一起删掉。
  */
@@ -295,21 +319,159 @@ export async function probeWorktreeForRemoval(worktreePath: string, options: Git
       { ...GIT_READONLY_ENV, LC_ALL: "C" },
     );
     if (run.code === 128 && /not a git repository/i.test(run.stderr)) {
-      return { kind: "ok", isRepoWithCommit: false, clean: false, onBranch: false };
+      return { kind: "ok", isRepoWithCommit: false, clean: false, onBranch: false, head: null, inProgress: false };
     }
     if (run.code !== 0) throw failed("git status", run);
     let hasCommit = true;
     let onBranch = false;
     let clean = true;
+    let head: string | null = null;
     for (const line of run.stdout.split("\n")) {
       if (line === "") continue;
       if (line === "# branch.oid (initial)") hasCommit = false;
+      else if (line.startsWith("# branch.oid ")) head = line.slice("# branch.oid ".length);
       else if (line.startsWith("# branch.head ")) onBranch = line !== "# branch.head (detached)";
       else if (!line.startsWith("# ")) clean = false;
     }
-    return { kind: "ok", isRepoWithCommit: hasCommit, clean, onBranch };
+    const inProgress = await hasOperationInProgress(worktreePath, timeoutMs);
+    return { kind: "ok", isRepoWithCommit: hasCommit, clean, onBranch, head: hasCommit ? head : null, inProgress };
   } catch (error) {
     return { kind: "failed", error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function hasOperationInProgress(worktreePath: string, timeoutMs: number): Promise<boolean> {
+  const args = ["rev-parse", "--path-format=absolute"];
+  for (const name of IN_PROGRESS_GIT_PATHS) args.push("--git-path", name);
+  const run = await runGit(worktreePath, [...GIT_READONLY_ARGS, ...args], timeoutMs, { ...GIT_READONLY_ENV, LC_ALL: "C" });
+  if (run.code !== 0) throw failed("git rev-parse --git-path", run);
+  return run.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .some((path) => path !== "" && existsSync(path));
+}
+
+/** 解析一个引用到完整提交号；引用不存在（或文件夹不是仓库）返回 null。 */
+export async function resolveCommit(folder: string, ref: string, options: GitOptions = {}): Promise<string | null> {
+  const run = await runGit(
+    folder,
+    [...GIT_READONLY_ARGS, "rev-parse", "--verify", "--quiet", `${ref}^{commit}`],
+    options.timeoutMs ?? GIT_PROBE_TIMEOUT_MS,
+    { ...GIT_READONLY_ENV, LC_ALL: "C" },
+  );
+  if (run.code !== 0) return null;
+  const sha = run.stdout.trim();
+  return sha === "" ? null : sha;
+}
+
+/**
+ * 提交已经在主分支（`origin/main`、`main`、master）的历史里（含恰好就是主分支的提交）。
+ * 和 isBranchMergedToMain 不同，这里不排除“还停在起点”：调用方（自动清理）只对已收工且工作区干净的 Worker 问，
+ * 起点就在 main 上、一个提交都没新增的目录没有任何东西会丢。
+ */
+export async function isCommitMergedToMain(repoFolder: string, commit: string, options: GitOptions = {}): Promise<boolean> {
+  const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
+  const refsRun = await runGit(repoFolder, ["for-each-ref", "--format=%(objectname)", ...MAIN_TARGET_REFS], timeoutMs);
+  if (refsRun.code !== 0) throw failed("git for-each-ref", refsRun);
+  for (const target of new Set(refsRun.stdout.split("\n").map((l) => l.trim()).filter((l) => l !== ""))) {
+    if (target === commit) return true;
+    const ancRun = await runGit(repoFolder, ["merge-base", "--is-ancestor", commit, target], timeoutMs);
+    if (ancRun.code === 0) return true;
+    if (ancRun.code !== 1) throw failed("git merge-base --is-ancestor", ancRun);
+  }
+  return false;
+}
+
+/**
+ * 保证 detached HEAD 上的提交不会随 worktree 一起丢：已经被某个本地分支包含就什么都不做，
+ * 否则建分支 `hub/detached-<标签>-<提交号前 8 位>`（名字带提交号，不会覆盖别的分支）。返回保底分支名，不需要时返回 null。
+ */
+export async function pinDetachedHead(repoFolder: string, head: string, label: string, options: GitOptions = {}): Promise<string | null> {
+  const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
+  const containing = await runGit(repoFolder, ["for-each-ref", "--contains", head, "--count=1", "--format=%(refname)", "refs/heads"], timeoutMs);
+  if (containing.code !== 0) throw failed("git for-each-ref --contains", containing);
+  if (containing.stdout.trim() !== "") return null;
+  const name = `hub/detached-${label}-${head.slice(0, 8)}`;
+  const created = await runGit(repoFolder, ["branch", name, head], timeoutMs, { LC_ALL: "C" });
+  if (created.code !== 0) {
+    // 上一轮建好了、后面一步失败：分支已经指在这个提交上就算成功
+    if ((await resolveCommit(repoFolder, `refs/heads/${name}`, options)) !== head) throw failed("git branch", created);
+  }
+  return name;
+}
+
+export type WorktreeLink = "linked" | "orphan";
+
+/**
+ * 目录和主仓的 worktree 登记还连着吗（只看文件系统，不跑 git：`.git` 没了时 git 会往上找父目录的仓库，不能拿来判断）：
+ * - orphan：`.git` 不存在，或是 `gitdir: <主仓>/.git/worktrees/<名字>` 指向的目录已经不在（外部 git worktree remove / prune 之后残留的壳）；
+ * - linked：其他情况（含 `.git` 是目录的独立克隆、读不出来的，交给原来的流程处理）。
+ */
+export function inspectWorktreeLink(worktreePath: string): WorktreeLink {
+  const dotGit = join(worktreePath, ".git");
+  let stat;
+  try {
+    stat = lstatSync(dotGit);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "orphan" : "linked";
+  }
+  if (!stat.isFile()) return "linked";
+  let text: string;
+  try {
+    text = readFileSync(dotGit, "utf8");
+  } catch {
+    return "linked";
+  }
+  const match = /^gitdir:\s*(.+?)\s*$/m.exec(text);
+  if (match === null) return "linked";
+  const target = isAbsolute(match[1]!) ? match[1]! : resolve(worktreePath, match[1]!);
+  return existsSync(target) ? "linked" : "orphan";
+}
+
+export type OrphanContentProbe = { kind: "ok"; hasContent: boolean } | { kind: "failed"; error: string };
+
+/**
+ * 孤儿目录（已经不是有效 worktree、没有 .git 可用）里有没有“值得留”的东西：用主仓的对象库和 `ref`（分支或起点）的提交做基准，
+ * 把目录当工作区、用临时索引跑一次 `git status`，.gitignore 取 `ref` 里的根 .gitignore（外加主仓的 info/exclude）。
+ * 未跟踪且没被忽略的文件、与 `ref` 内容不同的已跟踪文件算“有内容”；node_modules、.codegraph 这类被忽略的和缺失的已跟踪文件不算。
+ * 没有 `ref` 时只能用主仓 HEAD 的 .gitignore、空索引（所有未忽略的文件都算内容）。
+ */
+export async function probeOrphanContent(repoFolder: string, orphanPath: string, ref: string | null, options: GitOptions = {}): Promise<OrphanContentProbe> {
+  const timeoutMs = options.timeoutMs ?? GIT_PROBE_TIMEOUT_MS;
+  let tmp: string | null = null;
+  try {
+    const common = await runGit(repoFolder, [...GIT_READONLY_ARGS, "rev-parse", "--path-format=absolute", "--git-common-dir"], timeoutMs, { ...GIT_READONLY_ENV, LC_ALL: "C" });
+    if (common.code !== 0) throw failed("git rev-parse --git-common-dir", common);
+    const gitDir = common.stdout.trim();
+    tmp = await mkdtemp(join(tmpdir(), "agent-hub-orphan-"));
+    const ignoreText = await runGit(repoFolder, [...GIT_READONLY_ARGS, "show", `${ref ?? "HEAD"}:.gitignore`], timeoutMs, { ...GIT_READONLY_ENV, LC_ALL: "C" });
+    const excludesFile = join(tmp, "excludes");
+    await writeFile(excludesFile, ignoreText.code === 0 ? ignoreText.stdout : "");
+    const env = { ...GIT_READONLY_ENV, LC_ALL: "C", GIT_DIR: gitDir, GIT_WORK_TREE: orphanPath, GIT_INDEX_FILE: join(tmp, "index") };
+    if (ref !== null) {
+      const read = await runGit(orphanPath, [...GIT_READONLY_ARGS, "read-tree", ref], timeoutMs, env);
+      if (read.code !== 0) throw failed("git read-tree", read);
+    }
+    const status = await runGit(
+      orphanPath,
+      [...GIT_READONLY_ARGS, "-c", `core.excludesFile=${excludesFile}`, "status", "--porcelain=v2", "--untracked-files=normal", "--ignore-submodules=none"],
+      timeoutMs,
+      env,
+    );
+    if (status.code !== 0) throw failed("git status", status);
+    const hasContent = status.stdout.split("\n").some((line) => {
+      if (line === "") return false;
+      if (line === "? .git") return false; // 指向已不存在的 gitdir 的残留链接文件
+      // 已跟踪文件只看“工作区 vs 索引”这一侧（XY 的第二个字符）：没变（.）、缺失（D，目录被清空过）都不是用户内容；
+      // 第一个字符是“索引 vs 主仓 HEAD”，主仓 HEAD 不是基准，不看。
+      if (line.startsWith("1 ") || line.startsWith("2 ")) return line[3] !== "." && line[3] !== "D";
+      return true;
+    });
+    return { kind: "ok", hasContent };
+  } catch (error) {
+    return { kind: "failed", error: error instanceof Error ? error.message : String(error) };
+  } finally {
+    if (tmp !== null) await rm(tmp, { recursive: true, force: true }).catch(() => {});
   }
 }
 
