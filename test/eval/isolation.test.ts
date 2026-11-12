@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -64,3 +64,21 @@ it("回收独立进程组也关闭后台子进程持有的管道", async () => {
     await closed;
   } finally { if (child.pid) killGroup(child.pid); }
 }, 5_000);
+
+const signalProfile = pmSandboxProfile({ home: root, realRepo: join(root, "source"), realDataDirs: [join(root, ".agent-hub")], claudeConfigDir: join(root, ".claude"), denyExec: [], daemonPorts: [4317] });
+it("信号规则整条先拒、只放同沙箱（others 不含同进程组，不能靠它）", () => {
+  expect(signalProfile).toContain("(deny signal)\n(allow signal (target same-sandbox))");
+  expect(signalProfile).not.toContain("(target others)");
+});
+it.skipIf(!available)("真 SBPL 拦住发给沙箱外进程的信号（含同进程组的父进程），沙箱内部照常", () => {
+  const outsider = spawn("/bin/sleep", ["30"], { detached: true, stdio: "ignore" });
+  const run = (script: string) => spawnSync(SANDBOX_EXEC, ["-p", signalProfile, "/bin/sh", "-c", script], { encoding: "utf8" });
+  try {
+    for (const pid of [process.pid, outsider.pid!]) {
+      expect(run("kill -0 " + pid).status).not.toBe(0);
+      expect(run("kill -URG " + pid).status).not.toBe(0);
+    }
+    expect(() => process.kill(outsider.pid!, 0)).not.toThrow();
+    expect(run('sleep 30 & p=$!; /bin/sh -c "kill -TERM $p"; wait $p; [ $? -eq 143 ]').status).toBe(0);
+  } finally { try { process.kill(-outsider.pid!, "SIGKILL"); } catch { /* 已退出 */ } }
+});
