@@ -10,6 +10,7 @@ import { migrate, userVersion } from "../src/daemon/store/migrate.ts";
 import { createLedger } from "../src/daemon/ledger/index.ts";
 import { ConversationNotFoundError, LedgerRequestError } from "../src/shared/ledger.ts";
 import { ACTIVE_HANDOVER_STATUSES, HANDOVER_STATUSES } from "../src/shared/handover.ts";
+import { taskNodeStateFromLegacy } from "../src/shared/domain.ts";
 
 const migration = new URL("../migrations/0001_init.sql", import.meta.url).pathname;
 
@@ -1457,9 +1458,10 @@ describe("0023_router_and_task_graphs：从 0022 的旧库升级与幂等重跑"
          VALUES (2, 1, 1, '导出 CSV', 'active', 100, 100)`,
       ).lastInsertRowid,
     );
+    // 0025 起节点表是 task_graph_steps（四个状态），重跑时 0023 重建的空 task_graph_nodes 会被 0025 删掉
     db.run(
-      `INSERT INTO task_graph_nodes (graph_id, node_key, title, kind, status, sort_order, created_at, updated_at)
-       VALUES (?, 'schema', '建表', 'piece', 'ready', 0, 100, 100)`,
+      `INSERT INTO task_graph_steps (graph_id, node_key, title, status, waiting_for, sort_order, created_at, updated_at)
+       VALUES (?, 'schema', '建表', 'waiting', 'pm', 0, 100, 100)`,
       graphId,
     );
 
@@ -1468,7 +1470,8 @@ describe("0023_router_and_task_graphs：从 0022 的旧库升级与幂等重跑"
     expect(userVersion(db)).toBe(LATEST_VERSION);
     expect(db.get<{ n: number }>("SELECT count(*) AS n FROM router_items")!.n).toBe(1);
     expect(db.get<{ n: number }>("SELECT count(*) AS n FROM task_graphs")!.n).toBe(1);
-    expect(db.get<{ n: number }>("SELECT count(*) AS n FROM task_graph_nodes")!.n).toBe(1);
+    expect(db.get("SELECT status, waiting_for FROM task_graph_steps")).toEqual({ status: "waiting", waiting_for: "pm" });
+    expect(tableNames(db)).not.toContain("task_graph_nodes");
     expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 
@@ -1500,8 +1503,8 @@ describe("0023_router_and_task_graphs：从 0022 的旧库升级与幂等重跑"
       ).lastInsertRowid,
     );
     db.run(
-      `INSERT INTO task_graph_nodes (graph_id, node_key, title, kind, status, created_at, updated_at)
-       VALUES (?, 'n1', '节点1', 'piece', 'ready', 10, 10), (?, 'n2', '节点2', 'gate', 'waiting_user', 10, 10)`,
+      `INSERT INTO task_graph_steps (graph_id, node_key, title, status, waiting_for, created_at, updated_at)
+       VALUES (?, 'n1', '节点1', 'waiting', 'pm', 10, 10), (?, 'n2', '节点2', 'waiting', 'user', 10, 10)`,
       gid,
       gid,
     );
@@ -1543,7 +1546,7 @@ describe("0023_router_and_task_graphs：从 0022 的旧库升级与幂等重跑"
 
     // 删图级联清理节点与边
     db.run("DELETE FROM task_graphs WHERE id = ?", gid);
-    expect(db.get<{ n: number }>("SELECT count(*) AS n FROM task_graph_nodes WHERE graph_id = ?", gid)!.n).toBe(0);
+    expect(db.get<{ n: number }>("SELECT count(*) AS n FROM task_graph_steps WHERE graph_id = ?", gid)!.n).toBe(0);
     expect(db.get<{ n: number }>("SELECT count(*) AS n FROM task_graph_edges WHERE graph_id = ?", gid)!.n).toBe(0);
     expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
   });
@@ -1558,17 +1561,17 @@ describe("0023 关联记录删除安全", () => {
     db.run("INSERT INTO router_pm_notes (pm_id, text, session_id, updated_at) VALUES (1, 'note', 10, 0)");
     db.run("INSERT INTO router_worker_origins (worker_id, source_kind, source_id, pm_message_id, created_at) VALUES (1, 'router_resolve', 1, 900, 0)");
     db.run("INSERT INTO task_graphs (id, project_id, pm_id, conversation_id, title, status, origin_msg_id, created_at, updated_at) VALUES (900, 2, 1, 1, 'graph', 'active', 900, 0, 0)");
-    db.run("INSERT INTO task_graph_nodes (graph_id, node_key, title, kind, status, active_worker_id, gate_ask_message_id, created_at, updated_at) VALUES (900, 'n', 'node', 'piece', 'running', 1, 900, 0, 0)");
+    db.run("INSERT INTO task_graph_steps (graph_id, node_key, title, status, active_worker_id, gate_ask_message_id, created_at, updated_at) VALUES (900, 'n', 'node', 'running', 1, 900, 0, 0)");
     db.run("INSERT INTO task_graph_edges (graph_id, from_key, to_key) VALUES (900, 'n', 'next')");
     const targetIds: Record<string, number> = { workers: 1, messages: 900, agent_sessions: 10 };
     expect(() => db.run(`DELETE FROM ${table} WHERE id = ?`, targetIds[table]!)).not.toThrow();
     expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
     if (table === "workers") {
-      expect(db.get("SELECT active_worker_id FROM task_graph_nodes WHERE graph_id = 900")).toEqual({ active_worker_id: null });
+      expect(db.get("SELECT active_worker_id FROM task_graph_steps WHERE graph_id = 900")).toEqual({ active_worker_id: null });
       expect(db.all("SELECT * FROM router_worker_origins")).toEqual([]);
     }
     if (table === "messages") {
-      expect(db.get("SELECT gate_ask_message_id FROM task_graph_nodes WHERE graph_id = 900")).toEqual({ gate_ask_message_id: null });
+      expect(db.get("SELECT gate_ask_message_id FROM task_graph_steps WHERE graph_id = 900")).toEqual({ gate_ask_message_id: null });
       expect(db.get("SELECT ask_message_id FROM router_items")).toEqual({ ask_message_id: null });
       expect(db.get("SELECT origin_msg_id FROM task_graphs WHERE id = 900")).toEqual({ origin_msg_id: null });
       expect(db.all("SELECT * FROM router_worker_origins")).toEqual([]);
@@ -1614,5 +1617,158 @@ describe("0024_worker_turn_timeout：Worker 单轮超时计时落盘、按 workt
     expect(() => db.run("INSERT INTO worker_turn_timeouts (worker_id, max_time_ms, deadline_at) VALUES (999999, 1, 1)")).toThrow(/FOREIGN KEY/);
     const plan = db.all<{ detail: string }>("EXPLAIN QUERY PLAN SELECT id FROM workers WHERE worktree_path = ?", "/x").map((r) => r.detail).join("\n");
     expect(plan).toContain("workers_worktree_path");
+  });
+});
+
+// ---- 0025_task_graph_steps ----
+
+describe("0025_task_graph_steps：步骤状态 7 个变 4 个、节点类型 2 种变 1 种（docs/orchestration-simplify-design.md 第 3.4 节）", () => {
+  /** 第 3.4 节那张表逐行（旧类型、旧状态 → 新状态、等谁、是不是跳过的），外加 piece 的 waiting_user（库里约束允许，按同一张表）。 */
+  const ROWS: ReadonlyArray<readonly [kind: string, oldStatus: string, status: string, waitingFor: string | null, skipped: 0 | 1]> = [
+    ["piece", "pending", "pending", null, 0],
+    ["gate", "pending", "pending", null, 0],
+    ["piece", "ready", "waiting", "pm", 0],
+    ["piece", "running", "running", null, 0],
+    ["piece", "attention", "waiting", "pm", 0],
+    ["gate", "ready", "waiting", "pm", 0],
+    ["gate", "waiting_user", "waiting", "user", 0],
+    ["piece", "done", "done", null, 0],
+    ["gate", "done", "done", null, 0],
+    ["piece", "skipped", "done", null, 1],
+    ["gate", "skipped", "done", null, 1],
+    ["piece", "waiting_user", "waiting", "user", 0],
+  ];
+
+  /** 0024 的库里建一张活跃图，每行一个旧节点（带全部 gate_* 列、定案、经手 Worker），返回图编号。 */
+  function seedOldGraph(db: Db): number {
+    const workerId = db.get<{ id: number }>("SELECT id FROM workers ORDER BY id LIMIT 1")!.id;
+    db.run("INSERT INTO messages (id, conversation_id, sender, kind, text, dedupe_key, created_at, updated_at) VALUES (950, 1, 'agent', 'text', '卡', 'k-0025-ask', 0, 0)");
+    const gid = Number(
+      db.run(
+        "INSERT INTO task_graphs (project_id, pm_id, conversation_id, title, status, created_at, updated_at) VALUES (2, 1, 1, '编排简化实现', 'active', 100, 100)",
+      ).lastInsertRowid,
+    );
+    ROWS.forEach(([kind, status], i) => {
+      db.run(
+        `INSERT INTO task_graph_nodes (graph_id, node_key, title, kind, status, sort_order, active_worker_id, worker_ids_json, artifact_json,
+           gate_question, gate_options_json, gate_summary_md, gate_recommended, gate_ask_message_id, decision_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        gid,
+        `n${i}`,
+        `${kind} ${status}`,
+        kind,
+        status,
+        i,
+        status === "running" || status === "attention" ? workerId : null,
+        status === "pending" ? "[]" : JSON.stringify([workerId]),
+        status === "done" ? JSON.stringify({ summary: `第 ${i} 步`, prUrl: "https://example.test/pr/1" }) : null,
+        kind === "gate" ? `问题 ${i}` : null,
+        kind === "gate" ? '["A","B"]' : null,
+        kind === "gate" ? "背景" : null,
+        kind === "gate" ? "A" : null,
+        status === "waiting_user" && kind === "gate" ? 950 : null,
+        status === "done" && kind === "gate" ? JSON.stringify({ choice: "A", note: null, decidedBy: "user", decidedAt: 5 }) : null,
+        10 + i,
+        20 + i,
+      );
+    });
+    return gid;
+  }
+
+  it("从 0024 升级：第 3.4 节逐行映射；编号、经手 Worker、结果、拍板卡的 6 列原样保留；kind 列和旧表删掉；索引按等用户重建", () => {
+    const db = m3Db();
+    migrate(db, migrationsUpTo(24));
+    const gid = seedOldGraph(db);
+    const before = db.all<Record<string, unknown>>("SELECT * FROM task_graph_nodes ORDER BY id");
+    const otherTables = tableNames(db).filter((t) => t !== "task_graph_nodes");
+    const dump = Object.fromEntries(otherTables.map((name) => [name, db.all<Record<string, unknown>>(`SELECT * FROM ${name} ORDER BY rowid`)]));
+
+    expect(migrate(db, migrationsUpTo(25))).toMatchObject({ from: 24, to: 25, applied: [25] });
+    // 别的表一行不动
+    for (const name of otherTables) expect(db.all(`SELECT * FROM ${name} ORDER BY rowid`)).toEqual(dump[name]);
+    expect(tableNames(db)).not.toContain("task_graph_nodes");
+    expect(tableNames(db)).toContain("task_graph_steps");
+    expect(db.all<{ name: string }>("PRAGMA table_info(task_graph_steps)").map((c) => c.name)).not.toContain("kind");
+
+    const after = db.all<Record<string, unknown>>("SELECT * FROM task_graph_steps ORDER BY id");
+    expect(after).toHaveLength(ROWS.length);
+    ROWS.forEach(([kind, oldStatus, status, waitingFor, skipped], i) => {
+      const { kind: _k, status: _s, ...kept } = before[i]!;
+      expect(after[i], `${kind} ${oldStatus}`).toEqual({ ...kept, status, waiting_for: waitingFor, skipped });
+      // 网页读入旧数据用的是同一张表
+      expect(taskNodeStateFromLegacy(oldStatus)).toEqual({ status, waitingFor, skipped: skipped === 1 });
+    });
+    expect(after.every((r) => r.graph_id === gid)).toBe(true);
+
+    // 旧索引随表删掉；新索引：按 Worker 找步骤、按“等用户”找待拍板（原来按 kind = 'gate' AND status = 'waiting_user'）
+    const indexes = db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_task_graph_%' ORDER BY name").map((r) => r.name);
+    expect(indexes).not.toContain("idx_task_graph_nodes_waiting_gate");
+    expect(indexes).toEqual(expect.arrayContaining(["idx_task_graph_steps_waiting_user", "idx_task_graph_steps_worker"]));
+    const plan = db
+      .all<{ detail: string }>("EXPLAIN QUERY PLAN SELECT count(*) FROM task_graph_steps WHERE graph_id = 1 AND status = 'waiting' AND waiting_for = 'user'")
+      .map((r) => r.detail)
+      .join(" | ");
+    expect(plan).toContain("idx_task_graph_steps_waiting_user");
+    expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
+  it("新表的约束：只认四个状态；等谁只在等人时有、跳过只在完了时有", () => {
+    const db = m3Db();
+    migrate(db, migrationsDir);
+    db.run("INSERT INTO task_graphs (id, project_id, pm_id, conversation_id, title, status, created_at, updated_at) VALUES (7, 2, 1, 1, 'g', 'active', 0, 0)");
+    const insert = (key: string, status: string, waitingFor: string | null, skipped: number) =>
+      db.run(
+        "INSERT INTO task_graph_steps (graph_id, node_key, title, status, waiting_for, skipped, created_at, updated_at) VALUES (7, ?, ?, ?, ?, ?, 0, 0)",
+        key,
+        key,
+        status,
+        waitingFor,
+        skipped,
+      );
+    for (const old of ["ready", "attention", "waiting_user", "skipped"]) expect(() => insert(`old-${old}`, old, null, 0)).toThrow(/CHECK/);
+    expect(() => insert("w-none", "waiting", null, 0)).toThrow(/CHECK/);
+    expect(() => insert("w-bad", "waiting", "router", 0)).toThrow(/CHECK/);
+    expect(() => insert("r-wf", "running", "pm", 0)).toThrow(/CHECK/);
+    expect(() => insert("p-skip", "pending", null, 1)).toThrow(/CHECK/);
+    insert("ok-wait", "waiting", "user", 0);
+    insert("ok-skip", "done", null, 1);
+    expect(db.get<{ n: number }>("SELECT count(*) AS n FROM task_graph_steps WHERE graph_id = 7")!.n).toBe(2);
+  });
+
+  it("可重复执行：已是新结构时退回 user_version = 8 重跑全部迁移，不报错、不丢数据（0023 重建的空旧表被删掉），编号接着旧表往下发", () => {
+    const db = m3Db();
+    migrate(db, migrationsUpTo(24));
+    const gid = seedOldGraph(db);
+    // 旧表删过编号更大的行：计数比现存最大编号大，迁移后新步骤不能复用这些编号
+    db.run("INSERT INTO task_graph_nodes (id, graph_id, node_key, title, kind, status, created_at, updated_at) VALUES (500, ?, 'gone', 'gone', 'piece', 'pending', 0, 0)", gid);
+    db.run("DELETE FROM task_graph_nodes WHERE id = 500");
+    migrate(db, migrationsDir);
+    const upgraded = db.all<Record<string, unknown>>("SELECT * FROM task_graph_steps ORDER BY id");
+    expect(db.get("SELECT seq FROM sqlite_sequence WHERE name = 'task_graph_steps'")).toEqual({ seq: 500 });
+
+    for (let round = 0; round < 2; round++) {
+      db.exec("PRAGMA user_version = 8");
+      expect(() => migrate(db, migrationsDir)).not.toThrow();
+      expect(userVersion(db)).toBe(LATEST_VERSION);
+      expect(db.all("SELECT * FROM task_graph_steps ORDER BY id")).toEqual(upgraded);
+      expect(tableNames(db)).not.toContain("task_graph_nodes");
+      expect(db.get("SELECT seq FROM sqlite_sequence WHERE name = 'task_graph_steps'")).toEqual({ seq: 500 });
+      expect(db.get("SELECT count(*) AS n FROM sqlite_sequence WHERE name = 'task_graph_nodes'")).toEqual({ n: 0 });
+      expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+    }
+    const next = Number(
+      db.run("INSERT INTO task_graph_steps (graph_id, node_key, title, status, created_at, updated_at) VALUES (?, 'new', 'new', 'pending', 0, 0)", gid).lastInsertRowid,
+    );
+    expect(next).toBe(501);
+  });
+
+  it("全新的库：0023 建出旧表、0025 拷 0 行再删掉，只剩 task_graph_steps", () => {
+    dir = mkdtempSync(join(tmpdir(), "agent-hub-0025-"));
+    const db = openDatabase(join(dir, "hub.sqlite"));
+    migrate(db, migrationsDir);
+    expect(tableNames(db)).toContain("task_graph_steps");
+    expect(tableNames(db)).not.toContain("task_graph_nodes");
+    expect(db.get("SELECT count(*) AS n FROM task_graph_steps")).toEqual({ n: 0 });
+    db.close();
   });
 });

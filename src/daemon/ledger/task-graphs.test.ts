@@ -33,6 +33,14 @@ import { createResolveFolder } from "./files.ts";
 import { createLedger, type LedgerOptions, type SqliteLedger } from "./index.ts";
 import { taskGraphManualNote } from "../task-graph-skill.ts";
 
+/** 步骤的状态写成一个短串好比较：等人带上等谁（waiting:pm / waiting:user），跳过的写 skipped。 */
+function stateOf(graph: { nodes: ReadonlyArray<{ key: string; status: string; waitingFor: string | null; skipped: boolean }> }, key: string): string {
+  const n = graph.nodes.find((x) => x.key === key);
+  if (n === undefined) return "missing";
+  if (n.status === "waiting") return `waiting:${n.waitingFor}`;
+  return n.status === "done" && n.skipped ? "skipped" : n.status;
+}
+
 let root: string;
 let dbFile: string;
 let db: Db;
@@ -125,7 +133,7 @@ function liveGraphsSection(): string | null {
 }
 
 describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", () => {
-  it("hub graph create 校验 Kahn O(V+E) 无环并推导初始 ready / pending 状态；环路报出具体环路径", () => {
+  it("hub graph create 校验 Kahn O(V+E) 无环并推导初始状态（轮到的手动步骤等项目经理，其余没轮到）；环路报出具体环路径", () => {
     expect(() =>
       ledger.hubCall(lin.sessionId, "graph.create", {
         specJson: JSON.stringify({
@@ -144,7 +152,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
       specJson: JSON.stringify({
         nodes: [
           { key: "research", title: "调研数据规模" },
-          { key: "gate-api", title: "拍板接口契约", kind: "gate", deps: ["research"] },
+          { key: "gate-api", title: "拍板接口契约", deps: ["research"], question: "接口用 REST 还是 RPC？", options: ["REST", "RPC"] },
           { key: "impl-api", title: "实现后端接口", deps: ["gate-api"] },
           { key: "impl-ui", title: "实现前端按钮", deps: ["gate-api"] },
         ],
@@ -153,21 +161,23 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
 
     expect(created.title).toBe("实现 CSV 导出");
     expect(created.status).toBe("active");
-    expect(created.nodes.map((n) => [n.key, n.status])).toEqual([
-      ["research", "ready"],
+    expect(created.nodes.map((n) => [n.key, stateOf(created, n.key)])).toEqual([
+      ["research", "waiting:pm"],
       ["gate-api", "pending"],
       ["impl-api", "pending"],
       ["impl-ui", "pending"],
     ]);
+    // 节点类型只剩一种：返回的节点没有 kind；建图的回执写明轮到了谁、怎么派（项目经理自己的命令，不另外叫醒）
+    expect(created.nodes.every((n) => !("kind" in n))).toBe(true);
     expect(ledger.snapshot().activeTaskGraphs).toHaveLength(1);
     expect(changes.some((c) => c.type === "task_graph.created")).toBe(true);
   });
 
   it("提示词与 hub --help 里的 graph create / patch 一行 JSON 示例照抄就能跑通（字段名与真实校验一致）", () => {
     const created = ledger.hubCall(lin.sessionId, "graph.create", { specJson: TASK_GRAPH_CREATE_JSON_HINT }).data.graph;
-    expect(created.nodes.map((n) => [n.key, n.kind, n.status])).toEqual([
-      ["plan", "piece", "ready"],
-      ["ok", "gate", "pending"],
+    expect(created.nodes.map((n) => [n.key, stateOf(created, n.key), n.gateQuestion !== null])).toEqual([
+      ["plan", "waiting:pm", false],
+      ["ok", "pending", true],
     ]);
     // 先补上示例里要删的节点和边，再原样套用 patch 示例
     ledger.hubCall(lin.sessionId, "graph.patch", {
@@ -177,7 +187,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     const patched = ledger.hubCall(lin.sessionId, "graph.patch", { graphId: created.id, specJson: TASK_GRAPH_PATCH_JSON_HINT }).data.graph;
     expect(patched.nodes.map((n) => n.key).toSorted()).toEqual(["a", "b", "ok", "plan", "polish", "qa"]);
     // 示例里的 skipNodes：跳过还没开工的节点
-    expect(patched.nodes.find((n) => n.key === "polish")?.status).toBe("skipped");
+    expect(stateOf(patched, "polish")).toBe("skipped");
     expect(patched.edges).toContainEqual({ fromKey: "plan", toKey: "qa" });
     expect(patched.edges).not.toContainEqual({ fromKey: "a", toKey: "b" });
   });
@@ -202,7 +212,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     ).toThrow(/20/);
   });
 
-  it("Worker --node 绑定、异常置 attention、--incomplete 接力重绑不断链、正常收工解锁下游", () => {
+  it("Worker --node 绑定、出问题变等人（等项目经理）、--incomplete 接力重绑不断链、正常收工下游轮到", () => {
     const graph = ledger.hubCall(lin.sessionId, "graph.create", {
       specJson: JSON.stringify({
         title: "重构鉴权",
@@ -244,7 +254,8 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
 
     shown = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph;
     expect(shown.nodes.find((n) => n.key === "step-1")).toMatchObject({
-      status: "attention",
+      status: "waiting",
+      waitingFor: "pm",
       activeWorkerId: null,
       workerIds: [w1.id],
     });
@@ -261,7 +272,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     // 先汇报“有问题” -> 节点置为 attention
     finishWorkerTurn(w2.id, "有问题", "发现边界情况");
     shown = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph;
-    expect(shown.nodes.find((n) => n.key === "step-1")?.status).toBe("attention");
+    expect(stateOf(shown, "step-1")).toBe("waiting:pm");
 
     // PM 追问后 w2 汇报“做完了”并正常 end -> step-1 置 done，step-2 自动解锁为 ready！
     ledger.hubCall(lin.sessionId, "worker.send", { workerId: w2.id, text: "按方案 A 处理继续做完" });
@@ -274,18 +285,18 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
       activeWorkerId: null,
       workerIds: [w1.id, w2.id],
     });
-    expect(shown.nodes.find((n) => n.key === "step-2")?.status).toBe("ready");
+    expect(stateOf(shown, "step-2")).toBe("waiting:pm");
   });
 
-  it("hub graph done 拒绝有 Worker 在干的节点：提示先收工；收工后（节点 done 或 attention）可以标完成、补记 PR", () => {
+  it("hub graph done 拒绝有 Worker 在干的节点：提示先收工；收工后（节点完了或等你处理）可以放行、补记 PR", () => {
     const graph = ledger.hubCall(lin.sessionId, "graph.create", {
       specJson: JSON.stringify({ title: "导出", nodes: [{ key: "impl", title: "实现" }, { key: "qa", title: "验收", deps: ["impl"] }] }),
     }).data.graph;
-    // 没人在干的 ready 节点可以直接标完成（比如项目经理自己做完的）
+    // 没人在干、等项目经理的节点可以直接放行（比如项目经理自己做完的）
     const other = ledger.hubCall(lin.sessionId, "graph.create", {
       specJson: JSON.stringify({ title: "小事", nodes: [{ key: "solo", title: "自己做" }, { key: "after", title: "之后", deps: ["solo"] }] }),
     }).data.graph;
-    expect(ledger.hubCall(lin.sessionId, "graph.done", { graphId: other.id, nodeKey: "solo" }).text).toContain("已自动解锁：after [ready]");
+    expect(ledger.hubCall(lin.sessionId, "graph.done", { graphId: other.id, nodeKey: "solo" }).text).toContain("轮到了：after [等你处理]");
 
     const w = ledger.hubCall(lin.sessionId, "worker.start", { title: "实现", task: "做 impl", noWorktree: true, node: "impl" }).data.worker;
     let error: unknown;
@@ -315,7 +326,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
       artifact: { summary: "导出接口已实现", prUrl: "https://example.test/pr/1" },
     });
 
-    // attention（等人接手）的节点项目经理可以放行；最后一个节点完成时图保持待交付，提示用 hub graph finish 结束
+    // 等你处理（Worker 汇报有问题）的节点项目经理可以放行；最后一个节点完成时图保持待交付，提示用 hub graph finish 结束
     const w2 = ledger.hubCall(lin.sessionId, "worker.start", { title: "验收", task: "做 qa", noWorktree: true, node: "qa" }).data.worker;
     finishWorkerTurn(w2.id, "有问题", "缺测试数据");
     expect(ledger.hubCall(lin.sessionId, "graph.done", { graphId: graph.id, nodeKey: "qa" }).text).toContain(
@@ -323,7 +334,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     );
   });
 
-  it("hub worker end 的回执写明绑定的节点变成了什么：做完了 → done 并列出解锁的下游；--incomplete 或没汇报做完 → attention 等人接手；没绑图的不提", () => {
+  it("hub worker end 的回执写明绑定的节点变成了什么：做完了 → 完了并列出轮到的下游；--incomplete 或没汇报做完 → 等你处理；没绑图的不提", () => {
     const graph = ledger.hubCall(lin.sessionId, "graph.create", {
       specJson: JSON.stringify({ title: "导出", nodes: [{ key: "impl", title: "实现" }, { key: "qa", title: "验收", deps: ["impl"] }] }),
     }).data.graph;
@@ -335,26 +346,26 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     finishWorkerTurn(w1.id, "做完了", "做了一半");
     const swapped = ledger.hubCall(lin.sessionId, "worker.end", { workerId: w1.id, incomplete: true }).text;
     expect(swapped).toContain(`Worker #${w1.id}“实现第 1 棒”已收工。`);
-    expect(swapped).toContain(`它绑定的任务图 #${graph.id} 的节点「impl」变成 attention，等人接手（带了 --incomplete）`);
+    expect(swapped).toContain(`它绑定的任务图 #${graph.id} 的节点「impl」变成等你处理，等人接手（带了 --incomplete）`);
     expect(swapped).toContain("hub worker start --node impl");
     expect(swapped).toContain("hub graph skip impl");
 
     // 没汇报“做完了”就收工：也是等人接手，原因不一样
     const w2 = start("实现第 2 棒", "impl");
     const unfinished = ledger.hubCall(lin.sessionId, "worker.end", { workerId: w2.id }).text;
-    expect(unfinished).toContain("节点「impl」变成 attention，等人接手（它最近一轮没有汇报“做完了”）");
+    expect(unfinished).toContain("节点「impl」变成等你处理，等人接手（它最近一轮没有汇报“做完了”）");
 
     // 做完了：节点 done，回执列出解锁的下游
     const w3 = start("实现第 3 棒", "impl");
     finishWorkerTurn(w3.id, "做完了", "实现完了");
     const done = ledger.hubCall(lin.sessionId, "worker.end", { workerId: w3.id }).text;
-    expect(done).toContain(`它绑定的任务图 #${graph.id} 的节点「impl」已标记为 done（它最近一轮汇报是“做完了”）；已自动解锁：qa [ready]。`);
+    expect(done).toContain(`它绑定的任务图 #${graph.id} 的节点「impl」已标记为完了（它最近一轮汇报是“做完了”）；轮到了：qa [等你处理]（给它派 Worker：hub worker start --node qa --graph ${graph.id}）。`);
 
     // 最后一个节点做完：回执写明全部节点已完成（待交付）并提醒用 hub graph finish 结束
     const w4 = start("验收", "qa");
     finishWorkerTurn(w4.id, "做完了", "验收通过");
     expect(ledger.hubCall(lin.sessionId, "worker.end", { workerId: w4.id }).text).toContain(
-      "节点「qa」已标记为 done（它最近一轮汇报是“做完了”）；全部节点已完成（待交付），验收合并后用 hub graph finish 结束任务图。",
+      "节点「qa」已标记为完了（它最近一轮汇报是“做完了”）；全部节点已完成（待交付），验收合并后用 hub graph finish 结束任务图。",
     );
 
     // 临时 Worker（不绑图）：回执不提任务图
@@ -368,7 +379,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
         title: "导出",
         nodes: [
           { key: "impl", title: "实现" },
-          { key: "ok", title: "确认方案", kind: "gate", deps: ["impl"] },
+          { key: "ok", title: "确认方案", deps: ["impl"] },
           { key: "ship", title: "发布", deps: ["ok"] },
         ],
       }),
@@ -377,13 +388,13 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     // 还没有结果的节点只有一行，和以前一样
     expect(bare.split("\n")).toEqual([
       `任务图 #${graph.id}「导出」（状态：active）`,
-      "  - [ready] impl：实现",
-      "  - [pending] ok：确认方案 [门禁] ← [impl]",
-      "  - [pending] ship：发布 ← [ok]",
+      "  - [等你处理] impl：实现",
+      "  - [没轮到] ok：确认方案 ← [impl]",
+      "  - [没轮到] ship：发布 ← [ok]",
     ]);
 
     const w = ledger.hubCall(lin.sessionId, "worker.start", { title: "实现", task: "做 impl", noWorktree: true, node: "impl" }).data.worker;
-    expect(ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).text).toContain(`  - [running] impl：实现 · Worker #${w.id}`);
+    expect(ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).text).toContain(`  - [在干] impl：实现 · Worker #${w.id}`);
     finishWorkerTurn(w.id, "做完了", `导出接口已实现 ${"很长的说明".repeat(60)}`);
     ledger.hubCall(lin.sessionId, "worker.end", { workerId: w.id });
     ledger.hubCall(lin.sessionId, "graph.done", {
@@ -398,14 +409,14 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
 
     const text = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).text;
     const lines = text.split("\n");
-    expect(lines[1]).toBe(`  - [done] impl：实现 · 经手 Worker #${w.id}`);
+    expect(lines[1]).toBe(`  - [完了] impl：实现 · 经手 Worker #${w.id}`);
     expect(lines[2]).toBe("      分支 hub/7-导出 · 提交 abc1234 · PR https://example.test/pr/7");
     expect(lines[3]!.startsWith("      摘要：导出接口已实现 很长的说明")).toBe(true);
     expect([...lines[3]!.replace("      摘要：", "")]).toHaveLength(GRAPH_TEXT_NODE_NOTE_CHARS);
     expect(lines[3]!.endsWith("…")).toBe(true);
-    expect(lines[4]).toBe("  - [done] ok：确认方案 [门禁] ← [impl]");
+    expect(lines[4]).toBe("  - [完了] ok：确认方案 ← [impl]");
     expect(lines[5]).toBe("      定案：方案 A（先不做分页）");
-    expect(lines[6]).toBe("  - [ready] ship：发布 ← [ok]");
+    expect(lines[6]).toBe("  - [等你处理] ship：发布 ← [ok]");
     expect(lines).toHaveLength(7);
 
     // 交接摘要用的是同一份文本
@@ -443,7 +454,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     // 只列状态的那几张：每个节点一行，没有结果行
     const status = blocks.find((b) => tier(b) === "status")!;
     expect(status.split("\n")).toHaveLength(13);
-    expect(status).toContain("  - [done] n0：第 0 步");
+    expect(status).toContain("  - [完了] n0：第 0 步");
     expect(status).not.toContain("PR https://");
     // 全文、状态、一行进度以及分隔符均计入硬上限
     const bodyChars = blocks.filter((b) => tier(b) !== "brief").reduce((sum, b) => sum + [...b].length, 0);
@@ -458,7 +469,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
           key: `n${i}`, title: "😀".repeat(80),
         })) }),
       }).data.graph;
-      db.run("UPDATE task_graph_nodes SET artifact_json = ? WHERE graph_id = ?",
+      db.run("UPDATE task_graph_steps SET artifact_json = ? WHERE graph_id = ?",
         JSON.stringify({ summary: "😀".repeat(500), branch: "b".repeat(160), commit: "c".repeat(160), prUrl: "p".repeat(160) }), graph.id);
     }
     const first = liveGraphsSection()!;
@@ -476,21 +487,21 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     let size = 1;
     let full = "";
     for (; size < GRAPH_TEXT_NODE_NOTE_CHARS; size++) {
-      db.run("UPDATE task_graph_nodes SET artifact_json = ? WHERE graph_id = ?", artifact(size), graph.id);
+      db.run("UPDATE task_graph_steps SET artifact_json = ? WHERE graph_id = ?", artifact(size), graph.id);
       full = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).text;
       if ([...full].length > HANDOVER_GRAPHS_MAX_CHARS) break;
     }
     size--;
-    db.run("UPDATE task_graph_nodes SET artifact_json = ? WHERE graph_id = ?", artifact(size), graph.id);
+    db.run("UPDATE task_graph_steps SET artifact_json = ? WHERE graph_id = ?", artifact(size), graph.id);
     full = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).text;
     const extra = HANDOVER_GRAPHS_MAX_CHARS - [...full].length;
-    db.run("UPDATE task_graph_nodes SET artifact_json = ? WHERE graph_id = ? AND node_key = 'n0'", artifact(size + extra), graph.id);
+    db.run("UPDATE task_graph_steps SET artifact_json = ? WHERE graph_id = ? AND node_key = 'n0'", artifact(size + extra), graph.id);
     const exact = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).text;
     expect([...exact]).toHaveLength(HANDOVER_GRAPHS_MAX_CHARS);
     expect(liveGraphsSection()).toBe(exact);
-    db.run("UPDATE task_graph_nodes SET artifact_json = ? WHERE graph_id = ? AND node_key = 'n0'", artifact(size + extra + 1), graph.id);
+    db.run("UPDATE task_graph_steps SET artifact_json = ? WHERE graph_id = ? AND node_key = 'n0'", artifact(size + extra + 1), graph.id);
     const downgraded = liveGraphsSection()!;
-    expect(downgraded).toContain("[ready] n0");
+    expect(downgraded).toContain("[等你处理] n0");
     expect(downgraded).not.toContain("摘要：");
   });
 
@@ -515,10 +526,10 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     const w = ledger.hubCall(lin.sessionId, "worker.start", { title: "实现", task: "实现", node: "a", noWorktree: true }).data.worker;
     ledger.hubCall(lin.sessionId, "graph.cancel", { graphId: graph.id });
     finishWorkerTurn(w.id, "做完了");
-    expect(ledger.hubCall(lin.sessionId, "worker.end", { workerId: w.id }).text).not.toContain("已标记为 done");
+    expect(ledger.hubCall(lin.sessionId, "worker.end", { workerId: w.id }).text).not.toContain("已标记为完了");
     const after = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph;
     expect(after.status).toBe("cancelled");
-    expect(after.nodes.find((n) => n.key === "b")?.status).toBe("skipped");
+    expect(stateOf(after, "b")).toBe("skipped");
     expect(after.nodes.find((n) => n.key === "a")?.status).not.toBe("done");
   });
 
@@ -564,7 +575,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
   it("归档满七天清理 PM、项目与对话时，Router 与图关联记录全部安全清除", () => {
     const graph = ledger.hubCall(lin.sessionId, "graph.create", {
       specJson: JSON.stringify({ title: "待清理", nodes: [
-        { key: "a", title: "实现" }, { key: "g", title: "拍板", kind: "gate" },
+        { key: "a", title: "实现" }, { key: "g", title: "拍板" },
       ] }),
     }).data.graph;
     const worker = ledger.hubCall(lin.sessionId, "worker.start", {
@@ -576,7 +587,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     db.run("INSERT INTO router_worker_origins (worker_id, source_kind, source_id, pm_message_id, created_at) VALUES (?, 'router_resolve', ?, ?, ?)", worker.id, ask.item.id, ask.messageId, now);
     ledger.archivePm(lin.pmId);
     expect(ledger.purgeExpiredArchivedPms(now + PM_ARCHIVE_RETENTION_MS)).toEqual([lin.pmId]);
-    for (const table of ["router_items", "router_pm_notes", "router_worker_origins", "task_graphs", "task_graph_nodes", "task_graph_edges"]) {
+    for (const table of ["router_items", "router_pm_notes", "router_worker_origins", "task_graphs", "task_graph_steps", "task_graph_edges"]) {
       expect(db.all(`SELECT * FROM ${table}`)).toEqual([]);
     }
     expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
@@ -595,14 +606,14 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     ledger.hubCall(lin.sessionId, "worker.send", { workerId: worker.id, text: "还有漏项，继续修复" });
     ledger.hubCall(lin.sessionId, "worker.end", { workerId: worker.id });
     const shown = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph;
-    expect(shown.nodes.find((n) => n.key === "a")?.status).toBe("attention");
+    expect(stateOf(shown, "a")).toBe("waiting:pm");
     expect(shown.nodes.find((n) => n.key === "b")?.status).toBe("pending");
   });
 
-  it("已拍板门禁在图取消后重放旧 clientId 必须拒绝且不发消息", () => {
+  it("已拍板的步骤在图取消后重放旧 clientId 必须拒绝且不发消息", () => {
     const graph = ledger.hubCall(lin.sessionId, "graph.create", {
       specJson: JSON.stringify({ title: "旧卡", nodes: [
-        { key: "g", title: "拍板", kind: "gate" }, { key: "a", title: "实现", deps: ["g"] },
+        { key: "g", title: "拍板" }, { key: "a", title: "实现", deps: ["g"] },
       ] }),
     }).data.graph;
     ledger.decideTaskNode(graph.id, "g", { clientId: "old", note: "同意" });
@@ -618,22 +629,23 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
         title: "权限升级",
         nodes: [
           { key: "survey", title: "盘点现有路由" },
-          { key: "gate-auth", title: "确认会话策略", kind: "gate", deps: ["survey"] },
+          { key: "gate-auth", title: "确认会话策略", deps: ["survey"] },
           { key: "impl-jwt", title: "改造中间件", deps: ["gate-auth"] },
           { key: "impl-test", title: "回归测试", deps: ["impl-jwt"] },
         ],
       }),
     }).data.graph;
 
-    // PM 完成 survey -> 草稿门禁 gate-auth 因尚无 question 先解锁为 ready（不发半成品拍板卡）
+    // PM 完成 survey -> gate-auth 还没有问题，是手动步骤，轮到了等项目经理（不发半成品拍板卡）
     ledger.hubCall(lin.sessionId, "graph.done", {
       nodeKey: "survey",
       summary: "共 14 个路由需要鉴权",
     });
     let g = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph;
-    expect(g.nodes.find((n) => n.key === "gate-auth")?.status).toBe("ready");
+    expect(stateOf(g, "gate-auth")).toBe("waiting:pm");
 
-    // PM 调 hub graph ask 填入选项与调研摘要 -> gate-auth 正式激活为 waiting_user 并生成带 gateRef 的 AskMeta 消息
+    // PM 调 hub graph ask 填入选项与调研摘要 -> gate-auth 变等用户拍板并生成带 gateRef 的 AskMeta 消息
+
     const asked = ledger.hubCall(lin.sessionId, "graph.ask", {
       nodeKey: "gate-auth",
       question: "鉴权令牌存 HttpOnly Cookie 还是 Bearer Header？",
@@ -642,6 +654,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
       summaryMd: "同域部署下 HttpOnly Cookie 天然防 XSS。",
     }).data;
     expect(asked.messageId).toBeTypeOf("number");
+    expect(stateOf(asked.graph, "gate-auth")).toBe("waiting:user");
     const gateMsgId = asked.messageId!;
     expect(askOf(ledger.getMessage(gateMsgId)!)).toEqual({
       needsUser: true,
@@ -681,7 +694,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     // Digest 的 pendingDecisionCount 也同步计入该活跃门禁
     expect(ledger.getRouterDigest().pms.find((p) => p.pmId === lin.pmId)?.pendingDecisionCount).toBe(1);
 
-    // 用户点拍板按钮（decideTaskNode）：门禁 -> done，impl-jwt -> ready，AskMeta.answered = true，唤醒 PM，且幂等！
+    // 用户点拍板按钮（decideTaskNode）：步骤完了，impl-jwt 轮到了等项目经理，AskMeta.answered = true，唤醒 PM（同一条写明轮到了谁），且幂等！
     const decided = ledger.decideTaskNode(graph.id, "gate-auth", {
       clientId: "decide-btn-1",
       choice: "HttpOnly Cookie",
@@ -696,7 +709,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
         clientId: "decide-btn-1",
       },
     });
-    expect(decided.graph.nodes.find((n) => n.key === "impl-jwt")?.status).toBe("ready");
+    expect(stateOf(decided.graph, "impl-jwt")).toBe("waiting:pm");
     expect(askOf(ledger.getMessage(gateMsgId)!)).toMatchObject({
       needsUser: true,
       answered: true,
@@ -706,7 +719,8 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     const wakeText = ledger.getMessage(decided.messageId!)!.text;
     expect(wakeText).toContain("HttpOnly Cookie");
     expect(wakeText).toContain("SameSite=Lax");
-    expect(wakeText).toContain("impl-jwt");
+    expect(wakeText).toContain("轮到了：impl-jwt [等你处理]");
+    expect(wakeText).toContain(`hub worker start --node impl-jwt --graph ${graph.id}`);
 
     const snapAfter = { ...ledger.snapshot(), server: { os: "darwin" as const, folderPicker: true, fileActions: true } };
     expect(pendingDecisionsOf(snapAfter, "local")).toEqual([]);
@@ -746,11 +760,19 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
       }),
     ).toThrow();
 
-    // 跳过 opt-branch：只跳过它自己，不连带跳过 opt-leaf；opt-leaf 与 join-release 均解锁为 ready！
-    const afterSkip = ledger.skipTaskNode(graph.id, "opt-branch", { reason: "中间步骤跳过，直接进入下游" }).graph;
-    expect(afterSkip.nodes.find((n) => n.key === "opt-branch")?.status).toBe("skipped");
-    expect(afterSkip.nodes.find((n) => n.key === "opt-leaf")?.status).toBe("ready");
-    expect(afterSkip.nodes.find((n) => n.key === "join-release")?.status).toBe("ready");
+    // 用户在网页上跳过 opt-branch：只跳过它自己（跳过也算完了），不连带跳过 opt-leaf；opt-leaf 与 join-release 轮到了等项目经理，
+    // 不是项目经理自己的命令，叫醒项目经理（第 3.2 节第 3、12 行）
+    const skipped = ledger.skipTaskNode(graph.id, "opt-branch", { reason: "中间步骤跳过，直接进入下游" });
+    const afterSkip = skipped.graph;
+    expect(skipped.messageId).toBeTypeOf("number");
+    const skipWake = ledger.getMessage(skipped.messageId!)!;
+    expect(skipWake).toMatchObject({ sender: "user", status: "queued" });
+    expect(skipWake.text).toContain("用户在网页上跳过了步骤「opt-branch（可选实验分支）」（说明：中间步骤跳过，直接进入下游）");
+    expect(skipWake.text).toContain("轮到了：join-release（汇总发版）、opt-leaf（后续子任务），等你处理");
+    expect(afterSkip.nodes.find((n) => n.key === "opt-branch")).toMatchObject({ status: "done", skipped: true, waitingFor: null });
+    expect(stateOf(afterSkip, "opt-branch")).toBe("skipped");
+    expect(stateOf(afterSkip, "opt-leaf")).toBe("waiting:pm");
+    expect(stateOf(afterSkip, "join-release")).toBe("waiting:pm");
 
     ledger.hubCall(lin.sessionId, "graph.done", { graphId: graph.id, nodeKey: "opt-leaf" });
     const allSettled = ledger.hubCall(lin.sessionId, "graph.done", {
@@ -797,7 +819,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
       specJson: JSON.stringify({
         title: "鉴权改造",
         nodes: [
-          { key: "gate-plan", title: "确认方案", kind: "gate" },
+          { key: "gate-plan", title: "确认方案" },
           { key: "impl", title: "代码实现", deps: ["gate-plan"] },
         ],
       }),
@@ -868,7 +890,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
       specJson: JSON.stringify({ addNodes: [{ key: "review", title: "异构审查", deps: ["impl"] }] }),
     }).data.graph;
     expect(isTaskGraphReadyToFinish(patched)).toBe(false);
-    expect(patched.nodes.find((n) => n.key === "review")?.status).toBe("ready");
+    expect(stateOf(patched, "review")).toBe("waiting:pm");
     expect(deliveryMessagesOf(graph.id)[0]!.status).toBe("stopped");
 
     const wReview = ledger.hubCall(lin.sessionId, "worker.start", {
@@ -1053,7 +1075,15 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
 
     const statusRes = ledger.hubCall(lin.sessionId, "status", {});
     expect(statusRes.text).toContain("跨代长任务");
-    expect(statusRes.text).toContain("api-impl");
+    expect(statusRes.text).toContain(`- #${graph.id}「跨代长任务」（进度 1/2；等你处理：api-impl）`);
+    expect(statusRes.data.role === "pm" && statusRes.data.activeTaskGraphs?.[0]).toMatchObject({
+      totalNodes: 2,
+      doneCount: 1,
+      runningCount: 0,
+      waitingPmCount: 1,
+      waitingUserCount: 0,
+      readyToFinish: false,
+    });
 
     // 触发 PM 会话手动换代（写交接并切到第 2 代会话）
     const { handoverId } = ledger.renewSession(lin.pmId);
@@ -1070,8 +1100,8 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     expect(preamble).toContain("## 未完结的任务图（账本实时状态）");
     expect(preamble).toContain(`#${graph.id}`);
     expect(preamble).toContain("跨代长任务");
-    expect(preamble).toContain("[done] db-mig");
-    expect(preamble).toContain("[ready] api-impl");
+    expect(preamble).toContain("[完了] db-mig");
+    expect(preamble).toContain("[等你处理] api-impl");
   });
 });
 

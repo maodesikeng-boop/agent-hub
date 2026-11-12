@@ -186,11 +186,12 @@ export const SliceWheelIcon = memo(function SliceWheelIcon({
             const a0 = i * span;
             const a1 = a0 + span;
             const mid = a0 + span / 2;
-            const st = node.status;
+            // 四个状态加两项附带信息：跳过的和没轮到的一样留淡轮廓；等人按等谁分开（等用户强调色微凸，等项目经理琥珀色）
+            const st = node.status === "done" && node.skipped ? "skipped" : node.status === "waiting" ? `waiting-${node.waitingFor ?? "pm"}` : node.status;
             const isGhost = st === "pending" || st === "skipped";
-            const isWait = st === "waiting_user";
-            const isWarn = st === "attention";
-            const isRun = st === "running" || st === "ready";
+            const isWait = st === "waiting-user";
+            const isWarn = st === "waiting-pm";
+            const isRun = st === "running";
             const [dx, dy] = isWait && pop > 0 ? polar(pop, mid) : [0, 0];
             const peelFill = isWait ? "var(--primary)" : isWarn ? "var(--caution)" : "var(--peel)";
             const pulpFill = isRun

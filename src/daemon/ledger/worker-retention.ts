@@ -36,7 +36,7 @@ interface Candidate {
  * 接手时要从账本取它的汇报、最后的文字、最后几步操作（takeover.ts，docs/orchestration-simplify-design.md 第 11.1 节）。
  * 活跃的图最多 MAX_ACTIVE_GRAPHS_PER_PROJECT 张 × MAX_GRAPH_NODES 个节点，展开很便宜。
  */
-const IN_ACTIVE_GRAPH = `SELECT 1 FROM task_graphs g JOIN task_graph_nodes n ON n.graph_id = g.id, json_each(n.worker_ids_json) j
+const IN_ACTIVE_GRAPH = `SELECT 1 FROM task_graphs g JOIN task_graph_steps n ON n.graph_id = g.id, json_each(n.worker_ids_json) j
              WHERE g.status = 'active' AND j.value = w.id`;
 
 const placeholders = (ids: readonly number[]) => (ids.length === 0 ? "(NULL)" : `(${ids.map(() => "?").join(",")})`);

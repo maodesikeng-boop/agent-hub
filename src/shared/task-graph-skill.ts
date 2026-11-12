@@ -28,7 +28,7 @@ export function isInternalSkillCommand(name: string): boolean {
 
 /** 技能的说明：各家靠它决定要不要加载，先写什么时候加载，再写什么时候不用（上限 TASK_GRAPH_SKILL_DESCRIPTION_MAX_CHARS）。 */
 export const TASK_GRAPH_SKILL_DESCRIPTION =
-  `Fusa 任务图手册。要用 ${HUB} graph 建图或改图、给图里的节点派 Worker 或换人、挂门禁让用户拍板、加审查节点之前，先加载。一段就能做完的活不建图，不用加载。`;
+  `Fusa 任务图手册。要用 ${HUB} graph 建图或改图、给图里的节点派 Worker 或换人、挂拍板卡让用户拍板、加审查节点之前，先加载。一段就能做完的活不建图，不用加载。`;
 
 /**
  * 四类审查红线：碰到任意一条就在实现后面加审查节点。完整的在技能正文里；基础提示词第 2 步只用 PM_REVIEW_REDLINES_BRIEF 那一句压缩版
@@ -56,14 +56,15 @@ export function taskGraphSkillBody(): string {
 - **一张图只装一件事**：互不相干的几件事各建一张图。
 - **按先后步骤拆，不按模块拆**：不要把一个需求切成前端、后端各一个 Worker。写测试、改代码、截图、提 PR 是同一步，一个 Worker 一口气做完。只在三种时候另起一个节点：用户明说要先看、要换一个模型独立审查、一步的上下文装不下。
 - **默认一条线**：用 \`deps\` 把节点按先后串起来，前一个完成后一个才轮到。互不依赖的活才并行（比如同时探索几个方向再汇总）。
-- **用户明说要先看的地方**（比如“先给我看方案”）挂一个 \`gate\` 节点：轮到时用 \`${HUB} graph ask\` 填上问题、选项和你的推荐，用户点了才往下走。别的拍板不预先挂门禁，撞上了用 \`${HUB} ask\` 问。
+- **用户明说要先看的地方**（比如“先给我看方案”）单独加一个节点，带上 \`question\`、\`options\` 和你的推荐 \`recommended\`：轮到时自动给用户出拍板卡，用户点了才往下走；问题要等前面做完才写得出的，先不带，轮到时用 \`${HUB} graph ask\` 补上。别的拍板不预先挂卡，撞上了用 \`${HUB} ask\` 问。
 - **碰到下面任意一条，就在实现后面加一个审查节点**（派给另一家厂商的 Worker，任务说明里写清实现的分支和 PR、你最担心的地方，发现问题让它直接修）：
 ${PM_REVIEW_REDLINES.map((line) => `  - ${line}`).join("\n")}
 
   纯文案、纯展示、局部纯函数、薄胶水层不用审查，靠测试和截图兜底。
 
 ## 跟进
-进度以 \`${HUB} graph show\` 为准。
+进度以 \`${HUB} graph show\` 为准。节点只有四个状态：没轮到、在干、等人（等你处理，或等用户拍板）、完了（跳过也算完了）。
+- **节点轮到了**：前面的节点都完了，它就变成等你处理（挂了拍板卡的等用户拍板）。是你自己的命令让它轮到的，回执里会写；用户在网页上跳过了前一步这类情况，后台会叫醒你。给它派 Worker：\`${HUB} worker start --node <节点>\`。
 - **节点的 Worker 做完了**：验收通过就 \`${HUB} worker end <编号>\` 收工，节点自动标完成，后面的节点轮到。给下一个节点派 Worker 时，任务说明里给上一步的分支、PR 和文件路径，让它自己去读，不要转述内容。
 - **换人**（出错、额度用完、对话太长、该换一家）：直接 \`${HUB} worker start --node <节点> [--vendor …]\`。节点上还挂着的旧 Worker 自动按“没做完”收工；新 Worker 接着用前任的工作目录和分支，第一条消息自动带最近 ${TAKEOVER_PREDECESSORS_MAX} 个前任的汇报、最后的文字、最后几步操作和原始记录路径。正文可以不写，写了就是你的补充。
 - **计划变了**：随时 \`${HUB} graph patch\`，加节点、改还没开工的节点、跳过不需要的。原本没建图、做着发现要分段或加审查的，随时补建一张图。
@@ -71,15 +72,15 @@ ${PM_REVIEW_REDLINES.map((line) => `  - ${line}`).join("\n")}
 
 ## 命令
 \`<节点>\` 是节点的 key，它在几张活跃的图里重名时加 \`--graph <图编号>\`。
-- \`${HUB} graph create [--title <标题>] --stdin\`：建图，正文 JSON 形如 \`${TASK_GRAPH_CREATE_JSON_HINT}\`（\`kind\` 不写是 \`piece\`，要用户拍板的写 \`gate\`；\`deps\` 写前置节点的 key，不写就是一开始就轮到）
+- \`${HUB} graph create [--title <标题>] --stdin\`：建图，正文 JSON 形如 \`${TASK_GRAPH_CREATE_JSON_HINT}\`（\`deps\` 写前置节点的 key，不写就是一开始就轮到；带 \`question\` 的节点轮到时出拍板卡）
 - \`${HUB} graph show [<图编号>]\` / \`${HUB} graph list [--all | --status active|completed|cancelled]\`：看一张图的进度和每个节点的结果（分支、PR、摘要、定案）/ 列出任务图
 - \`${HUB} graph patch [<图编号>] --stdin\`：改图，正文 JSON 按需取 \`${TASK_GRAPH_PATCH_JSON_HINT}\`；已经结束的图不能改
-- \`${HUB} graph done <节点> [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要> | --stdin]\`：把没有 Worker 在干的节点标完成（比如你自己做完的），或给节点补记 PR 等结果（图已结束时加 \`--graph <图编号>\`）；有 Worker 在干的会被拒绝，先让它收工
-- \`${HUB} graph skip <节点> [--reason <原因>]\` / \`${HUB} graph cancel [<图编号>] [--reason <原因>]\`：跳过一个节点（只跳过它自己，下游照常解锁）/ 取消整张图
+- \`${HUB} graph done <节点> [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要> | --stdin]\`：放行，把没有 Worker 在干的节点标完了（比如你自己做完的），或给节点补记 PR 等结果（图已结束时加 \`--graph <图编号>\`）；有 Worker 在干的会被拒绝，先让它收工
+- \`${HUB} graph skip <节点> [--reason <原因>]\` / \`${HUB} graph cancel [<图编号>] [--reason <原因>]\`：跳过一个节点（跳过也算完了，只跳过它自己，下游照常轮到）/ 取消整张图
 - \`${HUB} graph finish [<图编号>] [--unmerged-ok] --stdin\`：所有节点完成后结束这张图，正文是交付摘要（自动同步给总助）；分支上有未合并的 PR 时默认拦下提醒，确认不合并加 \`--unmerged-ok\`
-- \`${HUB} graph ask <节点> [--question <问题>] [--option <选项>...] [--recommended <选项>] [--stdin]\`：给轮到的 \`gate\` 节点填上问题、选项和推荐，交给用户拍板；正文是给用户看的背景摘要
+- \`${HUB} graph ask <节点> [--question <问题>] [--option <选项>...] [--recommended <选项>] [--stdin]\`：给没人在干、还没完的节点挂上拍板卡（问题、选项和推荐），前面都完了就交给用户拍板；正文是给用户看的背景摘要
 - \`${HUB} graph decide <节点> --choice <选项> [--note <说明>]\`：用户没点选项、在聊天里口头答复时，用它记下来
-- \`${HUB} worker start --node <节点> …\`：把 Worker 绑到图里轮到的节点上，其余参数和不带 \`--node\` 时一样；节点上已经有经手过的 Worker 时就是换人，\`--title\` 和正文都可以不给
+- \`${HUB} worker start --node <节点> …\`：把 Worker 绑到等你处理的节点上，其余参数和不带 \`--node\` 时一样；节点上已经有经手过的 Worker 时就是换人，\`--title\` 和正文都可以不给
 - \`${HUB} worker end <编号> [--incomplete]\`：它最近一轮汇报是“做完了”时，绑定的节点自动标完成；否则节点等人接手。加 \`--incomplete\`：不管它汇报了什么，节点都等人接手
 `;
 }

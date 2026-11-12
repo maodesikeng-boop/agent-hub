@@ -479,8 +479,9 @@ describe("selector 缓存：300 个 Worker、3 万条消息", () => {
 
   it("activeGraphsOf、unboundWorkersOf、pendingDecisionsOf：1 个月规模下中位数 < 2 ms，流式打字与无关更新严格 === 引用稳定，变更即时失效", () => {
     const makeNode = (over: Partial<TaskNode> & Pick<TaskNode, "key" | "title">): TaskNode => ({
-      kind: "piece",
       status: "pending",
+      waitingFor: null,
+      skipped: false,
       sortOrder: 0,
       activeWorkerId: null,
       workerIds: [],
@@ -549,8 +550,9 @@ describe("selector 缓存：300 个 Worker、3 万条消息", () => {
         makeNode({
           key: "gate-scope",
           title: "确认同步范围",
-          kind: "gate",
-          status: "waiting_user",
+          status: "waiting",
+          waitingFor: "user",
+          skipped: false,
           sortOrder: 1,
           gateQuestion: "冲突项怎么处理？",
           gateOptions: ["全量同步", "仅不冲突项"],

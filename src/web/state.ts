@@ -33,6 +33,7 @@ import {
   type WorkerPick,
 } from "../shared/index.ts";
 import type { ErrorInfo } from "./format.ts";
+import { normalizeTaskGraph, normalizeTaskGraphs } from "./task-graph-compat.ts";
 import type { ConnectionStatus } from "./connection.ts";
 
 /** 网页自己先显示出来、服务端还没回真消息的用户消息。 */
@@ -462,7 +463,8 @@ export function applyChange(state: HubState, change: Change): HubState {
     }
     case "task_graph.created":
     case "task_graph.updated": {
-      const { graph } = change.data;
+      // 老版本守护进程推来的旧状态在这里换成新的四个（task-graph-compat.ts）
+      const graph = normalizeTaskGraph(change.data.graph);
       const existingIndex = state.activeTaskGraphs.findIndex((g) => g.id === graph.id);
       if (graph.status !== "active") {
         if (existingIndex === -1) return next;
@@ -550,7 +552,7 @@ function fromSnapshot(state: HubState, snapshot: StateSnapshot): HubState {
     health: snapshot.health,
     schedules: snapshot.schedules,
     router: normalizeRouterSlice(snapshot.router),
-    activeTaskGraphs: snapshot.activeTaskGraphs,
+    activeTaskGraphs: normalizeTaskGraphs(snapshot.activeTaskGraphs),
     server: snapshot.server,
     ...(snapshot.tunnel !== undefined ? { tunnel: snapshot.tunnel } : {}),
     ...(snapshot.publicEntry !== undefined ? { publicEntry: snapshot.publicEntry } : {}),

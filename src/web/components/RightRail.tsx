@@ -1,7 +1,16 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { ChevronRight, Loader2, MessageCircleQuestionMark } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
-import { askOf, DEFAULT_AGENT_VENDOR, GRAPH_HISTORY_PAGE_SIZE, MAX_COMPLETED_GRAPH_PAGES, agentEffortOf, isAgentVendor, modelShortLabel } from "../../shared/index.ts";
+import {
+  askOf,
+  DEFAULT_AGENT_VENDOR,
+  GRAPH_HISTORY_PAGE_SIZE,
+  MAX_COMPLETED_GRAPH_PAGES,
+  agentEffortOf,
+  isAgentVendor,
+  isTaskNodeWaitingUser,
+  modelShortLabel,
+} from "../../shared/index.ts";
 import type { ConversationId, Message, MessageId, ProjectId, TaskGraph, TaskGraphId } from "../../shared/index.ts";
 import { cleanPieceTitle, DEFAULT_CHOICE, errorText, formatContext, formatTokenDetail, NEEDS_YOU, NO_DATA } from "../format.ts";
 import { cn } from "../lib/utils.ts";
@@ -10,6 +19,7 @@ import { stripMarkdown } from "../plainText.ts";
 import { useHubQueryClient } from "../query-client.ts";
 import { useClient } from "../device-scope.tsx";
 import { boundWorkerIdsOf, isWorkerBound, type WorkerEntry } from "../selectors.ts";
+import { normalizeTaskGraphs } from "../task-graph-compat.ts";
 import type { WorkerTone } from "../worker-status.ts";
 import { Button } from "../ui/button.tsx";
 import { Avatar } from "./Avatar.tsx";
@@ -332,11 +342,14 @@ function CompletedGroup({
   const historyQuery = useInfiniteQuery(
     {
       queryKey: ["project-task-graphs", client.device, projectId ?? null, completedGraphCount ?? null, activeGraphIdsKey] as const,
-      queryFn: ({ pageParam }) =>
-        client.fetchProjectTaskGraphs(
+      queryFn: async ({ pageParam }) => {
+        const page = await client.fetchProjectTaskGraphs(
           projectId!,
           pageParam !== undefined ? { before: pageParam, limit: GRAPH_HISTORY_PAGE_SIZE } : { limit: GRAPH_HISTORY_PAGE_SIZE },
-        ),
+        );
+        // 老版本守护进程的历史图带旧状态，读入时换成新的四个（task-graph-compat.ts）
+        return { ...page, graphs: normalizeTaskGraphs(page.graphs) };
+      },
       initialPageParam: undefined as TaskGraphId | undefined,
       // 翻到 MAX_COMPLETED_GRAPH_PAGES 页就停（不再显示 Load more），而不是让 maxPages 把最新的第一页挤掉
       getNextPageParam: (lastPage, allPages) =>
@@ -505,7 +518,7 @@ export function RailGroups({
   const hasLive = live.length > 0;
   const hasCompleted = ended.length > 0 || (completedGraphCount ?? 0) > 0;
   const graphNeedsYou = useMemo(
-    () => activeGraphs?.some((g) => g.nodes.some((n) => n.status === "waiting_user")) ?? false,
+    () => activeGraphs?.some((g) => g.nodes.some(isTaskNodeWaitingUser)) ?? false,
     [activeGraphs],
   );
 

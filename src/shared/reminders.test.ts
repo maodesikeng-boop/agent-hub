@@ -252,8 +252,9 @@ describe("Router 跨设备汇总：PendingDecision 与未读 Router 汇报", () 
             {
               key: "gate-1",
               title: "切流确认",
-              kind: "gate",
-              status: "waiting_user",
+              status: "waiting",
+              waitingFor: "user",
+              skipped: false,
               sortOrder: 0,
               activeWorkerId: null,
               workerIds: [],

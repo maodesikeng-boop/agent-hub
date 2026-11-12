@@ -188,7 +188,7 @@ describe("Router 与已完成任务图的到期清理", () => {
         ).lastInsertRowid,
       );
       realDb.run(
-        "INSERT INTO task_graph_nodes (graph_id, node_key, title, kind, status, created_at, updated_at) VALUES (?, 'a', 'A', 'piece', 'done', ?, ?)",
+        "INSERT INTO task_graph_steps (graph_id, node_key, title, status, created_at, updated_at) VALUES (?, 'a', 'A', 'done', ?, ?)",
         oldGid,
         oldGraphAt,
         oldGraphAt,
@@ -212,7 +212,7 @@ describe("Router 与已完成任务图的到期清理", () => {
       expect(realDb.get<{ n: number }>("SELECT count(*) AS n FROM router_commands")!.n).toBe(ROUTER_COMMANDS_RETENTION_MAX);
       expect(realDb.get<{ n: number }>("SELECT count(*) AS n FROM router_audit_log")!.n).toBe(ROUTER_AUDIT_LOG_MAX_ROWS);
       expect(realDb.all<{ id: number }>("SELECT id FROM task_graphs")).toEqual([{ id: activeGid }]);
-      expect(realDb.get<{ n: number }>("SELECT count(*) AS n FROM task_graph_nodes WHERE graph_id = ?", oldGid)!.n).toBe(0);
+      expect(realDb.get<{ n: number }>("SELECT count(*) AS n FROM task_graph_steps WHERE graph_id = ?", oldGid)!.n).toBe(0);
     } finally {
       realLedger.close();
       realDb.close();

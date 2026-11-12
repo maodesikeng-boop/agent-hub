@@ -1406,7 +1406,7 @@ export function createLedgerWorkers(
   const inActiveGraph = (workerIds: readonly WorkerId[]): boolean =>
     workerIds.length > 0 &&
     db.get(
-      `SELECT 1 AS x FROM task_graphs g JOIN task_graph_nodes n ON n.graph_id = g.id, json_each(n.worker_ids_json) j
+      `SELECT 1 AS x FROM task_graphs g JOIN task_graph_steps n ON n.graph_id = g.id, json_each(n.worker_ids_json) j
         WHERE g.status = 'active' AND j.value IN (${workerIds.map(() => "?").join(", ")})
         LIMIT 1`,
       ...workerIds,

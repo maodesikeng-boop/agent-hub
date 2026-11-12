@@ -14,7 +14,7 @@ const readShot = (ctx: ScenarioContext): FakeTurn["steps"] => [{ tool: { name: "
 const bigGraph = (title: string, keys: string[]) =>
   heredoc(
     `${hub} graph create --title "${title}"`,
-    JSON.stringify({ nodes: keys.map((key, i) => ({ key, title: key, ...(key.startsWith("ok") ? { kind: "gate" } : {}), ...(i > 0 ? { deps: [keys[i - 1]] } : {}) })) }),
+    JSON.stringify({ nodes: keys.map((key, i) => ({ key, title: key, ...(key.startsWith("ok") ? { hasCard: true } : {}), ...(i > 0 ? { deps: [keys[i - 1]] } : {}) })) }),
   );
 
 export type SelfTestKind = "positive" | "negative" | "nothing";

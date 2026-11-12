@@ -80,7 +80,7 @@ export function readFacts(input: FactsInput): Facts {
       id: num(g.id),
       title: str(g.title),
       createdAt: num(g.created_at),
-      nodes: all("SELECT node_key, title, kind, status, worker_ids_json, created_at FROM task_graph_nodes WHERE graph_id = ? ORDER BY sort_order, id", num(g.id)).map((n) => ({
+      nodes: all("SELECT node_key, title, kind, status, worker_ids_json, created_at FROM task_graph_steps WHERE graph_id = ? ORDER BY sort_order, id", num(g.id)).map((n) => ({
         key: str(n.node_key),
         title: str(n.title),
         kind: str(n.kind),

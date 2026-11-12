@@ -45,26 +45,21 @@ const RAIL_OVERFLOW_MAX_PX = 76;
 const RAIL_COL_GAP_MAX_PX = 8;
 const RAIL_COL_GAP_MIN_PX = 6;
 
-export type LayoutNodeKind = "piece" | "gate" | "step";
-
-export type LayoutNodeStatus =
-  | "pending"
-  | "ready"
-  | "running"
-  | "waiting_user"
-  | "attention"
-  | "done"
-  | "skipped";
+/** 步骤的四个状态（shared/domain.ts 的 TASK_NODE_STATUSES）。 */
+export type LayoutNodeStatus = "pending" | "running" | "waiting" | "done";
 
 export type LayoutViewportMode = "rail" | "dialog";
 
 export interface LayoutInputNode {
   readonly key: string;
-  readonly kind: LayoutNodeKind;
   readonly status: LayoutNodeStatus;
+  /** 等谁：只在 status 是 waiting 时有；等用户（user）的步骤展开成拍板卡。 */
+  readonly waitingFor?: "user" | "pm" | null;
+  /** 挂着拍板卡（写了问题，或已经有定案）：卡片比普通步骤高一档。 */
+  readonly hasCard?: boolean;
   /** 同层兄弟节点的稳定声明序（默认按数组输入顺序）。 */
   readonly position?: number;
-  /** gate 节点的预设选项数（激活态用于估算按钮行数与卡片高度）。 */
+  /** 拍板卡的预设选项数（等用户时用于估算按钮行数与卡片高度）。 */
   readonly optionCount?: number;
   /** 是否带有摘要说明文本。 */
   readonly hasSummary?: boolean;
@@ -108,7 +103,7 @@ export type LayoutNodeBox =
   | (LayoutCardBoxBase & {
       readonly boxKind: "node";
       readonly nodeKey: string;
-      readonly kind: LayoutNodeKind;
+      readonly hasCard: boolean;
     })
   | (LayoutCardBoxBase & {
       readonly boxKind: "parallel_overflow";
@@ -163,7 +158,7 @@ function round2(n: number): number {
 }
 
 function isWaitingGate(node: LayoutInputNode): boolean {
-  return node.kind === "gate" && node.status === "waiting_user";
+  return node.status === "waiting" && node.waitingFor === "user";
 }
 
 function normalizedOptionRows(node: LayoutInputNode): number {
@@ -174,8 +169,8 @@ function normalizedOptionRows(node: LayoutInputNode): number {
 
 /**
  * 估算单个节点卡片的 rem 宽高（纯函数，不访问 DOM）：
- * 只依赖影响几何高度档位的字段（kind、是否为激活态 waiting_user 门禁、optionCount、hasSummary、noteExpanded），
- * 普通 Worker 状态在 pending / ready / running / attention 间流转时尺寸档位保持恒定，避免无意义重排。
+ * 只依赖影响几何高度档位的字段（hasCard、是否等用户拍板、optionCount、hasSummary、noteExpanded），
+ * 普通步骤在没轮到、在干、等项目经理之间流转时尺寸档位保持恒定，避免无意义重排。
  */
 export function estimateNodeSizeRem(
   node: LayoutInputNode,
@@ -194,7 +189,7 @@ export function estimateNodeSizeRem(
         (node.noteExpanded ? RAIL_GATE_NOTE_EXPANDED_REM : RAIL_GATE_NOTE_COLLAPSED_REM);
       return { widthRem: DIALOG_GATE_ACTIVE_WIDTH_REM, heightRem: round2(heightRem) };
     }
-    if (node.kind === "gate") {
+    if (node.hasCard === true) {
       return {
         widthRem: DIALOG_GATE_IDLE_WIDTH_REM,
         heightRem: round2(DIALOG_GATE_IDLE_HEIGHT_REM + (node.hasSummary ? DIALOG_SUMMARY_EXTRA_REM : 0)),
@@ -231,7 +226,7 @@ export function estimateNodeSizeRem(
 
   return {
     widthRem,
-    heightRem: node.kind === "gate" ? RAIL_GATE_IDLE_HEIGHT_REM : RAIL_SINGLE_NODE_HEIGHT_REM,
+    heightRem: node.hasCard === true ? RAIL_GATE_IDLE_HEIGHT_REM : RAIL_SINGLE_NODE_HEIGHT_REM,
   };
 }
 
@@ -252,7 +247,7 @@ function buildLayoutCacheKey(input: TaskGraphLayoutInput, fontPx: number): strin
     const sum = (activeGate || input.viewportMode === "dialog") && n.hasSummary ? 1 : 0;
     const note = activeGate && n.noteExpanded ? 1 : 0;
     const pos = n.position ?? i;
-    parts.push(`N:${n.key},${n.kind},${pos},${activeGate},${isDone},${opts},${sum},${note}`);
+    parts.push(`N:${n.key},${n.hasCard === true ? 1 : 0},${pos},${activeGate},${isDone},${opts},${sum},${note}`);
   }
 
   for (let i = 0; i < input.edges.length; i++) {
@@ -508,7 +503,7 @@ export function computeTaskGraphLayoutUncached(input: TaskGraphLayoutInput): Tas
     entries.sort((a, b) => a.order - b.order);
 
     if (input.viewportMode === "rail" && entries.length > RAIL_PARALLEL_VISIBLE_LIMIT) {
-      // 优先保留 waiting_user 激活门禁在可见的前 2 张卡中，其余保持稳定声明序
+      // 优先保留等用户拍板的步骤在可见的前 2 张卡中，其余保持稳定声明序
       const prioritized = [...entries].sort((a, b) => {
         const wa = isWaitingGate(a.node) ? 0 : 1;
         const wb = isWaitingGate(b.node) ? 0 : 1;
@@ -735,7 +730,7 @@ export function computeTaskGraphLayoutUncached(input: TaskGraphLayoutInput): Tas
                 boxKind: "node" as const,
                 id: vn.id,
                 nodeKey: vn.sourceNode!.key,
-                kind: vn.sourceNode!.kind,
+                hasCard: vn.sourceNode!.hasCard === true,
                 x: boxX,
                 y: boxY,
                 width: vn.widthPx,
@@ -778,7 +773,7 @@ export function computeTaskGraphLayoutUncached(input: TaskGraphLayoutInput): Tas
         boxKind: "node" as const,
         id: vn.id,
         nodeKey: vn.sourceNode!.key,
-        kind: vn.sourceNode!.kind,
+        hasCard: vn.sourceNode!.hasCard === true,
         x: bx,
         y: by,
         width: vn.widthPx,

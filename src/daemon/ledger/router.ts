@@ -935,9 +935,9 @@ export function createLedgerRouter(
       db
         .all<{ pm_id: number; n: number }>(
           `SELECT g.pm_id AS pm_id, count(*) AS n
-             FROM task_graph_nodes n
+             FROM task_graph_steps n
              JOIN task_graphs g ON g.id = n.graph_id
-            WHERE g.status = 'active' AND n.kind = 'gate' AND n.status = 'waiting_user'
+            WHERE g.status = 'active' AND n.status = 'waiting' AND n.waiting_for = 'user'
             GROUP BY g.pm_id`,
         )
         .map((r) => [r.pm_id, r.n]),

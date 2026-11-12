@@ -30,8 +30,9 @@ const CANCEL_PATH = new RegExp(`^/api/task-graphs/${GRAPH_ID}/cancel$`);
 
 function makeNode(over: Partial<TaskNode> & Pick<TaskNode, "key" | "title">): TaskNode {
   return {
-    kind: "piece",
     status: "pending",
+    waitingFor: null,
+    skipped: false,
     sortOrder: 0,
     activeWorkerId: null,
     workerIds: [],
@@ -62,8 +63,9 @@ function graph(): TaskGraph {
       makeNode({
         key: "gate",
         title: "确认上线",
-        kind: "gate",
-        status: "waiting_user",
+        status: "waiting",
+        waitingFor: "user",
+        skipped: false,
         sortOrder: 1,
         gateQuestion: "现在上线吗？",
         gateOptions: ["上线", "再等等"],
@@ -351,7 +353,7 @@ describe("待交付状态展示（Ready to finish）", () => {
             ...graph(),
             nodes: [
               makeNode({ key: "build", title: "构建产物", status: "done", sortOrder: 0, workerIds: [3] }),
-              makeNode({ key: "gate", title: "确认上线", kind: "gate", status: "skipped", sortOrder: 1 }),
+              makeNode({ key: "gate", title: "确认上线", status: "done", waitingFor: null, skipped: true, sortOrder: 1 }),
             ],
           },
         },

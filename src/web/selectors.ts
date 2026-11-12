@@ -28,6 +28,8 @@ import {
   vendorSpec,
   isQuotaExhausted,
   pendingDecisionsOf as devicePendingDecisionsOf,
+  isTaskNodeWaitingPm,
+  isTaskNodeWaitingUser,
   systemEventOf,
   systemNoticeText,
   workerEventOf,
@@ -1049,17 +1051,17 @@ function setBoundedMap<K, V>(map: Map<K, V>, key: K, value: V, maxSize: number):
   map.set(key, value);
 }
 
-/** 任务图紧急度排序权重：waiting_user（0）> attention（1）> 其余后台进行中（2）。 */
+/** 任务图紧急度排序权重：有步骤等用户拍板（0）> 有步骤等项目经理（1）> 其余后台进行中（2）。 */
 export function taskGraphPriority(graph: TaskGraph): number {
-  let hasAttention = false;
+  let hasWaitingPm = false;
   for (const node of graph.nodes) {
-    if (node.status === "waiting_user") return 0;
-    if (node.status === "attention") hasAttention = true;
+    if (isTaskNodeWaitingUser(node)) return 0;
+    if (isTaskNodeWaitingPm(node)) hasWaitingPm = true;
   }
-  return hasAttention ? 1 : 2;
+  return hasWaitingPm ? 1 : 2;
 }
 
-/** 按紧急度（waiting_user / attention 置顶）与最近更新时间排好活跃任务图。 */
+/** 按紧急度（等用户、等项目经理的置顶）与最近更新时间排好活跃任务图。 */
 export function sortActiveGraphs(graphs: readonly TaskGraph[]): TaskGraph[] {
   if (graphs.length === 0) return NO_TASK_GRAPHS;
   return graphs.toSorted((a, b) => {
@@ -1074,7 +1076,7 @@ const activeGraphsCache = new WeakMap<HubState["activeTaskGraphs"], Map<ProjectI
 const lastActiveGraphsByProject = new Map<ProjectId, TaskGraph[]>();
 
 /**
- * 指定项目的活跃任务图（status === 'active'）：waiting_user / attention 任务排在最前。
+ * 指定项目的活跃任务图（status === 'active'）：有步骤等用户、等项目经理的排在最前。
  * 按 activeTaskGraphs WeakMap 缓存，并在跨项目图变更时复用未变项目的数组引用（===）。
  */
 export function activeGraphsOf(state: HubState, projectId: ProjectId | null): TaskGraph[] {
@@ -1239,7 +1241,7 @@ const convDecisionsCache = new WeakMap<
 const lastDecisionsByScope = new Map<string, PendingDecision[]>();
 
 /**
- * 指定对话（PM 对话）当前待拍板事项（waiting_user 任务图门禁 + 去重后的 Router 待决项）：
+ * 指定对话（PM 对话）当前待拍板事项（任务图里挂卡等用户的步骤 + 去重后的 Router 待决项）：
  * 只扫描该对话自身的消息与归属它的任务图/待决项（绝不扫 300 个 Worker 对话），WeakMap 多级缓存保证 < 2 ms 与 === 引用稳定。
  */
 export function pendingDecisionsOf(
@@ -1282,7 +1284,7 @@ export function pendingDecisionsOf(
     if (graph.status !== "active" || graph.conversationId !== conversationId) continue;
     for (const node of graph.nodes) {
       if (node.gateAskMessageId !== null) graphGateIds.add(node.gateAskMessageId);
-      if (node.kind !== "gate" || node.status !== "waiting_user") continue;
+      if (!isTaskNodeWaitingUser(node)) continue;
       const { blockedNodeCount, nextNodeTitles } = computeGateImpact(graph, node.key);
       result.push({
         key: `gate:${deviceId}:${graph.id}:${node.key}`,
