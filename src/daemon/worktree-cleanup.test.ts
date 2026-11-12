@@ -2,7 +2,7 @@
 // 覆盖：已合并删（分支保留） / 收工满 3 天且干净删（分支保留） / 有改动不删（含已跟踪修改、暂存、未跟踪文件；PR 已合并也不删） /
 // 在跑不删 / 不用 worktree 跳过 / 不在 worktrees 目录下不删（含符号链接越界） / 手动删过的跳过 /
 // git worktree remove 失败记日志下轮重试并 prune / 每轮上限与轮转 / 没候选时零 git 调用 /
-// HEAD 不在分支上不删 / status.showUntrackedFiles=no 时未跟踪文件照样拦 / 被忽略的文件随目录删 / 相对路径不删。
+// 孤儿目录（外部解绑残留）/ detached HEAD 与 review-* 分支 / 0 提交探索目录 / rebase 中途 / status.showUntrackedFiles=no 时未跟踪文件照样拦 / 被忽略的文件随目录删 / 相对路径不删。
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -119,16 +119,47 @@ describe("worktree 自动清理", () => {
     expect(ledger.workerPrTarget(pm.sessionId, w.id)).toEqual({ cwd: repo, branch: w.branch });
   });
 
-  it("刚建出 worktree 一条新提交都没有（branch === baseCommit）就收工、未满 3 天：不当成“PR 已合并”，等满 3 天才删", async () => {
+  it("收工的 0 提交干净目录（HEAD === baseCommit、HEAD 在 main 历史里）：下一轮就删，保留分支；有未提交/未跟踪文件的照旧不删", async () => {
     const w = await spawnWorktreeWorker("零提交");
+    const dirty = await spawnWorktreeWorker("零提交但有未跟踪文件");
+    writeFileSync(join(dirty.worktreePath!, "half-done.md"), "写了一半\n");
+    const dirtyModified = await spawnWorktreeWorker("零提交但改了已跟踪文件");
+    writeFileSync(join(dirtyModified.worktreePath!, "README.md"), "改了一半\n");
+    const dirtyStaged = await spawnWorktreeWorker("零提交但有暂存文件");
+    writeFileSync(join(dirtyStaged.worktreePath!, "staged-zero.txt"), "暂存\n");
+    git(dirtyStaged.worktreePath!, "add", "staged-zero.txt");
     endWorker(w.id);
+    endWorker(dirty.id);
+    endWorker(dirtyModified.id);
+    endWorker(dirtyStaged.id);
 
     now += 60_000;
     const cleanup = createWorktreeCleanup({ ledger, worktreesDir, log: (l) => logs.push(l), now: () => now });
-    expect(await cleanup.runOnce()).toEqual([]);
-    expect(existsSync(w.worktreePath!)).toBe(true);
+    expect(await cleanup.runOnce()).toEqual([w.id]);
+    expect(existsSync(w.worktreePath!)).toBe(false);
+    expect(branchExists(w.branch!)).toBe(true);
+    expect(existsSync(dirty.worktreePath!)).toBe(true);
+    expect(existsSync(dirtyModified.worktreePath!)).toBe(true);
+    expect(existsSync(dirtyStaged.worktreePath!)).toBe(true);
 
     now += WORKTREE_RETENTION_MS;
+    expect(await cleanup.runOnce()).toEqual([]);
+    expect(existsSync(dirty.worktreePath!)).toBe(true);
+    expect(existsSync(dirtyModified.worktreePath!)).toBe(true);
+    expect(existsSync(dirtyStaged.worktreePath!)).toBe(true);
+  });
+
+  it("有未合并提交的分支：3 天内保留，满 3 天后清目录、保留分支", async () => {
+    const w = await spawnWorktreeWorker("有未合并提交");
+    writeFileSync(join(w.worktreePath!, "c.txt"), "1\n");
+    git(w.worktreePath!, "add", "-A");
+    git(w.worktreePath!, "commit", "-q", "-m", "c");
+    endWorker(w.id);
+    const cleanup = createWorktreeCleanup({ ledger, worktreesDir, log: (l) => logs.push(l), now: () => now });
+    now += 60_000;
+    expect(await cleanup.runOnce()).toEqual([]);
+    expect(existsSync(w.worktreePath!)).toBe(true);
+    now = T0 + WORKTREE_RETENTION_MS;
     expect(await cleanup.runOnce()).toEqual([w.id]);
     expect(existsSync(w.worktreePath!)).toBe(false);
     expect(branchExists(w.branch!)).toBe(true);
@@ -187,14 +218,7 @@ describe("worktree 自动清理", () => {
     expect(existsSync(wStaged.worktreePath!)).toBe(true);
   });
 
-  it("HEAD 不在分支上（detached 上有新提交、rebase 停在一半）：满 3 天也不删，免得只在 HEAD 上的提交跟着 worktree 一起丢", async () => {
-    const wDetached = await spawnWorktreeWorker("detached 有提交");
-    git(wDetached.worktreePath!, "checkout", "-q", "--detach");
-    writeFileSync(join(wDetached.worktreePath!, "only-on-head.txt"), "1\n");
-    git(wDetached.worktreePath!, "add", "-A");
-    git(wDetached.worktreePath!, "commit", "-q", "-m", "detached commit");
-    endWorker(wDetached.id);
-
+  it("rebase 停在一半、或有脏改动：满 3 天也绝不删（含 detached HEAD 已合并的情况）", async () => {
     const wRebase = await spawnWorktreeWorker("rebase 停在一半");
     for (const name of ["r1", "r2"]) {
       writeFileSync(join(wRebase.worktreePath!, name), `${name}\n`);
@@ -206,13 +230,252 @@ describe("worktree 自动清理", () => {
       env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_SEQUENCE_EDITOR: "sed -i.bak s/^pick/edit/" },
     });
     expect(git(wRebase.worktreePath!, "status", "--porcelain")).toBe("");
+    // 合入 main，让“已合并”也成立：rebase 中途仍然不删
+    git(repo, "merge", "--no-ff", "-q", "-m", "Merge", wRebase.branch!);
     endWorker(wRebase.id);
+
+    const wDirtyDetached = await spawnWorktreeWorker("detached 且有脏改动");
+    git(wDirtyDetached.worktreePath!, "checkout", "-q", "--detach");
+    writeFileSync(join(wDirtyDetached.worktreePath!, "README.md"), "dirty\n");
+    endWorker(wDirtyDetached.id);
 
     now += WORKTREE_RETENTION_MS + 10_000;
     const cleanup = createWorktreeCleanup({ ledger, worktreesDir, log: (l) => logs.push(l), now: () => now });
     expect(await cleanup.runOnce()).toEqual([]);
-    expect(existsSync(join(wDetached.worktreePath!, "only-on-head.txt"))).toBe(true);
     expect(existsSync(wRebase.worktreePath!)).toBe(true);
+    expect(existsSync(wDirtyDetached.worktreePath!)).toBe(true);
+  });
+
+  it("审查 Worker detached HEAD / review-* 分支且提交已合入 main：未满 3 天立即清理", async () => {
+    const w = await spawnWorktreeWorker("被审的 PR");
+    writeFileSync(join(w.worktreePath!, "pr.txt"), "pr\n");
+    git(w.worktreePath!, "add", "-A");
+    git(w.worktreePath!, "commit", "-q", "-m", "pr");
+    const prSha = git(w.worktreePath!, "rev-parse", "HEAD");
+    // 登记分支回退到起点，模拟“登记的分支没合入，真正合入的是 HEAD 所在提交”（审查 Worker 自己 checkout 了 PR 提交）
+    git(w.worktreePath!, "checkout", "-q", "--detach", prSha);
+    git(repo, "merge", "--ff-only", "-q", prSha);
+    git(repo, "branch", "-f", w.branch!, w.baseCommit!);
+    endWorker(w.id);
+
+    const wReview = await spawnWorktreeWorker("review-304");
+    git(wReview.worktreePath!, "checkout", "-q", "-b", "review-304", prSha);
+    endWorker(wReview.id);
+
+    now += 60_000;
+    const cleanup = createWorktreeCleanup({ ledger, worktreesDir, log: (l) => logs.push(l), now: () => now });
+    expect(await cleanup.runOnce()).toEqual([w.id, wReview.id]);
+    expect(existsSync(w.worktreePath!)).toBe(false);
+    expect(existsSync(wReview.worktreePath!)).toBe(false);
+    expect(branchExists("review-304")).toBe(true);
+    expect(git(repo, "branch", "--list", "hub/detached-*")).toBe("");
+  });
+
+  it("detached HEAD 有未合入提交：未满 3 天不删；满 3 天先建保底分支再删目录，提交仍可找回", async () => {
+    const w = await spawnWorktreeWorker("detached 有提交");
+    git(w.worktreePath!, "checkout", "-q", "--detach");
+    writeFileSync(join(w.worktreePath!, "only-on-head.txt"), "1\n");
+    git(w.worktreePath!, "add", "-A");
+    git(w.worktreePath!, "commit", "-q", "-m", "detached commit");
+    const sha = git(w.worktreePath!, "rev-parse", "HEAD");
+    endWorker(w.id);
+
+    // 另一个 detached HEAD 已在 main 历史里且满 3 天：直接删目录，不建多余 hub/detached-* 分支垃圾
+    const wMergedDetached = await spawnWorktreeWorker("detached 已合入满 3 天");
+    git(wMergedDetached.worktreePath!, "checkout", "-q", "--detach");
+    endWorker(wMergedDetached.id);
+
+    // 另一个 detached HEAD 有未合入提交，但建保底引用失败（同名命名空间冲突）：绝不继续删目录丢提交
+    const wPinFail = await spawnWorktreeWorker("detached 保底引用失败");
+    git(wPinFail.worktreePath!, "checkout", "-q", "--detach");
+    writeFileSync(join(wPinFail.worktreePath!, "must-not-lose.txt"), "precious\n");
+    git(wPinFail.worktreePath!, "add", "-A");
+    git(wPinFail.worktreePath!, "commit", "-q", "-m", "precious detached");
+    const failSha = git(wPinFail.worktreePath!, "rev-parse", "HEAD");
+    git(repo, "branch", `hub/detached-${wPinFail.id}-${failSha.slice(0, 8)}/conflict`, "main");
+    endWorker(wPinFail.id);
+
+    const cleanup = createWorktreeCleanup({ ledger, worktreesDir, log: (l) => logs.push(l), now: () => now });
+    now = T0 + WORKTREE_RETENTION_MS - 1;
+    expect(await cleanup.runOnce()).toEqual([wMergedDetached.id]);
+    expect(existsSync(w.worktreePath!)).toBe(true);
+    expect(existsSync(wPinFail.worktreePath!)).toBe(true);
+    expect(git(repo, "branch", "--list", `hub/detached-${wMergedDetached.id}-*`)).toBe("");
+
+    // 再测一个满 3 天才跑首轮且 detached HEAD 已在 main 历史里的：同样不建多余分支
+    const wMergedExpired = await spawnWorktreeWorker("detached 已合入满 3 天首轮");
+    git(wMergedExpired.worktreePath!, "checkout", "-q", "--detach");
+    endWorker(wMergedExpired.id);
+
+    now = T0 + WORKTREE_RETENTION_MS * 2;
+    expect(await cleanup.runOnce()).toEqual([w.id, wMergedExpired.id]);
+    expect(existsSync(w.worktreePath!)).toBe(false);
+    expect(existsSync(wMergedExpired.worktreePath!)).toBe(false);
+    expect(git(repo, "branch", "--list", `hub/detached-${wMergedExpired.id}-*`)).toBe("");
+    const pin = `hub/detached-${w.id}-${sha.slice(0, 8)}`;
+    expect(git(repo, "rev-parse", pin)).toBe(sha);
+    expect(git(repo, "show", `${pin}:only-on-head.txt`)).toBe("1");
+
+    // 建保底分支失败的目录与提交文件完好保留，并记失败日志
+    expect(existsSync(wPinFail.worktreePath!)).toBe(true);
+    expect(readFileSync(join(wPinFail.worktreePath!, "must-not-lose.txt"), "utf8")).toBe("precious\n");
+    expect(logs.some((l) => l.includes(`worker #${wPinFail.id}`) && l.includes("保全 detached HEAD 失败"))).toBe(true);
+  });
+
+  it("孤儿目录（外部解除 .git/worktrees/<id> 关联后残留，只剩忽略目录）：被安全清理，分支保留；有未忽略的用户文件则保留", async () => {
+    writeFileSync(join(repo, ".gitignore"), "node_modules/\n.codegraph/\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "ignore");
+    const make = async (title: string) => {
+      const w = await spawnWorktreeWorker(title);
+      mkdirSync(join(w.worktreePath!, "node_modules", "x"), { recursive: true });
+      writeFileSync(join(w.worktreePath!, "node_modules", "x", "i.js"), "1\n");
+      mkdirSync(join(w.worktreePath!, ".codegraph"), { recursive: true });
+      writeFileSync(join(w.worktreePath!, ".codegraph", "codegraph.db"), "db\n");
+      endWorker(w.id);
+      return w;
+    };
+    const wLinkGone = await make("登记目录被删");
+    const wNoDotGit = await make(".git 文件没了");
+    const wUser = await make("有用户文件");
+    for (const w of [wLinkGone, wUser]) {
+      const name = readFileSync(join(w.worktreePath!, ".git"), "utf8").trim().split("/").pop()!;
+      rmSync(join(repo, ".git", "worktrees", name), { recursive: true, force: true });
+    }
+    rmSync(join(wNoDotGit.worktreePath!, ".git"));
+    git(repo, "worktree", "prune");
+    writeFileSync(join(wUser.worktreePath!, "my-notes.md"), "别删\n");
+
+    // 分支未合并、未满 3 天：先不动；满 3 天才清
+    const cleanup = createWorktreeCleanup({ ledger, worktreesDir, log: (l) => logs.push(l), now: () => now });
+    now += 60_000;
+    expect(await cleanup.runOnce()).toEqual([wLinkGone.id, wNoDotGit.id]);
+    // 零提交的分支就在 main 历史里，不用等；有用户文件的保留
+    expect(existsSync(wLinkGone.worktreePath!)).toBe(false);
+    expect(existsSync(wNoDotGit.worktreePath!)).toBe(false);
+    expect(existsSync(join(wUser.worktreePath!, "my-notes.md"))).toBe(true);
+    expect(branchExists(wLinkGone.branch!)).toBe(true);
+
+    now += WORKTREE_RETENTION_MS;
+    expect(await cleanup.runOnce()).toEqual([]);
+    expect(readFileSync(join(wUser.worktreePath!, "my-notes.md"), "utf8")).toBe("别删\n");
+  });
+
+  it("孤儿目录且分支有未合并提交：3 天内保留，满 3 天回收", async () => {
+    const w = await spawnWorktreeWorker("孤儿有提交");
+    writeFileSync(join(w.worktreePath!, "u.txt"), "1\n");
+    git(w.worktreePath!, "add", "-A");
+    git(w.worktreePath!, "commit", "-q", "-m", "u");
+    mkdirSync(join(w.worktreePath!, "node_modules"), { recursive: true });
+    endWorker(w.id);
+    rmSync(join(w.worktreePath!, ".git"));
+
+    const cleanup = createWorktreeCleanup({ ledger, worktreesDir, log: (l) => logs.push(l), now: () => now });
+    now += 60_000;
+    expect(await cleanup.runOnce()).toEqual([]);
+    expect(existsSync(w.worktreePath!)).toBe(true);
+    now = T0 + WORKTREE_RETENTION_MS;
+    expect(await cleanup.runOnce()).toEqual([w.id]);
+    expect(existsSync(w.worktreePath!)).toBe(false);
+    expect(branchExists(w.branch!)).toBe(true);
+  });
+
+  it("孤儿目录且分支也被 git branch -D 删掉（真实合并脚本场景）：PR 已合入文件与半删空壳立即回收，未合入文件严格保留", async () => {
+    mkdirSync(join(repo, "apps", "windows"), { recursive: true });
+    writeFileSync(join(repo, ".gitignore"), "node_modules/\n.codegraph/\n");
+    writeFileSync(join(repo, "apps", "windows", ".gitignore"), "/target\n");
+    writeFileSync(join(repo, "untouched.txt"), "v0\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "setup");
+
+    // 1. PR 已合入 main（含修改旧文件与新增文件），合并脚本解绑 worktree（留孤儿文件）并 git branch -D 删掉分支，随后 main 继续演进
+    const wMerged = await spawnWorktreeWorker("合入后删分支留孤儿");
+    writeFileSync(join(wMerged.worktreePath!, "README.md"), "merged-readme\n");
+    writeFileSync(join(wMerged.worktreePath!, "feature-merged.ts"), "export const v = 1;\n");
+    git(wMerged.worktreePath!, "add", "-A");
+    git(wMerged.worktreePath!, "commit", "-q", "-m", "feat");
+    mkdirSync(join(wMerged.worktreePath!, "node_modules", "pkg"), { recursive: true });
+    writeFileSync(join(wMerged.worktreePath!, "node_modules", "pkg", "a.js"), "1\n");
+    endWorker(wMerged.id);
+    git(repo, "merge", "--no-ff", "-q", "-m", "Merge PR", wMerged.branch!);
+    rmSync(join(wMerged.worktreePath!, ".git"));
+    git(repo, "worktree", "prune");
+    git(repo, "branch", "-D", wMerged.branch!);
+    // 主仓继续合入别的提交，使 untouched.txt 与当前 main 不同（仍等于 wMerged.baseCommit）
+    writeFileSync(join(repo, "untouched.txt"), "v1-on-main\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "later commit on main");
+
+    // 2. git worktree remove 删了一半中断：源码和 .gitignore 已被删光，只剩忽略产物（含子目录 target）或纯空壳，且分支已删
+    const wHalf = await spawnWorktreeWorker("半删只剩忽略目录");
+    endWorker(wHalf.id);
+    for (const entry of ["README.md", "untouched.txt", ".gitignore", "apps", ".git"]) {
+      rmSync(join(wHalf.worktreePath!, entry), { recursive: true, force: true });
+    }
+    mkdirSync(join(wHalf.worktreePath!, "node_modules", "x"), { recursive: true });
+    writeFileSync(join(wHalf.worktreePath!, "node_modules", "x", "i.js"), "1\n");
+    mkdirSync(join(wHalf.worktreePath!, ".codegraph"), { recursive: true });
+    writeFileSync(join(wHalf.worktreePath!, ".codegraph", "codegraph.db"), "db\n");
+    mkdirSync(join(wHalf.worktreePath!, "apps", "windows", "target"), { recursive: true });
+    writeFileSync(join(wHalf.worktreePath!, "apps", "windows", "target", "bin"), "bin\n");
+    git(repo, "worktree", "prune");
+    git(repo, "branch", "-D", wHalf.branch!);
+
+    const wEmpty = await spawnWorktreeWorker("全空壳孤儿");
+    endWorker(wEmpty.id);
+    rmSync(wEmpty.worktreePath!, { recursive: true, force: true });
+    mkdirSync(wEmpty.worktreePath!, { recursive: true });
+    git(repo, "worktree", "prune");
+    git(repo, "branch", "-D", wEmpty.branch!);
+
+    // 3. 分支与 .git 都被误删、但孤儿目录里还有从未合入主仓的代码：绝不误删
+    const wUnmerged = await spawnWorktreeWorker("未合入误删分支");
+    writeFileSync(join(wUnmerged.worktreePath!, "unmerged-work.ts"), "precious\n");
+    endWorker(wUnmerged.id);
+    rmSync(join(wUnmerged.worktreePath!, ".git"));
+    git(repo, "worktree", "prune");
+    git(repo, "branch", "-D", wUnmerged.branch!);
+
+    now += 60_000;
+    const cleanup = createWorktreeCleanup({ ledger, worktreesDir, log: (l) => logs.push(l), now: () => now });
+    expect(await cleanup.runOnce()).toEqual([wMerged.id, wHalf.id, wEmpty.id]);
+    expect(existsSync(wMerged.worktreePath!)).toBe(false);
+    expect(existsSync(wHalf.worktreePath!)).toBe(false);
+    expect(existsSync(wEmpty.worktreePath!)).toBe(false);
+    expect(readFileSync(join(wUnmerged.worktreePath!, "unmerged-work.ts"), "utf8")).toBe("precious\n");
+
+    // 满 3 天后，未合入文件依然保留
+    now += WORKTREE_RETENTION_MS * 2;
+    expect(await cleanup.runOnce()).toEqual([]);
+    expect(readFileSync(join(wUnmerged.worktreePath!, "unmerged-work.ts"), "utf8")).toBe("precious\n");
+  });
+
+  it("符号链接或 worktreesDir 之外的路径：孤儿流程、兜底 fs.rm 下也严格拒删", async () => {
+    const outside = join(root, "outside-orphan");
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, "important.txt"), "keep\n");
+
+    // 外部目录（没有 .git，看起来像孤儿）
+    const wOutside = await spawnWorktreeWorker("外部孤儿");
+    endWorker(wOutside.id);
+    db.run("UPDATE workers SET worktree_path = ? WHERE id = ?", outside, wOutside.id);
+
+    // worktreesDir 下的符号链接指向外部
+    const wLink = await spawnWorktreeWorker("符号链接孤儿");
+    endWorker(wLink.id);
+    rmSync(wLink.worktreePath!, { recursive: true, force: true });
+    symlinkSync(outside, wLink.worktreePath!);
+
+    // worktreesDir 本身（不是严格在其下）
+    const wRoot = await spawnWorktreeWorker("目录本身");
+    endWorker(wRoot.id);
+    db.run("UPDATE workers SET worktree_path = ? WHERE id = ?", worktreesDir, wRoot.id);
+
+    now += WORKTREE_RETENTION_MS + 10_000;
+    const cleanup = createWorktreeCleanup({ ledger, worktreesDir, log: (l) => logs.push(l), now: () => now });
+    expect(await cleanup.runOnce()).toEqual([]);
+    expect(readFileSync(join(outside, "important.txt"), "utf8")).toBe("keep\n");
+    expect(existsSync(worktreesDir)).toBe(true);
   });
 
   it("仓库配了 status.showUntrackedFiles=no：未跟踪文件照样算改动，不删", async () => {
@@ -365,7 +628,8 @@ describe("worktree 自动清理", () => {
     endWorker(wFresh.id);
     writeFileSync(countFile, "");
     expect(await emptyCleanup.runOnce()).toEqual([]);
-    expect(countCalls()).toBe(2);
+    // for-each-ref + merge-base（登记分支）、rev-parse HEAD + for-each-ref + merge-base（实际 HEAD）：都只读引用，不跑 git status
+    expect(countCalls()).toBe(5);
     git(repo, "worktree", "remove", wFresh.worktreePath!);
 
     // 建 4 个已收工满 3 天的 worktree：前 2 个有未提交改动（删不掉），后 2 个干净（可删），设 batchLimit = 2
@@ -403,6 +667,61 @@ describe("worktree 自动清理", () => {
     expect(existsSync(w2.worktreePath!)).toBe(true);
     expect(existsSync(w3.worktreePath!)).toBe(false);
     expect(existsSync(w4.worktreePath!)).toBe(false);
+  });
+
+  it("换人共享同一个 worktree：0 提交已收工的前任（注册 worktree / 孤儿目录）不能靠“0 提交秒清”或“前任满 3 天”删掉后任还在用或未到期的目录", async () => {
+    const graph = ledger.hubCall(pm.sessionId, "graph.create", {
+      title: "共享目录边界",
+      specJson: JSON.stringify({ nodes: [{ key: "s1", title: "实现" }] }),
+    }).data.graph;
+    const w1 = ledger.hubCall(
+      pm.sessionId,
+      "worker.start",
+      { title: "实现", task: "做功能", vendor: "claude", node: "s1" },
+      { workspace: { kind: "ok", isRepoWithCommit: true, hasUncommittedChanges: false } },
+    ).data.worker;
+    const wt = await addWorktree({ repoFolder: repo, worktreePath: w1.worktreePath!, branch: w1.branch! });
+    ledger.onWorktreeCreated(w1.id, wt.baseCommit);
+    // 前任 0 提交、目录干净就收工（HEAD === baseCommit，单独看会被“0 提交秒清”）
+    ledger.hubCall(pm.sessionId, "worker.end", { workerId: w1.id, incomplete: true });
+
+    // 前任收工满 3 天后，后任接手同一目录，仍开着
+    now += WORKTREE_RETENTION_MS + 1_000;
+    const w2 = ledger.hubCall(
+      pm.sessionId,
+      "worker.start",
+      { node: "s1", vendor: "codex" },
+      { workspace: { kind: "ok", isRepoWithCommit: true, hasUncommittedChanges: false } },
+    ).data.worker;
+    expect(w2.worktreePath).toBe(w1.worktreePath);
+    const dir = w1.worktreePath!;
+
+    const cleanup = createWorktreeCleanup({ ledger, worktreesDir, log: (l) => logs.push(l), now: () => now });
+    // 1. 注册 worktree：后任还开着，前任的 0 提交 / 已满 3 天都不能删
+    expect(await cleanup.runOnce()).toEqual([]);
+    expect(existsSync(dir)).toBe(true);
+
+    // 2. 后任提交了未合并的活后，目录被外部解绑成孤儿：后任还开着，同样不能删
+    writeFileSync(join(dir, "successor.txt"), "后任的活\n");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-q", "-m", "successor");
+    const linkName = readFileSync(join(dir, ".git"), "utf8").trim().split("/").pop()!;
+    rmSync(join(repo, ".git", "worktrees", linkName), { recursive: true, force: true });
+    git(repo, "worktree", "prune");
+    expect(await cleanup.runOnce()).toEqual([]);
+    expect(existsSync(dir)).toBe(true);
+
+    // 3. 后任收工、取消任务图：分支有未合并提交，且按末任收工时间算还没满 3 天（前任早已满 3 天也不行）
+    now += 60_000;
+    ledger.hubCall(pm.sessionId, "worker.end", { workerId: w2.id, incomplete: true });
+    ledger.hubCall(pm.sessionId, "graph.cancel", { graphId: graph.id });
+    expect(await cleanup.runOnce()).toEqual([]);
+    expect(existsSync(dir)).toBe(true);
+
+    // 4. 末任收工也满 3 天后才回收
+    now += WORKTREE_RETENTION_MS;
+    expect(await cleanup.runOnce()).toEqual([w1.id]);
+    expect(existsSync(dir)).toBe(false);
   });
 
   it("换人共享同一个 worktree：前任已满 3 天但后任刚收工且分支未合并时不删，等后任收工也满 3 天才删", async () => {
