@@ -99,7 +99,7 @@ stateDiagram-v2
 
   running --> attention : Worker 汇报有问题/放弃了 / turn_failed / worktree_failed
   attention --> running : hub worker send 打回继续 / 换新 Worker 重绑 --node
-  running --> done : Worker 最新汇报为“做完了”且 hub worker end 验收收工 / hub graph done
+  running --> done : Worker 最新汇报为“做完了”且 hub worker end 验收收工
   attention --> done : hub graph done 人工验收放行
 
   waiting_user --> done : 用户点选拍板 (右栏 / Router / 聊天卡片) 或 hub graph decide
@@ -111,10 +111,12 @@ stateDiagram-v2
 ```
 
 **关键防误判边界（对接 100K 换人规矩 `src/daemon/prompt.ts` 第 176 行）**：
-- 项目经理常因 Worker 上下文超过 `WORKER_SEND_MAX_TOKENS`（100K）或跑偏而调用 `hub worker end <id>` 结束旧 Worker，再派新 Worker 接手同一节点。
+- 项目经理常因 Worker 上下文超过 `WORKER_SEND_MAX_TOKENS`（200K）或跑偏而调用 `hub worker end <id>` 结束旧 Worker，再派新 Worker 接手同一节点。
 - 因此 **`hub worker end <id>` 不会无脑把绑定节点标成 `done`**：
   - 仅当该 Worker 最后一轮汇报的解析状态为 `做完了`（`WorkerLineStatus === "done"`，且未传 `--incomplete`）时，`worker end` 才自动将绑定的 `piece` 节点推进到 `done` 并触发下游解锁；
   - 若 Worker 被中途打断、报错（`turn_failed` / `worktree_failed`）、汇报 `有问题` / `放弃了`，或传了 `hub worker end <id> --incomplete`，绑定节点置为 `attention`（等待项目经理 `hub worker start --node <key>` 派继任 Worker 接力，或显式 `hub graph done/skip`）。
+  - `hub worker end` 的回执写明绑定节点变成了什么（`done` 并列出解锁的下游，或 `attention` 等人接手）。
+- **`hub graph done` 拒绝 `running` 的节点**：有 Worker 在干时不能绕过它直接标完成，先 `hub worker end`；收工后要补记 PR 等结果再调 `hub graph done`。
 
 ### 1.4 SQLite 表结构（`migrations/0022_task_graphs.sql`）
 
