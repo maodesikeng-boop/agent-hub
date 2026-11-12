@@ -83,9 +83,19 @@ export interface FakeCodexTurnScript {
   skipMessageCompleted?: boolean;
   /** token 用量通知。 */
   tokenUsage?: {
-    last: { inputTokens: number; cachedInputTokens: number; outputTokens: number };
-    total: { inputTokens: number; cachedInputTokens: number; outputTokens: number };
+    last: { inputTokens: number; cachedInputTokens: number; cacheWriteInputTokens?: number; outputTokens: number };
+    total: { inputTokens: number; cachedInputTokens: number; cacheWriteInputTokens?: number; outputTokens: number };
   };
+  /** holdFile 放行前依次发出的多条 tokenUsage 通知（用于验证轮中实时 observe）。 */
+  preHoldTokenUsages?: Array<{
+    last?: { inputTokens: number; cachedInputTokens: number; cacheWriteInputTokens?: number; outputTokens: number };
+    total?: { inputTokens: number; cachedInputTokens: number; cacheWriteInputTokens?: number; outputTokens: number };
+  }>;
+  /** 收尾阶段依次发出的多条 tokenUsage 通知。 */
+  tokenUsages?: Array<{
+    last?: { inputTokens: number; cachedInputTokens: number; cacheWriteInputTokens?: number; outputTokens: number };
+    total?: { inputTokens: number; cachedInputTokens: number; cacheWriteInputTokens?: number; outputTokens: number };
+  }>;
   /** 额度通知。 */
   rateLimits?: {
     primary?: { usedPercent: number; windowDurationMins: number; resetsAt: number };
@@ -295,6 +305,13 @@ function runTurn(turnId, threadId, turnScript, input) {
         params: { threadId, turnId, tokenUsage: turnScript.tokenUsage },
       });
     }
+    for (const tu of turnScript.tokenUsages || []) {
+      send({
+        jsonrpc: "2.0",
+        method: "thread/tokenUsage/updated",
+        params: { threadId, turnId, tokenUsage: tu },
+      });
+    }
 
     if (turnScript.rateLimits) {
       send({
@@ -343,6 +360,13 @@ function runTurn(turnId, threadId, turnScript, input) {
   };
 
   stepReasoning();
+  for (const tu of turnScript.preHoldTokenUsages || []) {
+    send({
+      jsonrpc: "2.0",
+      method: "thread/tokenUsage/updated",
+      params: { threadId, turnId, tokenUsage: tu },
+    });
+  }
   if (turnScript.holdFile) {
     const hold = { id: "hold-" + turnId, type: "commandExecution", command: "sleep 8", cwd: process.cwd() };
     send({ jsonrpc: "2.0", method: "item/started", params: { threadId, turnId, item: { ...hold, status: "inProgress" } } });
@@ -828,11 +852,11 @@ describe("CodexDriver 首次启动握手与完整一轮事件流", () => {
 
     // 7. tokenUsage 与 rateLimits
     expect(updatedRow.usage).toEqual({
-      input: 120,
+      input: 90,
       cacheRead: 30,
       cacheWrite: 0,
       output: 45,
-      context: 150,
+      context: 120,
     });
     expect(updatedRow.rateLimit).toEqual({
       status: "allowed",
@@ -2048,5 +2072,235 @@ describe("CodexDriver 流式补丁文件路径早捕获", () => {
     await t.driver.send(s.id, user(1, "改"));
     await t.waitFor("turn.ended");
     expect(t.of("agent.tool_preview")).toEqual([]);
+  });
+});
+
+describe("CodexDriver tokenUsage 口径与跨轮/恢复累计", () => {
+  it("含大额缓存命中时 context 等于真实 inputTokens（118111），绝不把 cachedInputTokens 再加一遍", async () => {
+    const t = makeCodexHarness({
+      script: {
+        turns: [
+          {
+            messageDeltas: ["收到"],
+            tokenUsage: {
+              last: { inputTokens: 118_111, cachedInputTokens: 115_250, outputTokens: 500 },
+              total: { inputTokens: 118_111, cachedInputTokens: 115_250, outputTokens: 500 },
+            },
+          },
+        ],
+      },
+    });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "开始"));
+    await t.waitFor("turn.ended");
+    expect(t.store.get(s.id)!.usage).toEqual({
+      input: 2_861,
+      cacheRead: 115_250,
+      cacheWrite: 0,
+      output: 500,
+      context: 118_111,
+    });
+  });
+
+  it("同一轮多次 thread/tokenUsage/updated（含重复相同 total）：实时 observe 与轮末 finish 口径完全一致", async () => {
+    const t = makeCodexHarness();
+    const holdFile = join(t.dir, "release-turn");
+    writeFileSync(
+      join(t.dir, "script.json"),
+      JSON.stringify({
+        turns: [
+          {
+            holdFile,
+            preHoldTokenUsages: [
+              {
+                last: { inputTokens: 60_000, cachedInputTokens: 50_000, outputTokens: 200 },
+                total: { inputTokens: 60_000, cachedInputTokens: 50_000, outputTokens: 200 },
+              },
+              {
+                last: { inputTokens: 65_000, cachedInputTokens: 60_000, outputTokens: 300 },
+                total: { inputTokens: 125_000, cachedInputTokens: 110_000, outputTokens: 500 },
+              },
+              {
+                last: { inputTokens: 65_000, cachedInputTokens: 60_000, outputTokens: 300 },
+                total: { inputTokens: 125_000, cachedInputTokens: 110_000, outputTokens: 500 },
+              },
+            ],
+            messageDeltas: ["完成"],
+          },
+        ],
+      }),
+    );
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "多步执行"));
+    await t.waitFor("agent.tool", (e) => e.toolUseId === "hold-turn-1");
+
+    const deadline = Date.now() + 2_500;
+    while (t.store.get(s.id)!.usage.context !== 65_000 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 40));
+    }
+    const liveUsage = { ...t.store.get(s.id)!.usage };
+    expect(liveUsage).toEqual({
+      input: 15_000,
+      cacheRead: 110_000,
+      cacheWrite: 0,
+      output: 500,
+      context: 65_000,
+    });
+
+    writeFileSync(holdFile, "go");
+    await t.waitFor("turn.ended");
+    expect(t.store.get(s.id)!.usage).toEqual(liveUsage);
+  });
+
+  it("同进程连续多轮、空闲关进程后 thread/resume 续跑、以及新建驱动实例冷恢复续跑：均只加当轮增量，不重复叠加历史 total", async () => {
+    const t = makeCodexHarness({
+      driver: { idleCloseMs: 60 },
+      script: {
+        startThreadId: "thr_multi_1",
+        turns: [
+          {
+            messageDeltas: ["第一轮"],
+            tokenUsage: {
+              last: { inputTokens: 80_000, cachedInputTokens: 60_000, outputTokens: 400 },
+              total: { inputTokens: 80_000, cachedInputTokens: 60_000, outputTokens: 400 },
+            },
+          },
+          {
+            messageDeltas: ["第二轮"],
+            tokenUsage: {
+              last: { inputTokens: 95_000, cachedInputTokens: 80_000, outputTokens: 600 },
+              total: { inputTokens: 175_000, cachedInputTokens: 140_000, outputTokens: 1_000 },
+            },
+          },
+        ],
+      },
+    });
+
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "第一问"));
+    await t.waitFor("turn.ended", undefined, 1);
+    expect(t.store.get(s.id)!.usage).toEqual({
+      input: 20_000,
+      cacheRead: 60_000,
+      cacheWrite: 0,
+      output: 400,
+      context: 80_000,
+    });
+
+    await t.driver.send(s.id, user(2, "第二问"));
+    await t.waitFor("turn.ended", undefined, 2);
+    expect(t.store.get(s.id)!.usage).toEqual({
+      input: 35_000,
+      cacheRead: 140_000,
+      cacheWrite: 0,
+      output: 1_000,
+      context: 95_000,
+    });
+
+    // 等空闲关闭进程，走同一驱动实例下的 thread/resume 跑第三轮
+    await t.waitFor("session.exited", undefined, 1);
+    writeFileSync(
+      join(t.dir, "script.json"),
+      JSON.stringify({
+        turns: [
+          {
+            messageDeltas: ["第三轮"],
+            tokenUsage: {
+              last: { inputTokens: 110_000, cachedInputTokens: 100_000, outputTokens: 500 },
+              total: { inputTokens: 285_000, cachedInputTokens: 240_000, outputTokens: 1_500 },
+            },
+          },
+        ],
+      }),
+    );
+    await t.driver.send(s.id, user(3, "第三问"));
+    await t.waitFor("turn.ended", undefined, 3);
+    expect(t.rpcIn().filter((r) => r.method === "thread/resume")).toHaveLength(1);
+    expect(t.store.get(s.id)!.usage).toEqual({
+      input: 45_000,
+      cacheRead: 240_000,
+      cacheWrite: 0,
+      output: 1_500,
+      context: 110_000,
+    });
+
+    // 模拟守护进程重启：用全新驱动实例读取已有会话行（含历史 usage）并走 thread/resume 跑第四轮（两步 + 重复通知）
+    const cold = makeCodexHarness({
+      script: {
+        turns: [
+          {
+            messageDeltas: ["第四轮"],
+            tokenUsages: [
+              {
+                last: { inputTokens: 115_000, cachedInputTokens: 110_000, outputTokens: 300 },
+                total: { inputTokens: 400_000, cachedInputTokens: 350_000, outputTokens: 1_800 },
+              },
+              {
+                last: { inputTokens: 118_111, cachedInputTokens: 115_250, outputTokens: 200 },
+                total: { inputTokens: 518_111, cachedInputTokens: 465_250, outputTokens: 2_000 },
+              },
+              {
+                last: { inputTokens: 118_111, cachedInputTokens: 115_250, outputTokens: 200 },
+                total: { inputTokens: 518_111, cachedInputTokens: 465_250, outputTokens: 2_000 },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const persisted = t.store.get(s.id)!;
+    const sCold = cold.addSession({
+      vendorSessionId: persisted.vendorSessionId,
+      hasCompletedTurn: true,
+      usage: { ...persisted.usage },
+    });
+    await cold.driver.send(sCold.id, user(4, "第四问"));
+    await cold.waitFor("turn.ended");
+    expect(cold.rpcIn().filter((r) => r.method === "thread/resume")).toHaveLength(1);
+    expect(cold.store.get(sCold.id)!.usage).toEqual({
+      input: 52_861,
+      cacheRead: 465_250,
+      cacheWrite: 0,
+      output: 2_000,
+      context: 118_111,
+    });
+  });
+
+  it("thread/resume 失败自动回退 thread/start 开启新线程时：保留历史 usage 并累加新线程增量，不倒退不出负数", async () => {
+    const t = makeCodexHarness({
+      script: {
+        failResumeWith: "no rollout found for thr_old",
+        startThreadId: "thr_reborn",
+        turns: [
+          {
+            messageDeltas: ["新线程首轮"],
+            tokenUsage: {
+              last: { inputTokens: 12_000, cachedInputTokens: 2_000, outputTokens: 150 },
+              total: { inputTokens: 12_000, cachedInputTokens: 2_000, outputTokens: 150 },
+            },
+          },
+        ],
+      },
+    });
+    const s = t.addSession({
+      vendorSessionId: "thr_old",
+      hasCompletedTurn: true,
+      usage: {
+        input: 30_000,
+        cacheRead: 90_000,
+        cacheWrite: 0,
+        output: 800,
+        context: 95_000,
+      },
+    });
+    await t.driver.send(s.id, user(1, "继续"));
+    await t.waitFor("turn.ended");
+    expect(t.store.get(s.id)!.usage).toEqual({
+      input: 40_000,
+      cacheRead: 92_000,
+      cacheWrite: 0,
+      output: 950,
+      context: 12_000,
+    });
   });
 });
