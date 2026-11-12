@@ -265,7 +265,7 @@ describe("进队列：这一轮结束时用量到门槛", () => {
       const agyConv = agyPm.conversation.id;
       const agySession = agyPm.sessionId;
 
-      // 80_000 对 claude（200_000）没到门槛，但对 agy（80_000）到了门槛
+      // 80_000 对 claude（240_000）没到门槛，但对 agy（80_000）到了门槛
       const claudeMsg = post("claude 消息", conversationId);
       setContext(firstSession, 80_000);
       turn(firstSession, [claudeMsg], ["claude 回复"]);

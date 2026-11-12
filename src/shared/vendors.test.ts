@@ -124,7 +124,7 @@ describe("厂商清单", () => {
   });
 
   it("handoverTokenThresholdOf 按声明表返回", () => {
-    expect(HANDOVER_TOKEN_THRESHOLD).toBe(200_000);
+    expect(HANDOVER_TOKEN_THRESHOLD).toBe(240_000);
     expect(AUTO_RENEW_CONTEXT_TOKENS).toBe(HANDOVER_TOKEN_THRESHOLD);
     for (const v of AGENT_VENDORS) expect(handoverTokenThresholdOf(v)).toBe(HANDOVER_TOKEN_THRESHOLD);
     expect(handoverTokenThresholdOf("unknown")).toBe(HANDOVER_TOKEN_THRESHOLD);

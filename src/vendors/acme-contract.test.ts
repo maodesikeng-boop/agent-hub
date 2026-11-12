@@ -71,7 +71,7 @@ describe("名单加一项 acme，公共代码就认得它", () => {
 
   it("公共代码按 spec 读，没写的可选字段走默认", () => {
     expect(vendorSpec(acme).label).toBe("Acme Rocket");
-    expect(handoverTokenThresholdOf("acme")).toBe(200_000);
+    expect(handoverTokenThresholdOf("acme")).toBe(240_000);
     expect(VENDOR_FAILURE_SIGNS[acme].serviceName).toBe("Acme");
     // 可执行文件：spec 的 cli.envVar 给路径，没给找 PATH 里的 cli.command（HubPaths.vendorPaths，A4）
     expect(resolveHubPaths({}, "/home/u").vendorPaths[acme]).toBe("acme");
