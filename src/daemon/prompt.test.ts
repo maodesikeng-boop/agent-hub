@@ -187,7 +187,7 @@ describe("提示词：还没有项目", () => {
 const SECTION_TITLES = ["# 你的角色与环境", "# 你的项目", "# 怎么干活（当前模式：", "# 怎么记事情", `# 系统命令 ${hub}`, "# 性格设定"];
 
 /** “怎么干活”一节里的小标题，按顺序：五步 + 通用规矩。 */
-const WORK_STEPS = ["## 1. 拿到需求", "## 2. 分析", "## 3. 建图", "## 4. 跟进反馈", "## 5. 交付", "## 通用规矩"];
+const WORK_STEPS = ["## 1. 拿到需求", "## 2. 分析", "## 3. 派活", "## 4. 跟进反馈", "## 5. 交付", "## 通用规矩"];
 
 /** 提示词里“怎么干活”那一整节（到下一个一级标题为止）。 */
 function workSection(prompt: string): string {
@@ -209,11 +209,11 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
     expect(emptyPrompt).not.toContain("# 怎么带 Worker");
   });
 
-  it("怎么干活按五步排：拿到需求 → 分析 → 建图 → 跟进反馈 → 交付，最后是通用规矩；两种模式、六家厂商都一样", () => {
+  it("怎么干活按五步排：拿到需求 → 分析 → 派活 → 跟进反馈 → 交付，最后是通用规矩；两种模式、六家厂商都一样", () => {
     for (const mode of PM_MODES) {
       for (const vendor of AGENT_VENDORS) {
         const section = workSection(buildLaunchPrompt(projectContext({ pm: { id: 1, name: "小林", mode, vendor, persona: "" } }), dir));
-        expect(section).toContain("一个需求从头到尾走五步：拿到需求 → 分析 → 建图 → 跟进反馈 → 交付。");
+        expect(section).toContain("一个需求从头到尾走五步：拿到需求 → 分析 → 派活 → 跟进反馈 → 交付。");
         const positions = WORK_STEPS.map((title) => section.indexOf(`\n${title}\n`));
         expect(positions.every((p) => p >= 0), `${mode} ${vendor}`).toBe(true);
         expect([...positions].sort((a, b) => a - b)).toEqual(positions);
@@ -237,20 +237,21 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
     }
   });
 
-  it("两种模式只差四处：标题里的模式名、第 2 步的“自己做”和“建图”、通用规矩里的“用户说了算 / 拿不准先问”", () => {
+  it("两种模式只差三处：标题里的模式名、第 2 步的“直接做”、通用规矩里的“用户说了算 / 拿不准先问”", () => {
     const lines = (mode: (typeof PM_MODES)[number]) => buildPmModePrompt(mode, true).split("\n");
     const manage = lines("manage_only");
     const hands = lines("hands_on");
     const onlyManage = manage.filter((l) => !hands.includes(l));
     const onlyHands = hands.filter((l) => !manage.includes(l));
     const name = (l: string) => (l.startsWith("# ") ? "标题" : (/^- \*\*(.+?)\*\*/.exec(l)?.[1] ?? l));
-    expect(onlyManage.map(name)).toEqual(["标题", "自己做", "建图", "用户说了算"]);
-    expect(onlyHands.map(name)).toEqual(["标题", "自己做", "建图", "拿不准先问", "用户说了算"]);
-    expect(buildPmModePrompt("manage_only", true)).toContain("只有一步也建图");
-    expect(buildPmModePrompt("hands_on", true)).toContain("包括改文件；做完告诉用户做了什么、改了哪些文件");
+    expect(onlyManage.map(name)).toEqual(["标题", "直接做", "用户说了算"]);
+    expect(onlyHands.map(name)).toEqual(["标题", "直接做", "拿不准先问", "用户说了算"]);
+    expect(buildPmModePrompt("manage_only", true)).toContain("要改项目里的文件的不算，派 Worker");
+    expect(buildPmModePrompt("hands_on", true)).toContain("包括改几行文件");
+    expect(buildPmModePrompt("hands_on", true)).toContain("做完告诉用户做了什么、改了哪些文件");
   });
 
-  it("只写现有命令做得到的事：自动开工、交棒、finish、ask --node、confirm、review 标记等后台机制没上线前不出现", () => {
+  it("只写现有命令做得到的事：自动开工、交棒、finish、ask --node、confirm、review 标记及未落地的任务图技能文件等不出现，且撤掉“一步也建图”", () => {
     for (const mode of PM_MODES) {
       const prompt = buildLaunchPrompt(projectContext({ pm: { id: 1, name: "小林", mode, persona: "" } }), dir);
       for (const gone of [
@@ -267,12 +268,18 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
         "马上开工",
         "偏离",
         "skipSteps",
+        "只有一步也建图",
+        "一步也建图",
+        "临时 Worker",
+        "fusa-task-graph",
+        "fusa:task-graph",
+        "SKILL.md",
       ]) {
         expect(prompt, gone).not.toContain(gone);
       }
       // 现有机制下的等价说法：建完图自己给轮到的节点派 Worker，做完了自己收工
       expect(prompt).toContain(`给轮到的节点派 Worker（\`${hub} worker start --node <节点>\`）`);
-      expect(prompt).toContain(`通过就 \`${hub} worker end <编号>\` 收工，节点自动标完成`);
+      expect(prompt).toContain(`通过就 \`${hub} worker end <编号>\` 收工（绑了图节点的会自动标完成`);
       expect(prompt).toContain("所有节点都完成后整张图自动结束，不能再改");
     }
   });
@@ -555,15 +562,21 @@ describe("提示词：数值和事实以代码为准", () => {
 });
 
 describe("提示词：项目经理（M3）", () => {
-  it("“只管理”写成三选一（自己做、派临时 Worker、建图）、验收；两种模式都有通用规矩和 hub 用法", () => {
+  it("第 2 步“分析”按是否产生大量新上下文分三档（直接做、派一个 Worker 不建图、建图），不看有几步；两种模式都有通用规矩和 hub 用法", () => {
     const manage = PM_MODE_PROMPTS.manage_only;
-    expect(manage).toContain(`${hub} worker start`);
-    expect(manage).toContain("验收");
-    expect(manage).toContain("先定这件事怎么走，三选一：");
-    expect(manage).toContain("- **自己做**：查资料、看代码、跑只读命令，几分钟内能有结果的。");
-    expect(manage).toContain(`- **派临时 Worker**（\`${hub} worker start\`，不带 \`--node\`）：没有改动要交付的跑腿活`);
-    expect(manage).toContain("- **建图**：其余要改文件、要交付结果的活，只有一步也建图。");
-    expect(manage).toContain("分析要快。深读代码和长文档是 Worker 的事，你要想清的只有三样：目标、步骤、怎么验收。");
+    const hands = PM_MODE_PROMPTS.hands_on;
+    for (const section of [manage, hands]) {
+      const analyze = section.slice(section.indexOf("## 2. 分析"), section.indexOf("## 3. 派活"));
+      expect(analyze).toContain("先定这件事走哪一档。看它会不会产生大量新上下文（要读很多代码、要反复试、要写长东西），不看它有几步：");
+      expect(analyze).toContain(`- **派一个 Worker，不建图**（\`${hub} worker start\`，不带 \`--node\`）：一段就能做完，但中间过程多的。比如修 bug、写一份方案、做一个小的界面改动`);
+      expect(analyze).toContain("- **建图**：有两段以上、每段各要一个独立会话的。比如先出方案、用户看过再实现；实现后换一家模型审查；几个方向并行探索再汇总。");
+      expect(analyze).toContain(`只是中间要等用户拍板的用 \`${hub} ask\` 提问即可，不算建图理由。`);
+      expect(analyze).toContain("改动碰到下面任意一类，实现后面要换一家模型审查，所以走建图：");
+      expect(analyze).toContain("这是默认判断，不是死规定：拿不准选轻的一档，做着发现比想的复杂再升档；用户点名怎么做的，照用户说的。");
+      expect(analyze).toContain("分析要快。深读代码和长文档是 Worker 的事，你要想清的只有三样：目标、步骤、怎么验收。");
+    }
+    expect(manage).toContain("- **直接做**：变量少、照着做大概率一次成、产出少的。比如查资料、看代码、跑命令、装软件、合 PR、改本机配置。要改项目里的文件的不算，派 Worker。");
+    expect(hands).toContain("- **直接做**：变量少、照着做大概率一次成、产出少的，包括改几行文件。比如查资料、跑命令、装软件、合 PR、改配置、改文案；做完告诉用户做了什么、改了哪些文件。");
     for (const ctx of [projectContext(), noProjectContext()]) {
       const prompt = buildLaunchPrompt(ctx, dir);
       expect(prompt).toContain(PM_COMMON_RULES);
@@ -591,15 +604,16 @@ describe("提示词：项目经理（M3）", () => {
     }
   });
 
-  it("验收只看证据（第 5 步）：汇报、PR 的改动文件名单和检查结果、截图或实测输出；不读代码 diff，代码质量由审查节点负责；证据不够打回；补审查赶在收工前", () => {
+  it("验收只看证据（第 5 步）：汇报、PR 的改动文件名单和检查结果、截图或实测输出；不读代码 diff，代码质量由审查负责；补审查兼容已建图和单派不绑图", () => {
     for (const mode of PM_MODES) {
       const section = PM_MODE_PROMPTS[mode];
       const delivery = section.slice(section.indexOf("## 5. 交付"), section.indexOf("## 通用规矩"));
       for (const word of [
         "**验收只看证据**：汇报、PR 的改动文件名单和检查结果、截图或实测输出。",
-        "不读代码 diff，代码质量由审查节点负责。",
+        "不读代码 diff，代码质量由审查负责。",
         `证据不够就打回让 Worker 补（\`${hub} worker send\`）`,
-        `**补审查要赶在收工前**：改动碰了第 3 步的红线而图里没有审查节点，先 \`${hub} graph patch\` 补一个`,
+        `**补审查要赶在收工前**：改动碰了审查红线却没有审查的——建了图的先 \`${hub} graph patch\` 补一个审查节点，再让最后一个节点的 Worker 收工`,
+        "没建图的补建图挂审查，或直接派另一家厂商的 Worker 按第 3 步审查。",
         "合并和发布按项目 `AGENTS.md` 的规矩做。",
         "向用户汇报结果。",
       ]) {
@@ -608,21 +622,22 @@ describe("提示词：项目经理（M3）", () => {
     }
   });
 
-  it("建图（第 3 步）：一张图一件事、按先后步骤拆不按模块拆、默认一条线、任务说明写全、用户明说要先看的挂 gate、四条红线加审查节点", () => {
+  it("派活（第 3 步）：先写全任务说明，兼容单派不绑图与建图绑节点；保留完整建图规矩（一图一事、按步骤拆、默认一条线、用户明说要先看的挂 gate、四条红线加审查节点）", () => {
     for (const mode of PM_MODES) {
       const section = PM_MODE_PROMPTS[mode];
-      const build = section.slice(section.indexOf("## 3. 建图"), section.indexOf("## 4. 跟进反馈"));
+      const dispatch = section.slice(section.indexOf("## 3. 派活"), section.indexOf("## 4. 跟进反馈"));
       for (const word of [
-        `用 \`${hub} graph create\` 把这件事排成一串节点`,
-        "**一张图只装一件事**：互不相干的几件事各建一张图。",
-        "**按先后步骤拆，不按模块拆**：不要把一个需求切成前端、后端各一个 Worker。",
-        "写测试、改代码、截图、提 PR 是同一步，一个 Worker 一口气做完。",
-        "只在三种时候另起一个节点：要等用户拍板、要换一个模型独立审查、一步的上下文装不下。",
-        "**默认一条线**：用 `deps` 把节点按先后串起来",
-        "互不依赖的活才并行（比如同时探索几个方向再汇总）",
         "**任务说明要写全**：Worker 看不到你和用户的聊天，只靠任务说明对齐方向。",
         "“怎么算做完”写成能核对的证据（测试命令、截图、实测输出、PR 检查全绿）",
         "长材料存成文件，任务说明里给路径。",
+        `一段就能做完的活直接 \`${hub} worker start\`（不带 \`--node\`）。`,
+        `走建图那一档时，用 \`${hub} graph create\` 把这件事排成一串节点`,
+        "**一张图只装一件事**：互不相干的几件事各建一张图。",
+        "**按先后步骤拆，不按模块拆**：不要把一个需求切成前端、后端各一个 Worker。",
+        "写测试、改代码、截图、提 PR 是同一步，一个 Worker 一口气做完。",
+        "只在三种时候另起一个节点：用户明说要先看、要换一个模型独立审查、一步的上下文装不下。",
+        "**默认一条线**：用 `deps` 把节点按先后串起来",
+        "互不依赖的活才并行（比如同时探索几个方向再汇总）",
         `**用户明说要先看的地方**（比如“先给我看方案”）挂一个 \`gate\` 节点：轮到时用 \`${hub} graph ask\` 填上问题、选项和你的推荐`,
         "别的拍板不用预先安排，撞上了再问（见第 4 步）",
         "**碰到下面任意一条，就在实现后面加一个审查节点**（派给另一家厂商的 Worker，任务说明里写清实现的分支和 PR、你最担心的地方，发现问题让它直接修）",
@@ -632,27 +647,27 @@ describe("提示词：项目经理（M3）", () => {
         "  - 本地草稿和远端状态互相覆盖的交互。",
         "纯文案、纯展示、局部纯函数、薄胶水层不用审查，靠测试和截图兜底。",
       ]) {
-        expect(build, word).toContain(word);
+        expect(dispatch, word).toContain(word);
       }
     }
   });
 
-  it("大量材料交给临时 Worker 读（第 2 步）、看 Worker 干了什么先 show 再 log（第 4 步）：两种模式共用，用动态命令名，不写死厂商名", () => {
+  it("大量材料交给只读 Worker 读（第 2 步）、看 Worker 干了什么先 show 再 log（第 4 步）：两种模式共用，用动态命令名，不写死厂商名", () => {
     for (const mode of PM_MODES) {
       const section = PM_MODE_PROMPTS[mode];
-      const analyze = section.slice(section.indexOf("## 2. 分析"), section.indexOf("## 3. 建图"));
-      expect(analyze).toContain("比如从上千行代码、日志里读出结论（加 `--readonly`，任务说明里规定只回结论和出处）");
+      const analyze = section.slice(section.indexOf("## 2. 分析"), section.indexOf("## 3. 派活"));
+      expect(analyze).toContain("从上千行代码和日志里读出结论（只读的加 `--readonly`，任务说明里规定只回结论和出处）");
       const follow = section.slice(section.indexOf("## 4. 跟进反馈"), section.indexOf("## 5. 交付"));
       expect(follow).toContain(`先用 \`${hub} worker show <编号>\`、再用 \`${hub} worker log <编号>\` 看原因，原始记录只取要看的那一段`);
       expect(follow).toContain(`超时只是提醒，Worker 还在跑：在正常推进就用 \`${hub} worker max-time\` 续时`);
       for (const vendor of AGENT_VENDORS) expect(section.toLowerCase()).not.toContain(vendor);
     }
     const workerPrompt = buildWorkerPrompt(workerContext(), dir);
-    expect(workerPrompt).not.toContain("派临时 Worker");
+    expect(workerPrompt).not.toContain("派一个 Worker，不建图");
     expect(workerPrompt).not.toContain("原始记录只取要看的那一段");
   });
 
-  it("跟进反馈（第 4 步）：做完了收工再派下一步（给路径不转述）、有问题能答就答否则 hub ask（不口头问）、出错换人只有一种写法（worker end --incomplete 再 worker start --node）、用户亲手停的别叫醒、计划变了 patch", () => {
+  it("跟进反馈（第 4 步）：兼容单派不绑图与绑图节点——做完了收工（绑节点的自动标完成）、有问题能答就答否则 hub ask、出错换人兼顾单派和绑节点、计划变了 patch 或补图", () => {
     expect(WORKER_SEND_MAX_TOKENS).toBe(200_000);
     const limitK = `${WORKER_SEND_MAX_TOKENS / 1_000}K`;
     for (const mode of PM_MODES) {
@@ -663,16 +678,16 @@ describe("提示词：项目经理（M3）", () => {
       expect(positions.every((p) => p >= 0)).toBe(true);
       expect([...positions].sort((a, b) => a - b)).toEqual(positions);
       for (const word of [
-        `进度以 \`${hub} graph show\` 为准`,
-        "任务说明里给上一步的分支、PR 和文件路径，让它自己去读，不要转述内容",
+        `建了图的进度以 \`${hub} graph show\` 为准`,
+        "绑了图节点的会自动标完成，后面的节点轮到；给下一个节点派 Worker 时，任务说明里给上一步的分支、PR 和文件路径，让它自己去读，不要转述内容",
         `能答的直接答（\`${hub} worker send\`）`,
         `要用户定的，用 \`${hub} ask\` 提问并写上选项和你的推荐，答复回来再转给 Worker`,
         "不要只在回复里问一句就停下等",
         `能接着干就 \`${hub} worker send\``,
-        `对话超过 ${limitK} 或该换一家，就换人：\`${hub} worker end <编号> --incomplete\`，再 \`${hub} worker start --node <节点>\` 新派一个接手`,
+        `对话超过 ${limitK} 或该换一家，就换人：先 \`${hub} worker end <编号>\` 收工（绑了图节点的加 \`--incomplete\`），再 \`${hub} worker start\` 新派一个接手（绑了图节点的带 \`--node <节点>\`）`,
         "任务说明里写清分支、已有的提交、还要改的点",
         "用户亲手停的，用户没说继续就别叫醒它",
-        `随时 \`${hub} graph patch\`，加节点、改还没开工的节点、跳过不需要的`,
+        `建了图的随时 \`${hub} graph patch\`，加节点、改还没开工的节点、跳过不需要的；原本没建图、做着发现要分段或加审查的，随时补建一张图`,
       ]) {
         expect(follow, word).toContain(word);
       }
@@ -1069,11 +1084,11 @@ describe("性格设定、模式改了的说明（不重启，驱动层加在下�
         expect(modePrompt).toContain(`${hub} ask`);
         expect(modePrompt).toContain("不要只在回复里问一句就停下等");
 
-        // 3. 计划变了用 hub graph patch；换人：hub worker end <编号> --incomplete 再 hub worker start --node <节点>
+        // 3. 计划变了用 hub graph patch；换人兼顾单派不绑图与绑节点（worker end <编号> / --incomplete 再 worker start / --node <节点>）
         expect(modePrompt).toContain(`${hub} graph patch`);
-        expect(modePrompt).toContain(`${hub} worker end <编号> --incomplete`);
+        expect(modePrompt).toContain("--incomplete");
         expect(modePrompt).toContain(limitK);
-        expect(modePrompt).toMatch(/--incomplete.*再.*worker start --node <节点>.*新派一个接手/);
+        expect(modePrompt).toMatch(/worker end <编号>.*--incomplete.*再.*worker start.*新派一个接手.*--node <节点>/);
 
         expect(fullPrompt).toContain(modePrompt);
 
