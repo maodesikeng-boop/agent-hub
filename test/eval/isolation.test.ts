@@ -1,9 +1,11 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, readFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createServer } from "node:http";
+import { installHubShim } from "../../src/daemon/agent-api/shim.ts";
 import { join } from "node:path";
 import { afterAll, expect, it } from "vitest";
-import { CLAUDE_CONFIG_STATE_DIRS, claudeEnvScript, claudeScratchRules, mainRepoRoot, pmSandboxInput, pmSandboxProfile, realOr, SANDBOX_EXEC, SHIM_NAMES } from "./isolation.ts";
+import { CLAUDE_CONFIG_STATE_DIRS, claudeEnvScript, claudeScratchRules, mainRepoRoot, pmSandboxInput, pmSandboxProfile, realOr, SANDBOX_EXEC, SHIM_NAMES, writeShims } from "./isolation.ts";
 import { boundedText, markActive } from "./lifecycle.ts";
 import { pruneFailedWork, pruneRuns } from "./report.ts";
 const root = mkdtempSync(join(tmpdir(), "eval-isolation-"));
@@ -197,4 +199,113 @@ for (const shell of ["/bin/bash", "/bin/zsh"].filter((p) => existsSync(p))) {
     expect(r.stderr).toBe("");
     expect(r.stdout.trim().split("\n")).toEqual([...SHIM_NAMES.map((n) => join(bin, n)), "shim"]);
   });
+}
+
+it("祖先 metadata 规则覆盖逻辑路径与真实路径，不放开 data；空 socket 列表不拒全部出站", () => {
+  const runs = join(root, "metadata-runs");
+  const repo = join(root, "metadata-repo");
+  const profile = pmSandboxProfile({ home: root, realRepo: repo, realDataDirs: [], daemonPorts: [], denyExec: [],
+    claudeConfigDir: join(root, ".claude"), readDenied: [runs], writableDirs: [join(runs, "current/trial")] });
+  for (const path of [runs, join(runs, "current"), repo]) {
+    for (const alias of new Set([path, realOr(path)])) expect(profile).toContain(`(literal "${alias}")`);
+  }
+  expect(profile).not.toMatch(/\(deny network-outbound\s*\)/);
+  if (canCompile) expect(compileSbpl(profile).status).toBe(0);
+});
+
+it("依赖是软链且父目录路径经软链别名（/tmp → /private/tmp）时，被禁目录的真实侧祖先也放行 metadata，且在 deny file-read* 之后", () => {
+  const real = join(root, "alias-real"); const link = join(root, "alias-link");
+  mkdirSync(join(real, "source"), { recursive: true }); mkdirSync(join(root, "alias-deps/node_modules"), { recursive: true });
+  symlinkSync(real, link); symlinkSync(join(root, "alias-deps/node_modules"), join(real, "source/node_modules"));
+  const repo = join(link, "source");
+  const profile = pmSandboxProfile({ home: root, realRepo: repo, realDataDirs: [], daemonPorts: [], denyExec: [],
+    claudeConfigDir: join(root, ".claude"), dependencies: [join(repo, "node_modules")] });
+  // Node realpath 走“真实父目录 + 软链末级”：source 的 metadata 与 source/node_modules 本身都要对得上
+  const realSource = join(realOr(real), "source");
+  expect(profile).toContain(`(literal "${realSource}")`);
+  expect(profile).toContain(`(literal "${join(link, "source")}")`);
+  expect(profile).toContain(`(subpath "${join(realSource, "node_modules")}")`);
+  expect(profile.lastIndexOf("(allow file-read-metadata")).toBeGreaterThan(profile.lastIndexOf("(deny file-read* (subpath"));
+  if (canCompile) expect(compileSbpl(profile).status).toBe(0);
+  if (!available) return;
+  const r = spawnSync(SANDBOX_EXEC, ["-p", profile, process.execPath, "-e", "const fs=require('fs');fs.realpathSync(process.argv[1]);try{fs.readdirSync(process.argv[2]);process.exit(2)}catch(e){process.exit(e.code==='EPERM'?0:3)}", join(repo, "node_modules"), repo], { encoding: "utf8" });
+  expect({ status: r.status, stderr: r.stderr }).toEqual({ status: 0, stderr: "" });
+});
+
+// 同一夹具也在 Worker 无嵌套沙箱时裸跑，保证宿主机专用测试的命令、回放和假服务不会腐烂。
+for (const sandboxed of [false, true]) {
+  it.skipIf(sandboxed && !available)(`${sandboxed ? "真沙箱" : "夹具自检"}：runs 父目录封锁下的 Bash、Node gh/git/hub 与评测 socket 全链路`, async () => {
+    const dir = mkdtempSync("/tmp/ev-chain-");
+    const runs = join(dir, "runs");
+    const trial = join(runs, "current/trial");
+    const workspace = join(trial, "workspace");
+    const source = new URL("../../", import.meta.url).pathname;
+    const version = join(dir, "v/current");
+    const repo = join(dir, "source");
+    const binDir = join(trial, "bin");
+    const ghDir = join(trial, "gh");
+    const recordFile = join(trial, "recorded.jsonl");
+    const sock = join(trial, "hub.sock");
+    const realSock = join(dir, "real/run/hub.sock");
+    const calls: string[] = [];
+    const server = createServer((req, res) => {
+      req.resume();
+      req.on("end", () => { calls.push(req.url ?? ""); res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify({ ok: true, text: "eval-hub-ok" })); });
+    });
+    const realServer = createServer((_req, res) => res.end("should never connect"));
+    try {
+      for (const d of [workspace, join(runs, "other-run"), version, repo, join(trial, "tmp"), join(dir, "real/run")]) mkdirSync(d, { recursive: true });
+      writeFileSync(join(runs, "other-run/secret"), "secret");
+      // 与 prepareVersion 同构：导出版本源码，node_modules 指回禁读的源仓库。
+      cpSync(join(source, "src"), join(version, "src"), { recursive: true });
+      cpSync(join(source, "package.json"), join(version, "package.json"));
+      symlinkSync(join(source, "node_modules"), join(repo, "node_modules"));
+      symlinkSync(join(repo, "node_modules"), join(version, "node_modules"));
+      writeShims({ binDir, ghDir, recordFile }, { node: process.execPath, realGit: "/usr/bin/git" });
+      installHubShim({ binDir, mainScript: join(version, "src/hub/main.ts") });
+      writeFileSync(join(ghDir, "diff.patch"), "eval-diff\n");
+      writeFileSync(join(ghDir, "replay.json"), JSON.stringify({ repo: "eval/demo", nextPr: 2, baseDir: ghDir, logMaxBytes: 1024,
+        prs: [{ number: 1, title: "test", body: "", state: "OPEN", headRefName: "topic", headRefOid: "a".repeat(40), files: [], diffFile: "diff.patch",
+          checks: { runId: 1, workflow: "ci", jobs: [{ name: "test", databaseId: 1, elapsed: "1s" }], attempts: [{ status: "pass" }] } }] }));
+      execFileSync("/usr/bin/git", ["init", "-q", workspace]);
+      execFileSync("/usr/bin/git", ["-C", workspace, "-c", "user.name=eval", "-c", "user.email=eval@example.invalid", "commit", "--allow-empty", "-qm", "init"]);
+      await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(sock, resolve); });
+      await new Promise<void>((resolve, reject) => { realServer.once("error", reject); realServer.listen(realSock, resolve); });
+      const profile = pmSandboxProfile({ home: dir, realRepo: repo, mainRepo: source, dependencies: [join(repo, "node_modules"), join(source, "node_modules")],
+        realDataDirs: [join(dir, "real")], daemonPorts: [], denyExec: [], claudeConfigDir: join(dir, ".claude"),
+        writableDirs: [trial], projectDirs: [workspace], readDenied: [runs] });
+      if (canCompile) expect(compileSbpl(profile).status).toBe(0);
+      const quote = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
+      const run = async (script: string) => {
+        const argv = ["/bin/bash", "-lc", `. ${quote(join(trial, "env.sh"))}\nset -e\n${script}`];
+        const child = spawn(sandboxed ? SANDBOX_EXEC : argv[0]!, sandboxed ? ["-p", profile, ...argv] : argv.slice(1), {
+          cwd: workspace, env: { ...process.env, TMPDIR: join(trial, "tmp"), HUB_SOCK: sock, HUB_TOKEN: "eval-token", EVAL_GH_DIR: ghDir, EVAL_RECORD_FILE: recordFile },
+        });
+        let stdout = ""; let stderr = "";
+        child.stdout.on("data", (b) => { stdout += b; }); child.stderr.on("data", (b) => { stderr += b; });
+        const code = await new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("close", resolve); });
+        expect({ code, stderr }, script).toEqual({ code: 0, stderr: expect.not.stringMatching(/EPERM|EACCES|sandbox_apply/) });
+        return stdout;
+      };
+      writeFileSync(join(trial, "env.sh"), claudeEnvScript(binDir));
+      expect(await run("which gh\ngh --version\ngh pr view 1\ngh pr checks 1\ngh pr diff 1\ngh pr merge 1")).toContain("eval-gh-shim");
+      expect(readFileSync(join(ghDir, "calls.jsonl"), "utf8").trim().split("\n")).toHaveLength(4);
+      await run("git status\ngit log -1\ngit branch\ngit push");
+      expect(readFileSync(recordFile, "utf8")).toContain('"tool":"git"');
+      await run(`${quote(process.execPath)} -e ${quote("const fs=require('fs');fs.realpathSync(process.cwd());fs.realpathSync(process.argv[1])")} ${quote(join(repo, "node_modules/vitest"))}`);
+      for (const command of ["status", "ask --stdin", "worker start --title probe --stdin", "worker show 1", "worker end 1", "graph create --stdin", "graph show 1", "persona show", "persona edit --text probe --reason probe"]) {
+        expect(await run(`echo '{"nodes":[]}' | hub ${command}`)).toContain("eval-hub-ok");
+      }
+      expect(calls).toHaveLength(9);
+      if (sandboxed) {
+        const probe = `const fs=require('fs');for(const p of ${JSON.stringify([runs, repo, source])}){try{fs.readdirSync(p);throw Error('read allowed')}catch(e){if(e.code!=='EPERM')throw e}}try{fs.readFileSync(${JSON.stringify(join(runs, "other-run/secret"))});throw Error('secret allowed')}catch(e){if(e.code!=='EPERM')throw e}`;
+        await run(`${quote(process.execPath)} -e ${quote(probe)}`);
+        // 真 socket 的连接必须被权限拒绝；评测 socket 上面的九条 hub 命令必须成功。
+        await run(`${quote(process.execPath)} -e ${quote("const s=require('net').connect(process.argv[1]);s.on('connect',()=>process.exit(2));s.on('error',e=>process.exit(e.code==='EPERM'?0:3))")} ${quote(realSock)}`);
+      }
+    } finally {
+      await Promise.all([server, realServer].map((s) => new Promise<void>((resolve) => s.close(() => resolve()))));
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
 }
