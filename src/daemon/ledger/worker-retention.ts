@@ -10,10 +10,11 @@
 // 由 daemon/file-cleanup.ts 按目录修改时间满 FILE_RETENTION_DAYS 天清；它和本保留期同样是 30 天，Worker 对话里的文件到本清理时早已过期）。
 // 分批：每批一个事务（BEGIN IMMEDIATE），最多删 maxRows 行，没删完的下一批（下一轮）接着删，所以锁库的时间有上限；
 // 一个 Worker 的数据删完的那一批才记进 conversation_purges、推 conversation.purged，中途失败回滚后下次接着来。
-import { rmSync } from "node:fs";
+import { existsSync, readdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import type { ConversationId, SessionId, WorkerId } from "../../shared/domain.ts";
 import { WORKER_PURGE_BATCH_ROWS, WORKER_PURGE_CANDIDATES_PER_BATCH, WORKER_RETENTION_MS } from "../../shared/limits.ts";
-import { sessionLaunchDir, workerSetupLogPath } from "../../shared/paths.ts";
+import { removeSessionLaunchDir, workerSetupLogPath } from "../../shared/paths.ts";
 import type { LedgerContext, LedgerFiles, Pending } from "./context.ts";
 
 export interface WorkerPurgeBatch {
@@ -137,10 +138,61 @@ export function createLedgerWorkerRetention(ctx: LedgerContext, files: Pick<Ledg
     db.run("INSERT INTO conversation_purges (conversation_id, purged_at) VALUES (?, ?)", c.conv, purgedAt);
     p.changes.push({ type: "conversation.purged", data: { conversationId: c.conv, purgedAt } });
     p.after.push(() => {
-      if (files.launchDir !== undefined) for (const sid of sessionIds) rmSync(sessionLaunchDir(files.launchDir, sid), { recursive: true, force: true });
+      if (files.launchDir !== undefined) for (const sid of sessionIds) removeSessionLaunchDir(files.launchDir, sid);
       if (files.setupLogsDir !== undefined) rmSync(workerSetupLogPath(files.setupLogsDir, c.id), { force: true });
     });
     return { rows, finished: true };
+  };
+
+  /**
+   * 清理已退役或历史遗留的启动目录（`state/launch/<编号>` 与旧版 `state/launch/session-<编号>`）：
+   * - 活跃 PM 换会话（`handover`）淘汰下来的已结束旧 PM 会话（`role = 'pm' AND status = 'ended'`，且进程已退、无进行中交接、无待处理动作）；
+   * - 已结束的总助轨道 B 会话（`role = 'assistant' AND status = 'ended'`）或行已删的孤儿会话；
+   * - 已走完保留期清理（`conversation_purges`）的 Worker 会话；
+   * - 历史遗留的 `session-<编号>` 旧命名目录。
+   * 绝不碰：还在跑或有进程/待处理动作的会话、当前未结束的 PM 会话（含已归档未满 7 天的）、未满 30 天保留期的已收工 Worker 会话。
+   */
+  const sweepRetiredLaunchDirs = (): void => {
+    const launchDir = files.launchDir;
+    if (launchDir === undefined || !existsSync(launchDir)) return;
+    let entries: string[];
+    try {
+      entries = readdirSync(launchDir);
+    } catch {
+      return;
+    }
+    const parsed: Array<{ entry: string; sid: number; legacy: boolean }> = [];
+    for (const entry of entries) {
+      const m = /^(session-)?([1-9]\d*)$/.exec(entry);
+      if (m) parsed.push({ entry, sid: Number(m[2]), legacy: m[1] === "session-" });
+    }
+    if (parsed.length === 0) return;
+
+    const keep = new Set<number>();
+    for (const { id } of db.all<{ id: number }>(
+      `SELECT s.id FROM agent_sessions s
+        WHERE s.status != 'ended'
+           OR s.pid IS NOT NULL
+           OR (s.role = 'worker' AND (s.conversation_id IS NULL OR NOT EXISTS (
+                 SELECT 1 FROM conversation_purges cp WHERE cp.conversation_id = s.conversation_id
+               )))
+           OR (s.role = 'pm' AND EXISTS (
+                 SELECT 1 FROM handovers h
+                  WHERE h.from_session_id = s.id AND h.status IN ('queued', 'forking', 'writing', 'ready')
+               ))`,
+    )) {
+      keep.add(id);
+    }
+    for (const { params } of db.all<{ params: string }>("SELECT params FROM actions WHERE status IN ('pending', 'running') AND json_valid(params)")) {
+      const a = JSON.parse(params) as { sessionId?: unknown };
+      if (typeof a.sessionId === "number") keep.add(a.sessionId);
+    }
+
+    for (const { entry, sid, legacy } of parsed) {
+      if (legacy || !keep.has(sid)) {
+        rmSync(join(launchDir, entry), { recursive: true, force: true });
+      }
+    }
   };
 
   /**
@@ -149,7 +201,10 @@ export function createLedgerWorkerRetention(ctx: LedgerContext, files: Pick<Ledg
    */
   const purgeBatch = (nowMs: number = now(), maxRows: number = WORKER_PURGE_BATCH_ROWS): WorkerPurgeBatch => {
     const cutoff = nowMs - WORKER_RETENTION_MS;
-    if (!hasExpiredCandidate(cutoff)) return { rows: 0, purged: [], more: false };
+    if (!hasExpiredCandidate(cutoff)) {
+      sweepRetiredLaunchDirs();
+      return { rows: 0, purged: [], more: false };
+    }
     const budget = Math.max(1, Math.floor(maxRows));
     const { rows, purged, candidatesCount } = write((p) => {
       const candidates = eligible(cutoff, WORKER_PURGE_CANDIDATES_PER_BATCH);
@@ -163,6 +218,7 @@ export function createLedgerWorkerRetention(ctx: LedgerContext, files: Pick<Ledg
       }
       return { rows: batchRows, purged: batchPurged, candidatesCount: candidates.length };
     });
+    sweepRetiredLaunchDirs();
     const more =
       candidatesCount === 0
         ? false

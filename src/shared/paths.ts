@@ -1,5 +1,5 @@
 // 数据目录布局（设计第 6.1 节）。用到 node:path / node:fs，只给守护进程和测试用，不要从网页里引。
-import { existsSync, statSync } from "node:fs";
+import { existsSync, rmSync, statSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { ENV_HOME, PM_MEMORY_INDEX_FILE } from "./limits.ts";
 import { DATA_DIR_NAME } from "./names.ts";
@@ -338,10 +338,16 @@ export function workerWorktreePath(worktreesDir: string, projectId: number, work
 
 /**
  * 一个会话的启动目录 state/launch/<会话编号>/（prompt.md、设置文件、产品自带技能、agy 的规则目录……）：
- * 写的（daemon/launch.ts、router/sandbox.ts）和删的（项目经理彻底删除、Worker 保留期清理）都用这一个函数，名字对不上就删不掉。
+ * 写的（daemon/launch.ts、router/sandbox.ts）和删的（项目经理彻底删除、Worker 保留期与退役会话清理、总助轨道 B 退出）都走这里。
  */
 export function sessionLaunchDir(launchDir: string, sessionId: number): string {
   return join(launchDir, String(sessionId));
+}
+
+/** 删除一个会话的启动目录（同时顺手清掉历史遗留的 `session-<会话编号>` 目录格式）。 */
+export function removeSessionLaunchDir(launchDir: string, sessionId: number): void {
+  rmSync(sessionLaunchDir(launchDir, sessionId), { recursive: true, force: true });
+  rmSync(join(launchDir, `session-${sessionId}`), { recursive: true, force: true });
 }
 
 /** 一个 Worker 的准备命令日志：每跑一次追加一段（重启后重跑也在同一个文件里）。 */

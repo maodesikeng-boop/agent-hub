@@ -100,7 +100,7 @@ export interface LedgerOptions {
    * 默认 <dataHome>/worktrees（同 HubPaths 的布局），守护进程（W5）显式传。
    */
   worktreesDir?: string;
-  /** state/launch/（HubPaths.launchDir）：清理到期归档 PM 时删除 session-<sessionId> 目录。 */
+  /** state/launch/（HubPaths.launchDir）：清理到期归档 PM、到期 Worker 与退役旧会话时删除启动目录。 */
   launchDir?: string;
   /** state/logs/setup/（HubPaths.setupLogsDir）：清理到期归档 PM 时删除 worker-<workerId>.log。 */
   setupLogsDir?: string;
