@@ -18,6 +18,12 @@ export const EVAL_SCRIPTED_POLL_MS = 100;
 export const EVAL_QUIET_MS = 30_000;
 export const EVAL_SCRIPTED_QUIET_MS = 1_500;
 
+/**
+ * 回放假 Worker 预设的轮次用完后又被追加消息（真 PM 多发了一轮 hub worker send）时，先停这么久再回兜底汇报：
+ * 0 毫秒瞬回会让真 PM 误以为 Worker 运行时坏了。单测可经 TrialTimings.overrunDelayMs 缩短。
+ */
+export const EVAL_WORKER_OVERRUN_DELAY_MS = 1_500;
+
 /** 同时跑几个试跑（设计 7：并行上限 4，瞬时磁盘约 0.6GB）。 */
 export const EVAL_DEFAULT_PARALLEL = 3;
 export const EVAL_MAX_PARALLEL = 4;

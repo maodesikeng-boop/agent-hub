@@ -9,7 +9,7 @@ import { readJsonl } from "./facts.ts";
 import { route, settingsWithoutOwnSandbox, type RouterConfig } from "./fakes/claude-router.ts";
 import { RECORD_ONLY_TOOLS, claudeEnvScript, isolationEnv, pmSandboxProfile, realGitPath, scrubbedEnvNames, writeShims } from "./isolation.ts";
 import { REPLAY_DIR, SCENARIOS, scenarioById } from "./scenarios.ts";
-import { writeGhReplay, writeStubs } from "./trial.ts";
+import { overrunTurn, workerSessions, writeGhReplay, writeStubs, type TrialPlan } from "./trial.ts";
 import type { GhCall, RecordedCall, ScenarioId } from "./types.ts";
 
 const root = mkdtempSync(join(shortTmp(), "ah-evalfake-"));
@@ -226,5 +226,42 @@ describe("隔离规则", () => {
     expect(scrubbedEnvNames({ AGENT_HUB_HOME: "/x", AGENT_HUB_PORT: "1", PATH: "/bin" })).toEqual(
       expect.arrayContaining(["HUB_TOKEN", "HUB_SOCK", "GH_TOKEN", "GITHUB_TOKEN", "SSH_AUTH_SOCK", "AGENT_HUB_HOME", "AGENT_HUB_PORT"]),
     );
+  });
+});
+
+describe("回放假 Worker 超出预设轮次", () => {
+  const REPORT = "做完了。\n\n=== 汇报 ===\n状态: 有问题\n摘要: x\n提交: da36ed7\n测试: 无\n问题: 无\n=== 汇报结束 ===";
+
+  it("overrunTurn：先停一会儿，再按标准汇报格式说明没有更多预设步骤，状态与提交沿用上一份汇报", () => {
+    const turn = overrunTurn(REPORT, 1500);
+    expect(turn.steps?.[0]).toEqual({ sleepMs: 1500 });
+    const text = String((turn.steps?.[1] as { text: string }).text);
+    expect(text).toContain("=== 汇报 ===");
+    expect(text).toContain("=== 汇报结束 ===");
+    expect(text).toContain("状态: 有问题");
+    expect(text).toContain("提交: da36ed7");
+    expect(text).toContain("回放场景没有更多预设步骤");
+    expect(text).toContain("请基于已有证据决策");
+  });
+
+  it("延迟为 0（单测）不加 sleep；上一份汇报没有字段时用默认", () => {
+    const turn = overrunTurn("随便一句", 0);
+    expect(turn.steps).toHaveLength(1);
+    expect(String((turn.steps?.[0] as { text: string }).text)).toContain("状态: 做完了");
+  });
+
+  it("workerSessions：有预设剧本的 Worker 用完预设轮次后走带延迟的兜底（延迟可配置），不再 0 毫秒瞬回", () => {
+    const scenario = scenarioById("s5a-ci-mirror");
+    const ctx = { shotsDir: "/s", preludeShotsDir: "/p" } as Parameters<typeof workerSessions>[2];
+    const plan = (overrunDelayMs?: number) => ({ project: { kind: "synthetic" }, timings: { trialMs: 1, pollMs: 1, quietMs: 1, ...(overrunDelayMs === undefined ? {} : { overrunDelayMs }) } }) as unknown as TrialPlan;
+    const scripted = workerSessions(plan(), scenario, ctx, "/g").filter((s) => s.promptIncludes !== undefined);
+    expect(scripted.length).toBeGreaterThan(0);
+    for (const s of scripted) {
+      const first = s.script.defaultTurn?.steps?.[0] as { sleepMs?: number };
+      expect(first.sleepMs).toBeGreaterThanOrEqual(1000);
+      expect(first.sleepMs).toBeLessThanOrEqual(2000);
+    }
+    const fast = workerSessions(plan(0), scenario, ctx, "/g").filter((s) => s.promptIncludes !== undefined);
+    expect(fast[0]!.script.defaultTurn?.steps?.[0]).toHaveProperty("text");
   });
 });

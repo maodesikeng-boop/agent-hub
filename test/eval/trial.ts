@@ -7,7 +7,7 @@ import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSyn
 import { dirname, join } from "node:path";
 import { isQuotaExhausted, askOf, extractAskCard, type Message, type RateLimitInfo } from "../../src/shared/domain.ts";
 import { API_PATHS, type PersonaView } from "../../src/shared/index.ts";
-import type { FakeScript, FakeSessionScript, FakeStep } from "../fake-claude/fake-claude.ts";
+import type { FakeScript, FakeSessionScript, FakeStep, FakeTurn } from "../fake-claude/fake-claude.ts";
 import { Client, makeEnv, messagesOf, sleep, type RunningDaemon } from "../e2e/harness.ts";
 import { removeOwnClaudeProjects, removeOwnVendorRecords } from "../smoke/kit.ts";
 import { boundedText, killGroup, markActive, onExit } from "./lifecycle.ts";
@@ -15,7 +15,7 @@ import { runChecks } from "./checks.ts";
 import { countPmTurns, listWorkers, readFacts, readMetrics } from "./facts.ts";
 import type { RouterConfig } from "./fakes/claude-router.ts";
 import { type PmSandboxInput, pmSandboxInput, pmSandboxProfile, preflight, FAKE_CLAUDE, ROUTER, isolationEnv, realGitPath, whichFirst, writeShims } from "./isolation.ts";
-import { EVAL_EVIDENCE_MAX_CHARS, EVAL_GH_LOG_MAX_BYTES, EVAL_MAX_PM_TURNS, EVAL_TRANSCRIPT_MAX_CHARS } from "./limits.ts";
+import { EVAL_EVIDENCE_MAX_CHARS, EVAL_GH_LOG_MAX_BYTES, EVAL_MAX_PM_TURNS, EVAL_TRANSCRIPT_MAX_CHARS, EVAL_WORKER_OVERRUN_DELAY_MS } from "./limits.ts";
 import { NEUTRAL_PERSONA, REPLAY_DIR } from "./scenarios.ts";
 import type { Facts, Scenario, ScenarioContext, TrialResult } from "./types.ts";
 
@@ -23,6 +23,8 @@ export interface TrialTimings {
   trialMs: number;
   pollMs: number;
   quietMs: number;
+  /** 假 Worker 预设轮次用完后再被叫醒时先停多久（不给就用 EVAL_WORKER_OVERRUN_DELAY_MS；单测给小数免拖慢）。 */
+  overrunDelayMs?: number;
 }
 
 export type PmPlan =
@@ -76,8 +78,35 @@ function prepareProject(plan: TrialPlan, scenario: Scenario, workDir: string): {
   return { repo, bare };
 }
 
-/** 假 Worker 的剧本：按提示词认是哪一类，第一轮交回真实提交和真实汇报，之后每轮回通用汇报。 */
-function workerSessions(plan: TrialPlan, scenario: Scenario, ctx: ScenarioContext, gateFile: string): FakeSessionScript[] {
+/** 汇报里“字段: 值”那一行的值（取最后一份汇报块里的）。 */
+function reportField(report: string, field: string): string | undefined {
+  const block = report.split("=== 汇报 ===").pop() ?? "";
+  return new RegExp(`^${field}:[ \\t]*(.+)$`, "m").exec(block)?.[1]?.trim();
+}
+
+/**
+ * 预设轮次用完后的兜底：先停一会儿（不能 0 毫秒瞬回，真 PM 会误判 Worker 运行时坏了），再按标准汇报格式说明
+ * “没有更多预设步骤”，状态与提交沿用最后一份预设汇报。
+ */
+export function overrunTurn(lastReport: string, delayMs: number): FakeTurn {
+  const status = reportField(lastReport, "状态") ?? "做完了";
+  const commit = reportField(lastReport, "提交") ?? "无";
+  const text = [
+    "收到你追加的消息。这是回放场景：我已经交回了所有预设的步骤，没有更多可做的了，上一份汇报的状态与结论不变。请基于已有证据决策。",
+    "",
+    "=== 汇报 ===",
+    `状态: ${status}`,
+    "摘要: 回放场景没有更多预设步骤，保持上一轮的状态与结论，没有新的改动。请基于已有证据决策。",
+    `提交: ${commit}`,
+    "测试: 无（没有新的改动）",
+    "问题: 无",
+    "=== 汇报结束 ===",
+  ].join("\n");
+  return { steps: [...(delayMs > 0 ? [{ sleepMs: delayMs }] : []), { text }] };
+}
+
+/** 假 Worker 的剧本：按提示词认是哪一类，第一轮交回真实提交和真实汇报，之后几轮按场景交回后续汇报，再往后用兜底汇报。 */
+export function workerSessions(plan: TrialPlan, scenario: Scenario, ctx: ScenarioContext, gateFile: string): FakeSessionScript[] {
   const generic: FakeScript = { defaultTurn: { steps: [{ text: scenario.fallbackReport }] } };
   const sessions: FakeSessionScript[] = scenario.workers.map((w) => {
     const steps: FakeStep[] = [];
@@ -95,8 +124,14 @@ function workerSessions(plan: TrialPlan, scenario: Scenario, ctx: ScenarioContex
     const report = w.reportFile ? readFileSync(join(REPLAY_DIR, w.reportFile), "utf8") : (w.reportText ?? scenario.fallbackReport);
     steps.push({ text: fill(report) });
     // 被 hub worker send 叫醒后的几轮：依次交回之后的真实汇报（K1：用户登录以后，接 Pi、冒烟测试的那份）
-    const later = (w.laterReportFiles ?? []).map((f) => ({ steps: [{ text: fill(readFileSync(join(REPLAY_DIR, f), "utf8")) }] }));
-    return { role: "worker", promptIncludes: w.promptIncludes, script: { turns: [{ steps }, ...later], defaultTurn: generic.defaultTurn } };
+    const laterReports = (w.laterReportFiles ?? []).map((f) => fill(readFileSync(join(REPLAY_DIR, f), "utf8")));
+    const later = laterReports.map((text) => ({ steps: [{ text }] }));
+    const lastReport = laterReports.at(-1) ?? fill(report);
+    return {
+      role: "worker",
+      promptIncludes: w.promptIncludes,
+      script: { turns: [{ steps }, ...later], defaultTurn: overrunTurn(lastReport, plan.timings.overrunDelayMs ?? EVAL_WORKER_OVERRUN_DELAY_MS) },
+    };
   });
   return [...sessions, { role: "worker", script: generic }];
 }
