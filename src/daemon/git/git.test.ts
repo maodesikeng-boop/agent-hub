@@ -10,6 +10,8 @@ import {
   hasUncommittedChanges,
   isBranchMergedToMain,
   isRepoWithCommit,
+  parseDiffNumstatZ,
+  probeDiffNumstat,
   probeWorkspace,
   pruneWorktrees,
   removeWorktree,
@@ -383,5 +385,27 @@ describe("isBranchMergedToMain、removeWorktree、pruneWorktrees", () => {
     await pruneWorktrees(repo);
     expect(git(repo, "worktree", "list", "--porcelain")).not.toContain("dirty");
     expect(git(repo, "show-ref", "--verify", "refs/heads/hub/2-dirty")).toContain("refs/heads/hub/2-dirty");
+  });
+
+  it("probeDiffNumstat 与 parseDiffNumstatZ：正确解析带空格/中文路径与二进制文件，分支不存在返回 null", async () => {
+    expect(parseDiffNumstatZ("12\t3\tsrc/中文 文件.ts\0-\t-\tassets/logo.png\0")).toEqual([
+      { file: "src/中文 文件.ts", added: 12, deleted: 3 },
+      { file: "assets/logo.png", added: null, deleted: null },
+    ]);
+
+    const repo = makeRepo("numstat");
+    const wt = join(root, "wt", "numstat");
+    const { baseCommit } = await addWorktree({ repoFolder: repo, worktreePath: wt, branch: "hub/9-diff" });
+    writeFileSync(join(wt, "中文 文件.txt"), "line1\nline2\n");
+    writeFileSync(join(wt, "a.txt"), "updated\n");
+    git(wt, "add", "-A");
+    git(wt, "commit", "-q", "-m", "change files");
+
+    const stats = await probeDiffNumstat(repo, "hub/9-diff", { baseCommit });
+    expect(stats).toEqual([
+      { file: "a.txt", added: 1, deleted: 1 },
+      { file: "中文 文件.txt", added: 2, deleted: 0 },
+    ]);
+    expect(await probeDiffNumstat(repo, "hub/not-exist", { baseCommit })).toBeNull();
   });
 });

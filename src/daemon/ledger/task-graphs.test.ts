@@ -4,8 +4,26 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Change } from "../../shared/api.ts";
 import { pendingDecisionsOf } from "../../shared/decisions.ts";
-import { askOf, EMPTY_TOKEN_USAGE, type ConversationId, type PmId, type ProjectId, type SessionId } from "../../shared/domain.ts";
-import { GRAPH_TEXT_NODE_NOTE_CHARS, HANDOVER_GRAPHS_MAX_CHARS, MAX_GRAPH_NODES, MAX_ACTIVE_GRAPHS_PER_PROJECT, PM_ARCHIVE_RETENTION_MS } from "../../shared/limits.ts";
+import {
+  askOf,
+  EMPTY_TOKEN_USAGE,
+  isSilentTriggerMessage,
+  isTaskGraphReadyToFinish,
+  systemEventOf,
+  type ConversationId,
+  type PmId,
+  type ProjectId,
+  type SessionId,
+} from "../../shared/domain.ts";
+import {
+  DELIVERY_FILES_MAX,
+  DELIVERY_NOTE_MAX_CHARS,
+  GRAPH_TEXT_NODE_NOTE_CHARS,
+  HANDOVER_GRAPHS_MAX_CHARS,
+  MAX_GRAPH_NODES,
+  MAX_ACTIVE_GRAPHS_PER_PROJECT,
+  PM_ARCHIVE_RETENTION_MS,
+} from "../../shared/limits.ts";
 import { TASK_GRAPH_CREATE_JSON_HINT, TASK_GRAPH_PATCH_JSON_HINT } from "../../shared/hub.ts";
 import { REPORT_END, REPORT_START } from "../../shared/worker.ts";
 import { openDatabase } from "../store/db.ts";
@@ -60,7 +78,7 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-function finishWorkerTurn(workerId: number, statusText: "做完了" | "有问题" | "放弃了", summary = "已完成") {
+function finishWorkerTurn(workerId: number, statusText: "做完了" | "有问题" | "放弃了", summary = "已完成", commit = "abc1234") {
   const workerSession = db.get<{ id: number; conversation_id: number }>(
     "SELECT id, conversation_id FROM agent_sessions WHERE worker_id = ? ORDER BY generation DESC LIMIT 1",
     workerId,
@@ -74,7 +92,7 @@ function finishWorkerTurn(workerId: number, statusText: "做完了" | "有问题
   ledger.applyDriverEvent(workerSession.id, {
     type: "agent.text",
     uuid: `u-${workerId}-${++now}`,
-    text: `本轮说明\n\n${REPORT_START}\n状态: ${statusText}\n摘要: ${summary}\n提交: abc1234\n测试: vitest 绿\n问题: 无\n${REPORT_END}`,
+    text: `本轮说明\n\n${REPORT_START}\n状态: ${statusText}\n摘要: ${summary}\n提交: ${commit}\n测试: vitest 绿\n问题: 无\n${REPORT_END}`,
     at: now,
   });
   ledger.applyDriverEvent(workerSession.id, {
@@ -297,10 +315,12 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
       artifact: { summary: "导出接口已实现", prUrl: "https://example.test/pr/1" },
     });
 
-    // attention（等人接手）的节点项目经理可以放行
+    // attention（等人接手）的节点项目经理可以放行；最后一个节点完成时图保持待交付，提示用 hub graph finish 结束
     const w2 = ledger.hubCall(lin.sessionId, "worker.start", { title: "验收", task: "做 qa", noWorktree: true, node: "qa" }).data.worker;
     finishWorkerTurn(w2.id, "有问题", "缺测试数据");
-    expect(ledger.hubCall(lin.sessionId, "graph.done", { graphId: graph.id, nodeKey: "qa" }).text).toContain("整张任务图已全部完结");
+    expect(ledger.hubCall(lin.sessionId, "graph.done", { graphId: graph.id, nodeKey: "qa" }).text).toContain(
+      "全部节点已完成（待交付），验收合并后用 hub graph finish 结束任务图",
+    );
   });
 
   it("hub worker end 的回执写明绑定的节点变成了什么：做完了 → done 并列出解锁的下游；--incomplete 或没汇报做完 → attention 等人接手；没绑图的不提", () => {
@@ -330,10 +350,12 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     const done = ledger.hubCall(lin.sessionId, "worker.end", { workerId: w3.id }).text;
     expect(done).toContain(`它绑定的任务图 #${graph.id} 的节点「impl」已标记为 done（它最近一轮汇报是“做完了”）；已自动解锁：qa [ready]。`);
 
-    // 最后一个节点做完：回执写明整张图完结
+    // 最后一个节点做完：回执写明全部节点已完成（待交付）并提醒用 hub graph finish 结束
     const w4 = start("验收", "qa");
     finishWorkerTurn(w4.id, "做完了", "验收通过");
-    expect(ledger.hubCall(lin.sessionId, "worker.end", { workerId: w4.id }).text).toContain("节点「qa」已标记为 done（它最近一轮汇报是“做完了”）；整张任务图已全部完结！");
+    expect(ledger.hubCall(lin.sessionId, "worker.end", { workerId: w4.id }).text).toContain(
+      "节点「qa」已标记为 done（它最近一轮汇报是“做完了”）；全部节点已完成（待交付），验收合并后用 hub graph finish 结束任务图。",
+    );
 
     // 临时 Worker（不绑图）：回执不提任务图
     const temp = start("跑腿");
@@ -500,7 +522,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     expect(after.nodes.find((n) => n.key === "a")?.status).not.toBe("done");
   });
 
-  it("最后一个 Worker 收工后仍可给已完成图补记产物，但取消图不能补记", () => {
+  it("最后一个 Worker 收工后图处于待交付、finish 后图变 completed，两者均可给 done 节点补记产物，但取消图不能补记", () => {
     const graph = ledger.hubCall(lin.sessionId, "graph.create", {
       specJson: JSON.stringify({ title: "完成", nodes: [{ key: "only", title: "实现" }] }),
     }).data.graph;
@@ -509,11 +531,29 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     }).data.worker;
     finishWorkerTurn(w.id, "做完了");
     ledger.hubCall(lin.sessionId, "worker.end", { workerId: w.id });
-    const updated = ledger.hubCall(lin.sessionId, "graph.done", {
+    const readyGraph = ledger.hubCall(lin.sessionId, "graph.done", {
       graphId: graph.id, nodeKey: "only", prUrl: "https://example.test/pr/1",
     }).data.graph;
-    expect(updated.status).toBe("completed");
-    expect(updated.nodes[0]!.artifact?.prUrl).toBe("https://example.test/pr/1");
+    expect(readyGraph.status).toBe("active");
+    expect(isTaskGraphReadyToFinish(readyGraph)).toBe(true);
+    expect(readyGraph.nodes[0]!.artifact?.prUrl).toBe("https://example.test/pr/1");
+
+    const finished = ledger.hubCall(lin.sessionId, "graph.finish", {
+      graphId: graph.id,
+      summary: "已完成并合并 PR #1",
+    }).data.graph;
+    expect(finished.status).toBe("completed");
+
+    // 已 finish 的图传 --graph 仍可给已有 done 节点补记 commit
+    const updatedAfterFinish = ledger.hubCall(lin.sessionId, "graph.done", {
+      graphId: graph.id, nodeKey: "only", commit: "feedbeef",
+    }).data.graph;
+    expect(updatedAfterFinish.status).toBe("completed");
+    expect(updatedAfterFinish.nodes[0]!.artifact).toMatchObject({
+      prUrl: "https://example.test/pr/1",
+      commit: "feedbeef",
+    });
+
     const cancelled = ledger.hubCall(lin.sessionId, "graph.create", {
       specJson: JSON.stringify({ title: "取消", nodes: [{ key: "other", title: "取消" }] }),
     }).data.graph;
@@ -683,14 +723,14 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     expect(changes).toEqual([]);
   });
 
-  it("patch 保护运行态与已完成节点、skip 支持单分支级联与多分支汇聚解锁、全图完成后自动归入历史分页", () => {
+  it("patch 保护运行态与已完成节点、skip 只跳单个节点并解锁下游（不连带跳过下游）、finish 后归入历史分页", () => {
     const graph = ledger.hubCall(lin.sessionId, "graph.create", {
       specJson: JSON.stringify({
         title: "多路构建",
         nodes: [
           { key: "base", title: "公共底座" },
           { key: "opt-branch", title: "可选实验分支", deps: ["base"] },
-          { key: "opt-leaf", title: "实验子任务", deps: ["opt-branch"] },
+          { key: "opt-leaf", title: "后续子任务", deps: ["opt-branch"] },
           { key: "join-release", title: "汇总发版", deps: ["base", "opt-branch"] },
         ],
       }),
@@ -706,26 +746,297 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
       }),
     ).toThrow();
 
-    // 跳过 opt-branch：只依赖 opt-branch 的 opt-leaf 级联标为 skipped；同时依赖 base(done) 与 opt-branch(skipped) 的 join-release 解锁为 ready！
-    const afterSkip = ledger.skipTaskNode(graph.id, "opt-branch", { reason: "本期不做实验分支" }).graph;
+    // 跳过 opt-branch：只跳过它自己，不连带跳过 opt-leaf；opt-leaf 与 join-release 均解锁为 ready！
+    const afterSkip = ledger.skipTaskNode(graph.id, "opt-branch", { reason: "中间步骤跳过，直接进入下游" }).graph;
     expect(afterSkip.nodes.find((n) => n.key === "opt-branch")?.status).toBe("skipped");
-    expect(afterSkip.nodes.find((n) => n.key === "opt-leaf")?.status).toBe("skipped");
+    expect(afterSkip.nodes.find((n) => n.key === "opt-leaf")?.status).toBe("ready");
     expect(afterSkip.nodes.find((n) => n.key === "join-release")?.status).toBe("ready");
 
-    // 完成最后一个节点 join-release -> 整张图自动变为 completed，撤出 activeTaskGraphs，进入历史分页
-    const completed = ledger.hubCall(lin.sessionId, "graph.done", {
+    ledger.hubCall(lin.sessionId, "graph.done", { graphId: graph.id, nodeKey: "opt-leaf" });
+    const allSettled = ledger.hubCall(lin.sessionId, "graph.done", {
       graphId: graph.id,
       nodeKey: "join-release",
       prUrl: "https://github.com/org/repo/pull/200",
     }).data.graph;
-    expect(completed.status).toBe("completed");
-    expect(completed.completedAt).toBe(now);
+
+    // 全部节点到达终态后图仍为 active（待交付），保留在 activeTaskGraphs 中
+    expect(allSettled.status).toBe("active");
+    expect(isTaskGraphReadyToFinish(allSettled)).toBe(true);
+    expect(ledger.snapshot().activeTaskGraphs).toHaveLength(1);
+
+    // 调 hub graph finish 后才变为 completed，撤出 activeTaskGraphs，进入历史分页并同步进总助
+    const finished = ledger.hubCall(lin.sessionId, "graph.finish", {
+      graphId: graph.id,
+      summary: "多路构建已合并发布（PR #200）",
+    }).data;
+    expect(finished.graph.status).toBe("completed");
+    expect(finished.graph.completedAt).toBe(now);
+    expect(finished.reportItem).toMatchObject({ kind: "report", summary: "多路构建已合并发布（PR #200）" });
     expect(ledger.snapshot().activeTaskGraphs).toEqual([]);
 
     const history = ledger.listProjectTaskGraphs(lin.projectId);
     expect(history.graphs).toHaveLength(1);
     expect(history.graphs[0]?.id).toBe(graph.id);
     expect(history.hasMore).toBe(false);
+  });
+
+  it("第 2 步验收场景：最后节点完成后保持待交付、自动发交付单（防重复轰炸）、支持补挂审查节点与打回重派、PR 未合并默认拦截与 --unmerged-ok 放行", () => {
+    const deliveryMessagesOf = (graphId: number) =>
+      db
+        .all<{ id: number; status: string }>(
+          "SELECT id, status FROM messages WHERE conversation_id = ? AND sender = 'system' ORDER BY id ASC",
+          lin.conversationId,
+        )
+        .map((r) => ledger.getMessage(r.id)!)
+        .filter((m) => {
+          const ev = systemEventOf(m);
+          return ev?.event === "task_graph.ready_to_finish" && ev.graphId === graphId;
+        });
+
+    const graph = ledger.hubCall(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({
+        title: "鉴权改造",
+        nodes: [
+          { key: "gate-plan", title: "确认方案", kind: "gate" },
+          { key: "impl", title: "代码实现", deps: ["gate-plan"] },
+        ],
+      }),
+    }).data.graph;
+
+    ledger.hubCall(lin.sessionId, "graph.ask", {
+      graphId: graph.id,
+      nodeKey: "gate-plan",
+      question: "用 JWT 还是 Session？",
+      options: ["Session", "JWT"],
+    });
+    // 还有未完成节点时调 finish 会被拒绝并列出未完成节点
+    expect(() =>
+      ledger.hubCall(lin.sessionId, "graph.finish", { graphId: graph.id, summary: "提前结束" }),
+    ).toThrow(/还有未完成的节点.*gate-plan.*impl.*hub graph cancel/);
+
+    ledger.hubCall(lin.sessionId, "graph.decide", {
+      graphId: graph.id,
+      nodeKey: "gate-plan",
+      choice: "Session",
+      note: "Cookie HttpOnly",
+    });
+
+    const wImpl = ledger.hubCall(
+      lin.sessionId,
+      "worker.start",
+      {
+        title: "实现 Session",
+        task: "做 Session 鉴权",
+        node: "impl",
+      },
+      { workspace: { kind: "ok", isRepoWithCommit: true, hasUncommittedChanges: false } },
+    ).data.worker;
+    ledger.onWorktreeCreated(wImpl.id, "0000base");
+    const implBranch = wImpl.branch!;
+    finishWorkerTurn(wImpl.id, "做完了", "已完成 Session 中间件与单测");
+    ledger.hubCall(lin.sessionId, "worker.end", { workerId: wImpl.id });
+
+    // 1) 最后节点完成后图仍为 active（待交付），status 与 show 均展示待交付，且自动入队 1 条静默交付单通知
+    const afterImpl = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id });
+    expect(afterImpl.data.graph.status).toBe("active");
+    expect(isTaskGraphReadyToFinish(afterImpl.data.graph)).toBe(true);
+    expect(afterImpl.text).toContain("（状态：active · 待交付）");
+
+    const statusInfo = ledger.hubCall(lin.sessionId, "status", {});
+    expect(statusInfo.text).toContain("待交付");
+    expect(statusInfo.data.role === "pm" && statusInfo.data.activeTaskGraphs?.[0]?.readyToFinish).toBe(true);
+
+    let notes = deliveryMessagesOf(graph.id);
+    expect(notes).toHaveLength(1);
+    expect(isSilentTriggerMessage(notes[0]!)).toBe(true);
+    expect(notes[0]!.text).toContain(`【任务图 #${graph.id}「鉴权改造」全部步骤做完，等你交付】`);
+    expect(notes[0]!.text).toContain("已完成 Session 中间件与单测");
+    expect(notes[0]!.text).toContain("拍板：「用 JWT 还是 Session？」定案 Session（Cookie HttpOnly）");
+    expect(notes[0]!.text).toContain("hub graph finish");
+
+    // 2) 待交付期间重复调 graph done 补记产物，不会重复发送第二条交付单轰炸
+    ledger.hubCall(lin.sessionId, "graph.done", {
+      graphId: graph.id,
+      nodeKey: "impl",
+      prUrl: "https://github.com/org/repo/pull/88",
+    });
+    expect(deliveryMessagesOf(graph.id)).toHaveLength(1);
+
+    // 3) 待交付期间允许 hub graph patch 补挂异构审查节点！旧排队交付单自动标 stopped，审查完成后发新交付单
+    const patched = ledger.hubCall(lin.sessionId, "graph.patch", {
+      graphId: graph.id,
+      specJson: JSON.stringify({ addNodes: [{ key: "review", title: "异构审查", deps: ["impl"] }] }),
+    }).data.graph;
+    expect(isTaskGraphReadyToFinish(patched)).toBe(false);
+    expect(patched.nodes.find((n) => n.key === "review")?.status).toBe("ready");
+    expect(deliveryMessagesOf(graph.id)[0]!.status).toBe("stopped");
+
+    const wReview = ledger.hubCall(lin.sessionId, "worker.start", {
+      title: "审查 Session",
+      task: "审查 PR #88",
+      node: "review",
+      noWorktree: true,
+    }).data.worker;
+    finishWorkerTurn(wReview.id, "做完了", "审查无高危问题");
+    ledger.hubCall(lin.sessionId, "worker.end", { workerId: wReview.id });
+
+    notes = deliveryMessagesOf(graph.id);
+    expect(notes).toHaveLength(2);
+    expect(notes[1]!.status).toBe("queued");
+    expect(notes[1]!.text).toContain("审查无高危问题");
+
+    // 4) 待交付期间也支持对已 done 节点重新派 Worker 打回重做
+    const wRedo = ledger.hubCall(lin.sessionId, "worker.start", {
+      title: "补边角用例",
+      task: "补一个过期测试",
+      node: "impl",
+      noWorktree: true,
+    }).data.worker;
+    expect(ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph.nodes.find((n) => n.key === "impl")?.status).toBe("running");
+    expect(deliveryMessagesOf(graph.id)[1]!.status).toBe("stopped");
+    finishWorkerTurn(wRedo.id, "做完了", "已补齐过期单测");
+    ledger.hubCall(lin.sessionId, "worker.end", { workerId: wRedo.id });
+    notes = deliveryMessagesOf(graph.id);
+    expect(notes).toHaveLength(3);
+    expect(notes[2]!.status).toBe("queued");
+
+    // 5) enrichDeliveryNoteMessage 写入改动文件名单时严格遵守 DELIVERY_FILES_MAX（60）与 DELIVERY_NOTE_MAX_CHARS（6000）
+    const manyFiles = Array.from({ length: DELIVERY_FILES_MAX + 15 }, (_, idx) => ({
+      file: `src/module-${idx}/index.ts`,
+      added: idx + 1,
+      deleted: idx % 3,
+    }));
+    const probeTarget = ledger.graphDeliveryProbeTarget!(notes[2]!.id);
+    expect(probeTarget).toMatchObject({
+      graphId: graph.id,
+      repoFolder: lin.folder,
+      branches: [{ branch: implBranch, cwd: lin.folder, baseCommit: "0000base" }],
+    });
+    ledger.enrichDeliveryNoteMessage!(notes[2]!.id, {
+      files: manyFiles,
+      prs: { [implBranch]: { number: 88, state: "OPEN", url: "https://github.com/org/repo/pull/88" } },
+    });
+    const enriched = ledger.getMessage(notes[2]!.id)!;
+    expect(enriched.text).toContain(`改动文件（相对主干，共 ${DELIVERY_FILES_MAX + 15} 个）：`);
+    expect(enriched.text).toContain("…另有 15 个文件省略");
+    expect(enriched.text).toContain("PR #88（开着）");
+    expect([...enriched.text].length).toBeLessThanOrEqual(DELIVERY_NOTE_MAX_CHARS);
+    // diffProbed 置 true 后不再重复探测
+    expect(ledger.graphDeliveryProbeTarget!(notes[2]!.id)).toBeNull();
+
+    // 6) 分支上有 OPEN PR 时，hub graph finish 默认拦截并清晰列出 PR 与分支
+    expect(ledger.graphPrTargets!(lin.sessionId, graph.id)).toEqual([
+      { cwd: lin.folder, branch: implBranch },
+      { cwd: lin.folder, prUrl: "https://github.com/org/repo/pull/88" },
+    ]);
+    expect(() =>
+      ledger.hubCall(
+        lin.sessionId,
+        "graph.finish",
+        { graphId: graph.id, summary: "准备结案" },
+        { graphPrs: { [implBranch]: { number: 88, state: "OPEN", url: "https://github.com/org/repo/pull/88" } } },
+      ),
+    ).toThrow(/还有未合并（OPEN）的 PR.*impl.*PR #88.*--unmerged-ok/);
+
+    // 7) PR 已变为 MERGED（或传 --unmerged-ok、或未查到 PR）时 finish 放行，标 completed 并同步汇报卡进总助
+    const finishRes = ledger.hubCall(
+      lin.sessionId,
+      "graph.finish",
+      { graphId: graph.id, summary: "Session 鉴权改造与异构审查均已验收合并" },
+      { graphPrs: { [implBranch]: { number: 88, state: "MERGED", url: "https://github.com/org/repo/pull/88" } } },
+    );
+    expect(finishRes.data.graph.status).toBe("completed");
+    expect(finishRes.data.reportItem).toMatchObject({
+      kind: "report",
+      summary: "Session 鉴权改造与异构审查均已验收合并",
+      links: [{ label: "PR #88", target: "https://github.com/org/repo/pull/88" }],
+    });
+    expect(ledger.listRouterItems(undefined, 10, "report").items[0]?.id).toBe(finishRes.data.reportItem.id);
+
+    // 另建一张有 OPEN PR 的图，验证 --unmerged-ok 直接放行
+    const g2 = ledger.hubCall(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({ title: "对比实验", nodes: [{ key: "exp", title: "跑基准" }] }),
+    }).data.graph;
+    ledger.hubCall(lin.sessionId, "graph.done", { graphId: g2.id, nodeKey: "exp", branch: "hub/2-exp", summary: "基准数据已收集，不合入主干" });
+    const g2Finished = ledger.hubCall(
+      lin.sessionId,
+      "graph.finish",
+      { graphId: g2.id, unmergedOk: true, summary: "实验结论已归档，分支不合并" },
+      { graphPrs: { "hub/2-exp": { number: 89, state: "OPEN", url: "https://github.com/org/repo/pull/89" } } },
+    );
+    expect(g2Finished.data.graph.status).toBe("completed");
+  });
+
+  it("打回重做：已 done 节点换新 Worker 重跑收工后，节点产物与新交付单用新一轮汇报的提交号，不沿用上一轮的", () => {
+    const graph = ledger.hubCall(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({ title: "重做提交号", nodes: [{ key: "impl", title: "实现" }] }),
+    }).data.graph;
+    const w1 = ledger.hubCall(lin.sessionId, "worker.start", { title: "实现", task: "做", node: "impl", noWorktree: true }).data.worker;
+    finishWorkerTurn(w1.id, "做完了", "第一版", "1111111");
+    ledger.hubCall(lin.sessionId, "worker.end", { workerId: w1.id });
+    expect(ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph.nodes[0]!.artifact?.commit).toBe("1111111");
+
+    const w2 = ledger.hubCall(lin.sessionId, "worker.start", { title: "返工", task: "补", node: "impl", noWorktree: true }).data.worker;
+    finishWorkerTurn(w2.id, "做完了", "第二版", "2222222");
+    ledger.hubCall(lin.sessionId, "worker.end", { workerId: w2.id });
+
+    const node = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph.nodes[0]!;
+    expect(node.artifact).toMatchObject({ commit: "2222222", summary: "第二版" });
+    const notes = db
+      .all<{ id: number }>("SELECT id FROM messages WHERE dedupe_key GLOB ? ORDER BY id", `system:${lin.conversationId}:task_graph.ready_to_finish:${graph.id}:*`)
+      .map((r) => ledger.getMessage(r.id)!);
+    expect(notes.map((m) => m.status)).toEqual(["stopped", "queued"]);
+    expect(notes[1]!.text).toContain("提交 2222222");
+    expect(notes[1]!.text).not.toContain("1111111");
+  });
+
+  it("hub graph done --pr 手工补记的 PR（节点上没有分支）也进 finish 的 PR 检查：按网址查，开着的默认拦下，--unmerged-ok 放行", () => {
+    const graph = ledger.hubCall(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({ title: "手工补记 PR", nodes: [{ key: "doc", title: "改文档" }] }),
+    }).data.graph;
+    const prUrl = "https://github.com/org/repo/pull/301";
+    ledger.hubCall(lin.sessionId, "graph.done", { graphId: graph.id, nodeKey: "doc", prUrl });
+    // 不是 http(s) 网址的补记不交给 gh
+    ledger.hubCall(lin.sessionId, "graph.done", { graphId: graph.id, nodeKey: "doc", summary: "文档已改" });
+
+    expect(ledger.graphPrTargets!(lin.sessionId, graph.id)).toEqual([{ cwd: lin.folder, prUrl }]);
+    const open = { [prUrl]: { number: 301, state: "OPEN", url: prUrl } };
+    expect(() =>
+      ledger.hubCall(lin.sessionId, "graph.finish", { graphId: graph.id, summary: "结束" }, { graphPrs: open }),
+    ).toThrow(/还有未合并（OPEN）的 PR：节点「doc」补记的 PR：PR #301/);
+    expect(ledger.graphPrTargets!(lin.sessionId, graph.id)).toHaveLength(1);
+
+    const finished = ledger.hubCall(
+      lin.sessionId,
+      "graph.finish",
+      { graphId: graph.id, unmergedOk: true, summary: "用户决定不合" },
+      { graphPrs: open },
+    );
+    expect(finished.data.graph.status).toBe("completed");
+  });
+
+  it("交付单在事务外探测期间被收起（图被打回、finish 或 cancel）：探测结果不再改写已收起的消息", () => {
+    const graph = ledger.hubCall(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({ title: "探测竞态", nodes: [{ key: "only", title: "实现" }] }),
+    }).data.graph;
+    ledger.hubCall(lin.sessionId, "graph.done", { graphId: graph.id, nodeKey: "only", summary: "做完" });
+    const noteId = db.get<{ id: number }>(
+      "SELECT id FROM messages WHERE dedupe_key = ?",
+      `system:${lin.conversationId}:task_graph.ready_to_finish:${graph.id}:1`,
+    )!.id;
+    expect(ledger.graphDeliveryProbeTarget!(noteId)).not.toBeNull();
+    const before = ledger.getMessage(noteId)!;
+
+    // 探测进行中 PM 取消了整张图：交付单被收起
+    ledger.hubCall(lin.sessionId, "graph.cancel", { graphId: graph.id });
+    expect(ledger.getMessage(noteId)!.status).toBe("stopped");
+
+    changes = [];
+    ledger.enrichDeliveryNoteMessage!(noteId, { files: [{ file: "a.ts", added: 1, deleted: 0 }], prs: {} });
+    const after = ledger.getMessage(noteId)!;
+    expect(after.text).toBe(before.text);
+    expect(after.meta).toEqual(before.meta);
+    expect(changes).toEqual([]);
   });
 
   it("PM 会话自动/手动换代（handover）时，sessionPreamble 实时注入未完结的任务图状态，且 hub status 包含活跃任务图摘要", () => {

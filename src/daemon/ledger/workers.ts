@@ -188,7 +188,7 @@ export interface LedgerWorkersTaskGraphHooks {
   onWorkerEndedIn: (
     p: Pending,
     workerId: WorkerId,
-    opts: { hadLatestDoneReport: boolean; incomplete: boolean; summary?: string | null; branch?: string | null },
+    opts: { hadLatestDoneReport: boolean; incomplete: boolean; summary?: string | null; branch?: string | null; commit?: string | null },
   ) => string | null;
 }
 
@@ -659,8 +659,8 @@ export function createLedgerWorkers(
     enqueue(p, { type: "session.end", params: { sessionId: session.id, generation: session.generation } });
     stopQueued(p, ended);
     insertLine(p, ended, { event: "ended", status: null, summary: null, turnMessageId: null, deliver: null });
-    const latestOutcome = db.get<{ id: number; event: string | null; status: string | null; summary: string | null }>(
-      `SELECT id, CASE WHEN json_valid(meta) THEN json_extract(meta, '$.event') END AS event,
+    const latestOutcome = db.get<{ id: number; text: string; event: string | null; status: string | null; summary: string | null }>(
+      `SELECT id, text, CASE WHEN json_valid(meta) THEN json_extract(meta, '$.event') END AS event,
               CASE WHEN json_valid(meta) THEN json_extract(meta, '$.status') END AS status,
               CASE WHEN json_valid(meta) THEN json_extract(meta, '$.summary') END AS summary
          FROM messages
@@ -675,12 +675,14 @@ export function createLedgerWorkers(
       "SELECT max(id) AS id FROM messages WHERE conversation_id = ? AND sender IN ('pm', 'user')",
       ended.worker_conversation_id,
     )?.id ?? 0;
+    const parsedLatest = latestOutcome?.event === "report" ? parseWorkerReport(latestOutcome.text) : null;
     // 收工会顺带改任务图：绑定的节点标完成或变成等接手。回执里写明（nodeNote），不让项目经理事后才从 hub graph show 发现
     const nodeNote = options.taskGraphs?.onWorkerEndedIn(p, ended.id, {
       hadLatestDoneReport: !interrupted && latestOutcome?.event === "report" && latestOutcome.status === "done" && latestOutcome.id > latestInputId,
       incomplete: args.incomplete === true,
       summary: latestOutcome?.summary ?? null,
       branch: ended.branch,
+      commit: parsedLatest?.kind === "ok" ? parsedLatest.report.commit : null,
     }) ?? null;
     const cleanup =
       ended.workspace === "worktree"

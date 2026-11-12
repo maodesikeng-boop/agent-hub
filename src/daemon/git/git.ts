@@ -324,3 +324,66 @@ export async function pruneWorktrees(repoFolder: string, options: GitOptions = {
   const run = await runGit(repoFolder, ["worktree", "prune"], options.timeoutMs ?? GIT_TIMEOUT_MS, { LC_ALL: "C" });
   if (run.code !== 0) throw failed("git worktree prune", run);
 }
+
+export interface DiffFileStat {
+  file: string;
+  /** 二进制文件 git 输出 "-"，记为 null。 */
+  added: number | null;
+  deleted: number | null;
+}
+
+/** 解析 `git diff --numstat --no-renames -z` 的输出。 */
+export function parseDiffNumstatZ(stdout: string): DiffFileStat[] {
+  const out: DiffFileStat[] = [];
+  for (const record of stdout.split("\0")) {
+    if (record === "") continue;
+    const firstTab = record.indexOf("\t");
+    if (firstTab === -1) continue;
+    const secondTab = record.indexOf("\t", firstTab + 1);
+    if (secondTab === -1) continue;
+    const rawAdd = record.slice(0, firstTab);
+    const rawDel = record.slice(firstTab + 1, secondTab);
+    const file = record.slice(secondTab + 1);
+    if (file === "") continue;
+    const added = rawAdd === "-" ? null : Number.parseInt(rawAdd, 10);
+    const deleted = rawDel === "-" ? null : Number.parseInt(rawDel, 10);
+    out.push({
+      file,
+      added: added !== null && Number.isFinite(added) ? added : null,
+      deleted: deleted !== null && Number.isFinite(deleted) ? deleted : null,
+    });
+  }
+  return out;
+}
+
+/**
+ * 探测分支相对主干（`HEAD...<branch>`，若失败且有 baseCommit 则退回 `<baseCommit>...<branch>`）的改动文件与增删行数。
+ * 只读运行、带超时；失败、非仓库或找不到分支时返回 null（交付单降级省略改动文件块，不抛错阻塞消息投递）。
+ */
+export async function probeDiffNumstat(
+  repoFolder: string,
+  branch: string,
+  options: GitOptions & { baseCommit?: string | null } = {},
+): Promise<DiffFileStat[] | null> {
+  const trimmed = branch.trim();
+  if (trimmed === "" || trimmed.startsWith("-")) return null;
+  const timeoutMs = options.timeoutMs ?? GIT_PROBE_TIMEOUT_MS;
+  const ranges = [`HEAD...${trimmed}`];
+  if (options.baseCommit && /^[0-9a-f]{7,64}$/i.test(options.baseCommit)) {
+    ranges.push(`${options.baseCommit}...${trimmed}`);
+  }
+  for (const range of ranges) {
+    try {
+      const run = await runGit(
+        repoFolder,
+        [...GIT_READONLY_ARGS, "-c", "core.quotepath=false", "diff", "--numstat", "--no-renames", "-z", range, "--"],
+        timeoutMs,
+        { ...GIT_READONLY_ENV, LC_ALL: "C" },
+      );
+      if (run.code === 0) return parseDiffNumstatZ(run.stdout);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}

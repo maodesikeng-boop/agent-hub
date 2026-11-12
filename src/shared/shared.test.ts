@@ -394,6 +394,7 @@ describe("M2：系统消息", () => {
       "context.compacted",
       "driver.warning",
       "worker.max_time_exceeded",
+      "task_graph.ready_to_finish",
     ]);
     expect(systemEventOf(msg({ sender: "system", text: "x", meta: { event: "project.reassigned", projectId: 1, handoffId: 1 } }))).toBeNull();
   });
@@ -528,6 +529,7 @@ describe("M2：agent 接口", () => {
       "graph.decide",
       "graph.skip",
       "graph.cancel",
+      "graph.finish",
     ]);
     expect(hubPath("project.create")).toBe("/v1/project.create");
     expect(ENV_HUB_TOKEN).toBe("HUB_TOKEN");
@@ -821,6 +823,7 @@ describe("M3：hub 命令按角色放行", () => {
       "graph.decide": ["pm"],
       "graph.skip": ["pm"],
       "graph.cancel": ["pm"],
+      "graph.finish": ["pm"],
     });
     expect(hubCommandAllowed("worker", "status")).toBe(true);
     expect(hubCommandAllowed("worker", "persona.edit")).toBe(false);

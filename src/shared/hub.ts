@@ -98,6 +98,7 @@ export const HUB_COMMANDS = [
   "graph.decide",
   "graph.skip",
   "graph.cancel",
+  "graph.finish",
 ] as const;
 export type HubCommand = (typeof HUB_COMMANDS)[number];
 
@@ -140,6 +141,7 @@ export const HUB_COMMAND_ROLES: Readonly<Record<HubCommand, readonly AgentRole[]
   "graph.decide": ["pm"],
   "graph.skip": ["pm"],
   "graph.cancel": ["pm"],
+  "graph.finish": ["pm"],
 };
 
 export function hubCommandAllowed(role: AgentRole, command: HubCommand): boolean {
@@ -305,7 +307,7 @@ export interface HubArgsMap {
     choice: string;
     note?: string;
   };
-  /** `hub graph skip <nodeKey>`：跳过节点并在下游全跳过时级联跳过。 */
+  /** `hub graph skip <nodeKey>`：跳过单个节点（不级联跳过下游，下游在所有前置完成后照常解锁）。 */
   "graph.skip": {
     nodeKey: TaskNodeKey;
     graphId?: TaskGraphId;
@@ -315,6 +317,12 @@ export interface HubArgsMap {
   "graph.cancel": {
     graphId?: TaskGraphId;
     reason?: string;
+  };
+  /** `hub graph finish [<graphId>] [--unmerged-ok] --stdin`：所有节点完成后结束任务图并自动向总助投递汇报卡。 */
+  "graph.finish": {
+    graphId?: TaskGraphId;
+    unmergedOk?: boolean;
+    summary: string;
   };
 }
 
@@ -393,6 +401,7 @@ export interface PmActiveGraphSummary {
   readyCount: number;
   waitingUserCount: number;
   attentionCount: number;
+  readyToFinish: boolean;
 }
 
 /** 项目经理调 hub status。 */
@@ -520,6 +529,7 @@ interface HubDataMap {
   "graph.decide": { graph: TaskGraph };
   "graph.skip": { graph: TaskGraph };
   "graph.cancel": { graph: TaskGraph };
+  "graph.finish": { graph: TaskGraph; reportItem: RouterItem };
 }
 
 export type HubData<C extends HubCommand> = HubDataMap[C];

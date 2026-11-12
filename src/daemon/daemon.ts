@@ -71,7 +71,7 @@ import {
   createMultiVendorDriver,
   type ModelCatalogs,
 } from "./driver/index.ts";
-import { addWorktree } from "./git/index.ts";
+import { addWorktree, probeDiffNumstat, probePr } from "./git/index.ts";
 import { createFetchedQuota, mergeFetchedQuotas, queryFetchedQuota } from "./quota/fetched-quota.ts";
 import { vendorTranscriptPath } from "./driver/transcript.ts";
 import type { LedgerOptions } from "./ledger/ledger.ts";
@@ -482,7 +482,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     // worktree 准备命令（hub project setup）：在后台跑，不占执行器；网页上点停止、收工、关机时结束它
     const setup = createSetupRunner({ log });
     parts.setup = setup;
-    const deps = { driver, ledger, sessions, tokens, setup };
+    const deps = { driver, ledger, sessions, tokens, setup, probeDiffNumstat, probePr };
     executor.register("session.start", createSessionStartHandler(deps));
     executor.register("session.send", createSessionSendHandler(deps));
     // Worker 收工（hub worker end）登记 session.end：这一轮回完再关，然后作废它的令牌

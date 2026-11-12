@@ -44,16 +44,16 @@ import { API_ERRORS } from "../../shared/errors.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
 import { listenOnRunSocket } from "../run-socket.ts";
 import type { RouterSandboxGuard } from "../router/sandbox.ts";
-import type { WorkerPrProbeResult } from "../../shared/hub.ts";
+import type { WorkerPr, WorkerPrProbeResult } from "../../shared/hub.ts";
 import type { HubCallContext, WorkspaceProbe } from "../../shared/ledger.ts";
 import { isAgentVendor, type AgentVendor, type ModelCatalog, type VendorAvailability } from "../../shared/vendors.ts";
 import { vendorTranscriptPath } from "../driver/transcript.ts";
 import type { TranscriptRef } from "../driver/transcript.ts";
-import { probePr as defaultProbePr, probeWorkspace as defaultProbeWorkspace } from "../git/index.ts";
+import { probePr as defaultProbePr, probePrByUrl as defaultProbePrByUrl, probeWorkspace as defaultProbeWorkspace } from "../git/index.ts";
 
 export interface AgentApiOptions {
   /** reportHealth：500 记一次 "agent-api" 失败，成功一次清零；400–409 不算。 */
-  ledger: Pick<Ledger, "hubCall" | "sessionRole" | "reportHealth" | "workerStartFolder" | "workerPrTarget" | "workerTranscriptTarget">;
+  ledger: Pick<Ledger, "hubCall" | "sessionRole" | "reportHealth" | "workerStartFolder" | "workerPrTarget" | "graphPrTargets" | "workerTranscriptTarget">;
   /**
    * hub worker start 之前异步探主文件夹的 git（m3-plan 第 2.6 节），结果作为 HubCallContext.workspace 交给 hubCall：
    * 账本的事务里不做 I/O，git 卡住也不会停住整个守护进程。默认 daemon/git 的 probeWorkspace（每次 git 最多 GIT_PROBE_TIMEOUT_MS）。
@@ -64,6 +64,8 @@ export interface AgentApiOptions {
    * 没有 PR 返回 null（show 不写 PR 行）；gh 查不了返回 { unavailable: 原因 }（show 显示“PR 查不了（原因）”）。默认 gh pr list（最多 WORKER_PR_PROBE_TIMEOUT_MS）。
    */
   probePr?: (cwd: string, branch: string) => Promise<WorkerPrProbeResult>;
+  /** hub graph finish 前按网址查手工补记（hub graph done --pr）的 PR。默认 daemon/git 的 probePrByUrl（gh pr view）。 */
+  probePrByUrl?: (cwd: string, url: string) => Promise<WorkerPrProbeResult>;
   /**
    * hub worker show 之前找这个 Worker 会话在厂商那边的原始记录文件，结果作为 HubCallContext.transcript。
    * 找不到返回 null。默认驱动层的 vendorTranscriptPath（只读文件系统）。
@@ -362,6 +364,16 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
       reason: { type: "string", maxLength: MAX_REASON_CHARS * 2 },
     },
   },
+  "graph.finish": {
+    type: "object",
+    additionalProperties: false,
+    required: ["summary"],
+    properties: {
+      graphId: workerIdField,
+      unmergedOk: { type: "boolean" },
+      summary: { type: "string", minLength: 1, maxLength: MAX_TASK_BYTES },
+    },
+  },
 };
 
 /** 要查字符的字段：path 必须是绝对路径、不含 NUL；name 不含 NUL 和控制字符。 */
@@ -388,6 +400,7 @@ const BYTE_LIMITS: Partial<Record<HubCommand, Record<string, number>>> = {
   "schedule.add": { prompt: MAX_TASK_BYTES },
   "graph.create": { specJson: MAX_GRAPH_SPEC_BYTES },
   "graph.patch": { specJson: MAX_GRAPH_SPEC_BYTES },
+  "graph.finish": { summary: MAX_TASK_BYTES },
 };
 
 class HubError extends Error {
@@ -497,6 +510,7 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
   const { ledger, tokens } = opts;
   const probeWorkspace = opts.probeWorkspace ?? ((folder: string) => defaultProbeWorkspace(folder));
   const probePr = opts.probePr ?? ((cwd: string, branch: string) => defaultProbePr(cwd, branch));
+  const probePrByUrl = opts.probePrByUrl ?? ((cwd: string, url: string) => defaultProbePrByUrl(cwd, url));
   const findTranscript = opts.findTranscript ?? ((ref: TranscriptRef) => vendorTranscriptPath(ref));
 
   /** hubCall 之前要异步准备的东西：worker.start（没带 noWorktree、有项目）要探 git，worker.show 要查 PR，models 要查模型目录。 */
@@ -515,6 +529,22 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
       const ref = ledger.workerTranscriptTarget(sessionId, body.workerId as number);
       const transcript = ref === null ? null : findTranscript(ref);
       return { ...(pr === null ? {} : { pr }), transcript };
+    }
+    if (command === "graph.finish") {
+      const targets = ledger.graphPrTargets?.(sessionId, body.graphId as number | undefined) ?? [];
+      if (targets.length === 0) return {};
+      const entries = await Promise.all(
+        targets.map(async (t) => {
+          const key = "prUrl" in t ? t.prUrl : t.branch;
+          const res = await ("prUrl" in t ? probePrByUrl(t.cwd, t.prUrl) : probePr(t.cwd, t.branch)).catch(() => null);
+          return res !== null && !("unavailable" in res) ? ([key, res] as const) : null;
+        }),
+      );
+      const graphPrs: Record<string, WorkerPr> = {};
+      for (const entry of entries) {
+        if (entry !== null) graphPrs[entry[0]] = entry[1];
+      }
+      return { graphPrs };
     }
     if (command !== "worker.start") return {};
     const context: HubCallContext = {};

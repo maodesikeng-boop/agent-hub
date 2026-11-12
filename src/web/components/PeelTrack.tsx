@@ -1,7 +1,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { ChevronRight, Loader2, Maximize2 } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import type { ConversationId, TaskGraph, TaskGraphId, TaskNode, WorkerId } from "../../shared/index.ts";
+import { isTaskGraphReadyToFinish, type ConversationId, type TaskGraph, type TaskGraphId, type TaskNode, type WorkerId } from "../../shared/index.ts";
 import type { HubClient } from "../client.ts";
 import { useClient } from "../device-scope.tsx";
 import { cleanPieceTitle, errorLine, errorText, errorTitle, type ErrorLike } from "../format.ts";
@@ -1209,6 +1209,9 @@ export const PeelTrackList = memo(function PeelTrackList({
                 <span className={cn("min-w-0 flex-1 truncate text-body", open && "font-semibold")}>
                   {graph.title}
                 </span>
+                {isTaskGraphReadyToFinish(graph) && (
+                  <span className="shrink-0 text-xs text-muted-foreground">Ready to finish</span>
+                )}
                 <ChevronRight
                   className={cn(
                     "size-3.5 shrink-0 text-muted-foreground transition-transform duration-200 ease-out motion-reduce:transition-none",

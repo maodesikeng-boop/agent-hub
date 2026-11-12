@@ -253,11 +253,10 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
     expect(buildPmModePrompt("hands_on", true)).toContain("做完告诉用户做了什么、改了哪些文件");
   });
 
-  it("只写现有命令做得到的事：自动开工、交棒、finish、ask --node、confirm、review 标记等不出现，且撤掉“一步也建图”；建图手册不常驻，只留指路", () => {
+  it("只写现有命令做得到的事：自动开工、交棒、ask --node、confirm、review 标记等不出现，且撤掉“一步也建图”；建图手册与交付单细节不常驻，只留指路", () => {
     for (const mode of PM_MODES) {
       const prompt = buildLaunchPrompt(projectContext({ pm: { id: 1, name: "小林", mode, persona: "" } }), dir);
       for (const gone of [
-        `${hub} graph finish`,
         `${hub} ask --node`,
         "--unmerged-ok",
         "confirm",
@@ -616,7 +615,7 @@ describe("提示词：项目经理（M3）", () => {
     }
   });
 
-  it("验收只看证据（第 5 步）：汇报、PR 的改动文件名单和检查结果、截图或实测输出；不读代码 diff，代码质量由审查负责；该审查没审查的收工前补上（做法在手册里）", () => {
+  it("验收只看证据（第 5 步）：汇报、PR 的改动文件名单和检查结果、截图或实测输出；不读代码 diff，代码质量由审查负责；该审查没审查的交付前补上，建了图的用 hub graph finish 结束", () => {
     for (const mode of PM_MODES) {
       const section = PM_MODE_PROMPTS[mode];
       const delivery = section.slice(section.indexOf("## 5. 交付"), section.indexOf("## 通用规矩"));
@@ -624,9 +623,9 @@ describe("提示词：项目经理（M3）", () => {
         "**验收只看证据**：汇报、PR 的改动文件名单和检查结果、截图或实测输出。",
         "不读代码 diff，代码质量由审查负责。",
         `证据不够就打回让 Worker 补（\`${hub} worker send\`）`,
-        "**该审查而没审查的，收工前补上**：改动碰了第 2 步那四类，就按任务图手册里的做法补一个审查。",
+        "**该审查而没审查的，交付前补上**：改动碰了第 2 步那四类，就按任务图手册里的做法补一个审查。",
         "合并和发布按项目 `AGENTS.md` 的规矩做。",
-        "向用户汇报结果。",
+        `向用户汇报结果；建了图的，合并后用 \`${hub} graph finish\` 结束（摘要会自动同步给总助）。`,
       ]) {
         expect(delivery, word).toContain(word);
       }
@@ -727,7 +726,7 @@ describe("提示词：项目经理（M3）", () => {
       `最近几步（默认 ${WORKER_LOG_DEFAULT_STEPS} 步）`,
       `${hub} ask [--option <选项>...] --stdin`,
       // 任务图缩成一行，用法在任务图手册里（全部子命令按 HUB_COMMANDS 拼）
-      `- **任务图**：\`${hub} graph create|show|list|ask|patch|done|decide|skip|cancel\`，用法在任务图手册里（第 2 步“建图”那一条写了去哪看，也可以 \`${hub} help graph\`）`,
+      `- **任务图**：\`${hub} graph create|show|list|ask|patch|done|decide|skip|cancel|finish\`，用法在任务图手册里（第 2 步“建图”那一条写了去哪看，也可以 \`${hub} help graph\`）`,
     ]) {
       expect(HUB_USAGE_PROMPT, sub).toContain(sub);
     }

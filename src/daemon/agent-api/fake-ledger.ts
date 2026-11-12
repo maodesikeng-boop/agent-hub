@@ -3,6 +3,7 @@ import {
   LedgerRequestError,
   hubCommandAllowed,
   type AgentRole,
+  type GraphPrTarget,
   type HealthModule,
   type HubArgs,
   type HubCallContext,
@@ -19,7 +20,7 @@ export interface FakeHubCall {
   args: unknown;
 }
 
-export class FakeHubLedger implements Pick<Ledger, "hubCall" | "sessionRole" | "reportHealth" | "workerStartFolder" | "workerPrTarget" | "workerTranscriptTarget"> {
+export class FakeHubLedger implements Pick<Ledger, "hubCall" | "sessionRole" | "reportHealth" | "workerStartFolder" | "workerPrTarget" | "graphPrTargets" | "workerTranscriptTarget"> {
   readonly calls: FakeHubCall[] = [];
   /** 每次 hubCall 收到的 context（和 calls 一一对应）。 */
   readonly contexts: HubCallContext[] = [];
@@ -30,6 +31,8 @@ export class FakeHubLedger implements Pick<Ledger, "hubCall" | "sessionRole" | "
   startFolder: string | null = null;
   /** workerPrTarget 返回什么；默认 null（不查 PR）。 */
   prTarget: { cwd: string; branch: string } | null = null;
+  /** graphPrTargets 返回什么；默认空数组（不查 PR）。 */
+  graphTargets: GraphPrTarget[] = [];
   /** workerTranscriptTarget 返回什么；默认 null（找不到原始记录）。 */
   transcriptTarget: { vendor: string; vendorSessionId: string; cwd: string } | null = null;
   readonly healthReports: [HealthModule, string | null][] = [];
@@ -67,6 +70,10 @@ export class FakeHubLedger implements Pick<Ledger, "hubCall" | "sessionRole" | "
 
   workerPrTarget(_sessionId: SessionId, _workerId: number): { cwd: string; branch: string } | null {
     return this.prTarget;
+  }
+
+  graphPrTargets(_sessionId: SessionId, _graphId?: number): GraphPrTarget[] {
+    return this.graphTargets;
   }
 
   reportHealth(module: HealthModule, error: string | null): void {

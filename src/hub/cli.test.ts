@@ -498,7 +498,7 @@ describe("hub cli", () => {
       }
     });
 
-    it("graph create / show / list / ask / patch / done / decide / skip / cancel parse cleanly", async () => {
+    it("graph create / show / list / ask / patch / done / decide / skip / cancel / finish parse cleanly", async () => {
       const spec = JSON.stringify({ nodes: [{ key: "n1", title: "第一步" }] });
       expect((await hub(["graph", "create", "--title", "主线流图", "--stdin"], { stdin: stdinOf(`${spec}\n`) })).code).toBe(0);
       expect((await hub(["graph", "show"])).code).toBe(0);
@@ -536,6 +536,8 @@ describe("hub cli", () => {
       expect((await hub(["graph", "decide", "confirm-mcp", "--choice", "全量同步", "--note", "先备份", "--graph", "9"])).code).toBe(0);
       expect((await hub(["graph", "skip", "n1", "--reason", "不需要了", "--graph", "9"])).code).toBe(0);
       expect((await hub(["graph", "cancel", "9", "--reason", "改方案"])).code).toBe(0);
+      expect((await hub(["graph", "finish", "--stdin"], { stdin: stdinOf("已合并发布\n") })).code).toBe(0);
+      expect((await hub(["graph", "finish", "9", "--unmerged-ok", "--stdin"], { stdin: stdinOf("实验分支保留不合并\n") })).code).toBe(0);
 
       expect(ledger.calls.map((c) => ({ command: c.command, args: c.args }))).toEqual([
         { command: "graph.create", args: { title: "主线流图", specJson: spec } },
@@ -567,6 +569,8 @@ describe("hub cli", () => {
         { command: "graph.decide", args: { nodeKey: "confirm-mcp", graphId: 9, choice: "全量同步", note: "先备份" } },
         { command: "graph.skip", args: { nodeKey: "n1", graphId: 9, reason: "不需要了" } },
         { command: "graph.cancel", args: { graphId: 9, reason: "改方案" } },
+        { command: "graph.finish", args: { summary: "已合并发布" } },
+        { command: "graph.finish", args: { graphId: 9, unmergedOk: true, summary: "实验分支保留不合并" } },
       ]);
     });
 
@@ -583,6 +587,8 @@ describe("hub cli", () => {
       [["graph", "create", "--title", "缺stdin"]],
       [["graph", "ask", "confirm-mcp"]],
       [["graph", "patch"]],
+      [["graph", "finish"]],
+      [["graph", "finish", "1", "2", "--stdin"]],
       [["graph", "decide", "confirm-mcp"]],
       [["graph", "list", "--status", "bogus"]],
     ])("usage error: hub %j", async (argv) => {

@@ -753,6 +753,10 @@ export const GRAPH_TEXT_NODE_WORKERS_MAX = 3;
  * 一行进度和图间分隔符也计入预算；先为全部图预留最简进度，再按最近更新时间展开。
  */
 export const HANDOVER_GRAPHS_MAX_CHARS = 8_000;
+/** 任务图全部节点完成后发给项目经理的交付单上限（字，按 Unicode 码点）。 */
+export const DELIVERY_NOTE_MAX_CHARS = 6_000;
+/** 交付单里列出的相对主干改动文件条数上限（超过显示“另有 N 个文件省略”）。 */
+export const DELIVERY_FILES_MAX = 60;
 /** 历史任务图分页大小与 CLI 列表默认条数。 */
 export const GRAPH_HISTORY_PAGE_SIZE = 20;
 export const HUB_GRAPH_LIST_LIMIT = 20;

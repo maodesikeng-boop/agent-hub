@@ -343,7 +343,15 @@ export interface HubCallContext {
   vendorStatus?: { vendor: AgentVendor; availability: VendorAvailability; device: string };
   /** models：agent 接口按 --vendor / --refresh 异步查好的模型目录；不传时账本用缓存或打包目录兜底。 */
   modelCatalogs?: readonly ModelCatalog[];
+  /** graph.finish：agent 接口在结束图前异步查好的 PR（按分支名或手工补记的 PR 网址索引；查不到或未装 gh 的不在此表中，不硬拦）。 */
+  graphPrs?: Readonly<Record<string, WorkerPr>>;
 }
+
+/**
+ * graph.finish 前要查 PR 的一个目标：按分支查（gh pr list --head），或按 hub graph done --pr 手工补记的网址查（gh pr view）。
+ * 查到的结果以分支名或网址为键放进 HubCallContext.graphPrs。
+ */
+export type GraphPrTarget = { cwd: string; branch: string } | { cwd: string; prUrl: string };
 
 /** 后台写交接时跑腿的（daemon/handover/runner.ts）用的几个方法见 LedgerHandoverWork（shared/handover.ts）。 */
 export interface Ledger extends LedgerHandoverWork {
@@ -490,6 +498,31 @@ export interface Ledger extends LedgerHandoverWork {
    * 用来找厂商自己存的原始记录在哪（驱动层的 vendorTranscriptPath）。不是项目经理的会话、不是它派的 → null。
    */
   workerTranscriptTarget(sessionId: SessionId, workerId: WorkerId): { vendor: string; vendorSessionId: string; cwd: string } | null;
+  /**
+   * agent 接口在 graph.finish 之前调（只读）：取出目标任务图里已完成节点记录的各分支、手工补记的 PR 网址与查询目录。
+   * 不是项目经理的会话、找不到图或什么都没记 → 空数组（不用查，hubCall 自己会报错或放行）。
+   */
+  graphPrTargets?(sessionId: SessionId, graphId?: TaskGraphId): GraphPrTarget[];
+  /**
+   * session.send 处理函数在发送 task_graph.ready_to_finish 交付单前调（只读）：取出该交付单对应任务图的主文件夹与各分支信息，
+   * 以便异步探测 git diff --numstat 与 PR 状态。已探测过或非交付单消息返回 null。
+   */
+  graphDeliveryProbeTarget?(messageId: MessageId): {
+    graphId: TaskGraphId;
+    repoFolder: string | null;
+    branches: Array<{ branch: string; cwd: string; baseCommit: string | null }>;
+  } | null;
+  /**
+   * session.send 处理函数异步探完 git diff --numstat 与 PR 状态后调：将改动文件名单与 PR 状态合并进交付单消息正文，
+   * 并标记 meta.diffProbed = true 防止重发时重复探测。
+   */
+  enrichDeliveryNoteMessage?(
+    messageId: MessageId,
+    input: {
+      files?: ReadonlyArray<{ file: string; added: number | null; deleted: number | null }>;
+      prs?: Readonly<Record<string, WorkerPr>>;
+    },
+  ): void;
   /** 见 LaunchContext。 */
   getLaunchContext(sessionId: SessionId): LaunchContext;
   /**

@@ -334,3 +334,34 @@ describe("跨设备：右栏的请求走当前设备的接口", () => {
     await waitFor(() => expect(window.location.hash).toBe(`#/d/${TOKYO}/w/30`));
   });
 });
+
+describe("待交付状态展示（Ready to finish）", () => {
+  it("所有节点均已到达终态但图仍 active 时，果皮轨头与全览弹窗均克制显示 Ready to finish；仍有未完节点时不显示", async () => {
+    const user = userEvent.setup();
+    const { ws } = await bootSingle(graphSnapshot());
+    const rail = await waitFor(sidePanel);
+    expect(within(rail).queryByText("Ready to finish")).not.toBeInTheDocument();
+
+    act(() =>
+      ws.push({
+        seq: 30,
+        type: "task_graph.updated",
+        data: {
+          graph: {
+            ...graph(),
+            nodes: [
+              makeNode({ key: "build", title: "构建产物", status: "done", sortOrder: 0, workerIds: [3] }),
+              makeNode({ key: "gate", title: "确认上线", kind: "gate", status: "skipped", sortOrder: 1 }),
+            ],
+          },
+        },
+      }),
+    );
+
+    expect(await within(rail).findByText("Ready to finish")).toBeInTheDocument();
+
+    await user.click(within(rail).getByRole("button", { name: "Zoom" }));
+    const zoom = await screen.findByRole("dialog", { name: "发布流水线" });
+    expect(within(zoom).getByText("Ready to finish")).toBeInTheDocument();
+  });
+});

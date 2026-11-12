@@ -7,11 +7,13 @@ export {
   hasUncommittedChanges,
   isBranchMergedToMain,
   isRepoWithCommit,
+  parseDiffNumstatZ,
+  probeDiffNumstat,
   probeWorkspace,
   probeWorktreeForRemoval,
   pruneWorktrees,
   realpathLoose,
   removeWorktree,
 } from "./git.ts";
-export { probePr } from "./pr.ts";
-export type { AddWorktreeOptions, AddWorktreeResult, GitOptions } from "./git.ts";
+export { probePr, probePrByUrl } from "./pr.ts";
+export type { AddWorktreeOptions, AddWorktreeResult, DiffFileStat, GitOptions } from "./git.ts";

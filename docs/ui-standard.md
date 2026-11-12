@@ -106,7 +106,7 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
 | 总助处理中 | Working… |
 | 新简报分隔线 / 回复被截断 / 去向行状态词（已启动、已暂停、已结束、已创建） | New / Reply truncated / Started / Paused / Ended / Created |
 | 选项卡片补充框占位 / Router 发令框占位 | Add a note, or type a custom reply… / Tell Router, or type @ to pick a project… / Tell Router… |
-| 任务流图 / 等你拍板 / 待启动 / 受阻 / 需处理 / 已跳过 | Task Graph / Waiting on you / Ready / Blocked / Needs attention / Skipped |
+| 任务流图 / 待交付 / 等你拍板 / 待启动 / 受阻 / 需处理 / 已跳过 | Task Graph / Ready to finish / Waiting on you / Ready / Blocked / Needs attention / Skipped |
 | 补充说明 / 跳过此步 / 取消任务图 / 已完成卷 / 待解锁卷 / 加载更多 / 放大查看 / 同层折叠并行数 | Add note / Skip step / Cancel graph / N done / N next / Load more / Zoom / +N parallel |
 | 集成 / 跨厂商同步 / 扫描预览 / 立即同步 | Integrations / Vendor sync / Scan… / Sync preview / Sync |
 | MCP 服务 / 技能 / 云端连接器 / 取消勾选将移除 / 已有同名配置原样保留 | MCP servers / Skills / Cloud connectors / Unchecked — will be removed / Kept existing |
@@ -302,7 +302,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 
 - **任务级小切面进度轮（`SliceWheelIcon`）与多任务手风琴**：
   - 每个多阶段任务标题左侧配一枚小水果切面轮（默认 `20px` 换算为 `1.25rem`，随界面四档字号缩放）：取所属项目经理的水果配色（`paletteOf(avatarKey)`），按任务阶段数切瓣——已完成（`done`）果肉饱满，进行中（`running` / `ready`）外圈柔淡、果心向生长，等你拍板（`waiting_user`）强调色微凸，需关注（`attention`）琥珀色，未解锁（`pending`）留淡轮廓；同层相邻并行阶段刀口只切到果肉外半圈，果心相连。
-  - 任务标题行右侧配放大全览按钮（`Maximize2`，`aria-label="Zoom"`）与手风琴箭头（`ChevronRight`）。
+  - 任务标题行右侧配放大全览按钮（`Maximize2`，`aria-label="Zoom"`）与手风琴箭头（`ChevronRight`）；当活跃任务图全部阶段已进入终态（`done` / `skipped`）等待验收交付时，箭头左侧克制显示一行 `12px` 次要文字 `Ready to finish`（`text-xs text-muted-foreground`，全览弹窗左上状态词同样变为 `Ready to finish`），不加任何底色块或胶囊。
   - **多活跃任务优先级与折叠**：单项目同时有多个活跃任务图时，含 `waiting_user` 或 `attention` 节点的任务排在最前并默认展开；其余后台进行中任务默认收成带小切面进度轮的单行标题（无紧急任务时排第一的任务默认展开，其余收起），点击任务标题手风琴式展开/收起。
 - **果皮轨（Peel Track）纵向阶段与多股并行轨道**：
   - 普通阶段节点去掉外框，每行左侧配纵向果皮轨道槽 `<svg aria-hidden="true">`（1～2 股泳道时固定 `2.5rem` 即标准档 `40px`；3 股及以上并行泳道时按每多一股 `+0.875rem` 自适应加宽，封顶 `6rem` 即 `96px`，全程用 `rem` 随界面字号缩放，保住右侧标题净宽且零横向滚动条），右侧为单行紧凑标题（`text-minor`，进行中挂 `.status-shimmer` 流光，未解锁 `text-muted-foreground`）与绑定 `#编号`（`text-xs text-muted-foreground tabular-nums`，点击整行打开对应 Piece 对话）；严禁用 `·`、`|`、`/` 拼接，触屏热区满足 `pointer-coarse:min-h-11`。

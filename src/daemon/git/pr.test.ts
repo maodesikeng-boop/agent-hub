@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createResolveFolder } from "../ledger/files.ts";
 import { createLedger } from "../ledger/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
-import { describeGhError, parsePrList, probePr } from "./pr.ts";
+import { describeGhError, parsePrList, parsePrView, probePr, probePrByUrl } from "./pr.ts";
 
 let root: string;
 beforeEach(() => {
@@ -103,5 +103,30 @@ describe("probePr", () => {
     } finally {
       db.close();
     }
+  });
+});
+
+describe("probePrByUrl（hub graph finish 查 hub graph done --pr 手工补记的 PR）", () => {
+  it("gh pr view 输出单个对象：取编号、状态、网址", async () => {
+    fakeGh(`[ "$1 $2" = "pr view" ] || exit 9; echo '{"number":301,"state":"OPEN","url":"'"$3"'","title":"x"}'`);
+    const url = "https://github.com/o/r/pull/301";
+    expect(await probePrByUrl(root, url)).toEqual({ number: 301, state: "OPEN", url });
+  });
+
+  it("不是 http(s) 网址（含以 - 开头会被当成参数的）不调 gh，返回 null", async () => {
+    fakeGh("echo called >&2; exit 1");
+    expect(await probePrByUrl(root, "--repo=evil/x")).toBeNull();
+    expect(await probePrByUrl(root, "#301")).toBeNull();
+  });
+
+  it("gh 报错（比如不是 GitHub 的网址）：返回不可用原因，不抛错", async () => {
+    fakeGh("echo 'none of the git remotes configured for this repository point to a known GitHub host' >&2; exit 1");
+    expect(await probePrByUrl(root, "https://example.test/pr/1")).toMatchObject({ unavailable: expect.any(String) });
+  });
+
+  it("parsePrView：不是对象或缺字段返回 null", () => {
+    expect(parsePrView("not json")).toBeNull();
+    expect(parsePrView("[]")).toBeNull();
+    expect(parsePrView('{"number":"1","state":"OPEN","url":"u"}')).toBeNull();
   });
 });
