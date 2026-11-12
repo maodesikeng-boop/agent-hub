@@ -19,6 +19,7 @@
     "test:ci": "vitest run --reporter=verbose --reporter=github-actions --reporter=junit --outputFile.junit=vitest-junit.xml",
     "check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p src/web/tsconfig.json && tsc --noEmit -p src/web/tsconfig.sw.json && vitest run --reporter=dot",
     "smoke": "node test/smoke/main.ts",
+    "eval": "node test/eval/cli.ts",
     "app:mac": "bash scripts/build-mac-app.sh"
   },
   "devDependencies": {
