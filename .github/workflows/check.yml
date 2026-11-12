@@ -105,9 +105,9 @@ jobs:
           }
 
           if ! apt_install; then
-            echo "::warning::默认镜像（mirror+file:/etc/apt/apt-mirrors.txt → azure.archive.ubuntu.com）不可用，切换到 archive.ubuntu.com / security.ubuntu.com 重试"
+            echo "::warning::默认镜像（mirror+file:/etc/apt/apt-mirrors.txt → azure.archive.ubuntu.com）不可用，切换到 Ubuntu 官方源 archive.ubuntu.com 重试"
             # 24.04 是 deb822 的 *.sources，22.04 及以前是 sources.list；两种都改。
-            # mirror+file:... 与 azure.archive 一律换成官方 archive；security 本来就是 security.ubuntu.com。
+            # mirror+file:... 与 azure.archive 一律换成官方 archive.ubuntu.com（security 段同样指向它，archive 也托管 noble-security）。
             sudo sed -i -E \
               -e 's#mirror\+file:/etc/apt/apt-mirrors\.txt#http://archive.ubuntu.com/ubuntu/#g' \
               -e 's#https?://azure\.archive\.ubuntu\.com/ubuntu/?#http://archive.ubuntu.com/ubuntu/#g' \
