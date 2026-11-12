@@ -103,6 +103,7 @@ async function main(): Promise<void> {
     const realClaude = originalEnv.AGENT_HUB_CLAUDE || whichFirst("claude", originalEnv.PATH);
     if (!realClaude) fail("找不到 claude：先装好并登录 Claude Code。");
     const input = pmSandboxInput(SOURCE_REPO, originalEnv);
+    input.readDenied = [...(input.readDenied ?? []), runsDir];
     const probeDir = join(runDir, "probe");
     mkdirSync(probeDir, { recursive: true });
     input.writableDirs = [probeDir];

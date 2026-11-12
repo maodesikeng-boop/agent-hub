@@ -50,7 +50,15 @@ export function realOr(path: string): string {
     }
   }
 }
-const aliases = (paths: string[]) => [...new Set(paths.flatMap((p) => [resolve(p), realOr(p)]))];
+/**
+ * 路径的所有写法：字面路径、完全展开软链的真实路径，以及“只展开父目录、末级保留原名”的路径。
+ * 第三种必须有：macOS 上 /tmp 是 /private/tmp 的软链，Node 的 realpath 会逐级 lstat /private/tmp/…/node_modules（末级本身是软链），
+ * 完全展开后末级已是别处，/private/tmp 这一侧的路径就没有任何写法对得上。
+ */
+const aliases = (paths: string[]) => [...new Set(paths.flatMap((p) => {
+  const abs = resolve(p);
+  return [abs, realOr(abs), join(realOr(dirname(abs)), basename(abs))];
+}))];
 export function mainRepoRoot(repo: string): string {
   const common = execFileSync("git", ["-C", repo, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" }).trim();
   return dirname(realOr(common));
@@ -75,6 +83,28 @@ export function whichFirst(name: string, pathEnv = process.env.PATH ?? ""): stri
 }
 
 const sq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+
+/** 替身的名字：gh、git 和只记录的那几个。 */
+export const SHIM_NAMES = ["gh", "git", ...RECORD_ONLY_TOOLS] as const;
+
+/**
+ * CLAUDE_ENV_FILE 的内容。claude 每条 Bash 的拼法是：source 用户登录 shell 的快照 → source 这个文件 → 再跑命令（claude 2.1.x 实测），
+ * 所以这里是最后一道：
+ * 1. 把替身目录放回 PATH 最前面（快照里的 PATH 是用户 .zprofile、/etc/zprofile 的 path_helper 排过的，真 gh 在 /opt/homebrew/bin、~/.local/bin）。
+ * 2. 快照里用户的同名别名、函数（`alias gh=…`、`gh() {…}`）优先级比 PATH 高，`command -v gh` 会先命中它们：一并去掉。
+ * 3. 清命令路径缓存（hash -r），之前解析出的真 gh 路径不再生效。
+ * 真 gh 万一还是被调到（比如命令里又起了一个登录 shell，path_helper 重排了 PATH），沙箱也不许它执行（pmSandboxProfile 的 denyExec）。
+ */
+export function claudeEnvScript(binDir: string): string {
+  return [
+    `export PATH=${sq(binDir)}:"$PATH"`,
+    `for __eval_shim in ${SHIM_NAMES.join(" ")}; do unalias "$__eval_shim" 2>/dev/null; unset -f "$__eval_shim" 2>/dev/null; done`,
+    "unset __eval_shim",
+    "hash -r 2>/dev/null",
+    ":",
+    "",
+  ].join("\n");
+}
 
 export interface ShimPaths {
   binDir: string;
@@ -159,9 +189,9 @@ export function isolationEnv(input: IsolationInput): Record<string, string> {
     ].join("\n"),
   );
   // claude 的 Bash 先套用户登录 shell 的快照（用户的 .zprofile 会把 ~/.local/bin、homebrew 提到 PATH 最前面，真 gh 就在那里），
-  // 再 source CLAUDE_ENV_FILE：在这里把替身目录放回最前面。真 gh 万一还是被调到，沙箱也不许它执行（pmSandboxProfile）。
+  // 再 source CLAUDE_ENV_FILE：在这里把替身目录放回最前面（claudeEnvScript）。
   const claudeEnvFile = join(input.workDir, "claude-env.sh");
-  writeFileSync(claudeEnvFile, `export PATH=${sq(input.binDir)}:"$PATH"\n`);
+  writeFileSync(claudeEnvFile, claudeEnvScript(input.binDir));
   const routerConfigFile = join(input.workDir, "router.json");
   writeFileSync(routerConfigFile, JSON.stringify(input.routerConfig));
   return {
@@ -207,6 +237,31 @@ export interface PmSandboxInput {
   denyExec: string[];
   /** 真守护进程可能听的本机端口。 */
   daemonPorts: number[];
+  /** 当前用户的 uid（claude 的临时目录叫 claude-<uid>）；默认 process.getuid?.()，取不到就放行任意 claude-<数字>。 */
+  uid?: number;
+}
+
+/**
+ * claude 在 claudeConfigDir 下跑多轮工具调用必须写的状态目录（别的一概不放行）：
+ * todos、tasks（待办）、statsig、telemetry（统计）、debug（日志）、shell-snapshots（Bash 的 shell 快照）、session-env（会话环境）、
+ * file-history（编辑前备份）、backups（.claude.json 的备份）、cache。
+ * 不含：CLAUDE.md、settings*.json、hooks（pmSandboxProfile 末尾再显式禁一遍）、projects（只放行被测项目自己的）、plugins、skills。
+ */
+export const CLAUDE_CONFIG_STATE_DIRS = ["todos", "tasks", "statsig", "telemetry", "debug", "shell-snapshots", "session-env", "file-history", "backups", "cache"] as const;
+/** claude 写在用户主目录下的缓存、锁（相对 home）。不含 ~/.local/share/claude：那里是 claude 程序本体（versions/）。 */
+export const CLAUDE_HOME_STATE_DIRS = [".cache/claude", ".local/state/claude", "Library/Caches/claude-cli-nodejs"] as const;
+
+/**
+ * claude 的 Bash 工具即使设了 TMPDIR 也会在 /tmp/claude-<uid>/ 下建任务目录（输出文件、cwd 记录；macOS 上 /tmp 是 /private/tmp 的软链），
+ * 目录太长（>44 字节）时子进程的临时目录也退回这里；Bash 每条命令还在 /tmp/claude-<id>-cwd 记工作目录。
+ * 真 Worker 的写沙箱（daemon/driver/write-scope.ts 的 seatbeltProfile）是“默认放行、只禁数据目录”，/tmp 本来就能写，所以它没碰过这个 EPERM；
+ * 这里是“默认禁写”，必须按 claude 的写法放行。
+ */
+export function claudeScratchRules(uid: number | undefined): string[] {
+  const dirs = uid === undefined
+    ? [`(regex ${sbRegex("^/private/tmp/claude-[0-9]+(/|$)")})`]
+    : aliases([`/tmp/claude-${uid}`, `/private/tmp/claude-${uid}`]).map((p) => `(subpath ${sbString(p)})`);
+  return [...dirs, `(regex ${sbRegex("^/private/tmp/claude-[-A-Za-z0-9_]+-cwd$")})`];
 }
 
 /** 真守护进程在数据目录 run/ 下的 socket（src/shared/paths.ts）。 */
@@ -228,10 +283,26 @@ export function pmSandboxProfile(input: PmSandboxInput): string {
   const subpaths = (paths: string[]) => aliases(paths).map((p) => `(subpath ${sbString(p)})`).join(" ");
   const projectDirs = (input.projectDirs ?? []).flatMap((p) => aliases([p]).map((a) => join(projects, claudeProjectDirName(a))));
   const writable = [...(input.writableDirs ?? []), ...projectDirs,
-    ...["todos", "statsig", "debug"].map((p) => join(input.claudeConfigDir, p))];
+    ...CLAUDE_CONFIG_STATE_DIRS.map((p) => join(input.claudeConfigDir, p)),
+    ...CLAUDE_HOME_STATE_DIRS.map((p) => join(input.home, p))];
   const denied = [...input.realDataDirs, input.realRepo, ...(input.mainRepo ? [input.mainRepo] : []),
     ...[".ssh", ".config/gh", ".netrc", ".npmrc", ".aws", ".kube"].map((p) => join(input.home, p)),
     projects, join(input.claudeConfigDir, "CLAUDE.md"), ...(input.readDenied ?? [])];
+  // Node realpath 逐级 lstat 祖先；只恢复目录节点的 metadata，不恢复列目录或读取兄弟项。
+  const readable = aliases([...(input.dependencies ?? [join(input.realRepo, "node_modules")]),
+    ...(input.writableDirs ?? []), ...projectDirs]);
+  const deniedAliases = aliases(denied);
+  const metadata = new Set<string>();
+  for (const path of readable) {
+    for (let parent = dirname(path); ; parent = dirname(parent)) {
+      if (deniedAliases.some((d) => parent === d || parent.startsWith(d + "/"))) metadata.add(parent);
+      if (parent === dirname(parent)) break;
+    }
+  }
+  const blockedRemotes = [
+    ...aliases(input.realDataDirs).flatMap((d) => DAEMON_SOCKETS.map((rel) => `(remote unix-socket (path-literal ${sbString(join(d, rel))}))`)),
+    ...input.daemonPorts.map((p) => `(remote ip "localhost:${p}")`),
+  ];
   const lines = [
     "(version 1)",
     "(allow default)",
@@ -239,7 +310,9 @@ export function pmSandboxProfile(input: PmSandboxInput): string {
     ...(writable.length ? [`(allow file-write* ${subpaths(writable)})`] : []),
     '(allow file-write* (literal "/dev/null") (literal "/dev/zero") (literal "/dev/random") (literal "/dev/urandom") (literal "/dev/dtracehelper") (regex #"^/dev/tty") (regex #"^/dev/fd/"))',
     `(allow file-write* (literal ${sbString(join(input.home, ".claude.json"))}) (regex ${sbRegex("^" + sbRegexLiteral(join(input.home, ".claude.json")) + "[.].*")}))`,
+    `(allow file-write* ${claudeScratchRules(input.uid ?? process.getuid?.()).join(" ")})`,
     `(deny file-read* ${subpaths(denied)})`,
+    ...(metadata.size ? [`(allow file-read-metadata ${[...metadata].map((p) => `(literal ${sbString(p)})`).join(" ")})`] : []),
     `(allow file-read* ${subpaths(input.dependencies ?? [join(input.realRepo, "node_modules")])})`,
     ...((input.writableDirs ?? []).length ? [`(allow file-read* ${subpaths(input.writableDirs ?? [])})`] : []),
     ...(projectDirs.length ? [
@@ -249,18 +322,19 @@ export function pmSandboxProfile(input: PmSandboxInput): string {
       `(deny file-write* ${subpaths((input.writableDirs ?? []).flatMap((d) => ["bin", "fake", "router.json", "router-settings", "pm-sandbox.sb", "claude-env.sh", "gitconfig"].map((p) => join(d, p))))})`,
       `(deny file-read* ${subpaths((input.writableDirs ?? []).map((d) => join(d, "fake")))})`,
     ] : []),
-    // 全局配置始终不可写，即使未来扩大了状态目录白名单。
-    `(deny file-write* ${subpaths(["CLAUDE.md", "settings.json", "settings.local.json"].map((p) => join(input.claudeConfigDir, p)))} (regex ${sbRegex("^" + sbRegexLiteral(join(input.claudeConfigDir, "hooks")))}))`,
+    // 全局配置始终不可写，即使未来扩大了状态目录白名单：CLAUDE.md、settings*.json（含 settings.local.json、备份）、hooks。
+    `(deny file-write* ${subpaths([join(input.claudeConfigDir, "CLAUDE.md")])} (regex ${sbRegex("^" + sbRegexLiteral(join(input.claudeConfigDir, "settings")) + "[^/]*$")}) (regex ${sbRegex("^" + sbRegexLiteral(join(input.claudeConfigDir, "hooks")))}))`,
     ";; 连不上真守护进程：它的几个 unix socket 和本机端口",
-    `(deny network-outbound ${input.realDataDirs
-      .flatMap((d) => DAEMON_SOCKETS.map((rel) => `(remote unix-socket (path-literal ${sbString(join(d, rel))}))`))
-      .join(" ")} ${input.daemonPorts.map((p) => `(remote ip "localhost:${p}")`).join(" ")})`,
+    ...(blockedRemotes.length ? [`(deny network-outbound ${blockedRemotes.join(" ")})`] : []),
     ";; 不出 ssh（部署、推代码）",
     `(deny network-outbound (remote tcp "*:22"))`,
     ";; 真的 ssh、rsync、gh、launchctl……不许执行（PATH 里的替身之外的第二道）",
-    `(deny process-exec ${input.denyExec.map((p) => `(literal ${sbString(p)})`).join(" ")})`,
-    ";; 只能给自己这一棵进程发信号：杀不到真守护进程、Fusa.app、评测自己的守护进程",
-    "(deny signal (target others))",
+    // 列表为空时不能写：`(deny process-exec )` 不带过滤条件等于禁掉所有 exec，sandbox-exec 连 /bin/sh 都起不来（退出码 71）
+    ...(input.denyExec.length ? [`(deny process-exec ${input.denyExec.map((p) => `(literal ${sbString(p)})`).join(" ")})`] : []),
+    ";; 只能给同一个沙箱里的进程发信号：杀不到真守护进程、Fusa.app、评测自己的守护进程。",
+    ";; 不能只拒 others 这一类：others 不含同进程组的进程，而评测进程和沙箱里的 sh 同组（spawnSync 不 detached），",
+    ";; 那样信号还是发得出去。先整条 deny，再只放同沙箱。",
+    "(deny signal)",
     "(allow signal (target same-sandbox))",
     "",
   ];
@@ -317,13 +391,13 @@ export function preflight(profileFile: string, input: PmSandboxInput, opts: { pr
   }
   const mustDenyRead = (path: string) => {
     const r = spawnSync(SANDBOX_EXEC, ["-f", profileFile, process.execPath, "-e",
-      "const fs=require('fs');try{fs.openSync(process.argv[1],'r');process.exit(2)}catch(e){process.exit(e.code==='EPERM'||e.code==='EACCES'?0:3)}", path],
+      "const fs=require('fs');try{if(fs.statSync(process.argv[1]).isDirectory())fs.readdirSync(process.argv[1]);else fs.readFileSync(process.argv[1]);process.exit(2)}catch(e){process.exit(e.code==='EPERM'||e.code==='EACCES'?0:3)}", path],
       { encoding: "utf8", timeout: 30_000 });
     const good = r.status === 0;
     ok &&= good;
     lines.push(`${good ? "✓" : "✗"} 禁读（必须权限拒绝） ${path}`);
   };
-  for (const path of [join(input.mainRepo ?? input.realRepo, "HANDOVER.md"), join(input.home, ".agent-hub"), join(input.home, ".ssh"), ...(input.readDenied ?? [])]) mustDenyRead(path);
+  for (const path of [join(input.mainRepo ?? input.realRepo, "HANDOVER.md"), join(input.home, ".agent-hub"), join(input.home, ".ssh"), input.realRepo, ...(input.readDenied ?? [])]) mustDenyRead(path);
   const outside = join(input.home, ".eval-outside-probe-" + process.pid);
   const writeProbe = spawnSync(SANDBOX_EXEC, ["-f", profileFile, process.execPath, "-e",
     "try{require('fs').writeFileSync(process.argv[1],'probe');process.exit(2)}catch(e){process.exit(e.code==='EPERM'||e.code==='EACCES'?0:3)}", outside], { encoding: "utf8", timeout: 30_000 });
@@ -332,11 +406,43 @@ export function preflight(profileFile: string, input: PmSandboxInput, opts: { pr
   lines.push(`${writeDenied ? "✓" : "✗"} 禁写沙箱外目录（必须权限拒绝）`);
   if (!writeDenied && existsSync(outside)) rmSync(outside);
 
+  // claude 的 Bash 工具、状态目录要写的地方放行了：不放行，真 claude 在 Bash 里就是 EPERM: mkdir '/private/tmp/claude-<uid>/…'（只试能写，不碰别人的文件）
+  const uid = input.uid ?? process.getuid?.();
+  const tag = `.eval-probe-${process.pid}`;
+  if (uid !== undefined) {
+    const scratch = `/private/tmp/claude-${uid}`;
+    trySh(`放行 claude 的 Bash 临时目录 ${scratch}`,
+      `d=${sq(scratch)}; [ -d "$d" ] || mkdir -m 700 "$d" || exit 1; mkdir -p "$d/${tag}/tasks" && touch "$d/${tag}/tasks/x" && touch ${sq(`/private/tmp/claude-${tag.slice(1)}-cwd`)}; r=$?; rm -rf "$d/${tag}" ${sq(`/private/tmp/claude-${tag.slice(1)}-cwd`)}; exit $r`, true);
+  }
+  for (const dir of CLAUDE_CONFIG_STATE_DIRS.filter((d) => ["shell-snapshots", "session-env", "telemetry"].includes(d))) {
+    const target = join(input.claudeConfigDir, dir);
+    trySh(`放行 claude 的状态目录 ${target}`, `d=${sq(target)}; mkdir -p "$d" && touch "$d/${tag}"; r=$?; rm -f "$d/${tag}"; exit $r`, true);
+  }
+  const settingsProbe = join(input.claudeConfigDir, `settings${tag}.json`);
+  if (existsSync(input.claudeConfigDir)) {
+    trySh(`禁写 claude 全局配置 ${join(input.claudeConfigDir, "settings*.json")}`, `touch ${sq(settingsProbe)}`, false);
+    rmSync(settingsProbe, { force: true });
+  }
   trySh(`禁读真仓库 ${input.realRepo}`, `cat ${sq(join(input.realRepo, "package.json"))} >/dev/null`, false);
   if (existsSync(join(input.realRepo, "node_modules"))) trySh("真仓库的 node_modules 能读", `ls ${sq(join(input.realRepo, "node_modules"))} >/dev/null`, true);
+  trySh("Node 能解析评测工作目录与依赖的祖先 metadata", `${sq(process.execPath)} -e ${sq("const fs=require('fs');for(const p of process.argv.slice(1))fs.realpathSync(p)")} ${[opts.probeDir, ...(input.dependencies ?? [join(input.realRepo, "node_modules")])].filter(existsSync).map(sq).join(" ")}`, true);
   // sh 执行不了（沙箱拒绝 exec）时退出码是 126：只认这个，不靠命令自己的退出码
   for (const exe of input.denyExec.filter((p) => existsSync(p))) trySh(`不许执行 ${exe}`, `${sq(exe)} --version >/dev/null 2>&1; [ $? -eq 126 ]`, true);
-  trySh("不能给沙箱外的进程发信号", `kill -0 ${opts.evalPid}`, false);
+  // 用真信号（SIGURG 默认忽略，万一漏了也不伤人）试：评测进程（和沙箱里的 sh 同进程组）、另起进程组的沙箱外靶子；信号 0 也走同一道检查
+  const outsider = spawn("/bin/sleep", ["30"], { detached: true, stdio: "ignore" });
+  try {
+    if (outsider.pid) {
+      for (const [who, pid] of [["评测进程（同进程组）", opts.evalPid], ["另一进程组的进程", outsider.pid]] as const) {
+        trySh(`不能给沙箱外的${who}发信号 0`, `kill -0 ${pid}`, false);
+        trySh(`不能给沙箱外的${who}发 SIGURG`, `kill -URG ${pid}`, false);
+      }
+      const alive = (() => { try { process.kill(outsider.pid, 0); return true; } catch { return false; } })();
+      ok &&= alive;
+      lines.push(`${alive ? "✓" : "✗"} 沙箱外的靶子进程还活着`);
+    }
+  } finally { if (outsider.pid) try { process.kill(-outsider.pid, "SIGKILL"); } catch { /* 已退出 */ } }
+  // 反向对照：沙箱里自己这一棵（含兄弟进程）发信号必须正常，否则回收子进程会出事
+  trySh("沙箱里的进程能给同沙箱的进程发信号", `sleep 30 & p=$!; /bin/sh -c "kill -TERM $p"; wait $p; [ $? -eq 143 ]`, true);
   for (const d of input.realDataDirs) {
     const sock = join(d, "run", "hub.sock");
     if (existsSync(sock) && existsSync("/usr/bin/nc")) trySh(`连不上真守护进程的 ${sock}`, `/usr/bin/nc -U ${sq(sock)} </dev/null >/dev/null 2>&1`, false);
@@ -355,7 +461,7 @@ export async function probeClaudeShimPath(profileFile: string, opts: { realClaud
   writeShims({ binDir, ghDir: join(opts.dir, "gh"), recordFile: join(opts.dir, "recorded.jsonl") }, { node: process.execPath, realGit: realGitPath() });
   mkdirSync(join(opts.dir, "tmp"), { recursive: true });
   const envFile = join(opts.dir, "claude-env.sh");
-  writeFileSync(envFile, `export PATH=${sq(binDir)}:"$PATH"\n`);
+  writeFileSync(envFile, claudeEnvScript(binDir));
   const gitConfig = join(opts.dir, "gitconfig");
   writeFileSync(gitConfig, "[credential]\n\thelper =\n");
   const prompt = "Use the Bash tool to run exactly: gh --version ; then reply with only its output.";
