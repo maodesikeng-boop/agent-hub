@@ -35,6 +35,7 @@ import {
   type StartupOutcome,
 } from "../../daemon/driver/base-driver.ts";
 import {
+  ZERO_CODEX_USAGE_COUNTS,
   buildCodexArgs,
   buildInitializeRequest,
   buildInitializedNotification,
@@ -57,9 +58,11 @@ import {
   isCodexToolItemType,
   parseCodexRateLimits,
   parseCodexTokenUsage,
+  parseCodexThreadTotal,
   parseCodexToolStarted,
   readCodexLaunchConfig,
   type CodexLaunchConfig,
+  type CodexUsageCounts,
 } from "./protocol.ts";
 import { CODEX_RESUME_REBAKES, personaSeenAtStart } from "../../daemon/driver/persona-note.ts";
 import { lineUuid } from "../../daemon/driver/protocol.ts";
@@ -115,7 +118,11 @@ interface SessionState extends BaseSessionState<Proc, Batch> {
   /** 单调递增的轮次计数，保证跨轮或重启后即使 codex 复用 item.id，发出的事件 uuid 依然绝对唯一。 */
   turnSeq: number;
   interruptRequestId: number | string | null;
-  lastTurnResultUsage: Record<string, number> | null;
+  usageThreadId: string | null;
+  lastThreadTotal: CodexUsageCounts | null;
+  turnUsageStepSeq: number;
+  lastTurnResultUsage: CodexUsageCounts | null;
+  lastTurnContext: number | null;
   /** 按 itemId 缓存当前轮的 agentMessage 增量文本，在 item/completed 或 turn/completed 时一次性发出完整 agent.text。 */
   agentMessageBuffers: Map<string, string>;
   /** 当前轮已经发过 agent.text 的 itemId 集合，避免重复发送。 */
@@ -161,7 +168,11 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       activeTurnId: null,
       turnSeq: 0,
       interruptRequestId: null,
+      usageThreadId: null,
+      lastThreadTotal: null,
+      turnUsageStepSeq: 0,
       lastTurnResultUsage: null,
+      lastTurnContext: null,
       agentMessageBuffers: new Map(),
       emittedMessageIds: new Set(),
       emittedThinkingIds: new Set(),
@@ -350,7 +361,9 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     st.emittedThinkingIds.clear();
     proc.fileChangePaths.clear();
     proc.fileChangePreviewPaths.clear();
+    st.turnUsageStepSeq = 0;
     st.lastTurnResultUsage = null;
+    st.lastTurnContext = null;
 
     const reqId = ++this.requestSeq;
     proc.pendingRpcs.set(reqId, "turn_start");
@@ -705,6 +718,13 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     if (proc.initSeen) return;
     proc.initSeen = true;
     proc.resume = resumed;
+    if (!resumed) {
+      st.usageThreadId = proc.threadId;
+      st.lastThreadTotal = { ...ZERO_CODEX_USAGE_COUNTS };
+    } else if (st.usageThreadId !== proc.threadId) {
+      st.usageThreadId = proc.threadId;
+      st.lastThreadTotal = null;
+    }
     this.markHealthy(st.id);
     // 线程好了才定 agent 看到的性格设定：thread/start（包括 resume 失败退回的）是这次拼的；thread/resume 见 persona-note.ts
     this.setPersonaSeen(st, personaSeenAtStart(st, this.row(st), proc.personaLaunched, !resumed || CODEX_RESUME_REBAKES));
@@ -766,6 +786,9 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         } else if (!st.selfTurn && st.proc === proc) {
           st.selfTurn = true;
           st.turnSeq += 1;
+          st.turnUsageStepSeq = 0;
+          st.lastTurnResultUsage = null;
+          st.lastTurnContext = null;
           this.clearTimer(st, "idleTimer");
           this.emit(st.id, { type: "turn.started", at });
         }
@@ -879,12 +902,30 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       }
 
       case "thread/tokenUsage/updated": {
-        const parsed = parseCodexTokenUsage(params.tokenUsage, st.activeTurnId);
+        // thread/resume 后 app-server 会带着恢复前那一轮的 turnId 原样重放 rollout 里最后一条 total/last（codex-cli 0.167.1 实测；
+        // 进程崩在最后一步落盘前时，重放的还会比已记录的基线旧）。不属于正在跑的这一轮的通知只把线程累计基线校准到它的 total，
+        // 不计入任何一轮（本地 rollout 里 token_count 从不出现在一轮结束和下一轮开始之间）。
+        // total 是单条线程的累计：同一连接上别的线程（如子 agent）的通知既不计入本会话，也不能拿来当本线程的基线
+        if (typeof params.threadId === "string" && params.threadId !== "" && proc.threadId !== null && params.threadId !== proc.threadId) return;
+        const notifTurnId = typeof params.turnId === "string" && params.turnId !== "" ? params.turnId : null;
+        if (notifTurnId !== null ? notifTurnId !== st.activeTurnId : st.activeTurnId === null) {
+          st.lastThreadTotal = parseCodexThreadTotal(params.tokenUsage) ?? st.lastThreadTotal;
+          return;
+        }
+        const parsed = parseCodexTokenUsage(params.tokenUsage, st.activeTurnId, {
+          lastThreadTotal: st.lastThreadTotal,
+          turnResultUsage: st.lastTurnResultUsage,
+          stepSeq: st.turnUsageStepSeq,
+        });
         if (!parsed) return;
-        st.lastTurnResultUsage = parsed.resultUsage;
+        st.lastThreadTotal = parsed.nextState.lastThreadTotal;
+        st.lastTurnResultUsage = parsed.nextState.turnResultUsage;
+        st.turnUsageStepSeq = parsed.nextState.stepSeq;
+        if (parsed.duplicate) return;
+        st.lastTurnContext = parsed.context;
         const row = this.row(st);
         const live = row ? st.turnUsage.observe(parsed.observeObj, row.usage) : null;
-        if (live) this.pushUsage(st, live);
+        if (live) this.pushUsage(st, { ...live, context: parsed.context });
         return;
       }
 
@@ -999,10 +1040,16 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     this.cancelUsagePush(st);
     const patch: AgentSessionPatch = {};
     if (st.lastTurnResultUsage) {
-      patch.usage = st.turnUsage.finish(row?.usage ?? EMPTY_TOKEN_USAGE, st.lastTurnResultUsage);
+      const finished = st.turnUsage.finish(row?.usage ?? EMPTY_TOKEN_USAGE, st.lastTurnResultUsage);
+      if (st.lastTurnContext !== null) finished.context = st.lastTurnContext;
+      patch.usage = finished;
       st.lastTurnResultUsage = null;
+      st.lastTurnContext = null;
+      st.turnUsageStepSeq = 0;
     } else {
       st.turnUsage.reset();
+      st.lastTurnContext = null;
+      st.turnUsageStepSeq = 0;
     }
     if (row?.hasCompletedTurn === false) patch.hasCompletedTurn = true;
     if (exhaustedRateLimit !== null) patch.rateLimit = exhaustedRateLimit;
@@ -1079,7 +1126,9 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
   ): void {
     try {
       const at = this.beginProcessClose(st, proc);
+      st.turnUsageStepSeq = 0;
       st.lastTurnResultUsage = null;
+      st.lastTurnContext = null;
       st.agentMessageBuffers.clear();
       st.emittedMessageIds.clear();
       st.emittedThinkingIds.clear();

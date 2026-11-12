@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
+import { TurnUsage } from "../../daemon/driver/usage.ts";
+import { EMPTY_TOKEN_USAGE } from "../../shared/index.ts";
 import { buildReadonlyPolicy } from "../../shared/readonly-policy.ts";
 import {
   codexReadonlyConfig,
   decideMcpElicitation,
   exhaustCodexRateLimitOnTurnError,
   parseCodexRateLimits,
+  parseCodexTokenUsage,
   parseCodexToolStarted,
   readCodexLaunchConfig,
+  ZERO_CODEX_USAGE_COUNTS,
 } from "./protocol.ts";
 
 // 真实数据（2026-11-07，codex-cli 0.162 的 account/rateLimits/updated）：这个账号只有一个 30 天窗口（windowDurationMins 43200），放在 primary 里。
@@ -217,5 +221,177 @@ describe("parseCodexToolStarted：连接器与子 agent 条目", () => {
       input: { tool: "spawnAgent", prompt: "查一下" },
     });
     expect(parseCodexToolStarted({ type: "collabToolCall", id: "c2" }, 1)).toMatchObject({ name: "collabToolCall" });
+  });
+});
+
+describe("parseCodexTokenUsage：扣除已含缓存的 inputTokens，避免 context 翻倍", () => {
+  it("inputTokens 含 cachedInputTokens 时：input 为不含缓存部分，context 为真实上下文 118111 而非 233361", () => {
+    const parsed = parseCodexTokenUsage(
+      {
+        last: { inputTokens: 118_111, cachedInputTokens: 115_250, outputTokens: 500, reasoningOutputTokens: 120 },
+        total: { inputTokens: 118_111, cachedInputTokens: 115_250, outputTokens: 500, reasoningOutputTokens: 120 },
+      },
+      "turn-603",
+    );
+    expect(parsed).not.toBeNull();
+    const turnUsage = new TurnUsage();
+    const live = turnUsage.observe(parsed!.observeObj, EMPTY_TOKEN_USAGE);
+    expect(live).toEqual({
+      input: 2_861,
+      cacheRead: 115_250,
+      cacheWrite: 0,
+      output: 500,
+      context: 118_111,
+    });
+    const finished = turnUsage.finish(EMPTY_TOKEN_USAGE, parsed!.resultUsage);
+    expect(finished).toEqual({
+      input: 2_861,
+      cacheRead: 115_250,
+      cacheWrite: 0,
+      output: 500,
+      context: 118_111,
+    });
+  });
+
+  it("异常数据 cachedInputTokens 大于 inputTokens 时截断为 0，不产生负数", () => {
+    const parsed = parseCodexTokenUsage(
+      {
+        last: { inputTokens: 80, cachedInputTokens: 100, cacheWriteInputTokens: 10, outputTokens: 20 },
+        total: { inputTokens: 80, cachedInputTokens: 100, cacheWriteInputTokens: 10, outputTokens: 20 },
+      },
+      "turn-clamp",
+    );
+    expect(parsed).not.toBeNull();
+    const turnUsage = new TurnUsage();
+    const live = turnUsage.observe(parsed!.observeObj, EMPTY_TOKEN_USAGE);
+    expect(live).toEqual({
+      input: 0,
+      cacheRead: 100,
+      cacheWrite: 10,
+      output: 20,
+      context: 110,
+    });
+  });
+
+  it("线程累计 total 回退到已记录基线以下（服务端重置等）：按 total - last 重新校准基线，后续步骤不被截成 0", () => {
+    const highWater = { input_tokens: 50_000, cache_read_input_tokens: 450_000, cache_creation_input_tokens: 0, output_tokens: 3_000 };
+    const reset = parseCodexTokenUsage(
+      {
+        last: { inputTokens: 30_000, cachedInputTokens: 20_000, outputTokens: 100 },
+        total: { inputTokens: 30_000, cachedInputTokens: 20_000, outputTokens: 100 },
+      },
+      "t9",
+      { lastThreadTotal: highWater, turnResultUsage: null, stepSeq: 0 },
+    )!;
+    expect(reset.duplicate).toBe(false);
+    expect(reset.resultUsage).toEqual({ input_tokens: 10_000, cache_read_input_tokens: 20_000, cache_creation_input_tokens: 0, output_tokens: 100 });
+    expect(reset.nextState.lastThreadTotal).toEqual(reset.resultUsage);
+
+    const next = parseCodexTokenUsage(
+      {
+        last: { inputTokens: 35_000, cachedInputTokens: 30_000, outputTokens: 50 },
+        total: { inputTokens: 65_000, cachedInputTokens: 50_000, outputTokens: 150 },
+      },
+      "t9",
+      reset.nextState,
+    )!;
+    expect(next.resultUsage).toEqual({ input_tokens: 15_000, cache_read_input_tokens: 50_000, cache_creation_input_tokens: 0, output_tokens: 150 });
+    expect(next.context).toBe(35_000);
+  });
+
+  it("codex 自带压缩后那条 total 不变、last 全 0 的通知按重复跳过，不把 context 冲成 0 也不加用量", () => {
+    const before = { input_tokens: 318_000, cache_read_input_tokens: 2_996_614, cache_creation_input_tokens: 0, output_tokens: 12_492 };
+    const parsed = parseCodexTokenUsage(
+      {
+        last: { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 },
+        total: { inputTokens: 3_314_614, cachedInputTokens: 2_996_614, outputTokens: 12_492 },
+      },
+      "t10",
+      { lastThreadTotal: before, turnResultUsage: null, stepSeq: 0 },
+    )!;
+    expect(parsed.duplicate).toBe(true);
+    expect(parsed.nextState.lastThreadTotal).toEqual(before);
+  });
+
+  it("跨步、重复通知、跨轮与冷恢复（lastThreadTotal=null）差值计算准确", () => {
+    const turn1 = new TurnUsage();
+    const step1 = parseCodexTokenUsage(
+      {
+        last: { inputTokens: 60_000, cachedInputTokens: 50_000, outputTokens: 200 },
+        total: { inputTokens: 60_000, cachedInputTokens: 50_000, outputTokens: 200 },
+      },
+      "t1",
+      { lastThreadTotal: ZERO_CODEX_USAGE_COUNTS, turnResultUsage: null, stepSeq: 0 },
+    )!;
+    expect(step1.duplicate).toBe(false);
+    expect(turn1.observe(step1.observeObj, EMPTY_TOKEN_USAGE)).toEqual({
+      input: 10_000,
+      cacheRead: 50_000,
+      cacheWrite: 0,
+      output: 200,
+      context: 60_000,
+    });
+
+    const step2 = parseCodexTokenUsage(
+      {
+        last: { inputTokens: 65_000, cachedInputTokens: 60_000, outputTokens: 300 },
+        total: { inputTokens: 125_000, cachedInputTokens: 110_000, outputTokens: 500 },
+      },
+      "t1",
+      step1.nextState,
+    )!;
+    expect(step2.duplicate).toBe(false);
+    const live2 = turn1.observe(step2.observeObj, EMPTY_TOKEN_USAGE)!;
+    expect({ ...live2, context: step2.context }).toEqual({
+      input: 15_000,
+      cacheRead: 110_000,
+      cacheWrite: 0,
+      output: 500,
+      context: 65_000,
+    });
+
+    const dup = parseCodexTokenUsage(
+      {
+        last: { inputTokens: 65_000, cachedInputTokens: 60_000, outputTokens: 300 },
+        total: { inputTokens: 125_000, cachedInputTokens: 110_000, outputTokens: 500 },
+      },
+      "t1",
+      step2.nextState,
+    )!;
+    expect(dup.duplicate).toBe(true);
+    const afterTurn1 = turn1.finish(EMPTY_TOKEN_USAGE, dup.resultUsage);
+    expect(afterTurn1).toEqual({
+      input: 15_000,
+      cacheRead: 110_000,
+      cacheWrite: 0,
+      output: 500,
+      context: 65_000,
+    });
+
+    // 冷启动 thread/resume（lastThreadTotal 为 null）：首步用 total - last 反推基线
+    const turn2 = new TurnUsage();
+    const coldStep = parseCodexTokenUsage(
+      {
+        last: { inputTokens: 70_000, cachedInputTokens: 65_000, outputTokens: 400 },
+        total: { inputTokens: 195_000, cachedInputTokens: 175_000, outputTokens: 900 },
+      },
+      "t2",
+      { lastThreadTotal: null, turnResultUsage: null, stepSeq: 0 },
+    )!;
+    expect(coldStep.duplicate).toBe(false);
+    expect(turn2.observe(coldStep.observeObj, afterTurn1)).toEqual({
+      input: 20_000,
+      cacheRead: 175_000,
+      cacheWrite: 0,
+      output: 900,
+      context: 70_000,
+    });
+    expect(turn2.finish(afterTurn1, coldStep.resultUsage)).toEqual({
+      input: 20_000,
+      cacheRead: 175_000,
+      cacheWrite: 0,
+      output: 900,
+      context: 70_000,
+    });
   });
 });

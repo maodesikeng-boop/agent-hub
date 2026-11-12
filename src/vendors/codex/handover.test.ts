@@ -247,6 +247,37 @@ describe("write：在复制那份上跑一轮", () => {
     await forker.remove(handle);
   });
 
+  it("同一轮收到 total 未变的重复 thread/tokenUsage/updated 通知时不重复累加 last", async () => {
+    const { forker } = setup({
+      ...baseHandlers(),
+      "turn/start": (_p, s) => {
+        setTimeout(() => {
+          s.notify("turn/started", { turn: { id: "t1" } });
+          s.notify("thread/tokenUsage/updated", {
+            tokenUsage: {
+              last: { inputTokens: 1000, cachedInputTokens: 600, outputTokens: 50 },
+              total: { inputTokens: 1000, cachedInputTokens: 600, outputTokens: 50 },
+            },
+          });
+          s.notify("thread/tokenUsage/updated", {
+            tokenUsage: {
+              last: { inputTokens: 1000, cachedInputTokens: 600, outputTokens: 50 },
+              total: { inputTokens: 1000, cachedInputTokens: 600, outputTokens: 50 },
+            },
+          });
+          s.notify("item/completed", { item: { type: "agentMessage", text: "交接正文" } });
+          s.notify("turn/completed", { turn: { id: "t1", status: "completed", error: null } });
+        }, 0);
+        return { turn: { id: "t1" } };
+      },
+    });
+    const src = source();
+    const handle = await forker.fork(src, noAbort());
+    const result = await forker.write(src, handle, "写交接", noAbort());
+    expect(result.usage).toEqual({ input: 400, cacheRead: 600, cacheWrite: 0, output: 50, context: 1000 });
+    await forker.remove(handle);
+  });
+
   it("这一轮没成功（failed）：抛错，带 codex 的错误", async () => {
     const { forker } = setup({ ...baseHandlers(), "turn/start": turnScript([], "failed") });
     const src = source();
