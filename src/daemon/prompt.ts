@@ -250,7 +250,7 @@ function buildHubUsagePrompt(vendors: readonly AgentVendor[] = AGENT_VENDORS): s
   - \`${HUB} graph create [--title <标题>] --stdin\`：建图，正文 JSON 形如 \`${TASK_GRAPH_CREATE_JSON_HINT}\`（\`kind\` 不写是 \`piece\`，要用户拍板的写 \`gate\`；\`deps\` 写前置节点的 key，不写就是一开始就轮到）
   - \`${HUB} graph show [<图编号>]\` / \`${HUB} graph list [--all | --status active|completed|cancelled]\`：看一张图的进度和每个节点的结果（分支、PR、摘要、定案）/ 列出任务图
   - \`${HUB} graph patch [<图编号>] --stdin\`：改图，正文 JSON 按需取 \`${TASK_GRAPH_PATCH_JSON_HINT}\`；已经结束的图不能改
-  - \`${HUB} graph done <节点> [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要> | --stdin]\`：把没有 Worker 在干的节点标完成（比如你自己做完的），或给节点补记 PR 等结果；有 Worker 在干的会被拒绝，先让它收工
+  - \`${HUB} graph done <节点> [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要> | --stdin]\`：把没有 Worker 在干的节点标完成（比如你自己做完的），或给节点补记 PR 等结果（图已完成时加 \`--graph <图编号>\`）；有 Worker 在干的会被拒绝，先让它收工
   - \`${HUB} graph skip <节点> [--reason <原因>]\` / \`${HUB} graph cancel [<图编号>] [--reason <原因>]\`：跳过一个节点 / 取消整张图
 - **向用户提问**
   - \`${HUB} ask [--option <选项>...] --stdin\`：向用户提问，界面会单独提醒；要给用户可点的选项时传 \`--option\`（至少 2 个）

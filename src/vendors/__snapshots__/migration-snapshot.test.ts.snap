@@ -2756,7 +2756,7 @@ Worker 每干完一轮，你会收到 \`【Worker #编号 · 标题 的汇报】
   - \`hub graph create [--title <标题>] --stdin\`：建图，正文 JSON 形如 \`{"title":"…","nodes":[{"key":"plan","title":"…","kind":"piece"},{"key":"ok","title":"…","kind":"gate","deps":["plan"]}]}\`（\`kind\` 不写是 \`piece\`，要用户拍板的写 \`gate\`；\`deps\` 写前置节点的 key，不写就是一开始就轮到）
   - \`hub graph show [<图编号>]\` / \`hub graph list [--all | --status active|completed|cancelled]\`：看一张图的进度和每个节点的结果（分支、PR、摘要、定案）/ 列出任务图
   - \`hub graph patch [<图编号>] --stdin\`：改图，正文 JSON 按需取 \`{"addNodes":[{"key":"qa","title":"…","deps":["ok"]}],"updateNodes":[{"key":"ok","title":"…"}],"removeNodes":["old"],"skipNodes":["polish"],"addEdges":[{"from":"plan","to":"qa"}],"removeEdges":[{"from":"a","to":"b"}]}\`；已经结束的图不能改
-  - \`hub graph done <节点> [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要> | --stdin]\`：把没有 Worker 在干的节点标完成（比如你自己做完的），或给节点补记 PR 等结果；有 Worker 在干的会被拒绝，先让它收工
+  - \`hub graph done <节点> [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要> | --stdin]\`：把没有 Worker 在干的节点标完成（比如你自己做完的），或给节点补记 PR 等结果（图已完成时加 \`--graph <图编号>\`）；有 Worker 在干的会被拒绝，先让它收工
   - \`hub graph skip <节点> [--reason <原因>]\` / \`hub graph cancel [<图编号>] [--reason <原因>]\`：跳过一个节点 / 取消整张图
 - **向用户提问**
   - \`hub ask [--option <选项>...] --stdin\`：向用户提问，界面会单独提醒；要给用户可点的选项时传 \`--option\`（至少 2 个）
@@ -2923,7 +2923,7 @@ Worker 每干完一轮，你会收到 \`【Worker #编号 · 标题 的汇报】
   - \`hub graph create [--title <标题>] --stdin\`：建图，正文 JSON 形如 \`{"title":"…","nodes":[{"key":"plan","title":"…","kind":"piece"},{"key":"ok","title":"…","kind":"gate","deps":["plan"]}]}\`（\`kind\` 不写是 \`piece\`，要用户拍板的写 \`gate\`；\`deps\` 写前置节点的 key，不写就是一开始就轮到）
   - \`hub graph show [<图编号>]\` / \`hub graph list [--all | --status active|completed|cancelled]\`：看一张图的进度和每个节点的结果（分支、PR、摘要、定案）/ 列出任务图
   - \`hub graph patch [<图编号>] --stdin\`：改图，正文 JSON 按需取 \`{"addNodes":[{"key":"qa","title":"…","deps":["ok"]}],"updateNodes":[{"key":"ok","title":"…"}],"removeNodes":["old"],"skipNodes":["polish"],"addEdges":[{"from":"plan","to":"qa"}],"removeEdges":[{"from":"a","to":"b"}]}\`；已经结束的图不能改
-  - \`hub graph done <节点> [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要> | --stdin]\`：把没有 Worker 在干的节点标完成（比如你自己做完的），或给节点补记 PR 等结果；有 Worker 在干的会被拒绝，先让它收工
+  - \`hub graph done <节点> [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要> | --stdin]\`：把没有 Worker 在干的节点标完成（比如你自己做完的），或给节点补记 PR 等结果（图已完成时加 \`--graph <图编号>\`）；有 Worker 在干的会被拒绝，先让它收工
   - \`hub graph skip <节点> [--reason <原因>]\` / \`hub graph cancel [<图编号>] [--reason <原因>]\`：跳过一个节点 / 取消整张图
 - **向用户提问**
   - \`hub ask [--option <选项>...] --stdin\`：向用户提问，界面会单独提醒；要给用户可点的选项时传 \`--option\`（至少 2 个）
@@ -3090,7 +3090,7 @@ Worker 每干完一轮，你会收到 \`【Worker #编号 · 标题 的汇报】
   - \`hub graph create [--title <标题>] --stdin\`：建图，正文 JSON 形如 \`{"title":"…","nodes":[{"key":"plan","title":"…","kind":"piece"},{"key":"ok","title":"…","kind":"gate","deps":["plan"]}]}\`（\`kind\` 不写是 \`piece\`，要用户拍板的写 \`gate\`；\`deps\` 写前置节点的 key，不写就是一开始就轮到）
   - \`hub graph show [<图编号>]\` / \`hub graph list [--all | --status active|completed|cancelled]\`：看一张图的进度和每个节点的结果（分支、PR、摘要、定案）/ 列出任务图
   - \`hub graph patch [<图编号>] --stdin\`：改图，正文 JSON 按需取 \`{"addNodes":[{"key":"qa","title":"…","deps":["ok"]}],"updateNodes":[{"key":"ok","title":"…"}],"removeNodes":["old"],"skipNodes":["polish"],"addEdges":[{"from":"plan","to":"qa"}],"removeEdges":[{"from":"a","to":"b"}]}\`；已经结束的图不能改
-  - \`hub graph done <节点> [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要> | --stdin]\`：把没有 Worker 在干的节点标完成（比如你自己做完的），或给节点补记 PR 等结果；有 Worker 在干的会被拒绝，先让它收工
+  - \`hub graph done <节点> [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要> | --stdin]\`：把没有 Worker 在干的节点标完成（比如你自己做完的），或给节点补记 PR 等结果（图已完成时加 \`--graph <图编号>\`）；有 Worker 在干的会被拒绝，先让它收工
   - \`hub graph skip <节点> [--reason <原因>]\` / \`hub graph cancel [<图编号>] [--reason <原因>]\`：跳过一个节点 / 取消整张图
 - **向用户提问**
   - \`hub ask [--option <选项>...] --stdin\`：向用户提问，界面会单独提醒；要给用户可点的选项时传 \`--option\`（至少 2 个）
@@ -3257,7 +3257,7 @@ Worker 每干完一轮，你会收到 \`【Worker #编号 · 标题 的汇报】
   - \`hub graph create [--title <标题>] --stdin\`：建图，正文 JSON 形如 \`{"title":"…","nodes":[{"key":"plan","title":"…","kind":"piece"},{"key":"ok","title":"…","kind":"gate","deps":["plan"]}]}\`（\`kind\` 不写是 \`piece\`，要用户拍板的写 \`gate\`；\`deps\` 写前置节点的 key，不写就是一开始就轮到）
   - \`hub graph show [<图编号>]\` / \`hub graph list [--all | --status active|completed|cancelled]\`：看一张图的进度和每个节点的结果（分支、PR、摘要、定案）/ 列出任务图
   - \`hub graph patch [<图编号>] --stdin\`：改图，正文 JSON 按需取 \`{"addNodes":[{"key":"qa","title":"…","deps":["ok"]}],"updateNodes":[{"key":"ok","title":"…"}],"removeNodes":["old"],"skipNodes":["polish"],"addEdges":[{"from":"plan","to":"qa"}],"removeEdges":[{"from":"a","to":"b"}]}\`；已经结束的图不能改
-  - \`hub graph done <节点> [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要> | --stdin]\`：把没有 Worker 在干的节点标完成（比如你自己做完的），或给节点补记 PR 等结果；有 Worker 在干的会被拒绝，先让它收工
+  - \`hub graph done <节点> [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要> | --stdin]\`：把没有 Worker 在干的节点标完成（比如你自己做完的），或给节点补记 PR 等结果（图已完成时加 \`--graph <图编号>\`）；有 Worker 在干的会被拒绝，先让它收工
   - \`hub graph skip <节点> [--reason <原因>]\` / \`hub graph cancel [<图编号>] [--reason <原因>]\`：跳过一个节点 / 取消整张图
 - **向用户提问**
   - \`hub ask [--option <选项>...] --stdin\`：向用户提问，界面会单独提醒；要给用户可点的选项时传 \`--option\`（至少 2 个）
@@ -3424,7 +3424,7 @@ Worker 每干完一轮，你会收到 \`【Worker #编号 · 标题 的汇报】
   - \`hub graph create [--title <标题>] --stdin\`：建图，正文 JSON 形如 \`{"title":"…","nodes":[{"key":"plan","title":"…","kind":"piece"},{"key":"ok","title":"…","kind":"gate","deps":["plan"]}]}\`（\`kind\` 不写是 \`piece\`，要用户拍板的写 \`gate\`；\`deps\` 写前置节点的 key，不写就是一开始就轮到）
   - \`hub graph show [<图编号>]\` / \`hub graph list [--all | --status active|completed|cancelled]\`：看一张图的进度和每个节点的结果（分支、PR、摘要、定案）/ 列出任务图
   - \`hub graph patch [<图编号>] --stdin\`：改图，正文 JSON 按需取 \`{"addNodes":[{"key":"qa","title":"…","deps":["ok"]}],"updateNodes":[{"key":"ok","title":"…"}],"removeNodes":["old"],"skipNodes":["polish"],"addEdges":[{"from":"plan","to":"qa"}],"removeEdges":[{"from":"a","to":"b"}]}\`；已经结束的图不能改
-  - \`hub graph done <节点> [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要> | --stdin]\`：把没有 Worker 在干的节点标完成（比如你自己做完的），或给节点补记 PR 等结果；有 Worker 在干的会被拒绝，先让它收工
+  - \`hub graph done <节点> [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要> | --stdin]\`：把没有 Worker 在干的节点标完成（比如你自己做完的），或给节点补记 PR 等结果（图已完成时加 \`--graph <图编号>\`）；有 Worker 在干的会被拒绝，先让它收工
   - \`hub graph skip <节点> [--reason <原因>]\` / \`hub graph cancel [<图编号>] [--reason <原因>]\`：跳过一个节点 / 取消整张图
 - **向用户提问**
   - \`hub ask [--option <选项>...] --stdin\`：向用户提问，界面会单独提醒；要给用户可点的选项时传 \`--option\`（至少 2 个）
@@ -3591,7 +3591,7 @@ Worker 每干完一轮，你会收到 \`【Worker #编号 · 标题 的汇报】
   - \`hub graph create [--title <标题>] --stdin\`：建图，正文 JSON 形如 \`{"title":"…","nodes":[{"key":"plan","title":"…","kind":"piece"},{"key":"ok","title":"…","kind":"gate","deps":["plan"]}]}\`（\`kind\` 不写是 \`piece\`，要用户拍板的写 \`gate\`；\`deps\` 写前置节点的 key，不写就是一开始就轮到）
   - \`hub graph show [<图编号>]\` / \`hub graph list [--all | --status active|completed|cancelled]\`：看一张图的进度和每个节点的结果（分支、PR、摘要、定案）/ 列出任务图
   - \`hub graph patch [<图编号>] --stdin\`：改图，正文 JSON 按需取 \`{"addNodes":[{"key":"qa","title":"…","deps":["ok"]}],"updateNodes":[{"key":"ok","title":"…"}],"removeNodes":["old"],"skipNodes":["polish"],"addEdges":[{"from":"plan","to":"qa"}],"removeEdges":[{"from":"a","to":"b"}]}\`；已经结束的图不能改
-  - \`hub graph done <节点> [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要> | --stdin]\`：把没有 Worker 在干的节点标完成（比如你自己做完的），或给节点补记 PR 等结果；有 Worker 在干的会被拒绝，先让它收工
+  - \`hub graph done <节点> [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要> | --stdin]\`：把没有 Worker 在干的节点标完成（比如你自己做完的），或给节点补记 PR 等结果（图已完成时加 \`--graph <图编号>\`）；有 Worker 在干的会被拒绝，先让它收工
   - \`hub graph skip <节点> [--reason <原因>]\` / \`hub graph cancel [<图编号>] [--reason <原因>]\`：跳过一个节点 / 取消整张图
 - **向用户提问**
   - \`hub ask [--option <选项>...] --stdin\`：向用户提问，界面会单独提醒；要给用户可点的选项时传 \`--option\`（至少 2 个）

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Change } from "../../shared/api.ts";
 import { pendingDecisionsOf } from "../../shared/decisions.ts";
 import { askOf, EMPTY_TOKEN_USAGE, type ConversationId, type PmId, type ProjectId, type SessionId } from "../../shared/domain.ts";
-import { GRAPH_TEXT_NODE_NOTE_CHARS, HANDOVER_GRAPHS_MAX_CHARS, MAX_ACTIVE_GRAPHS_PER_PROJECT, PM_ARCHIVE_RETENTION_MS } from "../../shared/limits.ts";
+import { GRAPH_TEXT_NODE_NOTE_CHARS, HANDOVER_GRAPHS_MAX_CHARS, MAX_GRAPH_NODES, MAX_ACTIVE_GRAPHS_PER_PROJECT, PM_ARCHIVE_RETENTION_MS } from "../../shared/limits.ts";
 import { TASK_GRAPH_CREATE_JSON_HINT, TASK_GRAPH_PATCH_JSON_HINT } from "../../shared/hub.ts";
 import { REPORT_END, REPORT_START } from "../../shared/worker.ts";
 import { openDatabase } from "../store/db.ts";
@@ -416,10 +416,102 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     expect(status.split("\n")).toHaveLength(13);
     expect(status).toContain("  - [done] n0：第 0 步");
     expect(status).not.toContain("PR https://");
-    // 全文加只列状态的不超过上限；整节多出来的只有那些一行的
+    // 全文、状态、一行进度以及分隔符均计入硬上限
     const bodyChars = blocks.filter((b) => tier(b) !== "brief").reduce((sum, b) => sum + [...b].length, 0);
     expect(bodyChars).toBeLessThanOrEqual(HANDOVER_GRAPHS_MAX_CHARS);
-    expect([...section].length).toBeLessThanOrEqual(HANDOVER_GRAPHS_MAX_CHARS + MAX_ACTIVE_GRAPHS_PER_PROJECT * 200);
+    expect([...section].length).toBeLessThanOrEqual(HANDOVER_GRAPHS_MAX_CHARS);
+  });
+
+  it("20 张图各 32 个节点写满摘要时，交接全文含分隔符严格不超过 8000 字且稳定", () => {
+    for (let g = 0; g < MAX_ACTIVE_GRAPHS_PER_PROJECT; g++) {
+      const graph = ledger.hubCall(lin.sessionId, "graph.create", {
+        specJson: JSON.stringify({ title: "图".repeat(120), nodes: Array.from({ length: MAX_GRAPH_NODES }, (_, i) => ({
+          key: `n${i}`, title: "😀".repeat(80),
+        })) }),
+      }).data.graph;
+      db.run("UPDATE task_graph_nodes SET artifact_json = ? WHERE graph_id = ?",
+        JSON.stringify({ summary: "😀".repeat(500), branch: "b".repeat(160), commit: "c".repeat(160), prUrl: "p".repeat(160) }), graph.id);
+    }
+    const first = liveGraphsSection()!;
+    expect([...first].length).toBeLessThanOrEqual(HANDOVER_GRAPHS_MAX_CHARS);
+    expect(first.split("\n\n")).toHaveLength(MAX_ACTIVE_GRAPHS_PER_PROJECT);
+    expect(liveGraphsSection()).toBe(first);
+    expect(first).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+  });
+
+  it("交接全文恰好 8000 字时保留全文，多一字就降为状态档", () => {
+    const graph = ledger.hubCall(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({ title: "边界", nodes: Array.from({ length: MAX_GRAPH_NODES }, (_, i) => ({ key: `n${i}`, title: "步骤" })) }),
+    }).data.graph;
+    const artifact = (size: number) => JSON.stringify({ summary: "摘".repeat(GRAPH_TEXT_NODE_NOTE_CHARS), branch: "b".repeat(size) });
+    let size = 1;
+    let full = "";
+    for (; size < GRAPH_TEXT_NODE_NOTE_CHARS; size++) {
+      db.run("UPDATE task_graph_nodes SET artifact_json = ? WHERE graph_id = ?", artifact(size), graph.id);
+      full = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).text;
+      if ([...full].length > HANDOVER_GRAPHS_MAX_CHARS) break;
+    }
+    size--;
+    db.run("UPDATE task_graph_nodes SET artifact_json = ? WHERE graph_id = ?", artifact(size), graph.id);
+    full = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).text;
+    const extra = HANDOVER_GRAPHS_MAX_CHARS - [...full].length;
+    db.run("UPDATE task_graph_nodes SET artifact_json = ? WHERE graph_id = ? AND node_key = 'n0'", artifact(size + extra), graph.id);
+    const exact = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).text;
+    expect([...exact]).toHaveLength(HANDOVER_GRAPHS_MAX_CHARS);
+    expect(liveGraphsSection()).toBe(exact);
+    db.run("UPDATE task_graph_nodes SET artifact_json = ? WHERE graph_id = ? AND node_key = 'n0'", artifact(size + extra + 1), graph.id);
+    const downgraded = liveGraphsSection()!;
+    expect(downgraded).toContain("[ready] n0");
+    expect(downgraded).not.toContain("摘要：");
+  });
+
+  it("结果中的 Markdown 截断后仍是普通文本，不产生残缺链接或代码围栏", () => {
+    const graph = ledger.hubCall(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({ title: "显示", nodes: [{ key: "a", title: "结果" }, { key: "b", title: "继续" }] }),
+    }).data.graph;
+    ledger.hubCall(lin.sessionId, "graph.done", {
+      graphId: graph.id, nodeKey: "a", summary: "[链接](https://example.test/" + "😀".repeat(200) + ")",
+    });
+    const text = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).text;
+    expect(text).toContain("\\[链接\\]\\(");
+    expect(text).not.toContain("[链接](");
+    expect([...text].filter((c) => c === "😀")).toHaveLength(GRAPH_TEXT_NODE_NOTE_CHARS - "[链接](https://example.test/".length - 1);
+  });
+
+  it("取消图后 Worker 收工不改写节点，也不冒认已跳过的节点", () => {
+    const graph = ledger.hubCall(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({ title: "终态", nodes: [{ key: "a", title: "实现" }, { key: "b", title: "跳过" }] }),
+    }).data.graph;
+    ledger.hubCall(lin.sessionId, "graph.skip", { graphId: graph.id, nodeKey: "b" });
+    const w = ledger.hubCall(lin.sessionId, "worker.start", { title: "实现", task: "实现", node: "a", noWorktree: true }).data.worker;
+    ledger.hubCall(lin.sessionId, "graph.cancel", { graphId: graph.id });
+    finishWorkerTurn(w.id, "做完了");
+    expect(ledger.hubCall(lin.sessionId, "worker.end", { workerId: w.id }).text).not.toContain("已标记为 done");
+    const after = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph;
+    expect(after.status).toBe("cancelled");
+    expect(after.nodes.find((n) => n.key === "b")?.status).toBe("skipped");
+    expect(after.nodes.find((n) => n.key === "a")?.status).not.toBe("done");
+  });
+
+  it("最后一个 Worker 收工后仍可给已完成图补记产物，但取消图不能补记", () => {
+    const graph = ledger.hubCall(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({ title: "完成", nodes: [{ key: "only", title: "实现" }] }),
+    }).data.graph;
+    const w = ledger.hubCall(lin.sessionId, "worker.start", {
+      title: "实现", task: "实现", node: "only", noWorktree: true,
+    }).data.worker;
+    finishWorkerTurn(w.id, "做完了");
+    ledger.hubCall(lin.sessionId, "worker.end", { workerId: w.id });
+    const updated = ledger.hubCall(lin.sessionId, "graph.done", {
+      graphId: graph.id, nodeKey: "only", prUrl: "https://example.test/pr/1",
+    }).data.graph;
+    expect(updated.status).toBe("completed");
+    expect(updated.nodes[0]!.artifact?.prUrl).toBe("https://example.test/pr/1");
+    const cancelled = ledger.hubCall(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({ title: "取消", nodes: [{ key: "other", title: "取消" }] }),
+    }).data.graph;
+    ledger.hubCall(lin.sessionId, "graph.cancel", { graphId: cancelled.id });
+    expect(() => ledger.hubCall(lin.sessionId, "graph.done", { graphId: cancelled.id, nodeKey: "other" })).toThrow(/已经结束/);
   });
 
   it("归档满七天清理 PM、项目与对话时，Router 与图关联记录全部安全清除", () => {

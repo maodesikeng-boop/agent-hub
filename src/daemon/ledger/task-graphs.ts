@@ -351,8 +351,10 @@ function toTaskNode(row: TaskNodeDbRow): TaskNode {
   };
 }
 
-/** 压成一行并截到 GRAPH_TEXT_NODE_NOTE_CHARS 个字：节点结果里的自由文本（摘要、定案说明、分支、PR）都过它。 */
-const clipNote = (text: string): string => truncateChars(text.replace(/\s+/g, " ").trim(), GRAPH_TEXT_NODE_NOTE_CHARS);
+/** 结果自由文本压成一行，按码点截断后转义 Markdown 标点，避免残缺链接或代码标记影响后文。 */
+const clipNote = (text: string): string =>
+  truncateChars(text.replace(/\s+/g, " ").trim(), GRAPH_TEXT_NODE_NOTE_CHARS)
+    .replace(/[\\`*_[\]{}()<>~]/g, "\\$&");
 
 /**
  * 节点下面的结果行：分支、提交、PR 一行，摘要一行，定案一行；什么都没有就不出。
@@ -1169,7 +1171,7 @@ export function createLedgerTaskGraphs(
   ): HubResult<"graph.done"> => {
     assertPmNotArchived(caller.pmId);
     const nodeKey = validateNodeKey(args.nodeKey);
-    const graphRow = resolveGraphForPm(caller.pmId, { graphId: args.graphId, nodeKey, requireActive: true });
+    const graphRow = resolveGraphForPm(caller.pmId, { graphId: args.graphId, nodeKey, requireActive: false });
     const node = db.get<TaskNodeDbRow>(
       "SELECT * FROM task_graph_nodes WHERE graph_id = ? AND node_key = ?",
       graphRow.id,
@@ -1177,13 +1179,16 @@ export function createLedgerTaskGraphs(
     );
     if (node === undefined) throw fail("not_found", `任务图 #${graphRow.id} 中没有节点「${nodeKey}」`);
     if (node.kind !== "piece") throw fail("invalid", `门禁节点「${nodeKey}」请通过用户拍板或 ${HUB_COMMAND} graph decide 完成`);
+    if (graphRow.status !== "active" && !(graphRow.status === "completed" && node.status === "done")) {
+      throw fail("conflict", `任务图 #${graphRow.id} 已经结束（${graphRow.status}）`);
+    }
     // 在干的节点不能绕过 Worker 直接标完成（它还在改东西，下游会基于没做完的结果开工）：先让 Worker 收工，节点由收工时的汇报决定
     if (node.status === "running") {
       const who = node.active_worker_id === null ? "Worker" : `Worker #${node.active_worker_id}`;
       const end = node.active_worker_id === null ? `${HUB_COMMAND} worker end <编号>` : `${HUB_COMMAND} worker end ${node.active_worker_id}`;
       throw fail(
         "conflict",
-        `节点「${nodeKey}」正在由 ${who} 执行，不能直接标完成。先用 ${end} 让它收工：它最近一轮汇报是“做完了”时节点会自动标完成；要补记 PR 等结果，收工后再调 ${HUB_COMMAND} graph done`,
+        `节点「${nodeKey}」正在由 ${who} 执行，不能直接标完成。先用 ${end} 让它收工：它最近一轮汇报是“做完了”时节点会自动标完成；要补记 PR 等结果，收工后再调 ${HUB_COMMAND} graph done ${nodeKey} --graph ${graphRow.id}`,
       );
     }
 
@@ -1213,7 +1218,7 @@ export function createLedgerTaskGraphs(
       node.id,
     );
 
-    const unlocked = recomputeGraphProgressIn(p, graphRow, caller);
+    const unlocked = graphRow.status === "active" ? recomputeGraphProgressIn(p, graphRow, caller) : [];
     const graph = loadGraph(graphRow.id)!;
     p.changes.push({ type: "task_graph.updated", data: { graph } });
 
@@ -1755,7 +1760,7 @@ export function createLedgerTaskGraphs(
       );
       db.run("UPDATE task_graphs SET updated_at = ? WHERE id = ?", t, graphRow.id);
       const why = opts.incomplete ? "带了 --incomplete" : "它最近一轮没有汇报“做完了”";
-      note = `它绑定的${where}变成 attention，等人接手（${why}）：用 ${HUB_COMMAND} worker start --node ${node.node_key} 新派 Worker 接手，不需要了用 ${HUB_COMMAND} graph skip ${node.node_key}。`;
+      note = `它绑定的${where}变成 attention，等人接手（${why}）：用 ${HUB_COMMAND} worker start --node ${node.node_key} --graph ${graphRow.id} 新派 Worker 接手，不需要了用 ${HUB_COMMAND} graph skip ${node.node_key} --graph ${graphRow.id}。`;
     }
 
     const graph = loadGraph(graphRow.id);
@@ -1822,15 +1827,19 @@ export function createLedgerTaskGraphs(
     // 每个节点带着分支、PR、摘要、定案（formatGraphText）；总字数有上限：按最近动过的先给全文，
     // 放不下的退一档只列各节点的状态，还放不下的只留一行进度（用 hub graph show 看）
     const byRecent = [...graphs].sort((a, b) => b.updatedAt - a.updatedAt || b.id - a.id);
-    const texts = new Map<TaskGraphId, string>();
-    let used = 0;
+    // 先预留每张图的最简进度和分隔符，后续只花费升级档位的增量。
+    const texts = new Map(graphs.map((graph) => [graph.id, formatGraphBrief(graph)]));
+    let used = [...texts.values()].reduce((sum, text) => sum + charLen(text), 0) + (graphs.length - 1) * 2;
     for (const graph of byRecent) {
-      const fits = (text: string) => used + charLen(text) <= HANDOVER_GRAPHS_MAX_CHARS;
-      const full = formatGraphText(graph);
-      const statusOnly = fits(full) ? full : formatGraphText(graph, false);
-      const text = fits(statusOnly) ? statusOnly : formatGraphBrief(graph);
-      used += charLen(text);
-      texts.set(graph.id, text);
+      const brief = texts.get(graph.id)!;
+      for (const candidate of [formatGraphText(graph), formatGraphText(graph, false)]) {
+        const extra = charLen(candidate) - charLen(brief);
+        if (used + extra <= HANDOVER_GRAPHS_MAX_CHARS) {
+          texts.set(graph.id, candidate);
+          used += extra;
+          break;
+        }
+      }
     }
     return graphs.map((g) => texts.get(g.id)!).join("\n\n");
   };

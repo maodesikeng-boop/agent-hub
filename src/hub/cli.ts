@@ -304,7 +304,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     action: "done",
     cli: "graph done",
     usage: `  ${hub} graph done <节点> [--graph <图编号>] [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要> | --stdin]
-                                                          把没有 Worker 在干的阶段节点标完成并解锁下游，或给节点补记 PR 等结果；
+                                                          把没有 Worker 在干的阶段节点标完成并解锁下游，或给节点补记 PR 等结果（图已完成时加 --graph <图编号>）；
                                                           有 Worker 在干（running）的节点会被拒绝：先 ${hub} worker end 让它收工`,
   },
   {

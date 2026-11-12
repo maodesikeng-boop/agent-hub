@@ -743,7 +743,7 @@ export const GRAPH_TEXT_NODE_WORKERS_MAX = 3;
 /**
  * 换新会话的交接摘要里“未完结的任务图”一节的字数上限（最多 MAX_ACTIVE_GRAPHS_PER_PROJECT 张图 × MAX_GRAPH_NODES 个节点）：
  * 按最近动过的先给全文（带节点结果），放不下的只列各节点状态，还放不下的每张只留一行进度，详情用 hub graph show 看。
- * 一行进度不计在内（每张不到 200 字）。
+ * 一行进度和图间分隔符也计入预算；先为全部图预留最简进度，再按最近更新时间展开。
  */
 export const HANDOVER_GRAPHS_MAX_CHARS = 8_000;
 /** 历史任务图分页大小与 CLI 列表默认条数。 */
