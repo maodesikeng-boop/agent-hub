@@ -240,7 +240,7 @@ export function claudeScratchRules(uid: number | undefined): string[] {
   const dirs = uid === undefined
     ? [`(regex ${sbRegex("^/private/tmp/claude-[0-9]+(/|$)")})`]
     : aliases([`/tmp/claude-${uid}`, `/private/tmp/claude-${uid}`]).map((p) => `(subpath ${sbString(p)})`);
-  return [...dirs, `(regex ${sbRegex("^/private/tmp/claude-[A-Za-z0-9_-]+-cwd$")})`];
+  return [...dirs, `(regex ${sbRegex("^/private/tmp/claude-[-A-Za-z0-9_]+-cwd$")})`];
 }
 
 /** 真守护进程在数据目录 run/ 下的 socket（src/shared/paths.ts）。 */

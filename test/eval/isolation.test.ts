@@ -74,15 +74,16 @@ it("禁止执行的列表为空时不输出无过滤条件的 deny process-exec�
   expect(signalProfile).not.toMatch(/\(deny process-exec\s*\)/);
   expect(pmSandboxProfile({ home: root, realRepo: join(root, "source"), realDataDirs: [], claudeConfigDir: join(root, ".claude"), denyExec: ["/usr/bin/ssh"], daemonPorts: [] })).toContain('(deny process-exec (literal "/usr/bin/ssh"))');
 });
-it.skipIf(!available)("真 SBPL 拦住发给沙箱外进程的信号（含同进程组的父进程），沙箱内部照常", () => {
+it.skipIf(!available)("真 SBPL 拦住发给沙箱外进程的信号（含同进程组的父进程），沙箱内部照常", async () => {
   const outsider = spawn("/bin/sleep", ["30"], { detached: true, stdio: "ignore" });
+  const exited = new Promise<void>((resolve) => { outsider.once("exit", () => resolve()); outsider.once("error", () => resolve()); });
   const run = (script: string) => spawnSync(SANDBOX_EXEC, ["-p", signalProfile, "/bin/sh", "-c", script], { encoding: "utf8" });
-  // sandbox-exec 自己出错（规则写错 65、起不来 71）时 status 也非 0，会让“被拦”断言空转：先确认里面的 sh 真跑了
-  const ran = run("echo alive");
-  expect(ran.stderr).not.toMatch(/sandbox-exec|sandbox_apply/);
-  expect(ran.status).toBe(0);
-  expect(ran.stdout.trim()).toBe("alive");
   try {
+    // sandbox-exec 自己出错（规则写错 65、起不来 71）时 status 也非 0，会让“被拦”断言空转：先确认里面的 sh 真跑了
+    const ran = run("echo alive");
+    expect(ran.stderr).not.toMatch(/sandbox-exec|sandbox_apply/);
+    expect(ran.status).toBe(0);
+    expect(ran.stdout.trim()).toBe("alive");
     for (const pid of [process.pid, outsider.pid!]) {
       for (const sig of ["-0", "-URG"]) {
         // 必须是 sh 里的 kill 被沙箱拒绝：退出码 1 + Operation not permitted，不是 sandbox-exec 的 65/71
@@ -96,7 +97,35 @@ it.skipIf(!available)("真 SBPL 拦住发给沙箱外进程的信号（含同进
     const inner = run('sleep 30 & p=$!; /bin/sh -c "kill -TERM $p"; wait $p; [ $? -eq 143 ]');
     expect(inner.stderr).not.toMatch(/not permitted|sandbox-exec|sandbox_apply/i);
     expect(inner.status).toBe(0);
-  } finally { try { process.kill(-outsider.pid!, "SIGKILL"); } catch { /* 已退出 */ } }
+  } finally {
+    // 任何断言提前抛错都要杀掉 outsider 并等它退出，免得被 test/spawn-guard.ts 报残留
+    if (outsider.pid) { try { process.kill(-outsider.pid, "SIGKILL"); } catch { /* 已退出 */ } }
+    if (outsider.exitCode === null && outsider.signalCode === null) await exited;
+  }
+}, 10_000);
+
+// sandbox_compile_string 只编译不 apply，嵌套沙箱里也能跑；能当场抓出 SBPL 语法错（如字符类末尾的 -]）
+const COMPILE_PY = [
+  "import ctypes, sys",
+  "lib = ctypes.CDLL('/usr/lib/libsandbox.1.dylib')",
+  "lib.sandbox_compile_string.restype = ctypes.c_void_p",
+  "lib.sandbox_compile_string.argtypes = [ctypes.c_char_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_char_p)]",
+  "err = ctypes.c_char_p()",
+  "r = lib.sandbox_compile_string(sys.stdin.buffer.read(), None, ctypes.byref(err))",
+  "sys.stderr.write((err.value or b'').decode())",
+  "sys.exit(0 if r else 1)",
+].join("\n");
+const compileSbpl = (profile: string) => spawnSync("python3", ["-I", "-c", COMPILE_PY], { input: profile, encoding: "utf8" });
+const canCompile = process.platform === "darwin" && spawnSync("python3", ["-I", "-c", "import ctypes; ctypes.CDLL('/usr/lib/libsandbox.1.dylib')"]).status === 0;
+it.skipIf(!canCompile)("整份 pmSandboxProfile 能被 sandbox_compile_string 编译（各种参数组合，不是只看字符串）", () => {
+  const home = join(root, "user");
+  const base = { home, realRepo: join(root, "source"), realDataDirs: [join(home, ".agent-hub")], claudeConfigDir: join(home, ".claude"), denyExec: ["/usr/bin/ssh"], daemonPorts: [4317] };
+  for (const extra of [{}, { uid: 502 }, { uid: undefined, projectDirs: [join(root, "proj")], writableDirs: [join(root, "w")], mainRepo: join(root, "main") }]) {
+    const r = compileSbpl(pmSandboxProfile({ ...base, ...extra }));
+    expect(r.stderr).toBe(""); expect(r.status).toBe(0);
+  }
+  // 守卫自己有效：字符类末尾的 -] 在 SBPL 里是语法错
+  expect(compileSbpl('(version 1)(allow default)(allow file-write* (regex #"^/x-[a-z_-]+$"))').status).not.toBe(0);
 });
 
 // ---- claude 的 Bash 工具写 /private/tmp/claude-<uid>：默认禁写的沙箱要按 claude 的写法放行 ----
@@ -105,7 +134,7 @@ const claudeProfile = (extra: { uid?: number } = {}) =>
 it("放行 claude 的 Bash 临时目录 /tmp/claude-<uid>（/tmp 与 /private/tmp 两种写法）和 claude-<id>-cwd，不放行整个 /tmp", () => {
   const profile = claudeProfile({ uid: 502 });
   expect(profile).toContain('(subpath "/private/tmp/claude-502")');
-  expect(profile).toContain('(regex #"^/private/tmp/claude-[A-Za-z0-9_-]+-cwd$")');
+  expect(profile).toContain('(regex #"^/private/tmp/claude-[-A-Za-z0-9_]+-cwd$")');
   expect(profile).not.toMatch(/\(subpath "\/(private\/)?tmp"\)/);
   expect(claudeScratchRules(502).join(" ")).toContain('(subpath "/tmp/claude-502")'.replace("/tmp/", realOr("/tmp") + "/"));
 });
