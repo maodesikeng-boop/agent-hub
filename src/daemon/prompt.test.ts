@@ -755,10 +755,11 @@ describe("提示词：项目经理（M3）", () => {
       expect(HUB_USAGE_PROMPT, flag).toContain(flag);
     }
     // 绑图节点的参数只在 hub help 和任务图手册里
-    for (const flag of ["--node", "--incomplete", "--graph"]) {
+    for (const flag of ["--node", "--graph"]) {
       expect(HUB_USAGE, flag).toContain(flag);
       expect(HUB_USAGE_PROMPT, flag).not.toContain(flag);
     }
+    expect(HUB_USAGE).not.toContain("--incomplete");
   });
 
   it("缩成一行的命令组（项目、性格设定、定时任务、总助、热重启）：提示词让它用 hub help 查，参数和注意事项在 HUB_USAGE 里都查得到", () => {

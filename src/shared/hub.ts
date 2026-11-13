@@ -204,8 +204,8 @@ export interface HubArgsMap {
   "worker.send": { workerId: WorkerId; text: string; maxTimeMs?: number };
   /** `hub worker max-time <编号> <时长>`：单独延时或更新正在运行的 Worker 本轮最大时间（从现在重新计时）。 */
   "worker.max-time": { workerId: WorkerId; maxTimeMs: number };
-  /** `hub worker end <编号> [--incomplete]`：结束 Worker 会话（登记 session.end），Worker 标 ended；incomplete 为 true 时绑定节点变等人（等项目经理）供接力重绑。 */
-  "worker.end": { workerId: WorkerId; incomplete?: boolean };
+  /** `hub worker end <编号>`：停掉这个 Worker（登记 session.end），Worker 标 ended；绑在任务图未完成步骤上的会变成等你处理（不再标完成）。 */
+  "worker.end": { workerId: WorkerId };
   /** `hub worker list`：我派出去的 Worker。 */
   "worker.list": Record<string, never>;
   /**
@@ -301,6 +301,8 @@ export interface HubArgsMap {
     commit?: string;
     branch?: string;
     summary?: string;
+    /** PM 放行时补给下一步的话（--stdin 正文）。 */
+    note?: string;
   };
   /** `hub graph decide <nodeKey>`：PM 代填用户在对话中口头拍板的结论，步骤完了，下游轮到。 */
   "graph.decide": {
@@ -331,6 +333,15 @@ export interface HubArgsMap {
 export interface CreateTaskGraphNodeInput {
   key: TaskNodeKey;
   title: string;
+  brief?: string;
+  vendor?: AgentVendor;
+  model?: string;
+  effort?: string;
+  maxTime?: string | number;
+  readonly?: boolean;
+  confirm?: boolean;
+  review?: boolean;
+  base?: "main";
   deps?: TaskNodeKey[];
   /** 写了问题就是挂着拍板卡的步骤：轮到时等用户拍板。 */
   question?: string;
@@ -339,6 +350,8 @@ export interface CreateTaskGraphNodeInput {
   recommended?: string;
 }
 
+export type CreateTaskGraphStepInput = CreateTaskGraphNodeInput;
+
 export interface CreateTaskGraphEdgeInput {
   from: TaskNodeKey;
   to: TaskNodeKey;
@@ -346,14 +359,25 @@ export interface CreateTaskGraphEdgeInput {
 
 export interface CreateTaskGraphSpecInput {
   title?: string;
+  goal?: string;
   originMsgId?: MessageId;
-  nodes: CreateTaskGraphNodeInput[];
+  steps?: CreateTaskGraphStepInput[];
+  nodes?: CreateTaskGraphNodeInput[];
   edges?: CreateTaskGraphEdgeInput[];
 }
 
 export interface PatchTaskGraphNodeInput {
   key: TaskNodeKey;
   title?: string;
+  brief?: string | null;
+  vendor?: AgentVendor | null;
+  model?: string | null;
+  effort?: string | null;
+  maxTime?: string | number | null;
+  readonly?: boolean;
+  confirm?: boolean;
+  review?: boolean;
+  base?: "main" | null;
   deps?: TaskNodeKey[];
   question?: string;
   options?: string[];
@@ -361,8 +385,15 @@ export interface PatchTaskGraphNodeInput {
   recommended?: string;
 }
 
+export type PatchTaskGraphStepInput = PatchTaskGraphNodeInput;
+
 export interface PatchTaskGraphSpecInput {
   title?: string;
+  goal?: string | null;
+  addSteps?: CreateTaskGraphStepInput[];
+  updateSteps?: PatchTaskGraphStepInput[];
+  removeSteps?: TaskNodeKey[];
+  skipSteps?: TaskNodeKey[];
   addNodes?: CreateTaskGraphNodeInput[];
   updateNodes?: PatchTaskGraphNodeInput[];
   removeNodes?: TaskNodeKey[];
@@ -423,6 +454,17 @@ interface PmHubStatus {
   activeTaskGraphs?: PmActiveGraphSummary[];
 }
 
+/** Worker 调 hub status 时上游步骤的交棒摘要与落盘路径。 */
+export interface WorkerHubStatusUpstream {
+  key: TaskNodeKey;
+  title: string;
+  skipped: boolean;
+  summary: string | null;
+  branch: string | null;
+  prUrl: string | null;
+  reportFile: string | null;
+}
+
 /** Worker 调 hub status（M3）：我是哪个 Worker、任务是什么、在哪干活。 */
 export interface WorkerHubStatus {
   role: "worker";
@@ -433,6 +475,18 @@ export interface WorkerHubStatus {
   conversationId: ConversationId;
   worker: WorkerRecord;
   project: ProjectCard;
+  /** 所属任务图步骤信息（临时 Worker 没有此字段）。 */
+  taskGraph?: {
+    id: TaskGraphId;
+    title: string;
+    goal: string | null;
+    stepKey: TaskNodeKey;
+    stepTitle: string;
+    stepIndex: number;
+    totalSteps: number;
+    brief: string | null;
+    upstream: WorkerHubStatusUpstream[];
+  };
 }
 
 /** hub worker search 的一处命中：where 是 title、task 或 report；report 时 report 是第几轮汇报（从 1 起，按时间）。 */

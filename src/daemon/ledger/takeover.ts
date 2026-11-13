@@ -14,7 +14,7 @@ import {
 } from "../../shared/limits.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import { vendorLabel } from "../../shared/vendors.ts";
-import { UNFORMATTED_LABEL, WORKER_REPORT_STATUS_LABELS, workerReportHeader } from "../../shared/worker.ts";
+import { UNFORMATTED_LABEL, WORKER_REPORT_STATUS_LABELS, unwrapWorkerReportText } from "../../shared/worker.ts";
 import type { WorkerReportStatus } from "../../shared/worker.ts";
 import type { LedgerContext } from "./context.ts";
 import type { WorkerDbRow } from "./rows.ts";
@@ -41,6 +41,8 @@ export interface TakeoverMessageInput {
   predecessors: readonly TakeoverPredecessor[];
   /** 在哪干活的那一句（接手前任的目录、新开的 worktree、主文件夹）。 */
   workspaceNote: string;
+  /** 上一步移交来的交棒说明（若有）。 */
+  upstreamHandoff?: string | null;
   /** 项目经理的补充（hub worker start --node 的正文），没给是 null。 */
   pmNote: string | null;
 }
@@ -106,7 +108,6 @@ export function createLedgerTakeover(ctx: Pick<LedgerContext, "db" | "now">, ste
   const reportsOf = (p: TakeoverPredecessor, budget: { left: number }): string => {
     const rows = outcomeLines(p.worker, ["report"], TAKEOVER_ROWS_SCAN);
     if (rows.length === 0) return "（没有汇报）";
-    const header = `${workerReportHeader(p.worker.id, p.worker.title)}\n\n`;
     const parts: string[] = [];
     let skipped = 0;
     for (const row of rows) {
@@ -115,7 +116,7 @@ export function createLedgerTakeover(ctx: Pick<LedgerContext, "db" | "now">, ste
         skipped++;
         continue;
       }
-      const body = (row.text.startsWith(header) ? row.text.slice(header.length) : row.text).trim();
+      const body = unwrapWorkerReportText(p.worker, row.text).trim();
       const shown = keepHead(body, budget.left - sepCost);
       budget.left -= sepCost + charLength(shown);
       parts.push(shown);
@@ -192,6 +193,9 @@ export function createLedgerTakeover(ctx: Pick<LedgerContext, "db" | "now">, ste
       `## 你的任务`,
       `原始任务说明在系统提示词的“你的任务”里（也可以 \`${HUB_COMMAND} status\` 看）。接着前任的进度做，前任已经做过、验证过的不要从头再来；前任的结论拿不准的先核实。`,
     ];
+    if (input.upstreamHandoff && input.upstreamHandoff.trim() !== "") {
+      tailParts.push(`## 上一步交给你的话（原样转交）`, input.upstreamHandoff.trim());
+    }
     if (input.pmNote !== null) tailParts.push(`## 项目经理的补充`, input.pmNote.trim());
     return [head, ...blocks, tailParts.join("\n\n")].join("\n\n");
   };

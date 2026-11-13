@@ -273,12 +273,12 @@ describe("换人接手同一步：重放 441", () => {
     expect(() => hub("worker.start", { node: "s1" }, { workspace: repoProbe })).toThrow(LedgerRequestError);
     const w1 = start({ title: "实现", task: "原始任务", node: "s1" });
     worktreeReady(w1);
-    hub("worker.end", { workerId: w1.id, incomplete: true });
+    hub("worker.end", { workerId: w1.id });
 
     const w2 = hub("worker.start", { node: "s1", noWorktree: true }).data.worker;
     expect(w2).toMatchObject({ workspace: "main", worktreePath: null });
     expect(firstMessage(w2).text).toContain("--no-worktree");
-    hub("worker.end", { workerId: w2.id, incomplete: true });
+    hub("worker.end", { workerId: w2.id });
 
     rmSync(w1.worktreePath!, { recursive: true, force: true });
     enqueued = [];
@@ -375,7 +375,7 @@ describe("清理保护：同一个目录后任还在用、或所属任务图还 
     expect(ledger.isWorkerCleanable(w1.id)).toBe(false);
     expect(ledger.listEndedWorktreeWorkers().map((c) => c.workerId)).toEqual([w1.id]);
     // 后任也收工了，但图还 active（随时可能再换人接着用）
-    hub("worker.end", { workerId: w2.id, incomplete: true });
+    hub("worker.end", { workerId: w2.id });
     db.run("UPDATE agent_sessions SET status = 'ended', pid = NULL WHERE worker_id = ?", w2.id);
     expect(ledger.isWorkerCleanable(w1.id)).toBe(false);
     expect(ledger.isWorkerCleanable(w2.id)).toBe(false);
@@ -419,7 +419,7 @@ describe("清理保护：同一个目录后任还在用、或所属任务图还 
     worktreeReady(w1);
     turn(w1, firstMessage(w1).id, ["pnpm test"], report("有问题", "卡住"), "ok");
     const w1EndedAt = now;
-    hub("worker.end", { workerId: w1.id, incomplete: true });
+    hub("worker.end", { workerId: w1.id });
     db.run("UPDATE agent_sessions SET status = 'ended', pid = NULL WHERE worker_id = ?", w1.id);
 
     // 4 天后后任 w2 接手并在同一天收工，图取消结束
@@ -427,7 +427,7 @@ describe("清理保护：同一个目录后任还在用、或所属任务图还 
     const w2 = hub("worker.start", { node: "s1" }, { workspace: repoProbe }).data.worker;
     const w2EndedAt = now + 60_000;
     now = w2EndedAt;
-    hub("worker.end", { workerId: w2.id, incomplete: true });
+    hub("worker.end", { workerId: w2.id });
     hub("graph.cancel", { graphId: graph.id });
 
     // 后任进程 pid 还没退完时不可清理

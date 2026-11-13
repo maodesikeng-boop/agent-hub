@@ -1056,6 +1056,16 @@ export interface TaskEdge {
 export interface TaskNode {
   key: TaskNodeKey;
   title: string;
+  /** 步骤职责（仅单图详情按需带出，全量快照不带正文以控体积）。 */
+  brief?: string | null;
+  vendor?: string | null;
+  model?: string | null;
+  effort?: string | null;
+  readonly?: boolean;
+  maxTimeMs?: number | null;
+  confirm?: boolean;
+  review?: boolean;
+  base?: "main" | null;
   status: TaskNodeStatus;
   /** 等谁：只在 status 是 waiting 时有。 */
   waitingFor: TaskNodeWaitingFor | null;
@@ -1081,6 +1091,8 @@ export interface TaskGraph {
   pmId: PmId;
   conversationId: ConversationId;
   title: string;
+  /** 整张图目标（仅单图详情按需带出，全量快照不带正文以控体积）。 */
+  goal?: string | null;
   status: TaskGraphStatus;
   originMsgId: MessageId | null;
   nodes: TaskNode[];

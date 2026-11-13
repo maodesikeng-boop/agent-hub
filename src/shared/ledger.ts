@@ -289,6 +289,8 @@ export interface WorktreeTask {
   repo: string;
   branch: string;
   worktreePath: string;
+  /** 分叉步骤新开 worktree 时指定的基准分支或提交（不传默认 HEAD）。 */
+  base?: string;
   status: WorkerStatus;
   setupCommand: string | null;
 }
@@ -341,6 +343,9 @@ export interface HubCallContext {
   transcript?: string | null;
   /** worker.start 带 --vendor 时：这家在这台设备（device 是设备名）上能不能用；没装、没登录账本拒绝派。 */
   vendorStatus?: { vendor: AgentVendor; availability: VendorAvailability; device: string };
+  /** graph.create / patch / done / decide / skip 自动开工前预探的多厂商可用状态与设备名。 */
+  vendorStatuses?: Partial<Record<AgentVendor, VendorAvailability>>;
+  deviceName?: string;
   /** models：agent 接口按 --vendor / --refresh 异步查好的模型目录；不传时账本用缓存或打包目录兜底。 */
   modelCatalogs?: readonly ModelCatalog[];
   /** graph.finish：agent 接口在结束图前异步查好的 PR（按分支名或手工补记的 PR 网址索引；查不到或未装 gh 的不在此表中，不硬拦）。 */
@@ -503,6 +508,10 @@ export interface Ledger extends LedgerHandoverWork {
    * 不是项目经理的会话、找不到图或什么都没记 → 空数组（不用查，hubCall 自己会报错或放行）。
    */
   graphPrTargets?(sessionId: SessionId, graphId?: TaskGraphId): GraphPrTarget[];
+  /**
+   * agent 接口在 graph.create / patch / done / decide / skip 之前调（只读）：取出这次可能自动开工的步骤指定的厂商列表，以便预探可用性。
+   */
+  graphAutoDispatchVendors?(sessionId: SessionId, command: HubCommand, body: Record<string, unknown>): AgentVendor[];
   /**
    * session.send 处理函数在发送 task_graph.ready_to_finish 交付单前调（只读）：取出该交付单对应任务图的主文件夹与各分支信息，
    * 以便异步探测 git diff --numstat 与 PR 状态。已探测过或非交付单消息返回 null。

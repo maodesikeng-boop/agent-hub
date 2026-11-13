@@ -7,6 +7,8 @@ import {
   WORKER_REPORT_STATUSES,
   WORKER_REPORT_STATUS_LABELS,
   deliveryParts,
+  extractReportPrUrl,
+  hasReportQuestion,
   parseWorkerReport,
   workerPickNote,
   workerPickOf,
@@ -53,7 +55,16 @@ describe("parseWorkerReport", () => {
   it("标准格式", () => {
     expect(parseWorkerReport(standard)).toEqual({
       kind: "ok",
-      report: { status: "done", summary: "修好了 X，加了一条测试", commit: "a1b2c3d", tests: "pnpm test，全过", questions: "无" },
+      report: {
+        status: "done",
+        summary: "修好了 X，加了一条测试",
+        commit: "a1b2c3d",
+        pr: null,
+        tests: "pnpm test，全过",
+        deviation: null,
+        handoff: "",
+        questions: "无",
+      },
     });
   });
 
@@ -114,7 +125,16 @@ describe("parseWorkerReport", () => {
   it("全角冒号、首尾空白、提交写“无”、缺了的项是空串", () => {
     expect(parseWorkerReport(report("  状态：放弃了  \n摘要：  做不了，缺权限 \n提交：无"))).toEqual({
       kind: "ok",
-      report: { status: "gave_up", summary: "做不了，缺权限", commit: null, tests: "", questions: "" },
+      report: {
+        status: "gave_up",
+        summary: "做不了，缺权限",
+        commit: null,
+        pr: null,
+        tests: "",
+        deviation: null,
+        handoff: "",
+        questions: "",
+      },
     });
   });
 
@@ -130,6 +150,64 @@ describe("parseWorkerReport", () => {
   it("解析出的摘要不截断（完整的留给项目经理），截断只在那一行里", () => {
     const summary = "长".repeat(WORKER_LINE_SUMMARY_CHARS + 5);
     expect(parseWorkerReport(report(`状态: 做完了\n摘要: ${summary}`))).toMatchObject({ report: { summary } });
+  });
+
+  it("支持解析 PR、偏离、交棒三栏：PR URL 提取、偏离为无与以“无”开头的真偏离区分、多行交棒与问题判断", () => {
+    const withHandoff = parseWorkerReport(
+      report(
+        [
+          "状态: 做完了",
+          "摘要: 实现自动开工与交棒",
+          "提交: 1a2b3c4",
+          "PR: https://github.com/org/repo/pull/312",
+          "测试: pnpm vitest run，全绿",
+          "偏离: 无",
+          "交棒: 改动集中在 src/daemon/ledger/task-graphs.ts",
+          "- 注意检查异步恢复时序",
+          "问题: 无（全部明确）",
+        ].join("\n"),
+      ),
+    );
+    expect(withHandoff).toEqual({
+      kind: "ok",
+      report: {
+        status: "done",
+        summary: "实现自动开工与交棒",
+        commit: "1a2b3c4",
+        pr: "https://github.com/org/repo/pull/312",
+        tests: "pnpm vitest run，全绿",
+        deviation: null,
+        handoff: "改动集中在 src/daemon/ledger/task-graphs.ts\n- 注意检查异步恢复时序",
+        questions: "无（全部明确）",
+      },
+    });
+    if (withHandoff.kind === "ok") {
+      expect(extractReportPrUrl(withHandoff.report.pr)).toBe("https://github.com/org/repo/pull/312");
+      expect(hasReportQuestion(withHandoff.report.questions)).toBe(false);
+    }
+
+    // PR: 无 或说明性文字不提取为 URL；带说明文字包裹的链接也能干净提取
+    for (const nonePr of ["无", "无（本步只读）", "无，不用提 PR"]) {
+      const p = parseWorkerReport(report(`状态: 做完了\n摘要: 调研完\nPR: ${nonePr}`));
+      expect(p).toMatchObject({ kind: "ok", report: { pr: null } });
+    }
+    expect(extractReportPrUrl("PR #315（https://github.com/org/repo/pull/315）。")).toBe("https://github.com/org/repo/pull/315");
+    expect(extractReportPrUrl(null)).toBeNull();
+
+    // 以“无”开头的真实中文句子（如“无法…”、“无需…”）绝不能误判成无偏离或无问题
+    const realDev = parseWorkerReport(
+      report("状态: 做完了\n摘要: 改用方案 B\n偏离: 无法沿用旧表结构，改为新建扩展表\n问题: 无需新建配置项，是否认可？"),
+    );
+    expect(realDev).toMatchObject({
+      kind: "ok",
+      report: {
+        deviation: "无法沿用旧表结构，改为新建扩展表",
+        questions: "无需新建配置项，是否认可？",
+      },
+    });
+    if (realDev.kind === "ok") {
+      expect(hasReportQuestion(realDev.report.questions)).toBe(true);
+    }
   });
 });
 

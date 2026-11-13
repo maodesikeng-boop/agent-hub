@@ -199,7 +199,12 @@ export function createWorktreeCreateHandler(deps: WorktreeHandlerDeps): ActionHa
     const { workerId } = action.params;
     const task = deps.ledger.getWorktreeTask(workerId);
     if (task === null || task.status === "ended") return { kind: "done" };
-    const { baseCommit } = await deps.addWorktree({ repoFolder: task.repo, worktreePath: task.worktreePath, branch: task.branch });
+    const { baseCommit } = await deps.addWorktree({
+      repoFolder: task.repo,
+      worktreePath: task.worktreePath,
+      branch: task.branch,
+      ...(task.base ? { base: task.base } : {}),
+    });
     if (task.setupCommand === null) {
       deps.ledger.onWorktreeCreated(workerId, baseCommit);
       return { kind: "done" };

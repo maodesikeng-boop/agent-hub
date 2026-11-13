@@ -212,7 +212,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     ).toThrow(/20/);
   });
 
-  it("Worker --node 绑定、出问题变等人（等项目经理）、--incomplete 接力重绑不断链、正常收工下游轮到", () => {
+  it("Worker --node 绑定、worker end 仅停机变等人、汇报做完了自动收工并解锁下游", () => {
     const graph = ledger.hubCall(lin.sessionId, "graph.create", {
       specJson: JSON.stringify({
         title: "重构鉴权",
@@ -248,9 +248,8 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
       workerIds: [w1.id],
     });
 
-    // 即使 w1 汇报了“做完了”，若因对话太长换人传了 --incomplete，节点必须进入 attention 而绝不能误解锁 step-2！
-    finishWorkerTurn(w1.id, "做完了", "完成了一半，上下文已满");
-    ledger.hubCall(lin.sessionId, "worker.end", { workerId: w1.id, incomplete: true });
+    // PM 调 worker end 停掉正在干或停着的 Worker：只停机，节点变为 waiting:pm，绝不误解锁 step-2
+    ledger.hubCall(lin.sessionId, "worker.end", { workerId: w1.id });
 
     shown = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph;
     expect(shown.nodes.find((n) => n.key === "step-1")).toMatchObject({
@@ -274,10 +273,9 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     shown = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph;
     expect(stateOf(shown, "step-1")).toBe("waiting:pm");
 
-    // PM 追问后 w2 汇报“做完了”并正常 end -> step-1 置 done，step-2 自动解锁为 ready！
+    // PM 追问后 w2 汇报“做完了” -> 后台自动把 w2 收工、step-1 标 done、step-2 解锁为 waiting:pm！
     ledger.hubCall(lin.sessionId, "worker.send", { workerId: w2.id, text: "按方案 A 处理继续做完" });
     finishWorkerTurn(w2.id, "做完了", "全部搞定");
-    ledger.hubCall(lin.sessionId, "worker.end", { workerId: w2.id });
 
     shown = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph;
     expect(shown.nodes.find((n) => n.key === "step-1")).toMatchObject({
@@ -309,16 +307,13 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     const message = (error as Error).message;
     expect(message).toContain(`节点「impl」正在由 Worker #${w.id} 执行，不能直接标完成`);
     expect(message).toContain(`hub worker end ${w.id}`);
-    expect(message).toContain("它最近一轮汇报是“做完了”时节点会自动标完成");
     // 没被改：还在干，下游没解锁，PR 没记上
     let shown = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph;
     expect(shown.nodes.find((n) => n.key === "impl")).toMatchObject({ status: "running", activeWorkerId: w.id, artifact: null });
     expect(shown.nodes.find((n) => n.key === "qa")?.status).toBe("pending");
 
-    // Worker 汇报“做完了”后节点还是 running（有人在干），照样拒绝；收工后节点自动 done，再调 graph done 补记 PR
+    // Worker 汇报“做完了”后后台自动收工并标 done，再调 graph done 可补记 PR
     finishWorkerTurn(w.id, "做完了", "导出接口已实现");
-    expect(() => ledger.hubCall(lin.sessionId, "graph.done", { graphId: graph.id, nodeKey: "impl" })).toThrow(/不能直接标完成/);
-    ledger.hubCall(lin.sessionId, "worker.end", { workerId: w.id });
     ledger.hubCall(lin.sessionId, "graph.done", { graphId: graph.id, nodeKey: "impl", prUrl: "https://example.test/pr/1" });
     shown = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph;
     expect(shown.nodes.find((n) => n.key === "impl")).toMatchObject({
@@ -334,39 +329,28 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     );
   });
 
-  it("hub worker end 的回执写明绑定的节点变成了什么：做完了 → 完了并列出轮到的下游；--incomplete 或没汇报做完 → 等你处理；没绑图的不提", () => {
+  it("hub worker end 只作停机：绑在未完成步骤上的变为等你处理（绝不再标 done），没绑图的不提", () => {
     const graph = ledger.hubCall(lin.sessionId, "graph.create", {
       specJson: JSON.stringify({ title: "导出", nodes: [{ key: "impl", title: "实现" }, { key: "qa", title: "验收", deps: ["impl"] }] }),
     }).data.graph;
     const start = (title: string, node?: string) =>
       ledger.hubCall(lin.sessionId, "worker.start", { title, task: `做 ${title}`, noWorktree: true, ...(node === undefined ? {} : { node }) }).data.worker;
 
-    // 换人：汇报了“做完了”也按 --incomplete 等人接手
     const w1 = start("实现第 1 棒", "impl");
-    finishWorkerTurn(w1.id, "做完了", "做了一半");
-    const swapped = ledger.hubCall(lin.sessionId, "worker.end", { workerId: w1.id, incomplete: true }).text;
+    const swapped = ledger.hubCall(lin.sessionId, "worker.end", { workerId: w1.id }).text;
     expect(swapped).toContain(`Worker #${w1.id}“实现第 1 棒”已收工。`);
-    expect(swapped).toContain(`它绑定的任务图 #${graph.id} 的节点「impl」变成等你处理，等人接手（带了 --incomplete）`);
+    expect(swapped).toContain(`它绑定的任务图 #${graph.id} 的节点「impl」变成等你处理`);
     expect(swapped).toContain("hub worker start --node impl");
+    expect(swapped).toContain("hub graph done impl");
     expect(swapped).toContain("hub graph skip impl");
+    expect(stateOf(ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph, "impl")).toBe("waiting:pm");
 
-    // 没汇报“做完了”就收工：也是等人接手，原因不一样
+    // 汇报“有问题”后调 worker end 同样只停机保持 waiting:pm，绝不标 done
     const w2 = start("实现第 2 棒", "impl");
+    finishWorkerTurn(w2.id, "有问题", "缺权限");
     const unfinished = ledger.hubCall(lin.sessionId, "worker.end", { workerId: w2.id }).text;
-    expect(unfinished).toContain("节点「impl」变成等你处理，等人接手（它最近一轮没有汇报“做完了”）");
-
-    // 做完了：节点 done，回执列出解锁的下游
-    const w3 = start("实现第 3 棒", "impl");
-    finishWorkerTurn(w3.id, "做完了", "实现完了");
-    const done = ledger.hubCall(lin.sessionId, "worker.end", { workerId: w3.id }).text;
-    expect(done).toContain(`它绑定的任务图 #${graph.id} 的节点「impl」已标记为完了（它最近一轮汇报是“做完了”）；轮到了：qa [等你处理]（给它派 Worker：hub worker start --node qa --graph ${graph.id}）。`);
-
-    // 最后一个节点做完：回执写明全部节点已完成（待交付）并提醒用 hub graph finish 结束
-    const w4 = start("验收", "qa");
-    finishWorkerTurn(w4.id, "做完了", "验收通过");
-    expect(ledger.hubCall(lin.sessionId, "worker.end", { workerId: w4.id }).text).toContain(
-      "节点「qa」已标记为完了（它最近一轮汇报是“做完了”）；全部节点已完成（待交付），验收合并后用 hub graph finish 结束任务图。",
-    );
+    expect(unfinished).toContain("节点「impl」变成等你处理");
+    expect(stateOf(ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph, "impl")).toBe("waiting:pm");
 
     // 临时 Worker（不绑图）：回执不提任务图
     const temp = start("跑腿");
@@ -525,7 +509,8 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     ledger.hubCall(lin.sessionId, "graph.skip", { graphId: graph.id, nodeKey: "b" });
     const w = ledger.hubCall(lin.sessionId, "worker.start", { title: "实现", task: "实现", node: "a", noWorktree: true }).data.worker;
     ledger.hubCall(lin.sessionId, "graph.cancel", { graphId: graph.id });
-    finishWorkerTurn(w.id, "做完了");
+    // 取消整张图时后台已自动停掉在跑的 w
+    expect(db.get<{ status: string }>("SELECT status FROM workers WHERE id = ?", w.id)?.status).toBe("ended");
     expect(ledger.hubCall(lin.sessionId, "worker.end", { workerId: w.id }).text).not.toContain("已标记为完了");
     const after = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph;
     expect(after.status).toBe("cancelled");
@@ -602,7 +587,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     const worker = ledger.hubCall(lin.sessionId, "worker.start", {
       title: "实现", task: "实现 a", noWorktree: true, node: "a",
     }).data.worker;
-    finishWorkerTurn(worker.id, "做完了");
+    finishWorkerTurn(worker.id, "有问题", "遇到边界");
     ledger.hubCall(lin.sessionId, "worker.send", { workerId: worker.id, text: "还有漏项，继续修复" });
     ledger.hubCall(lin.sessionId, "worker.end", { workerId: worker.id });
     const shown = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph;

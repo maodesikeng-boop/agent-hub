@@ -36,13 +36,19 @@ export const WORKER_REPORT_FORMAT = `${REPORT_START}
 问题: <要项目经理回答什么、要问用户什么，或者建议改哪个记忆文件>
 ${REPORT_END}`;
 
-interface WorkerReport {
+export interface WorkerReport {
   status: WorkerReportStatus;
   summary: string;
   /** 写“无”是 null。 */
   commit: string | null;
+  /** PR 栏：写“无”或没写是 null。 */
+  pr: string | null;
   /** 没写是空串。 */
   tests: string;
+  /** 偏离栏：写“无”或没写是 null；有偏离内容时非 null（后台踩刹车停在 waiting:pm）。 */
+  deviation: string | null;
+  /** 交棒栏：没写是空串。 */
+  handoff: string;
   /** 没写是空串。 */
   questions: string;
 }
@@ -54,15 +60,44 @@ interface WorkerReport {
  */
 export type ParsedWorkerReport = { kind: "ok"; report: WorkerReport } | { kind: "unformatted"; summary: string };
 
-type FieldKey = "状态" | "摘要" | "提交" | "测试" | "问题";
+type FieldKey = "状态" | "摘要" | "提交" | "PR" | "测试" | "偏离" | "交棒" | "问题";
 /**
  * 一项的开头：行首可以有 Markdown 的列表符号、引用（- * > 和空白），名字可以加粗（**状态**: 或 **状态:**），冒号全角半角都行。
  */
-const FIELD_LINE = /^[-*>\s]*(?:\*\*)?(状态|摘要|提交|测试|问题)\s*(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*(.*)$/u;
+const FIELD_LINE = /^[-*>\s]*(?:\*\*)?(状态|摘要|提交|PR|pr|测试|偏离|交棒|问题)\s*(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*(.*)$/u;
 /** 状态值首尾的标点、符号（“做完了。”“「做完了」”“**做完了**”）。 */
 const EDGE_PUNCTUATION = /^[\p{P}\p{S}\s]+|[\p{P}\p{S}\s]+$/gu;
 /** 提交写“无”，或者“无”后面跟着说明（“无（没提交）”“无，只读调查”）：都当没有提交。提交号不会以“无”开头。 */
 const NO_COMMIT = "无";
+/** PR 栏写“无”或“无（无需提 PR）”这类：PR 链接/编号不会以“无”开头。 */
+const NO_PR_PREFIX = /^无(?:$|[（(\s，,。；;：:—-])/u;
+/** 自然语言栏（偏离、问题）里的“无”：纯“无/没有/暂无/none”或带括号补充“无（…）”；不把“无法…”“无需…”误判成无。 */
+const NONE_WORDS = new Set(["无", "没有", "暂无", "none", "n/a"]);
+const NONE_WITH_PAREN = /^无\s*[（(][^）)\r\n]*[）)][。.\s]*$/u;
+const HTTP_URL_IN_TEXT = /https?:\/\/[^\s<>)"'）\]】]+/iu;
+
+/** 自然语言字段（偏离、问题）是否表示“无”。 */
+export function isReportFieldNone(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (trimmed === "") return true;
+  if (NONE_WITH_PAREN.test(trimmed)) return true;
+  const stripped = trimmed.replace(EDGE_PUNCTUATION, "").trim().toLowerCase();
+  return stripped === "" || NONE_WORDS.has(stripped);
+}
+
+/** 汇报“问题”栏是否有需要交给项目经理的内容（非空且非“无”）。 */
+export function hasReportQuestion(questions: string): boolean {
+  return !isReportFieldNone(questions);
+}
+
+/** 从汇报“PR”栏提取有效的 HTTP(S) PR URL；没有写 URL（如“无”或仅文字）返回 null。 */
+export function extractReportPrUrl(pr: string | null | undefined): string | null {
+  if (!pr) return null;
+  const match = HTTP_URL_IN_TEXT.exec(pr.trim());
+  if (match === null) return null;
+  const url = match[0].replace(/[.,;。，；!！?？]+$/u, "");
+  return /^https?:\/\/\S+$/iu.test(url) ? url : null;
+}
 
 /** 压空白：连续的空白（含换行）变成一个空格，去首尾。 */
 function collapseWhitespace(text: string): string {
@@ -102,7 +137,8 @@ export function parseWorkerReport(text: string): ParsedWorkerReport {
   for (const line of block.split("\n")) {
     const match = FIELD_LINE.exec(line.trim());
     if (match !== null) {
-      current = match[1] as FieldKey;
+      const rawKey = match[1]!;
+      current = (rawKey.toUpperCase() === "PR" ? "PR" : rawKey) as FieldKey;
       values[current] = match[2]!;
     } else if (current !== null) {
       values[current] = `${values[current]}\n${line}`;
@@ -114,15 +150,45 @@ export function parseWorkerReport(text: string): ParsedWorkerReport {
   const summary = field("摘要");
   if (status === undefined || summary === "") return unformatted();
   const commit = field("提交");
+  const prRaw = field("PR");
+  const prStripped = prRaw.replace(EDGE_PUNCTUATION, "").trim();
+  const pr =
+    prRaw === "" || NO_PR_PREFIX.test(prRaw) || NONE_WORDS.has(prStripped.toLowerCase())
+      ? null
+      : prRaw;
+  const deviationRaw = field("偏离");
+  const deviation = isReportFieldNone(deviationRaw) ? null : deviationRaw;
   return {
     kind: "ok",
-    report: { status, summary, commit: commit === "" || commit.startsWith(NO_COMMIT) ? null : commit, tests: field("测试"), questions: field("问题") },
+    report: {
+      status,
+      summary,
+      commit: commit === "" || commit.startsWith(NO_COMMIT) ? null : commit,
+      pr,
+      tests: field("测试"),
+      deviation,
+      handoff: field("交棒"),
+      questions: field("问题"),
+    },
   };
 }
 
 /** 交给项目经理的汇报的开头（设计第 7.3 节的来源标签）：“【Worker #3 · 修 X 的汇报】”。 */
 export function workerReportHeader(workerId: WorkerId, title: string): string {
   return `【Worker #${workerId} · ${title} 的汇报】`;
+}
+
+const GRAPH_WAIT_ENVELOPE_HEAD = /^【任务图 #\d+[^\n]*等你处理】[^\n]*\n\n/u;
+const GRAPH_WAIT_ENVELOPE_TAIL = /\n\n(?:回答或打回|换人)：[^\n]+。$/u;
+
+/** 从项目经理对话里的汇报消息 text 剥掉信封头尾，还原 Worker 原始回复正文。 */
+export function unwrapWorkerReportText(worker: { id: WorkerId; title: string }, text: string): string {
+  const head = `${workerReportHeader(worker.id, worker.title)}\n\n`;
+  let body = text.startsWith(head) ? text.slice(head.length) : text;
+  if (GRAPH_WAIT_ENVELOPE_HEAD.test(body)) {
+    body = body.replace(GRAPH_WAIT_ENVELOPE_HEAD, "").replace(GRAPH_WAIT_ENVELOPE_TAIL, "");
+  }
+  return body;
 }
 
 /**
