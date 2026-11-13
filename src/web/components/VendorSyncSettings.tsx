@@ -2,6 +2,7 @@
 // 完全由接口返回的数据驱动渲染，零硬编码单家厂商分支、零符号拼接（不用 · / | / /）；状态与请求由 settings-model.ts 统一管理。
 import { Loader2 } from "lucide-react";
 import type { VendorSyncVendorBadge } from "../../shared/index.ts";
+import type { HubClient } from "../client.ts";
 import { VENDOR_STATUS_LABELS, useVendorSyncSetting } from "../settings-model.ts";
 import { Button } from "../ui/button.tsx";
 import { Dialog, DialogBody, DialogContent, DialogFooter } from "../ui/dialog.tsx";
@@ -25,7 +26,7 @@ function VendorBadges({ badges }: { badges: readonly VendorSyncVendorBadge[] }) 
   );
 }
 
-export function VendorSyncSettings() {
+export function VendorSyncSettings({ client }: { client?: HubClient } = {}) {
   const {
     preview,
     checkedMcp,
@@ -42,7 +43,7 @@ export function VendorSyncSettings() {
     toggleMcp,
     toggleSkill,
     closePreview,
-  } = useVendorSyncSetting();
+  } = useVendorSyncSetting(client);
 
   return (
     <>

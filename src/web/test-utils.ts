@@ -1,8 +1,17 @@
 // 网页测试的假后端：假 fetch（/api/*）和假 WebSocket（/api/ws），不连真服务。
 import { vi } from "vitest";
-import { API_PATHS, DEFAULT_AGENT_VENDOR, emptyRouterSlice, isQuietMessage, serverInfoFor } from "../shared/index.ts";
+import {
+  AGENT_VENDORS,
+  API_PATHS,
+  DEFAULT_AGENT_VENDOR,
+  emptyRouterSlice,
+  isQuietMessage,
+  serverInfoFor,
+  vendorLabel,
+} from "../shared/index.ts";
 import type {
   AddScheduleRequest,
+  AgentVendor,
   Attachment,
   ScheduleRecord,
   Change,
@@ -25,6 +34,14 @@ import type {
   PostRouterCommandRequest,
   Project,
   ProjectFolder,
+  ProviderCancelAuthRequest,
+  ProviderCancelJobRequest,
+  ProviderLogoutRequest,
+  ProviderSaveApiKeyRequest,
+  ProviderStartAuthRequest,
+  ProviderStatusItem,
+  ProviderSubmitAuthRequest,
+  ProvidersStatusResponse,
   PutPmMemoryFileRequest,
   ResolveRouterItemRequest,
   RouterItemsPage,
@@ -523,6 +540,296 @@ export class FakeApi {
       updatedFiles: 1,
     },
   });
+  /** GET /api/providers（支持 /d/<device>/api/providers）。 */
+  providersStatus: (options: { refresh: boolean; device: string | null }) => Reply | Promise<Reply> = () => ({
+    status: 200,
+    body: {
+      platform: "darwin",
+      gitInstalled: true,
+      canInstallGit: false,
+      gitJob: null,
+      providers: AGENT_VENDORS.map((vendor) => ({
+        vendor,
+        label: vendorLabel(vendor),
+        installed: true,
+        version: "1.0.0",
+        availability: "available",
+        accountSummary: "Signed in",
+        canInstall: false,
+        canUpdate: true,
+        canSignOut: true,
+        authMethods: [
+          { id: "browser", kind: "browser_oauth", label: "Browser", manualInput: "code_or_callback" },
+          { id: "api_key", kind: "api_key", label: "API key", placeholder: "sk-..." },
+        ],
+        job: null,
+        authFlow: null,
+      })),
+    } satisfies ProvidersStatusResponse,
+  });
+  providerGitInstall: (device: string | null) => Reply | Promise<Reply> = () => ({
+    status: 200,
+    body: {
+      platform: "win32",
+      gitInstalled: false,
+      canInstallGit: false,
+      gitJob: {
+        jobId: "git-job-1",
+        kind: "install",
+        phase: "running",
+        progressLine: "Installing Git via WinGet…",
+        error: null,
+        logTail: "",
+        startedAt: Date.now(),
+        finishedAt: null,
+      },
+      providers: [],
+    } satisfies ProvidersStatusResponse,
+  });
+  providerInstall: (vendor: AgentVendor, device: string | null) => Reply | Promise<Reply> = (vendor) => ({
+    status: 200,
+    body: {
+      vendor,
+      label: vendorLabel(vendor),
+      installed: false,
+      version: null,
+      availability: "not_installed",
+      accountSummary: null,
+      canInstall: false,
+      canUpdate: false,
+      canSignOut: false,
+      authMethods: [],
+      job: {
+        jobId: `job-${vendor}`,
+        kind: "install",
+        phase: "running",
+        progressLine: "Installing package…",
+        error: null,
+        logTail: "",
+        startedAt: Date.now(),
+        finishedAt: null,
+      },
+      authFlow: null,
+    } satisfies ProviderStatusItem,
+  });
+  providerUpdate: (vendor: AgentVendor, device: string | null) => Reply | Promise<Reply> = (vendor) => ({
+    status: 200,
+    body: {
+      vendor,
+      label: vendorLabel(vendor),
+      installed: true,
+      version: "1.0.0",
+      availability: "available",
+      accountSummary: "Signed in",
+      canInstall: false,
+      canUpdate: false,
+      canSignOut: false,
+      authMethods: [],
+      job: {
+        jobId: `job-upd-${vendor}`,
+        kind: "update",
+        phase: "running",
+        progressLine: "Updating CLI…",
+        error: null,
+        logTail: "",
+        startedAt: Date.now(),
+        finishedAt: null,
+      },
+      authFlow: null,
+    } satisfies ProviderStatusItem,
+  });
+  providerJobCancel: (vendor: AgentVendor, body: ProviderCancelJobRequest, device: string | null) => Reply | Promise<Reply> = (
+    vendor,
+    body,
+  ) => ({
+    status: 200,
+    body: {
+      vendor,
+      label: vendorLabel(vendor),
+      installed: false,
+      version: null,
+      availability: "not_installed",
+      accountSummary: null,
+      canInstall: true,
+      canUpdate: false,
+      canSignOut: false,
+      authMethods: [],
+      job: {
+        jobId: body.jobId,
+        kind: "install",
+        phase: "cancelled",
+        progressLine: null,
+        error: null,
+        logTail: "",
+        startedAt: Date.now(),
+        finishedAt: Date.now(),
+      },
+      authFlow: null,
+    } satisfies ProviderStatusItem,
+  });
+  providerAuthStart: (vendor: AgentVendor, body: ProviderStartAuthRequest, device: string | null) => Reply | Promise<Reply> = (
+    vendor,
+    body,
+  ) => ({
+    status: 200,
+    body: {
+      vendor,
+      label: vendorLabel(vendor),
+      installed: true,
+      version: "1.0.0",
+      availability: "signed_out",
+      accountSummary: null,
+      canInstall: false,
+      canUpdate: true,
+      canSignOut: false,
+      authMethods: [
+        { id: "browser", kind: "browser_oauth", label: "Browser", manualInput: "code_or_callback" },
+        { id: "device_code", kind: "device_code", label: "Device code" },
+        { id: "api_key", kind: "api_key", label: "API key", placeholder: "sk-..." },
+      ],
+      job: null,
+      authFlow:
+        body.methodId === "device_code"
+          ? {
+              flowId: `flow-${vendor}`,
+              methodId: body.methodId,
+              phase: "waiting_device_code",
+              authorizeUrl: null,
+              verificationUrl: "https://auth.example.com/device",
+              userCode: "WXYZ-5678",
+              manualInput: "none",
+              ownedByOtherClient: false,
+              error: null,
+              expiresAt: Date.now() + 300_000,
+            }
+          : {
+              flowId: `flow-${vendor}`,
+              methodId: body.methodId,
+              phase: "waiting_browser",
+              authorizeUrl: "https://auth.example.com/authorize?state=st1",
+              verificationUrl: null,
+              userCode: null,
+              manualInput: "code_or_callback",
+              ownedByOtherClient: false,
+              error: null,
+              expiresAt: Date.now() + 300_000,
+            },
+    } satisfies ProviderStatusItem,
+  });
+  providerAuthSubmit: (vendor: AgentVendor, body: ProviderSubmitAuthRequest, device: string | null) => Reply | Promise<Reply> = (
+    vendor,
+    body,
+  ) => ({
+    status: 200,
+    body: {
+      vendor,
+      label: vendorLabel(vendor),
+      installed: true,
+      version: "1.0.0",
+      availability: "available",
+      accountSummary: "Signed in",
+      canInstall: false,
+      canUpdate: true,
+      canSignOut: true,
+      authMethods: [
+        { id: "browser", kind: "browser_oauth", label: "Browser", manualInput: "code_or_callback" },
+        { id: "device_code", kind: "device_code", label: "Device code" },
+        { id: "api_key", kind: "api_key", label: "API key", placeholder: "sk-..." },
+      ],
+      job: null,
+      authFlow: {
+        flowId: body.flowId,
+        methodId: "browser",
+        phase: "succeeded",
+        authorizeUrl: null,
+        verificationUrl: null,
+        userCode: null,
+        manualInput: "code_or_callback",
+        ownedByOtherClient: false,
+        error: null,
+        expiresAt: Date.now() + 300_000,
+      },
+    } satisfies ProviderStatusItem,
+  });
+  providerAuthCancel: (vendor: AgentVendor, body: ProviderCancelAuthRequest, device: string | null) => Reply | Promise<Reply> = (
+    vendor,
+    body,
+  ) => ({
+    status: 200,
+    body: {
+      vendor,
+      label: vendorLabel(vendor),
+      installed: true,
+      version: "1.0.0",
+      availability: "signed_out",
+      accountSummary: null,
+      canInstall: false,
+      canUpdate: true,
+      canSignOut: false,
+      authMethods: [
+        { id: "browser", kind: "browser_oauth", label: "Browser", manualInput: "code_or_callback" },
+        { id: "device_code", kind: "device_code", label: "Device code" },
+        { id: "api_key", kind: "api_key", label: "API key", placeholder: "sk-..." },
+      ],
+      job: null,
+      authFlow: {
+        flowId: body.flowId,
+        methodId: "browser",
+        phase: "cancelled",
+        authorizeUrl: null,
+        verificationUrl: null,
+        userCode: null,
+        manualInput: "none",
+        ownedByOtherClient: false,
+        error: null,
+        expiresAt: Date.now() + 300_000,
+      },
+    } satisfies ProviderStatusItem,
+  });
+  providerAuthApiKey: (vendor: AgentVendor, body: ProviderSaveApiKeyRequest, device: string | null) => Reply | Promise<Reply> = (
+    vendor,
+  ) => ({
+    status: 200,
+    body: {
+      vendor,
+      label: vendorLabel(vendor),
+      installed: true,
+      version: "1.0.0",
+      availability: "available",
+      accountSummary: "API key configured",
+      canInstall: false,
+      canUpdate: true,
+      canSignOut: true,
+      authMethods: [
+        { id: "browser", kind: "browser_oauth", label: "Browser", manualInput: "code_or_callback" },
+        { id: "api_key", kind: "api_key", label: "API key", placeholder: "sk-..." },
+      ],
+      job: null,
+      authFlow: null,
+    } satisfies ProviderStatusItem,
+  });
+  providerAuthLogout: (vendor: AgentVendor, body: ProviderLogoutRequest, device: string | null) => Reply | Promise<Reply> = (
+    vendor,
+  ) => ({
+    status: 200,
+    body: {
+      vendor,
+      label: vendorLabel(vendor),
+      installed: true,
+      version: "1.0.0",
+      availability: "signed_out",
+      accountSummary: null,
+      canInstall: false,
+      canUpdate: true,
+      canSignOut: false,
+      authMethods: [
+        { id: "browser", kind: "browser_oauth", label: "Browser", manualInput: "code_or_callback" },
+        { id: "api_key", kind: "api_key", label: "API key", placeholder: "sk-..." },
+      ],
+      job: null,
+      authFlow: null,
+    } satisfies ProviderStatusItem,
+  });
   /** 跟真的 fetch 一样：init.signal 断了（超时、取消）就以它的 reason 失败，哪怕回应还没好。 */
   fetch = vi.fn((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const signal = init?.signal;
@@ -574,6 +881,32 @@ export class FakeApi {
     if (method === "PUT" && url.pathname === API_PATHS.publicEntry) return jsonResponse(await this.putPublicEntry(body));
     if (method === "GET" && url.pathname === API_PATHS.vendorSyncPreview) return jsonResponse(await this.vendorSyncPreview());
     if (method === "POST" && url.pathname === API_PATHS.vendorSyncApply) return jsonResponse(await this.vendorSyncApply(body));
+    const providerScoped = /^(?:\/d\/([^/]+))?(\/api\/providers(?:\/.*)?)$/.exec(url.pathname);
+    if (providerScoped) {
+      const device = providerScoped[1] ? decodeURIComponent(providerScoped[1]) : null;
+      const subPath = providerScoped[2]!;
+      if (method === "GET" && subPath === API_PATHS.providers) {
+        return jsonResponse(await this.providersStatus({ refresh: url.searchParams.get("refresh") === "1", device }));
+      }
+      if (method === "POST" && subPath === API_PATHS.providerGitInstall) {
+        return jsonResponse(await this.providerGitInstall(device));
+      }
+      const vendorAction = /^\/api\/providers\/([^/]+)\/(install|update|job\/cancel|auth\/start|auth\/submit|auth\/cancel|auth\/api-key|auth\/logout)$/.exec(
+        subPath,
+      );
+      if (vendorAction && method === "POST") {
+        const vendor = decodeURIComponent(vendorAction[1]!) as AgentVendor;
+        const action = vendorAction[2]!;
+        if (action === "install") return jsonResponse(await this.providerInstall(vendor, device));
+        if (action === "update") return jsonResponse(await this.providerUpdate(vendor, device));
+        if (action === "job/cancel") return jsonResponse(await this.providerJobCancel(vendor, body, device));
+        if (action === "auth/start") return jsonResponse(await this.providerAuthStart(vendor, body, device));
+        if (action === "auth/submit") return jsonResponse(await this.providerAuthSubmit(vendor, body, device));
+        if (action === "auth/cancel") return jsonResponse(await this.providerAuthCancel(vendor, body, device));
+        if (action === "auth/api-key") return jsonResponse(await this.providerAuthApiKey(vendor, body, device));
+        if (action === "auth/logout") return jsonResponse(await this.providerAuthLogout(vendor, body ?? {}, device));
+      }
+    }
     if (method === "POST" && url.pathname === "/api/pick-folder") return jsonResponse(await this.pickFolder(body));
     if (method === "POST" && url.pathname === "/api/pms") return jsonResponse(await this.createPm(body));
     const persona = /^\/api\/pms\/(\d+)\/persona$/.exec(url.pathname);

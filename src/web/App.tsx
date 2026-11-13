@@ -90,6 +90,7 @@ export function App() {
     compact,
     created,
     creating,
+    defaultProviderDevice,
     desktopSettingsOpen,
     desktopSettingsSection,
     deviceSettings,
@@ -105,6 +106,7 @@ export function App() {
     openAsk,
     openDeviceConversation,
     openDeviceWorker,
+    openManageProviders,
     openNewPm,
     openProfile,
     openSettings,
@@ -184,6 +186,7 @@ export function App() {
       layout={mobile ? "page" : narrow ? "rail" : "wide"}
       settingsOpen={desktopSettingsOpen}
       {...(desktopSettingsSection !== undefined ? { defaultSettingsSection: desktopSettingsSection } : {})}
+      defaultProviderDevice={defaultProviderDevice}
       onSettingsOpenChange={onSettingsOpenChange}
       onOpenSettings={openSettings}
       onSelect={select}
@@ -199,6 +202,7 @@ export function App() {
           section={settingsRoute.section}
           notify={reminders.notify}
           devices={deviceSettings}
+          defaultProviderDevice={defaultProviderDevice}
           onOpen={openSettingsSection}
           onBack={settingsBack}
         />
@@ -233,6 +237,7 @@ export function App() {
                 rev={state.personaRev[profile.id] ?? 0}
                 renewing={profileEntry !== undefined && isRenewing(state, profileEntry.id)}
                 onBack={mobile ? back : () => profileEntry && select({ device: current.key, id: profileEntry.id })}
+                onManageProviders={() => openManageProviders(current.key)}
               />
             ) : openWorker !== null ? (
               <WorkerConversation
@@ -322,7 +327,14 @@ export function App() {
             {/* 外壳底色掺当前项目经理的水果色（左栏、对话区、右栏、分割线）；Router 下传 null 保持纯白与碳黑中性调 */}
             <FruitTint colorKey={tintKey}>
               <MobileShell mobile={mobile} list={route === null} sidebar={sidebar}>{chat}</MobileShell>
-              <NewPmDialog open={creating} devices={newPmDevices} defaultDevice={current.key} onOpenChange={setCreating} onCreated={created} />
+              <NewPmDialog
+                open={creating}
+                devices={newPmDevices}
+                defaultDevice={current.key}
+                onOpenChange={setCreating}
+                onCreated={created}
+                onManageProviders={openManageProviders}
+              />
             </FruitTint>
           </div>
         </ModelCatalogProvider>

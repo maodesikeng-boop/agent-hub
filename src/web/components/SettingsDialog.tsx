@@ -1,5 +1,6 @@
-import { Monitor, Settings, Shield, type LucideIcon } from "lucide-react";
-import type { ReactNode } from "react";
+import { Blocks, Monitor, Settings, Shield, type LucideIcon } from "lucide-react";
+import { useRef, useState, type ReactNode } from "react";
+import { LOCAL_DEVICE, type DeviceKey } from "../devices.ts";
 import type { NotifySettings } from "../notify.ts";
 import { NOTIFY_BLOCKED, isNotifyBlocked, useUiScaleSetting, type DeviceSettings } from "../settings-model.ts";
 import { Dialog, DialogContent } from "../ui/dialog.tsx";
@@ -8,8 +9,8 @@ import { Switch } from "../ui/switch.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs.tsx";
 import { BrowserSessionsSettings } from "./BrowserSessions.tsx";
 import { ComputersSection, PublicEntrySection } from "./DeviceSettings.tsx";
+import { ProvidersSettings } from "./ProvidersSettings.tsx";
 import { SettingsGroup, SettingsRow } from "./SettingsList.tsx";
-import { VendorSyncSettings } from "./VendorSyncSettings.tsx";
 
 export type { DeviceSettings };
 
@@ -23,11 +24,12 @@ function UiScaleRow() {
   );
 }
 
-export type SettingsDialogSection = "general" | "computers" | "security";
+export type SettingsDialogSection = "general" | "providers" | "computers" | "security";
 
 /** 左栏的分类（照 Grok Bot 设置页）：顺序就是左栏从上到下；“电脑”只在守护进程支持联机时有。 */
 const SECTIONS: readonly { id: SettingsDialogSection; label: string; icon: LucideIcon }[] = [
   { id: "general", label: "General", icon: Settings },
+  { id: "providers", label: "Providers", icon: Blocks },
   { id: "computers", label: "Computers", icon: Monitor },
   { id: "security", label: "Security & Access", icon: Shield },
 ];
@@ -42,15 +44,43 @@ export function SettingsDialog({
   notify,
   devices = null,
   defaultSection,
+  defaultProviderDevice = LOCAL_DEVICE,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   notify: NotifySettings;
   /** 守护进程支持联机时才有“电脑”分类和“公网入口”。 */
   devices?: DeviceSettings | null;
-  /** 从手机设置子页拉宽切回桌面外壳时，落到对应的桌面分类。 */
+  /** 外部显式指定的初始分类（如首次启动 0 家引导、Manage providers… 或从手机设置拉宽切回桌面）。 */
   defaultSection?: SettingsDialogSection;
+  /** 打开 Providers 分类时的默认目标电脑（如当前正在查看或新建 PM 选中的设备）。 */
+  defaultProviderDevice?: DeviceKey;
 }) {
+  const sections = SECTIONS.filter((s) => s.id !== "computers" || devices !== null);
+  const initialSection: SettingsDialogSection =
+    defaultSection !== undefined && (defaultSection !== "computers" || devices !== null)
+      ? defaultSection
+      : devices !== null
+        ? "computers"
+        : "general";
+
+  const [activeSection, setActiveSection] = useState<SettingsDialogSection>(initialSection);
+  const prevSyncRef = useRef({ open, defaultSection, hasDevices: devices !== null });
+  if (
+    prevSyncRef.current.open !== open ||
+    prevSyncRef.current.defaultSection !== defaultSection ||
+    prevSyncRef.current.hasDevices !== (devices !== null)
+  ) {
+    const reopened = !prevSyncRef.current.open && open;
+    const defaultChanged = prevSyncRef.current.defaultSection !== defaultSection && defaultSection !== undefined;
+    prevSyncRef.current = { open, defaultSection, hasDevices: devices !== null };
+    if (reopened || defaultChanged || (activeSection === "computers" && devices === null)) {
+      setActiveSection(initialSection);
+    }
+  }
+
+  const effectiveSection = activeSection === "computers" && devices === null ? initialSection : activeSection;
+
   const content: Record<SettingsDialogSection, ReactNode> = {
     general: (
       <>
@@ -71,8 +101,14 @@ export function SettingsDialog({
             )}
           </SettingsRow>
         </SettingsGroup>
-        <VendorSyncSettings />
       </>
+    ),
+    providers: (
+      <ProvidersSettings
+        active={open && effectiveSection === "providers"}
+        devices={devices}
+        defaultDeviceKey={defaultProviderDevice}
+      />
     ),
     computers: devices && <ComputersSection {...devices} />,
     security: (
@@ -82,17 +118,16 @@ export function SettingsDialog({
       </>
     ),
   };
-  const sections = SECTIONS.filter((s) => s.id !== "computers" || devices !== null);
-  const initialSection: SettingsDialogSection =
-    defaultSection !== undefined && (defaultSection !== "computers" || devices !== null)
-      ? defaultSection
-      : devices !== null
-        ? "computers"
-        : "general";
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent title="Settings" titleClassName="sr-only" className="h-[min(35rem,calc(100%-3rem))] max-w-195 gap-0 p-0">
-        <Tabs defaultValue={initialSection} orientation="vertical" className="flex min-h-0 flex-1 flex-col sm:flex-row">
+        <Tabs
+          value={effectiveSection}
+          onValueChange={(val) => setActiveSection(val as SettingsDialogSection)}
+          orientation="vertical"
+          className="flex min-h-0 flex-1 flex-col sm:flex-row"
+        >
           {/* 窄屏：一排横着的分类（只有字，放得下三个），右边让出关闭按钮的位置 */}
           <TabsList
             aria-label="Settings categories"

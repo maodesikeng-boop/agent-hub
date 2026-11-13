@@ -192,12 +192,14 @@ function PmEditor({
   schedules,
   persona,
   onUpdate,
+  onManageProviders,
 }: {
   pm: Pm;
   folders: ProjectFolder[];
   schedules: ScheduleRecord[];
   persona: PersonaView;
   onUpdate: (p: PersonaView) => void;
+  onManageProviders?: () => void;
 }) {
   const client = useClient();
   const aliveRef = useRef(true);
@@ -341,6 +343,7 @@ function PmEditor({
           disabled={agentSaving}
           switchingToVendor={persona.switchingToVendor}
           onCustomSubmit={() => void saveAgent()}
+          {...(onManageProviders !== undefined ? { onManageProviders } : {})}
         />
         {editedAgent !== null && (
           <div className="px-4 py-3">
@@ -568,6 +571,7 @@ export function PmProfile({
   rev,
   renewing,
   onBack,
+  onManageProviders,
 }: {
   pm: Pm;
   project: Project | null;
@@ -580,6 +584,7 @@ export function PmProfile({
   /** 在换新会话（selectors.ts 的 isRenewing）。 */
   renewing: boolean;
   onBack: () => void;
+  onManageProviders?: () => void;
 }) {
   const { load, retry, set } = usePersona(pm.id, rev);
   const label = `${pm.name}'s profile`;
@@ -618,7 +623,17 @@ export function PmProfile({
               </Button>
             </div>
           )}
-          {load.phase === "ready" && <PmEditor key={pm.id} pm={pm} folders={folders} schedules={schedules} persona={load.persona} onUpdate={set} />}
+          {load.phase === "ready" && (
+            <PmEditor
+              key={pm.id}
+              pm={pm}
+              folders={folders}
+              schedules={schedules}
+              persona={load.persona}
+              onUpdate={set}
+              {...(onManageProviders !== undefined ? { onManageProviders } : {})}
+            />
+          )}
           {load.phase === "ready" && pm.archivedAt == null && (
             <RenewSessionGroup pmId={pm.id} renewing={renewing || (load.phase === "ready" && load.persona.switchingToVendor != null)} onArchived={onBack} />
           )}

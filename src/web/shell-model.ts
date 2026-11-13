@@ -1,10 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { isAgentVendor, isTaskNodeWaitingUser, type ConversationId, type Message, type MessageId, type PersonaChangeId, type PmId } from "../shared/index.ts";
+import {
+  isAgentVendor,
+  isSelectable,
+  isTaskNodeWaitingUser,
+  type ConversationId,
+  type Message,
+  type MessageId,
+  type PersonaChangeId,
+  type PmId,
+} from "../shared/index.ts";
 import type { SidebarGroup, SidebarRouterEntry } from "./components/Sidebar.tsx";
 import type { SettingsDialogSection } from "./components/SettingsDialog.tsx";
 import type { DeviceSettings } from "./settings-model.ts";
 import { useDevices } from "./device-hub.ts";
-import { LOCAL_DEVICE, conversationKey, deviceKeyOf, deviceNotices, isReadOnly, routeDeviceOf } from "./devices.ts";
+import { LOCAL_DEVICE, conversationKey, deviceKeyOf, deviceNotices, isReadOnly, routeDeviceOf, type DeviceKey } from "./devices.ts";
+import { useServerModelCatalogs } from "./models.tsx";
 import { useHubQueryClient } from "./query-client.ts";
 import {
   activeGraphsOf,
@@ -46,6 +56,31 @@ declare global {
 
 /** 用户手动收起右栏后记住（docs/ui-standard.md 第 12 条）：存 "closed"；再手动展开就删掉。 */
 const RIGHT_RAIL_KEY = "agent-hub.rightRail";
+export const PROVIDERS_GUIDED_KEY = "agent-hub.providersGuided";
+
+const loadProvidersGuided = () => {
+  try {
+    return (
+      localStorage.getItem(PROVIDERS_GUIDED_KEY) === "1" ||
+      sessionStorage.getItem(PROVIDERS_GUIDED_KEY) === "1"
+    );
+  } catch {
+    return false;
+  }
+};
+
+const saveProvidersGuided = () => {
+  try {
+    localStorage.setItem(PROVIDERS_GUIDED_KEY, "1");
+  } catch {
+    try {
+      sessionStorage.setItem(PROVIDERS_GUIDED_KEY, "1");
+    } catch {
+      // 隐私模式受限时仅在本次内存态生效
+    }
+  }
+};
+
 const loadRailClosed = () => {
   try {
     return localStorage.getItem(RIGHT_RAIL_KEY) === "closed";
@@ -64,7 +99,8 @@ const saveRailClosed = (closed: boolean) => {
 
 function desktopSectionOf(section: SettingsSection | undefined, managed: boolean): SettingsDialogSection | undefined {
   if (section === undefined) return undefined;
-  if (section === "scale" || section === "notifications" || section === "vendor-sync") return "general";
+  if (section === "scale" || section === "notifications") return "general";
+  if (section === "providers" || section === "vendor-sync") return "providers";
   if (section === "computers") return managed ? "computers" : "general";
   return "security";
 }
@@ -89,8 +125,14 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const drafts = useDraftStore<string>();
   const staging = useStagingStore<string>();
   const [creating, setCreating] = useState(false);
-  const [desktopSettings, setDesktopSettings] = useState<{ open: boolean; section?: SettingsDialogSection }>({ open: false });
+  const [desktopSettings, setDesktopSettings] = useState<{
+    open: boolean;
+    section?: SettingsDialogSection;
+    providerDevice?: DeviceKey;
+  }>({ open: false });
+  const [mobileProviderDevice, setMobileProviderDevice] = useState<DeviceKey | undefined>(undefined);
   const onSettingsOpenChange = useCallback((open: boolean) => setDesktopSettings({ open }), []);
+  const [providersGuided, setProvidersGuided] = useState(loadProvidersGuided);
   /** 用户手动收起了右栏（记住）。 */
   const [railClosed, setRailClosed] = useState(loadRailClosed);
   /** 太窄时右栏默认收着，点开关才出来（不记住）。 */
@@ -170,6 +212,26 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
 
   const shellReady = local.state.phase === "ready" &&
     !(route?.device !== undefined && routedDevice === undefined && !fleet.listed);
+
+  // 电脑外壳首次打开且 0 个已有 PM 时，探测本机真实模型可用性：若 0 家厂商就绪且尚未引导过，自动打开 Settings → Providers
+  const localClientRef = fleet.hub(LOCAL_DEVICE).client;
+  const shouldCheckFirstRunProviders =
+    autoSelect && shellReady && local.state.pms.length === 0 && !providersGuided;
+  const localServerCatalogs = useServerModelCatalogs({
+    enabled: shouldCheckFirstRunProviders,
+    client: localClientRef,
+  });
+  useEffect(() => {
+    if (!shouldCheckFirstRunProviders || localServerCatalogs === undefined || localServerCatalogs.length === 0) {
+      return;
+    }
+    setProvidersGuided(true);
+    saveProvidersGuided();
+    if (localServerCatalogs.every((c) => !isSelectable(c.availability))) {
+      setDesktopSettings({ open: true, section: "providers", providerDevice: LOCAL_DEVICE });
+    }
+  }, [shouldCheckFirstRunProviders, localServerCatalogs]);
+
   // 电脑外壳空 hash 默认落地水果刀工作台 #/router（replaceState 不留多余历史）；从手机 #/settings* 切回桌面外壳时自动承接打开桌面双栏 SettingsDialog
   useEffect(() => {
     if (!autoSelect || !shellReady) return;
@@ -313,8 +375,23 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
     [rawLink?.readOnly, rawLink?.waiting],
   );
   const openNewPm = useCallback(() => setCreating(true), []);
-  const openSettings = useCallback(() => navigate({ view: "settings" }), [navigate]);
+  const openSettings = useCallback(() => {
+    setMobileProviderDevice(current.key);
+    navigate({ view: "settings" });
+  }, [current.key, navigate]);
   const openSettingsSection = useCallback((section: SettingsSection) => navigate({ view: "settings", section }), [navigate]);
+  const openManageProviders = useCallback(
+    (targetDevice: DeviceKey = current.key) => {
+      setCreating(false);
+      if (autoSelect) {
+        setDesktopSettings({ open: true, section: "providers", providerDevice: targetDevice });
+      } else {
+        setMobileProviderDevice(targetDevice);
+        navigate({ view: "settings", section: "providers" });
+      }
+    },
+    [autoSelect, current.key, navigate],
+  );
   const routeRef = useRef(route);
   routeRef.current = route;
   const settingsBack = useCallback(() => {
@@ -471,6 +548,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       : nextGroups;
   groupsRef.current = groups;
   const newPmDevices = fleet.devices.map((d) => ({ key: d.key, name: d.info.name, status: d.status, client: fleet.hub(d.key).client, server: d.state.server }));
+  const defaultProviderDevice = desktopSettings.providerDevice ?? mobileProviderDevice ?? current.key;
   return {
     ...shared,
     content: {
@@ -483,6 +561,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       compact,
       created,
       creating,
+      defaultProviderDevice,
       desktopSettingsOpen: desktopSettings.open,
       desktopSettingsSection: desktopSettings.section,
       deviceSettings,
@@ -500,6 +579,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       openAsk,
       openDeviceConversation,
       openDeviceWorker,
+      openManageProviders,
       openNewPm,
       openProfile,
       openSettings,

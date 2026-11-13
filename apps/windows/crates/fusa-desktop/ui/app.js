@@ -29,86 +29,16 @@
   const statusDot = document.getElementById("status-dot");
   const stageTitle = document.getElementById("stage-title");
   const stageDetail = document.getElementById("stage-detail");
-  const gitRow = document.getElementById("git-row");
-  const gitCmd = document.getElementById("git-cmd");
   const errorRow = document.getElementById("error-row");
   const errorText = document.getElementById("error-text");
   const btnRetry = document.getElementById("btn-retry");
   const btnOpenLogs = document.getElementById("btn-open-logs");
-  const providersSection = document.getElementById("providers-section");
-  const providersList = document.getElementById("providers-list");
-  const btnOpenTerminal = document.getElementById("btn-open-terminal");
-  const btnRefreshVendors = document.getElementById("btn-refresh-vendors");
-  const btnContinue = document.getElementById("btn-continue");
 
   let busyAction = false;
 
   function setButtonsDisabled(disabled) {
     busyAction = disabled;
     btnRetry.disabled = disabled;
-    btnOpenTerminal.disabled = disabled;
-    btnRefreshVendors.disabled = disabled;
-    btnContinue.disabled = disabled;
-  }
-
-  function renderProviders(vendors) {
-    providersList.replaceChildren();
-    if (!Array.isArray(vendors) || vendors.length === 0) {
-      return;
-    }
-
-    for (const item of vendors) {
-      const row = document.createElement("div");
-      row.className = "provider-item";
-      row.setAttribute("role", "listitem");
-
-      const top = document.createElement("div");
-      top.className = "provider-top";
-
-      const left = document.createElement("div");
-      left.className = "status-line";
-
-      const dot = document.createElement("span");
-      dot.className = "status-dot";
-      dot.dataset.tone = item.installed ? "ready" : "muted";
-      dot.setAttribute("aria-hidden", "true");
-
-      const name = document.createElement("span");
-      name.className = "row-title";
-      name.textContent = item.label || item.id || item.command;
-
-      left.appendChild(dot);
-      left.appendChild(name);
-
-      const stateLabel = document.createElement("span");
-      stateLabel.className = "provider-state";
-      stateLabel.textContent = item.installed ? "Installed" : "Not installed";
-
-      top.appendChild(left);
-      top.appendChild(stateLabel);
-      row.appendChild(top);
-
-      const cmds = document.createElement("div");
-      cmds.className = "cmd-list";
-
-      const installCmd = item.installCommand || item.install_command || "";
-      const loginCmd = item.loginCommand || item.login_command || "";
-      const commandLines = [];
-      if (!item.installed && installCmd) {
-        commandLines.push(installCmd);
-      }
-      if (loginCmd) {
-        commandLines.push(loginCmd);
-      }
-      if (commandLines.length > 0) {
-        const pre = document.createElement("pre");
-        pre.className = "cmd-block";
-        pre.textContent = commandLines.join("\n");
-        cmds.appendChild(pre);
-        row.appendChild(cmds);
-      }
-      providersList.appendChild(row);
-    }
   }
 
   function applyState(view) {
@@ -120,14 +50,6 @@
     stageDetail.textContent = detail;
     stageDetail.hidden = !detail;
 
-    if (view.showGitGuide && view.gitInstallCommand) {
-      gitCmd.textContent = view.gitInstallCommand;
-      gitRow.hidden = false;
-    } else {
-      gitCmd.textContent = "";
-      gitRow.hidden = true;
-    }
-
     if (view.error) {
       errorText.textContent = view.error;
       errorRow.hidden = false;
@@ -138,14 +60,6 @@
 
     btnRetry.hidden = !view.canRetry;
     btnOpenLogs.hidden = !view.canOpenLogs;
-
-    if (view.showVendorGuide) {
-      renderProviders(view.vendors || []);
-      providersSection.hidden = false;
-      btnContinue.disabled = busyAction || !view.canEnterWorkspace;
-    } else {
-      providersSection.hidden = true;
-    }
   }
 
   async function runUserAction(fn) {
@@ -166,23 +80,8 @@
     runUserAction(() => tauriInvoke("retry_bootstrap"));
   });
 
-  btnRefreshVendors.addEventListener("click", () => {
-    runUserAction(() => tauriInvoke("retry_bootstrap"));
-  });
-
   btnOpenLogs.addEventListener("click", () => {
     tauriInvoke("open_logs").catch(() => {});
-  });
-
-  btnOpenTerminal.addEventListener("click", () => {
-    tauriInvoke("open_vendor_terminal").catch((err) => {
-      errorText.textContent = String(err && err.message ? err.message : err);
-      errorRow.hidden = false;
-    });
-  });
-
-  btnContinue.addEventListener("click", () => {
-    runUserAction(() => tauriInvoke("enter_workspace"));
   });
 
   listenBootstrapEvent("fusa://bootstrap-state", applyState).catch(() => {});
