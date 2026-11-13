@@ -584,18 +584,22 @@ export function PmProfile({
   const { load, retry, set } = usePersona(pm.id, rev);
   const label = `${pm.name}'s profile`;
   return (
-    <section className="flex min-h-0 flex-1 flex-col" aria-label={label}>
-      <header data-window-drag className="flex h-16 shrink-0 items-center px-6">
-        <Button variant="ghost" size="icon" aria-label="Back" onClick={onBack}>
+    <section className="flex min-h-0 min-w-0 flex-1 flex-col" aria-label={label}>
+      <header data-window-drag className="flex h-16 min-w-0 shrink-0 items-center overflow-hidden px-6">
+        <Button variant="ghost" size="icon" className="shrink-0" aria-label="Back" onClick={onBack}>
           <ArrowLeft aria-hidden="true" />
         </Button>
       </header>
       <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-6 pb-12">
-        <div className="mx-auto grid max-w-160 gap-6">
-          <header className="flex flex-col items-center pb-2 text-center">
+        <div className="mx-auto grid max-w-160 grid-cols-1 gap-6">
+          <header className="flex min-w-0 flex-col items-center pb-2 text-center">
             <Avatar colorKey={pm.id} size={64} />
-            <h1 className="mt-4 text-display leading-tight font-semibold tracking-tight">{pm.name}</h1>
-            {project && <p className="mt-1 text-minor text-muted-foreground">{project.name}</p>}
+            <h1 className="mt-4 max-w-full wrap-break-word text-display leading-tight font-semibold tracking-tight">{pm.name}</h1>
+            {project && (
+              <p title={project.name} className="mt-1 max-w-full truncate text-minor text-muted-foreground">
+                {project.name}
+              </p>
+            )}
           </header>
           {pm.archivedAt != null && <ArchiveStatusGroup key={pm.id} pmId={pm.id} archivedAt={pm.archivedAt} />}
           {load.phase === "loading" && (
