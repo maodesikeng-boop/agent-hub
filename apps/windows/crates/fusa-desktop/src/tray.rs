@@ -41,14 +41,11 @@ impl TrayMenuModel {
 
         let (summary_title, restart_title, restart_enabled) = match &snapshot.state {
             SupervisorState::Idle => ("正在准备 Fusa 环境…".to_string(), "重启后台服务".to_string(), false),
-            SupervisorState::Starting { is_cold_start, .. } => {
-                let text = if *is_cold_start {
-                    "正在冷启动 WSL 与后台服务…"
-                } else {
-                    "正在启动后台服务…"
-                };
-                (text.to_string(), "重启后台服务".to_string(), false)
-            }
+            SupervisorState::Starting { .. } => (
+                "正在启动后台服务…".to_string(),
+                "重启后台服务".to_string(),
+                false,
+            ),
             SupervisorState::Running { ownership, .. } => {
                 if *ownership == DaemonOwnership::ExternalManaged {
                     (

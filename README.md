@@ -272,21 +272,21 @@ Fusa 从最早开始开发时就是按**“一个会话管住整个项目”**�
 
 - **支持的 Agent 命令行**（注册表见 [`src/vendors/registry.ts`](src/vendors/registry.ts)，导出为 [`src/shared/vendors.ts`](src/shared/vendors.ts) 的 `AGENT_VENDORS`）：Claude Code（`claude`）、Antigravity（`agy`）、Codex（`codex`）、Pi（`pi`）、DeepSeek Harness（`dsh`）、Cursor（`cursor-agent`）。
 - **macOS 桌面应用（`Fusa.app`）**：双击打开独立应用窗口，自动拉起并监管本机后台守护进程、免手输地址自动登录，支持菜单栏运行状态摘要、Dock 角标与 macOS 原生通知。
-- **Windows 11 桌面应用（未签名预览版）**：基于 Tauri 2 的独立桌面窗口，首次运行自动初始化独立的 Ubuntu 24.04 WSL 2 发行版 `Fusa`，在内部拉起并监管 Linux 守护进程、完成本机免输令牌登录，并在系统托盘后台常驻。
+- **Windows 原生桌面应用（未签名预览版）**：基于 Tauri 2 的独立桌面窗口，随包内置校验过的 Node.js 24 LTS 与 `fusa-win-helper` 原生进程监管/沙箱组件，无需管理员权限或 WSL 2；项目直接留在 `C:\`、`D:\` 或 Dev Drive 本机目录并可直接调用 Visual Studio、MSVC、Rust 等本机工具链，支持单实例聚焦、原生目录选择与系统托盘常驻。
 - **富文本对话界面与手机 PWA**：支持 Markdown、代码高亮、Mermaid 与 Vega-Lite 图表、文件上传与预览；手机端可用浏览器访问或通过“添加到主屏幕”作为 PWA 使用（支持可选的 Web Push 锁屏通知）。
 - **多设备联机与额度面板**：在一个窗口里同时查看和操作桌面端与 Linux 服务器上的会话，并显示支持额度窗口查询的厂商（`claude`、`agy`、`codex`）的剩余比例与重置时间。
 
 ## 环境要求
 
-- **macOS 13+**（编译 `Fusa.app` 需安装 Xcode 命令行工具 `swiftc`）、已启用 **WSL 2** 的 **Windows 11（x64）**，或 **Linux** 服务器（Ubuntu 部署说明见 [docs/linux.md](docs/linux.md)）。
-- 在 macOS、Linux 服务器或直接在终端运行守护进程时，需安装 **Node.js >= 24.12**（原生运行 `.ts` 并使用内置 `node:sqlite`，见 `package.json` 的 `engines`）、**pnpm**（`pnpm@10.x`）与 `git`。Windows 11 桌面应用会在专用 `Fusa` WSL 2 发行版内自动装好 Node.js 24、pnpm、`git` 与 `bubblewrap`，无需在 Windows 宿主手动安装。
-- 至少在终端里安装并登录一家支持的 Agent 命令行（Windows 桌面版请在专用 `Fusa` WSL 2 终端内安装并登录；未登录时界面会提示对应命令）：
-  - Claude Code（`claude`）：安装 `curl -fsSL https://claude.ai/install.sh | bash`，登录 `claude auth login`
-  - Antigravity（`agy`）：安装 `curl -fsSL https://antigravity.google/cli/install.sh | bash`，运行 `agy` 登录（或配置 `GEMINI_API_KEY`）
-  - Codex（`codex`）：安装 `curl -fsSL https://chatgpt.com/codex/install.sh | sh`（或 `npm install -g @openai/codex`），登录 `codex login`（无浏览器环境用 `codex login --device-auth`）
-  - Pi（`pi`，详见 [docs/vendors/pi.md](docs/vendors/pi.md)）：安装 `curl -fsSL https://pi.dev/install.sh | sh`（或 `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`），在终端运行 `pi` 后输入 `/login` 连接模型商，或配置对应模型商的 API key 环境变量
+- **macOS 13+**（编译 `Fusa.app` 需安装 Xcode 命令行工具 `swiftc`）、**Windows 10（1809+）/ Windows 11（x64）**，或 **Linux** 服务器（Ubuntu 部署说明见 [docs/linux.md](docs/linux.md)）。
+- 在 macOS、Linux 服务器或直接从源码终端运行守护进程时，需安装 **Node.js >= 24.12**（原生运行 `.ts` 并使用内置 `node:sqlite`，见 `package.json` 的 `engines`；Windows 11 24H2+ 启用 MXC 只读容器需 Node.js >= 24.21）、**pnpm**（`pnpm@10.x`）与 `git`。Windows 桌面安装包已随包内置官方 Node.js 24 LTS 运行时，无需另装 Node；管理 Git 仓库与派发 Worker worktree 需安装 Git for Windows（`winget install --id Git.Git -e --source winget`，纯聊天场景不强制）。
+- 至少在本机终端里安装并登录一家支持的 Agent 命令行（未登录时界面与首次启动引导页会提示对应命令）：
+  - Claude Code（`claude`）：macOS/Linux `curl -fsSL https://claude.ai/install.sh | bash`，Windows PowerShell `irm https://claude.ai/install.ps1 | iex`；登录 `claude auth login`
+  - Antigravity（`agy`）：macOS/Linux `curl -fsSL https://antigravity.google/cli/install.sh | bash`，Windows PowerShell `irm https://antigravity.google/cli/install.ps1 | iex`；运行 `agy` 登录（或配置 `GEMINI_API_KEY`）
+  - Codex（`codex`）：macOS/Linux `curl -fsSL https://chatgpt.com/codex/install.sh | sh`（Windows 用 `npm install -g @openai/codex` 或 `winget install OpenAI.Codex`）；登录 `codex login`（无浏览器环境用 `codex login --device-auth`）
+  - Pi（`pi`，详见 [docs/vendors/pi.md](docs/vendors/pi.md)）：macOS/Linux `curl -fsSL https://pi.dev/install.sh | sh`，Windows PowerShell `irm https://pi.dev/install.ps1 | iex`（或 `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`）；在终端运行 `pi` 后输入 `/login` 连接模型商，或配置对应模型商的 API key 环境变量
   - DeepSeek Harness（`dsh`，开发者预览版，详见 [docs/vendors/deepseek.md](docs/vendors/deepseek.md)）：安装已验证的固定版本 `npm install -g @deepseek-ai/dsh@0.2.2-rc.1`，随后在终端运行 `dsh` 交互登录，或向 `~/.dsh/.env` 写入 `DEEPSEEK_API_KEY=<key>`
-  - Cursor（`cursor-agent`，详见 [docs/vendors/cursor.md](docs/vendors/cursor.md)）：安装 `curl https://cursor.com/install -fsS | bash`，登录 `cursor-agent login`（无浏览器环境用 `NO_OPEN_BROWSER=1 cursor-agent login`，或配置 `CURSOR_API_KEY`）
+  - Cursor（`cursor-agent`，详见 [docs/vendors/cursor.md](docs/vendors/cursor.md)）：macOS/Linux `curl https://cursor.com/install -fsS | bash`，Windows PowerShell `irm 'https://cursor.com/install?win32=true' | iex`；登录 `cursor-agent login`（无浏览器环境用 `NO_OPEN_BROWSER=1 cursor-agent login`，或配置 `CURSOR_API_KEY`）
 
 ## 安装和启动
 
@@ -312,38 +312,31 @@ bash scripts/build-mac-app.sh --install
 
 **预览版状态说明：** 当前 Windows 桌面版为**未签名预览版（unsigned preview，尚未在真机完成正式发行代码签名与验收）**。首次运行安装包或应用时，若遇到 Windows SmartScreen 拦截提示，请点击**更多信息 -> 仍要运行**（英文系统为 **More info -> Run anyway**）。
 
-**系统环境要求：** Windows 11（x64）且已启用 WSL 2。若尚未启用 WSL 2，请先以管理员身份打开 PowerShell 执行以下命令，并按提示重启系统：
-
-```powershell
-wsl --install --no-distribution
-```
+**系统环境要求：** Windows 10（1809+）或 Windows 11（x64，推荐 Windows 11 24H2+ 以启用原生 MXC 只读沙箱容器）。安装包采用当前用户模式（`currentUser`），**无需管理员权限，也无需安装或开启 WSL 2**。若需要使用 Git worktree 派发并行 Worker，请在本机安装 Git for Windows（PowerShell 执行 `winget install --id Git.Git -e --source winget`）。
 
 可通过以下两种方式获取并安装：
 
-1. **直接用云端构建产物安装（推荐）：** 打开本仓库 GitHub Actions 的 **`windows-desktop`** 工作流页面（[`.github/workflows/windows-desktop.yml`](.github/workflows/windows-desktop.yml)），点开最近一次成功构建（或手动点击 **Run workflow** 触发构建），在页面底部 **Artifacts** 下载 **`fusa-windows-x64-nsis-unsigned-preview`**，解压后运行 `Fusa_0.1.0_x64-setup-unsigned-preview.exe` 完成安装。
-2. **从源码在本机编译安装包（可选）：** 在 Windows 11 上安装 Node.js >= 24.12、pnpm 10 与 Rust stable `x86_64-pc-windows-msvc` 构建工具链（含 Visual Studio C++ Build Tools），随后在 Git Bash 中依次执行以下命令构建前端资源、打包 WSL 后端发布归档并生成 NSIS 安装包：
+1. **直接用云端构建产物安装（推荐）：** 打开本仓库 GitHub Actions 的 **`windows-desktop`** 工作流页面（[`.github/workflows/windows-desktop.yml`](.github/workflows/windows-desktop.yml)），点开最近一次成功构建，在页面底部 **Artifacts** 下载 **`fusa-windows-x64-nsis-unsigned-preview`**，解压后双击 `Fusa_0.1.0_x64-setup-unsigned-preview.exe` 即可免管理员完成安装。
+2. **从源码在本机编译安装包（可选）：** 在 Windows 上安装 Node.js >= 24.21、pnpm 10 与 Rust stable `x86_64-pc-windows-msvc` 构建工具链（含 Visual Studio C++ Build Tools），随后在 PowerShell 中依次执行以下命令构建前端资源、编译原生辅助程序、组装内置 Node 24 LTS 运行时并生成 NSIS 安装包：
 
-```sh
+```powershell
 git clone https://github.com/maodesikeng-boop/agent-hub.git
 cd agent-hub
 pnpm install --frozen-lockfile
 pnpm build
-mkdir -p apps/windows/crates/fusa-desktop/resources
-tar --exclude='*.test.ts' --exclude='*.test.tsx' \
-	-czf apps/windows/crates/fusa-desktop/resources/fusa-release.tar.gz \
-	package.json pnpm-lock.yaml tsconfig.json apps/desktop/contract.json \
-	migrations scripts src dist
+cargo build --release --manifest-path apps/windows/Cargo.toml --workspace --bins --locked
+node scripts/stage-win-runtime.ts --out-dir apps/windows/crates/fusa-desktop/staged-runtime --helpers-dir apps/windows/target/release --target-os win32
 cd apps/windows/crates/fusa-desktop
-pnpm dlx @tauri-apps/cli@^2 build --bundles nsis
+pnpm dlx @tauri-apps/cli@^2 build --bundles nsis --config tauri.bundle.conf.json
 ```
 
-（若已通过 Cargo 安装 `tauri-cli`，也可在 `apps/windows/crates/fusa-desktop` 下执行 `cargo tauri build --bundles nsis`；生成的安装包位于 `apps/windows/target/release/bundle/nsis/`。）
+（生成的安装包位于 `apps/windows/target/release/bundle/nsis/`。）
 
-**首次启动引导、系统托盘与隔离边界：**
+**首次启动引导、跨盘工作树与系统托盘：**
 
-- **独立 WSL 2 运行环境自动准备：** 首次打开 **Fusa** 桌面应用时，内置引导页会自动下载并校验官方 Ubuntu 24.04 WSL 镜像，导入并初始化独立的 WSL 2 发行版 **`Fusa`**（创建普通用户 `fusa`，自动配好 Node.js 24、pnpm、`git`、`bubblewrap` Worker 沙箱与守护进程，不会改动你机器上已有的其他 WSL 发行版）。准备就绪后，点击引导页上的 **Open terminal** 按钮即可一键打开 `Fusa` 终端，按页面列出的命令安装并登录要用的厂商 CLI，完成后点击 **Continue** 进入工作台。
-- **窗口关闭与彻底退出：** 点击窗口右上角关闭按钮只会将窗口缩进系统托盘，后台守护进程继续保持运行；需要彻底退出并优雅关停 WSL 内的守护进程时，请右键点击系统托盘图标并选择**彻底退出 Fusa**。
-- **项目目录与宿主隔离：** 为防止 Worker 越界读写宿主机文件或调用 Windows 程序绕过沙箱，`Fusa` 发行版默认关闭 Windows 磁盘自动挂载与互操作（`/etc/wsl.conf` 中设置 `automount=false`、`interop=false`，不挂载 `C:\` 也不直接调用 Windows `.exe`）。请将要管理的 Git 仓库克隆在 `Fusa` 环境内部（例如通过 `wsl -d Fusa` 终端克隆到 `/home/fusa/projects` 下）。完整架构说明见 [docs/windows-desktop-design.md](docs/windows-desktop-design.md)。
+- **轻量化首次引导与注册表 `PATH` 刷新：** 打开 **Fusa** 时会自动同步系统与当前用户最新注册表 `PATH`，拉起随包内置的原生守护进程并完成免输令牌登录。首次运行若检测到尚未安装 `git` 或任一厂商 CLI，会展示安装与登录命令（可点 **Open terminal** 打开本机终端，装好后点 **Refresh** 即刻生效，也可直接点 **Continue** 先进入纯聊天工作台）。
+- **直接管理本机磁盘仓库与同卷 worktree：** 可直接通过原生目录选择器选取 `C:\`、`D:\` 或 Dev Drive 上的现有项目目录；当项目在 `D:\` 而数据目录在 `C:\` 时，Worker worktree 会自动创建在项目同卷受保护根 `D:\.fusa-wt\…` 下，保留 `pnpm` 硬链接共享与 Dev Drive 性能加速。
+- **窗口关闭与彻底退出：** 点击窗口右上角关闭按钮只会将窗口隐藏到系统托盘，后台守护进程继续保持运行；需要彻底退出并经本机管理命名管道优雅关停守护进程及其全部子进程树时，请右键点击系统托盘图标并选择**彻底退出 Fusa**。完整架构说明见 [docs/windows-native-design.md](docs/windows-native-design.md)。
 
 ### 3. Linux 服务器（常驻后台与多设备中心）
 
@@ -421,8 +414,9 @@ Fusa 本身不直接请求任何模型 API，而是在你的电脑上、使用**
 
 Worker 会在你的电脑上以当前系统用户的权限修改文件、执行任意终端命令。在重要机器或仓库上使用前，请先了解实际的安全机制与边界：
 
-- **写入范围限制（`src/shared/write-scope.ts`、`src/daemon/driver/write-scope.ts`）**：在数据目录（`~/.agent-hub`）内部，普通 Worker 只能写自己的 worktree，数据库、令牌（`state/`）和其他 Worker 的目录均受保护。这一限制由包在 Agent 进程外层的操作系统沙箱强制执行（macOS 使用 `sandbox-exec`，Linux 使用 `bubblewrap` `bwrap`，Linux 首次使用需跑一次 `sudo scripts/linux-sandbox-setup.sh`，详见 [docs/write-scope.md](docs/write-scope.md)）。Windows 11 桌面版通过专用 `Fusa` WSL 2 发行版内的 Linux `bubblewrap` 强制执行完全相同的 Worker 写入与只读沙箱边界，并关闭自动挂载与互操作（`automount=false`、`interop=false`），防止挂载宿主磁盘或直接调用 Windows 程序越界。若系统沙箱不可用，Worker 会拒绝启动。**但数据目录之外没有任何写入限制**：Worker 可以修改该系统环境内你的项目文件夹及当前用户可写的其他路径，也可以像普通程序一样跑命令、联网和读取文件。
+- **写入范围限制（`src/shared/write-scope.ts`、`src/daemon/driver/write-scope.ts`）**：在受保护根（数据目录 `~/.agent-hub` 及跨盘同卷 `.fusa-wt` 根）内部，普通 Worker 只能写自己的 worktree，数据库、令牌（`state/`）和其他 Worker 的目录均受保护。这一限制由包在 Agent 进程外层的操作系统沙箱强制执行（macOS 使用 `sandbox-exec`；Linux 使用 `bubblewrap` `bwrap`，首次使用需跑一次 `sudo scripts/linux-sandbox-setup.sh`；Windows 原生版通过 `fusa-run.exe` 的 `KILL_ON_JOB_CLOSE` Job Object + `WRITE_RESTRICTED` 写受限令牌 + 受保护根拒写 NTFS ACL 强制执行，详见 [docs/write-scope.md](docs/write-scope.md)）。若基础系统沙箱不可用，Worker 会拒绝启动。**但受保护根之外没有任何写入限制**：Worker 可以修改你的项目文件夹及当前用户可写的其他路径，也可以像普通程序一样跑命令、联网和读取文件。
 - **只读模式（`src/shared/readonly-policy.ts`）**：只读 Worker 可以读文件、跑命令，连接器（MCP）只能调用标有 `readOnlyHint: true` 的只读工具；禁读本机界面令牌（`state/ui-token`）、各厂商令牌凭据文件、`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.config/gh` 等敏感目录以及 `**/.env`、`**/.env.*`、`**/*.pem`、`**/*.key`、`**/id_rsa*`、`**/id_ed25519*` 等密钥文件；除会话私有临时目录（及必要的运行时和缓存目录）外禁止写入任何位置。Claude Code 与 Codex 使用各自原生只读沙箱；Antigravity、Pi、DeepSeek Harness（`dsh`）与 Cursor（`cursor-agent`）使用外层只读系统沙箱。详见 [docs/readonly-worker-design.md](docs/readonly-worker-design.md)。
+- **Windows 只读模式说明**：在 Windows 上，Codex 继续使用其自带只读沙箱；其余厂商在支持 ProcessContainer 的 Windows 11 24H2+ 环境优先使用微软官方 MXC 只读容器（`@microsoft/mxc-sdk`），在低于 Windows 11 24H2 或未启用容器支持的系统上自动平滑回退为「写受限令牌（受保护根禁写）+ 厂商工具层只读拦截规则」并在会话中输出降级提示。
 - **项目经理不受沙箱限制。**
 - 请勿将本机端口直接暴露到公网。安全漏洞报告方式见 [SECURITY.md](SECURITY.md)。
 

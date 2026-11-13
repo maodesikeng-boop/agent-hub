@@ -31,5 +31,7 @@ export const credentialEnv: VendorPathsModule["credentialEnv"] = {
 };
 
 export const installCommand = "curl https://cursor.com/install -fsS | bash";
+export const windowsInstallCommand: VendorPathsModule["windowsInstallCommand"] =
+  "irm 'https://cursor.com/install?win32=true' | iex";
 
 export const headlessLoginCommand = "NO_OPEN_BROWSER=1 cursor-agent login";

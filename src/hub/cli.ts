@@ -1313,7 +1313,39 @@ type Outcome =
   /** 本地就没发出去（request() 自己抛错）。 */
   | { kind: "not-sent"; reason: string };
 
-function post(socketPath: string, path: string, token: string, payload: string, timeoutMs: number): Promise<Outcome> {
+export function parseLoopbackTcpEndpoint(endpoint: string): { host: "127.0.0.1"; port: number } | null {
+  const m = /^tcp:\/\/127\.0\.0\.1:([1-9]\d{0,4})$/.exec(endpoint.trim());
+  if (!m) return null;
+  const port = Number(m[1]);
+  return Number.isInteger(port) && port >= 1 && port <= 65_535 ? { host: "127.0.0.1", port } : null;
+}
+
+export type HubEndpointTarget =
+  | { kind: "tcp"; host: "127.0.0.1"; port: number }
+  | { kind: "socket"; socketPath: string };
+
+/**
+ * 严格校验 `HUB_SOCK` 目标端点（防凭证外泄）：
+ * - 任何 URL scheme 形式只允许 `tcp://127.0.0.1:<1..65535>`（硬拒绝 `0.0.0.0`、`localhost`、IPv6、任意域名或外部 IP）；
+ * - 任何 `\\` 或 `//` 开头的 UNC/命名管道路径只允许本机命名管道 `\\.\pipe\<不含斜杠的非空名称>`（硬拒绝远程 SMB 管道防 NTLM 与 Bearer 令牌泄漏）；
+ * - 其余仅允许不含 NUL 的本机 Unix socket 路径。
+ */
+export function parseHubEndpoint(raw: string): HubEndpointTarget | null {
+  const trimmed = raw.trim();
+  if (trimmed === "" || trimmed.includes("\0")) return null;
+  const tcp = parseLoopbackTcpEndpoint(trimmed);
+  if (tcp) return { kind: "tcp", host: tcp.host, port: tcp.port };
+  const isWindowsDrivePath = /^[A-Za-z]:[\\/]/.test(trimmed);
+  if (!isWindowsDrivePath && /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed)) {
+    return null;
+  }
+  if (trimmed.startsWith("\\\\") || trimmed.startsWith("//")) {
+    return /^\\\\\.\\pipe\\[^\\/\0]+$/.test(trimmed) ? { kind: "socket", socketPath: trimmed } : null;
+  }
+  return { kind: "socket", socketPath: trimmed };
+}
+
+function post(target: HubEndpointTarget, path: string, token: string, payload: string, timeoutMs: number): Promise<Outcome> {
   return new Promise((done) => {
     let settled = false;
     let sent = false;
@@ -1325,7 +1357,7 @@ function post(socketPath: string, path: string, token: string, payload: string, 
     };
     const lost = (reason: string): Outcome => (sent ? { kind: "no-answer", reason } : { kind: "unreachable", reason });
     const options = {
-      socketPath,
+      ...(target.kind === "tcp" ? { host: target.host, port: target.port } : { socketPath: target.socketPath }),
       method: "POST",
       path,
       timeout: timeoutMs,
@@ -1392,6 +1424,10 @@ export async function runHub(io: HubIo): Promise<number> {
   if (token === undefined || token === "") return usage(`没有设 ${ENV_HUB_TOKEN}：${hub} 只能在 ${PRODUCT_ID} 启动的会话里用`, true);
   if (!TOKEN_CHARS.test(token)) return usage(`${ENV_HUB_TOKEN} 里有不该有的字符，不是 ${PRODUCT_ID} 发的令牌`, true);
   if (socketPath === undefined || socketPath === "") return usage(`没有设 ${ENV_HUB_SOCK}：${hub} 只能在 ${PRODUCT_ID} 启动的会话里用`, true);
+  const endpointTarget = parseHubEndpoint(socketPath);
+  if (endpointTarget === null) {
+    return usage(`${ENV_HUB_SOCK} 不是合法的本机守护进程地址（只允许本机 socket / 命名管道或 tcp://127.0.0.1:<端口>）`, true);
+  }
 
   const body: Record<string, unknown> = { ...parsed.body };
   if (parsed.textSource !== null && parsed.textField !== undefined) {
@@ -1415,7 +1451,7 @@ export async function runHub(io: HubIo): Promise<number> {
       : parsed.command === "self.reload"
         ? SELF_RELOAD_AGENT_PATH
         : hubPath(parsed.command);
-  const outcome = await post(socketPath, routePath, token, JSON.stringify(body), io.timeoutMs ?? HUB_CLI_TIMEOUT_MS);
+  const outcome = await post(endpointTarget, routePath, token, JSON.stringify(body), io.timeoutMs ?? HUB_CLI_TIMEOUT_MS);
   if (outcome.kind === "not-sent") return usage("请求没发出去：令牌或参数里有不能放进请求的字符");
   if (outcome.kind === "unreachable") {
     io.stderr.write(`${UNREACHABLE_MESSAGE}\n`);

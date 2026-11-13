@@ -320,6 +320,13 @@ export interface DesktopAuthStatusResponse extends AuthStatusResponse {
   instanceId: string;
 }
 
+export interface DesktopHealthResponse {
+  ok: true;
+  product: typeof DESKTOP_PRODUCT;
+  protocolVersion: typeof DESKTOP_PROTOCOL_VERSION;
+  instanceId: string;
+}
+
 const pathOf = (req: FastifyRequest) => req.url.split("?", 1)[0] ?? "";
 /** 设备令牌能碰的：/api/ 下除了入口专用的（不能借本机的转发 /d/ 去别的设备，也不能碰 /auth、静态文件）。 */
 const inDeviceScope = (path: string) => path.startsWith("/api/") && !ENTRY_ONLY_API_PREFIXES.some((prefix) => path.startsWith(prefix));
@@ -1125,6 +1132,13 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
         instanceId,
       };
     });
+
+    routes.get(API_PATHS.health, async (): Promise<DesktopHealthResponse> => ({
+      ok: true,
+      product: DESKTOP_PRODUCT,
+      protocolVersion: DESKTOP_PROTOCOL_VERSION,
+      instanceId,
+    }));
 
     routes.get(API_PATHS.browserSessions, async (req): Promise<BrowserSessionsResponse> => {
       const current = sessionOf(req);

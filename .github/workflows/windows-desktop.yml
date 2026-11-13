@@ -2,6 +2,32 @@ name: windows-desktop
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "apps/windows/**"
+      - "apps/desktop/**"
+      - "src/daemon/**"
+      - "src/shared/**"
+      - "src/vendors/**"
+      - "src/hub/**"
+      - "scripts/stage-win-runtime.ts"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/windows-desktop.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/windows/**"
+      - "apps/desktop/**"
+      - "src/daemon/**"
+      - "src/shared/**"
+      - "src/vendors/**"
+      - "src/hub/**"
+      - "scripts/stage-win-runtime.ts"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/windows-desktop.yml"
 
 concurrency:
   group: windows-desktop-${{ github.head_ref || github.ref }}
@@ -12,11 +38,14 @@ permissions:
 
 jobs:
   build-windows-nsis:
-    name: windows-desktop (windows-2022 unsigned-preview)
-    runs-on: windows-2022
-    timeout-minutes: 30
+    name: windows-desktop (native x64 NSIS & self-test)
+    runs-on: windows-latest
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v5
+
+      - name: Enable git core.longpaths
+        run: git config --global core.longpaths true
 
       - uses: pnpm/action-setup@v4
 
@@ -25,45 +54,11 @@ jobs:
           node-version: 24
           cache: pnpm
 
-      - name: Install frontend dependencies
-        run: pnpm install --frozen-lockfile
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline
 
       - name: Build web frontend assets
         run: pnpm build
-
-      - name: Stage WSL backend release archive for Tauri resources
-        shell: bash
-        run: |
-          set -euo pipefail
-          node -e '
-            const fs = require("node:fs");
-            const path = require("node:path");
-            for (const dir of ["scripts", "migrations"]) {
-              for (const name of fs.readdirSync(dir)) {
-                if (name.endsWith(".test.ts")) continue;
-                const p = path.join(dir, name);
-                if (fs.statSync(p).isFile() && fs.readFileSync(p).includes(0x0d)) {
-                  throw new Error(`CRLF detected in ${p}`);
-                }
-              }
-            }
-          '
-          mkdir -p apps/windows/crates/fusa-desktop/resources
-          tar \
-            --exclude='*.test.ts' \
-            --exclude='*.test.tsx' \
-            -czf apps/windows/crates/fusa-desktop/resources/fusa-release.tar.gz \
-            package.json \
-            pnpm-lock.yaml \
-            tsconfig.json \
-            apps/desktop/contract.json \
-            migrations \
-            scripts \
-            src \
-            dist
-          archive_entries="$(tar -tzf apps/windows/crates/fusa-desktop/resources/fusa-release.tar.gz)"
-          grep -Eq '^(\./)?migrations/.*\.sql$' <<<"$archive_entries"
-          grep -Eq '^(\./)?src/daemon/main\.ts$' <<<"$archive_entries"
 
       - name: Install Rust stable (MSVC)
         uses: dtolnay/rust-toolchain@stable
@@ -80,13 +75,51 @@ jobs:
           RUSTFLAGS: -D warnings
         run: cargo test --manifest-path apps/windows/Cargo.toml --workspace --locked
 
-      - name: Build Tauri NSIS installer (unsigned-preview)
+      - name: Build fusa-win-helper and fusa-desktop release binaries
+        env:
+          RUSTFLAGS: -D warnings
+        run: cargo build --release --manifest-path apps/windows/Cargo.toml --workspace --bins --locked
+
+      - name: Stage native runtime (official Node 24 LTS SHA-256 + hoisted daemon node_modules + helpers)
+        run: >-
+          node scripts/stage-win-runtime.ts
+          --out-dir apps/windows/crates/fusa-desktop/staged-runtime
+          --helpers-dir apps/windows/target/release
+          --target-os win32
+
+      - name: Run portable fusa-desktop.exe --self-test (headless end-to-end verification)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $portableDir = Join-Path $env:RUNNER_TEMP "fusa-portable-selftest"
+          if (Test-Path $portableDir) {
+            Remove-Item -Recurse -Force $portableDir
+          }
+          Copy-Item -Recurse -Path "apps\windows\crates\fusa-desktop\staged-runtime" -Destination $portableDir
+          $selfTestExe = Join-Path $portableDir "fusa-desktop.exe"
+          Copy-Item -Path "apps\windows\target\release\fusa-desktop.exe" -Destination $selfTestExe
+          $stdoutFile = Join-Path $env:RUNNER_TEMP "fusa-selftest-stdout.txt"
+          $stderrFile = Join-Path $env:RUNNER_TEMP "fusa-selftest-stderr.txt"
+          Remove-Item -Force -ErrorAction SilentlyContinue $stdoutFile, $stderrFile
+          $proc = Start-Process -FilePath $selfTestExe -ArgumentList @("--self-test") -Wait -PassThru -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile
+          $stdoutText = if (Test-Path $stdoutFile) { Get-Content -Raw -Path $stdoutFile } else { "" }
+          $stderrText = if (Test-Path $stderrFile) { Get-Content -Raw -Path $stderrFile } else { "" }
+          if ($stdoutText) { Write-Host $stdoutText.TrimEnd() }
+          if ($stderrText) { Write-Host $stderrText.TrimEnd() }
+          Write-Host "[ci-self-test] fusa-desktop.exe --self-test exitCode=$($proc.ExitCode)"
+          if ($proc.ExitCode -ne 0 -or $stdoutText -notmatch "\[fusa-self-test\] PASS") {
+            throw "fusa-desktop.exe --self-test failed with exitCode=$($proc.ExitCode)"
+          }
+          Remove-Item -Recurse -Force $portableDir
+          Remove-Item -Force -ErrorAction SilentlyContinue $stdoutFile, $stderrFile
+
+      - name: Build Tauri NSIS installer (currentUser, unsigned-preview)
         working-directory: apps/windows/crates/fusa-desktop
         env:
           CI: "true"
-        run: pnpm dlx @tauri-apps/cli@^2 build --bundles nsis --ci -- --locked
+        run: pnpm dlx @tauri-apps/cli@^2 build --bundles nsis --ci --config tauri.bundle.conf.json -- --locked
 
-      - name: Label NSIS installer as unsigned-preview and generate SHA256
+      - name: Verify NSIS installer size budget (<= 60 MiB), label unsigned-preview and generate SHA256
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -113,8 +146,13 @@ jobs:
           $hash = (Get-FileHash -Path $previewPath -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $previewName" | Set-Content -Encoding ascii -NoNewline:$false -Path "$previewPath.sha256"
 
-          $sizeMiB = [math]::Round((Get-Item $previewPath).Length / 1MB, 2)
-          Write-Host "Prepared $previewName ($sizeMiB MiB) sha256=$hash"
+          $exactBytes = (Get-Item $previewPath).Length
+          $sizeMiB = [math]::Round($exactBytes / 1MB, 2)
+          $budgetBytes = 60 * 1024 * 1024
+          Write-Host "NSIS installer: $previewName | exactBytes=$exactBytes | sizeMiB=$sizeMiB MiB | budget=60 MiB | sha256=$hash"
+          if ($exactBytes -gt $budgetBytes) {
+            throw "NSIS installer exceeded 60 MiB budget: $exactBytes bytes ($sizeMiB MiB)"
+          }
 
       - name: Upload unsigned-preview NSIS installer artifact
         uses: actions/upload-artifact@v4

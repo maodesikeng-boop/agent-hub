@@ -20,7 +20,7 @@ import {
   type SessionTokens,
 } from "../shared/index.ts";
 import { LOCAL_ERRORS } from "../shared/errors.ts";
-import { HUB_USAGE, runHub, runHubSafely, type HubIo } from "./cli.ts";
+import { HUB_USAGE, parseHubEndpoint, runHub, runHubSafely, type HubIo } from "./cli.ts";
 import { FakeHubLedger } from "../daemon/agent-api/fake-ledger.ts";
 import { startAgentApi, type RunningAgentApi } from "../daemon/agent-api/server.ts";
 import { installHubShim } from "../daemon/agent-api/shim.ts";
@@ -1450,6 +1450,52 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
       const neither = await hub(["dispatch", "pm", "--device", "self", "--pm", "2"]);
       expect(neither.code).toBe(HUB_EXIT.usage);
       expect(neither.stderr).toContain("--verbatim 或 --stdin");
+    });
+  });
+
+  describe("loopback TCP bridge & HUB_SOCK exfiltration guard", () => {
+    it("accepts tcp://127.0.0.1:<port> loopback bridge and strictly rejects non-loopback hosts, 0.0.0.0, URLs, and remote UNC pipes", async () => {
+      expect(parseHubEndpoint("tcp://127.0.0.1:4317")).toEqual({ kind: "tcp", host: "127.0.0.1", port: 4317 });
+      expect(parseHubEndpoint("\\\\.\\pipe\\fusa-abc-hub")).toEqual({
+        kind: "socket",
+        socketPath: "\\\\.\\pipe\\fusa-abc-hub",
+      });
+
+      for (const malicious of [
+        "tcp://0.0.0.0:4317",
+        "tcp://localhost:4317",
+        "tcp://[::1]:4317",
+        "tcp://192.168.1.10:4317",
+        "tcp://evil.example.com:80",
+        "tcp://127.0.0.1:0",
+        "tcp://127.0.0.1:04317",
+        "tcp://127.0.0.1:70000",
+        "tcp://127.0.0.1:4317/extra",
+        "http://127.0.0.1:4317",
+        "https://evil.example.com/pwn",
+        "\\\\evil-smb-server\\pipe\\fusa-hub",
+        "//evil-smb-server/pipe/fusa-hub",
+        "\\\\?\\UNC\\evil\\share\\hub.sock",
+        "\\\\.\\pipe\\",
+        "\\\\.\\pipe\\nested\\bad",
+      ]) {
+        expect(parseHubEndpoint(malicious), malicious).toBeNull();
+        const rejected = await hub(["status"], { env: { ...env, [ENV_HUB_SOCK]: malicious } });
+        expect(rejected.code, malicious).toBe(HUB_EXIT.usage);
+        expect(rejected.stderr, malicious).toContain("不是合法的本机守护进程地址");
+      }
+      expect(ledger.calls).toHaveLength(0);
+
+      // 验证合法的 tcp://127.0.0.1:<port> 回环桥接端到端畅通
+      const { startHubPipeLoopbackBridge } = await import("../daemon/platform/win32/mxc-runner.ts");
+      const bridge = await startHubPipeLoopbackBridge(running.socketPath);
+      try {
+        const okRes = await hub(["status"], { env: { ...env, [ENV_HUB_SOCK]: bridge.endpoint } });
+        expect(okRes.code).toBe(HUB_EXIT.ok);
+        expect(okRes.stdout).toContain("status");
+      } finally {
+        await bridge.close();
+      }
     });
   });
 });

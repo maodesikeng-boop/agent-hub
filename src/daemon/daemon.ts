@@ -93,6 +93,7 @@ import { createSetupRunner, type SetupRunner } from "./setup/index.ts";
 import { DaemonAlreadyRunningError, acquireLock, createSessionStore, openStore, type Db, type DirLock } from "./store/index.ts";
 import { StartupError } from "./startup-error.ts";
 import { loadOrCreateUiToken, loginUrl, rotateUiToken, startUiServer, type RunningUiServer } from "./ui-server/index.ts";
+import type { FolderPicker } from "./pick-folder.ts";
 import { defaultDeviceName, loadOrCreateDevice, saveDevice } from "./device.ts";
 import { createPeers, type Peers } from "./peers/index.ts";
 import { createPushService } from "./push/index.ts";
@@ -152,6 +153,8 @@ export interface DaemonOptions {
    * 外部经管理管道 `POST /admin/shutdown`（带界面令牌）请求优雅关机时调它（Windows 下替代外部无法送达的 SIGTERM）。
    */
   onExternalShutdown?: () => void;
+  /** 桌面外壳提供的原生目录选择器桥接（Windows 下由 Tauri `tauri-plugin-dialog` 提供）。 */
+  folderPicker?: FolderPicker;
 }
 
 export interface RunningDaemon {
@@ -809,6 +812,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       routerDispatcher,
       routerLocalPort,
       ...(parts.selfReload ? { selfReload: parts.selfReload } : {}),
+      ...(options.folderPicker ? { folderPicker: options.folderPicker } : {}),
       ...(process.platform === "win32" ? {} : { publicSock: paths.publicSock }),
       publicEntryFile: paths.publicEntryFile,
       ...(process.platform === "win32"

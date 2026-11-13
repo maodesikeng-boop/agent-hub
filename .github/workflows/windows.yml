@@ -137,6 +137,8 @@ jobs:
           src/shared/vendor-guard.test.ts
           src/daemon/platform/win32.test.ts
           src/daemon/driver/write-scope.test.ts
+          src/daemon/desktop-preflight.test.ts
+          scripts/stage-win-runtime.test.ts
           src/daemon/worktree-cleanup.test.ts
           src/daemon/sent-files.test.ts
           src/daemon/router/sandbox.test.ts

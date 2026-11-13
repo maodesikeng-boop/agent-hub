@@ -13,6 +13,11 @@ import { LOCAL_ERRORS } from "../shared/errors.ts";
 import { DAEMON_LOG_MAX_BYTES, FATAL_SHUTDOWN_MS, LOG_PREFIX, PRODUCT_NAME, SHUTDOWN_TOTAL_MS } from "../shared/index.ts";
 import { resolveHubPaths, type HubPaths } from "../shared/paths.ts";
 import { startDaemon, type DaemonOptions, type RunningDaemon } from "./daemon.ts";
+import {
+  DESKTOP_DIALOG_TOKEN_ENV,
+  DESKTOP_DIALOG_URL_ENV,
+  createDesktopBridgeFolderPicker,
+} from "./pick-folder.ts";
 import { stopWithinLimit } from "./shutdown.ts";
 import { StartupError } from "./startup-error.ts";
 import { DaemonAlreadyRunningError } from "./store/index.ts";
@@ -118,12 +123,28 @@ export async function runDaemonProcess(options: DaemonOptions): Promise<void> {
     });
   };
   // 有外壳监管才接受热重启：排空到点后正常关机，以热重启退出码退出
-  const supervised = isSupervised(options.env ?? process.env);
+  const launchEnv = options.env ?? process.env;
+  const supervised = isSupervised(launchEnv);
+  const dialogUrl = launchEnv[DESKTOP_DIALOG_URL_ENV]?.trim() ?? "";
+  const dialogToken = launchEnv[DESKTOP_DIALOG_TOKEN_ENV]?.trim() ?? "";
   // 读完就摘掉：不传给 agent 子进程，免得 Worker 在 shell 里另起的守护进程（测试、手动 pnpm start）误以为有外壳拉起
-  for (const key of [DESKTOP_CONTRACT.supervisedEnv, SYSTEMD_INVOCATION_ENV]) {
+  for (const key of [
+    DESKTOP_CONTRACT.supervisedEnv,
+    SYSTEMD_INVOCATION_ENV,
+    DESKTOP_DIALOG_URL_ENV,
+    DESKTOP_DIALOG_TOKEN_ENV,
+  ]) {
     delete process.env[key];
     if (options.env !== undefined && options.env !== process.env) delete options.env[key];
   }
+  const desktopFolderPicker =
+    dialogUrl !== "" && dialogToken !== ""
+      ? createDesktopBridgeFolderPicker({
+          bridgeUrl: dialogUrl,
+          bridgeToken: dialogToken,
+          homeDir: options.userHome,
+        })
+      : undefined;
   const onSelfReload = () => {
     if (stopping) return;
     console.error(`${LOG_PREFIX} 空闲排空完成，正在关闭并热重启……`);
@@ -167,6 +188,7 @@ export async function runDaemonProcess(options: DaemonOptions): Promise<void> {
       ...options,
       ...(supervised && options.onSelfReload === undefined ? { onSelfReload } : {}),
       ...(options.onExternalShutdown === undefined ? { onExternalShutdown: () => onSignal("SIGTERM") } : {}),
+      ...(desktopFolderPicker !== undefined && options.folderPicker === undefined ? { folderPicker: desktopFolderPicker } : {}),
     });
   } catch (error) {
     process.off("uncaughtException", onUncaughtException);

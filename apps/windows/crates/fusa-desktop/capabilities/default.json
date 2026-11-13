@@ -8,7 +8,6 @@
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "allow-get-bootstrap-state",
-    "allow-install-wsl-component",
     "allow-retry-bootstrap",
     "allow-open-vendor-terminal",
     "allow-open-logs",

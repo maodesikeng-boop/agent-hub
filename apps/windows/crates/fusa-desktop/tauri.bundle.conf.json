@@ -1,0 +1,17 @@
+{
+  "bundle": {
+    "resources": {
+      "staged-runtime/node": "node",
+      "staged-runtime/bin": "bin",
+      "staged-runtime/daemon": "daemon",
+      "staged-runtime/runtime-manifest.json": "runtime-manifest.json",
+      "resources/contract.json": "contract.json"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "compression": "lzma"
+      }
+    }
+  }
+}

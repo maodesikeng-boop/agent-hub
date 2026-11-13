@@ -16,17 +16,20 @@ pub struct DesktopContract {
     pub protocol_version: u32,
     pub default_port: u16,
     pub status_path: String,
+    pub health_path: String,
+    pub shutdown_transport: String,
+    pub shutdown_path: String,
+    pub daemon_entry_relative_path: String,
     pub probe_timeout_ms: u64,
     pub poll_interval_ms: u64,
     pub startup_budget_ms: u64,
-    pub wsl_cold_start_budget_ms: u64,
     pub stop_grace_ms: u64,
     pub crash_backoff_ms: Vec<u64>,
     pub crash_window_ms: u64,
     pub max_crashes_in_window: usize,
     /// 守护进程空闲排空后请求热重启（`hub self-reload`）用的退出码：立即拉起新进程，不算崩溃、不进退避与熔断计数。
     pub reload_exit_code: i32,
-    /// 外壳拉起守护进程时设的环境变量名（WSL 内由 `wsl-daemon-ctl.sh run` 导出）：守护进程据此才接受热重启请求。
+    /// 外壳拉起守护进程时设的环境变量名（Windows 原生壳由 `NativeDaemonRuntime` 注入）：守护进程据此才接受热重启请求。
     pub supervised_env: String,
     pub log_relative_path: String,
     pub log_max_bytes: u64,
@@ -59,11 +62,14 @@ impl DesktopContract {
     fn validate(&self) -> Result<(), SupervisorError> {
         if self.product.trim().is_empty()
             || !self.status_path.starts_with('/')
+            || !self.health_path.starts_with('/')
+            || self.shutdown_transport.trim().is_empty()
+            || !self.shutdown_path.starts_with('/')
+            || self.daemon_entry_relative_path.trim().is_empty()
             || self.default_port == 0
             || self.probe_timeout_ms == 0
             || self.poll_interval_ms == 0
             || self.startup_budget_ms == 0
-            || self.wsl_cold_start_budget_ms == 0
             || self.stop_grace_ms == 0
             || self.crash_backoff_ms.is_empty()
             || self.crash_window_ms == 0
@@ -91,21 +97,8 @@ impl DesktopContract {
         Duration::from_millis(self.poll_interval_ms)
     }
 
-    pub fn startup_budget(&self, is_cold_start: bool) -> Duration {
-        let ms = if is_cold_start {
-            self.wsl_cold_start_budget_ms
-        } else {
-            self.startup_budget_ms
-        };
-        Duration::from_millis(ms)
-    }
-
-    pub fn startup_budget_ms_for(&self, is_cold_start: bool) -> u64 {
-        if is_cold_start {
-            self.wsl_cold_start_budget_ms
-        } else {
-            self.startup_budget_ms
-        }
+    pub fn startup_budget(&self) -> Duration {
+        Duration::from_millis(self.startup_budget_ms)
     }
 
     pub fn stop_grace(&self) -> Duration {

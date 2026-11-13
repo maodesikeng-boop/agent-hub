@@ -16,6 +16,7 @@ export const fallbackPaths: VendorPathsModule["fallbackPaths"] = ({ userHome, pl
 };
 
 export const installCommand: VendorPathsModule["installCommand"] = "curl -fsSL https://claude.ai/install.sh | bash";
+export const windowsInstallCommand: VendorPathsModule["windowsInstallCommand"] = "irm https://claude.ai/install.ps1 | iex";
 // claude 给它起的子进程设的（照 experiments/m0/claude_clean.sh），保持迁移前名单。
 export const parentSessionEnv: VendorPathsModule["parentSessionEnv"] = [
   "CLAUDECODE",

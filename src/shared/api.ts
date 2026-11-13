@@ -186,6 +186,8 @@ export const API_PATHS = {
 
   /** GET → AuthStatusResponse：查询当前浏览器会话状态（active / pending_approval / unauthenticated）。 */
   authStatus: "/api/auth/status",
+  /** GET → DesktopHealthResponse：需有效登录会话 Cookie 的本机健康探活端点（供桌面外壳 `--self-test` 验证鉴权与服务状态）。 */
+  health: "/api/health",
   /** GET → BrowserSessionsResponse。 */
   browserSessions: "/api/sessions",
   /** DELETE → 204：退出这一个浏览器（可以是自己）。 */
@@ -592,7 +594,7 @@ export const PEER_DEVICE_HEADER = "x-agent-hub-device";
  * 只给浏览器用、设备令牌不能访问的接口（入口自己的：设备管理、浏览器登录、推送订阅）。新加这类接口要加进来。
  * 设备令牌也不能访问 /d/（不能借别的设备的转发去第三台）和 /auth。
  */
-export const ENTRY_ONLY_API_PREFIXES: readonly string[] = ["/api/devices", "/api/sessions", "/api/login-links", "/api/push/", "/api/auth/", "/api/self-reload"];
+export const ENTRY_ONLY_API_PREFIXES: readonly string[] = ["/api/devices", "/api/sessions", "/api/login-links", "/api/push/", "/api/auth/", "/api/health", "/api/self-reload"];
 
 /** 入口转发的 WebSocket 因为对方连不上（握手失败、心跳没回）被关时的状态码和原因。网页按断线重连处理。 */
 export const DEVICE_OFFLINE_WS_CLOSE_CODE = 4502;

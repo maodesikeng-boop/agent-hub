@@ -47,7 +47,9 @@ Windows 原生版通过 `apps/windows/crates/fusa-win-helper`（`fusa-run.exe`�
   - `CreateRestrictedToken(..., DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED, ...)` 完整复制当前令牌用户 SID + 全部已启用组 SID（保证 `D:\` 等靠 `Authenticated Users` 赋权的数据卷、工具链缓存、`%TEMP%` 与命名管道照常读写）+ `FusaWorker` + `FusaWorker-<id>`，并在 Job 上附加 `JOB_OBJECT_UILIMIT_HANDLES | UILIMIT_DESKTOP | UILIMIT_GLOBALATOMS` 收窄 UI 句柄边界。
 - **只读 Worker**：
   - `codex`：继续使用其自带的 `readOnly` 沙箱与驱动审批回调；
-  - 其余 5 家（`claude, agy, pi, deepseek, cursor`）：在支持微软官方 MXC `processcontainer` 的 Win11 24H2+ 环境将走 MXC 容器（由 `registerWin32MxcReadonlyProvider` 接入）；**在尚未启用 MXC 或低于 Win11 24H2 / Windows Server 等无 `processcontainer` 的机器上绝不硬拒启动，自动回退为「4.4.2 写受限令牌（`--readonly-fallback`，仅带 `FusaWorker` 使全部受保护根连本 worktree 一并禁写）+ 各家现有工具层只读拦截规则（如 `--mode plan`、`--exclude-tools edit,write`、只读补丁与审批拒绝）」**，同时在后台日志与会话事件（`driver.warning`）输出清晰的降级告警说明。
+  - 其余 5 家（`claude, agy, pi, deepseek, cursor`）：通过 `src/daemon/platform/win32/mxc-readonly.ts` 与 `mxc-runner.ts` 按需动态加载微软官方 `@microsoft/mxc-sdk/v1`：
+    - 在支持无宿主 DACL 污染的 `base-container` / `appcontainer-bfs` 且具备 `filesystemDeniedPaths` 能力的 **Windows 11 24H2+**（Node ≥ 24.21）环境，自动运行于 MXC ProcessContainer 只读沙箱内（各本机盘根、工作树与 `protectedRoots` 严格只读，仅放行会话私有 `tmpDir`、`%TEMP%` 与厂商运行时目录可写，`secretPaths` 与扫出的 `.env` 等密钥文件通过 `deniedPaths` 禁读，`HUB_SOCK` 经单会话本机 `127.0.0.1` 回环桥接通信）；
+    - **在低于 Win11 24H2、未启用所需容器特性、仅剩需修改宿主 DACL 的 `appcontainer-dacl` 档位或 Windows Server 等环境，绝不硬拒报错，自动平滑回退为「4.4.2 写受限令牌（`--readonly-fallback`，仅带 `FusaWorker` 使全部受保护根连本 worktree 一并禁写）+ 各家现有工具层只读拦截规则（如 `--mode plan`、`--exclude-tools edit,write`、只读补丁与审批拒绝）」**，同时在后台日志与会话事件（`driver.warning`）输出清晰的降级告警说明。MXC 不可用探测遵守 30 秒短暂负缓存 TTL（`WIN_MXC_NEGATIVE_CACHE_TTL_MS`），不用永久 `null` 缓存。
 - **已知边界**：
   - 写受限令牌拦截的是本进程树（含全部子孙进程）的直接文件写入与改权；若借外部不受限系统服务代跑（如 `schtasks`、WMI `Win32_Process.Create`、进程外 COM），属于与 macOS `(allow default)` 下 `launchctl`/AppleEvents 同类的已知边界（设计目标是防误写与常规越权，而非防高对抗恶意逃逸）；
   - 低版本 Windows 只读回退模式下，写受限令牌只管受保护根禁写、不管文件读权限，受保护根以外目录的禁写与敏感文件禁读依赖各家 CLI 的工具权限层拦截；`agy` 存于 Windows 凭据管理器中的令牌不受文件级规则遮蔽。

@@ -867,3 +867,15 @@ export const WIN_HELPER_PROBE_TIMEOUT_MS = 8_000;
 export const WIN_REMOVE_PASS_DELAYS_MS: readonly number[] = [250, 500, 1_000, 2_000];
 /** Windows 原子写 rename 遇短暂占用（EPERM/EACCES/EBUSY）重试间隔（毫秒，共 5 次 < 1 秒）。 */
 export const WIN_RENAME_RETRY_DELAYS_MS: readonly number[] = [50, 100, 150, 200, 250];
+/** Windows MXC ProcessContainer 不可用时的负缓存短暂 TTL（30 秒，不用永久 null 缓存，启用特性后自动恢复）。 */
+export const WIN_MXC_NEGATIVE_CACHE_TTL_MS = 30_000;
+/** Windows MXC ProcessContainer 可用探测结果正缓存 TTL（5 分钟）。 */
+export const WIN_MXC_POSITIVE_CACHE_TTL_MS = 5 * 60_000;
+/** Windows MXC 启动配置走命令行 `--config-base64` 的最大字符数，超出则写入会话私有临时目录文件。 */
+export const WIN_MXC_INLINE_CONFIG_MAX_CHARS = 16 * 1024;
+/** Windows MXC 启动请求文件最大字节上限（512 KiB，防止异常配置撑爆内存）。 */
+export const WIN_MXC_REQUEST_FILE_MAX_BYTES = 512 * 1024;
+/** Windows MXC 回环 `hub` 桥接单次连接最大入站请求字节数（`HUB_MAX_BODY_BYTES` + 64 KiB HTTP 请求头余量）。 */
+export const WIN_MXC_BRIDGE_MAX_REQUEST_BYTES = HUB_MAX_BODY_BYTES + 64 * 1024;
+/** Windows MXC 回环 `hub` 桥接同时允许的最大活跃连接数。 */
+export const WIN_MXC_BRIDGE_MAX_CONCURRENT_CONNS = 32;

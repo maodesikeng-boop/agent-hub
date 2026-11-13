@@ -92,6 +92,16 @@ pub struct DaemonIdentity {
     pub status: Option<String>,
 }
 
+/// 经 `GET /api/health`（携带已兑换会话 Cookie）核验通过的健康状态响应。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaemonHealthReport {
+    pub ok: bool,
+    pub product: String,
+    pub protocol_version: u32,
+    pub instance_id: String,
+}
+
 /// 单侧探活失败原因（结构化建模，区分“尚未就绪/不可达”与“端口冲突/非法重定向”）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -135,7 +145,7 @@ impl ProbeFailureKind {
     }
 }
 
-/// 单侧（WSL 内部或 Windows 宿主）HTTP 探活结果。
+/// 本机回环 HTTP 探活结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProbeOutcome {
     Verified(DaemonIdentity),
@@ -145,88 +155,6 @@ pub enum ProbeOutcome {
 impl ProbeOutcome {
     pub fn is_port_conflict(&self) -> bool {
         matches!(self, Self::Failed(kind) if kind.is_port_conflict())
-    }
-}
-
-/// 双重探活冲突发生的侧。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ProbeSide {
-    Guest,
-    Host,
-}
-
-/// 先 WSL 内部探活、再宿主侧探活的双重诊断结论。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DualProbeDiagnosis {
-    /// WSL 内部与宿主回环均核验通过，且 `instanceId` 完全一致。
-    Ready(DaemonIdentity),
-    /// WSL 内部与宿主均尚未监听（后台正在启动或已退出）。
-    BothUnreachable,
-    /// WSL 内部已就绪，但宿主 Windows `127.0.0.1:<port>` 无法连通（`localhostForwarding` 异常或被防火墙拦截）。
-    LocalhostForwardingBroken {
-        guest_identity: DaemonIdentity,
-        host_reason: String,
-    },
-    /// 宿主侧已有兼容的 Fusa 响应，但其 `instanceId` 与当前 WSL 内部不一致（例如外部 Windows 侧进程占用了回环端口）。
-    SplitBrainInstanceMismatch {
-        guest_identity: Option<DaemonIdentity>,
-        host_identity: DaemonIdentity,
-    },
-    /// 任一侧检测到非 Fusa 服务、3xx 重定向或协议版本不兼容。
-    PortConflict {
-        side: ProbeSide,
-        failure: ProbeFailureKind,
-    },
-}
-
-/// 综合评估 WSL 内部探活与宿主侧探活结果。
-pub fn diagnose_dual_probe(guest: ProbeOutcome, host: ProbeOutcome) -> DualProbeDiagnosis {
-    if let ProbeOutcome::Failed(f) = &guest {
-        if f.is_port_conflict() {
-            return DualProbeDiagnosis::PortConflict {
-                side: ProbeSide::Guest,
-                failure: f.clone(),
-            };
-        }
-    }
-    if let ProbeOutcome::Failed(f) = &host {
-        if f.is_port_conflict() {
-            return DualProbeDiagnosis::PortConflict {
-                side: ProbeSide::Host,
-                failure: f.clone(),
-            };
-        }
-    }
-
-    match (guest, host) {
-        (ProbeOutcome::Verified(g_id), ProbeOutcome::Verified(h_id)) => {
-            if g_id.instance_id == h_id.instance_id {
-                DualProbeDiagnosis::Ready(h_id)
-            } else {
-                DualProbeDiagnosis::SplitBrainInstanceMismatch {
-                    guest_identity: Some(g_id),
-                    host_identity: h_id,
-                }
-            }
-        }
-        (ProbeOutcome::Verified(g_id), ProbeOutcome::Failed(f)) => {
-            let reason = match f {
-                ProbeFailureKind::Unreachable { reason } => reason,
-                other => other.describe_for_port(0),
-            };
-            DualProbeDiagnosis::LocalhostForwardingBroken {
-                guest_identity: g_id,
-                host_reason: reason,
-            }
-        }
-        (ProbeOutcome::Failed(_), ProbeOutcome::Verified(h_id)) => {
-            DualProbeDiagnosis::SplitBrainInstanceMismatch {
-                guest_identity: None,
-                host_identity: h_id,
-            }
-        }
-        (ProbeOutcome::Failed(_), ProbeOutcome::Failed(_)) => DualProbeDiagnosis::BothUnreachable,
     }
 }
 
@@ -310,20 +238,6 @@ pub fn parse_status_http_response(
     })
 }
 
-/// 解析 `wsl-daemon-ctl.sh probe` 标准输出（末尾固定携带 `__FUSA_HTTP_STATUS__:<code>`）。
-pub fn parse_wsl_ctl_probe_output(raw_stdout: &str, contract: &DesktopContract) -> ProbeOutcome {
-    const MARKER: &str = "__FUSA_HTTP_STATUS__:";
-    let Some(pos) = raw_stdout.rfind(MARKER) else {
-        return ProbeOutcome::Failed(ProbeFailureKind::Unreachable {
-            reason: "missing_probe_marker".to_string(),
-        });
-    };
-    let body_part = raw_stdout[..pos].trim();
-    let code_str = raw_stdout[pos + MARKER.len()..].trim();
-    let status_code = code_str.parse::<u16>().unwrap_or(0);
-    parse_status_http_response(status_code, body_part.as_bytes(), contract)
-}
-
 /// 解析 `POST /auth` 返回的 `Set-Cookie` 响应头。
 pub fn parse_set_cookie_header(header_val: &str, expected_port: u16) -> Result<SessionCookie, SupervisorError> {
     let mut segments = header_val.split(';').map(str::trim);
@@ -403,6 +317,46 @@ impl UreqHostHttpClient {
             .timeout_global(Some(timeout))
             .build();
         cfg.into()
+    }
+
+    /// 请求需要鉴权的 `GET /api/health`（可选携带 `SessionCookie`，用于 `--self-test` 同时验证无 Cookie 401 与有 Cookie 200）。
+    pub fn request_health(
+        &self,
+        port: u16,
+        cookie: Option<&SessionCookie>,
+        contract: &DesktopContract,
+        timeout: Duration,
+    ) -> Result<(u16, Option<DaemonHealthReport>), SupervisorError> {
+        let agent = Self::build_agent(timeout);
+        let url = format!("http://127.0.0.1:{port}{}", contract.health_path);
+        let host_header = format!("127.0.0.1:{port}");
+        let mut req = agent.get(&url).header("Host", &host_header);
+        if let Some(sc) = cookie {
+            req = req.header("Cookie", &format!("{}={}", sc.name, sc.value()));
+        }
+        let resp = match req.call() {
+            Ok(r) => r,
+            Err(ureq::Error::TooManyRedirects) => {
+                return Err(SupervisorError::RedirectBlocked { status_code: 302 })
+            }
+            Err(err) => return Err(SupervisorError::HealthCheckFailed(err.to_string())),
+        };
+        let status_code = resp.status().as_u16();
+        if (300..=399).contains(&status_code) {
+            return Err(SupervisorError::RedirectBlocked { status_code });
+        }
+        let mut body = Vec::with_capacity(512);
+        resp.into_body()
+            .into_reader()
+            .take(65_536)
+            .read_to_end(&mut body)
+            .map_err(|e| SupervisorError::HealthCheckFailed(e.to_string()))?;
+        let report = if status_code == 200 {
+            Some(serde_json::from_slice::<DaemonHealthReport>(&body)?)
+        } else {
+            None
+        };
+        Ok((status_code, report))
     }
 }
 

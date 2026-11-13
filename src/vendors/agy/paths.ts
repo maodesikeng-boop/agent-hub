@@ -51,5 +51,7 @@ export function agyHomePaths(userHome: string = homedir()) {
 }
 
 export const installCommand: VendorPathsModule["installCommand"] = "curl -fsSL https://antigravity.google/cli/install.sh | bash";
+export const windowsInstallCommand: VendorPathsModule["windowsInstallCommand"] =
+  "irm https://antigravity.google/cli/install.ps1 | iex";
 // agy 只从环境变量读 GEMINI_API_KEY（antigravity.google/docs/cli/install，2026-11 核过；GOOGLE_API_KEY、.env 它不读）
 export const credentialEnv: VendorPathsModule["credentialEnv"] = { names: ["GEMINI_API_KEY"] };

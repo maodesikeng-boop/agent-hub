@@ -5,7 +5,8 @@
 ## 1. 先弄清楚几件事
 
 - 守护进程只听 `127.0.0.1`（`src/daemon/ui-server/server.ts`），不能直接从别的电脑打开，也**不要**改成听 `0.0.0.0` 或在防火墙/安全组里开端口。从别的电脑用第 5 节的 SSH 隧道。
-- 网页的“选择…”（选文件夹）和“在 Finder 中显示 / 用默认程序打开”只有 macOS 上有：它们靠 `osascript`、`open` 在运行守护进程的机器的桌面上弹窗，Linux 服务器没有桌面。服务端把能力放在 `/api/state` 的 `server` 里，网页按它隐藏这些控件；主文件夹手填绝对路径，文件用“下载”。
+- 网页的“选择…”（选文件夹）和“在 Finder / 资源管理器中显示、用默认程序打开”仅在桌面环境提供（macOS 用 `osascript` / `open`，Windows 原生桌面版经桌面外壳 `tauri-plugin-dialog` 与 `explorer.exe` 提供），Linux 服务器没有桌面。服务端把能力放在 `/api/state` 的 `server` 里，网页按它隐藏这些控件；主文件夹手填绝对路径，文件用“下载”。
+- Windows 桌面应用现已改为脱离 WSL2 的纯原生版（详见 `docs/windows-native-design.md`）；如果你的项目专门依赖 Linux 工具链并希望跑在自己的 WSL2 发行版内，可直接在你自己的 WSL2 Ubuntu 终端按本文部署 Linux 版守护进程，再从 Windows 浏览器访问 `http://127.0.0.1:4317`。
 - Worker 隔离（数据目录里普通 Worker 只能写自己的工作目录，只读 Worker 全盘禁写且禁读敏感凭据）在 Linux 上与 macOS 一样由 OS 沙箱强制执行：Linux 使用 `bubblewrap`（`bwrap`）包住进程（首次部署需跑一次 `sudo scripts/linux-sandbox-setup.sh` 配置 `bubblewrap`、`socat` 与 AppArmor）；若 OS 沙箱探测失败，守护进程直接拒绝派发和启动 Worker，不再退回规则兜底（见第 6 节）。
 
 ## 2. 装依赖

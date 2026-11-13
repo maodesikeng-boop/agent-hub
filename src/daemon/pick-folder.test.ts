@@ -1,8 +1,17 @@
+import { createServer } from "node:http";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { PICK_FOLDER_BUSY_MESSAGE, PICK_FOLDER_UNAVAILABLE_MESSAGE, PickFolderError, createFolderPicker, type RunOsascript } from "./pick-folder.ts";
+import {
+  PICK_FOLDER_BUSY_MESSAGE,
+  PICK_FOLDER_UNAVAILABLE_MESSAGE,
+  PickFolderError,
+  createDesktopBridgeFolderPicker,
+  createFolderPicker,
+  trimPickedFolderPath,
+  type RunOsascript,
+} from "./pick-folder.ts";
 
 const HOME = mkdtempSync(join(tmpdir(), "hub-pick-home-"));
 
@@ -131,5 +140,49 @@ describe("createFolderPicker", () => {
       statusCode: 500,
       message: expect.stringContaining("没有权限 (-1743)"),
     });
+  });
+
+  it("trimPickedFolderPath 保留 / 与 Windows 盘符根 D:\\，去掉普通子目录末尾分隔符", () => {
+    expect(trimPickedFolderPath("/")).toBe("/");
+    expect(trimPickedFolderPath("D:\\")).toBe("D:\\");
+    expect(trimPickedFolderPath("D:\\projects\\demo\\")).toBe("D:\\projects\\demo");
+    expect(trimPickedFolderPath("   ")).toBeNull();
+  });
+
+  it("createDesktopBridgeFolderPicker：仅允许 127.0.0.1 回环桥接，携带 Bearer token 并解析返回的 Windows 路径", async () => {
+    await expect(
+      createDesktopBridgeFolderPicker({
+        bridgeUrl: "https://example.com/pick",
+        bridgeToken: "tok",
+        homeDir: HOME,
+      }).pick(),
+    ).rejects.toMatchObject({ statusCode: 501 });
+
+    let seenAuth = "";
+    let seenStartDir = "";
+    const server = createServer((req, res) => {
+      seenAuth = req.headers.authorization ?? "";
+      let raw = "";
+      req.on("data", (chunk: Buffer) => (raw += chunk.toString("utf8")));
+      req.on("end", () => {
+        seenStartDir = (JSON.parse(raw) as { startDir: string }).startDir;
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ path: "D:\\work\\repo\\" }));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    const port = (server.address() as { port: number }).port;
+    try {
+      const picker = createDesktopBridgeFolderPicker({
+        bridgeUrl: `http://127.0.0.1:${port}/pick-folder`,
+        bridgeToken: "bridge-secret-123",
+        homeDir: HOME,
+      });
+      expect(await picker.pick()).toBe("D:\\work\\repo");
+      expect(seenAuth).toBe("Bearer bridge-secret-123");
+      expect(seenStartDir).toBe(HOME);
+    } finally {
+      server.close();
+    }
   });
 });

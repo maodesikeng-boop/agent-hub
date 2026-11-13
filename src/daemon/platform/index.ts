@@ -110,3 +110,19 @@ export {
   worktreeRootsFile,
   type SelectedWorktreeRoot,
 } from "./win32/worktree-roots.ts";
+export {
+  buildWin32MxcCommandLine,
+  buildWin32MxcFilesystemPolicy,
+  buildWin32MxcRunnerConfig,
+  getLastWin32MxcSupportStatus,
+  probeWin32MxcSupport,
+  resetWin32MxcCacheForTest,
+  supportsWin32MxcNodeVersion,
+  wrapReadonlyWithWin32Mxc,
+  type MxcRunnerConfig,
+  type MxcV1ProbeSurface,
+  type Win32MxcReadonlyInputLike,
+  type Win32MxcSupportStatus,
+  type Win32MxcUnavailableReason,
+  type Win32MxcWrapBuildOptions,
+} from "./win32/mxc-readonly.ts";

@@ -28,7 +28,10 @@ import {
   findWinHelperBinary,
   loadManagedWorktreeRoots,
   normalizePathForComparison,
+  probeWin32MxcSupport,
+  resetWin32MxcCacheForTest,
   runWin32SandboxProbe,
+  wrapReadonlyWithWin32Mxc,
 } from "../platform/index.ts";
 
 export interface SpawnCommand {
@@ -74,6 +77,8 @@ export interface OsSandboxWrapOptions {
   winHelperPath?: string;
   /** 单测只生成命令参数、跳过真机 NTFS ACL 写入。 */
   skipAclSetup?: boolean;
+  /** 单测强制跳过 Windows MXC（模拟不支持 MXC 的低版本 Windows 回退分支）。 */
+  disableWin32Mxc?: boolean;
 }
 
 export interface WriteScopeEnforcer {
@@ -109,15 +114,46 @@ export interface Win32MxcReadonlyProvider {
 
 let registeredMxcProvider: Win32MxcReadonlyProvider | null = null;
 
+const defaultWin32MxcProvider: Win32MxcReadonlyProvider = {
+  available: () => probeWin32MxcSupport().available,
+  wrapReadonly: (base, input, options) => {
+    const real = options?.realpath ?? realpathOrSelf;
+    const expand = options?.expandGlobs ?? ((globs: readonly string[]) => expandWritableFileGlobs(globs, real));
+    return wrapReadonlyWithWin32Mxc(
+      base,
+      {
+        tmpDir: input.tmpDir,
+        stateDir: inferStateDirFromReadonlyInput(input, options),
+        protectedRoots: input.protectedRoots,
+        writableDirs: input.writableDirs,
+        writableFilePaths: expand(input.writableFileGlobs ?? []),
+        secretPaths: input.secretPaths,
+        readableFiles: input.readableFiles,
+      },
+      {
+        env: options?.env,
+        exists: options?.exists,
+        realpath: options?.realpath,
+        ownSandboxOffArgs: options?.ownSandboxOffArgs,
+      },
+    );
+  },
+};
+
+function activeWin32MxcProvider(options?: OsSandboxWrapOptions): Win32MxcReadonlyProvider | null {
+  if (options?.disableWin32Mxc) return null;
+  return registeredMxcProvider ?? defaultWin32MxcProvider;
+}
+
 /** 注册（或清除）Windows MXC 只读沙箱后端（供第 2 大步 `@microsoft/mxc-sdk` 与单测注入）。 */
 export function registerWin32MxcReadonlyProvider(provider: Win32MxcReadonlyProvider | null): void {
   registeredMxcProvider = provider;
 }
 
 /** 当前 Windows 环境是否已具备可用的 MXC ProcessContainer 只读沙箱。 */
-export function win32MxcReadonlyAvailable(): boolean {
+export function win32MxcReadonlyAvailable(options?: OsSandboxWrapOptions): boolean {
   try {
-    return registeredMxcProvider?.available() === true;
+    return activeWin32MxcProvider(options)?.available() === true;
   } catch {
     return false;
   }
@@ -200,6 +236,7 @@ export function resetOsSandboxCacheForTest(): void {
   linuxSandboxCachedTrue = false;
   win32SandboxCachedTrue = false;
   registeredMxcProvider = null;
+  resetWin32MxcCacheForTest();
   customProbeCachedTrue = new WeakSet();
 }
 
@@ -834,8 +871,9 @@ const win32Backend: OsSandboxBackend = {
   available: () => probeWin32Sandbox(),
   wrap: (base, scope, options) => win32WorkerSandboxArgs(base, scope, options),
   wrapReadonly: (base, input, options) => {
-    if (registeredMxcProvider && win32MxcReadonlyAvailable()) {
-      return registeredMxcProvider.wrapReadonly(base, input, options);
+    const mxc = activeWin32MxcProvider(options);
+    if (mxc && win32MxcReadonlyAvailable(options)) {
+      return mxc.wrapReadonly(base, input, options);
     }
     return win32ReadonlyFallbackSandboxArgs(base, input, options);
   },
@@ -887,9 +925,10 @@ export function wrapInReadonlyOsSandbox(
   const isAvailable = options?.available ?? (backend ? backend.available() : false);
   if (!backend || !isAvailable) return { ...base, osSandboxed: false };
   if (platform === "win32") {
-    if (registeredMxcProvider && win32MxcReadonlyAvailable()) {
+    const mxc = activeWin32MxcProvider(options);
+    if (mxc && win32MxcReadonlyAvailable(options)) {
       return {
-        ...registeredMxcProvider.wrapReadonly(base, input, options),
+        ...mxc.wrapReadonly(base, input, options),
         osSandboxed: true,
         readonlyMode: "mxc",
       };
