@@ -32,8 +32,9 @@ export function cleanOptionLabel(raw: string): string {
 
 /** 找出推荐项下标：gate 优先认 `source.recommended`，独立待决项认 `(Recommended)` / `（推荐）` 前缀。 */
 export function recommendedIndexOf(decision: Pick<PendingDecision, "options" | "source">): number | null {
-  if (decision.source.kind === "gate" && decision.source.recommended !== null) {
-    const exact = decision.options.indexOf(decision.source.recommended);
+  const rec = decision.source.recommended ?? null;
+  if (rec !== null) {
+    const exact = decision.options.indexOf(rec);
     if (exact >= 0) return exact;
   }
   const prefixed = decision.options.findIndex((opt) => RECOMMENDED_PREFIX.test(opt));

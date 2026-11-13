@@ -13,10 +13,8 @@ import { Avatar } from "./Avatar.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { RowError } from "./SettingsList.tsx";
 
-const OPTION_LETTERS = ["A", "B", "C", "D", "E", "F"] as const;
-
 /**
- * 补充依据：`hub router ask` / `hub graph ask` 传来的是 Markdown（段落、编号、子列表、行内代码），用共用的 Markdown 渲染，
+ * 补充依据：`hub ask` 传来的是 Markdown（段落、编号、子列表、行内代码），用共用的 Markdown 渲染，
  * 13.5px 灰字紧凑排版（Markdown 的间距都是 em，跟着字号缩）。超过 5 行（行数在 styles.css 的 `.decision-context-clamp`）
  * 默认收起，底部渐隐，下面一个 `Show more` / `Show less`；没超过就整段显示，不出按钮。
  */
@@ -128,7 +126,7 @@ export const RouterDecisionCard = memo(function RouterDecisionCard({
           {decision.options.map((rawOption, idx) => {
             const label = cleanOptionLabel(rawOption);
             const isRecommended = idx === recommendedIdx;
-            const letter = OPTION_LETTERS[idx] ?? String(idx + 1);
+            const letter = String.fromCharCode(65 + idx);
             return (
               <button
                 key={`${decision.key}-opt-${idx}`}

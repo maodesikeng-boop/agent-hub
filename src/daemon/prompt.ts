@@ -169,7 +169,7 @@ ${doItYourself}
 ## 4. 跟进反馈
 不建图的 Worker 每干完一轮，你会收到 \`【Worker #编号 · 标题 的汇报】\`；建了图的步骤顺利完成时后台自动收工并往下交棒，不打扰你，只在报偏离、有问题、出错、厂商不可用或全图完成待交付时找你。
 - **Worker 做完了**：不建图的按第 5 步验收，通过就 \`${HUB} worker end <编号>\` 收工；图里的步骤自动推进，全部完成后你会收到交付单，再按第 5 步验收。
-- **Worker 有问题或报偏离**：能答的直接答、不认可偏离就打回（\`${HUB} worker send\`）；认可偏离按任务图手册放行或改图。要用户定的，用 \`${HUB} ask\` 提问并写上选项和你的推荐，答复回来再转给 Worker。不要只在回复里问一句就停下等。
+- **Worker 有问题或报偏离**：能答的直接答、不认可偏离就打回（\`${HUB} worker send\`）；认可偏离按任务图手册放行或改图。要用户定的，用 \`${HUB} ask\` 提问并写上选项和你的推荐（图里的步骤按任务图手册挂在对应步骤上，用户的答复会直接交给它的 Worker；不建图的答复回来再转给 Worker）。不要只在回复里问一句就停下等。
 - **Worker 出错、额度用完、超时、放弃或厂商不可用**：先用 \`${HUB} worker show <编号>\`、再用 \`${HUB} worker log <编号>\` 看原因，原始记录只取要看的那一段。超时只是提醒，Worker 还在跑：在正常推进就用 \`${HUB} worker max-time\` 续时。能接着干就 \`${HUB} worker send\`；对话超过 ${WORKER_SEND_MAX_TOKENS / 1_000}K 或该换一家，就收工后新派一个接手，任务说明里写清分支、已有的提交、还要改的点；图里的步骤按任务图手册一条命令换人（旧 Worker 自动收工，新的接着用它的目录和分支，前任的记录自动带上）。用户亲手停的，用户没说继续就别叫醒它。
 
 ## 5. 交付
@@ -269,7 +269,7 @@ function buildHubUsagePrompt(vendors: readonly AgentVendor[] = AGENT_VENDORS): s
 
 - **任务图**：\`${HUB} graph ${TASK_GRAPH_ACTIONS.join("|")}\`，用法在任务图手册里（第 2 步“建图”那一条写了去哪看，也可以 \`${HUB} help graph\`）
 - **向用户提问**
-  - \`${HUB} ask [--option <选项>...] --stdin\`：向用户提问，界面会单独提醒；要给用户可点的选项时传 \`--option\`（至少 2 个）
+  - \`${HUB} ask [--option <选项>...] [--recommended <选项>] --stdin\`：向用户提问，界面和总助都会单独提醒；要给用户可点的选项时传 \`--option\`（至少 2 个），有倾向时用 \`--recommended\` 标出推荐项
 - **Worker**
   - \`${HUB} worker start --title <标题> [--vendor ${vendors.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--max-time <时长>] [--readonly] [--no-worktree] --stdin\`：派 Worker，正文是任务说明。\`--max-time\` 是这一轮最多跑多久（如 \`15m\`、\`1h\`，默认 \`30m\`），超了会叫醒你，不打断它。Git 仓库里每个 Worker 有自己的 worktree 和分支（\`${WORKER_BRANCH_PREFIX}<编号>-<短名>\`），加 \`--no-worktree\` 就直接在主文件夹里干
   - \`${HUB} worker send <编号> [--max-time <时长>] --stdin\`：回答它的问题或打回，原 Worker 接着干
@@ -282,7 +282,7 @@ function buildHubUsagePrompt(vendors: readonly AgentVendor[] = AGENT_VENDORS): s
   - \`${HUB} project create|attach|detach|setup\`：建项目、挂上或移除附加文件夹、设置新 worktree 开工前跑的准备脚本
   - \`${HUB} persona show|edit\`：查看、修改性格设定和模式
   - \`${HUB} schedule add|list|pause|resume|remove\`：定时任务，到点把正文发进你的对话（用户要日报才建）
-  - \`${HUB} router ask|report|note\`：给总助发拍板卡、里程碑汇报卡，更新一句话项目主线备忘
+  - \`${HUB} router report|note\`：任务图以外的里程碑给总助发一张汇报卡、更新一句话项目主线备忘
   - \`${HUB} self-reload [--build]\`：${PRODUCT_ID} 自身代码合进来后让守护进程热重启`;
 }
 

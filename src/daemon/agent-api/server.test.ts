@@ -65,13 +65,11 @@ const VALID_ARGS: { [C in HubCommand]: HubArgsMap[C] } = {
   "schedule.pause": { scheduleId: 3 },
   "schedule.resume": { scheduleId: 3 },
   "schedule.remove": { scheduleId: 3 },
-  "router.ask": { question: "选哪个方案？", options: ["方案 A", "方案 B"], context: "背景说明", replaceItemId: 2 },
   "router.report": { summary: "里程碑已完成", links: [{ label: "PR #1", target: "https://github.com/o/r/pull/1" }] },
   "router.note": { text: "正在验收第 1 波" },
   "graph.create": { title: "任务流图", specJson: '{"nodes":[{"key":"n1","title":"第一步"}]}' },
   "graph.show": { graphId: 1 },
   "graph.list": { all: true },
-  "graph.ask": { nodeKey: "gate-1", graphId: 1, question: "确认方案？", options: ["A", "B"], recommended: "A", summaryMd: "调研结论" },
   "graph.patch": { graphId: 1, specJson: '{"skipNodes":["n1"]}' },
   "graph.done": { nodeKey: "n1", graphId: 1, prUrl: "https://github.com/o/r/pull/1", commit: "abc1234", branch: "hub/1-n1", summary: "通过" },
   "graph.decide": { nodeKey: "gate-1", graphId: 1, choice: "A", note: "同意" },
@@ -734,7 +732,7 @@ describe("agent api over inject", () => {
     });
 
     it("hub router & hub graph：缺少必填字段或超出 specJson 字节上限 → invalid", async () => {
-      await expectInvalid(await call("router.ask", { question: "问" }));
+      await expectInvalid(await call("ask", { options: ["方案 A", "方案 B"] }));
       await expectInvalid(await call("router.report", {}));
       await expectInvalid(await call("router.note", {}));
       await expectInvalid(await call("graph.create", { title: "无正文" }));
@@ -742,6 +740,10 @@ describe("agent api over inject", () => {
       await expectInvalid(await call("graph.patch", { specJson: "补".repeat(Math.floor(MAX_GRAPH_SPEC_BYTES / 3) + 1) }));
       await expectInvalid(await call("graph.decide", { nodeKey: "n1" }));
       await expectInvalid(await call("worker.end", { workerId: 3, incomplete: true }));
+      expect(
+        (await call("ask", { text: "确认方案？", node: "gate-1", graphId: 1, options: ["A", "B"], recommended: "A" }))
+          .statusCode,
+      ).toBe(200);
       expect((await call("worker.start", { title: "绑定节点", task: "x", node: "impl-a", graphId: 2 })).statusCode).toBe(200);
       expect((await call("worker.end", { workerId: 3 })).statusCode).toBe(200);
     });

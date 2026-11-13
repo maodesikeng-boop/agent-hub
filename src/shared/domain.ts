@@ -455,10 +455,16 @@ export type SystemMessageMeta =
 export interface GateRef {
   graphId: TaskGraphId;
   nodeKey: TaskNodeKey;
+  /** 标了 `confirm: true` 的步骤在 Worker 汇报“做完了”后由后台自动挂出的检查点拍板卡（「通过 / 打回」）。 */
+  checkpoint?: true;
 }
 
+export const CONFIRM_PASS_OPTION = "通过";
+export const CONFIRM_REJECT_OPTION = "打回";
+export const CONFIRM_CHECKPOINT_OPTIONS = [CONFIRM_PASS_OPTION, CONFIRM_REJECT_OPTION] as const;
+
 /**
- * `hub ask` / `hub router ask` / 任务图门禁发的那条项目经理消息的 meta（M5 + Router/TaskGraph）：
+ * `hub ask`（普通提问、操作提醒、`--node` 步骤拍板卡与 `confirm` 检查点卡）发的那条项目经理消息的 meta：
  * needsUser 是“等你确定”的标记；answered 是用户回答了——普通提问在对话里收到用户消息或 Router 拍板时标上；
  * 带 gateRef 的门禁消息在用户对话闲聊时不会被误标已回答，须经门禁 decide 解锁才标上。
  */
@@ -466,6 +472,7 @@ export type AskMeta = {
   needsUser: true;
   answered?: true;
   options?: string[];
+  recommended?: string;
   gateRef?: GateRef;
   chosenOption?: string;
 };
@@ -478,6 +485,10 @@ export function askOf(message: Pick<Message, "sender" | "meta">): AskMeta | null
     Array.isArray(rawOptions) && rawOptions.length > 0 && rawOptions.every((o): o is string => typeof o === "string")
       ? rawOptions
       : undefined;
+  const recommended =
+    typeof message.meta.recommended === "string" && message.meta.recommended.trim() !== ""
+      ? message.meta.recommended.trim()
+      : undefined;
   const answered = message.meta.answered === true || message.meta.dismissed === true;
   const rawGateRef = message.meta.gateRef as Record<string, unknown> | null | undefined;
   const gateRef =
@@ -485,13 +496,18 @@ export function askOf(message: Pick<Message, "sender" | "meta">): AskMeta | null
     typeof rawGateRef === "object" &&
     typeof rawGateRef.graphId === "number" &&
     typeof rawGateRef.nodeKey === "string"
-      ? { graphId: rawGateRef.graphId, nodeKey: rawGateRef.nodeKey }
+      ? {
+          graphId: rawGateRef.graphId,
+          nodeKey: rawGateRef.nodeKey,
+          ...(rawGateRef.checkpoint === true ? { checkpoint: true as const } : {}),
+        }
       : undefined;
   const chosenOption = typeof message.meta.chosenOption === "string" ? message.meta.chosenOption : undefined;
   return {
     needsUser: true,
     ...(answered ? { answered: true } : {}),
     ...(options !== undefined ? { options } : {}),
+    ...(recommended !== undefined ? { recommended } : {}),
     ...(gateRef !== undefined ? { gateRef } : {}),
     ...(chosenOption !== undefined ? { chosenOption } : {}),
   };
@@ -549,14 +565,28 @@ function stripSequentialLetterPrefixes(items: readonly string[]): string[] | nul
  *    普通 `- xxx`/`1. xxx` 列表（如列出几项配置请用户确认）不是单选题，返回 null，走普通 Markdown 渲染；
  * 4. 其他纯文本提问返回 null。
  */
+export interface ExtractedAskCard {
+  question: string;
+  options: string[];
+  answered: boolean;
+  recommended?: string;
+  chosenOption?: string;
+  gateRef?: GateRef;
+}
+
 export function extractAskCard(
   message: Pick<Message, "sender" | "meta" | "text">,
-): { question: string; options: string[]; answered: boolean } | null {
+): ExtractedAskCard | null {
   const ask = askOf(message);
   if (ask === null) return null;
   const answered = ask.answered === true;
+  const extras = {
+    ...(ask.recommended !== undefined ? { recommended: ask.recommended } : {}),
+    ...(ask.chosenOption !== undefined ? { chosenOption: ask.chosenOption } : {}),
+    ...(ask.gateRef !== undefined ? { gateRef: ask.gateRef } : {}),
+  };
   if (ask.options !== undefined && ask.options.length >= ASK_MIN_OPTIONS) {
-    return { question: message.text.trim(), options: ask.options, answered };
+    return { question: message.text.trim(), options: ask.options, answered, ...extras };
   }
   const trimmed = message.text.trim();
   if (trimmed === "") return null;
@@ -585,7 +615,7 @@ export function extractAskCard(
   }
   const options = stripSequentialLetterPrefixes(rawItems);
   if (options === null) return null;
-  return { question, options, answered };
+  return { question, options, answered, ...extras };
 }
 
 /** 发给 agent 的系统消息的开头（设计第 7.3 节的来源标签）。 */
@@ -1080,6 +1110,8 @@ export interface TaskNode {
   gateSummaryMd: string | null;
   gateRecommended: string | null;
   gateAskMessageId: MessageId | null;
+  /** 当前挂着等用户拍板的卡是否是 `confirm: true` 步骤自动生成的检查点卡（「通过 / 打回」）。 */
+  gateCheckpoint?: boolean;
   decision: TaskDecision | null;
   createdAt: number;
   updatedAt: number;

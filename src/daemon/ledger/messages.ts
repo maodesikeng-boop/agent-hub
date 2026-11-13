@@ -151,18 +151,19 @@ export function createLedgerMessages(
     if (row !== undefined) p.changes.push({ type: "message.created", data: { message: toMessage(row) } });
   };
 
-  /** hub ask / hub router ask / hub graph ask：项目经理对话里一条带 needsUser 标记的消息（AskMeta）。不发给 agent，每次都是新的一条。 */
+  /** hub ask（含独立提问、`--node` 步骤拍板卡与 `confirm` 检查点卡）：项目经理对话里一条带 needsUser 标记的消息（AskMeta）。不发给 agent，每次都是新的一条。 */
   const insertAskMessage = (
     p: Pending,
     session: AgentSessionRow,
     text: string,
     askOptions?: string[],
-    extra?: { gateRef?: GateRef; skipRouterBridge?: boolean },
+    extra?: { gateRef?: GateRef; recommended?: string; skipRouterBridge?: boolean },
   ): Message => {
     const t = now();
     const meta: AskMeta = {
       needsUser: true,
       ...(askOptions && askOptions.length > 0 ? { options: askOptions } : {}),
+      ...(extra?.recommended !== undefined ? { recommended: extra.recommended } : {}),
       ...(extra?.gateRef !== undefined ? { gateRef: extra.gateRef } : {}),
     };
     const row = db.get<MessageDbRow>(

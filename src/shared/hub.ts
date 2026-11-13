@@ -48,7 +48,7 @@ export const ENV_HUB_SOCK = "HUB_SOCK";
  * - `hub project attach <文件夹>`                         → project.attach：给自己的项目挂上附加文件夹
  * - `hub project detach <文件夹>`                         → project.detach：从自己的项目上移除附加文件夹
  * - `hub project setup --stdin | --clear`                 → project.setup：设置、清除项目的 worktree 准备命令
- * - `hub ask [--option <选项>...] --stdin`               → ask：向用户提问（要用户拍板、确认、选择的事），正文是问题（Markdown）
+ * - `hub ask [--node <步骤>] [--graph <图编号>] [--option <选项>...] [--recommended <选项>] --stdin` → ask：统一向用户提问/挂拍板卡
  * - `hub schedule add --name <名> (--daily HH:MM | --every 30m|2h) --stdin` → schedule.add：建定时任务（M6），任务说明从标准输入读
  * - `hub schedule list | pause <编号> | resume <编号> | remove <编号>` → schedule.list / pause / resume / remove：只能管自己的
  * - `hub persona show`                                   → persona.show
@@ -85,13 +85,11 @@ export const HUB_COMMANDS = [
   "schedule.pause",
   "schedule.resume",
   "schedule.remove",
-  "router.ask",
   "router.report",
   "router.note",
   "graph.create",
   "graph.show",
   "graph.list",
-  "graph.ask",
   "graph.patch",
   "graph.done",
   "graph.decide",
@@ -128,13 +126,11 @@ export const HUB_COMMAND_ROLES: Readonly<Record<HubCommand, readonly AgentRole[]
   "schedule.pause": ["pm"],
   "schedule.resume": ["pm"],
   "schedule.remove": ["pm"],
-  "router.ask": ["pm"],
   "router.report": ["pm"],
   "router.note": ["pm"],
   "graph.create": ["pm"],
   "graph.show": ["pm"],
   "graph.list": ["pm"],
-  "graph.ask": ["pm"],
   "graph.patch": ["pm"],
   "graph.done": ["pm"],
   "graph.decide": ["pm"],
@@ -232,10 +228,19 @@ export interface HubArgsMap {
    */
   models: { vendor?: AgentVendor; refresh?: boolean };
   /**
-   * `hub ask [--option <选项>...] --stdin`（M5）：在项目经理的对话里发一条带“等你确定”标记的消息（meta 里 needsUser，见 domain.ts 的 AskMeta），
-   * 网页会单独提醒用户、不会被别的消息刷掉。text 不超过 MAX_TASK_BYTES、不能是空的；options 是可选的选项列表（2～10 项）。
+   * `hub ask [--node <步骤>] [--graph <图编号>] [--option <选项>...] [--recommended <选项>] [--replace <编号>] --stdin`：
+   * 统一向用户提问/挂拍板卡（对话消息流、右栏、总助三处同步提醒）。
+   * - 不带 `node`：独立提问/操作提醒卡，同时写入对话 AskMeta 与总助 router_items；
+   * - 带 `node`：把拍板卡挂在任务图步骤上，步骤进入 `waiting`（等用户），用户拍板后定案直接交给该步挂着的 Worker 接着干（全程不叫醒 PM）。
    */
-  ask: { text: string; options?: string[] };
+  ask: {
+    text: string;
+    options?: string[];
+    recommended?: string;
+    node?: TaskNodeKey;
+    graphId?: TaskGraphId;
+    replaceItemId?: RouterItemId;
+  };
   /**
    * `hub schedule add --name <名> (--daily HH:MM | --every 30m|2h) --stdin`（M6）：给自己建定时任务。name 按 normalizeName；
    * daily、everyMinutes 恰好给一个（HH:MM 本机本地时间；间隔最短 MIN_SCHEDULE_EVERY_MINUTES 分钟，hub 把 30m、2h 换成分钟数）；
@@ -248,13 +253,6 @@ export interface HubArgsMap {
   "schedule.pause": { scheduleId: ScheduleId };
   "schedule.resume": { scheduleId: ScheduleId };
   "schedule.remove": { scheduleId: ScheduleId };
-  /** `hub router ask`：提交结构化待拍板卡并同步写入对话 AskMeta 消息。 */
-  "router.ask": {
-    question: string;
-    options: string[];
-    context?: string;
-    replaceItemId?: RouterItemId;
-  };
   /** `hub router report`：提交里程碑完成汇报卡（不打扰对话流）。 */
   "router.report": {
     summary: string;
@@ -278,15 +276,6 @@ export interface HubArgsMap {
   "graph.list": {
     all?: boolean;
     status?: TaskGraphStatus;
-  };
-  /** `hub graph ask <nodeKey>`：给还没开工的步骤挂上（或改）拍板卡：问题、选项、推荐与背景摘要，前置都完了时等用户拍板。 */
-  "graph.ask": {
-    nodeKey: TaskNodeKey;
-    graphId?: TaskGraphId;
-    question: string;
-    options?: string[];
-    recommended?: string;
-    summaryMd?: string;
   };
   /** `hub graph patch [<graphId>] --stdin`：增量增删改节点与依赖边（含环路检测与运行态保护）。 */
   "graph.patch": {
@@ -568,7 +557,7 @@ interface HubDataMap {
   "worker.search": { hits: WorkerSearchHit[] };
   models: { vendors: HubVendorModels[] };
   /** messageId：对话里那条带标记的消息。 */
-  ask: { messageId: MessageId };
+  ask: { messageId: MessageId; graph?: TaskGraph; item?: RouterItem };
   "schedule.add": { schedule: ScheduleRecord };
   /** 按编号从小到大，含暂停的。 */
   "schedule.list": { schedules: ScheduleRecord[] };
@@ -576,13 +565,11 @@ interface HubDataMap {
   "schedule.resume": { schedule: ScheduleRecord };
   /** 删之前的样子。 */
   "schedule.remove": { schedule: ScheduleRecord };
-  "router.ask": { item: RouterItem; messageId: MessageId };
   "router.report": { item: RouterItem };
   "router.note": { note: RouterPmNote | null };
   "graph.create": { graph: TaskGraph };
   "graph.show": { graph: TaskGraph };
   "graph.list": { graphs: TaskGraph[] };
-  "graph.ask": { graph: TaskGraph; messageId: MessageId | null };
   "graph.patch": { graph: TaskGraph };
   "graph.done": { graph: TaskGraph };
   "graph.decide": { graph: TaskGraph };

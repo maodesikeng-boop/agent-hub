@@ -38,6 +38,10 @@ const modelsArgsSchema = z.object({
 const askArgsSchema = z.object({
   text: z.string().refine((s) => s.trim() !== ""),
   options: z.custom<string[]>((v) => v !== undefined).optional(),
+  recommended: z.string().optional(),
+  node: z.string().optional(),
+  graphId: z.number().int().positive().optional(),
+  replaceItemId: z.number().int().positive().optional(),
 });
 
 const recordArgsSchema = z.record(z.string(), z.unknown());
@@ -230,15 +234,52 @@ export function createLedgerHubCommands(
         assertPmNotArchived(caller.pmId);
         const parsed = askArgsSchema.safeParse(args);
         if (!parsed.success) throw fail("invalid", "要问用户的话不能是空的");
-        const { text, options } = parsed.data;
+        const { text, options, recommended, node, graphId, replaceItemId } = parsed.data;
+        if (graphId !== undefined && (node === undefined || node.trim() === "")) {
+          throw fail("invalid", "--graph 要配合 --node <步骤> 一起用");
+        }
+        if (node !== undefined && node.trim() !== "") {
+          if (replaceItemId !== undefined) throw fail("invalid", "--replace 不能和 --node 一起用");
+          return taskGraphs.askOnStepIn(p, caller, {
+            text,
+            node: node.trim(),
+            ...(graphId !== undefined ? { graphId } : {}),
+            ...(options !== undefined ? { options } : {}),
+            ...(recommended !== undefined ? { recommended } : {}),
+          });
+        }
         let normalizedOptions: string[] | undefined;
         if (options !== undefined) {
           const checked = validateAskOptions(options);
           if (!checked.ok) throw fail("invalid", checked.error);
           normalizedOptions = checked.options;
         }
-        const message = messages.insertAskMessage(p, caller, text, normalizedOptions);
-        return { text: "已向用户提问，会单独提醒用户。等用户回复再继续，别替用户拿主意。", data: { messageId: message.id } };
+        let resolvedRecommended: string | undefined;
+        if (recommended !== undefined && recommended.trim() !== "") {
+          const rec = recommended.trim();
+          if (normalizedOptions === undefined) {
+            throw fail("invalid", "--recommended 要配合 --option <选项>... 一起用");
+          }
+          let matched = normalizedOptions.find((o) => o === rec);
+          if (matched === undefined && /^[1-9][0-9]*$/.test(rec)) {
+            const idx = Number(rec) - 1;
+            if (idx >= 0 && idx < normalizedOptions.length) matched = normalizedOptions[idx];
+          }
+          if (matched === undefined) {
+            throw fail("invalid", `推荐项「${rec}」必须是选项之一`);
+          }
+          resolvedRecommended = matched;
+        }
+        router.prepareIndependentAskIn(p, caller.pmId, replaceItemId);
+        const message = messages.insertAskMessage(p, caller, text, normalizedOptions, {
+          ...(resolvedRecommended !== undefined ? { recommended: resolvedRecommended } : {}),
+          skipRouterBridge: true,
+        });
+        const item = router.bridgeAskIn(p, caller, message, normalizedOptions, { replaceItemId });
+        return {
+          text: "已向用户提问，会单独提醒用户。等用户回复再继续，别替用户拿主意。",
+          data: { messageId: message.id, ...(item !== null ? { item } : {}) },
+        };
       }
       case "schedule.add":
         return schedules.addIn(p, caller, args as HubArgs<"schedule.add">);
@@ -250,8 +291,6 @@ export function createLedgerHubCommands(
         return schedules.resumeIn(p, caller, args as HubArgs<"schedule.resume">);
       case "schedule.remove":
         return schedules.removeIn(p, caller, args as HubArgs<"schedule.remove">);
-      case "router.ask":
-        return router.askIn(p, caller, args as HubArgs<"router.ask">);
       case "router.report":
         return router.reportIn(p, caller, args as HubArgs<"router.report">);
       case "router.note":
@@ -262,8 +301,6 @@ export function createLedgerHubCommands(
         return taskGraphs.show(caller, args as HubArgs<"graph.show">);
       case "graph.list":
         return taskGraphs.list(caller, args as HubArgs<"graph.list">);
-      case "graph.ask":
-        return taskGraphs.askIn(p, caller, args as HubArgs<"graph.ask">);
       case "graph.patch":
         return withManual(caller.id, () => taskGraphs.patchIn(p, caller, args as HubArgs<"graph.patch">, context));
       case "graph.done":

@@ -10,7 +10,7 @@ import type {
   RouterItemsPage,
   UpdateRouterSettingsRequest,
 } from "../../shared/api.ts";
-import { userMessageDedupeKey, validateAskOptions } from "../../shared/domain.ts";
+import { extractAskCard, userMessageDedupeKey } from "../../shared/domain.ts";
 import type {
   AgentSessionRow,
   ConversationId,
@@ -27,6 +27,7 @@ import type {
 import { getAgentSession } from "../store/index.ts";
 import type { HubArgs, HubResult } from "../../shared/hub.ts";
 import {
+  ASK_MAX_OPTIONS,
   MAX_DECISION_NOTE_CHARS,
   ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX,
   ROUTER_STREAM_PAGE_SIZE,
@@ -39,8 +40,6 @@ import {
   ROUTER_ITEM_RETENTION_MS,
   ROUTER_NOTE_MAX_CHARS,
   ROUTER_OPTION_MAX_CHARS,
-  ROUTER_OPTION_MAX_COUNT,
-  ROUTER_OPTION_MIN_COUNT,
   ROUTER_PENDING_DECISIONS_PER_PM_MAX,
   ROUTER_PERSONA_SUMMARY_LINES,
   ROUTER_PERSONA_SUMMARY_MAX_CHARS,
@@ -185,13 +184,6 @@ function pageOf<R, T extends { createdAt: number; id: number }>(
   return { kept, nextCursor: hasMore && last !== undefined ? `${last.createdAt}:${last.id}` : null, hasMore };
 }
 
-const routerAskSchema = z.object({
-  question: z.string(),
-  options: z.array(z.string()),
-  context: z.string().optional(),
-  replaceItemId: z.number().int().positive().optional(),
-});
-
 const routerReportSchema = z.object({
   summary: z.string(),
   links: z
@@ -332,57 +324,21 @@ export function createLedgerRouter(
   const resolveWakeupDedupeKey = (conversationId: ConversationId, itemId: RouterItemId, clientId: string): string =>
     userMessageDedupeKey(conversationId, `router-resolve:${itemId}:${clientId}`);
 
-  /** hub router ask：写对话 AskMeta 消息并创建 pending 决策卡。 */
-  const askIn = (
+  /**
+   * 独立 `hub ask` 入库前预处理：支持 `--replace <旧卡编号>` 平滑替换旧待决卡，并校验单 PM 未决卡上限。
+   */
+  const prepareIndependentAskIn = (
     p: Pending,
-    caller: AgentSessionRow & { pmId: PmId },
-    rawArgs: HubArgs<"router.ask">,
-  ): HubResult<"router.ask"> => {
-    assertPmNotArchived(caller.pmId);
-    const parsed = routerAskSchema.safeParse(rawArgs);
-    if (!parsed.success) throw fail("invalid", "hub router ask 参数格式不正确");
-
-    const question = parsed.data.question.trim();
-    if (question === "") throw fail("invalid", "问题不能是空的");
-    if (charLen(question) > ROUTER_QUESTION_MAX_CHARS) {
-      throw fail("invalid", `问题最多 ${ROUTER_QUESTION_MAX_CHARS} 字（当前 ${charLen(question)} 字）`);
-    }
-
-    const context = (parsed.data.context ?? "").trim();
-    if (charLen(context) > ROUTER_CONTEXT_MAX_CHARS) {
-      throw fail("invalid", `背景说明最多 ${ROUTER_CONTEXT_MAX_CHARS} 字（当前 ${charLen(context)} 字）`);
-    }
-
-    if (
-      parsed.data.options.length < ROUTER_OPTION_MIN_COUNT ||
-      parsed.data.options.length > ROUTER_OPTION_MAX_COUNT
-    ) {
-      throw fail(
-        "invalid",
-        `选项数量需在 ${ROUTER_OPTION_MIN_COUNT} 到 ${ROUTER_OPTION_MAX_COUNT} 个之间`,
-      );
-    }
-    const checkedOptions = validateAskOptions(parsed.data.options);
-    if (!checkedOptions.ok) throw fail("invalid", checkedOptions.error);
-    const options = checkedOptions.options;
-    for (const opt of options) {
-      if (charLen(opt) > ROUTER_OPTION_MAX_CHARS) {
-        throw fail("invalid", `单个选项最多 ${ROUTER_OPTION_MAX_CHARS} 字`);
-      }
-    }
-
-    const conversationId = caller.conversationId ?? privateConversation(caller.pmId)?.id ?? null;
-    if (conversationId === null) throw fail("invalid", "项目经理缺少绑定对话");
-    const project = activeProjectOf(caller.pmId);
-    const projectId: ProjectId | null = project?.id ?? null;
-    const t = now();
-
-    if (parsed.data.replaceItemId !== undefined) {
-      const target = getItemRow(parsed.data.replaceItemId);
-      if (target === undefined || target.pm_id !== caller.pmId || target.kind !== "decision") {
-        throw fail("not_found", `没有可替换的拍板卡 #${parsed.data.replaceItemId}`);
+    pmId: PmId,
+    replaceItemId?: RouterItemId,
+  ): void => {
+    if (replaceItemId !== undefined) {
+      const target = getItemRow(replaceItemId);
+      if (target === undefined || target.pm_id !== pmId || target.kind !== "decision") {
+        throw fail("not_found", `没有可替换的拍板卡 #${replaceItemId}`);
       }
       if (target.status === "pending") {
+        const t = now();
         db.run(
           "UPDATE router_items SET status = 'superseded', updated_at = ? WHERE id = ?",
           t,
@@ -394,72 +350,46 @@ export function createLedgerRouter(
         p.changes.push({ type: "router.item.updated", data: { item: toRouterItem(getItemRow(target.id)!) } });
       }
     }
-
-    const currentPending = pendingDecisionCountOf(caller.pmId);
+    const currentPending = pendingDecisionCountOf(pmId);
     if (currentPending >= ROUTER_PENDING_DECISIONS_PER_PM_MAX) {
       throw fail(
         "conflict",
         `你当前已有 ${ROUTER_PENDING_DECISIONS_PER_PM_MAX} 张未决拍板卡，请等用户拍板，或用 --replace <旧卡编号> 替换旧卡`,
       );
     }
-
-    const chatText = context === "" ? question : `${question}\n\n${context}`;
-    const askMessage = messages.insertAskMessage(
-      p,
-      { ...caller, conversationId },
-      chatText,
-      options,
-      { skipRouterBridge: true },
-    );
-
-    const row = db.get<RouterItemDbRow>(
-      `INSERT INTO router_items (
-         pm_id, project_id, conversation_id, session_id, kind, status,
-         question, context, options_json, ask_message_id, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, 'decision', 'pending', ?, ?, ?, ?, ?, ?) RETURNING *`,
-      caller.pmId,
-      projectId,
-      conversationId,
-      caller.id,
-      question,
-      context,
-      JSON.stringify(options),
-      askMessage.id,
-      t,
-      t,
-    )!;
-    const item = toRouterItem(row);
-    p.changes.push({ type: "router.item.created", data: { item } });
-    appendAuditIn("pm", "router.ask", caller.pmId, row.id, {
-      question,
-      replaceItemId: parsed.data.replaceItemId ?? null,
-    });
-
-    return {
-      text: `已提交拍板卡 #${row.id} 并同步写入对话。等用户拍板后再推进依赖该决定的步骤。`,
-      data: { item, messageId: askMessage.id },
-    };
   };
 
-  /** 旧 hub ask 的自动同事务桥接：无 gateRef 的普通提问同步进入 router_items。 */
+  /** 独立 `hub ask`（不带 `--node`）同事务桥接进 `router_items`，保持对话、右栏 Needs You 与总助待拍板流三处互通。 */
   const bridgeAskIn = (
     p: Pending,
     session: AgentSessionRow,
     message: Message,
     askOptions?: string[],
-  ): void => {
-    if (session.role !== "pm" || session.pmId === null || session.conversationId === null) return;
-    if (pendingDecisionCountOf(session.pmId) >= ROUTER_PENDING_DECISIONS_PER_PM_MAX) return;
+    extra?: { replaceItemId?: RouterItemId },
+  ): RouterItem | null => {
+    if (session.role !== "pm" || session.pmId === null || session.conversationId === null) return null;
+    if (pendingDecisionCountOf(session.pmId) >= ROUTER_PENDING_DECISIONS_PER_PM_MAX) return null;
     const raw = message.text.trim();
-    if (raw === "") return;
-    const rawChars = [...raw];
-    const question = rawChars.length <= ROUTER_QUESTION_MAX_CHARS ? raw : sliceChars(raw, ROUTER_QUESTION_MAX_CHARS);
-    const context =
-      rawChars.length <= ROUTER_QUESTION_MAX_CHARS
-        ? ""
-        : sliceChars(rawChars.slice(ROUTER_QUESTION_MAX_CHARS - 1).join("").trim(), ROUTER_CONTEXT_MAX_CHARS);
-    const normalizedOpts = (askOptions ?? [])
-      .slice(0, ROUTER_OPTION_MAX_COUNT)
+    if (raw === "") return null;
+    const effectiveOptions = askOptions ?? extractAskCard(message)?.options;
+    const splitMatch = /^([^\r\n]+?)(?:\r?\n\s*\r?\n|\r?\n)([\s\S]+)$/u.exec(raw);
+    let question: string;
+    let context: string;
+    if (splitMatch !== null) {
+      const firstLine = splitMatch[1]!.trim();
+      question =
+        charLen(firstLine) <= ROUTER_QUESTION_MAX_CHARS ? firstLine : sliceChars(firstLine, ROUTER_QUESTION_MAX_CHARS);
+      context = sliceChars(splitMatch[2]!.trim(), ROUTER_CONTEXT_MAX_CHARS);
+    } else {
+      const rawChars = [...raw];
+      question = rawChars.length <= ROUTER_QUESTION_MAX_CHARS ? raw : sliceChars(raw, ROUTER_QUESTION_MAX_CHARS);
+      context =
+        rawChars.length <= ROUTER_QUESTION_MAX_CHARS
+          ? ""
+          : sliceChars(rawChars.slice(ROUTER_QUESTION_MAX_CHARS - 1).join("").trim(), ROUTER_CONTEXT_MAX_CHARS);
+    }
+    const normalizedOpts = (effectiveOptions ?? [])
+      .slice(0, ASK_MAX_OPTIONS)
       .map((o) => sliceChars(o.trim(), ROUTER_OPTION_MAX_CHARS))
       .filter((o) => o !== "");
     const project = activeProjectOf(session.pmId);
@@ -480,7 +410,13 @@ export function createLedgerRouter(
       t,
       t,
     )!;
-    p.changes.push({ type: "router.item.created", data: { item: toRouterItem(row) } });
+    const item = toRouterItem(row);
+    p.changes.push({ type: "router.item.created", data: { item } });
+    appendAuditIn("pm", "ask", session.pmId, row.id, {
+      question,
+      replaceItemId: extra?.replaceItemId ?? null,
+    });
+    return item;
   };
 
   /** 用户在对话里回消息回答了普通提问：同步将关联 pending router_items 标为 resolved (actor = conversation)。 */
@@ -1537,7 +1473,7 @@ export function createLedgerRouter(
   };
 
   return {
-    askIn,
+    prepareIndependentAskIn,
     bridgeAskIn,
     onConversationAnsweredAskIn,
     reportIn,

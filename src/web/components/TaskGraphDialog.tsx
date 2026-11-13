@@ -87,18 +87,25 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
 
   const layout = useMemo(() => {
     if (graph === null) return null;
+    const isActive = graph.status === "active";
     return computeTaskGraphLayout({
       graphId: graph.id,
-      nodes: graph.nodes.map((n) => ({
-        key: n.key,
-        status: n.status,
-        waitingFor: n.waitingFor,
-        hasCard: n.gateQuestion !== null || n.decision !== null,
-        position: n.sortOrder,
-        optionCount: n.gateOptions.length,
-        hasSummary: Boolean(n.gateSummaryMd || n.artifact?.summary || n.decision),
-        noteExpanded: Boolean(expandedNotes[n.key]),
-      })),
+      nodes: graph.nodes.map((n) => {
+        const activeWaitingUser = isActive && isTaskNodeWaitingUser(n);
+        return {
+          key: n.key,
+          status: n.status,
+          waitingFor: isActive ? n.waitingFor : null,
+          hasCard: n.gateQuestion !== null || n.decision !== null,
+          position: n.sortOrder,
+          optionCount: n.gateOptions.length,
+          hasSummary: Boolean(n.gateSummaryMd || n.artifact?.summary || n.decision),
+          noteExpanded: Boolean(
+            expandedNotes[n.key] ||
+              (activeWaitingUser && (n.gateCheckpoint || n.gateOptions.length === 0)),
+          ),
+        };
+      }),
       edges: graph.edges.map((e) => ({ from: e.fromKey, to: e.toKey })),
       viewportMode: "dialog",
       rootFontSizePx,
@@ -243,7 +250,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
               const node = nodeByKey.get(box.nodeKey);
               if (!node) return null;
               const { workerId, worker } = resolveBoundWorker(node, workerByKey);
-              const isWaitingGate = isTaskNodeWaitingUser(node);
+              const isWaitingGate = graph.status === "active" && isTaskNodeWaitingUser(node);
               const isPending = node.status === "pending";
               const isSkipped = node.status === "done" && node.skipped;
               const isDone = node.status === "done" && !node.skipped;
@@ -267,6 +274,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                       <span className="shrink-0 text-xs font-medium text-primary">Waiting on you</span>
                     </div>
                     <GateDecisionCard
+                      key={node.gateAskMessageId ?? node.key}
                       graphId={graph.id}
                       node={node}
                       client={client}

@@ -72,6 +72,17 @@ describe("规则（从 web/selectors.ts 搬来，行为不变）", () => {
     expect(waitingConversations(state, {})).toEqual([]);
   });
 
+  it("对话里有正在发送的普通消息（pending）时：独立 hub ask 乐观收起，但绑定步骤的 gateRef 拍板卡不被误收起", () => {
+    const snap = snapshot({
+      pm1: [
+        ask({ id: 5 }),
+        ask({ id: 6, meta: { needsUser: true, gateRef: { graphId: 7, nodeKey: "impl", checkpoint: true } } }),
+      ],
+    });
+    const state: ReminderState = { ...reminderStateFrom(snap), pending: [{ conversationId: 1, phase: "sending" }] };
+    expect(pendingAsks(state, 1).map((m) => m.id)).toEqual([6]);
+  });
+
   it("等你确定：没回答的 hub ask，从老到新", () => {
     const state = reminderStateFrom(snapshot({ pm1: [ask({ id: 5 }), ask({ id: 6, meta: { needsUser: true, answered: true } })] }));
     expect(pendingAsks(state, 1).map((m) => m.id)).toEqual([5]);
