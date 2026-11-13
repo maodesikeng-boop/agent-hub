@@ -693,4 +693,256 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
     expect(stateOf(ledger.snapshot().activeTaskGraphs[0]!.nodes[1]!)).toBe("running");
     expect(latestWorkerInputOf(wReview).text).toBe("【用户拍板】cursor 压缩丢提示词本轮是否处理？\n定案：cursor 先不动");
   });
+
+  it("检查点自定义文本 Send 语义与非法 choice 防护：choice=null 附意见按打回发给原 Worker（绝不误当通过），非法 choice 直接报错拦截", async () => {
+    const graph = ledger.hubCall(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({
+        title: "检查点自定义文本边界",
+        goal: "核查 confirm 检查点直接发自由文本意见时按打回处理、绝不误放行下游。",
+        steps: [
+          { key: "design", title: "方案检查点", brief: "输出方案初稿", confirm: true },
+          { key: "impl", title: "代码实现", brief: "按确认方案实现" },
+        ],
+      }),
+    }).data.graph;
+
+    const wDesign = graph.nodes[0]!.activeWorkerId!;
+    await runWorktreeCreate(wDesign);
+    runWorkerReportTurn(wDesign, buildReportBlock({ status: "做完了", summary: "初稿完成", handoff: "见 docs/plan.md" }));
+
+    const cardMsgId = ledger.snapshot().activeTaskGraphs[0]!.nodes[0]!.gateAskMessageId!;
+
+    // 1. 若调用方直接把自由文本塞进 choice（而非「通过」/「打回」），UI 接口与 CLI 接口均直接拦截，绝不误当「通过」！
+    expect(() =>
+      ledger.decideTaskNode(graph.id, "design", {
+        clientId: "chk-bad-choice",
+        choice: "把缓存上限改成 200",
+      }),
+    ).toThrow(/不在拍板卡的选项中/);
+    expect(() =>
+      ledger.hubCall(lin.sessionId, "graph.decide", {
+        graphId: graph.id,
+        nodeKey: "design",
+        choice: "把缓存上限改成 200",
+      }),
+    ).toThrow(/--choice 请传「通过」或「打回」/);
+    expect(db.get<{ status: string }>("SELECT status FROM workers WHERE id = ?", wDesign)?.status).toBe("open");
+    expect(stateOf(ledger.snapshot().activeTaskGraphs[0]!.nodes[1]!)).toBe("pending");
+
+    // 2. 用户在三处卡片输入框写修改意见并直接点 Send（choice: null, note: "..."）：按「打回」把意见发回原 Worker，不收工、不放行下游、不叫醒 PM！
+    enqueued.length = 0;
+    const res = ledger.decideTaskNode(graph.id, "design", {
+      clientId: "chk-custom-send-1",
+      choice: null,
+      note: "直接点 Send 的修改意见：缓存淘汰请统一用 lru-cache",
+    });
+    expect(res.messageId).toBeNull();
+    expect(pmSendActions()).toEqual([]);
+    expect(db.get<{ status: string }>("SELECT status FROM workers WHERE id = ?", wDesign)?.status).toBe("open");
+    expect(stateOf(res.graph.nodes[0]!)).toBe("running");
+    expect(stateOf(res.graph.nodes[1]!)).toBe("pending");
+    expect(askOf(ledger.getMessage(cardMsgId)!)).toMatchObject({
+      answered: true,
+      chosenOption: CONFIRM_REJECT_OPTION,
+    });
+    const workerMsg = latestWorkerInputOf(wDesign);
+    expect(workerMsg.sender).toBe("pm");
+    expect(workerMsg.text).toContain("【用户检查点打回】");
+    expect(workerMsg.text).toContain("直接点 Send 的修改意见：缓存淘汰请统一用 lru-cache");
+  });
+
+  it("Worker 报错/收工后挂 hub ask --node：用户拍板后记录定案、转 waiting:pm 并叫醒 PM 接手换人（绝不误标 done 静默卡死或跳步），换人时自动带上该定案", async () => {
+    const graph = ledger.hubCall(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({
+        title: "报错收工后挂拍板卡",
+        goal: "验证已收工步骤挂卡回答后准确叫醒 PM 接手，绝不误把未完步骤标成 done。",
+        steps: [
+          { key: "impl", title: "实现迁移", brief: "完成数据表迁移与索引" },
+          { key: "review", title: "独立审查", brief: "核查迁移幂等性", review: true, vendor: "codex" },
+        ],
+      }),
+    }).data.graph;
+
+    const w1 = graph.nodes[0]!.activeWorkerId!;
+    await runWorktreeCreate(w1);
+    // w1 报错/被 PM 手动收工（步骤未完成，active_worker_id 清空，worker_ids_json 留有 [w1]）
+    ledger.hubCall(lin.sessionId, "worker.end", { workerId: w1 });
+    expect(stateOf(ledger.snapshot().activeTaskGraphs[0]!.nodes[0]!)).toBe("waiting:pm");
+
+    // PM 调 hub ask --node impl 请用户拍板处理方向
+    ledger.hubCall(lin.sessionId, "ask", {
+      node: "impl",
+      options: ["重建新表迁移", "保留兼容视图"],
+      recommended: "重建新表迁移",
+      text: "旧表存在历史 CHECK 约束，采用哪种迁移方式？",
+    });
+    expect(stateOf(ledger.snapshot().activeTaskGraphs[0]!.nodes[0]!)).toBe("waiting:user");
+
+    // 用户点选卡片：原 Worker 已收工，impl 绝不能误标 done 或提前拉起下游 review，而应记下定案、置 waiting:pm 并发唤醒消息给 PM！
+    enqueued.length = 0;
+    const decided = ledger.decideTaskNode(graph.id, "impl", {
+      clientId: "decide-ended-worker-step",
+      choice: "重建新表迁移",
+      note: "同一事务内完成拷表与删旧表",
+    });
+    expect(decided.messageId).toBeTypeOf("number");
+    expect(pmSendActions()).toHaveLength(1);
+    const wakeText = ledger.getMessage(decided.messageId!)!.text;
+    expect(wakeText).toContain("用户已拍板（原 Worker 已收工，等你接手推进）");
+    expect(wakeText).toContain("定案：重建新表迁移");
+    expect(wakeText).toContain("补充说明：同一事务内完成拷表与删旧表");
+
+    const implAfter = decided.graph.nodes[0]!;
+    const reviewAfter = decided.graph.nodes[1]!;
+    expect(stateOf(implAfter)).toBe("waiting:pm");
+    expect(stateOf(reviewAfter)).toBe("pending");
+    expect(implAfter.decision).toMatchObject({
+      choice: "重建新表迁移",
+      note: "同一事务内完成拷表与删旧表",
+    });
+
+    // PM 被唤醒后调 hub worker start --node impl 换人接手：新 Worker 继承 w1 的 worktree 并收到「用户拍板」定案！
+    const w2 = ledger.hubCall(
+      lin.sessionId,
+      "worker.start",
+      { node: "impl", graphId: graph.id, vendor: "codex" },
+      { workspace: { kind: "ok", isRepoWithCommit: true, hasUncommittedChanges: false } },
+    ).data.worker.id;
+    expect(firstWorkerMessageOf(w2).text).toContain("重建新表迁移；补充说明：同一事务内完成拷表与删旧表");
+  });
+
+  it("Worker 正在跑某一轮中途时用户回答 hub ask --node：上一轮汇报完绝不误杀 Worker 或吞掉排队中的定案消息，续跑第二轮后正常收官", async () => {
+    const graph = ledger.hubCall(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({
+        title: "运行中途投递定案防吞没",
+        goal: "确保 Worker 忙时收到的拍板定案不会被本轮结束收工冲掉。",
+        steps: [
+          { key: "impl", title: "核心改造", brief: "改造接口并处理边界" },
+          { key: "review", title: "独立审查", brief: "审查接口", review: true, vendor: "codex" },
+        ],
+      }),
+    }).data.graph;
+
+    const wImpl = graph.nodes[0]!.activeWorkerId!;
+    await runWorktreeCreate(wImpl);
+
+    // 1. wImpl 正在跑第 1 轮（尚未 turn.ended）
+    const sImpl = workerSessionOf(wImpl);
+    const turn1Input = firstWorkerMessageOf(wImpl);
+    const store = createSessionStore(db);
+    store.update(sImpl.id, { status: "running", pid: 60_000 + wImpl });
+    ledger.applyDriverEvent(sImpl.id, { type: "message.delivered", messageIds: [turn1Input.id], at: ++now });
+    ledger.applyDriverEvent(sImpl.id, { type: "message.processing", messageIds: [turn1Input.id], at: ++now });
+
+    // 2. 第 1 轮还没跑完时，PM 挂了 hub ask --node impl，且用户立刻点选了定案（定案消息入队 queued，步骤变回 running）
+    ledger.hubCall(lin.sessionId, "ask", {
+      node: "impl",
+      options: ["严格模式", "宽松兼容"],
+      recommended: "严格模式",
+      text: "旧客户端缺省字段按严格还是宽松处理？",
+    });
+    enqueued.length = 0;
+    ledger.decideTaskNode(graph.id, "impl", {
+      clientId: "mid-turn-decide-1",
+      choice: "严格模式",
+      note: "缺省直接回 400",
+    });
+    const decisionMsg = latestWorkerInputOf(wImpl);
+    expect(decisionMsg.id).toBeGreaterThan(turn1Input.id);
+    expect(ledger.getMessage(decisionMsg.id)?.status).toBe("queued");
+
+    // 3. 第 1 轮此刻结束并输出“做完了”：因为还有尚未处理的 decisionMsg 在排队，绝不能提前收工 wImpl 或把 decisionMsg 标 stopped！
+    ledger.applyDriverEvent(sImpl.id, {
+      type: "agent.text",
+      uuid: `u-mid-1-${++now}`,
+      text: buildReportBlock({ status: "做完了", summary: "主干逻辑已完成", commit: "aaa1111", handoff: "第一轮产物" }),
+      at: now,
+    });
+    ledger.applyDriverEvent(sImpl.id, {
+      type: "turn.ended",
+      ok: true,
+      interrupted: false,
+      messageIds: [turn1Input.id],
+      durationMs: 30,
+      at: ++now,
+    });
+
+    expect(db.get<{ status: string }>("SELECT status FROM workers WHERE id = ?", wImpl)?.status).toBe("open");
+    expect(ledger.getMessage(decisionMsg.id)?.status).toBe("queued");
+    expect(stateOf(ledger.snapshot().activeTaskGraphs[0]!.nodes[0]!)).toBe("running");
+    expect(stateOf(ledger.snapshot().activeTaskGraphs[0]!.nodes[1]!)).toBe("pending");
+    expect(
+      db.get<{ worker_id: number }>("SELECT worker_id FROM worker_turn_timeouts WHERE worker_id = ?", wImpl),
+    ).toBeDefined();
+
+    // 4. 接着第 2 轮真正消费 decisionMsg 并汇报“做完了”：此时正常收工 wImpl 并交棒拉起下游 review！
+    runWorkerReportTurn(
+      wImpl,
+      buildReportBlock({ status: "做完了", summary: "已补齐严格模式 400 校验", commit: "bbb2222", handoff: "含严格校验" }),
+    );
+    expect(db.get<{ status: string }>("SELECT status FROM workers WHERE id = ?", wImpl)?.status).toBe("ended");
+    expect(stateOf(ledger.snapshot().activeTaskGraphs[0]!.nodes[0]!)).toBe("done");
+    expect(stateOf(ledger.snapshot().activeTaskGraphs[0]!.nodes[1]!)).toBe("running");
+  });
+
+  it("confirm 检查点等用户期间的守护进程重启恢复、手动收工+跳过与整图取消收敛（不留死卡或僵尸 Worker）", async () => {
+    const graph = ledger.hubCall(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({
+        title: "检查点异常与重启清理",
+        goal: "验证检查点等用户期间 recoverAfterRestart / worker.end / skip / cancel 一致收敛。",
+        steps: [
+          { key: "s1", title: "第一步检查点", brief: "做 s1", confirm: true },
+          { key: "s2", title: "第二步检查点", brief: "做 s2", confirm: true },
+        ],
+      }),
+    }).data.graph;
+
+    const w1 = graph.nodes[0]!.activeWorkerId!;
+    await runWorktreeCreate(w1);
+    runWorkerReportTurn(w1, buildReportBlock({ status: "做完了", summary: "s1 初稿", commit: "c1", handoff: "s1 交棒" }));
+    const chkMsg1 = ledger.snapshot().activeTaskGraphs[0]!.nodes[0]!.gateAskMessageId!;
+
+    // 1. 守护进程重启（recoverAfterRestart）：不误唤醒 PM/Worker，检查点卡与 open Worker 完整保持
+    enqueued.length = 0;
+    const recovered = ledger.recoverAfterRestart();
+    expect(recovered.resentMessageIds).toEqual([]);
+    expect(pmSendActions()).toEqual([]);
+    expect(ledger.snapshot().activeTaskGraphs[0]!.nodes[0]?.gateCheckpoint).toBe(true);
+    expect(db.get<{ status: string }>("SELECT status FROM workers WHERE id = ?", w1)?.status).toBe("open");
+
+    // 2. 未收工前直接调 graph.skip 被拒；PM 调 worker.end 后检查点卡自动收起、步骤变 waiting:pm，随后 graph.skip 干净跳过并拉起 s2
+    expect(() => ledger.hubCall(lin.sessionId, "graph.skip", { graphId: graph.id, nodeKey: "s1" })).toThrow(
+      /请先收工再跳过/,
+    );
+    ledger.hubCall(lin.sessionId, "worker.end", { workerId: w1 });
+    expect(askOf(ledger.getMessage(chkMsg1)!)?.answered).toBe(true);
+    const s1AfterEnd = ledger.snapshot().activeTaskGraphs[0]!.nodes[0]!;
+    expect(stateOf(s1AfterEnd)).toBe("waiting:pm");
+    expect(s1AfterEnd.gateCheckpoint).toBeUndefined();
+    expect(s1AfterEnd.gateQuestion).toBeNull();
+
+    ledger.hubCall(lin.sessionId, "graph.skip", {
+      graphId: graph.id,
+      nodeKey: "s1",
+      reason: "改由下游直接做",
+    });
+    const afterSkip = ledger.snapshot().activeTaskGraphs[0]!;
+    expect(stateOf(afterSkip.nodes[0]!)).toBe("skipped");
+    expect(stateOf(afterSkip.nodes[1]!)).toBe("running");
+
+    // 3. s2 进入 confirm 检查点等用户后执行 graph.cancel：检查点卡收起、checkpointPending 清除、未收工 w2 自动收工！
+    const w2 = afterSkip.nodes[1]!.activeWorkerId!;
+    await runWorktreeCreate(w2);
+    runWorkerReportTurn(w2, buildReportBlock({ status: "做完了", summary: "s2 完成", commit: "c2", handoff: "s2 交棒" }));
+    const chkMsg2 = ledger.snapshot().activeTaskGraphs[0]!.nodes[1]!.gateAskMessageId!;
+
+    ledger.hubCall(lin.sessionId, "graph.cancel", { graphId: graph.id, reason: "需求取消" });
+    expect(askOf(ledger.getMessage(chkMsg2)!)?.answered).toBe(true);
+    expect(db.get<{ status: string }>("SELECT status FROM workers WHERE id = ?", w2)?.status).toBe("ended");
+    expect(ledger.snapshot().activeTaskGraphs).toEqual([]);
+    expect(pendingDecisionsOf(ledger.snapshot(), "local")).toEqual([]);
+    const cancelledGraph = ledger.listProjectTaskGraphs(1).graphs[0]!;
+    expect(cancelledGraph.status).toBe("cancelled");
+    expect(cancelledGraph.nodes[1]!.gateCheckpoint).toBeUndefined();
+  });
 });

@@ -432,7 +432,13 @@ function PeelStageRow({
           <div className="flex min-h-8 items-center text-body font-semibold text-primary">
             <span className="truncate">{cleanPieceTitle(node.title)}</span>
           </div>
-          <GateDecisionCard graphId={graphId} node={node} client={client} className="rounded-tl-xl" />
+          <GateDecisionCard
+            key={node.gateAskMessageId ?? node.key}
+            graphId={graphId}
+            node={node}
+            client={client}
+            className="rounded-tl-xl"
+          />
         </div>
       </div>
     );

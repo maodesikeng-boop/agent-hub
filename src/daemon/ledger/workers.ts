@@ -210,6 +210,7 @@ export interface LedgerWorkersTaskGraphHooks {
     parsed: ParsedWorkerReport,
     rawBody: string,
     forcedNote: string | null,
+    opts?: { hasPendingFollowup?: boolean },
   ) =>
     | { handled: false }
     | { handled: true; outcome: "completed"; wakePmWithReport: boolean; completeStep: () => void }
@@ -1366,7 +1367,14 @@ export function createLedgerWorkers(
     )?.text ?? "";
 
   /** 按格式解析这一轮最后的文字，一行 report 交给项目经理；note 不是 null 就加在交给它的正文前面。 */
-  const insertReport = (p: Pending, worker: WorkerDbRow, turnMessageId: MessageId, text: string, note: string | null = null) => {
+  const insertReport = (
+    p: Pending,
+    worker: WorkerDbRow,
+    turnMessageId: MessageId,
+    text: string,
+    note: string | null = null,
+    opts?: { hasPendingFollowup?: boolean },
+  ) => {
     const parsed = parseWorkerReport(text);
     const body = text.trim() === "" ? NO_REPLY_TEXT : text;
     const status: WorkerLineStatus = parsed.kind === "ok" ? parsed.report.status : "unformatted";
@@ -1377,6 +1385,7 @@ export function createLedgerWorkers(
       parsed,
       body,
       note,
+      opts,
     );
     if (graphHandling?.handled === true) {
       if (graphHandling.outcome === "completed") {
@@ -1529,7 +1538,22 @@ export function createLedgerWorkers(
       });
       return;
     }
-    clearMaxTime(worker.worker_conversation_id);
+    const completedUpToId =
+      event.type === "turn.ended" && event.messageIds.length > 0 ? Math.max(...event.messageIds) : outcome.turnMessageId;
+    const hasPendingFollowup =
+      event.type === "turn.ended" &&
+      completedUpToId !== null &&
+      db.get(
+        `SELECT 1 AS x FROM messages
+          WHERE conversation_id = ? AND id > ? AND sender IN ('pm', 'user')
+            AND status IN ('queued', 'delivered', 'processing')
+          LIMIT 1`,
+        worker.worker_conversation_id,
+        completedUpToId,
+      ) !== undefined;
+    if (!hasPendingFollowup) {
+      clearMaxTime(worker.worker_conversation_id);
+    }
     // 自己开的一轮没有用户消息的编号：用这一轮最后一条 agent 消息的编号做键（重放的 agent 消息按 uuid 去重，编号不变）；这一轮什么都没做就不汇报
     const turnMessageId = outcome.turnMessageId ?? lastAgentMessageId(session.id, turnStart);
     if (turnMessageId === null) return;
@@ -1543,7 +1567,7 @@ export function createLedgerWorkers(
     if (outcome.turnMessageId === null && text.trim() === "") return;
     // 只压缩了上下文（用户发的 /compact）、没有任何 agent 消息的一轮：不汇报，对话里那行“已压缩上下文”照留
     if (onlyManualCompact(session, turnStart)) return;
-    insertReport(p, worker, turnMessageId, text);
+    insertReport(p, worker, turnMessageId, text, null, { hasPendingFollowup });
   };
 
   /**

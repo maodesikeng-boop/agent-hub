@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceInfo, StateSnapshot, TaskGraph, TaskNode } from "../shared/index.ts";
 import { App } from "./App.tsx";
 import * as RightRailMod from "./components/RightRail.tsx";
+import { TaskGraphDialog } from "./components/TaskGraphDialog.tsx";
 import * as PiecesDrawerMod from "./mobile/PiecesDrawer.tsx";
 import {
   FakeApi,
@@ -247,6 +248,103 @@ describe("桌面右栏：App 接通果皮轨与切面轮", () => {
       note: "把缓存淘汰改成 lru-cache",
     });
     expect(api.callsTo("POST", /^\/api\/conversations\/1\/messages$/)).toHaveLength(0);
+  });
+
+  it("confirm 检查点卡直接点 Send 发自由文本修改意见：传 choice=null 附意见，对话卡片立即高亮「打回」且不误触通过；已取消历史图不渲染活体拍板卡", async () => {
+    const user = userEvent.setup();
+    const checkpointGraph: TaskGraph = {
+      id: GRAPH_ID,
+      projectId: 1,
+      pmId: 1,
+      conversationId: 1,
+      title: "自定义 Send 检查点",
+      status: "active",
+      originMsgId: null,
+      nodes: [
+        makeNode({
+          key: "gate",
+          title: "方案检查点",
+          status: "waiting",
+          waitingFor: "user",
+          sortOrder: 0,
+          activeWorkerId: 3,
+          workerIds: [3],
+          gateQuestion: "请确认步骤「方案检查点」的结果",
+          gateOptions: ["通过", "打回"],
+          gateRecommended: "通过",
+          gateSummaryMd: "**摘要**：已完成初稿",
+          gateAskMessageId: 106,
+          gateCheckpoint: true,
+        }),
+      ],
+      edges: [],
+      createdAt: 1_000,
+      updatedAt: 2_000,
+      completedAt: null,
+    };
+    const snap = makeSnapshot({
+      pms: [makePm({ id: 1, name: "小林" })],
+      projects: [makeProject({ id: 1, pmId: 1, conversationId: 1 })],
+      conversations: [
+        makeConvSnapshot(
+          [
+            makeMessage({
+              id: 106,
+              text: "请确认步骤「方案检查点」的结果\n\n**摘要**：已完成初稿",
+              meta: {
+                needsUser: true,
+                options: ["通过", "打回"],
+                recommended: "通过",
+                gateRef: { graphId: GRAPH_ID, nodeKey: "gate", checkpoint: true },
+              },
+              dedupeKey: "ask:1:106",
+            }),
+          ],
+          { conversation: { id: 1, pmId: 1, title: "小林" } },
+        ),
+      ],
+      sessions: [makeSession({ sessionId: 10, conversationId: 1, pmId: 1 })],
+      activeTaskGraphs: [checkpointGraph],
+    });
+
+    const { api } = await bootSingle(snap);
+
+    // 在对话检查点卡输入框填修改意见并直接点 Send（未点「通过」也未点「打回」）
+    const chatArticle = await waitFor(() => document.querySelector('[data-message-id="106"]') as HTMLElement);
+    const chatCard = chatArticle.querySelector("[data-ask-card]") as HTMLElement;
+    await user.type(within(chatCard).getByLabelText("Add note"), "补充上限常量到 limits.ts");
+    await user.click(within(chatCard).getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(api.callsTo("POST", DECIDE_PATH)).toHaveLength(1));
+    expect(api.callsTo("POST", DECIDE_PATH)[0]!.body).toMatchObject({
+      choice: null,
+      note: "补充上限常量到 limits.ts",
+    });
+    // 乐观态立即高亮「打回」选项，不误高亮「通过」
+    const passBtn = within(chatCard).getByRole("button", { name: /通过/ });
+    const rejectBtn = within(chatCard).getByRole("button", { name: /打回/ });
+    expect(rejectBtn.className).toContain("bg-sidebar-active");
+    expect(passBtn.className).not.toContain("bg-sidebar-active");
+
+    // 打开已取消的历史图全览弹窗：绝不渲染活体 GateDecisionCard 或 Waiting on you
+    render(
+      <TaskGraphDialog
+        open
+        graph={{
+          ...checkpointGraph,
+          id: 88,
+          title: "已取消历史图",
+          status: "cancelled",
+          completedAt: 3_000,
+        }}
+        workers={[]}
+        onOpenChange={() => {}}
+        onOpenWorker={() => {}}
+      />,
+    );
+    const histDialog = await screen.findByRole("dialog", { name: "已取消历史图" });
+    expect(within(histDialog).queryByTestId("peel-gate-card")).toBeNull();
+    expect(within(histDialog).queryByText("Waiting on you")).toBeNull();
   });
 
   it("Cancel graph 要二次确认：点一下只弹确认，Keep going 不发请求；确认后才 POST，成功后两层弹窗都关", async () => {

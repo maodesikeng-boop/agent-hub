@@ -987,19 +987,16 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     if (values.recommended !== undefined) {
       const rec = values.recommended.trim();
       if (rec === "") throw new UsageError("--recommended 不能是空的");
-      if (options !== undefined) {
-        let matched = options.find((o) => o === rec);
-        if (matched === undefined && /^[1-9][0-9]*$/.test(rec)) {
-          const oneBased = Number(rec);
-          if (oneBased >= 1 && oneBased <= options.length) matched = options[oneBased - 1];
-        }
-        if (matched === undefined) {
-          throw new UsageError(`--recommended 要写某个选项原文或 1 到 ${options.length} 的序号`);
-        }
-        body.recommended = matched;
-      } else {
-        body.recommended = rec;
+      if (options === undefined) throw new UsageError("--recommended 要配合 --option <选项>... 一起用");
+      let matched = options.find((o) => o === rec);
+      if (matched === undefined && /^[1-9][0-9]*$/.test(rec)) {
+        const oneBased = Number(rec);
+        if (oneBased >= 1 && oneBased <= options.length) matched = options[oneBased - 1];
       }
+      if (matched === undefined) {
+        throw new UsageError(`--recommended 要写某个选项原文或 1 到 ${options.length} 的序号`);
+      }
+      body.recommended = matched;
     }
     if (values.question !== undefined) {
       if (values.question.trim() === "") throw new UsageError("--question 不能是空的");

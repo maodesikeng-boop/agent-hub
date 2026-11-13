@@ -23,6 +23,7 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   askOf,
   attachmentsOf,
+  CONFIRM_REJECT_OPTION,
   extractAskCard,
   isRewoundMessage,
   REPORT_END,
@@ -190,7 +191,7 @@ function AskCard({
       onMutate: () => setErr(null),
       onSuccess: (_data, vars) => {
         clientIdRef.current = null;
-        setChosen(vars.choice ?? vars.note ?? "");
+        setChosen(vars.choice ?? (gateRef?.checkpoint ? CONFIRM_REJECT_OPTION : (vars.note ?? "")));
         setNote("");
       },
       onError: (error) => {
@@ -211,7 +212,7 @@ function AskCard({
     decideMutation.mutate({ choice, note: trimmed === "" ? null : trimmed });
   };
 
-  const effectiveChosen = chosen ?? card.chosenOption ?? null;
+  const effectiveChosen = card.chosenOption ?? chosen;
   const answered = card.answered || chosen !== null;
   const disabled = answered || !onAnswerAsk || decideMutation.isPending;
   const { title: cardTitle, context: cardContext } = useMemo(

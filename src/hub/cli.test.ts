@@ -661,6 +661,7 @@ describe("hub cli", () => {
       [["graph"]],
       [["graph", "create", "--title", "缺stdin"]],
       [["graph", "ask", "confirm-mcp"]],
+      [["graph", "ask", "confirm-mcp", "--question", "问", "--recommended", "1"]],
       [["graph", "patch"]],
       [["graph", "finish"]],
       [["graph", "finish", "1", "2", "--stdin"]],
