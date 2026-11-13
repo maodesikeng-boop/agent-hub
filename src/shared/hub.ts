@@ -26,7 +26,7 @@ import type {
 } from "./domain.ts";
 import type { RouterItem, RouterPmNote, RouterReportLink } from "./router.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
-import type { AgentVendor, VendorAvailability } from "./vendors.ts";
+import { AGENT_VENDORS, DEFAULT_AGENT_VENDOR, type AgentVendor, type VendorAvailability } from "./vendors.ts";
 // ledger.ts 只从这里引类型，没有运行时的循环引用
 import { API_ERRORS } from "./errors.ts";
 import { LEDGER_ERROR_HTTP_STATUS } from "./ledger.ts";
@@ -404,8 +404,9 @@ export interface PatchTaskGraphSpecInput {
 }
 
 /** `hub graph create` 正文 JSON 一行字段示例（任务图手册与 `hub --help` 共用；顶层 title 可改用 --title 传；steps 不写 deps 默认按顺序串接，带 brief 自动开工）。 */
+const EXAMPLE_REVIEW_VENDOR = AGENT_VENDORS.find((vendor) => vendor !== DEFAULT_AGENT_VENDOR) ?? DEFAULT_AGENT_VENDOR;
 export const TASK_GRAPH_CREATE_JSON_HINT =
-  '{"title":"…","goal":"…","steps":[{"key":"impl","title":"…","brief":"…"},{"key":"review","title":"…","brief":"…","review":true,"vendor":"codex"}]}';
+  `{"title":"…","goal":"…","steps":[{"key":"impl","title":"…","brief":"…"},{"key":"review","title":"…","brief":"…","review":true,"vendor":"${EXAMPLE_REVIEW_VENDOR}"}]}`;
 
 /** `hub graph patch` 正文 JSON 一行字段示例（任务图手册与 `hub help` 共用，只此一份；按需取用；updateSteps 只能改还没开工的步骤；skipSteps 跳过还没开工的步骤）。 */
 export const TASK_GRAPH_PATCH_JSON_HINT =
