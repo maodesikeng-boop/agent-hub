@@ -92,7 +92,7 @@ function openWs(url: string, headers: Record<string, string>): Promise<"open" | 
   });
 }
 
-describe("设备入口：unix socket（连入方）", () => {
+describe.skipIf(process.platform === "win32")("设备入口：unix socket（连入方）", () => {
   async function setup() {
     const socketPath = join(tempDir(), "peer.sock");
     const d = await device({ socket: socketPath });
@@ -197,7 +197,7 @@ describe("设备入口：TCP 127.0.0.1（中心）", () => {
 describe("认错设备令牌的 401 也带 no-store", () => {
   const wrongAuth = { authorization: `Bearer ${newPeerToken()}`, [PEER_DEVICE_HEADER]: peer.id };
 
-  it("设备入口（unix socket 和 TCP）", async () => {
+  it.skipIf(process.platform === "win32")("设备入口（unix socket 和 TCP）", async () => {
     const socketPath = join(tempDir(), "peer.sock");
     await device({ socket: socketPath });
     const socketRes = await send({ socketPath }, "GET", API_PATHS.state, wrongAuth);
@@ -217,7 +217,7 @@ describe("认错设备令牌的 401 也带 no-store", () => {
   });
 });
 
-describe("旁路 socket 和 hub.sock 走同一套准备", () => {
+describe.skipIf(process.platform === "win32")("旁路 socket 和 hub.sock 走同一套准备", () => {
   /** run/ 事先是 0755，peer.sock 放在里面。 */
   function runDir0755(): { runDir: string; socket: string } {
     const runDir = join(tempDir(), "run");
@@ -253,7 +253,7 @@ describe("旁路 socket 和 hub.sock 走同一套准备", () => {
   });
 });
 
-describe("设备入口同时听 socket 与 TCP 端口（Linux 既可做中心也可做连入方）", () => {
+describe.skipIf(process.platform === "win32")("设备入口同时听 socket 与 TCP 端口（Linux 既可做中心也可做连入方）", () => {
   it("传 { socket, port } 时两边都听且都按设备入口规则走，关闭后两边都停", async () => {
     const socketPath = join(tempDir(), "peer.sock");
     const d = await device({ socket: socketPath, port: 0 });

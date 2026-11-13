@@ -1,7 +1,10 @@
 // 数据目录布局（设计第 6.1 节）。用到 node:path / node:fs，只给守护进程和测试用，不要从网页里引。
+import { createHash, randomBytes } from "node:crypto";
 import { existsSync, rmSync, statSync } from "node:fs";
-import { delimiter, join } from "node:path";
-import { ENV_HOME, PM_MEMORY_INDEX_FILE } from "./limits.ts";
+import { homedir } from "node:os";
+import { join, posix, win32 } from "node:path";
+import { LRUCache } from "lru-cache";
+import { ENV_HOME, PM_MEMORY_INDEX_FILE, WIN_EXEC_RESOLVE_CACHE_MAX } from "./limits.ts";
 import { DATA_DIR_NAME } from "./names.ts";
 // 各家只给守护进程用的路径（src/vendors/<id>/paths.ts，按名单加载；docs/vendor-plugin-design.md 的 B5）
 import { VENDOR_PATHS } from "../vendors/paths-registry.ts";
@@ -12,6 +15,8 @@ export interface ResolvePathsInput {
   env?: Record<string, string | undefined>;
   userHome?: string;
   home?: string;
+  /** 默认 process.platform；测试可传 "win32" | "darwin" | "linux"。 */
+  platform?: string;
   /** 各家可执行文件（优先于 spec 的 cli.envVar 环境变量），没给的家照常解析。 */
   vendorPaths?: Partial<Record<AgentVendor, string>>;
 }
@@ -91,10 +96,34 @@ export interface HubPaths {
   vendorPaths: Record<AgentVendor, string>;
 }
 
+function isWindowsStyleBase(base: string): boolean {
+  return /^[A-Za-z]:/.test(base) || base.startsWith("\\\\") || base.includes("\\");
+}
+
+function joinForBase(base: string, ...parts: string[]): string {
+  return isWindowsStyleBase(base) ? win32.join(base, ...parts) : posix.join(base, ...parts);
+}
+
+function splitPathList(envPath: string, platform: string): string[] {
+  const useSemi = platform === "win32" || envPath.includes(";") || /^[A-Za-z]:[\\/]/.test(envPath);
+  return envPath.split(useSemi ? win32.delimiter : posix.delimiter);
+}
+
 function expandHome(raw: string, userHome: string): string {
   if (raw === "~") return userHome;
-  if (raw.startsWith("~/")) return join(userHome, raw.slice(2));
+  if (raw.startsWith("~/") || raw.startsWith("~\\")) return joinForBase(userHome, raw.slice(2));
   return raw;
+}
+
+/** 数据目录对应的 12 位稳定哈希（供 Windows 命名管道名隔离不同数据目录）。 */
+export function dataDirPipeHash(home: string): string {
+  const normalized = home.normalize("NFC").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  return createHash("sha256").update(normalized).digest("hex").slice(0, 12);
+}
+
+/** 判断端点字符串是否为 Windows 命名管道（`\\.\pipe\...`）。 */
+export function isWindowsNamedPipe(endpoint: string): boolean {
+  return endpoint.startsWith("\\\\.\\pipe\\");
 }
 
 export function resolveHubPaths(
@@ -103,41 +132,44 @@ export function resolveHubPaths(
   input: ResolvePathsInput = {},
 ): HubPaths {
   const rawHome = input.home || env[ENV_HOME];
-  const home = rawHome ? expandHome(rawHome, userHome) : join(userHome, DATA_DIR_NAME);
-  const stateDir = join(home, "state");
-  const logsDir = join(stateDir, "logs");
+  const home = rawHome ? expandHome(rawHome, userHome) : joinForBase(userHome, DATA_DIR_NAME);
+  const platform = input.platform ?? (isWindowsStyleBase(home) ? process.platform : "darwin");
+  const stateDir = joinForBase(home, "state");
+  const logsDir = joinForBase(stateDir, "logs");
+  const pipeHash = platform === "win32" ? dataDirPipeHash(home) : "";
+  const hubPipeNonce = platform === "win32" ? randomBytes(8).toString("hex") : "";
   return {
     home,
     stateDir,
-    dbFile: join(stateDir, "hub.sqlite"),
-    lockFile: join(stateDir, "lock"),
-    childProcessesFile: join(stateDir, "child-processes.json"),
-    uiTokenFile: join(stateDir, "ui-token"),
-    deviceFile: join(stateDir, "device.json"),
-    pushVapidFile: join(stateDir, "push-vapid.json"),
-    pushSubscriptionsFile: join(stateDir, "push-subscriptions.json"),
-    peersFile: join(stateDir, "peers.json"),
-    tunnelsFile: join(stateDir, "tunnels.json"),
-    publicEntryFile: join(stateDir, "public-entry.json"),
-    tunnelDir: join(stateDir, "tunnel"),
-    tunnelHubSock: join(home, "run", "tunnel", "hub.sock"),
-    adminSock: join(home, "run", "admin.sock"),
-    launchDir: join(stateDir, "launch"),
+    dbFile: joinForBase(stateDir, "hub.sqlite"),
+    lockFile: joinForBase(stateDir, "lock"),
+    childProcessesFile: joinForBase(stateDir, "child-processes.json"),
+    uiTokenFile: joinForBase(stateDir, "ui-token"),
+    deviceFile: joinForBase(stateDir, "device.json"),
+    pushVapidFile: joinForBase(stateDir, "push-vapid.json"),
+    pushSubscriptionsFile: joinForBase(stateDir, "push-subscriptions.json"),
+    peersFile: joinForBase(stateDir, "peers.json"),
+    tunnelsFile: joinForBase(stateDir, "tunnels.json"),
+    publicEntryFile: joinForBase(stateDir, "public-entry.json"),
+    tunnelDir: joinForBase(stateDir, "tunnel"),
+    tunnelHubSock: joinForBase(home, "run", "tunnel", "hub.sock"),
+    adminSock: platform === "win32" ? `\\\\.\\pipe\\fusa-${pipeHash}-admin` : joinForBase(home, "run", "admin.sock"),
+    launchDir: joinForBase(stateDir, "launch"),
     logsDir,
-    setupLogsDir: join(logsDir, "setup"),
-    pmHomeDir: join(home, "pm-home"),
-    personasDir: join(stateDir, "personas"),
-    pmMemoryDir: join(stateDir, "pm-memory"),
-    runDir: join(home, "run"),
-    hubSock: join(home, "run", "hub.sock"),
-    uiSock: join(home, "run", "ui.sock"),
-    publicSock: join(home, "run", "public.sock"),
-    peerSock: join(home, "run", "peer.sock"),
-    hubBinDir: join(home, "run", "bin"),
-    worktreesDir: join(home, "worktrees"),
-    uploadsDir: join(home, "uploads"),
-    sentFilesDir: join(home, "sent-files"),
-    syncBackupsDir: join(home, "backups", "sync"),
+    setupLogsDir: joinForBase(logsDir, "setup"),
+    pmHomeDir: joinForBase(home, "pm-home"),
+    personasDir: joinForBase(stateDir, "personas"),
+    pmMemoryDir: joinForBase(stateDir, "pm-memory"),
+    runDir: joinForBase(home, "run"),
+    hubSock: platform === "win32" ? `\\\\.\\pipe\\fusa-${pipeHash}-${hubPipeNonce}-hub` : joinForBase(home, "run", "hub.sock"),
+    uiSock: joinForBase(home, "run", "ui.sock"),
+    publicSock: joinForBase(home, "run", "public.sock"),
+    peerSock: joinForBase(home, "run", "peer.sock"),
+    hubBinDir: joinForBase(home, "run", "bin"),
+    worktreesDir: joinForBase(home, "worktrees"),
+    uploadsDir: joinForBase(home, "uploads"),
+    sentFilesDir: joinForBase(home, "sent-files"),
+    syncBackupsDir: joinForBase(home, "backups", "sync"),
     vendorPaths: Object.fromEntries(
       VENDOR_LIST.map(({ id, cli }) => [id, expandHome(input.vendorPaths?.[id] || env[cli.envVar] || cli.command, userHome)]),
     ) as Record<AgentVendor, string>,
@@ -153,7 +185,7 @@ export function resolvePaths(
   }
   const input = inputOrEnv as ResolvePathsInput;
   const env = input.env ?? (inputOrEnv as Record<string, string | undefined>);
-  const userHome = input.userHome ?? env.HOME ?? "";
+  const userHome = input.userHome ?? env.HOME ?? env.USERPROFILE ?? homedir();
   return resolveHubPaths(env, userHome, input);
 }
 
@@ -163,11 +195,86 @@ export function resolvePaths(
  * - `envPath`（`PATH`）中的某个目录下存在 `cmd`：返回 `cmd`（保持原样）；
  * - 否则按顺序检查 `fallbackPaths`，第一个存在的候选路径返回该绝对路径。
  */
-export function findExecutable(cmd: string, envPath: string | undefined, fallbackPaths: readonly string[]): string | null {
-  if (cmd.includes("/")) return existsSync(cmd) ? cmd : null;
+const DEFAULT_WIN_PATHEXT = ".COM;.EXE;.BAT;.CMD";
+
+function isExplicitExecutablePath(cmd: string, platform: string): boolean {
+  if (cmd.includes("/")) return true;
+  if (/^[A-Za-z]:[\\/]/.test(cmd) || cmd.startsWith("\\\\")) return true;
+  if (platform === "win32") {
+    return cmd.includes("\\") || /^[A-Za-z]:/.test(cmd);
+  }
+  return false;
+}
+
+function parseWinPathExts(pathExt: string | undefined): string[] {
+  const raw = pathExt && pathExt.trim() !== "" ? pathExt : DEFAULT_WIN_PATHEXT;
+  return raw
+    .split(";")
+    .map((ext) => ext.trim().toLowerCase())
+    .filter((ext) => ext.startsWith("."));
+}
+
+function existsAsFile(candidate: string): boolean {
+  try {
+    return existsSync(candidate) && statSync(candidate).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function findWinCandidateInDir(dir: string, cmd: string, exts: readonly string[]): string | null {
+  const joinDir = process.platform === "win32" || /^[A-Za-z]:[\\/]/.test(dir) || dir.includes("\\") ? win32.join : join;
+  const lower = cmd.toLowerCase();
+  const hasKnownExt = exts.some((ext) => lower.endsWith(ext));
+  if (hasKnownExt) {
+    const direct = joinDir(dir, cmd);
+    if (existsAsFile(direct)) return direct;
+  }
+  for (const ext of exts) {
+    const candidate = joinDir(dir, `${cmd}${ext}`);
+    if (existsAsFile(candidate)) return candidate;
+  }
+  const exact = joinDir(dir, cmd);
+  return existsAsFile(exact) ? exact : null;
+}
+
+export function findExecutable(
+  cmd: string,
+  envPath: string | undefined,
+  fallbackPaths: readonly string[],
+  options?: { platform?: string; pathExt?: string },
+): string | null {
+  const platform = options?.platform ?? process.platform;
+  if (platform === "win32") {
+    const exts = parseWinPathExts(options?.pathExt ?? process.env.PATHEXT);
+    if (isExplicitExecutablePath(cmd, "win32")) {
+      if (existsAsFile(cmd)) return cmd;
+      const lower = cmd.toLowerCase();
+      if (!exts.some((ext) => lower.endsWith(ext))) {
+        for (const ext of exts) {
+          if (existsAsFile(`${cmd}${ext}`)) return `${cmd}${ext}`;
+        }
+      }
+      return null;
+    }
+    if (envPath) {
+      for (const rawDir of envPath.split(win32.delimiter)) {
+        const dir = rawDir.trim().replace(/^"(.*)"$/, "$1");
+        if (!dir) continue;
+        const hit = findWinCandidateInDir(dir, cmd, exts);
+        if (hit !== null) return hit;
+      }
+    }
+    for (const candidate of fallbackPaths) {
+      if (existsAsFile(candidate)) return candidate;
+    }
+    return null;
+  }
+
+  if (isExplicitExecutablePath(cmd, platform)) return existsSync(cmd) ? cmd : null;
   if (envPath) {
-    for (const dir of envPath.split(delimiter)) {
-      if (dir && existsSync(join(dir, cmd))) return cmd;
+    for (const dir of splitPathList(envPath, platform)) {
+      if (dir && existsSync(joinForBase(dir, cmd))) return cmd;
     }
   }
   for (const candidate of fallbackPaths) {
@@ -177,17 +284,31 @@ export function findExecutable(cmd: string, envPath: string | undefined, fallbac
 }
 
 /** 解析厂商可执行文件路径（启动时用）：同 findExecutable，找不到（含显式路径不存在）原样返回 `cmd`。 */
-export function resolveExecutable(cmd: string, envPath: string | undefined, fallbackPaths: readonly string[]): string {
-  return findExecutable(cmd, envPath, fallbackPaths) ?? cmd;
+export function resolveExecutable(
+  cmd: string,
+  envPath: string | undefined,
+  fallbackPaths: readonly string[],
+  options?: { platform?: string; pathExt?: string },
+): string {
+  return findExecutable(cmd, envPath, fallbackPaths, options) ?? cmd;
 }
 
 /** 找厂商可执行文件在磁盘上的实际路径（供 stat 指纹检查安装/升级变化），找不到返回 null。 */
-function locateExecutableFile(cmd: string, envPath: string | undefined, fallbackPaths: readonly string[]): string | null {
-  if (cmd.includes("/")) return existsSync(cmd) ? cmd : null;
+function locateExecutableFile(
+  cmd: string,
+  envPath: string | undefined,
+  fallbackPaths: readonly string[],
+  platform: string = process.platform,
+  pathExt?: string,
+): string | null {
+  if (platform === "win32") {
+    return findExecutable(cmd, envPath, fallbackPaths, { platform: "win32", pathExt });
+  }
+  if (isExplicitExecutablePath(cmd, platform)) return existsSync(cmd) ? cmd : null;
   if (envPath) {
-    for (const dir of envPath.split(delimiter)) {
+    for (const dir of splitPathList(envPath, platform)) {
       if (!dir) continue;
-      const full = join(dir, cmd);
+      const full = joinForBase(dir, cmd);
       if (existsSync(full)) return full;
     }
   }
@@ -206,7 +327,7 @@ function locateExecutableFile(cmd: string, envPath: string | undefined, fallback
  * 为什么要有这个兜底：systemd 用户服务的 PATH 里没有 ~/.local/bin，守护进程那样启动时 `PATH` 找不到刚装好的 CLI。
  */
 export function linuxInstallDirs(userHome: string): string[] {
-  return [join(userHome, ".local", "bin"), join(userHome, ".npm-global", "bin"), "/usr/local/bin", "/home/linuxbrew/.linuxbrew/bin"];
+  return [joinForBase(userHome, ".local", "bin"), joinForBase(userHome, ".npm-global", "bin"), "/usr/local/bin", "/home/linuxbrew/.linuxbrew/bin"];
 }
 
 /**
@@ -216,8 +337,15 @@ export function linuxInstallDirs(userHome: string): string[] {
 export const VENDOR_FALLBACK_PATHS: Readonly<Record<AgentVendor, (userHome: string, platform?: string) => string[]>> = Object.fromEntries(
   AGENT_VENDORS.map((vendor) => [
     vendor,
-    (userHome: string, platform: string = process.platform) =>
-      VENDOR_PATHS[vendor].fallbackPaths?.({ userHome, platform, linuxInstallDirs: linuxInstallDirs(userHome), join }) ?? [],
+    (userHome: string, platform: string = process.platform) => {
+      const joinFn =
+        platform === "win32" || isWindowsStyleBase(userHome)
+          ? win32.join
+          : platform === "darwin" || platform === "linux"
+            ? posix.join
+            : join;
+      return VENDOR_PATHS[vendor].fallbackPaths?.({ userHome, platform, linuxInstallDirs: linuxInstallDirs(userHome), join: joinFn }) ?? [];
+    },
   ]),
 ) as Record<AgentVendor, (userHome: string, platform?: string) => string[]>;
 
@@ -232,11 +360,12 @@ export function resolveVendorExecutables(
   envPath: string | undefined,
   userHome: string,
   platform: string = process.platform,
+  pathExt?: string,
 ): Record<AgentVendor, VendorExecutable> {
   return Object.fromEntries(
     AGENT_VENDORS.map((vendor) => {
       const cmd = paths.vendorPaths[vendor];
-      const path = resolveExecutable(cmd, envPath, VENDOR_FALLBACK_PATHS[vendor](userHome, platform));
+      const path = resolveExecutable(cmd, envPath, VENDOR_FALLBACK_PATHS[vendor](userHome, platform), { platform, pathExt });
       return [vendor, { cmd, path }];
     }),
   ) as Record<AgentVendor, VendorExecutable>;
@@ -250,7 +379,7 @@ export function vendorCatalogWatchFiles(vendor: AgentVendor, userHome: string, e
   const { configHome: override, catalogWatchPaths } = vendorSpec(vendor).home;
   const base = vendorConfigHome(vendor, userHome, env);
   return catalogWatchPaths.map((rel) =>
-    override && base && rel.startsWith(`${override.rel}/`) ? join(base, rel.slice(override.rel.length + 1)) : join(userHome, rel),
+    override && base && rel.startsWith(`${override.rel}/`) ? joinForBase(base, rel.slice(override.rel.length + 1)) : joinForBase(userHome, rel),
   );
 }
 
@@ -260,14 +389,19 @@ export function vendorCatalogWatchFiles(vendor: AgentVendor, userHome: string, e
  */
 export function vendorConfigHome(vendor: AgentVendor, userHome: string, env: Record<string, string | undefined> = process.env): string | null {
   const override = vendorSpec(vendor).home.configHome;
-  return override === undefined ? null : env[override.env]?.trim() || join(userHome, override.rel);
+  return override === undefined ? null : env[override.env]?.trim() || joinForBase(userHome, override.rel);
 }
 
 /**
  * 指纹里可执行文件的真实路径缓存（键：命令 + PATH + 兜底路径）：找到一次以后只 stat 那一个文件，不再每次遍历 PATH；
  * 那个文件没了（卸载、换位置）才重新找。没找到的不缓存（装上以后下次就能找到）。
  */
-const locatedExecutables = new Map<string, string>();
+const locatedExecutables = new LRUCache<string, string>({ max: WIN_EXEC_RESOLVE_CACHE_MAX });
+
+/** 仅供单测重置可执行文件路径缓存。 */
+export function resetLocatedExecutablesCacheForTest(): void {
+  locatedExecutables.clear();
+}
 
 function statSignature(file: string): string | null {
   try {
@@ -278,15 +412,28 @@ function statSignature(file: string): string | null {
   }
 }
 
-function executableSignature(cmd: string, envPath: string | undefined, fallbackPaths: readonly string[]): string {
-  const key = [cmd, envPath ?? "", ...fallbackPaths].join("\0");
+function envValueCaseInsensitive(env: Record<string, string | undefined>, name: string): string | undefined {
+  if (env[name] !== undefined) return env[name];
+  const lower = name.toLowerCase();
+  const key = Object.keys(env).find((k) => k.toLowerCase() === lower && env[k] !== undefined);
+  return key === undefined ? undefined : env[key];
+}
+
+function executableSignature(
+  cmd: string,
+  envPath: string | undefined,
+  fallbackPaths: readonly string[],
+  platform: string = process.platform,
+  pathExt?: string,
+): string {
+  const key = [platform, cmd, envPath ?? "", pathExt ?? "", ...fallbackPaths].join("\0");
   const cached = locatedExecutables.get(key);
   if (cached !== undefined) {
     const sig = statSignature(cached);
     if (sig !== null) return sig;
     locatedExecutables.delete(key);
   }
-  const exe = locateExecutableFile(cmd, envPath, fallbackPaths);
+  const exe = locateExecutableFile(cmd, envPath, fallbackPaths, platform, pathExt);
   if (exe === null) return "-";
   const sig = statSignature(exe);
   if (sig === null) return `${exe}:missing`;
@@ -306,34 +453,36 @@ export function vendorCatalogFingerprint(
   userHome: string,
   platform: string = process.platform,
 ): string {
-  const exe = executableSignature(cmd, env.PATH, VENDOR_FALLBACK_PATHS[vendor](userHome, platform));
+  const envPath = platform === "win32" ? envValueCaseInsensitive(env, "PATH") : env.PATH;
+  const pathExt = platform === "win32" ? envValueCaseInsensitive(env, "PATHEXT") : undefined;
+  const exe = executableSignature(cmd, envPath, VENDOR_FALLBACK_PATHS[vendor](userHome, platform), platform, pathExt);
   const files = vendorCatalogWatchFiles(vendor, userHome, env).map((file) => statSignature(file) ?? `${file}:missing`);
   return [exe, ...files].join("|");
 }
 
 /** 项目经理的性格设定文件。 */
 export function personaFilePath(personasDir: string, pmId: number): string {
-  return join(personasDir, `pm-${pmId}.md`);
+  return joinForBase(personasDir, `pm-${pmId}.md`);
 }
 
 /** 项目经理独占的记忆目录（state/pm-memory/<pmId>）。 */
 export function pmMemoryDirPath(pmMemoryDir: string, pmId: number): string {
-  return join(pmMemoryDir, String(pmId));
+  return joinForBase(pmMemoryDir, String(pmId));
 }
 
 /** 项目经理独占记忆目录下的主索引文件（state/pm-memory/<pmId>/MEMORY.md）。 */
 export function pmMemoryIndexPath(pmMemoryDir: string, pmId: number): string {
-  return join(pmMemoryDirPath(pmMemoryDir, pmId), PM_MEMORY_INDEX_FILE);
+  return joinForBase(pmMemoryDirPath(pmMemoryDir, pmId), PM_MEMORY_INDEX_FILE);
 }
 
 /** 一个项目的 Worker worktree 都在这一层：项目经理的 addDirs 加它。 */
 export function projectWorktreesDir(worktreesDir: string, projectId: number): string {
-  return join(worktreesDir, String(projectId));
+  return joinForBase(worktreesDir, String(projectId));
 }
 
 /** 一个 Worker 的 worktree 目录（WorkerRecord.worktreePath）。 */
 export function workerWorktreePath(worktreesDir: string, projectId: number, workerId: number): string {
-  return join(projectWorktreesDir(worktreesDir, projectId), String(workerId));
+  return joinForBase(projectWorktreesDir(worktreesDir, projectId), String(workerId));
 }
 
 /**
@@ -341,18 +490,18 @@ export function workerWorktreePath(worktreesDir: string, projectId: number, work
  * 写的（daemon/launch.ts、router/sandbox.ts）和删的（项目经理彻底删除、Worker 保留期与退役会话清理、总助轨道 B 退出）都走这里。
  */
 export function sessionLaunchDir(launchDir: string, sessionId: number): string {
-  return join(launchDir, String(sessionId));
+  return joinForBase(launchDir, String(sessionId));
 }
 
 /** 删除一个会话的启动目录（同时顺手清掉历史遗留的 `session-<会话编号>` 目录格式）。 */
 export function removeSessionLaunchDir(launchDir: string, sessionId: number): void {
   rmSync(sessionLaunchDir(launchDir, sessionId), { recursive: true, force: true });
-  rmSync(join(launchDir, `session-${sessionId}`), { recursive: true, force: true });
+  rmSync(joinForBase(launchDir, `session-${sessionId}`), { recursive: true, force: true });
 }
 
 /** 一个 Worker 的准备命令日志：每跑一次追加一段（重启后重跑也在同一个文件里）。 */
 export function workerSetupLogPath(setupLogsDir: string, workerId: number): string {
-  return join(setupLogsDir, `worker-${workerId}.log`);
+  return joinForBase(setupLogsDir, `worker-${workerId}.log`);
 }
 
 /**

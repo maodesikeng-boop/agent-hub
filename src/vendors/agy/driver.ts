@@ -464,8 +464,21 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         rmSync(privateTmp, { recursive: true, force: true });
         throw new DriverError("spawn_failed", READONLY_AGY_NEEDS_SANDBOX_MESSAGE);
       }
+      if (launch.readonlyFallbackWarning) {
+        this.log(launch.readonlyFallbackWarning);
+        this.emit(st.id, {
+          type: "driver.warning",
+          uuid: crypto.randomUUID(),
+          message: launch.readonlyFallbackWarning,
+          at: Date.now(),
+        });
+      }
       tmpDir = privateTmp;
-      childEnv = { ...childEnv, TMPDIR: privateTmp };
+      childEnv = {
+        ...childEnv,
+        TMPDIR: privateTmp,
+        ...(process.platform === "win32" ? { TEMP: privateTmp, TMP: privateTmp } : {}),
+      };
     }
     const removeTmp = () => {
       if (tmpDir !== null) rmSync(tmpDir, { recursive: true, force: true });

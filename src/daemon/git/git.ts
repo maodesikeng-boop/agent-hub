@@ -7,6 +7,8 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { WorkspaceProbe } from "../../shared/ledger.ts";
 import { GIT_MAX_BUFFER_BYTES, GIT_PROBE_TIMEOUT_MS, GIT_TIMEOUT_MS } from "../../shared/limits.ts";
+import { findExecutable } from "../../shared/paths.ts";
+import { firstEnvKey, normalizePathForComparison, resolveSpawn } from "../platform/index.ts";
 
 /**
  * 只读地列仓库里的东西（`git ls-files` 这类，对象是别人给的、不一定可信的仓库）时加在子命令前面的参数和环境变量：
@@ -30,6 +32,10 @@ export interface AddWorktreeOptions extends GitOptions {
   branch: string;
   /** 从哪个提交起，默认 `HEAD`（主文件夹当前分支的最新提交）。 */
   base?: string;
+  /**
+   * 在 `git worktree add` 检出工作区文件前预先建好空目录并设置 ACL（Windows 4.4.2：子文件自动继承 `ALLOW FusaWorker-<id>`，零传播开销）。
+   */
+  prepareDir?: (worktreePath: string) => Promise<void> | void;
 }
 
 export interface AddWorktreeResult {
@@ -61,6 +67,37 @@ interface GitRun {
   stderr: string;
 }
 
+function preferGitForWindowsMingw(foundPath: string): string {
+  const match = /^(.*)[\\/]cmd[\\/]git\.exe$/i.exec(foundPath);
+  if (!match) return foundPath;
+  const mingwCandidate = join(match[1]!, "mingw64", "bin", "git.exe");
+  return existsSync(mingwCandidate) ? mingwCandidate : foundPath;
+}
+
+function resolveGitInvocation(
+  args: readonly string[],
+  env: NodeJS.ProcessEnv,
+): { file: string; args: string[]; windowsVerbatimArguments?: boolean } {
+  if (process.platform !== "win32") {
+    return { file: "git", args: [...args] };
+  }
+  const pathKey = firstEnvKey(env, "PATH");
+  const envPath = pathKey ? env[pathKey] : undefined;
+  const pathExtKey = firstEnvKey(env, "PATHEXT");
+  const pathExt = pathExtKey ? env[pathExtKey] : undefined;
+  const found = findExecutable("git", envPath, [], { platform: "win32", pathExt });
+  if (found === null) {
+    return { file: "git", args: [...args] };
+  }
+  const upgraded = preferGitForWindowsMingw(found);
+  const spawned = resolveSpawn({ program: upgraded, args, env }, "win32");
+  return {
+    file: spawned.file,
+    args: spawned.args,
+    windowsVerbatimArguments: spawned.options.windowsVerbatimArguments,
+  };
+}
+
 /**
  * 跑一次 git。退出码非 0 不抛，交给调用方判断；找不到 git、超时才抛 GitError。
  * 一律 `git -C <folder>`：文件夹不存在也只是退出码 128，不会和“找不到 git”混在一起。
@@ -73,15 +110,23 @@ function runGit(
   stdin?: string,
 ): Promise<GitRun> {
   return new Promise((resolvePromise, reject) => {
+    const prefixArgs =
+      process.platform === "win32"
+        ? ["-c", "core.longpaths=true", "-C", folder]
+        : ["-C", folder];
+    const fullEnv: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0", ...extraEnv };
+    const invocation = resolveGitInvocation([...prefixArgs, ...args], fullEnv);
     const child = execFile(
-      "git",
-      ["-C", folder, ...args],
+      invocation.file,
+      invocation.args,
       {
         timeout: timeoutMs,
-        killSignal: "SIGKILL",
+        ...(process.platform === "win32"
+          ? { windowsHide: true, windowsVerbatimArguments: invocation.windowsVerbatimArguments }
+          : { killSignal: "SIGKILL" as const }),
         maxBuffer: GIT_MAX_BUFFER_BYTES,
         encoding: "utf8",
-        env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...extraEnv },
+        env: fullEnv,
       },
       (error, stdout, stderr) => {
         if (!error) return resolvePromise({ code: 0, stdout, stderr });
@@ -188,6 +233,8 @@ export async function addWorktree(options: AddWorktreeOptions): Promise<AddWorkt
   const branchRun = await git(["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
   if (branchRun.code === 0) throw new GitError("branch_taken", `分支 ${branch} 已经存在（可能是别的 Worker 占着），没法再建。`);
 
+  await options.prepareDir?.(worktreePath);
+
   const addRun = await runGit(repoFolder, ["worktree", "add", "-b", branch, worktreePath, baseCommit], timeoutMs, { LC_ALL: "C" });
   if (addRun.code !== 0) throw failed("git worktree add", addRun);
   return { created: true, baseCommit };
@@ -204,7 +251,7 @@ interface WorktreeEntry {
 /** 解析 `git worktree list --porcelain`：每个 worktree 一段，段之间空一行。 */
 function parseWorktreeList(output: string): WorktreeEntry[] {
   const entries: WorktreeEntry[] = [];
-  for (const block of output.split(/\n\s*\n/)) {
+  for (const block of output.replace(/\r\n/g, "\n").split(/\n\s*\n/)) {
     let path: string | null = null;
     let branch: string | null = null;
     let locked: string | null = null;
@@ -220,8 +267,8 @@ function parseWorktreeList(output: string): WorktreeEntry[] {
 
 /** git 登记的是 realpath（macOS 的 /var 其实是 /private/var），所以两边都转成 realpath 再比。 */
 function findWorktree(entries: WorktreeEntry[], worktreePath: string): WorktreeEntry | undefined {
-  const target = realpathLoose(worktreePath);
-  return entries.find((entry) => realpathLoose(entry.path) === target);
+  const target = normalizePathForComparison(realpathLoose(worktreePath));
+  return entries.find((entry) => normalizePathForComparison(realpathLoose(entry.path)) === target);
 }
 
 /** realpath，路径还不存在时：找到最近的存在的上级，转成 realpath 后接上剩下的部分。 */

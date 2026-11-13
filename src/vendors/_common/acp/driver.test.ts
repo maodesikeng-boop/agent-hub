@@ -8,6 +8,7 @@ import { MemorySessionStore, realSleep } from "../../../daemon/driver/test-helpe
 import {
   SANDBOX_EXEC,
   osSandboxAvailable,
+  win32MxcReadonlyAvailable,
   type ReadonlySandboxInput,
 } from "../../../daemon/driver/write-scope.ts";
 import {
@@ -41,7 +42,7 @@ import {
 } from "./index.ts";
 import type { FakeAcpLogEntry, FakeAcpScript } from "./fixtures/fake-acp-agent.ts";
 
-const FAKE_ACP_AGENT = new URL("./fixtures/fake-acp-agent.ts", import.meta.url).pathname;
+const FAKE_ACP_AGENT = fileURLToPath(new URL("./fixtures/fake-acp-agent.ts", import.meta.url));
 const TEST_VENDOR = AGENT_VENDORS[0]!;
 
 interface AcpTestHarness {
@@ -115,7 +116,7 @@ function makeAcpHarness(options: {
   };
 
   const driver = createAcpDriver(config, {
-    executablePath: FAKE_ACP_AGENT,
+    executablePath: wrapScriptAsPlatformCli(FAKE_ACP_AGENT, dir, "fake-acp-agent"),
     store,
     idleCloseMs: 60_000,
     interruptGraceMs: 2_000,
@@ -874,7 +875,9 @@ describe("ACP 驱动底座端到端协议与生命周期", () => {
               return false;
             }
           })()
-        : osSandboxAvailable();
+        : process.platform === "win32"
+          ? win32MxcReadonlyAvailable()
+          : osSandboxAvailable();
 
     // 1. 当 OS 沙箱不可用（osSandboxed: false）时拒绝启动只读 Worker
     const hNoSandbox = track(
@@ -1499,3 +1502,5 @@ describe("ACP 协议纯函数边界与上限守卫", () => {
     expect(h.of("agent.tool_result")).toHaveLength(1);
   });
 });
+import { fileURLToPath } from "node:url";
+import { wrapScriptAsPlatformCli } from "../../../../test/fake-cli-shim.ts";

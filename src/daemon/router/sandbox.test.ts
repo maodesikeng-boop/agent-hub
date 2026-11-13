@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   AGENT_VENDORS,
@@ -75,7 +75,7 @@ describe("Router 轨道 B 只读沙箱与令牌权限守卫", () => {
   it("ensureRouterHomeDir 建立 0700 隔离空目录，且全部 6 家厂商统一产出只读 LaunchFiles（零厂商硬编码）", () => {
     const routerHome = ensureRouterHomeDir(stateDir);
     expect(existsSync(routerHome)).toBe(true);
-    expect(statSync(routerHome).mode & 0o777).toBe(0o700);
+    if (process.platform !== "win32") expect(statSync(routerHome).mode & 0o777).toBe(0o700);
 
     for (const [idx, vendor] of AGENT_VENDORS.entries()) {
       const session = makeAssistantSession({ id: 1000 + idx, vendor, model: null, effort: "low" });
@@ -97,14 +97,23 @@ describe("Router 轨道 B 只读沙箱与令牌权限守卫", () => {
       expect(promptText).toContain("dispatch pm");
       expect(files.env[ENV_HUB_TOKEN]).toBe(`tok-${session.id}`);
       expect(files.env[ENV_HUB_SOCK]).toBe(hubSock);
-      expect(files.env.PATH).toBe(`${hubBinDir}:/usr/bin:/bin`);
+      expect(files.env.PATH).toBe(`${hubBinDir}${delimiter}/usr/bin:/bin`);
       expect(files.readonly).toBeDefined();
       expect(files.readonly!.secretPaths.some((p) => p.includes(stateDir))).toBe(true);
 
       if (vendorSpec(vendor).capabilities.readonly === "settings") {
         expect(files.settingsFile).toBeDefined();
         const settingsJson = readFileSync(files.settingsFile!, "utf8");
-        expect(settingsJson).toContain(hubSock);
+        const parsedSettings = JSON.parse(settingsJson) as {
+          permissions?: { defaultMode?: string };
+          sandbox?: { enabled?: boolean; network?: { allowUnixSockets?: string[] } };
+        };
+        expect(parsedSettings.permissions?.defaultMode).toBe("default");
+        if (process.platform === "win32") {
+          expect(parsedSettings.sandbox?.enabled).toBe(false);
+        } else {
+          expect(parsedSettings.sandbox?.network?.allowUnixSockets).toContain(hubSock);
+        }
         expect(files.writeScope).toBeUndefined();
       } else {
         expect(files.writeScope).toBeDefined();

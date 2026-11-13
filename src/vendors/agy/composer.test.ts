@@ -45,16 +45,14 @@ describe("agy 输入框实现（parseAgyCommands / agyComposerBase / createAgyCo
 
     const dir = mkdtempSync(join(tmpdir(), "hub-agy-commands-"));
     try {
-      const agyPath = join(dir, "agy");
-      writeFileSync(
-        agyPath,
+      const agyPath = writeExecutableNodeScript(
+        join(dir, "agy"),
         `#!/usr/bin/env node
 const fs = require("node:fs");
 fs.writeFileSync(${JSON.stringify(join(dir, "argv.json"))}, JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd() }));
 process.stdout.write(JSON.stringify({ command: { name: "skills", data: { skills: [{ name: "why", description: "Explain why" }] } } }) + "\\n");
 `,
       );
-      chmodSync(agyPath, 0o755);
       const composer = createAgyComposer({ executablePath: agyPath });
       const commands = await composer.queryCommands({ cwd: dir, addDirs: [] }, new AbortController().signal);
       expect(commands).toEqual([
@@ -69,3 +67,4 @@ process.stdout.write(JSON.stringify({ command: { name: "skills", data: { skills:
     }
   });
 });
+import { writeExecutableNodeScript } from "../../../test/fake-cli-shim.ts";

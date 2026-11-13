@@ -186,6 +186,19 @@ export interface WorktreeHandlerDeps {
   setup: Pick<SetupRunner, "start">;
   /** 这个 Worker 的准备命令日志（paths.ts 的 workerSetupLogPath）。 */
   setupLogPath: (workerId: WorkerId) => string;
+  /**
+   * 可选：跨卷同盘 worktree 落点与空目录 ACL 预准备钩子（Windows 4.4.2 & 6.2）。
+   * 返回最终 worktreePath 及在 `git worktree add` 前执行的空目录准备函数。
+   */
+  resolveWorktreePlacement?: (task: {
+    workerId: WorkerId;
+    sessionId: number;
+    repo: string;
+    worktreePath: string;
+  }) => {
+    worktreePath: string;
+    prepareDir?: (worktreePath: string) => Promise<void> | void;
+  };
 }
 
 /**
@@ -199,11 +212,21 @@ export function createWorktreeCreateHandler(deps: WorktreeHandlerDeps): ActionHa
     const { workerId } = action.params;
     const task = deps.ledger.getWorktreeTask(workerId);
     if (task === null || task.status === "ended") return { kind: "done" };
+    const placement = deps.resolveWorktreePlacement
+      ? deps.resolveWorktreePlacement({
+          workerId,
+          sessionId: task.sessionId,
+          repo: task.repo,
+          worktreePath: task.worktreePath,
+        })
+      : { worktreePath: task.worktreePath };
+    const effectiveWorktreePath = placement.worktreePath;
     const { baseCommit } = await deps.addWorktree({
       repoFolder: task.repo,
-      worktreePath: task.worktreePath,
+      worktreePath: effectiveWorktreePath,
       branch: task.branch,
       ...(task.base ? { base: task.base } : {}),
+      ...(placement.prepareDir ? { prepareDir: placement.prepareDir } : {}),
     });
     if (task.setupCommand === null) {
       deps.ledger.onWorktreeCreated(workerId, baseCommit);
@@ -215,7 +238,7 @@ export function createWorktreeCreateHandler(deps: WorktreeHandlerDeps): ActionHa
       workerId,
       sessionId: task.sessionId,
       command: task.setupCommand,
-      cwd: task.worktreePath,
+      cwd: effectiveWorktreePath,
       rootPath: task.repo,
       logPath: deps.setupLogPath(workerId),
       onDone: (outcome) => deps.ledger.onWorktreeCreated(workerId, baseCommit, outcome),

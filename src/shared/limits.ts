@@ -845,3 +845,25 @@ export const AUTO_RELOAD_MAX_DRAFTS = 50;
 export const AUTO_RELOAD_MAX_DRAFT_BYTES = 1024 * 1024;
 /** 网页：存进 sessionStorage 的草稿多久没被认领就当过期丢掉（1 天）。 */
 export const AUTO_RELOAD_DRAFT_TTL_MS = 24 * 60 * 60_000;
+
+// ---- Windows 原生运行时、缓存上限与重试预算（docs/windows-native-design.md 第 6.3 节）----
+/** Windows 辅助程序（fusa-run.exe、hub.exe）所在目录覆盖环境变量。 */
+export const ENV_WIN_HELPERS = "AGENT_HUB_WIN_HELPERS";
+/** 可执行文件路径解析缓存上限（PATH + PATHEXT 命中结果，满了清空重算，照 orca）。 */
+export const WIN_EXEC_RESOLVE_CACHE_MAX = 256;
+/** `.cmd` 垫片解析缓存上限（按路径 + mtime + size 校验失效，满了清空）。 */
+export const WIN_CMD_SHIM_CACHE_MAX = 256;
+/** 单个 `.cmd` 垫片文件最多读取字节数（64 KiB），防误读巨大非垫片文件。 */
+export const WIN_CMD_SHIM_MAX_BYTES = 64 * 1024;
+/** 已完成受保护根 ACL 校验的目录缓存上限（按进程生命周期去重避免每次派活重查 DACL）。 */
+export const WIN_PROTECTED_ROOTS_CACHE_MAX = 64;
+/** `state/win-sandbox-sids.json` 持久化的单 Worker SID 条目上限。 */
+export const WIN_WORKER_SIDS_MAX = 512;
+/** `state/worktree-roots.json` 登记的历史与当前跨卷 worktree 根目录上限。 */
+export const MAX_WORKTREE_ROOTS = 32;
+/** Windows 沙箱探针（`fusa-run.exe probe`）与辅助命令单次执行超时（毫秒）。 */
+export const WIN_HELPER_PROBE_TIMEOUT_MS = 8_000;
+/** Windows 删目录遇短暂文件锁（EBUSY/ENOTEMPTY/EPERM）整遍重删退避间隔（毫秒，共 4 遍 < 4 秒）。 */
+export const WIN_REMOVE_PASS_DELAYS_MS: readonly number[] = [250, 500, 1_000, 2_000];
+/** Windows 原子写 rename 遇短暂占用（EPERM/EACCES/EBUSY）重试间隔（毫秒，共 5 次 < 1 秒）。 */
+export const WIN_RENAME_RETRY_DELAYS_MS: readonly number[] = [50, 100, 150, 200, 250];

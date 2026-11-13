@@ -1,5 +1,6 @@
 // 账本里的项目（11-03 起一个项目经理就是一个会话）：每个项目经理最多一个进行中的项目，挂在它唯一的那个对话上。
 // 建项目、挂和移除文件夹；那个对话的会话的 cwd、addDirs 跟着项目的文件夹走（foldersChanged），下一条消息前驱动层按新值重启。
+import { existsSync } from "node:fs";
 import { basename } from "node:path";
 import { normalizeName, utf8Bytes } from "../../shared/domain.ts";
 import type { AgentSessionRow, PmId, ProjectFolder, ProjectId } from "../../shared/domain.ts";
@@ -15,6 +16,7 @@ import { toProject, toProjectFolder } from "./rows.ts";
 import type { ProjectDbRow, ProjectFolderDbRow } from "./rows.ts";
 import type { LedgerSessions } from "./sessions.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
+import { normalizePathForComparison } from "../platform/index.ts";
 
 export type LedgerProjects = ReturnType<typeof createLedgerProjects>;
 
@@ -97,7 +99,26 @@ export function createLedgerProjects(
     const session = currentSession(project.conversation_id);
     if (session !== null && main !== undefined) {
       const usesWorktrees = db.get("SELECT 1 AS x FROM workers WHERE project_id = ? AND workspace = 'worktree' LIMIT 1", project.id) !== undefined;
-      const addDirs = usesWorktrees ? [...others, projectWorktreesDir(worktreesDir, project.id)] : others;
+      let addDirs = others;
+      if (usesWorktrees) {
+        const primaryProjWt = projectWorktreesDir(worktreesDir, project.id);
+        const primaryRealKey = normalizePathForComparison(realpathOrLiteral(primaryProjWt, userHome));
+        const wtDirs = [primaryProjWt];
+        const seenKeys = new Set<string>([
+          normalizePathForComparison(primaryProjWt),
+          primaryRealKey,
+        ]);
+        for (const extraRoot of files.extraWorktreeRoots?.() ?? []) {
+          const candidate = projectWorktreesDir(extraRoot, project.id);
+          if (!existsSync(candidate)) continue;
+          const candidateKey = normalizePathForComparison(realpathOrLiteral(candidate, userHome));
+          if (!seenKeys.has(candidateKey)) {
+            seenKeys.add(candidateKey);
+            wtDirs.push(candidate);
+          }
+        }
+        addDirs = [...others, ...wtDirs];
+      }
       db.run("UPDATE agent_sessions SET cwd = ?, add_dirs = ?, updated_at = ? WHERE id = ?", main.path, JSON.stringify(addDirs), t, session.id);
     }
     db.run(

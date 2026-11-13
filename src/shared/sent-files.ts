@@ -142,6 +142,8 @@ export function linkNodesOf(tree: MdNode): MdNode[] {
 export type LocalHref = { kind: "absolute"; path: string } | { kind: "home"; path: string } | { kind: "relative"; path: string };
 
 const URL_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
+const WIN_DRIVE_ABS = /^[A-Za-z]:[\\/]/;
+const FILE_URL_WIN_DRIVE = /^\/([A-Za-z]:[\\/][\s\S]*)$/;
 
 function decodePercent(text: string): string {
   try {
@@ -162,14 +164,28 @@ export function parseLocalHref(href: string): LocalHref | null {
   if (/^file:/i.test(raw)) {
     const rest = raw.replace(/^file:\/\//i, "");
     if (rest === raw) return null;
-    const path = rest.startsWith("/") ? rest : /^localhost\//i.test(rest) ? rest.slice("localhost".length) : null;
-    return path === null ? null : { kind: "absolute", path: decodePercent(path) };
+    const afterLocalhost = /^localhost(?:\/|(?=[A-Za-z]:[\\/]))/i.test(rest) ? rest.slice("localhost".length) : null;
+    const candidate = rest.startsWith("/") || WIN_DRIVE_ABS.test(rest) ? rest : afterLocalhost;
+    const path = candidate && (candidate.startsWith("/") || WIN_DRIVE_ABS.test(candidate)) ? candidate : null;
+    if (path === null) return null;
+    const decoded = decodePercent(path);
+    const winDrive = FILE_URL_WIN_DRIVE.exec(decoded);
+    return { kind: "absolute", path: winDrive ? winDrive[1]! : decoded };
+  }
+  const decodedRaw = decodePercent(raw);
+  if (decodedRaw.includes("\u0000")) return null;
+  if (WIN_DRIVE_ABS.test(decodedRaw)) {
+    return { kind: "absolute", path: decodedRaw };
   }
   if (URL_SCHEME.test(raw) || raw.startsWith("//")) return null;
-  const path = decodePercent(raw);
-  if (path.includes("\u0000")) return null;
+  if (raw.startsWith("\\\\")) {
+    return { kind: "absolute", path: decodedRaw };
+  }
+  const path = decodedRaw;
   if (path.startsWith("/")) return { kind: "absolute", path };
-  if (path === "~" || path.startsWith("~/")) return { kind: "home", path: path.slice(1) };
+  if (path === "~" || path.startsWith("~/") || path.startsWith("~\\")) {
+    return { kind: "home", path: path.slice(1).replace(/\\/g, "/") };
+  }
   return { kind: "relative", path };
 }
 
@@ -197,17 +213,46 @@ export function locationFallbackPaths(href: string, path: string): string[] {
   return out;
 }
 
+function extractRawWindowsLinkTarget(node: MdNode, rawMarkdown: string | undefined): string | null {
+  if (!rawMarkdown) return null;
+  const pos = (node as { position?: { start?: { offset?: number }; end?: { offset?: number } } }).position;
+  const start = pos?.start?.offset;
+  const end = pos?.end?.offset;
+  if (typeof start !== "number" || typeof end !== "number" || start < 0 || end > rawMarkdown.length || start >= end) {
+    return null;
+  }
+  const slice = rawMarkdown.slice(start, end);
+  const closeBracketParen = slice.indexOf("](");
+  if (closeBracketParen >= 0 && slice.endsWith(")")) {
+    let inner = slice.slice(closeBracketParen + 2, -1).trim();
+    if (inner.startsWith("<") && inner.endsWith(">")) {
+      inner = inner.slice(1, -1);
+    }
+    if (/^(?:[A-Za-z]:\\|\\\\|~\\|file:\/\/(?:localhost\/?)?[A-Za-z]:\\)/i.test(inner)) {
+      return inner;
+    }
+  }
+  if (slice.startsWith("<") && slice.endsWith(">")) {
+    const inner = slice.slice(1, -1);
+    if (/^(?:[A-Za-z]:\\|\\\\|file:\/\/(?:localhost\/?)?[A-Za-z]:\\)/i.test(inner)) {
+      return inner;
+    }
+  }
+  return null;
+}
+
 /**
  * 回复里写成本机路径的链接（候选）：按出现顺序去重（同一个地址写两次只算一个）。图片和链接一视同仁。
  * 不一定都是文件（站内链接 /login、不存在的相对路径），守护进程逐个判断（daemon/sent-files.ts），最多收 MAX_SENT_FILES_PER_MESSAGE 个。
  */
-export function localLinksOf(tree: MdNode): { href: string; local: LocalHref }[] {
+export function localLinksOf(tree: MdNode, rawMarkdown?: string): { href: string; local: LocalHref }[] {
   const seen = new Set<string>();
   const out: { href: string; local: LocalHref }[] = [];
   for (const node of linkNodesOf(tree)) {
     const href = node.url!;
     if (seen.has(href)) continue;
-    const local = parseLocalHref(href);
+    const rawWinTarget = extractRawWindowsLinkTarget(node, rawMarkdown);
+    const local = parseLocalHref(rawWinTarget ?? href);
     if (local === null) continue;
     seen.add(href);
     out.push({ href, local });

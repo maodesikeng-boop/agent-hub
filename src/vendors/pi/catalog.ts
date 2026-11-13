@@ -2,7 +2,7 @@
 // 运行 `pi --offline --list-models`（纯本地离线读凭据与内置/缓存模型库，不发网络请求、不建会话）：
 // - 输出 "No models available..." 或列表为空 → signed_out，parse 返回 null（使用打包兜底模型）；
 // - 输出非空表格 → available；超过 MAX_CATALOG_MODELS（50）时先按 provider 分组、每组按新旧优先排，再跨模型商轮询截取前 50 项。
-import { spawn } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import {
   KILL_WAIT_MS,
   MAX_CATALOG_DESCRIPTION_CHARS,
@@ -25,6 +25,7 @@ import {
 } from "../../daemon/driver/model-catalog.ts";
 import { forceKill, termGroupAfterExit } from "../../daemon/driver/process.ts";
 import { buildChildEnv } from "../../daemon/driver/protocol.ts";
+import { spawnOwnedProcess } from "../../daemon/platform/index.ts";
 import { trackChild } from "../../daemon/process-ledger.ts";
 import type { VendorCatalogProbe, VendorCatalogSourceOptions } from "../../daemon/vendors/types.ts";
 import { PI_NO_PROJECT_TRUST_ARGS } from "./composer.ts";
@@ -280,13 +281,18 @@ function queryPiListModels(options: PiCatalogQueryOptions): Promise<{ stdout: st
   const { piPath, cwd, timeoutMs = MODEL_CATALOG_TIMEOUT_MS, signal } = options;
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new Error("cancelled"));
-    const child = spawn(piPath, [...PI_LIST_MODELS_ARGS], {
-      cwd,
-      env: buildChildEnv(options.env ?? process.env, undefined),
-      stdio: ["pipe", "pipe", "pipe"],
-      detached: true,
-    });
-    trackChild(child, "probe:pi-list-models", { detached: true });
+    let spawned: { child: ChildProcessWithoutNullStreams; detached: boolean };
+    try {
+      spawned = spawnOwnedProcess(piPath, [...PI_LIST_MODELS_ARGS], {
+        cwd,
+        env: buildChildEnv(options.env ?? process.env, undefined),
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } catch (err) {
+      return reject(err);
+    }
+    const { child, detached } = spawned;
+    trackChild(child, "probe:pi-list-models", { detached });
     child.once("exit", () => termGroupAfterExit(child));
     child.stdin.on("error", () => {});
     child.stdin.end();

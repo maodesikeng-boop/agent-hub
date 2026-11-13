@@ -2,29 +2,42 @@
 // 引了 node:path，只给守护进程和脚本用；网页要的相对路径常量在 spec.ts。PATH 里找不到可执行文件时去哪找（fallbackPaths）、凭据变量（A13）、
 // Linux 上的安装命令（D6）也在这里（见 daemon-types.ts 的 VendorPathsModule）。
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { posix, win32 } from "node:path";
 import type { VendorPathsModule } from "../daemon-types.ts";
 import { AGY_CLI_HOME_REL, AGY_LEGACY_HOME_REL, AGY_MCP_CONFIG_REL } from "./spec.ts";
 
+function joinByStyle(base: string, ...parts: string[]): string {
+  return /^[A-Za-z]:/.test(base) || base.startsWith("\\\\") || base.includes("\\")
+    ? win32.join(base, ...parts)
+    : posix.join(base, ...parts);
+}
+
 export const fallbackPaths: VendorPathsModule["fallbackPaths"] = ({ userHome, platform, linuxInstallDirs, join }) => {
+  if (platform === "win32") {
+    return [
+      join(userHome, "AppData", "Local", "agy", "bin", "agy.exe"),
+      join(userHome, ".local", "bin", "agy.exe"),
+      join(userHome, "AppData", "Roaming", "npm", "agy.cmd"),
+    ];
+  }
   const home = join(userHome, ".local", "bin", "agy");
   return platform === "darwin" ? [home] : [home, ...linuxInstallDirs.map((dir) => join(dir, "agy"))];
 };
 
 /** agy CLI 的数据根目录（~/.gemini/antigravity-cli）。 */
 export function agyCliDataDir(userHome: string = homedir()): string {
-  return join(userHome, AGY_CLI_HOME_REL);
+  return joinByStyle(userHome, AGY_CLI_HOME_REL);
 }
 
 /** agy 数据目录下的各子路径。 */
 export function agyDataPaths(root: string = agyCliDataDir()) {
   return {
     root,
-    conversationDb: (id: string) => join(root, "conversations", `${id}.db`),
-    brainDir: (id: string) => join(root, "brain", id),
-    mcpCacheDir: join(root, "mcp"),
-    summaryDb: join(root, "conversation_summaries.db"),
-    subDir: (sub: string) => join(root, sub),
+    conversationDb: (id: string) => joinByStyle(root, "conversations", `${id}.db`),
+    brainDir: (id: string) => joinByStyle(root, "brain", id),
+    mcpCacheDir: joinByStyle(root, "mcp"),
+    summaryDb: joinByStyle(root, "conversation_summaries.db"),
+    subDir: (sub: string) => joinByStyle(root, sub),
   };
 }
 
@@ -32,8 +45,8 @@ export function agyDataPaths(root: string = agyCliDataDir()) {
 export function agyHomePaths(userHome: string = homedir()) {
   return {
     cliDir: agyCliDataDir(userHome),
-    legacyDir: join(userHome, AGY_LEGACY_HOME_REL),
-    mcpConfigFile: join(userHome, AGY_MCP_CONFIG_REL),
+    legacyDir: joinByStyle(userHome, AGY_LEGACY_HOME_REL),
+    mcpConfigFile: joinByStyle(userHome, AGY_MCP_CONFIG_REL),
   };
 }
 

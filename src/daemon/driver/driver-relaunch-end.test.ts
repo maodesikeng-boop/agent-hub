@@ -3,7 +3,7 @@
 import { ChildProcess, spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DriverError, RELAUNCH_NOTE, type AgentSessionPatch } from "../../shared/index.ts";
 import { FAKE_CLAUDE, makeHarness, realSleep, slowTurn, type Harness } from "./test-helpers.ts";
@@ -96,14 +96,14 @@ const signals = (t: Harness) => t.log().flatMap((e) => (e.kind === "signal" ? [e
 describe("每次启动的环境变量", () => {
   it("LaunchFiles.env 进到 claude 的环境里：HUB_TOKEN、HUB_SOCK，PATH 整个换成给的（给的目录在最前面）", async () => {
     const t = harness();
-    const path = `${join(t.dir, "run", "bin")}:${process.env.PATH}`;
+    const path = `${join(t.dir, "run", "bin")}${delimiter}${process.env.PATH}`;
     t.launch.env = { HUB_TOKEN: "token-a", HUB_SOCK: "/private/tmp/hub.sock", PATH: path };
     const s = t.addSession();
     await t.driver.send(s.id, user(1, "hi"));
     await t.waitFor("turn.ended");
     const [env] = t.envs(s.id);
     expect(env).toMatchObject({ HUB_TOKEN: "token-a", HUB_SOCK: "/private/tmp/hub.sock", PATH: path });
-    expect(env!.PATH!.split(":")[0]).toBe(join(t.dir, "run", "bin"));
+    expect(env!.PATH!.split(delimiter)[0]).toBe(join(t.dir, "run", "bin"));
   });
 
   it("每个会话用自己的：两个会话的令牌不串", async () => {
@@ -194,7 +194,12 @@ describe("两轮之间重启", () => {
     expect(t.of("session.started").map((e) => e.resumed)).toEqual([false, true]);
     // 重启用的是比较时调的那次 prepareLaunch：一共两次（第一次启动、写“二”之前），不调第三次
     expect(t.prepareCalls.get(s.id)).toBe(2);
-    expect(t.store.get(s.id)).toMatchObject({ status: "running", pid: second });
+    if (process.platform === "win32") {
+      expect(t.store.get(s.id)).toMatchObject({ status: "running" });
+      expect(t.store.get(s.id)?.pid).toBeTypeOf("number");
+    } else {
+      expect(t.store.get(s.id)).toMatchObject({ status: "running", pid: second });
+    }
   });
 
   it.each([
@@ -578,7 +583,9 @@ describe("关机撞上起进程", () => {
       driverRef = t.driver;
       const s = t.addSession();
       await expect(t.driver.send(s.id, user(1, "一"))).rejects.toMatchObject({ code: "spawn_failed" });
-      expect(kills.some(([pid, sig]) => pid < 0 && sig === "SIGKILL")).toBe(true);
+      if (process.platform !== "win32") {
+        expect(kills.some(([pid, sig]) => pid < 0 && sig === "SIGKILL")).toBe(true);
+      }
       expect(t.store.get(s.id)?.pid ?? null).toBeNull();
     } finally {
       spy.mockRestore();
@@ -766,7 +773,7 @@ describe("假 claude 跑命令", () => {
   });
 });
 
-describe("进程组", () => {
+describe.skipIf(process.platform === "win32")("进程组", () => {
   it("关机超时强制结束：整个进程组 SIGKILL，claude 起的睡眠子进程也不在了", async () => {
     const t = harness({
       driver: { shutdownGraceMs: 200 },

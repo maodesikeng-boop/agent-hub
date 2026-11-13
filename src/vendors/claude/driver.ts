@@ -3,6 +3,9 @@
 // 本文件负责 Claude 专有协议：stream-json 行组装与解析、一轮中途写入（MID_TURN_CAPABILITIES + command_lifecycle 对账）、
 // control_request / control_response（只读 Worker 审批、优雅打断与 queryCommands）。
 import { randomUUID } from "node:crypto";
+import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   DriverError,
   EMPTY_TOKEN_USAGE,
@@ -56,7 +59,15 @@ import {
   parseToolResults,
 } from "./protocol.ts";
 import { StreamingToolPreviewTracker, lineUuid } from "../../daemon/driver/protocol.ts";
-import { spawnInWriteScope } from "../../daemon/driver/write-scope.ts";
+import {
+  WORKER_NEEDS_OS_SANDBOX_MESSAGE,
+  scanSecretGlobs,
+  spawnInWriteScope,
+  wrapInReadonlyOsSandbox,
+  type ReadonlySandboxInput,
+  type ScopedSpawn,
+  type SpawnCommand,
+} from "../../daemon/driver/write-scope.ts";
 
 /** 写进去（或正要写）的一行，等它的 result。 */
 interface Batch extends BaseBatch {
@@ -96,14 +107,22 @@ interface SessionState extends BaseSessionState<Proc, Batch> {
 export interface ClaudeDriverOptions extends DriverOptions {
   /** 这个驱动对应的厂商实现（命令的认法、写给 agent 的 content 怎么拼、命令列表怎么解析），默认 composer.ts 的 claudeComposerBase。 */
   composer?: VendorComposerBase;
+  /** 只读外层包装覆盖（供 Windows 无 MXC 回退 / MXC 单测注入）。 */
+  readonlySpawn?: (base: SpawnCommand, input: ReadonlySandboxInput) => ScopedSpawn;
+  /** 平台覆盖（单测用，默认 process.platform）。 */
+  platform?: NodeJS.Platform;
 }
 
 export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
   readonly #claudePath: string;
+  readonly #readonlySpawn?: (base: SpawnCommand, input: ReadonlySandboxInput) => ScopedSpawn;
+  readonly #platform: NodeJS.Platform;
 
   constructor(options: ClaudeDriverOptions) {
     super("claude", { ...options, composer: options.composer ?? claudeComposerBase });
     this.#claudePath = options.executablePath;
+    this.#readonlySpawn = options.readonlySpawn;
+    this.#platform = options.platform ?? process.platform;
   }
 
   protected createSessionState(id: SessionId): SessionState {
@@ -362,19 +381,76 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
   async #spawn(st: SessionState, resume: boolean, prepared: LaunchFiles | null): Promise<Proc> {
     const { row, files } = await this.resolveLaunchFiles(st, prepared);
     if (files.skillsDir) ensureClaudeSkillPlugin(files.skillsDir);
-    const launch = spawnInWriteScope(
-      "claude",
-      { command: this.#claudePath, args: buildClaudeArgs(row, files, resume) },
-      files.writeScope ?? null,
-      this.opts.log,
-      `session ${st.id}`,
-    );
+    const claudeArgs = buildClaudeArgs(row, files, resume);
+    let launch: ScopedSpawn;
+    let childEnv: Record<string, string> = { ...files.env };
+    let cleanupReadonlyTmp: (() => void) | undefined;
+
+    if (files.readonly && this.#platform === "win32") {
+      const realOrSelf = (p: string) => {
+        try {
+          return realpathSync(p);
+        } catch {
+          return p;
+        }
+      };
+      const privateTmp = mkdtempSync(join(realOrSelf(tmpdir()), "agent-hub-ro-"));
+      let cleaned = false;
+      cleanupReadonlyTmp = () => {
+        if (cleaned) return;
+        cleaned = true;
+        rmSync(privateTmp, { recursive: true, force: true });
+      };
+      const home = realOrSelf(homedir());
+      const claudeDirs = [join(home, ".claude"), join(home, ".cache"), join(home, ".npm")].filter((d) => existsSync(d)).map(realOrSelf);
+      const roProtectedRoots = files.writeScope?.protectedRoots ?? files.readonly.protectedRoots;
+      const roInput: ReadonlySandboxInput = {
+        tmpDir: privateTmp,
+        ...(files.readonly.stateDir ? { stateDir: files.readonly.stateDir } : {}),
+        ...(roProtectedRoots ? { protectedRoots: roProtectedRoots } : {}),
+        writableDirs: claudeDirs,
+        writableFileRegexes: [],
+        secretPaths: [
+          ...new Set([
+            ...files.readonly.secretPaths.map(realOrSelf),
+            ...scanSecretGlobs([row.cwd, ...row.addDirs], files.readonly.secretGlobs),
+          ]),
+        ],
+        secretGlobs: [...files.readonly.secretGlobs],
+      };
+      const wrap = this.#readonlySpawn ?? ((base, input) => wrapInReadonlyOsSandbox(base, input, this.#platform));
+      launch = wrap({ command: this.#claudePath, args: claudeArgs }, roInput);
+      if (!launch.osSandboxed) {
+        cleanupReadonlyTmp();
+        throw new DriverError("spawn_failed", WORKER_NEEDS_OS_SANDBOX_MESSAGE);
+      }
+      if (launch.readonlyFallbackWarning) {
+        this.log(launch.readonlyFallbackWarning);
+        this.emit(st.id, {
+          type: "driver.warning",
+          uuid: randomUUID(),
+          message: launch.readonlyFallbackWarning,
+          at: Date.now(),
+        });
+      }
+      childEnv = { ...childEnv, TMPDIR: privateTmp, TEMP: privateTmp, TMP: privateTmp };
+    } else {
+      launch = spawnInWriteScope(
+        "claude",
+        { command: this.#claudePath, args: claudeArgs },
+        files.writeScope ?? null,
+        this.opts.log,
+        `session ${st.id}`,
+        this.#platform,
+      );
+    }
     const child = await this.spawnDetachedChild(
       this.#claudePath,
       launch.command,
       launch.args,
       row.cwd,
-      files.env,
+      childEnv,
+      cleanupReadonlyTmp,
     );
     const { baseProc, resolveExited } = this.createBaseProc<ClaudeStartupOutcome>(child, resume, row, files);
     const proc: Proc = {
@@ -386,6 +462,7 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       toolPreviews: new StreamingToolPreviewTracker(),
     };
     this.attachChildProcess(st, proc, resolveExited, () => {
+      cleanupReadonlyTmp?.();
       proc.readonlyGate?.dispose();
       proc.toolPreviews.clear();
     });

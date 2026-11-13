@@ -7,7 +7,7 @@
 // 用到的超时都在 src/shared/limits.ts。
 import { createHash, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { hostname } from "node:os";
 import { fileURLToPath } from "node:url";
 import {
@@ -46,10 +46,12 @@ import { createHandoverRunner, type HandoverRunner } from "./handover/runner.ts"
 import { startWorktreeCleanup, type WorktreeCleanup } from "./worktree-cleanup.ts";
 import {
   findExecutable,
+  projectWorktreesDir,
   VENDOR_FALLBACK_PATHS,
   resolveHubPaths,
   resolveVendorExecutables,
   workerSetupLogPath,
+  workerWorktreePath,
 } from "../shared/paths.ts";
 import { createActionExecutor } from "./actions/index.ts";
 import { createProcessLedger, installProcessLedger } from "./process-ledger.ts";
@@ -88,7 +90,7 @@ import { DEFAULT_PM_NAME } from "./prompt.ts";
 import { prepareSentFilesDir } from "./sent-files.ts";
 import { resolveUpload } from "./uploads.ts";
 import { createSetupRunner, type SetupRunner } from "./setup/index.ts";
-import { acquireLock, createSessionStore, openStore, type Db, type DirLock } from "./store/index.ts";
+import { DaemonAlreadyRunningError, acquireLock, createSessionStore, openStore, type Db, type DirLock } from "./store/index.ts";
 import { StartupError } from "./startup-error.ts";
 import { loadOrCreateUiToken, loginUrl, rotateUiToken, startUiServer, type RunningUiServer } from "./ui-server/index.ts";
 import { defaultDeviceName, loadOrCreateDevice, saveDevice } from "./device.ts";
@@ -105,9 +107,17 @@ import {
 } from "./router/index.ts";
 import { createTunnelService, startTunnelAdmin, type RunningTunnelAdmin, type TunnelService } from "./tunnel/index.ts";
 import {
+  allowWin32WorkerWorktreeAcl,
   createSleepInhibitor,
   createTailnetProbe,
+  ensureProjectWorktreeBridge,
+  ensureWin32ProtectedRootAcl,
+  hardenWin32PrivateDirAcl,
+  isPathInsideOrEqual,
+  loadManagedWorktreeRoots,
+  normalizePathForComparison,
   runTailscaleStatus,
+  selectWorktreeRootForProject,
   serveCommandLine,
   serveTargetKind,
   tailscaleCommand,
@@ -138,6 +148,10 @@ export interface DaemonOptions {
    * reloadExitCode 退出，由外壳（Fusa.app、Windows 桌面端、systemd）立即拉起。不给 = 没有外壳监管，不接受热重启（409）。
    */
   onSelfReload?: () => void;
+  /**
+   * 外部经管理管道 `POST /admin/shutdown`（带界面令牌）请求优雅关机时调它（Windows 下替代外部无法送达的 SIGTERM）。
+   */
+  onExternalShutdown?: () => void;
 }
 
 export interface RunningDaemon {
@@ -170,7 +184,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
   const env = options.env ?? process.env;
   const log = options.log ?? ((line) => console.error(line));
   const paths = resolveHubPaths(env, options.userHome);
-  const executables = resolveVendorExecutables(paths, env.PATH, options.userHome);
+  const envPathForVendors = process.platform === "win32" ? (env.PATH ?? env.Path) : env.PATH;
+  const executables = resolveVendorExecutables(paths, envPathForVendors, options.userHome);
   const executablePaths = Object.fromEntries(AGENT_VENDORS.map((vendor) => [vendor, executables[vendor].path])) as Record<AgentVendor, string>;
   const port = parsePort(env[ENV_PORT]);
 
@@ -303,6 +318,19 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const stateDir = realpathSync.native(paths.stateDir);
     const worktreesDir = realpathSync.native(paths.worktreesDir);
     const pmMemoryDir = realpathSync.native(paths.pmMemoryDir);
+    if (process.platform === "win32") {
+      mkdirSync(paths.runDir, { recursive: true, mode: 0o700 });
+      mkdirSync(paths.syncBackupsDir, { recursive: true, mode: 0o700 });
+      // Windows 0600/0700 等价保护 + 数据目录受保护根拒写 ACL（幂等检查，已满足则跳过）
+      try {
+        ensureWin32ProtectedRootAcl(stateDir, dataDir, { env });
+        hardenWin32PrivateDirAcl(stateDir, stateDir, { env });
+        hardenWin32PrivateDirAcl(stateDir, paths.runDir, { env });
+        hardenWin32PrivateDirAcl(stateDir, dirname(paths.syncBackupsDir), { env });
+      } catch (aclErr) {
+        log(`${LOG_PREFIX} Windows 目录安全 ACL 初始化提示：${aclErr instanceof Error ? aclErr.message : String(aclErr)}`);
+      }
+    }
     // 模型名单和这台设备上各家的状态（没装 / 没登录，docs/vendor-availability-design.md）：第一次有人要（网页打开资料页、
     // 新建弹窗）时按厂商分别问本机 CLI，在用户主目录下起，不带任何项目的设置；装没装每次只查文件。
     // 账本写系统消息时用它缓存着的显示名
@@ -331,6 +359,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       pmMemoryDir,
       dataHome: paths.home,
       worktreesDir,
+      extraWorktreeRoots: () => loadManagedWorktreeRoots(stateDir, worktreesDir),
       launchDir: paths.launchDir,
       setupLogsDir: paths.setupLogsDir,
       uploadsDir,
@@ -393,6 +422,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       dataDir,
       stateDir,
       worktreesDir,
+      protectedRoots: () => loadManagedWorktreeRoots(stateDir, worktreesDir),
       getLaunchContext: (sessionId) => ledger.getLaunchContext(sessionId),
       tokens: endedOnRevokedTokens(tokens),
       // realpath 过的：写进 HUB_SOCK 和设置文件的 allowUnixSockets
@@ -489,7 +519,49 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     executor.register("session.end", createSessionEndHandler(deps));
     executor.register(
       "worktree.create",
-      createWorktreeCreateHandler({ ledger, addWorktree, setup, setupLogPath: (workerId) => workerSetupLogPath(paths.setupLogsDir, workerId) }),
+      createWorktreeCreateHandler({
+        ledger,
+        addWorktree,
+        setup,
+        setupLogPath: (workerId) => workerSetupLogPath(paths.setupLogsDir, workerId),
+        resolveWorktreePlacement: ({ workerId, sessionId, repo, worktreePath }) => {
+          let targetPath = worktreePath;
+          if (isPathInsideOrEqual(worktreesDir, worktreePath)) {
+            const selected = selectWorktreeRootForProject({
+              projectFolder: repo,
+              dataDir,
+              defaultWorktreesDir: worktreesDir,
+              stateDir,
+              log,
+              ...(process.platform === "win32"
+                ? { protectRoot: (sDir: string, root: string) => ensureWin32ProtectedRootAcl(sDir, root, { env }) }
+                : {}),
+            });
+            if (normalizePathForComparison(selected.root) !== normalizePathForComparison(worktreesDir)) {
+              const projectRow = db.get<{ project_id: number }>("SELECT project_id FROM workers WHERE id = ?", workerId);
+              if (projectRow) {
+                const actualProjDir = projectWorktreesDir(selected.root, projectRow.project_id);
+                const defaultProjDir = projectWorktreesDir(worktreesDir, projectRow.project_id);
+                ensureProjectWorktreeBridge(defaultProjDir, actualProjDir);
+                targetPath = workerWorktreePath(selected.root, projectRow.project_id, workerId);
+                const nowMs = Date.now();
+                db.run("UPDATE workers SET worktree_path = ?, updated_at = ? WHERE id = ?", targetPath, nowMs, workerId);
+                db.run("UPDATE agent_sessions SET cwd = ?, updated_at = ? WHERE id = ?", targetPath, nowMs, sessionId);
+              }
+            }
+          }
+          return {
+            worktreePath: targetPath,
+            prepareDir: (wtDir) => {
+              mkdirSync(wtDir, { recursive: true });
+              if (process.platform === "win32") {
+                ensureWin32ProtectedRootAcl(stateDir, dataDir, { env });
+                allowWin32WorkerWorktreeAcl(stateDir, workerId, wtDir, { env });
+              }
+            },
+          };
+        },
+      }),
     );
     parts.unsubscribe.push(
       ledger.onActionEnqueued(() => executor.wake()),
@@ -525,7 +597,12 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     // 已收工 Worker 满保留期：清它们的对话（消息、步骤日志等），再把空出来的页还给文件系统（db-retention.ts）；启动时先来一轮
     parts.stopWorkerRetention = startWorkerRetention({ ledger, db, log });
     // 已收工 Worker 的 worktree：启动时先清一轮，之后每 WORKTREE_CLEANUP_INTERVAL_MS 清一轮（分支保留）
-    parts.worktreeCleanup = startWorktreeCleanup({ ledger, worktreesDir, log });
+    parts.worktreeCleanup = startWorktreeCleanup({
+      ledger,
+      worktreesDir,
+      extraWorktreeRoots: () => loadManagedWorktreeRoots(stateDir, worktreesDir),
+      log,
+    });
     // 项目经理的对话太长：空闲一会儿后自动写交接、换新会话；写交接超时的放弃（ledger/handover.ts）
     const runAutoRenew = () => {
       try {
@@ -631,21 +708,34 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       if (status !== null) log(`${LOG_PREFIX} 隧道：${status.state}${status.detail ? `（${status.detail}）` : ""}`);
       if (status?.state === "connected") peers.onTunnelConnected();
     });
-    await tunnel.start();
+    if (process.platform !== "win32") {
+      await tunnel.start();
+    }
     const sha = (value: string) => createHash("sha256").update(value).digest();
-    parts.tunnelAdmin = await startTunnelAdmin({
-      runDir: paths.runDir,
-      socketPath: paths.adminSock,
-      authorize: (given) => {
-        try {
-          return timingSafeEqual(sha(given), sha(readFileSync(paths.uiTokenFile, "utf8").trim()));
-        } catch {
-          return false;
-        }
-      },
-      service: tunnel,
-      log: (line) => log(`${LOG_PREFIX} ${line}`),
-    });
+    try {
+      parts.tunnelAdmin = await startTunnelAdmin({
+        runDir: paths.runDir,
+        socketPath: paths.adminSock,
+        authorize: (given) => {
+          try {
+            return timingSafeEqual(sha(given), sha(readFileSync(paths.uiTokenFile, "utf8").trim()));
+          } catch {
+            return false;
+          }
+        },
+        service: tunnel,
+        ...(options.onExternalShutdown ? { onShutdown: options.onExternalShutdown } : {}),
+        log: (line) => log(`${LOG_PREFIX} ${line}`),
+      });
+    } catch (adminErr) {
+      if (
+        (adminErr as NodeJS.ErrnoException | null)?.code === "EADDRINUSE" ||
+        (adminErr instanceof Error && adminErr.message.includes("已有守护进程在跑"))
+      ) {
+        throw new DaemonAlreadyRunningError(0);
+      }
+      throw adminErr;
+    }
     const routerLocalPort = createLocalTargetPort({
       deviceId: device.id,
       deviceName: () => device.name,
@@ -719,12 +809,16 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       routerDispatcher,
       routerLocalPort,
       ...(parts.selfReload ? { selfReload: parts.selfReload } : {}),
-      publicSock: paths.publicSock,
+      ...(process.platform === "win32" ? {} : { publicSock: paths.publicSock }),
       publicEntryFile: paths.publicEntryFile,
-      peerEntry: {
-        socket: paths.peerSock,
-        ...(process.platform === "linux" ? { port: port === 0 ? 0 : DEFAULT_PEER_ENTRY_PORT } : {}),
-      },
+      ...(process.platform === "win32"
+        ? {}
+        : {
+            peerEntry: {
+              socket: paths.peerSock,
+              ...(process.platform === "linux" ? { port: port === 0 ? 0 : DEFAULT_PEER_ENTRY_PORT } : {}),
+            },
+          }),
       ...(serveTarget === "unix" ? { serveSocket: paths.uiSock } : {}),
     });
     const uiPort = parts.ui.port;

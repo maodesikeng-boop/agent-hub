@@ -1,10 +1,12 @@
 // hub worker show 查 PR：gh pr list 的输出只取编号、状态、网址；空数组返回 null，gh 报错/超时返回不可用原因（pr.ts）。
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { writeExecutableNodeScript } from "../../../test/fake-cli-shim.ts";
 import { createResolveFolder } from "../ledger/files.ts";
 import { createLedger } from "../ledger/index.ts";
+import { removeTreeWithRetry } from "../platform/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
 import { describeGhError, parsePrList, parsePrView, probePr, probePrByUrl } from "./pr.ts";
 
@@ -12,14 +14,30 @@ let root: string;
 beforeEach(() => {
   root = realpathSync.native(mkdtempSync(join(tmpdir(), "agent-hub-pr-test-")));
 });
-afterEach(() => {
+afterEach(async () => {
   vi.unstubAllEnvs();
-  rmSync(root, { recursive: true, force: true });
+  await removeTreeWithRetry(root);
 });
 
 function fakeGh(script: string): void {
   const bin = join(root, "fake-bin");
   mkdirSync(bin, { recursive: true });
+  if (process.platform === "win32") {
+    const gitBash = [
+      join(process.env.ProgramFiles ?? "C:\\Program Files", "Git", "bin", "bash.exe"),
+      join(process.env.ProgramFiles ?? "C:\\Program Files", "Git", "usr", "bin", "bash.exe"),
+    ].find((p) => existsSync(p)) ?? "bash.exe";
+    writeExecutableNodeScript(
+      join(bin, "gh"),
+      `
+import { spawnSync } from "node:child_process";
+const res = spawnSync(${JSON.stringify(gitBash)}, ["-c", ${JSON.stringify(script)}, "gh", ...process.argv.slice(2)], { stdio: "inherit", windowsHide: true });
+process.exit(res.status ?? 1);
+`,
+    );
+    vi.stubEnv("PATH", `${bin}${delimiter}${dirname(process.execPath)}`);
+    return;
+  }
   writeFileSync(join(bin, "gh"), `#!/bin/sh\n${script}\n`);
   chmodSync(join(bin, "gh"), 0o755);
   vi.stubEnv("PATH", `${bin}:/bin:/usr/bin`);

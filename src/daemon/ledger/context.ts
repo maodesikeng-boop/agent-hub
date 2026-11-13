@@ -102,6 +102,8 @@ export interface LedgerFiles {
   pmMemoryFallbackDir: string;
   /** worktrees/ 的根目录（LedgerOptions.worktreesDir 补上默认值）。 */
   worktreesDir: string;
+  /** 额外的已登记跨卷 worktree 根目录（如 `D:\.fusa-wt\<指纹>`）。 */
+  extraWorktreeRoots?: () => readonly string[];
   launchDir?: string;
   setupLogsDir?: string;
   userHome: string;

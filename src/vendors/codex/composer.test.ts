@@ -50,9 +50,8 @@ describe("codex 输入框实现（parseCodexCommands / codexComposerBase / creat
 
     const dir = mkdtempSync(join(tmpdir(), "hub-codex-commands-"));
     try {
-      const codexPath = join(dir, "codex");
-      writeFileSync(
-        codexPath,
+      const codexPath = writeExecutableNodeScript(
+        join(dir, "codex"),
         `#!/usr/bin/env node
 const fs = require("node:fs");
 const readline = require("node:readline");
@@ -73,7 +72,6 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 });
 `,
       );
-      chmodSync(codexPath, 0o755);
       const composer = createCodexComposer({ executablePath: codexPath });
       const commands = await composer.queryCommands({ cwd: dir, addDirs: ["/extra"] }, new AbortController().signal);
       expect(commands).toEqual([
@@ -84,7 +82,9 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
         cwds: [dir, "/extra"],
       });
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      await removeTreeWithRetry(dir);
     }
   });
 });
+import { writeExecutableNodeScript } from "../../../test/fake-cli-shim.ts";
+import { removeTreeWithRetry } from "../../daemon/platform/index.ts";

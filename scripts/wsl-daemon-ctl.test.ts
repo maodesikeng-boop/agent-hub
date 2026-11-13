@@ -111,7 +111,7 @@ function runCtlAsync(
   });
 }
 
-describe("scripts/wsl-daemon-ctl.sh 受控起停与探活契约", () => {
+describe.skipIf(process.platform === "win32")("scripts/wsl-daemon-ctl.sh 受控起停与探活契约", () => {
   it("probe 探活：正常返回 200 JSON、拦截 307 重定向绝不自动跟随、不可达返回 000", async () => {
     let followedRedirect = false;
     let mode: "ok" | "redirect" = "ok";

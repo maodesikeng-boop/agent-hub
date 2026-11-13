@@ -260,7 +260,7 @@ describe("wsl-provision-guest.sh 静态契约与插件化守卫", () => {
   });
 });
 
-describe("wsl-provision-guest.sh --phase root（幂等系统初始化）", () => {
+describe.skipIf(process.platform === "win32")("wsl-provision-guest.sh --phase root（幂等系统初始化）", () => {
   it("非 root 身份运行 --phase root 时拒绝执行", () => {
     const res = runGuest(["--phase", "root"], { FUSA_EFFECTIVE_UID: "1000" });
     expect(res.status).not.toBe(0);
@@ -389,7 +389,7 @@ echo "apparmor_parser $*" >> "${opsLog}"
   });
 });
 
-describe("wsl-provision-guest.sh --phase user（Node 24 SHA256 校验、pnpm 与目录幂等）", () => {
+describe.skipIf(process.platform === "win32")("wsl-provision-guest.sh --phase user（Node 24 SHA256 校验、pnpm 与目录幂等）", () => {
   it("拒绝以 root 运行，校验官方 SHA256（篡改即拒），安装 Node 与锁定版 pnpm，且重跑幂等跳过", () => {
     const root = makeTempDir("fusa-wsl-user-");
     const home = join(root, "home", "fusa");
@@ -463,7 +463,7 @@ describe("wsl-provision-guest.sh --phase user（Node 24 SHA256 校验、pnpm 与
   });
 });
 
-describe("wsl-provision-guest.sh --self-test（隔离与沙箱门禁 JSON 错误码）", () => {
+describe.skipIf(process.platform === "win32")("wsl-provision-guest.sh --self-test（隔离与沙箱门禁 JSON 错误码）", () => {
   function makeSelfTestFixture() {
     const root = makeTempDir("fusa-self-test-");
     const home = join(root, "home", "fusa");
@@ -606,7 +606,7 @@ describe("wsl-provision-guest.sh --self-test（隔离与沙箱门禁 JSON 错误
   });
 });
 
-describe("wsl-provision-guest.sh --vendors-json（复用注册表动态输出厂商引导元数据）", () => {
+describe.skipIf(process.platform === "win32")("wsl-provision-guest.sh --vendors-json（复用注册表动态输出厂商引导元数据）", () => {
   it("动态读取 scripts/print-vendors.ts 并准确反映当前用户下各厂商 CLI 安装状态", () => {
     const root = makeTempDir("fusa-vendors-");
     const home = join(root, "home", "fusa");

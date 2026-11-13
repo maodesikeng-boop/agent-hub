@@ -62,7 +62,7 @@ async function remoteWs(client: Client, deviceId: string, since: number) {
   return { messages, closed, close: () => socket.close() };
 }
 
-describe("联机：回环网址", () => {
+describe.skipIf(process.platform === "win32")("联机：回环网址", () => {
   it("正式入口不认回环网址：旧的环境变量开关打不开（只有测试入口能开）", async () => {
     const env = makeEnv();
     envs.push(env);
@@ -76,7 +76,7 @@ describe("联机：回环网址", () => {
   }, 30_000);
 });
 
-describe("联机：两台守护进程", () => {
+describe.skipIf(process.platform === "win32")("联机：两台守护进程", () => {
   it("配对 → 经入口聊天 → 第二台离线 → 再上线自动恢复并补齐 → 改名 → 移除", async () => {
     const envA = makeEnv();
     const envB = makeEnv();

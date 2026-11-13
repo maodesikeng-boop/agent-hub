@@ -186,7 +186,7 @@ describe("技能文件：只在项目经理的启动目录里写一份", () => {
     const skillsDir = writeProductSkills(sessionDir);
     expect(skillsDir).toBe(join(sessionDir, "skills"));
     expect(readFileSync(taskGraphSkillFile(sessionDir), "utf8")).toBe(taskGraphSkillMarkdown());
-    expect(statSync(taskGraphSkillFile(sessionDir)).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(statSync(taskGraphSkillFile(sessionDir)).mode & 0o777).toBe(0o600);
     removeProductSkills(sessionDir);
     expect(() => statSync(skillsDir)).toThrow();
   });

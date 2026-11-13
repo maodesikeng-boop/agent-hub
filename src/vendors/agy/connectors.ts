@@ -5,7 +5,7 @@
 // - 问不到清单的（起不来、超时、要 OAuth 认证）一律当不可用：只读 Worker 里拒，不放行未知的东西；
 // - 起 stdio 服务器问清单也是在跑第三方代码：必须和只读 Worker 同样包在外层只读沙箱里、环境变量用 Worker 那份（去掉 HUB_*）；没有 OS 沙箱就不问（该服务器整个当不可用）；
 // - 不在启动路径上做重活：结果按配置内容缓存 AGY_CONNECTOR_CACHE_MS（有服务器没问到的只记 AGY_CONNECTOR_RETRY_MS），同一时刻多个会话共用一次查询；每个服务器最多等 AGY_CONNECTOR_LIST_TIMEOUT_MS。
-import { spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +17,7 @@ import {
 import { AGY_CONNECTOR_CACHE_MS, AGY_CONNECTOR_LIST_TIMEOUT_MS, AGY_CONNECTOR_RETRY_MS } from "./limits.ts";
 import { agyCliDataDir, agyDataPaths, agyHomePaths } from "./paths.ts";
 import { buildChildEnv } from "../../daemon/driver/protocol.ts";
+import { spawnOwnedProcess } from "../../daemon/platform/index.ts";
 import { trackChild } from "../../daemon/process-ledger.ts";
 import { connectorProbeSandboxInput, type AgyConnectorCatalog } from "./readonly.ts";
 import type { ReadonlySandboxInput, ScopedSpawn, SpawnCommand } from "../../daemon/driver/write-scope.ts";
@@ -113,13 +114,18 @@ function listViaStdio(name: string, spec: McpServerSpec, timeoutMs: number, laun
     if (typeof spec.command !== "string" || spec.command === "") return reject(new Error(`${name}: 没有 command`));
     const launch = launcher?.({ command: spec.command, args: spec.args ?? [] }, spec.env ?? {}) ?? null;
     if (launch === null) return reject(new Error(`${name}: 没有 OS 沙箱，不起本地服务器探测`));
-    const child = spawn(launch.command, launch.args, {
-      cwd: homedir(),
-      env: launch.env,
-      stdio: ["pipe", "pipe", "ignore"],
-      detached: true,
-    });
-    trackChild(child, "probe:agy-mcp", { detached: true });
+    let spawned: { child: ChildProcess; detached: boolean };
+    try {
+      spawned = spawnOwnedProcess(launch.command, launch.args, {
+        cwd: homedir(),
+        env: launch.env,
+        stdio: ["pipe", "pipe", "ignore"],
+      });
+    } catch (err) {
+      return reject(err);
+    }
+    const child = spawned.child as ChildProcess & { stdin: NonNullable<ChildProcess["stdin"]>; stdout: NonNullable<ChildProcess["stdout"]> };
+    trackChild(child, "probe:agy-mcp", { detached: spawned.detached });
     const tools: McpListedTool[] = [];
     let done = false;
     let nextId = 1;

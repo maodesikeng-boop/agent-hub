@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   ENV_HUB_SOCK,
@@ -96,7 +96,7 @@ describe("prepareLaunch（M2、M3）", () => {
     expect(files).toMatchObject({
       promptFile: join(base, "prompt.md"),
       settingsFile: join(base, "settings.json"),
-      env: { [ENV_HUB_TOKEN]: "token-of-7", [ENV_HUB_SOCK]: hubSock, PATH: "/agent-hub/run/bin:/usr/bin:/bin" },
+      env: { [ENV_HUB_TOKEN]: "token-of-7", [ENV_HUB_SOCK]: hubSock, PATH: `/agent-hub/run/bin${delimiter}/usr/bin:/bin` },
     });
     const prompt = readFileSync(files.promptFile, "utf8");
     const settings = readFileSync(files.settingsFile!, "utf8");
@@ -156,8 +156,10 @@ describe("prepareLaunch（M2、M3）", () => {
     const file = taskGraphSkillFile(base);
     expect(file).toBe(join(base, "skills", TASK_GRAPH_SKILL_NAME, "SKILL.md"));
     expect(readFileSync(file, "utf8")).toBe(taskGraphSkillMarkdown());
-    expect(statSync(file).mode & 0o777).toBe(0o600);
-    expect(statSync(join(base, "skills", TASK_GRAPH_SKILL_NAME)).mode & 0o777).toBe(0o700);
+    if (process.platform !== "win32") {
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+      expect(statSync(join(base, "skills", TASK_GRAPH_SKILL_NAME)).mode & 0o777).toBe(0o700);
+    }
     expect(readdirSync(join(base, "skills"))).toEqual([TASK_GRAPH_SKILL_NAME]);
     expect(readFileSync(files.promptFile, "utf8")).toContain(file);
   });
@@ -260,10 +262,10 @@ describe("prepareLaunch（M2、M3）", () => {
     expect(prompt).toBe(buildWorkerPrompt(workerContext({ worktreePath: worktree }), worktree));
     expect(prompt).not.toContain("先问用户的事");
     expect(JSON.parse(readFileSync(files.settingsFile!, "utf8"))).toEqual(buildSessionSettings({ role: "worker", hubSock, stateDir: join(dir, "state"), osSandboxed: true }));
-    expect(files.env).toMatchObject({ ...WORKER_ENV, [ENV_HUB_TOKEN]: "token-of-9", [ENV_HUB_SOCK]: hubSock, PATH: "/agent-hub/run/bin:/usr/bin:/bin" });
+    expect(files.env).toMatchObject({ ...WORKER_ENV, [ENV_HUB_TOKEN]: "token-of-9", [ENV_HUB_SOCK]: hubSock, PATH: `/agent-hub/run/bin${delimiter}/usr/bin:/bin` });
     expect(files.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1");
     // 可写范围：数据目录里只有自己的 worktree
-    expect(files.writeScope).toEqual({ dataDir: dir, writableDirs: [worktree] });
+    expect(files.writeScope).toEqual({ dataDir: dir, protectedRoots: [dir], writableDirs: [worktree] });
     // 有后台命令时最多等多久（到点驱动层关进程、账本照常汇报）
     expect(files.backgroundHoldMaxMs).toBe(WORKER_BACKGROUND_HOLD_MAX_MS);
   });
@@ -271,7 +273,11 @@ describe("prepareLaunch（M2、M3）", () => {
   it("在主文件夹干活的 Worker：数据目录整个不能写，主文件夹在数据目录外不受影响", async () => {
     const main = "/Users/u/code/app";
     contexts.set(9, workerContext());
-    expect((await make()(row(9, main, "worker"))).writeScope).toEqual({ dataDir: dir, writableDirs: [] });
+    expect((await make()(row(9, main, "worker"))).writeScope).toEqual({
+      dataDir: dir,
+      protectedRoots: [dir],
+      writableDirs: [],
+    });
   });
 
   it("同一个项目的项目经理和 Worker：Worker 多 autoMemoryEnabled、state/ 的兜底拒绝规则，包进 OS 沙箱时关掉 claude 自带的沙箱", async () => {
@@ -326,9 +332,13 @@ describe("prepareLaunch（M2、M3）", () => {
       buildSessionSettings({ role: "worker", readonly: { policy, denyWrite: [realpathSync(wt), realpathSync(extra), join(dir, "not-created-yet")] }, hubSock, stateDir: join(dir, "state"), osSandboxed: true }),
     );
     expect(settings.permissions.defaultMode).toBe("default");
-    expect(settings.sandbox).toMatchObject({ enabled: true, failIfUnavailable: true, enableWeakerNetworkIsolation: true });
+    if (process.platform === "win32") {
+      expect(settings.sandbox).toMatchObject({ enabled: false });
+    } else {
+      expect(settings.sandbox).toMatchObject({ enabled: true, failIfUnavailable: true, enableWeakerNetworkIsolation: true });
+    }
     expect(readonly.writeScope).toBeUndefined();
-    expect(normal.writeScope).toEqual({ dataDir: dir, writableDirs: [wt] });
+    expect(normal.writeScope).toEqual({ dataDir: dir, protectedRoots: [dir], writableDirs: [wt] });
     expect(readonly.fingerprint).not.toBe(normal.fingerprint);
   });
 
@@ -337,7 +347,7 @@ describe("prepareLaunch（M2、M3）", () => {
     const files = await make()({ ...row(9, dir, "worker"), vendor: "agy" });
     expect(files.settingsFile).toBeUndefined();
     expect(existsSync(join(launchDir, "9", "settings.json"))).toBe(false);
-    expect(files.writeScope).toEqual({ dataDir: dir, writableDirs: [] });
+    expect(files.writeScope).toEqual({ dataDir: dir, protectedRoots: [dir], writableDirs: [] });
     expect(files.readonly).toBeDefined();
   });
 
@@ -347,7 +357,7 @@ describe("prepareLaunch（M2、M3）", () => {
       const files = await make()({ ...row(9, dir, "worker"), vendor });
       expect(files.settingsFile, vendor).toBeUndefined();
       for (const key of Object.keys(WORKER_ENV)) expect(files.env[key], `${vendor}:${key}`).toBeUndefined();
-      expect(files.env).toMatchObject({ [ENV_HUB_TOKEN]: "token-of-9", [ENV_HUB_SOCK]: hubSock, PATH: "/agent-hub/run/bin:/usr/bin:/bin" });
+      expect(files.env).toMatchObject({ [ENV_HUB_TOKEN]: "token-of-9", [ENV_HUB_SOCK]: hubSock, PATH: `/agent-hub/run/bin${delimiter}/usr/bin:/bin` });
     }
   });
 

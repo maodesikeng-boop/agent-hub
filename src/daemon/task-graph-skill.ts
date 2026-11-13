@@ -5,23 +5,29 @@
 // 生命周期跟 prompt.md 一样：每次启动都调；内容没变就不动文件（inode、mtime 不变，agy 的硬链接和各家的缓存都还有效），
 // 只有守护进程升级换了正文才重写；项目经理彻底删除时整个启动目录一起删（ledger/persona.ts 的 sessionLaunchDir）。
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
-import writeFileAtomic from "write-file-atomic";
+import { join, posix, win32 } from "node:path";
 import { HUB_COMMAND } from "../shared/names.ts";
 import { sessionLaunchDir } from "../shared/paths.ts";
 import { TASK_GRAPH_SKILL_NAME, taskGraphSkillMarkdown } from "../shared/task-graph-skill.ts";
+import { writeFileAtomicSyncWithRetry } from "./platform/index.ts";
+
+function joinSkillPath(base: string, ...parts: string[]): string {
+  return /^[A-Za-z]:/.test(base) || base.startsWith("\\\\") || base.includes("\\")
+    ? win32.join(base, ...parts)
+    : posix.join(base, ...parts);
+}
 
 /** 启动目录里放产品技能的目录名（一个技能一个子目录，Agent Skills 的标准形状）。 */
 export const PRODUCT_SKILLS_DIR = "skills";
 
 /** 这个会话启动目录里的技能根目录。 */
 export function productSkillsDir(sessionDir: string): string {
-  return join(sessionDir, PRODUCT_SKILLS_DIR);
+  return joinSkillPath(sessionDir, PRODUCT_SKILLS_DIR);
 }
 
 /** 任务图技能的 SKILL.md：提示词、hub graph create 回执、hub status、交接开场里写的都是这个路径。 */
 export function taskGraphSkillFile(sessionDir: string): string {
-  return join(productSkillsDir(sessionDir), TASK_GRAPH_SKILL_NAME, "SKILL.md");
+  return joinSkillPath(productSkillsDir(sessionDir), TASK_GRAPH_SKILL_NAME, "SKILL.md");
 }
 
 /**
@@ -38,8 +44,8 @@ export function writeProductSkills(sessionDir: string): string {
     current = null;
   }
   if (current !== content) {
-    mkdirSync(join(productSkillsDir(sessionDir), TASK_GRAPH_SKILL_NAME), { recursive: true, mode: 0o700 });
-    writeFileAtomic.sync(file, content, { mode: 0o600 });
+    mkdirSync(joinSkillPath(productSkillsDir(sessionDir), TASK_GRAPH_SKILL_NAME), { recursive: true, mode: 0o700 });
+    writeFileAtomicSyncWithRetry(file, content, { mode: 0o600 });
   }
   return productSkillsDir(sessionDir);
 }

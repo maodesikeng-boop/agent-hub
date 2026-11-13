@@ -82,7 +82,7 @@ function service(extra: Partial<TunnelServiceOptions> = {}) {
   });
 }
 
-describe("专用钥匙", () => {
+describe.skipIf(process.platform === "win32")("专用钥匙", () => {
   it("第一次生成 ed25519、私钥 0600、无口令；之后沿用；regenerate 换一把", async () => {
     const svc = service();
     const { publicKey } = await svc.ensureKey();
@@ -95,7 +95,7 @@ describe("专用钥匙", () => {
   });
 });
 
-describe("中心：槽位和邀请码", () => {
+describe.skipIf(process.platform === "win32")("中心：槽位和邀请码", () => {
   it("加设备：分槽位、出绑这个槽位的邀请码；同名再加端口不变；表 0600", () => {
     const svc = service();
     const a = svc.addSlot({ name: "mac", publicKey: PUB_MAC });
@@ -133,7 +133,7 @@ describe("中心：槽位和邀请码", () => {
   });
 });
 
-describe("连入方：连接码 → 隧道", () => {
+describe.skipIf(process.platform === "win32")("连入方：连接码 → 隧道", () => {
   it("钉主机公钥、记下中心、用 ssh-args 拼的参数起监督；状态转出去", async () => {
     const svc = service();
     expect(svc.status()).toBeNull();

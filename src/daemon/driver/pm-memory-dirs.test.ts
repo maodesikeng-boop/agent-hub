@@ -11,6 +11,7 @@ import claudeDaemon from "../../vendors/claude/daemon.ts";
 import { buildSandboxPolicy } from "../../vendors/codex/protocol.ts";
 import { buildPiArgs } from "../../vendors/pi/protocol.ts";
 import { DAEMON_VENDORS } from "../vendors/index.ts";
+import { removeTreeWithRetry } from "../platform/index.ts";
 import { BaseSessionDriver, launchChanged } from "./base-driver.ts";
 import { withPmMemoryAddDir } from "./pm-memory-dirs.ts";
 
@@ -53,8 +54,8 @@ describe("6 家厂商统一挂载 PM 专属 pm-memory addDirs 与 Worker 隔离"
     mkdirSync(cwd, { recursive: true });
   });
 
-  afterEach(() => {
-    rmSync(root, { recursive: true, force: true });
+  afterEach(async () => {
+    await removeTreeWithRetry(root);
   });
 
   it("withPmMemoryAddDir：为 PM 会话自动创建并追加 realpath 后的 pm-memory/<pmId>（去重），Worker 与 assistant 绝不挂载", () => {

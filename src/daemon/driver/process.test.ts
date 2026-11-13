@@ -138,7 +138,7 @@ function pgidOf(pid: number): Promise<number> {
   });
 }
 
-const canRunPs = (() => {
+const canRunPs = process.platform !== "win32" && (() => {
   try {
     execFileSync("ps", ["-o", "pid=", "-p", String(process.pid)], { stdio: "ignore" });
     return true;
@@ -243,7 +243,7 @@ function fakePs(body: string): () => void {
   };
 }
 
-describe("forceKillTree 的兜底", () => {
+describe.skipIf(process.platform === "win32")("forceKillTree 的兜底", () => {
   it("ps 跑不了（退出码 1）：退回只杀它的组，组里的进程都没了", async () => {
     const pid = detachedSleep120();
     const restore = fakePs("exit 1");
@@ -274,7 +274,7 @@ describe("forceKillTree 的兜底", () => {
     const dir = mkdtempSync(join(tmpdir(), "fake-ps-"));
     writeFileSync(join(dir, "ps"), "#!/bin/sh\nexec sleep 60\n");
     chmodSync(join(dir, "ps"), 0o755);
-    const processTs = new URL("./process.ts", import.meta.url).pathname;
+    const processTs = fileURLToPath(new URL("./process.ts", import.meta.url));
     const script = `import { forceKillTree } from ${JSON.stringify(processTs)};
 void forceKillTree(${pid}, true);
 setTimeout(() => process.exit(0), 200);`;
@@ -313,7 +313,7 @@ setTimeout(() => process.exit(0), 200);`;
   });
 });
 
-describe("signalTarget / signalChild / termGroupAfterExit（Linux bwrap 穿透与进程组清理）", () => {
+describe.skipIf(process.platform === "win32")("signalTarget / signalChild / termGroupAfterExit（Linux bwrap 穿透与进程组清理）", () => {
   it("退出后的同组子进程即使忽略 SIGTERM，也被清掉", async () => {
     const script = `const {spawn}=require('node:child_process');
 const bg=spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{});process.send('ready');setInterval(()=>{},1000)"],{stdio:['ignore','ignore','ignore','ipc']});
@@ -449,3 +449,4 @@ bg.once('message',()=>{console.log(bg.pid);process.exit(0)});`;
     }
   });
 });
+import { fileURLToPath } from "node:url";

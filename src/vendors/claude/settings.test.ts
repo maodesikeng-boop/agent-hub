@@ -65,7 +65,8 @@ describe("buildSessionSettings：Worker", () => {
 describe("buildSessionSettings：只读（claude 用自带沙箱，翻译见 readonly-settings.ts）", () => {
   const policy = buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: base.stateDir });
   const readonly = { policy, denyWrite: ["/w/cwd", "/w/main"] };
-  const ro = (extra: Partial<Parameters<typeof buildSessionSettings>[0]> = {}) => buildSessionSettings({ role: "worker", readonly, ...base, ...extra });
+  const ro = (extra: Partial<Parameters<typeof buildSessionSettings>[0]> = {}) =>
+    buildSessionSettings({ role: "worker", readonly, platform: "darwin", ...base, ...extra });
 
   it("default 档（不再是 dontAsk）；放行 hub 加内置读/命令/上网；拒绝编辑工具和读密钥；不写 state/ 的规则（编辑工具本来就全拒）", () => {
     const { allow, deny } = claudeReadonlyPermissions(policy);

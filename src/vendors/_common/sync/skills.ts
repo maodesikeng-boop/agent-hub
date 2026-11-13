@@ -1,12 +1,19 @@
 // 基准 `.agents/skills` 目录扫描与目标厂商技能目录逐项软链对账（绝不整目录替换，绝不覆盖用户私有技能）。
-import { existsSync, lstatSync, readdirSync, readlinkSync, realpathSync, statSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { execFileSync } from "node:child_process";
+import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
+import {
+  hashDirectoryContents,
+  isPathStrictlyInside,
+  normalizePathForComparison,
+  readManagedSkillCopyMeta,
+} from "../../../daemon/platform/index.ts";
 import { MAX_VENDOR_SYNC_SKILL_ITEMS } from "../../../shared/index.ts";
 
 /** 安全的 `realpath`：目标存在时返回真实路径，悬空软链或不存在时回退 `resolve`。 */
 export function safeRealpath(targetPath: string): string {
   try {
-    return realpathSync(targetPath);
+    return realpathSync.native(targetPath);
   } catch {
     return resolve(targetPath);
   }
@@ -50,27 +57,53 @@ export type SkillTargetEntryState =
   | "whole_dir_symlink"
   /** 目标下 `<name>` 已是指向该基准技能的逐项软链。 */
   | "linked"
+  /** 目标下 `<name>` 是 UNC / 网络盘回退生成的受控副本（带 `.fusa-managed` 且内容哈希一致）。 */
+  | "managed_copy"
   /** 目标下 `<name>` 不存在，或是指向 `.agents/skills` 下旧路径的软链（可安全建/更软链）。 */
   | "missing_or_stale_managed"
   /** 目标下 `<name>` 是用户自己的真实目录/文件或外部私有软链（必须原样保留，绝不覆盖）。 */
   | "user_private_conflict";
 
-/** 检查目标技能目录是否为指向基准 `.agents/skills` 的整目录软链。 */
-export function isWholeDirLinkedToCanonical(targetSkillsDir: string, canonicalSkillsDir: string): boolean {
+function isGitTrackedSymlinkBlob(filePath: string): boolean {
   try {
-    const st = lstatSync(targetSkillsDir);
-    if (!st.isSymbolicLink()) return false;
-    const rawTarget = readlinkSync(targetSkillsDir);
-    const resolvedLink = resolve(dirname(targetSkillsDir), rawTarget);
-    return safeRealpath(resolvedLink) === safeRealpath(canonicalSkillsDir);
+    const out = execFileSync(
+      "git",
+      ["-C", dirname(filePath), "ls-files", "-s", "--", basename(filePath)],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 2_000, windowsHide: true },
+    ).trim();
+    return out.startsWith("120000 ");
   } catch {
     return false;
   }
 }
 
-function isInsideDir(child: string, parent: string): boolean {
-  const rel = relative(parent, child);
-  return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+/** 检查目标技能目录是否为指向基准 `.agents/skills` 的整目录软链。 */
+export function isWholeDirLinkedToCanonical(targetSkillsDir: string, canonicalSkillsDir: string): boolean {
+  try {
+    const st = lstatSync(targetSkillsDir);
+    const canonicalRealKey = normalizePathForComparison(safeRealpath(canonicalSkillsDir));
+    if (st.isSymbolicLink()) {
+      const rawTarget = readlinkSync(targetSkillsDir);
+      const resolvedLink = resolve(dirname(targetSkillsDir), rawTarget);
+      return normalizePathForComparison(safeRealpath(resolvedLink)) === canonicalRealKey;
+    }
+    // Git for Windows 默认 core.symlinks=false 时会把仓库内 120000 软链检出成单行路径文本文件
+    if (st.isFile() && st.size > 0 && st.size <= 1024) {
+      const rawText = readFileSync(targetSkillsDir, "utf8").trim();
+      if (rawText !== "" && !rawText.includes("\n") && !rawText.includes("\r")) {
+        const candidateTarget = resolve(dirname(targetSkillsDir), rawText);
+        if (
+          normalizePathForComparison(safeRealpath(candidateTarget)) === canonicalRealKey &&
+          isGitTrackedSymlinkBlob(targetSkillsDir)
+        ) {
+          return true;
+        }
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -81,10 +114,16 @@ function isInsideDir(child: string, parent: string): boolean {
 export function isManagedAgentsSkillSymlink(linkPath: string, canonicalSkillsDir: string): boolean {
   try {
     const st = lstatSync(linkPath);
+    if (st.isDirectory()) {
+      const meta = readManagedSkillCopyMeta(linkPath);
+      if (meta === null) return false;
+      if (isPathStrictlyInside(resolve(canonicalSkillsDir), resolve(meta.canonicalPath))) return true;
+      return isPathStrictlyInside(safeRealpath(canonicalSkillsDir), safeRealpath(meta.canonicalPath));
+    }
     if (!st.isSymbolicLink()) return false;
     const resolvedTarget = resolve(dirname(linkPath), readlinkSync(linkPath));
-    if (isInsideDir(resolvedTarget, resolve(canonicalSkillsDir))) return true;
-    return isInsideDir(safeRealpath(resolvedTarget), safeRealpath(canonicalSkillsDir));
+    if (isPathStrictlyInside(resolve(canonicalSkillsDir), resolvedTarget)) return true;
+    return isPathStrictlyInside(safeRealpath(canonicalSkillsDir), safeRealpath(resolvedTarget));
   } catch {
     return false;
   }
@@ -111,13 +150,29 @@ export function inspectSkillTargetEntry(
   if (st.isSymbolicLink()) {
     const rawTarget = readlinkSync(entryPath);
     const resolvedTarget = resolve(dirname(entryPath), rawTarget);
-    if (safeRealpath(resolvedTarget) === safeRealpath(canonicalEntryPath)) {
+    if (
+      normalizePathForComparison(safeRealpath(resolvedTarget)) ===
+      normalizePathForComparison(safeRealpath(canonicalEntryPath))
+    ) {
       return "linked";
     }
     if (isManagedAgentsSkillSymlink(entryPath, canonicalSkillsDir)) {
       return "missing_or_stale_managed";
     }
     return "user_private_conflict";
+  }
+
+  if (st.isDirectory()) {
+    const meta = readManagedSkillCopyMeta(entryPath);
+    if (meta !== null && isManagedAgentsSkillSymlink(entryPath, canonicalSkillsDir)) {
+      const sameCanonical =
+        normalizePathForComparison(safeRealpath(meta.canonicalPath)) ===
+        normalizePathForComparison(safeRealpath(canonicalEntryPath));
+      if (sameCanonical && existsSync(canonicalEntryPath) && meta.contentHash === hashDirectoryContents(canonicalEntryPath)) {
+        return "managed_copy";
+      }
+      return "missing_or_stale_managed";
+    }
   }
 
   // 真实目录或真实文件 = 用户私有技能，绝不删除或覆盖

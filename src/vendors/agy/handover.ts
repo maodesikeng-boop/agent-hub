@@ -3,7 +3,7 @@
 // fork：sqlite 备份接口拷一份（原进程开着、有 WAL 也行）→ 库里所有格里的这两个编号逐字节换成同长新 UUID（protobuf 里有长度前缀，长度不能变）
 //       → brain/<编号>/ 一起拷。write：agy --conversation <新编号> 续跑一轮（只读模式、不带 HUB_*）。remove：照 #108 的 cleanup.py 删干净。
 // 格式对不上（没有库、没有 trajectory_meta、编号对不上或不是 UUID、agy 说找不到这个对话）一律抛 ForkUnsupportedError，账本退回“本会话写交接”。
-import { spawn } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { chmodSync, cpSync, existsSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync, backup } from "node:sqlite";
@@ -20,6 +20,7 @@ import {
   detectAgyArgsConflict,
   parseAgyUsage,
 } from "./protocol.ts";
+import { spawnOwnedProcess } from "../../daemon/platform/index.ts";
 import { forceKill, killFreshGroup, termGroupAfterExit } from "../../daemon/driver/process.ts";
 import { trackChild } from "../../daemon/process-ledger.ts";
 import { ForkUnsupportedError } from "../../daemon/handover/forker.ts";
@@ -218,8 +219,9 @@ export function createAgyCopyForker(options: AgyCopyOptions = {}): SessionForker
       const env = buildChildEnv(process.env, src.launch.env);
       delete env[ENV_HUB_TOKEN];
       delete env[ENV_HUB_SOCK];
-      const child = spawn(src.executablePath, buildForkArgs(src, fork.forkId), { cwd: src.cwd, env, stdio: ["pipe", "pipe", "pipe"], detached: true });
-      trackChild(child, "handover:agy", { detached: true });
+      const spawned = spawnOwnedProcess(src.executablePath, buildForkArgs(src, fork.forkId), { cwd: src.cwd, env, stdio: ["pipe", "pipe", "pipe"] });
+      const child: ChildProcessWithoutNullStreams = spawned.child;
+      trackChild(child, "handover:agy", { detached: spawned.detached });
       child.once("exit", () => termGroupAfterExit(child));
       let stdout = "";
       let stderr = "";

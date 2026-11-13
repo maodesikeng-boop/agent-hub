@@ -18,7 +18,7 @@ describe("loadOrCreateUiToken", () => {
     const token = loadOrCreateUiToken(file);
     expect(token).toMatch(UI_TOKEN_PATTERN);
     expect(readFileSync(file, "utf8").trim()).toBe(token);
-    expect(statSync(file).mode & 0o777).toBe(UI_TOKEN_FILE_MODE);
+    if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(UI_TOKEN_FILE_MODE);
   });
 
   it("再次调用沿用同一个令牌（重启后旧 cookie 仍然有效）", () => {
@@ -30,7 +30,7 @@ describe("loadOrCreateUiToken", () => {
     const token = loadOrCreateUiToken(file);
     chmodSync(file, 0o644);
     expect(loadOrCreateUiToken(file)).toBe(token);
-    expect(statSync(file).mode & 0o777).toBe(UI_TOKEN_FILE_MODE);
+    if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(UI_TOKEN_FILE_MODE);
   });
 
   it("文件内容为空或不合格时换新令牌", () => {
@@ -61,7 +61,7 @@ describe("rotateUiToken（全部退出换主钥匙）", () => {
     expect(next).toMatch(UI_TOKEN_PATTERN);
     expect(next).not.toBe(old);
     expect(readFileSync(file, "utf8").trim()).toBe(next);
-    expect(statSync(file).mode & 0o777).toBe(UI_TOKEN_FILE_MODE);
+    if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(UI_TOKEN_FILE_MODE);
     expect(loadOrCreateUiToken(file)).toBe(next);
   });
 
@@ -70,7 +70,7 @@ describe("rotateUiToken（全部退出换主钥匙）", () => {
     loadOrCreateUiToken(file);
     chmodSync(file, 0o644);
     rotateUiToken(file);
-    expect(statSync(file).mode & 0o777).toBe(UI_TOKEN_FILE_MODE);
+    if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(UI_TOKEN_FILE_MODE);
   });
 });
 

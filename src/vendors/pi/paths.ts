@@ -4,6 +4,13 @@ import type { VendorPathsModule } from "../daemon-types.ts";
 
 // 官方安装脚本默认放 ~/.local/bin/pi；兼容 ~/.pi/bin/pi、mise/npm 常见用户级全局目录及 Linux 统一安装目录
 export const fallbackPaths: VendorPathsModule["fallbackPaths"] = ({ userHome, platform, linuxInstallDirs, join }) => {
+  if (platform === "win32") {
+    return [
+      join(userHome, ".local", "bin", "pi.exe"),
+      join(userHome, ".pi", "bin", "pi.exe"),
+      join(userHome, "AppData", "Roaming", "npm", "pi.cmd"),
+    ];
+  }
   const userBins = [
     join(userHome, ".local", "bin", "pi"),
     join(userHome, ".pi", "bin", "pi"),

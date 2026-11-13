@@ -21,6 +21,14 @@ export default defineConfig({
             "scripts/**/*.test.ts",
             "test/**/*.test.ts",
           ],
+          ...(process.platform === "win32"
+            ? {
+                exclude: [
+                  "**/node_modules/**",
+                  "test/eval/**",
+                ],
+              }
+            : {}),
         },
       },
       {

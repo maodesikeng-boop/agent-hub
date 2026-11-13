@@ -167,7 +167,7 @@ describe("数据库封装", () => {
 });
 
 const lockPid = (file: string) => readFileSync(file, "utf8").split("\n")[0];
-const startTimeOf = (pid: number) => execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8" }).trim();
+const startTimeOf = (pid: number) => queryProcessStartTimeSync(pid) ?? "";
 
 describe("目录锁", () => {
   it("开两个：已拿锁时再拿一次，报“已有守护进程在跑”", () => {
@@ -189,7 +189,7 @@ describe("目录锁", () => {
     expect(existsSync(paths.stateDir)).toBe(false);
     const lock = acquireLock(paths.lockFile);
     try {
-      expect(statSync(paths.stateDir).mode & 0o777).toBe(0o700);
+      if (process.platform !== "win32") expect(statSync(paths.stateDir).mode & 0o777).toBe(0o700);
       expect(readFileSync(paths.lockFile, "utf8")).toBe(`${process.pid}\n${startTimeOf(process.pid)}\n`);
       expect(() => acquireLock(paths.lockFile)).toThrow(DaemonAlreadyRunningError);
       expect(readdirSync(paths.stateDir)).toEqual(["lock"]);
@@ -308,3 +308,4 @@ describe("SessionStore", () => {
     }
   });
 });
+import { queryProcessStartTimeSync } from "../platform/index.ts";

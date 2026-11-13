@@ -23,6 +23,10 @@ export interface ReadonlyPolicy {
    * 写法 "<服务器>/<工具>"，服务器和工具都可以是 *。
    */
   connectors: { extraAllow: string[]; deny: string[] };
+  /** 可选的数据目录 state/ 真实路径（供外层只读回退定位 SID 与受保护根）。 */
+  stateDir?: string;
+  /** 可选的受保护根目录列表（含数据目录与跨卷同盘 `.fusa-wt`）。 */
+  protectedRoots?: string[];
 }
 
 /**
@@ -58,12 +62,15 @@ export interface ReadonlyPolicyInput {
   homeDir: string;
   /** 数据目录 state/（realpath 过）。 */
   stateDir: string;
+  /** 额外的受保护根目录（跨卷同盘 `.fusa-wt` 等）。 */
+  protectedRoots?: readonly string[];
   /** 覆盖默认的补充/排除（设置页以后用）。 */
   connectors?: Partial<ReadonlyPolicy["connectors"]>;
 }
 
 function joinPath(base: string, rel: string): string {
-  return `${base.replace(/\/+$/, "")}/${rel}`;
+  const sep = base.includes("\\") && !base.includes("/") ? "\\" : "/";
+  return `${base.replace(/[\\/]+$/, "")}${sep}${rel.replace(/\//g, sep)}`;
 }
 
 /** 按默认清单生成这台机器的只读策略。每次返回新对象（调用方可以放心改）。 */
@@ -78,6 +85,9 @@ export function buildReadonlyPolicy(input: ReadonlyPolicyInput): ReadonlyPolicy 
       extraAllow: [...(input.connectors?.extraAllow ?? READONLY_CONNECTORS.extraAllow)],
       deny: [...(input.connectors?.deny ?? READONLY_CONNECTORS.deny)],
     },
+    ...(input.protectedRoots && input.protectedRoots.length > 0
+      ? { protectedRoots: [...input.protectedRoots] }
+      : {}),
   };
 }
 

@@ -14,8 +14,7 @@
 // 每轮最多检查 WORKTREE_CLEANUP_BATCH_LIMIT 个：先判条件（不到期才查合并，git 引用很便宜），满足了才跑 git status；
 // 用 git worktree remove（不带 --force），失败只记日志下轮再试，删完跑 git worktree prune。
 import { existsSync, lstatSync } from "node:fs";
-import { rm } from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
+import { resolve } from "node:path";
 import type { WorkerId } from "../shared/domain.ts";
 import {
   LOG_PREFIX,
@@ -37,6 +36,13 @@ import {
   type GitOptions,
 } from "./git/index.ts";
 import type { EndedWorktreeCandidate } from "./ledger/index.ts";
+import {
+  formatWin32LockHolders,
+  isCrossPlatformAbsolutePath,
+  isPathStrictlyInside,
+  queryWin32WhoLocks,
+  removeTreeWithRetry,
+} from "./platform/index.ts";
 
 export interface WorktreeCleanupLedger {
   listEndedWorktreeWorkers(): EndedWorktreeCandidate[];
@@ -47,6 +53,8 @@ export interface WorktreeCleanupLedger {
 export interface WorktreeCleanupOptions {
   ledger: WorktreeCleanupLedger;
   worktreesDir: string;
+  /** 额外的已登记跨卷 worktree 根目录（如 `D:\.fusa-wt\<指纹>`），清理时与 worktreesDir 一视同仁。 */
+  extraWorktreeRoots?: () => readonly string[];
   log: (line: string) => void;
   now?: () => number;
   retentionMs?: number;
@@ -62,36 +70,41 @@ export interface WorktreeCleanup {
   stop(): Promise<void>;
 }
 
-function isStrictlyInside(parentDir: string, targetPath: string): boolean {
-  const rel = relative(parentDir, targetPath);
-  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
-}
-
 /**
  * 校验 worktreePath 存在、是真目录（不是符号链接），且字面路径与真实路径都在 worktreesDir 之下。
  * 已手动删掉的目录（ENOENT）或不在 worktreesDir 下的路径都返回 false。
  */
-export function isUnderWorktreesDir(worktreePath: string, worktreesDir: string): boolean {
-  if (!isAbsolute(worktreePath) || !isStrictlyInside(resolve(worktreesDir), resolve(worktreePath))) return false;
+export function isUnderWorktreesDir(worktreePath: string, worktreesDir: string | readonly string[]): boolean {
+  if (!isCrossPlatformAbsolutePath(worktreePath)) return false;
+  const roots = typeof worktreesDir === "string" ? [worktreesDir] : worktreesDir;
+  if (roots.length === 0) return false;
+  const resolvedTarget = resolve(worktreePath);
+  const matchingRoots = roots.filter((root) => isPathStrictlyInside(resolve(root), resolvedTarget));
+  if (matchingRoots.length === 0) return false;
   try {
     const stat = lstatSync(worktreePath);
     if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
   } catch {
     return false;
   }
-  return isStrictlyInside(realpathLoose(worktreesDir), realpathLoose(worktreePath));
+  const realTarget = realpathLoose(worktreePath);
+  return matchingRoots.some((root) => isPathStrictlyInside(realpathLoose(root), realTarget));
 }
 
 export function createWorktreeCleanup(options: WorktreeCleanupOptions): WorktreeCleanup {
   const {
     ledger,
     worktreesDir,
+    extraWorktreeRoots,
     log,
     now = () => Date.now(),
     retentionMs = WORKTREE_RETENTION_MS,
     batchLimit = WORKTREE_CLEANUP_BATCH_LIMIT,
     git,
   } = options;
+
+  const currentRoots = (): string[] => [worktreesDir, ...(extraWorktreeRoots?.() ?? [])];
+  const stopController = new AbortController();
 
   let cursor = 0;
   let running: Promise<WorkerId[]> | null = null;
@@ -140,10 +153,9 @@ export function createWorktreeCleanup(options: WorktreeCleanupOptions): Worktree
       return false;
     }
     // 动手前再核一次：路径仍是 worktreesDir 下的真目录（不是符号链接）、Worker 没重新跑起来
-    if (stopped || !isUnderWorktreesDir(candidate.worktreePath, worktreesDir) || !ledger.isWorkerCleanable(candidate.workerId)) return false;
+    if (stopped || !isUnderWorktreesDir(candidate.worktreePath, currentRoots()) || !ledger.isWorkerCleanable(candidate.workerId)) return false;
     try {
-      // 不跟随符号链接；codegraph 守护进程刚退出时文件可能还在被释放，让 fs.rm 自己重试几次
-      await rm(candidate.worktreePath, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+      await removeTreeWithRetry(candidate.worktreePath, { signal: stopController.signal });
     } catch (error) {
       log(`${LOG_PREFIX} 清理孤儿 worktree 目录失败（${tag}）：${error instanceof Error ? error.message : String(error)}`);
       return false;
@@ -167,7 +179,8 @@ export function createWorktreeCleanup(options: WorktreeCleanupOptions): Worktree
       log(`${LOG_PREFIX} 清理 worktree：读取候选失败：${error instanceof Error ? error.message : String(error)}`);
       return [];
     }
-    const eligible = all.filter((c) => isUnderWorktreesDir(c.worktreePath, worktreesDir) && ledger.isWorkerCleanable(c.workerId));
+    const roots = currentRoots();
+    const eligible = all.filter((c) => isUnderWorktreesDir(c.worktreePath, roots) && ledger.isWorkerCleanable(c.workerId));
     if (eligible.length === 0) {
       cursor = 0;
       return [];
@@ -179,7 +192,7 @@ export function createWorktreeCleanup(options: WorktreeCleanupOptions): Worktree
 
     for (const candidate of batch) {
       if (stopped) break;
-      if (!isUnderWorktreesDir(candidate.worktreePath, worktreesDir) || !ledger.isWorkerCleanable(candidate.workerId)) continue;
+      if (!isUnderWorktreesDir(candidate.worktreePath, currentRoots()) || !ledger.isWorkerCleanable(candidate.workerId)) continue;
 
       // 0. 已经不是有效 git worktree 的残留目录（外部 git worktree remove / prune 之后剩下的壳）：走孤儿流程，不跑 git status
       if (inspectWorktreeLink(candidate.worktreePath) === "orphan") {
@@ -236,7 +249,7 @@ export function createWorktreeCleanup(options: WorktreeCleanupOptions): Worktree
       }
 
       // 3. 动手删之前再核一次路径和 Worker 状态，确保未重新跑起来
-      if (stopped || !isUnderWorktreesDir(candidate.worktreePath, worktreesDir) || !ledger.isWorkerCleanable(candidate.workerId)) continue;
+      if (stopped || !isUnderWorktreesDir(candidate.worktreePath, currentRoots()) || !ledger.isWorkerCleanable(candidate.workerId)) continue;
 
       try {
         await removeWorktree(candidate.repoFolder, candidate.worktreePath, git);
@@ -247,8 +260,13 @@ export function createWorktreeCleanup(options: WorktreeCleanupOptions): Worktree
           prunedRepos.add(candidate.repoFolder);
           continue;
         }
+        const lockInfo =
+          process.platform === "win32"
+            ? formatWin32LockHolders(queryWin32WhoLocks(candidate.worktreePath))
+            : "";
+        const lockSuffix = lockInfo === "" ? "" : `（占用进程：${lockInfo}）`;
         log(
-          `${LOG_PREFIX} 清理 worktree 失败（worker #${candidate.workerId}，${candidate.worktreePath}）：${error instanceof Error ? error.message : String(error)}`,
+          `${LOG_PREFIX} 清理 worktree 失败（worker #${candidate.workerId}，${candidate.worktreePath}）：${error instanceof Error ? error.message : String(error)}${lockSuffix}`,
         );
         continue;
       }
@@ -282,6 +300,7 @@ export function createWorktreeCleanup(options: WorktreeCleanupOptions): Worktree
 
   const stop = async (): Promise<void> => {
     stopped = true;
+    stopController.abort();
     if (running !== null) {
       await running.catch(() => {});
     }

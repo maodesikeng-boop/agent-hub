@@ -101,6 +101,8 @@ export interface LedgerOptions {
    * 默认 <dataHome>/worktrees（同 HubPaths 的布局），守护进程（W5）显式传。
    */
   worktreesDir?: string;
+  /** 额外的已登记跨卷 worktree 根目录（如 `D:\.fusa-wt\<指纹>`）：归档清理、分享白名单、PM addDirs 与输入过滤一并纳入。 */
+  extraWorktreeRoots?: () => readonly string[];
   /** state/launch/（HubPaths.launchDir）：清理到期归档 PM、到期 Worker 与退役旧会话时删除启动目录。 */
   launchDir?: string;
   /** state/logs/setup/（HubPaths.setupLogsDir）：清理到期归档 PM 时删除 worker-<workerId>.log。 */
@@ -138,6 +140,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     pmMemoryDir: options.pmMemoryDir ?? (options.dataHome !== undefined ? join(options.dataHome, "state", "pm-memory") : undefined),
     pmMemoryFallbackDir: join(options.pmHomeRoot, ".pm-memory"),
     worktreesDir: options.worktreesDir ?? join(dataHome, "worktrees"),
+    extraWorktreeRoots: options.extraWorktreeRoots,
     launchDir: options.launchDir,
     setupLogsDir: options.setupLogsDir,
     userHome,
@@ -151,6 +154,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     sentFilesDir: options.sentFilesDir ?? join(dataHome, "sent-files"),
     uploadsDir: options.uploadsDir ?? join(dataHome, "uploads"),
     worktreesDir: files.worktreesDir,
+    ...(files.extraWorktreeRoots ? { extraWorktreeRoots: files.extraWorktreeRoots } : {}),
     dataHome,
     userHome,
     tmpDirs: options.shareTmpDirs ?? ["/tmp", tmpdir()],
@@ -184,6 +188,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   const steps = createLedgerSteps(ctx);
   const workers = createLedgerWorkers(ctx, sessions, messages, persona, projects, {
     worktreesDir: files.worktreesDir,
+    ...(files.extraWorktreeRoots ? { extraWorktreeRoots: files.extraWorktreeRoots } : {}),
     taskGraphs,
     // 换人接手时新 Worker 的第一条消息：前任的汇报、最后的文字、最后几步操作、原始记录路径，从账本现取（takeover.ts）
     takeover: createLedgerTakeover(ctx, steps, { findTranscript: options.findTranscript }),
@@ -231,7 +236,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       if (rewound !== null) workers.clearMaxTime(conversationId);
       return rewound;
     },
-    composerTarget: (conversationId) => messages.composerTarget(conversationId, files.worktreesDir),
+    composerTarget: (conversationId) =>
+      messages.composerTarget(conversationId, files.worktreesDir, files.extraWorktreeRoots?.()),
 
     snapshot(): LedgerSnapshot {
       // 初始快照瘦身（shared/snapshot.ts）：已收工的 Worker 对话不带消息、只挂最近一行的摘要（点开再按 hasMore 拉），

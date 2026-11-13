@@ -8,11 +8,13 @@ import { isAlive, signalChild, termGroupAfterExit, waitForExit } from "./process
 import { FAKE_CLAUDE, makeHarness, realSleep, type Harness } from "./test-helpers.ts";
 import {
   BWRAP,
+  FUSA_RUN_EXE,
   OS_SANDBOX_BACKENDS,
   SANDBOX_EXEC,
   SECRET_SCAN_MAX_ENTRIES,
   SECRET_SCAN_MAX_MATCHES,
   SECRET_SCAN_MAX_MS,
+  WIN32_READONLY_FALLBACK_WARNING,
   WORKER_NEEDS_OS_SANDBOX_MESSAGE,
   WRITE_SCOPE_ENFORCERS,
   WSL_ISOLATED_DIRS,
@@ -24,6 +26,7 @@ import {
   parseWslDrvfsMounts,
   readonlyBwrapArgs,
   readonlySeatbeltProfile,
+  registerWin32MxcReadonlyProvider,
   resetOsSandboxCacheForTest,
   scanSecretGlobs,
   secretGlobRegex,
@@ -70,13 +73,20 @@ describe("WRITE_SCOPE_ENFORCERS", () => {
   it("macOS 上包 sandbox-exec，Linux 上包 bwrap（codex 换 externalSandbox，不再自己起沙箱）；未支持系统不包", () => {
     const darwinOpts = { available: true };
     const linuxOpts = { available: true, uid: 1000, exists: () => true, realpath: (p: string) => p };
+    const winOpts = { available: true, skipAclSetup: true, winHelperPath: "C:\\bin\\fusa-run.exe", stateDir: "C:\\state" };
     const wrappedDarwin = { command: SANDBOX_EXEC, args: ["-p", seatbeltProfile(scope), "/bin/agent", "--x", "y"], osSandboxed: true };
     const wrappedLinux = { command: BWRAP, args: bwrapArgs(base, scope, linuxOpts), osSandboxed: true };
     expect(wrapInOsSandbox(base, scope, "darwin", darwinOpts)).toEqual(wrappedDarwin);
     expect(wrapInOsSandbox(base, scope, "linux", linuxOpts)).toEqual(wrappedLinux);
+    expect(wrapInOsSandbox(base, scope, "win32", winOpts)).toEqual({
+      command: "C:\\bin\\fusa-run.exe",
+      args: ["--sandbox", "worker", "--state-dir", "C:\\state", "--worker", "2", "--", "/bin/agent", "--x", "y"],
+      osSandboxed: true,
+    });
     expect(wrapInOsSandbox(base, scope, "linux", { available: false })).toEqual({ ...base, osSandboxed: false });
-    expect(wrapInOsSandbox(base, scope, "win32")).toEqual({ ...base, osSandboxed: false });
-    expect(Object.keys(OS_SANDBOX_BACKENDS).sort()).toEqual(["darwin", "linux"]);
+    expect(wrapInOsSandbox(base, scope, "win32", { available: false })).toEqual({ ...base, osSandboxed: false });
+    expect(wrapInOsSandbox(base, scope, "freebsd")).toEqual({ ...base, osSandboxed: false });
+    expect(Object.keys(OS_SANDBOX_BACKENDS).sort()).toEqual(["darwin", "linux", "win32"]);
     for (const vendor of AGENT_VENDORS) {
       const off = WRITE_SCOPE_ENFORCERS[vendor].ownSandboxOffArgs;
       expect(WRITE_SCOPE_ENFORCERS[vendor].spawnCommand(base, scope, "darwin", darwinOpts), vendor).toEqual({
@@ -336,7 +346,71 @@ describe("readonlySeatbeltProfile", () => {
       osSandboxed: true,
     });
     expect(wrapInReadonlyOsSandbox(base, roInput, "linux", { available: false })).toEqual({ ...base, osSandboxed: false });
-    expect(wrapInReadonlyOsSandbox(base, roInput, "win32")).toEqual({ ...base, osSandboxed: false });
+    expect(wrapInReadonlyOsSandbox(base, roInput, "win32", { available: false })).toEqual({ ...base, osSandboxed: false });
+    expect(wrapInReadonlyOsSandbox(base, roInput, "freebsd")).toEqual({ ...base, osSandboxed: false });
+  });
+
+  it("Windows 只读 Worker 回退与 MXC 切换：无 MXC 时自动回退为 4.4.2 写受限令牌保底并带清晰降级告警；接入 MXC 后自动切到 MXC", () => {
+    resetOsSandboxCacheForTest();
+    const fallback = wrapInReadonlyOsSandbox(base, roInput, "win32", {
+      available: true,
+      skipAclSetup: true,
+      winHelperPath: FUSA_RUN_EXE,
+      stateDir: "C:\\Users\\u\\.agent-hub\\state",
+    });
+    expect(fallback).toEqual({
+      command: FUSA_RUN_EXE,
+      args: [
+        "--sandbox",
+        "worker",
+        "--state-dir",
+        "C:\\Users\\u\\.agent-hub\\state",
+        "--readonly-fallback",
+        "--",
+        "/bin/agent",
+        "--x",
+        "y",
+      ],
+      osSandboxed: true,
+      readonlyMode: "fallback_write_restricted",
+      readonlyFallbackWarning: WIN32_READONLY_FALLBACK_WARNING,
+    });
+
+    registerWin32MxcReadonlyProvider({
+      available: () => true,
+      wrapReadonly: (b, inp) => ({
+        command: "mxc-launcher.exe",
+        args: ["--tmp", inp.tmpDir, "--", b.command, ...b.args],
+      }),
+    });
+    try {
+      const mxc = wrapInReadonlyOsSandbox(base, roInput, "win32", { available: true });
+      expect(mxc).toEqual({
+        command: "mxc-launcher.exe",
+        args: ["--tmp", roInput.tmpDir, "--", "/bin/agent", "--x", "y"],
+        osSandboxed: true,
+        readonlyMode: "mxc",
+      });
+    } finally {
+      resetOsSandboxCacheForTest();
+    }
+  });
+
+  it("osSandboxAvailable('win32') 只缓存 true，探测失败不缓存，恢复后立即可用", () => {
+    resetOsSandboxCacheForTest();
+    let ready = false;
+    let calls = 0;
+    const probe = () => {
+      calls += 1;
+      return ready;
+    };
+    expect(osSandboxAvailable("win32", { probe })).toBe(false);
+    expect(osSandboxAvailable("win32", { probe })).toBe(false);
+    expect(calls).toBe(2);
+    ready = true;
+    expect(osSandboxAvailable("win32", { probe })).toBe(true);
+    expect(osSandboxAvailable("win32", { probe })).toBe(true);
+    expect(calls).toBe(3);
   });
 });
 

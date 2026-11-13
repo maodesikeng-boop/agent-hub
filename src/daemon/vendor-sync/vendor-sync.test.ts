@@ -513,7 +513,7 @@ enabled = true
     // 项目 A 的 .claude/skills/repo-lint 建了软链，项目 B 的整目录软链保持原样
     expect(lstatSync(join(projectDir, ".claude", "skills", "repo-lint")).isSymbolicLink()).toBe(true);
     expect(lstatSync(join(linkedRepo, ".claude", "skills")).isSymbolicLink()).toBe(true);
-    expect(readlinkSync(join(linkedRepo, ".claude", "skills"))).toBe("../.agents/skills");
+    expect(readlinkSync(join(linkedRepo, ".claude", "skills")).replace(/\\/g, "/")).toBe("../.agents/skills");
 
     // 取消勾选 code-review：只移除受管软链，绝不碰 user-private
     const codeReviewKey = preview.skills.find((s) => s.name === "code-review")!.key;
@@ -878,9 +878,10 @@ startup_timeout_sec = 20
     expect(lstatSync(join(userHome, ".claude.json")).isSymbolicLink()).toBe(true);
     const parsed = parseJsonc(readFileSync(realClaude, "utf8")) as { mcpServers: Record<string, unknown> };
     expect(Object.keys(parsed.mcpServers).sort()).toEqual(["a", "b"]);
-    expect(lstatSync(realClaude).mode & 0o777).toBe(0o644);
-    // 新建的配置文件默认 0600
-    expect(lstatSync(join(userHome, ".pi", "agent", "mcp.json")).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") {
+      expect(lstatSync(realClaude).mode & 0o777).toBe(0o644);
+      expect(lstatSync(join(userHome, ".pi", "agent", "mcp.json")).mode & 0o777).toBe(0o600);
+    }
     expect(readdirSync(dotfiles)).toEqual(["claude.json"]);
     expect(readdirSync(join(userHome, ".cursor"))).toEqual(["mcp.json"]);
   });

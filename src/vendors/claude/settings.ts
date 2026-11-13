@@ -57,6 +57,8 @@ export interface SessionSettingsInput {
    * 是的话关掉 claude 自带的沙箱（sandbox.enabled: false）——macOS 沙箱不能嵌套，开着 Bash 全部 exit 71。只读 Worker 不适用（见 readonly）。
    */
   osSandboxed: boolean;
+  /** 默认 process.platform（Windows 原生版下 Claude CLI 不支持自带沙箱，只读档关自带沙箱并由外层 MXC/受限令牌回退兜底）。 */
+  platform?: string;
 }
 
 /** --settings 文件的内容。 */
@@ -84,6 +86,14 @@ interface PlainSandbox {
 export function buildSessionSettings(input: SessionSettingsInput): SessionSettings {
   if (input.readonly) {
     const { allow, deny } = claudeReadonlyPermissions(input.readonly.policy);
+    const platform = input.platform ?? process.platform;
+    if (platform === "win32") {
+      return {
+        permissions: { defaultMode: CLAUDE_READONLY_PERMISSION_MODE, allow: [HUB_ALLOW_RULE, ...allow], deny },
+        sandbox: { enabled: false, network: { allowUnixSockets: [] } },
+        autoMemoryEnabled: false,
+      };
+    }
     return {
       permissions: { defaultMode: CLAUDE_READONLY_PERMISSION_MODE, allow: [HUB_ALLOW_RULE, ...allow], deny },
       sandbox: claudeReadonlySandbox(input.readonly.policy, { denyWrite: input.readonly.denyWrite, hubSock: input.hubSock }),

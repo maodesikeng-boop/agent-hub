@@ -1,0 +1,27 @@
+[package]
+name = "fusa-win-helper"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "fusa_win_helper"
+path = "src/lib.rs"
+
+[[bin]]
+name = "fusa-run"
+path = "src/bin/fusa-run.rs"
+
+[[bin]]
+name = "hub"
+path = "src/bin/hub.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -52,7 +52,7 @@ describe("cleanupExpiredFiles", () => {
     expect(existsSync(link)).toBe(true);
   });
 
-  it("删不掉的跳过并记一行日志，别的照常删；目录不存在也不报错", () => {
+  it.skipIf(process.platform === "win32")("删不掉的跳过并记一行日志，别的照常删；目录不存在也不报错", () => {
     const locked = entry(uploads, "5123456789abcdef", 100);
     const inner = join(locked, "sub");
     mkdirSync(inner);

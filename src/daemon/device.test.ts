@@ -20,7 +20,7 @@ describe("device.json", () => {
     expect(isDeviceId(device.id)).toBe(true);
     expect(device.name).toBe("mac-mini");
     expect(JSON.parse(readFileSync(file, "utf8"))).toEqual(device);
-    expect(statSync(file).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600);
   });
 
   it("之后再读不变（主机名改了也不变）", () => {

@@ -1,8 +1,8 @@
 // 守护进程启动失败时终端上看到什么（entry.ts）：已知的码一句话 + hint，不认识的一句话 + 日志路径，堆栈只进日志。
 import { execFileSync, spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
-import { arch } from "node:os";
+import { arch, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LOCAL_ERRORS } from "../shared/errors.ts";
@@ -31,7 +31,7 @@ describe("守护进程启动失败：终端上的输出", () => {
   const home = (name: string) => join(dir, name);
 
   beforeEach(() => {
-    dir = mkdtempSync("/tmp/ah-entry-");
+    dir = mkdtempSync(join(existsSync("/tmp") ? "/tmp" : tmpdir(), "ah-entry-"));
     userHome = join(dir, "user");
     mkdirSync(userHome);
     errors = [];

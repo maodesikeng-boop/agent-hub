@@ -346,13 +346,12 @@ describe("write：在复制那份上跑一轮", () => {
     expect(termGroupAfterExit).toHaveBeenCalledTimes(1);
   });
 
-  it("真进程（detached）：app-server 中途崩溃或 remove 正常关闭，同组残留子进程都被补杀", async () => {
+  it.skipIf(process.platform === "win32")("真进程（detached）：app-server 中途崩溃或 remove 正常关闭，同组残留子进程都被补杀", async () => {
     const dir = mkdtempSync(join(tmpdir(), "codex-real-proc-"));
     try {
-      const bin = join(dir, "fake-codex.mjs");
       const pidFile = join(dir, "bg.pid");
-      writeFileSync(
-        bin,
+      const bin = writeExecutableNodeScript(
+        join(dir, "fake-codex"),
         `#!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
@@ -376,7 +375,6 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 });
 `,
       );
-      chmodSync(bin, 0o755);
       const waitDead = async (pid: number) => {
         const deadline = Date.now() + 3_000;
         while (Date.now() < deadline && isAlive(pid)) await new Promise((r) => setTimeout(r, 20));
@@ -459,3 +457,4 @@ describe("forkSourceOf 给的 ForkSource 能直接用", () => {
     expect(src.launch.env[ENV_HUB_TOKEN]).toBeUndefined();
   });
 });
+import { writeExecutableNodeScript } from "../../../test/fake-cli-shim.ts";

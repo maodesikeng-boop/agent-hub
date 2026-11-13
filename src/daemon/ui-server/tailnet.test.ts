@@ -224,7 +224,7 @@ describe("二维码登录链接 × tailnet", () => {
   });
 });
 
-describe("serve 转发到 Unix socket（Linux）", () => {
+describe.skipIf(process.platform === "win32")("serve 转发到 Unix socket（Linux）", () => {
   let running: RunningUiServer;
   let socketPath: string;
 

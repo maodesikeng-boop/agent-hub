@@ -33,6 +33,25 @@ Linux 上同样由外层 OS 沙箱（`bwrap`）强制执行（详细设计见 `d
   - agy 外层套只读 `bwrap`（`readonlyBwrapArgs`）：`--ro-bind / /`，仅放开私有 `tmpDir`、运行时目录/已存在的匹配文件与缓存目录可写，存在的敏感目录用 `--tmpfs` 遮空、敏感文件（含启动时 `scanSecretGlobs` 在 `cwd` 与 `addDirs` 扫出的 `.env` 等）用 `--ro-bind /dev/null` 遮空。
 - **Ubuntu 24.04+ 一次性配置**：首次部署或 CI 跑 `sudo scripts/linux-sandbox-setup.sh`（装 `bubblewrap`、`socat` 并配置 `/etc/apparmor.d/bwrap` 放行 userns）。`osSandboxAvailable` 只缓存 `true`、不缓存 `false`，配置完成后无需重启守护进程即可派 Worker。
 
-## 沙箱不可用时：一律拒绝启动 Worker（不留规则兜底）
+## Windows：写受限令牌（`WRITE_RESTRICTED`）+ 受保护根拒写 ACL + 低版本只读回退
 
-无论普通 Worker 还是只读 Worker、无论哪家厂商，只要当前机器 OS 沙箱未就绪（`!osSandboxAvailable()`），派活（`workers.ts` 的 `startIn`）与驱动层起进程（`spawnInWriteScope` / 只读 agy）**一律直接报错拒绝启动**，并给出修复命令 `sudo scripts/linux-sandbox-setup.sh`，不再退回工具参数或命令行字面规则兜底。
+Windows 原生版通过 `apps/windows/crates/fusa-win-helper`（`fusa-run.exe`）在同一会话的 `KILL_ON_JOB_CLOSE` Job Object 内施加内核级写隔离（详细设计见 `docs/windows-native-design.md` 第 4.4 节）：
+
+- **跨卷同盘受保护根（`WriteScope.protectedRoots`）**：
+  - 数据目录（`%USERPROFILE%\.agent-hub`）以及跨盘项目同卷上的 `<卷根>\.fusa-wt\<数据目录指纹8>` 一并纳入 `protectedRoots`（macOS `seatbeltProfile`、Linux `bwrapArgs` 与 Windows ACL 三平台语义一致）。
+- **普通 Worker（`fusa-run.exe --sandbox worker --state-dir <state> --worker <id>`）**：
+  - 无需管理员权限，Win10 1809+ / Win11 通用；
+  - 持久化两个随机能力 SID（`state\win-sandbox-sids.json`）：所有 Worker 共用的 `FusaWorker` 与每个 Worker 独立的 `FusaWorker-<id>`；
+  - 在每个受保护根设置可继承的 `DENY FusaWorker`（拒绝写、追加、删除、子项删除、`WRITE_DAC`、`WRITE_OWNER`）与 `OWNER RIGHTS (S-1-3-4): READ_CONTROL`（压掉文件所有者的隐含 `WRITE_DAC`，防止 `icacls` / `Set-Acl` 自改权限绕过），先读 DACL 已满足则幂等跳过；
+  - 新建 worktree 时先建空目录并设置可继承的 `ALLOW FusaWorker-<id>` 修改权限，再执行 `git worktree add`，checkout 与 `pnpm install` 子文件自动继承、零传播开销；
+  - `CreateRestrictedToken(..., DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED, ...)` 完整复制当前令牌用户 SID + 全部已启用组 SID（保证 `D:\` 等靠 `Authenticated Users` 赋权的数据卷、工具链缓存、`%TEMP%` 与命名管道照常读写）+ `FusaWorker` + `FusaWorker-<id>`，并在 Job 上附加 `JOB_OBJECT_UILIMIT_HANDLES | UILIMIT_DESKTOP | UILIMIT_GLOBALATOMS` 收窄 UI 句柄边界。
+- **只读 Worker**：
+  - `codex`：继续使用其自带的 `readOnly` 沙箱与驱动审批回调；
+  - 其余 5 家（`claude, agy, pi, deepseek, cursor`）：在支持微软官方 MXC `processcontainer` 的 Win11 24H2+ 环境将走 MXC 容器（由 `registerWin32MxcReadonlyProvider` 接入）；**在尚未启用 MXC 或低于 Win11 24H2 / Windows Server 等无 `processcontainer` 的机器上绝不硬拒启动，自动回退为「4.4.2 写受限令牌（`--readonly-fallback`，仅带 `FusaWorker` 使全部受保护根连本 worktree 一并禁写）+ 各家现有工具层只读拦截规则（如 `--mode plan`、`--exclude-tools edit,write`、只读补丁与审批拒绝）」**，同时在后台日志与会话事件（`driver.warning`）输出清晰的降级告警说明。
+- **已知边界**：
+  - 写受限令牌拦截的是本进程树（含全部子孙进程）的直接文件写入与改权；若借外部不受限系统服务代跑（如 `schtasks`、WMI `Win32_Process.Create`、进程外 COM），属于与 macOS `(allow default)` 下 `launchctl`/AppleEvents 同类的已知边界（设计目标是防误写与常规越权，而非防高对抗恶意逃逸）；
+  - 低版本 Windows 只读回退模式下，写受限令牌只管受保护根禁写、不管文件读权限，受保护根以外目录的禁写与敏感文件禁读依赖各家 CLI 的工具权限层拦截；`agy` 存于 Windows 凭据管理器中的令牌不受文件级规则遮蔽。
+
+## 基础 OS 沙箱不可用时：一律拒绝启动 Worker
+
+在任何平台上，只要基础 OS 沙箱探针未就绪（`!osSandboxAvailable()`，例如 Linux 未装好 `bubblewrap`/AppArmor，或 Windows 缺少 `fusa-win-helper` / 文件系统为不支持 ACL 的 FAT/exFAT），派活（`workers.ts` 的 `startIn`）与驱动层起进程（`spawnInWriteScope` / `wrapInReadonlyOsSandbox`）**一律直接报错拒绝启动**，并给出对应平台的修复指引。

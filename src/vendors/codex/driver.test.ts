@@ -590,9 +590,7 @@ function makeCodexHarness(
   const scriptFile = join(dir, "script.json");
   writeFileSync(scriptFile, JSON.stringify(options.script ?? {}));
 
-  const fakeCodexBin = join(dir, "fake-codex");
-  writeFileSync(fakeCodexBin, `#!${process.execPath}\n${FAKE_CODEX_SOURCE}`);
-  chmodSync(fakeCodexBin, 0o755);
+  const fakeCodexBin = writeExecutableNodeScript(join(dir, "fake-codex"), FAKE_CODEX_SOURCE);
 
   const store = new MemorySessionStore();
   const readonlyMap = new Map<SessionId, boolean>();
@@ -1539,7 +1537,7 @@ describe("CodexDriver 跨轮 item.id 防撞车与残留进程清理", () => {
     expect(tools[0]!.uuid).not.toBe(tools[1]!.uuid);
   });
 
-  it("cleanupStale() 识别并清理残留的 codex app-server 进程且将 pid 置空", async () => {
+  it.skipIf(process.platform === "win32")("cleanupStale() 识别并清理残留的 codex app-server 进程且将 pid 置空", async () => {
     const t = makeCodexHarness();
     const fakeCodexBin = join(t.dir, "fake-codex");
     const staleChild = spawn(fakeCodexBin, ["app-server", "--listen", "stdio://"], {
@@ -2466,3 +2464,4 @@ describe("CodexDriver tokenUsage 口径与跨轮/恢复累计", () => {
     expect(t.store.get(s.id)!.usage).toEqual({ input: 15_000, cacheRead: 110_000, cacheWrite: 0, output: 500, context: 65_000 });
   });
 });
+import { writeExecutableNodeScript } from "../../../test/fake-cli-shim.ts";

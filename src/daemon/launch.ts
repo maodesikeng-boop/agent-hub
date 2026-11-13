@@ -9,7 +9,7 @@
 // Worker 的可写范围（数据目录里只有自己的工作目录能写）是 write-scope.ts 的 workerWriteScope，放在 LaunchFiles.writeScope 交给驱动层落实。
 import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { ENV_HUB_SOCK, ENV_HUB_TOKEN, WORKER_BACKGROUND_HOLD_MAX_MS, buildReadonlyPolicy, isAgentVendor, taskGraphSkillCatalogEntry, vendorSpec, workerWriteScope } from "../shared/index.ts";
 import type { AgentSessionRow, LaunchContext, LaunchFiles, PersonaNote, PersonaUpdate, SessionId, SessionRole, SessionTokens, VendorAvailabilityMap } from "../shared/index.ts";
 import { VENDOR_DAEMONS } from "../vendors/daemon-registry.ts";
@@ -33,6 +33,8 @@ export interface LaunchPreparerOptions {
   osSandboxed?: boolean | (() => boolean);
   /** Worker worktree 的根目录（paths.ts 的 worktreesDir，和账本的 LedgerOptions.worktreesDir 同一个）。 */
   worktreesDir: string;
+  /** 额外的受保护根目录（跨卷同盘 `.fusa-wt` 等，三平台统一进 WriteScope.protectedRoots）。 */
+  protectedRoots?: () => readonly string[];
   /** 账本的 getLaunchContext。 */
   getLaunchContext: (sessionId: SessionId) => LaunchContext;
   /** 同一个会话每次给同一个令牌（SessionTokens.issue 的约定）。 */
@@ -70,7 +72,7 @@ function sessionRole(ctx: LaunchContext): SessionRole {
  */
 export function createLaunchPreparer(options: LaunchPreparerOptions): (session: AgentSessionRow) => Promise<LaunchFiles> {
   const { launchDir, dataDir, stateDir, worktreesDir, getLaunchContext, tokens, hubSock, hubBinDir } = options;
-  const basePath = options.basePath ?? process.env.PATH ?? "";
+  const basePath = options.basePath ?? process.env.PATH ?? process.env.Path ?? "";
   const homeDir = realpathOr(options.homeDir ?? homedir());
   return async (session) => {
     if (session.role === "assistant") {
@@ -78,6 +80,7 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
         launchDir,
         dataDir,
         stateDir,
+        protectedRoots: options.protectedRoots?.(),
         homeDir,
         osSandboxed: options.osSandboxed,
         tokens,
@@ -101,8 +104,15 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
     const promptOptions = role === "pm" ? { taskGraphSkillFile: taskGraphSkillFile(dir) } : {};
     const prompt = buildLaunchPrompt(ctx, session.cwd, promptOptions);
     const readonly = role === "worker" && ctx.worker !== null && ctx.worker.readonly;
+    const extraRoots = options.protectedRoots?.();
     // 只读不再让 agy、codex 去反读 claude 设置文件里的权限档：统一定义放 LaunchFiles.readonly（shared/readonly-policy.ts）
-    const readonlyPolicy = readonly ? buildReadonlyPolicy({ homeDir, stateDir }) : undefined;
+    const readonlyPolicy = readonly
+      ? buildReadonlyPolicy({
+          homeDir,
+          stateDir,
+          ...(extraRoots && extraRoots.length > 0 ? { protectedRoots: [dataDir, ...extraRoots] } : {}),
+        })
+      : undefined;
     // 用设置文件落实只读的厂商（spec 的 capabilities.readonly 是 "settings"，如 claude 的自带沙箱，设计第 2.3 节）：设置文件换成只读翻译，
     // 进程不再包外层沙箱（macOS 沙箱不能嵌套）。别家的只读翻译在各自驱动层。
     const vendor = isAgentVendor(session.vendor) ? session.vendor : null;
@@ -128,7 +138,14 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
     let skillsDir: string | undefined;
     if (role === "pm") skillsDir = writeProductSkills(dir);
     else removeProductSkills(dir);
-    const writeScope = nativeReadonly ? null : workerWriteScope({ role, dataDir, cwd: session.cwd });
+    const writeScope = nativeReadonly
+      ? null
+      : workerWriteScope({
+          role,
+          dataDir,
+          ...(extraRoots && extraRoots.length > 0 ? { protectedRoots: extraRoots } : {}),
+          cwd: session.cwd,
+        });
     return {
       promptFile,
       ...(settingsFile === undefined ? {} : { settingsFile }),
@@ -136,7 +153,7 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
       env: {
         [ENV_HUB_TOKEN]: tokens.issue(session.id),
         [ENV_HUB_SOCK]: hubSock,
-        PATH: basePath === "" ? hubBinDir : `${hubBinDir}:${basePath}`,
+        PATH: basePath === "" ? hubBinDir : `${hubBinDir}${delimiter}${basePath}`,
         ...vendorFiles?.env,
       },
       // 性格设定、模式不进指纹：变了不重启，驱动层按 personaRevision 在下一条消息前加说明（createPersonaNoter）

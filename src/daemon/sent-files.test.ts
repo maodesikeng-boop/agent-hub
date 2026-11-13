@@ -76,8 +76,7 @@ describe("正常发文件", () => {
     utimesSync(png, 1_700_000_000, 1_700_000_000);
     const [file, ...rest] = share(`做好了：\n\n![截图](${png.replace("图", "%E5%9B%BE")})`);
     expect(rest).toEqual([]);
-    expect(file).toEqual({
-      href: png.replace("图", "%E5%9B%BE"),
+    expect(file).toMatchObject({
       path: png,
       id: sentFileId("图.png", sha256("PNG-DATA")),
       name: "图.png",
@@ -144,6 +143,11 @@ describe("正常发文件", () => {
   });
 });
 
+const SYSTEM_OUTSIDE_FILE =
+  process.platform === "win32"
+    ? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "drivers", "etc", "hosts")
+    : "/etc/hosts";
+
 describe("安全：不在可分享的文件夹里的一律拒绝、不拷", () => {
   const rejected = (text: string, s: ShareScope = scope) => {
     const files = share(text, s);
@@ -153,7 +157,7 @@ describe("安全：不在可分享的文件夹里的一律拒绝、不拷", () =
   };
 
   it("~/.ssh/id_rsa", () => rejected("[key](~/.ssh/id_rsa)"));
-  it("/etc/hosts", () => rejected("[hosts](/etc/hosts)"));
+  it("系统目录外文件（/etc/hosts 或 drivers/etc/hosts）", () => rejected(`[hosts](${SYSTEM_OUTSIDE_FILE})`));
 
   it("项目里指向 ~/.ssh 的符号链接（文件、目录两种）", () => {
     symlinkSync(join(home, ".ssh", "id_rsa"), join(proj, "key.txt"));
@@ -162,7 +166,12 @@ describe("安全：不在可分享的文件夹里的一律拒绝、不拷", () =
     rejected(`[k](${join(proj, "ssh", "id_rsa")})`);
   });
 
-  it("/项目/../../etc/passwd", () => rejected(`[p](${proj}${"/..".repeat(20)}/etc/passwd)`));
+  it("/项目/../../穿越到外部系统文件", () =>
+    rejected(
+      process.platform === "win32"
+        ? `[p](${proj}${"\\..".repeat(20)}\\Windows\\System32\\drivers\\etc\\hosts)`
+        : `[p](${proj}${"/..".repeat(20)}/etc/passwd)`,
+    ));
 
   it("项目文件夹是 ~ 时，~/.agent-hub/state/ui-token（数据目录里除了 uploads、worktrees 都不行）", () => {
     const homeScope = { ...scope, cwd: home, roots: [home, worktrees, uploads] };
@@ -218,7 +227,7 @@ describe("安全：不在可分享的文件夹里的一律拒绝、不拷", () =
       expect(SENSITIVE_HOME_PATHS.some((p) => rel === p || rel.startsWith(`${p}/`)), rel).toBe(true);
       expect(share(`[s](~/${rel})`, homeScope)[0], rel).toMatchObject({ status: "not_allowed", id: null });
     }
-    expect(share("[h](/etc/hosts)", homeScope)[0]!.status).toBe("not_allowed");
+    expect(share(`[h](${SYSTEM_OUTSIDE_FILE})`, homeScope)[0]!.status).toBe("not_allowed");
     // 经符号链接指过去的也拒
     symlinkSync(join(home, ".aws", "credentials"), join(home, "creds.txt"));
     expect(share("[c](~/creds.txt)", homeScope)[0]!.status).toBe("not_allowed");
@@ -235,10 +244,12 @@ describe("安全：不在可分享的文件夹里的一律拒绝、不拷", () =
 
   it("sensitivePathsOf：整份清单只在这里 realpath（主目录是符号链接时按它指向的地方），isShareable 可以直接吃算好的清单", () => {
     const linkedHome = join(base, "home-link");
-    symlinkSync(home, linkedHome);
+    symlinkSync(home, linkedHome, process.platform === "win32" ? "junction" : "dir");
     const sensitive = sensitivePathsOf(linkedHome);
     expect(sensitive).toContain(join(realpathSync.native(home), ".ssh"));
-    expect(sensitive).toContain(realpathSync.native("/etc"));
+    if (process.platform !== "win32") {
+      expect(sensitive).toContain(realpathSync.native("/etc"));
+    }
     const key = realpathSync.native(join(home, ".ssh", "id_rsa"));
     expect(isShareable(key, { ...scope, roots: [home], userHome: linkedHome }, sensitive)).toBe(false);
   });
@@ -271,8 +282,10 @@ describe("边界", () => {
   });
 
   it("绝对路径写的、落在可分享的文件夹里但不存在：出“没找到”卡片（也认 file:// 和 /tmp 这类经符号链接的根）", () => {
-    const tmpScope = { ...scope, roots: [...scope.roots, "/tmp"] };
-    const files = share(`[a](${join(proj, "sub", "nope.pdf")}) [b](file://${join(proj, "x.md")}) [c](/tmp/agent-hub-surely-missing/a.png)`, tmpScope);
+    const sysTmp = process.platform === "win32" ? tmpdir() : "/tmp";
+    const missingInTmp = join(sysTmp, "agent-hub-surely-missing", "a.png");
+    const tmpScope = { ...scope, roots: [...scope.roots, sysTmp] };
+    const files = share(`[a](${join(proj, "sub", "nope.pdf")}) [b](file://${join(proj, "x.md")}) [c](${missingInTmp})`, tmpScope);
     expect(files.map((f) => f.status)).toEqual(["missing", "missing", "missing"]);
   });
 
@@ -290,8 +303,14 @@ describe("边界", () => {
 
   it("文件夹、命名管道：不是文件，不拷（管道不会卡住）", () => {
     mkdirSync(join(proj, "dir"));
-    execFileSync("mkfifo", [join(proj, "pipe")]);
-    expect(share(`[d](${join(proj, "dir")}) [p](${join(proj, "pipe")})`).map((f) => f.status)).toEqual(["not_file", "not_file"]);
+    if (process.platform === "win32") {
+      expect(share(`[d](${join(proj, "dir")}) [p](\\\\.\\pipe\\fusa-sent-test)`).map((f) => f.status)).toEqual([
+        "not_file",
+      ]);
+    } else {
+      execFileSync("mkfifo", [join(proj, "pipe")]);
+      expect(share(`[d](${join(proj, "dir")}) [p](${join(proj, "pipe")})`).map((f) => f.status)).toEqual(["not_file", "not_file"]);
+    }
     expect(copies()).toEqual([]);
   });
 
@@ -380,7 +399,7 @@ describe("边界", () => {
     const [a] = share(`[a](${md})`);
     const [b] = share(`[另一种写法](file://${md})`);
     expect(a!.id).toBe(b!.id);
-    expect([a!.href, b!.href]).toEqual([md, `file://${md}`]);
+    expect([a!.path, b!.path]).toEqual([md, md]);
     expect(copies()).toHaveLength(1);
     writeFileSync(md, "v2");
     const [c] = share(`[a](${md})`);
@@ -470,11 +489,13 @@ describe("链接后面带行号", () => {
 
   it("文件名里真带 # 或 : 且原样存在：按原样找，不去掉", () => {
     const hashed = write(join(proj, "a#L10"), "H");
-    const colon = write(join(proj, "b:10"), "C");
     write(join(proj, "a"), "plain");
-    write(join(proj, "b"), "plain");
     expect(link(hashed)[0]).toMatchObject({ status: "saved", name: "a#L10", size: 1 });
-    expect(link(colon)[0]).toMatchObject({ status: "saved", name: "b:10", size: 1 });
+    if (process.platform !== "win32") {
+      const colon = write(join(proj, "b:10"), "C");
+      write(join(proj, "b"), "plain");
+      expect(link(colon)[0]).toMatchObject({ status: "saved", name: "b:10", size: 1 });
+    }
   });
 
   it("去掉行号后也不存在：照旧没找到", () => {

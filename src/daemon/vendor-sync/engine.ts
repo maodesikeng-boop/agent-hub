@@ -286,7 +286,7 @@ export function createVendorSyncService(options: VendorSyncServiceOptions): Vend
           }
           const entryState = inspectSkillTargetEntry(target.targetDir, loc.canonicalDir, loc.name);
           const status: VendorSyncItemVendorStatus =
-            entryState === "whole_dir_symlink" || entryState === "linked"
+            entryState === "whole_dir_symlink" || entryState === "linked" || entryState === "managed_copy"
               ? "symlink"
               : entryState === "user_private_conflict"
                 ? "conflict"
@@ -368,7 +368,7 @@ export function createVendorSyncService(options: VendorSyncServiceOptions): Vend
           if (target.mode === "native") continue;
 
           const state = inspectSkillTargetEntry(target.targetDir, loc.canonicalDir, loc.name);
-          if (state === "whole_dir_symlink" || state === "linked") continue;
+          if (state === "whole_dir_symlink" || state === "linked" || state === "managed_copy") continue;
           if (state === "user_private_conflict") {
             preservedPrivateSkillCount += 1;
             continue;

@@ -76,7 +76,7 @@ describe("按类型选渲染方式", () => {
       return el!;
     });
     expect(code.querySelectorAll(".line")).toHaveLength(2);
-    expect(highlight).toHaveBeenCalledWith(textBody, "typescript");
+    await waitFor(() => expect(highlight).toHaveBeenCalledWith(textBody, "typescript"));
     release('<pre class="shiki"><code><span class="line">HL1</span>\n<span class="line">HL2</span></code></pre>');
     await waitFor(() => expect(document.querySelector("[data-preview-code]")).toHaveTextContent("HL1"));
   });

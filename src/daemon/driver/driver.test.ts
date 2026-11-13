@@ -395,9 +395,7 @@ describe("启动卡住", () => {
 
   it("没等到 init 就退出了：抛 DriverError(spawn_failed)，带上退出码和标准错误", async () => {
     const t = harness();
-    const bin = join(t.dir, "broken-claude");
-    writeFileSync(bin, "#!/bin/sh\necho boom >&2\nexit 2\n");
-    chmodSync(bin, 0o755);
+    const bin = writeExecutableNodeScript(join(t.dir, "broken-claude"), 'process.stderr.write("boom\\n"); process.exit(2);\n');
     const t2 = makeHarness({ dir: t.dir, driver: { executablePath: bin } });
     try {
       const s = t2.addSession();
@@ -960,9 +958,7 @@ describe("参数冲突后的持久化", () => {
 
   it("只认 “Session ID … is already in use”，别的 already in use 不算参数选错", async () => {
     const t = harness();
-    const bin = join(t.dir, "port-claude");
-    writeFileSync(bin, "#!/bin/sh\necho 'Error: port 8080 is already in use' >&2\nexit 1\n");
-    chmodSync(bin, 0o755);
+    const bin = writeExecutableNodeScript(join(t.dir, "port-claude"), 'process.stderr.write("Error: port 8080 is already in use\\n"); process.exit(1);\n');
     const t2 = makeHarness({ dir: t.dir, driver: { executablePath: bin } });
     try {
       const s = t2.addSession();
@@ -1037,7 +1033,15 @@ describe("启动和关闭的边角", () => {
       expect(Date.now() - started).toBeLessThan(5_000);
       expect(exited).toMatchObject({ reason: "crash", exitCode: 1, messageIds: [1] });
     } finally {
-      for (const e of t.log()) if (e.kind === "orphan") process.kill(e.orphanPid, "SIGKILL");
+      for (const e of t.log()) {
+        if (e.kind === "orphan") {
+          try {
+            process.kill(e.orphanPid, "SIGKILL");
+          } catch {
+            // Windows 下 fusa-run Job Object 已在主进程退出时清掉孤儿
+          }
+        }
+      }
     }
   });
 
@@ -1287,3 +1291,4 @@ describe("token 用量", () => {
     expect(seen).toEqual({ input: 1, cacheRead: 2, cacheWrite: 3, output: 4, context: 6 });
   });
 });
+import { writeExecutableNodeScript } from "../../../test/fake-cli-shim.ts";

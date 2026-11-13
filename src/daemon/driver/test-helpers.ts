@@ -2,7 +2,8 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type {
   AgentSessionPatch,
   AgentSessionRow,
@@ -15,9 +16,10 @@ import type {
 } from "../../shared/index.ts";
 import { EMPTY_TOKEN_USAGE } from "../../shared/index.ts";
 import type { FakeLogEntry, FakeScript } from "../../../test/fake-claude/fake-claude.ts";
+import { wrapScriptAsPlatformCli } from "../../../test/fake-cli-shim.ts";
 import { createClaudeDriver, type ClaudeDriver, type ClaudeDriverOptions } from "../../vendors/claude/driver.ts";
 
-export const FAKE_CLAUDE = new URL("../../../test/fake-claude/fake-claude.ts", import.meta.url).pathname;
+export const FAKE_CLAUDE = fileURLToPath(new URL("../../../test/fake-claude/fake-claude.ts", import.meta.url));
 
 /** 在 vi.useFakeTimers 之前拿到的真计时器，测试里“真等一会儿”用。 */
 const realSetTimeout = globalThis.setTimeout;
@@ -115,11 +117,12 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
   const logFile = join(dir, "fake-claude.log");
   const scriptFile = join(dir, "script.json");
   writeFileSync(scriptFile, JSON.stringify(options.script ?? {}));
+  const defaultExe = wrapScriptAsPlatformCli(FAKE_CLAUDE, dir, "fake-claude");
   const store = new MemorySessionStore();
   const launch: Harness["launch"] = { fingerprint: "", env: {}, settings: false, fail: false, personaRevision: null, perSession: new Map(), writeScope: null, backgroundHoldMaxMs: null, readonly: null };
   const prepareCalls = new Map<SessionId, number>();
   const driver = createClaudeDriver({
-    executablePath: FAKE_CLAUDE,
+    executablePath: defaultExe,
     store,
     prepareLaunch: async (session) => {
       prepareCalls.set(session.id, (prepareCalls.get(session.id) ?? 0) + 1);
@@ -142,7 +145,14 @@ export function makeHarness(options: HarnessOptions = {}): Harness {
       }
       return files;
     },
-    env: { FAKE_CLAUDE_LOG: logFile, FAKE_CLAUDE_SCRIPT: scriptFile, FAKE_CLAUDE_STATE: dir },
+    env: {
+      FAKE_CLAUDE_LOG: logFile,
+      FAKE_CLAUDE_SCRIPT: scriptFile,
+      FAKE_CLAUDE_STATE: dir,
+      ...(process.platform === "win32"
+        ? { PATH: `${dirname(process.execPath)};${process.env.PATH ?? process.env.Path ?? ""}` }
+        : {}),
+    },
     ...options.driver,
   });
   const events: Harness["events"] = [];

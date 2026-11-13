@@ -1,6 +1,6 @@
 // DeepSeek Harness（`dsh --profile acp`）会话驱动：基于通用 ACP 驱动底座（src/vendors/_common/acp/）的薄封装。
 // 核实细节与出处见 docs/vendors/deepseek.md。
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { AgentSessionRow, Driver, LaunchFiles } from "../../shared/index.ts";
@@ -17,6 +17,7 @@ import {
 } from "../_common/acp/index.ts";
 import { resolveDeepSeekHome } from "./paths.ts";
 import { loadDeepSeekAcpMcpServers } from "./sync.ts";
+import { resolveSpawn } from "../../daemon/platform/index.ts";
 
 /** Cordis loader overlay patch 单项。 */
 export interface DeepSeekCordisPatchEntry {
@@ -344,7 +345,24 @@ function readonlyStatePatch(stateDir: string): readonly DeepSeekCordisPatchEntry
 export function ensureDeepSeekProfile(executablePath: string, dshHome: string, env: NodeJS.ProcessEnv, cwd: string): void {
   if (existsSync(join(dshHome, "profiles", DEEPSEEK_PROFILE, "package.json"))) return;
   try {
-    execFileSync(executablePath, ["--profile", DEEPSEEK_PROFILE, "--dump-config"], { cwd, env, stdio: "ignore", timeout: DEEPSEEK_PROFILE_INIT_TIMEOUT_MS });
+    if (process.platform === "win32") {
+      const resolved = resolveSpawn(
+        {
+          program: executablePath,
+          args: ["--profile", DEEPSEEK_PROFILE, "--dump-config"],
+          cwd,
+          env,
+          stdio: "ignore",
+        },
+        "win32",
+      );
+      spawnSync(resolved.file, resolved.args, {
+        ...resolved.options,
+        timeout: DEEPSEEK_PROFILE_INIT_TIMEOUT_MS,
+      });
+    } else {
+      execFileSync(executablePath, ["--profile", DEEPSEEK_PROFILE, "--dump-config"], { cwd, env, stdio: "ignore", timeout: DEEPSEEK_PROFILE_INIT_TIMEOUT_MS });
+    }
   } catch {
     // 初始化失败照常起，dsh 在沙箱里自己报错
   }

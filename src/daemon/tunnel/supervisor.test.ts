@@ -91,7 +91,7 @@ async function spawned(n: number) {
   while (pids().length < n) await new Promise((r) => setTimeout(r, 10));
 }
 
-describe("状态分类", () => {
+describe.skipIf(process.platform === "win32")("状态分类", () => {
   it("看到 remote forward success 才算 connected；之前是 connecting", async () => {
     setPlan([{ stderr: ["debug1: Authenticated to x ([1.2.3.4]:22) using \"publickey\".", CONNECTED], hang: true }]);
     const s = supervisor();
@@ -150,7 +150,7 @@ describe("状态分类", () => {
   });
 });
 
-describe("退避", () => {
+describe.skipIf(process.platform === "win32")("退避", () => {
   it("1→2→4…→60 秒封顶；定时器到了才重连", async () => {
     setPlan([{ stderr: [REFUSED], exit: 255 }]);
     const s = supervisor();
@@ -192,7 +192,7 @@ describe("退避", () => {
   });
 });
 
-describe("提前重连（给转发用：/d/<中心> 连不上时调）", () => {
+describe.skipIf(process.platform === "win32")("提前重连（给转发用：/d/<中心> 连不上时调）", () => {
   it("在等退避：取消定时器、马上连；同一个退避周期里只提前一次", async () => {
     setPlan([{ stderr: [REFUSED], exit: 255 }]);
     const s = supervisor();
@@ -251,7 +251,7 @@ describe("提前重连（给转发用：/d/<中心> 连不上时调）", () => {
   });
 });
 
-describe("停止", () => {
+describe.skipIf(process.platform === "win32")("停止", () => {
   it("杀掉子进程；之后不再重连、不再报状态", async () => {
     setPlan([{ stderr: [CONNECTED], hang: true }]);
     const s = supervisor();

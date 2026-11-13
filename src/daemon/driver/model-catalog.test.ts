@@ -321,15 +321,14 @@ describe("queryClaudeModels / queryAgyModels / queryCodexModels", () => {
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "model-catalog-"));
   });
-  afterEach(() => {
-    rmSync(dir, { recursive: true, force: true });
+  afterEach(async () => {
+    await removeTreeWithRetry(dir);
   });
 
   /** 写一个假 claude：读一行标准输入，交给 body 处理（body 里能用 req、out(obj)、argv）。 */
   function fakeClaude(body: string): string {
-    const path = join(dir, "claude");
-    writeFileSync(
-      path,
+    return writeExecutableNodeScript(
+      join(dir, "claude"),
       `#!/usr/bin/env node
 const fs = require("node:fs");
 fs.writeFileSync(${JSON.stringify(join(dir, "argv.json"))}, JSON.stringify(process.argv.slice(2)));
@@ -345,14 +344,11 @@ process.stdin.on("data", (d) => {
 });
 `,
     );
-    chmodSync(path, 0o755);
-    return path;
   }
 
   function fakeAgy(body: string): string {
-    const path = join(dir, "agy");
-    writeFileSync(
-      path,
+    return writeExecutableNodeScript(
+      join(dir, "agy"),
       `#!/usr/bin/env node
 const fs = require("node:fs");
 fs.writeFileSync(${JSON.stringify(join(dir, "agy-argv.json"))}, JSON.stringify(process.argv.slice(2)));
@@ -360,14 +356,11 @@ fs.writeFileSync(${JSON.stringify(join(dir, "agy-pid"))}, String(process.pid));
 ${body}
 `,
     );
-    chmodSync(path, 0o755);
-    return path;
   }
 
   function fakeCodex(body: string): string {
-    const path = join(dir, "codex");
-    writeFileSync(
-      path,
+    return writeExecutableNodeScript(
+      join(dir, "codex"),
       `#!/usr/bin/env node
 const fs = require("node:fs");
 const readline = require("node:readline");
@@ -382,8 +375,6 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 });
 `,
     );
-    chmodSync(path, 0o755);
-    return path;
   }
 
   /**
@@ -538,10 +529,10 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 
   it("queryClaudeAuthStatus：跑 claude auth status --json，loggedIn 真假对应能用 / 没登录，认不出是 unknown", async () => {
     const write = (body: string) => {
-      const path = join(dir, "claude-auth");
-      writeFileSync(path, `#!/usr/bin/env node\nrequire("node:fs").writeFileSync(${JSON.stringify(join(dir, "auth-argv.json"))}, JSON.stringify(process.argv.slice(2)));\n${body}\n`);
-      chmodSync(path, 0o755);
-      return path;
+      return writeExecutableNodeScript(
+        join(dir, "claude-auth"),
+        `require("node:fs").writeFileSync(${JSON.stringify(join(dir, "auth-argv.json"))}, JSON.stringify(process.argv.slice(2)));\n${body}\n`,
+      );
     };
     expect(await queryClaudeAuthStatus({ claudePath: write(`console.log(JSON.stringify({ loggedIn: true })); process.exit(0);`), cwd: dir })).toBe("available");
     expect(JSON.parse(readFileSync(join(dir, "auth-argv.json"), "utf8"))).toEqual(["auth", "status", "--json"]);
@@ -919,7 +910,7 @@ describe("createModelCatalogs：问一次、缓存、过期再问、问不到用
       await catalogs.list();
       expect(calls).toBe(3);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      await removeTreeWithRetry(dir);
     }
   });
 });
@@ -1072,3 +1063,5 @@ describe("createModelCatalogs：厂商在这台设备上的状态（跟名单一
     expect(t.catalogs.availability("agy")).toBe("unknown");
   });
 });
+import { writeExecutableNodeScript } from "../../../test/fake-cli-shim.ts";
+import { removeTreeWithRetry } from "../platform/index.ts";

@@ -5,9 +5,12 @@
 // 状态只有一个数：这台设备上正在跑一轮的会话有几个（项目经理和 Worker 都算）。靠会话状态变化的事件驱动，严禁轮询。
 import { spawn } from "node:child_process";
 import { SLEEP_INHIBIT_GRACE_MS, type SessionId, type SessionState } from "../../shared/index.ts";
+import { findWinHelperBinary } from "./win32/helper-bins.ts";
 
 /** macOS 防闲置睡眠的命令行路径。 */
 export const MACOS_CAFFEINATE_BIN = "/usr/bin/caffeinate";
+/** Windows 防闲置睡眠辅助程序默认名（实际启动时解析绝对路径）。 */
+export const WIN32_KEEP_AWAKE_BIN = "fusa-run.exe";
 
 export interface SleepInhibitCommand {
   command: string;
@@ -17,12 +20,17 @@ export interface SleepInhibitCommand {
 /**
  * 各平台防闲置睡眠的命令表。
  * - darwin：`caffeinate -i -w <守护进程 pid>`（-i 防闲置系统睡眠；-w 守护进程崩了也跟着退出，不留孤儿进程）。
+ * - win32：`fusa-run.exe keep-awake --parent <守护进程 pid>`（SetThreadExecutionState，父进程退出立即恢复并退出）。
  * - 别的平台（如 Linux 服务器）不在表里，什么都不做；以后支持 Linux 笔记本时加 linux: systemd-inhibit。
  */
 export const SLEEP_INHIBIT_COMMANDS: Readonly<Partial<Record<string, SleepInhibitCommand>>> = {
   darwin: {
     command: MACOS_CAFFEINATE_BIN,
     args: (daemonPid) => ["-i", "-w", String(daemonPid)],
+  },
+  win32: {
+    command: WIN32_KEEP_AWAKE_BIN,
+    args: (daemonPid) => ["keep-awake", "--parent", String(daemonPid)],
   },
 };
 
@@ -35,7 +43,9 @@ export interface SleepInhibitProcess {
 type SpawnSleepInhibitor = (command: string, args: string[]) => SleepInhibitProcess;
 
 const defaultSpawnSleepInhibitor: SpawnSleepInhibitor = (command, args) => {
-  const child = spawn(command, args, { stdio: "ignore" });
+  const resolvedCommand =
+    command === WIN32_KEEP_AWAKE_BIN ? (findWinHelperBinary("fusa-run.exe") ?? command) : command;
+  const child = spawn(resolvedCommand, args, { stdio: "ignore", windowsHide: true, shell: false });
   child.unref();
   child.on("error", () => {});
   return {

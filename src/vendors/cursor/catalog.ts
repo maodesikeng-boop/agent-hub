@@ -1,7 +1,7 @@
 // Cursor 模型名单与设备登录状态探测：
 // 并行运行 `cursor-agent models` 与 `cursor-agent status --format json`（不创建会话、不消耗额度），
 // 超时或中止时强制按进程组清理（killThenSettle + termGroupAfterExit），输出受 CURSOR_PROBE_MAX_STDOUT_BYTES 与 MAX_CATALOG_MODELS 保护。
-import { spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import {
   MAX_CATALOG_LABEL_CHARS,
   MAX_CATALOG_MODELS,
@@ -23,6 +23,7 @@ import {
 } from "../../daemon/driver/model-catalog.ts";
 import { streamClosed, termGroupAfterExit } from "../../daemon/driver/process.ts";
 import { buildChildEnv } from "../../daemon/driver/protocol.ts";
+import { spawnOwnedProcess } from "../../daemon/platform/index.ts";
 import { trackChild } from "../../daemon/process-ledger.ts";
 import type { VendorCatalogProbe, VendorCatalogSourceOptions } from "../../daemon/vendors/types.ts";
 import { CURSOR_PROBE_MAX_STDOUT_BYTES } from "./limits.ts";
@@ -195,14 +196,16 @@ function runCursorSubcommand(
       reject(err);
     };
 
-    let child: ReturnType<typeof spawn>;
+    let child: ChildProcess;
+    let detached = true;
     try {
-      child = spawn(executablePath, [...args], {
+      const spawned = spawnOwnedProcess(executablePath, [...args], {
         cwd,
         env: buildChildEnv(env, { NO_COLOR: "1" }),
         stdio: ["ignore", "pipe", "pipe"],
-        detached: true,
       });
+      child = spawned.child;
+      detached = spawned.detached;
     } catch (err) {
       reject(err instanceof Error ? err : new Error(String(err)));
       return;
@@ -214,7 +217,7 @@ function runCursorSubcommand(
     }
 
     const tracked = child as Parameters<typeof killThenSettle>[0];
-    trackChild(tracked, "probe:cursor", { detached: true });
+    trackChild(tracked, "probe:cursor", { detached });
 
     let stdout = "";
     let stdoutBytes = 0;

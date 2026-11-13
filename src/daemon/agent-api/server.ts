@@ -1,9 +1,12 @@
 // agent 接口（设计第 4.2、8.1、8.2 节；m2-plan 第 3 节接口约定第 4 条）：第二个 Fastify 实例，只监听 Unix socket run/hub.sock。
 // 按会话令牌认人，按 JSON Schema 查请求体的形状和长度，再交给账本的 hubCall。规格见 shared/hub.ts 的注释。
 import { dirname, resolve } from "node:path";
+import { Readable } from "node:stream";
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import {
   ASK_MAX_OPTION_CHARS,
+  ENV_HUB_SOCK,
+  ENV_HUB_TOKEN,
   HUB_COMMANDS,
   HUB_ERROR_HTTP_STATUS,
   HUB_MAX_BODY_BYTES,
@@ -43,6 +46,8 @@ import {
 } from "../../shared/index.ts";
 import { API_ERRORS } from "../../shared/errors.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
+import { runHubSafely } from "../../hub/cli.ts";
+import { isCrossPlatformAbsolutePath, isWindowsNamedPipe } from "../platform/index.ts";
 import { listenOnRunSocket } from "../run-socket.ts";
 import type { RouterSandboxGuard } from "../router/sandbox.ts";
 import type { WorkerPr, WorkerPrProbeResult } from "../../shared/hub.ts";
@@ -114,6 +119,8 @@ export interface AgentApiOptions {
   requestTimeoutMs?: number;
   /** 多久查一次有没有超时的请求，默认 HUB_TIMEOUT_CHECK_MS。 */
   timeoutCheckMs?: number;
+  /** 供 Windows `hub.exe` 原生直连 `/hub/cli` 转发时注入当前监听的管道名。 */
+  boundSocketPath?: () => string;
 }
 
 const BEARER = /^Bearer ([A-Za-z0-9_-]+)$/;
@@ -419,7 +426,9 @@ function checkFields(command: HubCommand, body: Record<string, unknown>): void {
   for (const [field, kind] of Object.entries(FIELD_KINDS[command] ?? {})) {
     const value = body[field];
     if (typeof value !== "string") continue;
-    if (kind === "path" && !value.startsWith("/")) throw new HubError("invalid", `参数不对：${field} 必须是绝对路径（以 / 开头）`);
+    if (kind === "path" && !isCrossPlatformAbsolutePath(value)) {
+      throw new HubError("invalid", `参数不对：${field} 必须是绝对路径`);
+    }
     if (kind === "path" && value.includes("\0")) throw new HubError("invalid", `参数不对：${field} 不能含 NUL 字符`);
     if (kind === "name" && CONTROL_CHARS.test(value)) throw new HubError("invalid", `参数不对：${field} 不能含 NUL 或控制字符`);
   }
@@ -745,6 +754,58 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
     return reply.code(200).send({ ok: true, text: result.text, data: result.data });
   });
 
+  const hubCliPipeSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["argv", "cwd"],
+    properties: {
+      argv: { type: "array", items: { type: "string" } },
+      cwd: { type: "string" },
+      msystem: { type: "string" },
+      exepath: { type: "string" },
+      stdinUtf8: { type: "string" },
+      stdinInvalidUtf8: { type: "boolean" },
+    },
+  };
+
+  app.post("/hub/cli", { bodyLimit: HUB_MAX_BODY_BYTES * 4, schema: { body: hubCliPipeSchema } }, async (req, reply) => {
+    const auth = authOf.get(req);
+    if (auth === undefined) throw new Error("agent-api: request reached /hub/cli without a session");
+    const sock = opts.boundSocketPath?.() ?? "";
+    if (!sock) {
+      return fail(reply, "internal", API_ERRORS.internal.text);
+    }
+    const body = req.body as {
+      argv: string[];
+      cwd: string;
+      msystem?: string;
+      exepath?: string;
+      stdinUtf8?: string;
+      stdinInvalidUtf8?: boolean;
+    };
+    let stdout = "";
+    let stderr = "";
+    const exitCode = await runHubSafely({
+      argv: body.argv,
+      cwd: body.cwd || process.cwd(),
+      env: {
+        [ENV_HUB_TOKEN]: auth.token,
+        [ENV_HUB_SOCK]: sock,
+        ...(body.msystem !== undefined ? { MSYSTEM: body.msystem } : {}),
+        ...(body.exepath !== undefined ? { EXEPATH: body.exepath } : {}),
+      },
+      stdin: () => {
+        if (body.stdinInvalidUtf8) {
+          return Readable.from([Buffer.from([0xff, 0xfe])]);
+        }
+        return Readable.from(body.stdinUtf8 !== undefined ? [Buffer.from(body.stdinUtf8, "utf8")] : []);
+      },
+      stdout: { write: (chunk: string) => { stdout += chunk; } },
+      stderr: { write: (chunk: string) => { stderr += chunk; } },
+    });
+    return reply.code(200).send({ exitCode, stdout, stderr });
+  });
+
   return app;
 }
 
@@ -768,12 +829,16 @@ export interface RunningAgentApi {
  * socket 文件在、但试连连不上，才当残留删掉；连得上说明有活实例，拒绝启动。
  */
 export async function startAgentApi(opts: AgentApiListenOptions): Promise<RunningAgentApi> {
-  if (resolve(dirname(opts.hubSock)) !== resolve(opts.runDir)) throw new Error(`hubSock must be directly inside runDir: ${opts.hubSock}`);
-  const app = createAgentApi(opts);
+  if (!isWindowsNamedPipe(opts.hubSock) && resolve(dirname(opts.hubSock)) !== resolve(opts.runDir)) {
+    throw new Error(`hubSock must be directly inside runDir: ${opts.hubSock}`);
+  }
+  let activeSocketPath = opts.hubSock;
+  const app = createAgentApi({ ...opts, boundSocketPath: () => activeSocketPath });
   const socketPath = await listenOnRunSocket(
     opts.hubSock,
     (path) => app.listen({ path }).then(() => undefined),
     () => app.close(),
   );
+  activeSocketPath = socketPath;
   return { app, socketPath, close: () => app.close() };
 }

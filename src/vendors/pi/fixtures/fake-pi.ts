@@ -1,7 +1,8 @@
 // 假 Pi 可执行程序夹具：同时模拟 `pi --offline --list-models`、`pi --mode rpc` 与 `pi --mode rpc --fork <src>`，
 // 严格按 `\n` 切分 JSONL（不将 U+2028/U+2029 当换行），供驱动、目录、命令、交接单测与基准测试共用。
-import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { writeExecutableNodeScript } from "../../../../test/fake-cli-shim.ts";
 
 interface FakePiToolCall {
   id: string;
@@ -603,12 +604,11 @@ export interface FakePiFiles {
 
 /** 在给定目录下创建可执行的假 `pi` 脚本及配套剧本/日志路径。 */
 export function writeFakePiBinary(dir: string, initialScript: FakePiScript = {}): FakePiFiles {
-  const binPath = join(dir, "fake-pi");
+  mkdirSync(dir, { recursive: true });
   const scriptPath = join(dir, "fake-pi-script.json");
   const logPath = join(dir, "fake-pi.log");
   writeFileSync(scriptPath, JSON.stringify(initialScript));
-  writeFileSync(binPath, `#!${process.execPath}\n${FAKE_PI_SOURCE}`);
-  chmodSync(binPath, 0o755);
+  const binPath = writeExecutableNodeScript(join(dir, "fake-pi"), FAKE_PI_SOURCE);
 
   return {
     binPath,

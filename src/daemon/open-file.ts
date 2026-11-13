@@ -5,14 +5,39 @@
 // 别的和带可执行权限的文件只许显示（打开可能直接运行）。
 import { execFile } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
-import { basename } from "node:path";
+import { basename, win32 } from "node:path";
 import { canOpenWithDefault, type FileAction, type FileActionResponse } from "../shared/index.ts";
 
 /** 跑 open，参数原样给它。测试里换成记录调用的假函数。 */
 export type RunOpen = (args: string[]) => Promise<void>;
 
+export function buildWindowsExplorerInvocation(
+  args: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+): { file: string; args: string[] } {
+  const sysRoot = env.SystemRoot || env.SYSTEMROOT || "C:\\Windows";
+  const explorer = win32.join(sysRoot, "explorer.exe");
+  const isReveal = args[0] === "-R";
+  const target = args[args.length - 1] ?? "";
+  return {
+    file: explorer,
+    args: isReveal ? [`/select,${target}`] : [target],
+  };
+}
+
 export const runOpenCommand: RunOpen = (args) =>
   new Promise((resolve, reject) => {
+    if (process.platform === "win32") {
+      const inv = buildWindowsExplorerInvocation(args);
+      // explorer.exe often exits with code 1 even when opening the window succeeds; only spawn errors (ENOENT) count as failure.
+      execFile(inv.file, inv.args, { windowsHide: false }, (error) => {
+        if (error && typeof (error as NodeJS.ErrnoException).code === "string") {
+          return reject(error);
+        }
+        resolve();
+      });
+      return;
+    }
     execFile("open", args, (error) => (error === null ? resolve() : reject(error)));
   });
 

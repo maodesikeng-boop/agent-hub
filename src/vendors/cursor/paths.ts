@@ -6,6 +6,18 @@ import type { VendorPathsModule } from "../daemon-types.ts";
  * Linux 额外覆盖通用安装目录（`~/.local/bin` 排第一，去重保序）。
  */
 export const fallbackPaths: VendorPathsModule["fallbackPaths"] = ({ userHome, platform, linuxInstallDirs, join }) => {
+  if (platform === "win32") {
+    return [
+      join(userHome, "AppData", "Local", "cursor-agent", "cursor-agent.exe"),
+      join(userHome, "AppData", "Local", "cursor-agent", "cursor-agent.cmd"),
+      join(userHome, "AppData", "Local", "cursor-agent", "agent.exe"),
+      join(userHome, "AppData", "Local", "cursor-agent", "agent.cmd"),
+      join(userHome, ".local", "bin", "cursor-agent.exe"),
+      join(userHome, ".local", "bin", "agent.exe"),
+      join(userHome, "AppData", "Roaming", "npm", "cursor-agent.cmd"),
+      join(userHome, "AppData", "Roaming", "npm", "agent.cmd"),
+    ];
+  }
   const localBin = join(userHome, ".local", "bin", "cursor-agent");
   if (platform === "darwin") return [localBin];
   return [...new Set([localBin, ...linuxInstallDirs.map((dir) => join(dir, "cursor-agent"))])];

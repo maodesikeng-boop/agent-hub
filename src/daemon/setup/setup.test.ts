@@ -38,7 +38,7 @@ async function waitForFile(path: string, ms = 5_000): Promise<void> {
   }
 }
 
-describe("runSetupCommand", () => {
+describe.skipIf(process.platform === "win32")("runSetupCommand", () => {
   it("1 正常：在 worktree 里跑，输出进 tail 和日志，日志有段头和结尾", async () => {
     const outcome = await run("pwd; echo hi");
     expect(outcome).toMatchObject({ kind: "ok", exitCode: 0, signal: null, error: null, logError: null, command: "pwd; echo hi", logPath });
@@ -176,7 +176,7 @@ describe("outputTail", () => {
   });
 });
 
-describe("createSetupRunner", () => {
+describe.skipIf(process.platform === "win32")("createSetupRunner", () => {
   const job = (workerId: number, command: string, onDone: (o: SetupOutcome) => void): SetupJob => ({
     workerId,
     sessionId: workerId * 10,
@@ -261,7 +261,7 @@ describe("createSetupRunner", () => {
   });
 });
 
-describe("审查后补的（PR #47）", () => {
+describe.skipIf(process.platform === "win32")("审查后补的（PR #47）", () => {
   it("R4 环境变量：按忽略大小写去掉模型和 hub 的凭据，GH、AWS、NPM 的令牌保留", () => {
     const base = {
       ANTHROPIC_API_KEY: "x",
@@ -380,7 +380,7 @@ describe("审查后补的（PR #47）", () => {
     expect(outcome.error).toBe(`worktree 目录不在：${join(root, "gone")}`);
   });
 
-  it("R7 日志目录权限 0700", async () => {
+  it.skipIf(process.platform === "win32")("R7 日志目录权限 0700", async () => {
     await run("true");
     expect(statSync(join(root, "logs", "setup")).mode & 0o777).toBe(0o700);
   });

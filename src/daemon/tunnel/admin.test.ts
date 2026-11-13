@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { TUNNEL_ADMIN_MAX_BODY_BYTES } from "../../shared/limits.ts";
+import { resolveHubPaths } from "../../shared/paths.ts";
 import { startTunnelAdmin, type RunningTunnelAdmin } from "./admin.ts";
 import { TunnelInputError, type TunnelService } from "./service.ts";
 
@@ -46,16 +47,24 @@ afterEach(async () => {
   calls.length = 0;
 });
 
-async function start() {
-  const runDir = join(mkdtempSync(join(tmpdir(), "hub-adm-")), "run");
-  admin = await startTunnelAdmin({ runDir, socketPath: join(runDir, "admin.sock"), authorize: (t) => t === TOKEN, service: fakeService });
+async function start(onShutdown?: () => void) {
+  const dir = mkdtempSync(join(tmpdir(), "hub-adm-"));
+  const runDir = join(dir, "run");
+  const socketPath = process.platform === "win32" ? resolveHubPaths({}, dir).adminSock : join(runDir, "admin.sock");
+  admin = await startTunnelAdmin({
+    runDir,
+    socketPath,
+    authorize: (t) => t === TOKEN,
+    service: fakeService,
+    ...(onShutdown ? { onShutdown } : {}),
+  });
   return admin.socketPath;
 }
 
 describe("管理 socket", () => {
   it("socket 0600；不带令牌、令牌不对 401，服务一次都没调", async () => {
     const sock = await start();
-    expect(statSync(sock).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(statSync(sock).mode & 0o777).toBe(0o600);
     expect((await call(sock, "POST", "/tunnel/key", {}, null)).status).toBe(401);
     expect((await call(sock, "POST", "/tunnel/key", {}, "wrong-token-0123456789")).status).toBe(401);
     expect(calls).toEqual([]);
@@ -86,5 +95,15 @@ describe("管理 socket", () => {
       body: { error: "请求太大" },
     });
     expect((await call(sock, "POST", "/nope", {})).status).toBe(404);
+  });
+
+  it("POST /admin/shutdown 带正确令牌触发优雅关机回调", async () => {
+    let triggered = false;
+    const sock = await start(() => {
+      triggered = true;
+    });
+    expect(await call(sock, "POST", "/admin/shutdown", {})).toEqual({ status: 200, body: { ok: true } });
+    await new Promise((r) => setImmediate(r));
+    expect(triggered).toBe(true);
   });
 });

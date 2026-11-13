@@ -42,9 +42,7 @@ function shortTmp(): string {
 }
 
 function writeExecutable(path: string, source: string): string {
-  writeFileSync(path, `#!/usr/bin/env node\n${source}`, "utf8");
-  chmodSync(path, 0o755);
-  return path;
+  return writeExecutableNodeScript(path, source);
 }
 
 describe("daemon 多厂商集成（claude + agy + codex）", () => {
@@ -639,3 +637,4 @@ rl.on("line", (line) => {
     expect(workerVendors).toEqual(["agy", "codex"]);
   });
 });
+import { writeExecutableNodeScript } from "../../test/fake-cli-shim.ts";

@@ -2,7 +2,7 @@
 // 记下本测试文件通过 child_process.spawn / fork / execFile 起的每个子进程，文件的 afterAll 里检查它们是不是都退出了，
 // 没退出（或者 detached 起的进程组里还有后代）就 SIGKILL 清掉并让这个文件失败，带上进程号和命令。
 // 只看自己记下的进程：用 process.kill(pid, 0) 检查，不跑 ps（Worker 沙箱里 ps 被禁）、不按名字找别人的进程。
-import { type ChildProcess } from "node:child_process";
+import { execFileSync, type ChildProcess } from "node:child_process";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { afterAll, expect } from "vitest";
 import { TEST_CHILD_EXIT_WAIT_MS } from "../src/shared/limits.ts";
@@ -60,6 +60,7 @@ function install(): void {
 }
 
 function groupAlive(pid: number): boolean {
+  if (process.platform === "win32") return false;
   try {
     process.kill(-pid, 0);
     return true;
@@ -96,7 +97,15 @@ export function killLeaked(leaked: readonly Tracked[]): void {
   for (const { child, detached } of leaked) {
     if (child.pid === undefined || child.pid <= 1) continue;
     try {
-      process.kill(detached ? -child.pid : child.pid, "SIGKILL");
+      if (process.platform === "win32") {
+        try {
+          execFileSync("taskkill.exe", ["/pid", String(child.pid), "/t", "/f"], { stdio: "ignore", windowsHide: true });
+        } catch {
+          process.kill(child.pid);
+        }
+      } else {
+        process.kill(detached ? -child.pid : child.pid, "SIGKILL");
+      }
     } catch {
       // 已经没了
     }

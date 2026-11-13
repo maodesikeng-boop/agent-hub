@@ -25,6 +25,8 @@ import { createUnixHttpPool, parsePasswdUid, resolvePeerTarget, verifySlotListen
 import { deviceIds, pair, settle, startTestDevice, type TestDevice } from "./test-helpers.ts";
 import { newPeerToken, sha256Hex } from "./tokens.ts";
 
+const describePosix = describe.skipIf(process.platform === "win32");
+
 const TEST_HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl";
 
 const devices: TestDevice[] = [];
@@ -525,7 +527,7 @@ describe("防冒充测试（配对冲突 409、拒回环网址 400、清单同�
   });
 });
 
-describe("端到端 socket 自动配对、双向 HTTP/WS 互转、Agent 复用、提前重连与移除联动", () => {
+describePosix("端到端 socket 自动配对、双向 HTTP/WS 互转、Agent 复用、提前重连与移除联动", () => {
   it("Mac 与东京经 unix socket 和本地槽位端口自动完成配对、双向转发 HTTP 与 WebSocket、复用 Agent、断连触发 reconnectNow 并联动移除", async () => {
     const unixPool = createUnixHttpPool();
     let reconnectCalls = 0;

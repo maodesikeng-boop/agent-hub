@@ -44,8 +44,7 @@ async function boot() {
 }
 
 async function terminate(daemon: RunningDaemon) {
-  daemon.child.kill("SIGTERM");
-  return daemon.exited;
+  return daemon.terminate();
 }
 
 async function pmWithProject(client: Client, dir: string) {

@@ -69,8 +69,10 @@ describe("配对", () => {
     expect(bAtA!.inboundTokenSha256).toBe(sha256(aAtB!.outboundToken));
     expect(readFileSync(b.peersFile, "utf8")).not.toContain(bAtA!.outboundToken);
     expect(readFileSync(a.peersFile, "utf8")).not.toContain(aAtB!.outboundToken);
-    expect(statSync(a.peersFile).mode & 0o777).toBe(0o600);
-    expect(statSync(b.peersFile).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") {
+      expect(statSync(a.peersFile).mode & 0o777).toBe(0o600);
+      expect(statSync(b.peersFile).mode & 0o777).toBe(0o600);
+    }
 
     // 令牌能用：A 带它访问 B 的接口
     expect((await asPeer(b, API_PATHS.state, a.id, bAtA!.outboundToken)).status).toBe(200);

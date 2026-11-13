@@ -79,10 +79,27 @@ export const PARENT_SESSION_ENV: readonly string[] = [
 export function buildChildEnv(
   base: Record<string, string | undefined>,
   extra: Record<string, string> | undefined,
+  platform: NodeJS.Platform = process.platform,
 ): Record<string, string> {
+  const parentDenyUpper = platform === "win32" ? new Set(PARENT_SESSION_ENV.map((k) => k.toUpperCase())) : null;
   const env: Record<string, string> = {};
-  for (const [k, v] of Object.entries(base)) if (v !== undefined && !PARENT_SESSION_ENV.includes(k)) env[k] = v;
-  return { ...env, ...extra };
+  for (const [k, v] of Object.entries(base)) {
+    if (v === undefined) continue;
+    if (parentDenyUpper ? parentDenyUpper.has(k.toUpperCase()) : PARENT_SESSION_ENV.includes(k)) continue;
+    env[k] = v;
+  }
+  if (!extra) return env;
+  if (platform !== "win32") return { ...env, ...extra };
+  for (const [ek, ev] of Object.entries(extra)) {
+    const lower = ek.toLowerCase();
+    for (const existingKey of Object.keys(env)) {
+      if (existingKey.toLowerCase() === lower && existingKey !== ek) {
+        delete env[existingKey];
+      }
+    }
+    env[ek] = ev;
+  }
+  return env;
 }
 
 /** 计算工具步骤的去重签名（工具名 + STEP_INPUT_KEYS 字段值），签名未变时不重复发预览事件。 */

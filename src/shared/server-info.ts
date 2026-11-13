@@ -16,12 +16,17 @@ export interface ServerInfo {
 }
 
 /**
- * 这两项只在 macOS 上有：别的系统（Linux 服务器一般没有桌面，有的话 xdg-open 也开在服务器的屏幕上，不是用户的浏览器那台电脑）一律没有。
- * platform 是 process.platform 的值。
+ * 按平台与是否经桌面外壳监管给出服务端桌面能力：
+ * - darwin：osascript 选文件夹 + open 在 Finder 中显示/默认程序打开；
+ * - win32：explorer.exe 在资源管理器中显示/默认程序打开（仅回环访问生效）；纯浏览器下隐藏“选择…”，经桌面外壳（supervised）时开启；
+ * - linux 等服务器系统：两项均关闭。
  */
-export function serverInfoFor(platform: string): ServerInfo {
-  const desktop = platform === "darwin";
-  return { platform, folderPicker: desktop, fileActions: desktop };
+export function serverInfoFor(platform: string, options?: { supervised?: boolean }): ServerInfo {
+  if (platform === "darwin") return { platform, folderPicker: true, fileActions: true };
+  if (platform === "win32") {
+    return { platform, folderPicker: options?.supervised === true, fileActions: true };
+  }
+  return { platform, folderPicker: false, fileActions: false };
 }
 
 /** 回环地址：请求来自守护进程所在的这台机器（127.0.0.0/8、::1、::ffff:127.x）。 */

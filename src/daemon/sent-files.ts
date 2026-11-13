@@ -12,7 +12,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import {
   closeSync,
-  constants,
   fstatSync,
   futimesSync,
   lstatSync,
@@ -21,7 +20,6 @@ import {
   readSync,
   readdirSync,
   realpathSync,
-  renameSync,
   rmSync,
   statSync,
   utimesSync,
@@ -49,6 +47,12 @@ import {
   VENDOR_LIST,
 } from "../shared/index.ts";
 import { resolveUpload, sanitizeFileName } from "./uploads.ts";
+import {
+  isPathInsideOrEqual,
+  normalizePathForComparison,
+  openRegularFileNoFollowSync,
+  renameSyncWithWindowsRetry,
+} from "./platform/index.ts";
 
 /**
  * 不管允许的文件夹怎么配（项目文件夹是 ~ 或 /、附加了家目录），这些始终不能分享：凭据清单（shared/secret-paths.ts，只读 Worker 也禁读）
@@ -101,6 +105,9 @@ function realOrNull(path: string): string | null {
 }
 
 function within(child: string, parent: string): boolean {
+  if (process.platform === "win32") {
+    return isPathInsideOrEqual(parent, child);
+  }
   return child === parent || child.startsWith(parent.endsWith(sep) ? parent : parent + sep);
 }
 
@@ -220,8 +227,7 @@ function shareOne(path: string, local: LocalHref, name: string, budget: number, 
   if (!before.isFile()) return reject("not_file", before);
   let fd: number;
   try {
-    // O_NOFOLLOW：realpath 之后最后一段又被换成符号链接就打不开；O_NONBLOCK：换成命名管道也不会卡住
-    fd = openSync(real, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    fd = openRegularFileNoFollowSync(real, { nonBlock: true });
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     return reject(code === "ENOENT" ? "missing" : code === "ELOOP" ? "not_allowed" : "unreadable");
@@ -230,7 +236,15 @@ function shareOne(path: string, local: LocalHref, name: string, budget: number, 
     const stat = fstatSync(fd);
     if (!stat.isFile()) return reject("not_file", stat);
     // 打开的必须还是检查过的那个文件：检查和 open 之间路径被换掉的，当不在允许的文件夹里
-    if (realOrNull(real) !== real || !sameFile(before, stat) || !sameFile(lstatSync(real), stat)) return reject("not_allowed");
+    const currentReal = realOrNull(real);
+    if (
+      currentReal === null ||
+      normalizePathForComparison(currentReal) !== normalizePathForComparison(real) ||
+      !sameFile(before, stat) ||
+      !sameFile(lstatSync(real), stat)
+    ) {
+      return reject("not_allowed");
+    }
     if (stat.size > MAX_SENT_FILE_BYTES || stat.size > budget) return reject("too_large", stat);
     const partial = join(scope.sentFilesDir, `${PARTIAL_PREFIX}${randomBytes(8).toString("hex")}`);
     try {
@@ -243,7 +257,7 @@ function shareOne(path: string, local: LocalHref, name: string, budget: number, 
         // 命中已有副本：刷新目录修改时间，刚发过的不会被定期清理（file-cleanup.ts）删掉
         const now = new Date();
         utimesSync(join(scope.sentFilesDir, id), now, now);
-      } else renameSync(partial, join(scope.sentFilesDir, id));
+      } else renameSyncWithWindowsRetry(partial, join(scope.sentFilesDir, id));
       return { status: "saved", id, size: copied.bytes, mtime: stat.mtimeMs };
     } catch (error) {
       rmSync(partial, { recursive: true, force: true });
@@ -262,7 +276,7 @@ function shareOne(path: string, local: LocalHref, name: string, budget: number, 
  */
 export function shareLinkedFiles(text: string, scope: ShareScope): SentFile[] {
   if (!text.includes("](") && !text.includes("<")) return [];
-  const links = localLinksOf(markdown.parse(text) as MdNode);
+  const links = localLinksOf(markdown.parse(text) as MdNode, text);
   if (links.length === 0) return [];
   const files: SentFile[] = [];
   let used = 0;
