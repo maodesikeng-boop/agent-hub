@@ -639,7 +639,7 @@ describe("设置 → 设备", () => {
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     const dialog = await screen.findByRole("dialog", { name: "Settings" });
     const tabs = within(within(dialog).getByRole("tablist", { name: "Settings categories" })).getAllByRole("tab");
-    expect(tabs.map((t) => t.textContent)).toEqual(["General", "Computers", "Security & Access"]);
+    expect(tabs.map((t) => t.textContent)).toEqual(["General", "Providers", "Computers", "Security & Access"]);
     for (const tab of tabs) expect(tab.querySelector("svg")).not.toBeNull();
     expect(within(dialog).getByRole("tab", { name: "Computers" })).toHaveAttribute("aria-selected", "true");
     const computers = within(dialog).getByRole("tabpanel", { name: "Computers" });

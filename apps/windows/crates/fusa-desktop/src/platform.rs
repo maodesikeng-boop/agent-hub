@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
 #[cfg(not(target_os = "windows"))]
-use std::process::Stdio;
+use std::process::{Command, Stdio};
 
 use fusa_supervisor::NativeRuntimeConfig;
 use url::Url;

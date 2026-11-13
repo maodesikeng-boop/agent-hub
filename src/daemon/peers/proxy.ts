@@ -15,6 +15,7 @@ import { WebSocket } from "ws";
 import {
   DEVICE_OFFLINE_REASON,
   DEVICE_OFFLINE_WS_CLOSE_CODE,
+  PEER_CLIENT_SCOPE_HEADER,
   PEER_DEVICE_HEADER,
   PEER_PROXY_HEADERS_TIMEOUT_MS,
   PEER_WS_CONNECT_TIMEOUT_MS,
@@ -107,6 +108,8 @@ export interface ProxyContext {
   selfId: string;
   /** 对方说不认本机了：本机也删掉它。 */
   forget: () => void;
+  /** 入口当前客户端会话的不可逆隔离摘要（仅注入上游请求头，不透传任何浏览器原始凭证）。 */
+  clientScope?: string;
   fetch?: typeof fetch;
   unixPool?: UnixHttpPool;
   /** WebSocket 心跳间隔，默认 PEER_WS_PING_MS。 */
@@ -166,7 +169,11 @@ export async function proxyHttp(req: FastifyRequest, reply: FastifyReply, target
     return reply.code(502).send(offlineBody(target.name));
   }
   const wantGzip = req.headers.range === undefined && acceptsGzip(req.headers["accept-encoding"]);
-  const headers: Record<string, string> = { ...authHeaders(target, ctx.selfId), "accept-encoding": wantGzip ? "gzip" : "identity" };
+  const headers: Record<string, string> = {
+    ...authHeaders(target, ctx.selfId),
+    "accept-encoding": wantGzip ? "gzip" : "identity",
+    ...(ctx.clientScope ? { [PEER_CLIENT_SCOPE_HEADER]: ctx.clientScope } : {}),
+  };
   for (const name of FORWARD_REQUEST_HEADERS) {
     const value = req.headers[name];
     if (typeof value === "string") headers[name] = value;

@@ -488,4 +488,34 @@ describe("桌面端 Settings → Providers", () => {
     const reopenedTablist = await screen.findByRole("tablist", { name: "Settings categories" });
     expect(within(reopenedTablist).getByRole("tab", { name: "Providers" })).toHaveAttribute("aria-selected", "true");
   });
+
+  it("冷启动 availability 为 unknown 且无本地身份摘要时：显示琥珀点 Not signed in 与 Sign in…，绝不假装绿点已登录", async () => {
+    const coldUnknown = makeMixedProviders();
+    const [v0] = AGENT_VENDORS;
+    const body: ProvidersStatusResponse = {
+      ...coldUnknown,
+      providers: coldUnknown.providers.map((item) =>
+        item.vendor === v0
+          ? {
+              ...item,
+              installed: true,
+              availability: "unknown",
+              accountSummary: null,
+              canSignOut: false,
+            }
+          : item,
+      ),
+    };
+    const api = new FakeApi(makeSnapshot({}));
+    api.providersStatus = () => ({ status: 200, body });
+    api.install();
+
+    render(<SettingsDialog open defaultSection="providers" onOpenChange={() => {}} notify={notify} />);
+    const panel = await screen.findByRole("tabpanel", { name: "Providers" });
+    const row = await within(panel).findByTestId(`provider-row-${v0}`);
+    expect(row.querySelector("[data-tone='caution']")).not.toBeNull();
+    expect(within(row).getByText("Not signed in")).toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: `Sign in to ${vendorLabel(v0!)}` })).toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: `Account for ${vendorLabel(v0!)}` })).toBeNull();
+  });
 });

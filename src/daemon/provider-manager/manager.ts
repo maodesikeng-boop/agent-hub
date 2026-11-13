@@ -237,7 +237,7 @@ export function createProviderManager(options: ProviderManagerOptions): Provider
     const adapter = adapterOf(vendor);
     const binaryPath = runtime.locateBinary(vendor);
     const installed = binaryPath !== null;
-    const availability = models.availability(vendor);
+    const catalogAvailability = models.availability(vendor);
     const version = installed ? versionCache.peek(vendor, binaryPath) : null;
 
     if (!adapter) {
@@ -246,7 +246,7 @@ export function createProviderManager(options: ProviderManagerOptions): Provider
         label: vendorSpec(vendor).label,
         installed,
         version,
-        availability,
+        availability: installed ? catalogAvailability : "not_installed",
         accountSummary: null,
         canInstall: false,
         canUpdate: false,
@@ -259,13 +259,18 @@ export function createProviderManager(options: ProviderManagerOptions): Provider
 
     const authInfo = await adapter.inspectAuth(buildSetupContext(vendor));
     const jobRunning = slot.job?.phase === "running";
+    const effectiveAvailability = !installed
+      ? "not_installed"
+      : catalogAvailability === "available" || authInfo.accountSummary !== null
+        ? "available"
+        : catalogAvailability;
 
     return {
       vendor,
       label: vendorSpec(vendor).label,
       installed,
       version,
-      availability,
+      availability: effectiveAvailability,
       accountSummary: installed ? authInfo.accountSummary : null,
       canInstall: !installed && !jobRunning,
       canUpdate: installed && !jobRunning,
@@ -652,6 +657,7 @@ export function createProviderManager(options: ProviderManagerOptions): Provider
       }
 
       const looksLikeUrl = /^https?:\/\//iu.test(trimmed) || flow.manualInput === "callback_url";
+      const prevPhase = flow.phase;
       if (looksLikeUrl) {
         if (flow.manualInput !== "callback_url" && flow.manualInput !== "code_or_callback") {
           throw new ProviderRequestError(400, "This sign-in flow does not accept a callback URL");
@@ -664,6 +670,9 @@ export function createProviderManager(options: ProviderManagerOptions): Provider
         try {
           await forwardLoopback(validation.url, { signal: flow.controller.signal });
         } catch (err) {
+          if (flow.phase === "verifying") {
+            flow.phase = prevPhase;
+          }
           const msg = redactProviderLog(err instanceof Error ? err.message : String(err)).slice(0, 240);
           throw new ProviderRequestError(400, msg);
         }
@@ -678,7 +687,15 @@ export function createProviderManager(options: ProviderManagerOptions): Provider
           throw new ProviderRequestError(409, "Sign-in process is not ready for code input yet");
         }
         flow.phase = "verifying";
-        await flow.inputHandler(trimmed);
+        try {
+          await flow.inputHandler(trimmed);
+        } catch (err) {
+          if (flow.phase === "verifying") {
+            flow.phase = prevPhase;
+          }
+          const msg = redactProviderLog(err instanceof Error ? err.message : String(err)).slice(0, 240);
+          throw new ProviderRequestError(400, msg);
+        }
       }
 
       if (authStartWaitMs > 0) {

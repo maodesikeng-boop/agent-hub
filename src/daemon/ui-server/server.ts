@@ -57,6 +57,7 @@ import {
   TAILSCALE_USER_LOGIN_HEADER,
   DEVICE_PROXY_PREFIX,
   ENTRY_ONLY_API_PREFIXES,
+  PEER_CLIENT_SCOPE_HEADER,
   PEER_DEVICE_HEADER,
   utf8Bytes,
   type AgentVendor,
@@ -782,11 +783,15 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     const identity = contextOf(req)?.identity;
     return identity?.kind === "deviceToken" ? identity.peer : undefined;
   };
-  /** 登录流与状态快照的发起方会话隔离标识（本机浏览器按 sessionId，跨机 Peer 代理按配对设备 ID）。 */
+  /** 登录流与状态快照的发起方会话隔离标识（本机浏览器按 sessionId，跨机 Peer 代理按配对设备 ID + 入口会话摘要）。 */
   const clientOwnerKeyOf = (req: FastifyRequest): string => {
     const identity = contextOf(req)?.identity;
     if (identity?.kind === "cookie") return `session:${identity.sessionId}`;
-    if (identity?.kind === "deviceToken") return `peer:${identity.peer.id}`;
+    if (identity?.kind === "deviceToken") {
+      const rawScope = req.headers[PEER_CLIENT_SCOPE_HEADER];
+      const scope = typeof rawScope === "string" && /^[0-9a-f]{16,64}$/u.test(rawScope) ? rawScope : null;
+      return scope ? `peer:${identity.peer.id}:${scope}` : `peer:${identity.peer.id}`;
+    }
     return "anonymous";
   };
   /** 记下这条 WebSocket 属于哪个会话：那个会话被退出时当场关掉。设备令牌来的没有会话，不记。 */
@@ -1291,6 +1296,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       routes.register(peerRoutes, {
         peers: opts.peers,
         peerOf,
+        clientScopeOf: (req) => createHash("sha256").update(clientOwnerKeyOf(req)).digest("hex").slice(0, 24),
         trackSocket,
         onChange: broadcastResync,
         ...(opts.peerProxy ? { proxy: opts.peerProxy } : {}),

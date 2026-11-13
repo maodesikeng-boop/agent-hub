@@ -121,6 +121,16 @@ fn run_self_test_inner(app_data_dir: &Path, hub_home_dir: &Path) -> Result<Strin
                 String::from_utf8_lossy(&out.stderr).trim()
             ));
         }
+        let node_dir = runtime_cfg
+            .node_exe_path
+            .parent()
+            .ok_or_else(|| "无法读取随包 node 目录".to_string())?;
+        for rel in ["npm.cmd", "npx.cmd", r"node_modules\npm\bin\npm-cli.js"] {
+            let p = node_dir.join(rel);
+            if !p.is_file() {
+                return Err(format!("随包 Node 24 运行时缺少免管理员安装所需的 npm 组件：{}", p.display()));
+            }
+        }
     }
 
     let preflight = run_desktop_preflight_probe(&runtime_cfg)?;

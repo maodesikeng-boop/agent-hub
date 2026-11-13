@@ -198,7 +198,7 @@ export function createCursorComposer(deps: VendorComposerDeps): VendorComposer {
     async queryCommands(target: CommandsTarget, signal: AbortSignal): Promise<ComposerCommand[]> {
       if (signal.aborted) throw new Error("cursor commands query aborted");
       const resolvedEnv = typeof deps.env === "function" ? deps.env() : deps.env;
-      const userHome = resolvedEnv?.HOME?.trim() || homedir();
+      const userHome = resolvedEnv?.HOME?.trim() || resolvedEnv?.USERPROFILE?.trim() || homedir();
       return collectLocalCursorCommands(target, userHome);
     },
   };

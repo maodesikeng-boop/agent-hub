@@ -898,16 +898,29 @@ const EMPTY_PROVIDERS_SUMMARY: ProvidersSummary = {
   attention: false,
 };
 
-const providersSummaryCache = new WeakMap<readonly { readonly availability: VendorAvailability }[], ProvidersSummary>();
+type ProvidersSummarySourceItem = {
+  readonly availability: VendorAvailability;
+  readonly installed?: boolean;
+  readonly accountSummary?: string | null;
+};
+
+const providersSummaryCache = new WeakMap<readonly ProvidersSummarySourceItem[], ProvidersSummary>();
+
+function isProviderSummaryItemReady(item: ProvidersSummarySourceItem): boolean {
+  if ("accountSummary" in item) {
+    return Boolean(item.installed) && (item.availability === "available" || (item.accountSummary ?? null) !== null);
+  }
+  return isSelectable(item.availability);
+}
 
 /** 计算手机一级设置页 Providers 导航行摘要（严禁用 · / | / / 拼接），按输入数组引用 WeakMap 缓存。 */
 export function describeProvidersSummary(
-  items: readonly { readonly availability: VendorAvailability }[] | null | undefined,
+  items: readonly ProvidersSummarySourceItem[] | null | undefined,
 ): ProvidersSummary {
   if (!items || items.length === 0) return EMPTY_PROVIDERS_SUMMARY;
   const cached = providersSummaryCache.get(items);
   if (cached !== undefined) return cached;
-  const readyCount = items.filter((item) => isSelectable(item.availability)).length;
+  const readyCount = items.filter(isProviderSummaryItemReady).length;
   const computed: ProvidersSummary =
     readyCount === 0
       ? { summary: "Attention", attention: true }

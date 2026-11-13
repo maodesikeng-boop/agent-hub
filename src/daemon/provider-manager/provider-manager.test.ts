@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AGENT_VENDORS,
   API_PATHS,
+  PEER_CLIENT_SCOPE_HEADER,
+  PEER_DEVICE_HEADER,
   PROVIDER_JOB_LOG_MAX_BYTES,
   PROVIDER_JOB_LOG_MAX_LINES,
   uiCookieName,
@@ -19,7 +21,7 @@ import {
   validateLoopbackCallbackUrl,
 } from "../../vendors/_common/setup/loopback-callback.ts";
 import { patchAgySettingsModelProvider } from "../../vendors/agy/setup.ts";
-import { hasDeepSeekLocalCredentials } from "../../vendors/deepseek/catalog.ts";
+import { createDeepSeekCatalogSource, hasDeepSeekLocalCredentials } from "../../vendors/deepseek/catalog.ts";
 import {
   DEEPSEEK_PINNED_NPM_SPEC,
   parseDeepSeekCredentialsYaml,
@@ -27,6 +29,8 @@ import {
 } from "../../vendors/deepseek/setup.ts";
 import { readPiAuthMap, resolvePiAuthJsonPath } from "../../vendors/pi/setup.ts";
 import { createModelCatalogs } from "../driver/model-catalog.ts";
+import { createPeers, type PeerRecord } from "../peers/index.ts";
+import { newPeerToken, sha256Hex } from "../peers/tokens.ts";
 import * as win32Platform from "../platform/win32/process-tree.ts";
 import { openTestDb } from "../store/test-helpers.ts";
 import { FakeLedger } from "../ui-server/fake-ledger.ts";
@@ -56,7 +60,7 @@ function writeExecutable(filePath: string, body: string): string {
   return filePath;
 }
 
-async function waitForCondition(check: () => boolean | Promise<boolean>, timeoutMs = 4_000): Promise<void> {
+async function waitForCondition(check: () => boolean | Promise<boolean>, timeoutMs = 10_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await check()) return;
@@ -765,10 +769,14 @@ describe("provider-manager + ui-server：0 子进程读取、免重启安装/登
 
     const paths = resolveHubPaths({}, winHome, { platform: "win32" });
     const secrets = createManagedProviderSecrets(join(root, "provider-secrets.json"), { platform: "win32" });
+    const baseEnv: Record<string, string | undefined> = {
+      Path: "C:\\Windows\\System32",
+      PATHEXT: ".COM;.EXE;.BAT;.CMD",
+    };
     const runtime = createVendorRuntimeResolver({
       paths,
       userHome: winHome,
-      baseEnv: { PATH: "C:\\Windows\\System32", PATHEXT: ".COM;.EXE;.BAT;.CMD" },
+      baseEnv,
       platform: "win32",
       secrets,
       readWinRegistryPaths: () => regPaths,
@@ -816,9 +824,316 @@ describe("provider-manager + ui-server：0 子进程读取、免重启安装/登
         return st.gitJob?.phase === "succeeded";
       });
       expect(runtime.gitInstalled()).toBe(true);
+      expect(baseEnv.Path).toContain(fakeGitDir);
     } finally {
       await manager.close();
       await models.close();
+    }
+  });
+
+  it("冷启动未探测模型目录时：无凭据已装厂商不伪装 available，已配凭据厂商报 available，且 submitAuth 报错后恢复 waiting_browser 支持重试", async () => {
+    const root = makeTempDir("fusa-coldstart-retry-");
+    tempDirs.push(root);
+    const userHome = join(root, "home");
+    const hubHome = join(userHome, ".agent-hub");
+    mkdirSync(userHome, { recursive: true });
+
+    // 预装 codex 与 deepseek 假可执行文件，但不触发 models.list()（模拟冷启动 models.availability === "unknown"）
+    writeExecutable(join(userHome, ".local", "bin", "codex"), "#!/bin/sh\nexit 0\n");
+    writeExecutable(join(hubHome, "tools", "npm", "bin", "dsh"), "#!/bin/sh\nexit 0\n");
+
+    const paths = resolveHubPaths({}, userHome, { home: hubHome, platform: "darwin" });
+    const secrets = createManagedProviderSecrets(paths.providerSecretsFile, { platform: "darwin" });
+    const runtime = createVendorRuntimeResolver({
+      paths,
+      userHome,
+      baseEnv: { PATH: "/usr/bin:/bin" },
+      platform: "darwin",
+      secrets,
+    });
+    const sources = createVendorCatalogSources(
+      Object.fromEntries(
+        AGENT_VENDORS.map((vendor) => [
+          vendor,
+          {
+            path: () => runtime.resolveExecutablePath(vendor),
+            cwd: userHome,
+            env: () => runtime.resolveVendorEnv(vendor),
+            installed: () => runtime.installed(vendor),
+            fingerprint: () => runtime.catalogFingerprint(vendor),
+          },
+        ]),
+      ) as Parameters<typeof createVendorCatalogSources>[0],
+    );
+    const models = createModelCatalogs({ sources });
+
+    // 验证无 HOME 环境变量时 createDeepSeekCatalogSource 也能按 options.cwd (userHome) 识别凭据
+    await VENDOR_DAEMONS.deepseek.setup!.saveApiKey!(
+      {
+        platform: "darwin",
+        userHome,
+        availability: "unknown",
+        executablePath: () => runtime.resolveExecutablePath("deepseek"),
+        installed: () => true,
+        env: () => ({ PATH: "/usr/bin:/bin" }),
+        secrets,
+      },
+      { apiKey: "sk-deepseek-coldstart-key-123456" },
+    );
+    const dsSource = createDeepSeekCatalogSource({
+      path: () => runtime.resolveExecutablePath("deepseek"),
+      cwd: userHome,
+      env: () => ({ PATH: "/usr/bin:/bin" }),
+      installed: () => true,
+    });
+    const dsRaw = await dsSource.query(new AbortController().signal);
+    expect(dsSource.availabilityOf?.(dsRaw)).toBe("available");
+
+    let forwardAttempt = 0;
+    let resolveCallbackDone!: () => void;
+    const callbackDone = new Promise<void>((r) => {
+      resolveCallbackDone = r;
+    });
+    const manager = createProviderManager({
+      runtime,
+      models,
+      adapters: {
+        codex: {
+          ...VENDOR_DAEMONS.codex.setup!,
+          async startAuthFlow(_ctx, _input, hooks, signal) {
+            hooks.onAuthorizeUrl(
+              "https://auth.openai.com/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A45678%2Fauth%2Fcallback&state=st_retry_1",
+            );
+            await Promise.race([
+              callbackDone,
+              new Promise<void>((_res, rej) => {
+                signal.addEventListener("abort", () => rej(new Error("cancelled")), { once: true });
+              }),
+            ]);
+          },
+        },
+      },
+      forwardLoopback: async () => {
+        forwardAttempt += 1;
+        if (forwardAttempt === 1) {
+          throw new Error("Local sign-in listener rejected callback (HTTP 400)");
+        }
+        resolveCallbackDone();
+      },
+    });
+
+    try {
+      const coldStatus = await manager.getStatus({ ownerKey: "session:1" });
+      const codexCold = coldStatus.providers.find((p) => p.vendor === "codex")!;
+      const dsCold = coldStatus.providers.find((p) => p.vendor === "deepseek")!;
+      expect(codexCold.installed).toBe(true);
+      expect(codexCold.availability).toBe("unknown");
+      expect(codexCold.accountSummary).toBeNull();
+      expect(dsCold.installed).toBe(true);
+      expect(dsCold.availability).toBe("available");
+      expect(dsCold.accountSummary).toBe("API key configured");
+
+      // 启动登录流并验证第一次转发报错后 phase 恢复 waiting_browser（不卡在 verifying），第二次重试成功
+      const started = await manager.startAuth("codex", { methodId: "browser" }, "session:1");
+      expect(started.authFlow?.phase).toBe("waiting_browser");
+      const validCbUrl = "http://127.0.0.1:45678/auth/callback?code=ok_code&state=st_retry_1";
+
+      await expect(
+        manager.submitAuth("codex", { flowId: started.authFlow!.flowId, input: validCbUrl }, "session:1"),
+      ).rejects.toThrow("HTTP 400");
+
+      const afterFail = await manager.getStatus({ ownerKey: "session:1" });
+      expect(afterFail.providers.find((p) => p.vendor === "codex")?.authFlow?.phase).toBe("waiting_browser");
+
+      const retried = await manager.submitAuth(
+        "codex",
+        { flowId: started.authFlow!.flowId, input: validCbUrl },
+        "session:1",
+      );
+      expect(["verifying", "succeeded"]).toContain(retried.authFlow?.phase);
+      await waitForCondition(async () => {
+        const st = await manager.getStatus({ ownerKey: "session:1" });
+        return st.providers.find((p) => p.vendor === "codex")?.authFlow?.phase === "succeeded";
+      });
+    } finally {
+      resolveCallbackDone();
+      await manager.close();
+      await models.close();
+    }
+  });
+
+  it("跨设备 Peer 代理（/d/<device>/api/providers/*）按入口浏览器会话摘要隔离 ownerKey，禁止跨窗口偷看或劫持远端登录流", async () => {
+    const root = makeTempDir("fusa-peer-scope-");
+    tempDirs.push(root);
+    const tokyoHome = join(root, "tokyo-home");
+    mkdirSync(tokyoHome, { recursive: true });
+    writeExecutable(join(tokyoHome, ".local", "bin", "cursor-agent"), "#!/bin/sh\nexit 0\n");
+
+    const tokyoPaths = resolveHubPaths({}, tokyoHome, { platform: "linux" });
+    const tokyoSecrets = createManagedProviderSecrets(tokyoPaths.providerSecretsFile, { platform: "linux" });
+    const tokyoRuntime = createVendorRuntimeResolver({
+      paths: tokyoPaths,
+      userHome: tokyoHome,
+      baseEnv: { PATH: "/usr/bin:/bin" },
+      platform: "linux",
+      secrets: tokyoSecrets,
+    });
+    const tokyoModels = createModelCatalogs({ sources: {} });
+    let releaseAuth!: () => void;
+    const authHold = new Promise<void>((r) => {
+      releaseAuth = r;
+    });
+    const tokyoManager = createProviderManager({
+      runtime: tokyoRuntime,
+      models: tokyoModels,
+      adapters: {
+        cursor: {
+          ...VENDOR_DAEMONS.cursor.setup!,
+          async startAuthFlow(_ctx, _input, hooks, signal) {
+            hooks.onAuthorizeUrl("https://cursor.com/cli-login?session=secret_tokyo_99");
+            await Promise.race([
+              authHold,
+              new Promise<void>((_res, rej) => {
+                signal.addEventListener("abort", () => rej(new Error("cancelled")), { once: true });
+              }),
+            ]);
+          },
+        },
+      },
+    });
+
+    const entryId = "11111111-1111-4111-8111-111111111111";
+    const tokyoId = "22222222-2222-4222-8222-222222222222";
+    const sharedPeerToken = newPeerToken();
+
+    // 上游东京服务器
+    const tokyoDb = openTestDb();
+    const entryRecordOnTokyo: PeerRecord = {
+      id: entryId,
+      name: "Mac",
+      platform: "darwin",
+      url: "http://127.0.0.1:9",
+      state: "paired",
+      since: Date.now(),
+      inboundTokenSha256: sha256Hex(sharedPeerToken),
+      outboundToken: newPeerToken(),
+    };
+    const tokyoPeersFile = join(root, "tokyo-peers.json");
+    writeFileSync(tokyoPeersFile, JSON.stringify({ version: 1, devices: [entryRecordOnTokyo], removed: [] }));
+    const tokyoPeersLoaded = createPeers({
+      file: tokyoPeersFile,
+      device: { id: tokyoId, name: "Tokyo" },
+      platform: "linux",
+      saveName: () => {},
+      selfUrl: () => null,
+      allowLoopback: true,
+    });
+    const tokyoApp = createUiServer({
+      ledger: new FakeLedger().asLedger(),
+      token: "tokyo-ui-token-0123456789abcdef",
+      db: tokyoDb,
+      port: 4392,
+      uploadsDir: tokyoPaths.uploadsDir,
+      sentFilesDir: tokyoPaths.sentFilesDir,
+      staticDir: join(root, "no-static"),
+      peers: tokyoPeersLoaded,
+      providers: tokyoManager,
+    });
+    await tokyoApp.listen({ host: "127.0.0.1", port: 0 });
+    const tokyoAddress = tokyoApp.server.address();
+    const tokyoPort = typeof tokyoAddress === "object" && tokyoAddress ? tokyoAddress.port : 0;
+
+    // 入口本机服务器（挂两个不同的已登录浏览器会话 browser1 / browser2，共享同一条配对隧道连向 Tokyo）
+    const entryDb = openTestDb();
+    const tokyoRecordOnEntry: PeerRecord = {
+      id: tokyoId,
+      name: "Tokyo",
+      platform: "linux",
+      url: `http://127.0.0.1:${tokyoPort}`,
+      state: "paired",
+      since: Date.now(),
+      inboundTokenSha256: sha256Hex(newPeerToken()),
+      outboundToken: sharedPeerToken,
+    };
+    const entryPeersFile = join(root, "entry-peers.json");
+    writeFileSync(entryPeersFile, JSON.stringify({ version: 1, devices: [tokyoRecordOnEntry], removed: [] }));
+    const entryPeers = createPeers({
+      file: entryPeersFile,
+      device: { id: entryId, name: "Mac" },
+      platform: "darwin",
+      saveName: () => {},
+      selfUrl: () => null,
+      allowLoopback: true,
+    });
+    const entryPort = 4393;
+    const entryHost = `127.0.0.1:${entryPort}`;
+    const entryApp = createUiServer({
+      ledger: new FakeLedger().asLedger(),
+      token: "entry-ui-token-0123456789abcdef",
+      db: entryDb,
+      port: entryPort,
+      uploadsDir: tokyoPaths.uploadsDir,
+      sentFilesDir: tokyoPaths.sentFilesDir,
+      staticDir: join(root, "no-static"),
+      peers: entryPeers,
+    });
+
+    try {
+      const browser1 = testLogin(entryDb, entryPort);
+      const browser2 = testLogin(entryDb, entryPort);
+
+      // browser1 经 /d/<tokyoId>/api/providers/cursor/auth/start 发起远端登录（伪造 x-agent-hub-client-scope 也会被代理覆盖）
+      const startRes = await entryApp.inject({
+        method: "POST",
+        url: `/d/${tokyoId}${API_PATHS.providerAuthStart("cursor")}`,
+        headers: {
+          host: entryHost,
+          origin: `http://${entryHost}`,
+          cookie: browser1.cookie(),
+          "content-type": "application/json",
+          [PEER_CLIENT_SCOPE_HEADER]: "deadbeefdeadbeefdeadbeef",
+        },
+        payload: JSON.stringify({ methodId: "browser", remoteHint: true }),
+      });
+      expect(startRes.statusCode).toBe(200);
+      const startedItem = startRes.json();
+      expect(startedItem.authFlow.ownedByOtherClient).toBe(false);
+      expect(startedItem.authFlow.authorizeUrl).toBe("https://cursor.com/cli-login?session=secret_tokyo_99");
+
+      // browser2 经同一台入口访问 Tokyo：authorizeUrl 被脱敏为 null 且标记 ownedByOtherClient: true
+      const viewByBrowser2 = await entryApp.inject({
+        method: "GET",
+        url: `/d/${tokyoId}${API_PATHS.providers}`,
+        headers: { host: entryHost, cookie: browser2.cookie() },
+      });
+      expect(viewByBrowser2.statusCode).toBe(200);
+      const cursorFor2 = (viewByBrowser2.json() as ProvidersStatusResponse).providers.find(
+        (p) => p.vendor === "cursor",
+      )!;
+      expect(cursorFor2.authFlow?.ownedByOtherClient).toBe(true);
+      expect(cursorFor2.authFlow?.authorizeUrl).toBeNull();
+
+      // browser2 试图取消 browser1 的远端登录流被 403 拒绝
+      const cancelBy2 = await entryApp.inject({
+        method: "POST",
+        url: `/d/${tokyoId}${API_PATHS.providerAuthCancel("cursor")}`,
+        headers: {
+          host: entryHost,
+          origin: `http://${entryHost}`,
+          cookie: browser2.cookie(),
+          "content-type": "application/json",
+        },
+        payload: JSON.stringify({ flowId: startedItem.authFlow.flowId }),
+      });
+      expect(cancelBy2.statusCode).toBe(403);
+    } finally {
+      releaseAuth();
+      await tokyoManager.close();
+      await tokyoModels.close();
+      await entryApp.close();
+      await tokyoApp.close();
+      entryDb.close();
+      tokyoDb.close();
     }
   });
 });

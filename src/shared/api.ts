@@ -611,6 +611,8 @@ export const TAILSCALE_USER_LOGIN_HEADER = "tailscale-user-login";
 
 /** 设备 → 设备的请求带上自己的设备编号（和 Bearer 设备令牌一起查）。 */
 export const PEER_DEVICE_HEADER = "x-agent-hub-device";
+/** 入口转发 `/d/<设备>/api/*` 时注入的当前浏览器会话不可逆摘要头（隔离不同浏览器窗口的远端登录流，不带原始会话凭证）。 */
+export const PEER_CLIENT_SCOPE_HEADER = "x-agent-hub-client-scope";
 
 /**
  * 只给浏览器用、设备令牌不能访问的接口（入口自己的：设备管理、浏览器登录、推送订阅）。新加这类接口要加进来。

@@ -44,10 +44,14 @@ function openExternalBrowserPage(url: string): void {
 
 type DotTone = "ready" | "caution" | "muted";
 
+export function isProviderAuthenticated(item: ProviderStatusItem): boolean {
+  return item.installed && (item.availability === "available" || item.accountSummary !== null);
+}
+
 function resolveItemTone(item: ProviderStatusItem): DotTone {
   if (item.job?.phase === "running") return "caution";
   if (!item.installed) return "muted";
-  if (isSelectable(item.availability)) return "ready";
+  if (isProviderAuthenticated(item)) return "ready";
   return "caution";
 }
 
@@ -168,7 +172,8 @@ function ProviderItemRow({
   const jobFailed = job?.phase === "failed";
   const hasLog = jobFailed && Boolean(job?.logTail.trim());
   const tone = resolveItemTone(item);
-  const ready = item.installed && (isSelectable(item.availability) || item.canSignOut);
+  const authenticated = isProviderAuthenticated(item);
+  const ready = authenticated || (item.installed && item.canSignOut);
   const combinedError: ErrorLike | null =
     rowError ?? (jobFailed && job?.error ? job.error : null);
 
@@ -196,7 +201,7 @@ function ProviderItemRow({
                 </span>
               ) : !item.installed ? (
                 <span>Not installed</span>
-              ) : isSelectable(item.availability) ? (
+              ) : authenticated ? (
                 <>
                   <span>{item.accountSummary ?? "Signed in"}</span>
                   {item.version && <span className="tabular-nums">{item.version}</span>}
@@ -549,7 +554,7 @@ export function ProviderSignInBody({
           value={selectedMethod.id}
           options={visibleMethods.map((m) => ({ value: m.id, label: m.label }))}
           onChange={handleMethodChange}
-          className="flex w-full [&>*]:flex-1 [&>*]:truncate"
+          className="flex w-full [&>*]:flex-auto [&>*]:justify-center [&>*]:truncate"
         />
       )}
 
@@ -564,7 +569,7 @@ export function ProviderSignInBody({
             onChange={(next) => {
               if (activeFlow === null) setVariantId(next);
             }}
-            className="flex w-full [&>*]:flex-1 [&>*]:truncate"
+            className="flex w-full [&>*]:flex-auto [&>*]:justify-center [&>*]:truncate"
           />
         )}
 
@@ -877,6 +882,10 @@ export function ProviderAccountBody({
     setBusyAction(null);
     if (res !== null) {
       onClose();
+    } else {
+      const latestErr = model.rowErrors[item.vendor];
+      if (latestErr !== undefined) setError(latestErr);
+      else onClose();
     }
   };
 
@@ -1033,6 +1042,14 @@ export function ProvidersListSection({
   onOpenSignIn: (vendor: AgentVendor) => void;
   onOpenAccount: (vendor: AgentVendor) => void;
 }) {
+  const status = model.status;
+  const hasGitGroup =
+    status !== null &&
+    ((!status.gitInstalled && status.canInstallGit) ||
+      status.gitJob?.phase === "running" ||
+      (status.gitJob?.phase === "failed" && !status.gitInstalled));
+  const hasExtraTopGroup = model.selectableComputers.length >= 2 || hasGitGroup;
+
   return (
     <>
       {model.selectableComputers.length >= 2 && (
@@ -1059,9 +1076,9 @@ export function ProvidersListSection({
       <GitEnvironmentGroup model={model} />
 
       <SettingsGroup
-        label="Providers"
+        {...(hasExtraTopGroup ? { title: "Providers" } : { label: "Providers" })}
         action={
-          <div className="ml-auto">
+          <span className="-mr-3 ml-auto flex items-center">
             <Button
               type="button"
               variant="ghost"
@@ -1072,7 +1089,7 @@ export function ProvidersListSection({
               {model.refreshing && <Loader2 className="animate-spin" aria-hidden="true" />}
               Refresh
             </Button>
-          </div>
+          </span>
         }
       >
         {model.loading && !model.status ? (

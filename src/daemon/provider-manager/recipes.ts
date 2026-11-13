@@ -54,11 +54,12 @@ export function resolveNpmCliJsPath(options?: {
   }
 
   const foundNpm = findExecutable("npm", options?.envPath, [], { platform });
-  if (foundNpm && foundNpm.includes("/")) {
+  if (foundNpm && (foundNpm.includes("/") || foundNpm.includes("\\"))) {
     try {
-      const real = realpathSync(foundNpm);
+      const real = existsSync(foundNpm) ? realpathSync(foundNpm) : foundNpm;
       if (/\.(?:c?m?js)$/iu.test(real) && existsSync(real)) return real;
-      const sibling = join(dirname(real), "node_modules", "npm", "bin", "npm-cli.js");
+      const pathMod = platform === "win32" || real.includes("\\") ? win32 : posix;
+      const sibling = pathMod.join(pathMod.dirname(real), "node_modules", "npm", "bin", "npm-cli.js");
       if (existsSync(sibling)) return sibling;
     } catch {
       // ignore symlink resolution errors

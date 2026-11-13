@@ -287,6 +287,9 @@ export function createVendorRuntimeResolver(
     refreshSystemPath() {
       if (platform === "win32") {
         refreshedRegistryPaths = readWinReg();
+        const merged = effectivePath();
+        const existingKey = Object.keys(baseEnv).find((k) => k.toLowerCase() === "path") ?? "PATH";
+        baseEnv[existingKey] = merged;
       }
       binaryCache.clear();
       invalidateLocatedExecutables();
