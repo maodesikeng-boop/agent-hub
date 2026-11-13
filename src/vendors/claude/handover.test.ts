@@ -10,12 +10,15 @@ import { createClaudeForker, claudeProjectDirName, CLAUDE_FORKERS } from "./hand
 import { ForkUnsupportedError, type ForkSource } from "../../daemon/handover/forker.ts";
 import { FORKERS } from "../../daemon/handover/forkers.ts";
 import { isAlive } from "../../daemon/driver/process.ts";
+import { removeTreeWithRetry } from "../../daemon/platform/index.ts";
 
 let dir: string;
 beforeEach(() => {
   dir = realpathSync(mkdtempSync(join(tmpdir(), "claude-forker-")));
 });
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+afterEach(async () => {
+  await removeTreeWithRetry(dir);
+});
 
 /** 假 claude：把 argv / 环境 / stdin 记到 call.json；按 FAKE_MODE 吐 stream-json、出错或挂住。 */
 function fakeClaude(): string {

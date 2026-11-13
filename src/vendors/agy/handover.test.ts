@@ -157,7 +157,9 @@ describe("fork：拷库换编号", () => {
   it("库文件权限 0600（和 agy 自己建的一样）", async () => {
     makeDb(SRC_ID);
     const handle = await forker().fork(source(), signal());
-    expect(statSync(join(root, "conversations", `${handle.forkId}.db`)).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") {
+      expect(statSync(join(root, "conversations", `${handle.forkId}.db`)).mode & 0o777).toBe(0o600);
+    }
   });
 });
 

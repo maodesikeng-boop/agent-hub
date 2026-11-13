@@ -143,10 +143,10 @@ describe("paths：可执行文件与数据目录解析", () => {
       expect(findExecutable("codex", pathDir, [fallback])).toBe(fallback);
       // PATH 里有：命令名
       writeFileSync(join(pathDir, "codex"), "");
-      expect(findExecutable("codex", pathDir, [fallback])).toBe("codex");
+      expect(findExecutable("codex", pathDir, [fallback], { platform: "darwin" })).toBe("codex");
       // 显式路径
-      expect(findExecutable(fallback, undefined, [])).toBe(fallback);
-      expect(findExecutable(join(dir, "nope"), undefined, [])).toBeNull();
+      expect(findExecutable(fallback, undefined, [], { platform: "darwin" })).toBe(fallback);
+      expect(findExecutable(join(dir, "nope"), undefined, [], { platform: "darwin" })).toBeNull();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -163,17 +163,17 @@ describe("paths：可执行文件与数据目录解析", () => {
       writeFileSync(fallback2, "");
 
       // 显式路径（含 /）直接返回
-      expect(resolveExecutable("/custom/bin/agy", pathDir, [fallback2])).toBe("/custom/bin/agy");
+      expect(resolveExecutable("/custom/bin/agy", pathDir, [fallback2], { platform: "darwin" })).toBe("/custom/bin/agy");
 
       // PATH 中不存在，回退到第一个存在的 candidate
-      expect(resolveExecutable("agy", pathDir, [fallback1, fallback2])).toBe(fallback2);
+      expect(resolveExecutable("agy", pathDir, [fallback1, fallback2], { platform: "darwin" })).toBe(fallback2);
 
       // PATH 中存在，保持命令名 "agy"
       writeFileSync(join(pathDir, "agy"), "");
-      expect(resolveExecutable("agy", `/nope${delimiter}${pathDir}`, [fallback2])).toBe("agy");
+      expect(resolveExecutable("agy", `/nope${delimiter}${pathDir}`, [fallback2], { platform: "darwin" })).toBe("agy");
 
       // 都不存在，保持原样
-      expect(resolveExecutable("codex", pathDir, [fallback1])).toBe("codex");
+      expect(resolveExecutable("codex", pathDir, [fallback1], { platform: "darwin" })).toBe("codex");
 
       expect(VENDOR_FALLBACK_PATHS.agy("/Users/u", "darwin")).toEqual(["/Users/u/.local/bin/agy"]);
       expect(VENDOR_FALLBACK_PATHS.claude("/Users/u", "darwin")).toEqual([]);

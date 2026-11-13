@@ -58,7 +58,7 @@ export function forceKill(child: ChildProcessWithoutNullStreams): Promise<void> 
 export function killFreshGroup(child: ChildProcessWithoutNullStreams): void {
   if (child.exitCode !== null || child.signalCode !== null) return;
   if (process.platform === "win32") {
-    child.kill();
+    child.kill("SIGKILL");
     return;
   }
   if (child.pid !== undefined && child.pid > 1 && signalOk(-child.pid, "SIGKILL")) return;

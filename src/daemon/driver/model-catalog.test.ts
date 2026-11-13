@@ -321,8 +321,8 @@ describe("queryClaudeModels / queryAgyModels / queryCodexModels", () => {
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "model-catalog-"));
   });
-  afterEach(() => {
-    rmSync(dir, { recursive: true, force: true });
+  afterEach(async () => {
+    await removeTreeWithRetry(dir);
   });
 
   /** 写一个假 claude：读一行标准输入，交给 body 处理（body 里能用 req、out(obj)、argv）。 */
@@ -910,7 +910,7 @@ describe("createModelCatalogs：问一次、缓存、过期再问、问不到用
       await catalogs.list();
       expect(calls).toBe(3);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      await removeTreeWithRetry(dir);
     }
   });
 });
@@ -1064,3 +1064,4 @@ describe("createModelCatalogs：厂商在这台设备上的状态（跟名单一
   });
 });
 import { writeExecutableNodeScript } from "../../../test/fake-cli-shim.ts";
+import { removeTreeWithRetry } from "../platform/index.ts";

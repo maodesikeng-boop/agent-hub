@@ -328,7 +328,8 @@ export function expandWritableFileGlobs(globs: readonly string[], realpath: (p: 
       }
       continue;
     }
-    const parts = glob.split("/");
+    const normalizedGlob = glob.replace(/\\/g, "/");
+    const parts = normalizedGlob.split("/");
     const firstWild = parts.findIndex((seg) => seg.includes("*"));
     if (firstWild < 0) continue;
     const baseDir = parts.slice(0, firstWild).join("/") || "/";

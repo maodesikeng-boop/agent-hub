@@ -5,7 +5,7 @@
 // 孤儿目录（外部解绑残留）/ detached HEAD 与 review-* 分支 / 0 提交探索目录 / rebase 中途 / status.showUntrackedFiles=no 时未跟踪文件照样拦 / 被忽略的文件随目录删 / 相对路径不删。
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { devNull, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PmId, SessionId, WorkerId, WorkerRecord } from "../shared/domain.ts";
@@ -20,11 +20,13 @@ import { openTestDb } from "./store/test-helpers.ts";
 import type { Db } from "./store/index.ts";
 import { createWorktreeCleanup } from "./worktree-cleanup.ts";
 
+let emptyGitConfig: string;
+
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...args], {
     cwd,
     encoding: "utf8",
-    env: { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_SYSTEM: devNull },
+    env: { ...process.env, GIT_CONFIG_GLOBAL: emptyGitConfig, GIT_CONFIG_SYSTEM: emptyGitConfig },
   }).trim();
 }
 
@@ -43,6 +45,8 @@ let pm: { pmId: PmId; sessionId: SessionId };
 beforeEach(() => {
   db = openTestDb();
   root = realpathSync.native(mkdtempSync(join(tmpdir(), "agent-hub-wt-cleanup-")));
+  emptyGitConfig = join(root, ".empty-gitconfig");
+  writeFileSync(emptyGitConfig, "");
   dataHome = join(root, ".agent-hub");
   worktreesDir = join(dataHome, "worktrees");
   mkdirSync(worktreesDir, { recursive: true });
@@ -230,7 +234,7 @@ describe("worktree 自动清理", () => {
     }
     execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "rebase", "-q", "-i", "HEAD~2"], {
       cwd: wRebase.worktreePath!,
-      env: { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_SYSTEM: devNull, GIT_SEQUENCE_EDITOR: "sed -i.bak s/^pick/edit/" },
+      env: { ...process.env, GIT_CONFIG_GLOBAL: emptyGitConfig, GIT_CONFIG_SYSTEM: emptyGitConfig, GIT_SEQUENCE_EDITOR: "sed -i.bak s/^pick/edit/" },
     });
     expect(git(wRebase.worktreePath!, "status", "--porcelain")).toBe("");
     // 合入 main，让“已合并”也成立：rebase 中途仍然不删

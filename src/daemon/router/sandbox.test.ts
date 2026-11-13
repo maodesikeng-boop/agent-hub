@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   AGENT_VENDORS,
@@ -97,7 +97,7 @@ describe("Router 轨道 B 只读沙箱与令牌权限守卫", () => {
       expect(promptText).toContain("dispatch pm");
       expect(files.env[ENV_HUB_TOKEN]).toBe(`tok-${session.id}`);
       expect(files.env[ENV_HUB_SOCK]).toBe(hubSock);
-      expect(files.env.PATH).toBe(`${hubBinDir}:/usr/bin:/bin`);
+      expect(files.env.PATH).toBe(`${hubBinDir}${delimiter}/usr/bin:/bin`);
       expect(files.readonly).toBeDefined();
       expect(files.readonly!.secretPaths.some((p) => p.includes(stateDir))).toBe(true);
 

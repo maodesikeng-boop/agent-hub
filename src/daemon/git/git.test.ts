@@ -1,7 +1,7 @@
 // 真 git、临时目录：判断仓库、没提交的改动、建 worktree（M3 W1，计划的测试表）。
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { devNull, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeExecutableNodeScript } from "../../../test/fake-cli-shim.ts";
@@ -23,12 +23,14 @@ import {
   removeWorktree,
 } from "./index.ts";
 
+let emptyGitConfig: string;
+
 /** 测试里自己用的 git：身份写死，不读用户的全局配置（也不会因为本机开了签名而卡住）。 */
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...args], {
     cwd,
     encoding: "utf8",
-    env: { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_SYSTEM: devNull },
+    env: { ...process.env, GIT_CONFIG_GLOBAL: emptyGitConfig, GIT_CONFIG_SYSTEM: emptyGitConfig },
   }).trim();
 }
 
@@ -36,6 +38,8 @@ let root: string;
 beforeEach(() => {
   // 目录名里有空格和中文：所有用例都走一遍这样的路径
   root = mkdtempSync(join(tmpdir(), "git 测试 "));
+  emptyGitConfig = join(root, ".empty-gitconfig");
+  writeFileSync(emptyGitConfig, "");
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 

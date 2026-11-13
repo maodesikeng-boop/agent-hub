@@ -9,9 +9,11 @@ import {
 import { createConnection } from "node:net";
 import { basename, win32 } from "node:path";
 import { PS_TIMEOUT_MS, WIN_HELPER_PROBE_TIMEOUT_MS } from "../../../shared/limits.ts";
+import { findExecutable } from "../../../shared/paths.ts";
 import { findWinHelperBinary, requireWinHelperBinary } from "./helper-bins.ts";
 import { createWin32ControlPipeName } from "./ipc-endpoint.ts";
 import { resolveSpawn, type ProcessSpawnSpec } from "./spawn-resolution.ts";
+import { firstEnvKey } from "./windows-cmd-shim-resolution.ts";
 
 /** Maps a spawned `fusa-run.exe` ChildProcess to its private control pipe (`interrupt` / `kill`). */
 const childControlPipes = new WeakMap< object, string >();
@@ -21,6 +23,14 @@ const liveFusaRunByPid = new Map<number, ChildProcess>();
 function isFusaRunBinary(program: string): boolean {
   const base = basename(program.replace(/\\/g, "/")).toLowerCase();
   return base === "fusa-run" || base === "fusa-run.exe";
+}
+
+function win32TargetExecutableExists(program: string, env: NodeJS.ProcessEnv): boolean {
+  const pathKey = firstEnvKey(env, "PATH");
+  const envPath = pathKey ? env[pathKey] : undefined;
+  const pathExtKey = firstEnvKey(env, "PATHEXT");
+  const pathExt = pathExtKey ? env[pathExtKey] : undefined;
+  return findExecutable(program, envPath, [], { platform: "win32", pathExt }) !== null;
 }
 
 export interface SpawnOwnedOptions {
@@ -93,6 +103,17 @@ export function spawnOwnedProcess(
       if (resolvedInner.options.env) {
         spawnEnv = resolvedInner.options.env;
       }
+      if (!win32TargetExecutableExists(resolvedInner.file, spawnEnv)) {
+        const missingChild = spawn(resolvedInner.file, resolvedInner.args, {
+          cwd: options.cwd,
+          env: spawnEnv,
+          stdio: options.stdio ?? ["pipe", "pipe", "pipe"],
+          detached: false,
+          windowsHide: true,
+          shell: false,
+        });
+        return { child: missingChild, detached: false };
+      }
       finalArgs = [
         ...headArgs,
         "--ctrl-pipe",
@@ -127,6 +148,11 @@ export function spawnOwnedProcess(
     detached: false,
   };
   const resolved = resolveSpawn(spec, "win32");
+  const effectiveEnv = resolved.options.env ?? env;
+  if (!win32TargetExecutableExists(resolved.file, effectiveEnv)) {
+    const missingChild = spawn(resolved.file, resolved.args, resolved.options);
+    return { child: missingChild, detached: false };
+  }
   const helper = options.allowMissingHelperFallback
     ? findWinHelperBinary("fusa-run.exe", { env })
     : requireWinHelperBinary("fusa-run.exe", { env });
@@ -146,7 +172,7 @@ export function spawnOwnedProcess(
   ];
   const child = spawn(helper, fusaArgs, {
     cwd: options.cwd,
-    env: resolved.options.env ?? env,
+    env: effectiveEnv,
     stdio: options.stdio ?? ["pipe", "pipe", "pipe"],
     detached: false,
     windowsHide: true,
@@ -211,14 +237,14 @@ export async function killWin32ProcessTree(pid: number): Promise<void> {
   const owned = liveFusaRunByPid.get(pid);
   if (owned) {
     try {
-      owned.kill();
+      owned.kill("SIGKILL");
     } catch {
       // Already exited
     }
     return;
   }
   try {
-    process.kill(pid);
+    process.kill(pid, "SIGKILL");
   } catch {
     // Ignore ESRCH
   }

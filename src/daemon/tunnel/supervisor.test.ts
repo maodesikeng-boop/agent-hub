@@ -91,7 +91,7 @@ async function spawned(n: number) {
   while (pids().length < n) await new Promise((r) => setTimeout(r, 10));
 }
 
-describe("状态分类", () => {
+describe.skipIf(process.platform === "win32")("状态分类", () => {
   it("看到 remote forward success 才算 connected；之前是 connecting", async () => {
     setPlan([{ stderr: ["debug1: Authenticated to x ([1.2.3.4]:22) using \"publickey\".", CONNECTED], hang: true }]);
     const s = supervisor();

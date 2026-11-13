@@ -1033,7 +1033,15 @@ describe("启动和关闭的边角", () => {
       expect(Date.now() - started).toBeLessThan(5_000);
       expect(exited).toMatchObject({ reason: "crash", exitCode: 1, messageIds: [1] });
     } finally {
-      for (const e of t.log()) if (e.kind === "orphan") process.kill(e.orphanPid, "SIGKILL");
+      for (const e of t.log()) {
+        if (e.kind === "orphan") {
+          try {
+            process.kill(e.orphanPid, "SIGKILL");
+          } catch {
+            // Windows 下 fusa-run Job Object 已在主进程退出时清掉孤儿
+          }
+        }
+      }
     }
   });
 

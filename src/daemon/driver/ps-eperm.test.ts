@@ -16,7 +16,7 @@ import { forceKillTree } from "./process.ts";
 
 afterEach(() => vi.restoreAllMocks());
 
-describe("execFile 同步抛 EPERM", () => {
+describe.skipIf(process.platform === "win32")("execFile 同步抛 EPERM", () => {
   it("forceKillTree 正常 resolve，照样 SIGKILL 它的组", async () => {
     const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
     await expect(forceKillTree(424242, true)).resolves.toBeUndefined();

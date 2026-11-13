@@ -82,8 +82,9 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
         cwds: [dir, "/extra"],
       });
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      await removeTreeWithRetry(dir);
     }
   });
 });
 import { writeExecutableNodeScript } from "../../../test/fake-cli-shim.ts";
+import { removeTreeWithRetry } from "../../daemon/platform/index.ts";
