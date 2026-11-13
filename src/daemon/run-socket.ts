@@ -5,6 +5,7 @@ import { createConnection } from "node:net";
 import { basename, dirname, join, resolve } from "node:path";
 import { HUB_SOCKET_PROBE_MS } from "../shared/limits.ts";
 import { assertSocketPathFits, isWindowsNamedPipe } from "../shared/paths.ts";
+import { allowWin32NamedPipeUserAccess } from "./platform/index.ts";
 
 const RUN_DIR_MODE = 0o700;
 const SOCKET_MODE = 0o600;
@@ -59,6 +60,9 @@ export async function listenOnRunSocket(
         throw new Error(`已有守护进程在跑：${socketPath} 上有人在监听，不能再启动一个。`, { cause: err });
       }
       throw err;
+    }
+    if (process.platform === "win32") {
+      allowWin32NamedPipeUserAccess(socketPath);
     }
     return socketPath;
   }

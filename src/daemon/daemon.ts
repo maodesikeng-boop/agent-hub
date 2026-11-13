@@ -359,6 +359,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       pmMemoryDir,
       dataHome: paths.home,
       worktreesDir,
+      extraWorktreeRoots: () => loadManagedWorktreeRoots(stateDir, worktreesDir),
       launchDir: paths.launchDir,
       setupLogsDir: paths.setupLogsDir,
       uploadsDir,
@@ -532,6 +533,9 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
               defaultWorktreesDir: worktreesDir,
               stateDir,
               log,
+              ...(process.platform === "win32"
+                ? { protectRoot: (sDir: string, root: string) => ensureWin32ProtectedRootAcl(sDir, root, { env }) }
+                : {}),
             });
             if (normalizePathForComparison(selected.root) !== normalizePathForComparison(worktreesDir)) {
               const projectRow = db.get<{ project_id: number }>("SELECT project_id FROM workers WHERE id = ?", workerId);

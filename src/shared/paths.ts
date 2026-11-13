@@ -3,6 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter as hostDelimiter, join, posix, win32 } from "node:path";
+import { LRUCache } from "lru-cache";
 import { ENV_HOME, PM_MEMORY_INDEX_FILE, WIN_EXEC_RESOLVE_CACHE_MAX } from "./limits.ts";
 import { DATA_DIR_NAME } from "./names.ts";
 // 各家只给守护进程用的路径（src/vendors/<id>/paths.ts，按名单加载；docs/vendor-plugin-design.md 的 B5）
@@ -378,7 +379,7 @@ export function vendorConfigHome(vendor: AgentVendor, userHome: string, env: Rec
  * 指纹里可执行文件的真实路径缓存（键：命令 + PATH + 兜底路径）：找到一次以后只 stat 那一个文件，不再每次遍历 PATH；
  * 那个文件没了（卸载、换位置）才重新找。没找到的不缓存（装上以后下次就能找到）。
  */
-const locatedExecutables = new Map<string, string>();
+const locatedExecutables = new LRUCache<string, string>({ max: WIN_EXEC_RESOLVE_CACHE_MAX });
 
 /** 仅供单测重置可执行文件路径缓存。 */
 export function resetLocatedExecutablesCacheForTest(): void {
@@ -419,9 +420,6 @@ function executableSignature(
   if (exe === null) return "-";
   const sig = statSignature(exe);
   if (sig === null) return `${exe}:missing`;
-  if (locatedExecutables.size >= WIN_EXEC_RESOLVE_CACHE_MAX) {
-    locatedExecutables.clear();
-  }
   locatedExecutables.set(key, exe);
   return sig;
 }

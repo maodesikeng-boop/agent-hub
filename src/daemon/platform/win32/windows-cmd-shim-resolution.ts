@@ -17,6 +17,7 @@
 // Resolve only exact known shims with verified targets; otherwise preserve cmd.exe fallback.
 import { readFileSync, statSync, type Stats } from "node:fs";
 import { win32 } from "node:path";
+import { LRUCache } from "lru-cache";
 import {
   WIN_CMD_SHIM_CACHE_MAX,
   WIN_CMD_SHIM_MAX_BYTES,
@@ -118,8 +119,8 @@ type ParseCacheEntry = {
   parsed: ParsedWindowsCmdShim | null;
 };
 
-const parseCache = new Map<string, ParseCacheEntry>();
-const nodeCache = new Map<string, string | null>();
+const parseCache = new LRUCache<string, ParseCacheEntry>({ max: WIN_CMD_SHIM_CACHE_MAX });
+const nodeCache = new LRUCache<string, string>({ max: WIN_EXEC_RESOLVE_CACHE_MAX });
 
 /** Clears `.cmd` shim and node interpreter caches (for unit tests). */
 export function resetWindowsCmdShimCacheForTest(): void {
@@ -156,9 +157,6 @@ function readParsedShim(
     return null;
   }
   const parsed = parseWindowsCmdShim(contents);
-  if (parseCache.size >= WIN_CMD_SHIM_CACHE_MAX) {
-    parseCache.clear();
-  }
   parseCache.set(program, { mtimeMs: stats.mtimeMs, size: stats.size, parsed });
   return parsed;
 }
@@ -183,14 +181,14 @@ function resolveShimNode(
   const pathExtValue = (pathExtKey ? env[pathExtKey] : undefined) || DEFAULT_PATHEXT;
   const key = `${directory}\n${pathValue}\n${pathExtValue}`;
   const cached = nodeCache.get(key);
-  if (cached !== undefined && (cached === null || statFn(cached))) {
-    return cached;
+  if (cached !== undefined) {
+    if (statFn(cached)) return cached;
+    nodeCache.delete(key);
   }
   const resolved = probeShimNode(directory, pathValue, pathExtValue, statFn);
-  if (nodeCache.size >= WIN_EXEC_RESOLVE_CACHE_MAX) {
-    nodeCache.clear();
+  if (resolved !== null) {
+    nodeCache.set(key, resolved);
   }
-  nodeCache.set(key, resolved);
   return resolved;
 }
 

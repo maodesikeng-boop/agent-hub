@@ -5,14 +5,17 @@
 // 孤儿目录（外部解绑残留）/ detached HEAD 与 review-* 分支 / 0 提交探索目录 / rebase 中途 / status.showUntrackedFiles=no 时未跟踪文件照样拦 / 被忽略的文件随目录删 / 相对路径不删。
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { devNull, tmpdir } from "node:os";
+import { delimiter, dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PmId, SessionId, WorkerId, WorkerRecord } from "../shared/domain.ts";
-import { WORKTREE_CLEANUP_BATCH_LIMIT, WORKTREE_RETENTION_MS } from "../shared/limits.ts";
+import { PM_ARCHIVE_RETENTION_MS, WORKTREE_CLEANUP_BATCH_LIMIT, WORKTREE_RETENTION_MS } from "../shared/limits.ts";
+import { projectWorktreesDir, workerWorktreePath } from "../shared/paths.ts";
+import { writeExecutableNodeScript } from "../../test/fake-cli-shim.ts";
 import { addWorktree } from "./git/index.ts";
 import { createResolveFolder } from "./ledger/files.ts";
 import { createLedger, type SqliteLedger } from "./ledger/index.ts";
+import { ensureProjectWorktreeBridge, loadManagedWorktreeRoots, registerManagedWorktreeRoot } from "./platform/index.ts";
 import { openTestDb } from "./store/test-helpers.ts";
 import type { Db } from "./store/index.ts";
 import { createWorktreeCleanup } from "./worktree-cleanup.ts";
@@ -21,7 +24,7 @@ function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...args], {
     cwd,
     encoding: "utf8",
-    env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" },
+    env: { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_SYSTEM: devNull },
   }).trim();
 }
 
@@ -227,7 +230,7 @@ describe("worktree 自动清理", () => {
     }
     execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "rebase", "-q", "-i", "HEAD~2"], {
       cwd: wRebase.worktreePath!,
-      env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_SEQUENCE_EDITOR: "sed -i.bak s/^pick/edit/" },
+      env: { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_SYSTEM: devNull, GIT_SEQUENCE_EDITOR: "sed -i.bak s/^pick/edit/" },
     });
     expect(git(wRebase.worktreePath!, "status", "--porcelain")).toBe("");
     // 合入 main，让“已合并”也成立：rebase 中途仍然不删
@@ -601,14 +604,30 @@ describe("worktree 自动清理", () => {
     const countFile = join(root, "git-count.txt");
     mkdirSync(binDir, { recursive: true });
     writeFileSync(countFile, "");
-    const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
-    writeFileSync(
-      join(binDir, "git"),
-      `#!/bin/sh\necho 1 >> "${countFile}"\nexec "${realGit}" "$@"\n`,
-    );
-    chmodSync(join(binDir, "git"), 0o755);
-
-    vi.stubEnv("PATH", `${binDir}:${process.env.PATH ?? ""}`);
+    const realGit =
+      process.platform === "win32"
+        ? execFileSync("where.exe", ["git.exe"], { encoding: "utf8", windowsHide: true }).trim().split(/\r?\n/)[0]!.trim()
+        : execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+    if (process.platform === "win32") {
+      writeExecutableNodeScript(
+        join(binDir, "git"),
+        `
+import { spawnSync } from "node:child_process";
+import { appendFileSync } from "node:fs";
+appendFileSync(${JSON.stringify(countFile)}, "1\\n");
+const res = spawnSync(${JSON.stringify(realGit)}, process.argv.slice(2), { stdio: "inherit", windowsHide: true });
+process.exit(res.status ?? 1);
+`,
+      );
+      vi.stubEnv("PATH", `${binDir}${delimiter}${dirname(process.execPath)}${delimiter}${process.env.PATH ?? process.env.Path ?? ""}`);
+    } else {
+      writeFileSync(
+        join(binDir, "git"),
+        `#!/bin/sh\necho 1 >> "${countFile}"\nexec "${realGit}" "$@"\n`,
+      );
+      chmodSync(join(binDir, "git"), 0o755);
+      vi.stubEnv("PATH", `${binDir}:${process.env.PATH ?? ""}`);
+    }
     const countCalls = () => readFileSync(countFile, "utf8").split("\n").filter(Boolean).length;
 
     const emptyCleanup = createWorktreeCleanup({
@@ -764,5 +783,99 @@ describe("worktree 自动清理", () => {
     now += WORKTREE_RETENTION_MS + 1_000;
     expect(await cleanup.runOnce()).toEqual([w1.id]);
     expect(existsSync(w1.worktreePath!)).toBe(false);
+  });
+
+  it("跨盘同卷 .fusa-wt 根目录自动回收闭环：已合并秒清、满 3 天清理、孤儿清理，以及 PM 归档到期连根删净 .fusa-wt/<projectId>", async () => {
+    const stateDir = join(dataHome, "state");
+    const crossRoot = join(root, "fake-d-drive", ".fusa-wt", "a1b2c3d4");
+    mkdirSync(crossRoot, { recursive: true });
+    registerManagedWorktreeRoot(stateDir, worktreesDir, crossRoot);
+
+    const crossDb = openTestDb();
+    const crossLedger = createLedger(crossDb, {
+      now: () => now,
+      initialSeq: 2_000,
+      pmHomeRoot: join(dataHome, "pm-home-cross"),
+      dataHome,
+      worktreesDir,
+      extraWorktreeRoots: () => loadManagedWorktreeRoots(stateDir, worktreesDir),
+      resolveFolder: createResolveFolder({ dataHome, userHome: root }),
+    });
+    try {
+      const crossCreated = crossLedger.createPm({ name: "跨盘PM", mode: "manage_only", persona: "", folder: repo });
+      const crossProjId = crossCreated.project!.id;
+
+      const spawnOnCrossRoot = async (title: string): Promise<WorkerRecord> => {
+        const started = crossLedger.hubCall(
+          crossCreated.sessionId,
+          "worker.start",
+          { title, task: "跨盘开发", vendor: "claude" },
+          { workspace: { kind: "ok", isRepoWithCommit: true, hasUncommittedChanges: false } },
+        ).data.worker;
+        const actualProjDir = projectWorktreesDir(crossRoot, crossProjId);
+        const defaultProjDir = projectWorktreesDir(worktreesDir, crossProjId);
+        ensureProjectWorktreeBridge(defaultProjDir, actualProjDir);
+        const crossWtPath = workerWorktreePath(crossRoot, crossProjId, started.id);
+        crossDb.run("UPDATE workers SET worktree_path = ? WHERE id = ?", crossWtPath, started.id);
+        const wt = await addWorktree({ repoFolder: repo, worktreePath: crossWtPath, branch: started.branch! });
+        crossLedger.onWorktreeCreated(started.id, wt.baseCommit);
+        return crossLedger.hubCall(crossCreated.sessionId, "worker.show", { workerId: started.id }).data.worker;
+      };
+
+      // 1) 已合入 main 的跨卷 .fusa-wt worktree 秒清
+      const wMerged = await spawnOnCrossRoot("跨盘已合入");
+      writeFileSync(join(wMerged.worktreePath!, "merged.txt"), "ok\n");
+      git(wMerged.worktreePath!, "add", "-A");
+      git(wMerged.worktreePath!, "commit", "-q", "-m", "cross-merged");
+      git(repo, "merge", "--no-ff", "-q", "-m", "merge cross", wMerged.branch!);
+      crossLedger.hubCall(crossCreated.sessionId, "worker.end", { workerId: wMerged.id });
+
+      // 2) 未合入但满 3 天的跨卷 .fusa-wt worktree 自动清理
+      const wExpired = await spawnOnCrossRoot("跨盘满三天");
+      writeFileSync(join(wExpired.worktreePath!, "unmerged.txt"), "wip\n");
+      git(wExpired.worktreePath!, "add", "-A");
+      git(wExpired.worktreePath!, "commit", "-q", "-m", "cross-wip");
+      crossLedger.hubCall(crossCreated.sessionId, "worker.end", { workerId: wExpired.id });
+
+      // 3) 跨卷孤儿目录回收
+      const wOrphan = await spawnOnCrossRoot("跨盘孤儿");
+      crossLedger.hubCall(crossCreated.sessionId, "worker.end", { workerId: wOrphan.id });
+      const gitPtr = readFileSync(join(wOrphan.worktreePath!, ".git"), "utf8").trim().replace(/\\/g, "/");
+      const linkName = gitPtr.split("/").pop()!;
+      rmSync(join(repo, ".git", "worktrees", linkName), { recursive: true, force: true });
+      git(repo, "worktree", "prune");
+
+      const cleanup = createWorktreeCleanup({
+        ledger: crossLedger,
+        worktreesDir,
+        extraWorktreeRoots: () => loadManagedWorktreeRoots(stateDir, worktreesDir),
+        log: (l) => logs.push(l),
+        now: () => now,
+      });
+
+      // 首轮：wMerged 与 0 提交孤儿 wOrphan 立即清理，未满 3 天的 wExpired 保留
+      const firstCleaned = await cleanup.runOnce();
+      expect(firstCleaned).toEqual([wMerged.id, wOrphan.id]);
+      expect(existsSync(wMerged.worktreePath!)).toBe(false);
+      expect(existsSync(wOrphan.worktreePath!)).toBe(false);
+      expect(existsSync(wExpired.worktreePath!)).toBe(true);
+
+      // 满 3 天后：wExpired 在跨卷 .fusa-wt 下被自动清理
+      now += WORKTREE_RETENTION_MS + 1_000;
+      expect(await cleanup.runOnce()).toEqual([wExpired.id]);
+      expect(existsSync(wExpired.worktreePath!)).toBe(false);
+
+      // 4) PM 归档到期彻底删除时，桥接软链/junction 与跨盘 .fusa-wt/<projectId> 物理目录一并清净，绝不遗留孤儿
+      const wArchiveLeft = await spawnOnCrossRoot("归档残留目录");
+      expect(existsSync(wArchiveLeft.worktreePath!)).toBe(true);
+      crossLedger.archivePm(crossCreated.pm.id);
+      now += PM_ARCHIVE_RETENTION_MS + 1_000;
+      expect(crossLedger.purgeExpiredArchivedPms(now)).toContain(crossCreated.pm.id);
+      expect(existsSync(projectWorktreesDir(worktreesDir, crossProjId))).toBe(false);
+      expect(existsSync(projectWorktreesDir(crossRoot, crossProjId))).toBe(false);
+    } finally {
+      crossLedger.close();
+      crossDb.close();
+    }
   });
 });

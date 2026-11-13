@@ -71,6 +71,7 @@ import { exitFailureReason } from "./messages.ts";
 import type { LedgerMessages } from "./messages.ts";
 import type { LedgerPersona } from "./persona.ts";
 import type { LedgerProjects } from "./projects.ts";
+import { isPathStrictlyInside } from "../platform/index.ts";
 import { agentSettingOf } from "./worker-view.ts";
 import { toConversation, toMessage, toWorkerRecord } from "./rows.ts";
 import type { ConversationDbRow, MessageDbRow, ProjectDbRow, WorkerDbRow } from "./rows.ts";
@@ -231,7 +232,12 @@ export function createLedgerWorkers(
   messages: LedgerMessages,
   persona: LedgerPersona,
   projects: LedgerProjects,
-  options: { worktreesDir: string; taskGraphs?: LedgerWorkersTaskGraphHooks; takeover?: LedgerTakeover },
+  options: {
+    worktreesDir: string;
+    extraWorktreeRoots?: () => readonly string[];
+    taskGraphs?: LedgerWorkersTaskGraphHooks;
+    takeover?: LedgerTakeover;
+  },
 ) {
   const { db, now, write, enqueue } = ctx;
   const { currentSession, insertSession, liveOf, updateLive } = sessions;
@@ -1689,13 +1695,20 @@ export function createLedgerWorkers(
   };
 
   /** 已收工、建过 worktree 的 Worker 的 worktree 目录是否已被清理掉。 */
-  const isWorktreeCleaned = (worker: WorkerDbRow): boolean =>
-    worker.workspace === "worktree" &&
-    worker.status === "ended" &&
-    worker.base_commit !== null &&
-    worker.worktree_path !== null &&
-    existsSync(worktreesDir) &&
-    !existsSync(worker.worktree_path);
+  const isWorktreeCleaned = (worker: WorkerDbRow): boolean => {
+    if (
+      worker.workspace !== "worktree" ||
+      worker.status !== "ended" ||
+      worker.base_commit === null ||
+      worker.worktree_path === null
+    ) {
+      return false;
+    }
+    if (existsSync(worker.worktree_path)) return false;
+    const allRoots = [worktreesDir, ...(options.extraWorktreeRoots?.() ?? [])];
+    const owningRoot = allRoots.find((r) => isPathStrictlyInside(r, worker.worktree_path!));
+    return existsSync(owningRoot ?? worktreesDir);
+  };
 
   /** agent 接口在 worker.show 之前查 PR 用：这个项目经理派的、在 worktree 里干活的 Worker 的 worktree 目录（已清理则退回主文件夹）和分支；别的 null。 */
   const workerPrTarget = (session: AgentSessionRow | null, workerId: WorkerId): { cwd: string; branch: string } | null => {

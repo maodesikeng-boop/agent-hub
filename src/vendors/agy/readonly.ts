@@ -80,6 +80,8 @@ export function agyReadonlySandboxInput(input: { homeDir: string; tmpDir: string
   const writableFileGlobs = [...AGY_RUNTIME_FILES.map((f) => `${cli}/${f}`), ...AGY_RUNTIME_FILES_LEGACY.map((f) => `${legacy}/${f}`)];
   return {
     tmpDir: real(input.tmpDir),
+    ...(input.policy.stateDir ? { stateDir: input.policy.stateDir } : {}),
+    ...(input.policy.protectedRoots ? { protectedRoots: input.policy.protectedRoots } : {}),
     writableDirs: [...AGY_RUNTIME_DIRS.map((d) => `${cli}/${d}`), ...READONLY_CACHE_DIRS.map((d) => `${home}/${d}`)],
     writableFileGlobs,
     writableFileRegexes: writableFileGlobs.map(fileRegex),

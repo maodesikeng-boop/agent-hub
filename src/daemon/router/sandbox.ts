@@ -92,7 +92,13 @@ export function prepareRouterSandboxLaunch(
   const basePath = options.basePath ?? process.env.PATH ?? process.env.Path ?? "";
 
   const prompt = buildRouterSystemPrompt({ vendorAvailability: options.vendorAvailability });
-  const readonlyPolicy = buildReadonlyPolicy({ homeDir, stateDir });
+  const readonlyPolicy = buildReadonlyPolicy({
+    homeDir,
+    stateDir,
+    ...(options.protectedRoots && options.protectedRoots.length > 0
+      ? { protectedRoots: [dataDir, ...options.protectedRoots] }
+      : {}),
+  });
   const vendor = isAgentVendor(session.vendor) ? session.vendor : null;
   const nativeReadonly = vendor !== null && vendorSpec(vendor).capabilities.readonly === "settings";
 

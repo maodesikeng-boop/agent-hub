@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { forceKill, isAlive, waitForExit } from "../../src/daemon/driver/process.ts";
+import { forceKill, isAlive, signalChild, waitForExit } from "../../src/daemon/driver/process.ts";
 import { removeTreeWithRetry, spawnOwnedProcess } from "../../src/daemon/platform/index.ts";
 import { writeExecutableNodeScript } from "../fake-cli-shim.ts";
 import { writeDiagLog } from "./diag-helper.ts";
@@ -102,6 +102,21 @@ setInterval(() => { void heldFd; }, 1000);
     const pidsFile = join(root, "chain-pids.txt");
     const helperDir = process.env.AGENT_HUB_WIN_HELPERS || join(process.cwd(), "apps", "windows", "target", "release");
 
+    const innerScript = join(root, "inner-worker.mjs");
+    writeFileSync(
+      innerScript,
+      `
+import { spawn } from "node:child_process";
+import { appendFileSync } from "node:fs";
+const leaf = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+  stdio: "ignore",
+  windowsHide: true,
+});
+appendFileSync(${JSON.stringify(pidsFile)}, process.pid + "\\n" + leaf.pid + "\\n");
+setInterval(() => {}, 1000);
+`,
+    );
+
     const outerScript = join(root, "outer-daemon.mjs");
     writeFileSync(
       outerScript,
@@ -111,14 +126,7 @@ import { appendFileSync } from "node:fs";
 import { join } from "node:path";
 
 const fusaRun = join(${JSON.stringify(helperDir)}, "fusa-run.exe");
-const innerCode = \`
-  const { spawn } = require("node:child_process");
-  const { appendFileSync } = require("node:fs");
-  const leaf = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore", windowsHide: true });
-  appendFileSync(${JSON.stringify(pidsFile)}, process.pid + "\\\\n" + leaf.pid + "\\\\n");
-  setInterval(() => {}, 1000);
-\`;
-const runner = spawn(fusaRun, ["--", process.execPath, "-e", innerCode], {
+const runner = spawn(fusaRun, ["--", process.execPath, ${JSON.stringify(innerScript)}], {
   stdio: "ignore",
   detached: false,
   windowsHide: true,
@@ -166,5 +174,38 @@ process.exit(0);
 
     const leafPid = Number(readFileSync(leafPidFile, "utf8").trim());
     expect(await waitForExit(leafPid, 1_000)).toBe(true);
+  });
+
+  it("④ 控制管道复用：同一长驻会话连续多次发送 SIGINT（CTRL_C_EVENT）均能送达而不丢失", { timeout: 30_000 }, async () => {
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "fusa-job-multi-int-")));
+    cleanups.push(() => removeTreeWithRetry(root));
+    const sigLog = join(root, "signals.txt");
+
+    const fakeCli = writeExecutableNodeScript(
+      join(root, "multi-int-cli"),
+      `
+import { appendFileSync } from "node:fs";
+let count = 0;
+process.on("SIGINT", () => {
+  count += 1;
+  appendFileSync(${JSON.stringify(sigLog)}, "sigint-" + count + "\\n");
+  if (count >= 2) {
+    process.exit(0);
+  }
+});
+appendFileSync(${JSON.stringify(sigLog)}, "ready\\n");
+setInterval(() => {}, 1000);
+`,
+    );
+
+    const { child } = spawnOwnedProcess(fakeCli, [], { cwd: root, stdio: ["pipe", "pipe", "pipe"] });
+    cleanups.push(() => forceKill(child));
+
+    await waitForFileLines(sigLog, 1);
+    signalChild(child, "SIGINT");
+    await waitForFileLines(sigLog, 2);
+    signalChild(child, "SIGINT");
+    const lines = await waitForFileLines(sigLog, 3);
+    expect(lines).toEqual(["ready", "sigint-1", "sigint-2"]);
   });
 });

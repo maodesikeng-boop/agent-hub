@@ -1,8 +1,9 @@
 // 账本里的项目经理和性格设定：建项目经理（不含项目，见 ledger.ts 的 createPm）、看和改性格设定、撤销、
 // 启动时同步性格设定文件（以数据库为准，见 syncPersonaFiles）。也放按编号找项目经理、项目经理的会话这些别处要用的读法。
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { LRUCache } from "lru-cache";
+import { normalizePathForComparison, unlinkDirectoryLinkSync } from "../platform/index.ts";
 import { PM_MODES, PM_MODE_LABELS, isOneOf, normalizeName, utf8Bytes } from "../../shared/domain.ts";
 import type {
   AgentSessionRow,
@@ -801,8 +802,28 @@ export function createLedgerPersona(
           }
           rmSync(pmMemoryDirPath(subfilesRoot, pmId), { recursive: true, force: true });
           rmSync(join(pmHomeRoot, String(pmId)), { recursive: true, force: true });
+          const seenRoots = new Set<string>();
+          const allWtRoots: string[] = [];
+          for (const r of [files.worktreesDir, ...(files.extraWorktreeRoots?.() ?? [])]) {
+            const key = normalizePathForComparison(r);
+            if (!seenRoots.has(key)) {
+              seenRoots.add(key);
+              allWtRoots.push(r);
+            }
+          }
           for (const projectId of projectIds) {
-            rmSync(join(files.worktreesDir, String(projectId)), { recursive: true, force: true });
+            for (const wtRoot of allWtRoots) {
+              const projWtDir = join(wtRoot, String(projectId));
+              try {
+                if (lstatSync(projWtDir).isSymbolicLink()) {
+                  unlinkDirectoryLinkSync(projWtDir);
+                  continue;
+                }
+              } catch {
+                // ENOENT or inaccessible -> handled by rmSync(force: true) below
+              }
+              rmSync(projWtDir, { recursive: true, force: true });
+            }
           }
           if (files.launchDir !== undefined) {
             for (const sid of sessionIds) {

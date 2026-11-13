@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, parse as parsePath } from "node:path";
@@ -32,6 +32,15 @@ function pickFreeSubstDrive(): string | null {
     if (!existsSync(`${letter}\\`)) return letter;
   }
   return null;
+}
+
+function waitForChildExit(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    child.once("exit", () => resolve());
+  });
 }
 
 describe.runIf(process.platform === "win32")("Windows 真机集成：盘符/8.3短名/subst/UNC、原子写重试与 who-locks 锁释放重删", () => {
@@ -110,16 +119,19 @@ describe.runIf(process.platform === "win32")("Windows 真机集成：盘符/8.3�
       [
         "-NoProfile",
         "-Command",
-        `$fs = [System.IO.File]::Open('${configFile.replaceAll("'", "''")}', [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read); Set-Content -LiteralPath '${lockReady1.replaceAll("'", "''")}' -Value '1'; Start-Sleep -Milliseconds 220; $fs.Close()`,
+        `$fs = [System.IO.File]::Open('${configFile.replaceAll("'", "''")}', [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read); Set-Content -LiteralPath '${lockReady1.replaceAll("'", "''")}' -Value '1'; Start-Sleep -Milliseconds 150; $fs.Close()`,
       ],
       { stdio: "ignore", windowsHide: true },
     );
+    cleanups.push(() => {
+      locker1.kill();
+    });
     const deadline1 = Date.now() + 8_000;
     while (!existsSync(lockReady1) && Date.now() < deadline1) {
       await new Promise((r) => setTimeout(r, 20));
     }
     writeFileAtomicSyncWithRetry(configFile, '{"v":2}\n', { platform: "win32" });
-    await new Promise((r) => locker1.once("exit", r));
+    await waitForChildExit(locker1);
     expect(readFileSync(configFile, "utf8")).toBe('{"v":2}\n');
 
     // 2. 子进程锁住 worktree 内文件：Restart Manager (who-locks) 准确报出持有者 PID，释放后整遍重删成功
@@ -163,6 +175,6 @@ describe.runIf(process.platform === "win32")("Windows 真机集成：盘符/8.3�
     }, 300);
     await removeTreeWithRetry(wtDir, { platform: "win32" });
     expect(existsSync(wtDir)).toBe(false);
-    await new Promise((r) => locker2.once("exit", r));
+    await waitForChildExit(locker2);
   });
 });

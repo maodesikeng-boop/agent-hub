@@ -71,24 +71,38 @@ pub fn current_user_sid_bytes() -> io::Result<Vec<u8>> {
     unsafe { copy_sid_bytes(user.User.Sid) }
 }
 
-unsafe fn set_restricted_token_default_dacl(token: HANDLE, grant_sid: *mut c_void) -> io::Result<()> {
+unsafe fn set_restricted_token_default_dacl(
+    token: HANDLE,
+    user_sid: *mut c_void,
+    logon_sid: Option<*mut c_void>,
+) -> io::Result<()> {
     let owner_rights = LocalSid::from_string("S-1-3-4")?;
-    let entries = [
-        (grant_sid, GENERIC_ALL),
+    let system_sid = LocalSid::from_string("S-1-5-18")?;
+    let mut principals: Vec<(*mut c_void, u32)> = vec![
+        (user_sid, GENERIC_ALL),
+        (system_sid.as_ptr(), GENERIC_ALL),
         (owner_rights.as_ptr(), READ_CONTROL),
-    ]
-    .map(|(sid, mask)| EXPLICIT_ACCESS_W {
-        grfAccessPermissions: mask,
-        grfAccessMode: GRANT_ACCESS,
-        grfInheritance: 0,
-        Trustee: TRUSTEE_W {
-            pMultipleTrustee: std::ptr::null_mut(),
-            MultipleTrusteeOperation: 0,
-            TrusteeForm: TRUSTEE_IS_SID,
-            TrusteeType: TRUSTEE_IS_UNKNOWN,
-            ptstrName: sid as *mut u16,
-        },
-    });
+    ];
+    if let Some(lsid) = logon_sid {
+        if unsafe { EqualSid(lsid, user_sid) == 0 } {
+            principals.push((lsid, GENERIC_ALL));
+        }
+    }
+    let entries: Vec<EXPLICIT_ACCESS_W> = principals
+        .into_iter()
+        .map(|(sid, mask)| EXPLICIT_ACCESS_W {
+            grfAccessPermissions: mask,
+            grfAccessMode: GRANT_ACCESS,
+            grfInheritance: 0,
+            Trustee: TRUSTEE_W {
+                pMultipleTrustee: std::ptr::null_mut(),
+                MultipleTrusteeOperation: 0,
+                TrusteeForm: TRUSTEE_IS_SID,
+                TrusteeType: TRUSTEE_IS_UNKNOWN,
+                ptstrName: sid as *mut u16,
+            },
+        })
+        .collect();
 
     let mut new_dacl: *mut ACL = std::ptr::null_mut();
     let code = unsafe {
@@ -246,11 +260,11 @@ pub fn create_worker_restricted_token(
     }
     let restricted = OwnedHandle(out_token);
 
-    let dacl_principal = logon_sid.as_ref().unwrap_or(&user_sid);
     unsafe {
         set_restricted_token_default_dacl(
             restricted.0,
-            dacl_principal.as_ptr() as *mut c_void,
+            user_sid.as_ptr() as *mut c_void,
+            logon_sid.as_ref().map(|b| b.as_ptr() as *mut c_void),
         )?;
     }
 

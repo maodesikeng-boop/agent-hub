@@ -4,6 +4,8 @@
 import { execFile } from "node:child_process";
 import type { WorkerPr, WorkerPrProbeResult } from "../../shared/hub.ts";
 import { GH_MAX_BUFFER_BYTES, WORKER_PR_PROBE_TIMEOUT_MS } from "../../shared/limits.ts";
+import { findExecutable } from "../../shared/paths.ts";
+import { firstEnvKey, resolveSpawn } from "../platform/index.ts";
 
 const PR_FIELDS = "number,state,url";
 
@@ -55,10 +57,35 @@ export function describeGhError(
 function runGh(cwd: string, args: string[], parse: (stdout: string) => WorkerPr | null, timeoutMs: number): Promise<WorkerPrProbeResult> {
   return new Promise((done) => {
     try {
+      const env: NodeJS.ProcessEnv = { ...process.env, GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1" };
+      let file = "gh";
+      let finalArgs = args;
+      let windowsVerbatimArguments: boolean | undefined;
+      if (process.platform === "win32") {
+        const pathKey = firstEnvKey(env, "PATH");
+        const pathExtKey = firstEnvKey(env, "PATHEXT");
+        const found = findExecutable("gh", pathKey ? env[pathKey] : undefined, [], {
+          platform: "win32",
+          pathExt: pathExtKey ? env[pathExtKey] : undefined,
+        });
+        if (found !== null) {
+          const spawned = resolveSpawn({ program: found, args, cwd, env }, "win32");
+          file = spawned.file;
+          finalArgs = spawned.args;
+          windowsVerbatimArguments = spawned.options.windowsVerbatimArguments;
+        }
+      }
       execFile(
-        "gh",
-        args,
-        { cwd, timeout: timeoutMs, maxBuffer: GH_MAX_BUFFER_BYTES, env: { ...process.env, GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1" } },
+        file,
+        finalArgs,
+        {
+          cwd,
+          timeout: timeoutMs,
+          maxBuffer: GH_MAX_BUFFER_BYTES,
+          env,
+          windowsHide: true,
+          ...(windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+        },
         (error, stdout, stderr) =>
           done(error === null ? parse(stdout) : { unavailable: describeGhError(error, stderr) }),
       );

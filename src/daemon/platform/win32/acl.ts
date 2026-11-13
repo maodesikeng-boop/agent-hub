@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { LRUCache } from "lru-cache";
 import {
   WIN_HELPER_PROBE_TIMEOUT_MS,
   WIN_PROTECTED_ROOTS_CACHE_MAX,
@@ -6,7 +7,7 @@ import {
 import { findWinHelperBinary, requireWinHelperBinary } from "./helper-bins.ts";
 import { normalizePathForComparison } from "./path-key.ts";
 
-const verifiedProtectedRoots = new Set<string>();
+const verifiedProtectedRoots = new LRUCache<string, true>({ max: WIN_PROTECTED_ROOTS_CACHE_MAX });
 
 export function resetVerifiedProtectedRootsForTest(): void {
   verifiedProtectedRoots.clear();
@@ -52,10 +53,7 @@ export function ensureWin32ProtectedRootAcl(
     timeout: WIN_HELPER_PROBE_TIMEOUT_MS * 4,
     windowsHide: true,
   });
-  if (verifiedProtectedRoots.size >= WIN_PROTECTED_ROOTS_CACHE_MAX) {
-    verifiedProtectedRoots.clear();
-  }
-  verifiedProtectedRoots.add(cacheKey);
+  verifiedProtectedRoots.set(cacheKey, true);
 }
 
 /** Grants `ALLOW FusaWorker-<workerId>` Modify ACE on an empty worktree directory before `git worktree add`. */
@@ -89,6 +87,28 @@ export function hardenWin32PrivateDirAcl(
     execFileSync(helper, ["acl", "harden", "--state-dir", stateDir, "--path", dirPath], {
       stdio: ["ignore", "pipe", "pipe"],
       timeout: WIN_HELPER_PROBE_TIMEOUT_MS * 4,
+      windowsHide: true,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Grants `FILE_GENERIC_READ | FILE_GENERIC_WRITE | SYNCHRONIZE` to the current user's personal SID
+ * on a Windows Named Pipe so `LUA_TOKEN` sandboxed Workers can connect even when the daemon runs elevated.
+ */
+export function allowWin32NamedPipeUserAccess(
+  pipePath: string,
+  options?: { env?: Record<string, string | undefined> },
+): boolean {
+  const helper = findWinHelperBinary("fusa-run.exe", { env: options?.env });
+  if (helper === null) return false;
+  try {
+    execFileSync(helper, ["acl", "allow-pipe", "--path", pipePath], {
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: WIN_HELPER_PROBE_TIMEOUT_MS,
       windowsHide: true,
     });
     return true;

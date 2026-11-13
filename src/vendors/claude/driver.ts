@@ -403,8 +403,11 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       };
       const home = realOrSelf(homedir());
       const claudeDirs = [join(home, ".claude"), join(home, ".cache"), join(home, ".npm")].filter((d) => existsSync(d)).map(realOrSelf);
+      const roProtectedRoots = files.writeScope?.protectedRoots ?? files.readonly.protectedRoots;
       const roInput: ReadonlySandboxInput = {
         tmpDir: privateTmp,
+        ...(files.readonly.stateDir ? { stateDir: files.readonly.stateDir } : {}),
+        ...(roProtectedRoots ? { protectedRoots: roProtectedRoots } : {}),
         writableDirs: claudeDirs,
         writableFileRegexes: [],
         secretPaths: [

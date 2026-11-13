@@ -36,7 +36,7 @@
 - `@fastify/static`：托管打包后的网页（`ui-server/server.ts`）。
 - `@fastify/compress`：大响应压缩（`ui-server/server.ts`、`peers/proxy.ts`）。
 - `zod`：校验输入（`ledger/hub-commands.ts`、`peers/service.ts`）。
-- `lru-cache`：带上限的缓存（`commands-catalog.ts`、`driver/model-catalog.ts`）。
+- `lru-cache`：带上限的缓存（`commands-catalog.ts`、`driver/model-catalog.ts`、`shared/paths.ts`、`platform/win32/`）。
 - `web-push`：手机推送（`push/sender.ts`、`push/vapid.ts`）。
 - `@agentclientprotocol/sdk`：标准 ACP（Agent Client Protocol）客户端与服务端协议层（`src/vendors/_common/acp/`）。
 - `jsonc-parser`：保留注释与格式的 JSON/JSONC 解析与局部补丁（`src/vendors/_common/sync/jsonc.ts`）。

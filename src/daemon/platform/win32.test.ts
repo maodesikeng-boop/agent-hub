@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync, type Stats } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +10,7 @@ import {
   MAX_WORKTREE_ROOTS,
   WIN_CMD_SHIM_CACHE_MAX,
   WIN_CMD_SHIM_MAX_BYTES,
+  buildReadonlyPolicy,
 } from "../../shared/index.ts";
 import {
   VENDOR_FALLBACK_PATHS,
@@ -593,5 +594,57 @@ describe("hub.exe 垫片安装、Git Bash MSYSTEM 斜杠拦截、准备命令 sh
     inhibitor.acquire();
     expect(spawned).toEqual([{ cmd: "fusa-run.exe", args: ["keep-awake", "--parent", "7788"] }]);
     inhibitor.stop();
+  });
+
+  it("resolveWindowsCmdShim 对未安装的 node.exe 不留永久负缓存，且 ReadonlyPolicy 兼容 Windows 反斜杠路径", () => {
+    resetWindowsCmdShimCacheForTest();
+    const shimPath = "C:\\Users\\u\\AppData\\Roaming\\npm\\claude.cmd";
+    const scriptPath = "C:\\Users\\u\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js";
+    const nodeExePath = "C:\\Program Files\\nodejs\\node.exe";
+    const shimContent = [
+      "@ECHO off",
+      "GOTO start",
+      ":find_dp0",
+      "SET dp0=%~dp0",
+      "EXIT /b",
+      ":start",
+      "SETLOCAL",
+      "CALL :find_dp0",
+      'IF EXIST "%dp0%\\node.exe" (',
+      '  SET "_prog=%dp0%\\node.exe"',
+      ") ELSE (",
+      '  SET "_prog=node"',
+      "  SET PATHEXT=%PATHEXT:;.JS;=;%",
+      ")",
+      'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\@anthropic-ai\\claude-code\\cli.js" %*',
+    ].join("\r\n");
+
+    let nodeInstalled = false;
+    const fakeStat = (p: string): Stats | null => {
+      const norm = p.toLowerCase();
+      if (norm === shimPath.toLowerCase() || norm === scriptPath.toLowerCase()) {
+        return { isFile: () => true, mtimeMs: 100, size: shimContent.length } as Stats;
+      }
+      if (nodeInstalled && norm === nodeExePath.toLowerCase()) {
+        return { isFile: () => true, mtimeMs: 100, size: 1024 } as Stats;
+      }
+      return null;
+    };
+    const env = { Path: "C:\\Program Files\\nodejs", PATHEXT: ".COM;.EXE;.BAT;.CMD" };
+
+    expect(resolveWindowsCmdShim(shimPath, env, { stat: fakeStat, read: () => shimContent })).toBeNull();
+    nodeInstalled = true;
+    expect(resolveWindowsCmdShim(shimPath, env, { stat: fakeStat, read: () => shimContent })).toEqual({
+      program: nodeExePath,
+      prefixArgs: [scriptPath],
+    });
+
+    const winRoPolicy = buildReadonlyPolicy({
+      homeDir: "C:\\Users\\u\\",
+      stateDir: "C:\\Users\\u\\.agent-hub\\state\\",
+      protectedRoots: ["C:\\Users\\u\\.agent-hub", "D:\\.fusa-wt\\12345678"],
+    });
+    expect(winRoPolicy.secretPaths).toContain("C:\\Users\\u\\.agent-hub\\state\\ui-token");
+    expect(winRoPolicy.protectedRoots).toEqual(["C:\\Users\\u\\.agent-hub", "D:\\.fusa-wt\\12345678"]);
   });
 });

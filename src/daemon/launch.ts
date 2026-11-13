@@ -104,8 +104,15 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
     const promptOptions = role === "pm" ? { taskGraphSkillFile: taskGraphSkillFile(dir) } : {};
     const prompt = buildLaunchPrompt(ctx, session.cwd, promptOptions);
     const readonly = role === "worker" && ctx.worker !== null && ctx.worker.readonly;
+    const extraRoots = options.protectedRoots?.();
     // 只读不再让 agy、codex 去反读 claude 设置文件里的权限档：统一定义放 LaunchFiles.readonly（shared/readonly-policy.ts）
-    const readonlyPolicy = readonly ? buildReadonlyPolicy({ homeDir, stateDir }) : undefined;
+    const readonlyPolicy = readonly
+      ? buildReadonlyPolicy({
+          homeDir,
+          stateDir,
+          ...(extraRoots && extraRoots.length > 0 ? { protectedRoots: [dataDir, ...extraRoots] } : {}),
+        })
+      : undefined;
     // 用设置文件落实只读的厂商（spec 的 capabilities.readonly 是 "settings"，如 claude 的自带沙箱，设计第 2.3 节）：设置文件换成只读翻译，
     // 进程不再包外层沙箱（macOS 沙箱不能嵌套）。别家的只读翻译在各自驱动层。
     const vendor = isAgentVendor(session.vendor) ? session.vendor : null;
@@ -131,7 +138,6 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
     let skillsDir: string | undefined;
     if (role === "pm") skillsDir = writeProductSkills(dir);
     else removeProductSkills(dir);
-    const extraRoots = options.protectedRoots?.();
     const writeScope = nativeReadonly
       ? null
       : workerWriteScope({

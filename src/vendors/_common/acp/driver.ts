@@ -600,10 +600,13 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
           ]
         : policy.secretPaths.map(realpathOrSelf);
     const secretPaths = allSecretPaths.filter((p) => !readableFiles.includes(p));
+    const roProtectedRoots = launch.files.writeScope?.protectedRoots ?? policy.protectedRoots;
 
     return {
       input: {
         tmpDir,
+        ...(policy.stateDir ? { stateDir: policy.stateDir } : {}),
+        ...(roProtectedRoots ? { protectedRoots: roProtectedRoots } : {}),
         writableDirs,
         writableFileGlobs,
         writableFileRegexes: [],

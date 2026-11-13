@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -34,6 +34,35 @@ import { writeFakePiBinary } from "../../src/vendors/pi/fixtures/fake-pi.ts";
 import { writeDiagLog } from "./diag-helper.ts";
 
 const cleanups: Array<() => Promise<void> | void> = [];
+
+function runChildAsync(
+  command: string,
+  args: readonly string[],
+  options: { cwd?: string; env?: NodeJS.ProcessEnv },
+): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, [...args], {
+      cwd: options.cwd,
+      env: options.env,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      resolve({ status: code, stdout, stderr });
+    });
+  });
+}
 
 afterEach(async () => {
   resetOsSandboxCacheForTest();
@@ -93,7 +122,7 @@ describe.runIf(process.platform === "win32")("Windows 真机集成：写受限�
       probeScript,
       `
 import { spawnSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { join } from "node:path";
 
@@ -110,9 +139,38 @@ const stateWrite = tryWrite(${JSON.stringify(join(stateDir, "pwn.txt"))});
 const dataRootWrite = tryWrite(${JSON.stringify(join(dataDir, "pwn.txt"))});
 const otherWtWrite = tryWrite(${JSON.stringify(join(otherWt, "pwn.txt"))});
 const ownWtWrite = tryWrite(${JSON.stringify(join(ownWt, "ok.txt"))});
+
+// 验证在 worktree 内多级新建嵌套子目录与临时目录中读写删自建文件闭环
+let nestedLifecycle = "err";
+try {
+  const nestedDir = join(${JSON.stringify(ownWt)}, "nested", "sub");
+  mkdirSync(nestedDir, { recursive: true });
+  const keptFile = join(nestedDir, "kept.txt");
+  const ephemeralFile = join(nestedDir, "ephemeral.txt");
+  writeFileSync(keptFile, "v1");
+  appendFileSync(keptFile, "+v2");
+  writeFileSync(ephemeralFile, "tmp");
+  rmSync(ephemeralFile);
+  if (readFileSync(keptFile, "utf8") === "v1+v2") {
+    nestedLifecycle = "ok";
+  }
+} catch (e) {
+  nestedLifecycle = e.code || String(e);
+}
+
 const extProjWrite = tryWrite(${JSON.stringify(join(externalProj, "ok.txt"))});
 const storeWrite = tryWrite(${JSON.stringify(join(pnpmStore, "ok.txt"))});
-const tempWrite = tryWrite(join(process.env.TEMP || process.env.TMP, "fusa-sbx-temp-" + process.pid + ".txt"));
+let tempWrite = "err";
+try {
+  const tmpFile = join(process.env.TEMP || process.env.TMP, "fusa-sbx-temp-" + process.pid + ".txt");
+  writeFileSync(tmpFile, "tmp-ok");
+  if (readFileSync(tmpFile, "utf8") === "tmp-ok") {
+    rmSync(tmpFile);
+    tempWrite = "wrote";
+  }
+} catch (e) {
+  tempWrite = e.code || "err";
+}
 
 const icaclsRes = spawnSync("icacls.exe", [${JSON.stringify(stateDir)}, "/grant", "*S-1-1-0:(F)"], { windowsHide: true });
 const takeownRes = spawnSync("takeown.exe", ["/f", ${JSON.stringify(stateDir)}], { windowsHide: true });
@@ -152,6 +210,7 @@ writeFileSync(
     dataRootWrite,
     otherWtWrite,
     ownWtWrite,
+    nestedLifecycle,
     extProjWrite,
     storeWrite,
     tempWrite,
@@ -174,10 +233,8 @@ writeFileSync(
       "win32",
       { stateDir },
     );
-    const run = spawnSync(wrapped.command, wrapped.args, {
+    const run = await runChildAsync(wrapped.command, wrapped.args, {
       cwd: ownWt,
-      encoding: "utf8",
-      windowsHide: true,
     });
     if (run.status !== 0) {
       writeDiagLog("worker-sandbox-stderr", `${run.stdout}\n${run.stderr}`);
@@ -189,6 +246,7 @@ writeFileSync(
     expect(report.dataRootWrite).not.toBe("wrote");
     expect(report.otherWtWrite).not.toBe("wrote");
     expect(report.ownWtWrite).toBe("wrote");
+    expect(report.nestedLifecycle).toBe("ok");
     expect(report.extProjWrite).toBe("wrote");
     expect(report.storeWrite).toBe("wrote");
     expect(report.tempWrite).toBe("wrote");
@@ -197,6 +255,34 @@ writeFileSync(
     expect(report.setAclCode).not.toBe(0);
     expect(report.nulCode).toBe(0);
     expect(report.pipeStatus).toBe(200);
+
+    // 兄弟 Worker 525 尝试篡改或删除 Worker 524 新建的嵌套子目录文件必须被拒绝；随后主守护进程可正常删除
+    const siblingScope = workerWriteScope({ role: "worker", dataDir, cwd: otherWt })!;
+    const keptNestedFile = join(ownWt, "nested", "sub", "kept.txt");
+    const siblingWrapped = spawnInWriteScope(
+      "codex",
+      {
+        command: process.execPath,
+        args: [
+          "-e",
+          `try { require("node:fs").writeFileSync(${JSON.stringify(keptNestedFile)}, "tampered"); process.exit(9); } catch { process.exit(0); }`,
+        ],
+      },
+      siblingScope,
+      undefined,
+      "worker 525",
+      "win32",
+      { stateDir },
+    );
+    const siblingRun = spawnSync(siblingWrapped.command, siblingWrapped.args, {
+      cwd: otherWt,
+      encoding: "utf8",
+      windowsHide: true,
+    });
+    expect(siblingRun.status, siblingRun.stderr).toBe(0);
+    expect(readFileSync(keptNestedFile, "utf8")).toBe("v1+v2");
+    await removeTreeWithRetry(join(ownWt, "nested"));
+    expect(existsSync(join(ownWt, "nested"))).toBe(false);
 
     // PM 会话（无沙箱）正常写 state\ 成功
     const fusaRun = requireWinHelperBinary("fusa-run.exe");
@@ -217,16 +303,22 @@ writeFileSync(
     const dataDir = join(root, "agent-hub");
     const stateDir = join(dataDir, "state");
     const wtDir = join(dataDir, "worktrees", "1", "600");
+    const extraProtectedRoot = join(root, "cross-vol-fusa-wt");
     const tmpRo = join(root, "ro-tmp");
     mkdirSync(stateDir, { recursive: true });
     mkdirSync(wtDir, { recursive: true });
+    mkdirSync(extraProtectedRoot, { recursive: true });
     mkdirSync(tmpRo, { recursive: true });
 
     ensureWin32ProtectedRootAcl(stateDir, dataDir);
     allowWin32WorkerWorktreeAcl(stateDir, "600", wtDir);
 
-    // 1) 验证 --readonly-fallback 内核级效果：连 worktree 目录本身也禁止写入（因为不挂单 Worker 放行 SID）！
-    const policy = buildReadonlyPolicy({ homeDir: realpathSync.native(homedir()), stateDir });
+    // 1) 验证 --readonly-fallback 内核级效果：连 worktree 目录本身与额外 protectedRoots 也一并禁止写入！
+    const policy = buildReadonlyPolicy({
+      homeDir: realpathSync.native(homedir()),
+      stateDir,
+      protectedRoots: [dataDir, extraProtectedRoot],
+    });
     const roWrapped = wrapInReadonlyOsSandbox(
       {
         command: process.execPath,
@@ -236,15 +328,18 @@ writeFileSync(
 const fs = require("node:fs");
 let stateBlocked = false;
 let wtBlocked = false;
+let extraRootBlocked = false;
 try { fs.writeFileSync(${JSON.stringify(join(stateDir, "ro.txt"))}, "x"); } catch { stateBlocked = true; }
 try { fs.writeFileSync(${JSON.stringify(join(wtDir, "ro.txt"))}, "x"); } catch { wtBlocked = true; }
-fs.writeFileSync(${JSON.stringify(join(tmpRo, "result.json"))}, JSON.stringify({ stateBlocked, wtBlocked }));
+try { fs.writeFileSync(${JSON.stringify(join(extraProtectedRoot, "ro.txt"))}, "x"); } catch { extraRootBlocked = true; }
+fs.writeFileSync(${JSON.stringify(join(tmpRo, "result.json"))}, JSON.stringify({ stateBlocked, wtBlocked, extraRootBlocked }));
 `,
         ],
       },
       {
         tmpDir: tmpRo,
         stateDir,
+        protectedRoots: policy.protectedRoots,
         writableDirs: [],
         writableFileRegexes: [],
         secretPaths: policy.secretPaths,
@@ -261,6 +356,7 @@ fs.writeFileSync(${JSON.stringify(join(tmpRo, "result.json"))}, JSON.stringify({
     expect(JSON.parse(readFileSync(join(tmpRo, "result.json"), "utf8"))).toEqual({
       stateBlocked: true,
       wtBlocked: true,
+      extraRootBlocked: true,
     });
 
     // 2) 验证真实非 codex 驱动（以 Pi 驱动 + .cmd 垫片为例）启动只读会话不报错、带出工具禁写参数并发射 driver.warning

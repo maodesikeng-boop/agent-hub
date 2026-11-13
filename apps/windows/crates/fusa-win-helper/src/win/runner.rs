@@ -4,23 +4,25 @@ use crate::win::job::SessionJob;
 use crate::win::token::create_worker_restricted_token;
 use crate::win::util::{last_os_error, to_wide, OwnedHandle};
 use std::ffi::c_void;
-use std::fs::File;
-use std::io::{self, BufRead, BufReader};
-use std::os::windows::io::FromRawHandle;
+use std::io;
 use std::path::Path;
 use std::sync::Arc;
 use std::thread;
 use windows_sys::Win32::Foundation::{
-    SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
+    ERROR_BROKEN_PIPE, ERROR_PIPE_CONNECTED, SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT,
+    INVALID_HANDLE_VALUE,
 };
-use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_INBOUND};
+use windows_sys::Win32::Storage::FileSystem::{
+    ReadFile, FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_INBOUND,
+};
 use windows_sys::Win32::System::Console::{
     AllocConsole, FreeConsole, GenerateConsoleCtrlEvent, GetStdHandle, SetConsoleCtrlHandler,
     SetStdHandle, CTRL_BREAK_EVENT, CTRL_C_EVENT, STD_ERROR_HANDLE, STD_INPUT_HANDLE,
     STD_OUTPUT_HANDLE,
 };
 use windows_sys::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_WAIT,
+    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE,
+    PIPE_WAIT,
 };
 use windows_sys::Win32::System::Threading::{
     CreateProcessAsUserW, CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess,
@@ -60,7 +62,30 @@ fn setup_private_console(stdin_h: HANDLE, stdout_h: HANDLE, stderr_h: HANDLE) {
     }
 }
 
-fn start_ctrl_pipe_listener(pipe_name: &str, job: Arc<SessionJob>) -> io::Result<()> {
+const CTRL_MAX_LINE_BYTES: usize = 256;
+
+fn handle_ctrl_command(raw_line: &[u8], job: Option<&Arc<SessionJob>>) -> bool {
+    let Ok(text) = std::str::from_utf8(raw_line) else {
+        return false;
+    };
+    match text.trim() {
+        "interrupt" => {
+            unsafe {
+                let _ = GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0);
+            }
+            false
+        }
+        "kill" => {
+            if let Some(j) = job {
+                j.terminate(1);
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+fn start_ctrl_pipe_listener(pipe_name: &str, job: Option<Arc<SessionJob>>) -> io::Result<()> {
     let wide = to_wide(pipe_name);
     let raw_pipe = unsafe {
         CreateNamedPipeW(
@@ -79,30 +104,75 @@ fn start_ctrl_pipe_listener(pipe_name: &str, job: Arc<SessionJob>) -> io::Result
     }
     let pipe_addr = raw_pipe as usize;
     thread::spawn(move || {
-        let pipe_handle = pipe_addr as HANDLE;
-        let connected = unsafe { ConnectNamedPipe(pipe_handle, std::ptr::null_mut()) };
-        if connected == 0 {
-            let err = io::Error::last_os_error();
-            // ERROR_PIPE_CONNECTED == 535 means client connected between CreateNamedPipeW and ConnectNamedPipe
-            if err.raw_os_error() != Some(535) {
-                unsafe {
-                    let _ = File::from_raw_handle(pipe_handle as _);
-                }
-                return;
-            }
-        }
-        let file = unsafe { File::from_raw_handle(pipe_handle as _) };
-        let reader = BufReader::new(file);
-        for line in reader.lines().map_while(Result::ok) {
-            match line.trim() {
-                "interrupt" => unsafe {
-                    let _ = GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0);
-                },
-                "kill" => {
-                    job.terminate(1);
+        let pipe = OwnedHandle(pipe_addr as HANDLE);
+        let mut chunk = [0u8; 256];
+        let mut line_buf = Vec::with_capacity(64);
+
+        loop {
+            let connected = unsafe { ConnectNamedPipe(pipe.0, std::ptr::null_mut()) };
+            if connected == 0 {
+                let err = io::Error::last_os_error();
+                if err.raw_os_error() != Some(ERROR_PIPE_CONNECTED as i32) {
                     break;
                 }
-                _ => {}
+            }
+
+            line_buf.clear();
+            let mut discarding_overlong = false;
+            let mut should_stop = false;
+
+            loop {
+                let mut read_len = 0u32;
+                let ok = unsafe {
+                    ReadFile(
+                        pipe.0,
+                        chunk.as_mut_ptr(),
+                        chunk.len() as u32,
+                        &mut read_len,
+                        std::ptr::null_mut(),
+                    )
+                };
+                if ok == 0 {
+                    let err = io::Error::last_os_error();
+                    if err.raw_os_error() != Some(ERROR_BROKEN_PIPE as i32) {
+                        should_stop = true;
+                    }
+                    break;
+                }
+                if read_len == 0 {
+                    break;
+                }
+                for &byte in &chunk[..read_len as usize] {
+                    if byte == b'\n' {
+                        if !discarding_overlong && handle_ctrl_command(&line_buf, job.as_ref()) {
+                            should_stop = true;
+                            break;
+                        }
+                        line_buf.clear();
+                        discarding_overlong = false;
+                    } else if !discarding_overlong {
+                        if line_buf.len() < CTRL_MAX_LINE_BYTES {
+                            line_buf.push(byte);
+                        } else {
+                            line_buf.clear();
+                            discarding_overlong = true;
+                        }
+                    }
+                }
+                if should_stop {
+                    break;
+                }
+            }
+
+            if !should_stop && !discarding_overlong && !line_buf.is_empty() {
+                should_stop = handle_ctrl_command(&line_buf, job.as_ref());
+            }
+
+            unsafe {
+                let _ = DisconnectNamedPipe(pipe.0);
+            }
+            if should_stop {
+                break;
             }
         }
     });
@@ -230,8 +300,8 @@ pub fn run_session(spec: RunSessionSpec<'_>) -> io::Result<i32> {
         ));
     }
 
-    if let (Some(pipe_name), Some(job_ref)) = (spec.ctrl_pipe, job.as_ref()) {
-        let _ = start_ctrl_pipe_listener(pipe_name, Arc::clone(job_ref));
+    if let Some(pipe_name) = spec.ctrl_pipe {
+        let _ = start_ctrl_pipe_listener(pipe_name, job.as_ref().map(Arc::clone));
     }
 
     let restricted_token = match spec.sandbox {

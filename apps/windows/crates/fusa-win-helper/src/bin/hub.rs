@@ -25,11 +25,13 @@ fn read_adjacent_config() -> Option<HubShimConfig> {
 fn try_direct_pipe(args: &[String]) -> Option<i32> {
     use fusa_win_helper::pipe_http::{
         is_help_invocation, send_hub_cli_over_stream, valid_token_chars, HubCliPipeRequest,
-        HubCliPipeResponse,
+        HubCliPipeResponse, HUB_MAX_STDIN_BYTES,
     };
     use fusa_win_helper::win::pipe::connect_named_pipe;
     use std::io::{self, Read, Write};
     use std::time::Duration;
+
+    const HUB_CLI_TIMEOUT: Duration = Duration::from_secs(30);
 
     if is_help_invocation(args) {
         return None;
@@ -48,8 +50,8 @@ fn try_direct_pipe(args: &[String]) -> Option<i32> {
     let mut stdin_invalid_utf8 = false;
     if wants_stdin {
         let mut buf = Vec::new();
-        // Read up to 2 MiB + 1 byte so the daemon enforces the exact HUB_MAX_BODY_BYTES limit.
-        let mut handle = io::stdin().take(2 * 1024 * 1024 + 1);
+        // Read up to HUB_MAX_STDIN_BYTES + 1 byte so the daemon enforces the exact HUB_MAX_BODY_BYTES limit.
+        let mut handle = io::stdin().take((HUB_MAX_STDIN_BYTES + 1) as u64);
         if handle.read_to_end(&mut buf).is_err() {
             return None;
         }
@@ -59,7 +61,7 @@ fn try_direct_pipe(args: &[String]) -> Option<i32> {
         }
     }
 
-    let pipe = match connect_named_pipe(&sock, Duration::from_secs(5)) {
+    let pipe = match connect_named_pipe(&sock, Duration::from_secs(5), HUB_CLI_TIMEOUT) {
         Ok(p) => p,
         Err(_) => return None,
     };
@@ -79,7 +81,16 @@ fn try_direct_pipe(args: &[String]) -> Option<i32> {
         stdin_invalid_utf8,
     };
 
-    let (status, body) = send_hub_cli_over_stream(pipe, &token, &req).ok()?;
+    let (status, body) = match send_hub_cli_over_stream(pipe, &token, &req) {
+        Ok(pair) => pair,
+        Err(err) if err.kind() == io::ErrorKind::TimedOut => {
+            let msg = "请求已经发给 agent-hub，但没等到回应（超时）。请求可能已经执行，请先用 `hub status` 确认，别直接重试\n";
+            let _ = io::stderr().write_all(msg.as_bytes());
+            let _ = io::stderr().flush();
+            return Some(1);
+        }
+        Err(_) => return None,
+    };
     if status == 404 {
         return None;
     }

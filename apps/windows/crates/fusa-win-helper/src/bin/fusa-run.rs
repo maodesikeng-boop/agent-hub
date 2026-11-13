@@ -94,6 +94,18 @@ fn main() {
                     }
                 }
             }
+            FusaRunCommand::AclAllowPipe { path } => {
+                match acl::allow_current_user_on_named_pipe(&path) {
+                    Ok(()) => {
+                        println!(r#"{{"ok":true}}"#);
+                        0
+                    }
+                    Err(err) => {
+                        eprintln!("fusa-run acl allow-pipe failed: {err}");
+                        1
+                    }
+                }
+            }
             FusaRunCommand::Inspect { pid } => {
                 let res = inspect::inspect_process(pid);
                 println!(

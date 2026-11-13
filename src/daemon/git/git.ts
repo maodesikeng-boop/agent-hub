@@ -7,7 +7,8 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { WorkspaceProbe } from "../../shared/ledger.ts";
 import { GIT_MAX_BUFFER_BYTES, GIT_PROBE_TIMEOUT_MS, GIT_TIMEOUT_MS } from "../../shared/limits.ts";
-import { normalizePathForComparison } from "../platform/index.ts";
+import { findExecutable } from "../../shared/paths.ts";
+import { firstEnvKey, normalizePathForComparison, resolveSpawn } from "../platform/index.ts";
 
 /**
  * 只读地列仓库里的东西（`git ls-files` 这类，对象是别人给的、不一定可信的仓库）时加在子命令前面的参数和环境变量：
@@ -66,24 +67,35 @@ interface GitRun {
   stderr: string;
 }
 
-let cachedWinGitBinary: string | undefined;
+function preferGitForWindowsMingw(foundPath: string): string {
+  const match = /^(.*)[\\/]cmd[\\/]git\.exe$/i.exec(foundPath);
+  if (!match) return foundPath;
+  const mingwCandidate = join(match[1]!, "mingw64", "bin", "git.exe");
+  return existsSync(mingwCandidate) ? mingwCandidate : foundPath;
+}
 
-function resolveGitExecutable(): string {
-  if (process.platform !== "win32") return "git";
-  if (cachedWinGitBinary !== undefined) return cachedWinGitBinary;
-  const candidates = [
-    join(process.env.ProgramFiles ?? "C:\\Program Files", "Git", "mingw64", "bin", "git.exe"),
-    join(process.env.ProgramFiles ?? "C:\\Program Files", "Git", "cmd", "git.exe"),
-    ...(process.env.LOCALAPPDATA ? [join(process.env.LOCALAPPDATA, "Programs", "Git", "mingw64", "bin", "git.exe")] : []),
-  ];
-  for (const c of candidates) {
-    if (existsSync(c)) {
-      cachedWinGitBinary = c;
-      return c;
-    }
+function resolveGitInvocation(
+  args: readonly string[],
+  env: NodeJS.ProcessEnv,
+): { file: string; args: string[]; windowsVerbatimArguments?: boolean } {
+  if (process.platform !== "win32") {
+    return { file: "git", args: [...args] };
   }
-  cachedWinGitBinary = "git";
-  return "git";
+  const pathKey = firstEnvKey(env, "PATH");
+  const envPath = pathKey ? env[pathKey] : undefined;
+  const pathExtKey = firstEnvKey(env, "PATHEXT");
+  const pathExt = pathExtKey ? env[pathExtKey] : undefined;
+  const found = findExecutable("git", envPath, [], { platform: "win32", pathExt });
+  if (found === null) {
+    return { file: "git", args: [...args] };
+  }
+  const upgraded = preferGitForWindowsMingw(found);
+  const spawned = resolveSpawn({ program: upgraded, args, env }, "win32");
+  return {
+    file: spawned.file,
+    args: spawned.args,
+    windowsVerbatimArguments: spawned.options.windowsVerbatimArguments,
+  };
 }
 
 /**
@@ -102,15 +114,19 @@ function runGit(
       process.platform === "win32"
         ? ["-c", "core.longpaths=true", "-C", folder]
         : ["-C", folder];
+    const fullEnv: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0", ...extraEnv };
+    const invocation = resolveGitInvocation([...prefixArgs, ...args], fullEnv);
     const child = execFile(
-      resolveGitExecutable(),
-      [...prefixArgs, ...args],
+      invocation.file,
+      invocation.args,
       {
         timeout: timeoutMs,
-        ...(process.platform === "win32" ? { windowsHide: true } : { killSignal: "SIGKILL" as const }),
+        ...(process.platform === "win32"
+          ? { windowsHide: true, windowsVerbatimArguments: invocation.windowsVerbatimArguments }
+          : { killSignal: "SIGKILL" as const }),
         maxBuffer: GIT_MAX_BUFFER_BYTES,
         encoding: "utf8",
-        env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...extraEnv },
+        env: fullEnv,
       },
       (error, stdout, stderr) => {
         if (!error) return resolvePromise({ code: 0, stdout, stderr });

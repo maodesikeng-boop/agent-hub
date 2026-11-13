@@ -27,6 +27,7 @@ import {
   ensureWin32ProtectedRootAcl,
   findWinHelperBinary,
   loadManagedWorktreeRoots,
+  normalizePathForComparison,
   runWin32SandboxProbe,
 } from "../platform/index.ts";
 
@@ -252,6 +253,8 @@ export interface ReadonlySandboxInput {
   tmpDir: string;
   /** 可选的数据目录 state/（供 Windows 无 MXC 回退时定位受保护根与 SID 表）。 */
   stateDir?: string;
+  /** 可选的受保护根目录列表（含数据目录与跨卷同盘 `.fusa-wt`，Windows 无 MXC 回退时逐一确保拒写 ACL）。 */
+  protectedRoots?: readonly string[];
   /** 厂商运行时目录、通用缓存目录：整个子树可写。 */
   writableDirs: string[];
   /** 具体的可写文件或单层通配（平台无关，如 /path/cli.log、/path/bin/agentapi*、/path/mcp/星/*）：seatbelt 转正则，bubblewrap 展开已存在文件并 --bind。 */
@@ -772,10 +775,14 @@ export function win32ReadonlyFallbackSandboxArgs(
   if (!options?.skipAclSetup && process.platform === "win32") {
     const dataDir = dirname(stateDir);
     const defaultWorktreesDir = join(dataDir, "worktrees");
-    const roots = [dataDir, ...loadManagedWorktreeRoots(stateDir, defaultWorktreesDir)];
+    const roots = [
+      dataDir,
+      ...(input.protectedRoots ?? []),
+      ...loadManagedWorktreeRoots(stateDir, defaultWorktreesDir),
+    ];
     const seen = new Set<string>();
     for (const r of roots) {
-      const key = r.toLowerCase();
+      const key = normalizePathForComparison(r);
       if (seen.has(key) || !existsSync(r)) continue;
       seen.add(key);
       ensureWin32ProtectedRootAcl(stateDir, r, { env: options?.env });

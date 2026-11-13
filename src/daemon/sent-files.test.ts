@@ -290,8 +290,14 @@ describe("边界", () => {
 
   it("文件夹、命名管道：不是文件，不拷（管道不会卡住）", () => {
     mkdirSync(join(proj, "dir"));
-    execFileSync("mkfifo", [join(proj, "pipe")]);
-    expect(share(`[d](${join(proj, "dir")}) [p](${join(proj, "pipe")})`).map((f) => f.status)).toEqual(["not_file", "not_file"]);
+    if (process.platform === "win32") {
+      expect(share(`[d](${join(proj, "dir")}) [p](\\\\.\\pipe\\fusa-sent-test)`).map((f) => f.status)).toEqual([
+        "not_file",
+      ]);
+    } else {
+      execFileSync("mkfifo", [join(proj, "pipe")]);
+      expect(share(`[d](${join(proj, "dir")}) [p](${join(proj, "pipe")})`).map((f) => f.status)).toEqual(["not_file", "not_file"]);
+    }
     expect(copies()).toEqual([]);
   });
 

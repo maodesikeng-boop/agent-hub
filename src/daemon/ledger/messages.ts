@@ -18,6 +18,7 @@ import { toMessage } from "./rows.ts";
 import type { MessageDbRow } from "./rows.ts";
 import type { LedgerSentFiles } from "./sent-files.ts";
 import { clearStreaming, idle, toolStarted, working } from "./sessions.ts";
+import { isPathInsideOrEqual } from "../platform/index.ts";
 import type { LedgerSessions } from "./sessions.ts";
 import { stepOfTool, summarizeToolCall } from "./tool-summary.ts";
 
@@ -486,11 +487,16 @@ export function createLedgerMessages(
    * 输入框“/”“@”用（shared/ledger.ts 的 composerTarget）：这个对话最新一代的会话和它的目录。
    * “@”能搜的文件夹：工作目录 + 附加文件夹，去掉项目经理带着的 worktrees 目录（那是 Worker 的，不是“这个对话的工作文件夹”）。
    */
-  const composerTarget = (conversationId: ConversationId, worktreesDir: string): ComposerTarget => {
+  const composerTarget = (
+    conversationId: ConversationId,
+    worktreesDir: string,
+    extraWorktreeRoots?: readonly string[],
+  ): ComposerTarget => {
     if (!conversationExists(conversationId)) throw new ConversationNotFoundError(conversationId);
     const session = currentSession(conversationId);
     if (session === null) throw new Error(`conversation ${conversationId} has no agent session`);
-    const underWorktrees = (dir: string) => dir === worktreesDir || dir.startsWith(`${worktreesDir.replace(/\/+$/, "")}/`);
+    const wtRoots = [worktreesDir, ...(extraWorktreeRoots ?? [])];
+    const underWorktrees = (dir: string) => wtRoots.some((root) => isPathInsideOrEqual(root, dir));
     return {
       sessionId: session.id,
       vendor: session.vendor,

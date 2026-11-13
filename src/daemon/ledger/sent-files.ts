@@ -5,6 +5,7 @@ import type { AgentTextMeta } from "../../shared/sent-files.ts";
 import type { AgentSessionRow } from "../../shared/domain.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
 import { projectWorktreesDir } from "../../shared/paths.ts";
+import { normalizePathForComparison } from "../platform/index.ts";
 import { isShareable, shareLinkedFiles, type ShareScope } from "../sent-files.ts";
 import type { Db } from "../store/index.ts";
 
@@ -12,6 +13,7 @@ export interface SentFilesOptions {
   sentFilesDir: string;
   uploadsDir: string;
   worktreesDir: string;
+  extraWorktreeRoots?: () => readonly string[];
   dataHome: string;
   userHome: string;
   /** /tmp 和系统临时目录（LedgerOptions.shareTmpDirs 的默认值）。 */
@@ -39,7 +41,18 @@ export function createLedgerSentFiles(db: Db, opts: SentFilesOptions) {
       projectId === null
         ? []
         : db.all<{ path: string }>("SELECT path FROM project_folders WHERE project_id = ? AND removed_at IS NULL", projectId).map((r) => r.path);
-    const worktrees = projectId === null ? [] : [projectWorktreesDir(opts.worktreesDir, projectId)];
+    const worktrees: string[] = [];
+    if (projectId !== null) {
+      const seen = new Set<string>();
+      for (const root of [opts.worktreesDir, ...(opts.extraWorktreeRoots?.() ?? [])]) {
+        const dir = projectWorktreesDir(root, projectId);
+        const key = normalizePathForComparison(dir);
+        if (!seen.has(key)) {
+          seen.add(key);
+          worktrees.push(dir);
+        }
+      }
+    }
     return {
       sentFilesDir: opts.sentFilesDir,
       cwd: session.cwd,

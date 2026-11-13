@@ -65,6 +65,8 @@ export function piReadonlySandboxInput(input: {
   const selfReadable = new Set(PI_SELF_READABLE_CONFIG_FILES.map((f) => trimSlash(real(`${configDir}/${f}`))));
   return {
     tmpDir: real(input.tmpDir),
+    ...(input.policy.stateDir ? { stateDir: input.policy.stateDir } : {}),
+    ...(input.policy.protectedRoots ? { protectedRoots: input.policy.protectedRoots } : {}),
     writableDirs: [...new Set(writableDirs)],
     writableFileGlobs: [],
     writableFileRegexes: [],

@@ -36,6 +36,9 @@ pub enum FusaRunCommand {
         state_dir: PathBuf,
         path: PathBuf,
     },
+    AclAllowPipe {
+        path: String,
+    },
     Inspect {
         pid: u32,
     },
@@ -121,21 +124,25 @@ pub fn parse_fusa_run_args(raw_args: &[String]) -> Result<FusaRunCommand, String
             let action = raw_args
                 .get(1)
                 .map(String::as_str)
-                .ok_or_else(|| "acl requires subcommand: protect-root | allow-worker | harden".to_string())?;
+                .ok_or_else(|| "acl requires subcommand: protect-root | allow-worker | harden | allow-pipe".to_string())?;
             let mut state_dir: Option<PathBuf> = None;
             let mut worker_id: Option<String> = None;
-            let mut path: Option<PathBuf> = None;
+            let mut path_raw: Option<String> = None;
             let mut it = raw_args[2..].iter().map(String::as_str);
             while let Some(arg) = it.next() {
                 match arg {
                     "--state-dir" => state_dir = Some(PathBuf::from(next_val(&mut it, "--state-dir")?)),
                     "--worker" => worker_id = Some(next_val(&mut it, "--worker")?),
-                    "--path" => path = Some(PathBuf::from(next_val(&mut it, "--path")?)),
+                    "--path" => path_raw = Some(next_val(&mut it, "--path")?),
                     other => return Err(format!("unknown acl option: {other}")),
                 }
             }
+            let path_raw = path_raw.ok_or_else(|| "acl requires --path <target>".to_string())?;
+            if action == "allow-pipe" {
+                return Ok(FusaRunCommand::AclAllowPipe { path: path_raw });
+            }
             let state_dir = state_dir.ok_or_else(|| "acl requires --state-dir <dir>".to_string())?;
-            let path = path.ok_or_else(|| "acl requires --path <dir>".to_string())?;
+            let path = PathBuf::from(path_raw);
             return match action {
                 "protect-root" => Ok(FusaRunCommand::AclProtectRoot { state_dir, path }),
                 "allow-worker" => {
@@ -293,6 +300,18 @@ mod tests {
         assert_eq!(
             parse_fusa_run_args(&vec_s(&["inspect", "--pid", "4321"])).expect("inspect"),
             FusaRunCommand::Inspect { pid: 4321 }
+        );
+        assert_eq!(
+            parse_fusa_run_args(&vec_s(&[
+                "acl",
+                "allow-pipe",
+                "--path",
+                "\\\\.\\pipe\\fusa-test-hub"
+            ]))
+            .expect("allow-pipe"),
+            FusaRunCommand::AclAllowPipe {
+                path: "\\\\.\\pipe\\fusa-test-hub".to_string()
+            }
         );
     }
 }

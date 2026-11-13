@@ -25,6 +25,21 @@ pub fn run_internal_probe_child(
         );
         return 11;
     }
+    if let Some(allowed_parent) = allowed_file.parent() {
+        let nested_dir = allowed_parent.join("nested").join("child");
+        let nested_file = nested_dir.join("self_created.txt");
+        if let Err(err) = fs::create_dir_all(&nested_dir)
+            .and_then(|()| fs::write(&nested_file, b"first"))
+            .and_then(|()| fs::write(&nested_file, b"updated"))
+            .and_then(|()| fs::remove_file(&nested_file))
+        {
+            eprintln!(
+                "sandbox probe failed: nested create/modify/delete inside allowed worktree failed ({}): {err}",
+                nested_dir.display()
+            );
+            return 13;
+        }
+    }
     if let Err(err) = fs::write(outside_file, b"ok") {
         eprintln!(
             "sandbox probe failed: write outside protected root failed ({}): {err}",

@@ -784,7 +784,7 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
     },
   };
 
-  app.post("/hub/cli", { schema: { body: hubCliPipeSchema } }, async (req, reply) => {
+  app.post("/hub/cli", { bodyLimit: HUB_MAX_BODY_BYTES * 4, schema: { body: hubCliPipeSchema } }, async (req, reply) => {
     const auth = authOf.get(req);
     if (auth === undefined) throw new Error("agent-api: request reached /hub/cli without a session");
     const sock = opts.boundSocketPath?.() ?? "";

@@ -1,9 +1,10 @@
 // 真 git、临时目录：判断仓库、没提交的改动、建 worktree（M3 W1，计划的测试表）。
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { devNull, tmpdir } from "node:os";
+import { delimiter, dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { writeExecutableNodeScript } from "../../../test/fake-cli-shim.ts";
 import {
   addWorktree,
   GitError,
@@ -27,7 +28,7 @@ function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...args], {
     cwd,
     encoding: "utf8",
-    env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" },
+    env: { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_SYSTEM: devNull },
   }).trim();
 }
 
@@ -54,6 +55,22 @@ function makeRepo(name: string, { commit = true } = {}): string {
 function fakeGit(script: string): void {
   const bin = join(root, "fake-bin");
   mkdirSync(bin, { recursive: true });
+  if (process.platform === "win32") {
+    const gitBash = [
+      join(process.env.ProgramFiles ?? "C:\\Program Files", "Git", "bin", "bash.exe"),
+      join(process.env.ProgramFiles ?? "C:\\Program Files", "Git", "usr", "bin", "bash.exe"),
+    ].find((p) => existsSync(p)) ?? "bash.exe";
+    writeExecutableNodeScript(
+      join(bin, "git"),
+      `
+import { spawnSync } from "node:child_process";
+const res = spawnSync(${JSON.stringify(gitBash)}, ["-c", ${JSON.stringify(script)}, "git", ...process.argv.slice(2)], { stdio: "inherit", windowsHide: true });
+process.exit(res.status ?? 1);
+`,
+    );
+    vi.stubEnv("PATH", `${bin}${delimiter}${dirname(process.execPath)}`);
+    return;
+  }
   writeFileSync(join(bin, "git"), `#!/bin/sh\n${script}\n`);
   chmodSync(join(bin, "git"), 0o755);
   vi.stubEnv("PATH", `${bin}:/bin:/usr/bin`);

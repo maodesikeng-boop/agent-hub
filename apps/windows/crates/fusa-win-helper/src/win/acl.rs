@@ -5,8 +5,10 @@ use std::ffi::c_void;
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{
-    ERROR_SUCCESS, GENERIC_ALL, GENERIC_WRITE, HLOCAL, INVALID_HANDLE_VALUE, LocalFree,
+    ERROR_PIPE_BUSY, ERROR_SUCCESS, GENERIC_ALL, GENERIC_WRITE, HLOCAL, INVALID_HANDLE_VALUE,
+    LocalFree,
 };
 use windows_sys::Win32::Security::Authorization::{
     GetNamedSecurityInfoW, GetSecurityInfo, SetEntriesInAclW, SetNamedSecurityInfoW,
@@ -22,8 +24,9 @@ use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, DELETE, FILE_APPEND_DATA, FILE_ATTRIBUTE_NORMAL, FILE_DELETE_CHILD,
     FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ,
     FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES, FILE_WRITE_DATA, FILE_WRITE_EA, OPEN_EXISTING,
-    READ_CONTROL, WRITE_DAC, WRITE_OWNER,
+    READ_CONTROL, SYNCHRONIZE, WRITE_DAC, WRITE_OWNER,
 };
+use windows_sys::Win32::System::Pipes::WaitNamedPipeW;
 use windows_sys::Win32::System::SystemServices::{
     ACCESS_ALLOWED_ACE_TYPE, ACCESS_DENIED_ACE_TYPE,
 };
@@ -501,4 +504,107 @@ pub fn allow_null_device(psid: *mut c_void) {
             LocalFree(sd as HLOCAL);
         }
     }
+}
+
+/// Grants `FILE_GENERIC_READ | FILE_GENERIC_WRITE | SYNCHRONIZE` to the current user's personal SID
+/// on a bound Windows Named Pipe (`\\.\pipe\...`).
+/// When the daemon runs under an elevated Administrator token (e.g. CI runners or UAC-off setups),
+/// libuv's default pipe DACL grants write access to `BUILTIN\Administrators` rather than the personal user SID,
+/// which `LUA_TOKEN` disables in sandboxed Workers (`EPERM`). Adding `current_user_sid` allows same-user
+/// sandboxed Workers through both normal and `WRITE_RESTRICTED` checks while keeping other OS users out.
+pub fn allow_current_user_on_named_pipe(pipe_path: &str) -> io::Result<()> {
+    let user_sid = current_user_sid_bytes()?;
+    let user_sid_ptr = user_sid.as_ptr() as *mut c_void;
+    let wide = to_wide(pipe_path);
+    let deadline = Instant::now() + Duration::from_secs(3);
+
+    let handle = loop {
+        let raw = unsafe {
+            CreateFileW(
+                wide.as_ptr(),
+                READ_CONTROL | WRITE_DAC,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                std::ptr::null(),
+                OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL,
+                std::ptr::null_mut(),
+            )
+        };
+        if !raw.is_null() && raw != INVALID_HANDLE_VALUE {
+            break OwnedHandle(raw);
+        }
+        let err = io::Error::last_os_error();
+        if err.raw_os_error() == Some(ERROR_PIPE_BUSY as i32) && Instant::now() < deadline {
+            unsafe {
+                let _ = WaitNamedPipeW(wide.as_ptr(), 50);
+            }
+            continue;
+        }
+        return Err(err);
+    };
+
+    let mut dacl: *mut ACL = std::ptr::null_mut();
+    let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+    let get_code = unsafe {
+        GetSecurityInfo(
+            handle.0,
+            SE_KERNEL_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut dacl,
+            std::ptr::null_mut(),
+            &mut sd,
+        )
+    };
+    if get_code != ERROR_SUCCESS {
+        return Err(win32_code_error(
+            &format!("GetSecurityInfo(pipe {pipe_path})"),
+            get_code,
+        ));
+    }
+
+    let explicit = make_explicit_access(
+        user_sid_ptr,
+        GRANT_ACCESS,
+        FILE_GENERIC_READ | FILE_GENERIC_WRITE | SYNCHRONIZE,
+        0,
+    );
+    let mut new_dacl: *mut ACL = std::ptr::null_mut();
+    let res = unsafe {
+        let acl_code = SetEntriesInAclW(1, &explicit, dacl, &mut new_dacl);
+        if acl_code != ERROR_SUCCESS {
+            Err(win32_code_error("SetEntriesInAclW(allow_pipe)", acl_code))
+        } else {
+            let set_code = SetSecurityInfo(
+                handle.0,
+                SE_KERNEL_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                new_dacl,
+                std::ptr::null(),
+            );
+            if set_code != ERROR_SUCCESS {
+                Err(win32_code_error(
+                    &format!("SetSecurityInfo(pipe {pipe_path})"),
+                    set_code,
+                ))
+            } else {
+                Ok(())
+            }
+        }
+    };
+
+    if !new_dacl.is_null() {
+        unsafe {
+            LocalFree(new_dacl as HLOCAL);
+        }
+    }
+    if !sd.is_null() {
+        unsafe {
+            LocalFree(sd as HLOCAL);
+        }
+    }
+    res
 }

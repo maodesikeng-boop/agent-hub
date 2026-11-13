@@ -63,6 +63,7 @@ export {
   isWindowsNamedPipe,
 } from "./win32/ipc-endpoint.ts";
 export {
+  allowWin32NamedPipeUserAccess,
   allowWin32WorkerWorktreeAcl,
   ensureWin32ProtectedRootAcl,
   formatWin32LockHolders,
