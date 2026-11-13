@@ -3,14 +3,19 @@ name = "fusa-supervisor"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Cross-platform daemon lifecycle supervisor, dual probe, and log rotator for Windows WSL2 Fusa"
+description = "Native Windows daemon lifecycle supervisor, loopback health probe, PATH refresher, and log rotator for Fusa"
 
 [dependencies]
-fusa-wsl = { path = "../fusa-wsl" }
+fusa-win-helper = { path = "../fusa-win-helper" }
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 ureq.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+winreg.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

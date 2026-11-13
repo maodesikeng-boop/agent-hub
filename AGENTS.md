@@ -42,6 +42,7 @@
 - `jsonc-parser`：保留注释与格式的 JSON/JSONC 解析与局部补丁（`src/vendors/_common/sync/jsonc.ts`）。
 - `@decimalturn/toml-patch`：保留注释与格式的 TOML 解析与局部补丁（`src/vendors/_common/sync/toml.ts`）。
 - `write-file-atomic`（npm 官方）：同目录临时文件 + fsync + rename 原子替换用户配置，目标是软链时替换真实文件、沿用原权限属主（`daemon/vendor-sync/backup.ts`）。
+- `@microsoft/mxc-sdk`（微软官方）：Windows 11 24H2+ 只读 Worker 的 MXC ProcessContainer 探测与只读容器执行，低版本 Windows 自动平滑回退写受限令牌（`daemon/platform/win32/mxc-readonly.ts`、`daemon/platform/win32/mxc-runner.ts`）。
 - `unified` + `remark-parse` + `remark-gfm`：解析 Markdown（`sent-files.ts`）。
 - 数据库用 Node 自带的 `node:sqlite`（`store/`），不是第三方库；Skill 逐项软链同步直接用 Node 自带的 `node:fs`（`src/vendors/_common/sync/skills.ts`）。
 
@@ -69,7 +70,7 @@
 **桌面外壳（`apps/desktop`、`apps/macos`、`apps/windows`）**
 - 共用监管约定：`apps/desktop/contract.json`（`apps/macos/DaemonSupervisor.swift`、`apps/windows/crates/fusa-supervisor/src/contract.rs`、`apps/windows/crates/fusa-desktop/src/lib.rs`）。
 - macOS（`apps/macos/`）：原生 Swift，系统框架 `AppKit`、`WebKit`、`UserNotifications`（`scripts/build-mac-app.sh` 调用 `swiftc` 编译为 `Fusa.app`）。
-- Windows（`apps/windows/`，Rust workspace）：`windows-sys`（微软官方 Win32 API 绑定，供 `crates/fusa-win-helper/` 的 `fusa-run.exe` 与 `hub.exe` 调用 Job Object、写受限令牌、NTFS ACL、Restart Manager、防睡眠与命名管道）、`tauri` + `tauri-build`（Tauri 2 桌面窗口、WebView 与托盘，`crates/fusa-desktop/`）、`ureq`（守护进程 HTTP 探活，`crates/fusa-supervisor/src/probe.rs`）、`winreg`（读取注册表，`crates/fusa-wsl/src/registry.rs`）、`sha2`（SHA-256 校验，`crates/fusa-wsl/src/runner.rs`）、`serde` + `serde_json`（配置与状态序列化，`fusa-win-helper` / `fusa-wsl` / `fusa-supervisor` / `fusa-desktop`）、`thiserror`（`fusa-wsl` / `fusa-supervisor`）+ `url`（`fusa-desktop`）；Rust 测试用 `tempfile`。
+- Windows（`apps/windows/`，Rust workspace，含 `fusa-win-helper`、`fusa-supervisor`、`fusa-desktop`）：`windows-sys`（微软官方 Win32 API 绑定，供 `crates/fusa-win-helper/` 的 `fusa-run.exe` 与 `hub.exe` 调用 Job Object、写受限令牌、NTFS ACL、Restart Manager、防睡眠与命名管道，以及 `fusa-supervisor` / `fusa-desktop` NFC 规整与管道自检）、`tauri` + `tauri-build` + `tauri-plugin-single-instance` + `tauri-plugin-dialog` + `tauri-plugin-opener`（Tauri 2 桌面窗口、单实例聚焦、原生目录选择、外部链接/日志打开与托盘，`crates/fusa-desktop/`）、`ureq`（守护进程回环 HTTP 探活与健康鉴权，`crates/fusa-supervisor/src/probe.rs`）、`winreg`（启动时读取系统与用户最新注册表 `Path` 环境变量，`crates/fusa-supervisor/src/env_path.rs`）、`sha2`（随包运行时清单 SHA-256 完整性校验与数据目录命名管道哈希，`crates/fusa-supervisor/src/manifest.rs`）、`serde` + `serde_json`（配置与状态序列化，`fusa-win-helper` / `fusa-supervisor` / `fusa-desktop`）、`thiserror`（`fusa-supervisor` / `fusa-desktop`）+ `url`（`fusa-desktop`）；Rust 测试用 `tempfile`。
 
 **测试**
 - `vitest`（`vitest.config.ts`）、`jsdom`（`src/shared/test-helpers.ts`）、`@testing-library/react`、`@testing-library/user-event`、`@testing-library/jest-dom`（`src/web/test-setup.ts`）。

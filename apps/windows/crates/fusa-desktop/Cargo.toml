@@ -3,7 +3,7 @@ name = "fusa-desktop"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Tauri 2 Windows desktop shell, bootstrap setup view, and system tray for Fusa"
+description = "Tauri 2 native Windows desktop shell, bundled Node daemon supervisor, and system tray for Fusa"
 
 [lib]
 name = "fusa_desktop"
@@ -17,13 +17,19 @@ path = "src/main.rs"
 tauri-build.workspace = true
 
 [dependencies]
-fusa-wsl = { path = "../fusa-wsl" }
 fusa-supervisor = { path = "../fusa-supervisor" }
+fusa-win-helper = { path = "../fusa-win-helper" }
 serde.workspace = true
 serde_json.workspace = true
 tauri.workspace = true
+tauri-plugin-dialog.workspace = true
+tauri-plugin-opener.workspace = true
+tauri-plugin-single-instance.workspace = true
 thiserror.workspace = true
 url.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -17,21 +17,18 @@ pub enum SupervisorError {
         source: std::io::Error,
     },
 
-    #[error("WSL 发行版归属或命令执行错误：{0}")]
-    Wsl(#[from] fusa_wsl::ProvisionError),
+    #[error("随包运行时文件或校验清单异常：{0}")]
+    RuntimeIntegrityFailed(String),
 
-    #[error("构造 WSL 命令失败：{0}")]
-    CommandBuild(#[from] fusa_wsl::CommandBuildError),
+    #[error("拉起原生进程失败（{program}）：{source}")]
+    SpawnFailed {
+        program: String,
+        #[source]
+        source: std::io::Error,
+    },
 
     #[error("端口 {port} 冲突：{detail}")]
     PortConflict { port: u16, detail: String },
-
-    #[error("WSL 内部后台已就绪（实例 {guest_instance_id}），但宿主 Windows 无法访问 127.0.0.1:{port}：{detail}")]
-    LocalhostForwardingBroken {
-        port: u16,
-        guest_instance_id: String,
-        detail: String,
-    },
 
     #[error("等待后台守护进程就绪超时（预算 {budget_ms} ms）：{detail}")]
     StartupTimedOut { budget_ms: u64, detail: String },
@@ -44,6 +41,9 @@ pub enum SupervisorError {
 
     #[error("兑换本地 WebView 会话 Cookie 失败：{0}")]
     AuthExchangeFailed(String),
+
+    #[error("健康探活请求失败：{0}")]
+    HealthCheckFailed(String),
 
     #[error("当前端口由外部兼容 Fusa 实例管理，外壳只复用连接，拒绝重启或停止外部实例")]
     ExternalManagedCannotRestart,

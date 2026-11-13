@@ -25,10 +25,13 @@ interface DesktopContract {
   protocolVersion: number;
   defaultPort: number;
   statusPath: string;
+  healthPath: string;
+  shutdownTransport: string;
+  shutdownPath: string;
+  daemonEntryRelativePath: string;
   probeTimeoutMs: number;
   pollIntervalMs: number;
   startupBudgetMs: number;
-  wslColdStartBudgetMs: number;
   stopGraceMs: number;
   crashBackoffMs: number[];
   crashWindowMs: number;
@@ -84,10 +87,13 @@ describe("桌面壳共用监管契约与 /api/auth/status 轻量身份响应", (
     expect(contract.protocolVersion).toBe(DESKTOP_PROTOCOL_VERSION);
     expect(contract.defaultPort).toBe(DEFAULT_UI_PORT);
     expect(contract.statusPath).toBe(API_PATHS.authStatus);
+    expect(contract.healthPath).toBe(API_PATHS.health);
+    expect(contract.shutdownTransport).toBe("admin-endpoint");
+    expect(contract.shutdownPath).toBe("/admin/shutdown");
+    expect(contract.daemonEntryRelativePath).toBe("src/daemon/main.ts");
     expect(contract.probeTimeoutMs).toBe(500);
     expect(contract.pollIntervalMs).toBe(150);
     expect(contract.startupBudgetMs).toBe(15_000);
-    expect(contract.wslColdStartBudgetMs).toBe(60_000);
     expect(contract.stopGraceMs).toBe(40_000);
     expect(contract.stopGraceMs).toBeGreaterThan(SHUTDOWN_TOTAL_MS);
     expect(contract.crashBackoffMs).toEqual([1_000, 2_000, 4_000, 8_000, 16_000, 30_000]);
@@ -100,8 +106,10 @@ describe("桌面壳共用监管契约与 /api/auth/status 轻量身份响应", (
     expect(isSupervised({ AGENT_HUB_SUPERVISED: "fusa-macos" })).toBe(true);
     expect(isSupervised({ INVOCATION_ID: "abc" })).toBe(true);
     expect(isSupervised({})).toBe(false);
-    // Windows 桌面端：WSL 里的起停脚本导出同一个变量
-    expect(readFileSync(new URL("../../../scripts/wsl-daemon-ctl.sh", import.meta.url), "utf8")).toContain(`export ${contract.supervisedEnv}=`);
+    // Windows 原生桌面端：fusa-supervisor 按 contract.supervised_env 注入同一个监管变量
+    expect(
+      readFileSync(new URL("../../../apps/windows/crates/fusa-supervisor/src/supervisor.rs", import.meta.url), "utf8"),
+    ).toContain("supervised_env");
     expect(contract.logRelativePath).toBe("state/logs/desktop-daemon.log");
     expect(contract.logMaxBytes).toBe(2 * 1024 * 1024);
     expect(contract.logMaxBytes).toBe(DAEMON_LOG_MAX_BYTES);
@@ -139,6 +147,14 @@ describe("桌面壳共用监管契约与 /api/auth/status 轻量身份响应", (
     });
     expect(secondRes.json().instanceId).toBe(instanceId);
 
+    // 未登录请求 GET /api/health 返回 401
+    const unauthHealth = await app.inject({
+      method: "GET",
+      url: API_PATHS.health,
+      headers: { host: HOST },
+    });
+    expect(unauthHealth.statusCode).toBe(401);
+
     // 已登录会话（active）
     const activeCookie = testLogin(db, PORT).cookie();
     const activeRes = await app.inject({
@@ -149,6 +165,19 @@ describe("桌面壳共用监管契约与 /api/auth/status 轻量身份响应", (
     expect(activeRes.statusCode).toBe(200);
     expect(activeRes.json()).toEqual({
       status: "active",
+      product: contract.product,
+      protocolVersion: contract.protocolVersion,
+      instanceId,
+    });
+
+    const activeHealth = await app.inject({
+      method: "GET",
+      url: API_PATHS.health,
+      headers: { host: HOST, cookie: activeCookie },
+    });
+    expect(activeHealth.statusCode).toBe(200);
+    expect(activeHealth.json()).toEqual({
+      ok: true,
       product: contract.product,
       protocolVersion: contract.protocolVersion,
       instanceId,

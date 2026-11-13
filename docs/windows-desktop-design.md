@@ -1,6 +1,8 @@
 # Windows 桌面版与 README 定位方案
 
-状态：已拍板（2026-11-11）。路线定为 A（WSL2 独立发行版 + Tauri 2 外壳，Mac 保留 Swift 外壳）；首发先做最小可用版（第 1～3 步），README 现已独立先行切换为桌面应用定位（Windows 段待真机验收通过后补入）。核对基线为 `4e18b20`，官方资料查阅于 2026-11-10。预计阅读 12–15 分钟。
+> **状态更新（已退役 / 已被取代）：** 本文档早期设计的 WSL2 专用发行版路线（`fusa-wsl` + `scripts/wsl-*.sh`）已于 2026-11-13 正式退役，**全面由 [`docs/windows-native-design.md`](windows-native-design.md)（Windows 原生桌面版：Tauri 2 外壳随包内置 Node 24 LTS + `fusa-win-helper` 原生进程树与沙箱 + Win11 24H2+ MXC 只读后端）取代**。以下正文仅作为历史方案存档保留，现行架构与实现请以 [`docs/windows-native-design.md`](windows-native-design.md) 为准。
+
+历史状态记录（2026-11-11）：原路线 A（WSL2 独立发行版 + Tauri 2 外壳，Mac 保留 Swift 外壳）；核对基线 `4e18b20`。
 
 ## 1. 推荐先做 WSL2 后台 + Tauri 桌面壳
 

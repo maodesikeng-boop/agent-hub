@@ -36,6 +36,19 @@ import {
   wrapInReadonlyOsSandbox,
   type ReadonlySandboxInput,
 } from "./write-scope.ts";
+import {
+  WIN_MXC_NEGATIVE_CACHE_TTL_MS,
+  WIN_MXC_POSITIVE_CACHE_TTL_MS,
+} from "../../shared/limits.ts";
+import {
+  buildWin32MxcFilesystemPolicy,
+  probeWin32MxcSupport,
+  resetWin32MxcCacheForTest,
+  supportsWin32MxcNodeVersion,
+  wrapReadonlyWithWin32Mxc,
+  type MxcV1ProbeSurface,
+} from "../platform/index.ts";
+import { parseMxcRunnerCliArgs } from "../platform/win32/mxc-runner.ts";
 
 const scope = { dataDir: "/Users/u/.agent-hub", writableDirs: ["/Users/u/.agent-hub/worktrees/1/2"] };
 const base = { command: "/bin/agent", args: ["--x", "y"] };
@@ -355,6 +368,7 @@ describe("readonlySeatbeltProfile", () => {
     const fallback = wrapInReadonlyOsSandbox(base, roInput, "win32", {
       available: true,
       skipAclSetup: true,
+      disableWin32Mxc: true,
       winHelperPath: FUSA_RUN_EXE,
       stateDir: "C:\\Users\\u\\.agent-hub\\state",
     });
@@ -817,29 +831,229 @@ describe.runIf(canRunSandboxExec)("真 sandbox-exec：只读", () => {
   });
 });
 
-// 真 bwrap（Ubuntu CI）：验证 scripts/wsl-provision-guest.sh --self-test 在真实 bubblewrap 下拦截 state 写入并放行工作目录
-describe.runIf(canRunBwrap)("真 bwrap：wsl-provision-guest.sh --self-test 门禁", () => {
-  it("在真实 Linux bubblewrap 下通过隔离自检（模拟无免密 sudo）", () => {
-    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ah-wsl-guest-live-")));
-    try {
-      const home = join(root, "home", "fusa");
-      const fakeSudo = join(root, "deny-sudo");
-      mkdirSync(home, { recursive: true });
-      writeFileSync(fakeSudo, "#!/usr/bin/env bash\nexit 1\n", { mode: 0o755 });
-      const guestScript = new URL("../../../scripts/wsl-provision-guest.sh", import.meta.url).pathname;
-      const out = execFileSync("bash", [guestScript, "--self-test"], {
-        env: {
-          ...process.env,
-          HOME: home,
-          FUSA_WSL_HOME: home,
-          FUSA_SUDO_BIN: fakeSudo,
+describe("Windows MXC 只读沙箱封装、策略与负缓存 TTL", () => {
+  const fullUiCaps = {
+    canBlockClipboardRead: true,
+    canBlockClipboardWrite: true,
+    canBlockInputInjection: true,
+    canBlockInputMethodChanges: true,
+    canBlockExternalUiObjects: true,
+    canBlockGlobalUiNamespace: true,
+    canBlockDesktopSwitching: true,
+    canBlockLogoffOrShutdown: true,
+    canBlockSystemParameterChanges: true,
+    canBlockDisplaySettingsChanges: true,
+  };
+
+  it("supportsWin32MxcNodeVersion 按 >=24.21.0 <25 || >=26.8.0 严格判定", () => {
+    expect(supportsWin32MxcNodeVersion("24.12.0")).toBe(false);
+    expect(supportsWin32MxcNodeVersion("24.20.9")).toBe(false);
+    expect(supportsWin32MxcNodeVersion("24.21.0")).toBe(true);
+    expect(supportsWin32MxcNodeVersion("v24.22.3")).toBe(true);
+    expect(supportsWin32MxcNodeVersion("25.4.0")).toBe(false);
+    expect(supportsWin32MxcNodeVersion("26.7.1")).toBe(false);
+    expect(supportsWin32MxcNodeVersion("26.8.0")).toBe(true);
+  });
+
+  it("probeWin32MxcSupport：识别 base-container，排除需改宿主 DACL 的 appcontainer-dacl，并遵守短暂负缓存 TTL", () => {
+    const unsupportedSdk: MxcV1ProbeSurface = {
+      probe: () => ({
+        warnings: ["BaseContainer unavailable"],
+        error: "ProcessContainer requires Windows 11 24H2+",
+        probes: {
+          baseContainerApiPresent: false,
+          nativeCaptureAvailable: false,
+          guardedCaptureAvailable: false,
+          bfscfgPresent: false,
+          bfsCompiledIn: false,
+          baseContainerSupportsDenyPaths: false,
+          baseContainerSupportsEnumeratePaths: false,
+          baseContainerSupportsIngressHostLoopbackAllow: false,
+          baseContainerSupportsIdentitylessLoopbackProxy: false,
+          isolationSessionAvailable: false,
+          hyperlightAvailable: false,
+          uiCapabilities: fullUiCaps,
         },
-        encoding: "utf8",
-      });
-      const report = JSON.parse(out) as { ok: boolean; worker_sandbox_ready: boolean; error_code: string | null };
-      expect(report).toMatchObject({ ok: true, worker_sandbox_ready: true, error_code: null });
+      }),
+      getAvailableBackends: () => [],
+    };
+
+    const daclTierSdk: MxcV1ProbeSurface = {
+      probe: () => ({
+        tier: "appcontainer-dacl",
+        needsDaclAugmentation: true,
+        warnings: ["Falling back to DACL augmentation"],
+        probes: {
+          baseContainerApiPresent: false,
+          nativeCaptureAvailable: false,
+          guardedCaptureAvailable: false,
+          bfscfgPresent: false,
+          bfsCompiledIn: false,
+          baseContainerSupportsDenyPaths: false,
+          baseContainerSupportsEnumeratePaths: false,
+          baseContainerSupportsIngressHostLoopbackAllow: false,
+          baseContainerSupportsIdentitylessLoopbackProxy: false,
+          isolationSessionAvailable: false,
+          hyperlightAvailable: false,
+          uiCapabilities: fullUiCaps,
+        },
+      }),
+      getAvailableBackends: () => [],
+    };
+
+    const supportedSdk: MxcV1ProbeSurface = {
+      probe: () => ({
+        tier: "base-container",
+        needsDaclAugmentation: false,
+        warnings: [],
+        probes: {
+          baseContainerApiPresent: true,
+          nativeCaptureAvailable: true,
+          guardedCaptureAvailable: true,
+          bfscfgPresent: true,
+          bfsCompiledIn: true,
+          baseContainerSupportsDenyPaths: true,
+          baseContainerSupportsEnumeratePaths: true,
+          baseContainerSupportsIngressHostLoopbackAllow: true,
+          baseContainerSupportsIdentitylessLoopbackProxy: true,
+          isolationSessionAvailable: false,
+          hyperlightAvailable: false,
+          uiCapabilities: fullUiCaps,
+        },
+      }),
+      getAvailableBackends: () => [
+        { backend: "processcontainer", tier: "base-container", capabilities: ["filesystemDeniedPaths"], warnings: [] },
+      ],
+    };
+
+    expect(
+      probeWin32MxcSupport({ platform: "win32", nodeVersion: "24.22.3", loadSdk: () => unsupportedSdk }),
+    ).toMatchObject({ available: false, reason: "probe_failed" });
+
+    expect(
+      probeWin32MxcSupport({ platform: "win32", nodeVersion: "24.22.3", loadSdk: () => daclTierSdk }),
+    ).toMatchObject({ available: false, reason: "dacl_tier_excluded", tier: "appcontainer-dacl" });
+
+    expect(
+      probeWin32MxcSupport({ platform: "win32", nodeVersion: "24.12.0", loadSdk: () => supportedSdk }),
+    ).toMatchObject({ available: false, reason: "node_version_too_old" });
+
+    expect(
+      probeWin32MxcSupport({ platform: "win32", nodeVersion: "24.22.3", loadSdk: () => supportedSdk }),
+    ).toMatchObject({ available: true, reason: "ok", tier: "base-container" });
+
+    // 验证模块级缓存的短暂负缓存 TTL（过 WIN_MXC_NEGATIVE_CACHE_TTL_MS 后自动重探，不用永久 null 缓存）
+    let fakeNow = 10_000;
+    let currentSdk = unsupportedSdk;
+    let loadCount = 0;
+    resetWin32MxcCacheForTest(() => {
+      loadCount += 1;
+      return currentSdk;
+    });
+    try {
+      if (process.platform === "win32" && supportsWin32MxcNodeVersion()) {
+        expect(probeWin32MxcSupport({ now: () => fakeNow }).available).toBe(false);
+        expect(loadCount).toBe(1);
+        fakeNow += WIN_MXC_NEGATIVE_CACHE_TTL_MS - 1;
+        expect(probeWin32MxcSupport({ now: () => fakeNow }).available).toBe(false);
+        expect(loadCount).toBe(1);
+        currentSdk = supportedSdk;
+        fakeNow += 2;
+        expect(probeWin32MxcSupport({ now: () => fakeNow }).available).toBe(true);
+        expect(loadCount).toBe(2);
+        fakeNow += WIN_MXC_POSITIVE_CACHE_TTL_MS - 1;
+        expect(probeWin32MxcSupport({ now: () => fakeNow }).available).toBe(true);
+        expect(loadCount).toBe(2);
+      }
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      resetWin32MxcCacheForTest();
     }
+  });
+
+  it("buildWin32MxcFilesystemPolicy & wrapReadonlyWithWin32Mxc：放行 %TEMP% 与私有临时目录，工作树与受保护根严格只读，敏感文件禁读且保留 readableFiles 例外", () => {
+    const existing = new Set([
+      "C:\\",
+      "D:\\",
+      "C:\\Users\\alice\\AppData\\Local\\Temp",
+      "C:\\Users\\alice\\AppData\\Local\\Temp\\ro-session-1",
+      "C:\\Users\\alice\\.agent-hub",
+      "C:\\Users\\alice\\.agent-hub\\state\\ui-token",
+      "C:\\Users\\alice\\.agent-hub\\worktrees\\1\\9",
+      "D:\\.fusa-wt\\1234abcd",
+      "C:\\Users\\alice\\.dsh",
+      "C:\\Users\\alice\\.dsh\\.env",
+      "D:\\repo\\.env.production",
+    ]);
+
+    const policy = buildWin32MxcFilesystemPolicy(
+      {
+        tmpDir: "C:\\Users\\alice\\AppData\\Local\\Temp\\ro-session-1",
+        stateDir: "C:\\Users\\alice\\.agent-hub\\state",
+        protectedRoots: ["C:\\Users\\alice\\.agent-hub", "D:\\.fusa-wt\\1234abcd"],
+        // 即使误把受保护 worktree 放进 writableDirs，安全过滤也必须剔除！
+        writableDirs: ["C:\\Users\\alice\\.dsh", "C:\\Users\\alice\\.agent-hub\\worktrees\\1\\9"],
+        secretPaths: [
+          "C:\\Users\\alice\\.agent-hub\\state\\ui-token",
+          "C:\\Users\\alice\\.dsh\\.env",
+          "D:\\repo\\.env.production",
+        ],
+        readableFiles: ["C:\\Users\\alice\\.dsh\\.env"],
+      },
+      {
+        env: { TEMP: "C:\\Users\\alice\\AppData\\Local\\Temp" },
+        exists: (p) => existing.has(p),
+        realpath: (p) => p,
+        driveRoots: ["C:\\", "D:\\"],
+      },
+    );
+
+    expect(policy.readonlyPaths).toEqual([
+      "C:\\",
+      "D:\\",
+      "C:\\Users\\alice\\.agent-hub",
+      "D:\\.fusa-wt\\1234abcd",
+      "C:\\Users\\alice\\.dsh\\.env",
+    ]);
+    expect(policy.readwritePaths).toEqual([
+      "C:\\Users\\alice\\AppData\\Local\\Temp\\ro-session-1",
+      "C:\\Users\\alice\\AppData\\Local\\Temp",
+      "C:\\Users\\alice\\.dsh",
+    ]);
+    expect(policy.deniedPaths).toEqual([
+      "C:\\Users\\alice\\.agent-hub\\state\\ui-token",
+      "D:\\repo\\.env.production",
+    ]);
+    expect(policy.clearPolicyOnExit).toBe(true);
+
+    const wrapped = wrapReadonlyWithWin32Mxc(
+      { command: "C:\\Users\\alice\\.local\\bin\\agent.exe", args: ["--flag", "v"] },
+      {
+        tmpDir: "C:\\Users\\alice\\AppData\\Local\\Temp\\ro-session-1",
+        stateDir: "C:\\Users\\alice\\.agent-hub\\state",
+        protectedRoots: ["C:\\Users\\alice\\.agent-hub"],
+        writableDirs: ["C:\\Users\\alice\\.dsh"],
+        secretPaths: ["C:\\Users\\alice\\.agent-hub\\state\\ui-token"],
+      },
+      {
+        nodeExecPath: "C:\\Fusa\\node\\node.exe",
+        runnerScriptPath: "C:\\Fusa\\daemon\\src\\daemon\\platform\\win32\\mxc-runner.ts",
+        ownSandboxOffArgs: ["--no-sandbox"],
+        env: { TEMP: "C:\\Users\\alice\\AppData\\Local\\Temp" },
+        exists: (p) => existing.has(p),
+        realpath: (p) => p,
+        driveRoots: ["C:\\"],
+      },
+    );
+
+    expect(wrapped.command).toBe("C:\\Fusa\\node\\node.exe");
+    expect(wrapped.args[0]).toBe("C:\\Fusa\\daemon\\src\\daemon\\platform\\win32\\mxc-runner.ts");
+    expect(wrapped.args[1]).toBe("--config-base64");
+    const parsedCfg = parseMxcRunnerCliArgs(wrapped.args.slice(1));
+    expect(parsedCfg.program).toBe("C:\\Users\\alice\\.local\\bin\\agent.exe");
+    expect(parsedCfg.args).toEqual(["--no-sandbox", "--flag", "v"]);
+    expect(parsedCfg.network).toEqual({
+      egress: { default: "allow" },
+      ingress: { default: "deny", hostLoopback: "allow" },
+    });
   });
 });

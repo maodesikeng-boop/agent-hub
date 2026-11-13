@@ -22,5 +22,6 @@ export const fallbackPaths: VendorPathsModule["fallbackPaths"] = ({ userHome, pl
 
 export const headlessLoginCommand: VendorPathsModule["headlessLoginCommand"] = "codex login --device-auth";
 export const installCommand: VendorPathsModule["installCommand"] = "curl -fsSL https://chatgpt.com/codex/install.sh | sh";
+export const windowsInstallCommand: VendorPathsModule["windowsInstallCommand"] = "npm install -g @openai/codex";
 // developers.openai.com/codex/environment-variables（2026-11 核过）：CODEX_API_KEY、CODEX_ACCESS_TOKEN；OPENAI_API_KEY 是默认 openai 提供方的 env_key
 export const credentialEnv: VendorPathsModule["credentialEnv"] = { names: ["CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "OPENAI_API_KEY"] };

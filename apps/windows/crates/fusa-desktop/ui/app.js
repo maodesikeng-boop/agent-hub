@@ -29,9 +29,10 @@
   const statusDot = document.getElementById("status-dot");
   const stageTitle = document.getElementById("stage-title");
   const stageDetail = document.getElementById("stage-detail");
+  const gitRow = document.getElementById("git-row");
+  const gitCmd = document.getElementById("git-cmd");
   const errorRow = document.getElementById("error-row");
   const errorText = document.getElementById("error-text");
-  const btnInstallWsl = document.getElementById("btn-install-wsl");
   const btnRetry = document.getElementById("btn-retry");
   const btnOpenLogs = document.getElementById("btn-open-logs");
   const providersSection = document.getElementById("providers-section");
@@ -44,7 +45,6 @@
 
   function setButtonsDisabled(disabled) {
     busyAction = disabled;
-    btnInstallWsl.disabled = disabled;
     btnRetry.disabled = disabled;
     btnOpenTerminal.disabled = disabled;
     btnRefreshVendors.disabled = disabled;
@@ -54,13 +54,6 @@
   function renderProviders(vendors) {
     providersList.replaceChildren();
     if (!Array.isArray(vendors) || vendors.length === 0) {
-      const empty = document.createElement("div");
-      empty.className = "provider-item";
-      const text = document.createElement("p");
-      text.className = "row-detail";
-      text.textContent = "Open terminal to install and sign in to your preferred agent CLI";
-      empty.appendChild(text);
-      providersList.appendChild(empty);
       return;
     }
 
@@ -82,7 +75,7 @@
 
       const name = document.createElement("span");
       name.className = "row-title";
-      name.textContent = item.id || item.command;
+      name.textContent = item.label || item.id || item.command;
 
       left.appendChild(dot);
       left.appendChild(name);
@@ -98,17 +91,20 @@
       const cmds = document.createElement("div");
       cmds.className = "cmd-list";
 
-      if (!item.installed && item.install_command) {
+      const installCmd = item.installCommand || item.install_command || "";
+      const loginCmd = item.loginCommand || item.login_command || "";
+
+      if (!item.installed && installCmd) {
         const preInstall = document.createElement("pre");
         preInstall.className = "cmd-block";
-        preInstall.textContent = item.install_command;
+        preInstall.textContent = installCmd;
         cmds.appendChild(preInstall);
       }
 
-      if (item.login_command) {
+      if (loginCmd) {
         const preLogin = document.createElement("pre");
         preLogin.className = "cmd-block";
-        preLogin.textContent = item.login_command;
+        preLogin.textContent = loginCmd;
         cmds.appendChild(preLogin);
       }
 
@@ -123,8 +119,18 @@
     if (!view) return;
 
     statusDot.dataset.tone = view.tone || "working";
-    stageTitle.textContent = view.title || "Preparing…";
-    stageDetail.textContent = view.detail || "";
+    stageTitle.textContent = view.title || "Starting Fusa…";
+    const detail = view.detail || "";
+    stageDetail.textContent = detail;
+    stageDetail.hidden = !detail;
+
+    if (view.showGitGuide && view.gitInstallCommand) {
+      gitCmd.textContent = view.gitInstallCommand;
+      gitRow.hidden = false;
+    } else {
+      gitCmd.textContent = "";
+      gitRow.hidden = true;
+    }
 
     if (view.error) {
       errorText.textContent = view.error;
@@ -134,7 +140,6 @@
       errorRow.hidden = true;
     }
 
-    btnInstallWsl.hidden = !view.canInstallWsl;
     btnRetry.hidden = !view.canRetry;
     btnOpenLogs.hidden = !view.canOpenLogs;
 
@@ -160,10 +165,6 @@
       setButtonsDisabled(false);
     }
   }
-
-  btnInstallWsl.addEventListener("click", () => {
-    runUserAction(() => tauriInvoke("install_wsl_component"));
-  });
 
   btnRetry.addEventListener("click", () => {
     runUserAction(() => tauriInvoke("retry_bootstrap"));

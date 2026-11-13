@@ -346,6 +346,7 @@ fs.writeFileSync(${JSON.stringify(join(tmpRo, "result.json"))}, JSON.stringify({
         secretGlobs: policy.secretGlobs,
       },
       "win32",
+      { disableWin32Mxc: true },
     );
     expect(roWrapped.osSandboxed).toBe(true);
     expect(roWrapped.readonlyMode).toBe("fallback_write_restricted");

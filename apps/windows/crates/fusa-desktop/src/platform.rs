@@ -2,15 +2,33 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 #[cfg(not(target_os = "windows"))]
 use std::process::Stdio;
-use fusa_wsl::{build_interactive_login_cmd, validate_local_app_data_dir};
+
+use fusa_supervisor::{refresh_current_process_path, NativeRuntimeConfig};
 use url::Url;
 
-/// 解析当前用户本地应用数据目录（Windows 下为 `%LOCALAPPDATA%\Fusa`，校验禁止 UNC 网络路径）。
+/// 校验本地目录不为空且不位于 UNC 网络共享上（ACL、命名管道与 SQLite 锁要求本机卷）。
+pub fn validate_local_dir(path: &Path) -> Result<(), String> {
+    let s = path.to_string_lossy();
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return Err("目录路径不能为空".to_string());
+    }
+    if trimmed.starts_with(r"\\?\UNC\")
+        || (trimmed.starts_with(r"\\") && !trimmed.starts_with(r"\\?\") && !trimmed.starts_with(r"\\.\"))
+    {
+        return Err(format!(
+            "不支持将网络共享路径作为本地数据目录：{trimmed}"
+        ));
+    }
+    Ok(())
+}
+
+/// 解析桌面外壳本地应用数据目录（Windows 下为 `%LOCALAPPDATA%\Fusa`）。
 pub fn resolve_local_app_data_dir() -> Result<PathBuf, String> {
     if let Ok(override_dir) = std::env::var("FUSA_APP_DATA_DIR") {
         let p = PathBuf::from(override_dir.trim());
         if !p.as_os_str().is_empty() {
-            validate_local_app_data_dir(&p).map_err(|e| e.to_string())?;
+            validate_local_dir(&p)?;
             return Ok(p);
         }
     }
@@ -20,7 +38,7 @@ pub fn resolve_local_app_data_dir() -> Result<PathBuf, String> {
         let local_app_data = std::env::var_os("LOCALAPPDATA")
             .ok_or_else(|| "无法读取环境变量 LOCALAPPDATA".to_string())?;
         let dir = PathBuf::from(local_app_data).join("Fusa");
-        validate_local_app_data_dir(&dir).map_err(|e| e.to_string())?;
+        validate_local_dir(&dir)?;
         return Ok(dir);
     }
 
@@ -29,9 +47,171 @@ pub fn resolve_local_app_data_dir() -> Result<PathBuf, String> {
         let home = std::env::var_os("HOME")
             .ok_or_else(|| "无法读取环境变量 HOME".to_string())?;
         let dir = PathBuf::from(home).join(".local/share/fusa-desktop");
-        validate_local_app_data_dir(&dir).map_err(|e| e.to_string())?;
+        validate_local_dir(&dir)?;
         Ok(dir)
     }
+}
+
+/// 解析守护进程数据目录（优先 `AGENT_HUB_HOME`，默认 `%USERPROFILE%\.agent-hub` / `~/.agent-hub`）。
+pub fn resolve_hub_home_dir() -> Result<PathBuf, String> {
+    if let Ok(override_home) = std::env::var("AGENT_HUB_HOME") {
+        let p = PathBuf::from(override_home.trim());
+        if !p.as_os_str().is_empty() {
+            validate_local_dir(&p)?;
+            return Ok(p);
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let profile = std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .ok_or_else(|| "无法读取环境变量 USERPROFILE".to_string())?;
+        let dir = PathBuf::from(profile).join(".agent-hub");
+        validate_local_dir(&dir)?;
+        return Ok(dir);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let home = std::env::var_os("HOME")
+            .ok_or_else(|| "无法读取环境变量 HOME".to_string())?;
+        let dir = PathBuf::from(home).join(".agent-hub");
+        validate_local_dir(&dir)?;
+        Ok(dir)
+    }
+}
+
+fn try_packaged_runtime_root(
+    base: &Path,
+    app_data_dir: &Path,
+    hub_home_dir: &Path,
+    extra_envs: &[(String, String)],
+) -> Option<NativeRuntimeConfig> {
+    let node_exe = {
+        let win = base.join("node").join("node.exe");
+        if win.is_file() {
+            win
+        } else {
+            let unix = base.join("node").join("node");
+            if unix.is_file() { unix } else { return None }
+        }
+    };
+    let bin_dir = base.join("bin");
+    let has_fusa_run = bin_dir.join("fusa-run.exe").is_file() || bin_dir.join("fusa-run").is_file();
+    let has_hub = bin_dir.join("hub.exe").is_file() || bin_dir.join("hub").is_file();
+    if !has_fusa_run || !has_hub {
+        return None;
+    }
+    let daemon_dir = base.join("daemon");
+    if !daemon_dir.join("src/daemon/main.ts").is_file() {
+        return None;
+    }
+    let manifest_candidate = base.join("runtime-manifest.json");
+    let manifest_path = manifest_candidate.is_file().then_some(manifest_candidate);
+    Some(NativeRuntimeConfig {
+        app_data_dir: app_data_dir.to_path_buf(),
+        hub_home_dir: hub_home_dir.to_path_buf(),
+        node_exe_path: node_exe,
+        daemon_root_dir: daemon_dir,
+        win_helpers_dir: bin_dir,
+        manifest_path,
+        extra_envs: extra_envs.to_vec(),
+    })
+}
+
+fn find_system_node_binary() -> Option<PathBuf> {
+    let path_os = std::env::var_os("PATH")?;
+    let names: &[&str] = if cfg!(windows) {
+        &["node.exe", "node"]
+    } else {
+        &["node"]
+    };
+    for dir in std::env::split_paths(&path_os) {
+        for name in names {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+/// 解析随包内置运行时目录（支持便携包、`FUSA_RUNTIME_DIR`、Tauri NSIS 安装目录以及源码开发回退）。
+pub fn resolve_native_runtime_config(
+    app_data_dir: PathBuf,
+    hub_home_dir: PathBuf,
+    resource_dir_hint: Option<&Path>,
+    extra_envs: Vec<(String, String)>,
+) -> Result<NativeRuntimeConfig, String> {
+    let mut candidate_roots: Vec<PathBuf> = Vec::new();
+    if let Ok(override_root) = std::env::var("FUSA_RUNTIME_DIR") {
+        let p = PathBuf::from(override_root.trim());
+        if !p.as_os_str().is_empty() {
+            candidate_roots.push(p.clone());
+            candidate_roots.push(p.join("resources"));
+        }
+    }
+    if let Some(res_dir) = resource_dir_hint {
+        candidate_roots.push(res_dir.to_path_buf());
+        candidate_roots.push(res_dir.join("resources"));
+        candidate_roots.push(res_dir.join("staged-runtime"));
+    }
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            candidate_roots.push(exe_dir.to_path_buf());
+            candidate_roots.push(exe_dir.join("resources"));
+        }
+    }
+
+    for root in &candidate_roots {
+        if let Some(cfg) = try_packaged_runtime_root(root, &app_data_dir, &hub_home_dir, &extra_envs)
+        {
+            return Ok(cfg);
+        }
+    }
+
+    // 源码开发态回退（例如在仓库下直接执行 `cargo run -p fusa-desktop`）
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    if let Some(repo_root) = manifest_dir
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+    {
+        if repo_root.join("src/daemon/main.ts").is_file() {
+            if let Some(node_exe) = find_system_node_binary() {
+                for profile in ["release", "debug"] {
+                    let helper_dir = repo_root.join("apps/windows/target").join(profile);
+                    let has_run = helper_dir.join("fusa-run.exe").is_file()
+                        || helper_dir.join("fusa-run").is_file();
+                    let has_hub =
+                        helper_dir.join("hub.exe").is_file() || helper_dir.join("hub").is_file();
+                    if has_run && has_hub {
+                        return Ok(NativeRuntimeConfig {
+                            app_data_dir,
+                            hub_home_dir,
+                            node_exe_path: node_exe,
+                            daemon_root_dir: repo_root.to_path_buf(),
+                            win_helpers_dir: helper_dir,
+                            manifest_path: None,
+                            extra_envs,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    Err(format!(
+        "未找到随包 Windows 原生运行时（node/node.exe、bin/fusa-run.exe、bin/hub.exe、daemon/src/daemon/main.ts），已检查：{}",
+        candidate_roots
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    ))
 }
 
 #[cfg(target_os = "windows")]
@@ -75,7 +255,6 @@ mod win32_shell {
                 SW_SHOWNORMAL,
             )
         };
-        // ShellExecuteW 返回值 > 32 表示成功拉起
         if rc > 32 {
             Ok(())
         } else {
@@ -84,7 +263,7 @@ mod win32_shell {
     }
 }
 
-/// 使用系统默认浏览器打开经过协议白名单校验的外部链接（绝不拼接 `cmd /c` 或 `sh -c`）。
+/// 使用系统默认浏览器打开经过协议白名单校验的外部链接（严禁拼接 shell）。
 pub fn open_external_url(url: &Url) -> Result<(), String> {
     if !matches!(url.scheme(), "http" | "https" | "mailto") {
         return Err(format!("拒绝打开非安全协议链接：{}", url.scheme()));
@@ -120,7 +299,7 @@ pub fn open_external_url(url: &Url) -> Result<(), String> {
     }
 }
 
-/// 打开宿主日志文件（若日志文件尚不存在则打开其所在日志目录）。
+/// 打开宿主日志文件（若日志文件尚不存在则打开其所在目录）。
 pub fn open_log_file_or_dir(log_path: &Path) -> Result<(), String> {
     if let Some(parent) = log_path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -161,53 +340,46 @@ pub fn open_log_file_or_dir(log_path: &Path) -> Result<(), String> {
     }
 }
 
-/// 为用户一键拉起交互式终端 `wsl.exe --distribution Fusa --user fusa --cd ~`，供用户本人完成厂商 CLI 登录。
-/// 优先通过 Windows Terminal（`wt.exe`）打开新标签页，回退至直接弹出 `wsl.exe` 交互控制台窗口。
-pub fn spawn_interactive_wsl_terminal(distro_name: &str, linux_user: &str) -> Result<(), String> {
-    let wsl_cmd =
-        build_interactive_login_cmd(distro_name, linux_user).map_err(|e| e.to_string())?;
+/// 为用户一键打开带最新注册表 `PATH` 的 Windows 原生交互式终端（优先 `wt.exe`，回退 `pwsh.exe` / `powershell.exe`），用于安装 Git 或登录厂商 CLI。
+pub fn spawn_interactive_native_terminal() -> Result<(), String> {
+    let refreshed_path = refresh_current_process_path(&[]);
 
     #[cfg(target_os = "windows")]
     {
+        let home_dir = std::env::var_os("USERPROFILE")
+            .map(PathBuf::from)
+            .filter(|p| p.is_dir());
+
         if let Some(local_app) = std::env::var_os("LOCALAPPDATA") {
             let wt_path = PathBuf::from(local_app).join(r"Microsoft\WindowsApps\wt.exe");
             if wt_path.is_file() {
                 let mut wt = Command::new(&wt_path);
-                wt.arg("--").arg(&wsl_cmd.program).args(&wsl_cmd.args);
-                wt.env_remove("WSLENV");
+                if let Some(ref dir) = home_dir {
+                    wt.arg("-d").arg(dir);
+                }
+                wt.env("PATH", &refreshed_path);
                 if wt.spawn().is_ok() {
                     return Ok(());
                 }
             }
         }
 
-        // 回退：直接拉起可见控制台窗口运行 wsl.exe -d Fusa -u fusa --cd ~（此处刻意不传 CREATE_NO_WINDOW）
-        let mut direct = Command::new(&wsl_cmd.program);
-        direct.args(&wsl_cmd.args);
-        direct.env_remove("WSLENV");
-        return direct.spawn().map(|_| ()).map_err(|e| e.to_string());
+        for shell in ["pwsh.exe", "powershell.exe", "cmd.exe"] {
+            let mut cmd = Command::new(shell);
+            if let Some(ref dir) = home_dir {
+                cmd.current_dir(dir);
+            }
+            cmd.env("PATH", &refreshed_path);
+            if cmd.spawn().is_ok() {
+                return Ok(());
+            }
+        }
+        Err("无法打开本机终端（wt.exe / powershell.exe / cmd.exe）".to_string())
     }
 
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = wsl_cmd;
-        Err("交互式 WSL 终端仅在 Windows 宿主上可用".to_string())
-    }
-}
-
-/// 在用户点击“Install WSL”时通过 Windows UAC 提权执行 `wsl.exe --install --no-distribution`。
-pub fn request_elevated_wsl_install() -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        return win32_shell::shell_execute(
-            "runas",
-            std::ffi::OsStr::new("wsl.exe"),
-            Some(std::ffi::OsStr::new("--install --no-distribution")),
-        );
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        Err("WSL 组件安装仅在 Windows 宿主上可用".to_string())
+        let _ = refreshed_path;
+        Err("原生交互终端快捷入口仅在 Windows 宿主上可用".to_string())
     }
 }

@@ -1313,6 +1313,13 @@ type Outcome =
   /** 本地就没发出去（request() 自己抛错）。 */
   | { kind: "not-sent"; reason: string };
 
+function parseLoopbackTcpEndpoint(endpoint: string): { host: "127.0.0.1"; port: number } | null {
+  const m = /^tcp:\/\/127\.0\.0\.1:(\d{1,5})$/.exec(endpoint.trim());
+  if (!m) return null;
+  const port = Number(m[1]);
+  return Number.isInteger(port) && port >= 1 && port <= 65_535 ? { host: "127.0.0.1", port } : null;
+}
+
 function post(socketPath: string, path: string, token: string, payload: string, timeoutMs: number): Promise<Outcome> {
   return new Promise((done) => {
     let settled = false;
@@ -1324,8 +1331,9 @@ function post(socketPath: string, path: string, token: string, payload: string, 
       }
     };
     const lost = (reason: string): Outcome => (sent ? { kind: "no-answer", reason } : { kind: "unreachable", reason });
+    const tcpTarget = parseLoopbackTcpEndpoint(socketPath);
     const options = {
-      socketPath,
+      ...(tcpTarget ? { host: tcpTarget.host, port: tcpTarget.port } : { socketPath }),
       method: "POST",
       path,
       timeout: timeoutMs,

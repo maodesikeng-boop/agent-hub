@@ -21,6 +21,13 @@ fn read_adjacent_config() -> Option<HubShimConfig> {
     serde_json::from_str::<HubShimConfig>(&content).ok()
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
+fn parse_loopback_tcp_endpoint(raw: &str) -> Option<u16> {
+    let port_str = raw.trim().strip_prefix("tcp://127.0.0.1:")?;
+    let port = port_str.parse::<u16>().ok()?;
+    (port > 0).then_some(port)
+}
+
 #[cfg(windows)]
 fn try_direct_pipe(args: &[String]) -> Option<i32> {
     use fusa_win_helper::pipe_http::{
@@ -29,6 +36,7 @@ fn try_direct_pipe(args: &[String]) -> Option<i32> {
     };
     use fusa_win_helper::win::pipe::connect_named_pipe;
     use std::io::{self, Read, Write};
+    use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream};
     use std::time::Duration;
 
     const HUB_CLI_TIMEOUT: Duration = Duration::from_secs(30);
@@ -37,7 +45,8 @@ fn try_direct_pipe(args: &[String]) -> Option<i32> {
         return None;
     }
     let sock = env::var("HUB_SOCK").ok()?;
-    if !sock.starts_with(r"\\.\pipe\") {
+    let tcp_port = parse_loopback_tcp_endpoint(&sock);
+    if tcp_port.is_none() && !sock.starts_with(r"\\.\pipe\") {
         return None;
     }
     let token = env::var("HUB_TOKEN").ok()?;
@@ -61,11 +70,6 @@ fn try_direct_pipe(args: &[String]) -> Option<i32> {
         }
     }
 
-    let pipe = match connect_named_pipe(&sock, Duration::from_secs(5), HUB_CLI_TIMEOUT) {
-        Ok(p) => p,
-        Err(_) => return None,
-    };
-
     let cwd = env::current_dir()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
@@ -81,7 +85,18 @@ fn try_direct_pipe(args: &[String]) -> Option<i32> {
         stdin_invalid_utf8,
     };
 
-    let (status, body) = match send_hub_cli_over_stream(pipe, &token, &req) {
+    let io_res = if let Some(port) = tcp_port {
+        let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port));
+        let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5)).ok()?;
+        let _ = stream.set_read_timeout(Some(HUB_CLI_TIMEOUT));
+        let _ = stream.set_write_timeout(Some(HUB_CLI_TIMEOUT));
+        send_hub_cli_over_stream(stream, &token, &req)
+    } else {
+        let pipe = connect_named_pipe(&sock, Duration::from_secs(5), HUB_CLI_TIMEOUT).ok()?;
+        send_hub_cli_over_stream(pipe, &token, &req)
+    };
+
+    let (status, body) = match io_res {
         Ok(pair) => pair,
         Err(err) if err.kind() == io::ErrorKind::TimedOut => {
             let msg = "请求已经发给 agent-hub，但没等到回应（超时）。请求可能已经执行，请先用 `hub status` 确认，别直接重试\n";
@@ -159,5 +174,18 @@ fn main() {
             eprintln!("hub：启动 {} 失败：{err}", cfg.node);
             std::process::exit(4);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_loopback_tcp_endpoint;
+
+    #[test]
+    fn parses_loopback_tcp_endpoint_strictly() {
+        assert_eq!(parse_loopback_tcp_endpoint("tcp://127.0.0.1:4317"), Some(4317));
+        assert_eq!(parse_loopback_tcp_endpoint("tcp://127.0.0.1:0"), None);
+        assert_eq!(parse_loopback_tcp_endpoint("tcp://0.0.0.0:4317"), None);
+        assert_eq!(parse_loopback_tcp_endpoint(r"\\.\pipe\fusa-abc-hub"), None);
     }
 }

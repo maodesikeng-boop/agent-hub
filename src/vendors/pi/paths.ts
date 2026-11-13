@@ -77,4 +77,5 @@ export const credentialEnv: VendorPathsModule["credentialEnv"] = {
 };
 
 export const installCommand: VendorPathsModule["installCommand"] = "curl -fsSL https://pi.dev/install.sh | sh";
+export const windowsInstallCommand: VendorPathsModule["windowsInstallCommand"] = "irm https://pi.dev/install.ps1 | iex";
 export const headlessLoginCommand: VendorPathsModule["headlessLoginCommand"] = "pi";

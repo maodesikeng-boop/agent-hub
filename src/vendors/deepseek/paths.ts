@@ -50,6 +50,8 @@ export function resolveDeepSeekHome(
  * 开发者预览版钉死实测通过的精确版本号（docs/vendors/deepseek.md 第 1 节）。
  */
 export const installCommand: VendorPathsModule["installCommand"] = "npm install -g @deepseek-ai/dsh@0.2.2-rc.1";
+export const windowsInstallCommand: VendorPathsModule["windowsInstallCommand"] =
+  "npm install -g @deepseek-ai/dsh@0.2.2-rc.1";
 
 export const headlessLoginCommand: VendorPathsModule["headlessLoginCommand"] =
   "向 ~/.dsh/.env 写入 DEEPSEEK_API_KEY=<key>，或在终端运行 dsh 完成登录";

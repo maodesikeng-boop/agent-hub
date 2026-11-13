@@ -162,6 +162,8 @@ export interface VendorPathsModule {
   credentialEnv?: { names?: readonly string[]; prefixes?: readonly string[]; pattern?: RegExp };
   /** scripts/provision-linux.sh 在 Linux 上装它的命令（官方安装脚本，装到 ~/.local/bin、不要 root）。不写 = 脚本跳过、提示手动装。 */
   installCommand?: string;
+  /** Windows 桌面版引导页展示的官方 PowerShell / npm / WinGet 安装命令（普通用户免管理员）。 */
+  windowsInstallCommand?: string;
   /** 没有浏览器的机器（ssh 上的 Linux）登录用的命令（provision 脚本最后提示）。不写 = spec 的 cli.loginCommand。 */
   headlessLoginCommand?: string;
 }

@@ -8,10 +8,13 @@ struct DesktopContract: Codable, Equatable {
     let protocolVersion: Int
     let defaultPort: Int
     let statusPath: String
+    let healthPath: String
+    let shutdownTransport: String
+    let shutdownPath: String
+    let daemonEntryRelativePath: String
     let probeTimeoutMs: Int
     let pollIntervalMs: Int
     let startupBudgetMs: Int
-    let wslColdStartBudgetMs: Int
     let stopGraceMs: Int
     let crashBackoffMs: [Int]
     let crashWindowMs: Int
