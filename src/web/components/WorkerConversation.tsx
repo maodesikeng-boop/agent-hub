@@ -109,18 +109,23 @@ export function WorkerConversation({
   const statusNode = useAgentStatusNode(session);
   return (
     <FileDropZone className="flex min-h-0 flex-1 flex-col" aria-label={`Piece ${title}`} onFiles={(files, skipped) => phase === "open" && staging.add(files, skipped)}>
-      <header data-window-drag className="flex min-h-16 shrink-0 items-center gap-3 py-3 pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]">
+      <header data-window-drag className="flex min-h-16 min-w-0 shrink-0 items-center gap-3 overflow-hidden py-3 pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]">
         {leading}
         {!mobile && (
-          <Button variant="ghost" size="icon" aria-label={`Back to ${pm.name}`} onClick={onBack}>
+          <Button variant="ghost" size="icon" className="shrink-0" aria-label={`Back to ${pm.name}`} onClick={onBack}>
             <ArrowLeft aria-hidden="true" />
           </Button>
         )}
         <Avatar colorKey={identity.avatarKey} size={34} neutral />
-        <h1 className="min-w-0 truncate text-title leading-snug font-semibold">{title}</h1>
-        {!mobile && readonly && <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs font-medium">Read-only</span>}
-        <span className="flex-1" />
-        {!mobile && meta && <PieceMeta worker={meta} />}
+        <div className="flex min-w-0 flex-1 items-center justify-between gap-3 overflow-hidden">
+          <div className="flex min-w-[40%] shrink-[9999] items-center gap-3 overflow-hidden">
+            <h1 title={title} className="min-w-0 truncate text-title leading-snug font-semibold">
+              {title}
+            </h1>
+            {!mobile && readonly && <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs font-medium">Read-only</span>}
+          </div>
+          {!mobile && meta && <PieceMeta worker={meta} />}
+        </div>
         {toolbar}
       </header>
       {top}

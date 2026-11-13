@@ -147,14 +147,14 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
             type="button"
             className="touch-target flex h-8 w-full cursor-pointer items-center justify-between gap-2 rounded-xl text-left text-xs font-medium text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
           >
-            <span className="inline-flex items-center gap-1.5">
+            <span className="inline-flex min-w-0 items-center gap-1.5">
               <ChevronRight
                 className={cn("size-3.5 shrink-0 transition-transform", !collapsed && "rotate-90")}
                 aria-hidden="true"
               />
-              <span>Needs You</span>
+              <span className="truncate">Needs You</span>
             </span>
-            <span className="text-muted-foreground tabular-nums">{decisions.length}</span>
+            <span className="shrink-0 text-muted-foreground tabular-nums">{decisions.length}</span>
           </CollapsibleTrigger>
 
           <CollapsibleContent
@@ -590,7 +590,7 @@ export function RouterWorkbench({
     <FileDropZone className="flex min-h-0 flex-1 flex-col" onFiles={staging.add}>
       <header
         data-window-drag
-        className="flex h-16 shrink-0 items-center gap-2.5 border-b border-line px-4 md:px-6"
+        className="flex h-16 min-w-0 shrink-0 items-center gap-2.5 overflow-hidden border-b border-line px-4 md:px-6"
       >
         {leading}
         <KnifeAvatar size={28} />

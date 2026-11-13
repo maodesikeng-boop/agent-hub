@@ -204,7 +204,7 @@ export function App() {
         />
       ) : (
         <>
-          <main className="chat-main tint-fade flex min-h-0 min-w-0 flex-1 flex-col bg-surface-chat">
+          <main className="chat-main tint-fade flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-surface-chat">
             {routerActive ? (
               <RouterWorkbench
                 leading={leading}
