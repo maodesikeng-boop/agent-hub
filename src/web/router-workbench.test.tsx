@@ -521,6 +521,93 @@ describe("Needs You 托盘", () => {
     expect(within(offlineCard).getByRole("button", { name: /方案甲/ })).toBeDisabled();
   });
 
+  it("远端设备（Tokyo）confirm 检查点卡多次打回循环：直接发自定义意见路由至 /d/<tokyo>/decide，同节点二次出新检查点卡即使跳过中间帧也立即可见可点", async () => {
+    const makeTokyoCheckpointGraph = (askMessageId: number, summaryMd: string, updatedAt: number): TaskGraph => ({
+      id: 5,
+      projectId: 20,
+      pmId: 2,
+      conversationId: 2,
+      title: "东京检查点流水线",
+      status: "active",
+      originMsgId: null,
+      nodes: [
+        {
+          key: "design",
+          title: "架构方案",
+          status: "waiting",
+          waitingFor: "user",
+          skipped: false,
+          sortOrder: 0,
+          activeWorkerId: 31,
+          workerIds: [31],
+          artifact: { summary: summaryMd },
+          gateQuestion: "请确认步骤「架构方案」的结果",
+          gateOptions: ["通过", "打回"],
+          gateSummaryMd: summaryMd,
+          gateRecommended: "通过",
+          gateAskMessageId: askMessageId,
+          gateCheckpoint: true,
+          decision: null,
+          createdAt: 1_000,
+          updatedAt,
+        },
+      ],
+      edges: [],
+      createdAt: 1_000,
+      updatedAt,
+      completedAt: null,
+    });
+
+    const tokyoSnap = makeSnapshot({
+      pms: [makePm({ id: 2, name: "阿青" })],
+      projects: [makeProject({ id: 20, name: "tokyo-api", pmId: 2, conversationId: 2 })],
+      conversations: [makeConvSnapshot([], { conversation: { id: 2, pmId: 2, projectId: 20, title: "阿青" } })],
+      activeTaskGraphs: [makeTokyoCheckpointGraph(201, "第一版方案初稿", 2_000)],
+    });
+
+    const { localApi, tokyoApi } = installFleet({ tokyo: tokyoSnap, tokyoOnline: true });
+    const user = userEvent.setup();
+    await openRouter();
+
+    const tray = await screen.findByRole("region", { name: "Needs You" });
+    const card1 = await waitFor(() => within(tray).getByText("请确认步骤「架构方案」的结果").closest("article")!);
+    expect(within(card1).getByText("Recommended")).toBeInTheDocument();
+
+    // 1. 直接输入自定义修改意见并点发送箭头（未选「通过」/「打回」）：路由到远端 Tokyo /decide，本机零请求
+    await user.type(within(card1).getByPlaceholderText("Add a note, or type a custom reply…"), "缓存改用 lru-cache");
+    await user.click(within(card1).getByRole("button", { name: "Send reply" }));
+    await waitFor(() =>
+      expect(tokyoApi!.callsTo("POST", /^\/api\/task-graphs\/5\/nodes\/design\/decide$/)).toHaveLength(1),
+    );
+    expect(tokyoApi!.callsTo("POST", /^\/api\/task-graphs\/5\/nodes\/design\/decide$/)[0]!.body).toMatchObject({
+      choice: null,
+      note: "缓存改用 lru-cache",
+    });
+    expect(localApi.callsTo("POST", /^\/api\/task-graphs\//)).toHaveLength(0);
+    expect(screen.queryByRole("region", { name: "Needs You" })).toBeNull();
+
+    // 2. 远端直接推送同一节点第二轮检查点卡（跳过中间 running 帧，askMessageId=202, updatedAt=5000）：新卡立即展示且可点「通过」
+    const tokyoWs = FakeWebSocket.instances.find((w) => w.url.includes(`/d/${TOKYO_ID}/`))!;
+    act(() =>
+      tokyoWs.push(
+        changeOf(11, "task_graph.updated", {
+          graph: makeTokyoCheckpointGraph(202, "第二版已改用 lru-cache", 5_000),
+        }),
+      ),
+    );
+
+    const tray2 = await screen.findByRole("region", { name: "Needs You" });
+    const card2 = within(tray2).getByText("请确认步骤「架构方案」的结果").closest("article")!;
+    expect(within(card2).getByText("第二版已改用 lru-cache")).toBeInTheDocument();
+    await user.click(within(card2).getByRole("button", { name: /通过/ }));
+    await waitFor(() =>
+      expect(tokyoApi!.callsTo("POST", /^\/api\/task-graphs\/5\/nodes\/design\/decide$/)).toHaveLength(2),
+    );
+    expect(tokyoApi!.callsTo("POST", /^\/api\/task-graphs\/5\/nodes\/design\/decide$/)[1]!.body).toMatchObject({
+      choice: "通过",
+    });
+  });
+
   it("收起的行超过 3 条出 Show more；标题整行可点收起，收起后时间流照常；防重入：同一帧连点同一张卡只提交一次", async () => {
     const now = Date.now();
     const decisions = Array.from({ length: 6 }, (_, i) => makeDecisionItem({ id: 111 + i, question: `第 ${i + 1} 个问题`, options: ["好", "不好"], createdAt: now - (i + 1) * 1_000 }));

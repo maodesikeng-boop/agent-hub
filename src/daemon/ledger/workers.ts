@@ -210,9 +210,11 @@ export interface LedgerWorkersTaskGraphHooks {
     parsed: ParsedWorkerReport,
     rawBody: string,
     forcedNote: string | null,
+    opts?: { hasPendingFollowup?: boolean },
   ) =>
     | { handled: false }
     | { handled: true; outcome: "completed"; wakePmWithReport: boolean; completeStep: () => void }
+    | { handled: true; outcome: "waiting_user" }
     | { handled: true; outcome: "waiting_pm"; pmDeliverBody: string };
   onWorkerFailedIn: (
     p: Pending,
@@ -564,9 +566,14 @@ export function createLedgerWorkers(
   /** 起 Worker 的会话、把任务说明发给它（主文件夹里干的派活时就做，worktree 的建好了再做）。 */
   const enqueueFirstTurn = (p: Pending, worker: WorkerDbRow) => {
     const session = workerSession(worker);
-    const task = db.get<{ id: number }>("SELECT id FROM messages WHERE dedupe_key = ?", taskDedupeKey(worker.id))!;
+    const queued = db.all<{ id: number }>(
+      "SELECT id FROM messages WHERE conversation_id = ? AND sender = 'pm' AND status = 'queued' ORDER BY id ASC",
+      worker.worker_conversation_id,
+    );
     enqueue(p, { type: "session.start", params: { sessionId: session.id, generation: session.generation } });
-    enqueue(p, { type: "session.send", params: { sessionId: session.id, messageId: task.id, source: "user" } });
+    for (const row of queued) {
+      enqueue(p, { type: "session.send", params: { sessionId: session.id, messageId: row.id, source: "user" } });
+    }
   };
 
   // ---- hub worker …（只给项目经理，见 shared/hub.ts 的 HUB_COMMAND_ROLES）----
@@ -1144,6 +1151,24 @@ export function createLedgerWorkers(
     return stopped;
   };
 
+  /**
+   * 供任务图把用户拍板定案或检查点打回意见直接送进该步骤的活跃 Worker 会话（第 5.1 节、第 9.4 节）：
+   * 走 `sender = 'pm'` 消息通道，不触发 `insertUserMessageLines`，全程不叫醒项目经理；按 `dedupeKey` 幂等。
+   */
+  const deliverToWorkerIn: TaskGraphWorkersBridge["deliverToWorkerIn"] = (p, input) => {
+    const existing = db.get<{ id: number }>("SELECT id FROM messages WHERE dedupe_key = ?", input.dedupeKey);
+    if (existing !== undefined) return existing.id;
+    const w = workerRow(input.workerId);
+    if (w === null || w.status === "ended") return null;
+    const session = workerSession(w);
+    const message = insertPmMessage(p, w, session, input.text, input.dedupeKey);
+    if (!notStarted(w)) {
+      enqueue(p, { type: "session.send", params: { sessionId: session.id, messageId: message.id, source: "user" } });
+      startMaxTime(w, input.maxTimeMs ?? DEFAULT_WORKER_MAX_TIME_MS);
+    }
+    return message.id;
+  };
+
   const endIn = (p: Pending, caller: AgentSessionRow & { pmId: PmId }, args: HubArgs<"worker.end">): HubResult<"worker.end"> => {
     assertPmNotArchived(caller.pmId);
     const worker = ownWorker(caller.pmId, args.workerId);
@@ -1342,7 +1367,14 @@ export function createLedgerWorkers(
     )?.text ?? "";
 
   /** 按格式解析这一轮最后的文字，一行 report 交给项目经理；note 不是 null 就加在交给它的正文前面。 */
-  const insertReport = (p: Pending, worker: WorkerDbRow, turnMessageId: MessageId, text: string, note: string | null = null) => {
+  const insertReport = (
+    p: Pending,
+    worker: WorkerDbRow,
+    turnMessageId: MessageId,
+    text: string,
+    note: string | null = null,
+    opts?: { hasPendingFollowup?: boolean },
+  ) => {
     const parsed = parseWorkerReport(text);
     const body = text.trim() === "" ? NO_REPLY_TEXT : text;
     const status: WorkerLineStatus = parsed.kind === "ok" ? parsed.report.status : "unformatted";
@@ -1353,6 +1385,7 @@ export function createLedgerWorkers(
       parsed,
       body,
       note,
+      opts,
     );
     if (graphHandling?.handled === true) {
       if (graphHandling.outcome === "completed") {
@@ -1371,7 +1404,19 @@ export function createLedgerWorkers(
         graphHandling.completeStep();
         return;
       }
-      // 偏离 / 有问题 / 放弃了 / 没按格式 / confirm：Worker 不收工，按第 9.4 节格式唤醒 PM
+      if (graphHandling.outcome === "waiting_user") {
+        // confirm 检查点或尚未回答的拍板卡：静默记录本轮汇报行（供交棒/交付单读取），不收工 Worker，全程不叫醒 PM
+        insertLine(p, worker, {
+          event: "report",
+          status,
+          summary,
+          turnMessageId,
+          deliver: body,
+          wakePm: false,
+        });
+        return;
+      }
+      // 偏离 / 有问题 / 放弃了 / 没按格式：Worker 不收工，按第 9.4 节格式唤醒 PM
       insertLine(p, worker, {
         event: "report",
         status,
@@ -1493,7 +1538,22 @@ export function createLedgerWorkers(
       });
       return;
     }
-    clearMaxTime(worker.worker_conversation_id);
+    const completedUpToId =
+      event.type === "turn.ended" && event.messageIds.length > 0 ? Math.max(...event.messageIds) : outcome.turnMessageId;
+    const hasPendingFollowup =
+      event.type === "turn.ended" &&
+      completedUpToId !== null &&
+      db.get(
+        `SELECT 1 AS x FROM messages
+          WHERE conversation_id = ? AND id > ? AND sender IN ('pm', 'user')
+            AND status IN ('queued', 'delivered', 'processing')
+          LIMIT 1`,
+        worker.worker_conversation_id,
+        completedUpToId,
+      ) !== undefined;
+    if (!hasPendingFollowup) {
+      clearMaxTime(worker.worker_conversation_id);
+    }
     // 自己开的一轮没有用户消息的编号：用这一轮最后一条 agent 消息的编号做键（重放的 agent 消息按 uuid 去重，编号不变）；这一轮什么都没做就不汇报
     const turnMessageId = outcome.turnMessageId ?? lastAgentMessageId(session.id, turnStart);
     if (turnMessageId === null) return;
@@ -1507,7 +1567,7 @@ export function createLedgerWorkers(
     if (outcome.turnMessageId === null && text.trim() === "") return;
     // 只压缩了上下文（用户发的 /compact）、没有任何 agent 消息的一轮：不汇报，对话里那行“已压缩上下文”照留
     if (onlyManualCompact(session, turnStart)) return;
-    insertReport(p, worker, turnMessageId, text);
+    insertReport(p, worker, turnMessageId, text, null, { hasPendingFollowup });
   };
 
   /**
@@ -1835,6 +1895,7 @@ export function createLedgerWorkers(
     maxTimeIn,
     endIn,
     stopWorkersIn,
+    deliverToWorkerIn,
     endOpenWorkersIn,
     list,
     status,

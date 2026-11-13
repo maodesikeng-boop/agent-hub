@@ -3,6 +3,7 @@
 import { dirname, resolve } from "node:path";
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import {
+  ASK_MAX_OPTION_CHARS,
   HUB_COMMANDS,
   HUB_ERROR_HTTP_STATUS,
   HUB_MAX_BODY_BYTES,
@@ -231,7 +232,14 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
     type: "object",
     additionalProperties: false,
     required: ["text"],
-    properties: { text: taskField, options: { type: "array", items: { type: "string" } } },
+    properties: {
+      text: taskField,
+      options: { type: "array", items: { type: "string" } },
+      recommended: { type: "string", minLength: 1, maxLength: ASK_MAX_OPTION_CHARS * 4 },
+      node: { type: "string", minLength: 1, maxLength: MAX_NODE_KEY_CHARS * 2 },
+      graphId: workerIdField,
+      replaceItemId: workerIdField,
+    },
   },
   // hub schedule …（M6）：daily 的 HH:MM、间隔的范围、两个频率二选一由账本查（报中文原因）；任务说明按字节另查
   "schedule.add": {
@@ -249,17 +257,6 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
   "schedule.pause": scheduleIdOnly,
   "schedule.resume": scheduleIdOnly,
   "schedule.remove": scheduleIdOnly,
-  "router.ask": {
-    type: "object",
-    additionalProperties: false,
-    required: ["question", "options"],
-    properties: {
-      question: { type: "string", minLength: 1, maxLength: MAX_TASK_BYTES },
-      options: { type: "array", items: { type: "string" } },
-      context: { type: "string", maxLength: MAX_TASK_BYTES },
-      replaceItemId: workerIdField,
-    },
-  },
   "router.report": {
     type: "object",
     additionalProperties: false,
@@ -309,19 +306,6 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
     properties: {
       all: { type: "boolean" },
       status: { type: "string", enum: [...TASK_GRAPH_STATUSES] },
-    },
-  },
-  "graph.ask": {
-    type: "object",
-    additionalProperties: false,
-    required: ["nodeKey", "question"],
-    properties: {
-      nodeKey: { type: "string", minLength: 1, maxLength: MAX_NODE_KEY_CHARS * 2 },
-      graphId: workerIdField,
-      question: { type: "string", minLength: 1, maxLength: MAX_TASK_BYTES },
-      options: { type: "array", items: { type: "string" } },
-      recommended: { type: "string" },
-      summaryMd: { type: "string", maxLength: MAX_TASK_BYTES },
     },
   },
   "graph.patch": {

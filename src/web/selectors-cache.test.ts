@@ -663,5 +663,33 @@ describe("selector 缓存：300 个 Worker、3 万条消息", () => {
     expect(decisions1).toHaveLength(1);
     expect(decisions1[0]!.source.kind).toBe("router_item");
     expect(pendingDecisionsOf(afterDecide, PM_CONVERSATION)).toBe(decisions1);
+
+    // confirm 检查点与独立提问 recommended：引用保持 === 稳定，状态切换时精确失效再稳定
+    const checkpointG1: TaskGraph = {
+      ...decidedG1,
+      updatedAt: 15_000,
+      nodes: decidedG1.nodes.map((n) =>
+        n.key === "impl"
+          ? {
+              ...n,
+              status: "waiting",
+              waitingFor: "user",
+              gateQuestion: "请确认步骤「核心实现」的结果",
+              gateOptions: ["通过", "打回"],
+              gateRecommended: "通过",
+              gateCheckpoint: true,
+            }
+          : n,
+      ),
+    };
+    const withCheckpoint = applyChange(afterDecide, changeOf(++seq, "task_graph.updated", { graph: checkpointG1 }));
+    const decisions2 = pendingDecisionsOf(withCheckpoint, PM_CONVERSATION);
+    expect(decisions2).not.toBe(decisions1);
+    expect(decisions2.find((d) => d.source.kind === "gate")?.source).toMatchObject({
+      kind: "gate",
+      checkpoint: true,
+      recommended: "通过",
+    });
+    expect(pendingDecisionsOf(withCheckpoint, PM_CONVERSATION)).toBe(decisions2);
   });
 });

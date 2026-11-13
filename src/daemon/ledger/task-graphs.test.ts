@@ -395,7 +395,7 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
       commit: "abc1234",
       branch: "hub/7-导出",
     });
-    ledger.hubCall(lin.sessionId, "graph.ask", { graphId: graph.id, nodeKey: "ok", question: "按方案 A 吗？", options: ["方案 A", "方案 B"] });
+    ledger.hubCall(lin.sessionId, "ask", { graphId: graph.id, node: "ok", text: "按方案 A 吗？", options: ["方案 A", "方案 B"] });
     ledger.hubCall(lin.sessionId, "graph.decide", { graphId: graph.id, nodeKey: "ok", choice: "方案 A", note: "先不做分页" });
 
     const text = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).text;
@@ -573,10 +573,10 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     const worker = ledger.hubCall(lin.sessionId, "worker.start", {
       title: "实现", task: "实现 a", noWorktree: true, node: "a",
     }).data.worker;
-    ledger.hubCall(lin.sessionId, "graph.ask", { graphId: graph.id, nodeKey: "g", question: "是否继续？", options: ["是", "否"] });
-    const ask = ledger.hubCall(lin.sessionId, "router.ask", { question: "继续吗？", options: ["是", "否"] }).data;
+    ledger.hubCall(lin.sessionId, "ask", { graphId: graph.id, node: "g", text: "是否继续？", options: ["是", "否"] });
+    const ask = ledger.hubCall(lin.sessionId, "ask", { text: "继续吗？", options: ["是", "否"] }).data;
     ledger.hubCall(lin.sessionId, "router.note", { text: "等待" });
-    db.run("INSERT INTO router_worker_origins (worker_id, source_kind, source_id, pm_message_id, created_at) VALUES (?, 'router_resolve', ?, ?, ?)", worker.id, ask.item.id, ask.messageId, now);
+    db.run("INSERT INTO router_worker_origins (worker_id, source_kind, source_id, pm_message_id, created_at) VALUES (?, 'router_resolve', ?, ?, ?)", worker.id, ask.item!.id, ask.messageId, now);
     ledger.archivePm(lin.pmId);
     expect(ledger.purgeExpiredArchivedPms(now + PM_ARCHIVE_RETENTION_MS)).toEqual([lin.pmId]);
     for (const table of ["router_items", "router_pm_notes", "router_worker_origins", "task_graphs", "task_graph_steps", "task_graph_edges"]) {
@@ -636,21 +636,21 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     let g = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph;
     expect(stateOf(g, "gate-auth")).toBe("waiting:pm");
 
-    // PM 调 hub graph ask 填入选项与调研摘要 -> gate-auth 变等用户拍板并生成带 gateRef 的 AskMeta 消息
+    // PM 调 hub ask --node 填入选项与调研摘要 -> gate-auth 变等用户拍板并生成带 gateRef 的 AskMeta 消息
 
-    const asked = ledger.hubCall(lin.sessionId, "graph.ask", {
-      nodeKey: "gate-auth",
-      question: "鉴权令牌存 HttpOnly Cookie 还是 Bearer Header？",
+    const asked = ledger.hubCall(lin.sessionId, "ask", {
+      node: "gate-auth",
+      text: "鉴权令牌存 HttpOnly Cookie 还是 Bearer Header？\n\n同域部署下 HttpOnly Cookie 天然防 XSS。",
       options: ["HttpOnly Cookie", "Bearer Header"],
       recommended: "HttpOnly Cookie",
-      summaryMd: "同域部署下 HttpOnly Cookie 天然防 XSS。",
     }).data;
     expect(asked.messageId).toBeTypeOf("number");
-    expect(stateOf(asked.graph, "gate-auth")).toBe("waiting:user");
+    expect(stateOf(asked.graph!, "gate-auth")).toBe("waiting:user");
     const gateMsgId = asked.messageId!;
     expect(askOf(ledger.getMessage(gateMsgId)!)).toEqual({
       needsUser: true,
       options: ["HttpOnly Cookie", "Bearer Header"],
+      recommended: "HttpOnly Cookie",
       gateRef: { graphId: graph.id, nodeKey: "gate-auth" },
     });
 
@@ -817,10 +817,10 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
       }),
     }).data.graph;
 
-    ledger.hubCall(lin.sessionId, "graph.ask", {
+    ledger.hubCall(lin.sessionId, "ask", {
       graphId: graph.id,
-      nodeKey: "gate-plan",
-      question: "用 JWT 还是 Session？",
+      node: "gate-plan",
+      text: "用 JWT 还是 Session？",
       options: ["Session", "JWT"],
     });
     // 还有未完成节点时调 finish 会被拒绝并列出未完成节点

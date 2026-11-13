@@ -151,12 +151,15 @@ export function pendingAsks(state: ReminderState, conversationId: ConversationId
   if (
     !view ||
     view.conversation.kind === "worker" ||
-    isPmArchived(state, view.conversation.pmId) ||
-    pendingIn(state, conversationId).some((p) => p.phase !== "failed")
+    isPmArchived(state, view.conversation.pmId)
   ) {
     return NO_MESSAGES;
   }
-  return unansweredAsksIn(view.messages);
+  const all = unansweredAsksIn(view.messages);
+  if (all.length === 0) return NO_MESSAGES;
+  if (!pendingIn(state, conversationId).some((p) => p.phase !== "failed")) return all;
+  const gateOnly = all.filter((m) => askOf(m)?.gateRef !== undefined);
+  return gateOnly.length === 0 ? NO_MESSAGES : gateOnly;
 }
 
 /** 所有对话里还在等用户确定的提问（Worker 对话没有 hub ask，直接跳过）。 */
@@ -208,7 +211,9 @@ export function askingConversations(state: ReminderState, deviceId = "local"): S
     set.add(conversationId);
   }
   for (const decision of pendingDecisionsOf(state, deviceId)) {
-    if (pendingIn(state, decision.conversationId).some((p) => p.phase !== "failed")) continue;
+    if (decision.source.kind !== "gate" && pendingIn(state, decision.conversationId).some((p) => p.phase !== "failed")) {
+      continue;
+    }
     set.add(decision.conversationId);
   }
   return set;

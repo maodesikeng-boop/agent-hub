@@ -1221,10 +1221,16 @@ function samePendingDecision(a: PendingDecision, b: PendingDecision): boolean {
       a.source.nodeTitle === b.source.nodeTitle &&
       a.source.blockedNodeCount === b.source.blockedNodeCount &&
       a.source.recommended === b.source.recommended &&
+      Boolean(a.source.checkpoint) === Boolean(b.source.checkpoint) &&
       sameStringList(a.source.nextNodeTitles, b.source.nextNodeTitles)
     );
   }
-  return a.source.kind === "router_item" && b.source.kind === "router_item" && a.source.itemId === b.source.itemId;
+  return (
+    a.source.kind === "router_item" &&
+    b.source.kind === "router_item" &&
+    a.source.itemId === b.source.itemId &&
+    (a.source.recommended ?? null) === (b.source.recommended ?? null)
+  );
 }
 
 interface DecisionCacheValue {
@@ -1309,6 +1315,7 @@ export function pendingDecisionsOf(
           blockedNodeCount,
           nextNodeTitles,
           recommended: node.gateRecommended,
+          ...(node.gateCheckpoint ? { checkpoint: true } : {}),
         },
       });
     }
@@ -1319,6 +1326,8 @@ export function pendingDecisionsOf(
     if (item.askMessageId !== null && (msgGateIds.has(item.askMessageId) || graphGateIds.has(item.askMessageId))) {
       continue;
     }
+    const targetMsg = item.askMessageId !== null ? convMessages.find((m) => m.id === item.askMessageId) : undefined;
+    const recommended = targetMsg !== undefined ? askOf(targetMsg)?.recommended : undefined;
     result.push({
       key: `item:${deviceId}:${item.id}`,
       deviceId,
@@ -1336,6 +1345,7 @@ export function pendingDecisionsOf(
       source: {
         kind: "router_item",
         itemId: item.id,
+        ...(recommended !== undefined ? { recommended } : {}),
       },
     });
   }

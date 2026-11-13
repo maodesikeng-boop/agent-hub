@@ -57,8 +57,8 @@ export function taskGraphSkillBody(): string {
 - **一张图只装一件事**：互不相干的几件事各建一张图。
 - **按先后步骤拆，不按模块拆**：不要把一个需求切成前端、后端各一个 Worker。写测试、改代码、截图、提 PR 是同一步，一个 Worker 一口气做完。只在三种时候另起一步：用户明说要先看、要换一个模型独立审查、一步的上下文装不下。
 - **默认一条线，同线共用工作目录和分支**：\`steps\` 里不写 \`deps\` 默认按书写顺序串成一条线；单线上下游默认接手同一个 git worktree 和同一条分支（不用重跑准备命令，未提交改动也在，整条线共用一个 PR）。互不依赖的活才并行（写 \`deps: []\` 或前置步骤的 \`key\`）：分叉步骤默认基于上游分支新开 worktree（要从主干重开传 \`"base": "main"\`）；多路合流时后台自动拼接各路交棒（总上限 12,000 字均分、单路最多 4,000 字，超长完整汇报自动落盘到启动目录 \`upstream/<stepKey>.md\` 并附路径）。
-- **每步自带职责与模型配置**：每步写 \`key\`、\`title\`、\`brief\`（一两句本步职责；上一步的交棒后台会自动原样转交，不用你手抄），按需配 \`vendor\`、\`model\`、\`effort\`、\`readonly\`、\`maxTime\`（单轮上限，如 \`"45m"\`，默认 \`30m\`）、\`review: true\`、\`base: "main"\`。
-- **用户明说要先看的地方**（比如“先给我看方案”）单独加一步（不写 \`brief\`），带上 \`question\`、\`options\` 和你的推荐 \`recommended\`：轮到时自动给用户出拍板卡，用户点了才往下走；问题要等前面做完才写得出的，先不带 \`brief\` 和 \`question\`，轮到时用 \`${HUB} graph ask\` 补上。别的拍板不预先挂卡，撞上了用 \`${HUB} ask\` 问。
+- **每步自带职责与模型配置**：每步写 \`key\`、\`title\`、\`brief\`（一两句本步职责；上一步的交棒后台会自动原样转交，不用你手抄），按需配 \`vendor\`、\`model\`、\`effort\`、\`readonly\`、\`maxTime\`（单轮上限，如 \`"45m"\`，默认 \`30m\`）、\`confirm: true\`、\`review: true\`、\`base: "main"\`。
+- **用户明说要先看的步骤**（比如“先给我看方案”“改完先让我看效果”）：给这一步标 \`"confirm": true\`（照常写 \`brief\` 自动开工）。它的 Worker 汇报“做完了”且无偏离时，后台不会立刻收工或标完成，而是在对话、右栏和总助自动挂出「通过 / 打回」检查点拍板卡（展示本轮摘要与交棒），全程不叫醒你：用户点「通过」（可附意见）后自动收工并把定案与意见随交棒带给下一步；点「打回」则把修改意见直接发给原 Worker 在原会话接着改，改完再出卡。别的拍板不要预先建空步骤，等干活的 Worker 撞上了再用 \`${HUB} ask --node <步骤>\` 挂卡。
 - **碰到下面任意一条，就在实现后面加一个审查步骤**（设 \`"review": true\` 并指定另一家 \`vendor\`，后台自动前置内置独立审查清单，接手实现的分支直接修；\`brief\` 里点名你最担心的地方）：
 ${PM_REVIEW_REDLINES.map((line) => `  - ${line}`).join("\n")}
 
@@ -66,9 +66,10 @@ ${PM_REVIEW_REDLINES.map((line) => `  - ${line}`).join("\n")}
 
 ## 跟进
 进度以 \`${HUB} graph show\` 为准。步骤只有四个状态：没轮到（\`pending\`）、在干（\`running\`）、等人（\`waiting\`，等你处理或等用户拍板）、完了（\`done\`，跳过也算完了）。
-- **顺利完成自动收工交棒，不叫醒你**：步骤的 Worker 汇报“做完了”且“偏离”为“无”时，后台自动收工该 Worker、记下分支/提交/PR/摘要，并带着 \`goal\`、下一步 \`brief\` 与上一步“交棒”自动拉起下游步骤（若“问题”栏有遗留事项，交棒照走同时把汇报抄送给你）。
+- **顺利完成自动收工交棒，不叫醒你**：非检查点步骤的 Worker 汇报“做完了”且“偏离”为“无”时，后台自动收工该 Worker、记下分支/提交/PR/摘要，并带着 \`goal\`、下一步 \`brief\` 与上一步“交棒”自动拉起下游步骤（若“问题”栏留了话，交棒照走同时把汇报抄送给你；需要用户定的可把卡挂在下游步骤上 \`${HUB} ask --node <下游步骤>\`）。
 - **报“偏离”或异常停在 \`waiting\` 等你处理**：Worker 汇报写了“偏离”、状态是“有问题”或“放弃了”、没按格式、崩溃/额度用完，或自动拉起时目标厂商不可用、手动步骤没写 \`brief\`，步骤都会停在 \`waiting\` 并叫醒你：
   - 回答问题或不认可偏离打回重做：\`${HUB} worker send <编号> --stdin\`；
+  - 要用户拍板的事：用 \`${HUB} ask --node <步骤> [--option <选项>...] [--recommended <选项>] --stdin\` 把拍板卡挂在该步骤上（对话、右栏、总助三处同步出现）；用户点完后定案与意见直接发给该步未收工的 Worker 接着干（步骤切回 \`running\`），全程不叫醒你，定案记在步骤上。用户若在聊天里口头答复，用 \`${HUB} graph decide <步骤> --choice <选项> [--note <说明>]\` 记下，效果相同；
   - 认可偏离或你已手动完成：\`${HUB} graph done <步骤> [--stdin]\` 放行（正文作为补充转交给下一步）；
   - **换人接手**（出错、额度用完、对话太长、厂商不可用或该换一家）：直接 \`${HUB} worker start --node <步骤> [--vendor …] [--model …] [--effort …] [--stdin]\`。还挂着的旧 Worker 自动收工且步骤不标完成；新 Worker 自动继承职责、审查清单、上游交棒、前任的工作目录与分支，以及最近 ${TAKEOVER_PREDECESSORS_MAX} 个前任的汇报、最后的文字、最后几步操作和原始记录路径，并把新的厂商/模型写回步骤。
 - **计划变了**：随时 \`${HUB} graph patch\`（用 \`addSteps\`、\`updateSteps\`、\`removeSteps\`、\`skipSteps\` 或更新 \`goal\`；在干或已完成的步骤不能直接 \`updateSteps\`）。原本没建图、做着发现要分段或加审查的，随时补建一张图。
@@ -76,14 +77,14 @@ ${PM_REVIEW_REDLINES.map((line) => `  - ${line}`).join("\n")}
 
 ## 命令
 \`<步骤>\` 是步骤的 key，它在几张活跃的图里重名时加 \`--graph <图编号>\`。
-- \`${HUB} graph create [--title <标题>] --stdin\`：建图并自动拉起就绪步骤，正文 JSON 形如 \`${TASK_GRAPH_CREATE_JSON_HINT}\`（\`steps\` 不写 \`deps\` 默认串成一条线，并行写 \`deps: []\` 或前置 key；带 \`question\` 的步骤轮到时出拍板卡）
+- \`${HUB} graph create [--title <标题>] --stdin\`：建图并自动拉起就绪步骤，正文 JSON 形如 \`${TASK_GRAPH_CREATE_JSON_HINT}\`（\`steps\` 不写 \`deps\` 默认串成一条线，并行写 \`deps: []\` 或前置 key；用户明说要先看的步骤加 \`"confirm": true\`）
 - \`${HUB} graph show [<图编号>]\` / \`${HUB} graph list [--all | --status active|completed|cancelled]\`：看一张图的进度和每步的结果（分支、提交、PR、摘要、定案）/ 列出任务图
 - \`${HUB} graph patch [<图编号>] --stdin\`：改图，正文 JSON 按需取 \`${TASK_GRAPH_PATCH_JSON_HINT}\`；在干或已完成的步骤不能改，已结束的图不能改
 - \`${HUB} graph done <步骤> [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要>] [--stdin]\`：放行在等你的步骤（正文是你补给下一步的话），或补记 PR 等结果；有 Worker 在干的步骤会被拒绝，先 \`${HUB} worker end\` 停掉它
 - \`${HUB} graph skip <步骤> [--reason <原因>]\` / \`${HUB} graph cancel [<图编号>] [--reason <原因>]\`：跳过一步（不连带跳过下游，下游追溯最近未跳过上游的交棒与目录）/ 取消整张图（自动停掉图里所有在跑的 Worker）
 - \`${HUB} graph finish [<图编号>] [--unmerged-ok] --stdin\`：所有步骤完成后结束这张图，正文是交付摘要（自动同步给总助）；分支上有未合并的 PR 时默认拦下提醒，确认不合并加 \`--unmerged-ok\`
-- \`${HUB} graph ask <步骤> [--question <问题>] [--option <选项>...] [--recommended <选项>] [--stdin]\`：给没人在干、还没完的步骤挂上拍板卡（问题、选项和推荐），前面都完了就交给用户拍板；正文是给用户看的背景摘要
-- \`${HUB} graph decide <步骤> --choice <选项> [--note <说明>]\`：用户没点选项、在聊天里口头答复时，用它记下来
+- \`${HUB} ask --node <步骤> [--option <选项>...] [--recommended <选项>] --stdin\`：在任意未完步骤上挂拍板卡（对话、右栏、总助三处同步提醒），正文是问题与背景摘要；用户点完后定案直接交给该步挂着的 Worker 接着干（无活跃 Worker 的手动步骤则标完了推进下游），全程不叫醒你
+- \`${HUB} graph decide <步骤> --choice <选项> [--note <说明>]\`：用户没点选项、在聊天里口头答复时记下定案；该步挂着未收工 Worker 时同样直接发给它接着干，否则推进下游
 - \`${HUB} worker start --node <步骤> …\`：给等你处理的步骤换人或手动派人（\`--title\` 和正文都可省略，正文作为补充说明）
 - \`${HUB} worker end <编号>\`：只停掉这个 Worker，不会把步骤标完成；未完成的步骤会停在 \`waiting\` 等你处理（顺利完成的步骤由后台自动收工）
 `;

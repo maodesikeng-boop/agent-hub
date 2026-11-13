@@ -237,6 +237,10 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
   );
 });
 
+function decisionInstanceToken(entry: FleetDecisionEntry): string {
+  return `${entry.decision.askMessageId ?? ""}:${entry.decision.updatedAt}`;
+}
+
 export function RouterWorkbench({
   leading,
   notices,
@@ -265,7 +269,7 @@ export function RouterWorkbench({
   const resolvedSelfId = selfId ?? undefined;
 
   // 待拍板乐观隐藏、备注草稿、错误回滚与当前选中展开项（随活跃集合裁剪，严格有界）
-  const [hiddenDecisionKeys, setHiddenDecisionKeys] = useState<ReadonlySet<string>>(new Set());
+  const [hiddenDecisionTokens, setHiddenDecisionTokens] = useState<Readonly<Record<string, string>>>({});
   const [decisionNotes, setDecisionNotes] = useState<Readonly<Record<string, string>>>({});
   const [decisionErrors, setDecisionErrors] = useState<Readonly<Record<string, ErrorLike>>>({});
   const [selectedDecisionKey, setSelectedDecisionKey] = useState<string | null>(null);
@@ -274,27 +278,28 @@ export function RouterWorkbench({
   const [selectedTargetKey, setSelectedTargetKey] = useState<string | null>(null);
 
   useEffect(() => {
-    const activeDecKeys = new Set(view.decisions.map((d) => d.decision.key));
-    setHiddenDecisionKeys((prev) => {
-      if (prev.size === 0) return prev;
-      const next = new Set([...prev].filter((k) => activeDecKeys.has(k)));
-      return next.size === prev.size ? prev : next;
+    const activeTokenByKey = new Map(view.decisions.map((d) => [d.decision.key, decisionInstanceToken(d)]));
+    setHiddenDecisionTokens((prev) => {
+      const entries = Object.entries(prev);
+      if (entries.length === 0) return prev;
+      const kept = entries.filter(([k, tok]) => activeTokenByKey.get(k) === tok);
+      return kept.length === entries.length ? prev : Object.fromEntries(kept);
     });
     setDecisionNotes((prev) => {
       const keys = Object.keys(prev);
-      if (keys.length === 0 || keys.every((k) => activeDecKeys.has(k))) return prev;
-      return Object.fromEntries(Object.entries(prev).filter(([k]) => activeDecKeys.has(k)));
+      if (keys.length === 0 || keys.every((k) => activeTokenByKey.has(k))) return prev;
+      return Object.fromEntries(Object.entries(prev).filter(([k]) => activeTokenByKey.has(k)));
     });
     setDecisionErrors((prev) => {
       const keys = Object.keys(prev);
-      if (keys.length === 0 || keys.every((k) => activeDecKeys.has(k))) return prev;
-      return Object.fromEntries(Object.entries(prev).filter(([k]) => activeDecKeys.has(k)));
+      if (keys.length === 0 || keys.every((k) => activeTokenByKey.has(k))) return prev;
+      return Object.fromEntries(Object.entries(prev).filter(([k]) => activeTokenByKey.has(k)));
     });
   }, [view.decisions]);
 
   const visibleDecisions = useMemo(
-    () => view.decisions.filter((d) => !hiddenDecisionKeys.has(d.decision.key)),
-    [view.decisions, hiddenDecisionKeys],
+    () => view.decisions.filter((d) => hiddenDecisionTokens[d.decision.key] !== decisionInstanceToken(d)),
+    [view.decisions, hiddenDecisionTokens],
   );
 
   const handleNoteChange = useCallback((key: string, value: string) => {
@@ -310,9 +315,10 @@ export function RouterWorkbench({
   const handleDecisionSubmit = useCallback(
     async (entry: FleetDecisionEntry, optionIndex: number | null, note: string) => {
       const key = entry.decision.key;
+      const token = decisionInstanceToken(entry);
       if (inflightDecisions.current.has(key)) return;
       inflightDecisions.current.add(key);
-      setHiddenDecisionKeys((prev) => new Set(prev).add(key));
+      setHiddenDecisionTokens((prev) => ({ ...prev, [key]: token }));
       setDecisionErrors((prev) => {
         if (prev[key] === undefined) return prev;
         const { [key]: _removed, ...rest } = prev;
@@ -327,10 +333,10 @@ export function RouterWorkbench({
           return rest;
         });
       } catch (err) {
-        setHiddenDecisionKeys((prev) => {
-          const next = new Set(prev);
-          next.delete(key);
-          return next;
+        setHiddenDecisionTokens((prev) => {
+          if (prev[key] !== token) return prev;
+          const { [key]: _removed, ...rest } = prev;
+          return rest;
         });
         setSelectedDecisionKey(key);
         setDecisionErrors((prev) => ({ ...prev, [key]: errorText(err) }));
