@@ -20,6 +20,7 @@ import { REPORT_END, REPORT_START } from "../../shared/worker.ts";
 import { scopeAllowsWrite, workerWriteScope } from "../../shared/write-scope.ts";
 import { addWorktree } from "../git/index.ts";
 import { createWorktreeCreateHandler } from "../handlers.ts";
+import { buildLaunchPrompt } from "../prompt.ts";
 import { createSessionStore, migrate, type Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
 import { createResolveFolder } from "./files.ts";
@@ -280,6 +281,14 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
     expect(w1Row.task).toContain("## 目标（整张图共用，每一步看到的都一样）");
     expect(w1Row.task).toContain("## 你这一步：实现并提 PR（第 1/2 步）");
     expect(firstWorkerMessageOf(w1Id).text).toContain("【系统 · 开工】");
+    expect(firstWorkerMessageOf(w1Id).text).toContain(`Worker #${w1Id}（实现并提 PR）`);
+    expect(firstWorkerMessageOf(w1Id).text).toContain(w1Row.worktree_path);
+    expect(firstWorkerMessageOf(w1Id).text).toContain(w1Row.branch);
+    expect(firstWorkerMessageOf(w1Id).text).toContain("修复总助时间流翻页游标乱序，补回归测试并通过独立审查。");
+    expect(firstWorkerMessageOf(w1Id).text).toContain("修好翻页游标比较逻辑并提 PR。");
+    expect(buildLaunchPrompt(ledger.getLaunchContext(workerSessionOf(w1Id).id), w1Row.worktree_path)).not.toContain(
+      "修好翻页游标比较逻辑并提 PR。",
+    );
 
     // 在 w1 的 worktree 提交代码，并留一个未提交的现场文件
     writeFileSync(join(w1Row.worktree_path, "cursor.ts"), "export const fix = 1;\n");
@@ -349,14 +358,20 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
     // 上游提交与未提交文件都在同一个目录里
     expect(readFileSync(join(w2Row.worktree_path, "scratch.log"), "utf8")).toBe("local repro notes\n");
 
-    // 审查步骤自动前置第 9.3 节内置审查清单，第一条消息是原样转交的交棒包（不把 task 重复发第二遍）
+    // 审查步骤自动前置第 9.3 节内置审查清单，动态目标/职责/审查清单/目录与上游交棒统一在第一条消息里各出现一次（静态系统提示词不重复带）
     expect(w2Row.task).toContain(STEP_REVIEW_CHECKLIST);
     expect(w2Row.task).toContain("重点核查游标边界与空页退化。");
+    const w2SysPrompt = buildLaunchPrompt(ledger.getLaunchContext(w2Sess.id), w2Row.worktree_path);
+    expect(w2SysPrompt).not.toContain(STEP_REVIEW_CHECKLIST);
+    expect(w2SysPrompt).not.toContain("重点核查游标边界与空页退化。");
     expect(w2FirstMsg.text).toContain("【系统 · 交棒】");
+    expect(w2FirstMsg.text).toContain(`Worker #${w2Id}（独立审查并直接修）`);
+    expect(w2FirstMsg.text).toContain(`这是上一步（Worker #${w1Id}）用过的工作目录和分支`);
+    expect(w2FirstMsg.text).toContain(STEP_REVIEW_CHECKLIST);
+    expect(w2FirstMsg.text).toContain("重点核查游标边界与空页退化。");
     expect(w2FirstMsg.text).toContain("改动在 cursor.ts，临时复现日志在 scratch.log");
     expect(w2FirstMsg.text).toContain("PR：https://github.com/maodesikeng-boop/agent-hub/pull/315");
     expect(w2FirstMsg.text).toContain(`分支：${w1Row.branch}（你已经在这个工作目录和分支上）`);
-    expect(w2FirstMsg.text).not.toContain(STEP_REVIEW_CHECKLIST);
 
     // Worker 角色调 hub status：返回 Worker 编号、图目标、本步职责、上游交棒摘要与工作目录
     const workerStatus = ledger.hubCall(w2Sess.id, "status", {});
@@ -658,6 +673,9 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
     expect(replaced.worktreePath).toBe(
       db.get<{ worktree_path: string }>("SELECT worktree_path FROM workers WHERE id = ?", wImpl)!.worktree_path,
     );
+    expect(firstWorkerMessageOf(replaced.id).text).toContain(`Worker #${replaced.id}（异构审查）`);
+    expect(firstWorkerMessageOf(replaced.id).text).toContain(STEP_REVIEW_CHECKLIST);
+    expect(firstWorkerMessageOf(replaced.id).text).toContain("独立审查");
     expect(firstWorkerMessageOf(replaced.id).text).toContain("校验脚本在 verify.sql");
   });
 

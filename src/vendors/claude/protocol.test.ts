@@ -351,6 +351,20 @@ describe("启动参数", () => {
     expect(neither).not.toContain("--model");
     expect(neither).not.toContain("--effort");
   });
+  it("Worker 会话加 --exclude-dynamic-system-prompt-sections 提升跨 worktree 前缀缓存命中；PM 与总助会话不加", () => {
+    const workerRow: AgentSessionRow = { ...row, role: "worker", pmId: null, workerId: 5, addDirs: [] };
+    const freshWorkerArgs = buildClaudeArgs(workerRow, files, false);
+    const resumeWorkerArgs = buildClaudeArgs(workerRow, files, true);
+    expect(freshWorkerArgs).toContain("--exclude-dynamic-system-prompt-sections");
+    expect(resumeWorkerArgs).toContain("--exclude-dynamic-system-prompt-sections");
+    expect(freshWorkerArgs.indexOf("--exclude-dynamic-system-prompt-sections")).toBeLessThan(
+      freshWorkerArgs.indexOf("--append-system-prompt-file"),
+    );
+    expect(buildClaudeArgs(row, files, false)).not.toContain("--exclude-dynamic-system-prompt-sections");
+    expect(buildClaudeArgs({ ...row, role: "assistant", pmId: null }, files, false)).not.toContain(
+      "--exclude-dynamic-system-prompt-sections",
+    );
+  });
 });
 
 describe("子进程环境", () => {

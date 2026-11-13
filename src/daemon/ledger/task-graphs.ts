@@ -49,6 +49,7 @@ import type {
   HubResult,
   PatchTaskGraphSpecInput,
   PmActiveGraphSummary,
+  ProjectCard,
   WorkerHubStatus,
   WorkerHubStatusUpstream,
   WorkerPr,
@@ -113,6 +114,7 @@ import { toMessage, type MessageDbRow } from "./rows.ts";
 import type { LedgerSessions } from "./sessions.ts";
 import {
   buildStepFirstMessage,
+  formatStepUpstreamForTakeover,
   formatStepWaitingPmMessage,
   renderGraphStepTask,
   upstreamReportFilePath,
@@ -615,7 +617,16 @@ export interface WorkerBindTarget {
   /** 经手过这个节点的 Worker，从旧到新；不是空的就是换人接手（docs/orchestration-simplify-design.md 第 5.2 节）。 */
   workerIds: WorkerId[];
   workspacePlan: StepWorkspacePlan;
-  buildFirstMessage: (sessionId: SessionId, opts: { inheritedFromWorkerId: WorkerId | null; pmNote?: string | null }) => string;
+  buildFirstMessage: (
+    sessionId: SessionId,
+    opts: {
+      inheritedFromWorkerId: WorkerId | null;
+      worker: WorkerRecord;
+      project: ProjectCard;
+      task: string;
+    },
+  ) => string;
+  buildUpstreamHandoff: (sessionId: SessionId, inheritedFromWorkerId: WorkerId | null) => string | null;
 }
 
 export interface TaskGraphWorkersBridge {
@@ -634,7 +645,12 @@ export interface TaskGraphWorkersBridge {
       readonly: boolean;
       maxTimeMs: number | null;
       workspacePlan: StepWorkspacePlan;
-      buildFirstMessage: (sessionId: SessionId, inheritedFromWorkerId: WorkerId | null) => string;
+      buildFirstMessage: (
+        sessionId: SessionId,
+        inheritedFromWorkerId: WorkerId | null,
+        worker: WorkerRecord,
+        project: ProjectCard,
+      ) => string;
       context?: HubCallContext;
     },
   ): WorkerRecord;
@@ -1390,7 +1406,7 @@ export function createLedgerTaskGraphs(
               readonly: node.readonly === 1,
               maxTimeMs: node.max_time_ms,
               workspacePlan,
-              buildFirstMessage: (sessionId, inheritedFromWorkerId) =>
+              buildFirstMessage: (sessionId, inheritedFromWorkerId, workerRecord, projectCard) =>
                 buildStepFirstMessage({
                   graph: { id: graphRow.id, title: graphRow.title },
                   step: {
@@ -1401,6 +1417,9 @@ export function createLedgerTaskGraphs(
                     decision: parseJsonOr<TaskDecision | null>(node.decision_json, null),
                     gateQuestion: node.gate_question,
                   },
+                  worker: workerRecord,
+                  project: projectCard,
+                  task: renderedTask,
                   directUpstreams,
                   inheritedFromWorkerId,
                   sessionId,
@@ -2993,11 +3012,26 @@ export function createLedgerTaskGraphs(
             decision: parseJsonOr<TaskDecision | null>(node.decision_json, null),
             gateQuestion: node.gate_question,
           },
+          worker: opts.worker,
+          project: opts.project,
+          task: opts.task,
           directUpstreams,
           inheritedFromWorkerId: opts.inheritedFromWorkerId,
           sessionId,
           launchDir: options.launchDir,
-          pmNote: opts.pmNote,
+        }),
+      buildUpstreamHandoff: (sessionId, inheritedFromWorkerId) =>
+        formatStepUpstreamForTakeover({
+          step: {
+            key: node.node_key,
+            title: node.title,
+            decision: parseJsonOr<TaskDecision | null>(node.decision_json, null),
+            gateQuestion: node.gate_question,
+          },
+          directUpstreams,
+          inheritedFromWorkerId,
+          sessionId,
+          launchDir: options.launchDir,
         }),
     };
   };

@@ -267,7 +267,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     group: "graph",
     action: "create",
     cli: "graph create",
-    usage: `  ${hub} graph create [--title <标题>] --stdin                  从标准输入 JSON 创建任务流图（DAG）
+    usage: `  ${hub} graph create [--title <标题>] --stdin                  从标准输入 JSON 创建任务流图（steps 不写 deps 默认串接，带 brief 自动开工）
                                                           JSON：${TASK_GRAPH_CREATE_JSON_HINT}`,
   },
   {
@@ -298,7 +298,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     group: "graph",
     action: "patch",
     cli: "graph patch",
-    usage: `  ${hub} graph patch [<图编号>] --stdin                       从标准输入 JSON 增量增删改任务图节点与依赖边、跳过还没开工的节点（已经结束的图不能改）
+    usage: `  ${hub} graph patch [<图编号>] --stdin                       从标准输入 JSON 增量增删改任务图步骤、跳过未开工步骤（在干或已完的不可直接改，已结束的图不能改）
                                                           JSON：${TASK_GRAPH_PATCH_JSON_HINT}`,
   },
   {

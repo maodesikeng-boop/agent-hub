@@ -205,10 +205,13 @@ describe("换人接手同一步：重放 441", () => {
     expect(scope.writableDirs).toEqual([dir]);
     expect(scopeAllowsWrite(scope, join(dir, "src", "a.ts"))).toBe(true);
     expect(scopeAllowsWrite(scope, join(workerWorktreePath(worktreesDir, projectId, w2.id), "a.ts"))).toBe(false);
-    // 提示词里写明是前任的目录
-    const prompt = buildLaunchPrompt(ledger.getLaunchContext(w2Session), cwd);
-    expect(prompt).toContain(`它是前任 Worker #${w1.id} 的工作目录和分支，你接着用`);
-    expect(prompt).toContain("原始任务：实测三家压缩后提示词还在不在");
+    // 静态系统提示词与前任完全一致（命中前缀缓存），前任目录与原始任务说明统一在第一条接手消息里给出
+    const w1Prompt = buildLaunchPrompt(ledger.getLaunchContext(sessionIdOf(w1.id)), cwd);
+    const w2Prompt = buildLaunchPrompt(ledger.getLaunchContext(w2Session), cwd);
+    expect(w2Prompt).toBe(w1Prompt);
+    expect(first).toContain(`你是 Worker #${w2.id}（实测压缩）`);
+    expect(first).toContain(`你就在前任 Worker #${w1.id} 的工作目录 ${dir} 和分支 ${w1.branch} 上`);
+    expect(first).toContain("原始任务：实测三家压缩后提示词还在不在");
 
     // 旧会话还没结束（进程在）：新 Worker 的第一条先等；旧会话结束后才发
     expect(ledger.waitsForFirstTurn(w2Session, firstMessage(w2).id)).toBe(true);

@@ -510,7 +510,10 @@ describe("hub cli", () => {
       const r = await hub(["--help"]);
       expect(r.stdout).toContain(`JSON：${TASK_GRAPH_CREATE_JSON_HINT}`);
       expect(r.stdout).toContain(`JSON：${TASK_GRAPH_PATCH_JSON_HINT}`);
-      for (const field of ["addNodes", "updateNodes", "removeNodes", "addEdges", "removeEdges"]) {
+      for (const field of ["title", "goal", "steps", "brief", "review"]) {
+        expect(TASK_GRAPH_CREATE_JSON_HINT).toContain(`"${field}"`);
+      }
+      for (const field of ["goal", "addSteps", "updateSteps", "removeSteps", "skipSteps"]) {
         expect(TASK_GRAPH_PATCH_JSON_HINT).toContain(`"${field}"`);
       }
     });

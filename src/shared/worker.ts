@@ -25,15 +25,18 @@ export const WORKER_REPORT_STATUS_LABELS: Readonly<Record<WorkerReportStatus, st
 export const UNFORMATTED_LABEL = "没按格式";
 
 /**
- * Worker 每一轮最后一条回复要以这段结尾（照设计 8.4，删掉了“证据”）。W3 原样放进 Worker 的提示词。
+ * Worker 每一轮最后一条回复要以这段八栏格式结尾（docs/orchestration-simplify-design.md 第 9.2 节）。原样放进 Worker 的提示词。
  * 这段本身把状态换成三种之一就能被 parseWorkerReport 认出来。
  */
 export const WORKER_REPORT_FORMAT = `${REPORT_START}
 状态: 做完了 | 有问题 | 放弃了
 摘要: 一两句
+PR: <链接>（没有写“无”）
 提交: <提交号>（没有写“无”）
-测试: <跑了什么，结果>
-问题: <要项目经理回答什么、要问用户什么，或者建议改哪个记忆文件>
+测试: <跑了什么，结果；界面改动附截图路径>
+偏离: 无 | <与任务说明或目标不一致的地方>
+交棒: 无 | <给下一步接手的人：关键结论、改了哪几处、分支/目录状态与注意事项>
+问题: 无 | <要项目经理回答什么、要用户拍板什么（写出选项和你的推荐），或者建议改哪个记忆文件>
 ${REPORT_END}`;
 
 export interface WorkerReport {

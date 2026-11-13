@@ -37,6 +37,8 @@ import {
   PM_MEMORY_PROMPT,
   PM_COMMON_RULES,
   PM_MODE_PROMPTS,
+  PM_OUT_OF_SCOPE_ASK_NOTE,
+  PM_USER_ACTION_CARD_NOTE,
   SHARE_FILES_NOTE,
   WORKER_HUB_USAGE_PROMPT,
   WORKER_READONLY_NOTE,
@@ -47,9 +49,12 @@ import {
   buildLaunchPrompt,
   buildPmModePrompt,
   personaUpdateNote,
+  buildWorkerFirstMessage,
   buildWorkerPrompt,
+  buildWorkerSystemPrompt,
   needsAgentsNote,
   setupNote,
+  workerWorkspaceSection,
 } from "./prompt.ts";
 import { card, noProjectContext, projectContext, workerContext } from "./test-helpers.ts";
 
@@ -253,7 +258,7 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
     expect(buildPmModePrompt("hands_on", true)).toContain("做完告诉用户做了什么、改了哪些文件");
   });
 
-  it("只写现有命令做得到的事：自动开工、交棒、ask --node、confirm、review 标记等不出现，且撤掉“一步也建图”；建图手册与交付单细节不常驻，只留指路", () => {
+  it("第 5b 步终稿拆分：保留三档判断、自动开工交棒与交付单摘要，撤掉“一步也建图”与 --incomplete；建图细节与第 6 步尚未落地的 ask --node / confirm 不进基础提示词", () => {
     for (const mode of PM_MODES) {
       const prompt = buildLaunchPrompt(projectContext({ pm: { id: 1, name: "小林", mode, persona: "" } }), dir);
       for (const gone of [
@@ -263,21 +268,17 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
         '"review"',
         '"goal"',
         '"brief"',
-        "交棒",
-        "交付单",
-        "自动开工",
-        "马上开工",
-        "偏离",
         "skipSteps",
         "只有一步也建图",
         "一步也建图",
         "临时 Worker",
-        // 建图手册挪进了 fusa-task-graph 技能（docs/orchestration-skill-design.md 第 4.2 节），基础提示词里一条都不留
+        // 建图手册挪进了 fusa-task-graph 技能（docs/orchestration-skill-design.md 第 4.2、10.2 节），基础提示词里一条都不留
         "一张图只装一件事",
         "按先后步骤拆",
         "默认一条线",
         "`gate`",
         "--node <节点>",
+        "--node <步骤>",
         "--incomplete",
         `${hub} graph patch`,
         `${hub} graph ask`,
@@ -288,7 +289,11 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
       ]) {
         expect(prompt, gone).not.toContain(gone);
       }
-      expect(prompt).toContain(`通过就 \`${hub} worker end <编号>\` 收工。`);
+      expect(prompt).toContain(`通过就 \`${hub} worker end <编号>\` 收工`);
+      expect(prompt).toContain("自动开工");
+      expect(prompt).toContain("交棒");
+      expect(prompt).toContain("交付单");
+      expect(prompt).toContain("报偏离");
     }
   });
 
@@ -620,7 +625,7 @@ describe("提示词：项目经理（M3）", () => {
       const section = PM_MODE_PROMPTS[mode];
       const delivery = section.slice(section.indexOf("## 5. 交付"), section.indexOf("## 通用规矩"));
       for (const word of [
-        "**验收只看证据**：汇报、PR 的改动文件名单和检查结果、截图或实测输出。",
+        "**验收只看证据**：汇报（或任务图交付单）、PR 的改动文件名单和检查结果、截图或实测输出。",
         "不读代码 diff，代码质量由审查负责。",
         `证据不够就打回让 Worker 补（\`${hub} worker send\`）`,
         "**该审查而没审查的，交付前补上**：改动碰了第 2 步那四类，就按任务图手册里的做法补一个审查。",
@@ -662,19 +667,20 @@ describe("提示词：项目经理（M3）", () => {
     expect(workerPrompt).not.toContain("原始记录只取要看的那一段");
   });
 
-  it("跟进反馈（第 4 步）：做完了收工、有问题能答就答否则 hub ask、出错先 show 再 log 再续时或换人；图里怎么跟进在手册里", () => {
+  it("跟进反馈（第 4 步）：图步骤顺利完成自动推进不打扰 PM，单派做完了收工、有问题或报偏离处理、出错或厂商不可用先 show 再 log 再续时或换人；worker end 无 --incomplete", () => {
     expect(WORKER_SEND_MAX_TOKENS).toBe(200_000);
     const limitK = `${WORKER_SEND_MAX_TOKENS / 1_000}K`;
     for (const mode of PM_MODES) {
       const section = PM_MODE_PROMPTS[mode];
       const follow = section.slice(section.indexOf("## 4. 跟进反馈"), section.indexOf("## 5. 交付"));
-      const order = ["**Worker 做完了**", "**Worker 有问题**", "**Worker 出错、额度用完、超时、放弃**"];
+      const order = ["**Worker 做完了**", "**Worker 有问题或报偏离**", "**Worker 出错、额度用完、超时、放弃或厂商不可用**"];
       const positions = order.map((title) => follow.indexOf(title));
       expect(positions.every((p) => p >= 0)).toBe(true);
       expect([...positions].sort((a, b) => a - b)).toEqual(positions);
       for (const word of [
-        `按第 5 步验收，通过就 \`${hub} worker end <编号>\` 收工。`,
-        `能答的直接答（\`${hub} worker send\`）`,
+        "建了图的步骤顺利完成时后台自动收工并往下交棒，不打扰你",
+        `不建图的按第 5 步验收，通过就 \`${hub} worker end <编号>\` 收工`,
+        `能答的直接答、不认可偏离就打回（\`${hub} worker send\`）`,
         `要用户定的，用 \`${hub} ask\` 提问并写上选项和你的推荐，答复回来再转给 Worker`,
         "不要只在回复里问一句就停下等",
         `能接着干就 \`${hub} worker send\``,
@@ -685,11 +691,26 @@ describe("提示词：项目经理（M3）", () => {
       }
       for (const gone of ["**计划变了**", "graph show", "绑了图节点", "--incomplete"]) expect(follow, gone).not.toContain(gone);
     }
-    // 命令表里 worker end 只剩收工本身；--incomplete 的区别写在任务图手册里（task-graph-skill.test.ts）
+    // 命令表里 worker end 明确只用于停掉 Worker，未完成步骤停下来等处理，彻底移除 --incomplete
     const endLine = HUB_USAGE_PROMPT.split("\n").find((l) => l.includes(`${hub} worker end <编号>`))!;
-    expect(endLine).toContain("收工（正在跑的一轮会先被打断，worktree 和分支先留着）");
+    expect(endLine).toContain("收工（只用于停掉这个 Worker，正在跑的一轮会先被打断，worktree 和分支先留着；图里未完成的步骤会停下来等你处理）");
     expect(endLine).not.toContain("--incomplete");
     expect(buildWorkerPrompt(workerContext(), dir)).not.toContain("--incomplete");
+  });
+
+  it("补齐两处已记账 PM 基础提示词短板：需用户本人动手操作必挂 hub ask 提醒卡、超出当前任务范围前先问用户（两种模式与六家厂商全覆盖）", () => {
+    for (const mode of PM_MODES) {
+      for (const vendor of AGENT_VENDORS) {
+        const prompt = buildLaunchPrompt(projectContext({ pm: { id: 1, name: "小林", mode, vendor, persona: "" } }), dir);
+        expect(prompt).toContain(PM_USER_ACTION_CARD_NOTE);
+        expect(prompt).toContain(PM_OUT_OF_SCOPE_ASK_NOTE);
+      }
+    }
+    expect(PM_USER_ACTION_CARD_NOTE).toContain(`必须用 \`${hub} ask\` 挂出提醒卡`);
+    expect(PM_USER_ACTION_CARD_NOTE).toContain("在终端跑命令、登录/授权 CLI、开启系统权限");
+    expect(PM_USER_ACTION_CARD_NOTE).toContain("不要只写在聊天回复里让用户漏看");
+    expect(PM_OUT_OF_SCOPE_ASK_NOTE).toContain(`先用 \`${hub} ask\` 问过用户再动，不要擅自扩大范围`);
+    expect(PM_OUT_OF_SCOPE_ASK_NOTE).toContain("全仓公共配置、CI 工作流或外部环境");
   });
 
   it("不替项目定流程（11-04）：没有合并步骤（合并和发布按项目 AGENTS.md）、没有利弊表、没有先问用户清单", () => {
@@ -831,15 +852,47 @@ describe("提示词：定时任务（M6）", () => {
 });
 
 describe("提示词：Worker（M3）", () => {
-  it("在 worktree 里：任务、标题、派它的项目经理、worktree 路径和分支、汇报格式、只有 hub status；没有性格设定、模式、hub worker", () => {
-    const prompt = buildWorkerPrompt(workerContext(), dir);
-    expect(prompt).toContain("Worker #5");
-    expect(prompt).toContain("修登录按钮");
+  it("静态前缀缓存优化：同一项目下不同任务、不同 worktree/主目录、只读与可写、换人接手的 Worker 系统提示词在全部 6 家厂商下字节级完全一致", () => {
+    for (const vendor of AGENT_VENDORS) {
+      const w1 = buildWorkerSystemPrompt({ ...workerContext(), vendor }, dir);
+      const w2 = buildWorkerSystemPrompt(
+        {
+          ...workerContext({
+            id: 99,
+            title: "只读排查内存泄漏",
+            task: "完全不同的超长任务说明正文，排查三万条消息下的内存占用。",
+            workspace: "main",
+            worktreePath: null,
+            branch: null,
+            baseCommit: null,
+            readonly: true,
+            takeoverOf: 42,
+          }),
+          vendor,
+        },
+        dir,
+      );
+      expect(w2, vendor).toBe(w1);
+      expect(Buffer.from(w2, "utf8").equals(Buffer.from(w1, "utf8"))).toBe(true);
+    }
+  });
+
+  it("静态系统提示词含项目固定背景、八栏汇报模板与偏离/交棒规则、hub status 指引；动态任务与目录信息只进第一条开工消息且不重复出现两遍", () => {
+    const ctx = workerContext();
+    const prompt = buildWorkerPrompt(ctx, dir);
+    const firstMsg = buildWorkerFirstMessage({ project: ctx.project!, worker: ctx.worker!, task: ctx.worker!.task });
+
     expect(prompt).toContain("小林");
-    expect(prompt).toContain("登录按钮点了没反应，查原因并修好。验收：pnpm test 全绿。");
-    expect(prompt).toContain("/data/worktrees/1/5");
-    expect(prompt).toContain("hub/5-修登录按钮");
+    expect(prompt).toContain("- 项目：foo");
+    expect(prompt).toContain("- 项目主文件夹：/work/foo");
     expect(prompt).toContain(WORKER_REPORT_FORMAT);
+    for (const field of ["状态:", "摘要:", "PR:", "提交:", "测试:", "偏离:", "交棒:", "问题:"]) {
+      expect(prompt).toContain(field);
+    }
+    expect(prompt).toContain("偏离: 无");
+    expect(prompt).toContain("踩刹车交给项目经理，不要擅自硬改扩范围");
+    expect(prompt).toContain("**交棒**：给下一步接手的人看的关键结论");
+    expect(prompt).toContain(`忘了目标或上游背景时随时跑 \`${hub} status\` 查看`);
     expect(prompt).toContain(WORKER_HUB_USAGE_PROMPT);
     expect(WORKER_HUB_USAGE_PROMPT).toContain(`${hub} status`);
     for (const gone of [`${hub} worker`, `${hub} persona`, `${hub} project`]) expect(WORKER_HUB_USAGE_PROMPT).not.toContain(gone);
@@ -847,7 +900,15 @@ describe("提示词：Worker（M3）", () => {
     expect(prompt).not.toContain("说话直接");
     expect(prompt).not.toContain(PM_MODE_PROMPTS.manage_only);
     expect(prompt).not.toContain(PM_MODE_PROMPTS.hands_on);
+
+    // 动态字段不在静态系统提示词里出现，统一收敛到第一条开工消息且只出现一次
+    for (const dynamicText of ["Worker #5", "修登录按钮", "登录按钮点了没反应", "/data/worktrees/1/5", "hub/5-修登录按钮"]) {
+      expect(prompt).not.toContain(dynamicText);
+      expect(firstMsg).toContain(dynamicText);
+    }
+    expect(( `${prompt}\n${firstMsg}` ).split("登录按钮点了没反应，查原因并修好。验收：pnpm test 全绿。")).toHaveLength(2);
     expect(prompt).not.toContain("只读");
+    expect(firstMsg).not.toContain("只读");
   });
 
   it("用户直接对它说的话带【用户直接对你说】，照做、照样汇报给项目经理；连发时每条开头的标签说明是谁说的", () => {
@@ -882,17 +943,25 @@ describe("提示词：Worker（M3）", () => {
     expect(WORKER_RULES).toContain("项目经理会发消息叫你");
   });
 
-  it("在主文件夹里：写明主文件夹和附加文件夹，没有分支", () => {
-    const prompt = buildWorkerPrompt(workerContext({ workspace: "main", branch: null, worktreePath: null, baseCommit: null }), dir);
-    expect(prompt).toContain("/work/foo");
-    expect(prompt).toContain("  - /work/foo-docs");
-    expect(prompt).not.toContain("/data/worktrees");
-    expect(prompt).not.toContain("分支：");
+  it("在主文件夹里与接手目录：动态工作目录与附加文件夹说明在首条开工消息里写出", () => {
+    const mainCtx = workerContext({ workspace: "main", branch: null, worktreePath: null, baseCommit: null });
+    const mainFirst = buildWorkerFirstMessage({ project: mainCtx.project!, worker: mainCtx.worker!, task: mainCtx.worker!.task });
+    expect(mainFirst).toContain("/work/foo（直接在主文件夹里干，不是 worktree）");
+    expect(mainFirst).toContain("  - /work/foo-docs");
+    expect(mainFirst).not.toContain("/data/worktrees");
+    expect(mainFirst).not.toContain("分支：");
+
+    const upstreamWs = workerWorkspaceSection(mainCtx.project!, workerContext().worker!, { inheritedFromUpstreamWorkerId: 3 });
+    expect(upstreamWs).toContain("这是上一步（Worker #3）用过的工作目录和分支");
+    const takeoverWs = workerWorkspaceSection(mainCtx.project!, workerContext({ takeoverOf: 4 }).worker!);
+    expect(takeoverWs).toContain("它是前任 Worker #4 的工作目录和分支");
   });
 
-  it("只读：写明这次只看不改", () => {
-    const prompt = buildWorkerPrompt(workerContext({ readonly: true }), dir);
-    expect(prompt).toContain(WORKER_READONLY_NOTE);
+  it("只读：只读限制说明进入首条开工消息，静态系统提示词保持与可写 Worker 一致", () => {
+    const roCtx = workerContext({ readonly: true });
+    expect(buildWorkerPrompt(roCtx, dir)).not.toContain(WORKER_READONLY_NOTE);
+    const roFirst = buildWorkerFirstMessage({ project: roCtx.project!, worker: roCtx.worker!, task: roCtx.worker!.task });
+    expect(roFirst).toContain(WORKER_READONLY_NOTE);
   });
 
   it("按 M1 规则加“先读 AGENTS.md”（看 Worker 的工作目录）", () => {

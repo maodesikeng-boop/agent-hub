@@ -2,10 +2,12 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { truncateChars } from "../../shared/domain.ts";
-import type { SessionId, TaskDecision, TaskGraphId, TaskNodeKey, WorkerId } from "../../shared/domain.ts";
+import type { SessionId, TaskDecision, TaskGraphId, TaskNodeKey, WorkerId, WorkerRecord } from "../../shared/domain.ts";
+import type { ProjectCard } from "../../shared/hub.ts";
 import { HANDOFF_NOTE_MAX_CHARS, HANDOFF_TOTAL_MAX_CHARS } from "../../shared/limits.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import { sessionLaunchDir } from "../../shared/paths.ts";
+import { workerWorkspaceSection } from "../prompt.ts";
 
 /** 第 9.3 节：步骤标了 review: true 时前置在“你这一步”开头的内置独立审查清单。 */
 export const STEP_REVIEW_CHECKLIST = [
@@ -155,20 +157,10 @@ function formatDecisionsSection(
   return lines.length > 0 ? `## 用户拍板\n${lines.join("\n")}` : null;
 }
 
-/**
- * 拼装图内步骤第一条开工通知 / 交棒包（第 4.2、4.5、3.3 节）：
- * - 无上游：简短开工通知；
- * - 单上游：4,000 字上限；多上游合流：总上限 12,000 字均分且单上游 <= 4,000 字，超长截断并落盘 launch/<sessionId>/upstream/<stepKey>.md；
- * - 直接上游被跳过时写明跳过原因并追溯最近未跳过上游的交棒；
- * - 附本步或上游已有的用户拍板定案。
- */
-export function buildStepFirstMessage(input: {
-  graph: { id: TaskGraphId; title: string };
+function formatUpstreamSections(input: {
   step: {
     key: TaskNodeKey;
     title: string;
-    index: number;
-    total: number;
     decision: TaskDecision | null;
     gateQuestion: string | null;
   };
@@ -176,22 +168,11 @@ export function buildStepFirstMessage(input: {
   inheritedFromWorkerId: WorkerId | null;
   sessionId: SessionId;
   launchDir: string;
-  pmNote?: string | null;
-}): string {
-  const { graph, step, directUpstreams } = input;
+}): { handoffSections: string[]; decisionsSection: string | null } {
+  const { step, directUpstreams } = input;
   if (directUpstreams.length === 0) {
-    const parts = [
-      `【系统 · 开工】任务图 #${graph.id}「${graph.title}」第 ${step.index}/${step.total} 步「${step.title}」。目标与你这一步的职责见系统提示词，请开始。`,
-    ];
-    const dec = formatDecisionsSection([step]);
-    if (dec !== null) parts.push(dec);
-    if (input.pmNote && input.pmNote.trim() !== "") {
-      parts.push(`## 项目经理的补充\n${input.pmNote.trim()}`);
-    }
-    return parts.join("\n\n");
+    return { handoffSections: [], decisionsSection: formatDecisionsSection([step]) };
   }
-
-  // 收集去重后的全部有效交棒源，用于计算多路均分预算
   const uniqueSources = new Map<TaskNodeKey, UpstreamSourceInfo>();
   const decisionCarriers: Array<{ key: string; title: string; gateQuestion: string | null; decision: TaskDecision | null }> = [];
   for (const entry of directUpstreams) {
@@ -225,25 +206,17 @@ export function buildStepFirstMessage(input: {
   }
 
   const singleActiveOnly = directUpstreams.length === 1 && directUpstreams[0]!.kind === "active";
-  const sections: string[] = [];
-
+  const handoffSections: string[] = [];
   if (singleActiveOnly) {
     const src = (directUpstreams[0] as Extract<DirectUpstreamEntry, { kind: "active" }>).source;
-    const workerTag = src.workerId !== null ? `（Worker #${src.workerId}）` : "";
-    sections.push(
-      `【系统 · 交棒】任务图 #${graph.id}「${graph.title}」第 ${step.index}/${step.total} 步，接「${src.title}」${workerTag}。`,
-    );
-    sections.push(`## 上一步交给你的话（原样转交）\n${formattedByKey.get(src.key)!}`);
+    handoffSections.push(`## 上一步交给你的话（原样转交）\n${formattedByKey.get(src.key)!}`);
   } else {
-    sections.push(
-      `【系统 · 交棒】任务图 #${graph.id}「${graph.title}」第 ${step.index}/${step.total} 步「${step.title}」。`,
-    );
     const emittedTraced = new Set<TaskNodeKey>();
     for (const entry of directUpstreams) {
       if (entry.kind === "active") {
         emittedTraced.add(entry.source.key);
         const workerTag = entry.source.workerId !== null ? ` · Worker #${entry.source.workerId}` : "";
-        sections.push(
+        handoffSections.push(
           `## 「${entry.source.title}」（${entry.source.key}${workerTag}）交给你的话\n${formattedByKey.get(entry.source.key)!}`,
         );
       } else {
@@ -258,13 +231,97 @@ export function buildStepFirstMessage(input: {
             lines.push(`\n### 追溯最近未跳过上游「${traced.title}」（${traced.key}${workerTag}）交给你的话\n${formattedByKey.get(traced.key)!}`);
           }
         }
-        sections.push(`## 「${entry.title}」（${entry.key}）\n${lines.join("\n")}`);
+        handoffSections.push(`## 「${entry.title}」（${entry.key}）\n${lines.join("\n")}`);
       }
     }
   }
+  return { handoffSections, decisionsSection: formatDecisionsSection(decisionCarriers) };
+}
 
-  const dec = formatDecisionsSection(decisionCarriers);
-  if (dec !== null) sections.push(dec);
+/** 换人接手（hub worker start --node）时附带的上游步骤交棒与拍板定案（若无上游且无定案则返回 null）。 */
+export function formatStepUpstreamForTakeover(input: {
+  step: {
+    key: TaskNodeKey;
+    title: string;
+    decision: TaskDecision | null;
+    gateQuestion: string | null;
+  };
+  directUpstreams: readonly DirectUpstreamEntry[];
+  inheritedFromWorkerId: WorkerId | null;
+  sessionId: SessionId;
+  launchDir: string;
+}): string | null {
+  const { handoffSections, decisionsSection } = formatUpstreamSections(input);
+  const parts = [...handoffSections];
+  if (decisionsSection !== null) parts.push(decisionsSection);
+  return parts.length > 0 ? parts.join("\n\n") : null;
+}
+
+/**
+ * 拼装图内步骤第一条开工通知 / 交棒包（第 4.2、4.5、3.3 节）：
+ * - 包含本 Worker 编号与标题、分配的工作目录/分支/只读说明、整张图 goal + 本步职责 +（若有）审查清单；
+ * - 单上游：4,000 字上限；多上游合流：总上限 12,000 字均分且单上游 <= 4,000 字，超长截断并落盘 launch/<sessionId>/upstream/<stepKey>.md；
+ * - 直接上游被跳过时写明跳过原因并追溯最近未跳过上游的交棒；
+ * - 附本步或上游已有的用户拍板定案。
+ */
+export function buildStepFirstMessage(input: {
+  graph: { id: TaskGraphId; title: string };
+  step: {
+    key: TaskNodeKey;
+    title: string;
+    index: number;
+    total: number;
+    decision: TaskDecision | null;
+    gateQuestion: string | null;
+  };
+  worker?: Pick<WorkerRecord, "id" | "title" | "workspace" | "worktreePath" | "branch" | "readonly" | "takeoverOf">;
+  project?: ProjectCard;
+  task?: string;
+  directUpstreams: readonly DirectUpstreamEntry[];
+  inheritedFromWorkerId: WorkerId | null;
+  sessionId: SessionId;
+  launchDir: string;
+  pmNote?: string | null;
+}): string {
+  const { graph, step, directUpstreams } = input;
+  const who = input.worker ? `，你是 Worker #${input.worker.id}（${input.worker.title}）` : "";
+  const workspaceBlock =
+    input.worker && input.project
+      ? workerWorkspaceSection(input.project, input.worker, {
+          inheritedFromUpstreamWorkerId: input.inheritedFromWorkerId,
+        })
+      : null;
+  const taskBlock = input.task && input.task.trim() !== "" ? `# 你的任务\n\n${input.task.trim()}` : null;
+  const { handoffSections, decisionsSection } = formatUpstreamSections({
+    step,
+    directUpstreams,
+    inheritedFromWorkerId: input.inheritedFromWorkerId,
+    sessionId: input.sessionId,
+    launchDir: input.launchDir,
+  });
+
+  const sections: string[] = [];
+  const singleActiveOnly = directUpstreams.length === 1 && directUpstreams[0]!.kind === "active";
+  if (directUpstreams.length === 0) {
+    sections.push(
+      `【系统 · 开工】任务图 #${graph.id}「${graph.title}」第 ${step.index}/${step.total} 步「${step.title}」${who}。`,
+    );
+  } else if (singleActiveOnly) {
+    const src = (directUpstreams[0] as Extract<DirectUpstreamEntry, { kind: "active" }>).source;
+    const workerTag = src.workerId !== null ? `（Worker #${src.workerId}）` : "";
+    sections.push(
+      `【系统 · 交棒】任务图 #${graph.id}「${graph.title}」第 ${step.index}/${step.total} 步，接「${src.title}」${workerTag}${who}。`,
+    );
+  } else {
+    sections.push(
+      `【系统 · 交棒】任务图 #${graph.id}「${graph.title}」第 ${step.index}/${step.total} 步「${step.title}」${who}。`,
+    );
+  }
+
+  if (workspaceBlock !== null) sections.push(workspaceBlock);
+  if (taskBlock !== null) sections.push(taskBlock);
+  sections.push(...handoffSections);
+  if (decisionsSection !== null) sections.push(decisionsSection);
   if (input.pmNote && input.pmNote.trim() !== "") {
     sections.push(`## 项目经理的补充\n${input.pmNote.trim()}`);
   }

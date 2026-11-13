@@ -35,10 +35,10 @@ const standard = report(`状态: 做完了
 问题: 无`);
 
 describe("汇报格式", () => {
-  it("说明里有开头、结尾和五项，状态的三种写法", () => {
+  it("说明里有开头、结尾和八项，状态的三种写法", () => {
     expect(REPORT_START).toBe("=== 汇报 ===");
     expect(REPORT_END).toBe("=== 汇报结束 ===");
-    for (const key of ["状态:", "摘要:", "提交:", "测试:", "问题:"]) expect(WORKER_REPORT_FORMAT).toContain(key);
+    for (const key of ["状态:", "摘要:", "PR:", "提交:", "测试:", "偏离:", "交棒:", "问题:"]) expect(WORKER_REPORT_FORMAT).toContain(key);
     expect(WORKER_REPORT_FORMAT).toContain("做完了 | 有问题 | 放弃了");
     expect(WORKER_REPORT_STATUSES).toEqual(["done", "problem", "gave_up"]);
     expect(WORKER_REPORT_STATUS_LABELS).toEqual({ done: "做完了", problem: "有问题", gave_up: "放弃了" });

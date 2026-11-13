@@ -403,13 +403,13 @@ export interface PatchTaskGraphSpecInput {
   removeEdges?: CreateTaskGraphEdgeInput[];
 }
 
-/** `hub graph create` 正文 JSON 一行字段示例（提示词与 `hub --help` 共用；顶层 title 可改用 --title 传；要用户先看的步骤带 question / options，还可带 recommended / summaryMd）。 */
+/** `hub graph create` 正文 JSON 一行字段示例（任务图手册与 `hub --help` 共用；顶层 title 可改用 --title 传；steps 不写 deps 默认按顺序串接，带 brief 自动开工）。 */
 export const TASK_GRAPH_CREATE_JSON_HINT =
-  '{"title":"…","nodes":[{"key":"plan","title":"…"},{"key":"ok","title":"…","deps":["plan"],"question":"…","options":["…","…"]}]}';
+  '{"title":"…","goal":"…","steps":[{"key":"impl","title":"…","brief":"…"},{"key":"review","title":"…","brief":"…","review":true,"vendor":"codex"}]}';
 
-/** `hub graph patch` 正文 JSON 一行字段示例（提示词与 `hub help` 共用，只此一份；六个字段按需取用；updateNodes 的 deps 整体替换该节点前置依赖；skipNodes 跳过还没开工的节点）。 */
+/** `hub graph patch` 正文 JSON 一行字段示例（任务图手册与 `hub help` 共用，只此一份；按需取用；updateSteps 只能改还没开工的步骤；skipSteps 跳过还没开工的步骤）。 */
 export const TASK_GRAPH_PATCH_JSON_HINT =
-  '{"addNodes":[{"key":"qa","title":"…","deps":["ok"]}],"updateNodes":[{"key":"ok","title":"…"}],"removeNodes":["old"],"skipNodes":["polish"],"addEdges":[{"from":"plan","to":"qa"}],"removeEdges":[{"from":"a","to":"b"}]}';
+  '{"goal":"…","addSteps":[{"key":"qa","title":"…","brief":"…","deps":["review"]}],"updateSteps":[{"key":"review","brief":"…"}],"removeSteps":["old"],"skipSteps":["polish"]}';
 
 export type HubArgs<C extends HubCommand> = HubArgsMap[C];
 

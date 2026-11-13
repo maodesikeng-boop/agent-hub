@@ -57,6 +57,7 @@ function options(extra: Partial<LedgerOptions> = {}): LedgerOptions {
     dataHome,
     worktreesDir: join(dataHome, "worktrees"),
     resolveFolder: createResolveFolder({ dataHome, userHome: root }),
+    osSandboxed: () => true,
     ...extra,
   };
 }
@@ -175,21 +176,27 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
 
   it("提示词与 hub --help 里的 graph create / patch 一行 JSON 示例照抄就能跑通（字段名与真实校验一致）", () => {
     const created = ledger.hubCall(lin.sessionId, "graph.create", { specJson: TASK_GRAPH_CREATE_JSON_HINT }).data.graph;
-    expect(created.nodes.map((n) => [n.key, stateOf(created, n.key), n.gateQuestion !== null])).toEqual([
-      ["plan", "waiting:pm", false],
-      ["ok", "pending", true],
+    expect(created.goal).toBe("…");
+    expect(created.nodes.map((n) => [n.key, stateOf(created, n.key), n.review])).toEqual([
+      ["impl", "running", false],
+      ["review", "pending", true],
     ]);
-    // 先补上示例里要删的节点和边，再原样套用 patch 示例
+    // 先补上示例里要删和要跳过的未开工步骤，再原样套用 patch 示例
     ledger.hubCall(lin.sessionId, "graph.patch", {
       graphId: created.id,
-      specJson: JSON.stringify({ addNodes: [{ key: "old", title: "旧步骤" }, { key: "polish", title: "打磨" }, { key: "a", title: "A" }, { key: "b", title: "B", deps: ["a"] }] }),
+      specJson: JSON.stringify({
+        addSteps: [
+          { key: "old", title: "旧步骤", deps: ["review"] },
+          { key: "polish", title: "打磨", deps: ["review"] },
+        ],
+      }),
     });
     const patched = ledger.hubCall(lin.sessionId, "graph.patch", { graphId: created.id, specJson: TASK_GRAPH_PATCH_JSON_HINT }).data.graph;
-    expect(patched.nodes.map((n) => n.key).toSorted()).toEqual(["a", "b", "ok", "plan", "polish", "qa"]);
-    // 示例里的 skipNodes：跳过还没开工的节点
+    expect(patched.nodes.map((n) => n.key).toSorted()).toEqual(["impl", "polish", "qa", "review"]);
+    // 示例里的 skipSteps：跳过还没开工的步骤
     expect(stateOf(patched, "polish")).toBe("skipped");
-    expect(patched.edges).toContainEqual({ fromKey: "plan", toKey: "qa" });
-    expect(patched.edges).not.toContainEqual({ fromKey: "a", toKey: "b" });
+    expect(patched.edges).toContainEqual({ fromKey: "impl", toKey: "review" });
+    expect(patched.edges).toContainEqual({ fromKey: "review", toKey: "qa" });
   });
 
   it("单项目允许最多 20 张活跃图（不卡 5 张低阈值），第 21 张报 conflict", () => {

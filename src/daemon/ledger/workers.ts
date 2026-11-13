@@ -61,7 +61,7 @@ import {
   workerReportHeader,
   type ParsedWorkerReport,
 } from "../../shared/worker.ts";
-import { SETUP_RECEIPT_NOTE, setupNote } from "../prompt.ts";
+import { SETUP_RECEIPT_NOTE, WORKER_READONLY_NOTE, buildWorkerFirstMessage, setupNote } from "../prompt.ts";
 import { composerBaseOf } from "../vendors/index.ts";
 import { WORKER_NEEDS_OS_SANDBOX_MESSAGE } from "../driver/write-scope.ts";
 import { fail } from "./context.ts";
@@ -719,7 +719,8 @@ export function createLedgerWorkers(
       effort: effort ?? inheritedSetting.effort,
     });
 
-    const firstMessageText = input.buildFirstMessage(session.id, inheritedPlan?.fromWorkerId ?? null);
+    const workerRecord = toWorkerRecord(worker);
+    const firstMessageText = input.buildFirstMessage(session.id, inheritedPlan?.fromWorkerId ?? null, workerRecord, card);
     insertPmMessage(p, worker, session, firstMessageText, taskDedupeKey(id));
     insertLine(p, worker, { event: "started", status: null, summary: null, turnMessageId: null, deliver: null });
 
@@ -733,7 +734,7 @@ export function createLedgerWorkers(
       enqueueFirstTurn(p, worker);
     }
     startMaxTime(worker, maxTimeMs);
-    return toWorkerRecord(worker);
+    return workerRecord;
   };
 
   /**
@@ -855,12 +856,12 @@ export function createLedgerWorkers(
     const workspace = effectiveInherit !== null || probe.isRepoWithCommit ? "worktree" : "main";
 
     // 换人：前任的记录先按现在的样子取出来（还挂着的旧 Worker 收工前），再把旧 Worker 按“没做完”收工（同 --incomplete，节点不标完成）
-    let takeoverText: string | null = null;
+    let takeoverPredecessors: TakeoverPredecessor[] | null = null;
     const endedOldList: Array<{ ended: WorkerDbRow; interrupted: boolean }> = [];
     if (takeover !== null && bindTarget !== undefined) {
       const openIds = new Set(takeover.openOld.map((w) => w.id));
       const inFlightIds = new Set(takeover.openOld.filter((w) => !notStarted(w) && isWorkerInFlight(w)).map((w) => w.id));
-      const predecessors: TakeoverPredecessor[] = takeover.predecessors.map((w) => ({
+      takeoverPredecessors = takeover.predecessors.map((w) => ({
         worker: w,
         session: workerSession(w),
         endedNote:
@@ -870,24 +871,6 @@ export function createLedgerWorkers(
               : "换人时它还开着（没在跑），后台已按“没做完”把它收工（节点不标完成）。"
             : "它已经收工了。",
       }));
-      const branches = [...new Set(takeover.predecessors.map((w) => w.branch).filter((b): b is string => b !== null && b !== ""))];
-      const branchNote = branches.length === 0 ? "" : `前任的分支 ${branches.join("、")} 还在，要的话自己合进来。`;
-      const workspaceNote =
-        inherit !== null
-          ? `你就在前任 Worker #${inherit.id} 的工作目录 ${inherit.worktree_path} 和分支 ${inherit.branch} 上，没提交的改动都还在，先看 git status 和 git log。`
-          : args.noWorktree === true
-            ? `这次按项目经理的要求直接在项目主文件夹 ${card.mainFolder} 里干（--no-worktree），没有接手前任的工作目录。${branchNote}`
-            : workspace === "main"
-              ? `你在项目主文件夹 ${card.mainFolder} 里干活，和前任是同一个目录，前任没提交的改动也都还在，先看 git status。`
-              : `前任没有还能接手的工作目录（已清理或没建成），你在新开的 worktree 里，从主文件夹最后一次提交开始。${branchNote}`;
-      takeoverText =
-        options.takeover?.takeoverMessage({
-          graph: { id: bindTarget.graphId, title: bindTarget.graphTitle },
-          node: { key: bindTarget.nodeKey, title: bindTarget.nodeTitle, index: bindTarget.index, total: bindTarget.total },
-          predecessors,
-          workspaceNote,
-          pmNote,
-        }) ?? null;
       for (const old of takeover.openOld) {
         endedOldList.push(endWorkerIn(p, old, { notifyGraph: false }));
       }
@@ -950,14 +933,68 @@ export function createLedgerWorkers(
       model: model ?? inherited.model,
       effort: effort ?? inherited.effort,
     });
+    const workerRecord = toWorkerRecord(worker);
+    let takeoverText: string | null = null;
+    if (takeover !== null && bindTarget !== undefined && takeoverPredecessors !== null) {
+      const branches = [...new Set(takeover.predecessors.map((w) => w.branch).filter((b): b is string => b !== null && b !== ""))];
+      const branchNote = branches.length === 0 ? "" : `前任的分支 ${branches.join("、")} 还在，要的话自己合进来。`;
+      const baseWorkspaceNote =
+        inherit !== null
+          ? `你就在前任 Worker #${inherit.id} 的工作目录 ${inherit.worktree_path} 和分支 ${inherit.branch} 上，没提交的改动都还在，先看 git status 和 git log。`
+          : args.noWorktree === true
+            ? `这次按项目经理的要求直接在项目主文件夹 ${card.mainFolder} 里干（--no-worktree），没有接手前任的工作目录。${branchNote}`
+            : workspace === "main"
+              ? `你在项目主文件夹 ${card.mainFolder} 里干活，和前任是同一个目录，前任没提交的改动也都还在，先看 git status。`
+              : `前任没有还能接手的工作目录（已清理或没建成），你在新开的 worktree ${worker.worktree_path}（分支 ${worker.branch}）里，从主文件夹最后一次提交开始。${branchNote}`;
+      const workspaceNote = readonly ? `${baseWorkspaceNote}\n${WORKER_READONLY_NOTE}` : baseWorkspaceNote;
+      const baseTaskForTakeover =
+        takeover.originalTask ??
+        (stepHasBrief
+          ? renderGraphStepTask({
+              goal: bindTarget.graphGoal,
+              stepTitle: bindTarget.nodeTitle,
+              index: bindTarget.index,
+              total: bindTarget.total,
+              brief: bindTarget.brief!,
+              review: bindTarget.review,
+            })
+          : task);
+      const upstreamHandoff = bindTarget.buildUpstreamHandoff(session.id, effectiveInherit?.fromWorkerId ?? null);
+      takeoverText =
+        options.takeover?.takeoverMessage({
+          graph: { id: bindTarget.graphId, title: bindTarget.graphTitle },
+          node: { key: bindTarget.nodeKey, title: bindTarget.nodeTitle, index: bindTarget.index, total: bindTarget.total },
+          worker: { id: worker.id, title: worker.title },
+          predecessors: takeoverPredecessors,
+          workspaceNote,
+          task: baseTaskForTakeover,
+          upstreamHandoff,
+          pmNote,
+        }) ?? null;
+    }
     const firstMessageText =
       takeoverText ??
-      (stepHasBrief && bindTarget !== undefined
+      (bindTarget !== undefined
         ? bindTarget.buildFirstMessage(session.id, {
             inheritedFromWorkerId: effectiveInherit?.fromWorkerId ?? null,
-            pmNote,
+            worker: workerRecord,
+            project: card,
+            task: stepHasBrief
+              ? task
+              : renderGraphStepTask({
+                  goal: bindTarget.graphGoal,
+                  stepTitle: bindTarget.nodeTitle,
+                  index: bindTarget.index,
+                  total: bindTarget.total,
+                  brief: task,
+                  review: bindTarget.review,
+                }),
           })
-        : task);
+        : buildWorkerFirstMessage({
+            project: card,
+            worker: workerRecord,
+            task,
+          }));
     insertPmMessage(p, worker, session, firstMessageText, taskDedupeKey(id));
     insertLine(p, worker, { event: "started", status: null, summary: null, turnMessageId: null, deliver: null });
     if (bindTarget !== undefined) {
