@@ -66,7 +66,7 @@ export function collectDesktopPreflight(input?: {
     const resolved = findExecutable(
       configuredCmd,
       envPath,
-      VENDOR_FALLBACK_PATHS[spec.id](userHome, platform),
+      VENDOR_FALLBACK_PATHS[spec.id](userHome, platform, hubPaths.toolsNpmBinDir),
       { platform, pathExt },
     );
     const installCmd =

@@ -7,10 +7,12 @@ import { defineVendorDaemon } from "../../../../src/vendors/daemon-types.ts";
 export default defineVendorDaemon({
   createDriver: ({ executablePath }): Driver => ({
     start: async () => {
-      throw new DriverError("spawn_failed", `acme_not_found: spawn ${executablePath} ENOENT`);
+      const exe = typeof executablePath === "function" ? executablePath() : executablePath;
+      throw new DriverError("spawn_failed", `acme_not_found: spawn ${exe} ENOENT`);
     },
     send: async () => {
-      throw new DriverError("spawn_failed", `acme_not_found: spawn ${executablePath} ENOENT`);
+      const exe = typeof executablePath === "function" ? executablePath() : executablePath;
+      throw new DriverError("spawn_failed", `acme_not_found: spawn ${exe} ENOENT`);
     },
     interrupt: async () => {},
     end: async () => {},

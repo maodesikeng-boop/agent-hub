@@ -535,7 +535,7 @@ export interface PersonaNote {
 
 export interface DriverOptions {
   /** 这家厂商的可执行文件（守护进程按 spec 的 cli.envVar、PATH 和兜底路径解析好的；docs/vendor-plugin-design.md 的 A10）。 */
-  executablePath: string;
+  executablePath: string | (() => string);
   store: SessionStore;
   /**
    * 每次启动前调用，生成提示词和设置文件；两轮之间判断要不要重启时也调（见上面“两轮之间自动重启”）。
@@ -556,7 +556,7 @@ export interface DriverOptions {
    */
   sessionPreamble?: (sessionId: SessionId) => string | null;
   /** 所有会话共用的额外环境变量（如 CLAUDE_CONFIG_DIR）。每个会话自己的在 LaunchFiles.env。 */
-  env?: Record<string, string>;
+  env?: Record<string, string> | (() => Record<string, string>);
   /** state/pm-memory 根目录：项目经理会话在驱动底座统一挂载专属 `<pmMemoryDir>/<pmId>` 到可读写 addDirs。 */
   pmMemoryDir?: string;
   /** 记日志（不进 health 的事，比如 claude 出了 conversation_reset）。默认写标准错误。 */

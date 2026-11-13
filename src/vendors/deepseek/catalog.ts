@@ -295,11 +295,13 @@ export const deepseekCatalogProbe: VendorCatalogProbe = {
 export function createDeepSeekCatalogSource(options: VendorCatalogSourceOptions): VendorCatalogSource {
   return {
     ...deepseekCatalogProbe,
-    query: (signal) =>
-      queryDeepSeekCatalog({
-        ...(options.env ? { env: options.env } : {}),
+    query: (signal) => {
+      const env = typeof options.env === "function" ? options.env() : options.env;
+      return queryDeepSeekCatalog({
+        ...(env ? { env } : {}),
         signal,
-      }),
+      });
+    },
     installed: options.installed,
     ...(options.fingerprint ? { fingerprint: options.fingerprint } : {}),
   };

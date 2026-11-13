@@ -1,7 +1,15 @@
 // 守护进程侧每家厂商交出来的东西（docs/vendor-plugin-design.md 3.3 节）：src/vendors/<id>/daemon.ts 默认导出一个 VendorDaemon，
 // daemon-registry.ts 按名单加载；src/vendors/<id>/paths.ts 放只给守护进程用的路径（PATH 里找不到可执行文件时去哪找）。
 // 只给守护进程用（会 import 驱动、起进程的代码），网页不引。现有的接口（VendorComposerBase、VendorCatalogProbe、SessionForker、Driver）原样复用。
-import type { Driver, DriverOptions, ReadonlyPolicy, SessionRole } from "../shared/index.ts";
+import type {
+  AgentVendor,
+  Driver,
+  DriverOptions,
+  ProviderAuthMethodDescriptor,
+  ReadonlyPolicy,
+  SessionRole,
+  VendorAvailability,
+} from "../shared/index.ts";
 import type { TranscriptRef, TranscriptRoots } from "../daemon/driver/transcript-files.ts";
 import type { VendorCatalogSource } from "../daemon/driver/model-catalog.ts";
 import type { SessionForker } from "../daemon/handover/forker.ts";
@@ -17,8 +25,8 @@ export interface VendorDriverDeps extends DriverOptions {
 
 /** 起进程问命令列表要的东西（守护进程给）。 */
 export interface VendorComposerDeps {
-  executablePath: string;
-  env?: Record<string, string | undefined>;
+  executablePath: string | (() => string);
+  env?: Record<string, string | undefined> | (() => Record<string, string | undefined>);
   timeoutMs?: number;
 }
 
@@ -45,6 +53,105 @@ export interface VendorDaemon {
   launchFiles?(input: VendorLaunchInput): VendorLaunchFiles;
   /** 可选：全厂商 MCP、云端连接器与 Skill 扫描及局部补丁适配器（daemon/vendor-sync/）。 */
   sync?: VendorSyncAdapter;
+  /** 可选：Settings → Providers 一键安装、更新与界面内直接登录适配器（daemon/provider-manager/）。 */
+  setup?: VendorSetupAdapter;
+}
+
+export type VendorNpmExtraArg = "--ignore-scripts" | "--min-release-age=0";
+
+export interface VendorNpmInstallRecipe {
+  readonly kind: "npm";
+  readonly packageSpec: string;
+  readonly extraArgs?: readonly VendorNpmExtraArg[];
+}
+
+export type VendorInstallRecipe =
+  | VendorNpmInstallRecipe
+  | {
+      readonly kind: "posix_script";
+      readonly scriptUrl: string;
+      readonly shell: "bash" | "sh";
+      readonly args?: readonly string[];
+      readonly env?: Readonly<Record<string, string>>;
+      readonly fallback?: VendorNpmInstallRecipe;
+    }
+  | {
+      readonly kind: "powershell_script";
+      readonly scriptUrl: string;
+      readonly args?: readonly string[];
+      readonly env?: Readonly<Record<string, string>>;
+      /** PowerShell 受组策略限制失败时的免脚本回退配方（如回退受管 npm 安装）。 */
+      readonly fallback?: VendorNpmInstallRecipe;
+    };
+
+export type VendorUpdateRecipe =
+  | { readonly kind: "reinstall" }
+  | {
+      readonly kind: "cli_subcommand";
+      readonly args: readonly string[];
+      readonly canUse?: (binaryPath: string, platform: string) => boolean;
+      readonly fallbackToReinstall?: boolean;
+    };
+
+/** 守护进程受管密钥库（`<stateDir>/provider-secrets.json`，0600，绝不写日志或 SQLite）。 */
+export interface ManagedProviderSecrets {
+  /** 返回指定厂商已配置的受管环境变量键名列表（不含明文）。 */
+  keys(vendor: AgentVendor): string[];
+  /** 判断指定厂商某环境变量是否配置了非空值。 */
+  has(vendor: AgentVendor, envName: string): boolean;
+  /** 读取指定厂商全部受管环境变量键值（仅供注入该厂商自身子进程环境）。 */
+  getEnv(vendor: AgentVendor): Readonly<Record<string, string>>;
+  /** 原子更新指定厂商的受管环境变量键值。 */
+  set(vendor: AgentVendor, entries: Readonly<Record<string, string>>): void;
+  /** 原子移除指定厂商的受管环境变量（不传 names 则清空该厂商全部受管密钥）。 */
+  remove(vendor: AgentVendor, names?: readonly string[]): void;
+  /** 返回不含明文的修订指纹（供模型目录缓存感知密钥变更）。 */
+  fingerprint(vendor: AgentVendor): string;
+}
+
+export interface VendorSetupContext {
+  readonly platform: string;
+  readonly userHome: string;
+  readonly availability: VendorAvailability;
+  readonly executablePath: () => string;
+  readonly installed: () => boolean;
+  readonly env: () => Record<string, string | undefined>;
+  readonly secrets: ManagedProviderSecrets;
+}
+
+export interface AuthFlowHooks {
+  /** 通知引擎已捕获浏览器 OAuth 授权 URL（引擎自动解析并登记回环回调契约）。 */
+  onAuthorizeUrl(url: string): void;
+  /** 通知引擎已拿到 Device Code 验证页与一次性设备验证码。 */
+  onDeviceCode(payload: { verificationUrl: string; userCode: string }): void;
+  /** 注册接收用户手动粘贴的授权码回调（回环回调 URL 由引擎经 6 重防 SSRF 校验后直接转发）。 */
+  onUserInput(handler: (input: string) => void | Promise<void>): void;
+}
+
+export interface VendorSetupAdapter {
+  /** 按目标平台返回白名单安装配方（禁止任意 shell 字符串）。 */
+  installRecipe(platform: string): VendorInstallRecipe;
+  /** 返回更新配方。 */
+  updateRecipe(platform: string): VendorUpdateRecipe;
+  /** 可选版本解析参数（默认 ["--version"]，结果按二进制 stat 指纹缓存）。 */
+  versionArgs?: readonly string[];
+  /** 返回当前环境下该厂商支持的界面内登录方法列表与已登录摘要（0 子进程轻量检查）。 */
+  inspectAuth(ctx: VendorSetupContext): Promise<{
+    accountSummary: string | null;
+    canSignOut: boolean;
+    methods: readonly ProviderAuthMethodDescriptor[];
+  }>;
+  /** 启动交互式登录流（Browser OAuth 或 Device Code）。 */
+  startAuthFlow?(
+    ctx: VendorSetupContext,
+    input: { methodId: string; variantId?: string; targetId?: string; remoteHint?: boolean },
+    hooks: AuthFlowHooks,
+    signal: AbortSignal,
+  ): Promise<void>;
+  /** 保存 API Key（写入原厂凭据文件或受管 secrets，必要时联动厂商配置）。 */
+  saveApiKey?(ctx: VendorSetupContext, input: { targetId?: string; apiKey: string }): Promise<void>;
+  /** 退出登录或移除指定子模型商凭据。 */
+  signOut(ctx: VendorSetupContext, input?: { targetId?: string }): Promise<void>;
 }
 
 export interface VendorSyncContext {
@@ -143,6 +250,8 @@ interface FallbackPathsInput {
   platform: string;
   /** Linux 上各家官方安装方式放可执行文件的目录（shared/paths.ts 的 linuxInstallDirs）。 */
   linuxInstallDirs: readonly string[];
+  /** Fusa 受管免管理员 npm 全局导出目录（win32 为 `<hubHome>\tools\npm`，POSIX 为 `<hubHome>/tools/npm/bin`）。 */
+  toolsNpmBinDir?: string;
   join: (...parts: string[]) => string;
 }
 

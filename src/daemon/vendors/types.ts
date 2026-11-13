@@ -60,12 +60,12 @@ export interface VendorCatalogProbe {
 /** 起进程问名单要的东西（守护进程给）。 */
 export interface VendorCatalogSourceOptions {
   /** 可执行文件（resolveExecutable 解析过的）。 */
-  path: string;
+  path: string | (() => string);
   /** 在哪个目录问：用户主目录（codex 也从这里找 ~/.codex）。 */
   cwd: string;
   /** 装没装（findExecutable，只查文件）。 */
   installed: () => boolean;
   /** 可执行文件及本地凭据/模型缓存文件的轻量 stat 指纹。 */
   fingerprint?: () => string;
-  env?: NodeJS.ProcessEnv;
+  env?: NodeJS.ProcessEnv | (() => NodeJS.ProcessEnv);
 }

@@ -45,11 +45,8 @@ import { startFileCleanup } from "./file-cleanup.ts";
 import { createHandoverRunner, type HandoverRunner } from "./handover/runner.ts";
 import { startWorktreeCleanup, type WorktreeCleanup } from "./worktree-cleanup.ts";
 import {
-  findExecutable,
   projectWorktreesDir,
-  VENDOR_FALLBACK_PATHS,
   resolveHubPaths,
-  resolveVendorExecutables,
   workerSetupLogPath,
   workerWorktreePath,
 } from "../shared/paths.ts";
@@ -57,6 +54,12 @@ import { createActionExecutor } from "./actions/index.ts";
 import { createProcessLedger, installProcessLedger } from "./process-ledger.ts";
 import { createCommandCatalogs, type CommandCatalogs } from "./commands-catalog.ts";
 import { createComposerService } from "./composer.ts";
+import {
+  createManagedProviderSecrets,
+  createProviderManager,
+  createVendorRuntimeResolver,
+  type ProviderManager,
+} from "./provider-manager/index.ts";
 import { createVendorSyncService } from "./vendor-sync/index.ts";
 import {
   DAEMON_VENDORS,
@@ -187,9 +190,6 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
   const env = options.env ?? process.env;
   const log = options.log ?? ((line) => console.error(line));
   const paths = resolveHubPaths(env, options.userHome);
-  const envPathForVendors = process.platform === "win32" ? (env.PATH ?? env.Path) : env.PATH;
-  const executables = resolveVendorExecutables(paths, envPathForVendors, options.userHome);
-  const executablePaths = Object.fromEntries(AGENT_VENDORS.map((vendor) => [vendor, executables[vendor].path])) as Record<AgentVendor, string>;
   const port = parsePort(env[ENV_PORT]);
 
   // 启动到哪一步，关机就关到哪一步；顺序固定：准备命令 → 执行器 → 驱动层 → 界面服务 → agent 接口 → 库 → 锁
@@ -204,6 +204,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     setup?: SetupRunner;
     executor?: ActionExecutor;
     driver?: Driver;
+    providerManager?: ProviderManager;
     models?: ModelCatalogs;
     commands?: CommandCatalogs;
     routerDispatcher?: RouterDispatcher;
@@ -260,6 +261,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       });
     }
     if (driver) await step("驱动层", () => driver.shutdown());
+    if (parts.providerManager) await step("厂商安装与登录管理", () => parts.providerManager!.close());
     if (models) await step("模型名单", () => models.close());
     if (commands) await step("命令列表", () => commands.close());
     // 隧道：先关管理 socket（不再收命令），再停 ssh 子进程
@@ -334,6 +336,18 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
         log(`${LOG_PREFIX} Windows 目录安全 ACL 初始化提示：${aclErr instanceof Error ? aclErr.message : String(aclErr)}`);
       }
     }
+    const providerSecrets = createManagedProviderSecrets(paths.providerSecretsFile, {
+      log: (line) => log(`${LOG_PREFIX} ${line}`),
+    });
+    const vendorRuntime = createVendorRuntimeResolver({
+      paths,
+      userHome: options.userHome,
+      baseEnv: env,
+      secrets: providerSecrets,
+    });
+    const dynamicExecutablePaths = Object.fromEntries(
+      AGENT_VENDORS.map((vendor) => [vendor, () => vendorRuntime.resolveExecutablePath(vendor)]),
+    ) as Record<AgentVendor, () => string>;
     // 模型名单和这台设备上各家的状态（没装 / 没登录，docs/vendor-availability-design.md）：第一次有人要（网页打开资料页、
     // 新建弹窗）时按厂商分别问本机 CLI，在用户主目录下起，不带任何项目的设置；装没装每次只查文件。
     // 账本写系统消息时用它缓存着的显示名
@@ -343,9 +357,11 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
           AGENT_VENDORS.map((vendor) => [
             vendor,
             {
-              path: executables[vendor].path,
+              path: () => vendorRuntime.resolveExecutablePath(vendor),
               cwd: options.userHome,
-              installed: () => findExecutable(executables[vendor].cmd, env.PATH, VENDOR_FALLBACK_PATHS[vendor](options.userHome)) !== null,
+              env: () => vendorRuntime.resolveVendorEnv(vendor),
+              installed: () => vendorRuntime.installed(vendor),
+              fingerprint: () => vendorRuntime.catalogFingerprint(vendor),
             },
           ]),
         ) as Record<AgentVendor, VendorCatalogSourceOptions>,
@@ -353,6 +369,12 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       log,
     });
     parts.models = models;
+    const providerManager = createProviderManager({
+      runtime: vendorRuntime,
+      models,
+      log: (line) => log(`${LOG_PREFIX} ${line}`),
+    });
+    parts.providerManager = providerManager;
     const ledger = createLedger(db, {
       modelCatalog: (vendor) => models.current(vendor),
       // 手打命令时看缓存着的命令列表（commands 在下面才建，所以现用现取）
@@ -431,6 +453,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       // realpath 过的：写进 HUB_SOCK 和设置文件的 allowUnixSockets
       hubSock: agentApi.socketPath,
       hubBinDir: paths.hubBinDir,
+      basePath: () => vendorRuntime.effectivePath(),
       // 项目经理提示词里“能用的厂商”只列这台设备上能用的（只看缓存，不等查询）
       vendorAvailability: () => Object.fromEntries(AGENT_VENDORS.map((vendor) => [vendor, models.availability(vendor)])),
     });
@@ -445,7 +468,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
           AGENT_VENDORS.map((vendor) => [
             vendor,
             {
-              executablePath: executables[vendor].path,
+              executablePath: () => vendorRuntime.resolveExecutablePath(vendor),
+              env: () => vendorRuntime.resolveManagedDriverEnv(vendor),
               ...launch,
               ...(vendorSpec(vendor).capabilities.explicitDefaultModel
                 ? {
@@ -463,7 +487,13 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     // 输入框的“/”命令列表：正在跑的会话直接问它，没在跑的另起一个对应厂商 CLI 在会话的目录里问；会话中途推来的新名单直接更新缓存
     const commands = createCommandCatalogs({
       vendors: Object.fromEntries(
-        AGENT_VENDORS.map((vendor) => [vendor, DAEMON_VENDORS[vendor].createComposer({ executablePath: executables[vendor].path })]),
+        AGENT_VENDORS.map((vendor) => [
+          vendor,
+          DAEMON_VENDORS[vendor].createComposer({
+            executablePath: () => vendorRuntime.resolveExecutablePath(vendor),
+            env: () => vendorRuntime.resolveVendorEnv(vendor),
+          }),
+        ]),
       ) as Record<AgentVendor, VendorComposer>,
       queryRunning: (sessionId) => driver.queryCommands(sessionId),
       log,
@@ -618,7 +648,13 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     parts.autoRenew = setInterval(runAutoRenew, AUTO_RENEW_TICK_MS);
     // 后台写交接：跑腿的从账本领活、复制项目经理的会话去写交接（daemon/handover/runner.ts）。放在重启恢复之后：
     // 账本先把上次没做完的记成失败，跑腿的再补清它们复制出来的会话。账本接口见 shared/handover.ts 的 LedgerHandoverWork
-    const handoverRunner = createHandoverRunner({ ledger, prepareLaunch, executablePaths, pmMemoryDir, log });
+    const handoverRunner = createHandoverRunner({
+      ledger,
+      prepareLaunch,
+      executablePaths: dynamicExecutablePaths,
+      pmMemoryDir,
+      log,
+    });
     parts.handoverRunner = handoverRunner;
     handoverRunner.start();
 
@@ -647,7 +683,18 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       VENDOR_LIST.flatMap(({ id, quota: spec }) => {
         const fetched = spec?.fetched;
         if (fetched === undefined) return [];
-        return [createFetchedQuota({ query: () => queryFetchedQuota({ vendor: id, path: executables[id].path, spec: fetched, cwd: options.userHome }) })];
+        return [
+          createFetchedQuota({
+            query: () =>
+              queryFetchedQuota({
+                vendor: id,
+                path: vendorRuntime.resolveExecutablePath(id),
+                env: vendorRuntime.resolveVendorEnv(id),
+                spec: fetched,
+                cwd: options.userHome,
+              }),
+          }),
+        ];
       }),
     );
     // 全部退出：换主钥匙写回 state/ui-token，新的登录链接打在日志里（旧的启动链接作废了）
@@ -802,6 +849,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       quota,
       composer,
       vendorSync,
+      providers: providerManager,
       db,
       rotateToken,
       tailnet,

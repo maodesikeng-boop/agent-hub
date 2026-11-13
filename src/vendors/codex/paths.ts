@@ -6,18 +6,42 @@ import type { VendorPathsModule } from "../daemon-types.ts";
 /** ChatGPT.app 里带的 codex（相对 Applications 目录）：装在 /Applications 或用户目录的 ~/Applications 都要找。 */
 const CHATGPT_APP_CODEX = "ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex";
 
-// macOS 先看 ChatGPT.app 里带的（/Applications、~/Applications），别的系统看官方安装目录；最后都看插件带的
-export const fallbackPaths: VendorPathsModule["fallbackPaths"] = ({ userHome, platform, linuxInstallDirs, join }) => {
+// macOS 优先看官方 install.sh 默认目录 ~/.local/bin、Homebrew、/usr/local/bin 与受管 npm 目录，再回退 ChatGPT.app 与插件目录；
+// Windows 优先看受管 npm 目录（随包 Node 24 一键安装位置）与常见安装目录；Linux 看官方安装目录与受管 npm 目录，最后都保留插件兜底。
+export const fallbackPaths: VendorPathsModule["fallbackPaths"] = ({
+  userHome,
+  platform,
+  linuxInstallDirs,
+  toolsNpmBinDir,
+  join,
+}) => {
+  const npmBin =
+    toolsNpmBinDir ??
+    (platform === "win32"
+      ? join(userHome, ".agent-hub", "tools", "npm")
+      : join(userHome, ".agent-hub", "tools", "npm", "bin"));
   if (platform === "win32") {
     return [
+      join(npmBin, "codex.cmd"),
+      join(npmBin, "codex.exe"),
       join(userHome, ".local", "bin", "codex.exe"),
       join(userHome, "AppData", "Roaming", "npm", "codex.cmd"),
       join(userHome, ".codex", "plugins", ".plugin-appserver", "codex-cli", "bin", "codex.exe"),
     ];
   }
   const plugin = join(userHome, ".codex", "plugins", ".plugin-appserver", "codex-cli", "bin", "codex");
-  if (platform === "darwin") return [join("/Applications", CHATGPT_APP_CODEX), join(userHome, "Applications", CHATGPT_APP_CODEX), plugin];
-  return [...linuxInstallDirs.map((dir) => join(dir, "codex")), plugin];
+  if (platform === "darwin") {
+    return [
+      join(userHome, ".local", "bin", "codex"),
+      "/opt/homebrew/bin/codex",
+      "/usr/local/bin/codex",
+      join(npmBin, "codex"),
+      join("/Applications", CHATGPT_APP_CODEX),
+      join(userHome, "Applications", CHATGPT_APP_CODEX),
+      plugin,
+    ];
+  }
+  return [...linuxInstallDirs.map((dir) => join(dir, "codex")), join(npmBin, "codex"), plugin];
 };
 
 export const headlessLoginCommand: VendorPathsModule["headlessLoginCommand"] = "codex login --device-auth";

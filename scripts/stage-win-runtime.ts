@@ -170,6 +170,10 @@ export function pruneStagedNodeModules(
   // 2. 裁剪 koffi 文档与 C/C++ 编译期源码（必须保留 `koffi/src/koffi/src/static.{js,cjs}` 等运行时加载入口！）
   //    以及未使用的非目标平台 `@koromix/koffi-*` 预编译二进制与 node-pty 源码
   for (const extraDir of [
+    join(nodeModulesDir, "npm", "docs"),
+    join(nodeModulesDir, "npm", "man"),
+    join(nodeModulesDir, "npm", "tap-snapshots"),
+    join(nodeModulesDir, "npm", "changelogs"),
     join(nodeModulesDir, "koffi", "doc"),
     join(nodeModulesDir, "koffi", "vendor"),
     join(nodeModulesDir, "koffi", "src", "koffi", "src", "abi"),
@@ -226,6 +230,31 @@ export function pruneStagedNodeModules(
   cleanWalk(nodeModulesDir);
 }
 
+/**
+ * 从已解压校验的官方 Node Windows 压缩包目录中提取 `npm.cmd`、`npx.cmd` 与 `node_modules/npm/` 到随包 `node/` 目录，
+ * 并剥离文档、man 手册、类型声明、source map 与任何软链，支持裸机 Windows 免管理员安装 CLI 包与运行 `npx mcp-remote`。
+ */
+export function stageBundledNpmFromExtractedNodeDir(
+  extractedNodeRoot: string,
+  nodeOutDir: string,
+  targetOs: "win32" | "host" = "win32",
+): void {
+  mkdirSync(nodeOutDir, { recursive: true });
+  for (const shim of ["npm.cmd", "npx.cmd"]) {
+    const srcShim = join(extractedNodeRoot, shim);
+    if (existsSync(srcShim)) {
+      copyFileSync(srcShim, join(nodeOutDir, shim));
+    }
+  }
+  const srcNpmDir = join(extractedNodeRoot, "node_modules", "npm");
+  if (existsSync(srcNpmDir)) {
+    const dstNodeModules = join(nodeOutDir, "node_modules");
+    mkdirSync(dstNodeModules, { recursive: true });
+    cpSync(srcNpmDir, join(dstNodeModules, "npm"), { recursive: true, dereference: true });
+    pruneStagedNodeModules(dstNodeModules, targetOs);
+  }
+}
+
 export function assertNoSymlinksInTree(rootDir: string): void {
   const walk = (dir: string) => {
     for (const ent of readdirSync(dir)) {
@@ -254,7 +283,10 @@ export function computeDirectoryBytes(rootDir: string): number {
   return total;
 }
 
-async function downloadAndVerifyOfficialWinNodeExe(destNodeExe: string): Promise<void> {
+async function downloadAndVerifyOfficialWinNode(
+  destNodeExe: string,
+  targetOs: "win32" | "host",
+): Promise<void> {
   const cacheDir = join(REPO_ROOT, "apps", "windows", "target", "node-cache");
   mkdirSync(cacheDir, { recursive: true });
   const zipPath = join(cacheDir, `node-${BUNDLED_NODE_VERSION}-win-x64.zip`);
@@ -283,26 +315,47 @@ async function downloadAndVerifyOfficialWinNodeExe(destNodeExe: string): Promise
   if (process.platform === "win32") {
     execFileSync(
       "tar.exe",
-      ["-xf", zipPath, "-C", extractDir, `node-${BUNDLED_NODE_VERSION}-win-x64/node.exe`],
+      [
+        "-xf",
+        zipPath,
+        "-C",
+        extractDir,
+        `node-${BUNDLED_NODE_VERSION}-win-x64/node.exe`,
+        `node-${BUNDLED_NODE_VERSION}-win-x64/npm.cmd`,
+        `node-${BUNDLED_NODE_VERSION}-win-x64/npx.cmd`,
+        `node-${BUNDLED_NODE_VERSION}-win-x64/node_modules/npm`,
+      ],
       { stdio: "inherit" },
     );
   } else {
     execFileSync(
       "unzip",
-      ["-q", zipPath, `node-${BUNDLED_NODE_VERSION}-win-x64/node.exe`, "-d", extractDir],
+      [
+        "-q",
+        zipPath,
+        `node-${BUNDLED_NODE_VERSION}-win-x64/node.exe`,
+        `node-${BUNDLED_NODE_VERSION}-win-x64/npm.cmd`,
+        `node-${BUNDLED_NODE_VERSION}-win-x64/npx.cmd`,
+        `node-${BUNDLED_NODE_VERSION}-win-x64/node_modules/npm/*`,
+        "-d",
+        extractDir,
+      ],
       { stdio: "inherit" },
     );
   }
 
-  const extractedExe = join(extractDir, `node-${BUNDLED_NODE_VERSION}-win-x64`, "node.exe");
+  const extractedRoot = join(extractDir, `node-${BUNDLED_NODE_VERSION}-win-x64`);
+  const extractedExe = join(extractedRoot, "node.exe");
   const exeSha = sha256FileHex(extractedExe);
   if (exeSha !== BUNDLED_NODE_WIN_X64_EXE_SHA256) {
     throw new Error(
       `Extracted node.exe SHA-256 mismatch: expected ${BUNDLED_NODE_WIN_X64_EXE_SHA256}, got ${exeSha}`,
     );
   }
-  mkdirSync(dirname(destNodeExe), { recursive: true });
+  const nodeOutDir = dirname(destNodeExe);
+  mkdirSync(nodeOutDir, { recursive: true });
   copyFileSync(extractedExe, destNodeExe);
+  stageBundledNpmFromExtractedNodeDir(extractedRoot, nodeOutDir, targetOs);
   rmSync(extractDir, { recursive: true, force: true });
 }
 
@@ -346,12 +399,14 @@ export async function stageWinRuntime(opts: StageWinRuntimeOptions): Promise<{
   const stagedNodeExe = join(nodeOutDir, nodeFileName);
   let nodeVersion = BUNDLED_NODE_VERSION;
   if (opts.nodeExePath) {
-    copyFileSync(resolve(opts.nodeExePath), stagedNodeExe);
+    const resolvedSrcNode = resolve(opts.nodeExePath);
+    copyFileSync(resolvedSrcNode, stagedNodeExe);
+    stageBundledNpmFromExtractedNodeDir(dirname(resolvedSrcNode), nodeOutDir, targetOs);
     if (targetOs === "host") {
       nodeVersion = process.version;
     }
   } else {
-    await downloadAndVerifyOfficialWinNodeExe(stagedNodeExe);
+    await downloadAndVerifyOfficialWinNode(stagedNodeExe, targetOs);
   }
 
   // 2. 拷贝 fusa-win-helper 产物（fusa-run.exe、hub.exe）

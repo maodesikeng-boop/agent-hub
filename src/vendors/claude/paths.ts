@@ -2,17 +2,38 @@
 // 父会话变量（A12）、凭据变量（A13）、Linux 上的安装命令（D6）。
 import type { VendorPathsModule } from "../daemon-types.ts";
 
-// macOS 上只认 PATH（沿用原来的行为）；Windows 看官方 install.ps1（~\.local\bin\claude.exe）、npm 全局垫片（%APPDATA%\npm\claude.cmd）与本地安装目录；Linux 看官方安装目录
-export const fallbackPaths: VendorPathsModule["fallbackPaths"] = ({ userHome, platform, linuxInstallDirs, join }) => {
-  if (platform === "darwin") return [];
+// macOS GUI 进程默认 PATH 不含 ~/.local/bin 与 Homebrew：补齐官方 install.sh 目录、Homebrew、/usr/local/bin 与受管 npm 目录；
+// Windows 看官方 install.ps1（~\.local\bin\claude.exe）、npm 全局垫片与本地安装目录；Linux 看官方安装目录。
+export const fallbackPaths: VendorPathsModule["fallbackPaths"] = ({
+  userHome,
+  platform,
+  linuxInstallDirs,
+  toolsNpmBinDir,
+  join,
+}) => {
+  const npmBin =
+    toolsNpmBinDir ??
+    (platform === "win32"
+      ? join(userHome, ".agent-hub", "tools", "npm")
+      : join(userHome, ".agent-hub", "tools", "npm", "bin"));
+  if (platform === "darwin") {
+    return [
+      join(userHome, ".local", "bin", "claude"),
+      "/opt/homebrew/bin/claude",
+      "/usr/local/bin/claude",
+      join(npmBin, "claude"),
+    ];
+  }
   if (platform === "win32") {
     return [
       join(userHome, ".local", "bin", "claude.exe"),
+      join(npmBin, "claude.cmd"),
+      join(npmBin, "claude.exe"),
       join(userHome, "AppData", "Roaming", "npm", "claude.cmd"),
       join(userHome, "AppData", "Local", "Programs", "claude", "claude.exe"),
     ];
   }
-  return linuxInstallDirs.map((dir) => join(dir, "claude"));
+  return [...linuxInstallDirs.map((dir) => join(dir, "claude")), join(npmBin, "claude")];
 };
 
 export const installCommand: VendorPathsModule["installCommand"] = "curl -fsSL https://claude.ai/install.sh | bash";

@@ -30,6 +30,8 @@ import {
   MAX_VENDOR_SYNC_KEY_CHARS,
   MAX_VENDOR_SYNC_MCP_ITEMS,
   MAX_VENDOR_SYNC_SKILL_ITEMS,
+  PROVIDER_API_KEY_MAX_CHARS,
+  PROVIDER_AUTH_INPUT_MAX_CHARS,
   ATTACHMENTS_MISSING_MESSAGE,
   ATTACHMENTS_TOO_MANY_MESSAGE,
   MAX_ATTACHMENTS_PER_MESSAGE,
@@ -44,6 +46,7 @@ import {
   UPLOAD_TOO_LARGE_MESSAGE,
   bundledModelCatalog,
   FILE_ACTIONS,
+  isAgentVendor,
   isImageMime,
   normalizeName,
   sentFileMime,
@@ -56,6 +59,7 @@ import {
   ENTRY_ONLY_API_PREFIXES,
   PEER_DEVICE_HEADER,
   utf8Bytes,
+  type AgentVendor,
   type ArchiveAllReportsResponse,
   type ArchivePmResponse,
   type AuthStatusResponse,
@@ -86,6 +90,14 @@ import {
   type PmMode,
   type PostMessageResponse,
   type PostRouterCommandResponse,
+  type ProviderCancelAuthRequest,
+  type ProviderCancelJobRequest,
+  type ProviderLogoutRequest,
+  type ProviderSaveApiKeyRequest,
+  type ProviderStartAuthRequest,
+  type ProviderStatusItem,
+  type ProviderSubmitAuthRequest,
+  type ProvidersStatusResponse,
   type PushKeyResponse,
   type PutPmMemoryFileResponse,
   type RenewSessionResponse,
@@ -115,6 +127,7 @@ import {
 import { workerPickSchema } from "../../shared/worker-pick-schema.ts";
 import { API_ERRORS, errorBody, type ApiErrorCode } from "../../shared/errors.ts";
 import type { ComposerService } from "../composer.ts";
+import { ProviderRequestError, type ProviderManager } from "../provider-manager/index.ts";
 import type { VendorSyncService } from "../vendor-sync/index.ts";
 import { PickFolderError, createFolderPicker, type FolderPicker } from "../pick-folder.ts";
 import {
@@ -180,6 +193,8 @@ export interface UiServerOptions {
   composer?: ComposerService;
   /** 全厂商连接器 / MCP / Skill 并集同步服务（daemon/vendor-sync/）。不给则 preview 回空列表、apply 回 501。 */
   vendorSync?: VendorSyncService;
+  /** Settings → Providers 一键安装与界面内直接登录管理服务（daemon/provider-manager/）。不给则 GET 回空、写接口回 501。 */
+  providers?: ProviderManager;
   /** 弹“选择文件夹”的（daemon/pick-folder.ts）。不给就用真的 osascript（不是 macOS 回 501）；测试里传假的。 */
   folderPicker?: FolderPicker;
   /** 跑 macOS 的 open（在 Finder 中显示、用默认程序打开）。默认 execFile("open")（不是 macOS 回 501）；测试里换成假的，不真的打开。 */
@@ -572,6 +587,62 @@ const vendorSyncApplyBodySchema = z
   })
   .strict();
 
+const emptyStrictBodySchema = z.object({}).strict();
+
+const providerCancelJobBodySchema = z
+  .object({
+    jobId: z.string().min(1).max(128),
+  })
+  .strict();
+
+const providerStartAuthBodySchema = z
+  .object({
+    methodId: z.string().min(1).max(64),
+    variantId: z.string().min(1).max(64).optional(),
+    targetId: z.string().min(1).max(64).optional(),
+    remoteHint: z.boolean().optional(),
+  })
+  .strict();
+
+const providerSubmitAuthBodySchema = z
+  .object({
+    flowId: z.string().min(1).max(128),
+    input: boundedCharsSchema(PROVIDER_AUTH_INPUT_MAX_CHARS, "input").refine(
+      (s) => s.trim() !== "",
+      "input must not be empty",
+    ),
+  })
+  .strict();
+
+const providerCancelAuthBodySchema = z
+  .object({
+    flowId: z.string().min(1).max(128),
+  })
+  .strict();
+
+const providerSaveApiKeyBodySchema = z
+  .object({
+    targetId: z.string().min(1).max(64).optional(),
+    apiKey: boundedCharsSchema(PROVIDER_API_KEY_MAX_CHARS, "apiKey").refine(
+      (s) => s.trim() !== "",
+      "apiKey must not be empty",
+    ),
+  })
+  .strict();
+
+const providerLogoutBodySchema = z
+  .object({
+    targetId: z.string().min(1).max(64).optional(),
+  })
+  .strict();
+
+function parseVendorParam(raw: unknown): AgentVendor {
+  if (typeof raw !== "string" || !isAgentVendor(raw)) {
+    throw new HttpError(404, "unknown provider");
+  }
+  return raw;
+}
+
 function parseOptionalPositiveInt(raw: unknown, what: string): number | undefined {
   if (raw === undefined || raw === "") return undefined;
   return parseId(raw, what);
@@ -710,6 +781,13 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
   const peerOf = (req: FastifyRequest) => {
     const identity = contextOf(req)?.identity;
     return identity?.kind === "deviceToken" ? identity.peer : undefined;
+  };
+  /** 登录流与状态快照的发起方会话隔离标识（本机浏览器按 sessionId，跨机 Peer 代理按配对设备 ID）。 */
+  const clientOwnerKeyOf = (req: FastifyRequest): string => {
+    const identity = contextOf(req)?.identity;
+    if (identity?.kind === "cookie") return `session:${identity.sessionId}`;
+    if (identity?.kind === "deviceToken") return `peer:${identity.peer.id}`;
+    return "anonymous";
   };
   /** 记下这条 WebSocket 属于哪个会话：那个会话被退出时当场关掉。设备令牌来的没有会话，不记。 */
   const trackSocket = (req: FastifyRequest, socket: { close(code?: number, reason?: string): void; once(event: "close", fn: () => void): unknown }) => {
@@ -979,9 +1057,10 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     if (isUpgrade(req)) req.raw.socket.destroy();
   });
 
-  app.setErrorHandler((err: FastifyError | ConversationNotFoundError | LedgerRequestError | RouterTargetError | UploadError | PickFolderError | TunnelInputError, req, reply) => {
+  app.setErrorHandler((err: FastifyError | ConversationNotFoundError | LedgerRequestError | RouterTargetError | UploadError | PickFolderError | TunnelInputError | ProviderRequestError, req, reply) => {
     const reason = err.message;
     if (err instanceof PickFolderError) return fail(reply, codeOfStatus(err.statusCode), reason);
+    if (err instanceof ProviderRequestError) return fail(reply, codeOfStatus(err.statusCode), reason);
     if (err instanceof ConversationNotFoundError) return fail(reply, "not_found");
     if (err instanceof UploadError) return fail(reply, codeOfStatus(err.statusCode), reason);
     if (err instanceof LedgerRequestError) return fail(reply, err.code, reason);
@@ -1282,6 +1361,82 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       if (!opts.vendorSync) throw new HttpError(501, "vendor sync unavailable");
       const raw = parseWithSchema(vendorSyncApplyBodySchema, req.body) satisfies VendorSyncApplyRequest;
       return opts.vendorSync.apply(raw);
+    });
+
+    routes.get(API_PATHS.providers, async (req): Promise<ProvidersStatusResponse> => {
+      if (!opts.providers) {
+        return {
+          platform: serverInfo.platform,
+          gitInstalled: true,
+          canInstallGit: false,
+          gitJob: null,
+          providers: [],
+        };
+      }
+      const refresh = (req.query as { refresh?: unknown }).refresh === "1";
+      return opts.providers.getStatus({ refresh, ownerKey: clientOwnerKeyOf(req) });
+    });
+
+    routes.post(API_PATHS.providerGitInstall, async (req): Promise<ProvidersStatusResponse> => {
+      if (!opts.providers) throw new HttpError(501, "provider manager unavailable");
+      parseWithSchema(emptyStrictBodySchema, req.body ?? {});
+      return opts.providers.installGit(clientOwnerKeyOf(req));
+    });
+
+    routes.post("/api/providers/:vendor/install", async (req): Promise<ProviderStatusItem> => {
+      if (!opts.providers) throw new HttpError(501, "provider manager unavailable");
+      const vendor = parseVendorParam((req.params as { vendor?: unknown }).vendor);
+      parseWithSchema(emptyStrictBodySchema, req.body ?? {});
+      return opts.providers.install(vendor, clientOwnerKeyOf(req));
+    });
+
+    routes.post("/api/providers/:vendor/update", async (req): Promise<ProviderStatusItem> => {
+      if (!opts.providers) throw new HttpError(501, "provider manager unavailable");
+      const vendor = parseVendorParam((req.params as { vendor?: unknown }).vendor);
+      parseWithSchema(emptyStrictBodySchema, req.body ?? {});
+      return opts.providers.update(vendor, clientOwnerKeyOf(req));
+    });
+
+    routes.post("/api/providers/:vendor/job/cancel", async (req): Promise<ProviderStatusItem> => {
+      if (!opts.providers) throw new HttpError(501, "provider manager unavailable");
+      const vendor = parseVendorParam((req.params as { vendor?: unknown }).vendor);
+      const body = parseWithSchema(providerCancelJobBodySchema, req.body) satisfies ProviderCancelJobRequest;
+      return opts.providers.cancelJob(vendor, body, clientOwnerKeyOf(req));
+    });
+
+    routes.post("/api/providers/:vendor/auth/start", async (req): Promise<ProviderStatusItem> => {
+      if (!opts.providers) throw new HttpError(501, "provider manager unavailable");
+      const vendor = parseVendorParam((req.params as { vendor?: unknown }).vendor);
+      const body = parseWithSchema(providerStartAuthBodySchema, req.body) satisfies ProviderStartAuthRequest;
+      return opts.providers.startAuth(vendor, body, clientOwnerKeyOf(req));
+    });
+
+    routes.post("/api/providers/:vendor/auth/submit", async (req): Promise<ProviderStatusItem> => {
+      if (!opts.providers) throw new HttpError(501, "provider manager unavailable");
+      const vendor = parseVendorParam((req.params as { vendor?: unknown }).vendor);
+      const body = parseWithSchema(providerSubmitAuthBodySchema, req.body) satisfies ProviderSubmitAuthRequest;
+      return opts.providers.submitAuth(vendor, body, clientOwnerKeyOf(req));
+    });
+
+    routes.post("/api/providers/:vendor/auth/cancel", async (req): Promise<ProviderStatusItem> => {
+      if (!opts.providers) throw new HttpError(501, "provider manager unavailable");
+      const vendor = parseVendorParam((req.params as { vendor?: unknown }).vendor);
+      const body = parseWithSchema(providerCancelAuthBodySchema, req.body) satisfies ProviderCancelAuthRequest;
+      return opts.providers.cancelAuth(vendor, body, clientOwnerKeyOf(req));
+    });
+
+    routes.post("/api/providers/:vendor/auth/api-key", async (req): Promise<ProviderStatusItem> => {
+      if (!opts.providers) throw new HttpError(501, "provider manager unavailable");
+      const vendor = parseVendorParam((req.params as { vendor?: unknown }).vendor);
+      const body = parseWithSchema(providerSaveApiKeyBodySchema, req.body) satisfies ProviderSaveApiKeyRequest;
+      return opts.providers.saveApiKey(vendor, body, clientOwnerKeyOf(req));
+    });
+
+    routes.post("/api/providers/:vendor/auth/logout", async (req): Promise<ProviderStatusItem> => {
+      if (!opts.providers) throw new HttpError(501, "provider manager unavailable");
+      const vendor = parseVendorParam((req.params as { vendor?: unknown }).vendor);
+      const body = parseWithSchema(providerLogoutBodySchema, req.body ?? {}) satisfies ProviderLogoutRequest;
+      return opts.providers.logout(vendor, body, clientOwnerKeyOf(req));
     });
 
     // 输入框的“/”列表、“@”列表：后台按对话找目录和厂商，网页不传路径；问不到给空列表

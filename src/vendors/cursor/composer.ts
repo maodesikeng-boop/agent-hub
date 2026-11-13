@@ -193,11 +193,12 @@ export const cursorComposerBase: VendorComposerBase = {
 };
 
 export function createCursorComposer(deps: VendorComposerDeps): VendorComposer {
-  const userHome = deps.env?.HOME?.trim() || homedir();
   return {
     ...cursorComposerBase,
     async queryCommands(target: CommandsTarget, signal: AbortSignal): Promise<ComposerCommand[]> {
       if (signal.aborted) throw new Error("cursor commands query aborted");
+      const resolvedEnv = typeof deps.env === "function" ? deps.env() : deps.env;
+      const userHome = resolvedEnv?.HOME?.trim() || homedir();
       return collectLocalCursorCommands(target, userHome);
     },
   };

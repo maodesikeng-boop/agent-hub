@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { READONLY_SECRET_GLOBS, READONLY_SECRET_HOME_PATHS, buildReadonlyPolicy, connectorToolAllowed, type ReadonlyPolicy } from "./readonly-policy.ts";
+import {
+  READONLY_SECRET_GLOBS,
+  READONLY_SECRET_HOME_PATHS,
+  READONLY_SECRET_STATE_FILES,
+  buildReadonlyPolicy,
+  connectorToolAllowed,
+  type ReadonlyPolicy,
+} from "./readonly-policy.ts";
 
 const policy = (connectors: Partial<ReadonlyPolicy["connectors"]> = {}) => buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: "/Users/u/.agent-hub/state", connectors });
 
@@ -52,7 +59,8 @@ describe("buildReadonlyPolicy：密钥清单", () => {
     expect(p.secretPaths).toContain("/Users/u/.gemini/oauth_creds.json");
     expect(p.secretPaths).toContain("/Users/u/Library/Keychains");
     expect(p.secretPaths).toContain("/Users/u/.agent-hub/state/ui-token");
-    expect(p.secretPaths).toHaveLength(READONLY_SECRET_HOME_PATHS.length + 1);
+    expect(p.secretPaths).toContain("/Users/u/.agent-hub/state/provider-secrets.json");
+    expect(p.secretPaths).toHaveLength(READONLY_SECRET_HOME_PATHS.length + READONLY_SECRET_STATE_FILES.length);
     expect(p.secretPaths.every((x) => x.startsWith("/") && !x.includes("~"))).toBe(true);
   });
 

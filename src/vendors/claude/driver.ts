@@ -114,7 +114,7 @@ export interface ClaudeDriverOptions extends DriverOptions {
 }
 
 export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
-  readonly #claudePath: string;
+  readonly #claudePath: string | (() => string);
   readonly #readonlySpawn?: (base: SpawnCommand, input: ReadonlySandboxInput) => ScopedSpawn;
   readonly #platform: NodeJS.Platform;
 
@@ -123,6 +123,10 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     this.#claudePath = options.executablePath;
     this.#readonlySpawn = options.readonlySpawn;
     this.#platform = options.platform ?? process.platform;
+  }
+
+  #resolveClaudePath(): string {
+    return typeof this.#claudePath === "function" ? this.#claudePath() : this.#claudePath;
   }
 
   protected createSessionState(id: SessionId): SessionState {
@@ -419,7 +423,8 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         secretGlobs: [...files.readonly.secretGlobs],
       };
       const wrap = this.#readonlySpawn ?? ((base, input) => wrapInReadonlyOsSandbox(base, input, this.#platform));
-      launch = wrap({ command: this.#claudePath, args: claudeArgs }, roInput);
+      const exePath = this.#resolveClaudePath();
+      launch = wrap({ command: exePath, args: claudeArgs }, roInput);
       if (!launch.osSandboxed) {
         cleanupReadonlyTmp();
         throw new DriverError("spawn_failed", WORKER_NEEDS_OS_SANDBOX_MESSAGE);
@@ -435,9 +440,10 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       }
       childEnv = { ...childEnv, TMPDIR: privateTmp, TEMP: privateTmp, TMP: privateTmp };
     } else {
+      const exePath = this.#resolveClaudePath();
       launch = spawnInWriteScope(
         "claude",
-        { command: this.#claudePath, args: claudeArgs },
+        { command: exePath, args: claudeArgs },
         files.writeScope ?? null,
         this.opts.log,
         `session ${st.id}`,
@@ -445,7 +451,7 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       );
     }
     const child = await this.spawnDetachedChild(
-      this.#claudePath,
+      this.#resolveClaudePath(),
       launch.command,
       launch.args,
       row.cwd,

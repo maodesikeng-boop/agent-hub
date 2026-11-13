@@ -982,9 +982,10 @@ export abstract class BaseSessionDriver<
   ): Promise<ChildProcessWithoutNullStreams> {
     let spawned: { child: ChildProcessWithoutNullStreams; detached: boolean };
     try {
+      const resolvedDriverEnv = typeof this.opts.env === "function" ? this.opts.env() : this.opts.env;
       spawned = spawnOwnedProcess(command, args, {
         cwd,
-        env: buildChildEnv(process.env, { ...this.opts.env, ...extraEnv }),
+        env: buildChildEnv(process.env, { ...resolvedDriverEnv, ...extraEnv }),
         stdio: ["pipe", "pipe", "pipe"],
       });
     } catch (error) {

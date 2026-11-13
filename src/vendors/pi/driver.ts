@@ -161,7 +161,7 @@ interface SessionState extends BaseSessionState<Proc, Batch> {
 }
 
 export interface PiDriverOptions extends Omit<DriverOptions, "executablePath"> {
-  executablePath?: string;
+  executablePath?: string | (() => string);
   composer?: VendorComposerBase;
   homeDir?: string;
   writeScopeSpawn?: (base: SpawnCommand, scope: WriteScope | null) => ScopedSpawn;
@@ -171,7 +171,7 @@ export interface PiDriverOptions extends Omit<DriverOptions, "executablePath"> {
 const ZERO_RAW_COUNTS: PiRawTokenCounts = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
 
 export class PiDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
-  readonly #piPath: string;
+  readonly #piPath: string | (() => string);
   readonly #homeDir?: string;
   readonly #writeScopeSpawn?: (base: SpawnCommand, scope: WriteScope | null) => ScopedSpawn;
   readonly #readonlySpawn?: (base: SpawnCommand, input: ReadonlySandboxInput) => ScopedSpawn;
@@ -182,6 +182,10 @@ export class PiDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     this.#homeDir = options.homeDir;
     this.#writeScopeSpawn = options.writeScopeSpawn;
     this.#readonlySpawn = options.readonlySpawn;
+  }
+
+  #resolvePiPath(): string {
+    return typeof this.#piPath === "function" ? this.#piPath() : this.#piPath;
   }
 
   protected createSessionState(id: SessionId): SessionState {
@@ -546,17 +550,18 @@ export class PiDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     let launch: ScopedSpawn;
     let childEnv: Record<string, string> = { ...effectiveFiles.env };
 
+    const exePath = this.#resolvePiPath();
     if (readonlyPolicy === undefined) {
       const wrapWriteScope =
         this.#writeScopeSpawn ??
         ((base, scope) => spawnInWriteScope("pi", base, scope, this.opts.log, `session ${st.id}`));
-      launch = wrapWriteScope({ command: this.#piPath, args }, effectiveFiles.writeScope ?? null);
+      launch = wrapWriteScope({ command: exePath, args }, effectiveFiles.writeScope ?? null);
     } else {
       const home = realpathSync(this.#homeDir ?? homedir());
       const wrap = this.#readonlySpawn ?? ((base, input) => wrapInReadonlyOsSandbox(base, input));
       const privateTmp = mkdtempSync(join(realpathSync(tmpdir()), "agent-hub-ro-"));
       launch = wrap(
-        { command: this.#piPath, args },
+        { command: exePath, args },
         piReadonlySandboxInput({
           homeDir: home,
           tmpDir: privateTmp,
@@ -590,7 +595,7 @@ export class PiDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     };
 
     const child = await this.spawnDetachedChild(
-      this.#piPath,
+      exePath,
       launch.command,
       launch.args,
       row.cwd,

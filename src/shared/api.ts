@@ -204,6 +204,28 @@ export const API_PATHS = {
   vendorSyncPreview: "/api/vendor-sync/preview",
   /** POST（VendorSyncApplyRequest → VendorSyncApplyResponse）：先轮转备份再原子替换落盘与逐项软链。 */
   vendorSyncApply: "/api/vendor-sync/apply",
+
+  // ---- Settings → Providers 一键安装与界面内直接登录（支持 /d/<device>/api/providers/* 跨设备代理） ----
+  /** GET（可选 ?refresh=1）→ ProvidersStatusResponse：汇总全部已注册厂商安装、版本、就绪状态与在途任务。 */
+  providers: "/api/providers",
+  /** POST（{} → ProviderStatusItem）：启动指定厂商白名单后台安装任务。 */
+  providerInstall: (vendor: string) => `/api/providers/${encodeURIComponent(vendor)}/install`,
+  /** POST（{} → ProviderStatusItem）：启动指定厂商白名单后台更新任务。 */
+  providerUpdate: (vendor: string) => `/api/providers/${encodeURIComponent(vendor)}/update`,
+  /** POST（ProviderCancelJobRequest → ProviderStatusItem）：取消并回收正在运行的安装/更新任务。 */
+  providerJobCancel: (vendor: string) => `/api/providers/${encodeURIComponent(vendor)}/job/cancel`,
+  /** POST（{} → ProvidersStatusResponse）：Windows 免交互调用 winget 安装 Git.Git。 */
+  providerGitInstall: "/api/providers/environment/git/install",
+  /** POST（ProviderStartAuthRequest → ProviderStatusItem）：启动界面内浏览器 OAuth 或 Device Code 登录流。 */
+  providerAuthStart: (vendor: string) => `/api/providers/${encodeURIComponent(vendor)}/auth/start`,
+  /** POST（ProviderSubmitAuthRequest → ProviderStatusItem）：提交授权码或回环回调 URL。 */
+  providerAuthSubmit: (vendor: string) => `/api/providers/${encodeURIComponent(vendor)}/auth/submit`,
+  /** POST（ProviderCancelAuthRequest → ProviderStatusItem）：取消当前活跃登录流。 */
+  providerAuthCancel: (vendor: string) => `/api/providers/${encodeURIComponent(vendor)}/auth/cancel`,
+  /** POST（ProviderSaveApiKeyRequest → ProviderStatusItem）：原子保存 API Key 并刷新单家模型目录。 */
+  providerAuthApiKey: (vendor: string) => `/api/providers/${encodeURIComponent(vendor)}/auth/api-key`,
+  /** POST（ProviderLogoutRequest → ProviderStatusItem）：退出登录并清理对应受管密钥。 */
+  providerAuthLogout: (vendor: string) => `/api/providers/${encodeURIComponent(vendor)}/auth/logout`,
 } as const;
 
 export interface ConversationSnapshot {
