@@ -879,3 +879,35 @@ export const WIN_MXC_REQUEST_FILE_MAX_BYTES = 512 * 1024;
 export const WIN_MXC_BRIDGE_MAX_REQUEST_BYTES = HUB_MAX_BODY_BYTES + 64 * 1024;
 /** Windows MXC 回环 `hub` 桥接同时允许的最大活跃连接数。 */
 export const WIN_MXC_BRIDGE_MAX_CONCURRENT_CONNS = 32;
+
+// ---- Settings → Providers 一键安装与界面内直接登录（docs/providers-install-login-design.md 第 8.3 节）----
+/** 单次 CLI 安装或更新任务硬超时（15 分钟，兼顾慢网下载原生二进制）。 */
+export const PROVIDER_INSTALL_TIMEOUT_MS = 15 * 60_000;
+/** 单次浏览器 OAuth 或 Device Code 登录流有效期上限（5 分钟）。 */
+export const PROVIDER_AUTH_FLOW_TIMEOUT_MS = 5 * 60_000;
+/** `POST /auth/start` 首包最多等待捕获 `authorizeUrl`/`userCode` 的毫秒数（超时先回 `starting` 由轮询接力）。 */
+export const PROVIDER_AUTH_START_WAIT_MS = 800;
+/** 远端粘贴回环回调 URL 后向本机 `127.0.0.1:<port>` 转发的超时（10 秒）。 */
+export const PROVIDER_CALLBACK_FORWARD_TIMEOUT_MS = 10_000;
+/** 后台按需读取已装 CLI `--version` 的超时上限（5 秒）。 */
+export const PROVIDER_VERSION_PROBE_TIMEOUT_MS = 5_000;
+/** 执行原厂 `logout` 子命令的超时上限（10 秒）。 */
+export const PROVIDER_LOGOUT_TIMEOUT_MS = 10_000;
+/** 单个安装/更新任务保留的脱敏输出最大 UTF-8 字节数（16 KiB）。 */
+export const PROVIDER_JOB_LOG_MAX_BYTES = 16 * 1024;
+/** 单个安装/更新任务保留的最大行数（80 行）。 */
+export const PROVIDER_JOB_LOG_MAX_LINES = 80;
+/** 无换行进度条（`\r`）单行缓冲字符上限。 */
+export const PROVIDER_JOB_PARTIAL_LINE_MAX_CHARS = 4_096;
+/** 行下实时展示的单行进度短语最大字符数。 */
+export const PROVIDER_PROGRESS_LINE_MAX_CHARS = 120;
+/** 捕获的授权或验证 URL 最大字符长度。 */
+export const PROVIDER_AUTH_URL_MAX_CHARS = 8_192;
+/** 用户粘贴的授权码或回调 URL 最大字符长度。 */
+export const PROVIDER_AUTH_INPUT_MAX_CHARS = 8_192;
+/** 用户输入的 API Key / Token 最大字符长度。 */
+export const PROVIDER_API_KEY_MAX_CHARS = 2_048;
+/** `<stateDir>/provider-secrets.json` 读取体积硬上限（64 KiB）。 */
+export const PROVIDER_SECRETS_FILE_MAX_BYTES = 64 * 1024;
+/** 前端存在进行中安装或登录流时的状态轮询间隔（1 秒）。 */
+export const PROVIDER_ACTIVE_POLL_MS = 1_000;

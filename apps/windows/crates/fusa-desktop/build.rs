@@ -47,9 +47,7 @@ fn main() {
         .app_manifest(tauri_build::AppManifest::new().commands(&[
             "get_bootstrap_state",
             "retry_bootstrap",
-            "open_vendor_terminal",
             "open_logs",
-            "enter_workspace",
         ]))
         .windows_attributes(
             tauri_build::WindowsAttributes::new().window_icon_path("icons/icon.ico"),

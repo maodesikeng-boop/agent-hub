@@ -60,6 +60,7 @@ describe("厂商名单", () => {
     expect(browserUnsafeImports("src/vendors/registry.ts")).toEqual([]);
     expect(browserUnsafeImports("src/vendors/types.ts")).toEqual([]);
     expect(browserUnsafeImports("src/shared/vendors.ts")).toEqual([]);
+    expect(browserUnsafeImports("src/shared/providers.ts")).toEqual([]);
     // 反向确认检查器不是空跑：守护进程路径文件引了 node:* 与各家文件夹，必须被抓出
     expect(browserUnsafeImports("src/shared/paths.ts").length).toBeGreaterThan(0);
     expect(browserUnsafeImports("src/vendors/agy/paths.ts").length).toBeGreaterThan(0);
@@ -147,6 +148,41 @@ describe.each(AGENT_VENDORS)("厂商契约（守护进程侧）：%s", (id) => {
     expect(result.nonSyncable).toEqual([]);
     const globalTarget = sync!.skillTarget({ userHome: emptyHome, env: {} }, { kind: "global" });
     expect(["native", "symlink"]).toContain(globalTarget.mode);
+  });
+
+  it("S12 全厂商安装与界面内登录适配器：每家都提供 setup，三平台脚本源强制 https://，空主目录下只读 inspectAuth 不抛不建文件", async () => {
+    const setup = VENDOR_DAEMONS[id].setup;
+    expect(setup).toBeDefined();
+    for (const platform of ["darwin", "linux", "win32"]) {
+      const recipe = setup!.installRecipe(platform);
+      if (recipe.kind === "posix_script" || recipe.kind === "powershell_script") {
+        const parsed = new URL(recipe.scriptUrl);
+        expect(parsed.protocol, `${id} ${platform}`).toBe("https:");
+      } else {
+        expect(recipe.packageSpec.trim().length, `${id} ${platform}`).toBeGreaterThan(0);
+      }
+      const update = setup!.updateRecipe(platform);
+      expect(["reinstall", "cli_subcommand"]).toContain(update.kind);
+    }
+    const emptyHome = `/nonexistent/agent-hub-setup-contract-${id}`;
+    const inspected = await setup!.inspectAuth({
+      platform: "darwin",
+      userHome: emptyHome,
+      availability: "not_installed",
+      executablePath: () => `/nonexistent/${id}`,
+      installed: () => false,
+      env: () => ({ HOME: emptyHome }),
+      secrets: {
+        keys: () => [],
+        has: () => false,
+        getEnv: () => ({}),
+        set: () => {},
+        remove: () => {},
+        fingerprint: () => "0",
+      },
+    });
+    expect(existsSync(emptyHome)).toBe(false);
+    expect(inspected.methods.length).toBeGreaterThan(0);
   });
 
   it.todo("S10 readonly 为 os_sandbox 的厂商在没有 OS 沙箱时派只读被拒（现在对所有 Worker 一律要求 OS 沙箱，P4 再按家）");

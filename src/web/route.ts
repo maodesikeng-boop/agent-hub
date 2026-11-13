@@ -16,7 +16,16 @@ export type ScopedRoute = (
 ) & { device?: DeviceId };
 
 /** 手机设置的二级子页，顺序就是一级主页从上到下（docs/mobile-settings-design.md 第 2.1 节）。 */
-export const SETTINGS_SECTIONS = ["scale", "notifications", "vendor-sync", "computers", "sign-in", "browsers", "public-access"] as const;
+export const SETTINGS_SECTIONS = [
+  "scale",
+  "notifications",
+  "providers",
+  "vendor-sync",
+  "computers",
+  "sign-in",
+  "browsers",
+  "public-access",
+] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 /** 手机设置页：不写 section 是一级主页。 */
 export type SettingsRoute = { view: "settings"; section?: SettingsSection; device?: undefined };

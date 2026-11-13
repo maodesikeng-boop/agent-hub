@@ -306,8 +306,15 @@ export function codexAuthFileAvailability(env: NodeJS.ProcessEnv, homeDir: strin
 export function createCodexCatalogSource(options: VendorCatalogSourceOptions): VendorCatalogSource {
   return {
     ...codexCatalogProbe,
-    query: (signal) => queryCodexCatalog({ codexPath: options.path, cwd: options.cwd, ...(options.env ? { env: options.env } : {}), signal }),
-    confirm: async () => codexAuthFileAvailability(options.env ?? process.env, options.cwd),
+    query: (signal) => {
+      const codexPath = typeof options.path === "function" ? options.path() : options.path;
+      const env = typeof options.env === "function" ? options.env() : options.env;
+      return queryCodexCatalog({ codexPath, cwd: options.cwd, ...(env ? { env } : {}), signal });
+    },
+    confirm: async () => {
+      const env = typeof options.env === "function" ? options.env() : (options.env ?? process.env);
+      return codexAuthFileAvailability(env, options.cwd);
+    },
     installed: options.installed,
     ...(options.fingerprint ? { fingerprint: options.fingerprint } : {}),
   };

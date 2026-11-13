@@ -245,11 +245,15 @@ export const claudeCatalogProbe: VendorCatalogProbe = {
 
 /** 名单那次查询：发 initialize 拿整个回应（models 和 account 一起），看不出登录时才另跑 `claude auth status`。 */
 export function createClaudeCatalogSource(options: VendorCatalogSourceOptions): VendorCatalogSource {
-  const query = { claudePath: options.path, cwd: options.cwd, ...(options.env ? { env: options.env } : {}) };
+  const resolveOpts = () => {
+    const claudePath = typeof options.path === "function" ? options.path() : options.path;
+    const env = typeof options.env === "function" ? options.env() : options.env;
+    return { claudePath, cwd: options.cwd, ...(env ? { env } : {}) };
+  };
   return {
     ...claudeCatalogProbe,
-    query: (signal) => queryClaudeInitialize({ ...query, signal }),
-    confirm: (signal) => queryClaudeAuthStatus({ ...query, signal }),
+    query: (signal) => queryClaudeInitialize({ ...resolveOpts(), signal }),
+    confirm: (signal) => queryClaudeAuthStatus({ ...resolveOpts(), signal }),
     installed: options.installed,
     ...(options.fingerprint ? { fingerprint: options.fingerprint } : {}),
   };

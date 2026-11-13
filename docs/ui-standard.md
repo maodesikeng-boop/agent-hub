@@ -114,6 +114,13 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
 | 创建登录链接 / 复制链接 / 复制邀请码 / 复制网址 / 分享… | Create sign-in link / Copy link / Copy code / Copy URL / Share… |
 | 移除电脑… / 退出此浏览器 / 退出所有浏览器… | Remove computer… / Sign out this browser / Sign out all browsers… |
 | 待批准 / 需留意 | Pending / Attention |
+| 厂商管理 / 运行环境 / 子模型商 / 刷新 | Providers / Environment / Model provider / Refresh |
+| 已就绪数 / 已登录 / 已配置密钥 / 已配置数 | N ready / Signed in / API key configured / N configured |
+| 安装中 / 更新中 / 等待浏览器完成授权 | Installing… / Updating… / Waiting for browser… |
+| 安装 / 更新 / 登录… / 账号… / 切换账号… / 退出登录 | Install / Update / Sign in… / Account… / Sign in with another account… / Sign out |
+| 在浏览器中继续 / 打开登录页 / 打开验证页 / 提交 | Continue in browser / Open sign-in page / Open verification page / Submit |
+| 查看日志 / 收起日志 / 管理厂商… | Show log / Hide log / Manage providers… |
+| 粘贴授权码或回调网址占位 | Paste code or redirect URL… |
 
 ## 4. 颜色
 
@@ -238,7 +245,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - `rounded-2xl border border-border bg-background p-6`，遮罩 `bg-black/30`。
 - 宽度三档：默认 520px（新建项目经理）；二次确认等窄弹窗 `className="max-w-110"`；全局设置是双栏的 780px（见下面）。
 - **全局设置按外壳分流**（双端共用 `src/web/settings-model.ts`）：电脑外壳用双栏弹窗 `SettingsDialog`（照 Grok Bot / Claude desktop 的双栏设置页）；手机外壳不挂弹窗，走第 20 条整屏钻取路由页。`SettingsDialog` 宽 `max-w-195`，高度固定 `h-[min(35rem,calc(100%-3rem))]`（切分类时弹窗不跳），弹窗自己 `p-0 gap-0`，标题“设置”只给读屏（`titleClassName="sr-only"`）。
-  - 左栏分类（Radix Tabs，`orientation="vertical"`）：宽 192px（`w-48`），`bg-sidebar`，右边 1px `border-border`，`px-3 py-4`；分类项 `h-9 rounded-xl px-3 gap-3`，16px 线条图标（`stroke-[1.5]`）+ 15px 名字，悬停 `bg-sidebar-hover`，选中 `bg-sidebar-active`（只靠底色）。分类和顺序在 `SettingsDialog.tsx` 的 `SECTIONS` 一处：通用（`Settings`：外观、通知、跨厂商同步）、电脑（`Monitor`：你的电脑、已连上的电脑；守护进程支持联机才有，有就默认选它，没有默认通用）、登录与安全（`Shield`：在手机上登录、已登录的浏览器、公网入口）。跨厂商同步行点 `Scan…` 打开独立的 `Sync preview` 确认弹窗（`DialogBody` 纵向滚动展示脱敏后的 `MCP servers`、`Skills` 与只读说明的 `Cloud connectors`，每项用 `Switch` 控制并集同步或取消勾选移除，厂商标签由接口数据驱动并用间距隔开、不用 `·` 拼接，底部固定 `Cancel` 与 `Sync`）。
+  - 左栏分类（Radix Tabs，`orientation="vertical"`）：宽 192px（`w-48`），`bg-sidebar`，右边 1px `border-border`，`px-3 py-4`；分类项 `h-9 rounded-xl px-3 gap-3`，16px 线条图标（`stroke-[1.5]`）+ 15px 名字，悬停 `bg-sidebar-hover`，选中 `bg-sidebar-active`（只靠底色）。分类和顺序在 `SettingsDialog.tsx` 的 `SECTIONS` 一处：通用（`Settings`：外观、通知）、厂商（`Blocks`：各厂商一键安装/更新与界面内直接登录，及下方 `Integrations → Vendor sync`）、电脑（`Monitor`：你的电脑、已连上的电脑；守护进程支持联机才有，未显式传入 `defaultSection` 时有联机默认选它，没有默认通用）、登录与安全（`Shield`：在手机上登录、已登录的浏览器、公网入口）。跨厂商同步行点 `Scan…` 打开独立的 `Sync preview` 确认弹窗（`DialogBody` 纵向滚动展示脱敏后的 `MCP servers`、`Skills` 与只读说明的 `Cloud connectors`，每项用 `Switch` 控制并集同步或取消勾选移除，厂商标签由接口数据驱动并用间距隔开、不用 `·` 拼接，底部固定 `Cancel` 与 `Sync`）。
   - 右栏：`p-6`，自己纵向滚动；最上面是分类名（17px、600，和下面的组隔 24px），下面若干分组（第 9 条），组之间 24px。关闭按钮照常在右上角。
   - 窄屏（640px 以下）：左栏变成顶上一排横着的分类（只有字、不放图标，`border-b`，横向能滚，右边 `pr-14` 让出关闭按钮），右栏在下面占满。
   - 分类名固定在右栏顶上（右边 `pr-14` 让出关闭按钮），只有下面的分组滚动。
@@ -495,8 +502,8 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - 聊天 `#/c/<id>`、Piece `#/w/<id>`、资料 `#/pm/<id>` 一次显示整屏一页。聊天顶栏只放 36px 返回箭头（触屏热区至少 44px）（措辞：返回 → Back）、头像名字、Pieces 开关；输入框占位 `Message…`，不自动聚焦。手机输入框底距为安全区 + 8px。
 - Pieces 使用 `ui/drawer.tsx` 底部抽屉，共用 `RailGroups` 三组内容；没有 Piece 和提问时隐藏开关。新提问只亮点，不自动弹出；点行先关抽屉再导航，提问复用消息 focus。
 - 层级：列表 → 聊天 → Piece/资料。进下一层 push，`history.state = { hub: true, previous: <上一页网址> }`；同层切换（Piece 切 Piece、聊天里跳到别的聊天）replace 当前条目并保留原 state；其余 replace 不写标记。顶栏返回只在 `previous` 正好是上级时 `history.back()`，否则 replace 到上级（聊天到列表、Piece/资料到所属聊天），直达、同层切换后都不循环。抽屉里点提问等同返回所属聊天。无效路由在目标设备快照就绪后 replace 到列表；刚新建、WebSocket 还没同步到的对话不算无效。路由、设备变化或抽屉内容消失时关闭抽屉。
-- 全局设置采用整屏二级路由钻取（`src/web/mobile/settings/`）：列表 `#/` → 一级设置 `#/settings` → 二级子页 `#/settings/<section>`（`scale`、`notifications`、`vendor-sync`、`computers`、`sign-in`、`browsers`、`public-access`），返回统一走 `mobileBack`，不调 `withViewTransition`；在 `#/settings*` 下拉宽切回电脑外壳时自动打开对应分类的 `SettingsDialog` 并将网址替换回首页。
-- 手机设置页画布底色为 `bg-surface-sidebar`，内容左右边距 `px-4`（16px），组间距 `gap-6`（24px）；打开一级主页零额外 HTTP 请求，进入子页时一级主页用 `<Activity mode="hidden">` 保留滚动位置；离开 `#/settings/sign-in` 立即停止会话轮询与倒计时。
+- 全局设置采用整屏二级路由钻取（`src/web/mobile/settings/`）：列表 `#/` → 一级设置 `#/settings`（`General`、`Providers`、`Computers`、`Security & Access` 四组，其中 `Providers` 组含 `Providers` 与 `Vendor sync` 两行）→ 二级子页 `#/settings/<section>`（`scale`、`notifications`、`providers`、`vendor-sync`、`computers`、`sign-in`、`browsers`、`public-access`），返回统一走 `mobileBack`，不调 `withViewTransition`；在 `#/settings*` 下拉宽切回电脑外壳时自动打开对应分类的 `SettingsDialog`（`providers` 与 `vendor-sync` 均映射到桌面 `Providers` 分类）并将网址替换回首页。
+- 手机设置页画布底色为 `bg-surface-sidebar`，内容左右边距 `px-4`（16px），组间距 `gap-6`（24px）；打开一级主页零额外 HTTP 请求（`Providers` 行摘要按 `WeakMap` 从已有缓存读取），进入子页时一级主页用 `<Activity mode="hidden">` 保留滚动位置；离开 `#/settings/sign-in` 或 `#/settings/providers` 立即停止轮询与倒计时。
 
 ## 21. Router 工作台：待拍板托盘和时间流
 

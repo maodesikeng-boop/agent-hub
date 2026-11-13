@@ -18,11 +18,11 @@ export const parseClaudeCommands = parseComposerCommands;
 export const claudeComposerBase: VendorComposerBase = createSpecComposerBase("claude");
 
 export interface ClaudeComposerOptions {
-  executablePath: string;
+  executablePath: string | (() => string);
   /** 起一个 claude 发 initialize 控制请求、返回回应（catalog.ts 的 queryClaudeInitialize；这里不直接引它，见文件开头）。 */
   queryInitialize: (options: ClaudeModelQueryOptions) => Promise<Record<string, unknown>>;
   /** 起 claude 的环境变量，默认守护进程自己的。 */
-  env?: Record<string, string | undefined>;
+  env?: Record<string, string | undefined> | (() => Record<string, string | undefined>);
   timeoutMs?: number;
 }
 
@@ -30,13 +30,15 @@ export function createClaudeComposer(options: ClaudeComposerOptions): VendorComp
   return {
     ...claudeComposerBase,
     async queryCommands(target: CommandsTarget, signal: AbortSignal) {
+      const claudePath = typeof options.executablePath === "function" ? options.executablePath() : options.executablePath;
+      const env = typeof options.env === "function" ? options.env() : options.env;
       const response = await options.queryInitialize({
-        claudePath: options.executablePath,
+        claudePath,
         cwd: target.cwd,
         addDirs: target.addDirs,
         timeoutMs: options.timeoutMs ?? COMMANDS_QUERY_TIMEOUT_MS,
         signal,
-        ...(options.env ? { env: options.env } : {}),
+        ...(env ? { env } : {}),
       });
       const commands = parseClaudeCommands(response.commands);
       if (commands === null) throw new Error("initialize 回应里没有 commands");

@@ -9,8 +9,6 @@
     "core:event:allow-unlisten",
     "allow-get-bootstrap-state",
     "allow-retry-bootstrap",
-    "allow-open-vendor-terminal",
-    "allow-open-logs",
-    "allow-enter-workspace"
+    "allow-open-logs"
   ]
 }

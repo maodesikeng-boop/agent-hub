@@ -117,9 +117,9 @@ export const codexComposerBase: VendorComposerBase = {
 };
 
 export interface CodexComposerOptions {
-  executablePath?: string;
+  executablePath?: string | (() => string);
   querySkills?: (options: CodexModelQueryOptions) => Promise<unknown>;
-  env?: Record<string, string | undefined>;
+  env?: Record<string, string | undefined> | (() => Record<string, string | undefined>);
   timeoutMs?: number;
 }
 
@@ -131,13 +131,18 @@ export function createCodexComposer(options?: CodexComposerOptions): VendorCompo
         return [...CODEX_BUILTIN_COMMANDS];
       }
       const query = options.querySkills ?? queryCodexSkills;
+      const codexPath =
+        typeof options.executablePath === "function"
+          ? options.executablePath()
+          : (options.executablePath ?? "codex");
+      const env = typeof options.env === "function" ? options.env() : options.env;
       const raw = await query({
-        codexPath: options.executablePath ?? "codex",
+        codexPath,
         cwd: target.cwd,
         addDirs: target.addDirs,
         timeoutMs: options.timeoutMs ?? COMMANDS_QUERY_TIMEOUT_MS,
         signal,
-        ...(options.env ? { env: options.env } : {}),
+        ...(env ? { env } : {}),
       });
       const commands = parseCodexCommands(raw);
       if (commands === null) throw new Error("codex skills/list 回应里没有可识别的列表");

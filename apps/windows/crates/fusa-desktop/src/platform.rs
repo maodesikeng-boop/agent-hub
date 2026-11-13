@@ -1,9 +1,8 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
 #[cfg(not(target_os = "windows"))]
-use std::process::Stdio;
+use std::process::{Command, Stdio};
 
-use fusa_supervisor::{refresh_current_process_path, NativeRuntimeConfig};
+use fusa_supervisor::NativeRuntimeConfig;
 use url::Url;
 
 /// 校验本地目录不为空且不位于 UNC 网络共享上（ACL、命名管道与 SQLite 锁要求本机卷）。
@@ -402,49 +401,5 @@ pub fn open_log_file_or_dir(log_path: &Path) -> Result<(), String> {
             .spawn()
             .map(|_| ())
             .map_err(|e| e.to_string())
-    }
-}
-
-/// 为用户一键打开带最新注册表 `PATH` 的 Windows 原生交互式终端（优先 `wt.exe`，回退 `pwsh.exe` / `powershell.exe`），用于安装 Git 或登录厂商 CLI。
-pub fn spawn_interactive_native_terminal() -> Result<(), String> {
-    let refreshed_path = refresh_current_process_path(&[]);
-
-    #[cfg(target_os = "windows")]
-    {
-        let home_dir = std::env::var_os("USERPROFILE")
-            .map(PathBuf::from)
-            .filter(|p| p.is_dir());
-
-        if let Some(local_app) = std::env::var_os("LOCALAPPDATA") {
-            let wt_path = PathBuf::from(local_app).join(r"Microsoft\WindowsApps\wt.exe");
-            if wt_path.is_file() {
-                let mut wt = Command::new(&wt_path);
-                if let Some(ref dir) = home_dir {
-                    wt.arg("-d").arg(dir);
-                }
-                wt.env("PATH", &refreshed_path);
-                if wt.spawn().is_ok() {
-                    return Ok(());
-                }
-            }
-        }
-
-        for shell in ["pwsh.exe", "powershell.exe", "cmd.exe"] {
-            let mut cmd = Command::new(shell);
-            if let Some(ref dir) = home_dir {
-                cmd.current_dir(dir);
-            }
-            cmd.env("PATH", &refreshed_path);
-            if cmd.spawn().is_ok() {
-                return Ok(());
-            }
-        }
-        Err("无法打开本机终端（wt.exe / powershell.exe / cmd.exe）".to_string())
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = refreshed_path;
-        Err("原生交互终端快捷入口仅在 Windows 宿主上可用".to_string())
     }
 }

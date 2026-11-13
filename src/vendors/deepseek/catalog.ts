@@ -250,11 +250,12 @@ function hasApiKeyInDotEnv(content: string): boolean {
  */
 export function hasDeepSeekLocalCredentials(
   env: Readonly<Record<string, string | undefined>> = process.env,
+  explicitUserHome?: string,
 ): boolean {
   if (typeof env.DEEPSEEK_API_KEY === "string" && env.DEEPSEEK_API_KEY.trim() !== "") {
     return true;
   }
-  const userHome = env.HOME?.trim() || homedir();
+  const userHome = explicitUserHome?.trim() || env.HOME?.trim() || env.USERPROFILE?.trim() || homedir();
   const dshHome = resolveDeepSeekHome(userHome, env);
   const credYaml = readBoundedUtf8(join(dshHome, ".credentials.yaml"));
   if (credYaml !== null && hasCredentialsInYaml(credYaml)) {
@@ -269,13 +270,14 @@ export function hasDeepSeekLocalCredentials(
 
 async function queryDeepSeekCatalog(options: {
   env?: Readonly<Record<string, string | undefined>>;
+  userHome?: string;
   signal?: AbortSignal;
 }): Promise<DeepSeekCatalogProbeResult> {
   if (options.signal?.aborted) {
     throw new Error("cancelled");
   }
   return {
-    hasCredentials: hasDeepSeekLocalCredentials(options.env ?? process.env),
+    hasCredentials: hasDeepSeekLocalCredentials(options.env ?? process.env, options.userHome),
   };
 }
 
@@ -295,11 +297,14 @@ export const deepseekCatalogProbe: VendorCatalogProbe = {
 export function createDeepSeekCatalogSource(options: VendorCatalogSourceOptions): VendorCatalogSource {
   return {
     ...deepseekCatalogProbe,
-    query: (signal) =>
-      queryDeepSeekCatalog({
-        ...(options.env ? { env: options.env } : {}),
+    query: (signal) => {
+      const env = typeof options.env === "function" ? options.env() : options.env;
+      return queryDeepSeekCatalog({
+        ...(env ? { env } : {}),
+        userHome: options.cwd,
         signal,
-      }),
+      });
+    },
     installed: options.installed,
     ...(options.fingerprint ? { fingerprint: options.fingerprint } : {}),
   };

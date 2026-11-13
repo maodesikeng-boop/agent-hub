@@ -44,7 +44,7 @@ export interface LaunchPreparerOptions {
   /** hub 外壳所在目录（paths.ts 的 hubBinDir），放在 PATH 最前面。 */
   hubBinDir: string;
   /** 接在 hubBinDir 后面的 PATH，默认守护进程自己的 process.env.PATH。 */
-  basePath?: string;
+  basePath?: string | (() => string);
   /** 这台设备上各家厂商的状态（缓存里的，不等查询）：项目经理提示词只列能选的。不给就全列。 */
   vendorAvailability?: () => VendorAvailabilityMap;
 }
@@ -72,9 +72,13 @@ function sessionRole(ctx: LaunchContext): SessionRole {
  */
 export function createLaunchPreparer(options: LaunchPreparerOptions): (session: AgentSessionRow) => Promise<LaunchFiles> {
   const { launchDir, dataDir, stateDir, worktreesDir, getLaunchContext, tokens, hubSock, hubBinDir } = options;
-  const basePath = options.basePath ?? process.env.PATH ?? process.env.Path ?? "";
+  const resolveBasePath = () =>
+    typeof options.basePath === "function"
+      ? options.basePath()
+      : (options.basePath ?? process.env.PATH ?? process.env.Path ?? "");
   const homeDir = realpathOr(options.homeDir ?? homedir());
   return async (session) => {
+    const basePath = resolveBasePath();
     if (session.role === "assistant") {
       return prepareRouterSandboxLaunch(session, {
         launchDir,

@@ -3,7 +3,16 @@
 // 一级主页 0 次 HTTP 请求、7 个子页与底部 Drawer 的确认与表单流程、离开扫码页后轮询与倒计时清零。
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { BrowserSessionInfo, DeviceInfo, TunnelStatus, VendorSyncPreviewResponse } from "../../../shared/index.ts";
+import {
+  AGENT_VENDORS,
+  PROVIDER_ACTIVE_POLL_MS,
+  vendorLabel,
+  type BrowserSessionInfo,
+  type DeviceInfo,
+  type ProvidersStatusResponse,
+  type TunnelStatus,
+  type VendorSyncPreviewResponse,
+} from "../../../shared/index.ts";
 import { App } from "../../App.tsx";
 import type { DeviceView } from "../../devices.ts";
 import type { NotifySettings } from "../../notify.ts";
@@ -125,6 +134,8 @@ describe("App 路由接入（手机外壳）", () => {
     expect(screen.queryByRole("tablist")).toBeNull();
     expect(screen.getByRole("button", { name: /Interface scale/ })).toHaveTextContent("Large");
     expect(screen.getByRole("button", { name: /Notifications/ })).toHaveTextContent("Off");
+    expect(screen.getByRole("region", { name: "Providers" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Providers/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Vendor sync/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Sign in on another device/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Signed-in browsers/ })).toBeInTheDocument();
@@ -182,15 +193,15 @@ describe("App 路由接入（手机外壳）", () => {
   });
 
   it("跨断点：在 #/settings* 把窗口切回桌面外壳，网址回首页并打开桌面双栏 SettingsDialog 对应分类", async () => {
-    history.replaceState(null, "", "/#/settings/browsers");
+    history.replaceState(null, "", "/#/settings/vendor-sync");
     const { media } = bootMobile();
-    expect(await screen.findByRole("heading", { level: 1, name: "Signed-in browsers" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 1, name: "Vendor sync" })).toBeInTheDocument();
     act(() => {
       media.mobile = false;
       media.listeners.forEach((cb) => cb());
     });
     const tablist = await screen.findByRole("tablist", { name: "Settings categories" });
-    expect(within(tablist).getByRole("tab", { name: "Security & Access" })).toHaveAttribute("aria-selected", "true");
+    expect(within(tablist).getByRole("tab", { name: "Providers" })).toHaveAttribute("aria-selected", "true");
     await waitFor(() => expect(location.hash).toBe("#/router"));
   });
 });
@@ -206,6 +217,7 @@ describe("一级设置主页", () => {
     };
     renderSettings("#/settings", { notify: notifyOf({ enabled: true }), devices });
     expect(screen.getByRole("region", { name: "General" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Providers" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Computers" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Security & Access" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Notifications/ })).toHaveTextContent(/On$/);
@@ -557,5 +569,104 @@ describe("子页", () => {
     expect(screen.getByRole("button", { name: "Copy command" })).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Public access" })).toHaveAttribute("aria-checked", "true");
     expect(onChanged).toHaveBeenCalled();
+  });
+
+  it("Providers 子页与底部抽屉：进子页拉取状态、一级主页回显 N ready 或 Attention，抽屉全宽防自动纠错输入保存 API Key，离开子页停止轮询", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const api = new FakeApi(makeSnapshot({}));
+    const v0 = AGENT_VENDORS[0]!;
+    const v1 = AGENT_VENDORS[1]!;
+    let statusBody: ProvidersStatusResponse = {
+      platform: "darwin",
+      gitInstalled: true,
+      canInstallGit: false,
+      gitJob: null,
+      providers: AGENT_VENDORS.map((vendor) => ({
+        vendor,
+        label: vendorLabel(vendor),
+        installed: vendor === v0 || vendor === v1,
+        version: vendor === v0 || vendor === v1 ? "1.2.0" : null,
+        availability: vendor === v0 ? "signed_out" : "not_installed",
+        accountSummary: null,
+        canInstall: vendor !== v0 && vendor !== v1,
+        canUpdate: vendor === v0 || vendor === v1,
+        canSignOut: false,
+        authMethods: [{ id: "api_key", kind: "api_key", label: "API key", placeholder: "sk-..." }],
+        job:
+          vendor === v1
+            ? {
+                jobId: "m-job-1",
+                kind: "install",
+                phase: "running",
+                progressLine: "Installing package…",
+                error: null,
+                logTail: "",
+                startedAt: 100,
+                finishedAt: null,
+              }
+            : null,
+        authFlow: null,
+      })),
+    };
+    api.providersStatus = () => ({ status: 200, body: statusBody });
+    api.providerAuthApiKey = (vendor) => {
+      const updated = {
+        ...statusBody.providers.find((p) => p.vendor === vendor)!,
+        availability: "available" as const,
+        accountSummary: "API key configured",
+        canSignOut: true,
+      };
+      statusBody = {
+        ...statusBody,
+        providers: statusBody.providers.map((p) => (p.vendor === vendor ? updated : p)),
+      };
+      return { status: 200, body: updated };
+    };
+    api.install();
+
+    renderSettings("#/settings");
+    expect(api.calls).toEqual([]);
+
+    fireEvent.click(screen.getByRole("button", { name: /^Providers/ }));
+    expect(location.hash).toBe("#/settings/providers");
+    const row0 = await screen.findByTestId(`provider-row-${v0}`);
+    expect(row0.className).toContain("min-h-12");
+
+    // 此时 0 家就绪：退回一级主页可见琥珀点与 Attention
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await waitFor(() => expect(location.hash).toBe("#/settings"));
+    expect(screen.getByRole("button", { name: /^Providers/ })).toHaveTextContent("Attention");
+    expect(screen.getByTestId("providers-attention")).toHaveClass("bg-caution");
+
+    // 离开子页后进行中任务的轮询已自动停止
+    const getCountOnHome = api.callsTo("GET", /^\/api\/providers$/).length;
+    await act(() => vi.advanceTimersByTimeAsync(PROVIDER_ACTIVE_POLL_MS * 3));
+    expect(api.callsTo("GET", /^\/api\/providers$/)).toHaveLength(getCountOnHome);
+
+    // 重新进入 #/settings/providers，点 Sign in… 拉起底部抽屉保存 API Key
+    fireEvent.click(screen.getByRole("button", { name: /^Providers/ }));
+    const row0Again = await screen.findByTestId(`provider-row-${v0}`);
+    fireEvent.click(within(row0Again).getByRole("button", { name: /Sign in/ }));
+    const drawer = await screen.findByRole("dialog", { name: `Sign in to ${vendorLabel(v0)}` });
+    const keyInput = within(drawer).getByPlaceholderText("sk-...");
+    expect(keyInput.className).toContain("h-11");
+    expect(keyInput.className).toContain("w-full");
+    expect(keyInput).toHaveAttribute("autocapitalize", "none");
+    expect(keyInput).toHaveAttribute("autocorrect", "off");
+    expect(keyInput).toHaveAttribute("spellcheck", "false");
+    const saveBtn = within(drawer).getByRole("button", { name: "Save" });
+    expect(saveBtn.className).toContain("h-11");
+    expect(saveBtn.className).toContain("w-full");
+    expect(saveBtn).toBeDisabled();
+
+    fireEvent.change(keyInput, { target: { value: "sk-mobile-test" } });
+    fireEvent.click(saveBtn);
+    await waitFor(() => expect(api.callsTo("POST", new RegExp(`^/api/providers/${v0}/auth/api-key$`))).toHaveLength(1));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    // 回到一级主页，摘要已变为 "1 ready" 且琥珀点消失
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Providers/ })).toHaveTextContent("1 ready"));
+    expect(screen.queryByTestId("providers-attention")).toBeNull();
   });
 });

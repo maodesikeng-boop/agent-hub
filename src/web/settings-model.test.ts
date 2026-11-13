@@ -2,7 +2,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { API_PATHS, type BrowserSessionInfo, type DeviceInfo, type StateSnapshot, type VendorSyncPreviewResponse } from "../shared/index.ts";
+import {
+  API_PATHS,
+  type BrowserSessionInfo,
+  type DeviceInfo,
+  type ProviderAuthMethodDescriptor,
+  type StateSnapshot,
+  type VendorSyncPreviewResponse,
+} from "../shared/index.ts";
 import { ChoiceRows } from "./components/ChoiceRows.tsx";
 import { ComputersSection } from "./components/DeviceSettings.tsx";
 import { ModeRows } from "./components/ModeRows.tsx";
@@ -17,12 +24,16 @@ import {
   NOTIFY_BLOCKED,
   SESSIONS_POLL_MS,
   TUNNEL_STATE_SPECS,
+  defaultProviderAuthMethodId,
   describeComputersSummary,
   describeNotifySummary,
+  describeProvidersSummary,
   describePublicEntrySummary,
+  extractProviderAuthTargets,
   useAddDevice,
   useBrowserSessions,
   useCachedBrowserSessionsSummary,
+  useCachedProvidersSummary,
   useCopyFeedback,
   useDeviceInvite,
   useDeviceRemove,
@@ -33,6 +44,7 @@ import {
   useTunnelRetry,
   useUiScaleSetting,
   useVendorSyncSetting,
+  visibleAuthMethodsForTarget,
 } from "./settings-model.ts";
 import { useShellModel } from "./shell-model.ts";
 import { initialState } from "./state.ts";
@@ -734,5 +746,83 @@ describe("shell-model deviceSettings 引用稳定", () => {
     });
     await waitFor(() => expect(result.current.content!.deviceSettings?.tunnel?.state).toBe("retrying"));
     expect(result.current.content!.deviceSettings).not.toBe(initialRef);
+  });
+});
+
+describe("Providers 摘要 WeakMap 缓存与登录方法纯函数", () => {
+  it("describeProvidersSummary：未加载返回 undefined，0 家就绪返回 Attention + 琥珀点，N 家就绪返回 N ready，同一数组引用恒定", () => {
+    expect(describeProvidersSummary(undefined)).toEqual({ summary: undefined, attention: false });
+    expect(describeProvidersSummary([])).toBe(describeProvidersSummary(null));
+
+    const noneReady = [{ availability: "not_installed" as const }, { availability: "signed_out" as const }];
+    const r0 = describeProvidersSummary(noneReady);
+    expect(r0).toEqual({ summary: "Attention", attention: true });
+    expect(describeProvidersSummary(noneReady)).toBe(r0);
+
+    const fourReady = [
+      { availability: "available" as const },
+      { availability: "available" as const },
+      { availability: "signed_out" as const },
+      { availability: "available" as const },
+      { availability: "not_installed" as const },
+      { availability: "available" as const },
+    ];
+    const r4 = describeProvidersSummary(fourReady);
+    expect(r4).toEqual({ summary: "4 ready", attention: false });
+    expect(r4.summary).not.toMatch(/[·|/]/);
+    expect(describeProvidersSummary(fourReady)).toBe(r4);
+  });
+
+  it("useCachedProvidersSummary：打开时 0 次 HTTP 请求，只读已有缓存", () => {
+    resetQueryClient();
+    const api = new FakeApi(makeSnapshot({}));
+    api.install();
+    const { result } = renderHook(() => useCachedProvidersSummary());
+    expect(result.current).toEqual({ summary: undefined, attention: false });
+    expect(api.calls).toEqual([]);
+  });
+
+  it("defaultProviderAuthMethodId 与多子模型商过滤：远端自动优选 device_code，子目标按 targetIds 精准过滤", () => {
+    const methods: readonly ProviderAuthMethodDescriptor[] = [
+      {
+        id: "browser",
+        kind: "browser_oauth",
+        label: "Browser",
+        manualInput: "callback_url",
+        preferDeviceCodeWhenRemote: true,
+      },
+      { id: "device_code", kind: "device_code", label: "Device code" },
+      { id: "api_key", kind: "api_key", label: "API key", placeholder: "sk-..." },
+    ];
+    expect(defaultProviderAuthMethodId(methods, false)).toBe("browser");
+    expect(defaultProviderAuthMethodId(methods, true)).toBe("device_code");
+
+    const aggregated: readonly ProviderAuthMethodDescriptor[] = [
+      {
+        id: "api_key",
+        kind: "api_key",
+        label: "API key",
+        placeholder: "sk-...",
+        targets: [
+          { id: "sub-key-only", label: "KeyOnly", configured: false },
+          { id: "sub-oauth", label: "WithOAuth", configured: true, supportsOauth: true },
+        ],
+      },
+      {
+        id: "browser",
+        kind: "browser_oauth",
+        label: "Browser",
+        manualInput: "code_or_callback",
+        targetIds: ["sub-oauth"],
+      },
+      { id: "device_code", kind: "device_code", label: "Device code", targetIds: ["sub-oauth"] },
+    ];
+    expect(extractProviderAuthTargets(aggregated)).toHaveLength(2);
+    expect(visibleAuthMethodsForTarget(aggregated, "sub-key-only").map((m) => m.id)).toEqual(["api_key"]);
+    expect(visibleAuthMethodsForTarget(aggregated, "sub-oauth").map((m) => m.id)).toEqual([
+      "api_key",
+      "browser",
+      "device_code",
+    ]);
   });
 });

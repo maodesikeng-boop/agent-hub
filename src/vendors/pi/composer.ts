@@ -216,9 +216,9 @@ export const piComposerBase: VendorComposerBase = {
 };
 
 export interface PiComposerOptions {
-  executablePath?: string;
+  executablePath?: string | (() => string);
   queryCommandsRpc?: (options: PiCommandsQueryOptions) => Promise<unknown>;
-  env?: Record<string, string | undefined>;
+  env?: Record<string, string | undefined> | (() => Record<string, string | undefined>);
   timeoutMs?: number;
 }
 
@@ -230,13 +230,18 @@ export function createPiComposer(options?: PiComposerOptions): VendorComposer {
         return [...PI_BUILTIN_COMMANDS];
       }
       const query = options.queryCommandsRpc ?? queryPiRpcCommands;
+      const piPath =
+        typeof options.executablePath === "function"
+          ? options.executablePath()
+          : (options.executablePath ?? "pi");
+      const env = typeof options.env === "function" ? options.env() : options.env;
       const raw = await query({
-        piPath: options.executablePath ?? "pi",
+        piPath,
         cwd: target.cwd,
         addDirs: target.addDirs,
         timeoutMs: options.timeoutMs ?? COMMANDS_QUERY_TIMEOUT_MS,
         signal,
-        ...(options.env ? { env: options.env } : {}),
+        ...(env ? { env } : {}),
       });
       const commands = parsePiCommands(raw);
       if (commands === null) throw new Error("pi get_commands 回应里没有可识别的列表");

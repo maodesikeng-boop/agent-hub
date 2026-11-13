@@ -31,17 +31,23 @@ export interface QueryFetchedQuotaOptions {
   path: string;
   spec: FetchedQuotaSpec;
   cwd: string;
+  env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
 }
 
 /** 起一次进程问额度，返回解析后的结果；起不来、超时、退出码非 0 报错。 */
 export function queryFetchedQuota(options: QueryFetchedQuotaOptions): Promise<QuotaResponse> {
-  const { vendor, path, spec, cwd, timeoutMs = FETCHED_QUOTA_TIMEOUT_MS } = options;
+  const { vendor, path, spec, cwd, env, timeoutMs = FETCHED_QUOTA_TIMEOUT_MS } = options;
   return new Promise((resolve, reject) => {
-    const child = execFile(path, [...spec.args], { cwd, timeout: timeoutMs, killSignal: "SIGKILL", maxBuffer: 1 << 20 }, (error, stdout) => {
+    const child = execFile(
+      path,
+      [...spec.args],
+      { cwd, ...(env ? { env } : {}), timeout: timeoutMs, killSignal: "SIGKILL", maxBuffer: 1 << 20 },
+      (error, stdout) => {
       if (error) reject(error);
       else resolve(parseFetchedQuota(stdout, spec, vendor));
-    });
+      },
+    );
     child.stdin?.end();
   });
 }

@@ -4,6 +4,7 @@ import { createPiCatalogSource, piCatalogProbe } from "./catalog.ts";
 import { createPiComposer, piComposerBase } from "./composer.ts";
 import { createPiDriver } from "./driver.ts";
 import { PI_FORKERS } from "./handover.ts";
+import { piSetupAdapter } from "./setup.ts";
 import { piSyncAdapter } from "./sync.ts";
 import { piSessionFiles, piTranscriptPath } from "./transcript.ts";
 
@@ -15,4 +16,5 @@ export default defineVendorDaemon({
   transcriptPath: piTranscriptPath,
   sessionFiles: piSessionFiles,
   sync: piSyncAdapter,
+  setup: piSetupAdapter,
 });

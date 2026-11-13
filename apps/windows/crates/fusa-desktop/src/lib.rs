@@ -68,12 +68,6 @@ fn retry_bootstrap<R: tauri::Runtime>(
 }
 
 #[tauri::command]
-fn open_vendor_terminal<R: tauri::Runtime>(webview: Webview<R>) -> Result<(), String> {
-    ensure_bootstrap_caller(&webview)?;
-    platform::spawn_interactive_native_terminal()
-}
-
-#[tauri::command]
 fn open_logs<R: tauri::Runtime>(
     app: AppHandle<R>,
     webview: Webview<R>,
@@ -81,16 +75,6 @@ fn open_logs<R: tauri::Runtime>(
 ) -> Result<(), String> {
     ensure_bootstrap_caller(&webview)?;
     open_log_with_app(&app, controller.supervisor.host_log_path())
-}
-
-#[tauri::command]
-fn enter_workspace<R: tauri::Runtime>(
-    webview: Webview<R>,
-    controller: State<'_, Arc<DesktopController>>,
-) -> Result<(), String> {
-    ensure_bootstrap_caller(&webview)?;
-    controller.trigger_navigate_to_workspace();
-    Ok(())
 }
 
 fn open_external_url_with_app<R: tauri::Runtime>(app: &AppHandle<R>, url: &Url) {
@@ -239,9 +223,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_bootstrap_state,
             retry_bootstrap,
-            open_vendor_terminal,
             open_logs,
-            enter_workspace,
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();
@@ -434,9 +416,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bootstrap::{
-        derive_view_from_supervisor, DesktopPreflightSummary, VendorGuideEntry,
-    };
+    use crate::bootstrap::derive_view_from_supervisor;
     use fusa_supervisor::{
         CrashRecord, DaemonIdentity, DaemonOwnership, DesktopContract, StopReason, SupervisorFault,
         SupervisorSnapshot, SupervisorState,
@@ -581,7 +561,7 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_view_guides_missing_git_and_dynamic_vendors_without_blocking_continue() {
+    fn bootstrap_view_transitions_directly_to_running_and_exposes_fault_recovery() {
         let running_owned = SupervisorSnapshot {
             port: 4317,
             state: SupervisorState::Running {
@@ -602,31 +582,31 @@ mod tests {
             host_log_path: PathBuf::from("/tmp/fusa-desktop.log"),
         };
 
-        let preflight_missing_git = DesktopPreflightSummary {
-            git_installed: false,
-            git_path: None,
-            git_install_command: "winget install --id Git.Git -e --source winget".to_string(),
-            vendors: vec![VendorGuideEntry {
-                id: "sample-vendor-a".to_string(),
-                label: "Sample Vendor A".to_string(),
-                command: "vendor-a-cli".to_string(),
-                install_command: "npm install -g @example/vendor-a".to_string(),
-                login_command: "vendor-a-cli auth login".to_string(),
-                installed: true,
-                binary_path: Some(r"C:\Users\u\.local\bin\vendor-a-cli.exe".to_string()),
-            }],
+        let v_running = derive_view_from_supervisor(&running_owned);
+        assert_eq!(v_running.tone, "ready");
+        assert_eq!(v_running.title, "Running");
+        assert!(!v_running.can_retry);
+        assert!(v_running.can_open_logs);
+
+        let faulted = SupervisorSnapshot {
+            port: 4317,
+            state: SupervisorState::Faulted {
+                fault: SupervisorFault::PortConflict {
+                    port: 4317,
+                    detail: "port busy".to_string(),
+                },
+                generation: 1,
+            },
+            ownership: DaemonOwnership::None,
+            has_session_cookie: false,
+            last_crash: None,
+            host_log_path: PathBuf::from("/tmp/fusa-desktop.log"),
         };
-
-        let v_first = derive_view_from_supervisor(&running_owned, &preflight_missing_git, false);
-        assert!(v_first.show_git_guide);
-        assert!(v_first.show_vendor_guide);
-        assert!(v_first.can_enter_workspace);
-
-        let v_after_continue =
-            derive_view_from_supervisor(&running_owned, &preflight_missing_git, true);
-        assert!(!v_after_continue.show_git_guide);
-        assert!(!v_after_continue.show_vendor_guide);
-        assert!(v_after_continue.can_enter_workspace);
+        let v_faulted = derive_view_from_supervisor(&faulted);
+        assert_eq!(v_faulted.tone, "error");
+        assert!(v_faulted.can_retry);
+        assert!(v_faulted.can_open_logs);
+        assert!(v_faulted.error.is_some());
     }
 
     #[test]
@@ -681,6 +661,16 @@ mod tests {
                 !content.contains('·') && !content.contains("&middot;"),
                 "{name} must not join metadata with middle dot `·`"
             );
+            for retired in [
+                "providers-section",
+                "open_vendor_terminal",
+                "enter_workspace",
+            ] {
+                assert!(
+                    !content.contains(retired),
+                    "{name} must not retain retired static onboarding identifier `{retired}`"
+                );
+            }
             let lower = content.to_ascii_lowercase();
             assert!(
                 !lower.contains("wsl"),

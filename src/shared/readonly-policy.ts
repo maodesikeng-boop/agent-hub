@@ -49,7 +49,7 @@ export const READONLY_SECRET_HOME_PATHS: readonly string[] = [
  *   只有 messages 的工具记录（text、meta）里留着别的守护进程（测试用）打印的登录链接 ?token=…，已经作废，不算。
  * 以后要在库里存令牌：先挪到 state/ 下单独的文件，再把文件名加到这里，别让只读 Worker 读到整库。
  */
-const READONLY_SECRET_STATE_FILES: readonly string[] = ["ui-token"];
+export const READONLY_SECRET_STATE_FILES: readonly string[] = ["ui-token", "provider-secrets.json"];
 
 /** 默认禁读的通配。 */
 export const READONLY_SECRET_GLOBS: readonly string[] = ["**/.env", "**/.env.*", "**/*.pem", "**/*.key", "**/id_rsa*", "**/id_ed25519*"];

@@ -167,7 +167,7 @@ interface AcpSessionState extends BaseSessionState<AcpProc, AcpBatch> {
 
 export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSessionState> {
   readonly #config: AcpDriverConfig;
-  readonly #executablePath: string;
+  readonly #executablePath: string | (() => string);
   readonly #readonlySpawn: (base: SpawnCommand, input: ReadonlySandboxInput) => ScopedSpawn;
 
   constructor(config: AcpDriverConfig, options: AcpDriverOptions) {
@@ -185,6 +185,10 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
     this.#config = config;
     this.#executablePath = executablePath;
     this.#readonlySpawn = readonlySpawn ?? ((base, input) => wrapInReadonlyOsSandbox(base, input));
+  }
+
+  #resolveExecutablePath(): string {
+    return typeof this.#executablePath === "function" ? this.#executablePath() : this.#executablePath;
   }
 
   /**
@@ -379,7 +383,7 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
       pid,
       row,
       this.vendor,
-      this.#executablePath,
+      this.#resolveExecutablePath(),
       staticTokens,
       this.#config.staleProcess?.matchesCommand,
     );
@@ -620,11 +624,12 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
 
   async #spawn(st: AcpSessionState, resume: boolean, prepared: LaunchFiles | null): Promise<AcpProc> {
     const { row, files } = await this.resolveLaunchFiles(st, prepared);
+    const exePath = this.#resolveExecutablePath();
     const launchCtx: AcpLaunchContext = {
       row,
       files,
       resume,
-      executablePath: this.#executablePath,
+      executablePath: exePath,
     };
     const rawLaunchArgs =
       typeof this.#config.launchArgs === "function"
@@ -641,7 +646,7 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
       cleanupReadonlyTmp = cleanupTmp;
       const ownOffArgs = vendorSpec(this.vendor).capabilities.ownSandboxOffArgs ?? [];
       const wrapped = this.#readonlySpawn(
-        { command: this.#executablePath, args: [...ownOffArgs, ...rawLaunchArgs] },
+        { command: exePath, args: [...ownOffArgs, ...rawLaunchArgs] },
         input,
       );
       if (!wrapped.osSandboxed) {
@@ -667,7 +672,7 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
     } else {
       const scoped = spawnInWriteScope(
         this.vendor,
-        { command: this.#executablePath, args: rawLaunchArgs },
+        { command: exePath, args: rawLaunchArgs },
         files.writeScope ?? null,
         this.opts.log,
         String(st.id),
@@ -677,7 +682,7 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
     }
 
     const child = await this.spawnDetachedChild(
-      this.#executablePath,
+      exePath,
       spawnCmd,
       spawnArgs,
       row.cwd,

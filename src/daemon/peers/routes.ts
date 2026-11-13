@@ -13,6 +13,8 @@ export interface PeerRoutesOptions {
   peers: Peers;
   /** 这次请求是哪台设备带令牌来的（server.ts 的认证钩子认出来的）；浏览器来的是 undefined。 */
   peerOf: (req: FastifyRequest) => PeerRecord | undefined;
+  /** 为入口转发请求生成不可逆的浏览器会话隔离标识。 */
+  clientScopeOf?: (req: FastifyRequest) => string | undefined;
   /** 浏览器经入口连别的设备的 WebSocket：记到它的会话下，退出登录时一起关。 */
   trackSocket: (req: FastifyRequest, socket: WebSocket) => void;
   /** 转发的可调项：fetch、WebSocket 心跳间隔（测试里换）。 */
@@ -131,7 +133,11 @@ export async function peerRoutes(app: FastifyInstance, opts: PeerRoutesOptions):
     proxy.all("/d/*", async (req, reply) => {
       const resolved = resolve(req);
       if (resolved === null) return notFound(reply);
-      return proxyHttp(req, reply, resolved.target, resolved.rest, contextFor(resolved.id));
+      const clientScope = opts.clientScopeOf?.(req);
+      return proxyHttp(req, reply, resolved.target, resolved.rest, {
+        ...contextFor(resolved.id),
+        ...(clientScope !== undefined ? { clientScope } : {}),
+      });
     });
   });
 }

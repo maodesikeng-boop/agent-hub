@@ -18,7 +18,7 @@ export interface HandoverRunnerOptions {
   prepareLaunch: (session: AgentSessionRow) => Promise<LaunchFiles>;
   log: (line: string) => void;
   /** 各家 CLI 的路径（解析好的 HubPaths.vendorPaths，用户可配、测试用假可执行文件）：拼 ForkSource.executablePath，厂商的办法一律用它起进程。 */
-  executablePaths: Readonly<Record<AgentVendor, string>>;
+  executablePaths: Readonly<Record<AgentVendor, string | (() => string)>>;
   /** 办法清单，默认 FORKERS；测试换假的。 */
   registry?: ForkerRegistry;
   /** 同时最多几份，默认 HANDOVER_CONCURRENCY。 */
@@ -150,7 +150,9 @@ export function createHandoverRunner(options: HandoverRunnerOptions): HandoverRu
     try {
       const sessionWithMemory = withPmMemoryAddDir(job.session, options.pmMemoryDir);
       const { vendor } = sessionWithMemory;
-      const src = forkSourceOf(sessionWithMemory, await abortable(prepareLaunch(sessionWithMemory), signal), isAgentVendor(vendor) ? executablePaths[vendor] : "");
+      const rawExe = isAgentVendor(vendor) ? executablePaths[vendor] : "";
+      const resolvedExe = typeof rawExe === "function" ? rawExe() : rawExe;
+      const src = forkSourceOf(sessionWithMemory, await abortable(prepareLaunch(sessionWithMemory), signal), resolvedExe);
       const forked = await forkFirst(registry[src.vendor], src, signal);
       if ("unsupported" in forked) {
         await attempt(`报 #${handoverId} 不支持`, () => ledger.handoverFailed(handoverId, { kind: "unsupported", detail: forked.unsupported }));

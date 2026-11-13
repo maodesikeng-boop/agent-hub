@@ -26,7 +26,7 @@ export const MODEL_CATALOG_REVALIDATE_MS = 5_000;
 const CatalogEnabledContext = createContext(false);
 
 const catalogKey = (client: HubClient) => client.device ?? "";
-const modelsQueryKey = (key: string) => ["models", key] as const;
+export const modelsQueryKey = (key: string) => ["models", key] as const;
 const refreshUnusableQueryKey = (key: string) => ["models", key, REFRESH_UNUSABLE] as const;
 
 /** 老服务端回的名单可能缺新加的字段（厂商名、通用思考程度、状态……）：认识的厂商用打包的补上（状态补成 unknown，当能用）。 */
@@ -74,11 +74,49 @@ function refreshUnusableCatalogs(qc: QueryClient, client: HubClient): void {
     .catch(() => {});
 }
 
+export function refreshDeviceModels(qc: QueryClient, client: HubClient): void {
+  const key = catalogKey(client);
+  void qc
+    .fetchQuery({
+      queryKey: modelsQueryKey(key),
+      queryFn: async () => parseCatalogs(await client.fetchModels()),
+      staleTime: 0,
+    })
+    .catch(() => {});
+}
+
 export function ModelCatalogProvider({ children }: { children: ReactNode; now?: () => number }) {
   return <CatalogEnabledContext.Provider value={true}>{children}</CatalogEnabledContext.Provider>;
 }
 
 const BUNDLED: readonly ModelCatalog[] = AGENT_VENDORS.map((v) => bundledModelCatalog(v));
+
+/**
+ * 直接读取服务端真实返回的模型名单（未拉取过时返回 undefined，不回退打包默认名单）。
+ * 用于首次启动 0 家可用自动引导检测与手机一级设置页 0 请求缓存摘要。
+ */
+export function useServerModelCatalogs({
+  enabled = true,
+  client: explicitClient,
+}: {
+  enabled?: boolean;
+  client?: HubClient;
+} = {}): readonly ModelCatalog[] | undefined {
+  const contextClient = useClient();
+  const client = explicitClient ?? contextClient;
+  const qc = useHubQueryClient();
+  const key = catalogKey(client);
+  const { data } = useQuery(
+    {
+      queryKey: modelsQueryKey(key),
+      queryFn: () => fetchCatalogs(qc, client),
+      staleTime: MODEL_CATALOG_REVALIDATE_MS,
+      enabled,
+    },
+    qc,
+  );
+  return data;
+}
 
 /**
  * 所有厂商的名单（厂商下拉的选项）。拉到之前、拉到的是空的用打包的。没有 Provider（单独渲染组件时）就只用缓存里有的或打包的。

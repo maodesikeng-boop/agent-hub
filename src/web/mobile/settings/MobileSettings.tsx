@@ -2,8 +2,9 @@
 // 一级主页 6～7 行摘要全从内存、localStorage 与 react-query 已有缓存同步读，打开时 0 次 HTTP 请求；进子页时一级主页用 <Activity hidden> 保活（滚动位置不丢）。
 // 桌面外壳不经过这里（Sidebar 打开 SettingsDialog）；两边的状态与接口都来自 settings-model.ts。
 import { Activity, memo, type ReactNode } from "react";
-import { Bell, Blocks, Globe, Monitor, QrCode, Smartphone, Type } from "lucide-react";
+import { ArrowLeftRight, Bell, Blocks, Globe, Monitor, QrCode, Smartphone, Type } from "lucide-react";
 import { SettingsGroup } from "../../components/SettingsList.tsx";
+import { LOCAL_DEVICE, type DeviceKey } from "../../devices.ts";
 import type { NotifySettings } from "../../notify.ts";
 import type { SettingsSection } from "../../route.ts";
 import {
@@ -11,6 +12,7 @@ import {
   describeNotifySummary,
   describePublicEntrySummary,
   useCachedBrowserSessionsSummary,
+  useCachedProvidersSummary,
   useUiScaleSetting,
   useVendorSyncSetting,
   type DeviceSettings,
@@ -19,6 +21,7 @@ import { Loader2 } from "lucide-react";
 import { BrowsersPage } from "./BrowsersPage.tsx";
 import { ComputersPage } from "./ComputersPage.tsx";
 import { NotificationsPage } from "./NotificationsPage.tsx";
+import { ProvidersPage } from "./ProvidersPage.tsx";
 import { PublicAccessPage } from "./PublicAccessPage.tsx";
 import { ScalePage } from "./ScalePage.tsx";
 import { SettingsNavRow } from "./SettingsNavRow.tsx";
@@ -32,6 +35,8 @@ export interface MobileSettingsProps {
   notify: NotifySettings;
   /** 守护进程支持联机时才有：电脑组与公网入口。 */
   devices: DeviceSettings | null;
+  /** 打开 Providers 子页时的默认目标电脑。 */
+  defaultProviderDevice?: DeviceKey;
   onOpen: (section: SettingsSection) => void;
   /** 顶栏返回（一级回列表、子页回一级），App 里走 mobileBack。 */
   onBack: () => void;
@@ -42,6 +47,7 @@ export interface MobileSettingsProps {
 interface SubpageContext {
   notify: NotifySettings;
   devices: DeviceSettings | null;
+  defaultProviderDevice: DeviceKey;
   vendor: VendorSync;
   onSignedOut?: () => void;
 }
@@ -66,6 +72,10 @@ const withDevices = (ctx: SubpageContext, render: (devices: DeviceSettings) => R
 const SUBPAGES: Record<SettingsSection, SubpageSpec> = {
   scale: { title: "Interface scale", render: () => <ScalePage /> },
   notifications: { title: "Notifications", render: (ctx) => <NotificationsPage notify={ctx.notify} /> },
+  providers: {
+    title: "Providers",
+    render: (ctx) => <ProvidersPage devices={ctx.devices} defaultDeviceKey={ctx.defaultProviderDevice} />,
+  },
   "vendor-sync": {
     title: "Vendor sync",
     render: (ctx) => <VendorSyncPage vendor={ctx.vendor} />,
@@ -91,14 +101,25 @@ function SettingsHome({
   onBack: () => void;
 }) {
   const { label: scaleLabel } = useUiScaleSetting();
+  const providers = useCachedProvidersSummary();
   const browsers = useCachedBrowserSessionsSummary();
   return (
     <SettingsPage title="Settings" home onBack={onBack}>
       <SettingsGroup title="General">
         <SettingsNavRow icon={<Type aria-hidden="true" />} label="Interface scale" summary={scaleLabel} onClick={() => onOpen("scale")} />
         <SettingsNavRow icon={<Bell aria-hidden="true" />} label="Notifications" summary={describeNotifySummary(notify)} onClick={() => onOpen("notifications")} />
+      </SettingsGroup>
+      <SettingsGroup title="Providers">
         <SettingsNavRow
           icon={<Blocks aria-hidden="true" />}
+          label="Providers"
+          summary={providers.summary}
+          attention={providers.attention}
+          attentionTestId="providers-attention"
+          onClick={() => onOpen("providers")}
+        />
+        <SettingsNavRow
+          icon={<ArrowLeftRight aria-hidden="true" />}
           label="Vendor sync"
           {...(vendorSynced ? { summary: "Synced" } : {})}
           onClick={() => onOpen("vendor-sync")}
@@ -133,11 +154,25 @@ function SettingsHome({
 }
 
 // memo：App 每个流式帧都会重画，这里的 props（通知设置、设备设置、两个回调）都是稳定引用，设置页开着时不跟着重画
-export const MobileSettings = memo(function MobileSettings({ section, notify, devices, onOpen, onBack, onSignedOut }: MobileSettingsProps) {
+export const MobileSettings = memo(function MobileSettings({
+  section,
+  notify,
+  devices,
+  defaultProviderDevice = LOCAL_DEVICE,
+  onOpen,
+  onBack,
+  onSignedOut,
+}: MobileSettingsProps) {
   // 同步预览与结果放在这一层：从子页回到一级主页还看得到 Synced，再进子页预览还在（全是按需的 mutation，没有初始请求）
   const vendor = useVendorSyncSetting();
   const spec = section === undefined ? null : SUBPAGES[section];
-  const ctx: SubpageContext = { notify, devices, vendor, ...(onSignedOut !== undefined ? { onSignedOut } : {}) };
+  const ctx: SubpageContext = {
+    notify,
+    devices,
+    defaultProviderDevice,
+    vendor,
+    ...(onSignedOut !== undefined ? { onSignedOut } : {}),
+  };
   return (
     <div data-testid="mobile-settings" className="flex h-full min-w-0 flex-1 flex-col">
       <Activity mode={spec === null ? "visible" : "hidden"}>

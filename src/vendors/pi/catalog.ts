@@ -365,13 +365,16 @@ export const piCatalogProbe: VendorCatalogProbe = {
 export function createPiCatalogSource(options: VendorCatalogSourceOptions): VendorCatalogSource {
   return {
     ...piCatalogProbe,
-    query: (signal) =>
-      queryPiListModels({
-        piPath: options.path,
+    query: (signal) => {
+      const piPath = typeof options.path === "function" ? options.path() : options.path;
+      const env = typeof options.env === "function" ? options.env() : options.env;
+      return queryPiListModels({
+        piPath,
         cwd: options.cwd,
-        ...(options.env ? { env: options.env } : {}),
+        ...(env ? { env } : {}),
         signal,
-      }),
+      });
+    },
     installed: options.installed,
     ...(options.fingerprint ? { fingerprint: options.fingerprint } : {}),
   };

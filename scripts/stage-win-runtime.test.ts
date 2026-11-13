@@ -10,6 +10,7 @@ import {
   buildStagedDaemonPackageJson,
   collectDaemonRuntimeDependencyNames,
   pruneStagedNodeModules,
+  stageBundledNpmFromExtractedNodeDir,
 } from "./stage-win-runtime.ts";
 
 describe("scripts/stage-win-runtime.ts 打包裁剪与完整性守卫", () => {
@@ -86,6 +87,42 @@ describe("scripts/stage-win-runtime.ts 打包裁剪与完整性守卫", () => {
       expect(() => readFileSync(join(koffiSrc, "ffi.cc"))).toThrow();
       expect(() => readFileSync(join(koromixWin, "koffi.node"))).not.toThrow();
       expect(() => readFileSync(join(koromixLinux, "koffi.node"))).toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("stageBundledNpmFromExtractedNodeDir 提取 npm.cmd、npx.cmd 与 npm-cli.js 并剥离 docs/man/软链与 .d.ts", () => {
+    const root = mkdtempSync(join(tmpdir(), "fusa-stage-npm-"));
+    try {
+      const extracted = join(root, "node-v24.22.3-win-x64");
+      const outNode = join(root, "out", "node");
+      const npmBin = join(extracted, "node_modules", "npm", "bin");
+      const npmDocs = join(extracted, "node_modules", "npm", "docs");
+      const npmMan = join(extracted, "node_modules", "npm", "man");
+      mkdirSync(npmBin, { recursive: true });
+      mkdirSync(npmDocs, { recursive: true });
+      mkdirSync(npmMan, { recursive: true });
+      writeFileSync(join(extracted, "npm.cmd"), "@ECHO OFF\r\n");
+      writeFileSync(join(extracted, "npx.cmd"), "@ECHO OFF\r\n");
+      writeFileSync(join(extracted, "node_modules", "npm", "package.json"), '{"name":"npm","version":"11.0.0"}');
+      writeFileSync(join(npmBin, "npm-cli.js"), "console.log('npm');");
+      writeFileSync(join(npmBin, "npx-cli.js"), "console.log('npx');");
+      writeFileSync(join(npmBin, "npm-cli.d.ts"), "export {};");
+      writeFileSync(join(npmDocs, "readme.html"), "<html></html>");
+      writeFileSync(join(npmMan, "npm.1"), "manpage");
+      symlinkSync(join(npmBin, "npm-cli.js"), join(extracted, "node_modules", "npm", "dangling-or-bin-link"));
+
+      stageBundledNpmFromExtractedNodeDir(extracted, outNode, "win32");
+      assertNoSymlinksInTree(outNode);
+
+      expect(readFileSync(join(outNode, "npm.cmd"), "utf8")).toContain("@ECHO OFF");
+      expect(readFileSync(join(outNode, "npx.cmd"), "utf8")).toContain("@ECHO OFF");
+      expect(readFileSync(join(outNode, "node_modules", "npm", "bin", "npm-cli.js"), "utf8")).toContain("npm");
+      expect(readFileSync(join(outNode, "node_modules", "npm", "bin", "npx-cli.js"), "utf8")).toContain("npx");
+      expect(() => readFileSync(join(outNode, "node_modules", "npm", "docs", "readme.html"))).toThrow();
+      expect(() => readFileSync(join(outNode, "node_modules", "npm", "man", "npm.1"))).toThrow();
+      expect(() => readFileSync(join(outNode, "node_modules", "npm", "bin", "npm-cli.d.ts"))).toThrow();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -217,7 +217,11 @@ export const agyCatalogProbe: VendorCatalogProbe = {
 export function createAgyCatalogSource(options: VendorCatalogSourceOptions): VendorCatalogSource {
   return {
     ...agyCatalogProbe,
-    query: (signal) => queryAgyModels({ agyPath: options.path, cwd: options.cwd, ...(options.env ? { env: options.env } : {}), signal }),
+    query: (signal) => {
+      const agyPath = typeof options.path === "function" ? options.path() : options.path;
+      const env = typeof options.env === "function" ? options.env() : options.env;
+      return queryAgyModels({ agyPath, cwd: options.cwd, ...(env ? { env } : {}), signal });
+    },
     installed: options.installed,
     ...(options.fingerprint ? { fingerprint: options.fingerprint } : {}),
   };

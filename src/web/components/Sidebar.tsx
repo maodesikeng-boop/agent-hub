@@ -289,6 +289,7 @@ export const Sidebar = memo(
     layout: propLayout,
     settingsOpen: propSettingsOpen,
     defaultSettingsSection,
+    defaultProviderDevice,
     onSettingsOpenChange,
     onOpenSettings,
     onSelect,
@@ -312,6 +313,7 @@ export const Sidebar = memo(
     /** 桌面设置弹窗开关（跨断点从手机设置页拉宽切回桌面时受控打开）。 */
     settingsOpen?: boolean;
     defaultSettingsSection?: SettingsDialogSection;
+    defaultProviderDevice?: DeviceKey;
     onSettingsOpenChange?: (open: boolean) => void;
     /** 手机整屏列表（layout === "page"）点设置齿轮跳到 #/settings，不挂 SettingsDialog。 */
     onOpenSettings?: () => void;
@@ -496,6 +498,7 @@ export const Sidebar = memo(
             open={dialogOpen}
             onOpenChange={setDialogOpen}
             {...(defaultSettingsSection !== undefined ? { defaultSection: defaultSettingsSection } : {})}
+            {...(defaultProviderDevice !== undefined ? { defaultProviderDevice } : {})}
             notify={notify}
             devices={devices}
           />
@@ -516,6 +519,7 @@ export const Sidebar = memo(
     prev.layout === next.layout &&
     prev.settingsOpen === next.settingsOpen &&
     prev.defaultSettingsSection === next.defaultSettingsSection &&
+    prev.defaultProviderDevice === next.defaultProviderDevice &&
     prev.onSettingsOpenChange === next.onSettingsOpenChange &&
     prev.onOpenSettings === next.onOpenSettings &&
     prev.onSelect === next.onSelect &&

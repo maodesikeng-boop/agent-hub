@@ -6,6 +6,7 @@ import {
   UPLOAD_TOO_LARGE_MESSAGE,
   devicePath,
   type AddDeviceRequest,
+  type AgentVendor,
   type ArchiveAllReportsResponse,
   type ArchivePmResponse,
   type Attachment,
@@ -48,6 +49,14 @@ import {
   type PmMemoryFilesResponse,
   type PostMessageResponse,
   type ProjectId,
+  type ProviderCancelAuthRequest,
+  type ProviderCancelJobRequest,
+  type ProviderLogoutRequest,
+  type ProviderSaveApiKeyRequest,
+  type ProviderStartAuthRequest,
+  type ProviderStatusItem,
+  type ProviderSubmitAuthRequest,
+  type ProvidersStatusResponse,
   type PublicEntryStatus,
   type PutPmMemoryFileRequest,
   type PutPmMemoryFileResponse,
@@ -249,6 +258,30 @@ export function createClient(device: DeviceId | null) {
     fetchQuota: () => request<QuotaResponse>(at(API_PATHS.quota), undefined, SLOW_API_REQUEST_TIMEOUT_MS),
     fetchVendorSyncPreview: () => request<VendorSyncPreviewResponse>(at(API_PATHS.vendorSyncPreview), undefined, SLOW_API_REQUEST_TIMEOUT_MS),
     postVendorSyncApply: (body: VendorSyncApplyRequest) => postJson<VendorSyncApplyResponse>(at(API_PATHS.vendorSyncApply), body, SLOW_API_REQUEST_TIMEOUT_MS),
+    fetchProviders: (options: { refresh?: boolean } = {}) =>
+      request<ProvidersStatusResponse>(
+        at(options.refresh ? `${API_PATHS.providers}?refresh=1` : API_PATHS.providers),
+        undefined,
+        options.refresh ? SLOW_API_REQUEST_TIMEOUT_MS : API_REQUEST_TIMEOUT_MS,
+      ),
+    postProviderInstall: (vendor: AgentVendor) =>
+      postJson<ProviderStatusItem>(at(API_PATHS.providerInstall(vendor)), {}),
+    postProviderUpdate: (vendor: AgentVendor) =>
+      postJson<ProviderStatusItem>(at(API_PATHS.providerUpdate(vendor)), {}),
+    postProviderJobCancel: (vendor: AgentVendor, body: ProviderCancelJobRequest) =>
+      postJson<ProviderStatusItem>(at(API_PATHS.providerJobCancel(vendor)), body),
+    postProviderGitInstall: () =>
+      postJson<ProvidersStatusResponse>(at(API_PATHS.providerGitInstall), {}),
+    postProviderAuthStart: (vendor: AgentVendor, body: ProviderStartAuthRequest) =>
+      postJson<ProviderStatusItem>(at(API_PATHS.providerAuthStart(vendor)), body),
+    postProviderAuthSubmit: (vendor: AgentVendor, body: ProviderSubmitAuthRequest) =>
+      postJson<ProviderStatusItem>(at(API_PATHS.providerAuthSubmit(vendor)), body),
+    postProviderAuthCancel: (vendor: AgentVendor, body: ProviderCancelAuthRequest) =>
+      postJson<ProviderStatusItem>(at(API_PATHS.providerAuthCancel(vendor)), body),
+    postProviderAuthApiKey: (vendor: AgentVendor, body: ProviderSaveApiKeyRequest) =>
+      postJson<ProviderStatusItem>(at(API_PATHS.providerAuthApiKey(vendor)), body, SLOW_API_REQUEST_TIMEOUT_MS),
+    postProviderAuthLogout: (vendor: AgentVendor, body: ProviderLogoutRequest = {}) =>
+      postJson<ProviderStatusItem>(at(API_PATHS.providerAuthLogout(vendor)), body, SLOW_API_REQUEST_TIMEOUT_MS),
     postRenewSession: (pmId: PmId) => postJson<RenewSessionResponse>(at(API_PATHS.renewSession(pmId))),
     postArchivePm: (pmId: PmId) => postJson<ArchivePmResponse>(at(API_PATHS.archivePm(pmId))),
     postUnarchivePm: (pmId: PmId) => postJson<ArchivePmResponse>(at(API_PATHS.unarchivePm(pmId))),

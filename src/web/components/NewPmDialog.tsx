@@ -17,7 +17,7 @@ import { DeviceScope, useClient } from "../device-scope.tsx";
 import { isReadOnly, type DeviceKey, type DeviceStatus } from "../devices.ts";
 import { errorText, nameError, errorLine, errorTitle, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
-import { useModelCatalog } from "../models.tsx";
+import { useModelCatalog, useModelCatalogs } from "../models.tsx";
 import { useServerInfo } from "../server-info.tsx";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
@@ -38,8 +38,19 @@ export interface NewPmDevice {
 }
 
 /** deviceRow：两台以上设备时最上面一行“设备”；表单的接口、模型名单、能不能“选择…”都按外面 DeviceScope 的那台。 */
-function NewPmForm({ mobile, deviceRow, onCreated }: { mobile: boolean; deviceRow: ReactNode; onCreated: (conversationId: ConversationId) => void }) {
+function NewPmForm({
+  mobile,
+  deviceRow,
+  onCreated,
+  onManageProviders,
+}: {
+  mobile: boolean;
+  deviceRow: ReactNode;
+  onCreated: (conversationId: ConversationId) => void;
+  onManageProviders?: () => void;
+}) {
   const client = useClient();
+  const allCatalogs = useModelCatalogs();
   const [name, setName] = useState("");
   const [folder, setFolder] = useState("");
   const [mode, setMode] = useState<PmMode>(DEFAULT_PM_MODE);
@@ -61,6 +72,11 @@ function NewPmForm({ mobile, deviceRow, onCreated }: { mobile: boolean; deviceRo
   // 选着的厂商这台设备用不了（没装、没登录）：不悄悄换掉（换了设备也保留原来的选择），下拉里标状态词，“创建”是灰的
   const vendorUsable = isSelectable(useModelCatalog(agent.vendor).availability);
   const canSubmit = cleanName !== null && !personaTooLong && agentResult.ok && vendorUsable && !busy;
+  const zeroProvidersReady = allCatalogs.length > 0 && allCatalogs.every((c) => !isSelectable(c.availability));
+
+  useEffect(() => {
+    if (zeroProvidersReady) setMoreOpen(true);
+  }, [zeroProvidersReady]);
 
   // 守护进程弹原生的“选择文件夹”：选中填进输入框；取消（path 为 null）输入框不变；出错在这一行下面写原因
   const pickFolder = async () => {
@@ -154,7 +170,13 @@ function NewPmForm({ mobile, deviceRow, onCreated }: { mobile: boolean; deviceRo
           </CollapsibleTrigger>
           <CollapsibleContent className="mt-3 grid gap-6">
             <SettingsGroup label="Model">
-              <AgentRows value={agent} onChange={setAgent} disabled={busy} stacked={mobile} />
+              <AgentRows
+                value={agent}
+                onChange={setAgent}
+                disabled={busy}
+                stacked={mobile}
+                {...(onManageProviders !== undefined ? { onManageProviders } : {})}
+              />
             </SettingsGroup>
             <SettingsGroup title="Persona">
               <Textarea
@@ -196,12 +218,14 @@ export function NewPmDialog({
   defaultDevice,
   onOpenChange,
   onCreated,
+  onManageProviders,
 }: {
   open: boolean;
   devices: readonly NewPmDevice[];
   defaultDevice: DeviceKey;
   onOpenChange: (open: boolean) => void;
   onCreated: (device: DeviceKey, conversationId: ConversationId) => void;
+  onManageProviders?: (device: DeviceKey) => void;
 }) {
   const mobile = useIsMobile();
   return (
@@ -211,7 +235,13 @@ export function NewPmDialog({
         fullScreen={mobile}
         onOpenAutoFocus={mobile ? (e) => e.preventDefault() : undefined}
       >
-        <DevicePicker mobile={mobile} devices={devices} defaultDevice={defaultDevice} onCreated={onCreated} />
+        <DevicePicker
+          mobile={mobile}
+          devices={devices}
+          defaultDevice={defaultDevice}
+          onCreated={onCreated}
+          {...(onManageProviders !== undefined ? { onManageProviders } : {})}
+        />
       </DialogContent>
     </Dialog>
   );
@@ -222,11 +252,13 @@ function DevicePicker({
   devices,
   defaultDevice,
   onCreated,
+  onManageProviders,
 }: {
   mobile: boolean;
   devices: readonly NewPmDevice[];
   defaultDevice: DeviceKey;
   onCreated: (device: DeviceKey, conversationId: ConversationId) => void;
+  onManageProviders?: (device: DeviceKey) => void;
 }) {
   const [key, setKey] = useState(defaultDevice);
   const device = devices.find((d) => d.key === key) ?? devices[0]!;
@@ -246,7 +278,12 @@ function DevicePicker({
     ) : null;
   return (
     <DeviceScope client={device.client} server={device.server}>
-      <NewPmForm mobile={mobile} deviceRow={deviceRow} onCreated={(conversationId) => onCreated(device.key, conversationId)} />
+      <NewPmForm
+        mobile={mobile}
+        deviceRow={deviceRow}
+        onCreated={(conversationId) => onCreated(device.key, conversationId)}
+        {...(onManageProviders !== undefined ? { onManageProviders: () => onManageProviders(device.key) } : {})}
+      />
     </DeviceScope>
   );
 }

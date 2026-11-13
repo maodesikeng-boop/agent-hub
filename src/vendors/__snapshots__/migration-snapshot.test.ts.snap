@@ -1555,6 +1555,7 @@ exports[`迁移前快照：声明表 > VENDOR_FALLBACK_PATHS（主目录换成�
   "agy": {
     "darwin": [
       "<HOME>/.local/bin/agy",
+      "<HOME>/.agent-hub/tools/npm/bin/agy",
     ],
     "linux": [
       "<HOME>/.local/bin/agy",
@@ -1562,19 +1563,30 @@ exports[`迁移前快照：声明表 > VENDOR_FALLBACK_PATHS（主目录换成�
       "<HOME>/.npm-global/bin/agy",
       "/usr/local/bin/agy",
       "/home/linuxbrew/.linuxbrew/bin/agy",
+      "<HOME>/.agent-hub/tools/npm/bin/agy",
     ],
   },
   "claude": {
-    "darwin": [],
+    "darwin": [
+      "<HOME>/.local/bin/claude",
+      "/opt/homebrew/bin/claude",
+      "/usr/local/bin/claude",
+      "<HOME>/.agent-hub/tools/npm/bin/claude",
+    ],
     "linux": [
       "<HOME>/.local/bin/claude",
       "<HOME>/.npm-global/bin/claude",
       "/usr/local/bin/claude",
       "/home/linuxbrew/.linuxbrew/bin/claude",
+      "<HOME>/.agent-hub/tools/npm/bin/claude",
     ],
   },
   "codex": {
     "darwin": [
+      "<HOME>/.local/bin/codex",
+      "/opt/homebrew/bin/codex",
+      "/usr/local/bin/codex",
+      "<HOME>/.agent-hub/tools/npm/bin/codex",
       "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
       "<HOME>/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
       "<HOME>/.codex/plugins/.plugin-appserver/codex-cli/bin/codex",
@@ -1584,18 +1596,21 @@ exports[`迁移前快照：声明表 > VENDOR_FALLBACK_PATHS（主目录换成�
       "<HOME>/.npm-global/bin/codex",
       "/usr/local/bin/codex",
       "/home/linuxbrew/.linuxbrew/bin/codex",
+      "<HOME>/.agent-hub/tools/npm/bin/codex",
       "<HOME>/.codex/plugins/.plugin-appserver/codex-cli/bin/codex",
     ],
   },
   "cursor": {
     "darwin": [
       "<HOME>/.local/bin/cursor-agent",
+      "<HOME>/.agent-hub/tools/npm/bin/cursor-agent",
     ],
     "linux": [
       "<HOME>/.local/bin/cursor-agent",
       "<HOME>/.npm-global/bin/cursor-agent",
       "/usr/local/bin/cursor-agent",
       "/home/linuxbrew/.linuxbrew/bin/cursor-agent",
+      "<HOME>/.agent-hub/tools/npm/bin/cursor-agent",
     ],
   },
   "deepseek": {
@@ -1606,6 +1621,7 @@ exports[`迁移前快照：声明表 > VENDOR_FALLBACK_PATHS（主目录换成�
       "<HOME>/.npm-global/bin/dsh",
       "/opt/homebrew/bin/dsh",
       "/usr/local/bin/dsh",
+      "<HOME>/.agent-hub/tools/npm/bin/dsh",
     ],
     "linux": [
       "<HOME>/.local/bin/dsh",
@@ -1614,6 +1630,7 @@ exports[`迁移前快照：声明表 > VENDOR_FALLBACK_PATHS（主目录换成�
       "<HOME>/.npm-global/bin/dsh",
       "/usr/local/bin/dsh",
       "/home/linuxbrew/.linuxbrew/bin/dsh",
+      "<HOME>/.agent-hub/tools/npm/bin/dsh",
     ],
   },
   "pi": {
@@ -1624,6 +1641,7 @@ exports[`迁移前快照：声明表 > VENDOR_FALLBACK_PATHS（主目录换成�
       "<HOME>/.npm-global/bin/pi",
       "/opt/homebrew/bin/pi",
       "/usr/local/bin/pi",
+      "<HOME>/.agent-hub/tools/npm/bin/pi",
     ],
     "linux": [
       "<HOME>/.local/bin/pi",
@@ -1634,6 +1652,7 @@ exports[`迁移前快照：声明表 > VENDOR_FALLBACK_PATHS（主目录换成�
       "<HOME>/.pi/bin/pi",
       "<HOME>/.local/share/mise/shims/pi",
       "<HOME>/.npm-global/bin/pi",
+      "<HOME>/.agent-hub/tools/npm/bin/pi",
     ],
   },
 }

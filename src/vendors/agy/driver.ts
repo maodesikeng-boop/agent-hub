@@ -133,7 +133,7 @@ interface SessionState extends BaseSessionState<Proc, Batch> {
 
 export interface AgyDriverOptions extends Omit<DriverOptions, "executablePath"> {
   /** agy 可执行文件路径，默认 "agy"。 */
-  executablePath?: string;
+  executablePath?: string | (() => string);
   /** 这个驱动对应的厂商实现，默认 composer.ts 的 agyComposerBase。 */
   composer?: VendorComposerBase;
   /** 用户主目录（找 agy 的运行时目录和 MCP 配置），默认 os.homedir()。 */
@@ -145,7 +145,7 @@ export interface AgyDriverOptions extends Omit<DriverOptions, "executablePath"> 
 }
 
 export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
-  readonly #agyPath: string;
+  readonly #agyPath: string | (() => string);
   readonly #homeDir?: string;
   readonly #customCatalog?: () => Promise<AgyConnectorCatalog>;
   readonly #readonlySpawn?: (base: SpawnCommand, input: ReadonlySandboxInput) => ScopedSpawn;
@@ -158,6 +158,10 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     this.#homeDir = options.homeDir;
     this.#customCatalog = options.connectorCatalog;
     this.#readonlySpawn = options.readonlySpawn;
+  }
+
+  #resolveAgyPath(): string {
+    return typeof this.#agyPath === "function" ? this.#agyPath() : this.#agyPath;
   }
 
   protected createSessionState(id: SessionId): SessionState {
@@ -402,7 +406,7 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
             policy: this.#latestReadonlyPolicy ?? policy,
             homeDir,
             baseEnv: process.env,
-            extraEnv: this.opts.env,
+            extraEnv: typeof this.opts.env === "function" ? this.opts.env() : this.opts.env,
             wrap,
           })(base, extraEnv),
       });
@@ -450,14 +454,15 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     let tmpDir: string | null = null;
     let launch: ScopedSpawn;
     let childEnv: Record<string, string> = { ...files.env };
+    const exePath = this.#resolveAgyPath();
     if (readonlyPolicy === undefined) {
-      launch = spawnInWriteScope("agy", { command: this.#agyPath, args }, files.writeScope ?? null, this.opts.log, `session ${st.id}`);
+      launch = spawnInWriteScope("agy", { command: exePath, args }, files.writeScope ?? null, this.opts.log, `session ${st.id}`);
     } else {
       const home = realpathSync(this.#homeDir ?? homedir());
       const wrap = this.#readonlySpawn ?? ((base, input) => wrapInReadonlyOsSandbox(base, input));
       const privateTmp = mkdtempSync(join(realpathSync(tmpdir()), "agent-hub-ro-"));
       launch = wrap(
-        { command: this.#agyPath, args },
+        { command: exePath, args },
         agyReadonlySandboxInput({ homeDir: home, tmpDir: privateTmp, policy: readonlyPolicy }),
       );
       if (!launch.osSandboxed) {
@@ -484,7 +489,7 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       if (tmpDir !== null) rmSync(tmpDir, { recursive: true, force: true });
     };
     const child = await this.spawnDetachedChild(
-      this.#agyPath,
+      exePath,
       launch.command,
       launch.args,
       row.cwd,

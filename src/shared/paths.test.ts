@@ -27,8 +27,15 @@ describe("paths：可执行文件与数据目录解析", () => {
   it("默认在用户目录下的 .agent-hub，各家默认找 PATH 里的同名可执行文件（spec 的 cli.command），按名单一家一项", () => {
     const paths = resolveHubPaths({}, "/Users/u");
     expect(paths.home).toBe(`/Users/u/${DATA_DIR_NAME}`);
+    expect(paths.providerSecretsFile).toBe(`/Users/u/${DATA_DIR_NAME}/state/provider-secrets.json`);
+    expect(paths.toolsNpmDir).toBe(`/Users/u/${DATA_DIR_NAME}/tools/npm`);
+    expect(paths.toolsNpmBinDir).toBe(`/Users/u/${DATA_DIR_NAME}/tools/npm/bin`);
     expect(paths.vendorPaths).toEqual(defaultVendorPaths);
     expect(Object.keys(paths.vendorPaths)).toEqual([...AGENT_VENDORS]);
+
+    const winPaths = resolveHubPaths({}, "C:\\Users\\u", { platform: "win32" });
+    expect(winPaths.toolsNpmDir).toBe("C:\\Users\\u\\.agent-hub\\tools\\npm");
+    expect(winPaths.toolsNpmBinDir).toBe("C:\\Users\\u\\.agent-hub\\tools\\npm");
   });
 
   it("环境变量 AGENT_HUB_<VENDOR> 覆盖默认值，支持 ~ 展开", () => {
@@ -175,9 +182,21 @@ describe("paths：可执行文件与数据目录解析", () => {
       // 都不存在，保持原样
       expect(resolveExecutable("codex", pathDir, [fallback1], { platform: "darwin" })).toBe("codex");
 
-      expect(VENDOR_FALLBACK_PATHS.agy("/Users/u", "darwin")).toEqual(["/Users/u/.local/bin/agy"]);
-      expect(VENDOR_FALLBACK_PATHS.claude("/Users/u", "darwin")).toEqual([]);
+      expect(VENDOR_FALLBACK_PATHS.agy("/Users/u", "darwin")).toEqual([
+        "/Users/u/.local/bin/agy",
+        "/Users/u/.agent-hub/tools/npm/bin/agy",
+      ]);
+      expect(VENDOR_FALLBACK_PATHS.claude("/Users/u", "darwin")).toEqual([
+        "/Users/u/.local/bin/claude",
+        "/opt/homebrew/bin/claude",
+        "/usr/local/bin/claude",
+        "/Users/u/.agent-hub/tools/npm/bin/claude",
+      ]);
       expect(VENDOR_FALLBACK_PATHS.codex("/Users/u", "darwin")).toEqual([
+        "/Users/u/.local/bin/codex",
+        "/opt/homebrew/bin/codex",
+        "/usr/local/bin/codex",
+        "/Users/u/.agent-hub/tools/npm/bin/codex",
         "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
         // ChatGPT 装在用户目录的 ~/Applications 里也要找得到，不然判成没装
         "/Users/u/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",

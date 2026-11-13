@@ -64,7 +64,13 @@ export function createVendorCatalogSources(
     if (create === null) continue;
     out[vendor] = create({
       ...opt,
-      fingerprint: opt.fingerprint ?? (() => vendorCatalogFingerprint(vendor, opt.path, opt.env ?? process.env, opt.cwd)),
+      fingerprint:
+        opt.fingerprint ??
+        (() => {
+          const p = typeof opt.path === "function" ? opt.path() : opt.path;
+          const e = typeof opt.env === "function" ? opt.env() : (opt.env ?? process.env);
+          return vendorCatalogFingerprint(vendor, p, e, opt.cwd);
+        }),
     });
   }
   return out;

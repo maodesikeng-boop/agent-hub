@@ -80,9 +80,9 @@ export const agyComposerBase: VendorComposerBase = {
 };
 
 export interface AgyComposerOptions {
-  executablePath?: string;
+  executablePath?: string | (() => string);
   querySkills?: (options: AgyModelQueryOptions) => Promise<unknown>;
-  env?: Record<string, string | undefined>;
+  env?: Record<string, string | undefined> | (() => Record<string, string | undefined>);
   timeoutMs?: number;
 }
 
@@ -94,12 +94,17 @@ export function createAgyComposer(options?: AgyComposerOptions): VendorComposer 
         return [...AGY_BUILTIN_COMMANDS];
       }
       const query = options.querySkills ?? queryAgySkills;
+      const agyPath =
+        typeof options.executablePath === "function"
+          ? options.executablePath()
+          : (options.executablePath ?? "agy");
+      const env = typeof options.env === "function" ? options.env() : options.env;
       const raw = await query({
-        agyPath: options.executablePath ?? "agy",
+        agyPath,
         cwd: target.cwd,
         timeoutMs: options.timeoutMs ?? COMMANDS_QUERY_TIMEOUT_MS,
         signal,
-        ...(options.env ? { env: options.env } : {}),
+        ...(env ? { env } : {}),
       });
       const commands = parseAgyCommands(raw);
       if (commands === null) throw new Error("agy skills 回应里没有可识别的列表");

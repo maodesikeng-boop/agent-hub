@@ -12,7 +12,8 @@ import {
   type ModelCatalog,
 } from "../../shared/index.ts";
 import { DEFAULT_CHOICE, defaultModelText, type ErrorLike } from "../format.ts";
-import { useModelCatalog, useRevalidateModels, useVendorChoices, vendorOptionLabel } from "../models.tsx";
+import { useModelCatalog, useModelCatalogs, useRevalidateModels, useVendorChoices, vendorOptionLabel } from "../models.tsx";
+import { Button } from "../ui/button.tsx";
 import { Input, Select } from "../ui/input.tsx";
 import { ReadonlyValue, SettingsRow } from "./SettingsList.tsx";
 
@@ -79,6 +80,7 @@ export function AgentRows({
   errors = {},
   customAction,
   onCustomSubmit,
+  onManageProviders,
 }: {
   value: AgentDraft;
   onChange: (draft: AgentDraft, row: AgentRowKey) => void;
@@ -88,7 +90,9 @@ export function AgentRows({
   errors?: Partial<Record<AgentRowKey, ErrorLike | null>>;
   customAction?: ReactNode;
   onCustomSubmit?: () => void;
+  onManageProviders?: () => void;
 }) {
+  const allCatalogs = useModelCatalogs();
   const { options: vendors, refreshUnusable } = useVendorChoices(value.vendor);
   const catalog = useModelCatalog(value.vendor);
   const revalidateModels = useRevalidateModels();
@@ -112,6 +116,8 @@ export function AgentRows({
   const unlisted = choice !== "" && choice !== CUSTOM_MODEL && !catalog.models.some((m) => m.id === choice);
   const efforts = effortsFor(catalog, modelOf(value));
   const customError = !result.ok ? result.error : null;
+  const showManageProviders =
+    onManageProviders !== undefined && allCatalogs.some((c) => !isSelectable(c.availability));
   return (
     <>
       <SettingsRow
@@ -119,27 +125,34 @@ export function AgentRows({
         detail={switchingToVendor != null ? `Switching to ${vendorLabel(switchingToVendor)}…` : undefined}
         error={errors.vendor}
       >
-        {(id) =>
-          vendors.length > 1 ? (
-            <Select
-              id={id}
-              variant="plain"
-              value={value.vendor}
-              disabled={disabled || switchingToVendor != null}
-              onPointerDown={refreshUnusable}
-              onFocus={refreshUnusable}
-              onChange={(e) => setVendor(e.target.value)}
-            >
-              {vendors.map((c) => (
-                <option key={c.vendor} value={c.vendor} disabled={!isSelectable(c.availability)}>
-                  {vendorOptionLabel(c)}
-                </option>
-              ))}
-            </Select>
-          ) : (
-            <ReadonlyValue id={id}>{vendorOptionLabel(catalog)}</ReadonlyValue>
-          )
-        }
+        {(id) => (
+          <>
+            {vendors.length > 1 ? (
+              <Select
+                id={id}
+                variant="plain"
+                value={value.vendor}
+                disabled={disabled || switchingToVendor != null}
+                onPointerDown={refreshUnusable}
+                onFocus={refreshUnusable}
+                onChange={(e) => setVendor(e.target.value)}
+              >
+                {vendors.map((c) => (
+                  <option key={c.vendor} value={c.vendor} disabled={!isSelectable(c.availability)}>
+                    {vendorOptionLabel(c)}
+                  </option>
+                ))}
+              </Select>
+            ) : (
+              <ReadonlyValue id={id}>{vendorOptionLabel(catalog)}</ReadonlyValue>
+            )}
+            {showManageProviders && (
+              <Button type="button" variant="ghost" size="sm" onClick={onManageProviders}>
+                Manage providers…
+              </Button>
+            )}
+          </>
+        )}
       </SettingsRow>
       <SettingsRow label="Model" wide error={errors.model}>
         {(id) => (

@@ -287,7 +287,6 @@ function runCursorSubcommand(
 export function createCursorCatalogSource(
   options: VendorCatalogSourceOptions & { timeoutMs?: number },
 ): VendorCatalogSource {
-  const env = options.env ?? process.env;
   const timeoutMs = options.timeoutMs ?? MODEL_CATALOG_TIMEOUT_MS;
 
   return {
@@ -297,9 +296,11 @@ export function createCursorCatalogSource(
     availabilityOf: cursorCatalogProbe.availabilityOf,
     availabilityOfError: cursorCatalogProbe.availabilityOfError,
     async query(signal: AbortSignal): Promise<CursorCatalogRaw> {
+      const exePath = typeof options.path === "function" ? options.path() : options.path;
+      const env = typeof options.env === "function" ? options.env() : (options.env ?? process.env);
       const [modelsSettled, statusSettled] = await Promise.allSettled([
-        runCursorSubcommand(options.path, ["models"], options.cwd, env, signal, timeoutMs),
-        runCursorSubcommand(options.path, ["status", "--format", "json"], options.cwd, env, signal, timeoutMs),
+        runCursorSubcommand(exePath, ["models"], options.cwd, env, signal, timeoutMs),
+        runCursorSubcommand(exePath, ["status", "--format", "json"], options.cwd, env, signal, timeoutMs),
       ]);
 
       const modelsText = modelsSettled.status === "fulfilled" ? modelsSettled.value.stdout : null;

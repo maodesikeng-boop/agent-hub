@@ -30,6 +30,8 @@ export interface HubPaths {
   childProcessesFile: string;
   /** 界面用户令牌，权限 0600，重启后沿用（见 limits.ts 的 UI_COOKIE_NAME）。 */
   uiTokenFile: string;
+  /** state/provider-secrets.json：界面内填写的受管厂商 API Key / Token，权限 0600，只读 Worker 沙箱显式禁读。 */
+  providerSecretsFile: string;
   /** state/device.json：这台设备的身份 { id, name }（联机，daemon/device.ts），第一次启动生成，之后不变。 */
   deviceFile: string;
   /** state/push-vapid.json：Web Push 的 VAPID 密钥对（联机 P4，daemon/push/vapid.ts），0600，第一次启动生成，不进仓库。 */
@@ -92,6 +94,10 @@ export interface HubPaths {
   sentFilesDir: string;
   /** backups/sync/：跨厂商同步落盘前的轮转备份目录（最多保留 MAX_VENDOR_SYNC_BACKUPS 份）。 */
   syncBackupsDir: string;
+  /** tools/npm/：免管理员受管 npm 全局安装前缀目录（继承数据目录受保护根防篡改保护）。 */
+  toolsNpmDir: string;
+  /** 受管 npm 导出的可执行文件目录：Windows 为 `tools/npm`，POSIX 为 `tools/npm/bin`。 */
+  toolsNpmBinDir: string;
   /** 各家可执行文件：spec 的 cli.envVar（AGENT_HUB_<大写编号>）给的路径，默认 cli.command（PATH 里找）。~ 开头的展开成用户主目录。 */
   vendorPaths: Record<AgentVendor, string>;
 }
@@ -136,6 +142,8 @@ export function resolveHubPaths(
   const platform = input.platform ?? (isWindowsStyleBase(home) ? process.platform : "darwin");
   const stateDir = joinForBase(home, "state");
   const logsDir = joinForBase(stateDir, "logs");
+  const toolsNpmDir = joinForBase(home, "tools", "npm");
+  const toolsNpmBinDir = platform === "win32" ? toolsNpmDir : joinForBase(toolsNpmDir, "bin");
   const pipeHash = platform === "win32" ? dataDirPipeHash(home) : "";
   const hubPipeNonce = platform === "win32" ? randomBytes(8).toString("hex") : "";
   return {
@@ -145,6 +153,7 @@ export function resolveHubPaths(
     lockFile: joinForBase(stateDir, "lock"),
     childProcessesFile: joinForBase(stateDir, "child-processes.json"),
     uiTokenFile: joinForBase(stateDir, "ui-token"),
+    providerSecretsFile: joinForBase(stateDir, "provider-secrets.json"),
     deviceFile: joinForBase(stateDir, "device.json"),
     pushVapidFile: joinForBase(stateDir, "push-vapid.json"),
     pushSubscriptionsFile: joinForBase(stateDir, "push-subscriptions.json"),
@@ -170,6 +179,8 @@ export function resolveHubPaths(
     uploadsDir: joinForBase(home, "uploads"),
     sentFilesDir: joinForBase(home, "sent-files"),
     syncBackupsDir: joinForBase(home, "backups", "sync"),
+    toolsNpmDir,
+    toolsNpmBinDir,
     vendorPaths: Object.fromEntries(
       VENDOR_LIST.map(({ id, cli }) => [id, expandHome(input.vendorPaths?.[id] || env[cli.envVar] || cli.command, userHome)]),
     ) as Record<AgentVendor, string>,
@@ -330,24 +341,73 @@ export function linuxInstallDirs(userHome: string): string[] {
   return [joinForBase(userHome, ".local", "bin"), joinForBase(userHome, ".npm-global", "bin"), "/usr/local/bin", "/home/linuxbrew/.linuxbrew/bin"];
 }
 
+/** 计算指定主目录（或自定义 hubHome）下受管 npm 可执行文件导出目录。 */
+export function defaultToolsNpmBinDir(
+  userHome: string,
+  platform: string = process.platform,
+  hubHome?: string,
+): string {
+  const home = hubHome ?? joinForBase(userHome, DATA_DIR_NAME);
+  const joinFn =
+    platform === "win32" || isWindowsStyleBase(home)
+      ? win32.join
+      : platform === "darwin" || platform === "linux"
+        ? posix.join
+        : join;
+  const npmDir = joinFn(home, "tools", "npm");
+  return platform === "win32" ? npmDir : joinFn(npmDir, "bin");
+}
+
+function managedNpmFallbackCandidates(
+  cmd: string,
+  toolsNpmBinDir: string,
+  platform: string,
+  joinFn: (...parts: string[]) => string,
+): string[] {
+  if (platform === "win32") {
+    return [joinFn(toolsNpmBinDir, `${cmd}.cmd`), joinFn(toolsNpmBinDir, `${cmd}.exe`)];
+  }
+  return [joinFn(toolsNpmBinDir, cmd)];
+}
+
 /**
  * 每家厂商的兜底安装路径（各家 paths.ts 的 fallbackPaths；没写的只认 PATH），以 AGENT_VENDORS 为键。
  * daemon.ts 按家调用，paths.test.ts 逐家核对。
  */
-export const VENDOR_FALLBACK_PATHS: Readonly<Record<AgentVendor, (userHome: string, platform?: string) => string[]>> = Object.fromEntries(
+export const VENDOR_FALLBACK_PATHS: Readonly<
+  Record<AgentVendor, (userHome: string, platform?: string, toolsNpmBinDir?: string) => string[]>
+> = Object.fromEntries(
   AGENT_VENDORS.map((vendor) => [
     vendor,
-    (userHome: string, platform: string = process.platform) => {
+    (userHome: string, platform: string = process.platform, customToolsNpmBinDir?: string) => {
       const joinFn =
         platform === "win32" || isWindowsStyleBase(userHome)
           ? win32.join
           : platform === "darwin" || platform === "linux"
             ? posix.join
             : join;
-      return VENDOR_PATHS[vendor].fallbackPaths?.({ userHome, platform, linuxInstallDirs: linuxInstallDirs(userHome), join: joinFn }) ?? [];
+      const toolsNpmBinDir = customToolsNpmBinDir ?? defaultToolsNpmBinDir(userHome, platform);
+      const declared = VENDOR_PATHS[vendor].fallbackPaths?.({
+        userHome,
+        platform,
+        linuxInstallDirs: linuxInstallDirs(userHome),
+        toolsNpmBinDir,
+        join: joinFn,
+      });
+      if (!declared) return [];
+      const managed = managedNpmFallbackCandidates(vendorSpec(vendor).cli.command, toolsNpmBinDir, platform, joinFn);
+      const seen = new Set(declared);
+      const appended = [...declared];
+      for (const item of managed) {
+        if (!seen.has(item)) {
+          seen.add(item);
+          appended.push(item);
+        }
+      }
+      return appended;
     },
   ]),
-) as Record<AgentVendor, (userHome: string, platform?: string) => string[]>;
+) as Record<AgentVendor, (userHome: string, platform?: string, toolsNpmBinDir?: string) => string[]>;
 
 export interface VendorExecutable {
   cmd: string;
@@ -356,7 +416,7 @@ export interface VendorExecutable {
 
 /** 按 AGENT_VENDORS 循环解析各家厂商可执行文件路径（cmd 为配置的命令或路径，path 为结合 PATH 与兜底候选路径解析后的结果）。 */
 export function resolveVendorExecutables(
-  paths: Pick<HubPaths, "vendorPaths">,
+  paths: Pick<HubPaths, "vendorPaths"> & Partial<Pick<HubPaths, "toolsNpmBinDir">>,
   envPath: string | undefined,
   userHome: string,
   platform: string = process.platform,
@@ -365,7 +425,12 @@ export function resolveVendorExecutables(
   return Object.fromEntries(
     AGENT_VENDORS.map((vendor) => {
       const cmd = paths.vendorPaths[vendor];
-      const path = resolveExecutable(cmd, envPath, VENDOR_FALLBACK_PATHS[vendor](userHome, platform), { platform, pathExt });
+      const path = resolveExecutable(
+        cmd,
+        envPath,
+        VENDOR_FALLBACK_PATHS[vendor](userHome, platform, paths.toolsNpmBinDir),
+        { platform, pathExt },
+      );
       return [vendor, { cmd, path }];
     }),
   ) as Record<AgentVendor, VendorExecutable>;
@@ -401,6 +466,18 @@ const locatedExecutables = new LRUCache<string, string>({ max: WIN_EXEC_RESOLVE_
 /** 仅供单测重置可执行文件路径缓存。 */
 export function resetLocatedExecutablesCacheForTest(): void {
   locatedExecutables.clear();
+}
+
+/** 安装、更新或主动刷新厂商环境后清理可执行文件解析缓存。 */
+export function invalidateLocatedExecutables(cmd?: string): void {
+  if (cmd === undefined) {
+    locatedExecutables.clear();
+    return;
+  }
+  for (const key of [...locatedExecutables.keys()]) {
+    const parts = key.split("\0");
+    if (parts[1] === cmd) locatedExecutables.delete(key);
+  }
 }
 
 function statSignature(file: string): string | null {

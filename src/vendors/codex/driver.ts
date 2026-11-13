@@ -133,7 +133,7 @@ interface SessionState extends BaseSessionState<Proc, Batch> {
 
 export interface CodexDriverOptions extends Omit<DriverOptions, "executablePath"> {
   /** codex 可执行文件路径，默认 "codex"。 */
-  executablePath?: string;
+  executablePath?: string | (() => string);
   /**
    * 会话没选模型（null = 默认）时 thread/start、thread/resume 显式带的模型：守护进程接模型名单里 codex 报的默认（有缓存）。
    * 不带的话 codex 用 ~/.codex/config.toml 里钉死的，那个模型可能这个账号用不了（实测 gpt-6-astra 报 model_not_found）。
@@ -149,7 +149,7 @@ export interface CodexDriverOptions extends Omit<DriverOptions, "executablePath"
 }
 
 export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
-  readonly #codexPath: string;
+  readonly #codexPath: string | (() => string);
   readonly #platform: NodeJS.Platform;
   readonly #writeScopeSpawn?: (base: SpawnCommand, scope: WriteScope | null) => ScopedSpawn;
   readonly #defaultModel: () => Promise<string | null>;
@@ -160,6 +160,10 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     this.#codexPath = executablePath ?? "codex";
     this.#platform = platform ?? process.platform;
     this.#writeScopeSpawn = writeScopeSpawn;
+  }
+
+  #resolveCodexPath(): string {
+    return typeof this.#codexPath === "function" ? this.#codexPath() : this.#codexPath;
   }
 
   protected createSessionState(id: SessionId): SessionState {
@@ -467,12 +471,13 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     // Worker 的可写范围：包一层 OS 沙箱，turn 的 sandboxPolicy 换成 externalSandbox（write-scope.ts）；没有 OS 沙箱时直接报错拒绝启动。
     // 只读 Worker 不在这里包：codex 自己的 readOnly 沙箱已经什么都写不了，macOS 沙箱又不能嵌套
     const wrapScope = launchConfig.readonly ? null : (files.writeScope ?? null);
-    const baseSpawn: SpawnCommand = { command: this.#codexPath, args: buildCodexArgs() };
+    const exePath = this.#resolveCodexPath();
+    const baseSpawn: SpawnCommand = { command: exePath, args: buildCodexArgs() };
     const launch = this.#writeScopeSpawn
       ? this.#writeScopeSpawn(baseSpawn, wrapScope)
       : spawnInWriteScope("codex", baseSpawn, wrapScope, this.opts.log, `session ${st.id}`, this.#platform);
     const child = await this.spawnDetachedChild(
-      this.#codexPath,
+      exePath,
       launch.command,
       launch.args,
       row.cwd,

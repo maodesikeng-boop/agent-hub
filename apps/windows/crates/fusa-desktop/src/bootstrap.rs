@@ -1,44 +1,18 @@
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
 use fusa_supervisor::{
-    build_refreshed_path_env, DaemonOwnership, DaemonSupervisor, DesktopContract, HostHttpClient,
-    NativeRuntimeConfig, ProbeOutcome, StartupPhase, SupervisorSnapshot, SupervisorState,
-    UreqHostHttpClient,
+    build_refreshed_path_env, DaemonOwnership, DaemonSupervisor, DesktopContract,
+    NativeRuntimeConfig, StartupPhase, SupervisorSnapshot, SupervisorState,
 };
 use serde::{Deserialize, Serialize};
 
-const FIRST_RUN_MARKER_FILE: &str = "desktop-onboarding.json";
 const DEFAULT_GIT_WINDOWS_INSTALL_CMD: &str = "winget install --id Git.Git -e --source winget";
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct OnboardingState {
-    completed: bool,
-}
-
-impl OnboardingState {
-    fn load(app_data_dir: &Path) -> Self {
-        let p = app_data_dir.join(FIRST_RUN_MARKER_FILE);
-        fs::read_to_string(p)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
-    }
-
-    fn save(&self, app_data_dir: &Path) -> std::io::Result<()> {
-        fs::create_dir_all(app_data_dir)?;
-        let p = app_data_dir.join(FIRST_RUN_MARKER_FILE);
-        let json = serde_json::to_vec_pretty(self)?;
-        fs::write(p, json)
-    }
-}
-
-/// 来自统一厂商注册表（`src/daemon/desktop-preflight.ts`）的单家 CLI 引导元数据（Rust 侧零硬编码厂商名）。
+/// 来自统一厂商注册表（`src/daemon/desktop-preflight.ts`）的单家 CLI 探测元数据（供 `--self-test` 冒烟校验使用）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VendorGuideEntry {
@@ -75,6 +49,7 @@ impl Default for DesktopPreflightSummary {
 }
 
 /// 发往内嵌本地引导页（`ui/app.js`）的无敏感信息视图状态。
+/// 仅承载守护进程启动中、退避重连、停止与故障恢复；厂商一键安装与界面内直接登录统一由 Web 主界面 `Settings → Providers` 承载。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BootstrapViewModel {
@@ -85,11 +60,6 @@ pub struct BootstrapViewModel {
     pub error: Option<String>,
     pub can_retry: bool,
     pub can_open_logs: bool,
-    pub show_git_guide: bool,
-    pub git_install_command: String,
-    pub show_vendor_guide: bool,
-    pub can_enter_workspace: bool,
-    pub vendors: Vec<VendorGuideEntry>,
 }
 
 impl Default for BootstrapViewModel {
@@ -101,23 +71,12 @@ impl Default for BootstrapViewModel {
             error: None,
             can_retry: false,
             can_open_logs: true,
-            show_git_guide: false,
-            git_install_command: DEFAULT_GIT_WINDOWS_INSTALL_CMD.to_string(),
-            show_vendor_guide: false,
-            can_enter_workspace: false,
-            vendors: Vec::new(),
         }
     }
 }
 
-/// 根据监管快照与前置检查结果生成纯前端展示状态：
-/// - 缺少 `git.exe` 时仅在首次引导页友好展示安装命令，绝不阻断 `Continue`（纯聊天场景随时可进）；
-/// - 所有状态词与计时单位使用简洁英文，不输出灰色解释性废话（遵守 `docs/ui-standard.md` 与 `frontend-rules`）。
-pub fn derive_view_from_supervisor(
-    snap: &SupervisorSnapshot,
-    preflight: &DesktopPreflightSummary,
-    onboarding_completed: bool,
-) -> BootstrapViewModel {
+/// 根据监管快照生成本地启动视图状态（所有状态词与计时单位使用简洁英文，遵守 `docs/ui-standard.md`）。
+pub fn derive_view_from_supervisor(snap: &SupervisorSnapshot) -> BootstrapViewModel {
     match &snap.state {
         SupervisorState::Idle => BootstrapViewModel::default(),
         SupervisorState::Starting { phase, .. } => {
@@ -147,36 +106,20 @@ pub fn derive_view_from_supervisor(
                 error: None,
                 can_retry: false,
                 can_open_logs: true,
-                show_git_guide: false,
-                git_install_command: preflight.git_install_command.clone(),
-                show_vendor_guide: false,
-                can_enter_workspace: false,
-                vendors: Vec::new(),
             }
         }
-        SupervisorState::Running { ownership, .. } => {
-            let any_vendor_installed = preflight.vendors.iter().any(|v| v.installed);
-            let should_pause_for_guide = *ownership == DaemonOwnership::Owned
-                && !onboarding_completed
-                && (!preflight.git_installed || !any_vendor_installed);
-            BootstrapViewModel {
-                tone: "ready".to_string(),
-                title: "Running".to_string(),
-                detail: if *ownership == DaemonOwnership::ExternalManaged {
-                    format!("127.0.0.1:{} (external)", snap.port)
-                } else {
-                    format!("127.0.0.1:{}", snap.port)
-                },
-                error: None,
-                can_retry: false,
-                can_open_logs: true,
-                show_git_guide: should_pause_for_guide && !preflight.git_installed,
-                git_install_command: preflight.git_install_command.clone(),
-                show_vendor_guide: should_pause_for_guide,
-                can_enter_workspace: true,
-                vendors: preflight.vendors.clone(),
-            }
-        }
+        SupervisorState::Running { ownership, .. } => BootstrapViewModel {
+            tone: "ready".to_string(),
+            title: "Running".to_string(),
+            detail: if *ownership == DaemonOwnership::ExternalManaged {
+                format!("127.0.0.1:{} (external)", snap.port)
+            } else {
+                format!("127.0.0.1:{}", snap.port)
+            },
+            error: None,
+            can_retry: false,
+            can_open_logs: true,
+        },
         SupervisorState::BackingOff {
             attempt,
             max_attempts,
@@ -190,11 +133,6 @@ pub fn derive_view_from_supervisor(
             error: Some(last_crash.menu_reason.clone()),
             can_retry: true,
             can_open_logs: true,
-            show_git_guide: false,
-            git_install_command: preflight.git_install_command.clone(),
-            show_vendor_guide: false,
-            can_enter_workspace: false,
-            vendors: Vec::new(),
         },
         SupervisorState::Stopping { .. } => BootstrapViewModel {
             tone: "working".to_string(),
@@ -203,11 +141,6 @@ pub fn derive_view_from_supervisor(
             error: None,
             can_retry: false,
             can_open_logs: true,
-            show_git_guide: false,
-            git_install_command: preflight.git_install_command.clone(),
-            show_vendor_guide: false,
-            can_enter_workspace: false,
-            vendors: Vec::new(),
         },
         SupervisorState::Stopped => BootstrapViewModel {
             tone: "muted".to_string(),
@@ -216,11 +149,6 @@ pub fn derive_view_from_supervisor(
             error: None,
             can_retry: true,
             can_open_logs: true,
-            show_git_guide: false,
-            git_install_command: preflight.git_install_command.clone(),
-            show_vendor_guide: false,
-            can_enter_workspace: false,
-            vendors: Vec::new(),
         },
         SupervisorState::Faulted { fault, .. } => BootstrapViewModel {
             tone: "error".to_string(),
@@ -229,11 +157,6 @@ pub fn derive_view_from_supervisor(
             error: Some(fault.user_message()),
             can_retry: true,
             can_open_logs: true,
-            show_git_guide: false,
-            git_install_command: preflight.git_install_command.clone(),
-            show_vendor_guide: false,
-            can_enter_workspace: false,
-            vendors: Vec::new(),
         },
     }
 }
@@ -283,15 +206,13 @@ pub fn run_desktop_preflight_probe(runtime_cfg: &NativeRuntimeConfig) -> Result<
         .map_err(|e| format!("解析 desktop-preflight.ts JSON 失败：{e}"))
 }
 
-/// 桌面端应用全局协调器（连接 `DaemonSupervisor`、前置环境检查、引导页与托盘）。
+/// 桌面端应用全局协调器（连接 `DaemonSupervisor`、本地启动页与托盘；就绪后直接进入 Web 主界面）。
 pub struct DesktopController {
     pub app_data_dir: PathBuf,
     pub contract: DesktopContract,
     pub supervisor: Arc<DaemonSupervisor>,
     view: Mutex<BootstrapViewModel>,
-    preflight_cache: Mutex<DesktopPreflightSummary>,
     workflow_running: AtomicBool,
-    suppress_auto_nav: AtomicBool,
     navigated_to_daemon: AtomicBool,
     on_view_changed: Mutex<Option<Arc<dyn Fn(BootstrapViewModel) + Send + Sync>>>,
     on_ready_to_navigate: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
@@ -309,9 +230,7 @@ impl DesktopController {
             contract,
             supervisor,
             view: Mutex::new(BootstrapViewModel::default()),
-            preflight_cache: Mutex::new(DesktopPreflightSummary::default()),
             workflow_running: AtomicBool::new(false),
-            suppress_auto_nav: AtomicBool::new(false),
             navigated_to_daemon: AtomicBool::new(false),
             on_view_changed: Mutex::new(None),
             on_ready_to_navigate: Mutex::new(None),
@@ -348,12 +267,8 @@ impl DesktopController {
     }
 
     fn on_supervisor_snapshot(&self, snap: SupervisorSnapshot) {
-        let preflight = self.preflight_cache.lock().unwrap().clone();
-        let onboarding = OnboardingState::load(&self.app_data_dir);
-        let next = derive_view_from_supervisor(&snap, &preflight, onboarding.completed);
+        let next = derive_view_from_supervisor(&snap);
         let auto_nav = matches!(snap.state, SupervisorState::Running { .. })
-            && !self.suppress_auto_nav.load(Ordering::SeqCst)
-            && !next.show_vendor_guide
             && !self.navigated_to_daemon.load(Ordering::SeqCst);
         self.set_view(next);
         if auto_nav {
@@ -362,11 +277,6 @@ impl DesktopController {
     }
 
     pub fn trigger_navigate_to_workspace(&self) {
-        let mut onboarding = OnboardingState::load(&self.app_data_dir);
-        if !onboarding.completed {
-            onboarding.completed = true;
-            let _ = onboarding.save(&self.app_data_dir);
-        }
         self.navigated_to_daemon.store(true, Ordering::SeqCst);
         if let Some(cb) = self.on_ready_to_navigate.lock().unwrap().clone() {
             cb();
@@ -404,21 +314,6 @@ impl DesktopController {
 
     fn run_bootstrap_blocking(self: &Arc<Self>) {
         fusa_supervisor::refresh_current_process_path(&[]);
-
-        let host_probe = UreqHostHttpClient.probe_status(self.supervisor.port(), &self.contract);
-        if host_probe.is_port_conflict() || matches!(host_probe, ProbeOutcome::Verified(_)) {
-            let _ = self.supervisor.ensure_running();
-            return;
-        }
-
-        self.suppress_auto_nav.store(true, Ordering::SeqCst);
-        if let Ok(report) = run_desktop_preflight_probe(self.supervisor.runtime().config()) {
-            *self.preflight_cache.lock().unwrap() = report;
-        }
-        let ensure_res = self.supervisor.ensure_running();
-        self.suppress_auto_nav.store(false, Ordering::SeqCst);
-        if ensure_res.is_ok() {
-            self.on_supervisor_snapshot(self.supervisor.snapshot());
-        }
+        let _ = self.supervisor.ensure_running();
     }
 }
