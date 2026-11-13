@@ -199,6 +199,7 @@ const DEFAULT_WIN_PATHEXT = ".COM;.EXE;.BAT;.CMD";
 
 function isExplicitExecutablePath(cmd: string, platform: string): boolean {
   if (cmd.includes("/")) return true;
+  if (/^[A-Za-z]:[\\/]/.test(cmd) || cmd.startsWith("\\\\")) return true;
   if (platform === "win32") {
     return cmd.includes("\\") || /^[A-Za-z]:/.test(cmd);
   }
@@ -337,7 +338,12 @@ export const VENDOR_FALLBACK_PATHS: Readonly<Record<AgentVendor, (userHome: stri
   AGENT_VENDORS.map((vendor) => [
     vendor,
     (userHome: string, platform: string = process.platform) => {
-      const joinFn = platform === "win32" ? win32.join : (platform === "darwin" || platform === "linux" ? posix.join : join);
+      const joinFn =
+        platform === "win32" || isWindowsStyleBase(userHome)
+          ? win32.join
+          : platform === "darwin" || platform === "linux"
+            ? posix.join
+            : join;
       return VENDOR_PATHS[vendor].fallbackPaths?.({ userHome, platform, linuxInstallDirs: linuxInstallDirs(userHome), join: joinFn }) ?? [];
     },
   ]),

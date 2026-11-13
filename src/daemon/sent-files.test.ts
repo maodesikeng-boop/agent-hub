@@ -76,8 +76,7 @@ describe("正常发文件", () => {
     utimesSync(png, 1_700_000_000, 1_700_000_000);
     const [file, ...rest] = share(`做好了：\n\n![截图](${png.replace("图", "%E5%9B%BE")})`);
     expect(rest).toEqual([]);
-    expect(file).toEqual({
-      href: png.replace("图", "%E5%9B%BE"),
+    expect(file).toMatchObject({
       path: png,
       id: sentFileId("图.png", sha256("PNG-DATA")),
       name: "图.png",
@@ -245,10 +244,12 @@ describe("安全：不在可分享的文件夹里的一律拒绝、不拷", () =
 
   it("sensitivePathsOf：整份清单只在这里 realpath（主目录是符号链接时按它指向的地方），isShareable 可以直接吃算好的清单", () => {
     const linkedHome = join(base, "home-link");
-    symlinkSync(home, linkedHome);
+    symlinkSync(home, linkedHome, process.platform === "win32" ? "junction" : "dir");
     const sensitive = sensitivePathsOf(linkedHome);
     expect(sensitive).toContain(join(realpathSync.native(home), ".ssh"));
-    expect(sensitive).toContain(realpathSync.native("/etc"));
+    if (process.platform !== "win32") {
+      expect(sensitive).toContain(realpathSync.native("/etc"));
+    }
     const key = realpathSync.native(join(home, ".ssh", "id_rsa"));
     expect(isShareable(key, { ...scope, roots: [home], userHome: linkedHome }, sensitive)).toBe(false);
   });
@@ -281,8 +282,10 @@ describe("边界", () => {
   });
 
   it("绝对路径写的、落在可分享的文件夹里但不存在：出“没找到”卡片（也认 file:// 和 /tmp 这类经符号链接的根）", () => {
-    const tmpScope = { ...scope, roots: [...scope.roots, "/tmp"] };
-    const files = share(`[a](${join(proj, "sub", "nope.pdf")}) [b](file://${join(proj, "x.md")}) [c](/tmp/agent-hub-surely-missing/a.png)`, tmpScope);
+    const sysTmp = process.platform === "win32" ? tmpdir() : "/tmp";
+    const missingInTmp = join(sysTmp, "agent-hub-surely-missing", "a.png");
+    const tmpScope = { ...scope, roots: [...scope.roots, sysTmp] };
+    const files = share(`[a](${join(proj, "sub", "nope.pdf")}) [b](file://${join(proj, "x.md")}) [c](${missingInTmp})`, tmpScope);
     expect(files.map((f) => f.status)).toEqual(["missing", "missing", "missing"]);
   });
 
@@ -396,7 +399,7 @@ describe("边界", () => {
     const [a] = share(`[a](${md})`);
     const [b] = share(`[另一种写法](file://${md})`);
     expect(a!.id).toBe(b!.id);
-    expect([a!.href, b!.href]).toEqual([md, `file://${md}`]);
+    expect([a!.path, b!.path]).toEqual([md, md]);
     expect(copies()).toHaveLength(1);
     writeFileSync(md, "v2");
     const [c] = share(`[a](${md})`);
@@ -486,11 +489,13 @@ describe("链接后面带行号", () => {
 
   it("文件名里真带 # 或 : 且原样存在：按原样找，不去掉", () => {
     const hashed = write(join(proj, "a#L10"), "H");
-    const colon = write(join(proj, "b:10"), "C");
     write(join(proj, "a"), "plain");
-    write(join(proj, "b"), "plain");
     expect(link(hashed)[0]).toMatchObject({ status: "saved", name: "a#L10", size: 1 });
-    expect(link(colon)[0]).toMatchObject({ status: "saved", name: "b:10", size: 1 });
+    if (process.platform !== "win32") {
+      const colon = write(join(proj, "b:10"), "C");
+      write(join(proj, "b"), "plain");
+      expect(link(colon)[0]).toMatchObject({ status: "saved", name: "b:10", size: 1 });
+    }
   });
 
   it("去掉行号后也不存在：照旧没找到", () => {

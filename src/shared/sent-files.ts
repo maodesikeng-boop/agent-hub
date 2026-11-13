@@ -164,7 +164,9 @@ export function parseLocalHref(href: string): LocalHref | null {
   if (/^file:/i.test(raw)) {
     const rest = raw.replace(/^file:\/\//i, "");
     if (rest === raw) return null;
-    const path = rest.startsWith("/") ? rest : /^localhost\//i.test(rest) ? rest.slice("localhost".length) : null;
+    const afterLocalhost = /^localhost(?:\/|(?=[A-Za-z]:[\\/]))/i.test(rest) ? rest.slice("localhost".length) : null;
+    const candidate = rest.startsWith("/") || WIN_DRIVE_ABS.test(rest) ? rest : afterLocalhost;
+    const path = candidate && (candidate.startsWith("/") || WIN_DRIVE_ABS.test(candidate)) ? candidate : null;
     if (path === null) return null;
     const decoded = decodePercent(path);
     const winDrive = FILE_URL_WIN_DRIVE.exec(decoded);
@@ -226,13 +228,13 @@ function extractRawWindowsLinkTarget(node: MdNode, rawMarkdown: string | undefin
     if (inner.startsWith("<") && inner.endsWith(">")) {
       inner = inner.slice(1, -1);
     }
-    if (/^(?:[A-Za-z]:\\|\\\\|~\\)/.test(inner)) {
+    if (/^(?:[A-Za-z]:\\|\\\\|~\\|file:\/\/(?:localhost\/?)?[A-Za-z]:\\)/i.test(inner)) {
       return inner;
     }
   }
   if (slice.startsWith("<") && slice.endsWith(">")) {
     const inner = slice.slice(1, -1);
-    if (/^(?:[A-Za-z]:\\|\\\\)/.test(inner)) {
+    if (/^(?:[A-Za-z]:\\|\\\\|file:\/\/(?:localhost\/?)?[A-Za-z]:\\)/i.test(inner)) {
       return inner;
     }
   }

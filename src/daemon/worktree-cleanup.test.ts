@@ -53,6 +53,7 @@ beforeEach(() => {
   repo = join(root, "work", "repo");
   mkdirSync(repo, { recursive: true });
   git(repo, "init", "-q", "-b", "main");
+  git(repo, "config", "core.autocrlf", "false");
   writeFileSync(join(repo, "README.md"), "init\n");
   git(repo, "add", "-A");
   git(repo, "commit", "-q", "-m", "init");
