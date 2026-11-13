@@ -9,6 +9,7 @@ import { writeFakePiBinary } from "./fixtures/fake-pi.ts";
 import { PI_NATIVE_FORKER_ID, createPiForker } from "./handover.ts";
 import * as piPaths from "./paths.ts";
 import { piSessionDirName, piSessionFiles, piSessionsRoot, piTranscriptPath } from "./transcript.ts";
+import { removeTreeWithRetry } from "../../daemon/platform/index.ts";
 
 const tempDirs: string[] = [];
 
@@ -18,9 +19,9 @@ function makeTempDir(): string {
   return dir;
 }
 
-afterEach(() => {
+afterEach(async () => {
   for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { recursive: true, force: true });
+    await removeTreeWithRetry(dir);
   }
 });
 

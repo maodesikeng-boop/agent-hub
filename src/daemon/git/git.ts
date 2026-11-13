@@ -251,7 +251,7 @@ interface WorktreeEntry {
 /** 解析 `git worktree list --porcelain`：每个 worktree 一段，段之间空一行。 */
 function parseWorktreeList(output: string): WorktreeEntry[] {
   const entries: WorktreeEntry[] = [];
-  for (const block of output.split(/\n\s*\n/)) {
+  for (const block of output.replace(/\r\n/g, "\n").split(/\n\s*\n/)) {
     let path: string | null = null;
     let branch: string | null = null;
     let locked: string | null = null;

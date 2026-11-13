@@ -1,7 +1,7 @@
-import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { openDatabase } from "../src/daemon/store/db.ts";
@@ -22,7 +22,26 @@ afterEach(() => {
 });
 
 function sqlite(db: string, sql: string): string {
-  return execFileSync("sqlite3", [db, sql], { encoding: "utf8" });
+  const trimmed = sql.trim();
+  const conn = new DatabaseSync(db, { enableForeignKeyConstraints: false });
+  try {
+    if (trimmed.startsWith(".read ")) {
+      const targetFile = trimmed.slice(6).trim();
+      conn.exec(readFileSync(targetFile, "utf8"));
+      return "";
+    }
+    if (/^SELECT\b/i.test(trimmed)) {
+      const stmt = conn.prepare(trimmed);
+      const rows = stmt.all();
+      return rows
+        .map((r) => Object.values(r).map((v) => (v === null || v === undefined ? "" : String(v))).join("|"))
+        .join("\n");
+    }
+    conn.exec(sql);
+    return "";
+  } finally {
+    conn.close();
+  }
 }
 
 function freshDb(): string {
@@ -51,14 +70,10 @@ describe("0001_init.sql", () => {
          VALUES (1, 'user', 'text', 'hi', 'client:a', 0, 0);`,
     );
     expect(() =>
-      execFileSync(
-        "sqlite3",
-        [
-          db,
-          `INSERT INTO messages (conversation_id, sender, kind, text, dedupe_key, created_at, updated_at)
-             VALUES (1, 'user', 'text', 'hi again', 'client:a', 0, 0)`,
-        ],
-        { stdio: "pipe" },
+      sqlite(
+        db,
+        `INSERT INTO messages (conversation_id, sender, kind, text, dedupe_key, created_at, updated_at)
+           VALUES (1, 'user', 'text', 'hi again', 'client:a', 0, 0)`,
       ),
     ).toThrow(/UNIQUE/);
   });
@@ -68,10 +83,9 @@ describe("0001_init.sql", () => {
     sqlite(db, `.read ${migration}`);
     sqlite(db, `INSERT INTO actions (type, dedupe_key, params, next_attempt_at, created_at, updated_at) VALUES ('session.send', '1', '{}', 0, 0, 0)`);
     expect(() =>
-      execFileSync(
-        "sqlite3",
-        [db, `INSERT INTO actions (type, dedupe_key, params, next_attempt_at, created_at, updated_at) VALUES ('session.send', '1', '{}', 0, 0, 0)`],
-        { stdio: "pipe" },
+      sqlite(
+        db,
+        `INSERT INTO actions (type, dedupe_key, params, next_attempt_at, created_at, updated_at) VALUES ('session.send', '1', '{}', 0, 0, 0)`,
       ),
     ).toThrow(/UNIQUE/);
   });
@@ -79,9 +93,9 @@ describe("0001_init.sql", () => {
 
 function fails(db: string, sql: string): string {
   try {
-    execFileSync("sqlite3", ["-bail", db, sql], { stdio: "pipe", encoding: "utf8" });
+    sqlite(db, sql);
   } catch (error) {
-    return String((error as { stderr: string }).stderr);
+    return error instanceof Error ? error.message : String(error);
   }
   throw new Error(`应该失败但成功了：${sql}`);
 }

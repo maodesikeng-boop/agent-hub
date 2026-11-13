@@ -76,7 +76,8 @@ export function agyReadonlySandboxInput(input: { homeDir: string; tmpDir: string
   const real = input.realpath ?? realpathOrSelf;
   const home = trimSlash(real(input.homeDir));
   const { cliDir: cli, legacyDir: legacy } = agyHomePaths(home);
-  const needed = new Set(AGY_READABLE_SECRET_HOME_PATHS.map((d) => `${home}/${d}`));
+  const cmpKey = (p: string) => trimSlash(p).replace(/\\/g, "/").toLowerCase();
+  const needed = new Set(AGY_READABLE_SECRET_HOME_PATHS.map((d) => cmpKey(`${home}/${d}`)));
   const writableFileGlobs = [...AGY_RUNTIME_FILES.map((f) => `${cli}/${f}`), ...AGY_RUNTIME_FILES_LEGACY.map((f) => `${legacy}/${f}`)];
   return {
     tmpDir: real(input.tmpDir),
@@ -85,7 +86,7 @@ export function agyReadonlySandboxInput(input: { homeDir: string; tmpDir: string
     writableDirs: [...AGY_RUNTIME_DIRS.map((d) => `${cli}/${d}`), ...READONLY_CACHE_DIRS.map((d) => `${home}/${d}`)],
     writableFileGlobs,
     writableFileRegexes: writableFileGlobs.map(fileRegex),
-    secretPaths: input.policy.secretPaths.map(real).filter((p) => !needed.has(trimSlash(p))),
+    secretPaths: input.policy.secretPaths.map(real).filter((p) => !needed.has(cmpKey(p))),
     secretGlobs: [...input.policy.secretGlobs],
   };
 }

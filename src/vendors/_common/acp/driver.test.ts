@@ -8,6 +8,7 @@ import { MemorySessionStore, realSleep } from "../../../daemon/driver/test-helpe
 import {
   SANDBOX_EXEC,
   osSandboxAvailable,
+  win32MxcReadonlyAvailable,
   type ReadonlySandboxInput,
 } from "../../../daemon/driver/write-scope.ts";
 import {
@@ -874,7 +875,9 @@ describe("ACP 驱动底座端到端协议与生命周期", () => {
               return false;
             }
           })()
-        : osSandboxAvailable();
+        : process.platform === "win32"
+          ? win32MxcReadonlyAvailable()
+          : osSandboxAvailable();
 
     // 1. 当 OS 沙箱不可用（osSandboxed: false）时拒绝启动只读 Worker
     const hNoSandbox = track(

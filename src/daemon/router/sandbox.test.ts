@@ -104,7 +104,16 @@ describe("Router 轨道 B 只读沙箱与令牌权限守卫", () => {
       if (vendorSpec(vendor).capabilities.readonly === "settings") {
         expect(files.settingsFile).toBeDefined();
         const settingsJson = readFileSync(files.settingsFile!, "utf8");
-        expect(settingsJson).toContain(hubSock);
+        const parsedSettings = JSON.parse(settingsJson) as {
+          permissions?: { defaultMode?: string };
+          sandbox?: { enabled?: boolean; network?: { allowUnixSockets?: string[] } };
+        };
+        expect(parsedSettings.permissions?.defaultMode).toBe("default");
+        if (process.platform === "win32") {
+          expect(parsedSettings.sandbox?.enabled).toBe(false);
+        } else {
+          expect(parsedSettings.sandbox?.network?.allowUnixSockets).toContain(hubSock);
+        }
         expect(files.writeScope).toBeUndefined();
       } else {
         expect(files.writeScope).toBeDefined();

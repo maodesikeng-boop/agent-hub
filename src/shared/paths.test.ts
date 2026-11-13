@@ -227,15 +227,15 @@ describe("vendorCatalogFingerprint：模型目录缓存的 stat 指纹", () => {
 
   it("codex 的盯防文件跟着 CODEX_HOME 走（认证判断用的同一处）；没设或空白回到 ~/.codex；别家不受影响", () => {
     expect(vendorConfigHome("codex", "/home/u", { CODEX_HOME: "/x/codex-home" })).toBe("/x/codex-home");
-    expect(vendorConfigHome("codex", "/home/u", { CODEX_HOME: "  " })).toBe(join("/home/u", ".codex"));
-    expect(vendorConfigHome("codex", "/home/u", {})).toBe(join("/home/u", ".codex"));
+    expect(vendorConfigHome("codex", "/home/u", { CODEX_HOME: "  " })).toBe("/home/u/.codex");
+    expect(vendorConfigHome("codex", "/home/u", {})).toBe("/home/u/.codex");
     expect(vendorConfigHome("claude", "/home/u", { CODEX_HOME: "/x/codex-home" })).toBeNull();
     const files = vendorCatalogWatchFiles("codex", "/home/u", { CODEX_HOME: "/x/codex-home" });
-    expect(files).toContain(join("/x/codex-home", "auth.json"));
-    expect(files).toContain(join("/x/codex-home", "models_cache.json"));
-    expect(files.some((f) => f.startsWith(join("/home/u", ".codex")))).toBe(false);
-    expect(vendorCatalogWatchFiles("codex", "/home/u", {})).toContain(join("/home/u", ".codex", "auth.json"));
-    expect(vendorCatalogWatchFiles("claude", "/home/u", { CODEX_HOME: "/x/codex-home" })).toContain(join("/home/u", ".claude.json"));
+    expect(files).toContain("/x/codex-home/auth.json");
+    expect(files).toContain("/x/codex-home/models_cache.json");
+    expect(files.some((f) => f.startsWith("/home/u/.codex"))).toBe(false);
+    expect(vendorCatalogWatchFiles("codex", "/home/u", {})).toContain("/home/u/.codex/auth.json");
+    expect(vendorCatalogWatchFiles("claude", "/home/u", { CODEX_HOME: "/x/codex-home" })).toContain("/home/u/.claude.json");
   });
 
   it("自定义 CODEX_HOME 下的 auth.json / models_cache.json 变了：指纹跟着变；~/.codex 下的变化不影响", () => {

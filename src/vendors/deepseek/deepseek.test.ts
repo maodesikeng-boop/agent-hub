@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { isAlive, waitForExit } from "../../daemon/driver/process.ts";
 import { createModelCatalogs } from "../../daemon/driver/model-catalog.ts";
@@ -846,7 +846,7 @@ rl.on("line", (line) => {
 
     // 共享 $DSH_HOME 只有图片上传索引目录可写；profiles（cordis.patch.yml 可写 !!js）、storages、sessions、jobs 和根目录都不可写
     expect(DEEPSEEK_READONLY_RUNTIME_SUBDIRS).toEqual(["llm-deepseek"]);
-    const dshWritable = spawned.input.writableDirs.filter((d) => d === dshHome || d.startsWith(`${dshHome}/`));
+    const dshWritable = spawned.input.writableDirs.filter((d) => d === dshHome || d.startsWith(`${dshHome}${sep}`));
     expect(dshWritable).toEqual([join(dshHome, "llm-deepseek")]);
     expect(spawned.input.writableDirs).toContain(stateDir);
     expect(spawned.input.writableFileGlobs).toEqual([join(dshHome, "profiles", "acp", "cordis.yml"), join(dshHome, ".anonymous-user-id")]);

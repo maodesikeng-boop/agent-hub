@@ -197,7 +197,7 @@ describe("设备入口：TCP 127.0.0.1（中心）", () => {
 describe("认错设备令牌的 401 也带 no-store", () => {
   const wrongAuth = { authorization: `Bearer ${newPeerToken()}`, [PEER_DEVICE_HEADER]: peer.id };
 
-  it("设备入口（unix socket 和 TCP）", async () => {
+  it.skipIf(process.platform === "win32")("设备入口（unix socket 和 TCP）", async () => {
     const socketPath = join(tempDir(), "peer.sock");
     await device({ socket: socketPath });
     const socketRes = await send({ socketPath }, "GET", API_PATHS.state, wrongAuth);

@@ -11,6 +11,8 @@ import {
   WIN_CMD_SHIM_CACHE_MAX,
   WIN_CMD_SHIM_MAX_BYTES,
   buildReadonlyPolicy,
+  localLinksOf,
+  type MdNode,
 } from "../../shared/index.ts";
 import {
   VENDOR_FALLBACK_PATHS,
@@ -646,5 +648,15 @@ describe("hub.exe 垫片安装、Git Bash MSYSTEM 斜杠拦截、准备命令 sh
     });
     expect(winRoPolicy.secretPaths).toContain("C:\\Users\\u\\.agent-hub\\state\\ui-token");
     expect(winRoPolicy.protectedRoots).toEqual(["C:\\Users\\u\\.agent-hub", "D:\\.fusa-wt\\12345678"]);
+
+    const md = "截图 ![pic](C:\\Users\\u\\.agent-hub\\uploads\\a.png) 与密钥 [k](<C:\\Users\\u\\.ssh\\id_rsa>)";
+    const tree = unified().use(remarkParse).parse(md) as MdNode;
+    const extracted = localLinksOf(tree, md);
+    expect(extracted.map((x) => x.local)).toEqual([
+      { kind: "absolute", path: "C:\\Users\\u\\.agent-hub\\uploads\\a.png" },
+      { kind: "absolute", path: "C:\\Users\\u\\.ssh\\id_rsa" },
+    ]);
   });
 });
+import { unified } from "unified";
+import remarkParse from "remark-parse";

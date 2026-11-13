@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RequestError, type SessionConfigOption } from "@agentclientprotocol/sdk/unstable";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -151,14 +151,14 @@ describe("cursor spec 与 paths 声明边界", () => {
         userHome: "/Users/u",
         platform: "darwin",
         linuxInstallDirs: linuxInstallDirs("/Users/u"),
-        join,
+        join: posix.join,
       }),
     ).toEqual(["/Users/u/.local/bin/cursor-agent"]);
     const linuxPaths = cursorPaths.fallbackPaths!({
       userHome: "/home/u",
       platform: "linux",
       linuxInstallDirs: linuxInstallDirs("/home/u"),
-      join,
+      join: posix.join,
     });
     expect(linuxPaths[0]).toBe("/home/u/.local/bin/cursor-agent");
     expect(new Set(linuxPaths).size).toBe(linuxPaths.length);

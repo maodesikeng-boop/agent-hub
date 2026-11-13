@@ -276,7 +276,7 @@ function shareOne(path: string, local: LocalHref, name: string, budget: number, 
  */
 export function shareLinkedFiles(text: string, scope: ShareScope): SentFile[] {
   if (!text.includes("](") && !text.includes("<")) return [];
-  const links = localLinksOf(markdown.parse(text) as MdNode);
+  const links = localLinksOf(markdown.parse(text) as MdNode, text);
   if (links.length === 0) return [];
   const files: SentFile[] = [];
   let used = 0;

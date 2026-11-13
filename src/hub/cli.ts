@@ -2,7 +2,7 @@
 // 经 Unix socket 请求守护进程的 agent 接口，把结果打印出来，按 HUB_EXIT 退出。
 // 只引 shared 里不依赖 node:path 以外东西的几个文件，启动快。
 import { request, type ClientRequest } from "node:http";
-import { basename, resolve } from "node:path";
+import { basename, posix, resolve } from "node:path";
 import type { Readable } from "node:stream";
 import { parseArgs } from "node:util";
 import { PM_MODES, TASK_GRAPH_STATUSES, validateAskOptions, type PmMode } from "../shared/domain.ts";
@@ -467,13 +467,19 @@ interface Parsed {
 }
 
 function expandPath(raw: string, env: HubIo["env"], cwd: string): string {
+  const resolveFn =
+    /^[A-Za-z]:/.test(cwd) || cwd.startsWith("\\\\") || cwd.includes("\\") || /^[A-Za-z]:/.test(raw) || raw.startsWith("\\\\") || raw.includes("\\")
+      ? resolve
+      : posix.resolve;
   if (raw === "") throw new UsageError("路径不能是空的");
   if (raw === "~" || raw.startsWith("~/") || raw.startsWith("~\\")) {
     const home = env.HOME || env.USERPROFILE;
     if (home === undefined || home === "") throw new UsageError("路径以 ~ 开头，但没有设 HOME");
-    return resolve(home, raw.slice(2));
+    const resolveHome =
+      /^[A-Za-z]:/.test(home) || home.startsWith("\\\\") || home.includes("\\") ? resolve : posix.resolve;
+    return resolveHome(home, raw.slice(2));
   }
-  return resolve(cwd, raw);
+  return resolveFn(cwd, raw);
 }
 
 function allowOnly(values: Options, allowed: (keyof Options)[], what: string): void {

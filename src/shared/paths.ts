@@ -131,9 +131,9 @@ export function resolveHubPaths(
   userHome: string,
   input: ResolvePathsInput = {},
 ): HubPaths {
-  const platform = input.platform ?? process.platform;
   const rawHome = input.home || env[ENV_HOME];
   const home = rawHome ? expandHome(rawHome, userHome) : joinForBase(userHome, DATA_DIR_NAME);
+  const platform = input.platform ?? (isWindowsStyleBase(home) ? process.platform : "darwin");
   const stateDir = joinForBase(home, "state");
   const logsDir = joinForBase(stateDir, "logs");
   const pipeHash = platform === "win32" ? dataDirPipeHash(home) : "";

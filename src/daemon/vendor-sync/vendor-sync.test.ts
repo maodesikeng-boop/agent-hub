@@ -513,7 +513,7 @@ enabled = true
     // 项目 A 的 .claude/skills/repo-lint 建了软链，项目 B 的整目录软链保持原样
     expect(lstatSync(join(projectDir, ".claude", "skills", "repo-lint")).isSymbolicLink()).toBe(true);
     expect(lstatSync(join(linkedRepo, ".claude", "skills")).isSymbolicLink()).toBe(true);
-    expect(readlinkSync(join(linkedRepo, ".claude", "skills"))).toBe("../.agents/skills");
+    expect(readlinkSync(join(linkedRepo, ".claude", "skills")).replace(/\\/g, "/")).toBe("../.agents/skills");
 
     // 取消勾选 code-review：只移除受管软链，绝不碰 user-private
     const codeReviewKey = preview.skills.find((s) => s.name === "code-review")!.key;

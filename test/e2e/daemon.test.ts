@@ -1,6 +1,6 @@
 // W5 端到端（m1-plan 第 4 节“W5 组装 + 端到端”）：真守护进程 + 假 claude，临时数据目录。
 import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { API_PATHS, CRASH_RECOVERY_NOTE, RESEND_NOTE, RESTART_RECOVERY_NOTE, isDeviceId, type Attachment } from "../../src/shared/index.ts";
@@ -359,7 +359,7 @@ describe("聊天框上传文件", () => {
     expect(res.status).toBe(200);
     const attachment = (await res.json()) as Attachment;
     expect(attachment.name).toBe("便签.txt");
-    expect(attachment.path.startsWith(`${realpathSync.native(join(env.home, "uploads"))}/`)).toBe(true);
+    expect(attachment.path.startsWith(`${realpathSync.native(join(env.home, "uploads"))}${sep}`)).toBe(true);
     expect(readFileSync(attachment.path, "utf8")).toBe("暗号：蓝鲸");
 
     const posted = await fetch(client.base + API_PATHS.messages(conversationId), {

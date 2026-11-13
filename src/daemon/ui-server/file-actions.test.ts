@@ -29,7 +29,7 @@ let opened: string[][];
 let openError: Error | null;
 
 beforeEach(async () => {
-  root = realpathSync(mkdtempSync(join(tmpdir(), "hub-actions-")));
+  root = realpathSync.native(mkdtempSync(join(tmpdir(), "hub-actions-")));
   projectDir = join(root, "project");
   uploadsDir = join(root, "data", "uploads");
   sentFilesDir = join(root, "data", "sent-files");

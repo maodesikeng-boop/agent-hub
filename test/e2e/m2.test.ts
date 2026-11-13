@@ -7,7 +7,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdir
 import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { API_PATHS, ENV_DEFAULT_MODEL, HUB_COMMAND, HUB_REQUEST_TIMEOUT_MS, RELAUNCH_NOTE, type EditPersonaResponse, type Message, type StateSnapshot } from "../../src/shared/index.ts";
+import { API_PATHS, ENV_DEFAULT_MODEL, ENV_HUB_SOCK, HUB_COMMAND, HUB_EXIT, HUB_REQUEST_TIMEOUT_MS, RELAUNCH_NOTE, type EditPersonaResponse, type Message, type StateSnapshot } from "../../src/shared/index.ts";
 import { LOCAL_ERRORS } from "../../src/shared/errors.ts";
 import { DEFAULT_MIGRATIONS_DIR, migrate, openDatabase } from "../../src/daemon/store/index.ts";
 import {
@@ -53,7 +53,17 @@ function folder(name: string): string {
 }
 
 const real = (path: string) => realpathSync.native(path);
-const hubSock = () => join(env.home, "run", "hub.sock");
+const hubSock = () => {
+  if (process.platform === "win32") {
+    const envEntries = env.log().filter((e) => e.kind === "env");
+    const latest = envEntries.at(-1);
+    if (latest?.kind === "env" && latest.env[ENV_HUB_SOCK]) {
+      return latest.env[ENV_HUB_SOCK]!;
+    }
+  }
+  return join(env.home, "run", "hub.sock");
+};
+const bashPathArg = (p: string) => `'${p.replace(/\\/g, "/").replaceAll("'", "'\\''")}'`;
 /**
  * 旧的 hub.sock 被删掉重建了。靠 inode 号不同判断只在 macOS 上成立：Linux 的文件系统会马上复用刚释放的 inode 号。
  * Linux 上由别处证明：SIGTERM 那条在重启前确认文件已经没了，SIGKILL 那条后面 hub 能连上新的（旧文件没人监听）。
@@ -174,7 +184,7 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
   it("一句话建项目：会话里剧本跑 hub project create，推 project.created，对话里“项目已建好”，hub_calls 一行；下一条消息前按主文件夹重启", async () => {
     env = makeEnv();
     const foo = folder("foo");
-    env.setScript({ turns: [{ steps: [{ bash: `${HUB_COMMAND} project create --folder ${foo}` }, { text: "建好了" }] }], defaultTurn: quick("foo 里有一个 README") });
+    env.setScript({ turns: [{ steps: [{ bash: `${HUB_COMMAND} project create --folder ${bashPathArg(foo)}` }, { text: "建好了" }] }], defaultTurn: quick("foo 里有一个 README") });
     const { daemon, client, state, privateId, pmId } = await boot();
     const ws = await client.ws(state.seq);
     const id = await client.post(privateId, `在 ${foo} 建项目`);
@@ -418,7 +428,7 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
     env = makeEnv();
     const foo = folder("foo");
     const extra = folder("foo-docs");
-    env.setScript({ turns: [{ steps: [{ bash: `${HUB_COMMAND} project attach ${extra}` }, { text: "挂上了" }] }], defaultTurn: quick("看到了") });
+    env.setScript({ turns: [{ steps: [{ bash: `${HUB_COMMAND} project attach ${bashPathArg(extra)}` }, { text: "挂上了" }] }], defaultTurn: quick("看到了") });
     const { daemon, client } = await boot();
     const zhou = await pmWithProject(client, "阿周", foo);
     const first = await client.post(zhou.conversationId, `把 ${extra} 也挂上`);
@@ -454,10 +464,11 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
     expect(await env.runHub(oldPid, ["project", "attach", extra])).toMatchObject({ code: 0, stderr: "" });
     const before = await client.state();
     const vendor = argValue(lastProcOf(zhou.sessionId).argv, "--session-id");
-    const sockIno = statSync(hubSock()).ino;
+    const oldEndpoint = hubSock();
+    const sockIno = process.platform === "win32" ? 0 : statSync(oldEndpoint).ino;
 
     expect(await terminate(first)).toEqual({ code: 0, signal: null });
-    expect(existsSync(hubSock())).toBe(false);
+    if (process.platform !== "win32") expect(existsSync(oldEndpoint)).toBe(false);
     const daemon = await env.start();
     const c2 = client.withPort(daemon.port);
     const after = await c2.state();
@@ -466,12 +477,18 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
     expect(after.folders.map((f) => f.path)).toEqual([real(foo), real(extra)]);
     expect(messagesOf(after, zhou.conversationId).map((m: Message) => m.id)).toEqual(messagesOf(before, zhou.conversationId).map((m) => m.id));
     expectSockReplaced(sockIno);
-    // 上次的令牌全部作废
-    expect((await env.runHub(oldPid, ["status"])).code).toBe(1);
-    expect(await rawHub(tokenOf(oldPid), "status", {})).toEqual({ status: 401, body: expect.objectContaining({ ok: false, code: "unauthorized" }) });
+    // 上次的令牌全部作废（Windows 旧随机命名管道已销毁故连不上返 3；POSIX 路径重建后返 1）
+    expect((await env.runHub(oldPid, ["status"])).code).toBe(process.platform === "win32" ? HUB_EXIT.unreachable : 1);
+    if (process.platform !== "win32") {
+      expect(await rawHub(tokenOf(oldPid), "status", {})).toEqual({ status: 401, body: expect.objectContaining({ ok: false, code: "unauthorized" }) });
+    }
 
     const again = await c2.post(zhou.conversationId, "接着聊");
     await waitForStatus(c2, again, "replied");
+    if (process.platform === "win32") {
+      expect(hubSock()).not.toBe(oldEndpoint);
+      expect(await rawHub(tokenOf(oldPid), "status", {})).toEqual({ status: 401, body: expect.objectContaining({ ok: false, code: "unauthorized" }) });
+    }
     const proc = lastProcOf(zhou.sessionId);
     expect(argValue(proc.argv, "--resume")).toBe(vendor);
     expect(proc.cwd).toBe(real(foo));

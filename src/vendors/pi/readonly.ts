@@ -62,7 +62,8 @@ export function piReadonlySandboxInput(input: {
     ...PI_READONLY_CACHE_DIRS.map((d) => `${home}/${d}`),
   ];
 
-  const selfReadable = new Set(PI_SELF_READABLE_CONFIG_FILES.map((f) => trimSlash(real(`${configDir}/${f}`))));
+  const cmpKey = (p: string) => trimSlash(p).replace(/\\/g, "/").toLowerCase();
+  const selfReadable = new Set(PI_SELF_READABLE_CONFIG_FILES.map((f) => cmpKey(real(`${configDir}/${f}`))));
   return {
     tmpDir: real(input.tmpDir),
     ...(input.policy.stateDir ? { stateDir: input.policy.stateDir } : {}),
@@ -70,7 +71,7 @@ export function piReadonlySandboxInput(input: {
     writableDirs: [...new Set(writableDirs)],
     writableFileGlobs: [],
     writableFileRegexes: [],
-    secretPaths: input.policy.secretPaths.map(real).filter((p) => !selfReadable.has(trimSlash(p))),
+    secretPaths: input.policy.secretPaths.map(real).filter((p) => !selfReadable.has(cmpKey(p))),
     secretGlobs: [...input.policy.secretGlobs],
   };
 }

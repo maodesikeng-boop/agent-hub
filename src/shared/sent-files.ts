@@ -211,17 +211,46 @@ export function locationFallbackPaths(href: string, path: string): string[] {
   return out;
 }
 
+function extractRawWindowsLinkTarget(node: MdNode, rawMarkdown: string | undefined): string | null {
+  if (!rawMarkdown) return null;
+  const pos = (node as { position?: { start?: { offset?: number }; end?: { offset?: number } } }).position;
+  const start = pos?.start?.offset;
+  const end = pos?.end?.offset;
+  if (typeof start !== "number" || typeof end !== "number" || start < 0 || end > rawMarkdown.length || start >= end) {
+    return null;
+  }
+  const slice = rawMarkdown.slice(start, end);
+  const closeBracketParen = slice.indexOf("](");
+  if (closeBracketParen >= 0 && slice.endsWith(")")) {
+    let inner = slice.slice(closeBracketParen + 2, -1).trim();
+    if (inner.startsWith("<") && inner.endsWith(">")) {
+      inner = inner.slice(1, -1);
+    }
+    if (/^(?:[A-Za-z]:\\|\\\\|~\\)/.test(inner)) {
+      return inner;
+    }
+  }
+  if (slice.startsWith("<") && slice.endsWith(">")) {
+    const inner = slice.slice(1, -1);
+    if (/^(?:[A-Za-z]:\\|\\\\)/.test(inner)) {
+      return inner;
+    }
+  }
+  return null;
+}
+
 /**
  * 回复里写成本机路径的链接（候选）：按出现顺序去重（同一个地址写两次只算一个）。图片和链接一视同仁。
  * 不一定都是文件（站内链接 /login、不存在的相对路径），守护进程逐个判断（daemon/sent-files.ts），最多收 MAX_SENT_FILES_PER_MESSAGE 个。
  */
-export function localLinksOf(tree: MdNode): { href: string; local: LocalHref }[] {
+export function localLinksOf(tree: MdNode, rawMarkdown?: string): { href: string; local: LocalHref }[] {
   const seen = new Set<string>();
   const out: { href: string; local: LocalHref }[] = [];
   for (const node of linkNodesOf(tree)) {
     const href = node.url!;
     if (seen.has(href)) continue;
-    const local = parseLocalHref(href);
+    const rawWinTarget = extractRawWindowsLinkTarget(node, rawMarkdown);
+    const local = parseLocalHref(rawWinTarget ?? href);
     if (local === null) continue;
     seen.add(href);
     out.push({ href, local });
