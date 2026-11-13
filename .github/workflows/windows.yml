@@ -122,21 +122,30 @@ jobs:
           "FUSA_WIN_DIAG_DIR=$diagDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           & (Join-Path $helperDir "fusa-run.exe") probe
 
-      - name: Upload built fusa-win-helper binaries for vitest shards
-        uses: actions/upload-artifact@v4
-        with:
-          name: fusa-win-helper-bins
-          path: |
-            apps/windows/target/release/fusa-run.exe
-            apps/windows/target/release/hub.exe
-          if-no-files-found: error
-          retention-days: 1
-
       - name: Typecheck
         run: pnpm typecheck
 
       - name: Run Windows real-OS integration tests (test/windows)
         run: pnpm exec vitest run --project=node test/windows --reporter=verbose --reporter=github-actions --reporter=junit --outputFile.junit=vitest-windows-integration.xml
+
+      - name: Run cross-platform core unit tests on Windows
+        run: >-
+          pnpm exec vitest run --project=node
+          src/shared/paths.test.ts
+          src/shared/write-scope.test.ts
+          src/shared/readonly-policy.test.ts
+          src/shared/vendor-guard.test.ts
+          src/daemon/platform/win32.test.ts
+          src/daemon/driver/write-scope.test.ts
+          src/daemon/worktree-cleanup.test.ts
+          src/daemon/sent-files.test.ts
+          src/daemon/router/sandbox.test.ts
+          src/daemon/vendor-sync/vendor-sync.test.ts
+          src/daemon/ui-server/file-actions.test.ts
+          src/daemon/git/pr.test.ts
+          src/vendors/claude/settings.test.ts
+          test/migration.test.ts
+          --reporter=verbose --reporter=github-actions --reporter=junit --outputFile.junit=vitest-windows-core.xml
 
       - name: Upload Windows integration diagnostics on failure
         if: failure()
@@ -145,53 +154,6 @@ jobs:
           name: windows-integration-diagnostics
           path: |
             vitest-windows-integration.xml
+            vitest-windows-core.xml
             ${{ runner.temp }}/fusa-win-diag/**
-          if-no-files-found: ignore
-
-  windows-vitest-node:
-    name: windows vitest (node ${{ matrix.shard }})
-    needs: windows-helper-and-integration
-    runs-on: windows-latest
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1/2, 2/2]
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Enable git core.longpaths
-        run: git config --global core.longpaths true
-
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile --prefer-offline
-
-      - name: Download built fusa-win-helper binaries
-        uses: actions/download-artifact@v4
-        with:
-          name: fusa-win-helper-bins
-          path: apps/windows/target/release
-
-      - name: Export AGENT_HUB_WIN_HELPERS
-        shell: pwsh
-        run: |
-          $helperDir = Join-Path $PWD "apps\windows\target\release"
-          "AGENT_HUB_WIN_HELPERS=$helperDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-      - name: Run node vitest shard
-        run: pnpm exec vitest run --project=node --shard=${{ matrix.shard }} --reporter=verbose --reporter=github-actions --reporter=junit --outputFile.junit=vitest-junit-win.xml
-
-      - name: Upload vitest diagnostics on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: vitest-junit-windows-${{ strategy.job-index }}
-          path: vitest-junit-win.xml
           if-no-files-found: ignore

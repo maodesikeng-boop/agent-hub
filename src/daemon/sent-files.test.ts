@@ -144,6 +144,11 @@ describe("正常发文件", () => {
   });
 });
 
+const SYSTEM_OUTSIDE_FILE =
+  process.platform === "win32"
+    ? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "drivers", "etc", "hosts")
+    : "/etc/hosts";
+
 describe("安全：不在可分享的文件夹里的一律拒绝、不拷", () => {
   const rejected = (text: string, s: ShareScope = scope) => {
     const files = share(text, s);
@@ -153,7 +158,7 @@ describe("安全：不在可分享的文件夹里的一律拒绝、不拷", () =
   };
 
   it("~/.ssh/id_rsa", () => rejected("[key](~/.ssh/id_rsa)"));
-  it("/etc/hosts", () => rejected("[hosts](/etc/hosts)"));
+  it("系统目录外文件（/etc/hosts 或 drivers/etc/hosts）", () => rejected(`[hosts](${SYSTEM_OUTSIDE_FILE})`));
 
   it("项目里指向 ~/.ssh 的符号链接（文件、目录两种）", () => {
     symlinkSync(join(home, ".ssh", "id_rsa"), join(proj, "key.txt"));
@@ -162,7 +167,12 @@ describe("安全：不在可分享的文件夹里的一律拒绝、不拷", () =
     rejected(`[k](${join(proj, "ssh", "id_rsa")})`);
   });
 
-  it("/项目/../../etc/passwd", () => rejected(`[p](${proj}${"/..".repeat(20)}/etc/passwd)`));
+  it("/项目/../../穿越到外部系统文件", () =>
+    rejected(
+      process.platform === "win32"
+        ? `[p](${proj}${"\\..".repeat(20)}\\Windows\\System32\\drivers\\etc\\hosts)`
+        : `[p](${proj}${"/..".repeat(20)}/etc/passwd)`,
+    ));
 
   it("项目文件夹是 ~ 时，~/.agent-hub/state/ui-token（数据目录里除了 uploads、worktrees 都不行）", () => {
     const homeScope = { ...scope, cwd: home, roots: [home, worktrees, uploads] };
@@ -218,7 +228,7 @@ describe("安全：不在可分享的文件夹里的一律拒绝、不拷", () =
       expect(SENSITIVE_HOME_PATHS.some((p) => rel === p || rel.startsWith(`${p}/`)), rel).toBe(true);
       expect(share(`[s](~/${rel})`, homeScope)[0], rel).toMatchObject({ status: "not_allowed", id: null });
     }
-    expect(share("[h](/etc/hosts)", homeScope)[0]!.status).toBe("not_allowed");
+    expect(share(`[h](${SYSTEM_OUTSIDE_FILE})`, homeScope)[0]!.status).toBe("not_allowed");
     // 经符号链接指过去的也拒
     symlinkSync(join(home, ".aws", "credentials"), join(home, "creds.txt"));
     expect(share("[c](~/creds.txt)", homeScope)[0]!.status).toBe("not_allowed");

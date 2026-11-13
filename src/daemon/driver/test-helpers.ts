@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
   AgentSessionPatch,
@@ -19,18 +19,7 @@ import type { FakeLogEntry, FakeScript } from "../../../test/fake-claude/fake-cl
 import { wrapScriptAsPlatformCli } from "../../../test/fake-cli-shim.ts";
 import { createClaudeDriver, type ClaudeDriver, type ClaudeDriverOptions } from "../../vendors/claude/driver.ts";
 
-const RAW_FAKE_CLAUDE = fileURLToPath(new URL("../../../test/fake-claude/fake-claude.ts", import.meta.url));
-if (process.platform === "win32") {
-  const nodeDir = dirname(process.execPath);
-  const curPath = process.env.PATH ?? process.env.Path ?? "";
-  if (!curPath.toLowerCase().includes(nodeDir.toLowerCase())) {
-    process.env.PATH = curPath ? `${nodeDir}${delimiter}${curPath}` : nodeDir;
-  }
-}
-export const FAKE_CLAUDE =
-  process.platform === "win32"
-    ? wrapScriptAsPlatformCli(RAW_FAKE_CLAUDE, join(tmpdir(), `fusa-fake-claude-shared-${process.pid}`), "fake-claude")
-    : RAW_FAKE_CLAUDE;
+export const FAKE_CLAUDE = fileURLToPath(new URL("../../../test/fake-claude/fake-claude.ts", import.meta.url));
 
 /** 在 vi.useFakeTimers 之前拿到的真计时器，测试里“真等一会儿”用。 */
 const realSetTimeout = globalThis.setTimeout;

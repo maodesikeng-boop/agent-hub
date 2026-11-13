@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeExecutableNodeScript } from "../../../test/fake-cli-shim.ts";
 import { createResolveFolder } from "../ledger/files.ts";
 import { createLedger } from "../ledger/index.ts";
+import { removeTreeWithRetry } from "../platform/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
 import { describeGhError, parsePrList, parsePrView, probePr, probePrByUrl } from "./pr.ts";
 
@@ -13,9 +14,9 @@ let root: string;
 beforeEach(() => {
   root = realpathSync.native(mkdtempSync(join(tmpdir(), "agent-hub-pr-test-")));
 });
-afterEach(() => {
+afterEach(async () => {
   vi.unstubAllEnvs();
-  rmSync(root, { recursive: true, force: true });
+  await removeTreeWithRetry(root);
 });
 
 function fakeGh(script: string): void {
