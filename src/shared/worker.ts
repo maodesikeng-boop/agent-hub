@@ -67,7 +67,8 @@ type FieldKey = "状态" | "摘要" | "提交" | "PR" | "测试" | "偏离" | "�
 /**
  * 一项的开头：行首可以有 Markdown 的列表符号、引用（- * > 和空白），名字可以加粗（**状态**: 或 **状态:**），冒号全角半角都行。
  */
-const FIELD_LINE = /^[-*>\s]*(?:\*\*)?(状态|摘要|提交|PR|pr|测试|偏离|交棒|问题)\s*(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*(.*)$/u;
+const FIELD_LINE = /^([-*>\s]*)(?:\*\*)?(状态|摘要|提交|PR|pr|测试|偏离|交棒|问题)\s*(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*(.*)$/u;
+const CODE_FENCE_OPEN = /^\s*(`{3,}|~{3,})/u;
 /** 状态值首尾的标点、符号（“做完了。”“「做完了」”“**做完了**”）。 */
 const EDGE_PUNCTUATION = /^[\p{P}\p{S}\s]+|[\p{P}\p{S}\s]+$/gu;
 /** 提交写“无”，或者“无”后面跟着说明（“无（没提交）”“无，只读调查”）：都当没有提交。提交号不会以“无”开头。 */
@@ -137,12 +138,54 @@ export function parseWorkerReport(text: string): ParsedWorkerReport {
   if (block === null) return unformatted();
   const values: Partial<Record<FieldKey, string>> = {};
   let current: FieldKey | null = null;
+  let topStyle: { indent: number; hasBullet: boolean; hasQuote: boolean } | null = null;
+  let inFence: { char: "`" | "~"; len: number } | null = null;
   for (const line of block.split("\n")) {
-    const match = FIELD_LINE.exec(line.trim());
+    if (inFence !== null) {
+      if (current !== null) values[current] = `${values[current]}\n${line}`;
+      const trimmed = line.trim();
+      if (
+        trimmed.length >= inFence.len &&
+        [...trimmed].every((ch) => ch === inFence!.char)
+      ) {
+        inFence = null;
+      }
+      continue;
+    }
+    if (current !== null) {
+      const openFence = CODE_FENCE_OPEN.exec(line);
+      if (openFence !== null) {
+        const marker = openFence[1]!;
+        inFence = { char: marker[0] as "`" | "~", len: marker.length };
+        values[current] = `${values[current]}\n${line}`;
+        continue;
+      }
+    }
+    const match = FIELD_LINE.exec(line.trimEnd());
     if (match !== null) {
-      const rawKey = match[1]!;
-      current = (rawKey.toUpperCase() === "PR" ? "PR" : rawKey) as FieldKey;
-      values[current] = match[2]!;
+      const prefix = match[1]!;
+      const leadingWs = prefix.match(/^\s*/u)?.[0] ?? "";
+      const indent = leadingWs.replace(/\t/g, "  ").length;
+      const hasBullet = /[-*]/u.test(prefix);
+      const hasQuote = prefix.includes(">");
+      const isNestedContinuation =
+        topStyle !== null &&
+        current !== null &&
+        (indent > topStyle.indent ||
+          (!topStyle.hasBullet && hasBullet) ||
+          (!topStyle.hasQuote && hasQuote));
+      if (current !== null && isNestedContinuation) {
+        values[current] = `${values[current]}\n${line}`;
+      } else {
+        if (topStyle === null) {
+          topStyle = { indent, hasBullet, hasQuote };
+        } else if (indent < topStyle.indent) {
+          topStyle.indent = indent;
+        }
+        const rawKey = match[2]!;
+        current = (rawKey.toUpperCase() === "PR" ? "PR" : rawKey) as FieldKey;
+        values[current] = match[3]!;
+      }
     } else if (current !== null) {
       values[current] = `${values[current]}\n${line}`;
     }
@@ -153,10 +196,18 @@ export function parseWorkerReport(text: string): ParsedWorkerReport {
   const summary = field("摘要");
   if (status === undefined || summary === "") return unformatted();
   const commit = field("提交");
+  const commitStripped = commit.replace(EDGE_PUNCTUATION, "").trim();
+  const parsedCommit =
+    commit === "" ||
+    commitStripped === "" ||
+    commit.startsWith(NO_COMMIT) ||
+    NONE_WORDS.has(commitStripped.toLowerCase())
+      ? null
+      : commit;
   const prRaw = field("PR");
   const prStripped = prRaw.replace(EDGE_PUNCTUATION, "").trim();
   const pr =
-    prRaw === "" || NO_PR_PREFIX.test(prRaw) || NONE_WORDS.has(prStripped.toLowerCase())
+    prRaw === "" || prStripped === "" || NO_PR_PREFIX.test(prRaw) || NONE_WORDS.has(prStripped.toLowerCase())
       ? null
       : prRaw;
   const deviationRaw = field("偏离");
@@ -166,7 +217,7 @@ export function parseWorkerReport(text: string): ParsedWorkerReport {
     report: {
       status,
       summary,
-      commit: commit === "" || commit.startsWith(NO_COMMIT) ? null : commit,
+      commit: parsedCommit,
       pr,
       tests: field("测试"),
       deviation,

@@ -1,10 +1,16 @@
 // 任务图自动开工渲染、交棒包拼装与 upstream/ 落盘（docs/orchestration-simplify-design.md 第 3.3、4.2、4.5、9.3、9.4 节）。
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { truncateChars } from "../../shared/domain.ts";
 import type { SessionId, TaskDecision, TaskGraphId, TaskNodeKey, WorkerId, WorkerRecord } from "../../shared/domain.ts";
 import type { ProjectCard } from "../../shared/hub.ts";
-import { HANDOFF_NOTE_MAX_CHARS, HANDOFF_TOTAL_MAX_CHARS } from "../../shared/limits.ts";
+import {
+  HANDOFF_NOTE_MAX_CHARS,
+  HANDOFF_REPORT_FILE_MAX_CHARS,
+  HANDOFF_REPORT_TOTAL_MAX_CHARS,
+  HANDOFF_TOTAL_MAX_CHARS,
+  MAX_NODE_KEY_CHARS,
+} from "../../shared/limits.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import { sessionLaunchDir } from "../../shared/paths.ts";
 import { workerWorkspaceSection } from "../prompt.ts";
@@ -19,6 +25,7 @@ export const STEP_REVIEW_CHECKLIST = [
 ].join("\n");
 
 const charLen = (s: string): number => [...s].length;
+const SAFE_UPSTREAM_STEP_KEY_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 
 /**
  * 渲染图内步骤的常驻任务说明（写入 workers.task，进系统提示词“# 你的任务”）：
@@ -81,27 +88,51 @@ export type DirectUpstreamEntry =
       tracedSources: UpstreamSourceInfo[];
     };
 
-export function upstreamReportFilePath(launchDir: string, sessionId: SessionId, stepKey: TaskNodeKey): string {
-  return join(sessionLaunchDir(launchDir, sessionId), "upstream", `${stepKey}.md`);
+function resolveSafeUpstreamFile(
+  launchDir: string,
+  sessionId: SessionId,
+  stepKey: TaskNodeKey,
+): { dir: string; file: string } {
+  const key = stepKey.trim();
+  if (
+    key === "" ||
+    charLen(key) > MAX_NODE_KEY_CHARS ||
+    key.includes("..") ||
+    key.includes("/") ||
+    key.includes("\\") ||
+    key.includes("\0") ||
+    !SAFE_UPSTREAM_STEP_KEY_RE.test(key)
+  ) {
+    throw new Error(`unsafe upstream step key: ${JSON.stringify(stepKey)}`);
+  }
+  const dir = resolve(sessionLaunchDir(launchDir, sessionId), "upstream");
+  const file = resolve(dir, `${key}.md`);
+  if (dirname(file) !== dir) {
+    throw new Error(`upstream report path escaped upstream dir: ${JSON.stringify(stepKey)}`);
+  }
+  return { dir, file };
 }
 
-function writeUpstreamReportFile(launchDir: string, sessionId: SessionId, source: UpstreamSourceInfo): string {
-  const dir = join(sessionLaunchDir(launchDir, sessionId), "upstream");
+export function upstreamReportFilePath(launchDir: string, sessionId: SessionId, stepKey: TaskNodeKey): string {
+  return resolveSafeUpstreamFile(launchDir, sessionId, stepKey).file;
+}
+
+function writeUpstreamReportFile(
+  launchDir: string,
+  sessionId: SessionId,
+  source: UpstreamSourceInfo,
+  maxFileChars: number,
+): string {
+  const { dir, file } = resolveSafeUpstreamFile(launchDir, sessionId, source.key);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const file = join(dir, `${source.key}.md`);
-  writeFileSync(file, source.fullReportMarkdown, { mode: 0o600 });
+  const raw = source.fullReportMarkdown;
+  const bounded =
+    charLen(raw) > maxFileChars ? `${truncateChars(raw.trimEnd(), maxFileChars)}\n` : raw;
+  writeFileSync(file, bounded, { mode: 0o600 });
   return file;
 }
 
-function formatSourceBlock(
-  source: UpstreamSourceInfo,
-  budget: number,
-  opts: {
-    inheritedFromWorkerId: WorkerId | null;
-    launchDir: string;
-    sessionId: SessionId;
-  },
-): { body: string; reportFile: string | null } {
+function extractShownHandoff(source: UpstreamSourceInfo): string {
   const handoffParts: string[] = [];
   if (source.handoff.trim() !== "") handoffParts.push(source.handoff.trim());
   if (source.pmNote !== null && source.pmNote.trim() !== "") {
@@ -110,11 +141,24 @@ function formatSourceBlock(
     );
   }
   const rawHandoff = handoffParts.join("\n\n");
-  let shownHandoff = rawHandoff !== "" ? rawHandoff : (source.summary?.trim() || "（上一步未填写交棒说明）");
+  return rawHandoff !== "" ? rawHandoff : (source.summary?.trim() || "（上一步未填写交棒说明）");
+}
+
+function formatSourceBlock(
+  source: UpstreamSourceInfo,
+  budget: number,
+  maxFileChars: number,
+  opts: {
+    inheritedFromWorkerId: WorkerId | null;
+    launchDir: string;
+    sessionId: SessionId;
+  },
+): { body: string; reportFile: string | null } {
+  let shownHandoff = extractShownHandoff(source);
   let reportFile: string | null = null;
   if (charLen(shownHandoff) > budget) {
     shownHandoff = truncateChars(shownHandoff, budget);
-    reportFile = writeUpstreamReportFile(opts.launchDir, opts.sessionId, source);
+    reportFile = writeUpstreamReportFile(opts.launchDir, opts.sessionId, source, maxFileChars);
   }
 
   const metaLines: string[] = [];
@@ -195,9 +239,18 @@ function formatUpstreamSections(input: {
       ? HANDOFF_NOTE_MAX_CHARS
       : Math.min(HANDOFF_NOTE_MAX_CHARS, Math.floor(HANDOFF_TOTAL_MAX_CHARS / sourceCount));
 
+  let overflowCount = 0;
+  for (const src of uniqueSources.values()) {
+    if (charLen(extractShownHandoff(src)) > perSourceBudget) overflowCount++;
+  }
+  const maxFileChars =
+    overflowCount <= 1
+      ? HANDOFF_REPORT_FILE_MAX_CHARS
+      : Math.min(HANDOFF_REPORT_FILE_MAX_CHARS, Math.floor(HANDOFF_REPORT_TOTAL_MAX_CHARS / overflowCount));
+
   const formattedByKey = new Map<TaskNodeKey, string>();
   for (const [key, src] of uniqueSources) {
-    const { body } = formatSourceBlock(src, perSourceBudget, {
+    const { body } = formatSourceBlock(src, perSourceBudget, maxFileChars, {
       inheritedFromWorkerId: input.inheritedFromWorkerId,
       launchDir: input.launchDir,
       sessionId: input.sessionId,

@@ -648,8 +648,11 @@ export function createLedgerWorkers(
     const inheritedPlan = input.workspacePlan.kind === "inherit" ? input.workspacePlan : null;
     if (inheritedPlan !== null) {
       // 若上游是通过 graph done 手动放行的、其挂着的旧 Worker 仍处于 open，接手目录前自动将其收工
-      const prevWorker = workerRow(inheritedPlan.fromWorkerId);
-      if (prevWorker !== null && prevWorker.status === "open") {
+      const openSharing = db.all<WorkerDbRow>(
+        "SELECT * FROM workers WHERE worktree_path = ? AND status = 'open' ORDER BY id",
+        inheritedPlan.worktreePath,
+      );
+      for (const prevWorker of openSharing) {
         endWorkerIn(p, prevWorker, { notifyGraph: false });
       }
     }
@@ -782,7 +785,7 @@ export function createLedgerWorkers(
     const rawTitle =
       typeof args.title === "string" && args.title.trim() !== ""
         ? args.title
-        : (latest?.title ?? (stepHasBrief ? bindTarget.nodeTitle : args.title));
+        : (latest?.title ?? bindTarget?.nodeTitle ?? args.title);
     const title = typeof rawTitle === "string" ? normalizeWorkerTitle(rawTitle) : null;
     if (title === null) throw fail("invalid", "Worker 的标题不能是空的，也不能带换行等控制字符");
     let task: string;
@@ -875,6 +878,16 @@ export function createLedgerWorkers(
         endedOldList.push(endWorkerIn(p, old, { notifyGraph: false }));
       }
     }
+    if (effectiveInherit !== null) {
+      // 若继承的同线目录上还有通过 graph done 放行遗留的 open Worker，接手前自动将其收工，避免死锁在 waitsForFirstTurn
+      const openSharing = db.all<WorkerDbRow>(
+        "SELECT * FROM workers WHERE worktree_path = ? AND status = 'open' ORDER BY id",
+        effectiveInherit.worktreePath,
+      );
+      for (const prevWorker of openSharing) {
+        endWorkerIn(p, prevWorker, { notifyGraph: false });
+      }
+    }
     const t = now();
 
     const conversation = toConversation(
@@ -941,24 +954,35 @@ export function createLedgerWorkers(
       const baseWorkspaceNote =
         inherit !== null
           ? `你就在前任 Worker #${inherit.id} 的工作目录 ${inherit.worktree_path} 和分支 ${inherit.branch} 上，没提交的改动都还在，先看 git status 和 git log。`
-          : args.noWorktree === true
-            ? `这次按项目经理的要求直接在项目主文件夹 ${card.mainFolder} 里干（--no-worktree），没有接手前任的工作目录。${branchNote}`
-            : workspace === "main"
-              ? `你在项目主文件夹 ${card.mainFolder} 里干活，和前任是同一个目录，前任没提交的改动也都还在，先看 git status。`
-              : `前任没有还能接手的工作目录（已清理或没建成），你在新开的 worktree ${worker.worktree_path}（分支 ${worker.branch}）里，从主文件夹最后一次提交开始。${branchNote}`;
+          : upstreamInherit !== null
+            ? `前任没有建成工作目录，你接着用上一步（Worker #${upstreamInherit.fromWorkerId}）的工作目录 ${upstreamInherit.worktreePath} 和分支 ${upstreamInherit.branch}：它的提交、没提交的文件和装好的依赖都在，不要另开分支。${branchNote}`
+            : args.noWorktree === true
+              ? `这次按项目经理的要求直接在项目主文件夹 ${card.mainFolder} 里干（--no-worktree），没有接手前任的工作目录。${branchNote}`
+              : workspace === "main"
+                ? `你在项目主文件夹 ${card.mainFolder} 里干活，和前任是同一个目录，前任没提交的改动也都还在，先看 git status。`
+                : bindTarget.workspacePlan.kind === "fork"
+                  ? `前任没有还能接手的工作目录（已清理或没建成），你在新开的 worktree ${worker.worktree_path}（分支 ${worker.branch}）里，从上游分支 ${bindTarget.workspacePlan.baseBranch} 最新提交开始。${branchNote}`
+                  : `前任没有还能接手的工作目录（已清理或没建成），你在新开的 worktree ${worker.worktree_path}（分支 ${worker.branch}）里，从主文件夹最后一次提交开始。${branchNote}`;
       const workspaceNote = readonly ? `${baseWorkspaceNote}\n${WORKER_READONLY_NOTE}` : baseWorkspaceNote;
-      const baseTaskForTakeover =
-        takeover.originalTask ??
-        (stepHasBrief
+      const baseTaskForTakeover = stepHasBrief
+        ? renderGraphStepTask({
+            goal: bindTarget.graphGoal,
+            stepTitle: bindTarget.nodeTitle,
+            index: bindTarget.index,
+            total: bindTarget.total,
+            brief: bindTarget.brief!,
+            review: bindTarget.review,
+          })
+        : takeover.originalTask !== null && !takeover.originalTask.includes("## 你这一步：")
           ? renderGraphStepTask({
               goal: bindTarget.graphGoal,
               stepTitle: bindTarget.nodeTitle,
               index: bindTarget.index,
               total: bindTarget.total,
-              brief: bindTarget.brief!,
+              brief: takeover.originalTask,
               review: bindTarget.review,
             })
-          : task);
+          : (takeover.originalTask ?? task);
       const upstreamHandoff = bindTarget.buildUpstreamHandoff(session.id, effectiveInherit?.fromWorkerId ?? null);
       takeoverText =
         options.takeover?.takeoverMessage({
@@ -1051,9 +1075,9 @@ export function createLedgerWorkers(
     // 和用户在网页上手打一样：隐藏的命令（/clear 会换会话 ID，之后接回的是旧对话）不发，hub 退出码 1 打印原因（原因由厂商实现给）
     const blocked = ctx.commandBlockReason(session, text);
     if (blocked !== null) throw fail("invalid", blocked);
+    options.taskGraphs?.onWorkerResumedIn(p, worker.id);
     const message = insertPmMessage(p, worker, session, text, sendDedupeKey(worker.id));
     enqueue(p, { type: "session.send", params: { sessionId: message.session_id!, messageId: message.id, source: "user" } });
-    options.taskGraphs?.onWorkerResumedIn(p, worker.id);
     // /compact 这一轮只压缩上下文、没有汇报（afterDriverEvent）：别让项目经理干等
     const compactOnly = composerBaseOf(session.vendor)?.isCompactCommand(text) === true;
     startMaxTime(worker, maxTimeMs);

@@ -1275,18 +1275,56 @@ export function createLedgerTaskGraphs(
           continue;
         }
         if (!forked && w.worktree_path && existsSync(w.worktree_path)) {
-          return {
-            kind: "inherit",
-            fromWorkerId: w.id,
-            worktreePath: w.worktree_path,
-            branch: w.branch,
-            baseCommit: w.base_commit,
-          };
+          const chainWorkerIds = new Set<number>(parseJsonOr<WorkerId[]>(step.worker_ids_json, []));
+          let anc: TaskNodeKey | undefined = step.node_key;
+          const ancVisited = new Set<TaskNodeKey>();
+          while (anc !== undefined && !ancVisited.has(anc)) {
+            ancVisited.add(anc);
+            const ancNode = byKey.get(anc);
+            if (ancNode !== undefined) {
+              for (const id of parseJsonOr<WorkerId[]>(ancNode.worker_ids_json, [])) chainWorkerIds.add(id);
+            }
+            const prevs: readonly TaskNodeKey[] = incoming.get(anc) ?? [];
+            anc = prevs.length === 1 ? prevs[0] : undefined;
+          }
+          const otherUsers = db.all<{ id: number }>("SELECT id FROM workers WHERE worktree_path = ?", w.worktree_path);
+          const claimedOutsideChain = otherUsers.some((o) => !chainWorkerIds.has(o.id));
+          if (!claimedOutsideChain) {
+            return {
+              kind: "inherit",
+              fromWorkerId: w.id,
+              worktreePath: w.worktree_path,
+              branch: w.branch,
+              baseCommit: w.base_commit,
+            };
+          }
         }
         return { kind: "fork", baseBranch: w.branch };
       }
       return { kind: "fresh" };
     }
+  };
+
+  /** 检查指定步骤是否存在正在执行或仍挂着未收工 Worker 的传递下游步骤（防上下游同时处于运行态或争抢同一同线 worktree）。 */
+  const findActiveDownstream = (
+    startKey: TaskNodeKey,
+    byKey: ReadonlyMap<TaskNodeKey, TaskNodeDbRow>,
+    outgoing: ReadonlyMap<TaskNodeKey, readonly TaskNodeKey[]>,
+  ): TaskNodeKey | null => {
+    const queue = [...(outgoing.get(startKey) ?? [])];
+    const visited = new Set<TaskNodeKey>();
+    while (queue.length > 0) {
+      const k = queue.shift()!;
+      if (visited.has(k)) continue;
+      visited.add(k);
+      const n = byKey.get(k);
+      if (n === undefined) continue;
+      if (n.status === "running" || n.active_worker_id !== null) {
+        return k;
+      }
+      for (const next of outgoing.get(k) ?? []) queue.push(next);
+    }
+    return null;
   };
 
   const buildGraphMaps = (graphId: TaskGraphId) => {
@@ -2011,6 +2049,10 @@ export function createLedgerTaskGraphs(
     for (const rm of patch.removeEdges ?? []) {
       const fk = validateNodeKey(rm.from);
       const tk = validateNodeKey(rm.to);
+      const target = nodesByKey.get(tk);
+      if (target !== undefined && (target.status === "running" || target.status === "done" || target.active_worker_id !== null)) {
+        throw fail("conflict", `节点「${tk}」${taskNodeStatusText(toTaskNode(target), "pm")}，不能移除其前置依赖`);
+      }
       edgeSet.delete(`${fk}\0${tk}`);
     }
     for (const a of addedNodes) {
@@ -2668,12 +2710,26 @@ export function createLedgerTaskGraphs(
     });
 
     const t = now();
+    // 第 6 节：步骤完了以后，它的 Worker 由后台收工（被下一步接手时，或图结束时）
+    const candidateWorkerIds = new Set<WorkerId>();
+    for (const n of nodeRows) {
+      if (n.active_worker_id !== null) candidateWorkerIds.add(n.active_worker_id);
+      for (const wid of parseJsonOr<WorkerId[]>(n.worker_ids_json, [])) candidateWorkerIds.add(wid);
+    }
+    db.run(
+      "UPDATE task_graph_steps SET active_worker_id = NULL, updated_at = ? WHERE graph_id = ? AND active_worker_id IS NOT NULL",
+      t,
+      graphRow.id,
+    );
     db.run(
       "UPDATE task_graphs SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?",
       t,
       t,
       graphRow.id,
     );
+    if (candidateWorkerIds.size > 0) {
+      options.workers?.()?.stopWorkersIn(p, [...candidateWorkerIds]);
+    }
     stopQueuedDeliveryNotesIn(p, graphRow.conversation_id, graphRow.id);
 
       const slimGraph = loadGraph(graphRow.id, false)!;
@@ -2955,8 +3011,8 @@ export function createLedgerTaskGraphs(
   // ---- Worker 绑定与状态联动钩子 ----
 
   /**
-   * hub worker start --node 派活前校验目标步骤：等项目经理（轮到了的手动步骤、出了问题停着的）、完了（支持待交付时打回重派），
-   * 或者还有 Worker 挂着（在干、或停着等人）——这时是换人：workers.ts 先把挂着的那个按“没做完”收工（同 --incomplete），再派新的。
+   * hub worker start --node 派活前校验目标步骤：等项目经理（轮到了的手动步骤、出了问题停着的）、完了且尚未被下游接手（支持待交付时打回重派），
+   * 或者还有 Worker 挂着（在干、或停着等人）——这时是换人：workers.ts 先把挂着的那个按“没做完”收工，再派新的。
    * 没轮到的、挂着拍板卡等用户的不能派。
    */
   const prepareWorkerBind = (
@@ -2977,6 +3033,15 @@ export function createLedgerTaskGraphs(
         "conflict",
         `节点「${nodeKey}」${taskNodeStatusText(toTaskNode(node), "pm")}（等你处理、已经完了要打回，或者有 Worker 挂着要换人，才能派 Worker）`,
       );
+    }
+    if (!replacing && node.status === "done") {
+      const activeDownstream = findActiveDownstream(node.node_key, byKey, outgoing);
+      if (activeDownstream !== null) {
+        throw fail(
+          "conflict",
+          `步骤「${nodeKey}」已完成且下游步骤「${activeDownstream}」正在执行或挂着未收工的 Worker，不能回退重开上游步骤（请先处理下游步骤，或待交付后再打回重派）`,
+        );
+      }
     }
     const stepIndex = index + 1;
     const totalSteps = nodeRows.length;
@@ -3298,6 +3363,14 @@ export function createLedgerTaskGraphs(
     if (reopened === undefined) return;
     const graphRow = getGraphRow(reopened.graph_id);
     if (graphRow === undefined || graphRow.status !== "active") return;
+    const { byKey, outgoing } = buildGraphMaps(graphRow.id);
+    const activeDownstream = findActiveDownstream(reopened.node_key, byKey, outgoing);
+    if (activeDownstream !== null) {
+      throw fail(
+        "conflict",
+        `步骤「${reopened.node_key}」已完成且下游步骤「${activeDownstream}」正在执行或挂着未收工的 Worker，不能再向原 Worker #${workerId} 发消息重开上游步骤`,
+      );
+    }
     const t = now();
     db.run(
       "UPDATE task_graph_steps SET status = 'running', active_worker_id = ?, updated_at = ? WHERE id = ?",
@@ -3389,8 +3462,14 @@ export function createLedgerTaskGraphs(
     const upstream: WorkerHubStatusUpstream[] = [];
     for (const entry of direct) {
       if (entry.kind === "active") {
-        const fileCandidate =
-          options.launchDir !== "" ? upstreamReportFilePath(options.launchDir, sessionId, entry.source.key) : null;
+        let fileCandidate: string | null = null;
+        if (options.launchDir !== "") {
+          try {
+            fileCandidate = upstreamReportFilePath(options.launchDir, sessionId, entry.source.key);
+          } catch {
+            fileCandidate = null;
+          }
+        }
         const reportFile = fileCandidate !== null && existsSync(fileCandidate) ? fileCandidate : null;
         const prUrl = extractReportPrUrl(entry.source.pr) ?? entry.source.pr;
         upstream.push({
@@ -3414,8 +3493,14 @@ export function createLedgerTaskGraphs(
         });
         for (const traced of entry.tracedSources) {
           if (upstream.some((u) => u.key === traced.key)) continue;
-          const fileCandidate =
-            options.launchDir !== "" ? upstreamReportFilePath(options.launchDir, sessionId, traced.key) : null;
+          let fileCandidate: string | null = null;
+          if (options.launchDir !== "") {
+            try {
+              fileCandidate = upstreamReportFilePath(options.launchDir, sessionId, traced.key);
+            } catch {
+              fileCandidate = null;
+            }
+          }
           const reportFile = fileCandidate !== null && existsSync(fileCandidate) ? fileCandidate : null;
           const prUrl = extractReportPrUrl(traced.pr) ?? traced.pr;
           upstream.push({

@@ -12,7 +12,12 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AnyActionRow } from "../../shared/actions.ts";
 import { isTaskGraphReadyToFinish, type ConversationId, type PmId, type SessionId, type TaskNode, type WorkerId } from "../../shared/domain.ts";
-import { HANDOFF_NOTE_MAX_CHARS, HANDOFF_TOTAL_MAX_CHARS } from "../../shared/limits.ts";
+import {
+  HANDOFF_NOTE_MAX_CHARS,
+  HANDOFF_REPORT_FILE_MAX_CHARS,
+  HANDOFF_REPORT_TOTAL_MAX_CHARS,
+  HANDOFF_TOTAL_MAX_CHARS,
+} from "../../shared/limits.ts";
 import { removeSessionLaunchDir, sessionLaunchDir, workerSetupLogPath } from "../../shared/paths.ts";
 import { buildReadonlyPolicy } from "../../shared/readonly-policy.ts";
 import { bundledModelCatalog, type AgentVendor, type ModelCatalog, type VendorAvailability } from "../../shared/vendors.ts";
@@ -25,7 +30,7 @@ import { createSessionStore, migrate, type Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
 import { createResolveFolder } from "./files.ts";
 import { createLedger, type SqliteLedger } from "./index.ts";
-import { STEP_REVIEW_CHECKLIST } from "./task-graph-handoff.ts";
+import { STEP_REVIEW_CHECKLIST, buildStepFirstMessage, upstreamReportFilePath } from "./task-graph-handoff.ts";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, {
@@ -788,5 +793,219 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
     const s3First = firstWorkerMessageOf(ws3).text;
     expect(s3First).toContain("小改动免卡点");
     expect(s3First).toContain("s1 关键交棒线索在 mod.ts");
+  });
+
+  it("下游已接手步骤禁止回退重开抢占同线 worktree、removeEdges 禁改在跑/已完节点，且 graph.finish 自动收工残留 open Worker", async () => {
+    // 1) 单线 s1 -> s2：s1 完成后 s2 已自动开工并接手同一 worktree，此时禁止对 s1 调 worker.start --node 抢目录
+    const g = ledger.hubCall(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({
+        title: "防越权回退双写",
+        goal: "确保同线 worktree 严格串行传递不双写。",
+        steps: [
+          { key: "s1", title: "第一步", brief: "写 s1" },
+          { key: "s2", title: "第二步", brief: "接手 s1 目录继续写" },
+        ],
+      }),
+    }).data.graph;
+    const w1 = g.nodes[0]!.activeWorkerId!;
+    await runWorktreeCreate(w1);
+    runWorkerReportTurn(w1, buildReportBlock({ status: "做完了", summary: "s1 完成", handoff: "见 s1" }));
+
+    const afterS1 = ledger.hubCall(lin.sessionId, "graph.show", { graphId: g.id }).data.graph;
+    expect(stateOf(afterS1.nodes[1]!)).toBe("running");
+    expect(() =>
+      ledger.hubCall(lin.sessionId, "worker.start", { graphId: g.id, node: "s1", task: "试图强行重开 s1" }),
+    ).toThrow(/下游步骤「s2」正在执行/);
+    expect(() =>
+      ledger.hubCall(lin.sessionId, "graph.patch", {
+        graphId: g.id,
+        specJson: JSON.stringify({ removeEdges: [{ from: "s1", to: "s2" }] }),
+      }),
+    ).toThrow(/不能移除其前置依赖/);
+
+    // 2) s2 报偏离停在 waiting:pm（w2 保持 open），PM 用 graph.done 放行 s2 进入待交付，再调 graph.finish：
+    //    finish 时后台自动把残留 open 的 w2 收工，目录随即满足清理前提！
+    const w2 = afterS1.nodes[1]!.activeWorkerId!;
+    runWorkerReportTurn(
+      w2,
+      buildReportBlock({ status: "做完了", summary: "s2 改了方案", deviation: "微调了参数名", handoff: "s2 交棒" }),
+    );
+    ledger.hubCall(lin.sessionId, "graph.done", { graphId: g.id, nodeKey: "s2", note: "认可微调" });
+    expect(db.get<{ status: string }>("SELECT status FROM workers WHERE id = ?", w2)?.status).toBe("open");
+
+    enqueued.length = 0;
+    ledger.hubCall(lin.sessionId, "graph.finish", { graphId: g.id, summary: "全部验收通过交付" });
+    expect(db.get<{ status: string }>("SELECT status FROM workers WHERE id = ?", w2)?.status).toBe("ended");
+    expect(
+      enqueued.some((a) => a.type === "session.end" && a.params.sessionId === workerSessionOf(w2).id),
+    ).toBe(true);
+    createSessionStore(db).update(workerSessionOf(w2).id, { status: "ended", pid: null });
+    expect(ledger.isWorkerCleanable(w1)).toBe(true);
+
+    // 3) 分叉图 p -> f1：p 经 graph.done 放行（wp 仍 open），f1 已自动开工后，禁止对 wp 调 worker.send 倒挂重开 p
+    const gFork = ledger.hubCall(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({
+        title: "防 send 倒挂重开",
+        steps: [
+          { key: "p", title: "上游", brief: "做 p" },
+          { key: "f1", title: "下游", brief: "做 f1", deps: ["p"], base: "main" },
+        ],
+      }),
+    }).data.graph;
+    const wp = gFork.nodes[0]!.activeWorkerId!;
+    await runWorktreeCreate(wp);
+    runWorkerReportTurn(wp, buildReportBlock({ status: "有问题", summary: "p 待确认", questions: "是否继续？" }));
+    ledger.hubCall(lin.sessionId, "graph.done", { graphId: gFork.id, nodeKey: "p", note: "直接放行" });
+    expect(() =>
+      ledger.hubCall(lin.sessionId, "worker.send", { workerId: wp, text: "回退重做 p" }),
+    ).toThrow(/下游步骤「f1」正在执行/);
+  });
+
+  it("upstream/ 落盘防路径穿越与单文件/总体积上限保护", () => {
+    for (const evilKey of ["../prompt", "..\\settings", "a/b", "a\\b", "..", ".hidden", ""]) {
+      expect(() => upstreamReportFilePath(launchDir, 777, evilKey), evilKey).toThrow(/unsafe upstream step key/);
+      expect(() =>
+        buildStepFirstMessage({
+          graph: { id: 1, title: "安全检查" },
+          step: { key: "sum", title: "汇总", index: 2, total: 2, decision: null, gateQuestion: null },
+          directUpstreams: [
+            {
+              kind: "active",
+              source: {
+                key: evilKey,
+                title: "脏节点",
+                workerId: 1,
+                summary: "s",
+                commit: null,
+                pr: null,
+                tests: null,
+                branch: null,
+                handoff: "x".repeat(HANDOFF_NOTE_MAX_CHARS + 100),
+                pmNote: null,
+                fullReportMarkdown: "pwned",
+                decision: null,
+                gateQuestion: null,
+              },
+            },
+          ],
+          inheritedFromWorkerId: null,
+          sessionId: 777,
+          launchDir,
+        }),
+      ).toThrow(/unsafe upstream step key/);
+    }
+    expect(existsSync(join(sessionLaunchDir(launchDir, 777), "prompt.md"))).toBe(false);
+
+    // 5 路超大汇报合流：每路落盘文件受 HANDOFF_REPORT_TOTAL_MAX_CHARS / 5 与 HANDOFF_REPORT_FILE_MAX_CHARS 封顶
+    const upKeys = ["u1", "u2", "u3", "u4", "u5"];
+    const hugeFull = `# 超大汇报\n\n${"数".repeat(HANDOFF_REPORT_FILE_MAX_CHARS + 20_000)}\n`;
+    buildStepFirstMessage({
+      graph: { id: 2, title: "落盘上限" },
+      step: { key: "merge", title: "汇总", index: 6, total: 6, decision: null, gateQuestion: null },
+      directUpstreams: upKeys.map((k, i) => ({
+        kind: "active" as const,
+        source: {
+          key: k,
+          title: `路 ${i + 1}`,
+          workerId: i + 1,
+          summary: "摘要",
+          commit: null,
+          pr: null,
+          tests: null,
+          branch: null,
+          handoff: "交".repeat(HANDOFF_NOTE_MAX_CHARS + 50),
+          pmNote: null,
+          fullReportMarkdown: hugeFull,
+          decision: null,
+          gateQuestion: null,
+        },
+      })),
+      inheritedFromWorkerId: null,
+      sessionId: 778,
+      launchDir,
+    });
+    let totalWrittenChars = 0;
+    const perFileCap = Math.floor(HANDOFF_REPORT_TOTAL_MAX_CHARS / upKeys.length);
+    for (const k of upKeys) {
+      const content = readFileSync(upstreamReportFilePath(launchDir, 778, k), "utf8");
+      const len = [...content.trimEnd()].length;
+      expect(len).toBeLessThanOrEqual(perFileCap);
+      totalWrittenChars += len;
+    }
+    expect(totalWrittenChars).toBeLessThanOrEqual(HANDOFF_REPORT_TOTAL_MAX_CHARS);
+  });
+
+  it("preparing 阶段取消整张图绝不死灰复燃，且手动审查步骤换人接力完整保留 goal、审查清单与继承上游目录说明", async () => {
+    ledger.hubCall(lin.sessionId, "project.setup", { command: "echo slow-setup" });
+    // 1) 自动拉起的 Worker 正在跑 setup（preparing）时取消整张图：setup 随后回调 onWorktreeCreated 绝不补发首轮启动
+    const gCancel = ledger.hubCall(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({
+        title: "准备中取消",
+        steps: [{ key: "s1", title: "建目录中", brief: "测试取消" }],
+      }),
+    }).data.graph;
+    const wPrep = gCancel.nodes[0]!.activeWorkerId!;
+    const wtTask = ledger.getWorktreeTask(wPrep)!;
+    const added = await addWorktree({ repoFolder: wtTask.repo, worktreePath: wtTask.worktreePath, branch: wtTask.branch });
+    expect(ledger.onSetupStarted(wPrep)).toBe(true);
+
+    ledger.hubCall(lin.sessionId, "graph.cancel", { graphId: gCancel.id, reason: "不再需要" });
+    enqueued.length = 0;
+    ledger.onWorktreeCreated(wPrep, added.baseCommit, {
+      kind: "stopped",
+      command: "echo slow-setup",
+      exitCode: null,
+      signal: "SIGTERM",
+      durationMs: 50,
+      timeoutMs: 60_000,
+      tail: "",
+      logPath: workerSetupLogPath(join(dataHome, "state", "logs", "setup"), wPrep),
+      error: null,
+      logError: null,
+    });
+    expect(enqueued.filter((a) => a.type === "session.start" || a.type === "session.send")).toEqual([]);
+    expect(ledger.getMessage(firstWorkerMessageOf(wPrep).id)?.status).toBe("stopped");
+
+    // 2) 图含 goal + 手动步骤（无预设 brief）标 review: true：
+    //    s1 建成 worktree 完成后，s2 首次手动派 --no-worktree 失败，再换人接力（不加 --no-worktree）时：
+    //    接手的新 Worker 自动继承上游 s1 的 worktree，且首条接手消息完整包含 goal、第 2/2 步、STEP_REVIEW_CHECKLIST、上游交棒与准确的继承目录提示，无重复拼接！
+    const gManual = ledger.hubCall(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({
+        title: "手动审查换人",
+        goal: "整张图共享目标：零回归合并。",
+        steps: [
+          { key: "impl", title: "实现", brief: "实现逻辑" },
+          { key: "rev", title: "手动独立审查", review: true },
+        ],
+      }),
+    }).data.graph;
+    const wImpl = gManual.nodes[0]!.activeWorkerId!;
+    await runWorktreeCreate(wImpl);
+    const implWtPath = db.get<{ worktree_path: string }>("SELECT worktree_path FROM workers WHERE id = ?", wImpl)!.worktree_path;
+    runWorkerReportTurn(wImpl, buildReportBlock({ status: "做完了", summary: "实现完毕", handoff: "重点看 auth.ts" }));
+
+    const wRev1 = ledger.hubCall(lin.sessionId, "worker.start", {
+      graphId: gManual.id,
+      node: "rev",
+      noWorktree: true,
+      task: "核查鉴权绕过边界",
+    }).data.worker;
+    runWorkerReportTurn(wRev1.id, buildReportBlock({ status: "有问题", summary: "网络中断", questions: "需重试" }));
+
+    const wRev2 = ledger.hubCall(lin.sessionId, "worker.start", {
+      graphId: gManual.id,
+      node: "rev",
+      task: "补跑边界用例",
+    }).data.worker;
+    expect(wRev2.worktreePath).toBe(implWtPath);
+    const takeoverMsg = firstWorkerMessageOf(wRev2.id).text;
+    expect(takeoverMsg).toContain("整张图共享目标：零回归合并。");
+    expect(takeoverMsg).toContain("## 你这一步：手动独立审查（第 2/2 步）");
+    expect(takeoverMsg).toContain(STEP_REVIEW_CHECKLIST);
+    expect(takeoverMsg).toContain("核查鉴权绕过边界");
+    expect(takeoverMsg).toContain("重点看 auth.ts");
+    expect(takeoverMsg).toContain(`你接着用上一步（Worker #${wImpl}）的工作目录 ${implWtPath}`);
+    expect(takeoverMsg.split("整张图共享目标：零回归合并。")).toHaveLength(2);
+    expect(takeoverMsg.split("补跑边界用例")).toHaveLength(2);
   });
 });

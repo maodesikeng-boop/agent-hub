@@ -722,6 +722,10 @@ export const MAX_STEP_BRIEF_CHARS = 1_500;
 export const HANDOFF_NOTE_MAX_CHARS = 4_000;
 /** 多线合流时各上游交棒合计上限（字，按 Unicode 码点；均分给各上游且单上游不超过 HANDOFF_NOTE_MAX_CHARS）。 */
 export const HANDOFF_TOTAL_MAX_CHARS = 12_000;
+/** 单个上游步骤落盘到启动目录 upstream/<stepKey>.md 的完整汇报上限（字，按 Unicode 码点）。 */
+export const HANDOFF_REPORT_FILE_MAX_CHARS = 60_000;
+/** 多线合流时单会话启动目录 upstream/ 下全部落盘汇报合计上限（字，按 Unicode 码点；按需落盘上游均分且单文件不超过 HANDOFF_REPORT_FILE_MAX_CHARS）。 */
+export const HANDOFF_REPORT_TOTAL_MAX_CHARS = 240_000;
 /** 节点 key 长度上限与合法字符格式。 */
 export const MAX_NODE_KEY_CHARS = 48;
 export const MAX_NODE_KEY_BYTES = 4 * MAX_NODE_KEY_CHARS;

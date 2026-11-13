@@ -209,6 +209,57 @@ describe("parseWorkerReport", () => {
       expect(hasReportQuestion(realDev.report.questions)).toBe(true);
     }
   });
+
+  it("多行交棒含同名子列表与围栏代码块时不截断、不覆盖顶层状态或冲掉偏离刹车，且支持横线占位符", () => {
+    const complexBody = [
+      "状态: 做完了",
+      "摘要: 完成迁移兼容层",
+      "提交: -",
+      "PR: -",
+      "测试: pnpm vitest run test/migration.test.ts 全绿",
+      "偏离: 旧视图仍被外部脚本读取，改为保留只读兼容视图",
+      "交棒:",
+      "下游审查请重点关注以下子项：",
+      "- 测试: 复核高并发写入锁",
+      "- 状态: 灰度开关默认关闭",
+      "- 偏离: 无",
+      "```ts",
+      "const sample = {",
+      '  pr: "https://github.com/org/repo/pull/999",',
+      '  状态: "不是顶层状态",',
+      "  偏离: null,",
+      "};",
+      "```",
+      "  问题: 缩进子行也不应覆盖顶层问题栏",
+      "问题: 无",
+    ].join("\n");
+
+    const parsed = parseWorkerReport(report(complexBody));
+    expect(parsed.kind).toBe("ok");
+    if (parsed.kind === "ok") {
+      expect(parsed.report.status).toBe("done");
+      expect(parsed.report.summary).toBe("完成迁移兼容层");
+      expect(parsed.report.commit).toBeNull();
+      expect(parsed.report.pr).toBeNull();
+      expect(parsed.report.tests).toBe("pnpm vitest run test/migration.test.ts 全绿");
+      // 顶层真实偏离绝不能被交棒子列表里的“- 偏离: 无”冲掉
+      expect(parsed.report.deviation).toBe("旧视图仍被外部脚本读取，改为保留只读兼容视图");
+      expect(parsed.report.handoff).toContain("- 测试: 复核高并发写入锁");
+      expect(parsed.report.handoff).toContain("- 状态: 灰度开关默认关闭");
+      expect(parsed.report.handoff).toContain('pr: "https://github.com/org/repo/pull/999"');
+      expect(parsed.report.handoff).toContain("缩进子行也不应覆盖顶层问题栏");
+      expect(parsed.report.questions).toBe("无");
+    }
+
+    const dashNone = parseWorkerReport(report("状态: 做完了\n摘要: 小修\n偏离: -\n问题: —"));
+    expect(dashNone).toMatchObject({
+      kind: "ok",
+      report: { status: "done", deviation: null },
+    });
+    if (dashNone.kind === "ok") {
+      expect(hasReportQuestion(dashNone.report.questions)).toBe(false);
+    }
+  });
 });
 
 describe("回到项目经理那一行", () => {

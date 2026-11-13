@@ -255,7 +255,7 @@ const TASK_GRAPH_ACTIONS = HUB_COMMANDS.filter((c) => c.startsWith("graph.")).ma
 /**
  * hub 用法（设计第 7.2、8.1 节；docs/orchestration-simplify-design.md 第 9.1 节），给项目经理看。命令以 shared/hub.ts 的命令表为准。
  * 向用户提问、Worker 两组写全参数；任务图缩成一行，用法在任务图手册（技能 fusa-task-graph、hub help graph）里，
- * Worker 的 --node、--incomplete 也只写在手册里（hub help 照旧查得到）；项目、性格设定、定时任务、总助、热重启不常用，各缩成一行，
+ * Worker 的 --node 也只写在手册里（hub help 照旧查得到）；项目、性格设定、定时任务、总助、热重启不常用，各缩成一行，
  * 参数在 hub help 里（hub/cli.ts 的 HUB_USAGE，写错命令时也会打印那一组的用法）。缩掉的参数要在 HUB_USAGE 里查得到（prompt.test.ts 守着）。
  * Worker 的见 WORKER_HUB_USAGE_PROMPT。
  */
