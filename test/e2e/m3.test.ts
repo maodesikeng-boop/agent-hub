@@ -425,8 +425,11 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     expect(argValue(procs[1]!.argv, "--resume")).toBe(argValue(procs[0]!.argv, "--session-id"));
     expect(procs[1]!.cwd).toBe(worker.worktree_path);
     // 恢复说明、重发说明和任务原文写在同一行：这一轮对应任务说明，汇报才回得来（不单独占一轮）
-    expect(env.stdinTextsOf(procs[0]!.pid)).toEqual(["慢慢做"]);
-    expect(env.stdinTextsOf(procs[1]!.pid)).toEqual([`${RESTART_RECOVERY_NOTE}\n\n${RESEND_NOTE}\n\n慢慢做`]);
+    const firstTexts = env.stdinTextsOf(procs[0]!.pid);
+    expect(firstTexts).toHaveLength(1);
+    expect(firstTexts[0]!.startsWith("你是 Worker #1（慢活）。\n\n# 在哪干活\n\n")).toBe(true);
+    expect(firstTexts[0]!.endsWith("\n\n# 你的任务\n\n慢慢做")).toBe(true);
+    expect(env.stdinTextsOf(procs[1]!.pid)).toEqual([`${RESTART_RECOVERY_NOTE}\n\n${RESEND_NOTE}\n\n${firstTexts[0]!}`]);
     expect(existsSync(join(worker.worktree_path!, "half.txt"))).toBe(true);
     expect(query<{ status: string }>("SELECT status FROM messages WHERE id = ?", task.id)).toEqual([{ status: "replied" }]);
     await terminate(daemon);
@@ -496,16 +499,17 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     // 快照里有 Worker 的对话（kind worker）和它的会话
     const snapshot = s.conversations.find((c) => c.conversation.id === worker.worker_conversation_id)!;
     expect(snapshot.conversation).toMatchObject({ kind: "worker", pmId: pm.pmId, projectId: pm.projectId });
-    expect(snapshot.messages.map((m) => [m.sender, m.text])).toEqual([
-      ["pm", "做很久"],
-      ["agent", "开始了"],
-    ]);
+    expect(snapshot.messages.map((m) => m.sender)).toEqual(["pm", "agent"]);
+    const firstPmText = snapshot.messages[0]!.text;
+    expect(firstPmText.startsWith("你是 Worker #1（长活）。\n\n# 在哪干活\n\n")).toBe(true);
+    expect(firstPmText.endsWith("\n\n# 你的任务\n\n做很久")).toBe(true);
+    expect(snapshot.messages[1]!.text).toBe("开始了");
     expect(sessionOf(s, worker.worker_conversation_id)).toMatchObject({ pmId: null, status: "running" });
     // 往前翻页
     const lastId = snapshot.messages.at(-1)!.id;
     const res = await client.get(`${API_PATHS.messages(worker.worker_conversation_id)}?before=${lastId}`);
     expect(res.status).toBe(200);
-    expect(((await res.json()) as MessagesPage).messages.map((m) => m.text)).toEqual(["做很久"]);
+    expect(((await res.json()) as MessagesPage).messages.map((m) => m.text)).toEqual([firstPmText]);
     // 停止：Worker 的这一轮停了，项目经理收到一行“被停止了”
     expect(await client.stop(worker.worker_conversation_id)).toBe(202);
     const [line] = await waitLines(client, pm.conversationId, "turn_failed", 1);

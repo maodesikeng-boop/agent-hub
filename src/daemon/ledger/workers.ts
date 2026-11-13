@@ -53,8 +53,15 @@ import { AGENT_VENDORS, checkEffort, checkModel, checkModelEffort, isAgentVendor
 import type { AgentVendor } from "../../shared/vendors.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import { workerWorktreePath } from "../../shared/paths.ts";
-import { parseWorkerReport, userToWorkerHeader, workerBranchName, workerLineText, workerReportHeader } from "../../shared/worker.ts";
-import { SETUP_RECEIPT_NOTE, setupNote } from "../prompt.ts";
+import {
+  parseWorkerReport,
+  userToWorkerHeader,
+  workerBranchName,
+  workerLineText,
+  workerReportHeader,
+  type ParsedWorkerReport,
+} from "../../shared/worker.ts";
+import { SETUP_RECEIPT_NOTE, WORKER_READONLY_NOTE, buildWorkerFirstMessage, setupNote } from "../prompt.ts";
 import { composerBaseOf } from "../vendors/index.ts";
 import { WORKER_NEEDS_OS_SANDBOX_MESSAGE } from "../driver/write-scope.ts";
 import { fail } from "./context.ts";
@@ -69,7 +76,8 @@ import { toConversation, toMessage, toWorkerRecord } from "./rows.ts";
 import type { ConversationDbRow, MessageDbRow, ProjectDbRow, WorkerDbRow } from "./rows.ts";
 import { idle } from "./sessions.ts";
 import type { LedgerSessions } from "./sessions.ts";
-import type { WorkerBindTarget } from "./task-graphs.ts";
+import { hasGitCommitSync, renderGraphStepTask } from "./task-graph-handoff.ts";
+import type { StepWorkspacePlan, TaskGraphWorkersBridge, WorkerBindTarget } from "./task-graphs.ts";
 import { newestFirst } from "./takeover.ts";
 import type { LedgerTakeover, TakeoverPredecessor } from "./takeover.ts";
 
@@ -190,14 +198,31 @@ export type LedgerWorkers = ReturnType<typeof createLedgerWorkers>;
 
 export interface LedgerWorkersTaskGraphHooks {
   prepareWorkerBind: (pmId: PmId, nodeKey: string, graphId?: number) => WorkerBindTarget;
-  bindWorkerStartedIn: (p: Pending, target: WorkerBindTarget, workerId: WorkerId) => void;
-  onWorkerAttentionIn: (p: Pending, workerId: WorkerId, opts: { clearActiveWorker: boolean }) => void;
-  onWorkerResumedIn: (p: Pending, workerId: WorkerId) => void;
-  onWorkerEndedIn: (
+  bindWorkerStartedIn: (
+    p: Pending,
+    target: WorkerBindTarget,
+    workerId: WorkerId,
+    agent?: { vendor: string; model: string | null; effort: string | null },
+  ) => void;
+  onWorkerTurnReportIn: (
+    p: Pending,
+    worker: { id: WorkerId; branch: string | null },
+    parsed: ParsedWorkerReport,
+    rawBody: string,
+    forcedNote: string | null,
+  ) =>
+    | { handled: false }
+    | { handled: true; outcome: "completed"; wakePmWithReport: boolean; completeStep: () => void }
+    | { handled: true; outcome: "waiting_pm"; pmDeliverBody: string };
+  onWorkerFailedIn: (
     p: Pending,
     workerId: WorkerId,
-    opts: { hadLatestDoneReport: boolean; incomplete: boolean; summary?: string | null; branch?: string | null; commit?: string | null },
+    opts: { clearActiveWorker: boolean; reasonLabel: string; detailBody: string; stoppedByUser?: boolean },
   ) => string | null;
+  onWorkerResumedIn: (p: Pending, workerId: WorkerId) => void;
+  onWorkerEndedIn: (p: Pending, workerId: WorkerId) => string | null;
+  workerGraphForkBase: (workerId: WorkerId) => string | undefined;
+  workerGraphStatus: (workerId: WorkerId, sessionId: SessionId) => WorkerHubStatus["taskGraph"] | undefined;
 }
 
 export function createLedgerWorkers(
@@ -465,7 +490,14 @@ export function createLedgerWorkers(
   const insertLine = (
     p: Pending,
     worker: WorkerDbRow,
-    line: { event: WorkerEvent; status: WorkerLineStatus | null; summary: string | null; turnMessageId: MessageId | null; deliver: string | null },
+    line: {
+      event: WorkerEvent;
+      status: WorkerLineStatus | null;
+      summary: string | null;
+      turnMessageId: MessageId | null;
+      deliver: string | null;
+      wakePm?: boolean;
+    },
   ) => {
     const header = line.event === "user_message" ? userToWorkerHeader(worker.id, worker.title) : workerReportHeader(worker.id, worker.title);
     const meta: WorkerMessageMeta = {
@@ -477,8 +509,9 @@ export function createLedgerWorkers(
       status: line.status,
       summary: line.summary,
     };
-    const pmSession = line.deliver === null ? null : currentSession(worker.pm_conversation_id);
-    if (line.deliver !== null && pmSession === null) throw new Error(`conversation ${worker.pm_conversation_id} has no agent session`);
+    const shouldWakePm = line.wakePm ?? (line.deliver !== null);
+    const pmSession = shouldWakePm ? currentSession(worker.pm_conversation_id) : null;
+    if (shouldWakePm && pmSession === null) throw new Error(`conversation ${worker.pm_conversation_id} has no agent session`);
     const text = line.deliver === null ? workerLineText(meta) : `${header}\n\n${line.deliver}`;
     const t = now();
     const row = db.get<MessageDbRow>(
@@ -549,6 +582,164 @@ export function createLedgerWorkers(
   const reusableWorktree = (w: WorkerDbRow, projectId: number): boolean =>
     w.workspace === "worktree" && w.project_id === projectId && w.base_commit !== null && w.worktree_path !== null && w.worktree_path !== "" && w.branch !== null && existsSync(w.worktree_path);
 
+  const probeWorkspaceForStep = (
+    projectId: number,
+    mainFolder: string,
+    context: HubCallContext | undefined,
+    allowSyncFallback: boolean,
+  ): { isRepoWithCommit: boolean; hasUncommittedChanges: boolean } => {
+    if (context?.workspace !== undefined) {
+      if (context.workspace.kind === "failed") throw gitFailed(context.workspace.error);
+      return context.workspace;
+    }
+    if (!allowSyncFallback) {
+      throw new Error("worker.start without noWorktree needs context.workspace (probe the main folder first)");
+    }
+    const hadWorktree =
+      db.get(
+        "SELECT 1 AS x FROM workers WHERE project_id = ? AND workspace = 'worktree' AND base_commit IS NOT NULL LIMIT 1",
+        projectId,
+      ) !== undefined;
+    return {
+      isRepoWithCommit: hadWorktree || hasGitCommitSync(mainFolder),
+      hasUncommittedChanges: false,
+    };
+  };
+
+  const checkTargetVendorUsable = (vendor: AgentVendor, context: HubCallContext | undefined): void => {
+    const fromSingle = context?.vendorStatus?.vendor === vendor ? context.vendorStatus : undefined;
+    const availability =
+      fromSingle?.availability ??
+      context?.vendorStatuses?.[vendor] ??
+      ctx.modelCatalog(vendor)?.availability ??
+      "unknown";
+    const device = fromSingle?.device ?? context?.deviceName ?? "";
+    const unusable = vendorUnavailableMessage(vendor, availability, device);
+    if (unusable !== null) throw fail("invalid", unusable);
+  };
+
+  /** 供 task-graphs.ts 在步骤解锁时后台自动拉起 Worker。 */
+  const dispatchStepWorkerIn: TaskGraphWorkersBridge["dispatchStepWorkerIn"] = (p, input) => {
+    assertPmNotArchived(input.pmId);
+    const project = activeProjectOf(input.pmId);
+    if (project === null) {
+      throw fail("invalid", `项目经理还没有项目，无法自动开工`);
+    }
+    const title = normalizeWorkerTitle(input.title);
+    if (title === null) throw fail("invalid", "步骤标题不能为空或含控制字符");
+    const task = validTask(input.task, "步骤任务说明");
+    const maxTimeMs = validMaxTimeMs(input.maxTimeMs ?? undefined);
+
+    const vendor: AgentVendor = input.vendor ?? input.pmVendor;
+    if (!isAgentVendor(vendor)) throw fail("invalid", `厂商只能是 ${AGENT_VENDORS.join("、")}`);
+    checkTargetVendorUsable(vendor, input.context);
+
+    const catalog = ctx.modelCatalog(vendor);
+    const badSetting =
+      checkModel(vendor, input.model) ??
+      checkEffort(vendor, input.effort, catalog) ??
+      checkModelEffort(vendor, input.model, input.effort, catalog);
+    if (badSetting !== null) throw fail("invalid", badSetting);
+    const { model, effort } = splitModelEffort(vendor, input.model, input.effort, catalog);
+
+    if (!ctx.osSandboxed()) throw fail("invalid", WORKER_NEEDS_OS_SANDBOX_MESSAGE);
+
+    const card = projectCard(project);
+    const inheritedPlan = input.workspacePlan.kind === "inherit" ? input.workspacePlan : null;
+    if (inheritedPlan !== null) {
+      // 若上游是通过 graph done 手动放行的、其挂着的旧 Worker 仍处于 open，接手目录前自动将其收工
+      const openSharing = db.all<WorkerDbRow>(
+        "SELECT * FROM workers WHERE worktree_path = ? AND status = 'open' ORDER BY id",
+        inheritedPlan.worktreePath,
+      );
+      for (const prevWorker of openSharing) {
+        endWorkerIn(p, prevWorker, { notifyGraph: false });
+      }
+    }
+    const probe =
+      inheritedPlan !== null
+        ? { isRepoWithCommit: true, hasUncommittedChanges: false }
+        : probeWorkspaceForStep(project.id, card.mainFolder, input.context, true);
+    const workspace = inheritedPlan !== null || probe.isRepoWithCommit ? "worktree" : "main";
+
+    const t = now();
+    const conversation = toConversation(
+      db.get<ConversationDbRow>(
+        "INSERT INTO conversations (kind, pm_id, project_id, title, created_at) VALUES ('worker', ?, ?, ?, ?) RETURNING *",
+        input.pmId,
+        project.id,
+        title,
+        t,
+      )!,
+    );
+    p.changes.push({ type: "conversation.created", data: { conversation } });
+
+    const id = db.run(
+      `INSERT INTO workers (project_id, pm_id, pm_conversation_id, worker_conversation_id, title, task, model, effort, readonly, workspace,
+                            branch, worktree_path, base_commit, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      project.id,
+      input.pmId,
+      project.conversation_id,
+      conversation.id,
+      title,
+      task,
+      model,
+      effort,
+      input.readonly ? 1 : 0,
+      workspace,
+      inheritedPlan !== null ? inheritedPlan.branch : workspace === "worktree" ? "" : null,
+      inheritedPlan !== null ? inheritedPlan.worktreePath : workspace === "worktree" ? "" : null,
+      inheritedPlan !== null ? inheritedPlan.baseCommit : null,
+      t,
+      t,
+    ).lastInsertRowid;
+
+    if (workspace === "worktree" && inheritedPlan === null) {
+      db.run(
+        "UPDATE workers SET branch = ?, worktree_path = ? WHERE id = ?",
+        workerBranchName(id, title),
+        workerWorktreePath(worktreesDir, project.id, id),
+        id,
+      );
+    }
+    const worker = workerRow(id)!;
+    const sameVendor = vendor === input.pmVendor;
+    const inheritedSetting = sameVendor
+      ? splitModelEffort(vendor, input.pmModel, input.pmEffort)
+      : { model: null, effort: null };
+
+    const session = insertSession(p, {
+      role: "worker",
+      conversationId: conversation.id,
+      pmId: null,
+      workerId: id,
+      cwd: worker.worktree_path ?? card.mainFolder,
+      addDirs: workspace === "worktree" ? [] : card.otherFolders,
+      generation: 1,
+      vendor,
+      model: model ?? inheritedSetting.model,
+      effort: effort ?? inheritedSetting.effort,
+    });
+
+    const workerRecord = toWorkerRecord(worker);
+    const firstMessageText = input.buildFirstMessage(session.id, inheritedPlan?.fromWorkerId ?? null, workerRecord, card);
+    insertPmMessage(p, worker, session, firstMessageText, taskDedupeKey(id));
+    insertLine(p, worker, { event: "started", status: null, summary: null, turnMessageId: null, deliver: null });
+
+    if (inheritedPlan !== null) {
+      const first = db.get<{ id: number }>("SELECT id FROM messages WHERE dedupe_key = ?", taskDedupeKey(id))!;
+      enqueue(p, { type: "session.send", params: { sessionId: session.id, messageId: first.id, source: "user" } });
+    } else if (workspace === "worktree") {
+      enqueue(p, { type: "worktree.create", params: { workerId: id } });
+      syncSessionFolders(project);
+    } else {
+      enqueueFirstTurn(p, worker);
+    }
+    startMaxTime(worker, maxTimeMs);
+    return workerRecord;
+  };
+
   /**
    * 换人接手同一步（hub worker start --node，节点上已经有经手过的 Worker；docs/orchestration-simplify-design.md 第 4.4、5.2 节）要的东西：
    * - predecessors：最近 TAKEOVER_PREDECESSORS_MAX 个前任，从新到旧；
@@ -590,7 +781,11 @@ export function createLedgerWorkers(
     // 节点上已经有经手过的 Worker：换人接手。标题、正文可以不给（正文给了就是项目经理的补充）
     const takeover = bindTarget !== undefined && bindTarget.workerIds.length > 0 ? planTakeover(bindTarget, project.id, args.noWorktree === true) : null;
     const latest = takeover?.predecessors[0] ?? null;
-    const rawTitle = typeof args.title === "string" && args.title.trim() !== "" ? args.title : (latest?.title ?? args.title);
+    const stepHasBrief = bindTarget !== undefined && bindTarget.brief !== null && bindTarget.brief.trim() !== "";
+    const rawTitle =
+      typeof args.title === "string" && args.title.trim() !== ""
+        ? args.title
+        : (latest?.title ?? bindTarget?.nodeTitle ?? args.title);
     const title = typeof rawTitle === "string" ? normalizeWorkerTitle(rawTitle) : null;
     if (title === null) throw fail("invalid", "Worker 的标题不能是空的，也不能带换行等控制字符");
     let task: string;
@@ -601,48 +796,75 @@ export function createLedgerWorkers(
       if (utf8Bytes(task) > MAX_TASK_BYTES) {
         throw fail("invalid", `原始任务说明加上补充超过 ${MAX_TASK_BYTES} 字节：补充写短一点，长材料存成文件给路径`);
       }
+    } else if (stepHasBrief && bindTarget !== undefined) {
+      pmNote = typeof args.task === "string" && args.task.trim() !== "" ? validTask(args.task, "项目经理的补充") : null;
+      task = renderGraphStepTask({
+        goal: bindTarget.graphGoal,
+        stepTitle: bindTarget.nodeTitle,
+        index: bindTarget.index,
+        total: bindTarget.total,
+        brief: bindTarget.brief!,
+        review: bindTarget.review,
+        pmNote,
+      });
+      if (utf8Bytes(task) > MAX_TASK_BYTES) {
+        throw fail("invalid", `步骤任务说明加上补充超过 ${MAX_TASK_BYTES} 字节`);
+      }
     } else {
       task = validTask(args.task, "任务说明");
     }
-    const maxTimeMs = validMaxTimeMs(args.maxTimeMs);
+    const maxTimeMs = validMaxTimeMs(args.maxTimeMs ?? bindTarget?.maxTimeMs ?? undefined);
     // 模型、思考程度按目标厂商清单查；同厂商不给就用项目经理会话现在的，换厂商不给就用 null
-    let vendor = caller.vendor as AgentVendor;
+    let vendor = (bindTarget?.vendor ?? caller.vendor) as AgentVendor;
     if (args.vendor !== undefined) {
       if (!isAgentVendor(args.vendor)) throw fail("invalid", `厂商只能是 ${AGENT_VENDORS.join("、")}`);
       vendor = args.vendor;
-      // 这台设备上没装、没登录（agent 接口查过，没登录的先重问过一次）：不派，说清楚是哪台、怎么登录
-      const status = context.vendorStatus;
-      const unusable = status?.vendor === vendor ? vendorUnavailableMessage(vendor, status.availability, status.device) : null;
-      if (unusable !== null) throw fail("invalid", unusable);
+      checkTargetVendorUsable(vendor, context);
+    } else if (bindTarget?.vendor !== null && bindTarget?.vendor !== undefined) {
+      if (!isAgentVendor(bindTarget.vendor)) throw fail("invalid", `厂商只能是 ${AGENT_VENDORS.join("、")}`);
+      checkTargetVendorUsable(vendor, context);
     }
-    const givenModel = typeof args.model === "string" ? args.model.trim() || null : null;
-    const givenEffort = typeof args.effort === "string" ? args.effort.trim() || null : null;
+    const reuseStepModel = bindTarget !== undefined && args.vendor === undefined && bindTarget.vendor === vendor;
+    const givenModel =
+      typeof args.model === "string" ? args.model.trim() || null : reuseStepModel ? bindTarget.model : null;
+    const givenEffort =
+      typeof args.effort === "string" ? args.effort.trim() || null : reuseStepModel ? bindTarget.effort : null;
     const catalog = ctx.modelCatalog(vendor);
     const badSetting = checkModel(vendor, givenModel) ?? checkEffort(vendor, givenEffort, catalog) ?? checkModelEffort(vendor, givenModel, givenEffort, catalog);
     if (badSetting !== null) throw fail("invalid", badSetting);
     // 思考程度写在模型 ID 里的厂商（agy）：--model gemini-4-argon-high 和 --model gemini-4-argon --effort high 存成一样的 模型 + 思考程度
     const { model, effort } = splitModelEffort(vendor, givenModel, givenEffort, catalog);
-    const readonly = args.readonly === true;
+    const readonly = args.readonly !== undefined ? args.readonly === true : (bindTarget?.readonly ?? false);
     // Worker（不论普通还是只读、不论哪家厂商）一律要求 OS 沙箱就绪；起不来直接报错拒绝派活，不退回规则兜底（docs/linux-sandbox-design.md 第 3.2 节）
     if (!ctx.osSandboxed()) throw fail("invalid", WORKER_NEEDS_OS_SANDBOX_MESSAGE);
     const card = projectCard(project);
     const inherit = takeover?.inherit ?? null;
+    const upstreamInherit: Extract<StepWorkspacePlan, { kind: "inherit" }> | null =
+      args.noWorktree !== true && inherit === null && bindTarget?.workspacePlan.kind === "inherit"
+        ? bindTarget.workspacePlan
+        : null;
+    const effectiveInherit =
+      inherit !== null
+        ? {
+            fromWorkerId: inherit.id,
+            worktreePath: inherit.worktree_path!,
+            branch: inherit.branch!,
+            baseCommit: inherit.base_commit!,
+          }
+        : upstreamInherit;
     let probe = { isRepoWithCommit: false, hasUncommittedChanges: false };
-    if (args.noWorktree !== true && inherit === null) {
-      const workspaceProbe = context.workspace;
-      if (workspaceProbe === undefined) throw new Error("worker.start without noWorktree needs context.workspace (probe the main folder first)");
-      if (workspaceProbe.kind === "failed") throw gitFailed(workspaceProbe.error);
-      probe = workspaceProbe;
+    if (args.noWorktree !== true && effectiveInherit === null) {
+      probe = probeWorkspaceForStep(project.id, card.mainFolder, context, bindTarget !== undefined);
     }
-    const workspace = inherit !== null || probe.isRepoWithCommit ? "worktree" : "main";
+    const workspace = effectiveInherit !== null || probe.isRepoWithCommit ? "worktree" : "main";
 
     // 换人：前任的记录先按现在的样子取出来（还挂着的旧 Worker 收工前），再把旧 Worker 按“没做完”收工（同 --incomplete，节点不标完成）
-    let takeoverText: string | null = null;
+    let takeoverPredecessors: TakeoverPredecessor[] | null = null;
     const endedOldList: Array<{ ended: WorkerDbRow; interrupted: boolean }> = [];
     if (takeover !== null && bindTarget !== undefined) {
       const openIds = new Set(takeover.openOld.map((w) => w.id));
       const inFlightIds = new Set(takeover.openOld.filter((w) => !notStarted(w) && isWorkerInFlight(w)).map((w) => w.id));
-      const predecessors: TakeoverPredecessor[] = takeover.predecessors.map((w) => ({
+      takeoverPredecessors = takeover.predecessors.map((w) => ({
         worker: w,
         session: workerSession(w),
         endedNote:
@@ -652,26 +874,18 @@ export function createLedgerWorkers(
               : "换人时它还开着（没在跑），后台已按“没做完”把它收工（节点不标完成）。"
             : "它已经收工了。",
       }));
-      const branches = [...new Set(takeover.predecessors.map((w) => w.branch).filter((b): b is string => b !== null && b !== ""))];
-      const branchNote = branches.length === 0 ? "" : `前任的分支 ${branches.join("、")} 还在，要的话自己合进来。`;
-      const workspaceNote =
-        inherit !== null
-          ? `你就在前任 Worker #${inherit.id} 的工作目录 ${inherit.worktree_path} 和分支 ${inherit.branch} 上，没提交的改动都还在，先看 git status 和 git log。`
-          : args.noWorktree === true
-            ? `这次按项目经理的要求直接在项目主文件夹 ${card.mainFolder} 里干（--no-worktree），没有接手前任的工作目录。${branchNote}`
-            : workspace === "main"
-              ? `你在项目主文件夹 ${card.mainFolder} 里干活，和前任是同一个目录，前任没提交的改动也都还在，先看 git status。`
-              : `前任没有还能接手的工作目录（已清理或没建成），你在新开的 worktree 里，从主文件夹最后一次提交开始。${branchNote}`;
-      takeoverText =
-        options.takeover?.takeoverMessage({
-          graph: { id: bindTarget.graphId, title: bindTarget.graphTitle },
-          node: { key: bindTarget.nodeKey, title: bindTarget.nodeTitle, index: bindTarget.index, total: bindTarget.total },
-          predecessors,
-          workspaceNote,
-          pmNote,
-        }) ?? null;
       for (const old of takeover.openOld) {
-        endedOldList.push(endWorkerIn(p, old, { incomplete: true }));
+        endedOldList.push(endWorkerIn(p, old, { notifyGraph: false }));
+      }
+    }
+    if (effectiveInherit !== null) {
+      // 若继承的同线目录上还有通过 graph done 放行遗留的 open Worker，接手前自动将其收工，避免死锁在 waitsForFirstTurn
+      const openSharing = db.all<WorkerDbRow>(
+        "SELECT * FROM workers WHERE worktree_path = ? AND status = 'open' ORDER BY id",
+        effectiveInherit.worktreePath,
+      );
+      for (const prevWorker of openSharing) {
+        endWorkerIn(p, prevWorker, { notifyGraph: false });
       }
     }
     const t = now();
@@ -701,13 +915,13 @@ export function createLedgerWorkers(
       effort,
       readonly ? 1 : 0,
       workspace,
-      inherit !== null ? inherit.branch : workspace === "worktree" ? "" : null,
-      inherit !== null ? inherit.worktree_path : workspace === "worktree" ? "" : null,
-      inherit !== null ? inherit.base_commit : null,
+      effectiveInherit !== null ? effectiveInherit.branch : workspace === "worktree" ? "" : null,
+      effectiveInherit !== null ? effectiveInherit.worktreePath : workspace === "worktree" ? "" : null,
+      effectiveInherit !== null ? effectiveInherit.baseCommit : null,
       t,
       t,
     ).lastInsertRowid;
-    if (workspace === "worktree" && inherit === null) {
+    if (workspace === "worktree" && effectiveInherit === null) {
       db.run(
         "UPDATE workers SET branch = ?, worktree_path = ? WHERE id = ?",
         workerBranchName(id, title),
@@ -732,12 +946,89 @@ export function createLedgerWorkers(
       model: model ?? inherited.model,
       effort: effort ?? inherited.effort,
     });
-    insertPmMessage(p, worker, session, takeoverText ?? task, taskDedupeKey(id));
+    const workerRecord = toWorkerRecord(worker);
+    let takeoverText: string | null = null;
+    if (takeover !== null && bindTarget !== undefined && takeoverPredecessors !== null) {
+      const branches = [...new Set(takeover.predecessors.map((w) => w.branch).filter((b): b is string => b !== null && b !== ""))];
+      const branchNote = branches.length === 0 ? "" : `前任的分支 ${branches.join("、")} 还在，要的话自己合进来。`;
+      const baseWorkspaceNote =
+        inherit !== null
+          ? `你就在前任 Worker #${inherit.id} 的工作目录 ${inherit.worktree_path} 和分支 ${inherit.branch} 上，没提交的改动都还在，先看 git status 和 git log。`
+          : upstreamInherit !== null
+            ? `前任没有建成工作目录，你接着用上一步（Worker #${upstreamInherit.fromWorkerId}）的工作目录 ${upstreamInherit.worktreePath} 和分支 ${upstreamInherit.branch}：它的提交、没提交的文件和装好的依赖都在，不要另开分支。${branchNote}`
+            : args.noWorktree === true
+              ? `这次按项目经理的要求直接在项目主文件夹 ${card.mainFolder} 里干（--no-worktree），没有接手前任的工作目录。${branchNote}`
+              : workspace === "main"
+                ? `你在项目主文件夹 ${card.mainFolder} 里干活，和前任是同一个目录，前任没提交的改动也都还在，先看 git status。`
+                : bindTarget.workspacePlan.kind === "fork"
+                  ? `前任没有还能接手的工作目录（已清理或没建成），你在新开的 worktree ${worker.worktree_path}（分支 ${worker.branch}）里，从上游分支 ${bindTarget.workspacePlan.baseBranch} 最新提交开始。${branchNote}`
+                  : `前任没有还能接手的工作目录（已清理或没建成），你在新开的 worktree ${worker.worktree_path}（分支 ${worker.branch}）里，从主文件夹最后一次提交开始。${branchNote}`;
+      const workspaceNote = readonly ? `${baseWorkspaceNote}\n${WORKER_READONLY_NOTE}` : baseWorkspaceNote;
+      const baseTaskForTakeover = stepHasBrief
+        ? renderGraphStepTask({
+            goal: bindTarget.graphGoal,
+            stepTitle: bindTarget.nodeTitle,
+            index: bindTarget.index,
+            total: bindTarget.total,
+            brief: bindTarget.brief!,
+            review: bindTarget.review,
+          })
+        : takeover.originalTask !== null && !takeover.originalTask.includes("## 你这一步：")
+          ? renderGraphStepTask({
+              goal: bindTarget.graphGoal,
+              stepTitle: bindTarget.nodeTitle,
+              index: bindTarget.index,
+              total: bindTarget.total,
+              brief: takeover.originalTask,
+              review: bindTarget.review,
+            })
+          : (takeover.originalTask ?? task);
+      const upstreamHandoff = bindTarget.buildUpstreamHandoff(session.id, effectiveInherit?.fromWorkerId ?? null);
+      takeoverText =
+        options.takeover?.takeoverMessage({
+          graph: { id: bindTarget.graphId, title: bindTarget.graphTitle },
+          node: { key: bindTarget.nodeKey, title: bindTarget.nodeTitle, index: bindTarget.index, total: bindTarget.total },
+          worker: { id: worker.id, title: worker.title },
+          predecessors: takeoverPredecessors,
+          workspaceNote,
+          task: baseTaskForTakeover,
+          upstreamHandoff,
+          pmNote,
+        }) ?? null;
+    }
+    const firstMessageText =
+      takeoverText ??
+      (bindTarget !== undefined
+        ? bindTarget.buildFirstMessage(session.id, {
+            inheritedFromWorkerId: effectiveInherit?.fromWorkerId ?? null,
+            worker: workerRecord,
+            project: card,
+            task: stepHasBrief
+              ? task
+              : renderGraphStepTask({
+                  goal: bindTarget.graphGoal,
+                  stepTitle: bindTarget.nodeTitle,
+                  index: bindTarget.index,
+                  total: bindTarget.total,
+                  brief: task,
+                  review: bindTarget.review,
+                }),
+          })
+        : buildWorkerFirstMessage({
+            project: card,
+            worker: workerRecord,
+            task,
+          }));
+    insertPmMessage(p, worker, session, firstMessageText, taskDedupeKey(id));
     insertLine(p, worker, { event: "started", status: null, summary: null, turnMessageId: null, deliver: null });
     if (bindTarget !== undefined) {
-      options.taskGraphs?.bindWorkerStartedIn(p, bindTarget, id);
+      options.taskGraphs?.bindWorkerStartedIn(p, bindTarget, id, {
+        vendor,
+        model: session.model,
+        effort: session.effort,
+      });
     }
-    if (inherit !== null) {
+    if (effectiveInherit !== null) {
       // 不建 worktree、不跑准备命令；只登记第一条消息，送之前等用这个目录的旧会话都结束（waitsForFirstTurn），会话由这条消息拉起
       const first = db.get<{ id: number }>("SELECT id FROM messages WHERE dedupe_key = ?", taskDedupeKey(id))!;
       enqueue(p, { type: "session.send", params: { sessionId: session.id, messageId: first.id, source: "user" } });
@@ -767,8 +1058,8 @@ export function createLedgerWorkers(
     if (workspace === "main" && args.noWorktree !== true) notes.push("（主文件夹不是有提交的 git 仓库，所以没建 worktree）");
     if (readonly) notes.push("。它是只读的，只看不改");
     notes.push(`。它每做完一轮，汇报会自动发给你；打回用 ${HUB_COMMAND} worker send ${id} --stdin，收工用 ${HUB_COMMAND} worker end ${id}。`);
-    if (workspace === "worktree" && inherit === null && project.setup_command !== null) notes.push(SETUP_RECEIPT_NOTE);
-    if (workspace === "worktree" && inherit === null && probe.hasUncommittedChanges) notes.push(WORKTREE_DIRTY_NOTE);
+    if (workspace === "worktree" && effectiveInherit === null && project.setup_command !== null) notes.push(SETUP_RECEIPT_NOTE);
+    if (workspace === "worktree" && effectiveInherit === null && probe.hasUncommittedChanges) notes.push(WORKTREE_DIRTY_NOTE);
     return { text: notes.join(""), data: { worker: toWorkerRecord(worker) } };
   };
 
@@ -784,9 +1075,9 @@ export function createLedgerWorkers(
     // 和用户在网页上手打一样：隐藏的命令（/clear 会换会话 ID，之后接回的是旧对话）不发，hub 退出码 1 打印原因（原因由厂商实现给）
     const blocked = ctx.commandBlockReason(session, text);
     if (blocked !== null) throw fail("invalid", blocked);
+    options.taskGraphs?.onWorkerResumedIn(p, worker.id);
     const message = insertPmMessage(p, worker, session, text, sendDedupeKey(worker.id));
     enqueue(p, { type: "session.send", params: { sessionId: message.session_id!, messageId: message.id, source: "user" } });
-    options.taskGraphs?.onWorkerResumedIn(p, worker.id);
     // /compact 这一轮只压缩上下文、没有汇报（afterDriverEvent）：别让项目经理干等
     const compactOnly = composerBaseOf(session.vendor)?.isCompactCommand(text) === true;
     startMaxTime(worker, maxTimeMs);
@@ -819,44 +1110,38 @@ export function createLedgerWorkers(
    * 正在跑就先打断，标 ended，登记 session.end（这一轮回完、进程退了才算结束，接手的新 Worker 等它结束才开工，见 waitsForFirstTurn），
    * 排队的话标停止，项目经理对话里一行“已收工”，绑定的图节点按 incomplete 标完成或等人接手。返回打断了没有、节点那句回执。
    */
-  const endWorkerIn = (p: Pending, worker: WorkerDbRow, opts: { incomplete: boolean }): { ended: WorkerDbRow; interrupted: boolean; nodeNote: string | null } => {
+  const endWorkerIn = (
+    p: Pending,
+    worker: WorkerDbRow,
+    opts: { notifyGraph?: boolean } = {},
+  ): { ended: WorkerDbRow; interrupted: boolean; nodeNote: string | null } => {
     clearMaxTime(worker.worker_conversation_id);
     const session = workerSession(worker);
     // 正在跑（一轮没结束、或有排队待送的消息）：先走和网页“停止”同一条打断路径（messages.ts 的 stopIn）。还没开工的在准备中，没有这一轮
     const interrupted = !notStarted(worker) && stopIn(p, { ...session, conversationId: worker.worker_conversation_id });
     if (interrupted) endInterrupted.add(session.id);
+    awaitingBackground.take(session.id);
     db.run("UPDATE workers SET status = 'ended', updated_at = ? WHERE id = ?", now(), worker.id);
     const ended = workerRow(worker.id)!;
     // 正在跑就等这一轮回完再关，然后作废令牌（session.end 的处理函数）
     enqueue(p, { type: "session.end", params: { sessionId: session.id, generation: session.generation } });
     stopQueued(p, ended);
     insertLine(p, ended, { event: "ended", status: null, summary: null, turnMessageId: null, deliver: null });
-    const latestOutcome = db.get<{ id: number; text: string; event: string | null; status: string | null; summary: string | null }>(
-      `SELECT id, text, CASE WHEN json_valid(meta) THEN json_extract(meta, '$.event') END AS event,
-              CASE WHEN json_valid(meta) THEN json_extract(meta, '$.status') END AS status,
-              CASE WHEN json_valid(meta) THEN json_extract(meta, '$.summary') END AS summary
-         FROM messages
-        WHERE conversation_id = ? AND kind = 'worker' AND worker_id = ?
-          AND CASE WHEN json_valid(meta) THEN json_extract(meta, '$.event') IN ('report', 'turn_failed') ELSE 0 END
-        ORDER BY id DESC LIMIT 1`,
-      ended.pm_conversation_id,
-      ended.id,
-    );
-    // 被打回或收到新用户消息后，上一轮的完成报告不再证明当前任务已完成。
-    const latestInputId = db.get<{ id: number | null }>(
-      "SELECT max(id) AS id FROM messages WHERE conversation_id = ? AND sender IN ('pm', 'user')",
-      ended.worker_conversation_id,
-    )?.id ?? 0;
-    const parsedLatest = latestOutcome?.event === "report" ? parseWorkerReport(latestOutcome.text) : null;
-    // 收工会顺带改任务图：绑定的节点标完成或变成等接手。回执里写明（nodeNote），不让项目经理事后才从 hub graph show 发现
-    const nodeNote = options.taskGraphs?.onWorkerEndedIn(p, ended.id, {
-      hadLatestDoneReport: !interrupted && latestOutcome?.event === "report" && latestOutcome.status === "done" && latestOutcome.id > latestInputId,
-      incomplete: opts.incomplete,
-      summary: latestOutcome?.summary ?? null,
-      branch: ended.branch,
-      commit: parsedLatest?.kind === "ok" ? parsedLatest.report.commit : null,
-    }) ?? null;
+    const nodeNote =
+      opts.notifyGraph === false ? null : (options.taskGraphs?.onWorkerEndedIn(p, ended.id) ?? null);
     return { ended, interrupted, nodeNote };
+  };
+
+  /** 供取消整张图或放行步骤时停掉关联的在跑 Worker（不回写已取消/已放行的步骤状态）。 */
+  const stopWorkersIn: TaskGraphWorkersBridge["stopWorkersIn"] = (p, workerIds) => {
+    const stopped: WorkerId[] = [];
+    for (const wid of workerIds) {
+      const w = workerRow(wid);
+      if (w === null || w.status === "ended") continue;
+      endWorkerIn(p, w, { notifyGraph: false });
+      stopped.push(wid);
+    }
+    return stopped;
   };
 
   const endIn = (p: Pending, caller: AgentSessionRow & { pmId: PmId }, args: HubArgs<"worker.end">): HubResult<"worker.end"> => {
@@ -866,7 +1151,7 @@ export function createLedgerWorkers(
       clearMaxTime(worker.worker_conversation_id);
       return { text: `Worker #${worker.id}“${worker.title}”已经收工了，什么也没做。`, data: { worker: toWorkerRecord(worker) } };
     }
-    const { ended, interrupted, nodeNote } = endWorkerIn(p, worker, { incomplete: args.incomplete === true });
+    const { ended, interrupted, nodeNote } = endWorkerIn(p, worker, { notifyGraph: true });
     const cleanup =
       ended.workspace === "worktree"
         ? ` worktree ${ended.worktree_path} 和分支 ${ended.branch} 还在：PR 合并后或收工满 ${WORKTREE_RETENTION_DAYS} 天且没有未提交改动时会自动清理 worktree（分支保留；还有 Worker 接着用这个目录、或它经手的任务图还没结束时不清）。`
@@ -899,7 +1184,7 @@ export function createLedgerWorkers(
       enqueue(p, { type: "session.end", params: { sessionId: session.id, generation: session.generation } });
       updateLive(p, session.id, idle);
       insertLine(p, ended, { event: "ended", status: null, summary: null, turnMessageId: null, deliver: null });
-      options.taskGraphs?.onWorkerEndedIn(p, ended.id, { hadLatestDoneReport: false, incomplete: true });
+      options.taskGraphs?.onWorkerEndedIn(p, ended.id);
     }
   };
 
@@ -934,6 +1219,7 @@ export function createLedgerWorkers(
     const worker = workerRow(caller.workerId!)!;
     const pm = pmRow(worker.pm_id)!;
     const card = projectCard(projectRow(worker.project_id));
+    const graphInfo = options.taskGraphs?.workerGraphStatus(worker.id, caller.id);
     const data: WorkerHubStatus = {
       role: "worker",
       pm: { id: pm.id, name: pm.name },
@@ -941,11 +1227,32 @@ export function createLedgerWorkers(
       conversationId: worker.worker_conversation_id,
       worker: toWorkerRecord(worker),
       project: card,
+      ...(graphInfo !== undefined ? { taskGraph: graphInfo } : {}),
     };
     const readonly = worker.readonly === 1 ? "只读（只看不改），" : "";
-    const text =
-      `你是 Worker #${worker.id}“${worker.title}”，项目经理“${pm.name}”派的，${readonly}${describeWorkspace(worker, card.mainFolder)}。` +
-      `\n\n任务说明：\n${worker.task}`;
+    const head = `你是 Worker #${worker.id}“${worker.title}”，项目经理“${pm.name}”派的，${readonly}${describeWorkspace(worker, card.mainFolder)}。`;
+    if (graphInfo === undefined) {
+      return { text: `${head}\n\n任务说明：\n${worker.task}`, data };
+    }
+    const sections = [
+      head,
+      `所属任务图：#${graphInfo.id}「${graphInfo.title}」· 第 ${graphInfo.stepIndex}/${graphInfo.totalSteps} 步「${graphInfo.stepTitle}」（${graphInfo.stepKey}）`,
+    ];
+    if (graphInfo.goal) sections.push(`图目标：\n${graphInfo.goal}`);
+    sections.push(`本步职责：\n${graphInfo.brief ?? worker.task}`);
+    if (graphInfo.upstream.length > 0) {
+      const upLines = graphInfo.upstream.map((u) => {
+        if (u.skipped) return `- ${u.key}（${u.title}）：${u.summary ?? "已跳过"}`;
+        const parts = [`- ${u.key}（${u.title}）`];
+        if (u.summary) parts.push(`摘要：${u.summary}`);
+        if (u.branch) parts.push(`分支：${u.branch}`);
+        if (u.prUrl) parts.push(`PR：${u.prUrl}`);
+        if (u.reportFile) parts.push(`完整汇报：${u.reportFile}`);
+        return parts.join(" · ");
+      });
+      sections.push(`上游交棒：\n${upLines.join("\n")}`);
+    }
+    const text = sections.join("\n\n");
     return { text, data };
   };
 
@@ -968,8 +1275,21 @@ export function createLedgerWorkers(
       const retry = message.status === "failed" ? "用户那边会看到发送失败，可以自己点重试。" : "";
       lines.push(`这一轮里有用户直接对它说的话：「${message.text}」。${retry}`);
     }
-    insertLine(p, worker, { event: "turn_failed", status: null, summary: reason, turnMessageId, deliver: lines.join("\n") });
-    options.taskGraphs?.onWorkerAttentionIn(p, worker.id, { clearActiveWorker: false });
+    const detailBody = lines.join("\n");
+    const graphDeliver =
+      options.taskGraphs?.onWorkerFailedIn(p, worker.id, {
+        clearActiveWorker: false,
+        reasonLabel: reason === TURN_STOPPED ? "用户亲手停了它" : `这一轮没做完（${reason}）`,
+        detailBody,
+        stoppedByUser: reason === TURN_STOPPED,
+      }) ?? null;
+    insertLine(p, worker, {
+      event: "turn_failed",
+      status: null,
+      summary: reason,
+      turnMessageId,
+      deliver: graphDeliver ?? detailBody,
+    });
   };
 
   /**
@@ -1025,17 +1345,50 @@ export function createLedgerWorkers(
   const insertReport = (p: Pending, worker: WorkerDbRow, turnMessageId: MessageId, text: string, note: string | null = null) => {
     const parsed = parseWorkerReport(text);
     const body = text.trim() === "" ? NO_REPLY_TEXT : text;
+    const status: WorkerLineStatus = parsed.kind === "ok" ? parsed.report.status : "unformatted";
+    const summary = parsed.kind === "ok" ? parsed.report.summary : parsed.summary;
+    const graphHandling = options.taskGraphs?.onWorkerTurnReportIn(
+      p,
+      { id: worker.id, branch: worker.branch },
+      parsed,
+      body,
+      note,
+    );
+    if (graphHandling?.handled === true) {
+      if (graphHandling.outcome === "completed") {
+        // ① 先写本步汇报行（有遗留问题才抄送唤醒 PM，否则静默存档供交棒/交付单/检索读取）
+        insertLine(p, worker, {
+          event: "report",
+          status,
+          summary,
+          turnMessageId,
+          deliver: body,
+          wakePm: graphHandling.wakePmWithReport,
+        });
+        // ② 自动收工本步 Worker（入队 session.end，排在下游 session.send 之前）
+        endWorkerIn(p, worker, { notifyGraph: false });
+        // ③ 标步骤 done，自动拉起就绪下游或发交付单
+        graphHandling.completeStep();
+        return;
+      }
+      // 偏离 / 有问题 / 放弃了 / 没按格式 / confirm：Worker 不收工，按第 9.4 节格式唤醒 PM
+      insertLine(p, worker, {
+        event: "report",
+        status,
+        summary,
+        turnMessageId,
+        deliver: graphHandling.pmDeliverBody,
+        wakePm: true,
+      });
+      return;
+    }
     insertLine(p, worker, {
       event: "report",
-      status: parsed.kind === "ok" ? parsed.report.status : "unformatted",
-      summary: parsed.kind === "ok" ? parsed.report.summary : parsed.summary,
+      status,
+      summary,
       turnMessageId,
       deliver: note === null ? body : `${note}\n\n${body}`,
     });
-    // 第 3.2 节第 6 行：汇报“有问题”“放弃了”或没按格式时，绑定的步骤变等人（等项目经理处理或放行）
-    if (parsed.kind !== "ok" || parsed.report.status === "problem" || parsed.report.status === "gave_up") {
-      options.taskGraphs?.onWorkerAttentionIn(p, worker.id, { clearActiveWorker: false });
-    }
   };
 
   /**
@@ -1185,12 +1538,14 @@ export function createLedgerWorkers(
   const getWorktreeTask = (workerId: WorkerId): WorktreeTask | null => {
     const worker = workerRow(workerId);
     if (worker === null || worker.workspace !== "worktree") return null;
+    const base = options.taskGraphs?.workerGraphForkBase(workerId);
     return {
       workerId,
       sessionId: workerSession(workerId).id,
       repo: mainFolderOf(worker.project_id),
       branch: worker.branch!,
       worktreePath: worker.worktree_path!,
+      ...(base !== undefined ? { base } : {}),
       status: worker.status as WorktreeTask["status"],
       setupCommand: projectRow(worker.project_id).setup_command,
     };
@@ -1306,8 +1661,19 @@ export function createLedgerWorkers(
         enqueue(p, { type: "session.end", params: { sessionId: session.id, generation: session.generation } });
       }
       const deliver = `建 worktree 失败，这个 Worker 没能开工，已经收工：${error}。要的话修好问题后重新派一个。`;
-      insertLine(p, workerRow(worker.id)!, { event: "worktree_failed", status: null, summary: error, turnMessageId: null, deliver });
-      options.taskGraphs?.onWorkerAttentionIn(p, worker.id, { clearActiveWorker: true });
+      const graphDeliver =
+        options.taskGraphs?.onWorkerFailedIn(p, worker.id, {
+          clearActiveWorker: true,
+          reasonLabel: `建 worktree 失败（${error}）`,
+          detailBody: deliver,
+        }) ?? null;
+      insertLine(p, workerRow(worker.id)!, {
+        event: "worktree_failed",
+        status: null,
+        summary: error,
+        turnMessageId: null,
+        deliver: graphDeliver ?? deliver,
+      });
       const task = db.get<{ id: number }>("SELECT id FROM messages WHERE dedupe_key = ?", taskDedupeKey(worker.id));
       if (task !== undefined) transition(p, task.id, "failed", error);
       return;
@@ -1464,9 +1830,11 @@ export function createLedgerWorkers(
 
   return {
     startIn,
+    dispatchStepWorkerIn,
     sendIn,
     maxTimeIn,
     endIn,
+    stopWorkersIn,
     endOpenWorkersIn,
     list,
     status,

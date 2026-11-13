@@ -337,6 +337,10 @@ export function buildClaudeArgs(session: AgentSessionRow, files: LaunchFiles, re
   ];
   // 模型、思考程度的参数名在厂商清单里（vendors.ts），默认的不传
   args.push(...agentLaunchArgs({ vendor: session.vendor as AgentVendor, model: session.model, effort: session.effort }));
+  // Worker 会话跨不同 worktree/分支共享静态前缀缓存：把 Claude 内置的 cwd、git status 等每会话动态段移到首条用户消息
+  if (session.role === "worker") {
+    args.push("--exclude-dynamic-system-prompt-sections");
+  }
   args.push("--append-system-prompt-file", files.promptFile);
   if (files.settingsFile) args.push("--settings", files.settingsFile);
   // 产品技能（只有项目经理会话有）：插件目录由驱动层起进程前写好（skills.ts 的 ensureClaudeSkillPlugin）

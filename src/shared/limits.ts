@@ -712,8 +712,20 @@ export const MAX_GRAPH_EDGES = 64;
 /** 任务图标题字数上限。 */
 export const MAX_GRAPH_TITLE_CHARS = 120;
 export const MAX_GRAPH_TITLE_BYTES = 4 * MAX_GRAPH_TITLE_CHARS;
+/** 任务图目标（goal）字数上限（docs/orchestration-simplify-design.md 第 11.2 节）。 */
+export const MAX_GRAPH_GOAL_CHARS = 6_000;
 /** 节点标题字数上限。 */
 export const MAX_NODE_TITLE_CHARS = 80;
+/** 步骤职责（brief）字数上限（docs/orchestration-simplify-design.md 第 11.2 节）。 */
+export const MAX_STEP_BRIEF_CHARS = 1_500;
+/** 单个上游步骤的交棒原文上限（字，按 Unicode 码点；超长截断并把完整汇报落盘到启动目录 upstream/）。 */
+export const HANDOFF_NOTE_MAX_CHARS = 4_000;
+/** 多线合流时各上游交棒合计上限（字，按 Unicode 码点；均分给各上游且单上游不超过 HANDOFF_NOTE_MAX_CHARS）。 */
+export const HANDOFF_TOTAL_MAX_CHARS = 12_000;
+/** 单个上游步骤落盘到启动目录 upstream/<stepKey>.md 的完整汇报上限（字，按 Unicode 码点）。 */
+export const HANDOFF_REPORT_FILE_MAX_CHARS = 60_000;
+/** 多线合流时单会话启动目录 upstream/ 下全部落盘汇报合计上限（字，按 Unicode 码点；按需落盘上游均分且单文件不超过 HANDOFF_REPORT_FILE_MAX_CHARS）。 */
+export const HANDOFF_REPORT_TOTAL_MAX_CHARS = 240_000;
 /** 节点 key 长度上限与合法字符格式。 */
 export const MAX_NODE_KEY_CHARS = 48;
 export const MAX_NODE_KEY_BYTES = 4 * MAX_NODE_KEY_CHARS;

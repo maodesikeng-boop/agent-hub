@@ -1821,3 +1821,124 @@ describe("0025_task_graph_steps：步骤状态 7 个变 4 个、节点类型 2 �
     db.close();
   });
 });
+
+describe("0026_task_graph_auto_dispatch：补齐图目标与步骤自动开工列，且回退 8 / 25 幂等重跑不丢数据", () => {
+  it("从 0025 升级到 0026：已有图与步骤保留原值、新列补默认值，写入非空新列后回退 user_version = 8 和 25 重跑完全幂等", () => {
+    const db = m3Db();
+    migrate(db, migrationsUpTo(25));
+    const gid = Number(
+      db.run(
+        "INSERT INTO task_graphs (project_id, pm_id, conversation_id, title, status, created_at, updated_at) VALUES (2, 1, 1, '旧图', 'active', 10, 10)",
+      ).lastInsertRowid,
+    );
+    db.run("INSERT INTO task_graphs (id, project_id, pm_id, conversation_id, title, status, created_at, updated_at) VALUES (300, 2, 1, 1, '已删图', 'cancelled', 10, 10)");
+    db.run("DELETE FROM task_graphs WHERE id = 300");
+
+    db.run(
+      "INSERT INTO task_graph_steps (graph_id, node_key, title, status, waiting_for, skipped, sort_order, created_at, updated_at) VALUES (?, 'impl', '实现', 'waiting', 'pm', 0, 0, 10, 10)",
+      gid,
+    );
+    db.run(
+      "INSERT INTO task_graph_steps (graph_id, node_key, title, status, waiting_for, skipped, sort_order, created_at, updated_at) VALUES (?, 'review', '审查', 'pending', NULL, 0, 1, 10, 10)",
+      gid,
+    );
+    db.run("INSERT INTO task_graph_edges (graph_id, from_key, to_key) VALUES (?, 'impl', 'review')", gid);
+
+    expect(migrate(db, migrationsUpTo(26))).toMatchObject({ from: 25, to: 26, applied: [26] });
+    expect(db.get("SELECT id, title, goal, status FROM task_graphs WHERE id = ?", gid)).toEqual({
+      id: gid,
+      title: "旧图",
+      goal: null,
+      status: "active",
+    });
+    expect(
+      db.all(
+        "SELECT node_key, brief, vendor, model, effort, readonly, max_time_ms, confirm, review, base, pm_note, status, waiting_for FROM task_graph_steps WHERE graph_id = ? ORDER BY sort_order",
+        gid,
+      ),
+    ).toEqual([
+      {
+        node_key: "impl",
+        brief: null,
+        vendor: null,
+        model: null,
+        effort: null,
+        readonly: 0,
+        max_time_ms: null,
+        confirm: 0,
+        review: 0,
+        base: null,
+        pm_note: null,
+        status: "waiting",
+        waiting_for: "pm",
+      },
+      {
+        node_key: "review",
+        brief: null,
+        vendor: null,
+        model: null,
+        effort: null,
+        readonly: 0,
+        max_time_ms: null,
+        confirm: 0,
+        review: 0,
+        base: null,
+        pm_note: null,
+        status: "pending",
+        waiting_for: null,
+      },
+    ]);
+    expect(db.all("SELECT * FROM task_graph_edges WHERE graph_id = ?", gid)).toEqual([
+      { graph_id: gid, from_key: "impl", to_key: "review" },
+    ]);
+
+    // 写入所有新列的非空值与布尔 1，验证 CHECK 约束与回退 8 / 25 重复执行零丢失
+    db.run("UPDATE task_graphs SET goal = '实现自动交棒引擎' WHERE id = ?", gid);
+    db.run(
+      `UPDATE task_graph_steps
+          SET brief = '审查实现并补测试',
+              vendor = 'codex',
+              model = 'gpt-5',
+              effort = 'high',
+              readonly = 1,
+              max_time_ms = 3600000,
+              confirm = 1,
+              review = 1,
+              base = 'main',
+              pm_note = '放行说明'
+        WHERE graph_id = ? AND node_key = 'review'`,
+      gid,
+    );
+    expect(() =>
+      db.run("UPDATE task_graph_steps SET readonly = 2 WHERE graph_id = ? AND node_key = 'impl'", gid),
+    ).toThrow(/CHECK/);
+    expect(() =>
+      db.run("UPDATE task_graph_steps SET confirm = 2 WHERE graph_id = ? AND node_key = 'impl'", gid),
+    ).toThrow(/CHECK/);
+    expect(() =>
+      db.run("UPDATE task_graph_steps SET review = 2 WHERE graph_id = ? AND node_key = 'impl'", gid),
+    ).toThrow(/CHECK/);
+
+    const graphsSnapshot = db.all("SELECT * FROM task_graphs ORDER BY id");
+    const stepsSnapshot = db.all("SELECT * FROM task_graph_steps ORDER BY id");
+    const edgesSnapshot = db.all("SELECT * FROM task_graph_edges ORDER BY graph_id, from_key, to_key");
+
+    for (const rewindTo of [25, 8, 25, 24, 8]) {
+      db.exec(`PRAGMA user_version = ${rewindTo}`);
+      expect(() => migrate(db, migrationsDir)).not.toThrow();
+      expect(userVersion(db)).toBe(LATEST_VERSION);
+      expect(db.all("SELECT * FROM task_graphs ORDER BY id")).toEqual(graphsSnapshot);
+      expect(db.all("SELECT * FROM task_graph_steps ORDER BY id")).toEqual(stepsSnapshot);
+      expect(db.all("SELECT * FROM task_graph_edges ORDER BY graph_id, from_key, to_key")).toEqual(edgesSnapshot);
+      expect(db.get("SELECT seq FROM sqlite_sequence WHERE name = 'task_graphs'")).toEqual({ seq: 300 });
+      expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+    }
+
+    const nextGid = Number(
+      db.run(
+        "INSERT INTO task_graphs (project_id, pm_id, conversation_id, title, status, created_at, updated_at) VALUES (2, 1, 1, '新图', 'active', 20, 20)",
+      ).lastInsertRowid,
+    );
+    expect(nextGid).toBe(301);
+  });
+});

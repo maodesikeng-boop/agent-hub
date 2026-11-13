@@ -176,7 +176,11 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   });
   const projects = createLedgerProjects(ctx, sessions, messages, persona, files);
   const router = createLedgerRouter(ctx, sessions, messages, persona, projects);
-  const taskGraphs = createLedgerTaskGraphs(ctx, sessions, messages, persona, projects, router);
+  const effectiveLaunchDir = files.launchDir ?? join(dataHome, "state", "launch");
+  const taskGraphs = createLedgerTaskGraphs(ctx, sessions, messages, persona, projects, router, {
+    launchDir: effectiveLaunchDir,
+    workers: () => workers,
+  });
   const steps = createLedgerSteps(ctx);
   const workers = createLedgerWorkers(ctx, sessions, messages, persona, projects, {
     worktreesDir: files.worktreesDir,
@@ -405,6 +409,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     workerPrTarget: (sessionId, workerId) => workers.workerPrTarget(getAgentSession(db, sessionId), workerId),
     workerTranscriptTarget: (sessionId, workerId) => workers.workerTranscriptTarget(getAgentSession(db, sessionId), workerId),
     graphPrTargets: (sessionId, graphId) => taskGraphs.graphPrTargets(getAgentSession(db, sessionId), graphId),
+    graphAutoDispatchVendors: (sessionId, command, body) =>
+      taskGraphs.graphAutoDispatchVendors(getAgentSession(db, sessionId), command, body),
     graphDeliveryProbeTarget: taskGraphs.graphDeliveryProbeTarget,
     enrichDeliveryNoteMessage: taskGraphs.enrichDeliveryNoteMessage,
 

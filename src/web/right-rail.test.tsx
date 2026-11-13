@@ -4,8 +4,9 @@ import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConversationId, Message } from "../shared/index.ts";
 import { EMPTY_TOKEN_USAGE } from "../shared/index.ts";
-import { RIGHT_RAIL_COLLAPSED_KEY, RIGHT_RAIL_VISIBLE_ROWS, RailGroups, RightRail, RightRailToggle } from "./components/RightRail.tsx";
+import { PieceMeta, RIGHT_RAIL_COLLAPSED_KEY, RIGHT_RAIL_VISIBLE_ROWS, RailGroups, RightRail, RightRailToggle } from "./components/RightRail.tsx";
 import { cleanPieceTitle } from "./format.ts";
+import { ModelCatalogProvider } from "./models.tsx";
 import type { WorkerEntry } from "./selectors.ts";
 import { makeMessage } from "./test-utils.ts";
 
@@ -461,5 +462,70 @@ describe("cleanPieceTitle：列表里去掉标题开头的分类前缀", () => {
     ["修复界面：别的", "修复界面：别的"],
   ])("%s → %s", (title, shown) => {
     expect(cleanPieceTitle(title)).toBe(shown);
+  });
+});
+
+describe("PieceMeta 与右栏窄屏收缩防溢出", () => {
+  it("长模型名下 PieceMeta 允许收缩（不写 shrink-0）：模型名 truncate 并带完整悬停 title，按主区容器宽度分级让位", () => {
+    render(
+      <ModelCatalogProvider>
+        <PieceMeta
+          worker={worker(30, {
+            vendor: "agy",
+            model: "Gemini 4 Carbon · Antigravity",
+            effort: "high",
+            usage: { input: 24_000, cacheRead: 280_000, cacheWrite: 0, output: 3_200, context: 304_000 },
+          })}
+        />
+      </ModelCatalogProvider>,
+    );
+    const meta = screen.getByTestId("piece-meta");
+    expect(meta).toHaveClass("min-w-0", "overflow-hidden", "max-[720px]:hidden", "@max-[18rem]/chat:hidden");
+    expect(meta).not.toHaveClass("shrink-0");
+
+    const model = within(meta).getByText("Gemini 4 Carbon · Antigravity");
+    expect(model).toHaveClass("min-w-0", "truncate", "@max-[22rem]/chat:hidden");
+    expect(model).toHaveAttribute("title", "Gemini 4 Carbon · Antigravity");
+
+    const effort = within(meta).getByText("high");
+    expect(effort).toHaveClass("shrink-0", "@max-[26rem]/chat:hidden");
+
+    const context = within(meta).getByText("304K context");
+    expect(context).toHaveClass("shrink-0", "tabular-nums");
+  });
+
+  it("尚无 context 用量时模型名不挂 @max-[22rem]/chat:hidden，避免窄窗下剩空容器", () => {
+    render(
+      <ModelCatalogProvider>
+        <PieceMeta worker={worker(30, { vendor: "agy", model: "Gemini 4 Carbon · Antigravity", effort: "high" })} />
+      </ModelCatalogProvider>,
+    );
+    const meta = screen.getByTestId("piece-meta");
+    const model = within(meta).getByText("Gemini 4 Carbon · Antigravity");
+    expect(model).toHaveClass("min-w-0", "truncate");
+    expect(model).not.toHaveClass("@max-[22rem]/chat:hidden");
+  });
+
+  it("右栏外壳与各折叠组标题均带 min-w-0 / truncate，防止窄窗挤折行或跨栏撑破", () => {
+    render(
+      <RightRail
+        asks={[ask(1)]}
+        workers={[busy(30), done(31)]}
+        openWorkerId={null}
+        layout="side"
+        toggle={<button type="button" aria-label="Hide side panel" />}
+        onOpenAsk={() => {}}
+        onOpenWorker={() => {}}
+      />,
+    );
+    const aside = screen.getByRole("complementary", { name: "Side panel" });
+    expect(aside).toHaveClass("min-w-0", "overflow-hidden");
+    for (const group of [asksGroup(), workerGroup(), completedGroup()]) {
+      const heading = within(group).getByRole("heading");
+      expect(heading).toHaveClass("min-w-0");
+      const labelSpan = Array.from(heading.querySelectorAll("button > span")).find((el) => !el.classList.contains("bg-primary"));
+      expect(labelSpan).toHaveClass("min-w-0", "truncate");
+    }
+    expect(within(asksGroup()).getByRole("heading").parentElement).toHaveClass("min-w-0");
   });
 });

@@ -161,9 +161,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     group: "worker",
     action: "end",
     cli: "worker end",
-    usage: `  ${hub} worker end <编号> [--incomplete]                     收工：结束这个 Worker 的会话（正在跑的一轮先被打断）。绑了任务图节点的：
-                                                          它最近一轮汇报是“做完了”，节点自动标完了、下游轮到；否则节点变成等你处理，等人接手。
-                                                          换人时加 --incomplete：不管它汇报了什么，节点都等人接手。回执里会写明节点变成了什么`,
+    usage: `  ${hub} worker end <编号>                                   停掉一个 Worker（正在跑的一轮先被打断）。它在任务图里未完成的步骤会变成等你处理，回执里会写明`,
   },
   {
     command: "worker.list",
@@ -269,7 +267,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     group: "graph",
     action: "create",
     cli: "graph create",
-    usage: `  ${hub} graph create [--title <标题>] --stdin                  从标准输入 JSON 创建任务流图（DAG）
+    usage: `  ${hub} graph create [--title <标题>] --stdin                  从标准输入 JSON 创建任务流图（steps 不写 deps 默认串接，带 brief 自动开工）
                                                           JSON：${TASK_GRAPH_CREATE_JSON_HINT}`,
   },
   {
@@ -300,7 +298,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     group: "graph",
     action: "patch",
     cli: "graph patch",
-    usage: `  ${hub} graph patch [<图编号>] --stdin                       从标准输入 JSON 增量增删改任务图节点与依赖边、跳过还没开工的节点（已经结束的图不能改）
+    usage: `  ${hub} graph patch [<图编号>] --stdin                       从标准输入 JSON 增量增删改任务图步骤、跳过未开工步骤（在干或已完的不可直接改，已结束的图不能改）
                                                           JSON：${TASK_GRAPH_PATCH_JSON_HINT}`,
   },
   {
@@ -308,8 +306,8 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     group: "graph",
     action: "done",
     cli: "graph done",
-    usage: `  ${hub} graph done <节点> [--graph <图编号>] [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要> | --stdin]
-                                                          放行：把没有 Worker 在干的节点标完了、下游轮到，或给节点补记 PR 等结果（图已结束时加 --graph <图编号>）；
+    usage: `  ${hub} graph done <节点> [--graph <图编号>] [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要>] [--stdin]
+                                                          放行：把没有 Worker 在干的步骤标完了、下游轮到（--stdin 正文是你补给下一步的话），或补记 PR 等结果；
                                                           有 Worker 在干（running）的节点会被拒绝：先 ${hub} worker end 让它收工`,
   },
   {
@@ -433,7 +431,6 @@ type Options = {
   "no-worktree"?: boolean;
   node?: string;
   graph?: string;
-  incomplete?: boolean;
   "unmerged-ok"?: boolean;
   question?: string;
   context?: string;
@@ -475,7 +472,7 @@ interface Parsed {
   /** 正文从哪来：--stdin、--text 或没有。 */
   textSource: { kind: "stdin" } | { kind: "inline"; value: string } | null;
   /** 正文放进 body 的哪个字段。 */
-  textField?: "text" | "task" | "command" | "prompt" | "context" | "summary" | "specJson" | "summaryMd" | "question";
+  textField?: "text" | "task" | "command" | "prompt" | "context" | "summary" | "note" | "specJson" | "summaryMd" | "question";
   /** 正文可以不给、给空的也行（换人接手时的 hub worker start --node）：读到空的就不带这个字段，由守护进程按情况判断。 */
   textOptional?: boolean;
   /** 若同时给了行内首句与 --stdin，拼在 stdin 前面。 */
@@ -587,7 +584,6 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
         "no-worktree": { type: "boolean" },
         node: { type: "string" },
         graph: { type: "string" },
-        incomplete: { type: "boolean" },
         "unmerged-ok": { type: "boolean" },
         question: { type: "string" },
         context: { type: "string" },
@@ -748,10 +744,9 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     return { command: "worker.max-time", body: { workerId, maxTimeMs }, textSource: null };
   }
   if (group === "worker" && action === "end") {
-    allowOnly(values, ["incomplete"], "worker end");
+    allowOnly(values, [], "worker end");
     expectPositionals(rest, 1, "worker end");
     const body: Record<string, unknown> = { workerId: workerIdOf(rest[0], "worker end") };
-    if (values.incomplete === true) body.incomplete = true;
     return { command: "worker.end", body, textSource: null };
   }
   if (group === "ask") {
@@ -1014,9 +1009,6 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
   if (group === "graph" && action === "done") {
     allowOnly(values, ["graph", "pr", "commit", "branch", "summary", "stdin"], "graph done");
     expectPositionals(rest, 1, "graph done");
-    if (values.stdin === true && values.summary !== undefined) {
-      throw new UsageError("--stdin 和 --summary 只能用一个");
-    }
     const nodeKey = (rest[0] ?? "").trim();
     if (nodeKey === "") throw new UsageError("节点名称不能是空的");
     const body: Record<string, unknown> = { nodeKey };
@@ -1024,13 +1016,16 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     if (values.pr !== undefined) body.prUrl = values.pr;
     if (values.commit !== undefined) body.commit = values.commit;
     if (values.branch !== undefined) body.branch = values.branch;
-    const textSource =
-      values.stdin === true
-        ? ({ kind: "stdin" } as const)
-        : values.summary !== undefined
-          ? ({ kind: "inline", value: values.summary } as const)
-          : null;
-    return { command: "graph.done", body, textSource, textField: "summary" };
+    if (values.summary !== undefined) {
+      if (values.summary.trim() === "") throw new UsageError("--summary 的正文是空的");
+      body.summary = values.summary;
+    }
+    return {
+      command: "graph.done",
+      body,
+      textSource: values.stdin === true ? ({ kind: "stdin" } as const) : null,
+      textField: "note",
+    };
   }
   if (group === "graph" && action === "decide") {
     allowOnly(values, ["graph", "choice", "note"], "graph decide");

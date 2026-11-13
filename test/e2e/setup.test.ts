@@ -106,7 +106,10 @@ describe("worktree 准备命令端到端", { timeout: 60_000 }, () => {
     await client.post(pm.conversationId, "派活");
     await waitLines(client, pm.conversationId, "report");
     const [worker] = workerRows();
-    expect(await firstTextOf(client, worker!)).toBe("把 X 修好");
+    const firstText = await firstTextOf(client, worker!);
+    expect(firstText).not.toContain("【系统】");
+    expect(firstText?.startsWith("你是 Worker #1（修 X）。\n\n# 在哪干活\n\n")).toBe(true);
+    expect(firstText?.endsWith("\n\n# 你的任务\n\n把 X 修好")).toBe(true);
     expect(env.bashRuns()[0]!.output).not.toContain(SETUP_RECEIPT_NOTE);
     expect(existsSync(setupLog(1))).toBe(false);
     await terminate(daemon);
@@ -131,7 +134,9 @@ describe("worktree 准备命令端到端", { timeout: 60_000 }, () => {
     expect(readyRun).toMatchObject({ exitCode: 0 });
     const [worker] = workerRows();
     const text = await firstTextOf(client, worker!);
-    expect(text).toMatch(/^【系统】已经在这个 worktree 里跑过项目的准备命令（用时 \d+ 秒，日志：.*worker-1\.log）。\n\n把 X 修好$/);
+    expect(text).toMatch(
+      /^【系统】已经在这个 worktree 里跑过项目的准备命令（用时 \d+ 秒，日志：.*worker-1\.log）。\n\n你是 Worker #1（修 X）。\n\n# 在哪干活\n\n[\s\S]*\n\n# 你的任务\n\n把 X 修好$/,
+    );
     const log = readFileSync(setupLog(1), "utf8");
     expect(log).toContain(`prepared in ${worker!.worktree_path} from ${dir}`);
     // worktree 里多了 ready，主文件夹没有
@@ -156,7 +161,8 @@ describe("worktree 准备命令端到端", { timeout: 60_000 }, () => {
     const text = (await firstTextOf(client, workerRows()[0]!))!;
     expect(text).toContain("准备命令没成功（退出码 2");
     expect(text).toContain("boom-lockfile");
-    expect(text.endsWith("下面是任务说明。\n\n把 X 修好")).toBe(true);
+    expect(text).toContain("下面是任务说明。\n\n你是 Worker #1（修 X）。");
+    expect(text.endsWith("\n\n# 你的任务\n\n把 X 修好")).toBe(true);
     await terminate(daemon);
   });
 
@@ -174,7 +180,11 @@ describe("worktree 准备命令端到端", { timeout: 60_000 }, () => {
     await client.post(pm.conversationId, "派活");
     await waitLines(client, pm.conversationId, "report");
     expect(env.bashRuns()[1]!.output).not.toContain(SETUP_RECEIPT_NOTE);
-    expect(await firstTextOf(client, workerRows()[0]!)).toBe("把 X 修好");
+    const firstText = await firstTextOf(client, workerRows()[0]!);
+    expect(firstText).not.toContain("【系统】");
+    expect(firstText?.startsWith("你是 Worker #1（修 X）。\n\n# 在哪干活\n\n")).toBe(true);
+    expect(firstText).toContain("直接在主文件夹里干，不是 worktree");
+    expect(firstText?.endsWith("\n\n# 你的任务\n\n把 X 修好")).toBe(true);
     expect(existsSync(join(dir, "setup-ran"))).toBe(false);
     expect(existsSync(setupLog(1))).toBe(false);
     await terminate(daemon);

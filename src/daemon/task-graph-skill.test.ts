@@ -70,23 +70,27 @@ const row = (cwd: string): AgentSessionRow => ({
 });
 
 describe("任务图技能正文", () => {
-  it("从基础提示词搬过来的建图规矩一条不少：一图一事、按步骤拆、默认一条线、明说要先看的单独一步挂拍板卡、四条红线加审查节点、纯文案不审", () => {
+  it("建图规矩匹配第 5 步自动开工与交棒终稿：goal + steps、一图一事、按步骤拆、默认一条线共用 worktree、多路合流落盘 upstream/、用户检查点、四条红线加 review 步骤", () => {
     const body = taskGraphSkillBody();
     // 编排简化第 4 步：节点类型只剩一种、状态只剩四个，手册里不再出现 gate 节点、kind 和旧状态
     expect(taskGraphSkillMarkdown()).not.toMatch(/\bgate\b|\bkind\b|\bready\b|attention|waiting_user|门禁/u);
     for (const word of [
       "一件事有两段以上、每段各要一个独立会话时才建图。一段就能做完的活不建图，直接派一个 Worker。",
-      `用 \`${hub} graph create\` 把这件事排成一串节点，然后给轮到的节点派 Worker（\`${hub} worker start --node <节点>\`）。`,
+      `用 \`${hub} graph create\` 一次写下整张图的 \`goal\`（总目标）和 \`steps\`（步骤数组），带 \`brief\` 的就绪步骤建好即自动开工。`,
+      "**总目标（`goal`）要写全**",
       "**一张图只装一件事**：互不相干的几件事各建一张图。",
       "**按先后步骤拆，不按模块拆**：不要把一个需求切成前端、后端各一个 Worker。",
       "写测试、改代码、截图、提 PR 是同一步，一个 Worker 一口气做完。",
-      "只在三种时候另起一个节点：用户明说要先看、要换一个模型独立审查、一步的上下文装不下。",
-      "**默认一条线**：用 `deps` 把节点按先后串起来",
-      "互不依赖的活才并行（比如同时探索几个方向再汇总）",
-      `**用户明说要先看的地方**（比如“先给我看方案”）单独加一个节点，带上 \`question\`、\`options\` 和你的推荐 \`recommended\`：轮到时自动给用户出拍板卡`,
-      "节点只有四个状态：没轮到、在干、等人（等你处理，或等用户拍板）、完了（跳过也算完了）。",
+      "只在三种时候另起一步：用户明说要先看、要换一个模型独立审查、一步的上下文装不下。",
+      "**默认一条线，同线共用工作目录和分支**：`steps` 里不写 `deps` 默认按书写顺序串成一条线",
+      "同一个 git worktree 和同一条分支",
+      "`upstream/<stepKey>.md`",
+      "`vendor`、`model`、`effort`、`readonly`、`maxTime`",
+      "`review: true`、`base: \"main\"`",
+      "**用户明说要先看的地方**（比如“先给我看方案”）单独加一步（不写 `brief`），带上 `question`、`options` 和你的推荐 `recommended`",
+      "步骤只有四个状态：没轮到（`pending`）、在干（`running`）、等人（`waiting`，等你处理或等用户拍板）、完了（`done`，跳过也算完了）。",
       `别的拍板不预先挂卡，撞上了用 \`${hub} ask\` 问。`,
-      "**碰到下面任意一条，就在实现后面加一个审查节点**（派给另一家厂商的 Worker，任务说明里写清实现的分支和 PR、你最担心的地方，发现问题让它直接修）",
+      "**碰到下面任意一条，就在实现后面加一个审查步骤**（设 `\"review\": true` 并指定另一家 `vendor`",
       ...PM_REVIEW_REDLINES.map((line) => `  - ${line}`),
       "纯文案、纯展示、局部纯函数、薄胶水层不用审查，靠测试和截图兜底。",
     ]) {
@@ -97,30 +101,34 @@ describe("任务图技能正文", () => {
     expect(PM_REVIEW_REDLINES_BRIEF.split("；")).toHaveLength(4);
   });
 
-  it("图里怎么跟进：graph show 为准、收工自动标完成、给下一个节点给路径不转述、换人一条 --node 命令（旧 Worker 自动收工、接着用前任目录、自动带前任记录）、计划变了 patch、全部节点完成后待交付发交付单并用 finish 结束", () => {
+  it("图里怎么跟进：顺利完成自动收工交棒不叫醒 PM、报偏离或异常停在 waiting、换人一条 --node 命令、计划变了 patch（addSteps/updateSteps/removeSteps/skipSteps）、待交付发交付单并用 finish 结束", () => {
     const body = taskGraphSkillBody();
     for (const word of [
       `进度以 \`${hub} graph show\` 为准。`,
-      `验收通过就 \`${hub} worker end <编号>\` 收工，节点自动标完成，后面的节点轮到。`,
-      "任务说明里给上一步的分支、PR 和文件路径，让它自己去读，不要转述内容。",
-      `**换人**（出错、额度用完、对话太长、该换一家）：直接 \`${hub} worker start --node <节点> [--vendor …]\``,
-      "节点上还挂着的旧 Worker 自动按“没做完”收工",
-      "新 Worker 接着用前任的工作目录和分支",
+      "**顺利完成自动收工交棒，不叫醒你**",
+      "**报“偏离”或异常停在 `waiting` 等你处理**",
+      `${hub} worker send <编号> --stdin`,
+      `${hub} graph done <步骤> [--stdin]`,
+      `**换人接手**（出错、额度用完、对话太长、厂商不可用或该换一家）：直接 \`${hub} worker start --node <步骤> [--vendor …] [--model …] [--effort …] [--stdin]\``,
+      "还挂着的旧 Worker 自动收工且步骤不标完成",
+      "前任的工作目录与分支",
       `最近 ${TAKEOVER_PREDECESSORS_MAX} 个前任的汇报、最后的文字、最后几步操作和原始记录路径`,
-      `**计划变了**：随时 \`${hub} graph patch\`，加节点、改还没开工的节点、跳过不需要的。`,
+      "**计划变了**：随时 `" + `${hub} graph patch` + "`（用 `addSteps`、`updateSteps`、`removeSteps`、`skipSteps` 或更新 `goal`",
       "原本没建图、做着发现要分段或加审查的，随时补建一张图。",
-      "**全部节点完成后图不会自动结束**：最后一个节点完成时图保持待交付，你会收到交付单（各节点结果和改动文件名单）。",
-      `仍可 \`${hub} graph patch\` 补节点或打回重做；验收合并后用 \`${hub} graph finish\` 结束整张图（交付摘要自动同步给总助）。`,
+      "**全部步骤完成后待交付**：最后一步完成时图不会自动结束，你会收到交付单",
+      `用 \`${hub} graph finish\` 收尾（交付摘要自动同步给总助）。`,
     ]) {
       expect(body, word).toContain(word);
     }
     expect(body).not.toContain("所有节点都完成后整张图自动结束，不能再改");
+    expect(body).not.toContain("--incomplete");
+    expect(body).not.toContain(`${hub} ask --node`);
     // 规矩在命令前面（claude 压缩后只重新挂每个技能的前 5,000 个 token）
     expect(body.indexOf("## 建图")).toBeLessThan(body.indexOf("## 跟进"));
     expect(body.indexOf("## 跟进")).toBeLessThan(body.indexOf("## 命令"));
   });
 
-  it("命令：每个 hub graph 子命令都有（按 HUB_COMMANDS 查，加命令漏写会红），JSON 契约同 hub help，--node、--incomplete、--graph 的用法写清", () => {
+  it("命令：每个 hub graph 子命令都有（按 HUB_COMMANDS 查，加命令漏写会红），JSON 契约同 hub help，--node、--graph 与 worker end 无 --incomplete 写清", () => {
     const body = taskGraphSkillBody();
     const commands = body.slice(body.indexOf("## 命令"));
     for (const command of HUB_COMMANDS.filter((c) => c.startsWith("graph."))) {
@@ -129,10 +137,11 @@ describe("任务图技能正文", () => {
     for (const spec of HUB_COMMAND_SPECS.filter((s) => s.group === "graph")) expect(commands, spec.cli).toContain(`${hub} ${spec.cli}`);
     expect(commands).toContain(TASK_GRAPH_CREATE_JSON_HINT);
     expect(commands).toContain(TASK_GRAPH_PATCH_JSON_HINT);
-    expect(commands).toContain("`<节点>` 是节点的 key，它在几张活跃的图里重名时加 `--graph <图编号>`。");
-    expect(commands).toContain(`\`${hub} worker start --node <节点> …\`：把 Worker 绑到等你处理的节点上`);
-    expect(commands).toContain(`\`${hub} worker end <编号> [--incomplete]\`：它最近一轮汇报是“做完了”时，绑定的节点自动标完成；否则节点等人接手。`);
-    expect(commands).toContain("加 `--incomplete`：不管它汇报了什么，节点都等人接手");
+    expect(commands).toContain("`<步骤>` 是步骤的 key，它在几张活跃的图里重名时加 `--graph <图编号>`。");
+    expect(commands).toContain(`\`${hub} worker start --node <步骤> …\`：给等你处理的步骤换人或手动派人`);
+    expect(commands).toContain(`\`${hub} worker end <编号>\`：只停掉这个 Worker，不会把步骤标完成；未完成的步骤会停在 \`waiting\` 等你处理`);
+    expect(commands).toContain("自动停掉图里所有在跑的 Worker");
+    expect(commands).not.toContain("--incomplete");
   });
 
   it("SKILL.md：Agent Skills 的 frontmatter（name 和目录名一致、description 先说什么时候加载再说什么时候不用）；全文、说明都在上限内", () => {

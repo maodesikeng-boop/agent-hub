@@ -141,13 +141,13 @@ export function Conversation({
   const statusNode = useAgentStatusNode(session);
   return (
     <FileDropZone className="flex min-h-0 flex-1 flex-col" aria-label={entry.name} onFiles={staging.add}>
-      <header data-window-drag className="flex min-h-16 shrink-0 items-center gap-3 py-3 pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]">
+      <header data-window-drag className="flex min-h-16 min-w-0 shrink-0 items-center gap-3 overflow-hidden py-3 pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]">
         {leading}
         {entry.pm ? (
           <button
             type="button"
             aria-label={`View ${entry.pm.name}'s profile`}
-            className="touch-target cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            className="touch-target shrink-0 cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
             onClick={() => entry.pm && onOpenProfile(entry.pm.id)}
           >
             <Avatar colorKey={entry.avatarKey} size={34} />
@@ -156,7 +156,9 @@ export function Conversation({
           <Avatar colorKey={entry.avatarKey} size={34} />
         )}
         <div className="min-w-0 flex-1">
-          <h1 className="w-fit max-w-full truncate text-title leading-snug font-semibold">{entry.name}</h1>
+          <h1 title={entry.name} className="w-fit max-w-full truncate text-title leading-snug font-semibold">
+            {entry.name}
+          </h1>
         </div>
         {toolbar}
       </header>

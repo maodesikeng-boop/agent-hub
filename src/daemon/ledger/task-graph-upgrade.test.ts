@@ -120,7 +120,7 @@ describe("迁移 0025 前在跑的旧图：升级后接着走完", () => {
     ledger.close();
     downgradeToOldSchema({ s1: "done", s2: "skipped", s3: "running", s4: "pending", s5: "pending", docs: "ready" });
     expect(db.get("SELECT kind FROM task_graph_nodes WHERE node_key = 's4'")).toEqual({ kind: "gate" });
-    expect(migrate(db)).toMatchObject({ from: 24, applied: [25] });
+    expect(migrate(db)).toMatchObject({ from: 24, applied: [25, 26] });
     expect(userVersion(db)).toBeGreaterThanOrEqual(25);
     ledger = createLedger(db, options());
 
@@ -139,12 +139,10 @@ describe("迁移 0025 前在跑的旧图：升级后接着走完", () => {
     const status = ledger.hubCall(lin.sessionId, "status", {}).text;
     expect(status).toContain(`- #${graph.id}「编排简化实现」（进度 2/6；在干：s3；等你处理：docs）`);
 
-    // 在干的 s3 汇报做完了、收工：完了，s4 轮到了，挂着问题，出拍板卡等用户
+    // 在干的 s3 汇报做完了：后台自动把 s3 标完了并收工 Worker，s4 轮到了，挂着问题，出拍板卡等用户
     finishWorkerTurn(w3.id, "接手带前任记录");
-    const ended = ledger.hubCall(lin.sessionId, "worker.end", { workerId: w3.id }).text;
-    expect(ended).toContain("「s3」已标记为完了");
-    expect(ended).toContain("轮到了：s4 [等用户拍板]");
     g = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph;
+    expect(stateOf(g, "s3")).toBe("done");
     expect(stateOf(g, "s4")).toBe("waiting:user");
     const card = g.nodes.find((n) => n.key === "s4")!;
     expect(card.gateAskMessageId).toBeTypeOf("number");
@@ -214,13 +212,13 @@ describe("迁移 0025 前在跑的旧图：升级后接着走完", () => {
       s5: "pending",
       s6: "pending",
     });
-    expect(migrate(db)).toMatchObject({ from: 24, applied: [25] });
+    expect(migrate(db)).toMatchObject({ from: 24, applied: [25, 26] });
     ledger = createLedger(db, options());
 
     expect(ledger.hubCall(lin.sessionId, "status", {}).text).toContain("进度 5/8；在干：s4-review");
 
     finishWorkerTurn(wReview.id, "审查通过并补齐回归用例");
-    expect(ledger.hubCall(lin.sessionId, "worker.end", { workerId: wReview.id }).text).toContain("轮到了：s5 [等你处理]");
+    expect(ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).text).toContain("[等你处理] s5");
 
     for (const k of ["s5", "s6"]) {
       const w = startOn(k, graph.id);

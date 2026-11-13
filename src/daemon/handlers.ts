@@ -225,6 +225,7 @@ export function createWorktreeCreateHandler(deps: WorktreeHandlerDeps): ActionHa
       repoFolder: task.repo,
       worktreePath: effectiveWorktreePath,
       branch: task.branch,
+      ...(task.base ? { base: task.base } : {}),
       ...(placement.prepareDir ? { prepareDir: placement.prepareDir } : {}),
     });
     if (task.setupCommand === null) {

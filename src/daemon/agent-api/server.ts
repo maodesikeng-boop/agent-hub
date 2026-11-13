@@ -58,7 +58,17 @@ import { probePr as defaultProbePr, probePrByUrl as defaultProbePrByUrl, probeWo
 
 export interface AgentApiOptions {
   /** reportHealth：500 记一次 "agent-api" 失败，成功一次清零；400–409 不算。 */
-  ledger: Pick<Ledger, "hubCall" | "sessionRole" | "reportHealth" | "workerStartFolder" | "workerPrTarget" | "graphPrTargets" | "workerTranscriptTarget">;
+  ledger: Pick<
+    Ledger,
+    | "hubCall"
+    | "sessionRole"
+    | "reportHealth"
+    | "workerStartFolder"
+    | "workerPrTarget"
+    | "graphPrTargets"
+    | "graphAutoDispatchVendors"
+    | "workerTranscriptTarget"
+  >;
   /**
    * hub worker start 之前异步探主文件夹的 git（m3-plan 第 2.6 节），结果作为 HubCallContext.workspace 交给 hubCall：
    * 账本的事务里不做 I/O，git 卡住也不会停住整个守护进程。默认 daemon/git 的 probeWorkspace（每次 git 最多 GIT_PROBE_TIMEOUT_MS）。
@@ -193,7 +203,7 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
     type: "object",
     additionalProperties: false,
     required: ["workerId"],
-    properties: { workerId: workerIdField, incomplete: { type: "boolean" } },
+    properties: { workerId: workerIdField },
   },
   "worker.list": noArgs,
   "worker.show": {
@@ -341,6 +351,7 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
       commit: { type: "string" },
       branch: { type: "string" },
       summary: { type: "string", maxLength: MAX_NODE_ARTIFACT_SUMMARY_CHARS * 4 },
+      note: taskField,
     },
   },
   "graph.decide": {
@@ -408,6 +419,7 @@ const BYTE_LIMITS: Partial<Record<HubCommand, Record<string, number>>> = {
   "schedule.add": { prompt: MAX_TASK_BYTES },
   "graph.create": { specJson: MAX_GRAPH_SPEC_BYTES },
   "graph.patch": { specJson: MAX_GRAPH_SPEC_BYTES },
+  "graph.done": { note: MAX_TASK_BYTES },
   "graph.finish": { summary: MAX_TASK_BYTES },
 };
 
@@ -555,6 +567,28 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
         if (entry !== null) graphPrs[entry[0]] = entry[1];
       }
       return { graphPrs };
+    }
+    if (
+      command === "graph.create" ||
+      command === "graph.patch" ||
+      command === "graph.done" ||
+      command === "graph.decide" ||
+      command === "graph.skip"
+    ) {
+      const context: HubCallContext = {};
+      const folder = ledger.workerStartFolder(sessionId);
+      if (folder !== null) context.workspace = await probeWorkspace(folder);
+      if (opts.vendorUsable) {
+        const vendors = ledger.graphAutoDispatchVendors?.(sessionId, command, body) ?? [];
+        if (vendors.length > 0) {
+          const pairs = await Promise.all(
+            vendors.map(async (v) => [v, await opts.vendorUsable!(v)] as const),
+          );
+          context.vendorStatuses = Object.fromEntries(pairs);
+          context.deviceName = opts.deviceName?.() ?? "";
+        }
+      }
+      return context;
     }
     if (command !== "worker.start") return {};
     const context: HubCallContext = {};

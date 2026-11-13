@@ -741,8 +741,9 @@ describe("agent api over inject", () => {
       await expectInvalid(await call("graph.create", { specJson: "图".repeat(Math.floor(MAX_GRAPH_SPEC_BYTES / 3) + 1) }));
       await expectInvalid(await call("graph.patch", { specJson: "补".repeat(Math.floor(MAX_GRAPH_SPEC_BYTES / 3) + 1) }));
       await expectInvalid(await call("graph.decide", { nodeKey: "n1" }));
+      await expectInvalid(await call("worker.end", { workerId: 3, incomplete: true }));
       expect((await call("worker.start", { title: "绑定节点", task: "x", node: "impl-a", graphId: 2 })).statusCode).toBe(200);
-      expect((await call("worker.end", { workerId: 3, incomplete: true })).statusCode).toBe(200);
+      expect((await call("worker.end", { workerId: 3 })).statusCode).toBe(200);
     });
 
     it("a malformed URL without a token → 400 invalid in HubResponse shape", async () => {

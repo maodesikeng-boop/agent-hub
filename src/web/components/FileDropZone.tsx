@@ -22,7 +22,7 @@ export function FileDropZone({
     <section
       {...props}
       data-dragging={dragging || undefined}
-      className={cn("relative", className)}
+      className={cn("relative min-w-0", className)}
       onDragEnter={(e) => {
         if (!hasFiles(e)) return;
         e.preventDefault();
