@@ -1,7 +1,6 @@
 use std::fs;
 use std::net::TcpListener;
 use std::path::Path;
-#[cfg(windows)]
 use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -127,6 +126,31 @@ fn run_self_test_inner(app_data_dir: &Path, hub_home_dir: &Path) -> Result<Strin
     let preflight = run_desktop_preflight_probe(&runtime_cfg)?;
     if preflight.vendors.is_empty() {
         return Err("desktop-preflight.ts 返回了空的厂商清单".to_string());
+    }
+
+    // 验证打包裁剪后的 node_modules（含 koffi 与 @microsoft/mxc-sdk）可被随包 node 正常加载，绝不出现 sdk_load_failed
+    {
+        let mxc_check_out = Command::new(&runtime_cfg.node_exe_path)
+            .current_dir(&runtime_cfg.daemon_root_dir)
+            .args([
+                "--input-type=module",
+                "-e",
+                r#"import("./src/daemon/platform/win32/mxc-readonly.ts").then((m) => {
+                  const st = m.probeWin32MxcSupport({ platform: "win32", forceRefresh: true });
+                  if (st.reason === "sdk_load_failed") {
+                    console.error(st.detail ?? "sdk_load_failed");
+                    process.exit(1);
+                  }
+                });"#,
+            ])
+            .output()
+            .map_err(|e| format!("执行随包 @microsoft/mxc-sdk 加载自检失败：{e}"))?;
+        if !mxc_check_out.status.success() {
+            return Err(format!(
+                "随包运行时加载 @microsoft/mxc-sdk/v1 失败：{}",
+                String::from_utf8_lossy(&mxc_check_out.stderr).trim()
+            ));
+        }
     }
 
     let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| format!("分配空闲端口失败：{e}"))?;

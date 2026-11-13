@@ -96,12 +96,22 @@ jobs:
             Remove-Item -Recurse -Force $portableDir
           }
           Copy-Item -Recurse -Path "apps\windows\crates\fusa-desktop\staged-runtime" -Destination $portableDir
-          Copy-Item -Path "apps\windows\target\release\fusa-desktop.exe" -Destination (Join-Path $portableDir "fusa-desktop.exe")
-          & (Join-Path $portableDir "fusa-desktop.exe") --self-test
-          if ($LASTEXITCODE -ne 0) {
-            throw "fusa-desktop.exe --self-test exited with non-zero code $LASTEXITCODE"
+          $selfTestExe = Join-Path $portableDir "fusa-desktop.exe"
+          Copy-Item -Path "apps\windows\target\release\fusa-desktop.exe" -Destination $selfTestExe
+          $stdoutFile = Join-Path $env:RUNNER_TEMP "fusa-selftest-stdout.txt"
+          $stderrFile = Join-Path $env:RUNNER_TEMP "fusa-selftest-stderr.txt"
+          Remove-Item -Force -ErrorAction SilentlyContinue $stdoutFile, $stderrFile
+          $proc = Start-Process -FilePath $selfTestExe -ArgumentList @("--self-test") -Wait -PassThru -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile
+          $stdoutText = if (Test-Path $stdoutFile) { Get-Content -Raw -Path $stdoutFile } else { "" }
+          $stderrText = if (Test-Path $stderrFile) { Get-Content -Raw -Path $stderrFile } else { "" }
+          if ($stdoutText) { Write-Host $stdoutText.TrimEnd() }
+          if ($stderrText) { Write-Host $stderrText.TrimEnd() }
+          Write-Host "[ci-self-test] fusa-desktop.exe --self-test exitCode=$($proc.ExitCode)"
+          if ($proc.ExitCode -ne 0 -or $stdoutText -notmatch "\[fusa-self-test\] PASS") {
+            throw "fusa-desktop.exe --self-test failed with exitCode=$($proc.ExitCode)"
           }
           Remove-Item -Recurse -Force $portableDir
+          Remove-Item -Force -ErrorAction SilentlyContinue $stdoutFile, $stderrFile
 
       - name: Build Tauri NSIS installer (currentUser, unsigned-preview)
         working-directory: apps/windows/crates/fusa-desktop

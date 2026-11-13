@@ -48,7 +48,7 @@ import {
   wrapReadonlyWithWin32Mxc,
   type MxcV1ProbeSurface,
 } from "../platform/index.ts";
-import { parseMxcRunnerCliArgs } from "../platform/win32/mxc-runner.ts";
+import { parseMxcRunnerCliArgs, startHubPipeLoopbackBridge } from "../platform/win32/mxc-runner.ts";
 
 const scope = { dataDir: "/Users/u/.agent-hub", writableDirs: ["/Users/u/.agent-hub/worktrees/1/2"] };
 const base = { command: "/bin/agent", args: ["--x", "y"] };
@@ -970,12 +970,13 @@ describe("Windows MXC 只读沙箱封装、策略与负缓存 TTL", () => {
     }
   });
 
-  it("buildWin32MxcFilesystemPolicy & wrapReadonlyWithWin32Mxc：放行 %TEMP% 与私有临时目录，工作树与受保护根严格只读，敏感文件禁读且保留 readableFiles 例外", () => {
+  it("buildWin32MxcFilesystemPolicy & wrapReadonlyWithWin32Mxc：仅放行会话私有临时目录（不放行共享 %TEMP%），工作树与受保护根严格只读，敏感文件禁读且保留 readableFiles 例外", () => {
     const existing = new Set([
       "C:\\",
       "D:\\",
       "C:\\Users\\alice\\AppData\\Local\\Temp",
       "C:\\Users\\alice\\AppData\\Local\\Temp\\ro-session-1",
+      "C:\\Users\\alice\\AppData\\Local\\Temp\\fusa-test\\hub-data",
       "C:\\Users\\alice\\.agent-hub",
       "C:\\Users\\alice\\.agent-hub\\state\\ui-token",
       "C:\\Users\\alice\\.agent-hub\\worktrees\\1\\9",
@@ -989,9 +990,17 @@ describe("Windows MXC 只读沙箱封装、策略与负缓存 TTL", () => {
       {
         tmpDir: "C:\\Users\\alice\\AppData\\Local\\Temp\\ro-session-1",
         stateDir: "C:\\Users\\alice\\.agent-hub\\state",
-        protectedRoots: ["C:\\Users\\alice\\.agent-hub", "D:\\.fusa-wt\\1234abcd"],
-        // 即使误把受保护 worktree 放进 writableDirs，安全过滤也必须剔除！
-        writableDirs: ["C:\\Users\\alice\\.dsh", "C:\\Users\\alice\\.agent-hub\\worktrees\\1\\9"],
+        protectedRoots: [
+          "C:\\Users\\alice\\.agent-hub",
+          "D:\\.fusa-wt\\1234abcd",
+          "C:\\Users\\alice\\AppData\\Local\\Temp\\fusa-test\\hub-data",
+        ],
+        // 即使误把受保护 worktree 或包含受保护根的父目录（%TEMP%）放进 writableDirs，安全过滤也必须剔除！
+        writableDirs: [
+          "C:\\Users\\alice\\.dsh",
+          "C:\\Users\\alice\\.agent-hub\\worktrees\\1\\9",
+          "C:\\Users\\alice\\AppData\\Local\\Temp",
+        ],
         secretPaths: [
           "C:\\Users\\alice\\.agent-hub\\state\\ui-token",
           "C:\\Users\\alice\\.dsh\\.env",
@@ -1012,11 +1021,11 @@ describe("Windows MXC 只读沙箱封装、策略与负缓存 TTL", () => {
       "D:\\",
       "C:\\Users\\alice\\.agent-hub",
       "D:\\.fusa-wt\\1234abcd",
+      "C:\\Users\\alice\\AppData\\Local\\Temp\\fusa-test\\hub-data",
       "C:\\Users\\alice\\.dsh\\.env",
     ]);
     expect(policy.readwritePaths).toEqual([
       "C:\\Users\\alice\\AppData\\Local\\Temp\\ro-session-1",
-      "C:\\Users\\alice\\AppData\\Local\\Temp",
       "C:\\Users\\alice\\.dsh",
     ]);
     expect(policy.deniedPaths).toEqual([
@@ -1055,5 +1064,86 @@ describe("Windows MXC 只读沙箱封装、策略与负缓存 TTL", () => {
       egress: { default: "allow" },
       ingress: { default: "deny", hostLoopback: "allow" },
     });
+  });
+
+  it("startHubPipeLoopbackBridge：正常转发、请求超限拦截、空闲超时销毁与 close() 零泄漏释放", async () => {
+    const { createConnection, createServer } = await import("node:net");
+    const sockDir = mkdtempSync(join(tmpdir(), "mxc-br-"));
+    const upstreamSock =
+      process.platform === "win32"
+        ? `\\\\.\\pipe\\fusa-test-br-${process.pid}-${Date.now()}`
+        : join(sockDir, "u.sock");
+
+    const upstreamServer = createServer((conn) => {
+      conn.on("data", (chunk: Buffer) => {
+        if (chunk.toString("utf8").includes("PING")) {
+          conn.end("PONG");
+        }
+      });
+    });
+    await new Promise<void>((resolve) => upstreamServer.listen(upstreamSock, resolve));
+
+    const bridge = await startHubPipeLoopbackBridge(upstreamSock, {
+      idleTimeoutMs: 120,
+      maxRequestBytes: 64,
+      maxConcurrentConns: 4,
+    });
+    const port = Number(bridge.endpoint.replace("tcp://127.0.0.1:", ""));
+    expect(bridge.endpoint).toBe(`tcp://127.0.0.1:${port}`);
+
+    try {
+      // 1. 正常小报文双向转发
+      const pong = await new Promise<string>((resolve, reject) => {
+        const c = createConnection({ host: "127.0.0.1", port }, () => c.write("PING"));
+        let acc = "";
+        c.on("data", (d) => (acc += d.toString("utf8")));
+        c.on("end", () => resolve(acc));
+        c.on("error", reject);
+      });
+      expect(pong).toBe("PONG");
+
+      // 2. 超过 maxRequestBytes 立即掐断连接
+      await new Promise<void>((resolve) => {
+        const c = createConnection({ host: "127.0.0.1", port }, () => {
+          c.write("X".repeat(256));
+        });
+        c.on("close", () => resolve());
+        c.on("error", () => resolve());
+      });
+
+      // 3. 空闲超时立即销毁慢连接
+      const idleStart = Date.now();
+      await new Promise<void>((resolve) => {
+        const c = createConnection({ host: "127.0.0.1", port });
+        c.on("close", () => resolve());
+        c.on("error", () => resolve());
+      });
+      expect(Date.now() - idleStart).toBeLessThan(1_500);
+
+      // 4. 挂着慢连接时 close() 强制销毁残余连接并释放端口
+      const lingering = createConnection({ host: "127.0.0.1", port });
+      await new Promise<void>((resolve) => lingering.once("connect", resolve));
+      const lingeringClosed = new Promise<void>((resolve) => {
+        lingering.once("close", () => resolve());
+        lingering.once("error", () => resolve());
+      });
+      await bridge.close();
+      await lingeringClosed;
+
+      // 关闭后端口必须拒绝新连接
+      const refused = await new Promise<boolean>((resolve) => {
+        const c = createConnection({ host: "127.0.0.1", port });
+        c.once("connect", () => {
+          c.destroy();
+          resolve(false);
+        });
+        c.once("error", () => resolve(true));
+      });
+      expect(refused).toBe(true);
+    } finally {
+      await bridge.close();
+      await new Promise<void>((resolve) => upstreamServer.close(() => resolve()));
+      rmSync(sockDir, { recursive: true, force: true });
+    }
   });
 });

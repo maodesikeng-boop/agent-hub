@@ -23,6 +23,7 @@ import {
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { resolveSpawn } from "../src/daemon/platform/win32/spawn-resolution.ts";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -165,11 +166,12 @@ export function pruneStagedNodeModules(
     }
   }
 
-  // 2. 裁剪 koffi 文档与 C++ 头文件/源码（保留 index.js / src/koffi/*.js 入口）以及未使用的 node-pty 原生源码
+  // 2. 裁剪 koffi 文档与 C/C++ 编译期源码（必须保留 `koffi/src/koffi/src/static.{js,cjs}` 等运行时加载入口！）
+  //    以及未使用的非目标平台 `@koromix/koffi-*` 预编译二进制与 node-pty 源码
   for (const extraDir of [
     join(nodeModulesDir, "koffi", "doc"),
     join(nodeModulesDir, "koffi", "vendor"),
-    join(nodeModulesDir, "koffi", "src", "koffi", "src"),
+    join(nodeModulesDir, "koffi", "src", "koffi", "src", "abi"),
     join(nodeModulesDir, "node-pty", "deps"),
     join(nodeModulesDir, "node-pty", "src"),
     join(nodeModulesDir, "node-pty", "prebuilds"),
@@ -177,6 +179,22 @@ export function pruneStagedNodeModules(
     join(nodeModulesDir, ".modules.yaml"),
   ]) {
     rmSync(extraDir, { recursive: true, force: true });
+  }
+  const koffiSrcDir = join(nodeModulesDir, "koffi", "src", "koffi", "src");
+  if (existsSync(koffiSrcDir)) {
+    for (const ent of readdirSync(koffiSrcDir)) {
+      if (/\.(?:cc|hh|inc|def)$/i.test(ent)) {
+        rmSync(join(koffiSrcDir, ent), { force: true });
+      }
+    }
+  }
+  const koromixDir = join(nodeModulesDir, "@koromix");
+  if (targetOs === "win32" && existsSync(koromixDir)) {
+    for (const ent of readdirSync(koromixDir)) {
+      if (ent.startsWith("koffi-") && ent !== "koffi-win32-x64") {
+        rmSync(join(koromixDir, ent), { recursive: true, force: true });
+      }
+    }
   }
 
   // 3. 移除类型声明、source map 与多余文档，且移除任何残留软链以保证 NSIS 100% 兼容
@@ -376,22 +394,27 @@ export async function stageWinRuntime(opts: StageWinRuntimeOptions): Promise<{
 
   // 4. 安装平铺（hoisted、无软链、无生命周期脚本）生产期后端依赖并裁剪跨平台冗余文件
   if (!opts.skipNodeModulesInstall) {
-    const pnpmCmd = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+    const pnpmArgs = [
+      "install",
+      "--prod",
+      "--no-lockfile",
+      "--ignore-scripts",
+      "--prefer-offline",
+      "--config.node-linker=hoisted",
+      "--config.package-import-method=copy",
+    ];
+    const resolvedPnpm =
+      process.platform === "win32"
+        ? resolveSpawn({ program: "pnpm", args: pnpmArgs, cwd: daemonOutDir, env: process.env }, "win32")
+        : { file: "pnpm", args: pnpmArgs, options: { cwd: daemonOutDir, env: process.env } };
     const installRes = spawnSync(
-      pnpmCmd,
-      [
-        "install",
-        "--prod",
-        "--no-lockfile",
-        "--ignore-scripts",
-        "--prefer-offline",
-        "--config.node-linker=hoisted",
-        "--config.package-import-method=copy",
-      ],
+      resolvedPnpm.file,
+      resolvedPnpm.args,
       {
+        ...resolvedPnpm.options,
         cwd: daemonOutDir,
         stdio: "inherit",
-        shell: process.platform === "win32",
+        shell: false,
       },
     );
     if (installRes.status !== 0) {

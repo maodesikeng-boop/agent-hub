@@ -875,3 +875,7 @@ export const WIN_MXC_POSITIVE_CACHE_TTL_MS = 5 * 60_000;
 export const WIN_MXC_INLINE_CONFIG_MAX_CHARS = 16 * 1024;
 /** Windows MXC 启动请求文件最大字节上限（512 KiB，防止异常配置撑爆内存）。 */
 export const WIN_MXC_REQUEST_FILE_MAX_BYTES = 512 * 1024;
+/** Windows MXC 回环 `hub` 桥接单次连接最大入站请求字节数（`HUB_MAX_BODY_BYTES` + 64 KiB HTTP 请求头余量）。 */
+export const WIN_MXC_BRIDGE_MAX_REQUEST_BYTES = HUB_MAX_BODY_BYTES + 64 * 1024;
+/** Windows MXC 回环 `hub` 桥接同时允许的最大活跃连接数。 */
+export const WIN_MXC_BRIDGE_MAX_CONCURRENT_CONNS = 32;

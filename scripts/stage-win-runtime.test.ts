@@ -55,6 +55,17 @@ describe("scripts/stage-win-runtime.ts 打包裁剪与完整性守卫", () => {
       writeFileSync(join(nm, "@microsoft", "mxc-sdk", "index.d.ts"), "export {};");
       writeFileSync(join(nm, "@microsoft", "mxc-sdk", "index.js.map"), "{}");
       writeFileSync(join(nm, "@microsoft", "mxc-sdk", "index.js"), "export {};");
+      const koffiSrc = join(nm, "koffi", "src", "koffi", "src");
+      const koromixWin = join(nm, "@koromix", "koffi-win32-x64");
+      const koromixLinux = join(nm, "@koromix", "koffi-linux-x64");
+      mkdirSync(join(koffiSrc, "abi"), { recursive: true });
+      mkdirSync(koromixWin, { recursive: true });
+      mkdirSync(koromixLinux, { recursive: true });
+      writeFileSync(join(koffiSrc, "static.js"), "export function loadStatic() { return null; }");
+      writeFileSync(join(koffiSrc, "static.cjs"), "module.exports = {};");
+      writeFileSync(join(koffiSrc, "ffi.cc"), "// c++ source");
+      writeFileSync(join(koromixWin, "koffi.node"), "win64-node");
+      writeFileSync(join(koromixLinux, "koffi.node"), "linux64-node");
 
       const targetFile = join(nm, "@microsoft", "mxc-sdk", "index.js");
       symlinkSync(targetFile, join(nm, "dangling-link"));
@@ -69,6 +80,12 @@ describe("scripts/stage-win-runtime.ts 打包裁剪与完整性守卫", () => {
       expect(() => readFileSync(join(mxcArm, "mxc_ffi.dll"))).toThrow();
       expect(() => readFileSync(join(nm, "@microsoft", "mxc-sdk", "index.d.ts"))).toThrow();
       expect(() => readFileSync(join(nm, "@microsoft", "mxc-sdk", "index.js"))).not.toThrow();
+      // 关键守卫：koffi 运行时入口 static.js / static.cjs 与 win32-x64 预编译二进制必须保留，C++ 源码与非目标平台包必须剔除
+      expect(() => readFileSync(join(koffiSrc, "static.js"))).not.toThrow();
+      expect(() => readFileSync(join(koffiSrc, "static.cjs"))).not.toThrow();
+      expect(() => readFileSync(join(koffiSrc, "ffi.cc"))).toThrow();
+      expect(() => readFileSync(join(koromixWin, "koffi.node"))).not.toThrow();
+      expect(() => readFileSync(join(koromixLinux, "koffi.node"))).toThrow();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

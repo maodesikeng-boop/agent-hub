@@ -93,22 +93,18 @@
 
       const installCmd = item.installCommand || item.install_command || "";
       const loginCmd = item.loginCommand || item.login_command || "";
-
+      const commandLines = [];
       if (!item.installed && installCmd) {
-        const preInstall = document.createElement("pre");
-        preInstall.className = "cmd-block";
-        preInstall.textContent = installCmd;
-        cmds.appendChild(preInstall);
+        commandLines.push(installCmd);
       }
-
       if (loginCmd) {
-        const preLogin = document.createElement("pre");
-        preLogin.className = "cmd-block";
-        preLogin.textContent = loginCmd;
-        cmds.appendChild(preLogin);
+        commandLines.push(loginCmd);
       }
-
-      if (cmds.childElementCount > 0) {
+      if (commandLines.length > 0) {
+        const pre = document.createElement("pre");
+        pre.className = "cmd-block";
+        pre.textContent = commandLines.join("\n");
+        cmds.appendChild(pre);
         row.appendChild(cmds);
       }
       providersList.appendChild(row);

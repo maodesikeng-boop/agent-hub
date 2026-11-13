@@ -3,6 +3,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// 严格遵循 `contract.json`（`logMaxBytes: 2 MiB` + `logRotatedFiles: 1`）的流式轮转日志写入器。
+const ROTATE_LOCK_RETRY_STEP_BYTES: u64 = 64 * 1024;
+
+/// 严格遵循 `contract.json`（`logMaxBytes: 2 MiB` + `logRotatedFiles: 1`）的流式轮转日志写入器。
 /// 单次超大块写入也会按剩余字节精确切分并轮转，确保主日志与 `.1` 备份任何时刻均不超过 `max_bytes`，且绝不生成 `.2`。
 pub struct RotatingLogWriter {
     log_path: PathBuf,
@@ -10,6 +13,7 @@ pub struct RotatingLogWriter {
     rotated_files: usize,
     file: Option<File>,
     current_bytes: u64,
+    next_rotate_retry_bytes: u64,
 }
 
 impl RotatingLogWriter {
@@ -29,6 +33,7 @@ impl RotatingLogWriter {
             rotated_files,
             file: None,
             current_bytes: existing_len,
+            next_rotate_retry_bytes: 0,
         };
         if writer.current_bytes >= writer.max_bytes {
             writer.rotate()?;
@@ -50,11 +55,13 @@ impl RotatingLogWriter {
 
     pub fn write_chunk(&mut self, mut data: &[u8]) -> std::io::Result<()> {
         while !data.is_empty() {
-            if self.current_bytes >= self.max_bytes {
+            let rotate_threshold = self.max_bytes.max(self.next_rotate_retry_bytes);
+            if self.current_bytes >= rotate_threshold {
                 self.rotate()?;
             }
             self.ensure_open()?;
-            let room = (self.max_bytes - self.current_bytes) as usize;
+            let active_limit = self.max_bytes.max(self.next_rotate_retry_bytes);
+            let room = active_limit.saturating_sub(self.current_bytes).max(1) as usize;
             let take = data.len().min(room);
             if let Some(f) = self.file.as_mut() {
                 f.write_all(&data[..take])?;
@@ -90,8 +97,11 @@ impl RotatingLogWriter {
         if let Some(mut f) = self.file.take() {
             let _ = f.flush();
         }
+        let mut rename_failed = false;
         if self.rotated_files == 0 {
-            let _ = fs::remove_file(&self.log_path);
+            if self.log_path.exists() && fs::remove_file(&self.log_path).is_err() {
+                rename_failed = true;
+            }
         } else if self.log_path.exists() {
             for idx in (1..self.rotated_files).rev() {
                 let src = self.rotated_path(idx);
@@ -103,15 +113,37 @@ impl RotatingLogWriter {
             }
             let first_backup = self.rotated_path(1);
             let _ = fs::remove_file(&first_backup);
-            fs::rename(&self.log_path, &first_backup)?;
+            if fs::rename(&self.log_path, &first_backup).is_err() {
+                rename_failed = true;
+            }
         }
-        let fresh = OpenOptions::new()
+
+        if let Ok(fresh) = OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(true)
+            .open(&self.log_path)
+        {
+            self.file = Some(fresh);
+            self.current_bytes = 0;
+            self.next_rotate_retry_bytes = 0;
+            return Ok(());
+        }
+
+        // Windows 文件共享锁降级容错：外部查看器（如 Notepad）打开日志文件阻断 rename / truncate 时，
+        // 回退为 append 继续写并在步进 ROTATE_LOCK_RETRY_STEP_BYTES 后再尝试轮转，绝不断开守护进程 stdout/stderr 管道。
+        let append_fallback = OpenOptions::new()
+            .create(true)
+            .append(true)
             .open(&self.log_path)?;
-        self.file = Some(fresh);
-        self.current_bytes = 0;
+        let len = append_fallback.metadata().map(|m| m.len()).unwrap_or(self.current_bytes);
+        self.current_bytes = len;
+        self.next_rotate_retry_bytes = if rename_failed {
+            len.saturating_add(ROTATE_LOCK_RETRY_STEP_BYTES)
+        } else {
+            0
+        };
+        self.file = Some(append_fallback);
         Ok(())
     }
 }

@@ -77,7 +77,17 @@ export function createReadonlyProbeLauncher(options: ReadonlyProbeLauncherOption
     }
     const workerEnv = buildChildEnv(options.baseEnv, options.extraEnv);
     const env = Object.fromEntries(Object.entries(workerEnv).filter(([k]) => !k.startsWith(PROBE_ENV_STRIPPED_PREFIX)));
-    return { command: wrapped.command, args: wrapped.args, env: { ...env, TMPDIR: tmpDir, ...extraEnv }, cleanup };
+    return {
+      command: wrapped.command,
+      args: wrapped.args,
+      env: {
+        ...env,
+        TMPDIR: tmpDir,
+        ...(process.platform === "win32" ? { TEMP: tmpDir, TMP: tmpDir } : {}),
+        ...extraEnv,
+      },
+      cleanup,
+    };
   };
 }
 

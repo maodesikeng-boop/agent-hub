@@ -148,7 +148,9 @@ pub(crate) fn drain_stdout(
         if n == 0 {
             return Ok(());
         }
-        log.lock().unwrap().write_chunk(&buf[..n])?;
+        if let Ok(mut w) = log.lock() {
+            let _ = w.write_chunk(&buf[..n]);
+        }
     }
 }
 

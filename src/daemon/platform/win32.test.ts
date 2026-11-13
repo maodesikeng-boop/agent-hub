@@ -16,6 +16,7 @@ import {
 } from "../../shared/index.ts";
 import {
   VENDOR_FALLBACK_PATHS,
+  dataDirPipeHash,
   findExecutable,
   isWindowsNamedPipe,
   resetLocatedExecutablesCacheForTest,
@@ -271,6 +272,13 @@ describe("Windows 路径比较键、IPC 命名管道与 6 家厂商路径解析"
     // admin 管道固定名（兼做单实例互斥），hub 管道每次随机后缀防猜测
     expect(p1.adminSock).toBe(p2.adminSock);
     expect(p1.hubSock).not.toBe(p2.hubSock);
+
+    // 跨语言（TS <-> Rust fusa-supervisor）100% 对齐的固定 <hash12> 对拍向量（盘符大小写、正反斜杠、末尾斜杠、空格与中文）
+    expect(dataDirPipeHash("C:\\Users\\Alice\\.agent-hub")).toBe("6e74bd83902c");
+    expect(dataDirPipeHash("c:\\users\\alice\\.agent-hub\\")).toBe("6e74bd83902c");
+    expect(dataDirPipeHash("C:/Users/Alice/.agent-hub///")).toBe("6e74bd83902c");
+    expect(dataDirPipeHash("D:\\Fusa Data\\hub-home\\")).toBe("f80e5ce8634e");
+    expect(dataDirPipeHash("C:\\Users\\张宇新 Test\\.agent-hub")).toBe("e722a7a0d60e");
 
     for (const vendor of AGENT_VENDORS) {
       const fallbacks = VENDOR_FALLBACK_PATHS[vendor]("C:\\Users\\alice", "win32");

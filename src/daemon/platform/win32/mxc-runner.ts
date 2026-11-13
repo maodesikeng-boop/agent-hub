@@ -6,7 +6,12 @@ import { readFileSync, realpathSync, statSync, unlinkSync } from "node:fs";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { fileURLToPath } from "node:url";
 import type { ContainerRequest } from "@microsoft/mxc-sdk/v1";
-import { WIN_MXC_REQUEST_FILE_MAX_BYTES } from "../../../shared/limits.ts";
+import {
+  HUB_CLI_TIMEOUT_MS,
+  WIN_MXC_BRIDGE_MAX_CONCURRENT_CONNS,
+  WIN_MXC_BRIDGE_MAX_REQUEST_BYTES,
+  WIN_MXC_REQUEST_FILE_MAX_BYTES,
+} from "../../../shared/limits.ts";
 import { isWindowsNamedPipe } from "../../../shared/paths.ts";
 import { buildWin32MxcCommandLine, type MxcRunnerConfig } from "./mxc-readonly.ts";
 import { normalizePathForComparison } from "./path-key.ts";
@@ -43,26 +48,68 @@ export function parseMxcRunnerCliArgs(argv: readonly string[]): MxcRunnerConfig 
   return JSON.parse(rawJson) as MxcRunnerConfig;
 }
 
-interface LoopbackPipeBridge {
+export interface LoopbackPipeBridge {
   endpoint: string;
   close(): Promise<void>;
 }
 
-async function startHubPipeLoopbackBridge(pipePath: string): Promise<LoopbackPipeBridge> {
+export interface LoopbackPipeBridgeOptions {
+  idleTimeoutMs?: number;
+  maxRequestBytes?: number;
+  maxConcurrentConns?: number;
+}
+
+export async function startHubPipeLoopbackBridge(
+  pipePath: string,
+  options?: LoopbackPipeBridgeOptions,
+): Promise<LoopbackPipeBridge> {
+  const idleTimeoutMs = options?.idleTimeoutMs ?? HUB_CLI_TIMEOUT_MS;
+  const maxRequestBytes = options?.maxRequestBytes ?? WIN_MXC_BRIDGE_MAX_REQUEST_BYTES;
+  const maxConcurrent = options?.maxConcurrentConns ?? WIN_MXC_BRIDGE_MAX_CONCURRENT_CONNS;
   const activeSockets = new Set<Socket>();
+  let activePairs = 0;
   const server: Server = createServer((client) => {
+    if (activePairs >= maxConcurrent) {
+      client.destroy();
+      return;
+    }
+    activePairs += 1;
     activeSockets.add(client);
     const upstream = createConnection(pipePath);
     activeSockets.add(upstream);
+    let pairClosed = false;
     const cleanup = () => {
+      if (!pairClosed) {
+        pairClosed = true;
+        activePairs = Math.max(0, activePairs - 1);
+      }
       activeSockets.delete(client);
       activeSockets.delete(upstream);
     };
+    const destroyBoth = () => {
+      client.destroy();
+      upstream.destroy();
+    };
+    client.setTimeout(idleTimeoutMs, destroyBoth);
+    upstream.setTimeout(idleTimeoutMs, destroyBoth);
     client.on("error", () => upstream.destroy());
     upstream.on("error", () => client.destroy());
     client.on("close", cleanup);
     upstream.on("close", cleanup);
-    client.pipe(upstream);
+
+    let inboundBytes = 0;
+    client.on("data", (chunk: Buffer) => {
+      inboundBytes += chunk.length;
+      if (inboundBytes > maxRequestBytes) {
+        destroyBoth();
+        return;
+      }
+      if (!upstream.write(chunk)) {
+        client.pause();
+        upstream.once("drain", () => client.resume());
+      }
+    });
+    client.once("end", () => upstream.end());
     upstream.pipe(client);
   });
   await new Promise<void>((resolve, reject) => {
@@ -110,25 +157,25 @@ async function runMain(argv: readonly string[]): Promise<number> {
   const containerEnv = buildContainerEnv(process.env, extraEnv);
 
   let hubBridge: LoopbackPipeBridge | null = null;
-  if (containerEnv.HUB_SOCK && isWindowsNamedPipe(containerEnv.HUB_SOCK)) {
-    hubBridge = await startHubPipeLoopbackBridge(containerEnv.HUB_SOCK);
-    containerEnv.HUB_SOCK = hubBridge.endpoint;
-  }
-
-  const mxc = await import("@microsoft/mxc-sdk/v1");
-  const request: ContainerRequest = {
-    command,
-    containment: { type: "processcontainer" },
-    workingDirectory: cwd,
-    environment: containerEnv,
-    inheritDefaultEnvironment: true,
-    filesystem: cfg.filesystem,
-    network: cfg.network,
-    ui: cfg.ui,
-  };
-
-  let proc: Awaited<ReturnType<typeof mxc.spawn>> | undefined;
+  let proc: Awaited<ReturnType<typeof import("@microsoft/mxc-sdk/v1").spawn>> | undefined;
   try {
+    if (containerEnv.HUB_SOCK && isWindowsNamedPipe(containerEnv.HUB_SOCK)) {
+      hubBridge = await startHubPipeLoopbackBridge(containerEnv.HUB_SOCK);
+      containerEnv.HUB_SOCK = hubBridge.endpoint;
+    }
+
+    const mxc = await import("@microsoft/mxc-sdk/v1");
+    const request: ContainerRequest = {
+      command,
+      containment: { type: "processcontainer" },
+      workingDirectory: cwd,
+      environment: containerEnv,
+      inheritDefaultEnvironment: true,
+      filesystem: cfg.filesystem,
+      network: cfg.network,
+      ui: cfg.ui,
+    };
+
     proc = await mxc.spawn(request, { telemetry: { enabled: false } });
     const stdinStream = proc.standardInput;
     const stdoutStream = proc.standardOutput;

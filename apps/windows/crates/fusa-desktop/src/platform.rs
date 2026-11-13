@@ -52,11 +52,77 @@ pub fn resolve_local_app_data_dir() -> Result<PathBuf, String> {
     }
 }
 
+/// 将用户配置的 `AGENT_HUB_HOME` 按与 Node `src/shared/paths.ts` 一致的规则展开 `~` 并规范化末尾斜杠与相对路径。
+pub fn normalize_hub_home_override(
+    raw: &str,
+    user_home: Option<&Path>,
+    cwd: Option<&Path>,
+) -> PathBuf {
+    let trimmed = raw.trim();
+    let expanded = if trimmed == "~" {
+        user_home
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from(trimmed))
+    } else if let Some(rest) = trimmed
+        .strip_prefix("~/")
+        .or_else(|| trimmed.strip_prefix("~\\"))
+    {
+        match user_home {
+            Some(home) => home.join(rest),
+            None => PathBuf::from(trimmed),
+        }
+    } else {
+        PathBuf::from(trimmed)
+    };
+
+    let exp_str = expanded.to_string_lossy();
+    let bytes = exp_str.as_bytes();
+    let is_win_drive_abs = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/');
+    let is_abs = expanded.is_absolute()
+        || is_win_drive_abs
+        || exp_str.starts_with("\\\\")
+        || exp_str.starts_with('/');
+    let resolved = if !is_abs {
+        if let Some(base) = cwd {
+            base.join(&expanded)
+        } else {
+            expanded
+        }
+    } else {
+        expanded
+    }
+    .to_path_buf();
+
+    let s = resolved.to_string_lossy();
+    if s.len() > 3 && (s.ends_with('/') || s.ends_with('\\')) {
+        let trimmed_sep = s.trim_end_matches(['/', '\\']);
+        if trimmed_sep.len() == 2 && trimmed_sep.as_bytes()[1] == b':' {
+            return PathBuf::from(format!("{trimmed_sep}\\"));
+        }
+        if trimmed_sep.is_empty() {
+            return PathBuf::from("/");
+        }
+        return PathBuf::from(trimmed_sep);
+    }
+    resolved
+}
+
 /// 解析守护进程数据目录（优先 `AGENT_HUB_HOME`，默认 `%USERPROFILE%\.agent-hub` / `~/.agent-hub`）。
 pub fn resolve_hub_home_dir() -> Result<PathBuf, String> {
+    #[cfg(target_os = "windows")]
+    let base_home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from);
+    #[cfg(not(target_os = "windows"))]
+    let base_home = std::env::var_os("HOME").map(PathBuf::from);
+
     if let Ok(override_home) = std::env::var("AGENT_HUB_HOME") {
-        let p = PathBuf::from(override_home.trim());
-        if !p.as_os_str().is_empty() {
+        if !override_home.trim().is_empty() {
+            let cwd = std::env::current_dir().ok();
+            let p = normalize_hub_home_override(&override_home, base_home.as_deref(), cwd.as_deref());
             validate_local_dir(&p)?;
             return Ok(p);
         }
@@ -64,8 +130,7 @@ pub fn resolve_hub_home_dir() -> Result<PathBuf, String> {
 
     #[cfg(target_os = "windows")]
     {
-        let profile = std::env::var_os("USERPROFILE")
-            .or_else(|| std::env::var_os("HOME"))
+        let profile = base_home
             .ok_or_else(|| "无法读取环境变量 USERPROFILE".to_string())?;
         let dir = PathBuf::from(profile).join(".agent-hub");
         validate_local_dir(&dir)?;
@@ -74,7 +139,7 @@ pub fn resolve_hub_home_dir() -> Result<PathBuf, String> {
 
     #[cfg(not(target_os = "windows"))]
     {
-        let home = std::env::var_os("HOME")
+        let home = base_home
             .ok_or_else(|| "无法读取环境变量 HOME".to_string())?;
         let dir = PathBuf::from(home).join(".agent-hub");
         validate_local_dir(&dir)?;

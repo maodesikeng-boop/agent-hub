@@ -25,7 +25,6 @@ import {
   WIN_MXC_POSITIVE_CACHE_TTL_MS,
   WIN_MXC_REQUEST_FILE_MAX_BYTES,
 } from "../../../shared/limits.ts";
-import { firstEnvKey } from "./windows-cmd-shim-resolution.ts";
 import { isPathInsideOrEqual, isWindowsAbsolutePathLike, normalizePathForComparison } from "./path-key.ts";
 import { resolveSpawn } from "./spawn-resolution.ts";
 import { quoteWindowsArgument } from "./windows-command-line.ts";
@@ -363,7 +362,7 @@ export function resetWin32MxcCacheForTest(customLoader?: (() => MxcV1ProbeSurfac
 /**
  * 按只读沙箱输入构造 MXC 文件系统、网络与 UI 隔离策略：
  * - 全部本机盘根、工作树与 `protectedRoots` 均置于 `readonlyPaths`（严格只读）；
- * - 放行会话私有 `tmpDir`、宿主 `%TEMP%`（若位于受保护根之外）与厂商运行时可写目录/文件；
+ * - 仅放行会话私有 `tmpDir`（各家驱动已将 `TEMP`/`TMP`/`TMPDIR` 指向它）与厂商运行时可写目录/文件，绝不放行共享宿主 `%TEMP%`；
  * - 任何落在 `protectedRoots` 或 `deniedPaths` 内的路径一律从 `readwritePaths` 剔除；
  * - `secretPaths`（扣除厂商自身启动必读的 `readableFiles`）全部置入 `deniedPaths`。
  */
@@ -435,21 +434,20 @@ export function buildWin32MxcFilesystemPolicy(
     real,
   );
 
-  const tempKey = firstEnvKey(env, "TEMP") ?? firstEnvKey(env, "TMP");
-  const hostTemp = tempKey ? env[tempKey]?.trim() : undefined;
   const writableCandidates = deduplicateWinPaths(
     [
       input.tmpDir,
-      ...(hostTemp && exists(hostTemp) ? [hostTemp] : []),
       ...input.writableDirs.filter((d) => exists(real(d))),
       ...(input.writableFilePaths ?? []).filter((f) => exists(real(f))),
     ],
     real,
   );
 
-  // 安全铁律：任何位于受保护根（含数据目录、state、全部 worktrees）或禁读路径下的目录绝不允许进入 readwritePaths
+  // 安全铁律：任何位于受保护根（含数据目录、state、全部 worktrees）或禁读路径下的目录，或反过来包含受保护根的父目录，绝不允许进入 readwritePaths
   const readwritePaths = writableCandidates.filter((candidate) => {
-    if (protectedRoots.some((root) => isPathInsideOrEqual(root, candidate))) return false;
+    if (protectedRoots.some((root) => isPathInsideOrEqual(root, candidate) || isPathInsideOrEqual(candidate, root))) {
+      return false;
+    }
     if (deniedPaths.some((secret) => isPathInsideOrEqual(secret, candidate))) return false;
     return true;
   });

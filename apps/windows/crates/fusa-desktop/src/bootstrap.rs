@@ -377,6 +377,10 @@ impl DesktopController {
         self.navigated_to_daemon.store(false, Ordering::SeqCst);
     }
 
+    pub fn has_navigated_to_daemon(&self) -> bool {
+        self.navigated_to_daemon.load(Ordering::SeqCst)
+    }
+
     pub fn spawn_bootstrap_workflow(self: &Arc<Self>) {
         if self
             .workflow_running

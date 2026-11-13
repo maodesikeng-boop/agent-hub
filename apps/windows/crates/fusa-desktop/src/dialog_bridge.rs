@@ -11,6 +11,10 @@ use serde::Deserialize;
 use tauri::AppHandle;
 use tauri_plugin_dialog::{DialogExt, FilePath};
 
+const MAX_DIALOG_HEADER_BYTES: usize = 8 * 1024;
+const MAX_DIALOG_BODY_BYTES: usize = 8 * 1024;
+const MAX_DIALOG_WIRE_BYTES: usize = MAX_DIALOG_HEADER_BYTES + MAX_DIALOG_BODY_BYTES;
+
 /// 守护进程 `POST /api/pick-folder` 与桌面外壳 `tauri-plugin-dialog` 之间的本机回环窄桥接句柄。
 pub struct DesktopDialogBridge {
     pub url: String,
@@ -23,6 +27,33 @@ pub struct DesktopDialogBridge {
 #[serde(rename_all = "camelCase")]
 struct PickFolderReq {
     start_dir: Option<String>,
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (&x, &y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+fn extract_bearer_token(header_text: &str) -> Option<&str> {
+    for line in header_text.lines() {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if !name.trim().eq_ignore_ascii_case("authorization") {
+            continue;
+        }
+        let trimmed = value.trim();
+        if trimmed.len() > 7 && trimmed[..7].eq_ignore_ascii_case("bearer ") {
+            return Some(trimmed[7..].trim());
+        }
+    }
+    None
 }
 
 fn generate_bridge_token() -> String {
@@ -56,15 +87,35 @@ impl DesktopDialogBridge {
         app_handle: AppHandle<R>,
         on_focus_window: impl Fn(&AppHandle<R>) + Send + Sync + 'static,
     ) -> std::io::Result<Self> {
+        let focus_fn = Arc::new(on_focus_window);
+        Self::start_with_handler(move |start_dir| {
+            focus_fn(&app_handle);
+            let mut builder = app_handle.dialog().file().set_title("选择主文件夹");
+            if let Some(dir_str) = start_dir {
+                let p = PathBuf::from(dir_str.trim());
+                if p.is_dir() {
+                    builder = builder.set_directory(p);
+                }
+            }
+            builder.blocking_pick_folder().and_then(|fp| match fp {
+                FilePath::Path(p) => Some(p.to_string_lossy().into_owned()),
+                FilePath::Url(_) => None,
+            })
+        })
+    }
+
+    pub fn start_with_handler(
+        pick_handler: impl Fn(Option<String>) -> Option<String> + Send + Sync + 'static,
+    ) -> std::io::Result<Self> {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let port = listener.local_addr()?.port();
         let token = generate_bridge_token();
-        let expected_auth = format!("bearer {}", token.to_ascii_lowercase());
+        let expected_token_bytes = token.as_bytes().to_vec();
         let stop_flag = Arc::new(AtomicBool::new(false));
         let busy_flag = Arc::new(AtomicBool::new(false));
 
         let stop_worker = Arc::clone(&stop_flag);
-        let focus_fn = Arc::new(on_focus_window);
+        let handler = Arc::new(pick_handler);
         thread::spawn(move || {
             while !stop_worker.load(Ordering::SeqCst) {
                 let Ok((mut stream, _)) = listener.accept() else {
@@ -80,24 +131,46 @@ impl DesktopDialogBridge {
                 let mut chunk = [0u8; 1024];
                 let mut header_end = None;
                 let mut content_len = 0usize;
+                let mut payload_too_large = false;
+                let mut invalid_content_length = false;
                 loop {
                     match stream.read(&mut chunk) {
                         Ok(0) | Err(_) => break,
                         Ok(n) => {
-                            if buf.len() + n > 16 * 1024 {
+                            if buf.len() + n > MAX_DIALOG_WIRE_BYTES {
+                                payload_too_large = true;
+                                let remain = MAX_DIALOG_WIRE_BYTES.saturating_sub(buf.len());
+                                buf.extend_from_slice(&chunk[..remain]);
                                 break;
                             }
                             buf.extend_from_slice(&chunk[..n]);
                             if header_end.is_none() {
                                 if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
                                     let end = pos + 4;
+                                    if end > MAX_DIALOG_HEADER_BYTES {
+                                        payload_too_large = true;
+                                        break;
+                                    }
                                     header_end = Some(end);
                                     let hdr = String::from_utf8_lossy(&buf[..end]).to_ascii_lowercase();
-                                    content_len = hdr
-                                        .lines()
-                                        .find_map(|l| l.strip_prefix("content-length:"))
-                                        .and_then(|v| v.trim().parse::<usize>().ok())
-                                        .unwrap_or(0);
+                                    if let Some(raw_cl) = hdr.lines().find_map(|l| l.strip_prefix("content-length:")) {
+                                        match raw_cl.trim().parse::<usize>() {
+                                            Ok(len) if len <= MAX_DIALOG_BODY_BYTES => {
+                                                content_len = len;
+                                            }
+                                            Ok(_) => {
+                                                payload_too_large = true;
+                                                break;
+                                            }
+                                            Err(_) => {
+                                                invalid_content_length = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                } else if buf.len() >= MAX_DIALOG_HEADER_BYTES {
+                                    payload_too_large = true;
+                                    break;
                                 }
                             }
                             if let Some(end) = header_end {
@@ -110,6 +183,14 @@ impl DesktopDialogBridge {
                 }
 
                 let Some(end) = header_end else {
+                    if payload_too_large {
+                        write_json_response(
+                            &mut stream,
+                            413,
+                            "Payload Too Large",
+                            r#"{"error":"payload_too_large"}"#,
+                        );
+                    }
                     continue;
                 };
                 let header_text = String::from_utf8_lossy(&buf[..end]);
@@ -119,19 +200,33 @@ impl DesktopDialogBridge {
                     continue;
                 }
 
-                let authorized = header_text.lines().any(|line| {
-                    line.split_once(':')
-                        .is_some_and(|(k, v)| {
-                            k.trim().eq_ignore_ascii_case("authorization")
-                                && v.trim().to_ascii_lowercase() == expected_auth
-                        })
-                });
+                let authorized = extract_bearer_token(&header_text)
+                    .is_some_and(|tok| constant_time_eq(tok.as_bytes(), &expected_token_bytes));
                 if !authorized {
                     write_json_response(
                         &mut stream,
                         401,
                         "Unauthorized",
                         r#"{"error":"unauthorized"}"#,
+                    );
+                    continue;
+                }
+
+                if payload_too_large {
+                    write_json_response(
+                        &mut stream,
+                        413,
+                        "Payload Too Large",
+                        r#"{"error":"payload_too_large"}"#,
+                    );
+                    continue;
+                }
+                if invalid_content_length || buf.len() < end + content_len {
+                    write_json_response(
+                        &mut stream,
+                        400,
+                        "Bad Request",
+                        r#"{"error":"bad_request"}"#,
                     );
                     continue;
                 }
@@ -144,13 +239,27 @@ impl DesktopDialogBridge {
                     continue;
                 }
 
-                let body_slice = &buf[end..buf.len().min(end + content_len)];
-                let req_payload: PickFolderReq =
-                    serde_json::from_slice(body_slice).unwrap_or_default();
+                let body_slice = &buf[end..end + content_len];
+                let req_payload: PickFolderReq = if body_slice.is_empty() {
+                    PickFolderReq::default()
+                } else {
+                    match serde_json::from_slice(body_slice) {
+                        Ok(p) => p,
+                        Err(_) => {
+                            busy_flag.store(false, Ordering::SeqCst);
+                            write_json_response(
+                                &mut stream,
+                                400,
+                                "Bad Request",
+                                r#"{"error":"invalid_json"}"#,
+                            );
+                            continue;
+                        }
+                    }
+                };
 
-                let app_for_pick = app_handle.clone();
                 let busy_for_pick = Arc::clone(&busy_flag);
-                let focus_for_pick = Arc::clone(&focus_fn);
+                let handler_for_pick = Arc::clone(&handler);
                 thread::spawn(move || {
                     struct BusyGuard(Arc<AtomicBool>);
                     impl Drop for BusyGuard {
@@ -160,18 +269,7 @@ impl DesktopDialogBridge {
                     }
                     let _guard = BusyGuard(busy_for_pick);
 
-                    focus_for_pick(&app_for_pick);
-                    let mut builder = app_for_pick.dialog().file().set_title("选择主文件夹");
-                    if let Some(dir_str) = req_payload.start_dir {
-                        let p = PathBuf::from(dir_str.trim());
-                        if p.is_dir() {
-                            builder = builder.set_directory(p);
-                        }
-                    }
-                    let picked = builder.blocking_pick_folder().and_then(|fp| match fp {
-                        FilePath::Path(p) => Some(p.to_string_lossy().into_owned()),
-                        FilePath::Url(_) => None,
-                    });
+                    let picked = handler_for_pick(req_payload.start_dir);
                     let body = serde_json::json!({ "path": picked }).to_string();
                     write_json_response(&mut stream, 200, "OK", &body);
                 });

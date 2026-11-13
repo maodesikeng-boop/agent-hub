@@ -713,12 +713,22 @@ const home = process.env.AGENT_HUB_HOME;
 const port = Number(process.env.AGENT_HUB_PORT);
 const supervised = process.env.AGENT_HUB_SUPERVISED ?? "";
 if (!supervised) process.exit(2);
+const dialogUrl = process.env.AGENT_HUB_DESKTOP_DIALOG_URL ?? "";
+const dialogToken = process.env.AGENT_HUB_DESKTOP_DIALOG_TOKEN ?? "";
+// 模拟 src/daemon/entry.ts 启动时剥离桌面桥接凭证环境变量，验证下一代由 supervisor 重新注入
+delete process.env.AGENT_HUB_SUPERVISED;
+delete process.env.AGENT_HUB_DESKTOP_DIALOG_URL;
+delete process.env.AGENT_HUB_DESKTOP_DIALOG_TOKEN;
 
 mkdirSync(join(home, "state"), { recursive: true });
 mkdirSync(join(home, "run"), { recursive: true });
 const bootFile = join(home, "state", "boot-count.txt");
 const bootCount = existsSync(bootFile) ? Number(readFileSync(bootFile, "utf8")) + 1 : 1;
 writeFileSync(bootFile, String(bootCount));
+writeFileSync(
+  join(home, "state", `dialog-env-${bootCount}.json`),
+  JSON.stringify({ dialogUrl, dialogToken }),
+);
 
 const uiToken = "test_ui_token_0123456789abcdef";
 writeFileSync(join(home, "state", "ui-token"), uiToken);
@@ -794,7 +804,16 @@ adminServer.listen(adminEndpoint, () => {
             daemon_root_dir: daemon_dir,
             win_helpers_dir: bin_dir,
             manifest_path: None,
-            extra_envs: Vec::new(),
+            extra_envs: vec![
+                (
+                    "AGENT_HUB_DESKTOP_DIALOG_URL".to_string(),
+                    "http://127.0.0.1:59123/pick-folder".to_string(),
+                ),
+                (
+                    "AGENT_HUB_DESKTOP_DIALOG_TOKEN".to_string(),
+                    "dlg_cross_gen_token_abc123".to_string(),
+                ),
+            ],
         });
         let sup = DaemonSupervisor::new(
             contract,
@@ -828,10 +847,49 @@ adminServer.listen(adminEndpoint, () => {
         }
         assert!(second_inst.is_some(), "expected immediate reload to boot-2");
         assert!(sup.snapshot().last_crash.is_none());
+        assert_eq!(
+            sup.session_cookie().map(|c| c.value().to_string()),
+            Some("sess_2".to_string())
+        );
+        for gen_idx in [1, 2] {
+            let env_json: serde_json::Value = serde_json::from_str(
+                &fs::read_to_string(hub_home.join("state").join(format!("dialog-env-{gen_idx}.json")))
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(env_json["dialogUrl"], "http://127.0.0.1:59123/pick-folder");
+            assert_eq!(env_json["dialogToken"], "dlg_cross_gen_token_abc123");
+        }
 
         let stop_started = Instant::now();
         let stop_snap = sup.shutdown();
         assert_eq!(stop_snap.state, SupervisorState::Stopped);
         assert!(stop_started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn admin_pipe_hash_matches_node_vectors_and_log_rotation_survives_locked_backup() {
+        // 与 TypeScript src/daemon/platform/win32.test.ts 逐字节对拍同一组固定 <hash12>
+        assert_eq!(data_dir_pipe_hash(r"C:\Users\Alice\.agent-hub"), "6e74bd83902c");
+        assert_eq!(data_dir_pipe_hash(r"c:\users\alice\.agent-hub\"), "6e74bd83902c");
+        assert_eq!(data_dir_pipe_hash("C:/Users/Alice/.agent-hub///"), "6e74bd83902c");
+        assert_eq!(data_dir_pipe_hash(r"D:\Fusa Data\hub-home\"), "f80e5ce8634e");
+        assert_eq!(data_dir_pipe_hash(r"C:\Users\张宇新 Test\.agent-hub"), "e722a7a0d60e");
+        assert_eq!(
+            admin_named_pipe_path(Path::new(r"C:\Users\Alice\.agent-hub\")),
+            r"\\.\pipe\fusa-6e74bd83902c-admin"
+        );
+
+        // 模拟轮转时 `.1` 目标无法覆盖（非空目录导致 fs::rename 必败）：写入器绝不抛错中断 stdout 管道
+        let tmp = TempDir::new().unwrap();
+        let log_file = tmp.path().join("desktop-daemon.log");
+        let locked_backup = tmp.path().join("desktop-daemon.log.1");
+        fs::create_dir_all(&locked_backup).unwrap();
+        fs::write(locked_backup.join("keep"), b"locked").unwrap();
+
+        let mut writer = RotatingLogWriter::open(&log_file, 128, 1).unwrap();
+        writer.write_chunk(&[b'A'; 300]).unwrap();
+        assert!(log_file.is_file());
+        assert!(fs::metadata(&log_file).unwrap().len() <= 128);
     }
 }

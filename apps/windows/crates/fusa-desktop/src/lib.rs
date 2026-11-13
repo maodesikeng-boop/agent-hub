@@ -122,7 +122,7 @@ fn open_log_with_app<R: tauri::Runtime>(
     platform::open_log_file_or_dir(log_path)
 }
 
-fn inject_cookie_and_navigate_to_daemon<R: tauri::Runtime>(
+fn sync_session_cookie_to_webview<R: tauri::Runtime>(
     window: &WebviewWindow<R>,
     controller: &DesktopController,
 ) -> Result<(), String> {
@@ -145,7 +145,14 @@ fn inject_cookie_and_navigate_to_daemon<R: tauri::Runtime>(
             .set_cookie(builder.build())
             .map_err(|e| format!("写入本地会话 Cookie 失败：{e}"))?;
     }
+    Ok(())
+}
 
+fn inject_cookie_and_navigate_to_daemon<R: tauri::Runtime>(
+    window: &WebviewWindow<R>,
+    controller: &DesktopController,
+) -> Result<(), String> {
+    sync_session_cookie_to_webview(window, controller)?;
     let target_url = Url::parse(&format!("http://127.0.0.1:{}/", controller.supervisor.port()))
         .map_err(|e| e.to_string())?;
     window
@@ -381,6 +388,11 @@ pub fn run() {
                 Arc::new(move |view| {
                     let _ = app_for_view.emit(BOOTSTRAP_STATE_EVENT, &view);
                     refresh_tray_from_controller(&app_for_view, &ctrl_for_view);
+                    if view.tone == "ready" && ctrl_for_view.has_navigated_to_daemon() {
+                        if let Some(win) = app_for_view.get_webview_window(MAIN_WINDOW_LABEL) {
+                            let _ = sync_session_cookie_to_webview(&win, &ctrl_for_view);
+                        }
+                    }
                 }),
                 Arc::new(move || {
                     if let Some(win) = app_for_nav.get_webview_window(MAIN_WINDOW_LABEL) {
@@ -653,6 +665,8 @@ mod tests {
             "-webkit-backdrop-filter",
             "box-shadow",
             "text-shadow",
+            "999px",
+            "9999px",
         ] {
             assert!(
                 !css_without_comments
@@ -694,5 +708,133 @@ mod tests {
         assert_eq!(&ico[0..4], &[0x00, 0x00, 0x01, 0x00]);
         let frame_count = u16::from_le_bytes([ico[4], ico[5]]);
         assert!(frame_count >= 4, "expected multi-resolution .ico frames");
+    }
+
+    #[test]
+    fn dialog_bridge_enforces_loopback_bearer_auth_413_limit_and_409_concurrency() {
+        use std::io::{Read, Write};
+        use std::net::TcpStream;
+        use std::sync::{Arc, Barrier};
+
+        let bridge = DesktopDialogBridge::start_with_handler(|start_dir| {
+            Some(start_dir.unwrap_or_else(|| r"C:\Picked\Default".to_string()))
+        })
+        .unwrap();
+        assert!(bridge.url.starts_with("http://127.0.0.1:"));
+        let addr_str = bridge
+            .url
+            .strip_prefix("http://")
+            .unwrap()
+            .split('/')
+            .next()
+            .unwrap()
+            .to_string();
+
+        let send_raw = |raw: &[u8]| -> String {
+            let mut s = TcpStream::connect(&addr_str).unwrap();
+            s.write_all(raw).unwrap();
+            s.flush().unwrap();
+            let mut out = String::new();
+            let _ = s.read_to_string(&mut out);
+            out
+        };
+
+        // 1. OPTIONS / GET 请求一律 404（且不返回任何 CORS 放行头，阻断浏览器 CSRF 预检）
+        let opt_resp = send_raw(b"OPTIONS /pick-folder HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+        assert!(opt_resp.starts_with("HTTP/1.1 404"));
+        assert!(!opt_resp.to_ascii_lowercase().contains("access-control-allow-origin"));
+
+        // 2. 缺失或错误的 Bearer token（含大小写篡改）一律 401
+        let unauth = send_raw(b"POST /pick-folder HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 2\r\n\r\n{}");
+        assert!(unauth.starts_with("HTTP/1.1 401"));
+        let upper_tok = bridge.token.to_ascii_uppercase();
+        let case_tampered = format!(
+            "POST /pick-folder HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {upper_tok}\r\nContent-Length: 2\r\n\r\n{{}}"
+        );
+        assert!(send_raw(case_tampered.as_bytes()).starts_with("HTTP/1.1 401"));
+
+        // 3. 请求体超过 8 KiB 上限严格返回 413 Payload Too Large
+        let big_body = format!(r#"{{"startDir":"{}"}}"#, "a".repeat(9000));
+        let big_req = format!(
+            "POST /pick-folder HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {}\r\nContent-Length: {}\r\n\r\n{}",
+            bridge.token,
+            big_body.len(),
+            big_body
+        );
+        assert!(send_raw(big_req.as_bytes()).starts_with("HTTP/1.1 413"));
+
+        // 4. 合法请求返回 200 与选中目录
+        let ok_body = r#"{"startDir":"D:\\Repo"}"#;
+        let ok_req = format!(
+            "POST /pick-folder HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: bearer {}\r\nContent-Length: {}\r\n\r\n{}",
+            bridge.token,
+            ok_body.len(),
+            ok_body
+        );
+        let ok_resp = send_raw(ok_req.as_bytes());
+        assert!(ok_resp.starts_with("HTTP/1.1 200"));
+        assert!(ok_resp.contains(r#"{"path":"D:\\Repo"}"#));
+        bridge.stop();
+
+        // 5. 并发弹窗返回 409 Conflict
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let entered_w = Arc::clone(&entered);
+        let release_w = Arc::clone(&release);
+        let slow_bridge = DesktopDialogBridge::start_with_handler(move |_| {
+            entered_w.wait();
+            release_w.wait();
+            Some("done".to_string())
+        })
+        .unwrap();
+        let slow_addr = slow_bridge
+            .url
+            .strip_prefix("http://")
+            .unwrap()
+            .split('/')
+            .next()
+            .unwrap()
+            .to_string();
+        let slow_tok = slow_bridge.token.clone();
+        let slow_addr_t1 = slow_addr.clone();
+        let slow_tok_t1 = slow_tok.clone();
+        let t1 = std::thread::spawn(move || {
+            let mut s = TcpStream::connect(&slow_addr_t1).unwrap();
+            let req = format!(
+                "POST /pick-folder HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {slow_tok_t1}\r\nContent-Length: 2\r\n\r\n{{}}"
+            );
+            s.write_all(req.as_bytes()).unwrap();
+            let mut out = String::new();
+            let _ = s.read_to_string(&mut out);
+            out
+        });
+        entered.wait();
+
+        let mut s2 = TcpStream::connect(&slow_addr).unwrap();
+        let req2 = format!(
+            "POST /pick-folder HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {slow_tok}\r\nContent-Length: 2\r\n\r\n{{}}"
+        );
+        s2.write_all(req2.as_bytes()).unwrap();
+        let mut resp2 = String::new();
+        let _ = s2.read_to_string(&mut resp2);
+        assert!(resp2.starts_with("HTTP/1.1 409"));
+
+        release.wait();
+        assert!(t1.join().unwrap().starts_with("HTTP/1.1 200"));
+        slow_bridge.stop();
+    }
+
+    #[test]
+    fn normalize_hub_home_override_aligns_tilde_and_trailing_slashes_with_node() {
+        let home = Path::new(r"C:\Users\Alice");
+        let cwd = Path::new(r"D:\Work");
+        let p_tilde = platform::normalize_hub_home_override(r"~\.agent-hub\", Some(home), Some(cwd));
+        assert_eq!(
+            fusa_supervisor::data_dir_pipe_hash(&p_tilde.to_string_lossy()),
+            "6e74bd83902c"
+        );
+        let p_rel = platform::normalize_hub_home_override("fusa-local/", Some(home), Some(cwd));
+        assert!(p_rel.to_string_lossy().contains("Work"));
+        assert!(!p_rel.to_string_lossy().ends_with('/'));
     }
 }
