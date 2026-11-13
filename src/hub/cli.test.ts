@@ -372,18 +372,19 @@ describe("hub cli", () => {
       }
     });
 
-    it("worker start --node [--graph] and worker end --incomplete pass task-graph binding flags", async () => {
+    it("worker start --node [--graph] passes task-graph binding flags and worker end rejects removed --incomplete", async () => {
       expect(
         (await hub(["worker", "start", "--title", "实现 CLI", "--node", "impl-cli", "--graph", "7", "--stdin"], {
           stdin: stdinOf("做 CLI"),
         })).code,
       ).toBe(0);
-      expect((await hub(["worker", "end", "3", "--incomplete"])).code).toBe(0);
+      expect((await hub(["worker", "end", "3"])).code).toBe(0);
       expect(ledger.calls).toEqual([
         { sessionId: 42, command: "worker.start", args: { title: "实现 CLI", node: "impl-cli", graphId: 7, task: "做 CLI" } },
-        { sessionId: 42, command: "worker.end", args: { workerId: 3, incomplete: true } },
+        { sessionId: 42, command: "worker.end", args: { workerId: 3 } },
       ]);
       ledger.calls.length = 0;
+      expect((await hub(["worker", "end", "3", "--incomplete"])).code).toBe(HUB_EXIT.usage);
       const badGraph = await hub(["worker", "start", "--title", "修 X", "--node", "n1", "--graph", "abc", "--stdin"], {
         stdin: stdinOf("x"),
       });
@@ -509,7 +510,10 @@ describe("hub cli", () => {
       const r = await hub(["--help"]);
       expect(r.stdout).toContain(`JSON：${TASK_GRAPH_CREATE_JSON_HINT}`);
       expect(r.stdout).toContain(`JSON：${TASK_GRAPH_PATCH_JSON_HINT}`);
-      for (const field of ["addNodes", "updateNodes", "removeNodes", "addEdges", "removeEdges"]) {
+      for (const field of ["title", "goal", "steps", "brief", "review"]) {
+        expect(TASK_GRAPH_CREATE_JSON_HINT).toContain(`"${field}"`);
+      }
+      for (const field of ["goal", "addSteps", "updateSteps", "removeSteps", "skipSteps"]) {
         expect(TASK_GRAPH_PATCH_JSON_HINT).toContain(`"${field}"`);
       }
     });
@@ -587,6 +591,28 @@ describe("hub cli", () => {
         { command: "graph.cancel", args: { graphId: 9, reason: "改方案" } },
         { command: "graph.finish", args: { summary: "已合并发布" } },
         { command: "graph.finish", args: { graphId: 9, unmergedOk: true, summary: "实验分支保留不合并" } },
+      ]);
+    });
+
+    it("graph done supports --stdin handoff note alongside optional --summary / --pr", async () => {
+      ledger.calls.length = 0;
+      expect(
+        (await hub(["graph", "done", "impl", "--graph", "5", "--pr", "https://github.com/o/r/pull/9", "--summary", "放行", "--stdin"], {
+          stdin: stdinOf("补给下一步审查的话\n"),
+        })).code,
+      ).toBe(0);
+      expect(ledger.calls).toEqual([
+        {
+          sessionId: 42,
+          command: "graph.done",
+          args: {
+            nodeKey: "impl",
+            graphId: 5,
+            prUrl: "https://github.com/o/r/pull/9",
+            summary: "放行",
+            note: "补给下一步审查的话",
+          },
+        },
       ]);
     });
 

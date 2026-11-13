@@ -216,8 +216,18 @@ describe("派活：在 worktree 里干（主文件夹是有提交的 git 仓库�
       status: "idle",
     });
     expect(messagesIn(worker.workerConversationId)).toEqual([
-      expect.objectContaining({ sender: "pm", kind: "text", text: "把 X 修好，测试要过", status: "queued", sessionId: session.id, workerId: worker.id }),
+      expect.objectContaining({
+        sender: "pm",
+        kind: "text",
+        text: expect.stringContaining("把 X 修好，测试要过"),
+        status: "queued",
+        sessionId: session.id,
+        workerId: worker.id,
+      }),
     ]);
+    expect(taskMessage(worker).text).toContain(`你是 Worker #${worker.id}（修 X）。`);
+    expect(taskMessage(worker).text).toContain(path);
+    expect(taskMessage(worker).text).toContain(worker.branch!);
     const [line] = workerLines();
     expect(line).toMatchObject({ sender: "system", kind: "worker", status: null, workerId: worker.id, sessionId: null });
     expect(workerEventOf(line!)).toEqual({
@@ -1415,7 +1425,8 @@ describe("worktree 准备命令（hub project setup）", () => {
     expect(task.text.startsWith("【系统】建好 worktree 后跑项目的准备命令没成功（退出码 1，用时 23 秒，日志：/data/state/logs/setup/worker-1.log）")).toBe(true);
     expect(task.text).toContain("```\npnpm install\n```");
     expect(task.text).toContain("```\nERR_PNPM_OUTDATED_LOCKFILE\n第二行\n```");
-    expect(task.text.endsWith("下面是任务说明。\n\n把 X 修好，测试要过")).toBe(true);
+    expect(task.text).toContain("下面是任务说明。\n\n你是 Worker #1（修 X）。");
+    expect(task.text.endsWith("# 你的任务\n\n把 X 修好，测试要过")).toBe(true);
     expect(task.status).toBe("queued");
     expect(changes.filter((c) => c.type === "message.updated")).toEqual([{ type: "message.updated", seq: expect.any(Number), data: { message: task } }]);
     expect(enqueued.map((a) => a.type)).toEqual(["session.start", "session.send"]);
@@ -1436,9 +1447,10 @@ describe("worktree 准备命令（hub project setup）", () => {
     const worker = start().data.worker;
     enqueued = [];
     ledger.onWorktreeCreated(worker.id, "c0ffee", outcome());
-    expect(taskMessage(worker).text).toBe(
-      "【系统】已经在这个 worktree 里跑过项目的准备命令（用时 23 秒，日志：/data/state/logs/setup/worker-1.log）。\n\n把 X 修好，测试要过",
-    );
+    expect(taskMessage(worker).text.startsWith(
+      "【系统】已经在这个 worktree 里跑过项目的准备命令（用时 23 秒，日志：/data/state/logs/setup/worker-1.log）。\n\n你是 Worker #1（修 X）。",
+    )).toBe(true);
+    expect(taskMessage(worker).text.endsWith("# 你的任务\n\n把 X 修好，测试要过")).toBe(true);
     expect(enqueued.map((a) => a.type)).toEqual(["session.start", "session.send"]);
     // 重复调用（重启恢复撞上）不再加一遍
     ledger.onWorktreeCreated(worker.id, "c0ffee", outcome());
@@ -1453,7 +1465,11 @@ describe("worktree 准备命令（hub project setup）", () => {
     enqueued = [];
     ledger.onWorktreeCreated(worker.id, "c0ffee", outcome({ kind: "stopped", exitCode: null }));
     expect(enqueued).toEqual([]);
-    expect(taskMessage(worker)).toMatchObject({ text: "把 X 修好，测试要过", status: "stopped" });
+    expect(taskMessage(worker)).toMatchObject({
+      text: expect.stringContaining("# 你的任务\n\n把 X 修好，测试要过"),
+      status: "stopped",
+    });
+    expect(taskMessage(worker).text).not.toContain("【系统】");
     expect(activityOf(worker.id)).toBe("idle");
   });
 

@@ -775,6 +775,7 @@ describe("M3：动作", () => {
       repo: string;
       branch: string;
       worktreePath: string;
+      base?: string;
       status: "open" | "ended";
       setupCommand: string | null;
     }>();

@@ -257,7 +257,7 @@ export function createLedgerHubCommands(
       case "router.note":
         return router.noteIn(p, caller, args as HubArgs<"router.note">);
       case "graph.create":
-        return withManual(caller.id, () => taskGraphs.createIn(p, caller, args as HubArgs<"graph.create">));
+        return withManual(caller.id, () => taskGraphs.createIn(p, caller, args as HubArgs<"graph.create">, context));
       case "graph.show":
         return taskGraphs.show(caller, args as HubArgs<"graph.show">);
       case "graph.list":
@@ -265,13 +265,13 @@ export function createLedgerHubCommands(
       case "graph.ask":
         return taskGraphs.askIn(p, caller, args as HubArgs<"graph.ask">);
       case "graph.patch":
-        return withManual(caller.id, () => taskGraphs.patchIn(p, caller, args as HubArgs<"graph.patch">));
+        return withManual(caller.id, () => taskGraphs.patchIn(p, caller, args as HubArgs<"graph.patch">, context));
       case "graph.done":
-        return taskGraphs.doneIn(p, caller, args as HubArgs<"graph.done">);
+        return taskGraphs.doneIn(p, caller, args as HubArgs<"graph.done">, context);
       case "graph.decide":
-        return taskGraphs.decideIn(p, caller, args as HubArgs<"graph.decide">);
+        return taskGraphs.decideIn(p, caller, args as HubArgs<"graph.decide">, context);
       case "graph.skip":
-        return taskGraphs.skipIn(p, caller, args as HubArgs<"graph.skip">);
+        return taskGraphs.skipIn(p, caller, args as HubArgs<"graph.skip">, context);
       case "graph.cancel":
         return taskGraphs.cancelIn(p, caller, args as HubArgs<"graph.cancel">);
       case "graph.finish":

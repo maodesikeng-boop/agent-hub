@@ -10,7 +10,7 @@ import {
   WORKER_SEARCH_MAX_KEYWORD_CHARS,
   WORKER_SEARCH_MAX_LIMIT,
 } from "../../shared/limits.ts";
-import { workerReportHeader } from "../../shared/worker.ts";
+import { unwrapWorkerReportText } from "../../shared/worker.ts";
 import { fail } from "./context.ts";
 import type { LedgerContext } from "./context.ts";
 import type { WorkerDbRow } from "./rows.ts";
@@ -23,8 +23,7 @@ interface ReportRow {
 
 /** 汇报原文：去掉交给项目经理时加的开头。 */
 function reportBody(worker: Pick<WorkerDbRow, "id" | "title">, text: string): string {
-  const head = `${workerReportHeader(worker.id, worker.title)}\n\n`;
-  return text.startsWith(head) ? text.slice(head.length) : text;
+  return unwrapWorkerReportText(worker, text);
 }
 
 /** 命中处前后各取一些字，连同关键词一共不超过 WORKER_SEARCH_CONTEXT_CHARS 个字；换行并成空格，被截掉的那头加省略号。 */

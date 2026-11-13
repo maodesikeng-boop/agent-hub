@@ -205,10 +205,13 @@ describe("换人接手同一步：重放 441", () => {
     expect(scope.writableDirs).toEqual([dir]);
     expect(scopeAllowsWrite(scope, join(dir, "src", "a.ts"))).toBe(true);
     expect(scopeAllowsWrite(scope, join(workerWorktreePath(worktreesDir, projectId, w2.id), "a.ts"))).toBe(false);
-    // 提示词里写明是前任的目录
-    const prompt = buildLaunchPrompt(ledger.getLaunchContext(w2Session), cwd);
-    expect(prompt).toContain(`它是前任 Worker #${w1.id} 的工作目录和分支，你接着用`);
-    expect(prompt).toContain("原始任务：实测三家压缩后提示词还在不在");
+    // 静态系统提示词与前任完全一致（命中前缀缓存），前任目录与原始任务说明统一在第一条接手消息里给出
+    const w1Prompt = buildLaunchPrompt(ledger.getLaunchContext(sessionIdOf(w1.id)), cwd);
+    const w2Prompt = buildLaunchPrompt(ledger.getLaunchContext(w2Session), cwd);
+    expect(w2Prompt).toBe(w1Prompt);
+    expect(first).toContain(`你是 Worker #${w2.id}（实测压缩）`);
+    expect(first).toContain(`你就在前任 Worker #${w1.id} 的工作目录 ${dir} 和分支 ${w1.branch} 上`);
+    expect(first).toContain("原始任务：实测三家压缩后提示词还在不在");
 
     // 旧会话还没结束（进程在）：新 Worker 的第一条先等；旧会话结束后才发
     expect(ledger.waitsForFirstTurn(w2Session, firstMessage(w2).id)).toBe(true);
@@ -273,12 +276,12 @@ describe("换人接手同一步：重放 441", () => {
     expect(() => hub("worker.start", { node: "s1" }, { workspace: repoProbe })).toThrow(LedgerRequestError);
     const w1 = start({ title: "实现", task: "原始任务", node: "s1" });
     worktreeReady(w1);
-    hub("worker.end", { workerId: w1.id, incomplete: true });
+    hub("worker.end", { workerId: w1.id });
 
     const w2 = hub("worker.start", { node: "s1", noWorktree: true }).data.worker;
     expect(w2).toMatchObject({ workspace: "main", worktreePath: null });
     expect(firstMessage(w2).text).toContain("--no-worktree");
-    hub("worker.end", { workerId: w2.id, incomplete: true });
+    hub("worker.end", { workerId: w2.id });
 
     rmSync(w1.worktreePath!, { recursive: true, force: true });
     enqueued = [];
@@ -375,7 +378,7 @@ describe("清理保护：同一个目录后任还在用、或所属任务图还 
     expect(ledger.isWorkerCleanable(w1.id)).toBe(false);
     expect(ledger.listEndedWorktreeWorkers().map((c) => c.workerId)).toEqual([w1.id]);
     // 后任也收工了，但图还 active（随时可能再换人接着用）
-    hub("worker.end", { workerId: w2.id, incomplete: true });
+    hub("worker.end", { workerId: w2.id });
     db.run("UPDATE agent_sessions SET status = 'ended', pid = NULL WHERE worker_id = ?", w2.id);
     expect(ledger.isWorkerCleanable(w1.id)).toBe(false);
     expect(ledger.isWorkerCleanable(w2.id)).toBe(false);
@@ -419,7 +422,7 @@ describe("清理保护：同一个目录后任还在用、或所属任务图还 
     worktreeReady(w1);
     turn(w1, firstMessage(w1).id, ["pnpm test"], report("有问题", "卡住"), "ok");
     const w1EndedAt = now;
-    hub("worker.end", { workerId: w1.id, incomplete: true });
+    hub("worker.end", { workerId: w1.id });
     db.run("UPDATE agent_sessions SET status = 'ended', pid = NULL WHERE worker_id = ?", w1.id);
 
     // 4 天后后任 w2 接手并在同一天收工，图取消结束
@@ -427,7 +430,7 @@ describe("清理保护：同一个目录后任还在用、或所属任务图还 
     const w2 = hub("worker.start", { node: "s1" }, { workspace: repoProbe }).data.worker;
     const w2EndedAt = now + 60_000;
     now = w2EndedAt;
-    hub("worker.end", { workerId: w2.id, incomplete: true });
+    hub("worker.end", { workerId: w2.id });
     hub("graph.cancel", { graphId: graph.id });
 
     // 后任进程 pid 还没退完时不可清理

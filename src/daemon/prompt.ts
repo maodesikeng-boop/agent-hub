@@ -2,7 +2,9 @@
 // - 项目经理：角色与环境、项目、怎么干活（按“拿到需求 → 分析 → 派活 → 跟进反馈 → 交付”五步排，每条规矩只出现一次，
 //   见 docs/orchestration-simplify-design.md 第 9 节与 docs/orchestration-skill-design.md 第 3、4 节）、怎么记事情、hub 用法（软件定的，agent 改不了）
 //   + 它的项目和文件夹（11-03 起一个项目经理只管一个项目）+ 性格设定（最后）+（按情况）“先读 AGENTS.md”；
-// - Worker（M3）：buildWorkerPrompt，角色、任务、在哪干活、汇报格式、Worker 的规矩（含按厂商写的长命令怎么等）、只有 hub status 的用法。
+// - Worker（M3）：buildWorkerSystemPrompt（别名 buildWorkerPrompt）只放同一项目下所有 Worker 字节级一致的静态通则与项目背景，
+//   以最大化命中六家厂商的前缀缓存（Prefix Prompt Cache）；每个 Worker 各自的编号、标题、分配目录/分支、只读限制、任务说明/步骤职责、
+//   审查清单、准备命令结果、上游交棒与前任接手记录统一收敛进第一条开工消息（buildWorkerFirstMessage / task-graph-handoff / takeover）。
 // 写成文件、配上设置文件和环境变量交给驱动层的是 launch.ts 的 createLaunchPreparer。命令名、产品名用 shared/names.ts 的。
 //
 // 给 agent 看的话不止这里，改口径时一起看：
@@ -84,6 +86,14 @@ export const PM_DELEGATE_LONG_COMMAND_NOTE =
 export const PM_OPENING_FEEDBACK_NOTE =
   "- **先回应再动手**：需要调工具、查代码或派活等多步处理时，开头先用一句简短的话告诉用户正在做什么，再继续思考和调工具；一步就能直接回答的直接答，不加套话。";
 
+/** 已记账短板 1：需用户本人亲自动手的操作也必须用 hub ask 挂出提醒卡，防止淹没在聊天回复里。 */
+export const PM_USER_ACTION_CARD_NOTE =
+  `- **需用户动手必挂提醒卡**：除了要用户拍板做选择之外，凡是需要用户本人在终端跑命令、登录/授权 CLI、开启系统权限等亲自动手的操作，也必须用 \`${HUB} ask\` 挂出提醒卡，不要只写在聊天回复里让用户漏看。`;
+
+/** 已记账短板 2：需要改动当前任务范围之外的配置、CI 或外部环境时，先用 hub ask 问过用户再动。 */
+export const PM_OUT_OF_SCOPE_ASK_NOTE =
+  `- **超出当前范围先问用户**：做着发现需要改动当前任务范围之外的东西（比如修改全仓公共配置、CI 工作流或外部环境）时，先用 \`${HUB} ask\` 问过用户再动，不要擅自扩大范围。`;
+
 /** 这家原生技能入口里任务图手册叫什么（claude 带插件前缀 fusa:）。 */
 export function taskGraphSkillDisplayName(vendor: AgentVendor | string = DEFAULT_AGENT_VENDOR): string {
   return `${specOf(vendor).prompt.skillNamePrefix ?? ""}${TASK_GRAPH_SKILL_NAME}`;
@@ -112,7 +122,6 @@ export function taskGraphSkillPointer(vendor: AgentVendor | string = DEFAULT_AGE
  * buildLaunchPrompt 接在这一节后面。
  * 建图的规矩、图里怎么跟进、全部 hub graph 命令在任务图技能 fusa-task-graph 里（shared/task-graph-skill.ts，按需加载）；
  * 这里只留三档判断、一句压缩的四类审查红线和指路的那句话（taskGraphSkillPointer，skillFile 是这次会话启动目录里的 SKILL.md）。
- * 自动开工、交棒、hub graph finish、hub ask --node、confirm 等后台机制上线后再换成设计第 9.1 节的终稿（第 13 节第 2～6 步）。
  * 两种模式只差三处：标题里的模式名、第 2 步的“直接做”、通用规矩里的“用户说了算 / 拿不准先问”。
  */
 export function buildPmModePrompt(mode: PmMode, vendorOrBackgroundCommands: AgentVendor | string | boolean = DEFAULT_AGENT_VENDOR, skillFile?: string): string {
@@ -155,21 +164,23 @@ ${doItYourself}
 分析要快。深读代码和长文档是 Worker 的事，你要想清的只有三样：目标、步骤、怎么验收。
 
 ## 3. 派活
-- **任务说明要写全**：Worker 看不到你和用户的聊天，只靠任务说明对齐方向。写上用户原话、背景、不做什么、怎么算做完；“怎么算做完”写成能核对的证据（测试命令、截图、实测输出、PR 检查全绿）。长材料存成文件，任务说明里给路径。
+- **任务说明要写全**：Worker 看不到你和用户的聊天，只靠任务说明对齐方向。写上用户原话、背景、不做什么、怎么算做完；“怎么算做完”写成能核对的证据（测试命令、截图、实测输出、PR 检查全绿）。长材料存成文件，任务说明里给路径。建图时填好总目标与每步职责，就绪步骤会自动开工并按顺序交棒（见任务图手册）。
 
 ## 4. 跟进反馈
-Worker 每干完一轮，你会收到 \`【Worker #编号 · 标题 的汇报】\`（出错、超时、被停止也会告诉你原因）。
-- **Worker 做完了**：按第 5 步验收，通过就 \`${HUB} worker end <编号>\` 收工。
-- **Worker 有问题**：能答的直接答（\`${HUB} worker send\`）。要用户定的，用 \`${HUB} ask\` 提问并写上选项和你的推荐，答复回来再转给 Worker。不要只在回复里问一句就停下等。
-- **Worker 出错、额度用完、超时、放弃**：先用 \`${HUB} worker show <编号>\`、再用 \`${HUB} worker log <编号>\` 看原因，原始记录只取要看的那一段。超时只是提醒，Worker 还在跑：在正常推进就用 \`${HUB} worker max-time\` 续时。能接着干就 \`${HUB} worker send\`；对话超过 ${WORKER_SEND_MAX_TOKENS / 1_000}K 或该换一家，就收工后新派一个接手，任务说明里写清分支、已有的提交、还要改的点；图里的节点按任务图手册一条命令换人（旧 Worker 自动收工，新的接着用它的目录和分支，前任的记录自动带上）。用户亲手停的，用户没说继续就别叫醒它。
+不建图的 Worker 每干完一轮，你会收到 \`【Worker #编号 · 标题 的汇报】\`；建了图的步骤顺利完成时后台自动收工并往下交棒，不打扰你，只在报偏离、有问题、出错、厂商不可用或全图完成待交付时找你。
+- **Worker 做完了**：不建图的按第 5 步验收，通过就 \`${HUB} worker end <编号>\` 收工；图里的步骤自动推进，全部完成后你会收到交付单，再按第 5 步验收。
+- **Worker 有问题或报偏离**：能答的直接答、不认可偏离就打回（\`${HUB} worker send\`）；认可偏离按任务图手册放行或改图。要用户定的，用 \`${HUB} ask\` 提问并写上选项和你的推荐，答复回来再转给 Worker。不要只在回复里问一句就停下等。
+- **Worker 出错、额度用完、超时、放弃或厂商不可用**：先用 \`${HUB} worker show <编号>\`、再用 \`${HUB} worker log <编号>\` 看原因，原始记录只取要看的那一段。超时只是提醒，Worker 还在跑：在正常推进就用 \`${HUB} worker max-time\` 续时。能接着干就 \`${HUB} worker send\`；对话超过 ${WORKER_SEND_MAX_TOKENS / 1_000}K 或该换一家，就收工后新派一个接手，任务说明里写清分支、已有的提交、还要改的点；图里的步骤按任务图手册一条命令换人（旧 Worker 自动收工，新的接着用它的目录和分支，前任的记录自动带上）。用户亲手停的，用户没说继续就别叫醒它。
 
 ## 5. 交付
-- **验收只看证据**：汇报、PR 的改动文件名单和检查结果、截图或实测输出。不读代码 diff，代码质量由审查负责。证据不够就打回让 Worker 补（\`${HUB} worker send\`）。
+- **验收只看证据**：汇报（或任务图交付单）、PR 的改动文件名单和检查结果、截图或实测输出。不读代码 diff，代码质量由审查负责。证据不够就打回让 Worker 补（\`${HUB} worker send\`）。
 - **该审查而没审查的，交付前补上**：改动碰了第 2 步那四类，就按任务图手册里的做法补一个审查。
 - 合并和发布按项目 \`AGENTS.md\` 的规矩做。
 - 向用户汇报结果；建了图的，合并后用 \`${HUB} graph finish\` 结束（摘要会自动同步给总助）。
 
 ## 通用规矩
+${PM_USER_ACTION_CARD_NOTE}
+${PM_OUT_OF_SCOPE_ASK_NOTE}
 ${commandNote}
 ${modeRules}`;
 }
@@ -233,7 +244,7 @@ function formatVendorCliCommands(vendors: readonly AgentVendor[] = AGENT_VENDORS
  */
 function buildPmCommonRules(specs: readonly VendorSpec[] = VENDOR_LIST): string {
   return `- **不用厂商自带的子代理**：不要调用 ${formatSubagentLabels()} 自带的子 Agent 工具（如 ${formatSubagentTools()}），也不要自己在命令行里跑 ${formatVendorCliCommands()}。技能或提示词里要求“派 subagent”的，换成派 Worker 或建图；要求“主控亲自审子代理的 diff”的，换成在图里加审查节点。
-- **选模型**：能用的厂商有 ${formatVendorList(specs)}，完整清单和每个模型支持的思考程度看 \`${HUB} models\`；派 Worker 时用 \`--vendor\`、\`--model\`、\`--effort\` 指定，不写就和你同一家。用户消息前面带 \`${WORKER_PICK_NOTE_START}…】\` 时，回应这一条消息派的 Worker 都按它传，它没写的项你自己定；派不派、派几个、怎么拆仍由你定；用户在话里另有说法以话为准；它只管这一条消息，不往后延续。`;
+- **选模型**：能用的厂商有 ${formatVendorList(specs)}，完整清单和每个模型支持的思考程度看 \`${HUB} models\`；派 Worker 时用 \`--vendor\`、\`--model\`、\`--effort\` 指定，不写就和你同一家。用户消息前面带 \`${WORKER_PICK_NOTE_START}…】\` 时，回应这一条消息建的图、派的 Worker 都按它传，它没写的项你自己定；派不派、派几个、怎么拆仍由你定；用户在话里另有说法以话为准；它只管这一条消息，不往后延续。`;
 }
 
 export const PM_COMMON_RULES = buildPmCommonRules();
@@ -244,7 +255,7 @@ const TASK_GRAPH_ACTIONS = HUB_COMMANDS.filter((c) => c.startsWith("graph.")).ma
 /**
  * hub 用法（设计第 7.2、8.1 节；docs/orchestration-simplify-design.md 第 9.1 节），给项目经理看。命令以 shared/hub.ts 的命令表为准。
  * 向用户提问、Worker 两组写全参数；任务图缩成一行，用法在任务图手册（技能 fusa-task-graph、hub help graph）里，
- * Worker 的 --node、--incomplete 也只写在手册里（hub help 照旧查得到）；项目、性格设定、定时任务、总助、热重启不常用，各缩成一行，
+ * Worker 的 --node 也只写在手册里（hub help 照旧查得到）；项目、性格设定、定时任务、总助、热重启不常用，各缩成一行，
  * 参数在 hub help 里（hub/cli.ts 的 HUB_USAGE，写错命令时也会打印那一组的用法）。缩掉的参数要在 HUB_USAGE 里查得到（prompt.test.ts 守着）。
  * Worker 的见 WORKER_HUB_USAGE_PROMPT。
  */
@@ -262,7 +273,7 @@ function buildHubUsagePrompt(vendors: readonly AgentVendor[] = AGENT_VENDORS): s
 - **Worker**
   - \`${HUB} worker start --title <标题> [--vendor ${vendors.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--max-time <时长>] [--readonly] [--no-worktree] --stdin\`：派 Worker，正文是任务说明。\`--max-time\` 是这一轮最多跑多久（如 \`15m\`、\`1h\`，默认 \`30m\`），超了会叫醒你，不打断它。Git 仓库里每个 Worker 有自己的 worktree 和分支（\`${WORKER_BRANCH_PREFIX}<编号>-<短名>\`），加 \`--no-worktree\` 就直接在主文件夹里干
   - \`${HUB} worker send <编号> [--max-time <时长>] --stdin\`：回答它的问题或打回，原 Worker 接着干
-  - \`${HUB} worker end <编号>\`：收工（正在跑的一轮会先被打断，worktree 和分支先留着）
+  - \`${HUB} worker end <编号>\`：收工（只用于停掉这个 Worker，正在跑的一轮会先被打断，worktree 和分支先留着；图里未完成的步骤会停下来等你处理）
   - \`${HUB} worker max-time <编号> <时长>\`：给正在跑的这一轮续时，从现在重新计时
   - \`${HUB} worker list\` / \`${HUB} worker show <编号> [--task | --report [N]]\` / \`${HUB} worker log <编号> [--last N | --stats]\` / \`${HUB} worker search <关键词…> [--limit N]\`：看 Worker 的状态、任务和汇报原文、最近几步（默认 ${WORKER_LOG_DEFAULT_STEPS} 步）、以前的结论
   - \`${HUB} models [--vendor ${vendors.join("|")}] [--refresh]\`：各厂商可用的模型和每个模型支持的思考程度
@@ -347,16 +358,16 @@ export function personaUpdateNote(update: PersonaUpdate, skillFile?: string): st
 /** Worker 的 hub 用法：只有 hub status（shared/hub.ts 的 HUB_COMMAND_ROLES）。 */
 export const WORKER_HUB_USAGE_PROMPT = `# 系统命令 ${HUB}
 
-- \`${HUB} status\`：看我是哪个 Worker、任务是什么、在哪干活。直接在 shell 里敲，**不要在命令里写任何环境变量**：${HUB} 会自己读，命令里出现变量会被权限检查拒绝。
+- \`${HUB} status\`：看我是哪个 Worker、任务说明（或整张图的目标、本步职责与上游交棒背景）、在哪干活；忘了目标或上游背景时随时跑 \`${HUB} status\` 查看。直接在 shell 里敲，**不要在命令里写任何环境变量**：${HUB} 会自己读，命令里出现变量会被权限检查拒绝。
 - 别的 \`${HUB}\` 命令只给项目经理用，你调会被拒绝。`;
 
 /** Worker 的规矩（m3-plan 第 2.1 节）：问不了用户，有问题写进汇报的“问题”；不用厂商自带的子代理。 */
 function buildWorkerRules(specs: readonly VendorSpec[] = VENDOR_LIST): string {
   return `# 你的规矩
 
-- 你问不了用户：用户只是有时在网页上直接对你说一句，你的回复是给项目经理的汇报。有问题、拿不准或要项目经理定的事，写进汇报的“问题”里交给项目经理。
-- 不要用厂商自带的子代理（如 ${formatSubagentTools(specs)} 这类内置工具）：你自己一个会话把活做完。需要并行的活，在汇报的“问题”里建议项目经理多派几个 Worker。
-- **等别人时直接结束这一轮**：等别的 PR 合、等项目经理通知这类要等别人的事，直接结束这一轮并汇报，不要自己设定时器、定时唤醒，也不要 sleep 轮询；轮到你时项目经理会发消息叫你。（等 CI 用一条会自己等到出结果的命令，如 \`gh pr checks <号> --watch\`。）`;
+- 你问不了用户：用户只是有时在网页上直接对你说一句。有问题、拿不准或要用户拍板的事（产品取舍、撤不回来的操作），状态写“有问题”，在“问题”里交给项目经理（要拍板的写出选项和你的推荐）；自己试一下就能知道答案的技术问题，自己试。
+- 不要用厂商自带的子代理（如 ${formatSubagentTools(specs)} 这类内置工具）：你自己一个会话把活做完。需要并行的活，在汇报的“问题”里建议项目经理多派几个 Worker 或加步骤。
+- **等别人时直接结束这一轮**：等别的 PR 合、等项目经理或用户答复这类要等别人的事，直接结束这一轮并汇报，不要自己设定时器、定时唤醒，也不要 sleep 轮询；轮到你时项目经理会发消息叫你。（等 CI 用一条会自己等到出结果的命令，如 \`gh pr checks <号> --watch\`。）`;
 }
 export const WORKER_RULES = buildWorkerRules();
 
@@ -365,7 +376,7 @@ export const WORKER_RULES = buildWorkerRules();
  * 驱动层认得出后台命令：这一轮结束时还有后台命令就不当汇报，命令跑完叫醒它、它真做完了再汇报（ledger/workers.ts）。
  */
 function buildWorkerBackgroundCommandNote(tool: string = specOf(DEFAULT_AGENT_VENDOR).prompt.backgroundCommandTool): string {
-  return `- **长命令放后台**：要等一分钟以上的命令（如等 CI、跑全量测试）用后台运行（如 ${tool}），这一轮先结束；命令跑完会叫醒你，接着做完再汇报（后台命令没跑完时，这一轮的回复不会交给项目经理）。不要 sleep 后反复查状态，每查一次都要多花一步；几秒钟的命令照常在前台跑。`;
+  return `- **长命令放后台**：要等一分钟以上的命令（如等 CI、跑全量测试）用后台运行（如 ${tool}），这一轮先结束；命令跑完会叫醒你，接着做完再汇报（后台命令没跑完时，这一轮的回复不会交给项目经理、也不算汇报）。不要 sleep 后反复查状态，每查一次都要多花一步；几秒钟的命令照常在前台跑。`;
 }
 export const WORKER_BACKGROUND_COMMAND_NOTE = buildWorkerBackgroundCommandNote();
 
@@ -382,29 +393,45 @@ function workerRulesSection(vendor: string = DEFAULT_AGENT_VENDOR): string {
 /** 派活时 --readonly（WorkerRecord.readonly）的 Worker 多一句。 */
 export const WORKER_READONLY_NOTE = "- 这次只读：只看、只查，不改文件，也不跑会改东西的命令；要批准的操作会被系统直接拒绝。结论写进汇报。";
 
-function workerRoleSection(ctx: LaunchContext, worker: WorkerRecord): string {
+function workerRoleSection(ctx: LaunchContext): string {
   return `# 你的角色
 
-你是项目经理“${ctx.pm.name}”派出的 Worker #${worker.id}（${worker.title}）。你只负责做完下面的任务，每做完一轮就把结果汇报给项目经理。
-- 不带标签的消息来自项目经理：第一条是任务说明，之后是它的打回意见或者对你问题的回答。
+你是项目经理“${ctx.pm.name}”派出的 Worker。把第一条消息里交代给你的任务（或你负责的那一步）一口气做完，然后汇报。
+- 第一条消息是你的开工通知，写明你的编号与标题、具体任务说明（或总目标与本步职责）、分配的工作目录与分支，以及上游交棒或前任接手记录。
+- 不带标签的消息来自项目经理（首条开工任务说明，或之后的打回意见、对你问题的回答）。
 - 带有“${USER_TO_WORKER_TAG}”标签的是用户在网页上直接对你说的话：照着做，这一轮的汇报照样交给项目经理（项目经理也会知道用户说了什么）。
 - 你忙的时候收到的几条会拼成一条，开头写“【用户连发了 N 条】”并编号，每一条是谁说的看那一条带不带“${USER_TO_WORKER_TAG}”标签；每一条都回应到。
-- 别的以“【…】”开头的是系统发的消息。以“【系统 · 接手】”开头的第一条，说明你是换人接手这一步：里面是前任没做完时留下的汇报、最后的文字、最后几步操作和原始记录路径。先看 git status 和 git log，接着前任的进度做，不要从头再来。
+- 别的以“【…】”开头的是系统发的消息（如准备命令输出、【系统 · 开工】、【系统 · 交棒】、【系统 · 接手】或用户拍板定案）。
 ${SHARE_FILES_NOTE}
 - 回复用中文，简洁。`;
 }
 
-/** 在哪干活：worktree（路径、分支，不带附加文件夹）或主文件夹（和项目经理一样带附加文件夹）。 */
-function workerWorkspaceSection(project: ProjectCard, worker: WorkerRecord): string {
-  const lines = [`# 在哪干活`, ``, `- 项目：${project.name}`];
+/** 静态项目背景（放在 Worker 系统提示词通用规矩之后，同一项目下所有 Worker 字节级一致）。 */
+function workerProjectSection(project: ProjectCard): string {
+  const lines = [`# 所在项目`, ``, `- 项目：${project.name}`];
   if (project.description) lines.push(`- 说明：${project.description}`);
+  lines.push(`- 项目主文件夹：${project.mainFolder}`);
+  return lines.join("\n");
+}
+
+/** 每个 Worker 各自不同的工作目录与只读说明（进入第一条开工消息，不进静态系统提示词）。 */
+export function workerWorkspaceSection(
+  project: ProjectCard,
+  worker: Pick<WorkerRecord, "workspace" | "worktreePath" | "branch" | "readonly" | "takeoverOf">,
+  options?: { inheritedFromUpstreamWorkerId?: number | null },
+): string {
+  const lines = [`# 在哪干活`, ``];
   if (worker.workspace === "worktree") {
     lines.push(`- 工作目录：${worker.worktreePath}，是项目主文件夹 ${project.mainFolder} 的一个 git worktree，分支：${worker.branch}。`);
-    lines.push(
-      worker.takeoverOf === undefined
-        ? `- 它是从主文件夹最后一次提交开出来的，看不到主文件夹里没提交的改动；依赖可能要重新装（比如 \`pnpm install\`）。`
-        : `- 它是前任 Worker #${worker.takeoverOf} 的工作目录和分支，你接着用：前任没提交的改动、装好的依赖都还在，先看 git status 和 git log。`,
-    );
+    if (options?.inheritedFromUpstreamWorkerId != null) {
+      lines.push(
+        `- 这是上一步（Worker #${options.inheritedFromUpstreamWorkerId}）用过的工作目录和分支：它的提交、没提交的文件和装好的依赖都在。接着在这条分支上干，不要另开分支。`,
+      );
+    } else if (worker.takeoverOf !== undefined) {
+      lines.push(`- 它是前任 Worker #${worker.takeoverOf} 的工作目录和分支，你接着用：前任没提交的改动、装好的依赖都还在，先看 git status 和 git log。`);
+    } else {
+      lines.push(`- 它是从主文件夹最后一次提交（或上游分支）开出来的，看不到主文件夹里没提交的改动；没配准备命令时依赖可能要重新装（比如 \`pnpm install\`）。`);
+    }
   } else {
     lines.push(
       `- 工作目录：项目主文件夹 ${project.mainFolder}（直接在主文件夹里干，不是 worktree）。`,
@@ -417,35 +444,57 @@ function workerWorkspaceSection(project: ProjectCard, worker: WorkerRecord): str
   return lines.join("\n");
 }
 
+/** 单派 Worker（或无上游交棒的手动节点）的第一条开工消息：包含编号标题、动态工作目录/只读说明与任务说明正文。 */
+export function buildWorkerFirstMessage(input: {
+  project: ProjectCard;
+  worker: Pick<WorkerRecord, "id" | "title" | "workspace" | "worktreePath" | "branch" | "readonly" | "takeoverOf">;
+  task: string;
+  inheritedFromUpstreamWorkerId?: number | null;
+}): string {
+  return [
+    `你是 Worker #${input.worker.id}（${input.worker.title}）。`,
+    workerWorkspaceSection(input.project, input.worker, {
+      inheritedFromUpstreamWorkerId: input.inheritedFromUpstreamWorkerId,
+    }),
+    `# 你的任务\n\n${input.task.trim()}`,
+  ].join("\n\n");
+}
+
 function workerReportSection(): string {
   return `# 汇报
 
-你每一轮最后一条回复都要以下面这段结尾（“状态”三选一，其余照实写），项目经理靠它验收：
+你每一轮最后一条回复都要以下面这段八栏格式结尾（“状态”三选一，其余照实写）。后台按它决定接下来怎么走：
+- 状态写“做完了”且“偏离”写“无”：这一步自动完成，“交棒”原样交给接着干的人（下一步的 Worker；没有下一步就是项目经理）。
+- 其余情况（报了“偏离”、状态写“有问题”或“放弃了”）：停下来交给项目经理处理。
 
 ${WORKER_REPORT_FORMAT}
 
-- 没做完也要汇报：卡住了写“有问题”，做不了写“放弃了”，原因写进“问题”。`;
+- **做完了**：这一步职责全部完成、你自己验证过、没有要等别人回答才能继续的事；任务要求提 PR 的，PR 提了、检查通过了才算。没做完也要汇报：卡住了写“有问题”，做不了写“放弃了”，原因写进“问题”。
+- **偏离**：实际要改的范围、设计与任务说明不符，或碰到预期外风险时，如实写清“偏离”踩刹车交给项目经理，不要擅自硬改扩范围；完全按计划做写 \`偏离: 无\`（只是换了局部实现细节不算偏离）。
+- **交棒**：给下一步接手的人看的关键结论、改了哪几处（给文件路径、分支、PR、截图路径，不要把长内容再抄一遍）、分支/目录状态与注意事项；没有下一步或没什么特别交代可写 \`无\`。`;
 }
 
 /**
- * Worker 的提示词（M3）。没有性格设定和模式：Worker 没有名字和性格，做完就散（设计 2.3）；派它的项目经理只用名字。
+ * Worker 的静态系统提示词（s5b 前缀缓存优化）：只保留同一项目下所有 Worker 完全一致的静态通则与项目背景，
+ * 不拼入编号、标题、任务说明、worktree 路径/分支或只读标记，确保同项目不同 Worker 的系统提示词字节级一致。
  * cwd 是 Worker 会话的工作目录（worktree 或主文件夹），只用来判断要不要加“先读 AGENTS.md”。
  */
-export function buildWorkerPrompt(ctx: LaunchContext, cwd: string): string {
+export function buildWorkerSystemPrompt(ctx: LaunchContext, cwd: string): string {
   const { worker, project } = ctx;
   if (worker === null || project === null) throw new Error(`session ${ctx.sessionId} is a worker session without worker or project`);
   const vendor = ctx.vendor ?? DEFAULT_AGENT_VENDOR;
   const parts = [
-    workerRoleSection(ctx, worker),
-    `# 你的任务\n\n${worker.task.trim()}`,
-    workerWorkspaceSection(project, worker),
+    workerRoleSection(ctx),
     workerReportSection(),
     workerRulesSection(vendor),
     WORKER_HUB_USAGE_PROMPT,
+    workerProjectSection(project),
   ];
   if (needsAgentsNote(cwd, specOf(vendor).prompt.instructionFile)) parts.push(AGENTS_NOTE);
   return parts.join("\n\n") + "\n";
 }
+
+export const buildWorkerPrompt = buildWorkerSystemPrompt;
 
 /**
  * 算 fingerprint 用的提示词：性格设定、模式换成固定的、厂商状态不算（它们变了不重启，见 driver.ts 的“两轮之间自动重启”），别的同 buildLaunchPrompt。

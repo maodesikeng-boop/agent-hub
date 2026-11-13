@@ -26,7 +26,7 @@ import type {
 } from "./domain.ts";
 import type { RouterItem, RouterPmNote, RouterReportLink } from "./router.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
-import type { AgentVendor, VendorAvailability } from "./vendors.ts";
+import { AGENT_VENDORS, DEFAULT_AGENT_VENDOR, type AgentVendor, type VendorAvailability } from "./vendors.ts";
 // ledger.ts 只从这里引类型，没有运行时的循环引用
 import { API_ERRORS } from "./errors.ts";
 import { LEDGER_ERROR_HTTP_STATUS } from "./ledger.ts";
@@ -204,8 +204,8 @@ export interface HubArgsMap {
   "worker.send": { workerId: WorkerId; text: string; maxTimeMs?: number };
   /** `hub worker max-time <编号> <时长>`：单独延时或更新正在运行的 Worker 本轮最大时间（从现在重新计时）。 */
   "worker.max-time": { workerId: WorkerId; maxTimeMs: number };
-  /** `hub worker end <编号> [--incomplete]`：结束 Worker 会话（登记 session.end），Worker 标 ended；incomplete 为 true 时绑定节点变等人（等项目经理）供接力重绑。 */
-  "worker.end": { workerId: WorkerId; incomplete?: boolean };
+  /** `hub worker end <编号>`：停掉这个 Worker（登记 session.end），Worker 标 ended；绑在任务图未完成步骤上的会变成等你处理（不再标完成）。 */
+  "worker.end": { workerId: WorkerId };
   /** `hub worker list`：我派出去的 Worker。 */
   "worker.list": Record<string, never>;
   /**
@@ -301,6 +301,8 @@ export interface HubArgsMap {
     commit?: string;
     branch?: string;
     summary?: string;
+    /** PM 放行时补给下一步的话（--stdin 正文）。 */
+    note?: string;
   };
   /** `hub graph decide <nodeKey>`：PM 代填用户在对话中口头拍板的结论，步骤完了，下游轮到。 */
   "graph.decide": {
@@ -331,6 +333,15 @@ export interface HubArgsMap {
 export interface CreateTaskGraphNodeInput {
   key: TaskNodeKey;
   title: string;
+  brief?: string;
+  vendor?: AgentVendor;
+  model?: string;
+  effort?: string;
+  maxTime?: string | number;
+  readonly?: boolean;
+  confirm?: boolean;
+  review?: boolean;
+  base?: "main";
   deps?: TaskNodeKey[];
   /** 写了问题就是挂着拍板卡的步骤：轮到时等用户拍板。 */
   question?: string;
@@ -339,6 +350,8 @@ export interface CreateTaskGraphNodeInput {
   recommended?: string;
 }
 
+export type CreateTaskGraphStepInput = CreateTaskGraphNodeInput;
+
 export interface CreateTaskGraphEdgeInput {
   from: TaskNodeKey;
   to: TaskNodeKey;
@@ -346,14 +359,25 @@ export interface CreateTaskGraphEdgeInput {
 
 export interface CreateTaskGraphSpecInput {
   title?: string;
+  goal?: string;
   originMsgId?: MessageId;
-  nodes: CreateTaskGraphNodeInput[];
+  steps?: CreateTaskGraphStepInput[];
+  nodes?: CreateTaskGraphNodeInput[];
   edges?: CreateTaskGraphEdgeInput[];
 }
 
 export interface PatchTaskGraphNodeInput {
   key: TaskNodeKey;
   title?: string;
+  brief?: string | null;
+  vendor?: AgentVendor | null;
+  model?: string | null;
+  effort?: string | null;
+  maxTime?: string | number | null;
+  readonly?: boolean;
+  confirm?: boolean;
+  review?: boolean;
+  base?: "main" | null;
   deps?: TaskNodeKey[];
   question?: string;
   options?: string[];
@@ -361,8 +385,15 @@ export interface PatchTaskGraphNodeInput {
   recommended?: string;
 }
 
+export type PatchTaskGraphStepInput = PatchTaskGraphNodeInput;
+
 export interface PatchTaskGraphSpecInput {
   title?: string;
+  goal?: string | null;
+  addSteps?: CreateTaskGraphStepInput[];
+  updateSteps?: PatchTaskGraphStepInput[];
+  removeSteps?: TaskNodeKey[];
+  skipSteps?: TaskNodeKey[];
   addNodes?: CreateTaskGraphNodeInput[];
   updateNodes?: PatchTaskGraphNodeInput[];
   removeNodes?: TaskNodeKey[];
@@ -372,13 +403,14 @@ export interface PatchTaskGraphSpecInput {
   removeEdges?: CreateTaskGraphEdgeInput[];
 }
 
-/** `hub graph create` 正文 JSON 一行字段示例（提示词与 `hub --help` 共用；顶层 title 可改用 --title 传；要用户先看的步骤带 question / options，还可带 recommended / summaryMd）。 */
+/** `hub graph create` 正文 JSON 一行字段示例（任务图手册与 `hub --help` 共用；顶层 title 可改用 --title 传；steps 不写 deps 默认按顺序串接，带 brief 自动开工）。 */
+const EXAMPLE_REVIEW_VENDOR = AGENT_VENDORS.find((vendor) => vendor !== DEFAULT_AGENT_VENDOR) ?? DEFAULT_AGENT_VENDOR;
 export const TASK_GRAPH_CREATE_JSON_HINT =
-  '{"title":"…","nodes":[{"key":"plan","title":"…"},{"key":"ok","title":"…","deps":["plan"],"question":"…","options":["…","…"]}]}';
+  `{"title":"…","goal":"…","steps":[{"key":"impl","title":"…","brief":"…"},{"key":"review","title":"…","brief":"…","review":true,"vendor":"${EXAMPLE_REVIEW_VENDOR}"}]}`;
 
-/** `hub graph patch` 正文 JSON 一行字段示例（提示词与 `hub help` 共用，只此一份；六个字段按需取用；updateNodes 的 deps 整体替换该节点前置依赖；skipNodes 跳过还没开工的节点）。 */
+/** `hub graph patch` 正文 JSON 一行字段示例（任务图手册与 `hub help` 共用，只此一份；按需取用；updateSteps 只能改还没开工的步骤；skipSteps 跳过还没开工的步骤）。 */
 export const TASK_GRAPH_PATCH_JSON_HINT =
-  '{"addNodes":[{"key":"qa","title":"…","deps":["ok"]}],"updateNodes":[{"key":"ok","title":"…"}],"removeNodes":["old"],"skipNodes":["polish"],"addEdges":[{"from":"plan","to":"qa"}],"removeEdges":[{"from":"a","to":"b"}]}';
+  '{"goal":"…","addSteps":[{"key":"qa","title":"…","brief":"…","deps":["review"]}],"updateSteps":[{"key":"review","brief":"…"}],"removeSteps":["old"],"skipSteps":["polish"]}';
 
 export type HubArgs<C extends HubCommand> = HubArgsMap[C];
 
@@ -423,6 +455,17 @@ interface PmHubStatus {
   activeTaskGraphs?: PmActiveGraphSummary[];
 }
 
+/** Worker 调 hub status 时上游步骤的交棒摘要与落盘路径。 */
+export interface WorkerHubStatusUpstream {
+  key: TaskNodeKey;
+  title: string;
+  skipped: boolean;
+  summary: string | null;
+  branch: string | null;
+  prUrl: string | null;
+  reportFile: string | null;
+}
+
 /** Worker 调 hub status（M3）：我是哪个 Worker、任务是什么、在哪干活。 */
 export interface WorkerHubStatus {
   role: "worker";
@@ -433,6 +476,18 @@ export interface WorkerHubStatus {
   conversationId: ConversationId;
   worker: WorkerRecord;
   project: ProjectCard;
+  /** 所属任务图步骤信息（临时 Worker 没有此字段）。 */
+  taskGraph?: {
+    id: TaskGraphId;
+    title: string;
+    goal: string | null;
+    stepKey: TaskNodeKey;
+    stepTitle: string;
+    stepIndex: number;
+    totalSteps: number;
+    brief: string | null;
+    upstream: WorkerHubStatusUpstream[];
+  };
 }
 
 /** hub worker search 的一处命中：where 是 title、task 或 report；report 时 report 是第几轮汇报（从 1 起，按时间）。 */

@@ -34,7 +34,7 @@ const canNestOsSandbox =
     : osSandboxAvailable();
 
 /** 只有 Worker 的提示词里有的一句（daemon/prompt.ts 的 buildWorkerPrompt）：假 agy、codex 靠它认出自己是 Worker。 */
-const WORKER_PROMPT_MARK = "# 你的任务";
+const WORKER_PROMPT_MARK = "# 你的规矩";
 
 function shortTmp(): string {
   const base = tmpdir();

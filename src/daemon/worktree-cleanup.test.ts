@@ -683,7 +683,7 @@ describe("worktree 自动清理", () => {
     const wt = await addWorktree({ repoFolder: repo, worktreePath: w1.worktreePath!, branch: w1.branch! });
     ledger.onWorktreeCreated(w1.id, wt.baseCommit);
     // 前任 0 提交、目录干净就收工（HEAD === baseCommit，单独看会被“0 提交秒清”）
-    ledger.hubCall(pm.sessionId, "worker.end", { workerId: w1.id, incomplete: true });
+    ledger.hubCall(pm.sessionId, "worker.end", { workerId: w1.id });
 
     // 前任收工满 3 天后，后任接手同一目录，仍开着
     now += WORKTREE_RETENTION_MS + 1_000;
@@ -713,7 +713,7 @@ describe("worktree 自动清理", () => {
 
     // 3. 后任收工、取消任务图：分支有未合并提交，且按末任收工时间算还没满 3 天（前任早已满 3 天也不行）
     now += 60_000;
-    ledger.hubCall(pm.sessionId, "worker.end", { workerId: w2.id, incomplete: true });
+    ledger.hubCall(pm.sessionId, "worker.end", { workerId: w2.id });
     ledger.hubCall(pm.sessionId, "graph.cancel", { graphId: graph.id });
     expect(await cleanup.runOnce()).toEqual([]);
     expect(existsSync(dir)).toBe(true);
@@ -740,7 +740,7 @@ describe("worktree 自动清理", () => {
     writeFileSync(join(w1.worktreePath!, "step1.txt"), "progress\n");
     git(w1.worktreePath!, "add", "-A");
     git(w1.worktreePath!, "commit", "-q", "-m", "wip");
-    ledger.hubCall(pm.sessionId, "worker.end", { workerId: w1.id, incomplete: true });
+    ledger.hubCall(pm.sessionId, "worker.end", { workerId: w1.id });
 
     // 4 天后 w2 接手同一个 worktree，随即收工并取消任务图（分支未合并）
     now += WORKTREE_RETENTION_MS + 86_400_000;
@@ -752,7 +752,7 @@ describe("worktree 自动清理", () => {
     ).data.worker;
     expect(w2.worktreePath).toBe(w1.worktreePath);
     now += 60_000;
-    ledger.hubCall(pm.sessionId, "worker.end", { workerId: w2.id, incomplete: true });
+    ledger.hubCall(pm.sessionId, "worker.end", { workerId: w2.id });
     ledger.hubCall(pm.sessionId, "graph.cancel", { graphId: graph.id });
 
     const cleanup = createWorktreeCleanup({ ledger, worktreesDir, log: (l) => logs.push(l), now: () => now });

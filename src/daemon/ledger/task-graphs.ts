@@ -1,4 +1,5 @@
 // 持久化任务流图（Task DAG）账本模块：Kahn O(V+E) 拓扑校验、同源门禁（gateRef）、Worker 绑定接力与实时交接摘要。
+import { existsSync } from "node:fs";
 import { z } from "zod";
 import type {
   CancelTaskGraphRequest,
@@ -17,6 +18,7 @@ import {
   taskNodeStatusText,
   truncateChars,
   userMessageDedupeKey,
+  utf8Bytes,
   validateAskOptions,
 } from "../../shared/domain.ts";
 import type {
@@ -25,6 +27,7 @@ import type {
   MessageId,
   PmId,
   ProjectId,
+  SessionId,
   SystemMessageMeta,
   TaskArtifact,
   TaskDecision,
@@ -37,13 +40,18 @@ import type {
   TaskNodeStatus,
   TaskNodeWaitingFor,
   WorkerId,
+  WorkerRecord,
 } from "../../shared/domain.ts";
 import type {
   CreateTaskGraphSpecInput,
   HubArgs,
+  HubCommand,
   HubResult,
   PatchTaskGraphSpecInput,
   PmActiveGraphSummary,
+  ProjectCard,
+  WorkerHubStatus,
+  WorkerHubStatusUpstream,
   WorkerPr,
 } from "../../shared/hub.ts";
 import type { GraphPrTarget, HubCallContext } from "../../shared/ledger.ts";
@@ -63,19 +71,39 @@ import {
   MAX_GATE_QUESTION_CHARS,
   MAX_GATE_SUMMARY_CHARS,
   MAX_GRAPH_EDGES,
+  MAX_GRAPH_GOAL_CHARS,
   MAX_GRAPH_NODES,
   MAX_GRAPH_SPEC_BYTES,
   MAX_GRAPH_TITLE_CHARS,
   MAX_NODE_ARTIFACT_SUMMARY_CHARS,
   MAX_NODE_KEY_CHARS,
   MAX_NODE_TITLE_CHARS,
+  MAX_STEP_BRIEF_CHARS,
+  MAX_TASK_BYTES,
   ROUTER_REPORT_LINKS_MAX,
   ROUTER_REPORT_LINK_LABEL_MAX_CHARS,
   ROUTER_REPORT_LINK_TARGET_MAX_CHARS,
 } from "../../shared/limits.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import type { RouterReportLink } from "../../shared/router.ts";
-import { parseWorkerReport } from "../../shared/worker.ts";
+import { checkWorkerMaxTimeMs, parseWorkerMaxTime } from "../../shared/schedule.ts";
+import {
+  AGENT_VENDORS,
+  DEFAULT_AGENT_VENDOR,
+  checkEffort,
+  checkModel,
+  checkModelEffort,
+  isAgentVendor,
+  splitModelEffort,
+  type AgentVendor,
+} from "../../shared/vendors.ts";
+import {
+  extractReportPrUrl,
+  hasReportQuestion,
+  parseWorkerReport,
+  unwrapWorkerReportText,
+  type ParsedWorkerReport,
+} from "../../shared/worker.ts";
 import { fail } from "./context.ts";
 import type { LedgerContext, Pending } from "./context.ts";
 import type { LedgerMessages } from "./messages.ts";
@@ -84,6 +112,15 @@ import type { LedgerProjects } from "./projects.ts";
 import type { LedgerRouter } from "./router.ts";
 import { toMessage, type MessageDbRow } from "./rows.ts";
 import type { LedgerSessions } from "./sessions.ts";
+import {
+  buildStepFirstMessage,
+  formatStepUpstreamForTakeover,
+  formatStepWaitingPmMessage,
+  renderGraphStepTask,
+  upstreamReportFilePath,
+  type DirectUpstreamEntry,
+  type UpstreamSourceInfo,
+} from "./task-graph-handoff.ts";
 
 interface TaskGraphDbRow {
   id: number;
@@ -91,6 +128,7 @@ interface TaskGraphDbRow {
   pm_id: number;
   conversation_id: number;
   title: string;
+  goal: string | null;
   status: string;
   origin_msg_id: number | null;
   created_at: number;
@@ -103,6 +141,16 @@ interface TaskNodeDbRow {
   graph_id: number;
   node_key: string;
   title: string;
+  brief: string | null;
+  vendor: string | null;
+  model: string | null;
+  effort: string | null;
+  readonly: number;
+  max_time_ms: number | null;
+  confirm: number;
+  review: number;
+  base: string | null;
+  pm_note: string | null;
   status: string;
   waiting_for: string | null;
   skipped: number;
@@ -163,6 +211,44 @@ function validateGraphTitle(raw: string): string {
     throw fail("invalid", `任务图标题不能为空或换行，且最多 ${MAX_GRAPH_TITLE_CHARS} 字`);
   }
   return title;
+}
+
+function validateGraphGoal(raw: string | null | undefined): string | null {
+  if (raw === undefined || raw === null) return null;
+  const goal = raw.trim();
+  if (goal === "") return null;
+  if (charLen(goal) > MAX_GRAPH_GOAL_CHARS) {
+    throw fail("invalid", `任务图目标最多 ${MAX_GRAPH_GOAL_CHARS} 字`);
+  }
+  return goal;
+}
+
+function validateStepBrief(raw: string | null | undefined): string | null {
+  if (raw === undefined || raw === null) return null;
+  const brief = raw.trim();
+  if (brief === "") return null;
+  if (charLen(brief) > MAX_STEP_BRIEF_CHARS) {
+    throw fail("invalid", `步骤职责最多 ${MAX_STEP_BRIEF_CHARS} 字`);
+  }
+  return brief;
+}
+
+function validateStepBase(raw: string | null | undefined): "main" | null {
+  if (raw === undefined || raw === null || raw === "") return null;
+  if (raw !== "main") throw fail("invalid", '步骤 base 目前只支持 "main"');
+  return "main";
+}
+
+function validateStepMaxTime(raw: string | number | null | undefined): number | null {
+  if (raw === undefined || raw === null || raw === "") return null;
+  if (typeof raw === "string") {
+    const parsed = parseWorkerMaxTime(raw.trim());
+    if (!parsed.ok) throw fail("invalid", `步骤 maxTime 不合法：${parsed.error}`);
+    return parsed.maxTimeMs;
+  }
+  const err = checkWorkerMaxTimeMs(raw);
+  if (err !== null) throw fail("invalid", `步骤 maxTime 不合法：${err}`);
+  return raw;
 }
 
 function validateGateFields(input: {
@@ -290,21 +376,32 @@ export function validateDagAndOrder(nodeKeys: readonly TaskNodeKey[], edges: rea
   return order;
 }
 
+const createStepItemSchema = z.object({
+  key: z.string(),
+  title: z.string(),
+  brief: z.string().optional(),
+  vendor: z.string().optional(),
+  model: z.string().optional(),
+  effort: z.string().optional(),
+  maxTime: z.union([z.string(), z.number()]).optional(),
+  readonly: z.boolean().optional(),
+  confirm: z.boolean().optional(),
+  review: z.boolean().optional(),
+  base: z.string().optional(),
+  draft: z.boolean().optional(),
+  deps: z.array(z.string()).optional(),
+  question: z.string().optional(),
+  options: z.array(z.string()).optional(),
+  summaryMd: z.string().optional(),
+  recommended: z.string().optional(),
+});
+
 const createSpecSchema = z.object({
   title: z.string().optional(),
+  goal: z.string().optional(),
   originMsgId: z.number().int().positive().optional(),
-  nodes: z.array(
-    z.object({
-      key: z.string(),
-      title: z.string(),
-      draft: z.boolean().optional(),
-      deps: z.array(z.string()).optional(),
-      question: z.string().optional(),
-      options: z.array(z.string()).optional(),
-      summaryMd: z.string().optional(),
-      recommended: z.string().optional(),
-    }),
-  ),
+  steps: z.array(createStepItemSchema).optional(),
+  nodes: z.array(createStepItemSchema).optional(),
   edges: z
     .array(
       z.object({
@@ -315,43 +412,42 @@ const createSpecSchema = z.object({
     .optional(),
 });
 
+const patchUpdateItemSchema = z.object({
+  key: z.string(),
+  title: z.string().optional(),
+  brief: z.string().nullable().optional(),
+  vendor: z.string().nullable().optional(),
+  model: z.string().nullable().optional(),
+  effort: z.string().nullable().optional(),
+  maxTime: z.union([z.string(), z.number()]).nullable().optional(),
+  readonly: z.boolean().optional(),
+  confirm: z.boolean().optional(),
+  review: z.boolean().optional(),
+  base: z.string().nullable().optional(),
+  deps: z.array(z.string()).optional(),
+  question: z.string().optional(),
+  options: z.array(z.string()).optional(),
+  summaryMd: z.string().optional(),
+  recommended: z.string().optional(),
+});
+
 const patchSpecSchema = z.object({
   title: z.string().optional(),
-  addNodes: z
-    .array(
-      z.object({
-        key: z.string(),
-        title: z.string(),
-        draft: z.boolean().optional(),
-        deps: z.array(z.string()).optional(),
-        question: z.string().optional(),
-        options: z.array(z.string()).optional(),
-        summaryMd: z.string().optional(),
-        recommended: z.string().optional(),
-      }),
-    )
-    .optional(),
-  updateNodes: z
-    .array(
-      z.object({
-        key: z.string(),
-        title: z.string().optional(),
-        deps: z.array(z.string()).optional(),
-        question: z.string().optional(),
-        options: z.array(z.string()).optional(),
-        summaryMd: z.string().optional(),
-        recommended: z.string().optional(),
-      }),
-    )
-    .optional(),
+  goal: z.string().nullable().optional(),
+  addSteps: z.array(createStepItemSchema).optional(),
+  updateSteps: z.array(patchUpdateItemSchema).optional(),
+  removeSteps: z.array(z.string()).optional(),
+  skipSteps: z.array(z.string()).optional(),
+  addNodes: z.array(createStepItemSchema).optional(),
+  updateNodes: z.array(patchUpdateItemSchema).optional(),
   removeNodes: z.array(z.string()).optional(),
   skipNodes: z.array(z.string()).optional(),
   addEdges: z.array(z.object({ from: z.string(), to: z.string() })).optional(),
   removeEdges: z.array(z.object({ from: z.string(), to: z.string() })).optional(),
 });
 
-function toTaskNode(row: TaskNodeDbRow): TaskNode {
-  return {
+function toTaskNode(row: TaskNodeDbRow, includeDetails = false): TaskNode {
+  const base: TaskNode = {
     key: row.node_key,
     title: row.title,
     status: row.status as TaskNodeStatus,
@@ -369,6 +465,19 @@ function toTaskNode(row: TaskNodeDbRow): TaskNode {
     decision: parseJsonOr<TaskDecision | null>(row.decision_json, null),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+  if (!includeDetails) return base;
+  return {
+    ...base,
+    brief: row.brief,
+    vendor: row.vendor,
+    model: row.model,
+    effort: row.effort,
+    readonly: row.readonly === 1,
+    maxTimeMs: row.max_time_ms,
+    confirm: row.confirm === 1,
+    review: row.review === 1,
+    base: row.base === "main" ? "main" : null,
   };
 }
 
@@ -449,27 +558,57 @@ interface TurnedStep {
   waitingFor: TaskNodeWaitingFor;
 }
 
+interface ProgressResult {
+  turned: TurnedStep[];
+  dispatched: Array<{ key: TaskNodeKey; title: string; workerId: WorkerId }>;
+  dispatchFailed: Array<{ key: TaskNodeKey; title: string; index: number; total: number; reason: string }>;
+}
+
 const turnedListText = (turned: readonly TurnedStep[]): string =>
   turned.map((u) => `${u.key} [${taskNodeStatusText({ status: "waiting", waitingFor: u.waitingFor, skipped: false }, "pm")}]`).join("、");
 
 /** 改图的命令回执里共用的一段：这次轮到了哪些步骤，或者全部步骤是否已完了待交付。 */
-function unlockedNoteOf(unlocked: readonly TurnedStep[], graph: TaskGraph): string {
-  if (unlocked.length > 0) {
-    const pmKeys = unlocked.filter((u) => u.waitingFor === "pm").map((u) => u.key);
-    const dispatch = pmKeys.length > 0 ? `（给它派 Worker：${HUB_COMMAND} worker start --node ${pmKeys[0]} --graph ${graph.id}）` : "";
-    return `；轮到了：${turnedListText(unlocked)}${dispatch}`;
+function unlockedNoteOf(progress: ProgressResult, graph: TaskGraph): string {
+  const parts: string[] = [];
+  if (progress.dispatched.length > 0) {
+    parts.push(`已自动开工：${progress.dispatched.map((d) => `${d.key}（Worker #${d.workerId}）`).join("、")}`);
   }
+  for (const f of progress.dispatchFailed) {
+    parts.push(
+      `步骤「${f.key}」自动开工未成功（${f.reason}），已置为等你处理（换人：${HUB_COMMAND} worker start --node ${f.key} --graph ${graph.id} --vendor <别家>）`,
+    );
+  }
+  if (progress.turned.length > 0) {
+    const pmKeys = progress.turned.filter((u) => u.waitingFor === "pm").map((u) => u.key);
+    const dispatch = pmKeys.length > 0 ? `（给它派 Worker：${HUB_COMMAND} worker start --node ${pmKeys[0]} --graph ${graph.id}）` : "";
+    parts.push(`轮到了：${turnedListText(progress.turned)}${dispatch}`);
+  }
+  if (parts.length > 0) return `；${parts.join("；")}`;
   if (isTaskGraphReadyToFinish(graph)) {
     return `；全部节点已完成（待交付），验收合并后用 ${HUB_COMMAND} graph finish 结束任务图`;
   }
   return graph.status === "completed" ? "；整张任务图已全部完结！" : "";
 }
 
+export type StepWorkspacePlan =
+  | { kind: "inherit"; fromWorkerId: WorkerId; worktreePath: string; branch: string; baseCommit: string }
+  | { kind: "fork"; baseBranch: string }
+  | { kind: "fresh" };
+
 export interface WorkerBindTarget {
   graphId: TaskGraphId;
   nodeKey: TaskNodeKey;
   graphTitle: string;
+  graphGoal: string | null;
   nodeTitle: string;
+  brief: string | null;
+  vendor: string | null;
+  model: string | null;
+  effort: string | null;
+  readonly: boolean;
+  maxTimeMs: number | null;
+  review: boolean;
+  base: "main" | null;
   /** 这一步在图里排第几（按节点顺序，从 1 起）、一共几步。 */
   index: number;
   total: number;
@@ -477,6 +616,45 @@ export interface WorkerBindTarget {
   activeWorkerId: WorkerId | null;
   /** 经手过这个节点的 Worker，从旧到新；不是空的就是换人接手（docs/orchestration-simplify-design.md 第 5.2 节）。 */
   workerIds: WorkerId[];
+  workspacePlan: StepWorkspacePlan;
+  buildFirstMessage: (
+    sessionId: SessionId,
+    opts: {
+      inheritedFromWorkerId: WorkerId | null;
+      worker: WorkerRecord;
+      project: ProjectCard;
+      task: string;
+    },
+  ) => string;
+  buildUpstreamHandoff: (sessionId: SessionId, inheritedFromWorkerId: WorkerId | null) => string | null;
+}
+
+export interface TaskGraphWorkersBridge {
+  dispatchStepWorkerIn(
+    p: Pending,
+    input: {
+      pmId: PmId;
+      pmVendor: AgentVendor;
+      pmModel: string | null;
+      pmEffort: string | null;
+      title: string;
+      task: string;
+      vendor: AgentVendor | null;
+      model: string | null;
+      effort: string | null;
+      readonly: boolean;
+      maxTimeMs: number | null;
+      workspacePlan: StepWorkspacePlan;
+      buildFirstMessage: (
+        sessionId: SessionId,
+        inheritedFromWorkerId: WorkerId | null,
+        worker: WorkerRecord,
+        project: ProjectCard,
+      ) => string;
+      context?: HubCallContext;
+    },
+  ): WorkerRecord;
+  stopWorkersIn(p: Pending, workerIds: readonly WorkerId[]): WorkerId[];
 }
 
 export type LedgerTaskGraphs = ReturnType<typeof createLedgerTaskGraphs>;
@@ -488,10 +666,34 @@ export function createLedgerTaskGraphs(
   persona: LedgerPersona,
   projects: LedgerProjects,
   router: Pick<LedgerRouter, "reportIn">,
+  options: { launchDir: string; workers?: () => TaskGraphWorkersBridge | undefined } = { launchDir: "" },
 ) {
   const { db, now, write, enqueue } = ctx;
-  const { assertPmNotArchived, privateConversation } = persona;
+  const { assertPmNotArchived, privateConversation, pmRow } = persona;
   const { activeProjectOf } = projects;
+
+  const validateStepAgentSetting = (
+    input: { vendor?: string | null; model?: string | null; effort?: string | null },
+    fallbackVendor: AgentVendor,
+  ): { vendor: AgentVendor | null; model: string | null; effort: string | null } => {
+    let resolvedVendor: AgentVendor | null = null;
+    if (input.vendor !== undefined && input.vendor !== null && input.vendor.trim() !== "") {
+      const rawV = input.vendor.trim();
+      if (!isAgentVendor(rawV)) throw fail("invalid", `厂商只能是 ${AGENT_VENDORS.join("、")}`);
+      resolvedVendor = rawV;
+    }
+    const targetVendor = resolvedVendor ?? fallbackVendor;
+    const givenModel = typeof input.model === "string" ? input.model.trim() || null : null;
+    const givenEffort = typeof input.effort === "string" ? input.effort.trim() || null : null;
+    const catalog = ctx.modelCatalog(targetVendor);
+    const bad =
+      checkModel(targetVendor, givenModel) ??
+      checkEffort(targetVendor, givenEffort, catalog) ??
+      checkModelEffort(targetVendor, givenModel, givenEffort, catalog);
+    if (bad !== null) throw fail("invalid", bad);
+    const { model, effort } = splitModelEffort(targetVendor, givenModel, givenEffort, catalog);
+    return { vendor: resolvedVendor, model, effort };
+  };
 
   const mainFolderOf = (projectId: ProjectId): string | null =>
     db.get<{ path: string }>(
@@ -502,7 +704,7 @@ export function createLedgerTaskGraphs(
   const getGraphRow = (id: TaskGraphId): TaskGraphDbRow | undefined =>
     db.get<TaskGraphDbRow>("SELECT * FROM task_graphs WHERE id = ?", id);
 
-  const loadGraph = (id: TaskGraphId): TaskGraph | null => {
+  const loadGraph = (id: TaskGraphId, includeDetails = true): TaskGraph | null => {
     const row = getGraphRow(id);
     if (row === undefined) return null;
     const nodeRows = db.all<TaskNodeDbRow>(
@@ -519,9 +721,10 @@ export function createLedgerTaskGraphs(
       pmId: row.pm_id,
       conversationId: row.conversation_id,
       title: row.title,
+      ...(includeDetails ? { goal: row.goal } : {}),
       status: row.status as TaskGraphStatus,
       originMsgId: row.origin_msg_id,
-      nodes: nodeRows.map(toTaskNode),
+      nodes: nodeRows.map((n) => toTaskNode(n, includeDetails)),
       edges: edgeRows.map((e) => ({ fromKey: e.from_key, toKey: e.to_key })),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -746,6 +949,26 @@ export function createLedgerTaskGraphs(
       lines.push(`拍板：「${q}」定案 ${choiceText}${noteText}`);
     }
 
+    // 第 6 节交付单：附上最后一步的交棒原文（若有）
+    const lastActiveNode = [...graph.nodes].reverse().find((n) => !n.skipped && n.workerIds.length > 0);
+    if (lastActiveNode !== undefined) {
+      const lastWid = lastActiveNode.workerIds[lastActiveNode.workerIds.length - 1]!;
+      const reportMsg = db.get<{ text: string }>(
+        `SELECT text FROM messages
+           WHERE conversation_id = ? AND kind = 'worker' AND worker_id = ?
+             AND CASE WHEN json_valid(meta) THEN json_extract(meta, '$.event') = 'report' ELSE 0 END
+           ORDER BY id DESC LIMIT 1`,
+        graph.conversationId,
+        lastWid,
+      );
+      if (reportMsg !== undefined) {
+        const parsed = parseWorkerReport(reportMsg.text);
+        if (parsed.kind === "ok" && parsed.report.handoff.trim() !== "") {
+          lines.push(`最后一步的交棒：\n${parsed.report.handoff.trim()}`);
+        }
+      }
+    }
+
     if (extra?.files !== undefined) {
       if (extra.files.length === 0) {
         lines.push("改动文件（相对主干）：无提交改动");
@@ -865,45 +1088,298 @@ export function createLedgerTaskGraphs(
     enqueue(p, { type: "session.send", params: { sessionId: pmSession.id, messageId: row.id, source: "system" } });
   };
 
+  /** 从账本读取单个未跳过完成步骤的交棒信息与完整汇报原文。 */
+  const buildUpstreamSourceInfo = (graphRow: TaskGraphDbRow, node: TaskNodeDbRow): UpstreamSourceInfo => {
+    const artifact = parseJsonOr<TaskArtifact | null>(node.artifact_json, null);
+    const decision = parseJsonOr<TaskDecision | null>(node.decision_json, null);
+    const workerIds = parseJsonOr<WorkerId[]>(node.worker_ids_json, []);
+    const lastWid = workerIds.length > 0 ? workerIds[workerIds.length - 1]! : null;
+    let workerTitle = node.title;
+    let workerBranch: string | null = null;
+    let reportSummary: string | null = null;
+    let reportCommit: string | null = null;
+    let reportPr: string | null = null;
+    let reportTests: string | null = null;
+    let reportHandoff = "";
+    let rawReportBody = "";
+
+    if (lastWid !== null) {
+      const w = db.get<{ title: string; branch: string | null }>(
+        "SELECT title, branch FROM workers WHERE id = ?",
+        lastWid,
+      );
+      if (w !== undefined) {
+        workerTitle = w.title;
+        workerBranch = w.branch;
+      }
+      const reportMsg = db.get<{ text: string }>(
+        `SELECT text FROM messages
+           WHERE conversation_id = ? AND kind = 'worker' AND worker_id = ?
+             AND CASE WHEN json_valid(meta) THEN json_extract(meta, '$.event') = 'report' ELSE 0 END
+           ORDER BY id DESC LIMIT 1`,
+        graphRow.conversation_id,
+        lastWid,
+      );
+      if (reportMsg !== undefined) {
+        rawReportBody = unwrapWorkerReportText({ id: lastWid, title: workerTitle }, reportMsg.text);
+        const parsed = parseWorkerReport(rawReportBody);
+        if (parsed.kind === "ok") {
+          reportSummary = parsed.report.summary;
+          reportCommit = parsed.report.commit;
+          reportPr = parsed.report.pr;
+          reportTests = parsed.report.tests.trim() || null;
+          reportHandoff = parsed.report.handoff;
+        } else if (parsed.summary) {
+          reportSummary = parsed.summary;
+        }
+      }
+    }
+
+    const summary = artifact?.summary?.trim() || reportSummary;
+    const commit = artifact?.commit?.trim() || reportCommit;
+    const pr = artifact?.prUrl?.trim() || reportPr;
+    const branch = artifact?.branch?.trim() || workerBranch;
+    const pmNote = node.pm_note;
+    const fullParts = [`# 上游步骤「${node.title}」（${node.node_key}）完整汇报`];
+    if (rawReportBody.trim() !== "") fullParts.push(rawReportBody.trim());
+    if (pmNote && pmNote.trim() !== "") fullParts.push(`## 项目经理放行补充\n\n${pmNote.trim()}`);
+    if (rawReportBody.trim() === "" && (!pmNote || pmNote.trim() === "") && summary) {
+      fullParts.push(summary);
+    }
+
+    return {
+      key: node.node_key,
+      title: node.title,
+      workerId: lastWid,
+      summary: summary ?? null,
+      commit: commit ?? null,
+      pr: pr ?? null,
+      tests: reportTests,
+      branch: branch ?? null,
+      handoff: reportHandoff,
+      pmNote,
+      fullReportMarkdown: fullParts.join("\n\n") + "\n",
+      decision,
+      gateQuestion: node.gate_question,
+    };
+  };
+
+  /** 向上追溯被跳过节点的最近未跳过完成祖先（遇到 skipped = 0 停下收录，遇到 skipped = 1 继续往上）。 */
+  const traceNearestNonSkippedAncestors = (
+    graphRow: TaskGraphDbRow,
+    startKey: TaskNodeKey,
+    byKey: ReadonlyMap<TaskNodeKey, TaskNodeDbRow>,
+    incoming: ReadonlyMap<TaskNodeKey, readonly TaskNodeKey[]>,
+  ): UpstreamSourceInfo[] => {
+    const queue = [...(incoming.get(startKey) ?? [])];
+    const visited = new Set<TaskNodeKey>();
+    const found: TaskNodeDbRow[] = [];
+    while (queue.length > 0) {
+      const k = queue.shift()!;
+      if (visited.has(k)) continue;
+      visited.add(k);
+      const n = byKey.get(k);
+      if (n === undefined) continue;
+      if (n.skipped === 1) {
+        for (const up of incoming.get(k) ?? []) queue.push(up);
+      } else if (n.status === "done") {
+        found.push(n);
+      }
+    }
+    found.sort((a, b) => a.sort_order - b.sort_order || a.id - b.id);
+    return found.map((n) => buildUpstreamSourceInfo(graphRow, n));
+  };
+
+  const collectDirectUpstreams = (
+    graphRow: TaskGraphDbRow,
+    stepKey: TaskNodeKey,
+    byKey: ReadonlyMap<TaskNodeKey, TaskNodeDbRow>,
+    incoming: ReadonlyMap<TaskNodeKey, readonly TaskNodeKey[]>,
+  ): DirectUpstreamEntry[] => {
+    const upKeys = [...(incoming.get(stepKey) ?? [])];
+    upKeys.sort((a, b) => {
+      const na = byKey.get(a);
+      const nb = byKey.get(b);
+      return (na?.sort_order ?? 0) - (nb?.sort_order ?? 0) || (na?.id ?? 0) - (nb?.id ?? 0);
+    });
+    return upKeys.flatMap((uk): DirectUpstreamEntry[] => {
+      const u = byKey.get(uk);
+      if (u === undefined) return [];
+      if (u.skipped === 0) {
+        return [{ kind: "active", source: buildUpstreamSourceInfo(graphRow, u) }];
+      }
+      const artifact = parseJsonOr<TaskArtifact | null>(u.artifact_json, null);
+      const skipReason = artifact?.summary ? artifact.summary.replace(/^已跳过[:：]\s*/u, "").trim() || null : null;
+      return [
+        {
+          kind: "skipped",
+          key: u.node_key,
+          title: u.title,
+          skipReason,
+          decision: parseJsonOr<TaskDecision | null>(u.decision_json, null),
+          gateQuestion: u.gate_question,
+          tracedSources: traceNearestNonSkippedAncestors(graphRow, u.node_key, byKey, incoming),
+        },
+      ];
+    });
+  };
+
   /**
-   * 按拓扑序重算整张活跃任务图里轮到了哪些步骤（docs/orchestration-simplify-design.md 第 3.2 节第 3 行）：
-   * 前置步骤都完了（跳过也算完了）的“没轮到”步骤变“等人”——挂了拍板卡（有问题）的等用户并补发卡片消息，
-   * 其余是手动步骤（还没有职责，自动开工是第 5 步的事），等项目经理派人。跳过只跳过它自己，不连带下游。
-   * patch 给还没人干过的等人步骤加了没完的前置（或上游被打回重做），退回“没轮到”。
-   * 全部步骤都完了以后图仍是 active 待交付，只在 hub graph finish 时标 completed。
-   * 返回这次轮到的步骤；不叫醒谁——调用方按是谁触发的决定（项目经理自己的命令写进回执，用户在网页上点的叫醒项目经理，见 wakePmForTurnedIn）。
+   * 第 4.4 节分支与工作目录延续规则：
+   * - base: "main"、无上游、多个上游（合流） -> fresh（从主文件夹最新提交新开 worktree 和分支）；
+   * - 唯一直接上游（若 skipped 则沿唯一上游链向上追溯）：
+   *   - 自己是唯一有效下游且上游有可接手 worktree -> inherit（接手同一个 worktreePath 与 branch，不跑 setup）；
+   *   - 上游有多个下游（分叉） -> fork（指定 base 为上游分支最新提交，新开 worktree 和分支）。
+   */
+  const resolveWorkspacePlan = (
+    graphRow: TaskGraphDbRow,
+    step: TaskNodeDbRow,
+    byKey: ReadonlyMap<TaskNodeKey, TaskNodeDbRow>,
+    incoming: ReadonlyMap<TaskNodeKey, readonly TaskNodeKey[]>,
+    outgoing: ReadonlyMap<TaskNodeKey, readonly TaskNodeKey[]>,
+  ): StepWorkspacePlan => {
+    if (step.base === "main") return { kind: "fresh" };
+    let cur = step.node_key;
+    let forked = false;
+    const seen = new Set<TaskNodeKey>();
+    while (true) {
+      const ups = incoming.get(cur) ?? [];
+      if (ups.length !== 1) return { kind: "fresh" };
+      const uKey = ups[0]!;
+      if (seen.has(uKey)) return { kind: "fresh" };
+      seen.add(uKey);
+      if ((outgoing.get(uKey)?.length ?? 0) > 1) forked = true;
+      const u = byKey.get(uKey);
+      if (u === undefined) return { kind: "fresh" };
+      if (u.skipped === 1) {
+        cur = uKey;
+        continue;
+      }
+      const workerIds = parseJsonOr<WorkerId[]>(u.worker_ids_json, []);
+      for (let i = workerIds.length - 1; i >= 0; i--) {
+        const w = db.get<{
+          id: number;
+          project_id: number;
+          workspace: string;
+          worktree_path: string | null;
+          branch: string | null;
+          base_commit: string | null;
+        }>("SELECT id, project_id, workspace, worktree_path, branch, base_commit FROM workers WHERE id = ?", workerIds[i]!);
+        if (
+          w === undefined ||
+          w.workspace !== "worktree" ||
+          w.project_id !== graphRow.project_id ||
+          w.base_commit === null ||
+          !w.branch
+        ) {
+          continue;
+        }
+        if (!forked && w.worktree_path && existsSync(w.worktree_path)) {
+          const chainWorkerIds = new Set<number>(parseJsonOr<WorkerId[]>(step.worker_ids_json, []));
+          let anc: TaskNodeKey | undefined = step.node_key;
+          const ancVisited = new Set<TaskNodeKey>();
+          while (anc !== undefined && !ancVisited.has(anc)) {
+            ancVisited.add(anc);
+            const ancNode = byKey.get(anc);
+            if (ancNode !== undefined) {
+              for (const id of parseJsonOr<WorkerId[]>(ancNode.worker_ids_json, [])) chainWorkerIds.add(id);
+            }
+            const prevs: readonly TaskNodeKey[] = incoming.get(anc) ?? [];
+            anc = prevs.length === 1 ? prevs[0] : undefined;
+          }
+          const otherUsers = db.all<{ id: number }>("SELECT id FROM workers WHERE worktree_path = ?", w.worktree_path);
+          const claimedOutsideChain = otherUsers.some((o) => !chainWorkerIds.has(o.id));
+          if (!claimedOutsideChain) {
+            return {
+              kind: "inherit",
+              fromWorkerId: w.id,
+              worktreePath: w.worktree_path,
+              branch: w.branch,
+              baseCommit: w.base_commit,
+            };
+          }
+        }
+        return { kind: "fork", baseBranch: w.branch };
+      }
+      return { kind: "fresh" };
+    }
+  };
+
+  /** 检查指定步骤是否存在正在执行或仍挂着未收工 Worker 的传递下游步骤（防上下游同时处于运行态或争抢同一同线 worktree）。 */
+  const findActiveDownstream = (
+    startKey: TaskNodeKey,
+    byKey: ReadonlyMap<TaskNodeKey, TaskNodeDbRow>,
+    outgoing: ReadonlyMap<TaskNodeKey, readonly TaskNodeKey[]>,
+  ): TaskNodeKey | null => {
+    const queue = [...(outgoing.get(startKey) ?? [])];
+    const visited = new Set<TaskNodeKey>();
+    while (queue.length > 0) {
+      const k = queue.shift()!;
+      if (visited.has(k)) continue;
+      visited.add(k);
+      const n = byKey.get(k);
+      if (n === undefined) continue;
+      if (n.status === "running" || n.active_worker_id !== null) {
+        return k;
+      }
+      for (const next of outgoing.get(k) ?? []) queue.push(next);
+    }
+    return null;
+  };
+
+  const buildGraphMaps = (graphId: TaskGraphId) => {
+    const nodeRows = db.all<TaskNodeDbRow>(
+      "SELECT * FROM task_graph_steps WHERE graph_id = ? ORDER BY sort_order ASC, id ASC",
+      graphId,
+    );
+    const edgeRows = db.all<TaskEdgeDbRow>("SELECT * FROM task_graph_edges WHERE graph_id = ?", graphId);
+    const edges: TaskEdge[] = edgeRows.map((e) => ({ fromKey: e.from_key, toKey: e.to_key }));
+    const byKey = new Map<TaskNodeKey, TaskNodeDbRow>(nodeRows.map((n) => [n.node_key, n]));
+    const incoming = new Map<TaskNodeKey, TaskNodeKey[]>();
+    const outgoing = new Map<TaskNodeKey, TaskNodeKey[]>();
+    for (const n of nodeRows) {
+      incoming.set(n.node_key, []);
+      outgoing.set(n.node_key, []);
+    }
+    for (const e of edges) {
+      incoming.get(e.toKey)?.push(e.fromKey);
+      outgoing.get(e.fromKey)?.push(e.toKey);
+    }
+    return { nodeRows, edges, byKey, incoming, outgoing };
+  };
+
+  /**
+   * 按拓扑序重算整张活跃任务图里轮到了哪些步骤（docs/orchestration-simplify-design.md 第 3.2、4.3 节）：
+   * - 前置步骤都完了（跳过也算完了）的 pending 步骤：
+   *   - 挂了未答拍板卡（gate_question 非空） -> 等用户（waiting_for = 'user'）并发卡片消息；
+   *   - 有非空 brief -> 后台自动拉起 Worker 进入 running；若厂商不可用或启动报错 -> 置为 waiting_for = 'pm' 并报告原因；
+   *   - 无 brief 的手动步骤 -> 置为 waiting_for = 'pm'。
+   * - 后台触发（callerSession 为空）时，若自动拉起失败，立即按第 9.4 节格式向 PM 发唤醒消息。
    */
   const recomputeGraphProgressIn = (
     p: Pending,
     graphRow: TaskGraphDbRow,
     callerSession?: AgentSessionRow | null,
-  ): TurnedStep[] => {
-    const nodeRows = db.all<TaskNodeDbRow>(
-      "SELECT * FROM task_graph_steps WHERE graph_id = ? ORDER BY sort_order ASC, id ASC",
-      graphRow.id,
-    );
-    const edgeRows = db.all<TaskEdgeDbRow>(
-      "SELECT * FROM task_graph_edges WHERE graph_id = ?",
-      graphRow.id,
-    );
-    if (nodeRows.length === 0) return [];
+    context?: HubCallContext,
+  ): ProgressResult => {
+    const { nodeRows, edges, byKey, incoming, outgoing } = buildGraphMaps(graphRow.id);
+    if (nodeRows.length === 0) return { turned: [], dispatched: [], dispatchFailed: [] };
 
-    const edges: TaskEdge[] = edgeRows.map((e) => ({ fromKey: e.from_key, toKey: e.to_key }));
-    const byKey = new Map<TaskNodeKey, TaskNodeDbRow>(nodeRows.map((n) => [n.node_key, n]));
     const order = validateDagAndOrder(
       nodeRows.map((n) => n.node_key),
       edges,
     );
 
-    const incoming = new Map<TaskNodeKey, TaskNodeKey[]>();
-    for (const n of nodeRows) incoming.set(n.node_key, []);
-    for (const e of edges) incoming.get(e.toKey)?.push(e.fromKey);
-
     const t = now();
     const turned: TurnedStep[] = [];
+    const dispatched: Array<{ key: TaskNodeKey; title: string; workerId: WorkerId }> = [];
+    const dispatchFailed: Array<{ key: TaskNodeKey; title: string; index: number; total: number; reason: string }> = [];
     const pmSession = callerSession ?? sessions.currentSession(graphRow.conversation_id);
+    const pm = pmRow(graphRow.pm_id);
+    const bridge = options.workers?.();
 
-    for (const key of order) {
+    for (let idx = 0; idx < order.length; idx++) {
+      const key = order[idx]!;
       const node = byKey.get(key)!;
       const upsDone = (incoming.get(key) ?? []).every((u) => byKey.get(u)?.status === "done");
 
@@ -933,6 +1409,126 @@ export function createLedgerTaskGraphs(
 
       const hasQuestion = node.gate_question !== null && node.gate_question.trim() !== "";
       if (!hasQuestion) {
+        const hasBrief = node.brief !== null && node.brief.trim() !== "";
+        if (hasBrief && bridge !== undefined && pm !== null) {
+          const stepIndex = nodeRows.findIndex((r) => r.node_key === node.node_key) + 1 || idx + 1;
+          const totalSteps = nodeRows.length;
+          const workspacePlan = resolveWorkspacePlan(graphRow, node, byKey, incoming, outgoing);
+          const directUpstreams = collectDirectUpstreams(graphRow, node.node_key, byKey, incoming);
+          const renderedTask = renderGraphStepTask({
+            goal: graphRow.goal,
+            stepTitle: node.title,
+            index: stepIndex,
+            total: totalSteps,
+            brief: node.brief!,
+            review: node.review === 1,
+          });
+          const prevChangesLen = p.changes.length;
+          const prevActionsLen = p.actions.length;
+          const prevStopsLen = p.stops.length;
+          db.exec("SAVEPOINT sp_auto_dispatch");
+          try {
+            const pmVendor = (pmSession?.vendor ?? pm.vendor ?? DEFAULT_AGENT_VENDOR) as AgentVendor;
+            const pmModel = pmSession?.model ?? pm.default_model ?? null;
+            const pmEffort = pmSession?.effort ?? pm.effort ?? null;
+            const worker = bridge.dispatchStepWorkerIn(p, {
+              pmId: graphRow.pm_id,
+              pmVendor,
+              pmModel,
+              pmEffort,
+              title: node.title,
+              task: renderedTask,
+              vendor: (node.vendor as AgentVendor | null) ?? null,
+              model: node.model,
+              effort: node.effort,
+              readonly: node.readonly === 1,
+              maxTimeMs: node.max_time_ms,
+              workspacePlan,
+              buildFirstMessage: (sessionId, inheritedFromWorkerId, workerRecord, projectCard) =>
+                buildStepFirstMessage({
+                  graph: { id: graphRow.id, title: graphRow.title },
+                  step: {
+                    key: node.node_key,
+                    title: node.title,
+                    index: stepIndex,
+                    total: totalSteps,
+                    decision: parseJsonOr<TaskDecision | null>(node.decision_json, null),
+                    gateQuestion: node.gate_question,
+                  },
+                  worker: workerRecord,
+                  project: projectCard,
+                  task: renderedTask,
+                  directUpstreams,
+                  inheritedFromWorkerId,
+                  sessionId,
+                  launchDir: options.launchDir,
+                }),
+              context,
+            });
+            db.exec("RELEASE SAVEPOINT sp_auto_dispatch");
+            const prevIds = parseJsonOr<WorkerId[]>(node.worker_ids_json, []);
+            const nextIds = prevIds.includes(worker.id) ? prevIds : [...prevIds, worker.id];
+            node.status = "running";
+            node.waiting_for = null;
+            node.skipped = 0;
+            node.active_worker_id = worker.id;
+            node.worker_ids_json = JSON.stringify(nextIds);
+            db.run(
+              `UPDATE task_graph_steps
+                  SET status = 'running',
+                      waiting_for = NULL,
+                      skipped = 0,
+                      active_worker_id = ?,
+                      worker_ids_json = ?,
+                      updated_at = ?
+                WHERE id = ?`,
+              worker.id,
+              node.worker_ids_json,
+              t,
+              node.id,
+            );
+            dispatched.push({ key: node.node_key, title: node.title, workerId: worker.id });
+            continue;
+          } catch (error) {
+            db.exec("ROLLBACK TO SAVEPOINT sp_auto_dispatch");
+            db.exec("RELEASE SAVEPOINT sp_auto_dispatch");
+            p.changes.length = prevChangesLen;
+            p.actions.length = prevActionsLen;
+            p.stops.length = prevStopsLen;
+            const reason = error instanceof Error ? error.message : String(error);
+            node.status = "waiting";
+            node.waiting_for = "pm";
+            db.run(
+              "UPDATE task_graph_steps SET status = 'waiting', waiting_for = 'pm', updated_at = ? WHERE id = ?",
+              t,
+              node.id,
+            );
+            dispatchFailed.push({
+              key: node.node_key,
+              title: node.title,
+              index: stepIndex,
+              total: totalSteps,
+              reason,
+            });
+            if (callerSession == null) {
+              messages.enqueueWakeupUserMessageIn(p, {
+                conversationId: graphRow.conversation_id,
+                dedupeKey: userMessageDedupeKey(
+                  graphRow.conversation_id,
+                  `graph-autodispatch-failed:${graphRow.id}:${node.node_key}:${t}`,
+                ),
+                text: formatStepWaitingPmMessage({
+                  graph: { id: graphRow.id, title: graphRow.title },
+                  step: { key: node.node_key, title: node.title, index: stepIndex, total: totalSteps },
+                  workerId: null,
+                  reasonLabel: "自动开工未成功",
+                  detailBody: reason,
+                }),
+              });
+            }
+            continue;
+          }
+        }
         node.status = "waiting";
         node.waiting_for = "pm";
         db.run("UPDATE task_graph_steps SET status = 'waiting', waiting_for = 'pm', updated_at = ? WHERE id = ?", t, node.id);
@@ -967,7 +1563,7 @@ export function createLedgerTaskGraphs(
 
     db.run("UPDATE task_graphs SET updated_at = ? WHERE id = ?", t, graphRow.id);
 
-    return turned;
+    return { turned, dispatched, dispatchFailed };
   };
 
   /**
@@ -1044,11 +1640,30 @@ export function createLedgerTaskGraphs(
     );
   };
 
+  /** 第 7 节：审查步骤若与直接上游使用同一家模型，返回柔和提醒句（只提醒不拦）。 */
+  const sameVendorReviewHint = (graphId: TaskGraphId, pmVendor: string): string => {
+    const { nodeRows, byKey, incoming } = buildGraphMaps(graphId);
+    const hints: string[] = [];
+    for (const n of nodeRows) {
+      if (n.review !== 1 || n.status === "done") continue;
+      const myVendor = n.vendor ?? pmVendor;
+      const sameUp = (incoming.get(n.node_key) ?? []).find((uk) => {
+        const u = byKey.get(uk);
+        return u !== undefined && (u.vendor ?? pmVendor) === myVendor;
+      });
+      if (sameUp !== undefined) {
+        hints.push(`提醒：审查步骤「${n.node_key}」和上游「${sameUp}」是同一家模型（${myVendor}）。`);
+      }
+    }
+    return hints.length > 0 ? `\n${hints.join(" ")}` : "";
+  };
+
   /** hub graph create：创建持久化 DAG 并推导初始状态。 */
   const createIn = (
     p: Pending,
     caller: AgentSessionRow & { pmId: PmId },
     rawArgs: HubArgs<"graph.create">,
+    context?: HubCallContext,
   ): HubResult<"graph.create"> => {
     assertPmNotArchived(caller.pmId);
     const project = activeProjectOf(caller.pmId);
@@ -1067,10 +1682,19 @@ export function createLedgerTaskGraphs(
     }
     const parsed = createSpecSchema.safeParse(rawObj);
     if (!parsed.success) throw fail("invalid", "任务图规格字段格式不正确");
-    const spec: CreateTaskGraphSpecInput = parsed.data;
+    const spec = parsed.data as CreateTaskGraphSpecInput;
+    if (spec.steps !== undefined && spec.nodes !== undefined) {
+      throw fail("invalid", "任务图规格中 steps 和 nodes 只能传其中一个");
+    }
+    const rawList = spec.steps ?? spec.nodes;
+    if (rawList === undefined) {
+      throw fail("invalid", "任务图规格缺少 steps");
+    }
+    const sequentialDefault = spec.steps !== undefined;
 
     const titleRaw = rawArgs.title ?? spec.title ?? "";
     const title = validateGraphTitle(titleRaw);
+    const goal = validateGraphGoal(spec.goal);
 
     const activeCount = db.get<{ n: number }>(
       "SELECT count(*) AS n FROM task_graphs WHERE project_id = ? AND status = 'active'",
@@ -1083,16 +1707,32 @@ export function createLedgerTaskGraphs(
       );
     }
 
-    const normalizedNodes = spec.nodes.map((n, index) => {
+    const fallbackVendor = caller.vendor as AgentVendor;
+    const normalizedNodes = rawList.map((n, index) => {
       const key = validateNodeKey(n.key);
       const nodeTitle = validateNodeTitle(n.title);
+      const brief = validateStepBrief(n.brief);
+      const agent = validateStepAgentSetting(n, fallbackVendor);
+      const maxTimeMs = validateStepMaxTime(n.maxTime);
+      const base = validateStepBase(n.base);
       // 节点类型只剩一种（步骤）：写了问题的步骤就是挂了拍板卡，轮到时等用户；老写法的 kind 由 zod 直接丢掉
       const gate = validateGateFields(n);
+      const rawDeps =
+        n.deps !== undefined ? n.deps : sequentialDefault && index >= 1 ? [rawList[index - 1]!.key] : [];
       return {
         key,
         title: nodeTitle,
+        brief,
+        vendor: agent.vendor,
+        model: agent.model,
+        effort: agent.effort,
+        readonly: n.readonly === true ? 1 : 0,
+        maxTimeMs,
+        confirm: n.confirm === true ? 1 : 0,
+        review: n.review === true ? 1 : 0,
+        base,
         sortOrder: index,
-        deps: (n.deps ?? []).map(validateNodeKey),
+        deps: rawDeps.map(validateNodeKey),
         gate,
       };
     });
@@ -1115,12 +1755,13 @@ export function createLedgerTaskGraphs(
     const t = now();
     const graphRow = db.get<TaskGraphDbRow>(
       `INSERT INTO task_graphs (
-         project_id, pm_id, conversation_id, title, status, origin_msg_id, created_at, updated_at, completed_at
-       ) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, NULL) RETURNING *`,
+         project_id, pm_id, conversation_id, title, goal, status, origin_msg_id, created_at, updated_at, completed_at
+       ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, NULL) RETURNING *`,
       project.id,
       caller.pmId,
       conversationId,
       title,
+      goal,
       spec.originMsgId ?? null,
       t,
       t,
@@ -1129,14 +1770,25 @@ export function createLedgerTaskGraphs(
     for (const n of normalizedNodes) {
       db.run(
         `INSERT INTO task_graph_steps (
-           graph_id, node_key, title, status, waiting_for, skipped, sort_order,
+           graph_id, node_key, title,
+           brief, vendor, model, effort, readonly, max_time_ms, confirm, review, base, pm_note,
+           status, waiting_for, skipped, sort_order,
            active_worker_id, worker_ids_json, artifact_json,
            gate_question, gate_options_json, gate_summary_md, gate_recommended, gate_ask_message_id, decision_json,
            created_at, updated_at
-         ) VALUES (?, ?, ?, 'pending', NULL, 0, ?, NULL, '[]', NULL, ?, ?, ?, ?, NULL, NULL, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'pending', NULL, 0, ?, NULL, '[]', NULL, ?, ?, ?, ?, NULL, NULL, ?, ?)`,
         graphRow.id,
         n.key,
         n.title,
+        n.brief,
+        n.vendor,
+        n.model,
+        n.effort,
+        n.readonly,
+        n.maxTimeMs,
+        n.confirm,
+        n.review,
+        n.base,
         rankOf.get(n.key) ?? n.sortOrder,
         n.gate.question,
         n.gate.options.length > 0 ? JSON.stringify(n.gate.options) : null,
@@ -1160,13 +1812,15 @@ export function createLedgerTaskGraphs(
       );
     }
 
-    const turned = recomputeGraphProgressIn(p, graphRow, caller);
+    const progress = recomputeGraphProgressIn(p, graphRow, caller, context);
+    const slimGraph = loadGraph(graphRow.id, false)!;
     const graph = loadGraph(graphRow.id)!;
-    p.changes.push({ type: "task_graph.created", data: { graph } });
-    const progressNote = unlockedNoteOf(turned, graph).replace(/^；/u, "");
+    p.changes.push({ type: "task_graph.created", data: { graph: slimGraph } });
+    const progressNote = unlockedNoteOf(progress, graph).replace(/^；/u, "");
+    const reviewHint = sameVendorReviewHint(graphRow.id, caller.vendor);
 
     return {
-      text: `已创建${formatGraphText(graph)}${progressNote !== "" ? `\n${progressNote}` : ""}`,
+      text: `已创建${formatGraphText(graph)}${progressNote !== "" ? `\n${progressNote}` : ""}${reviewHint}`,
       data: { graph },
     };
   };
@@ -1275,9 +1929,10 @@ export function createLedgerTaskGraphs(
     );
 
     recomputeGraphProgressIn(p, graphRow, caller);
+    const slimGraph = loadGraph(graphRow.id, false)!;
     const graph = loadGraph(graphRow.id)!;
     const updatedNode = graph.nodes.find((n) => n.key === nodeKey)!;
-    p.changes.push({ type: "task_graph.updated", data: { graph } });
+    p.changes.push({ type: "task_graph.updated", data: { graph: slimGraph } });
 
     return {
       text: isTaskNodeWaitingUser(updatedNode)
@@ -1292,6 +1947,7 @@ export function createLedgerTaskGraphs(
     p: Pending,
     caller: AgentSessionRow & { pmId: PmId },
     args: HubArgs<"graph.patch">,
+    context?: HubCallContext,
   ): HubResult<"graph.patch"> => {
     assertPmNotArchived(caller.pmId);
     if (typeof args.specJson !== "string" || Buffer.byteLength(args.specJson, "utf8") > MAX_GRAPH_SPEC_BYTES) {
@@ -1305,7 +1961,24 @@ export function createLedgerTaskGraphs(
     }
     const parsed = patchSpecSchema.safeParse(rawObj);
     if (!parsed.success) throw fail("invalid", "patch 字段格式不正确");
-    const patch: PatchTaskGraphSpecInput = parsed.data;
+    const patch = parsed.data as PatchTaskGraphSpecInput;
+    if (patch.addSteps !== undefined && patch.addNodes !== undefined) {
+      throw fail("invalid", "patch 中 addSteps 和 addNodes 只能传其中一个");
+    }
+    if (patch.updateSteps !== undefined && patch.updateNodes !== undefined) {
+      throw fail("invalid", "patch 中 updateSteps 和 updateNodes 只能传其中一个");
+    }
+    if (patch.removeSteps !== undefined && patch.removeNodes !== undefined) {
+      throw fail("invalid", "patch 中 removeSteps 和 removeNodes 只能传其中一个");
+    }
+    if (patch.skipSteps !== undefined && patch.skipNodes !== undefined) {
+      throw fail("invalid", "patch 中 skipSteps 和 skipNodes 只能传其中一个");
+    }
+    const rawAddList = patch.addSteps ?? patch.addNodes ?? [];
+    const addSequentialDefault = patch.addSteps !== undefined && patch.addEdges === undefined;
+    const rawUpdateList = patch.updateSteps ?? patch.updateNodes ?? [];
+    const rawRemoveList = patch.removeSteps ?? patch.removeNodes ?? [];
+    const rawSkipList = patch.skipSteps ?? patch.skipNodes ?? [];
 
     const graphRow = resolveGraphForPm(caller.pmId, { graphId: args.graphId, requireActive: true });
     const existingNodes = db.all<TaskNodeDbRow>(
@@ -1318,7 +1991,7 @@ export function createLedgerTaskGraphs(
     );
 
     const nodesByKey = new Map<TaskNodeKey, TaskNodeDbRow>(existingNodes.map((n) => [n.node_key, n]));
-    const removeKeySet = new Set<TaskNodeKey>((patch.removeNodes ?? []).map(validateNodeKey));
+    const removeKeySet = new Set<TaskNodeKey>(rawRemoveList.map(validateNodeKey));
 
     for (const rmKey of removeKeySet) {
       const target = nodesByKey.get(rmKey);
@@ -1332,22 +2005,38 @@ export function createLedgerTaskGraphs(
       nodesByKey.delete(rmKey);
     }
 
-    const addedNodes = (patch.addNodes ?? []).map((n) => {
+    const fallbackVendor = caller.vendor as AgentVendor;
+    const addedNodes = rawAddList.map((n, index) => {
       const key = validateNodeKey(n.key);
       if (nodesByKey.has(key)) throw fail("conflict", `节点「${key}」已存在`);
       const nodeTitle = validateNodeTitle(n.title);
+      const brief = validateStepBrief(n.brief);
+      const agent = validateStepAgentSetting(n, fallbackVendor);
+      const maxTimeMs = validateStepMaxTime(n.maxTime);
+      const base = validateStepBase(n.base);
       const gate = validateGateFields(n);
+      const rawDeps =
+        n.deps !== undefined ? n.deps : addSequentialDefault && index >= 1 ? [rawAddList[index - 1]!.key] : [];
       return {
         key,
         title: nodeTitle,
-        deps: (n.deps ?? []).map(validateNodeKey),
+        brief,
+        vendor: agent.vendor,
+        model: agent.model,
+        effort: agent.effort,
+        readonly: n.readonly === true ? 1 : 0,
+        maxTimeMs,
+        confirm: n.confirm === true ? 1 : 0,
+        review: n.review === true ? 1 : 0,
+        base,
+        deps: rawDeps.map(validateNodeKey),
         gate,
       };
     });
 
     const addedKeySet = new Set<TaskNodeKey>();
     for (const a of addedNodes) {
-      if (addedKeySet.has(a.key)) throw fail("invalid", `addNodes 中重复出现了「${a.key}」`);
+      if (addedKeySet.has(a.key)) throw fail("invalid", `新增步骤中重复出现了「${a.key}」`);
       addedKeySet.add(a.key);
     }
 
@@ -1360,6 +2049,10 @@ export function createLedgerTaskGraphs(
     for (const rm of patch.removeEdges ?? []) {
       const fk = validateNodeKey(rm.from);
       const tk = validateNodeKey(rm.to);
+      const target = nodesByKey.get(tk);
+      if (target !== undefined && (target.status === "running" || target.status === "done" || target.active_worker_id !== null)) {
+        throw fail("conflict", `节点「${tk}」${taskNodeStatusText(toTaskNode(target), "pm")}，不能移除其前置依赖`);
+      }
       edgeSet.delete(`${fk}\0${tk}`);
     }
     for (const a of addedNodes) {
@@ -1367,14 +2060,18 @@ export function createLedgerTaskGraphs(
         edgeSet.set(`${dep}\0${a.key}`, { fromKey: dep, toKey: a.key });
       }
     }
-    for (const u of patch.updateNodes ?? []) {
+    for (const u of rawUpdateList) {
       const uk = validateNodeKey(u.key);
       const target = nodesByKey.get(uk);
       if (target === undefined) throw fail("not_found", `要更新的节点「${uk}」不存在`);
+      // 已开工（running）或已完成（done）的步骤严禁通过 updateSteps / updateNodes 修改任何属性
+      if (target.status === "running" || target.status === "done" || target.active_worker_id !== null) {
+        throw fail(
+          "conflict",
+          `步骤「${uk}」${taskNodeStatusText(toTaskNode(target), "pm")}，已开工或已完成的步骤不允许通过 patch 修改`,
+        );
+      }
       if (u.deps !== undefined) {
-        if (target.status === "running" || target.status === "done") {
-          throw fail("conflict", `节点「${uk}」${taskNodeStatusText(toTaskNode(target), "pm")}，不能修改其前置依赖`);
-        }
         for (const [sig, edge] of [...edgeSet.entries()]) {
           if (edge.toKey === uk) edgeSet.delete(sig);
         }
@@ -1398,10 +2095,56 @@ export function createLedgerTaskGraphs(
     const topoOrder = validateDagAndOrder(finalNodeKeys, finalEdges);
     const rankOf = new Map<TaskNodeKey, number>(topoOrder.map((k, idx) => [k, idx]));
 
+    const nextGoal = patch.goal !== undefined ? validateGraphGoal(patch.goal) : undefined;
+    const preparedUpdates = rawUpdateList.map((u) => {
+      const uk = validateNodeKey(u.key);
+      const cur = nodesByKey.get(uk)!;
+      const nextTitle = u.title !== undefined ? validateNodeTitle(u.title) : cur.title;
+      const nextBrief = u.brief !== undefined ? validateStepBrief(u.brief) : cur.brief;
+      const vendorChanged = u.vendor !== undefined && (u.vendor?.trim() || null) !== cur.vendor;
+      const mergedVendor = u.vendor !== undefined ? u.vendor : cur.vendor;
+      const mergedModel = u.model !== undefined ? u.model : vendorChanged ? null : cur.model;
+      const mergedEffort = u.effort !== undefined ? u.effort : vendorChanged ? null : cur.effort;
+      const agent = validateStepAgentSetting(
+        { vendor: mergedVendor, model: mergedModel, effort: mergedEffort },
+        fallbackVendor,
+      );
+      const nextMaxTimeMs = u.maxTime !== undefined ? validateStepMaxTime(u.maxTime) : cur.max_time_ms;
+      const nextBase = u.base !== undefined ? validateStepBase(u.base) : (cur.base === "main" ? "main" : null);
+      const nextReadonly = u.readonly !== undefined ? (u.readonly ? 1 : 0) : cur.readonly;
+      const nextConfirm = u.confirm !== undefined ? (u.confirm ? 1 : 0) : cur.confirm;
+      const nextReview = u.review !== undefined ? (u.review ? 1 : 0) : cur.review;
+      const gateTouched =
+        u.question !== undefined || u.options !== undefined || u.summaryMd !== undefined || u.recommended !== undefined;
+      const gate = gateTouched
+        ? validateGateFields({
+            question: u.question ?? cur.gate_question ?? undefined,
+            options: u.options ?? parseJsonOr<string[] | undefined>(cur.gate_options_json, undefined),
+            summaryMd: u.summaryMd ?? cur.gate_summary_md ?? undefined,
+            recommended: u.recommended ?? cur.gate_recommended ?? undefined,
+          })
+        : null;
+      return {
+        cur,
+        nextTitle,
+        nextBrief,
+        agent,
+        nextMaxTimeMs,
+        nextBase,
+        nextReadonly,
+        nextConfirm,
+        nextReview,
+        gate,
+      };
+    });
+
     const t = now();
     if (patch.title !== undefined) {
       const nextTitle = validateGraphTitle(patch.title);
       db.run("UPDATE task_graphs SET title = ?, updated_at = ? WHERE id = ?", nextTitle, t, graphRow.id);
+    }
+    if (nextGoal !== undefined) {
+      db.run("UPDATE task_graphs SET goal = ?, updated_at = ? WHERE id = ?", nextGoal, t, graphRow.id);
     }
 
     for (const rmKey of removeKeySet) {
@@ -1415,14 +2158,25 @@ export function createLedgerTaskGraphs(
     for (const a of addedNodes) {
       db.run(
         `INSERT INTO task_graph_steps (
-           graph_id, node_key, title, status, waiting_for, skipped, sort_order,
+           graph_id, node_key, title,
+           brief, vendor, model, effort, readonly, max_time_ms, confirm, review, base, pm_note,
+           status, waiting_for, skipped, sort_order,
            active_worker_id, worker_ids_json, artifact_json,
            gate_question, gate_options_json, gate_summary_md, gate_recommended, gate_ask_message_id, decision_json,
            created_at, updated_at
-         ) VALUES (?, ?, ?, 'pending', NULL, 0, ?, NULL, '[]', NULL, ?, ?, ?, ?, NULL, NULL, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'pending', NULL, 0, ?, NULL, '[]', NULL, ?, ?, ?, ?, NULL, NULL, ?, ?)`,
         graphRow.id,
         a.key,
         a.title,
+        a.brief,
+        a.vendor,
+        a.model,
+        a.effort,
+        a.readonly,
+        a.maxTimeMs,
+        a.confirm,
+        a.review,
+        a.base,
         rankOf.get(a.key) ?? 0,
         a.gate.question,
         a.gate.options.length > 0 ? JSON.stringify(a.gate.options) : null,
@@ -1433,50 +2187,93 @@ export function createLedgerTaskGraphs(
       );
     }
 
-    for (const u of patch.updateNodes ?? []) {
-      const uk = validateNodeKey(u.key);
-      const cur = nodesByKey.get(uk)!;
-      const nextTitle = u.title !== undefined ? validateNodeTitle(u.title) : cur.title;
-      if (u.question !== undefined || u.options !== undefined || u.summaryMd !== undefined || u.recommended !== undefined) {
-        // 改拍板卡的内容只允许改没人在干、还没完的步骤；若此前已出过旧卡先收起，再交由 recomputeGraphProgressIn 重算激活或退回
-        if (cur.status === "running" || cur.status === "done" || cur.active_worker_id !== null) {
-          throw fail("conflict", `步骤「${uk}」${taskNodeStatusText(toTaskNode(cur), "pm")}，不能改它的拍板卡`);
-        }
-        const gate = validateGateFields({
-          question: u.question ?? cur.gate_question ?? undefined,
-          options: u.options ?? parseJsonOr<string[] | undefined>(cur.gate_options_json, undefined),
-          summaryMd: u.summaryMd ?? cur.gate_summary_md ?? undefined,
-          recommended: u.recommended ?? cur.gate_recommended ?? undefined,
-        });
+    for (const u of preparedUpdates) {
+      const { cur, gate } = u;
+      const canReevaluateWaiting =
+        cur.status === "waiting" &&
+        cur.active_worker_id === null &&
+        parseJsonOr<WorkerId[]>(cur.worker_ids_json, []).length === 0 &&
+        (gate !== null || (u.nextBrief !== null && u.nextBrief.trim() !== ""));
+      if (gate !== null) {
         if (cur.gate_ask_message_id !== null) {
           messages.markAskAnsweredIn(p, cur.gate_ask_message_id);
         }
         db.run(
           `UPDATE task_graph_steps
               SET title = ?,
+                  brief = ?,
+                  vendor = ?,
+                  model = ?,
+                  effort = ?,
+                  readonly = ?,
+                  max_time_ms = ?,
+                  confirm = ?,
+                  review = ?,
+                  base = ?,
                   gate_question = ?,
                   gate_options_json = ?,
                   gate_summary_md = ?,
                   gate_recommended = ?,
                   gate_ask_message_id = NULL,
-                  status = CASE WHEN status = 'waiting' THEN 'pending' ELSE status END,
-                  waiting_for = NULL,
+                  status = CASE WHEN ? = 1 THEN 'pending' ELSE status END,
+                  waiting_for = CASE WHEN ? = 1 THEN NULL ELSE waiting_for END,
                   updated_at = ?
             WHERE id = ?`,
-          nextTitle,
+          u.nextTitle,
+          u.nextBrief,
+          u.agent.vendor,
+          u.agent.model,
+          u.agent.effort,
+          u.nextReadonly,
+          u.nextMaxTimeMs,
+          u.nextConfirm,
+          u.nextReview,
+          u.nextBase,
           gate.question,
           gate.options.length > 0 ? JSON.stringify(gate.options) : null,
           gate.summaryMd,
           gate.recommended,
+          canReevaluateWaiting ? 1 : 0,
+          canReevaluateWaiting ? 1 : 0,
           t,
           cur.id,
         );
       } else {
-        db.run("UPDATE task_graph_steps SET title = ?, updated_at = ? WHERE id = ?", nextTitle, t, cur.id);
+        db.run(
+          `UPDATE task_graph_steps
+              SET title = ?,
+                  brief = ?,
+                  vendor = ?,
+                  model = ?,
+                  effort = ?,
+                  readonly = ?,
+                  max_time_ms = ?,
+                  confirm = ?,
+                  review = ?,
+                  base = ?,
+                  status = CASE WHEN ? = 1 THEN 'pending' ELSE status END,
+                  waiting_for = CASE WHEN ? = 1 THEN NULL ELSE waiting_for END,
+                  updated_at = ?
+            WHERE id = ?`,
+          u.nextTitle,
+          u.nextBrief,
+          u.agent.vendor,
+          u.agent.model,
+          u.agent.effort,
+          u.nextReadonly,
+          u.nextMaxTimeMs,
+          u.nextConfirm,
+          u.nextReview,
+          u.nextBase,
+          canReevaluateWaiting ? 1 : 0,
+          canReevaluateWaiting ? 1 : 0,
+          t,
+          cur.id,
+        );
       }
     }
 
-    for (const skRaw of patch.skipNodes ?? []) {
+    for (const skRaw of rawSkipList) {
       const sk = validateNodeKey(skRaw);
       const cur = nodesByKey.get(sk);
       if (cur === undefined) throw fail("not_found", `要跳过的节点「${sk}」不存在`);
@@ -1501,13 +2298,15 @@ export function createLedgerTaskGraphs(
     }
 
     const refreshedRow = getGraphRow(graphRow.id)!;
-    const turned = recomputeGraphProgressIn(p, refreshedRow, caller);
+    const progress = recomputeGraphProgressIn(p, refreshedRow, caller, context);
     syncDeliveryNoteAfterProgressIn(p, refreshedRow, wasAllSettled);
+    const slimGraph = loadGraph(graphRow.id, false)!;
     const graph = loadGraph(graphRow.id)!;
-    p.changes.push({ type: "task_graph.updated", data: { graph } });
-    const progressNote = unlockedNoteOf(turned, graph).replace(/^；/u, "");
+    p.changes.push({ type: "task_graph.updated", data: { graph: slimGraph } });
+    const progressNote = unlockedNoteOf(progress, graph).replace(/^；/u, "");
+    const reviewHint = sameVendorReviewHint(graphRow.id, caller.vendor);
     return {
-      text: `已更新${formatGraphText(graph)}${progressNote !== "" ? `\n${progressNote}` : ""}`,
+      text: `已更新${formatGraphText(graph)}${progressNote !== "" ? `\n${progressNote}` : ""}${reviewHint}`,
       data: { graph },
     };
   };
@@ -1520,6 +2319,7 @@ export function createLedgerTaskGraphs(
     p: Pending,
     caller: AgentSessionRow & { pmId: PmId },
     args: HubArgs<"graph.done">,
+    context?: HubCallContext,
   ): HubResult<"graph.done"> => {
     assertPmNotArchived(caller.pmId);
     const nodeKey = validateNodeKey(args.nodeKey);
@@ -1533,13 +2333,13 @@ export function createLedgerTaskGraphs(
     if (graphRow.status !== "active" && !(graphRow.status === "completed" && node.status === "done")) {
       throw fail("conflict", `任务图 #${graphRow.id} 已经结束（${graphRow.status}）`);
     }
-    // 在干的节点不能绕过 Worker 直接标完成（它还在改东西，下游会基于没做完的结果开工）：先让 Worker 收工，节点由收工时的汇报决定
+    // 在干的节点不能绕过 Worker 直接标完成（它还在改东西，下游会基于没做完的结果开工）：先让 Worker 收工
     if (node.status === "running") {
       const who = node.active_worker_id === null ? "Worker" : `Worker #${node.active_worker_id}`;
       const end = node.active_worker_id === null ? `${HUB_COMMAND} worker end <编号>` : `${HUB_COMMAND} worker end ${node.active_worker_id}`;
       throw fail(
         "conflict",
-        `节点「${nodeKey}」正在由 ${who} 执行，不能直接标完成。先用 ${end} 让它收工：它最近一轮汇报是“做完了”时节点会自动标完成；要补记 PR 等结果，收工后再调 ${HUB_COMMAND} graph done ${nodeKey} --graph ${graphRow.id}`,
+        `节点「${nodeKey}」正在由 ${who} 执行，不能直接标完成。先用 ${end} 停掉它，再调 ${HUB_COMMAND} graph done ${nodeKey} --graph ${graphRow.id} 放行`,
       );
     }
 
@@ -1547,14 +2347,23 @@ export function createLedgerTaskGraphs(
     if (summary !== undefined && charLen(summary) > MAX_NODE_ARTIFACT_SUMMARY_CHARS) {
       throw fail("invalid", `节点产物摘要最多 ${MAX_NODE_ARTIFACT_SUMMARY_CHARS} 字`);
     }
+    const note = args.note?.trim();
+    if (note !== undefined && utf8Bytes(note) > MAX_TASK_BYTES) {
+      throw fail("invalid", `放行说明不能超过 ${MAX_TASK_BYTES} 字节`);
+    }
     const existingArtifact = parseJsonOr<TaskArtifact>(node.artifact_json, {});
+    const derivedSummary =
+      summary ||
+      existingArtifact.summary ||
+      (note ? collapseOneLine(note, MAX_NODE_ARTIFACT_SUMMARY_CHARS) : undefined);
     const artifact: TaskArtifact = {
       ...existingArtifact,
       ...(args.prUrl?.trim() ? { prUrl: args.prUrl.trim() } : {}),
       ...(args.commit?.trim() ? { commit: args.commit.trim() } : {}),
       ...(args.branch?.trim() ? { branch: args.branch.trim() } : {}),
-      ...(summary ? { summary } : {}),
+      ...(derivedSummary ? { summary: derivedSummary } : {}),
     };
+    const nextPmNote = note && note !== "" ? note : node.pm_note;
 
     const wasAllSettled = graphRow.status === "active" && isGraphAllSettled(graphRow.id);
     const t = now();
@@ -1565,9 +2374,11 @@ export function createLedgerTaskGraphs(
               waiting_for = NULL,
               active_worker_id = NULL,
               artifact_json = ?,
+              pm_note = ?,
               updated_at = ?
         WHERE id = ?`,
       Object.keys(artifact).length > 0 ? JSON.stringify(artifact) : null,
+      nextPmNote,
       t,
       node.id,
     );
@@ -1575,13 +2386,17 @@ export function createLedgerTaskGraphs(
       messages.markAskAnsweredIn(p, node.gate_ask_message_id);
     }
 
-    const unlocked = graphRow.status === "active" ? recomputeGraphProgressIn(p, graphRow, caller) : [];
+    const progress: ProgressResult =
+      graphRow.status === "active"
+        ? recomputeGraphProgressIn(p, graphRow, caller, context)
+        : { turned: [], dispatched: [], dispatchFailed: [] };
     if (graphRow.status === "active") syncDeliveryNoteAfterProgressIn(p, graphRow, wasAllSettled);
+    const slimGraph = loadGraph(graphRow.id, false)!;
     const graph = loadGraph(graphRow.id)!;
-    p.changes.push({ type: "task_graph.updated", data: { graph } });
+    p.changes.push({ type: "task_graph.updated", data: { graph: slimGraph } });
 
     return {
-      text: `节点「${nodeKey}」已标记为完了${unlockedNoteOf(unlocked, graph)}`,
+      text: `节点「${nodeKey}」已标记为完了${unlockedNoteOf(progress, graph)}`,
       data: { graph },
     };
   };
@@ -1591,6 +2406,7 @@ export function createLedgerTaskGraphs(
     p: Pending,
     caller: AgentSessionRow & { pmId: PmId },
     args: HubArgs<"graph.decide">,
+    context?: HubCallContext,
   ): HubResult<"graph.decide"> => {
     assertPmNotArchived(caller.pmId);
     const nodeKey = validateNodeKey(args.nodeKey);
@@ -1640,13 +2456,14 @@ export function createLedgerTaskGraphs(
       messages.markAskAnsweredIn(p, node.gate_ask_message_id, choice);
     }
 
-    const unlocked = recomputeGraphProgressIn(p, graphRow, caller);
+    const progress = recomputeGraphProgressIn(p, graphRow, caller, context);
     syncDeliveryNoteAfterProgressIn(p, graphRow, wasAllSettled);
+    const slimGraph = loadGraph(graphRow.id, false)!;
     const graph = loadGraph(graphRow.id)!;
-    p.changes.push({ type: "task_graph.updated", data: { graph } });
+    p.changes.push({ type: "task_graph.updated", data: { graph: slimGraph } });
 
     return {
-      text: `步骤「${nodeKey}」已记录定案「${choice}」${unlockedNoteOf(unlocked, graph)}`,
+      text: `步骤「${nodeKey}」已记录定案「${choice}」${unlockedNoteOf(progress, graph)}`,
       data: { graph },
     };
   };
@@ -1661,7 +2478,9 @@ export function createLedgerTaskGraphs(
     nodeKey: TaskNodeKey,
     reason: string | undefined,
     byUser: boolean,
-  ): { graph: TaskGraph; messageId: MessageId | null; turned: TurnedStep[] } => {
+    callerSession?: AgentSessionRow | null,
+    context?: HubCallContext,
+  ): { graph: TaskGraph; messageId: MessageId | null; progress: ProgressResult } => {
     if (graphRow.status !== "active") throw fail("conflict", `任务图 #${graphRow.id} 已经结束（${graphRow.status}）`);
     const node = db.get<TaskNodeDbRow>(
       "SELECT * FROM task_graph_steps WHERE graph_id = ? AND node_key = ?",
@@ -1670,7 +2489,9 @@ export function createLedgerTaskGraphs(
     );
     if (node === undefined) throw fail("not_found", `任务图 #${graphRow.id} 中没有节点「${nodeKey}」`);
     if (node.status === "done") {
-      if (node.skipped === 1) return { graph: loadGraph(graphRow.id)!, messageId: null, turned: [] };
+      if (node.skipped === 1) {
+        return { graph: loadGraph(graphRow.id)!, messageId: null, progress: { turned: [], dispatched: [], dispatchFailed: [] } };
+      }
       throw fail("conflict", `节点「${nodeKey}」已经完了，不能跳过`);
     }
     if (node.status === "running" || node.active_worker_id !== null) {
@@ -1691,15 +2512,16 @@ export function createLedgerTaskGraphs(
       messages.markAskAnsweredIn(p, node.gate_ask_message_id);
     }
 
-    const turned = recomputeGraphProgressIn(p, graphRow);
+    const progress = recomputeGraphProgressIn(p, graphRow, callerSession, context);
     syncDeliveryNoteAfterProgressIn(p, graphRow, wasAllSettled);
     const messageId = byUser
-      ? wakePmForTurnedIn(p, graphRow, turned, `用户在网页上跳过了步骤「${nodeKey}（${node.title}）」${trimmedReason ? `（说明：${trimmedReason}）` : ""}，`, `skip:${nodeKey}:${t}`)
+      ? wakePmForTurnedIn(p, graphRow, progress.turned, `用户在网页上跳过了步骤「${nodeKey}（${node.title}）」${trimmedReason ? `（说明：${trimmedReason}）` : ""}，`, `skip:${nodeKey}:${t}`)
       : null;
+    const slimGraph = loadGraph(graphRow.id, false)!;
     const graph = loadGraph(graphRow.id)!;
-    p.changes.push({ type: "task_graph.updated", data: { graph } });
+    p.changes.push({ type: "task_graph.updated", data: { graph: slimGraph } });
 
-    return { graph, messageId, turned };
+    return { graph, messageId, progress };
   };
 
   /** hub graph skip <nodeKey> */
@@ -1707,13 +2529,14 @@ export function createLedgerTaskGraphs(
     p: Pending,
     caller: AgentSessionRow & { pmId: PmId },
     args: HubArgs<"graph.skip">,
+    context?: HubCallContext,
   ): HubResult<"graph.skip"> => {
     assertPmNotArchived(caller.pmId);
     const nodeKey = validateNodeKey(args.nodeKey);
     const graphRow = resolveGraphForPm(caller.pmId, { graphId: args.graphId, nodeKey, requireActive: true });
-    const { graph, turned } = skipNodeInternalIn(p, graphRow, nodeKey, args.reason, false);
+    const { graph, progress } = skipNodeInternalIn(p, graphRow, nodeKey, args.reason, false, caller, context);
     return {
-      text: `已跳过节点「${nodeKey}」${unlockedNoteOf(turned, graph)}\n${formatGraphText(graph)}`,
+      text: `已跳过节点「${nodeKey}」${unlockedNoteOf(progress, graph)}\n${formatGraphText(graph)}`,
       data: { graph },
     };
   };
@@ -1724,15 +2547,25 @@ export function createLedgerTaskGraphs(
     graphRow: TaskGraphDbRow,
     reason: string | undefined,
     wakePm: boolean,
-  ): { graph: TaskGraph; messageId: MessageId | null } => {
+  ): { graph: TaskGraph; messageId: MessageId | null; stoppedWorkerIds: WorkerId[] } => {
     if (graphRow.status === "cancelled") {
-      return { graph: loadGraph(graphRow.id)!, messageId: null };
+      return { graph: loadGraph(graphRow.id)!, messageId: null, stoppedWorkerIds: [] };
     }
     if (graphRow.status === "completed") {
       throw fail("conflict", `任务图 #${graphRow.id} 已经全部完成，无需取消`);
     }
 
     const t = now();
+    // 第 3.2 节：取消整张图时，后台自动停掉这张图里所有仍在跑（open）的关联 Worker
+    const allGraphNodes = db.all<Pick<TaskNodeDbRow, "active_worker_id" | "worker_ids_json">>(
+      "SELECT active_worker_id, worker_ids_json FROM task_graph_steps WHERE graph_id = ?",
+      graphRow.id,
+    );
+    const candidateWorkerIds = new Set<WorkerId>();
+    for (const n of allGraphNodes) {
+      if (n.active_worker_id !== null) candidateWorkerIds.add(n.active_worker_id);
+      for (const wid of parseJsonOr<WorkerId[]>(n.worker_ids_json, [])) candidateWorkerIds.add(wid);
+    }
     const waitingNodes = db.all<TaskNodeDbRow>(
       "SELECT * FROM task_graph_steps WHERE graph_id = ? AND gate_ask_message_id IS NOT NULL",
       graphRow.id,
@@ -1751,23 +2584,32 @@ export function createLedgerTaskGraphs(
       t,
       graphRow.id,
     );
+    const stoppedWorkerIds =
+      candidateWorkerIds.size > 0
+        ? (options.workers?.()?.stopWorkersIn(p, [...candidateWorkerIds]) ?? [])
+        : [];
     stopQueuedDeliveryNotesIn(p, graphRow.conversation_id, graphRow.id);
 
+    const slimGraph = loadGraph(graphRow.id, false)!;
     const graph = loadGraph(graphRow.id)!;
-    p.changes.push({ type: "task_graph.updated", data: { graph } });
+    p.changes.push({ type: "task_graph.updated", data: { graph: slimGraph } });
 
     let messageId: MessageId | null = null;
     if (wakePm) {
       const trimmedReason = reason?.trim();
+      const stoppedNote =
+        stoppedWorkerIds.length > 0
+          ? `已自动停掉在跑的 Worker ${stoppedWorkerIds.map((id) => `#${id}`).join("、")}。`
+          : "";
       const wake = messages.enqueueWakeupUserMessageIn(p, {
         conversationId: graph.conversationId,
         dedupeKey: userMessageDedupeKey(graph.conversationId, `graph-cancel:${graph.id}:${t}`),
-        text: `【任务图 #${graph.id} · ${graph.title}】用户取消了整张任务图${trimmedReason ? `（说明：${trimmedReason}）` : ""}。若有关联 Worker 仍在运行，请按需收工。`,
+        text: `【任务图 #${graph.id} · ${graph.title}】用户取消了整张任务图${trimmedReason ? `（说明：${trimmedReason}）` : ""}。${stoppedNote}`.trim(),
       });
       messageId = wake.id;
     }
 
-    return { graph, messageId };
+    return { graph, messageId, stoppedWorkerIds };
   };
 
   /** hub graph cancel [<graphId>] */
@@ -1778,9 +2620,13 @@ export function createLedgerTaskGraphs(
   ): HubResult<"graph.cancel"> => {
     assertPmNotArchived(caller.pmId);
     const graphRow = resolveGraphForPm(caller.pmId, { graphId: args.graphId, requireActive: true });
-    const { graph } = cancelGraphInternalIn(p, graphRow, args.reason, false);
+    const { graph, stoppedWorkerIds } = cancelGraphInternalIn(p, graphRow, args.reason, false);
+    const stoppedNote =
+      stoppedWorkerIds.length > 0
+        ? `（已自动停掉在跑的 Worker ${stoppedWorkerIds.map((id) => `#${id}`).join("、")}）`
+        : "";
     return {
-      text: `已取消任务图 #${graph.id}「${graph.title}」。`,
+      text: `已取消任务图 #${graph.id}「${graph.title}」${stoppedNote}。`,
       data: { graph },
     };
   };
@@ -1864,16 +2710,31 @@ export function createLedgerTaskGraphs(
     });
 
     const t = now();
+    // 第 6 节：步骤完了以后，它的 Worker 由后台收工（被下一步接手时，或图结束时）
+    const candidateWorkerIds = new Set<WorkerId>();
+    for (const n of nodeRows) {
+      if (n.active_worker_id !== null) candidateWorkerIds.add(n.active_worker_id);
+      for (const wid of parseJsonOr<WorkerId[]>(n.worker_ids_json, [])) candidateWorkerIds.add(wid);
+    }
+    db.run(
+      "UPDATE task_graph_steps SET active_worker_id = NULL, updated_at = ? WHERE graph_id = ? AND active_worker_id IS NOT NULL",
+      t,
+      graphRow.id,
+    );
     db.run(
       "UPDATE task_graphs SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?",
       t,
       t,
       graphRow.id,
     );
+    if (candidateWorkerIds.size > 0) {
+      options.workers?.()?.stopWorkersIn(p, [...candidateWorkerIds]);
+    }
     stopQueuedDeliveryNotesIn(p, graphRow.conversation_id, graphRow.id);
 
+      const slimGraph = loadGraph(graphRow.id, false)!;
     const graph = loadGraph(graphRow.id)!;
-    p.changes.push({ type: "task_graph.updated", data: { graph } });
+      p.changes.push({ type: "task_graph.updated", data: { graph: slimGraph } });
 
     return {
       text: `任务图 #${graph.id}「${graph.title}」已结束（completed），交付摘要已同步至总助（汇报 #${report.data.item.id}）。`,
@@ -2060,16 +2921,23 @@ export function createLedgerTaskGraphs(
         messages.markAskAnsweredIn(p, node.gate_ask_message_id, choice ?? undefined);
       }
 
-      const unlocked = recomputeGraphProgressIn(p, graphRow);
+      const progress = recomputeGraphProgressIn(p, graphRow);
       syncDeliveryNoteAfterProgressIn(p, graphRow, wasAllSettled);
+      const slimGraph = loadGraph(graphId, false)!;
       const graph = loadGraph(graphId)!;
+
+      // 下游已由后台自动开工且无手动步骤等 PM 时，按第 3.2 节第 10 行全程不叫醒 PM
+      if (progress.dispatched.length > 0 && progress.turned.length === 0 && progress.dispatchFailed.length === 0) {
+        p.changes.push({ type: "task_graph.updated", data: { graph: slimGraph } });
+        return { graph, messageId: null };
+      }
 
       const wakeLines = [`【任务图 #${graph.id}「${graph.title}」用户拍板】步骤「${nodeKey}（${node.title}）」`];
       if (choice !== null) wakeLines.push(`定案：${choice}`);
       if (note !== null) wakeLines.push(`补充说明：${note}`);
-      if (unlocked.length > 0) {
-        wakeLines.push(`轮到了：${turnedListText(unlocked)}`);
-        const forPm = unlocked.find((u) => u.waitingFor === "pm");
+      if (progress.turned.length > 0) {
+        wakeLines.push(`轮到了：${turnedListText(progress.turned)}`);
+        const forPm = progress.turned.find((u) => u.waitingFor === "pm");
         if (forPm !== undefined) {
           wakeLines.push(`给它派 Worker 用 ${HUB_COMMAND} worker start --node ${forPm.key} --graph ${graph.id}`);
         }
@@ -2080,7 +2948,7 @@ export function createLedgerTaskGraphs(
         text: wakeLines.join("\n"),
       });
 
-      p.changes.push({ type: "task_graph.updated", data: { graph } });
+      p.changes.push({ type: "task_graph.updated", data: { graph: slimGraph } });
       return { graph, messageId: wakeMsg.id };
     });
 
@@ -2105,7 +2973,8 @@ export function createLedgerTaskGraphs(
       const graphRow = getGraphRow(graphId);
       if (graphRow === undefined) throw fail("not_found", `没有编号 #${graphId} 的任务图`);
       assertPmNotArchived(graphRow.pm_id);
-      return cancelGraphInternalIn(p, graphRow, input.reason, true);
+      const { graph, messageId } = cancelGraphInternalIn(p, graphRow, input.reason, true);
+      return { graph, messageId };
     });
 
   /** GET /api/projects/:id/task-graphs：按 idx_task_graphs_project_history 倒序分页读取已完结/已取消历史任务图。 */
@@ -2142,8 +3011,8 @@ export function createLedgerTaskGraphs(
   // ---- Worker 绑定与状态联动钩子 ----
 
   /**
-   * hub worker start --node 派活前校验目标步骤：等项目经理（轮到了的手动步骤、出了问题停着的）、完了（支持待交付时打回重派），
-   * 或者还有 Worker 挂着（在干、或停着等人）——这时是换人：workers.ts 先把挂着的那个按“没做完”收工（同 --incomplete），再派新的。
+   * hub worker start --node 派活前校验目标步骤：等项目经理（轮到了的手动步骤、出了问题停着的）、完了且尚未被下游接手（支持待交付时打回重派），
+   * 或者还有 Worker 挂着（在干、或停着等人）——这时是换人：workers.ts 先把挂着的那个按“没做完”收工，再派新的。
    * 没轮到的、挂着拍板卡等用户的不能派。
    */
   const prepareWorkerBind = (
@@ -2153,12 +3022,9 @@ export function createLedgerTaskGraphs(
   ): WorkerBindTarget => {
     const nodeKey = validateNodeKey(rawNodeKey);
     const graphRow = resolveGraphForPm(pmId, { graphId, nodeKey, requireActive: true });
-    const nodes = db.all<TaskNodeDbRow>(
-      "SELECT * FROM task_graph_steps WHERE graph_id = ? ORDER BY sort_order ASC, id ASC",
-      graphRow.id,
-    );
-    const index = nodes.findIndex((n) => n.node_key === nodeKey);
-    const node = nodes[index];
+    const { nodeRows, byKey, incoming, outgoing } = buildGraphMaps(graphRow.id);
+    const index = nodeRows.findIndex((n) => n.node_key === nodeKey);
+    const node = nodeRows[index];
     if (node === undefined) throw fail("not_found", `任务图 #${graphRow.id} 中没有节点「${nodeKey}」`);
     const replacing = node.active_worker_id !== null;
     const dispatchable = node.status === "done" ? node.skipped === 0 : node.status === "waiting" && node.waiting_for === "pm";
@@ -2168,20 +3034,80 @@ export function createLedgerTaskGraphs(
         `节点「${nodeKey}」${taskNodeStatusText(toTaskNode(node), "pm")}（等你处理、已经完了要打回，或者有 Worker 挂着要换人，才能派 Worker）`,
       );
     }
+    if (!replacing && node.status === "done") {
+      const activeDownstream = findActiveDownstream(node.node_key, byKey, outgoing);
+      if (activeDownstream !== null) {
+        throw fail(
+          "conflict",
+          `步骤「${nodeKey}」已完成且下游步骤「${activeDownstream}」正在执行或挂着未收工的 Worker，不能回退重开上游步骤（请先处理下游步骤，或待交付后再打回重派）`,
+        );
+      }
+    }
+    const stepIndex = index + 1;
+    const totalSteps = nodeRows.length;
+    const workspacePlan = resolveWorkspacePlan(graphRow, node, byKey, incoming, outgoing);
+    const directUpstreams = collectDirectUpstreams(graphRow, node.node_key, byKey, incoming);
     return {
       graphId: graphRow.id,
       nodeKey,
       graphTitle: graphRow.title,
+      graphGoal: graphRow.goal,
       nodeTitle: node.title,
-      index: index + 1,
-      total: nodes.length,
+      brief: node.brief,
+      vendor: node.vendor,
+      model: node.model,
+      effort: node.effort,
+      readonly: node.readonly === 1,
+      maxTimeMs: node.max_time_ms,
+      review: node.review === 1,
+      base: node.base === "main" ? "main" : null,
+      index: stepIndex,
+      total: totalSteps,
       activeWorkerId: node.active_worker_id,
       workerIds: parseJsonOr<WorkerId[]>(node.worker_ids_json, []),
+      workspacePlan,
+      buildFirstMessage: (sessionId, opts) =>
+        buildStepFirstMessage({
+          graph: { id: graphRow.id, title: graphRow.title },
+          step: {
+            key: node.node_key,
+            title: node.title,
+            index: stepIndex,
+            total: totalSteps,
+            decision: parseJsonOr<TaskDecision | null>(node.decision_json, null),
+            gateQuestion: node.gate_question,
+          },
+          worker: opts.worker,
+          project: opts.project,
+          task: opts.task,
+          directUpstreams,
+          inheritedFromWorkerId: opts.inheritedFromWorkerId,
+          sessionId,
+          launchDir: options.launchDir,
+        }),
+      buildUpstreamHandoff: (sessionId, inheritedFromWorkerId) =>
+        formatStepUpstreamForTakeover({
+          step: {
+            key: node.node_key,
+            title: node.title,
+            decision: parseJsonOr<TaskDecision | null>(node.decision_json, null),
+            gateQuestion: node.gate_question,
+          },
+          directUpstreams,
+          inheritedFromWorkerId,
+          sessionId,
+          launchDir: options.launchDir,
+        }),
     };
   };
 
-  /** Worker 已入库：绑定到节点并置为 running，保留完整历史 workerIds 轨迹；若从 done 打回重派则重算下游并停掉排队中的旧交付单。 */
-  const bindWorkerStartedIn = (p: Pending, target: WorkerBindTarget, workerId: WorkerId): void => {
+  /** Worker 已入库：绑定到节点并置为 running，写回新的 vendor/model/effort，保留历史 workerIds 轨迹。 */
+  const bindWorkerStartedIn = (
+    p: Pending,
+    target: WorkerBindTarget,
+    workerId: WorkerId,
+    agent?: { vendor: string; model: string | null; effort: string | null },
+  ): void => {
     const node = db.get<TaskNodeDbRow>(
       "SELECT * FROM task_graph_steps WHERE graph_id = ? AND node_key = ?",
       target.graphId,
@@ -2199,10 +3125,18 @@ export function createLedgerTaskGraphs(
               skipped = 0,
               active_worker_id = ?,
               worker_ids_json = ?,
+              vendor = COALESCE(?, vendor),
+              model = CASE WHEN ? = 1 THEN ? ELSE model END,
+              effort = CASE WHEN ? = 1 THEN ? ELSE effort END,
               updated_at = ?
         WHERE id = ?`,
       workerId,
       JSON.stringify(nextIds),
+      agent?.vendor ?? null,
+      agent !== undefined ? 1 : 0,
+      agent?.model ?? null,
+      agent !== undefined ? 1 : 0,
+      agent?.effort ?? null,
       t,
       node.id,
     );
@@ -2217,23 +3151,31 @@ export function createLedgerTaskGraphs(
     } else {
       db.run("UPDATE task_graphs SET updated_at = ? WHERE id = ?", t, target.graphId);
     }
-    const graph = loadGraph(target.graphId);
+    const graph = loadGraph(target.graphId, false);
     if (graph !== null) p.changes.push({ type: "task_graph.updated", data: { graph } });
   };
 
-  /** Worker 汇报“有问题/放弃了”、turn_failed 或 worktree_failed 时，绑定的步骤变等人（等项目经理，第 3.2 节第 6 行；叫醒由 workers.ts 的汇报行负责）。 */
-  const onWorkerAttentionIn = (
+  /**
+   * 图内步骤的 Worker 发生 turn_failed 或 worktree_failed 时：步骤置为 waiting:pm，返回第 9.4 节格式的唤醒正文；
+   * 非活跃任务图步骤返回 null（按临时 Worker 处理）。
+   */
+  const onWorkerFailedIn = (
     p: Pending,
     workerId: WorkerId,
-    opts: { clearActiveWorker: boolean },
-  ): void => {
+    opts: { clearActiveWorker: boolean; reasonLabel: string; detailBody: string; stoppedByUser?: boolean },
+  ): string | null => {
     const node = db.get<TaskNodeDbRow>(
       "SELECT * FROM task_graph_steps WHERE active_worker_id = ?",
       workerId,
     );
-    if (node === undefined) return;
+    if (node === undefined) return null;
     const graphRow = getGraphRow(node.graph_id);
-    if (graphRow === undefined || graphRow.status !== "active") return;
+    if (graphRow === undefined || graphRow.status !== "active") return null;
+    const allNodes = db.all<{ node_key: string }>(
+      "SELECT node_key FROM task_graph_steps WHERE graph_id = ? ORDER BY sort_order ASC, id ASC",
+      graphRow.id,
+    );
+    const stepIndex = allNodes.findIndex((n) => n.node_key === node.node_key) + 1 || 1;
     const t = now();
     db.run(
       `UPDATE task_graph_steps
@@ -2247,8 +3189,150 @@ export function createLedgerTaskGraphs(
       node.id,
     );
     db.run("UPDATE task_graphs SET updated_at = ? WHERE id = ?", t, graphRow.id);
-    const graph = loadGraph(graphRow.id);
+    const graph = loadGraph(graphRow.id, false);
     if (graph !== null) p.changes.push({ type: "task_graph.updated", data: { graph } });
+    return formatStepWaitingPmMessage({
+      graph: { id: graphRow.id, title: graphRow.title },
+      step: { key: node.node_key, title: node.title, index: stepIndex, total: allNodes.length },
+      workerId: opts.clearActiveWorker ? null : workerId,
+      reasonLabel: opts.reasonLabel,
+      detailBody: opts.detailBody,
+      stoppedByUser: opts.stoppedByUser,
+    });
+  };
+
+  /**
+   * 图内步骤的 Worker 一轮正常结束（第 4.1、4.6、6、9.4 节）：
+   * - 做完了 + 无偏离 + 未标 confirm + 非后台强停补报 -> 步骤自动标 done，自动收工 Worker，自动拉起就绪下游，全程不叫醒 PM（问题非无则抄送 PM，全部完成发交付单）；
+   * - 汇报偏离、confirm: true、有问题、放弃了或没按格式 -> 置为 waiting:pm（Worker 不收工），按第 9.4 节格式叫醒 PM；
+   * - 有效的 PR URL 自动写入步骤的 prUrl。
+   */
+  const onWorkerTurnReportIn = (
+    p: Pending,
+    worker: { id: WorkerId; branch: string | null },
+    parsed: ParsedWorkerReport,
+    rawBody: string,
+    forcedNote: string | null,
+  ):
+    | { handled: false }
+    | { handled: true; outcome: "completed"; wakePmWithReport: boolean; completeStep: () => void }
+    | { handled: true; outcome: "waiting_pm"; pmDeliverBody: string } => {
+    const node = db.get<TaskNodeDbRow>(
+      "SELECT * FROM task_graph_steps WHERE active_worker_id = ?",
+      worker.id,
+    );
+    if (node === undefined) return { handled: false };
+    const graphRow = getGraphRow(node.graph_id);
+    if (graphRow === undefined || graphRow.status !== "active") return { handled: false };
+
+    const prUrl = parsed.kind === "ok" ? extractReportPrUrl(parsed.report.pr) : null;
+    const prevArtifact = parseJsonOr<TaskArtifact>(node.artifact_json, {});
+    const mergedArtifact: TaskArtifact = {
+      ...prevArtifact,
+      ...(worker.branch ? { branch: worker.branch } : {}),
+      ...(parsed.kind === "ok" && parsed.report.commit ? { commit: parsed.report.commit } : {}),
+      ...(prUrl ? { prUrl } : {}),
+      ...(parsed.kind === "ok"
+        ? { summary: truncateChars(parsed.report.summary, MAX_NODE_ARTIFACT_SUMMARY_CHARS) }
+        : {}),
+    };
+    const artifactJson = Object.keys(mergedArtifact).length > 0 ? JSON.stringify(mergedArtifact) : null;
+
+    const autoAdvance =
+      forcedNote === null &&
+      parsed.kind === "ok" &&
+      parsed.report.status === "done" &&
+      parsed.report.deviation === null &&
+      node.confirm === 0;
+
+    if (autoAdvance) {
+      const wakePmWithReport = hasReportQuestion(parsed.report.questions);
+      return {
+        handled: true,
+        outcome: "completed",
+        wakePmWithReport,
+        completeStep: () => {
+          const wasAllSettled = isGraphAllSettled(graphRow.id);
+          const t = now();
+          db.run(
+            `UPDATE task_graph_steps
+                SET status = 'done',
+                    waiting_for = NULL,
+                    active_worker_id = NULL,
+                    artifact_json = ?,
+                    updated_at = ?
+              WHERE id = ?`,
+            artifactJson,
+            t,
+            node.id,
+          );
+          const progress = recomputeGraphProgressIn(p, graphRow);
+          syncDeliveryNoteAfterProgressIn(p, graphRow, wasAllSettled);
+          // 若下游解锁了无 brief 的手动步骤（无人自动开工），唤醒 PM 处理手动步骤
+          if (progress.turned.some((u) => u.waitingFor === "pm")) {
+            wakePmForTurnedIn(
+              p,
+              graphRow,
+              progress.turned,
+              `步骤「${node.node_key}（${node.title}）」已完成，`,
+              `auto-done:${node.node_key}:${t}`,
+            );
+          }
+          const graph = loadGraph(graphRow.id, false);
+          if (graph !== null) p.changes.push({ type: "task_graph.updated", data: { graph } });
+        },
+      };
+    }
+
+    // 刹车停在 waiting:pm（Worker 不收工，保留 active_worker_id 以便 worker send 打回或回答）
+    const allNodes = db.all<{ node_key: string }>(
+      "SELECT node_key FROM task_graph_steps WHERE graph_id = ? ORDER BY sort_order ASC, id ASC",
+      graphRow.id,
+    );
+    const stepIndex = allNodes.findIndex((n) => n.node_key === node.node_key) + 1 || 1;
+    const t = now();
+    db.run(
+      `UPDATE task_graph_steps
+          SET status = 'waiting',
+              waiting_for = 'pm',
+              artifact_json = ?,
+              updated_at = ?
+        WHERE id = ?`,
+      artifactJson,
+      t,
+      node.id,
+    );
+    db.run("UPDATE task_graphs SET updated_at = ? WHERE id = ?", t, graphRow.id);
+    const graph = loadGraph(graphRow.id, false);
+    if (graph !== null) p.changes.push({ type: "task_graph.updated", data: { graph } });
+
+    let reasonLabel: string;
+    if (forcedNote !== null) {
+      reasonLabel = "这一轮没做完（后台命令中断）";
+    } else if (parsed.kind !== "ok") {
+      reasonLabel = "没按格式";
+    } else if (parsed.report.status === "problem") {
+      reasonLabel = "汇报有问题";
+    } else if (parsed.report.status === "gave_up") {
+      reasonLabel = "放弃了";
+    } else if (parsed.report.deviation !== null) {
+      reasonLabel = "报告偏离";
+    } else {
+      reasonLabel = "汇报做完了（此步骤标了 confirm 待确认）";
+    }
+
+    const detailBody = forcedNote === null ? rawBody : `${forcedNote}\n\n${rawBody}`;
+    return {
+      handled: true,
+      outcome: "waiting_pm",
+      pmDeliverBody: formatStepWaitingPmMessage({
+        graph: { id: graphRow.id, title: graphRow.title },
+        step: { key: node.node_key, title: node.title, index: stepIndex, total: allNodes.length },
+        workerId: worker.id,
+        reasonLabel,
+        detailBody,
+      }),
+    };
   };
 
   /** 项目经理向等它处理的步骤上挂着的 Worker、或刚完了但还没收工的 Worker 追加指令（hub worker send）时，步骤回到在干（第 3.2 节第 7、13 行）。 */
@@ -2263,7 +3347,7 @@ export function createLedgerTaskGraphs(
       const t = now();
       db.run("UPDATE task_graph_steps SET status = 'running', waiting_for = NULL, updated_at = ? WHERE id = ?", t, attnNode.id);
       db.run("UPDATE task_graphs SET updated_at = ? WHERE id = ?", t, graphRow.id);
-      const graph = loadGraph(graphRow.id);
+      const graph = loadGraph(graphRow.id, false);
       if (graph !== null) p.changes.push({ type: "task_graph.updated", data: { graph } });
       return;
     }
@@ -2279,6 +3363,14 @@ export function createLedgerTaskGraphs(
     if (reopened === undefined) return;
     const graphRow = getGraphRow(reopened.graph_id);
     if (graphRow === undefined || graphRow.status !== "active") return;
+    const { byKey, outgoing } = buildGraphMaps(graphRow.id);
+    const activeDownstream = findActiveDownstream(reopened.node_key, byKey, outgoing);
+    if (activeDownstream !== null) {
+      throw fail(
+        "conflict",
+        `步骤「${reopened.node_key}」已完成且下游步骤「${activeDownstream}」正在执行或挂着未收工的 Worker，不能再向原 Worker #${workerId} 发消息重开上游步骤`,
+      );
+    }
     const t = now();
     db.run(
       "UPDATE task_graph_steps SET status = 'running', active_worker_id = ?, updated_at = ? WHERE id = ?",
@@ -2288,27 +3380,15 @@ export function createLedgerTaskGraphs(
     );
     recomputeGraphProgressIn(p, graphRow);
     stopQueuedDeliveryNotesIn(p, graphRow.conversation_id, graphRow.id);
-    const graph = loadGraph(graphRow.id);
+    const graph = loadGraph(graphRow.id, false);
     if (graph !== null) p.changes.push({ type: "task_graph.updated", data: { graph } });
   };
 
   /**
-   * Worker 收工（hub worker end 或归档收工）：
-   * - 仅当 !incomplete 且最近一轮汇报状态为“做完了”时，步骤完了，下游轮到（若全部步骤都完了则发交付单通知 PM）；
-   * - 传了 --incomplete（如对话超过 WORKER_SEND_MAX_TOKENS 的 200K 上限换人接力）或未汇报“做完了”即收工时，变等人（等项目经理）且清空 active_worker_id，等待接力 Worker 重绑。
-   * 返回给 hub worker end 回执用的一句话：它绑定的节点变成了什么、解锁了谁、接下来怎么办；没绑节点（或图已结束）返回 null。
+   * 第 6 节：hub worker end（或归档收工）只停掉这个 Worker，绝不再把步骤标完成！
+   * 若它绑在活跃任务图里未 done 的步骤上，步骤变为 waiting:pm 并清空 active_worker_id。
    */
-  const onWorkerEndedIn = (
-    p: Pending,
-    workerId: WorkerId,
-    opts: {
-      hadLatestDoneReport: boolean;
-      incomplete: boolean;
-      summary?: string | null;
-      branch?: string | null;
-      commit?: string | null;
-    },
-  ): string | null => {
+  const onWorkerEndedIn = (p: Pending, workerId: WorkerId): string | null => {
     const node = db.get<TaskNodeDbRow>(
       "SELECT * FROM task_graph_steps WHERE active_worker_id = ?",
       workerId,
@@ -2318,36 +3398,10 @@ export function createLedgerTaskGraphs(
     if (graphRow === undefined || graphRow.status !== "active") return null;
     const t = now();
     const where = `任务图 #${graphRow.id} 的节点「${node.node_key}」`;
-    let note: string;
-
-    if (!opts.incomplete && opts.hadLatestDoneReport) {
-      const wasAllSettled = isGraphAllSettled(graphRow.id);
-      const prevArtifact = parseJsonOr<TaskArtifact>(node.artifact_json, {});
-      const artifact: TaskArtifact = {
-        ...prevArtifact,
-        ...(opts.branch ? { branch: opts.branch } : {}),
-        // 打回重做后由新 Worker 收工：用这一轮汇报的提交号覆盖上一轮的，交付单不能还显示旧提交
-        ...(opts.commit ? { commit: opts.commit } : {}),
-        ...(opts.summary ? { summary: opts.summary } : {}),
-      };
-      db.run(
-        `UPDATE task_graph_steps
-            SET status = 'done',
-                waiting_for = NULL,
-                active_worker_id = NULL,
-                artifact_json = ?,
-                updated_at = ?
-          WHERE id = ?`,
-        Object.keys(artifact).length > 0 ? JSON.stringify(artifact) : null,
-        t,
-        node.id,
-      );
-      const unlocked = recomputeGraphProgressIn(p, graphRow);
-      syncDeliveryNoteAfterProgressIn(p, graphRow, wasAllSettled);
-      const after = loadGraph(graphRow.id);
-      const tail = after === null ? "" : unlockedNoteOf(unlocked, after);
-      note = `它绑定的${where}已标记为完了（它最近一轮汇报是“做完了”）${tail}${tail.endsWith("！") ? "" : "。"}`;
-    } else {
+    if (node.status === "done") {
+      db.run("UPDATE task_graph_steps SET active_worker_id = NULL, updated_at = ? WHERE id = ?", t, node.id);
+      return null;
+    }
       db.run(
         `UPDATE task_graph_steps
             SET status = 'waiting',
@@ -2359,13 +3413,166 @@ export function createLedgerTaskGraphs(
         node.id,
       );
       db.run("UPDATE task_graphs SET updated_at = ? WHERE id = ?", t, graphRow.id);
-      const why = opts.incomplete ? "带了 --incomplete" : "它最近一轮没有汇报“做完了”";
-      note = `它绑定的${where}变成等你处理，等人接手（${why}）：用 ${HUB_COMMAND} worker start --node ${node.node_key} --graph ${graphRow.id} 新派 Worker 接手，不需要了用 ${HUB_COMMAND} graph skip ${node.node_key} --graph ${graphRow.id}。`;
-    }
+    const note =
+      `它绑定的${where}变成等你处理：换人用 ${HUB_COMMAND} worker start --node ${node.node_key} --graph ${graphRow.id}，` +
+      `放行用 ${HUB_COMMAND} graph done ${node.node_key} --graph ${graphRow.id}，` +
+      `跳过用 ${HUB_COMMAND} graph skip ${node.node_key} --graph ${graphRow.id}。`;
 
-    const graph = loadGraph(graphRow.id);
+    const graph = loadGraph(graphRow.id, false);
     if (graph !== null) p.changes.push({ type: "task_graph.updated", data: { graph } });
     return note;
+  };
+
+  /** 供 getWorktreeTask 查询分叉步骤新开 worktree 时的基准分支。 */
+  const workerGraphForkBase = (workerId: WorkerId): string | undefined => {
+    const node = db.get<TaskNodeDbRow>(
+      `SELECT n.* FROM task_graph_steps n
+         JOIN task_graphs g ON g.id = n.graph_id
+        WHERE n.active_worker_id = ?
+        ORDER BY n.id DESC LIMIT 1`,
+      workerId,
+    );
+    if (node === undefined) return undefined;
+    const graphRow = getGraphRow(node.graph_id);
+    if (graphRow === undefined) return undefined;
+    const { byKey, incoming, outgoing } = buildGraphMaps(graphRow.id);
+    const plan = resolveWorkspacePlan(graphRow, node, byKey, incoming, outgoing);
+    return plan.kind === "fork" ? plan.baseBranch : undefined;
+  };
+
+  /** 供 Worker 调 hub status 时查询所属任务图目标、本步职责与上游交棒摘要/落盘路径。 */
+  const workerGraphStatus = (
+    workerId: WorkerId,
+    sessionId: SessionId,
+  ): WorkerHubStatus["taskGraph"] | undefined => {
+    const node =
+      db.get<TaskNodeDbRow>("SELECT * FROM task_graph_steps WHERE active_worker_id = ? ORDER BY id DESC LIMIT 1", workerId) ??
+      db.get<TaskNodeDbRow>(
+        `SELECT n.* FROM task_graph_steps n, json_each(n.worker_ids_json) j
+          WHERE j.value = ?
+          ORDER BY n.id DESC LIMIT 1`,
+        workerId,
+      );
+    if (node === undefined) return undefined;
+    const graphRow = getGraphRow(node.graph_id);
+    if (graphRow === undefined) return undefined;
+    const { nodeRows, byKey, incoming } = buildGraphMaps(graphRow.id);
+    const stepIndex = nodeRows.findIndex((r) => r.node_key === node.node_key) + 1 || 1;
+    const direct = collectDirectUpstreams(graphRow, node.node_key, byKey, incoming);
+    const upstream: WorkerHubStatusUpstream[] = [];
+    for (const entry of direct) {
+      if (entry.kind === "active") {
+        let fileCandidate: string | null = null;
+        if (options.launchDir !== "") {
+          try {
+            fileCandidate = upstreamReportFilePath(options.launchDir, sessionId, entry.source.key);
+          } catch {
+            fileCandidate = null;
+          }
+        }
+        const reportFile = fileCandidate !== null && existsSync(fileCandidate) ? fileCandidate : null;
+        const prUrl = extractReportPrUrl(entry.source.pr) ?? entry.source.pr;
+        upstream.push({
+          key: entry.source.key,
+          title: entry.source.title,
+          skipped: false,
+          summary: entry.source.summary,
+          branch: entry.source.branch,
+          prUrl: prUrl ?? null,
+          reportFile,
+        });
+      } else {
+        upstream.push({
+          key: entry.key,
+          title: entry.title,
+          skipped: true,
+          summary: entry.skipReason ? `已跳过：${entry.skipReason}` : "已跳过",
+          branch: null,
+          prUrl: null,
+          reportFile: null,
+        });
+        for (const traced of entry.tracedSources) {
+          if (upstream.some((u) => u.key === traced.key)) continue;
+          let fileCandidate: string | null = null;
+          if (options.launchDir !== "") {
+            try {
+              fileCandidate = upstreamReportFilePath(options.launchDir, sessionId, traced.key);
+            } catch {
+              fileCandidate = null;
+            }
+          }
+          const reportFile = fileCandidate !== null && existsSync(fileCandidate) ? fileCandidate : null;
+          const prUrl = extractReportPrUrl(traced.pr) ?? traced.pr;
+          upstream.push({
+            key: traced.key,
+            title: traced.title,
+            skipped: false,
+            summary: traced.summary,
+            branch: traced.branch,
+            prUrl: prUrl ?? null,
+            reportFile,
+          });
+        }
+      }
+    }
+    return {
+      id: graphRow.id,
+      title: graphRow.title,
+      goal: graphRow.goal,
+      stepKey: node.node_key,
+      stepTitle: node.title,
+      stepIndex,
+      totalSteps: nodeRows.length,
+      brief: node.brief,
+      upstream,
+    };
+  };
+
+  /** agent 接口在建图/改图/推进前只读收集可能被自动拉起的指定厂商，供异步预探可用状态。 */
+  const graphAutoDispatchVendors = (
+    caller: AgentSessionRow | null,
+    command: HubCommand,
+    body: Record<string, unknown>,
+  ): AgentVendor[] => {
+    if (caller === null || caller.role !== "pm" || caller.pmId === null) return [];
+    const out = new Set<AgentVendor>();
+    if (command === "graph.create" || command === "graph.patch") {
+      if (typeof body.specJson === "string") {
+        try {
+          const obj = JSON.parse(body.specJson) as Record<string, unknown>;
+          for (const key of ["steps", "nodes", "addSteps", "addNodes", "updateSteps", "updateNodes"]) {
+            const arr = obj[key];
+            if (!Array.isArray(arr)) continue;
+            for (const item of arr) {
+              if (typeof item === "object" && item !== null && isAgentVendor((item as { vendor?: unknown }).vendor)) {
+                out.add((item as { vendor: AgentVendor }).vendor);
+              }
+            }
+          }
+        } catch {
+          // 非法 JSON 留给 hubCall 报错
+        }
+      }
+    }
+    if (command !== "graph.create") {
+      const graphId = typeof body.graphId === "number" ? body.graphId : undefined;
+      const rows =
+        graphId !== undefined
+          ? db.all<{ vendor: string | null }>(
+              "SELECT vendor FROM task_graph_steps WHERE graph_id = ? AND status != 'done' AND vendor IS NOT NULL",
+              graphId,
+            )
+          : db.all<{ vendor: string | null }>(
+              `SELECT n.vendor FROM task_graph_steps n
+                 JOIN task_graphs g ON g.id = n.graph_id
+                WHERE g.pm_id = ? AND g.status = 'active' AND n.status != 'done' AND n.vendor IS NOT NULL`,
+              caller.pmId,
+            );
+      for (const r of rows) {
+        if (r.vendor !== null && isAgentVendor(r.vendor)) out.add(r.vendor);
+      }
+    }
+    return [...out];
   };
 
   // ---- 快照、status 摘要、交接实时注入与保留期清理 ----
@@ -2475,6 +3682,7 @@ export function createLedgerTaskGraphs(
     cancelIn,
     finishIn,
     graphPrTargets,
+    graphAutoDispatchVendors,
     graphDeliveryProbeTarget,
     enrichDeliveryNoteMessage,
     decideNode,
@@ -2483,9 +3691,12 @@ export function createLedgerTaskGraphs(
     listProjectHistory,
     prepareWorkerBind,
     bindWorkerStartedIn,
-    onWorkerAttentionIn,
+    onWorkerTurnReportIn,
+    onWorkerFailedIn,
     onWorkerResumedIn,
     onWorkerEndedIn,
+    workerGraphForkBase,
+    workerGraphStatus,
     activeSnapshotGraphs,
     pmStatusGraphs,
     liveHandoverSection,
