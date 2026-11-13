@@ -113,7 +113,7 @@ function GroupTitle({
   trailing?: React.ReactNode;
 }) {
   const title = (
-    <h2 id={id} className={cn("h-8 pointer-coarse:h-11 text-xs font-medium text-muted-foreground", trailing && "min-w-0 flex-1")}>
+    <h2 id={id} className={cn("h-8 min-w-0 pointer-coarse:h-11 text-xs font-medium text-muted-foreground", trailing && "flex-1")}>
       <button
         type="button"
         aria-expanded={!collapsed}
@@ -122,7 +122,7 @@ function GroupTitle({
         onClick={onToggle}
       >
         {dot && <span className="size-1.5 shrink-0 rounded-full bg-primary" aria-hidden="true" />}
-        {children}
+        <span className="min-w-0 truncate">{children}</span>
         <ChevronRight
           className={cn(
             "size-3.5 shrink-0 text-muted-foreground transition-transform duration-200 ease-out motion-reduce:transition-none",
@@ -135,7 +135,7 @@ function GroupTitle({
   );
   if (!trailing) return title;
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex min-w-0 items-center gap-2">
       {title}
       {/* 开关的图标和收起时在顶栏右边的位置一样（右边 12px），点开关时不跳 */}
       <div className="-mr-2 shrink-0">{trailing}</div>
@@ -218,9 +218,20 @@ export function PieceMeta({ worker }: { worker: WorkerEntry }) {
   const { model, effort, context } = usePieceMeta(worker);
   if (model === null && effort === null && context === null) return null;
   return (
-    <span data-testid="piece-meta" className="flex shrink-0 items-baseline gap-3 text-xs text-muted-foreground max-[720px]:hidden">
-      {model !== null && <span>{model}</span>}
-      {effort !== null && <span className="shrink-0">{effort}</span>}
+    <span
+      data-testid="piece-meta"
+      className="flex min-w-0 items-baseline gap-3 overflow-hidden text-xs text-muted-foreground max-[720px]:hidden @max-[18rem]/chat:hidden"
+    >
+      {model !== null && (
+        <span title={model} className={cn("min-w-0 truncate", context !== null && "@max-[22rem]/chat:hidden")}>
+          {model}
+        </span>
+      )}
+      {effort !== null && (
+        <span className={cn("shrink-0", (model !== null || context !== null) && "@max-[26rem]/chat:hidden")}>
+          {effort}
+        </span>
+      )}
       {context !== null && (
         <span className="shrink-0 tabular-nums" title={formatTokenDetail(worker.usage)}>
           {context}
@@ -667,7 +678,7 @@ export const RightRail = memo(function RightRail({
     <aside
       id={RIGHT_RAIL_ID}
       aria-label="Side panel"
-      className={cn("tint-fade flex shrink-0 flex-col bg-surface-chat", side ? "w-80 border-l border-line" : "max-h-[40dvh] border-b border-line")}
+      className={cn("tint-fade flex min-w-0 shrink-0 flex-col overflow-hidden bg-surface-chat", side ? "w-80 border-l border-line" : "max-h-[40dvh] border-b border-line")}
     >
       <RailGroups
         asks={asks}
