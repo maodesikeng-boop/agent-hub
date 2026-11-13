@@ -86,10 +86,11 @@ describe("任务图技能正文", () => {
       "同一个 git worktree 和同一条分支",
       "`upstream/<stepKey>.md`",
       "`vendor`、`model`、`effort`、`readonly`、`maxTime`",
-      "`review: true`、`base: \"main\"`",
-      "**用户明说要先看的地方**（比如“先给我看方案”）单独加一步（不写 `brief`），带上 `question`、`options` 和你的推荐 `recommended`",
+      "`confirm: true`、`review: true`、`base: \"main\"`",
+      "**用户明说要先看的步骤**（比如“先给我看方案”“改完先让我看效果”）：给这一步标 `\"confirm\": true`（照常写 `brief` 自动开工）。",
+      "「通过 / 打回」检查点拍板卡",
       "步骤只有四个状态：没轮到（`pending`）、在干（`running`）、等人（`waiting`，等你处理或等用户拍板）、完了（`done`，跳过也算完了）。",
-      `别的拍板不预先挂卡，撞上了用 \`${hub} ask\` 问。`,
+      `别的拍板不要预先建空步骤，等干活的 Worker 撞上了再用 \`${hub} ask --node <步骤>\` 挂卡。`,
       "**碰到下面任意一条，就在实现后面加一个审查步骤**（设 `\"review\": true` 并指定另一家 `vendor`",
       ...PM_REVIEW_REDLINES.map((line) => `  - ${line}`),
       "纯文案、纯展示、局部纯函数、薄胶水层不用审查，靠测试和截图兜底。",
@@ -122,7 +123,8 @@ describe("任务图技能正文", () => {
     }
     expect(body).not.toContain("所有节点都完成后整张图自动结束，不能再改");
     expect(body).not.toContain("--incomplete");
-    expect(body).not.toContain(`${hub} ask --node`);
+    expect(body).toContain(`\`${hub} ask --node <步骤> [--option <选项>...] [--recommended <选项>] --stdin\``);
+    expect(body).not.toContain(`${hub} graph ask`);
     // 规矩在命令前面（claude 压缩后只重新挂每个技能的前 5,000 个 token）
     expect(body.indexOf("## 建图")).toBeLessThan(body.indexOf("## 跟进"));
     expect(body.indexOf("## 跟进")).toBeLessThan(body.indexOf("## 命令"));

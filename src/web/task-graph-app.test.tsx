@@ -170,6 +170,85 @@ describe("桌面右栏：App 接通果皮轨与切面轮", () => {
     expect(api.callsTo("POST", DECIDE_PATH)[0]!.body).toMatchObject({ choice: "再等等" });
   });
 
+  it("对话流里的步骤拍板卡（带 gateRef）与 confirm 检查点卡：点选或填打回意见直调 /decide，不误发普通聊天消息，检查点默认展开意见框", async () => {
+    const user = userEvent.setup();
+    const checkpointGraph: TaskGraph = {
+      id: GRAPH_ID,
+      projectId: 1,
+      pmId: 1,
+      conversationId: 1,
+      title: "检查点验收流水线",
+      status: "active",
+      originMsgId: null,
+      nodes: [
+        makeNode({
+          key: "gate",
+          title: "方案检查点",
+          status: "waiting",
+          waitingFor: "user",
+          sortOrder: 0,
+          activeWorkerId: 3,
+          workerIds: [3],
+          gateQuestion: "请确认步骤「方案检查点」的结果",
+          gateOptions: ["通过", "打回"],
+          gateRecommended: "通过",
+          gateSummaryMd: "**摘要**：已完成方案初稿\n\n**交棒要点**：\n见 `docs/plan.md`",
+          gateAskMessageId: 105,
+          gateCheckpoint: true,
+        }),
+      ],
+      edges: [],
+      createdAt: 1_000,
+      updatedAt: 2_000,
+      completedAt: null,
+    };
+    const snap = makeSnapshot({
+      pms: [makePm({ id: 1, name: "小林" })],
+      projects: [makeProject({ id: 1, pmId: 1, conversationId: 1 })],
+      conversations: [
+        makeConvSnapshot(
+          [
+            makeMessage({
+              id: 105,
+              text: "请确认步骤「方案检查点」的结果\n\n**摘要**：已完成方案初稿\n\n**交棒要点**：\n见 `docs/plan.md`",
+              meta: {
+                needsUser: true,
+                options: ["通过", "打回"],
+                recommended: "通过",
+                gateRef: { graphId: GRAPH_ID, nodeKey: "gate", checkpoint: true },
+              },
+              dedupeKey: "ask:1:105",
+            }),
+          ],
+          { conversation: { id: 1, pmId: 1, title: "小林" } },
+        ),
+      ],
+      sessions: [makeSession({ sessionId: 10, conversationId: 1, pmId: 1 })],
+      activeTaskGraphs: [checkpointGraph],
+    });
+
+    const { api } = await bootSingle(snap);
+    const railCard = await waitFor(() => within(sidePanel()).getByTestId("peel-gate-card"));
+    // 右栏果皮轨检查点拍板卡默认已展开补充输入框，无需先点 Add note
+    expect(within(railCard).getByLabelText("Add note")).toBeInTheDocument();
+    expect(within(railCard).getByRole("button", { name: /通过.*Recommended/ })).toBeInTheDocument();
+
+    // 对话消息流里的检查点 AskCard 同样展示 Recommended 并默认展开补充输入框，点「打回」带修改意见直调 /decide，不调 /messages
+    const chatArticle = document.querySelector('[data-message-id="105"]') as HTMLElement;
+    const chatCard = chatArticle.querySelector("[data-ask-card]") as HTMLElement;
+    expect(within(chatCard).getByText("Recommended")).toBeInTheDocument();
+    const noteInput = within(chatCard).getByLabelText("Add note");
+    await user.type(noteInput, "把缓存淘汰改成 lru-cache");
+    await user.click(within(chatCard).getByRole("button", { name: /打回/ }));
+
+    await waitFor(() => expect(api.callsTo("POST", DECIDE_PATH)).toHaveLength(1));
+    expect(api.callsTo("POST", DECIDE_PATH)[0]!.body).toMatchObject({
+      choice: "打回",
+      note: "把缓存淘汰改成 lru-cache",
+    });
+    expect(api.callsTo("POST", /^\/api\/conversations\/1\/messages$/)).toHaveLength(0);
+  });
+
   it("Cancel graph 要二次确认：点一下只弹确认，Keep going 不发请求；确认后才 POST，成功后两层弹窗都关", async () => {
     const user = userEvent.setup();
     const { api } = await bootSingle(graphSnapshot());

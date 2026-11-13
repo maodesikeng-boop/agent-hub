@@ -32,10 +32,12 @@ export type PendingDecisionSource =
       blockedNodeCount: number;
       nextNodeTitles: string[];
       recommended: string | null;
+      checkpoint?: boolean;
     }
   | {
       kind: "router_item";
       itemId: RouterItemId;
+      recommended?: string | null;
     };
 
 export interface PendingDecision {
@@ -153,8 +155,9 @@ export function pendingDecisionsOf(snapshot: DecisionSnapshotInput, deviceId = "
     if (item.kind === "decision" && item.status === "pending" && item.askMessageId !== null) {
       const msgs = messagesOfConversation(snapshot.conversations, item.conversationId);
       const targetMsg = msgs.find((m) => m.id === item.askMessageId);
-      const hasGateRef = targetMsg !== undefined && askOf(targetMsg)?.gateRef !== undefined ? "1" : "0";
-      askMessagesSig += `${item.id}:${hasGateRef};`;
+      const targetAsk = targetMsg !== undefined ? askOf(targetMsg) : null;
+      const hasGateRef = targetAsk?.gateRef !== undefined ? "1" : "0";
+      askMessagesSig += `${item.id}:${hasGateRef}:${targetAsk?.recommended ?? ""};`;
     }
   }
 
@@ -223,6 +226,7 @@ export function pendingDecisionsOf(snapshot: DecisionSnapshotInput, deviceId = "
           blockedNodeCount,
           nextNodeTitles,
           recommended: node.gateRecommended,
+          ...(node.gateCheckpoint ? { checkpoint: true } : {}),
         },
       });
     }
@@ -232,11 +236,14 @@ export function pendingDecisionsOf(snapshot: DecisionSnapshotInput, deviceId = "
     if (item.kind !== "decision" || item.status !== "pending") continue;
     const pm = pmById.get(item.pmId);
     if (pm?.archivedAt != null) continue;
+    let recommended: string | undefined;
     if (item.askMessageId !== null) {
       if (gateMessageIds.has(item.askMessageId)) continue;
       const msgs = messagesOfConversation(snapshot.conversations, item.conversationId);
       const targetMsg = msgs.find((m) => m.id === item.askMessageId);
-      if (targetMsg !== undefined && askOf(targetMsg)?.gateRef !== undefined) continue;
+      const targetAsk = targetMsg !== undefined ? askOf(targetMsg) : null;
+      if (targetAsk?.gateRef !== undefined) continue;
+      recommended = targetAsk?.recommended;
     }
     result.push({
       key: `item:${deviceId}:${item.id}`,
@@ -255,6 +262,7 @@ export function pendingDecisionsOf(snapshot: DecisionSnapshotInput, deviceId = "
       source: {
         kind: "router_item",
         itemId: item.id,
+        ...(recommended !== undefined ? { recommended } : {}),
       },
     });
   }

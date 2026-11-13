@@ -681,7 +681,7 @@ describe("提示词：项目经理（M3）", () => {
         "建了图的步骤顺利完成时后台自动收工并往下交棒，不打扰你",
         `不建图的按第 5 步验收，通过就 \`${hub} worker end <编号>\` 收工`,
         `能答的直接答、不认可偏离就打回（\`${hub} worker send\`）`,
-        `要用户定的，用 \`${hub} ask\` 提问并写上选项和你的推荐，答复回来再转给 Worker`,
+        `要用户定的，用 \`${hub} ask\` 提问并写上选项和你的推荐（图里的步骤按任务图手册挂在对应步骤上，用户的答复会直接交给它的 Worker；不建图的答复回来再转给 Worker）`,
         "不要只在回复里问一句就停下等",
         `能接着干就 \`${hub} worker send\``,
         `对话超过 ${limitK} 或该换一家，就收工后新派一个接手，任务说明里写清分支、已有的提交、还要改的点`,
@@ -745,9 +745,9 @@ describe("提示词：项目经理（M3）", () => {
       `${hub} worker log <编号> [--last N | --stats]`,
       `${hub} worker search <关键词…> [--limit N]`,
       `最近几步（默认 ${WORKER_LOG_DEFAULT_STEPS} 步）`,
-      `${hub} ask [--option <选项>...] --stdin`,
+      `${hub} ask [--option <选项>...] [--recommended <选项>] --stdin`,
       // 任务图缩成一行，用法在任务图手册里（全部子命令按 HUB_COMMANDS 拼）
-      `- **任务图**：\`${hub} graph create|show|list|ask|patch|done|decide|skip|cancel|finish\`，用法在任务图手册里（第 2 步“建图”那一条写了去哪看，也可以 \`${hub} help graph\`）`,
+      `- **任务图**：\`${hub} graph create|show|list|patch|done|decide|skip|cancel|finish\`，用法在任务图手册里（第 2 步“建图”那一条写了去哪看，也可以 \`${hub} help graph\`）`,
     ]) {
       expect(HUB_USAGE_PROMPT, sub).toContain(sub);
     }
@@ -771,7 +771,7 @@ describe("提示词：项目经理（M3）", () => {
     for (const [group, actions] of compressed) {
       for (const action of actions) expect(HUB_COMMANDS as readonly string[], `${group} ${action}`).toContain(`${group}.${action}`);
     }
-    for (const flag of ["--stdin", "--title", "--vendor", "--refresh", "--model", "--effort", "--readonly", "--no-worktree", "--task", "--report", "--limit", "--last", "--stats", "--option"]) {
+    for (const flag of ["--stdin", "--title", "--vendor", "--refresh", "--model", "--effort", "--readonly", "--no-worktree", "--task", "--report", "--limit", "--last", "--stats", "--option", "--recommended"]) {
       expect(HUB_USAGE, flag).toContain(flag);
       expect(HUB_USAGE_PROMPT, flag).toContain(flag);
     }
@@ -781,6 +781,8 @@ describe("提示词：项目经理（M3）", () => {
       expect(HUB_USAGE_PROMPT, flag).not.toContain(flag);
     }
     expect(HUB_USAGE).not.toContain("--incomplete");
+    expect(HUB_USAGE).not.toContain(`${hub} router ask`);
+    expect(HUB_USAGE).not.toContain(`${hub} graph ask`);
   });
 
   it("缩成一行的命令组（项目、性格设定、定时任务、总助、热重启）：提示词让它用 hub help 查，参数和注意事项在 HUB_USAGE 里都查得到", () => {
@@ -790,7 +792,7 @@ describe("提示词：项目经理（M3）", () => {
       `\`${hub} project create|attach|detach|setup\`：建项目、挂上或移除附加文件夹、设置新 worktree 开工前跑的准备脚本`,
       `\`${hub} persona show|edit\`：查看、修改性格设定和模式`,
       `\`${hub} schedule add|list|pause|resume|remove\`：定时任务，到点把正文发进你的对话（用户要日报才建）`,
-      `\`${hub} router ask|report|note\`：给总助发拍板卡、里程碑汇报卡，更新一句话项目主线备忘`,
+      `\`${hub} router report|note\`：任务图以外的里程碑给总助发一张汇报卡、更新一句话项目主线备忘`,
       `\`${hub} self-reload [--build]\`：${PRODUCT_ID} 自身代码合进来后让守护进程热重启`,
     ]) {
       expect(HUB_USAGE_PROMPT, line).toContain(line);
@@ -810,7 +812,7 @@ describe("提示词：项目经理（M3）", () => {
       `${hub} schedule pause <编号>`,
       `${hub} schedule resume <编号>`,
       `${hub} schedule remove <编号>`,
-      `${hub} router ask --question <问题> --option <选项>... [--recommended <1..4>] [--replace <编号>] [--context <说明> | --stdin]`,
+      `${hub} ask [--node <步骤>] [--graph <图编号>] [--option <选项>...] [--recommended <选项>] [--replace <编号>] --stdin`,
       `${hub} router report (--summary <摘要> | --stdin) [--pr <URL>] [--worker <编号>] [--file <路径>] [--link <标签=地址>...]`,
       `${hub} router note (--text <备忘> | --stdin | --clear)`,
       `${hub} self-reload [--build]`,

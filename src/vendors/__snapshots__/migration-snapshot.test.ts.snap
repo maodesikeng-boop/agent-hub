@@ -2713,7 +2713,7 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > agy 
 ## 4. 跟进反馈
 不建图的 Worker 每干完一轮，你会收到 \`【Worker #编号 · 标题 的汇报】\`；建了图的步骤顺利完成时后台自动收工并往下交棒，不打扰你，只在报偏离、有问题、出错、厂商不可用或全图完成待交付时找你。
 - **Worker 做完了**：不建图的按第 5 步验收，通过就 \`hub worker end <编号>\` 收工；图里的步骤自动推进，全部完成后你会收到交付单，再按第 5 步验收。
-- **Worker 有问题或报偏离**：能答的直接答、不认可偏离就打回（\`hub worker send\`）；认可偏离按任务图手册放行或改图。要用户定的，用 \`hub ask\` 提问并写上选项和你的推荐，答复回来再转给 Worker。不要只在回复里问一句就停下等。
+- **Worker 有问题或报偏离**：能答的直接答、不认可偏离就打回（\`hub worker send\`）；认可偏离按任务图手册放行或改图。要用户定的，用 \`hub ask\` 提问并写上选项和你的推荐（图里的步骤按任务图手册挂在对应步骤上，用户的答复会直接交给它的 Worker；不建图的答复回来再转给 Worker）。不要只在回复里问一句就停下等。
 - **Worker 出错、额度用完、超时、放弃或厂商不可用**：先用 \`hub worker show <编号>\`、再用 \`hub worker log <编号>\` 看原因，原始记录只取要看的那一段。超时只是提醒，Worker 还在跑：在正常推进就用 \`hub worker max-time\` 续时。能接着干就 \`hub worker send\`；对话超过 200K 或该换一家，就收工后新派一个接手，任务说明里写清分支、已有的提交、还要改的点；图里的步骤按任务图手册一条命令换人（旧 Worker 自动收工，新的接着用它的目录和分支，前任的记录自动带上）。用户亲手停的，用户没说继续就别叫醒它。
 
 ## 5. 交付
@@ -2748,9 +2748,9 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > agy 
 
 直接在 shell 里运行 \`hub ...\`。**不要**在命令里写任何环境变量，也**不要**在后面接 \`echo $?\`。传正文一律用 \`--stdin <<'EOF'\`（引号不能省）。
 
-- **任务图**：\`hub graph create|show|list|ask|patch|done|decide|skip|cancel|finish\`，用法在任务图手册里（第 2 步“建图”那一条写了去哪看，也可以 \`hub help graph\`）
+- **任务图**：\`hub graph create|show|list|patch|done|decide|skip|cancel|finish\`，用法在任务图手册里（第 2 步“建图”那一条写了去哪看，也可以 \`hub help graph\`）
 - **向用户提问**
-  - \`hub ask [--option <选项>...] --stdin\`：向用户提问，界面会单独提醒；要给用户可点的选项时传 \`--option\`（至少 2 个）
+  - \`hub ask [--option <选项>...] [--recommended <选项>] --stdin\`：向用户提问，界面和总助都会单独提醒；要给用户可点的选项时传 \`--option\`（至少 2 个），有倾向时用 \`--recommended\` 标出推荐项
 - **Worker**
   - \`hub worker start --title <标题> [--vendor claude|agy|codex|pi|deepseek|cursor] [--model <模型>] [--effort low|medium|high|xhigh|max|ultra|off|minimal] [--max-time <时长>] [--readonly] [--no-worktree] --stdin\`：派 Worker，正文是任务说明。\`--max-time\` 是这一轮最多跑多久（如 \`15m\`、\`1h\`，默认 \`30m\`），超了会叫醒你，不打断它。Git 仓库里每个 Worker 有自己的 worktree 和分支（\`hub/<编号>-<短名>\`），加 \`--no-worktree\` 就直接在主文件夹里干
   - \`hub worker send <编号> [--max-time <时长>] --stdin\`：回答它的问题或打回，原 Worker 接着干
@@ -2763,7 +2763,7 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > agy 
   - \`hub project create|attach|detach|setup\`：建项目、挂上或移除附加文件夹、设置新 worktree 开工前跑的准备脚本
   - \`hub persona show|edit\`：查看、修改性格设定和模式
   - \`hub schedule add|list|pause|resume|remove\`：定时任务，到点把正文发进你的对话（用户要日报才建）
-  - \`hub router ask|report|note\`：给总助发拍板卡、里程碑汇报卡，更新一句话项目主线备忘
+  - \`hub router report|note\`：任务图以外的里程碑给总助发一张汇报卡、更新一句话项目主线备忘
   - \`hub self-reload [--build]\`：agent-hub 自身代码合进来后让守护进程热重启
 
 # 性格设定
@@ -2869,7 +2869,7 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > clau
 ## 4. 跟进反馈
 不建图的 Worker 每干完一轮，你会收到 \`【Worker #编号 · 标题 的汇报】\`；建了图的步骤顺利完成时后台自动收工并往下交棒，不打扰你，只在报偏离、有问题、出错、厂商不可用或全图完成待交付时找你。
 - **Worker 做完了**：不建图的按第 5 步验收，通过就 \`hub worker end <编号>\` 收工；图里的步骤自动推进，全部完成后你会收到交付单，再按第 5 步验收。
-- **Worker 有问题或报偏离**：能答的直接答、不认可偏离就打回（\`hub worker send\`）；认可偏离按任务图手册放行或改图。要用户定的，用 \`hub ask\` 提问并写上选项和你的推荐，答复回来再转给 Worker。不要只在回复里问一句就停下等。
+- **Worker 有问题或报偏离**：能答的直接答、不认可偏离就打回（\`hub worker send\`）；认可偏离按任务图手册放行或改图。要用户定的，用 \`hub ask\` 提问并写上选项和你的推荐（图里的步骤按任务图手册挂在对应步骤上，用户的答复会直接交给它的 Worker；不建图的答复回来再转给 Worker）。不要只在回复里问一句就停下等。
 - **Worker 出错、额度用完、超时、放弃或厂商不可用**：先用 \`hub worker show <编号>\`、再用 \`hub worker log <编号>\` 看原因，原始记录只取要看的那一段。超时只是提醒，Worker 还在跑：在正常推进就用 \`hub worker max-time\` 续时。能接着干就 \`hub worker send\`；对话超过 200K 或该换一家，就收工后新派一个接手，任务说明里写清分支、已有的提交、还要改的点；图里的步骤按任务图手册一条命令换人（旧 Worker 自动收工，新的接着用它的目录和分支，前任的记录自动带上）。用户亲手停的，用户没说继续就别叫醒它。
 
 ## 5. 交付
@@ -2904,9 +2904,9 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > clau
 
 直接在 shell 里运行 \`hub ...\`。**不要**在命令里写任何环境变量，也**不要**在后面接 \`echo $?\`。传正文一律用 \`--stdin <<'EOF'\`（引号不能省）。
 
-- **任务图**：\`hub graph create|show|list|ask|patch|done|decide|skip|cancel|finish\`，用法在任务图手册里（第 2 步“建图”那一条写了去哪看，也可以 \`hub help graph\`）
+- **任务图**：\`hub graph create|show|list|patch|done|decide|skip|cancel|finish\`，用法在任务图手册里（第 2 步“建图”那一条写了去哪看，也可以 \`hub help graph\`）
 - **向用户提问**
-  - \`hub ask [--option <选项>...] --stdin\`：向用户提问，界面会单独提醒；要给用户可点的选项时传 \`--option\`（至少 2 个）
+  - \`hub ask [--option <选项>...] [--recommended <选项>] --stdin\`：向用户提问，界面和总助都会单独提醒；要给用户可点的选项时传 \`--option\`（至少 2 个），有倾向时用 \`--recommended\` 标出推荐项
 - **Worker**
   - \`hub worker start --title <标题> [--vendor claude|agy|codex|pi|deepseek|cursor] [--model <模型>] [--effort low|medium|high|xhigh|max|ultra|off|minimal] [--max-time <时长>] [--readonly] [--no-worktree] --stdin\`：派 Worker，正文是任务说明。\`--max-time\` 是这一轮最多跑多久（如 \`15m\`、\`1h\`，默认 \`30m\`），超了会叫醒你，不打断它。Git 仓库里每个 Worker 有自己的 worktree 和分支（\`hub/<编号>-<短名>\`），加 \`--no-worktree\` 就直接在主文件夹里干
   - \`hub worker send <编号> [--max-time <时长>] --stdin\`：回答它的问题或打回，原 Worker 接着干
@@ -2919,7 +2919,7 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > clau
   - \`hub project create|attach|detach|setup\`：建项目、挂上或移除附加文件夹、设置新 worktree 开工前跑的准备脚本
   - \`hub persona show|edit\`：查看、修改性格设定和模式
   - \`hub schedule add|list|pause|resume|remove\`：定时任务，到点把正文发进你的对话（用户要日报才建）
-  - \`hub router ask|report|note\`：给总助发拍板卡、里程碑汇报卡，更新一句话项目主线备忘
+  - \`hub router report|note\`：任务图以外的里程碑给总助发一张汇报卡、更新一句话项目主线备忘
   - \`hub self-reload [--build]\`：agent-hub 自身代码合进来后让守护进程热重启
 
 # 性格设定
@@ -3025,7 +3025,7 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > code
 ## 4. 跟进反馈
 不建图的 Worker 每干完一轮，你会收到 \`【Worker #编号 · 标题 的汇报】\`；建了图的步骤顺利完成时后台自动收工并往下交棒，不打扰你，只在报偏离、有问题、出错、厂商不可用或全图完成待交付时找你。
 - **Worker 做完了**：不建图的按第 5 步验收，通过就 \`hub worker end <编号>\` 收工；图里的步骤自动推进，全部完成后你会收到交付单，再按第 5 步验收。
-- **Worker 有问题或报偏离**：能答的直接答、不认可偏离就打回（\`hub worker send\`）；认可偏离按任务图手册放行或改图。要用户定的，用 \`hub ask\` 提问并写上选项和你的推荐，答复回来再转给 Worker。不要只在回复里问一句就停下等。
+- **Worker 有问题或报偏离**：能答的直接答、不认可偏离就打回（\`hub worker send\`）；认可偏离按任务图手册放行或改图。要用户定的，用 \`hub ask\` 提问并写上选项和你的推荐（图里的步骤按任务图手册挂在对应步骤上，用户的答复会直接交给它的 Worker；不建图的答复回来再转给 Worker）。不要只在回复里问一句就停下等。
 - **Worker 出错、额度用完、超时、放弃或厂商不可用**：先用 \`hub worker show <编号>\`、再用 \`hub worker log <编号>\` 看原因，原始记录只取要看的那一段。超时只是提醒，Worker 还在跑：在正常推进就用 \`hub worker max-time\` 续时。能接着干就 \`hub worker send\`；对话超过 200K 或该换一家，就收工后新派一个接手，任务说明里写清分支、已有的提交、还要改的点；图里的步骤按任务图手册一条命令换人（旧 Worker 自动收工，新的接着用它的目录和分支，前任的记录自动带上）。用户亲手停的，用户没说继续就别叫醒它。
 
 ## 5. 交付
@@ -3060,9 +3060,9 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > code
 
 直接在 shell 里运行 \`hub ...\`。**不要**在命令里写任何环境变量，也**不要**在后面接 \`echo $?\`。传正文一律用 \`--stdin <<'EOF'\`（引号不能省）。
 
-- **任务图**：\`hub graph create|show|list|ask|patch|done|decide|skip|cancel|finish\`，用法在任务图手册里（第 2 步“建图”那一条写了去哪看，也可以 \`hub help graph\`）
+- **任务图**：\`hub graph create|show|list|patch|done|decide|skip|cancel|finish\`，用法在任务图手册里（第 2 步“建图”那一条写了去哪看，也可以 \`hub help graph\`）
 - **向用户提问**
-  - \`hub ask [--option <选项>...] --stdin\`：向用户提问，界面会单独提醒；要给用户可点的选项时传 \`--option\`（至少 2 个）
+  - \`hub ask [--option <选项>...] [--recommended <选项>] --stdin\`：向用户提问，界面和总助都会单独提醒；要给用户可点的选项时传 \`--option\`（至少 2 个），有倾向时用 \`--recommended\` 标出推荐项
 - **Worker**
   - \`hub worker start --title <标题> [--vendor claude|agy|codex|pi|deepseek|cursor] [--model <模型>] [--effort low|medium|high|xhigh|max|ultra|off|minimal] [--max-time <时长>] [--readonly] [--no-worktree] --stdin\`：派 Worker，正文是任务说明。\`--max-time\` 是这一轮最多跑多久（如 \`15m\`、\`1h\`，默认 \`30m\`），超了会叫醒你，不打断它。Git 仓库里每个 Worker 有自己的 worktree 和分支（\`hub/<编号>-<短名>\`），加 \`--no-worktree\` 就直接在主文件夹里干
   - \`hub worker send <编号> [--max-time <时长>] --stdin\`：回答它的问题或打回，原 Worker 接着干
@@ -3075,7 +3075,7 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > code
   - \`hub project create|attach|detach|setup\`：建项目、挂上或移除附加文件夹、设置新 worktree 开工前跑的准备脚本
   - \`hub persona show|edit\`：查看、修改性格设定和模式
   - \`hub schedule add|list|pause|resume|remove\`：定时任务，到点把正文发进你的对话（用户要日报才建）
-  - \`hub router ask|report|note\`：给总助发拍板卡、里程碑汇报卡，更新一句话项目主线备忘
+  - \`hub router report|note\`：任务图以外的里程碑给总助发一张汇报卡、更新一句话项目主线备忘
   - \`hub self-reload [--build]\`：agent-hub 自身代码合进来后让守护进程热重启
 
 # 性格设定
@@ -3181,7 +3181,7 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > curs
 ## 4. 跟进反馈
 不建图的 Worker 每干完一轮，你会收到 \`【Worker #编号 · 标题 的汇报】\`；建了图的步骤顺利完成时后台自动收工并往下交棒，不打扰你，只在报偏离、有问题、出错、厂商不可用或全图完成待交付时找你。
 - **Worker 做完了**：不建图的按第 5 步验收，通过就 \`hub worker end <编号>\` 收工；图里的步骤自动推进，全部完成后你会收到交付单，再按第 5 步验收。
-- **Worker 有问题或报偏离**：能答的直接答、不认可偏离就打回（\`hub worker send\`）；认可偏离按任务图手册放行或改图。要用户定的，用 \`hub ask\` 提问并写上选项和你的推荐，答复回来再转给 Worker。不要只在回复里问一句就停下等。
+- **Worker 有问题或报偏离**：能答的直接答、不认可偏离就打回（\`hub worker send\`）；认可偏离按任务图手册放行或改图。要用户定的，用 \`hub ask\` 提问并写上选项和你的推荐（图里的步骤按任务图手册挂在对应步骤上，用户的答复会直接交给它的 Worker；不建图的答复回来再转给 Worker）。不要只在回复里问一句就停下等。
 - **Worker 出错、额度用完、超时、放弃或厂商不可用**：先用 \`hub worker show <编号>\`、再用 \`hub worker log <编号>\` 看原因，原始记录只取要看的那一段。超时只是提醒，Worker 还在跑：在正常推进就用 \`hub worker max-time\` 续时。能接着干就 \`hub worker send\`；对话超过 200K 或该换一家，就收工后新派一个接手，任务说明里写清分支、已有的提交、还要改的点；图里的步骤按任务图手册一条命令换人（旧 Worker 自动收工，新的接着用它的目录和分支，前任的记录自动带上）。用户亲手停的，用户没说继续就别叫醒它。
 
 ## 5. 交付
@@ -3216,9 +3216,9 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > curs
 
 直接在 shell 里运行 \`hub ...\`。**不要**在命令里写任何环境变量，也**不要**在后面接 \`echo $?\`。传正文一律用 \`--stdin <<'EOF'\`（引号不能省）。
 
-- **任务图**：\`hub graph create|show|list|ask|patch|done|decide|skip|cancel|finish\`，用法在任务图手册里（第 2 步“建图”那一条写了去哪看，也可以 \`hub help graph\`）
+- **任务图**：\`hub graph create|show|list|patch|done|decide|skip|cancel|finish\`，用法在任务图手册里（第 2 步“建图”那一条写了去哪看，也可以 \`hub help graph\`）
 - **向用户提问**
-  - \`hub ask [--option <选项>...] --stdin\`：向用户提问，界面会单独提醒；要给用户可点的选项时传 \`--option\`（至少 2 个）
+  - \`hub ask [--option <选项>...] [--recommended <选项>] --stdin\`：向用户提问，界面和总助都会单独提醒；要给用户可点的选项时传 \`--option\`（至少 2 个），有倾向时用 \`--recommended\` 标出推荐项
 - **Worker**
   - \`hub worker start --title <标题> [--vendor claude|agy|codex|pi|deepseek|cursor] [--model <模型>] [--effort low|medium|high|xhigh|max|ultra|off|minimal] [--max-time <时长>] [--readonly] [--no-worktree] --stdin\`：派 Worker，正文是任务说明。\`--max-time\` 是这一轮最多跑多久（如 \`15m\`、\`1h\`，默认 \`30m\`），超了会叫醒你，不打断它。Git 仓库里每个 Worker 有自己的 worktree 和分支（\`hub/<编号>-<短名>\`），加 \`--no-worktree\` 就直接在主文件夹里干
   - \`hub worker send <编号> [--max-time <时长>] --stdin\`：回答它的问题或打回，原 Worker 接着干
@@ -3231,7 +3231,7 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > curs
   - \`hub project create|attach|detach|setup\`：建项目、挂上或移除附加文件夹、设置新 worktree 开工前跑的准备脚本
   - \`hub persona show|edit\`：查看、修改性格设定和模式
   - \`hub schedule add|list|pause|resume|remove\`：定时任务，到点把正文发进你的对话（用户要日报才建）
-  - \`hub router ask|report|note\`：给总助发拍板卡、里程碑汇报卡，更新一句话项目主线备忘
+  - \`hub router report|note\`：任务图以外的里程碑给总助发一张汇报卡、更新一句话项目主线备忘
   - \`hub self-reload [--build]\`：agent-hub 自身代码合进来后让守护进程热重启
 
 # 性格设定
@@ -3337,7 +3337,7 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > deep
 ## 4. 跟进反馈
 不建图的 Worker 每干完一轮，你会收到 \`【Worker #编号 · 标题 的汇报】\`；建了图的步骤顺利完成时后台自动收工并往下交棒，不打扰你，只在报偏离、有问题、出错、厂商不可用或全图完成待交付时找你。
 - **Worker 做完了**：不建图的按第 5 步验收，通过就 \`hub worker end <编号>\` 收工；图里的步骤自动推进，全部完成后你会收到交付单，再按第 5 步验收。
-- **Worker 有问题或报偏离**：能答的直接答、不认可偏离就打回（\`hub worker send\`）；认可偏离按任务图手册放行或改图。要用户定的，用 \`hub ask\` 提问并写上选项和你的推荐，答复回来再转给 Worker。不要只在回复里问一句就停下等。
+- **Worker 有问题或报偏离**：能答的直接答、不认可偏离就打回（\`hub worker send\`）；认可偏离按任务图手册放行或改图。要用户定的，用 \`hub ask\` 提问并写上选项和你的推荐（图里的步骤按任务图手册挂在对应步骤上，用户的答复会直接交给它的 Worker；不建图的答复回来再转给 Worker）。不要只在回复里问一句就停下等。
 - **Worker 出错、额度用完、超时、放弃或厂商不可用**：先用 \`hub worker show <编号>\`、再用 \`hub worker log <编号>\` 看原因，原始记录只取要看的那一段。超时只是提醒，Worker 还在跑：在正常推进就用 \`hub worker max-time\` 续时。能接着干就 \`hub worker send\`；对话超过 200K 或该换一家，就收工后新派一个接手，任务说明里写清分支、已有的提交、还要改的点；图里的步骤按任务图手册一条命令换人（旧 Worker 自动收工，新的接着用它的目录和分支，前任的记录自动带上）。用户亲手停的，用户没说继续就别叫醒它。
 
 ## 5. 交付
@@ -3372,9 +3372,9 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > deep
 
 直接在 shell 里运行 \`hub ...\`。**不要**在命令里写任何环境变量，也**不要**在后面接 \`echo $?\`。传正文一律用 \`--stdin <<'EOF'\`（引号不能省）。
 
-- **任务图**：\`hub graph create|show|list|ask|patch|done|decide|skip|cancel|finish\`，用法在任务图手册里（第 2 步“建图”那一条写了去哪看，也可以 \`hub help graph\`）
+- **任务图**：\`hub graph create|show|list|patch|done|decide|skip|cancel|finish\`，用法在任务图手册里（第 2 步“建图”那一条写了去哪看，也可以 \`hub help graph\`）
 - **向用户提问**
-  - \`hub ask [--option <选项>...] --stdin\`：向用户提问，界面会单独提醒；要给用户可点的选项时传 \`--option\`（至少 2 个）
+  - \`hub ask [--option <选项>...] [--recommended <选项>] --stdin\`：向用户提问，界面和总助都会单独提醒；要给用户可点的选项时传 \`--option\`（至少 2 个），有倾向时用 \`--recommended\` 标出推荐项
 - **Worker**
   - \`hub worker start --title <标题> [--vendor claude|agy|codex|pi|deepseek|cursor] [--model <模型>] [--effort low|medium|high|xhigh|max|ultra|off|minimal] [--max-time <时长>] [--readonly] [--no-worktree] --stdin\`：派 Worker，正文是任务说明。\`--max-time\` 是这一轮最多跑多久（如 \`15m\`、\`1h\`，默认 \`30m\`），超了会叫醒你，不打断它。Git 仓库里每个 Worker 有自己的 worktree 和分支（\`hub/<编号>-<短名>\`），加 \`--no-worktree\` 就直接在主文件夹里干
   - \`hub worker send <编号> [--max-time <时长>] --stdin\`：回答它的问题或打回，原 Worker 接着干
@@ -3387,7 +3387,7 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > deep
   - \`hub project create|attach|detach|setup\`：建项目、挂上或移除附加文件夹、设置新 worktree 开工前跑的准备脚本
   - \`hub persona show|edit\`：查看、修改性格设定和模式
   - \`hub schedule add|list|pause|resume|remove\`：定时任务，到点把正文发进你的对话（用户要日报才建）
-  - \`hub router ask|report|note\`：给总助发拍板卡、里程碑汇报卡，更新一句话项目主线备忘
+  - \`hub router report|note\`：任务图以外的里程碑给总助发一张汇报卡、更新一句话项目主线备忘
   - \`hub self-reload [--build]\`：agent-hub 自身代码合进来后让守护进程热重启
 
 # 性格设定
@@ -3493,7 +3493,7 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > pi �
 ## 4. 跟进反馈
 不建图的 Worker 每干完一轮，你会收到 \`【Worker #编号 · 标题 的汇报】\`；建了图的步骤顺利完成时后台自动收工并往下交棒，不打扰你，只在报偏离、有问题、出错、厂商不可用或全图完成待交付时找你。
 - **Worker 做完了**：不建图的按第 5 步验收，通过就 \`hub worker end <编号>\` 收工；图里的步骤自动推进，全部完成后你会收到交付单，再按第 5 步验收。
-- **Worker 有问题或报偏离**：能答的直接答、不认可偏离就打回（\`hub worker send\`）；认可偏离按任务图手册放行或改图。要用户定的，用 \`hub ask\` 提问并写上选项和你的推荐，答复回来再转给 Worker。不要只在回复里问一句就停下等。
+- **Worker 有问题或报偏离**：能答的直接答、不认可偏离就打回（\`hub worker send\`）；认可偏离按任务图手册放行或改图。要用户定的，用 \`hub ask\` 提问并写上选项和你的推荐（图里的步骤按任务图手册挂在对应步骤上，用户的答复会直接交给它的 Worker；不建图的答复回来再转给 Worker）。不要只在回复里问一句就停下等。
 - **Worker 出错、额度用完、超时、放弃或厂商不可用**：先用 \`hub worker show <编号>\`、再用 \`hub worker log <编号>\` 看原因，原始记录只取要看的那一段。超时只是提醒，Worker 还在跑：在正常推进就用 \`hub worker max-time\` 续时。能接着干就 \`hub worker send\`；对话超过 200K 或该换一家，就收工后新派一个接手，任务说明里写清分支、已有的提交、还要改的点；图里的步骤按任务图手册一条命令换人（旧 Worker 自动收工，新的接着用它的目录和分支，前任的记录自动带上）。用户亲手停的，用户没说继续就别叫醒它。
 
 ## 5. 交付
@@ -3528,9 +3528,9 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > pi �
 
 直接在 shell 里运行 \`hub ...\`。**不要**在命令里写任何环境变量，也**不要**在后面接 \`echo $?\`。传正文一律用 \`--stdin <<'EOF'\`（引号不能省）。
 
-- **任务图**：\`hub graph create|show|list|ask|patch|done|decide|skip|cancel|finish\`，用法在任务图手册里（第 2 步“建图”那一条写了去哪看，也可以 \`hub help graph\`）
+- **任务图**：\`hub graph create|show|list|patch|done|decide|skip|cancel|finish\`，用法在任务图手册里（第 2 步“建图”那一条写了去哪看，也可以 \`hub help graph\`）
 - **向用户提问**
-  - \`hub ask [--option <选项>...] --stdin\`：向用户提问，界面会单独提醒；要给用户可点的选项时传 \`--option\`（至少 2 个）
+  - \`hub ask [--option <选项>...] [--recommended <选项>] --stdin\`：向用户提问，界面和总助都会单独提醒；要给用户可点的选项时传 \`--option\`（至少 2 个），有倾向时用 \`--recommended\` 标出推荐项
 - **Worker**
   - \`hub worker start --title <标题> [--vendor claude|agy|codex|pi|deepseek|cursor] [--model <模型>] [--effort low|medium|high|xhigh|max|ultra|off|minimal] [--max-time <时长>] [--readonly] [--no-worktree] --stdin\`：派 Worker，正文是任务说明。\`--max-time\` 是这一轮最多跑多久（如 \`15m\`、\`1h\`，默认 \`30m\`），超了会叫醒你，不打断它。Git 仓库里每个 Worker 有自己的 worktree 和分支（\`hub/<编号>-<短名>\`），加 \`--no-worktree\` 就直接在主文件夹里干
   - \`hub worker send <编号> [--max-time <时长>] --stdin\`：回答它的问题或打回，原 Worker 接着干
@@ -3543,7 +3543,7 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > pi �
   - \`hub project create|attach|detach|setup\`：建项目、挂上或移除附加文件夹、设置新 worktree 开工前跑的准备脚本
   - \`hub persona show|edit\`：查看、修改性格设定和模式
   - \`hub schedule add|list|pause|resume|remove\`：定时任务，到点把正文发进你的对话（用户要日报才建）
-  - \`hub router ask|report|note\`：给总助发拍板卡、里程碑汇报卡，更新一句话项目主线备忘
+  - \`hub router report|note\`：任务图以外的里程碑给总助发一张汇报卡、更新一句话项目主线备忘
   - \`hub self-reload [--build]\`：agent-hub 自身代码合进来后让守护进程热重启
 
 # 性格设定

@@ -1,5 +1,6 @@
 // 消息流里的每一种东西（docs/ui-standard.md 第 17 条）：一轮回复（一个头像、操作合成一行 Worked for、文字、复制和时间）、
 // 用户的气泡、Worker 的发言、很淡的系统行、到点的定时任务、消息状态、空对话。怎么分组见 selectors.ts 的 groupMessages。
+import { useMutation } from "@tanstack/react-query";
 import {
   Archive,
   CalendarClock,
@@ -12,13 +13,15 @@ import {
   FolderMinus,
   FolderPlus,
   Info,
+  Loader2,
   MessageSquare,
   RefreshCw,
   UserPen,
   type LucideIcon,
 } from "lucide-react";
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
+  askOf,
   attachmentsOf,
   extractAskCard,
   isRewoundMessage,
@@ -32,6 +35,7 @@ import {
   workerPickOf,
   type AgentVendor,
   type ConversationId,
+  type ExtractedAskCard,
   type Message,
   type MessageId,
   type PersonaChangeId,
@@ -39,15 +43,18 @@ import {
   type WorkerMessageMeta,
 } from "../../shared/index.ts";
 import { ApiError } from "../client.ts";
+import { useClient } from "../device-scope.tsx";
 import { describeFailure } from "../../shared/errors.ts";
-import { errorLine, errorTitle, formatTime } from "../format.ts";
+import { errorLine, errorText, errorTitle, formatTime, newClientId, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
+import { useHubQueryClient } from "../query-client.ts";
 import type { RenderItem } from "../selectors.ts";
 import type { PendingMessage, RetryPhase } from "../state.ts";
 import { workedFor } from "../step-labels.ts";
 import { workerStatusOf, type WorkerTone } from "../worker-status.ts";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
+import { Input } from "../ui/input.tsx";
 import { AttachmentList } from "./Attachments.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { WorkerPickTag } from "./WorkerPickTag.tsx";
@@ -138,6 +145,14 @@ export function displayText(text: string): string {
   return `${text.slice(0, start).trimEnd()}\n\n---\n\n${items.join("\n")}\n\n${text.slice(end + REPORT_END.length).trim()}`.trim();
 }
 
+function splitAskQuestionAndContext(raw: string): { title: string; context: string | null } {
+  const trimmed = raw.trim();
+  const match = /^([^\r\n]+?)(?:\r?\n\s*\r?\n)([\s\S]+)$/u.exec(trimmed);
+  if (match === null) return { title: trimmed, context: null };
+  const rest = match[2]!.trim();
+  return { title: match[1]!.trim(), context: rest === "" ? null : rest };
+}
+
 /** `hub ask` 带选项时的可点击 A/B/C/D 选项卡片（docs/ui-standard.md 第 17 条）。 */
 function AskCard({
   card,
@@ -145,48 +160,156 @@ function AskCard({
   messageId,
   onAnswerAsk,
 }: {
-  card: NonNullable<ReturnType<typeof extractAskCard>>;
+  card: ExtractedAskCard;
   files: ReturnType<typeof sentFilesOf>;
   messageId: MessageId;
   onAnswerAsk?: MessageActions["onAnswerAsk"];
 }) {
+  const client = useClient();
+  const qc = useHubQueryClient();
+  const gateRef = card.gateRef;
+  const hasOptions = card.options.length > 0;
   const [chosen, setChosen] = useState<string | null>(null);
+  const [noteOpen, setNoteOpen] = useState(!hasOptions || Boolean(gateRef?.checkpoint));
+  const [note, setNote] = useState("");
+  const [err, setErr] = useState<ErrorLike | null>(null);
+  const clientIdRef = useRef<string | null>(null);
+  const inFlightRef = useRef(false);
+
+  const decideMutation = useMutation(
+    {
+      mutationFn: async (vars: { choice: string | null; note: string | null }) => {
+        if (gateRef === undefined) return;
+        clientIdRef.current ??= newClientId();
+        return client.postTaskGraphDecide(gateRef.graphId, gateRef.nodeKey, {
+          clientId: clientIdRef.current,
+          choice: vars.choice,
+          ...(vars.note !== null ? { note: vars.note } : {}),
+        });
+      },
+      onMutate: () => setErr(null),
+      onSuccess: (_data, vars) => {
+        clientIdRef.current = null;
+        setChosen(vars.choice ?? vars.note ?? "");
+        setNote("");
+      },
+      onError: (error) => {
+        setErr(errorText(error));
+      },
+      onSettled: () => {
+        inFlightRef.current = false;
+      },
+    },
+    qc,
+  );
+
+  const submitGate = (choice: string | null, rawNote: string) => {
+    if (gateRef === undefined || inFlightRef.current) return;
+    const trimmed = rawNote.trim();
+    if (choice === null && trimmed === "") return;
+    inFlightRef.current = true;
+    decideMutation.mutate({ choice, note: trimmed === "" ? null : trimmed });
+  };
+
+  const effectiveChosen = chosen ?? card.chosenOption ?? null;
   const answered = card.answered || chosen !== null;
-  const disabled = answered || !onAnswerAsk;
+  const disabled = answered || !onAnswerAsk || decideMutation.isPending;
+  const { title: cardTitle, context: cardContext } = useMemo(
+    () => splitAskQuestionAndContext(card.question),
+    [card.question],
+  );
+
   return (
     <div className="w-full min-w-0 rounded-2xl border border-border bg-background p-4" data-ask-card>
-      <div className="w-full min-w-0 text-body leading-relaxed font-medium">
-        <Markdown text={card.question} files={files} messageId={messageId} />
+      <div className="w-full min-w-0 text-body leading-relaxed font-medium text-foreground">
+        <Markdown text={cardTitle} files={files} messageId={messageId} />
       </div>
-      <div className="mt-3 flex flex-col gap-1.5" role="group" aria-label="Options">
-        {card.options.map((opt, i) => {
-          const isChosen = chosen === opt;
-          return (
-            <button
-              key={i}
-              type="button"
-              data-ask-option
+      {cardContext !== null && (
+        <div className="mt-1.5 w-full min-w-0 text-minor leading-relaxed text-muted-foreground">
+          <Markdown text={cardContext} files={files} messageId={messageId} />
+        </div>
+      )}
+      {hasOptions && (
+        <div className="mt-3 flex flex-col gap-1.5" role="group" aria-label="Options">
+          {card.options.map((opt, i) => {
+            const isChosen = effectiveChosen === opt;
+            const isRecommended = card.recommended !== undefined && opt === card.recommended;
+            return (
+              <button
+                key={i}
+                type="button"
+                data-ask-option
+                disabled={disabled}
+                className={cn(
+                  "flex w-full cursor-pointer items-center gap-3 rounded-xl px-3 py-2 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default",
+                  isChosen ? "bg-sidebar-active" : "hover:bg-sidebar-hover disabled:opacity-60",
+                )}
+                onClick={() => {
+                  if (disabled) return;
+                  if (gateRef !== undefined) {
+                    submitGate(opt, note);
+                    return;
+                  }
+                  setChosen(opt);
+                  onAnswerAsk(opt);
+                }}
+              >
+                <span className="flex size-6 shrink-0 items-center justify-center rounded-xl border border-border bg-sidebar text-xs font-medium text-muted-foreground">
+                  {String.fromCharCode(65 + i)}
+                </span>
+                <span className="min-w-0 flex-1 text-body [overflow-wrap:anywhere] [&_p]:m-0">
+                  <Markdown text={opt} files={files} messageId={messageId} />
+                </span>
+                {isRecommended && (
+                  <span className="shrink-0 text-xs font-normal text-muted-foreground">Recommended</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {gateRef !== undefined && !answered && (
+        !noteOpen && hasOptions ? (
+          <button
+            type="button"
+            onClick={() => setNoteOpen(true)}
+            className="mt-2 inline-flex min-h-7 pointer-coarse:min-h-11 cursor-pointer items-center rounded-xl px-1 text-minor text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+          >
+            Add note
+          </button>
+        ) : (
+          <div className="mt-2.5 flex items-center gap-2">
+            <Input
+              value={note}
               disabled={disabled}
-              className={cn(
-                "flex w-full cursor-pointer items-center gap-3 rounded-xl px-3 py-2 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default",
-                isChosen ? "bg-sidebar-active" : "hover:bg-sidebar-hover disabled:opacity-60",
-              )}
-              onClick={() => {
-                if (disabled) return;
-                setChosen(opt);
-                onAnswerAsk(opt);
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Add a note, or type a custom reply…"
+              aria-label="Add note"
+              className="min-w-0 flex-1 text-minor"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.nativeEvent.isComposing && note.trim() !== "") {
+                  e.preventDefault();
+                  submitGate(null, note);
+                }
               }}
+            />
+            <Button
+              type="button"
+              size="sm"
+              disabled={disabled || note.trim() === ""}
+              onClick={() => submitGate(null, note)}
             >
-              <span className="flex size-6 shrink-0 items-center justify-center rounded-xl border border-border bg-sidebar text-xs font-medium text-muted-foreground">
-                {String.fromCharCode(65 + i)}
-              </span>
-              <span className="min-w-0 flex-1 text-body [overflow-wrap:anywhere] [&_p]:m-0">
-                <Markdown text={opt} files={files} messageId={messageId} />
-              </span>
-            </button>
-          );
-        })}
-      </div>
+              {decideMutation.isPending && <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />}
+              Send
+            </Button>
+          </div>
+        )
+      )}
+      {err !== null && (
+        <p role="alert" title={errorTitle(err)} className="mt-2 text-xs text-danger">
+          {errorLine(err)}
+        </p>
+      )}
     </div>
   );
 }
@@ -203,7 +326,20 @@ const AgentText = memo(function AgentText({
 }) {
   // agent 发来的文件：meta 没变就是同一个数组，Markdown 不用重建插件
   const files = useMemo(() => sentFilesOf(message), [message.meta]);
-  const askCard = useMemo(() => extractAskCard(message), [message.sender, message.meta, message.text]);
+  const askCard = useMemo<ExtractedAskCard | null>(() => {
+    const extracted = extractAskCard(message);
+    if (extracted !== null) return extracted;
+    const ask = askOf(message);
+    if (ask?.gateRef === undefined) return null;
+    return {
+      question: message.text.trim(),
+      options: [],
+      answered: ask.answered === true,
+      ...(ask.recommended !== undefined ? { recommended: ask.recommended } : {}),
+      ...(ask.chosenOption !== undefined ? { chosenOption: ask.chosenOption } : {}),
+      gateRef: ask.gateRef,
+    };
+  }, [message.sender, message.meta, message.text]);
   return (
     <article
       className={cn("flex w-full min-w-0 flex-col items-start gap-1.5", highlighted && "rounded-2xl outline-2 outline-offset-4 outline-ring/60")}

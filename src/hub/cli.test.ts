@@ -367,9 +367,11 @@ describe("hub cli", () => {
       const r = await hub(["--help"]);
       const vendorUnion = AGENT_VENDORS.join("|");
       const effortUnion = ALL_EFFORTS.join("|");
-      for (const usage of [`${cmd} models [--vendor ${vendorUnion}] [--refresh]`, `${cmd} worker start --title`, `--vendor ${vendorUnion}`, `--effort ${effortUnion}`, "--max-time <时长>", "--readonly", "--no-worktree", `${cmd} worker send <编号> [--max-time <时长>] --stdin`, `${cmd} worker max-time <编号> <时长>`, `${cmd} worker end <编号>`, `${cmd} worker list`, `${cmd} worker show <编号>`, `${cmd} worker log <编号> [--last N | --stats]`, `${cmd} ask [--option <选项>...] --stdin`]) {
+      for (const usage of [`${cmd} models [--vendor ${vendorUnion}] [--refresh]`, `${cmd} worker start --title`, `--vendor ${vendorUnion}`, `--effort ${effortUnion}`, "--max-time <时长>", "--readonly", "--no-worktree", `${cmd} worker send <编号> [--max-time <时长>] --stdin`, `${cmd} worker max-time <编号> <时长>`, `${cmd} worker end <编号>`, `${cmd} worker list`, `${cmd} worker show <编号>`, `${cmd} worker log <编号> [--last N | --stats]`, `${cmd} ask [--node <步骤>] [--graph <图编号>] [--option <选项>...] [--recommended <选项>] [--replace <编号>] --stdin`]) {
         expect(r.stdout).toContain(usage);
       }
+      expect(r.stdout).not.toContain(`${cmd} router ask`);
+      expect(r.stdout).not.toContain(`${cmd} graph ask`);
     });
 
     it("worker start --node [--graph] passes task-graph binding flags and worker end rejects removed --incomplete", async () => {
@@ -410,7 +412,29 @@ describe("hub cli", () => {
   });
 
   describe("hub router & hub graph", () => {
-    it("router ask / report / note parse structured options, links and stdin", async () => {
+    it("unified ask (--node / --recommended / --replace) and legacy CLI aliases (router ask / graph ask) forward cleanly to ask", async () => {
+      expect(
+        (
+          await hub(
+            [
+              "ask",
+              "--node",
+              "confirm-mcp",
+              "--graph",
+              "9",
+              "--option",
+              "全量同步",
+              "--option",
+              "仅无冲突",
+              "--recommended",
+              "全量同步",
+              "--stdin",
+            ],
+            { stdin: stdinOf("调研发现 2 项端口不同\n") },
+          )
+        ).code,
+      ).toBe(0);
+
       expect(
         (
           await hub(
@@ -457,12 +481,22 @@ describe("hub cli", () => {
       expect(ledger.calls).toEqual([
         {
           sessionId: 42,
-          command: "router.ask",
+          command: "ask",
           args: {
-            question: "用独立表还是复用？",
+            node: "confirm-mcp",
+            graphId: 9,
+            options: ["全量同步", "仅无冲突"],
+            recommended: "全量同步",
+            text: "调研发现 2 项端口不同",
+          },
+        },
+        {
+          sessionId: 42,
+          command: "ask",
+          args: {
             options: ["独立表（推荐）", "复用旧表"],
             replaceItemId: 5,
-            context: "独立表幂等迁移更干净",
+            text: "用独立表还是复用？\n\n独立表幂等迁移更干净",
           },
         },
         {
@@ -483,26 +517,25 @@ describe("hub cli", () => {
       ]);
     });
 
-    it("router ask --recommended <1..4> promotes the chosen option to index 0", async () => {
+    it("ask --recommended supports exact option text or 1..N index", async () => {
       expect(
         (
           await hub([
-            "router",
             "ask",
-            "--question",
-            "选哪个？",
             "--option",
             "方案 A",
             "--option",
             "方案 B",
             "--recommended",
             "2",
-          ])
+            "--stdin",
+          ], { stdin: stdinOf("选哪个？\n") })
         ).code,
       ).toBe(0);
       expect(ledger.calls[0]?.args).toEqual({
-        question: "选哪个？",
-        options: ["方案 B", "方案 A"],
+        text: "选哪个？",
+        options: ["方案 A", "方案 B"],
+        recommended: "方案 B",
       });
     });
 
@@ -566,12 +599,12 @@ describe("hub cli", () => {
         { command: "graph.list", args: { all: true } },
         { command: "graph.list", args: { status: "completed" } },
         {
-          command: "graph.ask",
+          command: "ask",
           args: {
-            nodeKey: "confirm-mcp",
+            node: "confirm-mcp",
             graphId: 9,
             options: ["全量同步", "仅无冲突"],
-            question: "调研发现 2 项端口不同",
+            text: "调研发现 2 项端口不同",
           },
         },
         { command: "graph.patch", args: { graphId: 9, specJson: '{"skipNodes":["n1"]}' } },
@@ -1017,7 +1050,9 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
 
       const askErr = await hub(["ask"]);
       expect(askErr.code).toBe(HUB_EXIT.usage);
-      expect(askErr.stderr).toContain(`${cmd} ask [--option <选项>...] --stdin`);
+      expect(askErr.stderr).toContain(
+        `${cmd} ask [--node <步骤>] [--graph <图编号>] [--option <选项>...] [--recommended <选项>] [--replace <编号>] --stdin`,
+      );
       expect(askErr.stderr).toContain(`（完整用法运行 ${cmd} help）`);
       expect(askErr.stderr).not.toContain(`${cmd} worker start`);
 

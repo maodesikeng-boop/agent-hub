@@ -23,6 +23,7 @@ import {
   ENV_SETUP_ROOT_PATH,
   ENV_SETUP_WORKTREE_PATH,
   HUB_MAX_BODY_BYTES,
+  MAX_GATE_OPTIONS,
   MIN_SCHEDULE_EVERY_MINUTES,
   ROUTER_OPTION_MAX_COUNT,
   SETUP_TIMEOUT_MS,
@@ -198,8 +199,10 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     command: "ask",
     group: "ask",
     cli: "ask",
-    usage: `  ${hub} ask [--option <选项>...] --stdin                      向用户提问（要用户拍板、确认、选择的事），问题从标准输入读；
-                                                          有明确选项时用 --option（至少 2 个）让用户点选；会单独提醒用户，不会被别的消息刷掉`,
+    usage: `  ${hub} ask [--node <步骤>] [--graph <图编号>] [--option <选项>...] [--recommended <选项>] [--replace <编号>] --stdin
+                                                          向用户挂一张提问/拍板卡（对话、右栏、总助三处同步提醒），问题从标准输入读；
+                                                          有明确选项时用 --option（至少 2 个），用 --recommended 标推荐项（选项原文或 1..N 序号）；
+                                                          加 --node 挂在任务图步骤上，用户拍板后定案直接交给该步 Worker 接着干（不叫醒项目经理）`,
   },
   {
     command: "schedule.add",
@@ -240,14 +243,6 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     usage: `  ${hub} schedule remove <编号>                                删除`,
   },
   {
-    command: "router.ask",
-    group: "router",
-    action: "ask",
-    cli: "router ask",
-    usage: `  ${hub} router ask --question <问题> --option <选项>... [--recommended <1..4>] [--replace <编号>] [--context <说明> | --stdin]
-                                                          向全局总助提交结构化拍板卡（2～4 个选项，同步写入对话）`,
-  },
-  {
     command: "router.report",
     group: "router",
     action: "report",
@@ -286,14 +281,6 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
                                                           列出当前项目的任务图`,
   },
   {
-    command: "graph.ask",
-    group: "graph",
-    action: "ask",
-    cli: "graph ask",
-    usage: `  ${hub} graph ask <节点> [--graph <图编号>] [--question <问题>] [--option <选项>...] [--recommended <选项>] [--stdin]
-                                                          给没人在干、还没完的节点挂上拍板卡（问题、选项、推荐与背景摘要），前置都完了就等用户拍板`,
-  },
-  {
     command: "graph.patch",
     group: "graph",
     action: "patch",
@@ -316,7 +303,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     action: "decide",
     cli: "graph decide",
     usage: `  ${hub} graph decide <节点> --choice <选项> [--note <说明>] [--graph <图编号>]
-                                                          记录用户在对话中的口头拍板，节点完了、下游轮到`,
+                                                          记录用户在对话中的口头拍板（挂着未收工 Worker 时直接发给该 Worker 接着干，否则步骤完了推进下游）`,
   },
   {
     command: "graph.skip",
@@ -718,13 +705,44 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     return { command: "worker.end", body, textSource: null };
   }
   if (group === "ask") {
-    allowOnly(values, ["option", "stdin"], "ask");
+    allowOnly(values, ["node", "graph", "option", "recommended", "replace", "stdin"], "ask");
     expectPositionals(parsed.positionals.slice(1), 0, "ask");
     const body: Record<string, unknown> = {};
+    if (values.graph !== undefined && (values.node === undefined || values.node.trim() === "")) {
+      throw new UsageError("--graph 要配合 --node <步骤> 一起用");
+    }
+    if (values.node !== undefined) {
+      const node = values.node.trim();
+      if (node === "") throw new UsageError("--node 不能为空");
+      if (values.replace !== undefined) throw new UsageError("--replace 不能和 --node 一起用");
+      body.node = node;
+      if (values.graph !== undefined) body.graphId = idOf(values.graph, "ask", "任务图");
+    } else if (values.replace !== undefined) {
+      body.replaceItemId = idOf(values.replace, "ask", "卡片");
+    }
+    let options: string[] | undefined;
     if (values.option !== undefined) {
       const checked = validateAskOptions(values.option);
       if (!checked.ok) throw new UsageError(checked.error);
+      if (body.node !== undefined && checked.options.length > MAX_GATE_OPTIONS) {
+        throw new UsageError(`步骤拍板卡的选项最多 ${MAX_GATE_OPTIONS} 个`);
+      }
+      options = checked.options;
       body.options = checked.options;
+    }
+    if (values.recommended !== undefined) {
+      const rec = values.recommended.trim();
+      if (rec === "") throw new UsageError("--recommended 不能是空的");
+      if (options === undefined) throw new UsageError("--recommended 要配合 --option <选项>... 一起用");
+      let matched = options.find((o) => o === rec);
+      if (matched === undefined && /^[1-9][0-9]*$/.test(rec)) {
+        const oneBased = Number(rec);
+        if (oneBased >= 1 && oneBased <= options.length) matched = options[oneBased - 1];
+      }
+      if (matched === undefined) {
+        throw new UsageError(`--recommended 要写某个选项原文或 1 到 ${options.length} 的序号`);
+      }
+      body.recommended = matched;
     }
     return { command: "ask", body, textSource: requireStdin(values, "ask"), textField: "text" };
   }
@@ -808,6 +826,7 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     return { command: `schedule.${action}`, body: { scheduleId: idOf(rest[0], `schedule ${action}`, "定时任务") }, textSource: null };
   }
   if (group === "router" && action === "ask") {
+    // 底层 CLI 兼容别名（已并入 hub ask，不在 help 与提示词暴露）：旧会话若敲了 router ask，平滑转发至统一 ask
     allowOnly(values, ["question", "option", "recommended", "replace", "context", "stdin"], "router ask");
     expectPositionals(rest, 0, "router ask");
     if (values.question === undefined || values.question.trim() === "") {
@@ -822,6 +841,7 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
       throw new UsageError(`选项最多 ${ROUTER_OPTION_MAX_COUNT} 个`);
     }
     const options = [...checked.options];
+    const body: Record<string, unknown> = { options };
     if (values.recommended !== undefined) {
       const rec = values.recommended.trim();
       let idx = -1;
@@ -832,23 +852,27 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
         idx = options.indexOf(rec);
       }
       if (idx < 0) throw new UsageError(`--recommended 要写 1 到 ${options.length} 或某个选项原文`);
-      if (idx > 0) {
-        const [picked] = options.splice(idx, 1);
-        options.unshift(picked!);
-      }
+      body.recommended = options[idx]!;
     }
     if (values.stdin === true && values.context !== undefined) {
       throw new UsageError("--stdin 和 --context 只能用一个");
     }
-    const body: Record<string, unknown> = { question: values.question.trim(), options };
+    const question = values.question.trim();
     if (values.replace !== undefined) body.replaceItemId = idOf(values.replace, "router ask", "卡片");
-    const textSource =
-      values.stdin === true
-        ? ({ kind: "stdin" } as const)
-        : values.context !== undefined
-          ? ({ kind: "inline", value: values.context } as const)
-          : null;
-    return { command: "router.ask", body, textSource, textField: "context" };
+    if (values.stdin === true) {
+      body.text = question;
+      return {
+        command: "ask",
+        body,
+        textSource: { kind: "stdin" },
+        textField: "text",
+        textOptional: true,
+        textPrefix: `${question}\n`,
+      };
+    }
+    const ctxText = values.context?.trim() ?? "";
+    body.text = ctxText === "" ? question : `${question}\n\n${ctxText}`;
+    return { command: "ask", body, textSource: null };
   }
   if (group === "router" && action === "report") {
     allowOnly(values, ["summary", "pr", "worker", "file", "link", "stdin"], "router report");
@@ -943,29 +967,57 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     return { command: "graph.list", body, textSource: null };
   }
   if (group === "graph" && action === "ask") {
+    // 底层 CLI 兼容别名（已并入 hub ask --node，不在 help 与提示词暴露）：旧会话若敲了 graph ask，平滑转发至统一 ask
     allowOnly(values, ["graph", "question", "option", "recommended", "stdin"], "graph ask");
     expectPositionals(rest, 1, "graph ask");
     const nodeKey = (rest[0] ?? "").trim();
     if (nodeKey === "") throw new UsageError("节点名称不能是空的");
-    const body: Record<string, unknown> = { nodeKey };
+    const body: Record<string, unknown> = { node: nodeKey };
     if (values.graph !== undefined) body.graphId = idOf(values.graph, "graph ask", "任务图");
+    let options: string[] | undefined;
     if (values.option !== undefined) {
       const checked = validateAskOptions(values.option);
       if (!checked.ok) throw new UsageError(checked.error);
+      if (checked.options.length > MAX_GATE_OPTIONS) {
+        throw new UsageError(`步骤拍板卡的选项最多 ${MAX_GATE_OPTIONS} 个`);
+      }
+      options = checked.options;
       body.options = checked.options;
     }
-    if (values.recommended !== undefined) body.recommended = values.recommended;
+    if (values.recommended !== undefined) {
+      const rec = values.recommended.trim();
+      if (rec === "") throw new UsageError("--recommended 不能是空的");
+      if (options !== undefined) {
+        let matched = options.find((o) => o === rec);
+        if (matched === undefined && /^[1-9][0-9]*$/.test(rec)) {
+          const oneBased = Number(rec);
+          if (oneBased >= 1 && oneBased <= options.length) matched = options[oneBased - 1];
+        }
+        if (matched === undefined) {
+          throw new UsageError(`--recommended 要写某个选项原文或 1 到 ${options.length} 的序号`);
+        }
+        body.recommended = matched;
+      } else {
+        body.recommended = rec;
+      }
+    }
     if (values.question !== undefined) {
       if (values.question.trim() === "") throw new UsageError("--question 不能是空的");
-      body.question = values.question.trim();
-      return {
-        command: "graph.ask",
-        body,
-        textSource: values.stdin === true ? { kind: "stdin" } : null,
-        textField: "summaryMd",
-      };
+      const q = values.question.trim();
+      body.text = q;
+      if (values.stdin === true) {
+        return {
+          command: "ask",
+          body,
+          textSource: { kind: "stdin" },
+          textField: "text",
+          textOptional: true,
+          textPrefix: `${q}\n`,
+        };
+      }
+      return { command: "ask", body, textSource: null };
     }
-    return { command: "graph.ask", body, textSource: requireStdin(values, "graph ask"), textField: "question" };
+    return { command: "ask", body, textSource: requireStdin(values, "graph ask"), textField: "text" };
   }
   if (group === "graph" && action === "patch") {
     allowOnly(values, ["stdin"], "graph patch");

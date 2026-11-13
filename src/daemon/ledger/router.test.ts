@@ -77,18 +77,19 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-describe("hub router ask / report / note 与同源桥接", () => {
-  it("hub router ask 同时写入对话 AskMeta 与 router_items，并出现在 snapshot.router.items 与 pendingDecisionsOf", () => {
-    const res = ledger.hubCall(lin.sessionId, "router.ask", {
-      question: "导出 CSV 用同步流还是后台异步任务？",
+describe("统一 hub ask 与 router report / note 同源桥接", () => {
+  it("hub ask（含 --recommended）同时写入对话 AskMeta 与 router_items，并出现在 snapshot.router.items 与 pendingDecisionsOf", () => {
+    const res = ledger.hubCall(lin.sessionId, "ask", {
+      text: "导出 CSV 用同步流还是后台异步任务？\n\n单次最多 5 万行，流式足够在 2 秒内返回。",
       options: ["同步流式响应", "后台异步导出"],
-      context: "单次最多 5 万行，流式足够在 2 秒内返回。",
+      recommended: "后台异步导出",
     });
     expect(res.data.item).toMatchObject({
       kind: "decision",
       status: "pending",
       pmId: lin.pmId,
       question: "导出 CSV 用同步流还是后台异步任务？",
+      context: "单次最多 5 万行，流式足够在 2 秒内返回。",
       options: ["同步流式响应", "后台异步导出"],
       askMessageId: res.data.messageId,
     });
@@ -97,6 +98,7 @@ describe("hub router ask / report / note 与同源桥接", () => {
     expect(askOf(msg)).toEqual({
       needsUser: true,
       options: ["同步流式响应", "后台异步导出"],
+      recommended: "后台异步导出",
     });
     expect(changes.map((c) => c.type)).toEqual(["message.created", "router.item.created"]);
 
@@ -109,7 +111,8 @@ describe("hub router ask / report / note 与同源桥接", () => {
       pmName: "小林",
       projectName: "后端核心",
       question: "导出 CSV 用同步流还是后台异步任务？",
-      source: { kind: "router_item", itemId: res.data.item.id },
+      context: "单次最多 5 万行，流式足够在 2 秒内返回。",
+      source: { kind: "router_item", itemId: res.data.item!.id, recommended: "后台异步导出" },
     });
   });
 
@@ -117,50 +120,51 @@ describe("hub router ask / report / note 与同源桥接", () => {
     const ids: number[] = [];
     for (let i = 1; i <= ROUTER_PENDING_DECISIONS_PER_PM_MAX; i++) {
       now += 10;
-      const r = ledger.hubCall(lin.sessionId, "router.ask", {
-        question: `待决问题 #${i}`,
+      const r = ledger.hubCall(lin.sessionId, "ask", {
+        text: `待决问题 #${i}`,
         options: ["方案甲", "方案乙"],
       });
-      ids.push(r.data.item.id);
+      ids.push(r.data.item!.id);
     }
     expect(ids).toHaveLength(30);
 
     expect(() =>
-      ledger.hubCall(lin.sessionId, "router.ask", {
-        question: "第 31 个问题",
+      ledger.hubCall(lin.sessionId, "ask", {
+        text: "第 31 个问题",
         options: ["甲", "乙"],
       }),
     ).toThrow(/30/);
 
     const oldAskMsgId = (ledger.snapshot().router.items.find((x) => x.id === ids[0]) as { askMessageId: number }).askMessageId;
-    const replaced = ledger.hubCall(lin.sessionId, "router.ask", {
-      question: "替换第 1 张的新问题",
+    const replaced = ledger.hubCall(lin.sessionId, "ask", {
+      text: "替换第 1 张的新问题",
       options: ["新甲", "新乙"],
       replaceItemId: ids[0],
     });
-    expect(replaced.data.item.status).toBe("pending");
+    expect(replaced.data.item!.status).toBe("pending");
     const oldRow = db.get<{ status: string }>("SELECT status FROM router_items WHERE id = ?", ids[0]!);
     expect(oldRow?.status).toBe("superseded");
     expect(askOf(ledger.getMessage(oldAskMsgId)!)?.answered).toBe(true);
   });
 
-  it("校验字段边界：问题超长、选项少于 2 个或超过 4 个、汇报摘要超长均被拒", () => {
+  it("校验字段边界：选项少于 2 个或超过 10 个、不存在的推荐项、汇报摘要超长均被拒", () => {
     expect(() =>
-      ledger.hubCall(lin.sessionId, "router.ask", {
-        question: "问".repeat(161),
+      ledger.hubCall(lin.sessionId, "ask", {
+        text: "合法问题",
         options: ["甲", "乙"],
+        recommended: "丙",
       }),
     ).toThrow();
     expect(() =>
-      ledger.hubCall(lin.sessionId, "router.ask", {
-        question: "合法问题",
+      ledger.hubCall(lin.sessionId, "ask", {
+        text: "合法问题",
         options: ["只有一个"],
       }),
     ).toThrow();
     expect(() =>
-      ledger.hubCall(lin.sessionId, "router.ask", {
-        question: "合法问题",
-        options: ["1", "2", "3", "4", "5"],
+      ledger.hubCall(lin.sessionId, "ask", {
+        text: "合法问题",
+        options: Array.from({ length: 11 }, (_, i) => `选项${i}`),
       }),
     ).toThrow();
     expect(() =>
@@ -171,11 +175,12 @@ describe("hub router ask / report / note 与同源桥接", () => {
   });
 
   it("一处拍板全端同步：Router 侧 resolve 同步标 AskMeta.answered、唤醒 PM，且相同 clientId 幂等", () => {
-    const { item, messageId } = ledger.hubCall(lin.sessionId, "router.ask", {
-      question: "缓存淘汰用 LRU 还是 TTL？",
+    const askRes = ledger.hubCall(lin.sessionId, "ask", {
+      text: "缓存淘汰用 LRU 还是 TTL？\n\n读多写少",
       options: ["LRU", "TTL"],
-      context: "读多写少",
     }).data;
+    const item = askRes.item!;
+    const messageId = askRes.messageId;
     changes = [];
 
     const first = ledger.resolveRouterItem(item.id, {
@@ -314,8 +319,8 @@ describe("hub router ask / report / note 与同源桥接", () => {
 
   it("DeviceRouterDigest 内存缓存命中与写操作精确失效，且体积严守 24 KB 上限", () => {
     ledger.hubCall(lin.sessionId, "router.note", { text: "正在推进导出模块与权限重构" });
-    ledger.hubCall(lin.sessionId, "router.ask", {
-      question: "导出文件默认编码用 UTF-8 BOM 吗？",
+    ledger.hubCall(lin.sessionId, "ask", {
+      text: "导出文件默认编码用 UTF-8 BOM 吗？",
       options: ["带 BOM（兼容 Excel）", "纯 UTF-8"],
     });
 
@@ -416,10 +421,10 @@ describe("hub router ask / report / note 与同源桥接", () => {
     expect(p2.nextCursor).toBeNull();
 
     // /api/router/items/:id/decide 风格：支持按 choice 文本匹配选项
-    const { item } = ledger.hubCall(lin.sessionId, "router.ask", {
-      question: "日志采样率设多少？",
+    const item = ledger.hubCall(lin.sessionId, "ask", {
+      text: "日志采样率设多少？",
       options: ["10%", "100%"],
-    }).data;
+    }).data.item!;
     const decided = ledger.resolveRouterItem(item.id, {
       clientId: "decide-choice-1",
       choice: "100%",
@@ -566,7 +571,7 @@ describe("v2 快照与简报历史（docs/router-workbench-v2-design.md 第 3.2 
     for (let i = 0; i < 5; i++) {
       now += 1;
       decisions.push(
-        ledger.hubCall(lin.sessionId, "router.ask", { question: `拍板 ${i}`, options: ["甲", "乙"] }).data.item,
+        ledger.hubCall(lin.sessionId, "ask", { text: `拍板 ${i}`, options: ["甲", "乙"] }).data.item!,
       );
     }
     const reports = [];
@@ -589,7 +594,7 @@ describe("v2 快照与简报历史（docs/router-workbench-v2-design.md 第 3.2 
   it("读过（archived）的简报仍在快照近窗里；已拍板的不在", () => {
     const r1 = ledger.hubCall(lin.sessionId, "router.report", { summary: "PR 已合并" }).data.item;
     now += 1;
-    const ask = ledger.hubCall(lin.sessionId, "router.ask", { question: "要不要发版？", options: ["要", "不要"] }).data.item;
+    const ask = ledger.hubCall(lin.sessionId, "ask", { text: "要不要发版？", options: ["要", "不要"] }).data.item!;
     ledger.archiveAllRouterReports();
     ledger.resolveRouterItem(ask.id, { clientId: "c-1", optionIndex: 0 });
     const items = ledger.snapshot().router.items;
@@ -655,7 +660,7 @@ describe("v2 快照与简报历史（docs/router-workbench-v2-design.md 第 3.2 
   it("listRouterItems 带 kind=report：任意状态的简报，不含拍板项，能按游标翻页；不带时行为不变", () => {
     const r1 = ledger.hubCall(lin.sessionId, "router.report", { summary: "一" }).data.item;
     now += 1;
-    const ask = ledger.hubCall(lin.sessionId, "router.ask", { question: "选哪个？", options: ["甲", "乙"] }).data.item;
+    const ask = ledger.hubCall(lin.sessionId, "ask", { text: "选哪个？", options: ["甲", "乙"] }).data.item!;
     now += 1;
     const r2 = ledger.hubCall(zhou.sessionId, "router.report", { summary: "二" }).data.item;
     ledger.resolveRouterItem(r2.id, { action: "archive" });

@@ -208,7 +208,9 @@ export function askingConversations(state: ReminderState, deviceId = "local"): S
     set.add(conversationId);
   }
   for (const decision of pendingDecisionsOf(state, deviceId)) {
-    if (pendingIn(state, decision.conversationId).some((p) => p.phase !== "failed")) continue;
+    if (decision.source.kind !== "gate" && pendingIn(state, decision.conversationId).some((p) => p.phase !== "failed")) {
+      continue;
+    }
     set.add(decision.conversationId);
   }
   return set;

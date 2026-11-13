@@ -213,13 +213,19 @@ export function GateDecisionCard({
 }) {
   const qc = useHubQueryClient();
   const hasOptions = node.gateOptions.length > 0;
-  const [noteOpen, setNoteOpen] = useState(!hasOptions);
+  const [noteOpen, setNoteOpen] = useState(!hasOptions || Boolean(node.gateCheckpoint));
   const [note, setNote] = useState("");
   const [err, setErr] = useState<ErrorLike | null>(null);
   // 同一次拍板（含失败后重试）沿用同一个 clientId，服务端按它严格幂等；成功后才换新的
   const clientIdRef = useRef<string | null>(null);
   // 同步防重入：useMutation 的 isPending 要等下一次渲染才变，连点两下会在它变之前各发一次请求
   const inFlightRef = useRef(false);
+
+  useEffect(() => {
+    if (!hasOptions || node.gateCheckpoint) {
+      setNoteOpen(true);
+    }
+  }, [hasOptions, node.gateCheckpoint, node.gateAskMessageId]);
 
   const decideMutation = useMutation(
     {
