@@ -24,6 +24,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { resolveSpawn } from "../src/daemon/platform/win32/spawn-resolution.ts";
+import { findExecutable } from "../src/shared/paths.ts";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -403,9 +404,16 @@ export async function stageWinRuntime(opts: StageWinRuntimeOptions): Promise<{
       "--config.node-linker=hoisted",
       "--config.package-import-method=copy",
     ];
+    const pnpmBin =
+      process.platform === "win32"
+        ? (findExecutable("pnpm", process.env.PATH ?? process.env.Path, [], {
+            platform: "win32",
+            pathExt: process.env.PATHEXT ?? process.env.Pathext,
+          }) ?? "pnpm.cmd")
+        : "pnpm";
     const resolvedPnpm =
       process.platform === "win32"
-        ? resolveSpawn({ program: "pnpm", args: pnpmArgs, cwd: daemonOutDir, env: process.env }, "win32")
+        ? resolveSpawn({ program: pnpmBin, args: pnpmArgs, cwd: daemonOutDir, env: process.env }, "win32")
         : { file: "pnpm", args: pnpmArgs, options: { cwd: daemonOutDir, env: process.env } };
     const installRes = spawnSync(
       resolvedPnpm.file,
@@ -417,8 +425,9 @@ export async function stageWinRuntime(opts: StageWinRuntimeOptions): Promise<{
         shell: false,
       },
     );
-    if (installRes.status !== 0) {
-      throw new Error(`pnpm hoisted install failed with exit code ${installRes.status}`);
+    if (installRes.error || installRes.status !== 0) {
+      const errDetail = installRes.error ? ` (${installRes.error.message})` : "";
+      throw new Error(`pnpm hoisted install failed with exit code ${installRes.status}${errDetail}`);
     }
     rmSync(join(daemonOutDir, "pnpm-lock.yaml"), { force: true });
     pruneStagedNodeModules(join(daemonOutDir, "node_modules"), targetOs);
