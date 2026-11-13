@@ -10,6 +10,14 @@ import { DEEPSEEK_HOME_REL } from "./spec.ts";
  * ~/.local/bin、mise shims、nvm current、~/.npm-global/bin，以及 macOS Homebrew / Linux 官方安装目录。
  */
 export const fallbackPaths: VendorPathsModule["fallbackPaths"] = ({ userHome, platform, linuxInstallDirs, join: joinPath }) => {
+  if (platform === "win32") {
+    return [
+      joinPath(userHome, "AppData", "Roaming", "npm", "dsh.cmd"),
+      joinPath(userHome, "AppData", "Local", "Programs", "DeepSeek", "resources", "runtime", "cli", "bin", "dsh.cmd"),
+      joinPath(userHome, ".local", "bin", "dsh.exe"),
+      joinPath(userHome, ".local", "bin", "dsh.cmd"),
+    ];
+  }
   const userCandidates = [
     joinPath(userHome, ".local", "bin", "dsh"),
     joinPath(userHome, ".local", "share", "mise", "shims", "dsh"),

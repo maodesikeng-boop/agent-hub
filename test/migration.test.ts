@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { openDatabase } from "../src/daemon/store/db.ts";
 import type { Db } from "../src/daemon/store/db.ts";
@@ -12,7 +13,7 @@ import { ConversationNotFoundError, LedgerRequestError } from "../src/shared/led
 import { ACTIVE_HANDOVER_STATUSES, HANDOVER_STATUSES } from "../src/shared/handover.ts";
 import { taskNodeStateFromLegacy } from "../src/shared/domain.ts";
 
-const migration = new URL("../migrations/0001_init.sql", import.meta.url).pathname;
+const migration = fileURLToPath(new URL("../migrations/0001_init.sql", import.meta.url));
 
 let dir: string | undefined;
 afterEach(() => {
@@ -187,7 +188,7 @@ describe("0001_init.sql：唯一约束", () => {
 
 // ---- 0002_projects：用 node:sqlite 和真正的迁移器测 ----
 
-const migrationsDir = new URL("../migrations/", import.meta.url).pathname;
+const migrationsDir = fileURLToPath(new URL("../migrations/", import.meta.url));
 /** migrations/ 下所有迁移的编号，从小到大。 */
 const ALL_VERSIONS = readdirSync(migrationsDir)
   .flatMap((name) => /^(\d+)_.*\.sql$/.exec(name)?.[1] ?? [])

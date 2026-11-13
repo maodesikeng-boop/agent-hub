@@ -1,15 +1,12 @@
 import { randomBytes } from "node:crypto";
 import {
   closeSync,
-  constants as fsConstants,
   fstatSync,
   lstatSync,
   mkdirSync,
-  openSync,
   opendirSync,
   readFileSync,
   realpathSync,
-  renameSync,
   rmSync,
   statSync,
   unlinkSync,
@@ -35,6 +32,11 @@ import {
   type PmMemoryFilesList,
 } from "../shared/index.ts";
 import { pmMemoryDirPath } from "../shared/paths.ts";
+import {
+  normalizePathForComparison,
+  openRegularFileNoFollowSync,
+  renameSyncWithWindowsRetry,
+} from "./platform/index.ts";
 
 /** 顶层 MEMORY.md 超出 200 行或 25 KB 时附在系统提示词截断末尾的单行提示（不含换行）。 */
 export const PM_MEMORY_TRUNCATION_HINT =
@@ -131,7 +133,7 @@ function resolveSafePmDir(pmMemoryDir: string, pmId: PmId, opts: { create: boole
   }
 
   const realDir = realpathSync.native(targetDir);
-  if (realDir !== targetDir) {
+  if (normalizePathForComparison(realDir) !== normalizePathForComparison(targetDir)) {
     throw new LedgerRequestError("invalid", "PM memory directory escaped root");
   }
   return realDir;
@@ -154,7 +156,7 @@ function assertValidSubfileName(name: string): void {
  * 大小按 fstat 判断，超过 maxBytes 不读内容、返回 oversize。
  */
 function readRegularFileNoFollow(target: string, maxBytes: number): { text: string; mtimeMs: number } | { oversize: true } {
-  const fd = openSync(target, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  const fd = openRegularFileNoFollowSync(target);
   try {
     const st = fstatSync(fd);
     if (!st.isFile()) throw new LedgerRequestError("invalid", "Memory file cannot be a symlink");
@@ -174,7 +176,7 @@ function atomicWriteRegularFile(realDir: string, fileName: string, content: stri
     if (st.isSymbolicLink() || !st.isFile()) {
       throw new LedgerRequestError("invalid", "Memory file cannot be a symlink");
     }
-    if (realpathSync.native(target) !== target) {
+    if (normalizePathForComparison(realpathSync.native(target)) !== normalizePathForComparison(target)) {
       throw new LedgerRequestError("invalid", "Memory file escaped PM memory directory");
     }
   } catch (err) {
@@ -195,7 +197,7 @@ function atomicWriteRegularFile(realDir: string, fileName: string, content: stri
       if (err instanceof LedgerRequestError) throw err;
       if (!isMissingError(err)) throw err;
     }
-    renameSync(tmp, target);
+    renameSyncWithWindowsRetry(tmp, target);
   } catch (err) {
     rmSync(tmp, { force: true });
     throw err;
@@ -218,7 +220,7 @@ export function readPmMemoryIndex(pmMemoryDir: string, pmId: PmId): PmMemoryInde
   try {
     const st = lstatSync(target);
     if (st.isSymbolicLink() || !st.isFile()) return null;
-    if (realpathSync.native(target) !== target) return null;
+    if (normalizePathForComparison(realpathSync.native(target)) !== normalizePathForComparison(target)) return null;
     const read = readRegularFileNoFollow(target, MAX_PERSONA_BYTES);
     return "oversize" in read ? read : { text: read.text };
   } catch {
@@ -246,7 +248,7 @@ export function quarantinePmMemoryIndex(pmMemoryDir: string, pmId: PmId, at: num
       } catch (err) {
         if (!isMissingError(err)) throw err;
       }
-      renameSync(source, target);
+      renameSyncWithWindowsRetry(source, target);
       return name;
     }
     return null;
@@ -290,7 +292,7 @@ function collectSubfile(realDir: string, name: string, files: PmMemoryFileSummar
   try {
     const st = lstatSync(full);
     if (st.isSymbolicLink() || !st.isFile()) return;
-    if (realpathSync.native(full) !== full) return;
+    if (normalizePathForComparison(realpathSync.native(full)) !== normalizePathForComparison(full)) return;
     files.push({ name, bytes: st.size, updatedAt: Math.trunc(st.mtimeMs) });
   } catch {
     // 并发删除或无权限读的项跳过
@@ -319,7 +321,7 @@ export function readPmMemoryFile(pmMemoryDir: string, pmId: PmId, name: string):
     if (st.isSymbolicLink() || !st.isFile()) {
       throw new LedgerRequestError("invalid", "Memory file cannot be a symlink");
     }
-    if (realpathSync.native(target) !== target) {
+    if (normalizePathForComparison(realpathSync.native(target)) !== normalizePathForComparison(target)) {
       throw new LedgerRequestError("invalid", "Memory file escaped PM memory directory");
     }
     const read = readRegularFileNoFollow(target, PM_MEMORY_MAX_TOTAL_BYTES);
@@ -394,7 +396,7 @@ export function deletePmMemoryFile(pmMemoryDir: string, pmId: PmId, name: string
     if (st.isSymbolicLink() || !st.isFile()) {
       throw new LedgerRequestError("invalid", "Memory file cannot be a symlink");
     }
-    if (realpathSync.native(target) !== target) {
+    if (normalizePathForComparison(realpathSync.native(target)) !== normalizePathForComparison(target)) {
       throw new LedgerRequestError("invalid", "Memory file escaped PM memory directory");
     }
   } catch (err) {

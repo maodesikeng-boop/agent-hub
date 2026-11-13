@@ -21,7 +21,7 @@ describe("VAPID 密钥", () => {
     const keys = loadOrCreateVapidKeys(file);
     expect(keys.publicKey).toMatch(/^[A-Za-z0-9_-]{80,}$/);
     expect(keys.privateKey).toMatch(/^[A-Za-z0-9_-]{40,}$/);
-    expect(statSync(file).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600);
     expect(loadOrCreateVapidKeys(file)).toEqual(keys);
   });
 
@@ -39,7 +39,7 @@ describe("推送订阅", () => {
     store.add(sub(1));
     store.add({ ...sub(1), keys: { p256dh: "new", auth: "new" } });
     store.add(sub(2));
-    expect(statSync(file).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600);
     expect(createSubscriptionStore(file).list()).toEqual([{ ...sub(1), keys: { p256dh: "new", auth: "new" } }, sub(2)]);
     store.remove(sub(1).endpoint);
     store.remove("https://fcm.googleapis.com/fcm/send/none");

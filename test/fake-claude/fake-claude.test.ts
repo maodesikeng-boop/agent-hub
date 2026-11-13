@@ -3,10 +3,11 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { WORKER_ENV } from "../../src/vendors/claude/settings.ts";
 
-const FAKE = new URL("./fake-claude.ts", import.meta.url).pathname;
+const FAKE = fileURLToPath(new URL("./fake-claude.ts", import.meta.url));
 const userLine = (text: string) => JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text }] } });
 
 let dir: string | undefined;
@@ -31,7 +32,7 @@ function run(
     delete env.FAKE_CLAUDE_STATE;
     delete env.FAKE_CLAUDE_LOG;
   }
-  const child = spawn(FAKE, args, { env, cwd: extra.cwd });
+  const child = spawn(process.execPath, [FAKE, ...args], { env, cwd: extra.cwd, windowsHide: true });
   let stdout = "";
   let stderr = "";
   child.stdout.on("data", (d) => (stdout += d));

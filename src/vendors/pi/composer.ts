@@ -2,7 +2,7 @@
 // - 运行中的会话直接通过 RPC `get_commands` 获取扩展命令、提示词模板与技能命令（如 `skill:<name>`）；
 // - 空闲会话由本模块短暂起 `pi --mode rpc --no-session --offline --no-mcp --no-approve`（显式带 `--skill <dir>/.agents/skills`）查询 `get_commands`；
 // - 额外补入内置压缩命令 `/compact`（驱动层将其映射为 RPC `compact` 命令）。
-import { spawn } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -17,6 +17,7 @@ import {
 import { STDERR_TAIL_CHARS, killThenSettle } from "../../daemon/driver/model-catalog.ts";
 import { forceKill, termGroupAfterExit } from "../../daemon/driver/process.ts";
 import { buildChildEnv, userContent } from "../../daemon/driver/protocol.ts";
+import { spawnOwnedProcess } from "../../daemon/platform/index.ts";
 import { trackChild } from "../../daemon/process-ledger.ts";
 import type { CommandsTarget, VendorComposer, VendorComposerBase } from "../../daemon/vendors/types.ts";
 import { createSpecComposerBase } from "../_common/composer.ts";
@@ -108,13 +109,18 @@ function queryPiRpcCommands(options: PiCommandsQueryOptions): Promise<unknown> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new Error("cancelled"));
     const args = ["--mode", "rpc", "--no-session", "--offline", "--no-mcp", ...PI_NO_PROJECT_TRUST_ARGS, ...buildPiSkillArgs(cwd, addDirs)];
-    const child = spawn(piPath, args, {
-      cwd,
-      env: buildChildEnv(options.env ?? process.env, undefined),
-      stdio: ["pipe", "pipe", "pipe"],
-      detached: true,
-    });
-    trackChild(child, "probe:pi-commands", { detached: true });
+    let spawned: { child: ChildProcessWithoutNullStreams; detached: boolean };
+    try {
+      spawned = spawnOwnedProcess(piPath, args, {
+        cwd,
+        env: buildChildEnv(options.env ?? process.env, undefined),
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } catch (err) {
+      return reject(err);
+    }
+    const { child, detached } = spawned;
+    trackChild(child, "probe:pi-commands", { detached });
 
     let buffer = "";
     let stderr = "";

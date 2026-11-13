@@ -6,7 +6,7 @@
 //   取消、出错时连同进程组强制结束；
 //   若原会话未落盘（报 `No session found`），抛出 ForkUnsupportedError 由上层自动退回本会话内写交接；
 // - `remove(fork)` 清理复制出的会话 JSONL 文件（含进程崩溃或守护进程重启后的残留文件）。
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
 import type { TokenUsage } from "../../shared/domain.ts";
@@ -15,6 +15,7 @@ import { KILL_WAIT_MS } from "../../shared/limits.ts";
 import { agentLaunchArgs } from "../../shared/vendors.ts";
 import { forceKill, killFreshGroup, termGroupAfterExit } from "../../daemon/driver/process.ts";
 import { buildChildEnv } from "../../daemon/driver/protocol.ts";
+import { spawnOwnedProcess } from "../../daemon/platform/index.ts";
 import { ForkUnsupportedError, withoutHubEnv } from "../../daemon/handover/forker.ts";
 import type { ForkHandle, ForkSource, ForkWriteResult, SessionForker } from "../../daemon/handover/forker.ts";
 import { trackChild } from "../../daemon/process-ledger.ts";
@@ -69,13 +70,13 @@ export function createPiForker(options: PiForkerOptions = {}): SessionForker {
   const spawnProcess =
     options.spawnProcess ??
     ((command, args, opts) => {
-      const child = spawn(command, args, {
+      const spawned = spawnOwnedProcess(command, args, {
         cwd: opts.cwd,
         env: opts.env,
         stdio: ["pipe", "pipe", "pipe"],
-        detached: true,
       });
-      trackChild(child, "handover:pi", { detached: true });
+      const { child, detached } = spawned;
+      trackChild(child, "handover:pi", { detached });
       return child;
     });
 

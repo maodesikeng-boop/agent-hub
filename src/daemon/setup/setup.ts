@@ -2,9 +2,9 @@
 // 跑命令的逻辑都在这里：shell、环境变量、日志、超时、强制结束（复用 driver/process.ts 的 forceKillTree）、
 // 同时跑着的那些（停止、收工、关机时结束它们）。什么时候跑、结果怎么交给 Worker 在 handlers.ts 和 ledger/workers.ts。
 // 用到的数在 src/shared/limits.ts，日志路径在 src/shared/paths.ts。
-import { spawn } from "node:child_process";
-import { closeSync, mkdirSync, openSync, statSync, writeSync } from "node:fs";
-import { dirname } from "node:path";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { closeSync, existsSync, mkdirSync, openSync, statSync, writeSync } from "node:fs";
+import { basename, dirname, win32 } from "node:path";
 import type { SessionId, SetupOutcome, WorkerId } from "../../shared/index.ts";
 import {
   ENV_SETUP_ROOT_PATH,
@@ -17,8 +17,10 @@ import {
   SETUP_TIMEOUT_MS,
   STDIO_DRAIN_MS,
 } from "../../shared/index.ts";
+import { findExecutable } from "../../shared/paths.ts";
 import { forceKillTree, streamClosed, termGroupAfterExit } from "../driver/process.ts";
 import { buildChildEnv } from "../driver/protocol.ts";
+import { firstEnvKey, spawnOwnedProcess } from "../platform/index.ts";
 import { trackChild } from "../process-ledger.ts";
 import { VENDOR_PATHS } from "../../vendors/paths-registry.ts";
 
@@ -37,9 +39,101 @@ function deniedSetupEnv(name: string): boolean {
   );
 }
 
-/** 用哪个 shell 跑：用户的 $SHELL（-c，不是登录 shell），没有就 /bin/sh。 */
-function setupShell(env: Record<string, string | undefined>): string {
-  return env.SHELL || "/bin/sh";
+export interface ResolvedSetupShell {
+  program: string;
+  args: string[];
+  label: string;
+}
+
+function isWslSystemBash(candidatePath: string): boolean {
+  return /[\\/]windows[\\/](?:system32|sysnative)[\\/]bash\.exe$/i.test(candidatePath);
+}
+
+function buildShellArgsForBinary(shellBin: string, command: string): ResolvedSetupShell {
+  const lower = basename(shellBin.replace(/\\/g, "/")).toLowerCase();
+  if (lower === "cmd" || lower === "cmd.exe") {
+    return { program: shellBin, args: ["/d", "/s", "/c", command], label: shellBin };
+  }
+  if (lower === "pwsh" || lower === "pwsh.exe" || lower === "powershell" || lower === "powershell.exe") {
+    return {
+      program: shellBin,
+      args: ["-NoProfile", "-NonInteractive", "-Command", command],
+      label: shellBin,
+    };
+  }
+  return { program: shellBin, args: ["-c", command], label: shellBin };
+}
+
+/**
+ * 选择准备命令的运行 shell（设计第 4.6 节）：
+ * - POSIX：显式指定 -> `$SHELL` -> `/bin/sh`（`-c`）；
+ * - Windows：显式指定 -> Git Bash（排除 `%SystemRoot%\System32\bash.exe` 的 WSL 入口）-> `pwsh` -> `cmd.exe`。
+ */
+export function resolveSetupShell(
+  command: string,
+  env: Record<string, string | undefined>,
+  explicitShell?: string,
+  platform: NodeJS.Platform = process.platform,
+  exists: (p: string) => boolean = existsSync,
+): ResolvedSetupShell {
+  if (explicitShell && explicitShell.trim() !== "") {
+    return buildShellArgsForBinary(explicitShell.trim(), command);
+  }
+  if (platform !== "win32") {
+    const sh = env.SHELL || "/bin/sh";
+    return { program: sh, args: ["-c", command], label: sh };
+  }
+
+  const pathKey = firstEnvKey(env as NodeJS.ProcessEnv, "PATH");
+  const envPath = pathKey ? env[pathKey] : undefined;
+  const pathExtKey = firstEnvKey(env as NodeJS.ProcessEnv, "PATHEXT");
+  const pathExt = pathExtKey ? env[pathExtKey] : undefined;
+
+  const progFiles = env.ProgramFiles || "C:\\Program Files";
+  const progFilesX86 = env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
+  const localApp = env.LOCALAPPDATA;
+  const gitBashCandidates = [
+    win32.join(progFiles, "Git", "bin", "bash.exe"),
+    win32.join(progFiles, "Git", "usr", "bin", "bash.exe"),
+    ...(localApp ? [win32.join(localApp, "Programs", "Git", "bin", "bash.exe")] : []),
+    win32.join(progFilesX86, "Git", "bin", "bash.exe"),
+  ];
+  for (const candidate of gitBashCandidates) {
+    if (exists(candidate)) {
+      return { program: candidate, args: ["-c", command], label: `Git Bash (${candidate})` };
+    }
+  }
+  if (exists === existsSync) {
+    const pathBash = findExecutable("bash.exe", envPath, [], { platform: "win32", pathExt });
+    if (pathBash && !isWslSystemBash(pathBash)) {
+      return { program: pathBash, args: ["-c", command], label: `Git Bash (${pathBash})` };
+    }
+  }
+
+  const pwshCandidates = [win32.join(progFiles, "PowerShell", "7", "pwsh.exe")];
+  for (const candidate of pwshCandidates) {
+    if (exists(candidate)) {
+      return {
+        program: candidate,
+        args: ["-NoProfile", "-NonInteractive", "-Command", command],
+        label: `PowerShell 7 (${candidate})`,
+      };
+    }
+  }
+  if (exists === existsSync) {
+    const pathPwsh = findExecutable("pwsh.exe", envPath, [], { platform: "win32", pathExt });
+    if (pathPwsh) {
+      return {
+        program: pathPwsh,
+        args: ["-NoProfile", "-NonInteractive", "-Command", command],
+        label: `PowerShell 7 (${pathPwsh})`,
+      };
+    }
+  }
+
+  const comSpecKey = firstEnvKey(env as NodeJS.ProcessEnv, "ComSpec");
+  const comSpec = (comSpecKey ? env[comSpecKey] : undefined) || win32.join(env.SystemRoot || "C:\\Windows", "System32", "cmd.exe");
+  return { program: comSpec, args: ["/d", "/s", "/c", command], label: `cmd (${comSpec})` };
 }
 
 /** 准备命令的环境变量：守护进程自己的，去掉父会话那几个（buildChildEnv）和模型、hub 的凭据（deniedSetupEnv），加上主文件夹、worktree 两个路径。 */
@@ -143,7 +237,7 @@ export async function runSetupCommand(options: RunSetupOptions): Promise<SetupOu
   const timeoutMs = options.timeoutMs ?? SETUP_TIMEOUT_MS;
   const logMaxBytes = options.logMaxBytes ?? SETUP_LOG_MAX_BYTES;
   const baseEnv = options.baseEnv ?? process.env;
-  const shell = options.shell ?? setupShell(baseEnv);
+  const resolvedShell = resolveSetupShell(options.command, baseEnv, options.shell);
   const started = now();
   const log = openLog(options.logPath);
   let logError = log.error;
@@ -157,7 +251,8 @@ export async function runSetupCommand(options: RunSetupOptions): Promise<SetupOu
       logError ??= errorMessage(error);
     }
   };
-  writeLog(`\n=== ${new Date(started).toISOString()} 在 ${options.cwd} 跑准备命令 ===\n${options.command}\n---\n`);
+  const shellHeader = process.platform === "win32" ? `[shell: ${resolvedShell.label}]\n` : "";
+  writeLog(`\n=== ${new Date(started).toISOString()} 在 ${options.cwd} 跑准备命令 ===\n${shellHeader}${options.command}\n---\n`);
 
   // 只留最后一截：够 tail 用就行
   const keepBytes = SETUP_OUTPUT_TAIL_BYTES * 2;
@@ -212,13 +307,13 @@ export async function runSetupCommand(options: RunSetupOptions): Promise<SetupOu
   }
 
   async function runChild(): Promise<SetupOutcome> {
-    const child = spawn(shell, ["-c", options.command], {
+    const spawned = spawnOwnedProcess(resolvedShell.program, resolvedShell.args, {
       cwd: options.cwd,
       env: buildSetupEnv(baseEnv, { rootPath: options.rootPath, worktreePath: options.cwd }),
-      detached: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    trackChild(child, "setup:worktree-command", { detached: true });
+    const child = spawned.child as ChildProcessWithoutNullStreams;
+    trackChild(child, "setup:worktree-command", { detached: spawned.detached });
     child.stdout.on("data", onData);
     child.stderr.on("data", onData);
 

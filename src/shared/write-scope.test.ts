@@ -4,7 +4,7 @@ import { commandMayWriteOutsideScope, scopeAllowsWrite, workerWriteScope } from 
 const dataDir = "/Users/u/.agent-hub";
 const cwd = "/Users/u/.agent-hub/worktrees/1/2";
 const home = "/Users/u";
-const scope = { dataDir, writableDirs: [cwd] };
+const scope = { dataDir, protectedRoots: [dataDir], writableDirs: [cwd] };
 
 describe("workerWriteScope", () => {
   it("Worker 在 worktree 里：数据目录里只放行自己的工作目录", () => {
@@ -13,7 +13,11 @@ describe("workerWriteScope", () => {
   });
 
   it("Worker 在主文件夹干活（--no-worktree）：数据目录整个不能写，主文件夹本来就在外面", () => {
-    expect(workerWriteScope({ role: "worker", dataDir, cwd: "/Users/u/code/app" })).toEqual({ dataDir, writableDirs: [] });
+    expect(workerWriteScope({ role: "worker", dataDir, cwd: "/Users/u/code/app" })).toEqual({
+      dataDir,
+      protectedRoots: [dataDir],
+      writableDirs: [],
+    });
   });
 
   it("工作目录就是数据目录、或包着数据目录时不放行（否则等于整个放开）", () => {
@@ -24,6 +28,38 @@ describe("workerWriteScope", () => {
   it("项目经理和别的角色没有可写范围", () => {
     expect(workerWriteScope({ role: "pm", dataDir, cwd })).toBeNull();
     expect(workerWriteScope({ role: "assistant", dataDir, cwd })).toBeNull();
+  });
+
+  it("跨盘同卷 worktree（protectedRoots 含 C 盘数据目录与 D 盘 .fusa-wt）：只放行本 worktree，禁写同卷别的 worktree 与 C 盘数据目录", () => {
+    const winDataDir = "C:\\Users\\alice\\.agent-hub";
+    const dWtRoot = "D:\\.fusa-wt\\1a2b3c4d";
+    const ownWt = "D:\\.fusa-wt\\1a2b3c4d\\7\\524";
+    const otherWt = "D:\\.fusa-wt\\1a2b3c4d\\7\\525";
+    const winScope = workerWriteScope({
+      role: "worker",
+      dataDir: winDataDir,
+      protectedRoots: [winDataDir, dWtRoot],
+      cwd: ownWt,
+    })!;
+    expect(winScope).toEqual({
+      dataDir: winDataDir,
+      protectedRoots: [winDataDir, dWtRoot],
+      writableDirs: [ownWt],
+    });
+    const winHome = "C:\\Users\\alice";
+    expect(scopeAllowsWrite(winScope, `${ownWt}\\src\\index.ts`, ownWt, winHome)).toBe(true);
+    expect(scopeAllowsWrite(winScope, "d:/project-repo/src/lib.rs", ownWt, winHome)).toBe(true);
+    expect(scopeAllowsWrite(winScope, "D:\\.pnpm-store\\v3\\files", ownWt, winHome)).toBe(true);
+    expect(scopeAllowsWrite(winScope, `${otherWt}\\src\\index.ts`, ownWt, winHome)).toBe(false);
+    expect(scopeAllowsWrite(winScope, `${winDataDir}\\state\\hub.sqlite`, ownWt, winHome)).toBe(false);
+    expect(scopeAllowsWrite(winScope, "%USERPROFILE%\\.agent-hub\\state\\ui-token", ownWt, winHome)).toBe(false);
+    expect(scopeAllowsWrite(winScope, "$env:USERPROFILE\\.agent-hub\\state\\ui-token", ownWt, winHome)).toBe(false);
+    expect(scopeAllowsWrite(winScope, `\\\\?\\${ownWt}\\a.ts`, ownWt, winHome)).toBe(true);
+    expect(scopeAllowsWrite(winScope, `\\\\?\\${otherWt}\\a.ts`, ownWt, winHome)).toBe(false);
+    expect(scopeAllowsWrite(winScope, "C:evil.txt", ownWt, winHome)).toBe(false);
+    expect(scopeAllowsWrite(winScope, `${ownWt}\\a.txt:zone.identifier`, ownWt, winHome)).toBe(false);
+    expect(commandMayWriteOutsideScope("cd /d C:\\Users\\alice\\.agent-hub\\state && echo x > a.txt", winScope, ownWt, winHome)).toBe(true);
+    expect(commandMayWriteOutsideScope(`cd /d ${ownWt}\\src && echo x > a.txt`, winScope, ownWt, winHome)).toBe(false);
   });
 });
 

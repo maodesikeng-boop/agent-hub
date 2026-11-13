@@ -1,6 +1,6 @@
 // Antigravity (agy) 的模型名单和登录状态（docs/vendor-availability-design.md 第 3 节、docs/vendor-plugin-design.md 的 C5）：
 // 跑 `agy --output-format json models`；agy 没有状态命令，问到名单就是能用。会话没在跑时问 skills 也在这里（composer.ts 用）。
-import { spawn } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import {
   ALL_EFFORTS,
   KILL_WAIT_MS,
@@ -17,6 +17,7 @@ import {
   type ModelCatalog,
 } from "../../shared/index.ts";
 import spec from "./spec.ts";
+import { spawnOwnedProcess } from "../../daemon/platform/index.ts";
 import {
   STDERR_TAIL_CHARS,
   defaultAvailabilityOfError,
@@ -124,13 +125,18 @@ function runAgyJsonCommand(options: AgyModelQueryOptions, args: readonly string[
   const { agyPath, cwd, timeoutMs = MODEL_CATALOG_TIMEOUT_MS, signal } = options;
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new Error("cancelled"));
-    const child = spawn(agyPath, [...args], {
-      cwd,
-      env: buildChildEnv(options.env ?? process.env, undefined),
-      stdio: ["pipe", "pipe", "pipe"],
-      detached: true,
-    });
-    trackChild(child, "probe:agy", { detached: true });
+    let spawned: { child: ChildProcessWithoutNullStreams; detached: boolean };
+    try {
+      spawned = spawnOwnedProcess(agyPath, [...args], {
+        cwd,
+        env: buildChildEnv(options.env ?? process.env, undefined),
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } catch (err) {
+      return reject(err);
+    }
+    const { child, detached } = spawned;
+    trackChild(child, "probe:agy", { detached });
     child.once("exit", () => termGroupAfterExit(child));
     let stdout = "";
     let stderr = "";

@@ -878,9 +878,10 @@ startup_timeout_sec = 20
     expect(lstatSync(join(userHome, ".claude.json")).isSymbolicLink()).toBe(true);
     const parsed = parseJsonc(readFileSync(realClaude, "utf8")) as { mcpServers: Record<string, unknown> };
     expect(Object.keys(parsed.mcpServers).sort()).toEqual(["a", "b"]);
-    expect(lstatSync(realClaude).mode & 0o777).toBe(0o644);
-    // 新建的配置文件默认 0600
-    expect(lstatSync(join(userHome, ".pi", "agent", "mcp.json")).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") {
+      expect(lstatSync(realClaude).mode & 0o777).toBe(0o644);
+      expect(lstatSync(join(userHome, ".pi", "agent", "mcp.json")).mode & 0o777).toBe(0o600);
+    }
     expect(readdirSync(dotfiles)).toEqual(["claude.json"]);
     expect(readdirSync(join(userHome, ".cursor"))).toEqual(["mcp.json"]);
   });

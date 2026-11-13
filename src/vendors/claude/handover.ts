@@ -3,7 +3,7 @@
 // 模型、思考程度、--append-system-prompt-file、--add-dir 照项目经理的来（前缀不变才吃得到缓存）；
 // --settings 是项目经理的设置叠上禁写三层（settings.ts 的 buildForkSettings：拦所有工具的钩子、dontAsk、Edit(//**) 拒绝），整段 JSON 传，
 // 只动权限和钩子、不动工具清单，实测缓存不掉。不落盘所以没有要删的文件，remove 只是保险。fork 本身什么都不跑，只定编号。
-import { spawn } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFile, rm } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -14,6 +14,7 @@ import { buildForkSettings } from "./settings.ts";
 import { agentLaunchArgs } from "../../shared/vendors.ts";
 import { assistantContext, buildChildEnv, parseUsage } from "../../daemon/driver/protocol.ts";
 import { killFreshGroup, termGroupAfterExit } from "../../daemon/driver/process.ts";
+import { spawnOwnedProcess } from "../../daemon/platform/index.ts";
 import { trackChild } from "../../daemon/process-ledger.ts";
 import { ForkUnsupportedError } from "../../daemon/handover/forker.ts";
 import { ensureClaudeSkillPlugin } from "./skills.ts";
@@ -106,13 +107,13 @@ export function createClaudeForker(options: ClaudeForkerOptions = {}): SessionFo
       if (signal.aborted) throw new Error("aborted");
       // 守护进程自己环境里的 HUB_* 也不能漏给复制那份；launch.env 已经去掉了
       const { [ENV_HUB_TOKEN]: _t, [ENV_HUB_SOCK]: _s, ...base } = process.env;
-      const child = spawn(src.executablePath, buildClaudeForkArgs(src, fork.forkId, persist, settings), {
+      const spawned = spawnOwnedProcess(src.executablePath, buildClaudeForkArgs(src, fork.forkId, persist, settings), {
         cwd: src.cwd,
         env: buildChildEnv(base, src.launch.env),
         stdio: ["pipe", "pipe", "pipe"],
-        detached: true,
       });
-      trackChild(child, "handover:claude", { detached: true });
+      const child: ChildProcessWithoutNullStreams = spawned.child;
+      trackChild(child, "handover:claude", { detached: spawned.detached });
       child.once("exit", () => termGroupAfterExit(child));
       return new Promise<ForkWriteResult>((resolve, reject) => {
         let stdout = "";

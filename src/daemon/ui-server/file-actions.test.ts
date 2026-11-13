@@ -236,7 +236,7 @@ describe("POST 在 Finder 中显示 / 用默认程序打开（agent 发来的文
     expect(opened).toEqual([]);
   });
 
-  it("白名单里的类型但带可执行权限：打开 403，显示可以", async () => {
+  it.skipIf(process.platform === "win32")("白名单里的类型但带可执行权限：打开 403，显示可以", async () => {
     const { original } = sendFile("tool.pdf");
     chmodSync(original, 0o755);
     expect((await post(url("open"))).statusCode).toBe(403);

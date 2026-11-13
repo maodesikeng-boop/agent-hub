@@ -215,7 +215,7 @@ describe("fork：格式对不上抛 ForkUnsupportedError（账本退回本会话
   });
 });
 
-describe("write：--conversation <新编号> 续跑一轮", () => {
+describe.skipIf(process.platform === "win32")("write：--conversation <新编号> 续跑一轮", () => {
   const result = (over: Record<string, unknown> = {}) =>
     [
       JSON.stringify({ event: "init", init: { conversation_id: "x", tools: [] } }),

@@ -1,7 +1,8 @@
 // hub 命令行的测试：起一个真的 agent 接口（假账本），经 Unix socket 调。
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -24,6 +25,7 @@ import { FakeHubLedger } from "../daemon/agent-api/fake-ledger.ts";
 import { startAgentApi, type RunningAgentApi } from "../daemon/agent-api/server.ts";
 import { installHubShim } from "../daemon/agent-api/shim.ts";
 import { createSessionTokens } from "../daemon/agent-api/tokens.ts";
+import { resolveHubPaths } from "../shared/paths.ts";
 
 /** 命令名（names.ts）：改名只改那一处，这里的断言跟着变。 */
 const cmd = HUB_COMMAND;
@@ -57,14 +59,15 @@ describe("hub cli", () => {
   let env: Record<string, string | undefined>;
 
   beforeEach(async () => {
-    dir = mkdtempSync("/tmp/ah-");
+    dir = mkdtempSync(join(existsSync("/tmp") ? "/tmp" : tmpdir(), "ah-"));
     home = join(dir, "home");
     cwd = join(dir, "work");
     mkdirSync(home);
     mkdirSync(cwd);
     ledger = new FakeHubLedger();
     tokens = createSessionTokens();
-    running = await startAgentApi({ ledger, tokens, runDir: join(dir, "run"), hubSock: join(dir, "run", "hub.sock") });
+    const sock = process.platform === "win32" ? resolveHubPaths({}, dir).hubSock : join(dir, "run", "hub.sock");
+    running = await startAgentApi({ ledger, tokens, runDir: join(dir, "run"), hubSock: sock });
     token = tokens.issue(42);
     env = { [ENV_HUB_TOKEN]: token, [ENV_HUB_SOCK]: running.socketPath, HOME: home };
   });
@@ -1068,7 +1071,8 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
       expect(r.code).toBe(HUB_EXIT.unreachable);
       expect(r.stderr).toMatch(UNREACHABLE);
       // afterEach 会再关一次，换一个能关的
-      running = await startAgentApi({ ledger, tokens, runDir: join(dir, "run2"), hubSock: join(dir, "run2", "hub.sock") });
+      const sock2 = process.platform === "win32" ? resolveHubPaths({}, join(dir, "h2")).hubSock : join(dir, "run2", "hub.sock");
+      running = await startAgentApi({ ledger, tokens, runDir: join(dir, "run2"), hubSock: sock2 });
     });
 
     it("守护进程没开：只打 network 那句话和 hint，不打 ENOENT、ECONNREFUSED 这类系统码", async () => {
@@ -1147,7 +1151,7 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
     });
   });
 
-  describe("run/bin/hub shim", () => {
+  describe.skipIf(process.platform === "win32")("run/bin/hub shim", () => {
     it("writes an executable 0700 wrapper that runs hub with the given node", async () => {
       const binDir = join(dir, "run", "bin");
       const shim = installHubShim({ binDir });
@@ -1195,11 +1199,12 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
     it("项目经理登记成功立即返回；--build 原样带上；Worker 调被拒（退出码 rejected）；多余参数是用法错", async () => {
       const calls: Array<{ sessionId: number; build: boolean }> = [];
       const runDir2 = join(dir, "run-sr");
+      const srSock = process.platform === "win32" ? resolveHubPaths({}, join(dir, "hsr")).hubSock : join(runDir2, "hub.sock");
       const api2 = await startAgentApi({
         ledger,
         tokens,
         runDir: runDir2,
-        hubSock: join(runDir2, "hub.sock"),
+        hubSock: srSock,
         selfReload: (input) => {
           calls.push(input);
           return { text: "已登记空闲排空热重启", data: null };
@@ -1242,11 +1247,12 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
       const { createRouterSandboxGuard } = await import("../daemon/router/sandbox.ts");
       const sandboxGuard = createRouterSandboxGuard();
       const runDir2 = join(dir, "run-r");
+      const rSock = process.platform === "win32" ? resolveHubPaths({}, join(dir, "hr")).hubSock : join(runDir2, "hub.sock");
       const routerApi = await startAgentApi({
         ledger,
         tokens,
         runDir: runDir2,
-        hubSock: join(runDir2, "hub.sock"),
+        hubSock: rSock,
         sandboxGuard,
         onRouterDispatch: async (sessionId, commandId, payload) => {
           dispatches.push({ sessionId, commandId, payload });

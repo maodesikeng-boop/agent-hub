@@ -7,6 +7,13 @@ import type { VendorPathsModule } from "../daemon-types.ts";
 import { AGY_CLI_HOME_REL, AGY_LEGACY_HOME_REL, AGY_MCP_CONFIG_REL } from "./spec.ts";
 
 export const fallbackPaths: VendorPathsModule["fallbackPaths"] = ({ userHome, platform, linuxInstallDirs, join }) => {
+  if (platform === "win32") {
+    return [
+      join(userHome, "AppData", "Local", "agy", "bin", "agy.exe"),
+      join(userHome, ".local", "bin", "agy.exe"),
+      join(userHome, "AppData", "Roaming", "npm", "agy.cmd"),
+    ];
+  }
   const home = join(userHome, ".local", "bin", "agy");
   return platform === "darwin" ? [home] : [home, ...linuxInstallDirs.map((dir) => join(dir, "agy"))];
 };

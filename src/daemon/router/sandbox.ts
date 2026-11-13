@@ -4,7 +4,7 @@
 // - 维护活跃 assistant 会话 → commandId 绑定表，严防 assistant 调普通 hub 命令，也严防 pm/worker 越权调 hub dispatch。
 import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import {
   ENV_HUB_SOCK,
   ENV_HUB_TOKEN,
@@ -64,6 +64,7 @@ export interface RouterSandboxLaunchOptions {
   launchDir: string;
   dataDir: string;
   stateDir: string;
+  protectedRoots?: readonly string[];
   homeDir?: string;
   osSandboxed?: boolean | (() => boolean);
   tokens: Pick<SessionTokens, "issue">;
@@ -88,7 +89,7 @@ export function prepareRouterSandboxLaunch(
   const homeDir = realpathOr(options.homeDir ?? homedir());
   const stateDir = realpathOr(options.stateDir);
   const dataDir = realpathOr(options.dataDir);
-  const basePath = options.basePath ?? process.env.PATH ?? "";
+  const basePath = options.basePath ?? process.env.PATH ?? process.env.Path ?? "";
 
   const prompt = buildRouterSystemPrompt({ vendorAvailability: options.vendorAvailability });
   const readonlyPolicy = buildReadonlyPolicy({ homeDir, stateDir });
@@ -120,7 +121,12 @@ export function prepareRouterSandboxLaunch(
 
   const writeScope = nativeReadonly
     ? null
-    : workerWriteScope({ role: "worker", dataDir, cwd: routerHomeDir });
+    : workerWriteScope({
+        role: "worker",
+        dataDir,
+        ...(options.protectedRoots && options.protectedRoots.length > 0 ? { protectedRoots: options.protectedRoots } : {}),
+        cwd: routerHomeDir,
+      });
 
   return {
     promptFile,
@@ -128,7 +134,7 @@ export function prepareRouterSandboxLaunch(
     env: {
       [ENV_HUB_TOKEN]: options.tokens.issue(session.id),
       [ENV_HUB_SOCK]: options.hubSock,
-      PATH: basePath === "" ? options.hubBinDir : `${options.hubBinDir}:${basePath}`,
+      PATH: basePath === "" ? options.hubBinDir : `${options.hubBinDir}${delimiter}${basePath}`,
       ...vendorFiles?.env,
     },
     fingerprint: launchFingerprint({ prompt, settings: settings ?? "", readonly: readonlyPolicy }),

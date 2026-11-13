@@ -380,7 +380,7 @@ describe("审查后补的（PR #47）", () => {
     expect(outcome.error).toBe(`worktree 目录不在：${join(root, "gone")}`);
   });
 
-  it("R7 日志目录权限 0700", async () => {
+  it.skipIf(process.platform === "win32")("R7 日志目录权限 0700", async () => {
     await run("true");
     expect(statSync(join(root, "logs", "setup")).mode & 0o777).toBe(0o700);
   });

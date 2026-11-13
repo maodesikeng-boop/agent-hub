@@ -147,10 +147,7 @@ describe("listMcpTools：真的起 stdio 服务器问 tools/list", () => {
 
   const writeServer = (body: string): string => {
     dir = mkdtempSync(join(tmpdir(), "agy-mcp-"));
-    const file = join(dir, "server.mjs");
-    writeFileSync(file, body);
-    chmodSync(file, 0o755);
-    return file;
+    return writeExecutableNodeScript(join(dir, "server"), body);
   };
 
   it("initialize → tools/list（翻两页），拿到 readOnlyHint", async () => {
@@ -262,3 +259,4 @@ describe("createReadonlyProbeLauncher：探测进程的沙箱和环境", () => {
     expect(existsSync(tmpSeen)).toBe(false);
   });
 });
+import { writeExecutableNodeScript } from "../../../test/fake-cli-shim.ts";

@@ -5,7 +5,7 @@ import { request } from "node:http";
 import { connect } from "node:net";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, delimiter, dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { API_PATHS, ENV_DEFAULT_MODEL, HUB_COMMAND, HUB_REQUEST_TIMEOUT_MS, RELAUNCH_NOTE, type EditPersonaResponse, type Message, type StateSnapshot } from "../../src/shared/index.ts";
 import { LOCAL_ERRORS } from "../../src/shared/errors.ts";
@@ -42,8 +42,7 @@ async function boot(options?: Parameters<E2eEnv["start"]>[0]) {
 }
 
 async function terminate(daemon: RunningDaemon) {
-  daemon.child.kill("SIGTERM");
-  return daemon.exited;
+  return daemon.terminate();
 }
 
 /** 临时目录里建一个文件夹，返回字面路径（macOS 上 /var 是 /private/var 的软链接，真实路径另算）。 */
@@ -236,18 +235,20 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
     expect(prompt).toContain("- 项目：foo");
     expect(prompt).toContain(`主文件夹（工作目录）：${real(foo)}`);
     // agent 接口：HUB_SOCK 是真实路径；设置文件放行 hub 和这个 socket；run/bin 在 PATH 最前面
-    const sock = real(hubSock());
     const childEnv = env.envs().find((e) => e.pid === proc!.pid)!.env;
+    const sock = process.platform === "win32" ? childEnv.HUB_SOCK! : real(hubSock());
     expect(childEnv.HUB_SOCK).toBe(sock);
     expect(childEnv.HUB_TOKEN).toMatch(/^[A-Za-z0-9_-]{40,}$/);
-    expect(childEnv.PATH!.split(":")[0]).toBe(join(env.home, "run", "bin"));
+    expect(childEnv.PATH!.split(delimiter)[0]).toBe(join(env.home, "run", "bin"));
     const settings = JSON.parse(readFileSync(argValue(proc!.argv, "--settings")!, "utf8")) as Record<string, unknown>;
     expect(JSON.stringify(settings)).toContain(`Bash(${HUB_COMMAND}:*)`);
     expect(JSON.stringify(settings)).toContain(JSON.stringify(sock));
     // 令牌只在环境变量里，不落盘
     expect(readFileSync(argValue(proc!.argv, "--settings")!, "utf8")).not.toContain(childEnv.HUB_TOKEN!);
-    expect(statSync(join(env.home, "run")).mode & 0o777).toBe(0o700);
-    expect(statSync(hubSock()).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") {
+      expect(statSync(join(env.home, "run")).mode & 0o777).toBe(0o700);
+      expect(statSync(hubSock()).mode & 0o777).toBe(0o600);
+    }
     await terminate(daemon);
   });
 
@@ -599,7 +600,7 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
     await terminate(daemon);
   });
 
-  it("重启后旧 hub.sock 被替换：守护进程被 SIGKILL 留下 socket 文件，再启动删掉重建，hub 照常能用", async () => {
+  it.skipIf(process.platform === "win32")("重启后旧 hub.sock 被替换：守护进程被 SIGKILL 留下 socket 文件，再启动删掉重建，hub 照常能用", async () => {
     env = makeEnv();
     env.setScript({ defaultTurn: quick("在") });
     const first = await boot();

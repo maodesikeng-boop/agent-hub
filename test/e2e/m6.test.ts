@@ -26,8 +26,7 @@ function withDb<T>(fn: (db: ReturnType<typeof openDatabase>) => T): T {
 const schedules = () => withDb((db) => db.all<{ id: number; name: string; next_run_at: number; last_status: string | null; last_message_id: number | null }>("SELECT * FROM schedules ORDER BY id"));
 
 async function terminate(daemon: RunningDaemon) {
-  daemon.child.kill("SIGTERM");
-  return daemon.exited;
+  return daemon.terminate();
 }
 
 describe("M6 端到端：定时任务", { timeout: 60_000 }, () => {

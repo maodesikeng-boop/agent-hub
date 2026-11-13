@@ -90,9 +90,7 @@ const REAL_CURSOR_MODELS_TEXT = [
 ].join("\n");
 
 function writeNodeScript(path: string, body: string): string {
-  writeFileSync(path, `#!/usr/bin/env node\n${body}\n`, "utf8");
-  chmodSync(path, 0o755);
-  return path;
+  return writeExecutableNodeScript(path, body);
 }
 
 describe("cursor spec 与 paths 声明边界", () => {
@@ -353,7 +351,7 @@ describe("cursor composer：本地命令扫描、阻塞拦截与 /compact 兜底
     expect(parsed.some((c) => c.name === "compact")).toBe(true);
   });
 
-  it("SKILL.md 是 FIFO 或超大文件时不卡住、不整个读进内存：FIFO 没有说明，超大文件只看开头", async () => {
+  it.skipIf(process.platform === "win32")("SKILL.md 是 FIFO 或超大文件时不卡住、不整个读进内存：FIFO 没有说明，超大文件只看开头", async () => {
     const home = join(dir, "home");
     const cwd = join(dir, "repo");
     mkdirSync(join(cwd, ".cursor", "skills", "pipe-skill"), { recursive: true });
@@ -894,3 +892,4 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     expect(isAlive(sleeperPid)).toBe(false);
   });
 });
+import { writeExecutableNodeScript } from "../../../test/fake-cli-shim.ts";

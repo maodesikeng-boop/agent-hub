@@ -373,7 +373,11 @@ if (resumeId !== undefined && (script.rejectSessionArgs || !sessionExists(resume
 }
 
 function spawnChild({ sleepSec, detached = false }: ChildSpec): void {
-  const child = spawn("sleep", [String(sleepSec)], { stdio: "ignore", detached });
+  const child = spawn(
+    process.execPath,
+    ["-e", `setTimeout(() => {}, ${Math.max(1, sleepSec) * 1000})`],
+    { stdio: "ignore", detached, windowsHide: true },
+  );
   child.unref();
   log({ kind: "child", pid: myPid, childPid: child.pid ?? -1 });
 }
@@ -619,7 +623,11 @@ async function runTurn(content: UserContent[] | null, selfTurn?: FakeTurn, uuids
         uuid: randomUUID(),
       });
     } else if ("spawnOrphan" in step) {
-      const orphan = spawn("sleep", [String(step.spawnOrphan.sleepSec)], { stdio: ["ignore", "inherit", "inherit"], detached: true });
+      const orphan = spawn(
+        process.execPath,
+        ["-e", `setTimeout(() => {}, ${Math.max(1, step.spawnOrphan.sleepSec) * 1000})`],
+        { stdio: ["ignore", "inherit", "inherit"], detached: true, windowsHide: true },
+      );
       orphan.unref();
       log({ kind: "orphan", pid: myPid, orphanPid: orphan.pid ?? -1 });
     } else if ("spawnChild" in step) {
@@ -689,7 +697,22 @@ function emitBackgroundTasks(tasks: BackgroundTaskSpec[] | "malformed"): void {
 /** sh -c 跑一条命令：环境变量、工作目录都是自己的；标准输入不接（/dev/null）。 */
 function runShell(command: string): Promise<{ exitCode: number; output: string }> {
   return new Promise((resolve) => {
-    const child = execFile("sh", ["-c", command], { maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
+    let shellBin = "sh";
+    let shellArgs = ["-c", command];
+    if (process.platform === "win32") {
+      const candidates = [
+        join(process.env.ProgramFiles ?? "C:\\Program Files", "Git", "bin", "bash.exe"),
+        join(process.env.ProgramFiles ?? "C:\\Program Files", "Git", "usr", "bin", "bash.exe"),
+      ];
+      const gitBash = candidates.find((p) => existsSync(p));
+      if (gitBash) {
+        shellBin = gitBash;
+      } else {
+        shellBin = process.env.ComSpec ?? "cmd.exe";
+        shellArgs = ["/d", "/s", "/c", command];
+      }
+    }
+    const child = execFile(shellBin, shellArgs, { maxBuffer: 16 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
       const code = error ? (typeof error.code === "number" ? error.code : 1) : 0;
       resolve({ exitCode: code, output: `${stdout}${stderr}`.replace(/\n$/, "") });
     });

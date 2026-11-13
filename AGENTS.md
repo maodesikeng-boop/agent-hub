@@ -14,7 +14,7 @@
 - 优先用成熟的第三方库，不要自己手搓基础轮子（比如前端状态订阅用 `zustand`、按需拉取与分页缓存用 `@tanstack/react-query`、UI 原语用 `shadcn/ui` 等），不要为了追求“零依赖”手写复杂的状态机、缓存淘汰或分页拼接。
 - 界面按 `docs/ui-standard.md`：间距、圆角、字号、颜色、控件尺寸、聚焦态、对齐都照它；标准没覆盖的先补进标准再改界面。
 - GitHub 操作一律用 `GH_TOKEN="$(gh auth token --user maodesikeng-boop)" gh ...`（本机 gh 默认账号不是仓库协作者）。
-- Mac 测试在本机跑（`pnpm typecheck`、本次改到的相关测试文件及涉及沙箱时的 `src/shared/write-scope.test.ts`），云端 CI 只跑 Ubuntu（4 路并行分片）。
+- Mac 测试在本机跑（`pnpm typecheck`、本次改到的相关测试文件及涉及沙箱时的 `src/shared/write-scope.test.ts`），云端 CI 默认跑 Ubuntu（4 路并行分片），并在改动平台层、驱动层、进程/管道/git/同步、`apps/windows/**` 或 `test/windows/**` 等跨端路径时按路径自动触发 `.github/workflows/windows.yml`（`windows-latest`）。
 - 写或审缓存、状态快照、会随时间变多的列表，必查 4 件事（守卫测试见 `src/web/selectors-cache.test.ts`、`src/daemon/store/db-cache.test.ts`、`src/web/sw-rules-cache.test.ts`）：
   1. 失效：底层文件、配置、数据变了要能感知；退出、删除要清掉；失败或空结果只短暂记（像 `FETCHED_QUOTA_RETRY_MS`），不当正常结果缓存几分钟到几小时。
   2. 上限：按跑了一个月（300 个已收工 Worker、3 万条消息、5 万步日志）算，内存里的 Map/数组、单次接口响应、给 agent 的命令输出都要有上限（数写进 `src/shared/limits.ts`），大响应要压缩。
@@ -69,7 +69,7 @@
 **桌面外壳（`apps/desktop`、`apps/macos`、`apps/windows`）**
 - 共用监管约定：`apps/desktop/contract.json`（`apps/macos/DaemonSupervisor.swift`、`apps/windows/crates/fusa-supervisor/src/contract.rs`、`apps/windows/crates/fusa-desktop/src/lib.rs`）。
 - macOS（`apps/macos/`）：原生 Swift，系统框架 `AppKit`、`WebKit`、`UserNotifications`（`scripts/build-mac-app.sh` 调用 `swiftc` 编译为 `Fusa.app`）。
-- Windows（`apps/windows/`，Rust workspace）：`tauri` + `tauri-build`（Tauri 2 桌面窗口、WebView 与托盘，`crates/fusa-desktop/`）、`ureq`（守护进程 HTTP 探活，`crates/fusa-supervisor/src/probe.rs`）、`winreg`（读取 WSL 注册表安装路径，`crates/fusa-wsl/src/registry.rs`）、`sha2`（SHA-256 校验，`crates/fusa-wsl/src/runner.rs`）、`serde` + `serde_json`（配置与状态序列化，`fusa-wsl` / `fusa-supervisor` / `fusa-desktop`）、`thiserror`（`fusa-wsl` / `fusa-supervisor`）+ `url`（`fusa-desktop`）；Rust 测试用 `tempfile`。
+- Windows（`apps/windows/`，Rust workspace）：`windows-sys`（微软官方 Win32 API 绑定，供 `crates/fusa-win-helper/` 的 `fusa-run.exe` 与 `hub.exe` 调用 Job Object、写受限令牌、NTFS ACL、Restart Manager、防睡眠与命名管道）、`tauri` + `tauri-build`（Tauri 2 桌面窗口、WebView 与托盘，`crates/fusa-desktop/`）、`ureq`（守护进程 HTTP 探活，`crates/fusa-supervisor/src/probe.rs`）、`winreg`（读取注册表，`crates/fusa-wsl/src/registry.rs`）、`sha2`（SHA-256 校验，`crates/fusa-wsl/src/runner.rs`）、`serde` + `serde_json`（配置与状态序列化，`fusa-win-helper` / `fusa-wsl` / `fusa-supervisor` / `fusa-desktop`）、`thiserror`（`fusa-wsl` / `fusa-supervisor`）+ `url`（`fusa-desktop`）；Rust 测试用 `tempfile`。
 
 **测试**
 - `vitest`（`vitest.config.ts`）、`jsdom`（`src/shared/test-helpers.ts`）、`@testing-library/react`、`@testing-library/user-event`、`@testing-library/jest-dom`（`src/web/test-setup.ts`）。

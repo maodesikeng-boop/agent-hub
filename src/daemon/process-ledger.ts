@@ -9,7 +9,8 @@ import { dirname } from "node:path";
 import type { ChildProcess } from "node:child_process";
 import { KILL_WAIT_MS, PROCESS_LEDGER_MAX_ENTRIES, PROCESS_LEDGER_PURPOSE_MAX_CHARS } from "../shared/limits.ts";
 import { LOG_PREFIX } from "../shared/names.ts";
-import { forceKillTree, runPs, signalPid, waitForExit } from "./driver/process.ts";
+import { forceKillTree, signalPid, waitForExit } from "./driver/process.ts";
+import { queryProcessStartTime } from "./platform/index.ts";
 
 export interface LedgerEntry {
   pid: number;
@@ -53,9 +54,7 @@ export interface ProcessLedger {
 }
 
 async function defaultStartTimeOf(pid: number): Promise<string | null> {
-  const out = await runPs(["-o", "lstart=", "-p", String(pid)]);
-  const text = out?.trim() ?? "";
-  return text === "" ? null : text;
+  return queryProcessStartTime(pid);
 }
 
 function isEntry(value: unknown): value is LedgerEntry {
@@ -86,6 +85,7 @@ function canSignal(pid: number): boolean {
 }
 
 function groupAlive(pid: number): boolean {
+  if (process.platform === "win32") return false;
   return canSignal(-pid);
 }
 

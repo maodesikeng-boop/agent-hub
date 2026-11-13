@@ -51,7 +51,7 @@ describe("列文件", () => {
     expect(files.sort()).toEqual([".hidden/ok.md", "README.md", "src/deep/a.ts"]);
   });
 
-  it("git 不执行仓库里配置的脚本：core.fsmonitor 指到脚本，列文件后脚本没跑", async () => {
+  it.skipIf(process.platform === "win32")("git 不执行仓库里配置的脚本：core.fsmonitor 指到脚本，列文件后脚本没跑", async () => {
     const root = tempDir();
     const outside = tempDir();
     gitInit(root);

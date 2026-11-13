@@ -766,7 +766,7 @@ describe("假 claude 跑命令", () => {
   });
 });
 
-describe("进程组", () => {
+describe.skipIf(process.platform === "win32")("进程组", () => {
   it("关机超时强制结束：整个进程组 SIGKILL，claude 起的睡眠子进程也不在了", async () => {
     const t = harness({
       driver: { shutdownGraceMs: 200 },

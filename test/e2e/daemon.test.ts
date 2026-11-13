@@ -37,8 +37,7 @@ async function boot(options?: Parameters<E2eEnv["start"]>[0]) {
 }
 
 async function terminate(daemon: RunningDaemon) {
-  daemon.child.kill("SIGTERM");
-  return daemon.exited;
+  return daemon.terminate();
 }
 
 const fakePids = () => env.argvs().map((a) => a.pid);
@@ -284,7 +283,7 @@ describe("W5 组装 + 端到端", () => {
     first.daemon.child.kill("SIGKILL");
     await first.daemon.exited;
     const [orphan] = fakePids();
-    expect(isAlive(orphan!)).toBe(true);
+    if (process.platform !== "win32") expect(isAlive(orphan!)).toBe(true);
 
     const daemon = await env.start();
     const client = first.client.withPort(daemon.port);

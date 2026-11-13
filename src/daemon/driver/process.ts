@@ -4,6 +4,7 @@ import { readFileSync, readlinkSync } from "node:fs";
 import { join } from "node:path";
 import type { Readable } from "node:stream";
 import { PS_TIMEOUT_MS, STALE_POLL_MS } from "../../shared/index.ts";
+import { killWin32ProcessTree, sendWin32Interrupt } from "../platform/index.ts";
 
 /** ps 卡住时不能一直等：超时直接 SIGKILL 掉 ps，当它跑不了。LC_ALL=C 让 lstart= 不随终端/launchd/systemd 的语言环境变。 */
 const PS_OPTIONS = { timeout: PS_TIMEOUT_MS, killSignal: "SIGKILL" as const };
@@ -13,6 +14,7 @@ const PS_OPTIONS = { timeout: PS_TIMEOUT_MS, killSignal: "SIGKILL" as const };
  * Node 对 EPERM 这类错误是同步抛出的，不走回调，所以 execFile 本身也要包起来。
  */
 export function runPs(args: string[]): Promise<string | null> {
+  if (process.platform === "win32") return Promise.resolve(null);
   return new Promise((resolve) => {
     try {
       execFile("ps", args, { ...PS_OPTIONS, env: { ...process.env, LC_ALL: "C" } }, (error, stdout) => resolve(error ? null : stdout));
@@ -55,6 +57,10 @@ export function forceKill(child: ChildProcessWithoutNullStreams): Promise<void> 
  */
 export function killFreshGroup(child: ChildProcessWithoutNullStreams): void {
   if (child.exitCode !== null || child.signalCode !== null) return;
+  if (process.platform === "win32") {
+    child.kill();
+    return;
+  }
   if (child.pid !== undefined && child.pid > 1 && signalOk(-child.pid, "SIGKILL")) return;
   child.kill("SIGKILL");
 }
@@ -67,6 +73,7 @@ export function killFreshGroup(child: ChildProcessWithoutNullStreams): void {
  * 调用方必须保证组身份：exit 回调发生前 libuv 已回收子进程，立即调用也不能排除空组号已被复用。
  */
 export function termGroupAfterExit(child: Pick<ChildProcess, "pid">): void {
+  if (process.platform === "win32") return;
   if (child.pid !== undefined && child.pid > 1) {
     signalPid(-child.pid, "SIGKILL");
   }
@@ -148,6 +155,11 @@ export function signalChild(
   platform: NodeJS.Platform = process.platform,
   procRoot = "/proc",
 ): void {
+  if (platform === "win32") {
+    if (signal === "SIGINT" && sendWin32Interrupt(child)) return;
+    child.kill(signal);
+    return;
+  }
   if (child.pid !== undefined) {
     const target = signalTarget(child.pid, platform, procRoot);
     if (target === null) return;
@@ -191,6 +203,10 @@ function stop(target: number): boolean {
  */
 export async function forceKillTree(pid: number, ownsGroup: boolean): Promise<void> {
   if (!Number.isInteger(pid) || pid <= 1) return;
+  if (process.platform === "win32") {
+    await killWin32ProcessTree(pid);
+    return;
+  }
   const root = ownsGroup && stop(-pid) ? -pid : pid;
   if (root === pid) stop(pid);
   const targets = new Set<number>([root]);

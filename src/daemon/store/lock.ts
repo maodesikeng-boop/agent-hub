@@ -1,10 +1,10 @@
 // 数据目录锁（设计第 5.4 节第 1 步）：state/lock 里写守护进程的进程号和进程启动时间。
 // 文件已存在而且那个进程还活着 → 已有守护进程在跑；进程不在了（上次崩溃留下的）→ 接管。
 // 启动时间用来认出“机器重启后进程号被别的进程复用了”，这种锁也算过期。
-import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { closeSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from "node:fs";
 import { dirname } from "node:path";
+import { queryProcessStartTimeSync, renameSyncWithWindowsRetry } from "../platform/index.ts";
 
 export class DaemonAlreadyRunningError extends Error {
   readonly code = "daemon_already_running";
@@ -27,14 +27,9 @@ interface Holder {
   startTime: string | null;
 }
 
-/** 进程启动时间；进程不在或 ps 出错返回 null。 */
+/** 进程启动时间；进程不在或探针出错返回 null。 */
 function startTimeOf(pid: number): string | null {
-  try {
-    const out = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-    return out === "" ? null : out;
-  } catch {
-    return null;
-  }
+  return queryProcessStartTimeSync(pid);
 }
 
 function isAlive(holder: Holder): boolean {
@@ -110,7 +105,7 @@ export function acquireLock(file: string): DirLock {
     // 改名到唯一的名字：两个进程同时接管时只有一个能挪走同一个文件
     const stale = `${file}.stale.${process.pid}.${randomUUID()}`;
     try {
-      renameSync(file, stale);
+      renameSyncWithWindowsRetry(file, stale);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       continue;

@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { createConnection, createServer, type Socket } from "node:net";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -38,7 +39,7 @@ import { createSessionTokens } from "./tokens.ts";
 
 /** 测试的 socket 放在 /tmp 下，路径短，远低于 macOS 的 103 字节上限。 */
 function shortTempDir(): string {
-  return mkdtempSync("/tmp/ah-");
+  return mkdtempSync(join(existsSync("/tmp") ? "/tmp" : tmpdir(), "ah-"));
 }
 
 const VALID_ARGS: { [C in HubCommand]: HubArgsMap[C] } = {
@@ -761,7 +762,7 @@ describe("agent api over inject", () => {
   });
 });
 
-describe("startAgentApi on a unix socket", () => {
+describe.skipIf(process.platform === "win32")("startAgentApi on a unix socket", () => {
   let dir: string;
   let running: RunningAgentApi | null;
   let ledger: FakeHubLedger;

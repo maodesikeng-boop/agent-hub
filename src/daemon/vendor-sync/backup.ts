@@ -1,6 +1,5 @@
 // 跨厂商同步的轮转备份（`<dataDir>/backups/sync/`，受 `MAX_VENDOR_SYNC_BACKUPS` 上限保护）与事务级原子替换/回滚。
 import { randomBytes } from "node:crypto";
-import writeFileAtomic from "write-file-atomic";
 import {
   chmodSync,
   copyFileSync,
@@ -12,12 +11,16 @@ import {
   readlinkSync,
   rmSync,
   statSync,
-  symlinkSync,
-  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { MAX_VENDOR_SYNC_BACKUPS } from "../../shared/index.ts";
+import {
+  createDirectoryLinkOrManagedCopySync,
+  readManagedSkillCopyMeta,
+  unlinkDirectoryLinkSync,
+  writeFileAtomicSyncWithRetry,
+} from "../platform/index.ts";
 
 export type WriteFileAtomicFn = (targetPath: string, content: string, mode?: number) => void;
 
@@ -42,6 +45,7 @@ interface BackedUpFileEntry {
 interface ReversedSymlinkAction {
   linkPath: string;
   previousTarget: string | null;
+  createdManagedCopy?: boolean;
 }
 
 function formatBackupTimestamp(nowMs: number): string {
@@ -61,7 +65,10 @@ function formatBackupTimestamp(nowMs: number): string {
 export function writeFileAtomicDefault(targetPath: string, content: string, mode?: number): void {
   mkdirSync(dirname(targetPath), { recursive: true });
   const exists = existsSync(targetPath);
-  writeFileAtomic.sync(targetPath, content, { encoding: "utf8", fsync: true, ...(exists ? {} : { mode: mode ?? 0o600 }) });
+  writeFileAtomicSyncWithRetry(targetPath, content, {
+    fsync: true,
+    ...(exists ? {} : { mode: mode ?? 0o600 }),
+  });
 }
 
 /** 淘汰超出 `MAX_VENDOR_SYNC_BACKUPS` 的最老快照目录，防磁盘无限堆积。 */
@@ -174,10 +181,17 @@ export function executeAtomicSyncTransaction(input: {
 
     for (const op of symlinkOps) {
       let previousTarget: string | null = null;
+      let hadManagedCopy = false;
       try {
         const st = lstatSync(op.linkPath);
         if (st.isSymbolicLink()) {
           previousTarget = readlinkSync(op.linkPath);
+        } else if (st.isDirectory()) {
+          const meta = readManagedSkillCopyMeta(op.linkPath);
+          if (meta !== null) {
+            previousTarget = meta.canonicalPath;
+            hadManagedCopy = true;
+          }
         }
       } catch {
         // 原路径不存在
@@ -185,14 +199,24 @@ export function executeAtomicSyncTransaction(input: {
 
       if (op.kind === "link") {
         mkdirSync(dirname(op.linkPath), { recursive: true });
-        if (previousTarget !== null) {
-          unlinkSync(op.linkPath);
+        if (hadManagedCopy) {
+          rmSync(op.linkPath, { recursive: true, force: true });
+        } else if (previousTarget !== null) {
+          unlinkDirectoryLinkSync(op.linkPath);
         }
-        symlinkSync(op.targetValue, op.linkPath, "dir");
-        reversedSymlinks.push({ linkPath: op.linkPath, previousTarget });
+        const linkKind = createDirectoryLinkOrManagedCopySync(op.targetValue, op.linkPath);
+        reversedSymlinks.push({
+          linkPath: op.linkPath,
+          previousTarget,
+          createdManagedCopy: linkKind === "managed_copy",
+        });
       } else {
         if (previousTarget !== null) {
-          unlinkSync(op.linkPath);
+          if (hadManagedCopy) {
+            rmSync(op.linkPath, { recursive: true, force: true });
+          } else {
+            unlinkDirectoryLinkSync(op.linkPath);
+          }
           reversedSymlinks.push({ linkPath: op.linkPath, previousTarget });
         }
       }
@@ -205,15 +229,17 @@ export function executeAtomicSyncTransaction(input: {
       const action = reversedSymlinks[i]!;
       try {
         try {
-          if (lstatSync(action.linkPath).isSymbolicLink()) {
-            unlinkSync(action.linkPath);
+          if (action.createdManagedCopy || readManagedSkillCopyMeta(action.linkPath) !== null) {
+            rmSync(action.linkPath, { recursive: true, force: true });
+          } else if (lstatSync(action.linkPath).isSymbolicLink()) {
+            unlinkDirectoryLinkSync(action.linkPath);
           }
         } catch {
           // 忽略不存在
         }
         if (action.previousTarget !== null) {
           mkdirSync(dirname(action.linkPath), { recursive: true });
-          symlinkSync(action.previousTarget, action.linkPath, "dir");
+          createDirectoryLinkOrManagedCopySync(action.previousTarget, action.linkPath);
         }
       } catch {
         // 尽力恢复所有项

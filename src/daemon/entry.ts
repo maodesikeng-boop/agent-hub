@@ -146,18 +146,6 @@ export async function runDaemonProcess(options: DaemonOptions): Promise<void> {
   process.on("uncaughtException", onUncaughtException);
   process.on("unhandledRejection", onUnhandledRejection);
 
-  try {
-    daemon = await startDaemon({ ...options, ...(supervised && options.onSelfReload === undefined ? { onSelfReload } : {}) });
-  } catch (error) {
-    process.off("uncaughtException", onUncaughtException);
-    process.off("unhandledRejection", onUnhandledRejection);
-    reportStartupFailure(error, paths);
-    process.exitCode = 1;
-    return;
-  }
-  console.log(`${PRODUCT_NAME} 已启动，数据目录 ${daemon.paths.home}`);
-  console.log(`在浏览器里打开：${daemon.url}`);
-
   let signals = 0;
   const onSignal = (signal: NodeJS.Signals) => {
     signals++;
@@ -173,6 +161,23 @@ export async function runDaemonProcess(options: DaemonOptions): Promise<void> {
     // 整个关机有总上限 SHUTDOWN_TOTAL_MS，超了记日志、退出码 1
     stopThenExit(SHUTDOWN_TOTAL_MS);
   };
+
+  try {
+    daemon = await startDaemon({
+      ...options,
+      ...(supervised && options.onSelfReload === undefined ? { onSelfReload } : {}),
+      ...(options.onExternalShutdown === undefined ? { onExternalShutdown: () => onSignal("SIGTERM") } : {}),
+    });
+  } catch (error) {
+    process.off("uncaughtException", onUncaughtException);
+    process.off("unhandledRejection", onUnhandledRejection);
+    reportStartupFailure(error, paths);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`${PRODUCT_NAME} 已启动，数据目录 ${daemon.paths.home}`);
+  console.log(`在浏览器里打开：${daemon.url}`);
+
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
 }

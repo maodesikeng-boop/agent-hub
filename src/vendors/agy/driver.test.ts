@@ -54,7 +54,7 @@ const canRunSandboxExec =
     }
   })();
 
-const canRunPs = (() => {
+const canRunPs = process.platform !== "win32" && (() => {
   try {
     execFileSync("ps", ["-o", "pid=", "-p", String(process.pid)], { stdio: "ignore" });
     return true;
@@ -149,7 +149,7 @@ interface FakeAgyLogEntry {
 }
 
 /** 生成模拟 agy CLI 行为的 Node 脚本。 */
-function writeFakeAgyScript(scriptPath: string): void {
+function writeFakeAgyScript(scriptPath: string): string {
   const code = `#!/usr/bin/env node
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -433,8 +433,7 @@ rl.on("close", () => {
   }
 });
 `;
-  writeFileSync(scriptPath, code, { mode: 0o755 });
-  chmodSync(scriptPath, 0o755);
+  return writeExecutableNodeScript(scriptPath, code);
 }
 
 interface AgyTestHarness {
@@ -483,8 +482,7 @@ function makeAgyHarness(options: { script?: FakeAgyScript; driver?: Partial<AgyD
   const dir = mkdtempSync(join(tmpdir(), "agent-hub-agy-driver-"));
   const stateDir = join(dir, "state");
   mkdirSync(stateDir, { recursive: true });
-  const fakeAgyPath = join(dir, "fake-agy.mjs");
-  writeFakeAgyScript(fakeAgyPath);
+  const fakeAgyPath = writeFakeAgyScript(join(dir, "fake-agy"));
 
   const logFile = join(dir, "fake-agy.log");
   const scriptFile = join(dir, "script.json");
@@ -2339,3 +2337,4 @@ it("启动与续接都检查最新项目规则预算，超限发可见告警但�
   expect(t.argvs()).toHaveLength(2);
   expect(t.of("driver.warning")).toHaveLength(1);
 });
+import { writeExecutableNodeScript } from "../../../test/fake-cli-shim.ts";

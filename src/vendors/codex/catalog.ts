@@ -1,10 +1,11 @@
 // OpenAI Codex 的模型名单和登录状态（docs/vendor-availability-design.md 第 3 节、docs/vendor-plugin-design.md 的 C5）：
 // 起 `codex app-server --listen stdio://`，同一个进程里问 model/list 和 account/read；老版本没有 account/read 时读凭据文件补充判断。
 // 会话没在跑时问 skills/list 也在这里（composer.ts 用）。
-import { spawn } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
+import { spawnOwnedProcess } from "../../daemon/platform/index.ts";
 import {
   KILL_WAIT_MS,
   MAX_CATALOG_DESCRIPTION_CHARS,
@@ -140,13 +141,18 @@ function queryCodexAppServer(options: CodexModelQueryOptions, calls: readonly Co
   const label = calls.map((c) => c.method).join("、");
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new Error("cancelled"));
-    const child = spawn(codexPath, [...CODEX_APP_SERVER_ARGS], {
-      cwd,
-      env: buildChildEnv(options.env ?? process.env, undefined),
-      stdio: ["pipe", "pipe", "pipe"],
-      detached: true,
-    });
-    trackChild(child, "probe:codex-app-server", { detached: true });
+    let spawned: { child: ChildProcessWithoutNullStreams; detached: boolean };
+    try {
+      spawned = spawnOwnedProcess(codexPath, [...CODEX_APP_SERVER_ARGS], {
+        cwd,
+        env: buildChildEnv(options.env ?? process.env, undefined),
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } catch (err) {
+      return reject(err);
+    }
+    const { child, detached } = spawned;
+    trackChild(child, "probe:codex-app-server", { detached });
     let stderr = "";
     let settled = false;
     let killTimer: NodeJS.Timeout | undefined;

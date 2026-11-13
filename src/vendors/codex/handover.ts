@@ -2,7 +2,6 @@
 // 单独起一个不带 HUB_* 的 `codex app-server`，`thread/fork` 复制项目经理的 thread（带 `ephemeral: true`：不落盘、不进用户的 codex 历史，
 // #121 实测上文照样带得过去、能答出原会话里的暗号），在同一个进程里 `turn/start` 写交接。ephemeral 的 thread 只活在这个进程里，
 // 所以 fork 起的进程按 forkId 留在 SERVERS 里给 write / remove 用，remove 杀掉进程就等于删了（thread/delete 对它会报“not persisted”，当保险调、忽略报错）。
-import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import type { TokenUsage } from "../../shared/domain.ts";
 import type { ForkHandle } from "../../shared/handover.ts";
@@ -14,6 +13,7 @@ import {
 } from "./protocol.ts";
 import { signalPid, termGroupAfterExit } from "../../daemon/driver/process.ts";
 import { buildChildEnv } from "../../daemon/driver/protocol.ts";
+import { spawnOwnedProcess } from "../../daemon/platform/index.ts";
 import { trackChild } from "../../daemon/process-ledger.ts";
 import { ForkUnsupportedError, withoutHubEnv } from "../../daemon/handover/forker.ts";
 import type { ForkSource, ForkWriteResult, SessionForker } from "../../daemon/handover/forker.ts";
@@ -187,8 +187,9 @@ export function createCodexForker(options: CodexForkerOptions = {}): SessionFork
   const spawnProcess =
     options.spawnProcess ??
     ((command, args, opts) => {
-      const child = spawn(command, args, { cwd: opts.cwd, env: opts.env, stdio: ["pipe", "pipe", "ignore"], detached: true });
-      trackChild(child, "handover:codex", { detached: true });
+      const spawned = spawnOwnedProcess(command, args, { cwd: opts.cwd, env: opts.env, stdio: ["pipe", "pipe", "ignore"] });
+      const { child, detached } = spawned;
+      trackChild(child, "handover:codex", { detached });
       return child;
     });
   /** forkId → 复制那份所在的 app-server 进程（ephemeral 的 thread 只活在里面）。 */

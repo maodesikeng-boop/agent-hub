@@ -1,6 +1,6 @@
 # Windows 原生版架构设计（项目留在本机磁盘，Agent 直接跑在 Windows 上）
 
-状态：方案，待用户拍板第 9 节三项。2026-11-13。核对基线 `5248143`。
+状态：已拍板定案，第 1 步落地中（用户门禁拍板：「按推荐推进，低版本 Win 只读退回工具层拦截不硬拒（推荐）」）。2026-11-13。核对基线 `5248143`。
 对标源码（浅克隆实读）：stablyai/orca `6854ab5a`（2026-11-12）、pingdotgg/t3code `95cb068c`（2026-11-12）、openai/codex `553c764`（2026-11-13，`codex-rs/windows-sandbox-rs`）、libuv `src/win/process.c` / `src/win/pipe.c`（main）。官方资料查阅于 2026-11-13。
 本文是内部设计文档，按要求逐条标出借鉴的具体源码；面向用户的 README 不出现这些产品名。本次只新增本文，不改代码。
 
@@ -15,7 +15,7 @@
 1. **进程树**：每个会话经一个小 Rust 辅助程序 `fusa-run.exe` 启动——先**挂起创建**厂商进程、放进 **kill-on-close 的 Job Object**、再恢复运行。停一轮、收工、后台崩溃，Job 句柄一关整棵树都死，不再靠 `ps`、负 PID、`taskkill /T` 猜后代。（借鉴 orca 给 node-pty 打的 Job 补丁、codex 的挂起后放行；Node 自带的 libuv 全局 Job 带 `SILENT_BREAKAWAY_OK`，管不到孙进程，不能直接依赖。）
 2. **本机 IPC**：`hub.sock` 换成 Node 原生支持的命名管道 `\\.\pipe\fusa-…`；`hub` 命令做成原生 `hub.exe` 小启动器（不用 `.cmd`：cmd.exe 会二次解析 `%*`、截断换行），cmd、PowerShell、Git Bash、各家 Agent 的工具调用都直接认 `.exe`。
 3. **启动厂商 CLI 不用 `shell: true`**：`.exe` 直接起；npm/pnpm 的 `.cmd` 垫片按官方垫片格式精确解析成"`node.exe` + 入口 `.js`"或真正的 `.exe` 直接起；认不出的才经 cmd.exe 严格转义并拒绝换行。（移植 orca `process-host` 的 MIT 代码，t3code 同思路。）
-4. **Worker 写范围沙箱**：普通 Worker 用 Windows 原生**写受限令牌（WRITE_RESTRICTED）+ 文件 ACL 拒写**，语义与 macOS `sandbox-exec`、Linux `bwrap` 完全一致——数据目录里只能写自己的 worktree，数据目录外原样不管；不要管理员，Win10/11 都能用。（机制照 codex `windows-sandbox-rs` 的 unelevated 实现，把它的"白名单可写"改成"黑名单拒写"以符合 2026-11-06 的硬规则。）只读 Worker：codex 用它自带的 Windows 只读沙箱；其余 5 家在 Windows 11 24H2+ 上用微软官方 MXC（`@microsoft/mxc-sdk`），不满足就拒绝并说明。
+4. **Worker 写范围沙箱**：普通 Worker 用 Windows 原生**写受限令牌（WRITE_RESTRICTED）+ 文件 ACL 拒写**，语义与 macOS `sandbox-exec`、Linux `bwrap` 完全一致——受保护根（数据目录 + 同卷 `.fusa-wt`）里只能写自己的 worktree，受保护根外原样不管；不要管理员，Win10/11 都能用。（机制照 codex `windows-sandbox-rs` 的 unelevated 实现，把它的"白名单可写"改成"黑名单拒写"以符合 2026-11-06 的硬规则。）只读 Worker：codex 用它自带的 Windows 只读沙箱；其余 5 家在 Windows 11 24H2+ 上用微软官方 MXC（`@microsoft/mxc-sdk`，第 2 步接入），在尚未接 MXC 的第 1 步以及低于 Win11 24H2 / Windows Server 等不支持 MXC `processcontainer` 的环境上**绝不硬性拒绝启动，而是自动回退为「4.4.2 写受限令牌（受保护根全禁写）+ 各家现有工具层只读拦截规则」并输出清晰降级告警**。
 5. **跨盘**：项目在 `D:\`、数据目录在 `C:\` 时，worktree 放到**项目同一卷**的 `D:\.fusa-wt\…`，保住 pnpm 硬链接、Dev Drive 加速和 C 盘空间；该目录与数据目录一起纳入写保护。
 
 改动面：后台约 40 个文件有 POSIX 假设（附录 A 逐项列出），新增实现集中到 `src/daemon/platform/win32/` 一处；新增一个 Rust crate；`fusa-wsl` 退役。拆成 **2 大步**（第 7 节）：①后台原生跑通（含普通 Worker 沙箱与 Windows CI）；②桌面壳原生化 + 打包 + 只读 Worker 的 MXC 后端 + WSL 路线退役。
@@ -207,7 +207,7 @@ Windows 删不掉目录的三类原因：①还有进程的**当前目录**在�
 
 - **codex**：照现有设计"不包外层，用 codex 自己的 readOnly 沙箱"——codex 在 Windows 上自选 MXC / elevated / unelevated。要真机核实"用户从没配过 `[windows] sandbox` 时，app-server 的 readOnly 是否真的生效"，不生效就拒绝。
 - **其余 5 家（claude、agy、pi、dsh、cursor）**：第 2 步新增 `win32` 的 `wrapReadonly`，用微软官方 `@microsoft/mxc-sdk`（V1 API）。`getPlatformSupport()` 报告有 `processcontainer` 才可用；策略：`readonlyPaths` = 各本机固定盘根，`deniedPaths` = `readonly-policy.ts` 的凭据路径 + 启动时 `scanSecretGlobs` 扫出的 `.env` 等，`readwritePaths` = 私有临时目录 + 该厂商运行时目录（沿用 spec 的 `readonlySecrets`、`writableFileGlobs`，不新造名单），网络放行（Agent 要连模型 API）。MXC 文档提醒"重叠规则（只读里套拒读、只读里套可写）要在所选后端实测"——列入验证清单。
-- **不满足时**（Windows 10、未更新的 Win11、组策略禁用 MXC）：这 5 家的只读 Worker 拒绝启动，提示"本机不支持只读隔离，可改用 codex 做只读审查"——符合"沙箱不可用一律拒绝"的硬规则。
+- **不满足 MXC 时（用户拍板定案）**（尚未接入 MXC 的第 1 步、Windows 10、低于 24H2 的 Win11、Windows Server 或组策略禁用 MXC `processcontainer`）：**绝不硬性拒绝启动只读 Worker！** 自动回退为「4.4.2 写受限令牌（`--readonly-fallback`，仅挂 `FusaWorker` SID 使数据目录与各卷 `.fusa-wt` 受保护根连本 worktree 一并禁写）+ 各家现有工具层只读拦截规则（claude `default` 档 + `can_use_tool` 审批、agy `--mode plan` + 工具禁写规则、pi `--exclude-tools edit,write --no-mcp`、dsh/cursor ACP 只读补丁与权限拒绝）」，同时在日志与会话流（`driver.warning`）输出清晰的降级告警说明。接口上预留 `registerWin32MxcReadonlyProvider`，第 2 步检测到 `processcontainer` 可用时自动切到 MXC。
 - agy 的凭据存在 Windows 凭据管理器（官方文档），文件级拒读管不到；MXC 容器能否访问凭据管理器要实测，能访问就在文档写明"只读 agy 不隐藏凭据管理器里的令牌"。
 
 #### 4.4.4 `state\` 与其他 PM 的记忆目录
@@ -365,7 +365,7 @@ Windows 删不掉目录的三类原因：①还有进程的**当前目录**在�
 - 6.2 的按卷 worktree 根（三平台同一套 `protectedRoots` 语义）。
 - CI：新增 `windows` 工作流（第 8 节）。
 
-验收：Windows CI 全绿（真 git worktree、管道、进程树强杀、受限令牌拒写与放行、跨卷、长路径）；Mac 本机 `pnpm typecheck`、受影响测试、`src/shared/write-scope.test.ts` 通过（POSIX 行为不变）；Ubuntu CI 不回退。用户在 Windows 真机用 `pnpm start`（从源码）跑通一整轮："PM 派 Worker → Worker 在 `D:\项目` 的同卷 worktree 改代码、`pnpm install`、提 PR → 收工删 worktree"，6 家能装几家测几家，至少 claude + codex。只读 Worker：codex 可用，其余 5 家显示"本机不支持只读隔离"（第 2 步补）。规模约 15–22 人日（设计估算，按一名熟悉项目的工程师）。
+验收：Windows CI 全绿（真 git worktree、管道、进程树强杀、受限令牌拒写与放行、无 MXC 只读回退与降级告警、跨卷、长路径）；Mac 本机 `pnpm typecheck`、受影响测试、`src/shared/write-scope.test.ts` 通过（POSIX 行为不变）；Ubuntu CI 不回退。用户在 Windows 真机用 `pnpm start`（从源码）跑通一整轮："PM 派 Worker → Worker 在 `D:\项目` 的同卷 worktree 改代码、`pnpm install`、提 PR → 收工删 worktree"，6 家能装几家测几家，至少 claude + codex。只读 Worker：codex 走自带 `readOnly`；其余 5 家在无 MXC 环境下自动回退为「4.4.2 写受限令牌保底 + 工具层只读拦截」并输出清晰降级警告（第 2 步接入 `@microsoft/mxc-sdk` 后在 Win11 24H2+ 自动升级为 MXC 容器）。规模约 15–22 人日（设计估算，按一名熟悉项目的工程师）。
 
 第 1 步内部高度耦合（启动链、沙箱、路径都穿过同一条 spawn 链），建议一个 Worker 一个 PR 做完，不拆中间态。
 
@@ -404,18 +404,16 @@ AGENTS.md 现规定云端 CI 只跑 Ubuntu 4 分片，加 Windows 任务需项�
 
 CI 覆盖不了、必须真机的：WebView2 窗口与托盘、真实 6 家 CLI 登录与一轮对话、Defender 实时扫描下的真实耗时、Dev Drive、企业组策略、MXC 在 Win11 24H2+ 的行为、agy 收到 Ctrl+C 的行为。
 
-## 9. 需要用户拍板的 3 件事
+## 9. 用户门禁已拍板定案（2026-11-13）
+
+> 用户拍板原文：**「按推荐推进，低版本 Win 只读退回工具层拦截不硬拒（推荐）」**
 
 1. **Windows 上 Worker 的沙箱**
-   - **推荐**：普通 Worker 用 Windows 自带的"写受限令牌 + 文件权限拒写"——不用管理员，Win10、Win11 都能用，规则与 Mac/Linux 完全一样（数据目录里只能写自己的 worktree，其余照常）。只读 Worker：codex 用它自带的 Windows 只读沙箱；其余 5 家要求 Windows 11 24H2 及以上（用微软官方 MXC），不满足就拒绝并提示改用 codex 做只读审查。
-   - 备选 B：全部用微软 MXC——隔离更强，但只支持较新的 Win11，且要逐项列出每个工具链（VS、Unity、各种缓存）能读写的目录，容易拦住用户自己的编译链。
-   - 备选 C：像 codex 的 elevated 那样建专用 Windows 用户 + 防火墙——要管理员，企业电脑常被策略挡住。
+   - **已定**：普通 Worker 采用"写受限令牌（`WRITE_RESTRICTED`）+ 受保护根拒写 ACL + 本 worktree 放行 ACL"（免管理员，Win10 1809+ / Win11 通用）。只读 Worker：`codex` 继续用其自带 `readOnly` 沙箱；其余 5 家在 Win11 24H2+ 走微软官方 MXC（第 2 步接入 `@microsoft/mxc-sdk`），在尚未接 MXC 的第 1 步及低于 Win11 24H2 / Windows Server 等不支持 MXC `processcontainer` 的机器上**不硬性拒绝，自动回退为「4.4.2 写受限令牌 + 受保护根拒写 ACL 保底 + 各家现有工具层只读拦截规则」并输出清晰降级告警**。
 2. **项目在 D 盘、数据目录在 C 盘时 worktree 放哪**
-   - **推荐**：跟项目放同一个盘（`D:\.fusa-wt\…`），保住 pnpm 硬链接与 Dev Drive 加速，不挤 C 盘。
-   - 备选：一律放数据目录（C 盘）——实现最简单，但每个 worktree 的依赖整份复制、构建产物堆在 C 盘。
+   - **已定**：默认建在项目同卷受保护根 `D:\.fusa-wt\<数据目录指纹8>\<项目>\<worker>`（先建空目录设 ACL 再 `git worktree add`，保住 `pnpm` 硬链接与 Dev Drive 加速；若该卷无权限建目录或不支持 ACL 则自动安全回退到数据目录下的 `worktrees/`）。`WriteScope` 统一扩展为 `protectedRoots: string[]`，macOS / Linux / Windows 三端一致。
 3. **WSL 路线去留与 Node 运行时**
-   - **推荐**：Windows 只做原生版，已写的 WSL 引导代码（`fusa-wsl`）退役；需要 Linux 工具链的用户照 Linux 版说明在自己的 WSL 里跑后台、用浏览器访问。后台用的 Node 随安装包内置（固定版本、校验过），不依赖用户电脑上的 Node。
-   - 备选：保留 WSL 作为可选模式——两套运行时、两套沙箱、两套 CI 长期一起维护。
+   - **已定**：Windows 只做原生版；第 1 步先落地按路径触发的 `.github/workflows/windows.yml`（`windows-latest`），第 2 步再退役 `fusa-wsl` 并随包内置校验过的 `node.exe`。
 
 ## 10. 风险与必须真机核实的事
 

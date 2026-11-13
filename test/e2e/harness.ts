@@ -2,9 +2,12 @@
 // 用 HTTP + cookie 登录、发消息、拉状态，用 WebSocket 收推送。
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
+import { request } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { FakeLogEntry, FakeScript } from "../fake-claude/fake-claude.ts";
+import { wrapScriptAsPlatformCli } from "../fake-cli-shim.ts";
 import { WORKER_ENV } from "../../src/vendors/claude/settings.ts";
 import { PARENT_SESSION_ENV } from "../../src/daemon/driver/protocol.ts";
 import {
@@ -27,11 +30,12 @@ import {
   type StateSnapshot,
   type WsServerMessage,
 } from "../../src/shared/index.ts";
+import { resolveHubPaths } from "../../src/shared/paths.ts";
 
-const MAIN = new URL("../../src/daemon/main.ts", import.meta.url).pathname;
+const MAIN = fileURLToPath(new URL("../../src/daemon/main.ts", import.meta.url));
 /** 认本机回环网址当设备网址的测试入口（联机端到端，同机两个守护进程互相配对）。 */
-export const LOOPBACK_MAIN = new URL("./loopback-daemon.ts", import.meta.url).pathname;
-const FAKE_CLAUDE = new URL("../fake-claude/fake-claude.ts", import.meta.url).pathname;
+export const LOOPBACK_MAIN = fileURLToPath(new URL("./loopback-daemon.ts", import.meta.url));
+const FAKE_CLAUDE = fileURLToPath(new URL("../fake-claude/fake-claude.ts", import.meta.url));
 
 const LOGIN_URL = /http:\/\/127\.0\.0\.1:(\d+)\/auth\?token=([A-Za-z0-9_-]+)/;
 
@@ -98,6 +102,8 @@ export interface RunningDaemon {
   token: string;
   stdout(): string;
   stderr(): string;
+  /** 优雅关机（POSIX 发 SIGTERM，Windows 经 admin 命名管道发 /admin/shutdown）。 */
+  terminate(): Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
   /** 等它退出，返回退出码（被信号结束时是 null）和信号。 */
   exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
 }
@@ -140,6 +146,7 @@ export function makeEnv(options: { root?: string; prefix?: string; detached?: bo
   const logFile = join(fakeDir, "fake-claude.log");
   const scriptFile = join(fakeDir, "script.json");
   writeFileSync(scriptFile, "{}");
+  const defaultFakeClaude = wrapScriptAsPlatformCli(FAKE_CLAUDE, fakeDir, "fake-claude");
   const running = new Set<ChildProcess>();
 
   // 在 agent 的会话里（比如 Worker）跑测试时，那家的父会话变量（含 Worker 才有的）会传下去，假 claude 就把项目经理也当成 Worker：去掉
@@ -147,6 +154,9 @@ export function makeEnv(options: { root?: string; prefix?: string; detached?: bo
   // 各家可执行文件按名单来：默认厂商用给的（假 claude），别家指到不存在的路径，免得起了这台机器上真装着的
   const baseEnv = (vendorPath: string, extra: Record<string, string> = {}) => ({
     ...inherited,
+    ...(process.platform === "win32"
+      ? { PATH: `${dirname(process.execPath)};${process.env.PATH ?? process.env.Path ?? ""}` }
+      : {}),
     [ENV_HOME]: home,
     ...Object.fromEntries(VENDOR_LIST.map(({ id, cli }) => [cli.envVar, id === DEFAULT_AGENT_VENDOR ? vendorPath : join(fakeDir, `no-${id}`)])),
     [ENV_PORT]: "0",
@@ -188,17 +198,49 @@ export function makeEnv(options: { root?: string; prefix?: string; detached?: bo
     fakeDir,
     setScript: (script) => writeFileSync(scriptFile, JSON.stringify(script)),
     async start(options = {}) {
-      const d = spawnDaemon(options.vendorPath ?? FAKE_CLAUDE, options.env, options.main);
+      const d = spawnDaemon(options.vendorPath ?? defaultFakeClaude, options.env, options.main);
       const match = await Promise.race([
         waitUntil("login url", () => LOGIN_URL.exec(d.out()) ?? undefined, 15_000),
         d.exited.then(({ code }) => {
           throw new Error(`daemon exited early (code ${code}): ${d.err()}`);
         }),
       ]);
-      return { child: d.child, port: Number(match[1]), token: match[2]!, stdout: d.out, stderr: d.err, exited: d.exited };
+      const uiToken = match[2]!;
+      const terminate = async () => {
+        if (process.platform === "win32") {
+          const adminPipe = resolveHubPaths({ [ENV_HOME]: home, ...options.env }, dir, { platform: "win32" }).adminSock;
+          await new Promise<void>((resolve) => {
+            const req = request(
+              {
+                socketPath: adminPipe,
+                method: "POST",
+                path: "/admin/shutdown",
+                headers: {
+                  authorization: `Bearer ${uiToken}`,
+                  "content-type": "application/json",
+                  "content-length": 2,
+                },
+              },
+              (res) => {
+                res.resume();
+                res.on("end", () => resolve());
+              },
+            );
+            req.on("error", () => {
+              d.child.kill();
+              resolve();
+            });
+            req.end("{}");
+          });
+          return d.exited;
+        }
+        d.child.kill("SIGTERM");
+        return d.exited;
+      };
+      return { child: d.child, port: Number(match[1]), token: uiToken, stdout: d.out, stderr: d.err, terminate, exited: d.exited };
     },
     async runToExit() {
-      const d = spawnDaemon(FAKE_CLAUDE);
+      const d = spawnDaemon(defaultFakeClaude);
       const { code } = await d.exited;
       return { code, stdout: d.out(), stderr: d.err() };
     },
@@ -212,9 +254,15 @@ export function makeEnv(options: { root?: string; prefix?: string; detached?: bo
     runHub(pid, args, options = {}) {
       const entry = log().find((e) => e.kind === "env" && e.pid === pid);
       if (entry?.kind !== "env") throw new Error(`no env logged for fake claude ${pid}`);
-      const child = spawn(join(home, "run", "bin", HUB_COMMAND), args, {
-        env: { PATH: process.env.PATH, [ENV_HUB_TOKEN]: entry.env[ENV_HUB_TOKEN], [ENV_HUB_SOCK]: entry.env[ENV_HUB_SOCK] },
+      const hubBin = join(home, "run", "bin", process.platform === "win32" ? `${HUB_COMMAND}.exe` : HUB_COMMAND);
+      const child = spawn(hubBin, args, {
+        env: {
+          PATH: process.env.PATH ?? process.env.Path ?? "",
+          [ENV_HUB_TOKEN]: entry.env[ENV_HUB_TOKEN],
+          [ENV_HUB_SOCK]: entry.env[ENV_HUB_SOCK],
+        },
         stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
       });
       let stdout = "";
       let stderr = "";

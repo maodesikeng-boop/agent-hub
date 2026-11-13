@@ -142,6 +142,8 @@ export function linkNodesOf(tree: MdNode): MdNode[] {
 export type LocalHref = { kind: "absolute"; path: string } | { kind: "home"; path: string } | { kind: "relative"; path: string };
 
 const URL_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
+const WIN_DRIVE_ABS = /^[A-Za-z]:[\\/]/;
+const FILE_URL_WIN_DRIVE = /^\/([A-Za-z]:[\\/][\s\S]*)$/;
 
 function decodePercent(text: string): string {
   try {
@@ -163,13 +165,25 @@ export function parseLocalHref(href: string): LocalHref | null {
     const rest = raw.replace(/^file:\/\//i, "");
     if (rest === raw) return null;
     const path = rest.startsWith("/") ? rest : /^localhost\//i.test(rest) ? rest.slice("localhost".length) : null;
-    return path === null ? null : { kind: "absolute", path: decodePercent(path) };
+    if (path === null) return null;
+    const decoded = decodePercent(path);
+    const winDrive = FILE_URL_WIN_DRIVE.exec(decoded);
+    return { kind: "absolute", path: winDrive ? winDrive[1]! : decoded };
+  }
+  const decodedRaw = decodePercent(raw);
+  if (decodedRaw.includes("\u0000")) return null;
+  if (WIN_DRIVE_ABS.test(decodedRaw)) {
+    return { kind: "absolute", path: decodedRaw };
   }
   if (URL_SCHEME.test(raw) || raw.startsWith("//")) return null;
-  const path = decodePercent(raw);
-  if (path.includes("\u0000")) return null;
+  if (raw.startsWith("\\\\")) {
+    return { kind: "absolute", path: decodedRaw };
+  }
+  const path = decodedRaw;
   if (path.startsWith("/")) return { kind: "absolute", path };
-  if (path === "~" || path.startsWith("~/")) return { kind: "home", path: path.slice(1) };
+  if (path === "~" || path.startsWith("~/") || path.startsWith("~\\")) {
+    return { kind: "home", path: path.slice(1).replace(/\\/g, "/") };
+  }
   return { kind: "relative", path };
 }
 

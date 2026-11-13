@@ -484,8 +484,8 @@ interface Parsed {
 
 function expandPath(raw: string, env: HubIo["env"], cwd: string): string {
   if (raw === "") throw new UsageError("路径不能是空的");
-  if (raw === "~" || raw.startsWith("~/")) {
-    const home = env.HOME;
+  if (raw === "~" || raw.startsWith("~/") || raw.startsWith("~\\")) {
+    const home = env.HOME || env.USERPROFILE;
     if (home === undefined || home === "") throw new UsageError("路径以 ~ 开头，但没有设 HOME");
     return resolve(home, raw.slice(2));
   }
@@ -530,7 +530,39 @@ function textSourceOf(values: Options): Parsed["textSource"] {
   return null;
 }
 
+function findGitBashMangledArg(argv: readonly string[], env: HubIo["env"]): string | null {
+  const msystem = env.MSYSTEM?.trim();
+  if (!msystem) return null;
+  const prefixes: string[] = [];
+  const rawExePath = env.EXEPATH?.trim();
+  if (rawExePath) {
+    const normalizedExe = rawExePath.replace(/\\/g, "/").replace(/\/+$/, "");
+    const gitRoot = normalizedExe.replace(/\/(?:mingw64|mingw32|ucrt64|clang64|usr)(?:\/bin)?$/i, "");
+    if (gitRoot) prefixes.push(`${gitRoot.toLowerCase()}/`);
+    prefixes.push(`${normalizedExe.toLowerCase()}/`);
+  }
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]!;
+    const prev = i > 0 ? argv[i - 1] : undefined;
+    if (prev === "--folder") continue;
+    const normalized = arg.replace(/\\/g, "/");
+    const lower = normalized.toLowerCase();
+    const matchedExeRoot = prefixes.some((p) => lower.startsWith(p));
+    const matchedDefaultGitRoot = /^[a-z]:\/(?:program files(?: \(x86\))?\/git|git)\/.+/i.test(normalized);
+    if (matchedExeRoot || matchedDefaultGitRoot) {
+      return arg;
+    }
+  }
+  return null;
+}
+
 function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | "help" | "help-graph" {
+  const mangled = findGitBashMangledArg(argv, env);
+  if (mangled !== null) {
+    throw new UsageError(
+      `检测到 Git Bash (MSYSTEM) 自动把以 / 开头的参数改写成了安装目录路径（${mangled}）；请改用 --stdin 传正文，或在命令前加 MSYS_NO_PATHCONV=1（或写成 //）`,
+    );
+  }
   let parsed;
   try {
     parsed = parseArgs({
@@ -1155,7 +1187,8 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
       if (device === "self") {
         folder = expandPath(rawFolder, env, cwd);
       } else {
-        if (!rawFolder.startsWith("/") && rawFolder !== "~" && !rawFolder.startsWith("~/")) {
+        const isWinAbs = /^[A-Za-z]:[\\/]/.test(rawFolder) || rawFolder.startsWith("\\\\");
+        if (!rawFolder.startsWith("/") && !isWinAbs && rawFolder !== "~" && !rawFolder.startsWith("~/") && !rawFolder.startsWith("~\\")) {
           throw new UsageError("远端设备 --folder 要写绝对路径或 ~/...");
         }
         folder = rawFolder;

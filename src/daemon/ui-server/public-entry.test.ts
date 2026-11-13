@@ -151,7 +151,7 @@ describe("createPublicAuthRateLimiter 桶上限与过期清理", () => {
   });
 });
 
-describe("公网入口 public.sock 与 4 道安全防线", () => {
+describe.skipIf(process.platform === "win32")("公网入口 public.sock 与 4 道安全防线", () => {
   let root: string;
   let publicSock: string;
   let publicEntryFile: string;

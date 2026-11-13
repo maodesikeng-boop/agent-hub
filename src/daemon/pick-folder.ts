@@ -6,6 +6,7 @@ import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { PICK_FOLDER_TIMEOUT_MS, serverInfoFor } from "../shared/index.ts";
+import { isCrossPlatformAbsolutePath } from "./platform/index.ts";
 
 /** 对话框上的提示语。 */
 const PICK_FOLDER_PROMPT = "选择主文件夹";
@@ -65,8 +66,13 @@ export interface FolderPicker {
 function startFolder(input: string | undefined, homeDir: string): string {
   const raw = input?.trim();
   if (!raw) return homeDir;
-  const expanded = raw === "~" ? homeDir : raw.startsWith("~/") ? resolve(homeDir, raw.slice(2)) : raw;
-  if (!expanded.startsWith("/")) return homeDir;
+  const expanded =
+    raw === "~"
+      ? homeDir
+      : raw.startsWith("~/") || raw.startsWith("~\\")
+        ? resolve(homeDir, raw.slice(2))
+        : raw;
+  if (!isCrossPlatformAbsolutePath(expanded)) return homeDir;
   try {
     const path = resolve(expanded);
     return statSync(path).isDirectory() ? path : dirname(path);

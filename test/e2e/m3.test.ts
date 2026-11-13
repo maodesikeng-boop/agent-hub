@@ -57,8 +57,7 @@ async function boot() {
 }
 
 async function terminate(daemon: RunningDaemon) {
-  daemon.child.kill("SIGTERM");
-  return daemon.exited;
+  return daemon.terminate();
 }
 
 const real = (path: string) => realpathSync.native(path);

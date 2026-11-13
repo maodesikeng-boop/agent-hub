@@ -15,7 +15,7 @@ describe("spawn-guard", () => {
     expect(await waitForNoLeaks(5_000)).toEqual([]);
   });
 
-  it("detached 的进程自己退了、组里的后代还在：算残留", async () => {
+  it.skipIf(process.platform === "win32")("detached 的进程自己退了、组里的后代还在：算残留", async () => {
     const child = spawn("/bin/sh", ["-c", `"${process.execPath}" -e "setInterval(() => {}, 1000)" & exit 0`], { stdio: "ignore", detached: true });
     await new Promise((resolve) => child.once("exit", resolve));
     const leaked = leakedChildren().filter((t) => t.child === child);

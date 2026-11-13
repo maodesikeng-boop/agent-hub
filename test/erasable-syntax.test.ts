@@ -2,10 +2,11 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
-const tsc = new URL("../node_modules/typescript/bin/tsc", import.meta.url).pathname;
-const rootTsconfig = new URL("../tsconfig.json", import.meta.url).pathname;
+const tsc = fileURLToPath(new URL("../node_modules/typescript/bin/tsc", import.meta.url));
+const rootTsconfig = fileURLToPath(new URL("../tsconfig.json", import.meta.url));
 
 let dir: string | undefined;
 afterEach(() => {

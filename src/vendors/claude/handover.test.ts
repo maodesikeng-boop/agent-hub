@@ -19,9 +19,8 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 /** 假 claude：把 argv / 环境 / stdin 记到 call.json；按 FAKE_MODE 吐 stream-json、出错或挂住。 */
 function fakeClaude(): string {
-  const path = join(dir, "fake-claude.mjs");
-  writeFileSync(
-    path,
+  return writeExecutableNodeScript(
+    join(dir, "fake-claude"),
     `#!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
@@ -47,8 +46,6 @@ process.stdin.on("end", () => {
 });
 `,
   );
-  chmodSync(path, 0o755);
-  return path;
 }
 
 /** 项目经理的设置文件（source() 每次都写一份）。 */
@@ -279,3 +276,4 @@ describe("remove：保险性地删复制那份可能落盘的 jsonl，幂等", (
     expect(existsSync(join(proj, "victim.jsonl"))).toBe(true);
   });
 });
+import { writeExecutableNodeScript } from "../../../test/fake-cli-shim.ts";

@@ -1,7 +1,9 @@
 // 数据目录布局（设计第 6.1 节）。用到 node:path / node:fs，只给守护进程和测试用，不要从网页里引。
+import { createHash, randomBytes } from "node:crypto";
 import { existsSync, rmSync, statSync } from "node:fs";
-import { delimiter, join } from "node:path";
-import { ENV_HOME, PM_MEMORY_INDEX_FILE } from "./limits.ts";
+import { homedir } from "node:os";
+import { delimiter as hostDelimiter, join, posix, win32 } from "node:path";
+import { ENV_HOME, PM_MEMORY_INDEX_FILE, WIN_EXEC_RESOLVE_CACHE_MAX } from "./limits.ts";
 import { DATA_DIR_NAME } from "./names.ts";
 // 各家只给守护进程用的路径（src/vendors/<id>/paths.ts，按名单加载；docs/vendor-plugin-design.md 的 B5）
 import { VENDOR_PATHS } from "../vendors/paths-registry.ts";
@@ -12,6 +14,8 @@ export interface ResolvePathsInput {
   env?: Record<string, string | undefined>;
   userHome?: string;
   home?: string;
+  /** 默认 process.platform；测试可传 "win32" | "darwin" | "linux"。 */
+  platform?: string;
   /** 各家可执行文件（优先于 spec 的 cli.envVar 环境变量），没给的家照常解析。 */
   vendorPaths?: Partial<Record<AgentVendor, string>>;
 }
@@ -93,8 +97,19 @@ export interface HubPaths {
 
 function expandHome(raw: string, userHome: string): string {
   if (raw === "~") return userHome;
-  if (raw.startsWith("~/")) return join(userHome, raw.slice(2));
+  if (raw.startsWith("~/") || raw.startsWith("~\\")) return join(userHome, raw.slice(2));
   return raw;
+}
+
+/** 数据目录对应的 12 位稳定哈希（供 Windows 命名管道名隔离不同数据目录）。 */
+export function dataDirPipeHash(home: string): string {
+  const normalized = home.normalize("NFC").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  return createHash("sha256").update(normalized).digest("hex").slice(0, 12);
+}
+
+/** 判断端点字符串是否为 Windows 命名管道（`\\.\pipe\...`）。 */
+export function isWindowsNamedPipe(endpoint: string): boolean {
+  return endpoint.startsWith("\\\\.\\pipe\\");
 }
 
 export function resolveHubPaths(
@@ -102,10 +117,13 @@ export function resolveHubPaths(
   userHome: string,
   input: ResolvePathsInput = {},
 ): HubPaths {
+  const platform = input.platform ?? process.platform;
   const rawHome = input.home || env[ENV_HOME];
   const home = rawHome ? expandHome(rawHome, userHome) : join(userHome, DATA_DIR_NAME);
   const stateDir = join(home, "state");
   const logsDir = join(stateDir, "logs");
+  const pipeHash = platform === "win32" ? dataDirPipeHash(home) : "";
+  const hubPipeNonce = platform === "win32" ? randomBytes(8).toString("hex") : "";
   return {
     home,
     stateDir,
@@ -121,7 +139,7 @@ export function resolveHubPaths(
     publicEntryFile: join(stateDir, "public-entry.json"),
     tunnelDir: join(stateDir, "tunnel"),
     tunnelHubSock: join(home, "run", "tunnel", "hub.sock"),
-    adminSock: join(home, "run", "admin.sock"),
+    adminSock: platform === "win32" ? `\\\\.\\pipe\\fusa-${pipeHash}-admin` : join(home, "run", "admin.sock"),
     launchDir: join(stateDir, "launch"),
     logsDir,
     setupLogsDir: join(logsDir, "setup"),
@@ -129,7 +147,7 @@ export function resolveHubPaths(
     personasDir: join(stateDir, "personas"),
     pmMemoryDir: join(stateDir, "pm-memory"),
     runDir: join(home, "run"),
-    hubSock: join(home, "run", "hub.sock"),
+    hubSock: platform === "win32" ? `\\\\.\\pipe\\fusa-${pipeHash}-${hubPipeNonce}-hub` : join(home, "run", "hub.sock"),
     uiSock: join(home, "run", "ui.sock"),
     publicSock: join(home, "run", "public.sock"),
     peerSock: join(home, "run", "peer.sock"),
@@ -153,7 +171,7 @@ export function resolvePaths(
   }
   const input = inputOrEnv as ResolvePathsInput;
   const env = input.env ?? (inputOrEnv as Record<string, string | undefined>);
-  const userHome = input.userHome ?? env.HOME ?? "";
+  const userHome = input.userHome ?? env.HOME ?? env.USERPROFILE ?? homedir();
   return resolveHubPaths(env, userHome, input);
 }
 
@@ -163,10 +181,85 @@ export function resolvePaths(
  * - `envPath`（`PATH`）中的某个目录下存在 `cmd`：返回 `cmd`（保持原样）；
  * - 否则按顺序检查 `fallbackPaths`，第一个存在的候选路径返回该绝对路径。
  */
-export function findExecutable(cmd: string, envPath: string | undefined, fallbackPaths: readonly string[]): string | null {
-  if (cmd.includes("/")) return existsSync(cmd) ? cmd : null;
+const DEFAULT_WIN_PATHEXT = ".COM;.EXE;.BAT;.CMD";
+
+function isExplicitExecutablePath(cmd: string, platform: string): boolean {
+  if (cmd.includes("/")) return true;
+  if (platform === "win32") {
+    return cmd.includes("\\") || /^[A-Za-z]:/.test(cmd);
+  }
+  return false;
+}
+
+function parseWinPathExts(pathExt: string | undefined): string[] {
+  const raw = pathExt && pathExt.trim() !== "" ? pathExt : DEFAULT_WIN_PATHEXT;
+  return raw
+    .split(";")
+    .map((ext) => ext.trim().toLowerCase())
+    .filter((ext) => ext.startsWith("."));
+}
+
+function existsAsFile(candidate: string): boolean {
+  try {
+    return existsSync(candidate) && statSync(candidate).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function findWinCandidateInDir(dir: string, cmd: string, exts: readonly string[]): string | null {
+  const joinDir = process.platform === "win32" || /^[A-Za-z]:[\\/]/.test(dir) || dir.includes("\\") ? win32.join : join;
+  const lower = cmd.toLowerCase();
+  const hasKnownExt = exts.some((ext) => lower.endsWith(ext));
+  if (hasKnownExt) {
+    const direct = joinDir(dir, cmd);
+    if (existsAsFile(direct)) return direct;
+  }
+  for (const ext of exts) {
+    const candidate = joinDir(dir, `${cmd}${ext}`);
+    if (existsAsFile(candidate)) return candidate;
+  }
+  const exact = joinDir(dir, cmd);
+  return existsAsFile(exact) ? exact : null;
+}
+
+export function findExecutable(
+  cmd: string,
+  envPath: string | undefined,
+  fallbackPaths: readonly string[],
+  options?: { platform?: string; pathExt?: string },
+): string | null {
+  const platform = options?.platform ?? process.platform;
+  if (platform === "win32") {
+    const exts = parseWinPathExts(options?.pathExt ?? process.env.PATHEXT);
+    if (isExplicitExecutablePath(cmd, "win32")) {
+      if (existsAsFile(cmd)) return cmd;
+      const lower = cmd.toLowerCase();
+      if (!exts.some((ext) => lower.endsWith(ext))) {
+        for (const ext of exts) {
+          if (existsAsFile(`${cmd}${ext}`)) return `${cmd}${ext}`;
+        }
+      }
+      return null;
+    }
+    if (envPath) {
+      for (const rawDir of envPath.split(win32.delimiter)) {
+        const dir = rawDir.trim().replace(/^"(.*)"$/, "$1");
+        if (!dir) continue;
+        const hit = findWinCandidateInDir(dir, cmd, exts);
+        if (hit !== null) return hit;
+      }
+    }
+    for (const candidate of fallbackPaths) {
+      if (existsAsFile(candidate)) return candidate;
+    }
+    return null;
+  }
+
+  if (isExplicitExecutablePath(cmd, platform)) return existsSync(cmd) ? cmd : null;
+  const sep = platform === "darwin" || platform === "linux" ? posix.delimiter : hostDelimiter;
   if (envPath) {
-    for (const dir of envPath.split(delimiter)) {
+    for (const dir of envPath.split(sep)) {
       if (dir && existsSync(join(dir, cmd))) return cmd;
     }
   }
@@ -177,15 +270,30 @@ export function findExecutable(cmd: string, envPath: string | undefined, fallbac
 }
 
 /** 解析厂商可执行文件路径（启动时用）：同 findExecutable，找不到（含显式路径不存在）原样返回 `cmd`。 */
-export function resolveExecutable(cmd: string, envPath: string | undefined, fallbackPaths: readonly string[]): string {
-  return findExecutable(cmd, envPath, fallbackPaths) ?? cmd;
+export function resolveExecutable(
+  cmd: string,
+  envPath: string | undefined,
+  fallbackPaths: readonly string[],
+  options?: { platform?: string; pathExt?: string },
+): string {
+  return findExecutable(cmd, envPath, fallbackPaths, options) ?? cmd;
 }
 
 /** 找厂商可执行文件在磁盘上的实际路径（供 stat 指纹检查安装/升级变化），找不到返回 null。 */
-function locateExecutableFile(cmd: string, envPath: string | undefined, fallbackPaths: readonly string[]): string | null {
-  if (cmd.includes("/")) return existsSync(cmd) ? cmd : null;
+function locateExecutableFile(
+  cmd: string,
+  envPath: string | undefined,
+  fallbackPaths: readonly string[],
+  platform: string = process.platform,
+  pathExt?: string,
+): string | null {
+  if (platform === "win32") {
+    return findExecutable(cmd, envPath, fallbackPaths, { platform: "win32", pathExt });
+  }
+  if (isExplicitExecutablePath(cmd, platform)) return existsSync(cmd) ? cmd : null;
+  const sep = platform === "darwin" || platform === "linux" ? posix.delimiter : hostDelimiter;
   if (envPath) {
-    for (const dir of envPath.split(delimiter)) {
+    for (const dir of envPath.split(sep)) {
       if (!dir) continue;
       const full = join(dir, cmd);
       if (existsSync(full)) return full;
@@ -216,8 +324,10 @@ export function linuxInstallDirs(userHome: string): string[] {
 export const VENDOR_FALLBACK_PATHS: Readonly<Record<AgentVendor, (userHome: string, platform?: string) => string[]>> = Object.fromEntries(
   AGENT_VENDORS.map((vendor) => [
     vendor,
-    (userHome: string, platform: string = process.platform) =>
-      VENDOR_PATHS[vendor].fallbackPaths?.({ userHome, platform, linuxInstallDirs: linuxInstallDirs(userHome), join }) ?? [],
+    (userHome: string, platform: string = process.platform) => {
+      const joinFn = platform === "win32" ? win32.join : join;
+      return VENDOR_PATHS[vendor].fallbackPaths?.({ userHome, platform, linuxInstallDirs: linuxInstallDirs(userHome), join: joinFn }) ?? [];
+    },
   ]),
 ) as Record<AgentVendor, (userHome: string, platform?: string) => string[]>;
 
@@ -232,11 +342,12 @@ export function resolveVendorExecutables(
   envPath: string | undefined,
   userHome: string,
   platform: string = process.platform,
+  pathExt?: string,
 ): Record<AgentVendor, VendorExecutable> {
   return Object.fromEntries(
     AGENT_VENDORS.map((vendor) => {
       const cmd = paths.vendorPaths[vendor];
-      const path = resolveExecutable(cmd, envPath, VENDOR_FALLBACK_PATHS[vendor](userHome, platform));
+      const path = resolveExecutable(cmd, envPath, VENDOR_FALLBACK_PATHS[vendor](userHome, platform), { platform, pathExt });
       return [vendor, { cmd, path }];
     }),
   ) as Record<AgentVendor, VendorExecutable>;
@@ -269,6 +380,11 @@ export function vendorConfigHome(vendor: AgentVendor, userHome: string, env: Rec
  */
 const locatedExecutables = new Map<string, string>();
 
+/** 仅供单测重置可执行文件路径缓存。 */
+export function resetLocatedExecutablesCacheForTest(): void {
+  locatedExecutables.clear();
+}
+
 function statSignature(file: string): string | null {
   try {
     const st = statSync(file);
@@ -278,18 +394,34 @@ function statSignature(file: string): string | null {
   }
 }
 
-function executableSignature(cmd: string, envPath: string | undefined, fallbackPaths: readonly string[]): string {
-  const key = [cmd, envPath ?? "", ...fallbackPaths].join("\0");
+function envValueCaseInsensitive(env: Record<string, string | undefined>, name: string): string | undefined {
+  if (env[name] !== undefined) return env[name];
+  const lower = name.toLowerCase();
+  const key = Object.keys(env).find((k) => k.toLowerCase() === lower && env[k] !== undefined);
+  return key === undefined ? undefined : env[key];
+}
+
+function executableSignature(
+  cmd: string,
+  envPath: string | undefined,
+  fallbackPaths: readonly string[],
+  platform: string = process.platform,
+  pathExt?: string,
+): string {
+  const key = [platform, cmd, envPath ?? "", pathExt ?? "", ...fallbackPaths].join("\0");
   const cached = locatedExecutables.get(key);
   if (cached !== undefined) {
     const sig = statSignature(cached);
     if (sig !== null) return sig;
     locatedExecutables.delete(key);
   }
-  const exe = locateExecutableFile(cmd, envPath, fallbackPaths);
+  const exe = locateExecutableFile(cmd, envPath, fallbackPaths, platform, pathExt);
   if (exe === null) return "-";
   const sig = statSignature(exe);
   if (sig === null) return `${exe}:missing`;
+  if (locatedExecutables.size >= WIN_EXEC_RESOLVE_CACHE_MAX) {
+    locatedExecutables.clear();
+  }
   locatedExecutables.set(key, exe);
   return sig;
 }
@@ -306,7 +438,9 @@ export function vendorCatalogFingerprint(
   userHome: string,
   platform: string = process.platform,
 ): string {
-  const exe = executableSignature(cmd, env.PATH, VENDOR_FALLBACK_PATHS[vendor](userHome, platform));
+  const envPath = platform === "win32" ? envValueCaseInsensitive(env, "PATH") : env.PATH;
+  const pathExt = platform === "win32" ? envValueCaseInsensitive(env, "PATHEXT") : undefined;
+  const exe = executableSignature(cmd, envPath, VENDOR_FALLBACK_PATHS[vendor](userHome, platform), platform, pathExt);
   const files = vendorCatalogWatchFiles(vendor, userHome, env).map((file) => statSignature(file) ?? `${file}:missing`);
   return [exe, ...files].join("|");
 }

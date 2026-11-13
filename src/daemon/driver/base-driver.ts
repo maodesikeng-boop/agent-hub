@@ -5,7 +5,7 @@
 // - 会话首次轮次前缀组装与回退状态（personaSeen、preambleTaken、recoveryNote、crashNote、relaunchNote、killedNote）；
 // - 后台任务状态跟踪与 background.changed 事件发射；
 // - 驱动级健康状态报错（reportError / markHealthy）与通用日志包装、进程组收尾与残留清理。
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import {
   BACKGROUND_TASKS_HOLD_MAX_MS,
@@ -60,6 +60,7 @@ import {
   waitForExit,
 } from "./process.ts";
 import { buildChildEnv, mergeUserTexts } from "./protocol.ts";
+import { spawnOwnedProcess } from "../platform/index.ts";
 import { trackChild } from "../process-ledger.ts";
 import { takeSessionPreamble, type PreambleTaken } from "./session-preamble.ts";
 import { dropUserEntries, untakenOnStopEvents } from "./stop-untaken.ts";
@@ -979,13 +980,19 @@ export abstract class BaseSessionDriver<
     extraEnv: Record<string, string>,
     onCleanup?: () => void,
   ): Promise<ChildProcessWithoutNullStreams> {
-    const child = spawn(command, args, {
-      cwd,
-      env: buildChildEnv(process.env, { ...this.opts.env, ...extraEnv }),
-      stdio: ["pipe", "pipe", "pipe"],
-      detached: true,
-    });
-    trackChild(child, `agent:${this.vendor}`, { detached: true });
+    let spawned: { child: ChildProcessWithoutNullStreams; detached: boolean };
+    try {
+      spawned = spawnOwnedProcess(command, args, {
+        cwd,
+        env: buildChildEnv(process.env, { ...this.opts.env, ...extraEnv }),
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } catch (error) {
+      onCleanup?.();
+      throw new DriverError("spawn_failed", `${binaryPath}: ${errorMessage(error)}`);
+    }
+    const { child, detached } = spawned;
+    trackChild(child, `agent:${this.vendor}`, { detached });
     try {
       await new Promise<void>((resolve, reject) => {
         child.once("spawn", resolve);

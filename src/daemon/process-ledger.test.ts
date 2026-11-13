@@ -137,7 +137,7 @@ describe("子进程记账", () => {
     expect(isAlive(child.pid!)).toBe(true);
   });
 
-  it("启动回收：领头的进程没了、detached 组里的后代还在：按组杀；非 detached 的不按组杀", async () => {
+  it.skipIf(process.platform === "win32")("启动回收：领头的进程没了、detached 组里的后代还在：按组杀；非 detached 的不按组杀", async () => {
     // sh 起一个后台的 node 就退出：组长（sh）没了，后代还在同一个组里
     const leader = spawn("/bin/sh", ["-c", `"${process.execPath}" -e "setInterval(() => {}, 1000)" >/dev/null 2>&1 & echo $!; exit 0`], { stdio: ["ignore", "pipe", "ignore"], detached: true });
     spawned.push(leader);

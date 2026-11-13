@@ -5,7 +5,7 @@
 // 不写用户的项目目录和 worktree，git status 不多东西；只读 Worker 的沙箱哪里都能读（密钥除外），也读得到。
 import { copyFileSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, rmSync, realpathSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
-import writeFileAtomic from "write-file-atomic";
+import { writeFileAtomicSyncWithRetry } from "../../daemon/platform/index.ts";
 import { AGY_RULE_FILE_MAX_BYTES, AGY_RULE_FILES_MAX, AGY_RULE_TOTAL_BUDGET_BYTES, AGY_RULE_SINGLE_BUDGET_BYTES } from "./limits.ts";
 
 /** 启动目录下放规则的工作区目录名（--add-dir 它）。 */
@@ -77,7 +77,7 @@ export function writeAgyPromptRules(promptFile: string, skillsDir?: string): str
   }
   chunks.forEach((chunk, i) => {
     // 原子替换：上一个进程（或后台写交接复制的那份）可能正在读规则，不能让它读到写了一半的文件
-    writeFileAtomic.sync(join(rulesDir, ruleFileName(i)), `${RULE_FRONTMATTER}${chunk}`, { mode: 0o600 });
+    writeFileAtomicSyncWithRetry(join(rulesDir, ruleFileName(i)), `${RULE_FRONTMATTER}${chunk}`, { mode: 0o600 });
   });
   linkAgySkills(workspace, skillsDir);
   return workspace;
@@ -98,7 +98,7 @@ function linkAgySkills(workspace: string, skillsDir: string | undefined): void {
       if (!entry.isDirectory() || !existsSync(source)) continue;
       wanted.add(entry.name);
       const dest = join(target, entry.name, "SKILL.md");
-      if (existsSync(dest) && statSync(dest).ino === statSync(source).ino) continue;
+      if (existsSync(dest) && statSync(dest, { bigint: true }).ino === statSync(source, { bigint: true }).ino) continue;
       mkdirSync(dirname(dest), { recursive: true, mode: 0o700 });
       rmSync(dest, { force: true });
       try {

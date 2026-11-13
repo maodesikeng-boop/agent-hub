@@ -48,7 +48,7 @@ function harness(opts: {
   return { io, calls, out: () => stdout, err: () => stderr };
 }
 
-describe("中心：add", () => {
+describe.skipIf(process.platform === "win32")("中心：add", () => {
   const files = { "/etc/ssh/ssh_host_ed25519_key.pub": `${HOST_KEY} root@ip-172-26-0-1\n` };
 
   it("守护进程分槽位 → sudo 装钥匙行 → 标准输出只有一行连接码", async () => {
@@ -125,7 +125,7 @@ describe("中心：add", () => {
   });
 });
 
-describe("中心：remove", () => {
+describe.skipIf(process.platform === "win32")("中心：remove", () => {
   it("先 sudo 删钥匙行、断旧会话，再让守护进程收回槽位；跑两遍一样", async () => {
     for (const removed of [{ port: 4401 }, null]) {
       const h = harness({ admin: () => ({ removed }) });
@@ -138,7 +138,7 @@ describe("中心：remove", () => {
   });
 });
 
-describe("连入方：join 一条命令", () => {
+describe.skipIf(process.platform === "win32")("连入方：join 一条命令", () => {
   it("守护进程出公钥 → 用管理员钥匙 ssh 到中心跑 add → 连接码交给守护进程", async () => {
     const h = harness({
       admin: (_m, path) => (path === "/tunnel/key" ? { publicKey: PUB } : { status: { state: "connecting", since: 0, retryAt: null, detail: null } }),
@@ -189,7 +189,7 @@ describe("连入方：join 一条命令", () => {
   });
 });
 
-describe("连入方：connect / key", () => {
+describe.skipIf(process.platform === "win32")("连入方：connect / key", () => {
   it("connect：先在本地校验连接码，再交给守护进程", async () => {
     const h = harness({ admin: () => ({ status: null }) });
     expect(await runTunnelCli(h.io(["connect", CODE]))).toBe(0);

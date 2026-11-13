@@ -591,7 +591,7 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
     const readableFiles = [...new Set((sandboxCfg?.readableFiles?.(homeDir) ?? []).map(realpathOrSelf))];
 
     const allSecretPaths =
-      process.platform === "linux"
+      process.platform === "linux" || process.platform === "win32"
         ? [
             ...new Set([
               ...policy.secretPaths.map(realpathOrSelf),
@@ -645,9 +645,22 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
         cleanupTmp();
         throw new DriverError("spawn_failed", WORKER_NEEDS_OS_SANDBOX_MESSAGE);
       }
+      if (wrapped.readonlyFallbackWarning) {
+        this.log(wrapped.readonlyFallbackWarning);
+        this.emit(st.id, {
+          type: "driver.warning",
+          uuid: randomUUID(),
+          message: wrapped.readonlyFallbackWarning,
+          at: Date.now(),
+        });
+      }
       spawnCmd = wrapped.command;
       spawnArgs = wrapped.args;
       extraEnv.TMPDIR = input.tmpDir;
+      if (process.platform === "win32") {
+        extraEnv.TEMP = input.tmpDir;
+        extraEnv.TMP = input.tmpDir;
+      }
     } else {
       const scoped = spawnInWriteScope(
         this.vendor,

@@ -638,7 +638,11 @@ function sendStoredFile(req: FastifyRequest, reply: FastifyReply, file: Pick<Att
 
 export function createUiServer(opts: UiServerOptions): FastifyInstance {
   const { ledger, staticDir, uploadsDir, sentFilesDir } = opts;
-  const serverInfo = opts.serverInfo ?? { ...serverInfoFor(process.platform), repoDir: ROOT_DIR };
+  const serverInfo =
+    opts.serverInfo ?? {
+      ...serverInfoFor(process.platform, { supervised: opts.selfReload !== undefined }),
+      repoDir: ROOT_DIR,
+    };
   // 默认的 open 只有 macOS 上有；不是 macOS 又没注入假的：回 501，不去起一个不存在的 open
   const runOpen: RunOpen =
     opts.runOpen ??

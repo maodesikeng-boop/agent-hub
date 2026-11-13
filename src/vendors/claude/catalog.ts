@@ -1,9 +1,10 @@
 // Claude Code 的模型名单和登录状态（docs/vendor-availability-design.md 第 3 节、docs/vendor-plugin-design.md 的 C5）：
 // 起 claude 发 stream-json 的 initialize 控制请求（不跑钩子、不连 MCP，protocol.ts 的 INITIALIZE_QUERY_ARGS），看不出登录时另跑
 // `claude auth status --json`。单独一个文件：composer.ts 给账本用，不能引入起进程的代码（composer.test.ts 查）。
-import { spawn } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
+import { spawnOwnedProcess } from "../../daemon/platform/index.ts";
 import {
   KILL_WAIT_MS,
   MAX_CATALOG_DESCRIPTION_CHARS,
@@ -112,13 +113,18 @@ export function queryClaudeInitialize(options: ClaudeModelQueryOptions): Promise
   for (const dir of options.addDirs ?? []) args.push("--add-dir", dir);
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new Error("cancelled"));
-    const child = spawn(claudePath, args, {
-      cwd,
-      env: buildChildEnv(options.env ?? process.env, undefined),
-      stdio: ["pipe", "pipe", "pipe"],
-      detached: true,
-    });
-    trackChild(child, "probe:claude-initialize", { detached: true });
+    let spawned: { child: ChildProcessWithoutNullStreams; detached: boolean };
+    try {
+      spawned = spawnOwnedProcess(claudePath, args, {
+        cwd,
+        env: buildChildEnv(options.env ?? process.env, undefined),
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } catch (err) {
+      return reject(err);
+    }
+    const { child, detached } = spawned;
+    trackChild(child, "probe:claude-initialize", { detached });
     const requestId = `initialize-${randomUUID()}`;
     let stderr = "";
     let settled = false;
@@ -184,13 +190,18 @@ export function queryClaudeAuthStatus(options: ClaudeModelQueryOptions): Promise
   const { claudePath, cwd, timeoutMs = MODEL_CATALOG_TIMEOUT_MS, signal } = options;
   return new Promise((resolve) => {
     if (signal?.aborted) return resolve("unknown");
-    const child = spawn(claudePath, [...CLAUDE_AUTH_STATUS_ARGS], {
-      cwd,
-      env: buildChildEnv(options.env ?? process.env, undefined),
-      stdio: ["pipe", "pipe", "pipe"],
-      detached: true,
-    });
-    trackChild(child, "probe:claude-auth-status", { detached: true });
+    let spawned: { child: ChildProcessWithoutNullStreams; detached: boolean };
+    try {
+      spawned = spawnOwnedProcess(claudePath, [...CLAUDE_AUTH_STATUS_ARGS], {
+        cwd,
+        env: buildChildEnv(options.env ?? process.env, undefined),
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } catch {
+      return resolve("unknown");
+    }
+    const { child, detached } = spawned;
+    trackChild(child, "probe:claude-auth-status", { detached });
     child.once("exit", () => termGroupAfterExit(child));
     child.stdin.on("error", () => {});
     child.stdin.end();

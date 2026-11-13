@@ -45,10 +45,11 @@ afterAll(async () => {
 });
 
 describe("服务端不是 macOS", () => {
-  it("serverInfoFor：只有 darwin 两项都有", () => {
+  it("serverInfoFor：darwin 两项都有；linux 两项都关；win32 支持文件定位且仅经壳监管时开选文件夹", () => {
     expect(serverInfoFor("darwin")).toEqual({ platform: "darwin", folderPicker: true, fileActions: true });
     expect(serverInfoFor("linux")).toEqual({ platform: "linux", folderPicker: false, fileActions: false });
-    expect(serverInfoFor("win32")).toEqual({ platform: "win32", folderPicker: false, fileActions: false });
+    expect(serverInfoFor("win32")).toEqual({ platform: "win32", folderPicker: false, fileActions: true });
+    expect(serverInfoFor("win32", { supervised: true })).toEqual({ platform: "win32", folderPicker: true, fileActions: true });
   });
 
   it("/api/state 带着 server，网页按它显示控件", async () => {

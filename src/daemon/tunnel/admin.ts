@@ -18,6 +18,8 @@ export interface TunnelAdminOptions {
   /** 认令牌：Authorization: Bearer <令牌>。 */
   authorize(token: string): boolean;
   service: Pick<TunnelService, "ensureKey" | "connect" | "status" | "addSlot" | "removeSlot">;
+  /** 桌面外壳经本机管理端点优雅关机（Windows 下替代外部无法送达的 SIGTERM）。 */
+  onShutdown?: () => void;
   log?: (line: string) => void;
 }
 
@@ -72,6 +74,10 @@ export async function startTunnelAdmin(opts: TunnelAdminOptions): Promise<Runnin
     "GET /tunnel/status": () => ({ status: service.status() }),
     "POST /tunnel/slots": (body) => service.addSlot({ name: str(body, "name"), publicKey: str(body, "publicKey") }),
     "POST /tunnel/slots/remove": (body) => ({ removed: service.removeSlot(str(body, "name")) }),
+    "POST /admin/shutdown": () => {
+      if (opts.onShutdown) setImmediate(() => opts.onShutdown?.());
+      return { ok: true };
+    },
   };
   const send = (res: ServerResponse, status: number, body: unknown) => {
     res.writeHead(status, { "content-type": "application/json; charset=utf-8" }).end(JSON.stringify(body));

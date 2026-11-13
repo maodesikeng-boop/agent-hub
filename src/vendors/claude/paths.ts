@@ -2,8 +2,18 @@
 // 父会话变量（A12）、凭据变量（A13）、Linux 上的安装命令（D6）。
 import type { VendorPathsModule } from "../daemon-types.ts";
 
-// macOS 上只认 PATH（沿用原来的行为），别的系统看官方安装目录
-export const fallbackPaths: VendorPathsModule["fallbackPaths"] = ({ platform, linuxInstallDirs, join }) => (platform === "darwin" ? [] : linuxInstallDirs.map((dir) => join(dir, "claude")));
+// macOS 上只认 PATH（沿用原来的行为）；Windows 看官方 install.ps1（~\.local\bin\claude.exe）、npm 全局垫片（%APPDATA%\npm\claude.cmd）与本地安装目录；Linux 看官方安装目录
+export const fallbackPaths: VendorPathsModule["fallbackPaths"] = ({ userHome, platform, linuxInstallDirs, join }) => {
+  if (platform === "darwin") return [];
+  if (platform === "win32") {
+    return [
+      join(userHome, ".local", "bin", "claude.exe"),
+      join(userHome, "AppData", "Roaming", "npm", "claude.cmd"),
+      join(userHome, "AppData", "Local", "Programs", "claude", "claude.exe"),
+    ];
+  }
+  return linuxInstallDirs.map((dir) => join(dir, "claude"));
+};
 
 export const installCommand: VendorPathsModule["installCommand"] = "curl -fsSL https://claude.ai/install.sh | bash";
 // claude 给它起的子进程设的（照 experiments/m0/claude_clean.sh），保持迁移前名单。

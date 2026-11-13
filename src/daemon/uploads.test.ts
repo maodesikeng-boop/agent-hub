@@ -62,8 +62,10 @@ describe("存文件", () => {
     expect(result.mime).toBe("application/octet-stream");
     expect(result.path).toBe(join(dir, result.id, "笔记.txt"));
     expect(readFileSync(result.path, "utf8")).toBe("你好");
-    expect(statSync(result.path).mode & 0o777).toBe(0o600);
-    expect(statSync(dirname(result.path)).mode & 0o777).toBe(0o700);
+    if (process.platform !== "win32") {
+      expect(statSync(result.path).mode & 0o777).toBe(0o600);
+      expect(statSync(dirname(result.path)).mode & 0o777).toBe(0o700);
+    }
   });
 
   it("图片按扩展名认类型", async () => {

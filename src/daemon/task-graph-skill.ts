@@ -6,10 +6,10 @@
 // 只有守护进程升级换了正文才重写；项目经理彻底删除时整个启动目录一起删（ledger/persona.ts 的 sessionLaunchDir）。
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import writeFileAtomic from "write-file-atomic";
 import { HUB_COMMAND } from "../shared/names.ts";
 import { sessionLaunchDir } from "../shared/paths.ts";
 import { TASK_GRAPH_SKILL_NAME, taskGraphSkillMarkdown } from "../shared/task-graph-skill.ts";
+import { writeFileAtomicSyncWithRetry } from "./platform/index.ts";
 
 /** 启动目录里放产品技能的目录名（一个技能一个子目录，Agent Skills 的标准形状）。 */
 export const PRODUCT_SKILLS_DIR = "skills";
@@ -39,7 +39,7 @@ export function writeProductSkills(sessionDir: string): string {
   }
   if (current !== content) {
     mkdirSync(join(productSkillsDir(sessionDir), TASK_GRAPH_SKILL_NAME), { recursive: true, mode: 0o700 });
-    writeFileAtomic.sync(file, content, { mode: 0o600 });
+    writeFileAtomicSyncWithRetry(file, content, { mode: 0o600 });
   }
   return productSkillsDir(sessionDir);
 }

@@ -73,7 +73,7 @@ import {
 } from "./paths.ts";
 import deepseekSpec, { DEEPSEEK_HOME_REL } from "./spec.ts";
 
-const FAKE_ACP_AGENT = new URL("../_common/acp/fixtures/fake-acp-agent.ts", import.meta.url).pathname;
+const FAKE_ACP_AGENT = fileURLToPath(new URL("../_common/acp/fixtures/fake-acp-agent.ts", import.meta.url));
 
 const DSH_TUPLE_CONFIG_OPTIONS = [
   {
@@ -173,7 +173,7 @@ function makeDeepSeekHarness(options: {
   const launchDirOf = (sessionId: SessionId) => join(dir, "launch", String(sessionId));
 
   const driver = createDeepSeekDriver({
-    executablePath: options.executablePath ?? FAKE_ACP_AGENT,
+    executablePath: options.executablePath ?? wrapScriptAsPlatformCli(FAKE_ACP_AGENT, dir, "fake-dsh"),
     store,
     env: { ...process.env, DSH_HOME: dshHome },
     idleCloseMs: 60_000,
@@ -595,9 +595,8 @@ describe("deepseek 驱动（driver.ts + daemon.ts）：--patch 启动配置、�
     expect(prompts[1]!.blocks).toEqual(["跨进程第二轮"]);
 
     // 模拟真实 dsh-acp 对失效会话抛 -32602 "Invalid params: session is not resumable: <id>"
-    const customFakeDsh = join(h.dir, "fake-dsh-unresumable.mjs");
-    writeFileSync(
-      customFakeDsh,
+    const customFakeDsh = writeExecutableNodeScript(
+      join(h.dir, "fake-dsh-unresumable"),
       `#!/usr/bin/env node
 import { createInterface } from "node:readline";
 const out = (obj) => process.stdout.write(JSON.stringify(obj) + "\\n");
@@ -651,9 +650,7 @@ rl.on("line", (line) => {
   }
 });
 `,
-      "utf8",
     );
-    chmodSync(customFakeDsh, 0o755);
 
     const hFallback = track(
       makeDeepSeekHarness({
@@ -887,12 +884,16 @@ rl.on("line", (line) => {
     try {
       const dshHome = join(dir, "dsh-home");
       const calls = join(dir, "calls.log");
-      const fakeDsh = join(dir, "dsh");
-      writeFileSync(
-        fakeDsh,
-        `#!/bin/sh\necho "$PWD $*" >> ${calls}\nmkdir -p "$DSH_HOME/profiles/acp" && echo '{}' > "$DSH_HOME/profiles/acp/package.json"\n`,
+      const fakeDsh = writeExecutableNodeScript(
+        join(dir, "dsh"),
+        `const fs = require("node:fs");
+const path = require("node:path");
+fs.appendFileSync(${JSON.stringify(calls)}, process.cwd() + " " + process.argv.slice(2).join(" ") + "\\n");
+const profDir = path.join(process.env.DSH_HOME, "profiles", "acp");
+fs.mkdirSync(profDir, { recursive: true });
+fs.writeFileSync(path.join(profDir, "package.json"), "{}\\n");
+`,
       );
-      chmodSync(fakeDsh, 0o755);
       const env = { ...process.env, DSH_HOME: dshHome };
       ensureDeepSeekProfile(fakeDsh, dshHome, env, dir);
       ensureDeepSeekProfile(fakeDsh, dshHome, env, dir);
@@ -1276,3 +1277,5 @@ describe("deepseek 零子进程本地凭据与模型目录探测（catalog.ts + 
     }
   });
 });
+import { fileURLToPath } from "node:url";
+import { wrapScriptAsPlatformCli, writeExecutableNodeScript } from "../../../test/fake-cli-shim.ts";

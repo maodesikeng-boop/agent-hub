@@ -11,18 +11,39 @@
 // 详见 docs/write-scope.md 与 docs/linux-sandbox-design.md。
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync, type Dirent } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { LOCAL_ERRORS } from "../../shared/errors.ts";
-import { AGENT_VENDORS, DriverError, vendorSpec, type AgentVendor, type WriteScope } from "../../shared/index.ts";
+import {
+  AGENT_VENDORS,
+  DriverError,
+  protectedRootsOf,
+  vendorSpec,
+  type AgentVendor,
+  type WriteScope,
+} from "../../shared/index.ts";
+import {
+  WIN32_KEEP_AWAKE_BIN,
+  allowWin32WorkerWorktreeAcl,
+  ensureWin32ProtectedRootAcl,
+  findWinHelperBinary,
+  loadManagedWorktreeRoots,
+  runWin32SandboxProbe,
+} from "../platform/index.ts";
 
 export interface SpawnCommand {
   command: string;
   args: string[];
 }
 
+export type ReadonlyEnforcementMode = "native" | "mxc" | "fallback_write_restricted";
+
 export interface ScopedSpawn extends SpawnCommand {
   /** 可写范围有没有被 OS 沙箱管住。scope !== null 时必须为 true，否则拒绝启动 Worker。 */
   osSandboxed: boolean;
+  /** 只读外层包装实际采用的隔离模式（Windows 无 MXC 回退时为 "fallback_write_restricted"）。 */
+  readonlyMode?: ReadonlyEnforcementMode;
+  /** Windows 缺少 MXC ProcessContainer 时自动回退为「写受限令牌 + 受保护根禁写 + 工具层拦截」的告警文案。 */
+  readonlyFallbackWarning?: string;
 }
 
 export interface OsSandboxWrapOptions {
@@ -44,6 +65,14 @@ export interface OsSandboxWrapOptions {
   env?: NodeJS.ProcessEnv;
   /** 包进 OS 沙箱时加在命令行最前面、关掉这家自带沙箱的参数。 */
   ownSandboxOffArgs?: readonly string[];
+  /** Windows 辅助程序 state 目录覆盖（默认 <dataDir>/state）。 */
+  stateDir?: string;
+  /** Windows 普通 Worker 编号覆盖（默认从 writableDirs 末段提取或 "main"）。 */
+  workerId?: string;
+  /** Windows `fusa-run.exe` 路径覆盖（单测跨平台断言命令行时注入）。 */
+  winHelperPath?: string;
+  /** 单测只生成命令参数、跳过真机 NTFS ACL 写入。 */
+  skipAclSetup?: boolean;
 }
 
 export interface WriteScopeEnforcer {
@@ -55,11 +84,43 @@ export interface WriteScopeEnforcer {
 
 export const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
 export const BWRAP = "bwrap";
+export const FUSA_RUN_EXE = WIN32_KEEP_AWAKE_BIN;
 const BWRAP_PROBE_TIMEOUT_MS = 3_000;
 
 /** OS 沙箱起不来时拒绝派 Worker / 起 Worker 进程的统一中文报错（含修复命令）。 */
 export const WORKER_NEEDS_OS_SANDBOX_MESSAGE =
   `${LOCAL_ERRORS.sandbox_unavailable.text}（Worker 需要 OS 沙箱强制限制可写与可读范围，不退回规则兜底）。${LOCAL_ERRORS.sandbox_unavailable.hint}。`;
+
+/**
+ * 用户拍板定案：低于 Win11 24H2 / Windows Server 或尚未启用 MXC ProcessContainer 的机器上，
+ * 非自带只读沙箱的厂商不硬拒只读 Worker，自动降级为「4.4.2 写受限令牌（受保护根禁写）+ 工具层只读拦截」并输出清晰告警。
+ */
+export const WIN32_READONLY_FALLBACK_WARNING =
+  "当前 Windows 环境不支持 MXC ProcessContainer 只读容器（需 Windows 11 24H2+ 且启用容器支持），已自动回退为「写受限令牌 + 受保护根拒写 ACL + 工具层只读拦截」模式运行：数据目录与受保护 worktree 根仍由内核强制禁写，其余目录写操作与敏感文件读取由厂商工具权限规则拦截。";
+
+/** 第 2 大步接入 `@microsoft/mxc-sdk` 时的可插拔只读容器提供者接口。 */
+export interface Win32MxcReadonlyProvider {
+  /** 检测本机是否具备可用的 MXC `processcontainer` 后端。 */
+  available(): boolean;
+  /** 使用 MXC 容器包装只读 Worker 进程命令。 */
+  wrapReadonly(base: SpawnCommand, input: ReadonlySandboxInput, options?: OsSandboxWrapOptions): SpawnCommand;
+}
+
+let registeredMxcProvider: Win32MxcReadonlyProvider | null = null;
+
+/** 注册（或清除）Windows MXC 只读沙箱后端（供第 2 大步 `@microsoft/mxc-sdk` 与单测注入）。 */
+export function registerWin32MxcReadonlyProvider(provider: Win32MxcReadonlyProvider | null): void {
+  registeredMxcProvider = provider;
+}
+
+/** 当前 Windows 环境是否已具备可用的 MXC ProcessContainer 只读沙箱。 */
+export function win32MxcReadonlyAvailable(): boolean {
+  try {
+    return registeredMxcProvider?.available() === true;
+  } catch {
+    return false;
+  }
+}
 
 /** Linux 下探测 bwrap 能否正常建 userns、pidns 并挂载 /proc 与 /run/user/<uid> 的参数（与真起 Worker 参数一致）。 */
 export function bwrapProbeArgs(uid: number = process.getuid?.() ?? 0): string[] {
@@ -86,6 +147,8 @@ export function bwrapProbeArgs(uid: number = process.getuid?.() ?? 0): string[] 
 
 /** 只缓存 true，不缓存 false：管理员跑完 sudo scripts/linux-sandbox-setup.sh 后无需重启守护进程，下次起 Worker 即刻生效。 */
 let linuxSandboxCachedTrue = false;
+/** Windows 沙箱探针同样只缓存 true，不缓存 false（辅助程序构建完成或修复权限后立即生效）。 */
+let win32SandboxCachedTrue = false;
 /** 注入的探测函数各自缓存 true，与真实探测的模块级缓存互不串（真机已探测成功不会让注入 false 的调用也返回 true）。 */
 let customProbeCachedTrue = new WeakSet<() => boolean>();
 
@@ -118,9 +181,24 @@ function probeLinuxBwrap(customProbe?: () => boolean): boolean {
   return ok;
 }
 
+function probeWin32Sandbox(customProbe?: () => boolean): boolean {
+  if (customProbe) {
+    if (customProbeCachedTrue.has(customProbe)) return true;
+    const ok = runProbe(customProbe);
+    if (ok) customProbeCachedTrue.add(customProbe);
+    return ok;
+  }
+  if (win32SandboxCachedTrue) return true;
+  const ok = runProbe(() => runWin32SandboxProbe());
+  if (ok) win32SandboxCachedTrue = true;
+  return ok;
+}
+
 /** 重置 OS 沙箱可用性缓存（仅供单测用）。 */
 export function resetOsSandboxCacheForTest(): void {
   linuxSandboxCachedTrue = false;
+  win32SandboxCachedTrue = false;
+  registeredMxcProvider = null;
   customProbeCachedTrue = new WeakSet();
 }
 
@@ -159,7 +237,11 @@ function sbplRegex(re: string): string {
  * 路径要是真实路径（沙箱按解析后的路径比，大小写不敏感的盘上大小写不同也拦得住，实测）。
  */
 export function seatbeltProfile(scope: WriteScope): string {
-  const lines = ["(version 1)", "(allow default)", `(deny file-write* (subpath ${sbplString(scope.dataDir)}))`];
+  const lines = [
+    "(version 1)",
+    "(allow default)",
+    ...protectedRootsOf(scope).map((root) => `(deny file-write* (subpath ${sbplString(root)}))`),
+  ];
   for (const dir of scope.writableDirs) lines.push(`(allow file-write* (subpath ${sbplString(dir)}))`);
   return lines.join("\n");
 }
@@ -168,6 +250,8 @@ export function seatbeltProfile(scope: WriteScope): string {
 export interface ReadonlySandboxInput {
   /** 这个会话自己的私有临时目录（TMPDIR 指到这，退出时删）。 */
   tmpDir: string;
+  /** 可选的数据目录 state/（供 Windows 无 MXC 回退时定位受保护根与 SID 表）。 */
+  stateDir?: string;
   /** 厂商运行时目录、通用缓存目录：整个子树可写。 */
   writableDirs: string[];
   /** 具体的可写文件或单层通配（平台无关，如 /path/cli.log、/path/bin/agentapi*、/path/mcp/星/*）：seatbelt 转正则，bubblewrap 展开已存在文件并 --bind。 */
@@ -421,11 +505,14 @@ export function bwrapArgs(
 
   const masked = appendWslIsolationArgs(args, options);
 
-  const dataDir = real(scope.dataDir);
   const bound: string[] = [];
-  if (exists(dataDir)) {
-    args.push("--ro-bind", dataDir, dataDir);
-    bound.push(dataDir);
+  const seenRoots = new Set<string>();
+  for (const rawRoot of protectedRootsOf(scope)) {
+    const root = real(rawRoot);
+    if (seenRoots.has(root) || !exists(root)) continue;
+    seenRoots.add(root);
+    args.push("--ro-bind", root, root);
+    bound.push(root);
   }
 
   const seenWritable = new Set<string>();
@@ -611,6 +698,106 @@ export interface OsSandboxBackend {
   wrapReadonly(base: SpawnCommand, input: ReadonlySandboxInput, options?: OsSandboxWrapOptions): SpawnCommand;
 }
 
+function inferWin32WorkerId(scope: WriteScope, options?: OsSandboxWrapOptions): string {
+  if (options?.workerId && options.workerId.trim() !== "") return options.workerId.trim();
+  const firstWritable = scope.writableDirs[0];
+  if (firstWritable) {
+    const tail = basename(firstWritable.replace(/[\\/]+$/, ""));
+    if (/^[A-Za-z0-9_-]{1,64}$/.test(tail)) return tail;
+  }
+  return "main";
+}
+
+function inferStateDirFromReadonlyInput(input: ReadonlySandboxInput, options?: OsSandboxWrapOptions): string {
+  if (options?.stateDir) return options.stateDir;
+  if (input.stateDir) return input.stateDir;
+  const uiTokenSecret = input.secretPaths.find((p) => /(?:^|[\\/])ui-token$/i.test(p));
+  if (uiTokenSecret) return dirname(uiTokenSecret);
+  return join(input.tmpDir, ".fusa-state");
+}
+
+export function win32WorkerSandboxArgs(
+  base: SpawnCommand,
+  scope: WriteScope,
+  options?: OsSandboxWrapOptions,
+): SpawnCommand {
+  const helper =
+    options?.winHelperPath ??
+    findWinHelperBinary("fusa-run.exe", { env: options?.env }) ??
+    FUSA_RUN_EXE;
+  const stateDir = options?.stateDir ?? join(scope.dataDir, "state");
+  const workerId = inferWin32WorkerId(scope, options);
+  const ownSandboxOffArgs = options?.ownSandboxOffArgs ?? [];
+
+  if (!options?.skipAclSetup && process.platform === "win32") {
+    for (const root of protectedRootsOf(scope)) {
+      if (existsSync(root)) {
+        ensureWin32ProtectedRootAcl(stateDir, root, { env: options?.env });
+      }
+    }
+    for (const dir of scope.writableDirs) {
+      allowWin32WorkerWorktreeAcl(stateDir, workerId, dir, { env: options?.env });
+    }
+  }
+
+  return {
+    command: helper,
+    args: [
+      "--sandbox",
+      "worker",
+      "--state-dir",
+      stateDir,
+      "--worker",
+      workerId,
+      "--",
+      base.command,
+      ...ownSandboxOffArgs,
+      ...base.args,
+    ],
+  };
+}
+
+export function win32ReadonlyFallbackSandboxArgs(
+  base: SpawnCommand,
+  input: ReadonlySandboxInput,
+  options?: OsSandboxWrapOptions,
+): SpawnCommand {
+  const helper =
+    options?.winHelperPath ??
+    findWinHelperBinary("fusa-run.exe", { env: options?.env }) ??
+    FUSA_RUN_EXE;
+  const stateDir = inferStateDirFromReadonlyInput(input, options);
+  const ownSandboxOffArgs = options?.ownSandboxOffArgs ?? [];
+
+  if (!options?.skipAclSetup && process.platform === "win32") {
+    const dataDir = dirname(stateDir);
+    const defaultWorktreesDir = join(dataDir, "worktrees");
+    const roots = [dataDir, ...loadManagedWorktreeRoots(stateDir, defaultWorktreesDir)];
+    const seen = new Set<string>();
+    for (const r of roots) {
+      const key = r.toLowerCase();
+      if (seen.has(key) || !existsSync(r)) continue;
+      seen.add(key);
+      ensureWin32ProtectedRootAcl(stateDir, r, { env: options?.env });
+    }
+  }
+
+  return {
+    command: helper,
+    args: [
+      "--sandbox",
+      "worker",
+      "--state-dir",
+      stateDir,
+      "--readonly-fallback",
+      "--",
+      base.command,
+      ...ownSandboxOffArgs,
+      ...base.args,
+    ],
+  };
+}
+
 const seatbeltBackend: OsSandboxBackend = {
   available: () => true,
   wrap: (base, scope, options) => ({
@@ -635,19 +822,31 @@ const bubblewrapBackend: OsSandboxBackend = {
   }),
 };
 
+const win32Backend: OsSandboxBackend = {
+  available: () => probeWin32Sandbox(),
+  wrap: (base, scope, options) => win32WorkerSandboxArgs(base, scope, options),
+  wrapReadonly: (base, input, options) => {
+    if (registeredMxcProvider && win32MxcReadonlyAvailable()) {
+      return registeredMxcProvider.wrapReadonly(base, input, options);
+    }
+    return win32ReadonlyFallbackSandboxArgs(base, input, options);
+  },
+};
+
 export const OS_SANDBOX_BACKENDS: Partial<Record<NodeJS.Platform, OsSandboxBackend>> = {
   darwin: seatbeltBackend,
   linux: bubblewrapBackend,
+  win32: win32Backend,
 };
 
-/** 这台机器能不能用 OS 沙箱（macOS 为 sandbox-exec，Linux 为跑通探测的 bubblewrap）。 */
+/** 这台机器能不能用 OS 沙箱（macOS 为 sandbox-exec，Linux 为跑通探测的 bubblewrap，Windows 为跑通探测的 fusa-run 写受限令牌 + ACL）。 */
 export function osSandboxAvailable(
   platform: NodeJS.Platform = process.platform,
   customLinuxProbe?: (() => boolean) | { probe?: () => boolean },
 ): boolean {
-  if (platform === "linux" && customLinuxProbe !== undefined) {
+  if ((platform === "linux" || platform === "win32") && customLinuxProbe !== undefined) {
     const fn = typeof customLinuxProbe === "function" ? customLinuxProbe : customLinuxProbe.probe;
-    return probeLinuxBwrap(fn);
+    return platform === "linux" ? probeLinuxBwrap(fn) : probeWin32Sandbox(fn);
   }
   return OS_SANDBOX_BACKENDS[platform]?.available() ?? false;
 }
@@ -679,6 +878,21 @@ export function wrapInReadonlyOsSandbox(
   const backend = OS_SANDBOX_BACKENDS[platform];
   const isAvailable = options?.available ?? (backend ? backend.available() : false);
   if (!backend || !isAvailable) return { ...base, osSandboxed: false };
+  if (platform === "win32") {
+    if (registeredMxcProvider && win32MxcReadonlyAvailable()) {
+      return {
+        ...registeredMxcProvider.wrapReadonly(base, input, options),
+        osSandboxed: true,
+        readonlyMode: "mxc",
+      };
+    }
+    return {
+      ...win32ReadonlyFallbackSandboxArgs(base, input, options),
+      osSandboxed: true,
+      readonlyMode: "fallback_write_restricted",
+      readonlyFallbackWarning: WIN32_READONLY_FALLBACK_WARNING,
+    };
+  }
   return { ...backend.wrapReadonly(base, input, options), osSandboxed: true };
 }
 
