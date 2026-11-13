@@ -187,7 +187,7 @@ const pipeStatus = await new Promise((resolve) => {
     {
       socketPath: ${JSON.stringify(api.socketPath)},
       method: "POST",
-      path: "/hub/status",
+      path: "/v1/status",
       headers: {
         authorization: "Bearer ${sessionTok}",
         "content-type": "application/json",

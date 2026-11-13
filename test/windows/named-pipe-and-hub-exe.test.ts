@@ -40,13 +40,14 @@ function findGitBash(): string {
 function runChildAsync(
   command: string,
   args: readonly string[],
-  options: { env?: NodeJS.ProcessEnv; input?: string },
+  options: { env?: NodeJS.ProcessEnv; input?: string; windowsVerbatimArguments?: boolean },
 ): Promise<{ status: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, [...args], {
       env: options.env,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
+      ...(options.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
     });
     let stdout = "";
     let stderr = "";
@@ -113,8 +114,8 @@ describe.runIf(process.platform === "win32")("Windows 真机集成：命名管�
     ledger.calls.length = 0;
     const cmdRes = await runChildAsync(
       "cmd.exe",
-      ["/d", "/c", 'hub worker search "a&b" "a|b" "^caret^" "中文关键字" "🚀emoji"'],
-      { env: baseEnv },
+      ["/d", "/s", "/c", '"hub worker search "a&b" "a|b" "^caret^" "中文关键字" "🚀emoji""'],
+      { env: baseEnv, windowsVerbatimArguments: true },
     );
     expect(cmdRes.status, cmdRes.stderr).toBe(0);
     expect((ledger.calls.at(-1)?.args as { keywords: string[] }).keywords).toEqual([
