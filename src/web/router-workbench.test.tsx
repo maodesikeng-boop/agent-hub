@@ -3,18 +3,24 @@ import { readFileSync } from "node:fs";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement } from "react";
 import { userEvent } from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   DEFAULT_AGENT_VENDOR,
   ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES,
   ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES,
   ROUTER_STREAM_PAGE_SIZE,
+  VENDOR_LIST,
+  bundledModelCatalog,
+  effortsFor,
   emptyRouterSlice,
+  modelShortLabel,
   type DeviceInfo,
+  type ModelCatalog,
   type RouterCommandRecord,
   type RouterCommandsPage,
   type RouterDecisionItem,
+  type RouterSettings,
   type RouterReportItem,
   type StateSnapshot,
   type TaskGraph,
@@ -464,7 +470,9 @@ describe("Needs You 托盘", () => {
     expect(tray.textContent).not.toMatch(/[·|/]/);
     // 数量在托盘标题上，顶栏不再重复
     expect(within(tray).getByRole("button", { name: /Needs You/ })).toHaveTextContent("4");
-    expect(screen.getByRole("heading", { level: 1, name: "Router" }).closest("header")!.textContent).toBe("Router");
+    const routerHeader = screen.getByRole("heading", { level: 1, name: "Router" }).closest("header")!;
+    expect(within(routerHeader).queryByText("4")).toBeNull();
+    expect(within(routerHeader).queryByText(/Needs You/i)).toBeNull();
     // 托盘和时间流、输入框左右对齐，桌面最高半屏（50dvh），超出在里面滚
     expect(tray.className).toMatch(/chat-column/);
     expect(tray.querySelector("[class*='max-h-[50dvh]']")).not.toBeNull();
@@ -1802,5 +1810,263 @@ describe("mergeRouterStream：多来源分别截断、连续翻页不插队", ()
       expect(prev.watermark).toBeNull();
       expect(prev.entries.map((e) => routerStreamPosOf(e))).toEqual(all.map((e) => routerStreamPosOf(e)));
     }
+  });
+});
+
+describe("顶栏模型选择入口（RouterModelPicker）", () => {
+  beforeAll(() => {
+    Element.prototype.setPointerCapture ??= () => {};
+    Element.prototype.releasePointerCapture ??= () => {};
+  });
+
+  function buildTestCatalogs(): {
+    catalogs: ModelCatalog[];
+    firstSpec: (typeof VENDOR_LIST)[number];
+    secondSpec: (typeof VENDOR_LIST)[number];
+    signedOutSpec: (typeof VENDOR_LIST)[number];
+    altModelId: string;
+    altModelLabel: string;
+    altEffort: string;
+  } {
+    const firstSpec = VENDOR_LIST[0]!;
+    const secondSpec = VENDOR_LIST.find((s, i) => i > 0 && s.models.bundled.length >= 2 && s.models.efforts.length >= 2) ?? VENDOR_LIST[1]!;
+    const signedOutSpec = VENDOR_LIST.find((s) => s.id !== firstSpec.id && s.id !== secondSpec.id)!;
+    const catalogs: ModelCatalog[] = VENDOR_LIST.map((spec) => {
+      const base = bundledModelCatalog(spec.id);
+      if (spec.id === firstSpec.id || spec.id === secondSpec.id) {
+        return { ...base, source: "vendor", availability: "available" };
+      }
+      if (spec.id === signedOutSpec.id) {
+        return { ...base, source: "vendor", availability: "signed_out" };
+      }
+      return { ...base, source: "vendor", availability: "not_installed" };
+    });
+    const secondCat = catalogs.find((c) => c.vendor === secondSpec.id)!;
+    const altModel = secondCat.models.find((m) => m.id !== secondSpec.models.routerDefault.model) ?? secondCat.models[0]!;
+    const supported = effortsFor(secondCat, altModel.id);
+    const altEffort = supported.find((e) => e !== secondSpec.models.routerDefault.effort) ?? supported[0]!;
+    return {
+      catalogs,
+      firstSpec,
+      secondSpec,
+      signedOutSpec,
+      altModelId: altModel.id,
+      altModelLabel: altModel.label,
+      altEffort,
+    };
+  }
+
+  it("桌面端 Popover：默认显示 Auto + 命中短名，切换厂商自动填入 routerDefault，细节默认收起可展开换模型与档位，支持切回 Auto、失败回滚与 Manage providers…，零 · 拼接", async () => {
+    const { catalogs, firstSpec, secondSpec, signedOutSpec, altModelId, altModelLabel, altEffort } = buildTestCatalogs();
+    const firstCat = catalogs.find((c) => c.vendor === firstSpec.id)!;
+    const secondCat = catalogs.find((c) => c.vendor === secondSpec.id)!;
+    const firstPresetShort = modelShortLabel(firstSpec.id, firstSpec.models.routerDefault.model, firstCat);
+    const secondPresetShort = modelShortLabel(secondSpec.id, secondSpec.models.routerDefault.model, secondCat);
+
+    const { localApi } = installFleet({});
+    localApi.models = () => ({ status: 200, body: { catalogs } });
+
+    const user = userEvent.setup();
+    await openRouter();
+    const putCalls = () => localApi.callsTo("PUT", /^\/api\/router\/settings$/);
+
+    // 1. 默认 vendor === null：显示 Auto + 第一家可用厂商的 routerDefault 短名，无 · 拼接，按钮为 ghost 无胶囊实底
+    const trigger = await screen.findByRole("button", { name: new RegExp(`Router model: Auto ${firstPresetShort}`) });
+    expect(trigger).toHaveTextContent("Auto");
+    expect(trigger).toHaveTextContent(firstPresetShort);
+    expect(trigger.textContent).not.toMatch(/[·|/]/);
+    expect(trigger.className).not.toContain("bg-muted");
+
+    // 2. 点开桌面端 Popover：Auto 选中，已就绪厂商可选，未登录厂商灰显 Not signed in 禁用，未安装厂商不塞满列表
+    await user.click(trigger);
+    const popover = await screen.findByRole("dialog", { name: "Router model" });
+    expect(popover).toHaveAttribute("data-slot", "popover-content");
+    expect(popover.textContent).not.toMatch(/[·|/]/);
+
+    const group = within(popover).getByRole("radiogroup", { name: "Router provider" });
+    expect(within(group).getByRole("radio", { name: new RegExp(`Auto.*${firstPresetShort}`) })).toHaveAttribute("aria-checked", "true");
+    const signedOutRadio = within(group).getByRole("radio", { name: new RegExp(`${signedOutSpec.label}.*Not signed in`) });
+    expect(signedOutRadio).toBeDisabled();
+    for (const spec of VENDOR_LIST) {
+      if (spec.id !== firstSpec.id && spec.id !== secondSpec.id && spec.id !== signedOutSpec.id) {
+        expect(within(group).queryByRole("radio", { name: new RegExp(spec.label) })).toBeNull();
+      }
+    }
+    // Auto 模式下不展示模型细节折叠块
+    expect(within(popover).queryByRole("button", { name: /Model/ })).toBeNull();
+
+    // 3. 点击第二家可用厂商：乐观更新顶栏显示并立即发送该厂商的 routerDefault 预设；下方细节默认收起
+    await user.click(within(group).getByRole("radio", { name: new RegExp(secondSpec.label) }));
+    await waitFor(() => expect(putCalls()).toHaveLength(1));
+    expect(putCalls()[0]!.body).toEqual({
+      vendor: secondSpec.id,
+      model: secondSpec.models.routerDefault.model,
+      effort: secondSpec.models.routerDefault.effort,
+    });
+    expect(screen.getByRole("button", { name: new RegExp(`Router model: ${secondSpec.label} ${secondPresetShort}`) })).toBeInTheDocument();
+
+    const detailsTrigger = within(popover).getByRole("button", { name: /Model & effort/ });
+    expect(detailsTrigger).toHaveAttribute("aria-expanded", "false");
+    expect(within(popover).queryByRole("combobox", { name: "Model" })).toBeNull();
+
+    // 4. 展开细节：切换该家其他模型与思考程度，每次变更立即调 putRouterSettings
+    await user.click(detailsTrigger);
+    expect(detailsTrigger).toHaveAttribute("aria-expanded", "true");
+    const modelSelect = within(popover).getByRole("combobox", { name: "Model" });
+    await user.selectOptions(modelSelect, altModelId);
+    await waitFor(() => expect(putCalls()).toHaveLength(2));
+    expect(putCalls()[1]!.body).toMatchObject({
+      vendor: secondSpec.id,
+      model: altModelId,
+    });
+    expect(screen.getByRole("button", { name: new RegExp(`Router model: ${secondSpec.label} ${altModelLabel}`) })).toBeInTheDocument();
+
+    const effortSelect = within(popover).getByRole("combobox", { name: "Effort" });
+    await user.selectOptions(effortSelect, altEffort);
+    await waitFor(() => expect(putCalls()).toHaveLength(3));
+    expect(putCalls()[2]!.body).toEqual({
+      vendor: secondSpec.id,
+      model: altModelId,
+      effort: altEffort,
+    });
+
+    // 5. 保存失败回滚并在浮层内显示中文报错，不崩溃
+    act(() =>
+      localSocket().push(
+        changeOf(50, "router.settings.updated", {
+          settings: { vendor: secondSpec.id, model: altModelId, effort: altEffort, updatedAt: 5_000 },
+        }),
+      ),
+    );
+    localApi.putRouterSettings = () => ({ status: 500, body: { error: "数据库写入繁忙", code: "internal" } });
+    await user.click(within(group).getByRole("radio", { name: /^Auto/ }));
+    expect(await within(popover).findByRole("alert")).toHaveTextContent("数据库写入繁忙");
+    expect(within(group).getByRole("radio", { name: new RegExp(secondSpec.label) })).toHaveAttribute("aria-checked", "true");
+
+    // 6. 恢复正常后一键切回 Auto：清空自定义偏好（vendor/model/effort 全为 null）
+    localApi.putRouterSettings = (body) => ({
+      status: 200,
+      body: { settings: { vendor: body.vendor, model: body.model, effort: body.effort, updatedAt: 6_000 } },
+    });
+    await user.click(within(group).getByRole("radio", { name: /^Auto/ }));
+    await waitFor(() => expect(putCalls()).toHaveLength(5));
+    expect(putCalls()[4]!.body).toEqual({ vendor: null, model: null, effort: null });
+    expect(screen.getByRole("button", { name: new RegExp(`Router model: Auto ${firstPresetShort}`) })).toBeInTheDocument();
+
+    // 7. 存在未安装/未登录厂商时，点击底部 Manage providers… 关闭 Popover 并打开桌面 Settings → Providers
+    await user.click(within(popover).getByRole("button", { name: "Manage providers…" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Router model" })).toBeNull());
+    const settingsDialog = await screen.findByRole("dialog", { name: "Settings" });
+    expect(within(settingsDialog).getByRole("tab", { name: "Providers" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("连着改两次：前一次的回声在第二次请求还没回来时到达，界面不闪回前一次的值；确认后别处的改动照常跟进", async () => {
+    const { catalogs, firstSpec, secondSpec, altModelId, altModelLabel } = buildTestCatalogs();
+    const firstCat = catalogs.find((c) => c.vendor === firstSpec.id)!;
+    const secondCat = catalogs.find((c) => c.vendor === secondSpec.id)!;
+    const firstPresetShort = modelShortLabel(firstSpec.id, firstSpec.models.routerDefault.model, firstCat);
+    const secondPresetShort = modelShortLabel(secondSpec.id, secondSpec.models.routerDefault.model, secondCat);
+    const preset = { vendor: secondSpec.id, ...secondSpec.models.routerDefault };
+
+    const { localApi } = installFleet({});
+    localApi.models = () => ({ status: 200, body: { catalogs } });
+    // 每次保存都挂起，由测试决定什么时候回
+    const replies: ((updatedAt: number) => void)[] = [];
+    localApi.putRouterSettings = (body) =>
+      new Promise((resolve) => {
+        replies.push((updatedAt) => resolve({ status: 200, body: { settings: { ...body, updatedAt } } }));
+      });
+
+    const user = userEvent.setup();
+    await openRouter();
+    await user.click(await screen.findByRole("button", { name: new RegExp(`Router model: Auto ${firstPresetShort}`) }));
+    const popover = await screen.findByRole("dialog", { name: "Router model" });
+    const presetTrigger = () => screen.queryByRole("button", { name: new RegExp(`Router model: ${secondSpec.label} ${secondPresetShort}$`) });
+    const altTrigger = () => screen.queryByRole("button", { name: new RegExp(`Router model: ${secondSpec.label} ${altModelLabel}$`) });
+
+    // 第一次：选厂商，请求没回来就先显示
+    await user.click(within(popover).getByRole("radio", { name: new RegExp(secondSpec.label) }));
+    await waitFor(() => expect(replies).toHaveLength(1));
+    expect(presetTrigger()).toBeInTheDocument();
+    await act(async () => replies[0]!(1_000));
+
+    // 第二次：换模型，请求挂着时第一次的回声才到
+    await user.click(within(popover).getByRole("button", { name: /Model & effort/ }));
+    await user.selectOptions(within(popover).getByRole("combobox", { name: "Model" }), altModelId);
+    await waitFor(() => expect(replies).toHaveLength(2));
+    expect(altTrigger()).toBeInTheDocument();
+    act(() => localSocket().push(changeOf(60, "router.settings.updated", { settings: { ...preset, updatedAt: 1_000 } })));
+    expect(altTrigger()).toBeInTheDocument();
+    expect(within(popover).getByRole("combobox", { name: "Model" })).toHaveValue(altModelId);
+
+    // 第二次确认、回声到达：一直是第二次的值
+    await act(async () => replies[1]!(2_000));
+    expect(altTrigger()).toBeInTheDocument();
+    const saved = localApi.callsTo("PUT", /^\/api\/router\/settings$/)[1]!.body as Omit<RouterSettings, "updatedAt">;
+    expect(saved).toMatchObject({ vendor: secondSpec.id, model: altModelId });
+    act(() => localSocket().push(changeOf(61, "router.settings.updated", { settings: { ...saved, updatedAt: 2_000 } })));
+    expect(altTrigger()).toBeInTheDocument();
+
+    // 之后别的浏览器改回 Auto：照常跟进，不被旧的乐观值压住
+    act(() =>
+      localSocket().push(changeOf(62, "router.settings.updated", { settings: { vendor: null, model: null, effort: null, updatedAt: 3_000 } })),
+    );
+    expect(screen.getByRole("button", { name: new RegExp(`Router model: Auto ${firstPresetShort}`) })).toBeInTheDocument();
+    expect(within(popover).getByRole("radio", { name: /^Auto/ })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("手机端底部 Drawer 与窄窗防溢出守卫：顶栏按优先级优雅收起前缀绝不溢出，点击弹出 Drawer 并可跳转 #/settings/providers", async () => {
+    installViewport("mobile");
+    window.history.replaceState(null, "", "#/router");
+    const { catalogs, firstSpec, secondSpec } = buildTestCatalogs();
+    const firstCat = catalogs.find((c) => c.vendor === firstSpec.id)!;
+    const secondCat = catalogs.find((c) => c.vendor === secondSpec.id)!;
+    const firstPresetShort = modelShortLabel(firstSpec.id, firstSpec.models.routerDefault.model, firstCat);
+    const secondPresetShort = modelShortLabel(secondSpec.id, secondSpec.models.routerDefault.model, secondCat);
+
+    const { localApi } = installFleet({});
+    localApi.models = () => ({ status: 200, body: { catalogs } });
+
+    const user = userEvent.setup();
+    await openRouter();
+    const putCalls = () => localApi.callsTo("PUT", /^\/api\/router\/settings$/);
+
+    // 窄窗防溢出结构校验：header 带 min-w-0 overflow-hidden justify-between，左侧组 shrink-0，右侧模型按钮 min-w-0 max-w-full overflow-hidden + 文本 truncate
+    const heading = screen.getByRole("heading", { level: 1, name: "Router" });
+    const header = heading.closest("header")!;
+    expect(header).toHaveClass("min-w-0", "overflow-hidden", "justify-between");
+    expect(heading.parentElement).toHaveClass("min-w-0", "shrink-0");
+
+    const trigger = await screen.findByRole("button", { name: new RegExp(`Router model: Auto ${firstPresetShort}`) });
+    expect(trigger).toHaveClass("min-w-0", "max-w-full", "overflow-hidden");
+    expect(within(trigger).getByText("Auto")).toHaveClass("@max-[19rem]/chat:hidden");
+    expect(within(trigger).getByText(firstPresetShort)).toHaveClass("min-w-0", "truncate");
+
+    // 手机外壳点击触发底部 Drawer（而非桌面 Popover）
+    await user.click(trigger);
+    const drawer = await screen.findByRole("dialog", { name: "Router model" });
+    expect(drawer).toHaveAttribute("data-slot", "drawer-content");
+    const group = within(drawer).getByRole("radiogroup", { name: "Router provider" });
+    const secondRadio = within(group).getByRole("radio", { name: new RegExp(secondSpec.label) });
+    expect(secondRadio.className).toContain("pointer-coarse:min-h-11");
+
+    // 切换厂商：手动模式下顶栏厂商名前缀挂 @max-[25rem]/chat:hidden 在手机端自动收起，仅保留简短模型名防拥挤
+    await user.click(secondRadio);
+    await waitFor(() => expect(putCalls()).toHaveLength(1));
+    expect(putCalls()[0]!.body).toEqual({
+      vendor: secondSpec.id,
+      model: secondSpec.models.routerDefault.model,
+      effort: secondSpec.models.routerDefault.effort,
+    });
+    const updatedTrigger = screen.getByRole("button", {
+      name: new RegExp(`Router model: ${secondSpec.label} ${secondPresetShort}`),
+      hidden: true,
+    });
+    expect(within(updatedTrigger).getByText(secondSpec.label)).toHaveClass("@max-[25rem]/chat:hidden");
+    expect(within(updatedTrigger).getByText(secondPresetShort)).toHaveClass("min-w-0", "truncate");
+
+    // 手机端点击 Manage providers… 关闭抽屉并钻取进入 #/settings/providers
+    await user.click(within(drawer).getByRole("button", { name: "Manage providers…" }));
+    await waitFor(() => expect(window.location.hash).toBe("#/settings/providers"));
   });
 });

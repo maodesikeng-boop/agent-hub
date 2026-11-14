@@ -12,6 +12,7 @@ export * from "./limits.ts";
 export * from "./names.ts";
 export * from "./peer-transport.ts";
 export * from "./providers.ts";
+export * from "./router-model.ts";
 export * from "./router.ts";
 export * from "./schedule.ts";
 export * from "./secret-paths.ts";

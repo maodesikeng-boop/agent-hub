@@ -121,6 +121,7 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
 | 在浏览器中继续 / 打开登录页 / 打开验证页 / 提交 | Continue in browser / Open sign-in page / Open verification page / Submit |
 | 查看日志 / 收起日志 / 管理厂商… | Show log / Hide log / Manage providers… |
 | 粘贴授权码或回调网址占位 | Paste code or redirect URL… |
+| 自动默认总助模型 / 模型与思考程度（总助顶栏模型选择） | Auto / Model & effort |
 
 ## 4. 颜色
 
@@ -533,4 +534,9 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
   - 处理失败：结果位置一行，14px `CircleAlert`（`text-danger`）、人话原因（13.5px 灰，原文放 `title`）、文字按钮 `Retry`。没有 `Dismiss`。
   - 未读分隔线：打开时有没看过的简报，在最早一条上面画 `New`（12px 灰）加 1px 细线，写法同第 17 条“换新会话”的分隔线。
 - **空状态**：没有待拍板项也没有任何条目时，居中 `<KnifeAvatar size={36} className="opacity-40" />` 和 `All clear`（`text-minor text-muted-foreground`）。
+- **顶栏模型选择入口（`RouterModelPicker`）**：顶栏右边一个 `Button variant="ghost"`（第 6 条：平时没有底色、描边，不是胶囊），显示当前实际生效的模型：自动时是灰色的 `Auto` 加模型短名，指定了厂商时是灰色的厂商名加模型短名，最右一个 16px `ChevronDown`；几项之间只靠 8px 间距隔开，不用“·”“|”“/”。窄了先收前缀（主区窄于 25rem 收厂商名，窄于 19rem 连 `Auto` 也收），再窄模型短名 `truncate`，`Router` 标题不被挤、顶栏不横向溢出。打开时不加底色，箭头变前景色。
+  - **面板**：电脑外壳是 `Popover`（第 11 条，宽 280px，靠右对齐），手机外壳是底部 `Drawer`（第 10 条），里面是同一份内容。最上面是单选列表（`RadioMark`，第 9 条）：第一行 `Auto`（清掉自己选的，交给总助按各家预设挑），下面一家厂商一行，右边 13.5px 灰字是这家会用的模型短名；没登录的照列但不能选，右边写状态词（`Not signed in`），没装的不列。行高 36px，触屏 44px。点一家就存，模型和思考程度填这家的 `routerDefault` 预设。
+  - **`Model & effort` 默认收起**：只在选了具体厂商时出现，一行折叠开关（13.5px、500、灰），收起时右边是当前思考程度和 `ChevronDown`，展开后箭头转 180°、不再重复写思考程度；下面两行 `Select variant="plain"` 换这家别的模型和思考程度，改了马上存。这家只有一档思考程度时开关叫 `Model`，不出思考程度那一行。
+  - **保存**：点了先显示，请求没回来时一直显示最后选的（连着改两次不闪回前一次）；失败退回原来的值，列表下面一行 `RowError`。
+  - **`Manage providers…`**：有没装或没登录的厂商时出现在最下面（13.5px、500、灰，右边 `ChevronRight`），先关面板再去 `Settings → Providers`（手机是 `#/settings/providers`）。
 - **输入框**：复用 `<DraftComposer>`，占位 `Tell Router, or type @ to pick a project…`，手机外壳是 `Tell Router…`。向上叠盖 26px，写法同对话页。

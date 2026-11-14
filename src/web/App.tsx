@@ -4,7 +4,7 @@ import { PiecesDrawer } from "./mobile/PiecesDrawer.tsx";
 import { MobileSettings } from "./mobile/settings/MobileSettings.tsx";
 import { mobileBack } from "./mobile/back.ts";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import { AccentScope, FruitTint } from "./lib/accent-scope.tsx";
 import { Conversation } from "./components/Conversation.tsx";
@@ -52,6 +52,11 @@ export function App() {
         />
       ),
     [content === null, content?.railHasContent, content?.railOpen, railAttention, content?.avatarKey, content?.toggleRail],
+  );
+  const openManageProvidersRef = content?.openManageProviders;
+  const openLocalProviders = useCallback(
+    () => openManageProvidersRef?.(LOCAL_DEVICE),
+    [openManageProvidersRef],
   );
   // 整页的加载中、没登录、连不上只看入口本机；别的设备连不上在主区里说
   if (local.state.phase === "loading" || (route?.device !== undefined && routedDevice === undefined && !fleet.listed)) {
@@ -221,6 +226,7 @@ export function App() {
                 clientForDevice={clientForDevice}
                 onOpenConversation={openDeviceConversation}
                 onOpenWorker={openDeviceWorker}
+                onManageProviders={openLocalProviders}
               />
             ) : deviceWaiting ? (
               <>

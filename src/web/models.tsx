@@ -160,25 +160,32 @@ export function vendorOptionLabel(catalog: ModelCatalog): string {
   return status === null ? catalog.label : `${catalog.label} (${status})`;
 }
 
+/** 打开模型选择面板时调：有不能用的厂商就在后台重问那几家，全可用时按冷却间隔后台重拉名单。 */
+export function useRefreshModelCatalogs(): () => void {
+  const enabled = useContext(CatalogEnabledContext);
+  const client = useClient();
+  const qc = useHubQueryClient();
+  const catalogs = useModelCatalogs();
+  const anyUnusable = catalogs.some((c) => !isSelectable(c.availability));
+  return () => {
+    if (!enabled) return;
+    if (anyUnusable) refreshUnusableCatalogs(qc, client);
+    else revalidateCatalogs(qc, client);
+  };
+}
+
 /**
  * 厂商下拉的选项：这台设备上没装的不列，但现在选着的那家总在（没装也显示，标状态词）。
  * refreshUnusable：打开下拉时调，有不能用的就在后台重问那几家，全可用时按冷却间隔后台重拉名单，下拉不等。
  */
 export function useVendorChoices(current: AgentVendor): { options: readonly ModelCatalog[]; refreshUnusable: () => void } {
-  const enabled = useContext(CatalogEnabledContext);
-  const client = useClient();
-  const qc = useHubQueryClient();
   const catalogs = useModelCatalogs();
+  const refreshUnusable = useRefreshModelCatalogs();
   // 老服务端的名单里可能根本没有选着的那家：用打包的补上（状态 unknown）
   const options = catalogs.some((c) => c.vendor === current) ? catalogs : [...catalogs, bundledModelCatalog(current)];
   const listed = options.filter((c) => isListed(c.availability) || c.vendor === current);
-  const anyUnusable = catalogs.some((c) => !isSelectable(c.availability));
   return {
     options: listed,
-    refreshUnusable: () => {
-      if (!enabled) return;
-      if (anyUnusable) refreshUnusableCatalogs(qc, client);
-      else revalidateCatalogs(qc, client);
-    },
+    refreshUnusable,
   };
 }

@@ -14,6 +14,7 @@ import {
 } from "react";
 import {
   ROUTER_STREAM_LIVE_MAX,
+  defaultRouterSettings,
   type Attachment,
   type ConversationId,
   type PostRouterCommandResponse,
@@ -48,6 +49,7 @@ import { FileDropZone } from "./FileDropZone.tsx";
 import { KnifeAvatar } from "./KnifeAvatar.tsx";
 import { RIGHT_RAIL_VISIBLE_ROWS } from "./RightRail.tsx";
 import { RouterDecisionCard } from "./RouterDecisionCard.tsx";
+import { RouterModelPicker } from "./RouterModelPicker.tsx";
 import { RouterStream } from "./RouterStream.tsx";
 
 const ROUTER_COMMAND_MUTATION_KEY = ["router-command"] as const;
@@ -56,6 +58,7 @@ const CHIP_REMOVE_CLASS =
   "touch-target flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full text-muted-foreground transition-colors outline-none hover:bg-sidebar-active hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50";
 
 const NO_PENDING_TURNS: readonly RouterTurnEntry[] = [];
+const DEFAULT_ROUTER_SETTINGS = defaultRouterSettings();
 
 interface RouterCommandVariables {
   clientId: string;
@@ -252,6 +255,7 @@ export function RouterWorkbench({
   clientForDevice,
   onOpenConversation,
   onOpenWorker,
+  onManageProviders,
 }: {
   leading?: ReactNode;
   notices?: ReactNode;
@@ -263,10 +267,15 @@ export function RouterWorkbench({
   clientForDevice: (deviceKey: string) => HubClient;
   onOpenConversation: (deviceKey: string, conversationId: ConversationId) => void;
   onOpenWorker: (deviceKey: string, conversationId: ConversationId) => void;
+  onManageProviders?: () => void;
 }) {
   const qc = useHubQueryClient();
   const mobile = useMediaQuery(MOBILE_SHELL_QUERY);
   const resolvedSelfId = selfId ?? undefined;
+  const localSettings = useMemo(() => {
+    const localDevice = devices.find((d) => d.key === LOCAL_DEVICE) ?? devices[0];
+    return localDevice?.state.router.settings ?? DEFAULT_ROUTER_SETTINGS;
+  }, [devices]);
 
   // 待拍板乐观隐藏、备注草稿、错误回滚与当前选中展开项（随活跃集合裁剪，严格有界）
   const [hiddenDecisionTokens, setHiddenDecisionTokens] = useState<Readonly<Record<string, string>>>({});
@@ -596,11 +605,18 @@ export function RouterWorkbench({
     <FileDropZone className="flex min-h-0 flex-1 flex-col" onFiles={staging.add}>
       <header
         data-window-drag
-        className="flex h-16 min-w-0 shrink-0 items-center gap-2.5 overflow-hidden border-b border-line px-4 md:px-6"
+        className="flex h-16 min-w-0 shrink-0 items-center justify-between gap-3 overflow-hidden border-b border-line pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]"
       >
-        {leading}
-        <KnifeAvatar size={28} />
-        <h1 className="min-w-0 truncate text-title font-semibold text-foreground">Router</h1>
+        <div className="flex min-w-0 shrink-0 items-center gap-2.5">
+          {leading}
+          <KnifeAvatar size={28} />
+          <h1 className="truncate text-title font-semibold text-foreground">Router</h1>
+        </div>
+        <RouterModelPicker
+          settings={localSettings}
+          mobile={mobile}
+          onManageProviders={onManageProviders}
+        />
       </header>
 
       {notices}
