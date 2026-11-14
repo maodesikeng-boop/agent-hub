@@ -546,7 +546,7 @@ export interface RouterAgentPlan {
 
 一套模型和一个视图覆盖 `claude`、`agy`、`codex`、`pi`、`deepseek`、`cursor`，没有任何一处按厂商分支：
 
-- 总助用哪家、哪个模型由 `resolveRouterModel` 按各家 `spec.ts` 里声明的快模型预设决定（`src/daemon/router/model-resolver.ts`）。这次不动。
+- 总助用哪家、哪个模型由 `resolveRouterModel` 按各家 `spec.ts` 里声明的快模型预设决定（`src/shared/router-model.ts`，守护进程从 `src/daemon/router/model-resolver.ts` 引）。这次不动。
 - 6 家的回复都经驱动层归一成同一种 `agent.text` 事件（`src/shared/driver.ts:200-204`），`dispatcher` 收到的是纯文本，写进 `plan.reply`，界面用同一个 `Markdown` 组件画。
 - 时间流的数据里没有厂商特有的字段。`RouterCommandRecord` 上的 `vendor`、`model`、`effort` 不显示，时间流里不出现厂商名。
 - 失败原因的人话化走 `describeFailure`，各家的错误特征在 `src/shared/vendors.ts`，不在界面里。
