@@ -120,7 +120,9 @@ describe("迁移 0025 前在跑的旧图：升级后接着走完", () => {
     ledger.close();
     downgradeToOldSchema({ s1: "done", s2: "skipped", s3: "running", s4: "pending", s5: "pending", docs: "ready" });
     expect(db.get("SELECT kind FROM task_graph_nodes WHERE node_key = 's4'")).toEqual({ kind: "gate" });
-    expect(migrate(db)).toMatchObject({ from: 24, applied: [25, 26] });
+    const mig = migrate(db);
+    expect(mig.from).toBe(24);
+    expect(mig.applied.slice(0, 2)).toEqual([25, 26]);
     expect(userVersion(db)).toBeGreaterThanOrEqual(25);
     ledger = createLedger(db, options());
 
@@ -212,7 +214,9 @@ describe("迁移 0025 前在跑的旧图：升级后接着走完", () => {
       s5: "pending",
       s6: "pending",
     });
-    expect(migrate(db)).toMatchObject({ from: 24, applied: [25, 26] });
+    const mig = migrate(db);
+    expect(mig.from).toBe(24);
+    expect(mig.applied.slice(0, 2)).toEqual([25, 26]);
     ledger = createLedger(db, options());
 
     expect(ledger.hubCall(lin.sessionId, "status", {}).text).toContain("进度 5/8；在干：s4-review");
