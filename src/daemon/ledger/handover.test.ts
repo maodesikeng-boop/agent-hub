@@ -1411,6 +1411,84 @@ describe("给已有项目经理换厂商", () => {
     expect(ledger.sessionPreamble(g3)).toContain(`## 交接\n\n${HANDOVER_STALE_HINT}\n\n刚好写好的现成交接`);
   });
 
+  it("审查：有本代起点后 A→B→C→A，每段中途说话 + Worker 汇报：整份只有一个起点摘要与一个正文段，不嵌套上次的继承说明，正文逐段累加", () => {
+    const { g2 } = renewNow("本代起点摘要X");
+    const q1 = post("本代第一句");
+    turn(g2, [q1], ["本代第一句回复"]);
+    const header = "## 本代完整对话与 Worker 汇报记录\n\n";
+    const anchorHeader = "## 本代起点摘要";
+    const occurrences = (text: string, needle: string) => text.split(needle).length - 1;
+    const latest = () => sessions().at(-1)!.id;
+
+    // A(claude) → B(codex)：B 首轮读到继承说明后说一句，并收到一份 Worker 汇报
+    ledger.editPersona(pmId, { vendor: "codex" }, { kind: "user" });
+    const b = latest();
+    const atB = ledger.sessionPreamble(b)!;
+    const q2 = post("在 B 说的话");
+    turn(b, [q2], ["B 的回复"]);
+    const r = report(b, "【Worker #7（B 期间）的汇报】\n\n=== 汇报 ===\n状态: 做完了\n摘要: B 期间全文\n=== 汇报结束 ===", 7);
+    turn(b, [r], ["B 收到 7"]);
+    expect(ledger.sessionPreamble(b)).toBeNull();
+
+    // B → C(agy)：不说话直接 C → A(claude)
+    ledger.editPersona(pmId, { vendor: "agy" }, { kind: "user" });
+    const c = latest();
+    const atC = ledger.sessionPreamble(c)!;
+    ledger.editPersona(pmId, { vendor: "claude" }, { kind: "user" });
+    const a2 = latest();
+    const atA = ledger.sessionPreamble(a2)!;
+
+    for (const p of [atB, atC, atA]) {
+      expect(occurrences(p, header)).toBe(1);
+      expect(occurrences(p, anchorHeader)).toBe(1);
+      expect(occurrences(p, "本代起点摘要X")).toBe(1);
+      expect(occurrences(p, "【系统】你还是同一个项目经理")).toBe(1);
+      expect(occurrences(p, "用户：本代第一句")).toBe(1);
+    }
+    // C 与 A 的本代正文逐字节一致（中间的 C 没说话），且是 B 的正文 + B 期间新增的消息
+    const bodyOf = (p: string) => p.split(header)[1]!;
+    expect(bodyOf(atA)).toBe(bodyOf(atC));
+    expect(bodyOf(atC).startsWith(bodyOf(atB))).toBe(true);
+    expect(bodyOf(atC).slice(bodyOf(atB).length)).toBe(
+      "\n\n用户：在 B 说的话\n\n你：B 的回复\n\n【Worker #7（B 期间）的汇报】\n\n=== 汇报 ===\n状态: 做完了\n摘要: B 期间全文\n=== 汇报结束 ===\n\n你：B 收到 7",
+    );
+    // 起点仍是那次真实换代，三次切厂商没有在 handovers 留下可当起点的文本
+    expect(rows().filter((h) => h.method === "vendor_switch")).toHaveLength(3);
+    expect(rows().filter((h) => h.method === "vendor_switch").every((h) => h.text === null && h.cut_message_id === null)).toBe(true);
+    expect(messages().filter((m) => systemEventOf(m)?.event === "session.renewed")).toHaveLength(1);
+  });
+
+  it("审查：切厂商后在新厂商上聊满门槛真自动换代：起点推进到新摘要，切厂商前的本代对话不再重复带入", () => {
+    const pre = post("切厂商前的本代对话");
+    turn(firstSession, [pre], ["切厂商前的回复"]);
+    ledger.editPersona(pmId, { vendor: "codex" }, { kind: "user" });
+    const b = sessions().at(-1)!.id;
+    expect(ledger.sessionPreamble(b)).toContain("用户：切厂商前的本代对话");
+    // B 首轮读到继承说明，聊到门槛进入自动换代
+    reachThreshold(b, "B 上聊满", "B 回复");
+    const job = ledger.claimHandover()!;
+    expect(job.session.id).toBe(b);
+    // B（不是 A）写交接：B 的上下文里有切厂商前的本代全部对话，摘要覆盖整个本代
+    forkAndWrite(job, "覆盖整个本代的新摘要（含切厂商前的对话）");
+    const g3 = sessions().at(-1)!.id;
+    expect(createSessionStore(db).get(g3)).toMatchObject({ vendor: "codex" });
+    const autoRow = rows().at(-1)!;
+    expect(autoRow).toMatchObject({ status: "switched", auto: 1, to_session_id: g3 });
+    expect(autoRow.cut_message_id).toBeGreaterThan(pre);
+
+    const q = post("新一代的话");
+    turn(g3, [q], ["新一代回复"]);
+    ledger.editPersona(pmId, { vendor: "claude" }, { kind: "user" });
+    const p = ledger.sessionPreamble(sessions().at(-1)!.id)!;
+    expect(p).toContain("覆盖整个本代的新摘要（含切厂商前的对话）");
+    expect(p).not.toContain("切厂商前的本代对话");
+    expect(p).not.toContain("用户：B 上聊满");
+    expect(p).toContain("用户：新一代的话\n\n你：新一代回复");
+    // 前序会话路径只从新一代起点 g3 起算，不带切点前的 A、B
+    expect(p).toContain("本代前序会话的原始记录");
+    expect(p.match(/\/records\/old-session\.jsonl/g)).toHaveLength(1);
+  });
+
   it("跑满一个月量级性能基准（30,000 条消息 + 300 个已收工 Worker）：切换与首轮上下文组装毫秒级完成且严格有界", () => {
     const projRow = db.get<{ id: number }>(
       "INSERT INTO projects (name, pm_id, conversation_id, created_at, updated_at) VALUES ('perf-proj', ?, ?, ?, ?) RETURNING id",
