@@ -679,7 +679,7 @@ describe("厂商、模型、思考程度（资料页的 Agent 一栏）", () => 
     expect(sessionRow(lin.sessionId)).toMatchObject({ model: null, effort: null });
   });
 
-  it("资料页换厂商：空闲时当场秒切（不沿用旧厂商的 model/effort）；在忙时登记 direct 交接、期间可继续改新厂商设置，改回旧厂商或撤销时标 abandoned", () => {
+  it("资料页换厂商：空闲时当场秒切（不沿用旧厂商的 model/effort、不插 session.renewed）；在忙时登记 vendor_switch、期间可继续改新厂商设置，改回旧厂商或撤销时标 abandoned", () => {
     let wakes = 0;
     ledger = createLedger(db, options({ onHandoverClaimable: () => wakes++ }));
     ledger.editPersona(lin.pmId, { model: "opus", effort: "max" }, { kind: "user" });
@@ -713,7 +713,7 @@ describe("厂商、模型、思考程度（资料页的 Agent 一栏）", () => 
     expect(sessionRow(lin.sessionId)).toMatchObject({ vendor: "claude", model: "opus", effort: "max" });
     expect(db.get("SELECT status, method, auto, to_vendor, to_model, to_effort FROM handovers WHERE conversation_id = ?", lin.conversationId)).toEqual({
       status: "ready",
-      method: "direct",
+      method: "vendor_switch",
       auto: 0,
       to_vendor: "codex",
       to_model: null,
@@ -751,14 +751,14 @@ describe("厂商、模型、思考程度（资料页的 Agent 一栏）", () => 
     });
     expect(db.get("SELECT status, method, auto, to_vendor, to_model, to_effort FROM handovers WHERE conversation_id = ?", lin.conversationId)).toEqual({
       status: "ready",
-      method: "direct",
+      method: "vendor_switch",
       auto: 0,
       to_vendor: "codex",
       to_model: "gpt-6-luna",
       to_effort: "high",
     });
 
-    // 改回旧厂商（或撤销）：direct 交接行直接标 abandoned，pms 与旧会话同步更新
+    // 改回旧厂商（或撤销）：vendor_switch 行直接标 abandoned，pms 与旧会话同步更新
     const back = ledger.editPersona(lin.pmId, { vendor: "claude", model: "haiku", effort: "low" }, { kind: "user" });
     expect(back.persona).toMatchObject({
       vendor: "claude",
@@ -774,7 +774,7 @@ describe("厂商、模型、思考程度（资料页的 Agent 一栏）", () => 
     expect(sessionRow(lin.sessionId)).toMatchObject({ vendor: "claude", model: "haiku", effort: "low" });
     expect(db.get("SELECT status, method, failure_reason, to_vendor, to_model, to_effort FROM handovers WHERE conversation_id = ?", lin.conversationId)).toEqual({
       status: "abandoned",
-      method: "direct",
+      method: "vendor_switch",
       failure_reason: "user_message",
       to_vendor: null,
       to_model: null,
@@ -796,6 +796,7 @@ describe("厂商、模型、思考程度（资料页的 Agent 一栏）", () => 
       default_model: null,
       effort: null,
     });
+    expect(messagesIn(lin.conversationId).some((m) => (m.meta as { event?: string } | null)?.event === "session.renewed")).toBe(false);
   });
 
   it("老库里不合规的模型名不锁死别的保存：改性格设定、工作方式、只改思考程度都行，模型不动；改模型时才查", () => {

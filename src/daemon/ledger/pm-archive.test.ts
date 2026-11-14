@@ -389,6 +389,11 @@ describe("purgeExpiredArchivedPms（7 天到期彻底清理）", () => {
       lin.sessionId,
     );
     db.run(
+      "INSERT INTO session_preamble_seen (session_id, seen_at) VALUES (?, ?)",
+      lin.sessionId,
+      now,
+    );
+    db.run(
       "INSERT INTO worker_background_waits (session_id, turn_start, background, created_at) VALUES (?, 1, 1, ?)",
       workerSessionId,
       now,
@@ -475,6 +480,7 @@ describe("purgeExpiredArchivedPms（7 天到期彻底清理）", () => {
     expect(count("hub_calls", "session_id IN (?, ?)", lin.sessionId, workerSessionId)).toBe(0);
     expect(count("session_steps", "session_id IN (?, ?)", lin.sessionId, workerSessionId)).toBe(0);
     expect(count("session_persona_seen", "session_id IN (?, ?)", lin.sessionId, workerSessionId)).toBe(0);
+    expect(count("session_preamble_seen", "session_id IN (?, ?)", lin.sessionId, workerSessionId)).toBe(0);
     expect(count("worker_background_waits", "session_id = ?", workerSessionId)).toBe(0);
     const remainingActions = listActions(db);
     expect(

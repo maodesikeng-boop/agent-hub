@@ -135,6 +135,7 @@ export function createLedgerWorkerRetention(ctx: LedgerContext, files: Pick<Ledg
       { table: "worker_background_waits", where: `session_id IN ${placeholders(sessionIds)}`, params: sessionIds },
       { table: "worker_turn_timeouts", where: "worker_id = ?", params: [c.id] },
       { table: "session_persona_seen", where: `session_id IN ${placeholders(sessionIds)}`, params: sessionIds },
+      { table: "session_preamble_seen", where: `session_id IN ${placeholders(sessionIds)}`, params: sessionIds },
     ];
     let rows = 0;
     let left = budget;

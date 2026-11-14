@@ -1209,7 +1209,8 @@ describe("资料页：Agent 一组（厂商、模型、思考程度）", () => {
     expect(await within(agent).findByText("Switching to Codex…")).toBeInTheDocument();
     expect(combo(page, "Provider")).toBeDisabled();
     expect(combo(page, "Model")).toBeEnabled();
-    expect(within(sessionGroup).getByRole("button", { name: "Handing off…" })).toBeDisabled();
+    expect(within(sessionGroup).getByRole("button", { name: "Start…" })).toBeDisabled();
+    expect(within(sessionGroup).queryByRole("button", { name: "Handing off…" })).not.toBeInTheDocument();
 
     // 换厂商失败回退：服务端推 pm.updated，重新拉 persona 回到 claude 且 switchingToVendor 为 null
     view = makePersonaView({ pmId: 1, vendor: "claude", model: "opus", effort: "high", switchingToVendor: null });

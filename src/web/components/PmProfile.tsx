@@ -483,7 +483,17 @@ function ArchiveStatusGroup({ pmId, archivedAt }: { pmId: number; archivedAt: nu
  * “会话”一组：开新会话、归档项目经理。点了先确认；确认后项目经理先写交接，写完换一个新会话（ledger/handover.ts）。
  * renewing：在换（交接请求还没结果），按钮不能点。对话太长时系统也会自动换（同一套，聊天里只多一条分隔线）。
  */
-function RenewSessionGroup({ pmId, renewing, onArchived }: { pmId: number; renewing: boolean; onArchived: () => void }) {
+function RenewSessionGroup({
+  pmId,
+  renewing,
+  disabled = false,
+  onArchived,
+}: {
+  pmId: number;
+  renewing: boolean;
+  disabled?: boolean;
+  onArchived: () => void;
+}) {
   const client = useClient();
   const [confirming, setConfirming] = useState(false);
   const [sending, setSending] = useState(false);
@@ -522,7 +532,7 @@ function RenewSessionGroup({ pmId, renewing, onArchived }: { pmId: number; renew
       {/* 行名说是什么，按钮说做什么（不重复）；“…”表示点了还要确认。在换的时候是状态，用英文 */}
       <SettingsRow label="New session" detail="The project manager writes a handoff first. Chat history stays" error={error}>
         {() => (
-          <Button variant="outline" disabled={busy} onClick={() => setConfirming(true)}>
+          <Button variant="outline" disabled={busy || disabled} onClick={() => setConfirming(true)}>
             {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
             {busy ? "Handing off…" : "Start…"}
           </Button>
@@ -635,7 +645,7 @@ export function PmProfile({
             />
           )}
           {load.phase === "ready" && pm.archivedAt == null && (
-            <RenewSessionGroup pmId={pm.id} renewing={renewing || (load.phase === "ready" && load.persona.switchingToVendor != null)} onArchived={onBack} />
+            <RenewSessionGroup pmId={pm.id} renewing={renewing} disabled={load.persona.switchingToVendor != null} onArchived={onBack} />
           )}
         </div>
       </div>

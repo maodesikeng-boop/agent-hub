@@ -123,6 +123,12 @@ export const AUTO_RENEW_MAX_ATTEMPTS = 3;
 export const AUTO_RENEW_RETRY_BACKOFF_MS = 10 * 60_000;
 /** PersonaView 里最多带几条修改记录。 */
 export const PERSONA_CHANGES_LIMIT = 50;
+/** 跨厂商切换时，本代消息与 Worker 汇报回放区的最大字符预算（String.length，24 万字保底防爆窗）。 */
+export const VENDOR_SWITCH_CONTEXT_MAX_CHARS = 240_000;
+/** 单次重建本代上下文最多倒序扫描的非工具 messages 行数上限。 */
+export const VENDOR_SWITCH_MESSAGE_SCAN_LIMIT = 4_000;
+/** 跨厂商切换提示中最多附带的本代前序旧会话原始记录条数。 */
+export const VENDOR_SWITCH_TRANSCRIPTS_MAX = 5;
 
 // ---- M3：Worker ----
 

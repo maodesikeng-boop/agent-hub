@@ -737,6 +737,7 @@ export function createLedgerPersona(
           db.run(`DELETE FROM session_steps WHERE session_id IN ${inList(sessionIds)}`);
           db.run(`DELETE FROM worker_background_waits WHERE session_id IN ${inList(sessionIds)}`);
           db.run(`DELETE FROM session_persona_seen WHERE session_id IN ${inList(sessionIds)}`);
+          db.run(`DELETE FROM session_preamble_seen WHERE session_id IN ${inList(sessionIds)}`);
           db.run(`DELETE FROM hub_calls WHERE session_id IN ${inList(sessionIds)}`);
         }
         if (conversationIds.length > 0 || sessionIds.length > 0) {
