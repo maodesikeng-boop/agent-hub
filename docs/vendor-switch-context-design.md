@@ -1,6 +1,6 @@
 # 切换厂商直接切对话、不写交接（方案）
 
-> 状态：设计方案（任务图 #14 第 1 步 `design`，本步只产出文档，不改业务代码）
+> 状态：已拍板落地（定案：保底字数上限翻倍调高至 `240,000` 字，其余按方案执行）
 > 范围：项目经理（PM）跨厂商切换上下文重建、与 240K 自动换代协同、聊天流与资料页状态展示，以及总助（Router）跨厂商切换核查；覆盖全部 6 家已接入厂商（`claude, agy, codex, pi, deepseek, cursor`）。
 
 ## 0. 一页结论
@@ -11,7 +11,7 @@
   - 发生过真实换代（满 `240K` 自动换代或用户手动点 `New session`）的 PM：只带**那次换代留下的摘要底座 + 换代切点之后的全部本代消息与 Worker 汇报全文**，彻底砍掉“跑去老切点之前重复挖 3 万字陈年旧话”的旧逻辑；
   - 末尾实时附上当前名下**未完结任务图最新状态**（弥补跨厂丢失的工具输出）与本代可读旧会话原始记录路径。
 - **连续来回切厂商（A → B → C → A）100% 幂等无套娃**：每次切换都从 SQLite 账本的“本代起点”干净重建同一份本代上下文，不把上一次切换的开场包再套一层，聊天流里也不再冒出假的/陈旧的 `Handed off to a new session ›` 折叠卡。
-- **窗口保底与缓存稳定**：新增 `VENDOR_SWITCH_CONTEXT_MAX_CHARS = 120_000` 保底上限（守住 `128K` 最小主力窗口首轮不报错）；首轮注入后永久固化在原厂会话第 1 轮历史中，第 2 轮起 `sessionPreamble` `O(1)` 返回 `null`，前缀缓存命中率稳定在 90%～99%。
+- **窗口保底与缓存稳定**：新增 `VENDOR_SWITCH_CONTEXT_MAX_CHARS = 240_000` 保底上限（按用户拍板定案调高至 24 万字，覆盖满 `240K` 自动换代前的完整一代纯对话与汇报零截断，同时守住首轮上限防极端异常爆窗）；首轮注入后永久固化在原厂会话第 1 轮历史中，第 2 轮起 `sessionPreamble` `O(1)` 返回 `null`，前缀缓存命中率稳定在 90%～99%。
 
 ---
 
@@ -320,11 +320,11 @@ interface GenerationAnchor {
 
 | 常量名 | 值 | 用途说明 |
 | --- | --- | --- |
-| `VENDOR_SWITCH_CONTEXT_MAX_CHARS` | `120_000` | 跨厂商切换时，本代消息与 Worker 汇报回放区的最大字符预算（`String.length`）。99% 日常会话全量无损带入；极端超长本代保留离当前最近的 12 万字（本代起点摘要另计不裁，自身仅约 2,000 字），确保切入 `128K` 窗口厂商首轮也绝不超限报错。 |
-| `VENDOR_SWITCH_MESSAGE_SCAN_LIMIT` | `2_000` | 单次重建本代上下文最多倒序扫描的 `messages` 行数硬护栏（防极端异常高频短消息无界扫描）。 |
+| `VENDOR_SWITCH_CONTEXT_MAX_CHARS` | `240_000` | 跨厂商切换时，本代消息与 Worker 汇报回放区的最大字符预算（`String.length`）。日常整代全量无损带入；极端超长本代保留离当前最近的 24 万字（本代起点摘要另计不裁，自身仅约 2,000 字），防止极端单代爆窗报错。 |
+| `VENDOR_SWITCH_MESSAGE_SCAN_LIMIT` | `4_000` | 单次重建本代上下文最多倒序扫描的非工具 `messages` 行数硬护栏（防极端异常高频短消息无界扫描）。 |
 | `VENDOR_SWITCH_TRANSCRIPTS_MAX` | `5` | 跨厂商切换提示中最多附带的本代前序可读旧会话 `.jsonl` 路径个数。 |
 
-**UTF-16 代理对安全截断**：当单条超长消息跨过 `120,000` 字边界需截取后半截时，若切点恰好落在 UTF-16 低位代理项（`0xDC00..0xDFFF`）上，切点向后移动 1 个码元对齐完整 Unicode 码点，杜绝产生孤立代理项（lone surrogate）导致 JSON 序列化或模型 API 400 报错。
+**UTF-16 代理对安全截断**：当单条超长消息跨过 `240,000` 字边界需截取后半截时，若切点恰好落在 UTF-16 低位代理项（`0xDC00..0xDFFF`）上，切点向后移动 1 个码元对齐完整 Unicode 码点，杜绝产生孤立代理项（lone surrogate）导致 JSON 序列化或模型 API 400 报错。
 
 ### 5.2 SQL 查询有界性（按跑满一个月：300 个已收工 Worker、3 万条消息基准核算）
 
@@ -336,7 +336,7 @@ interface GenerationAnchor {
    - **查本代起点 `GenerationAnchor`**：走 `handovers_conversation (conversation_id, id DESC)` 索引，`LIMIT 1`，耗时 **`< 0.01 ms`**；
    - **倒序流式取本代消息**：复用现有复合索引 `messages_conversation (conversation_id, id)`，按 `WHERE conversation_id = ? AND id > ? AND id < ? ORDER BY id DESC LIMIT 100` 分页倒序迭代：
      - 正常一代（约 50～200 条消息）：1～2 页索引范围扫描即遇到 `anchor.cutMessageId` 自然终止，完全不触碰库里其余 29,800 条历史消息，**耗时 `< 0.5 ms`**；
-     - 极端超长一代：累计入选文本达到 `VENDOR_SWITCH_CONTEXT_MAX_CHARS`（`120,000` 字）或扫描行数达 `VENDOR_SWITCH_MESSAGE_SCAN_LIMIT`（`2,000` 行）立即 `break` 停止拉页，单次内存峰值严格有界（`< 2 MB`）。
+     - 极端超长一代：累计入选文本达到 `VENDOR_SWITCH_CONTEXT_MAX_CHARS`（`240,000` 字）或扫描行数达 `VENDOR_SWITCH_MESSAGE_SCAN_LIMIT`（`4,000` 行）立即 `break` 停止拉页，单次内存峰值严格有界（`< 3 MB`）。
 
 ### 5.3 第 2 轮起前缀缓存（Prompt Cache）命中稳定性
 
@@ -362,7 +362,7 @@ interface GenerationAnchor {
 | 必查项 | 本方案落实情况 |
 | --- | --- |
 | **1. 失效** | 跨厂商切换不缓存静态 `preamble` 副本，首轮发送前实时从 SQLite 读取最新本代消息与实时活跃任务图；PM 归档到期清理时同步删除 `session_preamble_seen` 记录。 |
-| **2. 上限** | 文本预算 `VENDOR_SWITCH_CONTEXT_MAX_CHARS = 120_000`、扫描护栏 `VENDOR_SWITCH_MESSAGE_SCAN_LIMIT = 2_000`、路径条数 `VENDOR_SWITCH_TRANSCRIPTS_MAX = 5`、任务图预算 `HANDOVER_GRAPHS_MAX_CHARS = 8,000` 全部集中定义在 `src/shared/limits.ts`。 |
+| **2. 上限** | 文本预算 `VENDOR_SWITCH_CONTEXT_MAX_CHARS = 240_000`、扫描护栏 `VENDOR_SWITCH_MESSAGE_SCAN_LIMIT = 4_000`、路径条数 `VENDOR_SWITCH_TRANSCRIPTS_MAX = 5`、任务图预算 `HANDOVER_GRAPHS_MAX_CHARS = 8,000` 全部集中定义在 `src/shared/limits.ts`。 |
 | **3. 前端引用稳定** | 不新增前端状态字段或列表；`selectors.ts` 的 `placeHandovers` 因跨厂商切换不再产生 `session.renewed` 行，减少无意义的数组重排复制，已有 `WeakMap` 缓存保持原样稳定。 |
 | **4. 验证指标** | 在实现步单测中构造 30,000 条历史消息 + 300 个已收工 Worker 数据集，实测并断言切换与首轮 `sessionPreamble` 耗时及返回字符上限。 |
 
@@ -391,7 +391,7 @@ interface GenerationAnchor {
 3. **A → B → C → A 连续来回切三次（含中途说话与不说话）**：每次 `sessionPreamble` 产出的本代对话主体无套娃、无重复头部、不混入 `persona.changed` 噪音；中途未说话跳过中间厂商时，仍保留本代前序可读厂商 `.jsonl` 路径。
 4. **Worker 汇报全文保留**：覆盖已唤醒 PM 的汇报、任务图 `confirm` 检查点静默汇报、以及切换瞬间处于 `queued` 待发的汇报，新厂商拿到的均为八栏完整汇报原文而非一行目录。
 5. **6 家厂商全矩阵可移植性**：从 `claude / codex / pi` 切出时附 `.jsonl` 路径；从 `agy / deepseek / cursor` 切出时不塞不可读文件路径。
-6. **超长本代窗口保底截断**：本代消息总长超过 `VENDOR_SWITCH_CONTEXT_MAX_CHARS`（含边界处带 emoji 代理对），保留本代起点摘要 + 最新 12 万字完整尾部，首部带省略提示且无孤立代理项。
+6. **超长本代窗口保底截断**：本代消息总长超过 `VENDOR_SWITCH_CONTEXT_MAX_CHARS`（含边界处带 emoji 代理对），保留本代起点摘要 + 最新 24 万字完整尾部，首部带省略提示且无孤立代理项。
 7. **240K 自动换代切点不被污染**：切厂商后继续聊到 `240K` 触发自动换代，自动换代正常 fork 当前会话写出新摘要并推进 `GenerationAnchor`；切厂商不影响 `attemptsOf` 重试计数。
 8. **忙碌期切厂商、中途改参、撤销与碰撞**：旧会话 `working` / `backgroundTasks > 0` / 在途后台写交接时切厂商，`switchingToVendor` 状态、中途 `Undo` 取消、当轮结束（含报错结束）自动切换均准确闭环。
 9. **第 2 轮起 `sessionPreamble` 恒返 `null` 与迁移幂等**：首轮 `message.processing { preamble: true }` 后 `session_preamble_seen` 落库，重启后也不重塞；`0027` 从 `0026` 升级及回退 `user_version = 8` 重跑均幂等通过。

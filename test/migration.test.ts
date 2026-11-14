@@ -1250,7 +1250,13 @@ describe("0013_handovers：从 0012 的库升级", () => {
     expect(db.all("SELECT * FROM handovers")).toEqual([]);
     expect(
       db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'handovers' AND name NOT LIKE 'sqlite_%' ORDER BY name"),
-    ).toEqual([{ name: "handovers_active" }, { name: "handovers_from_session" }, { name: "handovers_uncleaned" }]);
+    ).toEqual([
+      { name: "handovers_active" },
+      { name: "handovers_conversation" },
+      { name: "handovers_from_session" },
+      { name: "handovers_to_session" },
+      { name: "handovers_uncleaned" },
+    ]);
     db.exec("PRAGMA user_version = 12");
     expect(() => migrate(db, migrationsDir)).not.toThrow();
     expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
@@ -1954,5 +1960,76 @@ describe("0026_task_graph_auto_dispatch：补齐图目标与步骤自动开工�
       ).lastInsertRowid,
     );
     expect(nextGid).toBe(301);
+  });
+});
+
+describe("0027_vendor_switch：从 0026 升级与幂等回退验证", () => {
+  it("建好 session_preamble_seen 与 handovers 索引，自动回填存量已读会话，回退 user_version = 8 / 26 重复迁移零报错零丢失", () => {
+    const db = m3Db();
+    migrate(db, migrationsUpTo(26));
+    expect(userVersion(db)).toBe(26);
+
+    // 准备 3 个 generation > 1 的会话：
+    // sDone：has_completed_turn = 1（应回填）
+    // sSeenMsg：has_completed_turn = 0，但 session.renewed 已标 seen: true（应回填）
+    // sUnread：刚切换尚未读过（不应回填）
+    const insertGenSession = (gen: number, done: number): number =>
+      Number(
+        db.run(
+          `INSERT INTO agent_sessions (role, conversation_id, pm_id, vendor, vendor_session_id, cwd, generation, status, has_completed_turn, created_at, updated_at)
+           VALUES ('pm', 1, 1, 'codex', ?, '/tmp', ?, 'idle', ?, 50, 60)`,
+          `uuid-${gen}`,
+          gen,
+          done,
+        ).lastInsertRowid,
+      );
+    const sDone = insertGenSession(2, 1);
+    const sSeenMsg = insertGenSession(3, 0);
+    const sUnread = insertGenSession(4, 0);
+    db.run(
+      `INSERT INTO messages (conversation_id, sender, kind, text, meta, dedupe_key, created_at, updated_at)
+       VALUES (1, 'system', 'text', '旧摘要', ?, 'sys:seen', 65, 70)`,
+      JSON.stringify({ event: "session.renewed", sessionId: sSeenMsg, fromSessionId: sDone, seen: true }),
+    );
+    db.run(
+      `INSERT INTO messages (conversation_id, sender, kind, text, meta, dedupe_key, created_at, updated_at)
+       VALUES (1, 'system', 'text', '未读摘要', ?, 'sys:unseen', 75, 80)`,
+      JSON.stringify({ event: "session.renewed", sessionId: sUnread, fromSessionId: sSeenMsg }),
+    );
+
+    expect(migrate(db, migrationsUpTo(27))).toMatchObject({ from: 26, to: 27, applied: [27] });
+    expect(db.all("SELECT session_id, seen_at FROM session_preamble_seen ORDER BY session_id")).toEqual([
+      { session_id: sDone, seen_at: 60 },
+      { session_id: sSeenMsg, seen_at: 70 },
+    ]);
+
+    // 查询计划验证：to_session_id 与 (conversation_id, id DESC) 均走索引
+    const planToSession = db
+      .all<{ detail: string }>("EXPLAIN QUERY PLAN SELECT * FROM handovers WHERE to_session_id = 2 AND status = 'switched'")
+      .map((r) => r.detail)
+      .join("\n");
+    expect(planToSession).toContain("handovers_to_session");
+    const planConv = db
+      .all<{ detail: string }>("EXPLAIN QUERY PLAN SELECT text, cut_message_id FROM handovers WHERE conversation_id = 1 ORDER BY id DESC LIMIT 1")
+      .map((r) => r.detail)
+      .join("\n");
+    expect(planConv).toContain("handovers_conversation");
+
+    // ON DELETE CASCADE 验证
+    const sTemp = insertGenSession(5, 0);
+    db.run("INSERT INTO session_preamble_seen (session_id, seen_at) VALUES (?, 99)", sTemp);
+    db.run("DELETE FROM agent_sessions WHERE id = ?", sTemp);
+    expect(db.get("SELECT 1 AS x FROM session_preamble_seen WHERE session_id = ?", sTemp)).toBeUndefined();
+
+    // 手动标记 sUnread 已读后，回退 26 与 8 重跑迁移，记录完整保留、幂等无报错
+    db.run("INSERT INTO session_preamble_seen (session_id, seen_at) VALUES (?, 123)", sUnread);
+    const snapshot = db.all("SELECT * FROM session_preamble_seen ORDER BY session_id");
+    for (const rewindTo of [26, 8, 26]) {
+      db.exec(`PRAGMA user_version = ${rewindTo}`);
+      expect(() => migrate(db, migrationsDir)).not.toThrow();
+      expect(userVersion(db)).toBe(LATEST_VERSION);
+      expect(db.all("SELECT * FROM session_preamble_seen ORDER BY session_id")).toEqual(snapshot);
+      expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+    }
   });
 });

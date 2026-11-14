@@ -19,8 +19,9 @@ import {
   HANDOVER_READY_MAX_MS,
   HANDOVER_RECENT_CHARS,
   HANDOVER_TIMEOUT_MS,
+  VENDOR_SWITCH_CONTEXT_MAX_CHARS,
 } from "../../shared/limits.ts";
-import { vendorSpec } from "../../shared/vendors.ts";
+import { AGENT_VENDORS, vendorSpec } from "../../shared/vendors.ts";
 import { enqueueAction, listActions, setActionStatus } from "../actions/index.ts";
 import { createSessionStore } from "../store/index.ts";
 import type { Db, SqlValue } from "../store/index.ts";
@@ -30,6 +31,7 @@ import { HANDOVER_EMPTY_REASON, HANDOVER_NOT_WRITTEN_TEXT, HANDOVER_STALE_HINT }
 import { OMITTED_MARK, generationMark } from "./handover-recent.ts";
 import { createLedger } from "./index.ts";
 import type { LedgerOptions, SqliteLedger } from "./index.ts";
+import { VENDOR_SWITCH_ANCHOR_HINT, VENDOR_SWITCH_TRUNCATED_HINT } from "./vendor-switch-context.ts";
 
 let db: Db;
 let home: string;
@@ -44,6 +46,19 @@ let wakes: number;
 let logs: string[];
 
 const TRANSCRIPT = "/records/old-session.jsonl";
+function hasNoLoneSurrogates(text: string): boolean {
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const next = text.charCodeAt(i + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+      i += 1;
+    } else if (c >= 0xdc00 && c <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
+}
 const USAGE: TokenUsage = { input: 1, cacheRead: 2, cacheWrite: 3, output: 4, context: 5 };
 const REF = { forker: "fake-native", handle: { forkId: "fork-1", extra: { path: "/tmp/fork-1" } } };
 
@@ -990,9 +1005,45 @@ describe("开场说明里的原话（账本查询）", () => {
 });
 
 describe("给已有项目经理换厂商", () => {
-  it("空闲时在资料页换厂商：当场在同一事务秒切（pms 立即变新厂商、建新会话、switchingToVendor 为 null、0 次旧厂商调用）", () => {
+  it("新 PM 初次切厂商：空闲当场秒切，带第 1 条起完整本代记录（含附件路径、hub ask 选项卡片、系统业务事件），无交接段落、聊天流无 session.renewed", () => {
     const asked = post("之前聊的");
     turn(firstSession, [asked], ["之前的回答"]);
+    // 用户带附件发消息 + PM 挂 hub ask 卡片 + 系统交付单事件
+    const attachMsg = Number(
+      db.run(
+        `INSERT INTO messages (conversation_id, session_id, sender, kind, text, meta, dedupe_key, status, created_at, updated_at)
+         VALUES (?, ?, 'user', 'text', '请看截图', ?, ?, 'replied', ?, ?)`,
+        conversationId,
+        firstSession,
+        JSON.stringify({
+          attachments: [{ id: "u1", name: "bug.png", path: "/Users/me/.agent-hub/uploads/u1/bug.png", size: 42, mime: "image/png" }],
+        }),
+        `test-attach:${++uuid}`,
+        now,
+        now,
+      ).lastInsertRowid,
+    );
+    expect(attachMsg).toBeGreaterThan(0);
+    db.run(
+      `INSERT INTO messages (conversation_id, session_id, sender, kind, text, meta, dedupe_key, created_at, updated_at)
+       VALUES (?, ?, 'agent', 'text', '选哪个方案？', ?, ?, ?, ?)`,
+      conversationId,
+      firstSession,
+      JSON.stringify({ needsUser: true, options: ["方案 A", "方案 B"], recommended: "方案 A" }),
+      `test-ask:${++uuid}`,
+      now,
+      now,
+    );
+    db.run(
+      `INSERT INTO messages (conversation_id, session_id, sender, kind, text, meta, dedupe_key, status, created_at, updated_at)
+       VALUES (?, ?, 'system', 'text', '【任务图 #3「改造」全部步骤做完，等你交付】\n1. [完了] impl', ?, ?, 'replied', ?, ?)`,
+      conversationId,
+      firstSession,
+      JSON.stringify({ event: "task_graph.ready_to_finish", graphId: 3, seq: 1 }),
+      `test-delivery:${++uuid}`,
+      now,
+      now,
+    );
 
     const changes: string[] = [];
     ledger.onChange((c) => {
@@ -1009,15 +1060,19 @@ describe("给已有项目经理换厂商", () => {
     expect(rows()).toMatchObject([
       {
         status: "switched",
-        method: "direct",
+        method: "vendor_switch",
         auto: 0,
         from_session_id: firstSession,
         to_session_id: g2!.id,
         to_vendor: "codex",
         to_model: "gpt-6-luna",
         to_effort: "high",
+        text: null,
+        cut_message_id: null,
+        preamble: null,
       },
     ]);
+    expect(renewed()).toBeUndefined();
     const next = createSessionStore(db).get(g2!.id)!;
     expect(next).toMatchObject({
       vendor: "codex",
@@ -1045,43 +1100,74 @@ describe("给已有项目经理换厂商", () => {
     });
 
     const preamble = ledger.sessionPreamble(g2!.id)!;
-    expect(preamble).toContain(
-      "用户把你的厂商从 Claude Code（claude）换成了 Codex（codex），直接把之前的对话原话和记录转给了你；用户那边还是同一个对话，不用跟用户提换会话的事。提到的工具名按你自己的工具理解。",
-    );
-    expect(preamble).not.toContain("上一个会话写完交接后换成了你");
-    expect(preamble).toContain("## 交接\n\n（上一个会话没有写交接）");
+    expect(preamble).toContain("用户刚把你的运行厂商从 Claude Code（claude）切换到了 Codex（codex）");
+    expect(preamble).not.toContain("## 交接");
+    expect(preamble).not.toContain("上一个会话没有写交接");
+    expect(preamble).not.toContain("## 本代起点摘要");
     expect(preamble).toContain("用户：之前聊的\n\n你：之前的回答");
-    expect(preamble).toContain(`上一个会话的原始记录：${TRANSCRIPT}（要查原话可以去翻）`);
+    expect(preamble).toContain("`/Users/me/.agent-hub/uploads/u1/bug.png`");
+    expect(preamble).toContain("你：选哪个方案？\n[选项：1. 方案 A（推荐） / 2. 方案 B；状态：待用户确认]");
+    expect(preamble).toContain("【任务图 #3「改造」全部步骤做完，等你交付】");
+    expect(preamble).toContain(`Claude Code（claude）：${TRANSCRIPT}`);
   });
 
-  it("从 agy 换到别家：当场秒切，开场说明里原始记录写成“格式是 agy 的，读不了，只看交接和原话”", () => {
-    const agyPm = ledger.createPm({ name: "阿吉", mode: "manage_only", persona: "", vendor: "agy", defaultModel: "gemini-4-argon", effort: "high" });
-    const msg = post("agy 聊了一句", agyPm.conversation.id);
-    turn(agyPm.sessionId, [msg], ["agy 回了一句"]);
-
-    const res = ledger.editPersona(agyPm.pm.id, { vendor: "claude" }, { kind: "user" });
-    expect(res.persona).toMatchObject({ vendor: "claude", switchingToVendor: null });
-    expect(ledger.claimHandover()).toBeNull();
-
-    const g2 = db.all<{ id: number }>("SELECT id FROM agent_sessions WHERE conversation_id = ? ORDER BY generation", agyPm.conversation.id)[1]!.id;
-    const preamble = ledger.sessionPreamble(g2)!;
-    expect(preamble).toContain(
-      "用户把你的厂商从 Antigravity（agy）换成了 Claude Code（claude），直接把之前的对话原话和记录转给了你；用户那边还是同一个对话，不用跟用户提换会话的事。提到的工具名按你自己的工具理解。",
-    );
-    expect(preamble).toContain("上一个会话的原始记录：格式是 agy 的，读不了，只看交接和原话");
-    expect(preamble).not.toContain(TRANSCRIPT);
+  it("6 家厂商全矩阵可移植性：claude/codex/pi 切出附 .jsonl 路径；agy/deepseek/cursor 切出隐藏专有记录路径并给说明", () => {
+    for (const fromVendor of AGENT_VENDORS) {
+      const toVendor = fromVendor === "claude" ? "codex" : "claude";
+      const p = ledger.createPm({ name: `测试-${fromVendor}`, mode: "manage_only", persona: "", vendor: fromVendor });
+      const m = post(`${fromVendor} 聊一句`, p.conversation.id);
+      turn(p.sessionId, [m], [`${fromVendor} 回一句`]);
+      const switched = ledger.editPersona(p.pm.id, { vendor: toVendor }, { kind: "user" });
+      expect(switched.persona).toMatchObject({ vendor: toVendor, switchingToVendor: null });
+      const nextId = db.all<{ id: number }>("SELECT id FROM agent_sessions WHERE conversation_id = ? ORDER BY generation", p.conversation.id)[1]!.id;
+      const preamble = ledger.sessionPreamble(nextId)!;
+      const portable = vendorSpec(fromVendor).handover?.transcriptPortable !== false;
+      if (portable) {
+        expect(preamble).toContain(TRANSCRIPT);
+      } else {
+        expect(preamble).not.toContain(TRANSCRIPT);
+        expect(preamble).toContain("不可跨厂商直接读取");
+      }
+    }
   });
 
-  it("旧厂商额度用光（rate_limit 已满、上一条用户消息 failed）时换厂商：当场秒切，带上一份已有交接、超长原话（含 failed 用户消息）与 Worker 汇报目录", () => {
-    const early = post("第一代问题");
-    turn(firstSession, [early], ["第一代回答"]);
+  it("240K 自动换代后切厂商 + 旧厂额度耗尽：只带本代起点摘要与切点后全量消息/Worker 汇报完整原文，绝不翻切点前 3 万字旧账", () => {
+    const ancient = post("上辈子早上第一代陈年旧问题");
+    turn(firstSession, [ancient], ["上辈子早上第一代陈年旧回答"]);
     const { g2 } = renewNow("上一份交接：已完成阶段一");
+    const realRenewalsBefore = messages().filter((m) => systemEventOf(m)?.event === "session.renewed");
+    expect(realRenewalsBefore).toHaveLength(1);
 
-    // 在第二代聊了超过 HANDOVER_POST_CUT_MAX_CHARS 的原话（直接换厂商不因 post_cut 作废），并收到一条 Worker 汇报
+    // 在第二代聊了超过 HANDOVER_POST_CUT_MAX_CHARS 的原话（切换厂商不因 post_cut 作废），并收到完整八栏 Worker 汇报
     const longChat = post("长对话");
     turn(g2, [longChat], ["甲".repeat(HANDOVER_POST_CUT_MAX_CHARS + 100)]);
-    const workerMsg = report(g2, "Worker 42 汇报正文", 42);
+    const fullWorkerReport = [
+      "【Worker #42（重构缓存层）的汇报】",
+      "",
+      "=== 汇报 ===",
+      "状态: 做完了",
+      "摘要: 已替换 LRU 缓存并补齐失效测试",
+      "PR: https://github.com/example/repo/pull/42",
+      "提交: a1b2c3d",
+      "测试: pnpm typecheck && pnpm vitest run 通过",
+      "偏离: 无",
+      "交棒: 注意保留上限常量",
+      "问题: 无",
+      "=== 汇报结束 ===",
+    ].join("\n");
+    const workerMsg = report(g2, fullWorkerReport, 42);
     turn(g2, [workerMsg], ["收到 42"]);
+    // 再插入一条任务图 confirm 检查点静默汇报（status = null）
+    db.run(
+      `INSERT INTO messages (conversation_id, session_id, worker_id, sender, kind, text, meta, dedupe_key, status, created_at, updated_at)
+       VALUES (?, NULL, 43, 'system', 'worker', ?, ?, ?, NULL, ?, ?)`,
+      conversationId,
+      "【Worker #43（检查点步骤）的汇报】\n\n=== 汇报 ===\n状态: 做完了\n摘要: 检查点静默全文也在\n=== 汇报结束 ===",
+      JSON.stringify({ event: "report", workerId: 43, workerConversationId: 100, title: "检查点步骤", readonly: false, status: "done", summary: "检查点静默全文也在" }),
+      `test-silent-report:${++uuid}`,
+      now,
+      now,
+    );
 
     // 用户刚发一条消息，撞上旧厂商额度耗尽（turn.ended ok: false -> 消息 status = 'failed'）
     const info = { status: "rejected", resetsAt: 9_999_999_999, rateLimitType: "five_hour", windows: {} } as never;
@@ -1090,21 +1176,122 @@ describe("给已有项目经理换厂商", () => {
     turn(g2, [failedMsg], [], "failed");
     expect(ledger.getMessage(failedMsg)!.status).toBe("failed");
 
+    // 切换瞬间刚好有一条排队的 Worker #44 汇报尚未被 g2 读取
+    const heldReportText = "【Worker #44（刚交活）的汇报】\n\n=== 汇报 ===\n状态: 做完了\n摘要: 排队转交全文\n=== 汇报结束 ===";
+    const heldReportId = report(g2, heldReportText, 44);
+
     // 换厂商：当场秒切到 g3
     const res = ledger.editPersona(pmId, { vendor: "codex", model: "gpt-6-luna", effort: "high" }, { kind: "user" });
     expect(res.persona).toMatchObject({ vendor: "codex", model: "gpt-6-luna", effort: "high", switchingToVendor: null });
     expect(ledger.claimHandover()).toBeNull();
+    // 聊天流里依然只有早上自动换代那 1 条 session.renewed，不会多出假分隔线
+    expect(messages().filter((m) => systemEventOf(m)?.event === "session.renewed")).toHaveLength(1);
+    // 排队中的 #44 汇报已自动改绑给 g3 直接投递
+    expect(ledger.getMessage(heldReportId)).toMatchObject({ status: "queued", sessionId: sessions()[2]!.id });
 
     const g3 = sessions()[2]!.id;
     const next = createSessionStore(db).get(g3)!;
     expect(next).toMatchObject({ vendor: "codex", model: "gpt-6-luna", effort: "high", rateLimit: null });
 
     const preamble = ledger.sessionPreamble(g3)!;
-    expect(preamble).toContain(`## 交接\n\n${HANDOVER_STALE_HINT}\n\n上一份交接：已完成阶段一`);
-    const recent = preamble.split("## 最近的原话")[1]!;
-    expect(recent).toContain("用户：刚发出去撞上额度用完的这句话");
-    expect(recent).toContain("用户：长对话");
-    expect(preamble).toContain("## 交接之后到的 Worker 汇报（交接里没有，只列目录）\n\n- #42「Worker 42」做完了，全文 `hub worker show 42 --report`");
+    expect(preamble).toContain(`## 本代起点摘要（上次会话换代时保存的背景）\n\n${VENDOR_SWITCH_ANCHOR_HINT}\n\n上一份交接：已完成阶段一`);
+    // 绝不翻切点前第 1 代的 3 万字旧原话！
+    expect(preamble).not.toContain("上辈子早上第一代陈年旧问题");
+    expect(preamble).not.toContain("上辈子早上第一代陈年旧回答");
+    // 本代消息与两份已完成汇报八栏全文原样保留，在途 #44 汇报不在继承包内重复
+    expect(preamble).toContain("用户：长对话");
+    expect(preamble).toContain("用户：刚发出去撞上额度用完的这句话");
+    expect(preamble).toContain(fullWorkerReport);
+    expect(preamble).toContain("检查点静默全文也在");
+    expect(preamble).not.toContain("排队转交全文");
+    expect(preamble).not.toContain("只列目录");
+  });
+
+  it("连续来回切三次（claude → codex → agy → claude）：零套娃字节级幂等，中途说话无缝累加，跨过未说话中间厂商保留可读 .jsonl 路径", () => {
+    const bySession = new Map<string, string>();
+    ledger = open({
+      findTranscript: ({ vendor, vendorSessionId }) => bySession.get(`${vendor}:${vendorSessionId}`) ?? `/logs/${vendor}-${vendorSessionId}.jsonl`,
+    });
+    const created = ledger.createPm({ name: "连切测试", mode: "manage_only", persona: "", vendor: "claude" });
+    const cId = created.conversation.id;
+    const pId = created.pm.id;
+    const s1 = created.sessionId;
+    const q1 = post("第一句在 Claude 聊的", cId);
+    turn(s1, [q1], ["Claude 的第一句回复"]);
+
+    // 1. 中途一句话不聊，连续切三次 claude -> codex -> agy -> claude
+    ledger.editPersona(pId, { vendor: "codex" }, { kind: "user" });
+    const s2 = db.all<{ id: number }>("SELECT id FROM agent_sessions WHERE conversation_id = ? ORDER BY generation", cId).at(-1)!.id;
+    const bodyAtCodex = ledger.sessionPreamble(s2)!.split("## 本代完整对话与 Worker 汇报记录\n\n")[1]!;
+
+    ledger.editPersona(pId, { vendor: "agy" }, { kind: "user" });
+    ledger.editPersona(pId, { vendor: "claude" }, { kind: "user" });
+    const s4 = db.all<{ id: number }>("SELECT id FROM agent_sessions WHERE conversation_id = ? ORDER BY generation", cId).at(-1)!.id;
+    const preambleBackToClaude = ledger.sessionPreamble(s4)!;
+    const bodyBackToClaude = preambleBackToClaude.split("## 本代完整对话与 Worker 汇报记录\n\n")[1]!;
+    // 本代对话主体 100% 字节级一致，零套娃、不混入 persona.changed
+    expect(bodyBackToClaude).toBe(bodyAtCodex);
+    expect(preambleBackToClaude).not.toContain("你改了连切测试的设置");
+    // 中途经过的 codex 与 agy 未跑过轮次，跳过不报 agy 不可读，仍保留 s1 (claude) 的 .jsonl 路径
+    expect(preambleBackToClaude).toContain("Claude Code（claude）：/logs/claude-");
+    expect(preambleBackToClaude).not.toContain("Antigravity（agy）的会话格式不可跨厂商直接读取");
+
+    // 2. 在 s4 切到 codex 聊一句，再经 agy（不说话）切回 claude：两段对话与两份可读 .jsonl 路径都在
+    ledger.editPersona(pId, { vendor: "codex" }, { kind: "user" });
+    const s5 = db.all<{ id: number }>("SELECT id FROM agent_sessions WHERE conversation_id = ? ORDER BY generation", cId).at(-1)!.id;
+    const q2 = post("第二句在 Codex 聊的", cId);
+    turn(s5, [q2], ["Codex 的第二句回复"]);
+    // 第 2 轮起 sessionPreamble 已持久化落盘，恒返回 null（重启后亦然）
+    expect(ledger.sessionPreamble(s5)).toBeNull();
+    const reopened = open({
+      findTranscript: ({ vendor, vendorSessionId }) => `/logs/${vendor}-${vendorSessionId}.jsonl`,
+    });
+    expect(reopened.sessionPreamble(s5)).toBeNull();
+
+    reopened.editPersona(pId, { vendor: "agy" }, { kind: "user" });
+    reopened.editPersona(pId, { vendor: "claude" }, { kind: "user" });
+    const s7 = db.all<{ id: number }>("SELECT id FROM agent_sessions WHERE conversation_id = ? ORDER BY generation", cId).at(-1)!.id;
+    const finalPreamble = reopened.sessionPreamble(s7)!;
+    expect(finalPreamble).toContain("用户：第一句在 Claude 聊的\n\n你：Claude 的第一句回复\n\n用户：第二句在 Codex 聊的\n\n你：Codex 的第二句回复");
+    expect(finalPreamble).toContain("Claude Code（claude）：/logs/claude-");
+    expect(finalPreamble).toContain("Codex（codex）：/logs/codex-");
+    expect(messages().filter((m) => systemEventOf(m)?.event === "session.renewed")).toHaveLength(0);
+  });
+
+  it("超长本代窗口保底截断与 240K 自动换代切点推进：超过 VENDOR_SWITCH_CONTEXT_MAX_CHARS 安全保留最新 24 万字，后续满 240K 正常开启新代", () => {
+    const { g2 } = renewNow("第一代摘要底座");
+    const earlyInGen2 = post("第二代早期将被保底截掉的消息");
+    turn(g2, [earlyInGen2], ["早期回复"]);
+    const huge = post("超长输入");
+    const emojiFiller = "😀中".repeat(Math.ceil(VENDOR_SWITCH_CONTEXT_MAX_CHARS / 3) + 500);
+    turn(g2, [huge], [`${emojiFiller}尾部锚点文字`]);
+
+    ledger.editPersona(pmId, { vendor: "codex" }, { kind: "user" });
+    const g3 = sessions().at(-1)!.id;
+    const preamble = ledger.sessionPreamble(g3)!;
+    expect(hasNoLoneSurrogates(preamble)).toBe(true);
+    expect(preamble).toContain("第一代摘要底座");
+    expect(preamble).toContain(VENDOR_SWITCH_TRUNCATED_HINT);
+    expect(preamble).toContain("尾部锚点文字");
+    expect(preamble).not.toContain("第二代早期将被保底截掉的消息");
+
+    // 切到 codex 后继续聊满 240K 自动换代：GenerationAnchor 正常推进到新摘要，切点不被之前切厂商污染
+    const qOnCodex = post("Codex 上的对话");
+    turn(g3, [qOnCodex], ["Codex 回复"]);
+    reachThreshold(g3);
+    const job = ledger.claimHandover()!;
+    forkAndWrite(job, "第二代完整自动换代新摘要");
+    const g4 = sessions().at(-1)!.id;
+    const qGen3 = post("第三代新消息");
+    turn(g4, [qGen3], ["第三代新回复"]);
+
+    ledger.editPersona(pmId, { vendor: "claude" }, { kind: "user" });
+    const g5 = sessions().at(-1)!.id;
+    const gen3Preamble = ledger.sessionPreamble(g5)!;
+    expect(gen3Preamble).toContain("第二代完整自动换代新摘要");
+    expect(gen3Preamble).not.toContain("第一代摘要底座");
+    expect(gen3Preamble).not.toContain("尾部锚点文字");
+    expect(gen3Preamble).toContain("用户：第三代新消息\n\n你：第三代新回复");
   });
 
   it("旧厂商正在忙（working 或有 backgroundTasks）时换厂商：不调旧厂商写交接，switchingToVendor 为新厂商；中途可撤销（abandoned）；这一轮结束（含报错结束）立即切到新厂商", () => {
@@ -1113,11 +1300,11 @@ describe("给已有项目经理换厂商", () => {
     turnStart(firstSession, [busy1]);
     const { change } = ledger.editPersona(pmId, { vendor: "codex", model: "gpt-6-luna" }, { kind: "user" });
     expect(ledger.claimHandover()).toBeNull();
-    expect(rows()).toMatchObject([{ status: "ready", method: "direct", to_vendor: "codex", to_model: "gpt-6-luna" }]);
+    expect(rows()).toMatchObject([{ status: "ready", method: "vendor_switch", to_vendor: "codex", to_model: "gpt-6-luna" }]);
     expect(ledger.getPersona(pmId)).toMatchObject({ vendor: "codex", model: "gpt-6-luna", switchingToVendor: "codex" });
 
     ledger.revertPersonaChange(change!.id);
-    expect(rows()).toMatchObject([{ status: "abandoned", method: "direct", failure_reason: "user_message", to_vendor: null }]);
+    expect(rows()).toMatchObject([{ status: "abandoned", method: "vendor_switch", failure_reason: "user_message", to_vendor: null }]);
     expect(ledger.getPersona(pmId)).toMatchObject({ vendor: "claude", model: "opus", switchingToVendor: null });
     turnEnd(firstSession, [busy1], ["第一轮回完"]);
     expect(sessions()).toHaveLength(1);
@@ -1137,21 +1324,28 @@ describe("给已有项目经理换厂商", () => {
     expect(createSessionStore(db).get(g2!.id)).toMatchObject({ vendor: "codex", model: "gpt-6-luna", effort: "high" });
     expect(ledger.getPersona(pmId)).toMatchObject({ vendor: "codex", model: "gpt-6-luna", effort: "high", switchingToVendor: null });
     expect(ledger.getMessage(queuedMsg)).toMatchObject({ status: "queued", sessionId: g2!.id });
-    expect(ledger.sessionPreamble(g2!.id)!.split("## 最近的原话")[1]).toContain("用户：在忙但马上报错的一轮");
+    const g2Preamble = ledger.sessionPreamble(g2!.id)!;
+    expect(g2Preamble.split("## 本代完整对话与 Worker 汇报记录")[1]).toContain("用户：在忙但马上报错的一轮");
+    // 排队的 queuedMsg 正作为新会话首轮输入发送，不能在继承包中重复出现
+    expect(g2Preamble).not.toContain("等切换后新厂商处理的");
 
     // 3. 旧会话有后台任务（backgroundTasks > 0）时换厂商：等后台任务归零立即切
     ledger.applyDriverEvent(g2!.id, { type: "background.changed", at: now, count: 1 });
     ledger.editPersona(pmId, { vendor: "agy", model: "gemini-4-argon", effort: "medium" }, { kind: "user" });
     expect(ledger.getPersona(pmId)).toMatchObject({ vendor: "agy", model: "gemini-4-argon", effort: "medium", switchingToVendor: "agy" });
     expect(sessions()).toHaveLength(2);
+    // 等待超过 HANDOVER_READY_MAX_MS 也不会把 vendor_switch 标 stale 作废
+    now += HANDOVER_READY_MAX_MS + 5_000;
+    ledger.runAutoRenew();
+    expect(ledger.getPersona(pmId).switchingToVendor).toBe("agy");
     ledger.applyDriverEvent(g2!.id, { type: "background.changed", at: now, count: 0 });
     expect(sessions()).toHaveLength(3);
     expect(createSessionStore(db).get(sessions()[2]!.id)).toMatchObject({ vendor: "agy", model: "gemini-4-argon", effort: "medium" });
     expect(ledger.getPersona(pmId)).toMatchObject({ vendor: "agy", switchingToVendor: null });
   });
 
-  it("与自动换会话撞上：未写完的直接改为 direct 秒切（in_session 的停止 H）；已 ready 有交接文本的复用该文本切换，撤销时清回 NULL", () => {
-    // 1. 自动交接正在 in_session 写交接时用户点换厂商：请求停掉 H、改成 direct，那一轮停下后立即切到新厂商
+  it("与自动换会话撞上：未写完的（in_session / forking）直接改为 vendor_switch 收口；已 ready 有现成交接文本的复用切换，撤销时清回 NULL", () => {
+    // 1. 自动交接正在 in_session 写交接时用户点换厂商：请求停掉 H、改成 vendor_switch，那一轮停下后立即切到新厂商
     reachThreshold();
     const job1 = ledger.claimHandover()!;
     ledger.handoverFailed(job1.handoverId, { kind: "unsupported", detail: "" });
@@ -1163,29 +1357,39 @@ describe("给已有项目经理换厂商", () => {
 
     ledger.editPersona(pmId, { vendor: "codex", model: "gpt-6-luna" }, { kind: "user" });
     expect(stops).toEqual([{ conversationId, sessionId: firstSession }]);
-    expect(rows()[0]).toMatchObject({ id: job1.handoverId, status: "ready", method: "direct", to_vendor: "codex", to_model: "gpt-6-luna" });
+    expect(rows()[0]).toMatchObject({ id: job1.handoverId, status: "ready", method: "vendor_switch", to_vendor: "codex", to_model: "gpt-6-luna" });
 
     turnEnd(firstSession, [req], ["半截交接"], "interrupted");
     const [, g2] = sessions();
     expect(g2).toBeDefined();
     expect(createSessionStore(db).get(g2!.id)).toMatchObject({ vendor: "codex", model: "gpt-6-luna" });
-    expect(rows()[0]).toMatchObject({ id: job1.handoverId, status: "switched", method: "direct", to_session_id: g2!.id });
+    expect(rows()[0]).toMatchObject({ id: job1.handoverId, status: "switched", method: "vendor_switch", to_session_id: g2!.id });
+
+    // 1b. 后台 runner 正在 forking 时切厂商：当场改成 vendor_switch 秒切，随后 runner 回调 handoverForked 返回 false 自动清理临时副本
+    reachThreshold(g2!.id);
+    const jobForking = ledger.claimHandover()!;
+    ledger.editPersona(pmId, { vendor: "claude", model: "opus" }, { kind: "user" });
+    const g2b = sessions()[2]!.id;
+    expect(rows()[1]).toMatchObject({ id: jobForking.handoverId, status: "switched", method: "vendor_switch", to_session_id: g2b });
+    expect(ledger.handoverForked(jobForking.handoverId, { kind: "native", ref: REF })).toBe(false);
+    expect(ledger.uncleanedHandovers()).toMatchObject([{ handoverId: jobForking.handoverId }]);
+    ledger.handoverCleaned(jobForking.handoverId);
 
     // 2. 自动交接已经 ready 且有写好的交接文本（因后台任务未换）：换厂商时复用该文本，换代前撤销则清回 NULL 按普通换会话走完
-    reachThreshold(g2!.id);
+    reachThreshold(g2b);
     const job2 = ledger.claimHandover()!;
-    ledger.applyDriverEvent(g2!.id, { type: "background.changed", at: now, count: 1 });
+    ledger.applyDriverEvent(g2b, { type: "background.changed", at: now, count: 1 });
     forkAndWrite(job2, "刚好写好的现成交接");
     expect(rows().at(-1)).toMatchObject({ id: job2.handoverId, status: "ready", method: "native" });
 
-    const { change } = ledger.editPersona(pmId, { vendor: "claude", model: "opus" }, { kind: "user" });
+    const { change } = ledger.editPersona(pmId, { vendor: "codex", model: "gpt-6-luna" }, { kind: "user" });
     expect(rows().at(-1)).toMatchObject({
       id: job2.handoverId,
       status: "ready",
       method: "native",
       auto: 0,
-      to_vendor: "claude",
-      to_model: "opus",
+      to_vendor: "codex",
+      to_model: "gpt-6-luna",
     });
 
     // 换代前撤销：清回 NULL，保留已写好的交接
@@ -1200,11 +1404,84 @@ describe("给已有项目经理换厂商", () => {
     });
 
     // 再点换厂商，然后后台任务归零：带着现成交接切到新厂商
-    ledger.editPersona(pmId, { vendor: "claude", model: "opus", effort: "high" }, { kind: "user" });
-    ledger.applyDriverEvent(g2!.id, { type: "background.changed", at: now, count: 0 });
-    const g3 = sessions()[2]!.id;
-    expect(createSessionStore(db).get(g3)).toMatchObject({ vendor: "claude", model: "opus", effort: "high" });
+    ledger.editPersona(pmId, { vendor: "codex", model: "gpt-6-luna", effort: "high" }, { kind: "user" });
+    ledger.applyDriverEvent(g2b, { type: "background.changed", at: now, count: 0 });
+    const g3 = sessions().at(-1)!.id;
+    expect(createSessionStore(db).get(g3)).toMatchObject({ vendor: "codex", model: "gpt-6-luna", effort: "high" });
     expect(ledger.sessionPreamble(g3)).toContain(`## 交接\n\n${HANDOVER_STALE_HINT}\n\n刚好写好的现成交接`);
+  });
+
+  it("跑满一个月量级性能基准（30,000 条消息 + 300 个已收工 Worker）：切换与首轮上下文组装毫秒级完成且严格有界", () => {
+    const projRow = db.get<{ id: number }>(
+      "INSERT INTO projects (name, pm_id, conversation_id, created_at, updated_at) VALUES ('perf-proj', ?, ?, ?, ?) RETURNING id",
+      pmId,
+      conversationId,
+      now,
+      now,
+    )!;
+    db.exec("BEGIN");
+    const insertMsgSql =
+      "INSERT INTO messages (conversation_id, session_id, sender, kind, text, dedupe_key, status, created_at, updated_at) VALUES (?, ?, ?, 'text', ?, ?, ?, ?, ?)";
+    // 29,800 条历史消息（含第一代旧消息与 300 个已收工 Worker 各自会话消息）
+    for (let i = 0; i < 1_800; i++) {
+      db.run(insertMsgSql, conversationId, firstSession, i % 2 === 0 ? "user" : "agent", `第一代历史消息 ${i} ${"旧".repeat(40)}`, `perf-old:${i}`, i % 2 === 0 ? "replied" : null, now, now);
+    }
+    for (let w = 1; w <= 300; w++) {
+      const wConv = Number(
+        db.run("INSERT INTO conversations (kind, pm_id, project_id, title, created_at) VALUES ('worker', ?, ?, ?, ?)", pmId, projRow.id, `W${w}`, now).lastInsertRowid,
+      );
+      db.run(
+        "INSERT INTO workers (project_id, pm_id, pm_conversation_id, worker_conversation_id, title, task, workspace, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, '任务', 'main', 'ended', ?, ?)",
+        projRow.id,
+        pmId,
+        conversationId,
+        wConv,
+        `Worker ${w}`,
+        now,
+        now,
+      );
+      for (let k = 0; k < 93; k++) {
+        db.run(insertMsgSql, wConv, null, "agent", `Worker ${w} 过程 ${k}`, `perf-w:${w}:${k}`, null, now, now);
+      }
+    }
+    db.exec("COMMIT");
+
+    // 完成一次真实自动换代，随后本代新增 120 条对话
+    const { g2 } = renewNow("月度换代摘要：前序 1,800 条已归档浓缩");
+    db.exec("BEGIN");
+    for (let i = 0; i < 120; i++) {
+      db.run(insertMsgSql, conversationId, g2, i % 2 === 0 ? "user" : "agent", `本代新对话 ${i} ${"新".repeat(60)}`, `perf-cur:${i}`, i % 2 === 0 ? "replied" : null, now, now);
+    }
+    db.exec("COMMIT");
+    const totalMsgs = db.get<{ n: number }>("SELECT count(*) AS n FROM messages")!.n;
+    expect(totalMsgs).toBeGreaterThanOrEqual(29_800);
+
+    const t0 = performance.now();
+    ledger.editPersona(pmId, { vendor: "codex" }, { kind: "user" });
+    const switchMs = performance.now() - t0;
+    const g3 = sessions().at(-1)!.id;
+
+    const t1 = performance.now();
+    const preamble = ledger.sessionPreamble(g3)!;
+    const preambleMs = performance.now() - t1;
+
+    expect(switchMs).toBeLessThan(50);
+    expect(preambleMs).toBeLessThan(50);
+    expect(preamble).toContain("月度换代摘要：前序 1,800 条已归档浓缩");
+    expect(preamble).toContain("本代新对话 0");
+    expect(preamble).toContain("本代新对话 119");
+    expect(preamble).not.toContain("第一代历史消息");
+    expect(preamble.length).toBeLessThanOrEqual(VENDOR_SWITCH_CONTEXT_MAX_CHARS + 4_000);
+
+    // 首轮 message.processing 后第 2 轮起 O(1) 返回 null
+    const mNext = post("切后首轮消息");
+    turn(g3, [mNext], ["首轮回复"]);
+    const t2 = performance.now();
+    for (let i = 0; i < 100; i++) {
+      expect(ledger.sessionPreamble(g3)).toBeNull();
+    }
+    const seen100Ms = performance.now() - t2;
+    expect(seen100Ms).toBeLessThan(25);
   });
 
   describe("交接提示：摘要可能过时，以最新对话和实际状态为准", () => {
@@ -1231,7 +1508,7 @@ describe("给已有项目经理换厂商", () => {
       expect(preamble).toContain("用户：手动重开前的问题\n\n你：手动重开前的回答");
     });
 
-    it("切换厂商：新会话复用先前保存的交接时开头带提示，且保留先前交接正文与最新原话", () => {
+    it("切换厂商：有本代起点摘要时开头带冲突以最新对话为准提示，且只带本代新原话不翻切点前旧话", () => {
       const q1 = post("早期对话");
       turn(firstSession, [q1], ["早期回答"]);
       renewNow("此前保存的交接正文");
@@ -1243,9 +1520,10 @@ describe("给已有项目经理换厂商", () => {
       ledger.editPersona(pmId, { vendor: "codex", model: "gpt-6-luna", effort: "high" }, { kind: "user" });
       const g3 = sessions()[2]!.id;
       const preamble = ledger.sessionPreamble(g3)!;
-      expect(preamble).toContain(HANDOVER_STALE_HINT);
-      expect(preamble).toContain(`## 交接\n\n${HANDOVER_STALE_HINT}\n\n此前保存的交接正文`);
+      expect(preamble).toContain(VENDOR_SWITCH_ANCHOR_HINT);
+      expect(preamble).toContain(`## 本代起点摘要（上次会话换代时保存的背景）\n\n${VENDOR_SWITCH_ANCHOR_HINT}\n\n此前保存的交接正文`);
       expect(preamble).toContain("用户：换厂商前的最新对话\n\n你：换厂商前的最新回答");
+      expect(preamble).not.toContain("早期对话");
     });
 
     it("活跃任务图实时注入：换新会话后 sessionPreamble 实时附带账本中未完结任务图及最新节点状态", () => {
