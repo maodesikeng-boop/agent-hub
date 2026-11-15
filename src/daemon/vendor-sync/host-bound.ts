@@ -5,11 +5,17 @@
 // 1. 命令（command）的路径在某个应用的安装包里：
 //    - macOS：路径里有 `<名字>.app/Contents/`（Apple 的 app bundle 约定，应用私有的可执行文件都放在 Contents 下）。
 //    - Windows：在 `%ProgramFiles%\WindowsApps\<包名>\` 下（MSIX/商店应用的包目录归应用所有）；
-//      或在 `%LOCALAPPDATA%\Programs`、`%ProgramFiles%`、`%ProgramFiles(x86)%` 的 `<应用目录>\` 下，且路径里有 `resources` 一层
-//      （Electron / Tauri 等桌面应用把随包可执行文件放在 `resources\` 下的约定）。只放在应用目录根上的普通运行时（Node、Python 等）不算。
+//      或在 `%LOCALAPPDATA%\Programs`、`%ProgramFiles%`、`%ProgramFiles(x86)%` 的 `<应用目录>\resources\`（含 Squirrel `app-<版本>\resources\`）下，
+//      或 `%LOCALAPPDATA%\<应用目录>\app-<版本>\resources\` 下（Electron / Tauri / Squirrel 桌面应用把随包可执行文件放在 `resources\` 下的约定）。
+//      只放在应用目录根上的普通运行时（Node、Python 等）或其深层 `node_modules` / `site-packages` 子目录不算。
 // 2. 配置依赖宿主应用透传的环境变量（Codex 的 `env_vars`）：值不在配置里，要靠宿主进程在启动时带进来，换一家应用启动就取不到。
 import { win32 } from "node:path";
-import { isPathStrictlyInside, isWindowsAbsolutePathLike, normalizePathForComparison } from "../platform/win32/path-key.ts";
+import {
+  isPathStrictlyInside,
+  isWindowsAbsolutePathLike,
+  normalizePathForComparison,
+  stripExtendedLengthPrefix,
+} from "../platform/win32/path-key.ts";
 import type { CanonicalMcpServer, VendorSyncContext } from "../../vendors/daemon-types.ts";
 
 export type HostBoundKind = "app_bundle" | "host_env";
@@ -37,6 +43,8 @@ export function hostBoundReason(detection: HostBoundDetection): string {
 }
 
 const MAC_APP_BUNDLE = /(?:^|\/)([^/]+)\.app\/Contents\//i;
+const WIN_SQUIRREL_APP_VER = /^app-\d/i;
+const WIN_USER_LOCAL_APPDATA = /^([A-Za-z]:\\Users\\[^\\]+\\AppData\\Local)\\/i;
 
 function envValue(env: VendorSyncContext["env"], name: string): string | undefined {
   const direct = env[name];
@@ -48,48 +56,93 @@ function envValue(env: VendorSyncContext["env"], name: string): string | undefin
   return undefined;
 }
 
-function windowsAppName(command: string, env: VendorSyncContext["env"]): string | null | undefined {
-  const programFiles = [envValue(env, "ProgramFiles"), envValue(env, "ProgramW6432"), envValue(env, "ProgramFiles(x86)")].filter(
-    (v): v is string => v !== undefined,
-  );
-  const localPrograms = envValue(env, "LOCALAPPDATA");
+function cleanWindowsPath(rawValue: string): string {
+  const stripped = stripExtendedLengthPrefix(rawValue.trim()).replace(/\//g, "\\");
+  if (/^[A-Za-z]:\\+$/.test(stripped)) return `${stripped.slice(0, 2)}\\`;
+  return stripped.replace(/\\+$/, "");
+}
+
+function uniqueWinPaths(candidates: ReadonlyArray<string | undefined>): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of candidates) {
+    if (!raw?.trim()) continue;
+    const cleaned = cleanWindowsPath(raw);
+    const key = normalizePathForComparison(cleaned);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(cleaned);
+  }
+  return out;
+}
+
+function hasDirectAppResourcesSegment(segments: readonly string[]): boolean {
+  // <应用目录>\resources\...\<可执行文件>
+  if (segments.length >= 3 && segments[1]?.toLowerCase() === "resources") return true;
+  // Squirrel.Windows：<应用目录>\app-<版本>\resources\...\<可执行文件>
+  if (segments.length >= 4 && WIN_SQUIRREL_APP_VER.test(segments[1] ?? "") && segments[2]?.toLowerCase() === "resources") {
+    return true;
+  }
+  return false;
+}
+
+function windowsAppName(command: string, env: VendorSyncContext["env"], userHome?: string): string | null | undefined {
+  const programFiles = uniqueWinPaths([
+    envValue(env, "ProgramFiles"),
+    envValue(env, "ProgramW6432"),
+    envValue(env, "ProgramFiles(x86)"),
+    "C:\\Program Files",
+    "C:\\Program Files (x86)",
+  ]);
+  const inferredUserLocal = WIN_USER_LOCAL_APPDATA.exec(command)?.[1];
+  const homeLocal =
+    userHome && isWindowsAbsolutePathLike(userHome) ? win32.join(cleanWindowsPath(userHome), "AppData", "Local") : undefined;
+  const localAppDataDirs = uniqueWinPaths([envValue(env, "LOCALAPPDATA"), homeLocal, inferredUserLocal]);
 
   for (const root of programFiles) {
     const packages = win32.join(root, "WindowsApps");
     if (!isPathStrictlyInside(packages, command)) continue;
     const pkg = win32.relative(packages, command).split("\\")[0] ?? "";
-    return pkg.split("_")[0] || null;
+    return pkg.split("_")[0]?.trim() || null;
   }
 
-  const installRoots = [...(localPrograms ? [win32.join(localPrograms, "Programs")] : []), ...programFiles];
+  const installRoots = uniqueWinPaths([...localAppDataDirs.map((dir) => win32.join(dir, "Programs")), ...programFiles]);
   for (const root of installRoots) {
     if (!isPathStrictlyInside(root, command)) continue;
     const segments = win32.relative(root, command).split("\\");
-    // <应用目录>\...\resources\...\<可执行文件>
-    if (segments.length >= 3 && segments.slice(1, -1).some((s) => s.toLowerCase() === "resources")) {
-      return segments[0] || null;
+    if (hasDirectAppResourcesSegment(segments)) {
+      return segments[0]?.trim() || null;
+    }
+  }
+
+  // Squirrel.Windows 用户级默认安装目录：%LOCALAPPDATA%\<应用名>\app-<版本>\resources\...
+  for (const localRoot of localAppDataDirs) {
+    if (!isPathStrictlyInside(localRoot, command)) continue;
+    const segments = win32.relative(localRoot, command).split("\\");
+    if (segments.length >= 4 && WIN_SQUIRREL_APP_VER.test(segments[1] ?? "") && segments[2]?.toLowerCase() === "resources") {
+      return segments[0]?.trim() || null;
     }
   }
   return undefined;
 }
 
 /** 命令路径是否在某个应用安装包里：是返回应用名（认不出名字时为 null），不是返回 undefined。 */
-function appBundleOf(command: string, env: VendorSyncContext["env"]): string | null | undefined {
+function appBundleOf(command: string, env: VendorSyncContext["env"], userHome?: string): string | null | undefined {
   const cmd = command.trim();
   if (cmd === "") return undefined;
-  if (isWindowsAbsolutePathLike(cmd)) return windowsAppName(normalizeWindowsSeparators(cmd), env);
+  if (isWindowsAbsolutePathLike(cmd)) return windowsAppName(cleanWindowsPath(cmd), env, userHome);
   const mac = MAC_APP_BUNDLE.exec(normalizePathForComparison(cmd));
-  return mac ? (mac[1] ?? null) : undefined;
+  return mac ? (mac[1]?.trim() || null) : undefined;
 }
 
-function normalizeWindowsSeparators(value: string): string {
-  return value.replace(/\//g, "\\");
-}
-
-export function detectHostBoundMcp(server: CanonicalMcpServer, env: VendorSyncContext["env"]): HostBoundDetection | null {
+export function detectHostBoundMcp(
+  server: CanonicalMcpServer,
+  env: VendorSyncContext["env"],
+  userHome?: string,
+): HostBoundDetection | null {
   if (server.transport !== "stdio") return null;
   const kinds: HostBoundKind[] = [];
-  const app = appBundleOf(server.command, env);
+  const app = appBundleOf(server.command, env, userHome);
   if (app !== undefined) kinds.push("app_bundle");
   if ((server.hostEnvVars?.length ?? 0) > 0) kinds.push("host_env");
   if (kinds.length === 0) return null;

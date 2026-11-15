@@ -28,7 +28,9 @@ import {
   type VendorAvailability,
   type VendorSyncApplyResponse,
   type VendorSyncItemVendorStatus,
+  type VendorSyncMcpPreviewItem,
   type VendorSyncPreviewResponse,
+  type VendorSyncVendorBadge,
 } from "../shared/index.ts";
 import {
   ApiError,
@@ -770,13 +772,35 @@ export function formatVendorSyncSummary(result: VendorSyncApplyResponse): string
   return parts.join(", ");
 }
 
+const EMPTY_STRING_SET: ReadonlySet<string> = new Set();
+const uncheckedHostBoundBadgesCache = new WeakMap<readonly VendorSyncVendorBadge[], readonly VendorSyncVendorBadge[]>();
+
+/**
+ * 计算预览行下方展示的厂商状态标签：
+ * 普通 MCP 与已勾选的 `hostBound` MCP 展示全部厂商状态；
+ * 未勾选的 `hostBound` MCP 只展示当前已持有它的厂商（`present` / `kept`），不展示不会发生的 `Add` / `mcp-remote`。
+ * 按输入数组引用 `WeakMap` 缓存，保持引用稳定。
+ */
+export function visibleMcpVendorBadges(
+  item: VendorSyncMcpPreviewItem,
+  checked: boolean,
+): readonly VendorSyncVendorBadge[] {
+  if (!item.hostBound || checked) return item.vendors;
+  const cached = uncheckedHostBoundBadgesCache.get(item.vendors);
+  if (cached !== undefined) return cached;
+  const filtered = item.vendors.filter((badge) => badge.status !== "will_add" && badge.status !== "mcp_remote");
+  uncheckedHostBoundBadgesCache.set(item.vendors, filtered);
+  return filtered;
+}
+
 export function useVendorSyncSetting(explicitClient?: HubClient) {
   const qc = useHubQueryClient();
   const contextClient = useClient();
   const client = explicitClient ?? contextClient;
+  const targetDevice = client.device ?? LOCAL_DEVICE;
   const [preview, setPreview] = useState<VendorSyncPreviewResponse | null>(null);
-  const [checkedMcp, setCheckedMcp] = useState<ReadonlySet<string>>(() => new Set());
-  const [checkedSkills, setCheckedSkills] = useState<ReadonlySet<string>>(() => new Set());
+  const [checkedMcp, setCheckedMcp] = useState<ReadonlySet<string>>(EMPTY_STRING_SET);
+  const [checkedSkills, setCheckedSkills] = useState<ReadonlySet<string>>(EMPTY_STRING_SET);
   const [lastSummary, setLastSummary] = useState<string | null>(null);
 
   const applyMutation = useMutation(
@@ -785,9 +809,11 @@ export function useVendorSyncSetting(explicitClient?: HubClient) {
         if (!preview) throw new Error("No preview loaded");
         const selectedMcpKeys: string[] = [];
         const removeMcpKeys: string[] = [];
+        const confirmedHostBoundMcpKeys: string[] = [];
         for (const item of preview.mcpServers) {
           if (checkedMcp.has(item.key)) {
             selectedMcpKeys.push(item.key);
+            if (item.hostBound) confirmedHostBoundMcpKeys.push(item.key);
           } else if (!item.hostBound) {
             // 别家应用自带的 MCP：不勾选只是“不往别家补”，不进移除清单，源头配置原样保留
             removeMcpKeys.push(item.key);
@@ -807,6 +833,7 @@ export function useVendorSyncSetting(explicitClient?: HubClient) {
           removeMcpKeys,
           selectedSkillKeys,
           removeSkillKeys,
+          ...(preview.hostBoundConfirmSupported ? { confirmedHostBoundMcpKeys } : {}),
         });
       },
       onSuccess: (result) => {
@@ -829,6 +856,21 @@ export function useVendorSyncSetting(explicitClient?: HubClient) {
     },
     qc,
   );
+
+  const prevDeviceRef = useRef(targetDevice);
+  if (prevDeviceRef.current !== targetDevice) {
+    prevDeviceRef.current = targetDevice;
+    setPreview(null);
+    setCheckedMcp(EMPTY_STRING_SET);
+    setCheckedSkills(EMPTY_STRING_SET);
+    setLastSummary(null);
+  }
+  useEffect(() => {
+    scanMutation.reset();
+    applyMutation.reset();
+    // 仅在切换目标设备时清理旧设备的异步错误态
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetDevice]);
 
   const toggleMcp = useCallback((key: string, nextChecked: boolean) => {
     setCheckedMcp((prev) => {

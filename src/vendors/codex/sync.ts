@@ -32,9 +32,10 @@ export function resolveCodexConfigPath(ctx: VendorSyncContext): string {
 function parseCodexMcpEntry(
   name: string,
   rawEntry: unknown,
+  options?: { includeDisabled?: boolean },
 ): { server?: CanonicalMcpServer; nonSyncable?: ScannedCloudConnector } {
   if (!isPlainObject(rawEntry)) return {};
-  if (rawEntry.enabled === false) return {};
+  if (!options?.includeDisabled && rawEntry.enabled === false) return {};
   if (isPlainObject(rawEntry.oauth)) {
     return {
       nonSyncable: {
@@ -160,24 +161,31 @@ export const codexSyncAdapter: VendorSyncAdapter = {
     return { configPath, servers, nonSyncable };
   },
 
-  planMcpPatch(ctx, { upsert, removeNames }) {
+  planMcpPatch(ctx, { upsert, removeNames, isProtectedServer }) {
     const configPath = resolveCodexConfigPath(ctx);
     const doc = readTomlObjectFile(configPath);
     const existingMcp = isPlainObject(doc.data.mcp_servers) ? doc.data.mcp_servers : {};
-    const protectedNames = new Set<string>();
+    const skipUpsert = new Set<string>();
+    const skipRemove = new Set<string>();
     for (const [name, rawEntry] of Object.entries(existingMcp)) {
-      if (parseCodexMcpEntry(name, rawEntry).nonSyncable) protectedNames.add(name);
+      const parsed = parseCodexMcpEntry(name, rawEntry, { includeDisabled: true });
+      if (parsed.nonSyncable) {
+        skipUpsert.add(name);
+        skipRemove.add(name);
+      } else if (parsed.server && isProtectedServer?.(parsed.server)) {
+        skipRemove.add(name);
+      }
     }
 
     const serializedUpsert: Record<string, Record<string, unknown>> = {};
     for (const [name, spec] of Object.entries(upsert)) {
-      if (protectedNames.has(name)) continue;
+      if (skipUpsert.has(name)) continue;
       serializedUpsert[name] = serializeCodexMcpEntry(spec);
     }
 
     const safeRemove = new Set<string>();
     for (const name of removeNames) {
-      if (!protectedNames.has(name)) safeRemove.add(name);
+      if (!skipRemove.has(name)) safeRemove.add(name);
     }
 
     const nextContent = patchTomlMapEntries({

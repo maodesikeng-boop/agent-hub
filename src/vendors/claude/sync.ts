@@ -9,6 +9,7 @@ import { isPlainObject, patchJsoncMapEntries, readJsoncObjectFile } from "../_co
 import {
   CLOUD_CONNECTOR_NON_SYNCABLE_REASON,
   OAUTH_NON_SYNCABLE_REASON,
+  collectProtectedJsonMcpNames,
   parseCommonJsonMcpEntry,
   serializeCommonJsonMcpEntry,
 } from "../_common/sync/mcp.ts";
@@ -122,20 +123,15 @@ export const claudeSyncAdapter: VendorSyncAdapter = {
     return { configPath, servers, nonSyncable };
   },
 
-  planMcpPatch(ctx, { upsert, removeNames }) {
+  planMcpPatch(ctx, { upsert, removeNames, isProtectedServer }) {
     const configPath = resolveClaudeMcpConfigPath(ctx);
     const doc = readJsoncObjectFile(configPath);
     const existingMcp = isPlainObject(doc.data.mcpServers) ? doc.data.mcpServers : {};
-    const protectedOAuthNames = new Set<string>();
-    for (const [name, rawEntry] of Object.entries(existingMcp)) {
-      if (parseCommonJsonMcpEntry(name, rawEntry).nonSyncable) {
-        protectedOAuthNames.add(name);
-      }
-    }
+    const { skipUpsert, skipRemove } = collectProtectedJsonMcpNames(existingMcp, isProtectedServer);
 
     const serializedUpsert: Record<string, Record<string, unknown>> = {};
     for (const [name, spec] of Object.entries(upsert)) {
-      if (protectedOAuthNames.has(name)) continue;
+      if (skipUpsert.has(name)) continue;
       serializedUpsert[name] = serializeCommonJsonMcpEntry(spec, {
         supportsSseMcp: true,
         explicitType: true,
@@ -144,7 +140,7 @@ export const claudeSyncAdapter: VendorSyncAdapter = {
 
     const safeRemove = new Set<string>();
     for (const name of removeNames) {
-      if (!protectedOAuthNames.has(name)) safeRemove.add(name);
+      if (!skipRemove.has(name)) safeRemove.add(name);
     }
 
     const nextContent = patchJsoncMapEntries({

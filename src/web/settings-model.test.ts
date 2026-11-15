@@ -10,6 +10,7 @@ import {
   type StateSnapshot,
   type VendorSyncPreviewResponse,
 } from "../shared/index.ts";
+import { createClient, localClient } from "./client.ts";
 import { ChoiceRows } from "./components/ChoiceRows.tsx";
 import { ComputersSection } from "./components/DeviceSettings.tsx";
 import { ModeRows } from "./components/ModeRows.tsx";
@@ -45,6 +46,7 @@ import {
   useUiScaleSetting,
   useVendorSyncSetting,
   visibleAuthMethodsForTarget,
+  visibleMcpVendorBadges,
 } from "./settings-model.ts";
 import { useShellModel } from "./shell-model.ts";
 import { initialState } from "./state.ts";
@@ -622,6 +624,7 @@ describe("useVendorSyncSetting：别家应用自带的 MCP", () => {
   const preview: VendorSyncPreviewResponse = {
     scannedAt: 1_700_000_000_000,
     truncated: false,
+    hostBoundConfirmSupported: true,
     mcpServers: [
       { key: "plain", name: "plain", transport: "stdio", maskedTarget: "npx a", maskedAuth: [], usesMcpRemoteBridge: false, vendors: [] },
       {
@@ -639,7 +642,7 @@ describe("useVendorSyncSetting：别家应用自带的 MCP", () => {
     nonSyncable: [],
   };
 
-  it("默认不勾选；按默认值同步时它既不在 selected 也不在 remove；用户手动勾上才进 selected，再取消勾选仍不进 remove", async () => {
+  it("默认不勾选；按默认值同步时它既不在 selected 也不在 remove 且 confirmedHostBoundMcpKeys 为空；手动勾上才进 selected 与 confirmedHostBoundMcpKeys，再取消勾选仍不进 remove", async () => {
     const api = new FakeApi(makeSnapshot({}));
     api.vendorSyncPreview = () => ({ status: 200, body: preview });
     api.vendorSyncApply = (body) => ({
@@ -656,21 +659,104 @@ describe("useVendorSyncSetting：别家应用自带的 MCP", () => {
 
     act(() => result.current.applyVendorSync());
     await waitFor(() => expect(result.current.preview).toBeNull());
-    expect(api.callsTo("POST", /\/api\/vendor-sync\/apply$/).at(-1)!.body).toMatchObject({ selectedMcpKeys: ["plain"], removeMcpKeys: [] });
+    expect(api.callsTo("POST", /\/api\/vendor-sync\/apply$/).at(-1)!.body).toMatchObject({
+      selectedMcpKeys: ["plain"],
+      removeMcpKeys: [],
+      confirmedHostBoundMcpKeys: [],
+    });
 
     act(() => result.current.previewVendorSync());
     await waitFor(() => expect(result.current.preview).not.toBeNull());
     act(() => result.current.toggleMcp("node_repl", true));
     act(() => result.current.applyVendorSync());
     await waitFor(() => expect(result.current.preview).toBeNull());
-    expect(api.callsTo("POST", /\/api\/vendor-sync\/apply$/).at(-1)!.body).toMatchObject({ selectedMcpKeys: ["plain", "node_repl"], removeMcpKeys: [] });
+    expect(api.callsTo("POST", /\/api\/vendor-sync\/apply$/).at(-1)!.body).toMatchObject({
+      selectedMcpKeys: ["plain", "node_repl"],
+      removeMcpKeys: [],
+      confirmedHostBoundMcpKeys: ["node_repl"],
+    });
 
     act(() => result.current.previewVendorSync());
     await waitFor(() => expect(result.current.preview).not.toBeNull());
+    act(() => result.current.toggleMcp("node_repl", true));
+    act(() => result.current.toggleMcp("node_repl", false));
     act(() => result.current.toggleMcp("plain", false));
     act(() => result.current.applyVendorSync());
     await waitFor(() => expect(result.current.preview).toBeNull());
-    expect(api.callsTo("POST", /\/api\/vendor-sync\/apply$/).at(-1)!.body).toMatchObject({ selectedMcpKeys: [], removeMcpKeys: ["plain"] });
+    expect(api.callsTo("POST", /\/api\/vendor-sync\/apply$/).at(-1)!.body).toMatchObject({
+      selectedMcpKeys: [],
+      removeMcpKeys: ["plain"],
+      confirmedHostBoundMcpKeys: [],
+    });
+  });
+
+  it("切换目标设备 client 时自动清空上一台设备的 preview、勾选状态与摘要", async () => {
+    const api = new FakeApi(makeSnapshot({}));
+    api.vendorSyncPreview = () => ({ status: 200, body: preview });
+    api.vendorSyncApply = () => ({
+      status: 200,
+      body: { backupId: null, syncedMcpCount: 1, removedMcpCount: 0, linkedSkillCount: 0, unlinkedSkillCount: 0, preservedPrivateSkillCount: 0, updatedFiles: 1 },
+    });
+    api.install();
+    const { wrapper } = makeWrapper();
+    const tokyoClient = createClient("tokyo");
+    const { result, rerender } = renderHook(({ client }) => useVendorSyncSetting(client), {
+      wrapper,
+      initialProps: { client: localClient },
+    });
+
+    act(() => result.current.previewVendorSync());
+    await waitFor(() => expect(result.current.preview).not.toBeNull());
+    act(() => result.current.applyVendorSync());
+    await waitFor(() => expect(result.current.lastSummary).toBe("1 MCP synced"));
+
+    act(() => result.current.previewVendorSync());
+    await waitFor(() => expect(result.current.preview).not.toBeNull());
+
+    rerender({ client: tokyoClient });
+    expect(result.current.preview).toBeNull();
+    expect([...result.current.checkedMcp]).toEqual([]);
+    expect(result.current.lastSummary).toBeNull();
+  });
+
+  it("兼容旧版远端设备（preview 未带 hostBoundConfirmSupported 时不发 confirmedHostBoundMcpKeys），且 visibleMcpVendorBadges 按 WeakMap 保持引用稳定", async () => {
+    const legacyPreview: VendorSyncPreviewResponse = {
+      scannedAt: 1_700_000_000_000,
+      truncated: false,
+      mcpServers: preview.mcpServers,
+      skills: [],
+      nonSyncable: [],
+    };
+    const api = new FakeApi(makeSnapshot({}));
+    api.vendorSyncPreview = () => ({ status: 200, body: legacyPreview });
+    api.vendorSyncApply = () => ({
+      status: 200,
+      body: { backupId: null, syncedMcpCount: 1, removedMcpCount: 0, linkedSkillCount: 0, unlinkedSkillCount: 0, preservedPrivateSkillCount: 0, updatedFiles: 1 },
+    });
+    api.install();
+    const { wrapper } = makeWrapper();
+    const { result } = renderHook(() => useVendorSyncSetting(), { wrapper });
+
+    act(() => result.current.previewVendorSync());
+    await waitFor(() => expect(result.current.preview).not.toBeNull());
+    act(() => result.current.applyVendorSync());
+    await waitFor(() => expect(result.current.preview).toBeNull());
+    const sentBody = api.callsTo("POST", /\/api\/vendor-sync\/apply$/).at(-1)!.body as Record<string, unknown>;
+    expect("confirmedHostBoundMcpKeys" in sentBody).toBe(false);
+
+    const hostItem = {
+      ...preview.mcpServers[1]!,
+      vendors: [
+        { vendor: "codex" as const, label: "Codex", status: "present" as const },
+        { vendor: "claude" as const, label: "Claude", status: "will_add" as const },
+        { vendor: "agy" as const, label: "Antigravity", status: "mcp_remote" as const },
+      ],
+    };
+    const badgesOff1 = visibleMcpVendorBadges(hostItem, false);
+    const badgesOff2 = visibleMcpVendorBadges(hostItem, false);
+    expect(badgesOff1).toEqual([{ vendor: "codex", label: "Codex", status: "present" }]);
+    expect(badgesOff1).toBe(badgesOff2);
+    expect(visibleMcpVendorBadges(hostItem, true)).toBe(hostItem.vendors);
   });
 });
 

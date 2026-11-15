@@ -5,7 +5,7 @@ import { Loader2 } from "lucide-react";
 import type { VendorSyncVendorBadge } from "../../../shared/index.ts";
 import { HostBoundNote } from "../../components/HostBoundNote.tsx";
 import { ReadonlyValue, RowError, SettingsGroup, SettingsRow } from "../../components/SettingsList.tsx";
-import { VENDOR_STATUS_LABELS, type useVendorSyncSetting } from "../../settings-model.ts";
+import { VENDOR_STATUS_LABELS, visibleMcpVendorBadges, type useVendorSyncSetting } from "../../settings-model.ts";
 import { Button } from "../../ui/button.tsx";
 import { DRAWER_BUTTON } from "./SettingsDrawer.tsx";
 import { SwitchRow } from "./SettingsNavRow.tsx";
@@ -75,7 +75,7 @@ export function VendorSyncPage({ vendor }: { vendor: VendorSync }) {
                     )}
                     {item.hostBound && <HostBoundNote hostBound={item.hostBound} />}
                     {!checked && !item.hostBound && <Removed />}
-                    <VendorBadges badges={item.vendors} />
+                    <VendorBadges badges={visibleMcpVendorBadges(item, checked)} />
                   </span>
                 }
               />

@@ -77,6 +77,8 @@ export interface VendorSyncPreviewResponse {
   skills: VendorSyncSkillPreviewItem[];
   nonSyncable: VendorSyncNonSyncableItem[];
   truncated: boolean;
+  /** 新版守护进程标记支持 `confirmedHostBoundMcpKeys` 二次确认校验（兼容未升级的远端守护进程 `.strict()` 请求体）。 */
+  hostBoundConfirmSupported?: boolean;
 }
 
 export interface VendorSyncApplyRequest {
@@ -88,6 +90,8 @@ export interface VendorSyncApplyRequest {
   selectedSkillKeys: string[];
   /** 在预览窗手动取消勾选、需清理受管软链（保留用户私有技能）的 Skill 键名列表。 */
   removeSkillKeys: string[];
+  /** 用户在预览里已看到 `hostBound` 标注并显式打开开关同意同步的 MCP 键名列表；防止预览后普通项半途变成 `hostBound` 被盲目同步。 */
+  confirmedHostBoundMcpKeys?: string[];
 }
 
 export interface VendorSyncApplyResponse {

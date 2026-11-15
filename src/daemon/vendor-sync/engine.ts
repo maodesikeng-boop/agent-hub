@@ -206,7 +206,7 @@ export function createVendorSyncService(options: VendorSyncServiceOptions): Vend
     const hostBound = new Map<string, { detection: HostBoundDetection; sources: VendorSyncHostBound["sources"] }>();
     for (const { vendor, label } of vendors) {
       for (const [name, server] of Object.entries(scans.get(vendor)?.servers ?? {})) {
-        const found = detectHostBoundMcp(server, ctx.env);
+        const found = detectHostBoundMcp(server, ctx.env, ctx.userHome);
         if (!found) continue;
         const prev = hostBound.get(name);
         const kinds = [...new Set<HostBoundKind>([...(prev?.detection.kinds ?? []), ...found.kinds])];
@@ -339,6 +339,7 @@ export function createVendorSyncService(options: VendorSyncServiceOptions): Vend
         skills: skillItems,
         nonSyncable,
         truncated,
+        hostBoundConfirmSupported: true,
       };
     },
 
@@ -346,6 +347,8 @@ export function createVendorSyncService(options: VendorSyncServiceOptions): Vend
       const { vendors, scans, unionMcpMap, hostBound, skills } = scanAll();
 
       const selectedMcpSet = new Set(request.selectedMcpKeys);
+      const confirmedHostBoundSet =
+        request.confirmedHostBoundMcpKeys !== undefined ? new Set(request.confirmedHostBoundMcpKeys) : null;
       // 只认这次扫描里真有的键：请求里伪造的名字不能借“移除”删掉各家别的配置；
       // 别家应用自带的 MCP 不勾选只表示“不往别家补”，同步永远不从源头删它
       const removeMcpSet = new Set(
@@ -354,6 +357,10 @@ export function createVendorSyncService(options: VendorSyncServiceOptions): Vend
 
       const upsertMcp: Record<string, CanonicalMcpServer> = {};
       for (const key of selectedMcpSet) {
+        // 预览时还是普通项、apply 重扫时已变成 hostBound 的条目，未在 confirmedHostBoundMcpKeys 确认则跳过不补
+        if (confirmedHostBoundSet !== null && hostBound.has(key) && !confirmedHostBoundSet.has(key)) {
+          continue;
+        }
         const spec = unionMcpMap.get(key);
         if (spec) upsertMcp[key] = spec;
       }
@@ -364,11 +371,13 @@ export function createVendorSyncService(options: VendorSyncServiceOptions): Vend
         if (existedAnywhere) removedMcpCount += 1;
       }
 
+      const isProtectedServer = (server: CanonicalMcpServer) => detectHostBoundMcp(server, ctx.env, ctx.userHome) !== null;
       const fileWrites: PlannedFileWrite[] = [];
       for (const { adapter } of vendors) {
         const plan = adapter.planMcpPatch(ctx, {
           upsert: upsertMcp,
           removeNames: removeMcpSet,
+          isProtectedServer,
         });
         if (plan.nextContent !== null) {
           fileWrites.push({

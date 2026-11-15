@@ -216,6 +216,8 @@ export interface VendorSyncAdapter {
     input: {
       upsert: Readonly<Record<string, CanonicalMcpServer>>;
       removeNames: ReadonlySet<string>;
+      /** 引擎注入的保护判定（如 `hostBound`）：二次读盘时命中该判定的条目绝不从本文件移除。 */
+      isProtectedServer?: (server: CanonicalMcpServer) => boolean;
     },
   ): VendorMcpPatchPlan;
   /** 全局（`~/.agents/skills`）或项目（`<projectDir>/.agents/skills`）下的技能同步策略。 */
