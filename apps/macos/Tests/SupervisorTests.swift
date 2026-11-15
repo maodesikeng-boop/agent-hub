@@ -82,6 +82,78 @@ enum SupervisorTestsMain {
         setenv("AGENT_HUB_REPO_DIR", repoDir, 1)
         setenv("AGENT_HUB_NODE", nodePath, 1)
 
+        // MARK: - 0a. 运行环境定位：源码开发模式与分发模式（Contents/Resources/runtime）
+
+        do {
+            let fakeResources = "/fake/Fusa.app/Contents/Resources"
+            let bundledDaemon = "\(fakeResources)/runtime/daemon"
+            let bundledNode = "\(fakeResources)/runtime/node/bin/node"
+            let devRepo = "/dev/agent-hub"
+            let devNode = "/dev/node/bin/node"
+            func inputs(
+                mode: String?,
+                env: [String: String] = [:],
+                existing: Set<String>,
+                executables: Set<String>
+            ) -> DaemonRuntimeLocator.Inputs {
+                DaemonRuntimeLocator.Inputs(
+                    environment: env,
+                    infoValue: { key in
+                        switch key {
+                        case DaemonRuntimeLocator.runtimeModeInfoKey: return mode
+                        case "AgentHubRepoDir": return devRepo
+                        case "AgentHubNodePath": return devNode
+                        default: return nil
+                        }
+                    },
+                    defaultsValue: { _ in nil },
+                    resourcePath: fakeResources,
+                    homeDir: "/fake-home",
+                    fileExists: { existing.contains($0) },
+                    isExecutable: { executables.contains($0) },
+                    listDirectory: { _ in [] }
+                )
+            }
+            let allExisting: Set<String> = ["\(bundledDaemon)/src/daemon/main.ts", "\(devRepo)/src/daemon/main.ts"]
+            let allExecutable: Set<String> = [bundledNode, devNode, "/opt/homebrew/bin/node"]
+
+            // 分发模式：只用包内运行环境，即使 Info.plist 残留开发路径、本机装着 Node 也不用
+            let bundled = DaemonRuntimeLocator.resolve(inputs(mode: "bundled", existing: allExisting, executables: allExecutable))
+            check(bundled == .success(DaemonRuntimeLocation(mode: .bundled, daemonRoot: bundledDaemon, nodePath: bundledNode)),
+                  "bundled mode must resolve runtime inside Contents/Resources/runtime, got \(bundled)")
+
+            // 分发模式包内缺 Node：报错，绝不回退到本机 Node
+            let missingNode = DaemonRuntimeLocator.resolve(inputs(mode: "bundled", existing: allExisting, executables: [devNode, "/opt/homebrew/bin/node"]))
+            if case .failure(let err) = missingNode {
+                check(err.code == 2 && err.message.contains("安装包"), "bundled missing node error should mention 安装包, got \(err)")
+            } else {
+                check(false, "bundled mode must not fall back to host node, got \(missingNode)")
+            }
+
+            // 分发模式包内缺守护进程代码：报错，绝不回退到本机仓库
+            let missingDaemon = DaemonRuntimeLocator.resolve(inputs(mode: "bundled", existing: ["\(devRepo)/src/daemon/main.ts"], executables: allExecutable))
+            if case .failure(let err) = missingDaemon {
+                check(err.code == 1, "bundled missing daemon error code 1, got \(err)")
+            } else {
+                check(false, "bundled mode must not fall back to repo dir, got \(missingDaemon)")
+            }
+
+            // 源码开发模式（没写 AgentHubRuntimeMode）：照旧用 Info.plist 的仓库与 Node
+            let source = DaemonRuntimeLocator.resolve(inputs(mode: nil, existing: allExisting, executables: allExecutable))
+            check(source == .success(DaemonRuntimeLocation(mode: .source, daemonRoot: devRepo, nodePath: devNode)),
+                  "source mode must keep using AgentHubRepoDir/AgentHubNodePath, got \(source)")
+
+            // 环境变量覆盖两种模式都优先（排查用）
+            let overridden = DaemonRuntimeLocator.resolve(inputs(
+                mode: "bundled",
+                env: ["AGENT_HUB_REPO_DIR": devRepo, "AGENT_HUB_NODE": devNode],
+                existing: allExisting,
+                executables: allExecutable
+            ))
+            check(overridden == .success(DaemonRuntimeLocation(mode: .bundled, daemonRoot: devRepo, nodePath: devNode)),
+                  "env overrides must win in bundled mode, got \(overridden)")
+        }
+
         // MARK: - 0. 契约加载与常量完全一致
 
         let contractPath = (repoDir as NSString).appendingPathComponent("apps/desktop/contract.json")

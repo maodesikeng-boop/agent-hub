@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  随包 Node（Contents/Resources/runtime/node/bin/node）的签名权限，取自 nodejs.org 官方 macOS 构建的同名权限，
+  去掉了 get-task-allow（公证不允许）。ad-hoc 预览版不开强化运行时，这些权限不起作用；
+  第二期 Developer ID 签名会开 hardened runtime（codesign -o runtime），V8 的 JIT 与加载 .node 原生扩展靠它们。
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.disable-executable-page-protection</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+</dict>
+</plist>
