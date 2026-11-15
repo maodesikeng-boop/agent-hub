@@ -33,7 +33,7 @@ mod tests {
     use super::*;
     use std::fs;
     use std::io::{Read, Write};
-    use std::net::TcpListener;
+    use std::net::{Shutdown, TcpListener, TcpStream};
     use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -277,6 +277,43 @@ mod tests {
         assert!(!log.lock().unwrap().rotated_path(2).exists());
     }
 
+    /// 模拟服务器用：把一个 HTTP/1.1 请求完整读完（请求头到 `\r\n\r\n`，再按 `Content-Length` 读完请求体）。
+    ///
+    /// 只 `read` 一次会读到哪算哪：ureq 可能把请求头和请求体分两次写，服务器只拿到请求头就回响应并关连接时，
+    /// 接收缓冲区里还有没读的请求体，Windows 的 closesocket 会直接发 RST，客户端在读到响应前就报 10054。
+    /// 连接提前断开或读超时则返回已读到的部分（例如收尾时用来唤醒 accept 的空连接）。
+    fn read_full_http_request(stream: &mut TcpStream) -> Vec<u8> {
+        const READ_TIMEOUT: Duration = Duration::from_secs(5);
+        let _ = stream.set_read_timeout(Some(READ_TIMEOUT));
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 2048];
+        let mut needed: Option<usize> = None;
+        loop {
+            if let Some(total) = needed {
+                if buf.len() >= total {
+                    break;
+                }
+            }
+            match stream.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => buf.extend_from_slice(&chunk[..n]),
+            }
+            if needed.is_none() {
+                if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let head_end = pos + 4;
+                    let head = String::from_utf8_lossy(&buf[..head_end]).to_ascii_lowercase();
+                    let content_len = head
+                        .lines()
+                        .find_map(|l| l.strip_prefix("content-length:"))
+                        .and_then(|v| v.trim().parse::<usize>().ok())
+                        .unwrap_or(0);
+                    needed = Some(head_end + content_len);
+                }
+            }
+        }
+        buf
+    }
+
     #[test]
     fn http_client_blocks_redirects_verifies_auth_and_health_endpoint() {
         let contract = DesktopContract::embedded().unwrap();
@@ -299,10 +336,8 @@ mod tests {
                 if stop_flag.load(Ordering::SeqCst) {
                     break;
                 }
-                let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
-                let mut raw_req = vec![0u8; 2048];
-                let n = stream.read(&mut raw_req).unwrap_or(0);
-                let req_str = String::from_utf8_lossy(&raw_req[..n]);
+                let raw_req = read_full_http_request(&mut stream);
+                let req_str = String::from_utf8_lossy(&raw_req);
                 let first_line = req_str.lines().next().unwrap_or("");
 
                 match *mode_srv.lock().unwrap() {
@@ -347,6 +382,8 @@ mod tests {
                         }
                     }
                 }
+                // 先半关闭写端（发 FIN）再 drop：响应发完后连接正常收尾，不会因残留未读数据在 Windows 上变 RST。
+                let _ = stream.shutdown(Shutdown::Write);
             }
         });
 
