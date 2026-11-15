@@ -57,6 +57,7 @@ import type {
   WorkerHubStatusUpstream,
   WorkerPr,
 } from "../../shared/hub.ts";
+import { ASK_CARD_TELL_USER, ASK_CARD_WHERE } from "../../shared/hub.ts";
 import type { GraphPrTarget, HubCallContext } from "../../shared/ledger.ts";
 import {
   COMPLETED_GRAPH_RETENTION_MS,
@@ -1960,7 +1961,7 @@ export function createLedgerTaskGraphs(
   /**
    * `hub ask --node <nodeKey>`（第 5.1 节、第 8 节）：
    * 在任意尚未完成的步骤上挂一张拍板卡（无需专门的 gate 节点，挂着 Worker 的步骤也能挂），
-   * 步骤进入 `waiting`（等用户），卡片在对话消息流、右栏（果皮轨）和总助（Router 待拍板流）三处同时可见。
+   * 步骤进入 `waiting`（等用户），卡片在对话消息流里，没拍板时右栏（果皮轨）和总助（Router 待拍板流）也列着，拍板后移走。
    */
   const askOnStepIn = (
     p: Pending,
@@ -2048,7 +2049,7 @@ export function createLedgerTaskGraphs(
         ? `用户拍板后定案会直接发给该步的 Worker #${node.active_worker_id} 接着推进，不会叫醒你。`
         : "等用户拍板后再往下推进。";
     return {
-      text: `已在任务图 #${graph.id} 的步骤「${nodeKey}」上挂出拍板卡（对话、右栏、总助三处同步提醒）。${workerHint}`,
+      text: `已在任务图 #${graph.id} 的步骤「${nodeKey}」上挂出拍板卡：${ASK_CARD_WHERE}。${ASK_CARD_TELL_USER}。${workerHint}`,
       data: { messageId: askMsg.id, graph },
     };
   };

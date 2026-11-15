@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Change } from "../../shared/api.ts";
 import { askOf } from "../../shared/domain.ts";
+import { ASK_CARD_TELL_USER, ASK_CARD_WHERE } from "../../shared/hub.ts";
 import type { ConversationId, MessageId, PmId, SessionId } from "../../shared/domain.ts";
 import { REPORT_END, REPORT_START } from "../../shared/worker.ts";
 import { openDatabase } from "../store/db.ts";
@@ -249,5 +250,19 @@ describe("持久化", () => {
       options: ["审一个 PR / 分支", "审本地代码路径"],
     });
     expect(() => ledger.hubCall(lin.sessionId, "ask", { text: "问", options: ["只有一个"] })).toThrow(/选项至少要给 2 个/);
+  });
+});
+
+describe("回执：提问卡出现在哪", () => {
+  it("独立 hub ask 的回执说卡片在对话里、用户直接点选，右栏和总助只在没回答时列着，不引导用户去右栏找", () => {
+    const { text } = ledger.hubCall(lin.sessionId, "ask", {
+      text: "Vendor sync 要不要改？",
+      options: ["改同步", "都不动"],
+      recommended: "改同步",
+    });
+    expect(text).toBe(`已向用户提问：${ASK_CARD_WHERE}。${ASK_CARD_TELL_USER}。等用户回复再继续，别替用户拿主意。`);
+    expect(text).toContain("卡片显示在对话里，用户直接在卡上点选");
+    expect(text).toContain("回答后自动移走");
+    expect(text).toContain("别让用户去右栏找");
   });
 });

@@ -4,7 +4,7 @@
 import { z } from "zod";
 import { PM_MODE_LABELS, validateAskOptions } from "../../shared/domain.ts";
 import type { AgentSessionRow, PmId, PmMode, SessionId } from "../../shared/domain.ts";
-import { hubCommandAllowed } from "../../shared/hub.ts";
+import { ASK_CARD_TELL_USER, ASK_CARD_WHERE, hubCommandAllowed } from "../../shared/hub.ts";
 import type { HubArgs, HubCommand, HubResult, HubVendorModels, ProjectCard } from "../../shared/hub.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
 import { HUB_COMMAND, LOG_PREFIX } from "../../shared/names.ts";
@@ -277,7 +277,7 @@ export function createLedgerHubCommands(
         });
         const item = router.bridgeAskIn(p, caller, message, normalizedOptions, { replaceItemId });
         return {
-          text: "已向用户提问，会单独提醒用户。等用户回复再继续，别替用户拿主意。",
+          text: `已向用户提问：${ASK_CARD_WHERE}。${ASK_CARD_TELL_USER}。等用户回复再继续，别替用户拿主意。`,
           data: { messageId: message.id, ...(item !== null ? { item } : {}) },
         };
       }
