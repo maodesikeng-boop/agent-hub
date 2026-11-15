@@ -27,6 +27,16 @@
     这是整体工作流程，你需要在rule a的规矩下完成，不同的功能，代码分别完成，整体分工你来规划，总效率达到最高
 
 
+## 提交和 PR
+
+项目经理照 pstack 的 `poteto-mode` 指挥 Worker。Worker 不加载 `poteto-mode`，照任务说明和本节做。
+
+- 提交和开 PR 照 `.agents/skills/poteto-mode/playbooks/opening-a-pr.md` 做。PR 正文的 `## Why` 第一句写任务说明里的用户目标。
+- 提交前重读自己的 diff，按 `.agents/skills/unslop/SKILL.md` 删掉 AI 腔。这一步代替原文里的 `/deslop`。
+- 提 PR 前自己按 `.agents/skills/no-comments/references/comment-sicko.md` 把注释过一遍，不起子代理。
+- 标题、提交说明和 PR 正文照 `.agents/skills/technical-writing/SKILL.md` 和 `unslop` 写。正文用中文，`##` 标题用 playbook 原文的英文。
+- GitHub 操作用上面“规矩”里的 `GH_TOKEN` 写法，不用 Origin。PR 直接开成可审查状态，不开草稿。贴出链接就汇报，任务说明要求等 CI 时才等。
+
 ## 我们用的组件
 只列 `package.json` 与 `apps/windows/Cargo.toml` 的直接依赖（macOS 用系统框架），"用在哪"都用 grep 核过。
 
