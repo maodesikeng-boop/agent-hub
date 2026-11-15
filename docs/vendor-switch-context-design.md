@@ -1,17 +1,17 @@
 # 切换厂商直接切对话、不写交接（方案）
 
 > 状态：已拍板落地（定案：保底字数上限翻倍调高至 `240,000` 字，其余按方案执行）
-> 范围：项目经理（PM）跨厂商切换上下文重建、与 240K 自动换代协同、聊天流与资料页状态展示，以及总助（Router）跨厂商切换核查；覆盖全部 6 家已接入厂商（`claude, agy, codex, pi, deepseek, cursor`）。
+> 范围：项目经理（PM）跨厂商切换上下文重建、与 400K 自动换代协同、聊天流与资料页状态展示，以及总助（Router）跨厂商切换核查；覆盖全部 6 家已接入厂商（`claude, agy, codex, pi, deepseek, cursor`）。
 
 ## 0. 一页结论
 
 - **切换厂商不是“换代”，不写交接、不借旧交接凑数**：用户在项目经理资料页把厂商从 A 切到 B（如 `Claude Code → Codex`）时，后台在同一事务内 0 秒切到新会话，直接把**旧会话当前这一代脑子里装的内容**按原时间顺序搬给新厂商。
 - **只搬“当前这一代”，绝不翻上辈子旧账，也绝不腰斩本代汇报**：
   - 从未发生过换代的 PM：从第 1 条消息起，把本对话全部用户原话（含上传附件本机路径）、PM 回复（含提问卡片选项）、系统事件通知、以及**每一份 Worker 汇报完整原文**原样喂给新厂商；
-  - 发生过真实换代（满 `240K` 自动换代或用户手动点 `New session`）的 PM：只带**那次换代留下的摘要底座 + 换代切点之后的全部本代消息与 Worker 汇报全文**，彻底砍掉“跑去老切点之前重复挖 3 万字陈年旧话”的旧逻辑；
+  - 发生过真实换代（满 `400K` 自动换代或用户手动点 `New session`）的 PM：只带**那次换代留下的摘要底座 + 换代切点之后的全部本代消息与 Worker 汇报全文**，彻底砍掉“跑去老切点之前重复挖 3 万字陈年旧话”的旧逻辑；
   - 末尾实时附上当前名下**未完结任务图最新状态**（弥补跨厂丢失的工具输出）与本代可读旧会话原始记录路径。
 - **连续来回切厂商（A → B → C → A）100% 幂等无套娃**：每次切换都从 SQLite 账本的“本代起点”干净重建同一份本代上下文，不把上一次切换的开场包再套一层，聊天流里也不再冒出假的/陈旧的 `Handed off to a new session ›` 折叠卡。
-- **窗口保底与缓存稳定**：新增 `VENDOR_SWITCH_CONTEXT_MAX_CHARS = 240_000` 保底上限（按用户拍板定案调高至 24 万字，覆盖满 `240K` 自动换代前的完整一代纯对话与汇报零截断，同时守住首轮上限防极端异常爆窗）；首轮注入后永久固化在原厂会话第 1 轮历史中，第 2 轮起 `sessionPreamble` `O(1)` 返回 `null`，前缀缓存命中率稳定在 90%～99%。
+- **窗口保底与缓存稳定**：新增 `VENDOR_SWITCH_CONTEXT_MAX_CHARS = 240_000` 保底上限（按用户拍板定案调高至 24 万字，覆盖满 `400K` 自动换代前的完整一代纯对话与汇报零截断，同时守住首轮上限防极端异常爆窗）；首轮注入后永久固化在原厂会话第 1 轮历史中，第 2 轮起 `sessionPreamble` `O(1)` 返回 `null`，前缀缓存命中率稳定在 90%～99%。
 
 ---
 
@@ -19,7 +19,7 @@
 
 ### 1.1 一句话看懂改前 vs 改后
 
-拿一天里聊了 **100 句**话打比方（中午第 50 句时因为上下文满 24 万 token 自动换过一次会话、写过一份《中午摘要》；下午又聊了第 51～100 句，期间收到了 Worker 的完整汇报）：
+拿一天里聊了 **100 句**话打比方（中午第 50 句时因为上下文满 40 万 token 自动换过一次会话、写过一份《中午摘要》；下午又聊了第 51～100 句，期间收到了 Worker 的完整汇报）：
 
 ```text
 第 1 句 ──────── 第 50 句（中午自动换代，已有《中午摘要》）──────── 第 100 句（下午你点切换厂商）
@@ -51,7 +51,7 @@
 
 ### 1.3 四种典型场景：新厂商脑子里到底装了什么？
 
-#### 场景一：新 PM 切厂商（从建好起还没满过 240K 自动换代）
+#### 场景一：新 PM 切厂商（从建好起还没满过 400K 自动换代）
 - **你的操作**：新建项目经理聊了 30 轮，Claude 额度快满了，你在资料页把 `Provider` 改成 `Codex` 点 `Save`，回到聊天框直接发第 31 句。
 - **网页上看到什么**：保存瞬间生效，聊天流里多一行极淡的 `你改了项目经理的设置（厂商：Claude Code → Codex）`，没有交接分隔线。
 - **Codex 脑子里装了什么**：
@@ -61,7 +61,7 @@
   4. 你刚发的第 31 句。
 
 #### 场景二：自动换代后切厂商（早上自动换过代，下午切厂商）
-- **你的操作**：早上聊满 240K 自动换过一次会话（生成过一份《早间换代摘要》，当时在聊天流里留下了一条真实的换代分隔线）；下午又聊了 40 轮，把厂商从 `Codex` 切到 `Antigravity`。
+- **你的操作**：早上聊满 400K 自动换过一次会话（生成过一份《早间换代摘要》，当时在聊天流里留下了一条真实的换代分隔线）；下午又聊了 40 轮，把厂商从 `Codex` 切到 `Antigravity`。
 - **网页上看到什么**：早上的那条真实换代分隔线照常留在早上位置；下午切厂商处**不会**再冒出第二条复读早上旧摘要的假分隔线。
 - **Antigravity 脑子里装了什么**：
   1. 系统提示词 + 最新性格设定；
@@ -224,7 +224,7 @@ interface GenerationAnchor {
      - 若为 `in_session` 正在写交接请求 H，立即停止 H（排队标 `stopped`，在途推 `p.stops` 并 `endWriting`）；
      - 若后台 `runner.ts` 正在 `forking / writing`，将状态原地改为 `method = 'vendor_switch', status = 'ready', text = NULL, cut_message_id = NULL`——后台跑腿进程随后回调 `handoverForked / handoverWritten / handoverFailed` 时因状态已非 `forking / writing` 会自动丢弃结果并立即 `remove` 清理临时 fork 副本，零残留；
      - 随后立即尝试 `trySwitch` 秒切。
-4. **与 `240K` 自动换代（`HANDOVER_TOKEN_THRESHOLD`）无缝衔接**：
+4. **与 `400K` 自动换代（`HANDOVER_TOKEN_THRESHOLD`）无缝衔接**：
    - 切到新厂商后，新会话第 1 轮读入本代完整上下文，驱动层如实上报新厂商的 `session.usage.context`；
    - 后续在新厂商上继续对话直到 `usage.context >= 240,000` 时，`afterDriverEvent` 照常触发后台 `auto` 自动换代；
    - 由于新厂商第 1 轮消息里本就完整装着切厂商前的本代前半段对话与汇报，fork 出的写手能看到**整整这一代从头到尾的完整上下文**，写出的新一代摘要自然覆盖整代，记录新的 `cut_message_id` 开启下一代；
@@ -270,7 +270,7 @@ interface GenerationAnchor {
 
 1. **聊天流（零前端改动即自动生效）**：
    - 跨厂商切换时后端不再插入 `session.renewed` 系统消息，聊天流里不再渲染 `SessionRenewed`（`Handed off to a new session ›`）折叠卡，仅显示 `persona.ts` 原有的 `persona.changed` 系统通知行（`你改了 <PM> 的设置（厂商：A → B）` + `Undo` 按钮）；
-   - 真实的 240K 自动换代与手动点击 `New session` 照常插入 `session.renewed` 分隔线，点开永远是当次新鲜写出的真实交接摘要。
+   - 真实的 400K 自动换代与手动点击 `New session` 照常插入 `session.renewed` 分隔线，点开永远是当次新鲜写出的真实交接摘要。
 2. **资料页 `PmProfile.tsx`（修平 1 处状态误报，不增删任何装饰字或新样式）**：
    - `RenewSessionGroup` 拆分为 `renewing: boolean`（确实在跑 `New session` 写交接）与 `disabled?: boolean`（如 `switchingToVendor != null` 正在等当轮结束切厂商）；
    - 当 `switchingToVendor != null` 且 `!renewing` 时：上方 `Provider` 行照常显示 `Switching to <Vendor>…` 并禁用厂商下拉；下方 `New session` 按钮仅置 `disabled`，文案保持 `"Start…"` 而不再转圈谎报 `"Handing off…"`。
@@ -281,7 +281,7 @@ interface GenerationAnchor {
 
 全部 6 家厂商均继承自统一的 `BaseSessionDriver`（`src/daemon/driver/base-driver.ts`），跨厂商切换在任意两家之间（`6 × 5 = 30` 种有向组合）走完全同一套协议与声明表，**零厂商名硬编码分支**：
 
-| 厂商 ID | 显示名 | 系统提示词通道（`spec.capabilities.systemPrompt`） | 首轮本代上下文注入点 | 第 2 轮起续接方式 | 原始记录跨厂可读（`transcriptPortable`） | 自动换代（240K）方式 |
+| 厂商 ID | 显示名 | 系统提示词通道（`spec.capabilities.systemPrompt`） | 首轮本代上下文注入点 | 第 2 轮起续接方式 | 原始记录跨厂可读（`transcriptPortable`） | 自动换代（400K）方式 |
 | --- | --- | --- | --- | --- | --- | --- |
 | `claude` | Claude Code | `resident`（`--append-system-prompt-file`） | `BaseSessionDriver.takeNotesPrefixes` → 首条 stdin 用户消息最前 | 常驻流 / `--resume <uuid>` | **可读**（`~/.claude/projects/.../<id>.jsonl`） | 后台 `CLAUDE_FORKERS`（`--fork-session`） |
 | `agy` | Antigravity | `resident`（`--add-dir` 下 `.agents/rules/fusa-*.md`） | `BaseSessionDriver.takeNotesPrefixes` → 首条用户消息最前 | `--conversation <uuid>` | **不可直读**（SQLite `conversations/<id>.db`） | 后台 `AGY_FORKERS`（SQLite 备份拷库） |
@@ -316,7 +316,7 @@ interface GenerationAnchor {
 - 活跃任务图快照（`HANDOVER_GRAPHS_MAX_CHARS = 8,000` 字 ≈ `5K` tokens）+ 当轮用户新消息 + 首轮推理与工具输出余量（预留 `20K` tokens）：约 `25K` tokens；
 - **留给本代上下文继承包的安全净预算**：约 `65K～75K` tokens（中英代码混排按 `1 字 ≈ 0.6 token` 折算约 **`110,000～125,000` 字**）。
 
-而日常使用中，PM 在满 `240K` 自动换代前，其上下文大头是历史工具返回结果，`messages` 表里沉淀的本代纯对话 + Worker 汇报全文通常仅 **`20,000～80,000` 字**。因此在 `src/shared/limits.ts` 集中定义以下常量：
+而日常使用中，PM 在满 `400K` 自动换代前，其上下文大头是历史工具返回结果，`messages` 表里沉淀的本代纯对话 + Worker 汇报全文通常仅 **`20,000～80,000` 字**。因此在 `src/shared/limits.ts` 集中定义以下常量：
 
 | 常量名 | 值 | 用途说明 |
 | --- | --- | --- |
@@ -387,12 +387,12 @@ interface GenerationAnchor {
 ### 6.2 必测回归场景清单
 
 1. **新 PM 初次切厂商**：无任何历史换代，聊多轮（含用户上传附件、PM `hub ask` 选项卡片、系统事件）后切厂商，新会话首轮拿到从第 1 条起的完整本代记录与附件绝对路径，无“交接”段落，聊天流无 `session.renewed` 消息。
-2. **240K 自动换代后切厂商**：第 1 代聊满阈值完成自动换代，第 2 代再聊若干轮后切厂商——首轮包含上次自动换代摘要 + 切点后全部本代消息，**严格不包含切点前第 1 代的 3 万字旧原话**。
+2. **400K 自动换代后切厂商**：第 1 代聊满阈值完成自动换代，第 2 代再聊若干轮后切厂商——首轮包含上次自动换代摘要 + 切点后全部本代消息，**严格不包含切点前第 1 代的 3 万字旧原话**。
 3. **A → B → C → A 连续来回切三次（含中途说话与不说话）**：每次 `sessionPreamble` 产出的本代对话主体无套娃、无重复头部、不混入 `persona.changed` 噪音；中途未说话跳过中间厂商时，仍保留本代前序可读厂商 `.jsonl` 路径。
 4. **Worker 汇报全文保留**：覆盖已唤醒 PM 的汇报、任务图 `confirm` 检查点静默汇报、以及切换瞬间处于 `queued` 待发的汇报，新厂商拿到的均为八栏完整汇报原文而非一行目录。
 5. **6 家厂商全矩阵可移植性**：从 `claude / codex / pi` 切出时附 `.jsonl` 路径；从 `agy / deepseek / cursor` 切出时不塞不可读文件路径。
 6. **超长本代窗口保底截断**：本代消息总长超过 `VENDOR_SWITCH_CONTEXT_MAX_CHARS`（含边界处带 emoji 代理对），保留本代起点摘要 + 最新 24 万字完整尾部，首部带省略提示且无孤立代理项。
-7. **240K 自动换代切点不被污染**：切厂商后继续聊到 `240K` 触发自动换代，自动换代正常 fork 当前会话写出新摘要并推进 `GenerationAnchor`；切厂商不影响 `attemptsOf` 重试计数。
+7. **400K 自动换代切点不被污染**：切厂商后继续聊到 `400K` 触发自动换代，自动换代正常 fork 当前会话写出新摘要并推进 `GenerationAnchor`；切厂商不影响 `attemptsOf` 重试计数。
 8. **忙碌期切厂商、中途改参、撤销与碰撞**：旧会话 `working` / `backgroundTasks > 0` / 在途后台写交接时切厂商，`switchingToVendor` 状态、中途 `Undo` 取消、当轮结束（含报错结束）自动切换均准确闭环。
 9. **第 2 轮起 `sessionPreamble` 恒返 `null` 与迁移幂等**：首轮 `message.processing { preamble: true }` 后 `session_preamble_seen` 落库，重启后也不重塞；`0027` 从 `0026` 升级及回退 `user_version = 8` 重跑均幂等通过。
 10. **前端界面验证**：资料页 `switchingToVendor != null` 时 `Provider` 显示 `Switching to …` 而 `New session` 按钮显示禁用态 `Start…`（不显示 `Handing off…`），聊天流不渲染 `session.renewed` 折叠卡。
