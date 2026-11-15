@@ -788,7 +788,8 @@ export function useVendorSyncSetting(explicitClient?: HubClient) {
         for (const item of preview.mcpServers) {
           if (checkedMcp.has(item.key)) {
             selectedMcpKeys.push(item.key);
-          } else {
+          } else if (!item.hostBound) {
+            // 别家应用自带的 MCP：不勾选只是“不往别家补”，不进移除清单，源头配置原样保留
             removeMcpKeys.push(item.key);
           }
         }
@@ -820,7 +821,7 @@ export function useVendorSyncSetting(explicitClient?: HubClient) {
     {
       mutationFn: () => client.fetchVendorSyncPreview(),
       onSuccess: (data) => {
-        setCheckedMcp(new Set(data.mcpServers.map((item) => item.key)));
+        setCheckedMcp(new Set(data.mcpServers.filter((item) => !item.hostBound).map((item) => item.key)));
         setCheckedSkills(new Set(data.skills.map((item) => item.key)));
         applyMutation.reset();
         setPreview(data);

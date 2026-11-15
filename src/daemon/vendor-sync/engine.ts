@@ -11,6 +11,7 @@ import {
   type AgentVendor,
   type VendorSyncApplyRequest,
   type VendorSyncApplyResponse,
+  type VendorSyncHostBound,
   type VendorSyncItemVendorStatus,
   type VendorSyncMcpPreviewItem,
   type VendorSyncNonSyncableItem,
@@ -34,6 +35,7 @@ import {
   type PlannedSymlinkOp,
   type WriteFileAtomicFn,
 } from "./backup.ts";
+import { detectHostBoundMcp, hostBoundReason, type HostBoundDetection, type HostBoundKind } from "./host-bound.ts";
 import { buildMaskedMcpSummary } from "./mask.ts";
 
 export interface SyncProjectFolderRef {
@@ -200,6 +202,22 @@ export function createVendorSyncService(options: VendorSyncServiceOptions): Vend
       }
     }
 
+    // 别家应用自带的 MCP：每家扫描结果用同一条规则判断；任何一家持有的那份命中就算（来源 = 命中的那几家）
+    const hostBound = new Map<string, { detection: HostBoundDetection; sources: VendorSyncHostBound["sources"] }>();
+    for (const { vendor, label } of vendors) {
+      for (const [name, server] of Object.entries(scans.get(vendor)?.servers ?? {})) {
+        const found = detectHostBoundMcp(server, ctx.env);
+        if (!found) continue;
+        const prev = hostBound.get(name);
+        const kinds = [...new Set<HostBoundKind>([...(prev?.detection.kinds ?? []), ...found.kinds])];
+        const app = prev?.detection.app ?? found.app;
+        hostBound.set(name, {
+          detection: { kinds, ...(app ? { app } : {}) },
+          sources: [...(prev?.sources ?? []), { vendor, label }],
+        });
+      }
+    }
+
     const sortedNames = [...allServerNames].sort();
     const unionMcpMap = new Map<string, CanonicalMcpServer>();
     for (const name of sortedNames) {
@@ -224,6 +242,7 @@ export function createVendorSyncService(options: VendorSyncServiceOptions): Vend
       vendors,
       scans,
       unionMcpMap,
+      hostBound,
       nonSyncable,
       skills: skillScan.skills,
       truncated,
@@ -232,7 +251,7 @@ export function createVendorSyncService(options: VendorSyncServiceOptions): Vend
 
   return {
     preview(): VendorSyncPreviewResponse {
-      const { vendors, scans, unionMcpMap, nonSyncable, skills, truncated } = scanAll();
+      const { vendors, scans, unionMcpMap, hostBound, nonSyncable, skills, truncated } = scanAll();
 
       const mcpServers: VendorSyncMcpPreviewItem[] = [];
       for (const [name, canonical] of unionMcpMap.entries()) {
@@ -263,6 +282,7 @@ export function createVendorSyncService(options: VendorSyncServiceOptions): Vend
           badges.push({ vendor, label, status });
         }
 
+        const owned = hostBound.get(name);
         mcpServers.push({
           key: name,
           name,
@@ -270,6 +290,15 @@ export function createVendorSyncService(options: VendorSyncServiceOptions): Vend
           maskedTarget,
           maskedAuth,
           usesMcpRemoteBridge,
+          ...(owned
+            ? {
+                hostBound: {
+                  ...(owned.detection.app ? { app: owned.detection.app } : {}),
+                  sources: owned.sources,
+                  reason: hostBoundReason(owned.detection),
+                },
+              }
+            : {}),
           vendors: badges,
         });
       }
@@ -314,11 +343,14 @@ export function createVendorSyncService(options: VendorSyncServiceOptions): Vend
     },
 
     apply(request: VendorSyncApplyRequest): VendorSyncApplyResponse {
-      const { vendors, scans, unionMcpMap, skills } = scanAll();
+      const { vendors, scans, unionMcpMap, hostBound, skills } = scanAll();
 
       const selectedMcpSet = new Set(request.selectedMcpKeys);
-      // 只认这次扫描里真有的键：请求里伪造的名字不能借“移除”删掉各家别的配置
-      const removeMcpSet = new Set(request.removeMcpKeys.filter((k) => !selectedMcpSet.has(k) && unionMcpMap.has(k)));
+      // 只认这次扫描里真有的键：请求里伪造的名字不能借“移除”删掉各家别的配置；
+      // 别家应用自带的 MCP 不勾选只表示“不往别家补”，同步永远不从源头删它
+      const removeMcpSet = new Set(
+        request.removeMcpKeys.filter((k) => !selectedMcpSet.has(k) && unionMcpMap.has(k) && !hostBound.has(k)),
+      );
 
       const upsertMcp: Record<string, CanonicalMcpServer> = {};
       for (const key of selectedMcpSet) {

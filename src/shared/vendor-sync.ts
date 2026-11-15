@@ -21,6 +21,16 @@ export interface VendorSyncVendorBadge {
   status: VendorSyncItemVendorStatus;
 }
 
+/** 别家应用自带的 MCP：离开所在应用就起不来，默认不勾选、不往别家补（用户可手动勾上）。 */
+export interface VendorSyncHostBound {
+  /** 命令所在的应用名（如 `ChatGPT`）；只靠宿主透传环境变量判断时没有。 */
+  app?: string;
+  /** 持有这条配置的厂商（来源）。 */
+  sources: Array<{ vendor: AgentVendor; label: string }>;
+  /** 面向界面的清晰英文原因。 */
+  reason: string;
+}
+
 export interface VendorSyncMcpPreviewItem {
   /** 稳定键名（即 MCP server 名称）。 */
   key: string;
@@ -32,6 +42,8 @@ export interface VendorSyncMcpPreviewItem {
   maskedAuth: string[];
   /** 是否存在仅支持 HTTP/stdio 的目标厂商需要自动包一层 `npx -y mcp-remote <url>`。 */
   usesMcpRemoteBridge: boolean;
+  /** 有值表示这是别家应用自带的 MCP：默认不勾选；不勾选只表示「不往别家补」，绝不会从源头删掉。 */
+  hostBound?: VendorSyncHostBound;
   /** 各厂商当前状态与同步计划（纯数据驱动渲染）。 */
   vendors: VendorSyncVendorBadge[];
 }
@@ -70,7 +82,7 @@ export interface VendorSyncPreviewResponse {
 export interface VendorSyncApplyRequest {
   /** 勾选要并集同步到各家的 MCP 键名列表。 */
   selectedMcpKeys: string[];
-  /** 在预览窗手动取消勾选、需主动从各家全局移除的 MCP 键名列表。 */
+  /** 在预览窗手动取消勾选、需主动从各家全局移除的 MCP 键名列表。别家应用自带的 MCP（`hostBound`）永远不会被移除，传了也忽略。 */
   removeMcpKeys: string[];
   /** 勾选要建立逐项软链的基准 Skill 键名列表。 */
   selectedSkillKeys: string[];

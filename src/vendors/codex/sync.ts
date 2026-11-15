@@ -50,6 +50,7 @@ function parseCodexMcpEntry(
     const args = cleanStringArray(rawEntry.args);
     const env = cleanStringMap(rawEntry.env);
     const unwrapped = Object.keys(env).length === 0 ? unwrapMcpRemoteBridge(command, args) : null;
+    const hostEnvVars = cleanStringArray(rawEntry.env_vars);
     return {
       server: {
         transport: "stdio",
@@ -57,6 +58,7 @@ function parseCodexMcpEntry(
         args,
         env,
         ...(unwrapped ? { bridgedSseUrl: unwrapped.url } : {}),
+        ...(hostEnvVars.length > 0 ? { hostEnvVars } : {}),
       },
     };
   }

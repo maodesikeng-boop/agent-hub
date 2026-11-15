@@ -3,6 +3,7 @@
 // 完全由接口数据驱动，不写死厂商名，不用 · | / 拼接。
 import { Loader2 } from "lucide-react";
 import type { VendorSyncVendorBadge } from "../../../shared/index.ts";
+import { HostBoundNote } from "../../components/HostBoundNote.tsx";
 import { ReadonlyValue, RowError, SettingsGroup, SettingsRow } from "../../components/SettingsList.tsx";
 import { VENDOR_STATUS_LABELS, type useVendorSyncSetting } from "../../settings-model.ts";
 import { Button } from "../../ui/button.tsx";
@@ -72,7 +73,8 @@ export function VendorSyncPage({ vendor }: { vendor: VendorSync }) {
                         ))}
                       </span>
                     )}
-                    {!checked && <Removed />}
+                    {item.hostBound && <HostBoundNote hostBound={item.hostBound} />}
+                    {!checked && !item.hostBound && <Removed />}
                     <VendorBadges badges={item.vendors} />
                   </span>
                 }

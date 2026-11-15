@@ -618,6 +618,62 @@ describe("useVendorSyncSetting", () => {
   });
 });
 
+describe("useVendorSyncSetting：别家应用自带的 MCP", () => {
+  const preview: VendorSyncPreviewResponse = {
+    scannedAt: 1_700_000_000_000,
+    truncated: false,
+    mcpServers: [
+      { key: "plain", name: "plain", transport: "stdio", maskedTarget: "npx a", maskedAuth: [], usesMcpRemoteBridge: false, vendors: [] },
+      {
+        key: "node_repl",
+        name: "node_repl",
+        transport: "stdio",
+        maskedTarget: "node_repl",
+        maskedAuth: [],
+        usesMcpRemoteBridge: false,
+        hostBound: { app: "ChatGPT", sources: [{ vendor: "codex", label: "Codex" }], reason: "Runs from inside the ChatGPT app and won't work without it" },
+        vendors: [],
+      },
+    ],
+    skills: [],
+    nonSyncable: [],
+  };
+
+  it("默认不勾选；按默认值同步时它既不在 selected 也不在 remove；用户手动勾上才进 selected，再取消勾选仍不进 remove", async () => {
+    const api = new FakeApi(makeSnapshot({}));
+    api.vendorSyncPreview = () => ({ status: 200, body: preview });
+    api.vendorSyncApply = (body) => ({
+      status: 200,
+      body: { backupId: null, syncedMcpCount: body.selectedMcpKeys.length, removedMcpCount: 0, linkedSkillCount: 0, unlinkedSkillCount: 0, preservedPrivateSkillCount: 0, updatedFiles: 0 },
+    });
+    api.install();
+    const { wrapper } = makeWrapper();
+    const { result } = renderHook(() => useVendorSyncSetting(), { wrapper });
+
+    act(() => result.current.previewVendorSync());
+    await waitFor(() => expect(result.current.preview).not.toBeNull());
+    expect([...result.current.checkedMcp]).toEqual(["plain"]);
+
+    act(() => result.current.applyVendorSync());
+    await waitFor(() => expect(result.current.preview).toBeNull());
+    expect(api.callsTo("POST", /\/api\/vendor-sync\/apply$/).at(-1)!.body).toMatchObject({ selectedMcpKeys: ["plain"], removeMcpKeys: [] });
+
+    act(() => result.current.previewVendorSync());
+    await waitFor(() => expect(result.current.preview).not.toBeNull());
+    act(() => result.current.toggleMcp("node_repl", true));
+    act(() => result.current.applyVendorSync());
+    await waitFor(() => expect(result.current.preview).toBeNull());
+    expect(api.callsTo("POST", /\/api\/vendor-sync\/apply$/).at(-1)!.body).toMatchObject({ selectedMcpKeys: ["plain", "node_repl"], removeMcpKeys: [] });
+
+    act(() => result.current.previewVendorSync());
+    await waitFor(() => expect(result.current.preview).not.toBeNull());
+    act(() => result.current.toggleMcp("plain", false));
+    act(() => result.current.applyVendorSync());
+    await waitFor(() => expect(result.current.preview).toBeNull());
+    expect(api.callsTo("POST", /\/api\/vendor-sync\/apply$/).at(-1)!.body).toMatchObject({ selectedMcpKeys: [], removeMcpKeys: ["plain"] });
+  });
+});
+
 describe("ChoiceRows、ModeRows 与 Button destructive", () => {
   it("ChoiceRows 支持无说明纯单行（min-h-12 py-2.5）与带说明行（py-3），ModeRows 包装完全兼容，Button destructive 具备标准危险主按钮样式", () => {
     const onPick = vi.fn();
