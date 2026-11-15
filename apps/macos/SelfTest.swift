@@ -16,8 +16,15 @@ enum FusaSelfTest {
     }
 
     static func run() -> Int32 {
-        let tempRoot = (NSTemporaryDirectory() as NSString)
-            .appendingPathComponent("fusa-st-\(getpid())-\(Int(Date().timeIntervalSince1970 * 1000))")
+        var template = Array("/tmp/fusa-st.XXXXXX".utf8CString)
+        let createdPtr = template.withUnsafeMutableBufferPointer { buf in
+            mkdtemp(buf.baseAddress)
+        }
+        guard createdPtr != nil else {
+            fputs("[fusa-self-test] FAIL: mkdtemp(/tmp/fusa-st.XXXXXX) 失败\n", stderr)
+            return 1
+        }
+        let tempRoot = String(cString: template)
         let homeDir = (tempRoot as NSString).appendingPathComponent("hub")
         defer { try? FileManager.default.removeItem(atPath: tempRoot) }
         do {
@@ -94,8 +101,9 @@ enum FusaSelfTest {
             throw Failure(message: "守护进程不是本次自检拉起的：\(supervisor.currentOwnership)")
         }
 
+        var sandboxStatus = "nested-skipped"
         let verify: () throws -> Void = {
-            // 4. 未鉴权 401；兑换 Cookie 后 200 且身份一致
+            // 4. 未鉴权 401；兑换 Cookie 后 200 且身份一致；分发包拒绝 --build 热重启（不碰签名目录）
             let healthPath = (try? JSONDecoder().decode(
                 HealthPathContract.self,
                 from: Data(contentsOf: Bundle.main.url(forResource: "contract", withExtension: "json")!)
@@ -109,7 +117,8 @@ enum FusaSelfTest {
                   case .success(let cookies) = cookieResult!, !cookies.isEmpty else {
                 throw Failure(message: "用 ui-token 兑换会话 Cookie 失败")
             }
-            let (okStatus, body) = try httpGet(healthURL, headers: HTTPCookie.requestHeaderFields(with: cookies))
+            let authHeaders = HTTPCookie.requestHeaderFields(with: cookies)
+            let (okStatus, body) = try httpGet(healthURL, headers: authHeaders)
             guard okStatus == 200,
                   let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
                   json["ok"] as? Bool == true,
@@ -117,8 +126,18 @@ enum FusaSelfTest {
                   json["instanceId"] as? String == instanceId else {
                 throw Failure(message: "已鉴权 GET \(healthPath) 应返回 200 且身份一致，实际 \(okStatus)：\(String(data: body, encoding: .utf8) ?? "")")
             }
+            let reloadURL = URL(string: "http://127.0.0.1:\(port)/api/self-reload")!
+            let (reloadBuildStatus, _) = try httpPostJson(
+                reloadURL,
+                origin: "http://127.0.0.1:\(port)",
+                headers: authHeaders,
+                body: Data("{\"build\":true}".utf8)
+            )
+            guard reloadBuildStatus == 400 else {
+                throw Failure(message: "分发包 POST /api/self-reload {\"build\":true} 应返回 400，实际 \(reloadBuildStatus)")
+            }
 
-            // 5. PM/Worker 会话 PATH 最前面的 hub 外壳必须指向包内 Node 与包内 hub 入口，且能跑
+            // 5. PM/Worker 会话 PATH 最前面的 hub 外壳必须指向包内 Node 与包内 hub 入口，且在 sandbox-exec 写入范围沙箱下可用
             let hubShim = (homeDir as NSString).appendingPathComponent("run/bin/hub")
             guard let shim = try? String(contentsOfFile: hubShim, encoding: .utf8) else {
                 throw Failure(message: "守护进程没写出 hub 外壳：\(hubShim)")
@@ -129,6 +148,26 @@ enum FusaSelfTest {
             }
             let usage = try runTool(hubShim, ["help"])
             guard usage.contains("hub") else { throw Failure(message: "hub help 输出不对：\(usage.prefix(200))") }
+
+            if canRunSandboxExec() {
+                let realHome = realpathOrSelf(homeDir)
+                let wtDir = (realHome as NSString).appendingPathComponent("worktrees/1/1")
+                try FileManager.default.createDirectory(atPath: wtDir, withIntermediateDirectories: true)
+                let escapedHome = sbplEscape(realHome)
+                let escapedWt = sbplEscape(wtDir)
+                let profile = "(version 1)\n(allow default)\n(deny file-write* (subpath \"\(escapedHome)\"))\n(allow file-write* (subpath \"\(escapedWt)\"))"
+                let sbUsage = try runTool("/usr/bin/sandbox-exec", ["-p", profile, hubShim, "help"])
+                guard sbUsage.contains("hub") else {
+                    throw Failure(message: "sandbox-exec 内跑 hub help 输出不对：\(sbUsage.prefix(200))")
+                }
+                _ = try runTool("/usr/bin/sandbox-exec", ["-p", profile, "/bin/sh", "-c", "echo ok > \"$1\"", "--", "\(wtDir)/probe"])
+                let deniedPath = "\(realHome)/state/sandbox-denied-probe"
+                let deniedStatus = try runToolStatus("/usr/bin/sandbox-exec", ["-p", profile, "/bin/sh", "-c", "echo bad > \"$1\"", "--", deniedPath])
+                guard deniedStatus != 0, !FileManager.default.fileExists(atPath: deniedPath) else {
+                    throw Failure(message: "sandbox-exec 没拦住对数据目录 state/ 的写入")
+                }
+                sandboxStatus = "verified"
+            }
         }
         let verifyError: Error?
         do { try verify(); verifyError = nil } catch { verifyError = error }
@@ -150,7 +189,7 @@ enum FusaSelfTest {
         _ = pumpUntil(timeout: 5) { probeAfter != nil }
         if probeAfter == true { throw Failure(message: "关机后端口 \(port) 仍在响应") }
 
-        return "mode=bundled node=\(nodeVersion) npm=\(npmVersion) port=\(port) pid=\(pid) startupMs=\(startupMs) shutdownMs=\(shutdownMs)"
+        return "mode=bundled node=\(nodeVersion) npm=\(npmVersion) sandbox=\(sandboxStatus) port=\(port) pid=\(pid) startupMs=\(startupMs) shutdownMs=\(shutdownMs)"
     }
 
     private static func pumpUntil(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {
@@ -181,10 +220,53 @@ enum FusaSelfTest {
         return text
     }
 
+    private static func runToolStatus(_ executable: String, _ args: [String]) throws -> Int32 {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = args
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch {
+            throw Failure(message: "跑不起来 \(executable)：\(error.localizedDescription)")
+        }
+        process.waitUntilExit()
+        return process.terminationStatus
+    }
+
+    private static func canRunSandboxExec() -> Bool {
+        (try? runToolStatus("/usr/bin/sandbox-exec", ["-p", "(version 1)\n(allow default)", "/usr/bin/true"])) == 0
+    }
+
+    private static func realpathOrSelf(_ path: String) -> String {
+        guard let resolved = Darwin.realpath(path, nil) else { return path }
+        defer { free(resolved) }
+        return String(cString: resolved)
+    }
+
+    private static func sbplEscape(_ path: String) -> String {
+        path.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+
     private static func httpGet(_ url: URL, headers: [String: String]) throws -> (Int, Data) {
         var req = URLRequest(url: url)
         req.timeoutInterval = 5
         headers.forEach { req.setValue($1, forHTTPHeaderField: $0) }
+        return try sendHttp(req)
+    }
+
+    private static func httpPostJson(_ url: URL, origin: String, headers: [String: String], body: Data) throws -> (Int, Data) {
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 5
+        headers.forEach { req.setValue($1, forHTTPHeaderField: $0) }
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue(origin, forHTTPHeaderField: "Origin")
+        req.httpBody = body
+        return try sendHttp(req)
+    }
+
+    private static func sendHttp(_ req: URLRequest) throws -> (Int, Data) {
         let config = URLSessionConfiguration.ephemeral
         config.httpCookieStorage = nil
         config.httpShouldSetCookies = false
@@ -200,8 +282,9 @@ enum FusaSelfTest {
             done.signal()
         }.resume()
         _ = done.wait(timeout: .now() + 10)
-        if let failure { throw Failure(message: "请求 \(url) 失败：\(failure.localizedDescription)") }
-        guard let result else { throw Failure(message: "请求 \(url) 超时") }
+        let target = req.url?.absoluteString ?? ""
+        if let failure { throw Failure(message: "请求 \(target) 失败：\(failure.localizedDescription)") }
+        guard let result else { throw Failure(message: "请求 \(target) 超时") }
         return result
     }
 

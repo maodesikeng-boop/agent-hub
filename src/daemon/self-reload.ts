@@ -4,7 +4,7 @@
 // 以 apps/desktop/contract.json 的 reloadExitCode 退出，Fusa.app / Windows 外壳 / systemd Restart=on-failure 立即拉起新进程）。
 // 带 build：登记时就在后台把网页构建到暂存目录（不碰正在用的 dist/web），构建失败取消本次重启；重启前一刻才把暂存产物原子换上线。
 // 多次登记合并成同一次；关机（close）清掉定时器、取消构建。
-import { existsSync, lstatSync, renameSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import {
   LedgerRequestError,
@@ -168,7 +168,7 @@ export function createSelfReload(options: SelfReloadOptions): SelfReloadControll
     request({ build, by }) {
       if (closed) throw new LedgerRequestError("conflict", "守护进程正在关闭，不能再登记热重启");
       if (state === "restarting") throw new LedgerRequestError("conflict", "已经在热重启了，稍等它重新起来");
-      if (build && options.build === undefined) throw new LedgerRequestError("invalid", "这台守护进程不支持 --build（找不到仓库根目录的 package.json）");
+      if (build && options.build === undefined) throw new LedgerRequestError("invalid", "这台守护进程不支持 --build（仅源码仓库运行环境支持前端构建）");
       const merged = state !== "idle";
       if (!merged) {
         requestedAt = now();
@@ -239,12 +239,23 @@ export interface StagedWebBuild {
   apply(): void;
 }
 
+function hasPackageBuildScript(pkgPath: string): boolean {
+  try {
+    const parsed = JSON.parse(readFileSync(pkgPath, "utf8")) as { scripts?: Record<string, unknown> };
+    return typeof parsed?.scripts?.build === "string" && parsed.scripts.build.trim() !== "";
+  } catch {
+    return false;
+  }
+}
+
 /**
  * pnpm build 构建到 staticDir 旁边的暂存目录（vite build 的 --outDir 覆盖配置里的），构建期间正在用的网页不受影响；
- * 重启前 apply 两次 rename 换上线。仓库根目录没有 package.json 返回 null（不支持 --build）。
+ * 重启前 apply 两次 rename 换上线。仓库根目录没有 package.json，或默认命令下没有 scripts.build（如分发包运行环境）时返回 null（不支持 --build）。
  */
 export function createStagedWebBuild(options: StagedWebBuildOptions): StagedWebBuild | null {
-  if (!existsSync(join(options.repoDir, "package.json"))) return null;
+  const pkgPath = join(options.repoDir, "package.json");
+  if (!existsSync(pkgPath)) return null;
+  if (options.command === undefined && !hasPackageBuildScript(pkgPath)) return null;
   const parent = dirname(options.staticDir);
   const staging = join(parent, `.${basename(options.staticDir)}-reload-next`);
   const previous = join(parent, `.${basename(options.staticDir)}-reload-prev`);

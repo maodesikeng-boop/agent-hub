@@ -13,6 +13,7 @@ on:
       - "src/shared/**"
       - "src/vendors/**"
       - "src/hub/**"
+      - "src/tunnel/**"
       - "src/web/**"
       - "migrations/**"
       - "scripts/build-mac-app.sh"
@@ -30,6 +31,7 @@ on:
       - "src/shared/**"
       - "src/vendors/**"
       - "src/hub/**"
+      - "src/tunnel/**"
       - "src/web/**"
       - "migrations/**"
       - "scripts/build-mac-app.sh"
@@ -73,12 +75,15 @@ jobs:
       - name: Build web frontend assets
         run: pnpm build
 
-      - name: Mac packaging and supervisor unit tests
+      - name: Mac packaging, supervisor and write-scope sandbox unit tests
         run: >-
           pnpm exec vitest run --project=node
           scripts/stage-mac-runtime.test.ts
           scripts/stage-win-runtime.test.ts
           src/daemon/ui-server/auth-status.test.ts
+          src/shared/write-scope.test.ts
+          src/daemon/driver/write-scope.test.ts
+          src/daemon/self-reload.test.ts
           --reporter=verbose --reporter=github-actions
 
       - name: Build distribution Fusa.app and DMG (ad-hoc, unsigned-preview)
@@ -107,6 +112,7 @@ jobs:
           env -i HOME="$clean_home" PATH=/usr/bin:/bin TMPDIR="$RUNNER_TEMP/" \
             "$app_dir/Fusa.app/Contents/MacOS/AgentHub" --self-test | tee "$RUNNER_TEMP/self-test.txt"
           grep -q "\[fusa-self-test\] PASS mode=bundled" "$RUNNER_TEMP/self-test.txt"
+          grep -q "sandbox=verified" "$RUNNER_TEMP/self-test.txt"
 
       - name: Verify DMG size budget and checksum
         run: |

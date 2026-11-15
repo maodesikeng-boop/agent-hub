@@ -220,6 +220,41 @@ writeFileSync(out + "/index.html", "new");`,
     expect(make()).toBeNull();
   });
 
+  it("分发包运行环境（package.json 没有 scripts.build）返回 null，源码仓库有 scripts.build 才启用默认构建", () => {
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ name: "fusa-daemon-runtime", version: "0.1.0", private: true, type: "module", dependencies: {} }),
+    );
+    expect(
+      createStagedWebBuild({
+        repoDir: root,
+        staticDir: join(root, "dist", "web"),
+        logPath: join(root, "logs", "build.log"),
+      }),
+    ).toBeNull();
+
+    writeFileSync(join(root, "package.json"), "{ invalid json");
+    expect(
+      createStagedWebBuild({
+        repoDir: root,
+        staticDir: join(root, "dist", "web"),
+        logPath: join(root, "logs", "build.log"),
+      }),
+    ).toBeNull();
+
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ name: "agent-hub", private: true, scripts: { build: "vite build" } }),
+    );
+    expect(
+      createStagedWebBuild({
+        repoDir: root,
+        staticDir: join(root, "dist", "web"),
+        logPath: join(root, "logs", "build.log"),
+      }),
+    ).not.toBeNull();
+  });
+
   it("构建到暂存目录，不碰正在用的那份；apply 才换上线", async () => {
     const build = make()!;
     expect(await build.build(new AbortController().signal)).toEqual({ ok: true });
