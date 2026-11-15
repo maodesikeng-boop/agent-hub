@@ -316,6 +316,7 @@ describe("桌面壳共用监管契约与 /api/auth/status 轻量身份响应", (
           join(repoRoot, "apps/macos/StatusBarController.swift"),
           join(repoRoot, "apps/macos/MainWindowController.swift"),
           join(repoRoot, "apps/macos/AppDelegate.swift"),
+          join(repoRoot, "apps/macos/SelfTest.swift"),
           join(repoRoot, "apps/macos/Tests/SupervisorTests.swift"),
           "-o",
           binPath,

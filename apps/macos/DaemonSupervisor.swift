@@ -209,6 +209,145 @@ private final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate {
     }
 }
 
+/// 守护进程运行环境的来源（docs/mac-distribution-design.md）：
+/// - source：源码开发模式，`scripts/build-mac-app.sh` 把本机仓库与本机 Node 的路径写进 Info.plist（`hub self-reload` 靠它）；
+/// - bundled：分发模式（`build-mac-app.sh --dist`），Info.plist 的 `AgentHubRuntimeMode` 为 `bundled`，
+///   守护进程代码与官方 Node 都在 `Contents/Resources/runtime/` 里，不依赖本机仓库和本机 Node。
+enum DaemonRuntimeMode: String, Equatable {
+    case source
+    case bundled
+}
+
+struct DaemonRuntimeLocation: Equatable {
+    let mode: DaemonRuntimeMode
+    /// 守护进程的工作目录（含 src/daemon/main.ts）。
+    let daemonRoot: String
+    let nodePath: String
+}
+
+struct DaemonRuntimeLocateError: Error, Equatable {
+    let code: Int
+    let message: String
+}
+
+/// 找守护进程运行环境的唯一入口（纯函数：环境变量、Info.plist、UserDefaults、文件系统都可注入，SupervisorTests 直接测）。
+/// 两种模式下 `AGENT_HUB_REPO_DIR` / `AGENT_HUB_NODE` 环境变量都优先（排查用）；分发模式绝不回退到本机仓库或本机 Node。
+enum DaemonRuntimeLocator {
+    static let runtimeModeInfoKey = "AgentHubRuntimeMode"
+    /// 分发包内运行环境相对 `Contents/Resources` 的目录（布局见 scripts/stage-mac-runtime.ts）。
+    static let bundledRuntimeDirName = "runtime"
+    static let bundledDaemonRelativePath = "daemon"
+    static let bundledNodeRelativePath = "node/bin/node"
+
+    struct Inputs {
+        var environment: [String: String]
+        var infoValue: (String) -> Any?
+        var defaultsValue: (String) -> String?
+        var resourcePath: String?
+        var homeDir: String
+        var fileExists: (String) -> Bool
+        var isExecutable: (String) -> Bool
+        var listDirectory: (String) -> [String]
+
+        static var live: Inputs {
+            let fm = FileManager.default
+            return Inputs(
+                environment: ProcessInfo.processInfo.environment,
+                infoValue: { Bundle.main.object(forInfoDictionaryKey: $0) },
+                defaultsValue: { UserDefaults.standard.string(forKey: $0) },
+                resourcePath: Bundle.main.resourcePath,
+                homeDir: NSHomeDirectory(),
+                fileExists: { fm.fileExists(atPath: $0) },
+                isExecutable: { fm.isExecutableFile(atPath: $0) },
+                listDirectory: { (try? fm.contentsOfDirectory(atPath: $0)) ?? [] }
+            )
+        }
+    }
+
+    static func mode(_ inputs: Inputs) -> DaemonRuntimeMode {
+        let raw = (inputs.infoValue(runtimeModeInfoKey) as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return raw.flatMap(DaemonRuntimeMode.init(rawValue:)) ?? .source
+    }
+
+    static func bundledRuntimeDir(_ inputs: Inputs) -> String? {
+        inputs.resourcePath.map { ($0 as NSString).appendingPathComponent(bundledRuntimeDirName) }
+    }
+
+    static func resolve(_ inputs: Inputs = .live) -> Result<DaemonRuntimeLocation, DaemonRuntimeLocateError> {
+        let runtimeMode = mode(inputs)
+        guard let daemonRoot = resolveDaemonRoot(inputs, mode: runtimeMode) else {
+            return .failure(DaemonRuntimeLocateError(
+                code: 1,
+                message: runtimeMode == .bundled
+                    ? "安装包里的 Fusa 运行环境不完整，请重新下载安装 Fusa"
+                    : "找不到 Fusa 仓库目录（请检查 AGENT_HUB_REPO_DIR 或重新运行 pnpm app:mac）"
+            ))
+        }
+        guard let nodePath = resolveNodePath(inputs, mode: runtimeMode) else {
+            return .failure(DaemonRuntimeLocateError(
+                code: 2,
+                message: runtimeMode == .bundled
+                    ? "安装包里的 Node.js 缺失，请重新下载安装 Fusa"
+                    : "找不到 Node.js 可执行文件（需要 Node 24+，请检查 AGENT_HUB_NODE）"
+            ))
+        }
+        return .success(DaemonRuntimeLocation(mode: runtimeMode, daemonRoot: daemonRoot, nodePath: nodePath))
+    }
+
+    private static func nonEmpty(_ raw: String?) -> String? {
+        guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else { return nil }
+        return (trimmed as NSString).expandingTildeInPath
+    }
+
+    private static func resolveDaemonRoot(_ inputs: Inputs, mode: DaemonRuntimeMode) -> String? {
+        var candidates: [String] = []
+        if let envDir = nonEmpty(inputs.environment["AGENT_HUB_REPO_DIR"]) {
+            candidates.append(envDir)
+        }
+        switch mode {
+        case .bundled:
+            if let runtimeDir = bundledRuntimeDir(inputs) {
+                candidates.append((runtimeDir as NSString).appendingPathComponent(bundledDaemonRelativePath))
+            }
+        case .source:
+            if let defaultsDir = nonEmpty(inputs.defaultsValue("AgentHubRepoDir")) {
+                candidates.append(defaultsDir)
+            }
+            if let plistDir = nonEmpty(inputs.infoValue("AgentHubRepoDir") as? String) {
+                candidates.append(plistDir)
+            }
+        }
+        return candidates.first { inputs.fileExists(($0 as NSString).appendingPathComponent("src/daemon/main.ts")) }
+    }
+
+    private static func resolveNodePath(_ inputs: Inputs, mode: DaemonRuntimeMode) -> String? {
+        var candidates: [String] = []
+        if let envNode = nonEmpty(inputs.environment["AGENT_HUB_NODE"]) {
+            candidates.append(envNode)
+        }
+        switch mode {
+        case .bundled:
+            if let runtimeDir = bundledRuntimeDir(inputs) {
+                candidates.append((runtimeDir as NSString).appendingPathComponent(bundledNodeRelativePath))
+            }
+        case .source:
+            let home = inputs.homeDir as NSString
+            if let plistNode = nonEmpty(inputs.infoValue("AgentHubNodePath") as? String) {
+                candidates.append(plistNode)
+            }
+            candidates.append(home.appendingPathComponent(".local/share/mise/shims/node"))
+            candidates.append(home.appendingPathComponent(".local/share/mise/installs/node/24/bin/node"))
+            let miseNodeRoot = home.appendingPathComponent(".local/share/mise/installs/node")
+            for v in inputs.listDirectory(miseNodeRoot).sorted().reversed() where v.hasPrefix("24") {
+                candidates.append((miseNodeRoot as NSString).appendingPathComponent("\(v)/bin/node"))
+            }
+            candidates.append("/opt/homebrew/bin/node")
+            candidates.append("/usr/local/bin/node")
+        }
+        return candidates.first(where: inputs.isExecutable)
+    }
+}
+
 final class DaemonSupervisor {
     private static let maxTrackedIntentionalPids = 64
 
@@ -775,66 +914,9 @@ final class DaemonSupervisor {
         return .verified(DaemonIdentity(product: product, protocolVersion: version, instanceId: instanceId))
     }
 
-    private func resolveRepoDir() -> String? {
-        let env = ProcessInfo.processInfo.environment
-        var candidates: [String] = []
-        if let envDir = env["AGENT_HUB_REPO_DIR"]?.trimmingCharacters(in: .whitespacesAndNewlines), !envDir.isEmpty {
-            candidates.append((envDir as NSString).expandingTildeInPath)
-        }
-        if let defaultsDir = UserDefaults.standard.string(forKey: "AgentHubRepoDir")?.trimmingCharacters(in: .whitespacesAndNewlines), !defaultsDir.isEmpty {
-            candidates.append((defaultsDir as NSString).expandingTildeInPath)
-        }
-        if let plistDir = Bundle.main.object(forInfoDictionaryKey: "AgentHubRepoDir") as? String {
-            let trimmed = plistDir.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
-                candidates.append((trimmed as NSString).expandingTildeInPath)
-            }
-        }
-
-        let fm = FileManager.default
-        for dir in candidates {
-            let entry = (dir as NSString).appendingPathComponent("src/daemon/main.ts")
-            if fm.fileExists(atPath: entry) {
-                return dir
-            }
-        }
-        return nil
-    }
-
-    private func resolveNodePath() -> String? {
-        let env = ProcessInfo.processInfo.environment
-        let home = NSHomeDirectory() as NSString
-        var candidates: [String] = []
-
-        if let envNode = env["AGENT_HUB_NODE"]?.trimmingCharacters(in: .whitespacesAndNewlines), !envNode.isEmpty {
-            candidates.append((envNode as NSString).expandingTildeInPath)
-        }
-        if let plistNode = Bundle.main.object(forInfoDictionaryKey: "AgentHubNodePath") as? String {
-            let trimmed = plistNode.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
-                candidates.append((trimmed as NSString).expandingTildeInPath)
-            }
-        }
-        candidates.append(home.appendingPathComponent(".local/share/mise/shims/node"))
-        candidates.append(home.appendingPathComponent(".local/share/mise/installs/node/24/bin/node"))
-
-        let miseNodeRoot = home.appendingPathComponent(".local/share/mise/installs/node")
-        if let versions = try? FileManager.default.contentsOfDirectory(atPath: miseNodeRoot) {
-            for v in versions.sorted().reversed() where v.hasPrefix("24") {
-                candidates.append((miseNodeRoot as NSString).appendingPathComponent("\(v)/bin/node"))
-            }
-        }
-
-        candidates.append("/opt/homebrew/bin/node")
-        candidates.append("/usr/local/bin/node")
-
-        let fm = FileManager.default
-        for path in candidates {
-            if fm.isExecutableFile(atPath: path) {
-                return path
-            }
-        }
-        return nil
+    /// 本次拉起守护进程要用的运行环境（源码开发模式或分发包内置），找不到返回带说明的错误。
+    func resolveRuntime() -> Result<DaemonRuntimeLocation, Error> {
+        DaemonRuntimeLocator.resolve().mapError { Self.makeError(code: $0.code, message: $0.message) }
     }
 
     private func openAppendLogHandle() -> FileHandle? {
@@ -904,19 +986,13 @@ final class DaemonSupervisor {
     /// 调用时必须已持有 lock：拉起子进程并登记到 spawnedProcess。登记要和 run() 在同一把锁里，
     /// 这样 terminationHandler（在后台线程）最快也要等登记完才能处理退出，不会漏掉或错判。
     private func spawnProcessLocked() -> Result<Process, Error> {
-        guard let repoDir = resolveRepoDir() else {
-            return .failure(Self.makeError(
-                code: 1,
-                message: "找不到 Fusa 仓库目录（请检查 AGENT_HUB_REPO_DIR 或重新运行 pnpm app:mac）"
-            ))
+        let runtime: DaemonRuntimeLocation
+        switch resolveRuntime() {
+        case .success(let located): runtime = located
+        case .failure(let error): return .failure(error)
         }
-
-        guard let nodePath = resolveNodePath() else {
-            return .failure(Self.makeError(
-                code: 2,
-                message: "找不到 Node.js 可执行文件（需要 Node 24+，请检查 AGENT_HUB_NODE）"
-            ))
-        }
+        let repoDir = runtime.daemonRoot
+        let nodePath = runtime.nodePath
 
         let stderrPipe = Pipe()
         let readHandle = stderrPipe.fileHandleForReading

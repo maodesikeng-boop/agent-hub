@@ -73,9 +73,31 @@ See [docs/mid-turn-messages.md](docs/mid-turn-messages.md) for details.
 
 ## Install and run
 
+### Download (prebuilt installers, unsigned preview)
+
+No GitHub login needed — download from the latest [GitHub Release](https://github.com/maodesikeng-boop/agent-hub/releases/latest):
+
+| Platform | Download | Checksum |
+| --- | --- | --- |
+| **Mac** (Apple silicon, macOS 13+) | [`Fusa-macos-arm64.dmg`](https://github.com/maodesikeng-boop/agent-hub/releases/latest/download/Fusa-macos-arm64.dmg) | [`.sha256`](https://github.com/maodesikeng-boop/agent-hub/releases/latest/download/Fusa-macos-arm64.dmg.sha256) |
+| **Windows** x64 | [`Fusa-windows-x64-setup.exe`](https://github.com/maodesikeng-boop/agent-hub/releases/latest/download/Fusa-windows-x64-setup.exe) | [`.sha256`](https://github.com/maodesikeng-boop/agent-hub/releases/latest/download/Fusa-windows-x64-setup.exe.sha256) |
+
+Both installers are **unsigned previews** (not code-signed or notarized yet), so the OS blocks the first launch. Intel Macs are not supported yet.
+
+**First launch on Mac:**
+
+1. Open the `.dmg` and drag **Fusa** into **Applications**.
+2. Double-click **Fusa**. macOS says it cannot verify the developer — click **Done** (do not move it to the Trash).
+3. Open **System Settings → Privacy & Security**, scroll down to **Security**, click **Open Anyway** next to Fusa, and confirm with your password.
+4. From then on Fusa opens normally. The app bundles its own Node.js and daemon, so you do not need Node, pnpm or the source repository.
+
+**First launch on Windows:** when SmartScreen blocks the installer, click **More info → Run anyway** (details in [section 2](#2-windows-desktop-app-unsigned-preview)).
+
+Optional: verify the download with `shasum -a 256 -c Fusa-macos-arm64.dmg.sha256` (Mac, run in the download folder). Maintainers publish releases by pushing a `v*` tag, see [docs/mac-distribution-design.md](docs/mac-distribution-design.md).
+
 ### 1. macOS desktop app (`Fusa.app`, primary entry)
 
-Build from source and install `/Applications/Fusa.app`:
+Most users should use the [prebuilt DMG](#download-prebuilt-installers-unsigned-preview) above. To develop Fusa itself, build from source and install `/Applications/Fusa.app`:
 
 ```sh
 git clone https://github.com/maodesikeng-boop/agent-hub.git
@@ -89,7 +111,7 @@ bash scripts/build-mac-app.sh --install
 
 Once installed, open **`Fusa.app`** directly from `/Applications` or Spotlight. `Fusa.app` (`apps/macos/`) automatically launches and supervises the local daemon (`node src/daemon/main.ts`), authenticates using your local token, and creates a default Project Manager on first start.
 
-**Source-build notes (compile on your own machine):** There is no standalone prebuilt macOS installer download yet. `scripts/build-mac-app.sh` embeds your repository's absolute path (`AgentHubRepoDir`) and your Node.js executable path (`AgentHubNodePath`) into `Contents/Info.plist` and signs the bundle ad-hoc (`codesign -s -`), so running `Fusa.app` still depends on your local Node installation, built assets (`dist/web`), and source directory. **If you move the repository or change your Node path, re-run the build script** (or override them at runtime via `AGENT_HUB_REPO_DIR` and `AGENT_HUB_NODE`). Do not distribute the compiled `.app` bundle.
+**Source-build notes (development mode, compile on your own machine):** `scripts/build-mac-app.sh` embeds your repository's absolute path (`AgentHubRepoDir`) and your Node.js executable path (`AgentHubNodePath`) into `Contents/Info.plist` and signs the bundle ad-hoc (`codesign -s -`), so running `Fusa.app` still depends on your local Node installation, built assets (`dist/web`), and source directory. **If you move the repository or change your Node path, re-run the build script** (or override them at runtime via `AGENT_HUB_REPO_DIR` and `AGENT_HUB_NODE`). Do not distribute this source-mode `.app` bundle; the downloadable DMG is built separately by `bash scripts/build-mac-app.sh --dist` (see [docs/mac-distribution-design.md](docs/mac-distribution-design.md)).
 
 ### 2. Windows desktop app (unsigned preview)
 
@@ -97,10 +119,11 @@ Once installed, open **`Fusa.app`** directly from `/Applications` or Spotlight. 
 
 **System requirements:** Windows x64. Windows 11 is recommended, and **Windows 11 24H2 or later** enables the native MXC read-only container for read-only Workers (see [Security notes](#security-notes)). The Windows 10 1809+ baseline comes from the design docs ([docs/windows-native-design.md](docs/windows-native-design.md)); the installer does not enforce an OS version check, and CI only runs on `windows-latest`, so Windows 10 is not separately verified. The installer uses per-user mode (`currentUser`): **no administrator rights and no WSL 2 are required**. To dispatch parallel Workers into Git worktrees, install Git for Windows (`winget install --id Git.Git -e --source winget`, or install it from `Settings → Providers`).
 
-You can install Fusa on Windows in two ways:
+You can install Fusa on Windows in three ways:
 
-1. **Install from the GitHub Actions artifact (recommended):** Open the **`windows-desktop`** workflow ([`.github/workflows/windows-desktop.yml`](.github/workflows/windows-desktop.yml)) under this repository's GitHub Actions tab, open the latest successful run (or click **Run workflow** to trigger one), download **`fusa-windows-x64-nsis-unsigned-preview`** under **Artifacts** at the bottom of the page (artifacts are kept for 14 days, so re-run the workflow if it has expired), extract the zip archive, and run `Fusa_0.1.0_x64-setup-unsigned-preview.exe` (a matching `.sha256` file is included). It installs for the current user without administrator rights.
-2. **Build the installer from source on Windows (optional):** Install Node.js >= 24.12, pnpm 10, and the Rust stable `x86_64-pc-windows-msvc` toolchain (with Visual Studio C++ Build Tools). The staging script downloads and SHA-256 verifies the official Node.js 24 LTS runtime that gets bundled. Then run the following commands in PowerShell to build the web assets, compile the native helpers, stage the bundled runtime, and produce the NSIS installer:
+1. **Install from the GitHub Release (recommended):** download [`Fusa-windows-x64-setup.exe`](https://github.com/maodesikeng-boop/agent-hub/releases/latest/download/Fusa-windows-x64-setup.exe) from the [latest release](https://github.com/maodesikeng-boop/agent-hub/releases/latest) (a matching `.sha256` is next to it) and run it; it installs for the current user without administrator rights.
+2. **Install from a GitHub Actions artifact (for unreleased builds):** Open the **`windows-desktop`** workflow ([`.github/workflows/windows-desktop.yml`](.github/workflows/windows-desktop.yml)) under this repository's GitHub Actions tab, open the latest successful run (or click **Run workflow** to trigger one), download **`fusa-windows-x64-nsis-unsigned-preview`** under **Artifacts** at the bottom of the page (artifacts are kept for 14 days, so re-run the workflow if it has expired), extract the zip archive, and run `Fusa_0.1.0_x64-setup-unsigned-preview.exe` (a matching `.sha256` file is included).
+3. **Build the installer from source on Windows (optional):** Install Node.js >= 24.12, pnpm 10, and the Rust stable `x86_64-pc-windows-msvc` toolchain (with Visual Studio C++ Build Tools). The staging script downloads and SHA-256 verifies the official Node.js 24 LTS runtime that gets bundled. Then run the following commands in PowerShell to build the web assets, compile the native helpers, stage the bundled runtime, and produce the NSIS installer:
 
 ```powershell
 git clone https://github.com/maodesikeng-boop/agent-hub.git
@@ -286,9 +309,31 @@ Fusa 从最早开始开发时就是按**“一个会话管住整个项目”**�
 
 ## 安装和启动
 
+### 下载安装包（预编译，未签名预览版）
+
+不用登录 GitHub，直接从最新的 [GitHub Release](https://github.com/maodesikeng-boop/agent-hub/releases/latest) 下载：
+
+| 平台 | 下载 | 校验 |
+| --- | --- | --- |
+| **Mac**（Apple 芯片，macOS 13+） | [`Fusa-macos-arm64.dmg`](https://github.com/maodesikeng-boop/agent-hub/releases/latest/download/Fusa-macos-arm64.dmg) | [`.sha256`](https://github.com/maodesikeng-boop/agent-hub/releases/latest/download/Fusa-macos-arm64.dmg.sha256) |
+| **Windows** x64 | [`Fusa-windows-x64-setup.exe`](https://github.com/maodesikeng-boop/agent-hub/releases/latest/download/Fusa-windows-x64-setup.exe) | [`.sha256`](https://github.com/maodesikeng-boop/agent-hub/releases/latest/download/Fusa-windows-x64-setup.exe.sha256) |
+
+两个安装包都是**未签名预览版**（还没做代码签名与公证），系统会在第一次打开时拦下来。暂不支持 Intel 芯片的 Mac。
+
+**Mac 首次打开：**
+
+1. 打开 `.dmg`，把 **Fusa** 拖进「**应用程序**」。
+2. 双击 **Fusa**。系统提示“无法验证开发者”时点「**完成**」（不要点“移到废纸篓”）。
+3. 打开「**系统设置 → 隐私与安全性**」，向下滚到「**安全性**」，在 Fusa 那一行点「**仍要打开**」，输入开机密码确认。
+4. 之后就能正常双击打开了。应用自带 Node.js 和后台，不需要另外装 Node、pnpm，也不需要源码目录。
+
+**Windows 首次运行：** SmartScreen 拦截时点「更多信息 → 仍要运行」（详见[第 2 节](#2-windows-桌面应用未签名预览版)）。
+
+可选校验：在下载目录运行 `shasum -a 256 -c Fusa-macos-arm64.dmg.sha256`（Mac）。维护者推 `v*` 标签即发布新版，见 [docs/mac-distribution-design.md](docs/mac-distribution-design.md)。
+
 ### 1. Mac 桌面应用（`Fusa.app`，主入口）
 
-从源码构建并安装 `/Applications/Fusa.app`：
+一般用户直接用上面的[预编译 DMG](#下载安装包预编译未签名预览版)。要开发 Fusa 本身，请从源码构建并安装 `/Applications/Fusa.app`：
 
 ```sh
 git clone https://github.com/maodesikeng-boop/agent-hub.git
@@ -302,7 +347,7 @@ bash scripts/build-mac-app.sh --install
 
 装好后直接打开 **`Fusa.app`** 即可使用，无需自己打开浏览器输入地址或粘贴令牌。`Fusa.app`（`apps/macos/`）会自动拉起并监管本机后台守护进程（`node src/daemon/main.ts`），读取本机令牌自动完成登录，首次启动会自动创建默认项目经理。
 
-**源码构建说明（仅限本机编译自用）：** 当前尚未发布独立打包的 Mac 下载安装包，需在本机从源码构建。`scripts/build-mac-app.sh` 编译时会把当前仓库的绝对路径（`AgentHubRepoDir`）和本机 Node 可执行文件路径（`AgentHubNodePath`）写入 `Contents/Info.plist`，并仅做本机临时签名（`codesign -s -`），运行时仍依赖本机 Node、构建产物（`dist/web`）与源码目录。**挪动仓库目录或更换 Node 路径后，请重新运行上述构建脚本**（或在运行时通过环境变量 `AGENT_HUB_REPO_DIR`、`AGENT_HUB_NODE` 覆盖）。请勿直接分发编译好的 `.app`。
+**源码构建说明（开发模式，仅限本机编译自用）：** `scripts/build-mac-app.sh` 编译时会把当前仓库的绝对路径（`AgentHubRepoDir`）和本机 Node 可执行文件路径（`AgentHubNodePath`）写入 `Contents/Info.plist`，并仅做本机临时签名（`codesign -s -`），运行时仍依赖本机 Node、构建产物（`dist/web`）与源码目录。**挪动仓库目录或更换 Node 路径后，请重新运行上述构建脚本**（或在运行时通过环境变量 `AGENT_HUB_REPO_DIR`、`AGENT_HUB_NODE` 覆盖）。请勿直接分发这个源码模式的 `.app`；可下载的 DMG 由 `bash scripts/build-mac-app.sh --dist` 单独打包（见 [docs/mac-distribution-design.md](docs/mac-distribution-design.md)）。
 
 ### 2. Windows 桌面应用（未签名预览版）
 
@@ -310,10 +355,11 @@ bash scripts/build-mac-app.sh --install
 
 **系统环境要求：** Windows x64。推荐 Windows 11，**Windows 11 24H2 及以上**会为只读 Worker 启用原生 MXC 沙箱容器（详见[安全提示](#安全提示)）。Windows 10 1809+ 这个下限来自设计文档（[docs/windows-native-design.md](docs/windows-native-design.md)）；安装包本身不做系统版本检查，CI 也只在 `windows-latest` 上跑，所以 Windows 10 没有单独验证过。安装包采用当前用户模式（`currentUser`），**无需管理员权限，也无需安装或开启 WSL 2**。若需要使用 Git worktree 派发并行 Worker，请在本机安装 Git for Windows（PowerShell 执行 `winget install --id Git.Git -e --source winget`，或在 `Settings → Providers` 里一键安装）。
 
-可通过以下两种方式获取并安装：
+可通过以下三种方式获取并安装：
 
-1. **直接用云端构建产物安装（推荐）：** 打开本仓库 GitHub Actions 的 **`windows-desktop`** 工作流页面（[`.github/workflows/windows-desktop.yml`](.github/workflows/windows-desktop.yml)），点开最近一次成功构建，在页面底部 **Artifacts** 下载 **`fusa-windows-x64-nsis-unsigned-preview`**（产物保留 14 天，过期后请重新运行该工作流），解压后双击 `Fusa_0.1.0_x64-setup-unsigned-preview.exe`（同目录附带对应的 `.sha256` 校验文件）即可免管理员完成安装。
-2. **从源码在本机编译安装包（可选）：** 在 Windows 上安装 Node.js >= 24.12、pnpm 10 与 Rust stable `x86_64-pc-windows-msvc` 构建工具链（含 Visual Studio C++ Build Tools；随包内置的官方 Node.js 24 LTS 由组装脚本自动下载并做 SHA-256 校验），随后在 PowerShell 中依次执行以下命令构建前端资源、编译原生辅助程序、组装内置 Node 24 LTS 运行时并生成 NSIS 安装包：
+1. **从 GitHub Release 下载安装（推荐）：** 在[最新 Release](https://github.com/maodesikeng-boop/agent-hub/releases/latest) 下载 [`Fusa-windows-x64-setup.exe`](https://github.com/maodesikeng-boop/agent-hub/releases/latest/download/Fusa-windows-x64-setup.exe)（旁边有对应的 `.sha256`），双击即可免管理员完成安装。
+2. **用云端构建产物安装（未发布的构建）：** 打开本仓库 GitHub Actions 的 **`windows-desktop`** 工作流页面（[`.github/workflows/windows-desktop.yml`](.github/workflows/windows-desktop.yml)），点开最近一次成功构建，在页面底部 **Artifacts** 下载 **`fusa-windows-x64-nsis-unsigned-preview`**（产物保留 14 天，过期后请重新运行该工作流），解压后双击 `Fusa_0.1.0_x64-setup-unsigned-preview.exe`（同目录附带对应的 `.sha256` 校验文件）。
+3. **从源码在本机编译安装包（可选）：** 在 Windows 上安装 Node.js >= 24.12、pnpm 10 与 Rust stable `x86_64-pc-windows-msvc` 构建工具链（含 Visual Studio C++ Build Tools；随包内置的官方 Node.js 24 LTS 由组装脚本自动下载并做 SHA-256 校验），随后在 PowerShell 中依次执行以下命令构建前端资源、编译原生辅助程序、组装内置 Node 24 LTS 运行时并生成 NSIS 安装包：
 
 ```powershell
 git clone https://github.com/maodesikeng-boop/agent-hub.git

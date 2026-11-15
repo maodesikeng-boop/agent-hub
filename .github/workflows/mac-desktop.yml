@@ -1,0 +1,139 @@
+name: mac-desktop
+
+on:
+  workflow_dispatch:
+  # 发版工作流（release.yml）复用本构建：产物在同一次运行里用 download-artifact 取
+  workflow_call:
+  pull_request:
+    branches: [main]
+    paths:
+      - "apps/macos/**"
+      - "apps/desktop/**"
+      - "src/daemon/**"
+      - "src/shared/**"
+      - "src/vendors/**"
+      - "src/hub/**"
+      - "src/tunnel/**"
+      - "src/web/**"
+      - "migrations/**"
+      - "scripts/build-mac-app.sh"
+      - "scripts/stage-mac-runtime.ts"
+      - "scripts/stage-runtime-common.ts"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/mac-desktop.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/macos/**"
+      - "apps/desktop/**"
+      - "src/daemon/**"
+      - "src/shared/**"
+      - "src/vendors/**"
+      - "src/hub/**"
+      - "src/tunnel/**"
+      - "src/web/**"
+      - "migrations/**"
+      - "scripts/build-mac-app.sh"
+      - "scripts/stage-mac-runtime.ts"
+      - "scripts/stage-runtime-common.ts"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/mac-desktop.yml"
+
+concurrency:
+  # github.workflow 在被复用时是调用方名（release），避免和本工作流自己的 PR 运行互相取消
+  group: mac-desktop-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # DMG 体积上限（MiB）：随包官方 Node 约 117 MiB 未压缩，DMG 实测约 39 MiB，留余量
+  DMG_BUDGET_MIB: 60
+
+jobs:
+  build-macos-dmg:
+    name: mac-desktop (arm64 DMG & self-test)
+    # macos-15 是 Apple 芯片（arm64）runner
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline
+
+      - name: Build web frontend assets
+        run: pnpm build
+
+      - name: Mac packaging, supervisor and write-scope sandbox unit tests
+        run: >-
+          pnpm exec vitest run --project=node
+          scripts/stage-mac-runtime.test.ts
+          scripts/stage-win-runtime.test.ts
+          src/daemon/ui-server/auth-status.test.ts
+          src/shared/write-scope.test.ts
+          src/daemon/driver/write-scope.test.ts
+          src/daemon/self-reload.test.ts
+          --reporter=verbose --reporter=github-actions
+
+      - name: Build distribution Fusa.app and DMG (ad-hoc, unsigned-preview)
+        run: bash scripts/build-mac-app.sh --dist
+
+      - name: Self-test from mounted DMG (headless, temp data dir and port, no repo, no host Node)
+        run: |
+          set -euo pipefail
+          dmg="$(ls build/dist/Fusa_*_arm64*.dmg)"
+          mnt="$RUNNER_TEMP/fusa-dmg"
+          app_dir="$RUNNER_TEMP/fusa-app"
+          mkdir -p "$mnt" "$app_dir"
+          hdiutil attach "$dmg" -mountpoint "$mnt" -nobrowse -readonly
+          test -L "$mnt/Applications"
+          ditto "$mnt/Fusa.app" "$app_dir/Fusa.app"
+          hdiutil detach "$mnt"
+          codesign --verify --deep --strict --verbose=2 "$app_dir/Fusa.app"
+          lipo -archs "$app_dir/Fusa.app/Contents/MacOS/AgentHub" | grep -qx arm64
+          if grep -q "AgentHubRepoDir\|AgentHubNodePath" "$app_dir/Fusa.app/Contents/Info.plist"; then
+            echo "分发包 Info.plist 不应写死仓库或 Node 路径" >&2
+            exit 1
+          fi
+          # 干净环境：PATH 里没有 node，HOME 是空目录（自检本身也只用临时数据目录和空闲端口）
+          clean_home="$RUNNER_TEMP/fusa-home"
+          mkdir -p "$clean_home"
+          env -i HOME="$clean_home" PATH=/usr/bin:/bin TMPDIR="$RUNNER_TEMP/" \
+            "$app_dir/Fusa.app/Contents/MacOS/AgentHub" --self-test | tee "$RUNNER_TEMP/self-test.txt"
+          grep -q "\[fusa-self-test\] PASS mode=bundled" "$RUNNER_TEMP/self-test.txt"
+          grep -q "sandbox=verified" "$RUNNER_TEMP/self-test.txt"
+
+      - name: Verify DMG size budget and checksum
+        run: |
+          set -euo pipefail
+          dmg="$(ls build/dist/Fusa_*_arm64*.dmg)"
+          name="$(basename "$dmg")"
+          (cd build/dist && shasum -a 256 -c "$name.sha256")
+          bytes="$(stat -f %z "$dmg")"
+          budget=$((DMG_BUDGET_MIB * 1024 * 1024))
+          echo "DMG: $name | bytes=$bytes | MiB=$((bytes / 1048576)) | budget=${DMG_BUDGET_MIB} MiB | app=$(du -sh build/dist/Fusa.app | cut -f1)"
+          if [ "$bytes" -gt "$budget" ]; then
+            echo "DMG exceeded ${DMG_BUDGET_MIB} MiB budget: $bytes bytes" >&2
+            exit 1
+          fi
+
+      - name: Upload unsigned-preview DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fusa-macos-arm64-dmg-unsigned-preview
+          path: |
+            build/dist/Fusa_*_arm64*.dmg
+            build/dist/Fusa_*_arm64*.dmg.sha256
+          if-no-files-found: error
+          retention-days: 14
