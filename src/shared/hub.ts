@@ -229,7 +229,7 @@ export interface HubArgsMap {
   models: { vendor?: AgentVendor; refresh?: boolean };
   /**
    * `hub ask [--node <步骤>] [--graph <图编号>] [--option <选项>...] [--recommended <选项>] [--replace <编号>] --stdin`：
-   * 统一向用户提问/挂拍板卡（对话消息流、右栏、总助三处同步提醒）。
+   * 统一向用户提问/挂拍板卡（卡片在对话里；没回答时右栏、总助也列着，回答后移走，见 ASK_CARD_WHERE）。
    * - 不带 `node`：独立提问/操作提醒卡，同时写入对话 AskMeta 与总助 router_items；
    * - 带 `node`：把拍板卡挂在任务图步骤上，步骤进入 `waiting`（等用户），用户拍板后定案直接交给该步挂着的 Worker 接着干（全程不叫醒 PM）。
    */
@@ -391,6 +391,14 @@ export interface PatchTaskGraphSpecInput {
   addEdges?: CreateTaskGraphEdgeInput[];
   removeEdges?: CreateTaskGraphEdgeInput[];
 }
+
+/**
+ * 提问卡（`hub ask`，独立的和挂在任务图步骤上的）出现在哪：说法只写在这里，`hub ask` 回执、`hub` 帮助、任务图手册、项目经理提示词共用，各家厂商通用。
+ * 卡片本体在对话里，用户直接在卡上点选；没回答时右栏（Needs You 或任务图那一步）和总助也会列出，回答后这两处自动移走。
+ */
+export const ASK_CARD_WHERE = "卡片显示在对话里，用户直接在卡上点选；没回答时右栏和总助也会列出，回答后自动移走";
+/** `hub ask` 回执里接在 ASK_CARD_WHERE 后面：项目经理怎么跟用户说（回答后右栏就没了，引导用户去右栏找会让人以为卡没挂上）。 */
+export const ASK_CARD_TELL_USER = "跟用户说“卡在上面，直接点选”，别让用户去右栏找";
 
 /** `hub graph create` 正文 JSON 一行字段示例（任务图手册与 `hub --help` 共用；顶层 title 可改用 --title 传；steps 不写 deps 默认按顺序串接，带 brief 自动开工）。 */
 const EXAMPLE_REVIEW_VENDOR = AGENT_VENDORS.find((vendor) => vendor !== DEFAULT_AGENT_VENDOR) ?? DEFAULT_AGENT_VENDOR;

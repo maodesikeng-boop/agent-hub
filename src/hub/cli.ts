@@ -8,6 +8,7 @@ import { parseArgs } from "node:util";
 import { PM_MODES, TASK_GRAPH_STATUSES, validateAskOptions, type PmMode } from "../shared/domain.ts";
 import { LOCAL_ERRORS } from "../shared/errors.ts";
 import {
+  ASK_CARD_WHERE,
   ENV_HUB_SOCK,
   ENV_HUB_TOKEN,
   HUB_EXIT,
@@ -200,7 +201,7 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     group: "ask",
     cli: "ask",
     usage: `  ${hub} ask [--node <步骤>] [--graph <图编号>] [--option <选项>...] [--recommended <选项>] [--replace <编号>] --stdin
-                                                          向用户挂一张提问/拍板卡（对话、右栏、总助三处同步提醒），问题从标准输入读；
+                                                          向用户挂一张提问/拍板卡，问题从标准输入读；${ASK_CARD_WHERE}；
                                                           有明确选项时用 --option（至少 2 个），用 --recommended 标推荐项（选项原文或 1..N 序号）；
                                                           加 --node 挂在任务图步骤上，用户拍板后定案直接交给该步 Worker 接着干（不叫醒项目经理）`,
   },
