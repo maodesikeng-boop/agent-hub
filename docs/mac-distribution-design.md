@@ -68,9 +68,9 @@ Fusa.app/Contents/
 | 项 | 数 | 怎么量的 |
 | --- | --- | --- |
 | 包内运行环境（未压缩） | 171 MiB：Node 117 MiB、npm 13 MiB、daemon 56 MiB（node_modules 35、dist/web 17、src 4） | `stage-mac-runtime` 输出、`du` |
-| Fusa.app（未压缩） | 约 172 MiB | `du -sh build/dist/Fusa.app` |
-| DMG（ULMO） | 约 39 MiB（CI 实测数写在 PR 里） | `stat -f %z`；CI 上限 60 MiB（`DMG_BUDGET_MIB`），超了失败 |
-| 守护进程冷启动（拉起 → `/api/auth/status` 有响应） | 包内 0.77–0.82 s，源码模式同机 0.80–0.83 s，没有变慢 | 本机各 3 次；自检 `startupMs` 约 0.81 s |
+| Fusa.app（未压缩） | 172–191 MiB（本机 / CI runner 的 `du` 块大小不同） | `du -sh build/dist/Fusa.app` |
+| DMG（ULMO） | 41.3 MiB（43,332,424 字节，CI 实测） | `stat -f %z`；CI 上限 60 MiB（`DMG_BUDGET_MIB`），超了失败 |
+| 守护进程冷启动（拉起 → `/api/auth/status` 有响应） | 包内 0.77–0.82 s，源码模式同机 0.80–0.83 s，没有变慢；CI runner 1.15 s | 本机各 3 次；自检 `startupMs`（本机约 0.81 s） |
 | 优雅关机 | 约 0.16 s | 自检 `shutdownMs` |
 
 体积大头是官方 Node 本身（117 MiB，已是 strip 过的官方构建），压缩后 DMG 仍小于 Windows 安装包的 60 MiB 上限。守护进程跑 TS 源码（Node 24 原生去类型），冷启动和源码模式一样，暂不需要 V8 编译缓存。
