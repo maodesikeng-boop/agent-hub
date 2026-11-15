@@ -2,6 +2,8 @@ name: windows-desktop
 
 on:
   workflow_dispatch:
+  # 发版工作流（release.yml）复用本构建：产物在同一次运行里用 download-artifact 取
+  workflow_call:
   pull_request:
     branches: [main]
     paths:
@@ -32,7 +34,8 @@ on:
       - ".github/workflows/windows-desktop.yml"
 
 concurrency:
-  group: windows-desktop-${{ github.head_ref || github.ref }}
+  # github.workflow 在被复用时是调用方名（release），避免和本工作流自己的 PR 运行互相取消
+  group: windows-desktop-${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 permissions:

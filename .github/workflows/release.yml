@@ -1,0 +1,130 @@
+name: release
+
+# 推 v* 标签：复用 Windows 与 Mac 的构建，建 GitHub Release 并挂上 .exe / .dmg / .sha256（固定文件名）。
+# workflow_dispatch 与改到本工作流的 PR 只做“试运行”：构建并组装发布文件，作为产物上传，不建 Release。
+# 标签 vX.Y.Z 是正式版（releases/latest 指向它）；vX.Y.Z-rc.1 之类带后缀的是预发布（GitHub 的 latest 不含预发布）。
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/release.yml"
+      - ".github/release-notes.md"
+      - "scripts/release-assets.ts"
+      - "scripts/release-assets.test.ts"
+
+concurrency:
+  group: release-${{ github.ref }}
+  # 已经在发布的标签不能被取消
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: verify version
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Release script unit tests
+        run: pnpm exec vitest run --project=node scripts/release-assets.test.ts
+      - name: Tag matches app version (tag runs only; otherwise just check version sources agree)
+        env:
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: |
+          if [[ -n "$TAG" ]]; then
+            node scripts/release-assets.ts check --tag "$TAG"
+          else
+            node scripts/release-assets.ts check
+          fi
+
+  windows:
+    needs: verify
+    uses: ./.github/workflows/windows-desktop.yml
+
+  mac:
+    needs: verify
+    uses: ./.github/workflows/mac-desktop.yml
+
+  assemble:
+    name: assemble release files
+    needs: [windows, mac]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --prefer-offline
+      - uses: actions/download-artifact@v5
+        with:
+          name: fusa-windows-x64-nsis-unsigned-preview
+          path: ${{ runner.temp }}/in/windows
+      - uses: actions/download-artifact@v5
+        with:
+          name: fusa-macos-arm64-dmg-unsigned-preview
+          path: ${{ runner.temp }}/in/macos
+      - name: Rename to fixed file names and rewrite .sha256
+        run: >-
+          node scripts/release-assets.ts prepare
+          --windows-dir "$RUNNER_TEMP/in/windows"
+          --mac-dir "$RUNNER_TEMP/in/macos"
+          --out-dir release-assets
+      - name: Verify checksums
+        working-directory: release-assets
+        run: |
+          ls -l
+          sha256sum -c ./*.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fusa-release-assets
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: publish GitHub Release
+    # 只有推 v* 标签才发布；试运行（dispatch / PR）到上一步为止
+    if: github.ref_type == 'tag'
+    needs: assemble
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          name: fusa-release-assets
+          path: release-assets
+      - name: Create release (or refresh assets if it already exists)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release-assets/* --clobber
+            exit 0
+          fi
+          args=(--verify-tag --title "Fusa $TAG (unsigned preview)" --notes-file .github/release-notes.md --generate-notes)
+          if [[ "$TAG" == *-* ]]; then
+            args+=(--prerelease)
+          else
+            args+=(--latest)
+          fi
+          gh release create "$TAG" "${args[@]}" release-assets/*

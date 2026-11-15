@@ -78,3 +78,17 @@ Fusa.app/Contents/
 ## CI
 
 `.github/workflows/mac-desktop.yml`（`macos-15`，Apple 芯片）：装依赖 → `pnpm build` → 打包相关单测（含 Swift 监管契约测试）→ `build-mac-app.sh --dist` → 挂载 DMG、把 app 拷到临时目录、核验签名与架构、Info.plist 不含本机路径 → 在 `env -i`（PATH 里没有 node、HOME 是空目录）下跑 `--self-test` → DMG 体积上限与 SHA-256 校验 → 上传产物（14 天）。
+
+## 发布到 GitHub Release
+
+`.github/workflows/release.yml`：推 `v*` 标签 → 建 Release 并挂上两平台安装包。`mac-desktop.yml` 与 `windows-desktop.yml` 加了 `workflow_call`，发布工作流用 `uses: ./.github/workflows/…` 直接复用，构建步骤只有一份。
+
+流程：`verify`（标签版本 = `apps/windows/Cargo.toml` 版本 = `tauri.conf.json` 版本，不一致就在构建前失败）→ `windows` 与 `mac` 两个复用构建并行 → `assemble`（改成固定文件名、核对并重写 `.sha256`、上传 `fusa-release-assets`）→ `publish`（只有标签触发才跑，也是唯一有 `contents: write` 的任务）。代码在 `scripts/release-assets.ts`，有单测。
+
+- **固定文件名**：`Fusa-macos-arm64.dmg`、`Fusa-windows-x64-setup.exe`（各带 `.sha256`）。不含版本号，也不含 `unsigned-preview`，所以 `releases/latest/download/<文件名>` 永远指向最新正式版，第二期签名公证后链接也不用改。版本号看 Release 的标签。
+- **latest 与预发布**：GitHub 的 `releases/latest` 只算最新的正式（非预发布、非草稿）Release。所以 README 固定链接要求 Release 不能标预发布。标签 `vX.Y.Z` 发正式版（`--latest`），“未签名预览”写在标题 `Fusa vX.Y.Z (unsigned preview)` 和发布说明（`.github/release-notes.md`，含 Mac 的「仍要打开」步骤）里；标签带后缀（`vX.Y.Z-rc.1`）自动标预发布，不会成为 latest，用来先试发。第一个正式 Release 发出之前，README 的下载链接是 404。
+- **试运行**：`workflow_dispatch` 和改到发布文件的 PR 只跑到 `assemble`，不建 Release；组装好的文件在产物 `fusa-release-assets` 里（14 天）。
+- **重跑**：同一标签的 Release 已存在时，`publish` 改为 `gh release upload --clobber` 刷新文件，不重复建。
+- **发版步骤**：改版本号（`apps/windows/Cargo.toml` 与 `tauri.conf.json`）合进 main → 在 main 上 `git tag vX.Y.Z && git push origin vX.Y.Z`。
+- **第二期**：签名用 `MAC_SIGN_IDENTITY` / `MAC_NOTARY_PROFILE`（见上文“签名”），还需在 `mac-desktop.yml` 里加导入证书到 runner 钥匙串的步骤；发布工作流不用改。
+- 发布的 DMG 一律由 CI 打（本机有 MDM 只读挂载限制，做不出 DMG）。
