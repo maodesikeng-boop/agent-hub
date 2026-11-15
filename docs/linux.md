@@ -28,6 +28,8 @@ sudo scripts/linux-sandbox-setup.sh # 一次性安装 bubblewrap + socat 并配�
 
 ## 3. 装各厂商 CLI 并登录
 
+> 也可以不进服务器终端：在网页或桌面应用里打开 **`Settings → Providers`**（多设备联机时先在页面顶部选这台服务器），点 **Install** 一键安装、再直接在界面里登录（方案见 [providers-install-login-design.md](providers-install-login-design.md)）。下面是手动安装与登录的备选做法。
+
 厂商清单以 `src/vendors/registry.ts` 的名单为准，现在是 claude、agy、codex；用哪家装哪家。`scripts/provision-linux.sh` 装的命令、最后提示的登录命令都读各家 `src/vendors/<厂商>/paths.ts` 的 `installCommand`、`headlessLoginCommand`（`node scripts/print-vendors.ts` 可以直接看）。**以守护进程所在的这个用户登录**（凭据存在这个用户的家目录里）。
 
 | 厂商 | 安装（Linux） | 登录 | 装到哪（守护进程会找） |

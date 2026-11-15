@@ -14,7 +14,7 @@ When you run multiple coding agents in parallel, the bottleneck quickly shifts f
 
 Fusa is designed from the ground up so **one conversation manages the whole project**. Instead of opening and babysitting individual worktree sessions yourself, you stay in one continuous conversation with your project's PM, and the UI, context lifecycle, sub-agent orchestration, and token-saving mechanisms are all built around that single thread.
 
-It is built for **one person across multiple devices**, not as a multi-user shared server. Open `Fusa.app` on your Mac or install the unsigned preview desktop app on Windows 11 (backed by a dedicated WSL 2 runtime) to work in a dedicated window without manual browser URLs or tokens. Run an always-on daemon on a Linux server when needed, and check in or reply from your phone in a browser or home-screen PWA.
+It is built for **one person across multiple devices**, not as a multi-user shared server. Open `Fusa.app` on your Mac or install the unsigned preview native desktop app on Windows (no WSL 2 needed; your projects stay on your own `C:\` / `D:\` drives) to work in a dedicated window without manual browser URLs or tokens. Run an always-on daemon on a Linux server when needed, and check in or reply from your phone in a browser or home-screen PWA.
 
 ## How it works
 
@@ -54,21 +54,22 @@ See [docs/mid-turn-messages.md](docs/mid-turn-messages.md) for details.
 
 - **Supported agent CLIs:** Claude Code (`claude`), Antigravity (`agy`), Codex (`codex`), Pi (`pi`), DeepSeek Harness (`dsh`), and Cursor (`cursor-agent`), registered in [`src/vendors/registry.ts`](src/vendors/registry.ts) (`AGENT_VENDORS` in [`src/shared/vendors.ts`](src/shared/vendors.ts)).
 - **Native macOS desktop app (`Fusa.app`):** opens in a dedicated desktop window, automatically starts and supervises the local daemon, authenticates locally without manual URLs or tokens, shows live worker and question counts in the menu bar and Dock badge, and delivers native macOS notifications.
-- **Windows 11 desktop app (unsigned preview):** Tauri 2 desktop window that provisions an isolated Ubuntu 24.04 WSL 2 distribution (`Fusa`), supervises the Linux daemon inside it, signs in locally, and stays running in the system tray.
+- **Native Windows desktop app (unsigned preview):** a Tauri 2 desktop window that bundles a verified official Node.js 24 LTS runtime and native helpers (`fusa-win-helper`), so it needs neither administrator rights nor WSL 2. Projects stay in place on `C:\`, `D:\` or a Dev Drive, and Workers can call your local toolchains (Git, Visual Studio / MSVC, Rust, ...). It supervises the daemon, signs in locally, focuses the existing window on a second launch, offers a native folder picker, and keeps running in the system tray. Worker write scope uses a write-restricted token + NTFS ACLs inside a Job Object, and read-only Workers use the Windows 11 24H2+ MXC container where available (see [Security notes](#security-notes)).
+- **One-click agent CLI setup (`Settings → Providers`):** install each supported agent CLI with one click and sign in directly inside Fusa (browser OAuth, device code, or API key, depending on the vendor), on macOS, Windows and Linux. On Windows it can also install Git for Windows via `winget`. If no vendor is ready on first launch, this page opens automatically.
 - **Rich conversation UI & mobile PWA:** Markdown rendering, syntax highlighting, Mermaid and Vega-Lite charts, and file uploads and previews; accessible on your phone in a browser or installed via **Add to Home Screen** (PWA) with optional Web Push lock-screen notifications.
 - **Multi-device view & quota tracking:** view and operate agents across your desktop machines and Linux server in one window, and track usage quota windows and reset times for vendors that report them (`claude`, `agy`, and `codex`).
 
 ## Requirements
 
-- **macOS 13+** with Xcode Command Line Tools (`swiftc`) to build `Fusa.app`, **Windows 11 (x64)** with **WSL 2** enabled for the Windows desktop preview, or an Ubuntu **Linux** server (see [docs/linux.md](docs/linux.md)).
-- **Node.js >= 24.12** (runs `.ts` natively and uses the built-in `node:sqlite`; see `package.json` `engines`), **pnpm** (`pnpm@10.x`), and `git` when building on macOS, deploying on Linux, or running the daemon directly. On Windows 11, the desktop app provisions Node.js 24, pnpm, `git`, and `bubblewrap` automatically inside its dedicated `Fusa` WSL 2 distribution.
-- At least one supported agent CLI **installed and signed in in your terminal** (on Windows, inside the `Fusa` WSL 2 terminal; the UI shows the login command if signed out):
-  - Claude Code (`claude`): install via `curl -fsSL https://claude.ai/install.sh | bash`, sign in with `claude auth login`
-  - Antigravity (`agy`): install via `curl -fsSL https://antigravity.google/cli/install.sh | bash`, sign in by running `agy` (or set `GEMINI_API_KEY`)
-  - Codex (`codex`): install via `curl -fsSL https://chatgpt.com/codex/install.sh | sh` (or `npm install -g @openai/codex`), sign in with `codex login` (or `codex login --device-auth` in headless terminals)
-  - Pi (`pi`, [docs/vendors/pi.md](docs/vendors/pi.md)): install via `curl -fsSL https://pi.dev/install.sh | sh` (or `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`), run `pi` and type `/login` to connect a model provider, or set that provider's API key environment variable
+- **macOS 13+** with Xcode Command Line Tools (`swiftc`) to build `Fusa.app`, **Windows x64** for the native Windows desktop preview (Windows 11 recommended; **24H2 or later** enables the MXC read-only container, see [Install and run](#2-windows-desktop-app-unsigned-preview)), or an Ubuntu **Linux** server (see [docs/linux.md](docs/linux.md)). The Windows app needs **no administrator rights and no WSL 2**.
+- **Node.js >= 24.12** (runs `.ts` natively and uses the built-in `node:sqlite`; see `package.json` `engines`), **pnpm** (`pnpm@10.x`), and `git` when building on macOS, deploying on Linux, or running the daemon directly. The Windows installer already bundles an official Node.js 24 LTS runtime (currently `v24.22.3`, SHA-256 verified), so you do not need to install Node separately. To let the Windows app manage Git repositories and dispatch Workers into worktrees, install **Git for Windows** (`winget install --id Git.Git -e --source winget`, or click the install button for Git on `Settings → Providers`); it is not required for chat-only use.
+- At least one supported agent CLI installed and signed in. The easiest way is **`Settings → Providers`** in Fusa (works on macOS, Windows and Linux): click **Install** for a vendor, then sign in inside Fusa. Alternatively, install and sign in manually in your own terminal with the commands below (on Windows, use the PowerShell or `npm` / `winget` variants noted per vendor):
+  - Claude Code (`claude`): macOS/Linux `curl -fsSL https://claude.ai/install.sh | bash`, Windows PowerShell `irm https://claude.ai/install.ps1 | iex`; sign in with `claude auth login`
+  - Antigravity (`agy`): macOS/Linux `curl -fsSL https://antigravity.google/cli/install.sh | bash`, Windows PowerShell `irm https://antigravity.google/cli/install.ps1 | iex`; sign in by running `agy` (or set `GEMINI_API_KEY`)
+  - Codex (`codex`): macOS/Linux `curl -fsSL https://chatgpt.com/codex/install.sh | sh` (on Windows, or anywhere, use `npm install -g @openai/codex`); sign in with `codex login` (or `codex login --device-auth` in headless terminals)
+  - Pi (`pi`, [docs/vendors/pi.md](docs/vendors/pi.md)): macOS/Linux `curl -fsSL https://pi.dev/install.sh | sh`, Windows PowerShell `irm https://pi.dev/install.ps1 | iex` (or `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`); run `pi` and type `/login` to connect a model provider, or set that provider's API key environment variable
   - DeepSeek Harness (`dsh`, developer preview, [docs/vendors/deepseek.md](docs/vendors/deepseek.md)): install the verified preview version with `npm install -g @deepseek-ai/dsh@0.2.2-rc.1`, then run `dsh` to sign in interactively or write `DEEPSEEK_API_KEY=<key>` to `~/.dsh/.env`
-  - Cursor (`cursor-agent`, [docs/vendors/cursor.md](docs/vendors/cursor.md)): install via `curl https://cursor.com/install -fsS | bash`, sign in with `cursor-agent login` (or `NO_OPEN_BROWSER=1 cursor-agent login` in headless terminals, or set `CURSOR_API_KEY`)
+  - Cursor (`cursor-agent`, [docs/vendors/cursor.md](docs/vendors/cursor.md)): macOS/Linux `curl https://cursor.com/install -fsS | bash`, Windows PowerShell `irm 'https://cursor.com/install?win32=true' | iex`; sign in with `cursor-agent login` (or `NO_OPEN_BROWSER=1 cursor-agent login` in headless terminals, or set `CURSOR_API_KEY`)
 
 ## Install and run
 
@@ -94,38 +95,31 @@ Once installed, open **`Fusa.app`** directly from `/Applications` or Spotlight. 
 
 **Preview status:** The Windows desktop app is currently an **unsigned preview** that has not yet completed release code-signing or final on-device acceptance sign-off. When you launch the installer or app for the first time and Windows SmartScreen shows a warning, click **More info -> Run anyway**.
 
-**System prerequisite:** Windows 11 (x64) with WSL 2 enabled. If WSL 2 is not enabled yet, open PowerShell as Administrator, run the following command, and restart Windows when prompted:
+**System requirements:** Windows x64. Windows 11 is recommended, and **Windows 11 24H2 or later** enables the native MXC read-only container for read-only Workers (see [Security notes](#security-notes)). The Windows 10 1809+ baseline comes from the design docs ([docs/windows-native-design.md](docs/windows-native-design.md)); the installer does not enforce an OS version check, and CI only runs on `windows-latest`, so Windows 10 is not separately verified. The installer uses per-user mode (`currentUser`): **no administrator rights and no WSL 2 are required**. To dispatch parallel Workers into Git worktrees, install Git for Windows (`winget install --id Git.Git -e --source winget`, or install it from `Settings → Providers`).
+
+You can install Fusa on Windows in two ways:
+
+1. **Install from the GitHub Actions artifact (recommended):** Open the **`windows-desktop`** workflow ([`.github/workflows/windows-desktop.yml`](.github/workflows/windows-desktop.yml)) under this repository's GitHub Actions tab, open the latest successful run (or click **Run workflow** to trigger one), download **`fusa-windows-x64-nsis-unsigned-preview`** under **Artifacts** at the bottom of the page (artifacts are kept for 14 days, so re-run the workflow if it has expired), extract the zip archive, and run `Fusa_0.1.0_x64-setup-unsigned-preview.exe` (a matching `.sha256` file is included). It installs for the current user without administrator rights.
+2. **Build the installer from source on Windows (optional):** Install Node.js >= 24.12, pnpm 10, and the Rust stable `x86_64-pc-windows-msvc` toolchain (with Visual Studio C++ Build Tools). The staging script downloads and SHA-256 verifies the official Node.js 24 LTS runtime that gets bundled. Then run the following commands in PowerShell to build the web assets, compile the native helpers, stage the bundled runtime, and produce the NSIS installer:
 
 ```powershell
-wsl --install --no-distribution
-```
-
-You can install Fusa on Windows 11 in two ways:
-
-1. **Install from the GitHub Actions artifact (recommended):** Open the **`windows-desktop`** workflow ([`.github/workflows/windows-desktop.yml`](.github/workflows/windows-desktop.yml)) under this repository's GitHub Actions tab, open the latest successful run (or click **Run workflow** to trigger one), download **`fusa-windows-x64-nsis-unsigned-preview`** under **Artifacts** at the bottom of the page, extract the zip archive, and run `Fusa_0.1.0_x64-setup-unsigned-preview.exe`.
-2. **Build the installer from source on Windows (optional):** Install Node.js >= 24.12, pnpm 10, and the Rust stable `x86_64-pc-windows-msvc` toolchain (with Visual Studio C++ Build Tools), then run the following commands in Git Bash to build the web assets, stage the WSL backend release archive, and bundle the NSIS installer:
-
-```sh
 git clone https://github.com/maodesikeng-boop/agent-hub.git
 cd agent-hub
 pnpm install --frozen-lockfile
 pnpm build
-mkdir -p apps/windows/crates/fusa-desktop/resources
-tar --exclude='*.test.ts' --exclude='*.test.tsx' \
-	-czf apps/windows/crates/fusa-desktop/resources/fusa-release.tar.gz \
-	package.json pnpm-lock.yaml tsconfig.json apps/desktop/contract.json \
-	migrations scripts src dist
+cargo build --release --manifest-path apps/windows/Cargo.toml --workspace --bins --locked
+node scripts/stage-win-runtime.ts --out-dir apps/windows/crates/fusa-desktop/staged-runtime --helpers-dir apps/windows/target/release --target-os win32
 cd apps/windows/crates/fusa-desktop
-pnpm dlx @tauri-apps/cli@^2 build --bundles nsis
+pnpm dlx @tauri-apps/cli@^2 build --bundles nsis --config tauri.bundle.conf.json
 ```
 
-*(If `tauri-cli` is installed via Cargo, you can run `cargo tauri build --bundles nsis` in `apps/windows/crates/fusa-desktop` instead. The compiled NSIS installer is written to `apps/windows/target/release/bundle/nsis/`.)*
+*(The compiled NSIS installer is written to `apps/windows/target/release/bundle/nsis/`.)*
 
-**First-run setup, tray behavior, and workspace isolation:**
+**First launch, worktrees, and tray behavior:**
 
-- **Automatic dedicated WSL 2 runtime:** On first launch, the built-in setup screen downloads and verifies the official Ubuntu 24.04 WSL rootfs image and imports a dedicated **`Fusa`** WSL 2 distribution (with non-root user `fusa`, Node.js 24, pnpm, `git`, the `bubblewrap` Worker sandbox, and the Fusa daemon) without modifying any existing WSL distributions on your machine. Click **Open terminal** on the setup screen to open an interactive `Fusa` shell, install and sign in to your preferred agent CLIs, and click **Continue**.
-- **System tray lifecycle:** Clicking the window close button hides Fusa to the system tray while the daemon keeps running in the background. To exit completely and gracefully stop the managed daemon inside WSL, right-click the Fusa system tray icon and choose the quit action (**彻底退出 Fusa**).
-- **Workspace and host isolation:** To prevent sandboxed Workers from reading or modifying host files or invoking Windows executables, the `Fusa` distribution disables Windows drive automounting and interoperability by default (`automount=false` and `interop=false` in `/etc/wsl.conf`, so `C:\` is not mounted and Windows `.exe` binaries cannot be launched from inside WSL). Clone and keep the Git repositories you manage inside the `Fusa` Linux filesystem (for example under `/home/fusa/projects` via `wsl -d Fusa`). See [docs/windows-desktop-design.md](docs/windows-desktop-design.md) for architecture details.
+- **First launch and agent CLIs:** Opening **Fusa** syncs the latest system and user registry `PATH`, starts the bundled native daemon, and signs you in automatically. If no vendor CLI is ready yet, `Settings → Providers` opens automatically so you can install each CLI with one click and sign in inside Fusa (and install Git for Windows if it is missing). The old static command-guide page has been retired. Manually installed CLIs on your `PATH` are detected too.
+- **Projects stay on your own drives; same-volume worktrees:** Pick an existing project folder on `C:\`, `D:\` or a Dev Drive with the native folder picker (UNC / network-share project folders are not supported). When the project is on a different volume from the data directory (`%USERPROFILE%\.agent-hub`), Worker worktrees are created on the project's own volume under `<drive>:\.fusa-wt\<fingerprint>` (for example `D:\.fusa-wt\…`), which preserves `pnpm` hardlink sharing and Dev Drive performance. If that directory cannot be created or protected (for example on FAT/exFAT), Fusa falls back to the worktrees directory inside the data directory with a warning.
+- **System tray lifecycle:** Clicking the window close button hides Fusa to the system tray while the daemon keeps running in the background; launching Fusa again focuses the existing window. The tray menu can open the main window, restart the background service, open logs, or quit. To exit completely, right-click the tray icon and choose **彻底退出 Fusa**, which gracefully stops the managed daemon and its whole child process tree (if the daemon was started externally, the item reads **退出 Fusa（保留外部后台）** and leaves it running). See [docs/windows-native-design.md](docs/windows-native-design.md) for architecture details.
 
 ### 3. Linux server (always-on daemon & multi-device hub)
 
@@ -162,7 +156,7 @@ All environment variables are optional.
 
 | Variable | Default | Description |
 |---|---|---|
-| `AGENT_HUB_HOME` | `~/.agent-hub` | Data directory (SQLite database, tokens, worktrees, uploads, logs). Keep the path short: Unix sockets inside `run/` must fit within 103 bytes (`MAX_UNIX_SOCKET_PATH_BYTES`). |
+| `AGENT_HUB_HOME` | `~/.agent-hub` | Data directory (SQLite database, tokens, worktrees, uploads, logs). On macOS and Linux, keep the path short: Unix sockets inside `run/` must fit within 103 bytes (`MAX_UNIX_SOCKET_PATH_BYTES`); the Windows app uses named pipes instead. |
 | `AGENT_HUB_PORT` | `4317` | Local UI server port (listens on `127.0.0.1` only). Set to `0` to let the OS pick a free port. |
 | `AGENT_HUB_CLAUDE` | `claude` | Command name or path to the Claude Code CLI (`~/` is expanded; searched in `PATH` and standard fallback directories). |
 | `AGENT_HUB_AGY` | `agy` | Command name or path to the Antigravity CLI (`~/` is expanded; searched in `PATH` and standard fallback directories). |
@@ -202,8 +196,9 @@ Vendor terms change over time. Always check the latest official documents yourse
 
 Workers edit files and execute shell commands on your machine with your OS user's permissions. Understand the actual boundaries before running agents on important repositories or machines:
 
-- **Worker write scope (`src/shared/write-scope.ts`, `src/daemon/driver/write-scope.ts`):** Inside the Fusa data directory (`~/.agent-hub`), a normal worker is only allowed to write to its own git worktree (`worktrees/<project>/<worker>`). Both `state/` (SQLite database, tokens, personas) and other workers' worktrees are write-protected. Fusa enforces this boundary by wrapping the worker process in an OS sandbox (`sandbox-exec` on macOS, `bubblewrap` / `bwrap` on Linux after running the one-time `sudo scripts/linux-sandbox-setup.sh` setup; see [docs/write-scope.md](docs/write-scope.md)). On Windows 11, the desktop app enforces the exact same Worker write-scope and read-only boundaries via Linux `bubblewrap` inside the dedicated `Fusa` WSL 2 distribution, with `automount=false` and `interop=false` so Workers cannot mount host drives or launch Windows executables. If the OS sandbox is unavailable, workers refuse to start. **Outside the data directory (`~/.agent-hub`), there are no write restrictions:** a worker can modify your project folder and any other user-writable files in that OS environment, run arbitrary commands, and access the network just like any program you run.
+- **Worker write scope (`src/shared/write-scope.ts`, `src/daemon/driver/write-scope.ts`):** Inside the Fusa data directory (`~/.agent-hub`), a normal worker is only allowed to write to its own git worktree (`worktrees/<project>/<worker>`). Both `state/` (SQLite database, tokens, personas) and other workers' worktrees are write-protected. Fusa enforces this boundary by wrapping the worker process in an OS sandbox (`sandbox-exec` on macOS, `bubblewrap` / `bwrap` on Linux after running the one-time `sudo scripts/linux-sandbox-setup.sh` setup; see [docs/write-scope.md](docs/write-scope.md)). On Windows, the native app enforces the same boundary through `fusa-run.exe` (from `fusa-win-helper`): a `KILL_ON_JOB_CLOSE` Job Object, a `WRITE_RESTRICTED` write-restricted token, and deny-write NTFS ACLs on the protected roots (the data directory plus the same-volume `.fusa-wt` roots; see [docs/write-scope.md](docs/write-scope.md)). If the OS sandbox is unavailable, workers refuse to start. **Outside the data directory (`~/.agent-hub`), there are no write restrictions:** a worker can modify your project folder and any other user-writable files in that OS environment, run arbitrary commands, and access the network just like any program you run.
 - **Read-only workers (`src/shared/readonly-policy.ts`):** Read-only workers can read files and run commands, and can only call read-only MCP connector tools (`readOnlyHint: true`). Sensitive paths are blocked from reading (`state/ui-token`, vendor credential files, `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh`, and globs like `**/.env`, `**/.env.*`, `**/*.pem`, `**/*.key`, `**/id_rsa*`, `**/id_ed25519*`), and writes are blocked everywhere except a per-session private temporary directory (and required runtime and cache directories). Claude Code and Codex use their native read-only sandboxes; Antigravity, Pi, DeepSeek Harness (`dsh`), and Cursor (`cursor-agent`) are wrapped in the outer read-only OS sandbox. See [docs/readonly-worker-design.md](docs/readonly-worker-design.md).
+- **Read-only workers on Windows:** Codex keeps using its own read-only sandbox. The other vendors use Microsoft's official MXC read-only container (`@microsoft/mxc-sdk`) on Windows 11 24H2+ with container support (Node.js >= 24.21; the bundled runtime satisfies this). On older Windows, Windows Server, or when container support is unavailable, they do not refuse to start: they automatically fall back to the write-restricted token (protected roots write-denied) plus each vendor's tool-layer read-only rules, and the session shows a downgrade warning. In that fallback mode, writes outside the protected roots and reads of sensitive files rely on the vendor CLI's own permission rules rather than the kernel.
 - **Project managers are not sandboxed.**
 - Do not expose the local daemon port (`4317`) to untrusted networks. To report a security vulnerability privately, see [SECURITY.md](SECURITY.md).
 
@@ -232,7 +227,7 @@ Fusa 是一个以桌面应用为主的个人多 Agent 协作工具，核心设�
 
 Fusa 从最早开始开发时就是按**“一个会话管住整个项目”**设计的：你不用自己去开、去盯每个 worktree 和 Agent 会话，界面布局、上下文生命周期、子 Agent 编排和省 Token 机制全都是为了让你始终留在这一个项目经理对话里。
 
-它是为**一个人、多台设备**设计的自用工具，不是多人共用的服务端。在 Mac 上双击打开 `Fusa.app`，或在 Windows 11 上安装桌面预览版（内置独立 WSL 2 运行环境），即可在独立桌面窗口中使用，不用自己开浏览器输地址或粘令牌。需要常驻后台时可部署在 Linux 服务器上，出门在手机上用浏览器或“添加到主屏幕”（PWA）查看和回复同一批对话。
+它是为**一个人、多台设备**设计的自用工具，不是多人共用的服务端。在 Mac 上双击打开 `Fusa.app`，或在 Windows 上安装原生桌面预览版（无需 WSL 2，项目直接放在你自己的 `C:\` / `D:\` 盘），即可在独立桌面窗口中使用，不用自己开浏览器输地址或粘令牌。需要常驻后台时可部署在 Linux 服务器上，出门在手机上用浏览器或“添加到主屏幕”（PWA）查看和回复同一批对话。
 
 ## 怎么做到的
 
@@ -272,18 +267,19 @@ Fusa 从最早开始开发时就是按**“一个会话管住整个项目”**�
 
 - **支持的 Agent 命令行**（注册表见 [`src/vendors/registry.ts`](src/vendors/registry.ts)，导出为 [`src/shared/vendors.ts`](src/shared/vendors.ts) 的 `AGENT_VENDORS`）：Claude Code（`claude`）、Antigravity（`agy`）、Codex（`codex`）、Pi（`pi`）、DeepSeek Harness（`dsh`）、Cursor（`cursor-agent`）。
 - **macOS 桌面应用（`Fusa.app`）**：双击打开独立应用窗口，自动拉起并监管本机后台守护进程、免手输地址自动登录，支持菜单栏运行状态摘要、Dock 角标与 macOS 原生通知。
-- **Windows 原生桌面应用（未签名预览版）**：基于 Tauri 2 的独立桌面窗口，随包内置校验过的 Node.js 24 LTS 与 `fusa-win-helper` 原生进程监管/沙箱组件，无需管理员权限或 WSL 2；项目直接留在 `C:\`、`D:\` 或 Dev Drive 本机目录并可直接调用 Visual Studio、MSVC、Rust 等本机工具链，支持单实例聚焦、原生目录选择与系统托盘常驻。
+- **Windows 原生桌面应用（未签名预览版）**：基于 Tauri 2 的独立桌面窗口，随包内置校验过的官方 Node.js 24 LTS 与 `fusa-win-helper` 原生进程监管/沙箱组件，无需管理员权限或 WSL 2；项目直接留在 `C:\`、`D:\` 或 Dev Drive 本机目录，Worker 可直接调用 Git、Visual Studio、MSVC、Rust 等本机工具链，支持单实例聚焦、原生目录选择与系统托盘常驻。Worker 写入范围由 Job Object 内的写受限令牌 + NTFS ACL 保证，只读 Worker 在 Windows 11 24H2+ 上用 MXC 容器（详见[安全提示](#安全提示)）。
+- **一键安装各家 Agent 命令行（`Settings → Providers`）**：在 macOS、Windows、Linux 上都可以在界面里点 **Install** 一键安装各家命令行，并直接在 Fusa 里完成登录（按厂商走浏览器 OAuth、设备码或 API key）；Windows 上还能一键用 `winget` 安装 Git for Windows。首次启动时若没有任何就绪的厂商，会自动弹出这个页面。
 - **富文本对话界面与手机 PWA**：支持 Markdown、代码高亮、Mermaid 与 Vega-Lite 图表、文件上传与预览；手机端可用浏览器访问或通过“添加到主屏幕”作为 PWA 使用（支持可选的 Web Push 锁屏通知）。
 - **多设备联机与额度面板**：在一个窗口里同时查看和操作桌面端与 Linux 服务器上的会话，并显示支持额度窗口查询的厂商（`claude`、`agy`、`codex`）的剩余比例与重置时间。
 
 ## 环境要求
 
-- **macOS 13+**（编译 `Fusa.app` 需安装 Xcode 命令行工具 `swiftc`）、**Windows 10（1809+）/ Windows 11（x64）**，或 **Linux** 服务器（Ubuntu 部署说明见 [docs/linux.md](docs/linux.md)）。
-- 在 macOS、Linux 服务器或直接从源码终端运行守护进程时，需安装 **Node.js >= 24.12**（原生运行 `.ts` 并使用内置 `node:sqlite`，见 `package.json` 的 `engines`；Windows 11 24H2+ 启用 MXC 只读容器需 Node.js >= 24.21）、**pnpm**（`pnpm@10.x`）与 `git`。Windows 桌面安装包已随包内置官方 Node.js 24 LTS 运行时，无需另装 Node；管理 Git 仓库与派发 Worker worktree 需安装 Git for Windows（`winget install --id Git.Git -e --source winget`，纯聊天场景不强制）。
-- 至少在本机终端里安装并登录一家支持的 Agent 命令行（未登录时界面与首次启动引导页会提示对应命令）：
+- **macOS 13+**（编译 `Fusa.app` 需安装 Xcode 命令行工具 `swiftc`）、**Windows x64**（原生桌面预览版，推荐 Windows 11，**24H2 及以上**可启用 MXC 只读容器，详见[安装和启动](#2-windows-桌面应用未签名预览版)），或 **Linux** 服务器（Ubuntu 部署说明见 [docs/linux.md](docs/linux.md)）。Windows 版**无需管理员权限，也无需 WSL 2**。
+- 在 macOS、Linux 服务器或直接从源码终端运行守护进程时，需安装 **Node.js >= 24.12**（原生运行 `.ts` 并使用内置 `node:sqlite`，见 `package.json` 的 `engines`；Windows 11 24H2+ 上用源码终端直接跑守护进程并启用 MXC 只读容器，需 Node.js >= 24.21）、**pnpm**（`pnpm@10.x`）与 `git`。Windows 桌面安装包已随包内置官方 Node.js 24 LTS 运行时（当前为 `v24.22.3`，经 SHA-256 校验），无需另装 Node；管理 Git 仓库与派发 Worker worktree 需安装 Git for Windows（`winget install --id Git.Git -e --source winget`，也可在 `Settings → Providers` 里点 Git 的安装按钮；纯聊天场景不强制）。
+- 至少安装并登录一家支持的 Agent 命令行。最省事的做法是在 Fusa 里打开 **`Settings → Providers`**（macOS、Windows、Linux 通用）：点对应厂商的 **Install** 一键安装，再直接在界面里登录。也可以照下面的命令在自己的终端里手动安装并登录（Windows 用各厂商标注的 PowerShell 或 `npm` 命令）：
   - Claude Code（`claude`）：macOS/Linux `curl -fsSL https://claude.ai/install.sh | bash`，Windows PowerShell `irm https://claude.ai/install.ps1 | iex`；登录 `claude auth login`
   - Antigravity（`agy`）：macOS/Linux `curl -fsSL https://antigravity.google/cli/install.sh | bash`，Windows PowerShell `irm https://antigravity.google/cli/install.ps1 | iex`；运行 `agy` 登录（或配置 `GEMINI_API_KEY`）
-  - Codex（`codex`）：macOS/Linux `curl -fsSL https://chatgpt.com/codex/install.sh | sh`（Windows 用 `npm install -g @openai/codex` 或 `winget install OpenAI.Codex`）；登录 `codex login`（无浏览器环境用 `codex login --device-auth`）
+  - Codex（`codex`）：macOS/Linux `curl -fsSL https://chatgpt.com/codex/install.sh | sh`（Windows 用 `npm install -g @openai/codex`）；登录 `codex login`（无浏览器环境用 `codex login --device-auth`）
   - Pi（`pi`，详见 [docs/vendors/pi.md](docs/vendors/pi.md)）：macOS/Linux `curl -fsSL https://pi.dev/install.sh | sh`，Windows PowerShell `irm https://pi.dev/install.ps1 | iex`（或 `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`）；在终端运行 `pi` 后输入 `/login` 连接模型商，或配置对应模型商的 API key 环境变量
   - DeepSeek Harness（`dsh`，开发者预览版，详见 [docs/vendors/deepseek.md](docs/vendors/deepseek.md)）：安装已验证的固定版本 `npm install -g @deepseek-ai/dsh@0.2.2-rc.1`，随后在终端运行 `dsh` 交互登录，或向 `~/.dsh/.env` 写入 `DEEPSEEK_API_KEY=<key>`
   - Cursor（`cursor-agent`，详见 [docs/vendors/cursor.md](docs/vendors/cursor.md)）：macOS/Linux `curl https://cursor.com/install -fsS | bash`，Windows PowerShell `irm 'https://cursor.com/install?win32=true' | iex`；登录 `cursor-agent login`（无浏览器环境用 `NO_OPEN_BROWSER=1 cursor-agent login`，或配置 `CURSOR_API_KEY`）
@@ -312,12 +308,12 @@ bash scripts/build-mac-app.sh --install
 
 **预览版状态说明：** 当前 Windows 桌面版为**未签名预览版（unsigned preview，尚未在真机完成正式发行代码签名与验收）**。首次运行安装包或应用时，若遇到 Windows SmartScreen 拦截提示，请点击**更多信息 -> 仍要运行**（英文系统为 **More info -> Run anyway**）。
 
-**系统环境要求：** Windows 10（1809+）或 Windows 11（x64，推荐 Windows 11 24H2+ 以启用原生 MXC 只读沙箱容器）。安装包采用当前用户模式（`currentUser`），**无需管理员权限，也无需安装或开启 WSL 2**。若需要使用 Git worktree 派发并行 Worker，请在本机安装 Git for Windows（PowerShell 执行 `winget install --id Git.Git -e --source winget`）。
+**系统环境要求：** Windows x64。推荐 Windows 11，**Windows 11 24H2 及以上**会为只读 Worker 启用原生 MXC 沙箱容器（详见[安全提示](#安全提示)）。Windows 10 1809+ 这个下限来自设计文档（[docs/windows-native-design.md](docs/windows-native-design.md)）；安装包本身不做系统版本检查，CI 也只在 `windows-latest` 上跑，所以 Windows 10 没有单独验证过。安装包采用当前用户模式（`currentUser`），**无需管理员权限，也无需安装或开启 WSL 2**。若需要使用 Git worktree 派发并行 Worker，请在本机安装 Git for Windows（PowerShell 执行 `winget install --id Git.Git -e --source winget`，或在 `Settings → Providers` 里一键安装）。
 
 可通过以下两种方式获取并安装：
 
-1. **直接用云端构建产物安装（推荐）：** 打开本仓库 GitHub Actions 的 **`windows-desktop`** 工作流页面（[`.github/workflows/windows-desktop.yml`](.github/workflows/windows-desktop.yml)），点开最近一次成功构建，在页面底部 **Artifacts** 下载 **`fusa-windows-x64-nsis-unsigned-preview`**，解压后双击 `Fusa_0.1.0_x64-setup-unsigned-preview.exe` 即可免管理员完成安装。
-2. **从源码在本机编译安装包（可选）：** 在 Windows 上安装 Node.js >= 24.21、pnpm 10 与 Rust stable `x86_64-pc-windows-msvc` 构建工具链（含 Visual Studio C++ Build Tools），随后在 PowerShell 中依次执行以下命令构建前端资源、编译原生辅助程序、组装内置 Node 24 LTS 运行时并生成 NSIS 安装包：
+1. **直接用云端构建产物安装（推荐）：** 打开本仓库 GitHub Actions 的 **`windows-desktop`** 工作流页面（[`.github/workflows/windows-desktop.yml`](.github/workflows/windows-desktop.yml)），点开最近一次成功构建，在页面底部 **Artifacts** 下载 **`fusa-windows-x64-nsis-unsigned-preview`**（产物保留 14 天，过期后请重新运行该工作流），解压后双击 `Fusa_0.1.0_x64-setup-unsigned-preview.exe`（同目录附带对应的 `.sha256` 校验文件）即可免管理员完成安装。
+2. **从源码在本机编译安装包（可选）：** 在 Windows 上安装 Node.js >= 24.12、pnpm 10 与 Rust stable `x86_64-pc-windows-msvc` 构建工具链（含 Visual Studio C++ Build Tools；随包内置的官方 Node.js 24 LTS 由组装脚本自动下载并做 SHA-256 校验），随后在 PowerShell 中依次执行以下命令构建前端资源、编译原生辅助程序、组装内置 Node 24 LTS 运行时并生成 NSIS 安装包：
 
 ```powershell
 git clone https://github.com/maodesikeng-boop/agent-hub.git
@@ -334,9 +330,9 @@ pnpm dlx @tauri-apps/cli@^2 build --bundles nsis --config tauri.bundle.conf.json
 
 **首次启动引导、跨盘工作树与系统托盘：**
 
-- **轻量化首次引导与注册表 `PATH` 刷新：** 打开 **Fusa** 时会自动同步系统与当前用户最新注册表 `PATH`，拉起随包内置的原生守护进程并完成免输令牌登录。首次运行若检测到尚未安装 `git` 或任一厂商 CLI，会展示安装与登录命令（可点 **Open terminal** 打开本机终端，装好后点 **Refresh** 即刻生效，也可直接点 **Continue** 先进入纯聊天工作台）。
-- **直接管理本机磁盘仓库与同卷 worktree：** 可直接通过原生目录选择器选取 `C:\`、`D:\` 或 Dev Drive 上的现有项目目录；当项目在 `D:\` 而数据目录在 `C:\` 时，Worker worktree 会自动创建在项目同卷受保护根 `D:\.fusa-wt\…` 下，保留 `pnpm` 硬链接共享与 Dev Drive 性能加速。
-- **窗口关闭与彻底退出：** 点击窗口右上角关闭按钮只会将窗口隐藏到系统托盘，后台守护进程继续保持运行；需要彻底退出并经本机管理命名管道优雅关停守护进程及其全部子进程树时，请右键点击系统托盘图标并选择**彻底退出 Fusa**。完整架构说明见 [docs/windows-native-design.md](docs/windows-native-design.md)。
+- **首次启动与各家 Agent 命令行：** 打开 **Fusa** 时会自动同步系统与当前用户最新注册表 `PATH`，拉起随包内置的原生守护进程并完成免输令牌登录。若还没有任何就绪的厂商命令行，会自动弹出 `Settings → Providers`，可在界面里一键安装各家命令行并直接登录（缺少 Git for Windows 时也能在这里一键安装）；原先的静态命令引导页已退役。自己用终端装在 `PATH` 里的命令行同样会被识别。
+- **直接管理本机磁盘仓库与同卷 worktree：** 可直接通过原生目录选择器选取 `C:\`、`D:\` 或 Dev Drive 上的现有项目目录（不支持 UNC / 网络共享路径）；当项目所在卷与数据目录（`%USERPROFILE%\.agent-hub`）不在同一卷时，Worker worktree 会自动创建在项目同卷受保护根 `<盘符>:\.fusa-wt\<指纹>`（例如 `D:\.fusa-wt\…`）下，保留 `pnpm` 硬链接共享与 Dev Drive 性能加速；若该目录无法创建或加保护（例如 FAT/exFAT），会给出警告并回退到数据目录下的 worktrees 目录。
+- **窗口关闭与彻底退出：** 点击窗口右上角关闭按钮只会将窗口隐藏到系统托盘，后台守护进程继续保持运行；再次启动 Fusa 会聚焦已有窗口。托盘菜单可打开主窗口、重启后台服务、打开日志或退出。需要彻底退出并经本机管理命名管道优雅关停守护进程及其全部子进程树时，请右键点击系统托盘图标并选择**彻底退出 Fusa**（若守护进程是外部启动的，菜单项显示为**退出 Fusa（保留外部后台）**，不会停掉它）。完整架构说明见 [docs/windows-native-design.md](docs/windows-native-design.md)。
 
 ### 3. Linux 服务器（常驻后台与多设备中心）
 
@@ -373,7 +369,7 @@ pnpm start
 
 | 变量名 | 默认值 | 说明 |
 |---|---|---|
-| `AGENT_HUB_HOME` | `~/.agent-hub` | 数据目录（数据库、令牌、worktrees、上传文件、日志）。macOS 和 Linux 上 Unix socket 路径上限为 103 字节（`MAX_UNIX_SOCKET_PATH_BYTES`），请保持路径简短。 |
+| `AGENT_HUB_HOME` | `~/.agent-hub` | 数据目录（数据库、令牌、worktrees、上传文件、日志）。macOS 和 Linux 上 Unix socket 路径上限为 103 字节（`MAX_UNIX_SOCKET_PATH_BYTES`），请保持路径简短；Windows 版改用命名管道。 |
 | `AGENT_HUB_PORT` | `4317` | 本机界面服务端口，只监听 `127.0.0.1`。设为 `0` 时由系统分配空闲端口。 |
 | `AGENT_HUB_CLAUDE` | `claude` | Claude Code CLI 的命令名或可执行文件路径（支持 `~/` 展开；先找 `PATH` 再找常见安装路径）。 |
 | `AGENT_HUB_AGY` | `agy` | Antigravity CLI 的命令名或可执行文件路径（支持 `~/` 展开；先找 `PATH` 再找常见安装路径）。 |
@@ -416,7 +412,7 @@ Worker 会在你的电脑上以当前系统用户的权限修改文件、执行�
 
 - **写入范围限制（`src/shared/write-scope.ts`、`src/daemon/driver/write-scope.ts`）**：在受保护根（数据目录 `~/.agent-hub` 及跨盘同卷 `.fusa-wt` 根）内部，普通 Worker 只能写自己的 worktree，数据库、令牌（`state/`）和其他 Worker 的目录均受保护。这一限制由包在 Agent 进程外层的操作系统沙箱强制执行（macOS 使用 `sandbox-exec`；Linux 使用 `bubblewrap` `bwrap`，首次使用需跑一次 `sudo scripts/linux-sandbox-setup.sh`；Windows 原生版通过 `fusa-run.exe` 的 `KILL_ON_JOB_CLOSE` Job Object + `WRITE_RESTRICTED` 写受限令牌 + 受保护根拒写 NTFS ACL 强制执行，详见 [docs/write-scope.md](docs/write-scope.md)）。若基础系统沙箱不可用，Worker 会拒绝启动。**但受保护根之外没有任何写入限制**：Worker 可以修改你的项目文件夹及当前用户可写的其他路径，也可以像普通程序一样跑命令、联网和读取文件。
 - **只读模式（`src/shared/readonly-policy.ts`）**：只读 Worker 可以读文件、跑命令，连接器（MCP）只能调用标有 `readOnlyHint: true` 的只读工具；禁读本机界面令牌（`state/ui-token`）、各厂商令牌凭据文件、`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.config/gh` 等敏感目录以及 `**/.env`、`**/.env.*`、`**/*.pem`、`**/*.key`、`**/id_rsa*`、`**/id_ed25519*` 等密钥文件；除会话私有临时目录（及必要的运行时和缓存目录）外禁止写入任何位置。Claude Code 与 Codex 使用各自原生只读沙箱；Antigravity、Pi、DeepSeek Harness（`dsh`）与 Cursor（`cursor-agent`）使用外层只读系统沙箱。详见 [docs/readonly-worker-design.md](docs/readonly-worker-design.md)。
-- **Windows 只读模式说明**：在 Windows 上，Codex 继续使用其自带只读沙箱；其余厂商在支持 ProcessContainer 的 Windows 11 24H2+ 环境优先使用微软官方 MXC 只读容器（`@microsoft/mxc-sdk`），在低于 Windows 11 24H2 或未启用容器支持的系统上自动平滑回退为「写受限令牌（受保护根禁写）+ 厂商工具层只读拦截规则」并在会话中输出降级提示。
+- **Windows 只读模式说明**：在 Windows 上，Codex 继续使用其自带只读沙箱；其余厂商在支持 ProcessContainer 的 Windows 11 24H2+ 环境优先使用微软官方 MXC 只读容器（`@microsoft/mxc-sdk`，需要 Node.js >= 24.21，随包内置的运行时已满足），在低于 Windows 11 24H2、Windows Server 或未启用容器支持的系统上不会拒绝启动，而是自动平滑回退为「写受限令牌（受保护根禁写）+ 厂商工具层只读拦截规则」并在会话中输出降级提示。回退模式下，受保护根之外的写入拦截与敏感文件读取限制依赖各家命令行自己的权限规则，而不是内核强制。
 - **项目经理不受沙箱限制。**
 - 请勿将本机端口直接暴露到公网。安全漏洞报告方式见 [SECURITY.md](SECURITY.md)。
 
