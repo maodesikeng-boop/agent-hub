@@ -125,12 +125,10 @@ function liveGraphsSection(): string | null {
   const heading = "## 未完结的任务图（账本实时状态）\n\n";
   const at = preamble.indexOf(heading);
   if (at === -1) return null;
-  // 最后一段是任务图手册那一行（换了会话手里有图却没有手册时靠它找回来），不算在图的摘要里
+  // 不再接一行任务图手册路径：上一代加载过手册的，正文随“上一个会话加载过的技能”带过来（loaded-skills.ts）
   const section = preamble.slice(at + heading.length);
-  const manual = section.lastIndexOf("\n\n任务图手册（");
-  expect(manual).toBeGreaterThan(0);
-  expect(section.slice(manual + 2)).toBe(taskGraphManualNote(undefined, next.id));
-  return section.slice(0, manual);
+  expect(section).not.toContain(taskGraphManualNote(undefined, next.id));
+  return section;
 }
 
 describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", () => {

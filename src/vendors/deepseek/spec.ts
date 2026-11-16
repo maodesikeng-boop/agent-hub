@@ -122,6 +122,8 @@ export default defineVendor({
       web_fetch: "web_fetch",
     },
   },
+  // skill 工具：参数 {"name": "<技能名>"}（@deepseek-ai/dsh-tool-skill 0.2.2-rc.1 源码）
+  skillSignals: { toolNameKeys: ["name"] },
   capabilities: {
     backgroundWake: false,
     readonly: "os_sandbox",

@@ -109,6 +109,8 @@ export default defineVendor({
       ToolSearch: "tool_search",
     },
   },
+  // Skill 工具：input {"skill":"frontend-rules"}，插件技能写成 "fusa:fusa-task-graph"（账本实测）
+  skillSignals: { toolNameKeys: ["skill"] },
   capabilities: {
     // Bash run_in_background 跑完推 task_notification 自动叫醒 agent（docs/mid-turn-messages.md 第 10.1 节）
     backgroundWake: true,

@@ -186,6 +186,16 @@ export interface VendorSpec<Id extends string = string> {
    * 所以同一个名字在各家要是同一个动作（契约测试查）。没列的工具显示“Using <名字>”，统计里按原名单独计数；mcp__ 开头的另按连接器认。
    */
   tools?: { actions: Readonly<Record<string, ToolAction>> };
+  /**
+   * 加载技能的信号里这家特有的写法（shared/skill-loads.ts 按它认，换代时把加载过的技能带进新会话）。读文件、跑命令按 tools.actions 认，不用写这里。
+   * 不写 = 用户手打按 composer.commandPrefix 认，没有原生技能工具。
+   */
+  skillSignals?: {
+    /** 用户手打调用技能的开头，不写 = [composer.commandPrefix]。 */
+    userTriggers?: readonly string[];
+    /** 原生技能工具（tools.actions 里是 "skill" 的）放技能名的参数键。 */
+    toolNameKeys?: readonly string[];
+  };
   capabilities: VendorCapabilities;
 }
 

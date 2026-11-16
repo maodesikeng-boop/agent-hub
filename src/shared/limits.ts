@@ -121,6 +121,17 @@ export const HANDOVER_TIMEOUT_MS = 5 * 60_000;
 export const AUTO_RENEW_MAX_ATTEMPTS = 3;
 /** 自动换新会话没成：至少过这么久才再试，之后每没成一次翻倍（10、20 分钟）；还要照常等又一轮回完、再空闲。 */
 export const AUTO_RENEW_RETRY_BACKOFF_MS = 10 * 60_000;
+/**
+ * 换代时带进新会话的技能正文（docs/skill-carryover-design.md，daemon/ledger/loaded-skills.ts），都按 String.length 算。
+ * 单个：超了从前往后截，末尾写全文路径。poteto-mode 约 2.5 万字（英文约 6～7K token），留了余量。
+ */
+export const SKILL_CARRYOVER_SKILL_MAX_CHARS = 30_000;
+/** 合计：英文为主时约 2 万 token，和 Claude Code 压缩后补回技能的 25000 token 相当。放不下的那个和之后的只列名字，不为塞进去再截短。 */
+export const SKILL_CARRYOVER_TOTAL_MAX_CHARS = 80_000;
+/** 每个对话最多记这么多个技能（loaded_skills 的行数），超了删最久没加载的。 */
+export const SKILL_CARRYOVER_RECORDS_MAX = 200;
+/** “没带正文”名单最多列几个名字。 */
+export const SKILL_CARRYOVER_SKIPPED_LIST_MAX = 20;
 /** PersonaView 里最多带几条修改记录。 */
 export const PERSONA_CHANGES_LIMIT = 50;
 /** 跨厂商切换时，本代消息与 Worker 汇报回放区的最大字符预算（String.length，24 万字保底防爆窗）。 */
