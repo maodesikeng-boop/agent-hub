@@ -7,7 +7,7 @@ describe("toolOutputText", () => {
   it("各家的形状", () => {
     // claude tool_result 的 content：字符串，或文字块数组（图片块没有文字）
     expect(toolOutputText("1\t---\n2\tname: x")).toBe("1\t---\n2\tname: x");
-    expect(toolOutputText([{ type: "text", text: "a" }, { type: "image", source: {} }, { type: "text", text: "b" }])).toBe("a\n\nb");
+    expect(toolOutputText([{ type: "text", text: "a" }, { type: "image", source: {} }, { type: "text", text: "b" }])).toBe("a\nb");
     // pi 的 tool_execution_end.result
     expect(toolOutputText({ content: [{ type: "text", text: "pi 输出" }], details: {} })).toBe("pi 输出");
     // ACP（deepseek）tool_call_update 的 content

@@ -143,6 +143,8 @@ const bump = (key: string, field: string, n = 1) => {
   counts.set(key, c);
 };
 const disagreements: string[] = [];
+/** 返回里有开头、但这个技能现在不在这个会话的名单里：多是旧会话的启动目录（任务图手册）已经清理掉，拿今天的磁盘重放认不到，不算识别错。 */
+const goneNow: string[] = [];
 const sessions = new Map((db.prepare("SELECT id, role, vendor, vendor_session_id, cwd, add_dirs FROM agent_sessions").all() as unknown as SessionRow[]).map((s) => [s.id, s]));
 const outputCache = new Map<number, Map<string, Output>>();
 const catalogs = new Map<number, SkillCatalog>();
@@ -150,12 +152,15 @@ const catalogOf = (s: SessionRow): SkillCatalog => {
   let c = catalogs.get(s.id);
   if (c === undefined) {
     const session: SkillSession = { id: s.id, vendor: s.vendor, cwd: s.cwd, addDirs: JSON.parse(s.add_dirs) as string[] };
-    c = skillFiles.catalog(session);
+    const started = performance.now();
+    c = skillFiles.catalog(session, { fresh: true });
+    catalogMs += performance.now() - started;
     catalogs.set(s.id, c);
   }
   return c;
 };
 let recognizeMs = 0;
+let catalogMs = 0;
 let recognized = 0;
 let farthest = 0;
 
@@ -190,8 +195,10 @@ for (const row of tools) {
   farthest = Math.max(farthest, expected.farthest);
   if (got.length > 0) bump(key, "认到加载", got.length);
   if (got.join() === expected.names.join()) continue;
-  bump(key, "不一致");
-  disagreements.push(`${row.id} ${key} ${meta.name} 生产=[${got}] 返回内容=[${expected.names}]  ${JSON.stringify(meta.input ?? null).slice(0, 220).replaceAll("\\n", "⏎")}`);
+  const line = `${row.id} ${key} ${meta.name} 生产=[${got}] 返回内容=[${expected.names}]  ${JSON.stringify(meta.input ?? null).slice(0, 220).replaceAll("\\n", "⏎")}`;
+  const onlyGone = got.every((n) => expected.names.includes(n)) && expected.names.filter((n) => !got.includes(n)).every((n) => catalog.named(n) === null);
+  bump(key, onlyGone ? "技能现在不在名单里" : "不一致");
+  (onlyGone ? goneNow : disagreements).push(line);
 }
 
 const users = db
@@ -206,6 +213,9 @@ for (const u of users) {
 
 for (const [key, c] of [...counts].sort()) console.log(key, JSON.stringify(c));
 console.log(`\n识别 ${recognized} 次工具返回，共 ${recognizeMs.toFixed(1)} ms，平均每次 ${((recognizeMs / Math.max(1, recognized)) * 1000).toFixed(1)} µs`);
+console.log(`建名单 ${catalogs.size} 次，共 ${catalogMs.toFixed(1)} ms，平均每次 ${(catalogMs / Math.max(1, catalogs.size)).toFixed(2)} ms（没用缓存）`);
 console.log(`技能开头在返回原文里最远出现在第 ${farthest} 字`);
 console.log(`生产代码和返回内容不一致 ${disagreements.length} 处${list ? "：" : "（--list 列出）"}`);
 if (list) for (const d of disagreements) console.log(d);
+console.log(`返回里有开头、但技能现在不在这个会话的名单里 ${goneNow.length} 处${list ? "：" : ""}`);
+if (list) for (const d of goneNow) console.log(d);

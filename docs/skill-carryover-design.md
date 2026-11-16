@@ -89,6 +89,11 @@ Fusa 已经把六家的工具调用统一成 `agent.tool` 事件（`name` 是厂
 
 结论：去掉“从命令文本还原文件”这个条件，看返回内容。只有一处例外：agy 的 `read_file` 在实时流里只回行数和字节数（上一节），返回里没有正文。它的路径是工具自己的结构化参数（`Path`），不是从 shell 文本里猜的，按路径认，规则见下文。
 
+实现以后，重放脚本改成直接调生产代码（识别函数和每个会话自己的已知技能名单），只用实时流拿得到的东西（返回原文按 `outputField` 取、按上限截；agy 的 `read_file` 只看路径参数和读没读成功），和原始记录里的完整返回对照：
+
+- 项目经理：7,223 次有返回的读文件和命令，不一致 0 处。另有 16 处返回里有任务图手册的开头，但那些会话的启动目录已经清掉了，拿今天的磁盘重放找不到这个文件；当时它在名单里。
+- 全部角色：44,354 次，不一致 1 处，是这个 Worker 自己排查时用 `strings` 导出 agy 会话库，输出里是 `1: ---` 这种行号，claude 的 `Bash` 没有声明这种前缀，按规则不算加载。另有 235 处是 worktree、启动目录已经删掉。
+
 ### 仓库里已经零散处理技能的地方
 
 | 位置 | 做什么 | 这次怎么处理 |
@@ -172,21 +177,21 @@ CREATE INDEX loaded_skills_generation ON loaded_skills (conversation_id, generat
 
 这份目录清单是 vendor-sync 每家必写的声明（`src/vendors/daemon-types.ts` 的 `skillTarget`）：claude 是 `.claude/skills` 和 `~/.claude/skills`，agy 全局是 `~/.gemini/config/skills`，pi 全局是 `~/.pi/agent/skills`，其余三家是 `.agents/skills`。不另起一张目录表。
 
-每个目录下每个 `<名字>/SKILL.md`，名字是合法的一段目录名（不是 `.`、`..`，不带 `/`、`\`），真实路径的文件名还是 `SKILL.md`，真实路径落在某个技能目录的真实路径里面，才进名单。`.claude/skills → ../.agents/skills` 这种整目录软链、vendor-sync 在 `~/.gemini/config/skills/<名字>` 建的逐项软链（指到 `~/.agents/skills/<名字>`）都落在技能目录里，照常能用；指到技能目录外面的软链不进名单。名单里每个技能记名字、枚举到的路径、真实路径，和从文件开头读出的“开头”：
+每个目录下每个 `<名字>/SKILL.md`，名字是合法的一段目录名（不是 `.`、`..`，不带 `/`、`\`），真实路径的文件名还是 `SKILL.md`，真实路径落在某个技能目录的真实路径里面，才进名单。`.claude/skills → ../.agents/skills` 这种整目录软链、vendor-sync 在 `~/.gemini/config/skills/<名字>` 建的逐项软链（指到 `~/.agents/skills/<名字>`）都落在技能目录里，照常能用；指到技能目录外面的软链不进名单。名单里每个技能记名字、枚举到的路径、真实路径、文件身份（设备号加 inode），和从文件开头读出的“开头”：
 
 - frontmatter 开头：文件头两个非空行（`---`、`name: <名字>`）；
 - 正文开头：frontmatter 之后的头两个非空行（跳过 frontmatter 只读正文的也认）。
 
 claude 插件里的技能（如 `slack:block-kit`）在 `~/.claude/plugins/…` 下，不在名单里，不记。
 
-名单按会话缓存 `SKILL_CATALOG_TTL_MS`，换代时不用缓存、现枚举。
+名单按会话缓存。每次取之前看一眼各技能目录的修改时间，新加、删掉技能时目录会变，马上重建；只改了某个 `SKILL.md` 的内容，最晚 `SKILL_CATALOG_TTL_MS` 后重读。换代时不用缓存、现枚举。不缓存时建一次名单约 9 毫秒（本机，约 100 个技能）。
 
 ### 识别规则
 
 新模块 `src/shared/skill-loads.ts` 是唯一的定义，六家共用。它只看名单和事件，不碰磁盘、不解析 shell：
 
 1. **工具返回内容里出现某个已知技能的开头，就算加载了。** 只看读文件（`read`）和跑命令（`command`）两类动作，动作按 `tools.actions` 翻。返回原文取前 `SKILL_LOAD_SCAN_MAX_CHARS` 字，按行切开（`\r\n` 和 `\n` 都算），每行去掉这家声明的行号前缀（`outputLinePrefix`）、行尾空白，丢掉空行；相邻两行和某个技能的开头一样，就是读了它。读了中段、输出被 `grep` 过滤、文件不存在的，返回里没有开头，不算。
-2. **返回里没有正文的读文件工具，按它的路径参数认。** 只有声明在 `readByPath` 里的工具走这条（现在只有 agy 的 `read_file`）。返回要匹配声明的“读成功”样子（agy 是 `14 lines, 310 bytes`），而且是从头读的（`StartLine` 没给或不大于 1，`ByteOffset` 没给或是 0）；路径参数按会话工作目录规整成真实路径，和名单里技能的真实路径比，相等才算。路径是工具自己的结构化参数，不是从命令文本里猜的。
+2. **返回里没有正文的读文件工具，按它的路径参数认。** 只有声明在 `readByPath` 里的工具走这条（现在只有 agy 的 `read_file`）。返回要匹配声明的“读成功”样子（agy 是 `14 lines, 310 bytes`），而且是从头读的（`StartLine` 没给或不大于 1，`ByteOffset` 没给或是 0）；路径参数按会话工作目录解析，和名单里的技能是同一个文件（设备号加 inode 相同）才算：软链、硬链都认。agy 不跟软链，任务图手册是硬链进启动目录 `agy-rules/.agents/skills/` 的（`src/vendors/agy/rules.ts`），这个目录不在名单里，按同一个文件认得到；换代读正文仍然只读名单里的路径。路径是工具自己的结构化参数，不是从命令文本里猜的。
 3. **原生技能工具。** 动作是 `skill` 的，技能名在 `toolNameKeys` 声明的参数里（claude 的 `Skill` 是 `skill`，deepseek 的 `skill` 是 `name`），调用那一刻按名字在名单里找。
 4. **用户手打的命令。** 一批消息开始处理（`message.processing`）时，看其中 `sender = 'user'`、`kind = 'text'` 的消息，用 `commandNameOf(text, 开头)`（`src/vendors/types.ts`，输入框也用它）取命令名，再按 `userTriggers` 额外认 codex 的 `$名字`，按名字在名单里找。记在真正处理它的那一代上。
 5. **名字规整。** `skillNameOf(raw)`（`src/shared/skill-names.ts`）去掉命名空间：`fusa:fusa-task-graph`、`skill:frontend-rules` 都取最后一段。状态行、任务图技能的隐藏判断、这里共用这一个函数。
@@ -272,8 +277,8 @@ skillSignals: {
 | `SKILL_CARRYOVER_TOTAL_MAX_CHARS` | `80_000` | 英文为主时约 2 万 token，和 Claude Code 合计 25000 token 相当。按 poteto-mode 加十来个 2～3 千字的原则技能算放得下 |
 | `SKILL_CARRYOVER_RECORDS_MAX` | `200` | 每个对话最多记这么多行，超了按 `loaded_at` 删最旧的。本机仓库里 59 个、用户目录里 33 个，有重名，合计不到 92 个（实测），200 够用 |
 | `SKILL_CARRYOVER_SKIPPED_LIST_MAX` | `20` | “没带正文”名单最多列的名字数 |
-| `SKILL_LOAD_SCAN_MAX_CHARS` | `64_000` | 一次工具返回最多看这么多字，驱动摊平时就截在这里，后面的不认。重放本机全部历史（项目经理和 Worker），技能开头在返回原文里最远出现在第 48,232 字（一条命令接连 `cat` 好几个技能）；Claude 的 `Bash` 输出本身在 3 万字左右截断。留了约三分之一的余量 |
-| `SKILL_CATALOG_TTL_MS` | `30_000` | 已知技能名单按会话缓存多久。新装、删掉的技能最晚 30 秒后认得到；换代时不用缓存 |
+| `SKILL_LOAD_SCAN_MAX_CHARS` | `64_000` | 一次工具返回最多看这么多字，驱动摊平时就截在这里，后面的不认。重放本机全部历史（项目经理和 Worker），技能开头在返回原文里最远出现在第 48,353 字（一条命令接连 `cat` 好几个技能）；Claude 的 `Bash` 输出本身在 3 万字左右截断。留了约三分之一的余量 |
+| `SKILL_CATALOG_TTL_MS` | `30_000` | 已知技能名单按会话缓存多久。新装、删掉技能看目录修改时间马上重建；只改 `SKILL.md` 内容的最晚 30 秒后重读；换代时不用缓存 |
 | `SKILL_CATALOG_CACHE_MAX` | `32` | 最多缓存几个会话的名单。只有项目经理的会话会建，同时在跑的不过几个 |
 | `SKILL_CATALOG_MAX_SKILLS` | `1_000` | 一份名单最多多少个技能。本机所有技能目录合起来 91 个不同的技能 |
 | `SKILL_HEAD_READ_BYTES` | `16_384` | 建名单时每个 `SKILL.md` 只读开头这么多字节算“开头”。本机最长的 frontmatter 1,101 字节 |
@@ -281,7 +286,7 @@ skillSignals: {
 
 - **记录条数。** 行数等于这个对话用过的不同技能数，不随消息数、代数涨。按跑一个月、3 万条消息算，每个项目经理也就几十行；就算十个项目经理都满，也只有 2000 行。每次加载只写一行，换代时多一次带索引的查询。
 - **换代时读盘。** 现枚举一次名单（本机约 100 个 `SKILL.md`，每个读开头 16KB），再读旧一代的行，一般十来个文件；正文读到合计上限就停，最多读约 8 万字。单个文件按 `SKILL_CARRYOVER_SKILL_MAX_CHARS` 的 4 倍字节封顶。毫秒级。
-- **认工具返回。** 只认项目经理主会话里读文件、跑命令的返回，在账本事务里同步跑：返回按行切开，相邻两行查一张“开头 → 技能”的表，和返回长度成正比，和技能个数无关。名单 30 秒内复用缓存。重放全部历史的耗时写在 PR 里（`node scripts/skill-load-replay.ts --role all`）。
+- **认工具返回。** 只认项目经理主会话里读文件、跑命令的返回，在账本事务里同步跑：返回按行切开，相邻两行查一张“开头 → 技能”的表，和返回长度成正比，和技能个数无关。重放本机全部历史（`node scripts/skill-load-replay.ts --role all`）：44,354 次工具返回共 1.34 秒，平均每次 30µs；项目经理的 7,223 次共 0.17 秒，平均 23µs。
 - **开场体积。** 新会话开场现在占 77K～92K token（实测）。这一节最多多出约 2 万 token（英文技能；中文技能 1 字约 1 token，同样字数会更多），在 400K 阈值里占 5%。窗口小于 400K 的厂商当项目经理时本来就会先撞上自己的窗口（交接对话里已经说过），这一节让它早一点撞上，量级不变。
 - **清理。** 删项目经理时，`src/daemon/ledger/persona.ts:715-795` 那串按对话删的语句里加一行 `DELETE FROM loaded_skills WHERE conversation_id IN …`，外键也写了 `ON DELETE CASCADE`。归档项目经理不删，取消归档后接着用。
 - **缓存四件事。** 这张表是会随时间变多的列表：
@@ -313,7 +318,7 @@ skillSignals: {
 - `src/vendors/types.ts`、各家 `spec.ts`：`skillSignals`。
 - `src/shared/skill-names.ts`（新）：`SKILL_FILE_RE`、`skillNameOf`、`skillNameOfFile`、`isSkillName`。
 - `src/shared/skill-loads.ts`（新）：名单的形状和“开头”的算法（`skillHeads`、`createSkillCatalog`），`skillOfToolCall`、`skillsOfToolResult`、`awaitsToolResult`、`userSkillCommandOf`。纯函数，不碰磁盘。
-- `src/daemon/skill-files.ts`（新）：枚举技能目录建名单（缓存）、`atPath` 的真实路径比对、换代时读正文。守护进程按 `launchDir`、用户目录、环境变量建好传给账本（`LedgerOptions.skillFiles`），测试用临时目录里的真文件。
+- `src/daemon/skill-files.ts`（新）：枚举技能目录建名单（缓存）、`atPath` 的同一个文件比对、换代时读正文。守护进程按 `launchDir`、用户目录、环境变量建好传给账本（`LedgerOptions.skillFiles`），测试用临时目录里的真文件。
 - `src/daemon/ledger/loaded-skills.ts`（新）：收事件记录、`carryIn`（即上文的 `carrySkills`）、渲染那一节。
 - `src/daemon/ledger/handover.ts`：`switchIn` 调 `carrySkills`；`sessionPreambleText`、`handoverRequestText`、`sessionPreamble` 带上这一节；文件开头第 4 步的说明改成新的开场组成。
 - `src/daemon/ledger/vendor-switch-context.ts`：`buildVendorSwitchPreamble` 收 `skills`。

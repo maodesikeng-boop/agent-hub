@@ -61,7 +61,7 @@ afterEach(() => {
 function skill(name: string, body: string, dir = join(cwd, ".agents", "skills")): string {
   mkdirSync(join(dir, name), { recursive: true });
   const path = join(dir, name, "SKILL.md");
-  writeFileSync(path, `---\nname: ${name}\ndescription: 测试技能 ${name}\n---\n\n${body}`);
+  writeFileSync(path, `---\nname: ${name}\ndescription: 测试技能 ${name}\n---\n\n${body}\n`);
   return path;
 }
 

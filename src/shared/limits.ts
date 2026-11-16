@@ -134,7 +134,7 @@ export const SKILL_CARRYOVER_RECORDS_MAX = 200;
 export const SKILL_CARRYOVER_SKIPPED_LIST_MAX = 20;
 /**
  * 认技能加载时一次工具返回最多看这么多字（String.length）：驱动摊平返回原文时截在这里，后面出现的技能开头不认。
- * 重放本机全部历史，技能开头在返回里最远出现在第 48,232 字（一条命令接连 cat 好几个技能），留了约三分之一余量。
+ * 重放本机全部历史，技能开头在返回里最远出现在第 48,353 字（一条命令接连 cat 好几个技能），留了约三分之一余量。
  */
 export const SKILL_LOAD_SCAN_MAX_CHARS = 64_000;
 /** 已知技能名单（daemon/skill-files.ts 枚举技能目录建的）按会话缓存多久；换代时不用缓存。 */

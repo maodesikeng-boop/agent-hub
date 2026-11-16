@@ -1,6 +1,6 @@
 // 已知技能名单（skill-files.ts）：枚举技能目录建名单，只收真实路径落在技能目录里的 SKILL.md；工具参数里的路径按真实路径比；
 // 换代读正文只读名单里的文件。PR #331 第二份 FAIL 评论里的四种软链都在这里。技能文件放在临时目录里。
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -160,6 +160,17 @@ describe("atPath：工具参数里的路径", () => {
     expect(catalog.atPath(".agents/skills/rel/SKILL.md")?.name).toBe("rel");
     expect(catalog.atPath(join(cwd, "x", "..", ".agents", "skills", "rel", "SKILL.md"))?.name).toBe("rel");
     expect(catalog.atPath(join(cwd, ".agents", "skills", "rel", "README.md"))).toBeNull();
+  });
+});
+
+describe("atPath：硬链也认（agy 的任务图手册硬链进 agy-rules/.agents/skills，agy 不跟软链）", () => {
+  it("硬链到名单里的文件：认；读正文还是读名单里的路径", () => {
+    const product = skill(join(launchDir, "7", "skills"), "fusa-task-graph");
+    const rules = join(launchDir, "7", "agy-rules", ".agents", "skills", "fusa-task-graph");
+    mkdirSync(rules, { recursive: true });
+    linkSync(product, join(rules, "SKILL.md"));
+    const catalog = files().catalog({ ...session, vendor: "agy" });
+    expect(catalog.atPath(join(rules, "SKILL.md"))?.path).toBe(product);
   });
 });
 

@@ -22,10 +22,10 @@ const FRONTEND = "---\r\nname: frontend-rules\r\ndescription: 前端规范\r\n--
 
 const known = (name: string, text: string): KnownSkill => {
   const path = `${ROOT}/${name}/SKILL.md`;
-  return { name, path, key: path, heads: skillHeads(text) };
+  return { name, path, key: path, fileId: path, heads: skillHeads(text) };
 };
 const SKILLS = [known("poteto-mode", POTETO), known("frontend-rules", FRONTEND)];
-/** 名单：.claude/skills 是指到 .agents/skills 的软链，两种写法规整成同一个真实路径。 */
+/** 名单：.claude/skills 是指到 .agents/skills 的软链，两种写法是同一个文件。 */
 const catalog: SkillCatalog = createSkillCatalog(SKILLS, (path) => {
   const real = path.replace("/repo/.claude/skills/", `${ROOT}/`);
   return SKILLS.some((s) => s.key === real) ? real : null;
@@ -195,7 +195,7 @@ describe("按返回内容认", () => {
 describe("agy 的 read_file：返回里没有正文，按路径参数认", () => {
   const read = (input: Record<string, unknown>, output = "14 lines, 310 bytes") => names("agy", { name: "read_file", input }, output);
 
-  it("路径规整成真实路径后和名单里的相等才算；软链 .claude/skills 照常认", () => {
+  it("路径指的是名单里的文件才算；软链 .claude/skills 照常认", () => {
     expect(read({ Path: `${ROOT}/poteto-mode/SKILL.md` })).toEqual(["poteto-mode"]);
     expect(read({ Path: "/repo/.claude/skills/frontend-rules/SKILL.md" })).toEqual(["frontend-rules"]);
     expect(read({ Path: "/repo/skills/../SKILL.md" })).toEqual([]);
@@ -222,7 +222,8 @@ describe("agy 的 read_file：返回里没有正文，按路径参数认", () =>
 
 describe("名单", () => {
   it("同一个开头出现在两个技能里（两处放了同一份）：按名单顺序认第一个", () => {
-    const copy = { ...known("poteto-mode", POTETO), path: "/home/.agents/skills/poteto-mode/SKILL.md", key: "/home/.agents/skills/poteto-mode/SKILL.md" };
+    const other = "/home/.agents/skills/poteto-mode/SKILL.md";
+    const copy = { ...known("poteto-mode", POTETO), path: other, key: other, fileId: other };
     const twice = createSkillCatalog([SKILLS[0]!, copy], () => null);
     expect(skillsOfToolResult("claude", { name: "Bash", input: {} }, POTETO, twice).map((s) => s.path)).toEqual([SKILLS[0]!.path]);
     expect(twice.named("poteto-mode")?.path).toBe(SKILLS[0]!.path);
