@@ -121,11 +121,11 @@ CREATE INDEX loaded_skills_generation ON loaded_skills (conversation_id, generat
 1. **从工具调用认。** 用 `step-labels.ts` 已有的合成表把工具名翻成通用动作，再按动作取参数：
    - `skill`：技能名在 `spec.skillSignals.toolNameKeys` 声明的参数里（claude 是 `skill`；deepseek 的键名实现时实测后填）。
    - `read`：路径在 `STEP_INPUT_KEYS` 里那几个路径键（`file_path`、`AbsolutePath`、`TargetFile`、`Path`、`path`），六家已经共用。
-   - `command`：命令在 `command` 或 `CommandLine`。用 `shell-quote`（npm 上成熟的 shell 分词库）把命令拆成一段段，先拆开 `sh|bash|zsh -c/-lc '<脚本>'` 和 PowerShell `-Command` 这层包装，再按换行、`;`、`&&`、`||`、`|` 分段。某一段的命令是读文件的（`cat`、`head`、`tail`、`sed`、`nl`、`less`、`more`、`bat`、`Get-Content`、`gc`、`type`），它的参数里的技能路径就算加载。带 `>` 重定向的段和 `sed -i` 是在写，不算。`ls`、`wc`、`grep`、`find`、`stat` 不读正文，不算。参数里有没展开的变量（如 `$S/poteto-mode/SKILL.md`）认不出，不记。
+   - `command`：命令在 `command` 或 `CommandLine`。用 `tree-sitter-bash`（Codex 认命令也用它，`web-tree-sitter` 跑它的 wasm）把命令解析成语法树，按脚本里的先后顺序走一遍。`sh|bash|zsh -c/-lc '<脚本>'` 和 PowerShell `-Command` 这层包装取出脚本再解析一次。一条命令是读文件的（`cat`、`head`、`tail`、`sed`、`nl`、`less`、`more`、`bat`、`Get-Content`、`gc`、`type`），它写死的参数里的技能路径就算加载。标准输出写进文件或关掉的（`>`、`>>`、`>|`、`&>`、`&>>`、`>&文件`、`>&-`）和 `sed -i` 不算，`2>/dev/null` 只丢错误输出，照样算。`ls`、`wc`、`grep`、`find`、`stat` 不读正文，不算。参数里有变量、命令替换、通配符的（如 `$S/poteto-mode/SKILL.md`）认不出，不记。`#` 注释到行尾为止；heredoc 正文是给别的程序的输入（比如 `hub worker start --stdin <<EOF` 的任务说明），命令替换、进程替换的输出给了别的命令，函数定义体这时没跑，这几处都不往里认。解析不了的部分是语法树里的 ERROR 节点，不抛错，也不往里认。
    - 相对路径按工具参数里的 `cwd`（codex 有）或会话的工作目录解析。
    - 子代理里的调用（`parentToolUseId` 有值）不记，和 `session_steps` 一样，那不是项目经理自己的上下文。
 2. **从用户消息认。** 一批消息开始处理（`message.processing`）时，看其中 `sender = 'user'`、`kind = 'text'` 的消息，用 `commandNameOf(text, 开头)`（`src/vendors/types.ts`，输入框也用它）取命令名，再按 `spec.skillSignals.userTriggers` 额外认 codex 的 `$名字`。记在真正处理它的那一代上；换代时被挪到新会话的消息因此记在新一代。
-3. **名字规整。** `skillNameOf(raw)`（`src/shared/skill-names.ts`）去掉命名空间：`fusa:fusa-task-graph`、`skill:frontend-rules` 都取最后一段。状态行、任务图技能的隐藏判断、这里共用这一个函数。
+3. **名字规整。** `skillNameOf(raw)`（`src/shared/skill-names.ts`）去掉命名空间：`fusa:fusa-task-graph`、`skill:frontend-rules` 都取最后一段。状态行、任务图技能的隐藏判断、这里共用这一个函数。技能名要拼进路径，只能是一段目录名：`.`、`..`、带 `/` 或 `\` 的都不认，`skillNameOf` 和 `skillNameOfFile` 都按这条给 null。
 4. **名字找路径。** `resolveSkillFile(name, session)` 按顺序在这些目录里找 `<名字>/SKILL.md`，第一个存在的就是：
    - 这个会话启动目录里的产品技能目录（`launch/<会话>/skills`，任务图手册在这里）；
    - 工作目录和每个附加目录下，这家 `VendorSyncAdapter.skillTarget(ctx, { kind: "project" })` 给的目录（`mode: "native"` 就是 `<目录>/.agents/skills`），再加 `<目录>/.agents/skills`；
@@ -135,7 +135,7 @@ CREATE INDEX loaded_skills_generation ON loaded_skills (conversation_id, generat
 
    claude 插件里的技能（如 `slack:block-kit`）在 `~/.claude/plugins/…` 下，这份清单找不到，不记。claude 的 `system init` 事件里有插件的路径（实测），以后要补就从那里取，这次不做。
 
-**只认技能目录下的 `SKILL.md`，不认任何 `SKILL.md`。** 规则沿用 `SKILL_FILE_RE`：路径形如 `…/skills/<名字>/SKILL.md`。理由有三条。六家的技能目录都叫 `skills`，这是 Agent Skills 的标准布局。目录名就是技能名，用户手打和 `Skill` 工具给的名字能和它对上，同一个技能不管怎么加载都去重成一行。别处碰巧叫 `SKILL.md` 的文件（依赖包里的文档、测试夹具）不该被当成技能带进新会话。
+**只认技能目录下的 `SKILL.md`，不认任何 `SKILL.md`。** 规则沿用 `SKILL_FILE_RE`：路径形如 `…/skills/<名字>/SKILL.md`。`skill-files.ts` 的 `locate` 在规整（拼上工作目录、`cd` 过的目录，解掉 `..`）之后再按这条核一次，名字还得是认到的那个，不然不读：`skills/../SKILL.md` 这类绕出技能目录的路径到不了磁盘。理由有三条。六家的技能目录都叫 `skills`，这是 Agent Skills 的标准布局。目录名就是技能名，用户手打和 `Skill` 工具给的名字能和它对上，同一个技能不管怎么加载都去重成一行。别处碰巧叫 `SKILL.md` 的文件（依赖包里的文档、测试夹具）不该被当成技能带进新会话。
 
 **各家差异只放在 `spec.ts` 里。** 新增一个块：
 
@@ -203,6 +203,7 @@ skillSignals?: {
 
 - **记录条数。** 行数等于这个对话用过的不同技能数，不随消息数、代数涨。按跑一个月、3 万条消息算，每个项目经理也就几十行；就算十个项目经理都满，也只有 2000 行。每次加载只写一行，换代时多一次带索引的查询。
 - **换代时读盘。** 只读旧一代的行，一般十来个文件，最多 200 次 `stat`；正文读到合计上限就停，最多读约 8 万字。单个文件按 `SKILL_CARRYOVER_SKILL_MAX_CHARS` 的 4 倍字节封顶，防止误认到一个大文件。和 `switchIn` 里已有的 `findTranscript` 是同一量级，毫秒级。
+- **认 shell 命令。** 每次工具调用都要认，在账本事务里同步跑。`tree-sitter-bash` 的 wasm 模块加载时初始化一次，之后每次解析是同步的，语法树用完就释放。本机账本 31,076 条 shell 命令整批认一遍约 1.9 秒，每条约 60µs；连跑 10 遍常驻内存不涨（实测）。
 - **开场体积。** 新会话开场现在占 77K～92K token（实测）。这一节最多多出约 2 万 token（英文技能；中文技能 1 字约 1 token，同样字数会更多），在 400K 阈值里占 5%。窗口小于 400K 的厂商当项目经理时本来就会先撞上自己的窗口（交接对话里已经说过），这一节让它早一点撞上，量级不变。
 - **清理。** 删项目经理时，`src/daemon/ledger/persona.ts:715-795` 那串按对话删的语句里加一行 `DELETE FROM loaded_skills WHERE conversation_id IN …`，外键也写了 `ON DELETE CASCADE`。归档项目经理不删，取消归档后接着用。
 - **缓存四件事。** 这张表是会随时间变多的列表：
@@ -236,7 +237,8 @@ skillSignals?: {
 - `src/daemon/ledger/persona.ts`：删项目经理时清表。
 - `src/shared/limits.ts`：四个数。
 - `src/shared/step-labels.ts`、`src/shared/task-graph-skill.ts`、`src/vendors/_common/composer.ts`、`src/daemon/ledger/ledger.ts`：见“删掉什么”。
-- `package.json`：加 `shell-quote`（和 `@types/shell-quote`），`AGENTS.md` 的“我们用的组件”同一个 PR 里补上。
+- `src/shared/shell-syntax.ts`（新）：模块加载时初始化 `tree-sitter-bash` 解析器，`withShellTree(script, visit)` 解析完交给 `skill-loads.ts` 走，用完释放语法树。
+- `package.json`：加 `web-tree-sitter`、`tree-sitter-bash`（只用 wasm，它的原生编译脚本 pnpm 默认不跑，`scripts/stage-runtime-common.ts` 打包时删掉 C 源码和原生预编译），`AGENTS.md` 的“我们用的组件”同一个 PR 里补上。
 - 文档：`docs/background-handover-design.md` 里开场说明的组成，`docs/orchestration-skill-design.md` 第 7 节。
 
 ### 测试

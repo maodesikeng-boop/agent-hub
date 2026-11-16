@@ -7,6 +7,7 @@ import type { AgentSessionRow } from "../shared/domain.ts";
 import { SKILL_CARRYOVER_SKILL_MAX_CHARS } from "../shared/limits.ts";
 import { sessionLaunchDir } from "../shared/paths.ts";
 import type { SkillLoad } from "../shared/skill-loads.ts";
+import { skillNameOfFile } from "../shared/skill-names.ts";
 import { isAgentVendor } from "../shared/vendors.ts";
 import { VENDOR_DAEMONS } from "../vendors/daemon-registry.ts";
 import type { VendorSyncContext } from "../vendors/daemon-types.ts";
@@ -65,7 +66,8 @@ export function createSkillFiles(options: { launchDir?: string; userHome: string
   return {
     locate(load, session) {
       const path = pathOf(load, session);
-      if (path === null || !isAbsolute(path) || !isFile(path)) return null;
+      // 规整后的路径还得是 …/skills/<这个名字>/SKILL.md：别的 SKILL.md 不是技能，不读
+      if (path === null || !isAbsolute(path) || skillNameOfFile(path) !== load.name || !isFile(path)) return null;
       try {
         return { path, key: realpathSync(path) };
       } catch {

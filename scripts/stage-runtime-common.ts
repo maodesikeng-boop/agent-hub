@@ -101,7 +101,7 @@ export function collectDaemonRuntimeDependencyNames(repoRoot: string = REPO_ROOT
         continue;
       }
       const text = readFileSync(full, "utf8");
-      for (const match of text.matchAll(/(?:from|import|esmRequire)\s*\(?["']([^."'\s][^"']*)["']/g)) {
+      for (const match of text.matchAll(/(?:from|import|esmRequire|import\.meta\.resolve)\s*\(?["']([^."'\s][^"']*)["']/g)) {
         const spec = match[1]!;
         if (spec.startsWith("node:")) continue;
         const pkgName = spec.startsWith("@")
@@ -207,6 +207,10 @@ export function pruneStagedNodeModules(nodeModulesDir: string, targetOs: StageTa
     join(nodeModulesDir, "node-pty", "deps"),
     join(nodeModulesDir, "node-pty", "src"),
     join(nodeModulesDir, "node-pty", "prebuilds"),
+    // tree-sitter-bash 只用它的 wasm（shared/shell-syntax.ts），C 源码和原生预编译不要
+    join(nodeModulesDir, "tree-sitter-bash", "src"),
+    join(nodeModulesDir, "tree-sitter-bash", "prebuilds"),
+    join(nodeModulesDir, "tree-sitter-bash", "bindings"),
     join(nodeModulesDir, ".bin"),
     join(nodeModulesDir, ".modules.yaml"),
   ]) {

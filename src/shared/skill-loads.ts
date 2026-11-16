@@ -1,10 +1,10 @@
 // 认出“加载了一个技能”（docs/skill-carryover-design.md 的识别规则）：六家共用这一份，各家差异只在 spec 的 tools.actions 和 skillSignals。
 // 账本收到 agent.tool、message.processing 时按它记（daemon/ledger/loaded-skills.ts），换代时把记下的技能正文带进新会话。
 // 纯函数，不碰磁盘：名字找 SKILL.md、相对路径解析由守护进程做（daemon/skill-files.ts）。
-import { parse, type ParseEntry } from "shell-quote";
 import { commandNameOf } from "../vendors/types.ts";
 import { skillNameOf, skillNameOfFile } from "./skill-names.ts";
 import type { AgentStepInput } from "./domain.ts";
+import { withShellTree, type ShellNode } from "./shell-syntax.ts";
 import { filePathOf, STEP_INPUT_KEYS } from "./step-labels.ts";
 import { isAgentVendor, vendorSpec } from "./vendors.ts";
 
@@ -20,75 +20,117 @@ const READ_COMMANDS: ReadonlySet<string> = new Set(["cat", "head", "tail", "sed"
 /** 包一层 shell 跑脚本的：`sh|bash|zsh -c/-lc '<脚本>'`、PowerShell `-Command`。 */
 const POSIX_SHELLS: ReadonlySet<string> = new Set(["sh", "bash", "zsh", "dash"]);
 const POWERSHELLS: ReadonlySet<string> = new Set(["powershell", "pwsh"]);
-/** 一段命令到这里为止。 */
-const SEPARATORS: ReadonlySet<string> = new Set([";", ";;", "&&", "||", "|", "|&", "&", "(", ")"]);
 /** 包装套娃最多拆几层。 */
 const MAX_SHELL_DEPTH = 3;
-/** shell-quote 遇到 `$变量` 时换成它：带着它的参数认不出路径。 */
-const UNEXPANDED = "\u0000var\u0000";
+/** 把标准输出写进文件或关掉的重定向：正文没进上下文。`>&2` 这种换到另一个输出的照样进。 */
+const STDOUT_AWAY: ReadonlySet<string> = new Set([">", ">>", ">|", "&>", "&>>", ">&-"]);
+/**
+ * 不往里认的节点：命令替换、进程替换的输出给了别的命令；heredoc 正文是给别的程序的输入；函数定义体这时没跑；
+ * ERROR 是解析不了的部分，认不准就不认。
+ */
+const OPAQUE: ReadonlySet<string> = new Set(["command_substitution", "process_substitution", "heredoc_redirect", "herestring_redirect", "function_definition", "ERROR"]);
 
 const commandBase = (token: string) =>
   (token.split(/[\\/]/u).at(-1) ?? token).toLowerCase().replace(/\.exe$/u, "");
 
-/**
- * shell-quote 不把换行当分隔：没被反斜杠续行的换行先改成 `;` 再分词。引号里的换行（`zsh -lc '多行脚本'`）也会改，
- * 那是要再拆一层的脚本，换行和 `;` 在里面意思一样。
- */
-const tokens = (script: string): ParseEntry[] => parse(script.replace(/\\\r?\n/gu, " ").replace(/\r?\n/gu, ";\n"), () => UNEXPANDED);
+interface Walk {
+  /** 这一处之前 cd 过的目录。 */
+  cwd: string[];
+  depth: number;
+  /** PowerShell 里反斜杠是路径分隔，不是转义。 */
+  powershell: boolean;
+  out: SkillLoad[];
+}
 
-/** 一段命令（分隔符之间）读了哪些技能文件；cwd 是这一段之前 cd 过的目录。 */
-function segmentLoads(words: ParseEntry[], cwd: string[], depth: number, out: SkillLoad[]): void {
-  const args: string[] = [];
-  for (let i = 0; i < words.length; i++) {
-    const word = words[i]!;
-    if (typeof word === "string") {
-      args.push(word);
-      continue;
+/** 写死的一个词（没有变量、命令替换、通配符）的值；不是写死的给 null。 */
+function literal(node: ShellNode | null, walk: Walk): string | null {
+  if (node === null) return null;
+  switch (node.type) {
+    case "command_name":
+      return node.namedChildCount === 1 ? literal(node.namedChild(0), walk) : null;
+    case "word":
+      if (/[*?[]/u.test(node.text)) return null;
+      return walk.powershell ? node.text : node.text.replace(/\\(.)/gsu, "$1");
+    case "number":
+      return node.text;
+    case "raw_string":
+      return node.text.slice(1, -1);
+    case "string":
+      return node.namedChildren.every((c) => c.type === "string_content") ? node.text.slice(1, -1).replace(/\\([$`"\\\n])/gu, "$1") : null;
+    case "concatenation": {
+      const parts = node.namedChildren.map((c) => literal(c, walk));
+      return parts.every((p) => p !== null) ? parts.join("") : null;
     }
-    if (!("op" in word)) continue;
-    if (word.op === ">" || word.op === ">>" || word.op === ">&") {
-      // 2>/dev/null 只丢错误输出，正文照样进上下文；标准输出重定向走了就没进
-      if (args.at(-1) !== "2") return;
-      args.pop();
-      i++;
-    }
-  }
-  while (args.length > 0 && /^[A-Za-z_][A-Za-z0-9_]*=/u.test(args[0]!)) args.shift();
-  if (args.length === 0) return;
-  const command = commandBase(args[0]!);
-  if (command === "cd") {
-    const target = args[1];
-    if (target !== undefined && !target.includes(UNEXPANDED)) cwd.push(target);
-    return;
-  }
-  if (depth < MAX_SHELL_DEPTH && POSIX_SHELLS.has(command)) {
-    const flag = args.findIndex((a, i) => i > 0 && /^-[a-z]*c[a-z]*$/u.test(a));
-    const script = flag === -1 ? undefined : args[flag + 1];
-    if (script !== undefined) scriptLoads(script, [...cwd], depth + 1, out);
-    return;
-  }
-  if (depth < MAX_SHELL_DEPTH && POWERSHELLS.has(command)) {
-    const flag = args.findIndex((a, i) => i > 0 && /^-(c|command)$/iu.test(a));
-    if (flag !== -1) scriptLoads(args.slice(flag + 1).join(" "), [...cwd], depth + 1, out);
-    return;
-  }
-  if (!READ_COMMANDS.has(command)) return;
-  if (command === "sed" && args.some((a) => /^-[a-z]*i/u.test(a) || a.startsWith("--in-place"))) return;
-  for (const arg of args.slice(1)) {
-    if (arg.includes(UNEXPANDED)) continue;
-    const name = skillNameOfFile(arg);
-    if (name !== null) out.push({ by: "file", name, path: arg, cwd: [...cwd] });
+    default:
+      return null;
   }
 }
 
-function scriptLoads(script: string, cwd: string[], depth: number, out: SkillLoad[]): void {
-  let segment: ParseEntry[] = [];
-  for (const word of [...tokens(script), { op: ";" } as ParseEntry]) {
-    if (typeof word === "object" && "op" in word && SEPARATORS.has(word.op)) {
-      segmentLoads(segment, cwd, depth, out);
-      segment = [];
-    } else segment.push(word);
+/** 这个重定向把标准输出送走了（没进上下文）。`2>`、`2>&1` 只动错误输出，不算。 */
+function sendsStdoutAway(redirect: ShellNode, walk: Walk): boolean {
+  if (redirect.type !== "file_redirect") return false;
+  const descriptor = redirect.childForFieldName("descriptor")?.text;
+  if (descriptor !== undefined && descriptor !== "1") return false;
+  const op = redirect.children.find((c) => !c.isNamed)?.type;
+  if (op === ">&") return !/^\d+$/u.test(literal(redirect.childForFieldName("destination"), walk) ?? "");
+  return op !== undefined && STDOUT_AWAY.has(op);
+}
+
+const isSedInPlace = (args: readonly (string | null)[]) => args.some((a) => a !== null && (/^-[a-z]*i/u.test(a) || a.startsWith("--in-place")));
+
+/** 一条简单命令：cd 记目录，sh -c、PowerShell -Command 拆开再认，读文件的命令认参数里的技能路径。away：输出没进上下文。 */
+function visitCommand(node: ShellNode, walk: Walk, away: boolean): void {
+  const name = literal(node.childForFieldName("name"), walk);
+  if (name === null) return;
+  const args = node.childrenForFieldName("argument").map((a) => literal(a, walk));
+  const command = commandBase(name);
+  if (command === "cd") {
+    const target = args[0];
+    if (typeof target === "string" && !target.startsWith("-")) walk.cwd.push(target);
+    return;
   }
+  if (walk.depth < MAX_SHELL_DEPTH && POSIX_SHELLS.has(command)) {
+    const flag = args.findIndex((a) => a !== null && /^-[a-z]*c[a-z]*$/u.test(a));
+    const script = flag === -1 ? undefined : args[flag + 1];
+    if (typeof script === "string") visitScript(script, { ...walk, cwd: [...walk.cwd], depth: walk.depth + 1, powershell: false }, away);
+    return;
+  }
+  if (walk.depth < MAX_SHELL_DEPTH && POWERSHELLS.has(command)) {
+    const flag = args.findIndex((a) => a !== null && /^-(c|command)$/iu.test(a));
+    const rest = flag === -1 ? [] : args.slice(flag + 1);
+    if (rest.length > 0 && rest.every((a) => a !== null)) visitScript(rest.join(" "), { ...walk, cwd: [...walk.cwd], depth: walk.depth + 1, powershell: true }, away);
+    return;
+  }
+  if (away || !READ_COMMANDS.has(command)) return;
+  if (command === "sed" && isSedInPlace(args)) return;
+  for (const arg of args) {
+    const skill = arg === null ? null : skillNameOfFile(arg);
+    if (arg !== null && skill !== null) walk.out.push({ by: "file", name: skill, path: arg, cwd: [...walk.cwd] });
+  }
+}
+
+const redirectsAway = (node: ShellNode, walk: Walk) => node.childrenForFieldName("redirect").some((r) => sendsStdoutAway(r, walk));
+
+/** 按脚本里的先后顺序走一遍语法树。用显式的栈不递归：嵌套再深也不会爆栈。 */
+function visitScript(script: string, walk: Walk, away: boolean): void {
+  withShellTree(script, (root) => {
+    const stack: [ShellNode, boolean][] = [[root, away]];
+    for (let item = stack.pop(); item !== undefined; item = stack.pop()) {
+      const [node, nodeAway] = item;
+      if (OPAQUE.has(node.type)) continue;
+      if (node.type === "command") {
+        visitCommand(node, walk, nodeAway || redirectsAway(node, walk));
+        continue;
+      }
+      if (node.type === "redirected_statement") {
+        const body = node.childForFieldName("body");
+        if (body !== null) stack.push([body, nodeAway || redirectsAway(node, walk)]);
+        continue;
+      }
+      const children = node.namedChildren;
+      for (let i = children.length - 1; i >= 0; i--) stack.push([children[i]!, nodeAway]);
+    }
+  });
 }
 
 const stringArg = (input: unknown, key: string): string | undefined => {
@@ -124,10 +166,10 @@ export function toolSkillLoads(vendor: string, toolName: string, input: unknown)
     case "command": {
       const script = stringArg(input, "command") ?? stringArg(input, "CommandLine");
       if (script === undefined) return [];
-      const out: SkillLoad[] = [];
       const cwd = stringArg(input, "cwd");
-      scriptLoads(script, cwd === undefined ? [] : [cwd], 0, out);
-      return out;
+      const walk: Walk = { cwd: cwd === undefined ? [] : [cwd], depth: 0, powershell: false, out: [] };
+      visitScript(script, walk, false);
+      return walk.out;
     }
     default:
       return [];

@@ -133,6 +133,8 @@ export function createLedgerLoadedSkills(ctx: LedgerContext, skillFiles: SkillFi
     const carried: { row: LoadedSkillRow; body: string }[] = [];
     const skipped: LoadedSkillRow[] = [];
     const missing: LoadedSkillRow[] = [];
+    /** 带上的真实路径：原路径没了按名字找回来的，可能就是后面另一行记的那个文件，同一个文件只带一份。 */
+    const carriedKeys = new Set<string>();
     let total = 0;
     for (const row of rows) {
       if (skipped.length > 0) {
@@ -150,12 +152,14 @@ export function createLedgerLoadedSkills(ctx: LedgerContext, skillFiles: SkillFi
         missing.push(row);
         continue;
       }
+      if (carriedKeys.has(at.key)) continue;
       const body = clip(bodyOf(text), at.path);
       if (total + body.length > SKILL_CARRYOVER_TOTAL_MAX_CHARS) {
         skipped.push(row);
         continue;
       }
       total += body.length;
+      carriedKeys.add(at.key);
       const moved = { ...row, path: at.path };
       carried.push({ row: moved, body });
       db.run(

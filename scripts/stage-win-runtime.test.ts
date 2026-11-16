@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -29,6 +29,9 @@ describe("scripts/stage-win-runtime.ts 打包裁剪与完整性守卫", () => {
     expect(deps).toContain("@microsoft/mxc-sdk");
     expect(deps).toContain("@agentclientprotocol/sdk");
     expect(deps).toContain("zod");
+    // shared/shell-syntax.ts 用 import.meta.resolve 找语法 wasm，也得收进来
+    expect(deps).toContain("web-tree-sitter");
+    expect(deps).toContain("tree-sitter-bash");
 
     // 纯前端包已由 vite build 打进 dist/web，绝不能混入随包 node_modules 膨胀 NSIS 安装包体积
     for (const frontendOnly of ["shiki", "mermaid", "vega", "vega-lite", "react", "react-dom", "lucide-react"]) {
@@ -67,6 +70,12 @@ describe("scripts/stage-win-runtime.ts 打包裁剪与完整性守卫", () => {
       writeFileSync(join(koffiSrc, "ffi.cc"), "// c++ source");
       writeFileSync(join(koromixWin, "koffi.node"), "win64-node");
       writeFileSync(join(koromixLinux, "koffi.node"), "linux64-node");
+      const treeSitterBash = join(nm, "tree-sitter-bash");
+      mkdirSync(join(treeSitterBash, "src"), { recursive: true });
+      mkdirSync(join(treeSitterBash, "prebuilds", "win32-x64"), { recursive: true });
+      writeFileSync(join(treeSitterBash, "tree-sitter-bash.wasm"), "wasm");
+      writeFileSync(join(treeSitterBash, "src", "parser.c"), "// c source");
+      writeFileSync(join(treeSitterBash, "prebuilds", "win32-x64", "tree-sitter-bash.node"), "native");
 
       const targetFile = join(nm, "@microsoft", "mxc-sdk", "index.js");
       symlinkSync(targetFile, join(nm, "dangling-link"));
@@ -87,6 +96,9 @@ describe("scripts/stage-win-runtime.ts 打包裁剪与完整性守卫", () => {
       expect(() => readFileSync(join(koffiSrc, "ffi.cc"))).toThrow();
       expect(() => readFileSync(join(koromixWin, "koffi.node"))).not.toThrow();
       expect(() => readFileSync(join(koromixLinux, "koffi.node"))).toThrow();
+      expect(() => readFileSync(join(treeSitterBash, "tree-sitter-bash.wasm"))).not.toThrow();
+      expect(existsSync(join(treeSitterBash, "src"))).toBe(false);
+      expect(existsSync(join(treeSitterBash, "prebuilds"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

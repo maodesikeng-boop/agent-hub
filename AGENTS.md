@@ -58,7 +58,7 @@
 - `write-file-atomic`（npm 官方）：同目录临时文件 + fsync + rename 原子替换用户配置，目标是软链时替换真实文件、沿用原权限属主（`daemon/vendor-sync/backup.ts`）。
 - `@microsoft/mxc-sdk`（微软官方）：Windows 11 24H2+ 只读 Worker 的 MXC ProcessContainer 探测与只读容器执行，低版本 Windows 自动平滑回退写受限令牌（`daemon/platform/win32/mxc-readonly.ts`、`daemon/platform/win32/mxc-runner.ts`）。
 - `unified` + `remark-parse` + `remark-gfm`：解析 Markdown（`sent-files.ts`）。
-- `shell-quote`：把 shell 命令拆成词和分隔符，认出项目经理用 `cat`、`sed` 等读了哪个 `SKILL.md`（`shared/skill-loads.ts`）。
+- `web-tree-sitter` + `tree-sitter-bash`：把 shell 命令解析成语法树（`shared/shell-syntax.ts`），认出项目经理用 `cat`、`sed` 等读了哪个 `SKILL.md`（`shared/skill-loads.ts`）。只用 `tree-sitter-bash` 的 wasm，它的原生编译脚本 pnpm 默认不跑，打包时删掉 C 源码和原生预编译（`scripts/stage-runtime-common.ts`）。
 - 数据库用 Node 自带的 `node:sqlite`（`store/`），不是第三方库；Skill 逐项软链同步直接用 Node 自带的 `node:fs`（`src/vendors/_common/sync/skills.ts`）。
 
 **前端（`src/web`）**

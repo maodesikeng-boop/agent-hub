@@ -182,6 +182,12 @@ describe("什么命令都不抛错：解析不了就当没加载（真实记录�
     expect(bash('H="a b"; echo ${H%% *}; cat a/skills/x/SKILL.md')).toEqual([file("x", "a/skills/x/SKILL.md")]);
   });
 
+  it("嵌套再深也不爆栈", () => {
+    const depth = 20_000;
+    expect(bash(`${"if true; then ".repeat(depth)}cat a/skills/x/SKILL.md${"; fi".repeat(depth)}`)).toEqual([file("x", "a/skills/x/SKILL.md")]);
+    expect(bash(`${Array.from({ length: depth }, () => "true").join(" && ")} && cat a/skills/x/SKILL.md`)).toEqual([file("x", "a/skills/x/SKILL.md")]);
+  });
+
   it("乱七八糟的输入也不抛错", () => {
     const alphabet = ["$", "{", "}", "(", ")", "`", "'", '"', "\\", "<<", "EOF", "\n", "#", ";", "&", "|", ">", " ", "cat", "a/skills/x/SKILL.md", "${", "$(("];
     let seed = 7;
