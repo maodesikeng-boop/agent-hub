@@ -91,7 +91,7 @@ describe("DeliverableFiles", () => {
     const media = container.querySelector("[data-deliverable-media]") as HTMLElement;
     const img = within(media).getByRole("img", { name: "桌面截图" });
     expect(img).toHaveAttribute("src", API_PATHS.sentFile(shot.id, shot.name));
-    expect(img).toHaveClass("h-24");
+    expect(img).toHaveClass("h-(--deliverable-media-height)");
     await user.click(thumbOf(media, "桌面截图"));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByRole("img")).toHaveAttribute("src", `${API_PATHS.sentFile(shot.id, shot.name)}?inline=1`);

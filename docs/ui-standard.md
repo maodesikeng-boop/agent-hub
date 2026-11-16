@@ -331,6 +331,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
   - 点击任务头右上角 `Maximize2`（或 `Completed` 列表中的历史任务图行）打开 `Dialog`（复用第 15 条放大窗规格 `h-[90dvh] w-[min(96vw,1400px)] max-w-none`，滚动视口保持弹窗内边距 `p-6` 不外扩贴边，原生双向滚动）。
   - 调用 `src/web/task-graph-layout.ts` 的 `computeTaskGraphLayout(..., viewportMode: "dialog")`（横向 `rankdir: "LR"`，`lru-cache` 容量 64），底层单张 `<svg aria-hidden="true">` 绘制 `1.5px` 三次贝塞尔有向连线与 `3px` 轻量折角箭头（上游 `done` 实线，其余 `stroke-dasharray="4 3"` 虚线；跨多层且直连会擦碰中间卡片的长边沿 Dagre 分层拐点平滑绕行，绝不横穿中间卡片正文），上层渲染完整阶段卡片（已完成绿勾、在干同色系果皮浅晕圆环、等项目经理琥珀圆点）、绑定 Piece 跳转、产物摘要、内联拍板/跳过节点（`Skip step`）/取消任务图（`Cancel graph`）及历史拍板记录。
   - **`Cancel graph` 要二次确认**（取消会结束整张多阶段任务图，误触代价大）：全览弹窗右上角的 `Cancel graph`（ghost `sm`，灰字，悬停 `text-danger`）点一下**不发请求**，先叠一个第 10 条的窄确认弹窗（`DialogContent` `className="max-w-110"`，标题 `Cancel this task graph?`，正文一句写清后果，15px 前景色）；底部 `DialogFooter`：左 `outline` 的 `Keep going`（`DialogClose`，默认聚焦，Esc、点遮罩同样是不取消），右主按钮 `Cancel graph`，点了才发 `POST /api/task-graphs/:graphId/cancel`，请求中主按钮前转圈、两个按钮都不能点；成功后确认弹窗和全览弹窗一起关掉，失败时确认弹窗关掉、错误照常显示在全览弹窗顶部（`role="alert"`，`text-danger`）。`Skip step` 只跳一个节点，不加确认。
+  - **卡片按估算高度绝对定位**，所以估算必须和实际渲染出自同一处规则，不在弹窗里加偏移：等拍板的卡（`task-graph-layout.ts` 的 `estimateNodeSizeRem`）按卡里每一块的实际高度加起来——标题行、问题行（`hasQuestion`）、摘要、交付物（`deliverable-size.ts` 的 `deliverablesHeightRem`，缩略图高度 `DELIVERABLE_MEDIA_HEIGHT_REM` 同时是 `DeliverableFiles` 里缩略图读的 `--deliverable-media-height`）、选项、`Add note`；触屏（`pointer: coarse`）下选项和 `Add note` 是 44px 热区，`coarsePointer` 传给布局。卡里加了新的一块，在这里加一项，并用实际渲染量一遍。文档行按一行算，链接多到折行时估算偏低。
   - **跨设备**：果皮轨、全览弹窗、拍板卡、`Completed` 历史拉取一律用 `DeviceScope`（`src/web/device-scope.tsx` 的 `useClient()`）给的当前设备接口，不自己按设备编号另建 client；看远端项目经理时请求走那台的 `/d/<设备>/...`。
 
 ## 13. 字体、数字、列表行
@@ -558,7 +559,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 
 - **分两行**（`flex flex-col gap-2`），按 `groupDeliverables` 分组，没有的那行不渲染：
   - **文档行**：md、pdf、html、csv、代码等。一个文件一个行内链接：14px 线条图标（`FileText`）+ 标签，`text-minor`，颜色和下划线同第 15 条的 `[data-file-link]`；`flex-wrap gap-x-3 gap-y-1`，触屏热区照第 19 条。不用胶囊、不加框。
-  - **媒体行**：图片、视频。缩略图固定 96px 高（`h-24 w-auto`，最宽 `max-w-40`，`object-cover`），`rounded-xl border border-border bg-muted`，`gap-2`，放不下横向滚（`overflow-x-auto`，不换行）。视频取第一帧（`preload="metadata"`），正中盖一个 36px 圆形深色半透明底的 `Play` 图标；不自动播放。
+  - **媒体行**：图片、视频。缩略图固定 96px 高（`h-(--deliverable-media-height) w-auto`，数在 `src/web/deliverable-size.ts`，放大弹窗估算卡片高度也读它；最宽 `max-w-40`，`object-cover`），`rounded-xl border border-border bg-muted`，`gap-2`，放不下横向滚（`overflow-x-auto`，不换行）。视频取第一帧（`preload="metadata"`），正中盖一个 36px 圆形深色半透明底的 `Play` 图标；不自动播放。
 - **点开**：都打开同一个预览窗（`FilePreview`）：图片看大图，视频用原生播放器（`controls`、`playsInline`），md 渲染，pdf、html 内联。
 - **悬停与聚焦**：缩略图是 `button`，聚焦态照第 7 条；鼠标是放大镜（图片）或手形（视频）。标签放 `aria-label`，图片 `alt` 也是标签。
 - **过期**：副本被定期清理掉（取文件 404）的，换成第 15 条的“文件已过期”卡片，不留破图。
