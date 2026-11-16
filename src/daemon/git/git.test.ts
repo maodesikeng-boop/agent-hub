@@ -13,6 +13,7 @@ import {
   isBranchMergedToMain,
   isCommitMergedToMain,
   isRepoWithCommit,
+  moveWorktree,
   parseDiffNumstatZ,
   pinDetachedHead,
   probeDiffNumstat,
@@ -20,7 +21,6 @@ import {
   probeWorkspace,
   probeWorktreeForRemoval,
   pruneWorktrees,
-  removeWorktree,
 } from "./index.ts";
 
 let emptyGitConfig: string;
@@ -343,7 +343,7 @@ describe("probeWorkspace（agent 接口在 hub worker start 之前探主文件�
   });
 });
 
-describe("isBranchMergedToMain、removeWorktree、pruneWorktrees", () => {
+describe("isBranchMergedToMain、moveWorktree、pruneWorktrees", () => {
   it("刚建好还没有新提交（等于 baseCommit）的分支不算已合并；有新提交且未合进 main 返回 false", async () => {
     const repo = makeRepo("unmerged");
     const wt = join(root, "wt", "1");
@@ -389,28 +389,28 @@ describe("isBranchMergedToMain、removeWorktree、pruneWorktrees", () => {
     expect(await isBranchMergedToMain(repo, "hub/2-noff", base2)).toBe(true);
   });
 
-  it("removeWorktree 删掉干净的 worktree 但保留分支；有未提交改动（不带 --force）时报错；pruneWorktrees 清理残留登记", async () => {
-    const repo = makeRepo("rm-wt");
-    const wtClean = join(root, "wt", "clean");
-    const wtDirty = join(root, "wt", "dirty");
-    await addWorktree({ repoFolder: repo, worktreePath: wtClean, branch: "hub/1-clean" });
-    await addWorktree({ repoFolder: repo, worktreePath: wtDirty, branch: "hub/2-dirty" });
+  it("moveWorktree 把 worktree 整个挪进指定目录、分支保留；锁着时报错不动；挪走的目录删掉后 pruneWorktrees 清理登记", async () => {
+    const repo = makeRepo("mv-wt");
+    const wt = join(root, "wt", "1");
+    const wtLocked = join(root, "wt", "2");
+    const into = join(root, "wt", ".trash", "s");
+    mkdirSync(into, { recursive: true });
+    await addWorktree({ repoFolder: repo, worktreePath: wt, branch: "hub/1-mv" });
+    await addWorktree({ repoFolder: repo, worktreePath: wtLocked, branch: "hub/2-locked" });
 
-    // 干净的 worktree 可以正常删，分支仍保留
-    await removeWorktree(repo, wtClean);
-    expect(existsSync(wtClean)).toBe(false);
-    expect(git(repo, "show-ref", "--verify", "refs/heads/hub/1-clean")).toContain("refs/heads/hub/1-clean");
+    await moveWorktree(repo, wt, into);
+    expect(existsSync(wt)).toBe(false);
+    expect(readFileSync(join(into, "1", "a.txt"), "utf8")).toBe("a\n");
+    expect(git(repo, "show-ref", "--verify", "refs/heads/hub/1-mv")).toContain("refs/heads/hub/1-mv");
 
-    // 有未提交改动（含未跟踪文件）时，不带 --force 的 git worktree remove 会失败且目录保留
-    writeFileSync(join(wtDirty, "untracked.txt"), "dirty\n");
-    await expect(removeWorktree(repo, wtDirty)).rejects.toThrow(GitError);
-    expect(existsSync(wtDirty)).toBe(true);
+    git(repo, "worktree", "lock", wtLocked);
+    await expect(moveWorktree(repo, wtLocked, into)).rejects.toThrow(GitError);
+    expect(existsSync(join(wtLocked, "a.txt"))).toBe(true);
 
-    // 手动删掉目录后，pruneWorktrees 清理 git worktree list 里的残留项
-    rmSync(wtDirty, { recursive: true, force: true });
+    rmSync(join(into, "1"), { recursive: true, force: true });
     await pruneWorktrees(repo);
-    expect(git(repo, "worktree", "list", "--porcelain")).not.toContain("dirty");
-    expect(git(repo, "show-ref", "--verify", "refs/heads/hub/2-dirty")).toContain("refs/heads/hub/2-dirty");
+    expect(git(repo, "worktree", "list", "--porcelain")).not.toContain("hub/1-mv");
+    expect(git(repo, "show-ref", "--verify", "refs/heads/hub/1-mv")).toContain("refs/heads/hub/1-mv");
   });
 
   it("probeDiffNumstat 与 parseDiffNumstatZ：正确解析带空格/中文路径与二进制文件，分支不存在返回 null", async () => {
