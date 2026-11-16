@@ -1325,7 +1325,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     });
 
     routes.get(API_PATHS.selfReload, async (): Promise<SelfReloadStatus> =>
-      opts.selfReload?.status() ?? { state: "idle", build: false, requestedAt: null, busy: [], lastFailure: null },
+      opts.selfReload?.status() ?? { state: "idle", build: false, requestedAt: null, deadlineAt: null, busy: [], lastFailure: null },
     );
 
     routes.get(API_PATHS.state, async (req): Promise<StateSnapshot> => {

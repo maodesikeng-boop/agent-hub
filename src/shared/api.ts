@@ -882,7 +882,7 @@ export interface CancelTaskGraphResponse {
 
 // ---- 空闲排空热重启（daemon/self-reload.ts） ----
 
-/** idle：没登记；building：在后台构建网页；draining：等全库空闲 + 静默窗口；restarting：正在关机重启。 */
+/** idle：没登记；building：在后台构建网页；draining：等全库空闲 + 静默窗口（最多等到 deadlineAt）；restarting：正在关机重启。 */
 export type SelfReloadState = "idle" | "building" | "draining" | "restarting";
 
 export interface SelfReloadStatus {
@@ -891,6 +891,8 @@ export interface SelfReloadStatus {
   build: boolean;
   /** 第一次登记的时间；没登记是 null。 */
   requestedAt: number | null;
+  /** 最晚什么时候执行（requestedAt + SELF_RELOAD_DRAIN_MAX_MS）：到点不管还有谁在跑都重启；没登记是 null。 */
+  deadlineAt: number | null;
   /** 现在还在忙的（给人看的原因），空的 = 全库空闲。 */
   busy: string[];
   /** 最近一次被取消（构建失败、换产物失败）的原因；之后再登记就清掉。 */

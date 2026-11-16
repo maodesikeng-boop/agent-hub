@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LedgerRequestError, SELF_RELOAD_DRAIN_MAX_MS, SELF_RELOAD_QUIET_MS, SELF_RELOAD_RECHECK_MS } from "../shared/index.ts";
-import { createBusySessions, createSelfReload, createStagedWebBuild, type BuildOutcome, type SelfReloadOptions } from "./self-reload.ts";
+import { formatClock } from "./ledger/worker-view.ts";
+import { createBusySessions, createSelfReload, createStagedWebBuild, describeSelfReload, type BuildOutcome, type SelfReloadOptions } from "./self-reload.ts";
 
 /** 可控的“全库忙不忙”和账本变化。 */
 function harness(overrides: Partial<SelfReloadOptions> = {}) {
@@ -38,13 +39,18 @@ describe("空闲排空热重启（createSelfReload）", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it("登记立即返回；有会话在跑就一直等，收尾停稳后再静默 SELF_RELOAD_QUIET_MS 才重启，且只重启一次", () => {
+  it("登记立即返回，回执写明从几点开始等、最晚几点执行；上限内有会话在跑就等，收尾停稳后再静默 SELF_RELOAD_QUIET_MS 才重启，且只重启一次", () => {
+    vi.setSystemTime(new Date(2026, 10, 16, 14, 10, 0));
     const h = harness();
     h.setBusy(["1 个会话还在跑"], false);
     const result = h.reload.request({ build: false, by: "项目经理会话 1" });
-    expect(result.text).toContain("已登记空闲排空热重启");
+    expect(result.text).toContain("已登记热重启");
+    const deadline = formatClock(Date.now() + SELF_RELOAD_DRAIN_MAX_MS);
+    expect(result.text).toContain(`14:10:00 开始等全库空闲，最晚 ${deadline} 不管还有谁在跑都执行`);
     expect(result.text).toContain("1 个会话还在跑");
     expect(result.status).toMatchObject({ state: "draining", build: false, busy: ["1 个会话还在跑"] });
+    expect(result.status.deadlineAt! - result.status.requestedAt!).toBe(SELF_RELOAD_DRAIN_MAX_MS);
+    expect(h.lines.at(-1)).toContain(`最晚 ${deadline} 执行`);
     vi.advanceTimersByTime(10 * SELF_RELOAD_RECHECK_MS);
     expect(h.restart).not.toHaveBeenCalled();
 
@@ -73,8 +79,44 @@ describe("空闲排空热重启（createSelfReload）", () => {
     vi.advanceTimersByTime(SELF_RELOAD_RECHECK_MS);
     expect(h.restart).toHaveBeenCalledTimes(1);
     expect(h.reload.status().state).toBe("restarting");
+    expect(h.lines.at(-1)).toContain("等全库空闲到了上限（10 分钟），还在忙：3 个会话还在跑。照常热重启");
+    expect(vi.getTimerCount()).toBe(0);
     vi.advanceTimersByTime(SELF_RELOAD_DRAIN_MAX_MS);
     expect(h.restart).toHaveBeenCalledTimes(1);
+  });
+
+  it("再登记合并进同一次，不顺延上限；hub status 那一段写明开始和最晚时间", () => {
+    vi.setSystemTime(new Date(2026, 10, 16, 14, 10, 0));
+    const h = harness({ drainMaxMs: 60_000 });
+    h.setBusy(["1 个会话还在跑"], false);
+    h.reload.request({ build: false, by: "a" });
+    vi.advanceTimersByTime(40_000);
+    const again = h.reload.request({ build: false, by: "b" });
+    expect(again.text).toContain("合并");
+    expect(describeSelfReload(again.status)).toBe(
+      "热重启：14:10:00 开始等全库空闲，最晚 14:11:00 不管还有谁在跑都执行。现在还在忙：1 个会话还在跑。" +
+        "到点被打断的 Worker 轮次和系统消息重启后自动重发；用户发给项目经理、还没回完的那条会标已停止。",
+    );
+    vi.advanceTimersByTime(19_999);
+    expect(h.restart).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(h.restart).toHaveBeenCalledTimes(1);
+    expect(describeSelfReload(h.reload.status())).toBe("热重启：正在关机重启。");
+    expect(describeSelfReload(harness().reload.status())).toBe("");
+  });
+
+  it("带 --build 时构建跑过了上限：不在构建中途重启，构建通过后立即重启", async () => {
+    let finishBuild: (o: BuildOutcome) => void = () => {};
+    const applyBuild = vi.fn();
+    const h = harness({ drainMaxMs: 60_000, build: () => new Promise<BuildOutcome>((resolve) => (finishBuild = resolve)), applyBuild });
+    h.setBusy(["1 个会话还在跑"], false);
+    h.reload.request({ build: true, by: "pm" });
+    expect(describeSelfReload(h.reload.status())).toContain("正在后台构建网页（构建完才算数）");
+    vi.advanceTimersByTime(120_000);
+    expect(h.restart).not.toHaveBeenCalled();
+    finishBuild({ ok: true });
+    await vi.waitFor(() => expect(h.restart).toHaveBeenCalledTimes(1));
+    expect(applyBuild).toHaveBeenCalledTimes(1);
   });
 
   it("静默窗口里又有新轮次启动：顺延，重新等空闲再完整静默一次", () => {

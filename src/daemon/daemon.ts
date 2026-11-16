@@ -152,6 +152,8 @@ export interface DaemonOptions {
    * reloadExitCode 退出，由外壳（Fusa.app、Windows 桌面端、systemd）立即拉起。不给 = 没有外壳监管，不接受热重启（409）。
    */
   onSelfReload?: () => void;
+  /** 热重启登记后最多等全库空闲多久（默认 SELF_RELOAD_DRAIN_MAX_MS）；只给测试改小。 */
+  selfReloadDrainMaxMs?: number;
   /**
    * 外部经管理管道 `POST /admin/shutdown`（带界面令牌）请求优雅关机时调它（Windows 下替代外部无法送达的 SIGTERM）。
    */
@@ -433,6 +435,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
               const result = parts.selfReload.request({ build, by: `项目经理会话 ${sessionId}` });
               return { text: result.text, data: result.status };
             },
+            selfReloadStatus: () => parts.selfReload?.status(),
           }
         : {}),
       onRouterDispatch: async (sessionId, commandId, payload) => {
@@ -835,6 +838,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
         subscribe: (listener) => ledger.onChange(listener),
         ...(webBuild ? { build: (signal: AbortSignal) => webBuild.build(signal), applyBuild: () => webBuild.apply() } : {}),
         restart: onSelfReload,
+        ...(options.selfReloadDrainMaxMs !== undefined ? { drainMaxMs: options.selfReloadDrainMaxMs } : {}),
         log,
       });
     }

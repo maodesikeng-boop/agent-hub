@@ -147,7 +147,7 @@ export async function runDaemonProcess(options: DaemonOptions): Promise<void> {
       : undefined;
   const onSelfReload = () => {
     if (stopping) return;
-    console.error(`${LOG_PREFIX} 空闲排空完成，正在关闭并热重启……`);
+    console.error(`${LOG_PREFIX} 正在关闭并热重启……`);
     stopThenExit(SHUTDOWN_TOTAL_MS, true);
   };
   const handleFatal = (error: unknown, origin: FatalErrorOrigin) => {

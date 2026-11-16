@@ -84,7 +84,7 @@ journalctl --user -u agent-hub -f
 ```
 
 热重启（项目经理 `hub self-reload [--build]`、网页 `POST /api/self-reload`）：守护进程看到 systemd 设的 `INVOCATION_ID` 就知道退出后有人拉起；
-等全库空闲后正常关机，以退出码 75（`apps/desktop/contract.json` 的 `reloadExitCode`）退出，`Restart=on-failure` 过 `RestartSec` 拉起新进程。
+等全库空闲后正常关机（最多等 10 分钟，`src/shared/limits.ts` 的 `SELF_RELOAD_DRAIN_MAX_MS`，到点不管还有谁在跑都重启，被打断的 Worker 轮次重启后重发），以退出码 75（`apps/desktop/contract.json` 的 `reloadExitCode`）退出，`Restart=on-failure` 过 `RestartSec` 拉起新进程。
 `--build` 先把网页构建到 `dist/` 下的暂存目录，构建失败就取消，不动正在用的 `dist/web`。不是 systemd、也不是 Fusa 应用拉起的（终端里 `pnpm start`）不接受热重启。
 
 - `Environment=`、`Restart=`、`TimeoutStopSec=`：<https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html>、<https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html>。

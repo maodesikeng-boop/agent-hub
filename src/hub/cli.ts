@@ -27,6 +27,7 @@ import {
   MAX_GATE_OPTIONS,
   MIN_SCHEDULE_EVERY_MINUTES,
   ROUTER_OPTION_MAX_COUNT,
+  SELF_RELOAD_DRAIN_MAX_MS,
   SETUP_TIMEOUT_MS,
   WORKER_LOG_DEFAULT_STEPS,
   WORKER_LOG_MAX_STEPS,
@@ -331,7 +332,8 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
 
 /** 守护进程级命令（不进账本的 hubCall，单独一条路由）。 */
 const SELF_RELOAD_USAGE = `  ${hub} self-reload [--build]                              ${PRODUCT_ID} 自身代码合进来后热重启守护进程：立即返回，等所有会话这一轮收尾、
-                                                          全库空闲后自动重启（调它的这一轮也要先结束）；--build 先在后台构建网页，失败就取消、不重启`;
+                                                          全库空闲后自动重启；最多等 ${SELF_RELOAD_DRAIN_MAX_MS / 60_000} 分钟，到点不管还有谁在跑都重启，被打断的 Worker 轮次和系统消息
+                                                          重启后重发，用户发给你、还没回完的那条标已停止（回执和 hub status 写明最晚几点）；--build 先在后台构建网页，失败就取消、不重启`;
 
 /**
  * hub 用法（hub help、未知顶层命令或环境变量缺失时打印），人和 agent 都看。给项目经理的提示词里另有一份精简的：daemon/prompt.ts 的 HUB_USAGE_PROMPT，

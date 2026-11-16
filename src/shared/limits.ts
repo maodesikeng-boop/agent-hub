@@ -835,7 +835,7 @@ export const MAX_VENDOR_SYNC_PREVIEW_CHARS = 240;
 export const MAX_VENDOR_SYNC_CONFIG_BYTES = 2 * 1024 * 1024;
 
 // ---- 空闲排空热重启（daemon/self-reload.ts、web/auto-reload.ts）----
-/** 全库空闲（没有会话在跑 / 停止中 / 准备中 / 等后台命令，总助分派引擎没有规划中或在途分派）后再静默这么久才重启；期间又有新轮次就顺延，重新等空闲。 */
+/** 全库空闲（没有会话在跑 / 停止中 / 准备中 / 等后台命令，总助分派引擎没有规划中或在途分派）后再静默这么久才重启；期间又有新轮次就顺延，重新等空闲（最多等到 SELF_RELOAD_DRAIN_MAX_MS）。 */
 export const SELF_RELOAD_QUIET_MS = 1_500;
 /**
  * 登记后最多等全库空闲这么久（10 分钟），到点不管还有谁在跑都照常重启。Worker 全天连续在跑时全库空闲可能一直不出现，不设上限重启会被饿死；
