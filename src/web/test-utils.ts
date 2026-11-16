@@ -522,13 +522,13 @@ export class FakeApi {
       },
     },
   });
-  /** GET /api/vendor-sync/preview。 */
-  vendorSyncPreview: () => Reply | Promise<Reply> = () => ({
+  /** GET /api/vendor-sync/preview（支持 /d/<device>/api/vendor-sync/preview，本机 device 为 null）。 */
+  vendorSyncPreview: (device: string | null) => Reply | Promise<Reply> = () => ({
     status: 200,
     body: { scannedAt: Date.now(), mcpServers: [], skills: [], nonSyncable: [], truncated: false } satisfies VendorSyncPreviewResponse,
   });
-  /** POST /api/vendor-sync/apply。 */
-  vendorSyncApply: (body: VendorSyncApplyRequest) => Reply | Promise<Reply> = (body) => ({
+  /** POST /api/vendor-sync/apply（支持 /d/<device>/api/vendor-sync/apply，本机 device 为 null）。 */
+  vendorSyncApply: (body: VendorSyncApplyRequest, device: string | null) => Reply | Promise<Reply> = (body) => ({
     status: 200,
     body: {
       backupId: "20261111-120000-abcd",
@@ -879,8 +879,13 @@ export class FakeApi {
     const browserSession = /^\/api\/sessions\/([^/]+)$/.exec(url.pathname);
     if (browserSession && method === "DELETE") return jsonResponse(await this.deleteBrowserSession(decodeURIComponent(browserSession[1]!)));
     if (method === "PUT" && url.pathname === API_PATHS.publicEntry) return jsonResponse(await this.putPublicEntry(body));
-    if (method === "GET" && url.pathname === API_PATHS.vendorSyncPreview) return jsonResponse(await this.vendorSyncPreview());
-    if (method === "POST" && url.pathname === API_PATHS.vendorSyncApply) return jsonResponse(await this.vendorSyncApply(body));
+    const vendorSyncScoped = /^(?:\/d\/([^/]+))?(\/api\/vendor-sync\/.*)$/.exec(url.pathname);
+    if (vendorSyncScoped) {
+      const device = vendorSyncScoped[1] === undefined ? null : decodeURIComponent(vendorSyncScoped[1]);
+      const subPath = vendorSyncScoped[2];
+      if (method === "GET" && subPath === API_PATHS.vendorSyncPreview) return jsonResponse(await this.vendorSyncPreview(device));
+      if (method === "POST" && subPath === API_PATHS.vendorSyncApply) return jsonResponse(await this.vendorSyncApply(body, device));
+    }
     const providerScoped = /^(?:\/d\/([^/]+))?(\/api\/providers(?:\/.*)?)$/.exec(url.pathname);
     if (providerScoped) {
       const device = providerScoped[1] ? decodeURIComponent(providerScoped[1]) : null;
