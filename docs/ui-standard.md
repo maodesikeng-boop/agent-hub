@@ -266,8 +266,9 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 
 ## 11. 浮层（Popover）
 
-`PopoverContent`：`rounded-2xl border border-border bg-background p-4`，宽 280px。里面的分块标题用组标题的样式（13.5px、500、灰），内容 15px，次要信息 13.5px 灰。
+`PopoverContent`：`rounded-2xl border border-border bg-background p-4`，宽度见下面“宽度跟内容走”。里面的分块标题用组标题的样式（13.5px、500、灰），内容 15px，次要信息 13.5px 灰。
 
+- **宽度跟内容走，最窄 280px、最宽 360px**：`PopoverContent` 自带 `w-max min-w-70 max-w-[min(22.5rem,var(--radix-popover-content-available-width))]`，内容短是 280px，长了跟着变宽，到 360px（窗口窄时到 Radix 量好的可用宽度）为止。到了上限还放不下，由里面的内容自己截断：浮层里装行的 `grid` 一律写 `grid-cols-1`（= `minmax(0,1fr)`，道理同第 10 条“宽度不能被内容撑开”），行里放不下的那一项 `min-w-0 truncate`、全名放 `title`，靠右的控件（单选圆点、状态词、箭头）`shrink-0`。不写 `grid-cols-1` 的话，不换行的长名字会把整列撑得比浮层宽，靠右的东西被裁掉。
 - **高度受可用空间限制**：`PopoverContent` 自带 `max-h-(--radix-popover-content-available-height) overflow-y-auto overscroll-contain`（Radix 量好的“窗口剩下的高度”，已扣掉离边 12px 的 `collisionPadding`），窗口矮了内容在浮层里滚，不顶出窗口、标题不被切；不自己用 JS 量窗口高度。`m3.test.tsx` 守着这几个类名。
 - **额度浮层**（左下角额度按钮点开，`QuotaPopover`）：
   - 结构：一家厂商一组，厂商名做组标题（13.5px、500、灰，组标题和内容之间 8px）；组与组之间 24px（`gap-6`）。按需查的厂商（Antigravity）分模型族（Gemini、Claude and GPT）：族名是组内一行小标题（12px `text-xs`、500、灰），各族之间 16px，族名和它的窗口之间 12px。**不用“·”拼厂商和模型族**（读屏：厂商是 `region`，模型族是 `group`）。
@@ -539,7 +540,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
   - 未读分隔线：打开时有没看过的简报，在最早一条上面画 `New`（12px 灰）加 1px 细线，写法同第 17 条“换新会话”的分隔线。
 - **空状态**：没有待拍板项也没有任何条目时，居中 `<KnifeAvatar size={36} className="opacity-40" />` 和 `All clear`（`text-minor text-muted-foreground`）。
 - **顶栏模型选择入口（`RouterModelPicker`）**：顶栏右边一个 `Button variant="ghost"`（第 6 条：平时没有底色、描边，不是胶囊），显示当前实际生效的模型：自动时是灰色的 `Auto` 加模型短名，指定了厂商时是灰色的厂商名加模型短名，最右一个 16px `ChevronDown`；几项之间只靠 8px 间距隔开，不用“·”“|”“/”。窄了先收前缀（主区窄于 25rem 收厂商名，窄于 19rem 连 `Auto` 也收），再窄模型短名 `truncate`，`Router` 标题不被挤、顶栏不横向溢出。打开时不加底色，箭头变前景色。
-  - **面板**：电脑外壳是 `Popover`（第 11 条，宽 280px，靠右对齐），手机外壳是底部 `Drawer`（第 10 条），里面是同一份内容。最上面是单选列表（`RadioMark`，第 9 条）：第一行 `Auto`（清掉自己选的，交给总助按各家预设挑），下面一家厂商一行，右边 13.5px 灰字是这家会用的模型短名；没登录的照列但不能选，右边写状态词（`Not signed in`），没装的不列。行高 36px，触屏 44px。点一家就存，模型和思考程度填这家的 `routerDefault` 预设。
+  - **面板**：电脑外壳是 `Popover`（第 11 条，宽度跟内容走，280px 到 360px，靠右对齐；再长模型短名截断成省略号，全名在 `title`），手机外壳是底部 `Drawer`（第 10 条），里面是同一份内容。最上面是单选列表（`RadioMark`，第 9 条）：第一行 `Auto`（清掉自己选的，交给总助按各家预设挑），下面一家厂商一行，右边 13.5px 灰字是这家会用的模型短名；没登录的照列但不能选，右边写状态词（`Not signed in`），没装的不列。行高 36px，触屏 44px。点一家就存，模型和思考程度填这家的 `routerDefault` 预设。
   - **`Model & effort` 默认收起**：只在选了具体厂商时出现，一行折叠开关（13.5px、500、灰），收起时右边是当前思考程度和 `ChevronDown`，展开后箭头转 180°、不再重复写思考程度；下面两行 `Select variant="plain"` 换这家别的模型和思考程度，改了马上存。这家只有一档思考程度时开关叫 `Model`，不出思考程度那一行。
   - **保存**：点了先显示，请求没回来时一直显示最后选的（连着改两次不闪回前一次）；失败退回原来的值，列表下面一行 `RowError`。
   - **`Manage providers…`**：有没装或没登录的厂商时出现在最下面（13.5px、500、灰，右边 `ChevronRight`），先关面板再去 `Settings → Providers`（手机是 `#/settings/providers`）。

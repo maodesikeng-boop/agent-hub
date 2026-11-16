@@ -299,12 +299,12 @@ export const RouterModelPicker = memo(function RouterModelPicker({
     !selectedCatalog.models.some((m) => m.id === selectedChoice.model);
 
   const panelBody = (
-    <div className="grid gap-2">
+    <div className="grid grid-cols-1 gap-2">
       <RadioGroupPrimitive.Root
         aria-label="Router provider"
         value={selectedRadioValue}
         onValueChange={handleRadioChange}
-        className="grid gap-0.5"
+        className="grid grid-cols-1 gap-0.5"
       >
         <RadioGroupPrimitive.Item value={AUTO_VALUE} className={ROW_INTERACTIVE_CLASS}>
           <span className="shrink-0 text-body text-foreground">Auto</span>
