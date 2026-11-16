@@ -814,6 +814,67 @@ mod tests {
         slow_bridge.stop();
     }
 
+    /// 客户端先发带超大 `Content-Length` 的请求头，等服务器回完 413 之后才分批发请求体（ureq 等客户端会把头和体分开写）。
+    /// 服务器若回完 413 就关连接，迟到的请求体会让内核回 RST，客户端读不到响应（Windows 报 10054）。
+    #[test]
+    fn dialog_bridge_413_response_survives_request_body_sent_after_the_response() {
+        use std::io::{Read, Write};
+        use std::net::{Shutdown, TcpStream};
+        use std::time::Duration;
+
+        let bridge = DesktopDialogBridge::start_with_handler(|_| None).unwrap();
+        let addr = bridge
+            .url
+            .strip_prefix("http://")
+            .unwrap()
+            .split('/')
+            .next()
+            .unwrap()
+            .to_string();
+
+        for attempt in 0..20 {
+            let mut s = TcpStream::connect(&addr).unwrap();
+            s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let head = format!(
+                "POST /pick-folder HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {}\r\nContent-Length: 1000000\r\n\r\n",
+                bridge.token
+            );
+            s.write_all(head.as_bytes()).unwrap();
+            s.flush().unwrap();
+
+            std::thread::sleep(Duration::from_millis(200));
+            let body_chunk = [b'a'; 4096];
+            for _ in 0..8 {
+                if s.write_all(&body_chunk).is_err() {
+                    break;
+                }
+                let _ = s.flush();
+            }
+            let _ = s.shutdown(Shutdown::Write);
+            std::thread::sleep(Duration::from_millis(50));
+
+            let mut raw = Vec::new();
+            let mut chunk = [0u8; 1024];
+            let read_result = loop {
+                match s.read(&mut chunk) {
+                    Ok(0) => break Ok(()),
+                    Ok(n) => raw.extend_from_slice(&chunk[..n]),
+                    Err(e) => break Err(e),
+                }
+            };
+            let resp = String::from_utf8_lossy(&raw);
+            assert!(
+                read_result.is_ok(),
+                "attempt {attempt}: reading the 413 response failed with {read_result:?}; got {resp:?}"
+            );
+            assert!(
+                resp.starts_with("HTTP/1.1 413") && resp.contains(r#"{"error":"payload_too_large"}"#),
+                "attempt {attempt}: expected a complete 413 response, got {resp:?}"
+            );
+        }
+        bridge.stop();
+    }
+
     #[test]
     fn normalize_hub_home_override_aligns_tilde_and_trailing_slashes_with_node() {
         let home = Path::new(r"C:\Users\Alice");
