@@ -525,6 +525,30 @@ describe("ACP 驱动底座端到端协议与生命周期", () => {
     });
   });
 
+  it("工具跑完的返回原文按这家 spec 的 outputField 带上（deepseek 是 content，cursor 是 rawOutput）；没有返回原文的不带", async () => {
+    const cases = [
+      {
+        vendor: "deepseek" as const,
+        tool: { resultContent: [{ type: "content", content: { type: "text", text: "<content>\n1: ---\n2: name: demo\n</content>" } }] },
+        output: "<content>\n1: ---\n2: name: demo\n</content>",
+      },
+      { vendor: "cursor" as const, tool: { rawOutput: { content: "---\nname: demo\n" } }, output: "---\nname: demo\n" },
+      { vendor: "cursor" as const, tool: { rawOutput: { exitCode: 0, stdout: "命令输出", stderr: "" } }, output: "命令输出" },
+    ];
+    for (const { vendor, tool, output } of cases) {
+      const h = track(
+        makeAcpHarness({
+          config: { vendor },
+          script: { turns: [{ toolCalls: [{ toolCallId: "tc-1", title: "Read", name: "read", kind: "read", ...tool }, { toolCallId: "tc-2", title: "Edit", name: "edit", kind: "edit" }] }] },
+        }),
+      );
+      const row = h.addSession({ vendor });
+      await h.driver.send(row.id, { messageIds: [1 as never], source: "user", text: "读技能" });
+      await h.waitFor("turn.ended");
+      expect(h.of("agent.tool_result").map((e) => e.outputs)).toEqual([{ "tc-1": output }, undefined]);
+    }
+  });
+
   it("multi_turn：多轮对话复用同一常驻进程且次轮不重复注入系统提示词，空闲到期正常关闭", async () => {
     const h = track(
       makeAcpHarness({

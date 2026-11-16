@@ -158,7 +158,7 @@ describe("工具结果（user 事件里的 tool_result）", () => {
   });
 
   it("出 agent.tool_result，带这些 tool_use 的 id；一个 user 事件里有几个结果就带几个", () => {
-    expect(parseToolResults(result(), 9)).toEqual({ type: "agent.tool_result", toolUseIds: ["toolu_1"], at: 9 });
+    expect(parseToolResults(result(), 9)).toEqual({ type: "agent.tool_result", toolUseIds: ["toolu_1"], outputs: { toolu_1: "ok" }, at: 9 });
     const two = result({
       message: {
         content: [
@@ -169,6 +169,29 @@ describe("工具结果（user 事件里的 tool_result）", () => {
       },
     });
     expect(parseToolResults(two, 9)).toMatchObject({ toolUseIds: ["a", "b"] });
+  });
+
+  it("返回原文按 tool_result 的 content 带上（Read 的“行号\\t正文”原样，claude -p stream-json 实跑抓的）；没有文字的不带", () => {
+    // 2026-11-16 claude 2.1 实跑 Read 一个技能，stream-json 里的 user 事件原样
+    const live = {
+      type: "user",
+      message: {
+        role: "user",
+        content: [{ tool_use_id: "toolu_01Lzt7YjK3XxQfgCgxYikCFp", type: "tool_result", content: "1\t---\n2\tname: demo\n3\tdescription: sample\n4\t---\n5\tLine 1 of demo skill body.\n15\t" }],
+      },
+      parent_tool_use_id: null,
+    };
+    expect(parseToolResults(live, 1)?.outputs).toEqual({ toolu_01Lzt7YjK3XxQfgCgxYikCFp: "1\t---\n2\tname: demo\n3\tdescription: sample\n4\t---\n5\tLine 1 of demo skill body.\n15\t" });
+    const blocks = result({
+      message: {
+        content: [
+          { type: "tool_result", tool_use_id: "a", content: [{ type: "text", text: "甲" }, { type: "image", source: {} }] },
+          { type: "tool_result", tool_use_id: "b", content: [{ type: "image", source: {} }] },
+          { type: "tool_result", tool_use_id: "c" },
+        ],
+      },
+    });
+    expect(parseToolResults(blocks, 1)?.outputs).toEqual({ a: "甲" });
   });
 
   it("子任务里的结果带 parentToolUseId", () => {

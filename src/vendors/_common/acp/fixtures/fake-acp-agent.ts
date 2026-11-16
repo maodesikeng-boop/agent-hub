@@ -36,6 +36,9 @@ export interface FakeAcpToolStep {
   };
   /** 测试外层只读 OS 沙箱：尝试写入该路径并把成功/报错记入日志。 */
   probeWritePath?: string;
+  /** 跑完那条 tool_call_update 带的 content、rawOutput（工具的返回原文）。 */
+  resultContent?: unknown;
+  rawOutput?: unknown;
 }
 
 export interface FakeAcpTurnScript {
@@ -577,6 +580,8 @@ const app = agent({ name: "fake-acp-agent" })
             sessionUpdate: "tool_call_update",
             toolCallId: tool.toolCallId,
             status: allowed ? "completed" : "failed",
+            ...(tool.resultContent !== undefined ? { content: tool.resultContent } : {}),
+            ...(tool.rawOutput !== undefined ? { rawOutput: tool.rawOutput } : {}),
           },
         });
       }
