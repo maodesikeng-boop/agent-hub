@@ -283,7 +283,7 @@ describe("带：换代时放进新会话的开场说明", () => {
     read(firstSession, path);
     rmSync(path);
     const section = sectionOf(renew().preamble);
-    expect(section).toContain("文件已经没有了");
+    expect(section).toContain("读不到了（文件没了或不在技能目录里）");
     expect(section).toContain("gone");
     expect(rows()).toMatchObject([{ name: "gone", generation: 1 }]);
   });
@@ -301,7 +301,7 @@ describe("带：换代时放进新会话的开场说明", () => {
     symlinkSync(outside, at());
     const section = sectionOf(renew().preamble);
     expect(section).not.toContain("OUTSIDE_SWAPPED_CONTENT");
-    expect(section).toContain("文件已经没有了");
+    expect(section).toContain("读不到了（文件没了或不在技能目录里）");
     expect(section).toContain("swapped");
   });
 

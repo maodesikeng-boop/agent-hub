@@ -3,7 +3,7 @@
 // 1. 它的工作目录里放两个测试技能，正文里各写一个暗号：carry-user（用户手打 /carry-user）、carry-model（让模型自己读 SKILL.md）；
 // 2. 空闲后自动换到第 2 代：开场说明里“上一个会话加载过的技能”那一节带着两个暗号，问新会话答得出来；
 // 3. 第 2 代没再加载，再换到第 3 代：两个技能还在（传下去）；
-// 4. 删掉 carry-model 再换到第 4 代：那一节写着“文件已经没有了”。
+// 4. 删掉 carry-model 再换到第 4 代：那一节写着“读不到了（文件没了或不在技能目录里）”。
 // 每一代开场里那一节打印出来，贴进 PR。跑完删掉临时目录和这次在各家用户目录里留下的会话记录。
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -136,7 +136,7 @@ try {
       const g4 = await sessionOf(4);
       const s4 = sectionFor(g4.sessionId);
       console.log(`\n----- ${vendor} 第 4 代开场里的技能一节（删了 carry-model）-----\n${s4.slice(0, 600)}\n-----`);
-      expect(s4.includes(userSecret) && !s4.includes(modelSecret) && /文件已经没有了：carry-model/.test(s4), "第 4 代没注明 carry-model 文件没了");
+      expect(s4.includes(userSecret) && !s4.includes(modelSecret) && /读不到了（文件没了或不在技能目录里）：carry-model/.test(s4), "第 4 代没注明 carry-model 文件没了");
       return `${model}：第 1 代记下 ${loaded.map((r) => `${r.name}(${r.source})`).join("、")}；第 2、3 代都带上，第 4 代注明文件没了；新会话答出“${replies.trim()}”`;
     });
     if (!ok) keepDir = true;

@@ -232,7 +232,7 @@ skillSignals: {
 `switchIn` 里加一步 `carrySkills(p, conversationId, fromGeneration, toGeneration, session)`，普通换代、手动开新会话、切换厂商都走它。读盘也在这里，和 `switchIn` 已经调的 `transcriptOf(old)` 一样，是换代那一刻的最新版本。
 
 1. 取 `generation = 旧代` 的行，按 `loaded_at` 从新到旧排。
-2. 现枚举新会话的已知技能名单（不用缓存），每行先按真实路径（`skill_key`）在名单里找，找不到再按名字找（任务图手册在每个会话自己的启动目录里，换代后路径会变）。名单里没有的，记进“文件已经没有了”。只读名单里的文件：读之前再核一次它的真实路径没变，从模型可控的文本里拼出来的路径一律不打开。
+2. 现枚举新会话的已知技能名单（不用缓存），每行先按真实路径（`skill_key`）在名单里找，找不到再按名字找（任务图手册在每个会话自己的启动目录里，换代后路径会变）。名单里没有的，记进“读不到了（文件没了或不在技能目录里）”。只读名单里的文件：读之前再核一次它的真实路径没变，从模型可控的文本里拼出来的路径一律不打开。
 3. 去掉 YAML frontmatter。单个超过 `SKILL_CARRYOVER_SKILL_MAX_CHARS` 的从前往后截，末尾写“（后面省略 N 字，全文在 <路径>）”。
 4. 累计超过 `SKILL_CARRYOVER_TOTAL_MAX_CHARS` 时，放不下的那个和之后的都不带正文，只进“没带正文”名单。不为了塞进去再截短，照 Claude Code 的做法。
 5. 带上正文的行改成 `generation = 新代`，`loaded_at` 不变，所以下一代仍按真正加载的先后排。没带上的留在旧代，不再往下传。
@@ -256,7 +256,7 @@ skillSignals: {
 </skill>
 
 没带正文（篇幅超了）：principle-model-the-domain（/…/SKILL.md）、…。要用时自己加载。
-文件已经没有了：old-skill（/…/SKILL.md）。
+读不到了（文件没了或不在技能目录里）：old-skill（/…/SKILL.md）。
 ```
 
 用 `<skill>` 标签包正文，不用代码块：技能正文里常有 ``` 代码块，套代码块会提前闭合。“没带正文”名单最多列 `SKILL_CARRYOVER_SKIPPED_LIST_MAX` 个名字。
@@ -350,7 +350,7 @@ skillSignals: {
 4. 等空闲后自动换代，从账本 `handovers.preamble`（切换厂商看 `skills_section`）里打印“上一个会话加载过的技能”那一节，确认两个暗号都在。
 5. 问新会话两个暗号，答得出来。
 6. 再触发一次换代，第三代开场里两个技能还在（传下去）。
-7. 把 `carry-model` 删掉再换代，开场里写着“文件已经没有了”。
+7. 把 `carry-model` 删掉再换代，开场里写着“读不到了（文件没了或不在技能目录里）”。
 
 至少 claude 和另一家（codex 或 agy）各跑一次，把开场里那一节的片段贴进 PR。
 

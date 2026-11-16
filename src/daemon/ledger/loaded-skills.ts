@@ -75,7 +75,7 @@ function renderSection(carried: readonly { row: LoadedSkillRow; body: string }[]
   }
   const notes: string[] = [];
   if (skipped.length > 0) notes.push(`没带正文（篇幅超了，要用时自己加载）：${listed(skipped)}`);
-  if (missing.length > 0) notes.push(`文件已经没有了：${listed(missing)}`);
+  if (missing.length > 0) notes.push(`读不到了（文件没了或不在技能目录里）：${listed(missing)}`);
   if (notes.length > 0) parts.push(notes.join("\n"));
   return parts.join("\n\n");
 }
