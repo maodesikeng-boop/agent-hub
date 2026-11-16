@@ -7,7 +7,10 @@ const SKILL_NAME_RE = /^(?!\.{1,2}$)[^\\/\0]+$/u;
 /** 技能目录下的 `…/skills/<名字>/SKILL.md`（Agent Skills 的标准布局，六家都这样放）；别处叫 SKILL.md 的文件不算技能。 */
 const SKILL_FILE_RE = /(?:^|[\\/])skills[\\/]([^\\/]+)[\\/]SKILL\.md$/iu;
 
-const validName = (name: string | undefined): string | null => (name !== undefined && SKILL_NAME_RE.test(name) ? name : null);
+/** 能当技能名：一段目录名。 */
+export const isSkillName = (name: string): boolean => SKILL_NAME_RE.test(name);
+
+const validName = (name: string | undefined): string | null => (name !== undefined && isSkillName(name) ? name : null);
 
 /** 技能名：去掉命名空间（`fusa:fusa-task-graph`、pi 的 `skill:frontend-rules` 都取最后一段），名字本身照抄。 */
 export function skillNameOf(raw: string | undefined): string | null {

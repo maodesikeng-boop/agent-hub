@@ -128,6 +128,10 @@ export default defineVendor({
       tool_search: "tool_search",
     },
   },
+  skillSignals: {
+    // rpc 的 tool_execution_end.result（{content:[{type:"text", text}]}），read 不带行号（2026-11-16 pi --mode rpc 实跑）
+    outputField: "result",
+  },
   capabilities: {
     backgroundWake: false,
     readonly: "os_sandbox",

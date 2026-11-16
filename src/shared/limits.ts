@@ -132,6 +132,21 @@ export const SKILL_CARRYOVER_TOTAL_MAX_CHARS = 80_000;
 export const SKILL_CARRYOVER_RECORDS_MAX = 200;
 /** “没带正文”名单最多列几个名字。 */
 export const SKILL_CARRYOVER_SKIPPED_LIST_MAX = 20;
+/**
+ * 认技能加载时一次工具返回最多看这么多字（String.length）：驱动摊平返回原文时截在这里，后面出现的技能开头不认。
+ * 重放本机全部历史，技能开头在返回里最远出现在第 48,232 字（一条命令接连 cat 好几个技能），留了约三分之一余量。
+ */
+export const SKILL_LOAD_SCAN_MAX_CHARS = 64_000;
+/** 已知技能名单（daemon/skill-files.ts 枚举技能目录建的）按会话缓存多久；换代时不用缓存。 */
+export const SKILL_CATALOG_TTL_MS = 30_000;
+/** 最多缓存几个会话的已知技能名单（只有项目经理的会话会建）。 */
+export const SKILL_CATALOG_CACHE_MAX = 32;
+/** 一份已知技能名单最多收多少个技能（本机所有技能目录合起来 91 个）。 */
+export const SKILL_CATALOG_MAX_SKILLS = 1_000;
+/** 建名单时每个 SKILL.md 只读开头这么多字节来算“开头”（本机最长的 frontmatter 1,101 字节）。 */
+export const SKILL_HEAD_READ_BYTES = 16_384;
+/** 调用发出、返回还没到的读文件和命令，账本内存里最多记几个（返回到了就取走）。 */
+export const SKILL_LOAD_PENDING_TOOLS_MAX = 256;
 /** PersonaView 里最多带几条修改记录。 */
 export const PERSONA_CHANGES_LIMIT = 50;
 /** 跨厂商切换时，本代消息与 Worker 汇报回放区的最大字符预算（String.length，24 万字保底防爆窗）。 */

@@ -140,6 +140,11 @@ export default defineVendor({
       update_todos: "todo",
     },
   },
+  skillSignals: {
+    // ACP tool_call_update 的 rawOutput：读文件是 {content}，shell 是 {exitCode, stdout, stderr}；content 只放改文件的 diff
+    // （cursor-agent 2026.11.10 的 extractToolCallOutput，本机没有会话）
+    outputField: "rawOutput",
+  },
   capabilities: {
     backgroundWake: false,
     readonly: "os_sandbox",

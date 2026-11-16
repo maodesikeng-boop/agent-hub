@@ -36,25 +36,58 @@
 
 ### 各家加载技能时 Fusa 收到什么
 
-Fusa 已经把六家的工具调用统一成 `agent.tool` 事件（`name` 是厂商原工具名，`input` 是完整参数），账本在 `src/daemon/ledger/steps.ts:117` 收它写 `session_steps`。各家工具名到通用动作（`read`、`command`、`skill`……）的翻译已经在各家 `spec.ts` 的 `tools.actions` 里，`src/shared/step-labels.ts:190` 合成一张表。`step-labels.ts:70` 的 `SKILL_FILE_RE` 已经能从读文件的路径认出“在加载技能 X”，网页状态行的 “Loading skill frontend-rules” 就是它出的。
+Fusa 已经把六家的工具调用统一成 `agent.tool` 事件（`name` 是厂商原工具名，`input` 是完整参数），工具跑完是 `agent.tool_result`。各家工具名到通用动作（`read`、`command`、`skill`……）的翻译在各家 `spec.ts` 的 `tools.actions` 里，`src/shared/step-labels.ts` 合成一张表。
 
-用户手打的命令都经过 Fusa：网页发来原文，驱动层把命令单独写进会话（`src/daemon/driver/base-driver.ts:303`、`:604`），codex 在发出前把 `/名字` 改成 `$名字`（`src/vendors/codex/composer.ts:100`）。
+用户手打的命令都经过 Fusa：网页发来原文，驱动层把命令单独写进会话（`src/daemon/driver/base-driver.ts:303`、`:604`），codex 在发出前把 `/名字` 改成 `$名字`（`src/vendors/codex/composer.ts`）。
 
 | 厂商 | 用户手打调用 | 模型用原生技能工具 | 模型读文件工具 | 模型用 shell 读 |
 | --- | --- | --- | --- | --- |
-| claude | `/poteto-mode 这个skill更新了`（`messages.id = 61781`，实测）。stream-json 只回放 `<command-name>/frontend-rules</command-name>`，不带技能路径（2026-11-16 用 `claude -p --replay-user-messages` 实测） | `Skill`，`input: {"skill":"frontend-rules"}`，结果是 `Launching skill: frontend-rules`（Worker 280 的会话记录，实测）；插件技能写成 `fusa:fusa-task-graph` | `Read`，`file_path: …/.agents/skills/poteto-mode/SKILL.md`（实测） | `Bash`，项目经理用 `cat .agents/skills/poteto-mode/SKILL.md` 读 poteto-mode（交接对话里项目经理自述，推断） |
-| agy | `/名字`，同 claude 的输入框写法（推断，读 `src/vendors/agy/composer.ts`） | 没有 | `read_file`，`session_steps` 里 “Loading skill poteto-mode”“Loading skill unslop”（实测） | `run_command`，如 `wc -l $S/poteto-mode/SKILL.md`（实测，路径里有变量） |
-| codex | Fusa 里是 `/名字`，发出前改成 `$名字`（读代码，实测） | 没有 | 没有 | `commandExecution`，`/bin/zsh -lc '…cat .agents/skills/poteto-mode/SKILL.m…'`（实测）。codex 自己的 `parsed_cmd` 只把单条命令认成 `read`，多行脚本是 `unknown`：本机记录里读 `SKILL.md` 的 97 次里 56 次是 `unknown`（实测） |
-| pi | `/skill:名字`（`src/vendors/pi/composer.ts:2`，推断） | 没有 | `read`，“Loading skill frontend-rules: …/.agents/skills/frontend-rules/SKILL.md”（实测） | `bash`（推断） |
-| deepseek | `/名字`（推断） | `skill`，参数 `{"name": "<技能名>"}`（读 `@deepseek-ai/dsh-tool-skill` 0.2.2-rc.1 源码，实测） | `read`（推断） | `bash`（推断） |
-| cursor | `/名字`（`src/vendors/cursor/composer.ts:146` 扫的就是技能目录，推断） | 没有 | `Read`、`read_file`（推断） | `Shell`、`run_terminal_cmd`（推断） |
+| claude | `/poteto-mode 这个skill更新了`（`messages.id = 61781`，实测） | `Skill`，`input: {"skill":"frontend-rules"}`，返回只有 `Launching skill: frontend-rules`（实测）；插件技能写成 `fusa:fusa-task-graph` | `Read` | `Bash` |
+| agy | `/名字`（推断，读 `src/vendors/agy/composer.ts`） | 没有 | `read_file`，路径在 `Path` | `run_command`，命令在 `CommandLine` |
+| codex | Fusa 里是 `/名字`，发出前改成 `$名字`（读代码，实测） | 没有 | 没有 | `commandExecution` |
+| pi | `/skill:名字`（`src/vendors/pi/composer.ts:2`，推断） | 没有 | `read` | `bash` |
+| deepseek | `/名字`（推断） | `skill`，参数 `{"name": "<技能名>"}`（读 `@deepseek-ai/dsh-tool-skill` 源码） | `read` | `bash` |
+| cursor | `/名字`（推断） | 没有 | `Read`、`read_file` | `Shell`、`run_terminal_cmd` |
 
-本机账本里 deepseek 没有会话，cursor 只有 4 个，这两家只能推断。
+工具跑完，实时流里带不带返回原文（2026-11-16 核对）：
 
-两个结论决定了做法：
+| 厂商 | 返回原文在哪 | 读文件工具的返回里有没有正文 | 怎么核对的 |
+| --- | --- | --- | --- |
+| claude | `user` 事件里 `tool_result` 块的 `content` | 有，每行前面是行号加制表符（`1\t---`） | `claude -p --output-format stream-json` 实跑 `Read` |
+| codex | `item/completed` 的 `item.aggregatedOutput` | 没有读文件工具；`commandExecution` 的输出原文在这里 | `codex app-server generate-ts` 生成的官方类型（`v2/ThreadItem.ts`）；本机原始记录 |
+| agy | `step_update.tool_info.output` | **没有**：`read_file` 只回 `14 lines, 310 bytes`；`run_command` 有完整输出，前面带 `Created At`、`Command output:` 几行，正文行尾是 `\r\n` | agy 1.5.9 实跑抓的流（测试夹具 `src/vendors/agy/fixtures/skill-read-stream.jsonl`） |
+| pi | `tool_execution_end` 的 `result.content[].text` | 有，不带行号 | `pi --mode rpc` 实跑 `read` |
+| deepseek | ACP `tool_call_update` 的 `content[].content.text` | 有，每行前面是 `1: `，外面包 `<content>` | 读 `@deepseek-ai/dsh-acp` 的 `toolResultUpdate`、`dsh-tool-fs` 的 `formatReadOutput`；本机没有会话，推断 |
+| cursor | ACP `tool_call_update` 的 `rawOutput`：读文件是 `{content}`，shell 是 `{exitCode, stdout, stderr}`；`content` 只放改文件的 diff | 有 | 读 `cursor-agent` 2026.11.10 的 `extractToolCallOutput`；本机没有会话，推断 |
 
-1. 只有读文件工具和 shell 命令给的是路径。claude 的 `Skill`、deepseek 的 `skill`、所有用户手打的命令只给名字。所以要有一处“名字找 `SKILL.md`”的解析，六家共用。
-2. `session_steps` 不能当记录来源。摘要截到 300 字、遮了密钥，`Read` 只留文件名，每个会话只留最近 `SESSION_STEPS_KEEP = 1_000` 条（`limits.ts:24`、`steps.ts:31`、`:105-113`）。
+现在账本收的 `agent.tool_result` 只有 `toolUseIds`，返回原文在驱动层就丢了。
+
+`session_steps` 不能当记录来源。摘要截到 300 字、遮了密钥，`Read` 只留文件名，每个会话只留最近 `SESSION_STEPS_KEEP = 1_000` 条（`limits.ts`、`steps.ts`）。
+
+### 怎么认出“读了技能”：先检验前提
+
+前两轮验收（PR #331 的两条 FAIL 评论）都栽在同一个前提上：从命令文本还原出模型读了哪个文件，就能知道它加载了哪个技能。第一轮用 `shell-quote` 栽在注释、heredoc、变量替换和 `..`；第二轮用 `tree-sitter-bash` 栽在 `cd` 之后的相对路径、子 shell 和软链。再补 cwd、子 shell、realpath，就是在仓库里写一个 shell 模拟器。
+
+检验办法：`scripts/skill-load-replay.ts` 只读打开账本和各家原始记录，拿工具真实的返回内容当事实对照（提交 `984c7933` 那一版比了三种认法）：
+
+- A：解析 shell 命令（当时的实现）。
+- B：返回内容里出现某个已知技能 `SKILL.md` 的开头。
+- C：已知技能名单加上对工具输入的简单文本匹配（输入里有 `<名字>/SKILL.md`）。
+
+项目经理的历史记录，以 B 为准，A、C 少记 / 多记的条数：
+
+| 项目经理 | B 认到 | A 少记 / 多记 | C 少记 / 多记 |
+| --- | --- | --- | --- |
+| claude | 49 | 27 / 2 | 8 / 42 |
+| codex | 21 | 4 / 0 | 4 / 14 |
+| agy | 203 | 0 / 0 | 0 / 35 |
+| pi | 0 | 0 / 0 | 0 / 5 |
+
+- A 漏掉 `cd …/skills && cat x/SKILL.md`、`for f in …` 循环、`$S/x/SKILL.md` 变量、模型去读 Claude 存下的超长输出文件；多记 `sed … | grep`（只输出了 grep 的结果）和读当时不存在的文件。
+- C 多记的是 `hub worker start <<EOF` 派活正文、`hub persona edit`、`wc -l`。
+- B 逐条核对都对。本机 91 个技能都以 `---` 加 `name: <名字>` 开头。
+
+结论：去掉“从命令文本还原文件”这个条件，看返回内容。只有一处例外：agy 的 `read_file` 在实时流里只回行数和字节数（上一节），返回里没有正文。它的路径是工具自己的结构化参数（`Path`），不是从 shell 文本里猜的，按路径认，规则见下文。
 
 ### 仓库里已经零散处理技能的地方
 
@@ -72,12 +105,12 @@ Fusa 已经把六家的工具调用统一成 `agent.tool` 事件（`name` 是厂
 
 | 做法 | 好处 | 问题 |
 | --- | --- | --- |
-| A. 账本收 `agent.tool` 和 `message.processing` 事件时，用一个共享的识别函数认（推荐） | 六家已经统一成同一种事件，`input` 是完整参数；各家差异只剩 `spec.ts` 里几项声明；和写 `session_steps` 在同一个事务里，不会漏也不会多记 | 识别函数要懂 shell 命令 |
-| B. 各家驱动各自发一个新的 `skill.loaded` 事件 | 每家能用自己最准的信号，比如 codex 的 `parsed_cmd` | 同一件事写六遍；codex 的 `parsed_cmd` 漏掉一半多行脚本，最后还是要共享的 shell 识别；以后每加一家都要记得写 |
+| A. 账本收 `agent.tool`、`agent.tool_result` 和 `message.processing` 事件时，用一个共享的识别函数认（推荐） | 六家已经统一成同一种事件；各家差异只剩 `spec.ts` 里几项声明；和写 `session_steps` 在同一个事务里，不会漏也不会多记 | `agent.tool_result` 要带上返回原文，六家驱动都要传 |
+| B. 各家驱动各自发一个新的 `skill.loaded` 事件 | 每家能用自己最准的信号 | 同一件事写六遍，以后每加一家都要记得写 |
 | C. 从 `session_steps` 的摘要里认 | 不加代码路径 | 摘要截断、遮密钥、只留文件名、每会话只留 1000 条，认不全 |
 | D. 换代时翻各家原始会话记录 | 不用实时记 | 六种格式，agy 是 sqlite 库别家读不了；用户已经否掉 |
 
-推荐 A。B 的好处在 A 里也拿得到：哪家有更准的信号，就在它的 `buildCodexToolInput` 这类已有函数里把参数补全，识别函数不变。
+推荐 A。驱动只管把返回原文按 spec 声明的字段取出来，认不认、怎么认都在共享的识别函数里。
 
 ### 记录存在哪
 
@@ -93,14 +126,28 @@ Fusa 已经把六家的工具调用统一成 `agent.tool` 事件（`name` 是厂
 
 ### 数据形状
 
-新迁移 `0029_loaded_skills.sql`（main 上 `0028_review_workers.sql` 已占了 0028）：
+**工具结果事件带上返回原文。** `src/shared/driver.ts`：
+
+```ts
+export interface AgentToolResultEvent {
+  type: "agent.tool_result";
+  toolUseIds: string[];
+  /** 工具的返回原文，按 toolUseId，最多 SKILL_LOAD_SCAN_MAX_CHARS 字。驱动拿不到的不写。 */
+  outputs?: Readonly<Record<string, string>>;
+}
+```
+
+- 只用来认技能加载。账本不存进数据库（`messages`、`session_steps` 都不写它），不进状态快照，不进给网页的任何响应。
+- 驱动按 spec 声明的字段取（下文 `skillSignals.outputField`），用共享的 `toolOutputText`（`src/vendors/_common/tool-output.ts`）摊平成文字：字符串原样；数组逐项接起来；对象取 `text`，没有就取 `content`，再没有取 `stdout`。claude 的块数组、pi 的 `{content: [...]}`、ACP 的 `[{type: "content", content: {text}}]`、cursor 的 `{content}` 和 `{stdout}` 都是这一个函数。摊平时到上限就停，超出的部分不认，事件也不会背着几兆的输出走。
+
+**记录表**，新迁移 `0029_loaded_skills.sql`（main 上 `0028_review_workers.sql` 已占了 0028）：
 
 ```sql
 CREATE TABLE loaded_skills (
   conversation_id INTEGER NOT NULL REFERENCES conversations (id) ON DELETE CASCADE,
   skill_key       TEXT    NOT NULL, -- SKILL.md 的真实路径（realpath），软链和原文件算同一个技能
   name            TEXT    NOT NULL, -- 规整后的技能名，显示用
-  path            TEXT    NOT NULL, -- 最近一次认到的路径，原样
+  path            TEXT    NOT NULL, -- 枚举技能目录时得到的路径
   source          TEXT    NOT NULL CHECK (source IN ('user', 'model')), -- 最近一次是谁加载的
   generation      INTEGER NOT NULL, -- 最近一次加载或被带进的那一代
   loaded_at       INTEGER NOT NULL, -- 最近一次真正加载的时间；被带进下一代时不改
@@ -109,38 +156,54 @@ CREATE TABLE loaded_skills (
 CREATE INDEX loaded_skills_generation ON loaded_skills (conversation_id, generation, loaded_at DESC);
 ```
 
-- 归属是项目经理的私有对话（`conversation_id`）加代数。换代本来就按对话进行，`agent_sessions.generation` 每次换代加一，换厂商也加一（`handover.ts:561`）。
+- 归属是项目经理的私有对话（`conversation_id`）加代数。换代本来就按对话进行，`agent_sessions.generation` 每次换代加一，换厂商也加一。
 - “第 N 代加载过的技能”就是 `generation = N` 的行。
 - 去重键是 `(conversation_id, skill_key)`。同一个技能再加载一次，`INSERT … ON CONFLICT DO UPDATE` 改 `path`、`source`、`generation`、`loaded_at`。仓库里 `.claude/skills` 是指向 `.agents/skills` 的软链，按真实路径去重，同一个技能不会记成两行。
-- 解析不到 `SKILL.md` 的不记。没有路径就没法在换代时读正文，记了也带不过去。
+- 只记已知技能名单里的技能（下一节）。不在名单里的不记，记了换代时也读不了。
+
+### 已知技能名单
+
+认技能、换代读正文都只用这份名单，`src/daemon/skill-files.ts` 的 `catalog(session)` 给。它枚举这些技能目录（先到先得，重复的只留一个）：
+
+1. 这个会话启动目录里的产品技能目录（`launch/<会话>/skills`，任务图手册在这里）；
+2. 工作目录和每个附加目录下，这家 `VendorSyncAdapter.skillTarget(ctx, { kind: "project" })` 给的目录，再加 `<目录>/.agents/skills`；
+3. 这家 `skillTarget(ctx, { kind: "global" })` 给的全局目录，再加 `~/.agents/skills`；
+4. 别的几家在项目和全局声明的技能目录。切换厂商以后上一家目录里的技能还要能读，模型也会去读别家目录里的技能。
+
+这份目录清单是 vendor-sync 每家必写的声明（`src/vendors/daemon-types.ts` 的 `skillTarget`）：claude 是 `.claude/skills` 和 `~/.claude/skills`，agy 全局是 `~/.gemini/config/skills`，pi 全局是 `~/.pi/agent/skills`，其余三家是 `.agents/skills`。不另起一张目录表。
+
+每个目录下每个 `<名字>/SKILL.md`，名字是合法的一段目录名（不是 `.`、`..`，不带 `/`、`\`），真实路径的文件名还是 `SKILL.md`，真实路径落在某个技能目录的真实路径里面，才进名单。`.claude/skills → ../.agents/skills` 这种整目录软链、vendor-sync 在 `~/.gemini/config/skills/<名字>` 建的逐项软链（指到 `~/.agents/skills/<名字>`）都落在技能目录里，照常能用；指到技能目录外面的软链不进名单。名单里每个技能记名字、枚举到的路径、真实路径，和从文件开头读出的“开头”：
+
+- frontmatter 开头：文件头两个非空行（`---`、`name: <名字>`）；
+- 正文开头：frontmatter 之后的头两个非空行（跳过 frontmatter 只读正文的也认）。
+
+claude 插件里的技能（如 `slack:block-kit`）在 `~/.claude/plugins/…` 下，不在名单里，不记。
+
+名单按会话缓存 `SKILL_CATALOG_TTL_MS`，换代时不用缓存、现枚举。
 
 ### 识别规则
 
-新模块 `src/shared/skill-loads.ts` 是唯一的定义，六家共用：
+新模块 `src/shared/skill-loads.ts` 是唯一的定义，六家共用。它只看名单和事件，不碰磁盘、不解析 shell：
 
-1. **从工具调用认。** 用 `step-labels.ts` 已有的合成表把工具名翻成通用动作，再按动作取参数：
-   - `skill`：技能名在 `spec.skillSignals.toolNameKeys` 声明的参数里（claude 是 `skill`；deepseek 的键名实现时实测后填）。
-   - `read`：路径在 `STEP_INPUT_KEYS` 里那几个路径键（`file_path`、`AbsolutePath`、`TargetFile`、`Path`、`path`），六家已经共用。
-   - `command`：命令在 `command` 或 `CommandLine`。用 `tree-sitter-bash`（Codex 认命令也用它，`web-tree-sitter` 跑它的 wasm）把命令解析成语法树，按脚本里的先后顺序走一遍。`sh|bash|zsh -c/-lc '<脚本>'` 和 PowerShell `-Command` 这层包装取出脚本再解析一次。一条命令是读文件的（`cat`、`head`、`tail`、`sed`、`nl`、`less`、`more`、`bat`、`Get-Content`、`gc`、`type`），它写死的参数里的技能路径就算加载。标准输出写进文件或关掉的（`>`、`>>`、`>|`、`&>`、`&>>`、`>&文件`、`>&-`）和 `sed -i` 不算，`2>/dev/null` 只丢错误输出，照样算。`ls`、`wc`、`grep`、`find`、`stat` 不读正文，不算。参数里有变量、命令替换、通配符的（如 `$S/poteto-mode/SKILL.md`）认不出，不记。`#` 注释到行尾为止；heredoc 正文是给别的程序的输入（比如 `hub worker start --stdin <<EOF` 的任务说明），命令替换、进程替换的输出给了别的命令，函数定义体这时没跑，这几处都不往里认。解析不了的部分是语法树里的 ERROR 节点，不抛错，也不往里认。
-   - 相对路径按工具参数里的 `cwd`（codex 有）或会话的工作目录解析。
-   - 子代理里的调用（`parentToolUseId` 有值）不记，和 `session_steps` 一样，那不是项目经理自己的上下文。
-2. **从用户消息认。** 一批消息开始处理（`message.processing`）时，看其中 `sender = 'user'`、`kind = 'text'` 的消息，用 `commandNameOf(text, 开头)`（`src/vendors/types.ts`，输入框也用它）取命令名，再按 `spec.skillSignals.userTriggers` 额外认 codex 的 `$名字`。记在真正处理它的那一代上；换代时被挪到新会话的消息因此记在新一代。
-3. **名字规整。** `skillNameOf(raw)`（`src/shared/skill-names.ts`）去掉命名空间：`fusa:fusa-task-graph`、`skill:frontend-rules` 都取最后一段。状态行、任务图技能的隐藏判断、这里共用这一个函数。技能名要拼进路径，只能是一段目录名：`.`、`..`、带 `/` 或 `\` 的都不认，`skillNameOf` 和 `skillNameOfFile` 都按这条给 null。
-4. **名字找路径。** `resolveSkillFile(name, session)` 按顺序在这些目录里找 `<名字>/SKILL.md`，第一个存在的就是：
-   - 这个会话启动目录里的产品技能目录（`launch/<会话>/skills`，任务图手册在这里）；
-   - 工作目录和每个附加目录下，这家 `VendorSyncAdapter.skillTarget(ctx, { kind: "project" })` 给的目录（`mode: "native"` 就是 `<目录>/.agents/skills`），再加 `<目录>/.agents/skills`；
-   - `skillTarget(ctx, { kind: "global" })` 给的全局目录，再加 `~/.agents/skills`。
+1. **工具返回内容里出现某个已知技能的开头，就算加载了。** 只看读文件（`read`）和跑命令（`command`）两类动作，动作按 `tools.actions` 翻。返回原文取前 `SKILL_LOAD_SCAN_MAX_CHARS` 字，按行切开（`\r\n` 和 `\n` 都算），每行去掉这家声明的行号前缀（`outputLinePrefix`）、行尾空白，丢掉空行；相邻两行和某个技能的开头一样，就是读了它。读了中段、输出被 `grep` 过滤、文件不存在的，返回里没有开头，不算。
+2. **返回里没有正文的读文件工具，按它的路径参数认。** 只有声明在 `readByPath` 里的工具走这条（现在只有 agy 的 `read_file`）。返回要匹配声明的“读成功”样子（agy 是 `14 lines, 310 bytes`），而且是从头读的（`StartLine` 没给或不大于 1，`ByteOffset` 没给或是 0）；路径参数按会话工作目录规整成真实路径，和名单里技能的真实路径比，相等才算。路径是工具自己的结构化参数，不是从命令文本里猜的。
+3. **原生技能工具。** 动作是 `skill` 的，技能名在 `toolNameKeys` 声明的参数里（claude 的 `Skill` 是 `skill`，deepseek 的 `skill` 是 `name`），调用那一刻按名字在名单里找。
+4. **用户手打的命令。** 一批消息开始处理（`message.processing`）时，看其中 `sender = 'user'`、`kind = 'text'` 的消息，用 `commandNameOf(text, 开头)`（`src/vendors/types.ts`，输入框也用它）取命令名，再按 `userTriggers` 额外认 codex 的 `$名字`，按名字在名单里找。记在真正处理它的那一代上。
+5. **名字规整。** `skillNameOf(raw)`（`src/shared/skill-names.ts`）去掉命名空间：`fusa:fusa-task-graph`、`skill:frontend-rules` 都取最后一段。状态行、任务图技能的隐藏判断、这里共用这一个函数。
+6. 子代理里的调用（`parentToolUseId` 有值）不记，和 `session_steps` 一样，那不是项目经理自己的上下文。
 
-   这份目录清单已经是 vendor-sync 每家必写的声明（`src/vendors/daemon-types.ts:221`），claude 是 `.claude/skills` 和 `~/.claude/skills`，agy 全局是 `~/.gemini/config/skills`，pi 全局是 `~/.pi/agent/skills`，其余三家是 `.agents/skills`。不另起一张目录表。
+调用和返回是两个事件。账本收到读文件、跑命令的 `agent.tool` 时，把工具名和参数按 `toolUseId` 先放在内存里（最多 `SKILL_LOAD_PENDING_TOOLS_MAX` 个，返回到了就取走），等 `agent.tool_result` 来了一起认。守护进程重启时还没返回的那几个认不到，这一步不补。
 
-   claude 插件里的技能（如 `slack:block-kit`）在 `~/.claude/plugins/…` 下，这份清单找不到，不记。claude 的 `system init` 事件里有插件的路径（实测），以后要补就从那里取，这次不做。
-
-**只认技能目录下的 `SKILL.md`，不认任何 `SKILL.md`。** 规则沿用 `SKILL_FILE_RE`：路径形如 `…/skills/<名字>/SKILL.md`。`skill-files.ts` 的 `locate` 在规整（拼上工作目录、`cd` 过的目录，解掉 `..`）之后再按这条核一次，名字还得是认到的那个，不然不读：`skills/../SKILL.md` 这类绕出技能目录的路径到不了磁盘。理由有三条。六家的技能目录都叫 `skills`，这是 Agent Skills 的标准布局。目录名就是技能名，用户手打和 `Skill` 工具给的名字能和它对上，同一个技能不管怎么加载都去重成一行。别处碰巧叫 `SKILL.md` 的文件（依赖包里的文档、测试夹具）不该被当成技能带进新会话。
-
-**各家差异只放在 `spec.ts` 里。** 新增一个块：
+**各家差异只放在 `spec.ts` 里。** 每家都要写一个块：
 
 ```ts
-skillSignals?: {
+skillSignals: {
+  /** 驱动从工具结果的哪个字段取返回原文（toolOutputText 摊平）。 */
+  outputField: string;
+  /** 读文件工具给返回的每一行加的行号，认之前去掉。 */
+  outputLinePrefix?: RegExp;
+  /** 返回里没有正文、按路径参数认的读文件工具：键是工具名，ok 是读成功时返回的样子，fromStart 是“从头读”的参数上限。 */
+  readByPath?: Readonly<Record<string, { ok: RegExp; fromStart?: Readonly<Record<string, number>> }>>;
   /** 用户手打调用技能的开头，默认 [composer.commandPrefix]；codex 另认 "$"。 */
   userTriggers?: readonly string[];
   /** 原生技能工具里放技能名的参数键；没有原生技能工具的不写。 */
@@ -148,14 +211,23 @@ skillSignals?: {
 };
 ```
 
-工具名到动作的翻译（`tools.actions`）和技能目录（`sync.ts` 的 `skillTarget`）是每家本来就要写的。加一家新厂商，照常写这两处，有特殊写法再填 `skillSignals`。`src/shared/skill-loads.test.ts` 的样例表按 `Record<AgentVendor, …>` 写，每家至少一条“用户手打”和一条“模型加载”，新厂商不填样例类型检查就不过。
+| 厂商 | `outputField` | `outputLinePrefix` | `readByPath` | 其余 |
+| --- | --- | --- | --- | --- |
+| claude | `content`（`tool_result` 块） | `/^\s*\d+\t/` | | `toolNameKeys: ["skill"]` |
+| codex | `aggregatedOutput`（`item`） | | | `userTriggers: ["/", "$"]` |
+| agy | `output`（`tool_info`） | | `read_file: { ok: /^\d+ lines?, \d+ bytes?$/, fromStart: { StartLine: 1, ByteOffset: 0 } }` | |
+| pi | `result`（`tool_execution_end`） | | | |
+| deepseek | `content`（`tool_call_update`） | `/^\d+: /` | | `toolNameKeys: ["name"]` |
+| cursor | `rawOutput`（`tool_call_update`） | | | |
+
+`skillSignals` 是必填的：加一家新厂商不写它类型检查就不过。`src/shared/skill-loads.test.ts` 的样例表按 `Record<AgentVendor, …>` 写，每家至少一条“用户手打”和一条“模型加载”，新厂商不填样例类型检查也不过。
 
 ### 带进新会话
 
 `switchIn` 里加一步 `carrySkills(p, conversationId, fromGeneration, toGeneration, session)`，普通换代、手动开新会话、切换厂商都走它。读盘也在这里，和 `switchIn` 已经调的 `transcriptOf(old)` 一样，是换代那一刻的最新版本。
 
 1. 取 `generation = 旧代` 的行，按 `loaded_at` 从新到旧排。
-2. 一个个读 `path`。读不到的用 `resolveSkillFile(name, 新会话)` 按名字再找一次（任务图手册在每个会话自己的启动目录里，换代后路径会变）。还是没有的，记进“找不到”名单。
+2. 现枚举新会话的已知技能名单（不用缓存），每行先按真实路径（`skill_key`）在名单里找，找不到再按名字找（任务图手册在每个会话自己的启动目录里，换代后路径会变）。名单里没有的，记进“文件已经没有了”。只读名单里的文件：读之前再核一次它的真实路径没变，从模型可控的文本里拼出来的路径一律不打开。
 3. 去掉 YAML frontmatter。单个超过 `SKILL_CARRYOVER_SKILL_MAX_CHARS` 的从前往后截，末尾写“（后面省略 N 字，全文在 <路径>）”。
 4. 累计超过 `SKILL_CARRYOVER_TOTAL_MAX_CHARS` 时，放不下的那个和之后的都不带正文，只进“没带正文”名单。不为了塞进去再截短，照 Claude Code 的做法。
 5. 带上正文的行改成 `generation = 新代`，`loaded_at` 不变，所以下一代仍按真正加载的先后排。没带上的留在旧代，不再往下传。
@@ -200,15 +272,21 @@ skillSignals?: {
 | `SKILL_CARRYOVER_TOTAL_MAX_CHARS` | `80_000` | 英文为主时约 2 万 token，和 Claude Code 合计 25000 token 相当。按 poteto-mode 加十来个 2～3 千字的原则技能算放得下 |
 | `SKILL_CARRYOVER_RECORDS_MAX` | `200` | 每个对话最多记这么多行，超了按 `loaded_at` 删最旧的。本机仓库里 59 个、用户目录里 33 个，有重名，合计不到 92 个（实测），200 够用 |
 | `SKILL_CARRYOVER_SKIPPED_LIST_MAX` | `20` | “没带正文”名单最多列的名字数 |
+| `SKILL_LOAD_SCAN_MAX_CHARS` | `64_000` | 一次工具返回最多看这么多字，驱动摊平时就截在这里，后面的不认。重放本机全部历史（项目经理和 Worker），技能开头在返回原文里最远出现在第 48,232 字（一条命令接连 `cat` 好几个技能）；Claude 的 `Bash` 输出本身在 3 万字左右截断。留了约三分之一的余量 |
+| `SKILL_CATALOG_TTL_MS` | `30_000` | 已知技能名单按会话缓存多久。新装、删掉的技能最晚 30 秒后认得到；换代时不用缓存 |
+| `SKILL_CATALOG_CACHE_MAX` | `32` | 最多缓存几个会话的名单。只有项目经理的会话会建，同时在跑的不过几个 |
+| `SKILL_CATALOG_MAX_SKILLS` | `1_000` | 一份名单最多多少个技能。本机所有技能目录合起来 91 个不同的技能 |
+| `SKILL_HEAD_READ_BYTES` | `16_384` | 建名单时每个 `SKILL.md` 只读开头这么多字节算“开头”。本机最长的 frontmatter 1,101 字节 |
+| `SKILL_LOAD_PENDING_TOOLS_MAX` | `256` | 调用发出、返回还没到的读文件和命令，内存里最多记几个。返回到了就取走；并行的工具调用一般只有几个 |
 
 - **记录条数。** 行数等于这个对话用过的不同技能数，不随消息数、代数涨。按跑一个月、3 万条消息算，每个项目经理也就几十行；就算十个项目经理都满，也只有 2000 行。每次加载只写一行，换代时多一次带索引的查询。
-- **换代时读盘。** 只读旧一代的行，一般十来个文件，最多 200 次 `stat`；正文读到合计上限就停，最多读约 8 万字。单个文件按 `SKILL_CARRYOVER_SKILL_MAX_CHARS` 的 4 倍字节封顶，防止误认到一个大文件。和 `switchIn` 里已有的 `findTranscript` 是同一量级，毫秒级。
-- **认 shell 命令。** 每次工具调用都要认，在账本事务里同步跑。`tree-sitter-bash` 的 wasm 模块加载时初始化一次，之后每次解析是同步的，语法树用完就释放。本机账本 31,076 条 shell 命令整批认一遍约 1.9 秒，每条约 60µs；连跑 10 遍常驻内存不涨（实测）。
+- **换代时读盘。** 现枚举一次名单（本机约 100 个 `SKILL.md`，每个读开头 16KB），再读旧一代的行，一般十来个文件；正文读到合计上限就停，最多读约 8 万字。单个文件按 `SKILL_CARRYOVER_SKILL_MAX_CHARS` 的 4 倍字节封顶。毫秒级。
+- **认工具返回。** 只认项目经理主会话里读文件、跑命令的返回，在账本事务里同步跑：返回按行切开，相邻两行查一张“开头 → 技能”的表，和返回长度成正比，和技能个数无关。名单 30 秒内复用缓存。重放全部历史的耗时写在 PR 里（`node scripts/skill-load-replay.ts --role all`）。
 - **开场体积。** 新会话开场现在占 77K～92K token（实测）。这一节最多多出约 2 万 token（英文技能；中文技能 1 字约 1 token，同样字数会更多），在 400K 阈值里占 5%。窗口小于 400K 的厂商当项目经理时本来就会先撞上自己的窗口（交接对话里已经说过），这一节让它早一点撞上，量级不变。
 - **清理。** 删项目经理时，`src/daemon/ledger/persona.ts:715-795` 那串按对话删的语句里加一行 `DELETE FROM loaded_skills WHERE conversation_id IN …`，外键也写了 `ON DELETE CASCADE`。归档项目经理不删，取消归档后接着用。
 - **缓存四件事。** 这张表是会随时间变多的列表：
-  1. 失效：不缓存正文，每次换代从磁盘读；文件没了当场跳过并注明。
-  2. 上限：上面四个数。
+  1. 失效：不缓存正文，每次换代从磁盘读；文件没了当场跳过并注明。名单缓存 30 秒过期，换代时现枚举。
+  2. 上限：上面的数。名单缓存有个数上限和过期时间；还没返回的工具调用有个数上限；工具返回原文不进库、不进快照、不进网页响应。
   3. 前端引用稳定：不推给网页，不涉及。
   4. 验证：实现 PR 用 pstack 的 `benchmark-checklist` 量 `switchIn` 加这一步前后的耗时、开场说明的字数，写进 PR。
 
@@ -222,32 +300,39 @@ skillSignals?: {
 4. `src/vendors/_common/composer.ts:27-31` 闭包里的 `commandNameOf`，和 `src/vendors/codex/composer.ts` 的 `rewriteCodexSkillCommand` 里另写的一份：合成 `src/vendors/types.ts` 的纯函数 `commandNameOf(text, 开头)`，输入框、codex 的 `$` 改写、记录用户调用都用它，不留三套解析。
 5. 项目经理性格设定里“每个会话开工先读 SKILL.md 全文”：合并后由项目经理用 `hub persona edit` 删掉，不再留一句叫模型重读的提示词。
 
+不再引入的：前两轮为了从命令文本还原文件加的 `shell-quote`、`tree-sitter-bash`、`web-tree-sitter`、`src/shared/shell-syntax.ts`、`skill-loads.ts` 里整套 shell 解析和它们的测试、打包时裁 `tree-sitter-bash` 的那几行，都从这个 PR 里拿掉，`AGENTS.md` 的“我们用的组件”不加它们。
+
 不删的：驱动层把命令单独写进会话（`base-driver.ts:303`、`:604`）是厂商命令行认命令的前提，和这件事无关。
 
 ### 要改的文件
 
 - `migrations/0029_loaded_skills.sql`：新表。
-- `src/shared/skill-names.ts`（新）：`SKILL_FILE_RE`、`skillNameOf`、`skillNameOfFile`。
-- `src/shared/skill-loads.ts`（新）：`toolSkillLoads(vendor, toolName, input)`、`userSkillCommandOf(vendor, text)`。纯函数，不碰磁盘。
-- `src/daemon/skill-files.ts`（新）：认到的加载落到哪个 `SKILL.md`（按名字找的目录清单、相对路径、`realpath`）、换代时读正文。守护进程按 `launchDir`、用户目录、环境变量建好传给账本（`LedgerOptions.skillFiles`），测试用临时目录里的真文件。
+- `src/shared/driver.ts`：`AgentToolResultEvent.outputs`。
+- `src/vendors/_common/tool-output.ts`（新）：`toolOutputText(value)`，按上限摊平返回原文。
+- 各家驱动（`claude/protocol.ts`、`codex/driver.ts`、`agy/driver.ts`、`pi/driver.ts`、`_common/acp/driver.ts`）：发 `agent.tool_result` 时按 `skillSignals.outputField` 带上 `outputs`。
 - `src/vendors/types.ts`、各家 `spec.ts`：`skillSignals`。
+- `src/shared/skill-names.ts`（新）：`SKILL_FILE_RE`、`skillNameOf`、`skillNameOfFile`、`isSkillName`。
+- `src/shared/skill-loads.ts`（新）：名单的形状和“开头”的算法（`skillHeads`、`createSkillCatalog`），`skillOfToolCall`、`skillsOfToolResult`、`awaitsToolResult`、`userSkillCommandOf`。纯函数，不碰磁盘。
+- `src/daemon/skill-files.ts`（新）：枚举技能目录建名单（缓存）、`atPath` 的真实路径比对、换代时读正文。守护进程按 `launchDir`、用户目录、环境变量建好传给账本（`LedgerOptions.skillFiles`），测试用临时目录里的真文件。
 - `src/daemon/ledger/loaded-skills.ts`（新）：收事件记录、`carryIn`（即上文的 `carrySkills`）、渲染那一节。
 - `src/daemon/ledger/handover.ts`：`switchIn` 调 `carrySkills`；`sessionPreambleText`、`handoverRequestText`、`sessionPreamble` 带上这一节；文件开头第 4 步的说明改成新的开场组成。
 - `src/daemon/ledger/vendor-switch-context.ts`：`buildVendorSwitchPreamble` 收 `skills`。
 - `src/daemon/ledger/persona.ts`：删项目经理时清表。
-- `src/shared/limits.ts`：四个数。
+- `src/shared/limits.ts`：上面的数。
 - `src/shared/step-labels.ts`、`src/shared/task-graph-skill.ts`、`src/vendors/_common/composer.ts`、`src/daemon/ledger/ledger.ts`：见“删掉什么”。
-- `src/shared/shell-syntax.ts`（新）：模块加载时初始化 `tree-sitter-bash` 解析器，`withShellTree(script, visit)` 解析完交给 `skill-loads.ts` 走，用完释放语法树。
-- `package.json`：加 `web-tree-sitter`、`tree-sitter-bash`（只用 wasm，它的原生编译脚本 pnpm 默认不跑，`scripts/stage-runtime-common.ts` 打包时删掉 C 源码和原生预编译），`AGENTS.md` 的“我们用的组件”同一个 PR 里补上。
+- `scripts/skill-load-replay.ts`：重放历史，直接调生产代码的识别函数，和返回内容对照。
 - 文档：`docs/background-handover-design.md` 里开场说明的组成，`docs/orchestration-skill-design.md` 第 7 节。
 
 ### 测试
 
 先提交会失败的测试，再实现：
 
-- `src/shared/skill-loads.test.ts`：每家至少一个“用户手打”和一个“模型加载”的样例被认出，用上面表里的真实参数形状：claude `Skill`、`Read`、`Bash cat`、`/poteto-mode`；agy `read_file`、`run_command`；codex `/bin/zsh -lc '…cat …/SKILL.md…'`（单行和多行脚本）、`/名字` 和 `$名字`；pi `read`、`/skill:名字`；deepseek `skill`、`read`；cursor `Read`、`Shell`。不该认的：`ls`、`wc`、`grep`、`cat > SKILL.md`、`sed -i`、不在 `skills/<名字>/` 下的 `SKILL.md`、带变量的路径、子代理里的调用。
-- `src/daemon/ledger/loaded-skills.test.ts`：软链去重；单个截断和合计裁剪（裁掉的进名单、留在旧代）；跨两代继承（第 1 代加载、第 2 代没再加载、第 3 代开场里还在）；文件缺失跳过并注明；任务图手册换了启动目录后按名字重新找到；超过 `SKILL_CARRYOVER_RECORDS_MAX` 删最旧的；删项目经理后表里没有这个对话的行。
+- `src/shared/skill-loads.test.ts`：每家至少一个“用户手打”和一个“模型加载”的样例被认出，返回原文用实时流里的真实形状：claude `Read`（带 `1\t` 行号）、`Bash`、`Skill`、`/poteto-mode`；agy `read_file`（`14 lines, 310 bytes`，按路径）、`run_command`（带元信息头、`\r\n`）；codex `commandExecution`、`/名字` 和 `$名字`；pi `read`、`/skill:名字`；deepseek `skill`、`read`（`1: ` 行号）；cursor `Read`（`rawOutput.content`）、`Shell`（`rawOutput.stdout`）。不该认的：只读中段、输出被过滤、文件不存在、超过扫描上限才出现的开头、agy 从中间读的 `read_file`、agy 读失败、名单外的路径。两份 FAIL 评论里的复现全部覆盖：`${H%% *}`、heredoc 里的模板字符串、`#` 注释后面的读取、`hub worker start --stdin <<EOF` 派活正文、`cd …/skills && cat <名字>/SKILL.md`、`(cd /tmp && ls); cat …`、`\<换行>` 续行、`Skill: "../../.."`、`skills/../SKILL.md`。
+- `src/daemon/skill-files.test.ts`：名单只收技能目录里的 `SKILL.md`；`.claude/skills → ../.agents/skills` 和逐项软链照常能用；FAIL 评论里四种软链（软链文件、软链目录、`<cwd>/skills` 指到别处、指到 `secret.txt`）都不进名单，换代读不到；`atPath` 只认真实路径相等的。
+- 各家驱动的测试：`agent.tool_result` 带上 `outputs`；agy 用实跑抓的流裁成的夹具。
+- `src/daemon/ledger/loaded-skills.test.ts`：按返回认、按路径认、调用和返回分开到；软链去重；单个截断和合计裁剪；跨两代继承；文件缺失跳过并注明；任务图手册换了启动目录后按名字重新找到；超过 `SKILL_CARRYOVER_RECORDS_MAX` 删最旧的；删项目经理后表里没有这个对话的行；返回原文不进 `messages`、`session_steps`。
 - `src/daemon/ledger/handover.test.ts`：普通换代、手动开新会话、切换厂商三条路的开场说明都带这一节，位置在说明头后面；开场说明里不再有任务图手册那一行。
+- 重放：`node scripts/skill-load-replay.ts --role all`，生产代码和返回内容对照零分歧。
 - 本机照 `AGENTS.md` 跑 `pnpm typecheck` 和这些测试文件；这次不涉及写入范围，不用跑 `src/shared/write-scope.test.ts`。
 
 ### 验收方法
@@ -271,3 +356,4 @@ skillSignals?: {
 - 每次换代多占约 2 万 token 的上下文，和交接加原话的 4 万多相比不大。
 - 用过很多技能时，只带最近的几个，其余的列个名字，要用时它自己再加载。
 - 性格设定里“每个会话开工先读全文”那句会删掉。
+- 认得更全也更准（按本机历史重放）：项目经理在 claude 上多记 27 次、codex 上多记 4 次以前漏掉的真实加载（`cd` 进技能目录再读、循环读、变量路径）；只读了中段、输出被 `grep` 过滤、文件当时不存在的，不再算加载（项目经理历史上 2 次）。

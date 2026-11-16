@@ -187,16 +187,28 @@ export interface VendorSpec<Id extends string = string> {
    */
   tools?: { actions: Readonly<Record<string, ToolAction>> };
   /**
-   * 加载技能的信号里这家特有的写法（shared/skill-loads.ts 按它认，换代时把加载过的技能带进新会话）。读文件、跑命令按 tools.actions 认，不用写这里。
-   * 不写 = 用户手打按 composer.commandPrefix 认，没有原生技能工具。
+   * 认“加载了技能”时这家特有的写法（shared/skill-loads.ts 按它认，换代时把加载过的技能带进新会话；docs/skill-carryover-design.md）。
+   * 读文件、跑命令是哪些工具按 tools.actions 认，不用写这里。必填：加一家新厂商要想清楚它的工具返回原文在哪。
    */
-  skillSignals?: {
-    /** 用户手打调用技能的开头，不写 = [composer.commandPrefix]。 */
-    userTriggers?: readonly string[];
-    /** 原生技能工具（tools.actions 里是 "skill" 的）放技能名的参数键。 */
-    toolNameKeys?: readonly string[];
-  };
+  skillSignals: SkillSignals;
   capabilities: VendorCapabilities;
+}
+
+/** 见 VendorSpec.skillSignals。 */
+export interface SkillSignals {
+  /** 驱动从工具结果的哪个字段取返回原文（claude 是 tool_result 块的 content，codex 是 item 的 aggregatedOutput……），toolOutputText 摊平成文字。 */
+  outputField: string;
+  /** 读文件工具给返回的每一行加的行号（claude Read 的 `12\t`），认之前去掉。 */
+  outputLinePrefix?: RegExp;
+  /**
+   * 返回里没有正文、只能按路径参数认的读文件工具（agy 的 read_file 只回“14 lines, 310 bytes”）。键是工具名；
+   * ok：读成功时返回的样子；fromStart：“从头读”时这些参数要么没给、要么不大于这个数（从中间读的不算加载）。
+   */
+  readByPath?: Readonly<Record<string, { ok: RegExp; fromStart?: Readonly<Record<string, number>> }>>;
+  /** 用户手打调用技能的开头，不写 = [composer.commandPrefix]。 */
+  userTriggers?: readonly string[];
+  /** 原生技能工具（tools.actions 里是 "skill" 的）放技能名的参数键。 */
+  toolNameKeys?: readonly string[];
 }
 
 /** 写 spec.ts 用：只做类型检查并把编号推成字面量类型（AgentVendor 从名单推出来）。 */

@@ -109,8 +109,13 @@ export default defineVendor({
       ToolSearch: "tool_search",
     },
   },
-  // Skill 工具：input {"skill":"frontend-rules"}，插件技能写成 "fusa:fusa-task-graph"（账本实测）
-  skillSignals: { toolNameKeys: ["skill"] },
+  skillSignals: {
+    // stream-json 的 user 事件里 tool_result 块的 content（字符串或文字块数组）；Read 的每行是“行号\t正文”（2026-11-16 claude -p 实跑）
+    outputField: "content",
+    outputLinePrefix: /^\s*\d+\t/u,
+    // Skill 工具：input {"skill":"frontend-rules"}，插件技能写成 "fusa:fusa-task-graph"（账本实测）
+    toolNameKeys: ["skill"],
+  },
   capabilities: {
     // Bash run_in_background 跑完推 task_notification 自动叫醒 agent（docs/mid-turn-messages.md 第 10.1 节）
     backgroundWake: true,

@@ -94,8 +94,12 @@ export default defineVendor({
       collabToolCall: "subagent",
     },
   },
-  // 输入框里的 /名字 发出前改成 $名字（composer.ts）；用户也能直接打 $名字
-  skillSignals: { userTriggers: ["/", "$"] },
+  skillSignals: {
+    // app-server 的 item/completed：commandExecution 的输出原文在 item.aggregatedOutput（codex app-server generate-ts 的 v2/ThreadItem.ts）
+    outputField: "aggregatedOutput",
+    // 输入框里的 /名字 发出前改成 $名字（composer.ts）；用户也能直接打 $名字
+    userTriggers: ["/", "$"],
+  },
   capabilities: {
     // 后台命令跑完不会自己开新轮叫醒 agent（docs/mid-turn-messages.md 第 10.3 节）
     backgroundWake: false,

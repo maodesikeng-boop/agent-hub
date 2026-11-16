@@ -1,9 +1,10 @@
 // 项目经理加载过的技能（loaded_skills，迁移 0029；docs/skill-carryover-design.md）：
-// - 记：applyDriverEvent 的同一个事务里，agent.tool（模型读 SKILL.md、用原生技能工具）和 message.processing（用户手打技能命令）
-//   按 shared/skill-loads.ts 认出来，落到 SKILL.md（daemon/skill-files.ts）就记一行，一个技能一行，再加载只更新；
+// - 记：applyDriverEvent 的同一个事务里，agent.tool（原生技能工具）、agent.tool_result（读文件、跑命令的返回）和
+//   message.processing（用户手打技能命令）按 shared/skill-loads.ts 和已知技能名单（daemon/skill-files.ts）认出来，一个技能一行，再加载只更新；
 // - 带：换代（handover.ts 的 switchIn，普通换代、开新会话、切换厂商都走它）时取旧一代的行，从磁盘读正文拼成开场说明里的一节；
 //   带上正文的行改成新一代，所以新一代换代时又会带上，一代代往下传。正文不缓存，每次换代现读。
 // 只记项目经理：Worker 不自动换代，总助跑完一轮就结束。
+import { LRUCache } from "lru-cache";
 import type { AgentSessionRow, ConversationId } from "../../shared/domain.ts";
 import type { DriverEvent } from "../../shared/driver.ts";
 import {
@@ -11,8 +12,16 @@ import {
   SKILL_CARRYOVER_SKILL_MAX_CHARS,
   SKILL_CARRYOVER_SKIPPED_LIST_MAX,
   SKILL_CARRYOVER_TOTAL_MAX_CHARS,
+  SKILL_LOAD_PENDING_TOOLS_MAX,
 } from "../../shared/limits.ts";
-import { toolSkillLoads, userSkillCommandOf, type SkillLoad } from "../../shared/skill-loads.ts";
+import {
+  awaitsToolResult,
+  skillNameOfToolCall,
+  skillsOfToolResult,
+  userSkillCommandOf,
+  type KnownSkill,
+  type ToolCall,
+} from "../../shared/skill-loads.ts";
 import type { SkillFiles } from "../skill-files.ts";
 import type { LedgerContext } from "./context.ts";
 
@@ -76,17 +85,20 @@ export type LedgerLoadedSkills = ReturnType<typeof createLedgerLoadedSkills>;
 export function createLedgerLoadedSkills(ctx: LedgerContext, skillFiles: SkillFiles) {
   const { db, now } = ctx;
 
-  const record = (session: AgentSessionRow, load: SkillLoad, source: SkillSource) => {
-    const found = skillFiles.locate(load, session);
-    if (found === null) return;
+  /** 调用发出、返回还没到的读文件和命令（会话 id + toolUseId）：返回到了一起认，取走就删。 */
+  const pending = new LRUCache<string, ToolCall>({ max: SKILL_LOAD_PENDING_TOOLS_MAX });
+  const pendingKey = (session: AgentSessionRow, toolUseId: string) => `${session.id}\0${toolUseId}`;
+
+  const record = (session: AgentSessionRow, skill: KnownSkill | null, source: SkillSource) => {
+    if (skill === null) return;
     db.run(
       `INSERT INTO loaded_skills (conversation_id, skill_key, name, path, source, generation, loaded_at) VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (conversation_id, skill_key) DO UPDATE SET
          name = excluded.name, path = excluded.path, source = excluded.source, generation = excluded.generation, loaded_at = excluded.loaded_at`,
       session.conversationId,
-      found.key,
-      load.name,
-      found.path,
+      skill.key,
+      skill.name,
+      skill.path,
       source,
       session.generation,
       now(),
@@ -103,25 +115,51 @@ export function createLedgerLoadedSkills(ctx: LedgerContext, skillFiles: SkillFi
   /** 在 applyDriverEvent 的事务里调。子代理里的工具调用不记（那不是项目经理自己的上下文）。 */
   const afterDriverEvent = (session: AgentSessionRow, event: DriverEvent) => {
     if (session.role !== "pm" || session.conversationId === null) return;
-    if (event.type === "agent.tool") {
-      if (event.parentToolUseId !== undefined) return;
-      for (const load of toolSkillLoads(session.vendor, event.name, event.input)) record(session, load, "model");
-      return;
-    }
-    if (event.type !== "message.processing" || event.messageIds.length === 0) return;
-    const texts = db.all<{ text: string }>(
-      `SELECT text FROM messages WHERE id IN (${event.messageIds.map(() => "?").join(", ")}) AND sender = 'user' AND kind = 'text' ORDER BY id`,
-      ...event.messageIds,
-    );
-    for (const { text } of texts) {
-      const name = userSkillCommandOf(session.vendor, text);
-      if (name !== null) record(session, { by: "name", name }, "user");
+    switch (event.type) {
+      case "agent.tool": {
+        if (event.parentToolUseId !== undefined) return;
+        const call = { name: event.name, input: event.input };
+        if (awaitsToolResult(session.vendor, event.name)) {
+          pending.set(pendingKey(session, event.toolUseId), call);
+          return;
+        }
+        const name = skillNameOfToolCall(session.vendor, call);
+        if (name !== null) record(session, skillFiles.catalog(session).named(name), "model");
+        return;
+      }
+      case "agent.tool_result": {
+        if (event.parentToolUseId !== undefined) return;
+        for (const toolUseId of event.toolUseIds) {
+          const key = pendingKey(session, toolUseId);
+          const call = pending.get(key);
+          if (call === undefined) continue;
+          pending.delete(key);
+          const output = event.outputs?.[toolUseId];
+          if (output === undefined) continue;
+          for (const skill of skillsOfToolResult(session.vendor, call, output, skillFiles.catalog(session))) record(session, skill, "model");
+        }
+        return;
+      }
+      case "message.processing": {
+        if (event.messageIds.length === 0) return;
+        const texts = db.all<{ text: string }>(
+          `SELECT text FROM messages WHERE id IN (${event.messageIds.map(() => "?").join(", ")}) AND sender = 'user' AND kind = 'text' ORDER BY id`,
+          ...event.messageIds,
+        );
+        for (const { text } of texts) {
+          const name = userSkillCommandOf(session.vendor, text);
+          if (name !== null) record(session, skillFiles.catalog(session).named(name), "user");
+        }
+        return;
+      }
+      default:
+        return;
     }
   };
 
   /**
    * 换代（handover.ts 的 switchIn，同一个事务）：旧一代加载过的技能按最近加载排，从磁盘读正文，拼成开场说明里的一节。
-   * 原路径读不到的按名字在新会话的技能目录里再找一次；合计放不下的那个和之后的只列名字。带上正文的改成新一代（loaded_at 不变），
+   * 只读新会话现枚举的名单里的文件：先按真实路径找，找不到按名字找（任务图手册换了启动目录）；合计放不下的那个和之后的只列名字。带上正文的改成新一代（loaded_at 不变），
    * 没带上的留在旧一代、不再往下传。旧一代没加载过技能是 null。
    */
   const carryIn = (conversationId: ConversationId, fromGeneration: number, next: AgentSessionRow): string | null => {
@@ -133,39 +171,34 @@ export function createLedgerLoadedSkills(ctx: LedgerContext, skillFiles: SkillFi
     const carried: { row: LoadedSkillRow; body: string }[] = [];
     const skipped: LoadedSkillRow[] = [];
     const missing: LoadedSkillRow[] = [];
-    /** 带上的真实路径：原路径没了按名字找回来的，可能就是后面另一行记的那个文件，同一个文件只带一份。 */
+    /** 带上的真实路径：原来那个没了按名字找回来的，可能就是后面另一行记的那个文件，同一个文件只带一份。 */
     const carriedKeys = new Set<string>();
+    const catalog = rows.length === 0 ? null : skillFiles.catalog(next, { fresh: true });
     let total = 0;
     for (const row of rows) {
       if (skipped.length > 0) {
         skipped.push(row);
         continue;
       }
-      let at = { path: row.path, key: row.skill_key };
-      let text = skillFiles.read(at.path);
-      if (text === null) {
-        const found = skillFiles.locate({ by: "name", name: row.name }, next);
-        text = found === null ? null : skillFiles.read(found.path);
-        if (found !== null) at = found;
-      }
-      if (text === null) {
+      const skill = catalog?.byKey(row.skill_key) ?? catalog?.named(row.name) ?? null;
+      const text = skill === null ? null : skillFiles.read(skill);
+      if (skill === null || text === null) {
         missing.push(row);
         continue;
       }
-      if (carriedKeys.has(at.key)) continue;
-      const body = clip(bodyOf(text), at.path);
+      if (carriedKeys.has(skill.key)) continue;
+      const body = clip(bodyOf(text), skill.path);
       if (total + body.length > SKILL_CARRYOVER_TOTAL_MAX_CHARS) {
         skipped.push(row);
         continue;
       }
       total += body.length;
-      carriedKeys.add(at.key);
-      const moved = { ...row, path: at.path };
-      carried.push({ row: moved, body });
+      carriedKeys.add(skill.key);
+      carried.push({ row: { ...row, path: skill.path }, body });
       db.run(
         "UPDATE OR REPLACE loaded_skills SET skill_key = ?, path = ?, generation = ? WHERE conversation_id = ? AND skill_key = ?",
-        at.key,
-        at.path,
+        skill.key,
+        skill.path,
         next.generation,
         conversationId,
         row.skill_key,

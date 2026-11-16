@@ -279,6 +279,7 @@ describe("VendorSpec models.flags 可选适配", () => {
       failure: {
         serviceName: "ACP Demo",
       },
+      skillSignals: { outputField: "content" },
       capabilities: {
         backgroundWake: false,
         readonly: "os_sandbox",

@@ -428,7 +428,7 @@ export const VENDOR_DAEMONS: Readonly<Record<AgentVendor, VendorDaemon>> = Objec
 | 模型简称 | 可选 `models.shortName` | — | 原样显示完整模型名 | `modelShortLabel` |
 | 启动专属文件 | 可选 `launchFiles` | — | 不生成 | — |
 
-**最小可跑的新厂商** = `spec.ts`（必需字段，capabilities 全写保守值：`backgroundWake: false`、`readonly: "os_sandbox"`、`resumeRebakesSystemPrompt: false`）+ `daemon.ts`（只有 `createDriver`）。能派项目经理和 Worker、能恢复会话、能只读（有 OS 沙箱的机器上）、能换会话（本会话写交接），下拉里是打包名单。
+**最小可跑的新厂商** = `spec.ts`（必需字段；`skillSignals.outputField` 写工具返回原文在结果里的哪个字段，见 `docs/skill-carryover-design.md`；capabilities 全写保守值：`backgroundWake: false`、`readonly: "os_sandbox"`、`resumeRebakesSystemPrompt: false`）+ `daemon.ts`（只有 `createDriver`）。能派项目经理和 Worker、能恢复会话、能只读（有 OS 沙箱的机器上）、能换会话（本会话写交接），下拉里是打包名单。
 
 ---
 
@@ -529,7 +529,7 @@ export const VENDOR_DAEMONS: Readonly<Record<AgentVendor, VendorDaemon>> = Objec
 
 ```text
 src/vendors/foo/
-  spec.ts          必需：defineVendor({ id: "foo", label, cli: { command: "foo", envVar: "AGENT_HUB_FOO", loginCommand }, home, models, composer, prompt, failure, handover, capabilities })
+  spec.ts          必需：defineVendor({ id: "foo", label, cli: { command: "foo", envVar: "AGENT_HUB_FOO", loginCommand }, home, models, composer, prompt, failure, handover, skillSignals, capabilities })
   daemon.ts        必需：export default defineVendorDaemon({ createDriver })；有就加 catalog / composer / quota / forkers / transcriptPath
   driver.ts        必需：实现 Driver（继承 BaseSessionDriver，只写 foo 的协议翻译）
   paths.ts         有 fallbackPaths 或配置目录时提供；只在守护进程侧引用，不反向引用 daemon.ts/daemon-registry.ts
