@@ -29,6 +29,7 @@ import {
   REPORT_END,
   REPORT_START,
   sentFilesOf,
+  sentFilesOfDeliverables,
   systemEventOf,
   systemNoticeText,
   workerEventOf,
@@ -36,6 +37,7 @@ import {
   workerPickOf,
   type AgentVendor,
   type ConversationId,
+  type Deliverable,
   type ExtractedAskCard,
   type Message,
   type MessageId,
@@ -58,6 +60,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/colla
 import { Input } from "../ui/input.tsx";
 import { AttachmentList } from "./Attachments.tsx";
 import { Avatar } from "./Avatar.tsx";
+import { DeliverableFiles } from "./Deliverables.tsx";
 import { WorkerPickTag } from "./WorkerPickTag.tsx";
 import { COPIED_RESET_MS } from "./CodeBlock.tsx";
 import { Markdown } from "./Markdown.tsx";
@@ -158,11 +161,13 @@ function splitAskQuestionAndContext(raw: string): { title: string; context: stri
 function AskCard({
   card,
   files,
+  deliverables,
   messageId,
   onAnswerAsk,
 }: {
   card: ExtractedAskCard;
   files: ReturnType<typeof sentFilesOf>;
+  deliverables: readonly Deliverable[];
   messageId: MessageId;
   onAnswerAsk?: MessageActions["onAnswerAsk"];
 }) {
@@ -230,6 +235,7 @@ function AskCard({
           <Markdown text={cardContext} files={files} messageId={messageId} />
         </div>
       )}
+      <DeliverableFiles deliverables={deliverables} className="mt-2" />
       {hasOptions && (
         <div className="mt-3 flex flex-col gap-1.5" role="group" aria-label="Options">
           {card.options.map((opt, i) => {
@@ -315,6 +321,8 @@ function AskCard({
   );
 }
 
+const NO_DELIVERABLES: readonly Deliverable[] = [];
+
 /** agent 说的一段文字（Markdown）。hub ask 问你的不另挂“等你确定”标签：右栏已经列着，点过去会高亮这一条。 */
 const AgentText = memo(function AgentText({
   message,
@@ -325,8 +333,16 @@ const AgentText = memo(function AgentText({
   highlighted: boolean;
   onAnswerAsk?: MessageActions["onAnswerAsk"];
 }) {
-  // agent 发来的文件：meta 没变就是同一个数组，Markdown 不用重建插件
-  const files = useMemo(() => sentFilesOf(message), [message.meta]);
+  // 提问卡下面列的文件（hub ask --file、检查点卡带的步骤交付物）
+  const deliverables = useMemo(() => askOf(message)?.deliverables ?? NO_DELIVERABLES, [message.sender, message.meta]);
+  // agent 发来的文件：meta 没变就是同一个数组，Markdown 不用重建插件。正文里写了交付物的同一个链接，也换成能点开的文件
+  const files = useMemo(() => {
+    const own = sentFilesOf(message);
+    if (deliverables.length === 0) return own;
+    const hrefs = new Set(own.map((f) => f.href));
+    const extra = sentFilesOfDeliverables(deliverables).filter((f) => !hrefs.has(f.href));
+    return extra.length === 0 ? own : [...own, ...extra];
+  }, [message.meta, deliverables]);
   const askCard = useMemo<ExtractedAskCard | null>(() => {
     const extracted = extractAskCard(message);
     if (extracted !== null) return extracted;
@@ -349,10 +365,11 @@ const AgentText = memo(function AgentText({
       data-highlighted={highlighted ? "true" : undefined}
     >
       {askCard ? (
-        <AskCard card={askCard} files={files} messageId={message.id} onAnswerAsk={onAnswerAsk} />
+        <AskCard card={askCard} files={files} deliverables={deliverables} messageId={message.id} onAnswerAsk={onAnswerAsk} />
       ) : (
         <div className="w-full min-w-0 text-body leading-relaxed">
           <Markdown text={displayText(message.text)} files={files} messageId={message.id} />
+          <DeliverableFiles deliverables={deliverables} className="mt-2" />
         </div>
       )}
     </article>

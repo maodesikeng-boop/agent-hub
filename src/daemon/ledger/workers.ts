@@ -25,6 +25,7 @@ import { normalizeWorkerTitle, systemMessageDedupeKey, utf8Bytes, workerMessageD
 import type {
   AgentSessionRow,
   ConversationId,
+  Message,
   MessageId,
   PmId,
   PmMode,
@@ -197,6 +198,9 @@ export interface EndedWorktreeCandidate {
 
 export type LedgerWorkers = ReturnType<typeof createLedgerWorkers>;
 
+/** 汇报所在的那条 agent 文字消息：解析汇报用 text，认“文件”栏的交付物用 id 和 meta.files。 */
+export type ReportMessage = Pick<Message, "id" | "text" | "meta">;
+
 export interface LedgerWorkersTaskGraphHooks {
   prepareWorkerBind: (pmId: PmId, nodeKey: string, graphId?: number) => WorkerBindTarget;
   bindWorkerStartedIn: (
@@ -211,7 +215,7 @@ export interface LedgerWorkersTaskGraphHooks {
     parsed: ParsedWorkerReport,
     rawBody: string,
     forcedNote: string | null,
-    opts?: { hasPendingFollowup?: boolean },
+    opts?: { hasPendingFollowup?: boolean; reportMessage?: ReportMessage | null },
   ) =>
     | { handled: false }
     | { handled: true; outcome: "completed"; wakePmWithReport: boolean; completeStep: () => void }
@@ -1364,23 +1368,26 @@ export function createLedgerWorkers(
   const lastAgentMessageId = (sessionId: SessionId, turnStart: number): MessageId | null =>
     db.get<{ id: number | null }>(`SELECT max(id) AS id FROM messages WHERE session_id = ? AND sender = 'agent' AND id > ?`, sessionId, turnStart)!.id;
 
-  /** 从 turnStart 起这个会话最后一段 agent 文字；没有是空串。 */
-  const lastAgentText = (sessionId: SessionId, turnStart: number): string =>
-    db.get<{ text: string }>(
-      `SELECT text FROM messages WHERE session_id = ? AND sender = 'agent' AND kind = 'text' AND id > ? ORDER BY id DESC LIMIT 1`,
+  /** 从 turnStart 起这个会话最后一段 agent 文字（汇报所在的那条，meta.files 是它存好的副本）；没有是 null。 */
+  const lastAgentTextMessage = (sessionId: SessionId, turnStart: number): ReportMessage | null => {
+    const row = db.get<{ id: number; text: string; meta: string | null }>(
+      `SELECT id, text, meta FROM messages WHERE session_id = ? AND sender = 'agent' AND kind = 'text' AND id > ? ORDER BY id DESC LIMIT 1`,
       sessionId,
       turnStart,
-    )?.text ?? "";
+    );
+    return row === undefined ? null : { id: row.id, text: row.text, meta: row.meta === null ? null : (JSON.parse(row.meta) as Record<string, unknown>) };
+  };
 
   /** 按格式解析这一轮最后的文字，一行 report 交给项目经理；note 不是 null 就加在交给它的正文前面。 */
   const insertReport = (
     p: Pending,
     worker: WorkerDbRow,
     turnMessageId: MessageId,
-    text: string,
+    reportMessage: ReportMessage | null,
     note: string | null = null,
     opts?: { hasPendingFollowup?: boolean },
   ) => {
+    const text = reportMessage?.text ?? "";
     const parsed = parseWorkerReport(text);
     const body = text.trim() === "" ? NO_REPLY_TEXT : text;
     const status: WorkerLineStatus = parsed.kind === "ok" ? parsed.report.status : "unformatted";
@@ -1391,7 +1398,7 @@ export function createLedgerWorkers(
       parsed,
       body,
       note,
-      opts,
+      { ...opts, reportMessage },
     );
     if (graphHandling?.handled === true) {
       if (graphHandling.outcome === "completed") {
@@ -1457,7 +1464,7 @@ export function createLedgerWorkers(
     if (turnMessageId === null) return;
     if (event.reason === "interrupt") return insertTurnFailed(p, worker, turnMessageId, [], TURN_STOPPED);
     if (event.reason === "crash" || event.reason === "startup_failed") return insertTurnFailed(p, worker, turnMessageId, [], exitFailureReason(event));
-    insertReport(p, worker, turnMessageId, lastAgentText(session.id, awaiting.turnStart), awaiting.background ? backgroundKilledNote(event.reason) : null);
+    insertReport(p, worker, turnMessageId, lastAgentTextMessage(session.id, awaiting.turnStart), awaiting.background ? backgroundKilledNote(event.reason) : null);
   };
 
   /** 一轮开始了却没在计时（用户直接发的话、claude 自己开的一轮）：按默认时长计时。已经在计时的（含重启后恢复的）不动。 */
@@ -1568,12 +1575,12 @@ export function createLedgerWorkers(
       return;
     }
     // 这一轮最后一段文字：这一轮开始之后、这个会话的 agent 文字里最新的一条；没有就是“没有文字回复”
-    const text = lastAgentText(session.id, turnStart);
+    const reportMessage = lastAgentTextMessage(session.id, turnStart);
     // 自己开的一轮只有工具调用、没有文字：没什么可汇报的
-    if (outcome.turnMessageId === null && text.trim() === "") return;
+    if (outcome.turnMessageId === null && (reportMessage?.text ?? "").trim() === "") return;
     // 只压缩了上下文（用户发的 /compact）、没有任何 agent 消息的一轮：不汇报，对话里那行“已压缩上下文”照留
     if (onlyManualCompact(session, turnStart)) return;
-    insertReport(p, worker, turnMessageId, text, null, { hasPendingFollowup });
+    insertReport(p, worker, turnMessageId, reportMessage, null, { hasPendingFollowup });
   };
 
   /**
@@ -1595,7 +1602,7 @@ export function createLedgerWorkers(
         if (worker === null || worker.status === "ended") continue;
         const turnMessageId = lastAgentMessageId(wait.session_id, wait.turn_start);
         if (turnMessageId === null) continue;
-        insertReport(p, worker, turnMessageId, lastAgentText(wait.session_id, wait.turn_start), backgroundKilledNote("restart"));
+        insertReport(p, worker, turnMessageId, lastAgentTextMessage(wait.session_id, wait.turn_start), backgroundKilledNote("restart"));
       }
     });
 

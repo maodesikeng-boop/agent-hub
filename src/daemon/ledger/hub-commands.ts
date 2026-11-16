@@ -7,6 +7,10 @@ import type { AgentSessionRow, PmId, PmMode, SessionId } from "../../shared/doma
 import { ASK_CARD_TELL_USER, ASK_CARD_WHERE, hubCommandAllowed } from "../../shared/hub.ts";
 import type { HubArgs, HubCommand, HubResult, HubVendorModels, ProjectCard } from "../../shared/hub.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
+import { HUB_FILE_ARGS_MAX } from "../../shared/limits.ts";
+import type { HubFileArg } from "../../shared/deliverables.ts";
+import type { SentFile } from "../../shared/sent-files.ts";
+import { deliverablesOfFileArgs, fileArgsProblem } from "../deliverables.ts";
 import { HUB_COMMAND, LOG_PREFIX } from "../../shared/names.ts";
 import type { HubCallContext } from "../../shared/ledger.ts";
 import { AGENT_VENDORS, bundledModelCatalog, effortsFor, isAgentVendor } from "../../shared/vendors.ts";
@@ -20,6 +24,7 @@ import type { LedgerPersona } from "./persona.ts";
 import type { LedgerProjects } from "./projects.ts";
 import type { LedgerRouter } from "./router.ts";
 import type { LedgerSchedules } from "./schedules.ts";
+import type { LedgerSentFiles } from "./sent-files.ts";
 import type { LedgerTaskGraphs } from "./task-graphs.ts";
 import type { createLedgerWorkerView } from "./worker-view.ts";
 import type { LedgerWorkers } from "./workers.ts";
@@ -43,6 +48,8 @@ const askArgsSchema = z.object({
   graphId: z.number().int().positive().optional(),
   replaceItemId: z.number().int().positive().optional(),
 });
+
+const fileArgsSchema = z.array(z.object({ label: z.string().nullable(), path: z.string() })).optional();
 
 const recordArgsSchema = z.record(z.string(), z.unknown());
 
@@ -120,6 +127,7 @@ export function createLedgerHubCommands(
   workerView: ReturnType<typeof createLedgerWorkerView>,
   router: LedgerRouter,
   taskGraphs: LedgerTaskGraphs,
+  sentFiles: LedgerSentFiles,
   /** 任务图手册那一行（task-graph-skill.ts 的 taskGraphManualNote，按调用的会话填路径）。 */
   taskGraphManual: (sessionId: SessionId) => string = () => "",
 ) {
@@ -134,6 +142,20 @@ export function createLedgerHubCommands(
       if (note !== "" && error instanceof LedgerRequestError) throw new LedgerRequestError(error.code, `${error.message}\n${note}`);
       throw error;
     }
+  };
+  /**
+   * hub ask / router report 的 --file：先查个数，再按这个会话能分享的文件夹存副本；有一个没存下就整条拒绝（卡片不挂出来），说清是哪个文件、为什么。
+   */
+  const sharedFileArgs = (caller: AgentSessionRow, raw: unknown): { args: HubFileArg[]; files: SentFile[] } | undefined => {
+    const parsed = fileArgsSchema.safeParse(raw);
+    if (!parsed.success) throw fail("invalid", "--file 要写成 [标签=]路径");
+    const args = parsed.data ?? [];
+    if (args.length === 0) return undefined;
+    if (args.length > HUB_FILE_ARGS_MAX) throw fail("invalid", `--file 最多 ${HUB_FILE_ARGS_MAX} 个`);
+    const files = sentFiles.filesForArgs(caller, args);
+    const problem = fileArgsProblem(files);
+    if (problem !== null) throw fail("invalid", problem);
+    return { args, files };
   };
   const { pmRow, pmSession, getPersona, editPersonaChecked, assertPmNotArchived } = persona;
   const { activeProjectOf, projectCard, createProjectIn, attachIn, detachIn, setupIn } = projects;
@@ -235,6 +257,7 @@ export function createLedgerHubCommands(
         const parsed = askArgsSchema.safeParse(args);
         if (!parsed.success) throw fail("invalid", "要问用户的话不能是空的");
         const { text, options, recommended, node, graphId, replaceItemId } = parsed.data;
+        const fileArgs = sharedFileArgs(caller, (args as HubArgs<"ask">).files);
         if (graphId !== undefined && (node === undefined || node.trim() === "")) {
           throw fail("invalid", "--graph 要配合 --node <步骤> 一起用");
         }
@@ -246,6 +269,7 @@ export function createLedgerHubCommands(
             ...(graphId !== undefined ? { graphId } : {}),
             ...(options !== undefined ? { options } : {}),
             ...(recommended !== undefined ? { recommended } : {}),
+            ...(fileArgs !== undefined ? { fileArgs } : {}),
           });
         }
         let normalizedOptions: string[] | undefined;
@@ -273,6 +297,7 @@ export function createLedgerHubCommands(
         router.prepareIndependentAskIn(p, caller.pmId, replaceItemId);
         const message = messages.insertAskMessage(p, caller, text, normalizedOptions, {
           ...(resolvedRecommended !== undefined ? { recommended: resolvedRecommended } : {}),
+          ...(fileArgs !== undefined ? { fileArgs } : {}),
           skipRouterBridge: true,
         });
         const item = router.bridgeAskIn(p, caller, message, normalizedOptions, { replaceItemId });
@@ -291,8 +316,11 @@ export function createLedgerHubCommands(
         return schedules.resumeIn(p, caller, args as HubArgs<"schedule.resume">);
       case "schedule.remove":
         return schedules.removeIn(p, caller, args as HubArgs<"schedule.remove">);
-      case "router.report":
-        return router.reportIn(p, caller, args as HubArgs<"router.report">);
+      case "router.report": {
+        const { files: rawFiles, ...rest } = args as HubArgs<"router.report">;
+        const fileArgs = sharedFileArgs(caller, rawFiles);
+        return router.reportIn(p, caller, rest, fileArgs === undefined ? [] : deliverablesOfFileArgs(fileArgs.args, fileArgs.files, null));
+      }
       case "router.note":
         return router.noteIn(p, caller, args as HubArgs<"router.note">);
       case "graph.create":

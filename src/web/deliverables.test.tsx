@@ -349,11 +349,11 @@ describe("四处入口", () => {
       installFleet(snapshotWith({ router: { ...emptyRouterSlice(), items: [item] }, activeTaskGraphs: [gateGraph()] }));
       await openRouter();
       const tray = await screen.findByRole("region", { name: "Needs You" });
-      const gateCard = await within(tray).findByRole("article", { name: "请确认步骤「实现」的结果" });
-      expect(within(gateCard.querySelector<HTMLElement>("[data-deliverables]")!).getByRole("button", { name: "录屏" })).toBeInTheDocument();
-      await user.click(within(tray).getByRole("button", { name: /方案标准改好了，请验收/ }));
       const itemCard = await within(tray).findByRole("article", { name: "方案标准改好了，请验收" });
       expect(within(itemCard.querySelector<HTMLElement>("[data-deliverables]")!).getByRole("button", { name: "验收结论" })).toBeInTheDocument();
+      await user.click(within(tray).getByRole("button", { name: /请确认步骤「实现」的结果/ }));
+      const gateCard = await within(tray).findByRole("article", { name: "请确认步骤「实现」的结果" });
+      expect(within(gateCard.querySelector<HTMLElement>("[data-deliverables]")!).getByRole("button", { name: "录屏" })).toBeInTheDocument();
     });
 
     it("总助简报：deliverables 列在正文下面，链接行只剩网址、Worker、对话", async () => {

@@ -9,7 +9,9 @@ import { cn } from "../lib/utils.ts";
 import type { FleetDecisionEntry } from "../selectors.ts";
 import { Button } from "../ui/button.tsx";
 import { Input } from "../ui/input.tsx";
+import { DeviceScopeOf } from "../device-scope.tsx";
 import { Avatar } from "./Avatar.tsx";
+import { DeliverableFiles } from "./Deliverables.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { RowError } from "./SettingsList.tsx";
 
@@ -119,6 +121,11 @@ export const RouterDecisionCard = memo(function RouterDecisionCard({
         <p className="mt-1 text-xs text-muted-foreground">
           {blockedCount === 1 ? "1 downstream step waiting" : `${blockedCount} downstream steps waiting`}
         </p>
+      )}
+      {decision.deliverables !== undefined && (
+        <DeviceScopeOf deviceKey={entry.deviceKey}>
+          <DeliverableFiles deliverables={decision.deliverables} className="mt-2" />
+        </DeviceScopeOf>
       )}
 
       {decision.options.length > 0 && (

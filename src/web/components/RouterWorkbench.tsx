@@ -21,6 +21,7 @@ import {
   type PostRouterCommandTarget,
 } from "../../shared/index.ts";
 import { localClient, type HubClient } from "../client.ts";
+import { FleetDeviceScopes, type DeviceScopeLookup } from "../device-scope.tsx";
 import type { ComposerSource, MenuItem } from "../composer-suggest.ts";
 import { submitDecision } from "../decision-actions.ts";
 import { LOCAL_DEVICE, isReadOnly, type DeviceView } from "../devices.ts";
@@ -276,6 +277,17 @@ export function RouterWorkbench({
     const localDevice = devices.find((d) => d.key === LOCAL_DEVICE) ?? devices[0];
     return localDevice?.state.router.settings ?? DEFAULT_ROUTER_SETTINGS;
   }, [devices]);
+
+  // 拍板卡、简报里的文件按条目所在设备取（DeviceScopeOf）。查找函数引用不变：设备状态每次推送都换新数组，不让卡片跟着重画
+  const devicesRef = useRef(devices);
+  devicesRef.current = devices;
+  const deviceScopeLookup = useCallback<DeviceScopeLookup>(
+    (deviceKey) => {
+      const device = devicesRef.current.find((d) => d.key === deviceKey);
+      return device === undefined ? null : { client: clientForDevice(deviceKey), server: device.state.server };
+    },
+    [clientForDevice],
+  );
 
   // 待拍板乐观隐藏、备注草稿、错误回滚与当前选中展开项（随活跃集合裁剪，严格有界）
   const [hiddenDecisionTokens, setHiddenDecisionTokens] = useState<Readonly<Record<string, string>>>({});
@@ -602,61 +614,63 @@ export function RouterWorkbench({
   }, [selectedTarget, view.multiDevice]);
 
   return (
-    <FileDropZone className="flex min-h-0 flex-1 flex-col" onFiles={staging.add}>
-      <header
-        data-window-drag
-        className="flex h-16 min-w-0 shrink-0 items-center justify-between gap-3 overflow-hidden border-b border-line pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]"
-      >
-        <div className="flex min-w-0 shrink-0 items-center gap-2.5">
-          {leading}
-          <KnifeAvatar size={28} />
-          <h1 className="truncate text-title font-semibold text-foreground">Router</h1>
-        </div>
-        <RouterModelPicker
-          settings={localSettings}
+    <FleetDeviceScopes lookup={deviceScopeLookup}>
+      <FileDropZone className="flex min-h-0 flex-1 flex-col" onFiles={staging.add}>
+        <header
+          data-window-drag
+          className="flex h-16 min-w-0 shrink-0 items-center justify-between gap-3 overflow-hidden border-b border-line pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]"
+        >
+          <div className="flex min-w-0 shrink-0 items-center gap-2.5">
+            {leading}
+            <KnifeAvatar size={28} />
+            <h1 className="truncate text-title font-semibold text-foreground">Router</h1>
+          </div>
+          <RouterModelPicker
+            settings={localSettings}
+            mobile={mobile}
+            onManageProviders={onManageProviders}
+          />
+        </header>
+
+        {notices}
+
+        <RouterNeedsYouTray
+          decisions={visibleDecisions}
           mobile={mobile}
-          onManageProviders={onManageProviders}
+          multiDevice={view.multiDevice}
+          decisionNotes={decisionNotes}
+          decisionErrors={decisionErrors}
+          onNoteChange={handleNoteChange}
+          onSubmit={handleDecisionSubmit}
+          onOpenConversation={onOpenConversation}
+          selectedKey={selectedDecisionKey}
+          onSelectKey={setSelectedDecisionKey}
         />
-      </header>
 
-      {notices}
-
-      <RouterNeedsYouTray
-        decisions={visibleDecisions}
-        mobile={mobile}
-        multiDevice={view.multiDevice}
-        decisionNotes={decisionNotes}
-        decisionErrors={decisionErrors}
-        onNoteChange={handleNoteChange}
-        onSubmit={handleDecisionSubmit}
-        onOpenConversation={onOpenConversation}
-        selectedKey={selectedDecisionKey}
-        onSelectKey={setSelectedDecisionKey}
-      />
-
-      <RouterStream
-        stream={stream}
-        selfId={resolvedSelfId}
-        pendingTurns={pendingTurns}
-        hasDecisions={visibleDecisions.length > 0}
-        clientForDevice={clientForDevice}
-        onRetryUnsent={handleRetryUnsent}
-        onOpenConversation={onOpenConversation}
-        onOpenWorker={onOpenWorker}
-      />
-
-      <div className="chat-column pointer-events-none relative z-10 -mt-6.5 w-full shrink-0 composer-dock *:pointer-events-auto">
-        <DraftComposer
-          draft={draft}
-          staging={staging}
-          source={composerSource}
-          placeholder={mobile ? "Tell Router…" : "Tell Router, or type @ to pick a project…"}
-          autoFocus={!mobile}
-          leadingChip={targetChip}
-          onSelectTarget={handleSelectTarget}
-          onSend={handleComposerSend}
+        <RouterStream
+          stream={stream}
+          selfId={resolvedSelfId}
+          pendingTurns={pendingTurns}
+          hasDecisions={visibleDecisions.length > 0}
+          clientForDevice={clientForDevice}
+          onRetryUnsent={handleRetryUnsent}
+          onOpenConversation={onOpenConversation}
+          onOpenWorker={onOpenWorker}
         />
-      </div>
-    </FileDropZone>
+
+        <div className="chat-column pointer-events-none relative z-10 -mt-6.5 w-full shrink-0 composer-dock *:pointer-events-auto">
+          <DraftComposer
+            draft={draft}
+            staging={staging}
+            source={composerSource}
+            placeholder={mobile ? "Tell Router…" : "Tell Router, or type @ to pick a project…"}
+            autoFocus={!mobile}
+            leadingChip={targetChip}
+            onSelectTarget={handleSelectTarget}
+            onSend={handleComposerSend}
+          />
+        </div>
+      </FileDropZone>
+    </FleetDeviceScopes>
   );
 }

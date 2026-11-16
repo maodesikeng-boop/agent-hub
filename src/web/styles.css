@@ -16,6 +16,8 @@
   --color-accent: var(--accent);
   --color-border: var(--border);
   --color-ring: var(--ring);
+  /* 行内链接（第 15 条的蓝色链接字）：text-link、decoration-link 从这里取 */
+  --color-link: var(--link);
   /* 用户气泡（docs/ui-standard.md 第 4 条）：当前强调色掺白的浅果冻底 + 前景色字，强调色本身只留给发送键和小圆点 */
   --color-bubble-me: color-mix(in srgb, var(--primary) var(--mix-bubble-me), #ffffff);
   --color-bubble-me-foreground: var(--foreground);

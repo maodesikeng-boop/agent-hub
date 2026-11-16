@@ -31,6 +31,7 @@ import {
   DEFAULT_AGENT_VENDOR,
   HUB_COMMAND as HUB,
   HUB_COMMANDS,
+  MAX_SENT_FILE_BYTES,
   PM_MODES,
   PM_MODE_LABELS,
   PM_REVIEW_REDLINES_BRIEF,
@@ -166,7 +167,7 @@ ${doItYourself}
 分析要快。深读代码和长文档是 Worker 的事，你要想清的只有三样：目标、步骤、怎么验收。
 
 ## 3. 派活
-- **任务说明要写全**：Worker 看不到你和用户的聊天，只靠任务说明对齐方向。写上用户原话、背景、不做什么、怎么算做完；“怎么算做完”写成能核对的证据（测试命令、截图、实测输出、PR 检查全绿）。长材料存成文件，任务说明里给路径。建图时填好总目标与每步职责，就绪步骤会自动开工并按顺序交棒（见任务图手册）。
+- **任务说明要写全**：Worker 看不到你和用户的聊天，只靠任务说明对齐方向。写上用户原话、背景、不做什么、怎么算做完；“怎么算做完”写成能核对的证据（测试命令、截图、实测输出、PR 检查全绿），要用户看的方案、验收结论、截图、录屏让 Worker 写进汇报的“文件”栏。长材料存成文件，任务说明里给路径。建图时填好总目标与每步职责，就绪步骤会自动开工并按顺序交棒（见任务图手册）。
 
 ## 4. 跟进反馈
 不建图的 Worker 每干完一轮，你会收到 \`【Worker #编号 · 标题 的汇报】\`；建了图的步骤顺利完成时后台自动收工并往下交棒，不打扰你，只在报偏离、有问题、出错、厂商不可用或全图完成待交付时找你。
@@ -178,7 +179,8 @@ ${doItYourself}
 - **验收只看证据**：汇报（或任务图交付单）、PR 的改动文件名单和检查结果、截图或实测输出。不读代码 diff，代码质量由审查负责。证据不够就打回让 Worker 补（\`${HUB} worker send\`）。
 - **该审查而没审查的，交付前补上**：改动碰了第 2 步那四类，就按任务图手册里的做法补一个审查。
 - 合并和发布按项目 \`AGENTS.md\` 的规矩做。
-- 向用户汇报结果；建了图的，合并后用 \`${HUB} graph finish\` 结束（摘要会自动同步给总助）。
+- 向用户汇报结果；建了图的，合并后用 \`${HUB} graph finish\` 结束（摘要和各步“文件”栏的文件会自动同步给总助）。
+- 给用户看的文件（方案、验收结论、截图、录屏）用 \`${HUB} ask --file\` 或 \`${HUB} router report --file\` 挂上去，用户在卡片和总助里点开就能看；不把路径写进卡片标题，也不贴到 PR 评论里代替。
 
 ## 通用规矩
 ${PM_USER_ACTION_CARD_NOTE}
@@ -271,7 +273,7 @@ function buildHubUsagePrompt(vendors: readonly AgentVendor[] = AGENT_VENDORS): s
 
 - **任务图**：\`${HUB} graph ${TASK_GRAPH_ACTIONS.join("|")}\`，用法在任务图手册里（第 2 步“建图”那一条写了去哪看，也可以 \`${HUB} help graph\`）
 - **向用户提问**
-  - \`${HUB} ask [--option <选项>...] [--recommended <选项>] --stdin\`：向用户提问（${ASK_CARD_WHERE}；${ASK_CARD_TELL_USER}）；要给用户可点的选项时传 \`--option\`（至少 2 个），有倾向时用 \`--recommended\` 标出推荐项
+  - \`${HUB} ask [--option <选项>...] [--recommended <选项>] --stdin\`：向用户提问（${ASK_CARD_WHERE}；${ASK_CARD_TELL_USER}）；要给用户可点的选项时传 \`--option\`（至少 2 个），有倾向时用 \`--recommended\` 标出推荐项；要用户看的文件（方案、验收结论、截图、录屏）用 \`--file [标签=]路径\`（可多个）挂在卡片下面，不把路径写进问题里
 - **Worker**
   - \`${HUB} worker start --title <标题> [--vendor ${vendors.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--max-time <时长>] [--readonly] [--no-worktree] --stdin\`：派 Worker，正文是任务说明。\`--max-time\` 是这一轮最多跑多久（如 \`15m\`、\`1h\`，默认 \`30m\`），超了会叫醒你，不打断它。Git 仓库里每个 Worker 有自己的 worktree 和分支（\`${WORKER_BRANCH_PREFIX}<编号>-<短名>\`），加 \`--no-worktree\` 就直接在主文件夹里干
   - \`${HUB} worker send <编号> [--max-time <时长>] --stdin\`：回答它的问题或打回，原 Worker 接着干
@@ -284,7 +286,7 @@ function buildHubUsagePrompt(vendors: readonly AgentVendor[] = AGENT_VENDORS): s
   - \`${HUB} project create|attach|detach|setup\`：建项目、挂上或移除附加文件夹、设置新 worktree 开工前跑的准备脚本
   - \`${HUB} persona show|edit\`：查看、修改性格设定和模式
   - \`${HUB} schedule add|list|pause|resume|remove\`：定时任务，到点把正文发进你的对话（用户要日报才建）
-  - \`${HUB} router report|note\`：任务图以外的里程碑给总助发一张汇报卡、更新一句话项目主线备忘
+  - \`${HUB} router report|note\`：任务图以外的里程碑给总助发一张汇报卡（本机文件用 \`--file\`）、更新一句话项目主线备忘
   - \`${HUB} self-reload [--build]\`：${PRODUCT_ID} 自身代码合进来后让守护进程热重启`;
 }
 
@@ -465,7 +467,7 @@ export function buildWorkerFirstMessage(input: {
 function workerReportSection(): string {
   return `# 汇报
 
-你每一轮最后一条回复都要以下面这段八栏格式结尾（“状态”三选一，其余照实写）。后台按它决定接下来怎么走：
+你每一轮最后一条回复都要以下面这段九栏格式结尾（“状态”三选一，其余照实写）。后台按它决定接下来怎么走：
 - 状态写“做完了”且“偏离”写“无”：这一步自动完成，“交棒”原样交给接着干的人（下一步的 Worker；没有下一步就是项目经理）。
 - 其余情况（报了“偏离”、状态写“有问题”或“放弃了”）：停下来交给项目经理处理。
 
@@ -473,7 +475,8 @@ ${WORKER_REPORT_FORMAT}
 
 - **做完了**：这一步职责全部完成、你自己验证过、没有要等别人回答才能继续的事；任务要求提 PR 的，PR 提了、检查通过了才算。没做完也要汇报：卡住了写“有问题”，做不了写“放弃了”，原因写进“问题”。
 - **偏离**：实际要改的范围、设计与任务说明不符，或碰到预期外风险时，如实写清“偏离”踩刹车交给项目经理，不要擅自硬改扩范围；完全按计划做写 \`偏离: 无\`（只是换了局部实现细节不算偏离）。
-- **交棒**：给下一步接手的人看的关键结论、改了哪几处（给文件路径、分支、PR、截图路径，不要把长内容再抄一遍）、分支/目录状态与注意事项；没有下一步或没什么特别交代可写 \`无\`。`;
+- **交棒**：给下一步接手的人看的关键结论、改了哪几处（给文件路径、分支、PR，不要把长内容再抄一遍）、分支/目录状态与注意事项；没有下一步或没什么特别交代可写 \`无\`。
+- **文件**：要用户看的方案、验收结论、截图、录屏，一行一个 \`[标签](绝对路径)\`，放在 worktree、项目文件夹或 \`/tmp\` 里；录屏交 mp4（H.264），单个不超过 ${MAX_SENT_FILE_BYTES / 1024 / 1024} MB。它们会挂到检查点卡和总助上，用户点开就能看。没有写 \`无\`。`;
 }
 
 /**

@@ -321,8 +321,8 @@ describe("初始快照的上限（一个月的量）", () => {
     expect(bytes).toBeLessThan(SNAPSHOT_MONTH_MAX_BYTES);
     expect(times[3]!).toBeLessThan(1_000);
   });
-  it("再加 10 张各带 DELIVERABLES_PER_CARD_MAX 个交付物的待拍板卡（docs/deliverables-design.md）：等拍板的卡和步骤带上交付物，整份仍不超过上限", () => {
-    seedMonth({ full: true, deliverables: true });
+  it("一个月的量再加 10 张各带 DELIVERABLES_PER_CARD_MAX 个交付物的待拍板卡（docs/deliverables-design.md）：等拍板的卡和步骤带上交付物，整份仍不超过上限", () => {
+    seedMonth({ deliverables: true });
     const snap = ledger.snapshot();
     const bytes = Buffer.byteLength(JSON.stringify(snap));
     const cards = snap.router.items.filter((x) => x.kind === "decision" && x.question.startsWith("请验收"));

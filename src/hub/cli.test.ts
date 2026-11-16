@@ -371,7 +371,7 @@ describe("hub cli", () => {
       const r = await hub(["--help"]);
       const vendorUnion = AGENT_VENDORS.join("|");
       const effortUnion = ALL_EFFORTS.join("|");
-      for (const usage of [`${cmd} models [--vendor ${vendorUnion}] [--refresh]`, `${cmd} worker start --title`, `--vendor ${vendorUnion}`, `--effort ${effortUnion}`, "--max-time <时长>", "--readonly", "--no-worktree", `${cmd} worker send <编号> [--max-time <时长>] --stdin`, `${cmd} worker max-time <编号> <时长>`, `${cmd} worker end <编号>`, `${cmd} worker list`, `${cmd} worker show <编号>`, `${cmd} worker log <编号> [--last N | --stats]`, `${cmd} ask [--node <步骤>] [--graph <图编号>] [--option <选项>...] [--recommended <选项>] [--replace <编号>] --stdin`]) {
+      for (const usage of [`${cmd} models [--vendor ${vendorUnion}] [--refresh]`, `${cmd} worker start --title`, `--vendor ${vendorUnion}`, `--effort ${effortUnion}`, "--max-time <时长>", "--readonly", "--no-worktree", `${cmd} worker send <编号> [--max-time <时长>] --stdin`, `${cmd} worker max-time <编号> <时长>`, `${cmd} worker end <编号>`, `${cmd} worker list`, `${cmd} worker show <编号>`, `${cmd} worker log <编号> [--last N | --stats]`, `${cmd} ask [--node <步骤>] [--graph <图编号>] [--option <选项>...] [--recommended <选项>] [--replace <编号>] [--file [标签=]路径...] --stdin`]) {
         expect(r.stdout).toContain(usage);
       }
       expect(r.stdout).not.toContain(`${cmd} router ask`);
@@ -1056,7 +1056,7 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
       const askErr = await hub(["ask"]);
       expect(askErr.code).toBe(HUB_EXIT.usage);
       expect(askErr.stderr).toContain(
-        `${cmd} ask [--node <步骤>] [--graph <图编号>] [--option <选项>...] [--recommended <选项>] [--replace <编号>] --stdin`,
+        `${cmd} ask [--node <步骤>] [--graph <图编号>] [--option <选项>...] [--recommended <选项>] [--replace <编号>] [--file [标签=]路径...] --stdin`,
       );
       expect(askErr.stderr).toContain(`（完整用法运行 ${cmd} help）`);
       expect(askErr.stderr).not.toContain(`${cmd} worker start`);

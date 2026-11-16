@@ -20,6 +20,7 @@ import { sortActiveGraphs, taskGraphPriority, workersByWorkerId, type WorkerEntr
 import { Button } from "../ui/button.tsx";
 import { Input } from "../ui/input.tsx";
 import { KnifeAvatar } from "./KnifeAvatar.tsx";
+import { DeliverableFiles } from "./Deliverables.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { computeGraphComponents, fruitTrackVars, SliceWheelIcon } from "./SliceWheelIcon.tsx";
 
@@ -274,6 +275,7 @@ export function GateDecisionCard({
           <Markdown text={node.gateSummaryMd!} />
         </div>
       )}
+      {node.artifact?.deliverables !== undefined && <DeliverableFiles deliverables={node.artifact.deliverables} className="mb-2" />}
       {hasOptions && (
         <div className="grid gap-2">
           {node.gateOptions.map((opt) => {

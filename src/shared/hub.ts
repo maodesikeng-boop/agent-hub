@@ -229,7 +229,7 @@ export interface HubArgsMap {
    */
   models: { vendor?: AgentVendor; refresh?: boolean };
   /**
-   * `hub ask [--node <步骤>] [--graph <图编号>] [--option <选项>...] [--recommended <选项>] [--replace <编号>] --stdin`：
+   * `hub ask [--node <步骤>] [--graph <图编号>] [--option <选项>...] [--recommended <选项>] [--replace <编号>] [--file [标签=]路径...] --stdin`：
    * 统一向用户提问/挂拍板卡（卡片在对话里；没回答时右栏、总助也列着，回答后移走，见 ASK_CARD_WHERE）。
    * - 不带 `node`：独立提问/操作提醒卡，同时写入对话 AskMeta 与总助 router_items；
    * - 带 `node`：把拍板卡挂在任务图步骤上，步骤进入 `waiting`（等用户），用户拍板后定案直接交给该步挂着的 Worker 接着干（全程不叫醒 PM）。

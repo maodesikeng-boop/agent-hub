@@ -3,7 +3,9 @@
 // - 每个交付物都是一份已存好的副本（sent-files/<id>/），网页按 id 取；原文件被改、被删、worktree 被清都不影响。
 // - 同一份数据在对话卡片、右栏、总助三处显示，网页只用本模块的函数分组，不在各个组件里各写一套判断。
 // - 老数据、老版本设备发来的条目没有交付物字段，一律当空列表。
-import type { MessageId, TaskNode } from "./domain.ts";
+import { truncateChars, type MessageId, type TaskNode } from "./domain.ts";
+import { DELIVERABLE_LABEL_MAX_CHARS, DELIVERABLES_PER_REPORT_MAX } from "./limits.ts";
+import { previewKindOf } from "./preview.ts";
 import type { SentFile } from "./sent-files.ts";
 
 /** hub ask / router report 的一个 --file：`标签=路径` 或只写路径（标签用文件名）。 */
@@ -38,12 +40,34 @@ export interface DeliverableGroups {
   media: Deliverable[];
 }
 
+const NO_DELIVERABLES: Deliverable[] = [];
+const groupsCache = new WeakMap<readonly Deliverable[], DeliverableGroups>();
+const sentFilesCache = new WeakMap<readonly Deliverable[], SentFile[]>();
+
+function isDeliverable(value: unknown): value is Deliverable {
+  if (typeof value !== "object" || value === null) return false;
+  const d = value as Record<string, unknown>;
+  const origin = d.origin as Record<string, unknown> | null | undefined;
+  return (
+    typeof d.label === "string" &&
+    typeof d.id === "string" &&
+    d.id !== "" &&
+    typeof d.name === "string" &&
+    typeof d.mime === "string" &&
+    typeof d.size === "number" &&
+    typeof d.href === "string" &&
+    (origin === null || (typeof origin === "object" && typeof origin.messageId === "number" && typeof origin.index === "number"))
+  );
+}
+
 /**
  * 前置：raw 是从数据库、快照或别的设备读来的任意值。
- * 后置：返回其中形状对的交付物；不是数组、元素形状不对的丢掉，不抛错。
+ * 后置：返回其中形状对的交付物；不是数组、元素形状不对的丢掉，不抛错。全都对时返回 raw 本身。
  */
 export function deliverablesOf(raw: unknown): Deliverable[] {
-  throw new Error("未实现");
+  if (!Array.isArray(raw)) return NO_DELIVERABLES;
+  // 全都对的原样返回：同一份 meta 每次给同一个数组，网页的 memo 不白画
+  return raw.every(isDeliverable) ? raw : raw.filter(isDeliverable);
 }
 
 /**
@@ -51,7 +75,16 @@ export function deliverablesOf(raw: unknown): Deliverable[] {
  * 前置：file.status 是 "saved"，id 不是 null。
  */
 export function deliverableOfSentFile(file: SentFile, label: string, origin: DeliverableOrigin | null): Deliverable {
-  throw new Error("未实现");
+  const trimmed = label.trim();
+  return {
+    label: truncateChars(trimmed === "" ? file.name : trimmed, DELIVERABLE_LABEL_MAX_CHARS),
+    id: file.id!,
+    name: file.name,
+    mime: file.mime,
+    size: file.size ?? 0,
+    href: file.href,
+    origin,
+  };
 }
 
 /**
@@ -59,7 +92,17 @@ export function deliverableOfSentFile(file: SentFile, label: string, origin: Del
  * 后置：输入都是空列表时返回同一个空数组引用。
  */
 export function mergeDeliverables(lists: readonly (readonly Deliverable[])[], max: number): Deliverable[] {
-  throw new Error("未实现");
+  const seen = new Set<string>();
+  const out: Deliverable[] = [];
+  for (const list of lists) {
+    for (const item of list) {
+      if (out.length === max) break;
+      if (seen.has(item.id)) continue;
+      seen.add(item.id);
+      out.push(item);
+    }
+  }
+  return out.length === 0 ? NO_DELIVERABLES : out;
 }
 
 /**
@@ -67,7 +110,11 @@ export function mergeDeliverables(lists: readonly (readonly Deliverable[])[], ma
  * 跳过的步骤不算。
  */
 export function graphDeliverables(nodes: readonly Pick<TaskNode, "artifact" | "sortOrder" | "skipped">[]): Deliverable[] {
-  throw new Error("未实现");
+  const lists = nodes
+    .filter((n) => !n.skipped)
+    .toSorted((a, b) => a.sortOrder - b.sortOrder)
+    .map((n) => n.artifact?.deliverables ?? NO_DELIVERABLES);
+  return mergeDeliverables(lists, DELIVERABLES_PER_REPORT_MAX);
 }
 
 /**
@@ -75,7 +122,15 @@ export function graphDeliverables(nodes: readonly Pick<TaskNode, "artifact" | "s
  * 后置：同一个 list 引用重复调用返回同一个对象（memo 的子组件不重画）。
  */
 export function groupDeliverables(list: readonly Deliverable[]): DeliverableGroups {
-  throw new Error("未实现");
+  const hit = groupsCache.get(list);
+  if (hit !== undefined) return hit;
+  const groups: DeliverableGroups = { documents: [], media: [] };
+  for (const item of list) {
+    const kind = previewKindOf(item.name, item.mime);
+    (kind === "image" || kind === "video" ? groups.media : groups.documents).push(item);
+  }
+  groupsCache.set(list, groups);
+  return groups;
 }
 
 /**
@@ -83,7 +138,11 @@ export function groupDeliverables(list: readonly Deliverable[]): DeliverableGrou
  * 后置：同一个 list 引用重复调用返回同一个数组引用。
  */
 export function sentFilesOfDeliverables(list: readonly Deliverable[]): SentFile[] {
-  throw new Error("未实现");
+  const hit = sentFilesCache.get(list);
+  if (hit !== undefined) return hit;
+  const files = list.map((d): SentFile => ({ href: d.href, path: d.href, id: d.id, name: d.name, size: d.size, mime: d.mime, status: "saved", mtime: null }));
+  sentFilesCache.set(list, files);
+  return files;
 }
 
 /**
@@ -91,5 +150,13 @@ export function sentFilesOfDeliverables(list: readonly Deliverable[]): SentFile[
  * 空串、只有标签没有路径时抛 RangeError，消息能直接给 agent 看。
  */
 export function parseHubFileArg(raw: string): HubFileArg {
-  throw new Error("未实现");
+  const text = raw.trim();
+  if (text === "") throw new RangeError("--file 不能是空的");
+  const eq = text.indexOf("=");
+  const head = eq === -1 ? "" : text.slice(0, eq);
+  if (eq === -1 || /[/\\]/.test(head)) return { label: null, path: text };
+  const path = text.slice(eq + 1).trim();
+  if (path === "") throw new RangeError(`--file ${text} 只写了标签，没写路径（要写成 标签=路径）`);
+  const label = head.trim();
+  return { label: label === "" ? null : label, path };
 }

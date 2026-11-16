@@ -2,7 +2,7 @@
 // 经 Unix socket 请求守护进程的 agent 接口，把结果打印出来，按 HUB_EXIT 退出。
 // 只引 shared 里不依赖 node:path 以外东西的几个文件，启动快。
 import { request, type ClientRequest } from "node:http";
-import { basename, posix, resolve } from "node:path";
+import { posix, resolve } from "node:path";
 import type { Readable } from "node:stream";
 import { parseArgs } from "node:util";
 import { PM_MODES, TASK_GRAPH_STATUSES, validateAskOptions, type PmMode } from "../shared/domain.ts";
@@ -21,6 +21,7 @@ import {
 import {
   HUB_CLI_STDIN_IDLE_MS,
   HUB_CLI_TIMEOUT_MS,
+  HUB_FILE_ARGS_MAX,
   ENV_SETUP_ROOT_PATH,
   ENV_SETUP_WORKTREE_PATH,
   HUB_MAX_BODY_BYTES,
@@ -34,6 +35,7 @@ import {
   WORKER_SEARCH_MAX_LIMIT,
 } from "../shared/limits.ts";
 import { ROUTER_DISPATCH_AGENT_PATH, type RouterReportLink } from "../shared/router.ts";
+import { parseHubFileArg, type HubFileArg } from "../shared/deliverables.ts";
 import { HUB_COMMAND, PRODUCT_ID } from "../shared/names.ts";
 import { taskGraphSkillBody } from "../shared/task-graph-skill.ts";
 import { checkEveryMinutes, parseDailyTime, parseEvery, parseWorkerMaxTime } from "../shared/schedule.ts";
@@ -200,8 +202,9 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     command: "ask",
     group: "ask",
     cli: "ask",
-    usage: `  ${hub} ask [--node <步骤>] [--graph <图编号>] [--option <选项>...] [--recommended <选项>] [--replace <编号>] --stdin
+    usage: `  ${hub} ask [--node <步骤>] [--graph <图编号>] [--option <选项>...] [--recommended <选项>] [--replace <编号>] [--file [标签=]路径...] --stdin
                                                           向用户挂一张提问/拍板卡，问题从标准输入读；${ASK_CARD_WHERE}；
+                                                          要用户看的文件（方案、验收结论、截图、录屏）用 --file 挂在卡片下面（最多 ${HUB_FILE_ARGS_MAX} 个），不写进问题里；
                                                           有明确选项时用 --option（至少 2 个），用 --recommended 标推荐项（选项原文或 1..N 序号）；
                                                           加 --node 挂在任务图步骤上，用户拍板后定案直接交给该步 Worker 接着干（不叫醒项目经理）`,
   },
@@ -248,8 +251,8 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     group: "router",
     action: "report",
     cli: "router report",
-    usage: `  ${hub} router report (--summary <摘要> | --stdin) [--pr <URL>] [--worker <编号>] [--file <路径>] [--link <标签=地址>...]
-                                                          向全局总助投递里程碑汇报卡（不打断对话流）`,
+    usage: `  ${hub} router report (--summary <摘要> | --stdin) [--pr <URL>] [--worker <编号>] [--file [标签=]路径...] [--link <标签=网址>...]
+                                                          向全局总助投递里程碑汇报卡（不打断对话流）；本机文件用 --file（最多 ${HUB_FILE_ARGS_MAX} 个），--link 只放网址`,
   },
   {
     command: "router.note",
@@ -426,7 +429,7 @@ type Options = {
   summary?: string;
   pr?: string;
   worker?: string;
-  file?: string;
+  file?: string[];
   link?: string[];
   all?: boolean;
   status?: string;
@@ -481,6 +484,22 @@ function expandPath(raw: string, env: HubIo["env"], cwd: string): string {
     return resolveHome(home, raw.slice(2));
   }
   return resolveFn(cwd, raw);
+}
+
+/** --file [标签=]路径（可多个）：相对路径、~ 按 hub 的当前目录和 HOME 变成绝对路径，守护进程按它存副本。 */
+function fileArgsOf(raw: string[] | undefined, env: HubIo["env"], cwd: string): HubFileArg[] | undefined {
+  if (raw === undefined || raw.length === 0) return undefined;
+  if (raw.length > HUB_FILE_ARGS_MAX) throw new UsageError(`--file 最多 ${HUB_FILE_ARGS_MAX} 个`);
+  return raw.map((item) => {
+    let arg: HubFileArg;
+    try {
+      arg = parseHubFileArg(item);
+    } catch (error) {
+      if (error instanceof RangeError) throw new UsageError(error.message);
+      throw error;
+    }
+    return { label: arg.label, path: expandPath(arg.path, env, cwd) };
+  });
 }
 
 function allowOnly(values: Options, allowed: (keyof Options)[], what: string): void {
@@ -585,7 +604,7 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
         summary: { type: "string" },
         pr: { type: "string" },
         worker: { type: "string" },
-        file: { type: "string" },
+        file: { type: "string", multiple: true },
         link: { type: "string", multiple: true },
         all: { type: "boolean" },
         status: { type: "string" },
@@ -744,9 +763,11 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     return { command: "worker.end", body, textSource: null };
   }
   if (group === "ask") {
-    allowOnly(values, ["node", "graph", "option", "recommended", "replace", "stdin"], "ask");
+    allowOnly(values, ["node", "graph", "option", "recommended", "replace", "file", "stdin"], "ask");
     expectPositionals(parsed.positionals.slice(1), 0, "ask");
     const body: Record<string, unknown> = {};
+    const files = fileArgsOf(values.file, env, cwd);
+    if (files !== undefined) body.files = files;
     if (values.graph !== undefined && (values.node === undefined || values.node.trim() === "")) {
       throw new UsageError("--graph 要配合 --node <步骤> 一起用");
     }
@@ -933,11 +954,6 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
       const wid = workerIdOf(values.worker, "router report");
       links.push({ label: `Worker #${wid}`, target: `worker:${wid}` });
     }
-    if (values.file !== undefined) {
-      const fp = values.file.trim();
-      if (fp === "") throw new UsageError("--file 不能是空的");
-      links.push({ label: basename(fp) || fp, target: fp });
-    }
     if (values.link !== undefined) {
       for (const rawLink of values.link) {
         const eq = rawLink.indexOf("=");
@@ -950,6 +966,8 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     }
     const body: Record<string, unknown> = {};
     if (links.length > 0) body.links = links;
+    const files = fileArgsOf(values.file, env, cwd);
+    if (files !== undefined) body.files = files;
     if (values.stdin === true) {
       return {
         command: "router.report",

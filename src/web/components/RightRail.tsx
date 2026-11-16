@@ -23,6 +23,7 @@ import { normalizeTaskGraphs } from "../task-graph-compat.ts";
 import type { WorkerTone } from "../worker-status.ts";
 import { Button } from "../ui/button.tsx";
 import { Avatar } from "./Avatar.tsx";
+import { DeliverableFiles } from "./Deliverables.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { PeelTrackList } from "./PeelTrack.tsx";
 import { SliceWheelIcon } from "./SliceWheelIcon.tsx";
@@ -191,6 +192,7 @@ function AskRow({ ask, open, onToggle }: { ask: Message; open: boolean; onToggle
         <div className="-mx-2.5 rounded-b-xl bg-sidebar px-2.5 pb-3 text-minor">
           <div className="pl-7">
             <Markdown text={ask.text} messageId={ask.id} />
+            <DeliverableFiles deliverables={askOf(ask)?.deliverables ?? []} className="mt-2" />
           </div>
         </div>
       )}

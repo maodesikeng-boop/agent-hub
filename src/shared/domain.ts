@@ -10,7 +10,7 @@ import {
   MAX_WORKER_TITLE_CHARS,
   PM_MEMORY_INDEX_FILE,
 } from "./limits.ts";
-import type { Deliverable } from "./deliverables.ts";
+import { deliverablesOf, type Deliverable } from "./deliverables.ts";
 import type { ScheduleId } from "./schedule.ts";
 import type { AgentVendor } from "./vendors.ts";
 import type { WorkerReportStatus } from "./worker.ts";
@@ -506,6 +506,7 @@ export function askOf(message: Pick<Message, "sender" | "meta">): AskMeta | null
         }
       : undefined;
   const chosenOption = typeof message.meta.chosenOption === "string" ? message.meta.chosenOption : undefined;
+  const deliverables = deliverablesOf(message.meta.deliverables);
   return {
     needsUser: true,
     ...(answered ? { answered: true } : {}),
@@ -513,6 +514,7 @@ export function askOf(message: Pick<Message, "sender" | "meta">): AskMeta | null
     ...(recommended !== undefined ? { recommended } : {}),
     ...(gateRef !== undefined ? { gateRef } : {}),
     ...(chosenOption !== undefined ? { chosenOption } : {}),
+    ...(deliverables.length > 0 ? { deliverables } : {}),
   };
 }
 

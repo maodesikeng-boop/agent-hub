@@ -7,7 +7,7 @@ import type { AgentSessionRow } from "../../shared/domain.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
 import { projectWorktreesDir } from "../../shared/paths.ts";
 import { normalizePathForComparison } from "../platform/index.ts";
-import { isShareable, shareLinkedFiles, type ShareScope } from "../sent-files.ts";
+import { isShareable, shareFilePaths, shareLinkedFiles, type ShareScope } from "../sent-files.ts";
 import type { Db } from "../store/index.ts";
 
 export interface SentFilesOptions {
@@ -81,10 +81,14 @@ export function createLedgerSentFiles(db: Db, opts: SentFilesOptions) {
 
   /**
    * hub ask / router report 的 --file：按这个会话能分享的文件夹存副本，规则和回复里的链接一样（daemon/sent-files.ts）。
-   * 后置：返回的 files 和 args 一一对应、顺序相同（没存下的 status 不是 "saved"）；args 为空返回空数组。不抛错，出了意外只记日志。
+   * 后置：返回的 files 和 args 一一对应、顺序相同（没存下的 status 不是 "saved"）；args 为空返回空数组。不抛错，单个文件出错记成 unreadable。
    */
   const filesForArgs = (session: AgentSessionRow, args: readonly HubFileArg[]): SentFile[] => {
-    throw new Error("未实现");
+    if (args.length === 0) return [];
+    return shareFilePaths(
+      args.map((a) => a.path),
+      scopeFor(session),
+    );
   };
 
   return { metaFor, allows, filesForArgs };

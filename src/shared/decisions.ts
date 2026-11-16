@@ -20,6 +20,7 @@ import {
 } from "./domain.ts";
 import type { ConversationSnapshot } from "./api.ts";
 import type { Deliverable } from "./deliverables.ts";
+import { DELIVERABLES_PER_CARD_MAX } from "./limits.ts";
 import type { RouterItem, RouterSlice } from "./router.ts";
 import { normalizeTaskGraphs } from "./task-graph-compat.ts";
 
@@ -76,6 +77,12 @@ export interface DecisionSnapshotInput {
 const EMPTY_ROUTER_ITEMS: readonly RouterItem[] = [];
 const EMPTY_TASK_GRAPHS: readonly TaskGraph[] = [];
 const EMPTY_PROJECTS: readonly Project[] = [];
+
+/** 卡片下面列的文件：有才带，超过一张卡的上限只留前面的（没超时原样带同一个数组引用）。 */
+function cardDeliverables(list: Deliverable[] | undefined): { deliverables?: Deliverable[] } {
+  if (list === undefined || list.length === 0) return {};
+  return { deliverables: list.length > DELIVERABLES_PER_CARD_MAX ? list.slice(0, DELIVERABLES_PER_CARD_MAX) : list };
+}
 
 /** 计算一个挂卡步骤当前阻塞的下游节点总数与直接下游节点标题预览（最多 3 个）。 */
 export function computeGateImpact(
@@ -218,6 +225,7 @@ export function pendingDecisionsOf(snapshot: DecisionSnapshotInput, deviceId = "
         context: node.gateSummaryMd ?? "",
         options: node.gateOptions,
         askMessageId: node.gateAskMessageId,
+        ...cardDeliverables(node.artifact?.deliverables),
         createdAt: node.createdAt,
         updatedAt: node.updatedAt,
         source: {
@@ -260,6 +268,7 @@ export function pendingDecisionsOf(snapshot: DecisionSnapshotInput, deviceId = "
       context: item.context,
       options: item.options,
       askMessageId: item.askMessageId,
+      ...cardDeliverables(item.deliverables),
       createdAt: item.createdAt,
       updatedAt: item.updatedAt,
       source: {

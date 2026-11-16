@@ -14,6 +14,7 @@ import {
   CONFIRM_CHECKPOINT_OPTIONS,
   CONFIRM_PASS_OPTION,
   CONFIRM_REJECT_OPTION,
+  askOf,
   isTaskGraphReadyToFinish,
   isTaskNodeWaitingPm,
   isTaskNodeWaitingUser,
@@ -61,6 +62,7 @@ import { ASK_CARD_TELL_USER, ASK_CARD_WHERE } from "../../shared/hub.ts";
 import type { GraphPrTarget, HubCallContext } from "../../shared/ledger.ts";
 import {
   COMPLETED_GRAPH_RETENTION_MS,
+  DELIVERABLES_PER_STEP_MAX,
   DELIVERY_FILES_MAX,
   DELIVERY_NOTE_MAX_CHARS,
   GRAPH_HISTORY_PAGE_SIZE,
@@ -90,6 +92,9 @@ import {
 } from "../../shared/limits.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import type { RouterReportLink } from "../../shared/router.ts";
+import type { SentFile } from "../../shared/sent-files.ts";
+import { graphDeliverables, mergeDeliverables, type HubFileArg } from "../../shared/deliverables.ts";
+import { stepDeliverablesOfReport } from "../deliverables.ts";
 import { checkWorkerMaxTimeMs, parseWorkerMaxTime } from "../../shared/schedule.ts";
 import {
   AGENT_VENDORS,
@@ -117,6 +122,7 @@ import type { LedgerProjects } from "./projects.ts";
 import type { LedgerRouter } from "./router.ts";
 import { toMessage, type MessageDbRow } from "./rows.ts";
 import type { LedgerSessions } from "./sessions.ts";
+import type { ReportMessage } from "./workers.ts";
 import {
   buildStepFirstMessage,
   formatStepUpstreamForTakeover,
@@ -485,6 +491,13 @@ const patchSpecSchema = z.object({
   removeEdges: z.array(z.object({ from: z.string(), to: z.string() })).optional(),
 });
 
+/** 全量快照（includeDetails 是 false）只给等用户拍板的步骤带交付物，控快照体积；单图详情都带。 */
+function artifactForView(artifact: TaskArtifact | null, waitingUser: boolean, includeDetails: boolean): TaskArtifact | null {
+  if (artifact?.deliverables === undefined || waitingUser || includeDetails) return artifact;
+  const { deliverables: _omitted, ...rest } = artifact;
+  return Object.keys(rest).length > 0 ? rest : null;
+}
+
 function toTaskNode(row: TaskNodeDbRow, includeDetails = false): TaskNode {
   const { artifact, checkpointPending } = readStoredArtifact(row.artifact_json);
   const waitingUser = row.status === "waiting" && row.waiting_for === "user";
@@ -497,7 +510,7 @@ function toTaskNode(row: TaskNodeDbRow, includeDetails = false): TaskNode {
     sortOrder: row.sort_order,
     activeWorkerId: row.active_worker_id,
     workerIds: parseJsonOr<WorkerId[]>(row.worker_ids_json, []),
-    artifact,
+    artifact: artifactForView(artifact, waitingUser, includeDetails),
     gateQuestion: row.gate_question,
     gateOptions: parseJsonOr<string[]>(row.gate_options_json, []),
     gateSummaryMd: row.gate_summary_md,
@@ -1966,7 +1979,11 @@ export function createLedgerTaskGraphs(
   const askOnStepIn = (
     p: Pending,
     caller: AgentSessionRow & { pmId: PmId },
-    args: HubArgs<"ask"> & { node: TaskNodeKey },
+    args: Omit<HubArgs<"ask">, "files"> & {
+      node: TaskNodeKey;
+      /** --file 存好的副本（hub-commands.ts 已查过都存下了）。 */
+      fileArgs?: { args: readonly HubFileArg[]; files: readonly SentFile[] };
+    },
   ): HubResult<"ask"> => {
     assertPmNotArchived(caller.pmId);
     const nodeKey = validateNodeKey(args.node);
@@ -2004,6 +2021,7 @@ export function createLedgerTaskGraphs(
       gate_summary_md: gate.summaryMd,
       gate_recommended: gate.recommended,
     });
+    const prevArtifact = readStoredArtifact(node.artifact_json).artifact;
     const askMsg = messages.insertAskMessage(
       p,
       { ...caller, conversationId: graphRow.conversation_id },
@@ -2012,9 +2030,18 @@ export function createLedgerTaskGraphs(
       {
         gateRef: { graphId: graphRow.id, nodeKey },
         ...(gate.recommended !== null ? { recommended: gate.recommended } : {}),
+        ...(args.fileArgs !== undefined ? { fileArgs: args.fileArgs, deliverables: prevArtifact?.deliverables ?? [] } : {}),
       },
     );
-    const cleanedArtifactJson = serializeArtifact(readStoredArtifact(node.artifact_json).artifact, false);
+    // --file 挂的文件新的在前，合进该步交付物
+    const stepDeliverables =
+      args.fileArgs === undefined
+        ? null
+        : mergeDeliverables([askOf(askMsg)?.deliverables ?? [], prevArtifact?.deliverables ?? []], DELIVERABLES_PER_STEP_MAX);
+    const cleanedArtifactJson = serializeArtifact(
+      stepDeliverables === null ? prevArtifact : { ...prevArtifact, deliverables: stepDeliverables },
+      false,
+    );
     db.run(
       `UPDATE task_graph_steps
           SET gate_question = ?,
@@ -3177,10 +3204,12 @@ export function createLedgerTaskGraphs(
       if (artifact?.prUrl) pushLink(`${n.node_key} PR`, artifact.prUrl);
     }
 
-    const report = router.reportIn(p, caller, {
-      summary,
-      ...(links.length > 0 ? { links } : {}),
-    });
+    const report = router.reportIn(
+      p,
+      caller,
+      { summary, ...(links.length > 0 ? { links } : {}) },
+      graphDeliverables(nodeRows.filter((n) => n.status === "done").map((n) => toTaskNode(n, true))),
+    );
 
     const t = now();
     // 第 6 节：步骤完了以后，它的 Worker 由后台收工（被下一步接手时，或图结束时）
@@ -3683,7 +3712,7 @@ export function createLedgerTaskGraphs(
     parsed: ParsedWorkerReport,
     rawBody: string,
     forcedNote: string | null,
-    opts?: { hasPendingFollowup?: boolean },
+    opts?: { hasPendingFollowup?: boolean; reportMessage?: ReportMessage | null },
   ):
     | { handled: false }
     | { handled: true; outcome: "completed"; wakePmWithReport: boolean; completeStep: () => void }
@@ -3699,8 +3728,12 @@ export function createLedgerTaskGraphs(
 
     const prUrl = parsed.kind === "ok" ? extractReportPrUrl(parsed.report.pr) : null;
     const prevArtifact = readStoredArtifact(node.artifact_json).artifact ?? {};
+    // “文件”栏写了就换成这次的；没写保留上一次交的
+    const reportDeliverables =
+      parsed.kind === "ok" && opts?.reportMessage != null ? stepDeliverablesOfReport(parsed.report, opts.reportMessage) : [];
     const mergedArtifact: TaskArtifact = {
       ...prevArtifact,
+      ...(reportDeliverables.length > 0 ? { deliverables: reportDeliverables } : {}),
       ...(worker.branch ? { branch: worker.branch } : {}),
       ...(parsed.kind === "ok" && parsed.report.commit ? { commit: parsed.report.commit } : {}),
       ...(prUrl ? { prUrl } : {}),
@@ -3784,6 +3817,7 @@ export function createLedgerTaskGraphs(
             {
               gateRef: { graphId: graphRow.id, nodeKey: node.node_key, checkpoint: true },
               recommended: CONFIRM_PASS_OPTION,
+              ...(mergedArtifact.deliverables !== undefined ? { deliverables: mergedArtifact.deliverables } : {}),
             },
           );
           askMsgId = msg.id;
