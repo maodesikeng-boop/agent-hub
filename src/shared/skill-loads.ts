@@ -37,8 +37,8 @@ interface Walk {
   /** 这一处之前 cd 过的目录。 */
   cwd: string[];
   depth: number;
-  /** PowerShell 里反斜杠是路径分隔，不是转义。 */
-  powershell: boolean;
+  /** 哪种 shell 的脚本：PowerShell 里反斜杠是路径分隔，不是转义。 */
+  dialect: "posix" | "powershell";
   out: SkillLoad[];
 }
 
@@ -50,7 +50,7 @@ function literal(node: ShellNode | null, walk: Walk): string | null {
       return node.namedChildCount === 1 ? literal(node.namedChild(0), walk) : null;
     case "word":
       if (/[*?[]/u.test(node.text)) return null;
-      return walk.powershell ? node.text : node.text.replace(/\\(.)/gsu, "$1");
+      return walk.dialect === "powershell" ? node.text : node.text.replace(/\\(.)/gsu, "$1");
     case "number":
       return node.text;
     case "raw_string":
@@ -92,13 +92,13 @@ function visitCommand(node: ShellNode, walk: Walk, away: boolean): void {
   if (walk.depth < MAX_SHELL_DEPTH && POSIX_SHELLS.has(command)) {
     const flag = args.findIndex((a) => a !== null && /^-[a-z]*c[a-z]*$/u.test(a));
     const script = flag === -1 ? undefined : args[flag + 1];
-    if (typeof script === "string") visitScript(script, { ...walk, cwd: [...walk.cwd], depth: walk.depth + 1, powershell: false }, away);
+    if (typeof script === "string") visitScript(script, { ...walk, cwd: [...walk.cwd], depth: walk.depth + 1, dialect: "posix" }, away);
     return;
   }
   if (walk.depth < MAX_SHELL_DEPTH && POWERSHELLS.has(command)) {
     const flag = args.findIndex((a) => a !== null && /^-(c|command)$/iu.test(a));
     const rest = flag === -1 ? [] : args.slice(flag + 1);
-    if (rest.length > 0 && rest.every((a) => a !== null)) visitScript(rest.join(" "), { ...walk, cwd: [...walk.cwd], depth: walk.depth + 1, powershell: true }, away);
+    if (rest.length > 0 && rest.every((a) => a !== null)) visitScript(rest.join(" "), { ...walk, cwd: [...walk.cwd], depth: walk.depth + 1, dialect: "powershell" }, away);
     return;
   }
   if (away || !READ_COMMANDS.has(command)) return;
@@ -167,7 +167,7 @@ export function toolSkillLoads(vendor: string, toolName: string, input: unknown)
       const script = stringArg(input, "command") ?? stringArg(input, "CommandLine");
       if (script === undefined) return [];
       const cwd = stringArg(input, "cwd");
-      const walk: Walk = { cwd: cwd === undefined ? [] : [cwd], depth: 0, powershell: false, out: [] };
+      const walk: Walk = { cwd: cwd === undefined ? [] : [cwd], depth: 0, dialect: "posix", out: [] };
       visitScript(script, walk, false);
       return walk.out;
     }
