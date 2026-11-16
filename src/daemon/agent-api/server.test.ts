@@ -1093,8 +1093,8 @@ describe.skipIf(process.platform === "win32")("startAgentApi on a unix socket", 
       await app.close();
     }
 
-    // hub status：项目经理的那份带上热重启状态（写明最晚几点执行），Worker 的不带
-    const reloadStatus = { state: "draining" as const, build: false, requestedAt: 1, deadlineAt: 2, busy: [], lastFailure: null };
+    // hub status：项目经理的那份带上热重启状态（写明从几点起只等正在回用户的轮次），Worker 的不带
+    const reloadStatus = { state: "draining" as const, build: false, requestedAt: 1, deadlineAt: 2, overdue: false, busy: [], unresumable: [], lastFailure: null };
     const withStatus = createAgentApi({ ledger, tokens, selfReload: () => ({ text: "", data: null }), selfReloadStatus: () => reloadStatus });
     await withStatus.ready();
     try {

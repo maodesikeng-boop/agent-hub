@@ -882,11 +882,21 @@ describe("hubCall 其他命令", () => {
     expect(none.text).toMatch(new RegExp(`还没有项目.*${HUB_COMMAND} project create`));
   });
 
-  it("status：登记了热重启时写明从几点开始等、最晚几点执行；没登记不写", () => {
+  it("status：登记了热重启时写明从几点开始等、几点起只等正在回用户的轮次；没登记不写", () => {
     const requestedAt = new Date(2026, 10, 16, 14, 10, 0).getTime();
-    const selfReload = { state: "draining" as const, build: false, requestedAt, deadlineAt: requestedAt + 10 * 60_000, busy: ["3 个会话还在跑"], lastFailure: null };
+    const selfReload = {
+      state: "draining" as const,
+      build: false,
+      requestedAt,
+      deadlineAt: requestedAt + 10 * 60_000,
+      overdue: false,
+      busy: ["3 个会话还在跑"],
+      unresumable: [],
+      lastFailure: null,
+    };
     const status = ledger.hubCall(lin.sessionId, "status", {} as never, { selfReload });
-    expect(status.text).toContain("热重启：14:10:00 开始等全库空闲，最晚 14:20:00 不管还有谁在跑都执行。现在还在忙：3 个会话还在跑。");
+    expect(status.text).toContain("热重启：14:10:00 开始等全库空闲，最晚 14:20:00 起不再等 Worker 轮次和系统消息");
+    expect(status.text).toContain("现在还在忙：3 个会话还在跑。");
     expect(status.data).toMatchObject({ selfReload });
     const idle = ledger.hubCall(lin.sessionId, "status", {} as never, { selfReload: { ...selfReload, state: "idle", requestedAt: null, deadlineAt: null, busy: [] } });
     expect(idle.text).not.toContain("热重启");

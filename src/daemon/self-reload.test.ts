@@ -46,18 +46,18 @@ describe("空闲排空热重启（createSelfReload）", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it("登记立即返回，回执写明从几点开始等、最晚几点执行；上限内有会话在跑就等，收尾停稳后再静默 SELF_RELOAD_QUIET_MS 才重启，且只重启一次", () => {
+  it("登记立即返回，回执写明从几点开始等、最晚几点起只等正在回用户的轮次；上限内有会话在跑就等，收尾停稳后再静默 SELF_RELOAD_QUIET_MS 才重启，且只重启一次", () => {
     vi.setSystemTime(new Date(2026, 10, 16, 14, 10, 0));
     const h = harness();
     h.setBusy(["1 个会话还在跑"], false);
     const result = h.reload.request({ build: false, by: "项目经理会话 1" });
     expect(result.text).toContain("已登记热重启");
     const deadline = formatClock(Date.now() + SELF_RELOAD_DRAIN_MAX_MS);
-    expect(result.text).toContain(`14:10:00 开始等全库空闲，最晚 ${deadline} 不管还有谁在跑都执行`);
+    expect(result.text).toContain(`14:10:00 开始等全库空闲，最晚 ${deadline} 起不再等 Worker 轮次和系统消息`);
     expect(result.text).toContain("1 个会话还在跑");
     expect(result.status).toMatchObject({ state: "draining", build: false, busy: ["1 个会话还在跑"] });
     expect(result.status.deadlineAt! - result.status.requestedAt!).toBe(SELF_RELOAD_DRAIN_MAX_MS);
-    expect(h.lines.at(-1)).toContain(`最晚 ${deadline} 执行`);
+    expect(h.lines.at(-1)).toContain(`最晚 ${deadline} 起只等正在回用户的轮次`);
     vi.advanceTimersByTime(10 * SELF_RELOAD_RECHECK_MS);
     expect(h.restart).not.toHaveBeenCalled();
 
@@ -73,7 +73,7 @@ describe("空闲排空热重启（createSelfReload）", () => {
     expect(() => h.reload.request({ build: false, by: "x" })).toThrow(LedgerRequestError);
   });
 
-  it("一直有会话在忙（全库空闲一直不出现）：登记后最多等 SELF_RELOAD_DRAIN_MAX_MS，到点照常重启，只重启一次", () => {
+  it("一直有会话在忙（全库空闲一直不出现），都是重启后会重发的轮次：登记后最多等 SELF_RELOAD_DRAIN_MAX_MS，到点照常重启，只重启一次", () => {
     const h = harness();
     h.setBusy(["3 个会话还在跑"], false);
     h.reload.request({ build: false, by: "项目经理会话 1" });
@@ -86,7 +86,7 @@ describe("空闲排空热重启（createSelfReload）", () => {
     vi.advanceTimersByTime(SELF_RELOAD_RECHECK_MS);
     expect(h.restart).toHaveBeenCalledTimes(1);
     expect(h.reload.status().state).toBe("restarting");
-    expect(h.lines.at(-1)).toContain("等全库空闲到了上限（10 分钟），还在忙：3 个会话还在跑。照常热重启");
+    expect(h.lines.at(-1)).toContain("等全库空闲过了上限（10 分钟），还在跑的轮次重启后都会重发：3 个会话还在跑。开始热重启");
     expect(vi.getTimerCount()).toBe(0);
     vi.advanceTimersByTime(SELF_RELOAD_DRAIN_MAX_MS);
     expect(h.restart).toHaveBeenCalledTimes(1);
@@ -100,7 +100,7 @@ describe("空闲排空热重启（createSelfReload）", () => {
     vi.advanceTimersByTime(SELF_RELOAD_DRAIN_MAX_MS + 10 * SELF_RELOAD_RECHECK_MS);
     expect(h.restart).not.toHaveBeenCalled();
     expect(h.reload.status()).toMatchObject({ state: "draining", unresumable: ["项目经理正在回用户的消息"] });
-    expect(describeSelfReload(h.reload.status())).toContain("已过最晚时间");
+    expect(describeSelfReload(h.reload.status())).toMatch(/已过最晚时间 \d\d:\d\d:\d\d，只等正在回用户的轮次回完就重启。还在等：项目经理正在回用户的消息。$/);
 
     // 项目经理回完了，Worker 还在跑（重启后会重发）：立即重启，不再等 Worker
     h.setUnresumable([]);
@@ -117,8 +117,8 @@ describe("空闲排空热重启（createSelfReload）", () => {
     const again = h.reload.request({ build: false, by: "b" });
     expect(again.text).toContain("合并");
     expect(describeSelfReload(again.status)).toBe(
-      "热重启：14:10:00 开始等全库空闲，最晚 14:11:00 不管还有谁在跑都执行。现在还在忙：1 个会话还在跑。" +
-        "到点被打断的 Worker 轮次和系统消息重启后自动重发；用户发给项目经理、还没回完的那条会标已停止。",
+      "热重启：14:10:00 开始等全库空闲，最晚 14:11:00 起不再等 Worker 轮次和系统消息（重启后自动重发）；" +
+        "项目经理、总助正在回用户的那一轮等它回完再重启。现在还在忙：1 个会话还在跑。",
     );
     vi.advanceTimersByTime(19_999);
     expect(h.restart).not.toHaveBeenCalled();

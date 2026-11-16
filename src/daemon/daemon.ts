@@ -835,6 +835,12 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
           }
           return reasons;
         },
+        // 重启后不会重发的：会话里按 resumesAfterShutdown 判（ledger/messages.ts）；总助分派引擎的指令重启后标失败、要用户点重试（ledger/router.ts 的 recoverAfterRestart）
+        unresumableReasons: () => {
+          const reasons = ledger.turnsLostOnShutdown().map(({ sessionId, role }) => `${role === "pm" ? "项目经理" : "总助"}会话 ${sessionId} 正在回用户的消息`);
+          if (routerDispatcher.busy()) reasons.push("总助在处理用户的指令");
+          return reasons;
+        },
         subscribe: (listener) => ledger.onChange(listener),
         ...(webBuild ? { build: (signal: AbortSignal) => webBuild.build(signal), applyBuild: () => webBuild.apply() } : {}),
         restart: onSelfReload,

@@ -112,7 +112,7 @@ export interface AgentApiOptions {
    * 不给 = 这台守护进程不支持（没有外壳监管，退出后没人拉起），回 conflict。
    */
   selfReload?: (input: { sessionId: SessionId; build: boolean }) => { text: string; data: unknown };
-  /** 热重启现在等到哪了：项目经理的 hub status 里写从几点开始等、最晚几点执行。和 selfReload 一起给；还没启动完是 undefined。 */
+  /** 热重启现在等到哪了：项目经理的 hub status 里写从几点开始等、几点起只等正在回用户的轮次。和 selfReload 一起给；还没启动完是 undefined。 */
   selfReloadStatus?: () => SelfReloadStatus | undefined;
   tokens: SessionTokens;
   logger?: boolean;

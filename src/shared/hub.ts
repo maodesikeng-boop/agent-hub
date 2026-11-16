@@ -451,7 +451,7 @@ interface PmHubStatus {
   setupCommand: string | null;
   /** 当前项目的活跃任务图计数摘要（如有）。 */
   activeTaskGraphs?: PmActiveGraphSummary[];
-  /** 登记了热重启时：从几点开始等、最晚几点执行、现在谁在忙。 */
+  /** 登记了热重启时：从几点开始等、几点起只等正在回用户的轮次、现在谁在忙。 */
   selfReload?: SelfReloadStatus;
 }
 

@@ -99,7 +99,7 @@ describe("热重启等全库空闲有上限", () => {
     const reload = await env.runHub(pmPid, ["self-reload"]);
     expect(reload.code).toBe(0);
     expect(reload.stdout).toContain("已登记热重启");
-    expect(reload.stdout).toMatch(/热重启：\d\d:\d\d:\d\d 开始等全库空闲，最晚 \d\d:\d\d:\d\d 不管还有谁在跑都执行。现在还在忙：/);
+    expect(reload.stdout).toMatch(/热重启：\d\d:\d\d:\d\d 开始等全库空闲，最晚 \d\d:\d\d:\d\d 起不再等 Worker 轮次和系统消息（重启后自动重发）；项目经理、总助正在回用户的那一轮等它回完再重启。现在还在忙：/);
     const status = await env.runHub(pmPid, ["status"]);
     expect(status.stdout).toMatch(/热重启：\d\d:\d\d:\d\d 开始等全库空闲，最晚 \d\d:\d\d:\d\d/);
 
@@ -107,7 +107,7 @@ describe("热重启等全库空闲有上限", () => {
     const waitedMs = Date.now() - registeredAt;
     expect(exit.code).toBe(DESKTOP_CONTRACT.reloadExitCode);
     expect(waitedMs).toBeGreaterThanOrEqual(DRAIN_MAX_MS - 500);
-    expect(first.stderr()).toContain("等全库空闲到了上限");
+    expect(first.stderr()).toContain("等全库空闲过了上限");
     // 被打断的 Worker 轮次留着“处理中”，等重启恢复重发
     expect(query<{ status: string }>("SELECT status FROM messages WHERE id = ?", taskId)).toEqual([{ status: "processing" }]);
 
@@ -206,7 +206,7 @@ describe("热重启等全库空闲有上限", () => {
     const pmPid = procsOf(pmSessionId).at(-1)!.pid;
     const registeredAt = Date.now();
     const reload = await env.runHub(pmPid, ["self-reload"]);
-    expect(reload.stdout).toMatch(/最晚 \d\d:\d\d:\d\d 不管还有谁在跑都执行。现在还在忙：1 个会话还在跑/);
+    expect(reload.stdout).toMatch(/最晚 \d\d:\d\d:\d\d 起不再等 Worker 轮次和系统消息（重启后自动重发）；项目经理、总助正在回用户的那一轮等它回完再重启。现在还在忙：1 个会话还在跑/);
     const status = await env.runHub(pmPid, ["status"]);
     expect(status.stdout).toMatch(/热重启：\d\d:\d\d:\d\d 开始等全库空闲，最晚 \d\d:\d\d:\d\d/);
 
@@ -214,7 +214,7 @@ describe("热重启等全库空闲有上限", () => {
     const waitedMs = Date.now() - registeredAt;
     expect(exit.code).toBe(DESKTOP_CONTRACT.reloadExitCode);
     expect(waitedMs).toBeGreaterThanOrEqual(DRAIN_MAX_MS - 500);
-    expect(first.stderr()).toContain("等全库空闲到了上限");
+    expect(first.stderr()).toContain("等全库空闲过了上限");
     expect(query<{ status: string }>("SELECT status FROM messages WHERE id = ?", run.id)).toEqual([{ status: "processing" }]);
 
     const second = await env.start();
