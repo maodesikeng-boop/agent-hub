@@ -17,6 +17,8 @@ export const DEVICE_SCALE_FACTOR = 2;
 
 /** 种子数据里的“现在”和浏览器里的“现在”：都钉死，时间显示、相对时间每次一样。 */
 export const SEED_START_ISO = "2026-11-16T14:00:00+08:00";
+/** 种子里每写一条（消息、事件）时钟走多少。 */
+export const SEED_STEP_MS = 1_000;
 export const BROWSER_NOW_ISO = "2026-11-16T17:36:00+08:00";
 export const SHOT_TIMEZONE = "Asia/Shanghai";
 export const SHOT_LOCALE = "en-US";
@@ -32,6 +34,12 @@ export const RECORD_DIR = "docs/ui-polish";
 export const SHOT_READY_TIMEOUT_MS = 15_000;
 /** 同时开几个浏览器上下文截图。 */
 export const SHOT_PARALLEL = 4;
+/** 在途请求都回来后再静多久才截（界面拿到回包还要画一帧）。 */
+export const SHOT_NETWORK_QUIET_MS = 300;
+/** 连截两张一样才算画稳：两次之间隔多久。 */
+export const SHOT_STABLE_POLL_MS = 150;
+/** 浏览器里预置成“看过了”的对话编号是 2 到这个数（编号 1 的小林留着没看过，左栏才有一个“等你”）。 */
+export const SHOT_SEEN_CONVERSATIONS = 400;
 
 /** 达标线：每一项、每个评委都不低于它（“9 分怎么算”见方案第 3.4 节）。 */
 export const PASS_SCORE = 9;

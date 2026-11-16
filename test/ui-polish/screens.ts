@@ -1,7 +1,7 @@
 // 界面清单（docs/ui-polish-loop-design.md 第 3.1 节）：要截、要评的每一个界面只在这里登记一次。
 // 截图命令、评委分批、给用户看的清单都从这一份数据来。
 // 不变量：id 全局唯一、以所属区域开头；一个界面在一个视口下出一张图，“一张图”的身份是 `<id>@<视口>`。
-import type { ViewportName } from "./limits.ts";
+import { JUDGE_MAX_CONCURRENT, type ViewportName } from "./limits.ts";
 
 export const SCREEN_AREAS = [
   "shell",
@@ -64,6 +64,7 @@ export interface ScreenSpec {
 
 /** 到达一个界面的可执行步骤，由截图命令逐条照做。 */
 export type ScreenStep =
+  /** 打开网址的 # 部分；`{c.lin}` 这样的占位换成种子里的编号（seed.ts 的 SeedResult.ids）。 */
   | { goto: string }
   | { click: string }
   | { hover: string }
@@ -77,7 +78,11 @@ export type ScreenStep =
   /** 预置这台浏览器的 localStorage（已读时间、界面大小、右栏收起）。 */
   | { storage: Record<string, string> }
   /** 等这个选择器出现才往下走。 */
-  | { waitFor: string };
+  | { waitFor: string }
+  /** 局部图裁哪个元素（清单里写了 focus 的界面才用）。 */
+  | { crop: string }
+  /** 清掉登录 cookie 再刷新（“没登录”那一屏）。 */
+  | { signOut: true };
 
 const s = (
   id: string,
@@ -213,11 +218,150 @@ export const SCREEN_INVENTORY: readonly ScreenSpec[] = [
   s("quota.rail", "额度浮层：从 72px 窄栏打开", ["narrow"], "normal", "standard", "窄栏底部点额度按钮，补丁 quota-normal", "浮层"),
 ];
 
+// ---- 到达步骤用的选择器（Playwright 选择器语法）和几段常用的步骤 ----
+const NAV = 'role=navigation[name="Conversations"]';
+const SIDEBAR = 'role=complementary[name="Sidebar"]';
+const RAIL = 'role=complementary[name="Side panel"]';
+const LOG = 'role=log[name="Messages"]';
+const ROUTER_LOG = 'role=log[name="Router timeline"]';
+const COMPOSER = 'role=textbox[name="Message"]';
+const DIALOG = "role=dialog";
+const POPOVER = "[data-radix-popper-content-wrapper]";
+/** 叠在别的弹窗上的那一个（确认、登录、同步预览）。 */
+const TOP_DIALOG = "role=dialog >> nth=-1";
+/** 输入框上方弹出的列表，没有匹配时是一行“No matching …”。 */
+const MENU = 'div:has(> ul[role="listbox"]), div:has(> p:text-matches("^No matching"))';
+/** 按名字认按钮：名字是整段里的一个词就算（左栏的行名前后还跟着状态和预览，窄栏里状态在前）。 */
+const btn = (name: string, within?: string) => `${within === undefined ? "" : `${within} >> `}role=button[name=/(?:^| )${name.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}(?: |$)/]`;
+/** 从左栏点进一个项目经理的对话（手机是列表页，电脑是左栏，同一个按钮）。 */
+const openPm = (name: string): ScreenStep[] => [{ waitFor: NAV }, { click: btn(name, NAV) }, { waitFor: LOG }];
+const openRouter: ScreenStep[] = [{ waitFor: SIDEBAR }, { click: btn("Router", SIDEBAR) }, { waitFor: ROUTER_LOG }];
+const openProfile = (name: string): ScreenStep[] => [...openPm(name), { click: `role=button[name="View ${name}'s profile"]` }, { waitFor: `role=region[name="${name}'s profile"]` }];
+const openSettings = (tab?: string): ScreenStep[] => [{ waitFor: SIDEBAR }, { click: btn("Settings", SIDEBAR) }, { waitFor: DIALOG }, ...(tab === undefined ? [] : [{ click: `role=tab[name="${tab}"]` }])];
+/** 手机设置：列表页点齿轮，再点一行。 */
+const openMobileSettings = (row?: string): ScreenStep[] => [{ waitFor: SIDEBAR }, { click: btn("Settings", SIDEBAR) }, { waitFor: 'role=heading[name="Settings"]' }, ...(row === undefined ? [] : [{ click: btn(row, "role=main") }])];
+const openQuota = (patch: string): ScreenStep[] => [{ patch }, { waitFor: SIDEBAR }, { click: `${SIDEBAR} >> role=button[name=/usage|Usage/]` }, { crop: 'role=dialog[name="Usage"]' }];
+const typeInComposer = (text: string): ScreenStep => ({ type: { into: COMPOSER, text } });
+const storage = (items: Record<string, string>): ScreenStep => ({ storage: items });
+
 /**
- * 每个界面的到达步骤。实现时补全：清单里的每个 id 都要有一条。
- * 手机外壳的界面从列表点进去，不直接改网址（试跑时直接改网址停在了列表页）。
+ * 每个界面的到达步骤。清单里的每个 id 都要有一条。
+ * 手机外壳的界面从列表点进去，不直接改网址（直接改网址其实也到得了，统一点进去更像真人用法，电脑上点左栏也是同一个按钮）。
  */
-export const SCREEN_STEPS: Readonly<Partial<Record<string, readonly ScreenStep[]>>> = {};
+export const SCREEN_STEPS: Readonly<Partial<Record<string, readonly ScreenStep[]>>> = {
+  "shell.loading": [{ patch: "state-pending" }, { waitFor: "text=Loading…" }],
+  "shell.signed-out": [{ signOut: true }],
+  "shell.load-error": [{ patch: "state-500" }, { waitFor: btn("Retry") }],
+  "sidebar.normal": [...openPm("小林"), { crop: SIDEBAR }],
+  "sidebar.fresh": [{ waitFor: NAV }],
+  "sidebar.search": [{ waitFor: NAV }, { type: { into: 'role=searchbox[name="Search"]', text: "小" } }],
+  "sidebar.search-empty": [{ waitFor: NAV }, { type: { into: 'role=searchbox[name="Search"]', text: "zzz" } }],
+  "sidebar.archived": [{ waitFor: NAV }, { click: btn("Archived", SIDEBAR) }, { waitFor: btn("旧博客", SIDEBAR) }],
+  "sidebar.long": [{ waitFor: NAV }, { scroll: { target: NAV, to: 600 } }],
+  "sidebar.rail": [...openPm("小林"), { crop: SIDEBAR }],
+  "sidebar.devices": [...openPm("小林"), { waitFor: btn("东京小助手", SIDEBAR) }],
+  "sidebar.list-mobile": [{ waitFor: NAV }],
+  "chat.normal": openPm("小林"),
+  "chat.empty": openPm("项目经理"),
+  "chat.busy": [{ patch: "session-working" }, ...openPm("小林"), { waitFor: btn("Stop") }],
+  "chat.streaming": [{ patch: "session-streaming" }, ...openPm("小林"), { waitFor: "text=所以后面几次" }],
+  "chat.worked-open": [...openPm("小林"), { click: btn("Worked for", LOG) }],
+  "chat.markdown": [...openPm("文档整理"), { waitFor: "text=1.5 发布说明" }, { scroll: { target: LOG, to: "bottom" } }],
+  "chat.charts": [...openPm("文档整理"), { waitFor: ".vega-embed" }],
+  "chat.chart-zoom": [...openPm("文档整理"), { waitFor: ".vega-embed" }, { click: btn("Zoom", LOG) }, { crop: DIALOG }],
+  "chat.worker-speech": [...openPm("小林"), { waitFor: "text=查到了：MCP 首次握手" }],
+  "chat.ask-answered": openPm("阿青"),
+  "chat.user-blocker": [...openPm("小周"), { waitFor: "text=Antigravity 没登录" }],
+  "chat.system-lines": [...openPm("阿青"), { waitFor: "text=Handed off to a new session" }],
+  "chat.failed": [...openPm("Momo"), { waitFor: "text=Translate the weekly draft into Japanese" }],
+  "chat.attachments": [...openPm("Momo"), { waitFor: "text=dashboard.png" }],
+  "chat.file-preview": [...openPm("Momo"), { click: `${LOG} >> text=metrics-2026-46.csv` }, { crop: DIALOG }],
+  "chat.scrolled": [...openPm("文档整理"), { scroll: { target: LOG, to: "top" } }, { waitFor: btn("Scroll to bottom") }],
+  "chat.notices": [{ patch: "ws-reconnecting" }, { patch: "health-driver" }, ...openPm("小林"), { waitFor: "text=找不到 Claude" }],
+  "chat.device-offline": [{ patch: "device-offline" }, { waitFor: NAV }, { click: btn("东京小助手", SIDEBAR) }],
+  "chat.archived": [{ waitFor: NAV }, { click: btn("Archived", SIDEBAR) }, { click: btn("旧博客", SIDEBAR) }, { waitFor: LOG }],
+  "chat.scale-compact": [storage({ "agent-hub.uiScale": "sm" }), ...openPm("小林")],
+  "chat.scale-xl": [storage({ "agent-hub.uiScale": "xl" }), ...openPm("小林")],
+  "composer.focus": [...openPm("小林"), { focus: COMPOSER }, { crop: "[data-multiline]" }],
+  "composer.multiline": [...openPm("小林"), typeInComposer("第一行：先看超时日志"), { press: "Shift+Enter" }, typeInComposer("第二行：再看缓存"), { press: "Shift+Enter" }, typeInComposer("第三行：最后补测试"), { crop: "[data-multiline]" }],
+  "composer.menu-commands": [...openPm("小林"), typeInComposer("/"), { crop: MENU }],
+  "composer.menu-files": [...openPm("小林"), typeInComposer("@src"), { crop: MENU }],
+  "composer.menu-worker": [{ patch: "vendors-mixed" }, ...openPm("小林"), typeInComposer("/hub:worker "), { crop: MENU }],
+  "composer.menu-empty": [...openPm("小林"), typeInComposer("/zzz"), { crop: MENU }],
+  "composer.blocked": [{ patch: "send-rejected" }, ...openPm("小林"), typeInComposer("/clear"), { press: "Enter" }, { waitFor: "role=alert" }, { crop: "[data-multiline]" }],
+  "composer.drop": [...openPm("小林"), { drag: { files: ["notes.md", "screenshot.png"], over: "[aria-label='Messages']" } }, { crop: "[data-multiline]" }],
+  "rail.task-graph": [...openPm("小林"), { crop: RAIL }],
+  "rail.multi-graph": [...openPm("小林"), { crop: RAIL }],
+  "rail.pieces": [{ patch: "workers-busy" }, ...openPm("阿青"), { crop: RAIL }],
+  "rail.needs-you": [...openPm("柚子"), { click: `${RAIL} >> role=region[name="Needs You"] >> role=listitem >> role=button >> nth=0` }, { crop: RAIL }],
+  "rail.completed": [...openPm("阿青"), { click: btn("Completed", RAIL) }, { crop: RAIL }],
+  "rail.collapsed": [storage({ "agent-hub.rightRail": "closed" }), ...openPm("小林")],
+  "rail.under-header": [...openPm("小林"), { click: 'role=button[name=/Show side panel/]' }, { waitFor: RAIL }],
+  "rail.blocker": [{ patch: "blocker-checking" }, ...openPm("小周"), { click: btn("Done", LOG) }, { waitFor: "text=Checking…" }, { crop: RAIL }],
+  "rail.long": [...openPm("阿青"), { click: btn("Show more", RAIL) }, { crop: RAIL }],
+  "rail.drawer-mobile": [...openPm("小林"), { click: 'role=button[name=/Show side panel/]' }, { crop: DIALOG }],
+  "graph.dialog": [...openPm("小林"), { click: btn("Zoom", RAIL) }, { crop: DIALOG }],
+  "graph.dialog-history": [...openPm("阿青"), { click: btn("Completed", RAIL) }, { click: btn("上周的发布", RAIL) }, { crop: DIALOG }],
+  "graph.dialog-wide": [...openPm("小林"), { click: `${RAIL} >> role=button[name="Zoom"] >> nth=1` }, { crop: DIALOG }],
+  "graph.cancel-confirm": [...openPm("小林"), { click: btn("Zoom", RAIL) }, { click: btn("Cancel graph", DIALOG) }, { crop: TOP_DIALOG }],
+  "worker.normal": [...openPm("小林"), { click: btn("Piece「排查只读 Worker 超时」已派出", LOG) }, { waitFor: "text=只读排查：为什么只读 Worker 偶发超时" }],
+  "worker.busy": [{ patch: "session-working" }, ...openPm("小林"), { click: btn("Piece「排查只读 Worker 超时」已派出", LOG) }, { waitFor: btn("Stop") }],
+  "worker.ended": [...openPm("小林"), { click: btn("Piece「按厂商配置换会话阈值」已收工", LOG) }, { waitFor: "text=把 AUTO_RENEW_CONTEXT_TOKENS 改成按厂商配置" }],
+  "router.normal": openRouter,
+  "router.empty": openRouter,
+  "router.tray-many": [...openRouter, { click: btn("Show more", "role=main") }],
+  "router.timeline": [...openRouter, { scroll: { target: ROUTER_LOG, to: "bottom" } }],
+  "router.working": [{ patch: "router-working" }, ...openRouter, { waitFor: "text=Working…" }],
+  "router.failed": [{ patch: "router-failed" }, ...openRouter, { waitFor: btn("Retry", ROUTER_LOG) }],
+  "router.offline-card": [{ patch: "device-offline" }, ...openRouter],
+  "router.model-picker": [{ patch: "vendors-mixed" }, ...openRouter, { click: 'role=button[name^="Router model"]' }, { crop: POPOVER }],
+  "router.model-picker-vendor": [{ patch: "router-vendor-agy" }, ...openRouter, { click: 'role=button[name^="Router model"]' }, { click: `${POPOVER} >> text=Model & effort` }, { crop: POPOVER }],
+  "router.model-picker-long": [{ patch: "models-long-names" }, ...openRouter, { click: 'role=button[name^="Router model"]' }, { crop: POPOVER }],
+  "router.model-drawer-mobile": [{ patch: "vendors-mixed" }, ...openRouter, { click: 'role=button[name^="Router model"]' }, { crop: DIALOG }],
+  "profile.normal": openProfile("小林"),
+  "profile.lower": [...openProfile("小林"), { scroll: { target: "role=main", to: "bottom" } }],
+  "profile.schedule-form": [...openProfile("阿青"), { click: btn("New", 'role=region[name="Schedules"]') }, { type: { into: 'role=region[name="Schedules"] >> role=textbox >> nth=0', text: "一个特别特别长的定时任务名字用来测试表单校验会不会提示太长了再长一点再长一点" } }, { crop: 'role=region[name="Schedules"]' }],
+  "profile.memory-open": [...openProfile("小林"), { click: btn("Memory files") }, { crop: 'role=region[name="Memory files"]' }],
+  "profile.history": [...openProfile("阿青"), { click: 'role=button[name^="History"]' }, { crop: 'role=region[name="History"]' }],
+  "profile.history-empty": [...openProfile("项目经理"), { click: 'role=button[name^="History"]' }, { crop: 'role=region[name="History"]' }],
+  "profile.new-session-confirm": [...openProfile("小林"), { click: btn("Start…") }, { crop: TOP_DIALOG }],
+  "profile.archive-confirm": [...openProfile("小林"), { click: btn("Archive…") }, { crop: TOP_DIALOG }],
+  "profile.archived": [{ waitFor: NAV }, { click: btn("Archived", SIDEBAR) }, { click: btn("旧博客", SIDEBAR) }, { waitFor: LOG }, { click: `role=button[name="View 旧博客's profile"]` }, { waitFor: `role=region[name="旧博客's profile"]` }],
+  "profile.vendor-unavailable": [{ patch: "vendors-mixed" }, ...openProfile("小周")],
+  "profile.long": openProfile("一个名字特别特别长的项目经理用来测试左栏和顶栏会不会被撑开"),
+  "new-pm.default": [{ waitFor: SIDEBAR }, { click: btn("New project manager", SIDEBAR) }, { crop: DIALOG }],
+  "new-pm.more": [{ waitFor: SIDEBAR }, { click: btn("New project manager", SIDEBAR) }, { click: btn("More settings", DIALOG) }, { crop: DIALOG }],
+  "new-pm.invalid": [{ waitFor: SIDEBAR }, { click: btn("New project manager", SIDEBAR) }, { type: { into: `${DIALOG} >> role=textbox >> nth=0`, text: "一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一" } }, { crop: DIALOG }],
+  "new-pm.devices": [{ waitFor: SIDEBAR }, { click: btn("New project manager", SIDEBAR) }, { crop: DIALOG }],
+  "settings.general": [...openSettings("General"), { crop: DIALOG }],
+  "settings.providers": [{ patch: "vendors-mixed" }, ...openSettings("Providers"), { crop: DIALOG }],
+  "settings.providers-busy": [{ patch: "provider-installing" }, ...openSettings("Providers"), { waitFor: "text=Installing package…" }, { crop: DIALOG }],
+  "settings.providers-sign-in": [{ patch: "provider-login-code" }, ...openSettings("Providers"), { click: `${DIALOG} >> role=button >> text=Sign in…` }, { crop: TOP_DIALOG }],
+  "settings.providers-error": [{ patch: "provider-failed" }, ...openSettings("Providers"), { crop: DIALOG }],
+  "settings.sync-preview": [{ patch: "vendor-sync-preview" }, { patch: "vendors-mixed" }, ...openSettings("Providers"), { click: btn("Scan…", DIALOG) }, { crop: TOP_DIALOG }],
+  "settings.computers": [...openSettings("Computers"), { crop: DIALOG }],
+  "settings.computers-multi": [...openSettings("Computers"), { click: btn("Invite", DIALOG) }, { crop: DIALOG }],
+  "settings.computers-remove": [...openSettings("Computers"), { click: `${DIALOG} >> role=button[name^="Remove"]` }, { crop: TOP_DIALOG }],
+  "settings.security": [...openSettings("Security & Access"), { crop: DIALOG }],
+  "settings.security-open": [{ patch: "browsers-pending" }, { patch: "public-access-on" }, ...openSettings("Security & Access"), { click: `${DIALOG} >> role=button[name^="Signed-in browsers"]` }, { crop: DIALOG }],
+  "settings.long": [{ patch: "public-access-long-domain" }, ...openSettings("Security & Access"), { crop: DIALOG }],
+  "settings.tabs-top": [...openSettings("General"), { crop: DIALOG }],
+  "m-settings.home": openMobileSettings(),
+  "m-settings.scale": openMobileSettings("Interface scale"),
+  "m-settings.notifications": openMobileSettings("Notifications"),
+  "m-settings.providers": [{ patch: "vendors-mixed" }, ...openMobileSettings("Providers")],
+  "m-settings.vendor-sync": [{ patch: "vendor-sync-preview" }, { patch: "vendors-mixed" }, ...openMobileSettings("Vendor sync")],
+  "m-settings.computers": openMobileSettings("Computers"),
+  "m-settings.sign-in": openMobileSettings("Sign in on another device"),
+  "m-settings.browsers": [{ patch: "browsers-pending" }, ...openMobileSettings("Signed-in browsers")],
+  "m-settings.public-access": openMobileSettings("Public access"),
+  "m-settings.drawer-confirm": [...openMobileSettings("Signed-in browsers"), { click: btn("Sign out all browsers…") }, { crop: DIALOG }],
+  "m-settings.drawer-form": [...openMobileSettings("Computers"), { click: "role=main >> text=Tokyo Mini" }, { click: "text=Rename…" }, { crop: DIALOG }],
+  "quota.normal": openQuota("quota-normal"),
+  "quota.max": openQuota("quota-max"),
+  "quota.short-window": openQuota("quota-max"),
+  "quota.rail": openQuota("quota-normal"),
+};
 
 /** 一张要截的图：一个界面配一个视口。 */
 export interface Shot {
@@ -232,7 +376,15 @@ export interface Shot {
  * only 给了就只留 id 或区域在里面的界面；写了清单里没有的 id 或区域抛 RangeError。
  */
 export function expandShots(inventory: readonly ScreenSpec[], only?: readonly string[]): Shot[] {
-  throw new Error("未实现");
+  if (only !== undefined) {
+    const unknown = only.filter((name) => !inventory.some((spec) => spec.id === name || spec.area === name));
+    if (unknown.length > 0) throw new RangeError(`清单里没有这些界面或区域：${unknown.join("、")}`);
+  }
+  const picked = only === undefined ? inventory : inventory.filter((spec) => only.includes(spec.id) || only.includes(spec.area));
+  const shots = picked.flatMap((screen) => screen.viewports.map((viewport) => ({ key: `${screen.id}@${viewport}`, screen, viewport })));
+  const keys = new Set(shots.map((shot) => shot.key));
+  if (keys.size !== shots.length) throw new Error("清单里有重复的界面 id");
+  return shots;
 }
 
 /**
@@ -241,7 +393,41 @@ export function expandShots(inventory: readonly ScreenSpec[], only?: readonly st
  * batchSize 不是正整数抛 RangeError。
  */
 export function batchShots(shots: readonly Shot[], sentinels: readonly Shot[], seed: number, batchSize: number): Shot[][] {
-  throw new Error("未实现");
+  if (!Number.isInteger(batchSize) || batchSize <= 0) throw new RangeError(`批大小 ${batchSize} 不是正整数`);
+  const total = shots.length + sentinels.length;
+  if (total === 0) return [];
+  const count = Math.ceil(total / batchSize);
+  const batches: Shot[][] = Array.from({ length: count }, () => []);
+  sentinels.forEach((shot, i) => batches[i % count]!.push(shot));
+  // 按清单顺序依次装满，同一区域的图挨在一起，自然落在同一批或相邻两批
+  let index = 0;
+  for (const shot of shots) {
+    while (batches[index]!.length >= batchSize) index++;
+    batches[index]!.push(shot);
+  }
+  const random = mulberry32(seed);
+  return batches.map((batch) => shuffle(batch, random));
+}
+
+/** 固定种子的伪随机数（mulberry32）：同一个种子每次出同一串。 */
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function shuffle<T>(items: readonly T[], random: () => number): T[] {
+  const out = [...items];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    [out[i], out[j]] = [out[j]!, out[i]!];
+  }
+  return out;
 }
 
 /**
@@ -249,10 +435,28 @@ export function batchShots(shots: readonly Shot[], sentinels: readonly Shot[], s
  * 后置：返回每个波次里的批次下标（两家用同一套波次）；每批恰好在一个波次里，顺序不变。
  */
 export function judgeWaves(batchCount: number, judgeCount: number): number[][] {
-  throw new Error("未实现");
+  if (!Number.isInteger(batchCount) || batchCount < 0) throw new RangeError(`批数 ${batchCount} 不对`);
+  if (!Number.isInteger(judgeCount) || judgeCount <= 0 || judgeCount > JUDGE_MAX_CONCURRENT) throw new RangeError(`评委数 ${judgeCount} 不对`);
+  const perWave = Math.floor(JUDGE_MAX_CONCURRENT / judgeCount);
+  const waves: number[][] = [];
+  for (let i = 0; i < batchCount; i += perWave) waves.push(Array.from({ length: Math.min(perWave, batchCount - i) }, (_, k) => i + k));
+  return waves;
 }
+
+const STATE_TITLES: Record<ScreenState, string> = { normal: "正常", empty: "空", loading: "加载中", error: "出错", long: "超长", busy: "在忙" };
 
 /** 给用户看的界面清单（Markdown）：按区域分组，每行是名字、视口、状态、怎么到达，最后是界面数和图数。 */
 export function inventoryMarkdown(inventory: readonly ScreenSpec[]): string {
-  throw new Error("未实现");
+  const cell = (text: string) => text.replaceAll("|", "\\|").replaceAll("\n", " ");
+  const lines = ["# 界面清单", ""];
+  for (const area of SCREEN_AREAS) {
+    const specs = inventory.filter((spec) => spec.area === area);
+    if (specs.length === 0) continue;
+    lines.push(`## ${AREA_TITLES[area]}`, "", "| 界面 | 视口 | 状态 | 怎么到达 |", "| --- | --- | --- | --- |");
+    for (const spec of specs) lines.push(`| ${cell(spec.title)}（\`${spec.id}\`） | ${spec.viewports.join("、")} | ${STATE_TITLES[spec.state]} | ${cell(spec.how)} |`);
+    lines.push("");
+  }
+  const shots = inventory.reduce((n, spec) => n + spec.viewports.length, 0);
+  lines.push(`合计：${inventory.length} 个界面，${shots} 张图。`);
+  return `${lines.join("\n")}\n`;
 }
