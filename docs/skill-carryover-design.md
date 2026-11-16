@@ -46,7 +46,7 @@ Fusa 已经把六家的工具调用统一成 `agent.tool` 事件（`name` 是厂
 | agy | `/名字`，同 claude 的输入框写法（推断，读 `src/vendors/agy/composer.ts`） | 没有 | `read_file`，`session_steps` 里 “Loading skill poteto-mode”“Loading skill unslop”（实测） | `run_command`，如 `wc -l $S/poteto-mode/SKILL.md`（实测，路径里有变量） |
 | codex | Fusa 里是 `/名字`，发出前改成 `$名字`（读代码，实测） | 没有 | 没有 | `commandExecution`，`/bin/zsh -lc '…cat .agents/skills/poteto-mode/SKILL.m…'`（实测）。codex 自己的 `parsed_cmd` 只把单条命令认成 `read`，多行脚本是 `unknown`：本机记录里读 `SKILL.md` 的 97 次里 56 次是 `unknown`（实测） |
 | pi | `/skill:名字`（`src/vendors/pi/composer.ts:2`，推断） | 没有 | `read`，“Loading skill frontend-rules: …/.agents/skills/frontend-rules/SKILL.md”（实测） | `bash`（推断） |
-| deepseek | `/名字`（推断） | `skill`（`src/vendors/deepseek/spec.ts:117`），参数键名没有样例（推断） | `read`（推断） | `bash`（推断） |
+| deepseek | `/名字`（推断） | `skill`，参数 `{"name": "<技能名>"}`（读 `@deepseek-ai/dsh-tool-skill` 0.2.2-rc.1 源码，实测） | `read`（推断） | `bash`（推断） |
 | cursor | `/名字`（`src/vendors/cursor/composer.ts:146` 扫的就是技能目录，推断） | 没有 | `Read`、`read_file`（推断） | `Shell`、`run_terminal_cmd`（推断） |
 
 本机账本里 deepseek 没有会话，cursor 只有 4 个，这两家只能推断。
@@ -124,8 +124,8 @@ CREATE INDEX loaded_skills_generation ON loaded_skills (conversation_id, generat
    - `command`：命令在 `command` 或 `CommandLine`。用 `shell-quote`（npm 上成熟的 shell 分词库）把命令拆成一段段，先拆开 `sh|bash|zsh -c/-lc '<脚本>'` 和 PowerShell `-Command` 这层包装，再按换行、`;`、`&&`、`||`、`|` 分段。某一段的命令是读文件的（`cat`、`head`、`tail`、`sed`、`nl`、`less`、`more`、`bat`、`Get-Content`、`gc`、`type`），它的参数里的技能路径就算加载。带 `>` 重定向的段和 `sed -i` 是在写，不算。`ls`、`wc`、`grep`、`find`、`stat` 不读正文，不算。参数里有没展开的变量（如 `$S/poteto-mode/SKILL.md`）认不出，不记。
    - 相对路径按工具参数里的 `cwd`（codex 有）或会话的工作目录解析。
    - 子代理里的调用（`parentToolUseId` 有值）不记，和 `session_steps` 一样，那不是项目经理自己的上下文。
-2. **从用户消息认。** 一批消息开始处理（`message.processing`）时，看其中 `sender = 'user'`、`kind = 'text'` 的消息，用 `composer.commandNameOf(text)` 取命令名，再按 `spec.skillSignals.userTriggers` 额外认 codex 的 `$名字`。记在真正处理它的那一代上；换代时被挪到新会话的消息因此记在新一代。
-3. **名字规整。** `skillNameOf(raw)` 去掉命名空间：`fusa:fusa-task-graph`、`skill:frontend-rules` 都取最后一段。状态行、任务图技能的隐藏判断、这里共用这一个函数。
+2. **从用户消息认。** 一批消息开始处理（`message.processing`）时，看其中 `sender = 'user'`、`kind = 'text'` 的消息，用 `commandNameOf(text, 开头)`（`src/vendors/types.ts`，输入框也用它）取命令名，再按 `spec.skillSignals.userTriggers` 额外认 codex 的 `$名字`。记在真正处理它的那一代上；换代时被挪到新会话的消息因此记在新一代。
+3. **名字规整。** `skillNameOf(raw)`（`src/shared/skill-names.ts`）去掉命名空间：`fusa:fusa-task-graph`、`skill:frontend-rules` 都取最后一段。状态行、任务图技能的隐藏判断、这里共用这一个函数。
 4. **名字找路径。** `resolveSkillFile(name, session)` 按顺序在这些目录里找 `<名字>/SKILL.md`，第一个存在的就是：
    - 这个会话启动目录里的产品技能目录（`launch/<会话>/skills`，任务图手册在这里）；
    - 工作目录和每个附加目录下，这家 `VendorSyncAdapter.skillTarget(ctx, { kind: "project" })` 给的目录（`mode: "native"` 就是 `<目录>/.agents/skills`），再加 `<目录>/.agents/skills`；
@@ -148,7 +148,7 @@ skillSignals?: {
 };
 ```
 
-工具名到动作的翻译（`tools.actions`）和技能目录（`sync.ts` 的 `skillTarget`）是每家本来就要写的。加一家新厂商，照常写这两处，有特殊写法再填 `skillSignals`。契约测试（`src/vendors/contract.test.ts`）给每家各加一条“用户手打”和“模型加载”的样例，新厂商不填样例测试就不过。
+工具名到动作的翻译（`tools.actions`）和技能目录（`sync.ts` 的 `skillTarget`）是每家本来就要写的。加一家新厂商，照常写这两处，有特殊写法再填 `skillSignals`。`src/shared/skill-loads.test.ts` 的样例表按 `Record<AgentVendor, …>` 写，每家至少一条“用户手打”和一条“模型加载”，新厂商不填样例类型检查就不过。
 
 ### 带进新会话
 
@@ -217,8 +217,8 @@ skillSignals?: {
 
 1. `src/daemon/ledger/ledger.ts:201-205`：`liveActiveGraphsSection` 给未完结的任务图后面接一行 `taskGraphManual(sessionId)`。这是“换代后叫模型去重读任务图手册”的旧说法。上一代加载过手册的，新做法把正文直接带过去；没加载过的，系统提示词第 2 步（`src/daemon/prompt.ts:109-117`）和 `hub graph` 的回执里本来就有手册路径。删掉后 `src/daemon/task-graph-skill.ts:28`、`:54-57` 注释里“换新会话的开场说明”那一处，和 `docs/orchestration-skill-design.md` 第 7 节里“开场说明带手册路径”这一道一起改掉。
 2. `src/shared/task-graph-skill.ts:15-23` 的 `INTERNAL_SKILL_COMMAND_NAMES`：写死的 `fusa:`、`skill:` 前缀表删掉，`isInternalSkillCommand` 改成 `skillNameOf(name) === TASK_GRAPH_SKILL_NAME`。
-3. `src/shared/step-labels.ts:69-77` 的 `SKILL_FILE_RE` 和 `skillName()`：搬进 `src/shared/skill-loads.ts`，`step-labels.ts` 只引用，不留第二份。
-4. `src/vendors/_common/composer.ts:27-31` 闭包里的 `commandNameOf`：提到 `VendorComposerBase` 上作为公开方法，`isCommand`、`isCompactCommand` 改成基于它，不留两套解析。
+3. `src/shared/step-labels.ts:69-77` 的 `SKILL_FILE_RE` 和 `skillName()`：搬进 `src/shared/skill-names.ts`（不引别的模块，`step-labels.ts`、`task-graph-skill.ts`、`skill-loads.ts` 都引它，避免 `skill-loads.ts` 和 `step-labels.ts` 互相引用），不留第二份。
+4. `src/vendors/_common/composer.ts:27-31` 闭包里的 `commandNameOf`，和 `src/vendors/codex/composer.ts` 的 `rewriteCodexSkillCommand` 里另写的一份：合成 `src/vendors/types.ts` 的纯函数 `commandNameOf(text, 开头)`，输入框、codex 的 `$` 改写、记录用户调用都用它，不留三套解析。
 5. 项目经理性格设定里“每个会话开工先读 SKILL.md 全文”：合并后由项目经理用 `hub persona edit` 删掉，不再留一句叫模型重读的提示词。
 
 不删的：驱动层把命令单独写进会话（`base-driver.ts:303`、`:604`）是厂商命令行认命令的前提，和这件事无关。
@@ -226,9 +226,11 @@ skillSignals?: {
 ### 要改的文件
 
 - `migrations/0028_loaded_skills.sql`：新表。
-- `src/shared/skill-loads.ts`（新）：`SKILL_FILE_RE`、`skillNameOf`、`recognizeSkillLoads(vendor, toolName, input)`、`userSkillCommandOf(vendor, text)`。纯函数，前后端都能引。
+- `src/shared/skill-names.ts`（新）：`SKILL_FILE_RE`、`skillNameOf`、`skillNameOfFile`。
+- `src/shared/skill-loads.ts`（新）：`toolSkillLoads(vendor, toolName, input)`、`userSkillCommandOf(vendor, text)`。纯函数，不碰磁盘。
+- `src/daemon/skill-files.ts`（新）：认到的加载落到哪个 `SKILL.md`（按名字找的目录清单、相对路径、`realpath`）、换代时读正文。守护进程按 `launchDir`、用户目录、环境变量建好传给账本（`LedgerOptions.skillFiles`），测试用临时目录里的真文件。
 - `src/vendors/types.ts`、各家 `spec.ts`：`skillSignals`。
-- `src/daemon/ledger/loaded-skills.ts`（新）：收事件记录、`carrySkills`、渲染那一节。解析路径要碰磁盘，`resolveSkillFile` 和读文件函数像 `findTranscript` 一样由守护进程注入，测试里给假的。
+- `src/daemon/ledger/loaded-skills.ts`（新）：收事件记录、`carryIn`（即上文的 `carrySkills`）、渲染那一节。
 - `src/daemon/ledger/handover.ts`：`switchIn` 调 `carrySkills`；`sessionPreambleText`、`handoverRequestText`、`sessionPreamble` 带上这一节；文件开头第 4 步的说明改成新的开场组成。
 - `src/daemon/ledger/vendor-switch-context.ts`：`buildVendorSwitchPreamble` 收 `skills`。
 - `src/daemon/ledger/persona.ts`：删项目经理时清表。
@@ -244,7 +246,6 @@ skillSignals?: {
 - `src/shared/skill-loads.test.ts`：每家至少一个“用户手打”和一个“模型加载”的样例被认出，用上面表里的真实参数形状：claude `Skill`、`Read`、`Bash cat`、`/poteto-mode`；agy `read_file`、`run_command`；codex `/bin/zsh -lc '…cat …/SKILL.md…'`（单行和多行脚本）、`/名字` 和 `$名字`；pi `read`、`/skill:名字`；deepseek `skill`、`read`；cursor `Read`、`Shell`。不该认的：`ls`、`wc`、`grep`、`cat > SKILL.md`、`sed -i`、不在 `skills/<名字>/` 下的 `SKILL.md`、带变量的路径、子代理里的调用。
 - `src/daemon/ledger/loaded-skills.test.ts`：软链去重；单个截断和合计裁剪（裁掉的进名单、留在旧代）；跨两代继承（第 1 代加载、第 2 代没再加载、第 3 代开场里还在）；文件缺失跳过并注明；任务图手册换了启动目录后按名字重新找到；超过 `SKILL_CARRYOVER_RECORDS_MAX` 删最旧的；删项目经理后表里没有这个对话的行。
 - `src/daemon/ledger/handover.test.ts`：普通换代、手动开新会话、切换厂商三条路的开场说明都带这一节，位置在说明头后面；开场说明里不再有任务图手册那一行。
-- `src/vendors/contract.test.ts`：每家 `spec` 都给了两类样例。
 - 本机照 `AGENTS.md` 跑 `pnpm typecheck` 和这些测试文件；这次不涉及写入范围，不用跑 `src/shared/write-scope.test.ts`。
 
 ### 验收方法

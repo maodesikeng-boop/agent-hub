@@ -109,7 +109,7 @@ queued ──(旧会话空闲)──► forking ──► writing ──► read
 
 - 建 `generation + 1` 的会话（抄工作目录、模型、思考程度、额度状态）；旧会话登记 `session.end`；
 - 记分隔线 R（`session.renewed`，网页照旧显示成很淡的分隔线，点开看交接全文），meta 里带 `handoverId`；
-- **开场说明在这一刻定稿**：交接 + 原话（第 3 节）拼好存到这一行的 `preamble`，`sessionPreamble(sessionId)` 直接返回它（不再每次现算；之后的消息本来就发给新会话，不会漏）；
+- **开场说明在这一刻定稿**：上一代加载过的技能正文（`docs/skill-carryover-design.md`）+ 交接 + 原话（第 3 节）拼好存到这一行的 `preamble`（技能那一节另存 `skills_section`，切换厂商时开场说明现拼要用），`sessionPreamble(sessionId)` 直接返回它（不再每次现算；之后的消息本来就发给新会话，不会漏）；
 - 压着的、还在排队的消息改发给新会话（照旧）；
 - **登记 `session.start` 预热新会话的进程**（第 5 节）；
 - 登记清理复制那份（跑腿的异步做，第 2.6 节）；
