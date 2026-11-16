@@ -3,7 +3,7 @@
 // - 三路/四路并行探索再汇总（a, b, c -> sum）多路交棒拼装与 12,000 字上限截断落盘 launch/<sessionId>/upstream/<stepKey>.md；
 // - 汇报填写“偏离”自动踩刹车停在 waiting:pm 叫醒 PM；“做完了”但“问题”非无时交棒照走并抄送 PM；
 // - 分叉步骤 addWorktree 指定 base 为上游分支、base: "main" 从主干开、跳过中间步骤向上追溯最近未跳过上游交棒与目录；
-// - 自动拉起时厂商不可用置为 waiting:pm 叫醒 PM，PM 调 worker start --node 换人自动复用任务与交棒并写回新 vendor/model/effort；
+// - 自动拉起时厂商没登录置为 waiting:user 挂卡并告诉 PM，PM 也可以调 worker start --node 换人自动复用任务与交棒并写回新 vendor/model/effort；
 // - hub graph cancel / 网页取消自动停掉所有在跑 Worker；hub worker end 仅作停机不再标步骤 done。
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -637,7 +637,7 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
 
     // 2) mid 汇报“做完了”、无偏离，但“问题”栏有话；且下游 rev 指定的 cursor 未登录不可用：
     //    - mid 照常标 done 并收工，且其汇报抄送唤醒 PM；
-    //    - 下游 rev 自动拉起失败置为 waiting:pm 并唤醒 PM 说明原因！
+    //    - 下游 rev 自动拉起失败：要用户登录，置为 waiting:user、挂卡，并告诉 PM 已挂卡（docs/user-blockers-design.md）
     enqueued.length = 0;
     runWorkerReportTurn(
       wMid,
@@ -651,12 +651,13 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
     );
     cur = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph;
     expect(stateOf(cur.nodes[1]!)).toBe("done");
-    expect(stateOf(cur.nodes[2]!)).toBe("waiting:pm");
-    // 两条唤醒 PM 的消息：1 条是 mid 留问题的汇报抄送，1 条是 rev 自动开工失败通知
+    expect(stateOf(cur.nodes[2]!)).toBe("waiting:user");
+    expect(cur.nodes[2]!.userBlocker).toMatchObject({ kind: "vendor_signed_out", vendor: "cursor" });
+    // 两条唤醒 PM 的消息：1 条是 mid 留问题的汇报抄送，1 条是 rev 等用户登录的说明
     expect(pmSendActions()).toHaveLength(2);
     const pmTexts = pmSendActions().map((a) => ledger.getMessage(a.params.messageId)!.text);
     expect(pmTexts.some((t) => t.includes("建议在后续版本移除历史兼容视图"))).toBe(true);
-    expect(pmTexts.some((t) => t.includes("第 3/3 步「异构审查」等你处理】自动开工未成功"))).toBe(true);
+    expect(pmTexts.some((t) => t.includes("第 3/3 步「异构审查」等用户动手】") && t.includes("已挂卡等用户"))).toBe(true);
 
     // 3) PM 用 hub worker start --node rev --vendor codex --model gpt-5 --effort medium 换一家：
     //    无需重传 title 和 task，自动继承职责、审查清单、上游交棒与同一个 worktree，且新的 vendor/model/effort 写回步骤！
@@ -671,6 +672,7 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
     expect(cur.nodes[2]).toMatchObject({
       status: "running",
       activeWorkerId: replaced.id,
+      userBlocker: null,
       vendor: "codex",
       model: "gpt-5",
       effort: "medium",
