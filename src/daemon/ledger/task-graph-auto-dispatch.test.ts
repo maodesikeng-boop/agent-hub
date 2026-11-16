@@ -20,7 +20,7 @@ import {
 } from "../../shared/limits.ts";
 import { removeSessionLaunchDir, sessionLaunchDir, workerSetupLogPath } from "../../shared/paths.ts";
 import { buildReadonlyPolicy } from "../../shared/readonly-policy.ts";
-import { bundledModelCatalog, type AgentVendor, type ModelCatalog, type VendorAvailability } from "../../shared/vendors.ts";
+import type { AgentVendor, VendorAvailability } from "../../shared/vendors.ts";
 import { REVIEW_CHECKLIST } from "../../shared/review.ts";
 import { REPORT_END, REPORT_START } from "../../shared/worker.ts";
 import { scopeAllowsWrite, workerWriteScope } from "../../shared/write-scope.ts";
@@ -127,10 +127,7 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
       setupLogsDir,
       userHome: root,
       osSandboxed: () => true,
-      modelCatalog: (vendor): ModelCatalog => ({
-        ...bundledModelCatalog(vendor),
-        availability: availabilityByVendor[vendor] ?? "available",
-      }),
+      models: { current: () => null, availability: (vendor) => availabilityByVendor[vendor] ?? "available" },
       resolveFolder: createResolveFolder({ dataHome, userHome: root }),
     });
     ledger.onActionEnqueued((a) => enqueued.push(a));

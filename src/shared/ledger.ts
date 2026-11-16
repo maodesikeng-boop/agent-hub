@@ -54,7 +54,7 @@ import type { ReviewSnapshot, ReviewVerifyResult } from "./review.ts";
 import type { SelfReloadStatus } from "./api.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
 import { API_ERRORS } from "./errors.ts";
-import type { AgentVendor, ModelCatalog, VendorAvailability, VendorAvailabilityMap } from "./vendors.ts";
+import type { AgentVendor, ModelCatalog, VendorAvailabilityMap } from "./vendors.ts";
 import type { UserBlockerId } from "./user-blockers.ts";
 import type { WorkerPick } from "./worker.ts";
 
@@ -348,10 +348,6 @@ export interface HubCallContext {
   prError?: string | null;
   /** worker.show：这个 Worker 的会话在厂商那边的原始记录文件；找不到就是 null（show 写“找不到”）。 */
   transcript?: string | null;
-  /** worker.start 带 --vendor 时：这家在这台设备上能不能用；没装、没登录账本拒绝派。 */
-  vendorStatus?: { vendor: AgentVendor; availability: VendorAvailability };
-  /** graph.create / patch / done / decide / skip 自动开工前预探的多厂商可用状态。 */
-  vendorStatuses?: Partial<Record<AgentVendor, VendorAvailability>>;
   /** models：agent 接口按 --vendor / --refresh 异步查好的模型目录；不传时账本用缓存或打包目录兜底。 */
   modelCatalogs?: readonly ModelCatalog[];
   /** graph.finish：agent 接口在结束图前异步查好的 PR（按分支名或手工补记的 PR 网址索引；查不到或未装 gh 的不在此表中，不硬拦）。 */
@@ -710,10 +706,10 @@ export interface Ledger extends LedgerHandoverWork {
   /** 用户在对话里的提问卡上点选项、填写：按卡上那条 ask 消息回答这一张卡（别的卡不动）。没有这张卡 → not_found。 */
   answerAsk(askMessageId: MessageId, input: ResolveRouterItemRequest): ResolveRouterItemResponse;
   /**
-   * 用户在“要你动手”的提醒卡上点了 Done，界面服务重查完这家厂商（availability）之后调：还不能用卡留着，能用就解开并接着派
-   * （docs/user-blockers-design.md）。已经解开的原样回。没有这条 → not_found。
+   * 用户在“要你动手”的提醒卡上点了 Done，界面服务让 ModelCatalogs 重问过这家厂商之后调：账本读现在的状态，还不能用卡留着，
+   * 能用就解开，所有被它卡住的步骤和 Worker 接着派（docs/user-blockers-design.md）。已经解开的原样回。没有这条 → not_found。
    */
-  recheckUserBlocker(id: UserBlockerId, availability: VendorAvailability): RecheckUserBlockerResponse;
+  recheckUserBlocker(id: UserBlockerId): RecheckUserBlockerResponse;
   /** 这条阻塞等的是哪家厂商（界面服务重查前要知道问谁）；没有或已解开是 null。 */
   userBlockerVendor(id: UserBlockerId): AgentVendor | null;
   /**

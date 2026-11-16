@@ -1,6 +1,6 @@
 // 要用户本人动手才解得开的阻塞（docs/user-blockers-design.md）：谁在等、等什么、在哪台设备、怎么解除，只在这里定义。
 // 步骤显示“等你”、系统挂的提醒卡、点“已处理”后重查与接着派，都从这个形状推出来。
-import type { MessageId } from "./domain.ts";
+import { SYSTEM_MESSAGE_PREFIX } from "./domain.ts";
 import { LedgerRequestError } from "./ledger.ts";
 import {
   VENDOR_FAILURE_SIGNS,
@@ -24,10 +24,9 @@ export interface UserBlockerCause {
   device: string;
 }
 
-/** 一条阻塞的完整状态：原因、卡（对话里那条提醒消息），以及上次点“已处理”后重查的结果。 */
+/** 一条阻塞的完整状态：原因，以及上次点“已处理”后重查的结果。卡是每个被卡住的项目经理对话里各一条消息（meta.blockerRef 指回这里）。 */
 export interface UserBlocker extends UserBlockerCause {
   id: UserBlockerId;
-  askMessageId: MessageId | null;
   /** 点过“已处理”但重查还不能用时记下的那次状态；没重查过是 null。 */
   recheckedAs: VendorAvailability | null;
 }
@@ -64,6 +63,11 @@ export function userBlockerCardText(blocker: UserBlockerCause & Pick<UserBlocker
   const head = `${userBlockerText(blocker)}。`;
   if (blocker.recheckedAs === null) return head;
   return `${head}\n\n${blocker.recheckedAs === "not_installed" ? "刚查过，还是没装。" : "刚查过，还是没登录。"}`;
+}
+
+/** 解开后卡住的 Worker 没有可重发的消息时，发给它的那句。 */
+export function userBlockerResumeText(blocker: UserBlockerCause): string {
+  return `${SYSTEM_MESSAGE_PREFIX}${vendorLabel(blocker.vendor)} 在这台设备上已经能用了，接着做你的任务。`;
 }
 
 /** 账本派 Worker 时发现要用户动手：带着原因抛出，自动开工的那一步据此挂卡等用户，而不是交给项目经理。 */

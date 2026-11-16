@@ -47,7 +47,7 @@ export function UserBlockerCard({
       data-testid="user-blocker-card"
       className={cn(
         "rounded-2xl border px-3.5 py-3",
-        answered ? "border-border bg-card" : "border-primary bg-jelly",
+        answered ? "border-border bg-background" : "border-primary bg-jelly",
         className,
       )}
     >

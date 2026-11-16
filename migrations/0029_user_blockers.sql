@@ -1,21 +1,30 @@
 -- 0029_user_blockers：要用户本人动手才解得开的阻塞（docs/user-blockers-design.md）。
--- 同一家厂商在这台设备上只有一条在等；被卡住的步骤记在 user_blocker_steps，起不来的 Worker 连同没送进去的消息记在 user_blocker_workers。
+-- 一个原因一条：同一家厂商在这台设备上只有一条在等，用户处理一次就解开所有被它卡住的步骤和 Worker。
+-- 每个被卡住的项目经理对话里各一张卡（user_blocker_cards）；删掉一个对话只删它那张卡，阻塞和别的对话不受影响。
+-- 被卡住的步骤记在 user_blocker_steps，起不来的 Worker 连同没送进去的消息记在 user_blocker_workers。
 -- 不改 task_graph_steps 的列；要能从 user_version = 8 起重跑，表、索引、触发器都带 IF NOT EXISTS
 -- （0026 重跑会重建 task_graph_steps、连带删掉它上面的触发器，这里重跑时再建回来）。
 CREATE TABLE IF NOT EXISTS user_blockers (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  kind            TEXT    NOT NULL CHECK (kind IN ('vendor_signed_out', 'vendor_not_installed')),
-  vendor          TEXT    NOT NULL,
-  device          TEXT    NOT NULL,
-  status          TEXT    NOT NULL CHECK (status IN ('open', 'resolved')),
-  conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-  ask_message_id  INTEGER REFERENCES messages(id) ON DELETE SET NULL,
-  rechecked_as    TEXT,
-  created_at      INTEGER NOT NULL,
-  updated_at      INTEGER NOT NULL
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind         TEXT    NOT NULL CHECK (kind IN ('vendor_signed_out', 'vendor_not_installed')),
+  vendor       TEXT    NOT NULL,
+  device       TEXT    NOT NULL,
+  status       TEXT    NOT NULL CHECK (status IN ('open', 'resolved')),
+  rechecked_as TEXT,
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL
 ) STRICT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS user_blockers_open_vendor ON user_blockers (vendor) WHERE status = 'open';
+
+CREATE TABLE IF NOT EXISTS user_blocker_cards (
+  blocker_id      INTEGER NOT NULL REFERENCES user_blockers(id) ON DELETE CASCADE,
+  conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  message_id      INTEGER NOT NULL UNIQUE REFERENCES messages(id) ON DELETE CASCADE,
+  PRIMARY KEY (blocker_id, conversation_id)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS user_blocker_cards_conversation ON user_blocker_cards (conversation_id);
 
 CREATE TABLE IF NOT EXISTS user_blocker_steps (
   step_id    INTEGER PRIMARY KEY REFERENCES task_graph_steps(id) ON DELETE CASCADE,

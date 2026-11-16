@@ -325,7 +325,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
   - 拍板通过（`done`，带定案）后水果刀收起、果冻卡收合，该节点变回紧凑果皮轨单行，并在右侧显示所选简称（`text-xs text-foreground`）。
 - **要你动手的提醒卡（`UserBlockerCard`，步骤 `waiting` + `waitingFor: "user"` 且带 `userBlocker`，docs/user-blockers-design.md）**：
   - 水果刀与泳道照拍板步骤画，卡片换成提醒卡：外壳同拍板卡（`rounded-2xl border border-primary bg-jelly px-3.5 py-3`），顶上一行 `size-2 rounded-full bg-status-active` 圆点加 `text-xs font-medium text-primary` 的 `Waiting on you`，正文是系统写的那句（在哪台设备做什么，`text-minor` Markdown），右下一个主按钮 `Done`（`Button size="sm"`），重查中显示 `Checking…` 加转圈并禁用；不加说明小字。放大全览弹窗里步骤标题行已经写了 `Waiting on you`，卡里那一行不再出。
-  - 对话里那条消息是同一张卡；处理完（重查能用）后卡变成 `border-border bg-card`，状态词改 `Done`（`text-muted-foreground`，圆点 `bg-muted-foreground`），不再有按钮。已挂在步骤上的那张不在 `Needs You` 重复出现。
+  - 对话里那条消息是同一张卡；处理完（重查能用）后卡变成 `border-border bg-background`（同已回答的提问卡），状态词改 `Done`（`text-muted-foreground`，圆点 `bg-muted-foreground`），不再有按钮。已挂在步骤上的那张不在 `Needs You` 重复出现。
 - **放大全览弹窗（`TaskGraphDialog`）**：
   - 点击任务头右上角 `Maximize2`（或 `Completed` 列表中的历史任务图行）打开 `Dialog`（复用第 15 条放大窗规格 `h-[90dvh] w-[min(96vw,1400px)] max-w-none`，滚动视口保持弹窗内边距 `p-6` 不外扩贴边，原生双向滚动）。
   - 调用 `src/web/task-graph-layout.ts` 的 `computeTaskGraphLayout(..., viewportMode: "dialog")`（横向 `rankdir: "LR"`，`lru-cache` 容量 64），底层单张 `<svg aria-hidden="true">` 绘制 `1.5px` 三次贝塞尔有向连线与 `3px` 轻量折角箭头（上游 `done` 实线，其余 `stroke-dasharray="4 3"` 虚线；跨多层且直连会擦碰中间卡片的长边沿 Dagre 分层拐点平滑绕行，绝不横穿中间卡片正文），上层渲染完整阶段卡片（已完成绿勾、在干同色系果皮浅晕圆环、等项目经理琥珀圆点）、绑定 Piece 跳转、产物摘要、内联拍板/跳过节点（`Skip step`）/取消任务图（`Cancel graph`）及历史拍板记录。

@@ -382,7 +382,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     // 联机：设备身份（要用户在这台设备上动手时，卡上和 hub worker start 的报错里写设备名）
     const device = loadOrCreateDevice(paths.deviceFile, defaultDeviceName(hostname()));
     const ledger = createLedger(db, {
-      modelCatalog: (vendor) => models.current(vendor),
+      models,
       deviceName: () => device.name,
       // 手打命令时看缓存着的命令列表（commands 在下面才建，所以现用现取）
       knownCommands: (session) => parts.commands?.cached(session) ?? null,
@@ -428,7 +428,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       hubSock: paths.hubSock,
       log,
       models,
-      vendorUsable: (vendor) => models.ensureUsable(vendor),
+      refreshVendor: (vendor) => models.ensureUsable(vendor),
       sandboxGuard,
       ...(options.onSelfReload
         ? {
@@ -804,7 +804,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       deviceName: () => device.name,
       ledger,
       uploadsDir,
-      vendorUsable: (vendor) => models.ensureUsable(vendor),
+      refreshVendor: (vendor) => models.ensureUsable(vendor),
     });
     const routerTargetRegistry = createRouterTargetRegistry({
       localPort: routerLocalPort,

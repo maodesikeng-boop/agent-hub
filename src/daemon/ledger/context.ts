@@ -7,7 +7,7 @@ import type { AgentSessionRow, ConversationId, HealthModule, SessionId } from ".
 import { LedgerRequestError } from "../../shared/ledger.ts";
 import type { LedgerErrorCode, ResolveFolder } from "../../shared/ledger.ts";
 import { CHANGE_BUFFER_SIZE } from "../../shared/limits.ts";
-import { modelLabel, modelShortLabel, type AgentVendor, type ModelCatalog } from "../../shared/vendors.ts";
+import { modelLabel, modelShortLabel, type AgentVendor, type ModelCatalog, type VendorAvailability } from "../../shared/vendors.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
 import { enqueueAction } from "../actions/index.ts";
 import type { Db } from "../store/index.ts";
@@ -16,6 +16,7 @@ import type { ChangeInput, ChangeLog } from "./change-log.ts";
 import { toHealth } from "./rows.ts";
 import type { HealthDbRow } from "./rows.ts";
 import { composerBaseOf } from "../vendors/index.ts";
+import type { ModelCatalogs } from "../driver/model-catalog.ts";
 import { osSandboxAvailable } from "../driver/write-scope.ts";
 
 export type StopEvent = { conversationId: ConversationId; sessionId: SessionId };
@@ -78,6 +79,8 @@ export interface LedgerContext {
   reportHealthIn(p: Pending, module: HealthModule, error: string | null): void;
   /** 现在缓存着的模型名单（ModelCatalogs.current），还没问到是 null。 */
   modelCatalog(vendor: AgentVendor): ModelCatalog | null;
+  /** 这家厂商在这台设备上现在能不能用（ModelCatalogs.availability）：账本判断要不要用户动手只读这里。不给是 unknown。 */
+  vendorAvailability(vendor: AgentVendor): VendorAvailability;
   /** 系统消息、hub 输出里的模型名：用缓存着的模型名单里的名字（“Opus 4.6”），没有名单用打包的，都没有原样。 */
   modelLabel(vendor: AgentVendor, model: string | null): string;
   /** 和网页右栏的 Worker 行同一个写法（vendors.ts 的 modelShortLabel）：Opus 5.5、Sonnet 5.5；默认写厂商说的实际模型。hub worker show 用。 */
@@ -116,8 +119,8 @@ export interface LedgerFiles {
 
 export interface LedgerContextOptions {
   now?: () => number;
-  /** 现在缓存着的模型名单（daemon/driver/model-catalog.ts 的 ModelCatalogs.current），还没问到是 null。 */
-  modelCatalog?: (vendor: AgentVendor) => ModelCatalog | null;
+  /** 这台设备上各家的模型名单和状态（daemon/driver/model-catalog.ts 的 ModelCatalogs，守护进程原样传进来）。不给：名单用打包的，状态 unknown。 */
+  models?: Pick<ModelCatalogs, "current" | "availability">;
   /** 缓存着的这个会话的完整命令列表（daemon/commands-catalog.ts 的 cached），没缓存是 null；不给等于都没缓存。 */
   knownCommands?: (session: Pick<AgentSessionRow, "vendor" | "cwd" | "addDirs">) => ComposerCommand[] | null;
   initialSeq?: number;
@@ -203,7 +206,8 @@ export function createLedgerContext(db: Db, options: LedgerContextOptions): Ledg
     p.changes.push({ type: "health.updated", data: { health: toHealth(updated) } });
   };
 
-  const modelCatalog = (vendor: AgentVendor) => options.modelCatalog?.(vendor) ?? null;
+  const modelCatalog = (vendor: AgentVendor) => options.models?.current(vendor) ?? null;
+  const vendorAvailability = (vendor: AgentVendor): VendorAvailability => options.models?.availability(vendor) ?? "unknown";
   const label = (vendor: AgentVendor, model: string | null) => {
     const catalog = modelCatalog(vendor);
     return catalog === null ? modelLabel(vendor, model) : modelLabel(vendor, model, catalog);
@@ -228,6 +232,7 @@ export function createLedgerContext(db: Db, options: LedgerContextOptions): Ledg
     enqueue,
     reportHealthIn,
     modelCatalog,
+    vendorAvailability,
     modelLabel: label,
     modelShortLabel: shortLabel,
     commandBlockReason,

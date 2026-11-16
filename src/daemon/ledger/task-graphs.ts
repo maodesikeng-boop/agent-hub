@@ -106,7 +106,6 @@ import {
   isAgentVendor,
   splitModelEffort,
   type AgentVendor,
-  type VendorAvailability,
 } from "../../shared/vendors.ts";
 import {
   extractReportPrUrl,
@@ -3853,40 +3852,31 @@ export function createLedgerTaskGraphs(
   };
 
   /**
-   * 这条阻塞解开了：被它卡住、还在等用户的步骤接着派。没派出去的退回没轮到、按刚重查到的厂商状态重算整张图（自动开工）；
-   * 挂着 Worker 的由 Worker 那边重发消息时回到在干（onWorkerResumedIn）；Worker 已经不在名单上的交给项目经理。
+   * 这条阻塞解开了（user-blockers.ts 的 resolveIn，同一个事务里 Worker 那边接着跑）：被它卡住、还在等用户的步骤全部离开等用户——
+   * 没派出去的退回没轮到、重算整张图（自动开工）；挂着的 Worker 还开着的回到在干；Worker 已经收工的交给项目经理。每张受影响的图都推一次变化。
    */
-  const releaseUserBlockedStepsIn = (
-    p: Pending,
-    blockerId: UserBlockerId,
-    vendorStatus: { vendor: AgentVendor; availability: VendorAvailability },
-  ): void => {
-    const rows = db.all<TaskNodeDbRow>(
-      `SELECT n.* FROM task_graph_steps n JOIN user_blocker_steps s ON s.step_id = n.id
+  const releaseUserBlockedStepsIn = (p: Pending, blockerId: UserBlockerId): void => {
+    const rows = db.all<TaskNodeDbRow & { worker_status: string | null }>(
+      `SELECT n.*, w.status AS worker_status FROM task_graph_steps n
+         JOIN user_blocker_steps s ON s.step_id = n.id
+         LEFT JOIN workers w ON w.id = n.active_worker_id
         WHERE s.blocker_id = ? AND n.status = 'waiting' AND n.waiting_for = 'user' ORDER BY n.id`,
       blockerId,
     );
     const t = now();
     const graphIds = new Set<TaskGraphId>();
     for (const row of rows) {
-      if (row.active_worker_id === null) {
-        db.run("UPDATE task_graph_steps SET status = 'pending', waiting_for = NULL, updated_at = ? WHERE id = ?", t, row.id);
-        graphIds.add(row.graph_id);
-        continue;
-      }
-      const resumes =
-        db.get("SELECT 1 AS x FROM user_blocker_workers WHERE blocker_id = ? AND worker_id = ?", blockerId, row.active_worker_id) !== undefined;
-      if (!resumes) {
-        db.run("UPDATE task_graph_steps SET status = 'waiting', waiting_for = 'pm', updated_at = ? WHERE id = ?", t, row.id);
-        graphIds.add(row.graph_id);
-      }
+      const [status, waitingFor] =
+        row.active_worker_id === null ? ["pending", null] : row.worker_status === "open" ? ["running", null] : ["waiting", "pm"];
+      db.run("UPDATE task_graph_steps SET status = ?, waiting_for = ?, updated_at = ? WHERE id = ?", status, waitingFor, t, row.id);
+      graphIds.add(row.graph_id);
     }
-    const context: HubCallContext = { vendorStatuses: { [vendorStatus.vendor]: vendorStatus.availability } };
     for (const graphId of graphIds) {
       const graphRow = getGraphRow(graphId);
-      if (graphRow === undefined || graphRow.status !== "active") continue;
-      recomputeGraphProgressIn(p, graphRow, undefined, context, { retractBlockedWaiting: false });
-      const graph = loadGraph(graphRow.id, false);
+      if (graphRow === undefined) continue;
+      if (graphRow.status === "active") recomputeGraphProgressIn(p, graphRow, undefined, undefined, { retractBlockedWaiting: false });
+      db.run("UPDATE task_graphs SET updated_at = ? WHERE id = ?", t, graphId);
+      const graph = loadGraph(graphId, false);
       if (graph !== null) p.changes.push({ type: "task_graph.updated", data: { graph } });
     }
   };

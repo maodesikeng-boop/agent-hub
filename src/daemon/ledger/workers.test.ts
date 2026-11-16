@@ -11,7 +11,7 @@ import type { DriverEvent } from "../../shared/driver.ts";
 import type { HubArgs, HubCommand, WorkerHubStatus } from "../../shared/hub.ts";
 import { LEDGER_ERROR_HTTP_STATUS, LedgerRequestError } from "../../shared/ledger.ts";
 import type { HubCallContext, LedgerErrorCode, SetupOutcome, WorkspaceProbe } from "../../shared/ledger.ts";
-import { AGENT_VENDORS, type ModelCatalog, type VendorAvailability } from "../../shared/vendors.ts";
+import { AGENT_VENDORS, type AgentVendor, type ModelCatalog, type VendorAvailability } from "../../shared/vendors.ts";
 import { MAX_SETUP_COMMAND_BYTES, MAX_TASK_BYTES, MAX_WORKER_TITLE_CHARS, SETUP_TIMEOUT_MS, WORKER_BACKGROUND_HOLD_MAX_MS, WORKER_LIST_RECENT_ENDED } from "../../shared/limits.ts";
 import { projectWorktreesDir, workerWorktreePath } from "../../shared/paths.ts";
 import { REPORT_END, REPORT_START, workerBranchName } from "../../shared/worker.ts";
@@ -44,6 +44,7 @@ let projectId: number;
 
 /** agent 接口探 git 的结果（这里按 repos、dirty 假装）。gitFails 不是 null 就是 git 没跑成。 */
 let gitFails: string | null;
+let vendorAvailability: Partial<Record<AgentVendor, VendorAvailability>>;
 function probeOf(folder: string): WorkspaceProbe {
   if (gitFails !== null) return { kind: "failed", error: gitFails };
   return { kind: "ok", isRepoWithCommit: repos.has(folder), hasUncommittedChanges: dirty.has(folder) };
@@ -59,6 +60,7 @@ function options(extra: Partial<LedgerOptions> = {}): LedgerOptions {
     resolveFolder: createResolveFolder({ dataHome, userHome: root }),
     osSandboxed: () => true,
     deviceName: () => "东京",
+    models: { current: () => null, availability: (vendor) => vendorAvailability[vendor] ?? "unknown" },
     ...extra,
   };
 }
@@ -79,6 +81,7 @@ beforeEach(() => {
   repos = new Set();
   dirty = new Set();
   gitFails = null;
+  vendorAvailability = {};
   now = 1_000;
   ledger = createLedger(db, options());
   const a = ledger.createPm({ name: "小林", mode: "manage_only", persona: "", defaultModel: "claude-sonnet-5-5" });
@@ -316,11 +319,17 @@ describe("派活：在 worktree 里干（主文件夹是有提交的 git 仓库�
 
   it("--vendor 选的厂商这台设备没装、没登录：报清楚是哪台、怎么登录，不派；能用、认不出的照派", () => {
     repos.add(main);
-    const on = (availability: VendorAvailability) => ({ vendorStatus: { vendor: "codex" as const, availability } });
-    expectLedgerError(() => start({ vendor: "codex" }, lin.sessionId, on("not_installed")), "invalid", /^这台设备（东京）没装 Codex/);
-    expectLedgerError(() => start({ vendor: "codex" }, lin.sessionId, on("signed_out")), "invalid", /这台设备（东京）的 Codex 没登录.*`codex login`/);
-    expect(start({ vendor: "codex", title: "a" }, lin.sessionId, on("available")).data.worker.id).toBeGreaterThan(0);
-    expect(start({ vendor: "codex", title: "b" }, lin.sessionId, on("unknown")).data.worker.id).toBeGreaterThan(0);
+    const on = (availability: VendorAvailability) => {
+      vendorAvailability.codex = availability;
+    };
+    on("not_installed");
+    expectLedgerError(() => start({ vendor: "codex" }), "invalid", /^这台设备（东京）没装 Codex/);
+    on("signed_out");
+    expectLedgerError(() => start({ vendor: "codex" }), "invalid", /这台设备（东京）的 Codex 没登录.*`codex login`/);
+    on("available");
+    expect(start({ vendor: "codex", title: "a" }).data.worker.id).toBeGreaterThan(0);
+    on("unknown");
+    expect(start({ vendor: "codex", title: "b" }).data.worker.id).toBeGreaterThan(0);
   });
 
   it("agy 两种写法存成一样：--model gemini-4-argon-high（完整 ID，老用法）和 --model gemini-4-argon --effort high 都是 模型 gemini-4-argon + 思考程度 high", () => {

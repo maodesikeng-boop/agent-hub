@@ -353,7 +353,7 @@ describe("要用户动手的事：系统挂卡、处理完接着派", () => {
         zhou.sessionId,
         "worker.start",
         { title: "查日志", task: "看看日志", vendor: "agy" },
-        { workspace: { isRepoWithCommit: true, hasUncommittedChanges: false } },
+        { workspace: { kind: "ok", isRepoWithCommit: true, hasUncommittedChanges: false } },
       ).data.worker.id;
       await runWorktreeCreate(zhouWorker);
       const send = workerSendActions(zhouWorker)[0]!;

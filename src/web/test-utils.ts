@@ -431,14 +431,15 @@ export class FakeApi {
       },
     },
   });
-  /** POST /api/asks/:messageId/answer（在对话里的提问卡上点选项或填写）。默认：回一张已拍板的卡。 */
+  /** POST /api/user-blockers/:id/recheck（提醒卡上点 Done）。默认：重查还没登录。 */
   recheckUserBlocker: (id: number) => Reply | Promise<Reply> = (id) => ({
     status: 200,
     body: {
-      blocker: { id, kind: "vendor_signed_out", vendor: DEFAULT_AGENT_VENDOR, device: "东京", askMessageId: null, recheckedAs: "signed_out" },
+      blocker: { id, kind: "vendor_signed_out", vendor: DEFAULT_AGENT_VENDOR, device: "东京", recheckedAs: "signed_out" },
       resolved: false,
     } satisfies RecheckUserBlockerResponse,
   });
+  /** POST /api/asks/:messageId/answer（在对话里的提问卡上点选项或填写）。默认：回一张已拍板的卡。 */
   answerAsk: (messageId: number, body: ResolveRouterItemRequest) => Reply | Promise<Reply> = (messageId) => ({
     status: 200,
     body: {

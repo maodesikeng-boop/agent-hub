@@ -312,13 +312,13 @@ describe("agent api over inject", () => {
       expect(ledger.contexts).toEqual([{}, {}, {}]);
     });
 
-    it("带 --vendor：先问守护进程这家在这台设备上能不能用（不能用的会先重问一次），结果交给账本；不带不问", async () => {
+    it("带 --vendor：调账本前先让守护进程问一次这家（账本从同一个 ModelCatalogs 读状态）；不带不问", async () => {
       const asked: string[] = [];
       await app.close();
       app = createAgentApi({
         ledger,
         tokens,
-        vendorUsable: async (vendor) => {
+        refreshVendor: async (vendor) => {
           asked.push(vendor);
           return "signed_out";
         },
@@ -327,10 +327,10 @@ describe("agent api over inject", () => {
       await call("worker.start", { title: "修 X", task: "任务", noWorktree: true, vendor: "codex" });
       await call("worker.start", { title: "修 X", task: "任务", noWorktree: true });
       expect(asked).toEqual(["codex"]);
-      expect(ledger.contexts).toEqual([{ vendorStatus: { vendor: "codex", availability: "signed_out" } }, {}]);
+      expect(ledger.contexts).toEqual([{}, {}]);
     });
 
-    it("带 --vendor、这家重问一直不回：预算内就带着“没登录”交给账本，不是请求超时；很快回 available 的照常派", async () => {
+    it("带 --vendor、这家重问一直不回：预算内就交给账本（状态还是上次的“没登录”），不是请求超时；很快回 available 的照常派", async () => {
       const codexQuery = [() => Promise.resolve({ models: [], account: { account: null, requiresOpenaiAuth: true } }), () => new Promise<never>(() => {})];
       const hangingCatalogs = createModelCatalogs({
         sources: {
@@ -345,13 +345,14 @@ describe("agent api over inject", () => {
       });
       await hangingCatalogs.list();
       await app.close();
-      app = createAgentApi({ ledger, tokens, vendorUsable: (vendor) => hangingCatalogs.ensureUsable(vendor), requestTimeoutMs: 2_000, timeoutCheckMs: 50 });
+      app = createAgentApi({ ledger, tokens, refreshVendor: (vendor) => hangingCatalogs.ensureUsable(vendor), requestTimeoutMs: 2_000, timeoutCheckMs: 50 });
       await app.ready();
       const started = Date.now();
       const res = await call("worker.start", { title: "修 X", task: "任务", noWorktree: true, vendor: "codex" });
       expect(res.statusCode).toBe(200);
       expect(Date.now() - started).toBeLessThan(1_500);
-      expect(ledger.contexts).toEqual([{ vendorStatus: { vendor: "codex", availability: "signed_out" } }]);
+      expect(ledger.contexts).toEqual([{}]);
+      expect(hangingCatalogs.availability("codex")).toBe("signed_out");
       hangingCatalogs.close();
 
       const fast = createModelCatalogs({
@@ -366,10 +367,11 @@ describe("agent api over inject", () => {
       });
       await fast.list();
       await app.close();
-      app = createAgentApi({ ledger, tokens, vendorUsable: (vendor) => fast.ensureUsable(vendor) });
+      app = createAgentApi({ ledger, tokens, refreshVendor: (vendor) => fast.ensureUsable(vendor) });
       await app.ready();
       await call("worker.start", { title: "修 Y", task: "任务", noWorktree: true, vendor: "codex" });
-      expect(ledger.contexts[1]).toEqual({ vendorStatus: { vendor: "codex", availability: "available" } });
+      expect(ledger.contexts[1]).toEqual({});
+      expect(fast.availability("codex")).toBe("available");
     });
 
     it("探的时候令牌作废了：401，不调账本", async () => {

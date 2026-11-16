@@ -8,7 +8,6 @@ import {
   findRewindableMessage,
   LedgerRequestError,
   MESSAGE_PAGE_SIZE,
-  userBlockerCleared,
   userMessageDedupeKey,
   type AgentVendor,
   type ArchiveAllReportsResponse,
@@ -56,7 +55,6 @@ import {
   type Unsubscribe,
   type UpdateRouterSettingsRequest,
   type UserBlockerId,
-  type VendorAvailability,
 } from "../../shared/index.ts";
 
 function makeSchedule(over: Partial<ScheduleRecord>): ScheduleRecord {
@@ -392,21 +390,15 @@ export class FakeLedger {
     return this.resolveRouterItem(askMessageId, input);
   }
 
-  /** 要用户动手的阻塞：编号 → 等的哪家厂商；recheckCalls 记下每次重查交给账本的状态。 */
+  /** 要用户动手的阻塞：编号 → 等的哪家厂商。重查一律当已经能用。 */
   userBlockerVendors = new Map<UserBlockerId, AgentVendor>();
-  recheckCalls: Array<{ id: UserBlockerId; availability: VendorAvailability }> = [];
 
-  recheckUserBlocker(id: UserBlockerId, availability: VendorAvailability): RecheckUserBlockerResponse {
+  recheckUserBlocker(id: UserBlockerId): RecheckUserBlockerResponse {
     this.check();
     const vendor = this.userBlockerVendors.get(id);
     if (vendor === undefined) throw new LedgerRequestError("not_found", "这张卡不在了");
-    this.recheckCalls.push({ id, availability });
-    const resolved = userBlockerCleared(availability);
-    if (resolved) this.userBlockerVendors.delete(id);
-    return {
-      blocker: { id, kind: "vendor_signed_out", vendor, device: "测试机", askMessageId: null, recheckedAs: resolved ? null : availability },
-      resolved,
-    };
+    this.userBlockerVendors.delete(id);
+    return { blocker: { id, kind: "vendor_signed_out", vendor, device: "测试机", recheckedAs: null }, resolved: true };
   }
 
   deliveryOf(message: Pick<Message, "workerId" | "sender" | "text" | "meta">): { prefixes: string[]; text: string } {
@@ -585,7 +577,7 @@ export class FakeLedger {
       listRouterItems: (c, l, k) => this.listRouterItems(c, l, k),
       resolveRouterItem: (id, i) => this.resolveRouterItem(id, i),
       answerAsk: (id, i) => this.answerAsk(id, i),
-      recheckUserBlocker: (id, a) => this.recheckUserBlocker(id, a),
+      recheckUserBlocker: (id) => this.recheckUserBlocker(id),
       userBlockerVendor: (id) => this.userBlockerVendors.get(id) ?? null,
       deliveryOf: (m) => this.deliveryOf(m),
       archiveAllRouterReports: () => this.archiveAllRouterReports(),

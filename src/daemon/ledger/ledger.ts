@@ -21,7 +21,6 @@ import { deliveryParts } from "../../shared/worker.ts";
 import { waitingAsksNote } from "../../shared/waiting-asks.ts";
 import { MESSAGE_PAGE_SIZE, WORKER_PURGE_BATCH_ROWS } from "../../shared/limits.ts";
 import { snapshotWindowStart, workerLineSummaries } from "../../shared/snapshot.ts";
-import type { AgentVendor, ModelCatalog } from "../../shared/vendors.ts";
 import { getAgentSession, toAgentSessionRow } from "../store/index.ts";
 import type { AgentSessionDbRow, Db } from "../store/index.ts";
 import { createLedgerContext } from "./context.ts";
@@ -80,8 +79,8 @@ export interface LedgerOptions {
   now?: () => number;
   /** 这台设备的名字（要用户在这台设备上动手时写在卡上），默认本机的主机名。 */
   deviceName?: () => string;
-  /** 现在缓存着的模型名单（ModelCatalogs.current）：系统消息、hub 输出里的模型名用它的显示名。不给用打包的。 */
-  modelCatalog?: (vendor: AgentVendor) => ModelCatalog | null;
+  /** 这台设备上各家的模型名单和状态：系统消息、hub 输出里的模型名用名单的显示名，派 Worker 前看厂商能不能用。不给用打包的、状态 unknown。 */
+  models?: LedgerContextOptions["models"];
   /** 缓存着的这个会话的完整命令列表（CommandCatalogs.cached）：手打命令时，列表里这个名字是用户自己的就不拦。没缓存、不给都按名字拦。 */
   knownCommands?: LedgerContextOptions["knownCommands"];
   /** 本次启动的初始 seq，默认启动时刻的毫秒时间戳（比上次运行用过的都大）。 */

@@ -27,7 +27,7 @@ function blockedNode(): TaskNode {
     gateSummaryMd: null,
     gateRecommended: null,
     gateAskMessageId: null,
-    userBlocker: { id: 5, kind: "vendor_signed_out", vendor: "agy", device: "东京", askMessageId: 120, recheckedAs: null },
+    userBlocker: { id: 5, kind: "vendor_signed_out", vendor: "agy", device: "东京", recheckedAs: null },
     decision: null,
     createdAt: 1_000,
     updatedAt: 1_000,

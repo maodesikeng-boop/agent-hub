@@ -1686,13 +1686,12 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       });
     });
 
-    // 用户在“要你动手”的提醒卡上点了 Done：先重问这家厂商（事务外的 I/O），再交给账本按结果留卡或接着派（docs/user-blockers-design.md）
+    // 用户在“要你动手”的提醒卡上点了 Done：先让 ModelCatalogs 重问这家厂商（事务外的 I/O），账本再按它的现状留卡或接着派（docs/user-blockers-design.md）
     routes.post("/api/user-blockers/:id/recheck", async (req): Promise<RecheckUserBlockerResponse> => {
       const blockerId = parseId((req.params as { id?: unknown }).id, "user blocker id");
       const vendor = ledger.userBlockerVendor(blockerId);
-      const availability =
-        vendor === null || !opts.models ? "unknown" : ((await opts.models.list({ vendor, refresh: true }))[0]?.availability ?? "unknown");
-      return ledger.recheckUserBlocker(blockerId, availability);
+      if (vendor !== null && opts.models) await opts.models.list({ vendor, refresh: true });
+      return ledger.recheckUserBlocker(blockerId);
     });
 
     routes.post("/api/router/items/:id/decide", async (req): Promise<ResolveRouterItemResponse> => {

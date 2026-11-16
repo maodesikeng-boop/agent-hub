@@ -24,7 +24,6 @@ import {
 } from "../../shared/domain.ts";
 import { ASK_CARD_TELL_USER, ASK_CARD_WHERE } from "../../shared/hub.ts";
 import { workerSetupLogPath } from "../../shared/paths.ts";
-import { bundledModelCatalog, type ModelCatalog } from "../../shared/vendors.ts";
 import { REPORT_END, REPORT_START } from "../../shared/worker.ts";
 import { addWorktree, remoteBranchHead, resolveCommit } from "../git/index.ts";
 import { createReviewObserver, createReviewVerifyHandler, createWorktreeCreateHandler } from "../handlers.ts";
@@ -122,10 +121,7 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
       setupLogsDir,
       userHome: root,
       osSandboxed: () => true,
-      modelCatalog: (vendor): ModelCatalog => ({
-        ...bundledModelCatalog(vendor),
-        availability: "available",
-      }),
+      models: { current: () => null, availability: () => "available" },
       resolveFolder: createResolveFolder({ dataHome, userHome: root }),
     });
     ledger.onActionEnqueued((a) => enqueued.push(a));
