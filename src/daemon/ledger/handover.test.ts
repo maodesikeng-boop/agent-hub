@@ -280,7 +280,7 @@ describe("进队列：这一轮结束时用量到门槛", () => {
       const agyConv = agyPm.conversation.id;
       const agySession = agyPm.sessionId;
 
-      // 80_000 对 claude（240_000）没到门槛，但对 agy（80_000）到了门槛
+      // 80_000 对 claude（HANDOVER_TOKEN_THRESHOLD）没到门槛，但对 agy（80_000）到了门槛
       const claudeMsg = post("claude 消息", conversationId);
       setContext(firstSession, 80_000);
       turn(firstSession, [claudeMsg], ["claude 回复"]);
@@ -1131,7 +1131,7 @@ describe("给已有项目经理换厂商", () => {
     }
   });
 
-  it("240K 自动换代后切厂商 + 旧厂额度耗尽：只带本代起点摘要与切点后全量消息/Worker 汇报完整原文，绝不翻切点前 3 万字旧账", () => {
+  it("400K 自动换代后切厂商 + 旧厂额度耗尽：只带本代起点摘要与切点后全量消息/Worker 汇报完整原文，绝不翻切点前 3 万字旧账", () => {
     const ancient = post("上辈子早上第一代陈年旧问题");
     turn(firstSession, [ancient], ["上辈子早上第一代陈年旧回答"]);
     const { g2 } = renewNow("上一份交接：已完成阶段一");
@@ -1258,7 +1258,7 @@ describe("给已有项目经理换厂商", () => {
     expect(messages().filter((m) => systemEventOf(m)?.event === "session.renewed")).toHaveLength(0);
   });
 
-  it("超长本代窗口保底截断与 240K 自动换代切点推进：超过 VENDOR_SWITCH_CONTEXT_MAX_CHARS 安全保留最新 24 万字，后续满 240K 正常开启新代", () => {
+  it("超长本代窗口保底截断与 400K 自动换代切点推进：超过 VENDOR_SWITCH_CONTEXT_MAX_CHARS 安全保留最新 24 万字，后续满 400K 正常开启新代", () => {
     const { g2 } = renewNow("第一代摘要底座");
     const earlyInGen2 = post("第二代早期将被保底截掉的消息");
     turn(g2, [earlyInGen2], ["早期回复"]);
@@ -1275,7 +1275,7 @@ describe("给已有项目经理换厂商", () => {
     expect(preamble).toContain("尾部锚点文字");
     expect(preamble).not.toContain("第二代早期将被保底截掉的消息");
 
-    // 切到 codex 后继续聊满 240K 自动换代：GenerationAnchor 正常推进到新摘要，切点不被之前切厂商污染
+    // 切到 codex 后继续聊满 400K 自动换代：GenerationAnchor 正常推进到新摘要，切点不被之前切厂商污染
     const qOnCodex = post("Codex 上的对话");
     turn(g3, [qOnCodex], ["Codex 回复"]);
     reachThreshold(g3);
