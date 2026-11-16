@@ -1,7 +1,7 @@
 // Worker worktree 自动清理测试（全部使用临时目录和临时 git 仓库，绝不碰真实 ~/.agent-hub/worktrees）：
 // 覆盖：已合并删（分支保留） / 收工满 3 天且干净删（分支保留） / 有改动不删（含已跟踪修改、暂存、未跟踪文件；PR 已合并也不删） /
 // 在跑不删 / 不用 worktree 跳过 / 不在 worktrees 目录下不删（含符号链接越界） / 手动删过的跳过 /
-// git worktree move 失败记日志下轮重试并 prune / 每轮上限与轮转 / 没候选时零 git 调用 / 删到一半下一轮接着删完 /
+// git worktree move 失败记日志下轮重试并 prune / 每轮 git status 名额与轮转（长期删不掉的不占名额）/ 没候选时零 git 调用 / 删到一半下一轮接着删完 /
 // 孤儿目录（外部解绑残留）/ detached HEAD 与 review-* 分支 / 0 提交探索目录 / rebase 中途 / status.showUntrackedFiles=no 时未跟踪文件照样拦 / 被忽略的文件随目录删 / 相对路径不删。
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";

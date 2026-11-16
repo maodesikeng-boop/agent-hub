@@ -600,7 +600,7 @@ export const WORKTREE_RETENTION_DAYS = 3;
 export const WORKTREE_RETENTION_MS = WORKTREE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 /** 后台多久跑一次 worktree 自动清理（每小时一次）。 */
 export const WORKTREE_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
-/** 每轮最多检查多少个已收工的候选 worktree（避免一次跑太多 git 子进程卡住后台）。 */
+/** 每轮最多对多少个已收工的候选 worktree 跑 git status（避免一次跑太多重的 git 子进程卡住后台；只读引用就能排除的候选不占名额）。 */
 export const WORKTREE_CLEANUP_BATCH_LIMIT = 10;
 
 // ---- 输入框 /hub:worker 选择列表与二次 Esc 回退 ----
