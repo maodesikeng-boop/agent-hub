@@ -243,6 +243,39 @@ describe("要用户动手的事：系统挂卡、处理完接着派", () => {
     expect(blockerCards().at(-1)!.text).toContain("这台设备（测试机）没装 Cursor");
   });
 
+  it("被没登录卡住的步骤不能再挂拍板卡：挂的时候就拒绝，说清这步在等用户处理登录；步骤、卡、消息都不变；解开后能挂", async () => {
+    setVendor("agy", "signed_out");
+    const graph = ledger.hubCall(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({
+        title: "两个验收",
+        steps: [
+          { key: "verify", title: "验收", brief: "跑一遍", vendor: "agy", deps: [] },
+          { key: "other", title: "别的", deps: [] },
+        ],
+      }),
+    }).data.graph;
+    const blocker = showGraph(graph.id).nodes.find((n) => n.key === "verify")!.userBlocker!;
+    const messageCount = () => db.get<{ n: number }>("SELECT count(*) AS n FROM messages")!.n;
+    const before = messageCount();
+
+    expect(() => ledger.hubCall(lin.sessionId, "ask", { text: "要继续吗？", options: ["继续", "停"], node: "verify", graphId: graph.id })).toThrow(
+      /步骤「verify」在等用户处理：.*Antigravity 没登录/,
+    );
+    const verify = showGraph(graph.id).nodes.find((n) => n.key === "verify")!;
+    expect(stateOf(verify)).toBe("waiting:user");
+    expect(verify.userBlocker).toEqual(blocker);
+    expect(verify.gateQuestion).toBeNull();
+    expect(messageCount()).toBe(before);
+
+    // 别的步骤照常能挂
+    ledger.hubCall(lin.sessionId, "ask", { text: "选哪个？", options: ["甲", "乙"], node: "other", graphId: graph.id });
+    expect(showGraph(graph.id).nodes.find((n) => n.key === "other")!.gateQuestion).not.toBeNull();
+
+    availabilityByVendor.agy = "available";
+    expect((await recheck(blocker.id)).resolved).toBe(true);
+    expect(() => ledger.hubCall(lin.sessionId, "ask", { text: "要继续吗？", options: ["继续", "停"], node: "verify", graphId: graph.id })).not.toThrow();
+  });
+
   it("Worker 起来时报认证失败：步骤等用户、挂卡、项目经理被告知不用重派；能用后原消息重新排队、步骤回到在干", async () => {
     const graph = ledger.hubCall(lin.sessionId, "graph.create", {
       specJson: JSON.stringify({ title: "单步", steps: [{ key: "impl", title: "实现", brief: "写代码", vendor: "codex" }] }),
