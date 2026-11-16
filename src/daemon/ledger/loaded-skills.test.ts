@@ -171,6 +171,28 @@ describe("记：加载那一刻", () => {
   });
 });
 
+describe("记：认不出、不该认的不打断这一轮", () => {
+  it("解析不了的 shell 命令：这一步照样记进账本，不记技能", () => {
+    skill("after", "后面读的");
+    tool(firstSession, "Bash", { command: 'H="abc def"; echo ${H%% *}; cat .agents/skills/after/SKILL.md' });
+    tool(firstSession, "Bash", { command: "node - <<'EOF'\nconsole.log(`${Math.random()}`)\nEOF" });
+    const steps = db.get<{ n: number }>("SELECT count(*) AS n FROM messages WHERE session_id = ? AND kind = 'tool'", firstSession)!.n;
+    expect(steps).toBe(2);
+    expect(rows()).toMatchObject([{ name: "after" }]);
+  });
+
+  it("名字、路径穿越出技能目录的不记：技能目录外面的 SKILL.md 读不到", () => {
+    writeFileSync(join(cwd, "SKILL.md"), "不是技能");
+    mkdirSync(join(cwd, "skills"));
+    tool(firstSession, "Skill", { skill: "../../.." });
+    tool(firstSession, "Skill", { skill: ".." });
+    tool(firstSession, "Read", { file_path: "skills/../SKILL.md" });
+    tool(firstSession, "Bash", { command: "cat skills/../SKILL.md" });
+    userTurn(firstSession, "/..");
+    expect(rows()).toEqual([]);
+  });
+});
+
 describe("带：换代时放进新会话的开场说明", () => {
   it("正文从磁盘读最新的、去掉 frontmatter，按最近加载排；放在说明头后面、交接前面", () => {
     const older = skill("older", "旧的正文");
@@ -235,6 +257,17 @@ describe("带：换代时放进新会话的开场说明", () => {
     const section = sectionOf(renew().preamble);
     expect(section).toContain("挪到用户目录的");
     expect(rows()).toMatchObject([{ name: "moved", generation: 2 }]);
+  });
+  it("同名的两个技能，新的那个没了、按名字找回旧的那个：开场里只放一份", () => {
+    skill("dup", "全局的", join(userHome, ".agents", "skills"));
+    tool(firstSession, "Skill", { skill: "dup" });
+    const project = skill("dup", "项目的");
+    tool(firstSession, "Read", { file_path: project });
+    rmSync(project);
+    const section = sectionOf(renew().preamble);
+    expect(section.split('name="dup"')).toHaveLength(2);
+    expect(section).toContain("全局的");
+    expect(rows()).toMatchObject([{ name: "dup", generation: 2 }]);
   });
 });
 

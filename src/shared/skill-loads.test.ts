@@ -161,3 +161,78 @@ describe("不算加载", () => {
     expect(userSkillCommandOf("claude", "$poteto-mode")).toBeNull();
   });
 });
+
+describe("什么命令都不抛错：解析不了就当没加载（真实记录里的写法）", () => {
+  const bash = (command: string) => toolSkillLoads("claude", "Bash", { command });
+
+  it("参数展开、空的 ${}、heredoc 里的模板字符串", () => {
+    for (const cmd of [
+      'H="abc def"; echo ${H%% *}',
+      "echo ${FOO:-hello world}",
+      "echo ${}",
+      "cat > a.ts <<'EOF'\nconst u = `/api/${encodeURIComponent(x)}`;\nEOF",
+      "node - <<'EOF'\nconsole.log(`${Math.random()}`)\nEOF",
+      'gh pr view 1 --json headRefName -q .headRefName; echo "${2:-src/daemon}"',
+    ]) {
+      expect(() => bash(cmd), cmd).not.toThrow();
+    }
+  });
+
+  it("参数展开后面的读取照样认", () => {
+    expect(bash('H="a b"; echo ${H%% *}; cat a/skills/x/SKILL.md')).toEqual([file("x", "a/skills/x/SKILL.md")]);
+  });
+
+  it("乱七八糟的输入也不抛错", () => {
+    const alphabet = ["$", "{", "}", "(", ")", "`", "'", '"', "\\", "<<", "EOF", "\n", "#", ";", "&", "|", ">", " ", "cat", "a/skills/x/SKILL.md", "${", "$(("];
+    let seed = 7;
+    const next = () => (seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648);
+    for (let n = 0; n < 2_000; n++) {
+      const cmd = Array.from({ length: 1 + (next() % 30) }, () => alphabet[next() % alphabet.length]).join("");
+      expect(() => bash(cmd), cmd).not.toThrow();
+      expect(() => toolSkillLoads("codex", "commandExecution", { command: `/bin/zsh -lc '${cmd}'` }), cmd).not.toThrow();
+    }
+  });
+});
+
+describe("多行脚本：注释、heredoc", () => {
+  const bash = (command: string) => toolSkillLoads("claude", "Bash", { command });
+
+  it("# 注释只到行尾，后面的行照样认", () => {
+    expect(bash("# 先读技能全文\ncat .agents/skills/poteto-mode/SKILL.md")).toEqual([file("poteto-mode", ".agents/skills/poteto-mode/SKILL.md")]);
+    expect(toolSkillLoads("codex", "commandExecution", { command: "/bin/zsh -lc '# check skill\ncat .agents/skills/poteto-mode/SKILL.md'", cwd: "/w" })).toEqual([
+      file("poteto-mode", ".agents/skills/poteto-mode/SKILL.md", ["/w"]),
+    ]);
+  });
+
+  it("heredoc 正文是给别的程序的输入，里面写的 cat 不是这个会话在读", () => {
+    expect(bash("hub worker start --title \"修界面\" --stdin <<'EOF'\n开工先执行：\ncat .agents/skills/frontend-rules/SKILL.md\nEOF")).toEqual([]);
+    expect(bash("hub worker start --stdin <<EOF\ncat .agents/skills/frontend-rules/SKILL.md ${x}\nEOF")).toEqual([]);
+  });
+
+  it("heredoc 之后的命令照样认", () => {
+    expect(bash("cat > /tmp/a.md <<'EOF'\nhi\nEOF\ncat .agents/skills/x/SKILL.md")).toEqual([file("x", ".agents/skills/x/SKILL.md")]);
+  });
+
+  it("标准输出重定向的各种写法都不算读：>|、&>、&>>", () => {
+    for (const cmd of ["cat a/skills/x/SKILL.md >| /tmp/c", "cat a/skills/x/SKILL.md &> /tmp/c", "cat a/skills/x/SKILL.md &>> /tmp/c"]) {
+      expect(bash(cmd), cmd).toEqual([]);
+    }
+  });
+});
+
+describe("技能名、路径不能穿越出技能目录", () => {
+  it("原生技能工具、用户手打：名字只能是一段目录名", () => {
+    for (const skill of ["..", ".", "../../..", "a/b", "..\\..\\foo", "fusa:.."]) {
+      expect(toolSkillLoads("claude", "Skill", { skill }), skill).toEqual([]);
+    }
+    for (const text of ["/..", "/../x", "/..\\..\\foo", "/.", "$.."]) {
+      expect(userSkillCommandOf("codex", text), text).toBeNull();
+    }
+  });
+
+  it("读文件：skills/ 后面那一段是 . 或 .. 的不是技能", () => {
+    expect(toolSkillLoads("claude", "Read", { file_path: "skills/../SKILL.md" })).toEqual([]);
+    expect(toolSkillLoads("claude", "Read", { file_path: "/r/skills/./SKILL.md" })).toEqual([]);
+    expect(toolSkillLoads("claude", "Bash", { command: "cat skills/../SKILL.md" })).toEqual([]);
+  });
+});
