@@ -35,7 +35,7 @@ import {
   type PlannedSymlinkOp,
   type WriteFileAtomicFn,
 } from "./backup.ts";
-import { detectHostBoundMcp, hostBoundReason, type HostBoundDetection, type HostBoundKind } from "./host-bound.ts";
+import { detectHostBoundMcp, hostBoundReason, type HostBoundDetection } from "./host-bound.ts";
 import { buildMaskedMcpSummary } from "./mask.ts";
 
 export interface SyncProjectFolderRef {
@@ -209,10 +209,9 @@ export function createVendorSyncService(options: VendorSyncServiceOptions): Vend
         const found = detectHostBoundMcp(server, ctx.env, ctx.userHome);
         if (!found) continue;
         const prev = hostBound.get(name);
-        const kinds = [...new Set<HostBoundKind>([...(prev?.detection.kinds ?? []), ...found.kinds])];
         const app = prev?.detection.app ?? found.app;
         hostBound.set(name, {
-          detection: { kinds, ...(app ? { app } : {}) },
+          detection: app ? { app } : {},
           sources: [...(prev?.sources ?? []), { vendor, label }],
         });
       }

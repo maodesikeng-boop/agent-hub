@@ -634,7 +634,7 @@ describe("useVendorSyncSetting：别家应用自带的 MCP", () => {
         maskedTarget: "node_repl",
         maskedAuth: [],
         usesMcpRemoteBridge: false,
-        hostBound: { app: "ChatGPT", sources: [{ vendor: "codex", label: "Codex" }], reason: "Runs from inside the ChatGPT app and won't work without it" },
+        hostBound: { app: "ChatGPT", sources: [{ vendor: "codex", label: "Codex" }], reason: "Runs from inside the ChatGPT app and may not work without it" },
         vendors: [],
       },
     ],
@@ -717,6 +717,40 @@ describe("useVendorSyncSetting：别家应用自带的 MCP", () => {
     expect(result.current.preview).toBeNull();
     expect([...result.current.checkedMcp]).toEqual([]);
     expect(result.current.lastSummary).toBeNull();
+  });
+
+  it("切换设备前发出的扫描在切换后才回来：结果不会当成新设备的预览，新设备上无法拿它去同步", async () => {
+    const api = new FakeApi(makeSnapshot({}));
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    api.vendorSyncPreview = async () => {
+      await gate;
+      return { status: 200, body: preview };
+    };
+    api.install();
+    const { wrapper } = makeWrapper();
+    const tokyoClient = createClient("tokyo");
+    const { result, rerender } = renderHook(({ client }) => useVendorSyncSetting(client), {
+      wrapper,
+      initialProps: { client: localClient },
+    });
+
+    act(() => result.current.previewVendorSync());
+    await waitFor(() => expect(result.current.scanning).toBe(true));
+    rerender({ client: tokyoClient });
+    await act(async () => {
+      release();
+      await gate;
+    });
+    await waitFor(() => expect(api.callsTo("GET", /\/api\/vendor-sync\/preview$/)).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(result.current.preview).toBeNull();
+    expect([...result.current.checkedMcp]).toEqual([]);
+    act(() => result.current.applyVendorSync());
+    await waitFor(() => expect(result.current.applyError).not.toBeNull());
+    expect(api.callsTo("POST", /\/api\/vendor-sync\/apply$/)).toHaveLength(0);
   });
 
   it("兼容旧版远端设备（preview 未带 hostBoundConfirmSupported 时不发 confirmedHostBoundMcpKeys），且 visibleMcpVendorBadges 按 WeakMap 保持引用稳定", async () => {

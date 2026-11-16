@@ -167,8 +167,6 @@ export type CanonicalMcpServer =
       env: Readonly<Record<string, string>>;
       /** 当该 stdio 条目是从 `npx -y mcp-remote <sseUrl>` 识别出的桥接命令时记录原始 SSE URL，防二次包裹并支持幂等对账。 */
       bridgedSseUrl?: string;
-      /** 靠宿主应用透传进来的环境变量名（Codex 的 `env_vars`）。值不在配置里，只用来识别「别家应用自带的 MCP」，不参与同步与对账。 */
-      hostEnvVars?: readonly string[];
     }
   | {
       transport: "http";

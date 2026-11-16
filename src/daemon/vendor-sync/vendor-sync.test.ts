@@ -952,31 +952,36 @@ startup_timeout_sec = 60
       app: "ChatGPT",
       sources: [{ vendor: "codex", label: expect.any(String) }],
     });
-    expect(nodeRepl.hostBound?.reason).toContain("ChatGPT app");
-    expect(nodeRepl.hostBound?.reason).toContain("environment variables");
+    expect(nodeRepl.hostBound?.reason).toBe("Runs from inside the ChatGPT app and may not work without it");
     // 原因里不带环境变量名和命令路径
     expect(JSON.stringify(nodeRepl.hostBound)).not.toContain("BROWSER_USE");
     expect(JSON.stringify(nodeRepl.hostBound)).not.toContain("cua_node");
     expect(preview.mcpServers.find((m) => m.name === "git_local")!.hostBound).toBeUndefined();
   });
 
-  it("只靠 env_vars（命令不在应用包里）也识别；命令在应用包里但没有 env_vars 也识别且带应用名", () => {
+  it("只看命令路径：透传 env_vars 的普通 MCP（如 GitHub 透传 GITHUB_TOKEN）不算别家自带、默认照常同步；命令在应用包里但没有 env_vars 也识别且带应用名", () => {
     writeFileSync(
       codexPath,
-      `[mcp_servers.env_only]
-command = "node"
-args = ["server.js"]
-env_vars = ["HOST_TOKEN"]
+      `[mcp_servers.github]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+env_vars = ["GITHUB_TOKEN"]
 
 [mcp_servers.bundle_only]
 command = "/Applications/Foo Bar.app/Contents/MacOS/helper"
 `,
       "utf8",
     );
-    const items = Object.fromEntries(service().preview().mcpServers.map((m) => [m.name, m]));
-    expect(items.env_only!.hostBound).toMatchObject({ reason: "Depends on environment variables passed in by its host app" });
-    expect(items.env_only!.hostBound?.app).toBeUndefined();
+    const svc = service();
+    const preview = svc.preview();
+    const items = Object.fromEntries(preview.mcpServers.map((m) => [m.name, m]));
+    expect(items.github!.hostBound).toBeUndefined();
     expect(items.bundle_only!.hostBound).toMatchObject({ app: "Foo Bar" });
+
+    const defaults = preview.mcpServers.filter((m) => !m.hostBound).map((m) => m.key);
+    expect(defaults).toEqual(["github"]);
+    svc.apply({ selectedMcpKeys: defaults, removeMcpKeys: [], selectedSkillKeys: [], removeSkillKeys: [], confirmedHostBoundMcpKeys: [] });
+    expect(Object.keys(claudeServers())).toEqual(["github"]);
   });
 
   it("按默认值（不勾选 node_repl，也不进移除清单）apply：别家没被补上，Codex 配置一个字节不变，普通 MCP 照常同步", () => {
@@ -1107,8 +1112,7 @@ command = "/Applications/Foo Bar.app/Contents/MacOS/helper"
       codexPath,
       `[mcp_servers.env_only]
 enabled = false
-command = "node"
-args = ["builtin.js"]
+command = "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl"
 env_vars = ["BROWSER_USE_SESSION"]
 
 [mcp_servers.oauth_disabled]

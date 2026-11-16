@@ -159,7 +159,7 @@ describe("设置弹窗：Vendor sync 扫描预览、取消勾选移除与执行�
             hostBound: {
               app: "ChatGPT",
               sources: [{ vendor: "codex", label: "Codex" }],
-              reason: "Runs from inside the ChatGPT app and won't work without it. Depends on environment variables passed in by its host app",
+              reason: "Runs from inside the ChatGPT app and may not work without it",
             },
             vendors: [
               { vendor: "claude", label: "Claude Code", status: "will_add" },

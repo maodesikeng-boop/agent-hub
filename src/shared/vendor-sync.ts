@@ -23,7 +23,7 @@ export interface VendorSyncVendorBadge {
 
 /** 别家应用自带的 MCP：离开所在应用就起不来，默认不勾选、不往别家补（用户可手动勾上）。 */
 export interface VendorSyncHostBound {
-  /** 命令所在的应用名（如 `ChatGPT`）；只靠宿主透传环境变量判断时没有。 */
+  /** 命令所在的应用名（如 `ChatGPT`）；路径里认不出名字时没有。 */
   app?: string;
   /** 持有这条配置的厂商（来源）。 */
   sources: Array<{ vendor: AgentVendor; label: string }>;

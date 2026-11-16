@@ -349,7 +349,7 @@ describe("子页", () => {
             hostBound: {
               app: "ChatGPT",
               sources: [{ vendor: "codex", label: "Codex" }],
-              reason: "Runs from inside the ChatGPT app and won't work without it",
+              reason: "Runs from inside the ChatGPT app and may not work without it",
             },
             vendors: [
               { vendor: "claude", label: "Claude Code", status: "will_add" },

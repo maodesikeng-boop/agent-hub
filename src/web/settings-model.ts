@@ -793,15 +793,32 @@ export function visibleMcpVendorBadges(
   return filtered;
 }
 
+function toggledSet(prev: ReadonlySet<string>, key: string, nextChecked: boolean): ReadonlySet<string> {
+  const next = new Set(prev);
+  if (nextChecked) next.add(key);
+  else next.delete(key);
+  return next;
+}
+
 export function useVendorSyncSetting(explicitClient?: HubClient) {
   const qc = useHubQueryClient();
   const contextClient = useClient();
   const client = explicitClient ?? contextClient;
   const targetDevice = client.device ?? LOCAL_DEVICE;
-  const [preview, setPreview] = useState<VendorSyncPreviewResponse | null>(null);
-  const [checkedMcp, setCheckedMcp] = useState<ReadonlySet<string>>(EMPTY_STRING_SET);
-  const [checkedSkills, setCheckedSkills] = useState<ReadonlySet<string>>(EMPTY_STRING_SET);
-  const [lastSummary, setLastSummary] = useState<string | null>(null);
+  // 预览、勾选和摘要都记下属于哪台设备：切换目标设备后旧设备的预览直接作废，
+  // 连切换前发出、切换后才回来的扫描结果也不会被当成新设备的预览拿去同步（按旧勾选在新设备上删配置）。
+  const [scoped, setScoped] = useState<{
+    device: DeviceKey;
+    preview: VendorSyncPreviewResponse;
+    checkedMcp: ReadonlySet<string>;
+    checkedSkills: ReadonlySet<string>;
+  } | null>(null);
+  const [summaryState, setSummaryState] = useState<{ device: DeviceKey; text: string } | null>(null);
+  const current = scoped?.device === targetDevice ? scoped : null;
+  const preview = current?.preview ?? null;
+  const checkedMcp = current?.checkedMcp ?? EMPTY_STRING_SET;
+  const checkedSkills = current?.checkedSkills ?? EMPTY_STRING_SET;
+  const lastSummary = summaryState?.device === targetDevice ? summaryState.text : null;
 
   const applyMutation = useMutation(
     {
@@ -828,17 +845,20 @@ export function useVendorSyncSetting(explicitClient?: HubClient) {
             removeSkillKeys.push(item.key);
           }
         }
-        return client.postVendorSyncApply({
-          selectedMcpKeys,
-          removeMcpKeys,
-          selectedSkillKeys,
-          removeSkillKeys,
-          ...(preview.hostBoundConfirmSupported ? { confirmedHostBoundMcpKeys } : {}),
-        });
+        const device = targetDevice;
+        return client
+          .postVendorSyncApply({
+            selectedMcpKeys,
+            removeMcpKeys,
+            selectedSkillKeys,
+            removeSkillKeys,
+            ...(preview.hostBoundConfirmSupported ? { confirmedHostBoundMcpKeys } : {}),
+          })
+          .then((result) => ({ device, result }));
       },
-      onSuccess: (result) => {
-        setLastSummary(formatVendorSyncSummary(result));
-        setPreview(null);
+      onSuccess: ({ device, result }) => {
+        setSummaryState({ device, text: formatVendorSyncSummary(result) });
+        setScoped((prev) => (prev?.device === device ? null : prev));
       },
     },
     qc,
@@ -846,25 +866,23 @@ export function useVendorSyncSetting(explicitClient?: HubClient) {
 
   const scanMutation = useMutation(
     {
-      mutationFn: () => client.fetchVendorSyncPreview(),
-      onSuccess: (data) => {
-        setCheckedMcp(new Set(data.mcpServers.filter((item) => !item.hostBound).map((item) => item.key)));
-        setCheckedSkills(new Set(data.skills.map((item) => item.key)));
+      mutationFn: () => {
+        const device = targetDevice;
+        return client.fetchVendorSyncPreview().then((data) => ({ device, data }));
+      },
+      onSuccess: ({ device, data }) => {
         applyMutation.reset();
-        setPreview(data);
+        setScoped({
+          device,
+          preview: data,
+          checkedMcp: new Set(data.mcpServers.filter((item) => !item.hostBound).map((item) => item.key)),
+          checkedSkills: new Set(data.skills.map((item) => item.key)),
+        });
       },
     },
     qc,
   );
 
-  const prevDeviceRef = useRef(targetDevice);
-  if (prevDeviceRef.current !== targetDevice) {
-    prevDeviceRef.current = targetDevice;
-    setPreview(null);
-    setCheckedMcp(EMPTY_STRING_SET);
-    setCheckedSkills(EMPTY_STRING_SET);
-    setLastSummary(null);
-  }
   useEffect(() => {
     scanMutation.reset();
     applyMutation.reset();
@@ -873,27 +891,17 @@ export function useVendorSyncSetting(explicitClient?: HubClient) {
   }, [targetDevice]);
 
   const toggleMcp = useCallback((key: string, nextChecked: boolean) => {
-    setCheckedMcp((prev) => {
-      const next = new Set(prev);
-      if (nextChecked) next.add(key);
-      else next.delete(key);
-      return next;
-    });
+    setScoped((prev) => (prev ? { ...prev, checkedMcp: toggledSet(prev.checkedMcp, key, nextChecked) } : prev));
   }, []);
 
   const toggleSkill = useCallback((key: string, nextChecked: boolean) => {
-    setCheckedSkills((prev) => {
-      const next = new Set(prev);
-      if (nextChecked) next.add(key);
-      else next.delete(key);
-      return next;
-    });
+    setScoped((prev) => (prev ? { ...prev, checkedSkills: toggledSet(prev.checkedSkills, key, nextChecked) } : prev));
   }, []);
 
   const previewVendorSync = useCallback(() => scanMutation.mutate(), [scanMutation]);
   const applyVendorSync = useCallback(() => applyMutation.mutate(), [applyMutation]);
   const closePreview = useCallback(() => {
-    if (!applyMutation.isPending) setPreview(null);
+    if (!applyMutation.isPending) setScoped(null);
   }, [applyMutation.isPending]);
 
   const scanError: ErrorLike | null = scanMutation.error ? errorText(scanMutation.error) : null;
