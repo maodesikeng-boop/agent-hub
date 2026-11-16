@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  DELIVERABLE_LABEL_MAX_CHARS,
+  DELIVERABLES_PER_CARD_MAX,
   ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES,
   ROUTER_COMMAND_MAX_CHARS,
   ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES,
@@ -18,6 +20,7 @@ import {
   SNAPSHOT_MONTH_MAX_BYTES,
   SNAPSHOT_RECENT_MESSAGES,
 } from "../../shared/limits.ts";
+import type { Deliverable } from "../../shared/deliverables.ts";
 import type { Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
 import { createLedger } from "./index.ts";
@@ -32,6 +35,7 @@ const ARCHIVED_ROUTER_ITEMS = 1_500;
 const ACTIVE_ROUTER_ITEMS = 15;
 const FULL_BRIEFINGS = 500;
 const BENCH_ROUNDS = 7;
+const DELIVERABLE_CARDS = 10;
 
 let root: string;
 let db: Db;
@@ -49,12 +53,25 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
+/** 一张卡写满的交付物：标签 DELIVERABLE_LABEL_MAX_CHARS 字，文件名、原链接按常见长度。 */
+function fullDeliverables(r: number): Deliverable[] {
+  return Array.from({ length: DELIVERABLES_PER_CARD_MAX }, (_, k) => ({
+    label: `${r}-${k}`.padEnd(DELIVERABLE_LABEL_MAX_CHARS, "标"),
+    id: `${r}${k}`.padStart(16, "0"),
+    name: `deliverable-${r}-${k}-desktop-screenshot.png`,
+    mime: "image/png",
+    size: 1_234_567,
+    href: `/Users/someone/.agent-hub/worktrees/7/595/docs/screenshots/deliverable-${r}-${k}-desktop-screenshot.png`,
+    origin: { messageId: 100_000 + r, index: k },
+  }));
+}
+
 /**
  * 一个项目经理派过 300 个 Worker（都收工了），每个 Worker 对话 95 条、汇报 3 行，项目经理对话 1000 条：约 3 万条。
  * full：总助按上限写满（docs/router-workbench-v2-design.md 第 5.5 节）——最近 10 条指令 4,000 字原话 + 6,000 字回复，
  * 另加 500 条带满 4 个链接的满长简报（最新 60 条未读）和 15 张待拍板项。
  */
-function seedMonth(options: { full?: boolean } = {}): { pmConversation: number } {
+function seedMonth(options: { full?: boolean; deliverables?: boolean } = {}): { pmConversation: number } {
   const { pm, conversation } = ledger.createPm({ name: "小林", mode: "manage_only", persona: "" });
   const longText = "汇报全文，".repeat(200);
   db.exec("BEGIN");
@@ -181,6 +198,28 @@ function seedMonth(options: { full?: boolean } = {}): { pmConversation: number }
       );
     }
   }
+  if (options.deliverables) {
+    // 10 张等用户拍板的卡、5 张活跃任务图的第一步（等用户确认），各带满 DELIVERABLES_PER_CARD_MAX 个交付物
+    for (let r = 1; r <= DELIVERABLE_CARDS; r++) {
+      const id = Number(
+        db.run(
+          `INSERT INTO router_items (pm_id, project_id, conversation_id, kind, status, question, context, options_json, created_at, updated_at)
+           VALUES (?, ?, ?, 'decision', 'pending', ?, ?, '["通过","打回"]', ?, ?)`,
+          pm.id, projectId, conversation.id, `请验收 #${r}`, "背景".repeat(100), at, at++,
+        ).lastInsertRowid,
+      );
+      db.run("INSERT INTO router_item_deliverables (item_id, deliverables_json) VALUES (?, ?)", id, JSON.stringify(fullDeliverables(r)));
+    }
+    db.run(
+      `UPDATE task_graph_steps SET status = 'waiting', waiting_for = 'user', artifact_json = ?
+        WHERE node_key = 'node-1' AND graph_id IN (SELECT id FROM task_graphs WHERE status = 'active')`,
+      JSON.stringify({ summary: "做完了", deliverables: fullDeliverables(0) }),
+    );
+    db.run(
+      "UPDATE task_graph_steps SET artifact_json = ? WHERE node_key = 'node-2' AND graph_id IN (SELECT id FROM task_graphs WHERE status = 'active')",
+      JSON.stringify({ summary: "做完了", deliverables: fullDeliverables(-1) }),
+    );
+  }
   for (let c = 1; c <= 500; c++) {
     const full = options.full === true && c > 500 - ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX;
     db.run(
@@ -281,5 +320,21 @@ describe("初始快照的上限（一个月的量）", () => {
     expect(briefings.length).toBeGreaterThanOrEqual(1);
     expect(bytes).toBeLessThan(SNAPSHOT_MONTH_MAX_BYTES);
     expect(times[3]!).toBeLessThan(1_000);
+  });
+  it("再加 10 张各带 DELIVERABLES_PER_CARD_MAX 个交付物的待拍板卡（docs/deliverables-design.md）：等拍板的卡和步骤带上交付物，整份仍不超过上限", () => {
+    seedMonth({ full: true, deliverables: true });
+    const snap = ledger.snapshot();
+    const bytes = Buffer.byteLength(JSON.stringify(snap));
+    const cards = snap.router.items.filter((x) => x.kind === "decision" && x.question.startsWith("请验收"));
+    expect(cards).toHaveLength(DELIVERABLE_CARDS);
+    for (const card of cards) expect(card.kind === "decision" && card.deliverables).toHaveLength(DELIVERABLES_PER_CARD_MAX);
+    const nodes = snap.activeTaskGraphs.flatMap((g) => g.nodes);
+    expect(nodes.filter((n) => n.key === "node-1").every((n) => n.artifact?.deliverables?.length === DELIVERABLES_PER_CARD_MAX)).toBe(true);
+    expect(nodes.filter((n) => n.key === "node-2").every((n) => n.artifact?.deliverables === undefined)).toBe(true);
+    const deliverableBytes =
+      cards.reduce((n, c) => n + Buffer.byteLength(JSON.stringify(c.kind === "decision" ? c.deliverables : [])), 0) +
+      nodes.reduce((n, x) => n + Buffer.byteLength(JSON.stringify(x.artifact?.deliverables ?? [])), 0);
+    console.log(`[snapshot-bench] deliverables bytes=${bytes} deliverables=${deliverableBytes}B`);
+    expect(bytes).toBeLessThan(SNAPSHOT_MONTH_MAX_BYTES);
   });
 });

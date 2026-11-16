@@ -6,14 +6,6 @@ import type { SentFile } from "../shared/sent-files.ts";
 import type { WorkerReport } from "../shared/worker.ts";
 
 /**
- * --file 参数写成 Markdown 链接，一行一个（`[标签](<路径>)`，没有标签用文件名），交给 shareLinkedFiles 存副本。
- * 后置：args 为空返回空串。
- */
-export function fileArgsMarkdown(args: readonly HubFileArg[]): string {
-  throw new Error("未实现");
-}
-
-/**
  * 正文里指向本机文件的链接，对上 files 里存好副本的，按出现顺序换成交付物，标签是链接文字；最多 max 个。
  * 没存下副本的（太大、不在可分享的文件夹里、没找到）不算。messageId 是 null 时 origin 是 null。
  */
@@ -26,5 +18,15 @@ export function deliverablesFromText(text: string, files: readonly SentFile[], m
  * 栏里没写、写“无”时返回空数组；“文件”栏以外的链接不算。
  */
 export function stepDeliverablesOfReport(report: WorkerReport, message: Pick<Message, "id" | "meta">): Deliverable[] {
+  throw new Error("未实现");
+}
+
+/** --file 存好的副本（和 args 一一对应，都已存好）换成交付物：标签用 --file 写的，没写用文件名。 */
+export function deliverablesOfFileArgs(args: readonly HubFileArg[], files: readonly SentFile[], messageId: MessageId | null): Deliverable[] {
+  throw new Error("未实现");
+}
+
+/** 第一个没存下副本的 --file 的原因（给 agent 看）；都存好了是 null。 */
+export function fileArgsProblem(files: readonly SentFile[]): string | null {
   throw new Error("未实现");
 }

@@ -14,6 +14,7 @@ import {
   ENV_HUB_TOKEN,
   HUB_COMMAND,
   HUB_EXIT,
+  HUB_FILE_ARGS_MAX,
   LedgerRequestError,
   TASK_GRAPH_CREATE_JSON_HINT,
   TASK_GRAPH_PATCH_JSON_HINT,
@@ -510,9 +511,9 @@ describe("hub cli", () => {
             links: [
               { label: "PR #398", target: "https://github.com/o/r/pull/398" },
               { label: "Worker #395", target: "worker:395" },
-              { label: "router-design.md", target: "docs/router-design.md" },
               { label: "面板", target: "http://localhost:5173" },
             ],
+            files: [{ label: null, path: join(cwd, "docs", "router-design.md") }],
           },
         },
         { sessionId: 42, command: "router.note", args: { text: "正在拆第 1 波 PR" } },
@@ -1498,10 +1499,53 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
       }
     });
   });
-});
 
-describe("--file（交付物，docs/deliverables-design.md）", () => {
-  it.todo("hub ask 和 hub router report 的 --file 可以写多个，按 `标签=路径` 解析成 files");
-  it.todo("--file 的相对路径按 hub 的当前目录变成绝对路径");
-  it.todo("--file 超过 HUB_FILE_ARGS_MAX 个时报用法错误");
+  describe("--file（交付物，docs/deliverables-design.md）", () => {
+    it("hub ask 和 hub router report 的 --file 可以写多个，按 `标签=路径` 解析成 files", async () => {
+      expect(
+        (await hub(["ask", "--file", "方案=/tmp/plan.md", "--file", "/tmp/shot.png", "--stdin"], { stdin: stdinOf("方案好了，请验收\n") })).code,
+      ).toBe(0);
+      expect(
+        (await hub(["router", "report", "--summary", "做完了", "--file", "验收结论=/tmp/verdict.md", "--file", "录屏=/tmp/rec.mp4"])).code,
+      ).toBe(0);
+      expect(ledger.calls.map((c) => c.args)).toEqual([
+        {
+          text: "方案好了，请验收",
+          files: [
+            { label: "方案", path: "/tmp/plan.md" },
+            { label: null, path: "/tmp/shot.png" },
+          ],
+        },
+        {
+          summary: "做完了",
+          files: [
+            { label: "验收结论", path: "/tmp/verdict.md" },
+            { label: "录屏", path: "/tmp/rec.mp4" },
+          ],
+        },
+      ]);
+    });
+
+    it("--file 的相对路径按 hub 的当前目录变成绝对路径", async () => {
+      expect((await hub(["ask", "--node", "impl", "--file", "方案=docs/x-design.md", "--file", "~/shot.png", "--stdin"], { stdin: stdinOf("看看\n") })).code).toBe(0);
+      expect(ledger.calls[0]?.args).toEqual({
+        node: "impl",
+        text: "看看",
+        files: [
+          { label: "方案", path: join(cwd, "docs", "x-design.md") },
+          { label: null, path: join(home, "shot.png") },
+        ],
+      });
+    });
+
+    it("--file 超过 HUB_FILE_ARGS_MAX 个时报用法错误", async () => {
+      const many = Array.from({ length: HUB_FILE_ARGS_MAX + 1 }, (_, i) => ["--file", `/tmp/${i}.png`]).flat();
+      const r = await hub(["router", "report", "--summary", "好", ...many]);
+      expect(r.code).toBe(HUB_EXIT.usage);
+      expect(r.stderr).toContain(`最多 ${HUB_FILE_ARGS_MAX} 个`);
+      const empty = await hub(["router", "report", "--summary", "好", "--file", "方案="]);
+      expect(empty.code).toBe(HUB_EXIT.usage);
+      expect(ledger.calls).toHaveLength(0);
+    });
+  });
 });
