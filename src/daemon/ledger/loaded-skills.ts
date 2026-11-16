@@ -1,4 +1,4 @@
-// 项目经理加载过的技能（loaded_skills，迁移 0028；docs/skill-carryover-design.md）：
+// 项目经理加载过的技能（loaded_skills，迁移 0029；docs/skill-carryover-design.md）：
 // - 记：applyDriverEvent 的同一个事务里，agent.tool（模型读 SKILL.md、用原生技能工具）和 message.processing（用户手打技能命令）
 //   按 shared/skill-loads.ts 认出来，落到 SKILL.md（daemon/skill-files.ts）就记一行，一个技能一行，再加载只更新；
 // - 带：换代（handover.ts 的 switchIn，普通换代、开新会话、切换厂商都走它）时取旧一代的行，从磁盘读正文拼成开场说明里的一节；

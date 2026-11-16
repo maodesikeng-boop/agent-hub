@@ -93,7 +93,7 @@ Fusa 已经把六家的工具调用统一成 `agent.tool` 事件（`name` 是厂
 
 ### 数据形状
 
-新迁移 `0028_loaded_skills.sql`（main 上最新是 `0027_vendor_switch.sql`；任务图 #18 如果先合进一个 0028，就顺延）：
+新迁移 `0029_loaded_skills.sql`（main 上 `0028_review_workers.sql` 已占了 0028）：
 
 ```sql
 CREATE TABLE loaded_skills (
@@ -226,7 +226,7 @@ skillSignals?: {
 
 ### 要改的文件
 
-- `migrations/0028_loaded_skills.sql`：新表。
+- `migrations/0029_loaded_skills.sql`：新表。
 - `src/shared/skill-names.ts`（新）：`SKILL_FILE_RE`、`skillNameOf`、`skillNameOfFile`。
 - `src/shared/skill-loads.ts`（新）：`toolSkillLoads(vendor, toolName, input)`、`userSkillCommandOf(vendor, text)`。纯函数，不碰磁盘。
 - `src/daemon/skill-files.ts`（新）：认到的加载落到哪个 `SKILL.md`（按名字找的目录清单、相对路径、`realpath`）、换代时读正文。守护进程按 `launchDir`、用户目录、环境变量建好传给账本（`LedgerOptions.skillFiles`），测试用临时目录里的真文件。

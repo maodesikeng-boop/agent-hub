@@ -1,4 +1,4 @@
--- 0028_loaded_skills：项目经理加载过的技能（docs/skill-carryover-design.md）。一个技能一行，换代时按代数取出、把正文带进新会话。
+-- 0029_loaded_skills：项目经理加载过的技能（docs/skill-carryover-design.md）。一个技能一行，换代时按代数取出、把正文带进新会话。
 CREATE TABLE IF NOT EXISTS loaded_skills (
   conversation_id INTEGER NOT NULL REFERENCES conversations (id) ON DELETE CASCADE,
   skill_key       TEXT    NOT NULL, -- SKILL.md 的真实路径（realpath），软链和原文件算同一个技能

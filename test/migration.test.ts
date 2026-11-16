@@ -2067,3 +2067,48 @@ describe("0028_review_workers：审查 Worker 不挂分支", () => {
     expect(plan).toContain("workers_worktree_path");
   });
 });
+
+describe("0029_loaded_skills：项目经理加载过的技能", () => {
+  it("建 loaded_skills、handovers 多一列 skills_section，老交接原样；回退 user_version = 8 / 28 重跑不丢已有的技能记录和 skills_section", () => {
+    const db = m3Db();
+    migrate(db, migrationsUpTo(28));
+    db.run(
+      `INSERT INTO agent_sessions (id, role, conversation_id, pm_id, vendor, vendor_session_id, cwd, generation, created_at, updated_at)
+       VALUES (90, 'pm', 1, 1, 'claude', 'gen-90', '/tmp', 9, 0, 0)`,
+    );
+    db.run(
+      `INSERT INTO handovers (conversation_id, from_session_id, auto, status, text, preamble, created_at, updated_at)
+       VALUES (1, 90, 1, 'switched', '交接', '开场', 1, 2)`,
+    );
+    const before = db.all("SELECT * FROM handovers ORDER BY id");
+
+    expect(migrate(db, migrationsUpTo(29))).toMatchObject({ from: 28, to: 29, applied: [29] });
+    expect(rowsInOldShape(db, "handovers", before)).toEqual(before);
+    expect(db.all("SELECT skills_section FROM handovers")).toEqual([{ skills_section: null }]);
+
+    db.run("UPDATE handovers SET skills_section = '## 技能'");
+    db.run(
+      `INSERT INTO loaded_skills (conversation_id, skill_key, name, path, source, generation, loaded_at)
+       VALUES (1, '/s/a/SKILL.md', 'a', '/s/a/SKILL.md', 'model', 9, 5)`,
+    );
+    expect(() => db.run(
+      `INSERT INTO loaded_skills (conversation_id, skill_key, name, path, source, generation, loaded_at)
+       VALUES (1, '/s/b/SKILL.md', 'b', '/s/b/SKILL.md', 'bogus', 9, 5)`,
+    )).toThrow(/CHECK/);
+    const handovers = db.all("SELECT * FROM handovers ORDER BY id");
+    const skills = db.all("SELECT * FROM loaded_skills");
+    for (const rewindTo of [28, 8]) {
+      db.exec(`PRAGMA user_version = ${rewindTo}`);
+      expect(() => migrate(db, migrationsDir)).not.toThrow();
+      expect(userVersion(db)).toBe(LATEST_VERSION);
+      expect(db.all("SELECT * FROM handovers ORDER BY id")).toEqual(handovers);
+      expect(db.all("SELECT * FROM loaded_skills")).toEqual(skills);
+      expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+    }
+    const plan = db
+      .all<{ detail: string }>("EXPLAIN QUERY PLAN SELECT name FROM loaded_skills WHERE conversation_id = 1 AND generation = 9 ORDER BY loaded_at DESC")
+      .map((r) => r.detail)
+      .join("\n");
+    expect(plan).toContain("loaded_skills_generation");
+  });
+});
