@@ -79,9 +79,11 @@ import {
   MAX_GRAPH_NODES,
   MAX_GRAPH_SPEC_BYTES,
   MAX_GRAPH_TITLE_CHARS,
+  MAX_NODE_ARTIFACT_COMMIT_CHARS,
   MAX_NODE_ARTIFACT_SUMMARY_CHARS,
   MAX_NODE_KEY_CHARS,
   MAX_NODE_TITLE_CHARS,
+  MAX_STEP_BASE_CHARS,
   MAX_STEP_BRIEF_CHARS,
   MAX_TASK_BYTES,
   ROUTER_REPORT_LINKS_MAX,
@@ -239,10 +241,46 @@ function validateStepBrief(raw: string | null | undefined): string | null {
   return brief;
 }
 
-function validateStepBase(raw: string | null | undefined): "main" | null {
-  if (raw === undefined || raw === null || raw === "") return null;
-  if (raw !== "main") throw fail("invalid", '步骤 base 目前只支持 "main"');
-  return "main";
+/** git 分支名（git check-ref-format 的规则）：不以 - . / 开头，不以 / . .lock 结尾，没有空白、控制字符、~^:?*[\、..、//、@{。 */
+const BRANCH_NAME_RE = /^(?![-./])(?!.*(?:\.\.|\/\/|@\{|\/\.))(?!.*(?:[/.]|\.lock)$)[^\s\p{Cc}~^:?*[\\]+$/u;
+
+/**
+ * 步骤的 base：这一步的工作目录从哪开始，不写是接着上一步。
+ * - 普通步骤只能写 "main"：从主文件夹最新提交新开 worktree 和分支；
+ * - 审查步骤写被审的分支名：审查目录 detached 检出它（docs/review-verify-only-design.md 第 3.1 节）。
+ */
+function validateStepBase(raw: string | null | undefined, review: boolean): string | null {
+  const base = raw?.trim() ?? "";
+  if (base === "") return null;
+  if (!review) {
+    if (base !== "main") throw fail("invalid", '普通步骤的 base 只能是 "main"（审查步骤的 base 才写被审分支）');
+    return "main";
+  }
+  if (base === "main" || charLen(base) > MAX_STEP_BASE_CHARS || !BRANCH_NAME_RE.test(base)) {
+    throw fail("invalid", `审查步骤的 base 写被审分支的名字（不能是 main，最多 ${MAX_STEP_BASE_CHARS} 字），现在是 ${JSON.stringify(base)}`);
+  }
+  return base;
+}
+
+/**
+ * 审查步骤要能定下被审分支：写了 base 就是它，没写就要有唯一的上一步（派活时取上一步 Worker 的分支）。
+ * 没有上一步、多路合流的审查步骤建图、改图时直接拒绝，不退成普通 Worker（docs/review-verify-only-design.md 第 3.1 节）。
+ * 只查还没开工的（pending、waiting）步骤：开工了的改不了。
+ */
+function assertReviewStepsHaveTarget(
+  nodes: Iterable<{ key: TaskNodeKey; review: number; base: string | null; status: string }>,
+  edges: readonly TaskEdge[],
+): void {
+  for (const n of nodes) {
+    if (n.review !== 1 || n.base !== null || (n.status !== "pending" && n.status !== "waiting")) continue;
+    const ups = edges.filter((e) => e.toKey === n.key).length;
+    if (ups !== 1) {
+      throw fail(
+        "invalid",
+        `审查步骤「${n.key}」${ups === 0 ? "没有上一步" : `有 ${ups} 个上一步`}，定不下被审分支：给它写 "base": "<被审分支>"`,
+      );
+    }
+  }
 }
 
 function validateStepMaxTime(raw: string | number | null | undefined): number | null {
@@ -520,7 +558,7 @@ function toTaskNode(row: TaskNodeDbRow, includeDetails = false): TaskNode {
     maxTimeMs: row.max_time_ms,
     confirm: row.confirm === 1,
     review: row.review === 1,
-    base: row.base === "main" ? "main" : null,
+    base: row.base,
   };
 }
 
@@ -540,6 +578,8 @@ function nodeResultLines(node: TaskNode): string[] {
   if (artifact?.branch) refs.push(`分支 ${clipNote(artifact.branch)}`);
   if (artifact?.commit) refs.push(`提交 ${clipNote(artifact.commit)}`);
   if (artifact?.prUrl) refs.push(`PR ${clipNote(artifact.prUrl)}`);
+  if (artifact?.reviewVerdict) refs.push(`审查 ${artifact.reviewVerdict}`);
+  if (artifact?.verifiedCommit) refs.push(`验证提交 ${clipNote(artifact.verifiedCommit)}`);
   if (refs.length > 0) lines.push(`      ${refs.join(" · ")}`);
   if (artifact?.summary) lines.push(`      摘要：${clipNote(artifact.summary)}`);
   if (decision !== null) {
@@ -653,7 +693,7 @@ export interface WorkerBindTarget {
   readonly: boolean;
   maxTimeMs: number | null;
   review: boolean;
-  base: "main" | null;
+  base: string | null;
   /** 这一步在图里排第几（按节点顺序，从 1 起）、一共几步。 */
   index: number;
   total: number;
@@ -980,6 +1020,8 @@ export function createLedgerTaskGraphs(
 
       const commit = n.artifact?.commit?.trim() || reportCommit;
       if (commit) parts.push(`提交 ${collapseOneLine(commit, 40)}`);
+      if (n.artifact?.reviewVerdict) parts.push(`审查 ${n.artifact.reviewVerdict}`);
+      if (n.artifact?.verifiedCommit) parts.push(`验证提交 ${n.artifact.verifiedCommit}`);
 
       const probedPr = branch ? extra?.prs?.[branch] : undefined;
       if (probedPr !== undefined) {
@@ -1276,33 +1318,28 @@ export function createLedgerTaskGraphs(
   };
 
   /**
-   * 第 4.4 节分支与工作目录延续规则：
-   * - base: "main"、无上游、多个上游（合流） -> fresh（从主文件夹最新提交新开 worktree 和分支）；
-   * - 唯一直接上游（跳过的、审查的步骤不改分支，沿唯一上游链接着往上找）：
-   *   - 自己是审查步骤 -> review（detached 检出上游分支的独立 worktree，不挂分支，见 docs/review-verify-only-design.md）；
-   *   - 自己是唯一有效下游且上游有可接手 worktree -> inherit（接手同一个 worktreePath 与 branch，不跑 setup）；
-   *   - 上游有多个下游（分叉） -> fork（指定 base 为上游分支最新提交，新开 worktree 和分支）。
+   * 沿唯一上游链往上找（跳过的、审查的步骤不改分支，接着往上），在第一个干过活的上游步骤里找最近一个在 worktree 分支上干活的 Worker。
+   * forked：途中有上游分出了多个下游。没有上游、多个上游（合流）、上游都没在 worktree 分支上干活：null。
    */
-  const resolveWorkspacePlan = (
+  const findUpstreamWorktree = (
     graphRow: TaskGraphDbRow,
     step: TaskNodeDbRow,
     byKey: ReadonlyMap<TaskNodeKey, TaskNodeDbRow>,
     incoming: ReadonlyMap<TaskNodeKey, readonly TaskNodeKey[]>,
     outgoing: ReadonlyMap<TaskNodeKey, readonly TaskNodeKey[]>,
-  ): StepWorkspacePlan => {
-    if (step.base === "main") return { kind: "fresh" };
+  ): { worker: { id: number; worktree_path: string | null; branch: string; base_commit: string }; forked: boolean } | null => {
     let cur = step.node_key;
     let forked = false;
     const seen = new Set<TaskNodeKey>();
     while (true) {
       const ups = incoming.get(cur) ?? [];
-      if (ups.length !== 1) return { kind: "fresh" };
+      if (ups.length !== 1) return null;
       const uKey = ups[0]!;
-      if (seen.has(uKey)) return { kind: "fresh" };
+      if (seen.has(uKey)) return null;
       seen.add(uKey);
       if ((outgoing.get(uKey)?.length ?? 0) > 1) forked = true;
       const u = byKey.get(uKey);
-      if (u === undefined) return { kind: "fresh" };
+      if (u === undefined) return null;
       if (u.skipped === 1 || u.review === 1) {
         cur = uKey;
         continue;
@@ -1326,38 +1363,73 @@ export function createLedgerTaskGraphs(
         ) {
           continue;
         }
-        if (step.review === 1) {
-          return { kind: "review", branch: w.branch, implWorktreePath: w.worktree_path };
-        }
-        if (!forked && w.worktree_path && existsSync(w.worktree_path)) {
-          const chainWorkerIds = new Set<number>(parseJsonOr<WorkerId[]>(step.worker_ids_json, []));
-          let anc: TaskNodeKey | undefined = step.node_key;
-          const ancVisited = new Set<TaskNodeKey>();
-          while (anc !== undefined && !ancVisited.has(anc)) {
-            ancVisited.add(anc);
-            const ancNode = byKey.get(anc);
-            if (ancNode !== undefined) {
-              for (const id of parseJsonOr<WorkerId[]>(ancNode.worker_ids_json, [])) chainWorkerIds.add(id);
-            }
-            const prevs: readonly TaskNodeKey[] = incoming.get(anc) ?? [];
-            anc = prevs.length === 1 ? prevs[0] : undefined;
-          }
-          const otherUsers = db.all<{ id: number }>("SELECT id FROM workers WHERE worktree_path = ?", w.worktree_path);
-          const claimedOutsideChain = otherUsers.some((o) => !chainWorkerIds.has(o.id));
-          if (!claimedOutsideChain) {
-            return {
-              kind: "inherit",
-              fromWorkerId: w.id,
-              worktreePath: w.worktree_path,
-              branch: w.branch,
-              baseCommit: w.base_commit,
-            };
-          }
-        }
-        return { kind: "fork", baseBranch: w.branch };
+        return { worker: { id: w.id, worktree_path: w.worktree_path, branch: w.branch, base_commit: w.base_commit }, forked };
       }
-      return { kind: "fresh" };
+      return null;
     }
+  };
+
+  /**
+   * 审查步骤的被审分支（docs/review-verify-only-design.md 第 3.1 节）：base 写明的分支；没写就是唯一上游链上最近一个在 worktree 分支上干活的 Worker 的分支。
+   * 都没有（上一步在主文件夹里干活）就报错：自动开工时步骤停在等项目经理处理，hub worker start --node 直接拒绝。不退成普通 Worker。
+   */
+  const resolveReviewPlan = (
+    graphRow: TaskGraphDbRow,
+    step: TaskNodeDbRow,
+    byKey: ReadonlyMap<TaskNodeKey, TaskNodeDbRow>,
+    incoming: ReadonlyMap<TaskNodeKey, readonly TaskNodeKey[]>,
+    outgoing: ReadonlyMap<TaskNodeKey, readonly TaskNodeKey[]>,
+  ): Extract<StepWorkspacePlan, { kind: "review" }> => {
+    if (step.base !== null) return { kind: "review", branch: step.base, implWorktreePath: null };
+    const up = findUpstreamWorktree(graphRow, step, byKey, incoming, outgoing);
+    if (up === null) {
+      throw fail(
+        "invalid",
+        `审查步骤「${step.node_key}」找不到被审分支：上一步没有在 worktree 分支上干活的 Worker（比如在主文件夹里干的）。用 ${HUB_COMMAND} graph patch 给它写 "base": "<被审分支>"`,
+      );
+    }
+    return { kind: "review", branch: up.worker.branch, implWorktreePath: up.worker.worktree_path };
+  };
+
+  /**
+   * 第 4.4 节分支与工作目录延续规则：
+   * - 审查步骤 -> review（detached 检出被审分支的独立 worktree，不挂分支，见 resolveReviewPlan）；
+   * - base: "main"、无上游、多个上游（合流）、上游没在 worktree 分支上干活 -> fresh（从主文件夹最新提交新开 worktree 和分支）；
+   * - 唯一上游链上找到在 worktree 分支上干活的 Worker（findUpstreamWorktree）：
+   *   - 自己是唯一有效下游且上游的 worktree 还在、没被链外的 Worker 用过 -> inherit（接手同一个 worktreePath 与 branch，不跑 setup）；
+   *   - 否则（分叉等） -> fork（指定 base 为上游分支最新提交，新开 worktree 和分支）。
+   */
+  const resolveWorkspacePlan = (
+    graphRow: TaskGraphDbRow,
+    step: TaskNodeDbRow,
+    byKey: ReadonlyMap<TaskNodeKey, TaskNodeDbRow>,
+    incoming: ReadonlyMap<TaskNodeKey, readonly TaskNodeKey[]>,
+    outgoing: ReadonlyMap<TaskNodeKey, readonly TaskNodeKey[]>,
+  ): StepWorkspacePlan => {
+    if (step.review === 1) return resolveReviewPlan(graphRow, step, byKey, incoming, outgoing);
+    if (step.base === "main") return { kind: "fresh" };
+    const up = findUpstreamWorktree(graphRow, step, byKey, incoming, outgoing);
+    if (up === null) return { kind: "fresh" };
+    const w = up.worker;
+    if (!up.forked && w.worktree_path && existsSync(w.worktree_path)) {
+      const chainWorkerIds = new Set<number>(parseJsonOr<WorkerId[]>(step.worker_ids_json, []));
+      let anc: TaskNodeKey | undefined = step.node_key;
+      const ancVisited = new Set<TaskNodeKey>();
+      while (anc !== undefined && !ancVisited.has(anc)) {
+        ancVisited.add(anc);
+        const ancNode = byKey.get(anc);
+        if (ancNode !== undefined) {
+          for (const id of parseJsonOr<WorkerId[]>(ancNode.worker_ids_json, [])) chainWorkerIds.add(id);
+        }
+        const prevs: readonly TaskNodeKey[] = incoming.get(anc) ?? [];
+        anc = prevs.length === 1 ? prevs[0] : undefined;
+      }
+      const otherUsers = db.all<{ id: number }>("SELECT id FROM workers WHERE worktree_path = ?", w.worktree_path);
+      if (!otherUsers.some((o) => !chainWorkerIds.has(o.id))) {
+        return { kind: "inherit", fromWorkerId: w.id, worktreePath: w.worktree_path, branch: w.branch, baseCommit: w.base_commit };
+      }
+    }
+    return { kind: "fork", baseBranch: w.branch };
   };
 
   /** 检查指定步骤是否存在正在执行或仍挂着未收工 Worker 的传递下游步骤（防上下游同时处于运行态或争抢同一同线 worktree）。 */
@@ -1472,7 +1544,6 @@ export function createLedgerTaskGraphs(
         if (hasBrief && bridge !== undefined && pm !== null) {
           const stepIndex = nodeRows.findIndex((r) => r.node_key === node.node_key) + 1 || idx + 1;
           const totalSteps = nodeRows.length;
-          const workspacePlan = resolveWorkspacePlan(graphRow, node, byKey, incoming, outgoing);
           const directUpstreams = collectDirectUpstreams(graphRow, node.node_key, byKey, incoming);
           const renderedTask = renderGraphStepTask({
             goal: graphRow.goal,
@@ -1487,6 +1558,7 @@ export function createLedgerTaskGraphs(
           const prevStopsLen = p.stops.length;
           db.exec("SAVEPOINT sp_auto_dispatch");
           try {
+            const workspacePlan = resolveWorkspacePlan(graphRow, node, byKey, incoming, outgoing);
             const pmVendor = (pmSession?.vendor ?? pm.vendor ?? DEFAULT_AGENT_VENDOR) as AgentVendor;
             const pmModel = pmSession?.model ?? pm.default_model ?? null;
             const pmEffort = pmSession?.effort ?? pm.effort ?? null;
@@ -1785,7 +1857,7 @@ export function createLedgerTaskGraphs(
       const brief = validateStepBrief(n.brief);
       const agent = validateStepAgentSetting(n, fallbackVendor);
       const maxTimeMs = validateStepMaxTime(n.maxTime);
-      const base = validateStepBase(n.base);
+      const base = validateStepBase(n.base, n.review === true);
       // 节点类型只剩一种（步骤）：写了问题的步骤就是挂了拍板卡，轮到时等用户；老写法的 kind 由 zod 直接丢掉
       const gate = validateGateFields(n);
       const rawDeps =
@@ -1818,6 +1890,10 @@ export function createLedgerTaskGraphs(
 
     const topoOrder = validateDagAndOrder(
       normalizedNodes.map((n) => n.key),
+      edges,
+    );
+    assertReviewStepsHaveTarget(
+      normalizedNodes.map((n) => ({ ...n, status: "pending" })),
       edges,
     );
     const rankOf = new Map<TaskNodeKey, number>(topoOrder.map((k, idx) => [k, idx]));
@@ -2132,7 +2208,7 @@ export function createLedgerTaskGraphs(
       const brief = validateStepBrief(n.brief);
       const agent = validateStepAgentSetting(n, fallbackVendor);
       const maxTimeMs = validateStepMaxTime(n.maxTime);
-      const base = validateStepBase(n.base);
+      const base = validateStepBase(n.base, n.review === true);
       const gate = validateGateFields(n);
       const rawDeps =
         n.deps !== undefined ? n.deps : addSequentialDefault && index >= 1 ? [rawAddList[index - 1]!.key] : [];
@@ -2229,10 +2305,10 @@ export function createLedgerTaskGraphs(
         fallbackVendor,
       );
       const nextMaxTimeMs = u.maxTime !== undefined ? validateStepMaxTime(u.maxTime) : cur.max_time_ms;
-      const nextBase = u.base !== undefined ? validateStepBase(u.base) : (cur.base === "main" ? "main" : null);
       const nextReadonly = u.readonly !== undefined ? (u.readonly ? 1 : 0) : cur.readonly;
       const nextConfirm = u.confirm !== undefined ? (u.confirm ? 1 : 0) : cur.confirm;
       const nextReview = u.review !== undefined ? (u.review ? 1 : 0) : cur.review;
+      const nextBase = validateStepBase(u.base !== undefined ? u.base : cur.base, nextReview === 1);
       const gateTouched =
         u.question !== undefined || u.options !== undefined || u.summaryMd !== undefined || u.recommended !== undefined;
       const gate = gateTouched
@@ -2256,6 +2332,17 @@ export function createLedgerTaskGraphs(
         gate,
       };
     });
+    const updatedByKey = new Map(preparedUpdates.map((u) => [u.cur.node_key, u]));
+    assertReviewStepsHaveTarget(
+      [
+        ...[...nodesByKey.values()].map((n) => {
+          const u = updatedByKey.get(n.node_key);
+          return { key: n.node_key, review: u?.nextReview ?? n.review, base: u !== undefined ? u.nextBase : n.base, status: n.status };
+        }),
+        ...addedNodes.map((a) => ({ ...a, status: "pending" })),
+      ],
+      finalEdges,
+    );
 
     const t = now();
     if (patch.title !== undefined) {
@@ -3505,7 +3592,7 @@ export function createLedgerTaskGraphs(
       readonly: node.readonly === 1,
       maxTimeMs: node.max_time_ms,
       review: node.review === 1,
-      base: node.base === "main" ? "main" : null,
+      base: node.base,
       index: stepIndex,
       total: totalSteps,
       activeWorkerId: node.active_worker_id,
@@ -3715,6 +3802,13 @@ export function createLedgerTaskGraphs(
       ...(parsed.kind === "ok"
         ? { summary: truncateChars(parsed.report.summary, MAX_NODE_ARTIFACT_SUMMARY_CHARS) }
         : {}),
+      // 审查的结论和验证提交按这一轮的汇报整个换掉（没写就清掉），不留前任审查的
+      ...(worker.review !== null && parsed.kind === "ok"
+        ? {
+            reviewVerdict: parsed.report.verdict ?? undefined,
+            verifiedCommit: parsed.report.verifiedCommit === null ? undefined : truncateChars(parsed.report.verifiedCommit, MAX_NODE_ARTIFACT_COMMIT_CHARS),
+          }
+        : {}),
     };
     const artifactJson = serializeArtifact(mergedArtifact, false);
 
@@ -3729,10 +3823,10 @@ export function createLedgerTaskGraphs(
       return { handled: true, outcome: "waiting_user" };
     }
 
-    // 审查步骤（docs/review-verify-only-design.md 第 3.3、3.4 节）：判 FAIL、汇报没写对结论或提交号、收尾核对发现被审分支动过，
+    // 审查 Worker（docs/review-verify-only-design.md 第 3.3、3.4 节）：判 FAIL、汇报没写对结论或提交号、收尾核对发现被审分支动过，
     // 都停在等项目经理处理；判 PASS 且做完了，先登记收尾核对（事务里不做 I/O），核对完再走下面的规则
     let reviewStop: { label: string; detail: string | null } | null = null;
-    if (node.review === 1 && forcedNote === null && parsed.kind === "ok") {
+    if (worker.review !== null && forcedNote === null && parsed.kind === "ok") {
       const problem = reviewReportProblem(parsed.report, worker.review);
       const changed = opts?.reviewVerified?.problems ?? [];
       if (parsed.report.verdict === "FAIL") reviewStop = { label: "审查判 FAIL", detail: null };
@@ -3747,7 +3841,7 @@ export function createLedgerTaskGraphs(
       parsed.report.status === "done" &&
       parsed.report.deviation === null;
 
-    if (cleanDone && node.review === 1 && worker.review?.snapshot != null && opts?.reviewVerified === undefined) {
+    if (cleanDone && worker.review !== null && opts?.reviewVerified === undefined) {
       return { handled: true, outcome: "verify" };
     }
 

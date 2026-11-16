@@ -10,7 +10,7 @@ import {
   MAX_WORKER_TITLE_CHARS,
   PM_MEMORY_INDEX_FILE,
 } from "./limits.ts";
-import type { ReviewTarget } from "./review.ts";
+import type { ReviewTarget, ReviewVerdict } from "./review.ts";
 import type { ScheduleId } from "./schedule.ts";
 import type { AgentVendor } from "./vendors.ts";
 import type { WorkerReportStatus } from "./worker.ts";
@@ -1071,6 +1071,9 @@ export interface TaskArtifact {
   commit?: string;
   branch?: string;
   summary?: string;
+  /** 审查步骤汇报的“结论”和“验证提交”（shared/review.ts）。 */
+  reviewVerdict?: ReviewVerdict;
+  verifiedCommit?: string;
 }
 
 export interface TaskDecision {
@@ -1098,7 +1101,8 @@ export interface TaskNode {
   maxTimeMs?: number | null;
   confirm?: boolean;
   review?: boolean;
-  base?: "main" | null;
+  /** 普通步骤只能是 "main"；审查步骤是被审分支（不写是唯一上一步的分支）。 */
+  base?: string | null;
   status: TaskNodeStatus;
   /** 等谁：只在 status 是 waiting 时有。 */
   waitingFor: TaskNodeWaitingFor | null;

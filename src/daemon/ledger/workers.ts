@@ -876,9 +876,12 @@ export function createLedgerWorkers(
     // Worker（不论普通还是只读、不论哪家厂商）一律要求 OS 沙箱就绪；起不来直接报错拒绝派活，不退回规则兜底（docs/linux-sandbox-design.md 第 3.2 节）
     if (!ctx.osSandboxed()) throw fail("invalid", WORKER_NEEDS_OS_SANDBOX_MESSAGE);
     const card = projectCard(project);
-    // 审查步骤换人：每个审查 Worker 都新开自己的审查目录，不接手前任的
+    // 审查步骤：每个审查 Worker 都新开自己的审查目录，不接手前任的；不能在主文件夹里干（docs/review-verify-only-design.md 第 3.1 节）
     const reviewPlan: Extract<StepWorkspacePlan, { kind: "review" }> | null =
-      args.noWorktree !== true && bindTarget?.workspacePlan.kind === "review" ? bindTarget.workspacePlan : null;
+      bindTarget?.workspacePlan.kind === "review" ? bindTarget.workspacePlan : null;
+    if (reviewPlan !== null && args.noWorktree === true) {
+      throw fail("invalid", `审查步骤只能在 detached 检出被审分支 ${reviewPlan.branch} 的独立审查目录里干活，不能用 --no-worktree`);
+    }
     const inherit = reviewPlan === null ? (takeover?.inherit ?? null) : null;
     const upstreamInherit: Extract<StepWorkspacePlan, { kind: "inherit" }> | null =
       args.noWorktree !== true && inherit === null && bindTarget?.workspacePlan.kind === "inherit"

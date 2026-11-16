@@ -330,7 +330,8 @@ export interface CreateTaskGraphNodeInput {
   readonly?: boolean;
   confirm?: boolean;
   review?: boolean;
-  base?: "main";
+  /** 普通步骤只能是 "main"；审查步骤是被审分支（不写是唯一上一步的分支）。 */
+  base?: string;
   deps?: TaskNodeKey[];
   /** 写了问题就是挂着拍板卡的步骤：轮到时等用户拍板。 */
   question?: string;
@@ -366,7 +367,8 @@ export interface PatchTaskGraphNodeInput {
   readonly?: boolean;
   confirm?: boolean;
   review?: boolean;
-  base?: "main" | null;
+  /** 普通步骤只能是 "main"；审查步骤是被审分支（不写是唯一上一步的分支）。 */
+  base?: string | null;
   deps?: TaskNodeKey[];
   question?: string;
   options?: string[];

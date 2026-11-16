@@ -968,7 +968,7 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
     expect(ledger.getMessage(firstWorkerMessageOf(wPrep).id)?.status).toBe("stopped");
 
     // 2) 图含 goal + 手动步骤（无预设 brief）标 review: true：
-    //    s1 建成 worktree 完成后，s2 首次手动派 --no-worktree 失败，再换人接力（不加 --no-worktree）时：
+    //    s1 建成 worktree 完成后，s2 手动派 --no-worktree 直接拒绝；派出的第一个审查 Worker 没做完，再换人接力时：
     //    接手的新 Worker 新开 detached 在实现分支上的审查目录，首条接手消息完整包含 goal、第 2/2 步、REVIEW_CHECKLIST、上游交棒与审查目录说明，无重复拼接！
     const gManual = ledger.hubCall(lin.sessionId, "graph.create", {
       specJson: JSON.stringify({
@@ -985,10 +985,12 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
     const implRow = db.get<{ worktree_path: string; branch: string }>("SELECT worktree_path, branch FROM workers WHERE id = ?", wImpl)!;
     runWorkerReportTurn(wImpl, buildReportBlock({ status: "做完了", summary: "实现完毕", handoff: "重点看 auth.ts" }));
 
+    expect(() =>
+      ledger.hubCall(lin.sessionId, "worker.start", { graphId: gManual.id, node: "rev", noWorktree: true, task: "核查鉴权绕过边界" }),
+    ).toThrow(/不能用 --no-worktree/);
     const wRev1 = ledger.hubCall(lin.sessionId, "worker.start", {
       graphId: gManual.id,
       node: "rev",
-      noWorktree: true,
       task: "核查鉴权绕过边界",
     }).data.worker;
     runWorkerReportTurn(wRev1.id, buildReportBlock({ status: "有问题", summary: "网络中断", questions: "需重试" }));

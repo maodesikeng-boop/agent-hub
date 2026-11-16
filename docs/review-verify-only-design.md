@@ -1,6 +1,6 @@
 # 审查只查不修：用代码强制
 
-状态：已实现（任务图 #18 第 2 步，Worker #586，2026-11-16）。方案由 Worker #584 写，实现时的出入写在对应小节里。用户原话：“审查只查不修，这是规则，用代码强制”。
+状态：已实现（任务图 #18 第 2 步，Worker #586，2026-11-16；第 4 步 Worker #590 堵上了 3.1 节写的两处退成普通 Worker 的口子）。方案由 Worker #584 写，实现时的出入写在对应小节里。用户原话：“审查只查不修，这是规则，用代码强制”。
 
 起因：#16 的审查 #574、#17 的审查 #580 都直接往实现分支提交了修复，判的 PASS 验的是自己的代码。根子在设计：审查步骤和实现共用一个 worktree 和分支，清单还明写“直接修、推上去”。
 
@@ -38,7 +38,12 @@ B 的结论是看代码得出的，没起真进程试推送。只读本来就不
 
 ### 3.1 审查拿独立 worktree，detached 在实现的 head 上
 
-- `StepWorkspacePlan` 加一种 `{ kind: "review"; branch; implWorktreePath }`。`resolveWorkspacePlan` 遇到 `review === 1` 的步骤，照原来的规则往上找实现 Worker，找到就返回 `review`，不再返回 `inherit`/`fork`。上游没有 worktree 分支（实现在主文件夹里干的），就退回 `fresh`，也不做分支核对。
+- `StepWorkspacePlan` 加一种 `{ kind: "review"; branch; implWorktreePath }`。“是不是审查”只看节点的 `review`：`resolveWorkspacePlan` 遇到 `review === 1` 的步骤只走 `resolveReviewPlan`，要么返回 `review`，要么报错，不会返回 `fresh`、`inherit`、`fork`。派活时按 plan 写 `workers.review_json`，所以审查步骤的每个 Worker 都有被审目标，独立目录、禁推钩子、验证提交校验和收尾核对都由它决定。
+- 被审分支（被审目标）从哪来：步骤的 `base` 写了就是它（补建的单步审查图、多路合流后的审查都这么写）；没写就沿唯一上游链往上找最近一个在 worktree 分支上干活的 Worker，用它的分支。`base` 的意思统一成“这一步的工作目录从哪开始”：普通步骤只能写 `"main"`，审查步骤写被审分支名，不能是 `"main"`。
+- 找不到被审分支的拒绝，不降级成普通 Worker：
+  - 建图、改图时：审查步骤没写 `base`，又没有唯一的上一步（没有上一步、多路合流），直接报错（`assertReviewStepsHaveTarget`）。
+  - 开工时：上一步在主文件夹里干的（链上找不到 worktree 分支），自动开工失败，步骤停在等项目经理处理，提示给它写 `base`；`hub worker start --node` 直接报同样的错。
+  - 审查步骤用 `--no-worktree` 派活直接拒绝。
 - 派活时仍然先把还开着的实现 Worker 收工（沿用 `inherit` 现有的那段），防止审查期间实现还在推。
 - 审查 Worker 的记录：`branch = NULL`，`worktree_path` 是新目录，新增一列 `review_json`（`shared/review.ts` 的 `ReviewTarget`）：`{ branch, snapshot: { sha, remote, pr } }`。迁移 `0028` 重建 `workers` 表，把 CHECK 放宽成“worktree 要么有分支、要么有 review_json”。分支为空，现有按分支查 PR、找可接手目录的代码会自动跳过它。
 - `worktree.create` 动作：`WorktreeTask.checkout` 是 `{ kind: "review", branch }`，`addWorktree` 的 `branch` 传 null，跑 `git worktree add --detach <路径> refs/heads/<实现分支>`，得到的 `baseCommit` 就是被审 SHA。同一个动作里现查 origin 上的同名分支（`remoteBranchHead`：没有 origin 是不核对、origin 上没有这个分支记 null）和 PR，交给账本的 `recordReviewSnapshot` 写进 `review_json.snapshot`。
@@ -53,11 +58,12 @@ B 的结论是看代码得出的，没起真进程试推送。只读本来就不
 
 ### 3.3 结论格式
 
-- 汇报八栏不变，审查步骤多两栏：`结论: PASS | PASS+NOTES | FAIL`、`验证提交: <SHA>`。`parseWorkerReport` 认这两栏，非审查步骤不要求写。
+- 汇报八栏不变，审查步骤多两栏：`结论: PASS | PASS+NOTES | FAIL`、`验证提交: <SHA>`。`parseWorkerReport` 认这两栏，两栏都去掉首尾标点（行内代码的反引号、句号、加粗），非审查步骤不要求写。
+- 两栏记进步骤产物（`TaskArtifact` 的 `reviewVerdict`、`verifiedCommit`），`hub graph show` 和交付单里看得到；每次审查汇报整个换掉，不留前任审查的。
 - 后台的判断：
   - FAIL：不管“状态”写什么都进 waiting:pm，复现写在“问题”里原样转给项目经理。修复由项目经理另派 Worker，后台不自动加步骤。
   - PASS / PASS+NOTES：先核对（3.4），通过才 done；PASS+NOTES 的“问题”照现有规则抄送项目经理。
-  - 没写结论、写错，或“验证提交”和 `review_json.sha` 对不上：进 waiting:pm，附一句原因。
+  - 没写结论、写错，“验证提交”和 `review_json.sha` 对不上，或审查目录没记下开审时的提交：进 waiting:pm，附一句原因。审查 Worker 一定有被审目标（3.1），提交号每次都核对。
 
 ### 3.4 收尾核对：`review.verify` 动作
 
@@ -93,8 +99,8 @@ B 的结论是看代码得出的，没起真进程试推送。只读本来就不
 ## 6. 要改的文件
 
 - `src/shared/review.ts`（新）：见第 5 节。
-- `src/daemon/ledger/task-graphs.ts`：`StepWorkspacePlan` 加 `review`；`resolveWorkspacePlan` 给审查步骤返回 `review`，往上找时把审查节点当透明；`onWorkerTurnReportIn` 审查分支改走 3.3/3.4；加 `onReviewVerifiedIn`。
-- `src/daemon/ledger/workers.ts`：`dispatchStepWorkerIn` 和 `hub worker start --node` 换人那条路都处理 `review` plan；`getWorktreeTask` 给审查 Worker 返回 `checkout: { kind: "review" }`。
+- `src/daemon/ledger/task-graphs.ts`：`StepWorkspacePlan` 加 `review`；`resolveWorkspacePlan` 给审查步骤走 `resolveReviewPlan`（返回 `review` 或报错），往上找时把审查节点当透明（`findUpstreamWorktree`）；`validateStepBase` 让审查步骤的 `base` 写被审分支，`assertReviewStepsHaveTarget` 在建图、改图时拒绝定不下被审分支的审查步骤；`onWorkerTurnReportIn` 按 Worker 的 `review` 走 3.3/3.4，产物记结论和验证提交；加 `onReviewVerifiedIn`。
+- `src/daemon/ledger/workers.ts`：`dispatchStepWorkerIn` 和 `hub worker start --node` 换人那条路都处理 `review` plan，审查步骤带 `--no-worktree` 拒绝；`getWorktreeTask` 给审查 Worker 返回 `checkout: { kind: "review" }`。
 - `src/daemon/store/migrate.ts`：加列 `workers.review_json`。
 - `src/shared/ledger.ts`、`src/shared/actions.ts`：`WorktreeTask.checkout`，新动作 `review.verify`。
 - `src/daemon/git/git.ts`：`addWorktree` 的 `branch` 可以是 null（`--detach`）；加 `remoteBranchHead`；`removeWorktree` 加 `force`。`src/daemon/handlers.ts`：`worktree.create` 记开审时的被审分支，加 `review.verify` 处理器。
@@ -115,7 +121,9 @@ B 的结论是看代码得出的，没起真进程试推送。只读本来就不
   - 判 FAIL 进 waiting:pm，带复现；
   - PASS、PASS+NOTES 核对通过后 done，下游照常开工；
   - 没写结论、SHA 对不上、核对报分支变了，都进 waiting:pm；
-  - 审查后面的修复步骤接手实现的 worktree。
+  - 审查后面的修复步骤接手实现的 worktree；
+  - 定不下被审分支（没有上一步、多路合流、`base: "main"`）建图、改图拒绝；补建的单步审查图写 `base` 照常 detached 检出并核对；上一步在主文件夹里干的不开工、停在 waiting:pm；`--no-worktree` 拒绝；
+  - “验证提交”写成行内代码、带句号也认，产物记下结论和验证提交。
 - `src/vendors/contract.test.ts`：6 家审查 Worker 的启动环境都带禁推配置，codex 落在 `shell_environment_policy.set` 里。
 - `src/shared/worker.test.ts`：两栏的解析。
 - `src/daemon/worktree-cleanup` 的测试：审查目录收工即删，有改动也删，不建保护分支。
@@ -132,5 +140,8 @@ B 的结论是看代码得出的，没起真进程试推送。只读本来就不
 - `task-graph-skill.ts` 手册里“接手实现的分支直接修”；`orchestration-simplify-design.md` 第 4.4、5、9.3 节和第 13 节表格里“审查在同一条分支上补提交、直接修、推上去”的说法；第 9.3 节抄的旧清单正文（改成指向 `review.ts`）；`orchestration-skill-design.md` 的“发现问题让它直接修”。
 - `worktree-cleanup.ts` 里“审查 Worker 常 detached 在 PR 提交上、停在 review-* 临时分支”的说法：审查目录现在单独一条清理路径，收工即删。
 - `WorktreeTask` 的 `branch` / `base` 两个平铺字段，换成 `checkout` 联合类型（新开分支 / 审查检出）。
+- 审查步骤退成普通 Worker 的两条路（第 4 步删掉）：`resolveWorkspacePlan` 给找不到上游 worktree 分支的审查步骤返回 `fresh`；`hub worker start --node <审查步骤> --no-worktree` 把审查 plan 丢掉、在主文件夹里干。连带删掉只为它们留的分支：`reviewReportProblem` 在没有被审目标时跳过提交号校验，`onWorkerTurnReportIn` 在没有开审快照时跳过收尾核对。
+- `validateStepBase` 的“目前只支持 main”：`base` 统一成“这一步从哪开始”，审查步骤写被审分支。
+- 测试：两处依赖上面那两条路的老测试改掉：`task-graph-auto-dispatch.test.ts` 里审查步骤先 `--no-worktree` 派活的那一段改成断言被拒；`task-graph-waiting-user.test.ts` 里没建审查目录就汇报 PASS 的两处改成先建审查目录、写真实的验证提交、跑收尾核对。
 - 测试：`task-graph-auto-dispatch.test.ts` 里“独立审查并直接修”那一步（审查在实现分支上提交 `review fix`）改成普通的同线步骤；两处审查步骤换人断言“接手实现的 worktree”改成断言新开审查目录。
 

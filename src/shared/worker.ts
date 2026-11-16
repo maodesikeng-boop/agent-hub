@@ -5,7 +5,7 @@ import { truncateChars } from "./domain.ts";
 import type { Message, WorkerId, WorkerEvent, WorkerLineStatus } from "./domain.ts";
 import { WORKER_BRANCH_SLUG_CHARS, WORKER_LINE_SUMMARY_CHARS } from "./limits.ts";
 import { WORKER_BRANCH_PREFIX } from "./names.ts";
-import { parseReviewVerdict, type ReviewVerdict } from "./review.ts";
+import { parseReviewCommit, parseReviewVerdict, type ReviewVerdict } from "./review.ts";
 import { isAgentVendor } from "./vendors.ts";
 import type { AgentVendor } from "./vendors.ts";
 
@@ -57,7 +57,7 @@ export interface WorkerReport {
   questions: string;
   /** 审查步骤的“结论”栏：没写或写错是 null（review.ts）。 */
   verdict: ReviewVerdict | null;
-  /** 审查步骤的“验证提交”栏：没写是 null。 */
+  /** 审查步骤的“验证提交”栏，去掉首尾标点、转成小写：没写是 null。 */
   verifiedCommit: string | null;
 }
 
@@ -229,7 +229,7 @@ export function parseWorkerReport(text: string): ParsedWorkerReport {
       handoff: field("交棒"),
       questions: field("问题"),
       verdict: parseReviewVerdict(field("结论")),
-      verifiedCommit: field("验证提交") === "" ? null : field("验证提交"),
+      verifiedCommit: parseReviewCommit(field("验证提交")),
     },
   };
 }

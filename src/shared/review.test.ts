@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   REVIEW_CHECKLIST,
   diffReviewSnapshot,
+  parseReviewCommit,
   parseReviewVerdict,
   reviewPushGuardEnv,
   reviewReportProblem,
@@ -20,14 +21,20 @@ describe("审查结论", () => {
     for (const bad of ["", "通过", "PASS / FAIL", "OK"]) expect(parseReviewVerdict(bad)).toBeNull();
   });
 
-  it("汇报的毛病：没写结论；验证提交不是被审的提交（至少 7 位前缀才算）；上游在主文件夹里干活时不核对提交号", () => {
+  it("验证提交：首尾的反引号、句号、加粗不计较，转成小写；空的是 null", () => {
+    expect(parseReviewCommit(`\`${SHA.slice(0, 8).toUpperCase()}\`。`)).toBe(SHA.slice(0, 8));
+    expect(parseReviewCommit(`**${SHA}**`)).toBe(SHA);
+    expect(parseReviewCommit(" ")).toBeNull();
+  });
+
+  it("汇报的毛病：没写结论；验证提交不是被审的提交（至少 7 位前缀才算）；开审时没记下被审提交", () => {
     const target = { branch: "hub/1-impl", snapshot: before };
     expect(reviewReportProblem({ verdict: null, verifiedCommit: SHA }, target)).toContain("没写“结论”");
     expect(reviewReportProblem({ verdict: "PASS", verifiedCommit: SHA }, target)).toBeNull();
-    expect(reviewReportProblem({ verdict: "PASS", verifiedCommit: SHA.slice(0, 7).toUpperCase() }, target)).toBeNull();
+    expect(reviewReportProblem({ verdict: "PASS", verifiedCommit: SHA.slice(0, 7) }, target)).toBeNull();
     expect(reviewReportProblem({ verdict: "PASS", verifiedCommit: SHA.slice(0, 6) }, target)).toContain("被审的是分支 hub/1-impl");
     expect(reviewReportProblem({ verdict: "PASS", verifiedCommit: null }, target)).toContain("（没写）");
-    expect(reviewReportProblem({ verdict: "PASS", verifiedCommit: null }, null)).toBeNull();
+    expect(reviewReportProblem({ verdict: "PASS", verifiedCommit: SHA }, { branch: "hub/1-impl", snapshot: null })).toContain("没记下被审分支 hub/1-impl 开审时的提交");
   });
 });
 

@@ -343,6 +343,7 @@ describe("审查步骤只查不修", () => {
     const node = graphNow(graph.id).nodes[1]!;
     expect(stateOf(node)).toBe("done");
     expect(node.artifact).toMatchObject({ reviewVerdict: "PASS", verifiedCommit: sha.slice(0, 8) });
+    expect(ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).text).toContain(`审查 PASS · 验证提交 ${sha.slice(0, 8)}`);
   });
 
   it("判 FAIL 后项目经理在审查后面加修复步骤：修复步骤接手实现的 worktree 和分支，不接审查目录", async () => {

@@ -21,7 +21,10 @@ export interface ReviewSnapshot {
   pr: WorkerPr | null;
 }
 
-/** 审查 Worker 审的是哪条分支；snapshot 在审查目录建好之前是 null。 */
+/**
+ * 审查 Worker 审的是哪条分支（被审目标）：审查步骤的 base 写明的分支，没写就是唯一上一步 Worker 的分支（task-graphs.ts 的 resolveReviewPlan）。
+ * 找不到被审分支的审查步骤建图、改图时拒绝，派活时报错，不会退成普通 Worker。snapshot 在审查目录建好之前是 null。
+ */
 export interface ReviewTarget {
   branch: string;
   snapshot: ReviewSnapshot | null;
@@ -45,14 +48,19 @@ export function parseReviewTarget(json: string | null): ReviewTarget | null {
   return { branch: raw.branch, snapshot: raw.snapshot ?? null };
 }
 
+/** 栏值首尾的空白、标点、符号（行内代码的反引号、句号、引号、加粗）。 */
+const stripEdgeMarks = (raw: string): string => raw.trim().replace(/^[\p{P}\p{S}\s]+|[\p{P}\p{S}\s]+$/gu, "");
+
 /** “结论”栏的值：大小写、+ 两边的空格、首尾标点都不计较；不是三种之一返回 null。 */
 export function parseReviewVerdict(raw: string): ReviewVerdict | null {
-  const normalized = raw
-    .trim()
-    .replace(/^[\p{P}\p{S}\s]+|[\p{P}\p{S}\s]+$/gu, "")
-    .replace(/\s*\+\s*/gu, "+")
-    .toUpperCase();
+  const normalized = stripEdgeMarks(raw).replace(/\s*\+\s*/gu, "+").toUpperCase();
   return REVIEW_VERDICTS.find((v) => v === normalized) ?? null;
+}
+
+/** “验证提交”栏的值：首尾标点不计较、转成小写；没写是 null。 */
+export function parseReviewCommit(raw: string): string | null {
+  const normalized = stripEdgeMarks(raw).toLowerCase();
+  return normalized === "" ? null : normalized;
 }
 
 const SHORT_SHA_MIN = 7;
@@ -60,22 +68,18 @@ const SHORT_SHA_MIN = 7;
 /** “验证提交”写的是不是被审的提交：完整提交号或至少 7 位前缀。 */
 function sameCommit(written: string | null, sha: string): boolean {
   if (written === null) return false;
-  const w = written.trim().toLowerCase();
-  return /^[0-9a-f]+$/u.test(w) && w.length >= SHORT_SHA_MIN && sha.toLowerCase().startsWith(w);
+  return /^[0-9a-f]+$/u.test(written) && written.length >= SHORT_SHA_MIN && sha.toLowerCase().startsWith(written);
 }
 
-/**
- * 审查汇报本身的毛病：没写结论、写错了，或“验证提交”不是被审的提交。没毛病返回 null。
- * 审查目录不是 detached 在被审分支上（上游在主文件夹里干活，target 是 null）时不核对提交号。
- */
+/** 审查汇报本身的毛病：没写结论、写错了，或“验证提交”不是开审时记下的被审提交。没毛病返回 null。 */
 export function reviewReportProblem(
   report: { verdict: ReviewVerdict | null; verifiedCommit: string | null },
-  target: ReviewTarget | null,
+  target: ReviewTarget,
 ): string | null {
   if (report.verdict === null) return `审查没写“${REVIEW_VERDICT_FIELD}”或写错了（只能是 ${REVIEW_VERDICTS.join("、")}）`;
-  const sha = target?.snapshot?.sha;
-  if (sha !== undefined && !sameCommit(report.verifiedCommit, sha)) {
-    return `审查的“${REVIEW_SHA_FIELD}”写的是 ${report.verifiedCommit ?? "（没写）"}，被审的是分支 ${target!.branch} 的提交 ${sha}`;
+  if (target.snapshot === null) return `审查目录没记下被审分支 ${target.branch} 开审时的提交，没法核对`;
+  if (!sameCommit(report.verifiedCommit, target.snapshot.sha)) {
+    return `审查的“${REVIEW_SHA_FIELD}”写的是 ${report.verifiedCommit ?? "（没写）"}，被审的是分支 ${target.branch} 的提交 ${target.snapshot.sha}`;
   }
   return null;
 }
