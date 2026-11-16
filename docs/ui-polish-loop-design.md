@@ -14,7 +14,7 @@
 | `/tmp/ui-polish-loop/scorecards/bad-router-model-picker.md` | 示例评分卡（差）：修复前的总助模型面板，页面分 4 |
 | `/tmp/ui-polish-loop/scorecards/good-pm-chat.md` | 示例评分卡（好）：候选 A，页面分 8 |
 
-两张评分卡只是示例，评委是写方案的这个 Claude 会话。正式评分换成下面第 3 件事定的两家，每次用新会话。
+两张评分卡只是示例，评委是写方案的这个 Claude 会话。正式评分换成 Antigravity 的 `gemini-4-carbon` 加 Claude Code 的 `opus`，每次用新会话。
 
 ### 要拍板的事
 
