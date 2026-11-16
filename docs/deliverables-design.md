@@ -85,7 +85,7 @@ B 的几个具体规定：
 一个交付物的 JSON 约 230 字节（标签、16 位编号、文件名、类型、大小、原链接、来源消息）。
 
 1. **失效。** 交付物指向的是副本，副本按内容哈希命名，原文件改了、Worker 再交一次汇报，会存成新副本、换成新列表；不会显示旧内容当新的。删除：`router_item_deliverables` 跟着总助条目删（外键级联，条目留 30 天）；副本 30 天后被清，卡片显示“文件已过期”。不缓存失败结果：这次不加任何请求缓存，取文件失败由组件当场显示。
-2. **上限。** 每张卡、每步、每条简报都有上表的上限。快照：等你拍板的卡最多 50 张（`ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX`），平时不到 10 张，10 × 6 × 230 ≈ 14 KB；简报已有 24 KB 的字节上限（`ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES`），带文件的简报多了，快照里的条数会少几条，更早的走翻页。任务图步骤的交付物，全量快照里只给等你拍板的步骤带，单图详情都带。磁盘：同一个文件在汇报、检查点卡、简报里是同一份副本（内容哈希），汇总不多拷。一个月 300 个 Worker、每个一段 20 MB 录屏，最多约 6 GB，30 天清一轮；这和现在 agent 在回复里发文件的上限一样，没有新增。
+2. **上限。** 每张卡、每步、每条简报都有上表的上限。快照：等你拍板的卡最多 50 张（`ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX`），平时不到 10 张，10 × 6 × 230 ≈ 14 KB；简报已有 24 KB 的字节上限（`ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES`），带文件的简报多了，快照里的条数会少几条，更早的走翻页。任务图步骤的交付物，全量快照里只给等你拍板的步骤带（被卡住等你动手的步骤不算拍板，不带），单图详情都带。磁盘：同一个文件在汇报、检查点卡、简报里是同一份副本（内容哈希），汇总不多拷。一个月 300 个 Worker、每个一段 20 MB 录屏，最多约 6 GB，30 天清一轮；这和现在 agent 在回复里发文件的上限一样，没有新增。
 3. **前端引用稳定。** `groupDeliverables`、`sentFilesOfDeliverables` 按输入数组用 `WeakMap` 缓存，同一个列表返回同一个对象；`pendingDecisionsOf` 原样带上条目里的数组引用，不复制。
 4. **验证。** `src/daemon/ledger/snapshot-size.test.ts` 有两个场景：
    - 一个月数据集再加 10 张各带 6 个常见长度交付物的待拍板卡：354,432 字节，不超过 `SNAPSHOT_MONTH_MAX_BYTES`（384 KB）。
@@ -120,7 +120,7 @@ B 的几个具体规定：
 - `src/daemon/ledger/messages.ts`：`insertAskMessage` 多一个 `deliverables` 参数。
 - `src/daemon/ledger/router.ts`：行类型多一个 `deliverables_json`（从新表 LEFT JOIN）。
 - `src/daemon/ledger/deliverables-flow.test.ts`：汇报 → 步骤 → 检查点卡 → 总助、`--file`、`graph finish`、快照体积的 `it.todo`。
-- `migrations/0028_deliverables.sql`：新表 `router_item_deliverables`（旁表，迁移能重跑）。
+- `migrations/0030_deliverables.sql`：新表 `router_item_deliverables`（旁表，迁移能重跑）。
 - `src/shared/domain.ts`：`TaskArtifact.deliverables`、`AskMeta.deliverables`。
 - `src/shared/router.ts`：拍板项、简报的 `deliverables`。
 - `src/shared/decisions.ts`：`PendingDecision.deliverables`。

@@ -10,7 +10,6 @@ import { CONFIRM_REJECT_OPTION, askOf, type ConversationId, type MessageId, type
 import { DELIVERABLES_PER_REPORT_MAX, HUB_FILE_ARGS_MAX } from "../../shared/limits.ts";
 import type { RouterItem } from "../../shared/router.ts";
 import { sentFilesOf } from "../../shared/sent-files.ts";
-import { bundledModelCatalog, type ModelCatalog } from "../../shared/vendors.ts";
 import { REPORT_END, REPORT_START } from "../../shared/worker.ts";
 import { createSessionStore, migrate, type Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
@@ -63,7 +62,7 @@ describe("交付物", () => {
       userHome: root,
       shareTmpDirs: [],
       osSandboxed: () => true,
-      modelCatalog: (vendor): ModelCatalog => ({ ...bundledModelCatalog(vendor), availability: "available" }),
+      models: { current: () => null, availability: () => "available" },
       resolveFolder: createResolveFolder({ dataHome, userHome: root }),
     });
     const created = ledger.createPm({ name: "林经理", mode: "manage_only", persona: "", folder });

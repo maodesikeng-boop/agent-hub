@@ -64,6 +64,7 @@ import {
   type RenewSessionResponse,
   type ResolveRouterItemRequest,
   type ResolveRouterItemResponse,
+  type RecheckUserBlockerResponse,
   type RetryMessageResponse,
   type RewindMessageResponse,
   type RouterCommandId,
@@ -82,6 +83,7 @@ import {
   type TunnelStatusResponse,
   type UpdateRouterSettingsRequest,
   type UpdateRouterSettingsResponse,
+  type UserBlockerId,
   type VendorSyncApplyRequest,
   type VendorSyncApplyResponse,
   type VendorSyncPreviewResponse,
@@ -286,6 +288,7 @@ export function createClient(device: DeviceId | null) {
     postArchivePm: (pmId: PmId) => postJson<ArchivePmResponse>(at(API_PATHS.archivePm(pmId))),
     postUnarchivePm: (pmId: PmId) => postJson<ArchivePmResponse>(at(API_PATHS.unarchivePm(pmId))),
     postRetryMessage: (messageId: MessageId) => postJson<RetryMessageResponse>(at(API_PATHS.retryMessage(messageId))),
+    postRecheckUserBlocker: (id: UserBlockerId) => postJson<RecheckUserBlockerResponse>(at(API_PATHS.recheckUserBlocker(id))),
     postFileAction: (target: FileActionTarget, action: FileAction) => {
       const path = target.kind === "sent" ? API_PATHS.sentFileAction(target.messageId, target.index, action) : API_PATHS.attachmentAction(target.id, action);
       return postJson<FileActionResponse>(at(path));

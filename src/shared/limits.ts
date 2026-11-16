@@ -945,3 +945,5 @@ export const PROVIDER_API_KEY_MAX_CHARS = 2_048;
 export const PROVIDER_SECRETS_FILE_MAX_BYTES = 64 * 1024;
 /** 前端存在进行中安装或登录流时的状态轮询间隔（1 秒）。 */
 export const PROVIDER_ACTIVE_POLL_MS = 1_000;
+/** 要用户动手的阻塞（docs/user-blockers-design.md）：已解开的留最近多少条，更早的删掉（在等的不删）。 */
+export const USER_BLOCKERS_RESOLVED_KEEP = 50;

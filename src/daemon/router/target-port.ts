@@ -44,7 +44,6 @@ import {
   type PmMode,
   type ProjectId,
   type RouterCommandId,
-  type VendorAvailability,
   type WorkerId,
   type WorkspaceProbe,
 } from "../../shared/index.ts";
@@ -260,7 +259,8 @@ export interface LocalTargetPortOptions {
   ledger: SqliteLedger;
   uploadsDir?: string;
   probeWorkspace?: (folder: string) => Promise<WorkspaceProbe>;
-  vendorUsable?: (vendor: AgentVendor) => Promise<VendorAvailability>;
+  /** 同 agent 接口的 refreshVendor：派 Worker 前让账本读到的厂商状态是新的。 */
+  refreshVendor?: (vendor: AgentVendor) => Promise<unknown>;
 }
 
 export function createLocalTargetPort(options: LocalTargetPortOptions): RouterTargetPort {
@@ -353,14 +353,7 @@ export function createLocalTargetPort(options: LocalTargetPortOptions): RouterTa
               if (!op.noWorktree) {
                 hubCtx.workspace = await probeWorkspace(target.mainFolder);
               }
-              if (op.vendor !== undefined && options.vendorUsable) {
-                const vendor = op.vendor as AgentVendor;
-                hubCtx.vendorStatus = {
-                  vendor,
-                  availability: await options.vendorUsable(vendor),
-                  device: resolveDeviceName(),
-                };
-              }
+              if (op.vendor !== undefined && options.refreshVendor) await options.refreshVendor(op.vendor as AgentVendor);
 
               const started = ledger.hubCall(
                 target.sessionId,

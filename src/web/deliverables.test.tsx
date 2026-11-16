@@ -365,6 +365,23 @@ describe("四处入口", () => {
       await expectPlanOpens(cardOf(61));
     });
 
+    it("同一个对话里还挂着 Waiting on you 提醒卡：提醒卡能点 Done，带文件的卡照样在等、文件能点开", async () => {
+      const blocker = askMessage({ id: 64, text: "这台设备的 Antigravity 没登录", meta: { needsUser: true, blockerRef: { blockerId: 5 } } });
+      const withFiles = askMessage({ id: 65, text: "方案好了，请验收", meta: { needsUser: true, options: ["通过", "打回"], deliverables: [plan, shot] } });
+      const snapshot = makeSnapshot({ conversations: [makeConvSnapshot([blocker, withFiles])] });
+      openFirstConversation(snapshot);
+      const api = await bootApp(snapshot);
+      await waitFor(() => expect(cardOf(65)).not.toBeNull());
+      const reminder = document.querySelector<HTMLElement>('[data-message-id="64"] [data-testid="user-blocker-card"]')!;
+      expect(reminder.querySelector("[data-ask-card]")).toBeNull();
+      expect(within(reminder).getByText("Waiting on you")).toBeInTheDocument();
+      await user.click(within(reminder).getByRole("button", { name: "Done" }));
+      await waitFor(() => expect(api.calls.filter((c) => c.path === "/api/user-blockers/5/recheck")).toHaveLength(1));
+      expect(api.calls.filter((c) => c.path === "/api/asks/65/answer")).toEqual([]);
+      for (const b of optionsOf(cardOf(65))) expect(b).not.toBeDisabled();
+      await expectPlanOpens(cardOf(65));
+    });
+
     it("了结后的卡：文件行在上，回答那一行、Closed 在下，文件照样能点开", async () => {
       const answeredCard = askMessage({
         id: 63,
@@ -440,6 +457,31 @@ describe("四处入口", () => {
     const card = screen.getByTestId("peel-gate-card");
     const files = card.querySelector<HTMLElement>("[data-deliverables]")!;
     expect(within(files).getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent)).toEqual(["方案", "验收结论", "桌面截图", "录屏"]);
+  });
+
+  it("果皮轨：同一张图里一步等拍板带文件、一步挂着 Waiting on you 提醒卡，各是各的卡", async () => {
+    const graph = gateGraph();
+    graph.nodes.push(
+      makeNode({
+        key: "verify",
+        title: "验收",
+        status: "waiting",
+        waitingFor: "user",
+        sortOrder: 1,
+        artifact: { summary: "上一轮", deliverables: [rec] },
+        userBlocker: { id: 5, kind: "vendor_signed_out", vendor: "agy", device: "东京", recheckedAs: null },
+      }),
+    );
+    render(
+      <RightRail asks={[]} workers={[]} activeGraphs={[graph]} openWorkerId={null} layout="side" avatarKey={1} onOpenAsk={() => {}} onOpenWorker={() => {}} />,
+    );
+    const reminder = screen.getByTestId("user-blocker-card");
+    expect(within(reminder).getByRole("button", { name: "Done" })).toBeEnabled();
+    expect(reminder.querySelector("[data-deliverables]")).toBeNull();
+    const gates = screen.getAllByTestId("peel-gate-card");
+    expect(gates).toHaveLength(1);
+    await user.click(within(gates[0]!.querySelector<HTMLElement>("[data-deliverables]")!).getByRole("button", { name: "方案" }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
   });
 
   describe("总助", () => {

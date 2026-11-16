@@ -36,6 +36,7 @@ import type { PeerTransport, RemotePeerTransportKind } from "./peer-transport.ts
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
 import type { WorkerLineSummary } from "./snapshot.ts";
 import type { TunnelStatus } from "./tunnel.ts";
+import type { UserBlocker, UserBlockerId } from "./user-blockers.ts";
 import type { AgentVendor, ModelCatalog, QuotaWindowKey } from "./vendors.ts";
 import type { FileAction } from "./preview.ts";
 import type { ServerInfo } from "./server-info.ts";
@@ -70,6 +71,8 @@ export const API_PATHS = {
   unarchivePm: (id: PmId) => `/api/pms/${id}/unarchive`,
   /** POST，没有请求体 → 202 RetryMessageResponse。 */
   retryMessage: (messageId: MessageId) => `/api/messages/${messageId}/retry`,
+  /** POST，没有请求体 → RecheckUserBlockerResponse：用户在“要你动手”的提醒卡上点了 Done，重查这家厂商，能用就接着派（docs/user-blockers-design.md）。 */
+  recheckUserBlocker: (id: UserBlockerId) => `/api/user-blockers/${id}/recheck`,
   /**
    * POST ?name=<文件名>：请求体就是文件原样的字节（不是 JSON，不绑定接收方），最多 MAX_UPLOAD_BYTES，不动别的接口 1 MB 的上限。
    * 200 → Attachment；空文件、太大（413）、文件名不合法 → 中文原因。之后发消息时在 PostMessageRequest.attachmentIds 里带上它的 id。
@@ -819,6 +822,12 @@ export type ResolveRouterItemRequest =
 export interface ResolveRouterItemResponse {
   item: RouterItem;
   messageId?: MessageId;
+}
+
+export interface RecheckUserBlockerResponse {
+  blocker: UserBlocker;
+  /** true：重查能用，已经解开并接着派了（之前已解开的也是 true）；false：还不能用，卡留着。 */
+  resolved: boolean;
 }
 
 export interface ArchiveAllReportsResponse {

@@ -12,7 +12,7 @@ import {
   isTaskNodeWaitingUser,
   modelShortLabel,
 } from "../../shared/index.ts";
-import type { ConversationId, Message, MessageId, ProjectId, TaskGraph, TaskGraphId } from "../../shared/index.ts";
+import type { ConversationId, Message, MessageId, ProjectId, TaskGraph, TaskGraphId, UserBlockerId } from "../../shared/index.ts";
 import { cleanPieceTitle, DEFAULT_CHOICE, errorText, formatContext, formatTokenDetail, NEEDS_YOU, NO_DATA } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { useModelCatalog } from "../models.tsx";
@@ -498,12 +498,19 @@ export function RailGroups({
   // 同源去重：带 gateRef 或已绑定到活跃任务图门禁的提问直接内联在果皮轨中，不在 Needs You 重复渲染
   const visibleAsks = useMemo(() => {
     const gateMsgIds = new Set<MessageId>();
+    const stepBlockerIds = new Set<UserBlockerId>();
     for (const graph of activeGraphs ?? []) {
       for (const node of graph.nodes) {
         if (node.gateAskMessageId !== null) gateMsgIds.add(node.gateAskMessageId);
+        // 要你动手的提醒卡已经挂在步骤上，同一条阻塞的卡不在 Needs You 再出一次
+        if (node.userBlocker !== null && node.userBlocker !== undefined) stepBlockerIds.add(node.userBlocker.id);
       }
     }
-    return asks.filter((ask) => askOf(ask)?.gateRef === undefined && !gateMsgIds.has(ask.id));
+    return asks.filter((ask) => {
+      const meta = askOf(ask);
+      if (meta?.gateRef !== undefined || gateMsgIds.has(ask.id)) return false;
+      return meta?.blockerRef === undefined || !stepBlockerIds.has(meta.blockerRef.blockerId);
+    });
   }, [asks, activeGraphs]);
 
   // 同源去重：已绑入活跃任务图节点的 Worker 不在独立 Pieces / Completed 中重复展示

@@ -204,7 +204,7 @@ const routerNoteSchema = z.object({
   clear: z.boolean().optional(),
 });
 
-/** 条目连同它挂的交付物（旁表 router_item_deliverables，migrations/0029_deliverables.sql）；没挂的 deliverables_json 是 null。 */
+/** 条目连同它挂的交付物（旁表 router_item_deliverables，migrations/0030_deliverables.sql）；没挂的 deliverables_json 是 null。 */
 const ITEM_SELECT = `SELECT router_items.*, router_item_deliverables.deliverables_json FROM router_items
   LEFT JOIN router_item_deliverables ON router_item_deliverables.item_id = router_items.id`;
 
@@ -908,7 +908,7 @@ export function createLedgerRouter(
           `SELECT g.pm_id AS pm_id, count(*) AS n
              FROM task_graph_steps n
              JOIN task_graphs g ON g.id = n.graph_id
-            WHERE g.status = 'active' AND n.status = 'waiting' AND n.waiting_for = 'user'
+            WHERE g.status = 'active' AND n.status = 'waiting' AND n.waiting_for = 'user' AND NOT EXISTS (SELECT 1 FROM user_blocker_steps s WHERE s.step_id = n.id)
             GROUP BY g.pm_id`,
         )
         .map((r) => [r.pm_id, r.n]),

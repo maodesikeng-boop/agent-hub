@@ -6,7 +6,7 @@ import type { MessagesPage } from "../../shared/api.ts";
 import type { UserMessageMeta } from "../../shared/attachments.ts";
 import { mergeDeliverables, type Deliverable, type HubFileArg } from "../../shared/deliverables.ts";
 import { agentMessageDedupeKey, canTransitionMessage, systemMessageDedupeKey, userMessageDedupeKey } from "../../shared/domain.ts";
-import type { AgentRole, AgentSessionRow, AskMeta, ConversationId, GateRef, Message, MessageId, MessageStatus, SessionId, SystemMessageMeta } from "../../shared/domain.ts";
+import type { AgentRole, AgentSessionRow, AskMeta, BlockerRef, ConversationId, GateRef, Message, MessageId, MessageStatus, SessionId, SystemMessageMeta } from "../../shared/domain.ts";
 import { turnFailureReason } from "../../shared/driver.ts";
 import type { DriverEvent, SessionExitedEvent } from "../../shared/driver.ts";
 import { ConversationNotFoundError } from "../../shared/ledger.ts";
@@ -163,6 +163,7 @@ export function createLedgerMessages(
     askOptions?: string[],
     extra?: {
       gateRef?: GateRef;
+      blockerRef?: BlockerRef;
       recommended?: string;
       skipRouterBridge?: boolean;
       /**
@@ -179,6 +180,7 @@ export function createLedgerMessages(
       ...(askOptions && askOptions.length > 0 ? { options: askOptions } : {}),
       ...(extra?.recommended !== undefined ? { recommended: extra.recommended } : {}),
       ...(extra?.gateRef !== undefined ? { gateRef: extra.gateRef } : {}),
+      ...(extra?.blockerRef !== undefined ? { blockerRef: extra.blockerRef } : {}),
       ...(extra?.fileArgs !== undefined && extra.fileArgs.files.length > 0 ? { files: [...extra.fileArgs.files] } : {}),
     };
     let row = db.get<MessageDbRow>(
@@ -201,7 +203,7 @@ export function createLedgerMessages(
     }
     const message = toMessage(row);
     p.changes.push({ type: "message.created", data: { message } });
-    if (!extra?.skipRouterBridge && extra?.gateRef === undefined) {
+    if (!extra?.skipRouterBridge && extra?.gateRef === undefined && extra?.blockerRef === undefined) {
       onIndependentAskCreated(p, session, message, askOptions);
     }
     return message;

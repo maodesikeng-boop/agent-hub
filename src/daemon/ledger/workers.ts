@@ -57,7 +57,8 @@ import {
   type ReviewVerifyResult,
 } from "../../shared/review.ts";
 import { checkWorkerMaxTimeMs, formatDurationShort } from "../../shared/schedule.ts";
-import { AGENT_VENDORS, checkEffort, checkModel, checkModelEffort, isAgentVendor, splitModelEffort, vendorUnavailableMessage } from "../../shared/vendors.ts";
+import { AGENT_VENDORS, checkEffort, checkModel, checkModelEffort, isAgentVendor, splitModelEffort } from "../../shared/vendors.ts";
+import { UserBlockedError, userBlockerKindOf, userBlockerKindOfFailure, userBlockerResumeText, type UserBlocker } from "../../shared/user-blockers.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import { workerWorktreePath } from "../../shared/paths.ts";
@@ -89,6 +90,7 @@ import { hasGitCommitSync, renderGraphStepTask } from "./task-graph-handoff.ts";
 import type { StepWorkspacePlan, TaskGraphWorkersBridge, WorkerBindTarget } from "./task-graphs.ts";
 import { newestFirst } from "./takeover.ts";
 import type { LedgerTakeover, TakeoverPredecessor } from "./takeover.ts";
+import { userBlockedPmNote, type LedgerUserBlockers } from "./user-blockers.ts";
 
 /** 主文件夹有没提交的改动、又用 worktree 时，start 返回的话里的提醒（m3-plan 第 2.6 节）。 */
 const WORKTREE_DIRTY_NOTE = "注意：主文件夹里有没提交的改动，Worker 是从最后一次提交开始的，看不到这些改动。";
@@ -249,6 +251,7 @@ export interface LedgerWorkersTaskGraphHooks {
     workerId: WorkerId,
     opts: { clearActiveWorker: boolean; reasonLabel: string; detailBody: string; stoppedByUser?: boolean },
   ) => string | null;
+  onWorkerUserBlockedIn: (p: Pending, workerId: WorkerId, blocker: UserBlocker) => string | null;
   onWorkerResumedIn: (p: Pending, workerId: WorkerId) => void;
   onWorkerEndedIn: (p: Pending, workerId: WorkerId) => string | null;
   workerGraphForkBase: (workerId: WorkerId) => string | undefined;
@@ -265,6 +268,7 @@ export function createLedgerWorkers(
     worktreesDir: string;
     extraWorktreeRoots?: () => readonly string[];
     taskGraphs?: LedgerWorkersTaskGraphHooks;
+    userBlockers?: Pick<LedgerUserBlockers, "raiseIn" | "attachWorkerIn">;
     takeover?: LedgerTakeover;
   },
 ) {
@@ -646,16 +650,13 @@ export function createLedgerWorkers(
     };
   };
 
-  const checkTargetVendorUsable = (vendor: AgentVendor, context: HubCallContext | undefined): void => {
-    const fromSingle = context?.vendorStatus?.vendor === vendor ? context.vendorStatus : undefined;
-    const availability =
-      fromSingle?.availability ??
-      context?.vendorStatuses?.[vendor] ??
-      ctx.modelCatalog(vendor)?.availability ??
-      "unknown";
-    const device = fromSingle?.device ?? context?.deviceName ?? "";
-    const unusable = vendorUnavailableMessage(vendor, availability, device);
-    if (unusable !== null) throw fail("invalid", unusable);
+  /**
+   * 这家在这台设备上要用户动手（没登录、没装）就抛 UserBlockedError：手动派的报给项目经理，自动开工的据此挂卡。
+   * 状态只读 ctx.vendorAvailability（守护进程的 ModelCatalogs），agent 接口在调账本前已让它问过一次。
+   */
+  const checkTargetVendorUsable = (vendor: AgentVendor): void => {
+    const kind = userBlockerKindOf(ctx.vendorAvailability(vendor));
+    if (kind !== null) throw new UserBlockedError({ kind, vendor, device: ctx.deviceName() });
   };
 
   /**
@@ -684,7 +685,7 @@ export function createLedgerWorkers(
 
     const vendor: AgentVendor = input.vendor ?? input.pmVendor;
     if (!isAgentVendor(vendor)) throw fail("invalid", `厂商只能是 ${AGENT_VENDORS.join("、")}`);
-    checkTargetVendorUsable(vendor, input.context);
+    checkTargetVendorUsable(vendor);
 
     const catalog = ctx.modelCatalog(vendor);
     const badSetting =
@@ -864,10 +865,10 @@ export function createLedgerWorkers(
     if (args.vendor !== undefined) {
       if (!isAgentVendor(args.vendor)) throw fail("invalid", `厂商只能是 ${AGENT_VENDORS.join("、")}`);
       vendor = args.vendor;
-      checkTargetVendorUsable(vendor, context);
+      checkTargetVendorUsable(vendor);
     } else if (bindTarget?.vendor !== null && bindTarget?.vendor !== undefined) {
       if (!isAgentVendor(bindTarget.vendor)) throw fail("invalid", `厂商只能是 ${AGENT_VENDORS.join("、")}`);
-      checkTargetVendorUsable(vendor, context);
+      checkTargetVendorUsable(vendor);
     }
     const reuseStepModel = bindTarget !== undefined && args.vendor === undefined && bindTarget.vendor === vendor;
     const givenModel =
@@ -1212,6 +1213,41 @@ export function createLedgerWorkers(
     return message.id;
   };
 
+  /**
+   * 卡住这个 Worker 的阻塞解开了（docs/user-blockers-design.md，user-blockers.ts 的 resolveIn 调；步骤由任务图那边在同一个事务里改）：
+   * 没送进去、标了失败的那几条消息重新排队发给它；都不是失败了（用户点了重试、厂商先回了一段报错）又没有在发的，叫它接着干。
+   * 已经收工的不管。
+   */
+  const resumeUserBlockedWorkerIn = (p: Pending, workerId: WorkerId, messageIds: readonly MessageId[], blocker: UserBlocker) => {
+    const worker = workerRow(workerId);
+    if (worker === null || worker.status === "ended") return;
+    const session = workerSession(worker);
+    const failed = messageIds.filter((id) => db.get<{ status: string | null }>("SELECT status FROM messages WHERE id = ?", id)?.status === "failed");
+    if (failed.length === 0) {
+      const inFlight = db.get(
+        "SELECT 1 AS x FROM messages WHERE conversation_id = ? AND sender IN ('pm', 'user') AND status IN ('queued', 'delivered', 'processing') LIMIT 1",
+        worker.worker_conversation_id,
+      );
+      if (inFlight === undefined) {
+        deliverToWorkerIn(p, { workerId, text: userBlockerResumeText(blocker), dedupeKey: `user-blocker-resumed:${blocker.id}:${workerId}` });
+      }
+      return;
+    }
+    const t = now();
+    for (const id of failed) {
+      db.run(
+        "UPDATE messages SET status = 'queued', failure_reason = NULL, meta = json_remove(meta, '$.deliveryConfirmed'), session_id = ?, updated_at = ? WHERE id = ?",
+        session.id,
+        t,
+        id,
+      );
+      enqueue(p, { type: "session.send", params: { sessionId: session.id, messageId: id, source: "user" } });
+      const message = messages.getMessage(id);
+      if (message !== null) p.changes.push({ type: "message.updated", data: { message } });
+    }
+    startMaxTime(worker);
+  };
+
   const endIn = (p: Pending, caller: AgentSessionRow & { pmId: PmId }, args: HubArgs<"worker.end">): HubResult<"worker.end"> => {
     assertPmNotArchived(caller.pmId);
     const worker = ownWorker(caller.pmId, args.workerId);
@@ -1346,6 +1382,21 @@ export function createLedgerWorkers(
       lines.push(`这一轮里有用户直接对它说的话：「${message.text}」。${retry}`);
     }
     const detailBody = lines.join("\n");
+    const vendor = workerSession(worker).vendor;
+    const blockedKind = reason === TURN_STOPPED || !isAgentVendor(vendor) ? null : userBlockerKindOfFailure(reason, vendor);
+    if (blockedKind !== null && options.userBlockers !== undefined && isAgentVendor(vendor)) {
+      const blocker = options.userBlockers.raiseIn(p, blockedKind, vendor, worker.pm_conversation_id);
+      options.userBlockers.attachWorkerIn(blocker.id, worker.id, messageIds);
+      const graphNote = options.taskGraphs?.onWorkerUserBlockedIn(p, worker.id, blocker) ?? null;
+      insertLine(p, worker, {
+        event: "turn_failed",
+        status: null,
+        summary: reason,
+        turnMessageId,
+        deliver: [graphNote ?? `Worker #${worker.id} 起不来：${userBlockedPmNote(blocker)}。`, ...lines.slice(1)].join("\n"),
+      });
+      return;
+    }
     const graphDeliver =
       options.taskGraphs?.onWorkerFailedIn(p, worker.id, {
         clearActiveWorker: false,
@@ -2005,6 +2056,7 @@ export function createLedgerWorkers(
     endIn,
     stopWorkersIn,
     deliverToWorkerIn,
+    resumeUserBlockedWorkerIn,
     endOpenWorkersIn,
     list,
     status,
