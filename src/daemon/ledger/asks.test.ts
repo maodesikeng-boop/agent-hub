@@ -173,6 +173,26 @@ describe("项目经理收到用户消息时带着账本里当前还在等的卡"
   });
 });
 
+describe("卡上记下怎么了结的：用户答了什么，或被项目经理关掉", () => {
+  it("没选项的卡填一句、有选项的卡点选项加一句：卡上都记下用户的原话", () => {
+    const plain = ask("请提供测试账号的邮箱地址");
+    const power = ledger.hubCall(lin.sessionId, "ask", { text: "请接电源", options: ["已接", "不接"] }).data.messageId;
+    answerCard(plain, "qa-test@example.com");
+    ledger.answerAsk(power, { clientId: "both", choice: "不接", note: "开完会再接" });
+    expect(askOf(ledger.getMessage(plain)!)).toEqual({ needsUser: true, answered: true, answerNote: "qa-test@example.com" });
+    expect(askOf(ledger.getMessage(power)!)).toMatchObject({ answered: true, chosenOption: "不接", answerNote: "开完会再接" });
+  });
+
+  it("hub ask close、--replace 关掉的卡：标成已关掉，不带回答", () => {
+    const a = ask("问 A");
+    const b = ask("问 B");
+    ledger.hubCall(lin.sessionId, "ask.close", { itemId: itemOf(a).id });
+    ledger.hubCall(lin.sessionId, "ask", { text: "问 B（改过）", replaceItemId: itemOf(b).id });
+    expect(askOf(ledger.getMessage(a)!)).toEqual({ needsUser: true, answered: true, closed: true });
+    expect(askOf(ledger.getMessage(b)!)).toEqual({ needsUser: true, answered: true, closed: true });
+  });
+});
+
 describe("项目经理自己关掉卡（hub ask close）", () => {
   it("关掉后：不再在等、对话里的卡标成已回答、之后的用户消息不再带它；别的卡不受影响", () => {
     const a = ask("问 A");

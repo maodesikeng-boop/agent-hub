@@ -347,8 +347,31 @@ describe("对话流里的 A/B/C/D 选项卡片", () => {
     );
     expect(api.calls.filter((c) => c.path === "/api/conversations/1/messages")).toEqual([]);
     await waitFor(() => expect(within(card).queryByRole("textbox", { name: "Add note" })).toBeNull());
+    expect(card.querySelector("[data-ask-answer]")).toHaveTextContent("按第二种来");
     const other = document.querySelector('[data-message-id="4"] [data-ask-card]') as HTMLElement;
     for (const b of within(other).getAllByRole("button").filter((x) => x.hasAttribute("data-ask-option"))) expect(b).not.toBeDisabled();
+  });
+
+  it("已回答的卡显示回答内容：选中项和补充说明都是高亮的一行，有没有选项都一样；被项目经理关掉的卡标 Closed", async () => {
+    await boot(
+      twoPms([
+        ask({ id: 3, text: "请提供测试账号的邮箱地址", meta: { needsUser: true, answered: true, answerNote: "qa-test@example.com" } }),
+        ask({ id: 4, text: "请接电源", meta: { needsUser: true, answered: true, options: ["已接", "不接"], chosenOption: "不接", answerNote: "开完会再接" } }),
+        ask({ id: 5, text: "预发环境的数据库还要保留吗？", meta: { needsUser: true, answered: true, closed: true } }),
+        ask({ id: 6, text: "用哪个分支？", meta: { needsUser: true, answered: true, closed: true, options: ["main", "dev"] } }),
+      ]),
+    );
+    const card = (id: number) => document.querySelector(`[data-message-id="${id}"] [data-ask-card]`) as HTMLElement;
+    const highlighted = (id: number) => [...card(id).querySelectorAll(".bg-sidebar-active")].map((el) => el.textContent?.replace(/^[A-Z](?=\S)/, ""));
+
+    expect(highlighted(3)).toEqual(["qa-test@example.com"]);
+    expect(highlighted(4)).toEqual(["不接", "开完会再接"]);
+    for (const id of [3, 4, 5, 6]) expect(within(card(id)).queryByRole("textbox")).toBeNull();
+    for (const id of [3, 4]) expect(within(card(id)).queryByText("Closed")).toBeNull();
+    for (const id of [5, 6]) {
+      expect(within(card(id)).getByText("Closed")).toBeInTheDocument();
+      expect(highlighted(id)).toEqual([]);
+    }
   });
 
   it("补充框和同排的 Send 按钮同一档高度（36px），输入框是 15px 正文字号（docs/ui-standard.md 第 3、6 条）", async () => {
