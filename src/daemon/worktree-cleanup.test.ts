@@ -1,10 +1,10 @@
 // Worker worktree 自动清理测试（全部使用临时目录和临时 git 仓库，绝不碰真实 ~/.agent-hub/worktrees）：
 // 覆盖：已合并删（分支保留） / 收工满 3 天且干净删（分支保留） / 有改动不删（含已跟踪修改、暂存、未跟踪文件；PR 已合并也不删） /
 // 在跑不删 / 不用 worktree 跳过 / 不在 worktrees 目录下不删（含符号链接越界） / 手动删过的跳过 /
-// git worktree remove 失败记日志下轮重试并 prune / 每轮上限与轮转 / 没候选时零 git 调用 /
+// git worktree move 失败记日志下轮重试并 prune / 每轮 git status 名额与轮转（长期删不掉的不占名额）/ 没候选时零 git 调用 / 删到一半下一轮接着删完 /
 // 孤儿目录（外部解绑残留）/ detached HEAD 与 review-* 分支 / 0 提交探索目录 / rebase 中途 / status.showUntrackedFiles=no 时未跟踪文件照样拦 / 被忽略的文件随目录删 / 相对路径不删。
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -578,14 +578,14 @@ describe("worktree 自动清理", () => {
     expect(readFileSync(join(outsideDir, "important.txt"), "utf8")).toBe("do not delete\n");
   });
 
-  it("项目经理已手动删掉 worktree 的自动跳过；git worktree remove 失败只记日志，下轮重试成功并跑 git worktree prune", async () => {
+  it("项目经理已手动删掉 worktree 的自动跳过；git worktree move 失败只记日志，下轮重试成功并跑 git worktree prune", async () => {
     const wManual = await spawnWorktreeWorker("已手动删");
     endWorker(wManual.id);
     git(repo, "worktree", "remove", wManual.worktreePath!);
 
     const wLocked = await spawnWorktreeWorker("先锁后解");
     endWorker(wLocked.id);
-    // 用 git worktree lock 让不带 --force 的 git worktree remove 失败
+    // 用 git worktree lock 让 git worktree move 失败
     git(repo, "worktree", "lock", wLocked.worktreePath!);
 
     now += WORKTREE_RETENTION_MS + 1_000;
@@ -692,6 +692,25 @@ process.exit(res.status ?? 1);
     expect(existsSync(w3.worktreePath!)).toBe(false);
     expect(existsSync(w4.worktreePath!)).toBe(false);
   });
+
+  it("每轮名额只算要跑 git status 的候选：29 个长期删不掉（未合并、没到期）排在前面，刚合并的 1 个下一轮就删", async () => {
+    const stuck: WorkerRecord[] = [];
+    for (let i = 0; i < 29; i++) stuck.push(await spawnWorktreeWorker(`未合并${i}`));
+    const merged = await spawnWorktreeWorker("刚合并");
+
+    writeFileSync(join(stuck[0]!.worktreePath!, "f.txt"), "1\n");
+    git(stuck[0]!.worktreePath!, "add", "-A");
+    git(stuck[0]!.worktreePath!, "commit", "-q", "-m", "未合并的提交");
+    const unmergedTip = git(stuck[0]!.worktreePath!, "rev-parse", "HEAD");
+    for (const w of stuck.slice(1)) git(w.worktreePath!, "reset", "-q", "--hard", unmergedTip);
+    for (const w of [...stuck, merged]) endWorker(w.id);
+    expect(merged.id).toBeGreaterThan(stuck.at(-1)!.id);
+
+    const cleanup = createWorktreeCleanup({ ledger, worktreesDir, log: (l) => logs.push(l), now: () => now });
+    expect(await cleanup.runOnce()).toEqual([merged.id]);
+    expect(existsSync(merged.worktreePath!)).toBe(false);
+    for (const w of stuck) expect(existsSync(w.worktreePath!)).toBe(true);
+  }, 60_000);
 
   it("换人共享同一个 worktree：0 提交已收工的前任（注册 worktree / 孤儿目录）不能靠“0 提交秒清”或“前任满 3 天”删掉后任还在用或未到期的目录", async () => {
     const graph = ledger.hubCall(pm.sessionId, "graph.create", {
@@ -882,5 +901,128 @@ process.exit(res.status ?? 1);
       crossLedger.close();
       crossDb.close();
     }
+  });
+});
+
+/** 目录下所有文件（不含目录本身），用来确认清理之后磁盘上什么都没剩。 */
+function filesUnder(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter((entry) => !entry.isDirectory())
+    .map((entry) => join(entry.parentPath, entry.name));
+}
+
+function chmodDirsUnder(dir: string, mode: number): void {
+  chmodSync(dir, mode);
+  for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
+    if (entry.isDirectory()) chmodSync(join(entry.parentPath, entry.name), mode);
+  }
+}
+
+describe("删到一半之后下一轮能接着删完", () => {
+  async function spawnWithTree(title: string): Promise<WorkerRecord> {
+    const w = await spawnWorktreeWorker(title);
+    mkdirSync(join(w.worktreePath!, "node_modules", "pkg"), { recursive: true });
+    writeFileSync(join(w.worktreePath!, "node_modules", "pkg", "index.js"), "1\n");
+    return w;
+  }
+
+  beforeEach(() => {
+    writeFileSync(join(repo, ".gitignore"), "node_modules/\n");
+    mkdirSync(join(repo, "src", "lib"), { recursive: true });
+    writeFileSync(join(repo, "src", "a.ts"), "a\n");
+    writeFileSync(join(repo, "src", "lib", "b.ts"), "b\n");
+    writeFileSync(join(repo, "LICENSE"), "MIT\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "tree");
+  });
+
+  it("git worktree remove 被超时打断（.git 和登记都还在，只剩部分已跟踪文件）：下一轮删完，分支保留、登记清掉", async () => {
+    const w = await spawnWithTree("删到一半");
+    endWorker(w.id);
+    rmSync(join(w.worktreePath!, "LICENSE"));
+    rmSync(join(w.worktreePath!, "src"), { recursive: true });
+    expect(git(w.worktreePath!, "status", "--porcelain")).toContain(" D src/a.ts");
+
+    now += WORKTREE_RETENTION_MS + 1_000;
+    const cleanup = createWorktreeCleanup({ ledger, worktreesDir, log: (l) => logs.push(l), now: () => now });
+    expect(await cleanup.runOnce()).toEqual([w.id]);
+    expect(existsSync(w.worktreePath!)).toBe(false);
+    expect(filesUnder(worktreesDir)).toEqual([]);
+    expect(branchExists(w.branch!)).toBe(true);
+    expect(git(repo, "worktree", "list", "--porcelain")).not.toContain(`hub/${w.id}-`);
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "清理自己删到一半失败（目录里有删不掉的子目录）：本轮记日志，下一轮接着删完并清掉登记",
+    async () => {
+      const w = await spawnWithTree("删除中途失败");
+      endWorker(w.id);
+      const stuck = join(w.worktreePath!, "node_modules", "pkg");
+      chmodSync(stuck, 0o555);
+
+      now += WORKTREE_RETENTION_MS + 1_000;
+      const cleanup = createWorktreeCleanup({ ledger, worktreesDir, log: (l) => logs.push(l), now: () => now });
+      try {
+        await cleanup.runOnce();
+        expect(filesUnder(worktreesDir).some((f) => f.endsWith("index.js"))).toBe(true);
+      } finally {
+        chmodDirsUnder(worktreesDir, 0o755);
+      }
+
+      await cleanup.runOnce();
+      expect(existsSync(w.worktreePath!)).toBe(false);
+      expect(filesUnder(worktreesDir)).toEqual([]);
+      expect(branchExists(w.branch!)).toBe(true);
+      expect(git(repo, "worktree", "list", "--porcelain")).not.toContain(`hub/${w.id}-`);
+    },
+  );
+
+  it("检出已经删光、目录里只剩删完之后别的进程写回的缓存（如 .vite）：孤儿目录照样回收", async () => {
+    const w = await spawnWorktreeWorker("删完又被 vite 写回");
+    endWorker(w.id);
+    git(repo, "worktree", "remove", w.worktreePath!);
+    mkdirSync(join(w.worktreePath!, ".vite", "deps"), { recursive: true });
+    writeFileSync(join(w.worktreePath!, ".vite", "deps", "_metadata.json"), "{}\n");
+    writeFileSync(join(w.worktreePath!, ".vite", "deps", "package.json"), '{"type":"module"}\n');
+
+    now += 60_000;
+    const cleanup = createWorktreeCleanup({ ledger, worktreesDir, log: (l) => logs.push(l), now: () => now });
+    expect(await cleanup.runOnce()).toEqual([w.id]);
+    expect(existsSync(w.worktreePath!)).toBe(false);
+    expect(filesUnder(worktreesDir)).toEqual([]);
+  });
+
+  it("删到一半但真有改动或未合并提交：照旧保留", async () => {
+    const halfDelete = (w: WorkerRecord) => {
+      rmSync(join(w.worktreePath!, "LICENSE"));
+      rmSync(join(w.worktreePath!, "src", "lib"), { recursive: true });
+    };
+    const wModified = await spawnWithTree("删一半还改了文件");
+    halfDelete(wModified);
+    writeFileSync(join(wModified.worktreePath!, "src", "a.ts"), "edited\n");
+    const wUntracked = await spawnWithTree("删一半还有新文件");
+    halfDelete(wUntracked);
+    writeFileSync(join(wUntracked.worktreePath!, "notes.md"), "mine\n");
+    const wStagedDelete = await spawnWithTree("删一半还暂存了删除");
+    halfDelete(wStagedDelete);
+    git(wStagedDelete.worktreePath!, "rm", "-q", "--cached", "LICENSE");
+    const wUnmerged = await spawnWithTree("删一半但有未合并提交");
+    writeFileSync(join(wUnmerged.worktreePath!, "feature.ts"), "f\n");
+    git(wUnmerged.worktreePath!, "add", "-A");
+    git(wUnmerged.worktreePath!, "commit", "-q", "-m", "feature");
+    halfDelete(wUnmerged);
+    for (const w of [wModified, wUntracked, wStagedDelete, wUnmerged]) endWorker(w.id);
+
+    now += 60_000;
+    const cleanup = createWorktreeCleanup({ ledger, worktreesDir, log: (l) => logs.push(l), now: () => now });
+    expect(await cleanup.runOnce()).toEqual([]);
+    now += WORKTREE_RETENTION_MS;
+    expect(await cleanup.runOnce()).toEqual([wUnmerged.id]);
+
+    expect(readFileSync(join(wModified.worktreePath!, "src", "a.ts"), "utf8")).toBe("edited\n");
+    expect(readFileSync(join(wUntracked.worktreePath!, "notes.md"), "utf8")).toBe("mine\n");
+    expect(existsSync(wStagedDelete.worktreePath!)).toBe(true);
+    expect(git(repo, "log", "-1", "--format=%s", wUnmerged.branch!)).toBe("feature");
   });
 });
