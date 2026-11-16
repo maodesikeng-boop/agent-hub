@@ -815,6 +815,191 @@ mod tests {
     }
 
     #[test]
+    fn dialog_bridge_413_response_survives_request_body_sent_after_the_response() {
+        use std::io::{Read, Write};
+        use std::net::TcpStream;
+        use std::time::Duration;
+
+        let bridge = DesktopDialogBridge::start_with_handler(|_| None).unwrap();
+        let addr = bridge
+            .url
+            .strip_prefix("http://")
+            .unwrap()
+            .split('/')
+            .next()
+            .unwrap()
+            .to_string();
+
+        for attempt in 0..20 {
+            let mut s = TcpStream::connect(&addr).unwrap();
+            s.set_nodelay(true).unwrap();
+            s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let head = format!(
+                "POST /pick-folder HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {}\r\nContent-Length: 1000000\r\n\r\n",
+                bridge.token
+            );
+            s.write_all(head.as_bytes()).unwrap();
+            s.flush().unwrap();
+
+            std::thread::sleep(Duration::from_millis(10));
+            let body_chunk = [b'a'; 16 * 1024];
+            let _ = s.write_all(&body_chunk);
+            std::thread::sleep(Duration::from_millis(10));
+
+            let mut raw = Vec::new();
+            let mut chunk = [0u8; 1024];
+            let read_result = loop {
+                match s.read(&mut chunk) {
+                    Ok(0) => break Ok(()),
+                    Ok(n) => raw.extend_from_slice(&chunk[..n]),
+                    Err(e) => break Err(e),
+                }
+            };
+            let resp = String::from_utf8_lossy(&raw);
+            assert!(
+                read_result.is_ok(),
+                "attempt {attempt}: reading the 413 response failed with {read_result:?}; got {resp:?}"
+            );
+            assert!(
+                resp.starts_with("HTTP/1.1 413") && resp.contains(r#"{"error":"payload_too_large"}"#),
+                "attempt {attempt}: expected a complete 413 response, got {resp:?}"
+            );
+        }
+        bridge.stop();
+    }
+
+    #[test]
+    fn dialog_bridge_413_linger_drain_bounds_stalled_and_flooding_clients_and_preserves_normal_200_path() {
+        use std::io::{Read, Write};
+        use std::net::TcpStream;
+        use std::time::{Duration, Instant};
+
+        fn read_framed_http_response(stream: &mut TcpStream) -> String {
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 1024];
+            let mut total_needed = None;
+            loop {
+                if let Some(needed) = total_needed {
+                    if buf.len() >= needed {
+                        break;
+                    }
+                }
+                let n = stream.read(&mut chunk).unwrap();
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&chunk[..n]);
+                if total_needed.is_none() {
+                    if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let end = pos + 4;
+                        let hdr = String::from_utf8_lossy(&buf[..end]).to_ascii_lowercase();
+                        let cl = hdr
+                            .lines()
+                            .find_map(|l| l.strip_prefix("content-length:"))
+                            .and_then(|v| v.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        total_needed = Some(end + cl);
+                    }
+                }
+            }
+            String::from_utf8_lossy(&buf).into_owned()
+        }
+
+        let bridge = DesktopDialogBridge::start_with_handler(|_| Some(r"C:\Picked\Ok".to_string())).unwrap();
+        let addr = bridge
+            .url
+            .strip_prefix("http://")
+            .unwrap()
+            .split('/')
+            .next()
+            .unwrap()
+            .to_string();
+
+        let ok_req = format!(
+            "POST /pick-folder HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {}\r\nContent-Length: 2\r\n\r\n{{}}",
+            bridge.token
+        );
+        let mut s_keep = TcpStream::connect(&addr).unwrap();
+        s_keep.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        s_keep.write_all(ok_req.as_bytes()).unwrap();
+        let first_ok = read_framed_http_response(&mut s_keep);
+        assert!(first_ok.starts_with("HTTP/1.1 200"), "got {first_ok:?}");
+
+        let t_normal = Instant::now();
+        let mut s_second = TcpStream::connect(&addr).unwrap();
+        s_second.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        s_second.write_all(ok_req.as_bytes()).unwrap();
+        let second_ok = read_framed_http_response(&mut s_second);
+        let normal_elapsed = t_normal.elapsed();
+        assert!(
+            second_ok.starts_with("HTTP/1.1 200"),
+            "holding previous 200 socket open must not cause 409 busy; got {second_ok:?}"
+        );
+        assert!(
+            normal_elapsed < Duration::from_millis(300),
+            "normal 200 path must not trigger 500ms linger drain (took {normal_elapsed:?})"
+        );
+        drop(s_second);
+        drop(s_keep);
+
+        let mut s_stalled = TcpStream::connect(&addr).unwrap();
+        s_stalled.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let big_head = format!(
+            "POST /pick-folder HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {}\r\nContent-Length: 1000000\r\n\r\n",
+            bridge.token
+        );
+        s_stalled.write_all(big_head.as_bytes()).unwrap();
+        let stalled_resp = read_framed_http_response(&mut s_stalled);
+        assert!(stalled_resp.starts_with("HTTP/1.1 413"), "got {stalled_resp:?}");
+
+        let t0 = Instant::now();
+        let mut s_after_stall = TcpStream::connect(&addr).unwrap();
+        s_after_stall.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        s_after_stall.write_all(ok_req.as_bytes()).unwrap();
+        let after_stall_resp = read_framed_http_response(&mut s_after_stall);
+        let stall_recovery = t0.elapsed();
+        assert!(after_stall_resp.starts_with("HTTP/1.1 200"), "got {after_stall_resp:?}");
+        assert!(
+            stall_recovery < Duration::from_secs(2),
+            "accept loop took {stall_recovery:?} after stalled 413 client (expected ~500ms linger cap, not 5s read timeout)"
+        );
+        drop(s_after_stall);
+        drop(s_stalled);
+
+        let total_flood: usize = 64 * 1024 * 1024;
+        let mut s_flood = TcpStream::connect(&addr).unwrap();
+        s_flood.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        s_flood.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
+        let flood_head = format!(
+            "POST /pick-folder HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {}\r\nContent-Length: {total_flood}\r\n\r\n",
+            bridge.token
+        );
+        s_flood.write_all(flood_head.as_bytes()).unwrap();
+        let flood_resp = read_framed_http_response(&mut s_flood);
+        assert!(flood_resp.starts_with("HTTP/1.1 413"), "got {flood_resp:?}");
+        let block = [b'x'; 16 * 1024];
+        let mut written = 0usize;
+        while written < total_flood {
+            match s_flood.write_all(&block) {
+                Ok(()) => written += block.len(),
+                Err(_) => break,
+            }
+        }
+        assert!(
+            written < total_flood,
+            "byte cap must close before draining all {total_flood} bytes (wrote {written})"
+        );
+        drop(s_flood);
+
+        let mut s_after_flood = TcpStream::connect(&addr).unwrap();
+        s_after_flood.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        s_after_flood.write_all(ok_req.as_bytes()).unwrap();
+        assert!(read_framed_http_response(&mut s_after_flood).starts_with("HTTP/1.1 200"));
+
+        bridge.stop();
+    }
+
+    #[test]
     fn normalize_hub_home_override_aligns_tilde_and_trailing_slashes_with_node() {
         let home = Path::new(r"C:\Users\Alice");
         let cwd = Path::new(r"D:\Work");
