@@ -2,7 +2,7 @@
 // - 正文：从基础提示词搬过来的建图规矩一条不少，全部 hub graph 命令和 JSON 契约都在；大小、说明长度有上限；
 // - 一份文件覆盖六家：各家驱动挂上的都是守护进程写的那一个 SKILL.md（claude 软链、agy 硬链接、codex/pi/deepseek 直接指目录），
 //   cursor 没有原生入口只读文件；只挂给项目经理；
-// - hub help graph 打印同一份正文；回执、hub status、交接开场那一行手册路径。
+// - hub help graph 打印同一份正文；回执、hub status 那一行手册路径。
 import { linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -192,7 +192,7 @@ describe("技能文件：只在项目经理的启动目录里写一份", () => {
     expect(() => statSync(skillsDir)).toThrow();
   });
 
-  it("手册那一行（graph create/patch 回执、hub status、交接开场）：有启动目录写这个会话的绝对路径，没有只指 hub help graph", () => {
+  it("手册那一行（graph create/patch 回执、hub status）：有启动目录写这个会话的绝对路径，没有只指 hub help graph", () => {
     const launchDir = join(dir, "launch");
     expect(taskGraphManualNote(launchDir, 12)).toBe(
       `任务图手册（建图、改图、换人、审查的做法）：\`${taskGraphSkillFile(sessionLaunchDir(launchDir, 12))}\`（也可以 \`${hub} help graph\`）`,

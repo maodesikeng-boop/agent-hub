@@ -18,6 +18,7 @@ import type {
 import { runPs } from "../../daemon/driver/process.ts";
 import { claudePluginDirOf } from "./skills.ts";
 import { StreamingToolPreviewTracker, lineUuid, pickStepInput, userContent } from "../../daemon/driver/protocol.ts";
+import { toolResultOutputs } from "../_common/tool-output.ts";
 
 /**
  * 写进标准输入的用户消息：一个固定结构，JSON.stringify 保证没有 \n。U+2028、U+2029 JSON.stringify 不转义，
@@ -248,10 +249,11 @@ export function parseToolResults(obj: Record<string, unknown>, at: number): Agen
   if (obj.isReplay === true) return null;
   const content = (obj.message as { content?: unknown } | undefined)?.content;
   if (!Array.isArray(content)) return null;
-  const toolUseIds = (content as Array<Record<string, unknown>>).flatMap((p) =>
-    p?.type === "tool_result" && typeof p.tool_use_id === "string" && p.tool_use_id !== "" ? [p.tool_use_id] : [],
+  const results = (content as Array<Record<string, unknown>>).flatMap((p) =>
+    p?.type === "tool_result" && typeof p.tool_use_id === "string" && p.tool_use_id !== "" ? [[p.tool_use_id, p] as const] : [],
   );
-  return toolUseIds.length === 0 ? null : { type: "agent.tool_result", toolUseIds, at, ...subtaskOf(obj) };
+  if (results.length === 0) return null;
+  return { type: "agent.tool_result", toolUseIds: results.map(([id]) => id), ...toolResultOutputs("claude", results), at, ...subtaskOf(obj) };
 }
 
 /** user 事件里的文字（content 可能是字符串，也可能是几段）。 */

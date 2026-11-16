@@ -259,6 +259,8 @@ describe("PiDriver：常驻 RPC 驱动协议与生命周期", () => {
     expect(h.of("agent.tool")).toHaveLength(1);
     expect(h.of("agent.tool")[0]?.name).toBe("read");
     expect(h.of("agent.tool_result")[0]?.toolUseIds).toEqual(["call-read-1"]);
+    // 返回原文：tool_execution_end.result 的 content（spec 的 outputField）
+    expect(h.of("agent.tool_result")[0]?.outputs).toEqual({ "call-read-1": "hello" });
     expect(h.of("agent.text_delta").map((e) => ({ delta: e.delta, reset: e.reset }))).toEqual([
       { delta: "第一行\u2028段落内分隔符不断行", reset: true },
       { delta: "，完成。", reset: undefined },

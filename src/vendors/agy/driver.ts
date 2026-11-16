@@ -72,6 +72,7 @@ import {
   type ScopedSpawn,
   type SpawnCommand,
 } from "../../daemon/driver/write-scope.ts";
+import { toolResultOutputs } from "../_common/tool-output.ts";
 
 interface Batch extends BaseBatch {
   text: string;
@@ -803,6 +804,7 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
           this.emit(st.id, {
             type: "agent.tool_result",
             toolUseIds: [toolUseId],
+            ...toolResultOutputs(this.vendor, [[toolUseId, toolInfo]]),
             at,
           });
         }

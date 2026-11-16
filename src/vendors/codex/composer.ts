@@ -14,6 +14,7 @@ import {
 import { userContent } from "../../daemon/driver/protocol.ts";
 import type { CommandsTarget, VendorComposer, VendorComposerBase } from "../../daemon/vendors/types.ts";
 import { createSpecComposerBase } from "../_common/composer.ts";
+import { commandNameOf } from "../types.ts";
 import codexSpec from "./spec.ts";
 import { queryCodexSkills, type CodexModelQueryOptions } from "./catalog.ts";
 
@@ -99,11 +100,9 @@ export function parseCodexCommands(raw: unknown): ComposerCommand[] | null {
  */
 export function rewriteCodexSkillCommand(text: string): string {
   const spec = codexSpec.composer;
-  if (!text.startsWith(spec.commandPrefix)) return text;
-  const rest = text.slice(spec.commandPrefix.length);
-  const name = rest.split(/\s/u, 1)[0] ?? "";
-  if (name === "" || name.includes("/") || name === spec.compactCommand) return text;
-  return `$${rest}`;
+  const name = commandNameOf(text, spec.commandPrefix);
+  if (name === null || name === spec.compactCommand) return text;
+  return `$${text.slice(spec.commandPrefix.length)}`;
 }
 
 const specBase = createSpecComposerBase("codex");

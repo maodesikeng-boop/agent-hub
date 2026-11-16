@@ -122,6 +122,14 @@ export default defineVendor({
       web_fetch: "web_fetch",
     },
   },
+  skillSignals: {
+    // ACP tool_call_update 的 content（[{type:"content", content:{type:"text", text}}]）；read 的每行是“行号: 正文”
+    // （@deepseek-ai/dsh-acp 的 toolResultUpdate、dsh-tool-fs 的 formatReadOutput，本机没有会话）
+    outputField: "content",
+    outputLinePrefix: /^\d+: /u,
+    // skill 工具：参数 {"name": "<技能名>"}（@deepseek-ai/dsh-tool-skill 0.2.2-rc.1 源码）
+    toolNameKeys: ["name"],
+  },
   capabilities: {
     backgroundWake: false,
     readonly: "os_sandbox",

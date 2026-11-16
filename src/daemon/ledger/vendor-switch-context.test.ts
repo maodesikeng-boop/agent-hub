@@ -218,6 +218,7 @@ describe("collectGenerationContext 与 buildVendorSwitchPreamble", () => {
       toVendor: "codex",
       anchor: { summaryText: "早间自动换代摘要", cutMessageId: 10, startSessionId: 2 },
       context: capped,
+      skills: null,
       transcriptSummary: "本代前序会话的原始记录：Claude Code（claude）：/tmp/s1.jsonl",
     });
     expect(preamble).toContain("从 Claude Code（claude）切换到了 Codex（codex）");

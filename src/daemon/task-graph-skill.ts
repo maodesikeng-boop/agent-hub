@@ -25,7 +25,7 @@ export function productSkillsDir(sessionDir: string): string {
   return joinSkillPath(sessionDir, PRODUCT_SKILLS_DIR);
 }
 
-/** 任务图技能的 SKILL.md：提示词、hub graph create 回执、hub status、交接开场里写的都是这个路径。 */
+/** 任务图技能的 SKILL.md：提示词、hub graph create 回执、hub status 里写的都是这个路径。 */
 export function taskGraphSkillFile(sessionDir: string): string {
   return joinSkillPath(productSkillsDir(sessionDir), TASK_GRAPH_SKILL_NAME, "SKILL.md");
 }
@@ -52,7 +52,7 @@ export function writeProductSkills(sessionDir: string): string {
 
 /**
  * 防漏读的第二、三道（docs/orchestration-skill-design.md 第 7 节）：hub graph create、hub graph patch 的回执（出错的也带）、
- * 有活跃图时的 hub status 和换新会话的开场说明，各带这一行手册路径。不判断加载过没有，每次都带；没加载就建图只提醒、不拦。
+ * 有活跃图时的 hub status，各带这一行手册路径。不判断加载过没有，每次都带；没加载就建图只提醒、不拦。
  * launchDir 没给（测试）只指 hub help graph。
  */
 export function taskGraphManualNote(launchDir: string | undefined, sessionId: number): string {

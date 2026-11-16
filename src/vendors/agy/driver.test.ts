@@ -1987,6 +1987,31 @@ describe("7. 后台任务跟踪与 background.changed 事件", () => {
   });
 });
 
+describe("工具的返回原文（认技能加载用，spec 的 skillSignals.outputField）", () => {
+  // agy 1.5.9 实跑抓的流（2026-11-16，--output-format stream-json）：read_file 读一个技能、run_command cat 同一个文件，只留工具的 step_update
+  const LIVE = readFileSync(new URL("./fixtures/skill-read-stream.jsonl", import.meta.url), "utf8")
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .map((line) => {
+      const { conversation_id: _ignored, ...stepUpdate } = (JSON.parse(line) as { step_update: Record<string, unknown> }).step_update;
+      return { type: "rawStepUpdate" as const, stepUpdate };
+    });
+
+  it("终态带上 tool_info.output：read_file 只有“N lines, B bytes”，run_command 是带元信息头的完整输出", async () => {
+    const t = makeAgyHarness({ script: { turns: [{ steps: [...LIVE, { type: "text", stepId: 5, deltas: ["读完了"] }] }] } });
+    const s = t.addSession();
+    await t.driver.send(s.id, user(1, "读 demo 技能"));
+    await t.waitFor("turn.ended");
+    expect(t.of("agent.tool").map((e) => ({ name: e.name, input: e.input }))).toEqual([
+      { name: "read_file", input: { Path: "/private/tmp/g19-agy-sample/skills/demo/SKILL.md" } },
+      { name: "run_command", input: { CommandLine: "cat skills/demo/SKILL.md" } },
+    ]);
+    const outputs = t.of("agent.tool_result").map((e) => e.outputs);
+    expect(outputs[0]).toEqual({ "tool-1-2": "14 lines, 310 bytes" });
+    expect(outputs[1]?.["tool-1-4"]).toMatch(/^Created At: .*\nCommand output:\n---\r\nname: demo\r\ndescription: sample\r\n---\r\nLine 1 of demo skill body\.\r\n/su);
+  });
+});
+
 describe("8. 工具终态闭合与共享步骤状态（#308）", () => {
   /** 按 messages.ts applyEvent 同款规则把驱动事件喂给 LiveSession，记录每一步之后的 step 与 openTools。 */
   function replayLiveSteps(events: DriverEvent[]) {

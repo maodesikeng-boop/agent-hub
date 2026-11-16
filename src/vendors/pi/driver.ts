@@ -83,6 +83,7 @@ import {
 } from "./protocol.ts";
 import { READONLY_PI_NEEDS_SANDBOX_MESSAGE, piReadonlySandboxInput } from "./readonly.ts";
 import { piTranscriptPath } from "./transcript.ts";
+import { toolResultOutputs } from "../_common/tool-output.ts";
 
 interface Batch extends BaseBatch {
   rawText: string;
@@ -997,7 +998,7 @@ export class PiDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     const toolId = typeof obj.toolCallId === "string" && obj.toolCallId !== "" ? obj.toolCallId : null;
     if (!toolId || st.completedToolIds.has(toolId)) return;
     st.completedToolIds.add(toolId);
-    this.emit(st.id, { type: "agent.tool_result", toolUseIds: [toolId], at });
+    this.emit(st.id, { type: "agent.tool_result", toolUseIds: [toolId], ...toolResultOutputs(this.vendor, [[toolId, obj]]), at });
   }
 
   #onCompactionEnd(st: SessionState, obj: Record<string, unknown>, rawLine: string, at: number): void {

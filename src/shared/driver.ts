@@ -223,6 +223,11 @@ export interface AgentThinkingEvent extends DriverEventBase, SubtaskField {
 export interface AgentToolResultEvent extends DriverEventBase, SubtaskField {
   type: "agent.tool_result";
   toolUseIds: string[];
+  /**
+   * 工具的返回原文，按 toolUseId，驱动按 spec 的 skillSignals.outputField 取、最多 SKILL_LOAD_SCAN_MAX_CHARS 字（vendors/_common/tool-output.ts）。
+   * 只给账本认技能加载（shared/skill-loads.ts），不存进数据库、不进快照和网页响应。驱动拿不到的不写。
+   */
+  outputs?: Readonly<Record<string, string>>;
 }
 
 /** 一次工具调用（调用开始时出一个）。Message.text 的一行摘要由账本生成。 */

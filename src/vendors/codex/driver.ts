@@ -67,6 +67,7 @@ import {
 import { CODEX_RESUME_REBAKES, personaSeenAtStart } from "../../daemon/driver/persona-note.ts";
 import { lineUuid } from "../../daemon/driver/protocol.ts";
 import { spawnInWriteScope, type ScopedSpawn, type SpawnCommand } from "../../daemon/driver/write-scope.ts";
+import { toolResultOutputs } from "../_common/tool-output.ts";
 
 interface Batch extends BaseBatch {
   combinedText: string;
@@ -901,7 +902,7 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         }
         if (isCodexToolItemType(item.type)) {
           const id = typeof item.id === "string" && item.id !== "" ? item.id : null;
-          if (id) this.emit(st.id, { type: "agent.tool_result", toolUseIds: [id], at });
+          if (id) this.emit(st.id, { type: "agent.tool_result", toolUseIds: [id], ...toolResultOutputs(this.vendor, [[id, item]]), at });
         }
         return;
       }

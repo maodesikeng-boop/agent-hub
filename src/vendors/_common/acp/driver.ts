@@ -99,6 +99,7 @@ import type {
   AcpLaunchContext,
   AcpTrackedToolCall,
 } from "./types.ts";
+import { toolResultOutputs } from "../tool-output.ts";
 
 const ZERO_USAGE: TokenUsage = {
   input: 0,
@@ -1428,6 +1429,7 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
       this.emit(st.id, {
         type: "agent.tool_result",
         toolUseIds: [toolCallId],
+        ...toolResultOutputs(this.vendor, [[toolCallId, toolCall]]),
         at,
       });
     }

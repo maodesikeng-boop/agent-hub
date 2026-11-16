@@ -40,6 +40,7 @@ export default defineVendor({
     serviceName: "Acme",
     rawHint: /^acme_not_found\b|\bacme\b/i,
   },
+  skillSignals: { outputField: "output" },
   capabilities: {
     backgroundWake: false,
     readonly: "os_sandbox",

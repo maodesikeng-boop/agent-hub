@@ -95,6 +95,7 @@ import { DEFAULT_PM_NAME } from "./prompt.ts";
 import { prepareSentFilesDir } from "./sent-files.ts";
 import { resolveUpload } from "./uploads.ts";
 import { createSetupRunner, type SetupRunner } from "./setup/index.ts";
+import { createSkillFiles } from "./skill-files.ts";
 import { DaemonAlreadyRunningError, acquireLock, createSessionStore, openStore, type Db, type DirLock } from "./store/index.ts";
 import { StartupError } from "./startup-error.ts";
 import { loadOrCreateUiToken, loginUrl, rotateUiToken, startUiServer, type RunningUiServer } from "./ui-server/index.ts";
@@ -398,6 +399,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       sentFilesDir,
       // 交接提示词里写上会话原始记录的路径
       findTranscript: (ref) => vendorTranscriptPath(ref),
+      // 换代带上加载过的技能：按各家的技能目录找 SKILL.md（claude 的 CLAUDE_CONFIG_DIR 这类要读环境变量）
+      skillFiles: createSkillFiles({ launchDir: paths.launchDir, userHome: options.userHome, env }),
       ...(options.autoRenew ? { autoRenew: options.autoRenew } : {}),
       // 账本有交接可以领了：叫醒跑腿的（它在下面才建，所以现用现取）
       onHandoverClaimable: () => parts.handoverRunner?.wake(),
