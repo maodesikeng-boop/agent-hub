@@ -459,6 +459,21 @@ describe("四处入口", () => {
     expect(within(files).getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent)).toEqual(["方案", "验收结论", "桌面截图", "录屏"]);
   });
 
+  it("果皮轨门禁卡：长问题、长选项不把列撑得比卡宽（选项那列 grid-cols-1，长词能换行），Recommended 留在按钮里", () => {
+    const longWord = "release/2026-11-16-hotfix-database-migration-rollback-plan-without-spaces-0123456789";
+    const graph = gateGraph();
+    graph.nodes[0] = { ...graph.nodes[0]!, gateQuestion: longWord, gateOptions: [longWord, "短"], gateRecommended: longWord, gateSummaryMd: "" };
+    render(
+      <RightRail asks={[]} workers={[]} activeGraphs={[graph]} openWorkerId={null} layout="side" avatarKey={1} onOpenAsk={() => {}} onOpenWorker={() => {}} />,
+    );
+    const card = screen.getByTestId("peel-gate-card");
+    const longOption = within(card).getByRole("button", { name: new RegExp(`^${longWord}`) });
+    expect(longOption.parentElement).toHaveClass("grid-cols-1");
+    expect(longOption.firstElementChild).toHaveClass("wrap-anywhere");
+    expect(within(longOption).getByText("Recommended")).toHaveClass("shrink-0");
+    expect(within(card).getAllByText(longWord)[0]).toHaveClass("wrap-anywhere");
+  });
+
   it("果皮轨：同一张图里一步等拍板带文件、一步挂着 Waiting on you 提醒卡，各是各的卡", async () => {
     const graph = gateGraph();
     graph.nodes.push(
