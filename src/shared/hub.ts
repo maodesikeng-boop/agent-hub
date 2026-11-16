@@ -24,6 +24,7 @@ import type {
   WorkerRecord,
   WorkerId,
 } from "./domain.ts";
+import type { HubFileArg } from "./deliverables.ts";
 import type { RouterItem, RouterPmNote, RouterReportLink } from "./router.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
 import { AGENT_VENDORS, DEFAULT_AGENT_VENDOR, type AgentVendor, type VendorAvailability } from "./vendors.ts";
@@ -240,6 +241,8 @@ export interface HubArgsMap {
     node?: TaskNodeKey;
     graphId?: TaskGraphId;
     replaceItemId?: RouterItemId;
+    /** `--file [标签=]路径`（可多个，最多 HUB_FILE_ARGS_MAX 个）：存副本列在卡片下面；带 node 时也记进该步的交付物。 */
+    files?: HubFileArg[];
   };
   /**
    * `hub schedule add --name <名> (--daily HH:MM | --every 30m|2h) --stdin`（M6）：给自己建定时任务。name 按 normalizeName；
@@ -257,6 +260,8 @@ export interface HubArgsMap {
   "router.report": {
     summary: string;
     links?: RouterReportLink[];
+    /** `--file [标签=]路径`（可多个，最多 HUB_FILE_ARGS_MAX 个）：存副本，在简报下面列出来。 */
+    files?: HubFileArg[];
   };
   /** `hub router note`：更新或清空该 PM 的一句话项目近况备忘。 */
   "router.note": {

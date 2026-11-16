@@ -94,6 +94,8 @@ interface RouterItemDbRow {
   context: string | null;
   options_json: string | null;
   summary: string | null;
+  /** LEFT JOIN router_item_deliverables 带出来的 Deliverable[] JSON（migrations/0028_deliverables.sql）；没有行是 null，当空列表。 */
+  deliverables_json?: string | null;
   links_json: string | null;
   resolution_json: string | null;
   ask_message_id: number | null;

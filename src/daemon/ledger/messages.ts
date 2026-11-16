@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { AnyActionRow } from "../../shared/actions.ts";
 import type { MessagesPage } from "../../shared/api.ts";
 import type { UserMessageMeta } from "../../shared/attachments.ts";
+import type { Deliverable } from "../../shared/deliverables.ts";
 import { agentMessageDedupeKey, canTransitionMessage, systemMessageDedupeKey, userMessageDedupeKey } from "../../shared/domain.ts";
 import type { AgentSessionRow, AskMeta, ConversationId, GateRef, Message, MessageId, MessageStatus, SessionId, SystemMessageMeta } from "../../shared/domain.ts";
 import { turnFailureReason } from "../../shared/driver.ts";
@@ -157,7 +158,13 @@ export function createLedgerMessages(
     session: AgentSessionRow,
     text: string,
     askOptions?: string[],
-    extra?: { gateRef?: GateRef; recommended?: string; skipRouterBridge?: boolean },
+    extra?: {
+      gateRef?: GateRef;
+      recommended?: string;
+      skipRouterBridge?: boolean;
+      /** 列在卡片下面的文件（--file、检查点卡带的步骤交付物）：写进 AskMeta.deliverables，它们的副本也进 meta.files。 */
+      deliverables?: Deliverable[];
+    },
   ): Message => {
     const t = now();
     const meta: AskMeta = {

@@ -10,6 +10,7 @@ import {
   MAX_WORKER_TITLE_CHARS,
   PM_MEMORY_INDEX_FILE,
 } from "./limits.ts";
+import type { Deliverable } from "./deliverables.ts";
 import type { ScheduleId } from "./schedule.ts";
 import type { AgentVendor } from "./vendors.ts";
 import type { WorkerReportStatus } from "./worker.ts";
@@ -475,6 +476,8 @@ export type AskMeta = {
   recommended?: string;
   gateRef?: GateRef;
   chosenOption?: string;
+  /** 卡片下面列的文件（--file、检查点卡带的步骤交付物），最多 DELIVERABLES_PER_CARD_MAX 个；老消息没有。 */
+  deliverables?: Deliverable[];
 };
 
 /** 是 hub ask 发的消息就返回它的 meta，否则 null。 */
@@ -1068,6 +1071,11 @@ export interface TaskArtifact {
   commit?: string;
   branch?: string;
   summary?: string;
+  /**
+   * 这一步交给用户看的文件：Worker 最近一次汇报“文件”栏里的，加上 `hub ask --node --file` 补的，最多 DELIVERABLES_PER_STEP_MAX 个。
+   * 全量快照只给等用户拍板的步骤带（控快照体积），单图详情都带。
+   */
+  deliverables?: Deliverable[];
 }
 
 export interface TaskDecision {

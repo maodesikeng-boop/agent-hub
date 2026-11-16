@@ -3,6 +3,7 @@ export * from "./actions.ts";
 export * from "./api.ts";
 export * from "./attachments.ts";
 export * from "./decisions.ts";
+export * from "./deliverables.ts";
 export * from "./domain.ts";
 export * from "./driver.ts";
 export * from "./handover.ts";

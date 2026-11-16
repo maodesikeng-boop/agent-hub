@@ -1499,3 +1499,9 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
     });
   });
 });
+
+describe("--file（交付物，docs/deliverables-design.md）", () => {
+  it.todo("hub ask 和 hub router report 的 --file 可以写多个，按 `标签=路径` 解析成 files");
+  it.todo("--file 的相对路径按 hub 的当前目录变成绝对路径");
+  it.todo("--file 超过 HUB_FILE_ARGS_MAX 个时报用法错误");
+});

@@ -54,6 +54,11 @@ export interface WorkerReport {
   handoff: string;
   /** 没写是空串。 */
   questions: string;
+  /**
+   * 文件栏原文：交给用户看的文件，每个写成 Markdown 链接 `[标签](路径)`。写“无”或没写是空串。
+   * 账本按这一栏的链接对上这条消息存好的副本（meta.files），记成该步的交付物。
+   */
+  files?: string;
 }
 
 /**

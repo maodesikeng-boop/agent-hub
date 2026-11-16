@@ -19,6 +19,7 @@ import {
   type TaskNodeKey,
 } from "./domain.ts";
 import type { ConversationSnapshot } from "./api.ts";
+import type { Deliverable } from "./deliverables.ts";
 import type { RouterItem, RouterSlice } from "./router.ts";
 import { normalizeTaskGraphs } from "./task-graph-compat.ts";
 
@@ -53,6 +54,8 @@ export interface PendingDecision {
   context: string;
   options: string[];
   askMessageId: MessageId | null;
+  /** 卡片下面列的文件：门禁步骤取该步 artifact.deliverables，独立待决项取 router_items 上的。没有时不带。 */
+  deliverables?: Deliverable[];
   createdAt: number;
   updatedAt: number;
   source: PendingDecisionSource;

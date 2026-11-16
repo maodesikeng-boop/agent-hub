@@ -394,3 +394,10 @@ describe("输入框指定派 Worker 的厂商、模型、思考程度（workerPi
     expect(HUB_COMPOSER_COMMANDS).toEqual([{ name: "hub:worker", description: "Pick provider, model and effort for Workers" }]);
   });
 });
+
+describe("汇报的“文件”栏（docs/deliverables-design.md）", () => {
+  it.todo("WORKER_REPORT_FORMAT 有“文件”一栏，“测试”栏不再写截图路径");
+  it.todo("“文件”栏的多行链接原样进 report.files");
+  it.todo("“文件”栏写“无”时 report.files 是空串");
+  it.todo("没写“文件”栏的老格式照常认出，report.files 是空串");
+});

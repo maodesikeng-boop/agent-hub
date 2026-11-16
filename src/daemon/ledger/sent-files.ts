@@ -1,7 +1,8 @@
 // agent 的文字消息入库时，给回复里指向本机文件的链接存副本（daemon/sent-files.ts），算出消息的 meta（AgentTextMeta）。
 // 这里只管“这个会话能分享哪些文件夹”：所属项目的全部文件夹、本项目的 worktrees 目录、会话自己的 cwd 和 addDirs、
 // uploads、临时目录；数据目录里只认 uploads 和本项目的 worktrees。
-import type { AgentTextMeta } from "../../shared/sent-files.ts";
+import type { HubFileArg } from "../../shared/deliverables.ts";
+import type { AgentTextMeta, SentFile } from "../../shared/sent-files.ts";
 import type { AgentSessionRow } from "../../shared/domain.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
 import { projectWorktreesDir } from "../../shared/paths.ts";
@@ -78,5 +79,13 @@ export function createLedgerSentFiles(db: Db, opts: SentFilesOptions) {
   /** 这个路径（已 realpath）现在还能不能分享给这个会话的用户（见 Ledger.sentFileAllows）。 */
   const allows = (session: AgentSessionRow, realPath: string): boolean => isShareable(realPath, scopeFor(session));
 
-  return { metaFor, allows };
+  /**
+   * hub ask / router report 的 --file：按这个会话能分享的文件夹存副本，规则和回复里的链接一样（daemon/sent-files.ts）。
+   * 后置：返回的 files 和 args 一一对应、顺序相同（没存下的 status 不是 "saved"）；args 为空返回空数组。不抛错，出了意外只记日志。
+   */
+  const filesForArgs = (session: AgentSessionRow, args: readonly HubFileArg[]): SentFile[] => {
+    throw new Error("未实现");
+  };
+
+  return { metaFor, allows, filesForArgs };
 }
