@@ -28,6 +28,8 @@ export type BuildOutcome = { ok: true } | { ok: false; reason: string };
 export interface SelfReloadOptions {
   /** 现在还在忙的（给人看的原因）；空数组 = 全库空闲。 */
   busyReasons(): string[];
+  /** 正在跑、重启后不会重发的轮次（项目经理、总助正在回用户），给人看的原因。过了等待上限后只等这些。 */
+  unresumableReasons?(): string[];
   /** 订阅“可能闲下来了”的信号（账本的变化）；返回取消订阅。 */
   subscribe(listener: () => void): () => void;
   /** 把网页构建到暂存目录（不碰正在用的那份）。不给 = 不支持 --build。 */

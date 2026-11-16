@@ -9,11 +9,13 @@ import { createBusySessions, createSelfReload, createStagedWebBuild, describeSel
 /** 可控的“全库忙不忙”和账本变化。 */
 function harness(overrides: Partial<SelfReloadOptions> = {}) {
   let busy: string[] = [];
+  let unresumable: string[] = [];
   const listeners = new Set<() => void>();
   const restart = vi.fn();
   const lines: string[] = [];
   const reload = createSelfReload({
     busyReasons: () => busy,
+    unresumableReasons: () => unresumable,
     subscribe: (listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -31,6 +33,11 @@ function harness(overrides: Partial<SelfReloadOptions> = {}) {
     setBusy(reasons: string[], emit = true) {
       busy = reasons;
       if (emit) for (const l of [...listeners]) l();
+    },
+    /** 改“重启后不会重发的轮次”（项目经理、总助正在回用户），并推一条账本变化。 */
+    setUnresumable(reasons: string[]) {
+      unresumable = reasons;
+      for (const l of [...listeners]) l();
     },
   };
 }
@@ -83,6 +90,22 @@ describe("空闲排空热重启（createSelfReload）", () => {
     expect(vi.getTimerCount()).toBe(0);
     vi.advanceTimersByTime(SELF_RELOAD_DRAIN_MAX_MS);
     expect(h.restart).toHaveBeenCalledTimes(1);
+  });
+
+  it("到上限时项目经理正在回用户消息（重启后不会重发）：不重启，等它回完再重启；能重发的轮次照样不等", () => {
+    const h = harness();
+    h.setBusy(["2 个会话还在跑"], false);
+    h.setUnresumable(["项目经理正在回用户的消息"]);
+    h.reload.request({ build: false, by: "pm" });
+    vi.advanceTimersByTime(SELF_RELOAD_DRAIN_MAX_MS + 10 * SELF_RELOAD_RECHECK_MS);
+    expect(h.restart).not.toHaveBeenCalled();
+    expect(h.reload.status()).toMatchObject({ state: "draining", unresumable: ["项目经理正在回用户的消息"] });
+    expect(describeSelfReload(h.reload.status())).toContain("已过最晚时间");
+
+    // 项目经理回完了，Worker 还在跑（重启后会重发）：立即重启，不再等 Worker
+    h.setUnresumable([]);
+    expect(h.restart).toHaveBeenCalledTimes(1);
+    expect(h.lines.at(-1)).toContain("还在跑的轮次重启后都会重发：2 个会话还在跑");
   });
 
   it("再登记合并进同一次，不顺延上限；hub status 那一段写明开始和最晚时间", () => {

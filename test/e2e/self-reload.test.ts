@@ -2,6 +2,7 @@
 // 有一轮一直卡着（全库空闲永远不出现）时项目经理登记热重启：到上限守护进程照常以 reloadExitCode 退出；再起来后被打断的轮次自动重发、接着做完。
 // - Worker 一轮卡着：要起 Worker 的 OS 沙箱，在已经包了 sandbox-exec 的 Worker 里不能嵌套，跳过（同 src/daemon/multi-vendor.test.ts）；
 // - 项目经理处理系统消息（定时任务）时卡着：不用沙箱，哪里都能跑。
+// 项目经理正在回用户的消息（重启后不会重发）：过了上限也不重启，等它回完再重启，用户的那条照常回完。
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
@@ -12,7 +13,7 @@ import { DESKTOP_CONTRACT } from "../../src/daemon/entry.ts";
 import { SANDBOX_EXEC, osSandboxAvailable } from "../../src/daemon/driver/write-scope.ts";
 import { openDatabase } from "../../src/daemon/store/index.ts";
 import type { FakeScript, FakeTurn } from "../fake-claude/fake-claude.ts";
-import { Client, makeEnv, messagesOf, waitUntil, type E2eEnv } from "./harness.ts";
+import { Client, makeEnv, messagesOf, sleep, waitUntil, type E2eEnv } from "./harness.ts";
 
 const RELOAD_MAIN = fileURLToPath(new URL("./self-reload-daemon.ts", import.meta.url));
 const DRAIN_MAX_MS = 4_000;
@@ -130,6 +131,47 @@ describe("热重启等全库空闲有上限", () => {
     console.log(
       `[self-reload e2e] 登记后 ${waitedMs} ms 退出，退出码 ${exit.code}；日志：${first.stderr().split("\n").filter((l) => l.includes("热重启")).join(" | ")}；` +
         `重启后 Worker 会话 ${workerSessionId} 以 --resume 重发任务，汇报“${reportLine!.summary}”`,
+    );
+    await second.terminate();
+  });
+
+  it("到上限时项目经理正在回用户的消息：不重启，等它回完才重启，那条照常回完", { timeout: 60_000 }, async () => {
+    env = makeEnv();
+    const release = join(env.dir, "release");
+    // 用户让项目经理重启后台：项目经理登记热重启后接着干活，这一轮一直到测试放行才回完
+    env.setScript({
+      turns: [{ steps: [{ bash: `${hub} self-reload` }, { text: "登记了，接着回你" }, { waitFile: release }, { text: "回完了" }] }],
+      defaultTurn: say("收到"),
+    });
+    const first = await env.start({ main: RELOAD_MAIN, env: SUPERVISED_ENV });
+    const client = await Client.login(first);
+    const { pmId, conversationId } = await client.createPm({ name: "小林", mode: "manage_only", persona: "小林的习惯" });
+    const asked = await client.post(conversationId, "代码合进去了，重启一下后台");
+    const registered = await waitUntil("self-reload registered", () => env.bashRuns().find((r) => r.command === `${hub} self-reload`), 20_000);
+    const registeredAt = Date.now();
+    expect(registered.output).toContain("已登记热重启");
+
+    await sleep(DRAIN_MAX_MS + 3_000);
+    expect(first.child.exitCode).toBeNull();
+    expect(query<{ status: string }>("SELECT status FROM messages WHERE id = ?", asked)).toEqual([{ status: "processing" }]);
+    const pmSessionId = query<{ id: number }>("SELECT id FROM agent_sessions WHERE pm_id = ? AND role = 'pm'", pmId)[0]!.id;
+    const status = await env.runHub(procsOf(pmSessionId)[0]!.pid, ["status"]);
+    expect(status.stdout).toContain("已过最晚时间");
+
+    writeFileSync(release, "");
+    const exit = await first.exited;
+    const waitedMs = Date.now() - registeredAt;
+    expect(exit.code).toBe(DESKTOP_CONTRACT.reloadExitCode);
+    expect(query<{ status: string }>("SELECT status FROM messages WHERE id = ?", asked)).toEqual([{ status: "replied" }]);
+
+    const second = await env.start();
+    const client2 = client.withPort(second.port);
+    const texts = messagesOf(await client2.state(), conversationId).filter((m) => m.sender === "agent" && m.kind === "text").map((m) => m.text);
+    expect(texts).toEqual(["登记了，接着回你", "回完了"]);
+    console.log(
+      `[self-reload e2e] 上限 ${DRAIN_MAX_MS} ms；登记后 ${DRAIN_MAX_MS + 3_000} ms 守护进程还在（项目经理在回用户）；hub status 末行：${status.stdout.trim().split("\n").at(-1)}；` +
+        `放行后退出码 ${exit.code}（登记后共 ${waitedMs} ms）；用户那条 replied，回复 ${JSON.stringify(texts)}；` +
+        `守护进程日志：${first.stderr().split("\n").filter((l) => l.includes("热重启")).join(" | ")}`,
     );
     await second.terminate();
   });
