@@ -1,6 +1,7 @@
 // Worker 的 git worktree 自动清理：
-// 满足任一条件就自动删 worktree（分支 hub/<id>-<slug> 保留）：
-// 1. 已合并进主分支（origin/main、main 等）：登记的分支，或 worktree 当前实际的 HEAD（detached 在 PR 提交上、review-* 临时分支、
+// 审查 Worker 的审查目录（不挂分支，docs/review-verify-only-design.md）是一次性的：收工、没在跑就删，有未提交改动也删（git worktree remove --force），
+// 不看合并、不等 3 天、不建保底分支。别的 worktree 满足任一条件就自动删（分支 hub/<id>-<slug> 保留）：
+// 1. 已合并进主分支（origin/main、main 等）：登记的分支，或 worktree 当前实际的 HEAD（切到别的提交上、
 //    一个提交都没新增的 0 提交探索目录——HEAD 就在 main 历史里——都算，不用白留 3 天）；
 // 2. Worker 已收工满 WORKTREE_RETENTION_DAYS（3 天）。
 // 任何情况下：还在跑（未收工）的不删；同一个目录被换人接手的后任接着用（还开着、还在跑）的不删，共用这个目录的 Worker 经手过的
@@ -129,7 +130,7 @@ export function createWorktreeCleanup(options: WorktreeCleanupOptions): Worktree
    * 孤儿目录（已不是有效 worktree）：登记的分支已合并 / 已不存在 / 收工满保留期之一成立，
    * 且目录里没有未被忽略的用户文件（node_modules、.codegraph 这类忽略目录随目录一起收回），才物理删除。返回是否删掉了。
    */
-  const cleanOrphan = async (candidate: EndedWorktreeCandidate): Promise<boolean> => {
+  const cleanOrphan = async (candidate: Extract<EndedWorktreeCandidate, { review: false }>): Promise<boolean> => {
     const tag = `worker #${candidate.workerId}，${candidate.worktreePath}`;
     const expired = now() - candidate.endedAt >= retentionMs;
     let tip: string | null;
@@ -170,6 +171,24 @@ export function createWorktreeCleanup(options: WorktreeCleanupOptions): Worktree
     return true;
   };
 
+  /** 审查目录：动手前再核一次路径和 Worker 状态，有改动也删；已被外部解绑的壳直接 fs.rm。返回是否删掉了。 */
+  const cleanReview = async (candidate: Extract<EndedWorktreeCandidate, { review: true }>): Promise<boolean> => {
+    const tag = `worker #${candidate.workerId}，${candidate.worktreePath}`;
+    if (stopped || !isUnderWorktreesDir(candidate.worktreePath, currentRoots()) || !ledger.isWorkerCleanable(candidate.workerId)) return false;
+    try {
+      if (inspectWorktreeLink(candidate.worktreePath) === "orphan") {
+        await removeTreeWithRetry(candidate.worktreePath, { signal: stopController.signal });
+      } else {
+        await removeWorktree(candidate.repoFolder, candidate.worktreePath, { ...git, force: true });
+      }
+    } catch (error) {
+      log(`${LOG_PREFIX} 清理审查目录失败（${tag}）：${error instanceof Error ? error.message : String(error)}`);
+      return false;
+    }
+    log(`${LOG_PREFIX} 已清理审查目录：${tag}`);
+    return true;
+  };
+
   const doRunOnce = async (): Promise<WorkerId[]> => {
     if (stopped) return [];
     let all: EndedWorktreeCandidate[];
@@ -194,6 +213,14 @@ export function createWorktreeCleanup(options: WorktreeCleanupOptions): Worktree
       if (stopped) break;
       if (!isUnderWorktreesDir(candidate.worktreePath, currentRoots()) || !ledger.isWorkerCleanable(candidate.workerId)) continue;
 
+      if (candidate.review) {
+        if (await cleanReview(candidate)) {
+          cleaned.push(candidate.workerId);
+          prunedRepos.add(candidate.repoFolder);
+        }
+        continue;
+      }
+
       // 0. 已经不是有效 git worktree 的残留目录（外部 git worktree remove / prune 之后剩下的壳）：走孤儿流程，不跑 git status
       if (inspectWorktreeLink(candidate.worktreePath) === "orphan") {
         if (await cleanOrphan(candidate)) {
@@ -204,8 +231,8 @@ export function createWorktreeCleanup(options: WorktreeCleanupOptions): Worktree
       }
 
       // 1. 满足“收工满 3 天”或“已合并进主分支”任一条件才往下走（不满足的不跑 git status）。
-      //    “已合并”看两处：登记的分支，和 worktree 当前实际的 HEAD（审查 Worker 常 detached 在 PR 提交上，
-      //    或停在 review-* 临时分支；一个提交都没新增、HEAD 还在 main 历史里的探索目录也算，没有任何东西会丢）。
+      //    “已合并”看两处：登记的分支，和 worktree 当前实际的 HEAD（切到了别的提交上；
+      //    一个提交都没新增、HEAD 还在 main 历史里的探索目录也算，没有任何东西会丢）。
       const expired = now() - candidate.endedAt >= retentionMs;
       let merged = false;
       if (!expired) {

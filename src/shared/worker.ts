@@ -5,6 +5,7 @@ import { truncateChars } from "./domain.ts";
 import type { Message, WorkerId, WorkerEvent, WorkerLineStatus } from "./domain.ts";
 import { WORKER_BRANCH_SLUG_CHARS, WORKER_LINE_SUMMARY_CHARS } from "./limits.ts";
 import { WORKER_BRANCH_PREFIX } from "./names.ts";
+import { parseReviewVerdict, type ReviewVerdict } from "./review.ts";
 import { isAgentVendor } from "./vendors.ts";
 import type { AgentVendor } from "./vendors.ts";
 
@@ -54,6 +55,10 @@ export interface WorkerReport {
   handoff: string;
   /** 没写是空串。 */
   questions: string;
+  /** 审查步骤的“结论”栏：没写或写错是 null（review.ts）。 */
+  verdict: ReviewVerdict | null;
+  /** 审查步骤的“验证提交”栏：没写是 null。 */
+  verifiedCommit: string | null;
 }
 
 /**
@@ -63,11 +68,11 @@ export interface WorkerReport {
  */
 export type ParsedWorkerReport = { kind: "ok"; report: WorkerReport } | { kind: "unformatted"; summary: string };
 
-type FieldKey = "状态" | "摘要" | "提交" | "PR" | "测试" | "偏离" | "交棒" | "问题";
+type FieldKey = "状态" | "摘要" | "提交" | "PR" | "测试" | "偏离" | "交棒" | "问题" | "结论" | "验证提交";
 /**
  * 一项的开头：行首可以有 Markdown 的列表符号、引用（- * > 和空白），名字可以加粗（**状态**: 或 **状态:**），冒号全角半角都行。
  */
-const FIELD_LINE = /^([-*>\s]*)(?:\*\*)?(状态|摘要|提交|PR|pr|测试|偏离|交棒|问题)\s*(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*(.*)$/u;
+const FIELD_LINE = /^([-*>\s]*)(?:\*\*)?(状态|摘要|提交|PR|pr|测试|偏离|交棒|问题|结论|验证提交)\s*(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*(.*)$/u;
 const CODE_FENCE_OPEN = /^\s*(`{3,}|~{3,})/u;
 /** 状态值首尾的标点、符号（“做完了。”“「做完了」”“**做完了**”）。 */
 const EDGE_PUNCTUATION = /^[\p{P}\p{S}\s]+|[\p{P}\p{S}\s]+$/gu;
@@ -128,7 +133,7 @@ function lastBlock(text: string): string | null {
 /**
  * 从 Worker 这一轮最后一段文字里找汇报。有好几段取最后一段完整的（有开头也有结尾）。
  * 每项一行 `名字: 值`（Markdown 的列表、引用、加粗写法也认，见 FIELD_LINE），首尾空白去掉；
- * 不以这五个名字开头的行接在上一项后面（换行连着）。状态值去掉首尾的标点再比。
+ * 不以这几个名字开头的行接在上一项后面（换行连着）。状态值去掉首尾的标点再比。
  * 状态不是三种之一、没写摘要 → unformatted。提交、测试、问题可以不写。
  */
 export function parseWorkerReport(text: string): ParsedWorkerReport {
@@ -223,6 +228,8 @@ export function parseWorkerReport(text: string): ParsedWorkerReport {
       deviation,
       handoff: field("交棒"),
       questions: field("问题"),
+      verdict: parseReviewVerdict(field("结论")),
+      verifiedCommit: field("验证提交") === "" ? null : field("验证提交"),
     },
   };
 }

@@ -7,10 +7,23 @@
 // prompt.md 的内容由 prompt.ts 的 buildLaunchPrompt 拼；厂商专属的设置文件和环境变量由那家 daemon.ts 的 launchFiles 给
 // （claude：src/vendors/claude/settings.ts，默认档、放行 hub 和 hub.sock），没写的厂商不生成（docs/vendor-plugin-design.md 的 A15）。
 // Worker 的可写范围（数据目录里只有自己的工作目录能写）是 write-scope.ts 的 workerWriteScope，放在 LaunchFiles.writeScope 交给驱动层落实。
-import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
+// 审查 Worker 的禁推（review.ts）：启动目录里写一个拒绝推送的 pre-push 钩子，经 env 的 GIT_CONFIG_* 让 git 用它，6 家同一个入口。
+import { chmodSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
-import { ENV_HUB_SOCK, ENV_HUB_TOKEN, WORKER_BACKGROUND_HOLD_MAX_MS, buildReadonlyPolicy, isAgentVendor, taskGraphSkillCatalogEntry, vendorSpec, workerWriteScope } from "../shared/index.ts";
+import {
+  ENV_HUB_SOCK,
+  ENV_HUB_TOKEN,
+  REVIEW_HOOKS_DIR,
+  REVIEW_PRE_PUSH_HOOK,
+  WORKER_BACKGROUND_HOLD_MAX_MS,
+  buildReadonlyPolicy,
+  isAgentVendor,
+  reviewPushGuardEnv,
+  taskGraphSkillCatalogEntry,
+  vendorSpec,
+  workerWriteScope,
+} from "../shared/index.ts";
 import type { AgentSessionRow, LaunchContext, LaunchFiles, PersonaNote, PersonaUpdate, SessionId, SessionRole, SessionTokens, VendorAvailabilityMap } from "../shared/index.ts";
 import { VENDOR_DAEMONS } from "../vendors/daemon-registry.ts";
 import { launchFingerprint } from "../shared/launch.ts";
@@ -142,6 +155,16 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
     let skillsDir: string | undefined;
     if (role === "pm") skillsDir = writeProductSkills(dir);
     else removeProductSkills(dir);
+    // 钩子放在启动目录：Worker 读得到（git 要执行它），写不了（数据目录只有自己的工作目录能写）
+    let reviewEnv: Record<string, string> = {};
+    if (role === "worker" && ctx.worker?.review !== undefined) {
+      const hooksDir = join(dir, REVIEW_HOOKS_DIR);
+      mkdirSync(hooksDir, { recursive: true, mode: 0o700 });
+      const hook = join(hooksDir, "pre-push");
+      writeFileSync(hook, REVIEW_PRE_PUSH_HOOK, { mode: 0o755 });
+      chmodSync(hook, 0o755);
+      reviewEnv = reviewPushGuardEnv(hooksDir, process.env);
+    }
     const writeScope = nativeReadonly
       ? null
       : workerWriteScope({
@@ -159,6 +182,7 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
         [ENV_HUB_SOCK]: hubSock,
         PATH: basePath === "" ? hubBinDir : `${hubBinDir}${delimiter}${basePath}`,
         ...vendorFiles?.env,
+        ...reviewEnv,
       },
       // 性格设定、模式不进指纹：变了不重启，驱动层按 personaRevision 在下一条消息前加说明（createPersonaNoter）
       fingerprint: launchFingerprint({

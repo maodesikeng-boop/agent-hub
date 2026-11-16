@@ -26,8 +26,8 @@ import { ASK_CARD_TELL_USER, ASK_CARD_WHERE } from "../../shared/hub.ts";
 import { workerSetupLogPath } from "../../shared/paths.ts";
 import { bundledModelCatalog, type ModelCatalog } from "../../shared/vendors.ts";
 import { REPORT_END, REPORT_START } from "../../shared/worker.ts";
-import { addWorktree } from "../git/index.ts";
-import { createWorktreeCreateHandler } from "../handlers.ts";
+import { addWorktree, remoteBranchHead, resolveCommit } from "../git/index.ts";
+import { createReviewObserver, createWorktreeCreateHandler } from "../handlers.ts";
 import { createSessionStore, migrate, type Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
 import { createResolveFolder } from "./files.ts";
@@ -61,11 +61,13 @@ function buildReportBlock(fields: {
   deviation?: string;
   handoff?: string;
   questions?: string;
+  verdict?: string;
 }): string {
   return [
     REPORT_START,
     `状态: ${fields.status}`,
     `摘要: ${fields.summary}`,
+    ...(fields.verdict !== undefined ? [`结论: ${fields.verdict}`, `验证提交: ${fields.commit ?? "无"}`] : []),
     `提交: ${fields.commit ?? "无"}`,
     `PR: ${fields.pr ?? "无"}`,
     `测试: ${fields.tests ?? "pnpm test 通过"}`,
@@ -146,6 +148,7 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
   const runWorktreeCreate = async (workerId: WorkerId) => {
     const handler = createWorktreeCreateHandler({
       ledger,
+      observeReview: createReviewObserver({ resolveCommit: (f, r) => resolveCommit(f, r), remoteBranchHead: (r, b) => remoteBranchHead(r, b), probePr: async () => null }),
       addWorktree,
       setup: {
         start: (req) => {
@@ -396,6 +399,7 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
       buildReportBlock({
         status: "做完了",
         summary: "审查通过",
+        verdict: "PASS",
         commit: "a1b2c3d",
         pr: "https://github.com/org/repo/pull/320",
         handoff: "可直接合并",
@@ -683,7 +687,7 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
     enqueued.length = 0;
     runWorkerReportTurn(
       wReview,
-      buildReportBlock({ status: "做完了", summary: "初审完成，等用户对 cursor 范围拍板", commit: "777aaaa", handoff: "初审无阻塞" }),
+      buildReportBlock({ status: "做完了", summary: "初审完成，等用户对 cursor 范围拍板", verdict: "PASS", commit: "777aaaa", handoff: "初审无阻塞" }),
     );
     expect(pmSendActions()).toEqual([]);
     expect(db.get<{ status: string }>("SELECT status FROM workers WHERE id = ?", wReview)?.status).toBe("open");

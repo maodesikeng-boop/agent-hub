@@ -17,6 +17,7 @@ export {
   probeWorktreeForRemoval,
   pruneWorktrees,
   realpathLoose,
+  remoteBranchHead,
   removeWorktree,
   resolveCommit,
 } from "./git.ts";

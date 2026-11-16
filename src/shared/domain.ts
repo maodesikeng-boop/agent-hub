@@ -10,6 +10,7 @@ import {
   MAX_WORKER_TITLE_CHARS,
   PM_MEMORY_INDEX_FILE,
 } from "./limits.ts";
+import type { ReviewTarget } from "./review.ts";
 import type { ScheduleId } from "./schedule.ts";
 import type { AgentVendor } from "./vendors.ts";
 import type { WorkerReportStatus } from "./worker.ts";
@@ -251,7 +252,7 @@ export interface WorkerRecord {
   /** --readonly：Worker 只看不改（统一定义在 readonly-policy.ts，经 LaunchFiles.readonly 交给各家驱动）。打回、重启都沿用。 */
   readonly: boolean;
   workspace: WorkerWorkspace;
-  /** worktree：hub/<编号>-<短名>（worker.ts 的 workerBranchName），派活时就定好；main：null。 */
+  /** worktree：hub/<编号>-<短名>（worker.ts 的 workerBranchName），派活时就定好；审查 Worker（review 有值）和 main：null。 */
   branch: string | null;
   /** worktree：<数据目录>/worktrees/<项目编号>/<编号>（paths.ts 的 workerWorktreePath），派活时就定好；main：null。 */
   worktreePath: string | null;
@@ -262,6 +263,8 @@ export interface WorkerRecord {
    * 目录名是前任的编号。自己新建 worktree 或在主文件夹里干的没有这一项。
    */
   takeoverOf?: WorkerId;
+  /** 任务图审查步骤（review: true）的 Worker 才有：它审的分支和开审时的样子（review.ts），工作目录是 detached 在这条分支上的独立 worktree。 */
+  review?: ReviewTarget;
   status: WorkerStatus;
   createdAt: number;
   updatedAt: number;

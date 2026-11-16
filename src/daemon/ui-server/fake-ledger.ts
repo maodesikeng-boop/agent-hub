@@ -567,6 +567,9 @@ export class FakeLedger {
       onSetupStarted: unused("onSetupStarted"),
       waitsForFirstTurn: unused("waitsForFirstTurn"),
       onWorktreeCreated: unused("onWorktreeCreated"),
+      recordReviewSnapshot: unused("recordReviewSnapshot"),
+      getReviewVerifyTask: unused("getReviewVerifyTask"),
+      onReviewVerified: unused("onReviewVerified"),
       syncPersonaFiles: unused("syncPersonaFiles"),
     };
   }

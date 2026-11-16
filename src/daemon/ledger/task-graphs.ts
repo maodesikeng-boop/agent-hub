@@ -89,6 +89,7 @@ import {
   ROUTER_REPORT_LINK_TARGET_MAX_CHARS,
 } from "../../shared/limits.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
+import { reviewReportProblem, reviewVerifyFailedText, type ReviewTarget, type ReviewVerifyResult } from "../../shared/review.ts";
 import type { RouterReportLink } from "../../shared/router.ts";
 import { checkWorkerMaxTimeMs, parseWorkerMaxTime } from "../../shared/schedule.ts";
 import {
@@ -635,7 +636,9 @@ function unlockedNoteOf(progress: ProgressResult, graph: TaskGraph): string {
 export type StepWorkspacePlan =
   | { kind: "inherit"; fromWorkerId: WorkerId; worktreePath: string; branch: string; baseCommit: string }
   | { kind: "fork"; baseBranch: string }
-  | { kind: "fresh" };
+  | { kind: "fresh" }
+  /** 审查步骤：新开 detached 在被审分支上的独立 worktree，不挂分支（docs/review-verify-only-design.md 第 3.1 节）。 */
+  | { kind: "review"; branch: string; implWorktreePath: string | null };
 
 export interface WorkerBindTarget {
   graphId: TaskGraphId;
@@ -1275,7 +1278,8 @@ export function createLedgerTaskGraphs(
   /**
    * 第 4.4 节分支与工作目录延续规则：
    * - base: "main"、无上游、多个上游（合流） -> fresh（从主文件夹最新提交新开 worktree 和分支）；
-   * - 唯一直接上游（若 skipped 则沿唯一上游链向上追溯）：
+   * - 唯一直接上游（跳过的、审查的步骤不改分支，沿唯一上游链接着往上找）：
+   *   - 自己是审查步骤 -> review（detached 检出上游分支的独立 worktree，不挂分支，见 docs/review-verify-only-design.md）；
    *   - 自己是唯一有效下游且上游有可接手 worktree -> inherit（接手同一个 worktreePath 与 branch，不跑 setup）；
    *   - 上游有多个下游（分叉） -> fork（指定 base 为上游分支最新提交，新开 worktree 和分支）。
    */
@@ -1299,7 +1303,7 @@ export function createLedgerTaskGraphs(
       if ((outgoing.get(uKey)?.length ?? 0) > 1) forked = true;
       const u = byKey.get(uKey);
       if (u === undefined) return { kind: "fresh" };
-      if (u.skipped === 1) {
+      if (u.skipped === 1 || u.review === 1) {
         cur = uKey;
         continue;
       }
@@ -1321,6 +1325,9 @@ export function createLedgerTaskGraphs(
           !w.branch
         ) {
           continue;
+        }
+        if (step.review === 1) {
+          return { kind: "review", branch: w.branch, implWorktreePath: w.worktree_path };
         }
         if (!forked && w.worktree_path && existsSync(w.worktree_path)) {
           const chainWorkerIds = new Set<number>(parseJsonOr<WorkerId[]>(step.worker_ids_json, []));
@@ -3679,13 +3686,14 @@ export function createLedgerTaskGraphs(
    */
   const onWorkerTurnReportIn = (
     p: Pending,
-    worker: { id: WorkerId; branch: string | null },
+    worker: { id: WorkerId; branch: string | null; review: ReviewTarget | null },
     parsed: ParsedWorkerReport,
     rawBody: string,
     forcedNote: string | null,
-    opts?: { hasPendingFollowup?: boolean },
+    opts?: { hasPendingFollowup?: boolean; reviewVerified?: ReviewVerifyResult },
   ):
     | { handled: false }
+    | { handled: true; outcome: "verify" }
     | { handled: true; outcome: "completed"; wakePmWithReport: boolean; completeStep: () => void }
     | { handled: true; outcome: "waiting_user" }
     | { handled: true; outcome: "waiting_pm"; pmDeliverBody: string } => {
@@ -3721,11 +3729,27 @@ export function createLedgerTaskGraphs(
       return { handled: true, outcome: "waiting_user" };
     }
 
+    // 审查步骤（docs/review-verify-only-design.md 第 3.3、3.4 节）：判 FAIL、汇报没写对结论或提交号、收尾核对发现被审分支动过，
+    // 都停在等项目经理处理；判 PASS 且做完了，先登记收尾核对（事务里不做 I/O），核对完再走下面的规则
+    let reviewStop: { label: string; detail: string | null } | null = null;
+    if (node.review === 1 && forcedNote === null && parsed.kind === "ok") {
+      const problem = reviewReportProblem(parsed.report, worker.review);
+      const changed = opts?.reviewVerified?.problems ?? [];
+      if (parsed.report.verdict === "FAIL") reviewStop = { label: "审查判 FAIL", detail: null };
+      else if (problem !== null) reviewStop = { label: problem, detail: null };
+      else if (changed.length > 0) reviewStop = { label: "被审分支在审查期间被动过", detail: reviewVerifyFailedText(changed) };
+    }
+
     const cleanDone =
+      reviewStop === null &&
       forcedNote === null &&
       parsed.kind === "ok" &&
       parsed.report.status === "done" &&
       parsed.report.deviation === null;
+
+    if (cleanDone && node.review === 1 && worker.review?.snapshot != null && opts?.reviewVerified === undefined) {
+      return { handled: true, outcome: "verify" };
+    }
 
     if (cleanDone) {
       // 若当前步骤已挂着一张尚未回答的 `hub ask --node` 用户拍板卡，保留该卡与活跃 Worker，等用户点选后再接着干
@@ -3894,6 +3918,8 @@ export function createLedgerTaskGraphs(
     let reasonLabel: string;
     if (forcedNote !== null) {
       reasonLabel = "这一轮没做完（后台命令中断）";
+    } else if (reviewStop !== null) {
+      reasonLabel = reviewStop.label;
     } else if (parsed.kind !== "ok") {
       reasonLabel = "没按格式";
     } else if (parsed.report.status === "problem") {
@@ -3906,7 +3932,8 @@ export function createLedgerTaskGraphs(
       reasonLabel = "汇报做完了（此步骤标了 confirm 待确认）";
     }
 
-    const detailBody = forcedNote === null ? rawBody : `${forcedNote}\n\n${rawBody}`;
+    const note = forcedNote ?? reviewStop?.detail ?? null;
+    const detailBody = note === null ? rawBody : `${note}\n\n${rawBody}`;
     return {
       handled: true,
       outcome: "waiting_pm",
