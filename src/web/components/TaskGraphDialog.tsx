@@ -31,6 +31,10 @@ function readRootFontSizePx(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_ROOT_FONT_SIZE_PX;
 }
 
+function readCoarsePointer(): boolean {
+  return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches;
+}
+
 /** 四个状态的英文状态词（docs/ui-standard.md 第 3 条的词表）：等人按等谁分开，完了按是不是跳过的分开。 */
 function statusLabelOf(node: TaskNode): string {
   switch (node.status) {
@@ -86,6 +90,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
   }, [graph]);
 
   const rootFontSizePx = open ? readRootFontSizePx() : DEFAULT_ROOT_FONT_SIZE_PX;
+  const coarsePointer = open && readCoarsePointer();
 
   const layout = useMemo(() => {
     if (graph === null) return null;
@@ -102,17 +107,22 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
           position: n.sortOrder,
           optionCount: n.gateOptions.length,
           hasSummary: Boolean(n.gateSummaryMd || n.artifact?.summary || n.decision),
+          hasQuestion: n.gateQuestion !== null && n.gateQuestion.trim() !== "" && n.gateQuestion !== n.title,
           noteExpanded: Boolean(
             expandedNotes[n.key] ||
               (activeWaitingUser && (n.gateCheckpoint || n.gateOptions.length === 0)),
           ),
+          ...(activeWaitingUser && n.userBlocker == null && n.artifact?.deliverables !== undefined
+            ? { deliverables: n.artifact.deliverables }
+            : {}),
         };
       }),
       edges: graph.edges.map((e) => ({ from: e.fromKey, to: e.toKey })),
       viewportMode: "dialog",
       rootFontSizePx,
+      coarsePointer,
     });
-  }, [graph, expandedNotes, rootFontSizePx]);
+  }, [graph, expandedNotes, rootFontSizePx, coarsePointer]);
 
   const skipMutation = useMutation(
     {

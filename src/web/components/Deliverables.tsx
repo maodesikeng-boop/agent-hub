@@ -1,8 +1,9 @@
 // 卡片正文和下面的交付物（shared/deliverables.ts）：对话里的提问卡、右栏的提问和门禁卡、总助的拍板卡和简报都用这里的 CardBody，
 // 顺序都是摘要 → 文件 → 细节（默认收起），界面规则见 docs/ui-standard.md 第 22 条。
 import { FileText, Play } from "lucide-react";
-import { memo, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { FILE_EXPIRED_TEXT, groupDeliverables, previewKindOf, sentFilesOfDeliverables, sentFileUrl, splitLead, type Deliverable, type SentFile } from "../../shared/index.ts";
+import { DELIVERABLE_MEDIA_HEIGHT_REM } from "../deliverable-size.ts";
 import { useClient } from "../device-scope.tsx";
 import { cn } from "../lib/utils.ts";
 import { FileCard, useFileExpired } from "./Attachments.tsx";
@@ -38,12 +39,12 @@ function DocumentLink({ item }: { item: Deliverable }) {
   );
 }
 
-/** 图片、视频的缩略图：固定 96px 高，视频取第一帧盖播放键、不自动播；副本被清理了换成“文件已过期”的卡片。 */
+/** 图片、视频的缩略图：固定高度（`--deliverable-media-height`，96px 标准档，数在 deliverable-size.ts），视频取第一帧盖播放键、不自动播；副本被清理了换成“文件已过期”的卡片。 */
 function MediaThumb({ item }: { item: Deliverable }) {
   const [open, setOpen] = useState(false);
   const preview = usePreview(item);
   const [expired, markExpired] = useFileExpired(preview.url, false);
-  if (expired) return <FileCard name={item.label} mime={item.mime} detail={FILE_EXPIRED_TEXT} className="h-24 shrink-0" />;
+  if (expired) return <FileCard name={item.label} mime={item.mime} detail={FILE_EXPIRED_TEXT} className="h-(--deliverable-media-height) shrink-0" />;
   const video = previewKindOf(item.name, item.mime) === "video";
   return (
     <>
@@ -52,15 +53,15 @@ function MediaThumb({ item }: { item: Deliverable }) {
         aria-label={item.label}
         onClick={() => setOpen(true)}
         className={cn(
-          "relative h-24 shrink-0 overflow-hidden rounded-xl border border-border bg-muted outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+          "relative h-(--deliverable-media-height) shrink-0 overflow-hidden rounded-xl border border-border bg-muted outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
           video ? "cursor-pointer" : "cursor-zoom-in",
         )}
       >
         {video ? (
           // #t=0.1：iOS Safari 只预载元数据时不画画面，带上起点才显示第一帧
-          <video src={`${preview.url}#t=0.1`} preload="metadata" muted playsInline onError={markExpired} className="block aspect-video h-24 w-auto max-w-40 object-cover" />
+          <video src={`${preview.url}#t=0.1`} preload="metadata" muted playsInline onError={markExpired} className="block aspect-video h-(--deliverable-media-height) w-auto max-w-40 object-cover" />
         ) : (
-          <img src={preview.url} alt={item.label} loading="lazy" onError={markExpired} className="block h-24 w-auto max-w-40 object-cover" />
+          <img src={preview.url} alt={item.label} loading="lazy" onError={markExpired} className="block h-(--deliverable-media-height) w-auto max-w-40 object-cover" />
         )}
         {video && (
           <span data-play-badge className="absolute inset-0 m-auto flex size-9 items-center justify-center rounded-full bg-black/55 text-white">
@@ -83,7 +84,11 @@ export const DeliverableFiles = memo(function DeliverableFiles({ deliverables, c
   if (deliverables.length === 0) return null;
   const { documents, media } = groupDeliverables(deliverables);
   return (
-    <div data-deliverables className={cn("flex min-w-0 flex-col gap-2", className)}>
+    <div
+      data-deliverables
+      style={{ "--deliverable-media-height": `${DELIVERABLE_MEDIA_HEIGHT_REM}rem` } as CSSProperties}
+      className={cn("flex min-w-0 flex-col gap-2", className)}
+    >
       {documents.length > 0 && (
         <div data-deliverable-documents className="flex flex-wrap items-center gap-x-3 gap-y-1 text-minor">
           {documents.map((item) => (

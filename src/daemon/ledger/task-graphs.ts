@@ -100,7 +100,7 @@ import type { RouterReportLink } from "../../shared/router.ts";
 import type { SentFile } from "../../shared/sent-files.ts";
 import { graphDeliverables, mergeDeliverables, type HubFileArg } from "../../shared/deliverables.ts";
 import { stepDeliverablesOfReport } from "../deliverables.ts";
-import { UserBlockedError, type UserBlocker, type UserBlockerId } from "../../shared/user-blockers.ts";
+import { UserBlockedError, userBlockerText, type UserBlocker, type UserBlockerId } from "../../shared/user-blockers.ts";
 import { checkWorkerMaxTimeMs, parseWorkerMaxTime } from "../../shared/schedule.ts";
 import {
   AGENT_VENDORS,
@@ -2125,6 +2125,13 @@ export function createLedgerTaskGraphs(
     );
     if (node === undefined) throw fail("not_found", `任务图 #${graphRow.id} 中没有节点「${nodeKey}」`);
     if (node.status === "done") throw fail("conflict", `步骤「${nodeKey}」已经完了，不能再挂拍板卡`);
+    const blocker = blockersOf([node]).get(node.id);
+    if (blocker !== undefined) {
+      throw fail(
+        "conflict",
+        `步骤「${nodeKey}」在等用户处理：${userBlockerText(blocker)}。系统已经挂了提醒卡，用户点 Done 后自动接着派，现在挂拍板卡用户点不了。要问用户别的事，用不带 --node 的 hub ask`,
+      );
+    }
 
     const { question, summaryMd } = splitAskTextForGate(args.text);
     const gate = validateGateFields({

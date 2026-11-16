@@ -269,7 +269,7 @@ export function GateDecisionCard({
       data-testid="peel-gate-card"
       className={cn("rounded-2xl border border-primary bg-jelly px-3.5 py-3", className)}
     >
-      {showQuestion && <p className="mb-1 text-minor font-medium text-foreground">{node.gateQuestion}</p>}
+      {showQuestion && <p className="mb-1 text-minor font-medium wrap-anywhere text-foreground">{node.gateQuestion}</p>}
       <CardBody
         text={node.gateSummaryMd ?? ""}
         deliverables={node.artifact?.deliverables}
@@ -277,7 +277,7 @@ export function GateDecisionCard({
         textClassName="text-minor leading-relaxed text-foreground"
       />
       {hasOptions && (
-        <div className="grid gap-2">
+        <div className="grid grid-cols-1 gap-2">
           {node.gateOptions.map((opt) => {
             const isRec = node.gateRecommended !== null && opt === node.gateRecommended;
             return (
@@ -293,7 +293,7 @@ export function GateDecisionCard({
                     : "border border-border bg-background text-foreground hover:bg-jelly-hover",
                 )}
               >
-                <span className="min-w-0 flex-1">{opt}</span>
+                <span className="min-w-0 flex-1 wrap-anywhere">{opt}</span>
                 {isRec && <span className="shrink-0 text-xs font-normal opacity-90">Recommended</span>}
               </button>
             );
