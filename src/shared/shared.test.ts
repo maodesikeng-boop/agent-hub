@@ -950,23 +950,21 @@ describe("hub ask 选项卡片（askOf、validateAskOptions、extractAskCard）"
       answered: false,
     });
 
-    // 纯文本提问、只有 1 项列表、列表后还有段落、非 ask 消息 → null
-    expect(extractAskCard({ sender: "agent", meta: { needsUser: true }, text: "再问一个" })).toBeNull();
-    expect(extractAskCard({ sender: "agent", meta: { needsUser: true }, text: "问题\n- 只有一项" })).toBeNull();
-    expect(extractAskCard({ sender: "agent", meta: { needsUser: true }, text: "问题\n- 选项一\n- 选项二\n\n补充说明" })).toBeNull();
+    // 每张提问都是一张卡：没认出选项的（纯文本、只有 1 项、列表后还有段落、普通列表）options 为空，问题是全文；不是提问 → null
+    const plain = (text: string) => ({ question: text, options: [], answered: false });
+    expect(extractAskCard({ sender: "agent", meta: { needsUser: true }, text: "再问一个" })).toEqual(plain("再问一个"));
+    expect(extractAskCard({ sender: "agent", meta: { needsUser: true }, text: "问题\n- 只有一项" })).toEqual(plain("问题\n- 只有一项"));
+    expect(extractAskCard({ sender: "agent", meta: { needsUser: true }, text: "问题\n- 选项一\n- 选项二\n\n补充说明" })).toEqual(
+      plain("问题\n- 选项一\n- 选项二\n\n补充说明"),
+    );
     expect(extractAskCard({ sender: "agent", meta: null, text: "问题\n- 选项一\n- 选项二" })).toBeNull();
     // 普通列表（没有 A/B 前缀）只是列出几项请用户确认，不当单选题
-    expect(extractAskCard({ sender: "agent", meta: { needsUser: true }, text: "问题\n- 选项一\n- 选项二" })).toBeNull();
-    expect(extractAskCard({ sender: "agent", meta: { needsUser: true }, text: "问题\n1. 选项一\n2. 选项二" })).toBeNull();
-    expect(
-      extractAskCard({
-        sender: "agent",
-        meta: { needsUser: true },
-        text: "准备部署 LibreTV，请确认以下配置：\n- **代码存放目录**: 默认 `~/LibreTV`\n- **部署方式**: 默认 **Docker Compose**\n- **访问密码 (`PASSWORD`)**: 默认设为 `libretv`",
-      }),
-    ).toBeNull();
-    // 字母不从 A 开始或不连续 → null
-    expect(extractAskCard({ sender: "agent", meta: { needsUser: true }, text: "问题\n- B. 一\n- C. 二" })).toBeNull();
+    expect(extractAskCard({ sender: "agent", meta: { needsUser: true }, text: "问题\n- 选项一\n- 选项二" })).toEqual(plain("问题\n- 选项一\n- 选项二"));
+    expect(extractAskCard({ sender: "agent", meta: { needsUser: true }, text: "问题\n1. 选项一\n2. 选项二" })).toEqual(plain("问题\n1. 选项一\n2. 选项二"));
+    const libre = "准备部署 LibreTV，请确认以下配置：\n- **代码存放目录**: 默认 `~/LibreTV`\n- **部署方式**: 默认 **Docker Compose**\n- **访问密码 (`PASSWORD`)**: 默认设为 `libretv`";
+    expect(extractAskCard({ sender: "agent", meta: { needsUser: true }, text: libre })).toEqual(plain(libre));
+    // 字母不从 A 开始或不连续 → 不认作选项
+    expect(extractAskCard({ sender: "agent", meta: { needsUser: true }, text: "问题\n- B. 一\n- C. 二" })).toEqual(plain("问题\n- B. 一\n- C. 二"));
     // 不带列表符号的 A. / B. 行也算
     expect(extractAskCard({ sender: "agent", meta: { needsUser: true }, text: "问题\nA. 一\nB. 二" })).toEqual({
       question: "问题",

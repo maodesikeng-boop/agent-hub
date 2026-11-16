@@ -328,8 +328,38 @@ describe("对话流里的 A/B/C/D 选项卡片", () => {
     ]);
 
     const msg3 = document.querySelector('[data-message-id="3"]') as HTMLElement;
-    expect(msg3.querySelector("[data-ask-card]")).toBeNull();
-    expect(within(msg3).getByText("纯文本提问，没有选项")).toBeInTheDocument();
+    const card3 = msg3.querySelector("[data-ask-card]") as HTMLElement;
+    expect(card3).toBeInTheDocument();
+    expect(within(card3).getByText("纯文本提问，没有选项")).toBeInTheDocument();
+    expect(within(card3).queryAllByRole("button").filter((b) => b.hasAttribute("data-ask-option"))).toEqual([]);
+  });
+
+  it("没有选项的独立提问也是一张卡：补充框直接展开，填一句回车只回答这一张；回答后卡变只读", async () => {
+    await boot(twoPms([ask({ id: 3, text: "纯文本提问，没有选项" }), ask({ id: 4, text: "请接电源", meta: { needsUser: true, options: ["已接", "不接"] } })]));
+    const card = document.querySelector('[data-message-id="3"] [data-ask-card]') as HTMLElement;
+    const input = within(card).getByRole("textbox", { name: "Add note" });
+    fireEvent.change(input, { target: { value: "按第二种来" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() =>
+      expect(api.calls.filter((c) => c.path === "/api/asks/3/answer")).toEqual([
+        expect.objectContaining({ method: "POST", body: expect.objectContaining({ note: "按第二种来" }) }),
+      ]),
+    );
+    expect(api.calls.filter((c) => c.path === "/api/conversations/1/messages")).toEqual([]);
+    await waitFor(() => expect(within(card).queryByRole("textbox", { name: "Add note" })).toBeNull());
+    const other = document.querySelector('[data-message-id="4"] [data-ask-card]') as HTMLElement;
+    for (const b of within(other).getAllByRole("button").filter((x) => x.hasAttribute("data-ask-option"))) expect(b).not.toBeDisabled();
+  });
+
+  it("补充框和同排的 Send 按钮同一档高度（36px），输入框是 15px 正文字号（docs/ui-standard.md 第 3、6 条）", async () => {
+    await boot(twoPms([ask({ id: 3, text: "纯文本提问，没有选项" })]));
+    const card = document.querySelector('[data-message-id="3"] [data-ask-card]') as HTMLElement;
+    const input = within(card).getByRole("textbox", { name: "Add note" });
+    const send = within(card).getByRole("button", { name: "Send" });
+    expect(input).toHaveClass("h-9", "text-body");
+    expect(input).not.toHaveClass("text-minor");
+    expect(send).toHaveClass("h-9");
+    expect(send).not.toHaveClass("h-8");
   });
 
   it("点击某个选项按钮只回答这一张卡（POST /api/asks/:id/answer），不发用户消息；回答后选项按钮变为 disabled 并高亮所选项", async () => {

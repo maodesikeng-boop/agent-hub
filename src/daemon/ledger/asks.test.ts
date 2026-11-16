@@ -8,6 +8,7 @@ import type { Change } from "../../shared/api.ts";
 import { askOf } from "../../shared/domain.ts";
 import { ASK_CARD_TELL_USER, ASK_CARD_WHERE } from "../../shared/hub.ts";
 import type { ConversationId, MessageId, PmId, SessionId } from "../../shared/domain.ts";
+import { ASK_MAX_OPTION_CHARS } from "../../shared/limits.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import { REPORT_END, REPORT_START } from "../../shared/worker.ts";
 import { openDatabase } from "../store/db.ts";
@@ -104,6 +105,14 @@ describe("一张卡只在用户回答这张卡时关掉", () => {
     expect(ledger.answerAsk(a, { clientId: "same", note: "好" }).item.id).toBe(first.item.id);
     expect([statusOf(a), statusOf(b)]).toEqual(["resolved", "pending"]);
     expect(() => ledger.answerAsk(a, { clientId: "other", note: "又答" })).toThrow(/已经被处理过/);
+  });
+
+  it("选项最长到 hub ask 允许的上限：在卡上点它照样只回答这一张，记下的是完整选项", () => {
+    const long = "甲".repeat(ASK_MAX_OPTION_CHARS);
+    const id = ledger.hubCall(lin.sessionId, "ask", { text: "选哪个？", options: [long, "乙"] }).data.messageId;
+    ledger.answerAsk(id, { clientId: "click-long", choice: long });
+    expect(statusOf(id)).toBe("resolved");
+    expect(askOf(ledger.getMessage(id)!)?.chosenOption).toBe(long);
   });
 
   it("没有这张卡：报 not_found", () => {
