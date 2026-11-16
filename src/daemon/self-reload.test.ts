@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LedgerRequestError, SELF_RELOAD_QUIET_MS, SELF_RELOAD_RECHECK_MS } from "../shared/index.ts";
+import { LedgerRequestError, SELF_RELOAD_DRAIN_MAX_MS, SELF_RELOAD_QUIET_MS, SELF_RELOAD_RECHECK_MS } from "../shared/index.ts";
 import { createBusySessions, createSelfReload, createStagedWebBuild, type BuildOutcome, type SelfReloadOptions } from "./self-reload.ts";
 
 /** 可控的“全库忙不忙”和账本变化。 */
@@ -58,6 +58,23 @@ describe("空闲排空热重启（createSelfReload）", () => {
     vi.advanceTimersByTime(10 * SELF_RELOAD_RECHECK_MS);
     expect(h.restart).toHaveBeenCalledTimes(1);
     expect(() => h.reload.request({ build: false, by: "x" })).toThrow(LedgerRequestError);
+  });
+
+  it("一直有会话在忙（全库空闲一直不出现）：登记后最多等 SELF_RELOAD_DRAIN_MAX_MS，到点照常重启，只重启一次", () => {
+    const h = harness();
+    h.setBusy(["3 个会话还在跑"], false);
+    h.reload.request({ build: false, by: "项目经理会话 1" });
+    // 轮次此起彼伏：每隔一会儿账本推一次变化，始终有人在忙
+    for (let t = 0; t < SELF_RELOAD_DRAIN_MAX_MS - SELF_RELOAD_RECHECK_MS; t += SELF_RELOAD_RECHECK_MS) {
+      h.setBusy(["3 个会话还在跑"]);
+      vi.advanceTimersByTime(SELF_RELOAD_RECHECK_MS);
+    }
+    expect(h.restart).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(SELF_RELOAD_RECHECK_MS);
+    expect(h.restart).toHaveBeenCalledTimes(1);
+    expect(h.reload.status().state).toBe("restarting");
+    vi.advanceTimersByTime(SELF_RELOAD_DRAIN_MAX_MS);
+    expect(h.restart).toHaveBeenCalledTimes(1);
   });
 
   it("静默窗口里又有新轮次启动：顺延，重新等空闲再完整静默一次", () => {
