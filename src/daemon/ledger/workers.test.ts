@@ -554,8 +554,8 @@ describe("建 worktree（worktree.create 处理函数用）", () => {
       workerId: worker.id,
       sessionId: workerSessionId(worker.id),
       repo: main,
-      branch: worker.branch,
       worktreePath: worker.worktreePath,
+      checkout: { kind: "branch", branch: worker.branch },
       status: "open",
       setupCommand: null,
     });
@@ -793,6 +793,29 @@ describe("出错、停止", () => {
     expect(enqueued.map((a) => [a.type, a.params])).toEqual([
       ["session.send", { sessionId: lin.sessionId, messageId: delivered, source: "system", resend: true, recovery: true }],
     ]);
+  });
+
+  it("turnsLostOnShutdown（热重启过了上限只等这些）：只列正在回用户消息的项目经理会话；Worker 的轮次、交给项目经理的汇报重启后会重发，不列", () => {
+    const workerSession = workerSessionId(worker.id);
+    const task = taskMessage(worker).id;
+    ledger.applyDriverEvent(workerSession, { type: "message.delivered", messageIds: [task], at: now });
+    ledger.applyDriverEvent(workerSession, { type: "message.processing", messageIds: [task], at: now });
+    expect(ledger.turnsLostOnShutdown()).toEqual([]);
+
+    runTurn(worker, [task], report("做完了", "好了"));
+    const line = workerLines().at(-1)!.id;
+    ledger.applyDriverEvent(lin.sessionId, { type: "message.delivered", messageIds: [line], at: now });
+    ledger.applyDriverEvent(lin.sessionId, { type: "message.processing", messageIds: [line], at: now });
+    expect(ledger.turnsLostOnShutdown()).toEqual([]);
+    ledger.applyDriverEvent(lin.sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [line], durationMs: 1, at: now });
+
+    const user = ledger.postUserMessage({ conversationId: lin.conversationId, clientId: "lost-1", text: "在吗" }).messageId;
+    ledger.applyDriverEvent(lin.sessionId, { type: "message.delivered", messageIds: [user], at: now });
+    expect(ledger.turnsLostOnShutdown()).toEqual([{ sessionId: lin.sessionId, role: "pm" }]);
+    ledger.applyDriverEvent(lin.sessionId, { type: "message.processing", messageIds: [user], at: now });
+    expect(ledger.turnsLostOnShutdown()).toEqual([{ sessionId: lin.sessionId, role: "pm" }]);
+    ledger.applyDriverEvent(lin.sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [user], durationMs: 1, at: now });
+    expect(ledger.turnsLostOnShutdown()).toEqual([]);
   });
 
   it("项目经理的会话关机时没等到 result 就退出（session.exited shutdown）：同样只留下交给它的汇报", () => {

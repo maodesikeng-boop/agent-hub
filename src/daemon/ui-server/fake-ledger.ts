@@ -537,6 +537,7 @@ export class FakeLedger {
       onActionEnqueued: unused("onActionEnqueued"),
       applyDriverEvent: unused("applyDriverEvent"),
       refreshSessionState: unused("refreshSessionState"),
+      turnsLostOnShutdown: unused("turnsLostOnShutdown"),
       recoverAfterRestart: unused("recoverAfterRestart"),
       createPm: (i) => this.createPm(i),
       archivePm: (p) => this.archivePm(p),
@@ -605,6 +606,9 @@ export class FakeLedger {
       onSetupStarted: unused("onSetupStarted"),
       waitsForFirstTurn: unused("waitsForFirstTurn"),
       onWorktreeCreated: unused("onWorktreeCreated"),
+      recordReviewSnapshot: unused("recordReviewSnapshot"),
+      getReviewVerifyTask: unused("getReviewVerifyTask"),
+      onReviewVerified: unused("onReviewVerified"),
       syncPersonaFiles: unused("syncPersonaFiles"),
     };
   }

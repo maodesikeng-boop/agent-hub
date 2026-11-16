@@ -1,4 +1,4 @@
--- 0028_user_blockers：要用户本人动手才解得开的阻塞（docs/user-blockers-design.md）。
+-- 0029_user_blockers：要用户本人动手才解得开的阻塞（docs/user-blockers-design.md）。
 -- 同一家厂商在这台设备上只有一条在等；被卡住的步骤记在 user_blocker_steps，起不来的 Worker 连同没送进去的消息记在 user_blocker_workers。
 -- 不改 task_graph_steps 的列；要能从 user_version = 8 起重跑，表、索引、触发器都带 IF NOT EXISTS
 -- （0026 重跑会重建 task_graph_steps、连带删掉它上面的触发器，这里重跑时再建回来）。

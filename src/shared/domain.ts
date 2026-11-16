@@ -10,6 +10,7 @@ import {
   MAX_WORKER_TITLE_CHARS,
   PM_MEMORY_INDEX_FILE,
 } from "./limits.ts";
+import type { ReviewTarget, ReviewVerdict } from "./review.ts";
 import type { ScheduleId } from "./schedule.ts";
 import type { UserBlocker, UserBlockerId } from "./user-blockers.ts";
 import type { AgentVendor } from "./vendors.ts";
@@ -252,7 +253,7 @@ export interface WorkerRecord {
   /** --readonly：Worker 只看不改（统一定义在 readonly-policy.ts，经 LaunchFiles.readonly 交给各家驱动）。打回、重启都沿用。 */
   readonly: boolean;
   workspace: WorkerWorkspace;
-  /** worktree：hub/<编号>-<短名>（worker.ts 的 workerBranchName），派活时就定好；main：null。 */
+  /** worktree：hub/<编号>-<短名>（worker.ts 的 workerBranchName），派活时就定好；审查 Worker（review 有值）和 main：null。 */
   branch: string | null;
   /** worktree：<数据目录>/worktrees/<项目编号>/<编号>（paths.ts 的 workerWorktreePath），派活时就定好；main：null。 */
   worktreePath: string | null;
@@ -263,6 +264,8 @@ export interface WorkerRecord {
    * 目录名是前任的编号。自己新建 worktree 或在主文件夹里干的没有这一项。
    */
   takeoverOf?: WorkerId;
+  /** 任务图审查步骤（review: true）的 Worker 才有：它审的分支和开审时的样子（review.ts），工作目录是 detached 在这条分支上的独立 worktree。 */
+  review?: ReviewTarget;
   status: WorkerStatus;
   createdAt: number;
   updatedAt: number;
@@ -466,8 +469,9 @@ export const CONFIRM_CHECKPOINT_OPTIONS = [CONFIRM_PASS_OPTION, CONFIRM_REJECT_O
 
 /**
  * `hub ask`（普通提问、操作提醒、`--node` 步骤拍板卡与 `confirm` 检查点卡）发的那条项目经理消息的 meta：
- * needsUser 是“等你确定”的标记；answered 是这张卡被处理了——普通提问在用户回答这张卡（卡上点选、填写，或右栏 Router 拍板）、
+ * needsUser 是“等你确定”的标记；answered 是这张卡了结了——普通提问在用户回答这张卡（卡上点选、填写，或总助工作台拍板）、
  * 项目经理 hub ask close / --replace 时标上，用户在对话里发的普通消息不标；带 gateRef 的门禁消息须经门禁 decide 解锁才标上。
+ * 用户回答的记下 chosenOption 和原话 answerNote；被项目经理关掉、替换、收回的标 closed（见 ledger/messages.ts 的 settleAskIn）。
  */
 export type AskMeta = {
   needsUser: true;
@@ -478,6 +482,8 @@ export type AskMeta = {
   /** 系统挂的“要你动手”的提醒卡（docs/user-blockers-design.md）：点 Done 重查这条阻塞，不归项目经理关。 */
   blockerRef?: BlockerRef;
   chosenOption?: string;
+  answerNote?: string;
+  closed?: true;
 };
 
 export interface BlockerRef {
@@ -515,6 +521,7 @@ export function askOf(message: Pick<Message, "sender" | "meta">): AskMeta | null
       ? { blockerId: rawBlockerRef.blockerId }
       : undefined;
   const chosenOption = typeof message.meta.chosenOption === "string" ? message.meta.chosenOption : undefined;
+  const answerNote = typeof message.meta.answerNote === "string" && message.meta.answerNote !== "" ? message.meta.answerNote : undefined;
   return {
     needsUser: true,
     ...(answered ? { answered: true } : {}),
@@ -523,6 +530,8 @@ export function askOf(message: Pick<Message, "sender" | "meta">): AskMeta | null
     ...(gateRef !== undefined ? { gateRef } : {}),
     ...(blockerRef !== undefined ? { blockerRef } : {}),
     ...(chosenOption !== undefined ? { chosenOption } : {}),
+    ...(answerNote !== undefined ? { answerNote } : {}),
+    ...(message.meta.closed === true ? { closed: true } : {}),
   };
 }
 
@@ -570,40 +579,12 @@ function stripSequentialLetterPrefixes(items: readonly string[]): string[] | nul
 }
 
 /**
- * 提取 `hub ask` 可点击选项卡片的数据：
- * 1. 先调 `askOf(message)`，若为 null 则返回 null；
- * 2. 若 `ask.options` 存在且长度 ≥ 2：返回 `{ question: message.text.trim(), options: ask.options, answered: ask.answered === true }`；
- * 3. 若未显式传 `options`：开头一段非空问题文本 + 紧接着的 2～10 行单行选项，每行都必须显式以顺序字母
- *    `A. `/`A：`/`A: ` 开头（可带 `- `/`1. ` 列表前缀），后面没有其他正文段落，去掉字母前缀作为选项；
- *    普通 `- xxx`/`1. xxx` 列表（如列出几项配置请用户确认）不是单选题，返回 null，走普通 Markdown 渲染；
- * 4. 其他纯文本提问返回 null。
+ * 正文是“一段问题 + 紧接着 2～10 行单行选项”时拆出问题和选项：每行都显式以顺序字母 `A. `/`A：`/`A: ` 开头
+ * （可带 `- `/`1. ` 列表前缀），后面没有其他正文段落，去掉字母前缀作为选项；普通 `- xxx`/`1. xxx` 列表
+ * （如列出几项配置请用户确认）不是单选题，返回 null。
  */
-export interface ExtractedAskCard {
-  question: string;
-  options: string[];
-  answered: boolean;
-  recommended?: string;
-  chosenOption?: string;
-  gateRef?: GateRef;
-}
-
-export function extractAskCard(
-  message: Pick<Message, "sender" | "meta" | "text">,
-): ExtractedAskCard | null {
-  const ask = askOf(message);
-  if (ask === null || ask.blockerRef !== undefined) return null;
-  const answered = ask.answered === true;
-  const extras = {
-    ...(ask.recommended !== undefined ? { recommended: ask.recommended } : {}),
-    ...(ask.chosenOption !== undefined ? { chosenOption: ask.chosenOption } : {}),
-    ...(ask.gateRef !== undefined ? { gateRef: ask.gateRef } : {}),
-  };
-  if (ask.options !== undefined && ask.options.length >= ASK_MIN_OPTIONS) {
-    return { question: message.text.trim(), options: ask.options, answered, ...extras };
-  }
-  const trimmed = message.text.trim();
-  if (trimmed === "") return null;
-  const lines = trimmed.split(/\r?\n/);
+function letteredOptionsOf(text: string): { question: string; options: string[] } | null {
+  const lines = text.split(/\r?\n/);
   const firstListIdx = lines.findIndex((line) => ASK_LIST_ITEM_RE.test(line.trim()));
   if (firstListIdx <= 0) return null;
 
@@ -627,8 +608,43 @@ export function extractAskCard(
     rawItems.push(item);
   }
   const options = stripSequentialLetterPrefixes(rawItems);
-  if (options === null) return null;
-  return { question, options, answered, ...extras };
+  return options === null ? null : { question, options };
+}
+
+export interface ExtractedAskCard {
+  question: string;
+  options: string[];
+  answered: boolean;
+  recommended?: string;
+  chosenOption?: string;
+  answerNote?: string;
+  closed?: true;
+  gateRef?: GateRef;
+}
+
+/**
+ * `hub ask` 在对话里那张卡的数据，不是提问返回 null。选项取显式的 `meta.options`，没有就从正文拆
+ * （见 letteredOptionsOf），都没有时 options 为空、问题是全文。
+ */
+export function extractAskCard(
+  message: Pick<Message, "sender" | "meta" | "text">,
+): ExtractedAskCard | null {
+  const ask = askOf(message);
+  if (ask === null || ask.blockerRef !== undefined) return null;
+  const answered = ask.answered === true;
+  const extras = {
+    ...(ask.recommended !== undefined ? { recommended: ask.recommended } : {}),
+    ...(ask.chosenOption !== undefined ? { chosenOption: ask.chosenOption } : {}),
+    ...(ask.answerNote !== undefined ? { answerNote: ask.answerNote } : {}),
+    ...(ask.closed === true ? { closed: true as const } : {}),
+    ...(ask.gateRef !== undefined ? { gateRef: ask.gateRef } : {}),
+  };
+  const trimmed = message.text.trim();
+  if (ask.options !== undefined && ask.options.length >= ASK_MIN_OPTIONS) {
+    return { question: trimmed, options: ask.options, answered, ...extras };
+  }
+  const lettered = letteredOptionsOf(trimmed) ?? { question: trimmed, options: [] };
+  return { ...lettered, answered, ...extras };
 }
 
 /** 发给 agent 的系统消息的开头（设计第 7.3 节的来源标签）。 */
@@ -1095,6 +1111,9 @@ export interface TaskArtifact {
   commit?: string;
   branch?: string;
   summary?: string;
+  /** 审查步骤汇报的“结论”和“验证提交”（shared/review.ts）。 */
+  reviewVerdict?: ReviewVerdict;
+  verifiedCommit?: string;
 }
 
 export interface TaskDecision {
@@ -1122,7 +1141,8 @@ export interface TaskNode {
   maxTimeMs?: number | null;
   confirm?: boolean;
   review?: boolean;
-  base?: "main" | null;
+  /** 普通步骤只能是 "main"；审查步骤是被审分支（不写是唯一上一步的分支）。 */
+  base?: string | null;
   status: TaskNodeStatus;
   /** 等谁：只在 status 是 waiting 时有。 */
   waitingFor: TaskNodeWaitingFor | null;

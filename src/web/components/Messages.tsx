@@ -15,6 +15,7 @@ import {
   Info,
   Loader2,
   MessageSquare,
+  PencilLine,
   RefreshCw,
   UserPen,
   type LucideIcon,
@@ -155,7 +156,7 @@ function splitAskQuestionAndContext(raw: string): { title: string; context: stri
   return { title: match[1]!.trim(), context: rest === "" ? null : rest };
 }
 
-/** `hub ask` 带选项时的可点击 A/B/C/D 选项卡片（docs/ui-standard.md 第 17 条）。 */
+/** `hub ask` 在对话里的那张卡：有选项时是可点的 A/B/C/D 行，没有时直接展开补充框（docs/ui-standard.md 第 17 条）。 */
 function AskCard({
   card,
   files,
@@ -171,7 +172,7 @@ function AskCard({
   const qc = useHubQueryClient();
   const gateRef = card.gateRef;
   const hasOptions = card.options.length > 0;
-  const [chosen, setChosen] = useState<string | null>(null);
+  const [submitted, setSubmitted] = useState<{ chosenOption?: string; note?: string } | null>(null);
   const [noteOpen, setNoteOpen] = useState(!hasOptions || Boolean(gateRef?.checkpoint));
   const [note, setNote] = useState("");
   const [err, setErr] = useState<ErrorLike | null>(null);
@@ -189,7 +190,8 @@ function AskCard({
       onMutate: () => setErr(null),
       onSuccess: (_data, vars) => {
         clientIdRef.current = null;
-        setChosen(vars.choice ?? (gateRef?.checkpoint ? CONFIRM_REJECT_OPTION : (vars.note ?? "")));
+        const chosenOption = vars.choice ?? (gateRef?.checkpoint ? CONFIRM_REJECT_OPTION : null);
+        setSubmitted({ ...(chosenOption !== null ? { chosenOption } : {}), ...(vars.note !== null ? { note: vars.note } : {}) });
         setNote("");
       },
       onError: (error) => {
@@ -210,8 +212,9 @@ function AskCard({
     decideMutation.mutate({ choice, note: trimmed === "" ? null : trimmed });
   };
 
-  const effectiveChosen = card.chosenOption ?? chosen;
-  const answered = card.answered || chosen !== null;
+  const effectiveChosen = card.chosenOption ?? submitted?.chosenOption;
+  const answerNote = card.answerNote ?? submitted?.note;
+  const answered = card.answered || submitted !== null;
   const disabled = answered || (gateRef === undefined && !onAnswerAsk) || decideMutation.isPending;
   const { title: cardTitle, context: cardContext } = useMemo(
     () => splitAskQuestionAndContext(card.question),
@@ -228,7 +231,7 @@ function AskCard({
           <Markdown text={cardContext} files={files} messageId={messageId} />
         </div>
       )}
-      {hasOptions && (
+      {(hasOptions || answerNote !== undefined) && (
         <div className="mt-3 flex flex-col gap-1.5" role="group" aria-label="Options">
           {card.options.map((opt, i) => {
             const isChosen = effectiveChosen === opt;
@@ -260,8 +263,17 @@ function AskCard({
               </button>
             );
           })}
+          {answerNote !== undefined && (
+            <div data-ask-answer className="flex w-full items-center gap-3 rounded-xl bg-sidebar-active px-3 py-2">
+              <span className="flex size-6 shrink-0 items-center justify-center rounded-xl border border-border bg-sidebar text-muted-foreground">
+                <PencilLine className="size-3.5" aria-hidden="true" />
+              </span>
+              <span className="min-w-0 flex-1 text-body whitespace-pre-wrap [overflow-wrap:anywhere]">{answerNote}</span>
+            </div>
+          )}
         </div>
       )}
+      {card.closed && <p className="mt-2 text-minor text-muted-foreground">Closed</p>}
       {!answered && (
         !noteOpen && hasOptions ? (
           <button
@@ -279,7 +291,7 @@ function AskCard({
               onChange={(e) => setNote(e.target.value)}
               placeholder="Add a note, or type a custom reply…"
               aria-label="Add note"
-              className="min-w-0 flex-1 text-minor"
+              className="min-w-0 flex-1"
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.nativeEvent.isComposing && note.trim() !== "") {
                   e.preventDefault();
@@ -289,7 +301,6 @@ function AskCard({
             />
             <Button
               type="button"
-              size="sm"
               disabled={disabled || note.trim() === ""}
               onClick={() => submit(null, note)}
             >
@@ -320,20 +331,7 @@ const AgentText = memo(function AgentText({
 }) {
   // agent 发来的文件：meta 没变就是同一个数组，Markdown 不用重建插件
   const files = useMemo(() => sentFilesOf(message), [message.meta]);
-  const askCard = useMemo<ExtractedAskCard | null>(() => {
-    const extracted = extractAskCard(message);
-    if (extracted !== null) return extracted;
-    const ask = askOf(message);
-    if (ask?.gateRef === undefined) return null;
-    return {
-      question: message.text.trim(),
-      options: [],
-      answered: ask.answered === true,
-      ...(ask.recommended !== undefined ? { recommended: ask.recommended } : {}),
-      ...(ask.chosenOption !== undefined ? { chosenOption: ask.chosenOption } : {}),
-      gateRef: ask.gateRef,
-    };
-  }, [message.sender, message.meta, message.text]);
+  const askCard = useMemo(() => extractAskCard(message), [message.sender, message.meta, message.text]);
   const blocker = askCard === null ? askOf(message) : null;
   return (
     <article

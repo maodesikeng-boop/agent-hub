@@ -389,6 +389,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       });
     },
     stopMessage: messages.stopMessage,
+    turnsLostOnShutdown: messages.turnsLostOnShutdown,
 
     reportHealth(module, error) {
       write((p) => reportHealthIn(p, module, error));
@@ -444,6 +445,9 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     onSetupStarted: workers.onSetupStarted,
     waitsForFirstTurn: workers.waitsForFirstTurn,
     onWorktreeCreated: workers.onWorktreeCreated,
+    recordReviewSnapshot: workers.recordReviewSnapshot,
+    getReviewVerifyTask: workers.getReviewVerifyTask,
+    onReviewVerified: workers.onReviewVerified,
 
     syncPersonaFiles: persona.syncPersonaFiles,
     listEndedWorktreeWorkers: workers.listEndedWorktreeWorkers,

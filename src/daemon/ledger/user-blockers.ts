@@ -162,7 +162,7 @@ export function createLedgerUserBlockers(
       }
       db.run("UPDATE user_blockers SET status = 'resolved', rechecked_as = NULL, updated_at = ? WHERE id = ?", t, id);
       if (row.rechecked_as !== null) reviseCardIn(p, rowOf(id)!);
-      if (row.ask_message_id !== null) messages.markAskAnsweredIn(p, row.ask_message_id);
+      if (row.ask_message_id !== null) messages.settleAskIn(p, row.ask_message_id, { by: "answer" });
       const { releaseStepsIn, resumeWorkerIn } = releases();
       releaseStepsIn(p, id, { vendor: row.vendor, availability });
       const workers = db.all<{ worker_id: number; message_ids_json: string }>(

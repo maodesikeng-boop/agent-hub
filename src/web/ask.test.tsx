@@ -143,11 +143,13 @@ describe("右栏的“等你确定”", () => {
     expect(rail()).not.toBeInTheDocument();
   });
 
-  it("在输入框里发出去：马上消失，不等服务端确认", async () => {
+  it("在输入框里发一条普通消息：右栏的提问还在（发消息不回答任何卡），发送中、发完都一样", async () => {
     await boot(twoPms([ask({ id: 1, text: QUESTION })]));
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "用 A" } });
     fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
-    await waitFor(() => expect(asksGroup()).toBeNull());
+    expect(askRows()).toHaveLength(1);
+    await waitFor(() => expect(api.calls.some((c) => c.path === "/api/conversations/1/messages")).toBe(true));
+    expect(askRows()).toHaveLength(1);
   });
 
   it("用户先发的消息不算：提问在用户消息之后，照样显示", async () => {
@@ -328,8 +330,61 @@ describe("对话流里的 A/B/C/D 选项卡片", () => {
     ]);
 
     const msg3 = document.querySelector('[data-message-id="3"]') as HTMLElement;
-    expect(msg3.querySelector("[data-ask-card]")).toBeNull();
-    expect(within(msg3).getByText("纯文本提问，没有选项")).toBeInTheDocument();
+    const card3 = msg3.querySelector("[data-ask-card]") as HTMLElement;
+    expect(card3).toBeInTheDocument();
+    expect(within(card3).getByText("纯文本提问，没有选项")).toBeInTheDocument();
+    expect(within(card3).queryAllByRole("button").filter((b) => b.hasAttribute("data-ask-option"))).toEqual([]);
+  });
+
+  it("没有选项的独立提问也是一张卡：补充框直接展开，填一句回车只回答这一张；回答后卡变只读", async () => {
+    await boot(twoPms([ask({ id: 3, text: "纯文本提问，没有选项" }), ask({ id: 4, text: "请接电源", meta: { needsUser: true, options: ["已接", "不接"] } })]));
+    const card = document.querySelector('[data-message-id="3"] [data-ask-card]') as HTMLElement;
+    const input = within(card).getByRole("textbox", { name: "Add note" });
+    fireEvent.change(input, { target: { value: "按第二种来" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() =>
+      expect(api.calls.filter((c) => c.path === "/api/asks/3/answer")).toEqual([
+        expect.objectContaining({ method: "POST", body: expect.objectContaining({ note: "按第二种来" }) }),
+      ]),
+    );
+    expect(api.calls.filter((c) => c.path === "/api/conversations/1/messages")).toEqual([]);
+    await waitFor(() => expect(within(card).queryByRole("textbox", { name: "Add note" })).toBeNull());
+    expect(card.querySelector("[data-ask-answer]")).toHaveTextContent("按第二种来");
+    const other = document.querySelector('[data-message-id="4"] [data-ask-card]') as HTMLElement;
+    for (const b of within(other).getAllByRole("button").filter((x) => x.hasAttribute("data-ask-option"))) expect(b).not.toBeDisabled();
+  });
+
+  it("已回答的卡显示回答内容：选中项和补充说明都是高亮的一行，有没有选项都一样；被项目经理关掉的卡标 Closed", async () => {
+    await boot(
+      twoPms([
+        ask({ id: 3, text: "请提供测试账号的邮箱地址", meta: { needsUser: true, answered: true, answerNote: "qa-test@example.com" } }),
+        ask({ id: 4, text: "请接电源", meta: { needsUser: true, answered: true, options: ["已接", "不接"], chosenOption: "不接", answerNote: "开完会再接" } }),
+        ask({ id: 5, text: "预发环境的数据库还要保留吗？", meta: { needsUser: true, answered: true, closed: true } }),
+        ask({ id: 6, text: "用哪个分支？", meta: { needsUser: true, answered: true, closed: true, options: ["main", "dev"] } }),
+      ]),
+    );
+    const card = (id: number) => document.querySelector(`[data-message-id="${id}"] [data-ask-card]`) as HTMLElement;
+    const highlighted = (id: number) => [...card(id).querySelectorAll(".bg-sidebar-active")].map((el) => el.textContent?.replace(/^[A-Z](?=\S)/, ""));
+
+    expect(highlighted(3)).toEqual(["qa-test@example.com"]);
+    expect(highlighted(4)).toEqual(["不接", "开完会再接"]);
+    for (const id of [3, 4, 5, 6]) expect(within(card(id)).queryByRole("textbox")).toBeNull();
+    for (const id of [3, 4]) expect(within(card(id)).queryByText("Closed")).toBeNull();
+    for (const id of [5, 6]) {
+      expect(within(card(id)).getByText("Closed")).toBeInTheDocument();
+      expect(highlighted(id)).toEqual([]);
+    }
+  });
+
+  it("补充框和同排的 Send 按钮同一档高度（36px），输入框是 15px 正文字号（docs/ui-standard.md 第 3、6 条）", async () => {
+    await boot(twoPms([ask({ id: 3, text: "纯文本提问，没有选项" })]));
+    const card = document.querySelector('[data-message-id="3"] [data-ask-card]') as HTMLElement;
+    const input = within(card).getByRole("textbox", { name: "Add note" });
+    const send = within(card).getByRole("button", { name: "Send" });
+    expect(input).toHaveClass("h-9", "text-body");
+    expect(input).not.toHaveClass("text-minor");
+    expect(send).toHaveClass("h-9");
+    expect(send).not.toHaveClass("h-8");
   });
 
   it("点击某个选项按钮只回答这一张卡（POST /api/asks/:id/answer），不发用户消息；回答后选项按钮变为 disabled 并高亮所选项", async () => {

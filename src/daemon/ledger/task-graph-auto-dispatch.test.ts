@@ -1,5 +1,5 @@
 // 编排简化第 5a 步端到端账本测试（docs/orchestration-simplify-design.md 第 4.1～4.6、6、9.3、9.4、13 节）：
-// - 两步单线图（impl -> review）自动开工、汇报“做完了”自动收工、同线续同一个 worktree 与分支、PM 中途 0 次被叫醒、末步发交付单；
+// - 两步单线图（impl -> followup）自动开工、汇报“做完了”自动收工、同线续同一个 worktree 与分支、PM 中途 0 次被叫醒、末步发交付单；
 // - 三路/四路并行探索再汇总（a, b, c -> sum）多路交棒拼装与 12,000 字上限截断落盘 launch/<sessionId>/upstream/<stepKey>.md；
 // - 汇报填写“偏离”自动踩刹车停在 waiting:pm 叫醒 PM；“做完了”但“问题”非无时交棒照走并抄送 PM；
 // - 分叉步骤 addWorktree 指定 base 为上游分支、base: "main" 从主干开、跳过中间步骤向上追溯最近未跳过上游交棒与目录；
@@ -21,16 +21,17 @@ import {
 import { removeSessionLaunchDir, sessionLaunchDir, workerSetupLogPath } from "../../shared/paths.ts";
 import { buildReadonlyPolicy } from "../../shared/readonly-policy.ts";
 import { bundledModelCatalog, type AgentVendor, type ModelCatalog, type VendorAvailability } from "../../shared/vendors.ts";
+import { REVIEW_CHECKLIST } from "../../shared/review.ts";
 import { REPORT_END, REPORT_START } from "../../shared/worker.ts";
 import { scopeAllowsWrite, workerWriteScope } from "../../shared/write-scope.ts";
-import { addWorktree } from "../git/index.ts";
-import { createWorktreeCreateHandler } from "../handlers.ts";
+import { addWorktree, remoteBranchHead, resolveCommit } from "../git/index.ts";
+import { createReviewObserver, createWorktreeCreateHandler } from "../handlers.ts";
 import { buildLaunchPrompt } from "../prompt.ts";
 import { createSessionStore, migrate, type Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
 import { createResolveFolder } from "./files.ts";
 import { createLedger, type SqliteLedger } from "./index.ts";
-import { STEP_REVIEW_CHECKLIST, buildStepFirstMessage, upstreamReportFilePath } from "./task-graph-handoff.ts";
+import { buildStepFirstMessage, upstreamReportFilePath } from "./task-graph-handoff.ts";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, {
@@ -152,6 +153,7 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
   const runWorktreeCreate = async (workerId: WorkerId) => {
     const handler = createWorktreeCreateHandler({
       ledger,
+      observeReview: createReviewObserver({ resolveCommit: (f, r) => resolveCommit(f, r), remoteBranchHead: (r, b) => remoteBranchHead(r, b), probePr: async () => null }),
       addWorktree,
       setup: {
         start: (req) => {
@@ -231,14 +233,14 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
         a.type === "session.send" && a.params.sessionId === lin.sessionId,
     );
 
-  it("单线两步图（impl -> review）：建图即开工、同线接手同一个 worktree 与分支（不重跑 setup、等上游退出才启动）、内置审查清单、Worker hub status，且 PM 中途 0 次被叫醒直到交付单", async () => {
+  it("单线两步图（impl -> followup）：建图即开工、同线接手同一个 worktree 与分支（不重跑 setup、等上游退出才启动）、Worker hub status，且 PM 中途 0 次被叫醒直到交付单", async () => {
     ledger.hubCall(lin.sessionId, "project.setup", { command: "echo setup-ok" });
     enqueued.length = 0;
 
     const createRes = ledger.hubCall(lin.sessionId, "graph.create", {
       specJson: JSON.stringify({
         title: "修复时间流翻页乱序",
-        goal: "修复总助时间流翻页游标乱序，补回归测试并通过独立审查。",
+        goal: "修复总助时间流翻页游标乱序，补回归测试。",
         steps: [
           {
             key: "impl",
@@ -248,10 +250,9 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
           },
           {
             // 未写 deps：steps 默认串接在 impl 后面
-            key: "review",
-            title: "独立审查并直接修",
+            key: "followup",
+            title: "补边界用例",
             brief: "重点核查游标边界与空页退化。",
-            review: true,
             vendor: "codex",
             model: "gpt-5",
             effort: "high",
@@ -261,11 +262,11 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
     });
 
     const g0 = createRes.data.graph;
-    expect(g0.goal).toBe("修复总助时间流翻页游标乱序，补回归测试并通过独立审查。");
-    expect(g0.edges).toEqual([{ fromKey: "impl", toKey: "review" }]);
+    expect(g0.goal).toBe("修复总助时间流翻页游标乱序，补回归测试。");
+    expect(g0.edges).toEqual([{ fromKey: "impl", toKey: "followup" }]);
     expect(g0.nodes.map((n) => [n.key, stateOf(n)])).toEqual([
       ["impl", "running"],
-      ["review", "pending"],
+      ["followup", "pending"],
     ]);
     // 全量快照瘦身：不带 goal 和 brief 正文
     const snapGraph = ledger.snapshot().activeTaskGraphs[0]!;
@@ -289,7 +290,7 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
     expect(firstWorkerMessageOf(w1Id).text).toContain(`Worker #${w1Id}（实现并提 PR）`);
     expect(firstWorkerMessageOf(w1Id).text).toContain(w1Row.worktree_path);
     expect(firstWorkerMessageOf(w1Id).text).toContain(w1Row.branch);
-    expect(firstWorkerMessageOf(w1Id).text).toContain("修复总助时间流翻页游标乱序，补回归测试并通过独立审查。");
+    expect(firstWorkerMessageOf(w1Id).text).toContain("修复总助时间流翻页游标乱序，补回归测试。");
     expect(firstWorkerMessageOf(w1Id).text).toContain("修好翻页游标比较逻辑并提 PR。");
     expect(buildLaunchPrompt(ledger.getLaunchContext(workerSessionOf(w1Id).id), w1Row.worktree_path)).not.toContain(
       "修好翻页游标比较逻辑并提 PR。",
@@ -325,7 +326,7 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
     const g1 = ledger.hubCall(lin.sessionId, "graph.show", { graphId: g0.id }).data.graph;
     expect(g1.nodes.map((n) => [n.key, stateOf(n)])).toEqual([
       ["impl", "done"],
-      ["review", "running"],
+      ["followup", "running"],
     ]);
     expect(g1.nodes[0]!.artifact).toMatchObject({
       branch: w1Row.branch,
@@ -363,16 +364,14 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
     // 上游提交与未提交文件都在同一个目录里
     expect(readFileSync(join(w2Row.worktree_path, "scratch.log"), "utf8")).toBe("local repro notes\n");
 
-    // 审查步骤自动前置第 9.3 节内置审查清单，动态目标/职责/审查清单/目录与上游交棒统一在第一条消息里各出现一次（静态系统提示词不重复带）
-    expect(w2Row.task).toContain(STEP_REVIEW_CHECKLIST);
+    // 动态目标/职责/目录与上游交棒统一在第一条消息里各出现一次（静态系统提示词不重复带）
     expect(w2Row.task).toContain("重点核查游标边界与空页退化。");
+    expect(w2Row.task).not.toContain(REVIEW_CHECKLIST);
     const w2SysPrompt = buildLaunchPrompt(ledger.getLaunchContext(w2Sess.id), w2Row.worktree_path);
-    expect(w2SysPrompt).not.toContain(STEP_REVIEW_CHECKLIST);
     expect(w2SysPrompt).not.toContain("重点核查游标边界与空页退化。");
     expect(w2FirstMsg.text).toContain("【系统 · 交棒】");
-    expect(w2FirstMsg.text).toContain(`Worker #${w2Id}（独立审查并直接修）`);
+    expect(w2FirstMsg.text).toContain(`Worker #${w2Id}（补边界用例）`);
     expect(w2FirstMsg.text).toContain(`这是上一步（Worker #${w1Id}）用过的工作目录和分支`);
-    expect(w2FirstMsg.text).toContain(STEP_REVIEW_CHECKLIST);
     expect(w2FirstMsg.text).toContain("重点核查游标边界与空页退化。");
     expect(w2FirstMsg.text).toContain("改动在 cursor.ts，临时复现日志在 scratch.log");
     expect(w2FirstMsg.text).toContain("PR：https://github.com/maodesikeng-boop/agent-hub/pull/315");
@@ -389,10 +388,10 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
       role: "worker",
       taskGraph: {
         id: g0.id,
-        stepKey: "review",
+        stepKey: "followup",
         stepIndex: 2,
         totalSteps: 2,
-        goal: "修复总助时间流翻页游标乱序，补回归测试并通过独立审查。",
+        goal: "修复总助时间流翻页游标乱序，补回归测试。",
         upstream: [
           expect.objectContaining({
             key: "impl",
@@ -409,7 +408,7 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
     // 第 2 步在同一分支补提交并汇报“做完了” -> 发交付单叫醒 PM（全程唯一次叫醒 PM）
     writeFileSync(join(w2Row.worktree_path, "cursor.ts"), "export const fix = 2;\n");
     git(w2Row.worktree_path, "add", "cursor.ts");
-    git(w2Row.worktree_path, "commit", "-m", "review fix");
+    git(w2Row.worktree_path, "commit", "-m", "edge cases");
     const commit2 = git(w2Row.worktree_path, "rev-parse", "--short", "HEAD");
 
     enqueued.length = 0;
@@ -417,7 +416,7 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
       w2Id,
       buildReportBlock({
         status: "做完了",
-        summary: "可以合，顺手修了同 id 排序稳定性",
+        summary: "补了同 id 排序稳定性用例",
         commit: commit2,
         tests: "pnpm vitest run 全绿",
         deviation: "无",
@@ -660,7 +659,7 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
     expect(pmTexts.some((t) => t.includes("第 3/3 步「异构审查」等用户动手】") && t.includes("已挂卡等用户"))).toBe(true);
 
     // 3) PM 用 hub worker start --node rev --vendor codex --model gpt-5 --effort medium 换一家：
-    //    无需重传 title 和 task，自动继承职责、审查清单、上游交棒与同一个 worktree，且新的 vendor/model/effort 写回步骤！
+    //    无需重传 title 和 task，自动继承职责、审查清单、上游交棒，新开 detached 在实现分支上的审查目录，且新的 vendor/model/effort 写回步骤！
     const replaced = ledger.hubCall(lin.sessionId, "worker.start", {
       node: "rev",
       graphId: graph.id,
@@ -677,11 +676,12 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
       model: "gpt-5",
       effort: "medium",
     });
-    expect(replaced.worktreePath).toBe(
-      db.get<{ worktree_path: string }>("SELECT worktree_path FROM workers WHERE id = ?", wImpl)!.worktree_path,
-    );
+    const implRow = db.get<{ worktree_path: string; branch: string }>("SELECT worktree_path, branch FROM workers WHERE id = ?", wImpl)!;
+    expect(replaced.worktreePath).not.toBe(implRow.worktree_path);
+    expect(replaced.branch).toBeNull();
+    expect(replaced.review).toEqual({ branch: implRow.branch, snapshot: null });
     expect(firstWorkerMessageOf(replaced.id).text).toContain(`Worker #${replaced.id}（异构审查）`);
-    expect(firstWorkerMessageOf(replaced.id).text).toContain(STEP_REVIEW_CHECKLIST);
+    expect(firstWorkerMessageOf(replaced.id).text).toContain(REVIEW_CHECKLIST);
     expect(firstWorkerMessageOf(replaced.id).text).toContain("独立审查");
     expect(firstWorkerMessageOf(replaced.id).text).toContain("校验脚本在 verify.sql");
   });
@@ -727,9 +727,9 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
     const wFork1 = afterRoot.nodes.find((n) => n.key === "fork1")!.activeWorkerId!;
     const wFork2 = afterRoot.nodes.find((n) => n.key === "fork2")!.activeWorkerId!;
     const wFresh = afterRoot.nodes.find((n) => n.key === "fresh")!.activeWorkerId!;
-    expect(ledger.getWorktreeTask(wFork1)?.base).toBe(rootWt.branch);
-    expect(ledger.getWorktreeTask(wFork2)?.base).toBe(rootWt.branch);
-    expect(ledger.getWorktreeTask(wFresh)?.base).toBeUndefined();
+    expect(ledger.getWorktreeTask(wFork1)?.checkout).toMatchObject({ kind: "branch", base: rootWt.branch });
+    expect(ledger.getWorktreeTask(wFork2)?.checkout).toMatchObject({ kind: "branch", base: rootWt.branch });
+    expect(ledger.getWorktreeTask(wFresh)?.checkout).not.toHaveProperty("base");
 
     await runWorktreeCreate(wFork1);
     await runWorktreeCreate(wFork2);
@@ -937,7 +937,7 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
     expect(totalWrittenChars).toBeLessThanOrEqual(HANDOFF_REPORT_TOTAL_MAX_CHARS);
   });
 
-  it("preparing 阶段取消整张图绝不死灰复燃，且手动审查步骤换人接力完整保留 goal、审查清单与继承上游目录说明", async () => {
+  it("preparing 阶段取消整张图绝不死灰复燃，且手动审查步骤换人接力完整保留 goal、审查清单与审查目录说明", async () => {
     ledger.hubCall(lin.sessionId, "project.setup", { command: "echo slow-setup" });
     // 1) 自动拉起的 Worker 正在跑 setup（preparing）时取消整张图：setup 随后回调 onWorktreeCreated 绝不补发首轮启动
     const gCancel = ledger.hubCall(lin.sessionId, "graph.create", {
@@ -948,7 +948,8 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
     }).data.graph;
     const wPrep = gCancel.nodes[0]!.activeWorkerId!;
     const wtTask = ledger.getWorktreeTask(wPrep)!;
-    const added = await addWorktree({ repoFolder: wtTask.repo, worktreePath: wtTask.worktreePath, branch: wtTask.branch });
+    if (wtTask.checkout.kind !== "branch") throw new Error("expected a branch checkout");
+    const added = await addWorktree({ repoFolder: wtTask.repo, worktreePath: wtTask.worktreePath, branch: wtTask.checkout.branch });
     expect(ledger.onSetupStarted(wPrep)).toBe(true);
 
     ledger.hubCall(lin.sessionId, "graph.cancel", { graphId: gCancel.id, reason: "不再需要" });
@@ -969,8 +970,8 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
     expect(ledger.getMessage(firstWorkerMessageOf(wPrep).id)?.status).toBe("stopped");
 
     // 2) 图含 goal + 手动步骤（无预设 brief）标 review: true：
-    //    s1 建成 worktree 完成后，s2 首次手动派 --no-worktree 失败，再换人接力（不加 --no-worktree）时：
-    //    接手的新 Worker 自动继承上游 s1 的 worktree，且首条接手消息完整包含 goal、第 2/2 步、STEP_REVIEW_CHECKLIST、上游交棒与准确的继承目录提示，无重复拼接！
+    //    s1 建成 worktree 完成后，s2 手动派 --no-worktree 直接拒绝；派出的第一个审查 Worker 没做完，再换人接力时：
+    //    接手的新 Worker 新开 detached 在实现分支上的审查目录，首条接手消息完整包含 goal、第 2/2 步、REVIEW_CHECKLIST、上游交棒与审查目录说明，无重复拼接！
     const gManual = ledger.hubCall(lin.sessionId, "graph.create", {
       specJson: JSON.stringify({
         title: "手动审查换人",
@@ -983,13 +984,15 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
     }).data.graph;
     const wImpl = gManual.nodes[0]!.activeWorkerId!;
     await runWorktreeCreate(wImpl);
-    const implWtPath = db.get<{ worktree_path: string }>("SELECT worktree_path FROM workers WHERE id = ?", wImpl)!.worktree_path;
+    const implRow = db.get<{ worktree_path: string; branch: string }>("SELECT worktree_path, branch FROM workers WHERE id = ?", wImpl)!;
     runWorkerReportTurn(wImpl, buildReportBlock({ status: "做完了", summary: "实现完毕", handoff: "重点看 auth.ts" }));
 
+    expect(() =>
+      ledger.hubCall(lin.sessionId, "worker.start", { graphId: gManual.id, node: "rev", noWorktree: true, task: "核查鉴权绕过边界" }),
+    ).toThrow(/不能用 --no-worktree/);
     const wRev1 = ledger.hubCall(lin.sessionId, "worker.start", {
       graphId: gManual.id,
       node: "rev",
-      noWorktree: true,
       task: "核查鉴权绕过边界",
     }).data.worker;
     runWorkerReportTurn(wRev1.id, buildReportBlock({ status: "有问题", summary: "网络中断", questions: "需重试" }));
@@ -999,14 +1002,15 @@ describe("编排简化第 5a 步：自动开工、同线续目录、多路交棒
       node: "rev",
       task: "补跑边界用例",
     }).data.worker;
-    expect(wRev2.worktreePath).toBe(implWtPath);
+    expect(wRev2.worktreePath).not.toBe(implRow.worktree_path);
+    expect(wRev2.review).toEqual({ branch: implRow.branch, snapshot: null });
     const takeoverMsg = firstWorkerMessageOf(wRev2.id).text;
     expect(takeoverMsg).toContain("整张图共享目标：零回归合并。");
     expect(takeoverMsg).toContain("## 你这一步：手动独立审查（第 2/2 步）");
-    expect(takeoverMsg).toContain(STEP_REVIEW_CHECKLIST);
+    expect(takeoverMsg).toContain(REVIEW_CHECKLIST);
     expect(takeoverMsg).toContain("核查鉴权绕过边界");
     expect(takeoverMsg).toContain("重点看 auth.ts");
-    expect(takeoverMsg).toContain(`你接着用上一步（Worker #${wImpl}）的工作目录 ${implWtPath}`);
+    expect(takeoverMsg).toContain(`你在新开的审查目录 ${wRev2.worktreePath} 里，detached 在被审分支 ${implRow.branch} 上`);
     expect(takeoverMsg.split("整张图共享目标：零回归合并。")).toHaveLength(2);
     expect(takeoverMsg.split("补跑边界用例")).toHaveLength(2);
   });

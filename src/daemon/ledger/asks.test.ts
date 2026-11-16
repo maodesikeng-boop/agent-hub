@@ -8,6 +8,7 @@ import type { Change } from "../../shared/api.ts";
 import { askOf } from "../../shared/domain.ts";
 import { ASK_CARD_TELL_USER, ASK_CARD_WHERE } from "../../shared/hub.ts";
 import type { ConversationId, MessageId, PmId, SessionId } from "../../shared/domain.ts";
+import { ASK_MAX_OPTION_CHARS } from "../../shared/limits.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import { REPORT_END, REPORT_START } from "../../shared/worker.ts";
 import { openDatabase } from "../store/db.ts";
@@ -106,6 +107,14 @@ describe("一张卡只在用户回答这张卡时关掉", () => {
     expect(() => ledger.answerAsk(a, { clientId: "other", note: "又答" })).toThrow(/已经被处理过/);
   });
 
+  it("选项最长到 hub ask 允许的上限：在卡上点它照样只回答这一张，记下的是完整选项", () => {
+    const long = "甲".repeat(ASK_MAX_OPTION_CHARS);
+    const id = ledger.hubCall(lin.sessionId, "ask", { text: "选哪个？", options: [long, "乙"] }).data.messageId;
+    ledger.answerAsk(id, { clientId: "click-long", choice: long });
+    expect(statusOf(id)).toBe("resolved");
+    expect(askOf(ledger.getMessage(id)!)?.chosenOption).toBe(long);
+  });
+
   it("没有这张卡：报 not_found", () => {
     expect(() => ledger.answerAsk(999_999, { clientId: "x", note: "好" })).toThrow(/这张卡不在了/);
   });
@@ -161,6 +170,26 @@ describe("项目经理收到用户消息时带着账本里当前还在等的卡"
   it("别的项目经理的卡不进说明", () => {
     ask("阿周的问题", zhou);
     expect(receivedBy(post(lin.conversationId, "你好")).prefixes).toEqual([]);
+  });
+});
+
+describe("卡上记下怎么了结的：用户答了什么，或被项目经理关掉", () => {
+  it("没选项的卡填一句、有选项的卡点选项加一句：卡上都记下用户的原话", () => {
+    const plain = ask("请提供测试账号的邮箱地址");
+    const power = ledger.hubCall(lin.sessionId, "ask", { text: "请接电源", options: ["已接", "不接"] }).data.messageId;
+    answerCard(plain, "qa-test@example.com");
+    ledger.answerAsk(power, { clientId: "both", choice: "不接", note: "开完会再接" });
+    expect(askOf(ledger.getMessage(plain)!)).toEqual({ needsUser: true, answered: true, answerNote: "qa-test@example.com" });
+    expect(askOf(ledger.getMessage(power)!)).toMatchObject({ answered: true, chosenOption: "不接", answerNote: "开完会再接" });
+  });
+
+  it("hub ask close、--replace 关掉的卡：标成已关掉，不带回答", () => {
+    const a = ask("问 A");
+    const b = ask("问 B");
+    ledger.hubCall(lin.sessionId, "ask.close", { itemId: itemOf(a).id });
+    ledger.hubCall(lin.sessionId, "ask", { text: "问 B（改过）", replaceItemId: itemOf(b).id });
+    expect(askOf(ledger.getMessage(a)!)).toEqual({ needsUser: true, answered: true, closed: true });
+    expect(askOf(ledger.getMessage(b)!)).toEqual({ needsUser: true, answered: true, closed: true });
   });
 });
 

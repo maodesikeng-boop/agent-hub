@@ -1093,6 +1093,25 @@ describe.skipIf(process.platform === "win32")("startAgentApi on a unix socket", 
       await app.close();
     }
 
+    // hub status：项目经理的那份带上热重启状态（写明从几点起只等正在回用户的轮次），Worker 的不带
+    const reloadStatus = { state: "draining" as const, build: false, requestedAt: 1, deadlineAt: 2, overdue: false, busy: [], unresumable: [], lastFailure: null };
+    const withStatus = createAgentApi({ ledger, tokens, selfReload: () => ({ text: "", data: null }), selfReloadStatus: () => reloadStatus });
+    await withStatus.ready();
+    try {
+      const pmToken = tokens.issue(205);
+      const workerToken = tokens.issue(206);
+      ledger.sessionRoles.set(205, "pm");
+      ledger.sessionRoles.set(206, "worker");
+      ledger.contexts.length = 0;
+      for (const token of [pmToken, workerToken]) {
+        const res = await withStatus.inject({ method: "POST", url: hubPath("status"), headers: { authorization: `Bearer ${token}` }, payload: {} });
+        expect(res.statusCode).toBe(200);
+      }
+      expect(ledger.contexts).toEqual([{ selfReload: reloadStatus }, {}]);
+    } finally {
+      await withStatus.close();
+    }
+
     const unsupported = createAgentApi({ ledger, tokens });
     await unsupported.ready();
     try {

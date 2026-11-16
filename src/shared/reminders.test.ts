@@ -72,7 +72,7 @@ describe("规则（从 web/selectors.ts 搬来，行为不变）", () => {
     expect(waitingConversations(state, {})).toEqual([]);
   });
 
-  it("对话里有正在发送的普通消息（pending）时：独立 hub ask 乐观收起，但绑定步骤的 gateRef 拍板卡不被误收起", () => {
+  it("对话里有正在发送的普通消息（pending）时：独立 hub ask 和 gateRef 拍板卡都还在等（发消息不回答任何卡）", () => {
     const snap = snapshot({
       pm1: [
         ask({ id: 5 }),
@@ -80,7 +80,7 @@ describe("规则（从 web/selectors.ts 搬来，行为不变）", () => {
       ],
     });
     const state: ReminderState = { ...reminderStateFrom(snap), pending: [{ conversationId: 1, phase: "sending" }] };
-    expect(pendingAsks(state, 1).map((m) => m.id)).toEqual([6]);
+    expect(pendingAsks(state, 1).map((m) => m.id)).toEqual([5, 6]);
   });
 
   it("等你确定：没回答的 hub ask，从老到新", () => {
@@ -318,6 +318,8 @@ describe("Router 跨设备汇总：PendingDecision 与未读 Router 汇报", () 
     // 对话 1 同时有 ask#5 与绑着 ask#5 的 decision#11，只算一次对话 1；对话 3 有无 ask 消息的 gate-1，也算在等你确定里
     expect([...askingConversations(localState)]).toEqual([1]);
     expect([...askingConversations(remoteState)]).toEqual([3]);
+    // 用户在对话 1 发着消息：卡照样在等，发消息不回答任何卡
+    expect([...askingConversations({ ...localState, pending: [{ conversationId: 1, phase: "sending" }] })]).toEqual([1]);
     expect(unreadRouterReports(localState).map((r) => r.id)).toEqual([12]);
 
     const both = routerReminderSummary([

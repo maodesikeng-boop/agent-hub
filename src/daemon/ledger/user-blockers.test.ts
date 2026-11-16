@@ -96,6 +96,7 @@ describe("要用户动手的事：系统挂卡、处理完接着派", () => {
       addWorktree,
       setup: { start: () => false },
       setupLogPath: (id) => workerSetupLogPath(setupLogsDir, id),
+      observeReview: async () => ({ sha: null, remote: null, pr: null }),
     });
     await handler({
       id: ++now,

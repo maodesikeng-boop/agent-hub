@@ -5,7 +5,7 @@ import type { AnyActionRow } from "../../shared/actions.ts";
 import type { MessagesPage } from "../../shared/api.ts";
 import type { UserMessageMeta } from "../../shared/attachments.ts";
 import { agentMessageDedupeKey, canTransitionMessage, systemMessageDedupeKey, userMessageDedupeKey } from "../../shared/domain.ts";
-import type { AgentSessionRow, AskMeta, BlockerRef, ConversationId, GateRef, Message, MessageId, MessageStatus, SessionId, SystemMessageMeta } from "../../shared/domain.ts";
+import type { AgentRole, AgentSessionRow, AskMeta, BlockerRef, ConversationId, GateRef, Message, MessageId, MessageStatus, SessionId, SystemMessageMeta } from "../../shared/domain.ts";
 import { turnFailureReason } from "../../shared/driver.ts";
 import type { DriverEvent, SessionExitedEvent } from "../../shared/driver.ts";
 import { ConversationNotFoundError } from "../../shared/ledger.ts";
@@ -19,8 +19,12 @@ import type { MessageDbRow } from "./rows.ts";
 import type { LedgerSentFiles } from "./sent-files.ts";
 import { clearStreaming, idle, toolStarted, working } from "./sessions.ts";
 import { isPathInsideOrEqual } from "../platform/index.ts";
+import { getAgentSession } from "../store/index.ts";
 import type { LedgerSessions } from "./sessions.ts";
 import { stepOfTool, summarizeToolCall } from "./tool-summary.ts";
+
+/** 一张提问卡怎么了结的：用户回答（选中的选项、原话，都可能没有），或被项目经理关掉、替换、收回。 */
+export type AskSettlement = { by: "answer"; chosenOption?: string; note?: string } | { by: "close" };
 
 const ACTIVE_MESSAGE_STATUSES = "('delivered', 'processing')";
 const WORKER_PICK_ONLY_PM_MESSAGE = "指定 Worker 用的厂商、模型只能用在项目经理的对话里";
@@ -70,7 +74,7 @@ export function createLedgerMessages(
   const afterUserPost = options.afterUserPost ?? (() => {});
   const onIndependentAskCreated = options.onIndependentAskCreated ?? (() => {});
   const { db, now, write, enqueue, reportHealthIn } = ctx;
-  const { currentSession, liveOf, updateLive } = sessions;
+  const { currentSession, liveOf, updateLive, workingSessionIds } = sessions;
 
   /** 老的项目群（11-03 拿掉了）当作不存在。 */
   const conversationExists = (id: ConversationId) =>
@@ -183,25 +187,33 @@ export function createLedgerMessages(
     return message;
   };
 
-  /** 在同一个事务里将指定 AskMeta 消息标为已答（可选记录选中的选项文本），推送 message.updated。 */
-  const markAskAnsweredIn = (p: Pending, messageId: MessageId, chosenOption?: string): void => {
+  /**
+   * 在同一个事务里了结一张提问卡，推送 message.updated：用户回答的记下选中的选项和原话（answerNote），
+   * 项目经理关掉、替换、收回的标 closed。已经了结的卡不会再被标成关掉。
+   */
+  const settleAskIn = (p: Pending, messageId: MessageId, settlement: AskSettlement): void => {
     const message = getMessage(messageId);
     if (message === null || message.meta === null || typeof message.meta !== "object") return;
     const current = message.meta as unknown as Record<string, unknown>;
     if (current.needsUser !== true) return;
-    if (current.answered === true && (chosenOption === undefined || current.chosenOption === chosenOption)) return;
-    const nextMeta = {
-      ...current,
-      answered: true,
-      ...(chosenOption !== undefined ? { chosenOption } : {}),
-    };
+    if (current.answered === true && settlement.by === "close") return;
+    const nextMeta =
+      settlement.by === "close"
+        ? { ...current, answered: true, closed: true }
+        : {
+            ...current,
+            answered: true,
+            ...(settlement.chosenOption !== undefined ? { chosenOption: settlement.chosenOption } : {}),
+            ...(settlement.note !== undefined && settlement.note !== "" ? { answerNote: settlement.note } : {}),
+          };
+    if (JSON.stringify(nextMeta) === JSON.stringify(current)) return;
     db.run("UPDATE messages SET meta = ?, updated_at = ? WHERE id = ?", JSON.stringify(nextMeta), now(), messageId);
     p.changes.push({ type: "message.updated", data: { message: getMessage(messageId)! } });
   };
 
   /**
    * 在同一个事务里向 PM 对话插入一条结构化拍板唤醒消息（sender = 'user'，排队送给当前会话），
-   * 不触发 answerAsks（避免误消同对话内其他未决提问），按 dedupeKey 严格幂等。
+   * 按 dedupeKey 严格幂等。
    */
   const enqueueWakeupUserMessageIn = (
     p: Pending,
@@ -479,6 +491,21 @@ export function createLedgerMessages(
   };
 
   /**
+   * 正在跑、关机打断后不会重发的轮次（有 resumesAfterShutdown 为假的已送达、处理中消息：项目经理、总助正在回用户），每个会话一条。
+   * 热重启过了等待上限后只等这些（daemon/self-reload.ts）。
+   */
+  const turnsLostOnShutdown = (): Array<{ sessionId: SessionId; role: AgentRole }> =>
+    workingSessionIds().flatMap((sessionId) => {
+      const session = getAgentSession(db, sessionId);
+      if (session === null) return [];
+      const inFlight = db.all<Pick<MessageDbRow, "sender">>(
+        `SELECT sender FROM messages WHERE session_id = ? AND status IN ${ACTIVE_MESSAGE_STATUSES}`,
+        sessionId,
+      );
+      return inFlight.some((message) => !resumesAfterShutdown(session, message)) ? [{ sessionId, role: session.role }] : [];
+    });
+
+  /**
    * 停止这个会话正在跑的一轮（在事务里调；网页“停止”和 hub worker end 共用）：排队的用户消息标已取消、标“正在停”、通知驱动层打断。
    * 没有要停的（空闲、没有排队、没有残留的处理中消息）什么也不做，返回 false。
    */
@@ -601,13 +628,14 @@ export function createLedgerMessages(
     applyEvent,
     insertSystemMessage,
     insertAskMessage,
-    markAskAnsweredIn,
+    settleAskIn,
     enqueueWakeupUserMessageIn,
     postUserMessage,
     composerTarget,
     requestStop,
     rewindLastUserMessage,
     stopIn,
+    turnsLostOnShutdown,
     messagesBefore,
     actionFailedIn,
     stopMessage,

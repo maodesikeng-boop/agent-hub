@@ -28,7 +28,6 @@ import { getAgentSession } from "../store/index.ts";
 import type { HubArgs, HubResult } from "../../shared/hub.ts";
 import type { WaitingAsk } from "../../shared/waiting-asks.ts";
 import {
-  ASK_MAX_OPTIONS,
   MAX_DECISION_NOTE_CHARS,
   ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX,
   ROUTER_STREAM_PAGE_SIZE,
@@ -40,7 +39,6 @@ import {
   ROUTER_FLEET_DIGEST_MAX_BYTES,
   ROUTER_ITEM_RETENTION_MS,
   ROUTER_NOTE_MAX_CHARS,
-  ROUTER_OPTION_MAX_CHARS,
   ROUTER_PENDING_DECISIONS_PER_PM_MAX,
   ROUTER_PERSONA_SUMMARY_LINES,
   ROUTER_PERSONA_SUMMARY_MAX_CHARS,
@@ -346,7 +344,7 @@ export function createLedgerRouter(
           target.id,
         );
         if (target.ask_message_id !== null) {
-          messages.markAskAnsweredIn(p, target.ask_message_id);
+          messages.settleAskIn(p, target.ask_message_id, { by: "close" });
         }
         p.changes.push({ type: "router.item.updated", data: { item: toRouterItem(getItemRow(target.id)!) } });
       }
@@ -389,10 +387,6 @@ export function createLedgerRouter(
           ? ""
           : sliceChars(rawChars.slice(ROUTER_QUESTION_MAX_CHARS - 1).join("").trim(), ROUTER_CONTEXT_MAX_CHARS);
     }
-    const normalizedOpts = (effectiveOptions ?? [])
-      .slice(0, ASK_MAX_OPTIONS)
-      .map((o) => sliceChars(o.trim(), ROUTER_OPTION_MAX_CHARS))
-      .filter((o) => o !== "");
     const project = activeProjectOf(session.pmId);
     const t = now();
     const row = db.get<RouterItemDbRow>(
@@ -406,7 +400,7 @@ export function createLedgerRouter(
       session.id,
       question,
       context,
-      JSON.stringify(normalizedOpts),
+      JSON.stringify(effectiveOptions ?? []),
       message.id,
       t,
       t,
@@ -447,7 +441,7 @@ export function createLedgerRouter(
     if (row.pm_id !== caller.pmId) throw fail("forbidden", `卡 #${row.id} 不是你的卡`);
     if (row.status !== "pending") throw fail("conflict", `卡 #${row.id} 已经不在等了（${row.status === "resolved" ? "用户已回答" : "已关掉或被替换"}）`);
     db.run("UPDATE router_items SET status = 'superseded', updated_at = ? WHERE id = ?", now(), row.id);
-    if (row.ask_message_id !== null) messages.markAskAnsweredIn(p, row.ask_message_id);
+    if (row.ask_message_id !== null) messages.settleAskIn(p, row.ask_message_id, { by: "close" });
     const item = toRouterItem(getItemRow(row.id)!);
     p.changes.push({ type: "router.item.updated", data: { item } });
     appendAuditIn("pm", "ask.close", caller.pmId, row.id);
@@ -641,7 +635,7 @@ export function createLedgerRouter(
       );
 
       if (row.ask_message_id !== null) {
-        messages.markAskAnsweredIn(p, row.ask_message_id, chosenOption ?? undefined);
+        messages.settleAskIn(p, row.ask_message_id, { by: "answer", ...(chosenOption !== null ? { chosenOption } : {}), note });
       }
 
       const wakeLines = [`【Router 拍板】关于「${row.question ?? ""}」`];

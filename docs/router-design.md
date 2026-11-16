@@ -117,7 +117,7 @@ CREATE TABLE IF NOT EXISTS router_items (
   status            TEXT NOT NULL CHECK (status IN ('pending', 'resolved', 'unread', 'archived', 'superseded')),
   question          TEXT NOT NULL,                 -- decision 为一句话问题，report 为一句话结论（≤160 字）
   context           TEXT NOT NULL DEFAULT '',      -- 补充背景或要点（≤400 字）
-  options_json      TEXT NOT NULL DEFAULT '[]',    -- string[]，0 项（旧 hub ask 无选项桥接）或 2~4 项（每项 ≤120 字）
+  options_json      TEXT NOT NULL DEFAULT '[]',    -- string[]，0 项（hub ask 无选项）或 2~10 项（每项 ≤ ASK_MAX_OPTION_CHARS 字，与对话卡同源）
   recommended_index INTEGER,                       -- 推荐项下标（0~3）或 NULL
   links_json        TEXT NOT NULL DEFAULT '[]',    -- RouterEvidenceLink[]（最多 4 个：PR、Piece、文件、外链）
   resolution_json   TEXT,                          -- RouterResolution JSON；未决时为 NULL
@@ -629,7 +629,7 @@ hub dispatch project-create --device <self|deviceId> --folder <路径> \
 | `ROUTER_CONTEXT_MAX_CHARS` | `400` | 待决背景 / 汇报补充要点最大字符数，禁止贴长篇聊天记录 |
 | `ROUTER_OPTION_MIN_COUNT` | `2` | `hub router ask` 最少选项数（旧 `hub ask` 无选项桥接除外） |
 | `ROUTER_OPTION_MAX_COUNT` | `4` | 最多选项数（对应 A/B/C/D 键帽） |
-| `ROUTER_OPTION_MAX_CHARS` | `120` | 单个选项最大字符数 |
+| `ASK_MAX_OPTION_CHARS` | `200` | 单个选项最大字符数（`hub ask` 校验、对话卡和拍板卡共用这一个数，入库不再截断） |
 | `ROUTER_NOTE_MAX_CHARS` | `500` | 用户在选项卡片补充框输入的备注最大字符数 |
 | `ROUTER_REPORT_LINKS_MAX` | `4` | 单张汇报卡最多附带的证据链接数 |
 | `ROUTER_PM_BRIEF_MAX_CHARS` | `120` | `hub router note` 单行状态摘要最大字符数 |

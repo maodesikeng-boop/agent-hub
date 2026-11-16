@@ -51,6 +51,7 @@ import { isCrossPlatformAbsolutePath, isWindowsNamedPipe } from "../platform/ind
 import { listenOnRunSocket } from "../run-socket.ts";
 import type { RouterSandboxGuard } from "../router/sandbox.ts";
 import type { WorkerPr, WorkerPrProbeResult } from "../../shared/hub.ts";
+import type { SelfReloadStatus } from "../../shared/api.ts";
 import type { HubCallContext, WorkspaceProbe } from "../../shared/ledger.ts";
 import { isAgentVendor, type AgentVendor, type ModelCatalog, type VendorAvailability } from "../../shared/vendors.ts";
 import { vendorTranscriptPath } from "../driver/transcript.ts";
@@ -109,6 +110,8 @@ export interface AgentApiOptions {
    * 不给 = 这台守护进程不支持（没有外壳监管，退出后没人拉起），回 conflict。
    */
   selfReload?: (input: { sessionId: SessionId; build: boolean }) => { text: string; data: unknown };
+  /** 热重启现在等到哪了：项目经理的 hub status 里写从几点开始等、几点起只等正在回用户的轮次。和 selfReload 一起给；还没启动完是 undefined。 */
+  selfReloadStatus?: () => SelfReloadStatus | undefined;
   tokens: SessionTokens;
   logger?: boolean;
   /** 守护进程的日志（组装代码给）：500 和 reportHealth 出错各写一行。不给就只走 Fastify 的 logger。 */
@@ -522,6 +525,10 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
   const prepare = async (sessionId: SessionId, command: HubCommand, body: Record<string, unknown>): Promise<HubCallContext> => {
     const role = ledger.sessionRole(sessionId);
     if (role === null || !hubCommandAllowed(role, command)) return {};
+    if (command === "status") {
+      const selfReload = role === "pm" ? opts.selfReloadStatus?.() : undefined;
+      return selfReload === undefined ? {} : { selfReload };
+    }
     if (command === "models") {
       if (!opts.models) return {};
       const vendor = isAgentVendor(body.vendor) ? body.vendor : undefined;

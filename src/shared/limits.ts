@@ -600,7 +600,7 @@ export const WORKTREE_RETENTION_DAYS = 3;
 export const WORKTREE_RETENTION_MS = WORKTREE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 /** 后台多久跑一次 worktree 自动清理（每小时一次）。 */
 export const WORKTREE_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
-/** 每轮最多检查多少个已收工的候选 worktree（避免一次跑太多 git 子进程卡住后台）。 */
+/** 每轮最多对多少个已收工的候选 worktree 跑 git status（避免一次跑太多重的 git 子进程卡住后台；只读引用就能排除的候选不占名额）。 */
 export const WORKTREE_CLEANUP_BATCH_LIMIT = 10;
 
 // ---- 输入框 /hub:worker 选择列表与二次 Esc 回退 ----
@@ -627,9 +627,6 @@ export const MAX_ROUTER_CONTEXT_BYTES = 4 * ROUTER_CONTEXT_MAX_CHARS;
 /** 拍板卡选项数量下限与上限。 */
 export const ROUTER_OPTION_MIN_COUNT = 2;
 export const ROUTER_OPTION_MAX_COUNT = 4;
-/** 单个选项字数上限。 */
-export const ROUTER_OPTION_MAX_CHARS = 120;
-export const MAX_ROUTER_OPTION_BYTES = 4 * ROUTER_OPTION_MAX_CHARS;
 /** PM 给 Router 留的一句话备忘字数上限。 */
 export const ROUTER_NOTE_MAX_CHARS = 500;
 export const MAX_ROUTER_NOTE_BYTES = 4 * ROUTER_NOTE_MAX_CHARS;
@@ -728,6 +725,8 @@ export const MAX_GRAPH_GOAL_CHARS = 6_000;
 export const MAX_NODE_TITLE_CHARS = 80;
 /** 步骤职责（brief）字数上限（docs/orchestration-simplify-design.md 第 11.2 节）。 */
 export const MAX_STEP_BRIEF_CHARS = 1_500;
+/** 审查步骤 base（被审分支名）的字数上限。 */
+export const MAX_STEP_BASE_CHARS = 200;
 /** 单个上游步骤的交棒原文上限（字，按 Unicode 码点；超长截断并把完整汇报落盘到启动目录 upstream/）。 */
 export const HANDOFF_NOTE_MAX_CHARS = 4_000;
 /** 多线合流时各上游交棒合计上限（字，按 Unicode 码点；均分给各上游且单上游不超过 HANDOFF_NOTE_MAX_CHARS）。 */
@@ -765,6 +764,8 @@ export const MAX_GRAPH_SPEC_BYTES = 64 * 1024;
 /** 节点完成产物摘要字数上限。 */
 export const MAX_NODE_ARTIFACT_SUMMARY_CHARS = 500;
 export const MAX_NODE_ARTIFACT_BYTES = 4 * MAX_NODE_ARTIFACT_SUMMARY_CHARS;
+/** 审查步骤产物里“验证提交”最多存多少字（SHA-256 提交号是 64 位）。 */
+export const MAX_NODE_ARTIFACT_COMMIT_CHARS = 64;
 /** hub graph show、换新会话的交接摘要里，每个节点的产物摘要、定案说明各最多显示多少字（完整内容在库里；一张图最多 MAX_GRAPH_NODES 个节点，每个不把上下文塞满）。 */
 export const GRAPH_TEXT_NODE_NOTE_CHARS = 160;
 /** 同上，每个节点最多列几个经手过的 Worker（换过很多次人的只列最近几个）。 */
@@ -839,8 +840,13 @@ export const MAX_VENDOR_SYNC_PREVIEW_CHARS = 240;
 export const MAX_VENDOR_SYNC_CONFIG_BYTES = 2 * 1024 * 1024;
 
 // ---- 空闲排空热重启（daemon/self-reload.ts、web/auto-reload.ts）----
-/** 全库空闲（没有会话在跑 / 停止中 / 准备中 / 等后台命令，总助分派引擎没有规划中或在途分派）后再静默这么久才重启；期间又有新轮次就顺延，重新等空闲。 */
+/** 全库空闲（没有会话在跑 / 停止中 / 准备中 / 等后台命令，总助分派引擎没有规划中或在途分派）后再静默这么久才重启；期间又有新轮次就顺延，重新等空闲（最多等到 SELF_RELOAD_DRAIN_MAX_MS）。 */
 export const SELF_RELOAD_QUIET_MS = 1_500;
+/**
+ * 登记后最多等全库空闲这么久（10 分钟）。Worker 全天连续在跑时全库空闲可能一直不出现，不设上限重启会被饿死。过了上限不再等重启后会重发的轮次
+ * （Worker 轮次、系统交给项目经理的消息，由 ledger 的 recoverAfterRestart 重发），只等重启后不会重发的（项目经理、总助正在回用户）回完就重启。
+ */
+export const SELF_RELOAD_DRAIN_MAX_MS = 10 * 60_000;
 /** 等空闲期间兜底重查的间隔：有些忙碌状态（总助在途管线收尾、后台写交接）结束时账本不一定推变化。只在登记了热重启时才跑。 */
 export const SELF_RELOAD_RECHECK_MS = 5_000;
 /** `hub self-reload --build` 的 pnpm build 最多跑多久（10 分钟），超时整组进程结束、取消本次重启。 */

@@ -28,8 +28,8 @@ export interface AddWorktreeOptions extends GitOptions {
   repoFolder: string;
   /** worktree 放哪。上一级目录不存在时 git 会自己建。 */
   worktreePath: string;
-  /** 新分支名，比如 `hub/7-fix-x`。 */
-  branch: string;
+  /** 新分支名，比如 `hub/7-fix-x`；null 是不建分支，`--detach` 检出 base 的提交（审查 Worker）。 */
+  branch: string | null;
   /** 从哪个提交起，默认 `HEAD`（主文件夹当前分支的最新提交）。 */
   base?: string;
   /**
@@ -194,8 +194,8 @@ export async function probeWorkspace(folder: string, options: GitOptions = {}): 
 const INITIALIZING_LOCK = "initializing";
 
 /**
- * 建 worktree：`git worktree add -b <branch> <worktreePath> <base>`。
- * 重复执行算成功：worktree 已经在这个目录、分支也对得上，就直接返回 `created: false`，不动里面的东西。
+ * 建 worktree：`git worktree add -b <branch> <worktreePath> <base>`；branch 是 null 时 `git worktree add --detach <worktreePath> <base>`。
+ * 重复执行算成功：worktree 已经在这个目录、分支也对得上（detached 的那边也是 detached），就直接返回 `created: false`，不动里面的东西。
  * 上次 add 被强杀留下的半成品（还锁着 initializing）不算建好：`git worktree remove -f -f` 加 `git branch -D` 清掉，再重建。
  * 分支名已经有了（比如别的 Worker 占着）、目录已经是别的分支的 worktree，报清楚的错（kind 是 branch_taken、path_taken）。
  */
@@ -215,27 +215,35 @@ export async function addWorktree(options: AddWorktreeOptions): Promise<AddWorkt
     // 两个 -f：锁着的 worktree 要这样才删得掉。分支是那次 add 建的，还没有 Worker 在上面干过活
     const removeRun = await git(["worktree", "remove", "-f", "-f", existing.path]);
     if (removeRun.code !== 0) throw failed("git worktree remove（清掉没建完的 worktree）", removeRun);
-    if (existing.branch === `refs/heads/${branch}`) {
+    if (branch !== null && existing.branch === `refs/heads/${branch}`) {
       const deleteRun = await git(["branch", "-D", branch]);
       if (deleteRun.code !== 0) throw failed("git branch -D（清掉没建完的 worktree 的分支）", deleteRun);
     }
     existing = undefined;
   }
   if (existing) {
-    if (existing.branch !== `refs/heads/${branch}`) {
+    const want = branch === null ? null : `refs/heads/${branch}`;
+    if (existing.branch !== want) {
       const now = existing.branch ? existing.branch.replace(/^refs\/heads\//, "") : "（没有分支）";
-      throw new GitError("path_taken", `${worktreePath} 已经是分支 ${now} 的 worktree，不是 ${branch}。`);
+      throw new GitError("path_taken", `${worktreePath} 已经是分支 ${now} 的 worktree，不是 ${branch ?? "detached"}。`);
+    }
+    if (branch === null) {
+      const head = await resolveCommit(existing.path, "HEAD", { timeoutMs });
+      return { created: false, baseCommit: head ?? baseCommit };
     }
     const mergeBase = await git(["merge-base", `refs/heads/${branch}`, baseCommit]);
     return { created: false, baseCommit: mergeBase.code === 0 ? mergeBase.stdout.trim() : baseCommit };
   }
 
-  const branchRun = await git(["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
-  if (branchRun.code === 0) throw new GitError("branch_taken", `分支 ${branch} 已经存在（可能是别的 Worker 占着），没法再建。`);
+  if (branch !== null) {
+    const branchRun = await git(["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
+    if (branchRun.code === 0) throw new GitError("branch_taken", `分支 ${branch} 已经存在（可能是别的 Worker 占着），没法再建。`);
+  }
 
   await options.prepareDir?.(worktreePath);
 
-  const addRun = await runGit(repoFolder, ["worktree", "add", "-b", branch, worktreePath, baseCommit], timeoutMs, { LC_ALL: "C" });
+  const checkout = branch === null ? ["--detach", worktreePath, baseCommit] : ["-b", branch, worktreePath, baseCommit];
+  const addRun = await runGit(repoFolder, ["worktree", "add", ...checkout], timeoutMs, { LC_ALL: "C" });
   if (addRun.code !== 0) throw failed("git worktree add", addRun);
   return { created: true, baseCommit };
 }
@@ -341,7 +349,8 @@ export type WorktreeRemovalProbe =
   | {
       kind: "ok";
       isRepoWithCommit: boolean;
-      clean: boolean;
+      /** 有只在这个目录里才有的东西：改过或暂存的已跟踪文件、未跟踪文件、子模块改动。只缺已跟踪文件不算。 */
+      hasContent: boolean;
       onBranch: boolean;
       /** HEAD 当前指向的完整提交号；还没有提交或不是仓库时是 null。 */
       head: string | null;
@@ -349,6 +358,9 @@ export type WorktreeRemovalProbe =
       inProgress: boolean;
     }
   | { kind: "failed"; error: string };
+
+/** porcelain v2 里“普通文件、索引没动、工作区里没了”的那一行的开头。 */
+const MISSING_TRACKED_FILE = "1 .D N... ";
 
 /** 这些 git 内部文件或目录存在，说明有一个多步操作停在中途（rebase、merge、cherry-pick、revert、bisect）。 */
 const IN_PROGRESS_GIT_PATHS = [
@@ -363,14 +375,15 @@ const IN_PROGRESS_GIT_PATHS = [
 
 /**
  * 自动清理删 worktree 之前探一次（一个 `git status --porcelain=v2 --branch` 子进程，外加一次 `git rev-parse --git-path` 查中间状态）：
- * - clean：没有已跟踪文件的改动、暂存、未跟踪文件、子模块改动。显式 `--untracked-files=normal`：
- *   仓库配了 `status.showUntrackedFiles=no` 时默认的 status 看不到未跟踪文件，而 `git worktree remove` 也照删不误（实测）。
+ * - hasContent：除了“工作区里缺了已跟踪文件、索引没动”（`1 .D N...`）以外的任何一行都算。缺的文件内容还在提交里，删目录丢不了东西；
+ *   上一轮删到一半中断留下的正是这个样子，所以下一轮能接着删。显式 `--untracked-files=normal`：
+ *   仓库配了 `status.showUntrackedFiles=no` 时默认的 status 看不到未跟踪文件。
  * - onBranch：HEAD 指在某个分支上；head：HEAD 的提交号。detached HEAD 上的新提交不在任何分支里，
- *   `git worktree remove` 不拦，删了 worktree 连同它的 HEAD reflog 一起没了（实测），所以调用方要先确认 head 已合入主分支，
+ *   删了 worktree 连同它的 HEAD reflog 一起没了（实测），所以调用方要先确认 head 已合入主分支，
  *   或者先给它建一个分支引用（见 pinDetachedHead），才能删。
  * - inProgress：rebase、merge、cherry-pick、bisect 进行到一半，任何时候都不删。
  * - 不是 git 仓库（目录还在但 .git 没了）返回 isRepoWithCommit: false，不算失败。
- * 被 .gitignore 忽略的文件（node_modules、.env、截图）不算改动，`git worktree remove` 会连目录一起删掉。
+ * 被 .gitignore 忽略的文件（node_modules、.env、截图）不算内容，随目录一起删。
  */
 export async function probeWorktreeForRemoval(worktreePath: string, options: GitOptions = {}): Promise<WorktreeRemovalProbe> {
   const timeoutMs = options.timeoutMs ?? GIT_PROBE_TIMEOUT_MS;
@@ -382,22 +395,22 @@ export async function probeWorktreeForRemoval(worktreePath: string, options: Git
       { ...GIT_READONLY_ENV, LC_ALL: "C" },
     );
     if (run.code === 128 && /not a git repository/i.test(run.stderr)) {
-      return { kind: "ok", isRepoWithCommit: false, clean: false, onBranch: false, head: null, inProgress: false };
+      return { kind: "ok", isRepoWithCommit: false, hasContent: true, onBranch: false, head: null, inProgress: false };
     }
     if (run.code !== 0) throw failed("git status", run);
     let hasCommit = true;
     let onBranch = false;
-    let clean = true;
+    let hasContent = false;
     let head: string | null = null;
     for (const line of run.stdout.split("\n")) {
       if (line === "") continue;
       if (line === "# branch.oid (initial)") hasCommit = false;
       else if (line.startsWith("# branch.oid ")) head = line.slice("# branch.oid ".length);
       else if (line.startsWith("# branch.head ")) onBranch = line !== "# branch.head (detached)";
-      else if (!line.startsWith("# ")) clean = false;
+      else if (!line.startsWith("# ") && !line.startsWith(MISSING_TRACKED_FILE)) hasContent = true;
     }
     const inProgress = await hasOperationInProgress(worktreePath, timeoutMs);
-    return { kind: "ok", isRepoWithCommit: hasCommit, clean, onBranch, head: hasCommit ? head : null, inProgress };
+    return { kind: "ok", isRepoWithCommit: hasCommit, hasContent, onBranch, head: hasCommit ? head : null, inProgress };
   } catch (error) {
     return { kind: "failed", error: error instanceof Error ? error.message : String(error) };
   }
@@ -430,6 +443,21 @@ export async function resolveCommit(folder: string, ref: string, options: GitOpt
   if ((run.code === 1 || run.code === 128) && run.stderr.trim() === "") return null;
   if (run.code === 128 && /not a git repository/i.test(run.stderr)) return null;
   throw failed("git rev-parse", run);
+}
+
+/**
+ * origin 上分支 branch 现在指向哪个提交（`git ls-remote origin refs/heads/<branch>`，审查开审和收尾核对用）：
+ * 仓库没有 origin 返回 undefined；origin 上没有这个分支返回 null；连不上、鉴权失败等抛 GitError（调用方重试）。
+ */
+export async function remoteBranchHead(repoFolder: string, branch: string, options: GitOptions = {}): Promise<string | null | undefined> {
+  const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
+  const remoteRun = await runGit(repoFolder, ["remote"], timeoutMs);
+  if (remoteRun.code !== 0) throw failed("git remote", remoteRun);
+  if (!remoteRun.stdout.split("\n").some((line) => line.trim() === "origin")) return undefined;
+  const run = await runGit(repoFolder, ["ls-remote", "origin", `refs/heads/${branch}`], timeoutMs, { LC_ALL: "C" });
+  if (run.code !== 0) throw failed("git ls-remote", run);
+  const line = run.stdout.split("\n").find((l) => l.endsWith(`\trefs/heads/${branch}`));
+  return line === undefined ? null : line.split("\t")[0]!;
 }
 
 /**
@@ -519,6 +547,19 @@ function lstatExists(path: string): boolean {
   }
 }
 
+/** 目录里还有没有这些提交的顶层条目（文件或目录，按文件系统自己的大小写规则找）。 */
+async function hasCheckoutRemnant(repoFolder: string, dir: string, commits: readonly string[], timeoutMs: number): Promise<boolean> {
+  for (const commit of commits) {
+    const run = await runGit(repoFolder, [...GIT_READONLY_ARGS, "ls-tree", "-z", "--name-only", commit], timeoutMs, {
+      ...GIT_READONLY_ENV,
+      LC_ALL: "C",
+    });
+    if (run.code !== 0) throw failed("git ls-tree", run);
+    if (run.stdout.split("\0").some((name) => name !== "" && lstatExists(join(dir, name)))) return true;
+  }
+  return false;
+}
+
 /** 从 porcelain=v2 的普通变更行（`1 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <path>`）取出末尾路径。 */
 function parsePorcelainV2OrdinaryPath(record: string): string | null {
   let pos = 0;
@@ -535,7 +576,9 @@ function parsePorcelainV2OrdinaryPath(record: string): string | null {
  * - 用主仓对象库与临时索引跑 `git status --porcelain=v2 -z --no-renames --untracked-files=normal`（命中忽略目录时在目录层级直接跳过，不遍历 node_modules 里的上万文件）；
  * - 若磁盘上的 `.gitignore`（含子目录）已被中断的 `git worktree remove` 删掉，把缺失项标为 `--skip-worktree` 让 git 原生从临时索引按各自子目录作用域读取，同时保留主仓 `info/exclude` 与用户全局 `core.excludesFile`；
  * - 依次用 `ref`（分支）、主分支（`origin/main` / `main` / `HEAD`，兜住 PR 已合并且分支被 `git branch -D` 删掉的场景）、`baseCommit`（及 `baseCommit..main` 中触碰过剩余路径的已合入提交）渐进消解已入库文件；
- * - 任何基准都解释不了的未忽略文件或被改写文件才算“有内容”（缺失的已跟踪文件 `.D` 不算）。
+ * - 任何基准都解释不了的未忽略文件或被改写文件才算“有内容”（缺失的已跟踪文件 `.D` 不算）；
+ * - 这些基准的顶层条目在目录里一个都不剩时，检出已经删光，剩下的是删完之后别的进程写回来的（比如 Vite 找不到 package.json 时
+ *   把缓存写到根目录的 `.vite/`），不算内容。
  */
 export async function probeOrphanContent(
   repoFolder: string,
@@ -588,6 +631,10 @@ export async function probeOrphanContent(
 
     const resolvedBase = options.baseCommit ? await resolveCommit(repoFolder, options.baseCommit, { timeoutMs }) : null;
     addCommit(resolvedBase);
+
+    if (commits.length > 0 && !(await hasCheckoutRemnant(repoFolder, orphanPath, commits, timeoutMs))) {
+      return { kind: "ok", hasContent: false };
+    }
 
     tmp = await mkdtemp(join(tmpdir(), "agent-hub-orphan-"));
     const env = { ...GIT_READONLY_ENV, LC_ALL: "C", GIT_DIR: gitDir, GIT_WORK_TREE: orphanPath, GIT_INDEX_FILE: join(tmp, "index") };
@@ -731,10 +778,13 @@ export async function probeOrphanContent(
   }
 }
 
-/** 删掉指定的 worktree（不加 --force，有未提交改动或锁着时 git 会拒绝报错；分支保留）。 */
-export async function removeWorktree(repoFolder: string, worktreePath: string, options: GitOptions = {}): Promise<void> {
-  const run = await runGit(repoFolder, ["worktree", "remove", worktreePath], options.timeoutMs ?? GIT_TIMEOUT_MS, { LC_ALL: "C" });
-  if (run.code !== 0) throw failed("git worktree remove", run);
+/**
+ * 把 worktree 挪进已存在的目录 intoDir，挪完在 `<intoDir>/<原目录名>`（`git worktree move`，一次 rename，不跨卷）。
+ * 锁着（`git worktree lock`）或带子模块的 git 会拒绝报错，什么都不动。
+ */
+export async function moveWorktree(repoFolder: string, worktreePath: string, intoDir: string, options: GitOptions = {}): Promise<void> {
+  const run = await runGit(repoFolder, ["worktree", "move", worktreePath, intoDir], options.timeoutMs ?? GIT_TIMEOUT_MS, { LC_ALL: "C" });
+  if (run.code !== 0) throw failed("git worktree move", run);
 }
 
 /** 清理仓库里已经不存在的 worktree 登记（`git worktree prune`）。 */
