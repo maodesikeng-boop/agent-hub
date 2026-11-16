@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
+  askOf,
   attachmentsOf,
   CONFIRM_REJECT_OPTION,
   extractAskCard,
@@ -29,6 +30,8 @@ import {
   REPORT_END,
   REPORT_START,
   sentFilesOf,
+  sentFilesOfDeliverables,
+  splitCardTitle,
   systemEventOf,
   systemNoticeText,
   workerEventOf,
@@ -36,6 +39,7 @@ import {
   workerPickOf,
   type AgentVendor,
   type ConversationId,
+  type Deliverable,
   type ExtractedAskCard,
   type Message,
   type MessageId,
@@ -58,9 +62,11 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/colla
 import { Input } from "../ui/input.tsx";
 import { AttachmentList } from "./Attachments.tsx";
 import { Avatar } from "./Avatar.tsx";
+import { CardBody, DeliverableFiles } from "./Deliverables.tsx";
 import { WorkerPickTag } from "./WorkerPickTag.tsx";
 import { COPIED_RESET_MS } from "./CodeBlock.tsx";
 import { Markdown } from "./Markdown.tsx";
+import { UserBlockerCard } from "./UserBlockerCard.tsx";
 
 export interface AgentIdentity {
   name: string;
@@ -146,23 +152,17 @@ export function displayText(text: string): string {
   return `${text.slice(0, start).trimEnd()}\n\n---\n\n${items.join("\n")}\n\n${text.slice(end + REPORT_END.length).trim()}`.trim();
 }
 
-function splitAskQuestionAndContext(raw: string): { title: string; context: string | null } {
-  const trimmed = raw.trim();
-  const match = /^([^\r\n]+?)(?:\r?\n\s*\r?\n)([\s\S]+)$/u.exec(trimmed);
-  if (match === null) return { title: trimmed, context: null };
-  const rest = match[2]!.trim();
-  return { title: match[1]!.trim(), context: rest === "" ? null : rest };
-}
-
 /** `hub ask` 在对话里的那张卡：有选项时是可点的 A/B/C/D 行，没有时直接展开补充框（docs/ui-standard.md 第 17 条）。 */
 function AskCard({
   card,
   files,
+  deliverables,
   messageId,
   onAnswerAsk,
 }: {
   card: ExtractedAskCard;
   files: ReturnType<typeof sentFilesOf>;
+  deliverables: readonly Deliverable[];
   messageId: MessageId;
   onAnswerAsk?: MessageActions["onAnswerAsk"];
 }) {
@@ -214,21 +214,21 @@ function AskCard({
   const answerNote = card.answerNote ?? submitted?.note;
   const answered = card.answered || submitted !== null;
   const disabled = answered || (gateRef === undefined && !onAnswerAsk) || decideMutation.isPending;
-  const { title: cardTitle, context: cardContext } = useMemo(
-    () => splitAskQuestionAndContext(card.question),
-    [card.question],
-  );
+  const { title: cardTitle, body: cardBody } = useMemo(() => splitCardTitle(card.question), [card.question]);
 
   return (
     <div className="w-full min-w-0 rounded-2xl border border-border bg-background p-4" data-ask-card>
       <div className="w-full min-w-0 text-body leading-relaxed font-medium text-foreground">
         <Markdown text={cardTitle} files={files} messageId={messageId} />
       </div>
-      {cardContext !== null && (
-        <div className="mt-1.5 w-full min-w-0 text-minor leading-relaxed text-muted-foreground">
-          <Markdown text={cardContext} files={files} messageId={messageId} />
-        </div>
-      )}
+      <CardBody
+        text={cardBody}
+        deliverables={deliverables}
+        files={files}
+        messageId={messageId}
+        className="mt-1.5"
+        textClassName="text-minor leading-relaxed text-muted-foreground"
+      />
       {(hasOptions || answerNote !== undefined) && (
         <div className="mt-3 flex flex-col gap-1.5" role="group" aria-label="Options">
           {card.options.map((opt, i) => {
@@ -317,6 +317,8 @@ function AskCard({
   );
 }
 
+const NO_DELIVERABLES: readonly Deliverable[] = [];
+
 /** agent 说的一段文字（Markdown）。hub ask 问你的不另挂“等你确定”标签：右栏已经列着，点过去会高亮这一条。 */
 const AgentText = memo(function AgentText({
   message,
@@ -327,9 +329,18 @@ const AgentText = memo(function AgentText({
   highlighted: boolean;
   onAnswerAsk?: MessageActions["onAnswerAsk"];
 }) {
-  // agent 发来的文件：meta 没变就是同一个数组，Markdown 不用重建插件
-  const files = useMemo(() => sentFilesOf(message), [message.meta]);
+  // 提问卡下面列的文件（hub ask --file、检查点卡带的步骤交付物）
+  const deliverables = useMemo(() => askOf(message)?.deliverables ?? NO_DELIVERABLES, [message.sender, message.meta]);
+  // agent 发来的文件：meta 没变就是同一个数组，Markdown 不用重建插件。正文里写了交付物的同一个链接，也换成能点开的文件
+  const files = useMemo(() => {
+    const own = sentFilesOf(message);
+    if (deliverables.length === 0) return own;
+    const hrefs = new Set(own.map((f) => f.href));
+    const extra = sentFilesOfDeliverables(deliverables).filter((f) => !hrefs.has(f.href));
+    return extra.length === 0 ? own : [...own, ...extra];
+  }, [message.meta, deliverables]);
   const askCard = useMemo(() => extractAskCard(message), [message.sender, message.meta, message.text]);
+  const blocker = askCard === null ? askOf(message) : null;
   return (
     <article
       className={cn("flex w-full min-w-0 flex-col items-start gap-1.5", highlighted && "rounded-2xl outline-2 outline-offset-4 outline-ring/60")}
@@ -337,11 +348,19 @@ const AgentText = memo(function AgentText({
       data-message-id={message.id}
       data-highlighted={highlighted ? "true" : undefined}
     >
-      {askCard ? (
-        <AskCard card={askCard} files={files} messageId={message.id} onAnswerAsk={onAnswerAsk} />
+      {blocker?.blockerRef !== undefined ? (
+        <UserBlockerCard
+          blockerId={blocker.blockerRef.blockerId}
+          text={message.text}
+          answered={blocker.answered === true}
+          className="w-full max-w-[min(100%,36rem)]"
+        />
+      ) : askCard ? (
+        <AskCard card={askCard} files={files} deliverables={deliverables} messageId={message.id} onAnswerAsk={onAnswerAsk} />
       ) : (
         <div className="w-full min-w-0 text-body leading-relaxed">
           <Markdown text={displayText(message.text)} files={files} messageId={message.id} />
+          <DeliverableFiles deliverables={deliverables} className="mt-2" />
         </div>
       )}
     </article>

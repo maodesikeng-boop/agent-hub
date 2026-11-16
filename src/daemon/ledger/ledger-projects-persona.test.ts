@@ -606,7 +606,7 @@ describe("厂商、模型、思考程度（资料页的 Agent 一栏）", () => 
         { id: "opus", label: "Opus 5.5", description: null, efforts: null },
       ],
     };
-    const withCatalog = createLedger(db, options({ modelCatalog: (vendor) => (vendor === "claude" ? catalog : null) }));
+    const withCatalog = createLedger(db, options({ models: { current: (vendor) => (vendor === "claude" ? catalog : null), availability: () => "available" } }));
     withCatalog.editPersona(lin.pmId, { model: "claude-opus-4-6" }, { kind: "user" });
     expect(messagesIn(lin.conversationId).at(-1)!.text).toBe("你改了小林的设置（模型：默认 → Opus 4.6）");
     withCatalog.editPersona(lin.pmId, { model: "claude-opus-4-1" }, { kind: "user" });

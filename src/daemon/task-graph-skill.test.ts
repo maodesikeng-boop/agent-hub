@@ -124,7 +124,7 @@ describe("任务图技能正文", () => {
     }
     expect(body).not.toContain("所有节点都完成后整张图自动结束，不能再改");
     expect(body).not.toContain("--incomplete");
-    expect(body).toContain(`\`${hub} ask --node <步骤> [--option <选项>...] [--recommended <选项>] --stdin\``);
+    expect(body).toContain(`\`${hub} ask --node <步骤> [--option <选项>...] [--recommended <选项>] [--file [标签=]路径...] --stdin\``);
     expect(body).not.toContain(`${hub} graph ask`);
     // 规矩在命令前面（claude 压缩后只重新挂每个技能的前 5,000 个 token）
     expect(body.indexOf("## 建图")).toBeLessThan(body.indexOf("## 跟进"));

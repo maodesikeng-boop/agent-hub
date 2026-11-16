@@ -27,6 +27,7 @@ import {
   MAX_MODEL_CHARS,
   MAX_REASON_CHARS,
   MAX_TASK_BYTES,
+  DELIVERABLE_LABEL_MAX_CHARS,
   PM_MODES,
   ROUTER_DISPATCH_AGENT_PATH,
   ROUTER_PM_BRIEF_MAX_CHARS,
@@ -53,7 +54,7 @@ import type { RouterSandboxGuard } from "../router/sandbox.ts";
 import type { WorkerPr, WorkerPrProbeResult } from "../../shared/hub.ts";
 import type { SelfReloadStatus } from "../../shared/api.ts";
 import type { HubCallContext, WorkspaceProbe } from "../../shared/ledger.ts";
-import { isAgentVendor, type AgentVendor, type ModelCatalog, type VendorAvailability } from "../../shared/vendors.ts";
+import { isAgentVendor, type AgentVendor, type ModelCatalog } from "../../shared/vendors.ts";
 import { vendorTranscriptPath } from "../driver/transcript.ts";
 import type { TranscriptRef } from "../driver/transcript.ts";
 import { probePr as defaultProbePr, probePrByUrl as defaultProbePrByUrl, probeWorkspace as defaultProbeWorkspace } from "../git/index.ts";
@@ -89,16 +90,14 @@ export interface AgentApiOptions {
    */
   findTranscript?: (ref: TranscriptRef) => string | null;
   /**
-   * hub worker start --vendor 选的这家在这台设备上能不能用（不能用的先重问一次，守护进程接 ModelCatalogs.ensureUsable）。
-   * 不给就不查（都当能用）。
+   * 派 Worker（hub worker start --vendor、建图或推进图时自动开工）前，让这家在这台设备上的状态是新的：还没问过、现在不能用的先问一次
+   * （守护进程接 ModelCatalogs.ensureUsable）。账本之后从同一个 ModelCatalogs 读状态。不给就不问。
    */
-  vendorUsable?: (vendor: AgentVendor) => Promise<VendorAvailability>;
+  refreshVendor?: (vendor: AgentVendor) => Promise<unknown>;
   /**
    * hub models 查询各厂商模型目录（守护进程接 ModelCatalogs）。不给就不预查，由账本用缓存或打包目录兜底。
    */
   models?: { list(options?: { refresh?: boolean | "unusable"; vendor?: AgentVendor }): Promise<ModelCatalog[]> };
-  /** 这台设备的名字（不能用时报错里写）。 */
-  deviceName?: () => string;
   /** Router 轨道 B 沙箱与活跃指令绑定守卫。 */
   sandboxGuard?: RouterSandboxGuard;
   /** Router 轨道 B 调用 `hub dispatch` 时的异步分派回调。 */
@@ -139,6 +138,19 @@ const folderOnly = { type: "object", additionalProperties: false, required: ["fo
 // hub worker …（M3）：编号是正整数；任务说明、打回的话按字节另查（BYTE_LIMITS）
 const workerIdField = { type: "integer", minimum: 1 };
 const taskField = { type: "string", minLength: 1, maxLength: MAX_TASK_BYTES };
+/** hub ask / router report 的 --file：个数超了由账本报中文原因（HUB_FILE_ARGS_MAX），这里只挡不像样的输入。 */
+const fileArgsField = {
+  type: "array",
+  items: {
+    type: "object",
+    additionalProperties: false,
+    required: ["label", "path"],
+    properties: {
+      label: { type: ["string", "null"], maxLength: DELIVERABLE_LABEL_MAX_CHARS * 4 },
+      path: pathField,
+    },
+  },
+};
 
 const scheduleIdOnly = { type: "object", additionalProperties: false, required: ["scheduleId"], properties: { scheduleId: workerIdField } };
 
@@ -249,6 +261,7 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
       node: { type: "string", minLength: 1, maxLength: MAX_NODE_KEY_CHARS * 2 },
       graphId: workerIdField,
       replaceItemId: workerIdField,
+      files: fileArgsField,
     },
   },
   "ask.close": { type: "object", additionalProperties: false, required: ["itemId"], properties: { itemId: workerIdField } },
@@ -286,6 +299,7 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
           },
         },
       },
+      files: fileArgsField,
     },
   },
   "router.note": {
@@ -570,25 +584,16 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
       const context: HubCallContext = {};
       const folder = ledger.workerStartFolder(sessionId);
       if (folder !== null) context.workspace = await probeWorkspace(folder);
-      if (opts.vendorUsable) {
-        const vendors = ledger.graphAutoDispatchVendors?.(sessionId, command, body) ?? [];
-        if (vendors.length > 0) {
-          const pairs = await Promise.all(
-            vendors.map(async (v) => [v, await opts.vendorUsable!(v)] as const),
-          );
-          context.vendorStatuses = Object.fromEntries(pairs);
-          context.deviceName = opts.deviceName?.() ?? "";
-        }
+      if (opts.refreshVendor) {
+        const refresh = opts.refreshVendor;
+        await Promise.all((ledger.graphAutoDispatchVendors?.(sessionId, command, body) ?? []).map((v) => refresh(v)));
       }
       return context;
     }
     if (command !== "worker.start") return {};
     const context: HubCallContext = {};
     // 带 --vendor：这家在这台设备上能不能用（不带就是项目经理自己那家，正在用着，不查）
-    if (opts.vendorUsable && isAgentVendor(body.vendor)) {
-      const vendor = body.vendor;
-      context.vendorStatus = { vendor, availability: await opts.vendorUsable(vendor), device: opts.deviceName?.() ?? "" };
-    }
+    if (opts.refreshVendor && isAgentVendor(body.vendor)) await opts.refreshVendor(body.vendor);
     if (body.noWorktree === true) return context;
     const folder = ledger.workerStartFolder(sessionId);
     if (folder !== null) context.workspace = await probeWorkspace(folder);

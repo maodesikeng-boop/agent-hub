@@ -58,7 +58,7 @@ B 的结论是看代码得出的，没起真进程试推送。只读本来就不
 
 ### 3.3 结论格式
 
-- 汇报八栏不变，审查步骤多两栏：`结论: PASS | PASS+NOTES | FAIL`、`验证提交: <SHA>`。`parseWorkerReport` 认这两栏，两栏都去掉首尾标点（行内代码的反引号、句号、加粗），非审查步骤不要求写。
+- 汇报九栏不变，审查步骤多两栏：`结论: PASS | PASS+NOTES | FAIL`、`验证提交: <SHA>`。`parseWorkerReport` 认这两栏，两栏都去掉首尾标点（行内代码的反引号、句号、加粗），非审查步骤不要求写。
 - 两栏记进步骤产物（`TaskArtifact` 的 `reviewVerdict`、`verifiedCommit`），`hub graph show` 和交付单里看得到；每次审查汇报整个换掉，不留前任审查的。
 - 后台的判断：
   - FAIL：不管“状态”写什么都进 waiting:pm，复现写在“问题”里原样转给项目经理。修复由项目经理另派 Worker，后台不自动加步骤。

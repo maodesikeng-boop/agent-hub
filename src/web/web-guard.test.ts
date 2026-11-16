@@ -1,4 +1,4 @@
-// 网页扫描守卫：防止 src/web 非测试代码里回潮“直接写定时器数字字面量”“写死单家厂商名”或“用标准外的圆角档”。
+// 网页扫描守卫：防止 src/web 非测试代码里回潮“直接写定时器数字字面量”“写死单家厂商名”“用标准外的圆角档”或“用 styles.css 没定义的底色”。
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { parseSync } from "oxc-parser";
@@ -128,6 +128,21 @@ describe("web-guard：src/web 代码守卫", () => {
       const lines = stripComments(readFileSync(file, "utf8")).split("\n");
       lines.forEach((line, index) => {
         if (bannedRadius.test(line)) hits.push(`${relative(WEB_DIR, file)}:${index + 1}: ${line.trim()}`);
+      });
+    }
+    expect(hits).toEqual([]);
+  });
+  it("底色 bg-<名字> 只用 styles.css 定义了 --color-<名字> 的颜色（或 Tailwind 自带的色板），没定义的会渲染成透明", () => {
+    const defined = new Set([...readFileSync(join(WEB_DIR, "styles.css"), "utf8").matchAll(/--color-([a-z0-9-]+)\s*:/g)].map((m) => m[1]!));
+    const builtin = /^(?:transparent|current|inherit|black|white|(?:red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose|slate|gray|zinc|neutral|stone)-\d{2,3})$/;
+    const bgColor = /(?:^|[\s"'`:])bg-([a-z][a-z0-9-]*)/g;
+    const hits: string[] = [];
+    for (const file of files) {
+      const lines = stripComments(readFileSync(file, "utf8")).split("\n");
+      lines.forEach((line, index) => {
+        for (const [, name] of line.matchAll(bgColor)) {
+          if (!defined.has(name!) && !builtin.test(name!)) hits.push(`${relative(WEB_DIR, file)}:${index + 1}: bg-${name}`);
+        }
       });
     }
     expect(hits).toEqual([]);

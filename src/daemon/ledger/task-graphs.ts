@@ -14,8 +14,11 @@ import {
   CONFIRM_CHECKPOINT_OPTIONS,
   CONFIRM_PASS_OPTION,
   CONFIRM_REJECT_OPTION,
+  askOf,
   isTaskGraphReadyToFinish,
   isTaskNodeWaitingPm,
+  isTaskNodeUserBlocked,
+  isTaskNodeWaitingDecision,
   isTaskNodeWaitingUser,
   systemMessageDedupeKey,
   taskNodeStatusText,
@@ -61,6 +64,7 @@ import { ASK_CARD_TELL_USER, ASK_CARD_WHERE } from "../../shared/hub.ts";
 import type { GraphPrTarget, HubCallContext } from "../../shared/ledger.ts";
 import {
   COMPLETED_GRAPH_RETENTION_MS,
+  DELIVERABLES_PER_STEP_MAX,
   DELIVERY_FILES_MAX,
   DELIVERY_NOTE_MAX_CHARS,
   GRAPH_HISTORY_PAGE_SIZE,
@@ -93,6 +97,10 @@ import {
 import { HUB_COMMAND } from "../../shared/names.ts";
 import { reviewReportProblem, reviewVerifyFailedText, type ReviewTarget, type ReviewVerifyResult } from "../../shared/review.ts";
 import type { RouterReportLink } from "../../shared/router.ts";
+import type { SentFile } from "../../shared/sent-files.ts";
+import { graphDeliverables, mergeDeliverables, type HubFileArg } from "../../shared/deliverables.ts";
+import { stepDeliverablesOfReport } from "../deliverables.ts";
+import { UserBlockedError, type UserBlocker, type UserBlockerId } from "../../shared/user-blockers.ts";
 import { checkWorkerMaxTimeMs, parseWorkerMaxTime } from "../../shared/schedule.ts";
 import {
   AGENT_VENDORS,
@@ -120,9 +128,12 @@ import type { LedgerProjects } from "./projects.ts";
 import type { LedgerRouter } from "./router.ts";
 import { toMessage, type MessageDbRow } from "./rows.ts";
 import type { LedgerSessions } from "./sessions.ts";
+import { userBlockedPmNote, type LedgerUserBlockers } from "./user-blockers.ts";
+import type { ReportMessage } from "./workers.ts";
 import {
   buildStepFirstMessage,
   formatStepUpstreamForTakeover,
+  formatStepUserBlockedMessage,
   formatStepWaitingPmMessage,
   renderGraphStepTask,
   upstreamReportFilePath,
@@ -524,9 +535,17 @@ const patchSpecSchema = z.object({
   removeEdges: z.array(z.object({ from: z.string(), to: z.string() })).optional(),
 });
 
-function toTaskNode(row: TaskNodeDbRow, includeDetails = false): TaskNode {
+/** 全量快照（includeDetails 是 false）只给等用户拍板的步骤带交付物，控快照体积；被卡住等用户动手的步骤不是拍板，不带。单图详情都带。 */
+function artifactForView(artifact: TaskArtifact | null, waitingDecision: boolean, includeDetails: boolean): TaskArtifact | null {
+  if (artifact?.deliverables === undefined || waitingDecision || includeDetails) return artifact;
+  const { deliverables: _omitted, ...rest } = artifact;
+  return Object.keys(rest).length > 0 ? rest : null;
+}
+
+function toTaskNode(row: TaskNodeDbRow, includeDetails = false, blockers?: ReadonlyMap<number, UserBlocker>): TaskNode {
   const { artifact, checkpointPending } = readStoredArtifact(row.artifact_json);
   const waitingUser = row.status === "waiting" && row.waiting_for === "user";
+  const userBlocker = blockers?.get(row.id) ?? null;
   const base: TaskNode = {
     key: row.node_key,
     title: row.title,
@@ -536,13 +555,14 @@ function toTaskNode(row: TaskNodeDbRow, includeDetails = false): TaskNode {
     sortOrder: row.sort_order,
     activeWorkerId: row.active_worker_id,
     workerIds: parseJsonOr<WorkerId[]>(row.worker_ids_json, []),
-    artifact,
+    artifact: artifactForView(artifact, waitingUser && userBlocker === null, includeDetails),
     gateQuestion: row.gate_question,
     gateOptions: parseJsonOr<string[]>(row.gate_options_json, []),
     gateSummaryMd: row.gate_summary_md,
     gateRecommended: row.gate_recommended,
     gateAskMessageId: row.gate_ask_message_id,
     ...(waitingUser && checkpointPending ? { gateCheckpoint: true } : {}),
+    userBlocker,
     decision: parseJsonOr<TaskDecision | null>(row.decision_json, null),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -645,6 +665,8 @@ interface ProgressResult {
   turned: TurnedStep[];
   dispatched: Array<{ key: TaskNodeKey; title: string; workerId: WorkerId }>;
   dispatchFailed: Array<{ key: TaskNodeKey; title: string; index: number; total: number; reason: string }>;
+  /** 自动开工要用户本人动手（厂商没登录、没装）：已挂卡等用户，处理完系统自动接着派（docs/user-blockers-design.md）。 */
+  userBlocked: Array<{ key: TaskNodeKey; note: string }>;
 }
 
 const turnedListText = (turned: readonly TurnedStep[]): string =>
@@ -660,6 +682,9 @@ function unlockedNoteOf(progress: ProgressResult, graph: TaskGraph): string {
     parts.push(
       `步骤「${f.key}」自动开工未成功（${f.reason}），已置为等你处理（换人：${HUB_COMMAND} worker start --node ${f.key} --graph ${graph.id} --vendor <别家>）`,
     );
+  }
+  for (const b of progress.userBlocked) {
+    parts.push(`步骤「${b.key}」等用户动手：${b.note}（要换别家：${HUB_COMMAND} worker start --node ${b.key} --graph ${graph.id} --vendor <别家>）`);
   }
   if (progress.turned.length > 0) {
     const pmKeys = progress.turned.filter((u) => u.waitingFor === "pm").map((u) => u.key);
@@ -755,9 +780,19 @@ export function createLedgerTaskGraphs(
   persona: LedgerPersona,
   projects: LedgerProjects,
   router: Pick<LedgerRouter, "reportIn">,
-  options: { launchDir: string; workers?: () => TaskGraphWorkersBridge | undefined } = { launchDir: "" },
+  options: {
+    launchDir: string;
+    workers?: () => TaskGraphWorkersBridge | undefined;
+    userBlockers?: Pick<LedgerUserBlockers, "raiseIn" | "blockStep" | "ofSteps">;
+  } = { launchDir: "" },
 ) {
   const { db, now, write, enqueue } = ctx;
+
+  /** 步骤被哪条还在等的阻塞卡着（步骤编号 → 阻塞），任务图读出来时一起带上。 */
+  const blockersOf = (rows: readonly TaskNodeDbRow[]): ReadonlyMap<number, UserBlocker> =>
+    options.userBlockers?.ofSteps(rows.map((r) => r.id)) ?? new Map();
+  const isUserBlocked = (stepId: number): boolean =>
+    db.get("SELECT 1 AS x FROM user_blocker_steps WHERE step_id = ?", stepId) !== undefined;
   const { assertPmNotArchived, privateConversation, pmRow } = persona;
   const { activeProjectOf } = projects;
 
@@ -804,6 +839,7 @@ export function createLedgerTaskGraphs(
       "SELECT * FROM task_graph_edges WHERE graph_id = ? ORDER BY from_key ASC, to_key ASC",
       id,
     );
+    const blockers = blockersOf(nodeRows);
     return {
       id: row.id,
       projectId: row.project_id,
@@ -813,7 +849,7 @@ export function createLedgerTaskGraphs(
       ...(includeDetails ? { goal: row.goal } : {}),
       status: row.status as TaskGraphStatus,
       originMsgId: row.origin_msg_id,
-      nodes: nodeRows.map((n) => toTaskNode(n, includeDetails)),
+      nodes: nodeRows.map((n) => toTaskNode(n, includeDetails, blockers)),
       edges: edgeRows.map((e) => ({ fromKey: e.from_key, toKey: e.to_key })),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -834,7 +870,8 @@ export function createLedgerTaskGraphs(
         ORDER BY n.graph_id ASC, n.sort_order ASC, n.id ASC`,
       idsJson,
     );
-    for (const n of nodeRows) byId.get(n.graph_id)?.nodes.push(toTaskNode(n));
+    const blockers = blockersOf(nodeRows);
+    for (const n of nodeRows) byId.get(n.graph_id)?.nodes.push(toTaskNode(n, false, blockers));
 
     const edgeRows = db.all<TaskEdgeDbRow>(
       `SELECT e.* FROM task_graph_edges e
@@ -1479,9 +1516,10 @@ export function createLedgerTaskGraphs(
    * 按拓扑序重算整张活跃任务图里轮到了哪些步骤（docs/orchestration-simplify-design.md 第 3.2、4.3 节）：
    * - 前置步骤都完了（跳过也算完了）的 pending 步骤：
    *   - 挂了未答拍板卡（gate_question 非空） -> 等用户（waiting_for = 'user'）并发卡片消息；
-   *   - 有非空 brief -> 后台自动拉起 Worker 进入 running；若厂商不可用或启动报错 -> 置为 waiting_for = 'pm' 并报告原因；
+   *   - 有非空 brief -> 后台自动拉起 Worker 进入 running；厂商没登录、没装 -> 挂卡等用户（waiting_for = 'user'，记进 user_blocker_steps）；
+   *     别的启动报错 -> 置为 waiting_for = 'pm' 并报告原因；
    *   - 无 brief 的手动步骤 -> 置为 waiting_for = 'pm'。
-   * - 后台触发（callerSession 为空）时，若自动拉起失败，立即按第 9.4 节格式向 PM 发唤醒消息。
+   * - 后台触发（callerSession 为空）时，若自动拉起失败，立即向 PM 发唤醒消息（等用户动手的只是告诉它已挂卡）。
    */
   const recomputeGraphProgressIn = (
     p: Pending,
@@ -1492,7 +1530,7 @@ export function createLedgerTaskGraphs(
   ): ProgressResult => {
     const retractBlockedWaiting = opts.retractBlockedWaiting ?? true;
     const { nodeRows, edges, byKey, incoming, outgoing } = buildGraphMaps(graphRow.id);
-    if (nodeRows.length === 0) return { turned: [], dispatched: [], dispatchFailed: [] };
+    if (nodeRows.length === 0) return { turned: [], dispatched: [], dispatchFailed: [], userBlocked: [] };
 
     const order = validateDagAndOrder(
       nodeRows.map((n) => n.node_key),
@@ -1503,6 +1541,7 @@ export function createLedgerTaskGraphs(
     const turned: TurnedStep[] = [];
     const dispatched: Array<{ key: TaskNodeKey; title: string; workerId: WorkerId }> = [];
     const dispatchFailed: Array<{ key: TaskNodeKey; title: string; index: number; total: number; reason: string }> = [];
+    const userBlocked: ProgressResult["userBlocked"] = [];
     const pmSession = callerSession ?? sessions.currentSession(graphRow.conversation_id);
     const pm = pmRow(graphRow.pm_id);
     const bridge = options.workers?.();
@@ -1626,6 +1665,27 @@ export function createLedgerTaskGraphs(
             p.changes.length = prevChangesLen;
             p.actions.length = prevActionsLen;
             p.stops.length = prevStopsLen;
+            if (error instanceof UserBlockedError && options.userBlockers !== undefined) {
+              const blocker = options.userBlockers.raiseIn(p, error.blocker.kind, error.blocker.vendor, graphRow.conversation_id);
+              node.status = "waiting";
+              node.waiting_for = "user";
+              db.run("UPDATE task_graph_steps SET status = 'waiting', waiting_for = 'user', updated_at = ? WHERE id = ?", t, node.id);
+              options.userBlockers.blockStep(node.id, blocker.id);
+              const note = userBlockedPmNote(blocker);
+              userBlocked.push({ key: node.node_key, note });
+              if (callerSession == null) {
+                messages.enqueueWakeupUserMessageIn(p, {
+                  conversationId: graphRow.conversation_id,
+                  dedupeKey: userMessageDedupeKey(graphRow.conversation_id, `graph-user-blocked:${graphRow.id}:${node.node_key}:${blocker.id}`),
+                  text: formatStepUserBlockedMessage({
+                    graph: { id: graphRow.id, title: graphRow.title },
+                    step: { key: node.node_key, title: node.title, index: stepIndex, total: totalSteps },
+                    note,
+                  }),
+                });
+              }
+              continue;
+            }
             const reason = error instanceof Error ? error.message : String(error);
             node.status = "waiting";
             node.waiting_for = "pm";
@@ -1706,7 +1766,7 @@ export function createLedgerTaskGraphs(
 
     db.run("UPDATE task_graphs SET updated_at = ? WHERE id = ?", t, graphRow.id);
 
-    return { turned, dispatched, dispatchFailed };
+    return { turned, dispatched, dispatchFailed, userBlocked };
   };
 
   /**
@@ -2049,7 +2109,11 @@ export function createLedgerTaskGraphs(
   const askOnStepIn = (
     p: Pending,
     caller: AgentSessionRow & { pmId: PmId },
-    args: HubArgs<"ask"> & { node: TaskNodeKey },
+    args: Omit<HubArgs<"ask">, "files"> & {
+      node: TaskNodeKey;
+      /** --file 存好的副本（hub-commands.ts 已查过都存下了）。 */
+      fileArgs?: { args: readonly HubFileArg[]; files: readonly SentFile[] };
+    },
   ): HubResult<"ask"> => {
     assertPmNotArchived(caller.pmId);
     const nodeKey = validateNodeKey(args.node);
@@ -2087,6 +2151,7 @@ export function createLedgerTaskGraphs(
       gate_summary_md: gate.summaryMd,
       gate_recommended: gate.recommended,
     });
+    const prevArtifact = readStoredArtifact(node.artifact_json).artifact;
     const askMsg = messages.insertAskMessage(
       p,
       { ...caller, conversationId: graphRow.conversation_id },
@@ -2095,9 +2160,18 @@ export function createLedgerTaskGraphs(
       {
         gateRef: { graphId: graphRow.id, nodeKey },
         ...(gate.recommended !== null ? { recommended: gate.recommended } : {}),
+        ...(args.fileArgs !== undefined ? { fileArgs: args.fileArgs, deliverables: prevArtifact?.deliverables ?? [] } : {}),
       },
     );
-    const cleanedArtifactJson = serializeArtifact(readStoredArtifact(node.artifact_json).artifact, false);
+    // --file 挂的文件新的在前，合进该步交付物
+    const stepDeliverables =
+      args.fileArgs === undefined
+        ? null
+        : mergeDeliverables([askOf(askMsg)?.deliverables ?? [], prevArtifact?.deliverables ?? []], DELIVERABLES_PER_STEP_MAX);
+    const cleanedArtifactJson = serializeArtifact(
+      stepDeliverables === null ? prevArtifact : { ...prevArtifact, deliverables: stepDeliverables },
+      false,
+    );
     db.run(
       `UPDATE task_graph_steps
           SET gate_question = ?,
@@ -2606,7 +2680,7 @@ export function createLedgerTaskGraphs(
     const progress: ProgressResult =
       graphRow.status === "active"
         ? recomputeGraphProgressIn(p, graphRow, caller, context, { retractBlockedWaiting: false })
-        : { turned: [], dispatched: [], dispatchFailed: [] };
+        : { turned: [], dispatched: [], dispatchFailed: [], userBlocked: [] };
     if (graphRow.status === "active") syncDeliveryNoteAfterProgressIn(p, graphRow, wasAllSettled);
     const slimGraph = loadGraph(graphRow.id, false)!;
     const graph = loadGraph(graphRow.id)!;
@@ -2679,7 +2753,7 @@ export function createLedgerTaskGraphs(
     const dedupeId = clientId ?? `pm:${t}:${node.id}`;
     const bridge = options.workers?.();
     const checkpoint = isStoredCheckpoint(node);
-    const emptyProgress: ProgressResult = { turned: [], dispatched: [], dispatchFailed: [] };
+    const emptyProgress: ProgressResult = { turned: [], dispatched: [], dispatchFailed: [], userBlocked: [] };
 
     if (checkpoint) {
       const passed = choice === CONFIRM_PASS_OPTION;
@@ -3053,7 +3127,7 @@ export function createLedgerTaskGraphs(
     if (node === undefined) throw fail("not_found", `任务图 #${graphRow.id} 中没有节点「${nodeKey}」`);
     if (node.status === "done") {
       if (node.skipped === 1) {
-        return { graph: loadGraph(graphRow.id)!, messageId: null, progress: { turned: [], dispatched: [], dispatchFailed: [] } };
+        return { graph: loadGraph(graphRow.id)!, messageId: null, progress: { turned: [], dispatched: [], dispatchFailed: [], userBlocked: [] } };
       }
       throw fail("conflict", `节点「${nodeKey}」已经完了，不能跳过`);
     }
@@ -3271,10 +3345,12 @@ export function createLedgerTaskGraphs(
       if (artifact?.prUrl) pushLink(`${n.node_key} PR`, artifact.prUrl);
     }
 
-    const report = router.reportIn(p, caller, {
-      summary,
-      ...(links.length > 0 ? { links } : {}),
-    });
+    const report = router.reportIn(
+      p,
+      caller,
+      { summary, ...(links.length > 0 ? { links } : {}) },
+      graphDeliverables(nodeRows.filter((n) => n.status === "done").map((n) => toTaskNode(n, true))),
+    );
 
     const t = now();
     // 第 6 节：步骤完了以后，它的 Worker 由后台收工（被下一步接手时，或图结束时）
@@ -3453,7 +3529,7 @@ export function createLedgerTaskGraphs(
       if (graphRow.status !== "active") {
         throw fail("conflict", `任务图 #${graphId} 已结束（${graphRow.status}）`);
       }
-      if (node.status !== "waiting" || (node.waiting_for !== "user" && node.active_worker_id !== null)) {
+      if (node.status !== "waiting" || isUserBlocked(node.id) || (node.waiting_for !== "user" && node.active_worker_id !== null)) {
         throw fail("conflict", `步骤「${nodeKey}」${taskNodeStatusText(toTaskNode(node), "user")}，现在不能拍板`);
       }
 
@@ -3559,11 +3635,12 @@ export function createLedgerTaskGraphs(
     const node = nodeRows[index];
     if (node === undefined) throw fail("not_found", `任务图 #${graphRow.id} 中没有节点「${nodeKey}」`);
     const replacing = node.active_worker_id !== null;
-    const dispatchable = node.status === "done" ? node.skipped === 0 : node.status === "waiting" && node.waiting_for === "pm";
+    const dispatchable =
+      node.status === "done" ? node.skipped === 0 : node.status === "waiting" && (node.waiting_for === "pm" || isUserBlocked(node.id));
     if (!replacing && !dispatchable) {
       throw fail(
         "conflict",
-        `节点「${nodeKey}」${taskNodeStatusText(toTaskNode(node), "pm")}（等你处理、已经完了要打回，或者有 Worker 挂着要换人，才能派 Worker）`,
+        `节点「${nodeKey}」${taskNodeStatusText(toTaskNode(node), "pm")}（等你处理、等用户动手、已经完了要打回，或者有 Worker 挂着要换人，才能派 Worker）`,
       );
     }
     if (!replacing && node.status === "done") {
@@ -3766,6 +3843,75 @@ export function createLedgerTaskGraphs(
   };
 
   /**
+   * 步骤上挂着的 Worker 起不来、要用户本人动手（docs/user-blockers-design.md）：步骤改等用户、记上这条阻塞，Worker 不收工。
+   * 返回交给项目经理的那段话；Worker 不在活跃图的步骤上返回 null。
+   */
+  const onWorkerUserBlockedIn = (p: Pending, workerId: WorkerId, blocker: UserBlocker): string | null => {
+    const node = db.get<TaskNodeDbRow>("SELECT * FROM task_graph_steps WHERE active_worker_id = ?", workerId);
+    if (node === undefined) return null;
+    const graphRow = getGraphRow(node.graph_id);
+    if (graphRow === undefined || graphRow.status !== "active") return null;
+    const allNodes = db.all<{ node_key: string }>(
+      "SELECT node_key FROM task_graph_steps WHERE graph_id = ? ORDER BY sort_order ASC, id ASC",
+      graphRow.id,
+    );
+    const t = now();
+    db.run("UPDATE task_graph_steps SET status = 'waiting', waiting_for = 'user', updated_at = ? WHERE id = ?", t, node.id);
+    options.userBlockers?.blockStep(node.id, blocker.id);
+    db.run("UPDATE task_graphs SET updated_at = ? WHERE id = ?", t, graphRow.id);
+    const graph = loadGraph(graphRow.id, false);
+    if (graph !== null) p.changes.push({ type: "task_graph.updated", data: { graph } });
+    return formatStepUserBlockedMessage({
+      graph: { id: graphRow.id, title: graphRow.title },
+      step: {
+        key: node.node_key,
+        title: node.title,
+        index: allNodes.findIndex((n) => n.node_key === node.node_key) + 1 || 1,
+        total: allNodes.length,
+      },
+      note: `Worker #${workerId} 起不来：${userBlockedPmNote(blocker)}`,
+    });
+  };
+
+  const notifyUserBlockedStepsIn = (p: Pending, blockerId: UserBlockerId): void => {
+    const graphIds = db.all<{ graph_id: number }>("SELECT DISTINCT n.graph_id FROM task_graph_steps n JOIN user_blocker_steps s ON s.step_id = n.id WHERE s.blocker_id = ?", blockerId);
+    for (const { graph_id } of graphIds) {
+      const graph = loadGraph(graph_id, false);
+      if (graph !== null) p.changes.push({ type: "task_graph.updated", data: { graph } });
+    }
+  };
+
+  /**
+   * 这条阻塞解开了（user-blockers.ts 的 resolveIn，同一个事务里 Worker 那边接着跑）：被它卡住、还在等用户的步骤全部离开等用户——
+   * 没派出去的退回没轮到、重算整张图（自动开工）；挂着的 Worker 还开着的回到在干；Worker 已经收工的交给项目经理。每张受影响的图都推一次变化。
+   */
+  const releaseUserBlockedStepsIn = (p: Pending, blockerId: UserBlockerId): void => {
+    const rows = db.all<TaskNodeDbRow & { worker_status: string | null }>(
+      `SELECT n.*, w.status AS worker_status FROM task_graph_steps n
+         JOIN user_blocker_steps s ON s.step_id = n.id
+         LEFT JOIN workers w ON w.id = n.active_worker_id
+        WHERE s.blocker_id = ? AND n.status = 'waiting' AND n.waiting_for = 'user' ORDER BY n.id`,
+      blockerId,
+    );
+    const t = now();
+    const graphIds = new Set<TaskGraphId>();
+    for (const row of rows) {
+      const [status, waitingFor] =
+        row.active_worker_id === null ? ["pending", null] : row.worker_status === "open" ? ["running", null] : ["waiting", "pm"];
+      db.run("UPDATE task_graph_steps SET status = ?, waiting_for = ?, updated_at = ? WHERE id = ?", status, waitingFor, t, row.id);
+      graphIds.add(row.graph_id);
+    }
+    for (const graphId of graphIds) {
+      const graphRow = getGraphRow(graphId);
+      if (graphRow === undefined) continue;
+      if (graphRow.status === "active") recomputeGraphProgressIn(p, graphRow, undefined, undefined, { retractBlockedWaiting: false });
+      db.run("UPDATE task_graphs SET updated_at = ? WHERE id = ?", t, graphId);
+      const graph = loadGraph(graphId, false);
+      if (graph !== null) p.changes.push({ type: "task_graph.updated", data: { graph } });
+    }
+  };
+
+  /**
    * 图内步骤的 Worker 一轮正常结束（第 4.1、4.6、6、9.4 节）：
    * - 做完了 + 无偏离 + 未标 confirm + 非后台强停补报 -> 步骤自动标 done，自动收工 Worker，自动拉起就绪下游，全程不叫醒 PM（问题非无则抄送 PM，全部完成发交付单）；
    * - 汇报偏离、confirm: true、有问题、放弃了或没按格式 -> 置为 waiting:pm（Worker 不收工），按第 9.4 节格式叫醒 PM；
@@ -3777,7 +3923,7 @@ export function createLedgerTaskGraphs(
     parsed: ParsedWorkerReport,
     rawBody: string,
     forcedNote: string | null,
-    opts?: { hasPendingFollowup?: boolean; reviewVerified?: ReviewVerifyResult },
+    opts?: { hasPendingFollowup?: boolean; reviewVerified?: ReviewVerifyResult; reportMessage?: ReportMessage | null },
   ):
     | { handled: false }
     | { handled: true; outcome: "verify" }
@@ -3794,8 +3940,12 @@ export function createLedgerTaskGraphs(
 
     const prUrl = parsed.kind === "ok" ? extractReportPrUrl(parsed.report.pr) : null;
     const prevArtifact = readStoredArtifact(node.artifact_json).artifact ?? {};
+    // “文件”栏写了就换成这次的；没写保留上一次交的
+    const reportDeliverables =
+      parsed.kind === "ok" && opts?.reportMessage != null ? stepDeliverablesOfReport(parsed.report, opts.reportMessage) : [];
     const mergedArtifact: TaskArtifact = {
       ...prevArtifact,
+      ...(reportDeliverables.length > 0 ? { deliverables: reportDeliverables } : {}),
       ...(worker.branch ? { branch: worker.branch } : {}),
       ...(parsed.kind === "ok" && parsed.report.commit ? { commit: parsed.report.commit } : {}),
       ...(prUrl ? { prUrl } : {}),
@@ -3865,9 +4015,10 @@ export function createLedgerTaskGraphs(
         const gateQuestion = truncateChars(`请确认步骤「${node.title}」的结果`, MAX_GATE_QUESTION_CHARS);
         const gateOptions = [...CONFIRM_CHECKPOINT_OPTIONS];
         const gateOptionsJson = JSON.stringify(gateOptions);
+        // 第一段是摘要，其余是细节：卡片里摘要后面紧跟文件，细节默认收起（shared/card-text.ts）
         const summaryParts: string[] = [];
         if (parsed.report.summary.trim() !== "") {
-          summaryParts.push(`**摘要**：${parsed.report.summary.trim()}`);
+          summaryParts.push(`**摘要**：${parsed.report.summary.trim().replace(/\n\s*\n/gu, "\n")}`);
         }
         const handoffText = parsed.report.handoff.trim();
         if (handoffText !== "" && !isReportFieldNone(handoffText)) {
@@ -3902,6 +4053,7 @@ export function createLedgerTaskGraphs(
             {
               gateRef: { graphId: graphRow.id, nodeKey: node.node_key, checkpoint: true },
               recommended: CONFIRM_PASS_OPTION,
+              ...(mergedArtifact.deliverables !== undefined ? { deliverables: mergedArtifact.deliverables } : {}),
             },
           );
           askMsgId = msg.id;
@@ -4355,13 +4507,15 @@ export function createLedgerTaskGraphs(
     const lines = graphs.map((g) => {
       const runningKeys = g.nodes.filter((n) => n.status === "running").map((n) => n.key);
       const waitingPmKeys = g.nodes.filter(isTaskNodeWaitingPm).map((n) => n.key);
-      const waitingUserKeys = g.nodes.filter(isTaskNodeWaitingUser).map((n) => n.key);
+      const waitingDecisionKeys = g.nodes.filter(isTaskNodeWaitingDecision).map((n) => n.key);
+      const userBlockedKeys = g.nodes.filter(isTaskNodeUserBlocked).map((n) => n.key);
       const doneCount = g.nodes.filter((n) => n.status === "done").length;
       const tags: string[] = [`进度 ${doneCount}/${g.nodes.length}`];
       if (isTaskGraphReadyToFinish(g)) tags.push("待交付");
       if (runningKeys.length > 0) tags.push(`在干：${runningKeys.join("、")}`);
       if (waitingPmKeys.length > 0) tags.push(`等你处理：${waitingPmKeys.join("、")}`);
-      if (waitingUserKeys.length > 0) tags.push(`等用户拍板：${waitingUserKeys.join("、")}`);
+      if (waitingDecisionKeys.length > 0) tags.push(`等用户拍板：${waitingDecisionKeys.join("、")}`);
+      if (userBlockedKeys.length > 0) tags.push(`等用户动手（已挂卡，处理完自动接着派）：${userBlockedKeys.join("、")}`);
       return `- #${g.id}「${g.title}」（${tags.join("；")}）`;
     });
     return {
@@ -4439,6 +4593,9 @@ export function createLedgerTaskGraphs(
     bindWorkerStartedIn,
     onWorkerTurnReportIn,
     onWorkerFailedIn,
+    onWorkerUserBlockedIn,
+    releaseUserBlockedStepsIn,
+    notifyUserBlockedStepsIn,
     onWorkerResumedIn,
     onWorkerEndedIn,
     workerGraphForkBase,

@@ -2,7 +2,9 @@
 export * from "./actions.ts";
 export * from "./api.ts";
 export * from "./attachments.ts";
+export * from "./card-text.ts";
 export * from "./decisions.ts";
+export * from "./deliverables.ts";
 export * from "./domain.ts";
 export * from "./driver.ts";
 export * from "./handover.ts";
@@ -28,6 +30,7 @@ export * from "./store.ts";
 export * from "./task-graph-compat.ts";
 export * from "./task-graph-skill.ts";
 export * from "./tunnel.ts";
+export * from "./user-blockers.ts";
 export * from "./vendor-sync.ts";
 export * from "./worker.ts";
 export * from "../vendors/registry.ts";

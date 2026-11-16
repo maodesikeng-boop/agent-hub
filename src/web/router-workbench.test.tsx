@@ -659,7 +659,7 @@ describe("Needs You 托盘", () => {
     await act(async () => releaseResolve!());
   });
 
-  it("补充依据按 Markdown 渲染（段落、编号、子列表、行内代码），超过 5 行默认收起并给 Show more / Show less；托盘不画全宽分割线、滚动区留底边、时间流顶边渐隐；长选项和 Recommended 分开排", async () => {
+  it("补充依据按 Markdown 渲染（段落、编号、子列表、行内代码），第一段是摘要（超过 3 行收起），其余是细节默认收起，Show more / Show less 一起管；托盘不画全宽分割线、滚动区留底边、时间流顶边渐隐；长选项和 Recommended 分开排", async () => {
     const longContext = [
       "方案文档：`docs/orchestration-skill-design.md`",
       "",
@@ -681,26 +681,27 @@ describe("Needs You 托盘", () => {
         items: [
           makeDecisionItem({ id: 101, question: "方案怎么推进？", context: longContext, options: [`(Recommended) ${longOption}`, "合并成一步做"], createdAt: now - 60_000 }),
           makeDecisionItem({ id: 102, question: "要不要覆盖手机？", context: "只差手机外壳", options: ["要", "不要"], createdAt: now - 120_000 }),
+          makeDecisionItem({ id: 103, question: "首页改版要不要上？", context: "首页改版".repeat(30), options: ["上", "不上"], createdAt: now - 180_000 }),
         ],
         commands: [makeCommandRecord()],
       },
     });
     installFleet({ local: localSnap });
-    // jsdom 不排版：补充依据框的内容高度按正文行数算（每行 22px），框高 5 行（收起时）
+    // jsdom 不排版：摘要框的内容高度按正文行数算（每行 22px，一行 30 字），框高 3 行（收起时）
     const proto = HTMLElement.prototype;
-    const lines = (el: HTMLElement) => (el.textContent ?? "").length / 12 + el.querySelectorAll("p, li").length;
+    const lines = (el: HTMLElement) => Math.ceil((el.textContent ?? "").length / 30);
     Object.defineProperty(proto, "scrollHeight", {
       configurable: true,
       get(this: HTMLElement) {
-        return this.hasAttribute("data-decision-context") ? Math.ceil(lines(this)) * 22 : 0;
+        return this.hasAttribute("data-card-lead") ? lines(this) * 22 : 0;
       },
     });
     Object.defineProperty(proto, "clientHeight", {
       configurable: true,
       get(this: HTMLElement) {
-        if (!this.hasAttribute("data-decision-context")) return 0;
-        const full = Math.ceil(lines(this)) * 22;
-        return this.classList.contains("decision-context-clamp") ? Math.min(full, 5 * 22) : full;
+        if (!this.hasAttribute("data-card-lead")) return 0;
+        const full = lines(this) * 22;
+        return this.classList.contains("card-lead-clamp") ? Math.min(full, 3 * 22) : full;
       },
     });
     try {
@@ -726,25 +727,25 @@ describe("Needs You 托盘", () => {
       expect(css).toMatch(/\n\.markdown code\s*\{[^}]*(?<!-webkit-)box-decoration-break:\s*clone/);
 
       const card = tray.querySelector("article")!;
-      const context = card.querySelector<HTMLElement>("[data-decision-context]")!;
-      // Markdown：段落、编号列表、子列表、行内代码都是真的元素，不是一坨纯文本
-      expect(context.querySelector("ol > li")).toHaveTextContent(/拆不拆只看/);
-      expect(context.querySelectorAll("ol > li > ul > li")).toHaveLength(2);
-      expect([...context.querySelectorAll("code")].map((c) => c.textContent)).toEqual(["docs/orchestration-skill-design.md", "fusa-task-graph"]);
-      expect(context.className).toContain("text-minor");
-      expect(context.className).toContain("text-muted-foreground");
-
-      // 长：默认收起（5 行、底部渐隐），Show more 展开、Show less 收回
-      expect(context.className).toContain("decision-context-clamp");
-      expect(context).toHaveAttribute("data-overflowing");
+      const lead = card.querySelector<HTMLElement>("[data-card-lead]")!;
+      expect(lead).toHaveTextContent("方案文档：docs/orchestration-skill-design.md");
+      expect(lead.className).toContain("text-minor");
+      expect(lead.className).toContain("text-muted-foreground");
+      expect(lead).not.toHaveAttribute("data-overflowing");
+      // 细节默认收起，Show more 展开、Show less 收回
+      expect(card.querySelector("[data-card-details]")).toBeNull();
       const more = within(card).getByRole("button", { name: "Show more" });
       expect(more).toHaveAttribute("aria-expanded", "false");
-      expect(more).toHaveAttribute("aria-controls", context.id);
+      expect(more).toHaveAttribute("aria-controls", card.querySelector("[data-card-body]")!.id);
       await user.click(more);
-      expect(context.className).not.toContain("decision-context-clamp");
-      expect(context).not.toHaveAttribute("data-overflowing");
+      const details = card.querySelector<HTMLElement>("[data-card-details]")!;
+      // Markdown：段落、编号列表、子列表、行内代码都是真的元素，不是一坨纯文本
+      expect(details.querySelector("ol > li")).toHaveTextContent(/拆不拆只看/);
+      expect(details.querySelectorAll("ol > li > ul > li")).toHaveLength(2);
+      expect([...card.querySelectorAll("code")].map((c) => c.textContent)).toEqual(["docs/orchestration-skill-design.md", "fusa-task-graph"]);
+      expect(details.className).toContain("text-muted-foreground");
       await user.click(within(card).getByRole("button", { name: "Show less" }));
-      expect(context.className).toContain("decision-context-clamp");
+      expect(card.querySelector("[data-card-details]")).toBeNull();
 
       // 长选项：键帽、文字、Recommended 顶对齐，Recommended 和文字分开（放得下在右边，放不下换到下面）
       const recOption = within(card).getByRole("button", { name: new RegExp(longOption) });
@@ -758,7 +759,17 @@ describe("Needs You 托盘", () => {
       const shortCard = tray.querySelector("article")!;
       expect(within(shortCard).getByText("只差手机外壳")).toBeInTheDocument();
       expect(within(shortCard).queryByRole("button", { name: /Show (more|less)/ })).toBeNull();
-      expect(shortCard.querySelector("[data-decision-context]")).not.toHaveAttribute("data-overflowing");
+      expect(shortCard.querySelector("[data-card-lead]")).not.toHaveAttribute("data-overflowing");
+
+      // 摘要超过 3 行：收起、底部渐隐，Show more 放开
+      await user.click(within(tray).getByRole("button", { name: /首页改版要不要上？/ }));
+      const longCard = tray.querySelector("article")!;
+      const longLead = longCard.querySelector<HTMLElement>("[data-card-lead]")!;
+      expect(longLead.className).toContain("card-lead-clamp");
+      expect(longLead).toHaveAttribute("data-overflowing");
+      await user.click(within(longCard).getByRole("button", { name: "Show more" }));
+      expect(longLead.className).not.toContain("card-lead-clamp");
+      expect(longLead).not.toHaveAttribute("data-overflowing");
     } finally {
       // 两个 getter 原本在 Element.prototype 上，删掉 HTMLElement.prototype 上的这层就还原了
       Reflect.deleteProperty(proto, "scrollHeight");
@@ -1197,7 +1208,9 @@ describe("时间流：简报、已读、贴底和历史", () => {
     expect(tokyoHead).toHaveTextContent("Tokyo");
     expect(tokyoHead.textContent).not.toMatch(/[·|/]/);
 
-    // 链接：外链是普通行内链接（带图标，不用胶囊）；worker:N 可点；文件路径没有可预览的副本，画成普通文字
+    // 链接行是细节，默认收起（docs/ui-standard.md 第 22 条）。外链是普通行内链接（带图标，不用胶囊）；worker:N 可点；文件路径没有可预览的副本，画成普通文字
+    expect(within(briefings()[1]!).queryByRole("link", { name: /PR #398/ })).toBeNull();
+    await user.click(within(briefings()[1]!).getByRole("button", { name: "Show more" }));
     const external = within(briefings()[1]!).getByRole("link", { name: /PR #398/ });
     expect(external).toHaveAttribute("href", "https://github.com/example/agent-hub/pull/398");
     expect(external).toHaveAttribute("target", "_blank");
@@ -1884,6 +1897,10 @@ describe("顶栏模型选择入口（RouterModelPicker）", () => {
     expect(popover.textContent).not.toMatch(/[·|/]/);
 
     const group = within(popover).getByRole("radiogroup", { name: "Router provider" });
+    // jsdom 量不了版面：锁住浮层宽度跟内容走（280px 到 360px），装行的两层 grid 都是 minmax(0,1fr)，长模型名撑不宽列、只会自己截断
+    expect(popover).toHaveClass("w-max", "min-w-70", "max-w-[min(22.5rem,var(--radix-popover-content-available-width))]");
+    expect(group).toHaveClass("grid-cols-1");
+    expect(group.parentElement).toHaveClass("grid-cols-1");
     expect(within(group).getByRole("radio", { name: new RegExp(`Auto.*${firstPresetShort}`) })).toHaveAttribute("aria-checked", "true");
     const signedOutRadio = within(group).getByRole("radio", { name: new RegExp(`${signedOutSpec.label}.*Not signed in`) });
     expect(signedOutRadio).toBeDisabled();

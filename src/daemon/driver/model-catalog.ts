@@ -112,12 +112,12 @@ export interface ModelCatalogs {
    * refresh：true 不管新不新都重新问一次；"unusable" 只重问现在不能用（没登录、没装）的那几家。都是问完再回。
    */
   list(options?: { refresh?: boolean | "unusable"; vendor?: AgentVendor }): Promise<ModelCatalog[]>;
-  /** 现在缓存着的那份（不问厂商、不等），还没问到过是 null。账本写系统消息时用。 */
+  /** 现在缓存着的那份（不问厂商、不等），availability 是现在的状态（同 availability()）；还没问到过名单是 null。 */
   current(vendor: AgentVendor): ModelCatalog | null;
-  /** 现在的状态（不问厂商、不等；装没装每次查文件）。提示词用。 */
+  /** 现在的状态（不问厂商、不等；装没装每次查文件）。这台设备上厂商能不能用只认它：账本派 Worker、提示词都读这里。 */
   availability(vendor: AgentVendor): VendorAvailability;
   /**
-   * hub worker start 用：现在不能用的先重问这一家一次，再给状态；能用的不问。最多等 VENDOR_RECHECK_BUDGET_MS，
+   * 派 Worker、建图自动开工前用：还没问过或现在不能用的先问这一家一次，再给状态；能用的不问。最多等 VENDOR_RECHECK_BUDGET_MS，
    * 没问完就按现在的状态回，重问在后台接着跑（下一次调用看得到新结果）。
    */
   ensureUsable(vendor: AgentVendor): Promise<VendorAvailability>;
@@ -267,14 +267,16 @@ export function createModelCatalogs(options: ModelCatalogsOptions): ModelCatalog
       return Promise.all(vendors.map((vendor) => catalogOf(slotOf(vendor), refresh)));
     },
     current(vendor) {
-      return slotOf(vendor)?.cached ?? null;
+      const slot = slotOf(vendor);
+      return slot.cached === null ? null : result(slot);
     },
     availability(vendor) {
       return availabilityOf(slotOf(vendor));
     },
     async ensureUsable(vendor) {
       const slot = slotOf(vendor);
-      if (slot.source && !closed && installed(slot) && (!isSelectable(availabilityOf(slot)) || fingerprintChanged(slot))) {
+      const unasked = slot.availability === null;
+      if (slot.source && !closed && installed(slot) && (unasked || !isSelectable(availabilityOf(slot)) || fingerprintChanged(slot))) {
         let timer: ReturnType<typeof setTimeout> | undefined;
         const timedOut = new Promise<void>((resolve) => {
           timer = setTimeout(resolve, ensureUsableBudgetMs);

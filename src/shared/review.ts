@@ -5,7 +5,7 @@ import type { WorkerPr, WorkerPrProbeResult } from "./hub.ts";
 export const REVIEW_VERDICTS = ["PASS", "PASS+NOTES", "FAIL"] as const;
 export type ReviewVerdict = (typeof REVIEW_VERDICTS)[number];
 
-/** 审查步骤的汇报在八栏之外多出的两栏。 */
+/** 审查步骤的汇报在九栏之外多出的两栏。 */
 export const REVIEW_VERDICT_FIELD = "结论";
 export const REVIEW_SHA_FIELD = "验证提交";
 
@@ -150,4 +150,5 @@ export const REVIEW_CHECKLIST = [
   "- 发现问题不修，写清复现：命令、输入、实际和期望的结果、文件和行号。要留在 PR 上的意见用 `gh pr comment` 发评论。修复由项目经理另派 Worker。",
   `- 汇报在“摘要”下面多写两栏：\`${REVIEW_VERDICT_FIELD}: ${REVIEW_VERDICTS.join(" | ")}\` 和 \`${REVIEW_SHA_FIELD}: <你验证的完整提交号>\`。PASS 是可以合；PASS+NOTES 是可以合，不挡合并的意见写进“问题”；FAIL 是不能合，复现写进“问题”，步骤停下等项目经理处理。`,
   "- “交棒”列出你查了什么，每条给出文件和行号。",
+  "- 结论和复现写成一份 Markdown 文件，连同截图、录屏写进“文件”栏，用户在检查点卡和总助上点开就能看。",
 ].join("\n");

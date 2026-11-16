@@ -1149,7 +1149,7 @@ describe("deepseek 零子进程本地凭据与模型目录探测（catalog.ts + 
           log: (line) => logs.push(line),
         });
         const [item] = await catalogs.list({ vendor: "deepseek" });
-        expect(catalogs.current("deepseek")).toEqual(bundledModelCatalog("deepseek"));
+        expect(catalogs.current("deepseek")).toEqual({ ...bundledModelCatalog("deepseek"), availability: item!.availability });
         return item!.availability;
       };
 

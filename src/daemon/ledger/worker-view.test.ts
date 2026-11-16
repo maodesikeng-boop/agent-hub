@@ -404,7 +404,7 @@ describe("模型名、思考程度：和网页右栏、资料页一样的写法"
       pmHomeRoot: join(root, ".agent-hub", "pm-home"),
       dataHome: join(root, ".agent-hub"),
       resolveFolder: createResolveFolder({ dataHome: join(root, ".agent-hub"), userHome: root }),
-      modelCatalog: (vendor) => ({ ...bundledModelCatalog(vendor), source: "vendor", defaultModel: "Opus 5.5" }),
+      models: { current: (vendor) => ({ ...bundledModelCatalog(vendor), source: "vendor", defaultModel: "Opus 5.5" }), availability: () => "available" },
     });
     const w = startWorker("claude");
     db.run("UPDATE agent_sessions SET model = NULL WHERE worker_id = ?", w);

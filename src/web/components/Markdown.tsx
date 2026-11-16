@@ -5,6 +5,7 @@ import remarkCjkFriendly from "remark-cjk-friendly/parseOnly";
 import remarkCjkFriendlyGfmStrikethrough from "remark-cjk-friendly-gfm-strikethrough/parseOnly";
 import remarkGfm from "remark-gfm";
 import {
+  deliverableOriginOfFile,
   isSentImage,
   linkNodesOf,
   parseLocalHref,
@@ -87,9 +88,13 @@ function useSentFile(props: object): { file: SentFile; index: number; messageId:
   return file === undefined ? undefined : { file, index, messageId };
 }
 
-/** 点开预览窗要的信息；没有消息编号（不是从消息里渲染的）就没有 Finder / 默认程序按钮。 */
+/**
+ * 点开预览窗要的信息。从交付物换来的文件按交付物记的原消息找；别的按这条消息的第几个找，没有消息编号（不是从消息里渲染的）就没有 Finder / 默认程序按钮。
+ */
 function previewOf(file: SentFile, url: string, index: number, messageId: number | undefined): PreviewFile {
-  return { name: file.name, mime: file.mime, size: file.size, url, target: messageId === undefined ? null : { kind: "sent", messageId, index } };
+  const origin = deliverableOriginOfFile(file);
+  const at = origin !== undefined ? origin : messageId === undefined ? null : { messageId, index };
+  return { name: file.name, mime: file.mime, size: file.size, url, target: at === null ? null : { kind: "sent", messageId: at.messageId, index: at.index } };
 }
 
 /** 内联图片，点开预览窗。固定 240px 高、最宽 320px，加载前后高度不变（消息流不跳，docs/ui-standard.md 第 15、17 条）；文件被清理掉了（取文件 404，<img> 报错）就换成“文件已过期”的卡片，不留破图、点不开。 */

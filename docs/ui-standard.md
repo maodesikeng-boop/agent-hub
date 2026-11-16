@@ -107,6 +107,7 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
 | 新简报分隔线 / 回复被截断 / 去向行状态词（已启动、已暂停、已结束、已创建） | New / Reply truncated / Started / Paused / Ended / Created |
 | 选项卡片补充框占位 / Router 发令框占位 | Add a note, or type a custom reply… / Tell Router, or type @ to pick a project… / Tell Router… |
 | 任务流图 / 待交付 / 步骤四个状态：没轮到 / 在干 / 等人（等你拍板、等项目经理） / 完了（做完、跳过） | Task Graph / Ready to finish / Blocked / Working… / Waiting on you / Waiting on PM / Done / Skipped |
+| 要你动手的提醒卡：已处理（点了重查）/ 重查中 | Done / Checking… |
 | 补充说明 / 跳过此步 / 取消任务图 / 已完成卷 / 待解锁卷 / 加载更多 / 放大查看 / 同层折叠并行数 | Add note / Skip step / Cancel graph / N done / N next / Load more / Zoom / +N parallel |
 | 集成 / 跨厂商同步 / 扫描预览 / 立即同步 | Integrations / Vendor sync / Scan… / Sync preview / Sync |
 | MCP 服务 / 技能 / 云端连接器 / 取消勾选将移除 / 已有同名配置原样保留 | MCP servers / Skills / Cloud connectors / Unchecked — will be removed / Kept existing |
@@ -265,8 +266,9 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 
 ## 11. 浮层（Popover）
 
-`PopoverContent`：`rounded-2xl border border-border bg-background p-4`，宽 280px。里面的分块标题用组标题的样式（13.5px、500、灰），内容 15px，次要信息 13.5px 灰。
+`PopoverContent`：`rounded-2xl border border-border bg-background p-4`，宽度见下面“宽度跟内容走”。里面的分块标题用组标题的样式（13.5px、500、灰），内容 15px，次要信息 13.5px 灰。
 
+- **宽度跟内容走，最窄 280px、最宽 360px**：`PopoverContent` 自带 `w-max min-w-70 max-w-[min(22.5rem,var(--radix-popover-content-available-width))]`，内容短是 280px，长了跟着变宽，到 360px（窗口窄时到 Radix 量好的可用宽度）为止。到了上限还放不下，由里面的内容自己截断：浮层里装行的 `grid` 一律写 `grid-cols-1`（= `minmax(0,1fr)`，道理同第 10 条“宽度不能被内容撑开”），行里放不下的那一项 `min-w-0 truncate`、全名放 `title`，靠右的控件（单选圆点、状态词、箭头）`shrink-0`。不写 `grid-cols-1` 的话，不换行的长名字会把整列撑得比浮层宽，靠右的东西被裁掉。
 - **高度受可用空间限制**：`PopoverContent` 自带 `max-h-(--radix-popover-content-available-height) overflow-y-auto overscroll-contain`（Radix 量好的“窗口剩下的高度”，已扣掉离边 12px 的 `collisionPadding`），窗口矮了内容在浮层里滚，不顶出窗口、标题不被切；不自己用 JS 量窗口高度。`m3.test.tsx` 守着这几个类名。
 - **额度浮层**（左下角额度按钮点开，`QuotaPopover`）：
   - 结构：一家厂商一组，厂商名做组标题（13.5px、500、灰，组标题和内容之间 8px）；组与组之间 24px（`gap-6`）。按需查的厂商（Antigravity）分模型族（Gemini、Claude and GPT）：族名是组内一行小标题（12px `text-xs`、500、灰），各族之间 16px，族名和它的窗口之间 12px。**不用“·”拼厂商和模型族**（读屏：厂商是 `region`，模型族是 `group`）。
@@ -322,6 +324,9 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
   - 右侧挂出整张图唯一一张浅果冻拍板卡（`rounded-2xl border border-primary bg-jelly px-3.5 py-3`）：标题用 `text-body font-semibold text-primary`，摘要支持 Markdown（`text-minor`）；推荐主选项按钮用 `rounded-xl bg-primary text-primary-foreground`（右标 `Recommended`），其余选项按钮用 `rounded-xl border border-border bg-background hover:bg-jelly-hover`；底部 `Add note` 展开补充输入框（`placeholder="Add a note, or type a custom reply…"`），同时支持**一键点选选项**、**输入备注后点选选项（选项 + 备注）**、以及**不选预设项直接 `Send` 自定义备注**，统一调用 `POST /api/task-graphs/:graphId/nodes/:nodeKey/decide`。
   - 标了 `confirm: true` 的用户检查点步骤（选项为「通过 / 打回」，推荐「通过」）自动默认展开底部补充输入框，方便用户在点「打回」或「通过」前一行填写修改意见，无需多点一次 `Add note`。
   - 拍板通过（`done`，带定案）后水果刀收起、果冻卡收合，该节点变回紧凑果皮轨单行，并在右侧显示所选简称（`text-xs text-foreground`）。
+- **要你动手的提醒卡（`UserBlockerCard`，步骤 `waiting` + `waitingFor: "user"` 且带 `userBlocker`，docs/user-blockers-design.md）**：
+  - 水果刀与泳道照拍板步骤画，卡片换成提醒卡：外壳同拍板卡（`rounded-2xl border border-primary bg-jelly px-3.5 py-3`），顶上一行 `size-2 rounded-full bg-status-active` 圆点加 `text-xs font-medium text-primary` 的 `Waiting on you`，正文是系统写的那句（在哪台设备做什么，`text-minor` Markdown），右下一个主按钮 `Done`（`Button size="sm"`），重查中显示 `Checking…` 加转圈并禁用；不加说明小字。放大全览弹窗里步骤标题行已经写了 `Waiting on you`，卡里那一行不再出。
+  - 对话里那条消息是同一张卡；处理完（重查能用）后卡变成 `border-border bg-background`（同已回答的提问卡），状态词改 `Done`（`text-muted-foreground`，圆点 `bg-muted-foreground`），不再有按钮。已挂在步骤上的那张不在 `Needs You` 重复出现。
 - **放大全览弹窗（`TaskGraphDialog`）**：
   - 点击任务头右上角 `Maximize2`（或 `Completed` 列表中的历史任务图行）打开 `Dialog`（复用第 15 条放大窗规格 `h-[90dvh] w-[min(96vw,1400px)] max-w-none`，滚动视口保持弹窗内边距 `p-6` 不外扩贴边，原生双向滚动）。
   - 调用 `src/web/task-graph-layout.ts` 的 `computeTaskGraphLayout(..., viewportMode: "dialog")`（横向 `rankdir: "LR"`，`lru-cache` 容量 64），底层单张 `<svg aria-hidden="true">` 绘制 `1.5px` 三次贝塞尔有向连线与 `3px` 轻量折角箭头（上游 `done` 实线，其余 `stroke-dasharray="4 3"` 虚线；跨多层且直连会擦碰中间卡片的长边沿 Dagre 分层拐点平滑绕行，绝不横穿中间卡片正文），上层渲染完整阶段卡片（已完成绿勾、在干同色系果皮浅晕圆环、等项目经理琥珀圆点）、绑定 Piece 跳转、产物摘要、内联拍板/跳过节点（`Skip step`）/取消任务图（`Cancel graph`）及历史拍板记录。
@@ -517,7 +522,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - **`Needs You` 托盘**：只放待拍板项。没有待拍板项时不渲染。套 `.chat-column`；下边 1px `border-border` 画在列里那一层，**只和对话列一样宽，不横贯整个主区**，线下留 12px（`pb-3`）空白再接时间流的视口。滚动区桌面最高 `50dvh`、手机外壳最高 `33dvh`，超出在里面滚，上下边渐隐（`.router-tray-scroll`，同左栏列表的 8px / 20px），渐隐带落在滚动区的 `pt-2` / `pb-5` 里：没滚动时不淡，滚到底卡片的底边和圆角完整、下面留 20px。左右各外扩 10px（`-mx-2.5 px-2.5`），收起的行的果冻底不被裁。组标题照第 12 条（12px、500、灰，高 32px，右边数量），整行可点收起。第一张用 `RouterDecisionCard` 完整展开，其余每张一行（来源头像 20px、名字、问题第一行 `truncate`、时间、`ChevronRight`，行的尺寸照第 12 条），点一行换它展开，收起的行超过 3 条出 `Show more`。
 - **待拍板卡（`RouterDecisionCard`）**：
   - 卡片容器 `rounded-2xl border border-border bg-background p-4`；一句话问题用 `text-body font-medium`，补充依据用 `text-minor text-muted-foreground`。
-  - **补充依据是 Markdown**（`hub router ask` / `hub graph ask` 传来的段落、编号、子列表、行内代码）：用共用的 `<Markdown>`（第 15 条）渲染，不压成一段纯文本；卡片里是紧凑排版，段落、列表之间 0.375em（消息里的一半），不加框线。超过 5 行（`.decision-context-clamp`，行数只在 `styles.css` 改）默认收起、最后一行渐隐，下面一个 `Show more` / `Show less`（`text-minor` 灰字按钮，`aria-expanded`、`aria-controls`）；没超过不出按钮。换一张卡展开时收起状态不带过去。
+  - **补充依据是 Markdown**（`hub router ask` / `hub graph ask` 传来的段落、编号、子列表、行内代码）：用共用的 `<Markdown>`（第 15 条）渲染，不压成一段纯文本；卡片里是紧凑排版，段落、列表之间 0.375em（消息里的一半），不加框线。分成摘要和细节，顺序和收起照第 22 条（细节一行放得下就直接显示，超过一行默认收起）；`N downstream steps waiting` 也算细节。换一张卡展开时收起状态不带过去。
   - **预设选项行**：`rounded-xl border border-border px-3 py-2.5`，`items-start`、行高 `leading-6`（单行正好 44px）；左放 `A` / `B` 键帽徽标（和第一行文字对齐），推荐项标 `Recommended`（12px 灰）。文字和 `Recommended` 在一个 `flex-wrap` 里：文字放得下 20rem（`basis-80`）时 `Recommended` 在右边、和第一行对齐、离文字 16px；放不下（手机）换到文字下面，不把选项挤成一条窄列。
   - **常驻单行补充框（零二级展开按钮、零悬停隐藏操作）**：卡片底部直接内嵌单行 `<Input>`（`h-9 rounded-xl`，占位 `Add a note, or type a custom reply…`）+ 右侧同高 `Button size="icon"`（`size-9`，`ArrowUp` 图标，空输入时 `disabled` 中性灰），触屏热区均 ≥ 44px。
   - **三合一拍板路径**：
@@ -535,8 +540,26 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
   - 未读分隔线：打开时有没看过的简报，在最早一条上面画 `New`（12px 灰）加 1px 细线，写法同第 17 条“换新会话”的分隔线。
 - **空状态**：没有待拍板项也没有任何条目时，居中 `<KnifeAvatar size={36} className="opacity-40" />` 和 `All clear`（`text-minor text-muted-foreground`）。
 - **顶栏模型选择入口（`RouterModelPicker`）**：顶栏右边一个 `Button variant="ghost"`（第 6 条：平时没有底色、描边，不是胶囊），显示当前实际生效的模型：自动时是灰色的 `Auto` 加模型短名，指定了厂商时是灰色的厂商名加模型短名，最右一个 16px `ChevronDown`；几项之间只靠 8px 间距隔开，不用“·”“|”“/”。窄了先收前缀（主区窄于 25rem 收厂商名，窄于 19rem 连 `Auto` 也收），再窄模型短名 `truncate`，`Router` 标题不被挤、顶栏不横向溢出。打开时不加底色，箭头变前景色。
-  - **面板**：电脑外壳是 `Popover`（第 11 条，宽 280px，靠右对齐），手机外壳是底部 `Drawer`（第 10 条），里面是同一份内容。最上面是单选列表（`RadioMark`，第 9 条）：第一行 `Auto`（清掉自己选的，交给总助按各家预设挑），下面一家厂商一行，右边 13.5px 灰字是这家会用的模型短名；没登录的照列但不能选，右边写状态词（`Not signed in`），没装的不列。行高 36px，触屏 44px。点一家就存，模型和思考程度填这家的 `routerDefault` 预设。
+  - **面板**：电脑外壳是 `Popover`（第 11 条，宽度跟内容走，280px 到 360px，靠右对齐；再长模型短名截断成省略号，全名在 `title`），手机外壳是底部 `Drawer`（第 10 条），里面是同一份内容。最上面是单选列表（`RadioMark`，第 9 条）：第一行 `Auto`（清掉自己选的，交给总助按各家预设挑），下面一家厂商一行，右边 13.5px 灰字是这家会用的模型短名；没登录的照列但不能选，右边写状态词（`Not signed in`），没装的不列。行高 36px，触屏 44px。点一家就存，模型和思考程度填这家的 `routerDefault` 预设。
   - **`Model & effort` 默认收起**：只在选了具体厂商时出现，一行折叠开关（13.5px、500、灰），收起时右边是当前思考程度和 `ChevronDown`，展开后箭头转 180°、不再重复写思考程度；下面两行 `Select variant="plain"` 换这家别的模型和思考程度，改了马上存。这家只有一档思考程度时开关叫 `Model`，不出思考程度那一行。
   - **保存**：点了先显示，请求没回来时一直显示最后选的（连着改两次不闪回前一次）；失败退回原来的值，列表下面一行 `RowError`。
   - **`Manage providers…`**：有没装或没登录的厂商时出现在最下面（13.5px、500、灰，右边 `ChevronRight`），先关面板再去 `Settings → Providers`（手机是 `#/settings/providers`）。
 - **输入框**：复用 `<DraftComposer>`，占位 `Tell Router, or type @ to pick a project…`，手机外壳是 `Tell Router…`。向上叠盖 26px，写法同对话页。
+
+## 22. 交付物（方案、验收结论、截图、录屏）
+
+组件只有一个：`src/web/components/Deliverables.tsx` 的 `<CardBody>`（正文和文件）和它里面的 `<DeliverableFiles>`（文件）。对话里的提问卡、右栏 Needs You 和果皮轨门禁卡、Router 待拍板卡和简报都用它。方案见 `docs/deliverables-design.md`。
+
+- **顺序**：标题 → 摘要 → 文件 → 细节 → 选项。用户最要看的是“做了什么”和文件，手机托盘只有三分之一屏高，文件行要不滑就看得到。
+  - **摘要**：正文的第一段（`shared/card-text.ts` 的 `splitLead`，代码块外的第一个空行分界）。收起时最多 3 行（`.card-lead-clamp`，行数只在 `styles.css` 改），超出的最后一行渐隐。写卡片正文的地方把最要紧的一句放第一段：检查点卡第一段是 `**摘要**：`，汇报摘要里的空行并成换行。
+  - **细节**：第一段以后的段落（交棒要点、提交、PR、附带说明），加上简报的链接行、拍板卡的 `N downstream steps waiting`。排在文件后面。**一行放得下就直接显示**（比如只有一两个链接、一行提交号）：这时 `Show more` 自己就占一行，收起来只是多点一下。**超过一行默认收起**。一行的判断：画出来量细节框的高度，比 2.4em（按细节的字号）矮算一行（`DETAILS_ONE_LINE_MAX_EM`）；卡片变宽变窄、内容变了重量一次，在绘制前定下来，不闪；量不到高度时当放不下。四处同一个规则，只在 `CardBody` 里写，不给哪一处单加判断。
+  - **一个开关**：摘要超过 3 行或细节被收起时，最下面一个 `Show more` / `Show less`（`text-minor` 灰字按钮，`aria-expanded`，`aria-controls` 指向整块正文），同时管摘要的收起和细节；都没有不出按钮。
+  - 块与块之间 8px（`flex flex-col gap-2`）；没有的块不渲染，不留空。
+
+- **分两行**（`flex flex-col gap-2`），按 `groupDeliverables` 分组，没有的那行不渲染：
+  - **文档行**：md、pdf、html、csv、代码等。一个文件一个行内链接：14px 线条图标（`FileText`）+ 标签，`text-minor`，颜色和下划线同第 15 条的 `[data-file-link]`；`flex-wrap gap-x-3 gap-y-1`，触屏热区照第 19 条。不用胶囊、不加框。
+  - **媒体行**：图片、视频。缩略图固定 96px 高（`h-24 w-auto`，最宽 `max-w-40`，`object-cover`），`rounded-xl border border-border bg-muted`，`gap-2`，放不下横向滚（`overflow-x-auto`，不换行）。视频取第一帧（`preload="metadata"`），正中盖一个 36px 圆形深色半透明底的 `Play` 图标；不自动播放。
+- **点开**：都打开同一个预览窗（`FilePreview`）：图片看大图，视频用原生播放器（`controls`、`playsInline`），md 渲染，pdf、html 内联。
+- **悬停与聚焦**：缩略图是 `button`，聚焦态照第 7 条；鼠标是放大镜（图片）或手形（视频）。标签放 `aria-label`，图片 `alt` 也是标签。
+- **过期**：副本被定期清理掉（取文件 404）的，换成第 15 条的“文件已过期”卡片，不留破图。
+- **不写说明文字**：不加“附件”“交付物”这类组标题，不写文件大小。

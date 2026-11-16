@@ -22,7 +22,6 @@ import { deliveryParts } from "../../shared/worker.ts";
 import { waitingAsksNote } from "../../shared/waiting-asks.ts";
 import { MESSAGE_PAGE_SIZE, WORKER_PURGE_BATCH_ROWS } from "../../shared/limits.ts";
 import { snapshotWindowStart, workerLineSummaries } from "../../shared/snapshot.ts";
-import type { AgentVendor, ModelCatalog } from "../../shared/vendors.ts";
 import { getAgentSession, toAgentSessionRow } from "../store/index.ts";
 import type { AgentSessionDbRow, Db } from "../store/index.ts";
 import { createLedgerContext } from "./context.ts";
@@ -47,6 +46,7 @@ import { createLedgerSteps } from "./steps.ts";
 import { createLedgerTaskGraphs } from "./task-graphs.ts";
 import { createLedgerTakeover } from "./takeover.ts";
 import { createSkillFiles, type SkillFiles } from "../skill-files.ts";
+import { createLedgerUserBlockers } from "./user-blockers.ts";
 import { taskGraphManualNote } from "../task-graph-skill.ts";
 import { createLedgerWorkerRetention } from "./worker-retention.ts";
 import type { WorkerPurgeBatch } from "./worker-retention.ts";
@@ -80,8 +80,10 @@ export interface SqliteLedger extends Ledger {
 
 export interface LedgerOptions {
   now?: () => number;
-  /** 现在缓存着的模型名单（ModelCatalogs.current）：系统消息、hub 输出里的模型名用它的显示名。不给用打包的。 */
-  modelCatalog?: (vendor: AgentVendor) => ModelCatalog | null;
+  /** 这台设备的名字（要用户在这台设备上动手时写在卡上），默认本机的主机名。 */
+  deviceName?: () => string;
+  /** 这台设备上各家的模型名单和状态：系统消息、hub 输出里的模型名用名单的显示名，派 Worker 前看厂商能不能用。不给用打包的、状态 unknown。 */
+  models?: LedgerContextOptions["models"];
   /** 缓存着的这个会话的完整命令列表（CommandCatalogs.cached）：手打命令时，列表里这个名字是用户自己的就不拦。没缓存、不给都按名字拦。 */
   knownCommands?: LedgerContextOptions["knownCommands"];
   /** 本次启动的初始 seq，默认启动时刻的毫秒时间戳（比上次运行用过的都大）。 */
@@ -187,15 +189,23 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   const projects = createLedgerProjects(ctx, sessions, messages, persona, files);
   const router = createLedgerRouter(ctx, sessions, messages, persona, projects);
   const effectiveLaunchDir = files.launchDir ?? join(dataHome, "state", "launch");
+  // 要用户本人动手的阻塞：挂卡在这里，解开时步骤交给任务图重算、Worker 交给 workers 重发（docs/user-blockers-design.md）
+  const userBlockers = createLedgerUserBlockers(ctx, sessions, messages, () => ({
+    releaseStepsIn: taskGraphs.releaseUserBlockedStepsIn,
+    notifyStepsIn: taskGraphs.notifyUserBlockedStepsIn,
+    resumeWorkerIn: workers.resumeUserBlockedWorkerIn,
+  }));
   const taskGraphs = createLedgerTaskGraphs(ctx, sessions, messages, persona, projects, router, {
     launchDir: effectiveLaunchDir,
     workers: () => workers,
+    userBlockers,
   });
   const steps = createLedgerSteps(ctx);
   const workers = createLedgerWorkers(ctx, sessions, messages, persona, projects, {
     worktreesDir: files.worktreesDir,
     ...(files.extraWorktreeRoots ? { extraWorktreeRoots: files.extraWorktreeRoots } : {}),
     taskGraphs,
+    userBlockers,
     // 换人接手时新 Worker 的第一条消息：前任的汇报、最后的文字、最后几步操作、原始记录路径，从账本现取（takeover.ts）
     takeover: createLedgerTakeover(ctx, steps, { findTranscript: options.findTranscript }),
   });
@@ -218,7 +228,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     turnMaxTimeOf: workers.turnMaxTimeOf,
     isWorktreeCleaned: workers.isWorktreeCleaned,
   });
-  const hub = createLedgerHubCommands(ctx, persona, projects, workers, messages, schedules, workerView, router, taskGraphs, taskGraphManual);
+  const hub = createLedgerHubCommands(ctx, persona, projects, workers, messages, schedules, workerView, router, taskGraphs, sentFiles, taskGraphManual);
   const launch = createLedgerLaunchContext(db, persona, projects, workers);
 
   /** 建项目经理；给了主文件夹就在同一个事务里给它建项目（同 hub project create）。 */
@@ -449,6 +459,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     listRouterItems: router.listItems,
     resolveRouterItem: router.resolveItem,
     answerAsk: router.answerAsk,
+    recheckUserBlocker: userBlockers.recheck,
+    userBlockerVendor: userBlockers.vendorOf,
     deliveryOf: (message) => {
       const parts = deliveryParts(message);
       // 项目经理对话里用户说的话：原文前面带账本里此刻还在等的提问卡（送出那一刻现查，排队期间有卡被回答了也不会写旧的）

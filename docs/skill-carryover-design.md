@@ -145,7 +145,7 @@ export interface AgentToolResultEvent {
 - 只用来认技能加载。账本不存进数据库（`messages`、`session_steps` 都不写它），不进状态快照，不进给网页的任何响应。
 - 驱动按 spec 声明的字段取（下文 `skillSignals.outputField`），用共享的 `toolOutputText`（`src/vendors/_common/tool-output.ts`）摊平成文字：字符串原样；数组逐项接起来；对象取 `text`，没有就取 `content`，再没有取 `stdout`。claude 的块数组、pi 的 `{content: [...]}`、ACP 的 `[{type: "content", content: {text}}]`、cursor 的 `{content}` 和 `{stdout}` 都是这一个函数。摊平时到上限就停，超出的部分不认，事件也不会背着几兆的输出走。
 
-**记录表**，新迁移 `0029_loaded_skills.sql`（main 上 `0028_review_workers.sql` 已占了 0028）：
+**记录表**，新迁移 `0031_loaded_skills.sql`（main 上 0028～0030 已被 `review_workers`、`user_blockers`、`deliverables` 占了）：
 
 ```sql
 CREATE TABLE loaded_skills (
@@ -311,7 +311,7 @@ skillSignals: {
 
 ### 要改的文件
 
-- `migrations/0029_loaded_skills.sql`：新表。
+- `migrations/0031_loaded_skills.sql`：新表。
 - `src/shared/driver.ts`：`AgentToolResultEvent.outputs`。
 - `src/vendors/_common/tool-output.ts`（新）：`toolOutputText(value)`，按上限摊平返回原文。
 - 各家驱动（`claude/protocol.ts`、`codex/driver.ts`、`agy/driver.ts`、`pi/driver.ts`、`_common/acp/driver.ts`）：发 `agent.tool_result` 时按 `skillSignals.outputField` 带上 `outputs`。

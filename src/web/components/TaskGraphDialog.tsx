@@ -5,6 +5,7 @@ import {
   isTaskGraphReadyToFinish,
   isTaskNodeWaitingPm,
   isTaskNodeWaitingUser,
+  userBlockerCardText,
   type ConversationId,
   type TaskGraph,
   type TaskNode,
@@ -18,6 +19,7 @@ import { computeTaskGraphLayout, DEFAULT_ROOT_FONT_SIZE_PX } from "../task-graph
 import { Button } from "../ui/button.tsx";
 import { Dialog, DialogBody, DialogClose, DialogContent, DialogFooter } from "../ui/dialog.tsx";
 import { KnifeAvatar } from "./KnifeAvatar.tsx";
+import { UserBlockerCard } from "./UserBlockerCard.tsx";
 import { GateDecisionCard, resolveBoundWorker } from "./PeelTrack.tsx";
 import { fruitTrackVars, SliceWheelIcon } from "./SliceWheelIcon.tsx";
 
@@ -273,15 +275,19 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                       </span>
                       <span className="shrink-0 text-xs font-medium text-primary">Waiting on you</span>
                     </div>
-                    <GateDecisionCard
-                      key={node.gateAskMessageId ?? node.key}
-                      graphId={graph.id}
-                      node={node}
-                      client={client}
-                      onNoteToggle={(noteOpen) =>
-                        setExpandedNotes((prev) => ({ ...prev, [node.key]: noteOpen }))
-                      }
-                    />
+                    {node.userBlocker != null ? (
+                      <UserBlockerCard blockerId={node.userBlocker.id} text={userBlockerCardText(node.userBlocker)} showStatus={false} />
+                    ) : (
+                      <GateDecisionCard
+                        key={node.gateAskMessageId ?? node.key}
+                        graphId={graph.id}
+                        node={node}
+                        client={client}
+                        onNoteToggle={(noteOpen) =>
+                          setExpandedNotes((prev) => ({ ...prev, [node.key]: noteOpen }))
+                        }
+                      />
+                    )}
                   </div>
                 );
               }

@@ -25,6 +25,7 @@ import { normalizeWorkerTitle, systemMessageDedupeKey, utf8Bytes, workerMessageD
 import type {
   AgentSessionRow,
   ConversationId,
+  Message,
   MessageId,
   PmId,
   PmMode,
@@ -56,7 +57,8 @@ import {
   type ReviewVerifyResult,
 } from "../../shared/review.ts";
 import { checkWorkerMaxTimeMs, formatDurationShort } from "../../shared/schedule.ts";
-import { AGENT_VENDORS, checkEffort, checkModel, checkModelEffort, isAgentVendor, splitModelEffort, vendorUnavailableMessage } from "../../shared/vendors.ts";
+import { AGENT_VENDORS, checkEffort, checkModel, checkModelEffort, isAgentVendor, splitModelEffort } from "../../shared/vendors.ts";
+import { UserBlockedError, userBlockerKindOf, userBlockerKindOfFailure, userBlockerResumeText, type UserBlocker } from "../../shared/user-blockers.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import { workerWorktreePath } from "../../shared/paths.ts";
@@ -88,6 +90,7 @@ import { hasGitCommitSync, renderGraphStepTask } from "./task-graph-handoff.ts";
 import type { StepWorkspacePlan, TaskGraphWorkersBridge, WorkerBindTarget } from "./task-graphs.ts";
 import { newestFirst } from "./takeover.ts";
 import type { LedgerTakeover, TakeoverPredecessor } from "./takeover.ts";
+import { userBlockedPmNote, type LedgerUserBlockers } from "./user-blockers.ts";
 
 /** 主文件夹有没提交的改动、又用 worktree 时，start 返回的话里的提醒（m3-plan 第 2.6 节）。 */
 const WORKTREE_DIRTY_NOTE = "注意：主文件夹里有没提交的改动，Worker 是从最后一次提交开始的，看不到这些改动。";
@@ -216,6 +219,12 @@ export type EndedWorktreeCandidate = {
 
 export type LedgerWorkers = ReturnType<typeof createLedgerWorkers>;
 
+/** 汇报所在的那条 agent 文字消息：解析汇报用 text，认“文件”栏的交付物用 id 和 meta.files。 */
+export type ReportMessage = Pick<Message, "id" | "text" | "meta">;
+type ReportMessageRow = { id: number; text: string; meta: string | null };
+const toReportMessage = (row: ReportMessageRow | undefined): ReportMessage | null =>
+  row === undefined ? null : { id: row.id, text: row.text, meta: row.meta === null ? null : (JSON.parse(row.meta) as Record<string, unknown>) };
+
 export interface LedgerWorkersTaskGraphHooks {
   prepareWorkerBind: (pmId: PmId, nodeKey: string, graphId?: number) => WorkerBindTarget;
   bindWorkerStartedIn: (
@@ -230,7 +239,7 @@ export interface LedgerWorkersTaskGraphHooks {
     parsed: ParsedWorkerReport,
     rawBody: string,
     forcedNote: string | null,
-    opts?: { hasPendingFollowup?: boolean; reviewVerified?: ReviewVerifyResult },
+    opts?: { hasPendingFollowup?: boolean; reviewVerified?: ReviewVerifyResult; reportMessage?: ReportMessage | null },
   ) =>
     | { handled: false }
     | { handled: true; outcome: "verify" }
@@ -242,6 +251,7 @@ export interface LedgerWorkersTaskGraphHooks {
     workerId: WorkerId,
     opts: { clearActiveWorker: boolean; reasonLabel: string; detailBody: string; stoppedByUser?: boolean },
   ) => string | null;
+  onWorkerUserBlockedIn: (p: Pending, workerId: WorkerId, blocker: UserBlocker) => string | null;
   onWorkerResumedIn: (p: Pending, workerId: WorkerId) => void;
   onWorkerEndedIn: (p: Pending, workerId: WorkerId) => string | null;
   workerGraphForkBase: (workerId: WorkerId) => string | undefined;
@@ -258,6 +268,7 @@ export function createLedgerWorkers(
     worktreesDir: string;
     extraWorktreeRoots?: () => readonly string[];
     taskGraphs?: LedgerWorkersTaskGraphHooks;
+    userBlockers?: Pick<LedgerUserBlockers, "raiseIn" | "attachWorkerIn">;
     takeover?: LedgerTakeover;
   },
 ) {
@@ -639,16 +650,13 @@ export function createLedgerWorkers(
     };
   };
 
-  const checkTargetVendorUsable = (vendor: AgentVendor, context: HubCallContext | undefined): void => {
-    const fromSingle = context?.vendorStatus?.vendor === vendor ? context.vendorStatus : undefined;
-    const availability =
-      fromSingle?.availability ??
-      context?.vendorStatuses?.[vendor] ??
-      ctx.modelCatalog(vendor)?.availability ??
-      "unknown";
-    const device = fromSingle?.device ?? context?.deviceName ?? "";
-    const unusable = vendorUnavailableMessage(vendor, availability, device);
-    if (unusable !== null) throw fail("invalid", unusable);
+  /**
+   * 这家在这台设备上要用户动手（没登录、没装）就抛 UserBlockedError：手动派的报给项目经理，自动开工的据此挂卡。
+   * 状态只读 ctx.vendorAvailability（守护进程的 ModelCatalogs），agent 接口在调账本前已让它问过一次。
+   */
+  const checkTargetVendorUsable = (vendor: AgentVendor): void => {
+    const kind = userBlockerKindOf(ctx.vendorAvailability(vendor));
+    if (kind !== null) throw new UserBlockedError({ kind, vendor, device: ctx.deviceName() });
   };
 
   /**
@@ -677,7 +685,7 @@ export function createLedgerWorkers(
 
     const vendor: AgentVendor = input.vendor ?? input.pmVendor;
     if (!isAgentVendor(vendor)) throw fail("invalid", `厂商只能是 ${AGENT_VENDORS.join("、")}`);
-    checkTargetVendorUsable(vendor, input.context);
+    checkTargetVendorUsable(vendor);
 
     const catalog = ctx.modelCatalog(vendor);
     const badSetting =
@@ -857,10 +865,10 @@ export function createLedgerWorkers(
     if (args.vendor !== undefined) {
       if (!isAgentVendor(args.vendor)) throw fail("invalid", `厂商只能是 ${AGENT_VENDORS.join("、")}`);
       vendor = args.vendor;
-      checkTargetVendorUsable(vendor, context);
+      checkTargetVendorUsable(vendor);
     } else if (bindTarget?.vendor !== null && bindTarget?.vendor !== undefined) {
       if (!isAgentVendor(bindTarget.vendor)) throw fail("invalid", `厂商只能是 ${AGENT_VENDORS.join("、")}`);
-      checkTargetVendorUsable(vendor, context);
+      checkTargetVendorUsable(vendor);
     }
     const reuseStepModel = bindTarget !== undefined && args.vendor === undefined && bindTarget.vendor === vendor;
     const givenModel =
@@ -1205,6 +1213,41 @@ export function createLedgerWorkers(
     return message.id;
   };
 
+  /**
+   * 卡住这个 Worker 的阻塞解开了（docs/user-blockers-design.md，user-blockers.ts 的 resolveIn 调；步骤由任务图那边在同一个事务里改）：
+   * 没送进去、标了失败的那几条消息重新排队发给它；都不是失败了（用户点了重试、厂商先回了一段报错）又没有在发的，叫它接着干。
+   * 已经收工的不管。
+   */
+  const resumeUserBlockedWorkerIn = (p: Pending, workerId: WorkerId, messageIds: readonly MessageId[], blocker: UserBlocker) => {
+    const worker = workerRow(workerId);
+    if (worker === null || worker.status === "ended") return;
+    const session = workerSession(worker);
+    const failed = messageIds.filter((id) => db.get<{ status: string | null }>("SELECT status FROM messages WHERE id = ?", id)?.status === "failed");
+    if (failed.length === 0) {
+      const inFlight = db.get(
+        "SELECT 1 AS x FROM messages WHERE conversation_id = ? AND sender IN ('pm', 'user') AND status IN ('queued', 'delivered', 'processing') LIMIT 1",
+        worker.worker_conversation_id,
+      );
+      if (inFlight === undefined) {
+        deliverToWorkerIn(p, { workerId, text: userBlockerResumeText(blocker), dedupeKey: `user-blocker-resumed:${blocker.id}:${workerId}` });
+      }
+      return;
+    }
+    const t = now();
+    for (const id of failed) {
+      db.run(
+        "UPDATE messages SET status = 'queued', failure_reason = NULL, meta = json_remove(meta, '$.deliveryConfirmed'), session_id = ?, updated_at = ? WHERE id = ?",
+        session.id,
+        t,
+        id,
+      );
+      enqueue(p, { type: "session.send", params: { sessionId: session.id, messageId: id, source: "user" } });
+      const message = messages.getMessage(id);
+      if (message !== null) p.changes.push({ type: "message.updated", data: { message } });
+    }
+    startMaxTime(worker);
+  };
+
   const endIn = (p: Pending, caller: AgentSessionRow & { pmId: PmId }, args: HubArgs<"worker.end">): HubResult<"worker.end"> => {
     assertPmNotArchived(caller.pmId);
     const worker = ownWorker(caller.pmId, args.workerId);
@@ -1339,6 +1382,21 @@ export function createLedgerWorkers(
       lines.push(`这一轮里有用户直接对它说的话：「${message.text}」。${retry}`);
     }
     const detailBody = lines.join("\n");
+    const vendor = workerSession(worker).vendor;
+    const blockedKind = reason === TURN_STOPPED || !isAgentVendor(vendor) ? null : userBlockerKindOfFailure(reason, vendor);
+    if (blockedKind !== null && options.userBlockers !== undefined && isAgentVendor(vendor)) {
+      const blocker = options.userBlockers.raiseIn(p, blockedKind, vendor, worker.pm_conversation_id);
+      options.userBlockers.attachWorkerIn(blocker.id, worker.id, messageIds);
+      const graphNote = options.taskGraphs?.onWorkerUserBlockedIn(p, worker.id, blocker) ?? null;
+      insertLine(p, worker, {
+        event: "turn_failed",
+        status: null,
+        summary: reason,
+        turnMessageId,
+        deliver: [graphNote ?? `Worker #${worker.id} 起不来：${userBlockedPmNote(blocker)}。`, ...lines.slice(1)].join("\n"),
+      });
+      return;
+    }
     const graphDeliver =
       options.taskGraphs?.onWorkerFailedIn(p, worker.id, {
         clearActiveWorker: false,
@@ -1396,23 +1454,26 @@ export function createLedgerWorkers(
   const lastAgentMessageId = (sessionId: SessionId, turnStart: number): MessageId | null =>
     db.get<{ id: number | null }>(`SELECT max(id) AS id FROM messages WHERE session_id = ? AND sender = 'agent' AND id > ?`, sessionId, turnStart)!.id;
 
-  /** 从 turnStart 起这个会话最后一段 agent 文字；没有是空串。 */
-  const lastAgentText = (sessionId: SessionId, turnStart: number): string =>
-    db.get<{ text: string }>(
-      `SELECT text FROM messages WHERE session_id = ? AND sender = 'agent' AND kind = 'text' AND id > ? ORDER BY id DESC LIMIT 1`,
-      sessionId,
-      turnStart,
-    )?.text ?? "";
+  /** 从 turnStart 起这个会话最后一段 agent 文字（汇报所在的那条，meta.files 是它存好的副本）；没有是 null。 */
+  const lastAgentTextMessage = (sessionId: SessionId, turnStart: number): ReportMessage | null =>
+    toReportMessage(
+      db.get<ReportMessageRow>(
+        `SELECT id, text, meta FROM messages WHERE session_id = ? AND sender = 'agent' AND kind = 'text' AND id > ? ORDER BY id DESC LIMIT 1`,
+        sessionId,
+        turnStart,
+      ),
+    );
 
   /** 按格式解析这一轮最后的文字，一行 report 交给项目经理；note 不是 null 就加在交给它的正文前面。 */
   const insertReport = (
     p: Pending,
     worker: WorkerDbRow,
     turnMessageId: MessageId,
-    text: string,
+    reportMessage: ReportMessage | null,
     note: string | null = null,
     opts?: { hasPendingFollowup?: boolean; reviewVerified?: ReviewVerifyResult },
   ) => {
+    const text = reportMessage?.text ?? "";
     const parsed = parseWorkerReport(text);
     const body = text.trim() === "" ? NO_REPLY_TEXT : text;
     const status: WorkerLineStatus = parsed.kind === "ok" ? parsed.report.status : "unformatted";
@@ -1423,16 +1484,12 @@ export function createLedgerWorkers(
       parsed,
       body,
       note,
-      opts,
+      { ...opts, reportMessage },
     );
     if (graphHandling?.handled === true) {
       if (graphHandling.outcome === "verify") {
-        // 审查判 PASS：先核对被审分支没被动过，核对完（onReviewVerified）再按这份汇报写那一行、往下走
-        const reportMessageId = db.get<{ id: number }>(
-          "SELECT max(id) AS id FROM messages WHERE session_id = ? AND sender = 'agent' AND kind = 'text'",
-          workerSession(worker.id).id,
-        )!.id;
-        enqueue(p, { type: "review.verify", params: { workerId: worker.id, turnMessageId, reportMessageId } });
+        // 审查判 PASS：先核对被审分支没被动过，核对完（onReviewVerified）再按这份汇报写那一行、往下走。判了 PASS 一定解析出了汇报，reportMessage 不会是 null
+        enqueue(p, { type: "review.verify", params: { workerId: worker.id, turnMessageId, reportMessageId: reportMessage!.id } });
         return;
       }
       if (graphHandling.outcome === "completed") {
@@ -1498,7 +1555,7 @@ export function createLedgerWorkers(
     if (turnMessageId === null) return;
     if (event.reason === "interrupt") return insertTurnFailed(p, worker, turnMessageId, [], TURN_STOPPED);
     if (event.reason === "crash" || event.reason === "startup_failed") return insertTurnFailed(p, worker, turnMessageId, [], exitFailureReason(event));
-    insertReport(p, worker, turnMessageId, lastAgentText(session.id, awaiting.turnStart), awaiting.background ? backgroundKilledNote(event.reason) : null);
+    insertReport(p, worker, turnMessageId, lastAgentTextMessage(session.id, awaiting.turnStart), awaiting.background ? backgroundKilledNote(event.reason) : null);
   };
 
   /** 一轮开始了却没在计时（用户直接发的话、claude 自己开的一轮）：按默认时长计时。已经在计时的（含重启后恢复的）不动。 */
@@ -1609,12 +1666,12 @@ export function createLedgerWorkers(
       return;
     }
     // 这一轮最后一段文字：这一轮开始之后、这个会话的 agent 文字里最新的一条；没有就是“没有文字回复”
-    const text = lastAgentText(session.id, turnStart);
+    const reportMessage = lastAgentTextMessage(session.id, turnStart);
     // 自己开的一轮只有工具调用、没有文字：没什么可汇报的
-    if (outcome.turnMessageId === null && text.trim() === "") return;
+    if (outcome.turnMessageId === null && (reportMessage?.text ?? "").trim() === "") return;
     // 只压缩了上下文（用户发的 /compact）、没有任何 agent 消息的一轮：不汇报，对话里那行“已压缩上下文”照留
     if (onlyManualCompact(session, turnStart)) return;
-    insertReport(p, worker, turnMessageId, text, null, { hasPendingFollowup });
+    insertReport(p, worker, turnMessageId, reportMessage, null, { hasPendingFollowup });
   };
 
   /**
@@ -1636,7 +1693,7 @@ export function createLedgerWorkers(
         if (worker === null || worker.status === "ended") continue;
         const turnMessageId = lastAgentMessageId(wait.session_id, wait.turn_start);
         if (turnMessageId === null) continue;
-        insertReport(p, worker, turnMessageId, lastAgentText(wait.session_id, wait.turn_start), backgroundKilledNote("restart"));
+        insertReport(p, worker, turnMessageId, lastAgentTextMessage(wait.session_id, wait.turn_start), backgroundKilledNote("restart"));
       }
     });
 
@@ -1786,8 +1843,8 @@ export function createLedgerWorkers(
       params.reportMessageId,
     );
     if (newerInput !== undefined) return;
-    const text = db.get<{ text: string }>("SELECT text FROM messages WHERE id = ?", params.reportMessageId)?.text ?? "";
-    insertReport(p, worker, params.turnMessageId, text, null, { reviewVerified: result });
+    const reportMessage = toReportMessage(db.get<ReportMessageRow>("SELECT id, text, meta FROM messages WHERE id = ?", params.reportMessageId));
+    insertReport(p, worker, params.turnMessageId, reportMessage, null, { reviewVerified: result });
   };
 
   const onReviewVerified = (params: ReviewVerifyParams, result: ReviewVerifyResult): void =>
@@ -1999,6 +2056,7 @@ export function createLedgerWorkers(
     endIn,
     stopWorkersIn,
     deliverToWorkerIn,
+    resumeUserBlockedWorkerIn,
     endOpenWorkersIn,
     list,
     status,

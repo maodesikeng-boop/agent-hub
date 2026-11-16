@@ -3,6 +3,7 @@ import { ChevronRight, Loader2, MessageCircleQuestionMark } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import {
   askOf,
+  splitCardTitle,
   DEFAULT_AGENT_VENDOR,
   GRAPH_HISTORY_PAGE_SIZE,
   MAX_COMPLETED_GRAPH_PAGES,
@@ -11,7 +12,7 @@ import {
   isTaskNodeWaitingUser,
   modelShortLabel,
 } from "../../shared/index.ts";
-import type { ConversationId, Message, MessageId, ProjectId, TaskGraph, TaskGraphId } from "../../shared/index.ts";
+import type { ConversationId, Message, MessageId, ProjectId, TaskGraph, TaskGraphId, UserBlockerId } from "../../shared/index.ts";
 import { cleanPieceTitle, DEFAULT_CHOICE, errorText, formatContext, formatTokenDetail, NEEDS_YOU, NO_DATA } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { useModelCatalog } from "../models.tsx";
@@ -23,6 +24,7 @@ import { normalizeTaskGraphs } from "../task-graph-compat.ts";
 import type { WorkerTone } from "../worker-status.ts";
 import { Button } from "../ui/button.tsx";
 import { Avatar } from "./Avatar.tsx";
+import { CardBody } from "./Deliverables.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { PeelTrackList } from "./PeelTrack.tsx";
 import { SliceWheelIcon } from "./SliceWheelIcon.tsx";
@@ -180,6 +182,7 @@ function askSummary(text: string): string {
 /** 一个提问一行：去掉 Markdown 的第一行；点开在下面看全文，同时让对话滚到那条消息。 */
 function AskRow({ ask, open, onToggle }: { ask: Message; open: boolean; onToggle: () => void }) {
   const summary = askSummary(ask.text);
+  const { title, body } = splitCardTitle(ask.text);
   return (
     <li>
       <button type="button" aria-expanded={open} className={cn(ROW, "items-start", open ? "bg-sidebar" : ITEM_HOVER)} onClick={onToggle}>
@@ -189,8 +192,9 @@ function AskRow({ ask, open, onToggle }: { ask: Message; open: boolean; onToggle
       </button>
       {open && (
         <div className="-mx-2.5 rounded-b-xl bg-sidebar px-2.5 pb-3 text-minor">
-          <div className="pl-7">
-            <Markdown text={ask.text} messageId={ask.id} />
+          <div data-ask-detail className="pl-7">
+            <Markdown text={title} messageId={ask.id} />
+            <CardBody text={body} deliverables={askOf(ask)?.deliverables} messageId={ask.id} className="mt-2" />
           </div>
         </div>
       )}
@@ -494,12 +498,19 @@ export function RailGroups({
   // 同源去重：带 gateRef 或已绑定到活跃任务图门禁的提问直接内联在果皮轨中，不在 Needs You 重复渲染
   const visibleAsks = useMemo(() => {
     const gateMsgIds = new Set<MessageId>();
+    const stepBlockerIds = new Set<UserBlockerId>();
     for (const graph of activeGraphs ?? []) {
       for (const node of graph.nodes) {
         if (node.gateAskMessageId !== null) gateMsgIds.add(node.gateAskMessageId);
+        // 要你动手的提醒卡已经挂在步骤上，同一条阻塞的卡不在 Needs You 再出一次
+        if (node.userBlocker !== null && node.userBlocker !== undefined) stepBlockerIds.add(node.userBlocker.id);
       }
     }
-    return asks.filter((ask) => askOf(ask)?.gateRef === undefined && !gateMsgIds.has(ask.id));
+    return asks.filter((ask) => {
+      const meta = askOf(ask);
+      if (meta?.gateRef !== undefined || gateMsgIds.has(ask.id)) return false;
+      return meta?.blockerRef === undefined || !stepBlockerIds.has(meta.blockerRef.blockerId);
+    });
   }, [asks, activeGraphs]);
 
   // 同源去重：已绑入活跃任务图节点的 Worker 不在独立 Pieces / Completed 中重复展示
