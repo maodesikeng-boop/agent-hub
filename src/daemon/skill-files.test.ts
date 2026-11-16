@@ -80,6 +80,16 @@ describe("名单从哪些目录来", () => {
     expect(catalog.atPath(join(userHome, ".gemini", "config", "skills", "linked", "SKILL.md"))?.name).toBe("linked");
   });
 
+  it("跨名软链（<cwd>/.agents/skills/alias → ~/.agents/skills/real-global）：别名不遮蔽原名，两个名字都找得到同一个文件", () => {
+    const real = skill(join(userHome, ".agents", "skills"), "real-global");
+    mkdirSync(project(), { recursive: true });
+    symlinkSync(dirname(real), join(project(), "alias"));
+    const catalog = files().catalog(session);
+    expect(catalog.named("real-global")?.path).toBe(real);
+    expect(catalog.named("alias")?.path).toBe(join(project(), "alias", "SKILL.md"));
+    expect(catalog.named("alias")?.key).toBe(catalog.named("real-global")?.key);
+  });
+
   it("技能目录没变时复用同一份名单；新加、删掉技能（目录变了）马上换新的", () => {
     skill(project(), "old");
     const skillFiles = files();
