@@ -97,6 +97,8 @@ function userTurn(sessionId: SessionId, text: string): MessageId {
 /** 资料页点开新会话、交接写完、旧会话空闲：换到下一代，返回新会话和它的开场说明。 */
 function renew(): { next: SessionId; preamble: string } {
   now += 10;
+  // 模型调过工具的那一轮先结束，会话空闲了才换
+  event(currentSession(), { type: "turn.ended", at: now, ok: true, interrupted: false, messageIds: [], durationMs: 1 });
   const { handoverId } = ledger.renewSession(pmId);
   ledger.claimHandover();
   ledger.handoverForked(handoverId, { kind: "native", ref: { forker: "claude", handle: { forkId: `f${handoverId}` } } });
@@ -160,7 +162,7 @@ describe("记：加载那一刻", () => {
   });
 
   it(`每个对话最多记 ${SKILL_CARRYOVER_RECORDS_MAX} 个，超了删最久没加载的`, () => {
-    const dir = join(root, "many");
+    const dir = join(root, "many", "skills");
     for (let i = 0; i <= SKILL_CARRYOVER_RECORDS_MAX; i++) tool(firstSession, "Read", { file_path: skill(`s${i}`, `第 ${i} 个`, dir) });
     const names = new Set(rows().map((r) => r.name));
     expect(names.size).toBe(SKILL_CARRYOVER_RECORDS_MAX);

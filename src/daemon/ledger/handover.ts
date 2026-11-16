@@ -9,8 +9,9 @@
 // 2. 开始：跑腿的领活时，旧会话空闲、没有发给它还在路上的消息、过了退避 → forking，记切点（那一刻库里最大的消息编号），交出交接提示词；
 // 3. 跑腿的复制好了（handoverForked → writing）、写完了（handoverWritten → ready）；写出来是空的、出错、超时（handoverFailed）→ failed；
 // 4. 换代：ready 时旧会话空闲（没后台任务、没有在路上的消息）→ 同一个事务里换（switchIn）；否则之后发给旧会话的新消息压着（waitsForHandover），
-//    旧会话这一轮结束（不管成没成、有没有被打断）时换，压着的改发给新会话。换代时开场说明定稿（交接 + 约 HANDOVER_RECENT_CHARS 字原话 +
-//    切点之后的 Worker 汇报目录），存在这一行的 preamble；新会话预先起好进程（session.start），开场说明由驱动层拼在第一条消息前面（sessionPreamble）。
+//    旧会话这一轮结束（不管成没成、有没有被打断）时换，压着的改发给新会话。换代时开场说明定稿（上一代加载过的技能正文（loaded-skills.ts）+ 交接 +
+//    约 HANDOVER_RECENT_CHARS 字原话 + 切点之后的 Worker 汇报目录），存在这一行的 preamble（技能那一节另存 skills_section，切换厂商时开场说明现拼要用）；
+//    新会话预先起好进程（session.start），开场说明由驱动层拼在第一条消息前面（sessionPreamble）。
 //    有后台任务时不压消息也不换，等后台任务没了；ready 放超过 HANDOVER_READY_MAX_MS 作废重来；切点之后聊得太多（HANDOVER_POST_CUT_MAX_CHARS）也作废重来；
 // 5. 没成：自动的每一代最多算 AUTO_RENEW_MAX_ATTEMPTS 次（重启、关机、用户发消息打断、作废不算），之间按 AUTO_RENEW_RETRY_BACKOFF_MS 退避翻倍，
 //    满了记一条日志、这一代不再自动试；手动的不自动重试，对话里提示一句。
@@ -43,6 +44,7 @@ import { getAgentSession } from "../store/index.ts";
 import type { LedgerContext, Pending } from "./context.ts";
 import { pickRecent, recentText } from "./handover-recent.ts";
 import type { RecentMessage } from "./handover-recent.ts";
+import type { LedgerLoadedSkills } from "./loaded-skills.ts";
 import type { LedgerMessages } from "./messages.ts";
 import type { LedgerPersona } from "./persona.ts";
 import { toMessage, toPm } from "./rows.ts";
@@ -69,7 +71,7 @@ export interface HandoverOptions {
   /** 有交接可以领了（shared/handover.ts 的 claimHandover）：守护进程接到跑腿的 wake。默认什么都不做。 */
   onHandoverClaimable?: () => void;
   /** 新会话首次启动时实时读取该 PM 未完结的任务图摘要（账本实时状态，不走静态快照防过期）。 */
-  liveActiveGraphsSection?: (pmId: PmId, sessionId: SessionId) => string | null;
+  liveActiveGraphsSection?: (pmId: PmId) => string | null;
 }
 
 const SEARCH_COMMANDS = `\`${HUB_COMMAND} worker search\`、\`${HUB_COMMAND} worker show --task / --report\``;
@@ -105,6 +107,7 @@ function handoverRequestText(options: {
 
 这份交接会替换掉你现在的全部上下文。新会话手里只有：
 - 最新的系统提示词和性格设定；
+- 你这个会话加载过的技能正文（系统自动带上，交接里不用写）；
 - 这份交接；
 - 交接之前约 ${HANDOVER_RECENT_CHARS / 10_000} 万字你和用户的原话（写交接期间又聊的也会全部带上）；
 - 能搜的账本：${SEARCH_COMMANDS}（派过的活、Worker 的汇报都在里面）；
@@ -133,10 +136,12 @@ export const HANDOVER_STALE_HINT =
 
 /**
  * 新会话第一条消息前面的开场说明（换代时定稿，驱动层拼在那条消息最前面，见 DriverOptions.sessionPreamble）：
- * 说明 + 交接 + 原话（handover-recent.ts 拼好的）+ 交接之后到的 Worker 汇报目录（每条一行，不带全文）。
+ * 说明 + 上一代加载过的技能正文（loaded-skills.ts，没有就不放）+ 交接 + 原话（handover-recent.ts 拼好的）+ 交接之后到的 Worker 汇报目录（每条一行，不带全文）。
+ * 技能是一直照着做的规矩，放前面；原话放后面，离新消息最近。
  */
 function sessionPreambleText(options: {
   auto: boolean;
+  skills: string | null;
   handover: string;
   recent: string;
   reports: string[];
@@ -160,8 +165,9 @@ function sessionPreambleText(options: {
       : `${HANDOVER_STALE_HINT}\n\n${options.handover}`;
   const parts = [
     `【系统】这是新会话：你还是同一个项目经理，接着上一个会话干。${reasonLine}
-下面是上一个会话写的交接，和交接之前约 ${HANDOVER_RECENT_CHARS / 10_000} 万字你和用户的原话。交接写于切点，之后的事看下面的原话和 Worker 汇报目录。还在跑的 Worker 照常会把汇报发给你。做过的细节用 ${SEARCH_COMMANDS} 搜；${transcript}。
+下面${options.skills === null ? "" : "先是上一个会话加载过的技能正文，再"}是上一个会话写的交接，和交接之前约 ${HANDOVER_RECENT_CHARS / 10_000} 万字你和用户的原话。交接写于切点，之后的事看下面的原话和 Worker 汇报目录。还在跑的 Worker 照常会把汇报发给你。做过的细节用 ${SEARCH_COMMANDS} 搜；${transcript}。
 不用回复“已接上”：读完直接处理这段说明后面的那条消息。`,
+    ...(options.skills === null ? [] : [options.skills]),
     `## 交接\n\n${handoverText}`,
     `## 最近的原话\n\n${options.recent === "" ? "（没有）" : options.recent}`,
   ];
@@ -213,6 +219,7 @@ interface HandoverDbRow {
   fork_ref: string | null;
   text: string | null;
   preamble: string | null;
+  skills_section: string | null;
   failure_reason: string | null;
   created_at: number;
   ready_at: number | null;
@@ -247,7 +254,14 @@ const VENDOR_SWITCH_METHOD = "vendor_switch";
 const isVendorSwitchRow = (row: Pick<HandoverDbRow, "method">): boolean =>
   row.method === VENDOR_SWITCH_METHOD || row.method === "direct";
 
-export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSessions, messages: LedgerMessages, persona: LedgerPersona, options: HandoverOptions = {}) {
+export function createLedgerHandover(
+  ctx: LedgerContext,
+  sessions: LedgerSessions,
+  messages: LedgerMessages,
+  persona: LedgerPersona,
+  loadedSkills: Pick<LedgerLoadedSkills, "carryIn">,
+  options: HandoverOptions = {},
+) {
   const { db, now, write, enqueue } = ctx;
   const { currentSession, insertSession, updateLive, liveOf } = sessions;
   const { getMessage, insertSystemMessage, transition } = messages;
@@ -563,6 +577,8 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
       model,
       effort,
     });
+    // 上一代加载过的技能：换代这一刻从磁盘读正文，带上的算新一代加载过（普通换代、开新会话、切换厂商都在这里）
+    const skills = loadedSkills.carryIn(conversationId, old.generation, next);
     // 旧会话刚报额度用完的话，同厂商的新会话也要知道，不然第一条立刻撞上额度失败；跨厂商不抄
     if (vendor === old.vendor && old.rateLimit !== null) {
       db.run("UPDATE agent_sessions SET rate_limit = ? WHERE id = ?", JSON.stringify(old.rateLimit), next.id);
@@ -592,6 +608,7 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
       ? null
       : sessionPreambleText({
           auto,
+          skills,
           handover,
           recent: recentText(picked),
           reports: reportsAfter(conversationId, cut),
@@ -603,11 +620,12 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
     enqueue(p, { type: "session.start", params: { sessionId: next.id, generation: next.generation } });
     const t = now();
     db.run(
-      "UPDATE handovers SET status = 'switched', to_session_id = ?, text = ?, cut_message_id = ?, preamble = ?, switched_at = ?, updated_at = ? WHERE id = ?",
+      "UPDATE handovers SET status = 'switched', to_session_id = ?, text = ?, cut_message_id = ?, preamble = ?, skills_section = ?, switched_at = ?, updated_at = ? WHERE id = ?",
       next.id,
       vendorSwitch ? null : handover,
       vendorSwitch ? null : row.cut_message_id,
       preamble,
+      skills,
       t,
       t,
       row.id,
@@ -1080,6 +1098,7 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
         toVendor: session.vendor,
         anchor,
         context,
+        skills: hRow.skills_section,
         transcriptSummary: describeGenerationTranscripts(priorSessions, findTranscript),
       });
     } else {
@@ -1097,6 +1116,7 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
         const { picked } = pickRecent(recentRows(session.conversationId, upTo), upTo, HANDOVER_RECENT_CHARS);
         base = sessionPreambleText({
           auto: meta.auto === true,
+          skills: null,
           handover: row.text,
           recent: recentText(picked),
           reports: [],
@@ -1107,7 +1127,7 @@ export function createLedgerHandover(ctx: LedgerContext, sessions: LedgerSession
       }
     }
     if (base === null) return null;
-    const liveGraphs = session.pmId === null ? null : (options.liveActiveGraphsSection?.(session.pmId, session.id) ?? null);
+    const liveGraphs = session.pmId === null ? null : (options.liveActiveGraphsSection?.(session.pmId) ?? null);
     return liveGraphs === null || liveGraphs === ""
       ? base
       : `${base}\n\n## 未完结的任务图（账本实时状态）\n\n${liveGraphs}`;

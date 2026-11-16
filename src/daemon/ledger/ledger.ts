@@ -9,6 +9,7 @@
 // - handover.ts：换新会话（后台写交接的状态机、换代；跑腿的在 daemon/handover/runner.ts）；
 // - workers.ts：Worker（M3）：派活、打回、收工、汇报回到项目经理、建 worktree 的回调；
 // - steps.ts、worker-view.ts：会话一步一步干了什么（session_steps）、hub worker show / log 怎么讲给项目经理；
+// - loaded-skills.ts：项目经理加载过的技能，换代时带进新会话；
 // - schedules.ts：定时任务（M6）：hub schedule 命令、到点往项目经理的对话发消息、这一轮没跑成的记录；
 // - launch-context.ts：启动 claude 前给提示词用的上下文。
 // 11-03 拿掉了项目群：快照不给老的项目群和归档的项目（数据还在库里，见迁移 0003）。
@@ -29,6 +30,7 @@ import { createLedgerHandover } from "./handover.ts";
 import type { HandoverOptions } from "./handover.ts";
 import { createLedgerHubCommands } from "./hub-commands.ts";
 import { createLedgerLaunchContext } from "./launch-context.ts";
+import { createLedgerLoadedSkills } from "./loaded-skills.ts";
 import { createLedgerMessages } from "./messages.ts";
 import { createLedgerPersona } from "./persona.ts";
 import { createLedgerProjects } from "./projects.ts";
@@ -42,6 +44,7 @@ import { createLedgerSessions } from "./sessions.ts";
 import { createLedgerSteps } from "./steps.ts";
 import { createLedgerTaskGraphs } from "./task-graphs.ts";
 import { createLedgerTakeover } from "./takeover.ts";
+import { createSkillFiles, type SkillFiles } from "../skill-files.ts";
 import { taskGraphManualNote } from "../task-graph-skill.ts";
 import { createLedgerWorkerRetention } from "./worker-retention.ts";
 import type { WorkerPurgeBatch } from "./worker-retention.ts";
@@ -125,6 +128,8 @@ export interface LedgerOptions {
   autoRenew?: HandoverOptions["autoRenew"];
   /** 写守护进程日志（目前只有自动换新会话试满了次数时写一条）；不给不写。 */
   log?: (line: string) => void;
+  /** 技能文件在磁盘上的那一半（换代带上加载过的技能，daemon/skill-files.ts）；不给按 launchDir、userHome 建，不读环境变量。 */
+  skillFiles?: SkillFiles;
   /** 有交接可以领了（后台写交接）：守护进程接到 daemon/handover/runner.ts 的 wake；不给什么都不做。 */
   onHandoverClaimable?: HandoverOptions["onHandoverClaimable"];
 }
@@ -193,16 +198,13 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     // 换人接手时新 Worker 的第一条消息：前任的汇报、最后的文字、最后几步操作、原始记录路径，从账本现取（takeover.ts）
     takeover: createLedgerTakeover(ctx, steps, { findTranscript: options.findTranscript }),
   });
-  const handover = createLedgerHandover(ctx, sessions, messages, persona, {
+  const loadedSkills = createLedgerLoadedSkills(ctx, options.skillFiles ?? createSkillFiles({ launchDir: files.launchDir, userHome }));
+  const handover = createLedgerHandover(ctx, sessions, messages, persona, loadedSkills, {
     findTranscript: options.findTranscript,
     autoRenew: options.autoRenew,
     log: options.log,
     onHandoverClaimable: options.onHandoverClaimable,
-    // 未完结的图后面带一行手册路径（新会话的启动目录里的），换了会话手里有图却没有手册时靠它找回来
-    liveActiveGraphsSection: (pmId, sessionId) => {
-      const section = taskGraphs.liveHandoverSection(pmId);
-      return section === null ? null : `${section}\n\n${taskGraphManual(sessionId)}`;
-    },
+    liveActiveGraphsSection: (pmId) => taskGraphs.liveHandoverSection(pmId),
   });
   const schedules = createLedgerSchedules(ctx, sessions, messages, persona);
   const workerRetention = createLedgerWorkerRetention(ctx, files);
@@ -328,6 +330,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       write((p) => {
         messages.applyEvent(p, session, event);
         steps.afterDriverEvent(session, event);
+        loadedSkills.afterDriverEvent(session, event);
         workers.afterDriverEvent(p, session, event);
         handover.afterDriverEvent(p, session, event);
         schedules.afterDriverEvent(p, event);

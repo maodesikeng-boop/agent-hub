@@ -740,6 +740,7 @@ export function createLedgerPersona(
           db.run(`DELETE FROM session_preamble_seen WHERE session_id IN ${inList(sessionIds)}`);
           db.run(`DELETE FROM hub_calls WHERE session_id IN ${inList(sessionIds)}`);
         }
+        if (conversationIds.length > 0) db.run(`DELETE FROM loaded_skills WHERE conversation_id IN ${inList(conversationIds)}`);
         if (conversationIds.length > 0 || sessionIds.length > 0) {
           db.run(
             `DELETE FROM handovers WHERE conversation_id IN ${inList(conversationIds)} OR from_session_id IN ${inList(sessionIds)} OR to_session_id IN ${inList(sessionIds)}`,
