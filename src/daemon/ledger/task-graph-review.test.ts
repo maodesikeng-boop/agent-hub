@@ -270,6 +270,81 @@ describe("审查步骤只查不修", () => {
     expect(pmTexts()[0]).toContain("收尾核对没跑成：git ls-remote 失败：Could not resolve host");
   });
 
+  const createGraph = (steps: unknown[]) =>
+    ledger.hubCall(lin.sessionId, "graph.create", { specJson: JSON.stringify({ title: "审查", goal: "只查不修", steps }) }).data.graph;
+
+  it("审查步骤找不到被审分支（没有上一步、多路合流、base 写 main）：建图、改图直接拒绝，不降级成普通 Worker", () => {
+    const solo = { key: "review", title: "独立审查", brief: "审查 hub/target-pr", review: true };
+    expect(() => createGraph([solo])).toThrow(/被审分支/);
+    expect(() =>
+      createGraph([
+        { key: "a", title: "A", brief: "做 A", deps: [] },
+        { key: "b", title: "B", brief: "做 B", deps: [] },
+        { ...solo, deps: ["a", "b"] },
+      ]),
+    ).toThrow(/被审分支/);
+    expect(() => createGraph([{ key: "impl", title: "实现", brief: "做" }, { ...solo, base: "main" }])).toThrow(/被审分支/);
+    expect(db.get<{ n: number }>("SELECT count(*) AS n FROM workers")).toEqual({ n: 0 });
+
+    const graph = createGraph([{ key: "impl", title: "实现" }]);
+    expect(() =>
+      ledger.hubCall(lin.sessionId, "graph.patch", { graphId: graph.id, specJson: JSON.stringify({ addSteps: [{ ...solo, deps: [] }] }) }),
+    ).toThrow(/被审分支/);
+  });
+
+  it("补建的单步审查图：base 写被审分支，审查目录 detached 在它上面、不挂分支；汇报不写验证提交就停下", async () => {
+    git(repoDir, "checkout", "-b", "hub/target-pr");
+    writeFileSync(join(repoDir, "a.ts"), "export const a = 9;\n");
+    git(repoDir, "commit", "-am", "target");
+    git(repoDir, "push", "origin", "hub/target-pr");
+    const sha = git(repoDir, "rev-parse", "HEAD");
+    git(repoDir, "checkout", "main");
+
+    const graph = createGraph([{ key: "review", title: "独立审查", brief: "审查 hub/target-pr", review: true, base: "hub/target-pr" }]);
+    const w = graph.nodes[0]!.activeWorkerId!;
+    await runWorktreeCreate(w);
+    const row = workerRow(w);
+    expect(row.branch).toBeNull();
+    expect(parseReviewTarget(row.review_json)).toEqual({ branch: "hub/target-pr", snapshot: { sha, remote: { sha }, pr: null } });
+    expect(git(row.worktree_path, "rev-parse", "HEAD")).toBe(sha);
+    enqueued.length = 0;
+
+    reportTurn(w, report({ summary: "可以合", verdict: "PASS" }));
+    expect(stateOf(graphNow(graph.id).nodes[0]!)).toBe("waiting:pm");
+    expect(enqueued.some((a) => a.type === "review.verify")).toBe(false);
+    expect(pmTexts()[0]).toContain("“验证提交”写的是 （没写）");
+  });
+
+  it("上一步在主文件夹里干活：审查步骤不开工，停在 waiting:pm 并写明找不到被审分支", () => {
+    const graph = createGraph([
+      { key: "impl", title: "实现" },
+      { key: "review", title: "独立审查", brief: "重点看边界", review: true },
+    ]);
+    const wImpl = ledger.hubCall(lin.sessionId, "worker.start", { node: "impl", graphId: graph.id, task: "修好翻页", noWorktree: true }).data.worker.id;
+    enqueued.length = 0;
+    reportTurn(wImpl, report({ summary: "修好了" }));
+    const g = graphNow(graph.id);
+    expect(g.nodes.map(stateOf)).toEqual(["done", "waiting:pm"]);
+    expect(g.nodes[1]!.workerIds).toEqual([]);
+    expect(pmTexts().some((t) => t.includes("找不到被审分支"))).toBe(true);
+  });
+
+  it("审查步骤用 --no-worktree 派活直接拒绝", async () => {
+    const { graph, wReview, sha } = await startReview();
+    reportTurn(wReview, report({ status: "有问题", summary: "游标越界", verdict: "FAIL", sha }));
+    expect(() => ledger.hubCall(lin.sessionId, "worker.start", { node: "review", graphId: graph.id, noWorktree: true })).toThrow(/审查/);
+    expect(workerRow(wReview).status).toBe("open");
+  });
+
+  it("验证提交写成行内代码、带句号也认；步骤产物记下结论和验证的提交号", async () => {
+    const { graph, wReview, sha } = await startReview();
+    reportTurn(wReview, report({ summary: "可以合", verdict: "PASS", sha: `\`${sha.slice(0, 8)}\`。` }));
+    await runVerify();
+    const node = graphNow(graph.id).nodes[1]!;
+    expect(stateOf(node)).toBe("done");
+    expect(node.artifact).toMatchObject({ reviewVerdict: "PASS", verifiedCommit: sha.slice(0, 8) });
+  });
+
   it("判 FAIL 后项目经理在审查后面加修复步骤：修复步骤接手实现的 worktree 和分支，不接审查目录", async () => {
     const { graph, wReview, impl, sha } = await startReview();
     reportTurn(wReview, report({ status: "有问题", summary: "游标越界", verdict: "FAIL", sha, questions: "复现见上" }));
