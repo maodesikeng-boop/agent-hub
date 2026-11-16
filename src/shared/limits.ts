@@ -9,6 +9,11 @@ export const MESSAGE_PAGE_SIZE = 100;
 export const SNAPSHOT_RECENT_MESSAGES = 20;
 /** 初始快照按“跑了一个月”（300 个已收工的 Worker、3 万条消息）算的上限（未压缩，守卫见 daemon/ledger/snapshot-size.test.ts）。 */
 export const SNAPSHOT_MONTH_MAX_BYTES = 384 * 1024;
+/**
+ * 一个月的量再加总助写满、交付物数量和长度都到上限（待拍板卡、等确认的步骤带满，文件名 255 字节、原链接 MAX_PATH_BYTES）时初始快照的上限。
+ * 运行时不按总字节裁剪，整份发（压缩后传）；实测约 1.6 MB，压缩后约 0.6 MB（守卫见 daemon/ledger/snapshot-size.test.ts）。
+ */
+export const SNAPSHOT_DELIVERABLES_WORST_MAX_BYTES = 2 * 1024 * 1024;
 
 /** git 没跑成时，回给项目经理的原因行最多几个字（ledger/workers.ts 的 gitReasonLine）。 */
 export const GIT_REASON_MAX_CHARS = 200;
