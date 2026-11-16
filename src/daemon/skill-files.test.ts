@@ -54,6 +54,7 @@ describe("名单从哪些目录来", () => {
     expect(catalog.named("pi-only")).not.toBeNull();
     expect(catalog.named("nope")).toBeNull();
     expect(catalog.named("dup")?.heads).toEqual(skillHeads(text("dup", "项目的")));
+    expect(catalog.atPath(join(userHome, ".agents", "skills", "dup", "SKILL.md"))?.path).toBe(join(userHome, ".agents", "skills", "dup", "SKILL.md"));
   });
 
   it("附加目录下的项目技能也收", () => {

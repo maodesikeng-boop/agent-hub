@@ -168,7 +168,7 @@ CREATE INDEX loaded_skills_generation ON loaded_skills (conversation_id, generat
 
 ### 已知技能名单
 
-认技能、换代读正文都只用这份名单，`src/daemon/skill-files.ts` 的 `catalog(session)` 给。它枚举这些技能目录（先到先得，重复的只留一个）：
+认技能、换代读正文都只用这份名单，`src/daemon/skill-files.ts` 的 `catalog(session)` 给。它枚举这些技能目录（按名字找时先到先得；名字是目录项，身份是真实路径，同一个名字指同一个文件只留一条，跨名软链按两个名字各留一条，别名不遮蔽原名）：
 
 1. 这个会话启动目录里的产品技能目录（`launch/<会话>/skills`，任务图手册在这里）；
 2. 工作目录和每个附加目录下，这家 `VendorSyncAdapter.skillTarget(ctx, { kind: "project" })` 给的目录，再加 `<目录>/.agents/skills`；

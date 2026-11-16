@@ -150,7 +150,10 @@ export function createSkillFiles(options: { launchDir?: string; userHome: string
 
   const expandHome = (path: string) => (path === "~" ? options.userHome : path.startsWith("~/") ? join(options.userHome, path.slice(2)) : path);
 
-  /** 枚举：每个技能目录下的 <名字>/SKILL.md，过了 skillFileIn 的边界才收；同一个真实路径只收第一次见到的。 */
+  /**
+   * 枚举：每个技能目录下的 <名字>/SKILL.md，过了 skillFileIn 的边界才收。名字是目录项（厂商按它列技能），身份是真实路径，
+   * 同一个名字指同一个文件只收一条：整目录软链、逐项软链不重复；跨名软链按两个名字各收一条，别名不遮蔽原名。
+   */
   const build = (roots: readonly SkillRoot[], cwd: string): SkillCatalog => {
     const trustedRoots = new Set(roots.flatMap((root) => trustedRootOf(root) ?? []));
     const skills: KnownSkill[] = [];
@@ -167,11 +170,11 @@ export function createSkillFiles(options: { launchDir?: string; userHome: string
         if (!isSkillName(name)) continue;
         const path = join(dir, name, "SKILL.md");
         const key = skillFileIn(path, trustedRoots);
-        if (key === null || seen.has(key)) continue;
+        if (key === null || seen.has(`${name}\0${key}`)) continue;
         const fileId = fileIdOf(key);
         const head = readStart(key, SKILL_HEAD_READ_BYTES);
         if (fileId === null || head === null) continue;
-        seen.add(key);
+        seen.add(`${name}\0${key}`);
         skills.push({ name, path, key, fileId, heads: skillHeads(head) });
       }
     }
