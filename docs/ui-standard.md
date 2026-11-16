@@ -540,3 +540,15 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
   - **保存**：点了先显示，请求没回来时一直显示最后选的（连着改两次不闪回前一次）；失败退回原来的值，列表下面一行 `RowError`。
   - **`Manage providers…`**：有没装或没登录的厂商时出现在最下面（13.5px、500、灰，右边 `ChevronRight`），先关面板再去 `Settings → Providers`（手机是 `#/settings/providers`）。
 - **输入框**：复用 `<DraftComposer>`，占位 `Tell Router, or type @ to pick a project…`，手机外壳是 `Tell Router…`。向上叠盖 26px，写法同对话页。
+
+## 22. 交付物（方案、验收结论、截图、录屏）
+
+组件只有一个：`src/web/components/Deliverables.tsx` 的 `<DeliverableFiles>`。对话里的提问卡、右栏 Needs You 和果皮轨门禁卡、Router 待拍板卡和简报都用它，放在正文（补充依据、摘要）下面、选项上面，和正文隔 8px（`mt-2`）。方案见 `docs/deliverables-design.md`。
+
+- **分两行**（`flex flex-col gap-2`），按 `groupDeliverables` 分组，没有的那行不渲染：
+  - **文档行**：md、pdf、html、csv、代码等。一个文件一个行内链接：14px 线条图标（`FileText`）+ 标签，`text-minor`，颜色和下划线同第 15 条的 `[data-file-link]`；`flex-wrap gap-x-3 gap-y-1`，触屏热区照第 19 条。不用胶囊、不加框。
+  - **媒体行**：图片、视频。缩略图固定 96px 高（`h-24 w-auto`，最宽 `max-w-40`，`object-cover`），`rounded-xl border border-border bg-muted`，`gap-2`，放不下横向滚（`overflow-x-auto`，不换行）。视频取第一帧（`preload="metadata"`），正中盖一个 36px 圆形深色半透明底的 `Play` 图标；不自动播放。
+- **点开**：都打开同一个预览窗（`FilePreview`）：图片看大图，视频用原生播放器（`controls`、`playsInline`），md 渲染，pdf、html 内联。
+- **悬停与聚焦**：缩略图是 `button`，聚焦态照第 7 条；鼠标是放大镜（图片）或手形（视频）。标签放 `aria-label`，图片 `alt` 也是标签。
+- **过期**：副本被定期清理掉（取文件 404）的，换成第 15 条的“文件已过期”卡片，不留破图。
+- **不写说明文字**：不加“附件”“交付物”这类组标题，不写文件大小。
