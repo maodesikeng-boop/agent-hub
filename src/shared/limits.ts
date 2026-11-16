@@ -627,9 +627,6 @@ export const MAX_ROUTER_CONTEXT_BYTES = 4 * ROUTER_CONTEXT_MAX_CHARS;
 /** 拍板卡选项数量下限与上限。 */
 export const ROUTER_OPTION_MIN_COUNT = 2;
 export const ROUTER_OPTION_MAX_COUNT = 4;
-/** 单个选项字数上限。 */
-export const ROUTER_OPTION_MAX_CHARS = 120;
-export const MAX_ROUTER_OPTION_BYTES = 4 * ROUTER_OPTION_MAX_CHARS;
 /** PM 给 Router 留的一句话备忘字数上限。 */
 export const ROUTER_NOTE_MAX_CHARS = 500;
 export const MAX_ROUTER_NOTE_BYTES = 4 * ROUTER_NOTE_MAX_CHARS;

@@ -21,7 +21,6 @@ import {
 } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
-  askOf,
   attachmentsOf,
   CONFIRM_REJECT_OPTION,
   extractAskCard,
@@ -154,7 +153,7 @@ function splitAskQuestionAndContext(raw: string): { title: string; context: stri
   return { title: match[1]!.trim(), context: rest === "" ? null : rest };
 }
 
-/** `hub ask` 带选项时的可点击 A/B/C/D 选项卡片（docs/ui-standard.md 第 17 条）。 */
+/** `hub ask` 在对话里的那张卡：有选项时是可点的 A/B/C/D 行，没有时直接展开补充框（docs/ui-standard.md 第 17 条）。 */
 function AskCard({
   card,
   files,
@@ -278,7 +277,7 @@ function AskCard({
               onChange={(e) => setNote(e.target.value)}
               placeholder="Add a note, or type a custom reply…"
               aria-label="Add note"
-              className="min-w-0 flex-1 text-minor"
+              className="min-w-0 flex-1"
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.nativeEvent.isComposing && note.trim() !== "") {
                   e.preventDefault();
@@ -288,7 +287,6 @@ function AskCard({
             />
             <Button
               type="button"
-              size="sm"
               disabled={disabled || note.trim() === ""}
               onClick={() => submit(null, note)}
             >
@@ -319,20 +317,7 @@ const AgentText = memo(function AgentText({
 }) {
   // agent 发来的文件：meta 没变就是同一个数组，Markdown 不用重建插件
   const files = useMemo(() => sentFilesOf(message), [message.meta]);
-  const askCard = useMemo<ExtractedAskCard | null>(() => {
-    const extracted = extractAskCard(message);
-    if (extracted !== null) return extracted;
-    const ask = askOf(message);
-    if (ask?.gateRef === undefined) return null;
-    return {
-      question: message.text.trim(),
-      options: [],
-      answered: ask.answered === true,
-      ...(ask.recommended !== undefined ? { recommended: ask.recommended } : {}),
-      ...(ask.chosenOption !== undefined ? { chosenOption: ask.chosenOption } : {}),
-      gateRef: ask.gateRef,
-    };
-  }, [message.sender, message.meta, message.text]);
+  const askCard = useMemo(() => extractAskCard(message), [message.sender, message.meta, message.text]);
   return (
     <article
       className={cn("flex w-full min-w-0 flex-col items-start gap-1.5", highlighted && "rounded-2xl outline-2 outline-offset-4 outline-ring/60")}

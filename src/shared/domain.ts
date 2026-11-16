@@ -557,40 +557,12 @@ function stripSequentialLetterPrefixes(items: readonly string[]): string[] | nul
 }
 
 /**
- * 提取 `hub ask` 可点击选项卡片的数据：
- * 1. 先调 `askOf(message)`，若为 null 则返回 null；
- * 2. 若 `ask.options` 存在且长度 ≥ 2：返回 `{ question: message.text.trim(), options: ask.options, answered: ask.answered === true }`；
- * 3. 若未显式传 `options`：开头一段非空问题文本 + 紧接着的 2～10 行单行选项，每行都必须显式以顺序字母
- *    `A. `/`A：`/`A: ` 开头（可带 `- `/`1. ` 列表前缀），后面没有其他正文段落，去掉字母前缀作为选项；
- *    普通 `- xxx`/`1. xxx` 列表（如列出几项配置请用户确认）不是单选题，返回 null，走普通 Markdown 渲染；
- * 4. 其他纯文本提问返回 null。
+ * 正文是“一段问题 + 紧接着 2～10 行单行选项”时拆出问题和选项：每行都显式以顺序字母 `A. `/`A：`/`A: ` 开头
+ * （可带 `- `/`1. ` 列表前缀），后面没有其他正文段落，去掉字母前缀作为选项；普通 `- xxx`/`1. xxx` 列表
+ * （如列出几项配置请用户确认）不是单选题，返回 null。
  */
-export interface ExtractedAskCard {
-  question: string;
-  options: string[];
-  answered: boolean;
-  recommended?: string;
-  chosenOption?: string;
-  gateRef?: GateRef;
-}
-
-export function extractAskCard(
-  message: Pick<Message, "sender" | "meta" | "text">,
-): ExtractedAskCard | null {
-  const ask = askOf(message);
-  if (ask === null) return null;
-  const answered = ask.answered === true;
-  const extras = {
-    ...(ask.recommended !== undefined ? { recommended: ask.recommended } : {}),
-    ...(ask.chosenOption !== undefined ? { chosenOption: ask.chosenOption } : {}),
-    ...(ask.gateRef !== undefined ? { gateRef: ask.gateRef } : {}),
-  };
-  if (ask.options !== undefined && ask.options.length >= ASK_MIN_OPTIONS) {
-    return { question: message.text.trim(), options: ask.options, answered, ...extras };
-  }
-  const trimmed = message.text.trim();
-  if (trimmed === "") return null;
-  const lines = trimmed.split(/\r?\n/);
+function letteredOptionsOf(text: string): { question: string; options: string[] } | null {
+  const lines = text.split(/\r?\n/);
   const firstListIdx = lines.findIndex((line) => ASK_LIST_ITEM_RE.test(line.trim()));
   if (firstListIdx <= 0) return null;
 
@@ -614,8 +586,39 @@ export function extractAskCard(
     rawItems.push(item);
   }
   const options = stripSequentialLetterPrefixes(rawItems);
-  if (options === null) return null;
-  return { question, options, answered, ...extras };
+  return options === null ? null : { question, options };
+}
+
+export interface ExtractedAskCard {
+  question: string;
+  options: string[];
+  answered: boolean;
+  recommended?: string;
+  chosenOption?: string;
+  gateRef?: GateRef;
+}
+
+/**
+ * `hub ask` 在对话里那张卡的数据，不是提问返回 null。选项取显式的 `meta.options`，没有就从正文拆
+ * （见 letteredOptionsOf），都没有时 options 为空、问题是全文。
+ */
+export function extractAskCard(
+  message: Pick<Message, "sender" | "meta" | "text">,
+): ExtractedAskCard | null {
+  const ask = askOf(message);
+  if (ask === null) return null;
+  const answered = ask.answered === true;
+  const extras = {
+    ...(ask.recommended !== undefined ? { recommended: ask.recommended } : {}),
+    ...(ask.chosenOption !== undefined ? { chosenOption: ask.chosenOption } : {}),
+    ...(ask.gateRef !== undefined ? { gateRef: ask.gateRef } : {}),
+  };
+  const trimmed = message.text.trim();
+  if (ask.options !== undefined && ask.options.length >= ASK_MIN_OPTIONS) {
+    return { question: trimmed, options: ask.options, answered, ...extras };
+  }
+  const lettered = letteredOptionsOf(trimmed) ?? { question: trimmed, options: [] };
+  return { ...lettered, answered, ...extras };
 }
 
 /** 发给 agent 的系统消息的开头（设计第 7.3 节的来源标签）。 */
