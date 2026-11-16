@@ -240,7 +240,7 @@ describe("守护进程启动失败：终端上的输出", () => {
 
     const supervised = await run("sub-supervised", true);
     expect(supervised.res.status).toBe(200);
-    expect(((await supervised.res.json()) as { text: string }).text).toContain("已登记空闲排空热重启");
+    expect(((await supervised.res.json()) as { text: string }).text).toContain("已登记热重启");
     expect(await supervised.exited).toBe(DESKTOP_CONTRACT.reloadExitCode);
     expect(supervised.stdout()).toContain("child-env:none");
     expect(supervised.stderr()).toContain("全库空闲，开始热重启");
