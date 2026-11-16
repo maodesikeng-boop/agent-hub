@@ -12,7 +12,6 @@ import type { ActionRow, AnyActionRow } from "../../shared/actions.ts";
 import type { ConversationId, PmId, SessionId, TaskNode, WorkerId } from "../../shared/domain.ts";
 import { workerSetupLogPath } from "../../shared/paths.ts";
 import { REVIEW_CHECKLIST, parseReviewTarget } from "../../shared/review.ts";
-import { bundledModelCatalog, type ModelCatalog } from "../../shared/vendors.ts";
 import { REPORT_END, REPORT_START } from "../../shared/worker.ts";
 import { addWorktree, remoteBranchHead, resolveCommit } from "../git/index.ts";
 import { createReviewObserver, createReviewVerifyHandler, createWorktreeCreateHandler } from "../handlers.ts";
@@ -91,7 +90,7 @@ describe("审查步骤只查不修", () => {
       setupLogsDir: join(dataHome, "state", "logs", "setup"),
       userHome: root,
       osSandboxed: () => true,
-      modelCatalog: (vendor): ModelCatalog => ({ ...bundledModelCatalog(vendor), availability: "available" }),
+      models: { current: () => null, availability: () => "available" },
       resolveFolder: createResolveFolder({ dataHome, userHome: root }),
     });
     ledger.onActionEnqueued((a) => enqueued.push(a));

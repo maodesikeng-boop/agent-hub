@@ -1356,7 +1356,7 @@ exports[`迁移前快照：agentLaunchArgs > pi：模型 × 思考程度各组�
 exports[`迁移前快照：声明表 > VENDOR_FAILURE_SIGNS 1`] = `
 {
   "agy": {
-    "auth": /not logged in\\|unauthenticated\\|sign in\\|\\\\b401\\\\b\\|invalid_api_key/i,
+    "auth": /not logged in\\|unauthenticated\\|authentication required\\|sign in\\|to log in\\|\\\\b401\\\\b\\|invalid_api_key/i,
     "context": /context_length_exceeded\\|context window\\|prompt is too long/i,
     "quota": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota/i,
     "serviceName": "Antigravity",
@@ -1379,7 +1379,7 @@ exports[`迁移前快照：声明表 > VENDOR_FAILURE_SIGNS 1`] = `
       },
       {
         "kind": "auth",
-        "pattern": /not logged in\\|unauthenticated\\|sign in\\|\\\\b401\\\\b\\|invalid_api_key/i,
+        "pattern": /not logged in\\|unauthenticated\\|authentication required\\|sign in\\|to log in\\|\\\\b401\\\\b\\|invalid_api_key/i,
       },
       {
         "kind": "context",
@@ -1388,7 +1388,7 @@ exports[`迁移前快照：声明表 > VENDOR_FAILURE_SIGNS 1`] = `
     ],
   },
   "claude": {
-    "auth": /not logged in\\|unauthenticated\\|sign in\\|\\\\b401\\\\b\\|invalid_api_key/i,
+    "auth": /not logged in\\|unauthenticated\\|authentication required\\|sign in\\|to log in\\|\\\\b401\\\\b\\|invalid_api_key/i,
     "context": /context_length_exceeded\\|context window\\|prompt is too long/i,
     "quota": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota/i,
     "serviceName": "Claude",
@@ -1411,7 +1411,7 @@ exports[`迁移前快照：声明表 > VENDOR_FAILURE_SIGNS 1`] = `
       },
       {
         "kind": "auth",
-        "pattern": /not logged in\\|unauthenticated\\|sign in\\|\\\\b401\\\\b\\|invalid_api_key/i,
+        "pattern": /not logged in\\|unauthenticated\\|authentication required\\|sign in\\|to log in\\|\\\\b401\\\\b\\|invalid_api_key/i,
       },
       {
         "kind": "context",
@@ -1420,7 +1420,7 @@ exports[`迁移前快照：声明表 > VENDOR_FAILURE_SIGNS 1`] = `
     ],
   },
   "codex": {
-    "auth": /not logged in\\|unauthenticated\\|sign in\\|\\\\b401\\\\b\\|invalid_api_key/i,
+    "auth": /not logged in\\|unauthenticated\\|authentication required\\|sign in\\|to log in\\|\\\\b401\\\\b\\|invalid_api_key/i,
     "context": /context_length_exceeded\\|context window\\|prompt is too long/i,
     "quota": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota/i,
     "serviceName": "Codex",
@@ -1443,7 +1443,7 @@ exports[`迁移前快照：声明表 > VENDOR_FAILURE_SIGNS 1`] = `
       },
       {
         "kind": "auth",
-        "pattern": /not logged in\\|unauthenticated\\|sign in\\|\\\\b401\\\\b\\|invalid_api_key/i,
+        "pattern": /not logged in\\|unauthenticated\\|authentication required\\|sign in\\|to log in\\|\\\\b401\\\\b\\|invalid_api_key/i,
       },
       {
         "kind": "context",
@@ -1452,7 +1452,7 @@ exports[`迁移前快照：声明表 > VENDOR_FAILURE_SIGNS 1`] = `
     ],
   },
   "cursor": {
-    "auth": /not logged in\\|unauthenticated\\|sign in\\|\\\\b401\\\\b\\|invalid_api_key/i,
+    "auth": /not logged in\\|unauthenticated\\|authentication required\\|sign in\\|to log in\\|\\\\b401\\\\b\\|invalid_api_key/i,
     "context": /context_length_exceeded\\|context window\\|prompt is too long/i,
     "quota": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota/i,
     "serviceName": "Cursor",
@@ -1475,7 +1475,7 @@ exports[`迁移前快照：声明表 > VENDOR_FAILURE_SIGNS 1`] = `
       },
       {
         "kind": "auth",
-        "pattern": /not logged in\\|unauthenticated\\|sign in\\|\\\\b401\\\\b\\|invalid_api_key/i,
+        "pattern": /not logged in\\|unauthenticated\\|authentication required\\|sign in\\|to log in\\|\\\\b401\\\\b\\|invalid_api_key/i,
       },
       {
         "kind": "context",
@@ -1484,7 +1484,7 @@ exports[`迁移前快照：声明表 > VENDOR_FAILURE_SIGNS 1`] = `
     ],
   },
   "deepseek": {
-    "auth": /not logged in\\|unauthenticated\\|sign in\\|\\\\b401\\\\b\\|invalid_api_key/i,
+    "auth": /not logged in\\|unauthenticated\\|authentication required\\|sign in\\|to log in\\|\\\\b401\\\\b\\|invalid_api_key/i,
     "context": /context_length_exceeded\\|context window\\|prompt is too long/i,
     "quota": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota/i,
     "serviceName": "DeepSeek",
@@ -1507,7 +1507,7 @@ exports[`迁移前快照：声明表 > VENDOR_FAILURE_SIGNS 1`] = `
       },
       {
         "kind": "auth",
-        "pattern": /not logged in\\|unauthenticated\\|sign in\\|\\\\b401\\\\b\\|invalid_api_key/i,
+        "pattern": /not logged in\\|unauthenticated\\|authentication required\\|sign in\\|to log in\\|\\\\b401\\\\b\\|invalid_api_key/i,
       },
       {
         "kind": "context",
@@ -1516,7 +1516,7 @@ exports[`迁移前快照：声明表 > VENDOR_FAILURE_SIGNS 1`] = `
     ],
   },
   "pi": {
-    "auth": /not logged in\\|unauthenticated\\|sign in\\|\\\\b401\\\\b\\|invalid_api_key/i,
+    "auth": /not logged in\\|unauthenticated\\|authentication required\\|sign in\\|to log in\\|\\\\b401\\\\b\\|invalid_api_key/i,
     "context": /context_length_exceeded\\|context window\\|prompt is too long/i,
     "quota": /quota\\[_ \\]\\?exceeded\\|rate\\[_ \\]\\?limit\\|usage\\[_ \\]\\?limit\\(\\?:_reached\\)\\?\\|resource_exhausted\\|\\\\b429\\\\b\\|credit balance\\|quota/i,
     "serviceName": "Pi",
@@ -1539,7 +1539,7 @@ exports[`迁移前快照：声明表 > VENDOR_FAILURE_SIGNS 1`] = `
       },
       {
         "kind": "auth",
-        "pattern": /not logged in\\|unauthenticated\\|sign in\\|\\\\b401\\\\b\\|invalid_api_key/i,
+        "pattern": /not logged in\\|unauthenticated\\|authentication required\\|sign in\\|to log in\\|\\\\b401\\\\b\\|invalid_api_key/i,
       },
       {
         "kind": "context",

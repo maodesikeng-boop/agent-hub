@@ -332,15 +332,6 @@ export function isSelectable(availability: VendorAvailability): boolean {
   return availability === "available" || availability === "unknown";
 }
 
-/** 不能用时给人看的一句（hub worker start 报错用）；能用返回 null。device 是设备名。 */
-export function vendorUnavailableMessage(vendor: AgentVendor, availability: VendorAvailability, device: string): string | null {
-  if (availability === "not_installed") return `这台设备（${device}）没装 ${vendor}`;
-  if (availability === "signed_out") {
-    return `这台设备（${device}）的 ${vendor} 没登录：先在这台设备的终端里跑 \`${SPECS[vendor].cli.loginCommand}\` 登录，再派`;
-  }
-  return null;
-}
-
 /** 找不到这家程序的驱动错误码（codex_not_found……），按厂商生成，不手写。 */
 export type VendorNotFoundCode = `${AgentVendor}_not_found`;
 export function notFoundCode(vendor: AgentVendor): VendorNotFoundCode {
@@ -365,7 +356,7 @@ export interface VendorFailureSigns {
   context: RegExp;
 }
 
-const COMMON_AUTH_PATTERN = /not logged in|unauthenticated|sign in|\b401\b|invalid_api_key/i;
+const COMMON_AUTH_PATTERN = /not logged in|unauthenticated|authentication required|sign in|to log in|\b401\b|invalid_api_key/i;
 const COMMON_QUOTA_PATTERN = /quota[_ ]?exceeded|rate[_ ]?limit|usage[_ ]?limit(?:_reached)?|resource_exhausted|\b429\b|credit balance|quota/i;
 const COMMON_CONTEXT_PATTERN = /context_length_exceeded|context window|prompt is too long/i;
 const COMMON_BUSY_PATTERN = /\b529\b|overloaded|api_error|\b5\d\d\b|internal server error|service unavailable/i;

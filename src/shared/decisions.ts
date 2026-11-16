@@ -3,7 +3,7 @@
 
 import {
   askOf,
-  isTaskNodeWaitingUser,
+  isTaskNodeWaitingDecision,
   type Conversation,
   type ConversationId,
   type Message,
@@ -201,7 +201,7 @@ export function pendingDecisionsOf(snapshot: DecisionSnapshotInput, deviceId = "
     const archived = pm?.archivedAt != null;
     for (const node of graph.nodes) {
       if (node.gateAskMessageId !== null) gateMessageIds.add(node.gateAskMessageId);
-      if (archived || !isTaskNodeWaitingUser(node)) continue;
+      if (archived || !isTaskNodeWaitingDecision(node)) continue;
       const { blockedNodeCount, nextNodeTitles } = computeGateImpact(graph, node.key);
       result.push({
         key: `gate:${deviceId}:${graph.id}:${node.key}`,

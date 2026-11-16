@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
+  askOf,
   attachmentsOf,
   CONFIRM_REJECT_OPTION,
   extractAskCard,
@@ -61,6 +62,7 @@ import { Avatar } from "./Avatar.tsx";
 import { WorkerPickTag } from "./WorkerPickTag.tsx";
 import { COPIED_RESET_MS } from "./CodeBlock.tsx";
 import { Markdown } from "./Markdown.tsx";
+import { UserBlockerCard } from "./UserBlockerCard.tsx";
 
 export interface AgentIdentity {
   name: string;
@@ -330,6 +332,7 @@ const AgentText = memo(function AgentText({
   // agent 发来的文件：meta 没变就是同一个数组，Markdown 不用重建插件
   const files = useMemo(() => sentFilesOf(message), [message.meta]);
   const askCard = useMemo(() => extractAskCard(message), [message.sender, message.meta, message.text]);
+  const blocker = askCard === null ? askOf(message) : null;
   return (
     <article
       className={cn("flex w-full min-w-0 flex-col items-start gap-1.5", highlighted && "rounded-2xl outline-2 outline-offset-4 outline-ring/60")}
@@ -337,7 +340,14 @@ const AgentText = memo(function AgentText({
       data-message-id={message.id}
       data-highlighted={highlighted ? "true" : undefined}
     >
-      {askCard ? (
+      {blocker?.blockerRef !== undefined ? (
+        <UserBlockerCard
+          blockerId={blocker.blockerRef.blockerId}
+          text={message.text}
+          answered={blocker.answered === true}
+          className="w-full max-w-[min(100%,36rem)]"
+        />
+      ) : askCard ? (
         <AskCard card={askCard} files={files} messageId={message.id} onAnswerAsk={onAnswerAsk} />
       ) : (
         <div className="w-full min-w-0 text-body leading-relaxed">

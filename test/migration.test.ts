@@ -2067,3 +2067,62 @@ describe("0028_review_workers：审查 Worker 不挂分支", () => {
     expect(plan).toContain("workers_worktree_path");
   });
 });
+
+describe("0029_user_blockers：要用户动手的阻塞", () => {
+  it("从 0028 升级建表；一个原因一条、每个对话一张卡；删一个对话只删它的卡；步骤离开等用户自动解开；回退 8 / 28 重跑零报错零丢失", () => {
+    const db = m2Db();
+    migrate(db, migrationsUpTo(28));
+    insertWorker(db);
+    expect(migrate(db, migrationsUpTo(29))).toMatchObject({ from: 28, to: 29, applied: [29] });
+
+    db.exec(`
+      INSERT INTO conversations (id, kind, pm_id, project_id, title, created_at) VALUES (30, 'worker', 1, 2, '另一个对话', 50);
+      INSERT INTO task_graphs (id, project_id, pm_id, conversation_id, title, status, created_at, updated_at) VALUES (40, 2, 1, 1, '验收', 'active', 60, 60);
+      INSERT INTO task_graph_steps (id, graph_id, node_key, title, status, waiting_for, sort_order, created_at, updated_at)
+        VALUES (41, 40, 'a', '验收 A', 'waiting', 'user', 0, 60, 60), (42, 40, 'b', '验收 B', 'waiting', 'user', 1, 60, 60);
+      INSERT INTO messages (id, conversation_id, sender, kind, text, meta, dedupe_key, created_at, updated_at)
+        VALUES (51, 1, 'agent', 'text', 'agy 没登录', '{"needsUser":true,"blockerRef":{"blockerId":7}}', 'ask:51', 60, 60),
+               (52, 30, 'agent', 'text', 'agy 没登录', '{"needsUser":true,"blockerRef":{"blockerId":7}}', 'ask:52', 60, 60);
+      INSERT INTO user_blockers (id, kind, vendor, device, status, rechecked_as, created_at, updated_at)
+        VALUES (7, 'vendor_signed_out', 'agy', '东京', 'open', NULL, 60, 60);
+      INSERT INTO user_blocker_cards (blocker_id, conversation_id, message_id) VALUES (7, 1, 51), (7, 30, 52);
+      INSERT INTO user_blocker_steps (step_id, blocker_id) VALUES (41, 7), (42, 7);
+      INSERT INTO user_blocker_workers (blocker_id, worker_id, message_ids_json) VALUES (7, 1, '[51]');
+    `);
+    expect(() =>
+      db.run("INSERT INTO user_blockers (kind, vendor, device, status, created_at, updated_at) VALUES ('vendor_signed_out', 'agy', '东京', 'open', 70, 70)"),
+    ).toThrow(/UNIQUE/);
+    expect(() => db.run("INSERT INTO user_blocker_cards (blocker_id, conversation_id, message_id) VALUES (7, 1, 52)")).toThrow(/UNIQUE|PRIMARY/);
+
+    // 步骤离开等用户：触发器删掉它被卡着的记录
+    db.run("UPDATE task_graph_steps SET status = 'running', waiting_for = NULL WHERE id = 42");
+    expect(db.all("SELECT step_id FROM user_blocker_steps ORDER BY step_id")).toEqual([{ step_id: 41 }]);
+
+    const tables = ["user_blockers", "user_blocker_cards", "user_blocker_steps", "user_blocker_workers"];
+    const snapshot = () => Object.fromEntries(tables.map((t) => [t, db.all(`SELECT * FROM ${t} ORDER BY 1, 2`)]));
+    const before = snapshot();
+    for (const rewindTo of [28, 8, 28]) {
+      db.exec(`PRAGMA user_version = ${rewindTo}`);
+      expect(() => migrate(db, migrationsDir)).not.toThrow();
+      expect(userVersion(db)).toBe(LATEST_VERSION);
+      expect(snapshot()).toEqual(before);
+      expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+      db.run("UPDATE task_graph_steps SET status = 'waiting', waiting_for = 'user' WHERE id = 42");
+      db.run("INSERT INTO user_blocker_steps (step_id, blocker_id) VALUES (42, 7)");
+      db.run("UPDATE task_graph_steps SET status = 'running', waiting_for = NULL WHERE id = 42");
+      expect(snapshot()).toEqual(before);
+    }
+
+    // 清掉一个对话（项目经理到期清理先删消息再删对话）：只少了它那张卡，阻塞和别的对话的卡、被卡住的步骤都还在
+    db.run("DELETE FROM messages WHERE conversation_id = 30");
+    db.run("DELETE FROM conversations WHERE id = 30");
+    expect(db.all("SELECT blocker_id, conversation_id FROM user_blocker_cards")).toEqual([{ blocker_id: 7, conversation_id: 1 }]);
+    expect(db.get<{ n: number }>("SELECT count(*) AS n FROM user_blockers")!.n).toBe(1);
+    expect(db.all("SELECT step_id FROM user_blocker_steps")).toEqual([{ step_id: 41 }]);
+
+    // 阻塞本身删掉时，卡、步骤、Worker 的记录一起没
+    db.run("DELETE FROM user_blockers WHERE id = 7");
+    for (const t of tables) expect(db.get<{ n: number }>(`SELECT count(*) AS n FROM ${t}`)!.n).toBe(0);
+    expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+});
