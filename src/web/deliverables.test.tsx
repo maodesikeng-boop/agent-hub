@@ -225,6 +225,42 @@ async function expectLeadFilesThenDetails(card: HTMLElement) {
   expect(within(card).queryByText(/交棒要点/)).toBeNull();
 }
 
+/** jsdom 不排版：细节框按文字算高度，每 40 字一行、一行 22px（15px 字），比两行矮就是“一行放得下”。 */
+function layoutDetailsByText() {
+  const original = HTMLElement.prototype.getBoundingClientRect;
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    if (!this.hasAttribute("data-card-details")) return original.call(this);
+    const height = Math.ceil((this.textContent ?? "").length / 40) * 22;
+    return { x: 0, y: 0, top: 0, left: 0, right: 600, bottom: height, width: 600, height, toJSON: () => ({}) } as DOMRect;
+  });
+}
+
+describe("细节只占一行时直接显示，不收起（四处同一个规则）", () => {
+  beforeEach(() => layoutDetailsByText());
+
+  it("门禁卡：细节只有一行提交号，直接显示、不出 Show more", () => {
+    const graph = gateGraph();
+    graph.nodes[0] = { ...graph.nodes[0]!, gateSummaryMd: "**摘要**：做完了\n\n提交 `22f68fed`" };
+    render(
+      <RightRail asks={[]} workers={[]} activeGraphs={[graph]} openWorkerId={null} layout="side" avatarKey={1} onOpenAsk={() => {}} onOpenWorker={() => {}} />,
+    );
+    const card = screen.getByTestId("peel-gate-card");
+    const files = card.querySelector<HTMLElement>("[data-deliverables]")!;
+    const details = within(card).getByText(/22f68fed/);
+    expect(files.compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(card).queryByRole("button", { name: /Show (more|less)/ })).toBeNull();
+  });
+
+  it("门禁卡：细节超过一行照旧收起", async () => {
+    const graph = gateGraph();
+    graph.nodes[0] = { ...graph.nodes[0]!, gateSummaryMd: CHECKPOINT_TEXT };
+    render(
+      <RightRail asks={[]} workers={[]} activeGraphs={[graph]} openWorkerId={null} layout="side" avatarKey={1} onOpenAsk={() => {}} onOpenWorker={() => {}} />,
+    );
+    await expectLeadFilesThenDetails(screen.getByTestId("peel-gate-card"));
+  });
+});
+
 describe("四处入口", () => {
   it("对话里的提问卡：AskMeta.deliverables 列在卡片正文下面", async () => {
     const ask = askMessage({
@@ -454,6 +490,19 @@ describe("四处入口", () => {
       await expectLeadFilesThenDetails(briefing);
       await user.click(within(briefing).getByRole("button", { name: "Show more" }));
       expect(within(briefing).getByRole("link", { name: /PR #333/ })).toBeInTheDocument();
+    });
+
+    it("总助简报：细节只有一个 PR 链接时直接显示，不收起", async () => {
+      layoutDetailsByText();
+      installFleet(snapshotWith({ router: { ...emptyRouterSlice(), items: [reportItem({ summary: "任务图 #22 做完了", deliverables: [plan] })] } }));
+      await openRouter();
+      const briefing = await waitFor(() => {
+        const el = document.querySelector<HTMLElement>("[data-router-briefing]");
+        expect(el).not.toBeNull();
+        return el!;
+      });
+      expect(within(briefing).getByRole("link", { name: /PR #333/ })).toBeInTheDocument();
+      expect(within(briefing).queryByRole("button", { name: /Show (more|less)/ })).toBeNull();
     });
 
     it("别的设备的拍板卡，缩略图地址走那台设备的代理", async () => {

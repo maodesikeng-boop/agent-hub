@@ -103,11 +103,16 @@ export const DeliverableFiles = memo(function DeliverableFiles({ deliverables, c
 });
 
 const NO_DELIVERABLES: readonly Deliverable[] = [];
+/** 细节比这个高（em，按细节框的字号）就收起：Markdown 一行 1.65em、两行 3.3em，链接行一行约 1.5em。 */
+const DETAILS_ONE_LINE_MAX_EM = 2.4;
+/** jsdom 之类读不到字号时按 16px 算。 */
+const FALLBACK_FONT_PX = 16;
 
 /**
  * 卡片正文：第一段摘要（超过 3 行收起、底部渐隐，行数在 styles.css 的 `.card-lead-clamp`）→ 交付物 → 细节（其余段落和 extra）。
- * 细节默认收起，一个 `Show more` / `Show less` 同时管摘要的收起和细节；没有细节、摘要也没超过 3 行时不出按钮。
- * 同一张卡换了内容要重置展开状态，调用方给 key。textClassName 是摘要和细节的字号颜色，className 给外边距。
+ * 细节一行放得下（比如只有一个 PR 链接、一行提交号）就直接显示；超过一行默认收起。一个 `Show more` / `Show less` 同时管摘要的收起和细节，
+ * 没有要收的就不出按钮。细节放不放得下是画出来量的：内容或卡片宽度变了，先画出来再量一次，在浏览器绘制之前定下来，不会闪。
+ * 量不到高度（没排版）时当放不下。同一张卡换了内容要重置展开状态，调用方给 key。textClassName 是摘要和细节的字号颜色，className 给外边距。
  */
 export const CardBody = memo(function CardBody({
   text,
@@ -120,7 +125,7 @@ export const CardBody = memo(function CardBody({
 }: {
   text: string;
   deliverables?: readonly Deliverable[] | undefined;
-  /** 接在细节后面、一起收起的东西（总助简报的链接行、拍板卡的下游等待数）。 */
+  /** 接在细节后面、和细节一起收起的东西（总助简报的链接行、拍板卡的下游等待数）。 */
   extra?: ReactNode;
   files?: SentFile[];
   messageId?: number;
@@ -128,10 +133,19 @@ export const CardBody = memo(function CardBody({
   textClassName?: string;
 }) {
   const { lead, details } = useMemo(() => splitLead(text), [text]);
+  const hasExtra = extra !== undefined && extra !== null && extra !== false;
+  const hasDetails = details !== "" || hasExtra;
   const [expanded, setExpanded] = useState(false);
   const [overflowing, setOverflowing] = useState(false);
+  const [width, setWidth] = useState(0);
+  const [fit, setFit] = useState<{ key: string; oneLine: boolean } | null>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const leadRef = useRef<HTMLDivElement>(null);
+  const detailsRef = useRef<HTMLDivElement>(null);
   const id = useId();
+  const fitKey = `${width}\u0000${hasExtra}\u0000${details}`;
+  const oneLine = fit?.key === fitKey ? fit.oneLine : null;
+  const showDetails = hasDetails && (expanded || oneLine !== false);
 
   // 收起时量一次“摘要比框高”：框宽变了（窗口、托盘滚动条）或摘要变了都重新量；展开时保持上一次的结论，按钮留着好收回去。
   useLayoutEffect(() => {
@@ -145,10 +159,25 @@ export const CardBody = memo(function CardBody({
     return () => observer.disconnect();
   }, [expanded, lead]);
 
-  const hasDetails = details !== "" || (extra !== undefined && extra !== null && extra !== false);
+  useLayoutEffect(() => {
+    const box = bodyRef.current;
+    if (box === null) return;
+    const observer = new ResizeObserver(() => setWidth(Math.round(box.clientWidth)));
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, []);
+
+  useLayoutEffect(() => {
+    const box = detailsRef.current;
+    if (oneLine !== null || box === null) return;
+    const height = box.getBoundingClientRect().height;
+    const fontPx = Number.parseFloat(getComputedStyle(box).fontSize) || FALLBACK_FONT_PX;
+    setFit({ key: fitKey, oneLine: height > 0 && height < DETAILS_ONE_LINE_MAX_EM * fontPx });
+  });
+
   if (lead === "" && !hasDetails && deliverables.length === 0) return null;
   return (
-    <div id={id} data-card-body className={cn("flex min-w-0 flex-col items-start gap-2", className)}>
+    <div ref={bodyRef} id={id} data-card-body className={cn("flex min-w-0 flex-col items-start gap-2", className)}>
       {lead !== "" && (
         <div
           ref={leadRef}
@@ -160,13 +189,13 @@ export const CardBody = memo(function CardBody({
         </div>
       )}
       <DeliverableFiles deliverables={deliverables} className="w-full" />
-      {expanded && hasDetails && (
-        <div data-card-details className={cn("flex w-full min-w-0 flex-col gap-2", textClassName)}>
+      {showDetails && (
+        <div ref={detailsRef} data-card-details className={cn("flex w-full min-w-0 flex-col gap-2", textClassName)}>
           {details !== "" && <Markdown text={details} files={files} messageId={messageId} />}
           {extra}
         </div>
       )}
-      {(hasDetails || overflowing) && (
+      {((hasDetails && oneLine === false) || overflowing) && (
         <button
           type="button"
           aria-expanded={expanded}

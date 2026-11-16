@@ -70,7 +70,7 @@ B 的几个具体规定：
 - **验收步骤交一份“验收结论”文件**（Markdown，写结论、怎么验的、每张截图说明什么），连同截图、录屏写进“文件”栏。只读 Worker 写到 `/tmp/<主题>-verify/` 也能分享。
 - **录屏用 mp4（H.264）**。浏览器自动化录出来的多是 webm，用 `ffmpeg -i in.webm -c:v libx264 -pix_fmt yuv420p -movflags +faststart out.mp4` 转（本机已装 ffmpeg）。理由：macOS 的 WKWebView、Windows 的 WebView2、iOS Safari 都能播 H.264 mp4；webm 在旧版 Safari 上不稳（推断，没逐个试）。单个不超过 50 MB。
 - **项目经理挂卡用 `--file`**：`hub ask --file 方案=docs/x-design.md`、`hub router report --file …`，可写多个。不再把路径写进标题。`--link` 的地址是本机路径时拒绝，提示改用 `--file`。
-- **卡片里的样子**照 `docs/ui-standard.md` 第 22 条（这次新加）：标题 → 摘要（正文第一段）→ 文件 → 细节（交棒、提交、PR、链接，默认收起）。文件两行，文档一行蓝色链接，图片和视频一行 96px 小图。四处共用 `<CardBody>`。
+- **卡片里的样子**照 `docs/ui-standard.md` 第 22 条（这次新加）：标题 → 摘要（正文第一段）→ 文件 → 细节（交棒、提交、PR、链接；一行放得下直接显示，超过一行默认收起）。文件两行，文档一行蓝色链接，图片和视频一行 96px 小图。四处共用 `<CardBody>`。
 
 ## 性能
 
