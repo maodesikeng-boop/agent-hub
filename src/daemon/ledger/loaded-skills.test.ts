@@ -12,6 +12,7 @@ import { PM_ARCHIVE_RETENTION_MS, SKILL_CARRYOVER_RECORDS_MAX, SKILL_CARRYOVER_S
 import { createSessionStore } from "../store/index.ts";
 import type { Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
+import { createResolveFolder } from "./files.ts";
 import { createLedger } from "./index.ts";
 import type { SqliteLedger } from "./index.ts";
 
@@ -378,6 +379,70 @@ describe("三条换代的路都带", () => {
     expect(sectionOf(preamble)).toContain("切厂商也带");
     expect(preamble.indexOf(SECTION)).toBeLessThan(preamble.indexOf("## 本代完整对话"));
     expect(db.get<{ skills_section: string | null }>("SELECT skills_section FROM handovers ORDER BY id DESC LIMIT 1")!.skills_section).toContain("切厂商也带");
+  });
+});
+
+describe("和提问卡交付物、提醒卡交汇（#333、#336）", () => {
+  /** 换一个带项目文件夹、能注入厂商状态的账本和项目经理（提问卡挂的文件要在项目文件夹里，提醒卡看厂商状态）。 */
+  function withProject(availability: (vendor: string) => "available" | "signed_out" = () => "available"): string {
+    const folder = join(root, "proj");
+    mkdirSync(folder, { recursive: true });
+    ledger = createLedger(db, {
+      now: () => now,
+      pmHomeRoot: join(root, "pm-home"),
+      dataHome: join(root, "data"),
+      userHome,
+      launchDir: join(root, "launch"),
+      shareTmpDirs: [],
+      osSandboxed: () => true,
+      deviceName: () => "测试机",
+      models: { current: () => null, availability },
+      resolveFolder: createResolveFolder({ dataHome: join(root, "data"), userHome }),
+    });
+    const created = ledger.createPm({ name: "林经理", mode: "manage_only", persona: "", folder });
+    pmId = created.pm.id;
+    conversationId = created.conversation.id;
+    firstSession = created.sessionId;
+    cwd = db.get<{ cwd: string }>("SELECT cwd FROM agent_sessions WHERE id = ?", firstSession)!.cwd;
+    return folder;
+  }
+
+  it("上一代挂了带文件的提问卡（hub ask --file）又加载了技能：开场里技能在交接前、卡在实时提问卡一节，卡的交付物不动，技能算新一代的", () => {
+    const folder = withProject();
+    writeFileSync(join(folder, "plan.md"), "方案");
+    read(firstSession, skill("with-ask", "提问卡旁边的技能"));
+    ledger.hubCall(firstSession, "ask", { text: "方案好了，请验收", options: ["通过", "打回"], files: [{ label: "方案", path: join(folder, "plan.md") }] });
+    const deliverables = db.all("SELECT * FROM router_item_deliverables");
+    expect(deliverables).toHaveLength(1);
+
+    const { next, preamble } = renew();
+    expect(sectionOf(preamble)).toContain("提问卡旁边的技能");
+    const asks = preamble.indexOf("## 在等用户的提问卡");
+    expect(preamble.indexOf(SECTION)).toBeLessThan(preamble.indexOf("## 交接"));
+    expect(preamble.indexOf("## 交接")).toBeLessThan(asks);
+    expect(preamble.slice(asks)).toContain("方案好了，请验收");
+    expect(db.all("SELECT * FROM router_item_deliverables")).toEqual(deliverables);
+    const nextGeneration = db.get<{ generation: number }>("SELECT generation FROM agent_sessions WHERE id = ?", next)!.generation;
+    expect(rows().map((r) => [r.name, r.generation])).toEqual([["with-ask", nextGeneration]]);
+  });
+
+  it("上一代对话里有厂商没登录的提醒卡又加载了技能：换代后技能带上、卡还挂在这个对话、等用户的步骤进实时任务图一节", () => {
+    withProject((vendor) => (vendor === "agy" ? "signed_out" : "available"));
+    read(firstSession, skill("with-blocker", "提醒卡旁边的技能"));
+    const graph = ledger.hubCall(firstSession, "graph.create", {
+      specJson: JSON.stringify({ title: "交汇验收", steps: [{ key: "verify", title: "验收", brief: "跑一遍", vendor: "agy" }] }),
+    }).data.graph;
+    const cards = () => db.all("SELECT * FROM user_blocker_cards WHERE conversation_id = ?", conversationId);
+    const before = cards();
+    expect(before).toHaveLength(1);
+
+    const { preamble } = renew();
+    expect(sectionOf(preamble)).toContain("提醒卡旁边的技能");
+    expect(cards()).toEqual(before);
+    expect(db.get<{ status: string }>("SELECT status FROM user_blockers")!.status).toBe("open");
+    const graphs = preamble.indexOf("## 未完结的任务图");
+    expect(graphs).toBeGreaterThan(preamble.indexOf(SECTION));
+    expect(preamble.slice(graphs)).toContain(graph.title);
   });
 });
 
