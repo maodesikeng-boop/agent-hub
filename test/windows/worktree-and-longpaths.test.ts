@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join, parse as parsePath } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { addWorktree, pruneWorktrees, removeWorktree } from "../../src/daemon/git/index.ts";
+import { addWorktree, moveWorktree, pruneWorktrees } from "../../src/daemon/git/index.ts";
 import {
   allowWin32WorkerWorktreeAcl,
   ensureWin32ProtectedRootAcl,
@@ -159,14 +159,16 @@ describe.runIf(process.platform === "win32")("Windows 真机集成：跨盘同�
     mkdirSync(deepDir, { recursive: true });
     writeFileSync(deepFile, "long-path-ok\n");
     expect(readFileSync(deepFile, "utf8")).toBe("long-path-ok\n");
-    rmSync(join(wtPath, seg), { recursive: true, force: true });
-    rmSync(join(wtPath, "node_modules"), { recursive: true, force: true });
-    rmSync(join(wtPath, "package.json"), { force: true });
-    rmSync(join(wtPath, "pnpm-lock.yaml"), { force: true });
 
-    await removeWorktree(repoDir, wtPath);
-    await pruneWorktrees(repoDir);
+    // 自动清理的删法：整个 worktree（含超长路径与硬链接的 node_modules）一次挪进同卷 .trash，再删、再 prune
+    const trashStage = join(wtPath, "..", ".trash", "stage");
+    mkdirSync(trashStage, { recursive: true });
+    await moveWorktree(repoDir, wtPath, trashStage);
     expect(existsSync(wtPath)).toBe(false);
+    await removeTreeWithRetry(trashStage);
+    await pruneWorktrees(repoDir);
+    expect(existsSync(trashStage)).toBe(false);
+    expect(execFileSync("git", ["-C", repoDir, "worktree", "list", "--porcelain"], { encoding: "utf8" })).not.toContain("hub/524");
 
     // 5. 当同卷受保护根无法设 ACL 时自动回退到 C 盘默认 worktrees 目录
     const fallbackLogs: string[] = [];
@@ -187,6 +189,10 @@ describe.runIf(process.platform === "win32")("Windows 真机集成：跨盘同�
     const cWtPath = join(fallback.root, "1", "525");
     const cAdd = await addWorktree({ repoFolder: repoDir, worktreePath: cWtPath, branch: "hub/525-fallback-c" });
     expect(cAdd.created).toBe(true);
-    await removeWorktree(repoDir, cWtPath);
+    const cTrashStage = join(cWtPath, "..", ".trash", "stage");
+    mkdirSync(cTrashStage, { recursive: true });
+    await moveWorktree(repoDir, cWtPath, cTrashStage);
+    await removeTreeWithRetry(cTrashStage);
+    expect(existsSync(cWtPath)).toBe(false);
   });
 });

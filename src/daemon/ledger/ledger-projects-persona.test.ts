@@ -882,6 +882,27 @@ describe("hubCall 其他命令", () => {
     expect(none.text).toMatch(new RegExp(`还没有项目.*${HUB_COMMAND} project create`));
   });
 
+  it("status：登记了热重启时写明从几点开始等、几点起只等正在回用户的轮次；没登记不写", () => {
+    const requestedAt = new Date(2026, 10, 16, 14, 10, 0).getTime();
+    const selfReload = {
+      state: "draining" as const,
+      build: false,
+      requestedAt,
+      deadlineAt: requestedAt + 10 * 60_000,
+      overdue: false,
+      busy: ["3 个会话还在跑"],
+      unresumable: [],
+      lastFailure: null,
+    };
+    const status = ledger.hubCall(lin.sessionId, "status", {} as never, { selfReload });
+    expect(status.text).toContain("热重启：14:10:00 开始等全库空闲，最晚 14:20:00 起不再等 Worker 轮次和系统消息");
+    expect(status.text).toContain("现在还在忙：3 个会话还在跑。");
+    expect(status.data).toMatchObject({ selfReload });
+    const idle = ledger.hubCall(lin.sessionId, "status", {} as never, { selfReload: { ...selfReload, state: "idle", requestedAt: null, deadlineAt: null, busy: [] } });
+    expect(idle.text).not.toContain("热重启");
+    expect(idle.data).not.toHaveProperty("selfReload");
+  });
+
   it("会话不存在、不是项目经理的会话 → forbidden；长字段在 hub_calls 里截断", () => {
     expectLedgerError(() => hub(999, "status", {} as never), "forbidden");
     const worker = db.run(

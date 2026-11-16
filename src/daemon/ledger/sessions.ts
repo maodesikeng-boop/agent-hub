@@ -162,6 +162,9 @@ export function createLedgerSessions(ctx: LedgerContext) {
 
   const liveOf = (id: SessionId): LiveSession => live.get(id) ?? { activity: "idle", currentTool: null };
 
+  /** 内存里不是空闲的会话（在跑、停止中、准备中、等后台命令）。 */
+  const workingSessionIds = (): SessionId[] => [...live].filter(([, l]) => l.activity !== "idle").map(([id]) => id);
+
   const sessionState = (row: AgentSessionRow): SessionState => {
     const l = liveOf(row.id);
     return {
@@ -500,6 +503,7 @@ export function createLedgerSessions(ctx: LedgerContext) {
   return {
     currentSession,
     liveOf,
+    workingSessionIds,
     sessionState,
     updateLive,
     applyStreamingDelta,

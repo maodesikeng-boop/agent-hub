@@ -34,6 +34,7 @@ import {
   PM_MODES,
   PM_MODE_LABELS,
   PM_REVIEW_REDLINES_BRIEF,
+  reviewWorkspaceLines,
   PRODUCT_ID,
   SETUP_TIMEOUT_MS,
   TASK_GRAPH_SKILL_NAME,
@@ -420,11 +421,13 @@ function workerProjectSection(project: ProjectCard): string {
 /** 每个 Worker 各自不同的工作目录与只读说明（进入第一条开工消息，不进静态系统提示词）。 */
 export function workerWorkspaceSection(
   project: ProjectCard,
-  worker: Pick<WorkerRecord, "workspace" | "worktreePath" | "branch" | "readonly" | "takeoverOf">,
+  worker: Pick<WorkerRecord, "workspace" | "worktreePath" | "branch" | "readonly" | "takeoverOf" | "review">,
   options?: { inheritedFromUpstreamWorkerId?: number | null },
 ): string {
   const lines = [`# 在哪干活`, ``];
-  if (worker.workspace === "worktree") {
+  if (worker.workspace === "worktree" && worker.review !== undefined) {
+    lines.push(...reviewWorkspaceLines(worker.worktreePath ?? "", worker.review.branch));
+  } else if (worker.workspace === "worktree") {
     lines.push(`- 工作目录：${worker.worktreePath}，是项目主文件夹 ${project.mainFolder} 的一个 git worktree，分支：${worker.branch}。`);
     if (options?.inheritedFromUpstreamWorkerId != null) {
       lines.push(
@@ -450,7 +453,7 @@ export function workerWorkspaceSection(
 /** 单派 Worker（或无上游交棒的手动节点）的第一条开工消息：包含编号标题、动态工作目录/只读说明与任务说明正文。 */
 export function buildWorkerFirstMessage(input: {
   project: ProjectCard;
-  worker: Pick<WorkerRecord, "id" | "title" | "workspace" | "worktreePath" | "branch" | "readonly" | "takeoverOf">;
+  worker: Pick<WorkerRecord, "id" | "title" | "workspace" | "worktreePath" | "branch" | "readonly" | "takeoverOf" | "review">;
   task: string;
   inheritedFromUpstreamWorkerId?: number | null;
 }): string {

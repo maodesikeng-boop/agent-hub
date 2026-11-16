@@ -10,6 +10,7 @@ import type { HubArgs, HubResult, WorkerLogStep, WorkerPr, WorkerPrProbeResult }
 import type { HubCallContext } from "../../shared/ledger.ts";
 import { WORKER_LOG_DEFAULT_STEPS, WORKER_LOG_MAX_STEPS, WORKER_RETENTION_DAYS, WORKER_STALL_HINT_MS, WORKER_VIEW_TEXT_MAX_CHARS } from "../../shared/limits.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
+import { parseReviewTarget } from "../../shared/review.ts";
 import { formatDurationShort } from "../../shared/schedule.ts";
 import { formatDuration } from "../../shared/step-labels.ts";
 import { agentEffortOf, effortLabel, vendorLabel } from "../../shared/vendors.ts";
@@ -232,7 +233,7 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
 
     lines.push(
       worker.workspace === "worktree"
-        ? `分支 ${worker.branch}，worktree ${worker.worktree_path}${isWorktreeCleaned?.(worker) ? "（已自动清理）" : ""}`
+        ? `${worker.review_json !== null ? `审查分支 ${parseReviewTarget(worker.review_json)!.branch}（detached）` : `分支 ${worker.branch}`}，worktree ${worker.worktree_path}${isWorktreeCleaned?.(worker) ? "（已自动清理）" : ""}`
         : `在项目主文件夹里干活（没有单独的分支和 worktree）`,
     );
     if (context.pr !== undefined && context.pr !== null) lines.push(prLine(context.pr));

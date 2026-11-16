@@ -258,9 +258,9 @@ describe("桌面壳共用监管契约与 /api/auth/status 轻量身份响应", (
       selfReload: {
         request: (input) => {
           requests.push(input);
-          return { text: "已登记空闲排空热重启", status: { state: "draining", build: input.build, requestedAt: 1, busy: [], lastFailure: null } };
+          return { text: "已登记空闲排空热重启", status: { state: "draining", build: input.build, requestedAt: 1, deadlineAt: 2, overdue: false, busy: [], unresumable: [], lastFailure: null } };
         },
-        status: () => ({ state: "draining", build: false, requestedAt: 1, busy: ["1 个会话还在跑"], lastFailure: null }),
+        status: () => ({ state: "draining", build: false, requestedAt: 1, deadlineAt: 2, overdue: false, busy: ["1 个会话还在跑"], unresumable: [], lastFailure: null }),
       },
     });
     await app3.ready();

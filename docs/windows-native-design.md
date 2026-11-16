@@ -170,7 +170,7 @@ Windows 删不掉目录的三类原因：①还有进程的**当前目录**在�
 1. 先确认会话 Job 已关（整树已死）再删——解决绝大部分①。
 2. `worktree-cleanup.ts:146` 现在是 `rm(…, { maxRetries: 3, retryDelay: 200 })`：异步 `rm` 的 `maxRetries` 逐项重试，大树会层层放大。改为 orca 的整遍重删：只对 `EBUSY/EPERM/ENOTEMPTY` 重试，间隔 250/500/1000/2000 ms，可中止；仍失败就停在本轮，日志用 `who-locks` 写出"哪个程序占着哪个文件"（Restart Manager 是系统官方接口），下一轮清理再试，不无限循环。
 3. 删除前转 `\\?\` 命名空间（`path.win32.toNamespacedPath`）；git 侧统一 `-c core.longpaths=true`。
-4. 先 `git worktree remove --force` / `prune` 让 git 元数据一致，再删残余目录（与现有流程一致）。
+4. 先用 `git worktree move` 把整个目录一次 rename 进同一根目录下的 `.trash/`（有占用就整体失败、原样不动），再按上面的办法删 `.trash/` 里的目录，最后 `git worktree prune`；删到一半被打断的，下一轮接着删。
 
 ### 4.4 写范围隔离与只读沙箱
 

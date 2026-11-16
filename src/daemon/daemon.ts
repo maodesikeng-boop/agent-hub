@@ -76,7 +76,7 @@ import {
   createMultiVendorDriver,
   type ModelCatalogs,
 } from "./driver/index.ts";
-import { addWorktree, probeDiffNumstat, probePr } from "./git/index.ts";
+import { addWorktree, probeDiffNumstat, probePr, remoteBranchHead, resolveCommit } from "./git/index.ts";
 import { createFetchedQuota, mergeFetchedQuotas, queryFetchedQuota } from "./quota/fetched-quota.ts";
 import { vendorTranscriptPath } from "./driver/transcript.ts";
 import type { LedgerOptions } from "./ledger/ledger.ts";
@@ -84,6 +84,8 @@ import {
   createSessionEndHandler,
   createSessionSendHandler,
   createSessionStartHandler,
+  createReviewObserver,
+  createReviewVerifyHandler,
   createWorktreeCreateHandler,
   endedOnRevokedTokens,
 } from "./handlers.ts";
@@ -152,6 +154,8 @@ export interface DaemonOptions {
    * reloadExitCode 退出，由外壳（Fusa.app、Windows 桌面端、systemd）立即拉起。不给 = 没有外壳监管，不接受热重启（409）。
    */
   onSelfReload?: () => void;
+  /** 热重启登记后最多等全库空闲多久（默认 SELF_RELOAD_DRAIN_MAX_MS）；只给测试改小。 */
+  selfReloadDrainMaxMs?: number;
   /**
    * 外部经管理管道 `POST /admin/shutdown`（带界面令牌）请求优雅关机时调它（Windows 下替代外部无法送达的 SIGTERM）。
    */
@@ -433,6 +437,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
               const result = parts.selfReload.request({ build, by: `项目经理会话 ${sessionId}` });
               return { text: result.text, data: result.status };
             },
+            selfReloadStatus: () => parts.selfReload?.status(),
           }
         : {}),
       onRouterDispatch: async (sessionId, commandId, payload) => {
@@ -550,10 +555,18 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     executor.register("session.send", createSessionSendHandler(deps));
     // Worker 收工（hub worker end）登记 session.end：这一轮回完再关，然后作废它的令牌
     executor.register("session.end", createSessionEndHandler(deps));
+    // 审查步骤开审时记下被审分支、汇报 PASS 后核对它没被动过（docs/review-verify-only-design.md）
+    const observeReview = createReviewObserver({
+      resolveCommit: (folder, ref) => resolveCommit(folder, ref),
+      remoteBranchHead: (repo, branch) => remoteBranchHead(repo, branch),
+      probePr: (cwd, branch) => probePr(cwd, branch),
+    });
+    executor.register("review.verify", createReviewVerifyHandler({ ledger, observeReview }));
     executor.register(
       "worktree.create",
       createWorktreeCreateHandler({
         ledger,
+        observeReview,
         addWorktree,
         setup,
         setupLogPath: (workerId) => workerSetupLogPath(paths.setupLogsDir, workerId),
@@ -832,9 +845,16 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
           }
           return reasons;
         },
+        // 重启后不会重发的：会话里按 resumesAfterShutdown 判（ledger/messages.ts）；总助分派引擎的指令重启后标失败、要用户点重试（ledger/router.ts 的 recoverAfterRestart）
+        unresumableReasons: () => {
+          const reasons = ledger.turnsLostOnShutdown().map(({ sessionId, role }) => `${role === "pm" ? "项目经理" : "总助"}会话 ${sessionId} 正在回用户的消息`);
+          if (routerDispatcher.busy()) reasons.push("总助在处理用户的指令");
+          return reasons;
+        },
         subscribe: (listener) => ledger.onChange(listener),
         ...(webBuild ? { build: (signal: AbortSignal) => webBuild.build(signal), applyBuild: () => webBuild.apply() } : {}),
         restart: onSelfReload,
+        ...(options.selfReloadDrainMaxMs !== undefined ? { drainMaxMs: options.selfReloadDrainMaxMs } : {}),
         log,
       });
     }

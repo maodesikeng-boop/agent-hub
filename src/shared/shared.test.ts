@@ -80,6 +80,7 @@ import type {
   WorkerMessageMeta,
   WorktreeCreateParams,
   WorktreeTask,
+  ReviewVerifyParams,
   SetupOutcome,
 } from "./index.ts";
 import {
@@ -153,6 +154,10 @@ describe("动作", () => {
       if (row.type === "worktree.create") {
         expectTypeOf(row.params).toEqualTypeOf<WorktreeCreateParams>();
         return row.params.workerId * 100;
+      }
+      if (row.type === "review.verify") {
+        expectTypeOf(row.params).toEqualTypeOf<ReviewVerifyParams>();
+        return row.params.reportMessageId;
       }
       expectTypeOf(row.params).toEqualTypeOf<SessionSendParams>();
       return row.params.messageId;
@@ -727,6 +732,7 @@ describe("M3：Worker 的记录", () => {
       | "worktreePath"
       | "baseCommit"
       | "takeoverOf"
+      | "review"
       | "status"
       | "createdAt"
       | "updatedAt"
@@ -772,9 +778,8 @@ describe("M3：动作", () => {
       workerId: number;
       sessionId: number;
       repo: string;
-      branch: string;
       worktreePath: string;
-      base?: string;
+      checkout: { kind: "branch"; branch: string; base?: string } | { kind: "review"; branch: string };
       status: "open" | "ended";
       setupCommand: string | null;
     }>();

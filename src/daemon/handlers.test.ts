@@ -308,8 +308,8 @@ describe("worktree.create 处理函数（m3-plan 第 3 节接口约定）", () =
     workerId: 3,
     sessionId: 30,
     repo: "/code/foo",
-    branch: "hub/3-fix-x",
     worktreePath: "/data/worktrees/1/3",
+    checkout: { kind: "branch", branch: "hub/3-fix-x" },
     status: "open",
     setupCommand: null,
   };
@@ -333,13 +333,16 @@ describe("worktree.create 处理函数（m3-plan 第 3 节接口约定）", () =
       jobs.push(job);
       return true;
     });
+    const recordReviewSnapshot = vi.fn(() => void calls.push("recordReviewSnapshot"));
+    const observeReview = vi.fn(async () => ({ sha: "c0ffee", remote: { sha: "c0ffee" }, pr: { number: 7, state: "OPEN", url: "https://x/pull/7" } }));
     const deps = {
-      ledger: { getWorktreeTask, onSetupStarted, onWorktreeCreated },
+      ledger: { getWorktreeTask, onSetupStarted, onWorktreeCreated, recordReviewSnapshot },
+      observeReview,
       addWorktree,
       setup: { start },
       setupLogPath: (id: number) => `/data/state/logs/setup/worker-${id}.log`,
     };
-    return { deps, getWorktreeTask, onSetupStarted, onWorktreeCreated, addWorktree, start, jobs, calls };
+    return { deps, getWorktreeTask, onSetupStarted, onWorktreeCreated, recordReviewSnapshot, observeReview, addWorktree, start, jobs, calls };
   }
 
   it("先取任务，再在主文件夹里建 worktree，最后把起点提交交给账本", async () => {
@@ -348,6 +351,7 @@ describe("worktree.create 处理函数（m3-plan 第 3 节接口约定）", () =
     expect(result).toEqual({ kind: "done" });
     expect(t.getWorktreeTask).toHaveBeenCalledWith(3);
     expect(t.addWorktree).toHaveBeenCalledWith({ repoFolder: "/code/foo", worktreePath: "/data/worktrees/1/3", branch: "hub/3-fix-x" });
+    expect(t.recordReviewSnapshot).not.toHaveBeenCalled();
     expect(t.onWorktreeCreated).toHaveBeenCalledWith(3, "c0ffee");
     expect(t.calls).toEqual(["addWorktree", "onWorktreeCreated"]);
   });
@@ -393,6 +397,15 @@ describe("worktree.create 处理函数（m3-plan 第 3 节接口约定）", () =
       expect(t.addWorktree).not.toHaveBeenCalled();
       expect(t.onWorktreeCreated).not.toHaveBeenCalled();
     }
+  });
+
+  it("审查 Worker：detached 检出被审分支，开工前记下被审分支在本地、origin 和 PR 上的样子", async () => {
+    const t = worktreeDeps({ task: { ...task, checkout: { kind: "review", branch: "hub/2-impl" } } });
+    expect(await createWorktreeCreateHandler(t.deps)(action("worktree.create", { workerId: 3 }))).toEqual({ kind: "done" });
+    expect(t.addWorktree).toHaveBeenCalledWith({ repoFolder: "/code/foo", worktreePath: "/data/worktrees/1/3", branch: null, base: "refs/heads/hub/2-impl" });
+    expect(t.observeReview).toHaveBeenCalledWith("/code/foo", "hub/2-impl");
+    expect(t.recordReviewSnapshot).toHaveBeenCalledWith(3, { sha: "c0ffee", remote: { sha: "c0ffee" }, pr: { number: 7, state: "OPEN", url: "https://x/pull/7" } });
+    expect(t.calls).toEqual(["addWorktree", "recordReviewSnapshot", "onWorktreeCreated"]);
   });
 
   it("git 出错：原样抛给执行器重试（次数用完由执行器调 onActionFailed），不告诉账本建好了", async () => {

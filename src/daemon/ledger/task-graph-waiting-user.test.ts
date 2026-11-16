@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { AnyActionRow } from "../../shared/actions.ts";
+import type { ActionRow, AnyActionRow } from "../../shared/actions.ts";
 import { pendingDecisionsOf } from "../../shared/decisions.ts";
 import {
   CONFIRM_PASS_OPTION,
@@ -26,8 +26,8 @@ import { ASK_CARD_TELL_USER, ASK_CARD_WHERE } from "../../shared/hub.ts";
 import { workerSetupLogPath } from "../../shared/paths.ts";
 import { bundledModelCatalog, type ModelCatalog } from "../../shared/vendors.ts";
 import { REPORT_END, REPORT_START } from "../../shared/worker.ts";
-import { addWorktree } from "../git/index.ts";
-import { createWorktreeCreateHandler } from "../handlers.ts";
+import { addWorktree, remoteBranchHead, resolveCommit } from "../git/index.ts";
+import { createReviewObserver, createReviewVerifyHandler, createWorktreeCreateHandler } from "../handlers.ts";
 import { createSessionStore, migrate, type Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
 import { createResolveFolder } from "./files.ts";
@@ -61,11 +61,13 @@ function buildReportBlock(fields: {
   deviation?: string;
   handoff?: string;
   questions?: string;
+  verdict?: string;
 }): string {
   return [
     REPORT_START,
     `状态: ${fields.status}`,
     `摘要: ${fields.summary}`,
+    ...(fields.verdict !== undefined ? [`结论: ${fields.verdict}`, `验证提交: ${fields.commit ?? "无"}`] : []),
     `提交: ${fields.commit ?? "无"}`,
     `PR: ${fields.pr ?? "无"}`,
     `测试: ${fields.tests ?? "pnpm test 通过"}`,
@@ -143,9 +145,19 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
     rmSync(root, { recursive: true, force: true });
   });
 
+  const observeReview = createReviewObserver({ resolveCommit: (f, r) => resolveCommit(f, r), remoteBranchHead: (r, b) => remoteBranchHead(r, b), probePr: async () => null });
+  /** 跑审查 PASS 后登记的收尾核对。 */
+  const runReviewVerify = async () => {
+    const verify = enqueued.find((a): a is ActionRow<"review.verify"> => a.type === "review.verify")!;
+    await createReviewVerifyHandler({ ledger, observeReview })(verify);
+  };
+  /** 审查目录 detached 检出的被审提交。 */
+  const reviewedShaOf = (workerId: WorkerId) => db.get<{ base_commit: string }>("SELECT base_commit FROM workers WHERE id = ?", workerId)!.base_commit;
+
   const runWorktreeCreate = async (workerId: WorkerId) => {
     const handler = createWorktreeCreateHandler({
       ledger,
+      observeReview,
       addWorktree,
       setup: {
         start: (req) => {
@@ -391,6 +403,7 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
     expect(pmSendActions()).toEqual([]);
     const wReview = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph.nodes[1]!.activeWorkerId!;
     expect(firstWorkerMessageOf(wReview).text).toContain("同步流式下载；补充说明：加上 30s 超时与断流清理");
+    await runWorktreeCreate(wReview);
 
     enqueued.length = 0;
     runWorkerReportTurn(
@@ -398,11 +411,13 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
       buildReportBlock({
         status: "做完了",
         summary: "审查通过",
-        commit: "a1b2c3d",
+        verdict: "PASS",
+        commit: reviewedShaOf(wReview),
         pr: "https://github.com/org/repo/pull/320",
         handoff: "可直接合并",
       }),
     );
+    await runReviewVerify();
     expect(pmSendActions()).toHaveLength(1);
     const deliveryText = ledger.getMessage(pmSendActions()[0]!.params.messageId)!.text;
     expect(deliveryText).toContain("拍板：「超过 5 万行时导出怎么走？」定案 同步流式下载（加上 30s 超时与断流清理）");
@@ -671,6 +686,7 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
     expect(stateOf(afterImpl.nodes[0]!)).toBe("done");
     expect(stateOf(afterImpl.nodes[1]!)).toBe("running");
     const wReview = afterImpl.nodes[1]!.activeWorkerId!;
+    await runWorktreeCreate(wReview);
 
     // PM 被唤醒后把拍板卡挂在正在运行的下游 review 步骤上
     ledger.hubCall(lin.sessionId, "ask", {
@@ -685,8 +701,9 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
     enqueued.length = 0;
     runWorkerReportTurn(
       wReview,
-      buildReportBlock({ status: "做完了", summary: "初审完成，等用户对 cursor 范围拍板", commit: "777aaaa", handoff: "初审无阻塞" }),
+      buildReportBlock({ status: "做完了", summary: "初审完成，等用户对 cursor 范围拍板", verdict: "PASS", commit: reviewedShaOf(wReview), handoff: "初审无阻塞" }),
     );
+    await runReviewVerify();
     expect(pmSendActions()).toEqual([]);
     expect(db.get<{ status: string }>("SELECT status FROM workers WHERE id = ?", wReview)?.status).toBe("open");
     expect(stateOf(ledger.snapshot().activeTaskGraphs[0]!.nodes[1]!)).toBe("waiting:user");
