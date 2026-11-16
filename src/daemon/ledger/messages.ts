@@ -58,8 +58,6 @@ export interface LedgerMessagesOptions {
   afterUserPost?: (p: Pending, conversationId: ConversationId) => void;
   /** 旧 hub ask 产生一条无 gateRef 的独立提问时，在同事务里桥接生成 router_items 待决卡。 */
   onIndependentAskCreated?: (p: Pending, session: AgentSessionRow, message: Message, options?: string[]) => void;
-  /** 用户在对话里发消息把一条无 gateRef 的 hub ask 标为已答时，同步收起关联的 router_items 待决卡。 */
-  onConversationAnsweredAsk?: (p: Pending, askMessageId: MessageId, userText: string) => void;
 }
 
 export function createLedgerMessages(
@@ -71,7 +69,6 @@ export function createLedgerMessages(
   const assertUserCanPost = options.assertUserCanPost ?? (() => {});
   const afterUserPost = options.afterUserPost ?? (() => {});
   const onIndependentAskCreated = options.onIndependentAskCreated ?? (() => {});
-  const onConversationAnsweredAsk = options.onConversationAnsweredAsk ?? (() => {});
   const { db, now, write, enqueue, reportHealthIn } = ctx;
   const { currentSession, liveOf, updateLive } = sessions;
 
@@ -232,32 +229,6 @@ export function createLedgerMessages(
     p.changes.push({ type: "message.created", data: { message } });
     afterUserPost(p, input.conversationId);
     return message;
-  };
-
-  /**
-   * 用户在这个对话里发了一条消息：之前没回答的独立 hub ask 都标成已回答（meta.answered），推 message.updated。
-   * 带 gateRef 的任务图门禁绝不因插队闲聊被自动消除（只能经门禁拍板或跳过闭环）。
-   * 只有用户自己发的消息走到这里；agent、Worker 汇报、系统消息不算回答。
-   */
-  const answerAsks = (p: Pending, conversationId: ConversationId, before: MessageId, userText: string) => {
-    const rows = db.all<MessageDbRow>(
-      // meta 不是合法 JSON 的行跳过（CASE 保证先判断 json_valid），不让一行脏数据挡住用户发消息
-      `SELECT * FROM messages WHERE conversation_id = ? AND sender = 'agent' AND id < ?
-         AND CASE WHEN json_valid(meta)
-           THEN json_extract(meta, '$.needsUser') = 1
-             AND json_extract(meta, '$.answered') IS NULL
-             AND json_extract(meta, '$.dismissed') IS NULL
-             AND json_extract(meta, '$.gateRef') IS NULL
-           ELSE 0 END`,
-      conversationId,
-      before,
-    );
-    for (const row of rows) {
-      const message = toMessage(row);
-      db.run("UPDATE messages SET meta = ?, updated_at = ? WHERE id = ?", JSON.stringify({ ...message.meta, answered: true }), now(), message.id);
-      p.changes.push({ type: "message.updated", data: { message: getMessage(message.id)! } });
-      onConversationAnsweredAsk(p, message.id, userText);
-    }
   };
 
   /** 写一条只给人看的系统消息（规则见 domain.ts 的 SystemMessageMeta）：没有会话、没有状态。 */
@@ -478,7 +449,6 @@ export function createLedgerMessages(
       )!;
       enqueue(p, { type: "session.send", params: { sessionId: session.id, messageId: row.id, source: "user" } });
       p.changes.push({ type: "message.created", data: { message: toMessage(row) } });
-      answerAsks(p, input.conversationId, row.id, input.text);
       afterUserPost(p, input.conversationId);
       return { messageId: row.id };
     });

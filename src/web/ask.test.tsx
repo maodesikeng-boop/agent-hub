@@ -311,7 +311,7 @@ describe("对话流里的 A/B/C/D 选项卡片", () => {
     const card1 = msg1.querySelector("[data-ask-card]") as HTMLElement;
     expect(card1).toBeInTheDocument();
     expect(within(card1).getByText("你想审什么？")).toBeInTheDocument();
-    const opts1 = within(card1).getAllByRole("button");
+    const opts1 = within(card1).getAllByRole("button").filter((b) => b.hasAttribute("data-ask-option"));
     expect(opts1.map((b) => [b.querySelector("span")?.textContent, b.querySelectorAll("span")[1]?.textContent])).toEqual([
       ["A", "审一个 PR / 分支"],
       ["B", "审本地代码路径"],
@@ -321,7 +321,7 @@ describe("对话流里的 A/B/C/D 选项卡片", () => {
     const card2 = msg2.querySelector("[data-ask-card]") as HTMLElement;
     expect(card2).toBeInTheDocument();
     expect(within(card2).getByText("方案 A").tagName).toBe("STRONG");
-    const opts2 = within(card2).getAllByRole("button");
+    const opts2 = within(card2).getAllByRole("button").filter((b) => b.hasAttribute("data-ask-option"));
     expect(opts2.map((b) => [b.querySelector("span")?.textContent, b.querySelectorAll("span")[1]?.textContent])).toEqual([
       ["A", "保留三栏"],
       ["B", "单栏信息流"],

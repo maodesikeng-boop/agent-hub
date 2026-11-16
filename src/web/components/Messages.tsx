@@ -80,8 +80,8 @@ export interface MessageActions {
   onRevertPersona: (changeId: PersonaChangeId) => Promise<void>;
   /** 这个对话现在用的厂商（出错时的那句话按它说哪家，不从原文猜）；不知道是 undefined。 */
   vendorOf?: (conversationId: ConversationId) => AgentVendor | undefined;
-  /** 点选 `hub ask` 选项卡片里的某个选项：直接把该选项作为用户消息发出去。 */
-  onAnswerAsk?: (text: string) => void;
+  /** 在 `hub ask` 提问卡上点选项或填写：只回答这一张卡（POST /api/asks/:id/answer）；失败 reject，卡上显示原因。没有这个就不能答（已归档）。 */
+  onAnswerAsk?: (messageId: MessageId, body: { clientId: string; choice: string | null; note?: string }) => Promise<void>;
 }
 
 export const BUBBLE = "w-fit max-w-full rounded-[22px] px-4 py-2.5 text-body leading-relaxed";
@@ -180,13 +180,10 @@ function AskCard({
   const decideMutation = useMutation(
     {
       mutationFn: async (vars: { choice: string | null; note: string | null }) => {
-        if (gateRef === undefined) return;
         clientIdRef.current ??= newClientId();
-        return client.postTaskGraphDecide(gateRef.graphId, gateRef.nodeKey, {
-          clientId: clientIdRef.current,
-          choice: vars.choice,
-          ...(vars.note !== null ? { note: vars.note } : {}),
-        });
+        const body = { clientId: clientIdRef.current, choice: vars.choice, ...(vars.note !== null ? { note: vars.note } : {}) };
+        if (gateRef === undefined) return onAnswerAsk?.(messageId, body);
+        return client.postTaskGraphDecide(gateRef.graphId, gateRef.nodeKey, body);
       },
       onMutate: () => setErr(null),
       onSuccess: (_data, vars) => {
@@ -204,8 +201,8 @@ function AskCard({
     qc,
   );
 
-  const submitGate = (choice: string | null, rawNote: string) => {
-    if (gateRef === undefined || inFlightRef.current) return;
+  const submit = (choice: string | null, rawNote: string) => {
+    if (inFlightRef.current) return;
     const trimmed = rawNote.trim();
     if (choice === null && trimmed === "") return;
     inFlightRef.current = true;
@@ -214,7 +211,7 @@ function AskCard({
 
   const effectiveChosen = card.chosenOption ?? chosen;
   const answered = card.answered || chosen !== null;
-  const disabled = answered || !onAnswerAsk || decideMutation.isPending;
+  const disabled = answered || (gateRef === undefined && !onAnswerAsk) || decideMutation.isPending;
   const { title: cardTitle, context: cardContext } = useMemo(
     () => splitAskQuestionAndContext(card.question),
     [card.question],
@@ -247,12 +244,7 @@ function AskCard({
                 )}
                 onClick={() => {
                   if (disabled) return;
-                  if (gateRef !== undefined) {
-                    submitGate(opt, note);
-                    return;
-                  }
-                  setChosen(opt);
-                  onAnswerAsk(opt);
+                  submit(opt, note);
                 }}
               >
                 <span className="flex size-6 shrink-0 items-center justify-center rounded-xl border border-border bg-sidebar text-xs font-medium text-muted-foreground">
@@ -269,7 +261,7 @@ function AskCard({
           })}
         </div>
       )}
-      {gateRef !== undefined && !answered && (
+      {!answered && (
         !noteOpen && hasOptions ? (
           <button
             type="button"
@@ -290,7 +282,7 @@ function AskCard({
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.nativeEvent.isComposing && note.trim() !== "") {
                   e.preventDefault();
-                  submitGate(null, note);
+                  submit(null, note);
                 }
               }}
             />
@@ -298,7 +290,7 @@ function AskCard({
               type="button"
               size="sm"
               disabled={disabled || note.trim() === ""}
-              onClick={() => submitGate(null, note)}
+              onClick={() => submit(null, note)}
             >
               {decideMutation.isPending && <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />}
               Send

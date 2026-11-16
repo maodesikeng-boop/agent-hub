@@ -80,6 +80,7 @@ export const HUB_COMMANDS = [
   "worker.search",
   "models",
   "ask",
+  "ask.close",
   "schedule.add",
   "schedule.list",
   "schedule.pause",
@@ -121,6 +122,7 @@ export const HUB_COMMAND_ROLES: Readonly<Record<HubCommand, readonly AgentRole[]
   "worker.search": ["pm"],
   models: ["pm"],
   ask: ["pm"],
+  "ask.close": ["pm"],
   "schedule.add": ["pm"],
   "schedule.list": ["pm"],
   "schedule.pause": ["pm"],
@@ -241,6 +243,11 @@ export interface HubArgsMap {
     graphId?: TaskGraphId;
     replaceItemId?: RouterItemId;
   };
+  /**
+   * `hub ask close <卡编号>`：关掉自己名下一张还在等用户的独立提问卡（用户在对话里打字答了、没点卡，或这张问题已经过时）。
+   * 卡编号就是用户消息前面说明块里列的 #编号；不是自己的 → forbidden，没有 → not_found，已经不在等 → conflict。
+   */
+  "ask.close": { itemId: RouterItemId };
   /**
    * `hub schedule add --name <名> (--daily HH:MM | --every 30m|2h) --stdin`（M6）：给自己建定时任务。name 按 normalizeName；
    * daily、everyMinutes 恰好给一个（HH:MM 本机本地时间；间隔最短 MIN_SCHEDULE_EVERY_MINUTES 分钟，hub 把 30m、2h 换成分钟数）；
@@ -566,6 +573,7 @@ interface HubDataMap {
   models: { vendors: HubVendorModels[] };
   /** messageId：对话里那条带标记的消息。 */
   ask: { messageId: MessageId; graph?: TaskGraph; item?: RouterItem };
+  "ask.close": { item: RouterItem };
   "schedule.add": { schedule: ScheduleRecord };
   /** 按编号从小到大，含暂停的。 */
   "schedule.list": { schedules: ScheduleRecord[] };

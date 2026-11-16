@@ -248,6 +248,7 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
       replaceItemId: workerIdField,
     },
   },
+  "ask.close": { type: "object", additionalProperties: false, required: ["itemId"], properties: { itemId: workerIdField } },
   // hub schedule …（M6）：daily 的 HH:MM、间隔的范围、两个频率二选一由账本查（报中文原因）；任务说明按字节另查
   "schedule.add": {
     type: "object",

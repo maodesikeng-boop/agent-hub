@@ -1674,6 +1674,17 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       return ledger.resolveRouterItem(itemId, body);
     });
 
+    routes.post("/api/asks/:id/answer", async (req): Promise<ResolveRouterItemResponse> => {
+      const messageId = parseId((req.params as { id?: unknown }).id, "message id");
+      const raw = parseWithSchema(decideRouterItemBodySchema, req.body);
+      return ledger.answerAsk(messageId, {
+        clientId: raw.clientId,
+        optionIndex: raw.optionIndex ?? null,
+        ...(raw.choice !== undefined && raw.choice !== null ? { choice: raw.choice } : {}),
+        ...(raw.note !== undefined ? { note: raw.note } : {}),
+      });
+    });
+
     routes.post("/api/router/items/:id/decide", async (req): Promise<ResolveRouterItemResponse> => {
       const itemId = parseId((req.params as { id?: unknown }).id, "router item id");
       const raw = parseWithSchema(decideRouterItemBodySchema, req.body);

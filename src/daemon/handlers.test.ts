@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  deliveryParts,
   DriverError,
   QUEUED_RECHECK_MS,
   SessionTokenRevokedError,
@@ -67,7 +68,7 @@ function deps(
   const waitsForHandover = vi.fn(() => options.waitsForHandover ?? false);
   const d: HandlerDeps = {
     driver: { start, send, end },
-    ledger: { getMessage, onActionFailed, refreshSessionState, stopMessage, waitsForFirstTurn, waitsForHandover },
+    ledger: { getMessage, onActionFailed, refreshSessionState, stopMessage, waitsForFirstTurn, waitsForHandover, deliveryOf: deliveryParts },
     sessions: { get: () => ({ rateLimit: options.rateLimit ?? null }) as AgentSessionRow },
     tokens: { revoke },
     now: () => NOW,

@@ -33,6 +33,9 @@ import { createLedger } from "./index.ts";
 import type { LedgerOptions, SqliteLedger } from "./index.ts";
 import { VENDOR_SWITCH_ANCHOR_HINT, VENDOR_SWITCH_TRUNCATED_HINT } from "./vendor-switch-context.ts";
 
+/** 开场说明里“在等用户的提问卡”一节的开头（后面是正文）。 */
+const WAITING_ASKS_HEADING = "\n\n## 在等用户的提问卡（账本实时状态）\n\n";
+
 let db: Db;
 let home: string;
 let ledger: SqliteLedger;
@@ -458,7 +461,8 @@ describe("复制好了、写完了（handoverForked / handoverWritten）", () =>
     const row = rows()[0]!;
     expect(row).toMatchObject({ status: "switched", to_session_id: g2!.id, text: "交接：暗号是 蓝鲸", usage: JSON.stringify(USAGE) });
     const preamble = ledger.sessionPreamble(g2!.id)!;
-    expect(preamble).toBe(row.preamble);
+    // 存下来的开场说明是换代时定稿的；对话里实时的部分（在等用户的提问卡、未完结的任务图）读的时候才从账本拼在后面
+    expect(preamble).toBe(`${row.preamble}${WAITING_ASKS_HEADING}无：账本里没有在等用户回答的提问卡；上面交接正文里提到的卡，用户那边已经没有了。`);
     expect(preamble).toMatch(/^【系统】这是新会话/);
     for (const part of [
       "系统自动给你换了这个新会话",
@@ -936,7 +940,7 @@ describe("开场说明里的原话（账本查询）", () => {
     forkAndWrite(job);
     const held = post("压着没回的");
     turnEnd(firstSession, [busy], ["正在聊的回答"]);
-    const recent = ledger.sessionPreamble(sessions()[1]!.id)!.split("## 最近的原话")[1]!;
+    const recent = ledger.sessionPreamble(sessions()[1]!.id)!.split("## 最近的原话")[1]!.split(WAITING_ASKS_HEADING)[0]!;
     expect(recent).toContain("用户：问一句\n\n你：答一句\n\n你：收到汇报\n\n用户：没发成的");
     expect(recent).toContain("用户：正在聊的\n\n你：正在聊的回答");
     for (const absent of ["echo", "汇报全文 XYZ", "压着没回的", "交接正文"]) expect(recent).not.toContain(absent);
@@ -1448,7 +1452,7 @@ describe("给已有项目经理换厂商", () => {
       expect(occurrences(p, "用户：本代第一句")).toBe(1);
     }
     // C 与 A 的本代正文逐字节一致（中间的 C 没说话），且是 B 的正文 + B 期间新增的消息
-    const bodyOf = (p: string) => p.split(header)[1]!;
+    const bodyOf = (p: string) => p.split(header)[1]!.split(WAITING_ASKS_HEADING)[0]!;
     expect(bodyOf(atA)).toBe(bodyOf(atC));
     expect(bodyOf(atC).startsWith(bodyOf(atB))).toBe(true);
     expect(bodyOf(atC).slice(bodyOf(atB).length)).toBe(
@@ -1615,7 +1619,7 @@ describe("给已有项目经理换厂商", () => {
       const split = cardOf(ledger.hubCall(firstSession, "ask", { text: "#330 怎么拆？" }).data.messageId);
       const { g2 } = renewNow("交接正文：在等用户拍板的有 #305、pstack、#330");
       const preamble = ledger.sessionPreamble(g2)!;
-      const heading = "## 在等用户的提问卡（账本实时状态）\n\n";
+      const heading = `${WAITING_ASKS_HEADING}`;
       expect(preamble).toContain(heading);
       expect(preamble.slice(preamble.indexOf(heading) + heading.length)).toBe(
         [
@@ -1624,7 +1628,7 @@ describe("给已有项目经理换厂商", () => {
           `- #${split}「#330 怎么拆？」`,
         ].join("\n"),
       );
-      expect(preamble).not.toContain("PR #305 要不要合？");
+      expect(preamble.slice(preamble.indexOf(heading))).not.toContain("PR #305 要不要合？");
       expect(preamble).toContain("一共 2 张");
     });
 
@@ -1633,8 +1637,8 @@ describe("给已有项目经理换厂商", () => {
       ledger.answerAsk(old, { clientId: "c-old", note: "回答" });
       const { g2 } = renewNow("交接正文：在等用户拍板的有 #305");
       const preamble = ledger.sessionPreamble(g2)!;
-      expect(preamble.slice(preamble.indexOf("## 在等用户的提问卡（账本实时状态）"))).toBe(
-        "## 在等用户的提问卡（账本实时状态）\n\n无：账本里没有在等用户回答的提问卡；上面交接正文里提到的卡，用户那边已经没有了。",
+      expect(preamble.slice(preamble.indexOf(WAITING_ASKS_HEADING))).toBe(
+        `${WAITING_ASKS_HEADING}无：账本里没有在等用户回答的提问卡；上面交接正文里提到的卡，用户那边已经没有了。`,
       );
     });
 

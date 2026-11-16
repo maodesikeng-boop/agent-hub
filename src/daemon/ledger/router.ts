@@ -26,6 +26,7 @@ import type {
 } from "../../shared/domain.ts";
 import { getAgentSession } from "../store/index.ts";
 import type { HubArgs, HubResult } from "../../shared/hub.ts";
+import type { WaitingAsk } from "../../shared/waiting-asks.ts";
 import {
   ASK_MAX_OPTIONS,
   MAX_DECISION_NOTE_CHARS,
@@ -419,33 +420,38 @@ export function createLedgerRouter(
     return item;
   };
 
-  /** 用户在对话里回消息回答了普通提问：同步将关联 pending router_items 标为 resolved (actor = conversation)。 */
-  const onConversationAnsweredAskIn = (p: Pending, askMessageId: MessageId, userText: string): void => {
-    const rows = db.all<RouterItemDbRow>(
-      "SELECT * FROM router_items WHERE ask_message_id = ? AND kind = 'decision' AND status = 'pending'",
+  /** 账本里这个对话（项目经理）现在还在等用户的独立提问卡，编号从小到大；换新会话的开场说明、每条送给项目经理的用户消息都用它。 */
+  const waitingAsksOf = (conversationId: ConversationId): WaitingAsk[] =>
+    db
+      .all<{ id: number; question: string | null }>(
+        `SELECT id, question FROM router_items
+          WHERE pm_id = (SELECT pm_id FROM conversations WHERE id = ?) AND kind = 'decision' AND status = 'pending' ORDER BY id`,
+        conversationId,
+      )
+      .map((row) => ({ id: row.id, question: row.question ?? "" }));
+
+  /** 用户在对话里的提问卡上点选项、填写：按卡上那条 ask 消息找到卡，只回答这一张（同 resolveItem，别的卡不动）。 */
+  const answerAsk = (askMessageId: MessageId, input: ResolveRouterItemRequest): ResolveRouterItemResponse => {
+    const row = db.get<{ id: number }>(
+      "SELECT id FROM router_items WHERE ask_message_id = ? AND kind = 'decision' ORDER BY id DESC LIMIT 1",
       askMessageId,
     );
-    if (rows.length === 0) return;
-    const t = now();
-    const note = sliceChars(userText.trim(), MAX_DECISION_NOTE_CHARS);
-    for (const row of rows) {
-      const options = parseJsonOr<string[]>(row.options_json, []);
-      const matchedIdx = options.findIndex((o) => o === userText.trim());
-      const resolution: RouterResolution = {
-        chosenIndex: matchedIdx >= 0 ? matchedIdx : null,
-        chosenOption: matchedIdx >= 0 ? options[matchedIdx]! : null,
-        note,
-        actor: "conversation",
-        resolvedAt: t,
-      };
-      db.run(
-        "UPDATE router_items SET status = 'resolved', resolution_json = ?, updated_at = ? WHERE id = ?",
-        JSON.stringify(resolution),
-        t,
-        row.id,
-      );
-      p.changes.push({ type: "router.item.updated", data: { item: toRouterItem(getItemRow(row.id)!) } });
-    }
+    if (row === undefined) throw fail("not_found", "这张卡不在了");
+    return resolveItem(row.id, input);
+  };
+
+  /** hub ask close：项目经理关掉自己名下一张还在等的卡（用户在对话里打字答了、没点卡，或问题过时了）。 */
+  const closeAskIn = (p: Pending, caller: AgentSessionRow & { pmId: PmId }, args: HubArgs<"ask.close">): HubResult<"ask.close"> => {
+    const row = getItemRow(args.itemId);
+    if (row === undefined || row.kind !== "decision") throw fail("not_found", `没有编号 ${args.itemId} 的卡`);
+    if (row.pm_id !== caller.pmId) throw fail("forbidden", `卡 #${row.id} 不是你的卡`);
+    if (row.status !== "pending") throw fail("conflict", `卡 #${row.id} 已经不在等了（${row.status === "resolved" ? "用户已回答" : "已关掉或被替换"}）`);
+    db.run("UPDATE router_items SET status = 'superseded', updated_at = ? WHERE id = ?", now(), row.id);
+    if (row.ask_message_id !== null) messages.markAskAnsweredIn(p, row.ask_message_id);
+    const item = toRouterItem(getItemRow(row.id)!);
+    p.changes.push({ type: "router.item.updated", data: { item } });
+    appendAuditIn("pm", "ask.close", caller.pmId, row.id);
+    return { text: `已关掉卡 #${row.id}。`, data: { item } };
   };
 
   /** hub router report：向 Router 投递里程碑汇报。 */
@@ -587,7 +593,7 @@ export function createLedgerRouter(
         throw fail("conflict", "这张拍板卡已经被处理过了");
       }
       if (row.status === "superseded") {
-        throw fail("conflict", "这张拍板卡已被项目经理的新提问替换");
+        throw fail("conflict", "这张卡已被项目经理关掉或替换");
       }
 
       assertPmNotArchived(row.pm_id);
@@ -1475,7 +1481,9 @@ export function createLedgerRouter(
   return {
     prepareIndependentAskIn,
     bridgeAskIn,
-    onConversationAnsweredAskIn,
+    waitingAsksOf,
+    answerAsk,
+    closeAskIn,
     reportIn,
     noteIn,
     resolveItem,

@@ -73,7 +73,7 @@ const messagesIn = (conversationId: ConversationId) =>
 
 const itemOf = (messageId: MessageId) => db.get<{ id: number; status: string }>("SELECT id, status FROM router_items WHERE ask_message_id = ?", messageId)!;
 const statusOf = (messageId: MessageId) => itemOf(messageId).status;
-const answerCard = (messageId: MessageId, choice: string) => ledger.answerAsk(messageId, { clientId: `a${++clientSeq}`, choice });
+const answerCard = (messageId: MessageId, note: string) => ledger.answerAsk(messageId, { clientId: `a${++clientSeq}`, note });
 
 /** 项目经理实际收到的这条用户消息：原文前面的说明块 + 原文（handlers.ts 的 session.send 原样交给驱动层）。 */
 const receivedBy = (messageId: MessageId) => ledger.deliveryOf(ledger.getMessage(messageId)!);
@@ -83,7 +83,7 @@ describe("一张卡只在用户回答这张卡时关掉", () => {
     const power = ledger.hubCall(lin.sessionId, "ask", { text: "请接电源", options: ["已接", "不接"] }).data.messageId;
     const standard = ledger.hubCall(lin.sessionId, "ask", { text: "方案标准", options: ["两处都按这个改（推荐）", "只改一处"] }).data.messageId;
     changes = [];
-    answerCard(standard, "两处都按这个改（推荐）");
+    ledger.answerAsk(standard, { clientId: "click-1", choice: "两处都按这个改（推荐）" });
     expect([statusOf(standard), statusOf(power)]).toEqual(["resolved", "pending"]);
     expect([answered(standard), answered(power)]).toEqual([true, false]);
     expect(changes.flatMap((c) => (c.type === "message.updated" ? [c.data.message.id] : []))).toEqual([standard]);
@@ -121,7 +121,7 @@ describe("项目经理收到用户消息时带着账本里当前还在等的卡"
         [
           "【系统：账本里现在还在等用户回答的提问卡有 2 张。这条消息不一定在回答它们；用户回答了哪张，用 `" + HUB_COMMAND + " ask close <编号>` 关掉那张，没回答的留着：",
           `- #${itemOf(a).id}「要不要发版？」`,
-          `- #${itemOf(b).id}「用 A 还是 B？ A 快，B 稳」`,
+          `- #${itemOf(b).id}「用 A 还是 B？」`,
           "】",
         ].join("\n"),
       ],
@@ -269,7 +269,7 @@ describe("持久化", () => {
       needsUser: true,
       options: ["审一个 PR / 分支", "审本地代码路径"],
     });
-    answerCard(id, "审一个 PR / 分支");
+    ledger.answerAsk(id, { clientId: "click-2", choice: "审一个 PR / 分支" });
     expect(askOf(ledger.getMessage(id)!)).toEqual({
       needsUser: true,
       answered: true,

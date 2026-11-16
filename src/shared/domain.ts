@@ -465,8 +465,8 @@ export const CONFIRM_CHECKPOINT_OPTIONS = [CONFIRM_PASS_OPTION, CONFIRM_REJECT_O
 
 /**
  * `hub ask`（普通提问、操作提醒、`--node` 步骤拍板卡与 `confirm` 检查点卡）发的那条项目经理消息的 meta：
- * needsUser 是“等你确定”的标记；answered 是用户回答了——普通提问在对话里收到用户消息或 Router 拍板时标上；
- * 带 gateRef 的门禁消息在用户对话闲聊时不会被误标已回答，须经门禁 decide 解锁才标上。
+ * needsUser 是“等你确定”的标记；answered 是这张卡被处理了——普通提问在用户回答这张卡（卡上点选、填写，或右栏 Router 拍板）、
+ * 项目经理 hub ask close / --replace 时标上，用户在对话里发的普通消息不标；带 gateRef 的门禁消息须经门禁 decide 解锁才标上。
  */
 export type AskMeta = {
   needsUser: true;

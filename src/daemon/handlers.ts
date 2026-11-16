@@ -14,7 +14,6 @@ import {
   RATE_LIMIT_RECHECK_PAD_MS,
   SessionTokenRevokedError,
   WORKER_FIRST_TURN_RECHECK_MS,
-  deliveryParts,
   isQuotaExhausted,
   type ActionHandler,
   type ActionResult,
@@ -42,6 +41,7 @@ export interface HandlerDeps {
     | "waitsForHandover"
     | "graphDeliveryProbeTarget"
     | "enrichDeliveryNoteMessage"
+    | "deliveryOf"
   >;
   sessions: Pick<SessionStore, "get">;
   /** 和 agent 接口、prepareLaunch 用的是同一个实例。 */
@@ -133,7 +133,7 @@ export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"sess
     }
     let result;
     // 用户写的字 + 附件的完整路径；Worker 对话里用户直接说的话另带标签，驱动层放在原文前面单独一块（shared/worker.ts）
-    const { prefixes, text } = deliveryParts(message);
+    const { prefixes, text } = deps.ledger.deliveryOf(message);
     try {
       result = await deps.driver.send(sessionId, {
         messageIds: [messageId],
