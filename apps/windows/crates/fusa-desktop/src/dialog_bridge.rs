@@ -1,10 +1,10 @@
 use std::io::{Read, Write};
-use std::net::TcpListener;
+use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use fusa_supervisor::compute_file_sha256_hex;
 use serde::Deserialize;
@@ -14,6 +14,10 @@ use tauri_plugin_dialog::{DialogExt, FilePath};
 const MAX_DIALOG_HEADER_BYTES: usize = 8 * 1024;
 const MAX_DIALOG_BODY_BYTES: usize = 8 * 1024;
 const MAX_DIALOG_WIRE_BYTES: usize = MAX_DIALOG_HEADER_BYTES + MAX_DIALOG_BODY_BYTES;
+/// 回完响应后最多再读掉多少字节的剩余请求体（lingering close），超过就不管了直接关。
+const MAX_LINGER_DRAIN_BYTES: usize = 64 * 1024;
+/// lingering close 的总时间上限。
+const LINGER_DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// 守护进程 `POST /api/pick-folder` 与桌面外壳 `tauri-plugin-dialog` 之间的本机回环窄桥接句柄。
 pub struct DesktopDialogBridge {
@@ -73,13 +77,37 @@ fn generate_bridge_token() -> String {
     format!("dlg_{part1}{part2}")
 }
 
-fn write_json_response(stream: &mut impl Write, status: u16, status_text: &str, body: &str) {
+/// 回响应后做有上限的 lingering close：先 `shutdown(Write)` 发 FIN，再在字节数与时间上限内读掉客户端还在发的请求体，最后才关连接。
+///
+/// 接收缓冲区里留着没读的数据（或关闭后又收到数据）时，TCP 会发 RST 而不是 FIN，
+/// 客户端可能在读到响应前就报连接重置（Windows 上是 10054）。
+fn write_json_response(stream: &mut TcpStream, status: u16, status_text: &str, body: &str) {
     let wire = format!(
         "HTTP/1.1 {status} {status_text}\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     let _ = stream.write_all(wire.as_bytes());
     let _ = stream.flush();
+    let _ = stream.shutdown(Shutdown::Write);
+    drain_request_remainder(stream);
+}
+
+fn drain_request_remainder(stream: &mut TcpStream) {
+    let deadline = Instant::now() + LINGER_DRAIN_TIMEOUT;
+    let mut drained = 0usize;
+    let mut chunk = [0u8; 4096];
+    while drained < MAX_LINGER_DRAIN_BYTES {
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            break;
+        };
+        if stream.set_read_timeout(Some(remaining)).is_err() {
+            break;
+        }
+        match stream.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => drained += n,
+        }
+    }
 }
 
 impl DesktopDialogBridge {
