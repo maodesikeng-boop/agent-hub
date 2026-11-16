@@ -204,6 +204,27 @@ async function bootApp(snapshot: StateSnapshot) {
   return api;
 }
 
+const LONG_DETAILS = "**交棒要点**：\n" + "改了卡片的顺序，".repeat(40) + "\n\n提交 `22f68fed` · PR https://github.com/o/r/pull/333";
+const CHECKPOINT_TEXT = `**摘要**：做完了\n\n${LONG_DETAILS}`;
+
+/** 细节默认收起：只看得到摘要和文件；Show more 展开后细节排在文件后面，Show less 收回。 */
+async function expectLeadFilesThenDetails(card: HTMLElement) {
+  const files = card.querySelector<HTMLElement>("[data-deliverables]")!;
+  expect(files).not.toBeNull();
+  const lead = within(card).getByText(/做完了/);
+  expect(lead.compareDocumentPosition(files) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(within(card).queryByText(/交棒要点/)).toBeNull();
+  expect(within(card).queryByText(/22f68fed/)).toBeNull();
+  const more = within(card).getByRole("button", { name: "Show more" });
+  expect(more).toHaveAttribute("aria-expanded", "false");
+  await user.click(more);
+  const details = within(card).getByText(/交棒要点/);
+  expect(files.compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(within(card).getByText(/22f68fed/)).toBeInTheDocument();
+  await user.click(within(card).getByRole("button", { name: "Show less" }));
+  expect(within(card).queryByText(/交棒要点/)).toBeNull();
+}
+
 describe("四处入口", () => {
   it("对话里的提问卡：AskMeta.deliverables 列在卡片正文下面", async () => {
     const ask = askMessage({
@@ -226,6 +247,23 @@ describe("四处入口", () => {
     // 在选项上面
     const options = within(card).getByRole("group", { name: "Options" });
     expect(files.compareDocumentPosition(options) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("对话里的提问卡：摘要 → 文件 → 细节，交棒、提交、PR 默认收起", async () => {
+    const ask = askMessage({
+      id: 53,
+      text: `请确认步骤「实现」的结果\n\n${CHECKPOINT_TEXT}`,
+      meta: { needsUser: true, options: ["通过", "打回"], deliverables: [plan, shot] },
+    });
+    const snapshot = makeSnapshot({ conversations: [makeConvSnapshot([ask])] });
+    openFirstConversation(snapshot);
+    await bootApp(snapshot);
+    const card = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>("[data-ask-card]");
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    await expectLeadFilesThenDetails(card);
   });
 
   it("对话里的提问卡：正文里写了同一个本机链接时，链接也能点开预览", async () => {
@@ -257,6 +295,24 @@ describe("四处入口", () => {
     expect(files).not.toBeNull();
     expect(within(files).getByRole("button", { name: "方案" })).toBeInTheDocument();
     expect(within(files).getByRole("button", { name: "录屏" })).toBeInTheDocument();
+  });
+
+  it("右栏 Needs You 的提问行：摘要 → 文件 → 细节", async () => {
+    const ask = askMessage({ id: 54, text: `请确认步骤「实现」的结果\n\n${CHECKPOINT_TEXT}`, meta: { needsUser: true, deliverables: [plan, rec] } });
+    render(
+      <RightRail asks={[ask]} workers={[]} activeGraphs={[]} openWorkerId={null} layout="side" avatarKey={1} onOpenAsk={() => {}} onOpenWorker={() => {}} />,
+    );
+    await user.click(screen.getByRole("button", { name: /请确认步骤「实现」的结果/ }));
+    await expectLeadFilesThenDetails(document.querySelector<HTMLElement>("[data-ask-detail]")!);
+  });
+
+  it("果皮轨门禁卡：摘要 → 文件 → 细节", async () => {
+    const graph = gateGraph();
+    graph.nodes[0] = { ...graph.nodes[0]!, gateSummaryMd: CHECKPOINT_TEXT };
+    render(
+      <RightRail asks={[]} workers={[]} activeGraphs={[graph]} openWorkerId={null} layout="side" avatarKey={1} onOpenAsk={() => {}} onOpenWorker={() => {}} />,
+    );
+    await expectLeadFilesThenDetails(screen.getByTestId("peel-gate-card"));
   });
 
   it("果皮轨门禁卡列出该步 artifact.deliverables", () => {
@@ -367,6 +423,36 @@ describe("四处入口", () => {
       const files = briefing.querySelector<HTMLElement>("[data-deliverables]")!;
       expect(within(files).getByRole("button", { name: "方案" })).toBeInTheDocument();
       expect(within(files).getByRole("button", { name: "录屏" })).toBeInTheDocument();
+      await user.click(within(briefing).getByRole("button", { name: "Show more" }));
+      expect(within(briefing).getByRole("link", { name: /PR #333/ })).toBeInTheDocument();
+    });
+
+    it("总助拍板卡：摘要 → 文件 → 细节，“downstream step waiting”也收在细节里", async () => {
+      const graph = gateGraph();
+      graph.nodes[0] = { ...graph.nodes[0]!, gateSummaryMd: CHECKPOINT_TEXT };
+      graph.nodes.push(makeNode({ key: "verify", title: "验收" }));
+      graph.edges.push({ fromKey: "impl", toKey: "verify" });
+      installFleet(snapshotWith({ activeTaskGraphs: [graph] }));
+      await openRouter();
+      const tray = await screen.findByRole("region", { name: "Needs You" });
+      const card = await within(tray).findByRole("article", { name: "请确认步骤「实现」的结果" });
+      expect(within(card).queryByText(/downstream step/)).toBeNull();
+      await expectLeadFilesThenDetails(card);
+      await user.click(within(card).getByRole("button", { name: "Show more" }));
+      expect(within(card).getByText("1 downstream step waiting")).toBeInTheDocument();
+    });
+
+    it("总助简报：摘要 → 文件 → 细节，链接行也收在细节里", async () => {
+      installFleet(snapshotWith({ router: { ...emptyRouterSlice(), items: [reportItem({ summary: CHECKPOINT_TEXT, deliverables: [plan, rec] })] } }));
+      await openRouter();
+      const briefing = await waitFor(() => {
+        const el = document.querySelector<HTMLElement>("[data-router-briefing]");
+        expect(el).not.toBeNull();
+        return el!;
+      });
+      expect(within(briefing).queryByRole("link", { name: /PR #333/ })).toBeNull();
+      await expectLeadFilesThenDetails(briefing);
+      await user.click(within(briefing).getByRole("button", { name: "Show more" }));
       expect(within(briefing).getByRole("link", { name: /PR #333/ })).toBeInTheDocument();
     });
 

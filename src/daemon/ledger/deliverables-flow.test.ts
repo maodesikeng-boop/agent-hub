@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { splitLead } from "../../shared/card-text.ts";
 import { pendingDecisionsOf } from "../../shared/decisions.ts";
 import { deliverablesOf, type Deliverable } from "../../shared/deliverables.ts";
 import { CONFIRM_REJECT_OPTION, askOf, type ConversationId, type MessageId, type PmId, type SessionId, type TaskGraph, type WorkerId } from "../../shared/domain.ts";
@@ -157,6 +158,16 @@ describe("交付物", () => {
       const decision = pendingDecisionsOf(ledger.snapshot())[0]!;
       expect(decision.source.kind).toBe("gate");
       expect(labels(decision.deliverables)).toEqual(["方案", "桌面截图", "录屏"]);
+    });
+
+    it("检查点卡正文的第一段是整段摘要，交棒、提交排在后面（卡片里摘要后面紧跟文件，其余收起）", () => {
+      const graph = createGraph([{ key: "plan", title: "方案", confirm: true }]);
+      const w = graph.nodes[0]!.activeWorkerId!;
+      runWorkerTurn(w, reportText(planFiles(), "方案好了。\n\n截图在文件里").replace("交棒: 无", "交棒: 改了卡片顺序"));
+      const { lead, details } = splitLead(graphShow(graph.id).nodes[0]!.gateSummaryMd!);
+      expect(lead).toBe("**摘要**：方案好了。\n截图在文件里");
+      expect(details).toContain("改了卡片顺序");
+      expect(details).toContain("abc1234");
     });
   });
 

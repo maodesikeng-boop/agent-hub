@@ -53,7 +53,7 @@ import { useStickToBottom } from "../useStickToBottom.ts";
 import { DeviceScopeOf } from "../device-scope.tsx";
 import { AttachmentList } from "./Attachments.tsx";
 import { Avatar } from "./Avatar.tsx";
-import { DeliverableFiles, INLINE_LINK_CLASS } from "./Deliverables.tsx";
+import { CardBody, INLINE_LINK_CLASS } from "./Deliverables.tsx";
 import { KnifeAvatar } from "./KnifeAvatar.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { AgentHead, BUBBLE, CopyButton, SentBody, TEXT_BUTTON, UnsentMark } from "./Messages.tsx";
@@ -373,20 +373,23 @@ const BriefingRow = memo(function BriefingRow({
           />
         )}
         <div className="flex flex-col gap-1.5">
-          <div className="w-full min-w-0 text-body leading-relaxed">
-            <Markdown text={entry.report.summary} />
-          </div>
-          {entry.report.deliverables !== undefined && (
-            <DeviceScopeOf deviceKey={entry.deviceKey}>
-              <DeliverableFiles deliverables={entry.report.deliverables} className="mt-0.5" />
-            </DeviceScopeOf>
-          )}
-          <BriefingLinks
-            links={entry.report.links}
-            deviceKey={entry.deviceKey}
-            onOpenConversation={onOpenConversation}
-            onOpenWorker={onOpenWorker}
-          />
+          <DeviceScopeOf deviceKey={entry.deviceKey}>
+            <CardBody
+              text={entry.report.summary}
+              deliverables={entry.report.deliverables}
+              extra={
+                entry.report.links.length > 0 && (
+                  <BriefingLinks
+                    links={entry.report.links}
+                    deviceKey={entry.deviceKey}
+                    onOpenConversation={onOpenConversation}
+                    onOpenWorker={onOpenWorker}
+                  />
+                )
+              }
+              textClassName="text-body leading-relaxed"
+            />
+          </DeviceScopeOf>
           <div className="text-xs text-muted-foreground tabular-nums">{formatTime(entry.report.createdAt)}</div>
         </div>
       </div>

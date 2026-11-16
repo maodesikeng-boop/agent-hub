@@ -3780,9 +3780,10 @@ export function createLedgerTaskGraphs(
         const gateQuestion = truncateChars(`请确认步骤「${node.title}」的结果`, MAX_GATE_QUESTION_CHARS);
         const gateOptions = [...CONFIRM_CHECKPOINT_OPTIONS];
         const gateOptionsJson = JSON.stringify(gateOptions);
+        // 第一段是摘要，其余是细节：卡片里摘要后面紧跟文件，细节默认收起（shared/card-text.ts）
         const summaryParts: string[] = [];
         if (parsed.report.summary.trim() !== "") {
-          summaryParts.push(`**摘要**：${parsed.report.summary.trim()}`);
+          summaryParts.push(`**摘要**：${parsed.report.summary.trim().replace(/\n\s*\n/gu, "\n")}`);
         }
         const handoffText = parsed.report.handoff.trim();
         if (handoffText !== "" && !isReportFieldNone(handoffText)) {

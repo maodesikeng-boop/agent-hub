@@ -30,6 +30,7 @@ import {
   REPORT_START,
   sentFilesOf,
   sentFilesOfDeliverables,
+  splitCardTitle,
   systemEventOf,
   systemNoticeText,
   workerEventOf,
@@ -60,7 +61,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/colla
 import { Input } from "../ui/input.tsx";
 import { AttachmentList } from "./Attachments.tsx";
 import { Avatar } from "./Avatar.tsx";
-import { DeliverableFiles } from "./Deliverables.tsx";
+import { CardBody, DeliverableFiles } from "./Deliverables.tsx";
 import { WorkerPickTag } from "./WorkerPickTag.tsx";
 import { COPIED_RESET_MS } from "./CodeBlock.tsx";
 import { Markdown } from "./Markdown.tsx";
@@ -149,14 +150,6 @@ export function displayText(text: string): string {
   return `${text.slice(0, start).trimEnd()}\n\n---\n\n${items.join("\n")}\n\n${text.slice(end + REPORT_END.length).trim()}`.trim();
 }
 
-function splitAskQuestionAndContext(raw: string): { title: string; context: string | null } {
-  const trimmed = raw.trim();
-  const match = /^([^\r\n]+?)(?:\r?\n\s*\r?\n)([\s\S]+)$/u.exec(trimmed);
-  if (match === null) return { title: trimmed, context: null };
-  const rest = match[2]!.trim();
-  return { title: match[1]!.trim(), context: rest === "" ? null : rest };
-}
-
 /** `hub ask` 带选项时的可点击 A/B/C/D 选项卡片（docs/ui-standard.md 第 17 条）。 */
 function AskCard({
   card,
@@ -220,22 +213,21 @@ function AskCard({
   const effectiveChosen = card.chosenOption ?? chosen;
   const answered = card.answered || chosen !== null;
   const disabled = answered || !onAnswerAsk || decideMutation.isPending;
-  const { title: cardTitle, context: cardContext } = useMemo(
-    () => splitAskQuestionAndContext(card.question),
-    [card.question],
-  );
+  const { title: cardTitle, body: cardBody } = useMemo(() => splitCardTitle(card.question), [card.question]);
 
   return (
     <div className="w-full min-w-0 rounded-2xl border border-border bg-background p-4" data-ask-card>
       <div className="w-full min-w-0 text-body leading-relaxed font-medium text-foreground">
         <Markdown text={cardTitle} files={files} messageId={messageId} />
       </div>
-      {cardContext !== null && (
-        <div className="mt-1.5 w-full min-w-0 text-minor leading-relaxed text-muted-foreground">
-          <Markdown text={cardContext} files={files} messageId={messageId} />
-        </div>
-      )}
-      <DeliverableFiles deliverables={deliverables} className="mt-2" />
+      <CardBody
+        text={cardBody}
+        deliverables={deliverables}
+        files={files}
+        messageId={messageId}
+        className="mt-1.5"
+        textClassName="text-minor leading-relaxed text-muted-foreground"
+      />
       {hasOptions && (
         <div className="mt-3 flex flex-col gap-1.5" role="group" aria-label="Options">
           {card.options.map((opt, i) => {

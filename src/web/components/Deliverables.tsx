@@ -1,11 +1,13 @@
-// 卡片下面的交付物（shared/deliverables.ts）：对话里的提问卡、右栏的门禁卡、总助的拍板卡和简报都用这一个组件，界面规则见 docs/ui-standard.md 第 22 条。
+// 卡片正文和下面的交付物（shared/deliverables.ts）：对话里的提问卡、右栏的提问和门禁卡、总助的拍板卡和简报都用这里的 CardBody，
+// 顺序都是摘要 → 文件 → 细节（默认收起），界面规则见 docs/ui-standard.md 第 22 条。
 import { FileText, Play } from "lucide-react";
-import { memo, useState } from "react";
-import { FILE_EXPIRED_TEXT, groupDeliverables, previewKindOf, sentFileUrl, type Deliverable } from "../../shared/index.ts";
+import { memo, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { FILE_EXPIRED_TEXT, groupDeliverables, previewKindOf, sentFileUrl, splitLead, type Deliverable, type SentFile } from "../../shared/index.ts";
 import { useClient } from "../device-scope.tsx";
 import { cn } from "../lib/utils.ts";
 import { FileCard, useFileExpired } from "./Attachments.tsx";
 import { FilePreview, type PreviewFile } from "./FilePreview.tsx";
+import { Markdown } from "./Markdown.tsx";
 
 /** 行内蓝色链接（总助简报的链接行也用）：颜色、下划线同 Markdown 里的链接，触屏热区照第 19 条。 */
 export const INLINE_LINK_CLASS =
@@ -95,6 +97,85 @@ export const DeliverableFiles = memo(function DeliverableFiles({ deliverables, c
             <MediaThumb key={item.id} item={item} />
           ))}
         </div>
+      )}
+    </div>
+  );
+});
+
+const NO_DELIVERABLES: readonly Deliverable[] = [];
+
+/**
+ * 卡片正文：第一段摘要（超过 3 行收起、底部渐隐，行数在 styles.css 的 `.card-lead-clamp`）→ 交付物 → 细节（其余段落和 extra）。
+ * 细节默认收起，一个 `Show more` / `Show less` 同时管摘要的收起和细节；没有细节、摘要也没超过 3 行时不出按钮。
+ * 同一张卡换了内容要重置展开状态，调用方给 key。textClassName 是摘要和细节的字号颜色，className 给外边距。
+ */
+export const CardBody = memo(function CardBody({
+  text,
+  deliverables = NO_DELIVERABLES,
+  extra,
+  files,
+  messageId,
+  className,
+  textClassName,
+}: {
+  text: string;
+  deliverables?: readonly Deliverable[] | undefined;
+  /** 接在细节后面、一起收起的东西（总助简报的链接行、拍板卡的下游等待数）。 */
+  extra?: ReactNode;
+  files?: SentFile[];
+  messageId?: number;
+  className?: string;
+  textClassName?: string;
+}) {
+  const { lead, details } = useMemo(() => splitLead(text), [text]);
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+  const leadRef = useRef<HTMLDivElement>(null);
+  const id = useId();
+
+  // 收起时量一次“摘要比框高”：框宽变了（窗口、托盘滚动条）或摘要变了都重新量；展开时保持上一次的结论，按钮留着好收回去。
+  useLayoutEffect(() => {
+    const box = leadRef.current;
+    if (box === null || expanded) return;
+    const measure = () => setOverflowing(box.scrollHeight > box.clientHeight + 1);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(box);
+    if (box.firstElementChild !== null) observer.observe(box.firstElementChild);
+    return () => observer.disconnect();
+  }, [expanded, lead]);
+
+  const hasDetails = details !== "" || (extra !== undefined && extra !== null && extra !== false);
+  if (lead === "" && !hasDetails && deliverables.length === 0) return null;
+  return (
+    <div id={id} data-card-body className={cn("flex min-w-0 flex-col items-start gap-2", className)}>
+      {lead !== "" && (
+        <div
+          ref={leadRef}
+          data-card-lead
+          data-overflowing={overflowing && !expanded ? "" : undefined}
+          className={cn("w-full min-w-0", textClassName, !expanded && "card-lead-clamp")}
+        >
+          <Markdown text={lead} files={files} messageId={messageId} />
+        </div>
+      )}
+      <DeliverableFiles deliverables={deliverables} className="w-full" />
+      {expanded && hasDetails && (
+        <div data-card-details className={cn("flex w-full min-w-0 flex-col gap-2", textClassName)}>
+          {details !== "" && <Markdown text={details} files={files} messageId={messageId} />}
+          {extra}
+        </div>
+      )}
+      {(hasDetails || overflowing) && (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          aria-controls={id}
+          className="touch-target inline-flex cursor-pointer items-center rounded-full text-minor text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+          onClick={() => setExpanded((v) => !v)}
+        >
+          {expanded ? "Show less" : "Show more"}
+        </button>
       )}
     </div>
   );

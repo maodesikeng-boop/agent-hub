@@ -1,7 +1,7 @@
 // 水果刀 Router 工作台：内嵌单行补充框的三合一待决拍板卡（docs/ui-standard.md 第 21 条、docs/router-design.md 第 4.2 节）。
 // 严格禁止聊天气泡与 · / | / / 拼接分隔符，元信息一律以 flex gap-2 排布。
 import { ArrowUp } from "lucide-react";
-import { memo, useId, useLayoutEffect, useRef, useState } from "react";
+import { memo } from "react";
 import type { ConversationId } from "../../shared/index.ts";
 import { cleanOptionLabel, recommendedIndexOf } from "../decision-actions.ts";
 import { formatTime, type ErrorLike } from "../format.ts";
@@ -11,58 +11,8 @@ import { Button } from "../ui/button.tsx";
 import { Input } from "../ui/input.tsx";
 import { DeviceScopeOf } from "../device-scope.tsx";
 import { Avatar } from "./Avatar.tsx";
-import { DeliverableFiles } from "./Deliverables.tsx";
-import { Markdown } from "./Markdown.tsx";
+import { CardBody } from "./Deliverables.tsx";
 import { RowError } from "./SettingsList.tsx";
-
-/**
- * 补充依据：`hub ask` 传来的是 Markdown（段落、编号、子列表、行内代码），用共用的 Markdown 渲染，
- * 13.5px 灰字紧凑排版（Markdown 的间距都是 em，跟着字号缩）。超过 5 行（行数在 styles.css 的 `.decision-context-clamp`）
- * 默认收起，底部渐隐，下面一个 `Show more` / `Show less`；没超过就整段显示，不出按钮。
- */
-const DecisionContext = memo(function DecisionContext({ text }: { text: string }) {
-  const [expanded, setExpanded] = useState(false);
-  const [overflowing, setOverflowing] = useState(false);
-  const boxRef = useRef<HTMLDivElement>(null);
-  const id = useId();
-
-  // 收起时量一次“内容比框高”：框宽变了（窗口、托盘滚动条）或正文变了都重新量；展开时保持上一次的结论，按钮留着好收回去。
-  useLayoutEffect(() => {
-    const box = boxRef.current;
-    if (box === null || expanded) return;
-    const measure = () => setOverflowing(box.scrollHeight > box.clientHeight + 1);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(box);
-    if (box.firstElementChild !== null) observer.observe(box.firstElementChild);
-    return () => observer.disconnect();
-  }, [expanded, text]);
-
-  return (
-    <div className="mt-1">
-      <div
-        ref={boxRef}
-        id={id}
-        data-decision-context
-        data-overflowing={overflowing && !expanded ? "" : undefined}
-        className={cn("text-minor text-muted-foreground", !expanded && "decision-context-clamp")}
-      >
-        <Markdown text={text} />
-      </div>
-      {overflowing && (
-        <button
-          type="button"
-          aria-expanded={expanded}
-          aria-controls={id}
-          className="touch-target mt-1 inline-flex cursor-pointer items-center rounded-full text-minor text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
-          onClick={() => setExpanded((v) => !v)}
-        >
-          {expanded ? "Show less" : "Show more"}
-        </button>
-      )}
-    </div>
-  );
-});
 
 export interface RouterDecisionCardProps {
   entry: FleetDecisionEntry;
@@ -116,17 +66,22 @@ export const RouterDecisionCard = memo(function RouterDecisionCard({
       </div>
 
       <h3 className="mt-2.5 text-body font-medium text-foreground">{decision.question}</h3>
-      {decision.context.trim() !== "" && <DecisionContext key={decision.key} text={decision.context} />}
-      {blockedCount > 0 && (
-        <p className="mt-1 text-xs text-muted-foreground">
-          {blockedCount === 1 ? "1 downstream step waiting" : `${blockedCount} downstream steps waiting`}
-        </p>
-      )}
-      {decision.deliverables !== undefined && (
-        <DeviceScopeOf deviceKey={entry.deviceKey}>
-          <DeliverableFiles deliverables={decision.deliverables} className="mt-2" />
-        </DeviceScopeOf>
-      )}
+      <DeviceScopeOf deviceKey={entry.deviceKey}>
+        <CardBody
+          key={decision.key}
+          text={decision.context}
+          deliverables={decision.deliverables}
+          extra={
+            blockedCount > 0 && (
+              <p className="text-xs text-muted-foreground">
+                {blockedCount === 1 ? "1 downstream step waiting" : `${blockedCount} downstream steps waiting`}
+              </p>
+            )
+          }
+          className="mt-1"
+          textClassName="text-minor text-muted-foreground"
+        />
+      </DeviceScopeOf>
 
       {decision.options.length > 0 && (
         <div className="mt-3 space-y-2">
