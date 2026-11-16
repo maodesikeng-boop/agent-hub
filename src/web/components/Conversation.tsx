@@ -129,8 +129,8 @@ export function Conversation({
   const messages = useMemo(() => visibleMessages(view.messages), [view.messages]);
   const archived = entry.pm?.archivedAt != null;
   const messageActions = useMemo<MessageActions>(
-    () => (archived ? actions : { ...actions, onAnswerAsk: (text: string) => void onSend(id, text, []) }),
-    [actions, archived, id, onSend],
+    () => (archived ? actions : { ...actions, onAnswerAsk: async (messageId, body) => void (await client.postAnswerAsk(messageId, body)) }),
+    [actions, archived, client],
   );
 
   // agent 的消息都是这个项目经理说的（Worker 的汇报是单独的一行，点开才是 Worker 自己的对话）

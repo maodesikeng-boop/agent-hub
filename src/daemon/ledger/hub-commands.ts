@@ -310,6 +310,8 @@ export function createLedgerHubCommands(
           data: { messageId: message.id, ...(item !== null ? { item } : {}) },
         };
       }
+      case "ask.close":
+        return router.closeAskIn(p, caller, args as HubArgs<"ask.close">);
       case "schedule.add":
         return schedules.addIn(p, caller, args as HubArgs<"schedule.add">);
       case "schedule.list":

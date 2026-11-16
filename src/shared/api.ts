@@ -120,6 +120,8 @@ export const API_PATHS = {
   // ---- Router（总助）与持久化任务图（Task DAG）----
   routerDigest: "/api/router/digest",
   routerItems: "/api/router/items",
+  /** 在对话里的提问卡上回答（点选项、填写）：按卡上那条 ask 消息找卡，只回答这一张。 */
+  askAnswer: (messageId: MessageId) => `/api/asks/${messageId}/answer`,
   routerItemResolve: (id: RouterItemId) => `/api/router/items/${id}/resolve`,
   routerItemDecide: (id: RouterItemId) => `/api/router/items/${id}/decide`,
   routerItemArchive: (id: RouterItemId) => `/api/router/items/${id}/archive`,

@@ -3,6 +3,7 @@ import {
   CHANGE_BUFFER_SIZE,
   ConversationNotFoundError,
   defaultRouterSettings,
+  deliveryParts,
   emptyRouterSlice,
   findRewindableMessage,
   MESSAGE_PAGE_SIZE,
@@ -379,6 +380,16 @@ export class FakeLedger {
     return this.routerItemsPageValue;
   }
 
+  answerAsk(askMessageId: MessageId, input: ResolveRouterItemRequest): ResolveRouterItemResponse {
+    this.check();
+    this.routerCalls.push({ call: "answerAsk", args: [askMessageId, input] });
+    return this.resolveRouterItem(askMessageId, input);
+  }
+
+  deliveryOf(message: Pick<Message, "workerId" | "sender" | "text" | "meta">): { prefixes: string[]; text: string } {
+    return deliveryParts(message);
+  }
+
   resolveRouterItem(itemId: RouterItemId, input: ResolveRouterItemRequest): ResolveRouterItemResponse {
     this.check();
     this.routerCalls.push({ call: "resolveItem", args: [itemId, input] });
@@ -550,6 +561,8 @@ export class FakeLedger {
       getRouterDigest: () => this.getRouterDigest(),
       listRouterItems: (c, l, k) => this.listRouterItems(c, l, k),
       resolveRouterItem: (id, i) => this.resolveRouterItem(id, i),
+      answerAsk: (id, i) => this.answerAsk(id, i),
+      deliveryOf: (m) => this.deliveryOf(m),
       archiveAllRouterReports: () => this.archiveAllRouterReports(),
       updateRouterSettings: (i) => this.updateRouterSettings(i),
       listRouterCommands: (c, l) => this.listRouterCommands(c, l),

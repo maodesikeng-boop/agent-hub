@@ -21,6 +21,7 @@ export interface RouterSettings {
   updatedAt: number;
 }
 
+/** conversation：旧版“用户在对话里发消息就算回答”写的，库里还有这样的老行；现在只写 router。 */
 export const ROUTER_RESOLUTION_ACTORS = ["router", "conversation"] as const;
 export type RouterResolutionActor = (typeof ROUTER_RESOLUTION_ACTORS)[number];
 

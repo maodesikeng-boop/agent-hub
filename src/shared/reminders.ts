@@ -143,8 +143,8 @@ function unansweredAsksIn(messages: readonly Message[]): Message[] {
 }
 
 /**
- * 对话里还在等用户确定的 hub ask（M5）：守护进程还没标成已回答（meta.answered，用户在这个对话里发了消息就标上，
- * 见 ledger/messages.ts）。用户刚发出、服务端还没确认的消息也先当回答了，不等推送。从老到新。
+ * 对话里还在等用户确定的 hub ask（M5）：守护进程还没标成已了结（meta.answered，只在用户回答这张卡、项目经理关掉它时标上，
+ * 见 ledger/messages.ts 的 settleAskIn）。用户发的普通消息不回答任何卡。从老到新。
  */
 export function pendingAsks(state: ReminderState, conversationId: ConversationId): Message[] {
   const view = state.conversations[conversationId];
@@ -156,10 +156,7 @@ export function pendingAsks(state: ReminderState, conversationId: ConversationId
     return NO_MESSAGES;
   }
   const all = unansweredAsksIn(view.messages);
-  if (all.length === 0) return NO_MESSAGES;
-  if (!pendingIn(state, conversationId).some((p) => p.phase !== "failed")) return all;
-  const gateOnly = all.filter((m) => askOf(m)?.gateRef !== undefined);
-  return gateOnly.length === 0 ? NO_MESSAGES : gateOnly;
+  return all.length === 0 ? NO_MESSAGES : all;
 }
 
 /** 所有对话里还在等用户确定的提问（Worker 对话没有 hub ask，直接跳过）。 */
@@ -211,9 +208,6 @@ export function askingConversations(state: ReminderState, deviceId = "local"): S
     set.add(conversationId);
   }
   for (const decision of pendingDecisionsOf(state, deviceId)) {
-    if (decision.source.kind !== "gate" && pendingIn(state, decision.conversationId).some((p) => p.phase !== "failed")) {
-      continue;
-    }
     set.add(decision.conversationId);
   }
   return set;

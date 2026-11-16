@@ -469,8 +469,9 @@ export const CONFIRM_CHECKPOINT_OPTIONS = [CONFIRM_PASS_OPTION, CONFIRM_REJECT_O
 
 /**
  * `hub ask`（普通提问、操作提醒、`--node` 步骤拍板卡与 `confirm` 检查点卡）发的那条项目经理消息的 meta：
- * needsUser 是“等你确定”的标记；answered 是用户回答了——普通提问在对话里收到用户消息或 Router 拍板时标上；
- * 带 gateRef 的门禁消息在用户对话闲聊时不会被误标已回答，须经门禁 decide 解锁才标上。
+ * needsUser 是“等你确定”的标记；answered 是这张卡了结了——普通提问在用户回答这张卡（卡上点选、填写，或总助工作台拍板）、
+ * 项目经理 hub ask close / --replace 时标上，用户在对话里发的普通消息不标；带 gateRef 的门禁消息须经门禁 decide 解锁才标上。
+ * 用户回答的记下 chosenOption 和原话 answerNote；被项目经理关掉、替换、收回的标 closed（见 ledger/messages.ts 的 settleAskIn）。
  */
 export type AskMeta = {
   needsUser: true;
@@ -479,6 +480,8 @@ export type AskMeta = {
   recommended?: string;
   gateRef?: GateRef;
   chosenOption?: string;
+  answerNote?: string;
+  closed?: true;
   /** 卡片下面列的文件（--file、检查点卡带的步骤交付物），最多 DELIVERABLES_PER_CARD_MAX 个；老消息没有。 */
   deliverables?: Deliverable[];
 };
@@ -509,6 +512,7 @@ export function askOf(message: Pick<Message, "sender" | "meta">): AskMeta | null
         }
       : undefined;
   const chosenOption = typeof message.meta.chosenOption === "string" ? message.meta.chosenOption : undefined;
+  const answerNote = typeof message.meta.answerNote === "string" && message.meta.answerNote !== "" ? message.meta.answerNote : undefined;
   const deliverables = deliverablesOf(message.meta.deliverables);
   return {
     needsUser: true,
@@ -517,6 +521,8 @@ export function askOf(message: Pick<Message, "sender" | "meta">): AskMeta | null
     ...(recommended !== undefined ? { recommended } : {}),
     ...(gateRef !== undefined ? { gateRef } : {}),
     ...(chosenOption !== undefined ? { chosenOption } : {}),
+    ...(answerNote !== undefined ? { answerNote } : {}),
+    ...(message.meta.closed === true ? { closed: true } : {}),
     ...(deliverables.length > 0 ? { deliverables } : {}),
   };
 }
@@ -565,40 +571,12 @@ function stripSequentialLetterPrefixes(items: readonly string[]): string[] | nul
 }
 
 /**
- * 提取 `hub ask` 可点击选项卡片的数据：
- * 1. 先调 `askOf(message)`，若为 null 则返回 null；
- * 2. 若 `ask.options` 存在且长度 ≥ 2：返回 `{ question: message.text.trim(), options: ask.options, answered: ask.answered === true }`；
- * 3. 若未显式传 `options`：开头一段非空问题文本 + 紧接着的 2～10 行单行选项，每行都必须显式以顺序字母
- *    `A. `/`A：`/`A: ` 开头（可带 `- `/`1. ` 列表前缀），后面没有其他正文段落，去掉字母前缀作为选项；
- *    普通 `- xxx`/`1. xxx` 列表（如列出几项配置请用户确认）不是单选题，返回 null，走普通 Markdown 渲染；
- * 4. 其他纯文本提问返回 null。
+ * 正文是“一段问题 + 紧接着 2～10 行单行选项”时拆出问题和选项：每行都显式以顺序字母 `A. `/`A：`/`A: ` 开头
+ * （可带 `- `/`1. ` 列表前缀），后面没有其他正文段落，去掉字母前缀作为选项；普通 `- xxx`/`1. xxx` 列表
+ * （如列出几项配置请用户确认）不是单选题，返回 null。
  */
-export interface ExtractedAskCard {
-  question: string;
-  options: string[];
-  answered: boolean;
-  recommended?: string;
-  chosenOption?: string;
-  gateRef?: GateRef;
-}
-
-export function extractAskCard(
-  message: Pick<Message, "sender" | "meta" | "text">,
-): ExtractedAskCard | null {
-  const ask = askOf(message);
-  if (ask === null) return null;
-  const answered = ask.answered === true;
-  const extras = {
-    ...(ask.recommended !== undefined ? { recommended: ask.recommended } : {}),
-    ...(ask.chosenOption !== undefined ? { chosenOption: ask.chosenOption } : {}),
-    ...(ask.gateRef !== undefined ? { gateRef: ask.gateRef } : {}),
-  };
-  if (ask.options !== undefined && ask.options.length >= ASK_MIN_OPTIONS) {
-    return { question: message.text.trim(), options: ask.options, answered, ...extras };
-  }
-  const trimmed = message.text.trim();
-  if (trimmed === "") return null;
-  const lines = trimmed.split(/\r?\n/);
+function letteredOptionsOf(text: string): { question: string; options: string[] } | null {
+  const lines = text.split(/\r?\n/);
   const firstListIdx = lines.findIndex((line) => ASK_LIST_ITEM_RE.test(line.trim()));
   if (firstListIdx <= 0) return null;
 
@@ -622,8 +600,43 @@ export function extractAskCard(
     rawItems.push(item);
   }
   const options = stripSequentialLetterPrefixes(rawItems);
-  if (options === null) return null;
-  return { question, options, answered, ...extras };
+  return options === null ? null : { question, options };
+}
+
+export interface ExtractedAskCard {
+  question: string;
+  options: string[];
+  answered: boolean;
+  recommended?: string;
+  chosenOption?: string;
+  answerNote?: string;
+  closed?: true;
+  gateRef?: GateRef;
+}
+
+/**
+ * `hub ask` 在对话里那张卡的数据，不是提问返回 null。选项取显式的 `meta.options`，没有就从正文拆
+ * （见 letteredOptionsOf），都没有时 options 为空、问题是全文。
+ */
+export function extractAskCard(
+  message: Pick<Message, "sender" | "meta" | "text">,
+): ExtractedAskCard | null {
+  const ask = askOf(message);
+  if (ask === null) return null;
+  const answered = ask.answered === true;
+  const extras = {
+    ...(ask.recommended !== undefined ? { recommended: ask.recommended } : {}),
+    ...(ask.chosenOption !== undefined ? { chosenOption: ask.chosenOption } : {}),
+    ...(ask.answerNote !== undefined ? { answerNote: ask.answerNote } : {}),
+    ...(ask.closed === true ? { closed: true as const } : {}),
+    ...(ask.gateRef !== undefined ? { gateRef: ask.gateRef } : {}),
+  };
+  const trimmed = message.text.trim();
+  if (ask.options !== undefined && ask.options.length >= ASK_MIN_OPTIONS) {
+    return { question: trimmed, options: ask.options, answered, ...extras };
+  }
+  const lettered = letteredOptionsOf(trimmed) ?? { question: trimmed, options: [] };
+  return { ...lettered, answered, ...extras };
 }
 
 /** 发给 agent 的系统消息的开头（设计第 7.3 节的来源标签）。 */

@@ -1535,7 +1535,7 @@ export function createLedgerTaskGraphs(
         node.decision_json === null
       ) {
         if (node.gate_ask_message_id !== null) {
-          messages.markAskAnsweredIn(p, node.gate_ask_message_id);
+          messages.settleAskIn(p, node.gate_ask_message_id, { by: "close" });
         }
         node.status = "pending";
         node.waiting_for = null;
@@ -2094,7 +2094,7 @@ export function createLedgerTaskGraphs(
     const t = now();
     // 若这张拍板卡此前已发过旧 AskMeta，先将旧消息标为已答再重发新提问
     if (node.gate_ask_message_id !== null) {
-      messages.markAskAnsweredIn(p, node.gate_ask_message_id);
+      messages.settleAskIn(p, node.gate_ask_message_id, { by: "close" });
     }
     const gateOptionsJson = gate.options.length > 0 ? JSON.stringify(gate.options) : null;
     const chatText = gateChatMessageText({
@@ -2383,7 +2383,7 @@ export function createLedgerTaskGraphs(
     for (const rmKey of removeKeySet) {
       const removed = existingNodes.find((n) => n.node_key === rmKey);
       if (removed?.gate_ask_message_id != null) {
-        messages.markAskAnsweredIn(p, removed.gate_ask_message_id);
+        messages.settleAskIn(p, removed.gate_ask_message_id, { by: "close" });
       }
       db.run("DELETE FROM task_graph_steps WHERE graph_id = ? AND node_key = ?", graphRow.id, rmKey);
     }
@@ -2429,7 +2429,7 @@ export function createLedgerTaskGraphs(
         (gate !== null || (u.nextBrief !== null && u.nextBrief.trim() !== ""));
       if (gate !== null) {
         if (cur.gate_ask_message_id !== null) {
-          messages.markAskAnsweredIn(p, cur.gate_ask_message_id);
+          messages.settleAskIn(p, cur.gate_ask_message_id, { by: "close" });
         }
         db.run(
           `UPDATE task_graph_steps
@@ -2515,7 +2515,7 @@ export function createLedgerTaskGraphs(
       }
       db.run("UPDATE task_graph_steps SET status = 'done', waiting_for = NULL, skipped = 1, updated_at = ? WHERE id = ?", t, cur.id);
       if (cur.gate_ask_message_id !== null) {
-        messages.markAskAnsweredIn(p, cur.gate_ask_message_id);
+        messages.settleAskIn(p, cur.gate_ask_message_id, { by: "close" });
       }
     }
 
@@ -2602,7 +2602,7 @@ export function createLedgerTaskGraphs(
     const t = now();
     const hadPendingCheckpoint = isStoredCheckpoint(node);
     if (node.status !== "done" && node.gate_ask_message_id !== null && node.decision_json === null) {
-      messages.markAskAnsweredIn(p, node.gate_ask_message_id);
+      messages.settleAskIn(p, node.gate_ask_message_id, { by: "close" });
     }
     // 已经完了（包括跳过的）只补记结果，不改“是不是跳过的”
     db.run(
@@ -2722,7 +2722,7 @@ export function createLedgerTaskGraphs(
         };
         const cleanedArtifactJson = serializeArtifact(readStoredArtifact(node.artifact_json).artifact, false);
         if (node.gate_ask_message_id !== null) {
-          messages.markAskAnsweredIn(p, node.gate_ask_message_id, CONFIRM_PASS_OPTION);
+          messages.settleAskIn(p, node.gate_ask_message_id, { by: "answer", chosenOption: CONFIRM_PASS_OPTION, ...(note !== null ? { note } : {}) });
         }
         db.run(
           `UPDATE task_graph_steps
@@ -2763,7 +2763,7 @@ export function createLedgerTaskGraphs(
       // 检查点打回：发回原 Worker 会话接着改，步骤切回 running，全程不叫醒 PM
       const targetWid = node.active_worker_id;
       if (node.gate_ask_message_id !== null) {
-        messages.markAskAnsweredIn(p, node.gate_ask_message_id, choice ?? CONFIRM_REJECT_OPTION);
+        messages.settleAskIn(p, node.gate_ask_message_id, { by: "answer", chosenOption: choice ?? CONFIRM_REJECT_OPTION, ...(note !== null ? { note } : {}) });
       }
       const cleanedArtifactJson = serializeArtifact(readStoredArtifact(node.artifact_json).artifact, false);
       const delivered =
@@ -2854,7 +2854,7 @@ export function createLedgerTaskGraphs(
     };
     const questionText = (node.gate_question ?? node.title).trim();
     if (node.gate_ask_message_id !== null) {
-      messages.markAskAnsweredIn(p, node.gate_ask_message_id, choice ?? undefined);
+      messages.settleAskIn(p, node.gate_ask_message_id, { by: "answer", ...(choice !== null ? { chosenOption: choice } : {}), ...(note !== null ? { note } : {}) });
     }
 
     if (node.active_worker_id !== null && bridge !== undefined) {
@@ -3099,7 +3099,7 @@ export function createLedgerTaskGraphs(
       node.id,
     );
     if (node.gate_ask_message_id !== null) {
-      messages.markAskAnsweredIn(p, node.gate_ask_message_id);
+      messages.settleAskIn(p, node.gate_ask_message_id, { by: "close" });
     }
 
     const progress = recomputeGraphProgressIn(p, graphRow, callerSession, context, { retractBlockedWaiting: false });
@@ -3161,7 +3161,7 @@ export function createLedgerTaskGraphs(
       graphRow.id,
     );
     for (const n of waitingNodes) {
-      if (n.gate_ask_message_id !== null) messages.markAskAnsweredIn(p, n.gate_ask_message_id);
+      if (n.gate_ask_message_id !== null) messages.settleAskIn(p, n.gate_ask_message_id, { by: "close" });
       if (isStoredCheckpoint(n)) {
         const cleaned = serializeArtifact(readStoredArtifact(n.artifact_json).artifact, false);
         db.run("UPDATE task_graph_steps SET artifact_json = ?, updated_at = ? WHERE id = ?", cleaned, t, n.id);
@@ -3681,7 +3681,7 @@ export function createLedgerTaskGraphs(
     const t = now();
     const hadPendingCheckpoint = isStoredCheckpoint(node);
     if (node.gate_ask_message_id !== null && node.decision_json === null) {
-      messages.markAskAnsweredIn(p, node.gate_ask_message_id);
+      messages.settleAskIn(p, node.gate_ask_message_id, { by: "close" });
     }
     const cleanedArtifactJson = serializeArtifact(readStoredArtifact(node.artifact_json).artifact, false);
     db.run(
@@ -3756,7 +3756,7 @@ export function createLedgerTaskGraphs(
     const t = now();
     const hadPendingCheckpoint = isStoredCheckpoint(node);
     if (node.gate_ask_message_id !== null && node.decision_json === null) {
-      messages.markAskAnsweredIn(p, node.gate_ask_message_id);
+      messages.settleAskIn(p, node.gate_ask_message_id, { by: "close" });
     }
     const cleanedArtifactJson = serializeArtifact(readStoredArtifact(node.artifact_json).artifact, false);
     db.run(
@@ -3893,7 +3893,7 @@ export function createLedgerTaskGraphs(
       if (node.confirm === 1) {
         const t = now();
         if (node.gate_ask_message_id !== null) {
-          messages.markAskAnsweredIn(p, node.gate_ask_message_id);
+          messages.settleAskIn(p, node.gate_ask_message_id, { by: "close" });
         }
         const gateQuestion = truncateChars(`请确认步骤「${node.title}」的结果`, MAX_GATE_QUESTION_CHARS);
         const gateOptions = [...CONFIRM_CHECKPOINT_OPTIONS];
@@ -4018,7 +4018,7 @@ export function createLedgerTaskGraphs(
     const t = now();
     const hadPendingCheckpoint = isStoredCheckpoint(node);
     if (node.gate_ask_message_id !== null && node.decision_json === null) {
-      messages.markAskAnsweredIn(p, node.gate_ask_message_id);
+      messages.settleAskIn(p, node.gate_ask_message_id, { by: "close" });
     }
     db.run(
       `UPDATE task_graph_steps
@@ -4088,7 +4088,7 @@ export function createLedgerTaskGraphs(
       const t = now();
       const hadPendingCheckpoint = isStoredCheckpoint(attnNode);
       if (attnNode.gate_ask_message_id !== null && attnNode.decision_json === null) {
-        messages.markAskAnsweredIn(p, attnNode.gate_ask_message_id);
+        messages.settleAskIn(p, attnNode.gate_ask_message_id, { by: "close" });
       }
       const cleanedArtifactJson = serializeArtifact(readStoredArtifact(attnNode.artifact_json).artifact, false);
       db.run(
@@ -4169,7 +4169,7 @@ export function createLedgerTaskGraphs(
     }
     const hadPendingCheckpoint = isStoredCheckpoint(node);
     if (node.gate_ask_message_id !== null && node.decision_json === null) {
-      messages.markAskAnsweredIn(p, node.gate_ask_message_id);
+      messages.settleAskIn(p, node.gate_ask_message_id, { by: "close" });
     }
     const cleanedArtifactJson = serializeArtifact(readStoredArtifact(node.artifact_json).artifact, false);
       db.run(

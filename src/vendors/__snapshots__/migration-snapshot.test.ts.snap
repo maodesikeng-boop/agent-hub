@@ -2773,6 +2773,7 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > agy 
 - **任务图**：\`hub graph create|show|list|patch|done|decide|skip|cancel|finish\`，用法在任务图手册里（第 2 步“建图”那一条写了去哪看，也可以 \`hub help graph\`）
 - **向用户提问**
   - \`hub ask [--option <选项>...] [--recommended <选项>] --stdin\`：向用户提问（卡片显示在对话里，用户直接在卡上点选；没回答时右栏和总助也会列出，回答后自动移走；跟用户说“卡在上面，直接点选”，别让用户去右栏找）；要给用户可点的选项时传 \`--option\`（至少 2 个），有倾向时用 \`--recommended\` 标出推荐项；要用户看的文件（方案、验收结论、截图、录屏）用 \`--file [标签=]路径\`（可多个）挂在卡片下面，不把路径写进问题里
+  - \`hub ask close <卡编号>\`：关掉自己名下一张还在等用户的卡（用户在对话里打字答了、没点卡，或问题过时了）；还在等的卡和编号在用户消息前面的系统说明里列着
 - **Worker**
   - \`hub worker start --title <标题> [--vendor claude|agy|codex|pi|deepseek|cursor] [--model <模型>] [--effort low|medium|high|xhigh|max|ultra|off|minimal] [--max-time <时长>] [--readonly] [--no-worktree] --stdin\`：派 Worker，正文是任务说明。\`--max-time\` 是这一轮最多跑多久（如 \`15m\`、\`1h\`，默认 \`30m\`），超了会叫醒你，不打断它。Git 仓库里每个 Worker 有自己的 worktree 和分支（\`hub/<编号>-<短名>\`），加 \`--no-worktree\` 就直接在主文件夹里干
   - \`hub worker send <编号> [--max-time <时长>] --stdin\`：回答它的问题或打回，原 Worker 接着干
@@ -2932,6 +2933,7 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > clau
 - **任务图**：\`hub graph create|show|list|patch|done|decide|skip|cancel|finish\`，用法在任务图手册里（第 2 步“建图”那一条写了去哪看，也可以 \`hub help graph\`）
 - **向用户提问**
   - \`hub ask [--option <选项>...] [--recommended <选项>] --stdin\`：向用户提问（卡片显示在对话里，用户直接在卡上点选；没回答时右栏和总助也会列出，回答后自动移走；跟用户说“卡在上面，直接点选”，别让用户去右栏找）；要给用户可点的选项时传 \`--option\`（至少 2 个），有倾向时用 \`--recommended\` 标出推荐项；要用户看的文件（方案、验收结论、截图、录屏）用 \`--file [标签=]路径\`（可多个）挂在卡片下面，不把路径写进问题里
+  - \`hub ask close <卡编号>\`：关掉自己名下一张还在等用户的卡（用户在对话里打字答了、没点卡，或问题过时了）；还在等的卡和编号在用户消息前面的系统说明里列着
 - **Worker**
   - \`hub worker start --title <标题> [--vendor claude|agy|codex|pi|deepseek|cursor] [--model <模型>] [--effort low|medium|high|xhigh|max|ultra|off|minimal] [--max-time <时长>] [--readonly] [--no-worktree] --stdin\`：派 Worker，正文是任务说明。\`--max-time\` 是这一轮最多跑多久（如 \`15m\`、\`1h\`，默认 \`30m\`），超了会叫醒你，不打断它。Git 仓库里每个 Worker 有自己的 worktree 和分支（\`hub/<编号>-<短名>\`），加 \`--no-worktree\` 就直接在主文件夹里干
   - \`hub worker send <编号> [--max-time <时长>] --stdin\`：回答它的问题或打回，原 Worker 接着干
@@ -3091,6 +3093,7 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > code
 - **任务图**：\`hub graph create|show|list|patch|done|decide|skip|cancel|finish\`，用法在任务图手册里（第 2 步“建图”那一条写了去哪看，也可以 \`hub help graph\`）
 - **向用户提问**
   - \`hub ask [--option <选项>...] [--recommended <选项>] --stdin\`：向用户提问（卡片显示在对话里，用户直接在卡上点选；没回答时右栏和总助也会列出，回答后自动移走；跟用户说“卡在上面，直接点选”，别让用户去右栏找）；要给用户可点的选项时传 \`--option\`（至少 2 个），有倾向时用 \`--recommended\` 标出推荐项；要用户看的文件（方案、验收结论、截图、录屏）用 \`--file [标签=]路径\`（可多个）挂在卡片下面，不把路径写进问题里
+  - \`hub ask close <卡编号>\`：关掉自己名下一张还在等用户的卡（用户在对话里打字答了、没点卡，或问题过时了）；还在等的卡和编号在用户消息前面的系统说明里列着
 - **Worker**
   - \`hub worker start --title <标题> [--vendor claude|agy|codex|pi|deepseek|cursor] [--model <模型>] [--effort low|medium|high|xhigh|max|ultra|off|minimal] [--max-time <时长>] [--readonly] [--no-worktree] --stdin\`：派 Worker，正文是任务说明。\`--max-time\` 是这一轮最多跑多久（如 \`15m\`、\`1h\`，默认 \`30m\`），超了会叫醒你，不打断它。Git 仓库里每个 Worker 有自己的 worktree 和分支（\`hub/<编号>-<短名>\`），加 \`--no-worktree\` 就直接在主文件夹里干
   - \`hub worker send <编号> [--max-time <时长>] --stdin\`：回答它的问题或打回，原 Worker 接着干
@@ -3250,6 +3253,7 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > curs
 - **任务图**：\`hub graph create|show|list|patch|done|decide|skip|cancel|finish\`，用法在任务图手册里（第 2 步“建图”那一条写了去哪看，也可以 \`hub help graph\`）
 - **向用户提问**
   - \`hub ask [--option <选项>...] [--recommended <选项>] --stdin\`：向用户提问（卡片显示在对话里，用户直接在卡上点选；没回答时右栏和总助也会列出，回答后自动移走；跟用户说“卡在上面，直接点选”，别让用户去右栏找）；要给用户可点的选项时传 \`--option\`（至少 2 个），有倾向时用 \`--recommended\` 标出推荐项；要用户看的文件（方案、验收结论、截图、录屏）用 \`--file [标签=]路径\`（可多个）挂在卡片下面，不把路径写进问题里
+  - \`hub ask close <卡编号>\`：关掉自己名下一张还在等用户的卡（用户在对话里打字答了、没点卡，或问题过时了）；还在等的卡和编号在用户消息前面的系统说明里列着
 - **Worker**
   - \`hub worker start --title <标题> [--vendor claude|agy|codex|pi|deepseek|cursor] [--model <模型>] [--effort low|medium|high|xhigh|max|ultra|off|minimal] [--max-time <时长>] [--readonly] [--no-worktree] --stdin\`：派 Worker，正文是任务说明。\`--max-time\` 是这一轮最多跑多久（如 \`15m\`、\`1h\`，默认 \`30m\`），超了会叫醒你，不打断它。Git 仓库里每个 Worker 有自己的 worktree 和分支（\`hub/<编号>-<短名>\`），加 \`--no-worktree\` 就直接在主文件夹里干
   - \`hub worker send <编号> [--max-time <时长>] --stdin\`：回答它的问题或打回，原 Worker 接着干
@@ -3409,6 +3413,7 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > deep
 - **任务图**：\`hub graph create|show|list|patch|done|decide|skip|cancel|finish\`，用法在任务图手册里（第 2 步“建图”那一条写了去哪看，也可以 \`hub help graph\`）
 - **向用户提问**
   - \`hub ask [--option <选项>...] [--recommended <选项>] --stdin\`：向用户提问（卡片显示在对话里，用户直接在卡上点选；没回答时右栏和总助也会列出，回答后自动移走；跟用户说“卡在上面，直接点选”，别让用户去右栏找）；要给用户可点的选项时传 \`--option\`（至少 2 个），有倾向时用 \`--recommended\` 标出推荐项；要用户看的文件（方案、验收结论、截图、录屏）用 \`--file [标签=]路径\`（可多个）挂在卡片下面，不把路径写进问题里
+  - \`hub ask close <卡编号>\`：关掉自己名下一张还在等用户的卡（用户在对话里打字答了、没点卡，或问题过时了）；还在等的卡和编号在用户消息前面的系统说明里列着
 - **Worker**
   - \`hub worker start --title <标题> [--vendor claude|agy|codex|pi|deepseek|cursor] [--model <模型>] [--effort low|medium|high|xhigh|max|ultra|off|minimal] [--max-time <时长>] [--readonly] [--no-worktree] --stdin\`：派 Worker，正文是任务说明。\`--max-time\` 是这一轮最多跑多久（如 \`15m\`、\`1h\`，默认 \`30m\`），超了会叫醒你，不打断它。Git 仓库里每个 Worker 有自己的 worktree 和分支（\`hub/<编号>-<短名>\`），加 \`--no-worktree\` 就直接在主文件夹里干
   - \`hub worker send <编号> [--max-time <时长>] --stdin\`：回答它的问题或打回，原 Worker 接着干
@@ -3568,6 +3573,7 @@ exports[`迁移前快照：提示词（每家 × 项目经理、Worker） > pi �
 - **任务图**：\`hub graph create|show|list|patch|done|decide|skip|cancel|finish\`，用法在任务图手册里（第 2 步“建图”那一条写了去哪看，也可以 \`hub help graph\`）
 - **向用户提问**
   - \`hub ask [--option <选项>...] [--recommended <选项>] --stdin\`：向用户提问（卡片显示在对话里，用户直接在卡上点选；没回答时右栏和总助也会列出，回答后自动移走；跟用户说“卡在上面，直接点选”，别让用户去右栏找）；要给用户可点的选项时传 \`--option\`（至少 2 个），有倾向时用 \`--recommended\` 标出推荐项；要用户看的文件（方案、验收结论、截图、录屏）用 \`--file [标签=]路径\`（可多个）挂在卡片下面，不把路径写进问题里
+  - \`hub ask close <卡编号>\`：关掉自己名下一张还在等用户的卡（用户在对话里打字答了、没点卡，或问题过时了）；还在等的卡和编号在用户消息前面的系统说明里列着
 - **Worker**
   - \`hub worker start --title <标题> [--vendor claude|agy|codex|pi|deepseek|cursor] [--model <模型>] [--effort low|medium|high|xhigh|max|ultra|off|minimal] [--max-time <时长>] [--readonly] [--no-worktree] --stdin\`：派 Worker，正文是任务说明。\`--max-time\` 是这一轮最多跑多久（如 \`15m\`、\`1h\`，默认 \`30m\`），超了会叫醒你，不打断它。Git 仓库里每个 Worker 有自己的 worktree 和分支（\`hub/<编号>-<短名>\`），加 \`--no-worktree\` 就直接在主文件夹里干
   - \`hub worker send <编号> [--max-time <时长>] --stdin\`：回答它的问题或打回，原 Worker 接着干

@@ -1,6 +1,6 @@
 // 四类动作的处理函数（m1-plan 第 3 节接口约定第 3、6 条；m2-plan 第 3 节接口约定第 6 条；m3-plan 第 3 节接口约定）。
 // - session.start → driver.start(sessionId)；
-// - session.send → 读出消息（写给 agent 的文字和标签用 deliveryParts），调 driver.send：written（含忙时中途交给 agent 的）/ cancelled / rejected → done；
+// - session.send → 读出消息（写给 agent 的文字和标签用 ledger.deliveryOf，带上账本里在等的卡），调 driver.send：written（含忙时中途交给 agent 的）/ cancelled / rejected → done；
 //   queued（会话正忙、驱动层自己排着）→ later；written 了但账本那边又回到排队中（send 期间被收回）→ later；
 //   额度用完 → later，到额度恢复再试；可重试的 DriverError 直接抛给执行器退避；
 // - session.end → driver.end，等会话 ended 之后作废它的令牌、推一次会话状态（Worker 收工也走这里）；
@@ -16,7 +16,6 @@ import {
   RATE_LIMIT_RECHECK_PAD_MS,
   SessionTokenRevokedError,
   WORKER_FIRST_TURN_RECHECK_MS,
-  deliveryParts,
   diffReviewSnapshot,
   isQuotaExhausted,
   type ActionHandler,
@@ -46,6 +45,7 @@ export interface HandlerDeps {
     | "waitsForHandover"
     | "graphDeliveryProbeTarget"
     | "enrichDeliveryNoteMessage"
+    | "deliveryOf"
   >;
   sessions: Pick<SessionStore, "get">;
   /** 和 agent 接口、prepareLaunch 用的是同一个实例。 */
@@ -137,7 +137,7 @@ export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"sess
     }
     let result;
     // 用户写的字 + 附件的完整路径；Worker 对话里用户直接说的话另带标签，驱动层放在原文前面单独一块（shared/worker.ts）
-    const { prefixes, text } = deliveryParts(message);
+    const { prefixes, text } = deps.ledger.deliveryOf(message);
     try {
       result = await deps.driver.send(sessionId, {
         messageIds: [messageId],

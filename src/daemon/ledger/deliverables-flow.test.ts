@@ -220,6 +220,41 @@ describe("交付物", () => {
       expect(db.get<{ n: number }>("SELECT count(*) AS n FROM messages WHERE json_extract(meta, '$.needsUser') = 1")!.n).toBe(0);
     });
 
+    it("带文件的卡：用户发普通消息、回答另一张卡都不关它，文件还在；了结后文件照旧挂在卡上", () => {
+      const withFiles = ledger.hubCall(lin.sessionId, "ask", {
+        text: "方案好了，请验收",
+        options: ["通过", "打回"],
+        files: [{ label: "方案", path: path("docs/plan.md") }],
+      }).data.messageId;
+      const plain = ledger.hubCall(lin.sessionId, "ask", { text: "用 A 还是 B？", options: ["A", "B"] }).data.messageId;
+      const rowOf = (id: MessageId) =>
+        db.get<{ status: string; deliverables_json: string | null }>(
+          "SELECT i.status, d.deliverables_json FROM router_items i LEFT JOIN router_item_deliverables d ON d.item_id = i.id WHERE i.ask_message_id = ?",
+          id,
+        )!;
+
+      ledger.postUserMessage({ conversationId: lin.conversationId, clientId: "plain-1", text: "先看看再说" });
+      ledger.answerAsk(plain, { clientId: "click-b", choice: "B" });
+      expect([rowOf(withFiles).status, rowOf(plain).status]).toEqual(["pending", "resolved"]);
+      expect(askOf(messageById(withFiles)!)?.answered).toBeUndefined();
+      expect(labels(askOf(messageById(withFiles)!)?.deliverables)).toEqual(["方案"]);
+      expect(labels(pendingDecisionsOf(ledger.snapshot()).find((d) => d.askMessageId === withFiles)?.deliverables)).toEqual(["方案"]);
+
+      ledger.answerAsk(withFiles, { clientId: "click-ok", choice: "通过", note: "看过了" });
+      expect(askOf(messageById(withFiles)!)).toMatchObject({ answered: true, chosenOption: "通过", answerNote: "看过了" });
+      expect(labels(askOf(messageById(withFiles)!)?.deliverables)).toEqual(["方案"]);
+      expect(rowOf(withFiles).status).toBe("resolved");
+      expect(labels(deliverablesOf(JSON.parse(rowOf(withFiles).deliverables_json ?? "[]")))).toEqual(["方案"]);
+    });
+
+    it("带文件的卡被 hub ask close 关掉：标成已关掉，文件还在卡上", () => {
+      const id = ledger.hubCall(lin.sessionId, "ask", { text: "截图对吗？", files: [{ label: "桌面截图", path: path("desktop.png") }] }).data.messageId;
+      const item = routerItems().find((i) => i.kind === "decision" && i.askMessageId === id)!;
+      ledger.hubCall(lin.sessionId, "ask.close", { itemId: item.id });
+      expect(askOf(messageById(id)!)).toMatchObject({ answered: true, closed: true });
+      expect(labels(askOf(messageById(id)!)?.deliverables)).toEqual(["桌面截图"]);
+    });
+
     it("超过 HUB_FILE_ARGS_MAX 个时拒绝", () => {
       const files = Array.from({ length: HUB_FILE_ARGS_MAX + 1 }, () => ({ label: null, path: path("verdict.md") }));
       expect(() => ledger.hubCall(lin.sessionId, "ask", { text: "看看", files })).toThrow(`最多 ${HUB_FILE_ARGS_MAX} 个`);

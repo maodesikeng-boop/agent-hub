@@ -328,6 +328,72 @@ describe("四处入口", () => {
     expect(card.querySelector(`a[href="${plan.href}"]`)).toBeNull();
   });
 
+  describe("带文件的提问卡什么时候了结", () => {
+    const cardOf = (id: number) => document.querySelector<HTMLElement>(`[data-message-id="${id}"] [data-ask-card]`)!;
+    const optionsOf = (card: HTMLElement) => within(card).getAllByRole("button").filter((b) => b.hasAttribute("data-ask-option"));
+    async function expectPlanOpens(card: HTMLElement) {
+      const files = card.querySelector<HTMLElement>("[data-deliverables]")!;
+      await user.click(within(files).getByRole("button", { name: "方案" }));
+      expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    }
+
+    it("用户在输入框发一条普通消息：卡还在等，文件行还能点开", async () => {
+      const ask = askMessage({ id: 60, text: "方案好了，请验收", meta: { needsUser: true, options: ["通过", "打回"], deliverables: [plan] } });
+      const snapshot = makeSnapshot({ conversations: [makeConvSnapshot([ask])] });
+      openFirstConversation(snapshot);
+      const api = await bootApp(snapshot);
+      await waitFor(() => expect(cardOf(60)).not.toBeNull());
+      fireEvent.change(screen.getByRole("textbox"), { target: { value: "先看看再说" } });
+      fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+      await waitFor(() => expect(api.calls.some((c) => c.path === "/api/conversations/1/messages")).toBe(true));
+      for (const b of optionsOf(cardOf(60))) expect(b).not.toBeDisabled();
+      await expectPlanOpens(cardOf(60));
+    });
+
+    it("两张卡答掉一张：另一张带文件的卡还在等，文件行还能点开", async () => {
+      const withFiles = askMessage({ id: 61, text: "方案好了，请验收", meta: { needsUser: true, options: ["通过", "打回"], deliverables: [plan, shot] } });
+      const other = askMessage({ id: 62, text: "用 A 还是 B？", meta: { needsUser: true, options: ["A", "B"] } });
+      const snapshot = makeSnapshot({ conversations: [makeConvSnapshot([withFiles, other])] });
+      openFirstConversation(snapshot);
+      const api = await bootApp(snapshot);
+      await waitFor(() => expect(cardOf(62)).not.toBeNull());
+      await user.click(optionsOf(cardOf(62))[1]!);
+      await waitFor(() => expect(api.calls.filter((c) => c.path === "/api/asks/62/answer")).toHaveLength(1));
+      expect(api.calls.filter((c) => c.path === "/api/asks/61/answer")).toEqual([]);
+      for (const b of optionsOf(cardOf(61))) expect(b).not.toBeDisabled();
+      expect(within(cardOf(61).querySelector<HTMLElement>("[data-deliverables]")!).getByRole("img", { name: "桌面截图" })).toBeInTheDocument();
+      await expectPlanOpens(cardOf(61));
+    });
+
+    it("了结后的卡：文件行在上，回答那一行、Closed 在下，文件照样能点开", async () => {
+      const answeredCard = askMessage({
+        id: 63,
+        text: "方案好了，请验收",
+        meta: { needsUser: true, answered: true, options: ["通过", "打回"], chosenOption: "通过", answerNote: "看过了", deliverables: [plan] },
+      });
+      const closedCard = askMessage({ id: 64, text: "截图对吗？", meta: { needsUser: true, answered: true, closed: true, deliverables: [shot] } });
+      const snapshot = makeSnapshot({ conversations: [makeConvSnapshot([answeredCard, closedCard])] });
+      openFirstConversation(snapshot);
+      await bootApp(snapshot);
+      await waitFor(() => expect(cardOf(64)).not.toBeNull());
+
+      const answered = cardOf(63);
+      const files = answered.querySelector<HTMLElement>("[data-deliverables]")!;
+      const answer = answered.querySelector<HTMLElement>("[data-ask-answer]")!;
+      expect(answer).toHaveTextContent("看过了");
+      expect(files.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(within(answered).queryByText("Closed")).toBeNull();
+
+      const closed = cardOf(64);
+      const closedFiles = closed.querySelector<HTMLElement>("[data-deliverables]")!;
+      const closedMark = within(closed).getByText("Closed");
+      expect(within(closedFiles).getByRole("img", { name: "桌面截图" })).toBeInTheDocument();
+      expect(closedFiles.compareDocumentPosition(closedMark) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(within(closed).queryByRole("textbox")).toBeNull();
+      await expectPlanOpens(answered);
+    });
+  });
+
   it("果皮轨门禁卡：摘要里写了交付物的同一个本机链接，链接也能点开预览", () => {
     const graph = gateGraph();
     graph.nodes[0] = { ...graph.nodes[0]!, gateSummaryMd: `**摘要**：做完了，结论见[验收结论](${verdict.href})` };
