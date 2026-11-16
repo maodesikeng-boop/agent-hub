@@ -143,11 +143,13 @@ describe("右栏的“等你确定”", () => {
     expect(rail()).not.toBeInTheDocument();
   });
 
-  it("在输入框里发出去：马上消失，不等服务端确认", async () => {
+  it("在输入框里发一条普通消息：右栏的提问还在（发消息不回答任何卡），发送中、发完都一样", async () => {
     await boot(twoPms([ask({ id: 1, text: QUESTION })]));
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "用 A" } });
     fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
-    await waitFor(() => expect(asksGroup()).toBeNull());
+    expect(askRows()).toHaveLength(1);
+    await waitFor(() => expect(api.calls.some((c) => c.path === "/api/conversations/1/messages")).toBe(true));
+    expect(askRows()).toHaveLength(1);
   });
 
   it("用户先发的消息不算：提问在用户消息之后，照样显示", async () => {
