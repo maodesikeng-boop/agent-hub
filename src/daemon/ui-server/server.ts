@@ -585,6 +585,7 @@ const vendorSyncApplyBodySchema = z
     removeMcpKeys: z.array(syncItemKeySchema).max(MAX_VENDOR_SYNC_MCP_ITEMS),
     selectedSkillKeys: z.array(syncItemKeySchema).max(MAX_VENDOR_SYNC_SKILL_ITEMS),
     removeSkillKeys: z.array(syncItemKeySchema).max(MAX_VENDOR_SYNC_SKILL_ITEMS),
+    confirmedHostBoundMcpKeys: z.array(syncItemKeySchema).max(MAX_VENDOR_SYNC_MCP_ITEMS).optional(),
   })
   .strict();
 
@@ -1324,7 +1325,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     });
 
     routes.get(API_PATHS.selfReload, async (): Promise<SelfReloadStatus> =>
-      opts.selfReload?.status() ?? { state: "idle", build: false, requestedAt: null, busy: [], lastFailure: null },
+      opts.selfReload?.status() ?? { state: "idle", build: false, requestedAt: null, deadlineAt: null, overdue: false, busy: [], unresumable: [], lastFailure: null },
     );
 
     routes.get(API_PATHS.state, async (req): Promise<StateSnapshot> => {
@@ -1365,8 +1366,15 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
 
     routes.post(API_PATHS.vendorSyncApply, async (req): Promise<VendorSyncApplyResponse> => {
       if (!opts.vendorSync) throw new HttpError(501, "vendor sync unavailable");
-      const raw = parseWithSchema(vendorSyncApplyBodySchema, req.body) satisfies VendorSyncApplyRequest;
-      return opts.vendorSync.apply(raw);
+      const raw = parseWithSchema(vendorSyncApplyBodySchema, req.body);
+      const request: VendorSyncApplyRequest = {
+        selectedMcpKeys: raw.selectedMcpKeys,
+        removeMcpKeys: raw.removeMcpKeys,
+        selectedSkillKeys: raw.selectedSkillKeys,
+        removeSkillKeys: raw.removeSkillKeys,
+        ...(raw.confirmedHostBoundMcpKeys !== undefined ? { confirmedHostBoundMcpKeys: raw.confirmedHostBoundMcpKeys } : {}),
+      };
+      return opts.vendorSync.apply(request);
     });
 
     routes.get(API_PATHS.providers, async (req): Promise<ProvidersStatusResponse> => {

@@ -87,7 +87,7 @@ B 的结论是看代码得出的，没起真进程试推送。只读本来就不
 
 - 建目录：本机实测本仓库 `git worktree add --detach` 0.4 秒，检出 34 MB（对象库和实现共用，不复制）。
 - 准备命令要跑，不然测试跑不起来。本仓库 `pnpm install --frozen-lockfile` 3.4 秒，node_modules 从 pnpm store 硬链接，基本不多占盘；整个准备命令 29 秒，大头是 `codegraph init`（项目自己配的，不是本方案加的）。一个审查步骤多 30 秒左右，跟审查本身动辄十几分钟比可以接受。
-- 清理：审查目录是一次性的。Worker 收工就能删（PASS 后步骤 done 自动收工），不等 3 天，不建 `hub/detached-*` 保护分支，有未提交改动也用 `git worktree remove --force` 删。判 FAIL 时 Worker 停在 waiting、不收工，目录留给项目经理看复现，收工后再删。`worktree-cleanup.ts` 按 `review_json` 不为空识别这类目录。
+- 清理：审查目录是一次性的。Worker 收工就能删（PASS 后步骤 done 自动收工），不等 3 天，不建 `hub/detached-*` 保护分支，有未提交改动也删，不跑 `git status`、不占每轮名额，和别的 worktree 一样先整个挪进 `.trash` 再删。判 FAIL 时 Worker 停在 waiting、不收工，目录留给项目经理看复现，收工后再删。`worktree-cleanup.ts` 按 `review_json` 不为空识别这类目录。
 - 核对：最多三条命令（本地一条、`ls-remote` 一条、`gh` 一条），每个审查步骤只跑一次，不进循环。`review_json` 每个 Worker 一行，不新增会随时间变多的内存结构。
 
 ## 5. 统一
@@ -103,7 +103,7 @@ B 的结论是看代码得出的，没起真进程试推送。只读本来就不
 - `src/daemon/ledger/workers.ts`：`dispatchStepWorkerIn` 和 `hub worker start --node` 换人那条路都处理 `review` plan，审查步骤带 `--no-worktree` 拒绝；`getWorktreeTask` 给审查 Worker 返回 `checkout: { kind: "review" }`。
 - `src/daemon/store/migrate.ts`：加列 `workers.review_json`。
 - `src/shared/ledger.ts`、`src/shared/actions.ts`：`WorktreeTask.checkout`，新动作 `review.verify`。
-- `src/daemon/git/git.ts`：`addWorktree` 的 `branch` 可以是 null（`--detach`）；加 `remoteBranchHead`；`removeWorktree` 加 `force`。`src/daemon/handlers.ts`：`worktree.create` 记开审时的被审分支，加 `review.verify` 处理器。
+- `src/daemon/git/git.ts`：`addWorktree` 的 `branch` 可以是 null（`--detach`）；加 `remoteBranchHead`。`src/daemon/handlers.ts`：`worktree.create` 记开审时的被审分支，加 `review.verify` 处理器。
 - `src/daemon/launch.ts`：审查 Worker 的 env 加禁推配置，启动目录里写 `review-hooks/pre-push`。
 - `src/shared/worker.ts`：`parseWorkerReport` 认“结论”“验证提交”。
 - `src/daemon/worktree-cleanup.ts`：审查目录收工即删。

@@ -376,6 +376,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       });
     },
     stopMessage: messages.stopMessage,
+    turnsLostOnShutdown: messages.turnsLostOnShutdown,
 
     reportHealth(module, error) {
       write((p) => reportHealthIn(p, module, error));

@@ -23,6 +23,7 @@ import type { LedgerSchedules } from "./schedules.ts";
 import type { LedgerTaskGraphs } from "./task-graphs.ts";
 import type { createLedgerWorkerView } from "./worker-view.ts";
 import type { LedgerWorkers } from "./workers.ts";
+import { describeSelfReload } from "../self-reload.ts";
 
 const projectCreateArgsSchema = z.object({
   folder: z.string(),
@@ -154,8 +155,10 @@ export function createLedgerHubCommands(
         const { summaries, textBlock } = taskGraphs.pmStatusGraphs(pm.id);
         // 手里有图时带上手册路径：换了会话、厂商压缩丢了前文之后靠这一行找回来（第 7 节第 3 条）
         const manual = summaries.length > 0 ? taskGraphManual(caller.id) : "";
+        const selfReload = context.selfReload !== undefined && context.selfReload.state !== "idle" ? context.selfReload : undefined;
+        const reloadNote = selfReload === undefined ? "" : `\n${describeSelfReload(selfReload)}`;
         return {
-          text: `你是项目经理“${pm.name}”（${PM_MODE_LABELS[pm.mode as PmMode]}），${describeProject(project)}${describeSetup(project, setupCommand)}${textBlock}${manual === "" ? "" : `\n${manual}`}`,
+          text: `你是项目经理“${pm.name}”（${PM_MODE_LABELS[pm.mode as PmMode]}），${describeProject(project)}${describeSetup(project, setupCommand)}${textBlock}${manual === "" ? "" : `\n${manual}`}${reloadNote}`,
           data: {
             role: "pm",
             pm: { id: pm.id, name: pm.name, mode: pm.mode as PmMode },
@@ -164,6 +167,7 @@ export function createLedgerHubCommands(
             project,
             setupCommand,
             ...(summaries.length > 0 ? { activeTaskGraphs: summaries } : {}),
+            ...(selfReload !== undefined ? { selfReload } : {}),
           },
         };
       }

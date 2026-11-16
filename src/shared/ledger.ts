@@ -50,6 +50,7 @@ import type { DeviceRouterDigest, RouterSettings } from "./router.ts";
 import type { HandoverId, LedgerHandoverWork } from "./handover.ts";
 import type { HubArgs, HubCommand, HubResult, ProjectCard, WorkerPr, WorkerPrProbeResult } from "./hub.ts";
 import type { ReviewSnapshot, ReviewVerifyResult } from "./review.ts";
+import type { SelfReloadStatus } from "./api.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
 import { API_ERRORS } from "./errors.ts";
 import type { AgentVendor, ModelCatalog, VendorAvailability, VendorAvailabilityMap } from "./vendors.ts";
@@ -354,6 +355,8 @@ export interface HubCallContext {
   modelCatalogs?: readonly ModelCatalog[];
   /** graph.finish：agent 接口在结束图前异步查好的 PR（按分支名或手工补记的 PR 网址索引；查不到或未装 gh 的不在此表中，不硬拦）。 */
   graphPrs?: Readonly<Record<string, WorkerPr>>;
+  /** status（项目经理）：热重启的登记状态；守护进程不支持热重启时没有这一项。 */
+  selfReload?: SelfReloadStatus;
 }
 
 /**
@@ -637,6 +640,11 @@ export interface Ledger extends LedgerHandoverWork {
    * 和这条写在同一行。不单独登记 session.start 去写恢复说明（单独一行会自己占一轮，那一轮的回复对不上任何消息）。
    * 重复登记按 NewAction 的规则重置已结束的动作。返回登记了什么，方便日志和测试。
    */
+  /**
+   * 正在跑、守护进程关机打断后不会重发的轮次（项目经理、总助正在回用户发的消息），每个会话一条。
+   * 热重启过了等待上限后只等这些（daemon/self-reload.ts）；会重发的（Worker 轮次、系统消息）见 recoverAfterRestart。
+   */
+  turnsLostOnShutdown(): Array<{ sessionId: SessionId; role: AgentRole }>;
   recoverAfterRestart(): { resentMessageIds: MessageId[]; requeuedMessageIds: MessageId[]; recoveredSessionIds: SessionId[] };
   /** 新建项目经理（界面；第一次启动没有项目经理时组装代码也调它）。见 CreatePmResult。 */
   createPm(input: CreatePmInput): CreatePmResult;

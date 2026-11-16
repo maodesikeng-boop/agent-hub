@@ -9,6 +9,7 @@ export {
   isBranchMergedToMain,
   isCommitMergedToMain,
   isRepoWithCommit,
+  moveWorktree,
   parseDiffNumstatZ,
   pinDetachedHead,
   probeDiffNumstat,
@@ -18,7 +19,6 @@ export {
   pruneWorktrees,
   realpathLoose,
   remoteBranchHead,
-  removeWorktree,
   resolveCommit,
 } from "./git.ts";
 export { probePr, probePrByUrl } from "./pr.ts";

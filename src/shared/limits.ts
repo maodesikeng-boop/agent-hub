@@ -600,7 +600,7 @@ export const WORKTREE_RETENTION_DAYS = 3;
 export const WORKTREE_RETENTION_MS = WORKTREE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 /** 后台多久跑一次 worktree 自动清理（每小时一次）。 */
 export const WORKTREE_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
-/** 每轮最多检查多少个已收工的候选 worktree（避免一次跑太多 git 子进程卡住后台）。 */
+/** 每轮最多对多少个已收工的候选 worktree 跑 git status（避免一次跑太多重的 git 子进程卡住后台；只读引用就能排除的候选不占名额）。 */
 export const WORKTREE_CLEANUP_BATCH_LIMIT = 10;
 
 // ---- 输入框 /hub:worker 选择列表与二次 Esc 回退 ----
@@ -839,8 +839,13 @@ export const MAX_VENDOR_SYNC_PREVIEW_CHARS = 240;
 export const MAX_VENDOR_SYNC_CONFIG_BYTES = 2 * 1024 * 1024;
 
 // ---- 空闲排空热重启（daemon/self-reload.ts、web/auto-reload.ts）----
-/** 全库空闲（没有会话在跑 / 停止中 / 准备中 / 等后台命令，总助分派引擎没有规划中或在途分派）后再静默这么久才重启；期间又有新轮次就顺延，重新等空闲。 */
+/** 全库空闲（没有会话在跑 / 停止中 / 准备中 / 等后台命令，总助分派引擎没有规划中或在途分派）后再静默这么久才重启；期间又有新轮次就顺延，重新等空闲（最多等到 SELF_RELOAD_DRAIN_MAX_MS）。 */
 export const SELF_RELOAD_QUIET_MS = 1_500;
+/**
+ * 登记后最多等全库空闲这么久（10 分钟）。Worker 全天连续在跑时全库空闲可能一直不出现，不设上限重启会被饿死。过了上限不再等重启后会重发的轮次
+ * （Worker 轮次、系统交给项目经理的消息，由 ledger 的 recoverAfterRestart 重发），只等重启后不会重发的（项目经理、总助正在回用户）回完就重启。
+ */
+export const SELF_RELOAD_DRAIN_MAX_MS = 10 * 60_000;
 /** 等空闲期间兜底重查的间隔：有些忙碌状态（总助在途管线收尾、后台写交接）结束时账本不一定推变化。只在登记了热重启时才跑。 */
 export const SELF_RELOAD_RECHECK_MS = 5_000;
 /** `hub self-reload --build` 的 pnpm build 最多跑多久（10 分钟），超时整组进程结束、取消本次重启。 */

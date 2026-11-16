@@ -8,6 +8,7 @@ import {
   ALL_EFFORTS,
   HUB_COMMANDS,
   MIN_SCHEDULE_EVERY_MINUTES,
+  SELF_RELOAD_DRAIN_MAX_MS,
   PM_MODES,
   PM_MODE_LABELS,
   PM_REVIEW_REDLINES_BRIEF,
@@ -817,7 +818,8 @@ describe("提示词：项目经理（M3）", () => {
       `${hub} router note (--text <备忘> | --stdin | --clear)`,
       `${hub} self-reload [--build]`,
       "等所有会话这一轮收尾",
-      "调它的这一轮也要先结束",
+      `最多等 ${SELF_RELOAD_DRAIN_MAX_MS / 60_000} 分钟，之后不再等 Worker 轮次和系统消息`,
+      "只等你、总助正在回用户的那一轮回完就重启",
       "失败就取消、不重启",
     ]) {
       expect(HUB_USAGE, detail).toContain(detail);

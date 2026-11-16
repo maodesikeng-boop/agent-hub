@@ -3,10 +3,11 @@
 import { Loader2 } from "lucide-react";
 import type { VendorSyncVendorBadge } from "../../shared/index.ts";
 import type { HubClient } from "../client.ts";
-import { VENDOR_STATUS_LABELS, useVendorSyncSetting } from "../settings-model.ts";
+import { VENDOR_STATUS_LABELS, useVendorSyncSetting, visibleMcpVendorBadges } from "../settings-model.ts";
 import { Button } from "../ui/button.tsx";
 import { Dialog, DialogBody, DialogContent, DialogFooter } from "../ui/dialog.tsx";
 import { Switch } from "../ui/switch.tsx";
+import { HostBoundNote } from "./HostBoundNote.tsx";
 import { ReadonlyValue, RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
 function VendorBadges({ badges }: { badges: readonly VendorSyncVendorBadge[] }) {
@@ -101,8 +102,9 @@ export function VendorSyncSettings({ client }: { client?: HubClient } = {}) {
                           ))}
                         </div>
                       )}
-                      {!isChecked && <span className="text-xs text-danger">Unchecked — will be removed</span>}
-                      <VendorBadges badges={item.vendors} />
+                      {item.hostBound && <HostBoundNote hostBound={item.hostBound} />}
+                      {!isChecked && !item.hostBound && <span className="text-xs text-danger">Unchecked — will be removed</span>}
+                      <VendorBadges badges={visibleMcpVendorBadges(item, isChecked)} />
                     </div>
                   );
                   return (
