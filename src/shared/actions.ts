@@ -1,8 +1,8 @@
-// 动作队列（设计第 12.2 节）。M1 两类动作，M2 加结束会话，M3 加建 worktree。
+// 动作队列（设计第 12.2 节）。M1 两类动作，M2 加结束会话，M3 加建 worktree，审查只查不修加收尾核对。
 import type { ActionId, MessageId, SessionId, WorkerId } from "./domain.ts";
 
 /** 会扩展，数据库不加 CHECK，用 isOneOf 校验。 */
-export const ACTION_TYPES = ["session.start", "session.send", "session.end", "worktree.create"] as const;
+export const ACTION_TYPES = ["session.start", "session.send", "session.end", "worktree.create", "review.verify"] as const;
 export type ActionType = (typeof ACTION_TYPES)[number];
 
 /** 待执行 / 执行中 / 完成 / 失败 / 放弃。 */
@@ -56,11 +56,28 @@ export interface WorktreeCreateParams {
   workerId: WorkerId;
 }
 
+/**
+ * 审查 Worker 汇报 PASS / PASS+NOTES 后的收尾核对（docs/review-verify-only-design.md 第 3.4 节）。账本事务里不做 I/O，
+ * 所以汇报到了步骤先保持在干，登记这个动作；处理函数：
+ * 1. ledger.getReviewVerifyTask(workerId) 取主文件夹和开审时记下的被审分支；null → done；
+ * 2. 现查本地分支、origin 上的同名分支和 PR，和开审时比；
+ * 3. ledger.onReviewVerified(params, 结果)：没变才按结论往下走，变了步骤停在等项目经理处理。
+ * git 出错抛给执行器按 ACTION_RETRY 重试；次数用完 ledger.onActionFailed 当成核对没跑成，步骤停在等项目经理处理。
+ */
+export interface ReviewVerifyParams {
+  workerId: WorkerId;
+  /** 那一轮的编号（汇报那一行的去重键，同 insertReport）。 */
+  turnMessageId: MessageId;
+  /** 汇报原文那条 agent 消息：核对完按它找回汇报。 */
+  reportMessageId: MessageId;
+}
+
 interface ActionParamsMap {
   "session.start": SessionStartParams;
   "session.send": SessionSendParams;
   "session.end": SessionEndParams;
   "worktree.create": WorktreeCreateParams;
+  "review.verify": ReviewVerifyParams;
 }
 
 /** 动作表的一行。T 是单个类型时 params 跟着确定；要按 type 收窄请用 AnyActionRow。 */
@@ -103,6 +120,8 @@ export function actionDedupeKey(action: NewAction): string {
       return `${action.params.sessionId}:${action.params.generation}`;
     case "worktree.create":
       return String(action.params.workerId);
+    case "review.verify":
+      return `${action.params.workerId}:${action.params.reportMessageId}`;
   }
 }
 
@@ -132,6 +151,8 @@ export const ACTION_RETRY: Record<ActionType, RetryPolicy> = {
   "session.end": { baseMs: 5_000, maxMs: 300_000, maxAttempts: 3 },
   // git 偶尔失败（锁文件、磁盘忙），隔几秒再试；3 次还不行就告诉项目经理
   "worktree.create": { baseMs: 5_000, maxMs: 300_000, maxAttempts: 3 },
+  // 查 origin、gh 偶尔断网，隔几秒再试；3 次还不行就当核对没跑成
+  "review.verify": { baseMs: 5_000, maxMs: 300_000, maxAttempts: 3 },
 };
 
 /** 第 attempt 次（从 1 起）失败后，隔多久再试：base × 2^(attempt-1)，不超过 maxMs。 */

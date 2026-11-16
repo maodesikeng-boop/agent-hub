@@ -20,7 +20,7 @@ import type {
 } from "./api.ts";
 import type { Attachment } from "./attachments.ts";
 import type { DriverEvent } from "./driver.ts";
-import type { AnyActionRow } from "./actions.ts";
+import type { AnyActionRow, ReviewVerifyParams } from "./actions.ts";
 import type {
   AgentRole,
   Conversation,
@@ -49,6 +49,7 @@ import type {
 import type { DeviceRouterDigest, RouterSettings } from "./router.ts";
 import type { HandoverId, LedgerHandoverWork } from "./handover.ts";
 import type { HubArgs, HubCommand, HubResult, ProjectCard, WorkerPr, WorkerPrProbeResult } from "./hub.ts";
+import type { ReviewSnapshot, ReviewVerifyResult } from "./review.ts";
 import type { SelfReloadStatus } from "./api.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
 import { API_ERRORS } from "./errors.ts";
@@ -288,10 +289,13 @@ export interface WorktreeTask {
   /** Worker 的会话：网页、hub worker list 上的“准备中”挂在它上面，停止也按它认。 */
   sessionId: SessionId;
   repo: string;
-  branch: string;
   worktreePath: string;
-  /** 分叉步骤新开 worktree 时指定的基准分支或提交（不传默认 HEAD）。 */
-  base?: string;
+  /**
+   * 检出什么：
+   * - branch：新开分支 branch，从 base 起（分叉步骤是上游分支，不传默认 HEAD）；
+   * - review：审查 Worker 不挂分支，detached 检出被审分支 branch 的提交，同时记下它开审时的样子（review.ts 的 ReviewSnapshot）。
+   */
+  checkout: { kind: "branch"; branch: string; base?: string } | { kind: "review"; branch: string };
   status: WorkerStatus;
   setupCommand: string | null;
 }
@@ -567,6 +571,17 @@ export interface Ledger extends LedgerHandoverWork {
    * 重启恢复（recoverAfterRestart）会给 open、在 worktree 里、base_commit 还是 NULL 的 Worker 重新登记 worktree.create。
    */
   onWorktreeCreated(workerId: WorkerId, baseCommit: string, setup?: SetupOutcome): void;
+  /** 审查目录建好、Worker 开工前，记下被审分支开审时的样子（workers.review_json 的 snapshot）。Worker 不是审查 Worker 什么也不做。 */
+  recordReviewSnapshot(workerId: WorkerId, snapshot: ReviewSnapshot): void;
+
+  // ---- review.verify 处理函数用（docs/review-verify-only-design.md 第 3.4 节）----
+  /** 审查 Worker 还开着、开审时记过被审分支：主文件夹和被审分支；别的 null。 */
+  getReviewVerifyTask(workerId: WorkerId): { repo: string; branch: string; snapshot: ReviewSnapshot } | null;
+  /**
+   * 核对完：被审分支没变就按那一轮汇报的结论往下走（自动完成或停下），变了步骤停在等项目经理处理、写明哪里变了。
+   * 那一轮之后项目经理或用户又给它发了话（新的一轮会再汇报、再核对）、Worker 已收工：什么也不做。
+   */
+  onReviewVerified(params: ReviewVerifyParams, result: ReviewVerifyResult): void;
 
   // ---- 组装代码用（M1 W5 接线，M2 起归 W6）----
   /**

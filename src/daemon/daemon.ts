@@ -76,7 +76,7 @@ import {
   createMultiVendorDriver,
   type ModelCatalogs,
 } from "./driver/index.ts";
-import { addWorktree, probeDiffNumstat, probePr } from "./git/index.ts";
+import { addWorktree, probeDiffNumstat, probePr, remoteBranchHead, resolveCommit } from "./git/index.ts";
 import { createFetchedQuota, mergeFetchedQuotas, queryFetchedQuota } from "./quota/fetched-quota.ts";
 import { vendorTranscriptPath } from "./driver/transcript.ts";
 import type { LedgerOptions } from "./ledger/ledger.ts";
@@ -84,6 +84,8 @@ import {
   createSessionEndHandler,
   createSessionSendHandler,
   createSessionStartHandler,
+  createReviewObserver,
+  createReviewVerifyHandler,
   createWorktreeCreateHandler,
   endedOnRevokedTokens,
 } from "./handlers.ts";
@@ -553,10 +555,18 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     executor.register("session.send", createSessionSendHandler(deps));
     // Worker 收工（hub worker end）登记 session.end：这一轮回完再关，然后作废它的令牌
     executor.register("session.end", createSessionEndHandler(deps));
+    // 审查步骤开审时记下被审分支、汇报 PASS 后核对它没被动过（docs/review-verify-only-design.md）
+    const observeReview = createReviewObserver({
+      resolveCommit: (folder, ref) => resolveCommit(folder, ref),
+      remoteBranchHead: (repo, branch) => remoteBranchHead(repo, branch),
+      probePr: (cwd, branch) => probePr(cwd, branch),
+    });
+    executor.register("review.verify", createReviewVerifyHandler({ ledger, observeReview }));
     executor.register(
       "worktree.create",
       createWorktreeCreateHandler({
         ledger,
+        observeReview,
         addWorktree,
         setup,
         setupLogPath: (workerId) => workerSetupLogPath(paths.setupLogsDir, workerId),
