@@ -322,6 +322,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - **水果刀拍板焦点（等你拍板的步骤：`waiting` + `waitingFor: "user"`，节点类型只剩一种，拍板卡挂在步骤上）**：
   - 等你拍板的步骤在所属泳道卡住一把微缩水果刀（直接复用 `KnifeAvatar`，刀身 `<linearGradient>` 由 `useId()` 生成实例级唯一 ID），刀下方沿本泳道延伸受阻虚线直通底部，同时旁路并行泳道在拍板卡左侧原样穿过不断线。
   - 右侧挂出整张图唯一一张浅果冻拍板卡（`rounded-2xl border border-primary bg-jelly px-3.5 py-3`）：标题用 `text-body font-semibold text-primary`，摘要支持 Markdown（`text-minor`）；推荐主选项按钮用 `rounded-xl bg-primary text-primary-foreground`（右标 `Recommended`），其余选项按钮用 `rounded-xl border border-border bg-background hover:bg-jelly-hover`；底部 `Add note` 展开补充输入框（`placeholder="Add a note, or type a custom reply…"`），同时支持**一键点选选项**、**输入备注后点选选项（选项 + 备注）**、以及**不选预设项直接 `Send` 自定义备注**，统一调用 `POST /api/task-graphs/:graphId/nodes/:nodeKey/decide`。
+  - **长内容不撑出卡片**（道理同第 11 条）：选项那一列的 `grid` 写 `grid-cols-1`，不然不换行的长选项（分支名、网址）会把整列撑得比卡宽，靠右的 `Recommended` 被推到卡外、右栏出现横向滚动条；选项文字和问题行写 `wrap-anywhere`，长词换行，不截断；`Recommended` `shrink-0`。
   - 标了 `confirm: true` 的用户检查点步骤（选项为「通过 / 打回」，推荐「通过」）自动默认展开底部补充输入框，方便用户在点「打回」或「通过」前一行填写修改意见，无需多点一次 `Add note`。
   - 拍板通过（`done`，带定案）后水果刀收起、果冻卡收合，该节点变回紧凑果皮轨单行，并在右侧显示所选简称（`text-xs text-foreground`）。
 - **要你动手的提醒卡（`UserBlockerCard`，步骤 `waiting` + `waitingFor: "user"` 且带 `userBlocker`，docs/user-blockers-design.md）**：
