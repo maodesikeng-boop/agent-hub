@@ -198,6 +198,13 @@ export function defineVendor<const Id extends string>(spec: VendorSpec<Id>): Ven
   return spec;
 }
 
+/** 用户原文以 prefix 开头（前面不能有空格）时的命令名，到第一个空白为止；不是命令、名字里带 `/`（文件路径）是 null。 */
+export function commandNameOf(text: string, prefix: string): string | null {
+  if (!text.startsWith(prefix)) return null;
+  const name = text.slice(prefix.length).split(/\s/u, 1)[0] ?? "";
+  return name === "" || name.includes("/") ? null : name;
+}
+
 /** 一组隐藏命令共用一个拦下的原因。 */
 export function blockedCommands(reason: string, names: readonly string[]): Record<string, string> {
   return Object.fromEntries(names.map((name) => [name, reason]));

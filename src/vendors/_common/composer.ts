@@ -13,6 +13,7 @@ import {
 } from "../../shared/index.ts";
 import { userContent } from "../../daemon/driver/protocol.ts";
 import type { VendorComposer, VendorComposerBase } from "../../daemon/vendors/types.ts";
+import { commandNameOf } from "../types.ts";
 
 /** 缓存的命令列表里这个名字是不是用户自己的（有这个名字、而且不是 builtin；名字不分大小写）。没缓存、列表里没有这个名字都是 false。 */
 function isUserOwned(name: string, known: readonly ComposerCommand[] | null): boolean {
@@ -24,11 +25,7 @@ function isUserOwned(name: string, known: readonly ComposerCommand[] | null): bo
 /** 按 vendorSpec(vendor).composer 生成不需要起进程的基础实现（各家在它上面改 parseCommands、mention、buildUserContent）。 */
 export function createSpecComposerBase(vendor: AgentVendor): VendorComposerBase {
   const spec = vendorSpec(vendor).composer;
-  const commandNameOf = (text: string): string | null => {
-    if (!text.startsWith(spec.commandPrefix)) return null;
-    const name = text.slice(spec.commandPrefix.length).split(/\s/u, 1)[0] ?? "";
-    return name === "" || name.includes("/") ? null : name;
-  };
+  const commandName = (text: string): string | null => commandNameOf(text, spec.commandPrefix);
   const blockedReasonOf = (name: string): string | null => {
     const key = name.toLowerCase();
     return Object.hasOwn(spec.blockedCommands, key) ? spec.blockedCommands[key]! : null;
@@ -38,10 +35,10 @@ export function createSpecComposerBase(vendor: AgentVendor): VendorComposerBase 
     parseCommands: parseComposerCommands,
     isHiddenCommand: (command) =>
       isInternalSkillCommand(command.name) || (command.builtin === true && blockedReasonOf(command.name) !== null),
-    isCommand: (text) => commandNameOf(text) !== null,
-    isCompactCommand: (text) => commandNameOf(text) === spec.compactCommand,
+    isCommand: (text) => commandName(text) !== null,
+    isCompactCommand: (text) => commandName(text) === spec.compactCommand,
     blockReason(text, known) {
-      const name = commandNameOf(text);
+      const name = commandName(text);
       const reason = name === null ? null : blockedReasonOf(name);
       if (name === null || reason === null || isUserOwned(name, known)) return null;
       return `/${name}：${reason}`;

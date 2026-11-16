@@ -4,26 +4,21 @@
 //   和“按路径读文件”兜底都指向这一个文件；
 // - hub help graph 打印同一份正文（hub/cli.ts），读不到文件时还有这条路；
 // - 基础提示词（daemon/prompt.ts）里只留三档判断、一句四类审查红线和指路的那句话。
-// 前后端都能引（不用 node:path）；cli.ts 也引它，所以只引 names.ts、hub.ts、limits.ts。
+// 前后端都能引（不用 node:path）；cli.ts 也引它，所以只引 names.ts、hub.ts、limits.ts、skill-names.ts。
 import { ASK_CARD_WHERE, TASK_GRAPH_CREATE_JSON_HINT, TASK_GRAPH_PATCH_JSON_HINT } from "./hub.ts";
 import { TAKEOVER_PREDECESSORS_MAX } from "./limits.ts";
-import { HUB_COMMAND as HUB, PRODUCT_PLUGIN_NAME } from "./names.ts";
+import { HUB_COMMAND as HUB } from "./names.ts";
+import { skillNameOf } from "./skill-names.ts";
 
 /** 技能名（目录名、frontmatter 的 name 都是它）。带 fusa 和 task-graph：本机已有别家的 orchestration 技能，撞名会加载错手册。 */
 export const TASK_GRAPH_SKILL_NAME = "fusa-task-graph";
 
 /**
- * 仅供项目经理模型后台按需加载的内部技能命令名（裸名、claude 插件前缀 `fusa:fusa-task-graph`、pi 前缀 `skill:fusa-task-graph`）：
- * 网页 `/` 斜杠命令弹窗过滤隐藏，不影响模型自身的原生技能清单加载。
+ * 是不是任务图技能的命令（`fusa-task-graph`、claude 插件的 `fusa:fusa-task-graph`、pi 的 `skill:fusa-task-graph`，前面可带 `/`、`$`）：
+ * 网页的 `/` 命令列表里藏起来，只给项目经理模型按需加载，不影响各家原生的技能清单。
  */
-const INTERNAL_SKILL_COMMAND_NAMES: ReadonlySet<string> = new Set([
-  TASK_GRAPH_SKILL_NAME,
-  `${PRODUCT_PLUGIN_NAME}:${TASK_GRAPH_SKILL_NAME}`,
-  `skill:${TASK_GRAPH_SKILL_NAME}`,
-]);
-
 export function isInternalSkillCommand(name: string): boolean {
-  return INTERNAL_SKILL_COMMAND_NAMES.has(name.trim().replace(/^[/\$]+/u, "").toLowerCase());
+  return skillNameOf(name.trim().replace(/^[/$]+/u, ""))?.toLowerCase() === TASK_GRAPH_SKILL_NAME;
 }
 
 /** 技能的说明：各家靠它决定要不要加载，先写什么时候加载，再写什么时候不用（上限 TASK_GRAPH_SKILL_DESCRIPTION_MAX_CHARS）。 */
