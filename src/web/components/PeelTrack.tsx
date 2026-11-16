@@ -5,6 +5,7 @@ import {
   isTaskGraphReadyToFinish,
   isTaskNodeWaitingPm,
   isTaskNodeWaitingUser,
+  userBlockerCardText,
   type ConversationId,
   type TaskGraph,
   type TaskGraphId,
@@ -21,6 +22,7 @@ import { Button } from "../ui/button.tsx";
 import { Input } from "../ui/input.tsx";
 import { KnifeAvatar } from "./KnifeAvatar.tsx";
 import { Markdown } from "./Markdown.tsx";
+import { UserBlockerCard } from "./UserBlockerCard.tsx";
 import { computeGraphComponents, fruitTrackVars, SliceWheelIcon } from "./SliceWheelIcon.tsx";
 
 type GutterKind = "station" | "parA" | "parB" | "coil" | "gate";
@@ -432,13 +434,17 @@ function PeelStageRow({
           <div className="flex min-h-8 items-center text-body font-semibold text-primary">
             <span className="truncate">{cleanPieceTitle(node.title)}</span>
           </div>
-          <GateDecisionCard
-            key={node.gateAskMessageId ?? node.key}
-            graphId={graphId}
-            node={node}
-            client={client}
-            className="rounded-tl-xl"
-          />
+          {node.userBlocker != null ? (
+            <UserBlockerCard blockerId={node.userBlocker.id} text={userBlockerCardText(node.userBlocker)} className="rounded-tl-xl" />
+          ) : (
+            <GateDecisionCard
+              key={node.gateAskMessageId ?? node.key}
+              graphId={graphId}
+              node={node}
+              client={client}
+              className="rounded-tl-xl"
+            />
+          )}
         </div>
       </div>
     );

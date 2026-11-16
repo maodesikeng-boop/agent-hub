@@ -169,6 +169,7 @@ describe("要用户动手的事：系统挂卡、处理完接着派", () => {
     const done = ledger.recheckUserBlocker(blockerId, "available");
     expect(done.resolved).toBe(true);
     expect(askOf(ledger.getMessage(cards[0]!.id)!)?.answered).toBe(true);
+    expect(ledger.getMessage(cards[0]!.id)!.text).not.toContain("刚查过");
     const a2 = showGraph(first.data.graph.id).nodes[0]!;
     const b2 = showGraph(second.id).nodes[0]!;
     expect(stateOf(a2)).toBe("running");
@@ -223,6 +224,8 @@ describe("要用户动手的事：系统挂卡、处理完接着派", () => {
     expect(send).toBeDefined();
     enqueued.length = 0;
 
+    // 执行器重试用完：先把这个动作标失败，再交给账本
+    db.run("UPDATE actions SET status = 'failed' WHERE id = ?", send.id);
     ledger.onActionFailed(send, "spawn_failed: codex exited before thread ready (exit 1): Error: authentication required. Run 'codex login' to log in");
 
     const node = showGraph(graph.id).nodes[0]!;

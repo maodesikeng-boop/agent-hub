@@ -355,11 +355,7 @@ export function createLocalTargetPort(options: LocalTargetPortOptions): RouterTa
               }
               if (op.vendor !== undefined && options.vendorUsable) {
                 const vendor = op.vendor as AgentVendor;
-                hubCtx.vendorStatus = {
-                  vendor,
-                  availability: await options.vendorUsable(vendor),
-                  device: resolveDeviceName(),
-                };
+                hubCtx.vendorStatus = { vendor, availability: await options.vendorUsable(vendor) };
               }
 
               const started = ledger.hubCall(

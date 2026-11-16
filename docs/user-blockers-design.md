@@ -18,7 +18,7 @@ interface UserBlocker extends UserBlockerCause {
 }
 ```
 
-- **谁在等**：被卡住的步骤（`task_graph_steps.user_blocker_id`）和起不来的 Worker（`user_blocker_workers`，带没送进去的消息编号）。
+- **谁在等**：被卡住的步骤（`user_blocker_steps`，不改步骤表的列）和起不来的 Worker（`user_blocker_workers`，带没送进去的消息编号）。
 - **怎么解除**：重查这家厂商在这台设备上的状态（`ModelCatalogs.list({ vendor, refresh: true })`），`isSelectable` 就解开。
 - 同一家厂商在这台设备上只有一条在等（`user_blockers` 上按 `vendor` 的部分唯一索引，`status = 'open'`）。每台守护进程只判断自己，所以设备是隐含的，存设备名只为卡上写清楚。
 
@@ -31,7 +31,7 @@ interface UserBlocker extends UserBlockerCause {
 | `hub worker start` 拒绝的原因 | 同一个 `userBlockerText`（替掉原来的 `vendorUnavailableMessage`） |
 | 重派 | 解开时：没派出去的步骤退回没轮到、重算整张图（自动开工）；起不来的 Worker 把失败的消息重新排队、步骤回到在干 |
 
-步骤离开“等用户”（换人、跳过、放行……）时，触发器 `task_graph_steps_user_blocker_clear` 把 `user_blocker_id` 清掉，
+步骤离开“等用户”（换人、跳过、放行……）时，触发器 `task_graph_steps_user_blocker_clear` 删掉它在 `user_blocker_steps` 里的那一行，
 各处改步骤状态的代码不用记得清它。
 
 ## 3. 哪些情况挂卡

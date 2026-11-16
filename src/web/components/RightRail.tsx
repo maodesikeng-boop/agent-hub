@@ -497,6 +497,8 @@ export function RailGroups({
     for (const graph of activeGraphs ?? []) {
       for (const node of graph.nodes) {
         if (node.gateAskMessageId !== null) gateMsgIds.add(node.gateAskMessageId);
+        // 要你动手的提醒卡已经挂在步骤上，同一张不在 Needs You 再出一次
+        if (node.userBlocker?.askMessageId != null) gateMsgIds.add(node.userBlocker.askMessageId);
       }
     }
     return asks.filter((ask) => askOf(ask)?.gateRef === undefined && !gateMsgIds.has(ask.id));

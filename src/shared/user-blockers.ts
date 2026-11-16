@@ -59,9 +59,11 @@ export function userBlockerText(cause: UserBlockerCause): string {
   return `这台设备（${cause.device}）的 ${name} 没登录：先在这台设备的终端里跑 \`${vendorSpec(cause.vendor).cli.loginCommand}\` 登录`;
 }
 
-/** 点了“已处理”、重查还不能用时卡上补的一句。 */
-export function userBlockerRecheckText(availability: VendorAvailability): string {
-  return availability === "not_installed" ? "刚查过，还是没装。" : "刚查过，还是没登录。";
+/** 提醒卡的正文：要做什么；点过 Done、重查还不能用的，后面补一句。对话里那条消息和任务图步骤上的卡都用它。 */
+export function userBlockerCardText(blocker: UserBlockerCause & Pick<UserBlocker, "recheckedAs">): string {
+  const head = `${userBlockerText(blocker)}。`;
+  if (blocker.recheckedAs === null) return head;
+  return `${head}\n\n${blocker.recheckedAs === "not_installed" ? "刚查过，还是没装。" : "刚查过，还是没登录。"}`;
 }
 
 /** 账本派 Worker 时发现要用户动手：带着原因抛出，自动开工的那一步据此挂卡等用户，而不是交给项目经理。 */

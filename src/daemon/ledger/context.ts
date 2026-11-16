@@ -1,5 +1,6 @@
 // 账本各部分共用的东西：数据库、事务（write：提交后才推变化、通知动作和停止请求）、动作登记、健康状态。
 // 账本拆成几个文件（messages.ts、sessions.ts……），都拿同一个 LedgerContext；只有 createLedger 建它。
+import { hostname } from "node:os";
 import type { AnyActionRow, NewAction } from "../../shared/actions.ts";
 import type { Change, ChangeType, ComposerCommand } from "../../shared/api.ts";
 import type { AgentSessionRow, ConversationId, HealthModule, SessionId } from "../../shared/domain.ts";
@@ -88,6 +89,8 @@ export interface LedgerContext {
   commandBlockReason(session: Pick<AgentSessionRow, "vendor" | "cwd" | "addDirs">, text: string): string | null;
   /** 这台机器有没有 OS 沙箱（driver/write-scope.ts 的 osSandboxAvailable）：没有的机器上派只读 agy 直接报错（hub worker start --readonly）。 */
   osSandboxed(): boolean;
+  /** 这台设备的名字（联机的设备身份）：要用户在这台设备上动手时写在卡上。 */
+  deviceName(): string;
   /** 单调递增的账本写事务代数（供 DeviceRouterDigest 等只读衍生快照精确失效缓存）。 */
   writeGeneration(): number;
 }
@@ -121,6 +124,8 @@ export interface LedgerContextOptions {
   changeBufferSize?: number;
   /** 这台机器有没有 OS 沙箱，默认按本机（osSandboxAvailable）；测试可以指定。 */
   osSandboxed?: () => boolean;
+  /** 这台设备的名字，默认本机的主机名。 */
+  deviceName?: () => string;
 }
 
 export function createLedgerContext(db: Db, options: LedgerContextOptions): LedgerContext {
@@ -227,6 +232,7 @@ export function createLedgerContext(db: Db, options: LedgerContextOptions): Ledg
     modelShortLabel: shortLabel,
     commandBlockReason,
     osSandboxed: options.osSandboxed ?? (() => osSandboxAvailable()),
+    deviceName: options.deviceName ?? (() => hostname()),
     writeGeneration: () => generation,
   };
 }

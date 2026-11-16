@@ -5,7 +5,7 @@ import type { AnyActionRow } from "../../shared/actions.ts";
 import type { MessagesPage } from "../../shared/api.ts";
 import type { UserMessageMeta } from "../../shared/attachments.ts";
 import { agentMessageDedupeKey, canTransitionMessage, systemMessageDedupeKey, userMessageDedupeKey } from "../../shared/domain.ts";
-import type { AgentSessionRow, AskMeta, ConversationId, GateRef, Message, MessageId, MessageStatus, SessionId, SystemMessageMeta } from "../../shared/domain.ts";
+import type { AgentSessionRow, AskMeta, BlockerRef, ConversationId, GateRef, Message, MessageId, MessageStatus, SessionId, SystemMessageMeta } from "../../shared/domain.ts";
 import { turnFailureReason } from "../../shared/driver.ts";
 import type { DriverEvent, SessionExitedEvent } from "../../shared/driver.ts";
 import { ConversationNotFoundError } from "../../shared/ledger.ts";
@@ -154,7 +154,7 @@ export function createLedgerMessages(
     session: AgentSessionRow,
     text: string,
     askOptions?: string[],
-    extra?: { gateRef?: GateRef; recommended?: string; skipRouterBridge?: boolean },
+    extra?: { gateRef?: GateRef; blockerRef?: BlockerRef; recommended?: string; skipRouterBridge?: boolean },
   ): Message => {
     const t = now();
     const meta: AskMeta = {
@@ -162,6 +162,7 @@ export function createLedgerMessages(
       ...(askOptions && askOptions.length > 0 ? { options: askOptions } : {}),
       ...(extra?.recommended !== undefined ? { recommended: extra.recommended } : {}),
       ...(extra?.gateRef !== undefined ? { gateRef: extra.gateRef } : {}),
+      ...(extra?.blockerRef !== undefined ? { blockerRef: extra.blockerRef } : {}),
     };
     const row = db.get<MessageDbRow>(
       `INSERT INTO messages (conversation_id, session_id, sender, kind, text, meta, dedupe_key, created_at, updated_at)
@@ -176,7 +177,7 @@ export function createLedgerMessages(
     )!;
     const message = toMessage(row);
     p.changes.push({ type: "message.created", data: { message } });
-    if (!extra?.skipRouterBridge && extra?.gateRef === undefined) {
+    if (!extra?.skipRouterBridge && extra?.gateRef === undefined && extra?.blockerRef === undefined) {
       onIndependentAskCreated(p, session, message, askOptions);
     }
     return message;

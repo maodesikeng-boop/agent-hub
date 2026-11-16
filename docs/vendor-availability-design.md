@@ -108,8 +108,9 @@ interface VendorCatalogSource extends VendorCatalogProbe {  // 加上起进程�
 
 ### 7.2 后台
 - `hub worker start --vendor`：agent 接口在调账本之前（异步）问 `ModelCatalogs.ensureUsable(vendor)`——不能用的先重问这一家一次，
-  结果连同设备名放进 `HubCallContext.vendorStatus`，账本（`workers.ts`）照它拒绝：“这台设备（东京）没装 codex” /
-  “这台设备（东京）的 codex 没登录：先在这台设备的终端里跑 `codex login` 登录，再派”（登录命令在 `VENDOR_SPECS[厂商].loginCommand`）。
+  结果放进 `HubCallContext.vendorStatus`，账本（`workers.ts`）照它抛 `UserBlockedError`，原因的话（设备名取账本的 `deviceName`）由
+  `shared/user-blockers.ts` 的 `userBlockerText` 给：“这台设备（东京）没装 Codex” / “这台设备（东京）的 Codex 没登录：先在这台设备的终端里跑 `codex login` 登录”。
+  任务图自动开工碰到同样的情况不交给项目经理，而是挂卡等用户（docs/user-blockers-design.md）。
   不写 `--vendor` 不查。资料页改厂商（`persona.ts`）只从网页来，网页不让选不能用的，后台不另查。
 - 提示词：`LaunchContext.vendorAvailability`（`launch.ts` 从缓存填，不等查询），`buildLaunchPrompt` 的厂商列表和
   `buildHubUsagePrompt(vendors)` 的 `--vendor a|b` 只列 `isSelectable` 的。

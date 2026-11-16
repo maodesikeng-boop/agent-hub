@@ -68,6 +68,7 @@ import {
   type BrowserSessionsResponse,
   type CancelTaskGraphResponse,
   type DecideTaskNodeResponse,
+  type RecheckUserBlockerResponse,
   type DeviceRouterDigest,
   type LoginLinkResponse,
   type CommandsResponse,
@@ -185,7 +186,7 @@ export interface UiServerOptions {
   port?: number;
   logger?: boolean;
   /** 模型名单（daemon/driver/model-catalog.ts 的 createModelCatalogs）。不给就回打包的名单。 */
-  models?: { list(options?: { refresh?: boolean | "unusable" }): Promise<ModelCatalog[]> };
+  models?: { list(options?: { refresh?: boolean | "unusable"; vendor?: AgentVendor }): Promise<ModelCatalog[]> };
   /** 事件流里没有额度的厂商的额度（daemon/quota/fetched-quota.ts 的 createFetchedQuota）。不给就回空。 */
   quota?: { get(): Promise<QuotaResponse> };
   /**
@@ -1683,6 +1684,15 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
         ...(raw.choice !== undefined && raw.choice !== null ? { choice: raw.choice } : {}),
         ...(raw.note !== undefined ? { note: raw.note } : {}),
       });
+    });
+
+    // 用户在“要你动手”的提醒卡上点了 Done：先重问这家厂商（事务外的 I/O），再交给账本按结果留卡或接着派（docs/user-blockers-design.md）
+    routes.post("/api/user-blockers/:id/recheck", async (req): Promise<RecheckUserBlockerResponse> => {
+      const blockerId = parseId((req.params as { id?: unknown }).id, "user blocker id");
+      const vendor = ledger.userBlockerVendor(blockerId);
+      const availability =
+        vendor === null || !opts.models ? "unknown" : ((await opts.models.list({ vendor, refresh: true }))[0]?.availability ?? "unknown");
+      return ledger.recheckUserBlocker(blockerId, availability);
     });
 
     routes.post("/api/router/items/:id/decide", async (req): Promise<ResolveRouterItemResponse> => {

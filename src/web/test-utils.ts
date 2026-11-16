@@ -43,6 +43,7 @@ import type {
   ProviderSubmitAuthRequest,
   ProvidersStatusResponse,
   PutPmMemoryFileRequest,
+  RecheckUserBlockerResponse,
   ResolveRouterItemRequest,
   RouterItemsPage,
   SessionState,
@@ -431,6 +432,13 @@ export class FakeApi {
     },
   });
   /** POST /api/asks/:messageId/answer（在对话里的提问卡上点选项或填写）。默认：回一张已拍板的卡。 */
+  recheckUserBlocker: (id: number) => Reply | Promise<Reply> = (id) => ({
+    status: 200,
+    body: {
+      blocker: { id, kind: "vendor_signed_out", vendor: DEFAULT_AGENT_VENDOR, device: "东京", askMessageId: null, recheckedAs: "signed_out" },
+      resolved: false,
+    } satisfies RecheckUserBlockerResponse,
+  });
   answerAsk: (messageId: number, body: ResolveRouterItemRequest) => Reply | Promise<Reply> = (messageId) => ({
     status: 200,
     body: {
@@ -970,6 +978,8 @@ export class FakeApi {
     if (method === "POST" && url.pathname === API_PATHS.routerCommands) return jsonResponse(await this.postRouterCommand(body));
     const resolveItem = /^\/api\/router\/items\/(\d+)\/resolve$/.exec(url.pathname);
     if (resolveItem && method === "POST") return jsonResponse(await this.resolveRouterItem(Number(resolveItem[1]), body));
+    const recheckBlocker = /^\/api\/user-blockers\/(\d+)\/recheck$/.exec(url.pathname);
+    if (recheckBlocker && method === "POST") return jsonResponse(await this.recheckUserBlocker(Number(recheckBlocker[1])));
     const answerAsk = /^\/api\/asks\/(\d+)\/answer$/.exec(url.pathname);
     if (answerAsk && method === "POST") return jsonResponse(await this.answerAsk(Number(answerAsk[1]), body));
     const retryCmd = /^\/api\/router\/commands\/(\d+)\/retry$/.exec(url.pathname);

@@ -879,7 +879,7 @@ export function createLedgerRouter(
           `SELECT g.pm_id AS pm_id, count(*) AS n
              FROM task_graph_steps n
              JOIN task_graphs g ON g.id = n.graph_id
-            WHERE g.status = 'active' AND n.status = 'waiting' AND n.waiting_for = 'user'
+            WHERE g.status = 'active' AND n.status = 'waiting' AND n.waiting_for = 'user' AND NOT EXISTS (SELECT 1 FROM user_blocker_steps s WHERE s.step_id = n.id)
             GROUP BY g.pm_id`,
         )
         .map((r) => [r.pm_id, r.n]),

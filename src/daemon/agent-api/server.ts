@@ -96,8 +96,6 @@ export interface AgentApiOptions {
    * hub models 查询各厂商模型目录（守护进程接 ModelCatalogs）。不给就不预查，由账本用缓存或打包目录兜底。
    */
   models?: { list(options?: { refresh?: boolean | "unusable"; vendor?: AgentVendor }): Promise<ModelCatalog[]> };
-  /** 这台设备的名字（不能用时报错里写）。 */
-  deviceName?: () => string;
   /** Router 轨道 B 沙箱与活跃指令绑定守卫。 */
   sandboxGuard?: RouterSandboxGuard;
   /** Router 轨道 B 调用 `hub dispatch` 时的异步分派回调。 */
@@ -570,7 +568,6 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
             vendors.map(async (v) => [v, await opts.vendorUsable!(v)] as const),
           );
           context.vendorStatuses = Object.fromEntries(pairs);
-          context.deviceName = opts.deviceName?.() ?? "";
         }
       }
       return context;
@@ -580,7 +577,7 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
     // 带 --vendor：这家在这台设备上能不能用（不带就是项目经理自己那家，正在用着，不查）
     if (opts.vendorUsable && isAgentVendor(body.vendor)) {
       const vendor = body.vendor;
-      context.vendorStatus = { vendor, availability: await opts.vendorUsable(vendor), device: opts.deviceName?.() ?? "" };
+      context.vendorStatus = { vendor, availability: await opts.vendorUsable(vendor) };
     }
     if (body.noWorktree === true) return context;
     const folder = ledger.workerStartFolder(sessionId);

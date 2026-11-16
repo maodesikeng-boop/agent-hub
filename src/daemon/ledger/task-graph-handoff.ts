@@ -406,6 +406,16 @@ export function formatStepWaitingPmMessage(input: {
   return `${header}\n\n${detailBody.trim()}\n\n${actions.join("；")}。`;
 }
 
+/** 步骤等用户本人动手时告诉项目经理的一段（docs/user-blockers-design.md）：系统已挂卡，处理完自动接着派，它不用做什么。 */
+export function formatStepUserBlockedMessage(input: {
+  graph: { id: TaskGraphId; title: string };
+  step: { key: TaskNodeKey; title: string; index: number; total: number };
+  note: string;
+}): string {
+  const { graph, step, note } = input;
+  return `【任务图 #${graph.id}「${graph.title}」第 ${step.index}/${step.total} 步「${step.title}」等用户动手】${note}。要换别家：${HUB_COMMAND} worker start --node ${step.key} --graph ${graph.id} --vendor <别家>。`;
+}
+
 /**
  * 纯本地 fs 检查目录是否为已有至少一次提交的 git 仓库（零子进程阻塞，微秒级）：
  * 供后台自动交棒开工且调用方未预探 context.workspace 时的兜底判断。

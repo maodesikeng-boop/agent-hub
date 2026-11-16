@@ -375,8 +375,11 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       log: (line) => log(`${LOG_PREFIX} ${line}`),
     });
     parts.providerManager = providerManager;
+    // 联机：设备身份（要用户在这台设备上动手时，卡上和 hub worker start 的报错里写设备名）
+    const device = loadOrCreateDevice(paths.deviceFile, defaultDeviceName(hostname()));
     const ledger = createLedger(db, {
       modelCatalog: (vendor) => models.current(vendor),
+      deviceName: () => device.name,
       // 手打命令时看缓存着的命令列表（commands 在下面才建，所以现用现取）
       knownCommands: (session) => parts.commands?.cached(session) ?? null,
       pmHomeRoot: paths.pmHomeDir,
@@ -412,8 +415,6 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     // 3. agent 接口（run/ 0700、删残留 socket、hub.sock 0600）和 hub 外壳，在执行器之前起。
     //    令牌只有这一份：agent 接口认人、prepareLaunch 发、session.end 处理函数作废，用的都是它
     const tokens = createSessionTokens();
-    // 联机：设备身份（hub worker start 报“这台设备没装 codex”时写设备名）
-    const device = loadOrCreateDevice(paths.deviceFile, defaultDeviceName(hostname()));
     const sandboxGuard = createRouterSandboxGuard();
     parts.sandboxGuard = sandboxGuard;
     const agentApi = await startAgentApi({
@@ -424,7 +425,6 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       log,
       models,
       vendorUsable: (vendor) => models.ensureUsable(vendor),
-      deviceName: () => device.name,
       sandboxGuard,
       ...(options.onSelfReload
         ? {

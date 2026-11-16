@@ -29,6 +29,7 @@ import {
   isQuotaExhausted,
   pendingDecisionsOf as devicePendingDecisionsOf,
   isTaskNodeWaitingPm,
+  isTaskNodeWaitingDecision,
   isTaskNodeWaitingUser,
   systemEventOf,
   systemNoticeText,
@@ -1290,7 +1291,7 @@ export function pendingDecisionsOf(
     if (graph.status !== "active" || graph.conversationId !== conversationId) continue;
     for (const node of graph.nodes) {
       if (node.gateAskMessageId !== null) graphGateIds.add(node.gateAskMessageId);
-      if (!isTaskNodeWaitingUser(node)) continue;
+      if (!isTaskNodeWaitingDecision(node)) continue;
       const { blockedNodeCount, nextNodeTitles } = computeGateImpact(graph, node.key);
       result.push({
         key: `gate:${deviceId}:${graph.id}:${node.key}`,

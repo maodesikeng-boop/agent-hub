@@ -61,6 +61,7 @@ import { Avatar } from "./Avatar.tsx";
 import { WorkerPickTag } from "./WorkerPickTag.tsx";
 import { COPIED_RESET_MS } from "./CodeBlock.tsx";
 import { Markdown } from "./Markdown.tsx";
+import { UserBlockerCard } from "./UserBlockerCard.tsx";
 
 export interface AgentIdentity {
   name: string;
@@ -333,6 +334,7 @@ const AgentText = memo(function AgentText({
       gateRef: ask.gateRef,
     };
   }, [message.sender, message.meta, message.text]);
+  const blocker = askCard === null ? askOf(message) : null;
   return (
     <article
       className={cn("flex w-full min-w-0 flex-col items-start gap-1.5", highlighted && "rounded-2xl outline-2 outline-offset-4 outline-ring/60")}
@@ -340,7 +342,14 @@ const AgentText = memo(function AgentText({
       data-message-id={message.id}
       data-highlighted={highlighted ? "true" : undefined}
     >
-      {askCard ? (
+      {blocker?.blockerRef !== undefined ? (
+        <UserBlockerCard
+          blockerId={blocker.blockerRef.blockerId}
+          text={message.text}
+          answered={blocker.answered === true}
+          className="w-full max-w-[min(100%,36rem)]"
+        />
+      ) : askCard ? (
         <AskCard card={askCard} files={files} messageId={message.id} onAnswerAsk={onAnswerAsk} />
       ) : (
         <div className="w-full min-w-0 text-body leading-relaxed">

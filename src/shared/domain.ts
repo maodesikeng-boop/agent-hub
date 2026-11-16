@@ -11,6 +11,7 @@ import {
   PM_MEMORY_INDEX_FILE,
 } from "./limits.ts";
 import type { ScheduleId } from "./schedule.ts";
+import type { UserBlocker, UserBlockerId } from "./user-blockers.ts";
 import type { AgentVendor } from "./vendors.ts";
 import type { WorkerReportStatus } from "./worker.ts";
 
@@ -474,8 +475,14 @@ export type AskMeta = {
   options?: string[];
   recommended?: string;
   gateRef?: GateRef;
+  /** 系统挂的“要你动手”的提醒卡（docs/user-blockers-design.md）：点 Done 重查这条阻塞，不归项目经理关。 */
+  blockerRef?: BlockerRef;
   chosenOption?: string;
 };
+
+export interface BlockerRef {
+  blockerId: UserBlockerId;
+}
 
 /** 是 hub ask 发的消息就返回它的 meta，否则 null。 */
 export function askOf(message: Pick<Message, "sender" | "meta">): AskMeta | null {
@@ -502,6 +509,11 @@ export function askOf(message: Pick<Message, "sender" | "meta">): AskMeta | null
           ...(rawGateRef.checkpoint === true ? { checkpoint: true as const } : {}),
         }
       : undefined;
+  const rawBlockerRef = message.meta.blockerRef as Record<string, unknown> | null | undefined;
+  const blockerRef =
+    rawBlockerRef !== null && typeof rawBlockerRef === "object" && typeof rawBlockerRef.blockerId === "number"
+      ? { blockerId: rawBlockerRef.blockerId }
+      : undefined;
   const chosenOption = typeof message.meta.chosenOption === "string" ? message.meta.chosenOption : undefined;
   return {
     needsUser: true,
@@ -509,6 +521,7 @@ export function askOf(message: Pick<Message, "sender" | "meta">): AskMeta | null
     ...(options !== undefined ? { options } : {}),
     ...(recommended !== undefined ? { recommended } : {}),
     ...(gateRef !== undefined ? { gateRef } : {}),
+    ...(blockerRef !== undefined ? { blockerRef } : {}),
     ...(chosenOption !== undefined ? { chosenOption } : {}),
   };
 }
@@ -578,7 +591,7 @@ export function extractAskCard(
   message: Pick<Message, "sender" | "meta" | "text">,
 ): ExtractedAskCard | null {
   const ask = askOf(message);
-  if (ask === null) return null;
+  if (ask === null || ask.blockerRef !== undefined) return null;
   const answered = ask.answered === true;
   const extras = {
     ...(ask.recommended !== undefined ? { recommended: ask.recommended } : {}),
@@ -1039,13 +1052,17 @@ export function taskNodeStateFromLegacy(status: string): TaskNodeState {
  * 步骤状态的中文说法：hub graph show 等给项目经理看的文字用 viewer = "pm"，网页给用户看的用 viewer = "user"
  * （等人时说清等谁：给项目经理看是“等你处理”，给用户看是“等你拍板”）。
  */
-export function taskNodeStatusText(node: Pick<TaskNode, "status" | "waitingFor" | "skipped">, viewer: "pm" | "user"): string {
+export function taskNodeStatusText(
+  node: Pick<TaskNode, "status" | "waitingFor" | "skipped" | "userBlocker">,
+  viewer: "pm" | "user",
+): string {
   switch (node.status) {
     case "pending":
       return "没轮到";
     case "running":
       return "在干";
     case "waiting":
+      if (isTaskNodeUserBlocked(node)) return viewer === "user" ? "等你动手" : "等用户动手";
       if (node.waitingFor === "user") return viewer === "user" ? "等你拍板" : "等用户拍板";
       return viewer === "user" ? "等项目经理" : "等你处理";
     case "done":
@@ -1053,9 +1070,19 @@ export function taskNodeStatusText(node: Pick<TaskNode, "status" | "waitingFor" 
   }
 }
 
-/** 等用户拍板的步骤（挂着拍板卡）。 */
+/** 等用户的步骤：挂着拍板卡，或者等用户本人动手（userBlocker）。 */
 export function isTaskNodeWaitingUser(node: Pick<TaskNode, "status" | "waitingFor">): boolean {
   return node.status === "waiting" && node.waitingFor === "user";
+}
+
+/** 等用户本人动手（厂商没登录、没装……）的步骤，系统挂了提醒卡（docs/user-blockers-design.md）。 */
+export function isTaskNodeUserBlocked(node: Pick<TaskNode, "status" | "waitingFor" | "userBlocker">): boolean {
+  return isTaskNodeWaitingUser(node) && node.userBlocker != null;
+}
+
+/** 等用户拍板的步骤（挂着拍板卡）。 */
+export function isTaskNodeWaitingDecision(node: Pick<TaskNode, "status" | "waitingFor" | "userBlocker">): boolean {
+  return isTaskNodeWaitingUser(node) && node.userBlocker == null;
 }
 
 /** 等项目经理处理的步骤。 */
@@ -1112,6 +1139,8 @@ export interface TaskNode {
   gateAskMessageId: MessageId | null;
   /** 当前挂着等用户拍板的卡是否是 `confirm: true` 步骤自动生成的检查点卡（「通过 / 打回」）。 */
   gateCheckpoint?: boolean;
+  /** 等用户本人动手时的阻塞原因；老服务端没有这个字段，当 null。 */
+  userBlocker?: UserBlocker | null;
   decision: TaskDecision | null;
   createdAt: number;
   updatedAt: number;

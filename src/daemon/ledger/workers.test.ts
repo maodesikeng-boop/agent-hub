@@ -58,6 +58,7 @@ function options(extra: Partial<LedgerOptions> = {}): LedgerOptions {
     worktreesDir,
     resolveFolder: createResolveFolder({ dataHome, userHome: root }),
     osSandboxed: () => true,
+    deviceName: () => "东京",
     ...extra,
   };
 }
@@ -315,9 +316,9 @@ describe("派活：在 worktree 里干（主文件夹是有提交的 git 仓库�
 
   it("--vendor 选的厂商这台设备没装、没登录：报清楚是哪台、怎么登录，不派；能用、认不出的照派", () => {
     repos.add(main);
-    const on = (availability: VendorAvailability) => ({ vendorStatus: { vendor: "codex" as const, availability, device: "东京" } });
-    expectLedgerError(() => start({ vendor: "codex" }, lin.sessionId, on("not_installed")), "invalid", /^这台设备（东京）没装 codex$/);
-    expectLedgerError(() => start({ vendor: "codex" }, lin.sessionId, on("signed_out")), "invalid", /这台设备（东京）的 codex 没登录.*`codex login`/);
+    const on = (availability: VendorAvailability) => ({ vendorStatus: { vendor: "codex" as const, availability } });
+    expectLedgerError(() => start({ vendor: "codex" }, lin.sessionId, on("not_installed")), "invalid", /^这台设备（东京）没装 Codex/);
+    expectLedgerError(() => start({ vendor: "codex" }, lin.sessionId, on("signed_out")), "invalid", /这台设备（东京）的 Codex 没登录.*`codex login`/);
     expect(start({ vendor: "codex", title: "a" }, lin.sessionId, on("available")).data.worker.id).toBeGreaterThan(0);
     expect(start({ vendor: "codex", title: "b" }, lin.sessionId, on("unknown")).data.worker.id).toBeGreaterThan(0);
   });
