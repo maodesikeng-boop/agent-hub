@@ -21,7 +21,7 @@ import { sortActiveGraphs, taskGraphPriority, workersByWorkerId, type WorkerEntr
 import { Button } from "../ui/button.tsx";
 import { Input } from "../ui/input.tsx";
 import { KnifeAvatar } from "./KnifeAvatar.tsx";
-import { Markdown } from "./Markdown.tsx";
+import { CardBody } from "./Deliverables.tsx";
 import { UserBlockerCard } from "./UserBlockerCard.tsx";
 import { computeGraphComponents, fruitTrackVars, SliceWheelIcon } from "./SliceWheelIcon.tsx";
 
@@ -263,7 +263,6 @@ export function GateDecisionCard({
   };
 
   const showQuestion = node.gateQuestion !== null && node.gateQuestion.trim() !== "" && node.gateQuestion !== node.title;
-  const showSummary = node.gateSummaryMd !== null && node.gateSummaryMd.trim() !== "";
 
   return (
     <div
@@ -271,11 +270,12 @@ export function GateDecisionCard({
       className={cn("rounded-2xl border border-primary bg-jelly px-3.5 py-3", className)}
     >
       {showQuestion && <p className="mb-1 text-minor font-medium text-foreground">{node.gateQuestion}</p>}
-      {showSummary && (
-        <div className="mb-2 text-minor leading-relaxed text-foreground">
-          <Markdown text={node.gateSummaryMd!} />
-        </div>
-      )}
+      <CardBody
+        text={node.gateSummaryMd ?? ""}
+        deliverables={node.artifact?.deliverables}
+        className="mb-2"
+        textClassName="text-minor leading-relaxed text-foreground"
+      />
       {hasOptions && (
         <div className="grid gap-2">
           {node.gateOptions.map((opt) => {

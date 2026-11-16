@@ -631,7 +631,8 @@ describe("提示词：项目经理（M3）", () => {
         `证据不够就打回让 Worker 补（\`${hub} worker send\`）`,
         "**该审查而没审查的，交付前补上**：改动碰了第 2 步那四类，就按任务图手册里的做法补一个审查。",
         "合并和发布按项目 `AGENTS.md` 的规矩做。",
-        `向用户汇报结果；建了图的，合并后用 \`${hub} graph finish\` 结束（摘要会自动同步给总助）。`,
+        `向用户汇报结果；建了图的，合并后用 \`${hub} graph finish\` 结束（摘要和各步“文件”栏的文件会自动同步给总助）。`,
+        `给用户看的文件（方案、验收结论、截图、录屏）用 \`${hub} ask --file\` 或 \`${hub} router report --file\` 挂上去`,
       ]) {
         expect(delivery, word).toContain(word);
       }
@@ -793,7 +794,7 @@ describe("提示词：项目经理（M3）", () => {
       `\`${hub} project create|attach|detach|setup\`：建项目、挂上或移除附加文件夹、设置新 worktree 开工前跑的准备脚本`,
       `\`${hub} persona show|edit\`：查看、修改性格设定和模式`,
       `\`${hub} schedule add|list|pause|resume|remove\`：定时任务，到点把正文发进你的对话（用户要日报才建）`,
-      `\`${hub} router report|note\`：任务图以外的里程碑给总助发一张汇报卡、更新一句话项目主线备忘`,
+      `\`${hub} router report|note\`：任务图以外的里程碑给总助发一张汇报卡（本机文件用 \`--file\`）、更新一句话项目主线备忘`,
       `\`${hub} self-reload [--build]\`：${PRODUCT_ID} 自身代码合进来后让守护进程热重启`,
     ]) {
       expect(HUB_USAGE_PROMPT, line).toContain(line);
@@ -813,8 +814,8 @@ describe("提示词：项目经理（M3）", () => {
       `${hub} schedule pause <编号>`,
       `${hub} schedule resume <编号>`,
       `${hub} schedule remove <编号>`,
-      `${hub} ask [--node <步骤>] [--graph <图编号>] [--option <选项>...] [--recommended <选项>] [--replace <编号>] --stdin`,
-      `${hub} router report (--summary <摘要> | --stdin) [--pr <URL>] [--worker <编号>] [--file <路径>] [--link <标签=地址>...]`,
+      `${hub} ask [--node <步骤>] [--graph <图编号>] [--option <选项>...] [--recommended <选项>] [--replace <编号>] [--file [标签=]路径...] --stdin`,
+      `${hub} router report (--summary <摘要> | --stdin) [--pr <URL>] [--worker <编号>] [--file [标签=]路径...] [--link <标签=网址>...]`,
       `${hub} router note (--text <备忘> | --stdin | --clear)`,
       `${hub} self-reload [--build]`,
       "等所有会话这一轮收尾",

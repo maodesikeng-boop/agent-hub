@@ -9,6 +9,11 @@ export const MESSAGE_PAGE_SIZE = 100;
 export const SNAPSHOT_RECENT_MESSAGES = 20;
 /** 初始快照按“跑了一个月”（300 个已收工的 Worker、3 万条消息）算的上限（未压缩，守卫见 daemon/ledger/snapshot-size.test.ts）。 */
 export const SNAPSHOT_MONTH_MAX_BYTES = 384 * 1024;
+/**
+ * 一个月的量再加总助写满、交付物数量和长度都到上限（待拍板卡、等确认的步骤带满，文件名 255 字节、原链接 MAX_PATH_BYTES）时初始快照的上限。
+ * 运行时不按总字节裁剪，整份发（压缩后传）；实测约 2.0 MB，压缩后约 0.85 MB（守卫见 daemon/ledger/snapshot-size.test.ts）。
+ */
+export const SNAPSHOT_DELIVERABLES_WORST_MAX_BYTES = 2 * 1024 * 1024;
 
 /** git 没跑成时，回给项目经理的原因行最多几个字（ledger/workers.ts 的 gitReasonLine）。 */
 export const GIT_REASON_MAX_CHARS = 200;
@@ -218,6 +223,19 @@ export const MAX_SENT_FILES_TOTAL_BYTES = 200 * 1024 * 1024;
 export const MAX_SENT_FILES_PER_MESSAGE = 10;
 /** 存发出文件副本时一次从文件句柄读多少字节（daemon/sent-files.ts）。 */
 export const SENT_FILE_COPY_CHUNK_BYTES = 1024 * 1024;
+
+// ---- 交付物（方案、验收结论、截图、录屏，shared/deliverables.ts，docs/deliverables-design.md）----
+
+/** 一张卡（hub ask、检查点卡、拍板卡）最多带几个交付物：方案 + 验收结论 + 桌面截图 + 手机截图 + 录屏，再留 1 个。 */
+export const DELIVERABLES_PER_CARD_MAX = 6;
+/** 一个任务图步骤最多记几个交付物（汇报“文件”栏按出现顺序取，和一条消息最多存几个副本一样）。 */
+export const DELIVERABLES_PER_STEP_MAX = MAX_SENT_FILES_PER_MESSAGE;
+/** 一条总助简报最多带几个交付物：graph finish 汇总 3 步各 4 个。多出来的不带，去任务图里看。 */
+export const DELIVERABLES_PER_REPORT_MAX = 12;
+/** 交付物标签（链接文字、--file 的“标签=路径”）最多几个字。 */
+export const DELIVERABLE_LABEL_MAX_CHARS = 40;
+/** hub ask / router report 一次最多几个 --file。 */
+export const HUB_FILE_ARGS_MAX = DELIVERABLES_PER_CARD_MAX;
 
 // ---- 预览窗（web/components/FilePreview.tsx）----
 

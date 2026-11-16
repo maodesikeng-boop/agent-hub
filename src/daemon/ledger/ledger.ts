@@ -226,7 +226,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     turnMaxTimeOf: workers.turnMaxTimeOf,
     isWorktreeCleaned: workers.isWorktreeCleaned,
   });
-  const hub = createLedgerHubCommands(ctx, persona, projects, workers, messages, schedules, workerView, router, taskGraphs, taskGraphManual);
+  const hub = createLedgerHubCommands(ctx, persona, projects, workers, messages, schedules, workerView, router, taskGraphs, sentFiles, taskGraphManual);
   const launch = createLedgerLaunchContext(db, persona, projects, workers);
 
   /** 建项目经理；给了主文件夹就在同一个事务里给它建项目（同 hub project create）。 */

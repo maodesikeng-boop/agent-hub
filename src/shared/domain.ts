@@ -10,6 +10,7 @@ import {
   MAX_WORKER_TITLE_CHARS,
   PM_MEMORY_INDEX_FILE,
 } from "./limits.ts";
+import { deliverablesOf, type Deliverable } from "./deliverables.ts";
 import type { ReviewTarget, ReviewVerdict } from "./review.ts";
 import type { ScheduleId } from "./schedule.ts";
 import type { UserBlocker, UserBlockerId } from "./user-blockers.ts";
@@ -484,6 +485,8 @@ export type AskMeta = {
   chosenOption?: string;
   answerNote?: string;
   closed?: true;
+  /** 卡片下面列的文件（--file、检查点卡带的步骤交付物），最多 DELIVERABLES_PER_CARD_MAX 个；老消息没有。 */
+  deliverables?: Deliverable[];
 };
 
 export interface BlockerRef {
@@ -522,6 +525,7 @@ export function askOf(message: Pick<Message, "sender" | "meta">): AskMeta | null
       : undefined;
   const chosenOption = typeof message.meta.chosenOption === "string" ? message.meta.chosenOption : undefined;
   const answerNote = typeof message.meta.answerNote === "string" && message.meta.answerNote !== "" ? message.meta.answerNote : undefined;
+  const deliverables = deliverablesOf(message.meta.deliverables);
   return {
     needsUser: true,
     ...(answered ? { answered: true } : {}),
@@ -532,6 +536,7 @@ export function askOf(message: Pick<Message, "sender" | "meta">): AskMeta | null
     ...(chosenOption !== undefined ? { chosenOption } : {}),
     ...(answerNote !== undefined ? { answerNote } : {}),
     ...(message.meta.closed === true ? { closed: true } : {}),
+    ...(deliverables.length > 0 ? { deliverables } : {}),
   };
 }
 
@@ -1111,6 +1116,11 @@ export interface TaskArtifact {
   commit?: string;
   branch?: string;
   summary?: string;
+  /**
+   * 这一步交给用户看的文件：Worker 最近一次汇报“文件”栏里的，加上 `hub ask --node --file` 补的，最多 DELIVERABLES_PER_STEP_MAX 个。
+   * 全量快照只给等用户拍板的步骤带（控快照体积），单图详情都带。
+   */
+  deliverables?: Deliverable[];
   /** 审查步骤汇报的“结论”和“验证提交”（shared/review.ts）。 */
   reviewVerdict?: ReviewVerdict;
   verifiedCommit?: string;

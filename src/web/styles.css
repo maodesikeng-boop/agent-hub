@@ -16,6 +16,8 @@
   --color-accent: var(--accent);
   --color-border: var(--border);
   --color-ring: var(--ring);
+  /* 行内链接（第 15 条的蓝色链接字）：text-link、decoration-link 从这里取 */
+  --color-link: var(--link);
   /* 用户气泡（docs/ui-standard.md 第 4 条）：当前强调色掺白的浅果冻底 + 前景色字，强调色本身只留给发送键和小圆点 */
   --color-bubble-me: color-mix(in srgb, var(--primary) var(--mix-bubble-me), #ffffff);
   --color-bubble-me-foreground: var(--foreground);
@@ -180,16 +182,14 @@ code {
   -webkit-mask-image: linear-gradient(to bottom, transparent, #000 2rem);
   mask-image: linear-gradient(to bottom, transparent, #000 2rem);
 }
-/* 待拍板卡的补充依据（RouterDecisionCard 的 DecisionContext，第 21 条）：收起时最多 5 行（Markdown 行高 1.65em），
-   超出的那一段最后一行渐隐，下面出 Show more。行数只在这里改 */
-/* 卡片里是紧凑排版：段落、列表之间比消息里收一半（消息里 0.75em） */
-[data-decision-context] .markdown :is(p, ul, ol, blockquote, [data-md-code], [data-md-table]) {
+/* 卡片正文（Deliverables.tsx 的 CardBody，第 22 条）是紧凑排版：段落、列表之间比消息里收一半（消息里 0.75em） */
+[data-card-body] .markdown :is(p, ul, ol, blockquote, [data-md-code], [data-md-table]) {
   margin-block: 0.375em;
 }
-[data-decision-context] .markdown > :first-child {
+[data-card-body] .markdown > :first-child {
   margin-top: 0;
 }
-[data-decision-context] .markdown > :last-child {
+[data-card-body] .markdown > :last-child {
   margin-bottom: 0;
 }
 /* Router 时间流里的表格（总助的状态表：PM、项目、状态说明）：前几列是短词，不在连字符、汉字中间折开，
@@ -197,12 +197,13 @@ code {
 .router-timeline .markdown :is(th, td):not(:last-child) {
   white-space: nowrap;
 }
-.decision-context-clamp {
-  --decision-context-lines: 5;
-  max-height: calc(var(--decision-context-lines) * 1.65em);
+/* 卡片正文的摘要（第一段）收起时最多 3 行（Markdown 行高 1.65em），超出的最后一行渐隐，下面出 Show more。行数只在这里改 */
+.card-lead-clamp {
+  --card-lead-lines: 3;
+  max-height: calc(var(--card-lead-lines) * 1.65em);
   overflow: hidden;
 }
-.decision-context-clamp[data-overflowing] {
+.card-lead-clamp[data-overflowing] {
   -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.65em), transparent);
   mask-image: linear-gradient(to bottom, #000 calc(100% - 1.65em), transparent);
 }

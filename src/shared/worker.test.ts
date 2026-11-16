@@ -35,10 +35,10 @@ const standard = report(`状态: 做完了
 问题: 无`);
 
 describe("汇报格式", () => {
-  it("说明里有开头、结尾和八项，状态的三种写法", () => {
+  it("说明里有开头、结尾和九项，状态的三种写法", () => {
     expect(REPORT_START).toBe("=== 汇报 ===");
     expect(REPORT_END).toBe("=== 汇报结束 ===");
-    for (const key of ["状态:", "摘要:", "PR:", "提交:", "测试:", "偏离:", "交棒:", "问题:"]) expect(WORKER_REPORT_FORMAT).toContain(key);
+    for (const key of ["状态:", "摘要:", "PR:", "提交:", "测试:", "偏离:", "交棒:", "文件:", "问题:"]) expect(WORKER_REPORT_FORMAT).toContain(key);
     expect(WORKER_REPORT_FORMAT).toContain("做完了 | 有问题 | 放弃了");
     expect(WORKER_REPORT_STATUSES).toEqual(["done", "problem", "gave_up"]);
     expect(WORKER_REPORT_STATUS_LABELS).toEqual({ done: "做完了", problem: "有问题", gave_up: "放弃了" });
@@ -64,6 +64,7 @@ describe("parseWorkerReport", () => {
         deviation: null,
         handoff: "",
         questions: "无",
+        files: "",
         verdict: null,
         verifiedCommit: null,
       },
@@ -136,6 +137,7 @@ describe("parseWorkerReport", () => {
         deviation: null,
         handoff: "",
         questions: "",
+        files: "",
         verdict: null,
         verifiedCommit: null,
       },
@@ -183,6 +185,7 @@ describe("parseWorkerReport", () => {
         deviation: null,
         handoff: "改动集中在 src/daemon/ledger/task-graphs.ts\n- 注意检查异步恢复时序",
         questions: "无（全部明确）",
+        files: "",
         verdict: null,
         verifiedCommit: null,
       },
@@ -209,6 +212,7 @@ describe("parseWorkerReport", () => {
       report: {
         deviation: "无法沿用旧表结构，改为新建扩展表",
         questions: "无需新建配置项，是否认可？",
+        files: "",
       },
     });
     if (realDev.kind === "ok") {
@@ -412,5 +416,31 @@ describe("输入框指定派 Worker 的厂商、模型、思考程度（workerPi
 
   it("HUB_COMPOSER_COMMANDS：hub:worker 的名字和说明放在 shared", () => {
     expect(HUB_COMPOSER_COMMANDS).toEqual([{ name: "hub:worker", description: "Pick provider, model and effort for Workers" }]);
+  });
+});
+
+describe("汇报的“文件”栏（docs/deliverables-design.md）", () => {
+  it("WORKER_REPORT_FORMAT 有“文件”一栏，“测试”栏不再写截图路径", () => {
+    expect(WORKER_REPORT_FORMAT).toMatch(/^文件: /mu);
+    const tests = WORKER_REPORT_FORMAT.split("\n").find((line) => line.startsWith("测试:"))!;
+    expect(tests).not.toContain("截图");
+  });
+
+  it("“文件”栏的多行链接原样进 report.files", () => {
+    const parsed = parseWorkerReport(report(`状态: 做完了
+摘要: 好了
+文件:
+- [方案](/tmp/plan.md)
+- [录屏](</tmp/a b.mp4>)
+问题: 无`));
+    expect(parsed).toMatchObject({ kind: "ok", report: { files: "- [方案](/tmp/plan.md)\n- [录屏](</tmp/a b.mp4>)", questions: "无" } });
+  });
+
+  it("“文件”栏写“无”时 report.files 是空串", () => {
+    expect(parseWorkerReport(report("状态: 做完了\n摘要: 好了\n文件: 无"))).toMatchObject({ kind: "ok", report: { files: "" } });
+  });
+
+  it("没写“文件”栏的老格式照常认出，report.files 是空串", () => {
+    expect(parseWorkerReport(standard)).toMatchObject({ kind: "ok", report: { files: "" } });
   });
 });

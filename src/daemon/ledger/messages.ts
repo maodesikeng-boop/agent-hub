@@ -4,14 +4,17 @@ import { randomUUID } from "node:crypto";
 import type { AnyActionRow } from "../../shared/actions.ts";
 import type { MessagesPage } from "../../shared/api.ts";
 import type { UserMessageMeta } from "../../shared/attachments.ts";
+import { mergeDeliverables, type Deliverable, type HubFileArg } from "../../shared/deliverables.ts";
 import { agentMessageDedupeKey, canTransitionMessage, systemMessageDedupeKey, userMessageDedupeKey } from "../../shared/domain.ts";
 import type { AgentRole, AgentSessionRow, AskMeta, BlockerRef, ConversationId, GateRef, Message, MessageId, MessageStatus, SessionId, SystemMessageMeta } from "../../shared/domain.ts";
 import { turnFailureReason } from "../../shared/driver.ts";
 import type { DriverEvent, SessionExitedEvent } from "../../shared/driver.ts";
 import { ConversationNotFoundError } from "../../shared/ledger.ts";
 import type { ComposerTarget, PostUserMessageInput, PostUserMessageResult } from "../../shared/ledger.ts";
-import { MESSAGE_PAGE_SIZE, REWIND_SCAN_LIMIT } from "../../shared/limits.ts";
+import { DELIVERABLES_PER_CARD_MAX, MESSAGE_PAGE_SIZE, REWIND_SCAN_LIMIT } from "../../shared/limits.ts";
 import { findRewindableMessage } from "../../shared/rewind.ts";
+import type { SentFile } from "../../shared/sent-files.ts";
+import { deliverablesOfFileArgs } from "../deliverables.ts";
 import { fail } from "./context.ts";
 import type { LedgerContext, Pending } from "./context.ts";
 import { toMessage } from "./rows.ts";
@@ -158,17 +161,29 @@ export function createLedgerMessages(
     session: AgentSessionRow,
     text: string,
     askOptions?: string[],
-    extra?: { gateRef?: GateRef; blockerRef?: BlockerRef; recommended?: string; skipRouterBridge?: boolean },
+    extra?: {
+      gateRef?: GateRef;
+      blockerRef?: BlockerRef;
+      recommended?: string;
+      skipRouterBridge?: boolean;
+      /**
+       * 列在卡片下面的文件，写进 AskMeta.deliverables（最多 DELIVERABLES_PER_CARD_MAX 个）：先是 fileArgs 存好的副本（它们也进这条消息的
+       * meta.files，来源记成这条消息），再接 deliverables（检查点卡带的步骤交付物，来源是原汇报消息，不再拷）。
+       */
+      fileArgs?: { args: readonly HubFileArg[]; files: readonly SentFile[] };
+      deliverables?: readonly Deliverable[];
+    },
   ): Message => {
     const t = now();
-    const meta: AskMeta = {
+    const meta: AskMeta & { files?: SentFile[] } = {
       needsUser: true,
       ...(askOptions && askOptions.length > 0 ? { options: askOptions } : {}),
       ...(extra?.recommended !== undefined ? { recommended: extra.recommended } : {}),
       ...(extra?.gateRef !== undefined ? { gateRef: extra.gateRef } : {}),
       ...(extra?.blockerRef !== undefined ? { blockerRef: extra.blockerRef } : {}),
+      ...(extra?.fileArgs !== undefined && extra.fileArgs.files.length > 0 ? { files: [...extra.fileArgs.files] } : {}),
     };
-    const row = db.get<MessageDbRow>(
+    let row = db.get<MessageDbRow>(
       `INSERT INTO messages (conversation_id, session_id, sender, kind, text, meta, dedupe_key, created_at, updated_at)
        VALUES (?, ?, 'agent', 'text', ?, ?, ?, ?, ?) RETURNING *`,
       session.conversationId,
@@ -179,6 +194,13 @@ export function createLedgerMessages(
       t,
       t,
     )!;
+    // --file 的副本记在这条消息上，来源要用它的编号：先插再补 deliverables
+    const fileDeliverables = extra?.fileArgs !== undefined ? deliverablesOfFileArgs(extra.fileArgs.args, extra.fileArgs.files, row.id) : [];
+    const deliverables = mergeDeliverables([fileDeliverables, extra?.deliverables ?? []], DELIVERABLES_PER_CARD_MAX);
+    if (deliverables.length > 0) {
+      meta.deliverables = deliverables;
+      row = db.get<MessageDbRow>("UPDATE messages SET meta = ? WHERE id = ? RETURNING *", JSON.stringify(meta), row.id)!;
+    }
     const message = toMessage(row);
     p.changes.push({ type: "message.created", data: { message } });
     if (!extra?.skipRouterBridge && extra?.gateRef === undefined && extra?.blockerRef === undefined) {

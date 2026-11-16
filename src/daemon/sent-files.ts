@@ -26,7 +26,7 @@ import {
   writeSync,
   type Stats,
 } from "node:fs";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
 import { unified } from "unified";
@@ -37,6 +37,7 @@ import {
   MAX_SENT_FILES_PER_MESSAGE,
   MAX_SENT_FILES_TOTAL_BYTES,
   SENT_FILE_COPY_CHUNK_BYTES,
+  linkNodesOf,
   localLinksOf,
   locationFallbackPaths,
   sentFileMime,
@@ -199,7 +200,7 @@ type Outcome =
   | { status: Exclude<SentFileStatus, "saved">; size: number | null; mtime: number | null }
   | { status: "saved"; id: string; size: number; mtime: number };
 
-const reject = (status: Exclude<SentFileStatus, "saved">, stat?: Stats): Outcome => ({
+const reject = (status: Exclude<SentFileStatus, "saved">, stat?: Stats): Extract<Outcome, { size: number | null }> => ({
   status,
   size: stat?.isFile() ? stat.size : null,
   mtime: stat?.mtimeMs ?? null,
@@ -270,14 +271,10 @@ function shareOne(path: string, local: LocalHref, name: string, budget: number, 
 }
 
 /**
- * 找出回复里写成本机路径的链接（shared/sent-files.ts 的 localLinksOf：代码块里的不算、同一个地址只算一次），
- * 按文件头的规则逐个判断、存副本，收满 MAX_SENT_FILES_PER_MESSAGE 个为止（不算的不占名额）。
- * 返回 meta.files；一个都不算返回空数组。不抛错：单个文件出错记成 unreadable。
+ * 按文件头的规则逐个判断、存副本，收满 MAX_SENT_FILES_PER_MESSAGE 个为止。
+ * strict 是 false（回复里的链接）：不算发文件的不进结果、不占名额；strict 是 true（--file 指名要发的）：也记一项，写清为什么没存。
  */
-export function shareLinkedFiles(text: string, scope: ShareScope): SentFile[] {
-  if (!text.includes("](") && !text.includes("<")) return [];
-  const links = localLinksOf(markdown.parse(text) as MdNode, text);
-  if (links.length === 0) return [];
+function shareLinks(links: readonly { href: string; local: LocalHref }[], scope: ShareScope, strict: boolean): SentFile[] {
   const files: SentFile[] = [];
   let used = 0;
   // 敏感清单这条消息里只 realpath 一次（不跨消息缓存：符号链接、主目录随时可能变）
@@ -294,7 +291,10 @@ export function shareLinkedFiles(text: string, scope: ShareScope): SentFile[] {
       console.error(`${LOG_PREFIX} sent file failed: ${path}:`, error);
       outcome = reject("unreadable");
     }
-    if (outcome.status === "skip") continue;
+    if (outcome.status === "skip") {
+      if (!strict) continue;
+      outcome = reject(realOrNull(path) === null ? "missing" : "not_allowed");
+    }
     const base = { href, path, name, mime: sentFileMime(name) };
     if (outcome.status === "saved") {
       used += outcome.size;
@@ -304,4 +304,39 @@ export function shareLinkedFiles(text: string, scope: ShareScope): SentFile[] {
     }
   }
   return files;
+}
+
+/**
+ * 找出回复里写成本机路径的链接（shared/sent-files.ts 的 localLinksOf：代码块里的不算、同一个地址只算一次），
+ * 按文件头的规则逐个判断、存副本。返回 meta.files；一个都不算返回空数组。不抛错：单个文件出错记成 unreadable。
+ */
+export function shareLinkedFiles(text: string, scope: ShareScope): SentFile[] {
+  if (!text.includes("](") && !text.includes("<")) return [];
+  const links = localLinksOf(markdown.parse(text) as MdNode, text);
+  if (links.length === 0) return [];
+  return shareLinks(links, scope, false);
+}
+
+const WIN_ABSOLUTE = /^(?:[A-Za-z]:[\\/]|\\\\)/;
+
+/**
+ * hub ask / router report 的 --file：路径原样（不当 Markdown、不做 %xx 解码）按同一套规则存副本。
+ * 后置：结果和 paths 一一对应、顺序相同；没存下的写明原因（没找到、不在可分享的文件夹里……）。不抛错。
+ */
+export function shareFilePaths(paths: readonly string[], scope: ShareScope): SentFile[] {
+  const links = paths.map((path) => ({
+    href: path,
+    local: { kind: isAbsolute(path) || WIN_ABSOLUTE.test(path) ? "absolute" : "relative", path } as LocalHref,
+  }));
+  return shareLinks(links, scope, true);
+}
+
+/** 正文里的图片和链接，按文档顺序：地址和给人看的文字（链接的文字、图片的 alt）。代码块里的不算。 */
+export function markdownLinksOf(text: string): { href: string; label: string }[] {
+  if (!text.includes("](")) return [];
+  const textOf = (node: MdNode): string => node.value ?? (node.children ?? []).map(textOf).join("");
+  return linkNodesOf(markdown.parse(text) as MdNode).map((node) => ({
+    href: node.url!,
+    label: (node.type === "image" ? (node.alt ?? "") : textOf(node)).trim(),
+  }));
 }

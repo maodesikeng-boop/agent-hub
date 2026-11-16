@@ -27,6 +27,7 @@ import {
   MAX_MODEL_CHARS,
   MAX_REASON_CHARS,
   MAX_TASK_BYTES,
+  DELIVERABLE_LABEL_MAX_CHARS,
   PM_MODES,
   ROUTER_DISPATCH_AGENT_PATH,
   ROUTER_PM_BRIEF_MAX_CHARS,
@@ -137,6 +138,19 @@ const folderOnly = { type: "object", additionalProperties: false, required: ["fo
 // hub worker …（M3）：编号是正整数；任务说明、打回的话按字节另查（BYTE_LIMITS）
 const workerIdField = { type: "integer", minimum: 1 };
 const taskField = { type: "string", minLength: 1, maxLength: MAX_TASK_BYTES };
+/** hub ask / router report 的 --file：个数超了由账本报中文原因（HUB_FILE_ARGS_MAX），这里只挡不像样的输入。 */
+const fileArgsField = {
+  type: "array",
+  items: {
+    type: "object",
+    additionalProperties: false,
+    required: ["label", "path"],
+    properties: {
+      label: { type: ["string", "null"], maxLength: DELIVERABLE_LABEL_MAX_CHARS * 4 },
+      path: pathField,
+    },
+  },
+};
 
 const scheduleIdOnly = { type: "object", additionalProperties: false, required: ["scheduleId"], properties: { scheduleId: workerIdField } };
 
@@ -247,6 +261,7 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
       node: { type: "string", minLength: 1, maxLength: MAX_NODE_KEY_CHARS * 2 },
       graphId: workerIdField,
       replaceItemId: workerIdField,
+      files: fileArgsField,
     },
   },
   "ask.close": { type: "object", additionalProperties: false, required: ["itemId"], properties: { itemId: workerIdField } },
@@ -284,6 +299,7 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
           },
         },
       },
+      files: fileArgsField,
     },
   },
   "router.note": {

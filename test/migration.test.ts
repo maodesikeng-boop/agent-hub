@@ -2126,3 +2126,41 @@ describe("0029_user_blockers：要用户动手的阻塞", () => {
     expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 });
+
+describe("0030_deliverables：总助条目挂交付物的旁表", () => {
+  it.each([28, 29])("从 %i 升级：老条目原样、没有交付物行；条目删掉时交付物跟着删；退回 user_version = 29 重跑不丢数据", (from) => {
+    const db = m3Db();
+    migrate(db, migrationsUpTo(from));
+    expect(db.get("SELECT name FROM sqlite_master WHERE name = 'router_item_deliverables'")).toBeUndefined();
+    expect(db.get("SELECT name FROM sqlite_master WHERE name = 'user_blockers'") !== undefined).toBe(from >= 29);
+    const itemId = Number(
+      db.run(
+        `INSERT INTO router_items (pm_id, project_id, conversation_id, kind, status, summary, created_at, updated_at)
+         VALUES (1, 2, 1, 'report', 'unread', '方案写好了', 100, 100)`,
+      ).lastInsertRowid,
+    );
+    if (from >= 29) {
+      db.run(
+        "INSERT INTO user_blockers (id, kind, vendor, device, status, rechecked_as, created_at, updated_at) VALUES (7, 'vendor_signed_out', 'agy', '东京', 'open', NULL, 60, 60)",
+      );
+    }
+    const before = db.all("SELECT * FROM router_items");
+    const blockers = from >= 29 ? db.all("SELECT * FROM user_blockers") : [];
+    expect(migrate(db, migrationsDir)).toMatchObject({ from, to: LATEST_VERSION });
+    expect(userVersion(db)).toBe(LATEST_VERSION);
+    expect(db.all("SELECT * FROM router_items")).toEqual(before);
+    expect(db.all("SELECT * FROM user_blockers")).toEqual(blockers);
+    expect(db.all("SELECT * FROM router_item_deliverables")).toEqual([]);
+
+    const json = JSON.stringify([{ label: "方案", path: "/tmp/plan.md" }]);
+    db.run("INSERT INTO router_item_deliverables (item_id, deliverables_json) VALUES (?, ?)", itemId, json);
+    db.exec("PRAGMA user_version = 29");
+    migrate(db, migrationsDir);
+    expect(db.all("SELECT * FROM router_item_deliverables")).toEqual([{ item_id: itemId, deliverables_json: json }]);
+    expect(db.all("SELECT * FROM user_blockers")).toEqual(blockers);
+
+    db.run("DELETE FROM router_items WHERE id = ?", itemId);
+    expect(db.all("SELECT * FROM router_item_deliverables")).toEqual([]);
+    expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+});

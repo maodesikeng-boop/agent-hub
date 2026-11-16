@@ -1,10 +1,18 @@
 // 初始快照（/api/state）的上限守卫：按“跑了一个月”算（300 个已收工的 Worker、3 万条消息，AGENTS.md“缓存和状态快照”那一条），
 // 快照里不带 Worker 对话的消息，项目经理对话只带最近几条，整份不超过 SNAPSHOT_MONTH_MAX_BYTES，算一次也要快。
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { gzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  DELIVERABLE_LABEL_MAX_CHARS,
+  DELIVERABLES_PER_CARD_MAX,
+  DELIVERABLES_PER_STEP_MAX,
+  MAX_PATH_BYTES,
+  ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX,
+  SNAPSHOT_DELIVERABLES_WORST_MAX_BYTES,
   ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES,
   ROUTER_COMMAND_MAX_CHARS,
   ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES,
@@ -18,6 +26,8 @@ import {
   SNAPSHOT_MONTH_MAX_BYTES,
   SNAPSHOT_RECENT_MESSAGES,
 } from "../../shared/limits.ts";
+import type { Deliverable } from "../../shared/deliverables.ts";
+import { AGENT_VENDORS } from "../../shared/vendors.ts";
 import type { Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
 import { createLedger } from "./index.ts";
@@ -32,6 +42,9 @@ const ARCHIVED_ROUTER_ITEMS = 1_500;
 const ACTIVE_ROUTER_ITEMS = 15;
 const FULL_BRIEFINGS = 500;
 const BENCH_ROUNDS = 7;
+const DELIVERABLE_CARDS = 10;
+/** 文件名最长 255 字节（APFS、ext4 的 NAME_MAX）。 */
+const FILE_NAME_MAX_BYTES = 255;
 
 let root: string;
 let db: Db;
@@ -49,12 +62,37 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
+/** 压不动的定长字符（十六进制摘要接起来），让 gzip 后的大小也按最坏算；同样的参数每次一样。 */
+function noise(seed: string, length: number): string {
+  let out = "";
+  for (let i = 0; out.length < length; i++) out += createHash("sha256").update(`${seed}:${i}`).digest("hex");
+  return out.slice(0, length);
+}
+
+/**
+ * 一张卡写满的交付物：标签 DELIVERABLE_LABEL_MAX_CHARS 字。
+ * 默认文件名、原链接按常见长度；worst 时文件名 FILE_NAME_MAX_BYTES、原链接 MAX_PATH_BYTES 字节，都是压不动的字符。
+ */
+function fullDeliverables(r: number, n = DELIVERABLES_PER_CARD_MAX, worst = false): Deliverable[] {
+  return Array.from({ length: n }, (_, k) => ({
+    label: `${r}-${k}`.padEnd(DELIVERABLE_LABEL_MAX_CHARS, "标"),
+    id: `${r}${k}`.padStart(16, "0"),
+    name: worst ? `${noise(`n${r}-${k}`, FILE_NAME_MAX_BYTES - 4)}.png` : `deliverable-${r}-${k}-desktop-screenshot.png`,
+    mime: "image/png",
+    size: 1_234_567,
+    href: worst
+      ? `/${noise(`h${r}-${k}`, MAX_PATH_BYTES - 5)}.png`
+      : `/Users/someone/.agent-hub/worktrees/7/595/docs/screenshots/deliverable-${r}-${k}-desktop-screenshot.png`,
+    origin: { messageId: 100_000 + r, index: k },
+  }));
+}
+
 /**
  * 一个项目经理派过 300 个 Worker（都收工了），每个 Worker 对话 95 条、汇报 3 行，项目经理对话 1000 条：约 3 万条。
  * full：总助按上限写满（docs/router-workbench-v2-design.md 第 5.5 节）——最近 10 条指令 4,000 字原话 + 6,000 字回复，
  * 另加 500 条带满 4 个链接的满长简报（最新 60 条未读）和 15 张待拍板项。
  */
-function seedMonth(options: { full?: boolean } = {}): { pmConversation: number } {
+function seedMonth(options: { full?: boolean; deliverables?: boolean | "worst"; blockers?: boolean } = {}): { pmConversation: number } {
   const { pm, conversation } = ledger.createPm({ name: "小林", mode: "manage_only", persona: "" });
   const longText = "汇报全文，".repeat(200);
   db.exec("BEGIN");
@@ -181,6 +219,53 @@ function seedMonth(options: { full?: boolean } = {}): { pmConversation: number }
       );
     }
   }
+  if (options.deliverables) {
+    // 10 张等用户拍板的卡、5 张活跃任务图的第一步（等用户确认），各带满 DELIVERABLES_PER_CARD_MAX 个交付物。
+    // worst：快照里的 ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX 张待拍板卡全是带满交付物的（比 full 的卡新，排在前面），步骤带满 DELIVERABLES_PER_STEP_MAX 个，文件名、原链接都到上限
+    const worst = options.deliverables === "worst";
+    const cards = worst ? ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX : DELIVERABLE_CARDS;
+    for (let r = 1; r <= cards; r++) {
+      const id = Number(
+        db.run(
+          `INSERT INTO router_items (pm_id, project_id, conversation_id, kind, status, question, context, options_json, created_at, updated_at)
+           VALUES (?, ?, ?, 'decision', 'pending', ?, ?, '["通过","打回"]', ?, ?)`,
+          pm.id, projectId, conversation.id, `请验收 #${r}`, "背景".repeat(100), at, at++,
+        ).lastInsertRowid,
+      );
+      db.run("INSERT INTO router_item_deliverables (item_id, deliverables_json) VALUES (?, ?)", id, JSON.stringify(fullDeliverables(r, DELIVERABLES_PER_CARD_MAX, worst)));
+    }
+    db.run(
+      `UPDATE task_graph_steps SET status = 'waiting', waiting_for = 'user', artifact_json = ?
+        WHERE node_key = 'node-1' AND graph_id IN (SELECT id FROM task_graphs WHERE status = 'active')`,
+      JSON.stringify({ summary: "做完了", deliverables: worst ? fullDeliverables(0, DELIVERABLES_PER_STEP_MAX, true) : fullDeliverables(0) }),
+    );
+    db.run(
+      "UPDATE task_graph_steps SET artifact_json = ? WHERE node_key = 'node-2' AND graph_id IN (SELECT id FROM task_graphs WHERE status = 'active')",
+      JSON.stringify({ summary: "做完了", deliverables: fullDeliverables(-1, DELIVERABLES_PER_STEP_MAX, worst) }),
+    );
+  }
+  if (options.blockers) {
+    // 每家厂商各一条在等的阻塞（一家只能有一条），项目经理对话里各一张提醒卡；活跃任务图除第一步外都被卡住等用户动手
+    // （node-2 带着上一轮的交付物）。
+    const blockerIds = AGENT_VENDORS.map((vendor) => {
+      const id = Number(
+        db.run(
+          "INSERT INTO user_blockers (kind, vendor, device, status, rechecked_as, created_at, updated_at) VALUES ('vendor_signed_out', ?, '这台 Mac', 'open', 'signed_out', ?, ?)",
+          vendor, at, at,
+        ).lastInsertRowid,
+      );
+      const card = Number(message(conversation.id, null, "agent", "text", `${vendor} 在这台 Mac 上没登录。`, { needsUser: true, blockerRef: { blockerId: id } }, `ask:blocker:${id}`).lastInsertRowid);
+      db.run("INSERT INTO user_blocker_cards (blocker_id, conversation_id, message_id) VALUES (?, ?, ?)", id, conversation.id, card);
+      return id;
+    });
+    const steps = db.all<{ id: number }>(
+      "SELECT id FROM task_graph_steps WHERE node_key <> 'node-1' AND graph_id IN (SELECT id FROM task_graphs WHERE status = 'active') ORDER BY id",
+    );
+    steps.forEach(({ id }, i) => {
+      db.run("UPDATE task_graph_steps SET status = 'waiting', waiting_for = 'user' WHERE id = ?", id);
+      db.run("INSERT INTO user_blocker_steps (step_id, blocker_id) VALUES (?, ?)", id, blockerIds[i % blockerIds.length]!);
+    });
+  }
   for (let c = 1; c <= 500; c++) {
     const full = options.full === true && c > 500 - ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX;
     db.run(
@@ -281,5 +366,41 @@ describe("初始快照的上限（一个月的量）", () => {
     expect(briefings.length).toBeGreaterThanOrEqual(1);
     expect(bytes).toBeLessThan(SNAPSHOT_MONTH_MAX_BYTES);
     expect(times[3]!).toBeLessThan(1_000);
+  });
+  it("一个月的量再加 10 张各带 DELIVERABLES_PER_CARD_MAX 个交付物的待拍板卡（docs/deliverables-design.md）：等拍板的卡和步骤带上交付物，整份仍不超过上限", () => {
+    seedMonth({ deliverables: true });
+    const snap = ledger.snapshot();
+    const bytes = Buffer.byteLength(JSON.stringify(snap));
+    const cards = snap.router.items.filter((x) => x.kind === "decision" && x.question.startsWith("请验收"));
+    expect(cards).toHaveLength(DELIVERABLE_CARDS);
+    for (const card of cards) expect(card.kind === "decision" && card.deliverables).toHaveLength(DELIVERABLES_PER_CARD_MAX);
+    const nodes = snap.activeTaskGraphs.flatMap((g) => g.nodes);
+    expect(nodes.filter((n) => n.key === "node-1").every((n) => n.artifact?.deliverables?.length === DELIVERABLES_PER_CARD_MAX)).toBe(true);
+    expect(nodes.filter((n) => n.key === "node-2").every((n) => n.artifact?.deliverables === undefined)).toBe(true);
+    const deliverableBytes =
+      cards.reduce((n, c) => n + Buffer.byteLength(JSON.stringify(c.kind === "decision" ? c.deliverables : [])), 0) +
+      nodes.reduce((n, x) => n + Buffer.byteLength(JSON.stringify(x.artifact?.deliverables ?? [])), 0);
+    console.log(`[snapshot-bench] deliverables bytes=${bytes} deliverables=${deliverableBytes}B`);
+    expect(bytes).toBeLessThan(SNAPSHOT_MONTH_MAX_BYTES);
+  });
+  it("总助写满、交付物数量和长度都到上限（50 张待拍板卡各 6 个、等确认的步骤各 10 个，文件名 255 字节、原链接 4096 字节），每家厂商都挂着要用户动手的阻塞：一个不裁，整份有上限", () => {
+    seedMonth({ full: true, deliverables: "worst", blockers: true });
+    const snap = ledger.snapshot();
+    const json = JSON.stringify(snap);
+    const bytes = Buffer.byteLength(json);
+    const gzipBytes = gzipSync(json).length;
+    const decisions = snap.router.items.filter((x) => x.kind === "decision");
+    console.log(`[snapshot-bench] deliverables-worst bytes=${bytes} gzip=${gzipBytes}`);
+    // 运行时不按总字节裁：待拍板卡、每张卡的交付物都照原样带全，网页照常显示（超出 SNAPSHOT_MONTH_MAX_BYTES 的部分走 gzip）
+    expect(decisions).toHaveLength(ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX);
+    for (const card of decisions) expect(card.kind === "decision" && card.deliverables).toHaveLength(DELIVERABLES_PER_CARD_MAX);
+    const waiting = snap.activeTaskGraphs.flatMap((g) => g.nodes).filter((n) => n.key === "node-1");
+    expect(waiting).toHaveLength(ACTIVE_GRAPHS);
+    for (const node of waiting) expect(node.artifact?.deliverables).toHaveLength(DELIVERABLES_PER_STEP_MAX);
+    const blocked = snap.activeTaskGraphs.flatMap((g) => g.nodes).filter((n) => n.userBlocker !== null);
+    expect(blocked).toHaveLength(ACTIVE_GRAPHS * 7);
+    // 被卡住的步骤等的是用户动手，不是拍板：上一轮的交付物不进全量快照
+    for (const node of blocked) expect(node.artifact?.deliverables).toBeUndefined();
+    expect(bytes).toBeLessThan(SNAPSHOT_DELIVERABLES_WORST_MAX_BYTES);
   });
 });
