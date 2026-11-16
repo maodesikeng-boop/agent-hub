@@ -1884,6 +1884,10 @@ describe("顶栏模型选择入口（RouterModelPicker）", () => {
     expect(popover.textContent).not.toMatch(/[·|/]/);
 
     const group = within(popover).getByRole("radiogroup", { name: "Router provider" });
+    // jsdom 量不了版面：锁住浮层宽度跟内容走（280px 到 360px），装行的两层 grid 都是 minmax(0,1fr)，长模型名撑不宽列、只会自己截断
+    expect(popover).toHaveClass("w-max", "min-w-70", "max-w-[min(22.5rem,var(--radix-popover-content-available-width))]");
+    expect(group).toHaveClass("grid-cols-1");
+    expect(group.parentElement).toHaveClass("grid-cols-1");
     expect(within(group).getByRole("radio", { name: new RegExp(`Auto.*${firstPresetShort}`) })).toHaveAttribute("aria-checked", "true");
     const signedOutRadio = within(group).getByRole("radio", { name: new RegExp(`${signedOutSpec.label}.*Not signed in`) });
     expect(signedOutRadio).toBeDisabled();
