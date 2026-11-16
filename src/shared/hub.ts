@@ -26,6 +26,7 @@ import type {
 } from "./domain.ts";
 import type { HubFileArg } from "./deliverables.ts";
 import type { RouterItem, RouterPmNote, RouterReportLink } from "./router.ts";
+import type { SelfReloadStatus } from "./api.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
 import { AGENT_VENDORS, DEFAULT_AGENT_VENDOR, type AgentVendor, type VendorAvailability } from "./vendors.ts";
 // ledger.ts 只从这里引类型，没有运行时的循环引用
@@ -335,7 +336,8 @@ export interface CreateTaskGraphNodeInput {
   readonly?: boolean;
   confirm?: boolean;
   review?: boolean;
-  base?: "main";
+  /** 普通步骤只能是 "main"；审查步骤是被审分支（不写是唯一上一步的分支）。 */
+  base?: string;
   deps?: TaskNodeKey[];
   /** 写了问题就是挂着拍板卡的步骤：轮到时等用户拍板。 */
   question?: string;
@@ -371,7 +373,8 @@ export interface PatchTaskGraphNodeInput {
   readonly?: boolean;
   confirm?: boolean;
   review?: boolean;
-  base?: "main" | null;
+  /** 普通步骤只能是 "main"；审查步骤是被审分支（不写是唯一上一步的分支）。 */
+  base?: string | null;
   deps?: TaskNodeKey[];
   question?: string;
   options?: string[];
@@ -455,6 +458,8 @@ interface PmHubStatus {
   setupCommand: string | null;
   /** 当前项目的活跃任务图计数摘要（如有）。 */
   activeTaskGraphs?: PmActiveGraphSummary[];
+  /** 登记了热重启时：从几点开始等、几点起只等正在回用户的轮次、现在谁在忙。 */
+  selfReload?: SelfReloadStatus;
 }
 
 /** Worker 调 hub status 时上游步骤的交棒摘要与落盘路径。 */

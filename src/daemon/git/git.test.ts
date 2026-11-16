@@ -13,6 +13,7 @@ import {
   isBranchMergedToMain,
   isCommitMergedToMain,
   isRepoWithCommit,
+  moveWorktree,
   parseDiffNumstatZ,
   pinDetachedHead,
   probeDiffNumstat,
@@ -20,7 +21,6 @@ import {
   probeWorkspace,
   probeWorktreeForRemoval,
   pruneWorktrees,
-  removeWorktree,
 } from "./index.ts";
 
 let emptyGitConfig: string;
@@ -343,7 +343,7 @@ describe("probeWorkspace（agent 接口在 hub worker start 之前探主文件�
   });
 });
 
-describe("isBranchMergedToMain、removeWorktree、pruneWorktrees", () => {
+describe("isBranchMergedToMain、moveWorktree、pruneWorktrees", () => {
   it("刚建好还没有新提交（等于 baseCommit）的分支不算已合并；有新提交且未合进 main 返回 false", async () => {
     const repo = makeRepo("unmerged");
     const wt = join(root, "wt", "1");
@@ -389,28 +389,28 @@ describe("isBranchMergedToMain、removeWorktree、pruneWorktrees", () => {
     expect(await isBranchMergedToMain(repo, "hub/2-noff", base2)).toBe(true);
   });
 
-  it("removeWorktree 删掉干净的 worktree 但保留分支；有未提交改动（不带 --force）时报错；pruneWorktrees 清理残留登记", async () => {
-    const repo = makeRepo("rm-wt");
-    const wtClean = join(root, "wt", "clean");
-    const wtDirty = join(root, "wt", "dirty");
-    await addWorktree({ repoFolder: repo, worktreePath: wtClean, branch: "hub/1-clean" });
-    await addWorktree({ repoFolder: repo, worktreePath: wtDirty, branch: "hub/2-dirty" });
+  it("moveWorktree 把 worktree 整个挪进指定目录、分支保留；锁着时报错不动；挪走的目录删掉后 pruneWorktrees 清理登记", async () => {
+    const repo = makeRepo("mv-wt");
+    const wt = join(root, "wt", "1");
+    const wtLocked = join(root, "wt", "2");
+    const into = join(root, "wt", ".trash", "s");
+    mkdirSync(into, { recursive: true });
+    await addWorktree({ repoFolder: repo, worktreePath: wt, branch: "hub/1-mv" });
+    await addWorktree({ repoFolder: repo, worktreePath: wtLocked, branch: "hub/2-locked" });
 
-    // 干净的 worktree 可以正常删，分支仍保留
-    await removeWorktree(repo, wtClean);
-    expect(existsSync(wtClean)).toBe(false);
-    expect(git(repo, "show-ref", "--verify", "refs/heads/hub/1-clean")).toContain("refs/heads/hub/1-clean");
+    await moveWorktree(repo, wt, into);
+    expect(existsSync(wt)).toBe(false);
+    expect(readFileSync(join(into, "1", "a.txt"), "utf8")).toBe("a\n");
+    expect(git(repo, "show-ref", "--verify", "refs/heads/hub/1-mv")).toContain("refs/heads/hub/1-mv");
 
-    // 有未提交改动（含未跟踪文件）时，不带 --force 的 git worktree remove 会失败且目录保留
-    writeFileSync(join(wtDirty, "untracked.txt"), "dirty\n");
-    await expect(removeWorktree(repo, wtDirty)).rejects.toThrow(GitError);
-    expect(existsSync(wtDirty)).toBe(true);
+    git(repo, "worktree", "lock", wtLocked);
+    await expect(moveWorktree(repo, wtLocked, into)).rejects.toThrow(GitError);
+    expect(existsSync(join(wtLocked, "a.txt"))).toBe(true);
 
-    // 手动删掉目录后，pruneWorktrees 清理 git worktree list 里的残留项
-    rmSync(wtDirty, { recursive: true, force: true });
+    rmSync(join(into, "1"), { recursive: true, force: true });
     await pruneWorktrees(repo);
-    expect(git(repo, "worktree", "list", "--porcelain")).not.toContain("dirty");
-    expect(git(repo, "show-ref", "--verify", "refs/heads/hub/2-dirty")).toContain("refs/heads/hub/2-dirty");
+    expect(git(repo, "worktree", "list", "--porcelain")).not.toContain("hub/1-mv");
+    expect(git(repo, "show-ref", "--verify", "refs/heads/hub/1-mv")).toContain("refs/heads/hub/1-mv");
   });
 
   it("probeDiffNumstat 与 parseDiffNumstatZ：正确解析带空格/中文路径与二进制文件，分支不存在返回 null", async () => {
@@ -442,7 +442,7 @@ describe("自动清理用的探测：中间状态、detached HEAD 保底、孤�
     const wt = join(root, "wt", "p");
     const { baseCommit } = await addWorktree({ repoFolder: repo, worktreePath: wt, branch: "hub/p" });
     const probe = await probeWorktreeForRemoval(wt);
-    expect(probe).toMatchObject({ kind: "ok", clean: true, onBranch: true, head: baseCommit, inProgress: false });
+    expect(probe).toMatchObject({ kind: "ok", hasContent: false, onBranch: true, head: baseCommit, inProgress: false });
 
     git(wt, "checkout", "-q", "--detach");
     expect(await probeWorktreeForRemoval(wt)).toMatchObject({ onBranch: false, head: baseCommit });
@@ -456,7 +456,26 @@ describe("自动清理用的探测：中间状态、detached HEAD 保底、孤�
     git(wt, "add", "-A");
     git(wt, "commit", "-q", "-m", "wt a");
     expect(() => git(wt, "merge", "main")).toThrow();
-    expect(await probeWorktreeForRemoval(wt)).toMatchObject({ kind: "ok", inProgress: true, clean: false });
+    expect(await probeWorktreeForRemoval(wt)).toMatchObject({ kind: "ok", inProgress: true, hasContent: true });
+  });
+
+  it("probeWorktreeForRemoval：只缺已跟踪文件（删到一半）不算内容；改了、新增、暂存的才算", async () => {
+    const repo = makeRepo("probe-half");
+    mkdirSync(join(repo, "d"), { recursive: true });
+    writeFileSync(join(repo, "d", "b.txt"), "b\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "d");
+    const wt = join(root, "wt", "half");
+    await addWorktree({ repoFolder: repo, worktreePath: wt, branch: "hub/half" });
+    rmSync(join(wt, "a.txt"));
+    rmSync(join(wt, "d"), { recursive: true });
+    expect(await probeWorktreeForRemoval(wt)).toMatchObject({ kind: "ok", hasContent: false, onBranch: true });
+
+    writeFileSync(join(wt, "new.txt"), "n\n");
+    expect(await probeWorktreeForRemoval(wt)).toMatchObject({ kind: "ok", hasContent: true });
+    rmSync(join(wt, "new.txt"));
+    git(wt, "rm", "-q", "--cached", "a.txt");
+    expect(await probeWorktreeForRemoval(wt)).toMatchObject({ kind: "ok", hasContent: true });
   });
 
   it("isCommitMergedToMain：main 历史里的提交（含 main 本身）是 true，没合入的是 false", async () => {
@@ -593,6 +612,15 @@ describe("自动清理用的探测：中间状态、detached HEAD 保底、孤�
     const emptyShell = join(root, "wt", "empty-shell");
     mkdirSync(emptyShell, { recursive: true });
     expect(await probeOrphanContent(repo, emptyShell, null, { baseCommit })).toEqual({ kind: "ok", hasContent: false });
+
+    // 检出删光之后又被别的进程写回的缓存（Vite 找不到 package.json 时把缓存写到根目录的 .vite）：不算内容
+    const rewritten = join(root, "wt", "rewritten");
+    mkdirSync(join(rewritten, ".vite", "deps"), { recursive: true });
+    writeFileSync(join(rewritten, ".vite", "deps", "_metadata.json"), "{}\n");
+    expect(await probeOrphanContent(repo, rewritten, null, { baseCommit })).toEqual({ kind: "ok", hasContent: false });
+    // 还剩检出里的东西时照常比对：多出来的未忽略文件算内容
+    writeFileSync(join(rewritten, "other.txt"), "base-other\n");
+    expect(await probeOrphanContent(repo, rewritten, null, { baseCommit })).toEqual({ kind: "ok", hasContent: true });
 
     // 异常分支（不存在的 ref、非仓库）均可靠清理临时索引目录，TMPDIR 零残留
     expect((await probeOrphanContent(repo, emptyShell, "refs/heads/no-such-ref")).kind).toBe("failed");

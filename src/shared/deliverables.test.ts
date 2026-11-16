@@ -6,6 +6,7 @@ import {
   groupDeliverables,
   mergeDeliverables,
   parseHubFileArg,
+  deliverableOriginOfFile,
   sentFilesOfDeliverables,
   type Deliverable,
 } from "./deliverables.ts";
@@ -140,6 +141,13 @@ describe("sentFilesOfDeliverables", () => {
   it("同一个列表引用重复调用返回同一个数组引用", () => {
     const list = [d("plan.md")];
     expect(sentFilesOfDeliverables(list)).toBe(sentFilesOfDeliverables(list));
+  });
+
+  it("换出的文件能查回交付物记的原消息；不是换出来的查不到", () => {
+    const [a, b] = sentFilesOfDeliverables([d("plan.md", { origin: { messageId: 7, index: 2 } }), d("rec.mp4")]);
+    expect(deliverableOriginOfFile(a!)).toEqual({ messageId: 7, index: 2 });
+    expect(deliverableOriginOfFile(b!)).toBeNull();
+    expect(deliverableOriginOfFile({ ...a! })).toBeUndefined();
   });
 });
 

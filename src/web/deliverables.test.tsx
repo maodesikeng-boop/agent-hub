@@ -155,6 +155,13 @@ function makeNode(over: Partial<TaskNode> & Pick<TaskNode, "key" | "title">): Ta
   };
 }
 
+/** 卡片正文（不算下面的文件行）里能点开预览的文件链接；本机路径不留成普通链接。 */
+function expectBodyFileLinks(card: HTMLElement, labels: string[]) {
+  const links = [...card.querySelectorAll<HTMLElement>("[data-file-link]")].filter((el) => !el.closest("[data-deliverables]"));
+  expect(links.map((el) => el.textContent)).toEqual(labels);
+  expect(card.querySelector('a[href^="/tmp/"]')).toBeNull();
+}
+
 function gateGraph(): TaskGraph {
   return {
     id: 5,
@@ -321,6 +328,15 @@ describe("四处入口", () => {
     expect(card.querySelector(`a[href="${plan.href}"]`)).toBeNull();
   });
 
+  it("果皮轨门禁卡：摘要里写了交付物的同一个本机链接，链接也能点开预览", () => {
+    const graph = gateGraph();
+    graph.nodes[0] = { ...graph.nodes[0]!, gateSummaryMd: `**摘要**：做完了，结论见[验收结论](${verdict.href})` };
+    render(
+      <RightRail asks={[]} workers={[]} activeGraphs={[graph]} openWorkerId={null} layout="side" avatarKey={1} onOpenAsk={() => {}} onOpenWorker={() => {}} />,
+    );
+    expectBodyFileLinks(screen.getByTestId("peel-gate-card"), ["验收结论"]);
+  });
+
   it("右栏 Needs You 的提问行展开后列出交付物", async () => {
     const ask = askMessage({ id: 52, text: "方案好了，请验收", meta: { needsUser: true, deliverables: [plan, rec] } });
     render(
@@ -446,6 +462,22 @@ describe("四处入口", () => {
       await user.click(within(tray).getByRole("button", { name: /请确认步骤「实现」的结果/ }));
       const gateCard = await within(tray).findByRole("article", { name: "请确认步骤「实现」的结果" });
       expect(within(gateCard.querySelector<HTMLElement>("[data-deliverables]")!).getByRole("button", { name: "录屏" })).toBeInTheDocument();
+    });
+
+    it("总助拍板卡、简报：正文里写了交付物的同一个本机链接，链接也能点开预览", async () => {
+      layoutDetailsByText();
+      const item = decisionItem({ context: `请看[方案](${plan.href})`, deliverables: [plan] });
+      const report = reportItem({ summary: `做完了，结论见[验收结论](${verdict.href})`, deliverables: [verdict] });
+      installFleet(snapshotWith({ router: { ...emptyRouterSlice(), items: [item, report] } }));
+      await openRouter();
+      const tray = await screen.findByRole("region", { name: "Needs You" });
+      expectBodyFileLinks(await within(tray).findByRole("article", { name: "方案标准改好了，请验收" }), ["方案"]);
+      const briefing = await waitFor(() => {
+        const el = document.querySelector<HTMLElement>("[data-router-briefing]");
+        expect(el).not.toBeNull();
+        return el!;
+      });
+      expectBodyFileLinks(briefing, ["验收结论"]);
     });
 
     it("总助简报：deliverables 列在正文下面，链接行只剩网址、Worker、对话", async () => {

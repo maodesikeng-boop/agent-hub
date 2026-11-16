@@ -22,6 +22,7 @@ export * from "./server-info.ts";
 export * from "./preview.ts";
 export * from "./readonly-policy.ts";
 export * from "./reminders.ts";
+export * from "./review.ts";
 export * from "./rewind.ts";
 export * from "./sent-files.ts";
 export * from "./snapshot.ts";

@@ -745,6 +745,18 @@ describe("0003_pm_conversation：约束", () => {
   });
 });
 
+/**
+ * 升级后这张表里升级前就有的那几列：之后的迁移给老表加的列（比如 0028 的 workers.review_json）不是老数据，不比；
+ * 老列被删、被改值照样比得出来。old 是升级前读出来的行，空表就原样返回。
+ */
+function rowsInOldShape(db: Db, table: string, old: readonly unknown[]): unknown[] {
+  const rows = db.all<Record<string, unknown>>(`SELECT * FROM ${table} ORDER BY rowid`);
+  const first = old[0] as Record<string, unknown> | undefined;
+  if (first === undefined) return rows;
+  const keys = Object.keys(first);
+  return rows.map((r) => Object.fromEntries(keys.map((k) => [k, r[k]])));
+}
+
 // ---- 0004_workers ----
 
 /**
@@ -984,7 +996,7 @@ describe("0006_agent_settings：从 M3 的库升级", () => {
     expect(db.all("SELECT * FROM agent_sessions ORDER BY id").map(({ token_usage: _, ...r }: Record<string, unknown>) => r)).toEqual(
       dump.agent_sessions!.map((r) => ({ ...r, effort: null })),
     );
-    expect(db.all("SELECT * FROM workers ORDER BY id")).toEqual(dump.workers!.map((r) => ({ ...r, effort: null })));
+    expect(rowsInOldShape(db, "workers", dump.workers!.map((r) => ({ ...r, effort: null })))).toEqual(dump.workers!.map((r) => ({ ...r, effort: null })));
     // 老的修改记录：前后都是项目经理现在的值
     expect(db.all("SELECT * FROM persona_changes ORDER BY id")).toEqual(
       dump.persona_changes!.map((r) => ({
@@ -1024,7 +1036,7 @@ describe("0008_schedules：从 0007 的库升级", () => {
     expect(userVersion(db)).toBe(7);
     expect(migrate(db, migrationsDir)).toMatchObject({ from: 7, to: LATEST_VERSION });
     expect(LATEST_VERSION).toBeGreaterThanOrEqual(8);
-    for (const { name } of tables) expect(db.all(`SELECT * FROM ${name} ORDER BY rowid`)).toEqual(dump[name]);
+    for (const { name } of tables) expect(rowsInOldShape(db, name, dump[name]!)).toEqual(dump[name]);
     expect(db.all("SELECT * FROM schedules")).toEqual([]);
     expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
   });
@@ -1205,7 +1217,7 @@ describe("0012_session_persona_revision：从 0011 的库升级", () => {
     const tables = db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name");
     const dump = Object.fromEntries(tables.map(({ name }) => [name, db.all<Record<string, unknown>>(`SELECT * FROM ${name} ORDER BY rowid`)]));
     expect(migrate(db, migrationsDir)).toMatchObject({ from: 11, to: LATEST_VERSION });
-    for (const { name } of tables) expect(db.all(`SELECT * FROM ${name} ORDER BY rowid`)).toEqual(dump[name]);
+    for (const { name } of tables) expect(rowsInOldShape(db, name, dump[name]!)).toEqual(dump[name]);
     expect(db.all("SELECT * FROM session_persona_seen")).toEqual([]);
     db.exec("PRAGMA user_version = 11");
     expect(() => migrate(db, migrationsDir)).not.toThrow();
@@ -1246,7 +1258,7 @@ describe("0013_handovers：从 0012 的库升级", () => {
     const tables = db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name");
     const dump = Object.fromEntries(tables.map(({ name }) => [name, db.all<Record<string, unknown>>(`SELECT * FROM ${name} ORDER BY rowid`)]));
     expect(migrate(db, migrationsDir)).toMatchObject({ from: 12, to: LATEST_VERSION });
-    for (const { name } of tables) expect(db.all(`SELECT * FROM ${name} ORDER BY rowid`)).toEqual(dump[name]);
+    for (const { name } of tables) expect(rowsInOldShape(db, name, dump[name]!)).toEqual(dump[name]);
     expect(db.all("SELECT * FROM handovers")).toEqual([]);
     expect(
       db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'handovers' AND name NOT LIKE 'sqlite_%' ORDER BY name"),
@@ -1332,7 +1344,7 @@ describe("0014_worker_background_waits：从 0013 的库升级", () => {
     const tables = db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name");
     const dump = Object.fromEntries(tables.map(({ name }) => [name, db.all<Record<string, unknown>>(`SELECT * FROM ${name} ORDER BY rowid`)]));
     expect(migrate(db, migrationsDir)).toMatchObject({ from: 13, to: LATEST_VERSION });
-    for (const { name } of tables) expect(db.all(`SELECT * FROM ${name} ORDER BY rowid`)).toEqual(dump[name]);
+    for (const { name } of tables) expect(rowsInOldShape(db, name, dump[name]!)).toEqual(dump[name]);
     expect(db.all("SELECT * FROM worker_background_waits")).toEqual([]);
     db.exec("PRAGMA user_version = 13");
     expect(() => migrate(db, migrationsDir)).not.toThrow();
@@ -1353,7 +1365,7 @@ describe("0015_browser_sessions：从 0014 的库升级", () => {
     const tables = db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name");
     const dump = Object.fromEntries(tables.map(({ name }) => [name, db.all<Record<string, unknown>>(`SELECT * FROM ${name} ORDER BY rowid`)]));
     expect(migrate(db, migrationsDir)).toMatchObject({ from: 14, to: LATEST_VERSION });
-    for (const { name } of tables) expect(db.all(`SELECT * FROM ${name} ORDER BY rowid`)).toEqual(dump[name]);
+    for (const { name } of tables) expect(rowsInOldShape(db, name, dump[name]!)).toEqual(dump[name]);
     expect(db.all("SELECT * FROM browser_sessions")).toEqual([]);
     db.exec("PRAGMA user_version = 14");
     expect(() => migrate(db, migrationsDir)).not.toThrow();
@@ -1374,7 +1386,7 @@ describe("0020_conversation_purges：从 0018 / 0019 的旧库升级", () => {
     const tables = db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name");
     const dump = Object.fromEntries(tables.map(({ name }) => [name, db.all<Record<string, unknown>>(`SELECT * FROM ${name} ORDER BY rowid`)]));
     expect(migrate(db, migrationsUpTo(20))).toMatchObject({ from: 18, to: 20, applied: [19, 20] });
-    for (const { name } of tables) expect(db.all(`SELECT * FROM ${name} ORDER BY rowid`)).toEqual(dump[name]);
+    for (const { name } of tables) expect(rowsInOldShape(db, name, dump[name]!)).toEqual(dump[name]);
     expect(
       db.get("SELECT count(*) AS n FROM sqlite_master WHERE type = 'index' AND tbl_name = 'messages' AND name = 'messages_worker_lines'"),
     ).toEqual({ n: 1 });
@@ -1417,7 +1429,7 @@ describe("0022_rewind_index：从 0021 的旧库升级", () => {
     const tables = db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name");
     const dump = Object.fromEntries(tables.map(({ name }) => [name, db.all<Record<string, unknown>>(`SELECT * FROM ${name} ORDER BY rowid`)]));
     expect(migrate(db, migrationsUpTo(22))).toMatchObject({ from: 21, to: 22, applied: [22] });
-    for (const { name } of tables) expect(db.all(`SELECT * FROM ${name} ORDER BY rowid`)).toEqual(dump[name]);
+    for (const { name } of tables) expect(rowsInOldShape(db, name, dump[name]!)).toEqual(dump[name]);
     expect(
       db.get("SELECT count(*) AS n FROM sqlite_master WHERE type = 'index' AND tbl_name = 'messages' AND name = 'messages_conversation_non_agent'"),
     ).toEqual({ n: 1 });
@@ -1448,7 +1460,7 @@ describe("0023_router_and_task_graphs：从 0022 的旧库升级与幂等重跑"
 
     expect(migrate(db, migrationsUpTo(23))).toMatchObject({ from: 22, to: 23, applied: [23] });
     expect(LATEST_VERSION).toBeGreaterThanOrEqual(23);
-    for (const name of beforeTables) expect(db.all(`SELECT * FROM ${name} ORDER BY rowid`)).toEqual(dump[name]);
+    for (const name of beforeTables) expect(rowsInOldShape(db, name, dump[name]!)).toEqual(dump[name]);
 
     const expectedNewTables = [
       "router_audit_log",
@@ -1619,7 +1631,7 @@ describe("0024_worker_turn_timeout：Worker 单轮超时计时落盘、按 workt
     const beforeTables = tableNames(db);
     const dump = Object.fromEntries(beforeTables.map((name) => [name, db.all<Record<string, unknown>>(`SELECT * FROM ${name} ORDER BY rowid`)]));
     expect(migrate(db, migrationsUpTo(24))).toMatchObject({ from: 23, to: 24, applied: [24] });
-    for (const name of beforeTables) expect(db.all(`SELECT * FROM ${name} ORDER BY rowid`)).toEqual(dump[name]);
+    for (const name of beforeTables) expect(rowsInOldShape(db, name, dump[name]!)).toEqual(dump[name]);
     expect(tableNames(db)).toEqual([...beforeTables, "worker_turn_timeouts"].sort());
 
     // 重跑幂等
@@ -1731,7 +1743,7 @@ describe("0025_task_graph_steps：步骤状态 7 个变 4 个、节点类型 2 �
     expect(migrate(db, migrationsUpTo(25))).toMatchObject({ from: 24, to: 25, applied: [25] });
     expect(db.get("PRAGMA foreign_keys")).toEqual({ foreign_keys: 1 });
     // 别的表一行不动
-    for (const name of otherTables) expect(db.all(`SELECT * FROM ${name} ORDER BY rowid`)).toEqual(dump[name]);
+    for (const name of otherTables) expect(rowsInOldShape(db, name, dump[name]!)).toEqual(dump[name]);
     expect(tableNames(db)).not.toContain("task_graph_nodes");
     expect(tableNames(db)).toContain("task_graph_steps");
     expect(db.all<{ name: string }>("PRAGMA table_info(task_graph_steps)").map((c) => c.name)).not.toContain("kind");
@@ -2031,5 +2043,56 @@ describe("0027_vendor_switch：从 0026 升级与幂等回退验证", () => {
       expect(db.all("SELECT * FROM session_preamble_seen ORDER BY session_id")).toEqual(snapshot);
       expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
     }
+  });
+});
+
+describe("0028_review_workers：审查 Worker 不挂分支", () => {
+  it("worktree 的 Worker 要么有分支、要么有 review_json；在主文件夹里干的不能有 review_json；老数据、外键原样；再跑一遍也行", () => {
+    const db = m2Db();
+    migrate(db, migrationsUpTo(27));
+    insertWorker(db);
+    const before = db.all("SELECT * FROM workers");
+    migrate(db, migrationsDir);
+    expect(rowsInOldShape(db, "workers", before)).toEqual(before);
+    expect(db.get("SELECT review_json FROM workers WHERE id = 1")).toEqual({ review_json: null });
+    expect(() => db.run("UPDATE workers SET branch = NULL WHERE id = 1")).toThrow(/CHECK/);
+    db.run("UPDATE workers SET branch = NULL, review_json = ? WHERE id = 1", JSON.stringify({ branch: "hub/1-impl", snapshot: null }));
+    expect(() => db.run("UPDATE workers SET workspace = 'main', worktree_path = NULL WHERE id = 1")).toThrow(/CHECK/);
+    expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+    const after = db.all("SELECT * FROM workers");
+    db.exec("PRAGMA user_version = 27");
+    migrate(db, migrationsDir);
+    expect(db.all("SELECT * FROM workers")).toEqual(after);
+    const plan = db.all<{ detail: string }>("EXPLAIN QUERY PLAN SELECT id FROM workers WHERE worktree_path = ?", "/x").map((r) => r.detail).join("\n");
+    expect(plan).toContain("workers_worktree_path");
+  });
+});
+
+describe("0029_deliverables：总助条目挂交付物的旁表", () => {
+  it("从 0028 升级：老条目原样、没有交付物行；条目删掉时交付物跟着删；退回 user_version = 28 重跑不丢数据", () => {
+    const db = m3Db();
+    migrate(db, migrationsUpTo(28));
+    expect(db.get("SELECT name FROM sqlite_master WHERE name = 'router_item_deliverables'")).toBeUndefined();
+    const itemId = Number(
+      db.run(
+        `INSERT INTO router_items (pm_id, project_id, conversation_id, kind, status, summary, created_at, updated_at)
+         VALUES (1, 2, 1, 'report', 'unread', '方案写好了', 100, 100)`,
+      ).lastInsertRowid,
+    );
+    const before = db.all("SELECT * FROM router_items");
+    migrate(db, migrationsDir);
+    expect(userVersion(db)).toBe(LATEST_VERSION);
+    expect(db.all("SELECT * FROM router_items")).toEqual(before);
+    expect(db.all("SELECT * FROM router_item_deliverables")).toEqual([]);
+
+    const json = JSON.stringify([{ label: "方案", path: "/tmp/plan.md" }]);
+    db.run("INSERT INTO router_item_deliverables (item_id, deliverables_json) VALUES (?, ?)", itemId, json);
+    db.exec("PRAGMA user_version = 28");
+    migrate(db, migrationsDir);
+    expect(db.all("SELECT * FROM router_item_deliverables")).toEqual([{ item_id: itemId, deliverables_json: json }]);
+
+    db.run("DELETE FROM router_items WHERE id = ?", itemId);
+    expect(db.all("SELECT * FROM router_item_deliverables")).toEqual([]);
+    expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 });

@@ -205,7 +205,7 @@ const routerNoteSchema = z.object({
   clear: z.boolean().optional(),
 });
 
-/** 条目连同它挂的交付物（旁表 router_item_deliverables，migrations/0028_deliverables.sql）；没挂的 deliverables_json 是 null。 */
+/** 条目连同它挂的交付物（旁表 router_item_deliverables，migrations/0029_deliverables.sql）；没挂的 deliverables_json 是 null。 */
 const ITEM_SELECT = `SELECT router_items.*, router_item_deliverables.deliverables_json FROM router_items
   LEFT JOIN router_item_deliverables ON router_item_deliverables.item_id = router_items.id`;
 

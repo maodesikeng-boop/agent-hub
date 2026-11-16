@@ -2,7 +2,7 @@
 // 顺序都是摘要 → 文件 → 细节（默认收起），界面规则见 docs/ui-standard.md 第 22 条。
 import { FileText, Play } from "lucide-react";
 import { memo, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { FILE_EXPIRED_TEXT, groupDeliverables, previewKindOf, sentFileUrl, splitLead, type Deliverable, type SentFile } from "../../shared/index.ts";
+import { FILE_EXPIRED_TEXT, groupDeliverables, previewKindOf, sentFilesOfDeliverables, sentFileUrl, splitLead, type Deliverable, type SentFile } from "../../shared/index.ts";
 import { useClient } from "../device-scope.tsx";
 import { cn } from "../lib/utils.ts";
 import { FileCard, useFileExpired } from "./Attachments.tsx";
@@ -113,12 +113,13 @@ const FALLBACK_FONT_PX = 16;
  * 细节一行放得下（比如只有一个 PR 链接、一行提交号）就直接显示；超过一行默认收起。一个 `Show more` / `Show less` 同时管摘要的收起和细节，
  * 没有要收的就不出按钮。细节放不放得下是画出来量的：内容或卡片宽度变了，先画出来再量一次，在浏览器绘制之前定下来，不会闪。
  * 量不到高度（没排版）时当放不下。同一张卡换了内容要重置展开状态，调用方给 key。textClassName 是摘要和细节的字号颜色，className 给外边距。
+ * files 不传时用交付物本身：正文里写了交付物的同一个链接，也换成能点开的文件。
  */
 export const CardBody = memo(function CardBody({
   text,
   deliverables = NO_DELIVERABLES,
   extra,
-  files,
+  files = sentFilesOfDeliverables(deliverables),
   messageId,
   className,
   textClassName,

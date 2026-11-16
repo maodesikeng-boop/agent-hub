@@ -67,7 +67,7 @@
 B 的几个具体规定：
 
 - **Worker 汇报加第 9 栏“文件”**，每个写成 `[标签](路径)`，没有写“无”。`测试` 栏不再写截图路径。汇报消息入库时本来就存副本，账本只按“文件”栏挑出对应的副本记进步骤，不再拷。再交一次汇报时换成新的。
-- **验收步骤交一份“验收结论”文件**（Markdown，写结论、怎么验的、每张截图说明什么），连同截图、录屏写进“文件”栏。只读 Worker 写到 `/tmp/<主题>-verify/` 也能分享。
+- **验收步骤交一份“验收结论”文件**（Markdown，写结论、怎么验的、每张截图说明什么），连同截图、录屏写进“文件”栏。只读 Worker 写到 `/tmp/<主题>-verify/` 也能分享。审查步骤（`review: true`）同样：结论文件写在审查目录或 `/tmp` 下，交到“文件”栏；判 PASS 后收尾核对通过，交付物才跟着那份汇报记进步骤（`reviewVerdict` 和 `deliverables` 同一次写入）。
 - **录屏用 mp4（H.264）**。浏览器自动化录出来的多是 webm，用 `ffmpeg -i in.webm -c:v libx264 -pix_fmt yuv420p -movflags +faststart out.mp4` 转（本机已装 ffmpeg）。理由：macOS 的 WKWebView、Windows 的 WebView2、iOS Safari 都能播 H.264 mp4；webm 在旧版 Safari 上不稳（推断，没逐个试）。单个不超过 50 MB。
 - **项目经理挂卡用 `--file`**：`hub ask --file 方案=docs/x-design.md`、`hub router report --file …`，可写多个。不再把路径写进标题。`--link` 的地址是本机路径时拒绝，提示改用 `--file`。
 - **卡片里的样子**照 `docs/ui-standard.md` 第 22 条（这次新加）：标题 → 摘要（正文第一段）→ 文件 → 细节（交棒、提交、PR、链接；一行放得下直接显示，超过一行默认收起）。文件两行，文档一行蓝色链接，图片和视频一行 96px 小图。四处共用 `<CardBody>`。
@@ -89,7 +89,7 @@ B 的几个具体规定：
 3. **前端引用稳定。** `groupDeliverables`、`sentFilesOfDeliverables` 按输入数组用 `WeakMap` 缓存，同一个列表返回同一个对象；`pendingDecisionsOf` 原样带上条目里的数组引用，不复制。
 4. **验证。** `src/daemon/ledger/snapshot-size.test.ts` 有两个场景：
    - 一个月数据集再加 10 张各带 6 个常见长度交付物的待拍板卡：354,432 字节，不超过 `SNAPSHOT_MONTH_MAX_BYTES`（384 KB）。
-   - 最坏情况：总助写满，等你拍板的卡补满 50 张各带 6 个，等确认的步骤各带 10 个，文件名 255 字节、原链接 4096 字节（`MAX_PATH_BYTES`）：1,593,345 字节，gzip 后 638,911 字节，守 `SNAPSHOT_DELIVERABLES_WORST_MAX_BYTES`（2 MB）。
+   - 最坏情况：总助写满，等你拍板的卡补满 50 张各带 6 个，等确认的步骤各带 10 个，文件名 255 字节、原链接 4096 字节（`MAX_PATH_BYTES`）：2,006,919 字节，gzip 后 852,612 字节，守 `SNAPSHOT_DELIVERABLES_WORST_MAX_BYTES`（2 MB）。
    - 超过 384 KB 时运行时不裁剪：快照整份发，压缩后传，网页照常显示。实测：真守护进程上“总助写满 + 10 张卡各带 6 个”的 `/api/state` 返回 200，413,329 字节（gzip 17,542 字节），25 张待拍板卡、每张的交付物都在，桌面和手机页面正常（`docs/screenshots/deliverables/snapshot-worst-desktop.png`）。
 
 ## 统一

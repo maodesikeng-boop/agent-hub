@@ -220,9 +220,9 @@ function seedMonth(options: { full?: boolean; deliverables?: boolean | "worst" }
   }
   if (options.deliverables) {
     // 10 张等用户拍板的卡、5 张活跃任务图的第一步（等用户确认），各带满 DELIVERABLES_PER_CARD_MAX 个交付物。
-    // worst：待拍板卡补满到 ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX 张，步骤带满 DELIVERABLES_PER_STEP_MAX 个，文件名、原链接都到上限
+    // worst：快照里的 ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX 张待拍板卡全是带满交付物的（比 full 的卡新，排在前面），步骤带满 DELIVERABLES_PER_STEP_MAX 个，文件名、原链接都到上限
     const worst = options.deliverables === "worst";
-    const cards = worst ? ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX - (options.full ? ACTIVE_ROUTER_ITEMS : 0) : DELIVERABLE_CARDS;
+    const cards = worst ? ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX : DELIVERABLE_CARDS;
     for (let r = 1; r <= cards; r++) {
       const id = Number(
         db.run(
@@ -370,9 +370,7 @@ describe("初始快照的上限（一个月的量）", () => {
     console.log(`[snapshot-bench] deliverables-worst bytes=${bytes} gzip=${gzipBytes}`);
     // 运行时不按总字节裁：待拍板卡、每张卡的交付物都照原样带全，网页照常显示（超出 SNAPSHOT_MONTH_MAX_BYTES 的部分走 gzip）
     expect(decisions).toHaveLength(ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX);
-    for (const card of decisions.filter((x) => x.question.startsWith("请验收"))) {
-      expect(card.kind === "decision" && card.deliverables).toHaveLength(DELIVERABLES_PER_CARD_MAX);
-    }
+    for (const card of decisions) expect(card.kind === "decision" && card.deliverables).toHaveLength(DELIVERABLES_PER_CARD_MAX);
     const waiting = snap.activeTaskGraphs.flatMap((g) => g.nodes).filter((n) => n.key === "node-1");
     expect(waiting).toHaveLength(ACTIVE_GRAPHS);
     for (const node of waiting) expect(node.artifact?.deliverables).toHaveLength(DELIVERABLES_PER_STEP_MAX);

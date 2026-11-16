@@ -6,7 +6,7 @@ import type { MessagesPage } from "../../shared/api.ts";
 import type { UserMessageMeta } from "../../shared/attachments.ts";
 import { mergeDeliverables, type Deliverable, type HubFileArg } from "../../shared/deliverables.ts";
 import { agentMessageDedupeKey, canTransitionMessage, systemMessageDedupeKey, userMessageDedupeKey } from "../../shared/domain.ts";
-import type { AgentSessionRow, AskMeta, ConversationId, GateRef, Message, MessageId, MessageStatus, SessionId, SystemMessageMeta } from "../../shared/domain.ts";
+import type { AgentRole, AgentSessionRow, AskMeta, ConversationId, GateRef, Message, MessageId, MessageStatus, SessionId, SystemMessageMeta } from "../../shared/domain.ts";
 import { turnFailureReason } from "../../shared/driver.ts";
 import type { DriverEvent, SessionExitedEvent } from "../../shared/driver.ts";
 import { ConversationNotFoundError } from "../../shared/ledger.ts";
@@ -22,6 +22,7 @@ import type { MessageDbRow } from "./rows.ts";
 import type { LedgerSentFiles } from "./sent-files.ts";
 import { clearStreaming, idle, toolStarted, working } from "./sessions.ts";
 import { isPathInsideOrEqual } from "../platform/index.ts";
+import { getAgentSession } from "../store/index.ts";
 import type { LedgerSessions } from "./sessions.ts";
 import { stepOfTool, summarizeToolCall } from "./tool-summary.ts";
 
@@ -76,7 +77,7 @@ export function createLedgerMessages(
   const onIndependentAskCreated = options.onIndependentAskCreated ?? (() => {});
   const onConversationAnsweredAsk = options.onConversationAnsweredAsk ?? (() => {});
   const { db, now, write, enqueue, reportHealthIn } = ctx;
-  const { currentSession, liveOf, updateLive } = sessions;
+  const { currentSession, liveOf, updateLive, workingSessionIds } = sessions;
 
   /** 老的项目群（11-03 拿掉了）当作不存在。 */
   const conversationExists = (id: ConversationId) =>
@@ -529,6 +530,21 @@ export function createLedgerMessages(
   };
 
   /**
+   * 正在跑、关机打断后不会重发的轮次（有 resumesAfterShutdown 为假的已送达、处理中消息：项目经理、总助正在回用户），每个会话一条。
+   * 热重启过了等待上限后只等这些（daemon/self-reload.ts）。
+   */
+  const turnsLostOnShutdown = (): Array<{ sessionId: SessionId; role: AgentRole }> =>
+    workingSessionIds().flatMap((sessionId) => {
+      const session = getAgentSession(db, sessionId);
+      if (session === null) return [];
+      const inFlight = db.all<Pick<MessageDbRow, "sender">>(
+        `SELECT sender FROM messages WHERE session_id = ? AND status IN ${ACTIVE_MESSAGE_STATUSES}`,
+        sessionId,
+      );
+      return inFlight.some((message) => !resumesAfterShutdown(session, message)) ? [{ sessionId, role: session.role }] : [];
+    });
+
+  /**
    * 停止这个会话正在跑的一轮（在事务里调；网页“停止”和 hub worker end 共用）：排队的用户消息标已取消、标“正在停”、通知驱动层打断。
    * 没有要停的（空闲、没有排队、没有残留的处理中消息）什么也不做，返回 false。
    */
@@ -658,6 +674,7 @@ export function createLedgerMessages(
     requestStop,
     rewindLastUserMessage,
     stopIn,
+    turnsLostOnShutdown,
     messagesBefore,
     actionFailedIn,
     stopMessage,

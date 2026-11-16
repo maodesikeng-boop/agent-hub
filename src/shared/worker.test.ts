@@ -65,6 +65,8 @@ describe("parseWorkerReport", () => {
         handoff: "",
         questions: "无",
         files: "",
+        verdict: null,
+        verifiedCommit: null,
       },
     });
   });
@@ -136,6 +138,8 @@ describe("parseWorkerReport", () => {
         handoff: "",
         questions: "",
         files: "",
+        verdict: null,
+        verifiedCommit: null,
       },
     });
   });
@@ -182,6 +186,8 @@ describe("parseWorkerReport", () => {
         handoff: "改动集中在 src/daemon/ledger/task-graphs.ts\n- 注意检查异步恢复时序",
         questions: "无（全部明确）",
         files: "",
+        verdict: null,
+        verifiedCommit: null,
       },
     });
     if (withHandoff.kind === "ok") {
@@ -263,6 +269,20 @@ describe("parseWorkerReport", () => {
     if (dashNone.kind === "ok") {
       expect(hasReportQuestion(dashNone.report.questions)).toBe(false);
     }
+  });
+});
+
+describe("审查步骤的两栏", () => {
+  it("结论、验证提交：大小写和 + 两边的空格不计较，加粗、列表写法也认；没写是 null，写错的结论是 null", () => {
+    const parsed = parseWorkerReport(report("- 状态: 做完了\n- 摘要: 可以合\n- **结论**: pass + notes\n- 验证提交: 1a2b3c4d\n- 问题: 命名再统一"));
+    expect(parsed).toMatchObject({ kind: "ok", report: { verdict: "PASS+NOTES", verifiedCommit: "1a2b3c4d", questions: "命名再统一" } });
+    expect(parseWorkerReport(report("状态: 有问题\n摘要: 不能合\n结论: FAIL。\n验证提交: abc"))).toMatchObject({ kind: "ok", report: { verdict: "FAIL" } });
+    expect(parseWorkerReport(report("状态: 做完了\n摘要: 看完了\n结论: 通过"))).toMatchObject({ kind: "ok", report: { verdict: null, verifiedCommit: null } });
+  });
+
+  it("“验证提交”不会被当成“提交”栏", () => {
+    const parsed = parseWorkerReport(report("状态: 做完了\n摘要: 可以合\n提交: 无\n验证提交: 1a2b3c4d"));
+    expect(parsed).toMatchObject({ kind: "ok", report: { commit: null, verifiedCommit: "1a2b3c4d" } });
   });
 });
 

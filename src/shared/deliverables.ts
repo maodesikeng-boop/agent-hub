@@ -133,16 +133,30 @@ export function groupDeliverables(list: readonly Deliverable[]): DeliverableGrou
   return groups;
 }
 
+const originOfFile = new WeakMap<SentFile, DeliverableOrigin | null>();
+
 /**
  * 给 <Markdown files> 用：卡片正文里写了同一个链接（href 相同）的，渲染成能点开的文件。
- * 后置：同一个 list 引用重复调用返回同一个数组引用。
+ * 后置：同一个 list 引用重复调用返回同一个数组引用；每一项的副本原本存在哪条消息，用 deliverableOriginOfFile 取。
  */
 export function sentFilesOfDeliverables(list: readonly Deliverable[]): SentFile[] {
   const hit = sentFilesCache.get(list);
   if (hit !== undefined) return hit;
-  const files = list.map((d): SentFile => ({ href: d.href, path: d.href, id: d.id, name: d.name, size: d.size, mime: d.mime, status: "saved", mtime: null }));
+  const files = list.map((d): SentFile => {
+    const file: SentFile = { href: d.href, path: d.href, id: d.id, name: d.name, size: d.size, mime: d.mime, status: "saved", mtime: null };
+    originOfFile.set(file, d.origin);
+    return file;
+  });
   sentFilesCache.set(list, files);
   return files;
+}
+
+/**
+ * sentFilesOfDeliverables 换出来的文件存在哪条消息的第几个（预览窗“在 Finder 中显示”按它找，不按正文所在的消息算）。
+ * 不是从交付物换来的返回 undefined。
+ */
+export function deliverableOriginOfFile(file: SentFile): DeliverableOrigin | null | undefined {
+  return originOfFile.get(file);
 }
 
 /**
