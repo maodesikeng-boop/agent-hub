@@ -15,13 +15,13 @@ import {
   Info,
   Loader2,
   MessageSquare,
+  PencilLine,
   RefreshCw,
   UserPen,
   type LucideIcon,
 } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
-  askOf,
   attachmentsOf,
   CONFIRM_REJECT_OPTION,
   extractAskCard,
@@ -80,8 +80,8 @@ export interface MessageActions {
   onRevertPersona: (changeId: PersonaChangeId) => Promise<void>;
   /** 这个对话现在用的厂商（出错时的那句话按它说哪家，不从原文猜）；不知道是 undefined。 */
   vendorOf?: (conversationId: ConversationId) => AgentVendor | undefined;
-  /** 点选 `hub ask` 选项卡片里的某个选项：直接把该选项作为用户消息发出去。 */
-  onAnswerAsk?: (text: string) => void;
+  /** 在 `hub ask` 提问卡上点选项或填写：只回答这一张卡（POST /api/asks/:id/answer）；失败 reject，卡上显示原因。没有这个就不能答（已归档）。 */
+  onAnswerAsk?: (messageId: MessageId, body: { clientId: string; choice: string | null; note?: string }) => Promise<void>;
 }
 
 export const BUBBLE = "w-fit max-w-full rounded-[22px] px-4 py-2.5 text-body leading-relaxed";
@@ -154,7 +154,7 @@ function splitAskQuestionAndContext(raw: string): { title: string; context: stri
   return { title: match[1]!.trim(), context: rest === "" ? null : rest };
 }
 
-/** `hub ask` 带选项时的可点击 A/B/C/D 选项卡片（docs/ui-standard.md 第 17 条）。 */
+/** `hub ask` 在对话里的那张卡：有选项时是可点的 A/B/C/D 行，没有时直接展开补充框（docs/ui-standard.md 第 17 条）。 */
 function AskCard({
   card,
   files,
@@ -170,7 +170,7 @@ function AskCard({
   const qc = useHubQueryClient();
   const gateRef = card.gateRef;
   const hasOptions = card.options.length > 0;
-  const [chosen, setChosen] = useState<string | null>(null);
+  const [submitted, setSubmitted] = useState<{ chosenOption?: string; note?: string } | null>(null);
   const [noteOpen, setNoteOpen] = useState(!hasOptions || Boolean(gateRef?.checkpoint));
   const [note, setNote] = useState("");
   const [err, setErr] = useState<ErrorLike | null>(null);
@@ -180,18 +180,16 @@ function AskCard({
   const decideMutation = useMutation(
     {
       mutationFn: async (vars: { choice: string | null; note: string | null }) => {
-        if (gateRef === undefined) return;
         clientIdRef.current ??= newClientId();
-        return client.postTaskGraphDecide(gateRef.graphId, gateRef.nodeKey, {
-          clientId: clientIdRef.current,
-          choice: vars.choice,
-          ...(vars.note !== null ? { note: vars.note } : {}),
-        });
+        const body = { clientId: clientIdRef.current, choice: vars.choice, ...(vars.note !== null ? { note: vars.note } : {}) };
+        if (gateRef === undefined) return onAnswerAsk?.(messageId, body);
+        return client.postTaskGraphDecide(gateRef.graphId, gateRef.nodeKey, body);
       },
       onMutate: () => setErr(null),
       onSuccess: (_data, vars) => {
         clientIdRef.current = null;
-        setChosen(vars.choice ?? (gateRef?.checkpoint ? CONFIRM_REJECT_OPTION : (vars.note ?? "")));
+        const chosenOption = vars.choice ?? (gateRef?.checkpoint ? CONFIRM_REJECT_OPTION : null);
+        setSubmitted({ ...(chosenOption !== null ? { chosenOption } : {}), ...(vars.note !== null ? { note: vars.note } : {}) });
         setNote("");
       },
       onError: (error) => {
@@ -204,17 +202,18 @@ function AskCard({
     qc,
   );
 
-  const submitGate = (choice: string | null, rawNote: string) => {
-    if (gateRef === undefined || inFlightRef.current) return;
+  const submit = (choice: string | null, rawNote: string) => {
+    if (inFlightRef.current) return;
     const trimmed = rawNote.trim();
     if (choice === null && trimmed === "") return;
     inFlightRef.current = true;
     decideMutation.mutate({ choice, note: trimmed === "" ? null : trimmed });
   };
 
-  const effectiveChosen = card.chosenOption ?? chosen;
-  const answered = card.answered || chosen !== null;
-  const disabled = answered || !onAnswerAsk || decideMutation.isPending;
+  const effectiveChosen = card.chosenOption ?? submitted?.chosenOption;
+  const answerNote = card.answerNote ?? submitted?.note;
+  const answered = card.answered || submitted !== null;
+  const disabled = answered || (gateRef === undefined && !onAnswerAsk) || decideMutation.isPending;
   const { title: cardTitle, context: cardContext } = useMemo(
     () => splitAskQuestionAndContext(card.question),
     [card.question],
@@ -230,7 +229,7 @@ function AskCard({
           <Markdown text={cardContext} files={files} messageId={messageId} />
         </div>
       )}
-      {hasOptions && (
+      {(hasOptions || answerNote !== undefined) && (
         <div className="mt-3 flex flex-col gap-1.5" role="group" aria-label="Options">
           {card.options.map((opt, i) => {
             const isChosen = effectiveChosen === opt;
@@ -247,12 +246,7 @@ function AskCard({
                 )}
                 onClick={() => {
                   if (disabled) return;
-                  if (gateRef !== undefined) {
-                    submitGate(opt, note);
-                    return;
-                  }
-                  setChosen(opt);
-                  onAnswerAsk(opt);
+                  submit(opt, note);
                 }}
               >
                 <span className="flex size-6 shrink-0 items-center justify-center rounded-xl border border-border bg-sidebar text-xs font-medium text-muted-foreground">
@@ -267,9 +261,18 @@ function AskCard({
               </button>
             );
           })}
+          {answerNote !== undefined && (
+            <div data-ask-answer className="flex w-full items-center gap-3 rounded-xl bg-sidebar-active px-3 py-2">
+              <span className="flex size-6 shrink-0 items-center justify-center rounded-xl border border-border bg-sidebar text-muted-foreground">
+                <PencilLine className="size-3.5" aria-hidden="true" />
+              </span>
+              <span className="min-w-0 flex-1 text-body whitespace-pre-wrap [overflow-wrap:anywhere]">{answerNote}</span>
+            </div>
+          )}
         </div>
       )}
-      {gateRef !== undefined && !answered && (
+      {card.closed && <p className="mt-2 text-minor text-muted-foreground">Closed</p>}
+      {!answered && (
         !noteOpen && hasOptions ? (
           <button
             type="button"
@@ -286,19 +289,18 @@ function AskCard({
               onChange={(e) => setNote(e.target.value)}
               placeholder="Add a note, or type a custom reply…"
               aria-label="Add note"
-              className="min-w-0 flex-1 text-minor"
+              className="min-w-0 flex-1"
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.nativeEvent.isComposing && note.trim() !== "") {
                   e.preventDefault();
-                  submitGate(null, note);
+                  submit(null, note);
                 }
               }}
             />
             <Button
               type="button"
-              size="sm"
               disabled={disabled || note.trim() === ""}
-              onClick={() => submitGate(null, note)}
+              onClick={() => submit(null, note)}
             >
               {decideMutation.isPending && <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />}
               Send
@@ -327,20 +329,7 @@ const AgentText = memo(function AgentText({
 }) {
   // agent 发来的文件：meta 没变就是同一个数组，Markdown 不用重建插件
   const files = useMemo(() => sentFilesOf(message), [message.meta]);
-  const askCard = useMemo<ExtractedAskCard | null>(() => {
-    const extracted = extractAskCard(message);
-    if (extracted !== null) return extracted;
-    const ask = askOf(message);
-    if (ask?.gateRef === undefined) return null;
-    return {
-      question: message.text.trim(),
-      options: [],
-      answered: ask.answered === true,
-      ...(ask.recommended !== undefined ? { recommended: ask.recommended } : {}),
-      ...(ask.chosenOption !== undefined ? { chosenOption: ask.chosenOption } : {}),
-      gateRef: ask.gateRef,
-    };
-  }, [message.sender, message.meta, message.text]);
+  const askCard = useMemo(() => extractAskCard(message), [message.sender, message.meta, message.text]);
   return (
     <article
       className={cn("flex w-full min-w-0 flex-col items-start gap-1.5", highlighted && "rounded-2xl outline-2 outline-offset-4 outline-ring/60")}

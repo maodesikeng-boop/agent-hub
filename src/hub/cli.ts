@@ -207,6 +207,14 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
                                                           加 --node 挂在任务图步骤上，用户拍板后定案直接交给该步 Worker 接着干（不叫醒项目经理）`,
   },
   {
+    command: "ask.close",
+    group: "ask",
+    action: "close",
+    cli: "ask close",
+    usage: `  ${hub} ask close <卡编号>                                    关掉自己名下一张还在等用户的提问卡（用户在对话里打字答了、没点卡，或问题过时了）；
+                                                          卡编号见用户消息前面说明块里的 #编号`,
+  },
+  {
     command: "schedule.add",
     group: "schedule",
     action: "add",
@@ -744,6 +752,11 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     expectPositionals(rest, 1, "worker end");
     const body: Record<string, unknown> = { workerId: workerIdOf(rest[0], "worker end") };
     return { command: "worker.end", body, textSource: null };
+  }
+  if (group === "ask" && action === "close") {
+    allowOnly(values, [], "ask close");
+    expectPositionals(rest, 1, "ask close");
+    return { command: "ask.close", body: { itemId: idOf(rest[0], "ask close", "卡") }, textSource: null };
   }
   if (group === "ask") {
     allowOnly(values, ["node", "graph", "option", "recommended", "replace", "stdin"], "ask");

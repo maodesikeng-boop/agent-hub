@@ -60,6 +60,7 @@ const VALID_ARGS: { [C in HubCommand]: HubArgsMap[C] } = {
   "worker.log": { workerId: 3, last: 10 },
   "worker.search": { keywords: ["登录", "bug"], limit: 5 },
   ask: { text: "用 A 还是 B？" },
+  "ask.close": { itemId: 52 },
   "schedule.add": { name: "每日汇报", prompt: "汇报昨天的进展", daily: "09:00" },
   "schedule.list": {},
   "schedule.pause": { scheduleId: 3 },

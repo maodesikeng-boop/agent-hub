@@ -614,6 +614,10 @@ export const MAX_REWOUND_PENDING_KEYS = 32;
 // ---- Router（总助）上限（docs/router-design.md §3.2 + 审定宽松水位）----
 /** 单个 PM 同时挂起的独立待决项安全水位（只防内存溢出，不拦正常并行工作）。 */
 export const ROUTER_PENDING_DECISIONS_PER_PM_MAX = 30;
+/** 送给项目经理的“账本里还在等的提问卡”里，每张卡的问题最多留几个字（完整问题在卡上）。 */
+export const WAITING_ASK_QUESTION_CHARS = 80;
+/** 同上，一次最多列几张（其余写个数）：每条用户消息都带这一块，不能随卡数涨。 */
+export const WAITING_ASKS_LISTED_MAX = 10;
 /** 拍板卡问题字数上限。 */
 export const ROUTER_QUESTION_MAX_CHARS = 160;
 export const MAX_ROUTER_QUESTION_BYTES = 4 * ROUTER_QUESTION_MAX_CHARS;
@@ -623,9 +627,6 @@ export const MAX_ROUTER_CONTEXT_BYTES = 4 * ROUTER_CONTEXT_MAX_CHARS;
 /** 拍板卡选项数量下限与上限。 */
 export const ROUTER_OPTION_MIN_COUNT = 2;
 export const ROUTER_OPTION_MAX_COUNT = 4;
-/** 单个选项字数上限。 */
-export const ROUTER_OPTION_MAX_CHARS = 120;
-export const MAX_ROUTER_OPTION_BYTES = 4 * ROUTER_OPTION_MAX_CHARS;
 /** PM 给 Router 留的一句话备忘字数上限。 */
 export const ROUTER_NOTE_MAX_CHARS = 500;
 export const MAX_ROUTER_NOTE_BYTES = 4 * ROUTER_NOTE_MAX_CHARS;

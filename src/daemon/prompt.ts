@@ -273,6 +273,7 @@ function buildHubUsagePrompt(vendors: readonly AgentVendor[] = AGENT_VENDORS): s
 - **任务图**：\`${HUB} graph ${TASK_GRAPH_ACTIONS.join("|")}\`，用法在任务图手册里（第 2 步“建图”那一条写了去哪看，也可以 \`${HUB} help graph\`）
 - **向用户提问**
   - \`${HUB} ask [--option <选项>...] [--recommended <选项>] --stdin\`：向用户提问（${ASK_CARD_WHERE}；${ASK_CARD_TELL_USER}）；要给用户可点的选项时传 \`--option\`（至少 2 个），有倾向时用 \`--recommended\` 标出推荐项
+  - \`${HUB} ask close <卡编号>\`：关掉自己名下一张还在等用户的卡（用户在对话里打字答了、没点卡，或问题过时了）；还在等的卡和编号在用户消息前面的系统说明里列着
 - **Worker**
   - \`${HUB} worker start --title <标题> [--vendor ${vendors.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--max-time <时长>] [--readonly] [--no-worktree] --stdin\`：派 Worker，正文是任务说明。\`--max-time\` 是这一轮最多跑多久（如 \`15m\`、\`1h\`，默认 \`30m\`），超了会叫醒你，不打断它。Git 仓库里每个 Worker 有自己的 worktree 和分支（\`${WORKER_BRANCH_PREFIX}<编号>-<短名>\`），加 \`--no-worktree\` 就直接在主文件夹里干
   - \`${HUB} worker send <编号> [--max-time <时长>] --stdin\`：回答它的问题或打回，原 Worker 接着干

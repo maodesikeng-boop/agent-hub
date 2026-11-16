@@ -430,6 +430,27 @@ export class FakeApi {
       },
     },
   });
+  /** POST /api/asks/:messageId/answer（在对话里的提问卡上点选项或填写）。默认：回一张已拍板的卡。 */
+  answerAsk: (messageId: number, body: ResolveRouterItemRequest) => Reply | Promise<Reply> = (messageId) => ({
+    status: 200,
+    body: {
+      item: {
+        id: messageId,
+        kind: "decision",
+        status: "resolved",
+        pmId: 1,
+        projectId: null,
+        conversationId: 1,
+        question: "",
+        context: "",
+        options: [],
+        askMessageId: messageId,
+        resolution: null,
+        createdAt: 1_000,
+        updatedAt: 1_000,
+      },
+    },
+  });
   /** POST /api/router/reports/archive-all。 */
   archiveAllRouterReports: () => Reply | Promise<Reply> = () => ({
     status: 200,
@@ -949,6 +970,8 @@ export class FakeApi {
     if (method === "POST" && url.pathname === API_PATHS.routerCommands) return jsonResponse(await this.postRouterCommand(body));
     const resolveItem = /^\/api\/router\/items\/(\d+)\/resolve$/.exec(url.pathname);
     if (resolveItem && method === "POST") return jsonResponse(await this.resolveRouterItem(Number(resolveItem[1]), body));
+    const answerAsk = /^\/api\/asks\/(\d+)\/answer$/.exec(url.pathname);
+    if (answerAsk && method === "POST") return jsonResponse(await this.answerAsk(Number(answerAsk[1]), body));
     const retryCmd = /^\/api\/router\/commands\/(\d+)\/retry$/.exec(url.pathname);
     if (retryCmd && method === "POST") return jsonResponse(await this.retryRouterCommand(Number(retryCmd[1])));
     const cancelGraph = /^\/api\/task-graphs\/(\d+)\/cancel$/.exec(url.pathname);
