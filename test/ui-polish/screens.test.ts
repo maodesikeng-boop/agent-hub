@@ -15,9 +15,15 @@ describe("expandShots", () => {
 });
 
 describe("batchShots", () => {
-  it.todo("每张图恰好在一批里，每批不超过 JUDGE_BATCH_MAX_SHOTS 张");
+  it.todo("每张图恰好在一批里，每批不超过 batchSize 张");
+  it.todo("batchSize 是 0 或小数时抛 RangeError");
   it.todo("哨兵图平均分到各批");
   it.todo("seed 相同分法相同，seed 不同批内顺序不同");
+});
+
+describe("judgeWaves", () => {
+  it.todo("5 批、两家评委排成两个波次：前 3 批一波，后 2 批一波，每波不超过 JUDGE_MAX_CONCURRENT 个 Worker");
+  it.todo("每批恰好在一个波次里，顺序不变");
 });
 
 describe("inventoryMarkdown", () => {

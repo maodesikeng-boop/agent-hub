@@ -2,11 +2,11 @@
 // 界面打磨循环的命令入口（docs/ui-polish-loop-design.md 第 3.8 节），`pnpm ui:polish <命令>`：
 //   inventory                                  打印界面清单（Markdown）
 //   shots [--round <id>] [--only <id|区域>…] [--verify]   截全部界面；--verify 截两遍，有一张字节不同就失败
-//   calibrate-shots [--round <id>]             截校准用的图：基准图、几张真实界面、每个弄坏各一张
-//   brief --round <id> --judge <厂商/模型> --batch <n> [--run <n>]   打印这一批的评委任务说明
+//   calibrate-shots [--round <id>]             截校准用的图：基准图、几张真实界面、每个弄坏各一张，另加凑满一批用的真实界面
+//   brief --round <id> --judge <厂商/模型> --batch <n> [--batch-size <n>] [--run <n>]   打印这一批的评委任务说明
 //   check-cards --round <id> --judge <厂商/模型>    评委自查：评分卡格式对不对、图齐不齐
 //   score --round <id> [--dismissals <文件>]      合分，写这一轮的记录，打印下一步
-//   calibration --round <id>                   算校准报告，写记录
+//   calibration --round <id>                   每档批大小各算一份校准报告，选出正式评审用的批大小，写记录
 //   report --round <id> [--previous <id>]      生成给用户看的 HTML
 // 截图和评分卡默认放 ROUND_OUTPUT_DIR/<轮次>/，记录写进仓库的 RECORD_DIR。
 

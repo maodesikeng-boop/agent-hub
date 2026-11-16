@@ -21,6 +21,12 @@ describe("calibrationReport", () => {
   it.todo("两家页面分差不超过 1 的图不到八成时 pass 是 false");
 });
 
+describe("pickBatchSize", () => {
+  it.todo("14 和 28 两档都过时返回 28");
+  it.todo("只有 14 过时返回 14");
+  it.todo("都没过时返回 null");
+});
+
 describe("sentinelDrift", () => {
   it.todo("哨兵图的页面分和校准中位数差 2 分时返回它的 key");
   it.todo("差 1 分以内返回空数组");

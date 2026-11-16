@@ -62,8 +62,15 @@ export const CALIBRATION_MAX_ATTEMPTS = 3;
 /** 每轮混进去的哨兵图（基准图和两张弄坏的）：它们的分和校准时差得超过这个数，这一次评审作废重评。 */
 export const SENTINEL_MAX_DRIFT = 1;
 
-/** 一个评委 Worker 一次最多评几张图：再多前后会互相带偏，上下文也吃紧。 */
-export const JUDGE_BATCH_MAX_SHOTS = 14;
+/**
+ * 一个评委 Worker 一次评几张图。校准时每一档都测，正式评审用过了校准门槛的最大一档；
+ * 大的那档过不了就用小的那档，分波次串行跑，不加并发。
+ */
+export const JUDGE_BATCH_CANDIDATES = [14, 28] as const;
+/** 同时在跑的评委 Worker 最多几个（这台 Mac 吃紧）。任务图里靠分波次排依赖做到。 */
+export const JUDGE_MAX_CONCURRENT = 6;
+/** 一次评审两家评委合起来最多派几个 Worker。136 张图每批 28 张是每家 5 个，正好 10 个。 */
+export const JUDGE_MAX_WORKERS_PER_REVIEW = 10;
 /** 两家评委的发现算同一处：框的交并比不低于它，或同一张图引了同一条规则。 */
 export const FINDING_MATCH_IOU = 0.3;
 /** 一张评分卡最多几条发现：超了多半是评委把同一个问题拆碎了，按格式错误打回重评。 */

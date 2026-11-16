@@ -71,7 +71,7 @@ export interface CalibrationReport {
 }
 
 /**
- * 前置：cards 是校准那批图（基准图、几张真实界面、每个弄坏各一张）每家评委各评 CALIBRATION_RUNS 次的卡。
+ * 前置：cards 是校准那批图（基准图、几张真实界面、每个弄坏各一张）每家评委各评 CALIBRATION_RUNS 次的卡，都是同一档批大小下评的。
  * 后置：按 limits.ts 的校准门槛算出报告。“被指出”= 那次的卡里有一条发现的框盖住弄坏的位置，且记在预期的那一项、不轻于预期的严重度。
  */
 export function calibrationReport(input: {
@@ -80,6 +80,14 @@ export function calibrationReport(input: {
   baselineKey: string;
   mutations: readonly Mutation[];
 }): CalibrationReport {
+  throw new Error("未实现");
+}
+
+/**
+ * 校准时每档批大小各有一份报告：返回过了门槛的最大一档；都没过返回 null。
+ * 用了较小一档时，一次评审的 Worker 会超过 JUDGE_MAX_WORKERS_PER_REVIEW，照 judgeWaves 分波次串行跑。
+ */
+export function pickBatchSize(reports: ReadonlyMap<number, CalibrationReport>): number | null {
   throw new Error("未实现");
 }
 

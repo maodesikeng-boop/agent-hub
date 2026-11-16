@@ -236,10 +236,19 @@ export function expandShots(inventory: readonly ScreenSpec[], only?: readonly st
 }
 
 /**
- * 把图分给评委：同一区域的尽量在一批，每批不超过 JUDGE_BATCH_MAX_SHOTS 张，哨兵图平均混进各批。
+ * 把图分给评委：同一区域的尽量在一批，每批不超过 batchSize 张，哨兵图平均混进各批。
  * 后置：每张图恰好在一批里；seed 相同分法相同，换 seed 批内顺序不同（两家评委用不同的 seed，抵消先后次序的影响）。
+ * batchSize 不是正整数抛 RangeError。
  */
-export function batchShots(shots: readonly Shot[], sentinels: readonly Shot[], seed: number): Shot[][] {
+export function batchShots(shots: readonly Shot[], sentinels: readonly Shot[], seed: number, batchSize: number): Shot[][] {
+  throw new Error("未实现");
+}
+
+/**
+ * 把一家评委的各批排成波次：每个波次里两家评委合起来不超过 JUDGE_MAX_CONCURRENT 个 Worker，前一波全部交卷后一波才开工。
+ * 后置：返回每个波次里的批次下标（两家用同一套波次）；每批恰好在一个波次里，顺序不变。
+ */
+export function judgeWaves(batchCount: number, judgeCount: number): number[][] {
   throw new Error("未实现");
 }
 
