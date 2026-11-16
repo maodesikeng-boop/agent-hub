@@ -1,8 +1,8 @@
-// 已知技能名单（skill-files.ts）：枚举技能目录建名单，只收真实路径落在技能目录里的 SKILL.md；工具参数里的路径按真实路径比；
-// 换代读正文只读名单里的文件。PR #331 第二份 FAIL 评论里的四种软链都在这里。技能文件放在临时目录里。
+// 已知技能名单（skill-files.ts）：枚举技能目录建名单，只收真实路径恰好是 <可信根>/<合法技能名>/SKILL.md 的文件；工具参数里的路径按真实路径比；
+// 换代读正文只读名单里的文件。PR #331 三份 FAIL 评论里的软链都在“软链边界”那张表里。技能文件放在临时目录里。
 import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { skillHeads } from "../shared/skill-loads.ts";
 import { createSkillFiles, type SkillSession } from "./skill-files.ts";
@@ -150,6 +150,101 @@ describe("指到技能目录外面的不收（FAIL 评论里的四种软链）",
     expect(catalog.atPath("skills/../SKILL.md")).toBeNull();
     expect(catalog.atPath(join(outside, "SKILL.md"))).toBeNull();
     expect(catalog.atPath("")).toBeNull();
+  });
+});
+
+describe("软链边界：软链位置 × 指向", () => {
+  // 可信根 = 锚点（启动目录、用户主目录、项目目录）的真实路径 + 按字面拼的技能子路径。子路径的每一段、单个技能目录、SKILL.md 本身
+  // 是软链时：指到技能目录以外、仓库里的非技能目录都不收；指到另一个可信根里面收。
+  const MARK = "BOUNDARY_PROBE_CONTENT";
+  type Target = "外面" | "仓库里的 docs" | "另一个可信根";
+  interface Row {
+    position: string;
+    /** 放软链的位置。 */
+    link: () => string;
+    /** 从软链往下到 SKILL.md 还剩的路径；空串是软链本身就是 SKILL.md。 */
+    rest: string;
+    /** “另一个可信根”那一格软链指到哪里（那里按 rest 放好技能）。 */
+    trusted: () => string;
+    vendor?: SkillSession["vendor"];
+  }
+  const userSkills = () => join(userHome, ".agents", "skills");
+  const rows: Row[] = [
+    { position: ".claude", link: () => join(cwd, ".claude"), rest: "skills/probe/SKILL.md", trusted: () => join(userHome, ".agents") },
+    { position: ".claude/skills", link: () => join(cwd, ".claude", "skills"), rest: "probe/SKILL.md", trusted: userSkills },
+    { position: ".agents", link: () => join(cwd, ".agents"), rest: "skills/probe/SKILL.md", trusted: () => join(userHome, ".agents") },
+    { position: ".agents/skills", link: () => join(cwd, ".agents", "skills"), rest: "probe/SKILL.md", trusted: userSkills },
+    { position: "~/.agents", link: () => join(userHome, ".agents"), rest: "skills/probe/SKILL.md", trusted: () => join(cwd, ".agents") },
+    { position: "~/.agents/skills", link: userSkills, rest: "probe/SKILL.md", trusted: () => join(cwd, ".agents", "skills") },
+    { position: "~/.claude/skills", link: () => join(userHome, ".claude", "skills"), rest: "probe/SKILL.md", trusted: userSkills },
+    { position: "~/.gemini/config/skills", link: () => join(userHome, ".gemini", "config", "skills"), rest: "probe/SKILL.md", trusted: userSkills, vendor: "agy" },
+    { position: "启动目录的 skills", link: () => join(launchDir, "7", "skills"), rest: "probe/SKILL.md", trusted: userSkills },
+    { position: "单个技能目录", link: () => join(project(), "probe"), rest: "SKILL.md", trusted: () => join(userSkills(), "probe") },
+    { position: "SKILL.md 本身", link: () => join(project(), "probe", "SKILL.md"), rest: "", trusted: () => join(userSkills(), "probe", "SKILL.md") },
+  ];
+
+  /** 在 base 下按 rest 放一个带 MARK 的 SKILL.md（rest 是空串时 base 本身就是这个文件），返回 base。 */
+  function plant(base: string, rest: string): string {
+    const file = rest === "" ? base : join(base, rest);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, text("probe", MARK));
+    return base;
+  }
+
+  function linkTo(row: Row, target: Target): string {
+    const id = row.position.replace(/[^a-z]/giu, "_");
+    /** 软链本身是 SKILL.md 时，指到的文件也叫 SKILL.md。 */
+    const named = (dir: string) => (row.rest === "" ? join(dir, "SKILL.md") : dir);
+    const to =
+      target === "外面" ? plant(named(join(root, "outside", id)), row.rest)
+      : target === "仓库里的 docs" ? plant(named(join(cwd, "docs", id)), row.rest)
+      : plant(row.trusted(), row.rest);
+    const at = row.link();
+    mkdirSync(dirname(at), { recursive: true });
+    symlinkSync(to, at);
+    return row.rest === "" ? at : join(at, row.rest);
+  }
+
+  const cells = rows.flatMap((row) => (["外面", "仓库里的 docs", "另一个可信根"] as const).map((target) => [row.position, target, row] as const));
+
+  it.each(cells)("%s → %s", (_position, target, row) => {
+    const through = linkTo(row, target);
+    const s = { ...session, vendor: row.vendor ?? session.vendor };
+    const skillFiles = files();
+    const catalog = skillFiles.catalog(s);
+    const leaked = catalog.skills.filter((k) => skillFiles.read(k)?.includes(MARK));
+    if (target === "另一个可信根") {
+      expect(catalog.atPath(through)?.name).toBe("probe");
+      expect(skillFiles.read(catalog.atPath(through)!)).toContain(MARK);
+    } else {
+      expect(leaked.map((k) => k.key)).toEqual([]);
+      expect(catalog.atPath(through)).toBeNull();
+    }
+  });
+
+  it("锚点本身是软链（像 macOS 的 /var → /private/var）：锚点先求真实路径，只收 <真实锚点>/<子路径>/<名字>/SKILL.md", () => {
+    const real = join(root, "real-project");
+    skill(join(real, ".agents", "skills"), "anchored");
+    writeFileSync(join(real, "SKILL.md"), text("stray", MARK));
+    skill(join(real, "docs"), "nested", MARK);
+    const linked = join(root, "linked-project");
+    symlinkSync(real, linked);
+    const skillFiles = files();
+    const catalog = skillFiles.catalog({ ...session, cwd: linked });
+    expect(catalog.atPath(join(linked, ".agents", "skills", "anchored", "SKILL.md"))?.name).toBe("anchored");
+    expect(catalog.skills.filter((k) => skillFiles.read(k)?.includes(MARK))).toEqual([]);
+    expect(catalog.atPath(join(linked, "SKILL.md"))).toBeNull();
+    expect(catalog.atPath(join(linked, "docs", "nested", "SKILL.md"))).toBeNull();
+  });
+
+  it("建完名单后整个技能目录掉包成指到外面的软链：换代现枚举不收，旧的那个也不读", () => {
+    skill(project(), "swapped");
+    const skillFiles = files();
+    const before = skillFiles.catalog(session).named("swapped")!;
+    rmSync(project(), { recursive: true });
+    symlinkSync(plant(join(root, "outside", "swapped-root"), "swapped/SKILL.md"), project());
+    expect(skillFiles.catalog(session, { fresh: true }).named("swapped")).toBeNull();
+    expect(skillFiles.read(before)).toBeNull();
   });
 });
 

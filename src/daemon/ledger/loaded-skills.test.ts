@@ -288,6 +288,23 @@ describe("带：换代时放进新会话的开场说明", () => {
     expect(rows()).toMatchObject([{ name: "gone", generation: 1 }]);
   });
 
+  it.each([
+    ["整个 .agents", () => join(cwd, ".agents"), "skills/swapped/SKILL.md"],
+    ["技能目录 .agents/skills", () => join(cwd, ".agents", "skills"), "swapped/SKILL.md"],
+    ["单个技能目录", () => join(cwd, ".agents", "skills", "swapped"), "SKILL.md"],
+  ] as const)("第 1 代合法加载后，%s 掉包成指到外面的软链：换代不读外面的文件，和文件没了一样注明", (_what, at, rest) => {
+    read(firstSession, skill("swapped", "合法的正文"));
+    const outside = join(root, "outside");
+    mkdirSync(join(outside, rest, ".."), { recursive: true });
+    writeFileSync(join(outside, rest), "---\nname: swapped\ndescription: x\n---\n\nOUTSIDE_SWAPPED_CONTENT\n");
+    rmSync(at(), { recursive: true });
+    symlinkSync(outside, at());
+    const section = sectionOf(renew().preamble);
+    expect(section).not.toContain("OUTSIDE_SWAPPED_CONTENT");
+    expect(section).toContain("文件已经没有了");
+    expect(section).toContain("swapped");
+  });
+
   it("原路径没了、按名字在新会话的技能目录里找得到：读找到的那个", () => {
     const path = skill("moved", "原来的");
     read(firstSession, path);

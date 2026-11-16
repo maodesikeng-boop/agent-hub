@@ -163,6 +163,15 @@ describe("按返回内容认", () => {
     expect(names("claude", { name: "Read", input: { file_path: "skills/../SKILL.md" } }, claudeRead("不是技能\n"))).toEqual([]);
   });
 
+  it("带 BOM 的 SKILL.md：去掉行号以后行首的 BOM 不算内容（正文只有一行，只能靠 frontmatter 开头认）", () => {
+    const tinyText = "\uFEFF---\nname: tiny\ndescription: 只有一行\n---\n\n只有一行。\n";
+    const tiny = known("tiny", tinyText);
+    const only = createSkillCatalog([tiny], () => null);
+    const of = (call: ToolCall, output: string) => skillsOfToolResult("claude", call, output, only).map((s) => s.name);
+    expect(of({ name: "Read", input: { file_path: tiny.path } }, claudeRead(tinyText))).toEqual(["tiny"]);
+    expect(of(bash("cat a.md tiny/SKILL.md"), `a\n${tinyText}`)).toEqual(["tiny"]);
+  });
+
   it("别家的行号前缀不去掉：claude 的返回里 `1: ---` 不算开头", () => {
     expect(names("claude", bash("x"), POTETO.split("\n").map((l, i) => `${i + 1}: ${l}`).join("\n"))).toEqual([]);
   });
