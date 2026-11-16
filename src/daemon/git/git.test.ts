@@ -442,7 +442,7 @@ describe("自动清理用的探测：中间状态、detached HEAD 保底、孤�
     const wt = join(root, "wt", "p");
     const { baseCommit } = await addWorktree({ repoFolder: repo, worktreePath: wt, branch: "hub/p" });
     const probe = await probeWorktreeForRemoval(wt);
-    expect(probe).toMatchObject({ kind: "ok", clean: true, onBranch: true, head: baseCommit, inProgress: false });
+    expect(probe).toMatchObject({ kind: "ok", hasContent: false, onBranch: true, head: baseCommit, inProgress: false });
 
     git(wt, "checkout", "-q", "--detach");
     expect(await probeWorktreeForRemoval(wt)).toMatchObject({ onBranch: false, head: baseCommit });
@@ -456,7 +456,26 @@ describe("自动清理用的探测：中间状态、detached HEAD 保底、孤�
     git(wt, "add", "-A");
     git(wt, "commit", "-q", "-m", "wt a");
     expect(() => git(wt, "merge", "main")).toThrow();
-    expect(await probeWorktreeForRemoval(wt)).toMatchObject({ kind: "ok", inProgress: true, clean: false });
+    expect(await probeWorktreeForRemoval(wt)).toMatchObject({ kind: "ok", inProgress: true, hasContent: true });
+  });
+
+  it("probeWorktreeForRemoval：只缺已跟踪文件（删到一半）不算内容；改了、新增、暂存的才算", async () => {
+    const repo = makeRepo("probe-half");
+    mkdirSync(join(repo, "d"), { recursive: true });
+    writeFileSync(join(repo, "d", "b.txt"), "b\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "d");
+    const wt = join(root, "wt", "half");
+    await addWorktree({ repoFolder: repo, worktreePath: wt, branch: "hub/half" });
+    rmSync(join(wt, "a.txt"));
+    rmSync(join(wt, "d"), { recursive: true });
+    expect(await probeWorktreeForRemoval(wt)).toMatchObject({ kind: "ok", hasContent: false, onBranch: true });
+
+    writeFileSync(join(wt, "new.txt"), "n\n");
+    expect(await probeWorktreeForRemoval(wt)).toMatchObject({ kind: "ok", hasContent: true });
+    rmSync(join(wt, "new.txt"));
+    git(wt, "rm", "-q", "--cached", "a.txt");
+    expect(await probeWorktreeForRemoval(wt)).toMatchObject({ kind: "ok", hasContent: true });
   });
 
   it("isCommitMergedToMain：main 历史里的提交（含 main 本身）是 true，没合入的是 false", async () => {
@@ -593,6 +612,15 @@ describe("自动清理用的探测：中间状态、detached HEAD 保底、孤�
     const emptyShell = join(root, "wt", "empty-shell");
     mkdirSync(emptyShell, { recursive: true });
     expect(await probeOrphanContent(repo, emptyShell, null, { baseCommit })).toEqual({ kind: "ok", hasContent: false });
+
+    // 检出删光之后又被别的进程写回的缓存（Vite 找不到 package.json 时把缓存写到根目录的 .vite）：不算内容
+    const rewritten = join(root, "wt", "rewritten");
+    mkdirSync(join(rewritten, ".vite", "deps"), { recursive: true });
+    writeFileSync(join(rewritten, ".vite", "deps", "_metadata.json"), "{}\n");
+    expect(await probeOrphanContent(repo, rewritten, null, { baseCommit })).toEqual({ kind: "ok", hasContent: false });
+    // 还剩检出里的东西时照常比对：多出来的未忽略文件算内容
+    writeFileSync(join(rewritten, "other.txt"), "base-other\n");
+    expect(await probeOrphanContent(repo, rewritten, null, { baseCommit })).toEqual({ kind: "ok", hasContent: true });
 
     // 异常分支（不存在的 ref、非仓库）均可靠清理临时索引目录，TMPDIR 零残留
     expect((await probeOrphanContent(repo, emptyShell, "refs/heads/no-such-ref")).kind).toBe("failed");
