@@ -706,6 +706,13 @@ export interface Ledger extends LedgerHandoverWork {
   /** kind=report：不分状态只回简报；不带：已拍板、已归档的历史。单页另守 ROUTER_STREAM_PAGE_MAX_BYTES。 */
   listRouterItems(beforeCursor?: string, limit?: number, kind?: import("./api.ts").RouterItemsKind): RouterItemsPage;
   resolveRouterItem(itemId: RouterItemId, input: ResolveRouterItemRequest): ResolveRouterItemResponse;
+  /** 用户在对话里的提问卡上点选项、填写：按卡上那条 ask 消息回答这一张卡（别的卡不动）。没有这张卡 → not_found。 */
+  answerAsk(askMessageId: MessageId, input: ResolveRouterItemRequest): ResolveRouterItemResponse;
+  /**
+   * 一条消息真正写给 agent 的内容（session.send 处理函数用）：deliveryParts 的结果；项目经理对话里用户说的话，
+   * 在原文前面再加一块账本里此刻还在等用户的提问卡（shared/waiting-asks.ts），送出那一刻现查。
+   */
+  deliveryOf(message: Pick<Message, "conversationId" | "workerId" | "sender" | "text" | "meta">): { prefixes: string[]; text: string };
   archiveAllRouterReports(): ArchiveAllReportsResponse;
   updateRouterSettings(input: UpdateRouterSettingsRequest): RouterSettings;
   listRouterCommands?(beforeCursor?: string, limit?: number): import("./api.ts").RouterCommandsPage;

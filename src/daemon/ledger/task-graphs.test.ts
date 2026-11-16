@@ -658,14 +658,16 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
       options: ["可以", "改成 warn"],
     }).data.messageId;
 
-    // 用户在聊天窗插队聊别的话题！普通 ask 被回答，但带 gateRef 的任务图门禁绝不被冲掉！
+    // 用户在聊天窗插队聊别的话题！普通 ask 和带 gateRef 的任务图门禁都不被冲掉！
     ledger.postUserMessage({
       conversationId: lin.conversationId,
       clientId: "side-chat-1",
       text: "日志用 info 就行，门禁那个我再看两分钟",
     });
-    expect(askOf(ledger.getMessage(casualAskId)!)?.answered).toBe(true);
+    expect(askOf(ledger.getMessage(casualAskId)!)?.answered).toBeUndefined();
     expect(askOf(ledger.getMessage(gateMsgId)!)?.answered).toBeUndefined();
+    ledger.answerAsk(casualAskId, { clientId: "side-card-1", choice: "可以" });
+    expect(askOf(ledger.getMessage(casualAskId)!)?.answered).toBe(true);
 
     const snapMid = { ...ledger.snapshot(), server: { os: "darwin" as const, folderPicker: true, fileActions: true } };
     const pendingMid = pendingDecisionsOf(snapMid, "local");

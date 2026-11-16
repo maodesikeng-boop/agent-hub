@@ -415,6 +415,17 @@ describe("hub cli", () => {
   });
 
   describe("hub router & hub graph", () => {
+    it("ask close <编号> 关掉一张自己的提问卡；缺编号、编号不是正整数、多余参数都是用法错误", async () => {
+      ledger.calls.length = 0;
+      expect((await hub(["ask", "close", "52"])).code).toBe(0);
+      expect(ledger.calls).toEqual([{ sessionId: 42, command: "ask.close", args: { itemId: 52 } }]);
+      ledger.calls.length = 0;
+      for (const argv of [["ask", "close"], ["ask", "close", "x"], ["ask", "close", "0"], ["ask", "close", "1", "2"], ["ask", "close", "1", "--stdin"]]) {
+        expect((await hub(argv, { stdin: stdinOf("") })).code).toBe(HUB_EXIT.usage);
+      }
+      expect(ledger.calls).toHaveLength(0);
+    });
+
     it("unified ask (--node / --recommended / --replace) and legacy CLI aliases (router ask / graph ask) forward cleanly to ask", async () => {
       expect(
         (

@@ -307,6 +307,8 @@ export function createClient(device: DeviceId | null) {
       const qs = new URLSearchParams(query).toString();
       return request<RouterCommandsPage>(at(qs ? `${API_PATHS.routerCommands}?${qs}` : API_PATHS.routerCommands));
     },
+    postAnswerAsk: (messageId: MessageId, body: ResolveRouterItemRequest) =>
+      postJson<ResolveRouterItemResponse>(at(API_PATHS.askAnswer(messageId)), body),
     postResolveRouterItem: (id: RouterItemId, body: ResolveRouterItemRequest) =>
       postJson<ResolveRouterItemResponse>(at(API_PATHS.routerItemResolve(id)), body),
     postArchiveAllRouterReports: () => postJson<ArchiveAllReportsResponse>(at(API_PATHS.routerReportsArchiveAll), {}),

@@ -21,6 +21,8 @@
 // H 的 meta 里另记几个字段（只有这里用）：handoverId、requestedAt、startedAt 和 turnStartId（H 开始处理的时间、那时库里最大的消息编号）、
 // writing（agent 正在写交接的那一轮，见 messages.ts）、abandoned（超时请驱动层停掉了）、interruptedBy（用户发消息打断的）。R 的 meta 另记 seen。
 import { agentTextOf } from "../../shared/attachments.ts";
+import { waitingAsksSection } from "../../shared/waiting-asks.ts";
+import type { WaitingAsk } from "../../shared/waiting-asks.ts";
 import { describeFailure } from "../../shared/errors.ts";
 import { systemEventOf, systemMessageDedupeKey, workerEventOf } from "../../shared/domain.ts";
 import type { AgentSessionRow, ConversationId, Message, MessageId, PmId, SessionId, TokenUsage } from "../../shared/domain.ts";
@@ -72,6 +74,8 @@ export interface HandoverOptions {
   onHandoverClaimable?: () => void;
   /** 新会话首次启动时实时读取该 PM 未完结的任务图摘要（账本实时状态，不走静态快照防过期）。 */
   liveActiveGraphsSection?: (pmId: PmId) => string | null;
+  /** 新会话首次启动时实时读账本里这个项目经理还在等用户的提问卡（提问卡是否还在等只认账本，不认交接正文）。默认没有卡。 */
+  waitingAsks?: (conversationId: ConversationId) => WaitingAsk[];
 }
 
 const SEARCH_COMMANDS = `\`${HUB_COMMAND} worker search\`、\`${HUB_COMMAND} worker show --task / --report\``;
@@ -119,11 +123,10 @@ function handoverRequestText(options: {
 2. 定下的事：做法、约束、分工；用户纠正过的做法单独写清楚（原来怎么做、用户要怎么做）。
 3. 试过和否掉的：试过什么办法、为什么不行，免得新会话再走一遍。
 4. 在跑的 Worker 和 PR：编号、在做什么、到哪一步、在等什么。
-5. 在等用户拍板的事：每件写清楚选项，并带上你的推荐。
-6. 用户这段时间说过的话：要点逐条列全，规矩、约束类的保留原话。
-7. 下一步：写清楚最后在做什么、做到哪了、接下来要做什么。原话会另外带给新会话，这里不用抄。
+5. 用户这段时间说过的话：要点逐条列全，规矩、约束类的保留原话。
+6. 下一步：写清楚最后在做什么、做到哪了、接下来要做什么。原话会另外带给新会话，这里不用抄。
 
-你这个会话开头要是带着上一份交接：它的第 1 节和第 5 节原样带过来，再补上之后新的。
+你这个会话开头要是带着上一份交接：它的第 1 节原样带过来，再补上之后新的。
 控制在 2000 字左右。做过的细节（任务说明、汇报全文、命令输出）账本里搜得到，不往交接里抄，写一句去哪搜就行。
 ${only}`;
 }
@@ -1127,10 +1130,11 @@ export function createLedgerHandover(
       }
     }
     if (base === null) return null;
+    const waiting = `${base}\n\n## 在等用户的提问卡（账本实时状态）\n\n${waitingAsksSection(options.waitingAsks?.(session.conversationId) ?? [])}`;
     const liveGraphs = session.pmId === null ? null : (options.liveActiveGraphsSection?.(session.pmId) ?? null);
     return liveGraphs === null || liveGraphs === ""
-      ? base
-      : `${base}\n\n## 未完结的任务图（账本实时状态）\n\n${liveGraphs}`;
+      ? waiting
+      : `${waiting}\n\n## 未完结的任务图（账本实时状态）\n\n${liveGraphs}`;
   };
 
   /**

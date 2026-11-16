@@ -318,7 +318,7 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
     });
     expect(ledger.getRouterDigest().pms.find((p) => p.pmId === lin.pmId)?.pendingDecisionCount).toBe(2);
 
-    // 3. 用户在对话输入框直接打字回复普通提问：普通提问收起，但绑定了 --node 的步骤卡绝不被误关、闲聊绝不灌给 Worker
+    // 3. 用户在对话输入框直接打字：普通提问卡和绑定了 --node 的步骤卡都不被关、闲聊绝不灌给 Worker
     const workerMsgCountBeforeChat = db.get<{ n: number }>(
       "SELECT count(*) AS n FROM messages WHERE conversation_id = ?",
       workerSessionOf(wImpl).conversation_id,
@@ -328,8 +328,10 @@ describe("编排简化第 6 步：hub ask --node、confirm 检查点与答案直
       clientId: "casual-chat-1",
       text: "编码用 UTF-8 with BOM，导出方式我点上面的卡片定",
     });
-    expect(askOf(ledger.getMessage(casualAskId)!)?.answered).toBe(true);
+    expect(askOf(ledger.getMessage(casualAskId)!)?.answered).toBeUndefined();
     expect(askOf(ledger.getMessage(stepAsk.messageId)!)?.answered).toBeUndefined();
+    ledger.answerAsk(casualAskId, { clientId: "casual-card-1", note: "UTF-8 with BOM" });
+    expect(askOf(ledger.getMessage(casualAskId)!)?.answered).toBe(true);
     expect(
       db.get<{ n: number }>("SELECT count(*) AS n FROM messages WHERE conversation_id = ?", workerSessionOf(wImpl).conversation_id)!.n,
     ).toBe(workerMsgCountBeforeChat);

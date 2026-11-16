@@ -18,6 +18,8 @@ import { dirname, join } from "node:path";
 import type { ConversationSnapshot, LedgerSnapshot } from "../../shared/api.ts";
 import type { ConversationId, MessageKind, Pm, PmId, SessionId, WorkerId } from "../../shared/domain.ts";
 import type { CreatePmInput, CreatePmResult, Ledger, ResolveFolder } from "../../shared/ledger.ts";
+import { deliveryParts } from "../../shared/worker.ts";
+import { waitingAsksNote } from "../../shared/waiting-asks.ts";
 import { MESSAGE_PAGE_SIZE, WORKER_PURGE_BATCH_ROWS } from "../../shared/limits.ts";
 import { snapshotWindowStart, workerLineSummaries } from "../../shared/snapshot.ts";
 import type { AgentVendor, ModelCatalog } from "../../shared/vendors.ts";
@@ -173,7 +175,6 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     },
     afterUserPost: (p, id) => handover.userPostedIn(p, id),
     onIndependentAskCreated: (p, session, message, askOptions) => router.bridgeAskIn(p, session, message, askOptions),
-    onConversationAnsweredAsk: (p, askMessageId, userText) => router.onConversationAnsweredAskIn(p, askMessageId, userText),
   });
   const { page } = messages;
   const persona = createLedgerPersona(ctx, sessions, messages, files, {
@@ -204,6 +205,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     autoRenew: options.autoRenew,
     log: options.log,
     onHandoverClaimable: options.onHandoverClaimable,
+    waitingAsks: router.waitingAsksOf,
     liveActiveGraphsSection: (pmId) => taskGraphs.liveHandoverSection(pmId),
   });
   const schedules = createLedgerSchedules(ctx, sessions, messages, persona);
@@ -446,6 +448,13 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     getRouterSettings: router.getSettings,
     listRouterItems: router.listItems,
     resolveRouterItem: router.resolveItem,
+    answerAsk: router.answerAsk,
+    deliveryOf: (message) => {
+      const parts = deliveryParts(message);
+      // 项目经理对话里用户说的话：原文前面带账本里此刻还在等的提问卡（送出那一刻现查，排队期间有卡被回答了也不会写旧的）
+      const waiting = message.sender === "user" && message.workerId === null ? waitingAsksNote(router.waitingAsksOf(message.conversationId)) : null;
+      return waiting === null ? parts : { ...parts, prefixes: [...parts.prefixes, waiting] };
+    },
     archiveAllRouterReports: router.archiveAllReports,
     updateRouterSettings: router.updateSettings,
     createRouterCommand: router.createCommand,
