@@ -693,6 +693,25 @@ process.exit(res.status ?? 1);
     expect(existsSync(w4.worktreePath!)).toBe(false);
   });
 
+  it("每轮名额只算要跑 git status 的候选：29 个长期删不掉（未合并、没到期）排在前面，刚合并的 1 个下一轮就删", async () => {
+    const stuck: WorkerRecord[] = [];
+    for (let i = 0; i < 29; i++) stuck.push(await spawnWorktreeWorker(`未合并${i}`));
+    const merged = await spawnWorktreeWorker("刚合并");
+
+    writeFileSync(join(stuck[0]!.worktreePath!, "f.txt"), "1\n");
+    git(stuck[0]!.worktreePath!, "add", "-A");
+    git(stuck[0]!.worktreePath!, "commit", "-q", "-m", "未合并的提交");
+    const unmergedTip = git(stuck[0]!.worktreePath!, "rev-parse", "HEAD");
+    for (const w of stuck.slice(1)) git(w.worktreePath!, "reset", "-q", "--hard", unmergedTip);
+    for (const w of [...stuck, merged]) endWorker(w.id);
+    expect(merged.id).toBeGreaterThan(stuck.at(-1)!.id);
+
+    const cleanup = createWorktreeCleanup({ ledger, worktreesDir, log: (l) => logs.push(l), now: () => now });
+    expect(await cleanup.runOnce()).toEqual([merged.id]);
+    expect(existsSync(merged.worktreePath!)).toBe(false);
+    for (const w of stuck) expect(existsSync(w.worktreePath!)).toBe(true);
+  }, 60_000);
+
   it("换人共享同一个 worktree：0 提交已收工的前任（注册 worktree / 孤儿目录）不能靠“0 提交秒清”或“前任满 3 天”删掉后任还在用或未到期的目录", async () => {
     const graph = ledger.hubCall(pm.sessionId, "graph.create", {
       title: "共享目录边界",
