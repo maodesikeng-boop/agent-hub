@@ -344,7 +344,7 @@ export function createLedgerRouter(
           target.id,
         );
         if (target.ask_message_id !== null) {
-          messages.markAskAnsweredIn(p, target.ask_message_id);
+          messages.settleAskIn(p, target.ask_message_id, { by: "close" });
         }
         p.changes.push({ type: "router.item.updated", data: { item: toRouterItem(getItemRow(target.id)!) } });
       }
@@ -441,7 +441,7 @@ export function createLedgerRouter(
     if (row.pm_id !== caller.pmId) throw fail("forbidden", `卡 #${row.id} 不是你的卡`);
     if (row.status !== "pending") throw fail("conflict", `卡 #${row.id} 已经不在等了（${row.status === "resolved" ? "用户已回答" : "已关掉或被替换"}）`);
     db.run("UPDATE router_items SET status = 'superseded', updated_at = ? WHERE id = ?", now(), row.id);
-    if (row.ask_message_id !== null) messages.markAskAnsweredIn(p, row.ask_message_id);
+    if (row.ask_message_id !== null) messages.settleAskIn(p, row.ask_message_id, { by: "close" });
     const item = toRouterItem(getItemRow(row.id)!);
     p.changes.push({ type: "router.item.updated", data: { item } });
     appendAuditIn("pm", "ask.close", caller.pmId, row.id);
@@ -635,7 +635,7 @@ export function createLedgerRouter(
       );
 
       if (row.ask_message_id !== null) {
-        messages.markAskAnsweredIn(p, row.ask_message_id, chosenOption ?? undefined);
+        messages.settleAskIn(p, row.ask_message_id, { by: "answer", ...(chosenOption !== null ? { chosenOption } : {}), note });
       }
 
       const wakeLines = [`【Router 拍板】关于「${row.question ?? ""}」`];

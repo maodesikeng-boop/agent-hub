@@ -22,6 +22,9 @@ import { isPathInsideOrEqual } from "../platform/index.ts";
 import type { LedgerSessions } from "./sessions.ts";
 import { stepOfTool, summarizeToolCall } from "./tool-summary.ts";
 
+/** 一张提问卡怎么了结的：用户回答（选中的选项、原话，都可能没有），或被项目经理关掉、替换、收回。 */
+export type AskSettlement = { by: "answer"; chosenOption?: string; note?: string } | { by: "close" };
+
 const ACTIVE_MESSAGE_STATUSES = "('delivered', 'processing')";
 const WORKER_PICK_ONLY_PM_MESSAGE = "指定 Worker 用的厂商、模型只能用在项目经理的对话里";
 
@@ -182,18 +185,26 @@ export function createLedgerMessages(
     return message;
   };
 
-  /** 在同一个事务里将指定 AskMeta 消息标为已答（可选记录选中的选项文本），推送 message.updated。 */
-  const markAskAnsweredIn = (p: Pending, messageId: MessageId, chosenOption?: string): void => {
+  /**
+   * 在同一个事务里了结一张提问卡，推送 message.updated：用户回答的记下选中的选项和原话（answerNote），
+   * 项目经理关掉、替换、收回的标 closed。已经了结的卡不会再被标成关掉。
+   */
+  const settleAskIn = (p: Pending, messageId: MessageId, settlement: AskSettlement): void => {
     const message = getMessage(messageId);
     if (message === null || message.meta === null || typeof message.meta !== "object") return;
     const current = message.meta as unknown as Record<string, unknown>;
     if (current.needsUser !== true) return;
-    if (current.answered === true && (chosenOption === undefined || current.chosenOption === chosenOption)) return;
-    const nextMeta = {
-      ...current,
-      answered: true,
-      ...(chosenOption !== undefined ? { chosenOption } : {}),
-    };
+    if (current.answered === true && settlement.by === "close") return;
+    const nextMeta =
+      settlement.by === "close"
+        ? { ...current, answered: true, closed: true }
+        : {
+            ...current,
+            answered: true,
+            ...(settlement.chosenOption !== undefined ? { chosenOption: settlement.chosenOption } : {}),
+            ...(settlement.note !== undefined && settlement.note !== "" ? { answerNote: settlement.note } : {}),
+          };
+    if (JSON.stringify(nextMeta) === JSON.stringify(current)) return;
     db.run("UPDATE messages SET meta = ?, updated_at = ? WHERE id = ?", JSON.stringify(nextMeta), now(), messageId);
     p.changes.push({ type: "message.updated", data: { message: getMessage(messageId)! } });
   };
@@ -600,7 +611,7 @@ export function createLedgerMessages(
     applyEvent,
     insertSystemMessage,
     insertAskMessage,
-    markAskAnsweredIn,
+    settleAskIn,
     enqueueWakeupUserMessageIn,
     postUserMessage,
     composerTarget,

@@ -15,6 +15,7 @@ import {
   Info,
   Loader2,
   MessageSquare,
+  PencilLine,
   RefreshCw,
   UserPen,
   type LucideIcon,
@@ -169,7 +170,7 @@ function AskCard({
   const qc = useHubQueryClient();
   const gateRef = card.gateRef;
   const hasOptions = card.options.length > 0;
-  const [chosen, setChosen] = useState<string | null>(null);
+  const [submitted, setSubmitted] = useState<{ chosenOption?: string; note?: string } | null>(null);
   const [noteOpen, setNoteOpen] = useState(!hasOptions || Boolean(gateRef?.checkpoint));
   const [note, setNote] = useState("");
   const [err, setErr] = useState<ErrorLike | null>(null);
@@ -187,7 +188,8 @@ function AskCard({
       onMutate: () => setErr(null),
       onSuccess: (_data, vars) => {
         clientIdRef.current = null;
-        setChosen(vars.choice ?? (gateRef?.checkpoint ? CONFIRM_REJECT_OPTION : (vars.note ?? "")));
+        const chosenOption = vars.choice ?? (gateRef?.checkpoint ? CONFIRM_REJECT_OPTION : null);
+        setSubmitted({ ...(chosenOption !== null ? { chosenOption } : {}), ...(vars.note !== null ? { note: vars.note } : {}) });
         setNote("");
       },
       onError: (error) => {
@@ -208,8 +210,9 @@ function AskCard({
     decideMutation.mutate({ choice, note: trimmed === "" ? null : trimmed });
   };
 
-  const effectiveChosen = card.chosenOption ?? chosen;
-  const answered = card.answered || chosen !== null;
+  const effectiveChosen = card.chosenOption ?? submitted?.chosenOption;
+  const answerNote = card.answerNote ?? submitted?.note;
+  const answered = card.answered || submitted !== null;
   const disabled = answered || (gateRef === undefined && !onAnswerAsk) || decideMutation.isPending;
   const { title: cardTitle, context: cardContext } = useMemo(
     () => splitAskQuestionAndContext(card.question),
@@ -226,7 +229,7 @@ function AskCard({
           <Markdown text={cardContext} files={files} messageId={messageId} />
         </div>
       )}
-      {hasOptions && (
+      {(hasOptions || answerNote !== undefined) && (
         <div className="mt-3 flex flex-col gap-1.5" role="group" aria-label="Options">
           {card.options.map((opt, i) => {
             const isChosen = effectiveChosen === opt;
@@ -258,8 +261,17 @@ function AskCard({
               </button>
             );
           })}
+          {answerNote !== undefined && (
+            <div data-ask-answer className="flex w-full items-center gap-3 rounded-xl bg-sidebar-active px-3 py-2">
+              <span className="flex size-6 shrink-0 items-center justify-center rounded-xl border border-border bg-sidebar text-muted-foreground">
+                <PencilLine className="size-3.5" aria-hidden="true" />
+              </span>
+              <span className="min-w-0 flex-1 text-body whitespace-pre-wrap [overflow-wrap:anywhere]">{answerNote}</span>
+            </div>
+          )}
         </div>
       )}
+      {card.closed && <p className="mt-2 text-minor text-muted-foreground">Closed</p>}
       {!answered && (
         !noteOpen && hasOptions ? (
           <button

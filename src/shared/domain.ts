@@ -465,8 +465,9 @@ export const CONFIRM_CHECKPOINT_OPTIONS = [CONFIRM_PASS_OPTION, CONFIRM_REJECT_O
 
 /**
  * `hub ask`（普通提问、操作提醒、`--node` 步骤拍板卡与 `confirm` 检查点卡）发的那条项目经理消息的 meta：
- * needsUser 是“等你确定”的标记；answered 是这张卡被处理了——普通提问在用户回答这张卡（卡上点选、填写，或右栏 Router 拍板）、
+ * needsUser 是“等你确定”的标记；answered 是这张卡了结了——普通提问在用户回答这张卡（卡上点选、填写，或总助工作台拍板）、
  * 项目经理 hub ask close / --replace 时标上，用户在对话里发的普通消息不标；带 gateRef 的门禁消息须经门禁 decide 解锁才标上。
+ * 用户回答的记下 chosenOption 和原话 answerNote；被项目经理关掉、替换、收回的标 closed（见 ledger/messages.ts 的 settleAskIn）。
  */
 export type AskMeta = {
   needsUser: true;
@@ -475,6 +476,8 @@ export type AskMeta = {
   recommended?: string;
   gateRef?: GateRef;
   chosenOption?: string;
+  answerNote?: string;
+  closed?: true;
 };
 
 /** 是 hub ask 发的消息就返回它的 meta，否则 null。 */
@@ -503,6 +506,7 @@ export function askOf(message: Pick<Message, "sender" | "meta">): AskMeta | null
         }
       : undefined;
   const chosenOption = typeof message.meta.chosenOption === "string" ? message.meta.chosenOption : undefined;
+  const answerNote = typeof message.meta.answerNote === "string" && message.meta.answerNote !== "" ? message.meta.answerNote : undefined;
   return {
     needsUser: true,
     ...(answered ? { answered: true } : {}),
@@ -510,6 +514,8 @@ export function askOf(message: Pick<Message, "sender" | "meta">): AskMeta | null
     ...(recommended !== undefined ? { recommended } : {}),
     ...(gateRef !== undefined ? { gateRef } : {}),
     ...(chosenOption !== undefined ? { chosenOption } : {}),
+    ...(answerNote !== undefined ? { answerNote } : {}),
+    ...(message.meta.closed === true ? { closed: true } : {}),
   };
 }
 
@@ -595,6 +601,8 @@ export interface ExtractedAskCard {
   answered: boolean;
   recommended?: string;
   chosenOption?: string;
+  answerNote?: string;
+  closed?: true;
   gateRef?: GateRef;
 }
 
@@ -611,6 +619,8 @@ export function extractAskCard(
   const extras = {
     ...(ask.recommended !== undefined ? { recommended: ask.recommended } : {}),
     ...(ask.chosenOption !== undefined ? { chosenOption: ask.chosenOption } : {}),
+    ...(ask.answerNote !== undefined ? { answerNote: ask.answerNote } : {}),
+    ...(ask.closed === true ? { closed: true as const } : {}),
     ...(ask.gateRef !== undefined ? { gateRef: ask.gateRef } : {}),
   };
   const trimmed = message.text.trim();
