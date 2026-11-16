@@ -232,3 +232,22 @@ export function serializeCommonJsonMcpEntry(
     ...(Object.keys(materialized.headers).length > 0 ? { headers: { ...materialized.headers } } : {}),
   };
 }
+
+/** 扫描当前 JSON `mcpServers` 中禁止覆盖（`oauth`）或禁止移除（`oauth` 及引擎判定的 `hostBound`）的键名集合。 */
+export function collectProtectedJsonMcpNames(
+  existingMcp: Record<string, unknown>,
+  isProtectedServer?: (server: CanonicalMcpServer) => boolean,
+): { skipUpsert: Set<string>; skipRemove: Set<string> } {
+  const skipUpsert = new Set<string>();
+  const skipRemove = new Set<string>();
+  for (const [name, rawEntry] of Object.entries(existingMcp)) {
+    const parsed = parseCommonJsonMcpEntry(name, rawEntry);
+    if (parsed.nonSyncable) {
+      skipUpsert.add(name);
+      skipRemove.add(name);
+    } else if (parsed.server && isProtectedServer?.(parsed.server)) {
+      skipRemove.add(name);
+    }
+  }
+  return { skipUpsert, skipRemove };
+}

@@ -10,6 +10,7 @@ import { openTestDb } from "../store/test-helpers.ts";
 import { FakeLedger } from "../ui-server/fake-ledger.ts";
 import { createUiServer } from "../ui-server/server.ts";
 import { testLogin } from "../ui-server/test-login.ts";
+import { detectHostBoundMcp } from "./host-bound.ts";
 import { createVendorSyncService } from "./index.ts";
 
 describe("vendor-sync：6 家厂商连接器、MCP 与 Skill 并集同步、脱敏预览与轮转备份", () => {
@@ -902,5 +903,307 @@ startup_timeout_sec = 20
     expect(entries).toContain(res.backupId);
     expect(entries.length).toBe(MAX_VENDOR_SYNC_BACKUPS);
     expect(existsSync(join(backupsDir, res.backupId!, "manifest.json"))).toBe(true);
+  });
+});
+
+describe("vendor-sync：别家应用自带的 MCP（如 Codex 的 node_repl）默认不同步、标明来源、绝不从源头删", () => {
+  let rootDir: string;
+  let userHome: string;
+  let backupsDir: string;
+  let codexPath: string;
+  let claudePath: string;
+
+  const NODE_REPL = `# Codex 顶层注释
+model = "gpt-5.4"
+
+[mcp_servers.git_local]
+command = "uvx"
+args = ["mcp-server-git"]
+
+[mcp_servers.node_repl]
+command = "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl"
+env_vars = ["BROWSER_USE_ACCESS_EXECUTOR_ID", "BROWSER_USE_SESSION"]
+startup_timeout_sec = 60
+`;
+
+  beforeEach(() => {
+    rootDir = mkdtempSync(join(tmpdir(), "agent-hub-vendor-sync-hostbound-"));
+    userHome = join(rootDir, "home");
+    backupsDir = join(rootDir, "data", "backups", "sync");
+    mkdirSync(join(userHome, ".codex"), { recursive: true });
+    codexPath = join(userHome, ".codex", "config.toml");
+    claudePath = join(userHome, ".claude.json");
+    writeFileSync(codexPath, NODE_REPL, "utf8");
+    writeFileSync(claudePath, `{\n  "mcpServers": {}\n}\n`, "utf8");
+  });
+
+  afterEach(() => {
+    rmSync(rootDir, { recursive: true, force: true });
+  });
+
+  const service = (env: Record<string, string> = {}) =>
+    createVendorSyncService({ userHome, env, backupsDir, listProjectFolders: () => [] });
+  const claudeServers = () => (parseJsonc(readFileSync(claudePath, "utf8")) as { mcpServers: Record<string, unknown> }).mcpServers;
+
+  it("预览：node_repl 带来源（Codex）、所属应用（ChatGPT）与原因；普通 MCP 没有 hostBound", () => {
+    const preview = service().preview();
+    const nodeRepl = preview.mcpServers.find((m) => m.name === "node_repl")!;
+    expect(nodeRepl.hostBound).toMatchObject({
+      app: "ChatGPT",
+      sources: [{ vendor: "codex", label: expect.any(String) }],
+    });
+    expect(nodeRepl.hostBound?.reason).toBe("Runs from inside the ChatGPT app and may not work without it");
+    // 原因里不带环境变量名和命令路径
+    expect(JSON.stringify(nodeRepl.hostBound)).not.toContain("BROWSER_USE");
+    expect(JSON.stringify(nodeRepl.hostBound)).not.toContain("cua_node");
+    expect(preview.mcpServers.find((m) => m.name === "git_local")!.hostBound).toBeUndefined();
+  });
+
+  it("只看命令路径：透传 env_vars 的普通 MCP（如 GitHub 透传 GITHUB_TOKEN）不算别家自带、默认照常同步；命令在应用包里但没有 env_vars 也识别且带应用名", () => {
+    writeFileSync(
+      codexPath,
+      `[mcp_servers.github]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+env_vars = ["GITHUB_TOKEN"]
+
+[mcp_servers.bundle_only]
+command = "/Applications/Foo Bar.app/Contents/MacOS/helper"
+`,
+      "utf8",
+    );
+    const svc = service();
+    const preview = svc.preview();
+    const items = Object.fromEntries(preview.mcpServers.map((m) => [m.name, m]));
+    expect(items.github!.hostBound).toBeUndefined();
+    expect(items.bundle_only!.hostBound).toMatchObject({ app: "Foo Bar" });
+
+    const defaults = preview.mcpServers.filter((m) => !m.hostBound).map((m) => m.key);
+    expect(defaults).toEqual(["github"]);
+    svc.apply({ selectedMcpKeys: defaults, removeMcpKeys: [], selectedSkillKeys: [], removeSkillKeys: [], confirmedHostBoundMcpKeys: [] });
+    expect(Object.keys(claudeServers())).toEqual(["github"]);
+  });
+
+  it("按默认值（不勾选 node_repl，也不进移除清单）apply：别家没被补上，Codex 配置一个字节不变，普通 MCP 照常同步", () => {
+    const svc = service();
+    const preview = svc.preview();
+    const defaults = preview.mcpServers.filter((m) => !m.hostBound).map((m) => m.key);
+    const before = readFileSync(codexPath);
+
+    const res = svc.apply({ selectedMcpKeys: defaults, removeMcpKeys: [], selectedSkillKeys: [], removeSkillKeys: [] });
+
+    expect(res.syncedMcpCount).toBe(1);
+    expect(Object.keys(claudeServers())).toEqual(["git_local"]);
+    expect(readFileSync(codexPath).equals(before)).toBe(true);
+  });
+
+  it("即使请求把 node_repl 放进 removeMcpKeys 也不删：源头 Codex 与已有副本都原样保留", () => {
+    writeFileSync(
+      claudePath,
+      `{"mcpServers":{"node_repl":{"command":"/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl","args":[]}}}`,
+      "utf8",
+    );
+    const codexBefore = readFileSync(codexPath);
+    const claudeBefore = readFileSync(claudePath);
+
+    const res = service().apply({
+      selectedMcpKeys: [],
+      removeMcpKeys: ["node_repl", "git_local"],
+      selectedSkillKeys: [],
+      removeSkillKeys: [],
+    });
+
+    // git_local 是普通 MCP，照旧能移除；node_repl 一份都不动
+    expect(res.removedMcpCount).toBe(1);
+    expect(readFileSync(codexPath, "utf8")).toContain("[mcp_servers.node_repl]");
+    expect(readFileSync(codexPath, "utf8")).toContain('env_vars = ["BROWSER_USE_ACCESS_EXECUTOR_ID", "BROWSER_USE_SESSION"]');
+    expect(readFileSync(codexPath, "utf8")).not.toContain("git_local");
+    expect(readFileSync(claudePath).equals(claudeBefore)).toBe(true);
+    expect(codexBefore.length).toBeGreaterThan(0);
+  });
+
+  it("用户显式勾选后照常同步到别家，源头 Codex 仍一个字节不变（含 env_vars、startup_timeout_sec）", () => {
+    const svc = service();
+    const before = readFileSync(codexPath);
+    const res = svc.apply({ selectedMcpKeys: ["node_repl"], removeMcpKeys: [], selectedSkillKeys: [], removeSkillKeys: [] });
+    expect(res.syncedMcpCount).toBe(1);
+    expect(claudeServers().node_repl).toMatchObject({
+      command: "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl",
+    });
+    expect(readFileSync(codexPath).equals(before)).toBe(true);
+  });
+
+  it("别家已有的副本（命令在应用包里）同样标出来；来源列出持有它的各家", () => {
+    writeFileSync(
+      claudePath,
+      `{"mcpServers":{"node_repl":{"command":"/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl","args":[]}}}`,
+      "utf8",
+    );
+    const item = service().preview().mcpServers.find((m) => m.name === "node_repl")!;
+    expect(item.hostBound?.sources.map((src) => src.vendor).sort()).toEqual(["claude", "codex"]);
+  });
+
+  it("Windows 路径：WindowsApps 包目录、Electron/Tauri resources 与 Squirrel app-<ver>/resources 算应用自带（含 \\\\?\\ 扩展前缀与空 env 兜底），Node/Python 深层 node_modules/site-packages 下的 resources 与执行别名不算", () => {
+    const env = {
+      LOCALAPPDATA: "C:\\Users\\me\\AppData\\Local",
+      ProgramFiles: "C:\\Program Files",
+    };
+    const detect = (command: string, customEnv: Record<string, string> = env, home?: string) =>
+      detectHostBoundMcp({ transport: "stdio", command, args: [], env: {} }, customEnv, home);
+
+    expect(detect("C:\\Program Files\\WindowsApps\\OpenAI.ChatGPT_1.2.3.0_x64__abc\\app\\node_repl.exe")?.app).toBe("OpenAI.ChatGPT");
+    expect(detect("\\\\?\\C:\\Program Files\\WindowsApps\\OpenAI.ChatGPT_1.2.3.0_x64__abc\\app\\node_repl.exe")?.app).toBe("OpenAI.ChatGPT");
+    expect(detect("\\\\?\\C:\\Program Files\\Cursor\\resources\\app\\bin\\mcp.exe")?.app).toBe("Cursor");
+    expect(detect("c:/users/me/appdata/local/programs/ChatGPT/resources/cua_node/bin/node_repl.exe")?.app).toBe("ChatGPT");
+    expect(detect("C:\\Program Files\\Cursor\\resources\\app\\bin\\mcp.exe")?.app).toBe("Cursor");
+    expect(detect("C:\\Users\\me\\AppData\\Local\\AnthropicClaude\\app-0.8.0\\resources\\mcp.exe")?.app).toBe("AnthropicClaude");
+    // 环境变量缺失时靠标准默认目录与 userHome 兜底识别
+    expect(detect("C:\\Program Files\\WindowsApps\\OpenAI.ChatGPT_1.0_x64__abc\\app\\node_repl.exe", {})?.app).toBe("OpenAI.ChatGPT");
+    expect(detect("C:\\Program Files (x86)\\LegacyApp\\resources\\mcp.exe", {})?.app).toBe("LegacyApp");
+    expect(
+      detect("C:\\Users\\alice\\AppData\\Local\\Programs\\ChatGPT\\resources\\cua_node\\bin\\node_repl.exe", {}, "C:\\Users\\alice")?.app,
+    ).toBe("ChatGPT");
+
+    // 普通运行时及包管理器深层恰好含 resources 子目录，或 Microsoft\WindowsApps 执行别名，绝不能误判成应用私有
+    expect(detect("C:\\Program Files\\nodejs\\node.exe")).toBeNull();
+    expect(detect("C:\\Program Files\\nodejs\\node_modules\\some-mcp\\resources\\cli.js")).toBeNull();
+    expect(detect("C:\\Users\\me\\AppData\\Local\\Programs\\Python\\Python312\\python.exe")).toBeNull();
+    expect(detect("C:\\Users\\me\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\pkg\\resources\\run.exe")).toBeNull();
+    expect(detect("C:\\Users\\me\\AppData\\Local\\Microsoft\\WindowsApps\\python.exe")).toBeNull();
+    expect(detect("C:\\Users\\me\\AppData\\Local\\pnpm\\global\\5\\node_modules\\pkg\\resources\\bin.exe")).toBeNull();
+    expect(detect("npx")).toBeNull();
+    expect(detect("/usr/local/bin/node")).toBeNull();
+    // 远程 MCP 没有命令，不判断
+    expect(detectHostBoundMcp({ transport: "http", url: "https://a.example/mcp", headers: {} }, env)).toBeNull();
+  });
+
+  it("别家有新普通 MCP 补进 Codex 触发 config.toml 改写时，源头 node_repl 的 command、env_vars、startup_timeout_sec 与顶层注释完整保留", () => {
+    writeFileSync(
+      claudePath,
+      JSON.stringify({ mcpServers: { context7: { command: "npx", args: ["-y", "@upstash/context7-mcp"] } } }, null, 2),
+      "utf8",
+    );
+    const svc = service();
+    const preview = svc.preview();
+    const defaults = preview.mcpServers.filter((m) => !m.hostBound).map((m) => m.key);
+    expect(defaults).toEqual(["context7", "git_local"]);
+
+    svc.apply({
+      selectedMcpKeys: defaults,
+      removeMcpKeys: [],
+      selectedSkillKeys: [],
+      removeSkillKeys: [],
+      confirmedHostBoundMcpKeys: [],
+    });
+
+    const codexRaw = readFileSync(codexPath, "utf8");
+    expect(codexRaw).toContain("# Codex 顶层注释");
+    expect(codexRaw).toContain("context7");
+    expect(codexRaw).toContain("@upstash/context7-mcp");
+    expect(codexRaw).toContain("[mcp_servers.node_repl]");
+    expect(codexRaw).toContain('command = "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl"');
+    expect(codexRaw).toContain('env_vars = ["BROWSER_USE_ACCESS_EXECUTOR_ID", "BROWSER_USE_SESSION"]');
+    expect(codexRaw).toContain("startup_timeout_sec = 60");
+    expect(claudeServers().node_repl).toBeUndefined();
+  });
+
+  it("Codex 里设为 enabled = false 的自带 MCP（或 oauth），即使别家同名普通 MCP 被取消勾选移除，也绝不从 Codex 源头误删", () => {
+    writeFileSync(
+      codexPath,
+      `[mcp_servers.env_only]
+enabled = false
+command = "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl"
+env_vars = ["BROWSER_USE_SESSION"]
+
+[mcp_servers.oauth_disabled]
+enabled = false
+url = "https://mcp.example.com/v1"
+oauth = { client_id = "abc" }
+`,
+      "utf8",
+    );
+    writeFileSync(
+      claudePath,
+      JSON.stringify({
+        mcpServers: {
+          env_only: { command: "npx", args: ["plain-tool"] },
+          oauth_disabled: { command: "npx", args: ["other-plain"] },
+        },
+      }),
+      "utf8",
+    );
+
+    const svc = service();
+    const res = svc.apply({
+      selectedMcpKeys: [],
+      removeMcpKeys: ["env_only", "oauth_disabled"],
+      selectedSkillKeys: [],
+      removeSkillKeys: [],
+    });
+
+    expect(res.removedMcpCount).toBe(2);
+    expect(claudeServers()).toEqual({});
+    const codexAfter = readFileSync(codexPath, "utf8");
+    expect(codexAfter).toContain("[mcp_servers.env_only]");
+    expect(codexAfter).toContain('env_vars = ["BROWSER_USE_SESSION"]');
+    expect(codexAfter).toContain("[mcp_servers.oauth_disabled]");
+  });
+
+  it("预览与 apply 两次扫描不一致：预览时是普通项、apply 前在磁盘上变成 hostBound 时，未在 confirmedHostBoundMcpKeys 确认则不往别家补、也不删源头", () => {
+    writeFileSync(
+      codexPath,
+      `[mcp_servers.morphing]
+command = "npx"
+args = ["portable-morphing"]
+`,
+      "utf8",
+    );
+    const svc = service();
+    const preview = svc.preview();
+    expect(preview.hostBoundConfirmSupported).toBe(true);
+    expect(preview.mcpServers.find((m) => m.key === "morphing")?.hostBound).toBeUndefined();
+
+    // 用户看预览窗期间，宿主应用把 morphing 改写成了应用自带的 MCP
+    const updatedCodex = `[mcp_servers.morphing]
+command = "/Applications/ChatGPT.app/Contents/Resources/bin/morphing"
+env_vars = ["HOST_SECRET"]
+`;
+    writeFileSync(codexPath, updatedCodex, "utf8");
+
+    // 1. 按预览时的默认勾选提交（confirmedHostBoundMcpKeys 为空）：不往 Claude 补，也不改 Codex
+    const res1 = svc.apply({
+      selectedMcpKeys: ["morphing"],
+      removeMcpKeys: [],
+      selectedSkillKeys: [],
+      removeSkillKeys: [],
+      confirmedHostBoundMcpKeys: [],
+    });
+    expect(res1.syncedMcpCount).toBe(0);
+    expect(claudeServers().morphing).toBeUndefined();
+    expect(readFileSync(codexPath, "utf8")).toBe(updatedCodex);
+
+    // 2. 若用户在预览窗取消勾选了普通 morphing（removeMcpKeys 含 morphing），apply 时它已变成 hostBound，同样绝不删除
+    const res2 = svc.apply({
+      selectedMcpKeys: [],
+      removeMcpKeys: ["morphing"],
+      selectedSkillKeys: [],
+      removeSkillKeys: [],
+      confirmedHostBoundMcpKeys: [],
+    });
+    expect(res2.removedMcpCount).toBe(0);
+    expect(readFileSync(codexPath, "utf8")).toBe(updatedCodex);
+
+    // 3. 重新扫描看到警告并显式确认（confirmedHostBoundMcpKeys 含 morphing）后，正常同步到 Claude
+    const res3 = svc.apply({
+      selectedMcpKeys: ["morphing"],
+      removeMcpKeys: [],
+      selectedSkillKeys: [],
+      removeSkillKeys: [],
+      confirmedHostBoundMcpKeys: ["morphing"],
+    });
+    expect(res3.syncedMcpCount).toBe(1);
+    expect(claudeServers().morphing).toMatchObject({
+      command: "/Applications/ChatGPT.app/Contents/Resources/bin/morphing",
+    });
   });
 });

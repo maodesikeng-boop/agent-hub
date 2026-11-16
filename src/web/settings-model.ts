@@ -26,9 +26,12 @@ import {
   type TunnelState,
   type TunnelStatus,
   type VendorAvailability,
+  type VendorSyncApplyRequest,
   type VendorSyncApplyResponse,
   type VendorSyncItemVendorStatus,
+  type VendorSyncMcpPreviewItem,
   type VendorSyncPreviewResponse,
+  type VendorSyncVendorBadge,
 } from "../shared/index.ts";
 import {
   ApiError,
@@ -770,47 +773,110 @@ export function formatVendorSyncSummary(result: VendorSyncApplyResponse): string
   return parts.join(", ");
 }
 
+const EMPTY_STRING_SET: ReadonlySet<string> = new Set();
+const uncheckedHostBoundBadgesCache = new WeakMap<readonly VendorSyncVendorBadge[], readonly VendorSyncVendorBadge[]>();
+
+/**
+ * 计算预览行下方展示的厂商状态标签：
+ * 普通 MCP 与已勾选的 `hostBound` MCP 展示全部厂商状态；
+ * 未勾选的 `hostBound` MCP 只展示当前已持有它的厂商（`present` / `kept`），不展示不会发生的 `Add` / `mcp-remote`。
+ * 按输入数组引用 `WeakMap` 缓存，保持引用稳定。
+ */
+export function visibleMcpVendorBadges(
+  item: VendorSyncMcpPreviewItem,
+  checked: boolean,
+): readonly VendorSyncVendorBadge[] {
+  if (!item.hostBound || checked) return item.vendors;
+  const cached = uncheckedHostBoundBadgesCache.get(item.vendors);
+  if (cached !== undefined) return cached;
+  const filtered = item.vendors.filter((badge) => badge.status !== "will_add" && badge.status !== "mcp_remote");
+  uncheckedHostBoundBadgesCache.set(item.vendors, filtered);
+  return filtered;
+}
+
+function toggledSet(prev: ReadonlySet<string>, key: string, nextChecked: boolean): ReadonlySet<string> {
+  const next = new Set(prev);
+  if (nextChecked) next.add(key);
+  else next.delete(key);
+  return next;
+}
+
+/**
+ * 一次同步预览会话：属于哪台设备、是哪一次扫描的结果，以及用户在这份结果上的勾选。
+ * 只有扫描 observer 当前那一次调用的结果能成为会话；同步成功或切换设备即结束。
+ */
+interface VendorSyncSession {
+  readonly device: DeviceKey;
+  readonly preview: VendorSyncPreviewResponse;
+  readonly checkedMcp: ReadonlySet<string>;
+  readonly checkedSkills: ReadonlySet<string>;
+}
+
+/** 某台设备上最近一次同步的结果摘要。 */
+interface VendorSyncSummary {
+  readonly device: DeviceKey;
+  readonly text: string;
+}
+
+/** 扫描与同步按设备区分 mutationKey：切换设备时 TanStack 自动 reset，在途请求与本 observer 解绑。 */
+const VENDOR_SYNC_MUTATION_KEY = (step: "scan" | "apply", device: DeviceKey) => ["vendor-sync", step, device] as const;
+
+function buildApplyRequest(session: VendorSyncSession): VendorSyncApplyRequest {
+  const { preview, checkedMcp, checkedSkills } = session;
+  const selectedMcpKeys: string[] = [];
+  const removeMcpKeys: string[] = [];
+  const confirmedHostBoundMcpKeys: string[] = [];
+  for (const item of preview.mcpServers) {
+    if (checkedMcp.has(item.key)) {
+      selectedMcpKeys.push(item.key);
+      if (item.hostBound) confirmedHostBoundMcpKeys.push(item.key);
+    } else if (!item.hostBound) {
+      // 别家应用自带的 MCP：不勾选只是“不往别家补”，不进移除清单，源头配置原样保留
+      removeMcpKeys.push(item.key);
+    }
+  }
+  const selectedSkillKeys: string[] = [];
+  const removeSkillKeys: string[] = [];
+  for (const item of preview.skills) {
+    if (checkedSkills.has(item.key)) {
+      selectedSkillKeys.push(item.key);
+    } else {
+      removeSkillKeys.push(item.key);
+    }
+  }
+  return {
+    selectedMcpKeys,
+    removeMcpKeys,
+    selectedSkillKeys,
+    removeSkillKeys,
+    ...(preview.hostBoundConfirmSupported ? { confirmedHostBoundMcpKeys } : {}),
+  };
+}
+
 export function useVendorSyncSetting(explicitClient?: HubClient) {
   const qc = useHubQueryClient();
   const contextClient = useClient();
   const client = explicitClient ?? contextClient;
-  const [preview, setPreview] = useState<VendorSyncPreviewResponse | null>(null);
-  const [checkedMcp, setCheckedMcp] = useState<ReadonlySet<string>>(() => new Set());
-  const [checkedSkills, setCheckedSkills] = useState<ReadonlySet<string>>(() => new Set());
-  const [lastSummary, setLastSummary] = useState<string | null>(null);
+  const targetDevice = client.device ?? LOCAL_DEVICE;
+  const [session, setSession] = useState<VendorSyncSession | null>(null);
+  const [summary, setSummary] = useState<VendorSyncSummary | null>(null);
+  // 切换设备即结束上一台设备的会话与摘要（渲染期按 prop 调整 state，不等 effect，切回来也不会复活旧预览）
+  if (session !== null && session.device !== targetDevice) setSession(null);
+  if (summary !== null && summary.device !== targetDevice) setSummary(null);
+  const current = session?.device === targetDevice ? session : null;
+  const preview = current?.preview ?? null;
+  const checkedMcp = current?.checkedMcp ?? EMPTY_STRING_SET;
+  const checkedSkills = current?.checkedSkills ?? EMPTY_STRING_SET;
+  const lastSummary = summary?.device === targetDevice ? summary.text : null;
 
+  // 结果只经 mutate() 的调用级回调落到 state：TanStack 只对 observer 当前那次调用触发，
+  // 被新一次调用顶掉、或因切换设备 reset 解绑的在途请求，回来后不会再写任何 state。
   const applyMutation = useMutation(
     {
-      mutationFn: () => {
-        if (!preview) throw new Error("No preview loaded");
-        const selectedMcpKeys: string[] = [];
-        const removeMcpKeys: string[] = [];
-        for (const item of preview.mcpServers) {
-          if (checkedMcp.has(item.key)) {
-            selectedMcpKeys.push(item.key);
-          } else {
-            removeMcpKeys.push(item.key);
-          }
-        }
-        const selectedSkillKeys: string[] = [];
-        const removeSkillKeys: string[] = [];
-        for (const item of preview.skills) {
-          if (checkedSkills.has(item.key)) {
-            selectedSkillKeys.push(item.key);
-          } else {
-            removeSkillKeys.push(item.key);
-          }
-        }
-        return client.postVendorSyncApply({
-          selectedMcpKeys,
-          removeMcpKeys,
-          selectedSkillKeys,
-          removeSkillKeys,
-        });
-      },
-      onSuccess: (result) => {
-        setLastSummary(formatVendorSyncSummary(result));
-        setPreview(null);
+      mutationKey: VENDOR_SYNC_MUTATION_KEY("apply", targetDevice),
+      mutationFn: (scanned: VendorSyncSession | null) => {
+        if (!scanned) throw new Error("No preview loaded");
+        return client.postVendorSyncApply(buildApplyRequest(scanned));
       },
     },
     qc,
@@ -818,39 +884,50 @@ export function useVendorSyncSetting(explicitClient?: HubClient) {
 
   const scanMutation = useMutation(
     {
+      mutationKey: VENDOR_SYNC_MUTATION_KEY("scan", targetDevice),
       mutationFn: () => client.fetchVendorSyncPreview(),
-      onSuccess: (data) => {
-        setCheckedMcp(new Set(data.mcpServers.map((item) => item.key)));
-        setCheckedSkills(new Set(data.skills.map((item) => item.key)));
-        applyMutation.reset();
-        setPreview(data);
-      },
     },
     qc,
   );
+  const { mutate: mutateScan } = scanMutation;
+  const { mutate: mutateApply, reset: resetApply } = applyMutation;
+
+  const previewVendorSync = useCallback(() => {
+    const device = targetDevice;
+    mutateScan(undefined, {
+      onSuccess: (data) => {
+        resetApply();
+        setSession({
+          device,
+          preview: data,
+          checkedMcp: new Set(data.mcpServers.filter((item) => !item.hostBound).map((item) => item.key)),
+          checkedSkills: new Set(data.skills.map((item) => item.key)),
+        });
+      },
+    });
+  }, [mutateScan, resetApply, targetDevice]);
+
+  const applyVendorSync = useCallback(() => {
+    mutateApply(current, {
+      onSuccess: (result, scanned) => {
+        if (!scanned) return;
+        setSummary({ device: scanned.device, text: formatVendorSyncSummary(result) });
+        // 只结束提交时那一次扫描的会话
+        setSession((prev) => (prev?.preview === scanned.preview ? null : prev));
+      },
+    });
+  }, [current, mutateApply]);
 
   const toggleMcp = useCallback((key: string, nextChecked: boolean) => {
-    setCheckedMcp((prev) => {
-      const next = new Set(prev);
-      if (nextChecked) next.add(key);
-      else next.delete(key);
-      return next;
-    });
+    setSession((prev) => (prev ? { ...prev, checkedMcp: toggledSet(prev.checkedMcp, key, nextChecked) } : prev));
   }, []);
 
   const toggleSkill = useCallback((key: string, nextChecked: boolean) => {
-    setCheckedSkills((prev) => {
-      const next = new Set(prev);
-      if (nextChecked) next.add(key);
-      else next.delete(key);
-      return next;
-    });
+    setSession((prev) => (prev ? { ...prev, checkedSkills: toggledSet(prev.checkedSkills, key, nextChecked) } : prev));
   }, []);
 
-  const previewVendorSync = useCallback(() => scanMutation.mutate(), [scanMutation]);
-  const applyVendorSync = useCallback(() => applyMutation.mutate(), [applyMutation]);
   const closePreview = useCallback(() => {
-    if (!applyMutation.isPending) setPreview(null);
+    if (!applyMutation.isPending) setSession(null);
   }, [applyMutation.isPending]);
 
   const scanError: ErrorLike | null = scanMutation.error ? errorText(scanMutation.error) : null;

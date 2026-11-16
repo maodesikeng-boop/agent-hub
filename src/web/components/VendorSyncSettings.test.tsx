@@ -139,4 +139,55 @@ describe("设置弹窗：Vendor sync 扫描预览、取消勾选移除与执行�
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("磁盘空间不足，回滚完成");
     expect(skillSwitch).toHaveAttribute("aria-checked", "false");
   });
+
+  it("别家应用自带的 MCP 默认关着、展示来源与原因、不显示 Unchecked — will be removed 且未勾选时不显示 Add 徽章，手动打开后才显示 Add", async () => {
+    const user = userEvent.setup();
+    api.vendorSyncPreview = () => ({
+      status: 200,
+      body: {
+        scannedAt: 1_700_000_000_000,
+        truncated: false,
+        hostBoundConfirmSupported: true,
+        mcpServers: [
+          {
+            key: "node_repl",
+            name: "node_repl",
+            transport: "stdio",
+            maskedTarget: "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl",
+            maskedAuth: [],
+            usesMcpRemoteBridge: false,
+            hostBound: {
+              app: "ChatGPT",
+              sources: [{ vendor: "codex", label: "Codex" }],
+              reason: "Runs from inside the ChatGPT app and may not work without it",
+            },
+            vendors: [
+              { vendor: "claude", label: "Claude Code", status: "will_add" },
+              { vendor: "codex", label: "Codex", status: "present" },
+            ],
+          },
+        ],
+        skills: [],
+        nonSyncable: [],
+      },
+    });
+
+    render(<SettingsDialog open defaultSection="providers" onOpenChange={() => {}} notify={notify} />);
+    await user.click(screen.getByRole("button", { name: "Scan…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Sync preview" });
+
+    const sw = within(dialog).getByRole("switch", { name: "node_repl" });
+    expect(sw).toHaveAttribute("aria-checked", "false");
+    expect(within(dialog).getByText("From Codex")).toBeVisible();
+    expect(within(dialog).getByText("ChatGPT app")).toBeVisible();
+    expect(within(dialog).queryByText("Unchecked — will be removed")).toBeNull();
+    // 未勾选时只显示已持有的 Codex Synced，不显示误导性的 Claude Code Add
+    expect(within(dialog).getByText("Synced")).toBeVisible();
+    expect(within(dialog).queryByText("Add")).toBeNull();
+
+    // 手动打开开关后显示 Claude Code Add
+    await user.click(sw);
+    expect(sw).toHaveAttribute("aria-checked", "true");
+    expect(within(dialog).getByText("Add")).toBeVisible();
+  });
 });

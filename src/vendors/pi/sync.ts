@@ -5,7 +5,7 @@
 import { join } from "node:path";
 import type { ScannedCloudConnector, VendorSyncAdapter, VendorSyncContext } from "../daemon-types.ts";
 import { isPlainObject, patchJsoncMapEntries, readJsoncObjectFile } from "../_common/sync/jsonc.ts";
-import { parseCommonJsonMcpEntry, serializeCommonJsonMcpEntry } from "../_common/sync/mcp.ts";
+import { collectProtectedJsonMcpNames, parseCommonJsonMcpEntry, serializeCommonJsonMcpEntry } from "../_common/sync/mcp.ts";
 import piSpec from "./spec.ts";
 
 function resolvePiAgentDir(ctx: VendorSyncContext): string {
@@ -41,18 +41,15 @@ export const piSyncAdapter: VendorSyncAdapter = {
     return { configPath, servers, nonSyncable };
   },
 
-  planMcpPatch(ctx, { upsert, removeNames }) {
+  planMcpPatch(ctx, { upsert, removeNames, isProtectedServer }) {
     const configPath = resolvePiMcpConfigPath(ctx);
     const doc = readJsoncObjectFile(configPath);
     const existingMcp = isPlainObject(doc.data.mcpServers) ? doc.data.mcpServers : {};
-    const protectedNames = new Set<string>();
-    for (const [name, rawEntry] of Object.entries(existingMcp)) {
-      if (parseCommonJsonMcpEntry(name, rawEntry).nonSyncable) protectedNames.add(name);
-    }
+    const { skipUpsert, skipRemove } = collectProtectedJsonMcpNames(existingMcp, isProtectedServer);
 
     const serializedUpsert: Record<string, Record<string, unknown>> = {};
     for (const [name, spec] of Object.entries(upsert)) {
-      if (protectedNames.has(name)) continue;
+      if (skipUpsert.has(name)) continue;
       serializedUpsert[name] = serializeCommonJsonMcpEntry(spec, {
         supportsSseMcp: false,
         explicitType: false,
@@ -61,7 +58,7 @@ export const piSyncAdapter: VendorSyncAdapter = {
 
     const safeRemove = new Set<string>();
     for (const name of removeNames) {
-      if (!protectedNames.has(name)) safeRemove.add(name);
+      if (!skipRemove.has(name)) safeRemove.add(name);
     }
 
     const nextContent = patchJsoncMapEntries({

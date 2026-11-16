@@ -330,6 +330,54 @@ describe("子页", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: /Vendor sync/ })).toHaveTextContent("Synced"));
   });
 
+  it("Vendor sync 手机页：别家应用自带的 MCP 默认关着、标明来源与原因、不显示移除告警与未选的 Add，打开开关后显示 Add", async () => {
+    const api = new FakeApi(makeSnapshot({}));
+    api.vendorSyncPreview = () => ({
+      status: 200,
+      body: {
+        scannedAt: 1,
+        truncated: false,
+        hostBoundConfirmSupported: true,
+        mcpServers: [
+          {
+            key: "node_repl",
+            name: "node_repl",
+            transport: "stdio",
+            maskedTarget: "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl",
+            maskedAuth: [],
+            usesMcpRemoteBridge: false,
+            hostBound: {
+              app: "ChatGPT",
+              sources: [{ vendor: "codex", label: "Codex" }],
+              reason: "Runs from inside the ChatGPT app and may not work without it",
+            },
+            vendors: [
+              { vendor: "claude", label: "Claude Code", status: "will_add" },
+              { vendor: "codex", label: "Codex", status: "present" },
+            ],
+          },
+        ],
+        skills: [],
+        nonSyncable: [],
+      },
+    });
+    api.install();
+    renderSettings("#/settings/vendor-sync");
+    fireEvent.click(screen.getByRole("button", { name: "Scan…" }));
+    const mcp = await screen.findByRole("region", { name: "MCP servers" });
+    const sw = within(mcp).getByRole("switch", { name: "node_repl" });
+    expect(sw).toHaveAttribute("aria-checked", "false");
+    expect(within(mcp).getByText("From Codex")).toBeInTheDocument();
+    expect(within(mcp).getByText("ChatGPT app")).toBeInTheDocument();
+    expect(within(mcp).queryByText("Unchecked — will be removed")).toBeNull();
+    expect(within(mcp).getByText("Synced")).toBeInTheDocument();
+    expect(within(mcp).queryByText("Add")).toBeNull();
+
+    fireEvent.click(sw);
+    expect(sw).toHaveAttribute("aria-checked", "true");
+    expect(within(mcp).getByText("Add")).toBeInTheDocument();
+  });
+
   describe("电脑", () => {
     const tunnel: TunnelStatus = { state: "auth_failed", since: 0, retryAt: null, detail: "Permission denied (publickey)" };
     let calls: { method: string; path: string; body: unknown }[];
