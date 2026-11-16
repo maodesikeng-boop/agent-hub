@@ -11,7 +11,8 @@
 // detached HEAD 且 HEAD 没合入主分支：满 3 天才删，删之前先建 hub/detached-<Worker>-<提交号> 分支保住提交。
 // 已被外部 git worktree remove / prune 解绑、只剩壳的孤儿目录：同样条件下（且没有未被忽略的文件）同样回收。
 // 被 .gitignore 忽略的文件（node_modules、.env、截图等）不算改动，随目录一起删；只缺已跟踪文件（上一轮删到一半）也不算。
-// 每轮最多检查 WORKTREE_CLEANUP_BATCH_LIMIT 个：先判条件（不到期才查合并，git 引用很便宜），满足了才跑 git status。
+// 每轮最多对 WORKTREE_CLEANUP_BATCH_LIMIT 个候选跑 git status（孤儿目录的内容检查同算）：不到期才查合并只读 git 引用、很便宜，
+// 条件不满足的候选不占名额、全部过一遍，长期删不掉的不会把刚合并的挤出这一轮；名额用完从下一个候选接着轮。
 // 删除分两步，每一步都能被打断、下一轮从磁盘上的状态接着做：
 // 1. 一次 rename 把整个目录挪进同一根目录下的 .trash/<临时名>/（注册 worktree 用 git worktree move，锁着或带子模块的 git 会拒绝），
 //    挪之前先在临时目录里写下主仓路径；原路径要么原样还在，要么已经不在，不会出现删了一半的 worktree。
@@ -51,6 +52,8 @@ import {
 const TRASH_DIR = ".trash";
 /** 待删临时目录里记主仓路径的文件：挪进来的目录删完后靠它知道该对哪个仓库跑 git worktree prune。 */
 const TRASH_REPO_FILE = ".repo";
+/** processCandidate 的返回值：本轮跑 git status 的名额用完了，当前候选没处理。 */
+const OUT_OF_QUOTA = Symbol("out-of-quota");
 
 export interface WorktreeCleanupLedger {
   listEndedWorktreeWorkers(): EndedWorktreeCandidate[];
@@ -118,19 +121,11 @@ export function createWorktreeCleanup(options: WorktreeCleanupOptions): Worktree
   let running: Promise<WorkerId[]> | null = null;
   let stopped = false;
 
-  const selectBatch = (eligible: EndedWorktreeCandidate[]): EndedWorktreeCandidate[] => {
-    if (eligible.length <= batchLimit) {
-      cursor = 0;
-      return eligible;
-    }
+  /** 从上一轮停下的地方（游标之后的下一个 Worker）开始，整个候选列表绕一圈。 */
+  const rotateFromCursor = (eligible: EndedWorktreeCandidate[]): EndedWorktreeCandidate[] => {
     const startIdx = eligible.findIndex((c) => c.workerId > cursor);
     const offset = startIdx === -1 ? 0 : startIdx;
-    const batch: EndedWorktreeCandidate[] = [];
-    for (let i = 0; i < batchLimit; i++) {
-      batch.push(eligible[(offset + i) % eligible.length]!);
-    }
-    cursor = batch.at(-1)!.workerId;
-    return batch;
+    return [...eligible.slice(offset), ...eligible.slice(0, offset)];
   };
 
   const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
@@ -220,6 +215,89 @@ export function createWorktreeCleanup(options: WorktreeCleanupOptions): Worktree
     return cleaned;
   };
 
+  /**
+   * 处理一个候选。返回挪走了的 Worker 编号，没动它返回 null；
+   * 要跑 git status（或孤儿目录的内容检查）却拿不到名额时返回 OUT_OF_QUOTA，调用方就此停下，下一轮从它接着来。
+   */
+  const processCandidate = async (
+    candidate: EndedWorktreeCandidate,
+    takeQuota: () => boolean,
+  ): Promise<WorkerId | null | typeof OUT_OF_QUOTA> => {
+    if (!isUnderWorktreesDir(candidate.worktreePath, currentRoots()) || !ledger.isWorkerCleanable(candidate.workerId)) return null;
+
+    // 0. 已经不是有效 git worktree 的残留目录（外部 git worktree remove / prune 之后剩下的壳）：走孤儿流程，不跑 git status
+    if (inspectWorktreeLink(candidate.worktreePath) === "orphan") {
+      if (!takeQuota()) return OUT_OF_QUOTA;
+      return (await cleanOrphan(candidate)) ? candidate.workerId : null;
+    }
+
+    // 1. 满足“收工满 3 天”或“已合并进主分支”任一条件才往下走（不满足的不跑 git status、不占名额）。
+    //    “已合并”看两处：登记的分支，和 worktree 当前实际的 HEAD（审查 Worker 常 detached 在 PR 提交上，
+    //    或停在 review-* 临时分支；一个提交都没新增、HEAD 还在 main 历史里的探索目录也算，没有任何东西会丢）。
+    const expired = now() - candidate.endedAt >= retentionMs;
+    if (!expired) {
+      let merged: boolean;
+      try {
+        merged = await isBranchMergedToMain(candidate.repoFolder, candidate.branch, candidate.baseCommit, git);
+        if (!merged) {
+          const head = await resolveCommit(candidate.worktreePath, "HEAD", git);
+          merged = head !== null && (await isCommitMergedToMain(candidate.repoFolder, head, git));
+        }
+      } catch (error) {
+        log(`${LOG_PREFIX} 清理 worktree：检查分支合并状态失败（worker #${candidate.workerId}）：${errorText(error)}`);
+        return null;
+      }
+      if (!merged) return null;
+    }
+    if (!takeQuota()) return OUT_OF_QUOTA;
+
+    // 2. 有未提交改动（含未跟踪文件）、rebase / merge / cherry-pick / bisect 进行到一半的一律不删（即使 PR 已合并也留给人看）；
+    //    只缺已跟踪文件的（上一轮删到一半）照删
+    const probe = await probeWorktreeForRemoval(candidate.worktreePath, git);
+    if (probe.kind !== "ok") {
+      log(`${LOG_PREFIX} 清理 worktree：检查状态失败（worker #${candidate.workerId}，${candidate.worktreePath}）：${probe.error}`);
+      return null;
+    }
+    if (!probe.isRepoWithCommit || probe.hasContent || probe.inProgress || probe.head === null) return null;
+
+    // 2b. 未满保留期时，worktree 当前实际的 HEAD 也必须在主分支历史里（防登记分支已合入但工作区切到了别的未合并提交）；
+    //     HEAD 不在分支上（detached）且没合入主分支时：满 3 天才删，并先给它建个分支引用，建失败绝不继续删目录丢提交。
+    let pinned: string | null = null;
+    if (!expired || !probe.onBranch) {
+      try {
+        const headMerged = await isCommitMergedToMain(candidate.repoFolder, probe.head, git);
+        if (!headMerged) {
+          if (!expired) return null;
+          if (!probe.onBranch) {
+            pinned = await pinDetachedHead(candidate.repoFolder, probe.head, String(candidate.workerId), git);
+          }
+        }
+      } catch (error) {
+        log(`${LOG_PREFIX} 清理 worktree：保全 detached HEAD 失败（worker #${candidate.workerId}）：${errorText(error)}`);
+        return null;
+      }
+    }
+
+    // 3. 动手删之前再核一次路径和 Worker 状态，确保未重新跑起来
+    if (stopped || !isUnderWorktreesDir(candidate.worktreePath, currentRoots()) || !ledger.isWorkerCleanable(candidate.workerId)) return null;
+
+    try {
+      await moveToTrash(candidate, true);
+    } catch (error) {
+      const lockInfo =
+        process.platform === "win32"
+          ? formatWin32LockHolders(queryWin32WhoLocks(candidate.worktreePath))
+          : "";
+      const lockSuffix = lockInfo === "" ? "" : `（占用进程：${lockInfo}）`;
+      log(`${LOG_PREFIX} 清理 worktree 失败（worker #${candidate.workerId}，${candidate.worktreePath}）：${errorText(error)}${lockSuffix}`);
+      return null;
+    }
+    log(
+      `${LOG_PREFIX} 已自动清理 worktree：worker #${candidate.workerId}（${candidate.worktreePath}，分支 ${candidate.branch} 保留${pinned === null ? "" : `，detached HEAD 已保底到分支 ${pinned}`}）`,
+    );
+    return candidate.workerId;
+  };
+
   const moveCandidatesToTrash = async (): Promise<WorkerId[]> => {
     let all: EndedWorktreeCandidate[];
     try {
@@ -235,85 +313,18 @@ export function createWorktreeCleanup(options: WorktreeCleanupOptions): Worktree
       return [];
     }
 
-    const batch = selectBatch(eligible);
     const cleaned: WorkerId[] = [];
+    let quotaLeft = batchLimit;
+    const takeQuota = (): boolean => quotaLeft-- > 0;
 
-    for (const candidate of batch) {
-      if (stopped) break;
-      if (!isUnderWorktreesDir(candidate.worktreePath, currentRoots()) || !ledger.isWorkerCleanable(candidate.workerId)) continue;
-
-      // 0. 已经不是有效 git worktree 的残留目录（外部 git worktree remove / prune 之后剩下的壳）：走孤儿流程，不跑 git status
-      if (inspectWorktreeLink(candidate.worktreePath) === "orphan") {
-        if (await cleanOrphan(candidate)) cleaned.push(candidate.workerId);
-        continue;
-      }
-
-      // 1. 满足“收工满 3 天”或“已合并进主分支”任一条件才往下走（不满足的不跑 git status）。
-      //    “已合并”看两处：登记的分支，和 worktree 当前实际的 HEAD（审查 Worker 常 detached 在 PR 提交上，
-      //    或停在 review-* 临时分支；一个提交都没新增、HEAD 还在 main 历史里的探索目录也算，没有任何东西会丢）。
-      const expired = now() - candidate.endedAt >= retentionMs;
-      let merged = false;
-      if (!expired) {
-        try {
-          merged = await isBranchMergedToMain(candidate.repoFolder, candidate.branch, candidate.baseCommit, git);
-          if (!merged) {
-            const head = await resolveCommit(candidate.worktreePath, "HEAD", git);
-            merged = head !== null && (await isCommitMergedToMain(candidate.repoFolder, head, git));
-          }
-        } catch (error) {
-          log(`${LOG_PREFIX} 清理 worktree：检查分支合并状态失败（worker #${candidate.workerId}）：${errorText(error)}`);
-          continue;
-        }
-        if (!merged) continue;
-      }
-
-      // 2. 有未提交改动（含未跟踪文件）、rebase / merge / cherry-pick / bisect 进行到一半的一律不删（即使 PR 已合并也留给人看）；
-      //    只缺已跟踪文件的（上一轮删到一半）照删
-      const probe = await probeWorktreeForRemoval(candidate.worktreePath, git);
-      if (probe.kind !== "ok") {
-        log(`${LOG_PREFIX} 清理 worktree：检查状态失败（worker #${candidate.workerId}，${candidate.worktreePath}）：${probe.error}`);
-        continue;
-      }
-      if (!probe.isRepoWithCommit || probe.hasContent || probe.inProgress || probe.head === null) continue;
-
-      // 2b. 未满保留期时，worktree 当前实际的 HEAD 也必须在主分支历史里（防登记分支已合入但工作区切到了别的未合并提交）；
-      //     HEAD 不在分支上（detached）且没合入主分支时：满 3 天才删，并先给它建个分支引用，建失败绝不继续删目录丢提交。
-      let pinned: string | null = null;
-      if (!expired || !probe.onBranch) {
-        try {
-          const headMerged = await isCommitMergedToMain(candidate.repoFolder, probe.head, git);
-          if (!headMerged) {
-            if (!expired) continue;
-            if (!probe.onBranch) {
-              pinned = await pinDetachedHead(candidate.repoFolder, probe.head, String(candidate.workerId), git);
-            }
-          }
-        } catch (error) {
-          log(`${LOG_PREFIX} 清理 worktree：保全 detached HEAD 失败（worker #${candidate.workerId}）：${errorText(error)}`);
-          continue;
-        }
-      }
-
-      // 3. 动手删之前再核一次路径和 Worker 状态，确保未重新跑起来
-      if (stopped || !isUnderWorktreesDir(candidate.worktreePath, currentRoots()) || !ledger.isWorkerCleanable(candidate.workerId)) continue;
-
-      try {
-        await moveToTrash(candidate, true);
-      } catch (error) {
-        const lockInfo =
-          process.platform === "win32"
-            ? formatWin32LockHolders(queryWin32WhoLocks(candidate.worktreePath))
-            : "";
-        const lockSuffix = lockInfo === "" ? "" : `（占用进程：${lockInfo}）`;
-        log(`${LOG_PREFIX} 清理 worktree 失败（worker #${candidate.workerId}，${candidate.worktreePath}）：${errorText(error)}${lockSuffix}`);
-        continue;
-      }
-      cleaned.push(candidate.workerId);
-      log(
-        `${LOG_PREFIX} 已自动清理 worktree：worker #${candidate.workerId}（${candidate.worktreePath}，分支 ${candidate.branch} 保留${pinned === null ? "" : `，detached HEAD 已保底到分支 ${pinned}`}）`,
-      );
+    for (const candidate of rotateFromCursor(eligible)) {
+      if (stopped) return cleaned;
+      const outcome = await processCandidate(candidate, takeQuota);
+      if (outcome === OUT_OF_QUOTA) return cleaned;
+      cursor = candidate.workerId;
+      if (outcome !== null) cleaned.push(outcome);
     }
-
+    cursor = 0;
     return cleaned;
   };
 
