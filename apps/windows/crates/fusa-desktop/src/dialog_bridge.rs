@@ -14,9 +14,7 @@ use tauri_plugin_dialog::{DialogExt, FilePath};
 const MAX_DIALOG_HEADER_BYTES: usize = 8 * 1024;
 const MAX_DIALOG_BODY_BYTES: usize = 8 * 1024;
 const MAX_DIALOG_WIRE_BYTES: usize = MAX_DIALOG_HEADER_BYTES + MAX_DIALOG_BODY_BYTES;
-/// 回完响应后最多再读掉多少字节的剩余请求体（lingering close），超过就不管了直接关。
 const MAX_LINGER_DRAIN_BYTES: usize = 64 * 1024;
-/// lingering close 的总时间上限。
 const LINGER_DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// 守护进程 `POST /api/pick-folder` 与桌面外壳 `tauri-plugin-dialog` 之间的本机回环窄桥接句柄。
@@ -77,11 +75,13 @@ fn generate_bridge_token() -> String {
     format!("dlg_{part1}{part2}")
 }
 
-/// 回响应后做有上限的 lingering close：先 `shutdown(Write)` 发 FIN，再在字节数与时间上限内读掉客户端还在发的请求体，最后才关连接。
-///
-/// 接收缓冲区里留着没读的数据（或关闭后又收到数据）时，TCP 会发 RST 而不是 FIN，
-/// 客户端可能在读到响应前就报连接重置（Windows 上是 10054）。
-fn write_json_response(stream: &mut TcpStream, status: u16, status_text: &str, body: &str) {
+fn write_json_response(
+    stream: &mut TcpStream,
+    status: u16,
+    status_text: &str,
+    body: &str,
+    linger_drain: bool,
+) {
     let wire = format!(
         "HTTP/1.1 {status} {status_text}\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
@@ -89,9 +89,12 @@ fn write_json_response(stream: &mut TcpStream, status: u16, status_text: &str, b
     let _ = stream.write_all(wire.as_bytes());
     let _ = stream.flush();
     let _ = stream.shutdown(Shutdown::Write);
-    drain_request_remainder(stream);
+    if linger_drain {
+        drain_request_remainder(stream);
+    }
 }
 
+// 接收缓冲留有未读数据或关连接后仍有请求体分片到达时，TCP 会发 RST 而非 FIN（Windows 报 10054），丢弃响应。
 fn drain_request_remainder(stream: &mut TcpStream) {
     let deadline = Instant::now() + LINGER_DRAIN_TIMEOUT;
     let mut drained = 0usize;
@@ -103,7 +106,8 @@ fn drain_request_remainder(stream: &mut TcpStream) {
         if stream.set_read_timeout(Some(remaining)).is_err() {
             break;
         }
-        match stream.read(&mut chunk) {
+        let max_step = (MAX_LINGER_DRAIN_BYTES - drained).min(chunk.len());
+        match stream.read(&mut chunk[..max_step]) {
             Ok(0) | Err(_) => break,
             Ok(n) => drained += n,
         }
@@ -161,6 +165,7 @@ impl DesktopDialogBridge {
                 let mut content_len = 0usize;
                 let mut payload_too_large = false;
                 let mut invalid_content_length = false;
+                let mut has_transfer_encoding = false;
                 loop {
                     match stream.read(&mut chunk) {
                         Ok(0) | Err(_) => break,
@@ -181,6 +186,8 @@ impl DesktopDialogBridge {
                                     }
                                     header_end = Some(end);
                                     let hdr = String::from_utf8_lossy(&buf[..end]).to_ascii_lowercase();
+                                    has_transfer_encoding =
+                                        hdr.lines().any(|l| l.starts_with("transfer-encoding:"));
                                     if let Some(raw_cl) = hdr.lines().find_map(|l| l.strip_prefix("content-length:")) {
                                         match raw_cl.trim().parse::<usize>() {
                                             Ok(len) if len <= MAX_DIALOG_BODY_BYTES => {
@@ -210,6 +217,8 @@ impl DesktopDialogBridge {
                     }
                 }
 
+                let linger_drain =
+                    payload_too_large || invalid_content_length || has_transfer_encoding;
                 let Some(end) = header_end else {
                     if payload_too_large {
                         write_json_response(
@@ -217,6 +226,7 @@ impl DesktopDialogBridge {
                             413,
                             "Payload Too Large",
                             r#"{"error":"payload_too_large"}"#,
+                            true,
                         );
                     }
                     continue;
@@ -224,7 +234,13 @@ impl DesktopDialogBridge {
                 let header_text = String::from_utf8_lossy(&buf[..end]);
                 let first_line = header_text.lines().next().unwrap_or("");
                 if !first_line.starts_with("POST /pick-folder ") {
-                    write_json_response(&mut stream, 404, "Not Found", r#"{"error":"not_found"}"#);
+                    write_json_response(
+                        &mut stream,
+                        404,
+                        "Not Found",
+                        r#"{"error":"not_found"}"#,
+                        linger_drain,
+                    );
                     continue;
                 }
 
@@ -236,6 +252,7 @@ impl DesktopDialogBridge {
                         401,
                         "Unauthorized",
                         r#"{"error":"unauthorized"}"#,
+                        linger_drain,
                     );
                     continue;
                 }
@@ -246,6 +263,7 @@ impl DesktopDialogBridge {
                         413,
                         "Payload Too Large",
                         r#"{"error":"payload_too_large"}"#,
+                        true,
                     );
                     continue;
                 }
@@ -255,6 +273,7 @@ impl DesktopDialogBridge {
                         400,
                         "Bad Request",
                         r#"{"error":"bad_request"}"#,
+                        linger_drain,
                     );
                     continue;
                 }
@@ -263,7 +282,13 @@ impl DesktopDialogBridge {
                     .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
                     .is_err()
                 {
-                    write_json_response(&mut stream, 409, "Conflict", r#"{"error":"busy"}"#);
+                    write_json_response(
+                        &mut stream,
+                        409,
+                        "Conflict",
+                        r#"{"error":"busy"}"#,
+                        linger_drain,
+                    );
                     continue;
                 }
 
@@ -280,6 +305,7 @@ impl DesktopDialogBridge {
                                 400,
                                 "Bad Request",
                                 r#"{"error":"invalid_json"}"#,
+                                linger_drain,
                             );
                             continue;
                         }
@@ -295,11 +321,12 @@ impl DesktopDialogBridge {
                             self.0.store(false, Ordering::SeqCst);
                         }
                     }
-                    let _guard = BusyGuard(busy_for_pick);
+                    let guard = BusyGuard(busy_for_pick);
 
                     let picked = handler_for_pick(req_payload.start_dir);
+                    drop(guard);
                     let body = serde_json::json!({ "path": picked }).to_string();
-                    write_json_response(&mut stream, 200, "OK", &body);
+                    write_json_response(&mut stream, 200, "OK", &body, linger_drain);
                 });
             }
         });
