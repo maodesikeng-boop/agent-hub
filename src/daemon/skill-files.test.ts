@@ -237,6 +237,13 @@ describe("软链边界：软链位置 × 指向", () => {
     expect(catalog.atPath(join(linked, "docs", "nested", "SKILL.md"))).toBeNull();
   });
 
+  it("环境变量把厂商配置目录指到主目录外面：那个目录自己是锚点，里面的技能照常收", () => {
+    const piDir = join(root, "pi-agent");
+    skill(join(piDir, "skills"), "pi-env");
+    const catalog = createSkillFiles({ launchDir, userHome, env: { PI_CODING_AGENT_DIR: piDir } }).catalog({ ...session, vendor: "pi" });
+    expect(catalog.named("pi-env")?.path).toBe(join(piDir, "skills", "pi-env", "SKILL.md"));
+  });
+
   it("建完名单后整个技能目录掉包成指到外面的软链：换代现枚举不收，旧的那个也不读", () => {
     skill(project(), "swapped");
     const skillFiles = files();

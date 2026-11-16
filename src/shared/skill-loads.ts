@@ -41,16 +41,16 @@ export interface ToolCall {
   input: unknown;
 }
 
-/** 非空行：去掉这家的行号前缀、行尾空白（\r\n、\n 都算换行）。 */
+/** 非空行：去掉这家的行号前缀、行首的 BOM（一次读了几个文件时每个文件开头都可能有）、行尾空白（\r\n、\n 都算换行）。 */
 const contentLines = (text: string, prefix?: RegExp): string[] =>
   text
     .split(/\r?\n/u)
-    .map((line) => (prefix === undefined ? line : line.replace(prefix, "")).trimEnd())
+    .map((line) => (prefix === undefined ? line : line.replace(prefix, "")).replace(/^\uFEFF/u, "").trimEnd())
     .filter((line) => line.trim() !== "");
 
 /** SKILL.md 全文（或开头）算出的“开头”：frontmatter 头两个非空行，正文（frontmatter 之后）头两个非空行。 */
 export function skillHeads(text: string): string[] {
-  const lines = contentLines(text.replace(/^\uFEFF/u, ""));
+  const lines = contentLines(text);
   const close = lines[0] === "---" ? lines.indexOf("---", 1) : -1;
   const body = close === -1 ? lines : lines.slice(close + 1);
   const heads: string[] = [];

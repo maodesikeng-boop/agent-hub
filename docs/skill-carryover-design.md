@@ -177,7 +177,7 @@ CREATE INDEX loaded_skills_generation ON loaded_skills (conversation_id, generat
 
 这份目录清单是 vendor-sync 每家必写的声明（`src/vendors/daemon-types.ts` 的 `skillTarget`）：claude 是 `.claude/skills` 和 `~/.claude/skills`，agy 全局是 `~/.gemini/config/skills`，pi 全局是 `~/.pi/agent/skills`，其余三家是 `.agents/skills`。不另起一张目录表。
 
-每个目录下每个 `<名字>/SKILL.md`，名字是合法的一段目录名（不是 `.`、`..`，不带 `/`、`\`），真实路径的文件名还是 `SKILL.md`，真实路径落在某个技能目录的真实路径里面，才进名单。`.claude/skills → ../.agents/skills` 这种整目录软链、vendor-sync 在 `~/.gemini/config/skills/<名字>` 建的逐项软链（指到 `~/.agents/skills/<名字>`）都落在技能目录里，照常能用；指到技能目录外面的软链不进名单。名单里每个技能记名字、枚举到的路径、真实路径、文件身份（设备号加 inode），和从文件开头读出的“开头”：
+边界只有一条，写在 `skillFileIn` 上：真实路径恰好是 `<可信根>/<合法技能名>/SKILL.md` 的普通文件才进名单。可信根是锚点（启动目录、用户主目录、各项目目录）先求真实路径，再按字面拼上技能子路径（如 `.claude/skills`），拼的这一段不跟随软链；环境变量把厂商配置目录指到主目录外面时，那个目录自己是锚点。合法技能名是一段目录名（不是 `.`、`..`，不带 `/`、`\`）。软链指到另一个可信根里面照常收：`.claude/skills → ../.agents/skills` 这种整目录软链、vendor-sync 在 `~/.gemini/config/skills/<名字>` 建的逐项软链（指到 `~/.agents/skills/<名字>`）。技能子路径的任何一段、单个技能目录、`SKILL.md` 本身是软链，指到技能目录外面或仓库里别的目录的，都不进名单。威胁模型：仓库和 worktree 里可以放任意软链；不防能在检查和读取之间换文件的本机进程。换代读正文读核对过的真实路径；上一代记下的技能这一代过不了边界的，和文件没了一样注明没带过来。名单里每个技能记名字、枚举到的路径、真实路径、文件身份（设备号加 inode），和从文件开头读出的“开头”：
 
 - frontmatter 开头：文件头两个非空行（`---`、`name: <名字>`）；
 - 正文开头：frontmatter 之后的头两个非空行（跳过 frontmatter 只读正文的也认）。
@@ -333,9 +333,9 @@ skillSignals: {
 先提交会失败的测试，再实现：
 
 - `src/shared/skill-loads.test.ts`：每家至少一个“用户手打”和一个“模型加载”的样例被认出，返回原文用实时流里的真实形状：claude `Read`（带 `1\t` 行号）、`Bash`、`Skill`、`/poteto-mode`；agy `read_file`（`14 lines, 310 bytes`，按路径）、`run_command`（带元信息头、`\r\n`）；codex `commandExecution`、`/名字` 和 `$名字`；pi `read`、`/skill:名字`；deepseek `skill`、`read`（`1: ` 行号）；cursor `Read`（`rawOutput.content`）、`Shell`（`rawOutput.stdout`）。不该认的：只读中段、输出被过滤、文件不存在、超过扫描上限才出现的开头、agy 从中间读的 `read_file`、agy 读失败、名单外的路径。两份 FAIL 评论里的复现全部覆盖：`${H%% *}`、heredoc 里的模板字符串、`#` 注释后面的读取、`hub worker start --stdin <<EOF` 派活正文、`cd …/skills && cat <名字>/SKILL.md`、`(cd /tmp && ls); cat …`、`\<换行>` 续行、`Skill: "../../.."`、`skills/../SKILL.md`。
-- `src/daemon/skill-files.test.ts`：名单只收技能目录里的 `SKILL.md`；`.claude/skills → ../.agents/skills` 和逐项软链照常能用；FAIL 评论里四种软链（软链文件、软链目录、`<cwd>/skills` 指到别处、指到 `secret.txt`）都不进名单，换代读不到；`atPath` 只认真实路径相等的。
+- `src/daemon/skill-files.test.ts`：名单只收技能目录里的 `SKILL.md`；`.claude/skills → ../.agents/skills` 和逐项软链照常能用；一张表把软链位置（技能子路径每一段、单个技能目录、`SKILL.md` 本身，项目、全局、启动目录都有）× 指向（外面、仓库里的 `docs`、另一个可信根）列全，前两种不收，第三种收；锚点本身是软链时按真实锚点算；建完名单后整个技能目录掉包成软链，现枚举不收、旧的也不读；`atPath` 只认真实路径相等的。
 - 各家驱动的测试：`agent.tool_result` 带上 `outputs`；agy 用实跑抓的流裁成的夹具。
-- `src/daemon/ledger/loaded-skills.test.ts`：按返回认、按路径认、调用和返回分开到；软链去重；单个截断和合计裁剪；跨两代继承；文件缺失跳过并注明；任务图手册换了启动目录后按名字重新找到；超过 `SKILL_CARRYOVER_RECORDS_MAX` 删最旧的；删项目经理后表里没有这个对话的行；返回原文不进 `messages`、`session_steps`。
+- `src/daemon/ledger/loaded-skills.test.ts`：按返回认、按路径认、调用和返回分开到；软链去重；单个截断和合计裁剪；跨两代继承；文件缺失跳过并注明；合法加载后目录掉包成指到外面的软链，换代不读外面的文件、同样注明；任务图手册换了启动目录后按名字重新找到；超过 `SKILL_CARRYOVER_RECORDS_MAX` 删最旧的；删项目经理后表里没有这个对话的行；返回原文不进 `messages`、`session_steps`。
 - `src/daemon/ledger/handover.test.ts`：普通换代、手动开新会话、切换厂商三条路的开场说明都带这一节，位置在说明头后面；开场说明里不再有任务图手册那一行。
 - 重放：`node scripts/skill-load-replay.ts --role all`，生产代码和返回内容对照零分歧。
 - 本机照 `AGENTS.md` 跑 `pnpm typecheck` 和这些测试文件；这次不涉及写入范围，不用跑 `src/shared/write-scope.test.ts`。
