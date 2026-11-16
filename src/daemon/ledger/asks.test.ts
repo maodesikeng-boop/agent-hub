@@ -1,5 +1,5 @@
-// “等你确定”（hub ask）什么时候算回答了：用户在这个项目经理的对话里发一条消息，守护进程就把之前没回答的提问标成已回答
-// （meta.answered），几个标签页、重启后都一致。项目经理自己说的、Worker 的汇报、系统消息、别的对话里的消息都不算。
+// “等你确定”（hub ask）什么时候算回答了：只有用户在这张卡上回答（点选项、填写），或项目经理自己关掉/替换它。
+// 用户在对话里发的普通消息不关任何卡；项目经理每次收到用户消息，都带着账本里当前还在等的卡。
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +8,7 @@ import type { Change } from "../../shared/api.ts";
 import { askOf } from "../../shared/domain.ts";
 import { ASK_CARD_TELL_USER, ASK_CARD_WHERE } from "../../shared/hub.ts";
 import type { ConversationId, MessageId, PmId, SessionId } from "../../shared/domain.ts";
+import { HUB_COMMAND } from "../../shared/names.ts";
 import { REPORT_END, REPORT_START } from "../../shared/worker.ts";
 import { openDatabase } from "../store/db.ts";
 import type { Db } from "../store/index.ts";
@@ -70,112 +71,137 @@ const answered = (id: MessageId): boolean => askOf(ledger.getMessage(id)!)?.answ
 const messagesIn = (conversationId: ConversationId) =>
   db.all<{ id: number }>("SELECT id FROM messages WHERE conversation_id = ? ORDER BY id", conversationId).map((r) => ledger.getMessage(r.id)!);
 
-describe("用户发消息就算回答了", () => {
-  it("之前没回答的提问都标成已回答，推 message.updated", () => {
-    const a = ask("用 A 还是 B？");
-    const b = ask("要不要发版？");
+const itemOf = (messageId: MessageId) => db.get<{ id: number; status: string }>("SELECT id, status FROM router_items WHERE ask_message_id = ?", messageId)!;
+const statusOf = (messageId: MessageId) => itemOf(messageId).status;
+const answerCard = (messageId: MessageId, choice: string) => ledger.answerAsk(messageId, { clientId: `a${++clientSeq}`, choice });
+
+/** 项目经理实际收到的这条用户消息：原文前面的说明块 + 原文（handlers.ts 的 session.send 原样交给驱动层）。 */
+const receivedBy = (messageId: MessageId) => ledger.deliveryOf(ledger.getMessage(messageId)!);
+
+describe("一张卡只在用户回答这张卡时关掉", () => {
+  it("挂两张卡，回答其中一张：另一张仍在等，对话里的卡也没被标成已回答", () => {
+    const power = ledger.hubCall(lin.sessionId, "ask", { text: "请接电源", options: ["已接", "不接"] }).data.messageId;
+    const standard = ledger.hubCall(lin.sessionId, "ask", { text: "方案标准", options: ["两处都按这个改（推荐）", "只改一处"] }).data.messageId;
+    changes = [];
+    answerCard(standard, "两处都按这个改（推荐）");
+    expect([statusOf(standard), statusOf(power)]).toEqual(["resolved", "pending"]);
+    expect([answered(standard), answered(power)]).toEqual([true, false]);
+    expect(changes.flatMap((c) => (c.type === "message.updated" ? [c.data.message.id] : []))).toEqual([standard]);
+  });
+
+  it("用户在对话里发普通消息：不关任何独立提问卡", () => {
+    const a = ask("要不要发版？");
+    const b = ask("用 A 还是 B？");
+    post(lin.conversationId, "现在的工具调用支持多工具同步调用吗");
+    expect([statusOf(a), statusOf(b)]).toEqual(["pending", "pending"]);
     expect([answered(a), answered(b)]).toEqual([false, false]);
-    changes = [];
-    post(lin.conversationId, "A，发");
-    expect([answered(a), answered(b)]).toEqual([true, true]);
-    const updated = changes.flatMap((c) => (c.type === "message.updated" ? [c.data.message.id] : []));
-    expect(updated.sort()).toEqual([a, b].sort());
-    expect(askOf(ledger.getMessage(a)!)).toEqual({ needsUser: true, answered: true });
   });
 
-  it("发消息之后才问的不算回答；已经回答过的不再推变化", () => {
-    const a = ask("问 1");
-    post(lin.conversationId);
-    const b = ask("问 2");
-    expect([answered(a), answered(b)]).toEqual([true, false]);
-    changes = [];
-    post(lin.conversationId);
-    const updated = changes.flatMap((c) => (c.type === "message.updated" ? [c.data.message.id] : []));
-    expect(updated).toEqual([b]);
+  it("回答别的项目经理的卡、重复提交同一次回答：不串、不重复", () => {
+    const a = ask("问 A");
+    const b = ask("问 B", zhou);
+    const first = ledger.answerAsk(a, { clientId: "same", note: "好" });
+    expect(ledger.answerAsk(a, { clientId: "same", note: "好" }).item.id).toBe(first.item.id);
+    expect([statusOf(a), statusOf(b)]).toEqual(["resolved", "pending"]);
+    expect(() => ledger.answerAsk(a, { clientId: "other", note: "又答" })).toThrow(/已经被处理过/);
   });
 
-  it("同一条消息重发（同一个 clientId）不重复处理", () => {
-    const a = ask("问");
-    ledger.postUserMessage({ conversationId: lin.conversationId, clientId: "same", text: "好" });
-    changes = [];
-    ledger.postUserMessage({ conversationId: lin.conversationId, clientId: "same", text: "好" });
-    expect(answered(a)).toBe(true);
-    expect(changes).toEqual([]);
+  it("没有这张卡：报 not_found", () => {
+    expect(() => ledger.answerAsk(999_999, { clientId: "x", note: "好" })).toThrow(/这张卡不在了/);
   });
 });
 
-describe("不算回答", () => {
-  it("项目经理自己说的话", () => {
-    const a = ask("问");
-    ledger.applyDriverEvent(lin.sessionId, { type: "agent.text", uuid: "pm-1", text: "我先自己看看", at: now });
-    expect(answered(a)).toBe(false);
-  });
-
-  it("系统消息（加文件夹）", () => {
-    const a = ask("问");
-    const folder = join(root, "work", "foo");
-    mkdirSync(folder, { recursive: true });
-    ledger.hubCall(lin.sessionId, "project.create", { folder: realpathSync.native(folder) });
-    const kinds = messagesIn(lin.conversationId).map((m) => m.sender);
-    expect(kinds).toContain("system");
-    expect(answered(a)).toBe(false);
-  });
-
-  it("Worker 的汇报，以及用户在 Worker 的对话里说的话", () => {
-    const folder = join(root, "work", "bar");
-    mkdirSync(folder, { recursive: true });
-    ledger.hubCall(lin.sessionId, "project.create", { folder: realpathSync.native(folder) });
-    const worker = ledger.hubCall(lin.sessionId, "worker.start", { title: "修 X", task: "把 X 修好", noWorktree: true }).data.worker;
-    const a = ask("问");
-    const workerSession = db.get<{ id: number }>("SELECT id FROM agent_sessions WHERE worker_id = ?", worker.id)!.id;
-    const task = messagesIn(worker.workerConversationId)[0]!.id;
-    for (const type of ["message.delivered", "message.processing"] as const) ledger.applyDriverEvent(workerSession, { type, messageIds: [task], at: now });
-    ledger.applyDriverEvent(workerSession, {
-      type: "agent.text",
-      uuid: "w-1",
-      text: `好了\n\n${REPORT_START}\n状态: 做完了\n摘要: 修好了\n提交: 无\n测试: 无\n问题: 无\n${REPORT_END}`,
-      at: now,
+describe("项目经理收到用户消息时带着账本里当前还在等的卡", () => {
+  it("两张卡都在等：原文前面带一块说明，列编号和问题前一段，原文不变", () => {
+    const a = ask("要不要发版？");
+    const b = ask("用 A 还是 B？\n\nA 快，B 稳");
+    const id = post(lin.conversationId, "现在的工具调用支持多工具同步调用吗");
+    expect(receivedBy(id)).toEqual({
+      prefixes: [
+        [
+          "【系统：账本里现在还在等用户回答的提问卡有 2 张。这条消息不一定在回答它们；用户回答了哪张，用 `" + HUB_COMMAND + " ask close <编号>` 关掉那张，没回答的留着：",
+          `- #${itemOf(a).id}「要不要发版？」`,
+          `- #${itemOf(b).id}「用 A 还是 B？ A 快，B 稳」`,
+          "】",
+        ].join("\n"),
+      ],
+      text: "现在的工具调用支持多工具同步调用吗",
     });
-    ledger.applyDriverEvent(workerSession, { type: "turn.ended", ok: true, interrupted: false, messageIds: [task], durationMs: 10, at: now });
-    expect(messagesIn(lin.conversationId).some((m) => m.kind === "worker" && m.meta?.event === "report")).toBe(true);
-    expect(answered(a)).toBe(false);
-    // 用户直接对 Worker 说：Worker 的对话里是用户消息，项目经理的对话里多一行系统消息，都不算回答这个项目经理的提问
-    post(worker.workerConversationId, "顺便把 Y 也改了");
-    expect(answered(a)).toBe(false);
   });
 
-  it("用户在别的项目经理的对话里发消息", () => {
+  it("没有卡在等（没问过、已回答、已关掉）：不带说明", () => {
+    expect(receivedBy(post(lin.conversationId, "你好"))).toEqual({ prefixes: [], text: "你好" });
     const a = ask("问");
-    const b = ask("问", zhou);
-    post(zhou.conversationId);
-    expect([answered(a), answered(b)]).toEqual([false, true]);
+    answerCard(a, "好");
+    expect(receivedBy(post(lin.conversationId, "再说一句")).prefixes).toEqual([]);
+  });
+
+  it("消息排队着还没送到时某张卡被回答了：送出去的说明按送出那一刻的账本，不带已回答的", () => {
+    const a = ask("问 A");
+    const b = ask("问 B");
+    const id = post(lin.conversationId, "随便说");
+    answerCard(a, "好");
+    const note = receivedBy(id).prefixes[0]!;
+    expect(note).toContain("有 1 张");
+    expect(note).toContain(`#${itemOf(b).id}「问 B」`);
+    expect(note).not.toContain("问 A");
+  });
+
+  it("问题很长只留前一段；卡很多只列前几张，其余写个数", () => {
+    for (let i = 1; i <= 12; i++) ask(`第${i}问${"长".repeat(200)}`);
+    const note = receivedBy(post(lin.conversationId, "回")).prefixes[0]!;
+    expect(note).toContain("有 12 张");
+    expect(note).toContain("「第1问");
+    expect(note).toContain("「第10问");
+    expect(note).not.toContain("「第11问");
+    expect(note).toContain("另有 2 张没列出");
+    expect(note).not.toContain("长".repeat(100));
+  });
+
+  it("别的项目经理的卡不进说明", () => {
+    ask("阿周的问题", zhou);
+    expect(receivedBy(post(lin.conversationId, "你好")).prefixes).toEqual([]);
   });
 });
 
-describe("回答的那条消息后来怎样都不影响", () => {
-  it("用户的消息还在排队、发送失败、被停止：提问照样是已回答", () => {
+describe("项目经理自己关掉卡（hub ask close）", () => {
+  it("关掉后：不再在等、对话里的卡标成已回答、之后的用户消息不再带它；别的卡不受影响", () => {
+    const a = ask("问 A");
+    const b = ask("问 B");
+    const result = ledger.hubCall(lin.sessionId, "ask.close", { itemId: itemOf(a).id });
+    expect(result.text).toContain(`已关掉卡 #${itemOf(a).id}`);
+    expect([statusOf(a), statusOf(b)]).toEqual(["superseded", "pending"]);
+    expect([answered(a), answered(b)]).toEqual([true, false]);
+    const note = receivedBy(post(lin.conversationId, "好")).prefixes[0]!;
+    expect(note).toContain("有 1 张");
+    expect(note).toContain("问 B");
+  });
+
+  it("只能关自己名下的卡；已经不在等的卡再关：报错说明状态；用户点已被关掉的卡：报冲突", () => {
+    const a = ask("问 A");
+    const other = ask("阿周的", zhou);
+    expect(() => ledger.hubCall(lin.sessionId, "ask.close", { itemId: itemOf(other).id })).toThrow(/不是你的卡/);
+    expect(() => ledger.hubCall(lin.sessionId, "ask.close", { itemId: 999_999 })).toThrow(/没有编号 999999 的卡/);
+    ledger.hubCall(lin.sessionId, "ask.close", { itemId: itemOf(a).id });
+    expect(() => ledger.hubCall(lin.sessionId, "ask.close", { itemId: itemOf(a).id })).toThrow(/已经不在等了/);
+    expect(() => answerCard(a, "好")).toThrow(/已被项目经理关掉或替换/);
+  });
+});
+
+describe("提问卡只认用户回答它的那一次，与别的消息无关", () => {
+  it("用户的消息发送失败、被停止都不碰卡", () => {
     const a = ask("问 1");
     const queued = post(lin.conversationId, "用 A");
-    expect(ledger.getMessage(queued)!.status).toBe("queued");
-    expect(answered(a)).toBe(true);
     ledger.applyDriverEvent(lin.sessionId, { type: "driver.error", code: "invalid_input", message: "炸了", messageIds: [queued], at: now });
     expect(ledger.getMessage(queued)!.status).toBe("failed");
-    expect(answered(a)).toBe(true);
-
-    const b = ask("问 2");
-    const stopped = post(lin.conversationId, "用 B");
-    for (const type of ["message.delivered", "message.processing"] as const) ledger.applyDriverEvent(lin.sessionId, { type, messageIds: [stopped], at: now });
-    ledger.requestStop(lin.conversationId);
-    ledger.applyDriverEvent(lin.sessionId, { type: "turn.ended", ok: false, interrupted: true, messageIds: [stopped], durationMs: 10, at: now });
-    expect(ledger.getMessage(stopped)!.status).toBe("stopped");
-    expect(answered(b)).toBe(true);
+    expect(statusOf(a)).toBe("pending");
   });
 });
 
 describe("持久化", () => {
   it("重启守护进程后已回答、没回答的都不变", () => {
     const a = ask("问 1");
-    post(lin.conversationId);
+    answerCard(a, "好");
     const b = ask("问 2");
     db.close();
     open();
@@ -223,7 +249,7 @@ describe("持久化", () => {
     expect(answered(good)).toBe(true);
     expect(db.get<{ meta: string }>("SELECT meta FROM messages WHERE id = ?", bad)!.meta).toBe("{not json");
     const later = ask("迁移后再问");
-    post(lin.conversationId);
+    answerCard(later, "好");
     expect(answered(later)).toBe(true);
     expect(db.get<{ meta: string }>("SELECT meta FROM messages WHERE id = ?", bad)!.meta).toBe("{not json");
   });
@@ -243,10 +269,11 @@ describe("持久化", () => {
       needsUser: true,
       options: ["审一个 PR / 分支", "审本地代码路径"],
     });
-    post(lin.conversationId, "审一个 PR / 分支");
+    answerCard(id, "审一个 PR / 分支");
     expect(askOf(ledger.getMessage(id)!)).toEqual({
       needsUser: true,
       answered: true,
+      chosenOption: "审一个 PR / 分支",
       options: ["审一个 PR / 分支", "审本地代码路径"],
     });
     expect(() => ledger.hubCall(lin.sessionId, "ask", { text: "问", options: ["只有一个"] })).toThrow(/选项至少要给 2 个/);

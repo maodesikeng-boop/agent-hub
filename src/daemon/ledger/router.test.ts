@@ -224,7 +224,7 @@ describe("统一 hub ask 与 router report / note 同源桥接", () => {
     expect(changes).toEqual([]);
   });
 
-  it("旧 hub ask 自动同事务桥接进 router_items；用户在对话里直接回复同步收起 Router 待决卡（actor = conversation）", () => {
+  it("旧 hub ask 自动同事务桥接进 router_items；用户在对话里发普通消息不收起它，在卡上回答才收起（actor = router）", () => {
     const askMsgId = ledger.hubCall(lin.sessionId, "ask", {
       text: "发版窗口定在今晚还是明早？",
       options: ["今晚 22:00", "明早 10:00"],
@@ -239,23 +239,19 @@ describe("统一 hub ask 与 router report / note 同源桥接", () => {
       options: ["今晚 22:00", "明早 10:00"],
     });
 
-    changes = [];
-    ledger.postUserMessage({
-      conversationId: lin.conversationId,
-      clientId: "chat-reply-1",
-      text: "明早 10:00 稳妥一点",
-    });
+    ledger.postUserMessage({ conversationId: lin.conversationId, clientId: "chat-reply-1", text: "明早 10:00 稳妥一点" });
+    expect(askOf(ledger.getMessage(askMsgId)!)?.answered).toBeUndefined();
+    expect(ledger.snapshot().router.items.find((x) => x.id === bridged!.id)).toMatchObject({ status: "pending" });
 
-    expect(askOf(ledger.getMessage(askMsgId)!)?.answered).toBe(true);
+    changes = [];
+    ledger.answerAsk(askMsgId, { clientId: "card-click-1", choice: "明早 10:00" });
+    expect(askOf(ledger.getMessage(askMsgId)!)).toMatchObject({ answered: true, chosenOption: "明早 10:00" });
     expect(ledger.snapshot().router.items.find((x) => x.id === bridged!.id)).toBeUndefined();
     const updatedEvent = changes.find((c) => c.type === "router.item.updated" && c.data.item.id === bridged!.id);
     expect(updatedEvent).toBeDefined();
     if (updatedEvent?.type === "router.item.updated" && updatedEvent.data.item.kind === "decision") {
       expect(updatedEvent.data.item.status).toBe("resolved");
-      expect(updatedEvent.data.item.resolution).toMatchObject({
-        actor: "conversation",
-        note: "明早 10:00 稳妥一点",
-      });
+      expect(updatedEvent.data.item.resolution).toMatchObject({ actor: "router", chosenOption: "明早 10:00" });
     }
   });
 

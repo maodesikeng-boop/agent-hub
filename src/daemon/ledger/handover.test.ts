@@ -354,15 +354,17 @@ describe("开始复制（claimHandover）", () => {
       "`hub worker search`",
       TRANSCRIPT,
       "连去找都不会知道要去找",
-      "在等用户拍板的事：每件写清楚选项，并带上你的推荐",
       "保留原话",
       "原话会另外带给新会话，这里不用抄",
-      "第 1 节和第 5 节原样带过来",
+      "第 1 节原样带过来",
       "2000 字",
       "不调用工具、不回复用户、不派活",
     ])
       expect(job.prompt).toContain(part);
     expect(job.prompt).not.toContain("一字不改");
+    // 在等谁拍板由账本说了算（新会话开场说明里的“在等用户的提问卡”），不再让模型凭记忆写
+    expect(job.prompt).not.toContain("在等用户拍板的事");
+    expect(job.prompt).toContain("6. 下一步：");
     // 领走了就没有了
     expect(ledger.claimHandover()).toBeNull();
   });
@@ -1602,6 +1604,38 @@ describe("给已有项目经理换厂商", () => {
       expect(preamble).toContain(`## 本代起点摘要（上次会话换代时保存的背景）\n\n${VENDOR_SWITCH_ANCHOR_HINT}\n\n此前保存的交接正文`);
       expect(preamble).toContain("用户：换厂商前的最新对话\n\n你：换厂商前的最新回答");
       expect(preamble).not.toContain("早期对话");
+    });
+
+    it("开场说明末尾列出账本里还在等用户的提问卡；用户回答过的不列；用户发普通消息不关卡", () => {
+      const merged = ledger.hubCall(firstSession, "ask", { text: "PR #305 要不要合？\n\n两张里先合哪张" }).data.messageId;
+      ledger.answerAsk(merged, { clientId: "c-merge", note: "合" });
+      post("先说别的事");
+      const cardOf = (messageId: number) => db.get<{ id: number }>("SELECT id FROM router_items WHERE ask_message_id = ?", messageId)!.id;
+      const pstack = cardOf(ledger.hubCall(firstSession, "ask", { text: "pstack 要不要升级？" }).data.messageId);
+      const split = cardOf(ledger.hubCall(firstSession, "ask", { text: "#330 怎么拆？" }).data.messageId);
+      const { g2 } = renewNow("交接正文：在等用户拍板的有 #305、pstack、#330");
+      const preamble = ledger.sessionPreamble(g2)!;
+      const heading = "## 在等用户的提问卡（账本实时状态）\n\n";
+      expect(preamble).toContain(heading);
+      expect(preamble.slice(preamble.indexOf(heading) + heading.length)).toBe(
+        [
+          "账本里现在还在等用户回答的提问卡，一共 2 张，用户那边就这几张；上面交接正文里提到、但不在这里的卡，用户那边已经没有了：",
+          `- #${pstack}「pstack 要不要升级？」`,
+          `- #${split}「#330 怎么拆？」`,
+        ].join("\n"),
+      );
+      expect(preamble).not.toContain("PR #305 要不要合？");
+      expect(preamble).toContain("一共 2 张");
+    });
+
+    it("账本里没有在等用户的提问卡：写“无”", () => {
+      const old = ledger.hubCall(firstSession, "ask", { text: "旧问题" }).data.messageId;
+      ledger.answerAsk(old, { clientId: "c-old", note: "回答" });
+      const { g2 } = renewNow("交接正文：在等用户拍板的有 #305");
+      const preamble = ledger.sessionPreamble(g2)!;
+      expect(preamble.slice(preamble.indexOf("## 在等用户的提问卡（账本实时状态）"))).toBe(
+        "## 在等用户的提问卡（账本实时状态）\n\n无：账本里没有在等用户回答的提问卡；上面交接正文里提到的卡，用户那边已经没有了。",
+      );
     });
 
     it("活跃任务图实时注入：换新会话后 sessionPreamble 实时附带账本中未完结任务图及最新节点状态", () => {

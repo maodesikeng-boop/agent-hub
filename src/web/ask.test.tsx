@@ -332,7 +332,7 @@ describe("对话流里的 A/B/C/D 选项卡片", () => {
     expect(within(msg3).getByText("纯文本提问，没有选项")).toBeInTheDocument();
   });
 
-  it("点击某个选项按钮直接发送一条用户消息，且回答后选项按钮变为 disabled 并高亮所选项", async () => {
+  it("点击某个选项按钮只回答这一张卡（POST /api/asks/:id/answer），不发用户消息；回答后选项按钮变为 disabled 并高亮所选项", async () => {
     await boot(
       twoPms([
         ask({
@@ -340,26 +340,41 @@ describe("对话流里的 A/B/C/D 选项卡片", () => {
           text: "你想审什么？",
           meta: { needsUser: true, options: ["审一个 PR / 分支", "审本地代码路径"] },
         }),
+        ask({ id: 2, text: "请接电源", meta: { needsUser: true, options: ["已接", "不接"] } }),
       ]),
     );
     const card = document.querySelector('[data-message-id="1"] [data-ask-card]') as HTMLElement;
-    const buttons = within(card).getAllByRole("button");
+    const other = document.querySelector('[data-message-id="2"] [data-ask-card]') as HTMLElement;
+    const buttons = within(card).getAllByRole("button").filter((b) => b.hasAttribute("data-ask-option"));
     expect(buttons[0]).not.toBeDisabled();
     expect(buttons[1]).not.toBeDisabled();
 
     fireEvent.click(buttons[1]!);
 
     await waitFor(() =>
-      expect(api.calls.filter((c) => c.path === "/api/conversations/1/messages")).toEqual([
-        expect.objectContaining({
-          method: "POST",
-          body: expect.objectContaining({ text: "审本地代码路径" }),
-        }),
+      expect(api.calls.filter((c) => c.path === "/api/asks/1/answer")).toEqual([
+        expect.objectContaining({ method: "POST", body: expect.objectContaining({ choice: "审本地代码路径" }) }),
       ]),
     );
+    expect(api.calls.filter((c) => c.path === "/api/conversations/1/messages")).toEqual([]);
     expect(buttons[0]).toBeDisabled();
     expect(buttons[1]).toBeDisabled();
     expect(buttons[1]).toHaveClass("bg-sidebar-active");
-    await waitFor(() => expect(asksGroup()).toBeNull());
+    for (const b of within(other).getAllByRole("button").filter((x) => x.hasAttribute("data-ask-option"))) expect(b).not.toBeDisabled();
+  });
+
+  it("没点选项、在卡上填一句话回车：也只回答这一张卡（note）", async () => {
+    await boot(twoPms([ask({ id: 1, text: "请接电源", meta: { needsUser: true, options: ["已接", "不接"] } })]));
+    const card = document.querySelector('[data-message-id="1"] [data-ask-card]') as HTMLElement;
+    fireEvent.click(within(card).getByRole("button", { name: "Add note" }));
+    const input = within(card).getByRole("textbox", { name: "Add note" });
+    fireEvent.change(input, { target: { value: "已经接上了" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() =>
+      expect(api.calls.filter((c) => c.path === "/api/asks/1/answer")).toEqual([
+        expect.objectContaining({ method: "POST", body: expect.objectContaining({ note: "已经接上了" }) }),
+      ]),
+    );
+    expect(api.calls.filter((c) => c.path === "/api/conversations/1/messages")).toEqual([]);
   });
 });
