@@ -28,8 +28,8 @@ export interface AddWorktreeOptions extends GitOptions {
   repoFolder: string;
   /** worktree 放哪。上一级目录不存在时 git 会自己建。 */
   worktreePath: string;
-  /** 新分支名，比如 `hub/7-fix-x`。 */
-  branch: string;
+  /** 新分支名，比如 `hub/7-fix-x`；null 是不建分支，`--detach` 检出 base 的提交（审查 Worker）。 */
+  branch: string | null;
   /** 从哪个提交起，默认 `HEAD`（主文件夹当前分支的最新提交）。 */
   base?: string;
   /**
@@ -194,8 +194,8 @@ export async function probeWorkspace(folder: string, options: GitOptions = {}): 
 const INITIALIZING_LOCK = "initializing";
 
 /**
- * 建 worktree：`git worktree add -b <branch> <worktreePath> <base>`。
- * 重复执行算成功：worktree 已经在这个目录、分支也对得上，就直接返回 `created: false`，不动里面的东西。
+ * 建 worktree：`git worktree add -b <branch> <worktreePath> <base>`；branch 是 null 时 `git worktree add --detach <worktreePath> <base>`。
+ * 重复执行算成功：worktree 已经在这个目录、分支也对得上（detached 的那边也是 detached），就直接返回 `created: false`，不动里面的东西。
  * 上次 add 被强杀留下的半成品（还锁着 initializing）不算建好：`git worktree remove -f -f` 加 `git branch -D` 清掉，再重建。
  * 分支名已经有了（比如别的 Worker 占着）、目录已经是别的分支的 worktree，报清楚的错（kind 是 branch_taken、path_taken）。
  */
@@ -215,27 +215,35 @@ export async function addWorktree(options: AddWorktreeOptions): Promise<AddWorkt
     // 两个 -f：锁着的 worktree 要这样才删得掉。分支是那次 add 建的，还没有 Worker 在上面干过活
     const removeRun = await git(["worktree", "remove", "-f", "-f", existing.path]);
     if (removeRun.code !== 0) throw failed("git worktree remove（清掉没建完的 worktree）", removeRun);
-    if (existing.branch === `refs/heads/${branch}`) {
+    if (branch !== null && existing.branch === `refs/heads/${branch}`) {
       const deleteRun = await git(["branch", "-D", branch]);
       if (deleteRun.code !== 0) throw failed("git branch -D（清掉没建完的 worktree 的分支）", deleteRun);
     }
     existing = undefined;
   }
   if (existing) {
-    if (existing.branch !== `refs/heads/${branch}`) {
+    const want = branch === null ? null : `refs/heads/${branch}`;
+    if (existing.branch !== want) {
       const now = existing.branch ? existing.branch.replace(/^refs\/heads\//, "") : "（没有分支）";
-      throw new GitError("path_taken", `${worktreePath} 已经是分支 ${now} 的 worktree，不是 ${branch}。`);
+      throw new GitError("path_taken", `${worktreePath} 已经是分支 ${now} 的 worktree，不是 ${branch ?? "detached"}。`);
+    }
+    if (branch === null) {
+      const head = await resolveCommit(existing.path, "HEAD", { timeoutMs });
+      return { created: false, baseCommit: head ?? baseCommit };
     }
     const mergeBase = await git(["merge-base", `refs/heads/${branch}`, baseCommit]);
     return { created: false, baseCommit: mergeBase.code === 0 ? mergeBase.stdout.trim() : baseCommit };
   }
 
-  const branchRun = await git(["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
-  if (branchRun.code === 0) throw new GitError("branch_taken", `分支 ${branch} 已经存在（可能是别的 Worker 占着），没法再建。`);
+  if (branch !== null) {
+    const branchRun = await git(["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
+    if (branchRun.code === 0) throw new GitError("branch_taken", `分支 ${branch} 已经存在（可能是别的 Worker 占着），没法再建。`);
+  }
 
   await options.prepareDir?.(worktreePath);
 
-  const addRun = await runGit(repoFolder, ["worktree", "add", "-b", branch, worktreePath, baseCommit], timeoutMs, { LC_ALL: "C" });
+  const checkout = branch === null ? ["--detach", worktreePath, baseCommit] : ["-b", branch, worktreePath, baseCommit];
+  const addRun = await runGit(repoFolder, ["worktree", "add", ...checkout], timeoutMs, { LC_ALL: "C" });
   if (addRun.code !== 0) throw failed("git worktree add", addRun);
   return { created: true, baseCommit };
 }
@@ -435,6 +443,21 @@ export async function resolveCommit(folder: string, ref: string, options: GitOpt
   if ((run.code === 1 || run.code === 128) && run.stderr.trim() === "") return null;
   if (run.code === 128 && /not a git repository/i.test(run.stderr)) return null;
   throw failed("git rev-parse", run);
+}
+
+/**
+ * origin 上分支 branch 现在指向哪个提交（`git ls-remote origin refs/heads/<branch>`，审查开审和收尾核对用）：
+ * 仓库没有 origin 返回 undefined；origin 上没有这个分支返回 null；连不上、鉴权失败等抛 GitError（调用方重试）。
+ */
+export async function remoteBranchHead(repoFolder: string, branch: string, options: GitOptions = {}): Promise<string | null | undefined> {
+  const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
+  const remoteRun = await runGit(repoFolder, ["remote"], timeoutMs);
+  if (remoteRun.code !== 0) throw failed("git remote", remoteRun);
+  if (!remoteRun.stdout.split("\n").some((line) => line.trim() === "origin")) return undefined;
+  const run = await runGit(repoFolder, ["ls-remote", "origin", `refs/heads/${branch}`], timeoutMs, { LC_ALL: "C" });
+  if (run.code !== 0) throw failed("git ls-remote", run);
+  const line = run.stdout.split("\n").find((l) => l.endsWith(`\trefs/heads/${branch}`));
+  return line === undefined ? null : line.split("\t")[0]!;
 }
 
 /**

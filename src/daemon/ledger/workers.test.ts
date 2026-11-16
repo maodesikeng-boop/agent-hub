@@ -553,8 +553,8 @@ describe("建 worktree（worktree.create 处理函数用）", () => {
       workerId: worker.id,
       sessionId: workerSessionId(worker.id),
       repo: main,
-      branch: worker.branch,
       worktreePath: worker.worktreePath,
+      checkout: { kind: "branch", branch: worker.branch },
       status: "open",
       setupCommand: null,
     });

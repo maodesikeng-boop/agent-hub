@@ -735,6 +735,8 @@ export const MAX_GRAPH_GOAL_CHARS = 6_000;
 export const MAX_NODE_TITLE_CHARS = 80;
 /** 步骤职责（brief）字数上限（docs/orchestration-simplify-design.md 第 11.2 节）。 */
 export const MAX_STEP_BRIEF_CHARS = 1_500;
+/** 审查步骤 base（被审分支名）的字数上限。 */
+export const MAX_STEP_BASE_CHARS = 200;
 /** 单个上游步骤的交棒原文上限（字，按 Unicode 码点；超长截断并把完整汇报落盘到启动目录 upstream/）。 */
 export const HANDOFF_NOTE_MAX_CHARS = 4_000;
 /** 多线合流时各上游交棒合计上限（字，按 Unicode 码点；均分给各上游且单上游不超过 HANDOFF_NOTE_MAX_CHARS）。 */
@@ -772,6 +774,8 @@ export const MAX_GRAPH_SPEC_BYTES = 64 * 1024;
 /** 节点完成产物摘要字数上限。 */
 export const MAX_NODE_ARTIFACT_SUMMARY_CHARS = 500;
 export const MAX_NODE_ARTIFACT_BYTES = 4 * MAX_NODE_ARTIFACT_SUMMARY_CHARS;
+/** 审查步骤产物里“验证提交”最多存多少字（SHA-256 提交号是 64 位）。 */
+export const MAX_NODE_ARTIFACT_COMMIT_CHARS = 64;
 /** hub graph show、换新会话的交接摘要里，每个节点的产物摘要、定案说明各最多显示多少字（完整内容在库里；一张图最多 MAX_GRAPH_NODES 个节点，每个不把上下文塞满）。 */
 export const GRAPH_TEXT_NODE_NOTE_CHARS = 160;
 /** 同上，每个节点最多列几个经手过的 Worker（换过很多次人的只列最近几个）。 */

@@ -13,23 +13,15 @@ import {
 } from "../../shared/limits.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import { sessionLaunchDir } from "../../shared/paths.ts";
+import { REVIEW_CHECKLIST } from "../../shared/review.ts";
 import { workerWorkspaceSection } from "../prompt.ts";
-
-/** 第 9.3 节：步骤标了 review: true 时前置在“你这一步”开头的内置独立审查清单。 */
-export const STEP_REVIEW_CHECKLIST = [
-  "这一步是独立审查，你不是作者。",
-  "- 看这条分支相对主干的全部改动，对照上面的目标和“怎么算做完”逐条核对。上一步在交棒里点名的地方只是线索，不是审查范围。",
-  "- 项目 `AGENTS.md` 里有审查清单的照做。另外重点过这四类：撤不回来的副作用和安全边界；异步、并发、生命周期（两件事交错、中途退出、重启恢复）；会随时间变多的数据（失效、上限）和多方共用的格式（两边是不是都改了）；本地草稿和远端状态互相覆盖。",
-  "- 发现问题直接在这条分支上修，补上能复现它的测试，推上去。修不了或拿不准的写进“问题”。",
-  "- 汇报的“摘要”写结论：可以合，或者还有什么没解决。“交棒”列出你查了什么、改了什么，每条给出文件和行号。",
-].join("\n");
 
 const charLen = (s: string): number => [...s].length;
 const SAFE_UPSTREAM_STEP_KEY_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 
 /**
  * 渲染图内步骤的常驻任务说明（写入 workers.task，进系统提示词“# 你的任务”）：
- * 包含整张图 goal（若有）+ 本步 title（第 index/total 步）+（若 review 为真前置第 9.3 节审查清单）+ brief。
+ * 包含整张图 goal（若有）+ 本步 title（第 index/total 步）+（若 review 为真前置 review.ts 的审查清单）+ brief。
  */
 export function renderGraphStepTask(input: {
   goal: string | null;
@@ -46,7 +38,7 @@ export function renderGraphStepTask(input: {
     sections.push(`## 目标（整张图共用，每一步看到的都一样）\n\n${goal}`);
   }
   const briefBody = input.review
-    ? `${STEP_REVIEW_CHECKLIST}\n\n项目经理点名要看的：\n${input.brief.trim()}`
+    ? `${REVIEW_CHECKLIST}\n\n项目经理点名要看的：\n${input.brief.trim()}`
     : input.brief.trim();
   sections.push(`## 你这一步：${input.stepTitle}（第 ${input.index}/${input.total} 步）\n\n${briefBody}`);
   if (input.pmNote && input.pmNote.trim() !== "") {
@@ -327,7 +319,7 @@ export function buildStepFirstMessage(input: {
     decision: TaskDecision | null;
     gateQuestion: string | null;
   };
-  worker?: Pick<WorkerRecord, "id" | "title" | "workspace" | "worktreePath" | "branch" | "readonly" | "takeoverOf">;
+  worker?: Pick<WorkerRecord, "id" | "title" | "workspace" | "worktreePath" | "branch" | "readonly" | "takeoverOf" | "review">;
   project?: ProjectCard;
   task?: string;
   directUpstreams: readonly DirectUpstreamEntry[];

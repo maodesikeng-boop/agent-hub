@@ -19,6 +19,7 @@ import type {
   WorkerStatus,
   WorkerWorkspace,
 } from "../../shared/domain.ts";
+import { parseReviewTarget } from "../../shared/review.ts";
 import type { ScheduleKind, ScheduleRecord, ScheduleStatus } from "../../shared/schedule.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
 
@@ -124,6 +125,7 @@ export interface WorkerDbRow {
   branch: string | null;
   worktree_path: string | null;
   base_commit: string | null;
+  review_json: string | null;
   status: string;
   created_at: number;
   updated_at: number;
@@ -283,6 +285,7 @@ export function toWorkerRecord(row: WorkerDbRow): WorkerRecord {
     branch: row.branch,
     worktreePath: row.worktree_path,
     baseCommit: row.base_commit,
+    ...(row.review_json === null ? {} : { review: parseReviewTarget(row.review_json)! }),
     status: row.status as WorkerStatus,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

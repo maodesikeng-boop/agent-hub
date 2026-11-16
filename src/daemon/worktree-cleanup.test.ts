@@ -2,7 +2,7 @@
 // 覆盖：已合并删（分支保留） / 收工满 3 天且干净删（分支保留） / 有改动不删（含已跟踪修改、暂存、未跟踪文件；PR 已合并也不删） /
 // 在跑不删 / 不用 worktree 跳过 / 不在 worktrees 目录下不删（含符号链接越界） / 手动删过的跳过 /
 // git worktree move 失败记日志下轮重试并 prune / 每轮 git status 名额与轮转（长期删不掉的不占名额）/ 没候选时零 git 调用 / 删到一半下一轮接着删完 /
-// 孤儿目录（外部解绑残留）/ detached HEAD 与 review-* 分支 / 0 提交探索目录 / rebase 中途 / status.showUntrackedFiles=no 时未跟踪文件照样拦 / 被忽略的文件随目录删 / 相对路径不删。
+// 孤儿目录（外部解绑残留）/ 审查目录收工即删（走同样的两步删除，挪到一半中断下一轮接着删）/ detached HEAD 与另开的分支 / 0 提交探索目录 / rebase 中途 / status.showUntrackedFiles=no 时未跟踪文件照样拦 / 被忽略的文件随目录删 / 相对路径不删。
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -87,6 +87,20 @@ async function spawnWorktreeWorker(title = "修功能"): Promise<WorkerRecord> {
     { workspace: { kind: "ok", isRepoWithCommit: true, hasUncommittedChanges: false } },
   ).data.worker;
   const wt = await addWorktree({ repoFolder: repo, worktreePath: started.worktreePath!, branch: started.branch! });
+  ledger.onWorktreeCreated(started.id, wt.baseCommit);
+  return ledger.hubCall(pm.sessionId, "worker.show", { workerId: started.id }).data.worker;
+}
+
+/** 审查 Worker：不挂分支、记下被审分支，审查目录 detached 检出被审分支的提交。 */
+async function spawnReviewWorker(reviewedBranch: string): Promise<WorkerRecord> {
+  const started = ledger.hubCall(
+    pm.sessionId,
+    "worker.start",
+    { title: "审查", task: "审查实现", vendor: "claude" },
+    { workspace: { kind: "ok", isRepoWithCommit: true, hasUncommittedChanges: false } },
+  ).data.worker;
+  db.run("UPDATE workers SET branch = NULL, review_json = ? WHERE id = ?", JSON.stringify({ branch: reviewedBranch, snapshot: null }), started.id);
+  const wt = await addWorktree({ repoFolder: repo, worktreePath: started.worktreePath!, branch: null, base: `refs/heads/${reviewedBranch}` });
   ledger.onWorktreeCreated(started.id, wt.baseCommit);
   return ledger.hubCall(pm.sessionId, "worker.show", { workerId: started.id }).data.worker;
 }
@@ -254,7 +268,30 @@ describe("worktree 自动清理", () => {
     expect(existsSync(wDirtyDetached.worktreePath!)).toBe(true);
   });
 
-  it("审查 Worker detached HEAD / review-* 分支且提交已合入 main：未满 3 天立即清理", async () => {
+  it("审查目录（不挂分支，detached 在被审分支上）：收工就删，有未提交改动和本地提交也删，不建保底分支、不动被审分支", async () => {
+    const impl = await spawnWorktreeWorker("实现");
+    writeFileSync(join(impl.worktreePath!, "fix.txt"), "fix\n");
+    git(impl.worktreePath!, "add", "-A");
+    git(impl.worktreePath!, "commit", "-q", "-m", "fix");
+    const implHead = git(repo, "rev-parse", impl.branch!);
+    const started = await spawnReviewWorker(impl.branch!);
+    writeFileSync(join(started.worktreePath!, "fix.txt"), "revert to prove the test fails\n");
+    git(started.worktreePath!, "commit", "-q", "-am", "local repro");
+    writeFileSync(join(started.worktreePath!, "scratch.log"), "notes\n");
+    endWorker(started.id);
+
+    const cleanup = createWorktreeCleanup({ ledger, worktreesDir, log: (l) => logs.push(l), now: () => now });
+    expect(await cleanup.runOnce()).toEqual([started.id]);
+    expect(existsSync(started.worktreePath!)).toBe(false);
+    expect(existsSync(impl.worktreePath!)).toBe(true);
+    expect(git(repo, "rev-parse", impl.branch!)).toBe(implHead);
+    expect(git(repo, "branch", "--list", "hub/detached-*")).toBe("");
+    expect(git(repo, "worktree", "list", "--porcelain")).not.toContain(started.worktreePath!);
+    expect(filesUnder(worktreesDir).filter((f) => !f.startsWith(impl.worktreePath!))).toEqual([]);
+    expect(logs.some((l) => l.includes("已清理审查目录"))).toBe(true);
+  });
+
+  it("HEAD 切到别的提交（detached、另开分支）且已合入 main：未满 3 天立即清理", async () => {
     const w = await spawnWorktreeWorker("被审的 PR");
     writeFileSync(join(w.worktreePath!, "pr.txt"), "pr\n");
     git(w.worktreePath!, "add", "-A");
@@ -992,6 +1029,36 @@ describe("删到一半之后下一轮能接着删完", () => {
     expect(existsSync(w.worktreePath!)).toBe(false);
     expect(filesUnder(worktreesDir)).toEqual([]);
   });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "审查目录有改动、删到一半失败：本轮已挪进 .trash，下一轮接着删完并清掉登记，被审分支不动",
+    async () => {
+      const impl = await spawnWithTree("实现");
+      const implHead = git(repo, "rev-parse", impl.branch!);
+      const review = await spawnReviewWorker(impl.branch!);
+      mkdirSync(join(review.worktreePath!, "node_modules", "pkg"), { recursive: true });
+      writeFileSync(join(review.worktreePath!, "node_modules", "pkg", "index.js"), "1\n");
+      writeFileSync(join(review.worktreePath!, "src", "a.ts"), "revert to prove the test fails\n");
+      writeFileSync(join(review.worktreePath!, "scratch.log"), "notes\n");
+      endWorker(review.id);
+      chmodSync(join(review.worktreePath!, "node_modules", "pkg"), 0o555);
+
+      const cleanup = createWorktreeCleanup({ ledger, worktreesDir, log: (l) => logs.push(l), now: () => now });
+      try {
+        expect(await cleanup.runOnce()).toEqual([review.id]);
+        expect(existsSync(review.worktreePath!)).toBe(false);
+        expect(filesUnder(worktreesDir).some((f) => f.endsWith("index.js"))).toBe(true);
+      } finally {
+        chmodDirsUnder(worktreesDir, 0o755);
+      }
+
+      expect(await cleanup.runOnce()).toEqual([]);
+      expect(filesUnder(worktreesDir).filter((f) => !f.startsWith(impl.worktreePath!))).toEqual([]);
+      expect(git(repo, "worktree", "list", "--porcelain")).not.toContain(review.worktreePath!);
+      expect(existsSync(impl.worktreePath!)).toBe(true);
+      expect(git(repo, "rev-parse", impl.branch!)).toBe(implHead);
+    },
+  );
 
   it("删到一半但真有改动或未合并提交：照旧保留", async () => {
     const halfDelete = (w: WorkerRecord) => {

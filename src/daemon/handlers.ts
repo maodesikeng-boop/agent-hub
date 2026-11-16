@@ -6,6 +6,8 @@
 // - session.end → driver.end，等会话 ended 之后作废它的令牌、推一次会话状态（Worker 收工也走这里）；
 // - worktree.create（M3）→ 账本取任务，git worktree add，再把起点提交交给账本（它登记 Worker 的第一轮）；
 //   项目配了准备命令的，先交给 setup runner 在后台跑，跑完再交给账本（daemon/setup/setup.ts）。
+//   审查 Worker 的目录 detached 检出被审分支，开工前先记下被审分支开审时的样子；
+// - review.verify → 审查汇报 PASS 后现查被审分支，和开审时比，结果交给账本（docs/review-verify-only-design.md 第 3.4 节）。
 // session_ended（会话已经 end 过）不是故障，不抛给执行器（执行器就不会记 driver 的 health），怎么接见 Driver.end 的注释。
 import {
   DriverError,
@@ -15,11 +17,13 @@ import {
   SessionTokenRevokedError,
   WORKER_FIRST_TURN_RECHECK_MS,
   deliveryParts,
+  diffReviewSnapshot,
   isQuotaExhausted,
   type ActionHandler,
   type ActionResult,
   type Driver,
   type Ledger,
+  type ReviewObservation,
   type SessionStore,
   type SessionTokens,
   type WorkerId,
@@ -178,8 +182,28 @@ export function createSessionEndHandler(
   };
 }
 
+/** 现查被审分支：本地分支、origin 上的同名分支、分支上的 PR（开审记一份、收尾核对再查一份，同一个函数）。 */
+export type ObserveReview = (repo: string, branch: string) => Promise<ReviewObservation>;
+
+export function createReviewObserver(deps: {
+  resolveCommit: (folder: string, ref: string) => Promise<string | null>;
+  remoteBranchHead: (repo: string, branch: string) => Promise<string | null | undefined>;
+  probePr: (cwd: string, branch: string) => Promise<WorkerPrProbeResult>;
+}): ObserveReview {
+  return async (repo, branch) => {
+    const [sha, remote, pr] = await Promise.all([
+      deps.resolveCommit(repo, `refs/heads/${branch}`),
+      deps.remoteBranchHead(repo, branch),
+      deps.probePr(repo, branch),
+    ]);
+    return { sha, remote: remote === undefined ? null : { sha: remote }, pr };
+  };
+}
+
 export interface WorktreeHandlerDeps {
-  ledger: Pick<Ledger, "getWorktreeTask" | "onSetupStarted" | "onWorktreeCreated">;
+  ledger: Pick<Ledger, "getWorktreeTask" | "onSetupStarted" | "onWorktreeCreated" | "recordReviewSnapshot">;
+  /** 审查 Worker 开审时记下被审分支的样子用。 */
+  observeReview: ObserveReview;
   /** daemon/git 的 addWorktree（重复执行算成功）；测试换成假的。 */
   addWorktree: (options: AddWorktreeOptions) => Promise<AddWorktreeResult>;
   /** 跑准备命令的（daemon/setup 的 createSetupRunner）。 */
@@ -221,13 +245,20 @@ export function createWorktreeCreateHandler(deps: WorktreeHandlerDeps): ActionHa
         })
       : { worktreePath: task.worktreePath };
     const effectiveWorktreePath = placement.worktreePath;
+    const { checkout } = task;
     const { baseCommit } = await deps.addWorktree({
       repoFolder: task.repo,
       worktreePath: effectiveWorktreePath,
-      branch: task.branch,
-      ...(task.base ? { base: task.base } : {}),
+      ...(checkout.kind === "review"
+        ? { branch: null, base: `refs/heads/${checkout.branch}` }
+        : { branch: checkout.branch, ...(checkout.base ? { base: checkout.base } : {}) }),
       ...(placement.prepareDir ? { prepareDir: placement.prepareDir } : {}),
     });
+    if (checkout.kind === "review") {
+      const seen = await deps.observeReview(task.repo, checkout.branch);
+      const pr = seen.pr !== null && !("unavailable" in seen.pr) ? seen.pr : null;
+      deps.ledger.recordReviewSnapshot(workerId, { sha: baseCommit, remote: seen.remote, pr });
+    }
     if (task.setupCommand === null) {
       deps.ledger.onWorktreeCreated(workerId, baseCommit);
       return { kind: "done" };
@@ -243,6 +274,25 @@ export function createWorktreeCreateHandler(deps: WorktreeHandlerDeps): ActionHa
       logPath: deps.setupLogPath(workerId),
       onDone: (outcome) => deps.ledger.onWorktreeCreated(workerId, baseCommit, outcome),
     });
+    return { kind: "done" };
+  };
+}
+
+export interface ReviewVerifyHandlerDeps {
+  ledger: Pick<Ledger, "getReviewVerifyTask" | "onReviewVerified">;
+  observeReview: ObserveReview;
+}
+
+/**
+ * 审查汇报 PASS 后的收尾核对（shared/actions.ts 的 ReviewVerifyParams）。Worker 收工了、不是审查 Worker：什么也不做。
+ * git、gh 出错抛给执行器重试；次数用完 onActionFailed 当成核对没跑成。
+ */
+export function createReviewVerifyHandler(deps: ReviewVerifyHandlerDeps): ActionHandler<"review.verify"> {
+  return async (action) => {
+    const task = deps.ledger.getReviewVerifyTask(action.params.workerId);
+    if (task === null) return { kind: "done" };
+    const now = await deps.observeReview(task.repo, task.branch);
+    deps.ledger.onReviewVerified(action.params, { problems: diffReviewSnapshot(task.branch, task.snapshot, now) });
     return { kind: "done" };
   };
 }

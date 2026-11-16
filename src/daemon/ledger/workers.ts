@@ -19,7 +19,7 @@
 // 汇报格式、解析、那一行的写法、分支名在 shared/worker.ts；按角色放行的表在 shared/hub.ts；git 在 daemon/git/。
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import type { AnyActionRow } from "../../shared/actions.ts";
+import type { AnyActionRow, ReviewVerifyParams } from "../../shared/actions.ts";
 import { agentTextOf } from "../../shared/attachments.ts";
 import { normalizeWorkerTitle, systemMessageDedupeKey, utf8Bytes, workerMessageDedupeKey } from "../../shared/domain.ts";
 import type {
@@ -48,6 +48,13 @@ import {
   WORKER_LIST_RECENT_ENDED,
   WORKTREE_RETENTION_DAYS,
 } from "../../shared/limits.ts";
+import {
+  parseReviewTarget,
+  reviewVerifyErrorProblem,
+  type ReviewSnapshot,
+  type ReviewTarget,
+  type ReviewVerifyResult,
+} from "../../shared/review.ts";
 import { checkWorkerMaxTimeMs, formatDurationShort } from "../../shared/schedule.ts";
 import { AGENT_VENDORS, checkEffort, checkModel, checkModelEffort, isAgentVendor, splitModelEffort, vendorUnavailableMessage } from "../../shared/vendors.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
@@ -177,23 +184,35 @@ function gitReasonLine(output: string): string {
   return [...reason.replace(/。$/, "")].slice(0, GIT_REASON_MAX_CHARS).join("");
 }
 
-/** 给 agent 看的一句“在哪干活”。 */
-function describeWorkspace(worker: WorkerDbRow, mainFolder: string): string {
-  return worker.workspace === "worktree"
-    ? `在 worktree ${worker.worktree_path}（分支 ${worker.branch}）里干活`
-    : `直接在项目的主文件夹 ${mainFolder} 里干活`;
+/** 在 worktree 里干活的 Worker 的目录和分支；审查 Worker 是 detached 在被审分支上的审查目录。 */
+function worktreeLabel(worker: WorkerDbRow): string {
+  const review = parseReviewTarget(worker.review_json);
+  return review !== null
+    ? `审查目录 ${worker.worktree_path}（detached 在被审分支 ${review.branch} 上）`
+    : `worktree ${worker.worktree_path}（分支 ${worker.branch}）`;
 }
 
-/** 已收工、用 worktree 的 Worker，供后台 worktree 自动清理筛选候选。 */
-export interface EndedWorktreeCandidate {
+/** 给 agent 看的一句“在哪干活”。 */
+function describeWorkspace(worker: WorkerDbRow, mainFolder: string): string {
+  return worker.workspace === "worktree" ? `在${worktreeLabel(worker)}里干活` : `直接在项目的主文件夹 ${mainFolder} 里干活`;
+}
+
+/** 新审查 Worker 的 workers.review_json：审哪条分支；开审时的样子等审查目录建好再记（recordReviewSnapshot）。 */
+const newReviewJson = (plan: StepWorkspacePlan): string | null =>
+  plan.kind === "review" ? JSON.stringify({ branch: plan.branch, snapshot: null } satisfies ReviewTarget) : null;
+
+/**
+ * 已收工、用 worktree 的 Worker，供后台 worktree 自动清理筛选候选。
+ * review 为真的是审查目录：不挂分支，一次性的，收工即删，有改动也删、不留保底分支（docs/review-verify-only-design.md 第 4 节）。
+ */
+export type EndedWorktreeCandidate = {
   workerId: WorkerId;
   projectId: number;
   repoFolder: string;
-  branch: string;
   worktreePath: string;
   baseCommit: string | null;
   endedAt: number;
-}
+} & ({ review: false; branch: string } | { review: true; branch: null });
 
 export type LedgerWorkers = ReturnType<typeof createLedgerWorkers>;
 
@@ -207,13 +226,14 @@ export interface LedgerWorkersTaskGraphHooks {
   ) => void;
   onWorkerTurnReportIn: (
     p: Pending,
-    worker: { id: WorkerId; branch: string | null },
+    worker: { id: WorkerId; branch: string | null; review: ReviewTarget | null },
     parsed: ParsedWorkerReport,
     rawBody: string,
     forcedNote: string | null,
-    opts?: { hasPendingFollowup?: boolean },
+    opts?: { hasPendingFollowup?: boolean; reviewVerified?: ReviewVerifyResult },
   ) =>
     | { handled: false }
+    | { handled: true; outcome: "verify" }
     | { handled: true; outcome: "completed"; wakePmWithReport: boolean; completeStep: () => void }
     | { handled: true; outcome: "waiting_user" }
     | { handled: true; outcome: "waiting_pm"; pmDeliverBody: string };
@@ -631,6 +651,18 @@ export function createLedgerWorkers(
     if (unusable !== null) throw fail("invalid", unusable);
   };
 
+  /**
+   * 接手上游目录（inherit）或审查上游分支（review）前，把这个目录上还开着的 Worker 收工：上游是 graph done 手动放行的，它还开着；
+   * 接手的不能和它双写同一个目录，审查期间实现也不能再改被审分支。
+   */
+  const endOpenUpstreamIn = (p: Pending, plan: StepWorkspacePlan): void => {
+    const path = plan.kind === "inherit" ? plan.worktreePath : plan.kind === "review" ? plan.implWorktreePath : null;
+    if (path === null) return;
+    for (const prevWorker of db.all<WorkerDbRow>("SELECT * FROM workers WHERE worktree_path = ? AND status = 'open' ORDER BY id", path)) {
+      endWorkerIn(p, prevWorker, { notifyGraph: false });
+    }
+  };
+
   /** 供 task-graphs.ts 在步骤解锁时后台自动拉起 Worker。 */
   const dispatchStepWorkerIn: TaskGraphWorkersBridge["dispatchStepWorkerIn"] = (p, input) => {
     assertPmNotArchived(input.pmId);
@@ -658,22 +690,14 @@ export function createLedgerWorkers(
     if (!ctx.osSandboxed()) throw fail("invalid", WORKER_NEEDS_OS_SANDBOX_MESSAGE);
 
     const card = projectCard(project);
-    const inheritedPlan = input.workspacePlan.kind === "inherit" ? input.workspacePlan : null;
-    if (inheritedPlan !== null) {
-      // 若上游是通过 graph done 手动放行的、其挂着的旧 Worker 仍处于 open，接手目录前自动将其收工
-      const openSharing = db.all<WorkerDbRow>(
-        "SELECT * FROM workers WHERE worktree_path = ? AND status = 'open' ORDER BY id",
-        inheritedPlan.worktreePath,
-      );
-      for (const prevWorker of openSharing) {
-        endWorkerIn(p, prevWorker, { notifyGraph: false });
-      }
-    }
+    const plan = input.workspacePlan;
+    const inheritedPlan = plan.kind === "inherit" ? plan : null;
+    endOpenUpstreamIn(p, plan);
     const probe =
-      inheritedPlan !== null
+      plan.kind === "inherit" || plan.kind === "review"
         ? { isRepoWithCommit: true, hasUncommittedChanges: false }
         : probeWorkspaceForStep(project.id, card.mainFolder, input.context, true);
-    const workspace = inheritedPlan !== null || probe.isRepoWithCommit ? "worktree" : "main";
+    const workspace = probe.isRepoWithCommit ? "worktree" : "main";
 
     const t = now();
     const conversation = toConversation(
@@ -689,8 +713,8 @@ export function createLedgerWorkers(
 
     const id = db.run(
       `INSERT INTO workers (project_id, pm_id, pm_conversation_id, worker_conversation_id, title, task, model, effort, readonly, workspace,
-                            branch, worktree_path, base_commit, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                            branch, worktree_path, base_commit, review_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       project.id,
       input.pmId,
       project.conversation_id,
@@ -704,6 +728,7 @@ export function createLedgerWorkers(
       inheritedPlan !== null ? inheritedPlan.branch : workspace === "worktree" ? "" : null,
       inheritedPlan !== null ? inheritedPlan.worktreePath : workspace === "worktree" ? "" : null,
       inheritedPlan !== null ? inheritedPlan.baseCommit : null,
+      newReviewJson(plan),
       t,
       t,
     ).lastInsertRowid;
@@ -711,7 +736,7 @@ export function createLedgerWorkers(
     if (workspace === "worktree" && inheritedPlan === null) {
       db.run(
         "UPDATE workers SET branch = ?, worktree_path = ? WHERE id = ?",
-        workerBranchName(id, title),
+        plan.kind === "review" ? null : workerBranchName(id, title),
         workerWorktreePath(worktreesDir, project.id, id),
         id,
       );
@@ -851,7 +876,13 @@ export function createLedgerWorkers(
     // Worker（不论普通还是只读、不论哪家厂商）一律要求 OS 沙箱就绪；起不来直接报错拒绝派活，不退回规则兜底（docs/linux-sandbox-design.md 第 3.2 节）
     if (!ctx.osSandboxed()) throw fail("invalid", WORKER_NEEDS_OS_SANDBOX_MESSAGE);
     const card = projectCard(project);
-    const inherit = takeover?.inherit ?? null;
+    // 审查步骤：每个审查 Worker 都新开自己的审查目录，不接手前任的；不能在主文件夹里干（docs/review-verify-only-design.md 第 3.1 节）
+    const reviewPlan: Extract<StepWorkspacePlan, { kind: "review" }> | null =
+      bindTarget?.workspacePlan.kind === "review" ? bindTarget.workspacePlan : null;
+    if (reviewPlan !== null && args.noWorktree === true) {
+      throw fail("invalid", `审查步骤只能在 detached 检出被审分支 ${reviewPlan.branch} 的独立审查目录里干活，不能用 --no-worktree`);
+    }
+    const inherit = reviewPlan === null ? (takeover?.inherit ?? null) : null;
     const upstreamInherit: Extract<StepWorkspacePlan, { kind: "inherit" }> | null =
       args.noWorktree !== true && inherit === null && bindTarget?.workspacePlan.kind === "inherit"
         ? bindTarget.workspacePlan
@@ -866,10 +897,10 @@ export function createLedgerWorkers(
           }
         : upstreamInherit;
     let probe = { isRepoWithCommit: false, hasUncommittedChanges: false };
-    if (args.noWorktree !== true && effectiveInherit === null) {
+    if (args.noWorktree !== true && effectiveInherit === null && reviewPlan === null) {
       probe = probeWorkspaceForStep(project.id, card.mainFolder, context, bindTarget !== undefined);
     }
-    const workspace = effectiveInherit !== null || probe.isRepoWithCommit ? "worktree" : "main";
+    const workspace = effectiveInherit !== null || reviewPlan !== null || probe.isRepoWithCommit ? "worktree" : "main";
 
     // 换人：前任的记录先按现在的样子取出来（还挂着的旧 Worker 收工前），再把旧 Worker 按“没做完”收工（同 --incomplete，节点不标完成）
     let takeoverPredecessors: TakeoverPredecessor[] | null = null;
@@ -892,14 +923,10 @@ export function createLedgerWorkers(
       }
     }
     if (effectiveInherit !== null) {
-      // 若继承的同线目录上还有通过 graph done 放行遗留的 open Worker，接手前自动将其收工，避免死锁在 waitsForFirstTurn
-      const openSharing = db.all<WorkerDbRow>(
-        "SELECT * FROM workers WHERE worktree_path = ? AND status = 'open' ORDER BY id",
-        effectiveInherit.worktreePath,
-      );
-      for (const prevWorker of openSharing) {
-        endWorkerIn(p, prevWorker, { notifyGraph: false });
-      }
+      // 接手的目录上还有通过 graph done 放行遗留的 open Worker：先收工，避免死锁在 waitsForFirstTurn
+      endOpenUpstreamIn(p, { kind: "inherit", ...effectiveInherit });
+    } else if (reviewPlan !== null) {
+      endOpenUpstreamIn(p, reviewPlan);
     }
     const t = now();
 
@@ -916,8 +943,8 @@ export function createLedgerWorkers(
     // 编号要先有才能定分支和目录：新建 worktree 的先占个空串（满足 CHECK），马上改成真的；接手前任的直接用前任的目录、分支和起点提交
     const id = db.run(
       `INSERT INTO workers (project_id, pm_id, pm_conversation_id, worker_conversation_id, title, task, model, effort, readonly, workspace,
-                            branch, worktree_path, base_commit, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                            branch, worktree_path, base_commit, review_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       project.id,
       caller.pmId,
       project.conversation_id,
@@ -931,13 +958,14 @@ export function createLedgerWorkers(
       effectiveInherit !== null ? effectiveInherit.branch : workspace === "worktree" ? "" : null,
       effectiveInherit !== null ? effectiveInherit.worktreePath : workspace === "worktree" ? "" : null,
       effectiveInherit !== null ? effectiveInherit.baseCommit : null,
+      reviewPlan === null ? null : newReviewJson(reviewPlan),
       t,
       t,
     ).lastInsertRowid;
     if (workspace === "worktree" && effectiveInherit === null) {
       db.run(
         "UPDATE workers SET branch = ?, worktree_path = ? WHERE id = ?",
-        workerBranchName(id, title),
+        reviewPlan === null ? workerBranchName(id, title) : null,
         workerWorktreePath(worktreesDir, project.id, id),
         id,
       );
@@ -965,7 +993,9 @@ export function createLedgerWorkers(
       const branches = [...new Set(takeover.predecessors.map((w) => w.branch).filter((b): b is string => b !== null && b !== ""))];
       const branchNote = branches.length === 0 ? "" : `前任的分支 ${branches.join("、")} 还在，要的话自己合进来。`;
       const baseWorkspaceNote =
-        inherit !== null
+        reviewPlan !== null
+          ? `你在新开的审查目录 ${worker.worktree_path} 里，detached 在被审分支 ${reviewPlan.branch} 上；前任的审查目录不接手，它的结论和复现看下面的记录。`
+          : inherit !== null
           ? `你就在前任 Worker #${inherit.id} 的工作目录 ${inherit.worktree_path} 和分支 ${inherit.branch} 上，没提交的改动都还在，先看 git status 和 git log。`
           : upstreamInherit !== null
             ? `前任没有建成工作目录，你接着用上一步（Worker #${upstreamInherit.fromWorkerId}）的工作目录 ${upstreamInherit.worktreePath} 和分支 ${upstreamInherit.branch}：它的提交、没提交的文件和装好的依赖都在，不要另开分支。${branchNote}`
@@ -1184,7 +1214,9 @@ export function createLedgerWorkers(
     }
     const { ended, interrupted, nodeNote } = endWorkerIn(p, worker, { notifyGraph: true });
     const cleanup =
-      ended.workspace === "worktree"
+      ended.workspace === "worktree" && ended.review_json !== null
+        ? ` ${worktreeLabel(ended)}会自动删掉。`
+        : ended.workspace === "worktree"
         ? ` worktree ${ended.worktree_path} 和分支 ${ended.branch} 还在：PR 合并后或收工满 ${WORKTREE_RETENTION_DAYS} 天且没有未提交改动时会自动清理 worktree（分支保留；还有 Worker 接着用这个目录、或它经手的任务图还没结束时不清）。`
         : "";
     const interruptNote = interrupted ? "已打断正在跑的那一轮。" : "";
@@ -1233,7 +1265,7 @@ export function createLedgerWorkers(
     const lines = rows.map((w) => {
       // 实际用的：会话那一行（--model、--effort 没给时是派活时项目经理的）
       const session = workerSession(w);
-      const where = w.workspace === "worktree" ? `worktree ${w.worktree_path}（分支 ${w.branch}）` : "主文件夹";
+      const where = w.workspace === "worktree" ? worktreeLabel(w) : "主文件夹";
       const state = w.status === "ended" ? "已收工" : liveOf(session.id).activity === "preparing" ? "准备中" : "进行中";
       const shown = agentSettingOf(ctx, session);
       const setting = `模型 ${shown.model} · 思考程度 ${shown.effort}`;
@@ -1379,7 +1411,7 @@ export function createLedgerWorkers(
     turnMessageId: MessageId,
     text: string,
     note: string | null = null,
-    opts?: { hasPendingFollowup?: boolean },
+    opts?: { hasPendingFollowup?: boolean; reviewVerified?: ReviewVerifyResult },
   ) => {
     const parsed = parseWorkerReport(text);
     const body = text.trim() === "" ? NO_REPLY_TEXT : text;
@@ -1387,13 +1419,22 @@ export function createLedgerWorkers(
     const summary = parsed.kind === "ok" ? parsed.report.summary : parsed.summary;
     const graphHandling = options.taskGraphs?.onWorkerTurnReportIn(
       p,
-      { id: worker.id, branch: worker.branch },
+      { id: worker.id, branch: worker.branch, review: parseReviewTarget(worker.review_json) },
       parsed,
       body,
       note,
       opts,
     );
     if (graphHandling?.handled === true) {
+      if (graphHandling.outcome === "verify") {
+        // 审查判 PASS：先核对被审分支没被动过，核对完（onReviewVerified）再按这份汇报写那一行、往下走
+        const reportMessageId = db.get<{ id: number }>(
+          "SELECT max(id) AS id FROM messages WHERE session_id = ? AND sender = 'agent' AND kind = 'text'",
+          workerSession(worker.id).id,
+        )!.id;
+        enqueue(p, { type: "review.verify", params: { workerId: worker.id, turnMessageId, reportMessageId } });
+        return;
+      }
       if (graphHandling.outcome === "completed") {
         // ① 先写本步汇报行（有遗留问题才抄送唤醒 PM，否则静默存档供交棒/交付单/检索读取）
         insertLine(p, worker, {
@@ -1604,14 +1645,17 @@ export function createLedgerWorkers(
   const getWorktreeTask = (workerId: WorkerId): WorktreeTask | null => {
     const worker = workerRow(workerId);
     if (worker === null || worker.workspace !== "worktree") return null;
-    const base = options.taskGraphs?.workerGraphForkBase(workerId);
+    const review = parseReviewTarget(worker.review_json);
+    const base = review === null ? options.taskGraphs?.workerGraphForkBase(workerId) : undefined;
     return {
       workerId,
       sessionId: workerSession(workerId).id,
       repo: mainFolderOf(worker.project_id),
-      branch: worker.branch!,
       worktreePath: worker.worktree_path!,
-      ...(base !== undefined ? { base } : {}),
+      checkout:
+        review !== null
+          ? { kind: "review", branch: review.branch }
+          : { kind: "branch", branch: worker.branch!, ...(base !== undefined ? { base } : {}) },
       status: worker.status as WorktreeTask["status"],
       setupCommand: projectRow(worker.project_id).setup_command,
     };
@@ -1709,6 +1753,46 @@ export function createLedgerWorkers(
       return ids;
     });
 
+  const recordReviewSnapshot = (workerId: WorkerId, snapshot: ReviewSnapshot): void =>
+    write(() => {
+      const worker = workerRow(workerId);
+      const review = worker === null ? null : parseReviewTarget(worker.review_json);
+      if (review === null) return;
+      db.run(
+        "UPDATE workers SET review_json = ?, updated_at = ? WHERE id = ?",
+        JSON.stringify({ branch: review.branch, snapshot } satisfies ReviewTarget),
+        now(),
+        workerId,
+      );
+    });
+
+  const getReviewVerifyTask = (workerId: WorkerId): { repo: string; branch: string; snapshot: ReviewSnapshot } | null => {
+    const worker = workerRow(workerId);
+    const review = worker === null || worker.status === "ended" ? null : parseReviewTarget(worker.review_json);
+    if (review === null || review.snapshot === null) return null;
+    return { repo: mainFolderOf(worker!.project_id), branch: review.branch, snapshot: review.snapshot };
+  };
+
+  /**
+   * 核对完，按那一轮的汇报原文带着核对结果再走一遍 insertReport。
+   * 汇报之后项目经理或用户又给它发了话：新的一轮会再汇报、再核对，这次的结果作废。
+   */
+  const reviewVerifiedIn = (p: Pending, params: ReviewVerifyParams, result: ReviewVerifyResult): void => {
+    const worker = workerRow(params.workerId);
+    if (worker === null || worker.status === "ended") return;
+    const newerInput = db.get(
+      "SELECT 1 AS x FROM messages WHERE conversation_id = ? AND sender IN ('pm', 'user') AND id > ? LIMIT 1",
+      worker.worker_conversation_id,
+      params.reportMessageId,
+    );
+    if (newerInput !== undefined) return;
+    const text = db.get<{ text: string }>("SELECT text FROM messages WHERE id = ?", params.reportMessageId)?.text ?? "";
+    insertReport(p, worker, params.turnMessageId, text, null, { reviewVerified: result });
+  };
+
+  const onReviewVerified = (params: ReviewVerifyParams, result: ReviewVerifyResult): void =>
+    write((p) => reviewVerifiedIn(p, params, result));
+
   /**
    * 动作彻底失败（ledger.onActionFailed，在同一个事务里、messages.ts 改完消息状态之后调）：
    * - worktree.create：Worker 标 ended、登记它会话的 session.end（同 endIn），项目经理对话里一行 worktree_failed 并交给它，
@@ -1717,6 +1801,10 @@ export function createLedgerWorkers(
    *   Worker 已经收工的不发（收工后发不出去是意料之中的）。
    */
   const actionFailedIn = (p: Pending, action: AnyActionRow, error: string) => {
+    if (action.type === "review.verify") {
+      reviewVerifiedIn(p, action.params, { problems: [reviewVerifyErrorProblem(error)] });
+      return;
+    }
     if (action.type === "worktree.create") {
       const worker = workerRow(action.params.workerId);
       if (worker === null) return;
@@ -1786,27 +1874,28 @@ export function createLedgerWorkers(
       .all<{
         id: number;
         project_id: number;
-        branch: string;
+        branch: string | null;
+        review_json: string | null;
         worktree_path: string;
         base_commit: string | null;
         ended_at: number;
         repo_folder: string;
       }>(
-        `SELECT w.id, w.project_id, w.branch, w.worktree_path, w.base_commit,
+        `SELECT w.id, w.project_id, w.branch, w.review_json, w.worktree_path, w.base_commit,
                 (SELECT max(o.updated_at) FROM workers o WHERE o.worktree_path = w.worktree_path) AS ended_at,
                 f.path AS repo_folder
          FROM workers w
          JOIN project_folders f ON f.project_id = w.project_id AND f.is_main = 1 AND f.removed_at IS NULL
          WHERE w.status = 'ended' AND w.workspace = 'worktree'
-           AND w.worktree_path IS NOT NULL AND w.worktree_path != '' AND w.branch IS NOT NULL
+           AND w.worktree_path IS NOT NULL AND w.worktree_path != '' 
            AND w.id = (SELECT min(o.id) FROM workers o WHERE o.worktree_path = w.worktree_path AND o.status = 'ended')
          ORDER BY w.id`,
       )
-      .map((r) => ({
+      .map((r): EndedWorktreeCandidate => ({
         workerId: r.id,
         projectId: r.project_id,
         repoFolder: r.repo_folder,
-        branch: r.branch,
+        ...(r.review_json !== null || r.branch === null ? { review: true, branch: null } : { review: false, branch: r.branch }),
         worktreePath: r.worktree_path,
         baseCommit: r.base_commit,
         endedAt: r.ended_at,
@@ -1839,7 +1928,8 @@ export function createLedgerWorkers(
     ) {
       return false;
     }
-    return !inActiveGraph(sharing.map((w) => w.id));
+    // 审查目录一次性用，没人会接手，不用等任务图结束
+    return worker.review_json !== null || !inActiveGraph(sharing.map((w) => w.id));
   };
 
   /** 这些 Worker 里有没有经手过还 active 的任务图节点的（节点的 worker_ids_json 里有它）。 */
@@ -1917,6 +2007,9 @@ export function createLedgerWorkers(
     onSetupStarted,
     waitsForFirstTurn,
     onWorktreeCreated,
+    recordReviewSnapshot,
+    getReviewVerifyTask,
+    onReviewVerified,
     recoverWorktrees,
     recoverBackgroundWaits,
     actionFailedIn,

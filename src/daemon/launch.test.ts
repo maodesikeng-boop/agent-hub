@@ -3,8 +3,11 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  AGENT_VENDORS,
   ENV_HUB_SOCK,
   ENV_HUB_TOKEN,
+  REVIEW_HOOKS_DIR,
+  REVIEW_PRE_PUSH_HOOK,
   TASK_GRAPH_SKILL_NAME,
   WORKER_BACKGROUND_HOLD_MAX_MS,
   buildReadonlyPolicy,
@@ -15,6 +18,7 @@ import {
 } from "../shared/index.ts";
 import { WORKER_ENV, buildSessionSettings, stateDirDenyRule } from "../vendors/claude/settings.ts";
 import { launchFingerprint } from "../shared/launch.ts";
+import { readCodexLaunchConfig } from "../vendors/codex/protocol.ts";
 import { projectWorktreesDir } from "../shared/paths.ts";
 import { createLaunchPreparer } from "./launch.ts";
 import { taskGraphSkillFile } from "./task-graph-skill.ts";
@@ -380,6 +384,22 @@ describe("prepareLaunch（M2、M3）", () => {
     expect(launchFingerprint({ ...base, readonly: policy })).toBe(launchFingerprint({ ...base, readonly: buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: "/s" }) }));
     expect(launchFingerprint({ ...base, readonly: policy })).not.toBe(launchFingerprint(base));
     expect(launchFingerprint({ ...base, readonly: buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: "/s", connectors: { deny: ["jenkins/*"] } }) })).not.toBe(launchFingerprint({ ...base, readonly: policy }));
+  });
+
+  it("审查 Worker（6 家都一样）：启动目录里写拒绝推送的 pre-push，env 用 GIT_CONFIG_* 把 core.hooksPath 指过去；codex 原样透传给它起的 shell；普通 Worker 没有", async () => {
+    const hooksDir = join(launchDir, "9", REVIEW_HOOKS_DIR);
+    contexts.set(9, workerContext({ branch: null, review: { branch: "hub/1-impl", snapshot: null } }));
+    for (const vendor of AGENT_VENDORS) {
+      const files = await make()({ ...row(9, dir, "worker"), vendor });
+      expect(files.env, vendor).toMatchObject({ GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.hooksPath", GIT_CONFIG_VALUE_0: hooksDir });
+      if (vendor === "codex") {
+        expect(readCodexLaunchConfig(files).config["shell_environment_policy.set"]).toMatchObject({ GIT_CONFIG_VALUE_0: hooksDir });
+      }
+    }
+    expect(readFileSync(join(hooksDir, "pre-push"), "utf8")).toBe(REVIEW_PRE_PUSH_HOOK);
+    if (process.platform !== "win32") expect(statSync(join(hooksDir, "pre-push")).mode & 0o777).toBe(0o755);
+    contexts.set(9, workerContext());
+    expect((await make()(row(9, dir, "worker"))).env.GIT_CONFIG_COUNT).toBeUndefined();
   });
 
   it("不是项目经理也不是 Worker 的会话：抛错", async () => {
