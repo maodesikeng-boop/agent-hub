@@ -13,6 +13,12 @@ export async function fontsReady(): Promise<void> {
   await document.fonts.ready;
 }
 
+/** 等布局过完两帧再设滚动位置，免得和对话首帧自动贴底的 ResizeObserver 打架。 */
+export async function scrollToPosition(el: HTMLElement, where: "top" | "bottom" | number): Promise<void> {
+  await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+  el.scrollTop = where === "top" ? 0 : where === "bottom" ? el.scrollHeight : where;
+}
+
 /** 在 selector 上模拟把这几个文件拖进来；drop 为 true 时顺便放下。 */
 export function dragFiles(args: { selector: string; names: readonly string[]; drop?: boolean }): void {
   const target = document.querySelector(args.selector);

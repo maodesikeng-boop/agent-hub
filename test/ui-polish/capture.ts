@@ -261,12 +261,7 @@ async function runStep(page: Page, step: ScreenStep, origin: string): Promise<st
     await input.focus({ timeout });
     await input.pressSequentially(step.type.text);
   } else if ("press" in step) await page.keyboard.press(step.press);
-  else if ("scroll" in step) {
-    const { to } = step.scroll;
-    await page.locator(step.scroll.target).first().evaluate((el, where) => {
-      el.scrollTop = where === "top" ? 0 : where === "bottom" ? el.scrollHeight : where;
-    }, to);
-  } else if ("drag" in step) await page.evaluate(inPage.dragFiles, { selector: step.drag.over, names: step.drag.files, ...(step.drag.drop === undefined ? {} : { drop: step.drag.drop }) });
+  else if ("scroll" in step) await page.locator(step.scroll.target).first().evaluate(inPage.scrollToPosition, step.scroll.to); else if ("drag" in step) await page.evaluate(inPage.dragFiles, { selector: step.drag.over, names: step.drag.files, ...(step.drag.drop === undefined ? {} : { drop: step.drag.drop }) });
   else if ("waitFor" in step) await page.waitForSelector(step.waitFor, { timeout });
   else if ("signOut" in step) {
     await page.context().clearCookies();

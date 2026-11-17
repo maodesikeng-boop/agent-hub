@@ -234,6 +234,8 @@ const MENU = 'div:has(> ul[role="listbox"]), div:has(> p:text-matches("^No match
 const btn = (name: string, within?: string) => `${within === undefined ? "" : `${within} >> `}role=button[name=/(?:^| )${name.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}(?: |$)/]`;
 /** 从左栏点进一个项目经理的对话（手机是列表页，电脑是左栏，同一个按钮）。 */
 const openPm = (name: string): ScreenStep[] => [{ waitFor: NAV }, { click: btn(name, NAV) }, { waitFor: LOG }];
+const waitCharts: ScreenStep[] = [{ waitFor: ".vega-embed canvas, .vega-embed svg" }, { waitFor: 'svg[id^="chart-mermaid-"]' }];
+const stickBottom: ScreenStep = { scroll: { target: LOG, to: "bottom" } };
 const openRouter: ScreenStep[] = [{ waitFor: SIDEBAR }, { click: btn("Router", SIDEBAR) }, { waitFor: ROUTER_LOG }];
 const openProfile = (name: string): ScreenStep[] => [...openPm(name), { click: `role=button[name="View ${name}'s profile"]` }, { waitFor: `role=region[name="${name}'s profile"]` }];
 const openSettings = (tab?: string): ScreenStep[] => [{ waitFor: SIDEBAR }, { click: btn("Settings", SIDEBAR) }, { waitFor: DIALOG }, ...(tab === undefined ? [] : [{ click: `role=tab[name="${tab}"]` }])];
@@ -265,9 +267,9 @@ export const SCREEN_STEPS: Readonly<Partial<Record<string, readonly ScreenStep[]
   "chat.busy": [{ patch: "session-working" }, ...openPm("小林"), { waitFor: btn("Stop") }],
   "chat.streaming": [{ patch: "session-streaming" }, ...openPm("小林"), { waitFor: "text=所以后面几次" }],
   "chat.worked-open": [...openPm("小林"), { click: btn("Worked for", LOG) }],
-  "chat.markdown": [...openPm("文档整理"), { waitFor: "text=1.5 发布说明" }, { scroll: { target: LOG, to: "bottom" } }],
-  "chat.charts": [...openPm("文档整理"), { waitFor: ".vega-embed" }],
-  "chat.chart-zoom": [...openPm("文档整理"), { waitFor: ".vega-embed" }, { click: btn("Zoom", LOG) }, { crop: DIALOG }],
+  "chat.markdown": [...openPm("文档整理"), ...waitCharts, { waitFor: "text=1.5 发布说明" }, stickBottom],
+  "chat.charts": [...openPm("文档整理"), ...waitCharts, stickBottom],
+  "chat.chart-zoom": [...openPm("文档整理"), ...waitCharts, { click: btn("Zoom", LOG) }, { crop: DIALOG }],
   "chat.worker-speech": [...openPm("小林"), { waitFor: "text=查到了：MCP 首次握手" }],
   "chat.ask-answered": openPm("阿青"),
   "chat.user-blocker": [...openPm("小周"), { waitFor: "text=Antigravity 没登录" }],
@@ -275,13 +277,13 @@ export const SCREEN_STEPS: Readonly<Partial<Record<string, readonly ScreenStep[]
   "chat.failed": [...openPm("Momo"), { waitFor: "text=Translate the weekly draft into Japanese" }],
   "chat.attachments": [...openPm("Momo"), { waitFor: "text=dashboard.png" }],
   "chat.file-preview": [...openPm("Momo"), { click: `${LOG} >> text=metrics-2026-46.csv` }, { crop: DIALOG }],
-  "chat.scrolled": [...openPm("文档整理"), { scroll: { target: LOG, to: "top" } }, { waitFor: btn("Scroll to bottom") }],
+  "chat.scrolled": [...openPm("文档整理"), ...waitCharts, { scroll: { target: LOG, to: "top" } }, { waitFor: btn("Scroll to bottom") }],
   "chat.notices": [{ patch: "ws-reconnecting" }, { patch: "health-driver" }, ...openPm("小林"), { waitFor: "text=找不到 Claude" }],
   "chat.device-offline": [{ patch: "device-offline" }, { waitFor: NAV }, { click: btn("东京小助手", SIDEBAR) }],
   "chat.archived": [{ waitFor: NAV }, { click: btn("Archived", SIDEBAR) }, { click: btn("旧博客", SIDEBAR) }, { waitFor: LOG }],
   "chat.scale-compact": [storage({ "agent-hub.uiScale": "sm" }), ...openPm("小林")],
   "chat.scale-xl": [storage({ "agent-hub.uiScale": "xl" }), ...openPm("小林")],
-  "composer.focus": [...openPm("小林"), { focus: COMPOSER }, { crop: "[data-multiline]" }],
+  "composer.focus": [...openPm("小林"), { focus: COMPOSER }, stickBottom, { crop: "[data-multiline]" }],
   "composer.multiline": [
     ...openPm("小林"),
     typeInComposer("/hub:worker "),
@@ -294,14 +296,14 @@ export const SCREEN_STEPS: Readonly<Partial<Record<string, readonly ScreenStep[]
     typeInComposer("第二行：再看缓存"),
     { press: "Shift+Enter" },
     typeInComposer("第三行：最后补测试"),
-    { scroll: { target: LOG, to: "bottom" } },
+    stickBottom,
     { crop: "[data-multiline]" },
   ],
-  "composer.menu-commands": [...openPm("小林"), typeInComposer("/"), { crop: MENU }],
-  "composer.menu-files": [...openPm("小林"), typeInComposer("@src"), { crop: MENU }],
-  "composer.menu-worker": [{ patch: "vendors-mixed" }, ...openPm("小林"), typeInComposer("/hub:worker "), { crop: MENU }],
-  "composer.menu-empty": [...openPm("小林"), typeInComposer("/zzz"), { crop: MENU }],
-  "composer.blocked": [{ patch: "send-rejected" }, ...openPm("小林"), typeInComposer("/clear"), { press: "Enter" }, { waitFor: "role=alert" }, { crop: "[data-multiline]" }],
+  "composer.menu-commands": [...openPm("小林"), typeInComposer("/"), stickBottom, { crop: MENU }],
+  "composer.menu-files": [...openPm("小林"), typeInComposer("@src"), stickBottom, { crop: MENU }],
+  "composer.menu-worker": [{ patch: "vendors-mixed" }, ...openPm("小林"), typeInComposer("/hub:worker "), { waitFor: `${MENU} >> text=Not signed in` }, stickBottom, { crop: MENU }],
+  "composer.menu-empty": [...openPm("小林"), typeInComposer("/zzz"), stickBottom, { crop: MENU }],
+  "composer.blocked": [{ patch: "send-rejected" }, ...openPm("小林"), typeInComposer("/clear"), { press: "Enter" }, { waitFor: "role=alert" }, stickBottom, { crop: "[data-multiline]" }],
   "composer.drop": [...openPm("小林"), { drag: { files: ["notes.md", "screenshot.png"], over: "[aria-label='Messages']" } }, { crop: "[data-multiline]" }],
   "rail.task-graph": [...openPm("小林"), { crop: RAIL }],
   "rail.multi-graph": [...openPm("小林"), { crop: RAIL }],
@@ -351,7 +353,7 @@ export const SCREEN_STEPS: Readonly<Partial<Record<string, readonly ScreenStep[]
   "settings.providers-busy": [{ patch: "provider-installing" }, ...openSettings("Providers"), { waitFor: "text=Installing package…" }, { crop: DIALOG }],
   "settings.providers-sign-in": [{ patch: "provider-login-code" }, ...openSettings("Providers"), { click: `${DIALOG} >> role=button >> text=Sign in…` }, { crop: TOP_DIALOG }],
   "settings.providers-error": [{ patch: "provider-failed" }, ...openSettings("Providers"), { crop: DIALOG }],
-  "settings.sync-preview": [{ patch: "vendor-sync-preview" }, { patch: "vendors-mixed" }, ...openSettings("Providers"), { click: btn("Scan…", DIALOG) }, { crop: TOP_DIALOG }],
+  "settings.sync-preview": [{ patch: "vendor-sync-preview" }, { patch: "vendors-mixed" }, ...openSettings("Providers"), { waitFor: `${DIALOG} >> text=Sign in…` }, { click: btn("Scan…", DIALOG) }, { crop: TOP_DIALOG }],
   "settings.computers": [...openSettings("Computers"), { crop: DIALOG }],
   "settings.computers-multi": [...openSettings("Computers"), { click: btn("Invite", DIALOG) }, { crop: DIALOG }],
   "settings.computers-remove": [...openSettings("Computers"), { click: `${DIALOG} >> role=button[name^="Remove"]` }, { crop: TOP_DIALOG }],
