@@ -1127,3 +1127,9 @@ describe.skipIf(process.platform === "win32")("startAgentApi on a unix socket", 
     }
   });
 });
+
+describe("项目档案的双向沙箱（docs/router-project-catalog-design.md）", () => {
+  it.todo("写档会话（purpose catalog）没有令牌，调任何 hub 命令和 /v1/router.dispatch 都被拒");
+  it.todo("项目经理和 Worker 调 hub dispatch project-show 被拒");
+  it.todo("hub router note 已删：调用返回未知命令");
+});

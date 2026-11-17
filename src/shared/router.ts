@@ -12,6 +12,7 @@ import type {
   WorkerId,
 } from "./domain.ts";
 import type { Deliverable } from "./deliverables.ts";
+import type { ProjectCatalogCard } from "./project-catalog.ts";
 import type { AgentVendor } from "./vendors.ts";
 
 export interface RouterSettings {
@@ -231,6 +232,8 @@ export interface PmDigestEntry {
     description: string | null;
     mainFolder: string;
     otherFolders: string[];
+    /** 第一层项目档案（docs/router-project-catalog-design.md）；还没建档或对方设备版本旧时没有。 */
+    catalog?: ProjectCatalogCard | null;
   } | null;
   personaSummary: string;
   pmNote: string | null;

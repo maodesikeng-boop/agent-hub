@@ -460,3 +460,9 @@ describe("RouterTargetPort：本机账本与跨设备隧道代理统一端口", 
     expect(registry.portFor(remoteId)).toBeNull();
   });
 });
+
+describe("project.show（docs/router-project-catalog-design.md）", () => {
+  it.todo("本机端口返回这个项目的完整档案，没有档案时返回 detail: null");
+  it.todo("远端端口经配对通道取对方设备的档案，不让对方名片缓存失效");
+  it.todo("对方设备版本旧、不认识 project.show 时报 invalid 并说明对方版本不支持");
+});

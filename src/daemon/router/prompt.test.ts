@@ -360,3 +360,11 @@ describe("v2 回答边界与常量收口（docs/router-workbench-v2-design.md �
     expect(utf8Bytes(smallSection)).toBeLessThanOrEqual(ROUTER_RECEIPTS_SECTION_MAX_BYTES);
   });
 });
+
+describe("项目档案进名片（docs/router-project-catalog-design.md）", () => {
+  it.todo("完整名片带用户写的说明、做什么、别名、主线和最近一句，不再带 summary 拼接行");
+  it.todo("还没建档的项目写“未建档”，用户写了说明时照样显示说明");
+  it.todo("压成单行时带做什么的前 PROJECT_CATALOG_COMPACT_ONE_LINER_CHARS 个字");
+  it.todo("单张名片不超过 ROUTER_PM_CARD_MAX_BYTES，超了先砍主线再砍别名");
+  it.todo("系统提示词写明名片看不准时用 hub dispatch project-show 展开，单轮最多查 ROUTER_PROJECT_SHOW_PER_TURN_MAX 个");
+});

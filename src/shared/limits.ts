@@ -973,3 +973,53 @@ export const PROVIDER_SECRETS_FILE_MAX_BYTES = 64 * 1024;
 export const PROVIDER_ACTIVE_POLL_MS = 1_000;
 /** 要用户动手的阻塞（docs/user-blockers-design.md）：已解开的留最近多少条，更早的删掉（在等的不删）。 */
 export const USER_BLOCKERS_RESOLVED_KEEP = 50;
+
+// 总助的项目目录（docs/router-project-catalog-design.md 第 4 节）。
+/** 档案“一句话：做什么”最多几个字。 */
+export const PROJECT_CATALOG_ONE_LINER_MAX_CHARS = 80;
+/** 档案里的别名（代号、产品名、用户的叫法）最多几个、每个最多几个字。 */
+export const PROJECT_CATALOG_ALIASES_MAX = 8;
+export const PROJECT_CATALOG_ALIAS_MAX_CHARS = 24;
+/** 档案“最近主线”最多几个字。 */
+export const PROJECT_CATALOG_FOCUS_MAX_CHARS = 160;
+/** 档案里核心模块、已定的事、悬着的事各最多几条，每条最多几个字。 */
+export const PROJECT_CATALOG_MODULES_MAX = 8;
+export const PROJECT_CATALOG_DECISIONS_MAX = 8;
+export const PROJECT_CATALOG_OPEN_ITEMS_MAX = 5;
+export const PROJECT_CATALOG_ITEM_MAX_CHARS = 160;
+/** 第二层（hub dispatch project-show）渲染出的档案全文最多几个字。 */
+export const PROJECT_CATALOG_DETAIL_MAX_CHARS = 4_000;
+/** 名片压成单行时，“做什么”留几个字。 */
+export const PROJECT_CATALOG_COMPACT_ONE_LINER_CHARS = 40;
+/** project_catalogs.catalog_json 单行字节上限（超了按写档失败记）。 */
+export const PROJECT_CATALOG_ROW_MAX_BYTES = 16_384;
+/** 写档输入：切点之后用户和项目经理的原话从新往旧最多带几个字。 */
+export const PROJECT_CATALOG_DIALOG_MAX_CHARS = 30_000;
+/** 写档输入：最新一份交接最多带几个字（本机实测最长 10,871 字）。 */
+export const PROJECT_CATALOG_HANDOVER_MAX_CHARS = 12_000;
+/** 写档输入：首次建档读项目说明文件，每个文件最多几个字。 */
+export const PROJECT_CATALOG_FILE_MAX_CHARS = 4_000;
+/** 写档输入：切点之后结束的任务图、Worker 汇报摘要各最多几条，每条最多几个字。 */
+export const PROJECT_CATALOG_GRAPHS_MAX = 10;
+export const PROJECT_CATALOG_WORKER_REPORTS_MAX = 20;
+export const PROJECT_CATALOG_INPUT_ITEM_MAX_CHARS = 200;
+/** 写档输入总字数上限（实测 3.9 万字单轮约 11 秒）。 */
+export const PROJECT_CATALOG_INPUT_MAX_CHARS = 60_000;
+/** “变化大”：切点之后加权字数（用户的字乘权重，项目经理的字算 1）到这个数才刷新。 */
+export const PROJECT_CATALOG_REFRESH_DELTA = 20_000;
+export const PROJECT_CATALOG_USER_CHAR_WEIGHT = 4;
+/** 同一个项目两次刷新的最短间隔（新项目首次建档不受限）。 */
+export const PROJECT_CATALOG_MIN_INTERVAL_MS = 2 * 60 * 60_000;
+/** 同时最多写几份档案。 */
+export const PROJECT_CATALOG_CONCURRENCY = 1;
+/** 单份写档从开始到结束最多多久，到了打断记失败。 */
+export const PROJECT_CATALOG_TIMEOUT_MS = 2 * 60_000;
+/** 写档失败退避：首次 10 分钟，之后翻倍；同一切点连续失败到次数上限后，隔一天再试。 */
+export const PROJECT_CATALOG_RETRY_BACKOFF_MS = 10 * 60_000;
+export const PROJECT_CATALOG_MAX_ATTEMPTS = 3;
+export const PROJECT_CATALOG_GIVE_UP_MS = 24 * 60 * 60_000;
+/** 跑腿的没人叫醒时多久自己看一次队列（队列空不查库）。 */
+export const PROJECT_CATALOG_TICK_MS = 60_000;
+/** hub dispatch project-show 单次输出字节上限，和单轮里最多查几个项目。 */
+export const ROUTER_PROJECT_SHOW_MAX_BYTES = 16_384;
+export const ROUTER_PROJECT_SHOW_PER_TURN_MAX = 4;

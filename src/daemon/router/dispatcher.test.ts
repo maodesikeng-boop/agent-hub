@@ -943,3 +943,10 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
     });
   });
 });
+
+describe("hub dispatch project-show（docs/router-project-catalog-design.md）", () => {
+  it.todo("返回渲染好的第二层档案，不超过 ROUTER_PROJECT_SHOW_MAX_BYTES");
+  it.todo("不算进单条指令的分派目标数，也不进回执的 dispatched");
+  it.todo("单轮里第 ROUTER_PROJECT_SHOW_PER_TURN_MAX + 1 次调用被拒");
+  it.todo("名片里每个项目的 description 和 catalog 原样传给提示词，不再拼 pmNote、personaSummary");
+});

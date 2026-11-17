@@ -1560,3 +1560,8 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
     });
   });
 });
+
+describe("hub dispatch project-show（docs/router-project-catalog-design.md）", () => {
+  it.todo("解析 --device 和 --project，缺一个报用法错误");
+  it.todo("hub router note 不再是命令");
+});
