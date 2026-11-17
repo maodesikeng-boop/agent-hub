@@ -112,7 +112,6 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
     const ctx: LaunchContext = {
       ...rawCtx,
       ...(rawCtx.role === "pm" ? { pm: { ...rawCtx.pm, persona: truncatePmMemoryForPrompt(rawCtx.pm.persona).text } } : {}),
-      vendorAvailability: options.vendorAvailability?.(),
     };
     const role = sessionRole(ctx);
     if (ctx.project !== null) mkdirSync(projectWorktreesDir(worktreesDir, ctx.project.id), { recursive: true });

@@ -79,12 +79,13 @@ describe("名单加一项 acme，公共代码就认得它", () => {
     expect(resolveHubPaths({ AGENT_HUB_ACME: "~/bin/acme" }, "/home/u").vendorPaths[acme]).toBe("/home/u/bin/acme");
   });
 
-  it("提示词：能用的厂商列表里有它（编号、显示名、代表模型）；没写 instructionFile 不加“先读 AGENTS.md”", () => {
+  it("提示词：不用厂商自带子代理那条点得到它的工具（spec 的 subagentTools）和命令行，厂商名单不写进提示词（用 hub models 查）；没写 instructionFile 不加“先读 AGENTS.md”", () => {
     const prompt = buildLaunchPrompt(projectContext(), "/nonexistent/acme-contract");
-    expect(prompt).toContain("`acme`（Acme Rocket，如 `acme-ultra-9`、`acme-mini-2`）");
     expect(prompt).toContain("`acme_spawn`");
+    expect(prompt).toContain("Acme Rocket");
+    expect(prompt).not.toContain("`acme`（Acme Rocket");
     // 不能放后台叫醒自己（backgroundWake: false）的 Worker：一条命令等到底
-    expect(buildWorkerPrompt({ ...workerContext(), vendor: acme }, "/nonexistent/acme-contract")).toContain("等长命令用一条命令等到底");
+    expect(buildWorkerPrompt({ ...workerContext(), vendor: acme }, "/nonexistent/acme-contract")).toContain("长命令一条等到底");
   });
 
   it("没写 tools：它的工具显示“Using <名>”、统计里认不出（按原名计）；mcp__ 开头的照样按连接器认", () => {
