@@ -396,6 +396,9 @@ describe("桌面端 Settings → Providers", () => {
     await user.click(within(dialog).getByRole("button", { name: "Open sign-in page" }));
     const pasteInput = await within(dialog).findByPlaceholderText("Paste code or redirect URL…");
     await user.type(pasteInput, "http://127.0.0.1:54321/auth/callback?code=ok_code&state=st1");
+    // 提交键在弹窗底部最右，Cancel 在它左边
+    const footer = dialog.querySelector<HTMLElement>("[data-slot=dialog-footer]")!;
+    expect(within(footer).getAllByRole("button").map((b) => b.textContent)).toEqual(["Cancel", "Submit"]);
     await user.click(within(dialog).getByRole("button", { name: "Submit" }));
     await waitFor(() =>
       expect(api.callsTo("POST", new RegExp(`^/d/${TOKYO_ID}/api/providers/${v2}/auth/submit$`))).toHaveLength(1),

@@ -7,6 +7,7 @@ import { chartCache, chartCacheKey, type ChartCacheEntry } from "../charts/cache
 import {
   CHART_MAX_SOURCE_CHARS,
   CHART_MIN_HEIGHT,
+  CHART_MIN_INLINE_FONT_PX,
   CHART_VIEWPORT_MARGIN,
   ChartLoadError,
   chartRendererOf,
@@ -142,6 +143,13 @@ export const ChartBlock = memo(function ChartBlock({ language, source }: { langu
     // entry 由 key 决定；进视口（near）或源码、语言变了才重新排队
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [near, key]);
+
+  // 窄列（手机）里横排的流程图跟着列宽缩小，字会小到看不清：给图一个最小宽度，放不下的在图区里横向滚（.md-chart-body）
+  useLayoutEffect(() => {
+    const svg = host.current?.querySelector("svg");
+    const width = svg?.viewBox?.baseVal?.width ?? 0;
+    if (svg && width > 0) svg.style.minWidth = `${Math.floor((width * CHART_MIN_INLINE_FONT_PX) / theme.fontSize)}px`;
+  });
 
   useEffect(() => () => disposeLive.current?.(), []);
 

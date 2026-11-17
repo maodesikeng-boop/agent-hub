@@ -1,7 +1,7 @@
 // Settings → Providers 一键安装、更新与界面内直接登录（docs/providers-install-login-design.md）。
 // 严格由服务端 ProviderStatusItem.authMethods 数据驱动渲染，零单家厂商字面量、零符号拼接（不用 · / | / /）、错误日志默认收起。
 import { Loader2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   isSelectable,
   type AgentVendor,
@@ -354,6 +354,14 @@ export function ProviderSignInBody({
   const [manualInput, setManualInput] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [localError, setLocalError] = useState<ErrorLike | null>(null);
+  // 粘贴授权码的表单只有输入框；提交键在弹窗底部最右（第 10 条），用 form 属性连回表单，手机抽屉里紧跟在输入框下面
+  const manualFormId = useId();
+  const manualSubmit = (
+    <Button type="submit" form={manualFormId} className={mobile ? DRAWER_BUTTON : undefined} disabled={!manualInput.trim() || submitting}>
+      {submitting && <Loader2 className="animate-spin" aria-hidden="true" />}
+      Submit
+    </Button>
+  );
   const watchedFlowIdRef = useRef<string | null>(
     item.authFlow && isProviderAuthFlowActive(item.authFlow.phase) && !item.authFlow.ownedByOtherClient
       ? item.authFlow.flowId
@@ -659,27 +667,17 @@ export function ProviderSignInBody({
                 </div>
               )}
               {activeFlow.manualInput !== "none" && (
-                <form
-                  className={cn("gap-2", mobile ? "grid grid-cols-1" : "flex items-center")}
-                  onSubmit={(e) => void handleSubmitManual(e)}
-                >
+                <form id={manualFormId} className="grid grid-cols-1 gap-2" onSubmit={(e) => void handleSubmitManual(e)}>
                   <Input
                     aria-label="Paste code or redirect URL"
                     placeholder="Paste code or redirect URL…"
                     value={manualInput}
                     disabled={submitting}
                     {...NO_AUTOCORRECT}
-                    className={mobile ? TOUCH_INPUT : "min-w-0 flex-1"}
+                    className={mobile ? TOUCH_INPUT : undefined}
                     onChange={(e) => setManualInput(e.target.value)}
                   />
-                  <Button
-                    type="submit"
-                    className={mobile ? DRAWER_BUTTON : undefined}
-                    disabled={!manualInput.trim() || submitting}
-                  >
-                    {submitting && <Loader2 className="animate-spin" aria-hidden="true" />}
-                    Submit
-                  </Button>
+                  {mobile && manualSubmit}
                 </form>
               )}
               {displayedError !== null && <RowError error={displayedError} />}
@@ -697,6 +695,7 @@ export function ProviderSignInBody({
                   <Button type="button" variant="outline" onClick={() => void handleCancelClick()}>
                     Cancel
                   </Button>
+                  {activeFlow.manualInput !== "none" && manualSubmit}
                 </DialogFooter>
               )}
             </>

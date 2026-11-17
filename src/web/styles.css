@@ -588,7 +588,8 @@ input[type="search"]::-webkit-search-cancel-button {
   white-space: pre;
 }
 
-/* 图表块：外壳同代码块（.md-code），正文是白底（--background）图区，四周 12px；最高 480px，更高的等比缩小，点放大看原尺寸 */
+/* 图表块：外壳同代码块（.md-code），正文是白底（--background）图区，四周 12px；最高 480px，更高的等比缩小，点放大看原尺寸。
+   比列宽的也等比缩小，缩到字只剩 12px 为止（ChartBlock.tsx 给 svg 的 min-width），再放不下在图区里横向滚 */
 /* 白底图区会盖住外壳的内描边（box-shadow inset），图表块改用同色的真边框 */
 .markdown .md-chart {
   box-shadow: none;
@@ -596,6 +597,7 @@ input[type="search"]::-webkit-search-cancel-button {
 }
 .markdown .md-chart-body {
   position: relative;
+  overflow-x: auto;
   padding: 0.75rem;
   background: var(--background);
   font-family: var(--font-ui);
