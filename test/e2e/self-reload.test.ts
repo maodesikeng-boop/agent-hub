@@ -103,6 +103,10 @@ describe("热重启等全库空闲有上限", () => {
 
     const exit = await first.exited;
     const waitedMs = Date.now() - registeredAt;
+    console.log("DIAG-LOG", JSON.stringify(env.log().filter((e) => e.kind !== "stdin").map((e) => ({ ...e, ...("argv" in e ? { argv: e.argv.slice(0, 6) } : {}) }))));
+    console.log("DIAG-SESS", JSON.stringify(query("SELECT id, role, status, cwd, worker_id FROM agent_sessions")));
+    console.log("DIAG-MSG", JSON.stringify(query("SELECT id, conversation_id, sender, kind, status FROM messages ORDER BY id")));
+    console.log("DIAG-ERR", first.stderr());
     expect(exit.code).toBe(DESKTOP_CONTRACT.reloadExitCode);
     expect(waitedMs).toBeGreaterThanOrEqual(DRAIN_MAX_MS - 500);
     expect(first.stderr()).toContain("等全库空闲过了上限");
