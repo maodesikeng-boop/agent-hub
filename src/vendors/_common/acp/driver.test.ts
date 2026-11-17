@@ -285,6 +285,7 @@ describe("VendorSpec models.flags 可选适配", () => {
         readonly: "os_sandbox",
         systemPrompt: "first_message",
         skills: "read_file",
+        isolation: { skill: "shared", mcp: "shared", connector: "shared" },
       },
     });
     expect(acpLikeSpec.models.flags).toBeUndefined();

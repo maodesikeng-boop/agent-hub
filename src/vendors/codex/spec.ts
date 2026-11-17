@@ -109,5 +109,6 @@ export default defineVendor({
     systemPrompt: "resident",
     // 任务图手册：app-server 握手后发 skills/extraRoots/set（每个会话一个 app-server 进程，只影响这个会话；2026-11-12 codex-cli 0.167.1 实测）
     skills: "native",
+    isolation: { skill: "session", mcp: "session", connector: "session" },
   },
 });

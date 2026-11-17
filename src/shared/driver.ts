@@ -1,6 +1,7 @@
 // 驱动层（M1 W2 实现，M2 W3 扩展）对外的接口：执行器调它，它把事件交给账本，它自己读写 SessionStore。
 import type { ComposerCommand } from "./api.ts";
 import type { AgentSessionRow, AgentStep, ApiRetryInfo, MessageId, RateLimitInfo, SessionId, Unsubscribe } from "./domain.ts";
+import type { SessionCapabilities } from "./pm-capabilities.ts";
 import type { ReadonlyPolicy } from "./readonly-policy.ts";
 import type { SessionStore } from "./store.ts";
 import type { WriteScope } from "./write-scope.ts";
@@ -525,6 +526,12 @@ export interface LaunchFiles {
    * 不再去反读设置文件里的权限档。三家各自翻译成自己的做法（daemon/driver/readonly.ts）。进 fingerprint：策略变了下一条消息前重启。
    */
   readonly?: ReadonlyPolicy;
+  /**
+   * 这次启动按项目经理的选择要关掉、或只开的技能、MCP、云端连接器（pm-capabilities.ts 的 resolveSessionCapabilities）。
+   * 没有 = 全开，和不按项目经理管理时一样。各家在 src/vendors/<厂商>/capabilities.ts 翻译成自己的参数，
+   * isolation 是 shared 的那一类不管。进 fingerprint：选择变了下一条消息前重启。
+   */
+  capabilities?: SessionCapabilities;
   /**
    * 拼进提示词的性格设定、模式是哪一版（LaunchContext 的 personaRevision）。不进 fingerprint：变了不重启，
    * 见上面“两轮之间自动重启”的性格设定那段。没有（Worker）就不比。

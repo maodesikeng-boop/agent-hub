@@ -1,6 +1,7 @@
 // 守护进程侧每家厂商交出来的东西（docs/vendor-plugin-design.md 3.3 节）：src/vendors/<id>/daemon.ts 默认导出一个 VendorDaemon，
 // daemon-registry.ts 按名单加载；src/vendors/<id>/paths.ts 放只给守护进程用的路径（PATH 里找不到可执行文件时去哪找）。
 // 只给守护进程用（会 import 驱动、起进程的代码），网页不引。现有的接口（VendorComposerBase、VendorCatalogProbe、SessionForker、Driver）原样复用。
+import type { CapabilitySource } from "../shared/pm-capabilities.ts";
 import type {
   AgentVendor,
   Driver,
@@ -220,6 +221,20 @@ export interface VendorSyncAdapter {
   ): VendorMcpPatchPlan;
   /** 全局（`~/.agents/skills`）或项目（`<projectDir>/.agents/skills`）下的技能同步策略。 */
   skillTarget(ctx: VendorSyncContext, scope: { kind: "global" } | { kind: "project"; projectDir: string }): VendorSkillTarget;
+  /**
+   * 可选：这家现在能看到的技能、MCP、云端连接器和插件（按项目经理管理用的库存，daemon/pm-capabilities/inventory.ts）。
+   * 只读，不写任何文件、不起要登录的东西；超时或读不了时拒绝（reject），库存按 PM_CAPABILITY_INVENTORY_RETRY_MS 短暂记空。
+   * 不写 = 库存只用 scanMcp 和标准技能目录。
+   */
+  scanCapabilities?(ctx: VendorSyncContext, scope: { projectDir: string | null }): Promise<VendorCapabilityScan>;
+}
+
+/** scanCapabilities 的结果。source 只用 global、project、plugin、vendor_bundled、account 里这家用得上的。 */
+export interface VendorCapabilityScan {
+  skills: Array<{ name: string; dir: string; description: string | null; source: CapabilitySource }>;
+  mcp: Array<{ name: string; source: CapabilitySource }>;
+  connectors: Array<{ id: string; name: string }>;
+  plugins: Array<{ id: string; label: string }>;
 }
 
 /** 生成启动文件时守护进程给的（daemon/launch.ts）。 */

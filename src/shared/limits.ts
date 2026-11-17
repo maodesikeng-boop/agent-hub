@@ -973,3 +973,17 @@ export const PROVIDER_SECRETS_FILE_MAX_BYTES = 64 * 1024;
 export const PROVIDER_ACTIVE_POLL_MS = 1_000;
 /** 要用户动手的阻塞（docs/user-blockers-design.md）：已解开的留最近多少条，更早的删掉（在等的不删）。 */
 export const USER_BLOCKERS_RESOLVED_KEEP = 50;
+
+// ---- 按项目经理管理技能、MCP、云端连接器（docs/pm-capabilities-design.md 的性能一节） ----
+/** 库存最多收多少项（三类合计）。本机实测 claude 166 个技能 + 71 个 MCP，codex 62 个技能 + 12 个 MCP + 10 个连接器，留十倍余量。 */
+export const PM_CAPABILITY_INVENTORY_MAX_ITEMS = 2_000;
+/** 一个项目经理最多存多少项单独设置（超过拒绝 PATCH）。和库存上限相同：每项最多一条。 */
+export const PM_CAPABILITY_OVERRIDES_MAX = 2_000;
+/** 库存缓存多久：配置文件和技能目录的 mtime 变了提前失效。 */
+export const PM_CAPABILITY_INVENTORY_TTL_MS = 60_000;
+/** 有厂商没扫到（读不了、探测超时）时库存只记多久。 */
+export const PM_CAPABILITY_INVENTORY_RETRY_MS = 5_000;
+/** 技能说明在库存里最多多少字。 */
+export const PM_CAPABILITY_DESCRIPTION_MAX_CHARS = 200;
+/** 一次 PATCH 最多改多少项（组开关一次改一整组，最大的插件组本机 37 个技能）。 */
+export const PM_CAPABILITY_PATCH_MAX_KEYS = 500;

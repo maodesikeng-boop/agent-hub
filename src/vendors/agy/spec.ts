@@ -140,6 +140,7 @@ export default defineVendor({
     systemPrompt: "resident",
     // 任务图手册：放进已经 --add-dir 的规则目录 agy-rules/.agents/skills/（硬链接，agy 不跟软链；2026-11-12 agy 1.5.6 实测）
     skills: "native",
+    isolation: { skill: "shared", mcp: "tool_deny", connector: "shared" },
     // 包进 OS 沙箱时关掉自带的终端沙箱（不能嵌套）
     ownSandboxOffArgs: ["--settings", JSON.stringify({ enableTerminalSandbox: false })],
   },

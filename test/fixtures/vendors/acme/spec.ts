@@ -46,5 +46,6 @@ export default defineVendor({
     readonly: "os_sandbox",
     systemPrompt: "first_message",
     skills: "read_file",
+    isolation: { skill: "shared", mcp: "shared", connector: "shared" },
   },
 });

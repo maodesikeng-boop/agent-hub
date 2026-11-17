@@ -33,6 +33,7 @@ import type {
 } from "./router.ts";
 import type { LedgerErrorCode, PersonaView } from "./ledger.ts";
 import type { PeerTransport, RemotePeerTransportKind } from "./peer-transport.ts";
+import type { PmCapabilitiesStart } from "./pm-capabilities.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
 import type { WorkerLineSummary } from "./snapshot.ts";
 import type { TunnelStatus } from "./tunnel.ts";
@@ -57,6 +58,8 @@ export const API_PATHS = {
   pms: "/api/pms",
   /** GET → PersonaView；PUT（EditPersonaRequest）→ EditPersonaResponse。 */
   persona: (pmId: PmId) => `/api/pms/${pmId}/persona`,
+  /** GET → PmCapabilitiesView；PATCH（PmCapabilitiesPatch → PmCapabilitiesView）：项目经理能用的技能、MCP、云端连接器。 */
+  pmCapabilities: (pmId: PmId) => `/api/pms/${pmId}/capabilities`,
   /** GET → PmMemoryFilesList：项目经理专属记忆目录 `<topic>.md` 子文件列表与合计字节数。 */
   pmMemoryFiles: (pmId: PmId) => `/api/pms/${pmId}/memory-files`,
   /** GET → PmMemoryFileDetail；PUT（PutPmMemoryFileRequest）→ PutPmMemoryFileResponse；DELETE → 204。 */
@@ -340,6 +343,8 @@ export interface CreatePmRequest {
   effort?: string | null;
   persona: string;
   folder?: string;
+  /** 技能、MCP、云端连接器从哪开始；不给 = 全开。 */
+  capabilities?: PmCapabilitiesStart;
 }
 
 export interface CreatePmResponse {
