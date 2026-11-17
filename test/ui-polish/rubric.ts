@@ -71,11 +71,16 @@ export const PRINCIPLES: readonly Principle[] = [
  * 发现里 rule 一栏能写什么。行业标准这一项不列在 PRINCIPLES 里，直接引条款：
  * `ui-standard §<条>`、`frontend-rules §<条>`、`WCAG <条款号>`、`HIG touch-44`、`machine:<机器检查的 id>`。
  */
-export const RULE_REF_PATTERN = /^(?:[SAU][1-8]|ui-standard §\d{1,2}(?:\.\d)?|frontend-rules §[1-5]|WCAG \d\.\d\.\d{1,2}|HIG touch-44|machine:[a-z][a-z-]*)$/;
+export const RULE_REF_PATTERN = /^(?:S[1-6]|[AU][1-8]|ui-standard §\d{1,2}(?:\.\d)?|frontend-rules §[1-5]|WCAG \d\.\d\.\d{1,2}|HIG touch-44|machine:[a-z][a-z-]*)$/;
+
+const PRINCIPLE_DIMENSIONS = new Map<string, Dimension>(PRINCIPLES.map((p) => [p.id, p.dimension]));
 
 /** 这条规则算在哪一项上：S、A、U 开头的看 PRINCIPLES，其余都算行业标准。rule 不合 RULE_REF_PATTERN 抛 RangeError。 */
 export function dimensionOfRule(rule: string): Dimension {
-  throw new Error("未实现");
+  if (!RULE_REF_PATTERN.test(rule)) {
+    throw new RangeError(`不能引用的规则：${rule}`);
+  }
+  return PRINCIPLE_DIMENSIONS.get(rule) ?? "standard";
 }
 
 /** 分档：一项的分数长什么样。分数由发现算出来（scoreFromFindings），这张表是给人看的对照。 */
@@ -132,6 +137,13 @@ export type ScoreCard = z.infer<typeof scoreCardSchema>;
 
 export type DimensionScores = Record<Dimension, number>;
 
+function capForDimension(p1: number, p2: number, p3: number): number {
+  const p1Cap = p1 === 0 ? 10 : p1 === 1 ? 6 : p1 === 2 ? 5 : 4;
+  const p2Cap = p2 === 0 ? 10 : p2 === 1 ? 8 : p2 <= 3 ? 7 : 6;
+  const p3Cap = p3 === 0 ? 10 : p3 <= 2 ? 9 : 8;
+  return Math.min(p1Cap, p2Cap, p3Cap);
+}
+
 /**
  * 按 SCORE_BANDS 把一张图的发现算成四项分数。
  * 后置：每项从 10 分起，按这一项里各严重度的条数取表里最低的那一档；没有发现的项是 10。
@@ -139,12 +151,51 @@ export type DimensionScores = Record<Dimension, number>;
  * 同样的发现不管顺序算出来一样。
  */
 export function scoreFromFindings(findings: ReadonlyArray<Pick<Finding, "rule" | "severity">>): DimensionScores {
-  throw new Error("未实现");
+  const counts: Record<Dimension, { P1: number; P2: number; P3: number }> = {
+    style: { P1: 0, P2: 0, P3: 0 },
+    standard: { P1: 0, P2: 0, P3: 0 },
+    aesthetic: { P1: 0, P2: 0, P3: 0 },
+    ux: { P1: 0, P2: 0, P3: 0 },
+  };
+  let p0 = 0;
+  for (const item of findings) {
+    const dim = dimensionOfRule(item.rule);
+    if (item.severity === "P0") {
+      p0++;
+    } else {
+      counts[dim][item.severity]++;
+    }
+  }
+  const p0Cap = p0 === 0 ? 10 : p0 === 1 ? 4 : 2;
+  return {
+    style: Math.min(p0Cap, capForDimension(counts.style.P1, counts.style.P2, counts.style.P3)),
+    standard: Math.min(p0Cap, capForDimension(counts.standard.P1, counts.standard.P2, counts.standard.P3)),
+    aesthetic: Math.min(p0Cap, capForDimension(counts.aesthetic.P1, counts.aesthetic.P2, counts.aesthetic.P3)),
+    ux: Math.min(p0Cap, capForDimension(counts.ux.P1, counts.ux.P2, counts.ux.P3)),
+  };
 }
 
 /** 一张图的页面分：四项里最低的那一项。 */
 export function pageScore(scores: DimensionScores): number {
-  throw new Error("未实现");
+  return Math.min(scores.style, scores.standard, scores.aesthetic, scores.ux);
+}
+
+function formatIssue(issue: z.ZodIssue): string {
+  const path = issue.path;
+  if (path[0] === "findings" && typeof path[1] === "number") {
+    const idx = path[1];
+    const field = path.slice(2).join(".");
+    const prefix = `第 ${idx + 1} 条发现（findings[${idx}]${field ? `.${field}` : ""}）`;
+    if (field === "rule") {
+      return `${prefix}：rule 不在允许引用的范围里（只能引 S1-S6、A1-A8、U1-U8、ui-standard §<条>、frontend-rules §<1-5>、WCAG <条款号>、HIG touch-44 或 machine:<id>）`;
+    }
+    return `${prefix}：${issue.message}`;
+  }
+  if (path[0] === "findings" && path.length === 1 && issue.code === "too_big") {
+    return `findings 超过上限（最多 ${MAX_FINDINGS_PER_CARD} 条，请把同一根因合并）`;
+  }
+  const label = path.length === 0 ? "根对象" : path.join(".");
+  return `${label}：${issue.message}`;
 }
 
 /**
@@ -152,5 +203,13 @@ export function pageScore(scores: DimensionScores): number {
  * 后置：形状不对、rule 不在能引用的范围里、发现超过上限，返回 ok: false 和给评委看的原因（照着改就能过）；不抛错。
  */
 export function parseScoreCard(json: string): { ok: true; card: ScoreCard } | { ok: false; reason: string } {
-  throw new Error("未实现");
+  let raw: unknown;
+  try {
+    raw = JSON.parse(json);
+  } catch (error) {
+    return { ok: false, reason: `不是合法的 JSON：${error instanceof Error ? error.message : String(error)}` };
+  }
+  const parsed = scoreCardSchema.safeParse(raw);
+  if (parsed.success) return { ok: true, card: parsed.data };
+  return { ok: false, reason: parsed.error.issues.map(formatIssue).join("；") };
 }

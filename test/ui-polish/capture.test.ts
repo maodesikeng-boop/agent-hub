@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Page, Route } from "playwright";
@@ -144,5 +144,143 @@ describe("校准用的弄坏与命令行入口", () => {
     expect(await main(["unknown"])).toBe(2);
     expect(await main(["shots", "--round", "bad"])).toBe(2);
     expect(err).toContain("用法：pnpm ui:polish");
+  });
+
+  it("cli brief、check-cards、score、report 全链路与无分数总览正常工作", async () => {
+    const repoRoot = makeTempDir();
+    const outRoot = makeTempDir();
+    const r0Dir = join(outRoot, "R00");
+    mkdirSync(r0Dir, { recursive: true });
+    const sha1 = "1".repeat(64);
+    const sha2 = "2".repeat(64);
+    const sampleManifest: CaptureManifest = {
+      commit: "abcdef1234567890abcdef1234567890abcdef12",
+      browser: "chromium 159",
+      shots: [shot("chat.normal@desktop", sha1), shot("quota.normal@desktop", sha2)],
+    };
+    writeFileSync(join(r0Dir, "manifest.json"), JSON.stringify(sampleManifest));
+
+    let out = "";
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      out += String(chunk);
+      return true;
+    });
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    expect(await main(["report", "--round", "R00", "--repo-root", repoRoot, "--out-root", outRoot])).toBe(0);
+    expect(existsSync(join(r0Dir, "report.html"))).toBe(true);
+    expect(readFileSync(join(r0Dir, "report.html"), "utf8")).toContain("chat.normal@desktop.png");
+
+    out = "";
+    expect(
+      await main([
+        "brief",
+        "--round",
+        "R00",
+        "--judge",
+        "agy/gemini-4-carbon",
+        "--batch",
+        "1",
+        "--repo-root",
+        repoRoot,
+        "--out-root",
+        outRoot,
+      ]),
+    ).toBe(0);
+    expect(out).toContain("chat.normal@desktop");
+    expect(out).toContain("quota.normal@desktop");
+
+    expect(
+      await main([
+        "check-cards",
+        "--round",
+        "R00",
+        "--judge",
+        "agy/gemini-4-carbon",
+        "--batch",
+        "1",
+        "--repo-root",
+        repoRoot,
+        "--out-root",
+        outRoot,
+      ]),
+    ).toBe(1);
+
+    for (const judge of ["agy/gemini-4-carbon", "claude/opus"]) {
+      const slug = judge.replaceAll("/", "__");
+      const batchDir = join(r0Dir, "cards", slug, "batch-1");
+      mkdirSync(batchDir, { recursive: true });
+      for (const s of sampleManifest.shots) {
+        writeFileSync(
+          join(batchDir, `${s.key}.json`),
+          JSON.stringify({
+            shot: s.key,
+            judge,
+            run: 1,
+            imageSha256: s.sha256,
+            findings: [],
+            holistic: { style: 10, standard: 10, aesthetic: 10, ux: 10 },
+            summary: "ok",
+          }),
+        );
+      }
+      expect(
+        await main([
+          "check-cards",
+          "--round",
+          "R00",
+          "--judge",
+          judge,
+          "--batch",
+          "1",
+          "--repo-root",
+          repoRoot,
+          "--out-root",
+          outRoot,
+        ]),
+      ).toBe(0);
+    }
+
+    expect(await main(["score", "--round", "R00", "--repo-root", repoRoot, "--out-root", outRoot])).toBe(0);
+    expect(existsSync(join(repoRoot, "docs/ui-polish/rounds/R00.json"))).toBe(true);
+    expect(existsSync(join(repoRoot, "docs/ui-polish/rounds.md"))).toBe(true);
+
+    expect(await main(["report", "--round", "R00", "--repo-root", repoRoot, "--out-root", outRoot])).toBe(0);
+    expect(readFileSync(join(r0Dir, "report.html"), "utf8")).toContain("agy/gemini-4-carbon");
+  });
+
+  it("cli calibration 生成校准报告和记录并按门槛返回退出码", async () => {
+    const repoRoot = makeTempDir();
+    const outRoot = makeTempDir();
+    const c1Dir = join(outRoot, "C1");
+    mkdirSync(c1Dir, { recursive: true });
+    const sha = "a".repeat(64);
+    const calManifest: CaptureManifest = {
+      commit: "abcdef1234567890abcdef1234567890abcdef12",
+      browser: "chromium 159",
+      shots: [shot("chat.normal@desktop", sha)],
+    };
+    writeFileSync(join(c1Dir, "manifest.json"), JSON.stringify(calManifest));
+    const cardsDir = join(c1Dir, "cards", "batch-size-28", "agy__gemini-4-carbon", "run-1", "batch-1");
+    mkdirSync(cardsDir, { recursive: true });
+    writeFileSync(
+      join(cardsDir, "chat.normal@desktop.json"),
+      JSON.stringify({
+        shot: "chat.normal@desktop",
+        judge: "agy/gemini-4-carbon",
+        run: 1,
+        imageSha256: sha,
+        findings: [{ rule: "S1", severity: "P1", box: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 }, what: "基准重伤", fix: "修" }],
+        holistic: { style: 6, standard: 10, aesthetic: 10, ux: 10 },
+        summary: "not ok",
+      }),
+    );
+
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    expect(await main(["calibration", "--round", "C1", "--repo-root", repoRoot, "--out-root", outRoot])).toBe(1);
+    expect(existsSync(join(repoRoot, "docs/ui-polish/calibration.md"))).toBe(true);
+    expect(existsSync(join(repoRoot, "docs/ui-polish/rounds/C1.json"))).toBe(true);
   });
 });
