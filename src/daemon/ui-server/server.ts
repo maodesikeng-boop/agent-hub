@@ -37,6 +37,7 @@ import {
   MAX_ATTACHMENTS_PER_MESSAGE,
   MAX_CONCURRENT_UPLOADS,
   MAX_UPLOAD_BYTES,
+  PM_CAPABILITY_PATCH_MAX_KEYS,
   PM_MODES,
   PUBLIC_SESSION_MAX_AGE_MS,
   ROUTER_COMMAND_MAX_CHARS,
@@ -47,6 +48,7 @@ import {
   bundledModelCatalog,
   FILE_ACTIONS,
   isAgentVendor,
+  isValidCapabilityKey,
   isImageMime,
   normalizeName,
   sentFileMime,
@@ -54,6 +56,7 @@ import {
   serverInfoFor,
   isLoopbackAddress,
   serverInfoForClient,
+  vendorSpec,
   TAILSCALE_USER_LOGIN_HEADER,
   DEVICE_PROXY_PREFIX,
   ENTRY_ONLY_API_PREFIXES,
@@ -87,6 +90,11 @@ import {
   type QuotaResponse,
   type PersonaResponse,
   type PickFolderResponse,
+  type CapabilityBase,
+  type CapabilityIsolationMap,
+  type CapabilityKind,
+  type PmCapabilitiesPatch,
+  type PmCapabilitiesView,
   type PmMemoryFileResponse,
   type PmMemoryFilesResponse,
   type PmMode,
@@ -130,6 +138,7 @@ import { workerPickSchema } from "../../shared/worker-pick-schema.ts";
 import { API_ERRORS, errorBody, type ApiErrorCode } from "../../shared/errors.ts";
 import type { ComposerService } from "../composer.ts";
 import { ProviderRequestError, type ProviderManager } from "../provider-manager/index.ts";
+import type { CapabilityInventoryService } from "../pm-capabilities/inventory.ts";
 import type { VendorSyncService } from "../vendor-sync/index.ts";
 import { PickFolderError, createFolderPicker, type FolderPicker } from "../pick-folder.ts";
 import {
@@ -195,6 +204,8 @@ export interface UiServerOptions {
   composer?: ComposerService;
   /** 全厂商连接器 / MCP / Skill 并集同步服务（daemon/vendor-sync/）。不给则 preview 回空列表、apply 回 501。 */
   vendorSync?: VendorSyncService;
+  /** 本机各厂商能力库存服务（daemon/pm-capabilities/inventory.ts）。不给则 GET/PATCH 里的 inventory 为空列表。 */
+  capabilityInventory?: CapabilityInventoryService;
   /** Settings → Providers 一键安装与界面内直接登录管理服务（daemon/provider-manager/）。不给则 GET 回空、写接口回 501。 */
   providers?: ProviderManager;
   /** 弹“选择文件夹”的（daemon/pick-folder.ts）。不给就用真的 osascript（不是 macOS 回 501）；测试里传假的。 */
@@ -420,6 +431,11 @@ const modeSchema = z.enum(PM_MODES);
 const vendorSchema = z.enum(AGENT_VENDORS);
 const optionalSettingSchema = (what: string) => boundedCharsSchema(MAX_MODEL_CHARS, what).nullable();
 
+const pmCapabilitiesStartSchema = z.discriminatedUnion("from", [
+  z.object({ from: z.literal("all") }).strict(),
+  z.object({ from: z.literal("pm"), pmId: z.number().int().positive() }).strict(),
+]);
+
 const createPmBodySchema = z
   .object({
     name: nameSchema,
@@ -432,6 +448,7 @@ const createPmBodySchema = z
     folder: boundedBytesSchema(MAX_PATH_BYTES, "folder")
       .refine((s) => s.trim() !== "" && !s.includes("\u0000"), "folder must be a non-empty path")
       .optional(),
+    capabilities: pmCapabilitiesStartSchema.optional(),
   })
   .strict();
 
@@ -445,7 +462,59 @@ function parseCreatePmBody(body: unknown): CreatePmRequest {
     ...(raw.defaultModel !== undefined ? { defaultModel: raw.defaultModel } : {}),
     ...(raw.effort !== undefined ? { effort: raw.effort } : {}),
     ...(raw.folder !== undefined ? { folder: raw.folder } : {}),
+    ...(raw.capabilities !== undefined ? { capabilities: raw.capabilities } : {}),
   };
+}
+
+const capabilityBaseSchema = z.enum(["all", "none"]);
+
+const patchPmCapabilitiesBodySchema = z
+  .object({
+    base: z
+      .object({
+        skill: capabilityBaseSchema.optional(),
+        mcp: capabilityBaseSchema.optional(),
+        connector: capabilityBaseSchema.optional(),
+      })
+      .strict()
+      .optional(),
+    set: z
+      .record(
+        z.string().refine((k) => isValidCapabilityKey(k), "invalid capability key"),
+        z.boolean().nullable(),
+      )
+      .refine(
+        (rec) => Object.keys(rec).length <= PM_CAPABILITY_PATCH_MAX_KEYS,
+        `at most ${PM_CAPABILITY_PATCH_MAX_KEYS} capability keys`,
+      )
+      .optional(),
+  })
+  .strict()
+  .refine(
+    (obj) =>
+      (obj.base !== undefined && Object.keys(obj.base).length > 0) ||
+      (obj.set !== undefined && Object.keys(obj.set).length > 0),
+    "at least one of base or set must be non-empty",
+  );
+
+function parsePatchPmCapabilitiesBody(body: unknown): PmCapabilitiesPatch {
+  const raw = parseWithSchema(patchPmCapabilitiesBodySchema, body);
+  let base: Partial<Record<CapabilityKind, CapabilityBase>> | undefined;
+  if (raw.base !== undefined) {
+    base = {
+      ...(raw.base.skill !== undefined ? { skill: raw.base.skill } : {}),
+      ...(raw.base.mcp !== undefined ? { mcp: raw.base.mcp } : {}),
+      ...(raw.base.connector !== undefined ? { connector: raw.base.connector } : {}),
+    };
+  }
+  return {
+    ...(base !== undefined && Object.keys(base).length > 0 ? { base } : {}),
+    ...(raw.set !== undefined ? { set: raw.set } : {}),
+  };
+}
+
+function vendorIsolationMap(): Readonly<Partial<Record<AgentVendor, CapabilityIsolationMap>>> {
+  return Object.fromEntries(AGENT_VENDORS.map((v) => [v, vendorSpec(v).capabilities.isolation]));
 }
 
 const editPersonaBodySchema = z
@@ -1375,7 +1444,9 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
         removeSkillKeys: raw.removeSkillKeys,
         ...(raw.confirmedHostBoundMcpKeys !== undefined ? { confirmedHostBoundMcpKeys: raw.confirmedHostBoundMcpKeys } : {}),
       };
-      return opts.vendorSync.apply(request);
+      const applied = opts.vendorSync.apply(request);
+      opts.capabilityInventory?.invalidate();
+      return applied;
     });
 
     routes.get(API_PATHS.providers, async (req): Promise<ProvidersStatusResponse> => {
@@ -1563,6 +1634,30 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       const pmId = parseId((req.params as { id?: unknown }).id, "pm id");
       const result = ledger.editPersona(pmId, parseEditPersonaBody(req.body), { kind: "user" });
       return { changed: result.change !== null, persona: result.persona };
+    });
+
+    routes.get("/api/pms/:id/capabilities", async (req): Promise<PmCapabilitiesView> => {
+      const pmId = parseId((req.params as { id?: unknown }).id, "pm id");
+      const policy = ledger.getPmCapabilityPolicy(pmId);
+      const projectDir = ledger.pmProjectMainFolder(pmId);
+      if ((req.query as { refresh?: unknown }).refresh === "1") {
+        opts.capabilityInventory?.invalidate();
+      }
+      const inventory = opts.capabilityInventory
+        ? await opts.capabilityInventory.get({ projectDir })
+        : { scannedAt: (opts.now ?? Date.now)(), items: [], groups: [], truncated: false };
+      return { pmId, inventory, policy, isolation: vendorIsolationMap() };
+    });
+
+    routes.patch("/api/pms/:id/capabilities", async (req): Promise<PmCapabilitiesView> => {
+      const pmId = parseId((req.params as { id?: unknown }).id, "pm id");
+      const patch = parsePatchPmCapabilitiesBody(req.body);
+      const policy = ledger.patchPmCapabilities(pmId, patch);
+      const projectDir = ledger.pmProjectMainFolder(pmId);
+      const inventory = opts.capabilityInventory
+        ? await opts.capabilityInventory.get({ projectDir })
+        : { scannedAt: (opts.now ?? Date.now)(), items: [], groups: [], truncated: false };
+      return { pmId, inventory, policy, isolation: vendorIsolationMap() };
     });
 
     routes.post("/api/persona-changes/:id/revert", async (req): Promise<EditPersonaResponse> => {

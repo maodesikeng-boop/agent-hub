@@ -19,15 +19,30 @@ import {
   WORKER_BACKGROUND_HOLD_MAX_MS,
   buildReadonlyPolicy,
   isAgentVendor,
+  resolveSessionCapabilities,
   reviewPushGuardEnv,
   taskGraphSkillCatalogEntry,
   vendorSpec,
   workerWriteScope,
 } from "../shared/index.ts";
-import type { AgentSessionRow, LaunchContext, LaunchFiles, PersonaNote, PersonaUpdate, SessionId, SessionRole, SessionTokens, VendorAvailabilityMap } from "../shared/index.ts";
+import type {
+  AgentSessionRow,
+  LaunchContext,
+  LaunchFiles,
+  PersonaNote,
+  PersonaUpdate,
+  PmCapabilityPolicy,
+  PmId,
+  SessionCapabilities,
+  SessionId,
+  SessionRole,
+  SessionTokens,
+  VendorAvailabilityMap,
+} from "../shared/index.ts";
 import { VENDOR_DAEMONS } from "../vendors/daemon-registry.ts";
 import { launchFingerprint } from "../shared/launch.ts";
 import { osSandboxAvailable } from "./driver/write-scope.ts";
+import type { CapabilityInventoryService } from "./pm-capabilities/inventory.ts";
 import { truncatePmMemoryForPrompt } from "./pm-memory.ts";
 import { projectWorktreesDir, sessionLaunchDir } from "../shared/paths.ts";
 import { buildFingerprintPrompt, buildLaunchPrompt, personaUpdateNote } from "./prompt.ts";
@@ -63,6 +78,10 @@ export interface LaunchPreparerOptions {
   vendorAvailability?: () => VendorAvailabilityMap;
   /** 总助单轮会话的用途（router/single-turn.ts 的 RouterTurnPurposes.of）；不给都按 dispatch。 */
   routerPurposeOf?: (sessionId: SessionId) => RouterTurnPurpose;
+  /** 项目经理的能力选择（ledger.getPmCapabilityPolicy）；与 capabilityInventory 一起给时按所属项目经理收窄会话能力。 */
+  getPmCapabilityPolicy?: (pmId: PmId) => PmCapabilityPolicy;
+  /** 本机能力库存服务（daemon/pm-capabilities/inventory.ts）；只读缓存。 */
+  capabilityInventory?: Pick<CapabilityInventoryService, "get">;
 }
 
 function realpathOr(path: string): string {
@@ -136,6 +155,13 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
     // 用设置文件落实只读的厂商（spec 的 capabilities.readonly 是 "settings"，如 claude 的自带沙箱，设计第 2.3 节）：设置文件换成只读翻译，
     // 进程不再包外层沙箱（macOS 沙箱不能嵌套）。别家的只读翻译在各自驱动层。
     const vendor = isAgentVendor(session.vendor) ? session.vendor : null;
+    let capabilities: SessionCapabilities | undefined;
+    if (vendor !== null && options.getPmCapabilityPolicy && options.capabilityInventory) {
+      const policy = options.getPmCapabilityPolicy(ctx.pm.id);
+      const mainFolder = ctx.project?.mainFolder.trim() ?? "";
+      const inv = await options.capabilityInventory.get({ projectDir: mainFolder === "" ? null : mainFolder });
+      capabilities = resolveSessionCapabilities(policy, inv, vendor) ?? undefined;
+    }
     const nativeReadonly = readonlyPolicy !== undefined && vendor !== null && vendorSpec(vendor).capabilities.readonly === "settings";
     const vendorFiles = vendor !== null
       ? VENDOR_DAEMONS[vendor].launchFiles?.({
@@ -144,6 +170,7 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
           hubSock,
           stateDir,
           osSandboxed,
+          ...(capabilities === undefined ? {} : { capabilities }),
         })
       : undefined;
     const settings = vendorFiles?.settings;
@@ -193,10 +220,12 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
         settings: settings ?? "",
         readonly: readonlyPolicy,
         ...(skillsDir === undefined ? {} : { skills: taskGraphSkillCatalogEntry() }),
+        ...(capabilities === undefined ? {} : { capabilities }),
       }),
       personaRevision: role === "pm" ? ctx.pm.personaRevision : undefined,
       ...(writeScope === null ? {} : { writeScope }),
       ...(readonlyPolicy === undefined ? {} : { readonly: readonlyPolicy }),
+      ...(capabilities === undefined ? {} : { capabilities }),
       // Worker 有后台命令时这一轮不汇报、项目经理在等，兜底比项目经理的短（limits.ts）
       ...(role === "worker" ? { backgroundHoldMaxMs: WORKER_BACKGROUND_HOLD_MAX_MS } : {}),
     };

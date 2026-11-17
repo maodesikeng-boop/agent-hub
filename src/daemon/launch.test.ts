@@ -10,11 +10,15 @@ import {
   REVIEW_PRE_PUSH_HOOK,
   TASK_GRAPH_SKILL_NAME,
   WORKER_BACKGROUND_HOLD_MAX_MS,
+  applyCapabilitiesPatch,
   buildReadonlyPolicy,
+  defaultPmCapabilityPolicy,
   taskGraphSkillCatalogEntry,
   taskGraphSkillMarkdown,
   type AgentSessionRow,
+  type CapabilityInventory,
   type LaunchContext,
+  type PmCapabilityPolicy,
 } from "../shared/index.ts";
 import { WORKER_ENV, buildSessionSettings, stateDirDenyRule } from "../vendors/claude/settings.ts";
 import { launchFingerprint } from "../shared/launch.ts";
@@ -405,5 +409,144 @@ describe("prepareLaunch（M2、M3）", () => {
   it("不是项目经理也不是 Worker 的会话：抛错", async () => {
     contexts.set(10, { ...projectContext(), role: "assistant" });
     await expect(make()(row(10))).rejects.toThrow(/assistant/);
+  });
+
+  describe("按项目经理收窄 Skill、MCP 与 Connector（LaunchFiles.capabilities）", () => {
+    const sampleInventory: CapabilityInventory = {
+      scannedAt: 1_000,
+      items: [
+        {
+          key: "skill:aws-auth",
+          kind: "skill",
+          name: "aws-auth",
+          description: "AWS auth",
+          groupId: "skill:global",
+          vendors: ["claude", "codex", "pi", "deepseek"],
+          dir: "/skills/aws-auth",
+        },
+        {
+          key: "mcp:codegraph",
+          kind: "mcp",
+          name: "codegraph",
+          description: null,
+          groupId: "mcp:global",
+          vendors: ["claude", "codex", "agy", "pi", "deepseek"],
+        },
+        {
+          key: "connector:claude:claude.ai Gmail",
+          kind: "connector",
+          name: "Gmail",
+          description: null,
+          groupId: "connector:account:claude",
+          vendors: ["claude"],
+        },
+      ],
+      groups: [],
+      truncated: false,
+    };
+
+    it("全开（defaultPmCapabilityPolicy）时 capabilities 为 undefined，设置文件和 fingerprint 与未接入时逐字一致", async () => {
+      const baseline = await make()(row(7));
+      const withAllOpen = createLaunchPreparer({
+        launchDir,
+        dataDir: dir,
+        stateDir: join(dir, "state"),
+        osSandboxed: true,
+        worktreesDir,
+        getLaunchContext: (id) => contexts.get(id)!,
+        tokens,
+        hubSock,
+        hubBinDir: "/agent-hub/run/bin",
+        basePath: "/usr/bin:/bin",
+        getPmCapabilityPolicy: (pmId) => defaultPmCapabilityPolicy(pmId),
+        capabilityInventory: { get: async () => sampleInventory },
+      });
+      const files = await withAllOpen(row(7));
+      expect(files.capabilities).toBeUndefined();
+      expect(readFileSync(files.settingsFile!, "utf8")).toBe(readFileSync(baseline.settingsFile!, "utf8"));
+      expect(files.fingerprint).toBe(baseline.fingerprint);
+    });
+
+    it("PM 与名下普通、只读、审查 Worker 均继承该 PM 选择并计入 fingerprint；总助会话保持不受限", async () => {
+      let currentPolicy: PmCapabilityPolicy = applyCapabilitiesPatch(defaultPmCapabilityPolicy(1), {
+        set: {
+          "skill:aws-auth": false,
+          "mcp:codegraph": false,
+          "connector:claude:claude.ai Gmail": false,
+        },
+      });
+      const seenProjectDirs: Array<string | null> = [];
+      const prepare = createLaunchPreparer({
+        launchDir,
+        dataDir: dir,
+        stateDir: join(dir, "state"),
+        homeDir: "/Users/u",
+        osSandboxed: true,
+        worktreesDir,
+        getLaunchContext: (id) => contexts.get(id)!,
+        tokens,
+        hubSock,
+        hubBinDir: "/agent-hub/run/bin",
+        basePath: "/usr/bin:/bin",
+        getPmCapabilityPolicy: () => currentPolicy,
+        capabilityInventory: {
+          get: async ({ projectDir }) => {
+            seenProjectDirs.push(projectDir);
+            return sampleInventory;
+          },
+        },
+      });
+
+      const pmFiles = await prepare(row(7));
+      expect(pmFiles.capabilities?.deny).toEqual({
+        skills: ["aws-auth"],
+        mcp: ["codegraph"],
+        connectors: ["claude.ai Gmail"],
+        plugins: [],
+      });
+      const pmSettings = JSON.parse(readFileSync(pmFiles.settingsFile!, "utf8"));
+      expect(pmSettings.skillOverrides).toEqual({ "aws-auth": "off" });
+      expect(pmSettings.deniedMcpServers).toEqual([
+        { serverName: "claude.ai Gmail" },
+        { serverName: "codegraph" },
+      ]);
+
+      contexts.set(9, workerContext());
+      const workerRestricted = await prepare({ ...row(9, dir, "worker"), vendor: "codex" });
+      expect(workerRestricted.capabilities?.deny.mcp).toEqual(["codegraph"]);
+      expect(workerRestricted.capabilities?.deny.skills).toEqual(["aws-auth"]);
+
+      contexts.set(11, workerContext({ readonly: true }));
+      const roWorker = await prepare({ ...row(11, dir, "worker"), vendor: "agy" });
+      expect(roWorker.readonly).toBeDefined();
+      expect(roWorker.capabilities?.deny.mcp).toEqual(["codegraph"]);
+
+      contexts.set(12, workerContext({ branch: null, review: { branch: "hub/1-impl", snapshot: null } }));
+      const reviewWorker = await prepare({ ...row(12, dir, "worker"), vendor: "pi" });
+      expect(reviewWorker.env.GIT_CONFIG_COUNT).toBe("1");
+      expect(reviewWorker.capabilities?.deny.mcp).toEqual(["codegraph"]);
+
+      const routerHome = join(dir, "state", "router-home");
+      mkdirSync(routerHome, { recursive: true });
+      const assistantRow: AgentSessionRow = {
+        ...row(20, routerHome, "pm"),
+        role: "assistant",
+        conversationId: null,
+        pmId: null,
+        workerId: null,
+        vendor: "claude",
+      };
+      const assistantFiles = await prepare(assistantRow);
+      expect(assistantFiles.capabilities).toBeUndefined();
+      const assistantSettings = JSON.parse(readFileSync(assistantFiles.settingsFile!, "utf8"));
+      expect(assistantSettings.skillOverrides).toBeUndefined();
+      expect(assistantSettings.deniedMcpServers).toBeUndefined();
+
+      currentPolicy = defaultPmCapabilityPolicy(1);
+      const workerAllOpen = await prepare({ ...row(9, dir, "worker"), vendor: "codex" });
+      expect(workerAllOpen.capabilities).toBeUndefined();
+      expect(workerAllOpen.fingerprint).not.toBe(workerRestricted.fingerprint);
+      expect(seenProjectDirs.every((p) => p === projectContext().project!.mainFolder)).toBe(true);
+    });
   });
 });

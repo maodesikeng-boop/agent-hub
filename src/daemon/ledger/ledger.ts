@@ -25,6 +25,7 @@ import { snapshotWindowStart, workerLineSummaries } from "../../shared/snapshot.
 import { getAgentSession, toAgentSessionRow } from "../store/index.ts";
 import type { AgentSessionDbRow, Db } from "../store/index.ts";
 import { createLedgerContext } from "./context.ts";
+import { fail } from "./context.ts";
 import type { LedgerContextOptions, LedgerFiles } from "./context.ts";
 import { createResolveFolder, writeFileAtomic as defaultWriteFileAtomic } from "./files.ts";
 import { createLedgerHandover } from "./handover.ts";
@@ -34,6 +35,7 @@ import { createLedgerLaunchContext } from "./launch-context.ts";
 import { createLedgerLoadedSkills } from "./loaded-skills.ts";
 import { createLedgerMessages } from "./messages.ts";
 import { createLedgerPersona } from "./persona.ts";
+import { createLedgerPmCapabilities } from "./pm-capabilities.ts";
 import { createLedgerProjectCatalog } from "./project-catalog.ts";
 import type { LedgerProjectCatalog, ProjectCatalogLedgerOptions } from "./project-catalog.ts";
 import { createLedgerProjects } from "./projects.ts";
@@ -244,12 +246,23 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   });
   const hub = createLedgerHubCommands(ctx, persona, projects, workers, messages, schedules, workerView, router, taskGraphs, sentFiles, taskGraphManual);
   const launch = createLedgerLaunchContext(db, persona, projects, workers);
+  const pmCapabilities = createLedgerPmCapabilities(ctx);
 
   /** 建项目经理；给了主文件夹就在同一个事务里给它建项目（同 hub project create）。 */
   const createPm = (input: CreatePmInput): CreatePmResult =>
     write((p) => {
+      if (input.capabilities !== undefined) {
+        if (input.capabilities.from === "pm") {
+          persona.requirePm(input.capabilities.pmId);
+        } else if (input.capabilities.from !== "all") {
+          throw fail("invalid", "不合法的能力初始来源");
+        }
+      }
       const created = persona.createPmIn(p, input);
       const project = input.folder === undefined ? null : projects.createProjectIn(p, { pmId: created.pm.id, folder: input.folder }).project;
+      if (input.capabilities !== undefined) {
+        pmCapabilities.init(created.pm.id, input.capabilities);
+      }
       return { ...created, project };
     });
 
@@ -417,6 +430,15 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     getPmMemoryFile: persona.getPmMemoryFile,
     putPmMemoryFile: persona.putPmMemoryFile,
     deletePmMemoryFile: persona.deletePmMemoryFile,
+    getPmCapabilityPolicy: pmCapabilities.get,
+    patchPmCapabilities: pmCapabilities.patch,
+    pmProjectMainFolder(pmId) {
+      persona.requirePm(pmId);
+      const proj = projects.activeProjectOf(pmId);
+      if (proj === null) return null;
+      const main = projects.projectCard(proj).mainFolder;
+      return main === "" ? null : main;
+    },
 
     editPersona: persona.editPersona,
 

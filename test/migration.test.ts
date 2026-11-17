@@ -2274,3 +2274,46 @@ describe("0032_project_catalogs：总助的项目目录", () => {
     expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 });
+
+describe("0033_pm_capabilities：每个项目经理的能力选择", () => {
+  it.each([31, 32])("从 %i 升级到 33：建 pm_capability_policies 与 pm_capability_overrides，保留已有数据，回退 32 重跑幂等", (from) => {
+    const db = m3Db();
+    migrate(db, migrationsUpTo(from));
+    if (from >= 32) {
+      db.run(
+        `INSERT INTO project_catalogs (project_id, catalog_json, cut_message_id, refreshed_at, forced, attempts, updated_at)
+         VALUES (2, '{"oneLiner":"keep"}', 5, 10, 0, 0, 10)`,
+      );
+    }
+    const pmsBefore = db.all("SELECT * FROM pms ORDER BY id");
+
+    expect(migrate(db, migrationsDir)).toMatchObject({ from, to: LATEST_VERSION });
+    expect(LATEST_VERSION).toBeGreaterThanOrEqual(33);
+    expect(tableNames(db)).toContain("pm_capability_policies");
+    expect(tableNames(db)).toContain("pm_capability_overrides");
+    expect(db.all("SELECT * FROM pms ORDER BY id")).toEqual(pmsBefore);
+    if (from >= 32) {
+      expect(db.all("SELECT catalog_json FROM project_catalogs WHERE project_id = 2")).toEqual([
+        { catalog_json: '{"oneLiner":"keep"}' },
+      ]);
+    }
+
+    db.run("INSERT INTO pm_capability_policies (pm_id, kind, base, updated_at) VALUES (1, 'mcp', 'none', 100)");
+    db.run("INSERT INTO pm_capability_overrides (pm_id, item_key, enabled, updated_at) VALUES (1, 'skill:aws-auth', 0, 100)");
+    expect(() =>
+      db.run("INSERT INTO pm_capability_policies (pm_id, kind, base, updated_at) VALUES (1, 'bogus', 'all', 100)"),
+    ).toThrow(/CHECK/);
+    expect(() =>
+      db.run("INSERT INTO pm_capability_overrides (pm_id, item_key, enabled, updated_at) VALUES (1, 'mcp:x', 2, 100)"),
+    ).toThrow(/CHECK/);
+
+    const policies = db.all("SELECT * FROM pm_capability_policies");
+    const overrides = db.all("SELECT * FROM pm_capability_overrides");
+    db.exec("PRAGMA user_version = 32");
+    expect(() => migrate(db, migrationsDir)).not.toThrow();
+    expect(userVersion(db)).toBe(LATEST_VERSION);
+    expect(db.all("SELECT * FROM pm_capability_policies")).toEqual(policies);
+    expect(db.all("SELECT * FROM pm_capability_overrides")).toEqual(overrides);
+    expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+});

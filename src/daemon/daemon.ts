@@ -8,7 +8,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { hostname } from "node:os";
+import { homedir, hostname } from "node:os";
 import { fileURLToPath } from "node:url";
 import {
   AGENT_API_CLOSE_MS,
@@ -61,6 +61,7 @@ import {
   type ProviderManager,
 } from "./provider-manager/index.ts";
 import { createVendorSyncService } from "./vendor-sync/index.ts";
+import { createCapabilityInventory } from "./pm-capabilities/inventory.ts";
 import {
   DAEMON_VENDORS,
   createVendorCatalogSources,
@@ -465,6 +466,9 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     });
     parts.agentApi = agentApi;
     installHubShim({ binDir: paths.hubBinDir });
+    const capabilityInventory = createCapabilityInventory({
+      ctx: { userHome: options.userHome ?? homedir(), env },
+    });
     const prepareLaunch = createLaunchPreparer({
       launchDir: paths.launchDir,
       dataDir,
@@ -480,6 +484,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       // 项目经理提示词里“能用的厂商”只列这台设备上能用的（只看缓存，不等查询）
       vendorAvailability: () => Object.fromEntries(AGENT_VENDORS.map((vendor) => [vendor, models.availability(vendor)])),
       routerPurposeOf: routerTurnPurposes.of,
+      getPmCapabilityPolicy: (pmId) => ledger.getPmCapabilityPolicy(pmId),
+      capabilityInventory,
     });
     // 性格设定、模式改了不重启，下一条消息前加说明（driver.ts 的“两轮之间自动重启”）
     const personaNote = createPersonaNoter((sessionId, since) => ledger.personaUpdate(sessionId, since), paths.launchDir);
@@ -899,6 +905,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       quota,
       composer,
       vendorSync,
+      capabilityInventory,
       providers: providerManager,
       db,
       rotateToken,

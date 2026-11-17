@@ -19,6 +19,7 @@ import {
   MAX_CONCURRENT_UPLOADS,
   MAX_REASON_CHARS,
   MAX_UPLOAD_BYTES,
+  PM_CAPABILITY_PATCH_MAX_KEYS,
   ROUTER_COMMAND_MAX_CHARS,
   ROUTER_REPLY_MAX_CHARS,
   ROUTER_STREAM_PAGE_MAX_BYTES,
@@ -28,9 +29,12 @@ import {
   bundledModelCatalog,
   serverInfoFor,
   type Attachment,
+  type CapabilityInventory,
   type Change,
   type LedgerErrorCode,
+  type PmCapabilitiesView,
   type QuotaResponse,
+  vendorSpec,
   type WsServerMessage,
 } from "../../shared/index.ts";
 import { createLedger } from "../ledger/index.ts";
@@ -89,7 +93,7 @@ interface ReqOpts {
   headers?: Record<string, string>;
 }
 
-type Method = "GET" | "POST" | "PUT" | "DELETE";
+type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 async function call(method: Method, url: string, opts: ReqOpts = {}) {
   const headers: Record<string, string> = { host: opts.host ?? HOST, ...opts.headers };
@@ -178,7 +182,9 @@ const ledgerCalls = () =>
   ledger.scheduleCalls.length +
   ledger.renewed.length +
   ledger.archived.length +
-  ledger.unarchived.length;
+  ledger.unarchived.length +
+  ledger.capabilityReads.length +
+  ledger.capabilityPatches.length;
 
 describe("没登录", () => {
   const apiRequests: Array<[Method, string, unknown?]> = [
@@ -191,6 +197,8 @@ describe("没登录", () => {
     ["POST", "/api/pms", NEW_PM],
     ["GET", "/api/pms/1/persona"],
     ["PUT", "/api/pms/1/persona", { text: "x" }],
+    ["GET", "/api/pms/1/capabilities"],
+    ["PATCH", "/api/pms/1/capabilities", { set: { "skill:aws-auth": false } }],
     ["POST", "/api/persona-changes/1/revert"],
     ["POST", "/api/pms/1/schedules", { name: "晨报", prompt: "x", daily: "09:00" }],
     ["PUT", "/api/schedules/1", { enabled: false }],
@@ -614,6 +622,7 @@ describe("停止 POST /api/conversations/:id/stop", () => {
 const NEW_ENDPOINTS: Array<[string, Method, string, unknown?]> = [
   ["POST /api/pms", "POST", "/api/pms", NEW_PM],
   ["PUT persona", "PUT", "/api/pms/1/persona", { text: "新正文" }],
+  ["PATCH capabilities", "PATCH", "/api/pms/1/capabilities", { set: { "skill:aws-auth": false } }],
   ["POST revert", "POST", "/api/persona-changes/1/revert"],
   ["POST schedule", "POST", "/api/pms/1/schedules", { name: "晨报", prompt: "x", daily: "09:00" }],
   ["PUT schedule", "PUT", "/api/schedules/1", { enabled: false }],
@@ -727,6 +736,8 @@ describe("POST /api/pms 建项目经理", () => {
     const bodies = [
       { ...NEW_PM, vendor: "claude", effort: "low" },
       { ...NEW_PM, effort: null },
+      { ...NEW_PM, capabilities: { from: "all" } },
+      { ...NEW_PM, capabilities: { from: "pm", pmId: 3 } },
     ];
     for (const body of bodies) expect((await call("POST", "/api/pms", { body })).statusCode).toBe(201);
     expect(ledger.createdPms).toEqual(bodies);
@@ -778,6 +789,10 @@ describe("POST /api/pms 建项目经理", () => {
     ["路径按字节算：中文 1366 个字（4098 字节）", { ...NEW_PM, folder: "字".repeat(1366) }],
     ["路径带 NUL", { ...NEW_PM, folder: "/x\u0000y" }],
     ["路径不是字符串", { ...NEW_PM, folder: 1 }],
+    ["capabilities.from 非法", { ...NEW_PM, capabilities: { from: "recent" } }],
+    ["capabilities from=pm 缺 pmId", { ...NEW_PM, capabilities: { from: "pm" } }],
+    ["capabilities from=pm 的 pmId 非正整数", { ...NEW_PM, capabilities: { from: "pm", pmId: 0 } }],
+    ["capabilities from=all 带多余字段", { ...NEW_PM, capabilities: { from: "all", pmId: 1 } }],
     ["多余字段", { ...NEW_PM, avatarFile: "x.png" }],
     ["body 是数组", [NEW_PM]],
     ["body 是 null", null],
@@ -987,6 +1002,160 @@ describe("POST /api/pms/:id/archive 与 /api/pms/:id/unarchive 归档与恢复�
     ledger.failWith = new LedgerRequestError("not_found", "没有编号 3 的项目经理");
     expect((await call("POST", "/api/pms/3/archive")).statusCode).toBe(404);
     expect((await call("POST", "/api/pms/3/unarchive")).statusCode).toBe(404);
+  });
+});
+
+describe("GET、PATCH /api/pms/:id/capabilities 项目经理能力库存与选择", () => {
+  it("GET 返回库存、当前 PM 选择与全厂商 isolation；?refresh=1 触发 invalidate", async () => {
+    const fakeInv: CapabilityInventory = {
+      scannedAt: 42_000,
+      items: [
+        {
+          key: "skill:aws-auth",
+          kind: "skill",
+          name: "aws-auth",
+          description: "AWS auth",
+          groupId: "skill:global",
+          vendors: ["claude", "codex"],
+        },
+      ],
+      groups: [],
+      truncated: false,
+    };
+    const seenScopes: Array<string | null> = [];
+    let invalidated = 0;
+    ledger.pmMainFolders.set(3, "/code/proj-3");
+    await app.close();
+    app = createUiServer({
+      ledger: ledger.asLedger(),
+      token: TOKEN,
+      staticDir,
+      uploadsDir,
+      sentFilesDir,
+      port: PORT,
+      db,
+      capabilityInventory: {
+        get: async ({ projectDir }) => {
+          seenScopes.push(projectDir);
+          return fakeInv;
+        },
+        invalidate: () => {
+          invalidated++;
+        },
+      },
+    });
+    await app.ready();
+
+    const res = await call("GET", "/api/pms/3/capabilities");
+    expect(res.statusCode).toBe(200);
+    const view = res.json() as PmCapabilitiesView;
+    expect(view.pmId).toBe(3);
+    expect(view.inventory).toEqual(fakeInv);
+    expect(view.policy).toEqual({
+      pmId: 3,
+      base: { skill: "all", mcp: "all", connector: "all" },
+      overrides: {},
+    });
+    for (const v of AGENT_VENDORS) {
+      expect(view.isolation[v]).toEqual(vendorSpec(v).capabilities.isolation);
+    }
+    expect(seenScopes).toEqual(["/code/proj-3"]);
+    expect(invalidated).toBe(0);
+
+    const refreshed = await call("GET", "/api/pms/3/capabilities?refresh=1");
+    expect(refreshed.statusCode).toBe(200);
+    expect(invalidated).toBe(1);
+  });
+
+  it("PATCH 更新 base 与 set 并返回新 PmCapabilitiesView；非法参数回 400，不存在回 404", async () => {
+    const patchRes = await call("PATCH", "/api/pms/3/capabilities", {
+      body: {
+        base: { mcp: "none" },
+        set: { "skill:aws-auth": false, "mcp:codegraph": true },
+      },
+    });
+    expect(patchRes.statusCode).toBe(200);
+    expect(ledger.capabilityPatches).toEqual([
+      {
+        pmId: 3,
+        patch: {
+          base: { mcp: "none" },
+          set: { "skill:aws-auth": false, "mcp:codegraph": true },
+        },
+      },
+    ]);
+    expect((patchRes.json() as PmCapabilitiesView).policy).toEqual({
+      pmId: 3,
+      base: { skill: "all", mcp: "none", connector: "all" },
+      overrides: { "skill:aws-auth": false, "mcp:codegraph": true },
+    });
+
+    const tooManySet = Object.fromEntries(
+      Array.from({ length: PM_CAPABILITY_PATCH_MAX_KEYS + 1 }, (_, i) => [`skill:s-${i}`, false]),
+    );
+    for (const bad of [
+      {},
+      { extra: 1 },
+      { base: { skill: "maybe" } },
+      { base: { unknownKind: "all" } },
+      { set: { "bad-key-no-colon": false } },
+      { set: { "connector:claude": false } },
+      { set: { "skill:aws-auth": "off" } },
+      { set: tooManySet },
+    ]) {
+      const r = await call("PATCH", "/api/pms/3/capabilities", { body: bad });
+      expect(r.statusCode).toBe(400);
+    }
+    expect((await call("GET", "/api/pms/abc/capabilities")).statusCode).toBe(400);
+    expect((await call("PATCH", "/api/pms/0/capabilities", { body: { set: { "skill:a": false } } })).statusCode).toBe(400);
+
+    ledger.failWith = new LedgerRequestError("not_found", "没有编号 99 的项目经理");
+    expect((await call("GET", "/api/pms/99/capabilities")).statusCode).toBe(404);
+    expect((await call("PATCH", "/api/pms/99/capabilities", { body: { set: { "skill:a": false } } })).statusCode).toBe(404);
+  });
+
+  it("POST /api/vendor-sync/apply 成功后触发 capabilityInventory.invalidate", async () => {
+    let invalidated = 0;
+    await app.close();
+    app = createUiServer({
+      ledger: ledger.asLedger(),
+      token: TOKEN,
+      staticDir,
+      uploadsDir,
+      sentFilesDir,
+      port: PORT,
+      db,
+      vendorSync: {
+        preview: () => ({ scannedAt: 1, mcpServers: [], skills: [], nonSyncable: [], truncated: false }),
+        apply: () => ({
+          backupId: "b1",
+          syncedMcpCount: 1,
+          removedMcpCount: 0,
+          linkedSkillCount: 0,
+          unlinkedSkillCount: 0,
+          preservedPrivateSkillCount: 0,
+          updatedFiles: 1,
+        }),
+      },
+      capabilityInventory: {
+        get: async () => ({ scannedAt: 1, items: [], groups: [], truncated: false }),
+        invalidate: () => {
+          invalidated++;
+        },
+      },
+    });
+    await app.ready();
+
+    const res = await call("POST", "/api/vendor-sync/apply", {
+      body: {
+        selectedMcpKeys: ["codegraph"],
+        removeMcpKeys: [],
+        selectedSkillKeys: [],
+        removeSkillKeys: [],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(invalidated).toBe(1);
   });
 });
 
