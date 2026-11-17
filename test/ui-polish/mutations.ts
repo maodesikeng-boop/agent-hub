@@ -35,7 +35,7 @@ export async function applyMutation(page: Page, id: string): Promise<void> {
   await page.evaluate(inPage.applyMutationInPage, id);
 }
 
-/** 校准用的基准图：用户定的候选 A，项目经理对话三栏。弄坏都注入在它上面。 */
-export const CALIBRATION_BASELINE = "chat.normal";
-/** 校准用的真实界面：好的差的都有。修复前的模型面板要检出 PR #337 之前的提交另截，这里用现在的。 */
-export const CALIBRATION_REAL_SCREENS = ["router.model-picker", "profile.normal", "settings.providers", "rail.task-graph", "m-settings.home"] as const;
+/** 校准用的基准图：用户定的候选 A，项目经理对话三栏（桌面）。弄坏都注入在它上面。 */
+export const CALIBRATION_BASELINE = "chat.normal@desktop";
+/** 校准用的真实界面（图的 key）：好的差的都有。修复前的模型面板要检出 PR #337 之前的提交另截，这里用现在的。 */
+export const CALIBRATION_REAL_SHOTS = ["router.model-picker@desktop", "profile.normal@desktop", "settings.providers@desktop", "rail.task-graph@desktop", "m-settings.home@mobile"] as const;

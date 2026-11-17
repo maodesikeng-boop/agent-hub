@@ -2,9 +2,9 @@
 // 不变量：同一个提交、同一份清单截两次，每张图的字节完全一样（视口、字号、时区、时钟、种子、动效都钉死，截图期间不改数据）。
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { chromium, type Browser, type Page, type Request } from "playwright";
+import { chromium, type Browser, type Cookie, type Page, type Request } from "playwright";
 import {
   BROWSER_NOW_ISO,
   DEVICE_SCALE_FACTOR,
@@ -62,6 +62,8 @@ export interface CaptureManifest {
 interface Backend {
   daemon: IsolatedDaemon;
   seed: SeedResult;
+  /** 登录一次拿到的 cookie：每张图的浏览器上下文都带它，不再各走一次登录链接（不然守护进程里“已登录的浏览器”条数随截图先后变）。 */
+  cookies: Cookie[];
   stop(): Promise<void>;
 }
 
@@ -77,17 +79,24 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureManife
     { shot },
     ...(mutate[shot.key] ?? mutate[shot.screen.id] ?? []).map((mutation) => ({ shot, mutation })),
   ]);
+  mkdirSync(options.outDir, { recursive: true });
   rmSync(join(options.outDir, "manifest.json"), { force: true });
   rmSync(join(options.outDir, "failed"), { recursive: true, force: true });
-  mkdirSync(options.outDir, { recursive: true });
+  for (const entry of readdirSync(options.outDir)) {
+    if (entry.endsWith(".png")) rmSync(join(options.outDir, entry), { force: true });
+  }
   rmSync(SHOT_WORK_DIR, { recursive: true, force: true });
   mkdirSync(SHOT_WORK_DIR, { recursive: true });
 
   const backends = new Map<Scenario, Backend>();
   let browser: Browser | null = null;
   try {
-    for (const scenario of new Set(shots.map((s) => s.screen.scenario))) backends.set(scenario, await startBackend(scenario, options.repoRoot));
     browser = await chromium.launch();
+    for (const scenario of new Set(shots.map((s) => s.screen.scenario))) {
+      const backend = await startBackend(scenario, options.repoRoot);
+      backends.set(scenario, backend);
+      backend.cookies = await signIn(browser, backend.daemon);
+    }
     const results: CapturedShot[] = new Array(jobs.length);
     const failures: string[] = [];
     let next = 0;
@@ -105,7 +114,6 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureManife
     };
     const b = browser;
     await Promise.all(Array.from({ length: Math.min(SHOT_PARALLEL, jobs.length) }, () => worker(b)));
-    // 一张没截到就整次失败，不写清单；把所有截不到的界面一起报出来
     if (failures.length > 0) throw new Error(`${failures.length} 个界面截图失败：\n${failures.sort().join("\n")}`);
     const manifest: CaptureManifest = { commit: currentCommit(options.repoRoot), browser: `chromium ${b.version()}`, shots: results };
     writeFileSync(join(options.outDir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
@@ -130,15 +138,28 @@ async function startBackend(scenario: Scenario, repoRoot: string): Promise<Backe
   const seed = await seedScenario({ home, projectsDir: join(SHOT_WORK_DIR, "projects"), scenario });
   if (scenario !== "two-devices") {
     const daemon = await startIsolatedDaemon({ home, repoRoot });
-    return { daemon, seed, stop: () => daemon.stop() };
+    return { daemon, seed, cookies: [], stop: () => daemon.stop() };
   }
   const peer = await startIsolatedDaemon({ home: peerHomeOf(home), repoRoot });
   try {
     const daemon = await startIsolatedDaemon({ home, repoRoot, pairWith: peer });
-    return { daemon, seed, stop: async () => void (await Promise.all([daemon.stop(), peer.stop()])) };
+    return { daemon, seed, cookies: [], stop: async () => void (await Promise.all([daemon.stop(), peer.stop()])) };
   } catch (error) {
     await peer.stop();
     throw error;
+  }
+}
+
+/** 用一个桌面上下文走一次登录链接，存下 cookie（同 Playwright 文档里用 storageState 复用登录的做法）。 */
+async function signIn(browser: Browser, daemon: IsolatedDaemon): Promise<Cookie[]> {
+  const context = await browser.newContext({ locale: SHOT_LOCALE, timezoneId: SHOT_TIMEZONE });
+  try {
+    const page = await context.newPage();
+    await page.goto(daemon.loginUrl);
+    await page.waitForURL(`${daemon.origin}/`);
+    return (await context.storageState()).cookies;
+  } finally {
+    await context.close();
   }
 }
 
@@ -173,7 +194,8 @@ async function captureOne(browser: Browser, backend: Backend, shot: Shot, mutati
     }, storage);
     await blockWrites(page);
     for (const step of steps) if ("patch" in step) await applyPatch(page, step.patch);
-    await page.goto(backend.daemon.loginUrl);
+    await context.addCookies(backend.cookies);
+    await page.goto(`${backend.daemon.origin}/`);
     await page.waitForLoadState("domcontentloaded");
     let crop: string | undefined;
     if (!steps.some((s) => "goto" in s)) await page.waitForSelector("#root > *", { timeout: SHOT_READY_TIMEOUT_MS });
@@ -203,7 +225,6 @@ async function captureOne(browser: Browser, backend: Backend, shot: Shot, mutati
     if (errors.length > 0) throw new Error(`页面报错：${errors.join("；")}`);
     return result;
   } catch (error) {
-    // 留现场：到不了的那一刻页面长什么样，修到达步骤时看
     const page = context.pages()[0];
     if (page !== undefined) {
       mkdirSync(join(outDir, "failed"), { recursive: true });
@@ -215,7 +236,6 @@ async function captureOne(browser: Browser, backend: Backend, shot: Shot, mutati
   }
 }
 
-/** 一个界面的到达步骤，占位换成种子里的编号。 */
 function stepsOf(screenId: string, seed: SeedResult): ScreenStep[] {
   const steps = SCREEN_STEPS[screenId];
   if (steps === undefined) throw new Error(`界面 ${screenId} 在 SCREEN_STEPS 里没有到达步骤`);
@@ -228,7 +248,6 @@ function stepsOf(screenId: string, seed: SeedResult): ScreenStep[] {
   return steps.map((step) => ("goto" in step ? { goto: fill(step.goto) } : step));
 }
 
-/** 照做一步；crop 步骤返回要裁的选择器。 */
 async function runStep(page: Page, step: ScreenStep, origin: string): Promise<string | undefined> {
   const timeout = SHOT_READY_TIMEOUT_MS;
   if ("goto" in step) {
@@ -239,7 +258,7 @@ async function runStep(page: Page, step: ScreenStep, origin: string): Promise<st
   else if ("focus" in step) await page.locator(step.focus).first().focus({ timeout });
   else if ("type" in step) {
     const input = page.locator(step.type.into).first();
-    await input.click({ timeout });
+    await input.focus({ timeout });
     await input.pressSequentially(step.type.text);
   } else if ("press" in step) await page.keyboard.press(step.press);
   else if ("scroll" in step) {
@@ -247,7 +266,7 @@ async function runStep(page: Page, step: ScreenStep, origin: string): Promise<st
     await page.locator(step.scroll.target).first().evaluate((el, where) => {
       el.scrollTop = where === "top" ? 0 : where === "bottom" ? el.scrollHeight : where;
     }, to);
-  } else if ("drag" in step) await page.evaluate(inPage.dragFiles, { selector: step.drag.over, names: step.drag.files });
+  } else if ("drag" in step) await page.evaluate(inPage.dragFiles, { selector: step.drag.over, names: step.drag.files, ...(step.drag.drop === undefined ? {} : { drop: step.drag.drop }) });
   else if ("waitFor" in step) await page.waitForSelector(step.waitFor, { timeout });
   else if ("signOut" in step) {
     await page.context().clearCookies();

@@ -72,7 +72,7 @@ export type ScreenStep =
   | { type: { into: string; text: string } }
   | { press: string }
   | { scroll: { target: string; to: "top" | "bottom" | number } }
-  | { drag: { files: readonly string[]; over: string } }
+  | { drag: { files: readonly string[]; over: string; drop?: boolean } }
   /** 套一个命名补丁（patches.ts）：真守护进程撑不住的瞬时状态。 */
   | { patch: string }
   /** 预置这台浏览器的 localStorage（已读时间、界面大小、右栏收起）。 */
@@ -182,7 +182,7 @@ export const SCREEN_INVENTORY: readonly ScreenSpec[] = [
   s("profile.new-session-confirm", "资料页：开新会话的确认弹窗", D, "normal", "standard", "点 Start…", "确认弹窗"),
   s("profile.archive-confirm", "资料页：归档的确认弹窗", D, "normal", "standard", "点 Archive…", "确认弹窗"),
   s("profile.archived", "资料页：已归档", D, "normal", "standard", "打开已归档项目经理的资料页"),
-  s("profile.vendor-unavailable", "资料页：现在选的厂商没登录", D, "error", "standard", "#/pm/1，补丁 vendors-mixed"),
+  s("profile.vendor-unavailable", "资料页：现在选的厂商没登录", D, "error", "standard", "老马的资料页（用 DeepSeek），补丁 vendors-mixed"),
   s("profile.long", "资料页：超长名字、超长路径、十几个文件夹", D, "long", "stress", "#/pm/1"),
   s("new-pm.default", "新建项目经理：默认", DM, "normal", "standard", "点左栏的加号", "弹窗"),
   s("new-pm.more", "新建项目经理：展开更多设置，中间滚动", D, "normal", "standard", "点 More settings", "弹窗"),
@@ -218,7 +218,6 @@ export const SCREEN_INVENTORY: readonly ScreenSpec[] = [
   s("quota.rail", "额度浮层：从 72px 窄栏打开", ["narrow"], "normal", "standard", "窄栏底部点额度按钮，补丁 quota-normal", "浮层"),
 ];
 
-// ---- 到达步骤用的选择器（Playwright 选择器语法）和几段常用的步骤 ----
 const NAV = 'role=navigation[name="Conversations"]';
 const SIDEBAR = 'role=complementary[name="Sidebar"]';
 const RAIL = 'role=complementary[name="Side panel"]';
@@ -283,7 +282,21 @@ export const SCREEN_STEPS: Readonly<Partial<Record<string, readonly ScreenStep[]
   "chat.scale-compact": [storage({ "agent-hub.uiScale": "sm" }), ...openPm("小林")],
   "chat.scale-xl": [storage({ "agent-hub.uiScale": "xl" }), ...openPm("小林")],
   "composer.focus": [...openPm("小林"), { focus: COMPOSER }, { crop: "[data-multiline]" }],
-  "composer.multiline": [...openPm("小林"), typeInComposer("第一行：先看超时日志"), { press: "Shift+Enter" }, typeInComposer("第二行：再看缓存"), { press: "Shift+Enter" }, typeInComposer("第三行：最后补测试"), { crop: "[data-multiline]" }],
+  "composer.multiline": [
+    ...openPm("小林"),
+    typeInComposer("/hub:worker "),
+    { press: "Enter" },
+    { press: "Enter" },
+    { press: "Enter" },
+    { drag: { files: ["notes.md"], over: "[aria-label='Messages']", drop: true } },
+    typeInComposer("第一行：先看超时日志"),
+    { press: "Shift+Enter" },
+    typeInComposer("第二行：再看缓存"),
+    { press: "Shift+Enter" },
+    typeInComposer("第三行：最后补测试"),
+    { scroll: { target: LOG, to: "bottom" } },
+    { crop: "[data-multiline]" },
+  ],
   "composer.menu-commands": [...openPm("小林"), typeInComposer("/"), { crop: MENU }],
   "composer.menu-files": [...openPm("小林"), typeInComposer("@src"), { crop: MENU }],
   "composer.menu-worker": [{ patch: "vendors-mixed" }, ...openPm("小林"), typeInComposer("/hub:worker "), { crop: MENU }],
@@ -327,7 +340,7 @@ export const SCREEN_STEPS: Readonly<Partial<Record<string, readonly ScreenStep[]
   "profile.new-session-confirm": [...openProfile("小林"), { click: btn("Start…") }, { crop: TOP_DIALOG }],
   "profile.archive-confirm": [...openProfile("小林"), { click: btn("Archive…") }, { crop: TOP_DIALOG }],
   "profile.archived": [{ waitFor: NAV }, { click: btn("Archived", SIDEBAR) }, { click: btn("旧博客", SIDEBAR) }, { waitFor: LOG }, { click: `role=button[name="View 旧博客's profile"]` }, { waitFor: `role=region[name="旧博客's profile"]` }],
-  "profile.vendor-unavailable": [{ patch: "vendors-mixed" }, ...openProfile("小周")],
+  "profile.vendor-unavailable": [{ patch: "vendors-mixed" }, ...openProfile("老马")],
   "profile.long": openProfile("一个名字特别特别长的项目经理用来测试左栏和顶栏会不会被撑开"),
   "new-pm.default": [{ waitFor: SIDEBAR }, { click: btn("New project manager", SIDEBAR) }, { crop: DIALOG }],
   "new-pm.more": [{ waitFor: SIDEBAR }, { click: btn("New project manager", SIDEBAR) }, { click: btn("More settings", DIALOG) }, { crop: DIALOG }],
@@ -399,7 +412,6 @@ export function batchShots(shots: readonly Shot[], sentinels: readonly Shot[], s
   const count = Math.ceil(total / batchSize);
   const batches: Shot[][] = Array.from({ length: count }, () => []);
   sentinels.forEach((shot, i) => batches[i % count]!.push(shot));
-  // 按清单顺序依次装满，同一区域的图挨在一起，自然落在同一批或相邻两批
   let index = 0;
   for (const shot of shots) {
     while (batches[index]!.length >= batchSize) index++;
@@ -409,7 +421,6 @@ export function batchShots(shots: readonly Shot[], sentinels: readonly Shot[], s
   return batches.map((batch) => shuffle(batch, random));
 }
 
-/** 固定种子的伪随机数（mulberry32）：同一个种子每次出同一串。 */
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
   return () => {

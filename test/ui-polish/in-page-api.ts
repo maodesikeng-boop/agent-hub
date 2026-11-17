@@ -4,7 +4,7 @@ import type { RawHit } from "./checks.ts";
 
 export interface InPageApi {
   fontsReady(): Promise<void>;
-  dragFiles(args: { selector: string; names: readonly string[] }): void;
+  dragFiles(args: { selector: string; names: readonly string[]; drop?: boolean }): void;
   measureInPage(options: { touch: boolean }): RawHit[];
   applyMutationInPage(id: string): void;
 }

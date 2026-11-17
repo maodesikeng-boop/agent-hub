@@ -15,10 +15,10 @@ describe("骨架", () => {
     expect(pkg.devDependencies["@types/node"]).toMatch(/^\^24\./);
   });
 
-  it("pnpm check 分三份做类型检查（守护进程、网页、Service Worker），再跑测试", () => {
+  it("pnpm check 分四份做类型检查（守护进程、网页、Service Worker、页面内测量脚本），再跑测试", () => {
     const pkg = readJson("package.json");
     expect(pkg.scripts.check).toBe(
-      "tsc --noEmit -p tsconfig.json && tsc --noEmit -p src/web/tsconfig.json && tsc --noEmit -p src/web/tsconfig.sw.json && vitest run --reporter=dot",
+      "tsc --noEmit -p tsconfig.json && tsc --noEmit -p src/web/tsconfig.json && tsc --noEmit -p src/web/tsconfig.sw.json && tsc --noEmit -p test/ui-polish/tsconfig.in-page.json && vitest run --reporter=dot",
     );
   });
 

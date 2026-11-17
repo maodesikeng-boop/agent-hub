@@ -114,15 +114,12 @@ function seedHome(rawHome: string, projectsDir: string, scenario: Scenario | "tw
   return { ids: story.ids, lastAt: clock };
 }
 
-/** 剧本里一个项目经理：对话、会话。 */
 interface PmHandle {
   pmId: number;
   conversationId: number;
-  /** 开过新会话后换成新的那个。 */
   sessionId: SessionId;
 }
 
-/** 写剧本用的几个动作，都走账本接口。 */
 class Story {
   readonly ids: Record<string, number> = {};
   #uuid = 0;
@@ -308,7 +305,8 @@ function standard(s: Story): void {
   const pms: Record<string, PmHandle> = {};
   for (const [key, name, reply] of others) {
     const folder = key === "zhou" ? s.repo("ops-scripts") : key === "qing" ? s.repo("crawler") : undefined;
-    const pm = s.pm(key, name, folder);
+    // 老马用 DeepSeek：资料页“现在选的厂商没登录”那一屏用它
+    const pm = s.pm(key, name, folder, key === "ma" ? { vendor: "deepseek" } : {});
     pms[key] = pm;
     s.turn(pm, "进度怎么样？", [reply]);
     s.jump(23);
@@ -438,7 +436,7 @@ function stress(s: Story): void {
   s.ids["graph.big"] = big.data.graph.id;
   s.ledger.hubCall(lin.sessionId, "graph.done", { graphId: big.data.graph.id, nodeKey: "a", summary: "需求齐了" });
   const qing = { pmId: s.ids["pm.qing"]!, conversationId: s.ids["c.qing"]!, sessionId: s.sessionOf(s.ids["c.qing"]!) };
-  // 历史任务图挂在阿青那边：右栏 Completed 组只在有收工 Piece 时出现（completedGraphCount 网页没传，见汇报）
+  // 历史任务图挂在阿青那边：右栏 Completed 组只在有收工 Piece 时出现（RightRail 的 completedGraphCount 在 App.tsx 里未传入）
   const done = s.ledger.hubCall(qing.sessionId, "graph.create", { specJson: JSON.stringify({ title: "上周的发布", steps: [{ key: "ship", title: "发布 1.4" }] }) });
   s.ids["graph.done"] = done.data.graph.id;
   s.ledger.hubCall(qing.sessionId, "graph.done", { graphId: done.data.graph.id, nodeKey: "ship", summary: "发布完成" });
@@ -507,7 +505,7 @@ export async function startIsolatedDaemon(options: { home: string; repoRoot: str
     FAKE_CLAUDE_LOG: join(scratch, "fake-claude.log"),
     FAKE_CLAUDE_STATE: scratch,
   };
-  const child = spawn(process.execPath, ["--import", FROZEN_CLOCK, LOOPBACK_MAIN], { cwd: options.repoRoot, env, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, ["--import", FROZEN_CLOCK, LOOPBACK_MAIN], { cwd: options.repoRoot, env, stdio: ["pipe", "pipe", "pipe"] });
   let out = "";
   let err = "";
   child.stdout.setEncoding("utf8").on("data", (c: string) => (out += c));

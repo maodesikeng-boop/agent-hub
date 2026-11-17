@@ -15,11 +15,11 @@ import { parseArgs } from "node:util";
 import { captureAll, diffManifests, type CaptureManifest } from "./capture.ts";
 import { MACHINE_CHECKS } from "./checks.ts";
 import { ROUND_OUTPUT_DIR } from "./limits.ts";
-import { CALIBRATION_BASELINE, CALIBRATION_REAL_SCREENS, MUTATIONS } from "./mutations.ts";
+import { CALIBRATION_BASELINE, CALIBRATION_REAL_SHOTS, MUTATIONS } from "./mutations.ts";
 import { SCREEN_INVENTORY, inventoryMarkdown } from "./screens.ts";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
-const ROUND_PATTERN = /^[A-Z]\d{2}$/;
+const ROUND_PATTERN = /^[A-Z]\d{1,2}(?:-confirm)?$/;
 
 const USAGE = `用法：pnpm ui:polish <命令>
   inventory
@@ -77,7 +77,7 @@ function parse<T extends NonNullable<Parameters<typeof parseArgs>[0]>["options"]
 
 function roundDir(round: string | undefined, fallback: string): string {
   const id = round ?? fallback;
-  if (!ROUND_PATTERN.test(id)) throw new UsageError(`轮次 ${id} 不对，要像 R01、C1 这样：一个大写字母加两位数字`);
+  if (!ROUND_PATTERN.test(id)) throw new UsageError(`轮次 ${id} 不对，要像 R01、C1 这样：一个大写字母加一到两位数字`);
   return join(ROUND_OUTPUT_DIR, id);
 }
 
@@ -100,14 +100,14 @@ async function shots(outDir: string, only: readonly string[] | undefined, verify
 
 async function calibrateShots(outDir: string): Promise<number> {
   const started = Date.now();
+  const keys: readonly string[] = [CALIBRATION_BASELINE, ...CALIBRATION_REAL_SHOTS];
   const manifest = await captureAll({
     repoRoot: REPO_ROOT,
     outDir,
-    only: [CALIBRATION_BASELINE, ...CALIBRATION_REAL_SCREENS],
-    mutate: { [`${CALIBRATION_BASELINE}@desktop`]: MUTATIONS.map((m) => m.id) },
+    only: [...new Set(keys.map((k) => k.split("@")[0]!))],
+    mutate: { [CALIBRATION_BASELINE]: MUTATIONS.map((m) => m.id) },
   });
-  // 校准只要基准图的桌面那张：手机、窄窗那几张不算
-  const keep = manifest.shots.filter((s) => s.screenId !== CALIBRATION_BASELINE || s.viewport === "desktop");
+  const keep = manifest.shots.filter((s) => keys.includes(s.key.split("!")[0]!));
   for (const s of manifest.shots) if (!keep.includes(s)) for (const f of [s.file, s.focusFile]) if (f !== undefined) rmSync(join(outDir, f), { force: true });
   const trimmed: CaptureManifest = { ...manifest, shots: keep };
   writeFileSync(join(outDir, "manifest.json"), `${JSON.stringify(trimmed, null, 2)}\n`);

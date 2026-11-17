@@ -53,12 +53,9 @@ export type PatchName = (typeof PATCH_NAMES)[number];
 
 const NOW = Date.parse(BROWSER_NOW_ISO);
 const HOUR = 3_600_000;
-/** 任何设备上的这个接口：入口本机是 /api/…，别的设备经入口转发是 /d/<设备>/api/…。 */
 const anyDevice = (path: string) => new RegExp(`^https?://[^/]+(?:/d/[^/]+)?${path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\?.*)?$`);
-/** 只认入口本机这一台的接口。 */
 const localOnly = (path: string) => new RegExp(`^https?://[^/]+${path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\?.*)?$`);
 
-/** 改写一个 GET 接口的 JSON 回包：先照常问守护进程，再改。 */
 async function editJson<T>(page: Page, url: RegExp, edit: (body: T) => T): Promise<void> {
   await page.route(url, async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
@@ -68,7 +65,6 @@ async function editJson<T>(page: Page, url: RegExp, edit: (body: T) => T): Promi
   });
 }
 
-/** 直接给一个固定的 JSON 回包，不问守护进程。 */
 async function fixedJson(page: Page, url: RegExp, body: unknown, options: { method?: string; status?: number } = {}): Promise<void> {
   await page.route(url, (route) =>
     route.request().method() !== (options.method ?? "GET") ? route.fallback() : route.fulfill({ status: options.status ?? 200, contentType: "application/json", body: JSON.stringify(body) }),
@@ -78,7 +74,6 @@ async function fixedJson(page: Page, url: RegExp, body: unknown, options: { meth
 /** 补丁故意挂着不回的请求：截图等“网络静下来”时不算它们。 */
 export const heldRequests = new WeakSet<Request>();
 
-/** 一直不回：界面停在“加载中”“Checking…”。 */
 async function hang(page: Page, url: RegExp, method = "GET"): Promise<void> {
   await page.route(url, (route) => {
     if (route.request().method() !== method) return route.fallback();
@@ -89,7 +84,6 @@ async function hang(page: Page, url: RegExp, method = "GET"): Promise<void> {
 
 const editState = (page: Page, edit: (state: StateSnapshot) => StateSnapshot, url = anyDevice(API_PATHS.state)) => editJson<StateSnapshot>(page, url, edit);
 
-/** 对话里最新那个会话（同网页的取法：generation 最大的）。 */
 function latestSessions(state: StateSnapshot, pick: (s: StateSnapshot["sessions"][number]) => boolean): Set<number> {
   const best = new Map<number, StateSnapshot["sessions"][number]>();
   for (const s of state.sessions) {
@@ -100,7 +94,6 @@ function latestSessions(state: StateSnapshot, pick: (s: StateSnapshot["sessions"
   return new Set([...best.values()].map((s) => s.sessionId));
 }
 
-/** 把一批会话改成在忙：在想、用工具或写字。 */
 function working(state: StateSnapshot, sessionIds: Set<number>, extra: (index: number) => Partial<StateSnapshot["sessions"][number]>): StateSnapshot {
   let index = 0;
   return {
@@ -131,8 +124,24 @@ function quota(page: Page, claude: RateLimitInfo, agy: QuotaResponse): Promise<v
   ]);
 }
 
-/** 截图用的厂商状态混排：claude、codex 能用，agy 没登录，其余没装。 */
-const MIXED: Partial<Record<AgentVendor, VendorAvailability>> = { claude: "available", codex: "available", agy: "signed_out" };
+/**
+ * 截图用的厂商状态混排，照用户真实机器的样子：五家能用、DeepSeek 没登录。
+ * 行多、每行都带模型名，面板才会被撑宽（PR #337 修的那个右边被裁，就是在这种情况下出现的）。
+ */
+const MIXED: Partial<Record<AgentVendor, VendorAvailability>> = { claude: "available", agy: "available", codex: "available", pi: "available", cursor: "available", deepseek: "signed_out" };
+/**
+ * Pi 是聚合多家的厂商，它自己报的模型名带服务商后缀（用户机器上是“Claude Sonnet 5.5 (anthropic)”），打包名单里没有后缀。
+ * 照真实的样子补上：模型面板每行右边显示它，是撑宽面板的那一行。
+ */
+const PI_PROVIDER: ReadonlyArray<[RegExp, string]> = [[/^DeepSeek/, "deepseek"], [/^Claude/, "anthropic"], [/^GPT/, "openai"], [/^Gemini/, "google"]];
+const mixedCatalog = (c: ModelsResponse["catalogs"][number]): ModelsResponse["catalogs"][number] => ({
+  ...c,
+  availability: mixedAvailability(c.vendor),
+  models:
+    c.vendor === "pi"
+      ? c.models.map((m) => ({ ...m, label: `${m.label} (${PI_PROVIDER.find(([re]) => re.test(m.label))?.[1] ?? "openrouter"})` }))
+      : c.models,
+});
 const mixedAvailability = (vendor: AgentVendor): VendorAvailability => MIXED[vendor] ?? "not_installed";
 
 function provider(vendor: AgentVendor, patch: Partial<ProviderStatusItem> = {}): ProviderStatusItem {
@@ -268,7 +277,7 @@ const PATCHES: Record<PatchName, (page: Page) => Promise<unknown>> = {
   "blocker-checking": (page) => hang(page, /\/api\/user-blockers\/\d+\/recheck$/, "POST"),
   "vendors-mixed": (page) =>
     Promise.all([
-      editJson<ModelsResponse>(page, anyDevice(API_PATHS.models), (m) => ({ catalogs: m.catalogs.map((c) => ({ ...c, availability: mixedAvailability(c.vendor) })) })),
+      editJson<ModelsResponse>(page, anyDevice(API_PATHS.models), (m) => ({ catalogs: m.catalogs.map(mixedCatalog) })),
       providers(page),
     ]),
   "models-long-names": (page) =>
@@ -276,7 +285,7 @@ const PATCHES: Record<PatchName, (page: Page) => Promise<unknown>> = {
       catalogs: m.catalogs.map((c) =>
         c.vendor === "claude"
           ? { ...c, availability: "available", defaultModel: LONG_MODEL, models: [...c.models, { id: LONG_MODEL, label: LONG_MODEL, description: "Preview model with extended thinking and a very long marketing description", efforts: ["low", "medium", "high"] }] }
-          : { ...c, availability: mixedAvailability(c.vendor) },
+          : mixedCatalog(c),
       ),
     })),
   "router-working": (page) =>
@@ -295,7 +304,7 @@ const PATCHES: Record<PatchName, (page: Page) => Promise<unknown>> = {
   "router-vendor-agy": (page) =>
     Promise.all([
       editState(page, (state) => ({ ...state, router: { ...state.router, settings: { ...state.router.settings, vendor: "agy", model: null, effort: "high" } } })),
-      editJson<ModelsResponse>(page, anyDevice(API_PATHS.models), (m) => ({ catalogs: m.catalogs.map((c) => ({ ...c, availability: c.vendor === "agy" ? "available" : mixedAvailability(c.vendor) })) })),
+      editJson<ModelsResponse>(page, anyDevice(API_PATHS.models), (m) => ({ catalogs: m.catalogs.map(mixedCatalog) })),
     ]),
   "send-rejected": (page) =>
     page.route(/\/api\/conversations\/\d+\/messages$/, (route) =>
@@ -322,7 +331,7 @@ const PATCHES: Record<PatchName, (page: Page) => Promise<unknown>> = {
   "provider-installing": (page) => providers(page, (v) => (v === "agy" ? { installed: false, availability: "not_installed", job: job("running", INSTALL_LOG.split("\n").slice(0, 2).join("\n")) } : {})),
   "provider-login-code": (page) =>
     providers(page, (v) =>
-      v === "agy"
+      v === "deepseek"
         ? {
             authFlow: {
               flowId: "flow-1",
