@@ -8,6 +8,7 @@ import { API_PATHS, ENV_HOME } from "../../src/shared/index.ts";
 import { resolveHubPaths } from "../../src/shared/paths.ts";
 import { BLIND_PLAN_FILE, type BlindPlan } from "./blind.ts";
 import { diffManifests, type CaptureManifest, type CapturedShot } from "./capture.ts";
+import { MACHINE_CHECKS } from "./checks.ts";
 import { main } from "./cli.ts";
 import { MUTATIONS, applyMutation } from "./mutations.ts";
 import { applyPatch, blockWrites } from "./patches.ts";
@@ -116,6 +117,7 @@ describe("校准用的弄坏与命令行入口", () => {
     expect(MUTATIONS.filter((m) => m.expectSeverity === "P1")).toHaveLength(4);
     expect(MUTATIONS.filter((m) => m.expectSeverity === "P2")).toHaveLength(3);
     for (const m of MUTATIONS) expect(DIMENSIONS).toContain(m.expectDimension);
+    for (const m of MUTATIONS) expect(MACHINE_CHECKS.map((c) => c.id)).not.toContain(m.id);
     await expect(applyMutation({} as Page, "nope")).rejects.toThrow(RangeError);
   });
 

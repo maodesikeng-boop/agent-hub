@@ -183,7 +183,7 @@ export function applyMutationInPage(id: string): void {
       for (const b of railOptions) b.style.width = "calc(100% + 72px)";
       return;
     }
-    case "overlap": {
+    case "covered-message": {
       const frame = one("[data-multiline]");
       frame.style.transform = "translateY(-104px)";
       frame.style.position = "relative";
@@ -220,12 +220,12 @@ export function applyMutationInPage(id: string): void {
       for (const child of second!.querySelectorAll<HTMLElement>("*")) child.style.color = style.color;
       return;
     }
-    case "off-scale-font": {
+    case "small-preview": {
       const body = parseFloat(getComputedStyle(document.body).fontSize);
       for (const el of nav.querySelectorAll<HTMLElement>("button *")) if (parseFloat(getComputedStyle(el).fontSize) < body - 0.5) el.style.fontSize = "11px";
       return;
     }
-    case "dot-joined": {
+    case "dot-suffix": {
       const heading = one('main h1');
       const extra = document.createElement("span");
       extra.textContent = " · agent-hub · Orchestrate · 3 Pieces";

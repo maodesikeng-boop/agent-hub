@@ -21,6 +21,7 @@ import {
 } from "./limits.ts";
 import { runMachineChecks, type MachineFinding } from "./checks.ts";
 import { inPage } from "./in-page-api.ts";
+import { assertIsolated } from "./isolation.ts";
 import { applyMutation } from "./mutations.ts";
 import { applyPatch, blockWrites, heldRequests } from "./patches.ts";
 import { SCREEN_INVENTORY, SCREEN_STEPS, expandShots, type Scenario, type ScreenStep, type Shot } from "./screens.ts";
@@ -34,6 +35,8 @@ export interface CaptureOptions {
   only?: readonly string[];
   /** 校准用：在这些界面（界面 id，或 `<界面>@<视口>` 只弄坏那一个视口）上各注入哪些弄坏（mutations.ts），每个弄坏另出一张图，key 是 `<界面>@<视口>!<弄坏 id>`。 */
   mutate?: Readonly<Record<string, readonly string[]>>;
+  /** 种子数据和隔离守护进程的数据目录放哪，默认 SHOT_WORK_DIR。每次开头清空。 */
+  workDir?: string;
 }
 
 export interface CapturedShot {
@@ -73,6 +76,9 @@ interface Backend {
  * 自己起、自己关隔离的守护进程和浏览器，不碰用户正在跑的守护进程和数据目录。
  */
 export async function captureAll(options: CaptureOptions): Promise<CaptureManifest> {
+  const workDir = options.workDir ?? SHOT_WORK_DIR;
+  assertIsolated(options.outDir);
+  assertIsolated(workDir);
   const shots = expandShots(SCREEN_INVENTORY, options.only);
   const mutate = options.mutate ?? {};
   const jobs: Array<{ shot: Shot; mutation?: string }> = shots.flatMap((shot) => [
@@ -85,15 +91,15 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureManife
   for (const entry of readdirSync(options.outDir)) {
     if (entry.endsWith(".png")) rmSync(join(options.outDir, entry), { force: true });
   }
-  rmSync(SHOT_WORK_DIR, { recursive: true, force: true });
-  mkdirSync(SHOT_WORK_DIR, { recursive: true });
+  rmSync(workDir, { recursive: true, force: true });
+  mkdirSync(workDir, { recursive: true });
 
   const backends = new Map<Scenario, Backend>();
   let browser: Browser | null = null;
   try {
     browser = await chromium.launch();
     for (const scenario of new Set(shots.map((s) => s.screen.scenario))) {
-      const backend = await startBackend(scenario, options.repoRoot);
+      const backend = await startBackend(scenario, options.repoRoot, workDir);
       backends.set(scenario, backend);
       backend.cookies = await signIn(browser, backend.daemon);
     }
@@ -133,9 +139,9 @@ export function diffManifests(a: CaptureManifest, b: CaptureManifest): string[] 
   return keys.filter((key) => left.get(key) !== right.get(key));
 }
 
-async function startBackend(scenario: Scenario, repoRoot: string): Promise<Backend> {
-  const home = join(SHOT_WORK_DIR, scenario, "home");
-  const seed = await seedScenario({ home, projectsDir: join(SHOT_WORK_DIR, "projects"), scenario });
+async function startBackend(scenario: Scenario, repoRoot: string, workDir: string): Promise<Backend> {
+  const home = join(workDir, scenario, "home");
+  const seed = await seedScenario({ home, projectsDir: join(workDir, "projects"), scenario });
   if (scenario !== "two-devices") {
     const daemon = await startIsolatedDaemon({ home, repoRoot });
     return { daemon, seed, cookies: [], stop: () => daemon.stop() };

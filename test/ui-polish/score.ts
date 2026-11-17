@@ -73,14 +73,14 @@ const SEVERITY_RANK: Record<Severity, number> = { P0: 0, P1: 1, P2: 2, P3: 3 };
 
 const DEFAULT_MUTATION_BOXES: Readonly<Record<string, Finding["box"]>> = {
   "clip-right": { x: 0.8, y: 0.22, w: 0.2, h: 0.33 },
-  overlap: { x: 0.26, y: 0.78, w: 0.46, h: 0.1 },
+  "covered-message": { x: 0.26, y: 0.78, w: 0.46, h: 0.1 },
   "low-contrast": { x: 0.26, y: 0.09, w: 0.46, h: 0.76 },
   misalign: { x: 0.008, y: 0.35, w: 0.2, h: 0.08 },
   "gradient-shadow": { x: 0.675, y: 0.905, w: 0.045, h: 0.065 },
   cramped: { x: 0.76, y: 0, w: 0.24, h: 0.65 },
   "two-primaries": { x: 0.81, y: 0.38, w: 0.17, h: 0.11 },
-  "off-scale-font": { x: 0.008, y: 0.18, w: 0.2, h: 0.52 },
-  "dot-joined": { x: 0.24, y: 0.015, w: 0.35, h: 0.045 },
+  "small-preview": { x: 0.008, y: 0.18, w: 0.2, h: 0.52 },
+  "dot-suffix": { x: 0.24, y: 0.015, w: 0.35, h: 0.045 },
   "radius-mix": { x: 0.26, y: 0.54, w: 0.46, h: 0.31 },
 };
 
@@ -140,9 +140,11 @@ function mergeFindingsForShot(
     for (const f of source.findings) {
       let bestIndex = -1;
       let bestIou = -1;
+      const dimension = dimensionOfRule(f.rule);
       for (let i = 0; i < merged.length; i++) {
         const candidate = merged[i]!;
-        if (candidate.by.includes(source.by)) continue;
+        // 只并同一项里的：跨项并成一条，被并进来的那家这一项就少算一条，分会被抬高
+        if (candidate.by.includes(source.by) || dimensionOfRule(candidate.rule) !== dimension) continue;
         const iou = boxIou(candidate.box, f.box);
         if (iou >= FINDING_MATCH_IOU && iou > bestIou) {
           bestIndex = i;
@@ -179,7 +181,7 @@ function mergeFindingsForShot(
 
 /**
  * 前置：cards 里每张图每家评委各有一张卡，卡的 imageSha256 和 manifest 对得上。
- * 后置：两家的发现按“同一张图、框的交并比不低于 FINDING_MATCH_IOU 或引了同一条规则”并成一条；
+ * 后置：两家的发现按“同一张图、同一项、框的交并比不低于 FINDING_MATCH_IOU 或引了同一条规则”并成一条，留下更重的那条；
  * 机器检查的发现并进去；被 dismissals 命中的标上理由、不计分；分数按 rubric.scoreFromFindings 算。
  * 缺卡、sha256 对不上抛 Error 并列出是哪些图哪家评委。
  */

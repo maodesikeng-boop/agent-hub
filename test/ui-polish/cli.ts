@@ -12,11 +12,13 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { captureAll, diffManifests, type CaptureManifest, type CapturedShot } from "./capture.ts";
+import { planMatches, readBlindPlan, unblindCard, writeBlindPlan, type BlindItem, type BlindPlan, type SentinelSource } from "./blind.ts";
+import { captureAll, diffManifests, type CaptureManifest } from "./capture.ts";
 import { MACHINE_CHECKS } from "./checks.ts";
+import { assertIsolated } from "./isolation.ts";
 import { judgeBrief } from "./judge-prompt.ts";
-import { CALIBRATION_RUNS, JUDGE_BATCH_CANDIDATES, PASS_SCORE, RECORD_DIR, ROUND_OUTPUT_DIR } from "./limits.ts";
-import { CALIBRATION_BASELINE, CALIBRATION_REAL_SHOTS, MUTATIONS } from "./mutations.ts";
+import { CALIBRATION_RUNS, JUDGE_BATCH_CANDIDATES, PASS_SCORE, RECORD_DIR, ROUND_OUTPUT_DIR, SENTINEL_MAX_DRIFT } from "./limits.ts";
+import { CALIBRATION_BASELINE, CALIBRATION_REAL_SHOTS, MUTATIONS, SENTINEL_MUTATIONS } from "./mutations.ts";
 import { readRoundRecords, reportHtml, writeRoundRecord, type RoundRecord } from "./record.ts";
 import { parseScoreCard, type ScoreCard } from "./rubric.ts";
 import {
@@ -30,7 +32,7 @@ import {
   type Dismissal,
   type RoundScores,
 } from "./score.ts";
-import { SCREEN_AREAS, SCREEN_INVENTORY, batchShots, inventoryMarkdown, type ScreenSpec, type Shot } from "./screens.ts";
+import { SCREEN_AREAS, SCREEN_INVENTORY, batchShots, inventoryMarkdown, type ScreenSpec } from "./screens.ts";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
 const ROUND_PATTERN = /^[A-Z]\d{1,2}(?:-confirm)?$/;
@@ -60,11 +62,13 @@ export async function main(argv: readonly string[]): Promise<number> {
         return 0;
       case "shots": {
         const { values } = parse(rest, { round: { type: "string" }, only: { type: "string", multiple: true }, verify: { type: "boolean" } });
-        return await shots(roundDir(values.round, "R00"), values.only?.flatMap((v) => v.split(",")), values.verify === true);
+        const round = values.round ?? "R00";
+        return await shots(round, roundDir(round, round), values.only?.flatMap((v) => v.split(",")), values.verify === true);
       }
       case "calibrate-shots": {
         const { values } = parse(rest, { round: { type: "string" } });
-        return await calibrateShots(roundDir(values.round, "C1"));
+        const round = values.round ?? "C1";
+        return await calibrateShots(round, roundDir(round, round));
       }
       case "brief": {
         const { values } = parse(rest, {
@@ -163,10 +167,13 @@ function parse<T extends NonNullable<Parameters<typeof parseArgs>[0]>["options"]
   return parseArgs({ args, options, allowPositionals: false, strict: true });
 }
 
+/** 这一轮的截图、评分卡放哪。每个命令都从这里拿目录，拿到之前先判隔离。 */
 function roundDir(round: string | undefined, fallback: string, outRoot = ROUND_OUTPUT_DIR): string {
   const id = round ?? fallback;
   if (!ROUND_PATTERN.test(id)) throw new UsageError(`轮次 ${id} 不对，要像 R01、C1 这样：一个大写字母加一到两位数字`);
-  return join(outRoot, id);
+  const dir = join(outRoot, id);
+  assertIsolated(dir);
+  return dir;
 }
 
 function requireRound(round: string | undefined): string {
@@ -220,30 +227,49 @@ function readManifest(outDir: string): CaptureManifest {
   return JSON.parse(readFileSync(manifestPath, "utf8")) as CaptureManifest;
 }
 
-function toShot(captured: CapturedShot): Shot {
-  const found = SCREEN_INVENTORY.find((s) => s.id === captured.screenId);
-  const fallbackArea = SCREEN_AREAS.find((a) => captured.screenId.startsWith(`${a}.`)) ?? "shell";
-  const screen: ScreenSpec = found ?? {
-    id: captured.screenId,
-    area: fallbackArea,
-    title: captured.screenId,
-    viewports: [captured.viewport],
-    state: "normal",
-    scenario: "standard",
-    how: "",
-  };
-  return { key: captured.key, screen, viewport: captured.viewport };
+function screenOf(screenId: string, viewport: BlindItem["viewport"]): ScreenSpec {
+  const found = SCREEN_INVENTORY.find((s) => s.id === screenId);
+  if (found !== undefined) return found;
+  const area = SCREEN_AREAS.find((a) => screenId.startsWith(`${a}.`)) ?? "shell";
+  return { id: screenId, area, title: screenId, viewports: [viewport], state: "normal", scenario: "standard", how: "" };
 }
 
-function planBatches(manifest: CaptureManifest, roundId: string, judge: string, run: number, batchSize: number): Shot[][] {
-  const allShots = manifest.shots.map(toShot);
-  const seed = hashSeed(`${roundId}:${judge}:${run}`);
-  if (roundId.startsWith("C")) {
-    return batchShots(allShots, [], seed, batchSize);
+/** 最近一次校准的基准图和 SENTINEL_MUTATIONS 那几张弄坏的图。校准轮自己、还没校准过时不混哨兵。 */
+function sentinelSource(roundId: string, repoRoot: string, outRoot: string): SentinelSource | undefined {
+  if (roundId.startsWith("C")) return undefined;
+  const calibration = [...readRoundRecords(repoRoot)].reverse().find((r) => r.kind === "calibration");
+  if (calibration === undefined) return undefined;
+  const dir = join(outRoot, calibration.id);
+  const keys = [CALIBRATION_BASELINE, ...SENTINEL_MUTATIONS.map((id) => `${CALIBRATION_BASELINE}!${id}`)];
+  const manifest = existsSync(join(dir, "manifest.json")) ? readManifest(dir) : undefined;
+  const shots = keys.map((key) => manifest?.shots.find((s) => s.key === key));
+  const missing = keys.filter((_, i) => shots[i] === undefined);
+  if (missing.length > 0) {
+    throw new Error(`最近一次校准是 ${calibration.id}，但 ${dir} 里没有这几张图：${missing.join("、")}，没法混进哨兵图。重跑 calibrate-shots --round ${calibration.id} 或把那一轮的截图放回去`);
   }
-  const sentinels = allShots.filter((s) => s.key.includes("!"));
-  const regular = allShots.filter((s) => !s.key.includes("!"));
-  return batchShots(regular, sentinels, seed, batchSize);
+  return { roundId: calibration.id, dir, shots: shots as NonNullable<(typeof shots)[number]>[] };
+}
+
+/** 这一轮的盲测对照表：已有且和清单对得上就用；没有或重截过就重新编号（评审轮混进哨兵图）。 */
+function blindPlanFor(outDir: string, roundId: string, repoRoot: string, outRoot: string): BlindPlan {
+  const manifest = readManifest(outDir);
+  const existing = readBlindPlan(outDir);
+  if (existing !== null && planMatches(existing, manifest)) return existing;
+  return writeBlindPlan(outDir, manifest, hashSeed(roundId), sentinelSource(roundId, repoRoot, outRoot));
+}
+
+function requireBlindPlan(outDir: string): BlindPlan {
+  const plan = readBlindPlan(outDir);
+  if (plan === null) throw new Error(`${outDir} 里没有盲测对照表，先运行 brief`);
+  return plan;
+}
+
+function planBatches(plan: BlindPlan, manifest: CaptureManifest, roundId: string, judge: string, run: number, batchSize: number): BlindItem[][] {
+  const regular = new Map(plan.items.filter((i) => !i.sentinel).map((i) => [i.key, i]));
+  const asShot = (item: BlindItem) => ({ item, screen: screenOf(item.screenId, item.viewport), viewport: item.viewport });
+  const shots = manifest.shots.map((s) => asShot(regular.get(s.key)!));
+  const sentinels = plan.items.filter((i) => i.sentinel).map(asShot);
+  return batchShots(shots, sentinels, hashSeed(`${roundId}:${judge}:${run}`), batchSize).map((batch) => batch.map((s) => s.item));
 }
 
 function cardsDirForBatch(outDir: string, roundId: string, judge: string, batchSize: number, explicitBatchSize: number | undefined, run: number, batch: number): string {
@@ -279,21 +305,22 @@ function runBrief(opts: {
   outRoot: string;
 }): number {
   const outDir = roundDir(opts.roundId, opts.roundId, opts.outRoot);
-  const manifest = readManifest(outDir);
+  const plan = blindPlanFor(outDir, opts.roundId, opts.repoRoot, opts.outRoot);
   const batchSize = resolveBatchSize(opts.repoRoot, opts.explicitBatchSize);
-  const batches = planBatches(manifest, opts.roundId, opts.judge, opts.run, batchSize);
+  const batches = planBatches(plan, readManifest(outDir), opts.roundId, opts.judge, opts.run, batchSize);
   if (opts.batch > batches.length) {
     throw new UsageError(`第 ${opts.batch} 批超出范围（共 ${batches.length} 批，每批最多 ${batchSize} 张）`);
   }
 
   const picked = batches[opts.batch - 1]!;
-  const capturedMap = new Map(manifest.shots.map((s) => [s.key, s]));
+  const idOf = new Map(plan.items.filter((i) => !i.sentinel).map((i) => [i.key, i.id]));
   const records = readRoundRecords(opts.repoRoot);
   const prevReview = [...records].reverse().find((r) => r.kind === "review" || r.kind === "confirm");
   const dismissed =
-    prevReview?.findings
-      .filter((f): f is typeof f & { dismissed: string } => f.dismissed !== undefined)
-      .map((f) => ({ shotKey: f.shotKey, what: f.what, reason: f.dismissed })) ?? [];
+    prevReview?.findings.flatMap((f) => {
+      const id = idOf.get(f.shotKey);
+      return f.dismissed === undefined || id === undefined ? [] : [{ id, what: f.what, reason: f.dismissed }];
+    }) ?? [];
 
   const cardsDir = cardsDirForBatch(outDir, opts.roundId, opts.judge, batchSize, opts.explicitBatchSize, opts.run, opts.batch);
   const text = judgeBrief({
@@ -301,14 +328,17 @@ function runBrief(opts: {
     run: opts.run,
     baselineImage: join(opts.repoRoot, RECORD_DIR, "baseline", "baseline.png"),
     styleBrief: join(opts.repoRoot, RECORD_DIR, "baseline", "style-brief.md"),
-    shots: picked.map((shot) => {
-      const cs = capturedMap.get(shot.key)!;
+    items: picked.map((item) => {
+      const screen = screenOf(item.screenId, item.viewport);
       return {
-        shot,
-        file: join(outDir, cs.file),
-        ...(cs.focusFile === undefined ? {} : { focusFile: join(outDir, cs.focusFile) }),
-        sha256: cs.sha256,
-        machineFacts: cs.machineFindings.map((mf) => `${mf.rule}（${mf.severity}）：${mf.what}`),
+        id: item.id,
+        title: screen.title,
+        viewport: item.viewport,
+        ...(screen.focus === undefined ? {} : { focus: screen.focus }),
+        file: join(outDir, item.file),
+        ...(item.focusFile === undefined ? {} : { focusFile: join(outDir, item.focusFile) }),
+        sha256: item.sha256,
+        machineFacts: item.machineFindings.map((mf) => `${mf.rule}（${mf.severity}）：${mf.what}`),
       };
     }),
     cardsDir,
@@ -328,22 +358,21 @@ function runCheckCards(opts: {
   outRoot: string;
 }): number {
   const outDir = roundDir(opts.roundId, opts.roundId, opts.outRoot);
-  const manifest = readManifest(outDir);
-  const capturedMap = new Map(manifest.shots.map((s) => [s.key, s]));
+  const plan = requireBlindPlan(outDir);
   const errors: string[] = [];
 
   if (opts.batch !== undefined) {
     const run = opts.run ?? 1;
     const batchSize = resolveBatchSize(opts.repoRoot, opts.explicitBatchSize);
-    const batches = planBatches(manifest, opts.roundId, opts.judge, run, batchSize);
+    const batches = planBatches(plan, readManifest(outDir), opts.roundId, opts.judge, run, batchSize);
     if (opts.batch > batches.length) {
       throw new UsageError(`第 ${opts.batch} 批超出范围（共 ${batches.length} 批）`);
     }
     const picked = batches[opts.batch - 1]!;
     const cardsDir = cardsDirForBatch(outDir, opts.roundId, opts.judge, batchSize, opts.explicitBatchSize, run, opts.batch);
 
-    for (const shot of picked) {
-      const filePath = join(cardsDir, `${shot.key}.json`);
+    for (const item of picked) {
+      const filePath = join(cardsDir, `${item.id}.json`);
       if (!existsSync(filePath)) {
         errors.push(`缺评分卡：${filePath}`);
         continue;
@@ -354,11 +383,10 @@ function runCheckCards(opts: {
         continue;
       }
       const card = parsed.card;
-      const cs = capturedMap.get(shot.key)!;
-      if (card.shot !== shot.key) errors.push(`${filePath}：shot 写成了 ${card.shot}，应为 ${shot.key}`);
+      if (card.shot !== item.id) errors.push(`${filePath}：shot 写成了 ${card.shot}，应为 ${item.id}`);
       if (card.judge !== opts.judge) errors.push(`${filePath}：judge 写成了 ${card.judge}，应为 ${opts.judge}`);
       if (card.run !== run) errors.push(`${filePath}：run 写成了 ${card.run}，应为 ${run}`);
-      if (card.imageSha256 !== cs.sha256) errors.push(`${filePath}：imageSha256 与清单不一致（应为 ${cs.sha256}）`);
+      if (card.imageSha256 !== item.sha256) errors.push(`${filePath}：imageSha256 和这张图对不上（应为 ${item.sha256}）`);
     }
 
     if (errors.length > 0) {
@@ -375,7 +403,8 @@ function runCheckCards(opts: {
       ? join(outDir, "cards", `batch-size-${opts.explicitBatchSize}`, slug)
       : join(outDir, "cards", slug);
   const files = collectJsonFiles(rootSearchDir);
-  const seen = new Map<string, ScoreCard>();
+  const byId = new Map(plan.items.map((i) => [i.id, i]));
+  const seen = new Set<string>();
 
   for (const filePath of files) {
     const parsed = parseScoreCard(readFileSync(filePath, "utf8"));
@@ -386,15 +415,15 @@ function runCheckCards(opts: {
     const card = parsed.card;
     if (opts.run !== undefined && card.run !== opts.run) continue;
     if (card.judge !== opts.judge) errors.push(`${filePath}：judge 写成了 ${card.judge}，应为 ${opts.judge}`);
-    const cs = capturedMap.get(card.shot);
-    if (cs === undefined) {
-      errors.push(`${filePath}：清单里没有 ${card.shot}`);
-    } else if (card.imageSha256 !== cs.sha256) {
-      errors.push(`${filePath}：imageSha256 与清单不一致（应为 ${cs.sha256}）`);
+    const item = byId.get(card.shot);
+    if (item === undefined) {
+      errors.push(`${filePath}：这一轮没有编号 ${card.shot} 的图`);
+    } else if (card.imageSha256 !== item.sha256) {
+      errors.push(`${filePath}：imageSha256 和这张图对不上（应为 ${item.sha256}）`);
     }
     const id = `${card.shot}#${card.run}`;
     if (seen.has(id)) errors.push(`${filePath}：${card.shot}（run ${card.run}）重复交卡`);
-    seen.set(id, card);
+    seen.add(id);
   }
 
   const expectedRuns =
@@ -404,10 +433,8 @@ function runCheckCards(opts: {
         ? Array.from({ length: CALIBRATION_RUNS }, (_, i) => i + 1)
         : [1];
   for (const r of expectedRuns) {
-    for (const cs of manifest.shots) {
-      if (!seen.has(`${cs.key}#${r}`)) {
-        errors.push(`缺评分卡：${cs.key}（run ${r}）`);
-      }
+    for (const item of plan.items) {
+      if (!seen.has(`${item.id}#${r}`)) errors.push(`缺评分卡：${item.id}（run ${r}）`);
     }
   }
 
@@ -419,22 +446,39 @@ function runCheckCards(opts: {
   return 0;
 }
 
-function loadCardsFromDir(dir: string): ScoreCard[] {
-  const files = collectJsonFiles(dir);
-  const cards: ScoreCard[] = [];
+/** 读一个目录下的全部评分卡，按这一轮的对照表把编号换回真实的 key。格式不对、编号不认识都抛 Error。 */
+function loadCards(dir: string, plan: BlindPlan): Array<{ card: ScoreCard; item: BlindItem }> {
+  const loaded: Array<{ card: ScoreCard; item: BlindItem }> = [];
   const bad: string[] = [];
-  for (const filePath of files) {
+  for (const filePath of collectJsonFiles(dir)) {
     const parsed = parseScoreCard(readFileSync(filePath, "utf8"));
-    if (!parsed.ok) {
-      bad.push(`${filePath}：${parsed.reason}`);
-    } else {
-      cards.push(parsed.card);
-    }
+    const unblinded = parsed.ok ? unblindCard(plan, parsed.card) : undefined;
+    if (!parsed.ok) bad.push(`${filePath}：${parsed.reason}`);
+    else if (unblinded === undefined) bad.push(`${filePath}：这一轮没有编号 ${parsed.card.shot} 的图`);
+    else loaded.push(unblinded);
   }
   if (bad.length > 0) {
-    throw new Error(`发现格式不合格的评分卡：\n${bad.join("\n")}`);
+    throw new Error(`发现不合格的评分卡：\n${bad.join("\n")}`);
   }
-  return cards;
+  return loaded;
+}
+
+/**
+ * 哨兵图这一次的分和它们在校准时的分比，漂得太远的返回它们的 key。
+ * 每家评委都要评过每张哨兵图，校准轮的评分卡也要在；缺了抛 Error，不悄悄跳过。
+ */
+function driftedSentinels(plan: BlindPlan, loaded: ReadonlyArray<{ card: ScoreCard; item: BlindItem }>, outRoot: string): string[] {
+  const sentinels = plan.items.filter((i) => i.sentinel);
+  if (sentinels.length === 0) return [];
+  const judges = [...new Set(loaded.map((l) => l.card.judge))];
+  const missing = sentinels.flatMap((s) => judges.filter((j) => !loaded.some((l) => l.item.id === s.id && l.card.judge === j)).map((j) => `${s.id}（缺 ${j}）`));
+  if (missing.length > 0) throw new Error(`评分卡不完整：${missing.join("；")}`);
+  const calDir = join(outRoot, plan.sentinelsFrom!);
+  const calCards = loadCards(join(calDir, "cards"), requireBlindPlan(calDir)).map((l) => l.card);
+  const noBaseline = sentinels.filter((s) => !calCards.some((c) => c.shot === s.key)).map((s) => s.key);
+  if (noBaseline.length > 0) throw new Error(`校准轮 ${plan.sentinelsFrom} 里找不到这几张图的评分卡：${noBaseline.join("、")}`);
+  const roundCards = loaded.filter((l) => l.item.sentinel).map((l) => l.card);
+  return sentinelDrift(calCards, roundCards, sentinels.map((s) => s.key));
 }
 
 function recordToScores(record: RoundRecord): RoundScores {
@@ -451,36 +495,19 @@ function recordToScores(record: RoundRecord): RoundScores {
 function runScore(opts: { roundId: string; dismissalsFile: string | undefined; repoRoot: string; outRoot: string }): number {
   const outDir = roundDir(opts.roundId, opts.roundId, opts.outRoot);
   const manifest = readManifest(outDir);
-  const allCards = loadCardsFromDir(join(outDir, "cards"));
+  const plan = requireBlindPlan(outDir);
+  const loaded = loadCards(join(outDir, "cards"), plan);
   const dismissals: Dismissal[] =
     opts.dismissalsFile === undefined ? [] : (JSON.parse(readFileSync(opts.dismissalsFile, "utf8")) as Dismissal[]);
 
-  const sentinelShots = manifest.shots.filter((s) => s.key.includes("!"));
-  if (sentinelShots.length > 0) {
-    const records = readRoundRecords(opts.repoRoot);
-    const calRec = [...records].reverse().find((r) => r.kind === "calibration");
-    if (calRec !== undefined) {
-      const calDir = join(opts.outRoot, calRec.id, "cards");
-      const calCards = loadCardsFromDir(calDir);
-      if (calCards.length > 0) {
-        const drifted = sentinelDrift(
-          calCards,
-          allCards,
-          sentinelShots.map((s) => s.key),
-        );
-        if (drifted.length > 0) {
-          process.stderr.write(`哨兵图漂移超标，本轮评审作废需重评：${drifted.join("、")}\n`);
-          return 1;
-        }
-      }
-    }
+  const drifted = driftedSentinels(plan, loaded, opts.outRoot);
+  if (drifted.length > 0) {
+    process.stderr.write(`哨兵图的分和校准时差得超过 ${SENTINEL_MAX_DRIFT} 分，这次评审作废，重评：${drifted.join("、")}\n`);
+    return 1;
   }
 
-  const evalShots = manifest.shots.filter((s) => !s.key.includes("!"));
-  const evalKeys = new Set(evalShots.map((s) => s.key));
-  const evalManifest: CaptureManifest = { ...manifest, shots: evalShots };
-  const evalCards = allCards.filter((c) => evalKeys.has(c.shot));
-  const scores = mergeRound({ manifest: evalManifest, cards: evalCards, dismissals });
+  const cards = loaded.filter((l) => !l.item.sentinel).map((l) => l.card);
+  const scores = mergeRound({ manifest, cards, dismissals });
 
   const existing = readRoundRecords(opts.repoRoot);
   const reviewRecords = existing.filter((r) => r.kind === "review" || r.kind === "confirm");
@@ -496,7 +523,7 @@ function runScore(opts: { roundId: string; dismissalsFile: string | undefined; r
   const prevScores = pastHistory.at(-1)?.scores;
   const regressed = prevScores === undefined ? [] : regressions(prevScores, scores);
 
-  const shaMap = new Map(evalShots.map((s) => [s.key, s.sha256]));
+  const shaMap = new Map(manifest.shots.map((s) => [s.key, s.sha256]));
   const record: RoundRecord = {
     id: opts.roundId,
     kind,
@@ -560,6 +587,7 @@ function calibrationMarkdown(
 function runCalibration(opts: { roundId: string; repoRoot: string; outRoot: string }): number {
   const outDir = roundDir(opts.roundId, opts.roundId, opts.outRoot);
   const manifest = readManifest(outDir);
+  const plan = requireBlindPlan(outDir);
   const cardsRoot = join(outDir, "cards");
   const reports = new Map<number, CalibrationReport>();
   let allJudges = new Set<string>();
@@ -567,14 +595,14 @@ function runCalibration(opts: { roundId: string; repoRoot: string; outRoot: stri
   for (const size of JUDGE_BATCH_CANDIDATES) {
     const dir = join(cardsRoot, `batch-size-${size}`);
     if (!existsSync(dir)) continue;
-    const cards = loadCardsFromDir(dir);
+    const cards = loadCards(dir, plan).map((l) => l.card);
     if (cards.length === 0) continue;
     for (const c of cards) allJudges.add(c.judge);
     reports.set(size, calibrationReport({ manifest, cards, baselineKey: CALIBRATION_BASELINE, mutations: MUTATIONS }));
   }
 
   if (reports.size === 0) {
-    const fallbackCards = loadCardsFromDir(cardsRoot);
+    const fallbackCards = loadCards(cardsRoot, plan).map((l) => l.card);
     if (fallbackCards.length === 0) {
       throw new Error(`找不到任何校准评分卡：${cardsRoot}`);
     }
@@ -661,9 +689,10 @@ function runReport(opts: { roundId: string; previousId: string | undefined; repo
   return 0;
 }
 
-async function shots(outDir: string, only: readonly string[] | undefined, verify: boolean): Promise<number> {
+async function shots(roundId: string, outDir: string, only: readonly string[] | undefined, verify: boolean): Promise<number> {
   const started = Date.now();
   const first = await captureAll({ repoRoot: REPO_ROOT, outDir, ...(only === undefined ? {} : { only }) });
+  writeBlindPlan(outDir, first, hashSeed(roundId), sentinelSource(roundId, REPO_ROOT, ROUND_OUTPUT_DIR));
   report(first, outDir, started);
   if (!verify) return 0;
   const again = mkdtempSync(join(ROUND_OUTPUT_DIR, ".verify-"));
@@ -678,7 +707,7 @@ async function shots(outDir: string, only: readonly string[] | undefined, verify
   return 1;
 }
 
-async function calibrateShots(outDir: string): Promise<number> {
+async function calibrateShots(roundId: string, outDir: string): Promise<number> {
   const started = Date.now();
   const keys: readonly string[] = [CALIBRATION_BASELINE, ...CALIBRATION_REAL_SHOTS];
   const manifest = await captureAll({
@@ -691,6 +720,7 @@ async function calibrateShots(outDir: string): Promise<number> {
   for (const s of manifest.shots) if (!keep.includes(s)) for (const f of [s.file, s.focusFile]) if (f !== undefined) rmSync(join(outDir, f), { force: true });
   const trimmed: CaptureManifest = { ...manifest, shots: keep };
   writeFileSync(join(outDir, "manifest.json"), `${JSON.stringify(trimmed, null, 2)}\n`);
+  writeBlindPlan(outDir, trimmed, hashSeed(roundId));
   report(trimmed, outDir, started);
   return 0;
 }

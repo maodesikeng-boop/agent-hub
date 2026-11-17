@@ -83,17 +83,52 @@ export function dimensionOfRule(rule: string): Dimension {
   return PRINCIPLE_DIMENSIONS.get(rule) ?? "standard";
 }
 
-/** 分档：一项的分数长什么样。分数由发现算出来（scoreFromFindings），这张表是给人看的对照。 */
-export const SCORE_BANDS: ReadonlyArray<{ score: number; means: string }> = [
-  { score: 10, means: "这一项一条发现都没有" },
-  { score: 9, means: "只有一两条 P3，不改也不影响发布" },
-  { score: 8, means: "有 1 条 P2，或 3 条以上 P3" },
-  { score: 7, means: "有 2 到 3 条 P2" },
-  { score: 6, means: "有 1 条 P1，或 4 条以上 P2" },
-  { score: 5, means: "有 2 条 P1" },
-  { score: 4, means: "有 3 条以上 P1；或这张图上有 1 条 P0（P0 不分项，四项一起压到这一档）" },
-  { score: 2, means: "这张图上有 2 条以上 P0：这一屏基本没法用" },
-];
+/**
+ * 分档表，算分和给评委看的分档文字都从这一份来：一项里某种严重度的发现到了 count 条，这一项最多 cap 分。
+ * P0 不分项：数的是整张图上的 P0，四项一起封顶（内容看不到、功能用不了时四项都不成立）。
+ * 同一严重度里 count 升序、cap 降序。
+ */
+export const SEVERITY_CAPS: Readonly<Record<Severity, ReadonlyArray<{ count: number; cap: number }>>> = {
+  P0: [
+    { count: 1, cap: 4 },
+    { count: 2, cap: 2 },
+  ],
+  P1: [
+    { count: 1, cap: 6 },
+    { count: 2, cap: 5 },
+    { count: 3, cap: 4 },
+  ],
+  P2: [
+    { count: 1, cap: 8 },
+    { count: 2, cap: 7 },
+    { count: 4, cap: 6 },
+  ],
+  P3: [
+    { count: 1, cap: 9 },
+    { count: 3, cap: 8 },
+  ],
+};
+
+function capOf(caps: typeof SEVERITY_CAPS, severity: Severity, count: number): number {
+  return Math.min(10, ...caps[severity].filter((step) => count >= step.count).map((step) => step.cap));
+}
+
+/** 按分档表写出每一档长什么样，从 10 分到最低一档。 */
+export function scoreBands(caps: typeof SEVERITY_CAPS): Array<{ score: number; means: string }> {
+  const conditions = new Map<number, string[]>();
+  for (const severity of SEVERITIES) {
+    caps[severity].forEach((step, i) => {
+      const next = caps[severity][i + 1];
+      const range = next === undefined ? `${step.count} 条以上` : next.count - 1 === step.count ? `${step.count} 条` : `${step.count} 到 ${next.count - 1} 条`;
+      const text = severity === "P0" ? `这张图上有 ${range} P0（P0 不分项，四项一起压到这一档）` : `这一项有 ${range} ${severity}`;
+      conditions.set(step.cap, [...(conditions.get(step.cap) ?? []), text]);
+    });
+  }
+  const scores = [...conditions.keys()].sort((a, b) => b - a);
+  return [{ score: 10, means: "这一项一条发现都没有" }, ...scores.map((score) => ({ score, means: conditions.get(score)!.join("；或") }))];
+}
+
+export const SCORE_BANDS = scoreBands(SEVERITY_CAPS);
 
 const box = z.object({
   x: z.number().min(0).max(1),
@@ -119,7 +154,7 @@ const score = z.number().int().min(1).max(10);
 
 /** 评委对一张图交的评分卡（一个 JSON 文件）。 */
 export const scoreCardSchema = z.object({
-  /** `<界面 id>@<视口>`。 */
+  /** 盲测编号 `item-NNN`（blind.ts），读进来以后由 cli 换回 `<界面 id>@<视口>`。 */
   shot: z.string().min(1),
   /** `<厂商>/<模型>`。 */
   judge: z.string().min(1),
@@ -137,42 +172,22 @@ export type ScoreCard = z.infer<typeof scoreCardSchema>;
 
 export type DimensionScores = Record<Dimension, number>;
 
-function capForDimension(p1: number, p2: number, p3: number): number {
-  const p1Cap = p1 === 0 ? 10 : p1 === 1 ? 6 : p1 === 2 ? 5 : 4;
-  const p2Cap = p2 === 0 ? 10 : p2 === 1 ? 8 : p2 <= 3 ? 7 : 6;
-  const p3Cap = p3 === 0 ? 10 : p3 <= 2 ? 9 : 8;
-  return Math.min(p1Cap, p2Cap, p3Cap);
-}
-
 /**
- * 按 SCORE_BANDS 把一张图的发现算成四项分数。
+ * 按 SEVERITY_CAPS 把一张图的发现算成四项分数。
  * 后置：每项从 10 分起，按这一项里各严重度的条数取表里最低的那一档；没有发现的项是 10。
- * P0 不分项：内容看不到、功能用不了时四项都不成立，所以任何一条 P0 把四项都按 P0 的条数压到 4 分或 2 分。
- * 同样的发现不管顺序算出来一样。
+ * 任何一条 P0 把四项都按整张图上 P0 的条数封顶。同样的发现不管顺序算出来一样。
  */
 export function scoreFromFindings(findings: ReadonlyArray<Pick<Finding, "rule" | "severity">>): DimensionScores {
-  const counts: Record<Dimension, { P1: number; P2: number; P3: number }> = {
-    style: { P1: 0, P2: 0, P3: 0 },
-    standard: { P1: 0, P2: 0, P3: 0 },
-    aesthetic: { P1: 0, P2: 0, P3: 0 },
-    ux: { P1: 0, P2: 0, P3: 0 },
-  };
+  const counts = Object.fromEntries(DIMENSIONS.map((d) => [d, { P0: 0, P1: 0, P2: 0, P3: 0 }])) as Record<Dimension, Record<Severity, number>>;
   let p0 = 0;
   for (const item of findings) {
     const dim = dimensionOfRule(item.rule);
-    if (item.severity === "P0") {
-      p0++;
-    } else {
-      counts[dim][item.severity]++;
-    }
+    if (item.severity === "P0") p0++;
+    else counts[dim][item.severity]++;
   }
-  const p0Cap = p0 === 0 ? 10 : p0 === 1 ? 4 : 2;
-  return {
-    style: Math.min(p0Cap, capForDimension(counts.style.P1, counts.style.P2, counts.style.P3)),
-    standard: Math.min(p0Cap, capForDimension(counts.standard.P1, counts.standard.P2, counts.standard.P3)),
-    aesthetic: Math.min(p0Cap, capForDimension(counts.aesthetic.P1, counts.aesthetic.P2, counts.aesthetic.P3)),
-    ux: Math.min(p0Cap, capForDimension(counts.ux.P1, counts.ux.P2, counts.ux.P3)),
-  };
+  const p0Cap = capOf(SEVERITY_CAPS, "P0", p0);
+  const score = (dim: Dimension) => Math.min(p0Cap, ...(["P1", "P2", "P3"] as const).map((sev) => capOf(SEVERITY_CAPS, sev, counts[dim][sev])));
+  return { style: score("style"), standard: score("standard"), aesthetic: score("aesthetic"), ux: score("ux") };
 }
 
 /** 一张图的页面分：四项里最低的那一项。 */

@@ -1,7 +1,7 @@
 // 种子数据（docs/ui-polish-loop-design.md 第 3.2 节）：用账本自己的接口和固定时钟，往一个空的数据目录里写一套固定的数据。
 // 不变量：不直接写 SQL 造业务数据，形状由账本保证；同一个剧本写两次，库里除自增编号以外的内容和时间戳逐字段相同。
 import { spawn, execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,6 +28,7 @@ import {
   type VendorAvailability,
 } from "../../src/shared/index.ts";
 import { wrapScriptAsPlatformCli } from "../fake-cli-shim.ts";
+import { assertIsolated } from "./isolation.ts";
 import { BROWSER_NOW_ISO, SEED_START_ISO, SEED_STEP_MS } from "./limits.ts";
 import type { Scenario } from "./screens.ts";
 
@@ -65,6 +66,7 @@ const SEED_AVAILABILITY: Partial<Record<AgentVendor, VendorAvailability>> = { cl
  * home 不是空的抛 Error，不覆盖。
  */
 export async function seedScenario(options: SeedOptions): Promise<SeedResult> {
+  for (const dir of [options.home, peerHomeOf(options.home), options.projectsDir]) assertIsolated(dir);
   const result = seedHome(options.home, options.projectsDir, options.scenario, SEED_DEVICES[0]);
   // 第二台设备的数据目录挨着放（peerHomeOf），截图命令在它上面另起一个守护进程再配对
   if (options.scenario === "two-devices") seedHome(peerHomeOf(options.home), options.projectsDir, "two-devices-peer", SEED_DEVICES[1]);
@@ -76,8 +78,8 @@ export const peerHomeOf = (home: string): string => `${resolve(home)}-peer`;
 
 function seedHome(rawHome: string, projectsDir: string, scenario: Scenario | "two-devices-peer", device: (typeof SEED_DEVICES)[number]): SeedResult {
   const home = resolve(rawHome);
+  assertIsolated(home);
   if (existsSync(home) && readdirSync(home).length > 0) throw new Error(`种子目录 ${home} 不是空的，不覆盖`);
-  assertIsolatedHome(home);
   const paths = resolveHubPaths({ [ENV_HOME]: home }, homedir());
   mkdirSync(paths.stateDir, { recursive: true });
   writeFileSync(paths.deviceFile, `${JSON.stringify(device, null, 2)}\n`, { mode: 0o600 });
@@ -451,22 +453,6 @@ function stress(s: Story): void {
   }
   s.routerCommand("把所有抓取任务的失败率汇总一下，按站点排序，超过 5% 的标红", "answered", { intent: "answer", reply: "汇总如下：\n\n| 站点 | 失败率 |\n| --- | --- |\n| a.example | 6.1% |\n| b.example | 0.4% |", actions: [] });
 }
-/** 截图用的数据目录必须是隔离的：落在用户真实的数据目录（~/.agent-hub）里就拒绝。 */
-export function assertIsolatedHome(home: string): void {
-  const real = (p: string) => {
-    try {
-      return realpathSync(p);
-    } catch {
-      return resolve(p);
-    }
-  };
-  const target = real(home);
-  const userData = real(join(homedir(), ".agent-hub"));
-  if (target === userData || target.startsWith(userData + sep) || userData.startsWith(target + sep)) {
-    throw new Error(`截图用的数据目录 ${target} 和真实数据目录 ${userData} 重叠，拒绝启动`);
-  }
-}
-
 export interface IsolatedDaemon {
   /** 带登录口令的网址，打开就登录。 */
   loginUrl: string;
@@ -487,8 +473,9 @@ const LOGIN_URL = /http:\/\/127\.0\.0\.1:(\d+)\/auth\?token=([A-Za-z0-9_-]+)/;
  */
 export async function startIsolatedDaemon(options: { home: string; repoRoot: string; pairWith?: IsolatedDaemon }): Promise<IsolatedDaemon> {
   const home = resolve(options.home);
-  assertIsolatedHome(home);
   const scratch = join(home, "..", `${home.split(sep).pop()}-scratch`);
+  assertIsolated(home);
+  assertIsolated(scratch);
   mkdirSync(join(scratch, "user-home"), { recursive: true });
   const env: Record<string, string> = {
     PATH: process.env.PATH ?? "",

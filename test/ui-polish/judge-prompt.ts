@@ -1,7 +1,7 @@
 // 评委的任务说明（docs/ui-polish-loop-design.md 第 3.3 节）：给评委 Worker 的话只在这一处拼。
-// 评委只看图和这份说明，不读代码、不看上一轮的分数、不知道哪些图是哨兵或弄坏的。
+// 评委只看图和这份说明，不读代码、不看上一轮的分数。图只用盲测编号（blind.ts），看不出哪张是基准图、哨兵或弄坏的。
 import { join } from "node:path";
-import { FINDING_TEXT_MAX_CHARS, MAX_FINDINGS_PER_CARD } from "./limits.ts";
+import { FINDING_TEXT_MAX_CHARS, MAX_FINDINGS_PER_CARD, type ViewportName } from "./limits.ts";
 import {
   DIMENSIONS,
   DIMENSION_TITLES,
@@ -11,7 +11,6 @@ import {
   SEVERITY_MEANS,
   type ScoreCard,
 } from "./rubric.ts";
-import type { Shot } from "./screens.ts";
 
 export interface JudgeBriefInput {
   /** `<厂商>/<模型>`，写进评分卡。 */
@@ -21,18 +20,21 @@ export interface JudgeBriefInput {
   /** 基准图和风格说明的绝对路径。 */
   baselineImage: string;
   styleBrief: string;
-  /** 这一批要评的图：整屏图、局部图的绝对路径，机器量出来的毛病，整屏图的 sha256。 */
-  shots: ReadonlyArray<{
-    shot: Shot;
+  /** 这一批要评的图：盲测编号、界面名和视口、评委看的整屏图和局部图的绝对路径、机器量出来的毛病、整屏图的 sha256。 */
+  items: ReadonlyArray<{
+    id: string;
+    title: string;
+    viewport: ViewportName;
+    focus?: string;
     file: string;
     focusFile?: string;
     sha256: string;
     machineFacts: readonly string[];
   }>;
-  /** 评分卡写到哪个目录，一张图一个 `<key>.json`。 */
+  /** 评分卡写到哪个目录，一张图一个 `<编号>.json`。 */
   cardsDir: string;
   /** 上一轮被驳回的发现和驳回的理由（同一张图上的）；评委不同意可以再提。 */
-  dismissed?: ReadonlyArray<{ shotKey: string; what: string; reason: string }>;
+  dismissed?: ReadonlyArray<{ id: string; what: string; reason: string }>;
 }
 
 function buildSelfCheckCommand(input: JudgeBriefInput): string {
@@ -55,9 +57,9 @@ function buildSelfCheckCommand(input: JudgeBriefInput): string {
  * 文字里不出现“哨兵”“弄坏”“校准”和上一轮的分数。
  */
 export function judgeBrief(input: JudgeBriefInput): string {
-  const sampleShot = input.shots[0];
+  const sampleShot = input.items[0];
   const exampleCard: ScoreCard = {
-    shot: sampleShot?.shot.key ?? "router.model-picker@desktop",
+    shot: sampleShot?.id ?? "item-001",
     judge: input.judge,
     run: input.run,
     imageSha256: sampleShot?.sha256 ?? "0".repeat(64),
@@ -76,9 +78,9 @@ export function judgeBrief(input: JudgeBriefInput): string {
 
   const dismissedByShot = new Map<string, Array<{ what: string; reason: string }>>();
   for (const item of input.dismissed ?? []) {
-    const list = dismissedByShot.get(item.shotKey) ?? [];
+    const list = dismissedByShot.get(item.id) ?? [];
     list.push({ what: item.what, reason: item.reason });
-    dismissedByShot.set(item.shotKey, list);
+    dismissedByShot.set(item.id, list);
   }
 
   const lines: string[] = [
@@ -122,22 +124,22 @@ export function judgeBrief(input: JudgeBriefInput): string {
     "",
     "## 评分卡 JSON 格式与示例",
     "",
-    `每张图单独写一个 JSON 文件到目录 \`${input.cardsDir}\` 下，文件名为 \`<shot>.json\`（先把目录创建出来）。\`box\` 的 \`x\`、\`y\`、\`w\`、\`h\` 都是占整屏图的 0 到 1 比例（\`w\`、\`h\` 大于 0）。`,
+    `每张图单独写一个 JSON 文件到目录 \`${input.cardsDir}\` 下，文件名为 \`<编号>.json\`，\`shot\` 填这张图的编号（先把目录创建出来）。\`box\` 的 \`x\`、\`y\`、\`w\`、\`h\` 都是占整屏图的 0 到 1 比例（\`w\`、\`h\` 大于 0）。`,
     "",
     "```json",
     JSON.stringify(exampleCard, null, 2),
     "```",
     "",
-    `## 本批待评截图（共 ${input.shots.length} 张）`,
+    `## 本批待评截图（共 ${input.items.length} 张）`,
     "",
   ];
 
-  input.shots.forEach((item, index) => {
-    const outPath = join(input.cardsDir, `${item.shot.key}.json`);
-    lines.push(`### ${index + 1}. \`${item.shot.key}\`（${item.shot.screen.title}，视口 \`${item.shot.viewport}\`）`);
+  input.items.forEach((item, index) => {
+    const outPath = join(input.cardsDir, `${item.id}.json`);
+    lines.push(`### ${index + 1}. \`${item.id}\`（${item.title}，视口 \`${item.viewport}\`）`);
     lines.push(`- 整屏图：\`${item.file}\``);
     if (item.focusFile !== undefined) {
-      lines.push(`- 局部 2 倍图：\`${item.focusFile}\`${item.shot.screen.focus ? `（${item.shot.screen.focus}）` : ""}`);
+      lines.push(`- 局部 2 倍图：\`${item.focusFile}\`${item.focus ? `（${item.focus}）` : ""}`);
     }
     lines.push(`- \`imageSha256\`：\`${item.sha256}\``);
     lines.push(`- 评分卡写入路径：\`${outPath}\``);
@@ -147,7 +149,7 @@ export function judgeBrief(input: JudgeBriefInput): string {
     } else {
       lines.push("- 页面机器检查：未检出硬指标违规");
     }
-    const dismissed = dismissedByShot.get(item.shot.key);
+    const dismissed = dismissedByShot.get(item.id);
     if (dismissed !== undefined && dismissed.length > 0) {
       lines.push("- 上一轮归因驳回记录（若你看图核对后认为驳回不成立，可在发现里重新提出并说明原因）：");
       for (const d of dismissed) lines.push(`  - 原发现「${d.what}」，驳回理由：${d.reason}`);

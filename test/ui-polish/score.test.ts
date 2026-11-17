@@ -224,18 +224,18 @@ describe("mergeRound", () => {
 describe("calibrationReport", () => {
   const mutClip: Mutation = MUTATIONS.find((m) => m.id === "clip-right")!;
   const mutMisalign: Mutation = MUTATIONS.find((m) => m.id === "misalign")!;
-  const mutFont: Mutation = MUTATIONS.find((m) => m.id === "off-scale-font")!;
+  const mutFont: Mutation = MUTATIONS.find((m) => m.id === "small-preview")!;
   const sampleMutations: readonly Mutation[] = [mutClip, mutMisalign, mutFont];
 
   const boxForMut: Record<string, Finding["box"]> = {
     "clip-right": { x: 0.81, y: 0.38, w: 0.18, h: 0.12 },
     misalign: { x: 0.01, y: 0.35, w: 0.19, h: 0.08 },
-    "off-scale-font": { x: 0.02, y: 0.22, w: 0.16, h: 0.35 },
+    "small-preview": { x: 0.02, y: 0.22, w: 0.16, h: 0.35 },
   };
   const ruleForMut: Record<string, string> = {
     "clip-right": "ui-standard §11",
     misalign: "A2",
-    "off-scale-font": "S2",
+    "small-preview": "S2",
   };
 
   const buildPassingFixture = () => {

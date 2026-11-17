@@ -116,7 +116,7 @@ export const SCREEN_INVENTORY: readonly ScreenSpec[] = [
   s("sidebar.rail", "左栏：72px 头像窄栏", ["narrow"], "normal", "standard", "#/c/1，窄于 1100px", "头像窄栏"),
   s("sidebar.devices", "左栏：多设备分组，在线、重连中、离线", D, "normal", "two-devices", "#/c/1；第二台依次用补丁 device-reconnecting、device-offline"),
   s("sidebar.list-mobile", "手机列表页", M, "normal", "standard", "首页（网址为空）"),
-  s("chat.normal", "对话：三栏，带任务图和拍板卡（基准图候选 A）", DNM, "normal", "standard", "#/c/1；手机从列表点进去"),
+  s("chat.normal", "对话：三栏，带任务图和拍板卡", DNM, "normal", "standard", "#/c/1；手机从列表点进去"),
   s("chat.empty", "对话：空对话", DM, "empty", "fresh", "#/c/1"),
   s("chat.busy", "对话：在忙，状态词流光和停止键", DM, "busy", "standard", "#/c/1，补丁 session-working"),
   s("chat.streaming", "对话：文字流式生成中", D, "busy", "standard", "#/c/1，补丁 session-streaming"),
@@ -162,7 +162,7 @@ export const SCREEN_INVENTORY: readonly ScreenSpec[] = [
   s("worker.normal", "Worker 对话：顶栏右边模型、思考程度、对话长度", DM, "normal", "standard", "#/w/<第一个 Worker>"),
   s("worker.busy", "Worker 对话：在忙", D, "busy", "standard", "同上，补丁 session-working"),
   s("worker.ended", "Worker 对话：已收工", D, "normal", "standard", "从 Completed 点进去"),
-  s("router.normal", "总助：待拍板托盘和时间流（基准图候选 B）", DNM, "normal", "standard", "#/router；手机从列表点进去"),
+  s("router.normal", "总助：待拍板托盘和时间流", DNM, "normal", "standard", "#/router；手机从列表点进去"),
   s("router.empty", "总助：All clear", DM, "empty", "fresh", "#/router"),
   s("router.tray-many", "总助：5 张待拍板、长依据、Show more", DM, "long", "stress", "#/router"),
   s("router.timeline", "总助：指令回合、去向行、连着几条简报、New 分隔线", D, "normal", "stress", "#/router，滚到时间流"),
@@ -173,7 +173,7 @@ export const SCREEN_INVENTORY: readonly ScreenSpec[] = [
   s("router.model-picker-vendor", "总助：模型面板，选了厂商，Model & effort 展开", D, "normal", "standard", "同上，补丁 router-vendor-agy，点开 Model & effort", "浮层"),
   s("router.model-picker-long", "总助：模型面板，超长模型名", D, "long", "standard", "同上，补丁 models-long-names", "浮层"),
   s("router.model-drawer-mobile", "总助：手机模型抽屉", M, "normal", "standard", "手机上点模型入口", "抽屉"),
-  s("profile.normal", "资料页：头部、厂商模型、工作方式、文件夹（基准图候选 C）", DM, "normal", "standard", "#/pm/1"),
+  s("profile.normal", "资料页：头部、厂商模型、工作方式、文件夹", DM, "normal", "standard", "#/pm/1"),
   s("profile.lower", "资料页：下半（定时任务、性格设定、记忆文件、修改记录、会话）", DM, "normal", "standard", "#/pm/1 滚到底"),
   s("profile.schedule-form", "资料页：新建定时任务表单和校验错误", D, "error", "standard", "点 New，名字填超长", "定时任务那一组"),
   s("profile.memory-open", "资料页：记忆文件展开、编辑中、接近配额的提示", D, "normal", "stress", "点开 Memory files，点一个文件", "记忆文件那一组"),
@@ -404,23 +404,30 @@ export function expandShots(inventory: readonly ScreenSpec[], only?: readonly st
 
 /**
  * 把图分给评委：同一区域的尽量在一批，每批不超过 batchSize 张，哨兵图平均混进各批。
- * 后置：每张图恰好在一批里；seed 相同分法相同，换 seed 批内顺序不同（两家评委用不同的 seed，抵消先后次序的影响）。
+ * 后置：每张图恰好在一批里；批数够时，哨兵图不和同一界面同一视口的图在一批；
+ * seed 相同分法相同，换 seed 批内顺序不同（两家评委用不同的 seed，抵消先后次序的影响）。
  * batchSize 不是正整数抛 RangeError。
  */
-export function batchShots(shots: readonly Shot[], sentinels: readonly Shot[], seed: number, batchSize: number): Shot[][] {
+export function batchShots<T extends Pick<Shot, "screen" | "viewport">>(shots: readonly T[], sentinels: readonly T[], seed: number, batchSize: number): T[][] {
   if (!Number.isInteger(batchSize) || batchSize <= 0) throw new RangeError(`批大小 ${batchSize} 不是正整数`);
   const total = shots.length + sentinels.length;
   if (total === 0) return [];
   const count = Math.ceil(total / batchSize);
-  const batches: Shot[][] = Array.from({ length: count }, () => []);
-  sentinels.forEach((shot, i) => batches[i % count]!.push(shot));
-  let index = 0;
+  const batches: T[][] = Array.from({ length: count }, () => []);
+  // 哨兵从最后一批往前轮着放；平常的图从第一批往后填，避开已经有同一界面同一视口的批（同名、同 sha256 的两张图挨着，评委一眼就认出来）
+  sentinels.forEach((shot, i) => batches[count - 1 - (i % count)]!.push(shot));
+  const same = (a: T, b: T) => a.screen.id === b.screen.id && a.viewport === b.viewport;
   for (const shot of shots) {
-    while (batches[index]!.length >= batchSize) index++;
-    batches[index]!.push(shot);
+    const open = batches.filter((b) => b.length < batchSize);
+    (open.find((b) => !b.some((other) => same(other, shot))) ?? open[0]!).push(shot);
   }
   const random = mulberry32(seed);
   return batches.map((batch) => shuffle(batch, random));
+}
+
+/** 按 seed 打乱，同样的 seed 同样的顺序。 */
+export function seededShuffle<T>(items: readonly T[], seed: number): T[] {
+  return shuffle(items, mulberry32(seed));
 }
 
 function mulberry32(seed: number): () => number {
