@@ -18,7 +18,7 @@ import { Client, makeEnv, messagesOf, sleep, waitUntil, type E2eEnv } from "./ha
 const RELOAD_MAIN = fileURLToPath(new URL("./self-reload-daemon.ts", import.meta.url));
 const DRAIN_MAX_MS = 4_000;
 const hub = HUB_COMMAND;
-const SUPERVISED_ENV = { [DESKTOP_CONTRACT.supervisedEnv]: "test", E2E_SELF_RELOAD_DRAIN_MAX_MS: String(DRAIN_MAX_MS) };
+const SUPERVISED_ENV = { [DESKTOP_CONTRACT.supervisedEnv]: "test", E2E_SELF_RELOAD_DRAIN_MAX_MS: String(DRAIN_MAX_MS), DIAG_NO_CATALOG: "1" };
 
 const canNestOsSandbox =
   process.platform === "darwin"
