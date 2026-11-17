@@ -103,8 +103,18 @@ function boxIou(a: Finding["box"], b: Finding["box"]): number {
   return union <= 0 ? 0 : inter / union;
 }
 
+/** 评委引的条款和机器检查量的是同一件事时，归到机器检查的规则上。 */
+const RULE_ALIASES: Readonly<Record<string, string>> = {
+  "WCAG 1.4.3": "machine:contrast",
+  "HIG touch-44": "machine:touch-target",
+};
+
+function canonicalRule(rule: string): string {
+  return RULE_ALIASES[rule] ?? rule;
+}
+
 function sameSpot(a: Pick<Finding, "rule" | "box">, b: Pick<Finding, "rule" | "box">): boolean {
-  return a.rule === b.rule || boxIou(a.box, b.box) >= FINDING_MATCH_IOU;
+  return canonicalRule(a.rule) === canonicalRule(b.rule) || boxIou(a.box, b.box) >= FINDING_MATCH_IOU;
 }
 
 function coversTarget(findingBox: Finding["box"], targetBox: Finding["box"]): boolean {
@@ -133,13 +143,29 @@ interface MutableFinding {
   by: string[];
 }
 
+/** 一家（或机器）在同一张图上引同一条规则（按 canonicalRule 归一）的几条只留最重的一条。 */
+function collapseSameRule<F extends Pick<Finding, "rule" | "severity">>(findings: readonly F[]): F[] {
+  const byRule = new Map<string, F>();
+  for (const f of findings) {
+    const rule = canonicalRule(f.rule);
+    const kept = byRule.get(rule);
+    if (kept === undefined || SEVERITY_RANK[f.severity] < SEVERITY_RANK[kept.severity]) byRule.set(rule, f);
+  }
+  return [...byRule.values()];
+}
+
+/** 一张评分卡自己算出来的四项，和 mergeRound 用同一套同规则归并。 */
+function cardScores(findings: readonly Finding[]): DimensionScores {
+  return scoreFromFindings(collapseSameRule(findings));
+}
+
 function mergeFindingsForShot(
   shotKey: string,
   sources: ReadonlyArray<{ by: string; findings: readonly Finding[] }>,
 ): MutableFinding[] {
   const merged: MutableFinding[] = [];
   for (const source of sources) {
-    for (const f of source.findings) {
+    for (const f of collapseSameRule(source.findings)) {
       let bestIndex = -1;
       let bestIou = -1;
       const dimension = dimensionOfRule(f.rule);
@@ -150,7 +176,7 @@ function mergeFindingsForShot(
         if (iou >= FINDING_MATCH_IOU && iou > bestIou) {
           bestIndex = i;
           bestIou = iou;
-        } else if (bestIndex === -1 && candidate.rule === f.rule) {
+        } else if (bestIndex === -1 && canonicalRule(candidate.rule) === canonicalRule(f.rule)) {
           bestIndex = i;
         }
       }
@@ -166,7 +192,7 @@ function mergeFindingsForShot(
         });
       } else {
         const target = merged[bestIndex]!;
-        target.by.push(source.by);
+        if (!target.by.includes(source.by)) target.by.push(source.by);
         if (SEVERITY_RANK[f.severity] < SEVERITY_RANK[target.severity]) {
           target.severity = f.severity;
           target.rule = f.rule;
@@ -182,7 +208,8 @@ function mergeFindingsForShot(
 
 /**
  * 前置：cards 里每张图每家评委各有一张卡，卡的 imageSha256 和 manifest 对得上。
- * 后置：两家的发现按“同一张图、同一项、框的交并比不低于 FINDING_MATCH_IOU 或引了同一条规则”并成一条，留下更重的那条；
+ * 后置：每家（含机器检查）先把引同一条规则的几条并成最重的一条（WCAG 1.4.3 归 machine:contrast，HIG touch-44 归 machine:touch-target）；
+ * 两家的发现再按“同一张图、同一项、框的交并比不低于 FINDING_MATCH_IOU 或引了同一条规则”并成一条，留下更重的那条；
  * 机器检查的发现并进去；被 dismissals 命中的标上理由、不计分；分数按 rubric.scoreFromFindings 算。
  * 缺卡、sha256 对不上抛 Error 并列出是哪些图哪家评委。
  */
@@ -248,7 +275,12 @@ export function mergeRound(input: { manifest: CaptureManifest; cards: readonly S
       byJudge[judge] = computed;
 
       const card = cardMap.get(`${shot.key}\0${judge}`)!;
-      const cardComputed = scoreFromFindings([...shot.machineFindings.filter((mf) => !shotDismissals.some((d) => sameSpot(d, mf))), ...card.findings]);
+      const cardComputed = scoreFromFindings(
+        mergeFindingsForShot(shot.key, [
+          { by: "machine", findings: shot.machineFindings.filter((mf) => !shotDismissals.some((d) => sameSpot(d, mf))) },
+          { by: judge, findings: card.findings },
+        ]),
+      );
       for (const dim of DIMENSIONS) {
         if (Math.abs(cardComputed[dim] - card.holistic[dim]) >= 2) {
           hasDisagreement = true;
@@ -316,7 +348,8 @@ function mutationDropsEnough(input: { baseScore: number; mutatedScore: number; c
 /**
  * 前置：cards 是校准那批图（基准图、几张真实界面、每个弄坏各一张）每家评委各评 CALIBRATION_RUNS 次的卡，都是同一档批大小下评的。
  * 后置：按 limits.ts 的校准门槛算出报告。
- * “被指出”= 那次的卡里有一条发现的框盖住弄坏的位置，且记在预期的那一项、不轻于预期的严重度。
+ * “被指出”= 那次的卡里有一条发现的框盖住弄坏的位置，且不轻于预期的严重度；预期 P1 到 P3 的还要记在预期的那一项，
+ * 预期 P0 的不看记在哪一项（P0 不分项，见 rubric.SEVERITY_CAPS）。每张卡的分数先按 collapseSameRule 归并，和 mergeRound 口径一致。
  * “拉得开”只看弄坏注入的那一项，判法见方案第 3.5 节的门槛表。
  */
 export function calibrationReport(input: {
@@ -343,7 +376,7 @@ export function calibrationReport(input: {
 
   const cardsOf = (shotKey: string, judge: string): ScoreCard[] =>
     input.cards.filter((c) => c.shot === shotKey && c.judge === judge).sort((a, b) => a.run - b.run);
-  const pageOf = (c: ScoreCard) => pageScore(scoreFromFindings(c.findings));
+  const pageOf = (c: ScoreCard) => pageScore(cardScores(c.findings));
 
   const stableShare: Record<string, number> = {};
   for (const judge of judges) {
@@ -364,7 +397,7 @@ export function calibrationReport(input: {
   const { min: baseMin, max: baseMax } = CALIBRATION_BASELINE_PAGE_RANGE;
   const mutationRows: MutationCheck[] = [];
   for (const judge of judges) {
-    const baseScores = cardsOf(input.baselineKey, judge).map((c) => scoreFromFindings(c.findings));
+    const baseScores = cardsOf(input.baselineKey, judge).map((c) => cardScores(c.findings));
     const basePage = median(baseScores.map(pageScore));
     baselinePage[judge] = basePage;
     if (basePage < baseMin || basePage > baseMax) {
@@ -376,15 +409,14 @@ export function calibrationReport(input: {
       const cap = SEVERITY_CAPS[m.expectSeverity][0]!.cap;
       const mutCards = cardsOf(`${input.baselineKey}!${m.id}`, judge);
       const baseScore = median(baseScores.map((s) => s[dimension]));
-      const mutatedScore = median(mutCards.map((c) => scoreFromFindings(c.findings)[dimension]));
+      const mutatedScore = median(mutCards.map((c) => cardScores(c.findings)[dimension]));
 
       const customBox = (m as Mutation & { box?: Finding["box"] }).box;
       const targetBox = customBox ?? DEFAULT_MUTATION_BOXES[m.id];
       const hits = mutCards.filter((c) =>
         c.findings.some(
           (f) =>
-            dimensionOfRule(f.rule) === dimension &&
-            SEVERITY_RANK[f.severity] <= SEVERITY_RANK[m.expectSeverity] &&
+            (m.expectSeverity === "P0" ? f.severity === "P0" : dimensionOfRule(f.rule) === dimension && SEVERITY_RANK[f.severity] <= SEVERITY_RANK[m.expectSeverity]) &&
             (targetBox === undefined || coversTarget(f.box, targetBox)),
         ),
       ).length;
@@ -473,8 +505,8 @@ export function sentinelDrift(calibration: readonly ScoreCard[], round: readonly
     const hitDrift = roundCards.some((rc) => {
       const calSameJudge = calAll.filter((c) => c.judge === rc.judge);
       const refCards = calSameJudge.length > 0 ? calSameJudge : calAll;
-      const calMed = median(refCards.map((c) => pageScore(scoreFromFindings(c.findings))));
-      const currPage = pageScore(scoreFromFindings(rc.findings));
+      const calMed = median(refCards.map((c) => pageScore(cardScores(c.findings))));
+      const currPage = pageScore(cardScores(rc.findings));
       return Math.abs(currPage - calMed) > SENTINEL_MAX_DRIFT;
     });
     if (hitDrift) drifted.push(key);
