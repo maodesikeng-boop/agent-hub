@@ -26,7 +26,7 @@ export const WORKER_REPORT_STATUS_LABELS: Readonly<Record<WorkerReportStatus, st
 export const UNFORMATTED_LABEL = "没按格式";
 
 /**
- * Worker 每一轮最后一条回复要以这段八栏格式结尾（docs/orchestration-simplify-design.md 第 9.2 节）。原样放进 Worker 的提示词。
+ * Worker 每一轮最后一条回复要以这段九栏格式结尾（docs/orchestration-simplify-design.md 第 9.2 节）。原样放进 Worker 的提示词。
  * 这段本身把状态换成三种之一就能被 parseWorkerReport 认出来。
  */
 export const WORKER_REPORT_FORMAT = `${REPORT_START}
@@ -34,9 +34,10 @@ export const WORKER_REPORT_FORMAT = `${REPORT_START}
 摘要: 一两句
 PR: <链接>（没有写“无”）
 提交: <提交号>（没有写“无”）
-测试: <跑了什么，结果；界面改动附截图路径>
+测试: <跑了什么，结果>
 偏离: 无 | <与任务说明或目标不一致的地方>
 交棒: 无 | <给下一步接手的人：关键结论、改了哪几处、分支/目录状态与注意事项>
+文件: 无 | <交给用户看的文件，一行一个 [标签](绝对路径)：方案、验收结论、截图、录屏（mp4）>
 问题: 无 | <要项目经理回答什么、要用户拍板什么（写出选项和你的推荐），或者建议改哪个记忆文件>
 ${REPORT_END}`;
 
@@ -55,6 +56,11 @@ export interface WorkerReport {
   handoff: string;
   /** 没写是空串。 */
   questions: string;
+  /**
+   * 文件栏原文：交给用户看的文件，每个写成 Markdown 链接 `[标签](路径)`。写“无”或没写是空串。
+   * 账本按这一栏的链接对上这条消息存好的副本（meta.files），记成该步的交付物。
+   */
+  files: string;
   /** 审查步骤的“结论”栏：没写或写错是 null（review.ts）。 */
   verdict: ReviewVerdict | null;
   /** 审查步骤的“验证提交”栏，去掉首尾标点、转成小写：没写是 null。 */
@@ -68,11 +74,11 @@ export interface WorkerReport {
  */
 export type ParsedWorkerReport = { kind: "ok"; report: WorkerReport } | { kind: "unformatted"; summary: string };
 
-type FieldKey = "状态" | "摘要" | "提交" | "PR" | "测试" | "偏离" | "交棒" | "问题" | "结论" | "验证提交";
+type FieldKey = "状态" | "摘要" | "提交" | "PR" | "测试" | "偏离" | "交棒" | "文件" | "问题" | "结论" | "验证提交";
 /**
  * 一项的开头：行首可以有 Markdown 的列表符号、引用（- * > 和空白），名字可以加粗（**状态**: 或 **状态:**），冒号全角半角都行。
  */
-const FIELD_LINE = /^([-*>\s]*)(?:\*\*)?(状态|摘要|提交|PR|pr|测试|偏离|交棒|问题|结论|验证提交)\s*(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*(.*)$/u;
+const FIELD_LINE = /^([-*>\s]*)(?:\*\*)?(状态|摘要|提交|PR|pr|测试|偏离|交棒|文件|问题|结论|验证提交)\s*(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*(.*)$/u;
 const CODE_FENCE_OPEN = /^\s*(`{3,}|~{3,})/u;
 /** 状态值首尾的标点、符号（“做完了。”“「做完了」”“**做完了**”）。 */
 const EDGE_PUNCTUATION = /^[\p{P}\p{S}\s]+|[\p{P}\p{S}\s]+$/gu;
@@ -133,7 +139,7 @@ function lastBlock(text: string): string | null {
 /**
  * 从 Worker 这一轮最后一段文字里找汇报。有好几段取最后一段完整的（有开头也有结尾）。
  * 每项一行 `名字: 值`（Markdown 的列表、引用、加粗写法也认，见 FIELD_LINE），首尾空白去掉；
- * 不以这几个名字开头的行接在上一项后面（换行连着）。状态值去掉首尾的标点再比。
+ * 不以这些名字开头的行接在上一项后面（换行连着）。状态值去掉首尾的标点再比。
  * 状态不是三种之一、没写摘要 → unformatted。提交、测试、问题可以不写。
  */
 export function parseWorkerReport(text: string): ParsedWorkerReport {
@@ -215,6 +221,7 @@ export function parseWorkerReport(text: string): ParsedWorkerReport {
     prRaw === "" || prStripped === "" || NO_PR_PREFIX.test(prRaw) || NONE_WORDS.has(prStripped.toLowerCase())
       ? null
       : prRaw;
+  const filesRaw = field("文件");
   const deviationRaw = field("偏离");
   const deviation = isReportFieldNone(deviationRaw) ? null : deviationRaw;
   return {
@@ -228,6 +235,7 @@ export function parseWorkerReport(text: string): ParsedWorkerReport {
       deviation,
       handoff: field("交棒"),
       questions: field("问题"),
+      files: isReportFieldNone(filesRaw) ? "" : filesRaw,
       verdict: parseReviewVerdict(field("结论")),
       verifiedCommit: parseReviewCommit(field("验证提交")),
     },

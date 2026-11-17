@@ -213,16 +213,19 @@ export function buildVendorSwitchPreamble(input: {
   toVendor: string;
   anchor: GenerationAnchor;
   context: CollectedGenerationContext;
+  /** 换代时拼好的“上一个会话加载过的技能”一节（loaded-skills.ts）；没有是 null。 */
+  skills: string | null;
   transcriptSummary: string;
 }): string {
   const searchCmds = `\`${HUB_COMMAND} worker search\`、\`${HUB_COMMAND} worker show --task / --report\``;
   const header = [
     `【系统】你还是同一个项目经理，用户刚把你的运行厂商从 ${vendorLabel(input.fromVendor)}（${input.fromVendor}）切换到了 ${vendorLabel(input.toVendor)}（${input.toVendor}）。`,
-    "下面按时间顺序完整附上了当前这一代会话迄今的全部上下文（用户那边仍是同一个连续对话，不要向用户提及切换了会话或回复“已接手”，读完直接回应本段末尾的最新消息；历史中提到的他厂专属工具名按你当前可用的工具理解）。",
+    `下面${input.skills === null ? "" : "先附上上一个会话加载过的技能正文，再"}按时间顺序完整附上了当前这一代会话迄今的全部上下文（用户那边仍是同一个连续对话，不要向用户提及切换了会话或回复“已接手”，读完直接回应本段末尾的最新消息；历史中提到的他厂专属工具名按你当前可用的工具理解）。`,
     `做过的历史任务细节可用 ${searchCmds} 查账本；${input.transcriptSummary}。`,
   ].join("\n");
 
   const sections = [header];
+  if (input.skills !== null) sections.push(input.skills);
   if (input.anchor.summaryText !== null && input.anchor.summaryText.trim() !== "") {
     sections.push(`## 本代起点摘要（上次会话换代时保存的背景）\n\n${VENDOR_SWITCH_ANCHOR_HINT}\n\n${input.anchor.summaryText}`);
   }

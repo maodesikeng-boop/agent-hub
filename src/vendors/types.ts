@@ -186,7 +186,29 @@ export interface VendorSpec<Id extends string = string> {
    * 所以同一个名字在各家要是同一个动作（契约测试查）。没列的工具显示“Using <名字>”，统计里按原名单独计数；mcp__ 开头的另按连接器认。
    */
   tools?: { actions: Readonly<Record<string, ToolAction>> };
+  /**
+   * 认“加载了技能”时这家特有的写法（shared/skill-loads.ts 按它认，换代时把加载过的技能带进新会话；docs/skill-carryover-design.md）。
+   * 读文件、跑命令是哪些工具按 tools.actions 认，不用写这里。必填：加一家新厂商要想清楚它的工具返回原文在哪。
+   */
+  skillSignals: SkillSignals;
   capabilities: VendorCapabilities;
+}
+
+/** 见 VendorSpec.skillSignals。 */
+export interface SkillSignals {
+  /** 驱动从工具结果的哪个字段取返回原文（claude 是 tool_result 块的 content，codex 是 item 的 aggregatedOutput……），toolOutputText 摊平成文字。 */
+  outputField: string;
+  /** 读文件工具给返回的每一行加的行号（claude Read 的 `12\t`），认之前去掉。 */
+  outputLinePrefix?: RegExp;
+  /**
+   * 返回里没有正文、只能按路径参数认的读文件工具（agy 的 read_file 只回“14 lines, 310 bytes”）。键是工具名；
+   * ok：读成功时返回的样子；fromStart：“从头读”时这些参数要么没给、要么不大于这个数（从中间读的不算加载）。
+   */
+  readByPath?: Readonly<Record<string, { ok: RegExp; fromStart?: Readonly<Record<string, number>> }>>;
+  /** 用户手打调用技能的开头，不写 = [composer.commandPrefix]。 */
+  userTriggers?: readonly string[];
+  /** 原生技能工具（tools.actions 里是 "skill" 的）放技能名的参数键。 */
+  toolNameKeys?: readonly string[];
 }
 
 /** 写 spec.ts 用：只做类型检查并把编号推成字面量类型（AgentVendor 从名单推出来）。 */
@@ -196,6 +218,13 @@ export function defineVendor<const Id extends string>(
 export function defineVendor<const Id extends string>(spec: VendorSpec<Id>): VendorSpec<Id>;
 export function defineVendor<const Id extends string>(spec: VendorSpec<Id>): VendorSpec<Id> {
   return spec;
+}
+
+/** 用户原文以 prefix 开头（前面不能有空格）时的命令名，到第一个空白为止；不是命令、名字里带 `/`（文件路径）是 null。 */
+export function commandNameOf(text: string, prefix: string): string | null {
+  if (!text.startsWith(prefix)) return null;
+  const name = text.slice(prefix.length).split(/\s/u, 1)[0] ?? "";
+  return name === "" || name.includes("/") ? null : name;
 }
 
 /** 一组隐藏命令共用一个拦下的原因。 */

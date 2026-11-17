@@ -50,16 +50,16 @@ import {
 import { Button } from "../ui/button.tsx";
 import { useMessageEnter, type EnterItem } from "../useMessageEnter.ts";
 import { useStickToBottom } from "../useStickToBottom.ts";
+import { DeviceScopeOf } from "../device-scope.tsx";
 import { AttachmentList } from "./Attachments.tsx";
 import { Avatar } from "./Avatar.tsx";
+import { CardBody, INLINE_LINK_CLASS } from "./Deliverables.tsx";
 import { KnifeAvatar } from "./KnifeAvatar.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { AgentHead, BUBBLE, CopyButton, SentBody, TEXT_BUTTON, UnsentMark } from "./Messages.tsx";
 
 const ROUTER_IDENTITY = { name: "Router", avatarKey: 0 } as const;
 
-const INLINE_LINK_CLASS =
-  "touch-target inline-flex cursor-pointer items-center gap-1 rounded-xl text-link underline decoration-link/40 transition-colors outline-none hover:decoration-link focus-visible:ring-2 focus-visible:ring-ring/50";
 
 function jellyStyle(avatarKey: number): CSSProperties {
   return { "--jelly": paletteOf(avatarKey).accent } as CSSProperties;
@@ -373,15 +373,23 @@ const BriefingRow = memo(function BriefingRow({
           />
         )}
         <div className="flex flex-col gap-1.5">
-          <div className="w-full min-w-0 text-body leading-relaxed">
-            <Markdown text={entry.report.summary} />
-          </div>
-          <BriefingLinks
-            links={entry.report.links}
-            deviceKey={entry.deviceKey}
-            onOpenConversation={onOpenConversation}
-            onOpenWorker={onOpenWorker}
-          />
+          <DeviceScopeOf deviceKey={entry.deviceKey}>
+            <CardBody
+              text={entry.report.summary}
+              deliverables={entry.report.deliverables}
+              extra={
+                entry.report.links.length > 0 && (
+                  <BriefingLinks
+                    links={entry.report.links}
+                    deviceKey={entry.deviceKey}
+                    onOpenConversation={onOpenConversation}
+                    onOpenWorker={onOpenWorker}
+                  />
+                )
+              }
+              textClassName="text-body leading-relaxed"
+            />
+          </DeviceScopeOf>
           <div className="text-xs text-muted-foreground tabular-nums">{formatTime(entry.report.createdAt)}</div>
         </div>
       </div>

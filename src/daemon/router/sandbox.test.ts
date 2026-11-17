@@ -93,7 +93,7 @@ describe("Router 轨道 B 只读沙箱与令牌权限守卫", () => {
 
       expect(existsSync(files.promptFile)).toBe(true);
       const promptText = readFileSync(files.promptFile, "utf8");
-      expect(promptText).toContain("四不准硬规矩");
+      expect(promptText).toContain("四条硬规矩");
       expect(promptText).toContain("dispatch pm");
       expect(files.env[ENV_HUB_TOKEN]).toBe(`tok-${session.id}`);
       expect(files.env[ENV_HUB_SOCK]).toBe(hubSock);

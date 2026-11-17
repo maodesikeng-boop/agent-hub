@@ -57,6 +57,8 @@ export interface FakeCodexTurnScript {
     type: "commandExecution" | "fileChange" | "webSearch" | "mcpToolCall" | "collabToolCall" | "collabAgentToolCall";
     command?: string;
     cwd?: string;
+    /** commandExecution 跑完的输出原文（app-server 的 ThreadItem.aggregatedOutput）。 */
+    aggregatedOutput?: string | null;
     changes?: Array<{ path: string; kind?: { type: string; move_path?: string | null } }>;
     /** item/fileChange/patchUpdated：模型还在生成补丁时推的结构化 changes（每项一次通知）。 */
     patchUpdates?: Array<Array<{ path: string; kind?: { type: string }; diff?: string }>>;
@@ -728,7 +730,7 @@ describe("CodexDriver 首次启动握手与完整一轮事件流", () => {
           {
             reasoningDeltas: ["先分析", "再实现"],
             tools: [
-              { id: "call-cmd-1", type: "commandExecution", command: "pnpm typecheck", cwd: "/tmp/work" },
+              { id: "call-cmd-1", type: "commandExecution", command: "pnpm typecheck", cwd: "/tmp/work", aggregatedOutput: "tsc 通过\n" },
               { id: "call-file-1", type: "fileChange", changes: [{ path: "src/index.ts" }] },
               { id: "call-web-1", type: "webSearch", query: "codex jsonrpc" },
             ],
@@ -850,6 +852,8 @@ describe("CodexDriver 首次启动握手与完整一轮事件流", () => {
 
     const toolResults = t.of("agent.tool_result");
     expect(toolResults.map((r) => r.toolUseIds)).toEqual([["call-cmd-1"], ["call-file-1"], ["call-web-1"]]);
+    // 返回原文：commandExecution 的 aggregatedOutput（spec 的 outputField）；没有的不带
+    expect(toolResults.map((r) => r.outputs)).toEqual([{ "call-cmd-1": "tsc 通过\n" }, undefined, undefined]);
 
     // 6. agentMessage delta 实时发出 agent.text_delta，并在 item/completed 发出完整的一条 agent.text
     expect(t.of("agent.text_delta").map((e) => ({ delta: e.delta, reset: e.reset }))).toEqual([

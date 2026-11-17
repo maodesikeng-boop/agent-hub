@@ -124,6 +124,13 @@ export default defineVendor({
       read_resource: "connector_resource",
     },
   },
+  skillSignals: {
+    // stream-json 的 step_update.tool_info.output：run_command 是完整输出（前面几行 Created At、Command output: 元信息，正文行尾 \r\n）
+    outputField: "output",
+    // read_file 的 output 只有“14 lines, 310 bytes”，没有正文，按路径参数 Path 认；带 StartLine、ByteOffset 从中间读的不算
+    // （agy 1.5.9 实跑，夹具 fixtures/skill-read-stream.jsonl）
+    readByPath: { read_file: { ok: /^\d+ lines?, \d+ bytes?$/u, fromStart: { StartLine: 1, ByteOffset: 0 } } },
+  },
   capabilities: {
     // 后台命令跑完不会叫醒 agent，闲置关进程后结果还会丢（docs/mid-turn-messages.md 第 10.2 节）
     backgroundWake: false,

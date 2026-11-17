@@ -130,6 +130,20 @@ describe("task-graph-layout（Dagre 自动分层拓扑布局与 LRU 缓存引擎
     expect(gate4Rem.heightRem).toBeGreaterThan(gate2Rem.heightRem);
   });
 
+  it("放大弹窗里等拍板的卡：问题行、摘要、选项间距、展开备注各自加高；问题行只在 hasQuestion 时算", () => {
+    const base = estimateNodeSizeRem({ key: "g", status: "waiting", waitingFor: "user", optionCount: 2 }, "dialog").heightRem;
+    const withQuestion = estimateNodeSizeRem({ key: "g", status: "waiting", waitingFor: "user", optionCount: 2, hasQuestion: true }, "dialog").heightRem;
+    const withSummary = estimateNodeSizeRem({ key: "g", status: "waiting", waitingFor: "user", optionCount: 2, hasSummary: true }, "dialog").heightRem;
+    const threeOptions = estimateNodeSizeRem({ key: "g", status: "waiting", waitingFor: "user", optionCount: 3 }, "dialog").heightRem;
+    const noteOpen = estimateNodeSizeRem({ key: "g", status: "waiting", waitingFor: "user", optionCount: 2, noteExpanded: true }, "dialog").heightRem;
+    expect(withQuestion).toBeGreaterThan(base);
+    expect(withSummary).toBeGreaterThan(base);
+    expect(threeOptions - base).toBeCloseTo(2.75, 2);
+    expect(noteOpen).toBeGreaterThan(base);
+    const touch = estimateNodeSizeRem({ key: "g", status: "waiting", waitingFor: "user", optionCount: 2 }, "dialog", 1, true).heightRem;
+    expect(touch - base).toBeCloseTo(2 * 0.5 + 1, 2);
+  });
+
   it("10 节点典型任务图：rail (TB) 与 dialog (LR) 拓扑层次正确、三次贝塞尔路径平滑、上游 done 实线否则虚线", () => {
     const { nodes, edges } = buildTenNodeGraph();
 

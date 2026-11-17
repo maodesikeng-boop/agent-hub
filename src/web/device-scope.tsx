@@ -20,3 +20,24 @@ export function DeviceScope({ client, server, children }: { client: HubClient; s
 export function useClient(): HubClient {
   return useContext(ClientContext);
 }
+
+/** 舰队视图（总助）里按设备键找那台的接口和平台能力；找不到（设备刚被删）是 null。 */
+export type DeviceScopeLookup = (deviceKey: string) => { client: HubClient; server: ServerInfo } | null;
+
+const FleetContext = createContext<DeviceScopeLookup | null>(null);
+
+/** 总助这种一页里混着几台设备条目的地方：在外面给出按设备键找接口的办法，里面的条目用 DeviceScopeOf 包住自己。 */
+export function FleetDeviceScopes({ lookup, children }: { lookup: DeviceScopeLookup; children: ReactNode }) {
+  return <FleetContext.Provider value={lookup}>{children}</FleetContext.Provider>;
+}
+
+/** 这块内容属于 deviceKey 那台设备：文件地址、预览窗的按钮都按那台的。外面没有 FleetDeviceScopes 或找不到设备时照外层的。 */
+export function DeviceScopeOf({ deviceKey, children }: { deviceKey: string; children: ReactNode }) {
+  const scope = useContext(FleetContext)?.(deviceKey) ?? null;
+  if (scope === null) return children;
+  return (
+    <DeviceScope client={scope.client} server={scope.server}>
+      {children}
+    </DeviceScope>
+  );
+}

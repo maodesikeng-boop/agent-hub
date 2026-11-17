@@ -54,7 +54,7 @@ import type { ReviewSnapshot, ReviewVerifyResult } from "./review.ts";
 import type { SelfReloadStatus } from "./api.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
 import { API_ERRORS } from "./errors.ts";
-import type { AgentVendor, ModelCatalog, VendorAvailabilityMap } from "./vendors.ts";
+import type { AgentVendor, ModelCatalog } from "./vendors.ts";
 import type { UserBlockerId } from "./user-blockers.ts";
 import type { WorkerPick } from "./worker.ts";
 
@@ -264,8 +264,6 @@ export interface LaunchContext {
   worker: WorkerRecord | null;
   /** 这个会话自己的厂商：Worker 给（可能和项目经理不是同一家，提示词按它写长命令怎么等）；项目经理的看 pm.vendor。 */
   vendor?: AgentVendor;
-  /** 这台设备上各家厂商的状态（启动时缓存里的，launch.ts 填）：项目经理提示词只列能选的；不算进 fingerprint。 */
-  vendorAvailability?: VendorAvailabilityMap;
 }
 
 /**

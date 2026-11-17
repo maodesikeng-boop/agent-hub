@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   AGENT_VENDORS,
+  PRODUCT_NAME,
   ROUTER_FLEET_DIGEST_MAX_BYTES,
   ROUTER_REPLY_MAX_CHARS,
   utf8Bytes,
@@ -37,29 +38,36 @@ function makePmCard(index: number, overrides: Partial<PromptPmDigestCard> = {}):
   };
 }
 
-describe("buildRouterSystemPrompt（轨道 B 极薄系统提示词）", () => {
-  it("严明四不准硬规矩：不读代码、不设计技术方案、单目标一律 --verbatim 零拷贝不改写原话、不寒暄废话", () => {
+describe("buildRouterSystemPrompt（总助系统提示词）", () => {
+  it("角色与环境：总助（Router） → 项目经理（PM） → Worker 三层分工、工作在全局总助台、有 hub dispatch；不再有内部代号", () => {
+    const prompt = buildRouterSystemPrompt();
+    expect(prompt).toContain(`你是 **${PRODUCT_NAME}**`);
+    expect(prompt).toContain("**总助（Router）**");
+    expect(prompt).toContain("**总助（你） → 项目经理（PM） → Worker**");
+    expect(prompt).toContain("**全局总助台**");
+    expect(prompt).toContain("你获得了专属的 `hub dispatch` 命令行工具");
+    for (const gone of ["水果刀", "轨道 B", "Piece", "四不准", "极速分派"]) expect(prompt, gone).not.toContain(gone);
+  });
+
+  it("四条硬规矩：不碰业务文件不起子代理、不替项目经理出方案、单目标一律 --verbatim 不改写原话、不讲客套废话（离线设备不分派）", () => {
     const prompt = buildRouterSystemPrompt();
 
-    // 1. 不读代码
-    expect(prompt).toMatch(/不准读.*代码|禁止.*读取.*代码/);
-    // 2. 不设计技术方案
-    expect(prompt).toMatch(/不准.*设计技术方案|禁止.*技术方案/);
-    // 3. 单目标一律 --verbatim 原文零拷贝，不改写用户原话
-    expect(prompt).toContain("--verbatim");
-    expect(prompt).toMatch(/不准改写.*原话|零拷贝/);
-    // 4. 不寒暄废话
-    expect(prompt).toMatch(/不准.*寒暄|禁止.*寒暄/);
-
-    // 包含完整 hub dispatch 命令族与离线设备拦截规则
-    expect(prompt).toContain("hub dispatch pm");
-    expect(prompt).toContain("hub dispatch worker-start");
-    expect(prompt).toContain("hub dispatch worker-stop");
-    expect(prompt).toContain("hub dispatch worker-send");
-    expect(prompt).toContain("hub dispatch worker-end");
-    expect(prompt).toContain("hub dispatch worker-list");
-    expect(prompt).toContain("hub dispatch project-create");
+    expect(prompt).toContain("# 四条硬规矩");
+    expect(prompt).toMatch(/1\. \*\*不碰业务文件，不起子代理\*\*：.*严禁读取、搜索任何代码或目录/);
+    expect(prompt).toContain("严禁调用任何内置子代理工具");
+    expect(prompt).toMatch(/2\. \*\*不替项目经理出方案\*\*：不分析业务架构、不写技术方案/);
+    expect(prompt).toMatch(/3\. \*\*传话不走样（单目标一律 `--verbatim`）\*\*/);
+    expect(prompt).toContain("严禁用 `--stdin` 自己重写或缩写");
+    expect(prompt).toMatch(/4\. \*\*不讲客套废话\*\*：严禁回复“好的”“收到”“马上处理”/);
     expect(prompt).toMatch(/离线|online:\s*false/);
+
+    // 命令族：每条命令都写明具体干嘛的
+    for (const cmd of ["pm", "worker-start", "worker-stop", "worker-send", "worker-end", "worker-list", "project-create"]) {
+      expect(prompt).toContain(`hub dispatch ${cmd}`);
+    }
+    expect(prompt).toContain("**暂停 Worker 当前这一轮**");
+    expect(prompt).toContain("**让 Worker 彻底收工**");
+    expect(prompt).toContain("会话和分支保留，以后还能 `worker-send` 继续");
   });
 
   it("按 vendorAvailability 动态过滤提示词里允许指定的厂商候选列表", () => {
@@ -300,27 +308,27 @@ describe("v2 回答边界与常量收口（docs/router-workbench-v2-design.md �
 
   it("状态问答：名片里看得出来的全局状态（谁在忙、卡在拍板、在哪台设备、上一条汇报）用 Markdown 完整作答，建议不超过 1,500 字", () => {
     const prompt = buildRouterSystemPrompt();
-    const rule = prompt.slice(prompt.indexOf("4. "), prompt.indexOf("# 分派决策规则"));
+    const rule = prompt.slice(prompt.indexOf("## 你负责干嘛"), prompt.indexOf("# 四条硬规矩"));
     expect(rule).toMatch(/名片/);
     expect(rule).toMatch(/Markdown/);
     expect(rule).toMatch(/1,500 字/);
-    for (const example of ["谁在忙", "拍板", "哪台设备", "汇报"]) expect(rule).toContain(example);
+    for (const example of ["谁在忙", "拍板", "哪台设备"]) expect(rule).toContain(example);
     // 角色说明不再写“唯一职责是分派”，和第 4 条不打架
     expect(prompt).not.toContain("唯一职责");
   });
 
   it("分派指令：凡要读代码、查日志、写方案、改状态的仍必须分派给对应 PM，前三条铁律原样保留", () => {
     const prompt = buildRouterSystemPrompt();
-    const rule = prompt.slice(prompt.indexOf("4. "), prompt.indexOf("# 分派决策规则"));
-    for (const must of ["读代码", "查日志", "写方案", "改状态"]) expect(rule).toContain(must);
-    expect(rule).toMatch(/必须.*分派/);
+    const duty = prompt.slice(prompt.indexOf("## 你负责干嘛"), prompt.indexOf("# 四条硬规矩"));
+    for (const must of ["查代码", "看日志", "写方案", "改状态"]) expect(duty).toContain(must);
+    expect(duty).toContain("**只要目标项目已有 PM，默认一律转交给 PM**");
     // 名片里看不出来的不准猜
-    expect(rule).toMatch(/看不出|不准猜|不要猜/);
-    expect(prompt).toMatch(/1\. \*\*不准读任何代码文件\*\*/);
-    expect(prompt).toMatch(/2\. \*\*不准设计技术方案\*\*/);
-    expect(prompt).toMatch(/3\. \*\*不准改写用户原话/);
-    // 分派完照旧直接结束本轮，不寒暄
-    expect(rule).toMatch(/寒暄/);
+    expect(duty).toMatch(/看不出来的细节不准猜，转交给对应的项目经理去查/);
+    expect(prompt).toMatch(/1\. \*\*不碰业务文件，不起子代理\*\*/);
+    expect(prompt).toMatch(/2\. \*\*不替项目经理出方案\*\*/);
+    expect(prompt).toMatch(/3\. \*\*传话不走样/);
+    // 分派完照旧直接结束本轮，不讲客套
+    expect(prompt).toContain("调完 `hub dispatch` 分派成功就直接结束本轮");
   });
 
   it("单轮上下文不超过 24 KB + 600 B：近期回执带满长回复也只占回执分节的 600 字节", () => {

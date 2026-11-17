@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>交付物草图</title>
+<style>
+:root{--bg:#fff;--fg:#18181b;--side:#f6f6f7;--muted:#f3f3f5;--mf:#71717a;--border:#ececef;--link:#2563eb;
+font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC",sans-serif;color:var(--fg)}
+*{box-sizing:border-box}body{margin:0;background:var(--bg)}
+.top{height:52px;display:flex;align-items:center;padding:0 12px 0 20px;font-size:17px;font-weight:600;border-bottom:1px solid var(--border)}
+.col{max-width:720px;margin:0 auto;padding:0 48px}
+@media (max-width:640px){.col{padding:0 12px}}
+.tray{padding:8px 0 12px;border-bottom:1px solid var(--border)}
+.card{border:1px solid var(--border);border-radius:16px;padding:16px;margin-top:8px}
+.meta{display:flex;gap:8px;align-items:center;font-size:13.5px}
+.av{width:24px;height:24px;border-radius:999px;background:#fcd34d}
+.name{font-weight:600}.mf{color:var(--mf)}.xs{font-size:12px}
+h3{margin:10px 0 0;font-size:15px;font-weight:500}
+.ctx{margin-top:4px;font-size:13.5px;color:var(--mf);line-height:1.6}
+.files{margin-top:10px;display:flex;flex-direction:column;gap:8px}
+.links{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:13.5px}
+.links a{color:var(--link);text-decoration:underline;text-decoration-color:rgba(37,99,235,.4);display:inline-flex;align-items:center;gap:4px;min-height:28px}
+.thumbs{display:flex;gap:8px;overflow-x:auto}
+.thumb{height:96px;border-radius:12px;border:1px solid var(--border);flex:none;position:relative;overflow:hidden;background:var(--muted)}
+.thumb img{height:100%;display:block}
+.play{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
+.play span{width:36px;height:36px;border-radius:999px;background:rgba(24,24,27,.7);display:flex;align-items:center;justify-content:center}
+.opt{margin-top:8px;border:1px solid var(--border);border-radius:12px;padding:10px 12px;font-size:15px;display:flex;gap:10px;align-items:flex-start}
+.key{width:20px;height:20px;border-radius:999px;background:var(--side);font-size:12px;color:var(--mf);display:flex;align-items:center;justify-content:center;margin-top:2px;flex:none}
+.grow{flex:1}
+.inp{margin-top:10px;display:flex;gap:8px}.inp div{flex:1;height:36px;border:1px solid var(--border);border-radius:12px;padding:8px 12px;font-size:13.5px;color:var(--mf)}
+.inp span{width:36px;height:36px;border-radius:999px;background:var(--muted)}
+.stream{padding:32px 0 40px}
+.brief{margin-top:24px}.brief .body{font-size:15px;line-height:1.6;margin-top:6px}
+svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.5}
+</style></head><body>
+<div class="top">Router</div>
+<div class="col">
+ <div class="tray">
+  <div class="card">
+   <div class="meta"><span class="av"></span><span class="name">项目经理geminni</span><span class="mf">agent-hub</span><span class="mf xs" style="margin-left:auto">13:24</span></div>
+   <h3>请确认步骤「实现：交付物能点开」的结果</h3>
+   <div class="ctx"><b>摘要</b>：总助、卡片、右栏里的方案和验收证据都能点开看，录屏能播。</div>
+   <div class="files">
+    <div class="links">
+     <a href="#"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>方案 deliverables-design.md</a>
+     <a href="#"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>验收结论 verdict.md</a>
+    </div>
+    <div class="thumbs">
+     <div class="thumb"><img src="../mobile/desktop-1440.png" alt="桌面截图"></div>
+     <div class="thumb"><img src="../mobile/02-chat.png" alt="手机截图"></div>
+     <div class="thumb"><img src="../mobile/01-list.png" alt="录屏"><div class="play"><span><svg viewBox="0 0 24 24" style="stroke:#fff;fill:#fff"><path d="M8 5v14l11-7z"/></svg></span></div></div>
+    </div>
+   </div>
+   <div class="opt"><span class="key">A</span><span class="grow">通过</span><span class="mf xs" style="line-height:24px">Recommended</span></div>
+   <div class="opt"><span class="key">B</span><span class="grow">打回</span></div>
+   <div class="inp"><div>Add a note, or type a custom reply…</div><span></span></div>
+  </div>
+ </div>
+ <div class="stream">
+  <div class="brief">
+   <div class="meta"><span class="av"></span><span class="name mf">项目经理geminni</span><span class="mf xs">agent-hub</span></div>
+   <div class="body">任务图 #22 做完了：方案和验收证据都做成了能点开的文件，PR #3xx 已合并。</div>
+   <div class="files">
+    <div class="links">
+     <a href="#"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>方案</a>
+     <a href="#"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>验收结论</a>
+     <a href="#"><svg viewBox="0 0 24 24"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>PR #3xx</a>
+    </div>
+    <div class="thumbs">
+     <div class="thumb"><img src="../mobile/desktop-1440.png" alt=""></div>
+     <div class="thumb"><img src="../mobile/02-chat.png" alt=""></div>
+     <div class="thumb"><img src="../mobile/01-list.png" alt=""><div class="play"><span><svg viewBox="0 0 24 24" style="stroke:#fff;fill:#fff"><path d="M8 5v14l11-7z"/></svg></span></div></div>
+    </div>
+   </div>
+   <div class="mf xs" style="margin-top:6px">13:40</div>
+  </div>
+ </div>
+</div>
+</body></html>

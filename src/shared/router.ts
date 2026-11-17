@@ -11,6 +11,7 @@ import type {
   SessionActivity,
   WorkerId,
 } from "./domain.ts";
+import type { Deliverable } from "./deliverables.ts";
 import type { AgentVendor } from "./vendors.ts";
 
 export interface RouterSettings {
@@ -56,6 +57,8 @@ export interface RouterDecisionItem {
   options: string[];
   askMessageId: MessageId | null;
   resolution: RouterResolution | null;
+  /** 从 hub ask 的卡片带过来的文件（AskMeta.deliverables）。老版本设备没有这个字段。 */
+  deliverables?: Deliverable[];
   createdAt: number;
   updatedAt: number;
 }
@@ -68,7 +71,10 @@ export interface RouterReportItem {
   projectId: ProjectId | null;
   conversationId: ConversationId;
   summary: string;
+  /** 网址、Worker、对话这类链接；本机文件不放这里，放 deliverables。 */
   links: RouterReportLink[];
+  /** router report --file 存的副本，graph finish 时是整张图的交付物（graphDeliverables）。老版本设备没有这个字段。 */
+  deliverables?: Deliverable[];
   createdAt: number;
   updatedAt: number;
 }

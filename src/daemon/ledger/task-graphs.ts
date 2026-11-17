@@ -14,6 +14,7 @@ import {
   CONFIRM_CHECKPOINT_OPTIONS,
   CONFIRM_PASS_OPTION,
   CONFIRM_REJECT_OPTION,
+  askOf,
   isTaskGraphReadyToFinish,
   isTaskNodeWaitingPm,
   isTaskNodeUserBlocked,
@@ -63,6 +64,7 @@ import { ASK_CARD_TELL_USER, ASK_CARD_WHERE } from "../../shared/hub.ts";
 import type { GraphPrTarget, HubCallContext } from "../../shared/ledger.ts";
 import {
   COMPLETED_GRAPH_RETENTION_MS,
+  DELIVERABLES_PER_STEP_MAX,
   DELIVERY_FILES_MAX,
   DELIVERY_NOTE_MAX_CHARS,
   GRAPH_HISTORY_PAGE_SIZE,
@@ -95,7 +97,10 @@ import {
 import { HUB_COMMAND } from "../../shared/names.ts";
 import { reviewReportProblem, reviewVerifyFailedText, type ReviewTarget, type ReviewVerifyResult } from "../../shared/review.ts";
 import type { RouterReportLink } from "../../shared/router.ts";
-import { UserBlockedError, type UserBlocker, type UserBlockerId } from "../../shared/user-blockers.ts";
+import type { SentFile } from "../../shared/sent-files.ts";
+import { graphDeliverables, mergeDeliverables, type HubFileArg } from "../../shared/deliverables.ts";
+import { stepDeliverablesOfReport } from "../deliverables.ts";
+import { UserBlockedError, userBlockerText, type UserBlocker, type UserBlockerId } from "../../shared/user-blockers.ts";
 import { checkWorkerMaxTimeMs, parseWorkerMaxTime } from "../../shared/schedule.ts";
 import {
   AGENT_VENDORS,
@@ -124,6 +129,7 @@ import type { LedgerRouter } from "./router.ts";
 import { toMessage, type MessageDbRow } from "./rows.ts";
 import type { LedgerSessions } from "./sessions.ts";
 import { userBlockedPmNote, type LedgerUserBlockers } from "./user-blockers.ts";
+import type { ReportMessage } from "./workers.ts";
 import {
   buildStepFirstMessage,
   formatStepUpstreamForTakeover,
@@ -529,9 +535,17 @@ const patchSpecSchema = z.object({
   removeEdges: z.array(z.object({ from: z.string(), to: z.string() })).optional(),
 });
 
+/** 全量快照（includeDetails 是 false）只给等用户拍板的步骤带交付物，控快照体积；被卡住等用户动手的步骤不是拍板，不带。单图详情都带。 */
+function artifactForView(artifact: TaskArtifact | null, waitingDecision: boolean, includeDetails: boolean): TaskArtifact | null {
+  if (artifact?.deliverables === undefined || waitingDecision || includeDetails) return artifact;
+  const { deliverables: _omitted, ...rest } = artifact;
+  return Object.keys(rest).length > 0 ? rest : null;
+}
+
 function toTaskNode(row: TaskNodeDbRow, includeDetails = false, blockers?: ReadonlyMap<number, UserBlocker>): TaskNode {
   const { artifact, checkpointPending } = readStoredArtifact(row.artifact_json);
   const waitingUser = row.status === "waiting" && row.waiting_for === "user";
+  const userBlocker = blockers?.get(row.id) ?? null;
   const base: TaskNode = {
     key: row.node_key,
     title: row.title,
@@ -541,14 +555,14 @@ function toTaskNode(row: TaskNodeDbRow, includeDetails = false, blockers?: Reado
     sortOrder: row.sort_order,
     activeWorkerId: row.active_worker_id,
     workerIds: parseJsonOr<WorkerId[]>(row.worker_ids_json, []),
-    artifact,
+    artifact: artifactForView(artifact, waitingUser && userBlocker === null, includeDetails),
     gateQuestion: row.gate_question,
     gateOptions: parseJsonOr<string[]>(row.gate_options_json, []),
     gateSummaryMd: row.gate_summary_md,
     gateRecommended: row.gate_recommended,
     gateAskMessageId: row.gate_ask_message_id,
     ...(waitingUser && checkpointPending ? { gateCheckpoint: true } : {}),
-    userBlocker: blockers?.get(row.id) ?? null,
+    userBlocker,
     decision: parseJsonOr<TaskDecision | null>(row.decision_json, null),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -2095,7 +2109,11 @@ export function createLedgerTaskGraphs(
   const askOnStepIn = (
     p: Pending,
     caller: AgentSessionRow & { pmId: PmId },
-    args: HubArgs<"ask"> & { node: TaskNodeKey },
+    args: Omit<HubArgs<"ask">, "files"> & {
+      node: TaskNodeKey;
+      /** --file 存好的副本（hub-commands.ts 已查过都存下了）。 */
+      fileArgs?: { args: readonly HubFileArg[]; files: readonly SentFile[] };
+    },
   ): HubResult<"ask"> => {
     assertPmNotArchived(caller.pmId);
     const nodeKey = validateNodeKey(args.node);
@@ -2107,6 +2125,13 @@ export function createLedgerTaskGraphs(
     );
     if (node === undefined) throw fail("not_found", `任务图 #${graphRow.id} 中没有节点「${nodeKey}」`);
     if (node.status === "done") throw fail("conflict", `步骤「${nodeKey}」已经完了，不能再挂拍板卡`);
+    const blocker = blockersOf([node]).get(node.id);
+    if (blocker !== undefined) {
+      throw fail(
+        "conflict",
+        `步骤「${nodeKey}」在等用户处理：${userBlockerText(blocker)}。系统已经挂了提醒卡，用户点 Done 后自动接着派，现在挂拍板卡用户点不了。要问用户别的事，用不带 --node 的 hub ask`,
+      );
+    }
 
     const { question, summaryMd } = splitAskTextForGate(args.text);
     const gate = validateGateFields({
@@ -2133,6 +2158,7 @@ export function createLedgerTaskGraphs(
       gate_summary_md: gate.summaryMd,
       gate_recommended: gate.recommended,
     });
+    const prevArtifact = readStoredArtifact(node.artifact_json).artifact;
     const askMsg = messages.insertAskMessage(
       p,
       { ...caller, conversationId: graphRow.conversation_id },
@@ -2141,9 +2167,18 @@ export function createLedgerTaskGraphs(
       {
         gateRef: { graphId: graphRow.id, nodeKey },
         ...(gate.recommended !== null ? { recommended: gate.recommended } : {}),
+        ...(args.fileArgs !== undefined ? { fileArgs: args.fileArgs, deliverables: prevArtifact?.deliverables ?? [] } : {}),
       },
     );
-    const cleanedArtifactJson = serializeArtifact(readStoredArtifact(node.artifact_json).artifact, false);
+    // --file 挂的文件新的在前，合进该步交付物
+    const stepDeliverables =
+      args.fileArgs === undefined
+        ? null
+        : mergeDeliverables([askOf(askMsg)?.deliverables ?? [], prevArtifact?.deliverables ?? []], DELIVERABLES_PER_STEP_MAX);
+    const cleanedArtifactJson = serializeArtifact(
+      stepDeliverables === null ? prevArtifact : { ...prevArtifact, deliverables: stepDeliverables },
+      false,
+    );
     db.run(
       `UPDATE task_graph_steps
           SET gate_question = ?,
@@ -3317,10 +3352,12 @@ export function createLedgerTaskGraphs(
       if (artifact?.prUrl) pushLink(`${n.node_key} PR`, artifact.prUrl);
     }
 
-    const report = router.reportIn(p, caller, {
-      summary,
-      ...(links.length > 0 ? { links } : {}),
-    });
+    const report = router.reportIn(
+      p,
+      caller,
+      { summary, ...(links.length > 0 ? { links } : {}) },
+      graphDeliverables(nodeRows.filter((n) => n.status === "done").map((n) => toTaskNode(n, true))),
+    );
 
     const t = now();
     // 第 6 节：步骤完了以后，它的 Worker 由后台收工（被下一步接手时，或图结束时）
@@ -3893,7 +3930,7 @@ export function createLedgerTaskGraphs(
     parsed: ParsedWorkerReport,
     rawBody: string,
     forcedNote: string | null,
-    opts?: { hasPendingFollowup?: boolean; reviewVerified?: ReviewVerifyResult },
+    opts?: { hasPendingFollowup?: boolean; reviewVerified?: ReviewVerifyResult; reportMessage?: ReportMessage | null },
   ):
     | { handled: false }
     | { handled: true; outcome: "verify" }
@@ -3910,8 +3947,12 @@ export function createLedgerTaskGraphs(
 
     const prUrl = parsed.kind === "ok" ? extractReportPrUrl(parsed.report.pr) : null;
     const prevArtifact = readStoredArtifact(node.artifact_json).artifact ?? {};
+    // “文件”栏写了就换成这次的；没写保留上一次交的
+    const reportDeliverables =
+      parsed.kind === "ok" && opts?.reportMessage != null ? stepDeliverablesOfReport(parsed.report, opts.reportMessage) : [];
     const mergedArtifact: TaskArtifact = {
       ...prevArtifact,
+      ...(reportDeliverables.length > 0 ? { deliverables: reportDeliverables } : {}),
       ...(worker.branch ? { branch: worker.branch } : {}),
       ...(parsed.kind === "ok" && parsed.report.commit ? { commit: parsed.report.commit } : {}),
       ...(prUrl ? { prUrl } : {}),
@@ -3981,9 +4022,10 @@ export function createLedgerTaskGraphs(
         const gateQuestion = truncateChars(`请确认步骤「${node.title}」的结果`, MAX_GATE_QUESTION_CHARS);
         const gateOptions = [...CONFIRM_CHECKPOINT_OPTIONS];
         const gateOptionsJson = JSON.stringify(gateOptions);
+        // 第一段是摘要，其余是细节：卡片里摘要后面紧跟文件，细节默认收起（shared/card-text.ts）
         const summaryParts: string[] = [];
         if (parsed.report.summary.trim() !== "") {
-          summaryParts.push(`**摘要**：${parsed.report.summary.trim()}`);
+          summaryParts.push(`**摘要**：${parsed.report.summary.trim().replace(/\n\s*\n/gu, "\n")}`);
         }
         const handoffText = parsed.report.handoff.trim();
         if (handoffText !== "" && !isReportFieldNone(handoffText)) {
@@ -4018,6 +4060,7 @@ export function createLedgerTaskGraphs(
             {
               gateRef: { graphId: graphRow.id, nodeKey: node.node_key, checkpoint: true },
               recommended: CONFIRM_PASS_OPTION,
+              ...(mergedArtifact.deliverables !== undefined ? { deliverables: mergedArtifact.deliverables } : {}),
             },
           );
           askMsgId = msg.id;

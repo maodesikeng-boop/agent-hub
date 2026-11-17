@@ -4,26 +4,21 @@
 //   和“按路径读文件”兜底都指向这一个文件；
 // - hub help graph 打印同一份正文（hub/cli.ts），读不到文件时还有这条路；
 // - 基础提示词（daemon/prompt.ts）里只留三档判断、一句四类审查红线和指路的那句话。
-// 前后端都能引（不用 node:path）；cli.ts 也引它，所以只引 names.ts、hub.ts、limits.ts。
+// 前后端都能引（不用 node:path）；cli.ts 也引它，所以只引 names.ts、hub.ts、limits.ts、skill-names.ts。
 import { ASK_CARD_WHERE, TASK_GRAPH_CREATE_JSON_HINT, TASK_GRAPH_PATCH_JSON_HINT } from "./hub.ts";
 import { TAKEOVER_PREDECESSORS_MAX } from "./limits.ts";
-import { HUB_COMMAND as HUB, PRODUCT_PLUGIN_NAME } from "./names.ts";
+import { HUB_COMMAND as HUB } from "./names.ts";
+import { skillNameOf } from "./skill-names.ts";
 
 /** 技能名（目录名、frontmatter 的 name 都是它）。带 fusa 和 task-graph：本机已有别家的 orchestration 技能，撞名会加载错手册。 */
 export const TASK_GRAPH_SKILL_NAME = "fusa-task-graph";
 
 /**
- * 仅供项目经理模型后台按需加载的内部技能命令名（裸名、claude 插件前缀 `fusa:fusa-task-graph`、pi 前缀 `skill:fusa-task-graph`）：
- * 网页 `/` 斜杠命令弹窗过滤隐藏，不影响模型自身的原生技能清单加载。
+ * 是不是任务图技能的命令（`fusa-task-graph`、claude 插件的 `fusa:fusa-task-graph`、pi 的 `skill:fusa-task-graph`，前面可带 `/`、`$`）：
+ * 网页的 `/` 命令列表里藏起来，只给项目经理模型按需加载，不影响各家原生的技能清单。
  */
-const INTERNAL_SKILL_COMMAND_NAMES: ReadonlySet<string> = new Set([
-  TASK_GRAPH_SKILL_NAME,
-  `${PRODUCT_PLUGIN_NAME}:${TASK_GRAPH_SKILL_NAME}`,
-  `skill:${TASK_GRAPH_SKILL_NAME}`,
-]);
-
 export function isInternalSkillCommand(name: string): boolean {
-  return INTERNAL_SKILL_COMMAND_NAMES.has(name.trim().replace(/^[/\$]+/u, "").toLowerCase());
+  return skillNameOf(name.trim().replace(/^[/$]+/u, ""))?.toLowerCase() === TASK_GRAPH_SKILL_NAME;
 }
 
 /** 技能的说明：各家靠它决定要不要加载，先写什么时候加载，再写什么时候不用（上限 TASK_GRAPH_SKILL_DESCRIPTION_MAX_CHARS）。 */
@@ -53,7 +48,7 @@ export function taskGraphSkillBody(): string {
 
 ## 建图
 用 \`${HUB} graph create\` 一次写下整张图的 \`goal\`（总目标）和 \`steps\`（步骤数组），带 \`brief\` 的就绪步骤建好即自动开工。
-- **总目标（\`goal\`）要写全**：所有步骤共用同一份 \`goal\`，写清用户原话、背景、不做什么、怎么算做完（写成能核对的证据：测试命令、截图、实测输出、PR 检查全绿）；长材料存成文件给路径。
+- **总目标（\`goal\`）要写全**：所有步骤共用同一份 \`goal\`，写清用户原话、背景、不做什么、怎么算做完（写成能核对的证据：测试命令、截图、实测输出、PR 检查全绿；要用户看的方案、验收结论、截图、录屏写进汇报的“文件”栏，会跟着步骤挂到检查点卡和总助上）；长材料存成文件给路径。
 - **一张图只装一件事**：互不相干的几件事各建一张图。
 - **按先后步骤拆，不按模块拆**：不要把一个需求切成前端、后端各一个 Worker。写测试、改代码、截图、提 PR 是同一步，一个 Worker 一口气做完。只在三种时候另起一步：用户明说要先看、要换一个模型独立审查、一步的上下文装不下。
 - **默认一条线，同线共用工作目录和分支**：\`steps\` 里不写 \`deps\` 默认按书写顺序串成一条线；单线上下游默认接手同一个 git worktree 和同一条分支（不用重跑准备命令，未提交改动也在，整条线共用一个 PR）。互不依赖的活才并行（写 \`deps: []\` 或前置步骤的 \`key\`）：分叉步骤默认基于上游分支新开 worktree（要从主干重开传 \`"base": "main"\`）；多路合流时后台自动拼接各路交棒（总上限 12,000 字均分、单路最多 4,000 字，超长完整汇报自动落盘到启动目录 \`upstream/<stepKey>.md\` 并附路径）。
@@ -70,7 +65,7 @@ ${PM_REVIEW_REDLINES.map((line) => `  - ${line}`).join("\n")}
 - **顺利完成自动收工交棒，不叫醒你**：非检查点步骤的 Worker 汇报“做完了”且“偏离”为“无”时，后台自动收工该 Worker、记下分支/提交/PR/摘要，并带着 \`goal\`、下一步 \`brief\` 与上一步“交棒”自动拉起下游步骤（若“问题”栏留了话，交棒照走同时把汇报抄送给你；需要用户定的可把卡挂在下游步骤上 \`${HUB} ask --node <下游步骤>\`）。
 - **报“偏离”或异常停在 \`waiting\` 等你处理**：Worker 汇报写了“偏离”、状态是“有问题”或“放弃了”、没按格式、崩溃/额度用完，或自动拉起时目标厂商不可用、手动步骤没写 \`brief\`，步骤都会停在 \`waiting\` 并叫醒你：
   - 回答问题或不认可偏离打回重做：\`${HUB} worker send <编号> --stdin\`；
-  - 要用户拍板的事：用 \`${HUB} ask --node <步骤> [--option <选项>...] [--recommended <选项>] --stdin\` 把拍板卡挂在该步骤上（${ASK_CARD_WHERE}）；用户点完后定案与意见直接发给该步未收工的 Worker 接着干（步骤切回 \`running\`），全程不叫醒你，定案记在步骤上。用户若在聊天里口头答复，用 \`${HUB} graph decide <步骤> --choice <选项> [--note <说明>]\` 记下，效果相同；
+  - 要用户拍板的事：用 \`${HUB} ask --node <步骤> [--option <选项>...] [--recommended <选项>] [--file [标签=]路径...] --stdin\` 把拍板卡挂在该步骤上（${ASK_CARD_WHERE}）；用户点完后定案与意见直接发给该步未收工的 Worker 接着干（步骤切回 \`running\`），全程不叫醒你，定案记在步骤上。用户若在聊天里口头答复，用 \`${HUB} graph decide <步骤> --choice <选项> [--note <说明>]\` 记下，效果相同；
   - 认可偏离或你已手动完成：\`${HUB} graph done <步骤> [--stdin]\` 放行（正文作为补充转交给下一步）；
   - **换人接手**（出错、额度用完、对话太长、厂商不可用或该换一家）：直接 \`${HUB} worker start --node <步骤> [--vendor …] [--model …] [--effort …] [--stdin]\`。还挂着的旧 Worker 自动收工且步骤不标完成；新 Worker 自动继承职责、审查清单、上游交棒、前任的工作目录与分支，以及最近 ${TAKEOVER_PREDECESSORS_MAX} 个前任的汇报、最后的文字、最后几步操作和原始记录路径，并把新的厂商/模型写回步骤。
 - **计划变了**：随时 \`${HUB} graph patch\`（用 \`addSteps\`、\`updateSteps\`、\`removeSteps\`、\`skipSteps\` 或更新 \`goal\`；在干或已完成的步骤不能直接 \`updateSteps\`）。原本没建图、做着发现要分段或加审查的，随时补建一张图。
@@ -84,7 +79,7 @@ ${PM_REVIEW_REDLINES.map((line) => `  - ${line}`).join("\n")}
 - \`${HUB} graph done <步骤> [--pr <URL>] [--commit <SHA>] [--branch <分支>] [--summary <摘要>] [--stdin]\`：放行在等你的步骤（正文是你补给下一步的话），或补记 PR 等结果；有 Worker 在干的步骤会被拒绝，先 \`${HUB} worker end\` 停掉它
 - \`${HUB} graph skip <步骤> [--reason <原因>]\` / \`${HUB} graph cancel [<图编号>] [--reason <原因>]\`：跳过一步（不连带跳过下游，下游追溯最近未跳过上游的交棒与目录）/ 取消整张图（自动停掉图里所有在跑的 Worker）
 - \`${HUB} graph finish [<图编号>] [--unmerged-ok] --stdin\`：所有步骤完成后结束这张图，正文是交付摘要（自动同步给总助）；分支上有未合并的 PR 时默认拦下提醒，确认不合并加 \`--unmerged-ok\`
-- \`${HUB} ask --node <步骤> [--option <选项>...] [--recommended <选项>] --stdin\`：在任意未完步骤上挂拍板卡（${ASK_CARD_WHERE}），正文是问题与背景摘要；用户点完后定案直接交给该步挂着的 Worker 接着干（无活跃 Worker 的手动步骤则标完了推进下游），全程不叫醒你
+- \`${HUB} ask --node <步骤> [--option <选项>...] [--recommended <选项>] [--file [标签=]路径...] --stdin\`：在任意未完步骤上挂拍板卡（${ASK_CARD_WHERE}），正文是问题与背景摘要，要用户看的文件用 \`--file\` 挂在卡片下面并记进该步的交付物；用户点完后定案直接交给该步挂着的 Worker 接着干（无活跃 Worker 的手动步骤则标完了推进下游），全程不叫醒你
 - \`${HUB} graph decide <步骤> --choice <选项> [--note <说明>]\`：用户没点选项、在聊天里口头答复时记下定案；该步挂着未收工 Worker 时同样直接发给它接着干，否则推进下游
 - \`${HUB} worker start --node <步骤> …\`：给等你处理的步骤换人或手动派人（\`--title\` 和正文都可省略，正文作为补充说明）
 - \`${HUB} worker end <编号>\`：只停掉这个 Worker，不会把步骤标完成；未完成的步骤会停在 \`waiting\` 等你处理（顺利完成的步骤由后台自动收工）

@@ -5,6 +5,7 @@ import { VENDOR_LIST } from "../vendors/registry.ts";
 import type { ToolAction } from "../vendors/types.ts";
 import type { AgentStep, AgentStepInput } from "./domain.ts";
 import { MAX_STEP_ARG_CHARS } from "./limits.ts";
+import { skillNameOf, skillNameOfFile } from "./skill-names.ts";
 
 export const STEP_TEXT = {
   /** 老服务端没带 step、或认不出来时。 */
@@ -56,7 +57,8 @@ const fileName = (path: string | undefined): string | null => {
   return name === undefined ? null : name;
 };
 
-const filePathOf = (input: AgentStepInput): string | undefined =>
+/** 工具参数里的文件路径：六家读写文件的工具用的就是这几个键。 */
+export const filePathOf = (input: AgentStepInput): string | undefined =>
   input.file_path ?? input.notebook_path ?? input.AbsolutePath ?? input.TargetFile ?? input.Path ?? input.path;
 
 /** “Reading a.ts”；没有文件名就写“Reading file”。 */
@@ -65,17 +67,8 @@ const onFile = (verb: string) => (input: AgentStepInput) => {
   return name === null ? `${verb} file` : `${verb} ${name}`;
 };
 
-/** 读 `…/skills/<名字>/SKILL.md` 就是在加载这个技能（codex、agy、pi、cursor 都这样激活技能）。 */
-const SKILL_FILE_RE = /(?:^|[\\/])skills[\\/]([^\\/]+)[\\/]SKILL\.md$/i;
-
-/** 技能名：去掉插件命名空间（`superpowers:brainstorming` → `brainstorming`），名字本身照抄（用户打 `/名字` 用的就是它）。 */
-function skillName(raw: string | undefined): string | null {
-  const name = raw?.trim().split(":").findLast((part) => part.trim() !== "")?.trim();
-  return name === undefined || name === "" ? null : name;
-}
-
 const loadingSkill = (raw: string | undefined): string => {
-  const name = skillName(raw);
+  const name = skillNameOf(raw);
   return name === null ? "Loading skill" : `Loading skill ${name}`;
 };
 
@@ -163,8 +156,9 @@ function callingText(server: string | undefined, tool: string | undefined): stri
 const ACTION_TEXT: Readonly<Record<ToolAction, (input: AgentStepInput) => string>> = {
   command: () => "Running command",
   read: (input) => {
-    const skill = SKILL_FILE_RE.exec(filePathOf(input) ?? "")?.[1];
-    return skill === undefined ? reading(input) : loadingSkill(skill);
+    // 读 `…/skills/<名字>/SKILL.md` 就是在加载这个技能（codex、agy、pi、cursor 都这样激活技能）
+    const skill = skillNameOfFile(filePathOf(input) ?? "");
+    return skill === null ? reading(input) : loadingSkill(skill);
   },
   edit: onFile("Editing"),
   write: onFile("Writing"),

@@ -3,6 +3,7 @@ import { ChevronRight, Loader2, MessageCircleQuestionMark } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import {
   askOf,
+  splitCardTitle,
   DEFAULT_AGENT_VENDOR,
   GRAPH_HISTORY_PAGE_SIZE,
   MAX_COMPLETED_GRAPH_PAGES,
@@ -23,6 +24,7 @@ import { normalizeTaskGraphs } from "../task-graph-compat.ts";
 import type { WorkerTone } from "../worker-status.ts";
 import { Button } from "../ui/button.tsx";
 import { Avatar } from "./Avatar.tsx";
+import { CardBody } from "./Deliverables.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { PeelTrackList } from "./PeelTrack.tsx";
 import { SliceWheelIcon } from "./SliceWheelIcon.tsx";
@@ -180,6 +182,7 @@ function askSummary(text: string): string {
 /** 一个提问一行：去掉 Markdown 的第一行；点开在下面看全文，同时让对话滚到那条消息。 */
 function AskRow({ ask, open, onToggle }: { ask: Message; open: boolean; onToggle: () => void }) {
   const summary = askSummary(ask.text);
+  const { title, body } = splitCardTitle(ask.text);
   return (
     <li>
       <button type="button" aria-expanded={open} className={cn(ROW, "items-start", open ? "bg-sidebar" : ITEM_HOVER)} onClick={onToggle}>
@@ -189,8 +192,9 @@ function AskRow({ ask, open, onToggle }: { ask: Message; open: boolean; onToggle
       </button>
       {open && (
         <div className="-mx-2.5 rounded-b-xl bg-sidebar px-2.5 pb-3 text-minor">
-          <div className="pl-7">
-            <Markdown text={ask.text} messageId={ask.id} />
+          <div data-ask-detail className="pl-7">
+            <Markdown text={title} messageId={ask.id} />
+            <CardBody text={body} deliverables={askOf(ask)?.deliverables} messageId={ask.id} className="mt-2" />
           </div>
         </div>
       )}

@@ -11,6 +11,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ActionRow, AnyActionRow } from "../../shared/actions.ts";
 import type { ConversationId, PmId, SessionId, TaskNode, WorkerId } from "../../shared/domain.ts";
 import { workerSetupLogPath } from "../../shared/paths.ts";
+import { pendingDecisionsOf } from "../../shared/decisions.ts";
+import { askOf } from "../../shared/domain.ts";
 import { REVIEW_CHECKLIST, parseReviewTarget } from "../../shared/review.ts";
 import { REPORT_END, REPORT_START } from "../../shared/worker.ts";
 import { addWorktree, remoteBranchHead, resolveCommit } from "../git/index.ts";
@@ -32,7 +34,7 @@ const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd,
 const stateOf = (n: Pick<TaskNode, "status" | "waitingFor" | "skipped">): string =>
   n.status === "waiting" ? `waiting:${n.waitingFor}` : n.status === "done" && n.skipped ? "skipped" : n.status;
 
-function report(fields: { status?: string; summary: string; verdict?: string; sha?: string; questions?: string }): string {
+function report(fields: { status?: string; summary: string; verdict?: string; sha?: string; questions?: string; files?: string }): string {
   return [
     REPORT_START,
     `状态: ${fields.status ?? "做完了"}`,
@@ -44,6 +46,7 @@ function report(fields: { status?: string; summary: string; verdict?: string; sh
     "测试: pnpm test 通过",
     "偏离: 无",
     "交棒: 查了 a.ts:1",
+    `文件: ${fields.files ?? "无"}`,
     `问题: ${fields.questions ?? "无"}`,
     REPORT_END,
   ].join("\n");
@@ -149,14 +152,14 @@ describe("审查步骤只查不修", () => {
     )!;
 
   /** impl -> review -> docs：impl 提交并推到 origin、汇报做完了，审查目录建好。返回各步的 Worker 和被审提交。 */
-  const startReview = async () => {
+  const startReview = async (reviewStep: { confirm?: boolean } = {}) => {
     const graph = ledger.hubCall(lin.sessionId, "graph.create", {
       specJson: JSON.stringify({
         title: "修翻页",
         goal: "修好翻页并通过独立审查。",
         steps: [
           { key: "impl", title: "实现", brief: "修好翻页" },
-          { key: "review", title: "独立审查", brief: "重点看游标边界", review: true, vendor: "codex" },
+          { key: "review", title: "独立审查", brief: "重点看游标边界", review: true, vendor: "codex", ...reviewStep },
           { key: "docs", title: "补文档", brief: "写进 README" },
         ],
       }),
@@ -343,6 +346,21 @@ describe("审查步骤只查不修", () => {
     expect(stateOf(node)).toBe("done");
     expect(node.artifact).toMatchObject({ reviewVerdict: "PASS", verifiedCommit: sha.slice(0, 8) });
     expect(ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).text).toContain(`审查 PASS · 验证提交 ${sha.slice(0, 8)}`);
+  });
+
+  it("审查结论文件写进“文件”栏：核对通过后挂到步骤上，标了 confirm 的审查步骤的检查点卡和总助拍板卡都带它", async () => {
+    const { graph, wReview, sha } = await startReview({ confirm: true });
+    const verdictPath = join(workerRow(wReview).worktree_path, "verdict.md");
+    writeFileSync(verdictPath, "# 审查结论\nPASS\n");
+    reportTurn(wReview, report({ summary: "可以合", verdict: "PASS", sha, files: `\n- [审查结论](${verdictPath})` }));
+    expect(stateOf(graphNow(graph.id).nodes[1]!)).toBe("running");
+    await runVerify();
+    const node = graphNow(graph.id).nodes[1]!;
+    expect(stateOf(node)).toBe("waiting:user");
+    expect(node.artifact).toMatchObject({ reviewVerdict: "PASS", verifiedCommit: sha });
+    expect(node.artifact?.deliverables?.map((d) => [d.label, d.mime])).toEqual([["审查结论", "text/markdown"]]);
+    expect(askOf(ledger.getMessage(node.gateAskMessageId!)!)?.deliverables?.map((d) => d.label)).toEqual(["审查结论"]);
+    expect(pendingDecisionsOf(ledger.snapshot())[0]!.deliverables?.map((d) => d.label)).toEqual(["审查结论"]);
   });
 
   it("判 FAIL 后项目经理在审查后面加修复步骤：修复步骤接手实现的 worktree 和分支，不接审查目录", async () => {

@@ -2126,3 +2126,108 @@ describe("0029_user_blockers：要用户动手的阻塞", () => {
     expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 });
+
+describe("0030_deliverables：总助条目挂交付物的旁表", () => {
+  it.each([28, 29])("从 %i 升级：老条目原样、没有交付物行；条目删掉时交付物跟着删；退回 user_version = 29 重跑不丢数据", (from) => {
+    const db = m3Db();
+    migrate(db, migrationsUpTo(from));
+    expect(db.get("SELECT name FROM sqlite_master WHERE name = 'router_item_deliverables'")).toBeUndefined();
+    expect(db.get("SELECT name FROM sqlite_master WHERE name = 'user_blockers'") !== undefined).toBe(from >= 29);
+    const itemId = Number(
+      db.run(
+        `INSERT INTO router_items (pm_id, project_id, conversation_id, kind, status, summary, created_at, updated_at)
+         VALUES (1, 2, 1, 'report', 'unread', '方案写好了', 100, 100)`,
+      ).lastInsertRowid,
+    );
+    if (from >= 29) {
+      db.run(
+        "INSERT INTO user_blockers (id, kind, vendor, device, status, rechecked_as, created_at, updated_at) VALUES (7, 'vendor_signed_out', 'agy', '东京', 'open', NULL, 60, 60)",
+      );
+    }
+    const before = db.all("SELECT * FROM router_items");
+    const blockers = from >= 29 ? db.all("SELECT * FROM user_blockers") : [];
+    expect(migrate(db, migrationsDir)).toMatchObject({ from, to: LATEST_VERSION });
+    expect(userVersion(db)).toBe(LATEST_VERSION);
+    expect(db.all("SELECT * FROM router_items")).toEqual(before);
+    expect(db.all("SELECT * FROM user_blockers")).toEqual(blockers);
+    expect(db.all("SELECT * FROM router_item_deliverables")).toEqual([]);
+
+    const json = JSON.stringify([{ label: "方案", path: "/tmp/plan.md" }]);
+    db.run("INSERT INTO router_item_deliverables (item_id, deliverables_json) VALUES (?, ?)", itemId, json);
+    db.exec("PRAGMA user_version = 29");
+    migrate(db, migrationsDir);
+    expect(db.all("SELECT * FROM router_item_deliverables")).toEqual([{ item_id: itemId, deliverables_json: json }]);
+    expect(db.all("SELECT * FROM user_blockers")).toEqual(blockers);
+
+    db.run("DELETE FROM router_items WHERE id = ?", itemId);
+    expect(db.all("SELECT * FROM router_item_deliverables")).toEqual([]);
+    expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+});
+
+describe("0031_loaded_skills：项目经理加载过的技能", () => {
+  it.each([28, 29, 30])("从 %i 升级：建 loaded_skills、handovers 多一列 skills_section，老交接、提醒卡、交付物原样；回退 8 / 28 / 29 / 30 重跑不丢数据", (from) => {
+    const db = m3Db();
+    migrate(db, migrationsUpTo(from));
+    expect(db.get("SELECT name FROM sqlite_master WHERE name = 'loaded_skills'")).toBeUndefined();
+    db.run(
+      `INSERT INTO agent_sessions (id, role, conversation_id, pm_id, vendor, vendor_session_id, cwd, generation, created_at, updated_at)
+       VALUES (90, 'pm', 1, 1, 'claude', 'gen-90', '/tmp', 9, 0, 0)`,
+    );
+    db.run(
+      `INSERT INTO handovers (conversation_id, from_session_id, auto, status, text, preamble, created_at, updated_at)
+       VALUES (1, 90, 1, 'switched', '交接', '开场', 1, 2)`,
+    );
+    if (from >= 29) {
+      db.run(
+        "INSERT INTO user_blockers (id, kind, vendor, device, status, rechecked_as, created_at, updated_at) VALUES (7, 'vendor_signed_out', 'agy', '东京', 'open', NULL, 60, 60)",
+      );
+    }
+    if (from >= 30) {
+      const itemId = Number(
+        db.run(
+          `INSERT INTO router_items (pm_id, project_id, conversation_id, kind, status, summary, created_at, updated_at)
+           VALUES (1, 2, 1, 'report', 'unread', '方案写好了', 100, 100)`,
+        ).lastInsertRowid,
+      );
+      db.run("INSERT INTO router_item_deliverables (item_id, deliverables_json) VALUES (?, ?)", itemId, '[{"label":"方案","path":"/tmp/plan.md"}]');
+    }
+    const before = db.all("SELECT * FROM handovers ORDER BY id");
+    const others = () => ({
+      blockers: from >= 29 ? db.all("SELECT * FROM user_blockers") : [],
+      deliverables: from >= 30 ? db.all("SELECT * FROM router_item_deliverables") : [],
+    });
+    const othersBefore = others();
+
+    expect(migrate(db, migrationsDir)).toMatchObject({ from, to: LATEST_VERSION });
+    expect(rowsInOldShape(db, "handovers", before)).toEqual(before);
+    expect(db.all("SELECT skills_section FROM handovers")).toEqual([{ skills_section: null }]);
+    expect(others()).toEqual(othersBefore);
+
+    db.run("UPDATE handovers SET skills_section = '## 技能'");
+    db.run(
+      `INSERT INTO loaded_skills (conversation_id, skill_key, name, path, source, generation, loaded_at)
+       VALUES (1, '/s/a/SKILL.md', 'a', '/s/a/SKILL.md', 'model', 9, 5)`,
+    );
+    expect(() => db.run(
+      `INSERT INTO loaded_skills (conversation_id, skill_key, name, path, source, generation, loaded_at)
+       VALUES (1, '/s/b/SKILL.md', 'b', '/s/b/SKILL.md', 'bogus', 9, 5)`,
+    )).toThrow(/CHECK/);
+    const handovers = db.all("SELECT * FROM handovers ORDER BY id");
+    const skills = db.all("SELECT * FROM loaded_skills");
+    for (const rewindTo of [30, 29, 28, 8]) {
+      db.exec(`PRAGMA user_version = ${rewindTo}`);
+      expect(() => migrate(db, migrationsDir)).not.toThrow();
+      expect(userVersion(db)).toBe(LATEST_VERSION);
+      expect(db.all("SELECT * FROM handovers ORDER BY id")).toEqual(handovers);
+      expect(db.all("SELECT * FROM loaded_skills")).toEqual(skills);
+      expect(others()).toEqual(othersBefore);
+      expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+    }
+    const plan = db
+      .all<{ detail: string }>("EXPLAIN QUERY PLAN SELECT name FROM loaded_skills WHERE conversation_id = 1 AND generation = 9 ORDER BY loaded_at DESC")
+      .map((r) => r.detail)
+      .join("\n");
+    expect(plan).toContain("loaded_skills_generation");
+  });
+});

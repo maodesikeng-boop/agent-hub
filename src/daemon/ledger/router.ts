@@ -10,7 +10,8 @@ import type {
   RouterItemsPage,
   UpdateRouterSettingsRequest,
 } from "../../shared/api.ts";
-import { extractAskCard, userMessageDedupeKey } from "../../shared/domain.ts";
+import { deliverablesOf, type Deliverable } from "../../shared/deliverables.ts";
+import { askOf, extractAskCard, userMessageDedupeKey } from "../../shared/domain.ts";
 import type {
   AgentSessionRow,
   ConversationId,
@@ -54,6 +55,7 @@ import {
   ROUTER_WORKER_LIST_MAX,
 } from "../../shared/limits.ts";
 import { defaultRouterSettings } from "../../shared/router.ts";
+import { parseLocalHref } from "../../shared/sent-files.ts";
 import type {
   DeviceRouterDigest,
   PmDigestActiveWorker,
@@ -93,6 +95,8 @@ interface RouterItemDbRow {
   context: string | null;
   options_json: string | null;
   summary: string | null;
+  /** ITEM_SELECT 的 LEFT JOIN 带出来的 Deliverable[] JSON；没有行是 null，当空列表。INSERT … RETURNING * 不带这一列。 */
+  deliverables_json?: string | null;
   links_json: string | null;
   resolution_json: string | null;
   ask_message_id: number | null;
@@ -200,6 +204,16 @@ const routerNoteSchema = z.object({
   clear: z.boolean().optional(),
 });
 
+/** 条目连同它挂的交付物（旁表 router_item_deliverables，migrations/0030_deliverables.sql）；没挂的 deliverables_json 是 null。 */
+const ITEM_SELECT = `SELECT router_items.*, router_item_deliverables.deliverables_json FROM router_items
+  LEFT JOIN router_item_deliverables ON router_item_deliverables.item_id = router_items.id`;
+
+/** 有交付物才带这个字段：老条目、没挂文件的条目和以前一样。 */
+function deliverablesField(row: RouterItemDbRow): { deliverables?: Deliverable[] } {
+  const list = deliverablesOf(parseJsonOr<unknown>(row.deliverables_json ?? null, null));
+  return list.length > 0 ? { deliverables: list } : {};
+}
+
 function parseJsonOr<T>(raw: string | null, fallback: T): T {
   if (raw === null) return fallback;
   try {
@@ -223,6 +237,7 @@ function toRouterItem(row: RouterItemDbRow): RouterItem {
       options: parseJsonOr<string[]>(row.options_json, []),
       askMessageId: row.ask_message_id,
       resolution: parseJsonOr<RouterResolution | null>(row.resolution_json, null),
+      ...deliverablesField(row),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
@@ -236,6 +251,7 @@ function toRouterItem(row: RouterItemDbRow): RouterItem {
     conversationId: row.conversation_id,
     summary: row.summary ?? "",
     links: parseJsonOr<RouterReportLink[]>(row.links_json, []),
+    ...deliverablesField(row),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -312,7 +328,19 @@ export function createLedgerRouter(
   };
 
   const getItemRow = (id: RouterItemId): RouterItemDbRow | undefined =>
-    db.get<RouterItemDbRow>("SELECT * FROM router_items WHERE id = ?", id);
+    db.get<RouterItemDbRow>(`${ITEM_SELECT} WHERE router_items.id = ?`, id);
+
+  /** 条目挂上交付物（空列表不写），返回连同交付物重读的条目。 */
+  const withDeliverablesIn = (itemId: RouterItemId, list: readonly Deliverable[]): RouterItem => {
+    if (list.length > 0) {
+      db.run(
+        "INSERT OR REPLACE INTO router_item_deliverables (item_id, deliverables_json) VALUES (?, ?)",
+        itemId,
+        JSON.stringify(list),
+      );
+    }
+    return toRouterItem(getItemRow(itemId)!);
+  };
 
   const pendingDecisionCountOf = (pmId: PmId): number =>
     db.get<{ n: number }>(
@@ -405,7 +433,7 @@ export function createLedgerRouter(
       t,
       t,
     )!;
-    const item = toRouterItem(row);
+    const item = withDeliverablesIn(row.id, askOf(message)?.deliverables ?? []);
     p.changes.push({ type: "router.item.created", data: { item } });
     appendAuditIn("pm", "ask", session.pmId, row.id, {
       question,
@@ -448,11 +476,15 @@ export function createLedgerRouter(
     return { text: `已关掉卡 #${row.id}。`, data: { item } };
   };
 
-  /** hub router report：向 Router 投递里程碑汇报。 */
+  /**
+   * hub router report：向 Router 投递里程碑汇报。本机文件不进 links（网页点不开），走 deliverables：
+   * hub router report 的 --file 由 hub-commands.ts 存好副本传进来，graph finish 传整张图的交付物。
+   */
   const reportIn = (
     p: Pending,
     caller: AgentSessionRow & { pmId: PmId },
-    rawArgs: HubArgs<"router.report">,
+    rawArgs: Omit<HubArgs<"router.report">, "files">,
+    deliverables: readonly Deliverable[] = [],
   ): HubResult<"router.report"> => {
     assertPmNotArchived(caller.pmId);
     const parsed = routerReportSchema.safeParse(rawArgs);
@@ -478,6 +510,9 @@ export function createLedgerRouter(
       if (charLen(target) > ROUTER_REPORT_LINK_TARGET_MAX_CHARS) {
         throw fail("invalid", `链接地址最多 ${ROUTER_REPORT_LINK_TARGET_MAX_CHARS} 字`);
       }
+      if (parseLocalHref(target) !== null) {
+        throw fail("invalid", `--link ${label}=${target} 是本机文件，总助里点不开：改用 --file ${label}=${target}`);
+      }
       return { label, target };
     });
 
@@ -500,7 +535,7 @@ export function createLedgerRouter(
       t,
       t,
     )!;
-    const item = toRouterItem(row);
+    const item = withDeliverablesIn(row.id, deliverables);
     p.changes.push({ type: "router.item.created", data: { item } });
     appendAuditIn("pm", "router.report", caller.pmId, row.id);
 
@@ -719,7 +754,7 @@ export function createLedgerRouter(
     const trimmed = beforeCursor?.trim() ?? "";
     if (trimmed === "") {
       rows = db.all<RouterItemDbRow>(
-        `SELECT * FROM router_items
+        `${ITEM_SELECT}
           WHERE ${scope}
           ORDER BY created_at DESC, id DESC
           LIMIT ?`,
@@ -734,7 +769,7 @@ export function createLedgerRouter(
       rows =
         pivot !== undefined
           ? db.all<RouterItemDbRow>(
-              `SELECT * FROM router_items
+              `${ITEM_SELECT}
                 WHERE ${scope}
                   AND (created_at < ? OR (created_at = ? AND id < ?))
                 ORDER BY created_at DESC, id DESC
@@ -745,7 +780,7 @@ export function createLedgerRouter(
               take + 1,
             )
           : db.all<RouterItemDbRow>(
-              `SELECT * FROM router_items
+              `${ITEM_SELECT}
                 WHERE ${scope} AND id < ?
                 ORDER BY created_at DESC, id DESC
                 LIMIT ?`,
@@ -758,7 +793,7 @@ export function createLedgerRouter(
       const cursorCreatedAt = Number(match[1]);
       const cursorId = Number(match[2]);
       rows = db.all<RouterItemDbRow>(
-        `SELECT * FROM router_items
+        `${ITEM_SELECT}
           WHERE ${scope}
             AND (created_at < ? OR (created_at = ? AND id < ?))
           ORDER BY created_at DESC, id DESC
@@ -794,14 +829,14 @@ export function createLedgerRouter(
   const snapshotSlice = (): RouterSlice => {
     const settings = getSettings();
     const pendingRows = db.all<RouterItemDbRow>(
-      `SELECT * FROM router_items
+      `${ITEM_SELECT}
         WHERE status IN ('pending', 'unread') AND status = 'pending'
         ORDER BY created_at DESC, id DESC
         LIMIT ?`,
       ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX,
     );
     const briefingRows = db.all<RouterItemDbRow>(
-      `SELECT * FROM router_items
+      `${ITEM_SELECT}
         WHERE kind = 'report'
         ORDER BY created_at DESC, id DESC
         LIMIT ?`,

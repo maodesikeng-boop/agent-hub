@@ -1,5 +1,7 @@
 import { Graph, layout as dagreLayout, type EdgeLabel, type GraphLabel, type NodeLabel } from "@dagrejs/dagre";
 import { LRUCache } from "lru-cache";
+import type { Deliverable } from "../shared/index.ts";
+import { deliverablesHeightRem } from "./deliverable-size.ts";
 
 /** Dagre 拓扑布局结果 LRU 缓存上限（对齐 docs/task-graph-design.md 第 5.2、5.3 节）。 */
 export const GRAPH_LAYOUT_CACHE_MAX = 64;
@@ -32,8 +34,17 @@ const DIALOG_SUMMARY_EXTRA_REM = 1;
 const DIALOG_GATE_IDLE_WIDTH_REM = 14;
 const DIALOG_GATE_IDLE_HEIGHT_REM = 4.5;
 const DIALOG_GATE_ACTIVE_WIDTH_REM = 17.5;
-const DIALOG_GATE_ACTIVE_BASE_REM = 4.75;
-const DIALOG_GATE_OPTION_ROW_REM = 2.5;
+// 放大弹窗里等拍板的卡（PeelTrack 的 GateDecisionCard）按实际渲染量出来的各块高度，17.5px 根字号下逐块量过。
+const DIALOG_GATE_ACTIVE_BASE_REM = 3.34; // 标题行（连下边距）1.725 + 卡片上下内边距和边框 1.61
+const DIALOG_GATE_QUESTION_REM = 1.6; // 问题一行 1.35 + mb-1 0.25
+const DIALOG_GATE_SUMMARY_REM = 1.9; // 摘要一行 1.39 + 和下面的 mb-2 0.5
+const DIALOG_GATE_OPTION_ROW_REM = 2.25; // 一个选项按钮（min-h-9）
+const DIALOG_GATE_OPTION_GAP_REM = 0.5; // 选项之间（gap-2）
+const DIALOG_GATE_NOTE_COLLAPSED_REM = 2.25; // “Add note” 按钮 1.75 + mt-2 0.5
+// 触屏（pointer: coarse）下选项和 “Add note” 按钮都是 min-h-11（2.75rem），第 19 条
+const DIALOG_GATE_OPTION_ROW_COARSE_REM = 2.75;
+const DIALOG_GATE_NOTE_COLLAPSED_COARSE_REM = 3.25;
+const DIALOG_GATE_NOTE_EXPANDED_REM = 2.875; // 输入行 2.25 + mt-2.5 0.625
 const DIALOG_MARGIN_REM = 0.75;
 const DIALOG_RANK_SEP_REM = 3;
 const DIALOG_NODE_SEP_REM = 1.125;
@@ -63,8 +74,12 @@ export interface LayoutInputNode {
   readonly optionCount?: number;
   /** 是否带有摘要说明文本。 */
   readonly hasSummary?: boolean;
+  /** 拍板卡是否画了问题那一行（问题和步骤标题不同才画）。 */
+  readonly hasQuestion?: boolean;
   /** 门禁卡片是否展开了补充备注输入框。 */
   readonly noteExpanded?: boolean;
+  /** 拍板卡下面的交付物（文档链接行、缩略图行）：只有放大弹窗里等拍板的卡会画出来，估算高度时加上。 */
+  readonly deliverables?: readonly Deliverable[];
 }
 
 export interface LayoutInputEdge {
@@ -80,6 +95,8 @@ export interface TaskGraphLayoutInput {
   readonly viewportMode: LayoutViewportMode;
   /** 当前 html 根字号像素值（支持 12~19 等各档界面大小缩放；默认 16）。 */
   readonly rootFontSizePx?: number;
+  /** 主指针是触屏（matchMedia("(pointer: coarse)")）：拍板卡里的按钮更高，估算跟着加高。 */
+  readonly coarsePointer?: boolean;
 }
 
 export interface LayoutPoint {
@@ -176,6 +193,7 @@ export function estimateNodeSizeRem(
   node: LayoutInputNode,
   viewportMode: LayoutViewportMode,
   layerCount = 1,
+  coarsePointer = false,
 ): { widthRem: number; heightRem: number } {
   const activeGate = isWaitingGate(node);
 
@@ -184,9 +202,16 @@ export function estimateNodeSizeRem(
       const rows = normalizedOptionRows(node);
       const heightRem =
         DIALOG_GATE_ACTIVE_BASE_REM +
-        (node.hasSummary ? DIALOG_SUMMARY_EXTRA_REM : 0) +
-        rows * DIALOG_GATE_OPTION_ROW_REM +
-        (node.noteExpanded ? RAIL_GATE_NOTE_EXPANDED_REM : RAIL_GATE_NOTE_COLLAPSED_REM);
+        (node.hasQuestion ? DIALOG_GATE_QUESTION_REM : 0) +
+        (node.hasSummary ? DIALOG_GATE_SUMMARY_REM : 0) +
+        deliverablesHeightRem(node.deliverables ?? []) +
+        rows * (coarsePointer ? DIALOG_GATE_OPTION_ROW_COARSE_REM : DIALOG_GATE_OPTION_ROW_REM) +
+        (rows - 1) * DIALOG_GATE_OPTION_GAP_REM +
+        (node.noteExpanded
+          ? DIALOG_GATE_NOTE_EXPANDED_REM
+          : coarsePointer
+            ? DIALOG_GATE_NOTE_COLLAPSED_COARSE_REM
+            : DIALOG_GATE_NOTE_COLLAPSED_REM);
       return { widthRem: DIALOG_GATE_ACTIVE_WIDTH_REM, heightRem: round2(heightRem) };
     }
     if (node.hasCard === true) {
@@ -237,6 +262,7 @@ function buildLayoutCacheKey(input: TaskGraphLayoutInput, fontPx: number): strin
     input.revision !== undefined ? String(input.revision) : "_",
     input.viewportMode,
     String(fontPx),
+    input.coarsePointer === true ? "coarse" : "fine",
   ];
 
   for (let i = 0; i < input.nodes.length; i++) {
@@ -245,9 +271,11 @@ function buildLayoutCacheKey(input: TaskGraphLayoutInput, fontPx: number): strin
     const isDone = n.status === "done" ? 1 : 0;
     const opts = activeGate ? normalizedOptionRows(n) : 0;
     const sum = (activeGate || input.viewportMode === "dialog") && n.hasSummary ? 1 : 0;
+    const question = activeGate && input.viewportMode === "dialog" && n.hasQuestion ? 1 : 0;
     const note = activeGate && n.noteExpanded ? 1 : 0;
+    const files = activeGate && input.viewportMode === "dialog" ? deliverablesHeightRem(n.deliverables ?? []) : 0;
     const pos = n.position ?? i;
-    parts.push(`N:${n.key},${n.hasCard === true ? 1 : 0},${pos},${activeGate},${isDone},${opts},${sum},${note}`);
+    parts.push(`N:${n.key},${n.hasCard === true ? 1 : 0},${pos},${activeGate},${isDone},${opts},${sum},${question},${note},${files}`);
   }
 
   for (let i = 0; i < input.edges.length; i++) {
@@ -564,7 +592,7 @@ export function computeTaskGraphLayoutUncached(input: TaskGraphLayoutInput): Tas
     } else {
       const layerSize = entries.length;
       const rowTemp: VirtualNode[] = entries.map((entry) => {
-        const remSize = estimateNodeSizeRem(entry.node, input.viewportMode, layerSize);
+        const remSize = estimateNodeSizeRem(entry.node, input.viewportMode, layerSize, input.coarsePointer === true);
         mappedNodeId.set(entry.node.key, entry.node.key);
         return {
           id: entry.node.key,
