@@ -34,7 +34,10 @@ import {
   type FileAction,
   type FileActionResponse,
   type MessageId,
+  type ConversationsLookup,
+  type EndedWorkersPage,
   type MessagesPage,
+  type WorkerId,
   type ModelsResponse,
   type REFRESH_UNUSABLE,
   type PickFolderRequest,
@@ -209,6 +212,9 @@ export function createClient(device: DeviceId | null) {
     fetchBootId: () => request<{ instanceId?: string }>(at(API_PATHS.authStatus)).then((r) => r.instanceId),
     fetchOlderMessages: (conversationId: ConversationId, before: MessageId) =>
       request<MessagesPage>(`${at(API_PATHS.messages(conversationId))}?before=${before}`),
+    fetchConversationsLookup: (query: { ids?: readonly ConversationId[]; workerIds?: readonly WorkerId[] }) =>
+      request<ConversationsLookup>(at(API_PATHS.conversationsLookup(query))),
+    fetchEndedWorkers: (pmId: PmId, before: ConversationId | null) => request<EndedWorkersPage>(at(API_PATHS.endedWorkers(pmId, before))),
     postMessage: (conversationId: ConversationId, body: PostMessageRequest) => postJson<PostMessageResponse>(at(API_PATHS.messages(conversationId)), body),
     /**
      * 上传一个文件：请求体是文件原样的字节（不是 JSON，也不说发给谁），文件名放在 ?name=。服务端清理文件名、给每个文件单独一个目录。

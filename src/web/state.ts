@@ -1,6 +1,7 @@
 // 网页的数据：/api/state 的快照 + WebSocket 推来的变化，合成一份界面要用的状态。
 // 全是纯函数，方便测试；网络和定时器在 device-hub.ts。
 import {
+  MAX_CONVERSATION_LOOKUP_STATES,
   MAX_REWOUND_PENDING_KEYS,
   ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX,
   ROUTER_STREAM_LIVE_MAX,
@@ -14,6 +15,8 @@ import {
   type Change,
   type ConversationId,
   type ConversationSnapshot,
+  type ConversationsLookup,
+  type EndedWorkersPage,
   type HealthEntry,
   type Message,
   type MessageId,
@@ -95,6 +98,13 @@ export interface HubState {
   router: RouterSlice;
   /** 所有进行中项目的活跃任务图（status = 'active'）。 */
   activeTaskGraphs: TaskGraph[];
+  /**
+   * 还有更早的已收工 Worker 没拉下来的项目经理：值是下一页的 before（快照的 olderEndedWorkers，右栏 Completed 每拉一页换成 nextBefore，
+   * 拉完了删掉）。
+   */
+  olderEndedWorkers: Record<PmId, ConversationId | undefined>;
+  /** 按需单拉的对话（不在快照里的早收工 Worker）：loading 在拉，missing 拉过、没有。拉到了删掉，重拉快照清空。 */
+  lookups: Record<ConversationId, "loading" | "missing" | undefined>;
   /** 服务端所在机器能做什么（界面按它显示控件，见 server-info.tsx）；还没加载时是 macOS 的占位，加载完才会显示界面。 */
   server: ServerInfo;
   /** 连入方 ssh 隧道状态（来自 /api/state 的 tunnel）。 */
@@ -128,6 +138,8 @@ export const initialState: HubState = {
   schedules: [],
   router: emptyRouterSlice(),
   activeTaskGraphs: [],
+  olderEndedWorkers: {},
+  lookups: {},
   server: serverInfoFor("darwin"),
   pending: [],
   older: {},
@@ -147,6 +159,10 @@ export type HubAction =
   | { type: "pendingPhase"; clientId: string; phase: PendingMessage["phase"]; failure?: PendingMessage["failure"]; reason?: ErrorInfo }
   | { type: "pendingRewind"; clientId: string }
   | { type: "messageRewind"; conversationId: ConversationId; messageId: MessageId }
+  | { type: "lookupStart"; ids: readonly ConversationId[] }
+  | { type: "lookupDone"; ids: readonly ConversationId[]; lookup: ConversationsLookup }
+  | { type: "lookupFailed"; ids: readonly ConversationId[] }
+  | { type: "endedWorkersLoaded"; pmId: PmId; page: EndedWorkersPage }
   | { type: "retryStart"; messageId: MessageId }
   | { type: "retryFailed"; messageId: MessageId };
 
@@ -464,12 +480,50 @@ export function applyChange(state: HubState, change: Change): HubState {
   }
 }
 
-/** 这条变化引用了网页还不认识的对话吗？ */
+/**
+ * 这条变化是网页还不认识的对话里的新消息吗（漏了 conversation.created，要重拉快照）？
+ * 不在快照里的早收工 Worker 对话的消息改动（message.updated）不算：网页没带它，点开时拉的就是最新的。
+ */
 export function referencesUnknownConversation(state: HubState, change: Change): boolean {
-  return (
-    (change.type === "message.created" || change.type === "message.updated") &&
-    !state.conversations[change.data.message.conversationId]
-  );
+  return change.type === "message.created" && !state.conversations[change.data.message.conversationId];
+}
+
+/**
+ * 按需拉回来的对话并进状态：已经有的不动（快照之后实时来的变化比拉的时候新），会话只补没有的。
+ * 引用不变：一个都没新加时原样返回 conversations、sessions。
+ */
+function mergeLoaded(state: HubState, lookup: ConversationsLookup): Pick<HubState, "conversations" | "sessions"> {
+  let conversations = state.conversations;
+  for (const c of lookup.conversations) {
+    if (conversations[c.conversation.id]) continue;
+    if (conversations === state.conversations) conversations = { ...state.conversations };
+    conversations[c.conversation.id] = {
+      conversation: c.conversation,
+      messages: c.messages,
+      hasMore: c.hasMore,
+      ...(c.workerLine !== undefined ? { workerLine: c.workerLine } : {}),
+    };
+  }
+  const known = new Set(state.sessions.map((s) => s.sessionId));
+  const added = lookup.sessions.filter((s) => !known.has(s.sessionId));
+  return { conversations, sessions: added.length === 0 ? state.sessions : [...state.sessions, ...added] };
+}
+
+/** lookups 里记的“拉过、没有”最多留这么多个（手改网址、删掉的 Worker 才会有），满了清掉，不随时间涨。 */
+function withLookups(
+  lookups: HubState["lookups"],
+  ids: readonly ConversationId[],
+  value: "loading" | "missing" | undefined,
+): HubState["lookups"] {
+  const next = { ...lookups };
+  for (const id of ids) {
+    if (value === undefined) delete next[id];
+    else next[id] = value;
+  }
+  if (Object.keys(next).length > MAX_CONVERSATION_LOOKUP_STATES) {
+    for (const [id, v] of Object.entries(next)) if (v === "missing") delete next[Number(id)];
+  }
+  return next;
 }
 
 function keepStillFailed(retry: HubState["retry"], messages: Message[]): HubState["retry"] {
@@ -535,6 +589,8 @@ function fromSnapshot(state: HubState, snapshot: StateSnapshot): HubState {
     schedules: snapshot.schedules,
     router: normalizeRouterSlice(snapshot.router),
     activeTaskGraphs: normalizeTaskGraphs(snapshot.activeTaskGraphs),
+    olderEndedWorkers: snapshot.olderEndedWorkers ?? {},
+    lookups: {},
     server: snapshot.server,
     ...(snapshot.tunnel !== undefined ? { tunnel: snapshot.tunnel } : {}),
     ...(snapshot.publicEntry !== undefined ? { publicEntry: snapshot.publicEntry } : {}),
@@ -586,6 +642,22 @@ export function reducer(state: HubState, action: HubAction): HubState {
         older: { ...state.older, [action.conversationId]: undefined },
         olderLoaded: { ...state.olderLoaded, [action.conversationId]: true },
       };
+    }
+    case "lookupStart":
+      return { ...state, lookups: withLookups(state.lookups, action.ids, "loading") };
+    case "lookupFailed":
+      return { ...state, lookups: withLookups(state.lookups, action.ids, undefined) };
+    case "lookupDone": {
+      const merged = mergeLoaded(state, action.lookup);
+      const found = action.ids.filter((id) => merged.conversations[id] !== undefined);
+      const missing = action.ids.filter((id) => merged.conversations[id] === undefined);
+      return { ...state, ...merged, lookups: withLookups(withLookups(state.lookups, found, undefined), missing, "missing") };
+    }
+    case "endedWorkersLoaded": {
+      const merged = mergeLoaded(state, action.page);
+      const { [action.pmId]: _done, ...rest } = state.olderEndedWorkers;
+      const olderEndedWorkers = action.page.nextBefore === null ? rest : { ...rest, [action.pmId]: action.page.nextBefore };
+      return { ...state, ...merged, olderEndedWorkers };
     }
     case "pendingAdd":
       return { ...state, pending: [...state.pending, action.pending] };

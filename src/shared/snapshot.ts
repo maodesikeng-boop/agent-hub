@@ -2,7 +2,8 @@
 // 拿的都是账本这一份；网页（web/selectors.ts）和守护进程的推送（reminders.ts）按同一套规则用它。
 // - 项目经理对话、在跑的 Worker 对话：最近 SNAPSHOT_RECENT_MESSAGES 条，往前带到最近一条要算的消息（snapshotWindowStart）；
 //   在跑的 Worker 只有几个（不随历史变多），点进去不用再等一次拉取；
-// - 已收工的 Worker 对话：不带消息，点开时按 hasMore 拉最新一页；
+// - 已收工的 Worker 对话：不带消息，点开时按 hasMore 拉最新一页；每个项目经理只带最近 SNAPSHOT_ENDED_WORKERS_PER_PM 个
+//   （绑在活跃任务图上的照带），更早的由右栏翻页、按编号单拉补上（daemon/ledger/snapshot.ts）；会话只带这些对话最新一代的；
 // - Worker 的状态色、已收工、最近一行：项目经理对话里那几行可能早就不在最近几条里了，账本把每个 Worker 最近一行的摘要
 //   （workerLineSummaries）挂在它自己的对话上，网页再拿实时来的新行盖掉旧的。
 import { workerEventOf, type ConversationId, type Message, type MessageId, type WorkerMessageMeta } from "./domain.ts";

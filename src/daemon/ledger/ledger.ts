@@ -15,15 +15,14 @@
 // 11-03 拿掉了项目群：快照不给老的项目群和归档的项目（数据还在库里，见迁移 0003）。
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { ConversationSnapshot, LedgerSnapshot } from "../../shared/api.ts";
-import type { ConversationId, MessageKind, Pm, PmId, SessionId, WorkerId } from "../../shared/domain.ts";
+import type { LedgerSnapshot } from "../../shared/api.ts";
+import type { Pm, PmId, SessionId, WorkerId } from "../../shared/domain.ts";
 import type { CreatePmInput, CreatePmResult, Ledger, ResolveFolder } from "../../shared/ledger.ts";
 import { deliveryParts } from "../../shared/worker.ts";
 import { waitingAsksNote } from "../../shared/waiting-asks.ts";
-import { MESSAGE_PAGE_SIZE, WORKER_PURGE_BATCH_ROWS } from "../../shared/limits.ts";
-import { snapshotWindowStart, workerLineSummaries } from "../../shared/snapshot.ts";
-import { getAgentSession, toAgentSessionRow } from "../store/index.ts";
-import type { AgentSessionDbRow, Db } from "../store/index.ts";
+import { WORKER_PURGE_BATCH_ROWS } from "../../shared/limits.ts";
+import { getAgentSession } from "../store/index.ts";
+import type { Db } from "../store/index.ts";
 import { createLedgerContext } from "./context.ts";
 import { fail } from "./context.ts";
 import type { LedgerContextOptions, LedgerFiles } from "./context.ts";
@@ -39,13 +38,14 @@ import { createLedgerPmCapabilities } from "./pm-capabilities.ts";
 import { createLedgerProjectCatalog } from "./project-catalog.ts";
 import type { LedgerProjectCatalog, ProjectCatalogLedgerOptions } from "./project-catalog.ts";
 import { createLedgerProjects } from "./projects.ts";
-import { parseMessageMeta, toConversation, toHealth, toPm, toProject, toProjectFolder } from "./rows.ts";
-import type { ConversationDbRow, HealthDbRow, MessageDbRow, PmDbRow, ProjectDbRow, ProjectFolderDbRow } from "./rows.ts";
+import { toHealth, toPm, toProject, toProjectFolder } from "./rows.ts";
+import type { HealthDbRow, PmDbRow, ProjectDbRow, ProjectFolderDbRow } from "./rows.ts";
 import { createLedgerRouter } from "./router.ts";
 import type { LedgerRouter } from "./router.ts";
 import { createLedgerSchedules } from "./schedules.ts";
 import { createLedgerSentFiles } from "./sent-files.ts";
 import { createLedgerSessions } from "./sessions.ts";
+import { createLedgerSnapshotQueries } from "./snapshot.ts";
 import { createLedgerSteps } from "./steps.ts";
 import { createLedgerTaskGraphs } from "./task-graphs.ts";
 import { createLedgerTakeover } from "./takeover.ts";
@@ -167,6 +167,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   const taskGraphManual = (sessionId: SessionId) => taskGraphManualNote(files.launchDir, sessionId);
   const sessions = createLedgerSessions(ctx);
   const { sessionState } = sessions;
+  const snapshotQueries = createLedgerSnapshotQueries(db, { sessionState });
   const sentFiles = createLedgerSentFiles(db, {
     sentFilesDir: options.sentFilesDir ?? join(dataHome, "sent-files"),
     uploadsDir: options.uploadsDir ?? join(dataHome, "uploads"),
@@ -186,7 +187,6 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     afterUserPost: (p, id) => handover.userPostedIn(p, id),
     onIndependentAskCreated: (p, session, message, askOptions) => router.bridgeAskIn(p, session, message, askOptions),
   });
-  const { page } = messages;
   const persona = createLedgerPersona(ctx, sessions, messages, files, {
     switchVendorIn: (p, conversationId, agent) => handover.switchVendorIn(p, conversationId, agent),
     clearVendorSwitchIn: (conversationId) => handover.clearVendorSwitchIn(conversationId),
@@ -281,44 +281,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       messages.composerTarget(conversationId, files.worktreesDir, files.extraWorktreeRoots?.()),
 
     snapshot(): LedgerSnapshot {
-      // 初始快照瘦身（shared/snapshot.ts）：已收工的 Worker 对话不带消息、只挂最近一行的摘要（点开再按 hasMore 拉），
-      // 项目经理对话和在跑的 Worker 对话带最近几条、往前带到要算的消息为止。几百个历史 Worker 也不会撑大首屏。
-      const ended = new Set(
-        db
-          .all<{ id: number }>(
-            `SELECT c.id FROM conversations c
-             LEFT JOIN workers w ON w.worker_conversation_id = c.id
-             LEFT JOIN agent_sessions s ON s.conversation_id = c.id
-             WHERE c.kind = 'worker' AND (w.status = 'ended' OR s.status = 'ended')`,
-          )
-          .map((r) => r.id),
-      );
-      // 只取算摘要要的几列（text 是交给项目经理的汇报全文，可能几 KB），走部分索引 messages_worker_lines
-      const workerLines = workerLineSummaries(
-        db
-          .all<Pick<MessageDbRow, "id" | "kind" | "meta" | "created_at">>("SELECT id, kind, meta, created_at FROM messages WHERE kind = 'worker' ORDER BY id")
-          .map((r) => ({ id: r.id, kind: r.kind as MessageKind, meta: parseMessageMeta(r.kind, r.meta), createdAt: r.created_at })),
-      );
-      const recentPage = (id: ConversationId) =>
-        page(db.all<MessageDbRow>("SELECT * FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?", id, MESSAGE_PAGE_SIZE + 1));
-      const conversations: ConversationSnapshot[] = db
-        .all<ConversationDbRow>(
-          `SELECT c.*, p.purged_at FROM conversations c LEFT JOIN conversation_purges p ON p.conversation_id = c.id
-           WHERE c.kind != 'project_group' ORDER BY c.id`,
-        )
-        .map((row) => {
-          const conversation = toConversation(row);
-          const workerLine = row.kind === "worker" ? workerLines.get(row.id) : undefined;
-          const summary = workerLine !== undefined ? { workerLine } : {};
-          if (ended.has(row.id)) {
-            const hasMore =
-              row.purged_at == null && db.get<{ id: number }>("SELECT id FROM messages WHERE conversation_id = ? LIMIT 1", row.id) !== undefined;
-            return { conversation, messages: [], hasMore, ...summary };
-          }
-          const { messages, hasMore } = recentPage(row.id);
-          const start = snapshotWindowStart(messages);
-          return { conversation, messages: messages.slice(start), hasMore: hasMore || start > 0, ...summary };
-        });
+      const activeTaskGraphs = taskGraphs.activeSnapshotGraphs();
+      const { conversations, sessions, olderEndedWorkers } = snapshotQueries.snapshotConversations(activeTaskGraphs);
       return {
         seq: log.seq,
         pms: db.all<PmDbRow>("SELECT p.*, a.archived_at FROM pms p LEFT JOIN pm_archives a ON a.pm_id = p.id ORDER BY p.id").map(toPm),
@@ -330,20 +294,18 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
           )
           .map(toProjectFolder),
         conversations,
-        sessions: db
-          .all<AgentSessionDbRow>(
-            `SELECT s.* FROM agent_sessions s LEFT JOIN conversations c ON c.id = s.conversation_id
-             WHERE s.role != 'assistant' AND (c.kind IS NULL OR c.kind != 'project_group') ORDER BY s.id`,
-          )
-          .map((r) => sessionState(toAgentSessionRow(r))),
+        sessions,
         health: db.all<HealthDbRow>("SELECT * FROM health ORDER BY module").map(toHealth),
         schedules: schedules.all(),
         router: router.snapshotSlice(),
-        activeTaskGraphs: taskGraphs.activeSnapshotGraphs(),
+        activeTaskGraphs,
+        ...(Object.keys(olderEndedWorkers).length > 0 ? { olderEndedWorkers } : {}),
       };
     },
 
     messagesBefore: messages.messagesBefore,
+    lookupConversations: snapshotQueries.lookupConversations,
+    endedWorkersPage: snapshotQueries.endedWorkersPage,
 
     changesSince: (seq) => log.since(seq),
     onChange: (listener) => subscribe(changeListeners, listener),

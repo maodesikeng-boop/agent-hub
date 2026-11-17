@@ -11,14 +11,14 @@ import {
   isTaskNodeWaitingUser,
   modelShortLabel,
 } from "../../shared/index.ts";
-import type { ConversationId, Message, MessageId, ProjectId, TaskGraph, TaskGraphId, TaskNode, UserBlockerId } from "../../shared/index.ts";
+import type { ConversationId, Message, MessageId, ProjectId, TaskGraph, TaskGraphId, TaskNode, UserBlockerId, WorkerId } from "../../shared/index.ts";
 import { cleanPieceTitle, errorText, formatContext, formatTokenDetail, NEEDS_YOU, NO_DATA } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { useModelCatalog } from "../models.tsx";
 import { stripMarkdown } from "../plainText.ts";
 import { useHubQueryClient } from "../query-client.ts";
 import { useClient } from "../device-scope.tsx";
-import { boundWorkerIdsOf, isWorkerBound, type WorkerEntry } from "../selectors.ts";
+import { boundWorkerIdsOf, isWorkerBound, workersByWorkerId, type WorkerEntry } from "../selectors.ts";
 import { normalizeTaskGraphs } from "../task-graph-compat.ts";
 import type { WorkerTone } from "../worker-status.ts";
 import { Button } from "../ui/button.tsx";
@@ -324,6 +324,7 @@ function CompletedGroup({
   openWorkerId,
   onOpenWorker,
   onZoomGraph,
+  onLoadMoreWorkers,
   trailing,
 }: {
   workers: WorkerEntry[];
@@ -334,9 +335,21 @@ function CompletedGroup({
   openWorkerId: ConversationId | null;
   onOpenWorker: (id: ConversationId) => void;
   onZoomGraph: (graph: TaskGraph) => void;
+  /** 还有更早的收工 Piece 没拉下来时给：拉下一页（快照只带最近几个，见 SNAPSHOT_ENDED_WORKERS_PER_PM）。 */
+  onLoadMoreWorkers?: () => Promise<void>;
   trailing?: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+  const [workersMore, setWorkersMore] = useState<{ loading: boolean; error: unknown }>({ loading: false, error: null });
+  const loadMore = () => {
+    if (historyQuery.hasNextPage && !historyQuery.isFetchingNextPage) void historyQuery.fetchNextPage();
+    if (onLoadMoreWorkers === undefined || workersMore.loading) return;
+    setWorkersMore({ loading: true, error: null });
+    onLoadMoreWorkers().then(
+      () => setWorkersMore({ loading: false, error: null }),
+      (error: unknown) => setWorkersMore({ loading: false, error }),
+    );
+  };
   const activeEnded = workers.some((w) => w.conversationId === openWorkerId);
   useEffect(() => {
     if (activeEnded) setOpen(true);
@@ -417,19 +430,14 @@ function CompletedGroup({
               </li>
             ))}
           </ul>
-          {historyQuery.error !== null && (
+          {(historyQuery.error ?? workersMore.error) !== null && (
             <p role="alert" className="py-1 text-xs text-danger">
-              {errorText(historyQuery.error).text}
+              {errorText(historyQuery.error ?? workersMore.error).text}
             </p>
           )}
-          {historyQuery.hasNextPage && (
-            <MoreToggle
-              expanded={false}
-              onClick={() => {
-                if (!historyQuery.isFetchingNextPage) void historyQuery.fetchNextPage();
-              }}
-            >
-              {historyQuery.isFetchingNextPage ? "Loading…" : "Load more"}
+          {(historyQuery.hasNextPage || onLoadMoreWorkers !== undefined) && (
+            <MoreToggle expanded={false} onClick={loadMore}>
+              {historyQuery.isFetchingNextPage || workersMore.loading ? "Loading…" : "Load more"}
             </MoreToggle>
           )}
         </GroupBody>
@@ -456,6 +464,8 @@ export function RailGroups({
   className,
   onOpenAsk,
   onOpenWorker,
+  onLoadMoreWorkers,
+  onNeedWorkers,
 }: {
   asks: Message[];
   workers: WorkerEntry[];
@@ -470,6 +480,10 @@ export function RailGroups({
   /** 点一个提问、或果皮轨里等你拍板的步骤：对话滚到那条消息。 */
   onOpenAsk: (messageId: MessageId) => void;
   onOpenWorker: (conversationId: ConversationId) => void;
+  /** Completed 的 Load more 顺带拉更早的收工 Piece；没有更早的不给。 */
+  onLoadMoreWorkers?: () => Promise<void>;
+  /** 全览弹窗里的图挂着 workers 里没有的 Worker（早收工、不在快照里）：按 Worker 编号拉回来。 */
+  onNeedWorkers?: (workerIds: WorkerId[]) => void;
 }) {
   const [zoomedState, setZoomedState] = useState<{ id: TaskGraphId; fallback: TaskGraph } | null>(null);
   // 稳定引用：PeelTrackList 是 memo 的，RailGroups 因别的原因重画时它不跟着重画
@@ -545,6 +559,12 @@ export function RailGroups({
     if (zoomedState === null) return null;
     return activeGraphs?.find((g) => g.id === zoomedState.id) ?? zoomedState.fallback;
   }, [zoomedState, activeGraphs]);
+  useEffect(() => {
+    if (zoomedGraph === null || onNeedWorkers === undefined) return;
+    const have = workersByWorkerId(workers);
+    const missing = [...boundWorkerIdsOf([zoomedGraph])].filter((id) => !have.has(id));
+    if (missing.length > 0) onNeedWorkers(missing);
+  }, [zoomedGraph, workers, onNeedWorkers]);
 
   return (
     <>
@@ -629,6 +649,7 @@ export function RailGroups({
             openWorkerId={openWorkerId}
             onOpenWorker={onOpenWorker}
             onZoomGraph={zoomGraph}
+            {...(onLoadMoreWorkers !== undefined ? { onLoadMoreWorkers } : {})}
             trailing={!hasAsks && !hasGraphs && !hasLive ? toggle : undefined}
           />
         )}
@@ -665,6 +686,8 @@ export const RightRail = memo(function RightRail({
   avatarKey = 0,
   onOpenAsk,
   onOpenWorker,
+  onLoadMoreWorkers,
+  onNeedWorkers,
 }: {
   asks: Message[];
   workers: WorkerEntry[];
@@ -673,6 +696,8 @@ export const RightRail = memo(function RightRail({
   projectId?: ProjectId | null;
   /** 正开着的 Worker 的对话。 */
   openWorkerId: ConversationId | null;
+  onLoadMoreWorkers?: () => Promise<void>;
+  onNeedWorkers?: (workerIds: WorkerId[]) => void;
   layout: "side" | "top";
   /** side：放在右栏顶部的开关（RightRailToggle）。 */
   toggle?: React.ReactNode;
@@ -701,6 +726,8 @@ export const RightRail = memo(function RightRail({
         className={side ? "pb-4" : "py-1"}
         onOpenAsk={onOpenAsk}
         onOpenWorker={onOpenWorker}
+        {...(onLoadMoreWorkers !== undefined ? { onLoadMoreWorkers } : {})}
+        {...(onNeedWorkers !== undefined ? { onNeedWorkers } : {})}
       />
     </aside>
   );

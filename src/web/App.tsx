@@ -158,8 +158,11 @@ export function App() {
     staging,
     view,
     workerLine,
+    workerLoading,
     workerPmEntry,
     workerView,
+    railLoadMoreWorkers,
+    ensureWorkers,
   } = content;
   // 开关跟着右栏走：并排的右栏展开时在右栏顶部，其余（收起、太窄时右栏在顶栏下面）在顶栏右边，也就是窗口右上角
   const mobileToggle = <RightRailToggle visible={railHasContent} open={drawerOpen} attention={railAttention} avatarKey={avatarKey} onToggle={() => setDrawerOpen(!drawerOpen)} />;
@@ -178,6 +181,8 @@ export function App() {
       avatarKey={avatarKey}
       onOpenAsk={openAsk}
       onOpenWorker={openWorkerConversation}
+      onLoadMoreWorkers={railLoadMoreWorkers}
+      onNeedWorkers={ensureWorkers}
     />
   ) : null;
   const top = !mobile && compact ? rail : null;
@@ -269,6 +274,7 @@ export function App() {
                 pm={{ name: workerPmEntry?.name ?? "Project manager", avatarKey: workerPmEntry?.avatarKey ?? 0 }}
                 meta={railWorkers.find((w) => w.conversationId === openWorker)}
                 view={workerView}
+                loading={workerLoading}
                 pending={pendingOf(state, openWorker)}
                 session={sessionOf(state, openWorker)}
                 older={state.older[openWorker]}
@@ -332,6 +338,8 @@ export function App() {
               openWorkerId={openWorker}
               onOpenAsk={openAsk}
               onOpenWorker={openWorkerConversation}
+              onLoadMoreWorkers={railLoadMoreWorkers}
+              onNeedWorkers={ensureWorkers}
             />
           )}
         </>

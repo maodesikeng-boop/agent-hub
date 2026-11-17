@@ -560,6 +560,43 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
     expect(within(histDialog).getByText("立即灰度")).toBeInTheDocument();
   });
 
+  it("历史图里经手的 Worker 早收工、不在快照里：打开全览弹窗时按 Worker 编号去拉，拉回来那一步能点开", async () => {
+    const user = userEvent.setup();
+    const hist = makeGraph({
+      id: 50,
+      title: "历史五步改版",
+      status: "completed",
+      completedAt: 20_000,
+      nodes: [makeNode({ key: "h1", title: "数据库迁移", status: "done", sortOrder: 0, workerIds: [91] })],
+    });
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => jsonResponse({ graphs: [hist], hasMore: false } satisfies TaskGraphsPage));
+    const onNeedWorkers = vi.fn();
+    const onOpenWorker = vi.fn();
+    const rail = (workers: ReturnType<typeof makeWorker>[]) => (
+      <RightRail
+        asks={[]}
+        workers={workers}
+        completedGraphCount={1}
+        projectId={1}
+        openWorkerId={null}
+        layout="side"
+        onOpenAsk={() => {}}
+        onOpenWorker={onOpenWorker}
+        onNeedWorkers={onNeedWorkers}
+      />
+    );
+    const { rerender } = render(rail([makeWorker(104, { workerId: 99, ended: true, activity: "idle" })]));
+    const completedRegion = screen.getByRole("region", { name: /^Completed$/ });
+    await user.click(within(completedRegion).getByRole("heading").querySelector("button")!);
+    await user.click(await within(completedRegion).findByRole("button", { name: /历史五步改版/ }));
+    expect(onNeedWorkers).toHaveBeenCalledWith([91]);
+    rerender(rail([makeWorker(104, { workerId: 99, ended: true, activity: "idle" }), makeWorker(103, { workerId: 91, ended: true, activity: "idle" })]));
+    const dialog = screen.getByRole("dialog", { name: "历史五步改版" });
+    await user.click(within(dialog).getByRole("button", { name: /#91/ }));
+    expect(onOpenWorker).toHaveBeenCalledWith(103);
+    expect(onNeedWorkers).toHaveBeenCalledTimes(1);
+  });
+
   beforeAll(() => {
     Element.prototype.setPointerCapture ??= () => {};
     Element.prototype.releasePointerCapture ??= () => {};

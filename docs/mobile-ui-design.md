@@ -35,7 +35,7 @@
 - 路由：`src/web/route.ts` 用的是 hash + `history.pushState` / `replaceState`，监听 `popstate` 和 `hashchange`，**浏览器返回键、iOS 边缘右滑本来就能走**；`navigate` 里用 View Transitions，`popstate` 这条路不起动画。
 - `Conversation`、`WorkerConversation` 已经有 `leading` 这个口子（顶栏最左边），现在没人传——手机的返回键可以直接放进去。
 - `index.html` 已经有 `viewport-fit=cover, interactive-widget=resizes-content`；`styles.css` 已经有 `--safe-top` / `--safe-bottom`、`#root { height: 100dvh }`、触屏下输入框 16px、`.touch-target` 撑到 44px。这几条手机外壳直接用。
-- 初始数据：`/api/state`（`ledger.ts` 的 `snapshot()`，规则在 `shared/snapshot.ts`）：项目经理对话和在跑的 Piece 对话带最近 `SNAPSHOT_RECENT_MESSAGES`（20）条，往前带到没回答的提问、没处理完的、最近一条非安静的消息为止（最多 100 条）；收工的 Piece 不带消息、点开才拉，状态色、已收工、最近一行靠快照里每个 Piece 的 `workerLine` 摘要（Worker #316）。左栏的预览从项目经理对话带着的这几条算（`selectors.ts` 的 `listConversations`）。
+- 初始数据：`/api/state`（`ledger.ts` 的 `snapshot()`，规则在 `shared/snapshot.ts`）：项目经理对话和在跑的 Piece 对话带最近 `SNAPSHOT_RECENT_MESSAGES`（20）条，往前带到没回答的提问、没处理完的、最近一条非安静的消息为止（最多 100 条）；收工的 Piece 不带消息、点开才拉，状态色、已收工、最近一行靠快照里每个 Piece 的 `workerLine` 摘要（Worker #316）；每个项目经理只带最近 `SNAPSHOT_ENDED_WORKERS_PER_PM`（20）个收工的 Piece 和绑在活跃任务图上的，更早的在右栏 Completed 点 Load more 翻页（`/api/pms/:id/ended-workers`），直接点开或任务图详情里找不到时按编号单拉（`/api/conversations/lookup`），会话只带这些对话最新一代的（`daemon/ledger/snapshot.ts`）。左栏的预览从项目经理对话带着的这几条算（`selectors.ts` 的 `listConversations`）。
 - 打包：首屏 JS `index-*.js` 814KB，压缩后 255KB；CSS 压缩后 10KB（本次 `vite build` 量的）。Service Worker 只缓存外壳（`sw-rules.ts`），第二次打开 JS/CSS 走本地缓存，接口不缓存。
 - `Sidebar` 的 `drawerOpen` / `onCloseDrawer` 两个参数已经没用了（以前左栏抽屉留下的）；`ui-standard.md` 第 19 条还写着“1100px 以下左栏抽屉”，也是旧的。
 

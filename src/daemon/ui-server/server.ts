@@ -74,7 +74,10 @@ import {
   type RecheckUserBlockerResponse,
   type DeviceRouterDigest,
   type LoginLinkResponse,
+  CONVERSATION_LOOKUP_MAX_IDS,
   type CommandsResponse,
+  type ConversationsLookup,
+  type EndedWorkersPage,
   type FilesResponse,
   type Attachment,
   type CreatePmRequest,
@@ -722,6 +725,15 @@ function parseVendorParam(raw: unknown): AgentVendor {
     throw new HttpError(404, "unknown provider");
   }
   return raw;
+}
+
+/** 逗号分隔的编号列表（空串、不带都是空列表），最多 CONVERSATION_LOOKUP_MAX_IDS 个。 */
+function parseIdList(raw: unknown, what: string): number[] {
+  if (raw === undefined || raw === "") return [];
+  if (typeof raw !== "string") throw new HttpError(400, `${what} must be a comma-separated list of positive integers`);
+  const parts = raw.split(",");
+  if (parts.length > CONVERSATION_LOOKUP_MAX_IDS) throw new HttpError(400, `${what} must have at most ${CONVERSATION_LOOKUP_MAX_IDS} items`);
+  return parts.map((part) => parseId(part, what));
 }
 
 function parseOptionalPositiveInt(raw: unknown, what: string): number | undefined {
@@ -1544,6 +1556,17 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       const conversationId = parseId((req.params as { id?: unknown }).id, "conversation id");
       const { q } = req.query as { q?: unknown };
       return opts.composer ? opts.composer.files(conversationId, typeof q === "string" ? q : "") : { entries: [], truncated: false };
+    });
+
+    routes.get("/api/conversations/lookup", async (req): Promise<ConversationsLookup> => {
+      const { ids, workerIds } = req.query as { ids?: unknown; workerIds?: unknown };
+      return ledger.lookupConversations({ ids: parseIdList(ids, "ids"), workerIds: parseIdList(workerIds, "workerIds") });
+    });
+
+    routes.get("/api/pms/:id/ended-workers", async (req): Promise<EndedWorkersPage> => {
+      const pmId = parseId((req.params as { id?: unknown }).id, "pm id");
+      const { before } = req.query as { before?: unknown };
+      return ledger.endedWorkersPage(pmId, parseOptionalPositiveInt(before, "before") ?? null);
     });
 
     routes.get("/api/conversations/:id/messages", async (req) => {
