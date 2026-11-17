@@ -20,6 +20,30 @@ import { createBrowserSessions } from "./sessions.ts";
 import { testLogin } from "./test-login.ts";
 import { DESKTOP_CONTRACT, isSupervised } from "../entry.ts";
 
+const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
+
+function compileSwift(files: string[], out: string): void {
+  const targetArch = arch() === "arm64" ? "arm64" : "x86_64";
+  execFileSync(
+    "/usr/bin/swiftc",
+    [
+      "-warnings-as-errors",
+      "-target",
+      `${targetArch}-apple-macos13.0`,
+      "-framework",
+      "AppKit",
+      "-framework",
+      "WebKit",
+      "-framework",
+      "UserNotifications",
+      ...files.map((file) => join(repoRoot, file)),
+      "-o",
+      out,
+    ],
+    { stdio: "pipe" },
+  );
+}
+
 interface DesktopContract {
   product: string;
   protocolVersion: number;
@@ -296,32 +320,19 @@ describe("桌面壳共用监管契约与 /api/auth/status 轻量身份响应", (
   it.skipIf(process.platform !== "darwin")(
     "macOS Swift 监管逻辑契约测试：非 Fusa/协议不兼容冲突拦截且不发 token、外部 Fusa 复用不误杀、40s 预算下 5s 慢关闭优雅退出、崩溃退避与上限",
     async () => {
-      const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
       const binPath = join(root, "supervisor-contract-tests");
-      const targetArch = arch() === "arm64" ? "arm64" : "x86_64";
 
-      execFileSync(
-        "/usr/bin/swiftc",
+      compileSwift(
         [
-          "-warnings-as-errors",
-          "-target",
-          `${targetArch}-apple-macos13.0`,
-          "-framework",
-          "AppKit",
-          "-framework",
-          "WebKit",
-          "-framework",
-          "UserNotifications",
-          join(repoRoot, "apps/macos/DaemonSupervisor.swift"),
-          join(repoRoot, "apps/macos/StatusBarController.swift"),
-          join(repoRoot, "apps/macos/MainWindowController.swift"),
-          join(repoRoot, "apps/macos/AppDelegate.swift"),
-          join(repoRoot, "apps/macos/SelfTest.swift"),
-          join(repoRoot, "apps/macos/Tests/SupervisorTests.swift"),
-          "-o",
-          binPath,
+          "apps/macos/DaemonSupervisor.swift",
+          "apps/macos/StatusBarController.swift",
+          "apps/macos/MainWindowController.swift",
+          "apps/macos/ShellNavigationPolicy.swift",
+          "apps/macos/AppDelegate.swift",
+          "apps/macos/SelfTest.swift",
+          "apps/macos/Tests/SupervisorTests.swift",
         ],
-        { stdio: "pipe" },
+        binPath,
       );
 
       const stdout = await new Promise<string>((resolve, reject) => {
@@ -342,5 +353,23 @@ describe("桌面壳共用监管契约与 /api/auth/status 轻量身份响应", (
       expect(stdout).toContain("ALL_SUPERVISOR_TESTS_PASSED");
     },
     45_000,
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "macOS 主窗口导航：真 WKWebView 里点网页链接，主窗口留在 Fusa，网页交系统浏览器，预览 iframe 照常显示",
+    () => {
+      const binPath = join(root, "shell-navigation-tests");
+      compileSwift(
+        [
+          "apps/macos/DaemonSupervisor.swift",
+          "apps/macos/MainWindowController.swift",
+          "apps/macos/ShellNavigationPolicy.swift",
+          "apps/macos/Tests/ShellNavigationTests.swift",
+        ],
+        binPath,
+      );
+      expect(execFileSync(binPath, { encoding: "utf8", timeout: 60_000 })).toContain("ALL PASS");
+    },
+    120_000,
   );
 });
