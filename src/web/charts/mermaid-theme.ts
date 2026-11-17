@@ -137,7 +137,8 @@ export function mermaidConfig(theme: ChartTheme) {
     maxEdges: MERMAID_MAX_EDGES,
     dompurifyConfig: MERMAID_LABEL_SANITIZE,
     // 甘特图的网格线：d3 坐标轴的 <line> 自带 stroke=currentColor，themeVariables.gridColor 管不到
-    themeCSS: `.grid .tick line { stroke: ${theme.border}; }`,
+    // 流程图节点 8px 圆角：和外壳的圆角三档接近，不在圆角的图表框里放一排直角方块
+    themeCSS: `.grid .tick line { stroke: ${theme.border}; } .node rect { rx: 8px; ry: 8px; }`,
     // 标签用 SVG 文字，不用 foreignObject 里的 HTML（洗 SVG 时 foreignObject 会被整个去掉，标签就空了）
     htmlLabels: false,
     // 宽度跟容器（不撑破消息列）

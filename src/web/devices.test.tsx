@@ -253,9 +253,9 @@ describe("Offline", () => {
     act(() => void vi.advanceTimersByTime(OFFLINE_AFTER_MS + 1_000));
     const entryOf = (question: string) => within(needsSection).getByText(question).closest<HTMLElement>("article, button")!;
     const expectStates = () => {
-      expect(entryOf("东京要确定")).toHaveClass("opacity-60");
+      expect(entryOf("东京要确定").className).toContain("[&_[data-slot=avatar]]:opacity-50");
       expect(within(entryOf("东京要确定")).getByText("Offline")).toBeInTheDocument();
-      expect(entryOf("本机要确定")).not.toHaveClass("opacity-60");
+      expect(entryOf("本机要确定").className).not.toContain("opacity-50");
       expect(within(entryOf("本机要确定")).queryByText("Offline")).toBeNull();
     };
     // 一张是展开的卡、一张是收起的行：两种形态都要对
@@ -413,7 +413,8 @@ describe("设置 → 设备", () => {
     expect(within(others).getByTestId("device-row").querySelector(".bg-success")).not.toBeNull();
     const rows = within(devices).getAllByTestId("device-row");
     expect(rows.map((r) => r.textContent)).toEqual([expect.stringContaining("Mac"), expect.stringContaining("东京")]);
-    expect(rows[0]).toHaveTextContent("This computer");
+    // 本机那一行不再写 This computer：它所在的组就叫这个
+    expect(rows[0]).not.toHaveTextContent("This computer");
     expect(rows[0]).toHaveTextContent("macOS");
     expect(rows[1]).toHaveTextContent("Linux");
     expect(rows[1]).toHaveTextContent("Online");
@@ -597,8 +598,8 @@ describe("设置 → 设备", () => {
     const publicRegion = await screen.findByRole("region", { name: "Public access" });
     const hostInput = within(publicRegion).getByRole("textbox", { name: "Public domain" });
     expect(hostInput).toHaveValue("tokyo.tail1234.ts.net");
-    expect(hostInput).toHaveAttribute("placeholder", "e.g. tokyo.tailnet.ts.net");
-    expect(hostInput).toHaveClass("w-60");
+    expect(hostInput).toHaveAttribute("placeholder", "tokyo.tailnet.ts.net");
+    expect(hostInput).toHaveClass("flex-1", "min-w-0");
     const toggleBtn = within(publicRegion).getByRole("button", { name: "Turn on" });
     expect(toggleBtn).not.toHaveClass("bg-primary");
     expect(within(publicRegion).queryByText(funnelCmd)).toBeNull();
@@ -614,9 +615,10 @@ describe("设置 → 设备", () => {
       hostname: "custom.tail1234.ts.net",
     });
 
-    // 开启后展示 https://<hostname>、Funnel 命令与“复制命令”按钮，按钮变为“关闭”
-    expect(await within(publicRegion).findByText("https://custom.tail1234.ts.net")).toBeInTheDocument();
-    expect(within(publicRegion).getByText(funnelCmd)).toBeInTheDocument();
+    // 开启后展示 Funnel 命令与“复制命令”按钮，按钮变为“关闭”；域名只在输入框里出现一次，不在行名下面再写一遍 https://<hostname>
+    expect(await within(publicRegion).findByText(funnelCmd)).toBeInTheDocument();
+    expect(within(publicRegion).queryByText("https://custom.tail1234.ts.net")).toBeNull();
+    expect(hostInput).toHaveValue("custom.tail1234.ts.net");
     const copyBtn = within(publicRegion).getByRole("button", { name: "Copy command" });
     await userEvent.click(copyBtn);
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(funnelCmd));
@@ -648,7 +650,7 @@ describe("设置 → 设备", () => {
 
     await userEvent.click(within(dialog).getByRole("tab", { name: "Security & Access" }));
     const security = within(dialog).getByRole("tabpanel", { name: "Security & Access" });
-    expect(within(security).getByRole("region", { name: "Sign in on phone" })).toBeInTheDocument();
+    expect(within(security).getByRole("region", { name: "Sign in on another device" })).toBeInTheDocument();
     expect(within(security).getByRole("region", { name: "Signed-in browsers" })).toBeInTheDocument();
     expect(within(security).getByRole("region", { name: "Public access" })).toBeInTheDocument();
     expect(within(dialog).queryByRole("region", { name: "This computer" })).toBeNull();

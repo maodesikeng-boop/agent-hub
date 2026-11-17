@@ -16,7 +16,7 @@ export function RadioMark({ checked }: { checked: boolean }) {
       aria-hidden="true"
       className={cn(
         "flex size-5 shrink-0 items-center justify-center rounded-full transition-colors motion-reduce:transition-none",
-        checked ? "bg-primary text-primary-foreground" : "border-[1.5px] border-zinc-300 bg-background",
+        checked ? "bg-primary text-primary-foreground" : "border-[1.5px] border-muted-foreground/75 bg-background",
       )}
     >
       {checked && <Check className="size-3" strokeWidth={3.5} />}

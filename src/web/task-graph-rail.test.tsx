@@ -990,7 +990,7 @@ describe("果皮轨按真实连通关系排布：独立子图不假连、多起�
         if (rowIdx < stageEls.length - 1 && bottom.size > 0) {
           const extSvg = rowEl.querySelector("svg[data-peel-gate-ext]") as HTMLElement | null;
           expect(extSvg).not.toBeNull();
-          expect(extSvg!.style.height).toBe("calc(100% - 2rem)");
+          expect(extSvg!.style.height).toBe("calc(100% - calc(32 * var(--peel-u)))");
           const extLines = extSvg!.querySelectorAll("line");
           expect(extLines).toHaveLength(bottom.size);
         }
@@ -1243,7 +1243,8 @@ describe("果皮轨按真实连通关系排布：独立子图不假连、多起�
     // join 汇合行上方同时接收 3 条独立泳道
     expect(rows.at(-1)!.top).toHaveLength(3);
     const firstSvg = component.querySelector("svg[data-peel-gutter]") as HTMLElement;
-    expect(firstSvg.style.width).toMatch(/rem$/);
+    // 宽度按轨道槽的画布单位算（styles.css 的 --peel-u 是 rem，跟着界面大小走）
+    expect(firstSvg.style.width).toMatch(/^calc\(\d+ \* var\(--peel-u\)\)$/);
   });
 
   it("N done 折叠边界守卫：链 A 已完成但链 B 仍在等待拍板时，只把链 A 卷成 2 done，不把链 B 的已完成起点吞进同一个果皮卷", () => {

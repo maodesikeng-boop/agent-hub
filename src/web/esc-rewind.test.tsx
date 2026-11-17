@@ -440,7 +440,7 @@ describe("跨项目经理（6 家厂商）与 Worker 对话一致生效", () => 
 
     // 先在项目经理输入框留一句草稿，再点进 Worker 对话
     await user.type(box(), "给项目经理留的话");
-    await user.click(within(log()).getByRole("button", { name: /Piece.*修表格/ }));
+    await user.click(within(log()).getByRole("button", { name: /修表格/ }));
     const workerBox = await screen.findByPlaceholderText("Message 修表格…") as HTMLTextAreaElement;
 
     // 在 Worker 对话按第一次 Esc 暂停，按第二次 Esc 回退到 Worker 输入框

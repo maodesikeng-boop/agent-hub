@@ -156,6 +156,12 @@ export function WorkerConversation({
             </div>
           )}
           <div className="chat-column pointer-events-none relative z-10 -mt-6.5 w-full shrink-0 composer-dock *:pointer-events-auto empty:hidden">
+            {/* 收工了不能再发：输入框的位置是一条状态（同已归档对话的状态条） */}
+            {phase === "ended" && view.conversation.purgedAt === undefined && (
+              <div role="status" className="rounded-2xl bg-sidebar px-4 py-3 text-body">
+                Completed
+              </div>
+            )}
             {phase !== "ended" && (
               <DraftComposer
                 autoFocus={!mobile}

@@ -241,7 +241,7 @@ const TurnRow = memo(function TurnRow({
     retryError !== undefined ? errorTitle(retryError) : (plan?.errorRaw !== undefined && plan.errorRaw !== failReason ? plan.errorRaw : undefined);
 
   return (
-    <div data-stream-entry className="chat-column w-full">
+    <div data-stream-entry className="w-full">
       <div data-router-turn data-status={effectiveStatus} className="mt-6 flex flex-col first:mt-2">
         <article className="flex flex-col items-end" data-side="right" title={formatTime(entry.createdAt)}>
           <SentBody unsent={unsentNode}>
@@ -346,7 +346,7 @@ const BriefingRow = memo(function BriefingRow({
   const showProject = entry.projectName !== null && entry.projectName !== entry.pmName;
   const showDevice = (multiDevice || !entry.self) && entry.deviceName !== "";
   return (
-    <div data-stream-entry className="chat-column w-full">
+    <div data-stream-entry className="w-full">
       {showNewDivider && (
         <div data-new-divider className="mt-6 mb-2 flex items-center gap-2.5 text-xs text-muted-foreground">
           <span>New</span>

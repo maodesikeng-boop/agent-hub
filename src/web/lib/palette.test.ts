@@ -1,5 +1,5 @@
 // 项目经理的颜色表（docs/ui-standard.md 第 4 条）：头像颜色和强调色共用一份，强调色按 WCAG 2.x AA 的文字对比度 4.5:1 配好。
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { accentStyle, CHART_CATEGORY_COLORS, contrastRatio, PALETTE, paletteOf } from "./palette.ts";
 
@@ -85,5 +85,40 @@ describe("水果色的掺入比例（styles.css 的 --mix-*，docs/ui-standard.m
 
   it.each(PALETTE.map((c) => [c.name, c] as const))("%s：用户气泡的浅果冻底上，前景色字对比度 ≥ 4.5:1", (_name, c) => {
     expect(contrastRatio(foreground, mix(c.accent, mixOf("bubble-me"), WHITE))).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+describe("次要文字和状态字的对比度（styles.css 的 --muted-foreground、--warn-foreground，WCAG 1.4.3）", () => {
+  const css = readFileSync("src/web/styles.css", "utf8");
+  const token = (name: string) => new RegExp(`\\n  --${name}: (#[0-9a-f]{6});`).exec(css)![1]!;
+  const mixOf = (name: string) => Number(new RegExp(`--mix-${name}: ([0-9.]+)%;`).exec(css)?.[1]);
+  const JELLY_PERCENT = 10;
+  /** 次要文字会压在上面的每一种底：中性的几种，加上 8 种水果各自的左栏底、对话区底，以及盖在它们上面的选中果冻底。 */
+  const surfaces = (): Array<[string, string]> => {
+    const list: Array<[string, string]> = ["background", "sidebar", "sidebar-active", "sidebar-hover", "muted", "bubble-agent"].map((name) => [name, token(name)]);
+    for (const c of PALETTE) {
+      const sidebar = mix(c.accent, mixOf("sidebar"), token("sidebar"));
+      const chat = mix(c.accent, mixOf("chat"), token("background"));
+      list.push([`${c.name} 左栏底`, sidebar], [`${c.name} 对话区底`, chat], [`${c.name} 左栏选中果冻底`, mix(c.accent, JELLY_PERCENT, sidebar)], [`${c.name} 右栏选中果冻底`, mix(c.accent, JELLY_PERCENT, chat)]);
+    }
+    return list;
+  };
+
+  it("果冻底的浓度和这里算的一样（10%）", () => {
+    expect(css).toMatch(/--color-jelly: color-mix\(in srgb, var\(--jelly, var\(--primary\)\) 10%, transparent\);/);
+  });
+
+  it.each(surfaces())("次要文字压在 %s 上 ≥ 4.5:1", (_name, surface) => {
+    expect(contrastRatio(token("muted-foreground"), surface)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it.each(surfaces())("琥珀色的状态字（Waiting on PM）压在 %s 上 ≥ 4.5:1", (_name, surface) => {
+    expect(contrastRatio(token("warn-foreground"), surface)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("琥珀色的填充色（--caution）对白底不到 3:1，只能当圆点、用量条的颜色，组件里不拿它当字色", () => {
+    expect(contrastRatio(token("caution"), WHITE)).toBeLessThan(3);
+    const sources = readdirSync("src/web", { recursive: true, encoding: "utf8" }).filter((f) => f.endsWith(".tsx") && !f.includes(".test."));
+    for (const file of sources) expect(readFileSync(`src/web/${file}`, "utf8"), file).not.toContain("text-caution");
   });
 });

@@ -54,7 +54,8 @@ export function UserBlockerCard({
       {showStatus && (
         <div className="mb-1.5 flex items-center gap-2">
           <span aria-hidden="true" className={cn("size-2 shrink-0 rounded-full", answered ? "bg-muted-foreground" : "bg-status-active")} />
-          <span className={cn("text-xs font-medium", answered ? "text-muted-foreground" : "text-primary")}>
+          {/* 压在果冻底上的小字用前景色：强调色的字在同色系的浅底上不到 4.5:1，状态靠前面的绿点 */}
+          <span className={cn("text-xs font-medium", answered ? "text-muted-foreground" : "text-foreground")}>
             {answered ? "Done" : "Waiting on you"}
           </span>
         </div>

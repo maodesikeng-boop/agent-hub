@@ -34,8 +34,8 @@ export function BrowserSessionsSettings({ onSignedOut }: { onSignedOut?: () => v
 
   return (
     <>
-      <SettingsGroup label="Sign in on phone">
-        <SettingsRow label="Sign in on phone" error={signIn.error}>
+      <SettingsGroup label="Sign in on another device">
+        <SettingsRow label="Sign in on another device" error={signIn.error}>
           {(id) => (
             <Button
               id={id}

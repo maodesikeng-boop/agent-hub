@@ -13,7 +13,7 @@ import {
   modelShortLabel,
 } from "../../shared/index.ts";
 import type { ConversationId, Message, MessageId, ProjectId, TaskGraph, TaskGraphId, UserBlockerId } from "../../shared/index.ts";
-import { cleanPieceTitle, DEFAULT_CHOICE, errorText, formatContext, formatTokenDetail, NEEDS_YOU, NO_DATA } from "../format.ts";
+import { cleanPieceTitle, errorText, formatContext, formatTokenDetail, NEEDS_YOU, NO_DATA } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { useModelCatalog } from "../models.tsx";
 import { stripMarkdown } from "../plainText.ts";
@@ -137,7 +137,8 @@ function GroupTitle({
   );
   if (!trailing) return title;
   return (
-    <div className="flex min-w-0 items-center gap-2">
+    // 标题按钮向右伸出 10px（-mx-2.5），和开关之间留 12px，两个可点范围不擦边
+    <div className="flex min-w-0 items-center gap-3">
       {title}
       {/* 开关的图标和收起时在顶栏右边的位置一样（右边 12px），点开关时不跳 */}
       <div className="-mr-2 shrink-0">{trailing}</div>
@@ -182,19 +183,27 @@ function askSummary(text: string): string {
 /** 一个提问一行：去掉 Markdown 的第一行；点开在下面看全文，同时让对话滚到那条消息。 */
 function AskRow({ ask, open, onToggle }: { ask: Message; open: boolean; onToggle: () => void }) {
   const summary = askSummary(ask.text);
-  const { title, body } = splitCardTitle(ask.text);
+  const { body } = splitCardTitle(ask.text);
+  const deliverables = askOf(ask)?.deliverables;
+  const hasDetail = body.trim() !== "" || (deliverables?.length ?? 0) > 0;
   return (
     <li>
-      <button type="button" aria-expanded={open} className={cn(ROW, "items-start", open ? "bg-sidebar" : ITEM_HOVER)} onClick={onToggle}>
+      {/* 展开后这一行和下面的全文是同一块灰底：行只留上圆角，标题不截断 */}
+      <button
+        type="button"
+        aria-expanded={open}
+        title={open ? undefined : summary}
+        className={cn(ROW, "items-start", open ? cn("bg-sidebar", hasDetail && "rounded-b-none") : ITEM_HOVER)}
+        onClick={onToggle}
+      >
         <MessageCircleQuestionMark className={cn(ROW_ICON, "mt-0.5")} strokeWidth={ICON_STROKE} aria-hidden="true" />
-        <span className="min-w-0 flex-1 truncate text-body leading-5">{summary}</span>
+        <span className={cn("min-w-0 flex-1 text-body leading-5", open ? "wrap-anywhere" : "truncate")}>{summary}</span>
         <ChevronRight className={cn(ROW_ICON, "mt-0.5 size-3.5 transition-transform", open && "rotate-90")} aria-hidden="true" />
       </button>
-      {open && (
+      {open && hasDetail && (
         <div className="-mx-2.5 rounded-b-xl bg-sidebar px-2.5 pb-3 text-minor">
           <div data-ask-detail className="pl-7">
-            <Markdown text={title} messageId={ask.id} />
-            <CardBody text={body} deliverables={askOf(ask)?.deliverables} messageId={ask.id} className="mt-2" />
+            <CardBody text={body} deliverables={deliverables} messageId={ask.id} />
           </div>
         </div>
       )}
@@ -211,7 +220,8 @@ function usePieceMeta(worker: WorkerEntry): { model: string | null; effort: stri
   const model = worker.model ?? null;
   const effort = agentEffortOf(vendor, model, worker.effort ?? null);
   return {
-    model: worker.vendor === undefined ? null : model === null ? (catalog.defaultModel ?? DEFAULT_CHOICE) : modelShortLabel(vendor, model, catalog),
+    // 没指定模型、名单也没报默认是哪个：这一项不显示
+    model: worker.vendor === undefined ? null : model === null ? (catalog.defaultModel ?? null) : modelShortLabel(vendor, model, catalog),
     effort: effort || null,
     context: context !== NO_DATA ? context : null,
   };

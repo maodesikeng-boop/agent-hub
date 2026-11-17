@@ -96,7 +96,7 @@ function log() {
  * 或者只有“已派出”一行时那很淡的一行。
  */
 function workerButton() {
-  return within(log()).getByRole("button", { name: /已派出|做完了/ });
+  return within(log()).getByRole("button", { name: /Started|做完了/ });
 }
 
 beforeEach(() => {
@@ -117,9 +117,9 @@ describe("那一行", () => {
     expect(done).toHaveTextContent("改好了，测试通过");
     expect(done.closest("[data-worker-report]")).toHaveAttribute("data-tone", "success");
     expect(done.closest("[data-worker-report]")).not.toBeNull();
-    expect(within(log()).queryByRole("button", { name: "Piece「修 X」已派出" })).not.toBeInTheDocument();
+    expect(within(log()).queryByRole("button", { name: "修 X Started" })).not.toBeInTheDocument();
     await user.click(within(log()).getByRole("button", { name: /Worked for/ }));
-    expect(within(log()).getByRole("button", { name: "Piece「修 X」已派出" })).toBeInTheDocument();
+    expect(within(log()).getByRole("button", { name: "修 X Started" })).toBeInTheDocument();
     // 汇报原文（给项目经理的那段）不显示给人看
     expect(within(log()).queryByText(/的汇报】/)).not.toBeInTheDocument();
   });
@@ -134,7 +134,7 @@ describe("那一行", () => {
         ],
       }),
     );
-    expect(within(log()).getByRole("button", { name: "Piece「调查 Y」已派出（只读）" })).toBeInTheDocument();
+    expect(within(log()).getByRole("button", { name: "调查 Y Started read-only" })).toBeInTheDocument();
   });
 
   it("用户直接对 Worker 说的话：一行“Worker「标题」你对它说：原文”，点开是 Worker 的对话", async () => {
@@ -150,7 +150,7 @@ describe("那一行", () => {
         ],
       }),
     );
-    const line = within(log()).getByRole("button", { name: "Piece「修 X」你对它说：顺便改 README" });
+    const line = within(log()).getByRole("button", { name: "修 X You said 顺便改 README" });
     expect(within(log()).queryByText(/Worker 已收到/)).not.toBeInTheDocument();
     await user.click(line);
     expect(screen.getByRole("region", { name: "Piece 修 X" })).toBeInTheDocument();
@@ -190,14 +190,14 @@ describe("那一行", () => {
       expect(row).toHaveTextContent(summary);
     });
     // 收工：不在一轮里，很淡的一行
-    expect(buttons[5]).toHaveTextContent("Piece「修 X」已收工");
+    expect(buttons[5]).toHaveAccessibleName("修 X Ended");
     expect(buttons[5]!.closest("[data-notice]")).not.toBeNull();
   });
 
   it("推一条新的 worker 消息，会话里多一行；左栏的预览还是最后一条文字", async () => {
     const ws = await boot();
     push(ws, messageChange(11, "message.created", makeWorkerLine({ id: 4, conversationId: 1, line: { event: "ended" } })));
-    expect(within(log()).getByRole("button", { name: "Piece「修 X」已收工" })).toBeInTheDocument();
+    expect(within(log()).getByRole("button", { name: "修 X Ended" })).toBeInTheDocument();
     expect(within(nav()).getByRole("button", { name: /派个 Worker 修 X/ })).toBeInTheDocument();
   });
 
@@ -936,9 +936,9 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
       expect(row.getAttribute("title")).not.toMatch(/Claude Code|·/);
     });
 
-    it("默认模型显示“默认”；没设思考程度就不列这一项", async () => {
+    it("没指定模型、名单也没报默认是哪个：不写孤零零的 Default；没设思考程度就不列这一项", async () => {
       await boot(withAgent({ vendor: "claude", model: null, effort: null, usage }));
-      expect(metaOf()).toEqual(["Default", "117K context"]);
+      expect(metaOf()).toEqual(["117K context"]);
     });
 
     it("默认模型：厂商的模型名单说了实际是哪个（defaultModel），就写它，不写“默认”", async () => {

@@ -80,7 +80,7 @@ describe("已登录的浏览器列表", () => {
     const region = screen.getByRole("region", { name: "Signed-in browsers" });
     expect(within(region).getByRole("button", { name: "Sign out all" })).toBeInTheDocument();
     // 扫码登录不藏：在框外单独一组，收不起来
-    expect(within(screen.getByRole("region", { name: "Sign in on phone" })).getByRole("button", { name: "Show QR code" })).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "Sign in on another device" })).getByRole("button", { name: "Show QR code" })).toBeInTheDocument();
   });
 
   it("读不出来（比如没登录）：自己展开，框里一行说原因，不是空白", async () => {

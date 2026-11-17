@@ -81,9 +81,10 @@ describe("贴底", () => {
     expect(log.scrollTop).toBe(700);
   });
 
-  it("贴底时没有“回到底部”，消息区没有渐隐蒙版，内容底部留白 pb-12 补偿输入框向上叠盖的 26px", () => {
+  it("贴底时没有“回到底部”，消息区只有上边渐隐（.messages-fade，内容上内边距 pt-8 一样高），内容底部留白 pb-12 补偿输入框向上叠盖的 26px", () => {
     const { log } = setup();
-    expect(log.className).not.toContain("fade");
+    expect(log).toHaveClass("messages-fade");
+    expect((log.firstElementChild as HTMLElement).className).toContain("pt-8");
     expect(log).not.toHaveAttribute("data-away");
     expect((log.firstElementChild as HTMLElement).className).toContain("pb-12");
     expect(screen.queryByRole("button", { name: "Scroll to bottom" })).not.toBeInTheDocument();
@@ -102,7 +103,7 @@ describe("贴底", () => {
     expect(back).toHaveTextContent("");
     // 浮在输入框上方一点、消息列正中；外层不挡鼠标，只有按钮自己能点；消息区的高度不跟着变（不让出一条、不加蒙版）
     expect(log).not.toContainElement(back);
-    expect(log.className).not.toMatch(/mask|fade/);
+    expect(log.className).not.toMatch(/mask|shadow/);
     const holder = back.closest("[data-back-to-bottom]") as HTMLElement;
     expect(holder.className).toContain("messages");
     expect(holder.className).toContain("justify-center");

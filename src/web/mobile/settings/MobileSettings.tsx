@@ -82,7 +82,7 @@ const SUBPAGES: Record<SettingsSection, SubpageSpec> = {
     footer: (ctx) => (ctx.vendor.preview === null ? null : <VendorSyncFooter vendor={ctx.vendor} />),
   },
   computers: { title: "Computers", render: (ctx) => withDevices(ctx, (devices) => <ComputersPage devices={devices} />) },
-  "sign-in": { title: "Sign in", render: () => <SignInPage /> },
+  "sign-in": { title: "Sign in on another device", render: () => <SignInPage /> },
   browsers: { title: "Signed-in browsers", render: (ctx) => <BrowsersPage {...(ctx.onSignedOut !== undefined ? { onSignedOut: ctx.onSignedOut } : {})} /> },
   "public-access": { title: "Public access", render: (ctx) => withDevices(ctx, (devices) => <PublicAccessPage devices={devices} />) },
 };

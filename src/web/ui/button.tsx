@@ -24,6 +24,9 @@ export const buttonVariants = cva(
         "icon-sm": "size-8 rounded-[var(--radius-btn)]",
       },
     },
+    // 带字的 ghost 按钮（行里、组标题右边的 Manage…、Refresh、Invite）字是前景色：和旁边灰色的只读值分得开，看得出能点；
+    // 纯图标的 ghost 按钮照旧是次要色
+    compoundVariants: [{ variant: "ghost", size: ["default", "sm"], class: "text-foreground" }],
     defaultVariants: { variant: "default", size: "default" },
   },
 );

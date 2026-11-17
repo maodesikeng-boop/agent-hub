@@ -271,7 +271,8 @@ describe("桌面端 Settings → Providers", () => {
     // 点击 Install 进入进行中并开启轮询
     fireEvent.click(within(row).getByRole("button", { name: /Install/ }));
     expect(await within(row).findByText("Downloading archive…")).toBeVisible();
-    expect(within(row).getByRole("button", { name: "Installing…" })).toBeDisabled();
+    // 进行中的状态只在左边写一遍（流光的进度词），右边不再放一个不能点的 Installing… 胶囊
+    expect(within(row).queryByRole("button", { name: "Installing…" })).toBeNull();
     expect(within(row).getByRole("button", { name: new RegExp(`Cancel ${vendorLabel(targetVendor)}`) })).toBeVisible();
 
     // 模拟任务失败：默认收起日志，点 Show log 才展开
@@ -297,7 +298,10 @@ describe("桌面端 Settings → Providers", () => {
       ),
     };
     await act(() => vi.advanceTimersByTimeAsync(PROVIDER_ACTIVE_POLL_MS + 50));
-    expect(await within(row).findByRole("alert")).toHaveTextContent("Download failed: network timeout");
+    // 行下只写一句人话，进程的原始报错放悬停提示
+    const failure = await within(row).findByRole("alert");
+    expect(failure).toHaveTextContent(/^Install failed$/);
+    expect(failure).toHaveAttribute("title", "Download failed: network timeout");
     expect(within(row).queryByTestId("provider-job-log")).toBeNull();
 
     fireEvent.click(within(row).getByRole("button", { name: /Show log/ }));
@@ -307,7 +311,7 @@ describe("桌面端 Settings → Providers", () => {
 
     // 点击 Retry 重新安装并成功完成 → 自动联动刷新 /api/models 且停止轮询
     fireEvent.click(within(row).getByRole("button", { name: /Retry/ }));
-    await waitFor(() => expect(within(row).getByRole("button", { name: "Installing…" })).toBeDisabled());
+    await waitFor(() => expect(within(row).getByRole("button", { name: new RegExp(`Cancel ${vendorLabel(targetVendor)}`) })).toBeVisible());
     currentStatus = {
       ...currentStatus,
       providers: currentStatus.providers.map((p) =>

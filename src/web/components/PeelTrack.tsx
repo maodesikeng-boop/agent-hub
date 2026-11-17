@@ -30,6 +30,11 @@ type LineStyle = "solid" | "dash" | "none";
 type DotTone = "done" | "run" | "warn" | "blocked";
 
 const GUTTER_H = 32;
+/**
+ * 轨道槽的长度：画布上的 1 个单位是 --peel-u（styles.css：平时 1/16rem，触屏 44/32 倍）。
+ * 触屏下每行高 44px，轨道槽跟着等比放大到同样高，上下两行的线才接得上、不断成一截一截。
+ */
+const peelLen = (units: number) => `calc(${units} * var(--peel-u))`;
 const GUTTER_CY = GUTTER_H / 2;
 const GATE_TOP_Y = GUTTER_CY - 9;
 const GATE_BOT_Y = GUTTER_CY + 11;
@@ -151,7 +156,7 @@ function PeelGutter({
       data-peel-gutter={kind}
       data-dot-x={dotX}
       viewBox={`0 0 ${gutterWidth} ${GUTTER_H}`}
-      style={{ width: `${gutterWidth / 16}rem`, height: "2rem" }}
+      style={{ width: peelLen(gutterWidth), height: peelLen(GUTTER_H) }}
       aria-hidden="true"
       className="block shrink-0 select-none"
     >
@@ -294,7 +299,7 @@ export function GateDecisionCard({
                 )}
               >
                 <span className="min-w-0 flex-1 wrap-anywhere">{opt}</span>
-                {isRec && <span className="shrink-0 text-xs font-normal opacity-90">Recommended</span>}
+                {isRec && <span className="shrink-0 text-xs font-normal">Recommended</span>}
               </button>
             );
           })}
@@ -384,16 +389,17 @@ function PeelStageRow({
   onOpenWorker: (id: ConversationId) => void;
 }) {
   if (isTaskNodeWaitingUser(node)) {
-    const gutterRem = `${gutterWidth / 16}rem`;
-    const knifeLeftRem = `${(dotX - 15) / 16}rem`;
+    const gutterRem = peelLen(gutterWidth);
+    // 水果刀 30px 宽，刀心对着泳道
+    const knifeLeftRem = `calc(${peelLen(dotX)} - ${15 / 16}rem)`;
     return (
       <div data-node-key={node.key} className="relative flex items-start">
         {hasBelow && exitLanes.length > 0 && (
           <svg
             data-peel-gate-ext
             aria-hidden="true"
-            style={{ width: gutterRem, height: "calc(100% - 2rem)" }}
-            className="pointer-events-none absolute top-8 left-0 block select-none"
+            style={{ width: gutterRem, top: peelLen(GUTTER_H), height: `calc(100% - ${peelLen(GUTTER_H)})` }}
+            className="pointer-events-none absolute left-0 block select-none"
           >
             {exitLanes.map((lane, idx) => {
               const xPct = `${round2((lane.x / gutterWidth) * 100)}%`;
@@ -424,15 +430,15 @@ function PeelStageRow({
             })}
           </svg>
         )}
-        <div style={{ width: gutterRem, height: "2rem" }} className="relative flex shrink-0 items-center">
+        <div style={{ width: gutterRem, height: peelLen(GUTTER_H) }} className="relative flex shrink-0 items-center">
           <PeelGutter kind="gate" gutterWidth={gutterWidth} dotX={dotX} segments={segments} />
           <span style={{ left: knifeLeftRem }} className="pointer-events-none absolute top-0 inline-flex">
             <KnifeAvatar size={30} />
           </span>
         </div>
         <div className="min-w-0 flex-1 pb-2">
-          <div className="flex min-h-8 items-center text-body font-semibold text-primary">
-            <span className="truncate">{cleanPieceTitle(node.title)}</span>
+          <div className="flex min-h-8 pointer-coarse:min-h-11 items-center text-body font-semibold text-primary">
+            <span className="truncate" title={node.title}>{cleanPieceTitle(node.title)}</span>
           </div>
           {node.userBlocker != null ? (
             <UserBlockerCard blockerId={node.userBlocker.id} text={userBlockerCardText(node.userBlocker)} className="rounded-tl-xl" />
@@ -465,7 +471,8 @@ function PeelStageRow({
     ) : isSkipped ? (
       <span className="shrink-0 text-xs text-muted-foreground">Skipped</span>
     ) : isTaskNodeWaitingPm(node) ? (
-      <span className="shrink-0 text-xs text-caution">Waiting on PM</span>
+      // 并行泳道多、右边窄的时候让出位置给步骤名（琥珀色圆点已经表示在等项目经理，悬停提示里也写着）
+      <span className="shrink-0 text-xs text-warn-foreground @max-[13rem]:hidden">Waiting on PM</span>
     ) : null;
 
   const content = (
@@ -477,7 +484,7 @@ function PeelStageRow({
         tone={dotToneOf(node)}
         segments={segments}
       />
-      <span className="flex min-h-8 min-w-0 flex-1 items-center justify-between gap-2">
+      <span className="@container flex min-h-8 min-w-0 flex-1 items-center justify-between gap-2">
         <span
           className={cn(
             "min-w-0 truncate text-minor",
@@ -514,7 +521,7 @@ function PeelStageRow({
   }
 
   return (
-    <div data-node-key={node.key} title={node.title} className="flex min-h-8 pointer-coarse:min-h-11 items-center">
+    <div data-node-key={node.key} title={isTaskNodeWaitingPm(node) ? `${node.title}\nWaiting on PM` : node.title} className="flex min-h-8 pointer-coarse:min-h-11 items-center">
       {content}
     </div>
   );
@@ -1227,7 +1234,7 @@ export const PeelTrackList = memo(function PeelTrackList({
                 className="flex min-h-9 pointer-coarse:min-h-11 min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-xl py-1.5 pr-1 text-left transition-colors outline-none hover:bg-jelly-hover focus-visible:ring-2 focus-visible:ring-ring/50"
               >
                 <SliceWheelIcon graph={graph} colorKey={colorKey} size={20} />
-                <span className={cn("min-w-0 flex-1 truncate text-body", open && "font-semibold")}>
+                <span title={graph.title} className={cn("min-w-0 flex-1 truncate text-body", open && "font-semibold")}>
                   {graph.title}
                 </span>
                 {isTaskGraphReadyToFinish(graph) && (

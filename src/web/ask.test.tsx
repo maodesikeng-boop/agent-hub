@@ -112,7 +112,8 @@ describe("右栏的“等你确定”", () => {
     fireEvent.click(first);
     expect(first).toHaveAttribute("aria-expanded", "true");
     const body = first.parentElement!;
-    expect(within(body).getByText("方案 A").tagName).toBe("STRONG");
+    // 展开后标题就在这一行里（不截断），下面的全文不再重复一遍标题
+    expect(first).toHaveTextContent("方案 A");
     expect(within(body).getByText("B：单栏信息流")).toBeInTheDocument();
     const target = document.querySelector('[data-message-id="1"]')!;
     expect(scrolled).toEqual([target]);
@@ -364,7 +365,8 @@ describe("对话流里的 A/B/C/D 选项卡片", () => {
       ]),
     );
     const card = (id: number) => document.querySelector(`[data-message-id="${id}"] [data-ask-card]`) as HTMLElement;
-    const highlighted = (id: number) => [...card(id).querySelectorAll(".bg-sidebar-active")].map((el) => el.textContent?.replace(/^[A-Z](?=\S)/, ""));
+    // 选中的选项是 bg-sidebar-active，用户写的原话是浅一档的 bg-sidebar（[data-ask-answer]）
+    const highlighted = (id: number) => [...card(id).querySelectorAll(".bg-sidebar-active, [data-ask-answer]")].map((el) => el.textContent?.replace(/^[A-Z](?=\S)/, ""));
 
     expect(highlighted(3)).toEqual(["qa-test@example.com"]);
     expect(highlighted(4)).toEqual(["不接", "开完会再接"]);

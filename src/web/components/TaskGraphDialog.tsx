@@ -1,6 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import { Check, Loader2 } from "lucide-react";
-import { memo, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useMemo, useRef, useState } from "react";
 import {
   isTaskGraphReadyToFinish,
   isTaskNodeWaitingPm,
@@ -17,7 +17,7 @@ import { useHubQueryClient } from "../query-client.ts";
 import { workersByWorkerId, type WorkerEntry } from "../selectors.ts";
 import { computeTaskGraphLayout, DEFAULT_ROOT_FONT_SIZE_PX } from "../task-graph-layout.ts";
 import { Button } from "../ui/button.tsx";
-import { Dialog, DialogBody, DialogClose, DialogContent, DialogFooter } from "../ui/dialog.tsx";
+import { Dialog, DialogBody, DialogClose, DialogContent, DialogFooter, ZOOM_DIALOG } from "../ui/dialog.tsx";
 import { KnifeAvatar } from "./KnifeAvatar.tsx";
 import { UserBlockerCard } from "./UserBlockerCard.tsx";
 import { GateDecisionCard, resolveBoundWorker } from "./PeelTrack.tsx";
@@ -72,6 +72,25 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
   const client = useClient();
   const qc = useHubQueryClient();
   const [expandedNotes, setExpandedNotes] = useState<Record<string, boolean>>({});
+  // 每张卡画出来的实际高度（px）：量到了交给排版，同一列的下一张卡才不会压上来（拍板卡的摘要、折成两行的步骤名都估不准）
+  const [measuredHeights, setMeasuredHeights] = useState<Readonly<Record<string, number>>>({});
+  const observerRef = useRef<ResizeObserver | null>(null);
+  const measureCard = useCallback((el: HTMLDivElement | null) => {
+    if (el === null || typeof ResizeObserver === "undefined") return;
+    observerRef.current ??= new ResizeObserver((entries) => {
+      setMeasuredHeights((prev) => {
+        let next = prev;
+        for (const entry of entries) {
+          const key = (entry.target as HTMLElement).dataset.measureKey;
+          const height = Math.ceil((entry.target as HTMLElement).offsetHeight);
+          if (key !== undefined && height > 0 && next[key] !== height) next = { ...next, [key]: height };
+        }
+        return next;
+      });
+    });
+    observerRef.current.observe(el);
+    return () => observerRef.current?.unobserve(el);
+  }, []);
   const [actionError, setActionError] = useState<ErrorLike | null>(null);
   /** Cancel graph 的二次确认弹窗（docs/ui-standard.md 第 12.1 条）：点了先确认，确认了才发请求。 */
   const [confirmingCancel, setConfirmingCancel] = useState(false);
@@ -115,6 +134,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
           ...(activeWaitingUser && n.userBlocker == null && n.artifact?.deliverables !== undefined
             ? { deliverables: n.artifact.deliverables }
             : {}),
+          ...(measuredHeights[n.key] !== undefined ? { measuredHeightPx: measuredHeights[n.key] } : {}),
         };
       }),
       edges: graph.edges.map((e) => ({ from: e.fromKey, to: e.toKey })),
@@ -122,7 +142,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
       rootFontSizePx,
       coarsePointer,
     });
-  }, [graph, expandedNotes, rootFontSizePx, coarsePointer]);
+  }, [graph, expandedNotes, measuredHeights, rootFontSizePx, coarsePointer]);
 
   const skipMutation = useMutation(
     {
@@ -165,22 +185,16 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
   };
 
   if (graph === null || layout === null) return null;
+  const graphStateLabel =
+    graph.status === "completed" ? "Completed" : graph.status === "cancelled" ? "Cancelled" : isTaskGraphReadyToFinish(graph) ? "Ready to finish" : null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent title={graph.title} className="h-[90dvh] w-[min(96vw,1400px)] max-w-none">
-        <div className="flex shrink-0 items-center justify-between gap-3">
+      <DialogContent title={graph.title} className={ZOOM_DIALOG}>
+        <div className="flex min-h-8 shrink-0 items-center justify-between gap-3">
           <div className="flex items-center gap-2.5 text-minor text-muted-foreground">
             <SliceWheelIcon graph={graph} colorKey={colorKey} size={20} />
-            <span>
-              {graph.status === "completed"
-                ? "Completed"
-                : graph.status === "cancelled"
-                  ? "Cancelled"
-                  : isTaskGraphReadyToFinish(graph)
-                    ? "Ready to finish"
-                    : "Task Graph"}
-            </span>
+            {graphStateLabel !== null && <span>{graphStateLabel}</span>}
           </div>
           {graph.status === "active" && (
             <Button
@@ -209,7 +223,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                     Keep going
                   </Button>
                 </DialogClose>
-                <Button disabled={cancelMutation.isPending} onClick={() => runExclusive(() => cancelMutation.mutate())}>
+                <Button variant="destructive" disabled={cancelMutation.isPending} onClick={() => runExclusive(() => cancelMutation.mutate())}>
                   {cancelMutation.isPending && <Loader2 className="animate-spin" aria-hidden="true" />}
                   Cancel graph
                 </Button>
@@ -275,13 +289,15 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                 return (
                   <div
                     key={box.id}
+                    ref={measureCard}
+                    data-measure-key={node.key}
                     style={{ left: `${box.x}px`, top: `${box.y}px`, width: `${box.width}px` }}
                     className="absolute"
                   >
                     <div className="mb-1.5 flex items-center justify-between gap-2 px-1">
                       <span className="flex min-w-0 items-center gap-2 text-minor font-semibold text-primary">
                         <KnifeAvatar size={20} />
-                        <span className="truncate">{node.title}</span>
+                        <span className="truncate" title={node.title}>{node.title}</span>
                       </span>
                       <span className="shrink-0 text-xs font-medium text-primary">Waiting on you</span>
                     </div>
@@ -308,6 +324,8 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
               return (
                 <div
                   key={box.id}
+                  ref={measureCard}
+                  data-measure-key={node.key}
                   style={{
                     left: `${box.x}px`,
                     top: `${box.y}px`,
@@ -321,8 +339,8 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                       : "border border-line bg-background",
                   )}
                 >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="flex min-w-0 items-center gap-1.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="flex min-w-0 items-start gap-1.5 [&>svg]:mt-0.75 [&>span:first-child:not(:last-child)]:mt-1.5">
                       {isDone && <Check className="size-3.5 shrink-0 text-success" aria-hidden="true" />}
                       {isRunning && (
                         <svg data-running-ring viewBox="0 0 16 16" className="size-3.5 shrink-0" aria-hidden="true">
@@ -331,9 +349,11 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                         </svg>
                       )}
                       {isWaitingPm && <span className="size-2 shrink-0 rounded-full bg-caution" aria-hidden="true" />}
+                      {/* 步骤名最多两行：并行的几步名字常常只有末尾不同，截成一行就分不出来 */}
                       <span
+                        title={node.title}
                         className={cn(
-                          "min-w-0 truncate text-minor font-medium",
+                          "line-clamp-2 min-w-0 text-minor font-medium wrap-anywhere",
                           isRunning && "status-shimmer",
                           isSkipped && "text-muted-foreground opacity-60",
                         )}

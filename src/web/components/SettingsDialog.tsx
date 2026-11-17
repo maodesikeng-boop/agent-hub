@@ -83,11 +83,8 @@ export function SettingsDialog({
 
   const content: Record<SettingsDialogSection, ReactNode> = {
     general: (
-      <>
-        <SettingsGroup title="Appearance">
+        <SettingsGroup label="General">
           <UiScaleRow />
-        </SettingsGroup>
-        <SettingsGroup label="Notifications">
           {/* 打不开的时候开关是灰的，下面一句说清为什么、怎么办（同表单校验：不让用户点了才知道） */}
           <SettingsRow label="Notifications" detail={NOTIFY_BLOCKED[notify.permission]}>
             {(id) => (
@@ -101,7 +98,6 @@ export function SettingsDialog({
             )}
           </SettingsRow>
         </SettingsGroup>
-      </>
     ),
     providers: (
       <ProvidersSettings
@@ -126,12 +122,12 @@ export function SettingsDialog({
           value={effectiveSection}
           onValueChange={(val) => setActiveSection(val as SettingsDialogSection)}
           orientation="vertical"
-          className="flex min-h-0 flex-1 flex-col sm:flex-row"
+          className="flex min-h-0 flex-1 flex-col min-[720px]:flex-row"
         >
-          {/* 窄屏：一排横着的分类（只有字，放得下三个），右边让出关闭按钮的位置 */}
+          {/* 窗口窄于 720px（和右栏挪到顶栏下面是同一个断点，固定像素、不跟界面大小变）：一排横着的分类（只有字），右边让出关闭按钮的位置 */}
           <TabsList
             aria-label="Settings categories"
-            className="flex shrink-0 gap-1 overflow-x-auto border-b border-border bg-sidebar py-3 pr-14 pl-3 sm:w-48 sm:flex-col sm:overflow-x-visible sm:border-r sm:border-b-0 sm:px-3 sm:py-4"
+            className="flex shrink-0 gap-1 overflow-x-auto border-b border-border bg-sidebar py-3 pr-14 pl-3 min-[720px]:w-48 min-[720px]:flex-col min-[720px]:overflow-x-visible min-[720px]:border-r min-[720px]:border-b-0 min-[720px]:px-3 min-[720px]:py-4"
           >
             {sections.map(({ id, label, icon: Icon }) => (
               <TabsTrigger
@@ -139,7 +135,7 @@ export function SettingsDialog({
                 value={id}
                 className="flex h-9 shrink-0 cursor-pointer items-center gap-3 rounded-xl px-3 text-body whitespace-nowrap transition-colors outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50 data-[state=active]:bg-sidebar-active"
               >
-                <Icon className="size-4 shrink-0 stroke-[1.5] max-sm:hidden" aria-hidden="true" />
+                <Icon className="size-4 shrink-0 stroke-[1.5] max-[719px]:hidden" aria-hidden="true" />
                 {label}
               </TabsTrigger>
             ))}
@@ -149,7 +145,7 @@ export function SettingsDialog({
             // 宽度：右栏 min-w-0（横排时 flex 子项默认不会比内容窄，内容有长域名就把整栏撑出弹窗），分组那一列 grid-cols-1（= minmax(0,1fr)，列宽不跟内容走）
             <TabsContent key={id} value={id} className="flex min-h-0 min-w-0 flex-1 flex-col outline-none">
               <h2 className="shrink-0 px-6 pt-6 pr-14 pb-5 text-title font-semibold">{label}</h2>
-              <div className="grid min-h-0 flex-1 grid-cols-1 content-start gap-6 overflow-x-hidden overflow-y-auto overscroll-y-contain px-6 pt-1 pb-6">{content[id]}</div>
+              <div className="dialog-body-fade grid min-h-0 flex-1 grid-cols-1 content-start gap-6 overflow-x-hidden overflow-y-auto overscroll-y-contain px-6 pt-1 pb-6">{content[id]}</div>
             </TabsContent>
           ))}
         </Tabs>

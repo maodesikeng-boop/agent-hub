@@ -73,7 +73,7 @@ describe("注册：vega-lite / vegalite 两个别名", () => {
 });
 
 describe("渲染", () => {
-  it("柱状图：画进容器，返回带 viewBox 的 SVG 和 dispose，柱子用分类色第一色", async () => {
+  it("柱状图：画进容器，返回带 viewBox 的 SVG 和 dispose，单序列的柱子用中性的次要文字色", async () => {
     const result = await draw(bar);
     const live = el.querySelector("svg");
     expect(live).not.toBeNull();
@@ -82,7 +82,8 @@ describe("渲染", () => {
     const svg = doc.documentElement;
     expect(svg.tagName).toBe("svg");
     expect(svg.getAttribute("viewBox")).toMatch(/^0 0 [\d.]+ [\d.]+$/);
-    expect(result.svg).toContain(CHART_CATEGORY_COLORS[0]);
+    expect(result.svg).toContain(theme.mutedForeground);
+    expect(result.svg).not.toContain(CHART_CATEGORY_COLORS[0]);
     expect(typeof result.dispose).toBe("function");
     result.dispose!();
   });
@@ -292,8 +293,10 @@ describe("主题 vegaLiteConfig", () => {
     expect(c.background).toBe(theme.background);
   });
 
-  it("没写颜色的 mark 用第一个分类色，悬停提示默认开；没有紫色", () => {
-    expect(c.mark).toMatchObject({ color: CHART_CATEGORY_COLORS[0], tooltip: true });
+  it("没写颜色的 mark（单序列）用中性的次要文字色，不占大面积的分类色；悬停提示默认开；横轴标签横着写；没有紫色", () => {
+    expect(c.mark).toMatchObject({ color: theme.mutedForeground, tooltip: true });
+    expect(c.axisX).toMatchObject({ labelAngle: 0 });
+    expect(c.range).toMatchObject({ category: [...CHART_CATEGORY_COLORS] });
     expect(JSON.stringify(c).toLowerCase()).not.toMatch(/purple|violet/);
   });
 });

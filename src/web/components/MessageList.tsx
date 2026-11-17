@@ -111,8 +111,9 @@ export const MessageList = memo(function MessageList({
 
   return (
     <div className="relative flex h-full flex-col">
-      <div className="messages min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain" ref={ref} role="log" aria-label="Messages" onScroll={onScroll}>
-        <div className="flex min-h-full flex-col pt-4 pb-12" ref={contentRef}>
+      <div className="messages messages-fade min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain" ref={ref} role="log" aria-label="Messages" onScroll={onScroll}>
+        {/* 上内边距和 .messages-fade 的渐隐带一样高（2rem）：没往上翻时第一条不淡 */}
+        <div className="flex min-h-full flex-col pt-8 pb-12" ref={contentRef}>
           {hasMore && (
             <button
               type="button"

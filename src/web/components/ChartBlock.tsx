@@ -15,7 +15,7 @@ import {
 } from "../charts/registry.ts";
 import { chartTheme } from "../charts/theme.ts";
 import { cn } from "../lib/utils.ts";
-import { Dialog, DialogBody, DialogContent } from "../ui/dialog.tsx";
+import { Dialog, DialogBody, DialogContent, ZOOM_DIALOG } from "../ui/dialog.tsx";
 import { BarButton, CodeBody, CodeView, CopyCodeButton } from "./CodeBlock.tsx";
 
 const TOO_LONG_TEXT = `Chart source is too long (over ${CHART_MAX_SOURCE_CHARS.toLocaleString("en-US")} characters), not rendered`;
@@ -33,7 +33,13 @@ function useNearViewport(ref: { current: Element | null }, enabled: boolean): bo
   return near;
 }
 
-/** 放大窗里的原尺寸图：按 viewBox 还原宽高，不再按列宽缩放、不限高；窗口放不下就两个方向滚动。 */
+/** 放大窗里最多放大到原尺寸的几倍：再大字就大得离谱了。 */
+const ZOOM_MAX_SCALE = 2.5;
+
+/**
+ * 放大窗里的图：按弹窗的宽度等比放大（最多 ZOOM_MAX_SCALE 倍），比弹窗高就在里面上下滚。
+ * 宽高比取 viewBox。
+ */
 function ZoomedSvg({ svg }: { svg: string }) {
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -43,12 +49,15 @@ function ZoomedSvg({ svg }: { svg: string }) {
     const el = host.querySelector("svg");
     const box = el?.viewBox.baseVal;
     if (el === null || box === undefined || box.width === 0) return;
-    el.style.maxWidth = "none";
-    el.style.maxHeight = "none";
     el.setAttribute("width", String(box.width));
     el.setAttribute("height", String(box.height));
+    el.style.maxHeight = "none";
+    el.style.width = `${box.width * ZOOM_MAX_SCALE}px`;
+    el.style.maxWidth = "100%";
+    el.style.height = "auto";
+    host.style.width = `${box.width * ZOOM_MAX_SCALE}px`;
   }, [svg]);
-  return <div ref={ref} data-chart-zoomed className="w-fit" />;
+  return <div ref={ref} data-chart-zoomed className="mx-auto max-w-full" />;
 }
 
 const firstLine = (message: string) => message.split("\n", 1)[0]!.trim();
@@ -182,7 +191,7 @@ export const ChartBlock = memo(function ChartBlock({ language, source }: { langu
       </div>
       {entry?.ok === true && (
         <Dialog open={zoomed} onOpenChange={setZoomed}>
-          <DialogContent title="Chart" className="h-[90dvh] w-[min(96vw,1400px)] max-w-none">
+          <DialogContent title="Chart" className={cn(ZOOM_DIALOG, "w-[min(96vw,1400px)]")}>
             <DialogBody className="overflow-auto">
               <ZoomedSvg svg={entry.svg} />
             </DialogBody>

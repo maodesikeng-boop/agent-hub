@@ -12,6 +12,7 @@ import { Input } from "../ui/input.tsx";
 import { DeviceScopeOf } from "../device-scope.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { CardBody } from "./Deliverables.tsx";
+import { OptionRow } from "./OptionRow.tsx";
 import { RowError } from "./SettingsList.tsx";
 
 export interface RouterDecisionCardProps {
@@ -46,7 +47,8 @@ export const RouterDecisionCard = memo(function RouterDecisionCard({
   return (
     <article
       aria-label={decision.question}
-      className={cn("rounded-2xl border border-border bg-background p-4 transition-opacity", !online && "opacity-60")}
+      // 离线：只把来源头像调淡、标 Offline、选项和发送不能点；整卡调淡的话字的对比度就不够了
+      className={cn("rounded-2xl border border-border bg-background p-4", !online && "[&_[data-slot=avatar]]:opacity-50")}
     >
       <div className="flex flex-wrap items-center gap-2 text-minor">
         <button
@@ -88,24 +90,10 @@ export const RouterDecisionCard = memo(function RouterDecisionCard({
           {decision.options.map((rawOption, idx) => {
             const label = cleanOptionLabel(rawOption);
             const isRecommended = idx === recommendedIdx;
-            const letter = String.fromCharCode(65 + idx);
             return (
-              <button
-                key={`${decision.key}-opt-${idx}`}
-                type="button"
-                disabled={disabled}
-                className="flex min-h-11 w-full cursor-pointer items-start gap-2.5 rounded-xl border border-border bg-background px-3 py-2.5 text-left text-body leading-6 transition-colors outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:opacity-50"
-                onClick={() => onSubmit(entry, idx, note)}
-              >
-                <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-sidebar text-xs font-medium text-muted-foreground">
-                  {letter}
-                </span>
-                {/* 宽的时候 Recommended 在右边和第一行对齐、离文字 16px；放不下 20rem 的文字时（手机）换到文字下面，不把选项挤成一条窄列 */}
-                <span className="flex min-w-0 flex-1 flex-wrap items-start gap-x-4">
-                  <span className="min-w-0 grow basis-80">{label}</span>
-                  {isRecommended && <span className="shrink-0 text-xs leading-6 text-muted-foreground">Recommended</span>}
-                </span>
-              </button>
+              <OptionRow key={`${decision.key}-opt-${idx}`} index={idx} disabled={disabled} recommended={isRecommended} onClick={() => onSubmit(entry, idx, note)}>
+                {label}
+              </OptionRow>
             );
           })}
         </div>

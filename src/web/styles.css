@@ -85,7 +85,8 @@ html[data-ui-scale="xl"] {
   --secondary: #f3f3f5;
   --secondary-foreground: #18181b;
   --muted: #f3f3f5;
-  --muted-foreground: #71717a;
+  /* 次要文字：要压在左栏底、选中底、8 种水果的果冻底上都 ≥ 4.5:1（lib/palette.test.ts 逐个底色校验），所以比 zinc-500 深一档 */
+  --muted-foreground: #5f5f69;
   --accent: #f1f1f3;
   --border: #ececef;
   /* 键盘焦点的圈：中性灰，不用主色（docs/ui-standard.md 第 7 条） */
@@ -97,7 +98,8 @@ html[data-ui-scale="xl"] {
   --danger-soft: #feeeec;
   --success: #16a34a;
   --status-active: var(--success);
-  /* 黄色的状态色（Worker 汇报“有问题”的色点）：--warn 是提示条的浅底，圆点要深一点 */
+  /* 黄色的状态色（Worker 汇报“有问题”的色点、用量条、果皮轨圆点）：只当图形的填充色，对白底不到 3:1，不能当字色；
+     琥珀色的字用 --warn-foreground（text-warn-foreground） */
   --caution: #dba10b;
   /* 水果色的掺入比例（docs/ui-standard.md 第 4 条）：只在这里调。外壳底色上限 5%、分割线上限 10%，再多就发黄发粉；
      用户气泡的浅果冻底配前景色字，对比度 ≥ 4.5:1（lib/palette.test.ts 按这里的数逐色校验） */
@@ -169,18 +171,44 @@ code {
   overflow-x: hidden;
   overscroll-behavior-y: contain;
 }
-/* 左栏对话列表、Router 的 Needs You 托盘滚动区的边缘渐变遮罩（docs/ui-standard.md 第 16、21 条）：滚动经过上下边时柔和渐隐，不硬切头像、卡片边框。
-   渐隐带正好落在滚动区的上下内边距里（托盘 pt-2 / pb-5），没滚动时什么都不淡 */
+/* 滚动区的上下边渐隐（docs/ui-standard.md 第 16、17、21 条）：内容滚过上下边时慢慢淡掉，不贴着一条线被腰斩（头像、卡片边框、一行字）。
+   写法只有这一处：各滚动区只定渐隐带多高（--fade-top / --fade-bottom），并让自己的上下内边距不小于它，没滚动时什么都不淡。
+   - 左栏对话列表：上 12px（pt-3）、下 20px（pb-5）
+   - Router 的 Needs You 托盘：上 8px（pt-2）、下 20px（pb-5）
+   - 消息列表、Router 时间流：上 2rem（内容上内边距 pt-8）
+   - 弹窗中间能滚的部分：下 1rem（pb-4） */
 .sidebar-list,
-.router-tray-scroll {
-  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 8px, #000 calc(100% - 20px), transparent);
-  mask-image: linear-gradient(to bottom, transparent, #000 8px, #000 calc(100% - 20px), transparent);
+.router-tray-scroll,
+.router-timeline,
+.messages-fade,
+.page-fade,
+.dialog-body-fade {
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 var(--fade-top, 0px), #000 calc(100% - var(--fade-bottom, 0px)), transparent);
+  mask-image: linear-gradient(to bottom, transparent, #000 var(--fade-top, 0px), #000 calc(100% - var(--fade-bottom, 0px)), transparent);
 }
-/* Router 时间流的上边（docs/ui-standard.md 第 21 条）：往上滚的消息在顶栏或托盘下面 2rem 内渐隐消失，不贴着一条线被腰斩；
-   和内容的上内边距（RouterStream 的 pt-8）一样高，没滚动时第一条不淡 */
-.router-timeline {
-  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 2rem);
-  mask-image: linear-gradient(to bottom, transparent, #000 2rem);
+.sidebar-list {
+  --fade-top: 12px;
+  --fade-bottom: 20px;
+}
+.router-tray-scroll {
+  --fade-top: 8px;
+  --fade-bottom: 20px;
+}
+.router-timeline,
+.messages-fade {
+  --fade-top: 2rem;
+}
+/* 整页滚动的页面（资料页、手机设置页）：上 1rem（pt-4） */
+.page-fade {
+  --fade-top: 1rem;
+}
+/* 弹窗中间能滚的部分（ui/dialog.tsx 的 DialogBody）：下 16px（pb-4） */
+.dialog-body-fade {
+  --fade-bottom: 1rem;
+}
+/* 搜索框的清除键自己画（Sidebar.tsx 的 Clear search），不用浏览器自带的那个蓝色叉 */
+input[type="search"]::-webkit-search-cancel-button {
+  appearance: none;
 }
 /* 卡片正文（Deliverables.tsx 的 CardBody，第 22 条）是紧凑排版：段落、列表之间比消息里收一半（消息里 0.75em） */
 [data-card-body] .markdown :is(p, ul, ol, blockquote, [data-md-code], [data-md-table]) {
@@ -197,13 +225,32 @@ code {
 .router-timeline .markdown :is(th, td):not(:last-child) {
   white-space: nowrap;
 }
-/* 卡片正文的摘要（第一段）收起时最多 3 行（Markdown 行高 1.65em），超出的最后一行渐隐，下面出 Show more。行数只在这里改 */
-.card-lead-clamp {
+/* 卡片正文的摘要（第一段）收起时最多 3 行（Markdown 行高 1.65em），超出的最后一行渐隐，下面出 Show more；只比 3 行多出不到一行的不收
+   （Deliverables.tsx 的 CardBody 量）。行数只在这里改 */
+[data-card-lead] {
   --card-lead-lines: 3;
+}
+.card-lead-clamp {
   max-height: calc(var(--card-lead-lines) * 1.65em);
   overflow: hidden;
 }
 .card-lead-clamp[data-overflowing] {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.65em), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 1.65em), transparent);
+}
+/* Worker 对话里项目经理交代的任务说明（Messages.tsx 的 LongBrief）：收起时最多 8 行、最后一行渐隐；里面的标题和正文一样大，层级只靠字重，
+   不让一段系统交代的话顶着比页面标题还大的 h1。行数只在这里改 */
+[data-brief] {
+  --brief-lines: 8;
+}
+[data-brief] .markdown :is(h1, h2, h3) {
+  margin-top: 1em;
+  font-size: 1em;
+  line-height: 1.65;
+}
+.brief-clamp {
+  max-height: calc(var(--brief-lines) * 1.65em);
+  overflow: hidden;
   -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.65em), transparent);
   mask-image: linear-gradient(to bottom, #000 calc(100% - 1.65em), transparent);
 }
@@ -637,6 +684,12 @@ code {
   user-select: none;
 }
 
+/* 果皮轨轨道槽的画布单位（PeelTrack.tsx 的 peelLen）：平时 1/16rem（一行 32 个单位 = 2rem）；触屏下行高 44px，单位跟着放大到 44/32，
+   上下两行的轨道线才接得上（触屏的值在下面“触屏”那一块里） */
+:root {
+  --peel-u: 0.0625rem;
+}
+
 /* 触屏（docs/ui-standard.md 第 19 条） */
 /* 点击区域不小于 44px，视觉大小不变：.touch-target 用 ::after 把可点范围撑开。position: relative 放在 components 层，
    工具类（absolute 之类）能盖掉它 */
@@ -662,6 +715,9 @@ code {
   textarea,
   select {
     font-size: max(16px, var(--text-body));
+  }
+  :root {
+    --peel-u: 0.0859375rem;
   }
 }
 

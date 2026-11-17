@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { cn } from "../lib/utils.ts";
 import {
   CUSTOM_MODEL,
   checkModel,
@@ -124,6 +125,7 @@ export function AgentRows({
         label="Provider"
         detail={switchingToVendor != null ? `Switching to ${vendorLabel(switchingToVendor)}…` : undefined}
         error={errors.vendor}
+        wide
       >
         {(id) => (
           <>
@@ -147,8 +149,8 @@ export function AgentRows({
               <ReadonlyValue id={id}>{vendorOptionLabel(catalog)}</ReadonlyValue>
             )}
             {showManageProviders && (
-              <Button type="button" variant="ghost" size="sm" onClick={onManageProviders}>
-                Manage providers…
+              <Button type="button" variant="ghost" size="sm" className={cn("-mr-3 shrink-0", vendors.length > 1 && "ml-4")} aria-label="Manage providers…" onClick={onManageProviders}>
+                Manage…
               </Button>
             )}
           </>

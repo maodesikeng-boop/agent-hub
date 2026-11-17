@@ -161,11 +161,11 @@ describe("Sidebar", () => {
     expect(time()).toBeInTheDocument();
   });
 
-  it("没有消息的行：第二行留空但占位，和别的行一样高", async () => {
+  it("没有消息的行：只有名字、和头像垂直居中，行高和别的行一样（文字块最少两行高）", async () => {
     await boot();
-    const preview = row("新来的").querySelector("span.block")!;
-    expect(preview.textContent).toBe(" ");
-    expect(preview).toHaveClass("block", "text-minor");
+    expect(row("新来的").querySelector("span.block")).toBeNull();
+    expect(row("新来的").querySelector("span.min-h-12")).toHaveClass("flex-col", "justify-center");
+    expect(row("小林").querySelector("span.min-h-12")).not.toBeNull();
   });
 
   it("左栏底部：不渲染“我”头像与文字；左侧放额度入口，右侧设置按钮 ml-auto 固定靠右；额度、设置、新建都是同一种 ghost 按钮", async () => {
@@ -201,16 +201,17 @@ describe("Sidebar", () => {
     expect(screen.getByRole("dialog", { name: "Settings" })).toBeInTheDocument();
   });
 
-  it("左栏对话列表带 sidebar-list 边缘渐变遮罩与 pb-3 底部内边距，与顶部搜索栏和底部栏柔和过渡", async () => {
+  it("左栏对话列表带 sidebar-list 边缘渐变遮罩（上 12px、下 20px），上下内边距不小于渐隐带，与顶部和底部栏柔和过渡", async () => {
     const css = readFileSync("src/web/styles.css", "utf8");
     // 和 Router 托盘滚动区（.router-tray-scroll）共用一条规则，选择器可以是一串
     const block = css.match(/(?:^|\n)\.sidebar-list(?:,\s*\.[\w-]+)*\s*\{([^}]*)\}/)?.[1] ?? "";
-    const gradient = "linear-gradient(to bottom, transparent, #000 8px, #000 calc(100% - 20px), transparent)";
+    const gradient = "linear-gradient(to bottom, transparent, #000 var(--fade-top, 0px), #000 calc(100% - var(--fade-bottom, 0px)), transparent)";
+    expect(css).toMatch(/\n\.sidebar-list\s*\{\s*--fade-top:\s*12px;\s*--fade-bottom:\s*20px;\s*\}/);
     expect(block).toContain(`-webkit-mask-image: ${gradient};`);
     expect(block).toContain(`mask-image: ${gradient};`);
 
     await boot();
-    expect(nav()).toHaveClass("sidebar-list", "pt-1", "pb-3");
+    expect(nav()).toHaveClass("sidebar-list", "pt-3", "pb-5");
   });
 });
 

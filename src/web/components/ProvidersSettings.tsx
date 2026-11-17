@@ -170,12 +170,14 @@ function ProviderItemRow({
   const job = item.job;
   const jobRunning = job?.phase === "running";
   const jobFailed = job?.phase === "failed";
-  const hasLog = jobFailed && Boolean(job?.logTail.trim());
+  // 装的过程中也能看日志：卡住时看得出停在哪一步
+  const hasLog = (jobFailed || jobRunning) && Boolean(job?.logTail.trim());
   const tone = resolveItemTone(item);
   const authenticated = isProviderAuthenticated(item);
   const ready = authenticated || (item.installed && item.canSignOut);
+  // 装、更新失败：行下只写一句人话，进程的原始报错（退出码、EACCES…）放悬停提示，全文在 Show log 里（docs/ui-standard.md 第 17 条）
   const combinedError: ErrorLike | null =
-    rowError ?? (jobFailed && job?.error ? job.error : null);
+    rowError ?? (jobFailed && job?.error ? { text: job.kind === "update" ? "Update failed" : "Install failed", raw: job.error } : null);
 
   return (
     <div
@@ -241,10 +243,6 @@ function ProviderItemRow({
                 onClick={() => onCancelJob(job.jobId)}
               >
                 Cancel
-              </Button>
-              <Button type="button" variant="outline" size="sm" disabled>
-                <Loader2 className="animate-spin" aria-hidden="true" />
-                {job.kind === "update" ? "Updating…" : "Installing…"}
               </Button>
             </>
           ) : !item.installed ? (
@@ -1050,6 +1048,7 @@ export function ProvidersListSection({
       (status.gitJob?.phase === "failed" && !status.gitInstalled));
   const hasExtraTopGroup = model.selectableComputers.length >= 2 || hasGitGroup;
 
+  const readyCount = model.status ? model.status.providers.filter((p) => p.availability === "available").length : null;
   return (
     <>
       {model.selectableComputers.length >= 2 && (
@@ -1075,8 +1074,9 @@ export function ProvidersListSection({
 
       <GitEnvironmentGroup model={model} />
 
+      {/* 上面没有别的组时分类名已经是 Providers：组标题写已就绪的个数，Refresh 和它同一行 */}
       <SettingsGroup
-        {...(hasExtraTopGroup ? { title: "Providers" } : { label: "Providers" })}
+        {...(hasExtraTopGroup ? { title: "Providers" } : readyCount === null ? { label: "Providers" } : { title: `${readyCount} ready`, label: "Providers" })}
         action={
           <span className="-mr-3 ml-auto flex items-center">
             <Button

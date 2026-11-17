@@ -80,6 +80,11 @@ export interface LayoutInputNode {
   readonly noteExpanded?: boolean;
   /** 拍板卡下面的交付物（文档链接行、缩略图行）：只有放大弹窗里等拍板的卡会画出来，估算高度时加上。 */
   readonly deliverables?: readonly Deliverable[];
+  /**
+   * 这张卡画出来之后量到的高度（px，取整）。给了就用它排版，不用估算：拍板卡里是 Markdown 摘要，几行、有没有 Show more 估不准，
+   * 估矮了同一列的下一张卡会压上来。第一帧没有量到的值时仍按估算排，量到后重排一次。
+   */
+  readonly measuredHeightPx?: number;
 }
 
 export interface LayoutInputEdge {
@@ -275,7 +280,7 @@ function buildLayoutCacheKey(input: TaskGraphLayoutInput, fontPx: number): strin
     const note = activeGate && n.noteExpanded ? 1 : 0;
     const files = activeGate && input.viewportMode === "dialog" ? deliverablesHeightRem(n.deliverables ?? []) : 0;
     const pos = n.position ?? i;
-    parts.push(`N:${n.key},${n.hasCard === true ? 1 : 0},${pos},${activeGate},${isDone},${opts},${sum},${question},${note},${files}`);
+    parts.push(`N:${n.key},${n.hasCard === true ? 1 : 0},${pos},${activeGate},${isDone},${opts},${sum},${question},${note},${files},${n.measuredHeightPx ?? "_"}`);
   }
 
   for (let i = 0; i < input.edges.length; i++) {
@@ -601,9 +606,9 @@ export function computeTaskGraphLayoutUncached(input: TaskGraphLayoutInput): Tas
           boxKind: "node",
           sourceNode: entry.node,
           widthPx: Math.round(remSize.widthRem * fontPx),
-          heightPx: Math.round(remSize.heightRem * fontPx),
+          heightPx: entry.node.measuredHeightPx ?? Math.round(remSize.heightRem * fontPx),
           widthRem: remSize.widthRem,
-          heightRem: remSize.heightRem,
+          heightRem: entry.node.measuredHeightPx === undefined ? remSize.heightRem : round2(entry.node.measuredHeightPx / fontPx),
           compact: input.viewportMode === "rail" && layerSize >= 2,
         };
       });
