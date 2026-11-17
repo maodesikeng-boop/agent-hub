@@ -124,6 +124,38 @@ describe("Router 轨道 B 只读沙箱与令牌权限守卫", () => {
     }
   });
 
+  it("后台写档（purpose = catalog）：全部厂商的环境和设置文件里都没有 hub 的令牌、socket 和放行规则", () => {
+    for (const [idx, vendor] of AGENT_VENDORS.entries()) {
+      const session = makeAssistantSession({ id: 1100 + idx, vendor, model: null, effort: "low" });
+      const files = prepareRouterSandboxLaunch(session, {
+        launchDir,
+        dataDir,
+        stateDir,
+        homeDir,
+        osSandboxed: true,
+        tokens: {
+          issue: () => {
+            throw new Error("写档会话不该领 hub 令牌");
+          },
+        },
+        hubSock,
+        hubBinDir,
+        basePath: "/usr/bin:/bin",
+        purpose: "catalog",
+      });
+
+      expect(files.env[ENV_HUB_TOKEN], vendor).toBeUndefined();
+      expect(files.env[ENV_HUB_SOCK], vendor).toBeUndefined();
+      expect(files.env.PATH, vendor).toBe("/usr/bin:/bin");
+      if (files.settingsFile !== undefined) {
+        const settings = readFileSync(files.settingsFile, "utf8");
+        expect(settings, vendor).not.toContain(hubSock);
+        expect(settings, vendor).not.toContain("Bash(hub:");
+      }
+      cleanupRouterLaunchDir(launchDir, session.id);
+    }
+  });
+
   it("严拒非隔离 cwd、挂载了业务目录（addDirs）或绑定了对话的会话进入 Router 沙箱", () => {
     expect(() =>
       prepareRouterSandboxLaunch(makeAssistantSession({ cwd: homeDir }), {

@@ -101,7 +101,7 @@
 
 推荐 A。沙箱两个方向都收紧：
 
-- 写档会话：角色 assistant，在 router-home 跑，套同一份只读策略；**不发 hub 令牌**（环境里没有 `HUB_TOKEN`、`HUB_SOCK`），调任何 hub 命令都失败；不绑定 sandboxGuard，`/v1/router.dispatch` 也拒；事件不进任何对话（账本跳过 assistant）。它能读到的项目文件和别的 agent 一样，但提示词要求不调用工具，材料全由守护进程喂进去。
+- 写档会话：角色 assistant，在 router-home 跑，套同一份只读策略；**不发 hub 令牌**（环境里没有 `HUB_TOKEN`、`HUB_SOCK`；守护进程自己环境里的也由 `buildChildEnv` 去掉，厂商设置里不放行 hub 命令和 hub.sock），调任何 hub 命令都失败；不绑定 sandboxGuard，`/v1/router.dispatch` 也拒；事件不进任何对话（账本跳过 assistant）。它能读到的项目文件和别的 agent 一样，但提示词要求不调用工具，材料全由守护进程喂进去。
 - 总助：`project-show` 只回档案，不回原话、不读文件；只读，不算分派数；单轮最多查 `ROUTER_PROJECT_SHOW_PER_TURN_MAX`（4）个。项目经理和 Worker 调 `hub dispatch project-show` 照旧被 sandboxGuard 拒。
 - 对话里可能有“忽略上面的要求”这类话：写档会话没有凭证、没有可写目录，输出按结构校验、按字数截断，进名片前去控制字符（`cleanInline`），最坏只是把档案写歪，下一次刷新会改回来。
 

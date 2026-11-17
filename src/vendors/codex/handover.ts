@@ -196,8 +196,7 @@ export function createCodexForker(options: CodexForkerOptions = {}): SessionFork
   const servers = new Map<string, CodexRpc>();
 
   async function startServer(src: ForkSource, signal: AbortSignal): Promise<CodexRpc> {
-    const launch = withoutHubEnv(src.launch);
-    const env = withoutHubEnv({ ...launch, env: buildChildEnv(process.env, launch.env) }).env;
+    const env = buildChildEnv(process.env, withoutHubEnv(src.launch).env);
     const child = spawnProcess(src.executablePath, buildCodexArgs(), { cwd: src.cwd, env });
     const rpc = new CodexRpc(child);
     const onAbort = (): void => void rpc.close();

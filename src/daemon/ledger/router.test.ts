@@ -5,7 +5,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Change } from "../../shared/api.ts";
 import { pendingDecisionsOf } from "../../shared/decisions.ts";
 import { askOf, type ConversationId, type PmId, type SessionId } from "../../shared/domain.ts";
+import { parseCatalogReply } from "../../shared/project-catalog.ts";
 import {
+  MAX_DESCRIPTION_CHARS,
+  PROJECT_CATALOG_ONE_LINER_MAX_CHARS,
   ROUTER_AUDIT_LOG_MAX_ROWS,
   ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES,
   ROUTER_COMMAND_MAX_CHARS,
@@ -332,6 +335,43 @@ describe("统一 hub ask 与 router report / note 同源桥接", () => {
     const d3 = ledger.getRouterDigest();
     expect(d3).not.toBe(d1);
     expect(d3.pms.map((p) => p.pmId)).toEqual([lin.pmId]);
+  });
+
+  it("45 个带满说明、附加文件夹、档案和近况的项目：getRouterDigest 不超 24 KB，省略的记了个数，有待拍板的留着", () => {
+    const catalog = parseCatalogReply(
+      JSON.stringify({
+        oneLiner: "档".repeat(PROJECT_CATALOG_ONE_LINER_MAX_CHARS),
+        aliases: Array.from({ length: 8 }, (_, k) => `别名${k}`),
+        focus: "焦".repeat(160),
+        modules: [{ name: "核心", summary: "流式识别" }],
+        decisions: ["采用 UTF-8"],
+        openItems: [],
+      }),
+    )!;
+    const created: PmId[] = [lin.pmId, zhou.pmId];
+    for (let i = 1; i <= 45; i++) {
+      const main = join(root, "repos", `enterprise-workspace-service-${i}`);
+      const extra = join(root, "repos", `enterprise-workspace-shared-lib-${i}`);
+      mkdirSync(main, { recursive: true });
+      mkdirSync(extra, { recursive: true });
+      const pm = ledger.createPm({ name: `项目经理-${i}`, mode: "manage_only", persona: "" });
+      ledger.hubCall(pm.sessionId, "project.create", { folder: main, name: `enterprise-service-${i}`, description: "说".repeat(MAX_DESCRIPTION_CHARS) });
+      ledger.hubCall(pm.sessionId, "project.attach", { folder: extra });
+      ledger.hubCall(pm.sessionId, "router.report", { summary: "近".repeat(400) });
+      created.push(pm.pm.id);
+    }
+    for (let job = ledger.projectCatalog.claimCatalog(now); job !== null; job = ledger.projectCatalog.claimCatalog(now)) {
+      ledger.projectCatalog.catalogWritten(job, catalog, null);
+    }
+
+    // 有待拍板的放最前面建、最早不活跃：省略时也得留着
+    ledger.hubCall(lin.sessionId, "ask", { text: "导出默认带 BOM 吗？", options: ["带", "不带"] });
+
+    const digest = ledger.getRouterDigest();
+    expect(Buffer.byteLength(JSON.stringify(digest), "utf8")).toBeLessThanOrEqual(ROUTER_FLEET_DIGEST_MAX_BYTES);
+    expect(digest.pms.length + (digest.omittedPms ?? 0)).toBe(created.length);
+    expect(digest.pms.find((p) => p.pmId === lin.pmId)).toMatchObject({ pendingDecisionCount: 1 });
+    for (const pm of digest.pms) expect(pm.project?.catalog?.oneLiner).toBeTruthy();
   });
 
   it("router_commands 创建幂等、状态更新、审计落库与游标分页查询，且按 choice 字符串拍板生效", () => {

@@ -37,7 +37,6 @@ import {
   ROUTER_COMMANDS_RETENTION_MAX,
   ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES,
   ROUTER_CONTEXT_MAX_CHARS,
-  ROUTER_FLEET_DIGEST_MAX_BYTES,
   ROUTER_ITEM_RETENTION_MS,
   ROUTER_PENDING_DECISIONS_PER_PM_MAX,
   ROUTER_PM_ACTIVE_WORKERS_MAX,
@@ -52,6 +51,7 @@ import {
   ROUTER_WORKER_LIST_MAX,
 } from "../../shared/limits.ts";
 import { defaultRouterSettings } from "../../shared/router.ts";
+import { fitRouterDigest } from "./router-digest-fit.ts";
 import { parseLocalHref } from "../../shared/sent-files.ts";
 import type { ProjectCatalogCard } from "../../shared/project-catalog.ts";
 import type {
@@ -929,25 +929,7 @@ export function createLedgerRouter(
       };
     });
 
-    const digest: DeviceRouterDigest = {
-      generatedAt: now(),
-      pms: entries,
-    };
-
-    // 严守单份 Digest 24 KB 体积上限：如超出则按优先级逐级裁剪次要文本字段
-    if (Buffer.byteLength(JSON.stringify(digest)) > ROUTER_FLEET_DIGEST_MAX_BYTES) {
-      for (const e of digest.pms) e.activeWorkers = e.activeWorkers.slice(0, 2);
-    }
-    if (Buffer.byteLength(JSON.stringify(digest)) > ROUTER_FLEET_DIGEST_MAX_BYTES) {
-      for (const e of digest.pms) e.recentBrief = null;
-    }
-    if (Buffer.byteLength(JSON.stringify(digest)) > ROUTER_FLEET_DIGEST_MAX_BYTES) {
-      for (const e of digest.pms) {
-        e.activeWorkers = [];
-        if (e.project?.catalog) e.project.catalog = { ...e.project.catalog, focus: "", aliases: e.project.catalog.aliases.slice(0, 3) };
-      }
-    }
-
+    const digest = fitRouterDigest({ generatedAt: now(), pms: entries });
     digestCache = { generation: gen, digest };
     return digest;
   };

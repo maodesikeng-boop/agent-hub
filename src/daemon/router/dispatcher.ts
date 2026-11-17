@@ -722,6 +722,7 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
         online: result.online,
         ...(result.stale ? { stale: true } : {}),
         ...(result.digest ? { generatedAt: result.digest.generatedAt } : {}),
+        ...(result.digest?.omittedPms ? { omittedPms: result.digest.omittedPms } : {}),
         pms: (result.digest?.pms ?? []).map((pm) => ({
           pmId: pm.pmId,
           pmName: pm.name,

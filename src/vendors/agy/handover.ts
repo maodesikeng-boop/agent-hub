@@ -9,7 +9,6 @@ import { join } from "node:path";
 import { DatabaseSync, backup } from "node:sqlite";
 import { DB_BUSY_TIMEOUT_MS, agentLaunchArgs } from "../../shared/index.ts";
 import type { TokenUsage } from "../../shared/index.ts";
-import { ENV_HUB_SOCK, ENV_HUB_TOKEN } from "../../shared/hub.ts";
 import { agyCliDataDir, agyDataPaths } from "./paths.ts";
 import {
   AGY_PLAN_PERMISSION_ARGS,
@@ -217,8 +216,6 @@ export function createAgyCopyForker(options: AgyCopyOptions = {}): SessionForker
     async write(src: ForkSource, fork: ForkHandle, prompt: string, signal: AbortSignal): Promise<ForkWriteResult> {
       signal.throwIfAborted();
       const env = buildChildEnv(process.env, src.launch.env);
-      delete env[ENV_HUB_TOKEN];
-      delete env[ENV_HUB_SOCK];
       const spawned = spawnOwnedProcess(src.executablePath, buildForkArgs(src, fork.forkId), { cwd: src.cwd, env, stdio: ["pipe", "pipe", "pipe"] });
       const child: ChildProcessWithoutNullStreams = spawned.child;
       trackChild(child, "handover:agy", { detached: spawned.detached });

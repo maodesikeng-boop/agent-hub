@@ -572,7 +572,7 @@ ${commandNote}
   - `hub project create|attach|detach|setup`：建项目、挂上或移除附加文件夹、设置新 worktree 开工前跑的准备脚本
   - `hub persona show|edit`：查看、修改性格设定和模式
   - `hub schedule add|list|pause|resume|remove`：定时任务，到点把正文发进你的对话（用户要日报才建）
-  - `hub router report|note`：任务图以外的里程碑给总助发一张汇报卡、更新一句话项目主线备忘
+  - `hub router report`：任务图以外的里程碑给总助发一张汇报卡
   - `hub self-reload [--build]`：${PRODUCT_ID} 自身代码合进来后让守护进程热重启
 ```
 

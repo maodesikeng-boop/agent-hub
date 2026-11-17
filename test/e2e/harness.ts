@@ -4,7 +4,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FakeLogEntry, FakeScript } from "../fake-claude/fake-claude.ts";
 import { wrapScriptAsPlatformCli } from "../fake-cli-shim.ts";
@@ -125,6 +125,11 @@ export interface E2eEnv {
   /** 同上，每条消息的 text 块分开。 */
   stdinBlocks(): string[][];
   argvs(): Array<{ pid: number; argv: string[]; cwd: string }>;
+  /**
+   * 某个会话起过的假 claude（按启动先后）：提示词文件在 launch/<会话编号>/ 下。
+   * 要某个会话的进程用它，别按 argvs()、envs() 的下标取：守护进程自己还会起探模型、后台写项目档案的进程。
+   */
+  procsOf(sessionId: number): Array<{ pid: number; argv: string[]; cwd: string }>;
   /** 假 claude 启动时记下的环境变量（HUB_TOKEN、HUB_SOCK、PATH……），按进程。 */
   envs(): Array<{ pid: number; env: Record<string, string> }>;
   /** 假 claude 的 bash 步骤跑过的命令和结果。 */
@@ -250,6 +255,12 @@ export function makeEnv(options: { root?: string; prefix?: string; detached?: bo
     stdinTextsOf: (pid) => userBlocks(log().filter((e) => e.pid === pid)).map((b) => b.join("\n\n")),
     argvs: () => log().flatMap((e) => (e.kind === "argv" ? [{ pid: e.pid, argv: e.argv, cwd: e.cwd }] : [])),
     envs: () => log().flatMap((e) => (e.kind === "env" ? [{ pid: e.pid, env: e.env }] : [])),
+    procsOf(sessionId) {
+      return this.argvs().filter((a) => {
+        const i = a.argv.indexOf("--append-system-prompt-file");
+        return i >= 0 && basename(dirname(a.argv[i + 1] ?? "")) === String(sessionId);
+      });
+    },
     bashRuns: () => log().flatMap((e) => (e.kind === "bash" ? [{ pid: e.pid, command: e.command, exitCode: e.exitCode, output: e.output }] : [])),
     runHub(pid, args, options = {}) {
       const entry = log().find((e) => e.kind === "env" && e.pid === pid);
@@ -410,6 +421,12 @@ export class Client {
 
 export function messagesOf(state: StateSnapshot, conversationId: number): Message[] {
   return state.conversations.find((c) => c.conversation.id === conversationId)?.messages ?? [];
+}
+
+/** 某个对话当前会话第一次起的假 claude 进程（比如项目经理的，拿来 runHub）。 */
+export async function firstPidOfConversation(env: E2eEnv, client: Client, conversationId: number): Promise<number> {
+  const sessionId = (await client.state()).sessions.find((s) => s.conversationId === conversationId)!.sessionId;
+  return env.procsOf(sessionId)[0]!.pid;
 }
 
 export function messageById(state: StateSnapshot, id: number): Message | undefined {

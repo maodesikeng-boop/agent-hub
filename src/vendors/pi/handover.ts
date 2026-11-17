@@ -10,7 +10,6 @@ import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
 import type { TokenUsage } from "../../shared/domain.ts";
-import { ENV_HUB_SOCK, ENV_HUB_TOKEN } from "../../shared/hub.ts";
 import { KILL_WAIT_MS } from "../../shared/limits.ts";
 import { agentLaunchArgs } from "../../shared/vendors.ts";
 import { forceKill, killFreshGroup, termGroupAfterExit } from "../../daemon/driver/process.ts";
@@ -102,8 +101,7 @@ export function createPiForker(options: PiForkerOptions = {}): SessionForker {
       if (signal.aborted) throw new Error("aborted");
 
       const cleanLaunch = withoutHubEnv(src.launch);
-      const { [ENV_HUB_TOKEN]: _t, [ENV_HUB_SOCK]: _s, ...baseEnv } = options.env ?? process.env;
-      const childEnv = withoutHubEnv({ ...cleanLaunch, env: buildChildEnv(baseEnv, cleanLaunch.env) }).env;
+      const childEnv = buildChildEnv(options.env ?? process.env, cleanLaunch.env);
 
       const transcript = piTranscriptPath(
         { vendor: "pi", cwd: src.cwd, vendorSessionId: src.vendorSessionId },

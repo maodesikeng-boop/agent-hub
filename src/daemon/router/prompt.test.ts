@@ -277,6 +277,11 @@ describe("formatFleetDigestForPrompt（跨设备名片格式化与 24 KB 预算�
     expect(out).toContain("项目经理-7");
   });
 
+  it("对方摘要超了上限省略的项目经理（omittedPms）也写进省略那一行", () => {
+    const devices: PromptDeviceDigest[] = [{ deviceId: "self", deviceName: "本机", online: true, pms: [makePmCard(1)], omittedPms: 3 }];
+    expect(formatFleetDigestForPrompt(devices)).toContain("另有 3 个低优空闲 PM 因预算上限已省略");
+  });
+
   it("空设备列表与含换行/控制字符的字段均安全处理不破坏结构", () => {
     const emptyOut = formatFleetDigestForPrompt([], []);
     expect(emptyOut).toContain("暂无已配置的设备或项目经理");

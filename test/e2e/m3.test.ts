@@ -6,7 +6,7 @@
 import { execFileSync } from "node:child_process";
 import { request } from "node:http";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   API_PATHS,
@@ -122,10 +122,6 @@ function waitLines(client: Client, pmConversationId: number, event: WorkerMessag
 
 const argValue = (argv: string[], flag: string) => (argv.includes(flag) ? argv[argv.indexOf(flag) + 1] : undefined);
 
-/** 某个会话起过的假 claude（按启动先后）：提示词文件在 launch/<会话编号>/ 下。 */
-function procsOf(sessionId: number) {
-  return env.argvs().filter((a) => basename(dirname(argValue(a.argv, "--append-system-prompt-file") ?? "")) === String(sessionId));
-}
 
 function sessionOf(state: StateSnapshot, conversationId: number) {
   return state.sessions.find((s) => s.conversationId === conversationId)!;
@@ -197,7 +193,7 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     expect(worker).toMatchObject({ id: 1, workspace: "worktree", branch: workerBranchName(1, "加 hello"), worktree_path: real(worktree), status: "open" });
     const s1 = await client.state();
     const workerSession = sessionOf(s1, worker!.worker_conversation_id);
-    const [proc] = procsOf(workerSession.sessionId);
+    const [proc] = env.procsOf(workerSession.sessionId);
     expect(proc!.cwd).toBe(real(worktree));
     // 越权：退出码 1、forbidden；hub status 能用
     const runs = env.bashRuns().filter((r) => r.pid === proc!.pid);
@@ -230,7 +226,7 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     expect(delivered[0]).toContain(report("加好了"));
     // 只有一个 Worker 会话；任务说明和打回都进了它（同一个 Claude 会话，另起进程的话是 --resume）
     expect(s2.sessions.filter((s) => s.conversationId === worker!.worker_conversation_id)).toHaveLength(1);
-    const workerProcs = procsOf(workerSession.sessionId);
+    const workerProcs = env.procsOf(workerSession.sessionId);
     const vendor = argValue(workerProcs[0]!.argv, "--session-id");
     for (const p of workerProcs.slice(1)) expect(argValue(p.argv, "--resume")).toBe(vendor);
     const toWorker = workerProcs.flatMap((p) => env.stdinTextsOf(p.pid));
@@ -245,7 +241,7 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     expect(readFileSync(join(dir, "README.md"), "utf8")).toBe("# demo\n");
     expect(readFileSync(join(worktree, "README.md"), "utf8")).toBe("# demo\nhi\n");
     // 项目经理的会话带上了 worktrees/<项目编号>/ 与专属记忆目录 state/pm-memory/<pmId>（真实路径），Worker 绝不带 pm-memory
-    const pmProc = procsOf(sessionOf(s2, pm.conversationId).sessionId).at(-1)!;
+    const pmProc = env.procsOf(sessionOf(s2, pm.conversationId).sessionId).at(-1)!;
     expect(pmProc.argv.flatMap((a, i) => (pmProc.argv[i - 1] === "--add-dir" ? [a] : []))).toEqual([
       real(join(env.home, "worktrees", String(pm.projectId))),
       real(join(env.home, "state", "pm-memory", String(pm.pmId))),
@@ -288,7 +284,7 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     const [first] = workerRows();
     expect(first).toMatchObject({ workspace: "main", branch: null, worktree_path: null });
     const s = await client.state();
-    const [proc] = procsOf(sessionOf(s, first!.worker_conversation_id).sessionId);
+    const [proc] = env.procsOf(sessionOf(s, first!.worker_conversation_id).sessionId);
     expect(proc!.cwd).toBe(plain);
     expect(readFileSync(join(plain, "notes.txt"), "utf8")).toBe("note\n");
     expect(query("SELECT * FROM actions WHERE type = 'worktree.create'")).toEqual([]);
@@ -305,7 +301,7 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     await waitLines(client, b.conversationId, "report", 1);
     const second = workerRows()[1]!;
     expect(second).toMatchObject({ workspace: "main", worktree_path: null });
-    const [proc2] = procsOf(sessionOf(await client.state(), second.worker_conversation_id).sessionId);
+    const [proc2] = env.procsOf(sessionOf(await client.state(), second.worker_conversation_id).sessionId);
     expect(proc2!.cwd).toBe(gitDir);
     expect(readFileSync(join(gitDir, "notes.txt"), "utf8")).toBe("note\n");
     await terminate(daemon);
@@ -325,7 +321,7 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     const rows = workerRows();
     expect(rows.map((r) => [r.id, r.workspace, r.status])).toEqual(Array.from({ length: 10 }, (_, i) => [i + 1, "worktree", "open"]));
     const s = await client.state();
-    const cwds = rows.map((r) => procsOf(sessionOf(s, r.worker_conversation_id).sessionId)[0]!.cwd);
+    const cwds = rows.map((r) => env.procsOf(sessionOf(s, r.worker_conversation_id).sessionId)[0]!.cwd);
     expect(cwds).toEqual(rows.map((r) => r.worktree_path));
     expect(new Set(cwds).size).toBe(10);
     // git 里也是 10 个 worktree（加上主文件夹自己）
@@ -350,7 +346,7 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     expect(workerRows()[0]!.status).toBe("ended");
     expect(query<{ attempts: number; status: string }>("SELECT attempts, status FROM actions WHERE type = 'worktree.create'")).toEqual([{ attempts: 3, status: "failed" }]);
     const s = await client.state();
-    expect(procsOf(sessionOf(s, workerRows()[0]!.worker_conversation_id).sessionId)).toEqual([]);
+    expect(env.procsOf(sessionOf(s, workerRows()[0]!.worker_conversation_id).sessionId)).toEqual([]);
     await terminate(daemon);
   });
 
@@ -376,7 +372,7 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     const [worker] = workerRows();
     expect(worker).toMatchObject({ status: "open", workspace: "worktree" });
     const s = await client.state();
-    expect(procsOf(sessionOf(s, worker!.worker_conversation_id).sessionId).map((p) => p.cwd)).toEqual([worker!.worktree_path]);
+    expect(env.procsOf(sessionOf(s, worker!.worker_conversation_id).sessionId).map((p) => p.cwd)).toEqual([worker!.worktree_path]);
     expect(workerLines(s, pm.conversationId).map((l) => l.event)).toEqual(["started", "report"]);
     await terminate(daemon);
   });
@@ -407,7 +403,7 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     });
     expect(task.status).toBe("processing");
     const workerSessionId = sessionOf(await first.client.state(), worker.worker_conversation_id).sessionId;
-    const [before] = procsOf(workerSessionId);
+    const [before] = env.procsOf(workerSessionId);
     expect(await terminate(first.daemon)).toEqual({ code: 0, signal: null });
     await waitUntil("worker claude exited", () => (isAlive(before!.pid) ? undefined : true));
     // 关机打断的这一轮：不发那一行，任务说明还是处理中
@@ -420,7 +416,7 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     expect(line!.summary).toBe("接着做完了");
     const s = await client.state();
     expect(workerLines(s, pm.conversationId).map((l) => l.event)).toEqual(["started", "report"]);
-    const procs = procsOf(workerSessionId);
+    const procs = env.procsOf(workerSessionId);
     expect(procs).toHaveLength(2);
     expect(argValue(procs[1]!.argv, "--resume")).toBe(argValue(procs[0]!.argv, "--session-id"));
     expect(procs[1]!.cwd).toBe(worker.worktree_path);
@@ -462,7 +458,7 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     const daemon = await env.start();
     const client = first.client.withPort(daemon.port);
     await waitForStatus(client, reportId, "replied", 20_000);
-    const procs = procsOf(pmSessionId);
+    const procs = env.procsOf(pmSessionId);
     const last = procs.at(-1)!;
     expect(argValue(last.argv, "--resume")).toBe(argValue(procs[0]!.argv, "--session-id"));
     // 汇报原文前面是恢复说明和重发说明，同一行
@@ -541,7 +537,7 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     const reports = await waitLines(client, pm.conversationId, "report", 2);
     expect(reports[1]!.summary).toBe("README 也改了");
     const workerSession = sessionOf(await client.state(), worker.worker_conversation_id).sessionId;
-    const workerTexts = procsOf(workerSession).flatMap((p) => env.stdinTextsOf(p.pid));
+    const workerTexts = env.procsOf(workerSession).flatMap((p) => env.stdinTextsOf(p.pid));
     // 标签一块、原文单独放最后一块（stdinTextsOf 把块之间空一行连起来）
     expect(workerTexts).toContain("【用户直接对你说】\n\n顺便把 README 也改了");
     await waitUntil("pm got the notice", () =>
@@ -553,12 +549,12 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     const pmSession = sessionOf(await client.state(), pm.conversationId).sessionId;
     // 项目经理用 hub worker send 发 /clear（会换 Worker 的会话 ID）：退出码 1，打印厂商给的原因，不发
     const pmMessagesBefore = query<{ n: number }>("SELECT count(*) AS n FROM messages WHERE conversation_id = ?", worker.worker_conversation_id)[0]!.n;
-    const clear = await env.runHub(procsOf(pmSession)[0]!.pid, ["worker", "send", String(worker.id), "--stdin"], { stdin: "/clear" });
+    const clear = await env.runHub(env.procsOf(pmSession)[0]!.pid, ["worker", "send", String(worker.id), "--stdin"], { stdin: "/clear" });
     expect(clear.code).toBe(1);
     expect(clear.stderr).toMatch(/\/clear：.*会话/);
     expect(query<{ n: number }>("SELECT count(*) AS n FROM messages WHERE conversation_id = ?", worker.worker_conversation_id)[0]!.n).toBe(pmMessagesBefore);
     // 项目经理让它收工以后再发：409
-    const ended = await env.runHub(procsOf(pmSession)[0]!.pid, ["worker", "end", String(worker.id)]);
+    const ended = await env.runHub(env.procsOf(pmSession)[0]!.pid, ["worker", "end", String(worker.id)]);
     expect(ended.code).toBe(0);
     const res = await client.postJson(API_PATHS.messages(worker.worker_conversation_id), { clientId: "late", text: "还在吗" });
     expect(res.status).toBe(409);

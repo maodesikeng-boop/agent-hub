@@ -2796,7 +2796,7 @@ Fusa 里有三层角色：**总助（Router） → 你（项目经理） → Wor
   - \`hub project create|attach|detach|setup\`：建项目、增删附加文件夹、设新 worktree 准备脚本
   - \`hub persona show|edit\`：查看、修改性格设定和干活模式
   - \`hub schedule add|list|pause|resume|remove\`：定时任务（用户要日报才建）
-  - \`hub router report|note\`：给总助发汇报卡（带本机文件用 \`--file\`）、更新一句话项目主线备忘
+  - \`hub router report\`：给总助发汇报卡（带本机文件用 \`--file\`）
   - \`hub self-reload [--build]\`：Fusa 自身代码合入后让守护进程热重启
 
 # 性格设定
@@ -2966,7 +2966,7 @@ Fusa 里有三层角色：**总助（Router） → 你（项目经理） → Wor
   - \`hub project create|attach|detach|setup\`：建项目、增删附加文件夹、设新 worktree 准备脚本
   - \`hub persona show|edit\`：查看、修改性格设定和干活模式
   - \`hub schedule add|list|pause|resume|remove\`：定时任务（用户要日报才建）
-  - \`hub router report|note\`：给总助发汇报卡（带本机文件用 \`--file\`）、更新一句话项目主线备忘
+  - \`hub router report\`：给总助发汇报卡（带本机文件用 \`--file\`）
   - \`hub self-reload [--build]\`：Fusa 自身代码合入后让守护进程热重启
 
 # 性格设定
@@ -3136,7 +3136,7 @@ Fusa 里有三层角色：**总助（Router） → 你（项目经理） → Wor
   - \`hub project create|attach|detach|setup\`：建项目、增删附加文件夹、设新 worktree 准备脚本
   - \`hub persona show|edit\`：查看、修改性格设定和干活模式
   - \`hub schedule add|list|pause|resume|remove\`：定时任务（用户要日报才建）
-  - \`hub router report|note\`：给总助发汇报卡（带本机文件用 \`--file\`）、更新一句话项目主线备忘
+  - \`hub router report\`：给总助发汇报卡（带本机文件用 \`--file\`）
   - \`hub self-reload [--build]\`：Fusa 自身代码合入后让守护进程热重启
 
 # 性格设定
@@ -3306,7 +3306,7 @@ Fusa 里有三层角色：**总助（Router） → 你（项目经理） → Wor
   - \`hub project create|attach|detach|setup\`：建项目、增删附加文件夹、设新 worktree 准备脚本
   - \`hub persona show|edit\`：查看、修改性格设定和干活模式
   - \`hub schedule add|list|pause|resume|remove\`：定时任务（用户要日报才建）
-  - \`hub router report|note\`：给总助发汇报卡（带本机文件用 \`--file\`）、更新一句话项目主线备忘
+  - \`hub router report\`：给总助发汇报卡（带本机文件用 \`--file\`）
   - \`hub self-reload [--build]\`：Fusa 自身代码合入后让守护进程热重启
 
 # 性格设定
@@ -3476,7 +3476,7 @@ Fusa 里有三层角色：**总助（Router） → 你（项目经理） → Wor
   - \`hub project create|attach|detach|setup\`：建项目、增删附加文件夹、设新 worktree 准备脚本
   - \`hub persona show|edit\`：查看、修改性格设定和干活模式
   - \`hub schedule add|list|pause|resume|remove\`：定时任务（用户要日报才建）
-  - \`hub router report|note\`：给总助发汇报卡（带本机文件用 \`--file\`）、更新一句话项目主线备忘
+  - \`hub router report\`：给总助发汇报卡（带本机文件用 \`--file\`）
   - \`hub self-reload [--build]\`：Fusa 自身代码合入后让守护进程热重启
 
 # 性格设定
@@ -3646,7 +3646,7 @@ Fusa 里有三层角色：**总助（Router） → 你（项目经理） → Wor
   - \`hub project create|attach|detach|setup\`：建项目、增删附加文件夹、设新 worktree 准备脚本
   - \`hub persona show|edit\`：查看、修改性格设定和干活模式
   - \`hub schedule add|list|pause|resume|remove\`：定时任务（用户要日报才建）
-  - \`hub router report|note\`：给总助发汇报卡（带本机文件用 \`--file\`）、更新一句话项目主线备忘
+  - \`hub router report\`：给总助发汇报卡（带本机文件用 \`--file\`）
   - \`hub self-reload [--build]\`：Fusa 自身代码合入后让守护进程热重启
 
 # 性格设定

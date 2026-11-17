@@ -75,7 +75,7 @@ export interface RouterSandboxLaunchOptions {
   hubBinDir: string;
   basePath?: string;
   vendorAvailability?: VendorAvailabilityMap;
-  /** 这一轮做什么，默认 dispatch。catalog 不发 hub 令牌、不给 hub 命令的路径，环境里没有 HUB_TOKEN / HUB_SOCK。 */
+  /** 这一轮做什么，默认 dispatch。catalog 不发 hub 令牌、不给 hub 命令的路径，环境里没有 HUB_TOKEN / HUB_SOCK，厂商设置里也不放行 hub。 */
   purpose?: RouterTurnPurpose;
 }
 
@@ -113,7 +113,7 @@ export function prepareRouterSandboxLaunch(
       ? VENDOR_DAEMONS[vendor].launchFiles?.({
           role: "worker",
           readonly: nativeReadonly ? { policy: readonlyPolicy, denyWrite: [routerHomeDir] } : undefined,
-          hubSock: options.hubSock,
+          ...(dispatch ? { hubSock: options.hubSock } : {}),
           stateDir,
           osSandboxed,
         })

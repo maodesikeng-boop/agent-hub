@@ -417,7 +417,7 @@ hub dispatch project-create --device <self|deviceId> --folder <路径> \
 | `POST /api/router/items/:id/resolve` | 轨道 A：用户拍板选项卡片（`{ clientId, optionIndex: number \| null, note?: string }`）或归档单张汇报卡（`{ action: "archive" }`） | 前端 `fleet.hub(deviceKey)` | 本机卡直调 `/api/...`；远端卡调 `/d/<deviceId>/api/...` 经 `proxyHttp` 直达卡片所在设备 |
 | `POST /api/router/reports/archive-all` | 轨道 A：一键归档该设备全部未读汇报卡 | 前端跨设备并发调 | 只对当前有 `unread` 汇报的在线设备发请求 |
 | `GET /api/router/items?before=<id>&limit=30` | 展开 `Archived` 时按游标拉历史已结卡片 | `@tanstack/react-query` | 按需拉取，走 `@fastify/compress` 压缩 |
-| `GET /api/router/digest` | 返回本机 `DeviceRouterDigest`（内存缓存命中 `< 0.1 ms`） | 入口守护进程轨道 B | 入口守护进程并发调各配对设备（`1.5s` 硬超时） |
+| `GET /api/router/digest` | 返回本机 `DeviceRouterDigest`（内存缓存命中 `< 0.1 ms`）；超 `ROUTER_FLEET_DIGEST_MAX_BYTES` 时逐级裁掉次要字段，最简条目还放不下就按优先级去掉空闲、没有待办的项目经理，个数记在 `omittedPms`（`ledger/router-digest-fit.ts`） | 入口守护进程轨道 B | 入口守护进程并发调各配对设备（`1.5s` 硬超时） |
 | `POST /api/router/project-ops` | 在本机原子执行 `worker.start/send/stop/end/list` 或 `project.create` | 本机或入口守护进程 `PeerTargetPort` | 远端设备校验 `deviceToken` + 幂等 `dedupeKey` 后落本机账本 |
 | `POST /api/router/commands` | 用户在发令框提交指令（`{ clientId, text, attachmentIds?, target? }`） | 前端固定调入口本机 `localClient` | `target` 非空走轨道 A2；否则走轨道 B |
 | `POST /api/router/commands/:id/retry` | 失败回执点 `Retry` 重试（复用原 `clientId` 幂等键） | 前端调入口本机 `localClient` | 已成功的子步骤按 `dedupeKey` 跳过，只补跑失败项 |

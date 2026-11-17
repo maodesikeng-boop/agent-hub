@@ -238,6 +238,8 @@ export interface PmDigestEntry {
 export interface DeviceRouterDigest {
   generatedAt: number;
   pms: PmDigestEntry[];
+  /** 超了体积上限没列出的项目经理个数（daemon/ledger/router-digest-fit.ts）；都列出了或对方设备版本旧时没有。 */
+  omittedPms?: number;
 }
 
 export function defaultRouterSettings(): RouterSettings {

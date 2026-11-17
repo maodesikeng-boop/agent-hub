@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { REVIEW_HOOKS_DIR, reviewPushGuardEnv } from "../../src/shared/index.ts";
 import { sessionLaunchDir } from "../../src/shared/paths.ts";
 import { openDatabase } from "../../src/daemon/store/index.ts";
-import { Client, makeEnv, waitForStatus, waitUntil, type E2eEnv } from "./harness.ts";
+import { Client, firstPidOfConversation, makeEnv, waitForStatus, waitUntil, type E2eEnv } from "./harness.ts";
 
 let env: E2eEnv;
 afterEach(async () => {
@@ -56,7 +56,7 @@ async function bootPm(dir: string) {
   const client = await Client.login(daemon);
   const { conversationId } = await client.createPm({ name: "小林", mode: "manage_only", persona: "", folder: dir });
   await waitForStatus(client, await client.post(conversationId, "在吗"), "replied", 20_000);
-  const pmPid = env.envs()[0]!.pid;
+  const pmPid = await firstPidOfConversation(env, client, conversationId);
   const hub = async (args: string[], stdin?: string) => {
     const r = await env.runHub(pmPid, args, stdin === undefined ? {} : { stdin });
     return { code: r.code, out: `${r.stdout}${r.stderr}`.trim() };

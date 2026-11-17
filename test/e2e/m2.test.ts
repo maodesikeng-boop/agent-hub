@@ -5,7 +5,7 @@ import { request } from "node:http";
 import { connect } from "node:net";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, delimiter, dirname, join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { API_PATHS, ENV_DEFAULT_MODEL, ENV_HUB_SOCK, HUB_COMMAND, HUB_EXIT, HUB_REQUEST_TIMEOUT_MS, RELAUNCH_NOTE, type EditPersonaResponse, type Message, type StateSnapshot } from "../../src/shared/index.ts";
 import { LOCAL_ERRORS } from "../../src/shared/errors.ts";
@@ -81,13 +81,9 @@ const argValue = (argv: string[], flag: string) => (argv.includes(flag) ? argv[a
 const promptOf = (argv: string[]) => readFileSync(argValue(argv, "--append-system-prompt-file")!, "utf8");
 const addDirsOf = (argv: string[]) => argv.flatMap((a, i) => (argv[i - 1] === "--add-dir" ? [a] : []));
 
-/** 某个会话起过的假 claude（按启动先后）：提示词文件在 launch/<会话编号>/ 下。 */
-function procsOf(sessionId: number) {
-  return env.argvs().filter((a) => basename(dirname(argValue(a.argv, "--append-system-prompt-file") ?? "")) === String(sessionId));
-}
 
 function lastProcOf(sessionId: number) {
-  const procs = procsOf(sessionId);
+  const procs = env.procsOf(sessionId);
   if (procs.length === 0) throw new Error(`session ${sessionId} has no process`);
   return procs.at(-1)!;
 }
@@ -213,7 +209,7 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
 
     const ask = await client.post(privateId, "这个文件夹里有什么");
     await waitForStatus(client, ask, "replied");
-    const procs = procsOf(sessionId);
+    const procs = env.procsOf(sessionId);
     expect(procs).toHaveLength(2);
     expect(procs[0]!.cwd).toBe(real(join(env.home, "pm-home", String(pmId))));
     expect(procs[1]!.cwd).toBe(real(foo));
@@ -237,7 +233,7 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
     await waitForStatus(client, id, "replied");
     expect(agentTexts(await client.state(), zhou.conversationId)).toEqual(["foo 里有一个 README"]);
 
-    const [proc] = procsOf(zhou.sessionId);
+    const [proc] = env.procsOf(zhou.sessionId);
     expect(proc!.cwd).toBe(real(foo));
     expect(proc!.argv).toContain("--session-id");
     const prompt = promptOf(proc!.argv);
@@ -332,11 +328,11 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
     const s = await client.state();
     expect(agentTexts(s, lin.conversationId)).toEqual(["看完了"]);
     expect(agentTexts(s, zhou.conversationId)).toEqual(["看完了"]);
-    expect(procsOf(lin.sessionId).map((p) => p.cwd)).toEqual([real(foo)]);
-    expect(procsOf(zhou.sessionId).map((p) => p.cwd)).toEqual([real(bar)]);
+    expect(env.procsOf(lin.sessionId).map((p) => p.cwd)).toEqual([real(foo)]);
+    expect(env.procsOf(zhou.sessionId).map((p) => p.cwd)).toEqual([real(bar)]);
     // 各自的消息进各自的进程
-    expect(env.stdinTextsOf(procsOf(lin.sessionId)[0]!.pid)).toEqual(["这个文件夹里有什么"]);
-    expect(env.stdinTextsOf(procsOf(zhou.sessionId)[0]!.pid)).toEqual(["这个文件夹里有什么"]);
+    expect(env.stdinTextsOf(env.procsOf(lin.sessionId)[0]!.pid)).toEqual(["这个文件夹里有什么"]);
+    expect(env.stdinTextsOf(env.procsOf(zhou.sessionId)[0]!.pid)).toEqual(["这个文件夹里有什么"]);
     await terminate(daemon);
   });
 
@@ -373,7 +369,7 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
     expect(bad.status).toBe(400);
     expect(((await bad.json()) as { error: string }).error).toContain("思考程度只能是");
 
-    const [first, second, third] = procsOf(zhou.sessionId);
+    const [first, second, third] = env.procsOf(zhou.sessionId);
     expect(argValue(first!.argv, "--model")).toBeUndefined();
     expect(argValue(first!.argv, "--effort")).toBeUndefined();
     const vendorSessionId = argValue(first!.argv, "--session-id");
@@ -398,10 +394,10 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
     await warmUp(client, zhou.conversationId, "第三条");
     expect((await client.postJson(API_PATHS.revertPersonaChange(edited.persona.revertableChangeId!), {})).status).toBe(200);
     await warmUp(client, zhou.conversationId, "第四条");
-    const [first] = procsOf(zhou.sessionId);
+    const [first] = env.procsOf(zhou.sessionId);
     expect((await rawHub(tokenOf(first!.pid), "persona.edit", { text: "我自己记的" })).status).toBe(200);
     await warmUp(client, zhou.conversationId, "第五条");
-    expect(procsOf(zhou.sessionId)).toHaveLength(1);
+    expect(env.procsOf(zhou.sessionId)).toHaveLength(1);
     const texts = env.stdinTextsOf(first!.pid);
     expect(texts[1]).toMatch(/^【系统】你的性格设定刚更新了，以下面这份为准：\n\n# 性格设定\n\n以后回复都用列表。\n\n第二条$/);
     expect(texts[2]).toBe("第三条");
@@ -411,7 +407,7 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
     await put({ model: "haiku", text: "用户最后改的" });
     await warmUp(client, zhou.conversationId, "第六条");
     await warmUp(client, zhou.conversationId, "第七条");
-    const [, second] = procsOf(zhou.sessionId);
+    const [, second] = env.procsOf(zhou.sessionId);
     expect(second).toBeDefined();
     expect(second!.argv).toContain("--resume");
     expect(env.stdinTextsOf(second!.pid)).toEqual([
@@ -439,7 +435,7 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
     const second = await client.post(zhou.conversationId, "看看里面有什么");
     await waitForStatus(client, second, "replied");
 
-    const procs = procsOf(zhou.sessionId);
+    const procs = env.procsOf(zhou.sessionId);
     expect(procs).toHaveLength(2);
     const zhouMemoryDir = real(join(env.home, "state", "pm-memory", String(zhou.pmId)));
     expect(addDirsOf(procs[0]!.argv)).toEqual([zhouMemoryDir]);
@@ -523,7 +519,7 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
     await waitUntil("queued group message settled", () =>
       query<{ status: string }>("SELECT status FROM messages WHERE id = 2")[0]?.status === "failed" ? true : undefined,
     );
-    expect(procsOf(2)).toEqual([]);
+    expect(env.procsOf(2)).toEqual([]);
     expect(env.stdinTexts()).toEqual(["你好"]);
     // 同一个文件夹能在项目经理的会话里拿来建项目（老群的主文件夹不占路径）
     const created = await env.runHub(lastProcOf(1).pid, ["project", "create", "--folder", foo]);
@@ -730,7 +726,7 @@ describe("开新会话（资料页的按钮，ledger/handover.ts + daemon/handov
     expect(lines[0]!.endsWith("换代之后的")).toBe(true);
     // 旧会话里没有交接请求：只有用户那两句
     // （复制那份用的是同一个提示词文件，procsOf 会把它也算进去，这里要排除）
-    const oldProc = procsOf(oldSession).filter((p) => !p.argv.includes("--fork-session")).at(-1)!;
+    const oldProc = env.procsOf(oldSession).filter((p) => !p.argv.includes("--fork-session")).at(-1)!;
     expect(env.stdinTextsOf(oldProc.pid)).toEqual(["记住暗号 蓝鲸", "写交接时发的"]);
     // 交接全文在换代那一行里；复制那份的回复不进对话
     expect(renewedLine(state, privateId)).toMatchObject({ text: "交接：暗号是 蓝鲸", status: null });

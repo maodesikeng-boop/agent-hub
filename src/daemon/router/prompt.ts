@@ -72,6 +72,8 @@ export interface PromptDeviceDigest {
   readonly stale?: boolean;
   readonly generatedAt?: number;
   readonly pms: readonly PromptPmDigestCard[];
+  /** 这台设备的摘要超了体积上限没列出的项目经理个数（DeviceRouterDigest.omittedPms）。 */
+  readonly omittedPms?: number;
 }
 
 export type PromptReceiptAction =
@@ -424,15 +426,15 @@ export function formatFleetDigestForPrompt(
 
   const renderAll = (): string => {
     const sections: string[] = ["# 跨设备 PM 与项目名片"];
-    devices.forEach((_device, dIdx) => {
+    devices.forEach((device, dIdx) => {
       const header = deviceHeaders[dIdx]!;
       const deviceSlots = slotsByDevice[dIdx]!;
-      if (deviceSlots.length === 0) {
+      if (deviceSlots.length === 0 && !device.omittedPms) {
         sections.push(`${header}\n（无项目经理）`);
         return;
       }
       const bodyLines: string[] = [];
-      let omittedCount = 0;
+      let omittedCount = device.omittedPms ?? 0;
       for (const slot of deviceSlots) {
         if (slot.mode === "full") {
           bodyLines.push(slot.fullText);
