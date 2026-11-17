@@ -9,7 +9,6 @@ import { readFile, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { TokenUsage } from "../../shared/domain.ts";
-import { ENV_HUB_SOCK, ENV_HUB_TOKEN } from "../../shared/hub.ts";
 import { buildForkSettings } from "./settings.ts";
 import { agentLaunchArgs } from "../../shared/vendors.ts";
 import { assistantContext, buildChildEnv, parseUsage } from "../../daemon/driver/protocol.ts";
@@ -105,11 +104,9 @@ export function createClaudeForker(options: ClaudeForkerOptions = {}): SessionFo
       if (!src.vendorSessionId) throw new ForkUnsupportedError("原会话没有 claude 会话编号");
       const settings = await forkSettingsJson(src.launch.settingsFile);
       if (signal.aborted) throw new Error("aborted");
-      // 守护进程自己环境里的 HUB_* 也不能漏给复制那份；launch.env 已经去掉了
-      const { [ENV_HUB_TOKEN]: _t, [ENV_HUB_SOCK]: _s, ...base } = process.env;
       const spawned = spawnOwnedProcess(src.executablePath, buildClaudeForkArgs(src, fork.forkId, persist, settings), {
         cwd: src.cwd,
-        env: buildChildEnv(base, src.launch.env),
+        env: buildChildEnv(process.env, src.launch.env),
         stdio: ["pipe", "pipe", "pipe"],
       });
       const child: ChildProcessWithoutNullStreams = spawned.child;

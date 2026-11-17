@@ -135,6 +135,23 @@ describe("每次启动的环境变量", () => {
     }
   });
 
+  it("守护进程自己的环境里带着 HUB_TOKEN、HUB_SOCK（在 agent 会话里起的）：LaunchFiles.env 没给的会话拿不到", async () => {
+    vi.stubEnv("HUB_TOKEN", "host-token");
+    vi.stubEnv("HUB_SOCK", "/host/hub.sock");
+    try {
+      const t = harness();
+      t.launch.env = { PATH: process.env.PATH ?? "" };
+      const s = t.addSession();
+      await t.driver.send(s.id, user(1, "hi"));
+      await t.waitFor("turn.ended");
+      const [env] = t.envs(s.id);
+      expect(env!.HUB_TOKEN).toBeUndefined();
+      expect(env!.HUB_SOCK).toBeUndefined();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("空闲退出后再起：还是同一个会话的令牌（prepareLaunch 给什么就用什么）", async () => {
     const t = harness({ driver: { idleCloseMs: 50 } });
     t.launch.env = { HUB_TOKEN: "token-a" };

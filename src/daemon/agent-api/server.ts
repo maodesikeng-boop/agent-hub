@@ -30,7 +30,6 @@ import {
   DELIVERABLE_LABEL_MAX_CHARS,
   PM_MODES,
   ROUTER_DISPATCH_AGENT_PATH,
-  ROUTER_PM_BRIEF_MAX_CHARS,
   SELF_RELOAD_AGENT_PATH,
   SELF_RELOAD_UNSUPPORTED_MESSAGE,
   TASK_GRAPH_STATUSES,
@@ -300,15 +299,6 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
         },
       },
       files: fileArgsField,
-    },
-  },
-  "router.note": {
-    type: "object",
-    additionalProperties: false,
-    anyOf: [{ required: ["text"] }, { required: ["clear"] }],
-    properties: {
-      text: { type: "string", minLength: 1, maxLength: ROUTER_PM_BRIEF_MAX_CHARS * 4 },
-      clear: { type: "boolean" },
     },
   },
   "graph.create": {
@@ -703,7 +693,7 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
     properties: {
       op: {
         type: "string",
-        enum: ["pm", "worker-start", "worker-stop", "worker-send", "worker-end", "worker-list", "project-create"],
+        enum: ["pm", "worker-start", "worker-stop", "worker-send", "worker-end", "worker-list", "project-create", "project-show"],
       },
       device: { type: "string", minLength: 1, maxLength: MAX_NAME_CHARS * 2 },
       pmId: workerIdField,

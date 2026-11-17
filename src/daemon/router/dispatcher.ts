@@ -13,6 +13,8 @@ import {
   ROUTER_MAX_CONCURRENT_TRACK_B,
   ROUTER_MAX_DISPATCH_TARGETS,
   ROUTER_PEER_DISPATCH_TIMEOUT_MS,
+  ROUTER_PROJECT_SHOW_MAX_BYTES,
+  ROUTER_PROJECT_SHOW_PER_TURN_MAX,
   ROUTER_REPLY_MAX_CHARS,
   ROUTER_SESSION_CLEANUP_GRACE_MS,
   ROUTER_TRACK_B_QUEUE_MAX,
@@ -32,21 +34,20 @@ import {
   type SessionTokens,
 } from "../../shared/index.ts";
 import { describeFailure } from "../../shared/errors.ts";
+import { renderCatalogDetail } from "../../shared/project-catalog.ts";
 import { within } from "../driver/base-driver.ts";
 import type { SqliteLedger } from "../ledger/index.ts";
 import { resolveRouterModel } from "./model-resolver.ts";
 import {
   ROUTER_RECENT_RECEIPTS_CONTEXT,
   formatFleetDigestForPrompt,
+  sliceUtf8Safe,
   type PromptDeviceDigest,
   type PromptReceiptAction,
   type PromptRecentReceipt,
 } from "./prompt.ts";
-import {
-  cleanupRouterLaunchDir,
-  ensureRouterHomeDir,
-  type RouterSandboxGuard,
-} from "./sandbox.ts";
+import type { RouterSandboxGuard } from "./sandbox.ts";
+import type { RouterTurnResult, RouterTurnRunner } from "./single-turn.ts";
 import {
   RouterTargetError,
   type DigestFetchResult,
@@ -58,7 +59,8 @@ import {
 
 interface ActiveTrackBState {
   readonly commandId: RouterCommandId;
-  readonly sessionId: SessionId;
+  /** 这一轮的总助会话；会话建好前、收尾后是 null。 */
+  sessionId: SessionId | null;
   readonly clientId: string;
   readonly rawText: string;
   readonly attachmentIds: string[];
@@ -68,6 +70,8 @@ interface ActiveTrackBState {
   readonly inflight: Set<Promise<unknown>>;
   /** 进行中的写操作数：与已成功的合计不超过 ROUTER_MAX_DISPATCH_TARGETS（模型并发调用也卡得住）。 */
   pendingMutations: number;
+  /** 这一轮已经调了几次 project-show（上限 ROUTER_PROJECT_SHOW_PER_TURN_MAX）。 */
+  projectShows: number;
   seq: number;
   /** 立即结束本轮（守护进程关闭时用）。 */
   abort(reason: string): void;
@@ -75,8 +79,8 @@ interface ActiveTrackBState {
 
 export interface RouterDispatcherOptions {
   ledger: SqliteLedger;
-  driver: Driver;
-  tokens: Pick<SessionTokens, "revoke">;
+  /** 总助单轮会话（single-turn.ts，和后台写档共用一份）。 */
+  runTurn: RouterTurnRunner;
   sandboxGuard: RouterSandboxGuard;
   targetRegistry: Pick<
     RouterTargetRegistry,
@@ -85,13 +89,8 @@ export interface RouterDispatcherOptions {
   models: { list(options?: { vendor?: AgentVendor }): Promise<ModelCatalog[]> };
   /** 按上传编号取附件的显示信息（守护进程从磁盘解析，见 uploads.ts 的 resolveUpload）；编号无效返回 null。 */
   resolveAttachment: (id: string) => RouterCommandAttachment | null;
-  stateDir: string;
-  launchDir: string;
   agentTimeoutMs?: number;
   maxConcurrentTrackB?: number;
-  /** 测试用：回收临时会话最多等多久（默认 ROUTER_SESSION_CLEANUP_GRACE_MS）。 */
-  sessionCleanupGraceMs?: number;
-  log?: (line: string) => void;
 }
 
 export interface RouterDispatcher {
@@ -364,6 +363,7 @@ function toDispatchedTarget(
         op: "project.create",
       };
     case "worker.list":
+    case "project.show":
       return null;
   }
 }
@@ -383,6 +383,10 @@ function formatOpReceiptText(port: RouterTargetPort, result: RouterTargetOpResul
       return `已结束收工${devLabel} Piece #${result.workerId}「${result.title}」`;
     case "project.create":
       return `已在${devLabel}创建项目 #${result.projectId}「${result.projectName}」（PM #${result.pmId}「${result.pmName}」）`;
+    case "project.show":
+      return result.detail === null
+        ? `${devLabel}的项目 #${result.projectId} 还没有档案（未建档、不存在或已归档）。名片看不出来的细节转给它的项目经理`
+        : sliceUtf8Safe(`${devLabel}的项目档案：\n\n${renderCatalogDetail(result.detail, Date.now())}`, ROUTER_PROJECT_SHOW_MAX_BYTES);
     case "worker.list": {
       if (result.workers.length === 0) return `${devLabel}当前没有 Piece 记录`;
       const lines = result.workers.map(
@@ -508,11 +512,9 @@ function errorRawOf(failure: CommandFailure): Pick<RouterAgentPlan, "errorRaw"> 
 }
 
 export function createRouterDispatcher(options: RouterDispatcherOptions): RouterDispatcher {
-  const { ledger, driver, tokens, sandboxGuard, targetRegistry, models, resolveAttachment, stateDir, launchDir } =
-    options;
+  const { ledger, runTurn, sandboxGuard, targetRegistry, models, resolveAttachment } = options;
   const agentTimeoutMs = options.agentTimeoutMs ?? ROUTER_AGENT_TIMEOUT_MS;
   const maxConcurrentTrackB = options.maxConcurrentTrackB ?? ROUTER_MAX_CONCURRENT_TRACK_B;
-  const sessionCleanupGraceMs = options.sessionCleanupGraceMs ?? ROUTER_SESSION_CLEANUP_GRACE_MS;
 
   const activeStates = new Map<RouterCommandId, ActiveTrackBState>();
   /** 在途的指令管线（close 时限时等它们收尾，不留悬空 Promise）。 */
@@ -720,6 +722,7 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
         online: result.online,
         ...(result.stale ? { stale: true } : {}),
         ...(result.digest ? { generatedAt: result.digest.generatedAt } : {}),
+        ...(result.digest?.omittedPms ? { omittedPms: result.digest.omittedPms } : {}),
         pms: (result.digest?.pms ?? []).map((pm) => ({
           pmId: pm.pmId,
           pmName: pm.name,
@@ -731,12 +734,11 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
                 id: pm.project.id,
                 name: pm.project.name,
                 mainFolder: pm.project.mainFolder,
+                description: pm.project.description,
+                catalog: pm.project.catalog ?? null,
               }
             : null,
-          roleSummary: [pm.pmNote, pm.personaSummary, pm.recentBrief]
-            .map((s) => s?.trim())
-            .filter(Boolean)
-            .join(" | "),
+          recentBrief: pm.recentBrief,
           activeWorkers: pm.activeWorkers.map((w) => ({
             id: w.id,
             title: w.title,
@@ -765,29 +767,11 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
 
       const turnText = `${digestPrompt}${attachmentNote}\n\n# 当前用户指令\n<user_command>\n${params.rawText}\n</user_command>`;
 
-      const routerHomeDir = ensureRouterHomeDir(stateDir);
-      const assistantSession = ledger.createRouterAssistantSession({
-        vendor: resolved.vendor,
-        model: resolved.model,
-        effort: resolved.effort,
-        cwd: routerHomeDir,
-      });
-
-      const agentTexts: string[] = [];
-      let timedOut = false;
-      let turnEnded = false;
-      let timer: NodeJS.Timeout | undefined;
-
-      /** error 是人话；非预期的原始错误另放 errorRaw。 */
-      type TurnDone = { ok: boolean } & Partial<CommandFailure>;
-      let settleTurn!: (outcome: TurnDone) => void;
-      const turnPromise = new Promise<TurnDone>((resolve) => {
-        settleTurn = resolve;
-      });
-
+      const controller = new AbortController();
+      let abortReason = "";
       const state: ActiveTrackBState = {
         commandId: params.commandId,
-        sessionId: assistantSession.id,
+        sessionId: null,
         clientId: params.clientId,
         rawText: params.rawText,
         attachmentIds: params.attachmentIds,
@@ -795,93 +779,53 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
         failedOps: [],
         inflight: new Set(),
         pendingMutations: 0,
+        projectShows: 0,
         seq: 0,
-        abort: (reason) => settleTurn({ ok: false, error: reason }),
+        abort: (reason) => {
+          abortReason = reason;
+          controller.abort();
+        },
       };
-
       activeStates.set(params.commandId, state);
-      sandboxGuard.bind(assistantSession.id, params.commandId);
 
-      const unsub = driver.onEvent((evSessionId, event) => {
-        if (evSessionId !== assistantSession.id) return;
-        if (event.type === "agent.text" && !event.parentToolUseId) {
-          agentTexts.push(event.text);
-        } else if (event.type === "turn.ended") {
-          turnEnded = true;
-          settleTurn({
-            ok: event.ok && !event.interrupted,
-            ...(event.error ? describeRaw(turnFailureReason(event.error), resolved.vendor) : {}),
-          });
-        } else if (event.type === "session.exited" && !event.hadResult) {
-          settleTurn({
-            ok: false,
-            error: `总助规划进程提前退出（${event.reason}）`,
-          });
-        } else if (event.type === "driver.error" && event.code === "invalid_input") {
-          settleTurn({ ok: false, ...describeRaw(event.message, resolved.vendor) });
-        }
-      });
-
-      timer = setTimeout(() => {
-        timedOut = true;
-        settleTurn({
-          ok: false,
-          error: `总助单轮规划超时（超过 ${Math.max(1, Math.round(agentTimeoutMs / 1000))} 秒），请重试或用 @设备名/项目名 直通发令`,
-        });
-      }, agentTimeoutMs);
-      timer.unref?.();
-
-      let turnOutcome: TurnDone;
+      let result: RouterTurnResult;
       try {
-        // start/send 跟超时计时器赛跑：厂商进程起不来或写不进去卡住时，超时照样结束本轮，不挂住并发槽
-        void (async () => {
-          await driver.start(assistantSession.id);
-          const sendRes = await driver.send(assistantSession.id, {
-            messageIds: [1],
-            source: "user",
-            text: turnText,
-          });
-          if (sendRes.kind === "rejected" || sendRes.kind === "cancelled") {
-            settleTurn({ ok: false, error: `总助指令未能写入会话（${sendRes.kind}）` });
-          }
-        })().catch((err: unknown) => {
-          settleTurn({ ok: false, ...failureOf(err, resolved.vendor) });
+        result = await runTurn({
+          purpose: "dispatch",
+          vendor: resolved.vendor,
+          model: resolved.model,
+          effort: resolved.effort,
+          text: turnText,
+          timeoutMs: agentTimeoutMs,
+          signal: controller.signal,
+          onSession: (sessionId) => {
+            state.sessionId = sessionId;
+            sandboxGuard.bind(sessionId, params.commandId);
+            return () => {
+              sandboxGuard.unbind(sessionId);
+              state.sessionId = null;
+            };
+          },
         });
-        turnOutcome = await turnPromise;
       } finally {
-        clearTimeout(timer);
-        unsub();
-        // 先撤令牌和绑定：之后到达的 hub dispatch 一律拒绝
-        tokens.revoke(assistantSession.id);
-        sandboxGuard.unbind(assistantSession.id);
         activeStates.delete(params.commandId);
-        // 本轮没正常结束（超时、关闭、出错）先打断再结束；driver.end 遇到还在跑的一轮会等它回完，限时等，厂商进程卡住也按时释放并发槽
-        const stopSession = (async () => {
-          if (!turnEnded) await driver.interrupt(assistantSession.id).catch(() => {});
-          await driver.end(assistantSession.id).catch(() => {});
-        })();
-        if ((await within(stopSession, sessionCleanupGraceMs)) === "timeout") {
-          options.log?.(`总助规划会话 ${assistantSession.id} 结束超时，放弃等待`);
-        }
         // 已发出的 hub dispatch 限时等落定（各自也有跨设备超时），晚到的成功/失败照样记进回执与重试列表
         if (state.inflight.size > 0) {
           await within(Promise.allSettled([...state.inflight]), ROUTER_PEER_DISPATCH_TIMEOUT_MS);
         }
-        cleanupRouterLaunchDir(launchDir, assistantSession.id);
-        try {
-          ledger.endRouterAssistantSession(assistantSession.id);
-        } catch {
-          // ignore if DB already closed during shutdown
-        }
       }
 
+      const timedOut = !result.ok && result.reason === "timeout";
+      const turnOutcome: { ok: boolean } & Partial<CommandFailure> = result.ok
+        ? { ok: true }
+        : result.reason === "aborted"
+          ? { ok: false, error: abortReason || "总助规划被打断，可点击重试" }
+          : { ok: false, error: result.error, ...(result.errorRaw === undefined ? {} : { errorRaw: result.errorRaw }) };
       const durationMs = Math.max(0, Date.now() - params.startedAt);
-      const replyPart = cleanReply(agentTexts);
+      const replyPart = cleanReply([result.ok ? result.text : result.partialText]);
 
       if (timedOut) {
-        const timeoutMsg =
-          turnOutcome.error ??
-          `总助单轮规划超时（超过 ${Math.max(1, Math.round(agentTimeoutMs / 1000))} 秒）`;
+        const timeoutMsg = `总助单轮规划超时（超过 ${Math.max(1, Math.round(agentTimeoutMs / 1000))} 秒），请重试或用 @设备名/项目名 直通发令`;
         return ledger.updateRouterCommand(params.commandId, {
           status: "failed",
           dispatched: state.dispatched.length > 0 ? state.dispatched : null,
@@ -1261,7 +1205,10 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
         throw new LedgerRequestError("forbidden", "总助调度会话已过期或与当前指令不匹配");
       }
 
-      const isMutating = payload.op !== "worker-list";
+      const isMutating = payload.op !== "worker-list" && payload.op !== "project-show";
+      if (payload.op === "project-show" && ++state.projectShows > ROUTER_PROJECT_SHOW_PER_TURN_MAX) {
+        throw new LedgerRequestError("conflict", `一轮最多查 ${ROUTER_PROJECT_SHOW_PER_TURN_MAX} 个项目档案，拿不准的转给项目经理`);
+      }
       if (isMutating && state.dispatched.length + state.pendingMutations >= ROUTER_MAX_DISPATCH_TARGETS) {
         throw new LedgerRequestError(
           "conflict",
@@ -1338,6 +1285,9 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
             kind: "worker.list",
             ...(payload.projectId !== undefined ? { projectId: payload.projectId } : {}),
           };
+          break;
+        case "project-show":
+          targetOp = { kind: "project.show", projectId: payload.projectId };
           break;
         case "project-create":
           targetOp = {

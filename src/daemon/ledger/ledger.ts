@@ -34,6 +34,8 @@ import { createLedgerLaunchContext } from "./launch-context.ts";
 import { createLedgerLoadedSkills } from "./loaded-skills.ts";
 import { createLedgerMessages } from "./messages.ts";
 import { createLedgerPersona } from "./persona.ts";
+import { createLedgerProjectCatalog } from "./project-catalog.ts";
+import type { LedgerProjectCatalog, ProjectCatalogLedgerOptions } from "./project-catalog.ts";
 import { createLedgerProjects } from "./projects.ts";
 import { parseMessageMeta, toConversation, toHealth, toPm, toProject, toProjectFolder } from "./rows.ts";
 import type { ConversationDbRow, HealthDbRow, MessageDbRow, PmDbRow, ProjectDbRow, ProjectFolderDbRow } from "./rows.ts";
@@ -73,6 +75,8 @@ export interface SqliteLedger extends Ledger {
   endRouterAssistantSession: LedgerRouter["endAssistantSession"];
   recordRouterWorkerOrigin: LedgerRouter["recordWorkerOrigin"];
   resolveRouterLocalPmOrProject: LedgerRouter["resolveLocalPmOrProject"];
+  /** 总助的项目目录（ledger/project-catalog.ts）：后台写档的跑腿的、守护进程启动扫描、hub dispatch project-show 用。 */
+  projectCatalog: Omit<LedgerProjectCatalog, "afterDriverEvent" | "markForcedIn">;
   resolveRouterLocalWorker: LedgerRouter["resolveLocalWorker"];
   listRouterLocalWorkers: LedgerRouter["listLocalWorkers"];
   close(): void;
@@ -136,6 +140,8 @@ export interface LedgerOptions {
   skillFiles?: SkillFiles;
   /** 有交接可以领了（后台写交接）：守护进程接到 daemon/handover/runner.ts 的 wake；不给什么都不做。 */
   onHandoverClaimable?: HandoverOptions["onHandoverClaimable"];
+  /** 有项目档案要写了：守护进程接到 daemon/project-catalog/runner.ts 的 wake；不给什么都不做。 */
+  onCatalogClaimable?: ProjectCatalogLedgerOptions["onCatalogClaimable"];
 }
 
 export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
@@ -186,8 +192,11 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     endOpenWorkersIn: (p, pmId) => workers.endOpenWorkersIn(p, pmId),
     pauseSchedulesIn: (p, pmId) => schedules.pauseAllForPmIn(p, pmId),
   });
-  const projects = createLedgerProjects(ctx, sessions, messages, persona, files);
-  const router = createLedgerRouter(ctx, sessions, messages, persona, projects);
+  const projects = createLedgerProjects(ctx, sessions, messages, persona, files, (p, projectId) =>
+    projectCatalog.markForcedIn(p, projectId, "project_created"),
+  );
+  const projectCatalog = createLedgerProjectCatalog(ctx, projects, { onCatalogClaimable: options.onCatalogClaimable });
+  const router = createLedgerRouter(ctx, sessions, messages, persona, projects, projectCatalog.cardOf);
   const effectiveLaunchDir = files.launchDir ?? join(dataHome, "state", "launch");
   // 要用户本人动手的阻塞：挂卡在这里，解开时步骤交给任务图重算、Worker 交给 workers 重发（docs/user-blockers-design.md）
   const userBlockers = createLedgerUserBlockers(ctx, sessions, messages, () => ({
@@ -199,6 +208,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     launchDir: effectiveLaunchDir,
     workers: () => workers,
     userBlockers,
+    onGraphFinishedIn: (p, projectId) => projectCatalog.markForcedIn(p, projectId, "graph_finished"),
   });
   const steps = createLedgerSteps(ctx);
   const workers = createLedgerWorkers(ctx, sessions, messages, persona, projects, {
@@ -217,6 +227,10 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     onHandoverClaimable: options.onHandoverClaimable,
     waitingAsks: router.waitingAsksOf,
     liveActiveGraphsSection: (pmId) => taskGraphs.liveHandoverSection(pmId),
+    onRenewedIn: (p, conversationId) => {
+      const project = db.get<{ id: number }>("SELECT id FROM projects WHERE conversation_id = ? AND status = 'active'", conversationId);
+      if (project !== undefined) projectCatalog.markForcedIn(p, project.id, "handover_switched");
+    },
   });
   const schedules = createLedgerSchedules(ctx, sessions, messages, persona);
   const workerRetention = createLedgerWorkerRetention(ctx, files);
@@ -346,6 +360,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
         workers.afterDriverEvent(p, session, event);
         handover.afterDriverEvent(p, session, event);
         schedules.afterDriverEvent(p, event);
+        projectCatalog.afterDriverEvent(p, session, event);
       });
     },
     refreshSessionState: sessions.refreshSessionState,
@@ -479,6 +494,15 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     resolveRouterLocalPmOrProject: router.resolveLocalPmOrProject,
     resolveRouterLocalWorker: router.resolveLocalWorker,
     listRouterLocalWorkers: router.listLocalWorkers,
+    projectCatalog: {
+      scanAtStartup: projectCatalog.scanAtStartup,
+      claimCatalog: projectCatalog.claimCatalog,
+      catalogWritten: projectCatalog.catalogWritten,
+      catalogFailed: projectCatalog.catalogFailed,
+      cardOf: projectCatalog.cardOf,
+      detailOf: projectCatalog.detailOf,
+      hasQueued: projectCatalog.hasQueued,
+    },
     listProjectTaskGraphs: taskGraphs.listProjectHistory,
     decideTaskNode: taskGraphs.decideNode,
     skipTaskNode: taskGraphs.skipNode,

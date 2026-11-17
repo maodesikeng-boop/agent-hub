@@ -288,7 +288,6 @@ describe("Router 跨设备汇总：PendingDecision 与未读 Router 汇报", () 
       ],
       router: {
         settings: localSnap.router.settings,
-        notes: [],
         commands: [],
         commandsHasMore: false,
         briefingsHasMore: false,

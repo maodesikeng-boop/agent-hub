@@ -264,13 +264,6 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
                                                           向全局总助投递里程碑汇报卡（不打断对话流）；本机文件用 --file（最多 ${HUB_FILE_ARGS_MAX} 个），--link 只放网址`,
   },
   {
-    command: "router.note",
-    group: "router",
-    action: "note",
-    cli: "router note",
-    usage: `  ${hub} router note (--text <备忘> | --stdin | --clear)        更新或清除当前项目经理的一句话主线备忘`,
-  },
-  {
     command: "graph.create",
     group: "graph",
     action: "create",
@@ -374,6 +367,7 @@ const DISPATCH_USAGE = `  ${hub} dispatch pm --device <self|deviceId> --pm <pmId
   ${hub} dispatch worker-send --device <self|deviceId> --worker <workerId> [--verbatim | --stdin]
   ${hub} dispatch worker-end --device <self|deviceId> --worker <workerId>
   ${hub} dispatch worker-list --device <self|deviceId> [--project <projectId>]
+  ${hub} dispatch project-show --device <self|deviceId> --project <projectId>
   ${hub} dispatch project-create --device <self|deviceId> --folder <路径> [--name <项目名>] [--pm-name <PM名>] [--vendor <${AGENT_VENDORS.join("|")}>] [--mode ${PM_MODES.join("|")}]`;
 
 /** 当第一个词已认出命令组（或进一步认出子命令）时，只输出对应那几行用法 + help 提示；否则输出完整 HUB_USAGE。 */
@@ -995,19 +989,6 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     body.summary = values.summary!.trim();
     return { command: "router.report", body, textSource: null };
   }
-  if (group === "router" && action === "note") {
-    allowOnly(values, ["text", "stdin", "clear"], "router note");
-    expectPositionals(rest, 0, "router note");
-    if (values.clear === true) {
-      if (values.stdin === true || values.text !== undefined) {
-        throw new UsageError("--clear 不能和 --stdin 或 --text 一起用");
-      }
-      return { command: "router.note", body: { clear: true }, textSource: null };
-    }
-    const textSource = textSourceOf(values);
-    if (textSource === null) throw new UsageError(`${hub} router note 要 --text <备忘>、--stdin 或 --clear`);
-    return { command: "router.note", body: {}, textSource, textField: "text" };
-  }
   if (group === "graph" && action === "create") {
     allowOnly(values, ["title", "stdin"], "graph create");
     expectPositionals(rest, 0, "graph create");
@@ -1252,6 +1233,14 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
       const body: Record<string, unknown> = { op: "worker-list", device };
       if (values.project !== undefined) body.projectId = idOf(values.project, "dispatch worker-list", "项目");
       return { command: "router.dispatch", body, textSource: null };
+    }
+    if (action === "project-show") {
+      allowOnly(values, ["device", "project"], "dispatch project-show");
+      expectPositionals(rest, 0, "dispatch project-show");
+      const device = requireDevice("dispatch project-show");
+      if (values.project === undefined) throw new UsageError(`${hub} dispatch project-show 要 --project <projectId>`);
+      const projectId = idOf(values.project, "dispatch project-show", "项目");
+      return { command: "router.dispatch", body: { op: "project-show", device, projectId }, textSource: null };
     }
     if (action === "project-create") {
       allowOnly(values, ["device", "folder", "name", "pm-name", "vendor", "mode"], "dispatch project-create");

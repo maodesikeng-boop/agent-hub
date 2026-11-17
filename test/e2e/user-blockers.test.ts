@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { API_PATHS, askOf, REPORT_END, REPORT_START, vendorSpec, type Message, type RecheckUserBlockerResponse } from "../../src/shared/index.ts";
 import { openDatabase } from "../../src/daemon/store/index.ts";
 import { wrapScriptAsPlatformCli } from "../fake-cli-shim.ts";
-import { Client, makeEnv, messagesOf, waitForStatus, waitUntil, type E2eEnv } from "./harness.ts";
+import { Client, firstPidOfConversation, makeEnv, messagesOf, waitForStatus, waitUntil, type E2eEnv } from "./harness.ts";
 
 let env: E2eEnv;
 afterEach(async () => {
@@ -80,7 +80,7 @@ describe("要用户动手的事：真守护进程", { timeout: 90_000 }, () => {
 
     const pm1 = await client.createPm({ name: "小林", mode: "manage_only", persona: "", folder: repo("one") });
     await waitForStatus(client, await client.post(pm1.conversationId, "在吗"), "replied", 20_000);
-    const pm1Pid = env.envs()[0]!.pid;
+    const pm1Pid = await firstPidOfConversation(env, client, pm1.conversationId);
     const hub = async (pid: number, args: string[], stdin: string) => {
       const r = await env.runHub(pid, args, { stdin });
       return { code: r.code, out: `${r.stdout}${r.stderr}`.trim() };
@@ -95,7 +95,7 @@ describe("要用户动手的事：真守护进程", { timeout: 90_000 }, () => {
 
     const pm2 = await client.createPm({ name: "小周", mode: "manage_only", persona: "", folder: repo("two") });
     await waitForStatus(client, await client.post(pm2.conversationId, "在吗"), "replied", 20_000);
-    const pm2Pid = env.envs().at(-1)!.pid;
+    const pm2Pid = await firstPidOfConversation(env, client, pm2.conversationId);
     expect(pm2Pid).not.toBe(pm1Pid);
 
     // 上游 impl 由假 claude Worker 汇报做完了，系统自动交棒给 agy 的 verify：不派 Worker，挂卡等用户

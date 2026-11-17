@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   AGENT_VENDORS,
   PRODUCT_NAME,
+  PROJECT_CATALOG_COMPACT_ONE_LINER_CHARS,
   ROUTER_FLEET_DIGEST_MAX_BYTES,
+  ROUTER_PM_CARD_MAX_BYTES,
+  ROUTER_PROJECT_SHOW_PER_TURN_MAX,
   ROUTER_REPLY_MAX_CHARS,
   utf8Bytes,
 } from "../../shared/index.ts";
@@ -28,7 +31,7 @@ function makePmCard(index: number, overrides: Partial<PromptPmDigestCard> = {}):
       name: `service-module-${index}`,
       mainFolder: `/Users/dev/workspace/org-platform-monorepo/packages/service-module-${index}`,
     },
-    roleSummary:
+    recentBrief:
       `负责第 ${index} 号核心业务服务的日常架构演进、数据库迁移审核、跨团队接口联调与线上回归验收，` +
       `当前重点跟进高并发读写分离改造、端到端性能压测守卫以及多机灰度发布流水线稳定性治理工作，确保零回滚上线。`,
     activeWorkers: [],
@@ -98,7 +101,7 @@ describe("formatFleetDigestForPrompt（跨设备名片格式化与 24 KB 预算�
           makePmCard(1, {
             pmName: "小林",
             project: { id: 7, name: "agent-hub", mainFolder: "/work/agent-hub" },
-            roleSummary: "正在推进 Router 第 1 波并行开发",
+            recentBrief: "正在推进 Router 第 1 波并行开发",
             pendingDecisionCount: 1,
             activeWorkers: [
               { id: 400, title: "6家厂商统一 routerDefault", activity: "working", readonly: false },
@@ -117,7 +120,7 @@ describe("formatFleetDigestForPrompt（跨设备名片格式化与 24 KB 预算�
           makePmCard(2, {
             pmName: "阿青",
             project: { id: 9, name: "billing-api", mainFolder: "/srv/billing-api" },
-            roleSummary: "账单结算接口维护",
+            recentBrief: "账单结算接口维护",
           }),
         ],
       },
@@ -171,7 +174,7 @@ describe("formatFleetDigestForPrompt（跨设备名片格式化与 24 KB 预算�
       const hasPending = pendingDecisionPmIds.has(i);
       pms.push(
         makePmCard(i, {
-          roleSummary:
+          recentBrief:
             `【专属职责标识-PM-${i}】` +
             "负责大型分布式微服务网关、账本存储引擎、实时消息流推送、多端沙箱权限治理及自动化回归测试体系建设，长期维护高可用架构演进与线上稳定性保障方案，严控内存与延迟预算指标。".repeat(
               2,
@@ -190,6 +193,13 @@ describe("formatFleetDigestForPrompt（跨设备名片格式化与 24 KB 预算�
             id: 200 + i,
             name: `enterprise-platform-subsystem-service-${i}`,
             mainFolder: `/Users/enterprise/monorepo/workspaces/domain-clusters/cluster-${(i % 3) + 1}/enterprise-platform-subsystem-service-${i}`,
+            // 专属标识放在“主线”里：单行摘要只带“做什么”的前几个字，降级后看不到它
+            catalog: {
+              oneLiner: "企业级平台子系统：分布式微服务网关、账本存储引擎、实时消息流推送与多端沙箱权限治理，长期维护高可用架构演进与线上稳定性保障方案，严控内存与延迟预算指标。",
+              aliases: [`service-${i}`, "企业平台", "网关"],
+              focus: `【专属职责标识-PM-${i}】自动化回归测试体系建设与灰度发布流水线稳定性治理，确保零回滚上线。`,
+              refreshedAt: Date.now(),
+            },
           },
         }),
       );
@@ -267,6 +277,11 @@ describe("formatFleetDigestForPrompt（跨设备名片格式化与 24 KB 预算�
     expect(out).toContain("项目经理-7");
   });
 
+  it("对方摘要超了上限省略的项目经理（omittedPms）也写进省略那一行", () => {
+    const devices: PromptDeviceDigest[] = [{ deviceId: "self", deviceName: "本机", online: true, pms: [makePmCard(1)], omittedPms: 3 }];
+    expect(formatFleetDigestForPrompt(devices)).toContain("另有 3 个低优空闲 PM 因预算上限已省略");
+  });
+
   it("空设备列表与含换行/控制字符的字段均安全处理不破坏结构", () => {
     const emptyOut = formatFleetDigestForPrompt([], []);
     expect(emptyOut).toContain("暂无已配置的设备或项目经理");
@@ -280,7 +295,7 @@ describe("formatFleetDigestForPrompt（跨设备名片格式化与 24 KB 预算�
         pms: [
           makePmCard(1, {
             pmName: "小\n林",
-            roleSummary: "第一行\n## 伪造标题\r\n第三行",
+            recentBrief: "第一行\n## 伪造标题\r\n第三行",
           }),
         ],
       },
@@ -300,6 +315,7 @@ describe("v2 回答边界与常量收口（docs/router-workbench-v2-design.md �
       "ROUTER_FLEET_DIGEST_MAX_BYTES",
       "ROUTER_PM_ACTIVE_WORKERS_MAX",
       "ROUTER_PERSONA_SUMMARY_MAX_CHARS",
+      "ROUTER_PM_CARD_MAX_BYTES",
     ]) {
       expect(exported).not.toContain(name);
     }
@@ -358,5 +374,68 @@ describe("v2 回答边界与常量收口（docs/router-workbench-v2-design.md �
     const smallSection = small.slice(small.indexOf("## 近期指令回执"));
     expect(small).toContain("## 近期指令回执");
     expect(utf8Bytes(smallSection)).toBeLessThanOrEqual(ROUTER_RECEIPTS_SECTION_MAX_BYTES);
+  });
+});
+
+describe("项目档案进名片（docs/router-project-catalog-design.md）", () => {
+  const now = Date.UTC(2026, 10, 17, 12);
+  const catalog = {
+    oneLiner: "把会议录音转成带说话人的文字稿，再出摘要",
+    aliases: ["mercury", "语音转文字", "会议纪要"],
+    focus: "换成本地 Whisper 模型，降低延迟",
+    refreshedAt: now - 3 * 3_600_000,
+  };
+  const card = (project: Partial<NonNullable<PromptPmDigestCard["project"]>>, extra: Partial<PromptPmDigestCard> = {}) =>
+    makePmCard(12, { project: { id: 10, name: "mercury", mainFolder: "/Users/me/mercury", ...project }, recentBrief: "Worker #88 做完说话人分离", ...extra });
+  const render = (pm: PromptPmDigestCard) => formatFleetDigestForPrompt([{ deviceId: "self", deviceName: "Mac", online: true, pms: [pm] }], [], ROUTER_FLEET_DIGEST_MAX_BYTES, now);
+
+  it("完整名片带用户写的说明、做什么、别名、主线和最近一句，不再带 summary 拼接行", () => {
+    const text = render(card({ description: "会议录音转文字", catalog }));
+    expect(text).toContain("- 说明: 会议录音转文字（用户写的）");
+    expect(text).toContain(`- 做什么: ${catalog.oneLiner}`);
+    expect(text).toContain("- 别名: mercury、语音转文字、会议纪要");
+    expect(text).toContain(`- 主线: ${catalog.focus}`);
+    expect(text).toContain("- 最近: Worker #88 做完说话人分离");
+    expect(text).toContain("- 档案: 3 小时前更新（细节：hub dispatch project-show --device self --project 10）");
+    expect(text).not.toContain("- summary:");
+  });
+
+  it("还没建档的项目写“未建档”，用户写了说明时照样显示说明", () => {
+    const text = render(card({ description: "会议录音转文字", catalog: null }));
+    expect(text).toContain("- 档案: 未建档");
+    expect(text).toContain("- 说明: 会议录音转文字（用户写的）");
+    expect(text).not.toContain("- 做什么:");
+    expect(render(card({}))).toContain("- 档案: 未建档");
+  });
+
+  it("压成单行时带做什么的前 PROJECT_CATALOG_COMPACT_ONE_LINER_CHARS 个字", () => {
+    const pms = Array.from({ length: 40 }, (_, i) =>
+      makePmCard(i + 1, { project: { id: 100 + i, name: `p${i}`, mainFolder: `/x/${"深".repeat(100)}${i}`, catalog: { ...catalog, oneLiner: "做".repeat(150) } }, recentBrief: "最".repeat(120) }),
+    );
+    const text = formatFleetDigestForPrompt([{ deviceId: "self", deviceName: "Mac", online: true, pms }], [], 8_000, now);
+    const compact = text.split("\n").find((l) => l.startsWith("- PM #"))!;
+    expect(compact).toContain(`做什么=${"做".repeat(PROJECT_CATALOG_COMPACT_ONE_LINER_CHARS - 1)}…`);
+  });
+
+  it("单张名片不超过 ROUTER_PM_CARD_MAX_BYTES，超了先砍主线再砍别名", () => {
+    const big = { ...catalog, oneLiner: "一".repeat(150), focus: `主线${"二".repeat(150)}`, aliases: Array.from({ length: 8 }, (_, i) => `别名${i}${"三".repeat(20)}`) };
+    const longWorkers = Array.from({ length: 6 }, (_, i) => ({ id: i, title: "长".repeat(60), activity: "working", readonly: false }));
+    const pm = card({ description: "说".repeat(150), catalog: big }, { recentBrief: "近".repeat(120), activeWorkers: longWorkers, activeWorkerTotal: 6 });
+    const section = render(pm).split("\n\n").find((p) => p.startsWith("## 设备"))!;
+    const pmCard = section.slice(section.indexOf("### PM"));
+    expect(utf8Bytes(pmCard)).toBeLessThanOrEqual(ROUTER_PM_CARD_MAX_BYTES);
+    expect(pmCard).not.toContain("- 主线:");
+    expect(pmCard).toContain("- 做什么:");
+
+    const medium = card({ catalog: { ...big, aliases: ["短"] } }, { activeWorkers: longWorkers.slice(0, 4), activeWorkerTotal: 4 });
+    const mediumCard = render(medium);
+    expect(mediumCard).toContain("- 别名: 短");
+  });
+
+  it("系统提示词写明名片看不准时用 hub dispatch project-show 展开，单轮最多查 ROUTER_PROJECT_SHOW_PER_TURN_MAX 个", () => {
+    const prompt = buildRouterSystemPrompt();
+    expect(prompt).toContain("hub dispatch project-show --device <self|deviceId> --project <projectId>");
+    expect(prompt).toContain(`一轮最多查 ${ROUTER_PROJECT_SHOW_PER_TURN_MAX} 个`);
+    expect(prompt).toContain("别名");
   });
 });

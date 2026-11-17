@@ -327,8 +327,6 @@ export function createLedgerHubCommands(
         const fileArgs = sharedFileArgs(caller, rawFiles);
         return router.reportIn(p, caller, rest, fileArgs === undefined ? [] : deliverablesOfFileArgs(fileArgs.args, fileArgs.files, null));
       }
-      case "router.note":
-        return router.noteIn(p, caller, args as HubArgs<"router.note">);
       case "graph.create":
         return withManual(caller.id, () => taskGraphs.createIn(p, caller, args as HubArgs<"graph.create">, context));
       case "graph.show":

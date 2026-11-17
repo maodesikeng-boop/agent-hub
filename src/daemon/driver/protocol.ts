@@ -9,6 +9,7 @@ import {
   type AgentToolPreviewEvent,
   type TokenUsage,
 } from "../../shared/index.ts";
+import { ENV_HUB_SOCK, ENV_HUB_TOKEN } from "../../shared/hub.ts";
 import { STEP_INPUT_KEYS, pickStepInput } from "../../shared/step-labels.ts";
 
 /** 驱动发 agent.tool_preview 时挑状态参数用（和账本 stepOfTool 同一份规则）。 */
@@ -70,10 +71,17 @@ export function assistantContext(obj: Record<string, unknown>): number | null {
 
 /**
  * 守护进程自己可能是在某个 agent 的会话里起的（开发时）。那家给子进程设的“父会话”变量会让子 agent 以为自己是嵌套的子会话，
- * 起任何厂商的子进程前都去掉：各家 paths.ts 的 parentSessionEnv 的并集，加上不属于哪一家厂商的宿主（t3code）设的。
+ * 起任何厂商的子进程前都去掉：各家 paths.ts 的 parentSessionEnv 的并集，加上不属于哪一家厂商的宿主（t3code）设的，
+ * 和 agent-hub 自己给会话设的 hub 凭证（HUB_TOKEN、HUB_SOCK）：子进程要用只能由 extra（LaunchFiles.env）明着给。
  */
 export const PARENT_SESSION_ENV: readonly string[] = [
-  ...new Set([...VENDOR_LIST.flatMap(({ id }) => VENDOR_PATHS[id].parentSessionEnv ?? []), "T3CODE_THREAD_ID", "T3CODE_CLI_PATH"]),
+  ...new Set([
+    ...VENDOR_LIST.flatMap(({ id }) => VENDOR_PATHS[id].parentSessionEnv ?? []),
+    "T3CODE_THREAD_ID",
+    "T3CODE_CLI_PATH",
+    ENV_HUB_TOKEN,
+    ENV_HUB_SOCK,
+  ]),
 ];
 
 export function buildChildEnv(

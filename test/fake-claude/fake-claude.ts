@@ -32,7 +32,7 @@
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 
 /** 一轮里的一步。 */
@@ -144,7 +144,7 @@ export interface FakeScript {
  * 顶层剧本照旧跨进程一起数。
  */
 export interface FakeSessionScript {
-  /** 角色：环境变量里有 Worker 才设的 CLAUDE_CODE_DISABLE_AUTO_MEMORY=1（src/vendors/claude/settings.ts 的 WORKER_ENV）就是 worker，否则 pm。 */
+  /** 角色，认法见 role。 */
   role?: FakeRole;
   /** 工作目录等于它（两边都 realpath 过再比）。 */
   cwd?: string;
@@ -155,7 +155,7 @@ export interface FakeSessionScript {
   script: FakeScript;
 }
 
-export type FakeRole = "pm" | "worker";
+export type FakeRole = "pm" | "worker" | "assistant";
 
 export interface ChildSpec {
   sleepSec: number;
@@ -220,8 +220,12 @@ const myPid: number = (() => {
 const topScript: FakeScript = process.env.FAKE_CLAUDE_SCRIPT
   ? (JSON.parse(readFileSync(process.env.FAKE_CLAUDE_SCRIPT, "utf8")) as FakeScript)
   : {};
-/** Worker 的会话才有的环境变量（src/vendors/claude/settings.ts 的 WORKER_ENV），假 claude 靠它认角色。 */
-const role: FakeRole = process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY === "1" ? "worker" : "pm";
+/**
+ * 认角色：工作目录叫 router-home 的是总助的单轮会话（分派、后台写档，src/daemon/router/sandbox.ts 的 ROUTER_HOME_DIR_NAME）；
+ * 其余看 Worker 才设的环境变量（src/vendors/claude/settings.ts 的 WORKER_ENV，总助的会话也带着它，所以先看目录）。
+ */
+const role: FakeRole =
+  basename(process.cwd()) === "router-home" ? "assistant" : process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY === "1" ? "worker" : "pm";
 
 function realOrSelf(path: string): string {
   try {
@@ -262,7 +266,9 @@ const sessionScriptIndex: number | null = (() => {
   const i = (topScript.sessions ?? []).findIndex(sessionScriptMatches);
   return i === -1 ? null : i;
 })();
-const script: FakeScript = sessionScriptIndex === null ? topScript : topScript.sessions![sessionScriptIndex]!.script;
+/** 总助的会话是守护进程在后台自己起的：剧本里没专门给它写，就每轮回 "ok"，不用、也不数顶层剧本（顶层剧本是写给项目经理、Worker 的）。 */
+const script: FakeScript =
+  sessionScriptIndex !== null ? topScript.sessions![sessionScriptIndex]!.script : role === "assistant" ? {} : topScript;
 const model = script.model ?? "claude-haiku-5-5";
 const tools = script.tools ?? ["Bash", "Read", "Edit"];
 
@@ -309,11 +315,11 @@ function createSession(id: string): void {
 function nextTurnIndex(): number {
   if (!stateDir) return memoryTurns++;
   mkdirSync(stateDir, { recursive: true });
-  // 顶层剧本跨进程一起数；按会话选中的剧本按会话 ID 分开数（见 FakeSessionScript）
+  // 顶层剧本跨进程一起数；按会话选中的剧本（和总助的默认剧本）按会话 ID 分开数（见 FakeSessionScript）
   const file =
-    sessionScriptIndex === null
+    script === topScript
       ? join(stateDir, "fake-turns")
-      : join(stateDir, `fake-turns-${sessionScriptIndex}-${createHash("sha256").update(sessionId).digest("hex").slice(0, 16)}`);
+      : join(stateDir, `fake-turns-${sessionScriptIndex ?? role}-${createHash("sha256").update(sessionId).digest("hex").slice(0, 16)}`);
   const n = existsSync(file) ? Number(readFileSync(file, "utf8")) : 0;
   writeFileSync(file, String(n + 1));
   return n;

@@ -74,6 +74,8 @@ export interface HandoverOptions {
   onHandoverClaimable?: () => void;
   /** 新会话首次启动时实时读取该 PM 未完结的任务图摘要（账本实时状态，不走静态快照防过期）。 */
   liveActiveGraphsSection?: (pmId: PmId) => string | null;
+  /** 项目经理换代（不含切换厂商）的同一个事务里调：总助的项目档案记 forced（ledger/project-catalog.ts）。 */
+  onRenewedIn?: (p: Pending, conversationId: ConversationId) => void;
   /** 新会话首次启动时实时读账本里这个项目经理还在等用户的提问卡（提问卡是否还在等只认账本，不认交接正文）。默认没有卡。 */
   waitingAsks?: (conversationId: ConversationId) => WaitingAsk[];
 }
@@ -634,6 +636,7 @@ export function createLedgerHandover(
       row.id,
     );
     queue.delete(conversationId);
+    if (!vendorSwitch) options.onRenewedIn?.(p, conversationId);
     return true;
   };
 

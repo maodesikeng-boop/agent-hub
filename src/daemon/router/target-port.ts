@@ -22,6 +22,7 @@ import {
   MAX_TASK_BYTES,
   PM_MODES,
   PEER_DEVICE_HEADER,
+  PRODUCT_NAME,
   ROUTER_ATTACHMENT_ID_MAX_CHARS,
   ROUTER_OP_CLIENT_ID_MAX_CHARS,
   ROUTER_OP_DEDUPE_MAX,
@@ -53,6 +54,7 @@ import type { ProxyTarget } from "../peers/proxy.ts";
 import { PEER_UNAUTHORIZED } from "../peers/service.ts";
 import { createUnixHttpPool, type ResolvedPeerTarget, type UnixHttpPool } from "../peers/transport.ts";
 import { resolveUpload } from "../uploads.ts";
+import type { ProjectCatalogDetail } from "../../shared/project-catalog.ts";
 
 export type RouterTargetErrorCode =
   | "device_offline"
@@ -127,6 +129,7 @@ export const routerTargetOpSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("worker.stop"), workerId: opIdSchema }).strict(),
   z.object({ kind: z.literal("worker.end"), workerId: opIdSchema }).strict(),
   z.object({ kind: z.literal("worker.list"), projectId: opIdSchema.optional() }).strict(),
+  z.object({ kind: z.literal("project.show"), projectId: opIdSchema }).strict(),
   z
     .object({
       kind: z.literal("project.create"),
@@ -208,6 +211,12 @@ export type RouterTargetOpResult =
       projectId: ProjectId;
       projectName: string;
       conversationId: ConversationId;
+    }
+  | {
+      /** 只读：这个项目的完整档案（docs/router-project-catalog-design.md 第二层）；还没建档、项目不存在或已归档是 null。 */
+      kind: "project.show";
+      projectId: ProjectId;
+      detail: ProjectCatalogDetail | null;
     };
 
 export interface DigestFetchResult {
@@ -451,6 +460,9 @@ export function createLocalTargetPort(options: LocalTargetPortOptions): RouterTa
               workers: ledger.listRouterLocalWorkers(op.projectId),
             };
           }
+
+          case "project.show":
+            return { kind: "project.show", projectId: op.projectId, detail: ledger.projectCatalog.detailOf(op.projectId) };
 
           case "project.create": {
             const dedupeKey = JSON.stringify(["project.create", op.clientId, op.folder, op.name ?? null]);
@@ -791,6 +803,10 @@ export function createRouterTargetRegistry(options: RouterTargetRegistryOptions)
         throw new RouterTargetError("device_not_found", `设备「${info.name}」已解除与本机的配对`);
       }
 
+      // 旧版设备不认识 project.show：按严格结构拒成 400
+      if (op.kind === "project.show" && res.status === 400) {
+        throw new RouterTargetError("invalid", `设备「${info.name}」的 ${PRODUCT_NAME} 版本旧，不支持查看项目档案，请升级那台设备，或把问题转给它的项目经理`);
+      }
       if (res.status < 200 || res.status >= 300) {
         let code: RouterTargetErrorCode = res.status === 404 ? "not_found" : res.status === 409 ? "conflict" : "invalid";
         let message = `设备「${info.name}」拒绝了操作（HTTP ${res.status}）`;
@@ -813,8 +829,8 @@ export function createRouterTargetRegistry(options: RouterTargetRegistryOptions)
         throw new RouterTargetError(code, message);
       }
 
-      // 投递写操作成功后主动使该设备 Digest 缓存失效，保证紧接着下一次查询拿到最新状态
-      if (op.kind !== "worker.list") {
+      // 投递写操作成功后主动使该设备 Digest 缓存失效，保证紧接着下一次查询拿到最新状态（只读的查询不失效）
+      if (op.kind !== "worker.list" && op.kind !== "project.show") {
         digestCache.delete(info.id);
       }
 

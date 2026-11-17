@@ -784,6 +784,8 @@ export function createLedgerTaskGraphs(
     launchDir: string;
     workers?: () => TaskGraphWorkersBridge | undefined;
     userBlockers?: Pick<LedgerUserBlockers, "raiseIn" | "blockStep" | "ofSteps">;
+    /** hub graph finish 的同一个事务里调：总助的项目档案记 forced（ledger/project-catalog.ts）。 */
+    onGraphFinishedIn?: (p: Pending, projectId: ProjectId) => void;
   } = { launchDir: "" },
 ) {
   const { db, now, write, enqueue } = ctx;
@@ -3377,6 +3379,7 @@ export function createLedgerTaskGraphs(
       t,
       graphRow.id,
     );
+    options.onGraphFinishedIn?.(p, graphRow.project_id);
     if (candidateWorkerIds.size > 0) {
       options.workers?.()?.stopWorkersIn(p, [...candidateWorkerIds]);
     }

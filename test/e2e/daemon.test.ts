@@ -9,7 +9,6 @@ import { taskGraphSkillMarkdown } from "../../src/shared/task-graph-skill.ts";
 import {
   Client,
   agentTexts,
-  isAlive,
   makeEnv,
   messageById,
   messagesOf,
@@ -234,7 +233,7 @@ describe("W5 组装 + 端到端", () => {
     const id = await first.client.post(first.conversationId, "记住暗号：蓝鲸");
     await waitForStatus(first.client, id, "replied");
     expect(await terminate(first.daemon)).toEqual({ code: 0, signal: null });
-    expect(fakePids().filter(isAlive)).toEqual([]);
+    expect(fakePids().filter((pid) => env.isAlive(pid))).toEqual([]);
     expect(existsSync(join(env.home, "state", "lock"))).toBe(false);
 
     const daemon = await env.start();
@@ -250,7 +249,7 @@ describe("W5 组装 + 端到端", () => {
     // 正常重启不补发：没有恢复说明、重发说明
     expect(env.stdinTexts()).toEqual(["记住暗号：蓝鲸", "暗号是什么"]);
     expect(await terminate(daemon)).toEqual({ code: 0, signal: null });
-    expect(fakePids().filter(isAlive)).toEqual([]);
+    expect(fakePids().filter((pid) => env.isAlive(pid))).toEqual([]);
   });
 
   it("关机：一轮中 SIGTERM，假 claude 收到 SIGINT，10 秒内全部退出，消息标已停止", async () => {
@@ -263,7 +262,7 @@ describe("W5 组装 + 端到端", () => {
     expect(await terminate(daemon)).toEqual({ code: 0, signal: null });
     expect(Date.now() - t0).toBeLessThan(10_000);
     expect(env.log().filter((e) => e.kind === "signal").map((e) => (e as { signal: string }).signal)).toEqual(["SIGINT"]);
-    expect(fakePids().filter(isAlive)).toEqual([]);
+    expect(fakePids().filter((pid) => env.isAlive(pid))).toEqual([]);
 
     const again = await env.start();
     const state = await client.withPort(again.port).state();
@@ -283,11 +282,11 @@ describe("W5 组装 + 端到端", () => {
     first.daemon.child.kill("SIGKILL");
     await first.daemon.exited;
     const [orphan] = fakePids();
-    if (process.platform !== "win32") expect(isAlive(orphan!)).toBe(true);
+    if (process.platform !== "win32") expect(env.isAlive(orphan!)).toBe(true);
 
     const daemon = await env.start();
     const client = first.client.withPort(daemon.port);
-    await waitUntil("stale claude killed", () => (isAlive(orphan!) ? undefined : true));
+    await waitUntil("stale claude killed", () => (env.isAlive(orphan!) ? undefined : true));
     await waitForStatus(client, id, "replied");
     // 按行：重启后只写了一行，恢复说明、重发说明和原文在同一行
     expect(env.stdinTexts()).toEqual(["做一件长的事", `${RESTART_RECOVERY_NOTE}\n\n${RESEND_NOTE}\n\n做一件长的事`]);
@@ -298,7 +297,7 @@ describe("W5 组装 + 端到端", () => {
     expect(argvs.length).toBeGreaterThanOrEqual(2);
     expect(argvs.at(-1)!.argv).toContain("--resume");
     await terminate(daemon);
-    expect(fakePids().filter(isAlive)).toEqual([]);
+    expect(fakePids().filter((pid) => env.isAlive(pid))).toEqual([]);
   });
 
   it("claude 崩溃：这一轮的消息标失败带原因；下一条带崩溃说明，照常回复", async () => {
@@ -312,7 +311,7 @@ describe("W5 组装 + 端到端", () => {
     await waitForStatus(client, next, "replied");
     // 按行：崩溃说明和下一条写在同一行；崩溃那一轮的消息标了失败，不再重发
     expect(env.stdinTexts()).toEqual(["第一条", `${CRASH_RECOVERY_NOTE}\n\n第二条`]);
-    expect(isAlive(daemon.child.pid!)).toBe(true);
+    expect(env.isAlive(daemon.child.pid!)).toBe(true);
     await terminate(daemon);
   });
 
@@ -330,7 +329,7 @@ describe("W5 组装 + 端到端", () => {
     expect(failed.failureReason).toMatch(/^claude_not_found: /);
     const s = await client.state();
     expect(s.health.find((h) => h.module === "driver")).toMatchObject({ consecutiveFailures: 3 });
-    expect(isAlive(daemon.child.pid!)).toBe(true);
+    expect(env.isAlive(daemon.child.pid!)).toBe(true);
     expect(await terminate(daemon)).toEqual({ code: 0, signal: null });
   });
 

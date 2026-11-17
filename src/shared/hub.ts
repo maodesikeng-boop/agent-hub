@@ -25,7 +25,7 @@ import type {
   WorkerId,
 } from "./domain.ts";
 import type { HubFileArg } from "./deliverables.ts";
-import type { RouterItem, RouterPmNote, RouterReportLink } from "./router.ts";
+import type { RouterItem, RouterReportLink } from "./router.ts";
 import type { SelfReloadStatus } from "./api.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
 import { AGENT_VENDORS, DEFAULT_AGENT_VENDOR, type AgentVendor, type VendorAvailability } from "./vendors.ts";
@@ -89,7 +89,6 @@ export const HUB_COMMANDS = [
   "schedule.resume",
   "schedule.remove",
   "router.report",
-  "router.note",
   "graph.create",
   "graph.show",
   "graph.list",
@@ -131,7 +130,6 @@ export const HUB_COMMAND_ROLES: Readonly<Record<HubCommand, readonly AgentRole[]
   "schedule.resume": ["pm"],
   "schedule.remove": ["pm"],
   "router.report": ["pm"],
-  "router.note": ["pm"],
   "graph.create": ["pm"],
   "graph.show": ["pm"],
   "graph.list": ["pm"],
@@ -270,11 +268,6 @@ export interface HubArgsMap {
     links?: RouterReportLink[];
     /** `--file [标签=]路径`（可多个，最多 HUB_FILE_ARGS_MAX 个）：存副本，在简报下面列出来。 */
     files?: HubFileArg[];
-  };
-  /** `hub router note`：更新或清空该 PM 的一句话项目近况备忘。 */
-  "router.note": {
-    text?: string;
-    clear?: boolean;
   };
   /** `hub graph create`：从 JSON 规格创建持久化任务流图（DAG）。 */
   "graph.create": {
@@ -592,7 +585,6 @@ interface HubDataMap {
   /** 删之前的样子。 */
   "schedule.remove": { schedule: ScheduleRecord };
   "router.report": { item: RouterItem };
-  "router.note": { note: RouterPmNote | null };
   "graph.create": { graph: TaskGraph };
   "graph.show": { graph: TaskGraph };
   "graph.list": { graphs: TaskGraph[] };

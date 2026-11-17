@@ -43,8 +43,8 @@ export function claudeReadonlyPermissions(policy: ReadonlyPolicy): { allow: stri
 export interface ClaudeReadonlySandboxInput {
   /** 工作目录和 add-dir 的真实路径：默认只有它们和 TMPDIR 能写，denyWrite 把它们盖住（实测 S1：别处本来就写不了）。 */
   denyWrite: string[];
-  /** hub.sock 的真实路径：放行，只读 Worker 才能敲 hub（实测 S6）。 */
-  hubSock: string;
+  /** hub.sock 的真实路径：放行，只读 Worker 才能敲 hub（实测 S6）。不给就一个 socket 都不放行。 */
+  hubSock?: string;
 }
 
 /** claude 的 sandbox 段（只读档）。 */
@@ -78,6 +78,6 @@ export function claudeReadonlySandbox(policy: ReadonlyPolicy, input: ClaudeReado
       denyWrite: [...input.denyWrite],
       denyRead: [...policy.secretPaths, ...policy.secretGlobs.map((glob) => (glob.startsWith("**/") ? `/${glob}` : glob))],
     },
-    network: { allowedDomains: ["*"], allowUnixSockets: [input.hubSock] },
+    network: { allowedDomains: ["*"], allowUnixSockets: input.hubSock === undefined ? [] : [input.hubSock] },
   };
 }
