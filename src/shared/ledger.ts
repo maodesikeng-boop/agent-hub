@@ -54,6 +54,7 @@ import type { PmCapabilitiesPatch, PmCapabilitiesStart, PmCapabilityPolicy } fro
 import type { ReviewSnapshot, ReviewVerifyResult } from "./review.ts";
 import type { SelfReloadStatus } from "./api.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
+import type { SlackMessageOrigin } from "./slack.ts";
 import { API_ERRORS } from "./errors.ts";
 import type { AgentVendor, ModelCatalog } from "./vendors.ts";
 import type { UserBlockerId } from "./user-blockers.ts";
@@ -121,6 +122,8 @@ export interface PostUserMessageInput {
   attachments?: Attachment[];
   /** 输入框指定的派 Worker 的厂商、模型、思考程度（形状界面服务已校验）；写进 meta.workerPick。只能用在项目经理的对话里，别的对话 → LedgerRequestError("invalid")。 */
   workerPick?: WorkerPick;
+  /** 从 Slack 进来的消息的发言人（daemon/slack/ 在入口边界认好的）；写进 meta.origin，发给 agent 时加署名，访客唤醒的轮次按它拦高危 hub 命令。 */
+  origin?: SlackMessageOrigin;
 }
 
 export interface PostUserMessageResult {

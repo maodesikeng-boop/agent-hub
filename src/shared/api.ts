@@ -189,6 +189,21 @@ export const API_PATHS = {
   /** POST（PushUnsubscribeRequest）→ 204。没有这条订阅也是 204。 */
   pushUnsubscribe: "/api/push/unsubscribe",
 
+  // ---- 接入 Slack（docs/slack-design.md）：只在本机，经设备令牌跨机访问一律 forbidden_peer ----
+
+  /** GET → SlackStatusView。 */
+  slack: "/api/slack",
+  /** GET → SlackManifestResponse。 */
+  slackManifest: "/api/slack/manifest",
+  /** PUT（SlackCredentialsRequest）→ SlackStatusView：验过令牌和权限才存，不对 400 并写明缺哪个权限。 */
+  slackCredentials: "/api/slack/credentials",
+  /** POST，没有请求体 → SlackBindCodeResponse：发新码，旧码作废。 */
+  slackBindCode: "/api/slack/bind-code",
+  /** POST，没有请求体 → SlackStatusView：照账本重新对一遍频道（建、改名、归档、拉主人进来）。 */
+  slackResync: "/api/slack/resync",
+  /** POST（SlackDisconnectRequest）→ SlackStatusView：断开并删掉令牌和绑定。 */
+  slackDisconnect: "/api/slack/disconnect",
+
   // ---- 联机：浏览器登录（每个浏览器一条，能单独退出；只在入口上，浏览器从不拿别的设备的令牌） ----
 
   /** GET → AuthStatusResponse：查询当前浏览器会话状态（active / pending_approval / unauthenticated）。 */

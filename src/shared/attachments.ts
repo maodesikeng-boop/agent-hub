@@ -3,6 +3,7 @@
 // 前后端都用这一个文件认附件、拼正文；接口地址在 api.ts 的 API_PATHS.uploads / upload。
 import { API_PATHS } from "./api.ts";
 import { MAX_ATTACHMENTS_PER_MESSAGE, MAX_UPLOAD_BYTES } from "./limits.ts";
+import type { SlackMessageOrigin } from "./slack.ts";
 import type { WorkerPick } from "./worker.ts";
 
 /** 一个上传好的文件。服务端从磁盘上的文件重新算出来，不信客户端报的（见 daemon/uploads.ts 的 resolveUpload）。 */
@@ -28,6 +29,8 @@ export interface UserMessageMeta {
   deliveryConfirmed?: true;
   /** 用户在暂停后按第二次 Esc 把文字与 workerPick 退回了输入框；幂等标记，刷新后仍一致。 */
   rewound?: true;
+  /** 从 Slack 进来的消息：谁说的、主人还是访客、当时是单人还是多人频道（docs/slack-design.md）。网页发的没有。 */
+  origin?: SlackMessageOrigin;
 }
 
 const IMAGE_MIME_BY_EXTENSION: Readonly<Record<string, string>> = {

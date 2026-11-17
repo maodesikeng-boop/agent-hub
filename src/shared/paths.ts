@@ -42,6 +42,8 @@ export interface HubPaths {
   peersFile: string;
   /** state/tunnels.json：ssh 隧道表（docs/hub-tunnel-design.md 第 5 节，daemon/tunnel/table.ts），0600。中心记槽位，连入方记中心。 */
   tunnelsFile: string;
+  /** state/slack-secrets.json：Slack 机器人令牌和应用级令牌（docs/slack-design.md），0600，只读 Worker 禁读，不进数据库。 */
+  slackSecretsFile: string;
   /** state/public-entry.json：公网入口配置 { enabled, hostname }（0600，daemon/ui-server/public-entry.ts）。 */
   publicEntryFile: string;
   /** state/tunnel/：连入方的专用钥匙 id_ed25519（0600）、钉死中心主机公钥的 known_hosts、ssh 子进程号文件。 */
@@ -156,6 +158,7 @@ export function resolveHubPaths(
     providerSecretsFile: joinForBase(stateDir, "provider-secrets.json"),
     deviceFile: joinForBase(stateDir, "device.json"),
     pushVapidFile: joinForBase(stateDir, "push-vapid.json"),
+    slackSecretsFile: joinForBase(stateDir, "slack-secrets.json"),
     pushSubscriptionsFile: joinForBase(stateDir, "push-subscriptions.json"),
     peersFile: joinForBase(stateDir, "peers.json"),
     tunnelsFile: joinForBase(stateDir, "tunnels.json"),

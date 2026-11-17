@@ -26,6 +26,7 @@ export * from "./reminders.ts";
 export * from "./review.ts";
 export * from "./rewind.ts";
 export * from "./sent-files.ts";
+export * from "./slack.ts";
 export * from "./snapshot.ts";
 export * from "./store.ts";
 export * from "./task-graph-compat.ts";

@@ -1035,3 +1035,43 @@ export const PM_CAPABILITY_DESCRIPTION_MAX_CHARS = 200;
 export const PM_CAPABILITY_PATCH_MAX_KEYS = 500;
 /** Codex 云端连接器工具缓存 JSON（含完整工具 Schema，本机实测 2.8 MB）只读扫描字节上限。 */
 export const PM_CAPABILITY_APPS_CACHE_MAX_BYTES = 16 * 1024 * 1024;
+
+// ---- 接入 Slack（docs/slack-design.md 的性能一节）。按一个月 300 个已收工 Worker、3 万条消息算，Worker 不建频道 ----
+/** 一条 Slack 消息里放多少字的正文：markdown 块一条消息合计 12,000 字，留出卡片按钮和署名的余量；更长的拆成几条。 */
+export const SLACK_MESSAGE_MAX_CHARS = 11_000;
+/** 顶层消息用 chat.update 流式刷新时，同一条消息两次刷新至少隔多久。 */
+export const SLACK_STREAM_UPDATE_INTERVAL_MS = 1_500;
+/** 整个工作区每分钟最多发多少次 chat.update（Tier 3 是 50+/分钟，留余量）；超了只合并、不排队。 */
+export const SLACK_UPDATE_BUDGET_PER_MINUTE = 45;
+/** 串里用原生流式（chat.appendStream，Tier 4）时两次追加至少隔多久。 */
+export const SLACK_NATIVE_STREAM_APPEND_INTERVAL_MS = 500;
+/** 原生流式一条最长开多久就收尾换下一条：Slack 10 分钟强制结束，空闲约 5 分钟失效（2026-10 第三方实测 301 秒还在、311 秒已失效）。 */
+export const SLACK_NATIVE_STREAM_MAX_MS = 8 * 60_000;
+export const SLACK_NATIVE_STREAM_IDLE_MAX_MS = 4 * 60_000;
+/** 多人频道里没唤醒机器人的聊天，每个频道最多记多少条、多少字、多久以内，下一次唤醒时带给 agent。 */
+export const SLACK_CONTEXT_WINDOW_MESSAGES = 20;
+export const SLACK_CONTEXT_WINDOW_CHARS = 4_000;
+export const SLACK_CONTEXT_WINDOW_MAX_AGE_MS = 2 * 60 * 60_000;
+/** 内存里最多给多少个频道记背景聊天和成员（频道数 = 项目经理数 + 1，留余量）。 */
+export const SLACK_CHANNEL_CACHE_MAX = 200;
+/** 频道成员缓存：事件实时更新，另外隔这么久对一遍；查失败只记这么久。每个频道最多记这么多成员。 */
+export const SLACK_MEMBERS_TTL_MS = 10 * 60_000;
+export const SLACK_MEMBERS_RETRY_MS = 30_000;
+export const SLACK_CHANNEL_MEMBERS_MAX = 1_000;
+/** 发言人显示名缓存：最多多少人、多久，查失败只记多久。显示名最多多少字。 */
+export const SLACK_USER_CACHE_MAX = 500;
+export const SLACK_USER_CACHE_TTL_MS = 60 * 60_000;
+export const SLACK_USER_CACHE_RETRY_MS = 30_000;
+export const SLACK_DISPLAY_NAME_MAX_CHARS = 40;
+/** slack_posts 里已定稿、不再会更新的行留多少天（等拍板的卡不删）。 */
+export const SLACK_POST_RETENTION_DAYS = 30;
+/** 守护进程重启或重连后，每个频道最多补发多少条离线期间的消息，更早的只发一行“还有 N 条，去网页看”。 */
+export const SLACK_CATCHUP_MAX_MESSAGES = 20;
+/** 绑定码多久失效。 */
+export const SLACK_BIND_CODE_TTL_MS = 10 * 60_000;
+/** 进来的事件排队上限（先 ack 再处理）；满了丢最旧的背景聊天，不丢主人的话和按钮。 */
+export const SLACK_INBOUND_QUEUE_MAX = 200;
+/** 要发出去的操作排队上限；满了先合并同一条消息的流式刷新。 */
+export const SLACK_OUTBOUND_QUEUE_MAX = 500;
+/** state/slack-secrets.json 的权限。 */
+export const SLACK_SECRETS_FILE_MODE = 0o600;
