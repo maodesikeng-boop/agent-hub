@@ -143,7 +143,6 @@ function mergeFindingsForShot(
       const dimension = dimensionOfRule(f.rule);
       for (let i = 0; i < merged.length; i++) {
         const candidate = merged[i]!;
-        // 只并同一项里的：跨项并成一条，被并进来的那家这一项就少算一条，分会被抬高
         if (candidate.by.includes(source.by) || dimensionOfRule(candidate.rule) !== dimension) continue;
         const iou = boxIou(candidate.box, f.box);
         if (iou >= FINDING_MATCH_IOU && iou > bestIou) {

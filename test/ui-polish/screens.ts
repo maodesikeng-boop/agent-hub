@@ -414,7 +414,6 @@ export function batchShots<T extends Pick<Shot, "screen" | "viewport">>(shots: r
   if (total === 0) return [];
   const count = Math.ceil(total / batchSize);
   const batches: T[][] = Array.from({ length: count }, () => []);
-  // 哨兵从最后一批往前轮着放；平常的图从第一批往后填，避开已经有同一界面同一视口的批（同名、同 sha256 的两张图挨着，评委一眼就认出来）
   sentinels.forEach((shot, i) => batches[count - 1 - (i % count)]!.push(shot));
   const same = (a: T, b: T) => a.screen.id === b.screen.id && a.viewport === b.viewport;
   for (const shot of shots) {
