@@ -24,7 +24,7 @@ import {
   materializeMcpForVendor,
   unwrapMcpRemoteBridge,
 } from "../_common/sync/mcp.ts";
-import { listCanonicalSkillNames, readSkillDescription } from "../_common/sync/skills.ts";
+import { listCanonicalSkillNames, readSkillDescription, readSkillName } from "../_common/sync/skills.ts";
 import { patchTomlMapEntries, readTomlObjectFile } from "../_common/sync/toml.ts";
 import codexSpec from "./spec.ts";
 
@@ -180,7 +180,8 @@ function scanCodexPlugins(codexHome: string, configData: Record<string, unknown>
     for (const sName of listCanonicalSkillNames(skillsRoot).names) {
       const dir = join(skillsRoot, sName);
       out.skills.push({
-        name: `${pluginName}:${sName}`,
+        // codex 认 frontmatter 的 name（spreadsheets 插件的目录是 spreadsheets，名字是 Spreadsheets），skills.config 按这个名字关
+        name: `${pluginName}:${readSkillName(dir) ?? sName}`,
         dir,
         description: readSkillDescription(dir),
         source,

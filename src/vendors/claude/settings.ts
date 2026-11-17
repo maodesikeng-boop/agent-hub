@@ -6,7 +6,7 @@ import type { SessionRole } from "../../shared/domain.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
 import type { SessionCapabilities } from "../../shared/pm-capabilities.ts";
 import type { ReadonlyPolicy } from "../../shared/readonly-policy.ts";
-import { claudeCapabilitySettings, type ClaudeCapabilitySettings } from "./capabilities.ts";
+import { claudeCapabilityDenyRules, claudeCapabilitySettings, type ClaudeCapabilitySettings } from "./capabilities.ts";
 import { CLAUDE_READONLY_PERMISSION_MODE, claudeReadonlyPermissions, claudeReadonlySandbox, type ClaudeReadonlySandbox } from "./readonly-settings.ts";
 
 /** 放行 hub 命令的规则（M2 起在 hub.ts，M3 W3 挪来和别的权限放一起，命令名用 names.ts 的）。 */
@@ -90,8 +90,10 @@ interface PlainSandbox {
 export function buildSessionSettings(input: SessionSettingsInput): SessionSettings {
   const hubAllow = input.hubSock === undefined ? [] : [HUB_ALLOW_RULE];
   const capSettings = input.capabilities ? claudeCapabilitySettings(input.capabilities) : {};
+  const capDeny = input.capabilities ? claudeCapabilityDenyRules(input.capabilities) : [];
   if (input.readonly) {
-    const { allow, deny } = claudeReadonlyPermissions(input.readonly.policy);
+    const { allow, deny: readonlyDeny } = claudeReadonlyPermissions(input.readonly.policy);
+    const deny = [...readonlyDeny, ...capDeny];
     const platform = input.platform ?? process.platform;
     if (platform === "win32") {
       return {
@@ -116,6 +118,7 @@ export function buildSessionSettings(input: SessionSettingsInput): SessionSettin
     settings.autoMemoryEnabled = false;
     if (input.osSandboxed) sandbox.enabled = false;
   }
+  if (capDeny.length > 0) settings.permissions.deny = [...(settings.permissions.deny ?? []), ...capDeny];
   return { ...settings, ...capSettings };
 }
 

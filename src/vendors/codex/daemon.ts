@@ -1,5 +1,6 @@
 // codex 的守护进程侧（docs/vendor-plugin-design.md 3.3 节）：daemon-registry.ts 按名单加载这个文件的默认导出。
 import { defineVendorDaemon } from "../daemon-types.ts";
+import { codexCapabilityArgs } from "./capabilities.ts";
 import { codexCatalogProbe, createCodexCatalogSource } from "./catalog.ts";
 import { codexComposerBase, createCodexComposer } from "./composer.ts";
 import { createCodexDriver } from "./driver.ts";
@@ -16,6 +17,7 @@ export default defineVendorDaemon({
   transcriptPath: codexTranscriptPath,
   // codex 起会话时没法不存记录：只有那一个 rollout 文件
   sessionFiles: (ref, roots) => [codexTranscriptPath(ref, roots)].filter((file) => file !== null),
+  capabilityLaunch: codexCapabilityArgs,
   sync: codexSyncAdapter,
   setup: codexSetupAdapter,
 });

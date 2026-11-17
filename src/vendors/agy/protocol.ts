@@ -83,7 +83,9 @@ export function buildAgyArgs(
   } else {
     args.push(...AGY_AUTO_PERMISSION_ARGS);
     if (capDeny.length > 0) {
-      args.push("--settings", JSON.stringify({ permissions: { deny: capDeny } }));
+      // agy 多个 --settings 只认最后一个：包进 OS 沙箱的 Worker（有 writeScope）前面那条关终端沙箱的设置要并进这一条
+      const sandboxOff = files.writeScope ? { enableTerminalSandbox: false } : {};
+      args.push("--settings", JSON.stringify({ ...sandboxOff, permissions: { deny: capDeny } }));
     }
   }
   args.push(...agentLaunchArgs({ vendor: "agy", model: session.model, effort: session.effort }));

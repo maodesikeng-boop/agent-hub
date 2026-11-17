@@ -1,7 +1,6 @@
 // 启动文件的指纹（W3 的 prepareLaunch 用，见 driver.ts 的 LaunchFiles.fingerprint）。用到 node:crypto，
 // 只给守护进程和测试用，不在 index.ts 里导出。
 import { createHash } from "node:crypto";
-import type { SessionCapabilities } from "./pm-capabilities.ts";
 import type { ReadonlyPolicy } from "./readonly-policy.ts";
 
 /**
@@ -16,8 +15,8 @@ export interface LaunchContents {
   readonly?: ReadonlyPolicy;
   /** 产品自带技能的名字和说明（项目经理会话才有，shared/task-graph-skill.ts 的 taskGraphSkillCatalogEntry）：各家在会话开头读进技能清单，改了要重启。没给的算出来跟以前一样。 */
   skills?: string;
-  /** 这次会话按项目经理选择收窄的能力清单；没有（全开）不给，算出来的指纹和存量完全一样。 */
-  capabilities?: SessionCapabilities;
+  /** 这家把能力清单翻成的启动参数或设置（VendorDaemon.capabilityLaunch）；全开或这家不按会话管时不给，算出来的指纹和存量完全一样。 */
+  capabilityLaunch?: unknown;
 }
 
 /** sha256 十六进制。两段先按 JSON 数组编码再算，内容挪到另一段算不一样。同样的输入一定得到同样的结果。 */
@@ -25,6 +24,6 @@ export function launchFingerprint(contents: LaunchContents): string {
   const parts: unknown[] = [contents.prompt, contents.settings];
   if (contents.readonly !== undefined) parts.push(contents.readonly);
   if (contents.skills !== undefined) parts.push({ skills: contents.skills });
-  if (contents.capabilities !== undefined) parts.push({ capabilities: contents.capabilities });
+  if (contents.capabilityLaunch !== undefined) parts.push({ capabilityLaunch: contents.capabilityLaunch });
   return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
 }

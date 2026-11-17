@@ -2,6 +2,7 @@
 // - launchFiles：生成关闭 dsh 自带 Seatbelt/bwrap 沙箱（设为 danger-full-access）的 Cordis overlay patch 文件；
 // - catalog：零子进程读取本地凭据就绪状态并返回打包目录（绝不拉起 dsh 新建持久空会话）；输入框命令、换代复制、原始记录走通用兜底。
 import { defineVendorDaemon } from "../daemon-types.ts";
+import { deepseekSkillFilesystemConfig } from "./capabilities.ts";
 import { createDeepSeekCatalogSource, deepseekCatalogProbe } from "./catalog.ts";
 import { buildDeepSeekPatchSettings, createDeepSeekDriver } from "./driver.ts";
 import { deepseekSetupAdapter } from "./setup.ts";
@@ -13,6 +14,7 @@ export default defineVendorDaemon({
     probe: deepseekCatalogProbe,
     source: (options) => createDeepSeekCatalogSource(options),
   },
+  capabilityLaunch: (caps) => ({ skills: deepseekSkillFilesystemConfig(caps, undefined), mcp: caps.deny.mcp }),
   launchFiles: () => ({ settings: buildDeepSeekPatchSettings() }),
   sync: deepseekSyncAdapter,
   setup: deepseekSetupAdapter,

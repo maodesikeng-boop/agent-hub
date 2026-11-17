@@ -198,8 +198,7 @@ function unquoteYamlScalar(raw: string): string {
   return trimmed;
 }
 
-/** 只读提取 `<skillDir>/SKILL.md` 的 frontmatter description，截断到 PM_CAPABILITY_DESCRIPTION_MAX_CHARS。 */
-export function readSkillDescription(skillDir: string): string | null {
+function readSkillFrontmatterLines(skillDir: string): string[] | null {
   const skillFile = join(skillDir, "SKILL.md");
   let head = "";
   try {
@@ -221,7 +220,26 @@ export function readSkillDescription(skillDir: string): string | null {
   if (lines[0]?.trim() !== "---") return null;
   const closeIdx = lines.findIndex((line, idx) => idx > 0 && line.trim() === "---");
   if (closeIdx <= 0) return null;
-  const fmLines = lines.slice(1, closeIdx);
+  return lines.slice(1, closeIdx);
+}
+
+/** 只读提取 `<skillDir>/SKILL.md` 的 frontmatter name（单行值）；没有或读不了返回 null。 */
+export function readSkillName(skillDir: string): string | null {
+  const fmLines = readSkillFrontmatterLines(skillDir);
+  if (fmLines === null) return null;
+  for (const line of fmLines) {
+    const match = /^name\s*:\s*(.*)$/.exec(line);
+    if (!match) continue;
+    const name = unquoteYamlScalar(match[1]!).trim();
+    return name === "" ? null : name;
+  }
+  return null;
+}
+
+/** 只读提取 `<skillDir>/SKILL.md` 的 frontmatter description，截断到 PM_CAPABILITY_DESCRIPTION_MAX_CHARS。 */
+export function readSkillDescription(skillDir: string): string | null {
+  const fmLines = readSkillFrontmatterLines(skillDir);
+  if (fmLines === null) return null;
 
   for (let i = 0; i < fmLines.length; i++) {
     const match = /^description\s*:\s*(.*)$/.exec(fmLines[i]!);

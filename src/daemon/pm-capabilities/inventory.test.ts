@@ -77,6 +77,41 @@ describe("createCapabilityInventory", () => {
     expect(mcpItems[0]!.vendors).toEqual(["claude", "codex"]);
   });
 
+  it("codex 插件技能按 SKILL.md frontmatter 的 name 起名，插件技能和插件 MCP 记下这家来自哪个插件", async () => {
+    mkdirSync(join(userHome, ".codex"), { recursive: true });
+    writeFileSync(
+      join(userHome, ".codex", "config.toml"),
+      [
+        '[plugins."spreadsheets@openai-primary-runtime"]',
+        "enabled = true",
+        '[plugins."unified-computer-use@openai-bundled"]',
+        "enabled = true",
+        "[mcp_servers.codegraph]",
+        'command = "codegraph"',
+        "",
+      ].join("\n"),
+    );
+    const sheetsRoot = join(userHome, ".codex", "plugins", "cache", "openai-primary-runtime", "spreadsheets", "26.1111.10930");
+    mkdirSync(join(sheetsRoot, "skills", "spreadsheets"), { recursive: true });
+    writeFileSync(
+      join(sheetsRoot, "skills", "spreadsheets", "SKILL.md"),
+      "---\nname: Spreadsheets\ndescription: Edit sheets\n---\nBody\n",
+    );
+    const cuaRoot = join(userHome, ".codex", "plugins", "cache", "openai-bundled", "unified-computer-use", "26.1106.51428");
+    mkdirSync(cuaRoot, { recursive: true });
+    writeFileSync(join(cuaRoot, ".mcp.json"), JSON.stringify({ mcpServers: { cua_repl: { command: "node_repl" } } }));
+
+    const inv = createCapabilityInventory({ ctx: { userHome, env: {} }, now: () => now });
+    const res = await inv.get({ projectDir: null });
+
+    expect(res.items.some((i) => i.key === "skill:spreadsheets:spreadsheets")).toBe(false);
+    const sheet = res.items.find((i) => i.key === "skill:spreadsheets:Spreadsheets");
+    expect(sheet?.plugins).toEqual({ codex: "spreadsheets@openai-primary-runtime" });
+    const cua = res.items.find((i) => i.key === "mcp:cua_repl");
+    expect(cua?.plugins).toEqual({ codex: "unified-computer-use@openai-bundled" });
+    expect(res.items.find((i) => i.key === "mcp:codegraph")?.plugins).toBeUndefined();
+  });
+
   it("云端连接器按厂商分开算，键带厂商编号", async () => {
     writeFileSync(
       join(userHome, ".claude.json"),

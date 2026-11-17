@@ -503,6 +503,7 @@ describe("prepareLaunch（M2、M3）", () => {
         mcp: ["codegraph"],
         connectors: ["claude.ai Gmail"],
         plugins: [],
+        pluginOf: { skills: {}, mcp: {} },
       });
       const pmSettings = JSON.parse(readFileSync(pmFiles.settingsFile!, "utf8"));
       expect(pmSettings.skillOverrides).toEqual({ "aws-auth": "off" });
@@ -547,6 +548,57 @@ describe("prepareLaunch（M2、M3）", () => {
       expect(workerAllOpen.capabilities).toBeUndefined();
       expect(workerAllOpen.fingerprint).not.toBe(workerRestricted.fingerprint);
       expect(seenProjectDirs.every((p) => p === projectContext().project!.mainFolder)).toBe(true);
+    });
+
+    it("fingerprint 只算各家翻出来的结果：多了一个开着的全局技能，claude、codex 不重启，靠允许清单的 pi 重启", async () => {
+      const policy = applyCapabilitiesPatch(defaultPmCapabilityPolicy(1), {
+        set: { "skill:aws-auth": false, "mcp:codegraph": false },
+      });
+      let inventory = sampleInventory;
+      const prepare = createLaunchPreparer({
+        launchDir,
+        dataDir: dir,
+        stateDir: join(dir, "state"),
+        homeDir: "/Users/u",
+        osSandboxed: true,
+        worktreesDir,
+        getLaunchContext: (id) => contexts.get(id)!,
+        tokens,
+        hubSock,
+        hubBinDir: "/agent-hub/run/bin",
+        basePath: "/usr/bin:/bin",
+        getPmCapabilityPolicy: () => policy,
+        capabilityInventory: { get: async () => inventory },
+      });
+      contexts.set(9, workerContext());
+      const before = {
+        claude: (await prepare(row(7))).fingerprint,
+        codex: (await prepare({ ...row(9, dir, "worker"), vendor: "codex" })).fingerprint,
+        pi: (await prepare({ ...row(9, dir, "worker"), vendor: "pi" })).fingerprint,
+      };
+      inventory = {
+        ...sampleInventory,
+        items: [
+          ...sampleInventory.items,
+          {
+            key: "skill:new-global",
+            kind: "skill",
+            name: "new-global",
+            description: null,
+            groupId: "skill:global",
+            vendors: ["claude", "codex", "pi"],
+            dir: "/skills/new-global",
+          },
+        ],
+      };
+      const after = {
+        claude: (await prepare(row(7))).fingerprint,
+        codex: (await prepare({ ...row(9, dir, "worker"), vendor: "codex" })).fingerprint,
+        pi: (await prepare({ ...row(9, dir, "worker"), vendor: "pi" })).fingerprint,
+      };
+      expect(after.claude).toBe(before.claude);
+      expect(after.codex).toBe(before.codex);
+      expect(after.pi).not.toBe(before.pi);
     });
   });
 });

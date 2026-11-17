@@ -52,6 +52,11 @@ export interface VendorDaemon {
   sessionFiles?(ref: TranscriptRef, roots: TranscriptRoots): string[];
   /** 可选：每次启动前要生成的这家专属的东西（claude 的 --settings 文件、Worker 多设的环境变量）。缺了不生成（docs/vendor-plugin-design.md 的 A15）。 */
   launchFiles?(input: VendorLaunchInput): VendorLaunchFiles;
+  /**
+   * 可选：这家把能力清单翻成的启动参数或设置（各家 capabilities.ts），守护进程只拿来算 fingerprint：
+   * 翻出来一样就不重启（改了这家看不到或用不上的项不算）。缺了 = 这家不按会话管能力，能力不进 fingerprint。
+   */
+  capabilityLaunch?(caps: SessionCapabilities): unknown;
   /** 可选：全厂商 MCP、云端连接器与 Skill 扫描及局部补丁适配器（daemon/vendor-sync/）。 */
   sync?: VendorSyncAdapter;
   /** 可选：Settings → Providers 一键安装、更新与界面内直接登录适配器（daemon/provider-manager/）。 */

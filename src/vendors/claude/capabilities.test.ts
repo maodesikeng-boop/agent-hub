@@ -5,14 +5,20 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { launchFingerprint } from "../../shared/launch.ts";
 import type { SessionCapabilities } from "../../shared/pm-capabilities.ts";
-import { claudeCapabilitySettings } from "./capabilities.ts";
+import { buildReadonlyPolicy } from "../../shared/readonly-policy.ts";
+import { claudeCapabilityDenyRules, claudeCapabilitySettings } from "./capabilities.ts";
 import { buildSessionSettings } from "./settings.ts";
 
 function emptyCaps(): SessionCapabilities {
   return {
-    deny: { skills: [], mcp: [], connectors: [], plugins: [] },
+    deny: { skills: [], mcp: [], connectors: [], plugins: [], pluginOf: { skills: {}, mcp: {} } },
     allow: { skills: [], mcp: [] },
   };
+}
+
+function denyCaps(deny: Partial<SessionCapabilities["deny"]>): SessionCapabilities {
+  const base = emptyCaps();
+  return { ...base, deny: { ...base.deny, ...deny } };
 }
 
 const canRunLiveClaude =
@@ -60,6 +66,20 @@ describe("claudeCapabilitySettings", () => {
     });
   });
 
+  it("插件里的技能不进 skillOverrides（claude 对插件技能不认它），插件 MCP 照样进 deniedMcpServers", () => {
+    const res = claudeCapabilitySettings(
+      denyCaps({
+        skills: ["aws-auth", "data:analyze"],
+        mcp: ["plugin:parallel:parallel-search"],
+        pluginOf: { skills: { "data:analyze": "data@synced" }, mcp: { "plugin:parallel:parallel-search": "parallel@market" } },
+      }),
+    );
+    expect(res).toEqual({
+      skillOverrides: { "aws-auth": "off" },
+      deniedMcpServers: [{ serverName: "plugin:parallel:parallel-search" }],
+    });
+  });
+
   it("deny 全空时返回空对象，设置文件和现在逐字相同", () => {
     const extra = claudeCapabilitySettings(emptyCaps());
     expect(extra).toEqual({});
@@ -87,6 +107,7 @@ describe("claudeCapabilitySettings", () => {
         mcp: ["z-mcp", "a-mcp"],
         connectors: ["claude.ai Slack", "claude.ai Gmail"],
         plugins: ["sales@synced", "data@synced"],
+        pluginOf: { skills: {}, mcp: {} },
       },
     });
     const b = claudeCapabilitySettings({
@@ -96,6 +117,7 @@ describe("claudeCapabilitySettings", () => {
         mcp: ["a-mcp", "z-mcp"],
         connectors: ["claude.ai Gmail", "claude.ai Slack"],
         plugins: ["data@synced", "sales@synced"],
+        pluginOf: { skills: {}, mcp: {} },
       },
     });
     const jsonA = JSON.stringify(a);
@@ -104,6 +126,17 @@ describe("claudeCapabilitySettings", () => {
     expect(launchFingerprint({ prompt: "p", settings: jsonA })).toBe(
       launchFingerprint({ prompt: "p", settings: jsonB }),
     );
+  });
+
+  it("同样的输入键顺序相同，fingerprint 不变（插件技能拒绝规则也排序）", () => {
+    const a = claudeCapabilityDenyRules(
+      denyCaps({ skills: ["s:b", "s:a"], pluginOf: { skills: { "s:b": "s@m", "s:a": "s@m" }, mcp: {} } }),
+    );
+    const b = claudeCapabilityDenyRules(
+      denyCaps({ skills: ["s:a", "s:b"], pluginOf: { skills: { "s:a": "s@m", "s:b": "s@m" }, mcp: {} } }),
+    );
+    expect(a).toEqual(["Skill(s:a)", "Skill(s:b)"]);
+    expect(b).toEqual(a);
   });
 
   it.runIf(canRunLiveClaude)(
@@ -126,6 +159,7 @@ describe("claudeCapabilitySettings", () => {
             mcp: ["codegraph"],
             connectors: ["claude.ai Gmail"],
             plugins: ["sales@synced"],
+            pluginOf: { skills: {}, mcp: {} },
           },
         });
         const settingsPath = join(dir, "settings.json");
@@ -181,4 +215,50 @@ describe("claudeCapabilitySettings", () => {
     },
     25_000,
   );
+});
+
+describe("claudeCapabilityDenyRules", () => {
+  it("插件里关掉的技能每个一条 Skill(<名字>)，非插件技能不写", () => {
+    const rules = claudeCapabilityDenyRules(
+      denyCaps({
+        skills: ["aws-auth", "sales:account-plan", "data:analyze"],
+        pluginOf: { skills: { "sales:account-plan": "sales@synced", "data:analyze": "data@synced" }, mcp: {} },
+      }),
+    );
+    expect(rules).toEqual(["Skill(data:analyze)", "Skill(sales:account-plan)"]);
+  });
+
+  it("所属插件整个关了的技能不再写（enabledPlugins 已经让它不见）", () => {
+    const rules = claudeCapabilityDenyRules(
+      denyCaps({
+        skills: ["sales:account-plan", "data:analyze"],
+        plugins: ["sales@synced"],
+        pluginOf: { skills: { "sales:account-plan": "sales@synced", "data:analyze": "data@synced" }, mcp: {} },
+      }),
+    );
+    expect(rules).toEqual(["Skill(data:analyze)"]);
+  });
+});
+
+describe("buildSessionSettings 合并插件技能的拒绝规则", () => {
+  const caps = denyCaps({ skills: ["data:analyze"], pluginOf: { skills: { "data:analyze": "data@synced" }, mcp: {} } });
+  const base = { hubSock: "/tmp/hub.sock", stateDir: "/tmp/state", osSandboxed: true, capabilities: caps } as const;
+
+  it("项目经理：permissions.deny 只有这一条", () => {
+    expect(buildSessionSettings({ ...base, role: "pm" }).permissions.deny).toEqual(["Skill(data:analyze)"]);
+  });
+
+  it("普通 Worker：接在 state/ 的拒绝规则后面", () => {
+    const deny = buildSessionSettings({ ...base, role: "worker" }).permissions.deny ?? [];
+    expect(deny[0]).toMatch(/^Edit\(/);
+    expect(deny.at(-1)).toBe("Skill(data:analyze)");
+  });
+
+  it("只读 Worker：接在只读规则后面，只读规则一条不少", () => {
+    const readonly = { policy: buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: "/tmp/state" }), denyWrite: ["/tmp/w"] };
+    const withCaps = buildSessionSettings({ ...base, role: "worker", readonly });
+    const without = buildSessionSettings({ ...base, capabilities: undefined, role: "worker", readonly });
+    expect(without.permissions.deny?.length).toBeGreaterThan(0);
+    expect(withCaps.permissions.deny).toEqual([...(without.permissions.deny ?? []), "Skill(data:analyze)"]);
+  });
 });

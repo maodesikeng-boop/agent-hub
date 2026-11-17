@@ -8,9 +8,14 @@ import { codexCapabilityArgs } from "./capabilities.ts";
 
 function emptyCaps(): SessionCapabilities {
   return {
-    deny: { skills: [], mcp: [], connectors: [], plugins: [] },
+    deny: { skills: [], mcp: [], connectors: [], plugins: [], pluginOf: { skills: {}, mcp: {} } },
     allow: { skills: [], mcp: [] },
   };
+}
+
+function denyCaps(deny: Partial<SessionCapabilities["deny"]>): SessionCapabilities {
+  const base = emptyCaps();
+  return { ...base, deny: { ...base.deny, ...deny } };
 }
 
 const canRunLiveCodex =
@@ -18,53 +23,59 @@ const canRunLiveCodex =
   spawnSync("codex", ["--version"], { stdio: "ignore" }).status === 0;
 
 describe("codexCapabilityArgs", () => {
-  it("关掉的技能合成一条 skills.config 覆盖，按名字禁用", () => {
-    const args = codexCapabilityArgs({
-      ...emptyCaps(),
-      deny: { ...emptyCaps().deny, skills: ["pdf", "aws-auth"] },
-    });
-    expect(args).toEqual(["-c", 'skills.config=[{name="aws-auth",enabled=false},{name="pdf",enabled=false}]']);
-  });
-
-  it("关掉的 MCP 各一条 mcp_servers.<名字>.enabled=false", () => {
-    const args = codexCapabilityArgs({
-      ...emptyCaps(),
-      deny: { ...emptyCaps().deny, mcp: ["codegraph", "aws-mcp"] },
-    });
+  it("关掉的技能合成一条 skills.config 覆盖，按名字禁用，插件技能也一样", () => {
+    const args = codexCapabilityArgs(
+      denyCaps({
+        skills: ["pdf", "aws-auth", "spreadsheets:Spreadsheets"],
+        pluginOf: { skills: { "spreadsheets:Spreadsheets": "spreadsheets@openai-primary-runtime" }, mcp: {} },
+      }),
+    );
     expect(args).toEqual([
       "-c",
-      "mcp_servers.aws-mcp.enabled=false",
-      "-c",
-      "mcp_servers.codegraph.enabled=false",
+      'skills.config=[{name="aws-auth",enabled=false},{name="pdf",enabled=false},{name="spreadsheets:Spreadsheets",enabled=false}]',
     ]);
   });
 
-  it("关掉的连接器各一条 apps.<编号>.enabled=false", () => {
-    const args = codexCapabilityArgs({
-      ...emptyCaps(),
-      deny: { ...emptyCaps().deny, connectors: ["connector_openai_chatgpt_pets"] },
-    });
-    expect(args).toEqual(["-c", "apps.connector_openai_chatgpt_pets.enabled=false"]);
-  });
-
-  it("名字带点或空格的键段加引号", () => {
-    const args = codexCapabilityArgs({
-      ...emptyCaps(),
-      deny: {
-        skills: [],
-        mcp: ["my.server"],
-        connectors: ["my app"],
-        plugins: ["slack@claude-plugins-official"],
-      },
-    });
+  it("config.toml 里的 MCP 合成一条 mcp_servers 内联表，名字放引号键里（带点、空格也行）", () => {
+    const args = codexCapabilityArgs(denyCaps({ mcp: ["codegraph", "my.server", "aws-mcp"] }));
     expect(args).toEqual([
       "-c",
-      'mcp_servers."my.server".enabled=false',
-      "-c",
-      'apps."my app".enabled=false',
-      "-c",
-      'plugins."slack@claude-plugins-official".enabled=false',
+      'mcp_servers={"aws-mcp"={enabled=false},"codegraph"={enabled=false},"my.server"={enabled=false}}',
     ]);
+  });
+
+  it("插件带的 MCP 写到 plugins.<插件>.mcp_servers 下，不进顶层 mcp_servers（顶层没定义的服务器会让 app-server 退出）", () => {
+    const args = codexCapabilityArgs(
+      denyCaps({
+        mcp: ["codegraph", "cua_repl", "gmail"],
+        pluginOf: {
+          skills: {},
+          mcp: { cua_repl: "unified-computer-use@openai-bundled", gmail: "gmail@openai-curated" },
+        },
+      }),
+    );
+    expect(args).toEqual([
+      "-c",
+      'mcp_servers={"codegraph"={enabled=false}}',
+      "-c",
+      'plugins={"gmail@openai-curated"={mcp_servers={"gmail"={enabled=false}}},"unified-computer-use@openai-bundled"={mcp_servers={"cua_repl"={enabled=false}}}}',
+    ]);
+  });
+
+  it("整个插件都关时也只逐项关，不发 plugins.<编号>.enabled", () => {
+    const args = codexCapabilityArgs(
+      denyCaps({
+        skills: ["visualize:visualize"],
+        plugins: ["visualize@openai-bundled"],
+        pluginOf: { skills: { "visualize:visualize": "visualize@openai-bundled" }, mcp: {} },
+      }),
+    );
+    expect(args).toEqual(["-c", 'skills.config=[{name="visualize:visualize",enabled=false}]']);
+  });
+
+  it("关掉的连接器合成一条 apps 内联表", () => {
+    const args = codexCapabilityArgs(denyCaps({ connectors: ["connector_openai_chatgpt_pets", "my app"] }));
+    expect(args).toEqual(["-c", 'apps={"connector_openai_chatgpt_pets"={enabled=false},"my app"={enabled=false}}']);
   });
 
   it("deny 全空返回空数组", () => {
@@ -72,7 +83,7 @@ describe("codexCapabilityArgs", () => {
   });
 
   it.runIf(canRunLiveCodex)(
-    "真机：带这些参数起 app-server，skills/list 里该技能 enabled 为 false、app/list 里该连接器 isEnabled 为 false",
+    "真机：带这些参数起 app-server（插件 MCP 的覆盖不让它退出），skills/list 里该技能 enabled 为 false、app/list 里该连接器 isEnabled 为 false",
     async () => {
       const dir = mkdtempSync(join(tmpdir(), "codex-cap-test-"));
       try {
@@ -82,15 +93,14 @@ describe("codexCapabilityArgs", () => {
           join(skillDir, "SKILL.md"),
           "---\nname: probe-codex-off\ndescription: Probe codex skill\n---\nBody\n",
         );
-        const extraArgs = codexCapabilityArgs({
-          ...emptyCaps(),
-          deny: {
+        const extraArgs = codexCapabilityArgs(
+          denyCaps({
             skills: ["probe-codex-off"],
-            mcp: [],
+            mcp: ["probe-plugin-mcp"],
             connectors: ["connector_openai_chatgpt_pets"],
-            plugins: [],
-          },
-        });
+            pluginOf: { skills: {}, mcp: { "probe-plugin-mcp": "probe-plugin@probe-market" } },
+          }),
+        );
         const { skillsResult, appsResult } = await new Promise<{
           skillsResult: unknown;
           appsResult: unknown;

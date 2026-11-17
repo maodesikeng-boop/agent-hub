@@ -1059,6 +1059,7 @@ describe("GET、PATCH /api/pms/:id/capabilities 项目经理能力库存与选�
     for (const v of AGENT_VENDORS) {
       expect(view.isolation[v]).toEqual(vendorSpec(v).capabilities.isolation);
     }
+    expect(view.pluginIsolation).toEqual({ claude: { skill: "tool_deny" } });
     expect(seenScopes).toEqual(["/code/proj-3"]);
     expect(invalidated).toBe(0);
 

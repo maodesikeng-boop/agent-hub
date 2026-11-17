@@ -40,6 +40,8 @@ export interface CapabilityItem {
   /** 技能在磁盘上的目录（MCP 和连接器没有）；不同厂商指向不同目录时按 skillDirs 区分。 */
   dir?: string;
   skillDirs?: Readonly<Partial<Record<AgentVendor, string>>>;
+  /** 哪几家是从插件拿到它的：厂商 → 插件编号。分组只记第一家的来源，按插件关要看这里。 */
+  plugins?: Readonly<Partial<Record<AgentVendor, string>>>;
 }
 
 export interface CapabilityGroup {
@@ -76,12 +78,20 @@ export interface SkillRef {
  * 支持禁用清单的用 deny，只支持允许清单的用 allow。
  */
 export interface SessionCapabilities {
-  /** plugins：一整组都关掉的插件（claude enabledPlugins、codex plugins.<id>.enabled），比逐项关更干净。 */
-  deny: { skills: readonly string[]; mcp: readonly string[]; connectors: readonly string[]; plugins: readonly string[] };
+  deny: {
+    /** 关掉的全部技能、MCP 名字，插件带的也在里面。 */
+    skills: readonly string[];
+    mcp: readonly string[];
+    connectors: readonly string[];
+    /** 这家看到的项全关了的插件（claude 用 enabledPlugins 整个关）。 */
+    plugins: readonly string[];
+    /** skills、mcp 里哪些是这家从插件拿到的：名字 → 插件编号（claude 插件技能、codex 插件 MCP 的开关写法不同）。 */
+    pluginOf: { skills: Readonly<Record<string, string>>; mcp: Readonly<Record<string, string>> };
+  };
   allow: { skills: readonly SkillRef[]; mcp: readonly string[] };
 }
 
-/** 一家厂商对一类能力能做到什么：session = 按会话隔离；tool_deny = 服务器照起，工具调用被拒；shared = 只能用全局配置。 */
+/** 一家厂商对一类能力能做到什么：session = 按会话隔离；tool_deny = 照样列出来，调用被拒；shared = 只能用全局配置。 */
 export type CapabilityIsolation = "session" | "tool_deny" | "shared";
 
 export type CapabilityIsolationMap = Readonly<Record<CapabilityKind, CapabilityIsolation>>;
@@ -96,6 +106,8 @@ export interface PmCapabilitiesView {
   policy: PmCapabilityPolicy;
   /** 各家每类能做到什么，界面给 shared 的那几家打标。 */
   isolation: Readonly<Partial<Record<AgentVendor, CapabilityIsolationMap>>>;
+  /** 插件里的项单独关时和 isolation 不一样的那几家、那几类（claude 插件技能是 tool_deny；整个插件都关时照 isolation）。 */
+  pluginIsolation: Readonly<Partial<Record<AgentVendor, Partial<CapabilityIsolationMap>>>>;
 }
 
 /** PATCH /api/pms/:id/capabilities：set 里给 null 是去掉这一项的单独设置，回到 base。 */
@@ -106,6 +118,10 @@ export interface PmCapabilitiesPatch {
 
 function cmpStr(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function sortedRecord(map: ReadonlyMap<string, string>): Record<string, string> {
+  return Object.fromEntries([...map.entries()].sort(([a], [b]) => cmpStr(a, b)));
 }
 
 function kindOfCapabilityKey(key: CapabilityKey): CapabilityKind {
@@ -197,6 +213,7 @@ export function applyCapabilitiesPatch(policy: PmCapabilityPolicy, patch: PmCapa
  * 算这一次启动要关的、只开的：
  * - 三类 base 都是 all 且没有一项被关时返回 null，驱动不加任何参数，和现在一样；
  * - 只看 vendor 能看到的那些项；连接器只算 vendor 自己账号上的；
+ * - 插件按 item.plugins[vendor] 认（不看分组）：这家从这个插件拿到的项全关了才进 deny.plugins，逐项的 deny 照样都列；
  * - deny 和 allow 都按名字排序，内容一样时结果逐字相同（进 fingerprint）。
  */
 export function resolveSessionCapabilities(
@@ -210,48 +227,29 @@ export function resolveSessionCapabilities(
     if (item.kind === "connector") return item.key.startsWith(connectorPrefix);
     return true;
   });
-  const visibleByKey = new Map<CapabilityKey, CapabilityItem>();
-  for (const item of visibleItems) visibleByKey.set(item.key, item);
-
-  const pluginItemKeys = new Map<string, Set<CapabilityKey>>();
-  for (const group of inventory.groups) {
-    if (group.source.kind !== "plugin" || group.source.vendor !== vendor) continue;
-    let set = pluginItemKeys.get(group.source.plugin);
-    if (!set) {
-      set = new Set();
-      pluginItemKeys.set(group.source.plugin, set);
-    }
-    for (const key of group.itemKeys) {
-      if (visibleByKey.has(key)) set.add(key);
-    }
-  }
-
-  const denyPlugins: string[] = [];
-  const coveredByPlugin = new Set<CapabilityKey>();
-  for (const [pluginId, keys] of pluginItemKeys) {
-    if (keys.size === 0) continue;
-    const allDisabled = [...keys].every((key) => !capabilityEnabled(policy, key));
-    if (allDisabled) {
-      denyPlugins.push(pluginId);
-      for (const key of keys) coveredByPlugin.add(key);
-    }
-  }
-
   const denySkills = new Set<string>();
   const denyMcp = new Set<string>();
   const denyConnectors = new Set<string>();
+  const pluginSkills = new Map<string, string>();
+  const pluginMcp = new Map<string, string>();
   const allowSkillsByName = new Map<string, SkillRef>();
   const allowMcp = new Set<string>();
+  const pluginAllOff = new Map<string, boolean>();
   let anyDisabled = false;
 
   for (const item of visibleItems) {
     const enabled = capabilityEnabled(policy, item.key);
+    const pluginId = item.plugins?.[vendor];
+    if (pluginId !== undefined) pluginAllOff.set(pluginId, (pluginAllOff.get(pluginId) ?? true) && !enabled);
     if (!enabled) {
       anyDisabled = true;
-      if (coveredByPlugin.has(item.key)) continue;
-      if (item.kind === "skill") denySkills.add(item.name);
-      else if (item.kind === "mcp") denyMcp.add(item.name);
-      else if (item.kind === "connector") denyConnectors.add(item.key.slice(connectorPrefix.length));
+      if (item.kind === "skill") {
+        denySkills.add(item.name);
+        if (pluginId !== undefined) pluginSkills.set(item.name, pluginId);
+      } else if (item.kind === "mcp") {
+        denyMcp.add(item.name);
+        if (pluginId !== undefined) pluginMcp.set(item.name, pluginId);
+      } else if (item.kind === "connector") denyConnectors.add(item.key.slice(connectorPrefix.length));
     } else {
       if (item.kind === "skill") {
         const dir = item.skillDirs?.[vendor] ?? item.dir;
@@ -278,7 +276,8 @@ export function resolveSessionCapabilities(
       skills: [...denySkills].sort(cmpStr),
       mcp: [...denyMcp].sort(cmpStr),
       connectors: [...denyConnectors].sort(cmpStr),
-      plugins: [...new Set(denyPlugins)].sort(cmpStr),
+      plugins: [...pluginAllOff].filter(([, allOff]) => allOff).map(([id]) => id).sort(cmpStr),
+      pluginOf: { skills: sortedRecord(pluginSkills), mcp: sortedRecord(pluginMcp) },
     },
     allow: {
       skills: [...allowSkillsByName.keys()].sort(cmpStr).map((name) => allowSkillsByName.get(name)!),

@@ -51,14 +51,14 @@
 
 | 厂商 | 技能 | MCP | 云端连接器 | 怎么测的 |
 | --- | --- | --- | --- | --- |
-| claude 2.1.326 | session：`--settings` 里 `skillOverrides {"aws-auth":"off"}`，init 的 skills 从 166 变 129（同时关了一个插件），`aws-auth` 不在 | session：`--settings` 里 `deniedMcpServers [{"serverName":"codegraph"}]`，init 里没有 codegraph | session：同上，`{"serverName":"claude.ai Gmail"}` 后 init 里没有 claude.ai Gmail | 实测。整个插件：`enabledPlugins {"sales@synced":false}` 后插件带的技能和 MCP 一起没了。`--strict-mcp-config` 会把云端连接器和插件 MCP 一起清零，不能用来挑 |
-| codex 0.169.0 | session：`-c 'skills.config=[{name="aws-auth",enabled=false}]'`，`skills/list` 里 62 个只剩 61 个 enabled | session：`-c mcp_servers.codegraph.enabled=false`，`mcpServerStatus/list` 里 codegraph 工具数从 1 变 0 | session：`-c apps.connector_openai_chatgpt_pets.enabled=false`，`app/list` 里它的 isEnabled 变 false（本机 10 个已连接） | 实测。`skills/config/write` 会写 `~/.codex/config.toml`，不用 |
-| agy 1.5.9 | shared：没找到按会话的开关（`--settings` 只收 settings.json 的键，`skillOverrides` 只出现在云端 protobuf 里） | tool_deny：`--settings` 的 `permissions.deny` 写 `mcp(<服务器>/*)`，服务器照起、调用被拒 | shared：agy 的连接器就是 MCP，按 MCP 算 | 实测。带 `--mode auto --dangerously-skip-permissions` 与 `--settings` 的 `mcp(codegraph/*)` 规则时，`call_mcp_tool` 调 codegraph 返回 `ERROR`，不带的对照会话返回 `DONE` |
+| claude 2.1.326 | session：`--settings` 里 `skillOverrides {"aws-auth":"off"}`，init 的 skills 从 166 变 129（同时关了一个插件），`aws-auth` 不在。插件里的技能是 tool_deny：`skillOverrides` 对它不生效（二进制里插件技能只认 claude.ai 同步来的技能的设置），改用 `permissions.deny` 的 `Skill(data:analyze)`，init 里还列着，调用返回 `Skill execution blocked by permission rules` | session：`--settings` 里 `deniedMcpServers [{"serverName":"codegraph"}]`，init 里没有 codegraph；插件带的 MCP 写全名（`plugin:parallel:parallel-search`）也一样 | session：同上，`{"serverName":"claude.ai Gmail"}` 后 init 里没有 claude.ai Gmail | 实测。整个插件：`enabledPlugins {"sales@synced":false}` 后插件带的技能和 MCP 一起没了，这家从这个插件拿到的项全关时才这样写。`--strict-mcp-config` 会把云端连接器和插件 MCP 一起清零，不能用来挑 |
+| codex 0.169.0 | session：`-c 'skills.config=[{name="aws-auth",enabled=false}]'`，`skills/list` 里 62 个只剩 61 个 enabled。插件技能的名字是 `<插件>:<SKILL.md frontmatter 的 name>`（`spreadsheets:Spreadsheets`，不是目录名），按这个名字关才生效 | session：`-c 'mcp_servers={"codegraph"={enabled=false}}'`，`mcpServerStatus/list` 里 codegraph 工具数从 1 变 0。插件带的 MCP 写 `-c 'plugins={"unified-computer-use@openai-bundled"={mcp_servers={"cua_repl"={enabled=false}}}}'`，cua_repl 工具数从 3 变 0；写成顶层 `mcp_servers.cua_repl` 会因为 config.toml 里没有它的定义，app-server 报 `invalid transport` 退出 | session：`-c 'apps={"connector_openai_chatgpt_pets"={enabled=false}}'`，`app/list` 里它的 isEnabled 变 false（本机 10 个已连接） | 实测。`-c` 的键按 `.` 直接切段、不认引号，`plugins."visualize@openai-bundled".enabled=false` 会变成一个叫 `"visualize@openai-bundled"` 的键，不生效；所以键只写顶层表名，名字放在内联表的引号键里，codex 把它和 config.toml 逐层合并。`skills/config/write` 会写 `~/.codex/config.toml`，不用 |
+| agy 1.5.9 | shared：没找到按会话的开关（`--settings` 只收 settings.json 的键，`skillOverrides` 只出现在云端 protobuf 里） | tool_deny：`--settings` 的 `permissions.deny` 写 `mcp(<服务器>/*)`，服务器照起、调用被拒 | shared：agy 的连接器就是 MCP，按 MCP 算 | 实测。带 `--mode auto --dangerously-skip-permissions` 与 `--settings` 的 `mcp(codegraph/*)` 规则时，`call_mcp_tool` 调 codegraph 返回 `ERROR`，不带的对照会话返回 `DONE`。多个 `--settings` 只认最后一个：包进 OS 沙箱的 Worker 前面已有关终端沙箱的 `{"enableTerminalSandbox":false}`，能力规则要和它合成一条 |
 | pi 1.5.2 | session：`--no-skills` 关自动发现，再逐个 `--skill <目录>` | tool_deny：`--exclude-tools mcp__<服务器>__*`（服务器名非 `[A-Za-z0-9_]` 换成 `_`） | shared：没有云端连接器 | 实测。`get_commands` 只剩允许的技能；`--exclude-tools` 在工具注册阶段剔除匹配的 MCP 工具，模型请求的工具列表里不可见 |
 | deepseek dsh 0.2.2-rc.1 | session：`--patch` 给 skill-filesystem 设 `includeDefaultRoots:false` + `customSkillDirs` | session：`session.mcpServers` 只传开着的 | shared：没有云端连接器 | 实测。带补丁起 `dsh --profile acp`，首轮请求里的 `<available_skills>` 只含允许目录和产品技能，默认项目根与全局根技能都不在；`session.mcpServers` 按选择过滤 |
 | cursor 2026.11.10 | shared：ACP 下读不到 `--plugin-dir` 的技能（2026-11-12 实测），没有按会话的技能开关 | shared：`mcp enable/disable` 写本地批准名单，启动带 `--approve-mcps` 全部批准 | shared | `--help` 和 `mcp --help`，推断 |
 
-结论：claude、codex 三类都能精确按会话隔离；deepseek 技能和 MCP 可以；pi 技能可以、MCP 只能拒调用；agy 只有 MCP 能拒调用；cursor 都不行。所有能做到的都是启动参数或只对这次会话生效的设置，不用碰用户的全局配置。
+结论：claude、codex 三类都能精确按会话隔离，只有 claude 插件里的单个技能只能拒调用（`VendorCapabilities.pluginIsolation`，接口里是 `pluginIsolation`）；deepseek 技能和 MCP 可以；pi 技能可以、MCP 只能拒调用；agy 只有 MCP 能拒调用；cursor 都不行。所有能做到的都是启动参数或只对这次会话生效的设置，不用碰用户的全局配置。
 
 ## 做法比较
 
@@ -90,7 +90,9 @@
 ## 统一
 
 - 一处定义覆盖所有厂商：`LaunchFiles.capabilities`（`src/shared/driver.ts`）是这次启动要关的、只开的清单，由 `resolveSessionCapabilities`（`src/shared/pm-capabilities.ts`）按项目经理的选择、库存和厂商算出来，对所有厂商一样。
-- 每家能做到什么写在 `VendorCapabilities.isolation`（`src/vendors/types.ts`，必填），各家 `spec.ts` 照上面的实测表填；界面打 `uses all` 标签、守护进程决定给不给那一类，都只读这个字段，不写死厂商。
+- 每家能做到什么写在 `VendorCapabilities.isolation`（`src/vendors/types.ts`，必填），各家 `spec.ts` 照上面的实测表填；界面打 `uses all` 标签、守护进程决定给不给那一类，都只读这个字段，不写死厂商。插件里的项单独关时做不到那么干净的，另写在 `pluginIsolation`（目前只有 claude 的技能是 `tool_deny`）。
+- 插件归属按厂商记在库存项的 `plugins`（厂商 → 插件编号），不看分组：同名技能会合进先扫到的那家的插件组，按分组算会把别家插件里没关的项一起关掉。`SessionCapabilities.deny.pluginOf` 告诉翻译函数哪些名字来自插件。
+- fingerprint 只算各家翻出来的结果（`VendorDaemon.capabilityLaunch`），不算原始清单：改了这家看不到、用不上的项（比如 claude 不用的允许清单）不重启。
 - 每家怎么翻译放在 `src/vendors/<厂商>/capabilities.ts`，由该家 `protocol.ts` 或 `driver.ts` 调用；isolation 是 shared 的那一类不翻译。cursor 三类都是 shared，没有这个文件。
 - 库存的厂商专属部分（插件、厂商自带技能、账号连接器）走 `VendorSyncAdapter.scanCapabilities`（`src/vendors/daemon-types.ts`），和 Vendor sync 用同一个适配器，不另起一套扫描。
 - 三个平台：所有手段都是命令行参数、会话设置文件或 ACP 字段，不碰文件权限和沙箱，macOS、Windows、Linux 一样；路径拼接走各家已有的 `paths.ts`，`src/daemon/platform/index.ts` 不用改。
@@ -111,8 +113,8 @@
 - `src/shared/index.ts`：导出 `pm-capabilities.ts`。
 - `src/vendors/types.ts`：`VendorCapabilities.isolation`；六家 `spec.ts`、测试假厂商 `test/fixtures/vendors/acme/spec.ts` 和 `src/vendors/_common/acp/driver.test.ts` 里的假 spec 照实测表填上。
 - `src/vendors/daemon-types.ts`：`VendorSyncAdapter.scanCapabilities`、`VendorCapabilityScan`。
-- `src/vendors/claude/capabilities.ts`：清单翻成 `--settings` 里的 `skillOverrides`、`deniedMcpServers`、`enabledPlugins`。
-- `src/vendors/codex/capabilities.ts`：清单翻成 `codex app-server` 的 `-c` 参数。
+- `src/vendors/claude/capabilities.ts`：清单翻成 `--settings` 里的 `skillOverrides`、`deniedMcpServers`、`enabledPlugins`，插件里的技能翻成 `permissions.deny` 的 `Skill(<名字>)`。
+- `src/vendors/codex/capabilities.ts`：清单翻成 `codex app-server` 的 `-c` 参数（`skills.config`、`mcp_servers`、`plugins.<插件>.mcp_servers`、`apps`，不整个关插件）。
 - `src/vendors/agy/capabilities.ts`：清单翻成 `permissions.deny` 的 `mcp(<服务器>/*)`。
 - `src/vendors/pi/capabilities.ts`：清单翻成 `--no-skills`、`--skill`、`--exclude-tools`。
 - `src/vendors/deepseek/capabilities.ts`：清单翻成 skill-filesystem 的补丁和过滤后的 `session.mcpServers`。

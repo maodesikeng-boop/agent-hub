@@ -517,6 +517,15 @@ function vendorIsolationMap(): Readonly<Partial<Record<AgentVendor, CapabilityIs
   return Object.fromEntries(AGENT_VENDORS.map((v) => [v, vendorSpec(v).capabilities.isolation]));
 }
 
+function vendorPluginIsolationMap(): Readonly<Partial<Record<AgentVendor, Partial<CapabilityIsolationMap>>>> {
+  return Object.fromEntries(
+    AGENT_VENDORS.flatMap((v) => {
+      const plugin = vendorSpec(v).capabilities.pluginIsolation;
+      return plugin === undefined ? [] : [[v, plugin]];
+    }),
+  );
+}
+
 const editPersonaBodySchema = z
   .object({
     text: boundedBytesSchema(MAX_PERSONA_BYTES, "text").optional(),
@@ -1646,7 +1655,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       const inventory = opts.capabilityInventory
         ? await opts.capabilityInventory.get({ projectDir })
         : { scannedAt: (opts.now ?? Date.now)(), items: [], groups: [], truncated: false };
-      return { pmId, inventory, policy, isolation: vendorIsolationMap() };
+      return { pmId, inventory, policy, isolation: vendorIsolationMap(), pluginIsolation: vendorPluginIsolationMap() };
     });
 
     routes.patch("/api/pms/:id/capabilities", async (req): Promise<PmCapabilitiesView> => {
@@ -1657,7 +1666,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       const inventory = opts.capabilityInventory
         ? await opts.capabilityInventory.get({ projectDir })
         : { scannedAt: (opts.now ?? Date.now)(), items: [], groups: [], truncated: false };
-      return { pmId, inventory, policy, isolation: vendorIsolationMap() };
+      return { pmId, inventory, policy, isolation: vendorIsolationMap(), pluginIsolation: vendorPluginIsolationMap() };
     });
 
     routes.post("/api/persona-changes/:id/revert", async (req): Promise<EditPersonaResponse> => {

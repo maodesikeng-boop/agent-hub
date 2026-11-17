@@ -174,6 +174,8 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
         })
       : undefined;
     const settings = vendorFiles?.settings;
+    // 只算翻出来的结果：改了这家看不到、用不上的项（比如 claude 用不到的 allow 清单）不重启
+    const capabilityLaunch = capabilities !== undefined && vendor !== null ? VENDOR_DAEMONS[vendor].capabilityLaunch?.(capabilities) : undefined;
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const promptFile = join(dir, "prompt.md");
     writeFileSync(promptFile, prompt, { mode: 0o600 });
@@ -220,7 +222,7 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
         settings: settings ?? "",
         readonly: readonlyPolicy,
         ...(skillsDir === undefined ? {} : { skills: taskGraphSkillCatalogEntry() }),
-        ...(capabilities === undefined ? {} : { capabilities }),
+        ...(capabilityLaunch === undefined ? {} : { capabilityLaunch }),
       }),
       personaRevision: role === "pm" ? ctx.pm.personaRevision : undefined,
       ...(writeScope === null ? {} : { writeScope }),

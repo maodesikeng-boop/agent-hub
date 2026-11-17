@@ -121,6 +121,7 @@ interface MutableItem {
   vendors: Set<AgentVendor>;
   dir?: string;
   skillDirs: Partial<Record<AgentVendor, string>>;
+  plugins: Partial<Record<AgentVendor, string>>;
 }
 
 export function createCapabilityInventory(options: CapabilityInventoryOptions): CapabilityInventoryService {
@@ -198,6 +199,8 @@ export function createCapabilityInventory(options: CapabilityInventoryOptions): 
       vendor: AgentVendor;
       dir?: string;
     }) => {
+      const pluginId =
+        input.source.kind === "plugin" && input.source.vendor === input.vendor ? input.source.plugin : undefined;
       let existing = itemsMap.get(input.key);
       if (!existing) {
         const groupId = groupIdFor(input.kind, input.source);
@@ -211,6 +214,7 @@ export function createCapabilityInventory(options: CapabilityInventoryOptions): 
           vendors: new Set([input.vendor]),
           ...(input.dir !== undefined ? { dir: input.dir } : {}),
           skillDirs: input.dir !== undefined ? { [input.vendor]: input.dir } : {},
+          plugins: pluginId !== undefined ? { [input.vendor]: pluginId } : {},
         };
         itemsMap.set(input.key, existing);
       } else {
@@ -222,6 +226,7 @@ export function createCapabilityInventory(options: CapabilityInventoryOptions): 
           existing.dir ??= input.dir;
           existing.skillDirs[input.vendor] ??= input.dir;
         }
+        if (pluginId !== undefined) existing.plugins[input.vendor] ??= pluginId;
       }
     };
 
@@ -377,6 +382,7 @@ export function createCapabilityInventory(options: CapabilityInventoryOptions): 
         vendors: sortedVendors,
         ...(m.dir !== undefined ? { dir: m.dir } : {}),
         ...(hasMultiDirs ? { skillDirs: m.skillDirs } : {}),
+        ...(Object.keys(m.plugins).length > 0 ? { plugins: m.plugins } : {}),
       });
       let group = groupsById.get(m.groupId);
       if (!group) {

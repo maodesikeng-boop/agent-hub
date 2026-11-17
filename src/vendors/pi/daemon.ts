@@ -1,5 +1,6 @@
 // Pi 的守护进程侧入口（docs/vendor-plugin-design.md 3.3 节）：daemon-registry.ts 按名单加载默认导出。
 import { defineVendorDaemon } from "../daemon-types.ts";
+import { piCapabilityArgs } from "./capabilities.ts";
 import { createPiCatalogSource, piCatalogProbe } from "./catalog.ts";
 import { createPiComposer, piComposerBase } from "./composer.ts";
 import { createPiDriver } from "./driver.ts";
@@ -15,6 +16,7 @@ export default defineVendorDaemon({
   forkers: PI_FORKERS,
   transcriptPath: piTranscriptPath,
   sessionFiles: piSessionFiles,
+  capabilityLaunch: piCapabilityArgs,
   sync: piSyncAdapter,
   setup: piSetupAdapter,
 });

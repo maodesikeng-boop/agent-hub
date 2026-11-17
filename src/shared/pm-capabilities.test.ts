@@ -144,29 +144,13 @@ describe("resolveSessionCapabilities", () => {
     expect(resolveSessionCapabilities(policy, inv, "codex")?.deny.connectors).toEqual(["connector_gmail"]);
   });
 
-  it("插件里的项全关时进 deny.plugins，不再逐项列", () => {
+  it("插件里这家看到的项全关时进 deny.plugins，逐项照样列，pluginOf 记着插件编号", () => {
     const items: CapabilityItem[] = [
-      { key: "skill:sales:call-prep", kind: "skill", name: "sales:call-prep", description: null, groupId: "p-skill", vendors: ["claude"], dir: "/p/call-prep" },
-      { key: "mcp:plugin:sales:crm", kind: "mcp", name: "plugin:sales:crm", description: null, groupId: "p-mcp", vendors: ["claude"] },
+      { key: "skill:sales:call-prep", kind: "skill", name: "sales:call-prep", description: null, groupId: "p-skill", vendors: ["claude"], dir: "/p/call-prep", plugins: { claude: "sales@synced" } },
+      { key: "mcp:plugin:sales:crm", kind: "mcp", name: "plugin:sales:crm", description: null, groupId: "p-mcp", vendors: ["claude"], plugins: { claude: "sales@synced" } },
       { key: "skill:global-one", kind: "skill", name: "global-one", description: null, groupId: "g-skill", vendors: ["claude"], dir: "/g/global-one" },
     ];
-    const groups: CapabilityGroup[] = [
-      {
-        id: "p-skill",
-        kind: "skill",
-        label: "sales",
-        source: { kind: "plugin", vendor: "claude", plugin: "sales@synced" },
-        itemKeys: ["skill:sales:call-prep"],
-      },
-      {
-        id: "p-mcp",
-        kind: "mcp",
-        label: "sales",
-        source: { kind: "plugin", vendor: "claude", plugin: "sales@synced" },
-        itemKeys: ["mcp:plugin:sales:crm"],
-      },
-    ];
-    const inv = makeInventory(items, groups);
+    const inv = makeInventory(items);
 
     const allPluginOff = applyCapabilitiesPatch(defaultPmCapabilityPolicy(1), {
       set: {
@@ -176,8 +160,12 @@ describe("resolveSessionCapabilities", () => {
     });
     const resolvedAllOff = resolveSessionCapabilities(allPluginOff, inv, "claude");
     expect(resolvedAllOff?.deny.plugins).toEqual(["sales@synced"]);
-    expect(resolvedAllOff?.deny.skills).toEqual([]);
-    expect(resolvedAllOff?.deny.mcp).toEqual([]);
+    expect(resolvedAllOff?.deny.skills).toEqual(["sales:call-prep"]);
+    expect(resolvedAllOff?.deny.mcp).toEqual(["plugin:sales:crm"]);
+    expect(resolvedAllOff?.deny.pluginOf).toEqual({
+      skills: { "sales:call-prep": "sales@synced" },
+      mcp: { "plugin:sales:crm": "sales@synced" },
+    });
 
     const partialOff = applyCapabilitiesPatch(defaultPmCapabilityPolicy(1), {
       set: { "skill:sales:call-prep": false },
@@ -185,6 +173,21 @@ describe("resolveSessionCapabilities", () => {
     const resolvedPartial = resolveSessionCapabilities(partialOff, inv, "claude");
     expect(resolvedPartial?.deny.plugins).toEqual([]);
     expect(resolvedPartial?.deny.skills).toEqual(["sales:call-prep"]);
+    expect(resolvedPartial?.deny.pluginOf.skills).toEqual({ "sales:call-prep": "sales@synced" });
+  });
+
+  it("插件归属按厂商算，不看分组：同名技能归在 claude 的插件组里，codex 的插件只算 codex 自己从插件拿到的项", () => {
+    const items: CapabilityItem[] = [
+      { key: "skill:slack:slack-api", kind: "skill", name: "slack:slack-api", description: null, groupId: "skill:plugin:claude:slack@claude-plugins-official", vendors: ["claude", "codex"], dir: "/c/slack-api", plugins: { claude: "slack@claude-plugins-official", codex: "slack@claude-plugins-official" } },
+      { key: "mcp:slack", kind: "mcp", name: "slack", description: null, groupId: "mcp:plugin:codex:slack@claude-plugins-official", vendors: ["codex"], plugins: { codex: "slack@claude-plugins-official" } },
+      { key: "mcp:codegraph", kind: "mcp", name: "codegraph", description: null, groupId: "mcp:global", vendors: ["claude", "codex"] },
+    ];
+    const policy = applyCapabilitiesPatch(defaultPmCapabilityPolicy(1), { set: { "mcp:slack": false } });
+    const codex = resolveSessionCapabilities(policy, makeInventory(items), "codex");
+    expect(codex?.deny.plugins).toEqual([]);
+    expect(codex?.deny.mcp).toEqual(["slack"]);
+    expect(codex?.deny.pluginOf).toEqual({ skills: {}, mcp: { slack: "slack@claude-plugins-official" } });
+    expect(resolveSessionCapabilities(policy, makeInventory(items), "claude")).toBeNull();
   });
 
   it("allow.skills 是开着的技能及其目录", () => {
@@ -231,6 +234,7 @@ describe("resolveSessionCapabilities", () => {
         mcp: ["a-mcp", "z-mcp"],
         connectors: ["a-conn", "z-conn"],
         plugins: [],
+        pluginOf: { skills: {}, mcp: {} },
       },
       allow: {
         skills: [

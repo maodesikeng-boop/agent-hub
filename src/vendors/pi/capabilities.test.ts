@@ -9,7 +9,7 @@ import { buildPiArgs } from "./protocol.ts";
 
 function emptyCaps(): SessionCapabilities {
   return {
-    deny: { skills: [], mcp: [], connectors: [], plugins: [] },
+    deny: { skills: [], mcp: [], connectors: [], plugins: [], pluginOf: { skills: {}, mcp: {} } },
     allow: { skills: [], mcp: [] },
   };
 }
@@ -19,7 +19,7 @@ const canRunLivePi = spawnSync("pi", ["--version"], { stdio: "ignore" }).status 
 describe("piCapabilityArgs", () => {
   it("有技能被关时 noSkills 为 true，只带允许的技能目录", () => {
     const res = piCapabilityArgs({
-      deny: { skills: ["aws-auth"], mcp: [], connectors: [], plugins: [] },
+      deny: { skills: ["aws-auth"], mcp: [], connectors: [], plugins: [], pluginOf: { skills: {}, mcp: {} } },
       allow: {
         skills: [
           { name: "docx", dir: "/skills/docx" },
@@ -41,7 +41,7 @@ describe("piCapabilityArgs", () => {
       const projSkills = join(dir, ".agents", "skills");
       mkdirSync(projSkills, { recursive: true });
       const caps: SessionCapabilities = {
-        deny: { skills: [], mcp: ["codegraph"], connectors: [], plugins: [] },
+        deny: { skills: [], mcp: ["codegraph"], connectors: [], plugins: [], pluginOf: { skills: {}, mcp: {} } },
         allow: { skills: [{ name: "docx", dir: "/skills/docx" }], mcp: [] },
       };
       const res = piCapabilityArgs(caps);
@@ -62,7 +62,7 @@ describe("piCapabilityArgs", () => {
 
   it("关掉的 MCP 写成 mcp__<服务器>__* 并进 --exclude-tools", () => {
     const caps: SessionCapabilities = {
-      deny: { skills: [], mcp: ["codegraph", "aws-mcp"], connectors: [], plugins: [] },
+      deny: { skills: [], mcp: ["codegraph", "aws-mcp"], connectors: [], plugins: [], pluginOf: { skills: {}, mcp: {} } },
       allow: { skills: [], mcp: [] },
     };
     const res = piCapabilityArgs(caps);
@@ -102,7 +102,7 @@ describe("piCapabilityArgs", () => {
         );
 
         const caps: SessionCapabilities = {
-          deny: { skills: ["denied-two"], mcp: [], connectors: [], plugins: [] },
+          deny: { skills: ["denied-two"], mcp: [], connectors: [], plugins: [], pluginOf: { skills: {}, mcp: {} } },
           allow: { skills: [{ name: "allowed-one", dir: allowedDir }], mcp: [] },
         };
         const args = buildPiArgs({

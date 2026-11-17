@@ -6,7 +6,7 @@ import { deepseekSkillFilesystemConfig, filterDeepSeekMcpServers } from "./capab
 describe("deepseekSkillFilesystemConfig", () => {
   it("没有技能被关时返回 null", () => {
     const caps: SessionCapabilities = {
-      deny: { skills: [], mcp: ["codegraph"], connectors: [], plugins: [] },
+      deny: { skills: [], mcp: ["codegraph"], connectors: [], plugins: [], pluginOf: { skills: {}, mcp: {} } },
       allow: { skills: [{ name: "a", dir: "/s/a" }], mcp: [] },
     };
     expect(deepseekSkillFilesystemConfig(caps, "/launch/1/skills")).toBeNull();
@@ -14,7 +14,7 @@ describe("deepseekSkillFilesystemConfig", () => {
 
   it("有技能被关时关掉默认目录，只给允许的技能目录和产品技能目录", () => {
     const caps: SessionCapabilities = {
-      deny: { skills: ["aws-auth"], mcp: [], connectors: [], plugins: [] },
+      deny: { skills: ["aws-auth"], mcp: [], connectors: [], plugins: [], pluginOf: { skills: {}, mcp: {} } },
       allow: {
         skills: [
           { name: "docx", dir: "/s/docx" },
@@ -42,7 +42,7 @@ describe("filterDeepSeekMcpServers", () => {
       { name: "zeta", type: "http", url: "https://example.com/mcp", headers: [] },
     ];
     const caps: SessionCapabilities = {
-      deny: { skills: [], mcp: ["codegraph"], connectors: [], plugins: [] },
+      deny: { skills: [], mcp: ["codegraph"], connectors: [], plugins: [], pluginOf: { skills: {}, mcp: {} } },
       allow: { skills: [], mcp: ["alpha", "zeta"] },
     };
     expect(filterDeepSeekMcpServers(servers, caps)).toEqual([servers[0], servers[2]]);
