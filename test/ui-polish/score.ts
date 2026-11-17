@@ -4,10 +4,9 @@
 import type { CaptureManifest } from "./capture.ts";
 import {
   CALIBRATION_AGREE_SHARE,
+  CALIBRATION_BASELINE_PAGE_RANGE,
   CALIBRATION_DETECT_SHARE,
   CALIBRATION_MAX_SPREAD,
-  CALIBRATION_MIN_GAP_MINOR,
-  CALIBRATION_MIN_GAP_SEVERE,
   CALIBRATION_MIN_HITS,
   CALIBRATION_STABLE_SHARE,
   FINDING_MATCH_IOU,
@@ -20,9 +19,12 @@ import {
 import type { Mutation } from "./mutations.ts";
 import {
   DIMENSIONS,
+  DIMENSION_TITLES,
+  SEVERITY_CAPS,
   dimensionOfRule,
   pageScore,
   scoreFromFindings,
+  type Dimension,
   type DimensionScores,
   type Finding,
   type ScoreCard,
@@ -101,8 +103,18 @@ function boxIou(a: Finding["box"], b: Finding["box"]): number {
   return union <= 0 ? 0 : inter / union;
 }
 
+/** 评委引的条款和机器检查量的是同一件事时，归到机器检查的规则上。 */
+const RULE_ALIASES: Readonly<Record<string, string>> = {
+  "WCAG 1.4.3": "machine:contrast",
+  "HIG touch-44": "machine:touch-target",
+};
+
+function canonicalRule(rule: string): string {
+  return RULE_ALIASES[rule] ?? rule;
+}
+
 function sameSpot(a: Pick<Finding, "rule" | "box">, b: Pick<Finding, "rule" | "box">): boolean {
-  return a.rule === b.rule || boxIou(a.box, b.box) >= FINDING_MATCH_IOU;
+  return canonicalRule(a.rule) === canonicalRule(b.rule) || boxIou(a.box, b.box) >= FINDING_MATCH_IOU;
 }
 
 function coversTarget(findingBox: Finding["box"], targetBox: Finding["box"]): boolean {
@@ -131,13 +143,29 @@ interface MutableFinding {
   by: string[];
 }
 
+/** 一家（或机器）在同一张图上引同一条规则（按 canonicalRule 归一）的几条只留最重的一条。 */
+function collapseSameRule<F extends Pick<Finding, "rule" | "severity">>(findings: readonly F[]): F[] {
+  const byRule = new Map<string, F>();
+  for (const f of findings) {
+    const rule = canonicalRule(f.rule);
+    const kept = byRule.get(rule);
+    if (kept === undefined || SEVERITY_RANK[f.severity] < SEVERITY_RANK[kept.severity]) byRule.set(rule, f);
+  }
+  return [...byRule.values()];
+}
+
+/** 一张评分卡自己算出来的四项，和 mergeRound 用同一套同规则归并。 */
+function cardScores(findings: readonly Finding[]): DimensionScores {
+  return scoreFromFindings(collapseSameRule(findings));
+}
+
 function mergeFindingsForShot(
   shotKey: string,
   sources: ReadonlyArray<{ by: string; findings: readonly Finding[] }>,
 ): MutableFinding[] {
   const merged: MutableFinding[] = [];
   for (const source of sources) {
-    for (const f of source.findings) {
+    for (const f of collapseSameRule(source.findings)) {
       let bestIndex = -1;
       let bestIou = -1;
       const dimension = dimensionOfRule(f.rule);
@@ -148,7 +176,7 @@ function mergeFindingsForShot(
         if (iou >= FINDING_MATCH_IOU && iou > bestIou) {
           bestIndex = i;
           bestIou = iou;
-        } else if (bestIndex === -1 && candidate.rule === f.rule) {
+        } else if (bestIndex === -1 && canonicalRule(candidate.rule) === canonicalRule(f.rule)) {
           bestIndex = i;
         }
       }
@@ -164,7 +192,7 @@ function mergeFindingsForShot(
         });
       } else {
         const target = merged[bestIndex]!;
-        target.by.push(source.by);
+        if (!target.by.includes(source.by)) target.by.push(source.by);
         if (SEVERITY_RANK[f.severity] < SEVERITY_RANK[target.severity]) {
           target.severity = f.severity;
           target.rule = f.rule;
@@ -180,7 +208,8 @@ function mergeFindingsForShot(
 
 /**
  * 前置：cards 里每张图每家评委各有一张卡，卡的 imageSha256 和 manifest 对得上。
- * 后置：两家的发现按“同一张图、同一项、框的交并比不低于 FINDING_MATCH_IOU 或引了同一条规则”并成一条，留下更重的那条；
+ * 后置：每家（含机器检查）先把引同一条规则的几条并成最重的一条（WCAG 1.4.3 归 machine:contrast，HIG touch-44 归 machine:touch-target）；
+ * 两家的发现再按“同一张图、同一项、框的交并比不低于 FINDING_MATCH_IOU 或引了同一条规则”并成一条，留下更重的那条；
  * 机器检查的发现并进去；被 dismissals 命中的标上理由、不计分；分数按 rubric.scoreFromFindings 算。
  * 缺卡、sha256 对不上抛 Error 并列出是哪些图哪家评委。
  */
@@ -246,7 +275,12 @@ export function mergeRound(input: { manifest: CaptureManifest; cards: readonly S
       byJudge[judge] = computed;
 
       const card = cardMap.get(`${shot.key}\0${judge}`)!;
-      const cardComputed = scoreFromFindings([...shot.machineFindings.filter((mf) => !shotDismissals.some((d) => sameSpot(d, mf))), ...card.findings]);
+      const cardComputed = scoreFromFindings(
+        mergeFindingsForShot(shot.key, [
+          { by: "machine", findings: shot.machineFindings.filter((mf) => !shotDismissals.some((d) => sameSpot(d, mf))) },
+          { by: judge, findings: card.findings },
+        ]),
+      );
       for (const dim of DIMENSIONS) {
         if (Math.abs(cardComputed[dim] - card.holistic[dim]) >= 2) {
           hasDisagreement = true;
@@ -276,14 +310,28 @@ export function mergeRound(input: { manifest: CaptureManifest; cards: readonly S
   };
 }
 
+/** 一个弄坏在一家评委那里的结果。分数都是 CALIBRATION_RUNS 次的中位数，只看弄坏注入的那一项。 */
+export interface MutationCheck {
+  id: string;
+  judge: string;
+  dimension: Dimension;
+  baseScore: number;
+  mutatedScore: number;
+  /** 这一项有一条预期严重度的发现时最多几分（SEVERITY_CAPS 的第一档）。 */
+  cap: number;
+  hits: number;
+  ok: boolean;
+}
+
 export interface CalibrationReport {
-  /** 四条门槛都过才是 true。 */
+  /** 门槛都过才是 true。 */
   pass: boolean;
-  /** 同一张图同一项多次评分的最大差不超过 CALIBRATION_MAX_SPREAD 的图占几成，分评委。 */
+  /** 页面分在多次评分里最大差不超过 CALIBRATION_MAX_SPREAD 的图占几成，分评委。 */
   stableShare: Readonly<Record<string, number>>;
-  /** 每个弄坏：基准图的页面分减去弄坏图的页面分（各取多次的中位数），3 次里被指出几次，分评委。 */
-  mutations: ReadonlyArray<{ id: string; judge: string; gap: number; hits: number; ok: boolean }>;
-  /** 基准图上被提过的 P0、P1（应该没有）。 */
+  /** 基准图的页面分（多次的中位数），分评委。应落在 CALIBRATION_BASELINE_PAGE_RANGE 里。 */
+  baselinePage: Readonly<Record<string, number>>;
+  mutations: readonly MutationCheck[];
+  /** 基准图上被提过的 P0（应该没有）。基准图是 6 到 7 分的毛坯，P1 允许。 */
   baselineSevere: readonly MergedFinding[];
   /** 两家评委页面分差不超过 1 的图占几成。 */
   agreeShare: number;
@@ -291,9 +339,18 @@ export interface CalibrationReport {
   failures: string[];
 }
 
+function mutationDropsEnough(input: { baseScore: number; mutatedScore: number; cap: number; detected: boolean }): boolean {
+  const { baseScore, mutatedScore, cap, detected } = input;
+  if (baseScore > cap) return mutatedScore <= cap;
+  return mutatedScore < baseScore || (mutatedScore <= cap && detected);
+}
+
 /**
  * 前置：cards 是校准那批图（基准图、几张真实界面、每个弄坏各一张）每家评委各评 CALIBRATION_RUNS 次的卡，都是同一档批大小下评的。
- * 后置：按 limits.ts 的校准门槛算出报告。“被指出”= 那次的卡里有一条发现的框盖住弄坏的位置，且记在预期的那一项、不轻于预期的严重度。
+ * 后置：按 limits.ts 的校准门槛算出报告。
+ * “被指出”= 那次的卡里有一条发现的框盖住弄坏的位置，且不轻于预期的严重度；预期 P1 到 P3 的还要记在预期的那一项，
+ * 预期 P0 的不看记在哪一项（P0 不分项，见 rubric.SEVERITY_CAPS）。每张卡的分数先按 collapseSameRule 归并，和 mergeRound 口径一致。
+ * “拉得开”只看弄坏注入的那一项，判法见方案第 3.5 节的门槛表。
  */
 export function calibrationReport(input: {
   manifest: CaptureManifest;
@@ -309,6 +366,7 @@ export function calibrationReport(input: {
     return {
       pass: false,
       stableShare: {},
+      baselinePage: {},
       mutations: [],
       baselineSevere: [],
       agreeShare: 0,
@@ -318,67 +376,64 @@ export function calibrationReport(input: {
 
   const cardsOf = (shotKey: string, judge: string): ScoreCard[] =>
     input.cards.filter((c) => c.shot === shotKey && c.judge === judge).sort((a, b) => a.run - b.run);
+  const pageOf = (c: ScoreCard) => pageScore(cardScores(c.findings));
 
   const stableShare: Record<string, number> = {};
   for (const judge of judges) {
     let stableCount = 0;
     for (const shotKey of shotKeys) {
-      const runs = cardsOf(shotKey, judge);
-      if (runs.length === 0) continue;
-      const runScores = runs.map((c) => scoreFromFindings(c.findings));
-      const isStable = DIMENSIONS.every((dim) => {
-        const vals = runScores.map((s) => s[dim]);
-        return Math.max(...vals) - Math.min(...vals) <= CALIBRATION_MAX_SPREAD;
-      });
-      if (isStable) stableCount++;
+      const pages = cardsOf(shotKey, judge).map(pageOf);
+      if (pages.length === 0) continue;
+      if (Math.max(...pages) - Math.min(...pages) <= CALIBRATION_MAX_SPREAD) stableCount++;
     }
     const share = stableCount / shotKeys.length;
     stableShare[judge] = share;
     if (share < CALIBRATION_STABLE_SHARE) {
-      failures.push(`复评稳定未过：${judge} 稳定占比 ${(share * 100).toFixed(1)}%，低于 ${(CALIBRATION_STABLE_SHARE * 100).toFixed(0)}%`);
+      failures.push(`复评稳定未过：${judge} 页面分稳定的图占 ${(share * 100).toFixed(1)}%，低于 ${(CALIBRATION_STABLE_SHARE * 100).toFixed(0)}%`);
     }
   }
 
-  const mutationRows: Array<{ id: string; judge: string; gap: number; hits: number; ok: boolean }> = [];
+  const baselinePage: Record<string, number> = {};
+  const { min: baseMin, max: baseMax } = CALIBRATION_BASELINE_PAGE_RANGE;
+  const mutationRows: MutationCheck[] = [];
   for (const judge of judges) {
-    const baseCards = cardsOf(input.baselineKey, judge);
-    const baseMedian = median(baseCards.map((c) => pageScore(scoreFromFindings(c.findings))));
+    const baseScores = cardsOf(input.baselineKey, judge).map((c) => cardScores(c.findings));
+    const basePage = median(baseScores.map(pageScore));
+    baselinePage[judge] = basePage;
+    if (basePage < baseMin || basePage > baseMax) {
+      failures.push(`基准图页面分未落在 ${baseMin} 到 ${baseMax} 分：${judge} 中位数 ${basePage} 分`);
+    }
 
     for (const m of input.mutations) {
-      const mutKey = `${input.baselineKey}!${m.id}`;
-      const mutCards = cardsOf(mutKey, judge);
-      const mutMedian = median(mutCards.map((c) => pageScore(scoreFromFindings(c.findings))));
-      const gap = baseMedian - mutMedian;
-      const minGap = m.expectSeverity === "P0" || m.expectSeverity === "P1" ? CALIBRATION_MIN_GAP_SEVERE : CALIBRATION_MIN_GAP_MINOR;
+      const dimension = m.expectDimension;
+      const cap = SEVERITY_CAPS[m.expectSeverity][0]!.cap;
+      const mutCards = cardsOf(`${input.baselineKey}!${m.id}`, judge);
+      const baseScore = median(baseScores.map((s) => s[dimension]));
+      const mutatedScore = median(mutCards.map((c) => cardScores(c.findings)[dimension]));
 
       const customBox = (m as Mutation & { box?: Finding["box"] }).box;
       const targetBox = customBox ?? DEFAULT_MUTATION_BOXES[m.id];
+      const hits = mutCards.filter((c) =>
+        c.findings.some(
+          (f) =>
+            (m.expectSeverity === "P0" ? f.severity === "P0" : dimensionOfRule(f.rule) === dimension && SEVERITY_RANK[f.severity] <= SEVERITY_RANK[m.expectSeverity]) &&
+            (targetBox === undefined || coversTarget(f.box, targetBox)),
+        ),
+      ).length;
+      const detected = hits >= CALIBRATION_MIN_HITS;
+      const dropped = mutationDropsEnough({ baseScore, mutatedScore, cap, detected });
 
-      let hits = 0;
-      for (const c of mutCards) {
-        const detected = c.findings.some((f) => {
-          const dimOk = dimensionOfRule(f.rule) === m.expectDimension;
-          const sevOk = SEVERITY_RANK[f.severity] <= SEVERITY_RANK[m.expectSeverity];
-          const boxOk = targetBox === undefined ? true : coversTarget(f.box, targetBox);
-          return dimOk && sevOk && boxOk;
-        });
-        if (detected) hits++;
-      }
-
-      const ok = gap >= minGap && hits >= CALIBRATION_MIN_HITS;
-      mutationRows.push({ id: m.id, judge, gap, hits, ok });
-      if (gap < minGap) {
-        failures.push(`分差未拉开：${judge} 在 ${m.id}（${m.expectSeverity}）上分差 ${gap}，至少要 ${minGap}`);
+      mutationRows.push({ id: m.id, judge, dimension, baseScore, mutatedScore, cap, hits, ok: dropped && detected });
+      if (!dropped) {
+        const need = baseScore > cap ? `要压到 ${cap} 分以下` : `要低于基准图，或被指出且不高于 ${cap} 分`;
+        failures.push(`分差未拉开：${judge} 在 ${m.id}（${m.expectSeverity}，${DIMENSION_TITLES[dimension]}）上这一项基准 ${baseScore} 分、弄坏后 ${mutatedScore} 分，${need}`);
       }
     }
 
     const severeMutations = input.mutations.filter((m) => m.expectSeverity === "P0" || m.expectSeverity === "P1");
     const checkSet = severeMutations.length > 0 ? severeMutations : input.mutations;
     if (checkSet.length > 0) {
-      const caught = checkSet.filter((m) => {
-        const row = mutationRows.find((r) => r.id === m.id && r.judge === judge)!;
-        return row.hits >= CALIBRATION_MIN_HITS;
-      }).length;
+      const caught = checkSet.filter((m) => mutationRows.find((r) => r.id === m.id && r.judge === judge)!.hits >= CALIBRATION_MIN_HITS).length;
       const detectShare = caught / checkSet.length;
       if (detectShare < CALIBRATION_DETECT_SHARE) {
         failures.push(`检出率未过：${judge} 抓到 ${caught}/${checkSet.length}（${(detectShare * 100).toFixed(1)}%），低于 ${(CALIBRATION_DETECT_SHARE * 100).toFixed(0)}%`);
@@ -389,15 +444,8 @@ export function calibrationReport(input: {
   const baseSources = input.cards
     .filter((c) => c.shot === input.baselineKey)
     .sort((a, b) => a.judge.localeCompare(b.judge) || a.run - b.run)
-    .map((c) => ({
-      by: `${c.judge}#${c.run}`,
-      judge: c.judge,
-      findings: c.findings.filter((f) => f.severity === "P0" || f.severity === "P1"),
-    }));
-  const mergedBaseSevere = mergeFindingsForShot(
-    input.baselineKey,
-    baseSources.map((s) => ({ by: s.by, findings: s.findings })),
-  ).map<MergedFinding>((m) => ({
+    .map((c) => ({ by: `${c.judge}#${c.run}`, findings: c.findings.filter((f) => f.severity === "P0") }));
+  const mergedBaseSevere = mergeFindingsForShot(input.baselineKey, baseSources).map<MergedFinding>((m) => ({
     shotKey: m.shotKey,
     rule: m.rule,
     severity: m.severity,
@@ -408,15 +456,12 @@ export function calibrationReport(input: {
     counted: true,
   }));
   if (mergedBaseSevere.length > 0) {
-    failures.push(`基准图上出现 ${mergedBaseSevere.length} 条 P0/P1 发现`);
+    failures.push(`基准图上出现 ${mergedBaseSevere.length} 条 P0 发现`);
   }
 
   let agreeCount = 0;
   for (const shotKey of shotKeys) {
-    const medians = judges.map((judge) => {
-      const runs = cardsOf(shotKey, judge);
-      return median(runs.map((c) => pageScore(scoreFromFindings(c.findings))));
-    });
+    const medians = judges.map((judge) => median(cardsOf(shotKey, judge).map(pageOf)));
     if (Math.max(...medians) - Math.min(...medians) <= 1) agreeCount++;
   }
   const agreeShare = agreeCount / shotKeys.length;
@@ -427,6 +472,7 @@ export function calibrationReport(input: {
   return {
     pass: failures.length === 0,
     stableShare,
+    baselinePage,
     mutations: mutationRows,
     baselineSevere: mergedBaseSevere,
     agreeShare,
@@ -459,8 +505,8 @@ export function sentinelDrift(calibration: readonly ScoreCard[], round: readonly
     const hitDrift = roundCards.some((rc) => {
       const calSameJudge = calAll.filter((c) => c.judge === rc.judge);
       const refCards = calSameJudge.length > 0 ? calSameJudge : calAll;
-      const calMed = median(refCards.map((c) => pageScore(scoreFromFindings(c.findings))));
-      const currPage = pageScore(scoreFromFindings(rc.findings));
+      const calMed = median(refCards.map((c) => pageScore(cardScores(c.findings))));
+      const currPage = pageScore(cardScores(rc.findings));
       return Math.abs(currPage - calMed) > SENTINEL_MAX_DRIFT;
     });
     if (hitDrift) drifted.push(key);

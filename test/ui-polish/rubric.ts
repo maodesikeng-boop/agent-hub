@@ -2,7 +2,7 @@
 // 评委提示词（judge-prompt.ts）、合分（score.ts）、给用户看的评分卡都从这一处取，不各写各的。
 // 不变量：分数由发现按固定的表算出来，评委自己报的整体印象分只用来对账，不进最后的分数。
 import { z } from "zod";
-import { FINDING_TEXT_MAX_CHARS, MAX_FINDINGS_PER_CARD } from "./limits.ts";
+import { CONTRAST_SEVERITY_LINES, FINDING_TEXT_MAX_CHARS, MAX_FINDINGS_PER_CARD } from "./limits.ts";
 
 export const DIMENSIONS = ["style", "standard", "aesthetic", "ux"] as const;
 export type Dimension = (typeof DIMENSIONS)[number];
@@ -27,6 +27,26 @@ export const SEVERITY_MEANS: Record<Severity, string> = {
 };
 
 /**
+ * 9 分的审美高线。没有硬伤只说明到了及格的毛坯，离 9 分还差“好看”。
+ * 基准图本身也只有 6 到 7 分：它只定风格不跑偏，不是天花板。
+ */
+export const NINE_POINT_BAR: readonly string[] = [
+  "没有裁切、错位、遮挡这些硬伤，不等于 9 到 10 分。",
+  "9 分以上要对得上 Linear、Claude 桌面版、iA Writer、柳宗理器物那一级的完成度：克制，比例匀称，留白通透，细节做到位。",
+  "功能正常、没有报错，但排版呆板拘谨、疏密失衡、层级平庸、没有呼吸感，这是 6 到 7 分的毛坯：引 A1 到 A8 里对应的那条，照实记 P1（这一项封顶 6 分）或 P2（封顶 7 到 8 分），并写出具体怎么改好看。",
+  "基准图只管风格基因不跑偏，不是 9 分的样板。和基准图一样不等于好；在同一套气质里比基准图更好看是对的。",
+];
+
+/** 归口规则：同一处毛病只能算在一条规则、一项上，严重度照这里定死，不由评委自选。 */
+export const ATTRIBUTION_RULES: readonly string[] = [
+  "同一处根因只记一条发现，不准拆成几条，也不准跨几条规则、几项重复记。",
+  `对比度只归行业标准：只引 \`WCAG 1.4.3\`、\`WCAG 1.4.11\` 或 \`machine:contrast\`。对比度低于 ${CONTRAST_SEVERITY_LINES.P0_BELOW}:1 记 P0；${CONTRAST_SEVERITY_LINES.P0_BELOW}:1 到 ${CONTRAST_SEVERITY_LINES.P1_BELOW}:1 之间记 P1。不在 U5、S1、A6 里再记。`,
+  "`machine:overlap` 只有盖住文字、图标或控件主体，导致看不全、点不到时记 P0；相邻按钮透明的可点范围边缘擦碰几个像素、看上去没有遮挡的，一律记 P2。",
+  "一屏或一张卡里出现两个实心主按钮抢主次，只记 `A1` P1，不在 U1、S1、ui-standard 里再记。",
+  "同类区域的行高或内边距比基准图压缩一半以上、文字挤成一团，记 `S3` 或 `S5` 的 P1（二选一，不重复记）。",
+];
+
+/**
  * 一条能引用的原则。评委的每条发现都要引一条规则，引不出来的发现不算数。
  * “艺术家、美学家”落在 aesthetic 这一组：每条写明出处和在图上怎么核对。
  */
@@ -41,14 +61,14 @@ export interface Principle {
 }
 
 export const PRINCIPLES: readonly Principle[] = [
-  { id: "S1", dimension: "style", title: "配色", source: "基准图的风格说明；ui-standard 第 4 条", check: "底色、字色、线色都在风格说明的色板里；强调色只出现在主按钮、选中态、小圆点这几处" },
+  { id: "S1", dimension: "style", title: "配色", source: "基准图的风格说明；ui-standard 第 4 条", check: "大面积底色极淡中性或微暖；强调色只在主按钮、选中态、小圆点这几处小面积出现，选中和门禁用 10% 浅果冻底；颜色跑出这套气质才记，对比度不在这里记" },
   { id: "S2", dimension: "style", title: "字号层级", source: "基准图的风格说明；ui-standard 第 3 条", check: "一屏里的字号只有 12、13.5、15、17 四档（资料页名字 22 除外），字重只有 400、500、600" },
-  { id: "S3", dimension: "style", title: "间距节奏", source: "基准图的风格说明；ui-standard 第 1 条", check: "同类容器的内边距、同类行的行高和基准图里的一样；间距都落在间距档位上" },
+  { id: "S3", dimension: "style", title: "间距节奏", source: "基准图的风格说明；ui-standard 第 1 条", check: "间距落在 ui-standard 的间距档位上，同类容器的内边距、同类行的行高在本屏内一致；不要求和基准图的像素一样，比基准图更舒展匀称是加分；同类区域的行高或内边距比基准图压缩一半以上、文字挤成一团记 P1" },
   { id: "S4", dimension: "style", title: "形状", source: "基准图的风格说明；ui-standard 第 2、4 条", check: "圆角只有三档；除聊天输入框外没有阴影；没有渐变和毛玻璃；分隔只用 1px 细线或底色" },
-  { id: "S5", dimension: "style", title: "疏密", source: "基准图的风格说明", check: "和基准图里同类的区域比，不更挤也不更空：行与行的间隔、留白占比相当" },
+  { id: "S5", dimension: "style", title: "疏密", source: "基准图的风格说明", check: "导航栏紧凑、阅读区宽裕，过程细节默认收起；不要求留白占比和基准图一样，更通透更好；同类区域的行高或内边距比基准图压缩一半以上、文字挤成一团记 P1，空得说不出理由记 P2" },
   { id: "S6", dimension: "style", title: "语气", source: "ui-standard 第 3、13、14 条；frontend-rules 第 2 条", check: "外壳用英文、句首大写；状态词是 Working… 这一套；不用“·”“|”“/”拼接；没有解释性的灰色小字" },
 
-  { id: "A1", dimension: "aesthetic", title: "层级", source: "Wathan、Schoger《Refactoring UI》的层级一章；设计评审常用的眯眼测试", check: "把图缩到四分之一：第一眼落在这一屏最重要的东西上，主操作只有一个，次要信息明显退后" },
+  { id: "A1", dimension: "aesthetic", title: "层级", source: "Wathan、Schoger《Refactoring UI》的层级一章；设计评审常用的眯眼测试", check: "把图缩到四分之一：第一眼落在这一屏最重要的东西上，次要信息明显退后；主操作只有一个，一屏或一张卡里出现两个实心主按钮抢主次记 P1" },
   { id: "A2", dimension: "aesthetic", title: "对齐", source: "Müller-Brockmann《Grid Systems in Graphic Design》；Robin Williams 的对齐原则", check: "数一数各块左边缘连成的竖线，同一栏里应当只有一到两条；数字、图标、文字的基线对得上" },
   { id: "A3", dimension: "aesthetic", title: "亲疏", source: "格式塔的接近律和相似律", check: "相关的东西挨得近、无关的离得远；组内间距小于组间间距；同类的东西长得一样" },
   { id: "A4", dimension: "aesthetic", title: "留白", source: "原研哉《白》；Rams 十条第 10 条“尽可能少的设计”", check: "内容不顶边、不挤在一起，也没有说不出理由的大块空白；留白是匀的，不是一头挤一头空" },
@@ -57,11 +77,11 @@ export const PRINCIPLES: readonly Principle[] = [
   { id: "A7", dimension: "aesthetic", title: "克制", source: "Rams 十条第 5、10 条；Tufte《The Visual Display of Quantitative Information》的数据墨水比", check: "逐个元素问“删掉它用户会不会少知道什么”：多余的边框、底色胶囊、图标、分隔线都算毛病" },
   { id: "A8", dimension: "aesthetic", title: "细节完成度", source: "Rams 十条第 8 条“细致到最后一个细节”；民艺运动的“用之美”（柳宗悦提出，柳宗理在产品设计里沿用）", check: "没有被裁的字和图标；嵌套圆角内小外大；图标粗细一致；截断处有省略号；光学上居中的看着居中" },
 
-  { id: "U1", dimension: "ux", title: "一眼知道做什么", source: "Krug《Don't Make Me Think》；Nielsen 十条第 6 条“认得出，不用回忆”", check: "不看说明能说出这一屏是干什么的、下一步点哪里；能点的东西看着就能点" },
+  { id: "U1", dimension: "ux", title: "一眼知道做什么", source: "Krug《Don't Make Me Think》；Nielsen 十条第 6 条“认得出，不用回忆”", check: "不看说明能说出这一屏是干什么的、下一步点哪里；能点的东西看着就能点；两个实心主按钮抢主次归 A1，不在这里再记" },
   { id: "U2", dimension: "ux", title: "状态看得见", source: "Nielsen 十条第 1 条“系统状态可见”", check: "在忙、空、出错、离线各有交代；空状态和错误告诉用户下一步怎么办" },
   { id: "U3", dimension: "ux", title: "好点", source: "Fitts 定律；Apple HIG 触控目标 44pt；WCAG 2.2 的 2.5.8", check: "常用操作的目标够大、离手近；手机上可点范围不小于 44px；挨着的目标不会点错" },
   { id: "U4", dimension: "ux", title: "防错和可撤回", source: "Nielsen 十条第 3、5 条", check: "撤不回的操作有二次确认；危险按钮和普通按钮分得开；主按钮能点就一定交得上去" },
-  { id: "U5", dimension: "ux", title: "读得清", source: "WCAG 2.2 的 1.4.3、1.4.11", check: "文字和底色的对比度够；被截断的内容有办法看全；不靠颜色一种手段传达状态" },
+  { id: "U5", dimension: "ux", title: "看得全", source: "WCAG 2.2 的 1.4.1；Nielsen 十条第 6 条", check: "被截断的内容有办法看全；不靠颜色一种手段传达状态；对比度不在这里记，归行业标准" },
   { id: "U6", dimension: "ux", title: "位置一致", source: "Nielsen 十条第 4 条“一致和标准”", check: "同一个功能在各屏的位置、样子、叫法相同（关闭在右上、主按钮在最右、返回在左上）" },
   { id: "U7", dimension: "ux", title: "不打扰", source: "frontend-rules 第 2、5 条；Nielsen 十条第 8 条“简洁”", check: "细节默认收起；没有飘来飘去的动效；一屏里要用户注意的东西不超过一处" },
   { id: "U8", dimension: "ux", title: "手机顺手", source: "Hoober 的拇指热区研究；ui-standard 第 19、20 条", check: "主要操作在屏幕下半；输入框贴着键盘；没有横向滚动；安全区里不放内容" },
