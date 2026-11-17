@@ -205,6 +205,64 @@ describe("mergeRound", () => {
     expect(res.disagreements).toEqual(["diff@desktop"]);
   });
 
+  it("机器量出同一条规则的多处只记一条，留下最重的，不把这一项压穿", () => {
+    const contrast = (x: number, severity: Finding["severity"], evidence: string): MachineFinding => ({
+      rule: "machine:contrast",
+      severity,
+      box: { x, y: 0.1, w: 0.05, h: 0.03 },
+      what: "对比度不足",
+      fix: "加深字色",
+      evidence,
+    });
+    const machine = Array.from({ length: 14 }, (_, i) => contrast(i * 0.06, "P1", "4.1:1"));
+    const manifest = makeManifest(makeShot("chat.normal@desktop", machine));
+    const res = mergeRound({
+      manifest,
+      cards: [card("chat.normal@desktop", JUDGE_A, []), card("chat.normal@desktop", JUDGE_B, [])],
+      dismissals: [],
+    });
+    expect(res.findings).toHaveLength(1);
+    expect(res.shots[0]!.dimensions.standard).toBe(6);
+  });
+
+  it("WCAG 1.4.3 和 machine:contrast、HIG touch-44 和 machine:touch-target 各算同一条规则", () => {
+    const mf = (rule: string, x: number): MachineFinding => ({
+      rule,
+      severity: "P1",
+      box: { x, y: 0.1, w: 0.05, h: 0.03 },
+      what: rule,
+      fix: rule,
+      evidence: "量到的数",
+    });
+    const manifest = makeManifest(makeShot("chat.normal@mobile", [mf("machine:contrast", 0.1), mf("machine:touch-target", 0.5)]));
+    const res = mergeRound({
+      manifest,
+      cards: [
+        card("chat.normal@mobile", JUDGE_A, [finding("WCAG 1.4.3", "P1", { x: 0.7, y: 0.7, w: 0.1, h: 0.1 }), finding("WCAG 1.4.3", "P1", { x: 0.3, y: 0.8, w: 0.1, h: 0.1 })]),
+        card("chat.normal@mobile", JUDGE_B, [finding("HIG touch-44", "P1", { x: 0.85, y: 0.85, w: 0.1, h: 0.1 })]),
+      ],
+      dismissals: [],
+    });
+    expect(res.findings).toHaveLength(2);
+    expect(res.shots[0]!.dimensions.standard).toBe(5);
+  });
+
+  it("一家评委自己写两条同规则的 P3 只算一家提的，不计分", () => {
+    const manifest = makeManifest(makeShot("chat.normal@desktop"));
+    const res = mergeRound({
+      manifest,
+      cards: [
+        card("chat.normal@desktop", JUDGE_A, [finding("A4", "P3", { x: 0.1, y: 0.1, w: 0.1, h: 0.1 }), finding("A4", "P3", { x: 0.6, y: 0.6, w: 0.1, h: 0.1 })]),
+        card("chat.normal@desktop", JUDGE_B, []),
+      ],
+      dismissals: [],
+    });
+    expect(res.findings).toHaveLength(1);
+    expect(res.findings[0]!.by).toEqual([JUDGE_A]);
+    expect(res.findings[0]!.counted).toBe(false);
+    expect(res.shots[0]!.page).toBe(10);
+  });
+
   it("缺卡或 sha256 对不上时抛 Error，列出是哪张图哪家评委", () => {
     const manifest = makeManifest(makeShot("a@desktop"), makeShot("b@desktop"));
     expect(() =>
@@ -348,6 +406,29 @@ describe("calibrationReport", () => {
       }
     }
     expect(rowOf(calibrationReport(fix), "two-primaries")).toMatchObject({ hits: 3, ok: true });
+  });
+
+  it("P0 弄坏不看算在哪一项：评委在目标框里引体验规则记 P0 也算抓到", () => {
+    const covered = MUTATIONS.find((m) => m.id === "covered-message")!;
+    expect(covered.expectSeverity).toBe("P0");
+    const fix = buildPassingFixture();
+    fix.mutations = [...sampleMutations, covered];
+    fix.manifest.shots.push(makeShot(`${BASE}!covered-message`));
+    for (const judge of [JUDGE_A, JUDGE_B]) {
+      for (let run = 1; run <= CALIBRATION_RUNS; run++) {
+        fix.cards.push(card(`${BASE}!covered-message`, judge, [...baselineFindings(), finding("U5", "P0", { x: 0.27, y: 0.78, w: 0.44, h: 0.1 })], { run }));
+      }
+    }
+    expect(rowOf(calibrationReport(fix), "covered-message")).toMatchObject({ dimension: "standard", mutatedScore: 4, hits: 3, ok: true });
+  });
+
+  it("单张卡把同一条规则拆成两条时按一条算分，和正式轮口径一致", () => {
+    const fix = buildPassingFixture();
+    for (const c of cardsOf(fix, BASE, JUDGE_B)) {
+      c.findings = [...baselineFindings(), finding("WCAG 1.4.3", "P1", { x: 0.02, y: 0.2, w: 0.2, h: 0.5 }), finding("WCAG 1.4.3", "P1", { x: 0.8, y: 0.4, w: 0.1, h: 0.05 })];
+    }
+    const rep = calibrationReport(fix);
+    expect(rep.baselinePage[JUDGE_B]).toBe(6);
   });
 
   it("基准图上的 P1 不算重度发现，不挡校准", () => {
