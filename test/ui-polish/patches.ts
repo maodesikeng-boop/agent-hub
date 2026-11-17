@@ -116,8 +116,12 @@ const claudeWindows = (fiveHour: number, sevenDay: number): RateLimitInfo => ({
 function quota(page: Page, claude: RateLimitInfo, agy: QuotaResponse): Promise<void[]> {
   return Promise.all([
     editState(page, (state) => {
-      const pm = firstPmConversation(state);
-      return { ...state, sessions: state.sessions.map((s) => (s.conversationId === pm ? { ...s, vendor: "claude", rateLimit: claude } : s)) };
+      const [pm, second] = state.conversations.filter((c) => c.conversation.kind === "pm").map((c) => c.conversation.id);
+      // 第二个项目经理用 Antigravity：有按需查额度的厂商在用，浮层才会去查它的两个模型族（selectors.ts 的 hasFetchedQuotaSession）
+      return {
+        ...state,
+        sessions: state.sessions.map((s) => (s.conversationId === pm ? { ...s, vendor: "claude", rateLimit: claude } : s.conversationId === second ? { ...s, vendor: "agy" } : s)),
+      };
     }),
     fixedJson(page, anyDevice(API_PATHS.quota), agy),
     editJson<ModelsResponse>(page, anyDevice(API_PATHS.models), (m) => ({ catalogs: m.catalogs.map((c) => (c.vendor === "agy" ? { ...c, availability: "available" } : c)) })),
@@ -328,7 +332,7 @@ const PATCHES: Record<PatchName, (page: Page) => Promise<unknown>> = {
         { vendor: "agy", id: "claude_gpt", windows: { five_hour: { utilization: 1, resetsAt: Math.floor((NOW + 4 * HOUR) / 1000), status: "rejected" }, seven_day: { utilization: 0.97, resetsAt: Math.floor((NOW + 50 * HOUR) / 1000), status: "allowed" } } },
       ],
     }),
-  "provider-installing": (page) => providers(page, (v) => (v === "agy" ? { installed: false, availability: "not_installed", job: job("running", INSTALL_LOG.split("\n").slice(0, 2).join("\n")) } : {})),
+  "provider-installing": (page) => providers(page, (v) => (v === "agy" ? { installed: false, version: null, accountSummary: null, canInstall: true, canUpdate: false, canSignOut: false, availability: "not_installed", job: job("running", INSTALL_LOG.split("\n").slice(0, 2).join("\n")) } : {})),
   "provider-login-code": (page) =>
     providers(page, (v) =>
       v === "deepseek"
@@ -348,7 +352,7 @@ const PATCHES: Record<PatchName, (page: Page) => Promise<unknown>> = {
           }
         : {},
     ),
-  "provider-failed": (page) => providers(page, (v) => (v === "agy" ? { installed: false, availability: "not_installed", job: job("failed", INSTALL_LOG) } : {})),
+  "provider-failed": (page) => providers(page, (v) => (v === "agy" ? { installed: false, version: null, accountSummary: null, canInstall: true, canUpdate: false, canSignOut: false, availability: "not_installed", job: job("failed", INSTALL_LOG) } : {})),
   "vendor-sync-preview": (page) => fixedJson(page, anyDevice(API_PATHS.vendorSyncPreview), SYNC_PREVIEW),
   "browsers-pending": (page) =>
     editJson<BrowserSessionsResponse>(page, localOnly(API_PATHS.browserSessions), (body) => ({

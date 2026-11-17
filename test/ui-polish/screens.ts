@@ -79,6 +79,8 @@ export type ScreenStep =
   | { storage: Record<string, string> }
   /** 等这个选择器出现才往下走。 */
   | { waitFor: string }
+  /** 把浏览器钉住的时间拨到“固定时间 + 这么多毫秒”（界面按时间差判断的状态，比如断线满 30 秒才算离线）；之后要有一次重画才看得到。 */
+  | { clock: number }
   /** 局部图裁哪个元素（清单里写了 focus 的界面才用）。 */
   | { crop: string }
   /** 清掉登录 cookie 再刷新（“没登录”那一屏）。 */
@@ -186,7 +188,7 @@ export const SCREEN_INVENTORY: readonly ScreenSpec[] = [
   s("profile.long", "资料页：超长名字、超长路径、十几个文件夹", D, "long", "stress", "#/pm/1"),
   s("new-pm.default", "新建项目经理：默认", DM, "normal", "standard", "点左栏的加号", "弹窗"),
   s("new-pm.more", "新建项目经理：展开更多设置，中间滚动", D, "normal", "standard", "点 More settings", "弹窗"),
-  s("new-pm.invalid", "新建项目经理：名字超长、重名", D, "error", "standard", "名字填 41 个字", "弹窗"),
+  s("new-pm.invalid", "新建项目经理：名字超长", D, "error", "standard", "名字填 41 个字；一行只报一个原因，重名另算", "弹窗"),
   s("new-pm.devices", "新建项目经理：多台设备时第一行选设备", D, "normal", "two-devices", "点加号", "弹窗"),
   s("settings.general", "设置：通用（界面大小、通知）", D, "normal", "standard", "点左下角齿轮，General", "弹窗"),
   s("settings.providers", "设置：厂商，各家状态混排", D, "normal", "standard", "Providers，补丁 vendors-mixed", "弹窗"),
@@ -242,6 +244,8 @@ const openSettings = (tab?: string): ScreenStep[] => [{ waitFor: SIDEBAR }, { cl
 /** 手机设置：列表页点齿轮，再点一行。 */
 const openMobileSettings = (row?: string): ScreenStep[] => [{ waitFor: SIDEBAR }, { click: btn("Settings", SIDEBAR) }, { waitFor: 'role=heading[name="Settings"]' }, ...(row === undefined ? [] : [{ click: btn(row, "role=main") }])];
 const openQuota = (patch: string): ScreenStep[] => [{ patch }, { waitFor: SIDEBAR }, { click: `${SIDEBAR} >> role=button[name=/usage|Usage/]` }, { crop: 'role=dialog[name="Usage"]' }];
+/** 断线满 30 秒（src/web/devices.ts 的 OFFLINE_AFTER_MS）才从“重连中”变“离线”：截图的时间是钉住的，要拨过去。 */
+const PAST_OFFLINE: ScreenStep = { clock: 31_000 };
 const typeInComposer = (text: string): ScreenStep => ({ type: { into: COMPOSER, text } });
 const storage = (items: Record<string, string>): ScreenStep => ({ storage: items });
 
@@ -279,7 +283,7 @@ export const SCREEN_STEPS: Readonly<Partial<Record<string, readonly ScreenStep[]
   "chat.file-preview": [...openPm("Momo"), { click: `${LOG} >> text=metrics-2026-46.csv` }, { crop: DIALOG }],
   "chat.scrolled": [...openPm("文档整理"), ...waitCharts, { scroll: { target: LOG, to: "top" } }, { waitFor: btn("Scroll to bottom") }],
   "chat.notices": [{ patch: "ws-reconnecting" }, { patch: "health-driver" }, ...openPm("小林"), { waitFor: "text=找不到 Claude" }],
-  "chat.device-offline": [{ patch: "device-offline" }, { waitFor: NAV }, { click: btn("东京小助手", SIDEBAR) }],
+  "chat.device-offline": [{ patch: "device-offline" }, { waitFor: `${SIDEBAR} >> text=Reconnecting` }, PAST_OFFLINE, { click: btn("东京小助手", SIDEBAR) }, { waitFor: `${SIDEBAR} >> text=Offline` }],
   "chat.archived": [{ waitFor: NAV }, { click: btn("Archived", SIDEBAR) }, { click: btn("旧博客", SIDEBAR) }, { waitFor: LOG }],
   "chat.scale-compact": [storage({ "agent-hub.uiScale": "sm" }), ...openPm("小林")],
   "chat.scale-xl": [storage({ "agent-hub.uiScale": "xl" }), ...openPm("小林")],
@@ -319,23 +323,25 @@ export const SCREEN_STEPS: Readonly<Partial<Record<string, readonly ScreenStep[]
   "graph.dialog-history": [...openPm("阿青"), { click: btn("Completed", RAIL) }, { click: btn("上周的发布", RAIL) }, { crop: DIALOG }],
   "graph.dialog-wide": [...openPm("小林"), { click: `${RAIL} >> role=button[name="Zoom"] >> nth=1` }, { crop: DIALOG }],
   "graph.cancel-confirm": [...openPm("小林"), { click: btn("Zoom", RAIL) }, { click: btn("Cancel graph", DIALOG) }, { crop: TOP_DIALOG }],
-  "worker.normal": [...openPm("小林"), { click: btn("Piece「排查只读 Worker 超时」已派出", LOG) }, { waitFor: "text=只读排查：为什么只读 Worker 偶发超时" }],
-  "worker.busy": [{ patch: "session-working" }, ...openPm("小林"), { click: btn("Piece「排查只读 Worker 超时」已派出", LOG) }, { waitFor: btn("Stop") }],
-  "worker.ended": [...openPm("小林"), { click: btn("Piece「按厂商配置换会话阈值」已收工", LOG) }, { waitFor: "text=把 AUTO_RENEW_CONTEXT_TOKENS 改成按厂商配置" }],
+  "worker.normal": [...openPm("小林"), { click: btn("排查只读 Worker 超时 Started", LOG) }, { waitFor: "text=只读排查：为什么只读 Worker 偶发超时" }],
+  "worker.busy": [{ patch: "session-working" }, ...openPm("小林"), { click: btn("排查只读 Worker 超时 Started", LOG) }, { waitFor: btn("Stop") }],
+  "worker.ended": [...openPm("小林"), { click: btn("按厂商配置换会话阈值 Ended", LOG) }, { waitFor: "text=把 AUTO_RENEW_CONTEXT_TOKENS 改成按厂商配置" }],
   "router.normal": openRouter,
   "router.empty": openRouter,
   "router.tray-many": [...openRouter, { click: btn("Show more", "role=main") }],
   "router.timeline": [...openRouter, { scroll: { target: ROUTER_LOG, to: "bottom" } }],
   "router.working": [{ patch: "router-working" }, ...openRouter, { waitFor: "text=Working…" }],
   "router.failed": [{ patch: "router-failed" }, ...openRouter, { waitFor: btn("Retry", ROUTER_LOG) }],
-  "router.offline-card": [{ patch: "device-offline" }, ...openRouter],
+  "router.offline-card": [{ patch: "device-offline" }, { waitFor: `${SIDEBAR} >> text=Reconnecting` }, PAST_OFFLINE, ...openRouter, { waitFor: `${SIDEBAR} >> text=Offline` }],
   "router.model-picker": [{ patch: "vendors-mixed" }, ...openRouter, { click: 'role=button[name^="Router model"]' }, { crop: POPOVER }],
   "router.model-picker-vendor": [{ patch: "router-vendor-agy" }, ...openRouter, { click: 'role=button[name^="Router model"]' }, { click: `${POPOVER} >> text=Model & effort` }, { crop: POPOVER }],
   "router.model-picker-long": [{ patch: "models-long-names" }, ...openRouter, { click: 'role=button[name^="Router model"]' }, { crop: POPOVER }],
   "router.model-drawer-mobile": [{ patch: "vendors-mixed" }, ...openRouter, { click: 'role=button[name^="Router model"]' }, { crop: DIALOG }],
   "profile.normal": openProfile("小林"),
-  "profile.lower": [...openProfile("小林"), { scroll: { target: "role=main", to: "bottom" } }],
-  "profile.schedule-form": [...openProfile("阿青"), { click: btn("New", 'role=region[name="Schedules"]') }, { type: { into: 'role=region[name="Schedules"] >> role=textbox >> nth=0', text: "一个特别特别长的定时任务名字用来测试表单校验会不会提示太长了再长一点再长一点" } }, { crop: 'role=region[name="Schedules"]' }],
+  // 资料页自己滚（main 不滚）：滚的是页面里那一层
+  "profile.lower": [...openProfile("小林"), { scroll: { target: `role=region[name="小林's profile"] >> .page-fade`, to: "bottom" } }],
+  // 名字要超过 40 个字（MAX_SCHEDULE_NAME_CHARS）才会出校验提示
+  "profile.schedule-form": [...openProfile("阿青"), { click: btn("New", 'role=region[name="Schedules"]') }, { type: { into: 'role=region[name="Schedules"] >> role=textbox >> nth=0', text: "一个特别特别长的定时任务名字用来测试表单校验会不会提示太长了再长一点再长一点再长一点" } }, { crop: 'role=region[name="Schedules"]' }],
   "profile.memory-open": [...openProfile("小林"), { click: btn("Memory files") }, { crop: 'role=region[name="Memory files"]' }],
   "profile.history": [...openProfile("阿青"), { click: 'role=button[name^="History"]' }, { crop: 'role=region[name="History"]' }],
   "profile.history-empty": [...openProfile("项目经理"), { click: 'role=button[name^="History"]' }, { crop: 'role=region[name="History"]' }],
@@ -350,7 +356,7 @@ export const SCREEN_STEPS: Readonly<Partial<Record<string, readonly ScreenStep[]
   "new-pm.devices": [{ waitFor: SIDEBAR }, { click: btn("New project manager", SIDEBAR) }, { crop: DIALOG }],
   "settings.general": [...openSettings("General"), { crop: DIALOG }],
   "settings.providers": [{ patch: "vendors-mixed" }, ...openSettings("Providers"), { crop: DIALOG }],
-  "settings.providers-busy": [{ patch: "provider-installing" }, ...openSettings("Providers"), { waitFor: "text=Installing package…" }, { crop: DIALOG }],
+  "settings.providers-busy": [{ patch: "provider-installing" }, ...openSettings("Providers"), { waitFor: "text=Installing package…" }, { click: `${DIALOG} >> role=button[name^="Show log"]` }, { crop: DIALOG }],
   "settings.providers-sign-in": [{ patch: "provider-login-code" }, ...openSettings("Providers"), { click: `${DIALOG} >> role=button >> text=Sign in…` }, { crop: TOP_DIALOG }],
   "settings.providers-error": [{ patch: "provider-failed" }, ...openSettings("Providers"), { crop: DIALOG }],
   "settings.sync-preview": [{ patch: "vendor-sync-preview" }, { patch: "vendors-mixed" }, ...openSettings("Providers"), { waitFor: `${DIALOG} >> text=Sign in…` }, { click: btn("Scan…", DIALOG) }, { crop: TOP_DIALOG }],
@@ -358,7 +364,8 @@ export const SCREEN_STEPS: Readonly<Partial<Record<string, readonly ScreenStep[]
   "settings.computers-multi": [...openSettings("Computers"), { click: btn("Invite", DIALOG) }, { crop: DIALOG }],
   "settings.computers-remove": [...openSettings("Computers"), { click: `${DIALOG} >> role=button[name^="Remove"]` }, { crop: TOP_DIALOG }],
   "settings.security": [...openSettings("Security & Access"), { crop: DIALOG }],
-  "settings.security-open": [{ patch: "browsers-pending" }, { patch: "public-access-on" }, ...openSettings("Security & Access"), { click: `${DIALOG} >> role=button[name^="Signed-in browsers"]` }, { crop: DIALOG }],
+  // 有待批准的浏览器时这一组自己展开，不用再点（点了反而收起）
+  "settings.security-open": [{ patch: "browsers-pending" }, { patch: "public-access-on" }, ...openSettings("Security & Access"), { waitFor: `${DIALOG} >> role=button[name="Allow"]` }, { crop: DIALOG }],
   "settings.long": [{ patch: "public-access-long-domain" }, ...openSettings("Security & Access"), { crop: DIALOG }],
   "settings.tabs-top": [...openSettings("General"), { crop: DIALOG }],
   "m-settings.home": openMobileSettings(),
