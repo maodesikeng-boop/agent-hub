@@ -18090,8 +18090,8 @@
     },
     {
       "id": "G19",
-      "layer": "screen",
-      "title": "留到 R02 定：同一道拍板题在对话和右栏各展开一张、同屏两个实心主按钮（见 PR 的 Scope）",
+      "layer": "shared-component",
+      "title": "同一道拍板题只在对话里作答：右栏的提问和等拍板的步骤收成一行，点了跳到对话里的卡",
       "findings": [
         "sidebar.normal@desktop#A7",
         "sidebar.rail@narrow#U7",
@@ -18132,7 +18132,24 @@
         "m-settings.home@mobile#A7",
         "m-settings.drawer-confirm@mobile#A7"
       ],
-      "commit": null,
+      "commit": "6d0df4d0",
+      "outcome": null
+    },
+    {
+      "id": "G20",
+      "layer": "screen",
+      "title": "文件预览窗跟内容走；窄屏流程图的字不小于 12px；单步切面轮切一刀；登录窗 Submit 到底部最右",
+      "findings": [
+        "chat.file-preview@desktop#A4",
+        "chat.markdown@mobile#U5",
+        "chat.markdown@mobile#A5",
+        "rail.completed@desktop#A6",
+        "rail.completed@desktop#ui-standard §12",
+        "graph.dialog-history@desktop#A6",
+        "settings.providers-sign-in@desktop#A1",
+        "settings.providers-sign-in@desktop#ui-standard §10"
+      ],
+      "commit": "dfc66286",
       "outcome": null
     }
   ],

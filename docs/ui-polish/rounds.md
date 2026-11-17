@@ -5,7 +5,7 @@
 | 轮次 | 类型 | 提交 | 评委 | 不达标图数 | 最低分 | 中位分 | 修改组 | 下一步 | PR |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | C2 | calibration | `4550f6cd` | agy/gemini-4-carbon、claude/opus | 0 | — | — | — | — | — |
-| R01 | review | `bb156d4f` | agy/gemini-4-carbon、claude/opus | 133 | 4 | 6 | 修 18 / 留 0 / 撤 0 | fix | https://github.com/maodesikeng-boop/agent-hub/pull/346 |
+| R01 | review | `bb156d4f` | agy/gemini-4-carbon、claude/opus | 133 | 4 | 6 | 修 19 / 留 0 / 撤 0 | fix | https://github.com/maodesikeng-boop/agent-hub/pull/346 |
 
 ## 每张图各轮页面分
 
