@@ -14,11 +14,13 @@ import {
   type RateLimitInfo,
   type ReadonlyPolicy,
   type RateLimitWindow,
+  type SessionCapabilities,
   type WriteScope,
   type QuotaWindowKey,
   windowKeyByMinutes,
 } from "../../shared/index.ts";
 import { runPs } from "../../daemon/driver/process.ts";
+import { codexCapabilityArgs } from "./capabilities.ts";
 
 
 /**
@@ -77,8 +79,8 @@ export type CodexSandboxPolicy =
 export type CodexApprovalDecision = "accept" | "decline";
 
 /** 生成 codex 子进程命令行参数。 */
-export function buildCodexArgs(): string[] {
-  return [...CODEX_APP_SERVER_ARGS];
+export function buildCodexArgs(capabilities?: SessionCapabilities): string[] {
+  return capabilities ? [...CODEX_APP_SERVER_ARGS, ...codexCapabilityArgs(capabilities)] : [...CODEX_APP_SERVER_ARGS];
 }
 
 /** JSON.stringify 并转义 U+2028 / U+2029，保证单行 NDJSON 安全写入 stdin。 */

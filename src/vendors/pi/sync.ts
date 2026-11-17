@@ -3,9 +3,10 @@
 // - OAuth 凭证文件 `mcp-auth.json` 绝不读取或复制，带 `oauth` 的条目识别为不可跨厂同步；
 // - Skill：全局 `~/.pi/agent/skills/<name>` 逐项建软链，项目级 `.agents/skills` 原生及 `--skill` 直读。
 import { join } from "node:path";
-import type { ScannedCloudConnector, VendorSyncAdapter, VendorSyncContext } from "../daemon-types.ts";
+import type { ScannedCloudConnector, VendorCapabilityScan, VendorSyncAdapter, VendorSyncContext } from "../daemon-types.ts";
 import { isPlainObject, patchJsoncMapEntries, readJsoncObjectFile } from "../_common/sync/jsonc.ts";
 import { collectProtectedJsonMcpNames, parseCommonJsonMcpEntry, serializeCommonJsonMcpEntry } from "../_common/sync/mcp.ts";
+import { listCanonicalSkillNames, readSkillDescription } from "../_common/sync/skills.ts";
 import piSpec from "./spec.ts";
 
 function resolvePiAgentDir(ctx: VendorSyncContext): string {
@@ -75,5 +76,20 @@ export const piSyncAdapter: VendorSyncAdapter = {
       return { mode: "symlink", targetDir: join(resolvePiAgentDir(ctx), "skills") };
     }
     return { mode: "native" };
+  },
+
+  async scanCapabilities(ctx) {
+    const out: VendorCapabilityScan = { skills: [], mcp: [], connectors: [], plugins: [] };
+    const globalAgentsSkills = join(ctx.userHome, ".agents", "skills");
+    for (const sName of listCanonicalSkillNames(globalAgentsSkills).names) {
+      const dir = join(globalAgentsSkills, sName);
+      out.skills.push({
+        name: sName,
+        dir,
+        description: readSkillDescription(dir),
+        source: { kind: "global" },
+      });
+    }
+    return out;
   },
 };

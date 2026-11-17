@@ -1,7 +1,7 @@
 // 守护进程侧每家厂商交出来的东西（docs/vendor-plugin-design.md 3.3 节）：src/vendors/<id>/daemon.ts 默认导出一个 VendorDaemon，
 // daemon-registry.ts 按名单加载；src/vendors/<id>/paths.ts 放只给守护进程用的路径（PATH 里找不到可执行文件时去哪找）。
 // 只给守护进程用（会 import 驱动、起进程的代码），网页不引。现有的接口（VendorComposerBase、VendorCatalogProbe、SessionForker、Driver）原样复用。
-import type { CapabilitySource } from "../shared/pm-capabilities.ts";
+import type { CapabilitySource, SessionCapabilities } from "../shared/pm-capabilities.ts";
 import type {
   AgentVendor,
   Driver,
@@ -248,6 +248,8 @@ interface VendorLaunchInput {
   osSandboxed: boolean;
   /** 只读 Worker、而且这家用设置文件落实只读（spec 的 capabilities.readonly 是 "settings"）时才给：统一策略和要盖住写的真实路径。 */
   readonly?: { policy: ReadonlyPolicy; denyWrite: string[] };
+  /** 这次会话按项目经理选择收窄的能力清单；没有 = 全开。 */
+  capabilities?: SessionCapabilities;
 }
 
 /** launchFiles 交出来的：设置文件的内容（守护进程写成 launch/<会话>/settings.json，进 fingerprint）、这一次启动多设的环境变量。 */

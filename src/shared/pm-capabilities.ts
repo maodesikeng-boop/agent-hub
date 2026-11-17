@@ -37,6 +37,9 @@ export interface CapabilityItem {
   groupId: string;
   /** 本机哪几家能看到它。 */
   vendors: readonly AgentVendor[];
+  /** 技能在磁盘上的目录（MCP 和连接器没有）；不同厂商指向不同目录时按 skillDirs 区分。 */
+  dir?: string;
+  skillDirs?: Readonly<Partial<Record<AgentVendor, string>>>;
 }
 
 export interface CapabilityGroup {
@@ -101,9 +104,38 @@ export interface PmCapabilitiesPatch {
   set?: Readonly<Record<CapabilityKey, boolean | null>>;
 }
 
+function cmpStr(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function kindOfCapabilityKey(key: CapabilityKey): CapabilityKind {
+  if (key.startsWith("skill:") && key.length > 6) return "skill";
+  if (key.startsWith("mcp:") && key.length > 4) return "mcp";
+  if (key.startsWith("connector:")) {
+    const rest = key.slice("connector:".length);
+    const sep = rest.indexOf(":");
+    if (sep > 0 && sep + 1 < rest.length) return "connector";
+  }
+  throw new RangeError(`invalid capability key: ${key}`);
+}
+
+export function isValidCapabilityKey(key: string): boolean {
+  if (key.length === 0 || key.length > 512 || /[\u0000-\u001f]/.test(key)) return false;
+  try {
+    kindOfCapabilityKey(key);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** 没存过选择的项目经理：三类都是 all，没有 overrides。 */
 export function defaultPmCapabilityPolicy(pmId: PmId): PmCapabilityPolicy {
-  throw new Error("未实现");
+  return {
+    pmId,
+    base: { skill: "all", mcp: "all", connector: "all" },
+    overrides: {},
+  };
 }
 
 /**
@@ -111,12 +143,20 @@ export function defaultPmCapabilityPolicy(pmId: PmId): PmCapabilityPolicy {
  * 前置：key 是 capabilityKey 拼出来的。
  */
 export function capabilityEnabled(policy: PmCapabilityPolicy, key: CapabilityKey): boolean {
-  throw new Error("未实现");
+  if (Object.hasOwn(policy.overrides, key)) {
+    return policy.overrides[key]!;
+  }
+  const kind = kindOfCapabilityKey(key);
+  return policy.base[kind] === "all";
 }
 
 /** 拼稳定键。connector 必须给 vendor，别的种类给了也不用。 */
 export function capabilityKey(kind: CapabilityKind, name: string, vendor?: AgentVendor): CapabilityKey {
-  throw new Error("未实现");
+  if (kind === "connector") {
+    if (!vendor) throw new RangeError("connector capabilityKey requires vendor");
+    return `connector:${vendor}:${name}`;
+  }
+  return `${kind}:${name}`;
 }
 
 /**
@@ -124,7 +164,33 @@ export function capabilityKey(kind: CapabilityKind, name: string, vendor?: Agent
  * 改了 base 时，已有 overrides 里和新 base 相同的项也去掉。
  */
 export function applyCapabilitiesPatch(policy: PmCapabilityPolicy, patch: PmCapabilitiesPatch): PmCapabilityPolicy {
-  throw new Error("未实现");
+  const nextBase: Record<CapabilityKind, CapabilityBase> = {
+    skill: patch.base?.skill ?? policy.base.skill,
+    mcp: patch.base?.mcp ?? policy.base.mcp,
+    connector: patch.base?.connector ?? policy.base.connector,
+  };
+  const rawOverrides = new Map<CapabilityKey, boolean>(Object.entries(policy.overrides));
+  if (patch.set !== undefined) {
+    for (const [key, value] of Object.entries(patch.set)) {
+      if (value === null) rawOverrides.delete(key);
+      else if (typeof value === "boolean") rawOverrides.set(key, value);
+    }
+  }
+  const sortedKeys = [...rawOverrides.keys()].sort(cmpStr);
+  const nextOverrides: Record<CapabilityKey, boolean> = {};
+  for (const key of sortedKeys) {
+    const val = rawOverrides.get(key)!;
+    const kind = kindOfCapabilityKey(key);
+    const defaultEnabled = nextBase[kind] === "all";
+    if (val !== defaultEnabled) {
+      nextOverrides[key] = val;
+    }
+  }
+  return {
+    pmId: policy.pmId,
+    base: nextBase,
+    overrides: nextOverrides,
+  };
 }
 
 /**
@@ -138,5 +204,85 @@ export function resolveSessionCapabilities(
   inventory: CapabilityInventory,
   vendor: AgentVendor,
 ): SessionCapabilities | null {
-  throw new Error("未实现");
+  const connectorPrefix = `connector:${vendor}:`;
+  const visibleItems = inventory.items.filter((item) => {
+    if (!item.vendors.includes(vendor)) return false;
+    if (item.kind === "connector") return item.key.startsWith(connectorPrefix);
+    return true;
+  });
+  const visibleByKey = new Map<CapabilityKey, CapabilityItem>();
+  for (const item of visibleItems) visibleByKey.set(item.key, item);
+
+  const pluginItemKeys = new Map<string, Set<CapabilityKey>>();
+  for (const group of inventory.groups) {
+    if (group.source.kind !== "plugin" || group.source.vendor !== vendor) continue;
+    let set = pluginItemKeys.get(group.source.plugin);
+    if (!set) {
+      set = new Set();
+      pluginItemKeys.set(group.source.plugin, set);
+    }
+    for (const key of group.itemKeys) {
+      if (visibleByKey.has(key)) set.add(key);
+    }
+  }
+
+  const denyPlugins: string[] = [];
+  const coveredByPlugin = new Set<CapabilityKey>();
+  for (const [pluginId, keys] of pluginItemKeys) {
+    if (keys.size === 0) continue;
+    const allDisabled = [...keys].every((key) => !capabilityEnabled(policy, key));
+    if (allDisabled) {
+      denyPlugins.push(pluginId);
+      for (const key of keys) coveredByPlugin.add(key);
+    }
+  }
+
+  const denySkills = new Set<string>();
+  const denyMcp = new Set<string>();
+  const denyConnectors = new Set<string>();
+  const allowSkillsByName = new Map<string, SkillRef>();
+  const allowMcp = new Set<string>();
+  let anyDisabled = false;
+
+  for (const item of visibleItems) {
+    const enabled = capabilityEnabled(policy, item.key);
+    if (!enabled) {
+      anyDisabled = true;
+      if (coveredByPlugin.has(item.key)) continue;
+      if (item.kind === "skill") denySkills.add(item.name);
+      else if (item.kind === "mcp") denyMcp.add(item.name);
+      else if (item.kind === "connector") denyConnectors.add(item.key.slice(connectorPrefix.length));
+    } else {
+      if (item.kind === "skill") {
+        const dir = item.skillDirs?.[vendor] ?? item.dir;
+        if (dir !== undefined && !allowSkillsByName.has(item.name)) {
+          allowSkillsByName.set(item.name, { name: item.name, dir });
+        }
+      } else if (item.kind === "mcp") {
+        allowMcp.add(item.name);
+      }
+    }
+  }
+
+  if (
+    policy.base.skill === "all" &&
+    policy.base.mcp === "all" &&
+    policy.base.connector === "all" &&
+    !anyDisabled
+  ) {
+    return null;
+  }
+
+  return {
+    deny: {
+      skills: [...denySkills].sort(cmpStr),
+      mcp: [...denyMcp].sort(cmpStr),
+      connectors: [...denyConnectors].sort(cmpStr),
+      plugins: [...new Set(denyPlugins)].sort(cmpStr),
+    },
+    allow: {
+      skills: [...allowSkillsByName.keys()].sort(cmpStr).map((name) => allowSkillsByName.get(name)!),
+      mcp: [...allowMcp].sort(cmpStr),
+    },
+  };
 }

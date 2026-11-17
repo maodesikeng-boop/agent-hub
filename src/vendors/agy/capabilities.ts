@@ -2,10 +2,14 @@
 // 服务器照起、工具调用被拒（只读 Worker 已在用同一套规则，readonly.ts）。技能和云端连接器没有按会话的开关，isolation 是 shared。
 import type { SessionCapabilities } from "../../shared/pm-capabilities.ts";
 
+function cmpStr(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 /**
  * 后置：每个关掉的 MCP 一条 `mcp(<服务器>/*)`，按名字排序；deny.mcp 为空返回 []。
  * 调用方把它并进 --settings 的 permissions.deny（只读 Worker 的规则也在那里），不覆盖已有规则。
  */
 export function agyCapabilityDenyRules(caps: SessionCapabilities): string[] {
-  throw new Error("未实现");
+  return [...new Set(caps.deny.mcp)].sort(cmpStr).map((server) => `mcp(${server}/*)`);
 }

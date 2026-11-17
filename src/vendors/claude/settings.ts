@@ -4,7 +4,9 @@
 // 别家不读这个文件，不生成（docs/vendor-plugin-design.md 的 A15）。
 import type { SessionRole } from "../../shared/domain.ts";
 import { HUB_COMMAND } from "../../shared/names.ts";
+import type { SessionCapabilities } from "../../shared/pm-capabilities.ts";
 import type { ReadonlyPolicy } from "../../shared/readonly-policy.ts";
+import { claudeCapabilitySettings, type ClaudeCapabilitySettings } from "./capabilities.ts";
 import { CLAUDE_READONLY_PERMISSION_MODE, claudeReadonlyPermissions, claudeReadonlySandbox, type ClaudeReadonlySandbox } from "./readonly-settings.ts";
 
 /** 放行 hub 命令的规则（M2 起在 hub.ts，M3 W3 挪来和别的权限放一起，命令名用 names.ts 的）。 */
@@ -59,10 +61,12 @@ export interface SessionSettingsInput {
   osSandboxed: boolean;
   /** 默认 process.platform（Windows 原生版下 Claude CLI 不支持自带沙箱，只读档关自带沙箱并由外层 MXC/受限令牌回退兜底）。 */
   platform?: string;
+  /** 这次会话按项目经理选择收窄的能力清单；没有 = 全开。 */
+  capabilities?: SessionCapabilities;
 }
 
 /** --settings 文件的内容。 */
-export interface SessionSettings {
+export interface SessionSettings extends ClaudeCapabilitySettings {
   permissions: { defaultMode: PermissionMode; allow: string[]; deny?: string[] };
   sandbox: PlainSandbox | ClaudeReadonlySandbox;
   autoMemoryEnabled?: false;
@@ -85,6 +89,7 @@ interface PlainSandbox {
  */
 export function buildSessionSettings(input: SessionSettingsInput): SessionSettings {
   const hubAllow = input.hubSock === undefined ? [] : [HUB_ALLOW_RULE];
+  const capSettings = input.capabilities ? claudeCapabilitySettings(input.capabilities) : {};
   if (input.readonly) {
     const { allow, deny } = claudeReadonlyPermissions(input.readonly.policy);
     const platform = input.platform ?? process.platform;
@@ -93,12 +98,14 @@ export function buildSessionSettings(input: SessionSettingsInput): SessionSettin
         permissions: { defaultMode: CLAUDE_READONLY_PERMISSION_MODE, allow: [...hubAllow, ...allow], deny },
         sandbox: { enabled: false, network: { allowUnixSockets: [] } },
         autoMemoryEnabled: false,
+        ...capSettings,
       };
     }
     return {
       permissions: { defaultMode: CLAUDE_READONLY_PERMISSION_MODE, allow: [...hubAllow, ...allow], deny },
       sandbox: claudeReadonlySandbox(input.readonly.policy, { denyWrite: input.readonly.denyWrite, hubSock: input.hubSock }),
       autoMemoryEnabled: false,
+      ...capSettings,
     };
   }
   const sandbox: PlainSandbox = { network: { allowUnixSockets: input.hubSock === undefined ? [] : [input.hubSock] } };
@@ -109,7 +116,7 @@ export function buildSessionSettings(input: SessionSettingsInput): SessionSettin
     settings.autoMemoryEnabled = false;
     if (input.osSandboxed) sandbox.enabled = false;
   }
-  return settings;
+  return { ...settings, ...capSettings };
 }
 
 /** 这个角色启动时要多设的环境变量（daemon/launch.ts 盖在 HUB_TOKEN 等之上）。项目经理没有。 */

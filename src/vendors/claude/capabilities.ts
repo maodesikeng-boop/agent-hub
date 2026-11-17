@@ -11,10 +11,31 @@ export interface ClaudeCapabilitySettings {
   enabledPlugins?: Record<string, false>;
 }
 
+function cmpStr(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 /**
  * 后置：只含 caps.deny 里有东西的键；deny 全空返回 {}。同样的 caps 返回逐字相同的对象（键按名字排序），进 fingerprint 不抖。
  * allow 不用（claude 支持禁用清单）。
  */
 export function claudeCapabilitySettings(caps: SessionCapabilities): ClaudeCapabilitySettings {
-  throw new Error("未实现");
+  const out: ClaudeCapabilitySettings = {};
+
+  const skills = [...new Set(caps.deny.skills)].sort(cmpStr);
+  if (skills.length > 0) {
+    out.skillOverrides = Object.fromEntries(skills.map((name) => [name, "off" as const]));
+  }
+
+  const deniedServers = [...new Set([...caps.deny.mcp, ...caps.deny.connectors])].sort(cmpStr);
+  if (deniedServers.length > 0) {
+    out.deniedMcpServers = deniedServers.map((serverName) => ({ serverName }));
+  }
+
+  const plugins = [...new Set(caps.deny.plugins)].sort(cmpStr);
+  if (plugins.length > 0) {
+    out.enabledPlugins = Object.fromEntries(plugins.map((id) => [id, false as const]));
+  }
+
+  return out;
 }

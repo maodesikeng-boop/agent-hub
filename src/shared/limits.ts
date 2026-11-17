@@ -1033,3 +1033,5 @@ export const PM_CAPABILITY_INVENTORY_RETRY_MS = 5_000;
 export const PM_CAPABILITY_DESCRIPTION_MAX_CHARS = 200;
 /** 一次 PATCH 最多改多少项（组开关一次改一整组，最大的插件组本机 37 个技能）。 */
 export const PM_CAPABILITY_PATCH_MAX_KEYS = 500;
+/** Codex 云端连接器工具缓存 JSON（含完整工具 Schema，本机实测 2.8 MB）只读扫描字节上限。 */
+export const PM_CAPABILITY_APPS_CACHE_MAX_BYTES = 16 * 1024 * 1024;

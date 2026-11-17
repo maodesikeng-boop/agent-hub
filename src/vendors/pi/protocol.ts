@@ -14,6 +14,7 @@ import {
   type LaunchFiles,
 } from "../../shared/index.ts";
 import { runPs } from "../../daemon/driver/process.ts";
+import { piCapabilityArgs } from "./capabilities.ts";
 import { PI_NO_PROJECT_TRUST_ARGS, buildPiSkillArgs } from "./composer.ts";
 import { PI_READONLY_CLI_ARGS } from "./readonly.ts";
 import piSpec from "./spec.ts";
@@ -30,7 +31,7 @@ export function isValidPiSessionId(id: string): boolean {
 
 export interface BuildPiArgsInput {
   row: Pick<AgentSessionRow, "cwd" | "addDirs" | "model" | "effort">;
-  files: Pick<LaunchFiles, "promptFile" | "readonly" | "skillsDir">;
+  files: Pick<LaunchFiles, "promptFile" | "readonly" | "skillsDir" | "capabilities">;
   sessionId: string;
   /** 若会话文件位于别的编码子目录，恢复时可直接传 `--session <path>`；默认传 `--session-id <sessionId>`。 */
   sessionFile?: string | null;
@@ -48,12 +49,26 @@ export function buildPiArgs(input: BuildPiArgsInput): string[] {
   if (files.promptFile.trim() !== "") {
     args.push("--append-system-prompt", files.promptFile);
   }
-  args.push(...PI_NO_PROJECT_TRUST_ARGS, ...buildPiSkillArgs(row.cwd, row.addDirs));
+  const capArgs = files.capabilities ? piCapabilityArgs(files.capabilities) : null;
+  if (capArgs?.noSkills) {
+    args.push(...PI_NO_PROJECT_TRUST_ARGS, "--no-skills");
+    for (const dir of capArgs.skillDirs) {
+      args.push("--skill", dir);
+    }
+  } else {
+    args.push(...PI_NO_PROJECT_TRUST_ARGS, ...buildPiSkillArgs(row.cwd, row.addDirs));
+  }
   // 产品技能（只有项目经理会话有）：--skill 只对这次进程生效（get_commands 里 scope: "temporary"，2026-11-12 pi 1.5.2 实测）
   if (files.skillsDir) args.push("--skill", files.skillsDir);
   args.push(...agentLaunchArgs({ vendor: "pi", model: row.model, effort: row.effort }));
   if (files.readonly !== undefined) {
-    args.push(...PI_READONLY_CLI_ARGS);
+    if (capArgs && capArgs.excludeTools.length > 0) {
+      args.push("--exclude-tools", ["edit", "write", ...capArgs.excludeTools].join(","), "--no-mcp");
+    } else {
+      args.push(...PI_READONLY_CLI_ARGS);
+    }
+  } else if (capArgs && capArgs.excludeTools.length > 0) {
+    args.push("--exclude-tools", capArgs.excludeTools.join(","));
   }
   return args;
 }

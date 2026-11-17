@@ -9,6 +9,7 @@ import {
   type WriteScope,
   type TokenUsage,
 } from "../../shared/index.ts";
+import { agyCapabilityDenyRules } from "./capabilities.ts";
 import { agyReadonlySettings, type AgyConnectorRules } from "./readonly.ts";
 import { buildChildEnv, lineUuid, mergeUserTexts, userContent } from "../../daemon/driver/protocol.ts";
 import type { TurnUsage } from "../../daemon/driver/usage.ts";
@@ -72,10 +73,18 @@ export function buildAgyArgs(
   if (resume && session.vendorSessionId.trim() !== "") {
     args.push("--conversation", session.vendorSessionId);
   }
+  const capDeny = files.capabilities ? agyCapabilityDenyRules(files.capabilities) : [];
   if (files.readonly !== undefined) {
-    args.push(...AGY_PLAN_PERMISSION_ARGS, "--settings", JSON.stringify(agyReadonlySettings(files.readonly, connectors)));
+    const settings = agyReadonlySettings(files.readonly, connectors);
+    if (capDeny.length > 0) {
+      settings.permissions.deny = [...new Set([...settings.permissions.deny, ...capDeny])];
+    }
+    args.push(...AGY_PLAN_PERMISSION_ARGS, "--settings", JSON.stringify(settings));
   } else {
     args.push(...AGY_AUTO_PERMISSION_ARGS);
+    if (capDeny.length > 0) {
+      args.push("--settings", JSON.stringify({ permissions: { deny: capDeny } }));
+    }
   }
   args.push(...agentLaunchArgs({ vendor: "agy", model: session.model, effort: session.effort }));
   for (const dir of session.addDirs) args.push("--add-dir", dir);

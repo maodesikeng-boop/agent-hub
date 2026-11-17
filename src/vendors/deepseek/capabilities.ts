@@ -12,10 +12,18 @@ export function deepseekSkillFilesystemConfig(
   caps: SessionCapabilities,
   productSkillsDir: string | undefined,
 ): { includeDefaultRoots: false; customSkillDirs: string[] } | null {
-  throw new Error("未实现");
+  if (caps.deny.skills.length === 0) return null;
+  const dirs = caps.allow.skills.map((s) => s.dir);
+  if (productSkillsDir) dirs.push(productSkillsDir);
+  return {
+    includeDefaultRoots: false,
+    customSkillDirs: [...new Set(dirs)],
+  };
 }
 
 /** 后置：去掉名字在 deny.mcp 里的服务器，其余原样、顺序不变。 */
 export function filterDeepSeekMcpServers(servers: readonly McpServer[], caps: SessionCapabilities): McpServer[] {
-  throw new Error("未实现");
+  if (caps.deny.mcp.length === 0) return [...servers];
+  const denied = new Set(caps.deny.mcp);
+  return servers.filter((server) => !denied.has(server.name));
 }
