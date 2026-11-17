@@ -4,10 +4,9 @@
 import type { CaptureManifest } from "./capture.ts";
 import {
   CALIBRATION_AGREE_SHARE,
+  CALIBRATION_BASELINE_PAGE_RANGE,
   CALIBRATION_DETECT_SHARE,
   CALIBRATION_MAX_SPREAD,
-  CALIBRATION_MIN_GAP_MINOR,
-  CALIBRATION_MIN_GAP_SEVERE,
   CALIBRATION_MIN_HITS,
   CALIBRATION_STABLE_SHARE,
   FINDING_MATCH_IOU,
@@ -20,9 +19,12 @@ import {
 import type { Mutation } from "./mutations.ts";
 import {
   DIMENSIONS,
+  DIMENSION_TITLES,
+  SEVERITY_CAPS,
   dimensionOfRule,
   pageScore,
   scoreFromFindings,
+  type Dimension,
   type DimensionScores,
   type Finding,
   type ScoreCard,
@@ -276,14 +278,28 @@ export function mergeRound(input: { manifest: CaptureManifest; cards: readonly S
   };
 }
 
+/** 一个弄坏在一家评委那里的结果。分数都是 CALIBRATION_RUNS 次的中位数，只看弄坏注入的那一项。 */
+export interface MutationCheck {
+  id: string;
+  judge: string;
+  dimension: Dimension;
+  baseScore: number;
+  mutatedScore: number;
+  /** 这一项有一条预期严重度的发现时最多几分（SEVERITY_CAPS 的第一档）。 */
+  cap: number;
+  hits: number;
+  ok: boolean;
+}
+
 export interface CalibrationReport {
-  /** 四条门槛都过才是 true。 */
+  /** 门槛都过才是 true。 */
   pass: boolean;
-  /** 同一张图同一项多次评分的最大差不超过 CALIBRATION_MAX_SPREAD 的图占几成，分评委。 */
+  /** 页面分在多次评分里最大差不超过 CALIBRATION_MAX_SPREAD 的图占几成，分评委。 */
   stableShare: Readonly<Record<string, number>>;
-  /** 每个弄坏：基准图的页面分减去弄坏图的页面分（各取多次的中位数），3 次里被指出几次，分评委。 */
-  mutations: ReadonlyArray<{ id: string; judge: string; gap: number; hits: number; ok: boolean }>;
-  /** 基准图上被提过的 P0、P1（应该没有）。 */
+  /** 基准图的页面分（多次的中位数），分评委。应落在 CALIBRATION_BASELINE_PAGE_RANGE 里。 */
+  baselinePage: Readonly<Record<string, number>>;
+  mutations: readonly MutationCheck[];
+  /** 基准图上被提过的 P0（应该没有）。基准图是 6 到 7 分的毛坯，P1 允许。 */
   baselineSevere: readonly MergedFinding[];
   /** 两家评委页面分差不超过 1 的图占几成。 */
   agreeShare: number;
@@ -291,9 +307,17 @@ export interface CalibrationReport {
   failures: string[];
 }
 
+function mutationDropsEnough(input: { baseScore: number; mutatedScore: number; cap: number; detected: boolean }): boolean {
+  const { baseScore, mutatedScore, cap, detected } = input;
+  if (baseScore > cap) return mutatedScore <= cap;
+  return mutatedScore < baseScore || (mutatedScore <= cap && detected);
+}
+
 /**
  * 前置：cards 是校准那批图（基准图、几张真实界面、每个弄坏各一张）每家评委各评 CALIBRATION_RUNS 次的卡，都是同一档批大小下评的。
- * 后置：按 limits.ts 的校准门槛算出报告。“被指出”= 那次的卡里有一条发现的框盖住弄坏的位置，且记在预期的那一项、不轻于预期的严重度。
+ * 后置：按 limits.ts 的校准门槛算出报告。
+ * “被指出”= 那次的卡里有一条发现的框盖住弄坏的位置，且记在预期的那一项、不轻于预期的严重度。
+ * “拉得开”只看弄坏注入的那一项，判法见方案第 3.5 节的门槛表。
  */
 export function calibrationReport(input: {
   manifest: CaptureManifest;
@@ -309,6 +333,7 @@ export function calibrationReport(input: {
     return {
       pass: false,
       stableShare: {},
+      baselinePage: {},
       mutations: [],
       baselineSevere: [],
       agreeShare: 0,
@@ -318,67 +343,65 @@ export function calibrationReport(input: {
 
   const cardsOf = (shotKey: string, judge: string): ScoreCard[] =>
     input.cards.filter((c) => c.shot === shotKey && c.judge === judge).sort((a, b) => a.run - b.run);
+  const pageOf = (c: ScoreCard) => pageScore(scoreFromFindings(c.findings));
 
   const stableShare: Record<string, number> = {};
   for (const judge of judges) {
     let stableCount = 0;
     for (const shotKey of shotKeys) {
-      const runs = cardsOf(shotKey, judge);
-      if (runs.length === 0) continue;
-      const runScores = runs.map((c) => scoreFromFindings(c.findings));
-      const isStable = DIMENSIONS.every((dim) => {
-        const vals = runScores.map((s) => s[dim]);
-        return Math.max(...vals) - Math.min(...vals) <= CALIBRATION_MAX_SPREAD;
-      });
-      if (isStable) stableCount++;
+      const pages = cardsOf(shotKey, judge).map(pageOf);
+      if (pages.length === 0) continue;
+      if (Math.max(...pages) - Math.min(...pages) <= CALIBRATION_MAX_SPREAD) stableCount++;
     }
     const share = stableCount / shotKeys.length;
     stableShare[judge] = share;
     if (share < CALIBRATION_STABLE_SHARE) {
-      failures.push(`复评稳定未过：${judge} 稳定占比 ${(share * 100).toFixed(1)}%，低于 ${(CALIBRATION_STABLE_SHARE * 100).toFixed(0)}%`);
+      failures.push(`复评稳定未过：${judge} 页面分稳定的图占 ${(share * 100).toFixed(1)}%，低于 ${(CALIBRATION_STABLE_SHARE * 100).toFixed(0)}%`);
     }
   }
 
-  const mutationRows: Array<{ id: string; judge: string; gap: number; hits: number; ok: boolean }> = [];
+  const baselinePage: Record<string, number> = {};
+  const { min: baseMin, max: baseMax } = CALIBRATION_BASELINE_PAGE_RANGE;
+  const mutationRows: MutationCheck[] = [];
   for (const judge of judges) {
-    const baseCards = cardsOf(input.baselineKey, judge);
-    const baseMedian = median(baseCards.map((c) => pageScore(scoreFromFindings(c.findings))));
+    const baseScores = cardsOf(input.baselineKey, judge).map((c) => scoreFromFindings(c.findings));
+    const basePage = median(baseScores.map(pageScore));
+    baselinePage[judge] = basePage;
+    if (basePage < baseMin || basePage > baseMax) {
+      failures.push(`基准图页面分未落在 ${baseMin} 到 ${baseMax} 分：${judge} 中位数 ${basePage} 分`);
+    }
 
     for (const m of input.mutations) {
-      const mutKey = `${input.baselineKey}!${m.id}`;
-      const mutCards = cardsOf(mutKey, judge);
-      const mutMedian = median(mutCards.map((c) => pageScore(scoreFromFindings(c.findings))));
-      const gap = baseMedian - mutMedian;
-      const minGap = m.expectSeverity === "P0" || m.expectSeverity === "P1" ? CALIBRATION_MIN_GAP_SEVERE : CALIBRATION_MIN_GAP_MINOR;
+      const dimension = m.expectDimension;
+      const cap = SEVERITY_CAPS[m.expectSeverity][0]!.cap;
+      const mutCards = cardsOf(`${input.baselineKey}!${m.id}`, judge);
+      const baseScore = median(baseScores.map((s) => s[dimension]));
+      const mutatedScore = median(mutCards.map((c) => scoreFromFindings(c.findings)[dimension]));
 
       const customBox = (m as Mutation & { box?: Finding["box"] }).box;
       const targetBox = customBox ?? DEFAULT_MUTATION_BOXES[m.id];
+      const hits = mutCards.filter((c) =>
+        c.findings.some(
+          (f) =>
+            dimensionOfRule(f.rule) === dimension &&
+            SEVERITY_RANK[f.severity] <= SEVERITY_RANK[m.expectSeverity] &&
+            (targetBox === undefined || coversTarget(f.box, targetBox)),
+        ),
+      ).length;
+      const detected = hits >= CALIBRATION_MIN_HITS;
+      const dropped = mutationDropsEnough({ baseScore, mutatedScore, cap, detected });
 
-      let hits = 0;
-      for (const c of mutCards) {
-        const detected = c.findings.some((f) => {
-          const dimOk = dimensionOfRule(f.rule) === m.expectDimension;
-          const sevOk = SEVERITY_RANK[f.severity] <= SEVERITY_RANK[m.expectSeverity];
-          const boxOk = targetBox === undefined ? true : coversTarget(f.box, targetBox);
-          return dimOk && sevOk && boxOk;
-        });
-        if (detected) hits++;
-      }
-
-      const ok = gap >= minGap && hits >= CALIBRATION_MIN_HITS;
-      mutationRows.push({ id: m.id, judge, gap, hits, ok });
-      if (gap < minGap) {
-        failures.push(`分差未拉开：${judge} 在 ${m.id}（${m.expectSeverity}）上分差 ${gap}，至少要 ${minGap}`);
+      mutationRows.push({ id: m.id, judge, dimension, baseScore, mutatedScore, cap, hits, ok: dropped && detected });
+      if (!dropped) {
+        const need = baseScore > cap ? `要压到 ${cap} 分以下` : `要低于基准图，或被指出且不高于 ${cap} 分`;
+        failures.push(`分差未拉开：${judge} 在 ${m.id}（${m.expectSeverity}，${DIMENSION_TITLES[dimension]}）上这一项基准 ${baseScore} 分、弄坏后 ${mutatedScore} 分，${need}`);
       }
     }
 
     const severeMutations = input.mutations.filter((m) => m.expectSeverity === "P0" || m.expectSeverity === "P1");
     const checkSet = severeMutations.length > 0 ? severeMutations : input.mutations;
     if (checkSet.length > 0) {
-      const caught = checkSet.filter((m) => {
-        const row = mutationRows.find((r) => r.id === m.id && r.judge === judge)!;
-        return row.hits >= CALIBRATION_MIN_HITS;
-      }).length;
+      const caught = checkSet.filter((m) => mutationRows.find((r) => r.id === m.id && r.judge === judge)!.hits >= CALIBRATION_MIN_HITS).length;
       const detectShare = caught / checkSet.length;
       if (detectShare < CALIBRATION_DETECT_SHARE) {
         failures.push(`检出率未过：${judge} 抓到 ${caught}/${checkSet.length}（${(detectShare * 100).toFixed(1)}%），低于 ${(CALIBRATION_DETECT_SHARE * 100).toFixed(0)}%`);
@@ -389,15 +412,8 @@ export function calibrationReport(input: {
   const baseSources = input.cards
     .filter((c) => c.shot === input.baselineKey)
     .sort((a, b) => a.judge.localeCompare(b.judge) || a.run - b.run)
-    .map((c) => ({
-      by: `${c.judge}#${c.run}`,
-      judge: c.judge,
-      findings: c.findings.filter((f) => f.severity === "P0" || f.severity === "P1"),
-    }));
-  const mergedBaseSevere = mergeFindingsForShot(
-    input.baselineKey,
-    baseSources.map((s) => ({ by: s.by, findings: s.findings })),
-  ).map<MergedFinding>((m) => ({
+    .map((c) => ({ by: `${c.judge}#${c.run}`, findings: c.findings.filter((f) => f.severity === "P0") }));
+  const mergedBaseSevere = mergeFindingsForShot(input.baselineKey, baseSources).map<MergedFinding>((m) => ({
     shotKey: m.shotKey,
     rule: m.rule,
     severity: m.severity,
@@ -408,15 +424,12 @@ export function calibrationReport(input: {
     counted: true,
   }));
   if (mergedBaseSevere.length > 0) {
-    failures.push(`基准图上出现 ${mergedBaseSevere.length} 条 P0/P1 发现`);
+    failures.push(`基准图上出现 ${mergedBaseSevere.length} 条 P0 发现`);
   }
 
   let agreeCount = 0;
   for (const shotKey of shotKeys) {
-    const medians = judges.map((judge) => {
-      const runs = cardsOf(shotKey, judge);
-      return median(runs.map((c) => pageScore(scoreFromFindings(c.findings))));
-    });
+    const medians = judges.map((judge) => median(cardsOf(shotKey, judge).map(pageOf)));
     if (Math.max(...medians) - Math.min(...medians) <= 1) agreeCount++;
   }
   const agreeShare = agreeCount / shotKeys.length;
@@ -427,6 +440,7 @@ export function calibrationReport(input: {
   return {
     pass: failures.length === 0,
     stableShare,
+    baselinePage,
     mutations: mutationRows,
     baselineSevere: mergedBaseSevere,
     agreeShare,

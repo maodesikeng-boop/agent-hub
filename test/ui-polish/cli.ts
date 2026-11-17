@@ -20,7 +20,7 @@ import { judgeBrief } from "./judge-prompt.ts";
 import { CALIBRATION_RUNS, JUDGE_BATCH_CANDIDATES, PASS_SCORE, RECORD_DIR, ROUND_OUTPUT_DIR, SENTINEL_MAX_DRIFT } from "./limits.ts";
 import { CALIBRATION_BASELINE, CALIBRATION_REAL_SHOTS, MUTATIONS, SENTINEL_MUTATIONS } from "./mutations.ts";
 import { readRoundRecords, reportHtml, writeRoundRecord, type RoundRecord } from "./record.ts";
-import { parseScoreCard, type ScoreCard } from "./rubric.ts";
+import { DIMENSION_TITLES, parseScoreCard, type ScoreCard } from "./rubric.ts";
 import {
   calibrationReport,
   decideNext,
@@ -569,12 +569,15 @@ function calibrationMarkdown(
       `## 批大小 ${size} 张（${rep.pass ? "通过" : "未通过"}）`,
       "",
       `- 两家页面分一致率（差 ≤ 1）：${(rep.agreeShare * 100).toFixed(1)}%`,
-      `- 基准图重度发现（P0/P1）：${rep.baselineSevere.length} 条`,
+      `- 基准图 P0 发现：${rep.baselineSevere.length} 条`,
+      ...Object.entries(rep.baselinePage).map(([j, p]) => `- 基准图页面分（${j}）：${p}`),
       ...Object.entries(rep.stableShare).map(([j, s]) => `- 复评稳定率（${j}）：${(s * 100).toFixed(1)}%`),
       "",
-      "| 弄坏 | 评委 | 分差（基准 - 弄坏） | 命中次数 | 结果 |",
-      "| --- | --- | --- | --- | --- |",
-      ...rep.mutations.map((m) => `| \`${m.id}\` | ${m.judge} | ${m.gap} | ${m.hits}/${CALIBRATION_RUNS} | ${m.ok ? "合格" : "不合格"} |`),
+      "| 弄坏 | 评委 | 注入的项 | 这一项 基准 → 弄坏（封顶） | 命中次数 | 结果 |",
+      "| --- | --- | --- | --- | --- | --- |",
+      ...rep.mutations.map(
+        (m) => `| \`${m.id}\` | ${m.judge} | ${DIMENSION_TITLES[m.dimension]} | ${m.baseScore} → ${m.mutatedScore}（${m.cap}） | ${m.hits}/${CALIBRATION_RUNS} | ${m.ok ? "合格" : "不合格"} |`,
+      ),
       "",
     );
     if (rep.failures.length > 0) {

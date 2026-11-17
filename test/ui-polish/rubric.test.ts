@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { MAX_FINDINGS_PER_CARD } from "./limits.ts";
+import { readFileSync } from "node:fs";
+import { MACHINE_CHECKS } from "./checks.ts";
+import { CONTRAST_SEVERITY_LINES, MAX_FINDINGS_PER_CARD } from "./limits.ts";
 import {
+  ATTRIBUTION_RULES,
   DIMENSIONS,
+  NINE_POINT_BAR,
   PRINCIPLES,
   RULE_REF_PATTERN,
   SCORE_BANDS,
@@ -54,6 +58,59 @@ describe("PRINCIPLES", () => {
     for (const p of PRINCIPLES) {
       expect(RULE_REF_PATTERN.test(p.id), p.id).toBe(true);
     }
+  });
+});
+
+describe("尺子不打架", () => {
+  it("对比度只归行业标准：S、A、U 原则的核对文字都不要求对比度够，归口规则写明线在哪", () => {
+    for (const p of PRINCIPLES) expect(p.check, p.id).not.toMatch(/对比度(够|不足|不到)/);
+    const contrast = ATTRIBUTION_RULES.find((r) => r.includes("machine:contrast"))!;
+    expect(contrast).toContain("WCAG 1.4.3");
+    expect(contrast).toContain(`${CONTRAST_SEVERITY_LINES.P0_BELOW}:1`);
+    expect(contrast).toContain(`${CONTRAST_SEVERITY_LINES.P1_BELOW}:1`);
+  });
+
+  it("两个实心主按钮只归 A1，U1 不再收", () => {
+    const a1 = PRINCIPLES.find((p) => p.id === "A1")!;
+    const u1 = PRINCIPLES.find((p) => p.id === "U1")!;
+    expect(a1.check).toContain("两个实心主按钮");
+    expect(a1.check).toContain("P1");
+    expect(u1.check).toContain("归 A1");
+  });
+
+  it("S3、S5 不锁基准图的像素和留白占比，写明挤成一团记 P1", () => {
+    for (const id of ["S3", "S5"]) {
+      const p = PRINCIPLES.find((x) => x.id === id)!;
+      expect(p.check, id).not.toMatch(/和基准图里的一样|占比相当/);
+      expect(p.check, id).toContain("压缩一半以上");
+      expect(p.check, id).toContain("P1");
+    }
+  });
+
+  it("机器量到的可点范围擦碰默认 P2，看图确认盖住了才升到 P0", () => {
+    expect(MACHINE_CHECKS.find((c) => c.id === "overlap")!.severity).toBe("P2");
+    expect(ATTRIBUTION_RULES.some((r) => r.includes("machine:overlap") && r.includes("P0") && r.includes("P2"))).toBe(true);
+  });
+
+  it("9 分高线写明没有硬伤不等于 9 分，平庸呆板引 A 系列记 P1 或 P2", () => {
+    const text = NINE_POINT_BAR.join("\n");
+    expect(text).toContain("不等于 9 到 10 分");
+    expect(text).toMatch(/A1 到 A8/);
+    expect(text).toContain("P1");
+    expect(text).toContain("P2");
+  });
+});
+
+describe("基准图风格说明", () => {
+  const brief = readFileSync(new URL("../../docs/ui-polish/baseline/style-brief.md", import.meta.url), "utf8");
+
+  it("不锁死栏宽和卡片内边距的像素值", () => {
+    for (const fixed of ["300px", "280px", "14px×12px"]) expect(brief).not.toContain(fixed);
+  });
+
+  it("写明基准图只定风格基因、不是 9 分天花板", () => {
+    expect(brief).toContain("风格基因");
+    expect(brief).toMatch(/6.{0,3}7 分/);
   });
 });
 

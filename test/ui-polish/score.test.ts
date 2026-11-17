@@ -222,6 +222,7 @@ describe("mergeRound", () => {
 });
 
 describe("calibrationReport", () => {
+  const BASE = "chat.normal@desktop";
   const mutClip: Mutation = MUTATIONS.find((m) => m.id === "clip-right")!;
   const mutMisalign: Mutation = MUTATIONS.find((m) => m.id === "misalign")!;
   const mutFont: Mutation = MUTATIONS.find((m) => m.id === "small-preview")!;
@@ -237,104 +238,146 @@ describe("calibrationReport", () => {
     misalign: "A2",
     "small-preview": "S2",
   };
+  const baselineFindings = (): Finding[] => [finding("A4", "P1", { x: 0.3, y: 0.3, w: 0.3, h: 0.3 })];
 
   const buildPassingFixture = () => {
-    const base = "chat.normal@desktop";
     const reals = ["r1@desktop", "r2@desktop", "r3@desktop", "r4@desktop", "r5@desktop", "r6@desktop"];
-    const shots = [
-      makeShot(base),
-      ...reals.map((k) => makeShot(k)),
-      ...sampleMutations.map((m) => makeShot(`${base}!${m.id}`)),
-    ];
+    const shots = [makeShot(BASE), ...reals.map((k) => makeShot(k)), ...sampleMutations.map((m) => makeShot(`${BASE}!${m.id}`))];
     const cards: ScoreCard[] = [];
     for (const judge of [JUDGE_A, JUDGE_B]) {
       for (let run = 1; run <= CALIBRATION_RUNS; run++) {
-        cards.push(card(base, judge, [], { run }));
+        cards.push(card(BASE, judge, baselineFindings(), { run }));
         for (const r of reals) cards.push(card(r, judge, [finding("S1", "P2")], { run }));
         for (const m of sampleMutations) {
-          cards.push(
-            card(`${base}!${m.id}`, judge, [finding(ruleForMut[m.id]!, m.expectSeverity, boxForMut[m.id]!)], { run }),
-          );
+          cards.push(card(`${BASE}!${m.id}`, judge, [...baselineFindings(), finding(ruleForMut[m.id]!, m.expectSeverity, boxForMut[m.id]!)], { run }));
         }
       }
     }
-    return { manifest: makeManifest(...shots), cards, baselineKey: base, mutations: sampleMutations };
+    return { manifest: makeManifest(...shots), cards, baselineKey: BASE, mutations: sampleMutations };
   };
+  const cardsOf = (fix: ReturnType<typeof buildPassingFixture>, shot: string, judge = JUDGE_A) =>
+    fix.cards.filter((c) => c.shot === shot && c.judge === judge);
+  const rowOf = (rep: CalibrationReport, id: string, judge = JUDGE_A) => rep.mutations.find((m) => m.id === id && m.judge === judge)!;
 
-  it("四条门槛都过时 pass 是 true，failures 是空的", () => {
+  it("门槛都过时 pass 是 true，failures 是空的", () => {
     const rep = calibrationReport(buildPassingFixture());
-    expect(rep.pass).toBe(true);
     expect(rep.failures).toEqual([]);
+    expect(rep.pass).toBe(true);
     expect(rep.baselineSevere).toEqual([]);
+    expect(rep.baselinePage).toEqual({ [JUDGE_A]: 6, [JUDGE_B]: 6 });
     expect(rep.agreeShare).toBe(1);
     expect(rep.mutations.every((m) => m.ok)).toBe(true);
   });
 
-  it("同一张图同一项三次评分差 2 分时这张图不算稳", () => {
+  it("页面分三次差 2 分时这张图不算稳", () => {
     const fix = buildPassingFixture();
-    const target = fix.cards.find((c) => c.shot === "r1@desktop" && c.judge === JUDGE_A && c.run === 3)!;
-    target.findings = [finding("S1", "P1")];
+    cardsOf(fix, "r1@desktop").find((c) => c.run === 3)!.findings = [finding("S1", "P1")];
     const rep = calibrationReport(fix);
     expect(rep.stableShare[JUDGE_A]!).toBeLessThan(1);
   });
 
-  it("P0 的弄坏比基准图只低 2 分时这个弄坏不合格", () => {
+  it("某一项三次差 2 分但页面分没变时这张图仍算稳", () => {
+    const fix = buildPassingFixture();
+    cardsOf(fix, "r1@desktop").find((c) => c.run === 3)!.findings = [finding("S1", "P2"), finding("U3", "P2")];
+    const rep = calibrationReport(fix);
+    expect(rep.stableShare[JUDGE_A]).toBe(1);
+  });
+
+  it("基准图这一项已有 P1 时，P0 弄坏把这一项压到 4 分就算拉开，页面分只差 2 也合格", () => {
+    const fix = buildPassingFixture();
+    for (const c of cardsOf(fix, BASE)) c.findings = [finding("WCAG 1.4.3", "P1", { x: 0.3, y: 0.3, w: 0.3, h: 0.3 })];
+    for (const c of cardsOf(fix, `${BASE}!clip-right`)) c.findings.push(finding("WCAG 1.4.3", "P1", { x: 0.3, y: 0.3, w: 0.3, h: 0.3 }));
+    const row = rowOf(calibrationReport(fix), "clip-right");
+    expect(row).toMatchObject({ dimension: "standard", baseScore: 6, mutatedScore: 4, cap: 4, ok: true });
+  });
+
+  it("基准图这一项高于封顶时，弄坏图这一项没压到封顶不合格", () => {
+    const fix = buildPassingFixture();
+    for (const c of cardsOf(fix, `${BASE}!clip-right`)) c.findings = [...baselineFindings(), finding("ui-standard §11", "P1", boxForMut["clip-right"]!)];
+    const rep = calibrationReport(fix);
+    expect(rowOf(rep, "clip-right")).toMatchObject({ baseScore: 10, mutatedScore: 6, cap: 4, ok: false });
+    expect(rep.failures.some((f) => f.includes("clip-right") && f.includes("要压到 4 分以下"))).toBe(true);
+    expect(rep.pass).toBe(false);
+  });
+
+  it("基准图这一项已压在封顶时，弄坏图同一项降一档就算拉开", () => {
+    const fix = buildPassingFixture();
+    const row = rowOf(calibrationReport(fix), "misalign");
+    expect(row).toMatchObject({ dimension: "aesthetic", baseScore: 6, mutatedScore: 5, cap: 6, ok: true });
+  });
+
+  it("基准图这一项已压在封顶、弄坏图分没再降时，被指出就算合格，没被指出不合格", () => {
     const fix = buildPassingFixture();
     for (const c of fix.cards) {
-      if (c.shot === "chat.normal@desktop" && c.judge === JUDGE_A) {
-        c.findings = [finding("S1", "P2"), finding("S2", "P2"), finding("S3", "P2"), finding("S4", "P2")];
-      }
+      if (c.shot === BASE || c.shot === `${BASE}!small-preview`) c.findings.push(finding("S4", "P1", { x: 0.5, y: 0.9, w: 0.1, h: 0.05 }));
     }
+    expect(rowOf(calibrationReport(fix), "small-preview")).toMatchObject({ baseScore: 6, mutatedScore: 6, cap: 8, hits: 3, ok: true });
+
+    for (const c of cardsOf(fix, `${BASE}!small-preview`)) c.findings = c.findings.filter((f) => f.rule !== "S2");
     const rep = calibrationReport(fix);
-    const entry = rep.mutations.find((m) => m.id === "clip-right" && m.judge === JUDGE_A)!;
-    expect(entry.gap).toBe(2);
-    expect(entry.ok).toBe(false);
-    expect(rep.pass).toBe(false);
+    expect(rowOf(rep, "small-preview")).toMatchObject({ hits: 0, ok: false });
+    expect(rep.failures.some((f) => f.includes("small-preview") && f.includes("要低于基准图"))).toBe(true);
+  });
+
+  it("别的项掉分不算拉开：只看弄坏注入的那一项", () => {
+    const fix = buildPassingFixture();
+    for (const c of cardsOf(fix, `${BASE}!misalign`)) c.findings = [...baselineFindings(), finding("S3", "P1", boxForMut.misalign!), finding("U1", "P1")];
+    const row = rowOf(calibrationReport(fix), "misalign");
+    expect(row).toMatchObject({ baseScore: 6, mutatedScore: 6, hits: 0, ok: false });
   });
 
   it("弄坏的位置三次里只被指出一次时不合格", () => {
     const fix = buildPassingFixture();
-    for (const c of fix.cards) {
-      if (c.shot === "chat.normal@desktop!misalign" && c.judge === JUDGE_A && c.run >= 2) {
-        c.findings = [finding("A2", "P1", { x: 0.85, y: 0.85, w: 0.1, h: 0.1 })];
+    for (const c of cardsOf(fix, `${BASE}!misalign`)) {
+      if (c.run >= 2) c.findings = [...baselineFindings(), finding("A2", "P1", { x: 0.85, y: 0.85, w: 0.1, h: 0.1 })];
+    }
+    const row = rowOf(calibrationReport(fix), "misalign");
+    expect(row.hits).toBe(1);
+    expect(row.ok).toBe(false);
+  });
+
+  it("两个实心主按钮记成 A1 就算抓到", () => {
+    const two = MUTATIONS.find((m) => m.id === "two-primaries")!;
+    expect(two.expectDimension).toBe("aesthetic");
+    const fix = buildPassingFixture();
+    fix.mutations = [...sampleMutations, two];
+    fix.manifest.shots.push(makeShot(`${BASE}!two-primaries`));
+    for (const judge of [JUDGE_A, JUDGE_B]) {
+      for (let run = 1; run <= CALIBRATION_RUNS; run++) {
+        fix.cards.push(card(`${BASE}!two-primaries`, judge, [...baselineFindings(), finding("A1", "P1", { x: 0.82, y: 0.39, w: 0.15, h: 0.1 })], { run }));
       }
     }
+    expect(rowOf(calibrationReport(fix), "two-primaries")).toMatchObject({ hits: 3, ok: true });
+  });
+
+  it("基准图上的 P1 不算重度发现，不挡校准", () => {
+    const rep = calibrationReport(buildPassingFixture());
+    expect(rep.baselineSevere).toEqual([]);
+    expect(rep.pass).toBe(true);
+  });
+
+  it("基准图上有 P0 时列进 baselineSevere 并且 pass 是 false", () => {
+    const fix = buildPassingFixture();
+    cardsOf(fix, BASE, JUDGE_B).find((c) => c.run === 1)!.findings = [finding("machine:overlap", "P0")];
     const rep = calibrationReport(fix);
-    const entry = rep.mutations.find((m) => m.id === "misalign" && m.judge === JUDGE_A)!;
-    expect(entry.hits).toBe(1);
-    expect(entry.ok).toBe(false);
+    expect(rep.baselineSevere).toHaveLength(1);
+    expect(rep.baselineSevere[0]!.severity).toBe("P0");
     expect(rep.pass).toBe(false);
   });
 
-  it("指出的位置对但记在别的项上不算指出", () => {
+  it("基准图评到 9 分以上时 pass 是 false：没立住审美高线", () => {
     const fix = buildPassingFixture();
-    for (const c of fix.cards) {
-      if (c.shot === "chat.normal@desktop!misalign" && c.judge === JUDGE_A) {
-        c.findings = [finding("U1", "P1", boxForMut.misalign!)];
-      }
-    }
+    for (const c of cardsOf(fix, BASE)) c.findings = [finding("A4", "P3")];
     const rep = calibrationReport(fix);
-    const entry = rep.mutations.find((m) => m.id === "misalign" && m.judge === JUDGE_A)!;
-    expect(entry.hits).toBe(0);
-    expect(entry.ok).toBe(false);
-  });
-
-  it("基准图上有 P1 时列进 baselineSevere 并且 pass 是 false", () => {
-    const fix = buildPassingFixture();
-    const baseCard = fix.cards.find((c) => c.shot === "chat.normal@desktop" && c.judge === JUDGE_B && c.run === 1)!;
-    baseCard.findings = [finding("S4", "P1")];
-    const rep = calibrationReport(fix);
-    expect(rep.baselineSevere.length).toBeGreaterThan(0);
-    expect(rep.baselineSevere[0]!.severity).toBe("P1");
+    expect(rep.baselinePage[JUDGE_A]).toBe(9);
+    expect(rep.failures.some((f) => f.includes("基准图页面分") && f.includes(JUDGE_A))).toBe(true);
     expect(rep.pass).toBe(false);
   });
 
   it("两家页面分差不超过 1 的图不到八成时 pass 是 false", () => {
     const fix = buildPassingFixture();
     for (const c of fix.cards) {
-      if (c.shot.startsWith("r") && c.judge === JUDGE_B) {
-        c.findings = [finding("S1", "P1"), finding("S2", "P1")];
-      }
+      if (c.shot.startsWith("r") && c.judge === JUDGE_B) c.findings = [finding("S1", "P1"), finding("S2", "P1")];
     }
     const rep = calibrationReport(fix);
     expect(rep.agreeShare).toBeLessThan(0.8);
@@ -346,6 +389,7 @@ describe("pickBatchSize", () => {
   const fakeReport = (pass: boolean): CalibrationReport => ({
     pass,
     stableShare: {},
+    baselinePage: {},
     mutations: [],
     baselineSevere: [],
     agreeShare: pass ? 1 : 0,
