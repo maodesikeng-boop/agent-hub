@@ -109,6 +109,8 @@ describe("cursor spec 与 paths 声明边界", () => {
       systemPrompt: "first_message",
       // ACP 下 --plugin-dir、--add-dir 里的技能都读不到：任务图手册只能按提示词里的路径读
       skills: "read_file",
+      // 技能、MCP、连接器都没有按会话的开关（docs/pm-capabilities-design.md 的现状表）
+      isolation: { skill: "shared", mcp: "shared", connector: "shared" },
     });
     expect(cursorSpec.models.shortName?.("auto")).toBe("Auto");
     expect(cursorSpec.models.shortName?.("default[]")).toBe("Auto");

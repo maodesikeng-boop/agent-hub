@@ -124,5 +124,8 @@ export default defineVendor({
     systemPrompt: "resident",
     // 任务图手册：--plugin-dir 启动目录里的 claude-plugin（技能目录软链到 skills/），显示成 fusa:fusa-task-graph（2026-11-12 claude 2.1.322 实测）
     skills: "native",
+    isolation: { skill: "session", mcp: "session", connector: "session" },
+    // 插件里的技能 skillOverrides 关不掉，只能 permissions.deny 拒调用（2026-11-17 claude 2.1.326 实测，capabilities.ts）
+    pluginIsolation: { skill: "tool_deny" },
   },
 });

@@ -1,7 +1,9 @@
 // 测试用的内存假账本：只实现界面服务用到的那几个方法，记下每次调用；其余方法调了就抛错。
 import {
+  applyCapabilitiesPatch,
   CHANGE_BUFFER_SIZE,
   ConversationNotFoundError,
+  defaultPmCapabilityPolicy,
   defaultRouterSettings,
   deliveryParts,
   emptyRouterSlice,
@@ -33,6 +35,8 @@ import {
   type PersonaChangeId,
   type PersonaView,
   type Pm,
+  type PmCapabilitiesPatch,
+  type PmCapabilityPolicy,
   type PmId,
   type PostUserMessageInput,
   type PostUserMessageResult,
@@ -153,6 +157,10 @@ export class FakeLedger {
   readonly renewed: PmId[] = [];
   readonly archived: PmId[] = [];
   readonly unarchived: PmId[] = [];
+  readonly capabilityReads: PmId[] = [];
+  readonly capabilityPatches: Array<{ pmId: PmId; patch: PmCapabilitiesPatch }> = [];
+  readonly pmPolicies = new Map<PmId, PmCapabilityPolicy>();
+  readonly pmMainFolders = new Map<PmId, string | null>();
   /** editPersona、revertPersonaChange 返回的修改记录；null 表示“没改动”。 */
   personaChange: PersonaChange | null = makePersonaChange();
   snapshotValue: LedgerSnapshot = {
@@ -289,6 +297,26 @@ export class FakeLedger {
     this.check();
     this.personaEdits.push({ pmId, input, actor });
     return { change: this.personaChange, persona: makePersonaView(pmId, this.personaChange === null ? [] : [this.personaChange]) };
+  }
+
+  getPmCapabilityPolicy(pmId: PmId): PmCapabilityPolicy {
+    this.check();
+    this.capabilityReads.push(pmId);
+    return this.pmPolicies.get(pmId) ?? defaultPmCapabilityPolicy(pmId);
+  }
+
+  patchPmCapabilities(pmId: PmId, patch: PmCapabilitiesPatch): PmCapabilityPolicy {
+    this.check();
+    this.capabilityPatches.push({ pmId, patch });
+    const cur = this.pmPolicies.get(pmId) ?? defaultPmCapabilityPolicy(pmId);
+    const next = applyCapabilitiesPatch(cur, patch);
+    this.pmPolicies.set(pmId, next);
+    return next;
+  }
+
+  pmProjectMainFolder(pmId: PmId): string | null {
+    this.check();
+    return this.pmMainFolders.get(pmId) ?? null;
   }
 
   revertPersonaChange(changeId: PersonaChangeId): EditPersonaResult {
@@ -547,6 +575,9 @@ export class FakeLedger {
       getPmMemoryFile: unused("getPmMemoryFile"),
       putPmMemoryFile: unused("putPmMemoryFile"),
       deletePmMemoryFile: unused("deletePmMemoryFile"),
+      getPmCapabilityPolicy: (p) => this.getPmCapabilityPolicy(p),
+      patchPmCapabilities: (p, patch) => this.patchPmCapabilities(p, patch),
+      pmProjectMainFolder: (p) => this.pmProjectMainFolder(p),
       retryMessage: (m) => this.retryMessage(m),
       renewSession: (p) => this.renewSession(p),
       waitsForHandover: unused("waitsForHandover"),

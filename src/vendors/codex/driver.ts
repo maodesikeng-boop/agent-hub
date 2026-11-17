@@ -473,7 +473,7 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     // 只读 Worker 不在这里包：codex 自己的 readOnly 沙箱已经什么都写不了，macOS 沙箱又不能嵌套
     const wrapScope = launchConfig.readonly ? null : (files.writeScope ?? null);
     const exePath = this.#resolveCodexPath();
-    const baseSpawn: SpawnCommand = { command: exePath, args: buildCodexArgs() };
+    const baseSpawn: SpawnCommand = { command: exePath, args: buildCodexArgs(files.capabilities) };
     const launch = this.#writeScopeSpawn
       ? this.#writeScopeSpawn(baseSpawn, wrapScope)
       : spawnInWriteScope("codex", baseSpawn, wrapScope, this.opts.log, `session ${st.id}`, this.#platform);

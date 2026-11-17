@@ -353,6 +353,8 @@ describe("deepseek 声明（spec.ts）与路径/凭据边界（paths.ts）", () 
       systemPrompt: "resident",
       // 任务图手册：--patch 给 skill-filesystem 设 customSkillDirs（buildDeepSeekSkillsPatch）
       skills: "native",
+      // 技能走 skill-filesystem 补丁、MCP 走 session.mcpServers，都按会话；没有云端连接器
+      isolation: { skill: "session", mcp: "session", connector: "shared" },
     });
     expect(deepseekSpec.models.flags).toBeUndefined();
     expect(agentLaunchArgs({ vendor: "deepseek", model: "deepseek-v4-pro", effort: "max" })).toEqual([]);

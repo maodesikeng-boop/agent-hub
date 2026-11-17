@@ -139,5 +139,6 @@ export default defineVendor({
     systemPrompt: "resident",
     // 任务图手册：--skill <启动目录>/skills（scope: temporary；2026-11-12 pi 1.5.2 实测）
     skills: "native",
+    isolation: { skill: "session", mcp: "tool_deny", connector: "shared" },
   },
 });

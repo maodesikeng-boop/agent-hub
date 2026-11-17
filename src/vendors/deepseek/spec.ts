@@ -138,5 +138,6 @@ export default defineVendor({
     systemPrompt: "resident",
     // 任务图手册：--patch 给 skill-filesystem 设 customSkillDirs，进模型看到的技能目录（2026-11-12 dsh 0.2.2-rc.1 实测）
     skills: "native",
+    isolation: { skill: "session", mcp: "session", connector: "shared" },
   },
 });

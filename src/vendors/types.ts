@@ -1,6 +1,7 @@
 // 厂商声明的类型（docs/vendor-plugin-design.md 3.2 节）：每家在 src/vendors/<id>/spec.ts 填一份 VendorSpec，名单在 registry.ts。
 // 只放类型和纯函数：网页、hub 命令行、守护进程都引，不许 import node:*、src/daemon（契约测试 S2 查）。
 // 公共代码一律按 vendorSpec(vendor) 读这里的分组字段（src/shared/vendors.ts），不再派生平铺的旧形状。
+import type { CapabilityIsolationMap } from "../shared/pm-capabilities.ts";
 import type { QuotaWindowKey } from "../shared/vendors.ts";
 
 /**
@@ -108,6 +109,14 @@ interface VendorCapabilities {
    * 两种都不写用户的技能目录和仓库。
    */
   skills: "native" | "read_file";
+  /**
+   * 技能、MCP、云端连接器能不能按会话隔离（docs/pm-capabilities-design.md 的现状表，按本机 CLI 实测填）：
+   * session = 只对这次会话生效的参数能精确开关；tool_deny = 照样列出来、调用被拒；shared = 只能用全局配置。
+   * 守护进程按它决定给不给 LaunchFiles.capabilities 里那一类，界面给 shared 的那几家打标。
+   */
+  isolation: CapabilityIsolationMap;
+  /** 插件里的项单独关时做不到 isolation 那么干净的那几类（整个插件都关时照 isolation）。不写 = 和 isolation 一样。 */
+  pluginIsolation?: Partial<CapabilityIsolationMap>;
   /** 未选模型时把名单里的默认模型（ModelCatalog.defaultModelId）显式传给驱动。不写 = false。 */
   explicitDefaultModel?: boolean;
   /**

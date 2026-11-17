@@ -1,5 +1,6 @@
 // agy 的守护进程侧（docs/vendor-plugin-design.md 3.3 节）：daemon-registry.ts 按名单加载这个文件的默认导出。
 import { defineVendorDaemon } from "../daemon-types.ts";
+import { agyCapabilityDenyRules } from "./capabilities.ts";
 import { agyCatalogProbe, createAgyCatalogSource } from "./catalog.ts";
 import { agyComposerBase, createAgyComposer } from "./composer.ts";
 import { createAgyDriver } from "./driver.ts";
@@ -15,6 +16,7 @@ export default defineVendorDaemon({
   forkers: AGY_FORKERS,
   transcriptPath: agyTranscriptPath,
   sessionFiles: agySessionFiles,
+  capabilityLaunch: agyCapabilityDenyRules,
   sync: agySyncAdapter,
   setup: agySetupAdapter,
 });

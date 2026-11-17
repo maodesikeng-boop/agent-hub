@@ -50,6 +50,7 @@ import type {
 import type { DeviceRouterDigest, RouterSettings } from "./router.ts";
 import type { HandoverId, LedgerHandoverWork } from "./handover.ts";
 import type { HubArgs, HubCommand, HubResult, ProjectCard, WorkerPr, WorkerPrProbeResult } from "./hub.ts";
+import type { PmCapabilitiesPatch, PmCapabilitiesStart, PmCapabilityPolicy } from "./pm-capabilities.ts";
 import type { ReviewSnapshot, ReviewVerifyResult } from "./review.ts";
 import type { SelfReloadStatus } from "./api.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
@@ -156,6 +157,8 @@ export interface CreatePmInput {
   effort?: string | null;
   persona: string;
   folder?: string;
+  /** 技能、MCP、云端连接器从哪开始；不给 = 全开。 */
+  capabilities?: PmCapabilitiesStart;
 }
 
 /**
@@ -408,6 +411,12 @@ export interface Ledger extends LedgerHandoverWork {
   getPmMemoryFile(pmId: PmId, name: string): PmMemoryFileDetail;
   putPmMemoryFile(pmId: PmId, name: string, content: string): { file: PmMemoryFileDetail; totalBytes: number };
   deletePmMemoryFile(pmId: PmId, name: string): void;
+  /** 界面服务与启动准备：读取项目经理的能力选择（没存过返回全开）。不存在抛 not_found。 */
+  getPmCapabilityPolicy(pmId: PmId): PmCapabilityPolicy;
+  /** 界面服务：更新项目经理的能力选择并发 pm.updated。不存在抛 not_found，超限或非法键抛 invalid。 */
+  patchPmCapabilities(pmId: PmId, patch: PmCapabilitiesPatch): PmCapabilityPolicy;
+  /** 界面服务：返回该项目经理当前活跃项目的主文件夹路径（没有活跃项目返回 null；项目经理不存在抛 not_found）。 */
+  pmProjectMainFolder(pmId: PmId): string | null;
   /**
    * 见 EditPersonaResult。actor 是会话时只能改这个会话所属的项目经理，否则 forbidden。
    * 错误：项目经理不存在 → not_found；text、mode 都没给、太长 → invalid。

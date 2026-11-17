@@ -9,6 +9,7 @@ import {
   type WriteScope,
   type TokenUsage,
 } from "../../shared/index.ts";
+import { agyCapabilityDenyRules } from "./capabilities.ts";
 import { agyReadonlySettings, type AgyConnectorRules } from "./readonly.ts";
 import { buildChildEnv, lineUuid, mergeUserTexts, userContent } from "../../daemon/driver/protocol.ts";
 import type { TurnUsage } from "../../daemon/driver/usage.ts";
@@ -72,10 +73,20 @@ export function buildAgyArgs(
   if (resume && session.vendorSessionId.trim() !== "") {
     args.push("--conversation", session.vendorSessionId);
   }
+  const capDeny = files.capabilities ? agyCapabilityDenyRules(files.capabilities) : [];
   if (files.readonly !== undefined) {
-    args.push(...AGY_PLAN_PERMISSION_ARGS, "--settings", JSON.stringify(agyReadonlySettings(files.readonly, connectors)));
+    const settings = agyReadonlySettings(files.readonly, connectors);
+    if (capDeny.length > 0) {
+      settings.permissions.deny = [...new Set([...settings.permissions.deny, ...capDeny])];
+    }
+    args.push(...AGY_PLAN_PERMISSION_ARGS, "--settings", JSON.stringify(settings));
   } else {
     args.push(...AGY_AUTO_PERMISSION_ARGS);
+    if (capDeny.length > 0) {
+      // agy 多个 --settings 只认最后一个：包进 OS 沙箱的 Worker（有 writeScope）前面那条关终端沙箱的设置要并进这一条
+      const sandboxOff = files.writeScope ? { enableTerminalSandbox: false } : {};
+      args.push("--settings", JSON.stringify({ ...sandboxOff, permissions: { deny: capDeny } }));
+    }
   }
   args.push(...agentLaunchArgs({ vendor: "agy", model: session.model, effort: session.effort }));
   for (const dir of session.addDirs) args.push("--add-dir", dir);

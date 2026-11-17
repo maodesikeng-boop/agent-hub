@@ -1019,3 +1019,19 @@ export const ROUTER_PROJECT_SHOW_MAX_BYTES = 16_384;
 export const ROUTER_PROJECT_SHOW_PER_TURN_MAX = 4;
 /** 总助名片里单张完整 PM 名片的字节上限（带第一层项目档案，docs/router-project-catalog-design.md 第 4 节）。 */
 export const ROUTER_PM_CARD_MAX_BYTES = 2_048;
+
+// ---- 按项目经理管理技能、MCP、云端连接器（docs/pm-capabilities-design.md 的性能一节） ----
+/** 库存最多收多少项（三类合计）。本机实测 claude 166 个技能 + 71 个 MCP，codex 62 个技能 + 12 个 MCP + 10 个连接器，留十倍余量。 */
+export const PM_CAPABILITY_INVENTORY_MAX_ITEMS = 2_000;
+/** 一个项目经理最多存多少项单独设置（超过拒绝 PATCH）。和库存上限相同：每项最多一条。 */
+export const PM_CAPABILITY_OVERRIDES_MAX = 2_000;
+/** 库存缓存多久：配置文件和技能目录的 mtime 变了提前失效。 */
+export const PM_CAPABILITY_INVENTORY_TTL_MS = 60_000;
+/** 有厂商没扫到（读不了、探测超时）时库存只记多久。 */
+export const PM_CAPABILITY_INVENTORY_RETRY_MS = 5_000;
+/** 技能说明在库存里最多多少字。 */
+export const PM_CAPABILITY_DESCRIPTION_MAX_CHARS = 200;
+/** 一次 PATCH 最多改多少项（组开关一次改一整组，最大的插件组本机 37 个技能）。 */
+export const PM_CAPABILITY_PATCH_MAX_KEYS = 500;
+/** Codex 云端连接器工具缓存 JSON（含完整工具 Schema，本机实测 2.8 MB）只读扫描字节上限。 */
+export const PM_CAPABILITY_APPS_CACHE_MAX_BYTES = 16 * 1024 * 1024;

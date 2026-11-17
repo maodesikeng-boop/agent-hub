@@ -13,6 +13,7 @@ export * from "./ledger.ts";
 export * from "./limits.ts";
 export * from "./names.ts";
 export * from "./peer-transport.ts";
+export * from "./pm-capabilities.ts";
 export * from "./providers.ts";
 export * from "./router-model.ts";
 export * from "./router.ts";

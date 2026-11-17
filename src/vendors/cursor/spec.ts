@@ -155,5 +155,6 @@ export default defineVendor({
     systemPrompt: "first_message",
     // 任务图手册：ACP 下 --plugin-dir、--add-dir 里的技能都读不到（2026-11-12 cursor-agent 2026.11.10 实测），项目和用户目录又不能写，只能按路径读文件
     skills: "read_file",
+    isolation: { skill: "shared", mcp: "shared", connector: "shared" },
   },
 });

@@ -1,6 +1,6 @@
 // 基准 `.agents/skills` 目录扫描与目标厂商技能目录逐项软链对账（绝不整目录替换，绝不覆盖用户私有技能）。
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
+import { closeSync, existsSync, lstatSync, openSync, readFileSync, readSync, readdirSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import {
   hashDirectoryContents,
@@ -8,7 +8,7 @@ import {
   normalizePathForComparison,
   readManagedSkillCopyMeta,
 } from "../../../daemon/platform/index.ts";
-import { MAX_VENDOR_SYNC_SKILL_ITEMS } from "../../../shared/index.ts";
+import { MAX_VENDOR_SYNC_SKILL_ITEMS, PM_CAPABILITY_DESCRIPTION_MAX_CHARS, truncateChars } from "../../../shared/index.ts";
 
 /** 安全的 `realpath`：目标存在时返回真实路径，悬空软链或不存在时回退 `resolve`。 */
 export function safeRealpath(targetPath: string): string {
@@ -177,4 +177,87 @@ export function inspectSkillTargetEntry(
 
   // 真实目录或真实文件 = 用户私有技能，绝不删除或覆盖
   return "user_private_conflict";
+}
+
+const SKILL_DESCRIPTION_READ_BYTES = 8 * 1024;
+
+function unquoteYamlScalar(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.length >= 2) {
+    if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+      return trimmed.slice(1, -1).replace(/\\(["\\nrt])/g, (_m, ch: string) => {
+        if (ch === "n") return " ";
+        if (ch === "r" || ch === "t") return " ";
+        return ch;
+      });
+    }
+    if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
+      return trimmed.slice(1, -1).replace(/''/g, "'");
+    }
+  }
+  return trimmed;
+}
+
+function readSkillFrontmatterLines(skillDir: string): string[] | null {
+  const skillFile = join(skillDir, "SKILL.md");
+  let head = "";
+  try {
+    const st = statSync(skillFile);
+    if (!st.isFile()) return null;
+    const fd = openSync(skillFile, "r");
+    try {
+      const buf = Buffer.allocUnsafe(SKILL_DESCRIPTION_READ_BYTES);
+      const bytesRead = readSync(fd, buf, 0, buf.length, 0);
+      head = buf.subarray(0, bytesRead).toString("utf8");
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
+
+  const lines = head.split(/\r?\n/);
+  if (lines[0]?.trim() !== "---") return null;
+  const closeIdx = lines.findIndex((line, idx) => idx > 0 && line.trim() === "---");
+  if (closeIdx <= 0) return null;
+  return lines.slice(1, closeIdx);
+}
+
+/** 只读提取 `<skillDir>/SKILL.md` 的 frontmatter name（单行值）；没有或读不了返回 null。 */
+export function readSkillName(skillDir: string): string | null {
+  const fmLines = readSkillFrontmatterLines(skillDir);
+  if (fmLines === null) return null;
+  for (const line of fmLines) {
+    const match = /^name\s*:\s*(.*)$/.exec(line);
+    if (!match) continue;
+    const name = unquoteYamlScalar(match[1]!).trim();
+    return name === "" ? null : name;
+  }
+  return null;
+}
+
+/** 只读提取 `<skillDir>/SKILL.md` 的 frontmatter description，截断到 PM_CAPABILITY_DESCRIPTION_MAX_CHARS。 */
+export function readSkillDescription(skillDir: string): string | null {
+  const fmLines = readSkillFrontmatterLines(skillDir);
+  if (fmLines === null) return null;
+
+  for (let i = 0; i < fmLines.length; i++) {
+    const match = /^description\s*:\s*(.*)$/.exec(fmLines[i]!);
+    if (!match) continue;
+    const rest = match[1]!.trim();
+    if (rest === ">" || rest === "|-" || rest === ">-" || rest === "|") {
+      const parts: string[] = [];
+      for (let j = i + 1; j < fmLines.length; j++) {
+        const cont = fmLines[j]!;
+        if (cont.trim() === "") continue;
+        if (!/^\s+/.test(cont)) break;
+        parts.push(cont.trim());
+      }
+      const joined = parts.join(" ").replace(/\s+/g, " ").trim();
+      return joined === "" ? null : truncateChars(joined, PM_CAPABILITY_DESCRIPTION_MAX_CHARS);
+    }
+    const cleaned = unquoteYamlScalar(rest).replace(/\s+/g, " ").trim();
+    return cleaned === "" ? null : truncateChars(cleaned, PM_CAPABILITY_DESCRIPTION_MAX_CHARS);
+  }
+  return null;
 }

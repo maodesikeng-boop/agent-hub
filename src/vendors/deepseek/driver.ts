@@ -18,6 +18,7 @@ import {
 import { resolveDeepSeekHome } from "./paths.ts";
 import { loadDeepSeekAcpMcpServers } from "./sync.ts";
 import { resolveSpawn } from "../../daemon/platform/index.ts";
+import { deepseekSkillFilesystemConfig, filterDeepSeekMcpServers } from "./capabilities.ts";
 
 /** Cordis loader overlay patch 单项。 */
 export interface DeepSeekCordisPatchEntry {
@@ -307,7 +308,14 @@ function buildDeepSeekLaunchArgs(ctx: AcpLaunchContext): string[] {
   }
   // 产品技能（只有项目经理会话有）：给 skill-filesystem 加一个技能根，进模型看到的技能目录（buildDeepSeekSkillsPatch）
   const skillsPatchPath = join(launchDir, "dsh-skills.patch.json");
-  if (ctx.files.skillsDir) {
+  const capSkillsCfg = ctx.files.capabilities
+    ? deepseekSkillFilesystemConfig(ctx.files.capabilities, ctx.files.skillsDir)
+    : null;
+  if (capSkillsCfg !== null) {
+    const entries: readonly DeepSeekCordisPatchEntry[] = [{ id: "skill-filesystem", config: capSkillsCfg }];
+    writeFileSync(skillsPatchPath, `${JSON.stringify(entries, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    args.push("--patch", skillsPatchPath);
+  } else if (ctx.files.skillsDir) {
     writeFileSync(skillsPatchPath, `${JSON.stringify(buildDeepSeekSkillsPatch(ctx.files.skillsDir), null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
     args.push("--patch", skillsPatchPath);
   } else {
@@ -421,7 +429,11 @@ export function createDeepSeekDriver(options: AcpDriverOptions): Driver {
       rebakesPersonaOnResume: true,
     },
     session: {
-      mcpServers: (ctx) => (ctx.files.readonly ? [] : loadDeepSeekAcpMcpServers(resolveDeepSeekHome(undefined, env))),
+      mcpServers: (ctx) => {
+        if (ctx.files.readonly) return [];
+        const servers = loadDeepSeekAcpMcpServers(resolveDeepSeekHome(undefined, env));
+        return ctx.files.capabilities ? filterDeepSeekMcpServers(servers, ctx.files.capabilities) : servers;
+      },
     },
     configOptions: {
       modelOptionIds: ["model"],
