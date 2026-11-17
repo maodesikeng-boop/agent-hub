@@ -20,7 +20,7 @@ import {
   UserPen,
   type LucideIcon,
 } from "lucide-react";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   askOf,
   attachmentsOf,
@@ -35,7 +35,6 @@ import {
   systemEventOf,
   systemNoticeText,
   workerEventOf,
-  workerLineText,
   workerPickOf,
   type AgentVendor,
   type ConversationId,
@@ -50,7 +49,7 @@ import {
 import { ApiError } from "../client.ts";
 import { useClient } from "../device-scope.tsx";
 import { describeFailure } from "../../shared/errors.ts";
-import { errorLine, errorText, errorTitle, formatTime, newClientId, type ErrorLike } from "../format.ts";
+import { errorLine, errorText, errorTitle, formatTime, newClientId, pieceLineParts, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { useHubQueryClient } from "../query-client.ts";
 import type { RenderItem } from "../selectors.ts";
@@ -66,6 +65,7 @@ import { CardBody, DeliverableFiles } from "./Deliverables.tsx";
 import { WorkerPickTag } from "./WorkerPickTag.tsx";
 import { COPIED_RESET_MS } from "./CodeBlock.tsx";
 import { Markdown } from "./Markdown.tsx";
+import { OptionRow } from "./OptionRow.tsx";
 import { UserBlockerCard } from "./UserBlockerCard.tsx";
 
 export interface AgentIdentity {
@@ -230,40 +230,31 @@ function AskCard({
         textClassName="text-minor leading-relaxed text-muted-foreground"
       />
       {(hasOptions || answerNote !== undefined) && (
-        <div className="mt-3 flex flex-col gap-1.5" role="group" aria-label="Options">
+        <div className="mt-3 flex flex-col gap-2" role="group" aria-label="Options">
           {card.options.map((opt, i) => {
             const isChosen = effectiveChosen === opt;
             const isRecommended = card.recommended !== undefined && opt === card.recommended;
             return (
-              <button
+              <OptionRow
                 key={i}
-                type="button"
+                index={i}
                 data-ask-option
                 disabled={disabled}
-                className={cn(
-                  "flex w-full cursor-pointer items-center gap-3 rounded-xl px-3 py-2 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default",
-                  isChosen ? "bg-sidebar-active" : "hover:bg-sidebar-hover disabled:opacity-60",
-                )}
+                chosen={isChosen}
+                recommended={isRecommended}
                 onClick={() => {
                   if (disabled) return;
                   submit(opt, note);
                 }}
               >
-                <span className="flex size-6 shrink-0 items-center justify-center rounded-xl border border-border bg-sidebar text-xs font-medium text-muted-foreground">
-                  {String.fromCharCode(65 + i)}
-                </span>
-                <span className="min-w-0 flex-1 text-body [overflow-wrap:anywhere] [&_p]:m-0">
-                  <Markdown text={opt} files={files} messageId={messageId} />
-                </span>
-                {isRecommended && (
-                  <span className="shrink-0 text-xs font-normal text-muted-foreground">Recommended</span>
-                )}
-              </button>
+                <Markdown text={opt} files={files} messageId={messageId} />
+              </OptionRow>
             );
           })}
           {answerNote !== undefined && (
-            <div data-ask-answer className="flex w-full items-center gap-3 rounded-xl bg-sidebar-active px-3 py-2">
-              <span className="flex size-6 shrink-0 items-center justify-center rounded-xl border border-border bg-sidebar text-muted-foreground">
+            // 底色比选中的选项浅一档：两行不会看成选了两个
+            <div data-ask-answer className="flex min-h-11 w-full items-start gap-3 rounded-xl bg-sidebar px-3 py-2.5 leading-6">
+              <span className="flex size-6 shrink-0 items-center justify-center rounded-xl border border-border bg-background text-muted-foreground">
                 <PencilLine className="size-3.5" aria-hidden="true" />
               </span>
               <span className="min-w-0 flex-1 text-body whitespace-pre-wrap [overflow-wrap:anywhere]">{answerNote}</span>
@@ -367,15 +358,30 @@ const AgentText = memo(function AgentText({
   );
 });
 
+/** Piece 的一行（派出、收工、你对它说的）：标题、英文状态词、摘要用间距隔开，整行点开它的对话。 */
+function PieceLineButton({ line, onOpen }: { line: WorkerMessageMeta; onOpen: MessageActions["onOpenWorker"] }) {
+  const { title, state, detail } = pieceLineParts(line);
+  return (
+    <button
+      type="button"
+      aria-label={[title, state, detail].filter((part) => part !== "").join(" ")}
+      className={cn(TEXT_BUTTON, "inline-flex flex-wrap gap-x-2 text-left [overflow-wrap:anywhere]")}
+      onClick={() => onOpen(line.workerConversationId)}
+    >
+      <span className="text-foreground">{title}</span>
+      <span>{state}</span>
+      {detail !== "" && <span>{detail}</span>}
+    </button>
+  );
+}
+
 /** Worked for 里的一步：工具原样（等宽）、派出 / 收工的 Worker（点开它的对话）、建删的定时任务。 */
 function WorkStep({ message, onOpenWorker }: { message: Message; onOpenWorker: MessageActions["onOpenWorker"] }) {
   const line = workerEventOf(message);
   if (line) {
     return (
       <li>
-        <button type="button" className={cn(TEXT_BUTTON, "text-left [overflow-wrap:anywhere]")} onClick={() => onOpenWorker(line.workerConversationId)}>
-          {workerLineText(line).replace(/^Worker/, "Piece")}
-        </button>
+        <PieceLineButton line={line} onOpen={onOpenWorker} />
       </li>
     );
   }
@@ -767,9 +773,7 @@ function WorkerItem({ line, avatarKey, actions }: { line: WorkerMessageMeta; ava
   }
   return (
     <NoticeLine icon={WORKER_NOTICE_ICONS[line.event] ?? Info}>
-      <button type="button" className={cn(TEXT_BUTTON, "text-left")} onClick={() => onOpen(line.workerConversationId)}>
-        {workerLineText(line).replace(/^Worker/, "Piece")}
-      </button>
+      <PieceLineButton line={line} onOpen={onOpen} />
     </NoticeLine>
   );
 }
@@ -802,7 +806,9 @@ export const MessageBubble = memo(
     return (
       <div className={cn("flex flex-col", head ? "mt-6 first:mt-2" : "mt-2.5")} data-side="left" data-head={head}>
         {head && <AgentHead identity={identity} />}
-        <AgentText message={message} highlighted={highlighted} onAnswerAsk={actions.onAnswerAsk} />
+        <LongBrief>
+          <AgentText message={message} highlighted={highlighted} onAnswerAsk={actions.onAnswerAsk} />
+        </LongBrief>
       </div>
     );
   },
@@ -814,6 +820,50 @@ export const MessageBubble = memo(
     prev.highlighted === next.highlighted &&
     prev.revertedChanges === next.revertedChanges,
 );
+
+/** 任务说明比收起的高度多出这么多行才收：只多一两行时 Show more 自己就占一行，收了没省地方。 */
+const BRIEF_SLACK_LINES = 2;
+/** 读不到 styles.css 的 --brief-lines 时（jsdom）按 8 行收。 */
+const BRIEF_FALLBACK_LINES = 8;
+
+/**
+ * 项目经理交给 Worker 的话（开工通知、接手记录、打回意见）常常几十行，还带着标题：默认只露开头几行、底部渐隐，
+ * `Show more` 看全文，Worker 干出来的结果不会被挤到屏幕外。行数在 styles.css 的 `--brief-lines`；标题在里面和正文一样大（`[data-brief]`）。
+ */
+function LongBrief({ children }: { children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+  const id = useId();
+  useLayoutEffect(() => {
+    const box = ref.current;
+    if (box === null || expanded) return;
+    const measure = () => {
+      const style = getComputedStyle(box);
+      const lineHeight = Number.parseFloat(style.lineHeight) || 1.65 * (Number.parseFloat(style.fontSize) || 16);
+      const lines = Number.parseInt(style.getPropertyValue("--brief-lines"), 10) || BRIEF_FALLBACK_LINES;
+      setOverflowing(box.scrollHeight > (lines + BRIEF_SLACK_LINES) * lineHeight);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(box);
+    if (box.firstElementChild !== null) observer.observe(box.firstElementChild);
+    return () => observer.disconnect();
+  }, [expanded]);
+  return (
+    <div className="flex min-w-0 flex-col items-start gap-1">
+      <div ref={ref} id={id} data-brief data-overflowing={overflowing && !expanded ? "" : undefined} className={cn("w-full min-w-0", overflowing && !expanded && "brief-clamp")}>
+        {children}
+      </div>
+      {overflowing && (
+        <button type="button" aria-expanded={expanded} aria-controls={id} className={cn(TEXT_BUTTON, "text-minor text-muted-foreground")} onClick={() => setExpanded((v) => !v)}>
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      )}
+    </div>
+  );
+}
 
 function UserBubble({ message, actions }: { message: Message; actions: MessageActions }) {
   const attachments = attachmentsOf(message);

@@ -132,6 +132,13 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
     }
   }, [decisions.length]);
 
+  // 换一张卡展开（点了收起的行、点了 Show more 之后再点）：托盘滚回最上面，展开卡的来源头像和问题从头看得到
+  const trayRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const tray = trayRef.current;
+    if (tray !== null) tray.scrollTop = 0;
+  }, [selectedKey]);
+
   if (decisions.length === 0) return null;
 
   const expandedEntry =
@@ -149,7 +156,7 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
         <div className="border-b border-border pt-2.5">
           <CollapsibleTrigger
             type="button"
-            className="touch-target flex h-8 w-full cursor-pointer items-center justify-between gap-2 rounded-xl text-left text-xs font-medium text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+            className="touch-target flex h-8 w-full cursor-pointer items-center gap-2 rounded-xl text-left text-xs font-medium text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
           >
             <span className="inline-flex min-w-0 items-center gap-1.5">
               <ChevronRight
@@ -158,13 +165,15 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
               />
               <span className="truncate">Needs You</span>
             </span>
-            <span className="shrink-0 text-muted-foreground tabular-nums">{decisions.length}</span>
+            {/* 个数紧跟在标题后面：甩到一整行的最右端就看不出是谁的数 */}
+            <span className="shrink-0 font-normal text-muted-foreground tabular-nums">{decisions.length}</span>
           </CollapsibleTrigger>
 
           <CollapsibleContent
+            ref={trayRef}
             className={cn(
               "router-tray-scroll -mx-2.5 space-y-2 overflow-y-auto overscroll-y-contain px-2.5 pt-2 pb-5",
-              mobile ? "max-h-[33dvh]" : "max-h-[50dvh]",
+              mobile ? "max-h-[45dvh]" : "max-h-[50dvh]",
             )}
           >
             <RouterDecisionCard
@@ -192,7 +201,7 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
                       style={{ "--jelly": paletteOf(entry.avatarKey).accent } as CSSProperties}
                       className={cn(
                         "flex w-full pointer-coarse:min-h-11 cursor-pointer items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors outline-none hover:bg-jelly-hover focus-visible:ring-2 focus-visible:ring-ring/50",
-                        !entry.online && "opacity-60",
+                        !entry.online && "[&_[data-slot=avatar]]:opacity-50",
                       )}
                       onClick={() => onSelectKey(entry.decision.key)}
                     >
@@ -618,7 +627,7 @@ export function RouterWorkbench({
       <FileDropZone className="flex min-h-0 flex-1 flex-col" onFiles={staging.add}>
         <header
           data-window-drag
-          className="flex h-16 min-w-0 shrink-0 items-center justify-between gap-3 overflow-hidden border-b border-line pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]"
+          className="flex h-16 min-w-0 shrink-0 items-center justify-between gap-3 overflow-hidden pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]"
         >
           <div className="flex min-w-0 shrink-0 items-center gap-2.5">
             {leading}

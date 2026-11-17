@@ -54,7 +54,7 @@ const FRAME_CLASS = "composer-frame rounded-[26px] border border-border bg-backg
 const ROW_CLASS = "grid grid-cols-[auto_minmax(0,1fr)_auto] items-center px-2 py-1.25";
 const ROW_MULTI_CLASS = "pb-2";
 const TEXTAREA_CLASS =
-  "block min-h-9 w-full min-w-0 resize-none bg-transparent px-3 py-1.5 text-body leading-6 outline-none placeholder:text-muted-foreground disabled:opacity-50 [field-sizing:content]";
+  "block min-h-9 w-full min-w-0 resize-none bg-transparent px-3 py-1.5 pointer-coarse:py-2.5 text-body leading-6 outline-none placeholder:text-muted-foreground disabled:opacity-50 [field-sizing:content]";
 const ATTACH_CLASS = ["col-start-1 row-start-1", "col-start-1 row-start-2"] as const;
 const TEXT_CLASS = ["col-start-2 row-start-1", "col-span-3 col-start-1 row-start-1"] as const;
 const ACTIONS_CLASS = ["col-start-3 row-start-1", "col-start-3 row-start-2"] as const;
@@ -102,8 +102,8 @@ function WorkerPickChip({ pick, disabled, onEdit, onRemove }: { pick: WorkerPick
 }
 
 /**
- * 输入框上方的提示条：浅灰底、没有描边，左边一个小图标，右边 ×。加文件被拒的是灰字；发送失败的图标是红色、字是前景色。
- * 图标和字从框内 20px 开始，和待发文件、输入的文字对齐。
+ * 输入框上方的一行提示（docs/ui-standard.md 第 18 条“发送被拦”）：在框外面，没有底色和描边，左边一个小图标，右边 ×。
+ * 发送失败、被拦是 text-danger；加文件被拒是灰字。图标从 20px 开始，和框里待发文件、输入的文字对齐。
  */
 function NoticeBar({ notice, onDismiss }: { notice: ComposerNotice; onDismiss: () => void }) {
   const failed = notice.kind === "failed";
@@ -112,10 +112,10 @@ function NoticeBar({ notice, onDismiss }: { notice: ComposerNotice; onDismiss: (
     <div
       role="alert"
       title={errorTitle(notice.message)}
-      className="mx-3 mt-3 flex items-center gap-2 rounded-xl bg-sidebar py-1 pr-1 pl-2 text-minor leading-snug text-muted-foreground"
+      className={cn("mb-2 flex items-center gap-2 pr-3 pl-5 text-minor leading-snug", failed ? "text-danger" : "text-muted-foreground")}
     >
-      <Icon className={cn("size-3.5 shrink-0", failed && "text-danger")} aria-hidden="true" />
-      <span className={cn("min-w-0 flex-1", failed && "text-foreground")}>{errorLine(notice.message)}</span>
+      <Icon className="size-3.5 shrink-0" aria-hidden="true" />
+      <span className="min-w-0 flex-1">{errorLine(notice.message)}</span>
       <button type="button" aria-label="Dismiss" className={CHIP_CLOSE_CLASS} onClick={onDismiss}>
         <X className="size-3.5" aria-hidden="true" />
       </button>
@@ -362,9 +362,14 @@ export function Composer({
     );
   };
 
+  const menu = notice === null ? suggest.menu : null;
+  // 列表里有行可选时 Enter 是“选这一行”不是发送，发送键跟着不能点：半截的 /命令、@文件 不会被误发出去
+  const picking = menu !== null && menu.items.length > 0;
   return (
     <>
-      {suggest.menu && <ComposerMenu id={menuId} menu={suggest.menu} onSelect={suggest.select} onHighlight={suggest.highlight} />}
+      {/* 发送被拦时原文还在框里，会匹配出“没有匹配的命令”：有提示时不出列表 */}
+      {menu && <ComposerMenu id={menuId} menu={menu} onSelect={suggest.select} onHighlight={suggest.highlight} />}
+      {notice !== null && <NoticeBar notice={notice} onDismiss={staging.dismissNotice} />}
       <div data-multiline={multiline} className={FRAME_CLASS}>
         {(files.length > 0 || workerPick !== null || hasLeadingChip) && (
           <ul aria-label="Files to send" className="flex flex-wrap gap-2 px-5 pt-3">
@@ -392,7 +397,6 @@ export function Composer({
             ))}
           </ul>
         )}
-        {notice !== null && <NoticeBar notice={notice} onDismiss={staging.dismissNotice} />}
         <div className={cn(ROW_CLASS, multiline && ROW_MULTI_CLASS)}>
           <input
             ref={picker}
@@ -429,8 +433,8 @@ export function Composer({
             className={cn(TEXTAREA_CLASS, TEXT_CLASS[+multiline])}
             value={value}
             aria-autocomplete={source ? "list" : undefined}
-            aria-controls={suggest.menu ? menuId : undefined}
-            aria-activedescendant={suggest.menu && suggest.menu.items.length > 0 && suggest.menu.activeIndex >= 0 ? optionId(menuId, suggest.menu.activeIndex) : undefined}
+            aria-controls={menu ? menuId : undefined}
+            aria-activedescendant={menu && menu.items.length > 0 && menu.activeIndex >= 0 ? optionId(menuId, menu.activeIndex) : undefined}
             onChange={(e) => {
               if (!e.target.value.startsWith(`/${WORKER_COMMAND}`)) repickCaret.current = null;
               setCursor(e.target.selectionStart);
@@ -464,7 +468,7 @@ export function Composer({
             {showStop ? (
               <StopButton stop={stop} />
             ) : (
-              <Button size="icon" aria-label="Send" disabled={!canSend} onClick={submit} className={cn(bounce && "composer-send-bounce")}>
+              <Button size="icon" aria-label="Send" disabled={!canSend || picking} onClick={submit} className={cn(bounce && "composer-send-bounce")}>
                 <ArrowUp className="size-5" aria-hidden="true" />
               </Button>
             )}

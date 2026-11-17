@@ -1,5 +1,16 @@
 // 界面上的文字：状态名、错误、时间。界面外壳的字用英文（docs/ui-standard.md 第 3 条）。
-import { MAX_NAME_CHARS, PM_ARCHIVE_RETENTION_MS, type PersonaChange, type PmMode, type ScheduleRecord, type TokenUsage } from "../shared/index.ts";
+import {
+  MAX_NAME_CHARS,
+  PM_ARCHIVE_RETENTION_MS,
+  truncateChars,
+  WORKER_LINE_SUMMARY_CHARS,
+  type PersonaChange,
+  type PmMode,
+  type ScheduleRecord,
+  type TokenUsage,
+  type WorkerEvent,
+  type WorkerLineStatus,
+} from "../shared/index.ts";
 import type { ModelCatalog } from "../shared/vendors.ts";
 import { GENERIC_ERROR_TEXT } from "../shared/errors.ts";
 import { ApiError } from "./client.ts";
@@ -101,6 +112,35 @@ export function formatSchedule(schedule: Pick<ScheduleRecord, "kind" | "atTime" 
 /** 给人看的路径：用户目录写成 ~（/Users/名字、/home/名字），别的原样。 */
 export function shortPath(path: string): string {
   return path.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, "~");
+}
+
+/**
+ * 项目经理对话里 Piece 那一行的英文状态词（docs/ui-standard.md 第 3 条：外壳用英文）。
+ * shared 的 workerLineText 是写给命令行和提示词的中文（“已派出”“已收工”），界面不用它。
+ */
+const PIECE_EVENT_LABELS: Readonly<Record<Exclude<WorkerEvent, "report">, string>> = {
+  started: "Started",
+  ended: "Ended",
+  user_message: "You said",
+  turn_failed: "Turn failed",
+  worktree_failed: "Couldn't create worktree",
+};
+const PIECE_REPORT_LABELS: Readonly<Record<WorkerLineStatus, string>> = {
+  done: "Done",
+  problem: "Problem",
+  gave_up: "Gave up",
+  unformatted: "Reported",
+};
+
+/** Piece 那一行拆成几项：标题、状态词、后面的摘要（没有是空串）。几项之间用间距隔开，不拼成一句。 */
+export function pieceLineParts(line: { title: string; event: WorkerEvent; status: WorkerLineStatus | null; summary: string | null; readonly: boolean }): {
+  title: string;
+  state: string;
+  detail: string;
+} {
+  const state = line.event === "report" ? PIECE_REPORT_LABELS[line.status ?? "unformatted"] : PIECE_EVENT_LABELS[line.event];
+  const detail = line.summary === null ? "" : truncateChars(line.summary.replace(/\s+/g, " ").trim(), WORKER_LINE_SUMMARY_CHARS);
+  return { title: line.title, state: line.event === "started" && line.readonly ? `${state} read-only` : state, detail };
 }
 
 /** 界面上两种模式的叫法（新建项目经理的单选、资料页、修改记录）。shared 的 PM_MODE_LABELS 是写进提示词的中文名，界面不用它。 */

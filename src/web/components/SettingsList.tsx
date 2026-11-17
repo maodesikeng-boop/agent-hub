@@ -18,7 +18,7 @@ const GROUP_TITLE = "text-minor font-medium text-muted-foreground";
 
 /**
  * 一组：小号灰色标题（可以没有）+ 白底细框，框里的直接子元素之间有细分隔线。
- * 读屏名字是 title；没有标题的组（资料页头部下面第一组）用 label。
+ * 读屏名字是 title；没有标题的组（资料页头部下面第一组）用 label；标题是会变的状态（“5 ready”）时两个都给，读屏用 label。
  */
 export function SettingsGroup({
   title,
@@ -32,9 +32,10 @@ export function SettingsGroup({
   children: ReactNode;
 }) {
   return (
-    <section aria-label={title ?? label} className="grid grid-cols-1 gap-2">
+    <section aria-label={label ?? title} className="grid grid-cols-1 gap-2">
       {(title || action) && (
-        <div className="flex min-h-7 items-end justify-between gap-3 px-4">
+        // 标题行一律 32px 高、垂直居中：右边带不带操作按钮，标题到框的距离都一样，标题和按钮的字在同一条线上
+        <div className="flex min-h-8 items-center justify-between gap-3 px-4">
           {title && <h2 className={GROUP_TITLE}>{title}</h2>}
           {action}
         </div>

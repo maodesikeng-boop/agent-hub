@@ -97,7 +97,7 @@ function DeviceRow({ device, onChanged }: { device: DeviceView; onChanged: () =>
             {!info.self && info.transport && info.transport.kind !== "local" && (
               <span>{PEER_TRANSPORT_SPECS[info.transport.kind].label}</span>
             )}
-            {info.self ? <span>This computer</span> : <StatusText status={device.status} lastOnlineAt={device.lastOnlineAt} online />}
+            {!info.self && <StatusText status={device.status} lastOnlineAt={device.lastOnlineAt} online />}
           </span>
         }
       >
@@ -108,6 +108,7 @@ function DeviceRow({ device, onChanged }: { device: DeviceView; onChanged: () =>
                 Cancel
               </Button>
               <Button
+                variant="destructive"
                 size="sm"
                 disabled={busy}
                 onClick={() =>
@@ -285,15 +286,7 @@ export function PublicEntrySection({ publicEntry, onChanged }: { publicEntry?: P
   const { entry, summary, hostname, setHostname, busy, error, copied, toggle, copyCommand } = usePublicEntrySetting(publicEntry, onChanged);
   return (
     <CollapsibleGroup title="Public access" summary={summary} defaultOpen={entry.enabled || entry.hostname !== null}>
-      <SettingsRow
-        label="Public domain"
-        detail={
-          entry.enabled && entry.hostname ? (
-            <span className="font-mono text-minor select-all">{`https://${entry.hostname}`}</span>
-          ) : undefined
-        }
-        error={error}
-      >
+      <SettingsRow label="Public domain" stacked error={error}>
         {(id) => (
           <>
             <Input
@@ -301,13 +294,18 @@ export function PublicEntrySection({ publicEntry, onChanged }: { publicEntry?: P
               value={hostname}
               autoComplete="off"
               spellCheck={false}
-              placeholder="e.g. tokyo.tailnet.ts.net"
-              className="w-60 min-w-0 font-mono"
+              title={hostname || undefined}
+              autoCapitalize="none"
+              autoCorrect="off"
+              inputMode="url"
+              placeholder="tokyo.tailnet.ts.net"
+              className="min-w-0 flex-1 font-mono"
               onChange={(e) => setHostname(e.target.value)}
             />
             <Button
               type="button"
               variant="outline"
+              className="shrink-0"
               disabled={busy}
               onClick={() => void toggle()}
             >

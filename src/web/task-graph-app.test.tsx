@@ -148,7 +148,9 @@ describe("桌面右栏：App 接通果皮轨与切面轮", () => {
     const graphs = within(rail).getByRole("region", { name: /^Task Graph$/ });
     expect(within(graphs).getByText("发布流水线")).toBeInTheDocument();
     expect(graphs.querySelector("[data-slot='slice-wheel']")).toBeInTheDocument();
-    expect(within(graphs).getByTestId("peel-gate-card")).toBeInTheDocument();
+    // 等你拍板的步骤在右栏只有一行，作答在对话里
+    expect(within(graphs).getByTestId("peel-gate-row")).toHaveTextContent("确认上线");
+    expect(within(graphs).queryByTestId("peel-gate-card")).toBeNull();
 
     const asks = within(rail).getByRole("region", { name: /^Needs You$/ });
     expect(within(asks).getByText("独立提问：要不要加日志？")).toBeInTheDocument();
@@ -162,10 +164,23 @@ describe("桌面右栏：App 接通果皮轨与切面轮", () => {
     await waitFor(() => expect(window.location.hash).toBe("#/w/30"));
   });
 
-  it("门禁卡点选项：POST 到本机的 /api/task-graphs/:id/nodes/:key/decide", async () => {
+  it("点右栏里等你拍板的那一行：对话滚到那张拍板卡并高亮，不发请求；在全览弹窗的卡上点选项才 POST 到本机的 /api/task-graphs/:id/nodes/:key/decide", async () => {
     const user = userEvent.setup();
+    const scrolled: Element[] = [];
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this);
+    };
     const { api } = await bootSingle(graphSnapshot());
-    const card = await waitFor(() => within(sidePanel()).getByTestId("peel-gate-card"));
+    const row = await waitFor(() => within(sidePanel()).getByTestId("peel-gate-row"));
+    await user.click(row);
+    const target = document.querySelector('[data-message-id="99"]')!;
+    await waitFor(() => expect(target).toHaveAttribute("data-highlighted", "true"));
+    expect(scrolled).toEqual([target]);
+    expect(api.callsTo("POST", DECIDE_PATH)).toHaveLength(0);
+    Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+
+    await user.click(within(sidePanel()).getByRole("button", { name: "Zoom" }));
+    const card = within(await screen.findByRole("dialog", { name: "发布流水线" })).getByTestId("peel-gate-card");
     await user.click(within(card).getByRole("button", { name: /再等等/ }));
     await waitFor(() => expect(api.callsTo("POST", DECIDE_PATH)).toHaveLength(1));
     expect(api.callsTo("POST", DECIDE_PATH)[0]!.body).toMatchObject({ choice: "再等等" });
@@ -229,12 +244,13 @@ describe("桌面右栏：App 接通果皮轨与切面轮", () => {
     });
 
     const { api } = await bootSingle(snap);
-    const railCard = await waitFor(() => within(sidePanel()).getByTestId("peel-gate-card"));
-    // 右栏果皮轨检查点拍板卡默认已展开补充输入框，无需先点 Add note
-    expect(within(railCard).getByLabelText("Add note")).toBeInTheDocument();
-    expect(within(railCard).getByRole("button", { name: /通过.*Recommended/ })).toBeInTheDocument();
+    // 右栏果皮轨里检查点只有一行，不出选项和补充框
+    const railRow = await waitFor(() => within(sidePanel()).getByTestId("peel-gate-row"));
+    expect(within(sidePanel()).queryByLabelText("Add note")).toBeNull();
+    expect(within(sidePanel()).queryByText("Recommended")).toBeNull();
+    expect(railRow.tagName).toBe("BUTTON");
 
-    // 对话消息流里的检查点 AskCard 同样展示 Recommended 并默认展开补充输入框，点「打回」带修改意见直调 /decide，不调 /messages
+    // 对话消息流里的检查点 AskCard 展示 Recommended 并默认展开补充输入框，点「打回」带修改意见直调 /decide，不调 /messages
     const chatArticle = document.querySelector('[data-message-id="105"]') as HTMLElement;
     const chatCard = chatArticle.querySelector("[data-ask-card]") as HTMLElement;
     expect(within(chatCard).getByText("Recommended")).toBeInTheDocument();
@@ -495,13 +511,13 @@ describe("跨设备：右栏的请求走当前设备的接口", () => {
     const user = userEvent.setup();
     const { local, remote } = await bootFleet();
     const rail = await waitFor(sidePanel);
-    const card = within(rail).getByTestId("peel-gate-card");
+    await user.click(within(rail).getByRole("button", { name: "Zoom" }));
+    const zoom = await screen.findByRole("dialog", { name: "发布流水线" });
+    const card = within(zoom).getByTestId("peel-gate-card");
     await user.click(within(card).getByRole("button", { name: /上线/ }));
     await waitFor(() => expect(remote.callsTo("POST", DECIDE_PATH)).toHaveLength(1));
     expect(local.callsTo("POST", DECIDE_PATH)).toHaveLength(0);
 
-    await user.click(within(rail).getByRole("button", { name: "Zoom" }));
-    const zoom = await screen.findByRole("dialog", { name: "发布流水线" });
     await user.click(within(zoom).getByRole("button", { name: "Cancel graph" }));
     await user.click(within(await screen.findByRole("dialog", { name: "Cancel this task graph?" })).getByRole("button", { name: "Cancel graph" }));
     await waitFor(() => expect(remote.callsTo("POST", CANCEL_PATH)).toHaveLength(1));

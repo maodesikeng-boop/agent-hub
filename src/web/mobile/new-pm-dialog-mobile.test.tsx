@@ -196,10 +196,12 @@ describe("NewPmDialog mobile full-screen & desktop parity", () => {
 
     const nameInput = within(dialog).getByRole("textbox", { name: "Name" });
     await waitFor(() => expect(nameInput).toHaveFocus());
-    expect(nameInput).toHaveClass("w-60");
+    expect(nameInput).toHaveClass("w-72");
 
     const folderInput = within(dialog).getByRole("textbox", { name: "Main folder" });
-    expect(folderInput).toHaveClass("w-60", "min-w-0");
+    // 主文件夹的输入框和 Choose… 一起占 w-72，和上面名字那一行同宽、不折行
+    expect(folderInput).toHaveClass("flex-1", "min-w-0");
+    expect(folderInput.parentElement).toHaveClass("w-72");
     expect(folderInput).toHaveAttribute("autocapitalize", "none");
     expect(folderInput).toHaveAttribute("autocorrect", "off");
     expect(folderInput).toHaveAttribute("spellcheck", "false");

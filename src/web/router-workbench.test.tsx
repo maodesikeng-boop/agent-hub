@@ -476,7 +476,7 @@ describe("Needs You 托盘", () => {
     // 托盘和时间流、输入框左右对齐，桌面最高半屏（50dvh），超出在里面滚
     expect(tray.className).toMatch(/chat-column/);
     expect(tray.querySelector("[class*='max-h-[50dvh]']")).not.toBeNull();
-    expect(tray.querySelector("[class*='max-h-[33dvh]']")).toBeNull();
+    expect(tray.querySelector("[class*='max-h-[45dvh]']")).toBeNull();
 
     // 只有第一张是卡片，其余每张一行（问题第一行截断，全文在 title）
     expect(tray.querySelectorAll("article")).toHaveLength(1);
@@ -521,11 +521,13 @@ describe("Needs You 托盘", () => {
     act(() => tokyoWs!.drop());
     act(() => void vi.advanceTimersByTime(OFFLINE_AFTER_MS + 1_000));
     vi.useRealTimers();
-    await waitFor(() => expect(within(tray).getByRole("button", { name: /远端离线时的待决卡/ }).className).toContain("opacity-60"));
+    await waitFor(() => expect(within(tray).getByRole("button", { name: /远端离线时的待决卡/ }).className).toContain("[&_[data-slot=avatar]]:opacity-50"));
     await user.click(within(tray).getByRole("button", { name: /远端离线时的待决卡/ }));
     const offlineCard = within(tray).getByText("远端离线时的待决卡").closest("article")!;
     expect(within(offlineCard).getByText("Offline")).toBeInTheDocument();
-    expect(offlineCard.className).toContain("opacity-60");
+    // 离线只调淡来源头像，字不调淡（调淡了对比度不够）
+    expect(offlineCard.className).toContain("[&_[data-slot=avatar]]:opacity-50");
+    expect(offlineCard.className).not.toMatch(/(^| )opacity-60/);
     expect(within(offlineCard).getByRole("button", { name: /方案甲/ })).toBeDisabled();
   });
 
@@ -681,27 +683,27 @@ describe("Needs You 托盘", () => {
         items: [
           makeDecisionItem({ id: 101, question: "方案怎么推进？", context: longContext, options: [`(Recommended) ${longOption}`, "合并成一步做"], createdAt: now - 60_000 }),
           makeDecisionItem({ id: 102, question: "要不要覆盖手机？", context: "只差手机外壳", options: ["要", "不要"], createdAt: now - 120_000 }),
-          makeDecisionItem({ id: 103, question: "首页改版要不要上？", context: "首页改版".repeat(30), options: ["上", "不上"], createdAt: now - 180_000 }),
+          makeDecisionItem({ id: 103, question: "首页改版要不要上？", context: "首页改版".repeat(45), options: ["上", "不上"], createdAt: now - 180_000 }),
         ],
         commands: [makeCommandRecord()],
       },
     });
     installFleet({ local: localSnap });
-    // jsdom 不排版：摘要框的内容高度按正文行数算（每行 22px，一行 30 字），框高 3 行（收起时）
+    // jsdom 不排版：摘要框的内容高度按正文行数算（每行 26.4px = 1.65 × 16px，一行 30 字），框高 3 行（收起时）
     const proto = HTMLElement.prototype;
     const lines = (el: HTMLElement) => Math.ceil((el.textContent ?? "").length / 30);
     Object.defineProperty(proto, "scrollHeight", {
       configurable: true,
       get(this: HTMLElement) {
-        return this.hasAttribute("data-card-lead") ? lines(this) * 22 : 0;
+        return this.hasAttribute("data-card-lead") ? lines(this) * 26.4 : 0;
       },
     });
     Object.defineProperty(proto, "clientHeight", {
       configurable: true,
       get(this: HTMLElement) {
         if (!this.hasAttribute("data-card-lead")) return 0;
-        const full = lines(this) * 22;
-        return this.classList.contains("card-lead-clamp") ? Math.min(full, 3 * 22) : full;
+        const full = lines(this) * 26.4;
+        return this.classList.contains("card-lead-clamp") ? Math.min(full, 3 * 26.4) : full;
       },
     });
     try {
@@ -777,7 +779,7 @@ describe("Needs You 托盘", () => {
     }
   });
 
-  it("手机外壳下托盘上限降为 33dvh 并保持内部纵向滚动，第一张卡完整展开、其余收成单行", async () => {
+  it("手机外壳下托盘上限降为 45dvh 并保持内部纵向滚动，第一张卡完整展开、其余收成单行", async () => {
     installViewport("mobile");
     window.history.replaceState(null, "", "#/router");
     const now = Date.now();
@@ -796,7 +798,7 @@ describe("Needs You 托盘", () => {
     await openRouter();
 
     const tray = await screen.findByRole("region", { name: "Needs You" });
-    const scrollBox = tray.querySelector<HTMLElement>("[class*='max-h-[33dvh]']");
+    const scrollBox = tray.querySelector<HTMLElement>("[class*='max-h-[45dvh]']");
     expect(scrollBox).not.toBeNull();
     expect(scrollBox!.className).toContain("overflow-y-auto");
     expect(scrollBox!.className).toContain("overscroll-y-contain");

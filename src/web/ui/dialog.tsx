@@ -9,6 +9,12 @@ import { Button } from "./button.tsx";
 // 底部按钮放 DialogFooter（靠右，主按钮在最右）。宽度三档：简单设置 max-w-110，表单默认 520px，双栏的全局设置 780px（SettingsDialog）。
 // 弹窗自己不滚：内容可能超过一屏的放进 DialogBody（只有它滚），标题和 DialogFooter 一直在视野里。
 export const Dialog = DialogPrimitive.Root;
+
+/**
+ * 放大窗（图表、任务流图全览，docs/ui-standard.md 第 15 条）：大小跟内容走，内容小弹窗就小，不留大片空白；
+ * 最大到窗口的 96% 宽（封顶 1400px）、90% 高，再大在里面滚。
+ */
+export const ZOOM_DIALOG = "h-auto max-h-[90dvh] w-fit max-w-[min(96vw,1400px)] min-w-[min(96vw,26rem)]";
 export const DialogClose = DialogPrimitive.Close;
 
 export function DialogContent({
@@ -57,7 +63,7 @@ export function DialogContent({
             {children}
             <DialogPrimitive.Close
               aria-label="Close"
-              className="absolute top-4 right-4 flex size-8 cursor-pointer items-center justify-center rounded-full text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+              className="touch-target absolute top-4 right-4 flex size-8 cursor-pointer items-center justify-center rounded-full text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
             >
               <X className="size-4" aria-hidden="true" />
             </DialogPrimitive.Close>
@@ -73,7 +79,8 @@ export function DialogBody({ className, ...props }: React.ComponentProps<"div">)
   return (
     <div
       data-slot="dialog-body"
-      className={cn("-mx-6 -my-1 grid min-h-0 flex-1 content-start gap-6 overflow-x-hidden overflow-y-auto overscroll-y-contain px-6 py-1", className)}
+      // 往下多伸 16px 再用内边距收回来（落在和底部按钮之间的 24px 空隙里）：滚动的内容在这 16px 里渐隐（.dialog-body-fade），不贴着底部按钮被硬切
+      className={cn("dialog-body-fade -mx-6 -mt-1 -mb-4 grid min-h-0 flex-1 content-start gap-6 overflow-x-hidden overflow-y-auto overscroll-y-contain px-6 pt-1 pb-4", className)}
       {...props}
     />
   );

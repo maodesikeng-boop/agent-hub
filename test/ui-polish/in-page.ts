@@ -114,6 +114,28 @@ export function measureInPage(options: { touch: boolean }): RawHit[] {
     const top = document.elementFromPoint(x, y);
     return top !== null && (top === el || el.contains(top));
   });
+  /** 元素真正点得到的那一块：滚出滚动区、被祖先裁掉的部分点不到，不算。 */
+  const clickableRect = (el: Element) => {
+    const r = el.getBoundingClientRect();
+    let left = r.left;
+    let top = r.top;
+    let right = r.right;
+    let bottom = r.bottom;
+    for (let a = el.parentElement; a !== null && a !== document.documentElement; a = a.parentElement) {
+      const style = getComputedStyle(a);
+      if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+      const c = a.getBoundingClientRect();
+      if (style.overflowX !== "visible") {
+        left = Math.max(left, c.left + a.clientLeft);
+        right = Math.min(right, c.left + a.clientLeft + a.clientWidth);
+      }
+      if (style.overflowY !== "visible") {
+        top = Math.max(top, c.top + a.clientTop);
+        bottom = Math.min(bottom, c.top + a.clientTop + a.clientHeight);
+      }
+    }
+    return { left, top, right, bottom };
+  };
   for (let i = 0; i < hittable.length; i++) {
     for (let j = i + 1; j < hittable.length; j++) {
       const a = hittable[i]!;
@@ -121,8 +143,8 @@ export function measureInPage(options: { touch: boolean }): RawHit[] {
       if (a.contains(b) || b.contains(a)) continue;
       // 浮层、弹窗、抽屉本来就盖在页面上面：只比同一层里的
       if (layerOf(a) !== layerOf(b)) continue;
-      const ra = a.getBoundingClientRect();
-      const rb = b.getBoundingClientRect();
+      const ra = clickableRect(a);
+      const rb = clickableRect(b);
       const w = Math.min(ra.right, rb.right) - Math.max(ra.left, rb.left);
       const h = Math.min(ra.bottom, rb.bottom) - Math.max(ra.top, rb.top);
       if (w > 2 && h > 2) hits.push({ check: "overlap", rect: { x: Math.max(ra.left, rb.left), y: Math.max(ra.top, rb.top), w, h }, evidence: `${describe(a)} 和 ${describe(b)} 重叠 ${w.toFixed(0)}×${h.toFixed(0)}px` });
@@ -133,7 +155,12 @@ export function measureInPage(options: { touch: boolean }): RawHit[] {
     for (const el of hittable) {
       const r = el.getBoundingClientRect();
       const inline = el.tagName === "A" && getComputedStyle(el).display === "inline";
-      if (!inline && (r.width < 43.5 || r.height < 43.5)) hits.push({ check: "touch-target", rect: rectOf(r), evidence: `${describe(el)} ${r.width.toFixed(0)}×${r.height.toFixed(0)}px` });
+      // 可点范围 = 元素自己的框，或者它用 ::after 撑开的那一块（styles.css 的 .touch-target，docs/ui-standard.md 第 19 条），取大的
+      const after = getComputedStyle(el, "::after");
+      const expanded = after.content !== "none" && after.position === "absolute";
+      const w = expanded ? Math.max(r.width, parseFloat(after.width) || 0) : r.width;
+      const h = expanded ? Math.max(r.height, parseFloat(after.height) || 0) : r.height;
+      if (!inline && (w < 43.5 || h < 43.5)) hits.push({ check: "touch-target", rect: rectOf(r), evidence: `${describe(el)} ${w.toFixed(0)}×${h.toFixed(0)}px` });
     }
   }
 
@@ -175,12 +202,13 @@ export function applyMutationInPage(id: string): void {
   const rail = one('[aria-label="Side panel"]');
   const log = one('[aria-label="Messages"]');
   const nav = one('[aria-label="Conversations"]');
-  const railOptions = [...rail.querySelectorAll<HTMLElement>("button")].filter((b) => /60 秒|5 分钟/.test(b.textContent ?? ""));
+  // 拍板的选项只在对话里那张提问卡上（右栏里那一步是一行跳转，没有选项）
+  const askOptions = [...byText(log, '[role="group"][aria-label="Options"]', "60 秒").querySelectorAll<HTMLElement>("button")];
   switch (id) {
     case "clip-right": {
-      const option = railOptions[0]!;
+      const option = askOptions[0]!;
       cardOf(option).style.overflow = "hidden";
-      for (const b of railOptions) b.style.width = "calc(100% + 72px)";
+      for (const b of askOptions) b.style.width = "calc(100% + 72px)";
       return;
     }
     case "covered-message": {
@@ -214,10 +242,14 @@ export function applyMutationInPage(id: string): void {
       }
       return;
     case "two-primaries": {
-      const [first, second] = railOptions;
-      const style = getComputedStyle(first!);
-      Object.assign(second!.style, { backgroundColor: style.backgroundColor, color: style.color, borderColor: style.borderColor });
-      for (const child of second!.querySelectorAll<HTMLElement>("*")) child.style.color = style.color;
+      // 提问卡的选项平时都是白底细边框；把头两个都涂成实心强调色
+      const vars = getComputedStyle(log);
+      const fill = vars.getPropertyValue("--primary").trim();
+      const ink = vars.getPropertyValue("--primary-foreground").trim();
+      for (const option of askOptions.slice(0, 2)) {
+        Object.assign(option.style, { backgroundColor: fill, color: ink, borderColor: fill });
+        for (const child of option.querySelectorAll<HTMLElement>("*")) Object.assign(child.style, { color: ink, backgroundColor: "transparent", borderColor: ink });
+      }
       return;
     }
     case "small-preview": {

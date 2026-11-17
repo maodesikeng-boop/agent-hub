@@ -5,6 +5,8 @@
 export const CHART_MAX_SOURCE_CHARS = 50_000;
 /** 还没渲染好（占位、转圈）时图区最小高度 px。 */
 export const CHART_MIN_HEIGHT = 160;
+/** 消息里的图跟着列宽等比缩小，缩到图里的字只剩这么多 px（docs/ui-standard.md 第 3 条最小的一档）就不再缩，改在图区里横向滚。 */
+export const CHART_MIN_INLINE_FONT_PX = 12;
 /** 渲染结果缓存的条数（LRU）。 */
 export const CHART_CACHE_SIZE = 200;
 /** 离视口还有多远就开始渲染（IntersectionObserver 的 rootMargin，px）。 */

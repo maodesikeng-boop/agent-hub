@@ -331,13 +331,15 @@ describe("Composer 布局", () => {
 });
 
 describe("Composer 提示条", () => {
-  it("加文件被拒（skipped）：浅灰底内联提示条，点 × 或打字立刻关闭，4 秒后自动消失", () => {
+  it("加文件被拒（skipped）：输入框上方一行灰字（框外、没有底色），点 × 或打字立刻关闭，4 秒后自动消失", () => {
     vi.useFakeTimers();
     try {
       const dismissNotice = vi.fn();
       setup({ notice: { message: "「空.txt」是空文件，没有加入", kind: "skipped" }, dismissNotice });
       const alert = screen.getByRole("alert");
-      expect(alert).toHaveClass("bg-sidebar", "rounded-xl", "text-muted-foreground");
+      expect(alert).toHaveClass("text-muted-foreground");
+      expect(alert.className).not.toMatch(/bg-|rounded/);
+      expect(alert.closest(".composer-frame")).toBeNull();
       expect(alert).toHaveTextContent("「空.txt」是空文件，没有加入");
 
       screen.getByRole("button", { name: "Dismiss" }).click();
@@ -355,14 +357,14 @@ describe("Composer 提示条", () => {
     }
   });
 
-  it("发送失败（failed）：正文前景色、红色图标，4 秒后不自动消失", () => {
+  it("发送失败（failed）：整行 text-danger，4 秒后不自动消失", () => {
     vi.useFakeTimers();
     try {
       const dismissNotice = vi.fn();
       setup({ notice: { message: "上传失败", kind: "failed" }, dismissNotice });
       const alert = screen.getByRole("alert");
-      expect(alert.querySelector(".text-danger")).not.toBeNull();
-      expect(screen.getByText("上传失败")).toHaveClass("text-foreground");
+      expect(alert).toHaveClass("text-danger");
+      expect(alert).toHaveTextContent("上传失败");
 
       act(() => vi.advanceTimersByTime(NOTICE_AUTO_HIDE_MS * 2));
       expect(dismissNotice).not.toHaveBeenCalled();

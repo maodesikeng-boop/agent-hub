@@ -105,7 +105,8 @@ export function QuotaPopover({ quota, fetchable = false }: { quota: QuotaVendor[
                   <div key={vendor.id} role={vendor.group ? "group" : undefined} aria-label={vendor.group} className="grid gap-3">
                     {vendor.group && <h4 className="text-xs font-medium text-muted-foreground">{vendor.group}</h4>}
                     {vendor.windows.map((w) => (
-                      <WindowRow key={w.key} window={w} exhausted={vendor.exhausted || w.percent >= 100} />
+                      // 用满的是哪个窗口就只把那一条画成实心；厂商只说“用完了”、看不出是哪个窗口时才整组都算
+                      <WindowRow key={w.key} window={w} exhausted={w.percent >= 100 || (vendor.exhausted && !vendor.windows.some((x) => x.percent >= 100))} />
                     ))}
                   </div>
                 ))}

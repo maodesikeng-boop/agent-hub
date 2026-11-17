@@ -225,7 +225,8 @@ export const SliceWheelIcon = memo(function SliceWheelIcon({
             );
           })
         )}
-        {count > 1 &&
+        {/* 只有一步的图也切一刀（整圈的起止线）：没有刀口的实心圆像一个报错的状态点，不像切面 */}
+        {count >= 1 &&
           petals.map((curr, i) => {
             const next = petals[(i + 1) % count]!;
             const angle = (i + 1) * span;

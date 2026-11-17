@@ -467,9 +467,9 @@ function ArchiveStatusGroup({ pmId, archivedAt }: { pmId: number; archivedAt: nu
   };
   return (
     <SettingsGroup label="Archive status">
-      <SettingsRow label="Archived" detail={`${formatArchiveRemaining(archivedAt)}. Your project folder stays untouched`} error={unarchiveError}>
+      <SettingsRow label="Archived" detail={formatArchiveRemaining(archivedAt)} error={unarchiveError}>
         {() => (
-          <Button variant="outline" disabled={unarchiving} onClick={() => void unarchive()}>
+          <Button disabled={unarchiving} onClick={() => void unarchive()}>
             {unarchiving && <Loader2 className="animate-spin" aria-hidden="true" />}
             {unarchiving ? "Restoring…" : "Restore"}
           </Button>
@@ -598,20 +598,39 @@ export function PmProfile({
 }) {
   const { load, retry, set } = usePersona(pm.id, rev);
   const label = `${pm.name}'s profile`;
+  // 往下滚、头部的大名字滚出去之后，顶栏里补上头像和名字（照 iOS 大标题收进导航栏）：滚到哪都看得出在改谁
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const nameRef = useRef<HTMLHeadingElement>(null);
+  const [nameHidden, setNameHidden] = useState(false);
+  useEffect(() => {
+    const root = scrollerRef.current;
+    const name = nameRef.current;
+    if (root === null || name === null || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(([entry]) => setNameHidden(entry !== undefined && !entry.isIntersecting), { root });
+    observer.observe(name);
+    return () => observer.disconnect();
+  }, []);
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col" aria-label={label}>
-      <header data-window-drag className="flex h-16 min-w-0 shrink-0 items-center overflow-hidden px-6">
+      <header data-window-drag className="flex h-16 min-w-0 shrink-0 items-center gap-3 overflow-hidden px-6">
         <Button variant="ghost" size="icon" className="shrink-0" aria-label="Back" onClick={onBack}>
           <ArrowLeft aria-hidden="true" />
         </Button>
+        {nameHidden && (
+          <div aria-hidden="true" className="flex min-w-0 items-center gap-3">
+            <Avatar colorKey={pm.id} size={34} />
+            <span className="min-w-0 truncate text-title leading-snug font-semibold">{pm.name}</span>
+          </div>
+        )}
       </header>
-      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-6 pb-12">
+      {/* 上边 1rem 渐隐（.page-fade，内容上内边距 pt-4 一样高）：滚上去的分组框不贴着顶栏被硬切 */}
+      <div ref={scrollerRef} className="page-fade min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-6 pt-4 pb-12">
         <div className="mx-auto grid max-w-160 grid-cols-1 gap-6">
-          <header className="flex min-w-0 flex-col items-center pb-2 text-center">
+          <header className="grid min-w-0 grid-cols-1 justify-items-center pb-2 text-center">
             <Avatar colorKey={pm.id} size={64} />
-            <h1 className="mt-4 max-w-full wrap-break-word text-display leading-tight font-semibold tracking-tight">{pm.name}</h1>
+            <h1 ref={nameRef} className="mt-4 max-w-full wrap-break-word text-display leading-tight font-semibold tracking-tight">{pm.name}</h1>
             {project && (
-              <p title={project.name} className="mt-1 max-w-full truncate text-minor text-muted-foreground">
+              <p title={project.name} className="mt-1 w-full min-w-0 truncate text-minor text-muted-foreground">
                 {project.name}
               </p>
             )}

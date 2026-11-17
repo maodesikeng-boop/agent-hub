@@ -23,7 +23,33 @@ import { Button } from "./ui/button.tsx";
 import { ModelCatalogProvider } from "./models.tsx";
 import { ROUTER_DRAFT_KEY, useShellModel } from "./shell-model.ts";
 
-const FULLPAGE = "flex h-full flex-col items-center justify-center gap-3";
+/**
+ * 整页状态（加载中、没登录、连不上、设备没连上）：居中一列，最宽 22rem、左右留 24px；
+ * 标题 17px 600，下面的说明 13.5px 灰，一屏最多一个主按钮。
+ */
+function FullPage({ title, lines = [], titleTip, busy = false, action, testId }: { title: string; lines?: readonly string[]; titleTip?: string; busy?: boolean; action?: React.ReactNode; testId?: string }) {
+  return (
+    <div className="flex h-full flex-col items-center justify-center px-6 text-center" data-testid={testId}>
+      <div className="flex max-w-88 flex-col items-center gap-2">
+        {busy ? (
+          <>
+            <Loader2 className="size-5 animate-spin text-muted-foreground" aria-hidden="true" />
+            <p className="text-minor text-muted-foreground">{title}</p>
+          </>
+        ) : (
+          <h1 title={titleTip} className="text-title leading-snug font-semibold">{title}</h1>
+        )}
+        {lines.map((line) => (
+          <p key={line} className="text-minor leading-relaxed text-muted-foreground">{line}</p>
+        ))}
+        {action && <div className="mt-2">{action}</div>}
+      </div>
+    </div>
+  );
+}
+
+const SIGN_IN_ON_COMPUTER = "On a computer, open the sign-in link printed in the terminal at startup";
+const SIGN_IN_ON_PHONE = "On a phone, scan the code under Settings → Security & Access → Sign in on another device on a signed-in computer";
 
 export function App() {
   const mobile = useMediaQuery(MOBILE_SHELL_QUERY);
@@ -32,12 +58,14 @@ export function App() {
   useEffect(() => {
     setDrawerOpen(false);
   }, [route, current.key, content?.railHasContent, mobile]);
+  const openManageProvidersRef = content?.openManageProviders;
+  const openCurrentProviders = useCallback(() => openManageProvidersRef?.(current.key), [openManageProvidersRef, current.key]);
   const notices = useMemo(
     () =>
       content === null ? null : (
-        <Notices health={content.health} reconnecting={content.reconnecting} offline={content.offline} listFailed={fleet.listFailed} />
+        <Notices health={content.health} reconnecting={content.reconnecting} offline={content.offline} listFailed={fleet.listFailed} onManageProviders={openCurrentProviders} />
       ),
-    [content?.health, content?.reconnecting, content?.offline, fleet.listFailed],
+    [content?.health, content?.reconnecting, content?.offline, fleet.listFailed, openCurrentProviders],
   );
   const railAttention = content?.railAttention ?? false;
   const railToggle = useMemo(
@@ -53,35 +81,26 @@ export function App() {
       ),
     [content === null, content?.railHasContent, content?.railOpen, railAttention, content?.avatarKey, content?.toggleRail],
   );
-  const openManageProvidersRef = content?.openManageProviders;
   const openLocalProviders = useCallback(
     () => openManageProvidersRef?.(LOCAL_DEVICE),
     [openManageProvidersRef],
   );
   // 整页的加载中、没登录、连不上只看入口本机；别的设备连不上在主区里说
   if (local.state.phase === "loading" || (route?.device !== undefined && routedDevice === undefined && !fleet.listed)) {
-    return (
-      <div className={FULLPAGE}>
-        <Loader2 className="size-6 animate-spin text-muted-foreground" aria-hidden="true" />
-        <p>Loading…</p>
-      </div>
-    );
+    return <FullPage busy title="Loading…" />;
   }
   if (local.state.phase === "unauthorized") {
-    return (
-      <div className={FULLPAGE} data-testid="unauthenticated">
-        <p>Not signed in. On your computer, open the sign-in link printed in the terminal at startup. On a phone, scan the code from Settings → Security &amp; Access → Sign in on phone on a signed-in computer</p>
-      </div>
-    );
+    return <FullPage testId="unauthenticated" title="Not signed in" lines={mobile ? [SIGN_IN_ON_PHONE, SIGN_IN_ON_COMPUTER] : [SIGN_IN_ON_COMPUTER, SIGN_IN_ON_PHONE]} />;
   }
   if (local.state.phase === "error") {
+    const error = local.state.loadError;
     return (
-      <div className={FULLPAGE}>
-        <p title={local.state.loadError ? errorTitle(local.state.loadError) : undefined}>{local.state.loadError?.text ?? "连不上守护进程"}</p>
-        {local.state.loadError?.hint && <p>{local.state.loadError.hint}</p>}
-        <p className="text-minor text-muted-foreground">If the service isn't running, run pnpm start in the project folder</p>
-        <Button onClick={() => void fleet.hub(LOCAL_DEVICE).reload()}>Retry</Button>
-      </div>
+      <FullPage
+        title={error?.text ?? "连不上守护进程"}
+        titleTip={error ? errorTitle(error) : undefined}
+        lines={error?.hint ? [error.hint] : []}
+        action={<Button onClick={() => void fleet.hub(LOCAL_DEVICE).reload()}>Retry</Button>}
+      />
     );
   }
 
@@ -166,15 +185,9 @@ export function App() {
   // 别的设备还没加载好：加载中，或者一次都没连上（联机第 4.3 节）
   const deviceWaiting =
     routerActive || state.phase === "ready" ? null : current.status === "connecting" ? (
-      <div className={FULLPAGE}>
-        <Loader2 className="size-6 animate-spin text-muted-foreground" aria-hidden="true" />
-        <p>Loading…</p>
-      </div>
+      <FullPage busy title="Loading…" />
     ) : (
-      <div className={FULLPAGE}>
-        <p>Not connected to this computer yet</p>
-        <p className="text-minor text-muted-foreground">Check that Tailscale is on and the daemon is running on {current.info.name}</p>
-      </div>
+      <FullPage title="Not connected to this computer yet" lines={[`Check that Tailscale is on and the daemon is running on ${current.info.name}`]} />
     );
 
   const sidebar = (
@@ -302,7 +315,7 @@ export function App() {
             ) : (
               <>
                 {notices}
-                <div className="flex flex-1 items-center justify-center text-muted-foreground">No conversations yet</div>
+                <div className="flex flex-1 items-center justify-center text-minor text-muted-foreground">No conversations yet</div>
               </>
             )}
           </main>

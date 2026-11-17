@@ -9,6 +9,7 @@ import {
   previewKindOf,
   sentFileMime,
   type FileAction,
+  type PreviewKind,
 } from "../../shared/index.ts";
 import { fetchFileBytes, type FileActionTarget } from "../client.ts";
 import { useClient } from "../device-scope.tsx";
@@ -18,7 +19,8 @@ import { highlightHtml } from "../highlight.ts";
 import { errorLine, errorText, errorTitle, type ErrorLike } from "../format.ts";
 import { formatBytes } from "../upload.ts";
 import { Button } from "../ui/button.tsx";
-import { Dialog, DialogContent } from "../ui/dialog.tsx";
+import { cn } from "../lib/utils.ts";
+import { Dialog, DialogContent, ZOOM_DIALOG } from "../ui/dialog.tsx";
 import { COPIED_RESET_MS } from "./CodeBlock.tsx";
 import { Markdown } from "./Markdown.tsx";
 
@@ -96,11 +98,11 @@ function CodeView({ text, language }: { text: string; language: string }) {
   );
 }
 
-/** 表格：整个容器滚动（横竖都能），表头 sticky 固定在顶上。 */
+/** 表格：跟着外面的内容框滚动（横竖都能），表头 sticky 固定在顶上。 */
 function CsvView({ rows }: { rows: string[][] }) {
   const [head = [], ...body] = rows;
   return (
-    <div data-preview-table className="h-full overflow-auto">
+    <div data-preview-table>
       <table className="min-w-full border-separate border-spacing-0 text-left text-minor">
         <thead>
           <tr>
@@ -111,7 +113,8 @@ function CsvView({ rows }: { rows: string[][] }) {
             ))}
           </tr>
         </thead>
-        <tbody>
+        {/* 最后一行不画底线：表格跟着内容框收到一样高之后，它和框的边贴在一起成了双线 */}
+        <tbody className="[&>tr:last-child>td]:border-b-0">
           {body.map((row, r) => (
             <tr key={r}>
               {row.map((cell, c) => (
@@ -134,7 +137,7 @@ function Centered({ children }: { children: React.ReactNode }) {
 const rowsLabel = (total: number, shown: number) => (total > shown ? `${total} rows, showing the first ${shown}` : `${total} ${total === 1 ? "row" : "rows"}`);
 
 /** 内容区和工具栏上跟类型有关的部分（源码切换、复制、截断说明）。 */
-function usePreviewBody(file: PreviewFile, kind: ReturnType<typeof previewKindOf>) {
+function usePreviewBody(file: PreviewFile, kind: PreviewKind) {
   const isText = kind === "markdown" || kind === "code";
   const isCsv = kind === "csv";
   const textLimit = file.size !== null && file.size <= MAX_PREVIEW_TEXT_BYTES ? null : MAX_PREVIEW_TEXT_BYTES;
@@ -210,24 +213,27 @@ function OtherInfo({ file }: { file: PreviewFile }) {
   );
 }
 
+/** 自己没有大小、给多大占多大的内容（内嵌的 PDF 和网页、视频、看大图的图片）：预览窗开到接近全屏。 */
+const FILLS_WINDOW: ReadonlySet<PreviewKind> = new Set(["pdf", "html", "video", "image"]);
+
 /**
- * 文件预览窗（接近全屏）：按类型显示，上面是三个按钮——下载、在 Finder 中显示、用默认程序打开。
- * 内容在窗打开之后才去取（Radix 关着的时候不挂载内容）；Shiki 要上色时才加载。
+ * 文件预览窗：按类型显示，上面是三个按钮——下载、在 Finder 中显示、用默认程序打开。
+ * 大小（docs/ui-standard.md 第 10 条）：表格、文字、代码、音频、认不出的文件跟内容走（同放大窗），两行的表不撑出一个近全屏的空框；
+ * FILLS_WINDOW 里的开到接近全屏。内容在窗打开之后才去取（Radix 关着的时候不挂载内容）；Shiki 要上色时才加载。
  */
 export function FilePreview({ file, open, onOpenChange }: { file: PreviewFile; open: boolean; onOpenChange: (open: boolean) => void }) {
+  const kind = previewKindOf(file.name, file.mime === FALLBACK_MIME ? sentFileMime(file.name) : file.mime);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent title={file.name} className="h-[90vh] w-[90vw] max-w-none gap-3 overflow-hidden">
-        <PreviewContent file={file} />
+      <DialogContent title={file.name} className={cn(FILLS_WINDOW.has(kind) ? "h-[90vh] w-[90vw] max-w-none" : ZOOM_DIALOG, "gap-3 overflow-hidden")}>
+        <PreviewContent file={file} kind={kind} />
       </DialogContent>
     </Dialog>
   );
 }
 
-function PreviewContent({ file }: { file: PreviewFile }) {
+function PreviewContent({ file, kind }: { file: PreviewFile; kind: PreviewKind }) {
   const client = useClient();
-  const mime = file.mime === FALLBACK_MIME ? sentFileMime(file.name) : file.mime;
-  const kind = previewKindOf(file.name, mime);
   const { pending, failed, controls, note, body } = usePreviewBody(file, kind);
   const [busy, setBusy] = useState<FileAction | null>(null);
   const [result, setResult] = useState<{ text: ErrorLike; error: boolean } | null>(null);

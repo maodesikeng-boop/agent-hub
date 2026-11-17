@@ -348,11 +348,11 @@ describe("Search", () => {
     expect(names()).toHaveLength(2);
   });
 
-  it("清空恢复全部；没有匹配时列表是空的，没有说明文字", async () => {
+  it("清空恢复全部；没有匹配时列表里只有一行 No matching conversations", async () => {
     await boot(withProjects());
     type("没有这个");
     expect(names()).toEqual([]);
-    expect(nav()).toBeEmptyDOMElement();
+    expect(nav()).toHaveTextContent(/^No matching conversations$/);
     type("");
     expect(names()).toHaveLength(2);
   });

@@ -1,6 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import { Check, Loader2 } from "lucide-react";
-import { memo, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useMemo, useRef, useState } from "react";
 import {
   isTaskGraphReadyToFinish,
   isTaskNodeWaitingPm,
@@ -8,6 +8,7 @@ import {
   userBlockerCardText,
   type ConversationId,
   type TaskGraph,
+  type TaskGraphId,
   type TaskNode,
 } from "../../shared/index.ts";
 import { useClient } from "../device-scope.tsx";
@@ -17,7 +18,7 @@ import { useHubQueryClient } from "../query-client.ts";
 import { workersByWorkerId, type WorkerEntry } from "../selectors.ts";
 import { computeTaskGraphLayout, DEFAULT_ROOT_FONT_SIZE_PX } from "../task-graph-layout.ts";
 import { Button } from "../ui/button.tsx";
-import { Dialog, DialogBody, DialogClose, DialogContent, DialogFooter } from "../ui/dialog.tsx";
+import { Dialog, DialogBody, DialogClose, DialogContent, DialogFooter, ZOOM_DIALOG } from "../ui/dialog.tsx";
 import { KnifeAvatar } from "./KnifeAvatar.tsx";
 import { UserBlockerCard } from "./UserBlockerCard.tsx";
 import { GateDecisionCard, resolveBoundWorker } from "./PeelTrack.tsx";
@@ -33,6 +34,11 @@ function readRootFontSizePx(): number {
 
 function readCoarsePointer(): boolean {
   return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches;
+}
+
+/** 一张卡的测量键，也是它的 React key：图、步骤、形态（拍板卡还是普通卡）有一个变了就是另一张卡，重新挂载、重新量。 */
+function measureKeyOf(graphId: TaskGraphId, nodeKey: string, waitingGate: boolean): string {
+  return `${graphId}:${nodeKey}:${waitingGate ? "gate" : "node"}`;
 }
 
 /** 四个状态的英文状态词（docs/ui-standard.md 第 3 条的词表）：等人按等谁分开，完了按是不是跳过的分开。 */
@@ -72,6 +78,35 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
   const client = useClient();
   const qc = useHubQueryClient();
   const [expandedNotes, setExpandedNotes] = useState<Record<string, boolean>>({});
+  // 每张卡画出来的实际高度（px）：量到了交给排版，同一列的下一张卡才不会压上来（拍板卡的摘要、折成两行的步骤名都估不准）。
+  // 键是 measureKeyOf：换了图、同一步从拍板卡变成普通卡都是另一张卡，不沿用旧高度；卡卸载时把它那一项删掉，表里只有画着的卡
+  const [measuredHeights, setMeasuredHeights] = useState<Readonly<Record<string, number>>>({});
+  const observerRef = useRef<ResizeObserver | null>(null);
+  const measureCard = useCallback((el: HTMLDivElement | null) => {
+    if (el === null || typeof ResizeObserver === "undefined") return;
+    observerRef.current ??= new ResizeObserver((entries) => {
+      setMeasuredHeights((prev) => {
+        let next = prev;
+        for (const entry of entries) {
+          const key = (entry.target as HTMLElement).dataset.measureKey;
+          const height = Math.ceil((entry.target as HTMLElement).offsetHeight);
+          if (key !== undefined && height > 0 && next[key] !== height) next = { ...next, [key]: height };
+        }
+        return next;
+      });
+    });
+    observerRef.current.observe(el);
+    return () => {
+      observerRef.current?.unobserve(el);
+      const key = el.dataset.measureKey;
+      if (key === undefined) return;
+      setMeasuredHeights((prev) => {
+        if (!(key in prev)) return prev;
+        const { [key]: _gone, ...rest } = prev;
+        return rest;
+      });
+    };
+  }, []);
   const [actionError, setActionError] = useState<ErrorLike | null>(null);
   /** Cancel graph 的二次确认弹窗（docs/ui-standard.md 第 12.1 条）：点了先确认，确认了才发请求。 */
   const [confirmingCancel, setConfirmingCancel] = useState(false);
@@ -99,6 +134,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
       graphId: graph.id,
       nodes: graph.nodes.map((n) => {
         const activeWaitingUser = isActive && isTaskNodeWaitingUser(n);
+        const measured = measuredHeights[measureKeyOf(graph.id, n.key, activeWaitingUser)];
         return {
           key: n.key,
           status: n.status,
@@ -115,6 +151,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
           ...(activeWaitingUser && n.userBlocker == null && n.artifact?.deliverables !== undefined
             ? { deliverables: n.artifact.deliverables }
             : {}),
+          ...(measured !== undefined ? { measuredHeightPx: measured } : {}),
         };
       }),
       edges: graph.edges.map((e) => ({ from: e.fromKey, to: e.toKey })),
@@ -122,7 +159,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
       rootFontSizePx,
       coarsePointer,
     });
-  }, [graph, expandedNotes, rootFontSizePx, coarsePointer]);
+  }, [graph, expandedNotes, measuredHeights, rootFontSizePx, coarsePointer]);
 
   const skipMutation = useMutation(
     {
@@ -165,22 +202,16 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
   };
 
   if (graph === null || layout === null) return null;
+  const graphStateLabel =
+    graph.status === "completed" ? "Completed" : graph.status === "cancelled" ? "Cancelled" : isTaskGraphReadyToFinish(graph) ? "Ready to finish" : null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent title={graph.title} className="h-[90dvh] w-[min(96vw,1400px)] max-w-none">
-        <div className="flex shrink-0 items-center justify-between gap-3">
+      <DialogContent title={graph.title} className={ZOOM_DIALOG}>
+        <div className="flex min-h-8 shrink-0 items-center justify-between gap-3">
           <div className="flex items-center gap-2.5 text-minor text-muted-foreground">
             <SliceWheelIcon graph={graph} colorKey={colorKey} size={20} />
-            <span>
-              {graph.status === "completed"
-                ? "Completed"
-                : graph.status === "cancelled"
-                  ? "Cancelled"
-                  : isTaskGraphReadyToFinish(graph)
-                    ? "Ready to finish"
-                    : "Task Graph"}
-            </span>
+            {graphStateLabel !== null && <span>{graphStateLabel}</span>}
           </div>
           {graph.status === "active" && (
             <Button
@@ -209,7 +240,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                     Keep going
                   </Button>
                 </DialogClose>
-                <Button disabled={cancelMutation.isPending} onClick={() => runExclusive(() => cancelMutation.mutate())}>
+                <Button variant="destructive" disabled={cancelMutation.isPending} onClick={() => runExclusive(() => cancelMutation.mutate())}>
                   {cancelMutation.isPending && <Loader2 className="animate-spin" aria-hidden="true" />}
                   Cancel graph
                 </Button>
@@ -270,18 +301,21 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
               const isWaitingPm = isTaskNodeWaitingPm(node);
               // 没轮到、等项目经理（没有 Worker 挂着）的步骤能跳过；在干、等用户、完了的不行
               const canSkip = graph.status === "active" && (isPending || (isWaitingPm && node.activeWorkerId === null));
+              const measureKey = measureKeyOf(graph.id, node.key, isWaitingGate);
 
               if (isWaitingGate) {
                 return (
                   <div
-                    key={box.id}
+                    key={measureKey}
+                    ref={measureCard}
+                    data-measure-key={measureKey}
                     style={{ left: `${box.x}px`, top: `${box.y}px`, width: `${box.width}px` }}
                     className="absolute"
                   >
                     <div className="mb-1.5 flex items-center justify-between gap-2 px-1">
                       <span className="flex min-w-0 items-center gap-2 text-minor font-semibold text-primary">
                         <KnifeAvatar size={20} />
-                        <span className="truncate">{node.title}</span>
+                        <span className="truncate" title={node.title}>{node.title}</span>
                       </span>
                       <span className="shrink-0 text-xs font-medium text-primary">Waiting on you</span>
                     </div>
@@ -307,22 +341,20 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
 
               return (
                 <div
-                  key={box.id}
-                  style={{
-                    left: `${box.x}px`,
-                    top: `${box.y}px`,
-                    width: `${box.width}px`,
-                    minHeight: `${box.height}px`,
-                  }}
+                  key={measureKey}
+                  ref={measureCard}
+                  data-measure-key={measureKey}
+                  // 高度只由内容定，下限是写死的一档：把量到的高度写回这里，卡变矮时（拍板、跳过之后）会被旧高度撑住
+                  style={{ left: `${box.x}px`, top: `${box.y}px`, width: `${box.width}px` }}
                   className={cn(
-                    "absolute flex flex-col justify-between gap-1.5 rounded-xl px-3 py-2.5",
+                    "absolute flex min-h-17 flex-col justify-between gap-1.5 rounded-xl px-3 py-2.5",
                     isPending
                       ? "border border-dashed border-line bg-transparent opacity-65"
                       : "border border-line bg-background",
                   )}
                 >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="flex min-w-0 items-center gap-1.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="flex min-w-0 items-start gap-1.5 [&>svg]:mt-0.75 [&>span:first-child:not(:last-child)]:mt-1.5">
                       {isDone && <Check className="size-3.5 shrink-0 text-success" aria-hidden="true" />}
                       {isRunning && (
                         <svg data-running-ring viewBox="0 0 16 16" className="size-3.5 shrink-0" aria-hidden="true">
@@ -331,9 +363,11 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                         </svg>
                       )}
                       {isWaitingPm && <span className="size-2 shrink-0 rounded-full bg-caution" aria-hidden="true" />}
+                      {/* 步骤名最多两行：并行的几步名字常常只有末尾不同，截成一行就分不出来 */}
                       <span
+                        title={node.title}
                         className={cn(
-                          "min-w-0 truncate text-minor font-medium",
+                          "line-clamp-2 min-w-0 text-minor font-medium wrap-anywhere",
                           isRunning && "status-shimmer",
                           isSkipped && "text-muted-foreground opacity-60",
                         )}

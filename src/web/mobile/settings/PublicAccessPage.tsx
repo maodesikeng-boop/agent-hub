@@ -33,7 +33,7 @@ export function PublicAccessPage({ devices }: { devices: DeviceSettings }) {
                 inputMode="url"
                 {...NO_AUTOCORRECT}
                 value={hostname}
-                placeholder="e.g. tokyo.tailnet.ts.net"
+                placeholder="tokyo.tailnet.ts.net"
                 className={`${TOUCH_INPUT} font-mono`}
                 onChange={(e) => setHostname(e.target.value)}
               />

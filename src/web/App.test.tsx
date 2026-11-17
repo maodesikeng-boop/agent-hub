@@ -146,7 +146,6 @@ describe("首屏", () => {
     render(<App />);
     expect(await screen.findByText("连不上守护进程")).toBeInTheDocument();
     expect(screen.getByText("看守护进程有没有在跑")).toBeInTheDocument();
-    expect(screen.getByText(/If the service isn't running, run pnpm start in the project folder/)).toBeInTheDocument();
     expect(screen.getByText("连不上守护进程")).toHaveAttribute("title", "Failed to fetch");
     expect(FakeWebSocket.instances).toHaveLength(0);
     api.state = () => ({ status: 200, body: defaultSnapshot() });
@@ -173,7 +172,9 @@ describe("没登录", () => {
     api.install();
     installFakeWebSocket();
     render(<App />);
-    expect(await screen.findByText("Not signed in. On your computer, open the sign-in link printed in the terminal at startup. On a phone, scan the code from Settings → Security & Access → Sign in on phone on a signed-in computer")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Not signed in" })).toBeInTheDocument();
+    expect(screen.getByText("On a computer, open the sign-in link printed in the terminal at startup")).toBeInTheDocument();
+    expect(screen.getByText("On a phone, scan the code under Settings → Security & Access → Sign in on another device on a signed-in computer")).toBeInTheDocument();
     expect(FakeWebSocket.instances).toHaveLength(0);
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
   });

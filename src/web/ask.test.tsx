@@ -105,21 +105,17 @@ describe("右栏的“等你确定”", () => {
     expect(within(screen.getByRole("main")).queryByRole("button", { name: /Needs You/ })).not.toBeInTheDocument();
   });
 
-  it("点一行：在右栏里展开全文（Markdown），对话滚到那条消息并高亮；再点收起", async () => {
+  it("点一行：对话滚到那条消息并高亮；右栏里不展开全文、不出选项（作答在对话里那张卡上）", async () => {
     await boot(twoPms([ask({ id: 1, text: QUESTION }), makeMessage({ id: 2, text: "中间的话" }), ask({ id: 3, text: "再问一个" })]));
     const first = askRows()[0]!;
-    expect(first).toHaveAttribute("aria-expanded", "false");
+    expect(first).not.toHaveAttribute("aria-expanded");
     fireEvent.click(first);
-    expect(first).toHaveAttribute("aria-expanded", "true");
-    const body = first.parentElement!;
-    expect(within(body).getByText("方案 A").tagName).toBe("STRONG");
-    expect(within(body).getByText("B：单栏信息流")).toBeInTheDocument();
+    expect(first).toHaveTextContent("方案 A");
+    expect(within(asksGroup()!).queryByText("B：单栏信息流")).not.toBeInTheDocument();
+    expect(askRows()).toHaveLength(2);
     const target = document.querySelector('[data-message-id="1"]')!;
     expect(scrolled).toEqual([target]);
     expect(target).toHaveAttribute("data-highlighted", "true");
-    fireEvent.click(first);
-    expect(first).toHaveAttribute("aria-expanded", "false");
-    expect(within(body).queryByText("B：单栏信息流")).not.toBeInTheDocument();
   });
 
   it("那条消息上不另挂“等你确定”标签（细节藏起来，提问在别处列着）", async () => {
@@ -209,7 +205,7 @@ describe("跳到提问只生效一次", () => {
     fireEvent.click(askRows()[0]!);
     fireEvent.click(askRows()[0]!);
     fireEvent.click(askRows()[0]!);
-    expect(scrolled).toHaveLength(2);
+    expect(scrolled).toHaveLength(3);
     expect(messageOne()).toHaveAttribute("data-highlighted", "true");
   });
 });
@@ -364,7 +360,8 @@ describe("对话流里的 A/B/C/D 选项卡片", () => {
       ]),
     );
     const card = (id: number) => document.querySelector(`[data-message-id="${id}"] [data-ask-card]`) as HTMLElement;
-    const highlighted = (id: number) => [...card(id).querySelectorAll(".bg-sidebar-active")].map((el) => el.textContent?.replace(/^[A-Z](?=\S)/, ""));
+    // 选中的选项是 bg-sidebar-active，用户写的原话是浅一档的 bg-sidebar（[data-ask-answer]）
+    const highlighted = (id: number) => [...card(id).querySelectorAll(".bg-sidebar-active, [data-ask-answer]")].map((el) => el.textContent?.replace(/^[A-Z](?=\S)/, ""));
 
     expect(highlighted(3)).toEqual(["qa-test@example.com"]);
     expect(highlighted(4)).toEqual(["不接", "开完会再接"]);

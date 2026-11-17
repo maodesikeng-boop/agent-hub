@@ -1850,7 +1850,7 @@ describe("归档与恢复项目经理（左栏已归档分组、聊天页归档�
     const archivedPage = await screen.findByRole("region", { name: "小林\'s profile" });
     expect(within(archivedPage).queryByRole("region", { name: "Session" })).not.toBeInTheDocument();
     const archiveStatusGroup = within(archivedPage).getByRole("region", { name: "Archive status" });
-    expect(archiveStatusGroup).toHaveTextContent("Deletes in 7d. Your project folder stays untouched");
+    expect(archiveStatusGroup).toHaveTextContent("Deletes in 7d");
 
     api.unarchivePm = () => {
       const restored = makePm({ id: 1, name: "小林", archivedAt: null });

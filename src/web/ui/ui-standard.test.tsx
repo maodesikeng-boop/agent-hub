@@ -54,7 +54,7 @@ describe("界面标准：共用组件", () => {
     expect(composerSrc).not.toContain("focus-within:");
     expect(composerSrc).not.toContain("<style>");
     expect(composerSrc).toContain("composer-send-bounce");
-    expect(composerSrc).toMatch(/disabled=\{!canSend\}/);
+    expect(composerSrc).toMatch(/disabled=\{!canSend \|\| picking\}/);
     expect(composerSrc).toMatch(/data-multiline=\{multiline\}/);
     const css = readFileSync("src/web/styles.css", "utf8");
     expect(css).toMatch(/\.composer-send-bounce\s*\{\s*animation: composer-send-bounce 150ms/);

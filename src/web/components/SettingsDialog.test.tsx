@@ -80,15 +80,15 @@ describe("设置弹窗：右栏宽度跟着弹窗走，按钮不被挤出去", (
     }
   });
 
-  it("公网域名那一行：输入框 min-w-0 能跟着收窄（240px + 按钮放不下一行时不撑出右栏），长域名小字能换行", async () => {
+  it("公网域名那一行上下排：输入框 min-w-0 flex-1 占满整行、能跟着收窄，域名只在输入框里出现一次", async () => {
     const panel = await openSecurity();
     const input = within(panel).getByRole("textbox");
-    expect(classOf(input)).toEqual(expect.arrayContaining(["w-60", "min-w-0"]));
+    expect(classOf(input)).toEqual(expect.arrayContaining(["flex-1", "min-w-0"]));
     const controls = controlsOf(rowOf(input));
     expect(classOf(controls)).toContain("max-w-full");
     expect(within(controls).getByRole("button", { name: "Turn off" })).toBeVisible();
-    const detail = within(panel).getByText(`https://${LONG_HOSTNAME}`).parentElement!;
-    expect(classOf(detail.parentElement!)).toContain("break-words");
+    expect(input).toHaveValue(LONG_HOSTNAME);
+    expect(within(panel).queryByText(`https://${LONG_HOSTNAME}`)).toBeNull();
   });
 
   it("切到别的分类（General、Computers）右栏同一套约束", async () => {

@@ -88,18 +88,21 @@ afterEach(() => {
 });
 
 describe("要用户动手的提醒卡", () => {
-  it("步骤显示 Waiting on you 和提醒卡，不出拍板卡；点 Done 调本机的重查接口", async () => {
+  it("右栏里这一步只有一行，不出提醒卡和拍板卡；点了让对话滚到那张提醒卡并高亮，不发请求", async () => {
     const user = userEvent.setup();
+    Element.prototype.scrollIntoView = vi.fn();
     const api = await boot(snapshot());
     const graphs = await waitFor(() => within(sidePanel()).getByRole("region", { name: /^Task Graph$/ }));
     expect(within(graphs).queryByTestId("peel-gate-card")).toBeNull();
+    expect(within(graphs).queryByTestId("user-blocker-card")).toBeNull();
     expect(within(graphs).queryByText("Waiting on PM")).toBeNull();
-    const card = within(graphs).getByTestId("user-blocker-card");
-    expect(within(card).getByText("Waiting on you")).toBeInTheDocument();
-    expect(card).toHaveTextContent("这台设备（东京）的 Antigravity 没登录");
+    expect(within(sidePanel()).queryByRole("region", { name: /^Needs You$/ })).toBeNull();
 
-    await user.click(within(card).getByRole("button", { name: "Done" }));
-    await waitFor(() => expect(api.callsTo("POST", RECHECK_PATH)).toHaveLength(1));
+    await user.click(within(graphs).getByTestId("peel-gate-row"));
+    await waitFor(() => expect(document.querySelector('[data-message-id="120"]')).toHaveAttribute("data-highlighted", "true"));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(api.callsTo("POST", RECHECK_PATH)).toHaveLength(0);
+    Reflect.deleteProperty(Element.prototype, "scrollIntoView");
   });
 
   it("对话里那条消息是同一张卡，带 Done 按钮", async () => {

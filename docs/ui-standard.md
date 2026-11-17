@@ -123,6 +123,10 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
 | 查看日志 / 收起日志 / 管理厂商… | Show log / Hide log / Manage providers… |
 | 粘贴授权码或回调网址占位 | Paste code or redirect URL… |
 | 自动默认总助模型 / 模型与思考程度（总助顶栏模型选择） | Auto / Model & effort |
+| Piece 那一行的状态词：已派出 / 已派出（只读）/ 已收工 / 你对它说（`format.ts` 的 `pieceLineParts`） | Started / Started read-only / Ended / You said |
+| 没有匹配的对话（左栏搜索）/ 清除搜索 | No matching conversations / Clear search |
+| 安装失败 / 更新失败（原始报错放悬停提示和日志） | Install failed / Update failed |
+| 没登录（整页）/ 行里的“管理厂商”按钮 | Not signed in / Manage… |
 
 ## 4. 颜色
 
@@ -148,10 +152,11 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
 - 其余一律中性色：
   - 页面底色 `bg-background`（白，外壳的对话区和右栏是上面的 `bg-surface-chat`）；左栏 `bg-surface-sidebar`，设置弹窗的分类栏 `bg-sidebar`；分组框白底 + 1px `border-border`（第 9 条）；悬停 `bg-sidebar-hover`；选中、凹进去的输入框（左栏搜索）`bg-sidebar-active`（左栏的项目经理行、右栏的列表项除外，用上面的果冻底）。
   - 分隔线分两种：**外壳**（三栏之间、右栏组之间、窄屏头像栏右边、左栏置顶 Router 入口下方）用 1px `border-line` / `divide-line`（中性边框掺 8% 水果色，跟着项目经理变；Router 下无 `--fruit` 自然退回中性 `--border`）；**白底的框和弹窗**（分组框、弹窗、popover、卡片、输入框，框里行与行之间）仍用 1px `border-border` / `divide-border`（纯中性色，不掺水果色）。
-  - 次要文字 `text-muted-foreground`；错误 `text-danger`；警告 `bg-warn text-warn-foreground`。
+  - 次要文字 `text-muted-foreground`（`--muted-foreground: #5f5f69`）：要压在左栏底、选中底、8 种水果的果冻底上都 ≥ 4.5:1，`lib/palette.test.ts` 逐个底色校验，改这个值先过它。错误 `text-danger`。琥珀色的字（`Waiting on PM`）用 `text-warn-foreground`；`--caution` 只当圆点、用量条的填充色，对白底不到 3:1，**不当字色**（组件里不写 `text-caution`，同一个测试守着）。
+  - **调淡不落在字上**：离线的设备组、离线的待拍板卡只把头像调淡（`[&_[data-slot=avatar]]:opacity-50`），字照常；整块 `opacity-60` 会让次要文字掉到 3:1 以下。
   - 状态色（Worker 汇报头像右下角的小圆点，第 17 条）：做完了 `--success`、有问题 `--caution`、放弃了和出错 `--danger`，不用主色。
 - 不能点的主按钮换成中性灰（`bg-sidebar-active text-muted-foreground`，`Button` 自带），不显示半透明的强调色。
-- 不用渐变（`<KnifeAvatar>` 矢量刀身金属光泽属头像素材，控件背景与卡片严禁用渐变）、阴影（聊天输入框那一处轻阴影除外）、毛玻璃。在忙状态词、右栏在跑的 Piece 名字的流光（第 14 条）是同一颜色深浅扫过，不算渐变文字。提示条（“重连中”、健康问题）也只用底色，不加阴影和描边。
+- 不用渐变（`<KnifeAvatar>` 矢量刀身金属光泽属头像素材，控件背景与卡片严禁用渐变）、阴影（聊天输入框那一处轻阴影除外）、毛玻璃。在忙状态词、右栏在跑的 Piece 名字的流光（第 14 条）是同一颜色深浅扫过，不算渐变文字。提示条（“重连中”、健康问题，`Notices.tsx`）一律中性浅灰底 `bg-muted`、前景色字，不加阴影、描边和彩色底；轻重只看图标的颜色（出错 `text-danger`、提醒 `text-warn-foreground`、其余灰）。厂商没装、起不来这类要去设置里处理的，后面带一个下划线文字按钮 `Manage providers…`。
 
 ## 5. 图标
 
@@ -170,12 +175,12 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 | 多行输入 | 最少 `min-h-24`，在分组框里时去掉边框、跟着内容长高 | — | `Textarea` |
 | 开关 | `h-5 w-9`（滑块 `size-4`） | — | `Switch` |
 
-输入框和按钮放同一行时用同一档高度（都是 36px）。分组行里的输入框宽 240px（`w-60`）。
+输入框和按钮放同一行时用同一档高度（都是 36px）。分组行里的输入框宽 240px（`w-60`）。触屏（`pointer: coarse`）下 `Input`、`Select` 本身 44px 高（`pointer-coarse:h-11`）：输入框没法用 `::after` 撑开可点范围。
 
 - **危险主操作按钮**：`Button variant="destructive"`（`bg-danger text-primary-foreground hover:brightness-90 disabled:bg-sidebar-active disabled:text-muted-foreground`），专用于确认弹窗与底部确认抽屉中的不可逆危险主操作（移除设备、退出会话、退出所有浏览器），一屏最多一个。
 - **触屏输入防纠错与全宽排布**：URL、域名、邀请码、连接码等非自然语言输入框一律声明 `autoCapitalize="none" autoCorrect="off" spellCheck={false}`（网址类再加 `inputMode="url"`），防止 iOS 软键盘自动首字母大写与拼写替换；手机设置子页与底部抽屉里的输入框和主操作按钮一律全宽 `h-11 w-full`，不写死 `w-60`。
 
-**工具栏和角落里的按钮只有一种样子**：`Button variant="ghost"`，平时不带底色、不带描边、不是胶囊，图标是次要色；悬停才有浅底（`hover:bg-accent`）、图标变前景色。右栏顶部和顶栏右边（右栏开关）、顶栏左边（返回）、左栏顶部的“新建”、左栏左下角（额度、设置）都是它：纯图标用 `size="icon"`（顶栏、左栏顶部，36px）或 `size="icon-sm"`（左下角，32px）。打开状态不靠底色表示，靠 `aria-expanded` 和图标变前景色。实心的、描边的按钮只用在弹窗、表单、资料页的操作上。
+**工具栏和角落里的按钮只有一种样子**：`Button variant="ghost"`，平时不带底色、不带描边、不是胶囊，纯图标的图标是次要色，**带字的（`Manage…`、`Refresh`、`Invite`、`Show QR code`）字是前景色**（`button.tsx` 的 `compoundVariants`）——和旁边灰色的只读值分得开，看得出能点；悬停才有浅底（`hover:bg-accent`）、图标变前景色。右栏顶部和顶栏右边（右栏开关）、顶栏左边（返回）、左栏顶部的“新建”、左栏左下角（额度、设置）都是它：纯图标用 `size="icon"`（顶栏、左栏顶部，36px）或 `size="icon-sm"`（左下角，32px）。打开状态不靠底色表示，靠 `aria-expanded` 和图标变前景色。实心的、描边的按钮只用在弹窗、表单、资料页的操作上。
 
 ## 7. 聚焦态
 
@@ -210,7 +215,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 
 用 `SettingsGroup` + `SettingsRow`（`src/web/components/SettingsList.tsx`），能收起的组用 `CollapsibleGroup`，工作方式这种多选一用 `ModeRows`。资料页、新建项目经理、设置弹窗全用这一套，**照 Grok Bot 的设置页：框外小灰字组标题 + 白底细框**。
 
-- 组标题在框外：13.5px、500、`text-muted-foreground`、`px-4`，和框之间 8px。没有标题的组直接是框（弹窗里的“名字 / 主文件夹”；资料页头部下面第一组厂商、模型、思考程度，头部就是它的标题；设置“登录与安全”里的“在手机上登录”），读屏名字用 `label`。
+- 组标题在框外：13.5px、500、`text-muted-foreground`、`px-4`，和框之间 8px。标题行一律 32px 高、垂直居中（`min-h-8 items-center`）：右边带不带操作按钮，标题到框的距离都一样，标题和按钮的字在一条线上。标题右边的操作不单独占一行：没有标题可写时用状态当标题（设置里厂商那一组写 `5 ready`，右边 `Refresh`）。没有标题的组直接是框（弹窗里的“名字 / 主文件夹”；资料页头部下面第一组厂商、模型、思考程度，头部就是它的标题；设置“登录与安全”里的“在手机上登录”），读屏名字用 `label`。
 - 框：白底、1px 浅边框、圆角，`rounded-2xl border border-border bg-background`，行与行之间 1px `divide-border`；不用灰底色块（`bg-sidebar`、`bg-neutral-50`），不加阴影。样子只写在 `SettingsList.tsx` 的 `GROUP_BOX` 一处。
 - 行：`px-4 py-2`，内容最少 36px 高（`min-h-9`），所以一行是 52px；有说明小字的行 `py-3`，跟着长高。
 - **带图标的行**（设备、浏览器，照 Grok Bot 的“管理设备”）：`SettingsRow` 的 `icon`，名字左边一个 16px 线条图标（`stroke-[1.5]`，`text-muted-foreground`），和名字隔 12px（`gap-3`）。电脑按系统（Mac `Laptop`、Linux `Server`、别的 `Monitor`），浏览器按 User-Agent（电脑 `Monitor`、手机 `Smartphone`、平板 `Tablet`）。在线状态是小字最前面的 8px 圆点（在线 `bg-success`，重连中 `bg-caution`，其余 `bg-muted-foreground/40`），和后面的字隔 8px，各项之间 `gap-3`，不用“·”。
@@ -222,7 +227,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - **多选一勾选列表（`ChoiceRows`，`ModeRows` 为其薄包装）**：有说明的行用 `py-3`，无说明的短选项行（手机端 `Interface scale`）用 `min-h-12 px-4 py-2.5`；右边统一一个 20px 的圆：没选中是 1.5px 灰边空心圆，选中是强调色实心圆里一个白色粗勾（`RadioMark`）。整行可点、点了即存，悬停与按下 `bg-sidebar-hover`。
 - **钻取导航行（`SettingsNavRow`）**：用于手机一级设置主页与组内动作入口；位于 `GROUP_BOX` 内，整行 `<button type="button">`，`min-h-12 px-4 py-3`（标准档 48px、默认大档 52.5px），左侧可选 16px 线条图标 + `gap-3` + 15px 标题，右侧单一状态摘要（`text-minor text-muted-foreground tabular-nums`，严禁用 `·`、`|`、`/` 拼接）+ 16px `ChevronRight`，触屏按下态 `active:bg-sidebar-hover`；独立危险入口行（`Sign out all browsers…`）用 `text-danger`，不带右箭头。
 - 厂商、模型、思考程度（`AgentRows`）的选项全从模型名单拿（`useModelCatalogs`，名单的厂商名、通用思考程度、能不能自定义来自 `src/shared/vendors.ts`，模型来自厂商自己报的 `model-catalog`），页面里不写死厂商、模型名。
-  - 只有一家厂商：厂商一行只显示厂商名（只读值），不放下拉。两家以上才是下拉。
+  - 只有一家厂商：厂商一行只显示厂商名（只读值），不放下拉。两家以上才是下拉。这一行是 `wide`（手机上也不折行，厂商名放不下自己截断），右边的按钮只写动作 `Manage…`（读屏名字仍是 `Manage providers…`）。
   - 这台设备上的状态（`docs/vendor-availability-design.md`）：没装的不列；没登录的照列，原生 `option` 设 `disabled`（系统灰掉），文字是“厂商名 (英文状态词)”，如 `Codex (Not signed in)`、`Claude Code (Not installed)`（原生选项不能分样式，括号是唯一能用的写法）。现在选着的那家总在，哪怕没装（换了设备也不悄悄换掉），这时“创建”是灰的，不加说明文字。打开下拉不等任何请求，没登录的那几家在后台重问，回来了再更新。截图见 `docs/screenshots/vendor-availability/`。
   - 思考程度只有一档（或这个模型没有档位）时，这一行整个不显示。Antigravity 照它软件的做法：模型下拉只列不带档位的模型（Gemini 4 Argon、Claude Opus 5.5……），档位（low、medium、high）在思考程度下拉里，存的时候拼回完整模型 ID（`docs/model-catalog.md` 的 agy 一节）；老数据里存的完整 ID 显示成“模型 + 档位”。
   - 模型选“默认”时显示实际用的模型：“Opus 5.5（默认）”（名单里报了默认是哪个时）；不知道才只写“默认”。
@@ -249,12 +254,16 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - **全局设置按外壳分流**（双端共用 `src/web/settings-model.ts`）：电脑外壳用双栏弹窗 `SettingsDialog`（照 Grok Bot / Claude desktop 的双栏设置页）；手机外壳不挂弹窗，走第 20 条整屏钻取路由页。`SettingsDialog` 宽 `max-w-195`，高度固定 `h-[min(35rem,calc(100%-3rem))]`（切分类时弹窗不跳），弹窗自己 `p-0 gap-0`，标题“设置”只给读屏（`titleClassName="sr-only"`）。
   - 左栏分类（Radix Tabs，`orientation="vertical"`）：宽 192px（`w-48`），`bg-sidebar`，右边 1px `border-border`，`px-3 py-4`；分类项 `h-9 rounded-xl px-3 gap-3`，16px 线条图标（`stroke-[1.5]`）+ 15px 名字，悬停 `bg-sidebar-hover`，选中 `bg-sidebar-active`（只靠底色）。分类和顺序在 `SettingsDialog.tsx` 的 `SECTIONS` 一处：通用（`Settings`：外观、通知）、厂商（`Blocks`：各厂商一键安装/更新与界面内直接登录，及下方 `Integrations → Vendor sync`）、电脑（`Monitor`：你的电脑、已连上的电脑；守护进程支持联机才有，未显式传入 `defaultSection` 时有联机默认选它，没有默认通用）、登录与安全（`Shield`：在手机上登录、已登录的浏览器、公网入口）。跨厂商同步行点 `Scan…` 打开独立的 `Sync preview` 确认弹窗（`DialogBody` 纵向滚动展示脱敏后的 `MCP servers`、`Skills` 与只读说明的 `Cloud connectors`，每项用 `Switch` 控制并集同步或取消勾选移除，厂商标签由接口数据驱动并用间距隔开、不用 `·` 拼接，底部固定 `Cancel` 与 `Sync`；别家应用自带的 MCP（`hostBound`，命令路径在某个应用安装包里）默认关着，行里先放 `From <厂商>`、`<应用> app` 两个 `text-xs` 标签，下面一行 `text-xs text-muted-foreground` 写原因，不显示 `Unchecked — will be removed`，关着时厂商标签只列已持有它的厂商（不显示不会发生的 `Add` / `mcp-remote`，手动打开开关后才显示完整目标标签），手机页同样，共用 `HostBoundNote` 与 `visibleMcpVendorBadges`；关着只表示不往别家补，同步从不删源头）。
   - 右栏：`p-6`，自己纵向滚动；最上面是分类名（17px、600，和下面的组隔 24px），下面若干分组（第 9 条），组之间 24px。关闭按钮照常在右上角。
-  - 窄屏（640px 以下）：左栏变成顶上一排横着的分类（只有字、不放图标，`border-b`，横向能滚，右边 `pr-14` 让出关闭按钮），右栏在下面占满。
+  - 窄屏（窗口 720px 以下，和右栏挪到顶栏下面是同一个断点；写 `min-[720px]:`，固定像素，不用随界面大小放大的 `sm:`）：左栏变成顶上一排横着的分类（只有字、不放图标，`border-b`，横向能滚，右边 `pr-14` 让出关闭按钮），右栏在下面占满。
+  - 通用只有两行（界面大小、通知），放在一个不带标题的框里，分类名就是它的标题。右栏滚动区下边 16px 渐隐（`.dialog-body-fade`）。
   - 分类名固定在右栏顶上（右边 `pr-14` 让出关闭按钮），只有下面的分组滚动。
   - **宽度不能被内容撑开**（任何宽度下行右边的按钮都完整可见）：右栏 `min-w-0`，分组那一列 `grid-cols-1`（= `minmax(0,1fr)`），带标题的分组（`SettingsGroup`）自己也 `grid-cols-1`；否则长域名、长路径这类放不下的内容会把右栏撑出弹窗，被 `overflow` 裁掉，右边的 Allow / Show 就点不到。`SettingsRow`：非 `wide` 的行 `flex-wrap`，左边 `min-w-32 flex-1`（名字 `line-clamp-2` 最多两行、`title` 放全名，小字 `break-words`，小字里并排的几项自己 `flex-wrap`），右边控件 `ml-auto shrink-0 max-w-full`，放不下就换到下一行靠右；行里的输入框 `min-w-0` 跟着收窄。`wide` 的行不换行，控件自己截断。
 - 结构从上到下：标题 → `DialogBody`（若干分组，`gap-6`）→ 错误提示（`px-4`，`text-danger`）→ `DialogFooter`。
-- **标题和底部按钮固定，只有中间滚动**：内容超过一屏（展开“更多设置”）时，`DialogBody` 自己滚，“创建”一直在视野里。表单弹窗把 `<form>` 做成 `DialogForm`（`flex min-h-0 flex-col`），里面放 `DialogBody` 和 `DialogFooter`。
-- 弹窗里的行照第 9 条：输入框 240px（带按钮的，输入框 + 按钮一起不超过行宽），占位符要能完整显示。
+- **标题和底部按钮固定，只有中间滚动**：内容超过一屏（展开“更多设置”）时，`DialogBody` 自己滚，“创建”一直在视野里。`DialogBody` 往下多伸 16px 再用内边距收回来（`-mb-4 pb-4`，落在和底部按钮之间的 24px 空隙里），滚动的内容在这 16px 里渐隐（`.dialog-body-fade`），不贴着底部按钮被硬切。表单弹窗把 `<form>` 做成 `DialogForm`（`flex min-h-0 flex-col`），里面放 `DialogBody` 和 `DialogFooter`。
+- 弹窗里的行照第 9 条：输入框 240px（带按钮的，输入框 + 按钮一起不超过行宽），占位符要能完整显示。新建项目经理的“名字”“主文件夹”两行右边控件同宽 288px（`w-72`，`NewPmDialog.tsx` 的 `FIELD_WIDTH`）：主文件夹的输入框和 `Choose…` 一起占这么宽，一行放得下、不折行，两行左右边线对齐。
+- **放大窗**（图表、任务流图全览，`ui/dialog.tsx` 的 `ZOOM_DIALOG`）：大小跟内容走，内容小弹窗就小，不留大片空白；最大到窗口的 96% 宽（封顶 1400px）、90% 高，再大在里面滚。
+- **文件预览窗**（`FilePreview`）按内容分两种大小：表格、Markdown、代码、音频、认不出的文件同放大窗，跟内容走（两行的 CSV 不撑出一个近全屏的空框）；内嵌的 PDF 和网页、视频、看大图的图片自己没有大小，开到接近全屏（`h-[90vh] w-[90vw]`）。滚动的是工具条下面那个带边框的内容框，表格的表头粘在它顶上。
+- **弹窗里只有一个输入框的表单**（登录时粘贴授权码）：输入框独占一行，提交键放 `DialogFooter` 最右、`Cancel` 在它左边（按钮用 `form` 属性连回表单），不把提交键挤在输入框同一行、底部只剩一个 `Cancel`。
 - 不写副标题和解释性的灰字；需要的说明放在行下面的小字里。
 
 **抽屉**（手机外壳里 Pieces、以及手机设置里的危险操作确认与短表单向导共用，`DrawerContent`，`src/web/ui/drawer.tsx`，底层 `vaul`，只有 bottom 方向）：
@@ -273,14 +282,14 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - **额度浮层**（左下角额度按钮点开，`QuotaPopover`）：
   - 结构：一家厂商一组，厂商名做组标题（13.5px、500、灰，组标题和内容之间 8px）；组与组之间 24px（`gap-6`）。按需查的厂商（Antigravity）分模型族（Gemini、Claude and GPT）：族名是组内一行小标题（12px `text-xs`、500、灰），各族之间 16px，族名和它的窗口之间 12px。**不用“·”拼厂商和模型族**（读屏：厂商是 `region`，模型族是 `group`）。
   - 一个窗口一行：左边窗口名（15px，`5h` / `7d`），右边已用百分比（15px，`tabular-nums`，不上色）；下面一条 6px 高的用量条（`h-1.5 rounded-full`，轨道 `bg-sidebar-active`）；条下面“Resets 17:11”（12px 灰，`tabular-nums`；不是今天的写“Resets 11/16 13:13”）。行内各层间隔 4px，窗口与窗口之间 12px。没有额外的底色块、胶囊、卡片，浮层本身就是容器。
-  - **用量条颜色**（只用 `styles.css` 现有变量，不另写色值；`QuotaPopover.tsx` 的 `USAGE_BAR_COLORS` 一处）：正常 `bg-foreground/40`（中性灰）；偏高（≥ 80%，或 Claude 自己报 allowed_warning）`bg-caution`（琥珀）；用满（100% 或厂商报 rejected）`bg-foreground`（前景色实心）。**用满不用红色**，不像报错；百分比文字三档都是前景色。左下角的额度图标按钮与设置齿轮保持同色同风格的单色线性图标，不随用量变色，用量只在弹层里看。
+  - **用量条颜色**（只用 `styles.css` 现有变量，不另写色值；`QuotaPopover.tsx` 的 `USAGE_BAR_COLORS` 一处）：正常 `bg-foreground/40`（中性灰）；偏高（≥ 80%，或 Claude 自己报 allowed_warning）`bg-caution`（琥珀）；用满（100% 或厂商报 rejected）`bg-foreground`（前景色实心）。**一条一条分开算**：用满的是哪个窗口就只把那一条画成实心，同一家别的窗口照自己的档位（86% 是琥珀）；厂商只说“用完了”、看不出是哪个窗口时才整组算用满。**用满不用红色**，不像报错；百分比文字三档都是前景色。左下角的额度图标按钮与设置齿轮保持同色同风格的单色线性图标，不随用量变色，用量只在弹层里看。
 
 ## 12. 右栏（Needs You、Task Graph、Pieces、Completed）
 
 对话右边的一栏（`RightRail`，`src/web/components/RightRail.tsx`），**照 Claude desktop 的右栏**：组标题加单行的列表或紧凑任务流图，一组一组用细线隔开，不加外框、不加阴影，**不密密麻麻**：列表每行只有一行字，行与行留出呼吸感。界面展示文案统一使用 `Piece` / `Pieces`，组名是 “Needs You”“Task Graph”“Pieces”“Completed”。
 
 - **四段式兼容结构**（没有内容的组不显示，单步零散任务照旧不建图）：
-  1. `Needs You`（在上，仅渲染未绑定任务图的独立 `hub ask`；带 `gateRef` 或已绑入任务图的 `gate` 门禁直接内联在下方 `Task Graph` 果皮轨中，绝不双卡重复渲染）；
+  1. `Needs You`（在上，仅渲染未绑定任务图的独立 `hub ask`；带 `gateRef` 或已绑入任务图的 `gate` 门禁是下方 `Task Graph` 果皮轨里那一步的一行，不在这里再列一遍）；
   2. `Task Graph`（活跃多阶段任务流图，`status === 'active'`，采用果皮轨 + 任务级小切面进度轮）；
   3. `Pieces`（未绑定任何活跃任务图节点的独立进行中 Piece；已绑入活跃任务图节点的 Piece 不在列表重复列出）；
   4. `Completed`（在下，默认折叠，按需游标拉取历史已完成/已取消任务图，并与独立已收工 Piece 合并收纳）。
@@ -292,10 +301,11 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
   - 收起后只剩标题这一行，不写个数。
   - 内容用网格行高度过渡（`grid-rows-[1fr]` ↔ `grid-rows-[0fr]`，150ms，`motion-reduce` 时关掉），不跳；收起后内容 `inert` + `aria-hidden`，键盘和读屏都够不着。**Completed 例外**：历史完成项会越来越多，收着时行**不挂载**（不渲染、不跑每行的 `usePieceMeta`、不触发历史任务图请求），点开才渲染并按需拉取，没有收起的高度动画。
   - **每组各自记住**：`localStorage` 的 `agent-hub.rightRail.collapsed`（`{ asks?: true, graphs?: true, workers?: true }`，没写的是展开），刷新、切对话都保持，不分项目经理；值坏了当都展开。收起的组里来了新内容不自动展开。Completed 默认收着、不记住，正开着的是收工的 Piece 时自动展开。
+- **作答只在对话里，右栏只有一行跳转**：同一道题不在对话和右栏各展开一张。对话里那张提问卡是完整的（正文、文件、选项、补充框，第 17 条）；右栏的 `Needs You` 和果皮轨里等你拍板的步骤（第 12.1 条）都只有一行，不展开全文、不列文件、不出选项和补充框。点这一行，对话平滑滚到那张卡（`block: "center"`，`prefers-reduced-motion` 时直接跳）并高亮 2 秒；正开着 Piece 的对话时先回到项目经理的对话再滚；手机上先关掉 Pieces 抽屉再滚。
 - **行**：
-  - “等你确定”：左边一个 16px 线条问号图标（`size-4`，`strokeWidth` 1.5，`text-muted-foreground`），中间名字（去掉 Markdown 符号后的第一行，15px，前景色，400，超长 `truncate`），右边一个向右的小箭头；点一下在这一行下面展开全文（13.5px Markdown，`bg-sidebar`），箭头转向下，同时对话滚到那条消息并高亮。一张卡只在用户回答这张卡（在对话里的卡上点选项或填写，或在总助工作台 `#/router` 拍板）、或项目经理 `hub ask close` / `--replace` 时，守护进程才标上（`meta.answered`），这一张从这一组、左栏的“等你确定”标签和标签页标题里的数字消失；用户在对话里发的普通消息不关任何卡，回答一张也不关别的卡。没有“知道了”按钮。
+  - “等你确定”：左边一个 16px 线条问号图标（`size-4`，`strokeWidth` 1.5，`text-muted-foreground`），中间名字（去掉 Markdown 符号后的第一行，15px，前景色，400，超长 `truncate`，全文放 `title`），右边一个向右的小箭头（不转向，这一行不展开）。一张卡只在用户回答这张卡（在对话里的卡上点选项或填写，或在总助工作台 `#/router` 拍板）、或项目经理 `hub ask close` / `--replace` 时，守护进程才标上（`meta.answered`），这一张从这一组、左栏的“等你确定”标签和标签页标题里的数字消失；用户在对话里发的普通消息不关任何卡，回答一张也不关别的卡。没有“知道了”按钮。
   - **行的尺寸**：`py-2 px-2.5 rounded-xl`（`-mx-2.5`，字和组标题对齐），单行 36px，触屏下 `pointer-coarse:min-h-11`；选中、悬停是水果果冻底（第 4 条，`bg-jelly` / `hover:bg-jelly-hover`）。
-  - Piece 行：**只有一行**，左侧不放机器人图标，**只有标题**（15px 前景色，`truncate`），**右边不写状态词**（Working…、Thinking…、Idle 都不写）。**正在跑的 Piece（干活、准备中、等后台命令，`RightRail.tsx` 的 `isBusy`）标题字本身带流光** `.status-shimmer`（第 14 条，同一套，不另造），只挂在这几行上；空闲、停止中、收工的标题静态。**不显示第二行**：模型名、思考程度、对话长度（“158K context”）不常驻，收进整行的悬停提示（`title`，第一行是完整标题，后面每项一行，没有的项不写）；点进 Piece 的对话，顶栏右边一行 12px 灰字写模型、思考程度、对话长度（`PieceMeta`，`gap-3`，context 悬停看累计明细；720px 以下藏起来）。
+  - Piece 行：**只有一行**，左侧不放机器人图标，**只有标题**（15px 前景色，`truncate`），**右边不写状态词**（Working…、Thinking…、Idle 都不写）。**正在跑的 Piece（干活、准备中、等后台命令，`RightRail.tsx` 的 `isBusy`）标题字本身带流光** `.status-shimmer`（第 14 条，同一套，不另造），只挂在这几行上；空闲、停止中、收工的标题静态。**不显示第二行**：模型名、思考程度、对话长度（“158K context”）不常驻，收进整行的悬停提示（`title`，第一行是完整标题，后面每项一行，没有的项不写）；点进 Piece 的对话，顶栏右边一行 12px 灰字写模型、思考程度、对话长度（`PieceMeta`，`gap-3`，context 悬停看累计明细；720px 以下藏起来）。没指定模型、名单也没报默认是哪个时这一项不显示，不写一个孤零零的 `Default`。
   - **标题去掉机械前缀**：列表里显示的标题去掉开头的分类前缀（“界面：”“修复：”“功能：”……，`format.ts` 的 `cleanPieceTitle`，前缀表只在那一处），直接露出任务名；读屏名字（`aria-label`）和悬停提示保留完整标题。
   - 收工的行标题字 `opacity-60`（只淡字，选中时果冻底不跟着淡），**右边不写 Ended**（整组就叫 Completed，每行再写一遍是噪音），只有标题。点一行打开它的对话；历史任务图行左侧配一枚小切面整果图标（`SliceWheelIcon`），点击打开放大全览弹窗回看完整拓扑。
 - **只列几条**（`RIGHT_RAIL_VISIBLE_ROWS` = 3）：
@@ -311,28 +321,29 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 右栏 `Task Graph` 摒弃笨重的全框节点卡片堆叠，采用 **纵向果皮轨（Peel Track，`src/web/components/PeelTrack.tsx`）为主体 + 任务级小切面进度轮图标（`src/web/components/SliceWheelIcon.tsx`）+ 全屏横向拓扑弹窗（`src/web/components/TaskGraphDialog.tsx`）** 的双层视图，确保 `280px` 右栏净宽内呼吸通透、零横向滚动条：
 
 - **任务级小切面进度轮（`SliceWheelIcon`）与多任务手风琴**：
-  - 每个多阶段任务标题左侧配一枚小水果切面轮（默认 `20px` 换算为 `1.25rem`，随界面四档字号缩放）：取所属项目经理的水果配色（`paletteOf(avatarKey)`），按任务阶段数切瓣，对应步骤的四个状态（`docs/orchestration-simplify-design.md` 第 3 节）——完了（`done`）果肉饱满，跳过的（`done` 且 `skipped`）和没轮到（`pending`）一样留淡轮廓，在干（`running`）外圈柔淡、果心向生长，等人按等谁分开：等你拍板（`waiting` + `waitingFor: "user"`）强调色微凸，等项目经理（`waiting` + `waitingFor: "pm"`）琥珀色；同层相邻并行阶段刀口只切到果肉外半圈，果心相连。
+  - 每个多阶段任务标题左侧配一枚小水果切面轮（默认 `20px` 换算为 `1.25rem`，随界面四档字号缩放）：取所属项目经理的水果配色（`paletteOf(avatarKey)`），按任务阶段数切瓣，对应步骤的四个状态（`docs/orchestration-simplify-design.md` 第 3 节）——完了（`done`）果肉饱满，跳过的（`done` 且 `skipped`）和没轮到（`pending`）一样留淡轮廓，在干（`running`）外圈柔淡、果心向生长，等人按等谁分开：等你拍板（`waiting` + `waitingFor: "user"`）强调色微凸，等项目经理（`waiting` + `waitingFor: "pm"`）琥珀色；同层相邻并行阶段刀口只切到果肉外半圈，果心相连。只有一步的图也切一刀（整圈的起止线，从果心到 12 点方向）：没有刀口的实心圆在列表里像一个报错的状态点。
   - 任务标题行右侧配放大全览按钮（`Maximize2`，`aria-label="Zoom"`）与手风琴箭头（`ChevronRight`）；当活跃任务图全部步骤都完了（`done`，跳过也算完了）等待验收交付时，箭头左侧克制显示一行 `12px` 次要文字 `Ready to finish`（`text-xs text-muted-foreground`，全览弹窗左上状态词同样变为 `Ready to finish`），不加任何底色块或胶囊。
   - **多活跃任务优先级与折叠**：单项目同时有多个活跃任务图时，有步骤等你拍板或等项目经理的任务排在最前并默认展开；其余后台进行中任务默认收成带小切面进度轮的单行标题（无紧急任务时排第一的任务默认展开，其余收起），点击任务标题手风琴式展开/收起。
 - **果皮轨（Peel Track）纵向阶段与多股并行轨道**：
-  - 普通阶段节点去掉外框，每行左侧配纵向果皮轨道槽 `<svg aria-hidden="true">`（1～2 股泳道时固定 `2.5rem` 即标准档 `40px`；3 股及以上并行泳道时按每多一股 `+0.875rem` 自适应加宽，封顶 `6rem` 即 `96px`，全程用 `rem` 随界面字号缩放，保住右侧标题净宽且零横向滚动条），右侧为单行紧凑标题（`text-minor`，进行中挂 `.status-shimmer` 流光，未解锁 `text-muted-foreground`）与绑定 `#编号`（`text-xs text-muted-foreground tabular-nums`，点击整行打开对应 Piece 对话）；严禁用 `·`、`|`、`/` 拼接，触屏热区满足 `pointer-coarse:min-h-11`。
-  - **轨道实虚与并行分合**：已走通阶段画实心果皮圆点，且沿全链路均已走通的泳道画圆头果皮实线（`var(--peel)`）；在干阶段画果肉浅晕圆环；等项目经理的阶段画琥珀色圆点（`var(--color-caution)`），没有 Worker 挂着时右侧写 `Waiting on PM`（`text-xs text-caution`），有 Worker 的照常写 `#编号`；没轮到、跳过的阶段画空心圆（跳过的标题再 `opacity-60`），没轮到或受上游未完阻塞的泳道画细虚线（`stroke-dasharray="2 4"`）。
+  - 普通阶段节点去掉外框，每行左侧配纵向果皮轨道槽 `<svg aria-hidden="true">`（1～2 股泳道时固定 `2.5rem` 即标准档 `40px`；3 股及以上并行泳道时按每多一股 `+0.875rem` 自适应加宽，封顶 `6rem` 即 `96px`，全程用 `rem` 随界面字号缩放，保住右侧标题净宽且零横向滚动条），右侧为单行紧凑标题（`text-minor`，进行中挂 `.status-shimmer` 流光，未解锁 `text-muted-foreground`）与绑定 `#编号`（`text-xs text-muted-foreground tabular-nums`，点击整行打开对应 Piece 对话）；严禁用 `·`、`|`、`/` 拼接，触屏热区满足 `pointer-coarse:min-h-11`。轨道槽的尺寸按画布单位 `--peel-u` 算（`styles.css`：平时 1/16rem，触屏 44/32 倍；`PeelTrack.tsx` 的 `peelLen`），触屏下行高 44px 时轨道槽等比放大到一样高，上下两行的线接得上、不断成一截一截。
+  - **轨道实虚与并行分合**：已走通阶段画实心果皮圆点，且沿全链路均已走通的泳道画圆头果皮实线（`var(--peel)`）；在干阶段画果肉浅晕圆环；等项目经理的阶段画琥珀色圆点（`var(--color-caution)`），没有 Worker 挂着时右侧写 `Waiting on PM`（`text-xs text-warn-foreground`；并行泳道多、右边不到 13rem 宽时让给步骤名不显示，琥珀色圆点和悬停提示仍在），有 Worker 的照常写 `#编号`；没轮到、跳过的阶段画空心圆（跳过的标题再 `opacity-60`），没轮到或受上游未完阻塞的泳道画细虚线（`stroke-dasharray="2 4"`）。
   - **按真实依赖排布（`git log --graph --topo-order` 分道连续布局）**：先按弱连通分量（`computeGraphComponents`）把图拆成互不相连的子图，按各子图最靠前节点的 `sortOrder` 排序，子图之间留 `space-y-1.5` 呼吸间距、绝不画跨子图连线；同一连通子图内先做传递约简（去掉已有更长有向路径覆盖的跨层弦边），再按链优先拓扑序（`--topo-order`）把汇合前的同一条多步链连续排在一起，并按源点独占多泳道规则为每条尚未走完下游的分支分配独立平行泳道——**画出来的任何一条线段都严格对应真实依赖**，汇合行上方把各上游泳道平滑弧线汇入汇合点，多起点无共同上游时不画分叉弧线，出度为 0 的收尾阶段不画假合流线。小切面进度轮同理，只有同一子图同一并行层的相邻瓣果心相连。
   - **已完成 / 未轮到折叠卷**：连续已完成的上游前缀节点数 `>= 2`、后面仍有未完阶段、且折叠不会把尚未汇合的独立旁链混进同一个卷时，默认卷成一行螺旋果皮小卷 `N done`（点击展开全部已完成步骤；若用户正打开其中某个 Piece 对话则自动展开）；尾部连续未解锁 `pending` 且内部拓扑深度 `>= 2` 的链路默认折成一行 `N next`（点击展开全部下游步骤）。
 - **水果刀拍板焦点（等你拍板的步骤：`waiting` + `waitingFor: "user"`，节点类型只剩一种，拍板卡挂在步骤上）**：
   - 等你拍板的步骤在所属泳道卡住一把微缩水果刀（直接复用 `KnifeAvatar`，刀身 `<linearGradient>` 由 `useId()` 生成实例级唯一 ID），刀下方沿本泳道延伸受阻虚线直通底部，同时旁路并行泳道在拍板卡左侧原样穿过不断线。
-  - 右侧挂出整张图唯一一张浅果冻拍板卡（`rounded-2xl border border-primary bg-jelly px-3.5 py-3`）：标题用 `text-body font-semibold text-primary`，摘要支持 Markdown（`text-minor`）；推荐主选项按钮用 `rounded-xl bg-primary text-primary-foreground`（右标 `Recommended`），其余选项按钮用 `rounded-xl border border-border bg-background hover:bg-jelly-hover`；底部 `Add note` 展开补充输入框（`placeholder="Add a note, or type a custom reply…"`），同时支持**一键点选选项**、**输入备注后点选选项（选项 + 备注）**、以及**不选预设项直接 `Send` 自定义备注**，统一调用 `POST /api/task-graphs/:graphId/nodes/:nodeKey/decide`。
+  - **右栏里这一步只有一行**（整行是按钮，尺寸同普通步骤：`min-h-8`、`pointer-coarse:min-h-11`、`rounded-xl`、悬停 `bg-jelly-hover`）：水果刀后面是步骤名（`text-body font-semibold text-primary`，`truncate`，全名放 `title`），最右一个向右的小箭头（`ChevronRight` 14px，`text-muted-foreground`）。点了对话滚到这一步的拍板卡并高亮（第 12 条“作答只在对话里”）；对话里找不到那张卡时（消息还没加载到、老服务端没带消息号）改为打开放大全览弹窗，卡在弹窗里能作答。这一行和别的行一样高，轨道槽画满整行。
+  - **拍板卡画在放大全览弹窗里**（弹窗盖住了对话，在里面要能直接作答），浅果冻底（`rounded-2xl border border-primary bg-jelly px-3.5 py-3`）：卡上方一行步骤名（`text-minor font-semibold text-primary`）和 `Waiting on you`，摘要支持 Markdown（`text-minor`）；推荐主选项按钮用 `rounded-xl bg-primary text-primary-foreground`（右标 `Recommended`），其余选项按钮用 `rounded-xl border border-border bg-background hover:bg-jelly-hover`；底部 `Add note` 展开补充输入框（`placeholder="Add a note, or type a custom reply…"`），同时支持**一键点选选项**、**输入备注后点选选项（选项 + 备注）**、以及**不选预设项直接 `Send` 自定义备注**，统一调用 `POST /api/task-graphs/:graphId/nodes/:nodeKey/decide`。
   - **长内容不撑出卡片**（道理同第 11 条）：选项那一列的 `grid` 写 `grid-cols-1`，不然不换行的长选项（分支名、网址）会把整列撑得比卡宽，靠右的 `Recommended` 被推到卡外、右栏出现横向滚动条；选项文字和问题行写 `wrap-anywhere`，长词换行，不截断；`Recommended` `shrink-0`。
   - 标了 `confirm: true` 的用户检查点步骤（选项为「通过 / 打回」，推荐「通过」）自动默认展开底部补充输入框，方便用户在点「打回」或「通过」前一行填写修改意见，无需多点一次 `Add note`。
-  - 拍板通过（`done`，带定案）后水果刀收起、果冻卡收合，该节点变回紧凑果皮轨单行，并在右侧显示所选简称（`text-xs text-foreground`）。
+  - 拍板通过（`done`，带定案）后水果刀收起，该节点变回普通的果皮轨单行，并在右侧显示所选简称（`text-xs text-foreground`）。
 - **要你动手的提醒卡（`UserBlockerCard`，步骤 `waiting` + `waitingFor: "user"` 且带 `userBlocker`，docs/user-blockers-design.md）**：
-  - 水果刀与泳道照拍板步骤画，卡片换成提醒卡：外壳同拍板卡（`rounded-2xl border border-primary bg-jelly px-3.5 py-3`），顶上一行 `size-2 rounded-full bg-status-active` 圆点加 `text-xs font-medium text-primary` 的 `Waiting on you`，正文是系统写的那句（在哪台设备做什么，`text-minor` Markdown），右下一个主按钮 `Done`（`Button size="sm"`），重查中显示 `Checking…` 加转圈并禁用；不加说明小字。放大全览弹窗里步骤标题行已经写了 `Waiting on you`，卡里那一行不再出。
+  - 右栏里和拍板步骤一样只有一行（水果刀、步骤名、小箭头），点了对话滚到那张提醒卡。提醒卡画在对话里和放大全览弹窗里：外壳同拍板卡（`rounded-2xl border border-primary bg-jelly px-3.5 py-3`），顶上一行 `size-2 rounded-full bg-status-active` 圆点加 `text-xs font-medium text-foreground` 的 `Waiting on you`（压在果冻底上的小字不用强调色：同色系浅底上不到 4.5:1），正文是系统写的那句（在哪台设备做什么，`text-minor` Markdown），右下一个主按钮 `Done`（`Button size="sm"`），重查中显示 `Checking…` 加转圈并禁用；不加说明小字。放大全览弹窗里步骤标题行已经写了 `Waiting on you`，卡里那一行不再出。
   - 对话里那条消息是同一张卡；处理完（重查能用）后卡变成 `border-border bg-background`（同已回答的提问卡），状态词改 `Done`（`text-muted-foreground`，圆点 `bg-muted-foreground`），不再有按钮。已挂在步骤上的那张不在 `Needs You` 重复出现。
 - **放大全览弹窗（`TaskGraphDialog`）**：
-  - 点击任务头右上角 `Maximize2`（或 `Completed` 列表中的历史任务图行）打开 `Dialog`（复用第 15 条放大窗规格 `h-[90dvh] w-[min(96vw,1400px)] max-w-none`，滚动视口保持弹窗内边距 `p-6` 不外扩贴边，原生双向滚动）。
+  - 点击任务头右上角 `Maximize2`（或 `Completed` 列表中的历史任务图行）打开 `Dialog`（第 10 条的放大窗 `ZOOM_DIALOG`，大小跟图走，滚动视口保持弹窗内边距 `p-6` 不外扩贴边，原生双向滚动）。左上只在不是进行中时写状态词（`Completed`、`Cancelled`、`Ready to finish`），进行中的图不再写一遍 `Task Graph`；步骤名最多两行（`line-clamp-2`，`title` 放全名）。
   - 调用 `src/web/task-graph-layout.ts` 的 `computeTaskGraphLayout(..., viewportMode: "dialog")`（横向 `rankdir: "LR"`，`lru-cache` 容量 64），底层单张 `<svg aria-hidden="true">` 绘制 `1.5px` 三次贝塞尔有向连线与 `3px` 轻量折角箭头（上游 `done` 实线，其余 `stroke-dasharray="4 3"` 虚线；跨多层且直连会擦碰中间卡片的长边沿 Dagre 分层拐点平滑绕行，绝不横穿中间卡片正文），上层渲染完整阶段卡片（已完成绿勾、在干同色系果皮浅晕圆环、等项目经理琥珀圆点）、绑定 Piece 跳转、产物摘要、内联拍板/跳过节点（`Skip step`）/取消任务图（`Cancel graph`）及历史拍板记录。
-  - **`Cancel graph` 要二次确认**（取消会结束整张多阶段任务图，误触代价大）：全览弹窗右上角的 `Cancel graph`（ghost `sm`，灰字，悬停 `text-danger`）点一下**不发请求**，先叠一个第 10 条的窄确认弹窗（`DialogContent` `className="max-w-110"`，标题 `Cancel this task graph?`，正文一句写清后果，15px 前景色）；底部 `DialogFooter`：左 `outline` 的 `Keep going`（`DialogClose`，默认聚焦，Esc、点遮罩同样是不取消），右主按钮 `Cancel graph`，点了才发 `POST /api/task-graphs/:graphId/cancel`，请求中主按钮前转圈、两个按钮都不能点；成功后确认弹窗和全览弹窗一起关掉，失败时确认弹窗关掉、错误照常显示在全览弹窗顶部（`role="alert"`，`text-danger`）。`Skip step` 只跳一个节点，不加确认。
-  - **卡片按估算高度绝对定位**，所以估算必须和实际渲染出自同一处规则，不在弹窗里加偏移：等拍板的卡（`task-graph-layout.ts` 的 `estimateNodeSizeRem`）按卡里每一块的实际高度加起来——标题行、问题行（`hasQuestion`）、摘要、交付物（`deliverable-size.ts` 的 `deliverablesHeightRem`，缩略图高度 `DELIVERABLE_MEDIA_HEIGHT_REM` 同时是 `DeliverableFiles` 里缩略图读的 `--deliverable-media-height`）、选项、`Add note`；触屏（`pointer: coarse`）下选项和 `Add note` 是 44px 热区，`coarsePointer` 传给布局。卡里加了新的一块，在这里加一项，并用实际渲染量一遍。文档行按一行算，链接多到折行时估算偏低。
+  - **`Cancel graph` 要二次确认**（取消会结束整张多阶段任务图，误触代价大）：全览弹窗右上角的 `Cancel graph`（ghost `sm`，灰字，悬停 `text-danger`）点一下**不发请求**，先叠一个第 10 条的窄确认弹窗（`DialogContent` `className="max-w-110"`，标题 `Cancel this task graph?`，正文一句写清后果，15px 前景色）；底部 `DialogFooter`：左 `outline` 的 `Keep going`（`DialogClose`，默认聚焦，Esc、点遮罩同样是不取消），右 `destructive` 按钮 `Cancel graph`（撤不回，不用会话的强调色），点了才发 `POST /api/task-graphs/:graphId/cancel`，请求中主按钮前转圈、两个按钮都不能点；成功后确认弹窗和全览弹窗一起关掉，失败时确认弹窗关掉、错误照常显示在全览弹窗顶部（`role="alert"`，`text-danger`）。`Skip step` 只跳一个节点，不加确认。
+  - **卡片先按估算高度排，画出来后按量到的高度重排一次**（`TaskGraphDialog` 用 `ResizeObserver` 量每张卡，交给 `computeTaskGraphLayout` 的 `measuredHeightPx`）：拍板卡的摘要是 Markdown、步骤名最多折两行，估不准，估矮了同一列的下一张卡会压上来。**量到的高度只用来排位置，不写回卡片自己的 `min-height`**（普通卡只有一个写死的下限 `min-h-17`）：写回去的话，卡变矮时（在弹窗里拍板、点 `Skip step` 之后）会被旧高度撑住，中间空一大块。量到的值按“图、步骤、形态（拍板卡还是普通卡）”记，有一个变了就是另一张卡，重新量；卡卸载时删掉它那一项。估算仍然要尽量准（第一帧用它），不在弹窗里加偏移：等拍板的卡（`task-graph-layout.ts` 的 `estimateNodeSizeRem`）按卡里每一块的实际高度加起来——标题行、问题行（`hasQuestion`）、摘要、交付物（`deliverable-size.ts` 的 `deliverablesHeightRem`，缩略图高度 `DELIVERABLE_MEDIA_HEIGHT_REM` 同时是 `DeliverableFiles` 里缩略图读的 `--deliverable-media-height`）、选项、`Add note`；触屏（`pointer: coarse`）下选项和 `Add note` 是 44px 热区，`coarsePointer` 传给布局。卡里加了新的一块，在这里加一项，并用实际渲染量一遍。文档行按一行算，链接多到折行时估算偏低。
   - **跨设备**：果皮轨、全览弹窗、拍板卡、`Completed` 历史拉取一律用 `DeviceScope`（`src/web/device-scope.tsx` 的 `useClient()`）给的当前设备接口，不自己按设备编号另建 client；看远端项目经理时请求走那台的 `/d/<设备>/...`。
 
 ## 13. 字体、数字、列表行
@@ -349,6 +360,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 
 - 悬停：浅灰底（`hover:bg-sidebar-hover` / `hover:bg-accent`），不变色、不放大。
 - 加载：`Loader2` 转圈 + 短句（“加载中”），居中；按钮里转圈放在字前面。
+- **整页状态**（加载中、没登录、连不上、设备没连上，`App.tsx` 的 `FullPage`）：居中一列，最宽 22rem、左右留 24px；加载是 20px 转圈加 13.5px 灰字；其余是 17px、600 的标题，下面每条说明一段 13.5px 灰字，一屏最多一个主按钮。没登录页手机上先说手机怎么登，电脑上先说电脑怎么登。不写开发者命令（`pnpm start`）。
 - **在忙的流光**（消息流底部的 Working… / Thinking… / Reading App.tsx… 等 `AgentStatus`、右栏正在跑的 Piece 的名字）：加 `styles.css` 的 `.status-shimmer`，照 Claude desktop 的 “Thinking” 流光：一道变淡的光（字色 35%，比字色浅，深色字上看得出）从左往右扫过字，2.2s `ease-in-out` 循环。只用字本身的颜色（`currentColor`，右栏名字是前景色、消息流是灰），不引入别的颜色；省略号是静态的“...”，不再一个点一个点闪。等额度这类不在忙的状态不加。`prefers-reduced-motion: reduce` 时不动、显示原色字。时长、光带只在 `.status-shimmer` 一处改。
 - **动效规矩**：动效只在状态变化时触发一次，不超过 400ms，不循环（上面的流光是唯一例外），`prefers-reduced-motion: reduce` 时全部关掉。时长只在 `styles.css` 的 `--motion-*` 改。现有的只有这几处：
   - 换项目经理时外壳底色、分割线淡变 300ms（`--motion-tint`，第 4 条）；右栏组的收起展开 150ms、普通箭头转向 200ms（第 12 条）。
@@ -378,12 +390,12 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - **内联图片与文件链接**：`![]()` 写的、存了副本的图片继续内联显示：固定 240px 高、最宽 320px（`h-60 w-auto max-w-xs`，`object-contain` 靠左），加载前后高度不变，消息流不跳（第 17 条）；`rounded-xl`，鼠标是放大镜，点开预览窗看大图；文件过期换成“文件已过期”卡片。普通链接 `[文字](路径)` 写的本机文件不再渲染成文件卡片，而是保留链接原本写的文字、以行内蓝色链接样式（`[data-file-link]`）嵌在正文中，点开预览窗（`FilePreview`）；没存下副本（如指向文件夹 `not_file`、没找到文件 `missing` 等）的不渲染卡片、不显示失败原因，直接显示链接原本的文字。
 - **图表**（```` ```mermaid ````、```` ```vega-lite ```` / ```` ```vegalite ````，闭合后才渲染；`ChartBlock.tsx`、`src/web/charts/`，方案见 `docs/charts-diagrams-design.md`）：
   - **外壳**同代码块（`.md-code`：`rounded-xl`、`--muted` 底、1px 内描边、右上角工具条）；图区是白底（`--background`），四周 12px 内边距，没有自己的描边。工具条从左到右：语言名（12px 灰）、源码/图切换（`Code` / `ChartNetwork` 图标，`aria-pressed`）、放大（`Maximize2`）、复制（复制源码）；按钮都是第 6 条的图标按钮（`size-7`，悬停 `bg-accent`）。
-  - **尺寸**：宽跟消息列走，不撑破；加载中最小高 160px（`CHART_MIN_HEIGHT`），图最高 480px（`CHART_MAX_INLINE_HEIGHT`），更高的等比缩到这个高度，点放大看原尺寸。
+  - **尺寸**：宽跟消息列走，不撑破；加载中最小高 160px（`CHART_MIN_HEIGHT`），图最高 480px（`CHART_MAX_INLINE_HEIGHT`），更高的等比缩到这个高度，点放大看原尺寸。比列宽的图也等比缩小，但缩到图里的字只剩 12px（`CHART_MIN_INLINE_FONT_PX`，第 3 条最小的一档）就不再缩，放不下的在图区里横向滚（同表格、代码块）：手机上横排的四级流程图不会被缩到字只有 6px。
   - **渲染中**：占位里一个居中的 `Loader2` 转圈，不写字；离视口 600px 以内才开始渲染，缓存里有的同步出图。
   - **看源码**：点切换，图区藏起来、换成上色的源码，再点回图（不重画）；状态只在这一块里，不记住。
   - **失败**（源码有错、源码超过 5 万字、图表组件没加载下来）：显示成普通代码块，上面一行 `AlertCircle`（14px）+ 错误第一行（13.5px、`text-danger`、`truncate`），完整错误放 `title`；不弹 toast，源码不吞。没闭合的（流式中）照常是代码块，不报错。
-  - **放大窗**：`Dialog`（`w-[min(96vw,1400px)] h-[90dvh]`），里面是原尺寸的图，两个方向滚动；先不缩放、不拖动。点图本身也能放大（Mermaid）；Vega-Lite 有悬停提示，点图不放大，只有按钮。
-  - **颜色**：只用 CSS 变量（`--foreground`、`--muted-foreground`、`--border`、`--muted`、`--background`）和 `palette.ts` 的 `CHART_CATEGORY_COLORS`（颜色表 accent 里的 6 种，对白底 ≥ 3:1），不用库默认的紫色。
+  - **放大窗**：`Dialog`（第 10 条的 `ZOOM_DIALOG`，宽 `min(96vw,1400px)`、高跟内容走），图按弹窗宽度等比放大（最多原尺寸 2.5 倍，`ZOOM_MAX_SCALE`），比弹窗高就上下滚；不拖动。点图本身也能放大（Mermaid）；Vega-Lite 有悬停提示，点图不放大，只有按钮。
+  - **颜色**：只用 CSS 变量（`--foreground`、`--muted-foreground`、`--border`、`--muted`、`--background`）和 `palette.ts` 的 `CHART_CATEGORY_COLORS`（颜色表 accent 里的 6 种，对白底 ≥ 3:1），不用库默认的紫色。**只有一个序列、没写颜色的图用中性的 `--muted-foreground`**（大面积的柱、面不抢色），分类色留给真按颜色分的图；柱子顶端 4px 圆角、柱间留 45%；横轴的类目标签横着写（不用库默认的竖排）。流程图节点 8px 圆角。
   - **字**：图里 13.5px、坐标轴 12px，字体 `--font-ui`。
 - 不靠 emoji、粗体全大写之类撑层次。
 
@@ -395,17 +407,18 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
   - 对话列表（`<nav aria-label="Conversations">`）居中列出各项目经理的圆角方块头像按钮（`size-13 rounded-2xl`，内含 `40px` `<Avatar colorKey={entry.avatarKey} size={40} />`，选中、悬停是这个项目经理的水果果冻底（第 4 条），带 `title={entry.name}` 和 `<span className="sr-only">{entry.name}</span>` 保持可访问性；有 `asking`“等你确定”或 `waiting`“等你”时在头像右下角显示小圆点角标）；
   - 窄栏底部纵向居中排列 3 个 `icon-sm` ghost 图标按钮：`新建项目经理`（`Plus`）、`QuotaPopover`、`设置`（`Settings`）。
   - 因为左栏 `72px` 常驻在窗口最左侧（正好覆盖 `--macos-traffic-lights-width: 72px`），去掉 `styles.css` 中 `@media (max-width: 1100px)` 下给 `.chat-main` 额外加的 `--macos-traffic-lights-width` 偏移以及 `PmProfile.tsx` / `App.tsx` 顶栏的多余窄屏左内边距。右栏照样推开对话（第 12 条）。
-- **左栏的行**：选中、悬停是这个项目经理的水果果冻底（第 4 条），头像 44px，第一行名字 + 右边的标注（两侧 `items-center justify-between gap-2`，左侧标题区 `min-w-0 flex-1 overflow-hidden` 绝不溢出遮挡右侧标注），第二行消息预览；没有消息的行第二行留空但占一样的高度，每行一样高。右边的标注只放一个，优先级：“等你确定”圆点（8px `size-2 rounded-full bg-status-active`，无文字，`aria-label` / `title` 为“等你确定”） > “等你”圆点（同样 8px 绿点，无文字，`aria-label` / `title` 为“等你”） > 时间。项目经理在忙不另加标记，照旧显示时间。
+- **左栏的行**：选中、悬停是这个项目经理的水果果冻底（第 4 条），头像 44px，第一行名字 + 右边的标注（两侧 `items-center justify-between gap-2`，左侧标题区 `min-w-0 flex-1 overflow-hidden` 绝不溢出遮挡右侧标注），第二行消息预览（`truncate`，`title` 放全文）；没有消息的行只有名字、和头像垂直居中，文字块最少两行高（`min-h-12`），每行一样高。右边的标注只放一个，优先级：“等你确定”圆点（8px `size-2 rounded-full bg-status-active`，无文字，`aria-label` / `title` 为“等你确定”） > “等你”圆点（同样 8px 绿点，无文字，`aria-label` / `title` 为“等你”） > 时间。项目经理在忙不另加标记，照旧显示时间。
 - **已归档项目经理**：左栏每个设备组内（或单设备列表底部）将已归档项目经理收进默认折叠的“已归档”分组（样式同设备组头，右侧标数量；搜索中或当前选中已归档对话时自动展开），行右侧标剩余删除天数（`Deletes in 7d`，`tabular-nums`，不标“等你”或“等你确定”）。聊天页底部输入框换成归档状态条（`rounded-2xl bg-sidebar px-4 py-3`：左侧“已归档”与剩余天数用 `gap-3` 分开，右侧 `outline` `sm`“恢复”按钮，进行中显示 `Restoring…`）。资料页在会话组提供“归档…”及二次确认弹窗（`max-w-110`）；已归档时顶部第一组显示归档状态与“恢复”按钮，隐藏会话组。
-- **左栏左下角**：左栏底部栏左侧放额度按钮（若有），右侧放设置 ghost 按钮（`ml-auto` 固定靠右，第 6 条）。左栏对话列表（`<nav aria-label="对话列表">`）带 `.sidebar-list` 边缘渐变遮罩（顶部 `8px`、底部 `20px` 渐隐：`mask-image: linear-gradient(to bottom, transparent, #000 8px, #000 calc(100% - 20px), transparent)`）与底部内边距 `pb-3`，使列表滚动经过底部栏和顶部搜索栏时柔和过渡、不硬切头像，滚到底部时最后一项完整显示在渐变区上方。额度按钮：与右侧设置齿轮保持统一风格的 `icon-sm` 单色线性图标按钮（`CircleGauge`，16px，平时 `text-muted-foreground`，悬停 `hover:text-foreground` 与浅底 `hover:bg-accent`），不随用量填充或变色，与设置齿轮同色同风格；无障碍名称与悬停提示保留完整状态（如“5h usage 37%”“Usage limit reached”），用量只在点开的浮层里显示（第 11 条）。agy 的额度事件里没有，点开时才向服务端要一次（缓存 5 分钟，`quota.fetched`），按组（Gemini、Claude and GPT）各一块，同在“Antigravity”这个厂商标题下，组名是小标题（第 11 条）；没装或查失败就没有这几块。
+- **左栏左下角**：左栏底部栏左侧放额度按钮（若有），右侧放设置 ghost 按钮（`ml-auto` 固定靠右，第 6 条）。左栏对话列表（`<nav aria-label="对话列表">`）带 `.sidebar-list` 边缘渐变遮罩（顶部 `12px`、底部 `20px` 渐隐）与同样高的上下内边距 `pt-3 pb-5`，使列表滚动经过底部栏和顶部置顶行时柔和过渡、不硬切头像，没滚动时第一项、滚到底时最后一项都完整显示在渐变区外。**滚动区的上下边渐隐只有一种写法**（`styles.css`）：各滚动区只定 `--fade-top` / `--fade-bottom`，并让自己的上下内边距不小于它——左栏列表 12px / 20px，Router 托盘 8px / 20px，消息列表和 Router 时间流上 2rem，资料页上 1rem，弹窗中间下 1rem。
+- **左栏搜索**：搜索框的外形在外层（`h-9 rounded-xl bg-sidebar-active`，触屏 44px），里面放大镜、输入、清除键（有字时出现的 `X` ghost 图标按钮，`Clear search`）并排；不用浏览器自带的蓝色清除叉。没有匹配时列表里一行 `No matching conversations`（13.5px 灰）；搜索时置顶的 Router 也要对得上才留着。额度按钮：与右侧设置齿轮保持统一风格的 `icon-sm` 单色线性图标按钮（`CircleGauge`，16px，平时 `text-muted-foreground`，悬停 `hover:text-foreground` 与浅底 `hover:bg-accent`），不随用量填充或变色，与设置齿轮同色同风格；无障碍名称与悬停提示保留完整状态（如“5h usage 37%”“Usage limit reached”），用量只在点开的浮层里显示（第 11 条）。agy 的额度事件里没有，点开时才向服务端要一次（缓存 5 分钟，`quota.fetched`），按组（Gemini、Claude and GPT）各一块，同在“Antigravity”这个厂商标题下，组名是小标题（第 11 条）；没装或查失败就没有这几块。
 - **每个对话与全局工作台有自己的网址**：`#/router`（全局唯一的水果刀 Router 工作台，不带 `/d/<设备编号>` 前缀；电脑外壳首次打开空锚点 `#` 时默认落到 `#/router`）、`#/c/<对话编号>`（项目经理的对话）、`#/w/<对话编号>`（Worker 的对话）、`#/pm/<项目经理编号>`（资料页）。点左栏、点 Worker、打开资料页都会改网址（能前进后退）；刷新后回到原来那个，找不到才回到默认入口。
 - **左栏 Router 水果刀三档置顶规则**：
-  1. **桌面 300px 宽栏（`layout === "wide"`）**：固定在顶部搜索框下方、可滚动对话列表 `.sidebar-list` **上方**（`px-3 pb-2 border-b border-line shrink-0`），行高与内边距同普通列表行（`rounded-2xl px-3 py-2.5 gap-3`），不设 `--jelly`（选中 `bg-sidebar-active`、悬停 `hover:bg-sidebar-hover`）。左侧 `<KnifeAvatar size={44} />`，第一行标题 `Router`（`text-body font-semibold`），第二行副文（`text-minor text-muted-foreground truncate`）显示首张待决问题摘要、最新未读汇报摘要或 `All clear`；右侧在有未决项（`pendingCount > 0`）时显示 `text-xs font-semibold tabular-nums text-foreground` 计数 + `size-2 rounded-full bg-status-active` 绿点（`gap-1.5`），无未决但有未读汇报时仅显示淡灰计数 `text-xs text-muted-foreground tabular-nums`。
+  1. **桌面 300px 宽栏（`layout === "wide"`）**：固定在顶部搜索框下方、可滚动对话列表 `.sidebar-list` **上方**（`px-3 shrink-0`，行下面隔 8px 一条和行里的字对齐的 1px 线 `mx-3 border-b border-line`，不顶到栏边），行高与内边距同普通列表行（`rounded-2xl px-3 py-2.5 gap-3`），不设 `--jelly`（选中 `bg-sidebar-active`、悬停 `hover:bg-sidebar-hover`）。左侧 `<KnifeAvatar size={44} />`，第一行标题 `Router`（`text-body font-semibold`），第二行副文（`text-minor text-muted-foreground truncate`）显示首张待决问题摘要、最新未读汇报摘要或 `All clear`；右侧在有未决项（`pendingCount > 0`）时显示 `text-xs font-semibold tabular-nums text-foreground` 计数 + `size-2 rounded-full bg-status-active` 绿点（`gap-1.5`），无未决但有未读汇报时仅显示淡灰计数 `text-xs text-muted-foreground tabular-nums`。
   2. **桌面 72px 窄栏（`layout === "rail"`，`< 1100px`）**：固定在 `<nav>` 上方独立置顶槽位，下方配 `w-8 border-b border-line` 短分割线；按钮 `size-13 rounded-2xl` 内放 `<KnifeAvatar size={40} />`，`pendingCount > 0` 时右下角叠 `size-2 rounded-full bg-status-active ring-2 ring-surface-sidebar`。
   3. **手机整屏列表页（`layout === "page"`）**：钉在首页顶部第一行（同宽栏样式，天然满足 `>= 44px` 触控高度），点按进入全屏 `#/router` 工作台，工作台顶栏左侧配标准 `Back` 返回键回到列表页。
 - **焦点**：打开或切换对话时，用鼠标的设备（`pointer: fine`）把焦点放进输入框（输入框不可用时不放）；触屏（手机、iPad）不放，不弹键盘。
 - **多台设备（联机，`docs/multi-device-design.md` 第 4 节）**：只有一台时左栏、网址、弹窗和没有联机时一模一样。两台以上：
-  - 左栏按设备分组。组头 32px 高、`px-3`、`rounded-2xl`，左边设备名（12px、500、灰，第 3 条组标题）+ 折叠箭头（`ChevronRight` 14px，展开转 90°），右边状态词（12px 灰：重连中；离线 + 多久以前，两项之间 `gap-2`，不用“·”）、状态点（8px 圆：在线 `--success`、重连中 `--caution`、其余 `bg-muted-foreground/40`）、系统图标（14px：Mac `Laptop`、Linux `Server`）。组之间 8px（`pt-2`）。离线、没连上过的整组 `opacity-60`。
+  - 左栏按设备分组。组头 32px 高、`px-3`、`rounded-2xl`，左边设备名（12px、500、灰，第 3 条组标题）+ 折叠箭头（`ChevronRight` 14px，展开转 90°），右边状态词（12px 灰：重连中；离线 + 多久以前，两项之间 `gap-2`，不用“·”）、状态点（8px 圆：在线 `--success`、重连中 `--caution`、其余 `bg-muted-foreground/40`）、系统图标（14px：Mac `Laptop`、Linux `Server`）。组之间 16px（`pt-4`，比组里“已归档”那一行和上面的间距大，看得出是另一台设备）。离线、没连上过的组只把头像调淡（第 4 条），字不调淡。
   - 跨设备待决提问统一由置顶的 `Router` 入口汇总承接，左栏不再单独重复渲染跨设备 `Needs you` 汇总分组；各设备分组内项目经理行自身的“等你确定 / 等你”绿点照常显示。标签页标题的数字是所有设备的合计。
   - 别的设备离线：对话顶上一条提示（同“重连中”的灰底胶囊，`WifiOff` 图标）“东京离线，显示的是 3 分钟前的内容”；输入框整个不可用，占位写“东京离线，暂时不能发消息”。重连中（断了不到 30 秒）照常能打字，发送按钮等连上。从没连上过：主区居中“还没连上这台设备”+ 一行排查提示（13.5px 灰）。
   - 新建项目经理弹窗第一行“设备”（`Select plain`，默认当前看的那台，离线的不能选）；设置弹窗多一个“电脑”分类（第 10 条）：“你的电脑”一组是本机一行和中心隧道状态行，组标题右边“连到中心”；“已连上的电脑”一组是别的设备（没有就一行“还没有别的电脑”），组标题右边“邀请”“添加”。这些按钮是 ghost `sm`，`-mr-3 gap-1`，展开态 `aria-expanded:bg-accent aria-expanded:text-foreground`，向导（白底细框分组）出现在对应组下面 12px。每台一行（第 9 条带图标的行）：系统图标，名字，下面状态点 + 系统、连法、本机 / 状态，右边改名、移除图标按钮，移除要二次确认。网址前面加 `#/d/<设备编号>`，入口本机不加。
@@ -430,12 +443,13 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
       - 模型还在流式生成工具参数时就先显示（`agent.tool_preview`，只改内存不入库），拼出路径、服务名再原地升级；工具几毫秒就回结果时文案至少停 450ms（`MIN_TOOL_STEP_VISIBLE_MS`）再回 `Thinking…`，期间来了文字、新工具、这一轮结束或停止就立刻换掉。
   - 这一轮的文字按顺序排在下面（`hub ask` 问你的那条不另挂“等你确定”标签，右栏列着，点过去高亮这一条）；跑完后最下面一行是复制按钮（图标按钮 `icon-sm`，复制这一轮所有文字的 Markdown 原文，点了换成勾）和结束时间（12px 灰，`tabular-nums`）。
   - **流式生成中的文字**：agent 正在输出某段文字（`session.streamingText` 非空）时，在同一轮（共用这轮唯一的头像 + 名字；本轮尚无已入库消息时直接展开该轮）已入库内容下方、底部状态行上方，按第 15 条正文 Markdown 实时显示这段正在生成的文字（未闭合代码块防抖上色、未闭合图表保持代码块）；该段完成入库时原子清掉流式文本并原位替换成正式消息，不出现“流式预览 + 正式消息”双份重影，也不重复播放 `.message-enter` 淡入动画。
-  - **`hub ask` 提问卡片**：每张 `hub ask`（不论有没有选项、有没有绑定任务图步骤 `gateRef`）在对话流中都渲染为圆角边框卡片（`rounded-2xl border border-border bg-background p-4`），顶部为问题标题（15px、`font-medium`）。有选项时（显式传 `--option`，或正文末尾紧接 2～10 行、每行都以顺序字母 `A. `/`B. ` 开头的选项；普通 `- xxx` 列表不算选项）下方为 A/B/C/D 选项行（左 `size-6 rounded-xl border border-border bg-sidebar` 字母徽标 + 右 15px 文字（行内 Markdown 渲染）+ 推荐项右侧 `Recommended` 标注，整行 `rounded-xl`，悬停 `hover:bg-sidebar-hover`），补充框收在 `Add note` 后面（`confirm` 检查点卡默认展开）；没有选项时补充框直接展开。补充框是同一行的 `Input`（36px、15px 正文字号）+ 默认尺寸 `Button`（36px）`Send`。点选项或在补充框里提交只回答这一张：独立提问走 `POST /api/asks/:messageId/answer`，绑定了任务图步骤的走 `POST /api/task-graphs/:graphId/nodes/:nodeKey/decide`，都不发用户消息；卡了结后变只读，**卡上直接看得到怎么了结的**，有没有选项都是同一套：用户选的选项高亮（`bg-sidebar-active`）；用户在补充框写的原话是选项下面同样高亮的一行（同一套 `rounded-xl px-3 py-2` 行，左边 `size-6` 徽标里是 14px `PencilLine` 图标，15px 原文保留换行），只有选项、只有原话、两者都有都照显示；被项目经理 `hub ask close`、`--replace` 或任务图收回的卡不高亮任何行，卡底一行 13.5px 灰字 `Closed`。数据来自卡那条消息的 meta（`chosenOption`、`answerNote`、`closed`，守护进程 `settleAskIn` 统一写）。
+  - **`hub ask` 提问卡片**：每张 `hub ask`（不论有没有选项、有没有绑定任务图步骤 `gateRef`）在对话流中都渲染为圆角边框卡片（`rounded-2xl border border-border bg-background p-4`），顶部为问题标题（15px、`font-medium`）。有选项时（显式传 `--option`，或正文末尾紧接 2～10 行、每行都以顺序字母 `A. `/`B. ` 开头的选项；普通 `- xxx` 列表不算选项）下方为 A/B/C/D 选项行（`OptionRow.tsx`，和 Router 待拍板卡共用：`min-h-11 rounded-xl border border-border bg-background px-3 py-2.5`，平时就有细边框，触屏没有悬停也看得出能点；左 `size-6 rounded-xl border border-border bg-sidebar` 字母徽标 + 15px 文字（行内 Markdown 渲染）+ 推荐项的 `Recommended` 紧跟在文字后面隔 12px，不甩到卡片最右端；悬停 `hover:bg-sidebar-hover`），补充框收在 `Add note` 后面（`confirm` 检查点卡默认展开）；没有选项时补充框直接展开。补充框是同一行的 `Input`（36px、15px 正文字号）+ 默认尺寸 `Button`（36px）`Send`。点选项或在补充框里提交只回答这一张：独立提问走 `POST /api/asks/:messageId/answer`，绑定了任务图步骤的走 `POST /api/task-graphs/:graphId/nodes/:nodeKey/decide`，都不发用户消息；卡了结后变只读，**卡上直接看得到怎么了结的**，有没有选项都是同一套：用户选的选项高亮（`bg-sidebar-active`）；用户在补充框写的原话是选项下面的一行（同一套行尺寸，底色浅一档 `bg-sidebar`，和“选中的选项”分得开；左边 `size-6` 徽标里是 14px `PencilLine` 图标，15px 原文保留换行），只有选项、只有原话、两者都有都照显示；被项目经理 `hub ask close`、`--replace` 或任务图收回的卡不高亮任何行，卡底一行 13.5px 灰字 `Closed`。数据来自卡那条消息的 meta（`chosenOption`、`answerNote`、`closed`，守护进程 `settleAskIn` 统一写）。
 - **Worker 的发言**（项目经理对话里的汇报、这一轮没做完、建 worktree 失败）：是一个靠左的**消息气泡**，头像和名字在气泡上面（和 agent 一样一个 26px 所属项目经理对应水果切出的果瓣头像 `Avatar neutral` + 名字 13.5px、500、灰，名字是 Worker 的标题），气泡里是汇报摘要。`WorkerSpeech`（`Messages.tsx`），状态和颜色的对应在 `worker-status.ts`。
   - **气泡**：圆角、内边距和用户气泡同一套（`BUBBLE`：`rounded-[22px] px-4 py-2.5`，15px），底色永远是中性浅灰 `--bubble-agent`，和项目经理自己的正文（没有气泡）、用户的浅果冻气泡一眼分得开。整个气泡是一个按钮，点开 Worker 的完整对话；悬停底色加深一点点（掺 5% 前景色），键盘聚焦有中性的圈。
   - **状态用小色点，不写字**：头像右下角一个 10px 的圆点（白色 2px 描边，`bg-success` / `bg-caution` / `bg-danger`，不写死色值）：做完了绿、有问题黄、放弃了和出错红；没按格式的、没有状态的没有点。“做完了 / 有问题 / 放弃了 / 出错”这几个字不显示，放在气泡的 `title`，`aria-label` 是“标题，状态：摘要”。状态和颜色的对应在 `worker-status.ts` 的 `workerStatusOf`。
-  - Worker 自己的对话里它的顶栏与消息头像同样是所属项目经理对应水果的一瓣，项目经理说的话是项目经理的完整水果横切面头像 + 名字。右栏 Worker 行只用名字流光表示在跑（第 12 条），不是汇报的结果，不用这套颜色。
+  - Worker 自己的对话里它的顶栏与消息头像同样是所属项目经理对应水果的一瓣，项目经理说的话是项目经理的完整水果横切面头像 + 名字。项目经理交代的话（开工通知、接手记录、打回意见）常常几十行：默认只露 8 行、最后一行渐隐，`Show more` 看全文（`LongBrief`，行数在 `styles.css` 的 `--brief-lines`；只多出一两行的不收），里面的标题和正文一样大、只靠字重。收工的 Piece 对话底部原来放输入框的地方是一条状态 `Completed`（`rounded-2xl bg-sidebar px-4 py-3`，同已归档对话的状态条）。右栏 Worker 行只用名字流光表示在跑（第 12 条），不是汇报的结果，不用这套颜色。
 - **系统行**：
+  - Piece 的派出、收工、你对它说的那一行：标题（前景色）、英文状态词（`Started` / `Ended` / `You said`，第 3 条词表）、摘要用间距隔开，不拼成“Piece「标题」已派出”这样中英混排的一句；整行点开它的对话（`Messages.tsx` 的 `PieceLineButton`）。
   - 不单独显示：派出 Worker、Worker 收工、项目经理建删定时任务——它们是项目经理这一轮的操作，收在 `Worked for` 里（不在任何一轮里时才显示成很淡的一行）。
   - 很淡的一行：建项目、挂上 / 移除文件夹、改性格设定（带“撤销”）、交接失败、定时任务没跑成、你直接对 Worker 说的话。靠左和正文对齐，12px 灰，前面一个 14px 图标，没有底色、不居中、不用胶囊；出错的图标用 `text-danger`。
   - 换新会话（用户点的“开新会话”和对话太长时自动换，`ledger/handover.ts`）：用户看来是同一个对话，**聊天里只多一条很淡的分隔线**。写交接的请求、写交接那一轮的话和操作都不显示、不算未读、不进左栏预览、不改排序、不弹通知；写交接时状态行和停止键也不出现（那期间有交给项目经理的话在等就显示 `Thinking…`，用户的话不显示“排队中”）。分隔线：`RefreshCw` 14px 图标 + `Handed off to a new session`（12px 灰，英文状态词，不用“·”拼接）+ `›`，后面一条 1px `bg-border` 细线占满剩下的宽度；放在写交接开始的地方，换代期间来的话（包括交接请求排队时就来了、压到换代才交给新会话的）排在它下面，和实际处理它的会话对上。点开看交接全文（Markdown，13.5px 灰，左边一条竖线，同定时任务的说明）。
@@ -448,6 +462,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - **出错**：写用户看得懂的中文，说清“出了什么事”和“该怎么办”（“连不上守护进程，看守护进程有没有在跑”“Claude 服务繁忙，稍后重试”），原始错误放 `title`（悬停才看得到）；后面跟“重试”。**错误码与文案统一定义在 `src/shared/errors.ts`**（`API_ERRORS`、`LOCAL_ERRORS`、`describeFailure`）：接口出错网页一律经 `humanize`（`format.ts` 的 `errorText`、`errorLine`、`errorTitle` 包了一层）显示，text 后面接 hint，raw 放 `title`，不显示英文码、`err.message`、浏览器的 “Failed to fetch”；任何接口回 401 直接切到登录界面，不弹报错。厂商运行失败的分类和说法经 `describeFailure` 按通用的类型分（服务繁忙、额度用完、网络断了、没能启动、未知），厂商的错误特征在 `src/shared/vendors.ts`。
 - **贴底**：打开对话、刷新、图片加载完、内容变高时，原本在底部的继续贴底（`ResizeObserver`）；往上翻了就不拉回去。底部输入框外层 `.chat-column` 向上叠盖 `26px`（`-mt-6.5 relative z-10 pointer-events-none`，内部控件 `*:pointer-events-auto`），与输入框 `rounded-[26px]` 顶部圆角半径对齐，使消息滚过输入框顶部时圆角外侧不被水平硬切，同时 `y = 26px` 以下输入框已占满列宽、下方不漏字；消息内容底部留白 `pb-12`，高度不随“回到底部”出现和消失而变，文字正常滚动，没有渐隐、没有硬切的一条。
   - **“回到底部”**：只在往上翻了（离底部 80px 以上）时出现，一个图标按钮（`secondary` 浅灰底、`icon-sm` 32px，无描边、无阴影、不带字），浮在输入框上方一点（`bottom-9`）、消息列的水平正中（照 t3code 的 Scroll to end）；外层 `pointer-events-none`，只有按钮能点。回到底部这一条就收起。内联图片固定 240px 高占位（第 15 条），加载前后不跳。
+- **上边渐隐**：消息列表上边 2rem 渐隐（`.messages-fade`，内容上内边距 `pt-8` 一样高）：往上翻的消息在顶栏、提示条下面慢慢淡掉，不贴着一条线被腰斩；没往上翻时第一条不淡。下边照旧没有渐隐（见上面“贴底”）。
 - **空对话**：消息区中间是 agent 的头像（120px，现有 256px 素材，不加新图）、名字（17px、600）和一句“还没有消息”（13.5px 灰）。
 
 ## 18. 输入框弹出列表
@@ -478,7 +493,8 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
   - 不加标题、面包屑、提示小字：已选的路径就在输入框文字里。加载中不转圈：清单还没拉到时用打包的名单，拉到后换上。
   - 最后一级选完才收列表（见上面“例外”）；Esc 关列表、文字不动；手打完整的 `/hub:worker codex gpt-5.5 high` 时最后一级照样弹，Enter 选中即完成。
 - **文件搜索**：接着打字等 120ms 没再打才发请求，旧请求作废，后发先回时旧结果不显示。
-- **发送被拦**：后台给的原因显示在输入框上方（和上传失败同一处，`text-danger`），用户原文留在输入框里。
+- **发送被拦**：后台给的原因显示在输入框上方（框外面的一行，和上传失败同一处，`text-danger`，没有底色；加文件被拒是灰字），用户原文留在输入框里；这时不再弹“没有匹配的命令”，接着打字提示就收掉、列表照常。
+- **列表里有行可选时发送键不能点**：这时 Enter 是“选这一行”，半截的 `/命令`、`@文件` 不会被误发出去。
 - **聊天页 `Esc` 暂停与回退（照 Claude Code）**：项目经理对话与 Piece 对话一致生效（输入框禁用或只读时不响应）。
   - **按键优先级**：输入法选字组合中（`isComposing` / `229`）、带修饰键或长按连发（`repeat`）、页面上有打开的弹窗 / 浮层 / 抽屉 / 预览窗、或焦点在聊天输入框以外的其他输入控件（如左栏搜索框）时忽略；`/`、`@` 弹出列表开着时按 `Esc` 只关闭弹出列表，不动文字也不暂停。
   - **第一次 `Esc`（暂停）**：当前对话正在运行，或有排队中 / 发送路上的用户消息且尚未进入停止中时，焦点在聊天输入框内或对话页面其余非输入处按 `Esc`，立即请求停止（等同点“停止”键），不改动输入框里已打的草稿。
@@ -521,18 +537,19 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
   - `viewBox="0 0 44 44"`，45° 斜置削皮水果刀，尺寸同 `Avatar.tsx` 换算为 `${size / 16}rem` 跟随第 0 条四档界面大小缩放，`aria-hidden="true"`、`data-slot="knife-avatar"`。
   - **唯一渐变 ID 铁律**：SVG `<defs>` 内的 `<linearGradient>` ID 必须用 `React.useId()` 生成实例级唯一 ID，严禁写死静态 `id="knife-blade"`（防止左栏置顶刀与顶栏刀同屏渲染后卸载其一时导致另一处 `url(#...)` 失效变黑）。
   - **配色与 WCAG 1.4.11 图形对比度**：刀身拉丝钢线性渐变（`#f4f4f6` → `#d4d4d8`）配白色刃口高光 `#ffffff`；刀背与外轮廓用 `1.5px` 深钢灰 `#3f3f46`（对白底 `#ffffff` 与侧栏 `#f6f6f7` 对比度均 ≥ 3:1，实测 > 9:1）；金属护手 `#71717a`；碳黑刀柄 `#18181b` 嵌双银色铆钉 `#d4d4d8`。
-- **`Needs You` 托盘**：只放待拍板项。没有待拍板项时不渲染。套 `.chat-column`；下边 1px `border-border` 画在列里那一层，**只和对话列一样宽，不横贯整个主区**，线下留 12px（`pb-3`）空白再接时间流的视口。滚动区桌面最高 `50dvh`、手机外壳最高 `33dvh`，超出在里面滚，上下边渐隐（`.router-tray-scroll`，同左栏列表的 8px / 20px），渐隐带落在滚动区的 `pt-2` / `pb-5` 里：没滚动时不淡，滚到底卡片的底边和圆角完整、下面留 20px。左右各外扩 10px（`-mx-2.5 px-2.5`），收起的行的果冻底不被裁。组标题照第 12 条（12px、500、灰，高 32px，右边数量），整行可点收起。第一张用 `RouterDecisionCard` 完整展开，其余每张一行（来源头像 20px、名字、问题第一行 `truncate`、时间、`ChevronRight`，行的尺寸照第 12 条），点一行换它展开，收起的行超过 3 条出 `Show more`。
+- **`Needs You` 托盘**：只放待拍板项。没有待拍板项时不渲染。套 `.chat-column`；下边 1px `border-border` 画在列里那一层，**只和对话列一样宽，不横贯整个主区**，线下留 12px（`pb-3`）空白再接时间流的视口。滚动区桌面最高 `50dvh`、手机外壳最高 `45dvh`（33dvh 时一张带两个选项的卡就被拦腰切断），超出在里面滚，上下边渐隐（`.router-tray-scroll`，同左栏列表的 8px / 20px），渐隐带落在滚动区的 `pt-2` / `pb-5` 里：没滚动时不淡，滚到底卡片的底边和圆角完整、下面留 20px。左右各外扩 10px（`-mx-2.5 px-2.5`），收起的行的果冻底不被裁。组标题照第 12 条（12px、500、灰，高 32px），数量紧跟在标题后面（隔 8px，不甩到一整行的最右端），整行可点收起。换一张卡展开时托盘滚回最上面，展开卡的来源头像和问题从头看得到。第一张用 `RouterDecisionCard` 完整展开，其余每张一行（来源头像 20px、名字、问题第一行 `truncate`、时间、`ChevronRight`，行的尺寸照第 12 条），点一行换它展开，收起的行超过 3 条出 `Show more`。
 - **待拍板卡（`RouterDecisionCard`）**：
   - 卡片容器 `rounded-2xl border border-border bg-background p-4`；一句话问题用 `text-body font-medium`，补充依据用 `text-minor text-muted-foreground`。
   - **补充依据是 Markdown**（`hub router ask` / `hub graph ask` 传来的段落、编号、子列表、行内代码）：用共用的 `<Markdown>`（第 15 条）渲染，不压成一段纯文本；卡片里是紧凑排版，段落、列表之间 0.375em（消息里的一半），不加框线。分成摘要和细节，顺序和收起照第 22 条（细节一行放得下就直接显示，超过一行默认收起）；`N downstream steps waiting` 也算细节。换一张卡展开时收起状态不带过去。
-  - **预设选项行**：`rounded-xl border border-border px-3 py-2.5`，`items-start`、行高 `leading-6`（单行正好 44px）；左放 `A` / `B` 键帽徽标（和第一行文字对齐），推荐项标 `Recommended`（12px 灰）。文字和 `Recommended` 在一个 `flex-wrap` 里：文字放得下 20rem（`basis-80`）时 `Recommended` 在右边、和第一行对齐、离文字 16px；放不下（手机）换到文字下面，不把选项挤成一条窄列。
+  - **预设选项行**：和对话里的提问卡共用 `OptionRow`（第 17 条）：`rounded-xl border border-border px-3 py-2.5`，`items-start`、行高 `leading-6`（单行正好 44px）；左放 `A` / `B` 字母徽标，推荐项的 `Recommended`（12px 灰）紧跟在文字后面隔 12px，放不下换到文字下面（`flex-wrap`）。
   - **常驻单行补充框（零二级展开按钮、零悬停隐藏操作）**：卡片底部直接内嵌单行 `<Input>`（`h-9 rounded-xl`，占位 `Add a note, or type a custom reply…`）+ 右侧同高 `Button size="icon"`（`size-9`，`ArrowUp` 图标，空输入时 `disabled` 中性灰），触屏热区均 ≥ 44px。
   - **三合一拍板路径**：
     1. **一键纯点选秒定**：补充框为空时点击任一选项按钮，立即提交该选项并乐观收起卡片（全程 1 次点击，无需二次点确认）；
     2. **点选 + 附备注**：先在补充框输入文字再点任一选项按钮，同时提交所选选项与补充说明；
     3. **纯文字自定义决定**：不点预设选项，直接在补充框输入决定后按 `Enter` 或点右侧发送按钮提交。
-  - **离线态**：卡片所属远端设备离线时整卡 `opacity-60`、右上角标 `Offline`（`text-xs text-muted-foreground`），选项与发送按钮禁用，重连后自动恢复。
-- **时间流**：从上到下按时间排，贴底，滚动规则照第 17 条“贴底”。上边 2rem 渐隐（`.router-timeline`，内容上内边距 `pt-8` 一样高）：往上滚的字在顶栏或托盘下面慢慢淡掉，不贴着一条线被腰斩。里面只有两种条目，都没有边框、底色和关闭键。
+  - **离线态**：卡片所属远端设备离线时只把来源头像调淡（第 4 条）、右上角标 `Offline`（`text-xs text-muted-foreground`），选项与发送按钮禁用，重连后自动恢复。
+- **顶栏**：下面不画横线（和对话页一样）。
+- **时间流**：从上到下按时间排，贴底，滚动规则照第 17 条“贴底”。左右边线和托盘、输入框是同一条（滚动区带 `.messages` 的列边距，里面的条目不再各加一次）。上边 2rem 渐隐（`.router-timeline`，内容上内边距 `pt-8` 一样高）：往上滚的字在顶栏或托盘下面慢慢淡掉，不贴着一条线被腰斩。里面只有两种条目，都没有边框、底色和关闭键。
   - 指令回合：用户说的话是靠右的气泡（第 17 条的用户气泡）。总助的结果靠左，开头一次水果刀头像 26px 和 `Router`（13.5px、500、灰），下面依次是去向行、Markdown 正文（第 15 条，全文不截断）、结尾一行复制键和时间（12px 灰，`tabular-nums`）。
   - 去向行：一个投递成功的目标一行。目标头像 20px、名字 15px、500，项目名和设备名 12px 灰，`gap-3`，最右 `ChevronRight`；启动、暂停、结束、新建时箭头前有 12px 灰的状态词。整行可点，尺寸和果冻底照第 12 条的行。不用“·”“|”“/”。
   - 简报：开头来源项目经理的水果头像 26px 和名字（13.5px、500、灰），项目名、设备名 12px 灰。正文 Markdown。链接是正文下面一行普通行内链接，`gap-3`，不用胶囊。结尾是时间。同一个项目经理连着几条只有第一条带头像。
@@ -550,11 +567,11 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 
 ## 22. 交付物（方案、验收结论、截图、录屏）
 
-组件只有一个：`src/web/components/Deliverables.tsx` 的 `<CardBody>`（正文和文件）和它里面的 `<DeliverableFiles>`（文件）。对话里的提问卡、右栏 Needs You 和果皮轨门禁卡、Router 待拍板卡和简报都用它。方案见 `docs/deliverables-design.md`。
+组件只有一个：`src/web/components/Deliverables.tsx` 的 `<CardBody>`（正文和文件）和它里面的 `<DeliverableFiles>`（文件）。对话里的提问卡、放大全览弹窗里的拍板卡、Router 待拍板卡和简报都用它；右栏的 Needs You 和果皮轨里等拍板的步骤只有一行，不列文件（第 12 条）。方案见 `docs/deliverables-design.md`。
 
 - **顺序**：标题 → 摘要 → 文件 → 细节 → 选项。用户最要看的是“做了什么”和文件，手机托盘只有三分之一屏高，文件行要不滑就看得到。
   - **摘要**：正文的第一段（`shared/card-text.ts` 的 `splitLead`，代码块外的第一个空行分界）。收起时最多 3 行（`.card-lead-clamp`，行数只在 `styles.css` 改），超出的最后一行渐隐。写卡片正文的地方把最要紧的一句放第一段：检查点卡第一段是 `**摘要**：`，汇报摘要里的空行并成换行。
-  - **细节**：第一段以后的段落（交棒要点、提交、PR、附带说明），加上简报的链接行、拍板卡的 `N downstream steps waiting`。排在文件后面。**一行放得下就直接显示**（比如只有一两个链接、一行提交号）：这时 `Show more` 自己就占一行，收起来只是多点一下。**超过一行默认收起**。一行的判断：画出来量细节框的高度，比 2.4em（按细节的字号）矮算一行（`DETAILS_ONE_LINE_MAX_EM`）；卡片变宽变窄、内容变了重量一次，在绘制前定下来，不闪；量不到高度时当放不下。四处同一个规则，只在 `CardBody` 里写，不给哪一处单加判断。
+  - **细节**：第一段以后的段落（交棒要点、提交、PR、附带说明），加上简报的链接行、拍板卡的 `N downstream steps waiting`。排在文件后面。**一行放得下就直接显示**（比如只有一两个链接、一行提交号）：这时 `Show more` 自己就占一行，收起来只是多点一下。**超过一行默认收起**。一行的判断：画出来量细节框的高度，比 2.4em（按细节的字号）矮算一行（`DETAILS_ONE_LINE_MAX_EM`）；卡片变宽变窄、内容变了重量一次，在绘制前定下来，不闪；量不到高度时当放不下。各处同一个规则，只在 `CardBody` 里写，不给哪一处单加判断。
   - **一个开关**：摘要超过 3 行或细节被收起时，最下面一个 `Show more` / `Show less`（`text-minor` 灰字按钮，`aria-expanded`，`aria-controls` 指向整块正文），同时管摘要的收起和细节；都没有不出按钮。
   - 块与块之间 8px（`flex flex-col gap-2`）；没有的块不渲染，不留空。
 

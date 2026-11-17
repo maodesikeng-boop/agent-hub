@@ -121,7 +121,10 @@ describe("按类型选渲染方式", () => {
     const table = await screen.findByRole("table");
     expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["名字", "数"]);
     expect(table.querySelector("thead th")!.className).toContain("sticky");
-    expect(table.closest("[data-preview-table]")!.className).toContain("overflow-auto");
+    // 滚的是外面那个内容框（表格自己不再套一层滚动）：表头才粘得住，预览窗也才能跟着表的大小走
+    expect(table.closest("[data-preview-table]")!.className).not.toContain("overflow");
+    expect(table.closest("[data-preview-table]")!.parentElement!.className).toContain("overflow-auto");
+    expect(screen.getByRole("dialog").className).not.toContain("h-[90vh]");
     expect(within(table).getAllByRole("row")).toHaveLength(MAX_PREVIEW_CSV_ROWS + 1);
     expect(screen.getByText("2500 rows, showing the first 1000")).toBeInTheDocument();
     expect(calls[0]!.headers.range).toBeUndefined();
@@ -142,6 +145,8 @@ describe("按类型选渲染方式", () => {
     expect(frame).toHaveAttribute("src", `${API_PATHS.sentFile(ID, "报告.pdf")}?inline=1`);
     expect(frame).not.toHaveAttribute("sandbox");
     expect(calls).toEqual([]);
+    // 内嵌的查看器自己没有大小：预览窗开到接近全屏
+    expect(screen.getByRole("dialog").className).toContain("h-[90vh]");
   });
 
   it("HTML：iframe sandbox 只有 allow-scripts（没有 allow-same-origin）", () => {

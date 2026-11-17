@@ -8,7 +8,8 @@ const FIELD =
   "w-full rounded-xl border border-border bg-background px-3 text-body outline-none transition-colors placeholder:text-muted-foreground aria-invalid:border-danger disabled:cursor-default disabled:opacity-50";
 
 export function Input({ className, ...props }: React.ComponentProps<"input">) {
-  return <input data-slot="input" className={cn(FIELD, "h-9", className)} {...props} />;
+  // 触屏下输入框本身 44px 高（第 19 条）：输入框没法用 ::after 撑开可点范围
+  return <input data-slot="input" className={cn(FIELD, "h-9 pointer-coarse:h-11", className)} {...props} />;
 }
 
 export function Textarea({ className, ...props }: React.ComponentProps<"textarea">) {
@@ -31,7 +32,7 @@ export function Select({ className, variant = "field", ...props }: React.Compone
           variant === "plain"
             ? "field-sizing-content rounded-xl bg-transparent pr-8 pl-3 text-body outline-none transition-colors hover:bg-sidebar-hover focus-visible:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:opacity-50"
             : cn(FIELD, "pr-8"),
-          "h-9 w-auto max-w-65 min-w-0 cursor-pointer appearance-none truncate",
+          "h-9 w-auto max-w-65 min-w-0 cursor-pointer appearance-none truncate pointer-coarse:h-11",
           className,
         )}
         {...props}

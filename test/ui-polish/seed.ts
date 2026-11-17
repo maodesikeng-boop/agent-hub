@@ -27,6 +27,7 @@ import {
   type SessionId,
   type VendorAvailability,
 } from "../../src/shared/index.ts";
+import { REPORT_END, REPORT_START } from "../../src/shared/worker.ts";
 import { wrapScriptAsPlatformCli } from "../fake-cli-shim.ts";
 import { assertIsolated } from "./isolation.ts";
 import { BROWSER_NOW_ISO, SEED_START_ISO, SEED_STEP_MS } from "./limits.ts";
@@ -199,6 +200,13 @@ class Story {
     return id;
   }
 
+  /** 一条用户消息没发出去（还没送达，agent 进程就崩了）：气泡左边是红色感叹号。 */
+  unsent(pm: PmHandle, text: string): number {
+    const id = this.post(pm, text);
+    this.ledger.applyDriverEvent(pm.sessionId, { type: "session.exited", reason: "crash", exitCode: 1, signal: null, hadResult: false, messageIds: [id], at: this.at() });
+    return id;
+  }
+
   /**
    * 还排着队要交给 agent 的消息（拍板定案、Worker 汇报）都当这一轮已经处理完：不然守护进程起来会把它们发给假 claude，
    * 回一句按真实时间记的“ok”，每次截图都不一样。
@@ -287,12 +295,22 @@ const SCENARIOS: Record<Scenario | "two-devices-peer", (s: Story) => void> = {
   "two-devices-peer"(s) {
     const tokyo = s.pm("tokyo", "东京小助手");
     s.turn(tokyo, "今天的构建跑完了吗？", ["跑完了，全部通过，耗时 6 分 12 秒。"]);
+    // 这台设备上一条没回答的提问：离线后总助托盘里那张卡不能点（router.offline-card）
+    s.ledger.hubCall(tokyo.sessionId, "ask", {
+      text: "夜间构建要不要挪到凌晨 3 点？\n\n现在 1 点跑，和数据库备份撞在一起，构建机的磁盘读写被打满。",
+      options: ["挪到 3 点", "保持 1 点"],
+      recommended: "挪到 3 点",
+    });
     const lab = s.pm("lab", "实验室");
     s.turn(lab, "GPU 机器空出来了吗？", ["空出来了，A100 两张都闲着。"]);
   },
 };
 
 const PR_142 = "https://github.com/example/agent-hub/pull/142";
+
+/** Worker 按九栏格式写的汇报（src/shared/worker.ts 的 WORKER_REPORT_FORMAT）：守护进程认得出状态，汇报气泡的头像上才有状态点。 */
+const workerReport = (status: "做完了" | "有问题" | "放弃了", summary: string): string =>
+  [REPORT_START, `状态: ${status}`, `摘要: ${summary}`, "PR: 无", "提交: 无", "测试: 无", "偏离: 无", "交棒: 无", "文件: 无", "问题: 无", REPORT_END].join("\n");
 
 function standard(s: Story): void {
   const repo = s.repo("agent-hub");
@@ -338,8 +356,10 @@ function standard(s: Story): void {
     specJson: JSON.stringify({ title: "备份校验", steps: [{ key: "verify", title: "校验昨晚的备份", brief: "跑 scripts/verify-backup.sh，贴结果", vendor: "agy" }] }),
   });
 
-  // Momo：一条处理失败、带附件（图片、文件、文件已过期）
+  // Momo：一条没发出去、一条处理失败、带附件（图片、文件、文件已过期）
   const momo = pms.momo!;
+  s.unsent(momo, "Post the summary to the team channel");
+  s.jump(1);
   s.fail(momo, "Translate the weekly draft into Japanese");
   s.jump(3);
   s.withAttachments(momo, "Here are the screenshots and the spreadsheet", [
@@ -359,7 +379,7 @@ function standard(s: Story): void {
     lin,
     "把自动换会话的阈值改成按厂商配置，顺便查一下为什么只读 Worker 偶发超时",
     [
-      "好，我拆成三步：\n\n1. **按厂商配置换会话阈值**：改 `VENDOR_SPECS` 与账本\n2. **排查只读 Worker 超时**：只读排查工具清单缓存与超时逻辑\n3. **补边界测试**：两处改完后一起补\n\n第 2 步要你定一下失败结果缓存多久，卡挂在右栏了。",
+      "好，我拆成三步：\n\n1. **按厂商配置换会话阈值**：改 `VENDOR_SPECS` 与账本\n2. **排查只读 Worker 超时**：只读排查工具清单缓存与超时逻辑\n3. **补边界测试**：两处改完后一起补\n\n第 2 步要你定一下失败结果缓存多久，卡在下面。",
     ],
     [
       { name: "Read", input: { file_path: "src/shared/vendors.ts" } },
@@ -381,11 +401,11 @@ function standard(s: Story): void {
   });
   s.ids["graph.lin"] = graph.data.graph.id;
   s.ledger.hubCall(lin.sessionId, "graph.done", { nodeKey: "plan", summary: "拆成两路并行" });
-  const w1 = s.worker(lin, "threshold", "按厂商配置换会话阈值", "把 AUTO_RENEW_CONTEXT_TOKENS 改成按厂商配置，补测试。", "做完了：阈值挪进 VENDOR_SPECS，32 条测试通过，PR #142。");
+  const w1 = s.worker(lin, "threshold", "按厂商配置换会话阈值", "把 AUTO_RENEW_CONTEXT_TOKENS 改成按厂商配置，补测试。", workerReport("做完了", "阈值挪进 VENDOR_SPECS，32 条测试通过，PR #142。"));
   s.ids["w.threshold"] = w1.workerConversationId;
   s.ledger.hubCall(lin.sessionId, "worker.end", { workerId: w1.id });
   s.ledger.hubCall(lin.sessionId, "graph.done", { nodeKey: "threshold", summary: "32 条测试通过", prUrl: PR_142 });
-  const w2 = s.worker(lin, "timeout", "排查只读 Worker 超时", "只读排查：为什么只读 Worker 偶发超时。", "查到了：MCP 首次握手超过 30 秒时失败结果被缓存了 10 分钟。要定缓存多久。");
+  const w2 = s.worker(lin, "timeout", "排查只读 Worker 超时", "只读排查：为什么只读 Worker 偶发超时。", workerReport("有问题", "MCP 首次握手超过 30 秒时失败结果被缓存了 10 分钟。要定缓存多久。"));
   s.ids["w.timeout"] = w2.workerConversationId;
   s.ledger.hubCall(lin.sessionId, "ask", {
     node: "timeout",

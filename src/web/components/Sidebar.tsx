@@ -1,4 +1,4 @@
-import { ChevronRight, Plus, Search, Settings } from "lucide-react";
+import { ChevronRight, Plus, Search, Settings, X } from "lucide-react";
 import { Fragment, memo, useState, type ReactNode } from "react";
 import { conversationKey, isReadOnly, type DeviceKey, type DeviceStatus } from "../devices.ts";
 import { formatArchiveRemaining, formatTime, NEEDS_YOU, YOUR_TURN } from "../format.ts";
@@ -18,6 +18,13 @@ import { SettingsDialog, type DeviceSettings, type SettingsDialogSection } from 
 /** 行的果冻底（docs/ui-standard.md 第 4 条）：选中、悬停是这个项目经理水果色的极淡底，颜色经 --jelly 交给 styles.css 的 bg-jelly。 */
 const jellyOf = (avatarKey: number) => ({ "--jelly": paletteOf(avatarKey).accent }) as React.CSSProperties;
 const JELLY_ROW = (active: boolean) => (active ? "bg-jelly" : "hover:bg-jelly-hover");
+
+// 窄栏头像右下角的绿点：外面一圈描边和它压着的底同色，选中的行压在果冻底上（10% 水果色盖在左栏底上）
+const RAIL_DOT = "absolute right-0 bottom-0 size-2 rounded-full bg-status-active ring-2 ring-surface-sidebar";
+const RAIL_DOT_ON_JELLY = "ring-[color-mix(in_srgb,var(--jelly)_10%,var(--color-surface-sidebar))]";
+// 左栏里的小组头（设备、Archived）：同一套 12px 灰字，整行可点
+const GROUP_HEADER =
+  "flex h-8 w-full cursor-pointer items-center gap-2 rounded-2xl px-3 text-left text-xs font-medium text-muted-foreground outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50 pointer-coarse:h-11";
 
 export type SidebarLayout = "wide" | "rail" | "page";
 
@@ -74,7 +81,9 @@ function RouterRowButton({ router, active }: { router: SidebarRouterEntry; activ
           <span className="truncate text-body font-semibold">Router</span>
           {badge}
         </span>
-        <span className="mt-0.5 block truncate text-minor text-muted-foreground">{router.subtitle || "All clear"}</span>
+        <span title={router.subtitle || undefined} className="mt-0.5 block truncate text-minor text-muted-foreground">
+          {router.subtitle || "All clear"}
+        </span>
       </span>
     </button>
   );
@@ -138,6 +147,7 @@ function EntryButton({
     ) : entry.lastMessage ? (
       <span className="text-xs text-muted-foreground tabular-nums">{formatTime(entry.lastMessage.createdAt)}</span>
     ) : null;
+  const preview = previewText(entry);
   return (
     <button
       type="button"
@@ -150,10 +160,11 @@ function EntryButton({
       onClick={onSelect}
     >
       <Avatar colorKey={entry.avatarKey} size={44} />
-      <span className="min-w-0 flex-1">
+      {/* 两行字高 48px：没有消息的行只剩名字，和头像垂直居中，行高不变 */}
+      <span className="flex min-h-12 min-w-0 flex-1 flex-col justify-center">
         <span className="flex items-center justify-between gap-2">
           <span className="flex min-w-0 flex-1 items-baseline gap-2 overflow-hidden">
-            <span className={cn("truncate text-body font-semibold", device && "max-w-[70%] shrink-0")}>{entry.name}</span>
+            <span title={entry.name} className={cn("truncate text-body font-semibold", device && "max-w-[70%] shrink-0")}>{entry.name}</span>
             {device && (
               <span data-testid="entry-device" title={device} className="min-w-0 truncate text-xs text-muted-foreground">
                 {device}
@@ -162,8 +173,11 @@ function EntryButton({
           </span>
           {tag && <span className="flex shrink-0 items-center">{tag}</span>}
         </span>
-        {/* 没有消息也占一行的高度，每行一样高 */}
-        <span className="mt-0.5 block truncate text-minor text-muted-foreground">{previewText(entry) || " "}</span>
+        {preview !== "" && (
+          <span title={preview} className="mt-0.5 block truncate text-minor text-muted-foreground">
+            {preview}
+          </span>
+        )}
       </span>
     </button>
   );
@@ -202,7 +216,7 @@ function NarrowEntryButton({
             aria-label={NEEDS_YOU}
             title={NEEDS_YOU}
             data-testid="asking-indicator"
-            className="absolute right-0 bottom-0 size-2 rounded-full bg-status-active ring-2 ring-surface-sidebar"
+            className={cn(RAIL_DOT, active && RAIL_DOT_ON_JELLY)}
           />
         ) : waiting ? (
           <span
@@ -210,7 +224,7 @@ function NarrowEntryButton({
             aria-label={YOUR_TURN}
             title={YOUR_TURN}
             data-testid="waiting-indicator"
-            className="absolute right-0 bottom-0 size-2 rounded-full bg-status-active ring-2 ring-surface-sidebar"
+            className={cn(RAIL_DOT, active && RAIL_DOT_ON_JELLY)}
           />
         ) : null}
       </span>
@@ -228,11 +242,11 @@ function matches(entry: ConversationEntry, query: string): boolean {
 /** 一台设备的组头：设备名 + 状态点 + 系统图标，点了折叠。离线的整组变灰。 */
 function DeviceGroup({ group, open, onToggle, children }: { group: SidebarGroup; open: boolean; onToggle: () => void; children: ReactNode }) {
   return (
-    <section aria-label={group.name} data-device-status={group.status} className="pt-2 first:pt-0">
+    <section aria-label={group.name} data-device-status={group.status} className="pt-4 first:pt-0">
       <button
         type="button"
         aria-expanded={open}
-        className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-2xl px-3 text-left text-xs font-medium text-muted-foreground outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50"
+        className={GROUP_HEADER}
         onClick={onToggle}
       >
         <span className="truncate">{group.name}</span>
@@ -243,7 +257,8 @@ function DeviceGroup({ group, open, onToggle, children }: { group: SidebarGroup;
           <PlatformIcon platform={group.platform} className="size-3.5" />
         </span>
       </button>
-      {open && <div className={cn("mt-1 space-y-1", isReadOnly(group.status) && "opacity-60")}>{children}</div>}
+      {/* 离线、没连上过的组只把头像调淡：字照常，调淡了对比度就不够（组头的 Offline 和灰点已经说明状态） */}
+      {open && <div className={cn("mt-1 space-y-1", isReadOnly(group.status) && "[&_[data-slot=avatar]]:opacity-50")}>{children}</div>}
     </section>
   );
 }
@@ -337,6 +352,10 @@ export const Sidebar = memo(
     const [collapsed, setCollapsed] = useState<ReadonlySet<DeviceKey>>(new Set());
     const [archivedOpen, setArchivedOpen] = useState<ReadonlySet<DeviceKey>>(new Set());
     const grouped = groups.length > 1;
+    const searching = query.trim() !== "";
+    const anyMatch = groups.some((g) => g.entries.some((entry) => matches(entry, query)));
+    // 搜索时置顶的 Router 也要对得上才留着，不然像是搜到了它
+    const routerMatches = !searching || "router".includes(query.trim().toLowerCase());
 
     const hasUnarchived = groups.some((g) => g.entries.some((e) => e.pm?.archivedAt == null));
     const narrowEntries = groups.flatMap((group) =>
@@ -373,7 +392,7 @@ export const Sidebar = memo(
               <button
                 type="button"
                 aria-expanded={showArchived}
-                className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-2xl px-3 text-left text-xs font-medium text-muted-foreground outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50"
+                className={GROUP_HEADER}
                 onClick={() =>
                   setArchivedOpen((prev) => {
                     const next = new Set(prev);
@@ -412,7 +431,7 @@ export const Sidebar = memo(
               </div>
             )}
             <nav
-              className="sidebar-list flex flex-1 flex-col items-center gap-1.5 overflow-x-hidden overflow-y-auto overscroll-y-contain px-0 pt-1 pb-3"
+              className="sidebar-list flex flex-1 flex-col items-center gap-1.5 overflow-x-hidden overflow-y-auto overscroll-y-contain px-0 pt-3 pb-5"
               aria-label="Conversations"
             >
               {narrowEntries.map(({ group, entry }) => {
@@ -445,27 +464,35 @@ export const Sidebar = memo(
               data-window-drag
               className="relative flex h-16 shrink-0 items-center gap-2 px-3 before:absolute before:inset-x-0 before:bottom-full before:h-[calc(var(--safe-top)+var(--macos-traffic-lights-height))] before:content-['']"
             >
-              <div className="relative min-w-0 flex-1">
-                <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+              {/* 搜索框的外形在这一层：放大镜、输入、清除键并排，清除键不压在输入框上 */}
+              <div className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-xl bg-sidebar-active pr-0.5 pl-3 pointer-coarse:h-11">
+                <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                 <Input
                   type="search"
                   aria-label="Search"
                   placeholder="Search"
-                  className="h-9 border-transparent bg-sidebar-active pl-9"
+                  className="h-full min-w-0 flex-1 rounded-none border-0 bg-transparent px-0 pointer-coarse:h-full"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                 />
+                {searching && (
+                  <Button variant="ghost" size="icon-sm" className="shrink-0" aria-label="Clear search" onClick={() => setQuery("")}>
+                    <X aria-hidden="true" />
+                  </Button>
+                )}
               </div>
               <Button variant="ghost" size="icon" className="shrink-0" aria-label="New project manager" onClick={onNewPm}>
                 <Plus aria-hidden="true" />
               </Button>
             </div>
-            {router && (
-              <div className="shrink-0 border-b border-line px-3 pb-2">
+            {router && routerMatches && (
+              <div className="shrink-0 px-3">
                 <RouterRowButton router={router} active={routerActive} />
+                <div className="mx-3 mt-2 border-b border-line" aria-hidden="true" />
               </div>
             )}
-            <nav className={cn("sidebar-list flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-3 pt-1 pb-3", !grouped && "space-y-1")} aria-label="Conversations">
+            <nav className={cn("sidebar-list flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-3 pt-3 pb-5", !grouped && "space-y-1")} aria-label="Conversations">
+              {searching && !anyMatch && !routerMatches && <p className="flex h-9 items-center px-3 text-minor text-muted-foreground">No matching conversations</p>}
               {grouped
                 ? groups.map((group) => (
                     <DeviceGroup

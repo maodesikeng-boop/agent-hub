@@ -28,6 +28,9 @@ import { AgentRows, draftOf, settingOf } from "./AgentRows.tsx";
 import { ModeRows } from "./ModeRows.tsx";
 import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
+/** 名字、主文件夹两行右边控件的宽度（288px）：两行左右边线对齐；主文件夹的输入框和 Choose… 一起占这么宽，一行放得下、不折行。 */
+const FIELD_WIDTH = "w-72";
+
 /** 新建项目经理时能选的一台设备。 */
 export interface NewPmDevice {
   key: DeviceKey;
@@ -130,7 +133,7 @@ function NewPmForm({
                 value={name}
                 autoFocus={!mobile}
                 autoComplete="off"
-                className={mobile ? "min-w-0 flex-1" : "w-60"}
+                className={mobile ? "min-w-0 flex-1" : FIELD_WIDTH}
                 aria-invalid={nameProblem !== null}
                 onChange={(e) => setName(e.target.value)}
               />
@@ -138,7 +141,7 @@ function NewPmForm({
           </SettingsRow>
           <SettingsRow label="Main folder" stacked={mobile} error={pickError}>
             {(id) => (
-              <>
+              <div className={cn("flex items-center gap-2", mobile ? "min-w-0 flex-1" : FIELD_WIDTH)}>
                 <Input
                   id={id}
                   value={folder}
@@ -147,16 +150,16 @@ function NewPmForm({
                   autoCorrect="off"
                   spellCheck={false}
                   placeholder="Optional"
-                  className={mobile ? "min-w-0 flex-1" : "w-60 min-w-0"}
+                  className="min-w-0 flex-1"
                   onChange={(e) => setFolder(e.target.value)}
                 />
                 {canPick && (
-                  <Button type="button" variant="outline" disabled={picking || busy} onClick={() => void pickFolder()}>
+                  <Button type="button" variant="outline" className="shrink-0" disabled={picking || busy} onClick={() => void pickFolder()}>
                     {picking && <Loader2 className="animate-spin" aria-hidden="true" />}
                     Choose…
                   </Button>
                 )}
-              </>
+              </div>
             )}
           </SettingsRow>
         </SettingsGroup>

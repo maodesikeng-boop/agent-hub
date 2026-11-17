@@ -13,6 +13,8 @@ import {
   type BrowserSessionsResponse,
   type LoginLinkResponse,
   type ModelsResponse,
+  type PmMemoryFileDetail,
+  type PmMemoryFilesList,
   type QuotaResponse,
   type RateLimitInfo,
   type StateSnapshot,
@@ -33,6 +35,7 @@ export const PATCH_NAMES = [
   "blocker-checking",
   "vendors-mixed",
   "models-long-names",
+  "memory-files",
   "router-working",
   "router-failed",
   "router-vendor-agy",
@@ -54,7 +57,8 @@ export type PatchName = (typeof PATCH_NAMES)[number];
 const NOW = Date.parse(BROWSER_NOW_ISO);
 const HOUR = 3_600_000;
 const anyDevice = (path: string) => new RegExp(`^https?://[^/]+(?:/d/[^/]+)?${path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\?.*)?$`);
-const localOnly = (path: string) => new RegExp(`^https?://[^/]+${path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\?.*)?$`);
+// 入口本机的接口：HTTP 的和 WebSocket 的都认（routeWebSocket 拿到的网址是 ws:// 开头）
+const localOnly = (path: string) => new RegExp(`^(?:https?|wss?)://[^/]+${path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\?.*)?$`);
 
 async function editJson<T>(page: Page, url: RegExp, edit: (body: T) => T): Promise<void> {
   await page.route(url, async (route) => {
@@ -116,8 +120,12 @@ const claudeWindows = (fiveHour: number, sevenDay: number): RateLimitInfo => ({
 function quota(page: Page, claude: RateLimitInfo, agy: QuotaResponse): Promise<void[]> {
   return Promise.all([
     editState(page, (state) => {
-      const pm = firstPmConversation(state);
-      return { ...state, sessions: state.sessions.map((s) => (s.conversationId === pm ? { ...s, vendor: "claude", rateLimit: claude } : s)) };
+      const [pm, second] = state.conversations.filter((c) => c.conversation.kind === "pm").map((c) => c.conversation.id);
+      // 第二个项目经理用 Antigravity：有按需查额度的厂商在用，浮层才会去查它的两个模型族（selectors.ts 的 hasFetchedQuotaSession）
+      return {
+        ...state,
+        sessions: state.sessions.map((s) => (s.conversationId === pm ? { ...s, vendor: "claude", rateLimit: claude } : s.conversationId === second ? { ...s, vendor: "agy" } : s)),
+      };
     }),
     fixedJson(page, anyDevice(API_PATHS.quota), agy),
     editJson<ModelsResponse>(page, anyDevice(API_PATHS.models), (m) => ({ catalogs: m.catalogs.map((c) => (c.vendor === "agy" ? { ...c, availability: "available" } : c)) })),
@@ -190,6 +198,12 @@ const job = (phase: "running" | "failed", logTail: string) => ({
 });
 
 const INSTALL_LOG = ["npm notice Beginning install", "added 112 packages in 6s", "npm error code EACCES", "npm error syscall mkdir", "npm error path /usr/local/lib/node_modules"].join("\n");
+
+const MEMORY_FILES: readonly PmMemoryFileDetail[] = [
+  { name: "conventions.md", bytes: 4_200, updatedAt: NOW - 2 * HOUR, content: "# 约定\n\n- 改动前先说清边界\n- 测试不过不交\n- 周报每周五发" },
+  { name: "crawler-notes.md", bytes: 512_000, updatedAt: NOW - 26 * HOUR, content: "# 抓取笔记\n\n限流时退避到每 3 小时一次。" },
+  { name: "release-log.md", bytes: 356_000, updatedAt: NOW - 5 * 24 * HOUR, content: "# 发布记录\n\n1.4：换会话阈值按厂商配置。" },
+];
 
 const LONG_MODEL = "claude-opus-5-5-20261101-extended-thinking-preview-with-a-very-long-identifier";
 
@@ -280,7 +294,9 @@ const PATCHES: Record<PatchName, (page: Page) => Promise<unknown>> = {
       editJson<ModelsResponse>(page, anyDevice(API_PATHS.models), (m) => ({ catalogs: m.catalogs.map(mixedCatalog) })),
       providers(page),
     ]),
-  "models-long-names": (page) =>
+  // 总助指定用这个超长名字的模型：顶栏的入口和面板里 Claude 那一行都要显示它（只往名单里加一个没人用的模型，界面上看不到）
+  "models-long-names": (page) => Promise.all([
+    editState(page, (state) => ({ ...state, router: { ...state.router, settings: { ...state.router.settings, vendor: "claude", model: LONG_MODEL, effort: "high" } } })),
     editJson<ModelsResponse>(page, anyDevice(API_PATHS.models), (m) => ({
       catalogs: m.catalogs.map((c) =>
         c.vendor === "claude"
@@ -288,6 +304,17 @@ const PATCHES: Record<PatchName, (page: Page) => Promise<unknown>> = {
           : mixedCatalog(c),
       ),
     })),
+  ]),
+  // 记忆文件：三个子文件，合计接近 1 MB 上限（出配额提示）；点开一个能看到内容
+  "memory-files": (page) => Promise.all([
+    fixedJson(page, /\/api\/pms\/\d+\/memory-files$/, { files: MEMORY_FILES.map(({ content: _content, ...summary }) => summary), totalBytes: MEMORY_FILES.reduce((sum, f) => sum + f.bytes, 0) } satisfies PmMemoryFilesList),
+    page.route(/\/api\/pms\/\d+\/memory-files\/[^/]+$/, (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const name = decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-1)!);
+      const file = MEMORY_FILES.find((f) => f.name === name) ?? MEMORY_FILES[0]!;
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(file satisfies PmMemoryFileDetail) });
+    }),
+  ]),
   "router-working": (page) =>
     editState(page, (state) => ({
       ...state,
@@ -328,7 +355,7 @@ const PATCHES: Record<PatchName, (page: Page) => Promise<unknown>> = {
         { vendor: "agy", id: "claude_gpt", windows: { five_hour: { utilization: 1, resetsAt: Math.floor((NOW + 4 * HOUR) / 1000), status: "rejected" }, seven_day: { utilization: 0.97, resetsAt: Math.floor((NOW + 50 * HOUR) / 1000), status: "allowed" } } },
       ],
     }),
-  "provider-installing": (page) => providers(page, (v) => (v === "agy" ? { installed: false, availability: "not_installed", job: job("running", INSTALL_LOG.split("\n").slice(0, 2).join("\n")) } : {})),
+  "provider-installing": (page) => providers(page, (v) => (v === "agy" ? { installed: false, version: null, accountSummary: null, canInstall: true, canUpdate: false, canSignOut: false, availability: "not_installed", job: job("running", INSTALL_LOG.split("\n").slice(0, 2).join("\n")) } : {})),
   "provider-login-code": (page) =>
     providers(page, (v) =>
       v === "deepseek"
@@ -348,7 +375,7 @@ const PATCHES: Record<PatchName, (page: Page) => Promise<unknown>> = {
           }
         : {},
     ),
-  "provider-failed": (page) => providers(page, (v) => (v === "agy" ? { installed: false, availability: "not_installed", job: job("failed", INSTALL_LOG) } : {})),
+  "provider-failed": (page) => providers(page, (v) => (v === "agy" ? { installed: false, version: null, accountSummary: null, canInstall: true, canUpdate: false, canSignOut: false, availability: "not_installed", job: job("failed", INSTALL_LOG) } : {})),
   "vendor-sync-preview": (page) => fixedJson(page, anyDevice(API_PATHS.vendorSyncPreview), SYNC_PREVIEW),
   "browsers-pending": (page) =>
     editJson<BrowserSessionsResponse>(page, localOnly(API_PATHS.browserSessions), (body) => ({

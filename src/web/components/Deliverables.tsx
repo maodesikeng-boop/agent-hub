@@ -110,11 +110,15 @@ export const DeliverableFiles = memo(function DeliverableFiles({ deliverables, c
 const NO_DELIVERABLES: readonly Deliverable[] = [];
 /** 细节比这个高（em，按细节框的字号）就收起：Markdown 一行 1.65em、两行 3.3em，链接行一行约 1.5em。 */
 const DETAILS_ONE_LINE_MAX_EM = 2.4;
+/** 摘要一行的高度（em）：同 styles.css 里 .markdown 的行高。 */
+const LEAD_LINE_HEIGHT_EM = 1.65;
+/** 读不到 styles.css 的 --card-lead-lines 时（jsdom）摘要按 3 行收。 */
+const LEAD_FALLBACK_LINES = 3;
 /** jsdom 之类读不到字号时按 16px 算。 */
 const FALLBACK_FONT_PX = 16;
 
 /**
- * 卡片正文：第一段摘要（超过 3 行收起、底部渐隐，行数在 styles.css 的 `.card-lead-clamp`）→ 交付物 → 细节（其余段落和 extra）。
+ * 卡片正文：第一段摘要（比 3 行多出一行以上才收成 3 行、底部渐隐，行数在 styles.css 的 `--card-lead-lines`）→ 交付物 → 细节（其余段落和 extra）。
  * 细节一行放得下（比如只有一个 PR 链接、一行提交号）就直接显示；超过一行默认收起。一个 `Show more` / `Show less` 同时管摘要的收起和细节，
  * 没有要收的就不出按钮。细节放不放得下是画出来量的：内容或卡片宽度变了，先画出来再量一次，在浏览器绘制之前定下来，不会闪。
  * 量不到高度（没排版）时当放不下。同一张卡换了内容要重置展开状态，调用方给 key。textClassName 是摘要和细节的字号颜色，className 给外边距。
@@ -157,7 +161,13 @@ export const CardBody = memo(function CardBody({
   useLayoutEffect(() => {
     const box = leadRef.current;
     if (box === null || expanded) return;
-    const measure = () => setOverflowing(box.scrollHeight > box.clientHeight + 1);
+    // 只多出不到一行就不收：Show more 自己要占一行，收起来没省地方，还多点一下
+    const measure = () => {
+      const style = getComputedStyle(box);
+      const lineHeight = LEAD_LINE_HEIGHT_EM * (Number.parseFloat(style.fontSize) || FALLBACK_FONT_PX);
+      const lines = Number.parseInt(style.getPropertyValue("--card-lead-lines"), 10) || LEAD_FALLBACK_LINES;
+      setOverflowing(box.scrollHeight > (lines + 1) * lineHeight + 1);
+    };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(box);
@@ -189,7 +199,7 @@ export const CardBody = memo(function CardBody({
           ref={leadRef}
           data-card-lead
           data-overflowing={overflowing && !expanded ? "" : undefined}
-          className={cn("w-full min-w-0", textClassName, !expanded && "card-lead-clamp")}
+          className={cn("w-full min-w-0", textClassName, overflowing && !expanded && "card-lead-clamp")}
         >
           <Markdown text={lead} files={files} messageId={messageId} />
         </div>

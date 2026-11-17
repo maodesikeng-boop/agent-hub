@@ -10,8 +10,14 @@ export function vegaLiteConfig(theme: ChartTheme): Config {
     background: theme.background,
     font: theme.fontFamily,
     view: { stroke: "transparent" },
-    // 没写颜色的 mark 用第一个分类色；悬停提示默认开（vega-embed 自带的 tooltip 会转义内容）
-    mark: { color: first, tooltip: true },
+    // 没写颜色的 mark（只有一个序列）用中性的次要文字色：大面积的柱、面不抢色，分类色留给真有“按颜色分”的图；
+    // 悬停提示默认开（vega-embed 自带的 tooltip 会转义内容）
+    mark: { color: theme.mutedForeground, tooltip: true },
+    // 柱子瘦一点、顶端 4px 圆角、七成浓度（对白底仍 ≥ 3:1，WCAG 1.4.11）：不成一堵实心的深色墙
+    bar: { cornerRadiusEnd: 4, fillOpacity: 0.7 },
+    scale: { bandPaddingInner: 0.45, bandPaddingOuter: 0.25 },
+    // 横轴的类目标签横着写（库默认竖排 -90°，要歪头看）；放不下时隔一个省一个
+    axisX: { labelAngle: 0, labelOverlap: "parity" },
     text,
     title: { font: theme.fontFamily, color: theme.foreground, fontSize: theme.fontSize, fontWeight: 500, anchor: "start" },
     axis: {

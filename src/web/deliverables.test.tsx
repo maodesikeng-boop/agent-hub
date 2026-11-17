@@ -21,6 +21,7 @@ import { App } from "./App.tsx";
 import { createClient } from "./client.ts";
 import { DeliverableFiles } from "./components/Deliverables.tsx";
 import { RightRail } from "./components/RightRail.tsx";
+import { TaskGraphDialog } from "./components/TaskGraphDialog.tsx";
 import { DeviceScope } from "./device-scope.tsx";
 import { resetQueryClient } from "./query-client.ts";
 import {
@@ -211,6 +212,10 @@ async function bootApp(snapshot: StateSnapshot) {
   return api;
 }
 
+/** 拍板卡只在放大全览弹窗里画（右栏果皮轨里那一步只有一行）。 */
+const renderGateDialog = (graph: TaskGraph) =>
+  render(<TaskGraphDialog open graph={graph} workers={[]} colorKey={1} onOpenChange={() => {}} onOpenWorker={() => {}} />);
+
 const LONG_DETAILS = "**交棒要点**：\n" + "改了卡片的顺序，".repeat(40) + "\n\n提交 `22f68fed` · PR https://github.com/o/r/pull/333";
 const CHECKPOINT_TEXT = `**摘要**：做完了\n\n${LONG_DETAILS}`;
 
@@ -242,15 +247,13 @@ function layoutDetailsByText() {
   });
 }
 
-describe("细节只占一行时直接显示，不收起（四处同一个规则）", () => {
+describe("细节只占一行时直接显示，不收起（各处同一个规则）", () => {
   beforeEach(() => layoutDetailsByText());
 
-  it("门禁卡：细节只有一行提交号，直接显示、不出 Show more", () => {
+  it("全览弹窗的门禁卡：细节只有一行提交号，直接显示、不出 Show more", () => {
     const graph = gateGraph();
     graph.nodes[0] = { ...graph.nodes[0]!, gateSummaryMd: "**摘要**：做完了\n\n提交 `22f68fed`" };
-    render(
-      <RightRail asks={[]} workers={[]} activeGraphs={[graph]} openWorkerId={null} layout="side" avatarKey={1} onOpenAsk={() => {}} onOpenWorker={() => {}} />,
-    );
+    renderGateDialog(graph);
     const card = screen.getByTestId("peel-gate-card");
     const files = card.querySelector<HTMLElement>("[data-deliverables]")!;
     const details = within(card).getByText(/22f68fed/);
@@ -258,17 +261,15 @@ describe("细节只占一行时直接显示，不收起（四处同一个规则�
     expect(within(card).queryByRole("button", { name: /Show (more|less)/ })).toBeNull();
   });
 
-  it("门禁卡：细节超过一行照旧收起", async () => {
+  it("全览弹窗的门禁卡：细节超过一行照旧收起", async () => {
     const graph = gateGraph();
     graph.nodes[0] = { ...graph.nodes[0]!, gateSummaryMd: CHECKPOINT_TEXT };
-    render(
-      <RightRail asks={[]} workers={[]} activeGraphs={[graph]} openWorkerId={null} layout="side" avatarKey={1} onOpenAsk={() => {}} onOpenWorker={() => {}} />,
-    );
+    renderGateDialog(graph);
     await expectLeadFilesThenDetails(screen.getByTestId("peel-gate-card"));
   });
 });
 
-describe("四处入口", () => {
+describe("各处入口", () => {
   it("对话里的提问卡：AskMeta.deliverables 列在卡片正文下面", async () => {
     const ask = askMessage({
       id: 50,
@@ -411,61 +412,53 @@ describe("四处入口", () => {
     });
   });
 
-  it("果皮轨门禁卡：摘要里写了交付物的同一个本机链接，链接也能点开预览", () => {
+  it("全览弹窗的门禁卡：摘要里写了交付物的同一个本机链接，链接也能点开预览", () => {
     const graph = gateGraph();
     graph.nodes[0] = { ...graph.nodes[0]!, gateSummaryMd: `**摘要**：做完了，结论见[验收结论](${verdict.href})` };
-    render(
-      <RightRail asks={[]} workers={[]} activeGraphs={[graph]} openWorkerId={null} layout="side" avatarKey={1} onOpenAsk={() => {}} onOpenWorker={() => {}} />,
-    );
+    renderGateDialog(graph);
     expectBodyFileLinks(screen.getByTestId("peel-gate-card"), ["验收结论"]);
   });
 
-  it("右栏 Needs You 的提问行展开后列出交付物", async () => {
-    const ask = askMessage({ id: 52, text: "方案好了，请验收", meta: { needsUser: true, deliverables: [plan, rec] } });
+  it("右栏 Needs You 的提问行只有一行：不展开、不列交付物（文件在对话里那张卡上看），点了交给 onOpenAsk", async () => {
+    const ask = askMessage({ id: 52, text: `方案好了，请验收\n\n${CHECKPOINT_TEXT}`, meta: { needsUser: true, deliverables: [plan, rec] } });
+    const onOpenAsk = vi.fn();
     render(
-      <RightRail asks={[ask]} workers={[]} activeGraphs={[]} openWorkerId={null} layout="side" avatarKey={1} onOpenAsk={() => {}} onOpenWorker={() => {}} />,
+      <RightRail asks={[ask]} workers={[]} activeGraphs={[]} openWorkerId={null} layout="side" avatarKey={1} onOpenAsk={onOpenAsk} onOpenWorker={() => {}} />,
     );
     await user.click(screen.getByRole("button", { name: /方案好了，请验收/ }));
-    const files = document.querySelector<HTMLElement>("[data-deliverables]")!;
-    expect(files).not.toBeNull();
-    expect(within(files).getByRole("button", { name: "方案" })).toBeInTheDocument();
-    expect(within(files).getByRole("button", { name: "录屏" })).toBeInTheDocument();
+    expect(onOpenAsk).toHaveBeenCalledWith(52);
+    expect(document.querySelector("[data-deliverables]")).toBeNull();
+    expect(screen.queryByText(/做完了/)).toBeNull();
   });
 
-  it("右栏 Needs You 的提问行：摘要 → 文件 → 细节", async () => {
-    const ask = askMessage({ id: 54, text: `请确认步骤「实现」的结果\n\n${CHECKPOINT_TEXT}`, meta: { needsUser: true, deliverables: [plan, rec] } });
-    render(
-      <RightRail asks={[ask]} workers={[]} activeGraphs={[]} openWorkerId={null} layout="side" avatarKey={1} onOpenAsk={() => {}} onOpenWorker={() => {}} />,
-    );
-    await user.click(screen.getByRole("button", { name: /请确认步骤「实现」的结果/ }));
-    await expectLeadFilesThenDetails(document.querySelector<HTMLElement>("[data-ask-detail]")!);
-  });
-
-  it("果皮轨门禁卡：摘要 → 文件 → 细节", async () => {
-    const graph = gateGraph();
-    graph.nodes[0] = { ...graph.nodes[0]!, gateSummaryMd: CHECKPOINT_TEXT };
-    render(
-      <RightRail asks={[]} workers={[]} activeGraphs={[graph]} openWorkerId={null} layout="side" avatarKey={1} onOpenAsk={() => {}} onOpenWorker={() => {}} />,
-    );
-    await expectLeadFilesThenDetails(screen.getByTestId("peel-gate-card"));
-  });
-
-  it("果皮轨门禁卡列出该步 artifact.deliverables", () => {
+  it("右栏果皮轨里等拍板的步骤只有一行：不列交付物、不出选项", () => {
     render(
       <RightRail asks={[]} workers={[]} activeGraphs={[gateGraph()]} openWorkerId={null} layout="side" avatarKey={1} onOpenAsk={() => {}} onOpenWorker={() => {}} />,
     );
+    expect(screen.getByTestId("peel-gate-row")).toBeInTheDocument();
+    expect(screen.queryByTestId("peel-gate-card")).toBeNull();
+    expect(document.querySelector("[data-deliverables]")).toBeNull();
+  });
+
+  it("全览弹窗的门禁卡：摘要 → 文件 → 细节", async () => {
+    const graph = gateGraph();
+    graph.nodes[0] = { ...graph.nodes[0]!, gateSummaryMd: CHECKPOINT_TEXT };
+    renderGateDialog(graph);
+    await expectLeadFilesThenDetails(screen.getByTestId("peel-gate-card"));
+  });
+
+  it("全览弹窗的门禁卡列出该步 artifact.deliverables", () => {
+    renderGateDialog(gateGraph());
     const card = screen.getByTestId("peel-gate-card");
     const files = card.querySelector<HTMLElement>("[data-deliverables]")!;
     expect(within(files).getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent)).toEqual(["方案", "验收结论", "桌面截图", "录屏"]);
   });
 
-  it("果皮轨门禁卡：长问题、长选项不把列撑得比卡宽（选项那列 grid-cols-1，长词能换行），Recommended 留在按钮里", () => {
+  it("全览弹窗的门禁卡：长问题、长选项不把列撑得比卡宽（选项那列 grid-cols-1，长词能换行），Recommended 留在按钮里", () => {
     const longWord = "release/2026-11-16-hotfix-database-migration-rollback-plan-without-spaces-0123456789";
     const graph = gateGraph();
     graph.nodes[0] = { ...graph.nodes[0]!, gateQuestion: longWord, gateOptions: [longWord, "短"], gateRecommended: longWord, gateSummaryMd: "" };
-    render(
-      <RightRail asks={[]} workers={[]} activeGraphs={[graph]} openWorkerId={null} layout="side" avatarKey={1} onOpenAsk={() => {}} onOpenWorker={() => {}} />,
-    );
+    renderGateDialog(graph);
     const card = screen.getByTestId("peel-gate-card");
     const longOption = within(card).getByRole("button", { name: new RegExp(`^${longWord}`) });
     expect(longOption.parentElement).toHaveClass("grid-cols-1");
@@ -474,7 +467,7 @@ describe("四处入口", () => {
     expect(within(card).getAllByText(longWord)[0]).toHaveClass("wrap-anywhere");
   });
 
-  it("果皮轨：同一张图里一步等拍板带文件、一步挂着 Waiting on you 提醒卡，各是各的卡", async () => {
+  it("全览弹窗：同一张图里一步等拍板带文件、一步挂着要你动手的提醒卡，各是各的卡", async () => {
     const graph = gateGraph();
     graph.nodes.push(
       makeNode({
@@ -487,16 +480,15 @@ describe("四处入口", () => {
         userBlocker: { id: 5, kind: "vendor_signed_out", vendor: "agy", device: "东京", recheckedAs: null },
       }),
     );
-    render(
-      <RightRail asks={[]} workers={[]} activeGraphs={[graph]} openWorkerId={null} layout="side" avatarKey={1} onOpenAsk={() => {}} onOpenWorker={() => {}} />,
-    );
+    renderGateDialog(graph);
     const reminder = screen.getByTestId("user-blocker-card");
     expect(within(reminder).getByRole("button", { name: "Done" })).toBeEnabled();
     expect(reminder.querySelector("[data-deliverables]")).toBeNull();
     const gates = screen.getAllByTestId("peel-gate-card");
     expect(gates).toHaveLength(1);
     await user.click(within(gates[0]!.querySelector<HTMLElement>("[data-deliverables]")!).getByRole("button", { name: "方案" }));
-    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    // 预览窗叠在全览弹窗上面，底下那层被 Radix 标成 aria-hidden
+    await waitFor(() => expect(screen.getAllByRole("dialog", { hidden: true })).toHaveLength(2));
   });
 
   describe("总助", () => {

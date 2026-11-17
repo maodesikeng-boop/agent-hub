@@ -72,10 +72,11 @@ export const MessageList = memo(function MessageList({
     onLoadOlder,
   });
 
-  // 点了“等你确定”里的某个问题：滚到那条消息，高亮一会儿。跳一次就用掉（通知 App 清掉），重新挂载时不会再跳
+  // 点了右栏里的某个提问、果皮轨里等你拍板的步骤：平滑滚到那条消息（减弱动效时直接跳），高亮一会儿。跳一次就用掉（通知 App 清掉），重新挂载时不会再跳
   useEffect(() => {
     if (!focus) return;
-    ref.current?.querySelector(`[data-message-id="${focus.id}"]`)?.scrollIntoView({ block: "center" });
+    const reduced = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    ref.current?.querySelector(`[data-message-id="${focus.id}"]`)?.scrollIntoView({ block: "center", behavior: reduced ? "auto" : "smooth" });
     setHighlightId(focus.id);
     onFocusDone?.();
   }, [focus, onFocusDone, ref]);
@@ -111,8 +112,9 @@ export const MessageList = memo(function MessageList({
 
   return (
     <div className="relative flex h-full flex-col">
-      <div className="messages min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain" ref={ref} role="log" aria-label="Messages" onScroll={onScroll}>
-        <div className="flex min-h-full flex-col pt-4 pb-12" ref={contentRef}>
+      <div className="messages messages-fade min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain" ref={ref} role="log" aria-label="Messages" onScroll={onScroll}>
+        {/* 上内边距和 .messages-fade 的渐隐带一样高（2rem）：没往上翻时第一条不淡 */}
+        <div className="flex min-h-full flex-col pt-8 pb-12" ref={contentRef}>
           {hasMore && (
             <button
               type="button"
