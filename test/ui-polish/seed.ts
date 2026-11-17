@@ -295,6 +295,12 @@ const SCENARIOS: Record<Scenario | "two-devices-peer", (s: Story) => void> = {
   "two-devices-peer"(s) {
     const tokyo = s.pm("tokyo", "东京小助手");
     s.turn(tokyo, "今天的构建跑完了吗？", ["跑完了，全部通过，耗时 6 分 12 秒。"]);
+    // 这台设备上一条没回答的提问：离线后总助托盘里那张卡不能点（router.offline-card）
+    s.ledger.hubCall(tokyo.sessionId, "ask", {
+      text: "夜间构建要不要挪到凌晨 3 点？\n\n现在 1 点跑，和数据库备份撞在一起，构建机的磁盘读写被打满。",
+      options: ["挪到 3 点", "保持 1 点"],
+      recommended: "挪到 3 点",
+    });
     const lab = s.pm("lab", "实验室");
     s.turn(lab, "GPU 机器空出来了吗？", ["空出来了，A100 两张都闲着。"]);
   },
@@ -373,7 +379,7 @@ function standard(s: Story): void {
     lin,
     "把自动换会话的阈值改成按厂商配置，顺便查一下为什么只读 Worker 偶发超时",
     [
-      "好，我拆成三步：\n\n1. **按厂商配置换会话阈值**：改 `VENDOR_SPECS` 与账本\n2. **排查只读 Worker 超时**：只读排查工具清单缓存与超时逻辑\n3. **补边界测试**：两处改完后一起补\n\n第 2 步要你定一下失败结果缓存多久，卡挂在右栏了。",
+      "好，我拆成三步：\n\n1. **按厂商配置换会话阈值**：改 `VENDOR_SPECS` 与账本\n2. **排查只读 Worker 超时**：只读排查工具清单缓存与超时逻辑\n3. **补边界测试**：两处改完后一起补\n\n第 2 步要你定一下失败结果缓存多久，卡在下面。",
     ],
     [
       { name: "Read", input: { file_path: "src/shared/vendors.ts" } },

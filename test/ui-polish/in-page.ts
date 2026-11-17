@@ -202,12 +202,13 @@ export function applyMutationInPage(id: string): void {
   const rail = one('[aria-label="Side panel"]');
   const log = one('[aria-label="Messages"]');
   const nav = one('[aria-label="Conversations"]');
-  const railOptions = [...rail.querySelectorAll<HTMLElement>("button")].filter((b) => /60 秒|5 分钟/.test(b.textContent ?? ""));
+  // 拍板的选项只在对话里那张提问卡上（右栏里那一步是一行跳转，没有选项）
+  const askOptions = [...byText(log, '[role="group"][aria-label="Options"]', "60 秒").querySelectorAll<HTMLElement>("button")];
   switch (id) {
     case "clip-right": {
-      const option = railOptions[0]!;
+      const option = askOptions[0]!;
       cardOf(option).style.overflow = "hidden";
-      for (const b of railOptions) b.style.width = "calc(100% + 72px)";
+      for (const b of askOptions) b.style.width = "calc(100% + 72px)";
       return;
     }
     case "covered-message": {
@@ -241,10 +242,14 @@ export function applyMutationInPage(id: string): void {
       }
       return;
     case "two-primaries": {
-      const [first, second] = railOptions;
-      const style = getComputedStyle(first!);
-      Object.assign(second!.style, { backgroundColor: style.backgroundColor, color: style.color, borderColor: style.borderColor });
-      for (const child of second!.querySelectorAll<HTMLElement>("*")) child.style.color = style.color;
+      // 提问卡的选项平时都是白底细边框；把头两个都涂成实心强调色
+      const vars = getComputedStyle(log);
+      const fill = vars.getPropertyValue("--primary").trim();
+      const ink = vars.getPropertyValue("--primary-foreground").trim();
+      for (const option of askOptions.slice(0, 2)) {
+        Object.assign(option.style, { backgroundColor: fill, color: ink, borderColor: fill });
+        for (const child of option.querySelectorAll<HTMLElement>("*")) Object.assign(child.style, { color: ink, backgroundColor: "transparent", borderColor: ink });
+      }
       return;
     }
     case "small-preview": {

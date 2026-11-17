@@ -57,7 +57,8 @@ export type PatchName = (typeof PATCH_NAMES)[number];
 const NOW = Date.parse(BROWSER_NOW_ISO);
 const HOUR = 3_600_000;
 const anyDevice = (path: string) => new RegExp(`^https?://[^/]+(?:/d/[^/]+)?${path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\?.*)?$`);
-const localOnly = (path: string) => new RegExp(`^https?://[^/]+${path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\?.*)?$`);
+// 入口本机的接口：HTTP 的和 WebSocket 的都认（routeWebSocket 拿到的网址是 ws:// 开头）
+const localOnly = (path: string) => new RegExp(`^(?:https?|wss?)://[^/]+${path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\?.*)?$`);
 
 async function editJson<T>(page: Page, url: RegExp, edit: (body: T) => T): Promise<void> {
   await page.route(url, async (route) => {
