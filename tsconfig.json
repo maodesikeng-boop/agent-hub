@@ -18,5 +18,5 @@
     "skipLibCheck": true
   },
   "include": ["src", "scripts", "test", "vite.config.ts", "vitest.config.ts", "vitest.eval.config.ts"],
-  "exclude": ["src/web"]
+  "exclude": ["src/web", "test/ui-polish/in-page.ts"]
 }

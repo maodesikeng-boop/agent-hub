@@ -1,0 +1,88 @@
+// 机器检查（docs/ui-polish-loop-design.md 第 3.3 节）：截图的同时在页面里量出来的硬毛病。
+// 裁切、溢出、对比度、点击区域这些是量得出来的，不交给评委用眼睛猜；量出来的直接算成“行业标准”这一项的发现，也当作事实告诉评委。
+import { AxeBuilder } from "@axe-core/playwright";
+import type { Page } from "playwright";
+import { inPage } from "./in-page-api.ts";
+import { FINDING_TEXT_MAX_CHARS } from "./limits.ts";
+import type { Finding } from "./rubric.ts";
+
+export const MACHINE_CHECKS = [
+  { id: "clipped", severity: "P0", what: "元素的内容超出了会裁切它的祖先，露不全（没有截断样式的）", fix: "让装它的容器在这个方向上放得下（grid-cols-1、min-w-0、换行），或者给它截断样式和 title" },
+  { id: "page-overflow", severity: "P0", what: "页面或弹窗出现横向滚动", fix: "找出最宽的那个子元素，限制宽度或允许换行" },
+  { id: "overlap", severity: "P0", what: "两个能点的东西的可点范围互相盖住", fix: "拉开两者的间距，或者让上面那个不再盖住下面那个" },
+  { id: "contrast", severity: "P1", what: "文字对比度不到 WCAG AA（axe-core 的 color-contrast）", fix: "字色换深一档，或底色换浅一档，到 4.5:1（大字 3:1）" },
+  { id: "touch-target", severity: "P1", what: "触屏视口下可点范围小于 44×44px", fix: "可点范围扩到 44×44px（加内边距或用伪元素扩大点击区）" },
+  { id: "truncated-no-title", severity: "P2", what: "文字被截成省略号，却没有 title 放全文", fix: "给截断的元素加 title 写全文" },
+  { id: "off-scale-font", severity: "P2", what: "界面外壳的字号不在四档字号里", fix: "改用 text-xs、text-minor、text-body、text-title 四档之一" },
+  { id: "dot-joined", severity: "P2", what: "界面外壳的字里用“·”“|”拼接", fix: "拆成两个元素，用间距或换行分开，不用符号拼接" },
+] as const;
+export type MachineCheckId = (typeof MACHINE_CHECKS)[number]["id"];
+
+/** 机器量出来的一条：形状同评委的发现，rule 是 `machine:<检查 id>`，另带量到的数。 */
+export interface MachineFinding extends Finding {
+  /** 量到的数和选择器，给修的人定位。 */
+  evidence: string;
+}
+
+/** 页面里量出来的原始一条：哪种检查、元素的框（CSS 像素）、量到的数。 */
+export interface RawHit {
+  check: MachineCheckId;
+  rect: { x: number; y: number; w: number; h: number };
+  evidence: string;
+}
+
+/**
+ * 前置：页面已经画稳。
+ * 后置：返回这一屏量出来的全部毛病，位置是占视口的比例；同一个元素同一种毛病只报一条。
+ * 只读页面，不改 DOM、不滚动。
+ */
+export async function runMachineChecks(page: Page, options: { touch: boolean }): Promise<MachineFinding[]> {
+  const viewport = page.viewportSize();
+  if (viewport === null) throw new Error("页面没有固定视口，量不了位置");
+  const hits = await page.evaluate(inPage.measureInPage, { touch: options.touch });
+  hits.push(...(await contrastHits(page)));
+  const seen = new Set<string>();
+  const findings: MachineFinding[] = [];
+  for (const hit of hits) {
+    const id = `${hit.check}|${hit.evidence}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const check = MACHINE_CHECKS.find((c) => c.id === hit.check)!;
+    findings.push({
+      rule: `machine:${check.id}`,
+      severity: check.severity,
+      box: toBox(hit.rect, viewport),
+      what: clip(`${check.what}：${hit.evidence}`),
+      fix: check.fix,
+      evidence: hit.evidence,
+    });
+  }
+  return findings;
+}
+
+const clip = (text: string) => (text.length <= FINDING_TEXT_MAX_CHARS ? text : `${text.slice(0, FINDING_TEXT_MAX_CHARS - 1)}…`);
+
+/** CSS 像素的框换成占视口的比例，裁到视口里；看不见的元素给一个最小的框，形状仍然合法。 */
+function toBox(rect: RawHit["rect"], viewport: { width: number; height: number }): Finding["box"] {
+  const round = (n: number) => Math.round(n * 10_000) / 10_000;
+  const x1 = Math.min(Math.max(rect.x, 0), viewport.width - 1);
+  const y1 = Math.min(Math.max(rect.y, 0), viewport.height - 1);
+  const x2 = Math.min(Math.max(rect.x + rect.w, x1 + 1), viewport.width);
+  const y2 = Math.min(Math.max(rect.y + rect.h, y1 + 1), viewport.height);
+  return { x: round(x1 / viewport.width), y: round(y1 / viewport.height), w: round((x2 - x1) / viewport.width), h: round((y2 - y1) / viewport.height) };
+}
+
+async function contrastHits(page: Page): Promise<RawHit[]> {
+  const result = await new AxeBuilder({ page }).withRules(["color-contrast"]).analyze();
+  const hits: RawHit[] = [];
+  for (const violation of result.violations) {
+    for (const node of violation.nodes) {
+      const target = node.target.map(String).join(" ");
+      const box = await page.locator(target).first().boundingBox().catch(() => null);
+      const data = node.any[0]?.data as { contrastRatio?: number; fgColor?: string; bgColor?: string; expectedContrastRatio?: string } | undefined;
+      const ratio = data?.contrastRatio === undefined ? "" : `${data.contrastRatio}:1，要 ${data.expectedContrastRatio ?? "4.5:1"}，字 ${data.fgColor} 底 ${data.bgColor}，`;
+      hits.push({ check: "contrast", rect: box === null ? { x: 0, y: 0, w: 1, h: 1 } : { x: box.x, y: box.y, w: box.width, h: box.height }, evidence: `${ratio}${target}` });
+    }
+  }
+  return hits;
+}

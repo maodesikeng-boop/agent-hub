@@ -88,6 +88,8 @@
 
 **测试**
 - `vitest`（`vitest.config.ts`）、`jsdom`（`src/shared/test-helpers.ts`）、`@testing-library/react`、`@testing-library/user-event`、`@testing-library/jest-dom`（`src/web/test-setup.ts`）。
+- `playwright`（微软）：界面打磨循环的截图，驱动无头 Chromium，固定视口、时钟、关动效、改写接口回包（`test/ui-polish/capture.ts`、`test/ui-polish/patches.ts`）。只用它的库，不用 Playwright Test 运行器。浏览器要另装：`pnpm exec playwright install chromium`。
+- `@axe-core/playwright`（Deque）：截图时量文字对比度等 WCAG 问题（`test/ui-polish/checks.ts`）。
 
 **工程工具**
 - `typescript`：类型检查（`pnpm typecheck`）。`knip`：死代码检查，没接脚本和 CI，需要时手动跑 `pnpm exec knip`（上次全仓清理见 PR #193）。`@types/*`（node、react、react-dom、ws、web-push、write-file-atomic）：类型。
