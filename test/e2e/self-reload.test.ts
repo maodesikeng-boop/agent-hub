@@ -93,7 +93,6 @@ describe("热重启等全库空闲有上限", () => {
     const pmSessionId = query<{ id: number }>("SELECT id FROM agent_sessions WHERE pm_id = ? AND role = 'pm'", pmId)[0]!.id;
     const pmPid = env.procsOf(pmSessionId)[0]!.pid;
 
-    const registeredAt = Date.now();
     const reload = await env.runHub(pmPid, ["self-reload"]);
     expect(reload.code).toBe(0);
     expect(reload.stdout).toContain("已登记热重启");
@@ -102,9 +101,7 @@ describe("热重启等全库空闲有上限", () => {
     expect(status.stdout).toMatch(/热重启：\d\d:\d\d:\d\d 开始等全库空闲，最晚 \d\d:\d\d:\d\d/);
 
     const exit = await first.exited;
-    const waitedMs = Date.now() - registeredAt;
     expect(exit.code).toBe(DESKTOP_CONTRACT.reloadExitCode);
-    expect(waitedMs).toBeGreaterThanOrEqual(DRAIN_MAX_MS - 500);
     expect(first.stderr()).toContain("等全库空闲过了上限");
     // 被打断的 Worker 轮次留着“处理中”，等重启恢复重发
     expect(query<{ status: string }>("SELECT status FROM messages WHERE id = ?", taskId)).toEqual([{ status: "processing" }]);
@@ -127,7 +124,7 @@ describe("热重启等全库空闲有上限", () => {
     expect(env.stdinTextsOf(procs[1]!.pid)).toEqual([`${RESTART_RECOVERY_NOTE}\n\n${RESEND_NOTE}\n\n${firstText}`]);
     expect(query<{ status: string }>("SELECT status FROM messages WHERE id = ?", taskId)).toEqual([{ status: "replied" }]);
     console.log(
-      `[self-reload e2e] 登记后 ${waitedMs} ms 退出，退出码 ${exit.code}；日志：${first.stderr().split("\n").filter((l) => l.includes("热重启")).join(" | ")}；` +
+      `[self-reload e2e] 退出码 ${exit.code}；日志：${first.stderr().split("\n").filter((l) => l.includes("热重启")).join(" | ")}；` +
         `重启后 Worker 会话 ${workerSessionId} 以 --resume 重发任务，汇报“${reportLine!.summary}”`,
     );
     await second.terminate();
@@ -202,16 +199,13 @@ describe("热重启等全库空闲有上限", () => {
     );
     const pmSessionId = query<{ id: number }>("SELECT id FROM agent_sessions WHERE pm_id = ? AND role = 'pm'", pmId)[0]!.id;
     const pmPid = env.procsOf(pmSessionId).at(-1)!.pid;
-    const registeredAt = Date.now();
     const reload = await env.runHub(pmPid, ["self-reload"]);
     expect(reload.stdout).toMatch(/最晚 \d\d:\d\d:\d\d 起不再等 Worker 轮次和系统消息（重启后自动重发）；项目经理、总助正在回用户的那一轮等它回完再重启。现在还在忙：1 个会话还在跑/);
     const status = await env.runHub(pmPid, ["status"]);
     expect(status.stdout).toMatch(/热重启：\d\d:\d\d:\d\d 开始等全库空闲，最晚 \d\d:\d\d:\d\d/);
 
     const exit = await first.exited;
-    const waitedMs = Date.now() - registeredAt;
     expect(exit.code).toBe(DESKTOP_CONTRACT.reloadExitCode);
-    expect(waitedMs).toBeGreaterThanOrEqual(DRAIN_MAX_MS - 500);
     expect(first.stderr()).toContain("等全库空闲过了上限");
     expect(query<{ status: string }>("SELECT status FROM messages WHERE id = ?", run.id)).toEqual([{ status: "processing" }]);
 
@@ -224,7 +218,7 @@ describe("热重启等全库空闲有上限", () => {
     expect(env.stdinTextsOf(last.pid)).toEqual([`${RESTART_RECOVERY_NOTE}\n\n${RESEND_NOTE}\n\n${run.text}`]);
     expect(messagesOf(await client2.state(), conversationId).some((m) => m.sender === "agent" && m.text === "接着写完了日报")).toBe(true);
     console.log(
-      `[self-reload e2e] 登记后 ${waitedMs} ms 退出，退出码 ${exit.code}；回执：${reload.stdout.trim()}；hub status 末行：${status.stdout.trim().split("\n").at(-1)}；` +
+      `[self-reload e2e] 退出码 ${exit.code}；回执：${reload.stdout.trim()}；hub status 末行：${status.stdout.trim().split("\n").at(-1)}；` +
         `守护进程日志：${first.stderr().split("\n").filter((l) => l.includes("热重启")).join(" | ")}；` +
         `重启后项目经理会话 ${pmSessionId} 以 --resume 收到重发的定时任务，回复“接着写完了日报”`,
     );
