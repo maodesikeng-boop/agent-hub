@@ -289,8 +289,8 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const missingWorker = route?.view === "worker" && state.phase === "ready" && workerView === undefined ? route.id : null;
   const workerLookup = missingWorker === null ? undefined : state.lookups[missingWorker];
   useEffect(() => {
-    if (missingWorker !== null) hub.ensureConversation(missingWorker);
-  }, [hub, missingWorker]);
+    if (missingWorker !== null && workerLookup === undefined) hub.ensureConversation(missingWorker);
+  }, [hub, missingWorker, workerLookup]);
   const invalidMobileRoute = !autoSelect && shellReady && routedDevice !== undefined && state.phase === "ready" && !awaitingCreated && route !== null &&
     route.view !== "router" && route.view !== "settings" &&
     (route.view === "profile"

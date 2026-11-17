@@ -190,14 +190,14 @@ describe("不在快照里的早收工 Worker", () => {
     expect(s2.olderEndedWorkers).toEqual({});
   });
 
-  it("按编号单拉：在拉记 loading，拉到删掉，没有记 missing，失败删掉好再拉；重拉快照清空", () => {
+  it("按编号单拉：在拉记 loading，拉到删掉，没有、没拉成都记 missing；重拉快照清空（再拉一次）", () => {
     const s0 = loaded();
     const loading = reducer(s0, { type: "lookupStart", ids: [30, 31] });
     expect(loading.lookups).toEqual({ 30: "loading", 31: "loading" });
     const done = reducer(loading, { type: "lookupDone", ids: [30, 31], lookup: { conversations: [worker(30)], sessions: [] } });
     expect(done.lookups).toEqual({ 31: "missing" });
     expect(done.conversations[30]?.hasMore).toBe(true);
-    expect(reducer(loading, { type: "lookupFailed", ids: [30, 31] }).lookups).toEqual({});
+    expect(reducer(loading, { type: "lookupFailed", ids: [30, 31] }).lookups).toEqual({ 30: "missing", 31: "missing" });
     expect(reducer(done, { type: "loaded", snapshot: makeSnapshot() }).lookups).toEqual({});
   });
 

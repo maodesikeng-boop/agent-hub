@@ -103,7 +103,7 @@ export interface HubState {
    * 拉完了删掉）。
    */
   olderEndedWorkers: Record<PmId, ConversationId | undefined>;
-  /** 按需单拉的对话（不在快照里的早收工 Worker）：loading 在拉，missing 拉过、没有。拉到了删掉，重拉快照清空。 */
+  /** 按需单拉的对话（不在快照里的早收工 Worker）：loading 在拉，missing 拉过、没有或没拉成。拉到了删掉，重拉快照清空（再拉一次）。 */
   lookups: Record<ConversationId, "loading" | "missing" | undefined>;
   /** 服务端所在机器能做什么（界面按它显示控件，见 server-info.tsx）；还没加载时是 macOS 的占位，加载完才会显示界面。 */
   server: ServerInfo;
@@ -646,7 +646,7 @@ export function reducer(state: HubState, action: HubAction): HubState {
     case "lookupStart":
       return { ...state, lookups: withLookups(state.lookups, action.ids, "loading") };
     case "lookupFailed":
-      return { ...state, lookups: withLookups(state.lookups, action.ids, undefined) };
+      return { ...state, lookups: withLookups(state.lookups, action.ids, "missing") };
     case "lookupDone": {
       const merged = mergeLoaded(state, action.lookup);
       const found = action.ids.filter((id) => merged.conversations[id] !== undefined);
