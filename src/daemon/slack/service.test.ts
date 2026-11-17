@@ -11,8 +11,8 @@ describe("createSlackService：接入与频道", () => {
 
 describe("createSlackService：单人直聊与多人共聊", () => {
   it.todo("单人频道里主人说的话进账本，meta.origin 的 mode 是 solo，发给 agent 时没有署名");
-  it.todo("访客进频道后，没 @ 的聊天不进账本，下一次 @机器人 时作为背景一起带给项目经理");
-  it.todo("多人频道里在主聊天流 @机器人 的话进账本，带发言人署名和主客身份；在串里 @机器人 不进账本");
+  it.todo("访客进频道后，主人和访客在主聊天流里的每句话都进账本（不用 @机器人），发给 agent 时带发言人署名和主客身份");
+  it.todo("串里的话不进账本");
   it.todo("访客离开后自动回到单人直聊");
   it.todo("同一条 Slack 消息重投只进账本一次");
 });
@@ -20,7 +20,7 @@ describe("createSlackService：单人直聊与多人共聊", () => {
 describe("createSlackService：主客权限", () => {
   it.todo("访客在总助频道说话不进账本，收到只有他看得见的提示");
   it.todo("访客点拍板按钮、停止按钮不改账本，收到只有他看得见的提示");
-  it.todo("访客唤醒的那一轮里项目经理调 project.attach 被账本拒绝");
+  it.todo("访客的消息触发的那一轮里项目经理调 project.attach 被账本拒绝");
 });
 
 describe("createSlackService：流式、急停与卡片", () => {

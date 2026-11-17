@@ -1043,11 +1043,7 @@ export const SLACK_MESSAGE_MAX_CHARS = 11_000;
 export const SLACK_STREAM_UPDATE_INTERVAL_MS = 1_500;
 /** 整个工作区每分钟最多发多少次 chat.update（Tier 3 是 50+/分钟，留余量）；超了只合并、不排队。 */
 export const SLACK_UPDATE_BUDGET_PER_MINUTE = 45;
-/** 多人频道里没唤醒机器人的聊天，每个频道最多记多少条、多少字、多久以内，下一次唤醒时带给 agent。 */
-export const SLACK_CONTEXT_WINDOW_MESSAGES = 20;
-export const SLACK_CONTEXT_WINDOW_CHARS = 4_000;
-export const SLACK_CONTEXT_WINDOW_MAX_AGE_MS = 2 * 60 * 60_000;
-/** 内存里最多给多少个频道记背景聊天和成员（频道数 = 项目经理数 + 1，留余量）。 */
+/** 内存里最多给多少个频道记成员（频道数 = 项目经理数 + 1，留余量）。 */
 export const SLACK_CHANNEL_CACHE_MAX = 200;
 /** 频道成员缓存：事件实时更新，另外隔这么久对一遍；查失败只记这么久。每个频道最多记这么多成员。 */
 export const SLACK_MEMBERS_TTL_MS = 10 * 60_000;
@@ -1064,7 +1060,7 @@ export const SLACK_POST_RETENTION_DAYS = 30;
 export const SLACK_CATCHUP_MAX_MESSAGES = 20;
 /** 绑定码多久失效。 */
 export const SLACK_BIND_CODE_TTL_MS = 10 * 60_000;
-/** 进来的事件排队上限（先 ack 再处理）；满了丢最旧的背景聊天，不丢主人的话和按钮。 */
+/** 进来的事件排队上限（先 ack 再处理）；满了丢最旧的成员和改名事件（重连对账会补回），不丢消息和按钮。 */
 export const SLACK_INBOUND_QUEUE_MAX = 200;
 /** 要发出去的操作排队上限；满了先合并同一条消息的流式刷新。 */
 export const SLACK_OUTBOUND_QUEUE_MAX = 500;

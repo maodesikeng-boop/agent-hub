@@ -45,8 +45,9 @@ export type SlackSpeakerRole = (typeof SLACK_SPEAKER_ROLES)[number];
 
 /**
  * 频道模式，按频道里除机器人以外的真人数自动定：
- * - solo：只有主人，每句话直达总助或项目经理；
- * - shared：还有别人，只有在频道主聊天流里 @机器人 才唤醒，其余只记作背景。
+ * - solo：只有主人；
+ * - shared：还有别人。
+ * 两种模式下频道主聊天流里的每句话都直达总助或项目经理，不用 @机器人；模式只决定发给 agent 时加不加署名。
  */
 export const SLACK_CHANNEL_MODES = ["solo", "shared"] as const;
 export type SlackChannelMode = (typeof SLACK_CHANNEL_MODES)[number];
@@ -55,7 +56,7 @@ export type SlackChannelMode = (typeof SLACK_CHANNEL_MODES)[number];
 export type SlackChannelTarget = { kind: "router" } | { kind: "pm"; pmId: PmId };
 
 /**
- * 从 Slack 进来的用户消息的来源，写进 UserMessageMeta.origin，发给 agent 时据此加署名（slackSpeakerPrefix）。
+ * 从 Slack 进来的用户消息的来源，写进 UserMessageMeta.origin，发给 agent 时据此加署名（slackDeliveryPrefixes）。
  * 网页发的消息没有 origin。
  */
 export interface SlackMessageOrigin {
@@ -65,32 +66,18 @@ export interface SlackMessageOrigin {
   name: string;
   role: SlackSpeakerRole;
   mode: SlackChannelMode;
-  /**
-   * 多人频道里，上次唤醒之后、这句之前没唤醒机器人的聊天（按时间从早到晚），
-   * 最多 SLACK_CONTEXT_WINDOW_MESSAGES 条、合计 SLACK_CONTEXT_WINDOW_CHARS 字；没有就不写。
-   */
-  context?: SlackContextLine[];
-}
-
-/** 一条背景聊天。 */
-export interface SlackContextLine {
-  name: string;
-  role: SlackSpeakerRole;
-  text: string;
-  at: number;
 }
 
 /**
- * 发给 agent 时放在正文前的几块（交给 shared/worker.ts 的 deliveryParts 拼进 prefixes）：
- * 有背景聊天时先放一块“频道里刚才的讨论”，再放一行署名，如“【Slack · 李四（访客）】”。
- * 后置：solo 模式下主人的话返回空数组（和网页发的一样不加）；shared 模式下总有署名，写明显示名和主客身份。
+ * 发给 agent 时放在正文前的署名（交给 shared/worker.ts 的 deliveryParts 拼进 prefixes），如“【Slack · 李四（访客）】”。
+ * 后置：solo 模式下主人的话返回空数组（和网页发的一样不加）；shared 模式下主人和访客的话都有一行署名，写明显示名和主客身份。
  */
 export function slackDeliveryPrefixes(origin: SlackMessageOrigin): string[] {
   throw new Error("未实现");
 }
 
 /**
- * 访客唤醒的那一轮里项目经理不能调的 hub 命令：建项目、挂卸文件夹、准备命令、改性格设定、拍板步骤、加定时任务。
+ * 访客的消息触发的那一轮里项目经理不能调的 hub 命令：建项目、挂卸文件夹、准备命令、改性格设定、拍板步骤、加定时任务。
  * 这一份是唯一定义，账本的 hubCall 按它拦。
  */
 export const SLACK_GUEST_BLOCKED_HUB_COMMANDS: readonly HubCommand[] = [
@@ -105,7 +92,7 @@ export const SLACK_GUEST_BLOCKED_HUB_COMMANDS: readonly HubCommand[] = [
 
 /**
  * 前置：origin 是项目经理正在处理的这一轮的那条用户消息的来源（网页发的是 null）。
- * 后置：访客唤醒的轮次里调 SLACK_GUEST_BLOCKED_HUB_COMMANDS 中的命令时返回给项目经理看的拒绝原因；其余返回 null。
+ * 后置：访客的消息触发的轮次里调 SLACK_GUEST_BLOCKED_HUB_COMMANDS 中的命令时返回给项目经理看的拒绝原因；其余返回 null。
  */
 export function slackGuestTurnBlockReason(command: HubCommand, origin: SlackMessageOrigin | null): string | null {
   throw new Error("未实现");

@@ -14,7 +14,7 @@ export const SLACK_BOT_SCOPES = [
   "files:write",
 ] as const;
 
-/** 订阅的事件。@机器人 从 message.groups 的正文里认（<@机器人编号>），不另订 app_mention，免得同一句话来两遍。 */
+/** 订阅的事件。频道里每句话都从 message.groups 来，不用 @机器人，不订 app_mention。 */
 export const SLACK_BOT_EVENTS = [
   "message.groups",
   "message.im",

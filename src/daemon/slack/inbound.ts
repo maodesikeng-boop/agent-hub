@@ -24,11 +24,10 @@ export type SlackInbound =
       channelId: SlackChannelId;
       userId: SlackUserId;
       ts: SlackTs;
-      /** 是不是发在某条消息的串里。Fusa 只看频道主聊天流，串里的话不唤醒（routing.ts）。 */
+      /** 是不是发在某条消息的串里。Fusa 只看频道主聊天流，串里的话不交给 agent（routing.ts）。 */
       inThread: boolean;
-      /** 去掉 @机器人 之后的原文。 */
+      /** 原文，去掉了 <@机器人>（@ 不 @ 机器人都一样送达）。 */
       text: string;
-      mentionsBot: boolean;
       files: SlackInboundFile[];
     }
   | {
@@ -61,7 +60,7 @@ export interface SlackSelf {
 
 /**
  * 后置：认得的、和 Fusa 有关的信封返回一个领域事件；其余（不变量里要丢的、不认识的类型、形状不对）返回 null，不抛错。
- * 文字里的 <@机器人> 去掉并标 mentionsBot；按钮值过 decodeSlackActionValue，解不出返回 null。
+ * 文字里的 <@机器人> 去掉；按钮值过 decodeSlackActionValue，解不出返回 null。
  */
 export function parseSlackEnvelope(envelope: SlackRawEnvelope, self: SlackSelf): SlackInbound | null {
   throw new Error("未实现");

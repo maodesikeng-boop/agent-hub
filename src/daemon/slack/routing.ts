@@ -1,8 +1,8 @@
-// 入站分流（docs/slack-design.md）：一条 Slack 消息或一次点击，交给总助、交给项目经理、只记作背景、拒绝，还是不理。
-// 主客权限的硬边界在这里：总助频道、按钮、急停、附件、斜杠命令只认主人；访客唤醒的轮次里高危 hub 命令由账本按
+// 入站分流（docs/slack-design.md）：一条 Slack 消息或一次点击，交给总助、交给项目经理、拒绝，还是不理。
+// 主客权限的硬边界在这里：总助频道、按钮、急停、附件、斜杠命令只认主人；访客的消息触发的轮次里高危 hub 命令由账本按
 // meta.origin 再拦一次（shared/slack.ts 的 slackGuestTurnBlockReason）。
-// 不变量：这里不做 I/O、不读时钟以外的状态；成员、显示名、绑定都由调用方查好放进上下文。
-import type { SlackChannelMode, SlackChannelTarget, SlackContextLine, SlackMessageOrigin, SlackSpeakerRole, SlackUserId } from "../../shared/slack.ts";
+// 不变量：这里不做 I/O、不读别的状态；成员、显示名、绑定都由调用方查好放进上下文。
+import type { SlackChannelMode, SlackChannelTarget, SlackMessageOrigin, SlackSpeakerRole, SlackUserId } from "../../shared/slack.ts";
 import type { SlackCardRef } from "./cards.ts";
 import type { SlackInbound, SlackInboundFile } from "./inbound.ts";
 
@@ -33,7 +33,6 @@ export type SlackMessageRoute =
       files: SlackInboundFile[];
       droppedFiles: number;
     }
-  | { kind: "context"; line: SlackContextLine }
   /** 拒绝：给发言人一条只有他看得见的提示（单聊里直接回）。 */
   | { kind: "reject"; userId: SlackUserId; reason: string }
   | { kind: "ignore" };
@@ -43,13 +42,12 @@ export type SlackMessageRoute =
  * 后置（按顺序，命中即返回）：
  * - 单聊：没认主人且文字是有效绑定码 → bind_owner；其余单聊 → reject（提示去频道里说）；
  * - 不是 Fusa 的频道，或还没认主人 → ignore；频道对应的项目经理已归档 → reject；
- * - 发在串里的话：主人 → reject（提示在频道主聊天流里说），访客 → ignore；不唤醒、也不记作背景；
+ * - 发在串里的话：主人 → reject（提示在频道主聊天流里说），访客 → ignore；
  * - 总助频道：主人 → deliver；访客 → reject；
- * - 项目经理频道 solo：主人 → deliver（没有前缀的 origin）；
- * - 项目经理频道 shared：@机器人 → deliver（带署名的 origin），否则 → context；
+ * - 项目经理频道：主聊天流里主人和访客的每句话都 deliver，不用 @机器人；origin 的 mode 是 ctx.mode（solo 时主人的话不加署名，shared 时都加）；
  * - 访客以“/”开头的文字 → reject（厂商斜杠命令只给主人）；访客带的文件不收，droppedFiles 记个数。
  */
-export function routeSlackMessage(message: InboundMessage, ctx: SlackRoutingContext, now: number): SlackMessageRoute {
+export function routeSlackMessage(message: InboundMessage, ctx: SlackRoutingContext): SlackMessageRoute {
   throw new Error("未实现");
 }
 
@@ -71,22 +69,5 @@ export function routeSlackAction(input: InboundAction | InboundNote, ctx: Pick<S
 
 /** 后置：userId 是主人返回 owner，否则 guest。ownerUserId 为 null 时一律 guest。 */
 export function slackSpeakerRole(userId: SlackUserId, ownerUserId: SlackUserId | null): SlackSpeakerRole {
-  throw new Error("未实现");
-}
-
-/**
- * 多人频道里没唤醒机器人的聊天，按频道记在内存里（重启就没了，不进账本）。
- * 不变量：每个频道最多 SLACK_CONTEXT_WINDOW_MESSAGES 条、SLACK_CONTEXT_WINDOW_CHARS 字，早于 SLACK_CONTEXT_WINDOW_MAX_AGE_MS 的丢掉；
- * 最多记 SLACK_CHANNEL_CACHE_MAX 个频道，超了丢最久没动的频道。
- */
-export interface SlackContextWindows {
-  record(channelId: string, line: SlackContextLine): void;
-  /** 后置：返回这个频道还在窗口里的聊天（从早到晚）并清空，下一次唤醒不会再带一遍。 */
-  take(channelId: string, now: number): SlackContextLine[];
-  /** 频道归档、解绑、换工作区时清掉。 */
-  forget(channelId: string): void;
-}
-
-export function createSlackContextWindows(): SlackContextWindows {
   throw new Error("未实现");
 }

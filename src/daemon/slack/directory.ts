@@ -1,7 +1,7 @@
 // 频道成员与发言人显示名（docs/slack-design.md）：直接用 Slack 私密频道的成员关系当“谁能参与”的名单，不另造白名单。
 // 不变量：
 // - 成员由 member_joined_channel / member_left_channel 实时改；连上、重连、过了 SLACK_MEMBERS_TTL_MS 再整份对一遍；
-//   查失败只记 SLACK_MEMBERS_RETRY_MS，期间按“有访客”（shared）处理，宁可少唤醒也不误把访客当单人频道；
+//   查失败只记 SLACK_MEMBERS_RETRY_MS，期间按“有访客”（shared）处理，宁可多加署名也不把访客的话当成主人说的；
 // - 显示名按 SLACK_USER_CACHE_TTL_MS 缓存，最多 SLACK_USER_CACHE_MAX 人；查失败记 SLACK_USER_CACHE_RETRY_MS，期间用用户编号当名字；
 // - 换工作区、断开时整份清掉。
 import type { SlackChannelId, SlackChannelMode, SlackUserId } from "../../shared/slack.ts";
