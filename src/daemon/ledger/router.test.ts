@@ -298,23 +298,16 @@ describe("统一 hub ask 与 router report / note 同源桥接", () => {
     expect(page2.nextCursor).toBeNull();
   });
 
-  it("hub router note 与 router_audit_log 500 行环形上限生效", () => {
+  it("router_audit_log 500 行环形上限生效", () => {
     for (let i = 1; i <= 530; i++) {
       now += 1;
-      ledger.hubCall(lin.sessionId, "router.note", { text: `阶段进展 #${i}` });
+      ledger.hubCall(lin.sessionId, "router.report", { summary: `阶段进展 #${i}` });
     }
-    expect(ledger.snapshot().router.notes).toEqual([
-      { pmId: lin.pmId, text: "阶段进展 #530", updatedAt: now },
-    ]);
     const count = db.get<{ n: number }>("SELECT count(*) AS n FROM router_audit_log")!.n;
     expect(count).toBeLessThanOrEqual(ROUTER_AUDIT_LOG_MAX_ROWS);
-
-    ledger.hubCall(lin.sessionId, "router.note", { clear: true });
-    expect(ledger.snapshot().router.notes).toEqual([]);
   });
 
   it("DeviceRouterDigest 内存缓存命中与写操作精确失效，且体积严守 24 KB 上限", () => {
-    ledger.hubCall(lin.sessionId, "router.note", { text: "正在推进导出模块与权限重构" });
     ledger.hubCall(lin.sessionId, "ask", {
       text: "导出文件默认编码用 UTF-8 BOM 吗？",
       options: ["带 BOM（兼容 Excel）", "纯 UTF-8"],
@@ -328,7 +321,6 @@ describe("统一 hub ask 与 router report / note 同源桥接", () => {
     const linDigest = d1.pms.find((p) => p.pmId === lin.pmId)!;
     expect(linDigest).toMatchObject({
       name: "小林",
-      pmNote: "正在推进导出模块与权限重构",
       pendingDecisionCount: 1,
       project: { name: "后端核心", mainFolder: lin.folder },
     });

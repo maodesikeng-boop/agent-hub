@@ -1,4 +1,4 @@
-// Router（总助）账本模块：独立待决拍板卡、里程碑汇报、PM 近况备忘、配置、审计环与 Fleet Digest 缓存。
+// Router（总助）账本模块：独立待决拍板卡、里程碑汇报、配置、审计环与 Fleet Digest 缓存（项目档案的第一层由 project-catalog.ts 给）。
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type {
@@ -39,10 +39,7 @@ import {
   ROUTER_CONTEXT_MAX_CHARS,
   ROUTER_FLEET_DIGEST_MAX_BYTES,
   ROUTER_ITEM_RETENTION_MS,
-  ROUTER_NOTE_MAX_CHARS,
   ROUTER_PENDING_DECISIONS_PER_PM_MAX,
-  ROUTER_PERSONA_SUMMARY_LINES,
-  ROUTER_PERSONA_SUMMARY_MAX_CHARS,
   ROUTER_PM_ACTIVE_WORKERS_MAX,
   ROUTER_PM_BRIEF_MAX_CHARS,
   ROUTER_QUESTION_MAX_CHARS,
@@ -56,6 +53,7 @@ import {
 } from "../../shared/limits.ts";
 import { defaultRouterSettings } from "../../shared/router.ts";
 import { parseLocalHref } from "../../shared/sent-files.ts";
+import type { ProjectCatalogCard } from "../../shared/project-catalog.ts";
 import type {
   DeviceRouterDigest,
   PmDigestActiveWorker,
@@ -66,7 +64,6 @@ import type {
   RouterCommandStatus,
   RouterDecisionStatus,
   RouterItem,
-  RouterPmNote,
   RouterReportLink,
   RouterReportStatus,
   RouterResolution,
@@ -117,13 +114,6 @@ interface RouterCommandDbRow {
   error: string | null;
   duration_ms: number | null;
   created_at: number;
-  updated_at: number;
-}
-
-interface RouterPmNoteDbRow {
-  pm_id: number;
-  text: string;
-  session_id: number | null;
   updated_at: number;
 }
 
@@ -199,11 +189,6 @@ const routerReportSchema = z.object({
     .optional(),
 });
 
-const routerNoteSchema = z.object({
-  text: z.string().optional(),
-  clear: z.boolean().optional(),
-});
-
 /** 条目连同它挂的交付物（旁表 router_item_deliverables，migrations/0030_deliverables.sql）；没挂的 deliverables_json 是 null。 */
 const ITEM_SELECT = `SELECT router_items.*, router_item_deliverables.deliverables_json FROM router_items
   LEFT JOIN router_item_deliverables ON router_item_deliverables.item_id = router_items.id`;
@@ -275,16 +260,6 @@ function toRouterCommand(row: RouterCommandDbRow): RouterCommandRecord {
   };
 }
 
-function summarizePersona(persona: string | null): string {
-  if (persona === null || persona.trim() === "") return "";
-  const lines = persona
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l !== "")
-    .slice(0, ROUTER_PERSONA_SUMMARY_LINES);
-  return sliceChars(lines.join(" / "), ROUTER_PERSONA_SUMMARY_MAX_CHARS);
-}
-
 export type LedgerRouter = ReturnType<typeof createLedgerRouter>;
 
 export function createLedgerRouter(
@@ -293,6 +268,7 @@ export function createLedgerRouter(
   messages: LedgerMessages,
   persona: LedgerPersona,
   projects: LedgerProjects,
+  catalogCardOf: (projectId: ProjectId) => ProjectCatalogCard | null,
 ) {
   const { db, now, write } = ctx;
   const { assertPmNotArchived, privateConversation } = persona;
@@ -543,48 +519,6 @@ export function createLedgerRouter(
       text: `已向总助投递里程碑汇报 #${row.id}。`,
       data: { item },
     };
-  };
-
-  /** hub router note：更新或清空该 PM 的一句话项目近况备忘。 */
-  const noteIn = (
-    p: Pending,
-    caller: AgentSessionRow & { pmId: PmId },
-    rawArgs: HubArgs<"router.note">,
-  ): HubResult<"router.note"> => {
-    assertPmNotArchived(caller.pmId);
-    const parsed = routerNoteSchema.safeParse(rawArgs);
-    if (!parsed.success) throw fail("invalid", "hub router note 参数格式不正确");
-
-    const t = now();
-    if (parsed.data.clear === true) {
-      db.run("DELETE FROM router_pm_notes WHERE pm_id = ?", caller.pmId);
-      p.changes.push({ type: "router.note.updated", data: { pmId: caller.pmId, note: null } });
-      appendAuditIn("pm", "router.note.clear", caller.pmId, null);
-      return { text: "已清空你在总助那里的项目近况备忘。", data: { note: null } };
-    }
-
-    const text = (parsed.data.text ?? "").trim();
-    if (text === "") throw fail("invalid", "备忘内容不能是空的（要清空请传 --clear）");
-    if (charLen(text) > ROUTER_NOTE_MAX_CHARS) {
-      throw fail("invalid", `项目近况备忘最多 ${ROUTER_NOTE_MAX_CHARS} 字（当前 ${charLen(text)} 字）`);
-    }
-
-    db.run(
-      `INSERT INTO router_pm_notes (pm_id, text, session_id, updated_at)
-       VALUES (?, ?, ?, ?)
-       ON CONFLICT(pm_id) DO UPDATE SET
-         text = excluded.text,
-         session_id = excluded.session_id,
-         updated_at = excluded.updated_at`,
-      caller.pmId,
-      text,
-      caller.id,
-      t,
-    );
-    const note: RouterPmNote = { pmId: caller.pmId, text, updatedAt: t };
-    p.changes.push({ type: "router.note.updated", data: { pmId: caller.pmId, note } });
-    appendAuditIn("pm", "router.note", caller.pmId, null);
-    return { text: "已更新你在总助那里的项目近况备忘。", data: { note } };
   };
 
   /** POST /api/router/items/:id/resolve：拍板决策卡或归档单条汇报。 */
@@ -851,12 +785,6 @@ export function createLedgerRouter(
     const items = [...pendingRows.map(toRouterItem), ...briefings].sort(
       (a, b) => b.createdAt - a.createdAt || b.id - a.id,
     );
-    const noteRows = db.all<RouterPmNoteDbRow>(
-      `SELECT n.* FROM router_pm_notes n
-        LEFT JOIN pm_archives a ON a.pm_id = n.pm_id
-        WHERE a.pm_id IS NULL
-        ORDER BY n.pm_id`,
-    );
     const commandRows = db.all<RouterCommandDbRow>(
       `SELECT * FROM router_commands
         ORDER BY created_at DESC, id DESC
@@ -873,7 +801,6 @@ export function createLedgerRouter(
       settings,
       items,
       briefingsHasMore,
-      notes: noteRows.map((n) => ({ pmId: n.pm_id, text: n.text, updatedAt: n.updated_at })),
       commands,
       commandsHasMore,
     };
@@ -891,9 +818,6 @@ export function createLedgerRouter(
         LEFT JOIN pm_archives a ON a.pm_id = p.id
         WHERE a.pm_id IS NULL
         ORDER BY p.id`,
-    );
-    const notesByPm = new Map<number, RouterPmNoteDbRow>(
-      db.all<RouterPmNoteDbRow>("SELECT * FROM router_pm_notes").map((r) => [r.pm_id, r]),
     );
     const pendingItemsByPm = new Map<number, number>(
       db
@@ -975,13 +899,7 @@ export function createLedgerRouter(
           ? sliceChars(briefSource.replace(/\s+/g, " ").trim(), ROUTER_PM_BRIEF_MAX_CHARS)
           : null;
 
-      const noteRow = notesByPm.get(pm.id);
-      const timestamps = [
-        pmSess?.lastEventAt ?? 0,
-        latestMsg?.created_at ?? 0,
-        latestReport?.created_at ?? 0,
-        noteRow?.updated_at ?? 0,
-      ].filter((x) => x > 0);
+      const timestamps = [pmSess?.lastEventAt ?? 0, latestMsg?.created_at ?? 0, latestReport?.created_at ?? 0].filter((x) => x > 0);
       const lastActiveAt = timestamps.length > 0 ? Math.max(...timestamps) : null;
 
       return {
@@ -1001,9 +919,8 @@ export function createLedgerRouter(
                 description: projRow.description,
                 mainFolder: card.mainFolder,
                 otherFolders: card.otherFolders,
+                catalog: catalogCardOf(projRow.id),
               },
-        personaSummary: summarizePersona(pm.persona),
-        pmNote: noteRow?.text ?? null,
         activeWorkers,
         activeWorkerTotal: openWorkers.length,
         pendingDecisionCount: (pendingItemsByPm.get(pm.id) ?? 0) + (waitingGatesByPm.get(pm.id) ?? 0),
@@ -1022,15 +939,12 @@ export function createLedgerRouter(
       for (const e of digest.pms) e.activeWorkers = e.activeWorkers.slice(0, 2);
     }
     if (Buffer.byteLength(JSON.stringify(digest)) > ROUTER_FLEET_DIGEST_MAX_BYTES) {
-      for (const e of digest.pms) {
-        e.recentBrief = null;
-        e.personaSummary = sliceChars(e.personaSummary, 60);
-      }
+      for (const e of digest.pms) e.recentBrief = null;
     }
     if (Buffer.byteLength(JSON.stringify(digest)) > ROUTER_FLEET_DIGEST_MAX_BYTES) {
       for (const e of digest.pms) {
-        e.pmNote = e.pmNote === null ? null : sliceChars(e.pmNote, 80);
         e.activeWorkers = [];
+        if (e.project?.catalog) e.project.catalog = { ...e.project.catalog, focus: "", aliases: e.project.catalog.aliases.slice(0, 3) };
       }
     }
 
@@ -1300,7 +1214,7 @@ export function createLedgerRouter(
    * agent_sessions.id 是不带 AUTOINCREMENT 的 INTEGER PRIMARY KEY：删掉最大行，下一次 INSERT（下一条总助指令、
    * 新建的项目经理或 Worker）就复用这个号，撞上驱动层与令牌表里这个号“已结束 / 已撤销”的内存标记，start 直接抛 session_ended。
    * 留着最大行保证 id 只增不退；已结束的 assistant 行任何时刻最多 1 行，跑多久都不膨胀。
-   * session_persona_seen 以外键引用会话行，一起删（router_items / router_pm_notes 是 ON DELETE SET NULL）。
+   * session_persona_seen 以外键引用会话行，一起删（router_items 是 ON DELETE SET NULL）。
    */
   const pruneEndedAssistantSessions = (): void => {
     const prunable =
@@ -1514,7 +1428,6 @@ export function createLedgerRouter(
     answerAsk,
     closeAskIn,
     reportIn,
-    noteIn,
     resolveItem,
     archiveAllReports,
     updateSettings,

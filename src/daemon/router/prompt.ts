@@ -6,9 +6,13 @@ import {
   HUB_COMMAND as HUB,
   PM_MODES,
   PRODUCT_NAME,
+  PROJECT_CATALOG_COMPACT_ONE_LINER_CHARS,
+  PROJECT_CATALOG_ITEM_MAX_CHARS,
   ROUTER_FLEET_DIGEST_MAX_BYTES,
-  ROUTER_PERSONA_SUMMARY_MAX_CHARS,
   ROUTER_PM_ACTIVE_WORKERS_MAX,
+  ROUTER_PM_BRIEF_MAX_CHARS,
+  ROUTER_PM_CARD_MAX_BYTES,
+  ROUTER_PROJECT_SHOW_PER_TURN_MAX,
   VENDOR_LIST,
   isSelectable,
   truncateChars,
@@ -17,10 +21,9 @@ import {
   type PmMode,
   type VendorAvailabilityMap,
 } from "../../shared/index.ts";
+import { catalogAgeText, type ProjectCatalogCard } from "../../shared/project-catalog.ts";
 
-// 跨设备总名片 24 KB、名片里活跃 Piece 条数、职责摘要字数这几个上限在 src/shared/limits.ts，这里不另存一份。
-/** 单张完整 PM 名片硬上限：1 KB（1_024 UTF-8 字节）。 */
-export const ROUTER_PM_CARD_MAX_BYTES = 1_024;
+// 跨设备总名片 24 KB、单张名片 2 KB、名片里活跃 Piece 条数这几个上限在 src/shared/limits.ts，这里不另存一份。
 /** 注入上下文的最近指令回执条数上限。 */
 export const ROUTER_RECENT_RECEIPTS_CONTEXT = 5;
 /** 最近指令回执分节最大字节预算。 */
@@ -49,8 +52,13 @@ export interface PromptPmDigestCard {
     readonly id: number;
     readonly name: string;
     readonly mainFolder?: string;
+    /** 用户写的项目说明（projects.description）。 */
+    readonly description?: string | null;
+    /** 第一层项目档案（docs/router-project-catalog-design.md）；还没建档是 null，对方设备版本旧时没有。 */
+    readonly catalog?: ProjectCatalogCard | null;
   } | null;
-  readonly roleSummary: string;
+  /** 最近一条里程碑汇报或项目经理最后一句回复。 */
+  readonly recentBrief?: string | null;
   readonly activeWorkers: readonly PromptActiveWorker[];
   readonly activeWorkerTotal: number;
   readonly pendingDecisionCount: number;
@@ -152,6 +160,10 @@ ${PRODUCT_NAME} 采用三层分工：**总助（你） → 项目经理（PM） 
 1. **替用户把话精准带给对的人**：凡是要干活、查代码、看日志、写方案、改状态（派活、暂停、追发、收工、建项目）的输入，你对照名片找到目标设备和目标项目经理（或 Worker），调 \`${HUB} dispatch ...\` 投递过去。**只要目标项目已有 PM，默认一律转交给 PM**；只有用户点名要直接起 Worker、操作某个在跑的 Worker 或新建项目时，才调其他子命令。
 2. **看着名片回答全局状态**：如果用户只是问全局情况（比如现在谁在忙、哪个项目卡在拍板、某项目在哪台设备上），名片里直接看得出来的，不用分派，直接看着名片用清晰的 Markdown 简洁回答（建议不超过 ${ROUTER_ANSWER_SUGGESTED_MAX_CHARS} 字）；名片里看不出来的细节不准猜，转交给对应的项目经理去查。
 
+## 怎么认项目
+用户常用口头叫法、产品名或代号指项目，不一定是文件夹名。名片里每个项目有「做什么」「别名」「主线」，是后台按你和项目经理的对话自动整理的项目档案；对照它们认项目。
+名片看不准是哪个项目（几个项目都像、档案太旧）或用户问到某个项目的模块、已定的事时，先用 \`${HUB} dispatch project-show\` 展开那个项目的完整档案再判断，一轮最多查 ${ROUTER_PROJECT_SHOW_PER_TURN_MAX} 个。档案里也没有的细节照旧转给项目经理。
+
 # 四条硬规矩
 
 1. **不碰业务文件，不起子代理**：你在全局总助台，严禁读取、搜索任何代码或目录，一切具体查改一律用 \`${HUB} dispatch\` 分派下去。${subagentBan}
@@ -181,6 +193,9 @@ ${PRODUCT_NAME} 采用三层分工：**总助（你） → 项目经理（PM） 
 - **查看项目的活跃 Worker 完整列表**
   \`${HUB} dispatch worker-list --device <self|deviceId> [--project <projectId>]\`
   名片里活跃 Worker 太多被折叠省略、需要查全量名单时用。
+- **展开一个项目的完整档案（只读，不算分派）**
+  \`${HUB} dispatch project-show --device <self|deviceId> --project <projectId>\`
+  看项目的核心模块、已定的事、悬着的事；名片上写“未建档”的项目没有档案可看。
 - **在设备上新建项目和它的项目经理**
   \`${HUB} dispatch project-create --device <self|deviceId> --folder <路径> [--name <项目名>] [--pm-name <PM名>] [--vendor <${vendorChoices}>] [--mode <${modeChoices}>]\`
   把指定文件夹注册成新项目并创建配套 PM（\`--mode\` 默认 \`manage_only\` 只管不写代码，\`hands_on\` 为亲自写代码）。
@@ -195,7 +210,7 @@ function cleanInline(raw: string | null | undefined, maxChars: number): string {
 }
 
 /** 按 UTF-8 字节上限安全截断字符串（按 Unicode 码点累加，绝不切碎多字节字符）。 */
-function sliceUtf8Safe(text: string, maxBytes: number): string {
+export function sliceUtf8Safe(text: string, maxBytes: number): string {
   if (maxBytes <= 0) return "";
   if (utf8Bytes(text) <= maxBytes) return text;
   const suffix = "…";
@@ -213,7 +228,31 @@ function sliceUtf8Safe(text: string, maxBytes: number): string {
   return `${out}${suffix}`;
 }
 
-function formatFullPmCard(deviceId: string, pm: PromptPmDigestCard): string {
+/** 名片里第一层项目档案的几行（docs/router-project-catalog-design.md 示例文件第 1 节）；没有项目时什么都不出。 */
+function catalogLines(deviceId: string, pm: PromptPmDigestCard, nowMs: number, keep: { focus: boolean; aliases: boolean }): string[] {
+  const project = pm.project;
+  if (project === null) return [];
+  const lines: string[] = [];
+  const description = cleanInline(project.description, PROJECT_CATALOG_ITEM_MAX_CHARS);
+  if (description !== "") lines.push(`- 说明: ${description}（用户写的）`);
+  const catalog = project.catalog;
+  if (catalog) {
+    lines.push(`- 做什么: ${cleanInline(catalog.oneLiner, PROJECT_CATALOG_ITEM_MAX_CHARS)}`);
+    if (keep.aliases && catalog.aliases.length > 0) lines.push(`- 别名: ${catalog.aliases.map((a) => cleanInline(a, 40)).join("、")}`);
+    const focus = cleanInline(catalog.focus, PROJECT_CATALOG_ITEM_MAX_CHARS);
+    if (keep.focus && focus !== "") lines.push(`- 主线: ${focus}`);
+  }
+  const brief = cleanInline(pm.recentBrief, ROUTER_PM_BRIEF_MAX_CHARS);
+  if (brief !== "") lines.push(`- 最近: ${brief}`);
+  lines.push(
+    catalog
+      ? `- 档案: ${catalogAgeText(catalog.refreshedAt, nowMs)}（细节：${HUB} dispatch project-show --device ${deviceId} --project ${project.id}）`
+      : "- 档案: 未建档",
+  );
+  return lines;
+}
+
+function formatFullPmCard(deviceId: string, pm: PromptPmDigestCard, nowMs: number): string {
   const name = cleanInline(pm.pmName, 40) || `PM-${pm.pmId}`;
   const activity = cleanInline(pm.activity ?? "idle", 24) || "idle";
   const projectText = pm.project
@@ -231,35 +270,32 @@ function formatFullPmCard(deviceId: string, pm: PromptPmDigestCard): string {
   }
   const workersLine = workerParts.length > 0 ? workerParts.join("；") : "无";
 
-  const buildWithSummary = (summaryText: string): string => {
-    const lines = [
+  const build = (keep: { focus: boolean; aliases: boolean }): string =>
+    [
       `### PM #${pm.pmId} ${name} [device=${deviceId} | activity=${activity} | pending=${pm.pendingDecisionCount}]`,
       `- project: ${projectText}`,
-    ];
-    if (summaryText !== "") lines.push(`- summary: ${summaryText}`);
-    lines.push(`- activePieces (${totalWorkers}): ${workersLine}`);
-    return lines.join("\n");
-  };
+      ...catalogLines(deviceId, pm, nowMs, keep),
+      `- activePieces (${totalWorkers}): ${workersLine}`,
+    ].join("\n");
 
-  let summary = cleanInline(pm.roleSummary, ROUTER_PERSONA_SUMMARY_MAX_CHARS);
-  let card = buildWithSummary(summary);
-  if (utf8Bytes(card) > ROUTER_PM_CARD_MAX_BYTES) {
-    const withoutSummaryBytes = utf8Bytes(buildWithSummary(""));
-    const summaryBudget = Math.max(0, ROUTER_PM_CARD_MAX_BYTES - withoutSummaryBytes - 16);
-    summary = summaryBudget > 0 ? sliceUtf8Safe(summary, summaryBudget) : "";
-    card = buildWithSummary(summary);
-    if (utf8Bytes(card) > ROUTER_PM_CARD_MAX_BYTES) {
-      card = sliceUtf8Safe(card, ROUTER_PM_CARD_MAX_BYTES);
-    }
+  // 超了先砍主线，再砍别名，最后按字节硬截
+  for (const keep of [
+    { focus: true, aliases: true },
+    { focus: false, aliases: true },
+    { focus: false, aliases: false },
+  ]) {
+    const card = build(keep);
+    if (utf8Bytes(card) <= ROUTER_PM_CARD_MAX_BYTES) return card;
   }
-  return card;
+  return sliceUtf8Safe(build({ focus: false, aliases: false }), ROUTER_PM_CARD_MAX_BYTES);
 }
 
 function formatCompactPmLine(deviceId: string, pm: PromptPmDigestCard): string {
   const name = cleanInline(pm.pmName, 40) || `PM-${pm.pmId}`;
   const projectText = pm.project ? `#${pm.project.id} ${cleanInline(pm.project.name, 60)}` : "无";
+  const oneLiner = pm.project?.catalog ? cleanInline(pm.project.catalog.oneLiner, PROJECT_CATALOG_COMPACT_ONE_LINER_CHARS) : "";
   const totalWorkers = Math.max(pm.activeWorkerTotal, pm.activeWorkers.length);
-  return `- PM #${pm.pmId} ${name} | device=${deviceId} | project=${projectText} | activePieces=${totalWorkers} | pending=${pm.pendingDecisionCount}`;
+  return `- PM #${pm.pmId} ${name} | device=${deviceId} | project=${projectText}${oneLiner === "" ? "" : ` | 做什么=${oneLiner}`} | activePieces=${totalWorkers} | pending=${pm.pendingDecisionCount}`;
 }
 
 function formatReceiptAction(action: PromptReceiptAction): string {
@@ -342,6 +378,7 @@ export function formatFleetDigestForPrompt(
   devices: readonly PromptDeviceDigest[],
   recentReceipts: readonly PromptRecentReceipt[] = [],
   maxBytes: number = ROUTER_FLEET_DIGEST_MAX_BYTES,
+  nowMs: number = Date.now(),
 ): string {
   if (devices.length === 0) {
     const receiptsBlock = formatReceiptsSection(recentReceipts, Math.min(ROUTER_RECEIPTS_SECTION_MAX_BYTES, maxBytes));
@@ -366,7 +403,7 @@ export function formatFleetDigestForPrompt(
     deviceHeaders.push(`## 设备：${devName} (${flags})`);
 
     device.pms.forEach((pm, pIdx) => {
-      const fullText = formatFullPmCard(devId, pm);
+      const fullText = formatFullPmCard(devId, pm, nowMs);
       const compactText = formatCompactPmLine(devId, pm);
       const slot: IndexedPmSlot = {
         deviceIndex: dIdx,

@@ -5,7 +5,21 @@
 // - 存进库的档案每个字段都在字数和条数上限内（src/shared/limits.ts 的 PROJECT_CATALOG_*）：模型写超了由 parseCatalogReply 截断，
 //   结构不对（缺字段、类型错）才算写档失败。实测模型会超字数（“一句话”上限 80 字写了 110 字），所以不按超长判失败。
 import { z } from "zod";
-import type { MessageId, ProjectId, TokenUsage } from "./domain.ts";
+import { truncateChars, type MessageId, type ProjectId, type TokenUsage } from "./domain.ts";
+import {
+  PROJECT_CATALOG_ALIASES_MAX,
+  PROJECT_CATALOG_ALIAS_MAX_CHARS,
+  PROJECT_CATALOG_DECISIONS_MAX,
+  PROJECT_CATALOG_DETAIL_MAX_CHARS,
+  PROJECT_CATALOG_FOCUS_MAX_CHARS,
+  PROJECT_CATALOG_ITEM_MAX_CHARS,
+  PROJECT_CATALOG_MIN_INTERVAL_MS,
+  PROJECT_CATALOG_MODULES_MAX,
+  PROJECT_CATALOG_ONE_LINER_MAX_CHARS,
+  PROJECT_CATALOG_OPEN_ITEMS_MAX,
+  PROJECT_CATALOG_REFRESH_DELTA,
+  PROJECT_CATALOG_USER_CHAR_WEIGHT,
+} from "./limits.ts";
 
 const text = z.string().trim().min(1);
 
@@ -75,7 +89,7 @@ export interface CatalogJob {
   input: CatalogRefreshInput;
 }
 
-export type CatalogFailureReason = "timeout" | "error" | "invalid_reply" | "model_unavailable" | "shutdown";
+type CatalogFailureReason = "timeout" | "error" | "invalid_reply" | "model_unavailable" | "shutdown";
 
 export interface CatalogFailure {
   reason: CatalogFailureReason;
@@ -118,7 +132,7 @@ export interface CatalogDueState {
  * 前置：两个数都是非负整数。
  */
 export function changeScore(counts: { userChars: number; agentChars: number }): number {
-  throw new Error("未实现");
+  return counts.userChars * PROJECT_CATALOG_USER_CHAR_WEIGHT + counts.agentChars;
 }
 
 /**
@@ -126,7 +140,10 @@ export function changeScore(counts: { userChars: number; agentChars: number }): 
  * 离上次写成不到 PROJECT_CATALOG_MIN_INTERVAL_MS 的 false；其余 forced 或 score ≥ PROJECT_CATALOG_REFRESH_DELTA 时 true。
  */
 export function catalogDue(state: CatalogDueState, nowMs: number): boolean {
-  throw new Error("未实现");
+  if (state.nextAttemptAt !== null && nowMs < state.nextAttemptAt) return false;
+  if (state.neverWritten) return true;
+  if (state.refreshedAt !== null && nowMs - state.refreshedAt < PROJECT_CATALOG_MIN_INTERVAL_MS) return false;
+  return state.forced || state.score >= PROJECT_CATALOG_REFRESH_DELTA;
 }
 
 /**
@@ -135,12 +152,15 @@ export function catalogDue(state: CatalogDueState, nowMs: number): boolean {
  * 每个数组只留前 PROJECT_CATALOG_*_MAX 条，去掉空白和重复的别名。
  */
 export function parseCatalogReply(text: string): ProjectCatalog | null {
-  throw new Error("未实现");
+  const last = jsonObjectsOf(text).at(-1);
+  if (last === undefined) return null;
+  const parsed = projectCatalogSchema.safeParse(withoutBlankAliases(last));
+  return parsed.success ? clampCatalog(parsed.data) : null;
 }
 
 /** 第一层名片：只取一句话、别名、主线。 */
 export function catalogCardOf(catalog: ProjectCatalog, refreshedAt: number): ProjectCatalogCard {
-  throw new Error("未实现");
+  return { oneLiner: catalog.oneLiner, aliases: [...catalog.aliases], focus: catalog.focus, refreshedAt };
 }
 
 /**
@@ -148,5 +168,118 @@ export function catalogCardOf(catalog: ProjectCatalog, refreshedAt: number): Pro
  * 后置：不超过 PROJECT_CATALOG_DETAIL_MAX_CHARS 个字；控制字符换成空格，不会打乱总助看到的结构。
  */
 export function renderCatalogDetail(detail: ProjectCatalogDetail, nowMs: number): string {
-  throw new Error("未实现");
+  const { catalog } = detail;
+  const list = (items: readonly string[]) => (items.length === 0 ? ["无"] : items.map((item) => `- ${inline(item)}`));
+  const description = detail.description === null ? "" : inline(detail.description);
+  const lines = [
+    `# 项目 #${detail.projectId} ${inline(detail.projectName)}`,
+    "",
+    ...(description === "" ? [] : [`- 说明（用户写的）：${description}`]),
+    `- 做什么：${inline(catalog.oneLiner)}`,
+    `- 别名：${catalog.aliases.length === 0 ? "无" : catalog.aliases.map(inline).join("、")}`,
+    `- 主线：${inline(catalog.focus)}`,
+    "",
+    "## 核心模块",
+    ...list(catalog.modules.map((m) => `${m.name}：${m.summary}`)),
+    "",
+    "## 已定的事",
+    ...list(catalog.decisions),
+    "",
+    "## 悬着的事",
+    ...list(catalog.openItems),
+    "",
+    `（档案写于 ${clockText(detail.refreshedAt)}，${catalogAgeText(detail.refreshedAt, nowMs)}）`,
+  ];
+  return truncateChars(lines.join("\n"), PROJECT_CATALOG_DETAIL_MAX_CHARS);
+}
+
+/** 档案多久前写的，给名片和第二层用：“刚刚更新”“3 小时前更新”“2 天前更新”。 */
+export function catalogAgeText(refreshedAt: number, nowMs: number): string {
+  const minutes = Math.max(0, Math.floor((nowMs - refreshedAt) / 60_000));
+  if (minutes < 1) return "刚刚更新";
+  if (minutes < 60) return `${minutes} 分钟前更新`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前更新`;
+  return `${Math.floor(hours / 24)} 天前更新`;
+}
+
+/** 控制字符、换行换成空格，不让材料里的字打乱总助看到的结构。 */
+const inline = (raw: string): string => raw.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/\s+/g, " ").trim();
+
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+/** 本地时间的“2026-11-17 11:30”。 */
+function clockText(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+/** 从 start 的“{”往后找配对的“}”（跳过字符串里的括号），找不到返回 -1。 */
+function matchingBrace(text: string, start: number): number {
+  let depth = 0;
+  let inString = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (ch === "\\") i++;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{") depth++;
+    else if (ch === "}" && --depth === 0) return i;
+  }
+  return -1;
+}
+
+/** 回复里从前往后所有能解析的顶层 JSON 对象（代码块围栏、前后的说明文字都跳过）。 */
+function jsonObjectsOf(text: string): unknown[] {
+  const found: unknown[] = [];
+  for (let i = text.indexOf("{"); i !== -1; i = text.indexOf("{", i + 1)) {
+    const end = matchingBrace(text, i);
+    if (end === -1) continue;
+    try {
+      const value: unknown = JSON.parse(text.slice(i, end + 1));
+      if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+        found.push(value);
+        i = end;
+      }
+    } catch {
+      // 不是 JSON，从下一个“{”接着找
+    }
+  }
+  return found;
+}
+
+/** 模型常给出空字符串别名：校验前先去掉，不因此判整份档案不合格。 */
+function withoutBlankAliases(value: unknown): unknown {
+  if (value === null || typeof value !== "object") return value;
+  const aliases = (value as { aliases?: unknown }).aliases;
+  if (!Array.isArray(aliases)) return value;
+  return { ...value, aliases: aliases.filter((a) => typeof a !== "string" || a.trim() !== "") };
+}
+
+function clampCatalog(raw: ProjectCatalog): ProjectCatalog {
+  const clip = (items: readonly string[], max: number) => items.slice(0, max).map((s) => truncateChars(s, PROJECT_CATALOG_ITEM_MAX_CHARS));
+  const seen = new Set<string>();
+  const aliases: string[] = [];
+  for (const alias of raw.aliases) {
+    const clean = truncateChars(alias.replace(/\s+/g, " "), PROJECT_CATALOG_ALIAS_MAX_CHARS);
+    const key = clean.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    aliases.push(clean);
+    if (aliases.length >= PROJECT_CATALOG_ALIASES_MAX) break;
+  }
+  return {
+    oneLiner: truncateChars(raw.oneLiner, PROJECT_CATALOG_ONE_LINER_MAX_CHARS),
+    aliases,
+    focus: truncateChars(raw.focus, PROJECT_CATALOG_FOCUS_MAX_CHARS),
+    modules: raw.modules.slice(0, PROJECT_CATALOG_MODULES_MAX).map((m) => ({
+      name: truncateChars(m.name, PROJECT_CATALOG_ALIAS_MAX_CHARS),
+      summary: truncateChars(m.summary, PROJECT_CATALOG_ITEM_MAX_CHARS),
+    })),
+    decisions: clip(raw.decisions, PROJECT_CATALOG_DECISIONS_MAX),
+    openItems: clip(raw.openItems, PROJECT_CATALOG_OPEN_ITEMS_MAX),
+  };
 }

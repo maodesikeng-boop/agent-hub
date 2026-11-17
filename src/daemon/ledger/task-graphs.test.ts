@@ -573,11 +573,11 @@ describe("任务图（Task DAG）生命周期、同源门禁与 Worker 绑定", 
     }).data.worker;
     ledger.hubCall(lin.sessionId, "ask", { graphId: graph.id, node: "g", text: "是否继续？", options: ["是", "否"] });
     const ask = ledger.hubCall(lin.sessionId, "ask", { text: "继续吗？", options: ["是", "否"] }).data;
-    ledger.hubCall(lin.sessionId, "router.note", { text: "等待" });
+    expect(db.all("SELECT project_id FROM project_catalogs")).not.toEqual([]);
     db.run("INSERT INTO router_worker_origins (worker_id, source_kind, source_id, pm_message_id, created_at) VALUES (?, 'router_resolve', ?, ?, ?)", worker.id, ask.item!.id, ask.messageId, now);
     ledger.archivePm(lin.pmId);
     expect(ledger.purgeExpiredArchivedPms(now + PM_ARCHIVE_RETENTION_MS)).toEqual([lin.pmId]);
-    for (const table of ["router_items", "router_pm_notes", "router_worker_origins", "task_graphs", "task_graph_steps", "task_graph_edges"]) {
+    for (const table of ["router_items", "project_catalogs", "router_worker_origins", "task_graphs", "task_graph_steps", "task_graph_edges"]) {
       expect(db.all(`SELECT * FROM ${table}`)).toEqual([]);
     }
     expect(db.all("PRAGMA foreign_key_check")).toEqual([]);

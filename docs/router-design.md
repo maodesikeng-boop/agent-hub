@@ -160,12 +160,7 @@ CREATE TABLE IF NOT EXISTS router_commands (
 CREATE INDEX IF NOT EXISTS router_commands_recent_idx
   ON router_commands(id DESC);
 
--- 3. PM 主动同步给 Router 的一句话当前主线（每个 PM 仅覆盖写 1 行，零历史膨胀）
-CREATE TABLE IF NOT EXISTS router_pm_notes (
-  pm_id      INTEGER PRIMARY KEY REFERENCES pms(id) ON DELETE CASCADE,
-  brief      TEXT NOT NULL,                        -- ≤120 字
-  updated_at INTEGER NOT NULL
-) STRICT;
+-- 3. （已删）router_pm_notes：0032 起由后台自动维护的项目档案 project_catalogs 取代，见 docs/router-project-catalog-design.md
 
 -- 4. 本机作为入口时的 Router 模型偏好设置（单行表；未配时自动取可用厂商的 routerDefault）
 CREATE TABLE IF NOT EXISTS router_settings (
@@ -308,9 +303,10 @@ export interface PmDigestCard {
   mode: PmMode;
   conversationId: ConversationId;
   activity: "idle" | "working" | "waiting_quota";
-  project: { id: ProjectId; name: string; mainFolder: string } | null;
-  /** 优先取 router_pm_notes.brief；未设时取 persona 前 4 个非空行（截断至 ≤ 200 字） */
-  roleSummary: string;
+  /** description 是用户写的项目说明；catalog 是第一层项目档案（docs/router-project-catalog-design.md） */
+  project: { id: ProjectId; name: string; mainFolder: string; description: string | null; catalog: ProjectCatalogCard | null } | null;
+  /** 最近一条里程碑汇报或项目经理最后一句回复 */
+  recentBrief: string | null;
   /** 当前未收工 Piece 摘要（最多 6 个，超出只报活跃总数） */
   activeWorkers: Array<{ id: WorkerId; title: string; activity: string; readonly: boolean }>;
   activeWorkerTotal: number;
@@ -366,10 +362,9 @@ hub router report \
   [--worker 395] \
   [--file "docs/router-design.md"] \
   [--stdin]          # 可选：标准输入传入 ≤400 字的要点列表（context）
-
-# 3. 更新暴露给 Router 名片的“当前主线一句话”（≤120 字，覆盖写，不产生卡片）
-hub router note --text "正在推进 Router 4 个 PR 的拆单与并行验收"
 ```
+
+名片上项目“做什么、别名、主线”由守护进程按对话在后台自动维护（docs/router-project-catalog-design.md），原来的 `hub router note` 已删。
 
 #### （2）与现有 `hub ask` 的双向自动桥接（彻底消除双份打扰）
 
@@ -596,7 +591,7 @@ hub dispatch project-create --device <self|deviceId> --folder <路径> \
 
 | 缓存项 | 驻留位置 | 失效与清理时机 | 失败 / 空结果策略 |
 |---|---|---|---|
-| 本机 `DeviceRouterDigest` 缓存 | 每台守护进程内存（单对象引用） | `ctx.write()` 提交涉及 `pms`、`projects`、`project_folders`、`persona`、`workers`、`agent_sessions`、`router_items`、`router_pm_notes` 变更时**同步置 `null`**；PM 归档或删除立刻剔除 | 本机同步算，失败不写缓存 |
+| 本机 `DeviceRouterDigest` 缓存 | 每台守护进程内存（单对象引用） | `ctx.write()` 提交涉及 `pms`、`projects`、`project_folders`、`persona`、`workers`、`agent_sessions`、`router_items`、`project_catalogs` 变更时**同步置 `null`**；PM 归档或删除立刻剔除 | 本机同步算，失败不写缓存 |
 | 远端配对设备 `PeerDigest` 缓存 | 入口守护进程内存 `Map<DeviceId, PeerDigestEntry>` | 正常有效期 `ROUTER_PEER_DIGEST_TTL_MS = 10_000`（10s）；设备解除配对或 `PeersService` 断连时立刻 `delete(deviceId)` | 超时（`>1.5s`）或 502 离线**绝不当成空正常结果缓存几分钟**：仅记 `offlineUntil = now + 5_000`（5s 短退避，同 `FETCHED_QUOTA_RETRY_MS` 思路），有最近 5 分钟内旧快照则标 `online: false, stale: true` 供提示，无旧快照标 `online: false, pms: []` |
 | 前端 `Archived` 历史分页缓存 | `@tanstack/react-query`（键 `['router-archived', deviceKey]`） | 收到该设备 `router.item.updated`（状态变为 `resolved`/`archived`/`superseded`）、`router.reports.archived` 或 `DeviceHub` `resync` 时 `invalidateQueries`；设备移除时 `removeQueries` | 请求报错由 React Query 按默认重试失败态呈现，不污染已缓存页 |
 | 轨道 B 临时 `assistant` 会话 | `launch/<sessionId>` 与驱动进程表 | 单轮 `send()` 返回后 `finally` 块**立即 `driver.end()` + 删除 `launch/<sessionId>` 目录 + 清理库内临时会话行**；守护进程重启时 `cleanupStale()` 兜底清残余 | 启动或调用抛错同样进 `finally` 立即回收，零僵尸子进程 |
@@ -630,16 +625,15 @@ hub dispatch project-create --device <self|deviceId> --folder <路径> \
 | `ROUTER_OPTION_MIN_COUNT` | `2` | `hub router ask` 最少选项数（旧 `hub ask` 无选项桥接除外） |
 | `ROUTER_OPTION_MAX_COUNT` | `4` | 最多选项数（对应 A/B/C/D 键帽） |
 | `ASK_MAX_OPTION_CHARS` | `200` | 单个选项最大字符数（`hub ask` 校验、对话卡和拍板卡共用这一个数，入库不再截断） |
-| `ROUTER_NOTE_MAX_CHARS` | `500` | 用户在选项卡片补充框输入的备注最大字符数 |
+| `MAX_DECISION_NOTE_CHARS` | `2_000` | 用户在选项卡片补充框输入的备注最大字符数 |
 | `ROUTER_REPORT_LINKS_MAX` | `4` | 单张汇报卡最多附带的证据链接数 |
-| `ROUTER_PM_BRIEF_MAX_CHARS` | `120` | `hub router note` 单行状态摘要最大字符数 |
+| `ROUTER_PM_BRIEF_MAX_CHARS` | `120` | 名片“最近”一行（最近汇报或项目经理最后一句）最大字符数 |
 | `ROUTER_PENDING_DECISIONS_PER_PM_MAX` | `3` | 单个 PM 同时挂起的最大未决卡片数（防失控刷屏，超限提示先等拍板或 `--replace`） |
 | `ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX` | `50` | 单台设备 `/api/state` 最多携带的未决+未读卡片数 |
 | `ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX` | `10` | 入口设备 `/api/state` 携带的最近指令回执数 |
 | `ROUTER_VISIBLE_RECEIPTS_MAX` | `5` | 工作台 `Recent` 区默认展开显示的已完成回执条数 |
 | `ROUTER_ARCHIVED_PAGE_SIZE` | `30` | `GET /api/router/items` 历史归档游标分页每页条数 |
-| `ROUTER_PERSONA_SUMMARY_LINES` | `4` | 未设 `brief` 时从 PM `persona` 提取的前 N 个非空行 |
-| `ROUTER_PERSONA_SUMMARY_MAX_CHARS` | `200` | `PmDigestCard.roleSummary` 最大字符数 |
+| `ROUTER_PM_CARD_MAX_BYTES` | `2_048` | 单张完整 PM 名片上限（带第一层项目档案，见 docs/router-project-catalog-design.md） |
 | `ROUTER_PM_ACTIVE_WORKERS_MAX` | `6` | `PmDigestCard` 内列出的活跃 Piece 标题上限 |
 | `ROUTER_FLEET_DIGEST_MAX_BYTES` | `24_576` | 跨设备总名片快照硬上限（24 KB） |
 | `ROUTER_RECENT_RECEIPTS_CONTEXT` | `5` | 轨道 B 注入上下文的最近回执条数 |

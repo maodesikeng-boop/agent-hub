@@ -67,7 +67,6 @@ const VALID_ARGS: { [C in HubCommand]: HubArgsMap[C] } = {
   "schedule.resume": { scheduleId: 3 },
   "schedule.remove": { scheduleId: 3 },
   "router.report": { summary: "里程碑已完成", links: [{ label: "PR #1", target: "https://github.com/o/r/pull/1" }] },
-  "router.note": { text: "正在验收第 1 波" },
   "graph.create": { title: "任务流图", specJson: '{"nodes":[{"key":"n1","title":"第一步"}]}' },
   "graph.show": { graphId: 1 },
   "graph.list": { all: true },
@@ -736,7 +735,6 @@ describe("agent api over inject", () => {
     it("hub router & hub graph：缺少必填字段或超出 specJson 字节上限 → invalid", async () => {
       await expectInvalid(await call("ask", { options: ["方案 A", "方案 B"] }));
       await expectInvalid(await call("router.report", {}));
-      await expectInvalid(await call("router.note", {}));
       await expectInvalid(await call("graph.create", { title: "无正文" }));
       await expectInvalid(await call("graph.create", { specJson: "图".repeat(Math.floor(MAX_GRAPH_SPEC_BYTES / 3) + 1) }));
       await expectInvalid(await call("graph.patch", { specJson: "补".repeat(Math.floor(MAX_GRAPH_SPEC_BYTES / 3) + 1) }));
@@ -1061,6 +1059,84 @@ describe.skipIf(process.platform === "win32")("startAgentApi on a unix socket", 
     }
   });
 
+  describe("项目档案的双向沙箱（docs/router-project-catalog-design.md）", () => {
+    const appWithGuard = async () => {
+      const { createRouterSandboxGuard } = await import("../router/sandbox.ts");
+      const sandboxGuard = createRouterSandboxGuard();
+      const received: unknown[] = [];
+      const app = createAgentApi({
+        ledger,
+        tokens,
+        sandboxGuard,
+        onRouterDispatch: async (_sessionId, _commandId, payload) => {
+          received.push(payload);
+          return { text: "档案", data: null };
+        },
+      });
+      await app.ready();
+      return { app, sandboxGuard, received };
+    };
+    const show = { op: "project-show", device: "self", projectId: 7 };
+
+    it("写档会话（purpose catalog）没有令牌，调任何 hub 命令和 /v1/router.dispatch 都被拒", async () => {
+      const { app, received } = await appWithGuard();
+      try {
+        // 写档会话的环境里没有 HUB_TOKEN：不带令牌、乱带令牌都 401
+        for (const authorization of [undefined, "Bearer not-a-token"]) {
+          const headers = authorization === undefined ? {} : { authorization };
+          for (const url of [hubPath("status"), hubPath("worker.start"), "/v1/router.dispatch"]) {
+            const res = await app.inject({ method: "POST", url, headers, payload: url === "/v1/router.dispatch" ? show : {} });
+            expect(res.statusCode, url).toBe(401);
+          }
+        }
+        // 就算拿到了一个总助会话的令牌，没绑定指令也调不了 hub dispatch，普通命令照样拒
+        const token = tokens.issue(301);
+        ledger.sessionRoles.set(301, "assistant");
+        const dispatchRes = await app.inject({ method: "POST", url: "/v1/router.dispatch", headers: { authorization: `Bearer ${token}` }, payload: show });
+        expect(dispatchRes.statusCode).toBe(403);
+        const statusRes = await app.inject({ method: "POST", url: hubPath("status"), headers: { authorization: `Bearer ${token}` }, payload: {} });
+        expect(statusRes.statusCode).toBe(403);
+        expect(received).toEqual([]);
+        expect(ledger.calls).toHaveLength(0);
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("项目经理和 Worker 调 hub dispatch project-show 被拒", async () => {
+      const { app, sandboxGuard, received } = await appWithGuard();
+      try {
+        ledger.sessionRoles.set(311, "pm");
+        ledger.sessionRoles.set(312, "worker");
+        ledger.sessionRoles.set(313, "assistant");
+        const assistantToken = tokens.issue(313);
+        sandboxGuard.bind(313, 77);
+        for (const token of [tokens.issue(311), tokens.issue(312)]) {
+          const res = await app.inject({ method: "POST", url: "/v1/router.dispatch", headers: { authorization: `Bearer ${token}` }, payload: show });
+          expect(res.statusCode).toBe(403);
+          expect(res.json().code).toBe("forbidden");
+        }
+        const ok = await app.inject({ method: "POST", url: "/v1/router.dispatch", headers: { authorization: `Bearer ${assistantToken}` }, payload: show });
+        expect(ok.statusCode).toBe(200);
+        expect(received).toEqual([show]);
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("hub router note 已删：调用返回未知命令", async () => {
+      const { app } = await appWithGuard();
+      try {
+        ledger.sessionRoles.set(321, "pm");
+        const res = await app.inject({ method: "POST", url: "/v1/router.note", headers: { authorization: `Bearer ${tokens.issue(321)}` }, payload: { text: "备忘" } });
+        expect(res.json()).toMatchObject({ ok: false, code: "invalid", message: expect.stringContaining("未知命令") });
+        expect(ledger.calls).toHaveLength(0);
+      } finally {
+        await app.close();
+      }
+    });
+  });
+
   it("hub self-reload：只放行项目经理，Worker（含只读）与总助一律 403；没有外壳监管时 409；--build 原样交给守护进程", async () => {
     const calls: Array<{ sessionId: number; build: boolean }> = [];
     const app = createAgentApi({
@@ -1126,10 +1202,4 @@ describe.skipIf(process.platform === "win32")("startAgentApi on a unix socket", 
       await unsupported.close();
     }
   });
-});
-
-describe("项目档案的双向沙箱（docs/router-project-catalog-design.md）", () => {
-  it.todo("写档会话（purpose catalog）没有令牌，调任何 hub 命令和 /v1/router.dispatch 都被拒");
-  it.todo("项目经理和 Worker 调 hub dispatch project-show 被拒");
-  it.todo("hub router note 已删：调用返回未知命令");
 });

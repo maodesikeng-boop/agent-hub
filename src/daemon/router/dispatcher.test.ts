@@ -19,6 +19,8 @@ import {
   type DriverSendInput,
   type DriverSendResult,
   type ModelCatalog,
+  ROUTER_PROJECT_SHOW_MAX_BYTES,
+  ROUTER_PROJECT_SHOW_PER_TURN_MAX,
   ROUTER_REPLY_MAX_CHARS,
   type RouterCommandAttachment,
   type RouterCommandRecord,
@@ -35,6 +37,7 @@ import {
   type RouterTargetPort,
 } from "./target-port.ts";
 import { createRouterDispatcher, type RouterDispatcher } from "./dispatcher.ts";
+import { createRouterTurnPurposes, createRouterTurnRunner } from "./single-turn.ts";
 
 class FakeRouterDriver implements Driver {
   readonly started: SessionId[] = [];
@@ -255,8 +258,6 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
                   mainFolder: "/srv/gpu-worker",
                   otherFolders: [],
                 },
-                personaSummary: "负责 Linux GPU 训练服务",
-                pmNote: null,
                 activeWorkers: [],
                 activeWorkerTotal: 0,
                 pendingDecisionCount: 0,
@@ -311,14 +312,11 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
 
     dispatcher = createRouterDispatcher({
       ledger,
-      driver,
-      tokens,
+      runTurn: createRouterTurnRunner({ ledger, driver, tokens, purposes: createRouterTurnPurposes(), stateDir, launchDir }),
       sandboxGuard,
       targetRegistry: customRegistry,
       models: { list: async () => catalogs },
       resolveAttachment: (id) => attachmentMetaOf(uploadsDir, id),
-      stateDir,
-      launchDir,
       agentTimeoutMs: 500,
     });
   });
@@ -687,8 +685,7 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
     const makeDispatcher = (overrides: Partial<Parameters<typeof createRouterDispatcher>[0]> = {}) =>
       createRouterDispatcher({
         ledger,
-        driver,
-        tokens,
+        runTurn: createRouterTurnRunner({ ledger, driver, tokens, purposes: createRouterTurnPurposes(), stateDir, launchDir, cleanupGraceMs: 50 }),
         sandboxGuard,
         targetRegistry: {
           selfDeviceId: () => "dev-local",
@@ -698,10 +695,7 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
         },
         models: { list: async () => catalogs },
         resolveAttachment: (id: string) => attachmentMetaOf(uploadsDir, id),
-        stateDir,
-        launchDir,
         agentTimeoutMs: 100,
-        sessionCleanupGraceMs: 50,
         ...overrides,
       });
 
@@ -942,11 +936,83 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
       expect(cmd.error).not.toContain("TypeError");
     });
   });
-});
+  describe("hub dispatch project-show（docs/router-project-catalog-design.md）", () => {
+    const CATALOG = {
+      oneLiner: "给用户自己用的多 agent 系统",
+      aliases: ["Fusa", "agent-hub"],
+      focus: "后台维护项目目录",
+      modules: [{ name: "总助", summary: "分派用户的话" }],
+      decisions: ["每个项目一个项目经理"],
+      openItems: [],
+    };
+    const writeCatalog = () => {
+      const job = ledger.projectCatalog.claimCatalog(Date.now())!;
+      expect(job.projectId).toBe(proj1Id);
+      ledger.projectCatalog.catalogWritten(job, CATALOG, null);
+    };
+    const endTurn = (emit: (event: DriverEvent) => void, input: DriverSendInput) =>
+      emit({ type: "turn.ended", ok: true, interrupted: false, messageIds: input.messageIds, durationMs: 5, at: Date.now() });
 
-describe("hub dispatch project-show（docs/router-project-catalog-design.md）", () => {
-  it.todo("返回渲染好的第二层档案，不超过 ROUTER_PROJECT_SHOW_MAX_BYTES");
-  it.todo("不算进单条指令的分派目标数，也不进回执的 dispatched");
-  it.todo("单轮里第 ROUTER_PROJECT_SHOW_PER_TURN_MAX + 1 次调用被拒");
-  it.todo("名片里每个项目的 description 和 catalog 原样传给提示词，不再拼 pmNote、personaSummary");
+    it("返回渲染好的第二层档案，不超过 ROUTER_PROJECT_SHOW_MAX_BYTES", async () => {
+      writeCatalog();
+      const texts: string[] = [];
+      driver.onTurn = async ({ sessionId, input, emit }) => {
+        const commandId = sandboxGuard.commandOf(sessionId)!;
+        texts.push((await dispatcher.handleAgentDispatch(sessionId, commandId, { op: "project-show", device: "self", projectId: proj1Id })).text);
+        texts.push((await dispatcher.handleAgentDispatch(sessionId, commandId, { op: "project-show", device: "self", projectId: 9_999 })).text);
+        endTurn(emit, input);
+      };
+      await dispatcher.submitCommand({ clientId: "cid-show", text: "agent-hub 有哪些模块" });
+      expect(texts[0]).toContain(`# 项目 #${proj1Id} agent-hub`);
+      expect(texts[0]).toContain("- 做什么：给用户自己用的多 agent 系统");
+      expect(texts[0]).toContain("- 总助：分派用户的话");
+      expect(Buffer.byteLength(texts[0]!)).toBeLessThanOrEqual(ROUTER_PROJECT_SHOW_MAX_BYTES);
+      expect(texts[1]).toContain("还没有档案");
+    });
+
+    it("不算进单条指令的分派目标数，也不进回执的 dispatched", async () => {
+      writeCatalog();
+      driver.onTurn = async ({ sessionId, input, emit }) => {
+        const commandId = sandboxGuard.commandOf(sessionId)!;
+        await dispatcher.handleAgentDispatch(sessionId, commandId, { op: "project-show", device: "self", projectId: proj1Id });
+        emit({ type: "agent.text", uuid: "a", text: "agent-hub 有总助模块", at: Date.now() });
+        endTurn(emit, input);
+      };
+      const record = await dispatcher.submitCommand({ clientId: "cid-show-count", text: "agent-hub 有哪些模块" });
+      expect(record.status).toBe("answered");
+      expect(record.dispatched).toBeNull();
+    });
+
+    it("单轮里第 ROUTER_PROJECT_SHOW_PER_TURN_MAX + 1 次调用被拒", async () => {
+      let rejected: unknown = null;
+      driver.onTurn = async ({ sessionId, input, emit }) => {
+        const commandId = sandboxGuard.commandOf(sessionId)!;
+        for (let i = 0; i < ROUTER_PROJECT_SHOW_PER_TURN_MAX; i++) {
+          await dispatcher.handleAgentDispatch(sessionId, commandId, { op: "project-show", device: "self", projectId: proj1Id });
+        }
+        rejected = await dispatcher.handleAgentDispatch(sessionId, commandId, { op: "project-show", device: "self", projectId: proj1Id }).catch((e: unknown) => e);
+        endTurn(emit, input);
+      };
+      await dispatcher.submitCommand({ clientId: "cid-show-max", text: "查查" });
+      expect(rejected).toBeInstanceOf(Error);
+      expect((rejected as Error).message).toContain(`一轮最多查 ${ROUTER_PROJECT_SHOW_PER_TURN_MAX} 个`);
+    });
+
+    it("名片里每个项目的 description 和 catalog 原样传给提示词，不再拼 pmNote、personaSummary", async () => {
+      db.run("UPDATE projects SET description = '多 agent 工作台' WHERE id = ?", proj1Id);
+      writeCatalog();
+      let prompt = "";
+      driver.onTurn = async ({ input, emit }) => {
+        prompt = input.text;
+        endTurn(emit, input);
+      };
+      await dispatcher.submitCommand({ clientId: "cid-card", text: "改一下 Fusa 的设置页" });
+      expect(prompt).toContain("- 说明: 多 agent 工作台（用户写的）");
+      expect(prompt).toContain("- 做什么: 给用户自己用的多 agent 系统");
+      expect(prompt).toContain("- 别名: Fusa、agent-hub");
+      expect(prompt).toContain(`hub dispatch project-show --device self --project ${proj1Id}`);
+      expect(prompt).not.toContain("负责核心仓库研发");
+      expect(prompt).not.toContain("- summary:");
+    });
+  });
 });

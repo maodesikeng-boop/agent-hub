@@ -704,12 +704,6 @@ describe("Router 与 TaskGraph 增量状态演进", () => {
     s = applyChange(s, changeOf(15, "router.reports.archived_all", { archivedIds: [2], updatedAt: 107 }));
     expect(s.router.items).toBe(afterArchive);
 
-    // 备忘增改与清空
-    s = applyChange(s, changeOf(16, "router.note.updated", { pmId: 1, note: { pmId: 1, text: "正在合 PR", updatedAt: 110 } }));
-    expect(s.router.notes).toEqual([{ pmId: 1, text: "正在合 PR", updatedAt: 110 }]);
-    s = applyChange(s, changeOf(17, "router.note.updated", { pmId: 1, note: null }));
-    expect(s.router.notes).toEqual([]);
-
     // 任务图创建（active）与完结移出（completed）
     const baseGraph = {
       id: 9,
@@ -821,7 +815,6 @@ describe("Router 与 TaskGraph 增量状态演进", () => {
     const legacyRouter = {
       settings: s.router.settings,
       items: [report(2)],
-      notes: [],
       commands: [],
     } as unknown as HubState["router"];
     const legacyLoaded = reducer(initialState, { type: "loaded", snapshot: makeSnapshot({ router: legacyRouter }) });

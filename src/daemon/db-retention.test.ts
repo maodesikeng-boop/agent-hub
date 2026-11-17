@@ -170,7 +170,7 @@ describe("Router 与已完成任务图的到期清理", () => {
         );
       }
       for (let i = 1; i <= 530; i++) {
-        realDb.run("INSERT INTO router_audit_log (actor, action, created_at) VALUES ('pm', 'router.note', ?)", freshRouterAt + i);
+        realDb.run("INSERT INTO router_audit_log (actor, action, created_at) VALUES ('pm', 'router.report', ?)", freshRouterAt + i);
       }
       realDb.exec("COMMIT");
 

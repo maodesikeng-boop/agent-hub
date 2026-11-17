@@ -33,6 +33,7 @@ import { projectWorktreesDir, sessionLaunchDir } from "../shared/paths.ts";
 import { buildFingerprintPrompt, buildLaunchPrompt, personaUpdateNote } from "./prompt.ts";
 import { removeProductSkills, taskGraphSkillFile, writeProductSkills } from "./task-graph-skill.ts";
 import { prepareRouterSandboxLaunch } from "./router/sandbox.ts";
+import type { RouterTurnPurpose } from "./router/single-turn.ts";
 
 export interface LaunchPreparerOptions {
   launchDir: string;
@@ -60,6 +61,8 @@ export interface LaunchPreparerOptions {
   basePath?: string | (() => string);
   /** 这台设备上各家厂商的状态（缓存里的，不等查询）：项目经理提示词只列能选的。不给就全列。 */
   vendorAvailability?: () => VendorAvailabilityMap;
+  /** 总助单轮会话的用途（router/single-turn.ts 的 RouterTurnPurposes.of）；不给都按 dispatch。 */
+  routerPurposeOf?: (sessionId: SessionId) => RouterTurnPurpose;
 }
 
 function realpathOr(path: string): string {
@@ -105,6 +108,7 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
         hubBinDir,
         basePath,
         vendorAvailability: options.vendorAvailability?.(),
+        purpose: options.routerPurposeOf?.(session.id) ?? "dispatch",
       });
     }
     const osSandboxed = typeof options.osSandboxed === "function" ? options.osSandboxed() : (options.osSandboxed ?? osSandboxAvailable());

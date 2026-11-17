@@ -441,11 +441,7 @@ export function applyReminderChange(state: ReminderState, change: Change): Remin
         Object.entries(state.conversations).filter(([, view]) => view.conversation.pmId !== pmId),
       );
       const routerItems = curRouter.items.filter((i) => i.pmId !== pmId);
-      const routerNotes = curRouter.notes.filter((n) => n.pmId !== pmId);
-      const router =
-        routerItems.length === curRouter.items.length && routerNotes.length === curRouter.notes.length
-          ? curRouter
-          : { ...curRouter, items: routerItems, notes: routerNotes };
+      const router = routerItems.length === curRouter.items.length ? curRouter : { ...curRouter, items: routerItems };
       const activeTaskGraphs = curGraphs.filter((g) => g.pmId !== pmId);
       return {
         ...next,

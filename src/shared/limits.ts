@@ -671,9 +671,6 @@ export const MAX_ROUTER_CONTEXT_BYTES = 4 * ROUTER_CONTEXT_MAX_CHARS;
 /** 拍板卡选项数量下限与上限。 */
 export const ROUTER_OPTION_MIN_COUNT = 2;
 export const ROUTER_OPTION_MAX_COUNT = 4;
-/** PM 给 Router 留的一句话备忘字数上限。 */
-export const ROUTER_NOTE_MAX_CHARS = 500;
-export const MAX_ROUTER_NOTE_BYTES = 4 * ROUTER_NOTE_MAX_CHARS;
 /** 汇报附带链接上限及单条标签/目标长度上限。 */
 export const ROUTER_REPORT_LINKS_MAX = 4;
 export const ROUTER_REPORT_LINK_LABEL_MAX_CHARS = 80;
@@ -690,9 +687,6 @@ export const ROUTER_STREAM_LIVE_MAX = 200;
 /** Router 时间流历史每页条数，和每个来源最多往回翻几页（到了就不再出 Load earlier）。 */
 export const ROUTER_STREAM_PAGE_SIZE = 30;
 export const ROUTER_STREAM_MAX_PAGES = 10;
-/** Digest 中 PM 性格摘要最多取前几行、最多多少字。 */
-export const ROUTER_PERSONA_SUMMARY_LINES = 4;
-export const ROUTER_PERSONA_SUMMARY_MAX_CHARS = 200;
 /** Digest 中单个 PM 附带的在跑 Worker 上限（超出只计总数）。 */
 export const ROUTER_PM_ACTIVE_WORKERS_MAX = 6;
 /** 单份 Fleet Digest JSON 字节上限（24 KB）。 */
@@ -1023,3 +1017,5 @@ export const PROJECT_CATALOG_TICK_MS = 60_000;
 /** hub dispatch project-show 单次输出字节上限，和单轮里最多查几个项目。 */
 export const ROUTER_PROJECT_SHOW_MAX_BYTES = 16_384;
 export const ROUTER_PROJECT_SHOW_PER_TURN_MAX = 4;
+/** 总助名片里单张完整 PM 名片的字节上限（带第一层项目档案，docs/router-project-catalog-design.md 第 4 节）。 */
+export const ROUTER_PM_CARD_MAX_BYTES = 2_048;

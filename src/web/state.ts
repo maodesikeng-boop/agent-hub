@@ -326,11 +326,7 @@ export function applyChange(state: HubState, change: Change): HubState {
         Object.entries(state.conversations).filter(([, view]) => view.conversation.pmId !== pmId),
       );
       const routerItems = state.router.items.filter((i) => i.pmId !== pmId);
-      const routerNotes = state.router.notes.filter((n) => n.pmId !== pmId);
-      const router =
-        routerItems.length === state.router.items.length && routerNotes.length === state.router.notes.length
-          ? state.router
-          : { ...state.router, items: routerItems, notes: routerNotes };
+      const router = routerItems.length === state.router.items.length ? state.router : { ...state.router, items: routerItems };
       const activeTaskGraphs = state.activeTaskGraphs.filter((g) => g.pmId !== pmId);
       return {
         ...next,
@@ -422,20 +418,6 @@ export function applyChange(state: HubState, change: Change): HubState {
         return x;
       });
       return changed ? { ...next, router: { ...state.router, items } } : next;
-    }
-    case "router.note.updated": {
-      const { pmId, note } = change.data;
-      if (note === null) {
-        const notes = state.router.notes.filter((n) => n.pmId !== pmId);
-        return notes.length === state.router.notes.length ? next : { ...next, router: { ...state.router, notes } };
-      }
-      return {
-        ...next,
-        router: {
-          ...state.router,
-          notes: upsertBy(state.router.notes, note, (a, b) => a.pmId === b.pmId),
-        },
-      };
     }
     case "router.command.created": {
       const { command } = change.data;

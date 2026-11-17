@@ -1,6 +1,6 @@
 -- 0032_project_catalogs：总助的项目目录（docs/router-project-catalog-design.md）。一个项目一行，后台按账本里的对话增量自动维护。
 -- 档案正文是 shared/project-catalog.ts 的 ProjectCatalog（JSON）。删项目时跟着删。
--- 实现步骤在同一个文件里补 DROP TABLE router_pm_notes（hub router note 一起删）；方案 PR 不单独合入。
+-- 同时删掉 hub router note 的表 router_pm_notes：项目经理手写的一句话备忘被自动维护的档案取代。
 CREATE TABLE IF NOT EXISTS project_catalogs (
   project_id      INTEGER PRIMARY KEY REFERENCES projects (id) ON DELETE CASCADE,
   -- ProjectCatalog 的 JSON；NULL = 还没写成过（只有失败记录）
@@ -20,3 +20,5 @@ CREATE TABLE IF NOT EXISTS project_catalogs (
   usage           TEXT,
   updated_at      INTEGER NOT NULL
 ) STRICT;
+
+DROP TABLE IF EXISTS router_pm_notes;
