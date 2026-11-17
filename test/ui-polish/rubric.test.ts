@@ -5,9 +5,11 @@ import {
   PRINCIPLES,
   RULE_REF_PATTERN,
   SCORE_BANDS,
+  SEVERITY_CAPS,
   dimensionOfRule,
   pageScore,
   parseScoreCard,
+  scoreBands,
   scoreFromFindings,
   type Finding,
   type ScoreCard,
@@ -213,6 +215,27 @@ describe("scoreFromFindings", () => {
   it.each(bandCases)("分档表 $score 分档按对应发现精确算出", ({ score, findings }) => {
     expect(SCORE_BANDS.some((b) => b.score === score)).toBe(true);
     expect(scoreFromFindings(findings).style).toBe(score);
+  });
+
+  it("分档表里每一档，算分照它算", () => {
+    for (const sev of ["P1", "P2", "P3"] as const) {
+      for (const { count, cap } of SEVERITY_CAPS[sev]) {
+        expect(scoreFromFindings(Array.from({ length: count }, () => ({ rule: "S1", severity: sev }))).style).toBe(cap);
+      }
+    }
+    for (const { count, cap } of SEVERITY_CAPS.P0) {
+      expect(scoreFromFindings(Array.from({ length: count }, () => ({ rule: "machine:clipped", severity: "P0" as const })))).toEqual({ style: cap, standard: cap, aesthetic: cap, ux: cap });
+    }
+  });
+
+  it("给评委看的分档文字由同一张分档表推出来，改表文字跟着变", () => {
+    const band = (bands: ReturnType<typeof scoreBands>, score: number) => bands.find((b) => b.score === score)?.means ?? "";
+    expect(SCORE_BANDS).toEqual(scoreBands(SEVERITY_CAPS));
+    expect(band(SCORE_BANDS, 7)).toContain("2 到 3 条 P2");
+    expect(band(SCORE_BANDS, 6)).toContain("4 条以上 P2");
+    const changed = scoreBands({ ...SEVERITY_CAPS, P2: [{ count: 1, cap: 8 }, { count: 2, cap: 7 }, { count: 5, cap: 6 }] });
+    expect(band(changed, 7)).toContain("2 到 4 条 P2");
+    expect(band(changed, 6)).toContain("5 条以上 P2");
   });
 
   it("两张示例评分卡的 findings 算出同文件里的 computed", () => {

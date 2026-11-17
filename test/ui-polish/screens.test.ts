@@ -96,6 +96,16 @@ describe("batchShots", () => {
     expect(Math.max(...per) - Math.min(...per)).toBeLessThanOrEqual(1);
   });
 
+  it("哨兵图不和同一界面同一视口的图分在一批", () => {
+    const shots = shotsOf(40);
+    const sentinels = [shots[0]!, shots[0]!, shots[0]!].map((s, i) => ({ ...s, key: `sentinel-${i}` }));
+    const batches = batchShots(shots, sentinels, 1, 14);
+    for (const batch of batches) {
+      const same = batch.filter((s) => s.screen.id === shots[0]!.screen.id && s.viewport === shots[0]!.viewport);
+      expect(same.length).toBeLessThanOrEqual(1);
+    }
+  });
+
   it("seed 相同分法相同，seed 不同批内顺序不同", () => {
     const shots = shotsOf(28);
     const keys = (seed: number) => batchShots(shots, [], seed, 28).map((b) => b.map((s) => s.key));

@@ -3,7 +3,7 @@ import type { CaptureManifest, CapturedShot } from "./capture.ts";
 import type { MachineFinding } from "./checks.ts";
 import { CALIBRATION_RUNS, MAX_FIX_ROUNDS, PASS_SCORE, STALL_ROUNDS } from "./limits.ts";
 import { MUTATIONS, type Mutation } from "./mutations.ts";
-import type { Finding, ScoreCard } from "./rubric.ts";
+import { pageScore, scoreFromFindings, type Finding, type ScoreCard } from "./rubric.ts";
 import {
   calibrationReport,
   decideNext,
@@ -69,13 +69,36 @@ describe("mergeRound", () => {
       manifest,
       cards: [
         card("chat.normal@desktop", JUDGE_A, [finding("A2", "P2", { x: 0.2, y: 0.2, w: 0.2, h: 0.2 })]),
-        card("chat.normal@desktop", JUDGE_B, [finding("S3", "P2", { x: 0.22, y: 0.22, w: 0.2, h: 0.2 })]),
+        card("chat.normal@desktop", JUDGE_B, [finding("A5", "P2", { x: 0.22, y: 0.22, w: 0.2, h: 0.2 })]),
       ],
       dismissals: [],
     });
     expect(res.findings).toHaveLength(1);
     expect([...res.findings[0]!.by].sort()).toEqual([JUDGE_A, JUDGE_B].sort());
     expect(res.findings[0]!.counted).toBe(true);
+  });
+
+  it("同一处并成一条时留下更重的那条的规则和严重度", () => {
+    const box = { x: 0.2, y: 0.2, w: 0.2, h: 0.2 };
+    const res = mergeRound({
+      manifest: makeManifest(makeShot("chat.normal@desktop")),
+      cards: [card("chat.normal@desktop", JUDGE_A, [finding("A2", "P2", box)]), card("chat.normal@desktop", JUDGE_B, [finding("A5", "P1", box)])],
+      dismissals: [],
+    });
+    expect(res.findings).toHaveLength(1);
+    expect(res.findings[0]).toMatchObject({ rule: "A5", severity: "P1" });
+    expect(res.shots[0]!.byJudge[JUDGE_A]!.aesthetic).toBe(6);
+  });
+
+  it("框重叠但记在不同项上的发现不并，合出来的分不高于每家各自算再取低", () => {
+    const at = (x: number) => ({ x, y: 0.1, w: 0.1, h: 0.1 });
+    const cardA = card("s@desktop", JUDGE_A, [finding("A3", "P2", at(0.1))]);
+    const cardB = card("s@desktop", JUDGE_B, [finding("S3", "P2", at(0.1)), finding("S5", "P2", at(0.3)), finding("S1", "P2", at(0.5)), finding("S4", "P2", at(0.7))]);
+    const res = mergeRound({ manifest: makeManifest(makeShot("s@desktop")), cards: [cardA, cardB], dismissals: [] });
+    const separate = Math.min(pageScore(scoreFromFindings(cardA.findings)), pageScore(scoreFromFindings(cardB.findings)));
+    expect(separate).toBe(6);
+    expect(res.shots[0]!.page).toBe(separate);
+    expect(res.shots[0]!.byJudge[JUDGE_B]!.style).toBe(6);
   });
 
   it("只有一家提的 P0 到 P2 计分，只有一家提的 P3 不计分", () => {

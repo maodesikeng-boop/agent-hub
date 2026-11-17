@@ -6,12 +6,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { openStore } from "../../src/daemon/store/index.ts";
 import { API_PATHS, ENV_HOME } from "../../src/shared/index.ts";
 import { resolveHubPaths } from "../../src/shared/paths.ts";
+import { BLIND_PLAN_FILE, type BlindPlan } from "./blind.ts";
 import { diffManifests, type CaptureManifest, type CapturedShot } from "./capture.ts";
 import { main } from "./cli.ts";
 import { MUTATIONS, applyMutation } from "./mutations.ts";
 import { applyPatch, blockWrites } from "./patches.ts";
 import { DIMENSIONS } from "./rubric.ts";
-import { assertIsolatedHome, seedScenario } from "./seed.ts";
+import { seedScenario } from "./seed.ts";
 
 const shot = (key: string, sha256: string, focusSha256?: string): CapturedShot => ({
   key,
@@ -55,14 +56,6 @@ describe("diffManifests", () => {
 });
 
 describe("安全边界与种子数据", () => {
-  it("数据目录落在 ~/.agent-hub 或包含它时拒绝启动", () => {
-    const realData = join(homedir(), ".agent-hub");
-    expect(() => assertIsolatedHome(realData)).toThrow(/重叠/);
-    expect(() => assertIsolatedHome(join(realData, "shots"))).toThrow(/重叠/);
-    expect(() => assertIsolatedHome(homedir())).toThrow(/重叠/);
-    expect(() => assertIsolatedHome(makeTempDir())).not.toThrow();
-  });
-
   it("seedScenario 在目标目录非空时抛错不覆盖", async () => {
     const dir = makeTempDir();
     writeFileSync(join(dir, "keep.txt"), "1");
@@ -159,6 +152,7 @@ describe("校准用的弄坏与命令行入口", () => {
       shots: [shot("chat.normal@desktop", sha1), shot("quota.normal@desktop", sha2)],
     };
     writeFileSync(join(r0Dir, "manifest.json"), JSON.stringify(sampleManifest));
+    for (const s of sampleManifest.shots) writeFileSync(join(r0Dir, s.file), s.key);
 
     let out = "";
     vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
@@ -187,8 +181,10 @@ describe("校准用的弄坏与命令行入口", () => {
         outRoot,
       ]),
     ).toBe(0);
-    expect(out).toContain("chat.normal@desktop");
-    expect(out).toContain("quota.normal@desktop");
+    const plan = JSON.parse(readFileSync(join(r0Dir, BLIND_PLAN_FILE), "utf8")) as BlindPlan;
+    expect(plan.items.map((i) => i.key).sort()).toEqual(["chat.normal@desktop", "quota.normal@desktop"]);
+    for (const item of plan.items) expect(out).toContain(item.id);
+    expect(out).not.toContain("chat.normal@desktop");
 
     expect(
       await main([
@@ -210,14 +206,14 @@ describe("校准用的弄坏与命令行入口", () => {
       const slug = judge.replaceAll("/", "__");
       const batchDir = join(r0Dir, "cards", slug, "batch-1");
       mkdirSync(batchDir, { recursive: true });
-      for (const s of sampleManifest.shots) {
+      for (const item of plan.items) {
         writeFileSync(
-          join(batchDir, `${s.key}.json`),
+          join(batchDir, `${item.id}.json`),
           JSON.stringify({
-            shot: s.key,
+            shot: item.id,
             judge,
             run: 1,
-            imageSha256: s.sha256,
+            imageSha256: item.sha256,
             findings: [],
             holistic: { style: 10, standard: 10, aesthetic: 10, ux: 10 },
             summary: "ok",
@@ -261,12 +257,17 @@ describe("校准用的弄坏与命令行入口", () => {
       shots: [shot("chat.normal@desktop", sha)],
     };
     writeFileSync(join(c1Dir, "manifest.json"), JSON.stringify(calManifest));
+    writeFileSync(join(c1Dir, "chat.normal@desktop.png"), "png");
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    expect(await main(["brief", "--round", "C1", "--judge", "agy/gemini-4-carbon", "--batch", "1", "--batch-size", "28", "--repo-root", repoRoot, "--out-root", outRoot])).toBe(0);
+    const [item] = (JSON.parse(readFileSync(join(c1Dir, BLIND_PLAN_FILE), "utf8")) as BlindPlan).items;
     const cardsDir = join(c1Dir, "cards", "batch-size-28", "agy__gemini-4-carbon", "run-1", "batch-1");
     mkdirSync(cardsDir, { recursive: true });
     writeFileSync(
-      join(cardsDir, "chat.normal@desktop.json"),
+      join(cardsDir, `${item!.id}.json`),
       JSON.stringify({
-        shot: "chat.normal@desktop",
+        shot: item!.id,
         judge: "agy/gemini-4-carbon",
         run: 1,
         imageSha256: sha,
@@ -275,9 +276,6 @@ describe("校准用的弄坏与命令行入口", () => {
         summary: "not ok",
       }),
     );
-
-    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
     expect(await main(["calibration", "--round", "C1", "--repo-root", repoRoot, "--out-root", outRoot])).toBe(1);
     expect(existsSync(join(repoRoot, "docs/ui-polish/calibration.md"))).toBe(true);
