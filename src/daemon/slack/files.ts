@@ -5,7 +5,7 @@
 //   超了的跳过并在回执里说明；
 // - 同一条消息的第几个文件只传一次（slack_posts 的 file ref）。
 import type { Attachment } from "../../shared/attachments.ts";
-import type { SlackChannelId, SlackTs } from "../../shared/slack.ts";
+import type { SlackChannelId } from "../../shared/slack.ts";
 import type { SlackInboundFile } from "./inbound.ts";
 import type { SlackTransport } from "./transport.ts";
 
@@ -19,12 +19,12 @@ export interface SlackOutboundFile {
 }
 
 /**
- * 后置：逐个上传到 channel（threadTs 不为 null 时挂在串里），返回传成了的 index 和 Slack 文件编号；
+ * 后置：逐个上传到频道主聊天流，返回传成了的 index 和 Slack 文件编号；
  * 单个失败（文件不在了、超过 MAX_SENT_FILE_BYTES、Slack 报错）记进 failed，不影响别的。
  */
 export function uploadSlackFiles(
   transport: SlackTransport,
-  target: { channelId: SlackChannelId; threadTs: SlackTs | null },
+  channelId: SlackChannelId,
   files: readonly SlackOutboundFile[],
 ): Promise<{ uploaded: { index: number; fileId: string }[]; failed: { index: number; reason: string }[] }> {
   throw new Error("未实现");

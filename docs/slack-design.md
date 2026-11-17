@@ -9,17 +9,15 @@
 
 ### 要你拍板的事
 
-1. **回复放在哪、怎么流式。** Slack 规定原生流式（打字机效果）只能发在消息串里，顶层消息只能发出后反复改。
-   - A（推荐）：回复跟着提问走。你在频道里直接说，项目经理就在频道里直接回，边写边刷新（约 1.5 秒一刷）；你在某条消息的串里说，就在那个串里回，用原生流式。手机上一对一聊天不用每次点进串里看。
-   - B：所有回复都进串，全用原生流式，打字最顺，但每条回复都要点进串才看得到全文。
-   - C：不流式，写完一段发一段。最省事，但长回复要干等。
-2. **被拉进来的人说话，项目经理能做多少。**
-   - A（推荐）：访客 @机器人 或在机器人的串里接话就直达项目经理，消息带上他的名字和“访客”标记。新建项目、挂载或移除文件夹、准备命令、改性格设定、拍板步骤、加定时任务这几件，访客唤醒的那一轮里账本直接拒绝。拍板卡按钮、停止按钮、总助频道、附件、斜杠命令只认你。要提醒的是：项目经理那一轮仍然能在项目目录里读写文件、跑命令，所以共享的项目最好放在东京服务器上，并在项目经理能力开关里关掉邮件、云盘这类私人连接器。
+已定：不用串（Thread）。所有回复都直接发在频道主聊天流里，边写边刷新（约 1.5 秒一刷）；多人频道里只有在主聊天流里 @机器人 才唤醒项目经理，在串里说的话一律不唤醒。
+
+1. **被拉进来的人说话，项目经理能做多少。**
+   - A（推荐）：访客在频道主聊天流里 @机器人 就直达项目经理，消息带上他的名字和“访客”标记。新建项目、挂载或移除文件夹、准备命令、改性格设定、拍板步骤、加定时任务这几件，访客唤醒的那一轮里账本直接拒绝。拍板卡按钮、停止按钮、总助频道、附件、斜杠命令只认你。要提醒的是：项目经理那一轮仍然能在项目目录里读写文件、跑命令，所以共享的项目最好放在东京服务器上，并在项目经理能力开关里关掉邮件、云盘这类私人连接器。
    - B：访客的话先在频道里给你一个“转给项目经理”按钮，你点了才送达。最安全，但聊起来不顺。
-3. **Mac 和东京服务器两台都要接时。**
+2. **Mac 和东京服务器两台都要接时。**
    - A（推荐）：每台各建一个 Slack 应用（机器人名带设备名，比如 “Fusa · 东京”），可以装在同一个工作区里，频道名也带设备名，互不串台。哪台断了只影响那台。
    - B：只在一台上接，经已配对设备转发管另一台的项目经理。少一个机器人，但这台一断两台都没法在 Slack 里用，这次不做。
-4. **总助频道里的拍板卡。**
+3. **总助频道里的拍板卡。**
    - A（推荐）：按钮只放在项目经理频道那张卡上，总助频道发一行摘要和“去拍板”的跳转链接，同一张卡只有一处可点。
    - B：两个频道都放按钮，点了一处另一处同时变成已定案。
 
@@ -63,13 +61,12 @@
 | --- | --- | --- |
 | Socket Mode | 守护进程用应用级令牌（`xapp-`，`connections:write`）开 WebSocket，主动连出去，不要公网地址。每个信封带 `envelope_id`，必须回 ack；连接每隔几小时会收到 `disconnect`（`warning` 提前约 10 秒、`refresh_requested`），要重连。 | docs.slack.dev/apis/events-api/using-socket-mode |
 | 应用级令牌轮换 | 2026-10 起可选开启，开了每 12 小时过期且关不掉。我们不开，清单里写 `token_rotation_enabled: false`。 | slack.dev/app-level-token-rotation-in-slack（2026-10-08） |
-| 原生流式 | `chat.startStream`（Tier 2）/`appendStream`（Tier 4）/`stopStream`（Tier 2），只要 `chat:write`。在普通频道和单聊里必须是串里的回复（顶层只在 Slack Code 这类频道可以，否则 `invalid_thread_ts`），在频道里还必须给 `recipient_user_id` 和 `recipient_team_id`。一条最长 10 分钟，markdown 合计 12,000 字；第三方 2026-10 实测普通机器人不开 Agents 功能也能用，空闲 301 秒还在、311 秒失效。 | docs.slack.dev/reference/methods/chat.startStream、chat.appendStream、chat.stopStream；slack.green/en/blog/slack-chat-startstream（2026-10-03） |
 | 改消息 | `chat.update` 是 Tier 3（每个工作区每分钟 50+ 次）。发消息每个频道约每秒一条。 | docs.slack.dev/reference/methods/chat.update；docs.slack.dev/apis/web-api/rate-limits |
 | 富文本 | `markdown` 块直接吃标准 Markdown（项目经理的回复不用转格式），一个块 12,000 字，一条消息合计约 13,000 字。 | docs.slack.dev/reference/block-kit/blocks/markdown-block |
-| 文件 | `files.upload` 已于 2025-11-12 下线，改用 `files.getUploadURLExternal` + 上传 + `files.completeUploadExternal`（都是 Tier 4，`files:write`），可以挂在串里（`thread_ts`）。官方 SDK 的 `uploadV2` 包好了这三步。 | docs.slack.dev/reference/methods/files.getUploadURLExternal、files.completeUploadExternal |
+| 文件 | `files.upload` 已于 2025-11-12 下线，改用 `files.getUploadURLExternal` + 上传 + `files.completeUploadExternal`（都是 Tier 4，`files:write`）。官方 SDK 的 `uploadV2` 包好了这三步。 | docs.slack.dev/reference/methods/files.getUploadURLExternal、files.completeUploadExternal |
 | 读历史的限流 | 2025-05 起对商店外分发的应用把 `conversations.history/replies` 降到每分钟 1 次；用户自己工作区里自建的应用（我们这种）不受影响。我们也不靠读历史，事件进来就处理。 | docs.slack.dev/changelog/2025/05/29/rate-limit-changes-for-non-marketplace-apps |
 | 私密频道 | `conversations.create` 带 `is_private: true`（`groups:write`）。频道名只能小写字母、数字、`-`、`_`，最长 80 字；第三方实测中文等其他文字也收。归档的频道仍占着名字。 | docs.slack.dev/reference/methods/conversations.create；slack.green/en/blog/slack-channel-name-rules（2026-10-07） |
-| 官方 Node 包 | `@slack/web-api` 8.x（改用原生 fetch，自带 429 退避和 `chatStream` 流式助手）、`@slack/socket-mode` 3.x（3.2.0），Bolt for JS 5.0（Node 20+）。 | slack.dev/changelog-july-sept-2026；npmjs.com/package/@slack/socket-mode |
+| 官方 Node 包 | `@slack/web-api` 8.x（改用原生 fetch，自带 429 退避和三步上传）、`@slack/socket-mode` 3.x（3.2.0），Bolt for JS 5.0（Node 20+）。 | slack.dev/changelog-july-sept-2026；npmjs.com/package/@slack/socket-mode |
 | 免费版 | 免费版只能看最近 90 天的消息，账本里的完整记录不受影响。 | 推断（Slack 计划说明，未逐字核对） |
 
 ## 做法比较
@@ -86,7 +83,7 @@
 
 | 做法 | 说明 | 结论 |
 | --- | --- | --- |
-| A. `@slack/web-api` 8.x + `@slack/socket-mode` 3.x | 官方 SDK 的两块：Web API 客户端（429 退避、`uploadV2`、`chatStream`）和 Socket Mode 客户端（ack、断线重连）。路由由我们自己按领域做 | 推荐 |
+| A. `@slack/web-api` 8.x + `@slack/socket-mode` 3.x | 官方 SDK 的两块：Web API 客户端（429 退避、`uploadV2`）和 Socket Mode 客户端（ack、断线重连）。路由由我们自己按领域做 | 推荐 |
 | B. `@slack/bolt` 5.x | 官方框架，内部就是 A 的两个包，再加一层监听器路由和中间件 | 我们的分流规则（主客、单人多人、绑定码）不按事件类型路由，Bolt 那层用不上，反而多一层要绕开的约定 |
 | C. 自己写 `ws` + `fetch` | 已有 `ws` | 不用：ack、重连、429、三步上传都要手搓 |
 
@@ -105,11 +102,11 @@
 
 **频道对应。** 总助一个、每个项目经理一个私密频道，名字带设备名。对齐只看账本现状和 `slack_channels`，项目经理新建、改名、归档、取消归档时重算一遍（`planSlackChannelSync`），重复执行不多建。Worker 不建频道，按静默规矩只由项目经理转述。
 
-**单人直聊和多人共聊。** 频道里除机器人外只有主人时是 solo，每句话直达；有别人时是 shared，只有 @机器人 或在机器人消息的串里接话才唤醒，其余聊天按频道记在内存里（最多 20 条、4,000 字、2 小时内），下一次唤醒时作为“频道里刚才的讨论”一起带给项目经理。模式由成员事件实时切换。
+**单人直聊和多人共聊。** 频道里除机器人外只有主人时是 solo，每句话直达；有别人时是 shared，只有在频道主聊天流里 @机器人 才唤醒，其余主聊天流里的话按频道记在内存里（最多 20 条、4,000 字、2 小时内），下一次唤醒时作为“频道里刚才的讨论”一起带给项目经理。模式由成员事件实时切换。发在串里的话不唤醒、也不记背景（主人在串里说话会收到一条只有自己看得见的提示：“请在频道主聊天流里说”）。
 
 **发言人署名与主客边界。** 从 Slack 进来的用户消息在 meta 里记 `origin`（显示名、主人或访客、当时的模式、背景聊天），发给 agent 时由 `deliveryParts` 加署名（solo 下主人的话不加，和网页一样）。硬边界分三处：入口（`routing.ts`）挡住访客的总助频道发言、按钮、停止、附件、斜杠命令；账本 `hubCall` 在访客唤醒的轮次里拒绝 `SLACK_GUEST_BLOCKED_HUB_COMMANDS`；配合已上线的项目经理能力开关把私人连接器关掉。
 
-**流式与急停。** 每个项目经理对话同一时间最多一条在流式的 Slack 消息，状态机见 `stream.ts`：顶层用 `chat.postMessage` + 节流 `chat.update`（每条 1.5 秒一刷，整个工作区每分钟最多 45 次，超了只合并）；串里用原生流式，失败一次就退回改消息。流式中的消息带“停止”按钮（调 `requestStop`），定稿时去掉。一段落库后流式那条改成最终正文，不另发。
+**流式与急停。** 每个项目经理对话同一时间最多一条在流式的 Slack 消息，状态机见 `stream.ts`：在频道主聊天流里先 `chat.postMessage`，再节流 `chat.update`（每条 1.5 秒一刷，整个工作区每分钟最多 45 次，超了只合并）。所有发送都不带 `thread_ts`。流式中的消息带“停止”按钮（调 `requestStop`），定稿时去掉。一段落库后流式那条改成最终正文，不另发。
 
 **拍板卡。** 提问卡、检查点卡、提醒卡画成 Block Kit：选项按钮（推荐项第一、带星）、“补充说明”和“打回”打开弹窗写原因、提醒卡是 Done。点了走账本原有接口，账本推变化后 Slack 原消息改成“已定案”（谁、选了什么）。网页上答的卡也一样改。
 
@@ -131,9 +128,6 @@
 | `SLACK_MESSAGE_MAX_CHARS` | 11,000 | markdown 块一条消息合计 12,000 字，留按钮和署名的余量 |
 | `SLACK_STREAM_UPDATE_INTERVAL_MS` | 1,500 | 一条消息每分钟约 40 次刷新，单个项目经理回复不超 Tier 3 |
 | `SLACK_UPDATE_BUDGET_PER_MINUTE` | 45 | `chat.update` Tier 3 每个工作区每分钟 50+ 次，留余量 |
-| `SLACK_NATIVE_STREAM_APPEND_INTERVAL_MS` | 500 | `appendStream` Tier 4 每分钟 100+ 次 |
-| `SLACK_NATIVE_STREAM_MAX_MS` | 480,000 | 10 分钟强制结束前收尾 |
-| `SLACK_NATIVE_STREAM_IDLE_MAX_MS` | 240,000 | 实测空闲约 5 分钟失效 |
 | `SLACK_CONTEXT_WINDOW_MESSAGES` / `_CHARS` / `_MAX_AGE_MS` | 20 / 4,000 / 2 小时 | 一次唤醒带的背景不超过一屏，也不把几小时前的闲聊塞给 agent |
 | `SLACK_CHANNEL_CACHE_MAX` | 200 | 频道数 = 项目经理数 + 1，本机现在不到 20 个项目经理，留十倍 |
 | `SLACK_MEMBERS_TTL_MS` / `_RETRY_MS` | 10 分钟 / 30 秒 | 事件实时更新为主，定期对账兜住漏掉的事件 |
@@ -189,11 +183,11 @@
 
 ## 验收方法
 
-- **单元测试。** 上面每个 `it.todo` 改成真断言后全绿，重点：`routeSlackMessage` 的单人多人切换和主客拦截、`stepSlackStream` 的“定稿正文等于账本这段文字、不另发”、`planSlackChannelSync` 的幂等、`slackGuestTurnBlockReason` 覆盖每个禁用命令。`service.test.ts` 用假传输层和真账本跑通整条链。
+- **单元测试。** 上面每个 `it.todo` 改成真断言后全绿，重点：`routeSlackMessage` 的单人多人切换和主客拦截、`stepSlackStream` 的“定稿正文等于账本这段文字、不另发”、`planSlackChannelSync` 的幂等、`slackGuestTurnBlockReason` 覆盖每个禁用命令。`service.test.ts` 用假传输层和真账本跑通整条链，并断言所有发送都不带 `thread_ts`。
 - **真机，私人工作区，手机 Slack 客户端。** 证据是手机截图（放 `docs/screenshots/slack/`）和守护进程日志片段，贴进 PR：
   1. 从清单链接建应用到频道出现，计时，五分钟以内（录屏 mp4）。
-  2. solo：在项目经理频道说一句，回复边写边出现，点“停止”能停；网页上同一个对话同时出现这两条。
-  3. shared：拉一个测试账号进频道，它不 @ 说的话项目经理不回；@机器人 后项目经理的回复里引用了刚才的讨论；驱动日志里写给 agent 的正文带“【Slack · 名字（访客）】”。
+  2. solo：在项目经理频道说一句，回复直接出现在频道主聊天流里、边写边刷新，点“停止”能停；网页上同一个对话同时出现这两条。整个过程频道里没有任何串（截图）。
+  3. shared：拉一个测试账号进频道，它不 @ 说的话项目经理不回；在某条消息的串里 @机器人 项目经理也不回；在主聊天流 @机器人 后项目经理的回复里引用了刚才的讨论；驱动日志里写给 agent 的正文带“【Slack · 名字（访客）】”。
   4. 访客点拍板按钮只看到“只有主人能拍板”；访客让项目经理挂载 `~/Documents`，`hub project attach` 返回 forbidden（日志）；访客在总助频道说话被拒。
   5. 拍板卡：Slack 点选项后网页卡片同时变已回答；网页回答另一张，Slack 原消息变“已定案”、按钮消失。
   6. 交付：项目经理发一张截图和一份 Markdown，Slack 里是原生图片和文件附件。

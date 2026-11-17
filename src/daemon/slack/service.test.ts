@@ -12,7 +12,7 @@ describe("createSlackService：接入与频道", () => {
 describe("createSlackService：单人直聊与多人共聊", () => {
   it.todo("单人频道里主人说的话进账本，meta.origin 的 mode 是 solo，发给 agent 时没有署名");
   it.todo("访客进频道后，没 @ 的聊天不进账本，下一次 @机器人 时作为背景一起带给项目经理");
-  it.todo("多人频道里 @机器人 的话进账本，带发言人署名和主客身份");
+  it.todo("多人频道里在主聊天流 @机器人 的话进账本，带发言人署名和主客身份；在串里 @机器人 不进账本");
   it.todo("访客离开后自动回到单人直聊");
   it.todo("同一条 Slack 消息重投只进账本一次");
 });
@@ -24,7 +24,8 @@ describe("createSlackService：主客权限", () => {
 });
 
 describe("createSlackService：流式、急停与卡片", () => {
-  it.todo("项目经理回复时先发一条带停止按钮的消息，随流式更新，落库后正文等于账本里这段文字，停止按钮去掉");
+  it.todo("项目经理回复时先在频道主聊天流发一条带停止按钮的消息，随流式用 chat.update 更新，落库后正文等于账本里这段文字，停止按钮去掉");
+  it.todo("整个流程里假传输层收到的发送都不带 thread_ts");
   it.todo("主人点停止调 requestStop，这一轮停下");
   it.todo("hub ask 的卡片在频道里带按钮；主人在 Slack 点选项后账本记下回答，网页上这张卡同时变成已回答");
   it.todo("网页上回答的卡片，Slack 原消息改成已定案，按钮去掉；改两次结果相同");
@@ -33,7 +34,7 @@ describe("createSlackService：流式、急停与卡片", () => {
 });
 
 describe("createSlackService：总助频道", () => {
-  it.todo("主人在总助频道说的话交给 submitCommand，回复发在那条消息的串里");
+  it.todo("主人在总助频道说的话交给 submitCommand，回复作为新消息发在总助频道主聊天流里");
   it.todo("简报发到总助频道；带提问卡的拍板项只发摘要和项目经理频道里那张卡的链接");
 });
 

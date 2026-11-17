@@ -1,7 +1,7 @@
 import { describe, it } from "vitest";
 
 describe("parseSlackEnvelope", () => {
-  it.todo("私密频道里的真人消息解析成 message，channelType 是 group，带 ts 和串的根 ts");
+  it.todo("私密频道里的真人消息解析成 message，channelType 是 group，带 ts；发在串里的 inThread 为 true");
   it.todo("正文里的 <@机器人> 去掉并标 mentionsBot，@别人不算");
   it.todo("机器人自己发的、别的机器人发的、message_changed、message_deleted、channel_join 子类型返回 null");
   it.todo("别的工作区的用户（team 不是本工作区）返回 null");

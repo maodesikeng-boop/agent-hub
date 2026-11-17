@@ -1,6 +1,8 @@
 // Slack 的外部边界（docs/slack-design.md「做法比较」）：Fusa 用到的 Web API 方法和 Socket Mode 收到的原始信封。
 // 只有 sdk.ts 引官方包（@slack/web-api、@slack/socket-mode），别的文件只认这里的接口，测试用假的实现。
-// 不变量：这里的入参出参都是 Slack 原样的 JSON 形状（蛇形命名、裸字符串编号）；进领域前一律过 inbound.ts 的解析。
+// 不变量：
+// - 这里的入参出参都是 Slack 原样的 JSON 形状（蛇形命名、裸字符串编号）；进领域前一律过 inbound.ts 的解析；
+// - 所有发送都在频道主聊天流里，参数里没有 thread_ts，Fusa 不发串回复。
 
 /** 用到的 Web API 方法和参数（只列 Fusa 传的字段）。 */
 export interface SlackMethodArgs {
@@ -14,14 +16,11 @@ export interface SlackMethodArgs {
   "conversations.members": { channel: string; cursor?: string; limit: number };
   "conversations.open": { users: string };
   "users.info": { user: string };
-  "chat.postMessage": { channel: string; text: string; blocks?: unknown[]; thread_ts?: string };
+  "chat.postMessage": { channel: string; text: string; blocks?: unknown[] };
   "chat.update": { channel: string; ts: string; text: string; blocks?: unknown[] };
   "chat.postEphemeral": { channel: string; user: string; text: string };
   "chat.getPermalink": { channel: string; message_ts: string };
   "views.open": { trigger_id: string; view: Record<string, unknown> };
-  "chat.startStream": { channel: string; thread_ts: string; recipient_user_id: string; recipient_team_id: string; markdown_text?: string };
-  "chat.appendStream": { channel: string; ts: string; markdown_text: string };
-  "chat.stopStream": { channel: string; ts: string; blocks?: unknown[] };
 }
 
 export type SlackMethod = keyof SlackMethodArgs;
@@ -37,7 +36,6 @@ export interface SlackApiResult {
 
 export interface SlackUploadInput {
   channel: string;
-  threadTs?: string;
   filename: string;
   /** 本机文件的绝对路径（sent-files 副本或附件）。 */
   path: string;

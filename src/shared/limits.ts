@@ -1039,15 +1039,10 @@ export const PM_CAPABILITY_APPS_CACHE_MAX_BYTES = 16 * 1024 * 1024;
 // ---- 接入 Slack（docs/slack-design.md 的性能一节）。按一个月 300 个已收工 Worker、3 万条消息算，Worker 不建频道 ----
 /** 一条 Slack 消息里放多少字的正文：markdown 块一条消息合计 12,000 字，留出卡片按钮和署名的余量；更长的拆成几条。 */
 export const SLACK_MESSAGE_MAX_CHARS = 11_000;
-/** 顶层消息用 chat.update 流式刷新时，同一条消息两次刷新至少隔多久。 */
+/** 频道主聊天流里用 chat.update 流式刷新时，同一条消息两次刷新至少隔多久。 */
 export const SLACK_STREAM_UPDATE_INTERVAL_MS = 1_500;
 /** 整个工作区每分钟最多发多少次 chat.update（Tier 3 是 50+/分钟，留余量）；超了只合并、不排队。 */
 export const SLACK_UPDATE_BUDGET_PER_MINUTE = 45;
-/** 串里用原生流式（chat.appendStream，Tier 4）时两次追加至少隔多久。 */
-export const SLACK_NATIVE_STREAM_APPEND_INTERVAL_MS = 500;
-/** 原生流式一条最长开多久就收尾换下一条：Slack 10 分钟强制结束，空闲约 5 分钟失效（2026-10 第三方实测 301 秒还在、311 秒已失效）。 */
-export const SLACK_NATIVE_STREAM_MAX_MS = 8 * 60_000;
-export const SLACK_NATIVE_STREAM_IDLE_MAX_MS = 4 * 60_000;
 /** 多人频道里没唤醒机器人的聊天，每个频道最多记多少条、多少字、多久以内，下一次唤醒时带给 agent。 */
 export const SLACK_CONTEXT_WINDOW_MESSAGES = 20;
 export const SLACK_CONTEXT_WINDOW_CHARS = 4_000;

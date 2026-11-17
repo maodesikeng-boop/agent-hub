@@ -46,7 +46,7 @@ export type SlackSpeakerRole = (typeof SLACK_SPEAKER_ROLES)[number];
 /**
  * 频道模式，按频道里除机器人以外的真人数自动定：
  * - solo：只有主人，每句话直达总助或项目经理；
- * - shared：还有别人，只有 @机器人 或在机器人发的消息串里接话才唤醒，其余只记作背景。
+ * - shared：还有别人，只有在频道主聊天流里 @机器人 才唤醒，其余只记作背景。
  */
 export const SLACK_CHANNEL_MODES = ["solo", "shared"] as const;
 export type SlackChannelMode = (typeof SLACK_CHANNEL_MODES)[number];

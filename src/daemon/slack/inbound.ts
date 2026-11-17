@@ -24,8 +24,8 @@ export type SlackInbound =
       channelId: SlackChannelId;
       userId: SlackUserId;
       ts: SlackTs;
-      /** 在串里回复时是串的根消息；顶层消息是 null。 */
-      threadTs: SlackTs | null;
+      /** 是不是发在某条消息的串里。Fusa 只看频道主聊天流，串里的话不唤醒（routing.ts）。 */
+      inThread: boolean;
       /** 去掉 @机器人 之后的原文。 */
       text: string;
       mentionsBot: boolean;

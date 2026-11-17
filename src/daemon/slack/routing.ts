@@ -2,7 +2,7 @@
 // 主客权限的硬边界在这里：总助频道、按钮、急停、附件、斜杠命令只认主人；访客唤醒的轮次里高危 hub 命令由账本按
 // meta.origin 再拦一次（shared/slack.ts 的 slackGuestTurnBlockReason）。
 // 不变量：这里不做 I/O、不读时钟以外的状态；成员、显示名、绑定都由调用方查好放进上下文。
-import type { SlackChannelMode, SlackChannelTarget, SlackContextLine, SlackMessageOrigin, SlackSpeakerRole, SlackTs, SlackUserId } from "../../shared/slack.ts";
+import type { SlackChannelMode, SlackChannelTarget, SlackContextLine, SlackMessageOrigin, SlackSpeakerRole, SlackUserId } from "../../shared/slack.ts";
 import type { SlackCardRef } from "./cards.ts";
 import type { SlackInbound, SlackInboundFile } from "./inbound.ts";
 
@@ -18,15 +18,8 @@ export interface SlackRoutingContext {
   mode: SlackChannelMode;
   /** 发言人的显示名（调用方已查好、截好长度）。 */
   speakerName: string;
-  /** 这条 ts 是不是机器人发的消息（判断“在机器人的串里接话”）。 */
-  isBotMessage: (ts: SlackTs) => boolean;
   /** 单聊里的文字是不是当前有效的绑定码。 */
   isBindCode: (text: string) => boolean;
-}
-
-/** 回复挂在哪：顶层还是某个串里（跟着提问走）。 */
-export interface SlackReplyAnchor {
-  threadTs: SlackTs | null;
 }
 
 export type SlackMessageRoute =
@@ -39,7 +32,6 @@ export type SlackMessageRoute =
       /** 要下载、放进附件的文件；访客的文件不收，记在 droppedFiles。 */
       files: SlackInboundFile[];
       droppedFiles: number;
-      anchor: SlackReplyAnchor;
     }
   | { kind: "context"; line: SlackContextLine }
   /** 拒绝：给发言人一条只有他看得见的提示（单聊里直接回）。 */
@@ -51,11 +43,11 @@ export type SlackMessageRoute =
  * 后置（按顺序，命中即返回）：
  * - 单聊：没认主人且文字是有效绑定码 → bind_owner；其余单聊 → reject（提示去频道里说）；
  * - 不是 Fusa 的频道，或还没认主人 → ignore；频道对应的项目经理已归档 → reject；
+ * - 发在串里的话：主人 → reject（提示在频道主聊天流里说），访客 → ignore；不唤醒、也不记作背景；
  * - 总助频道：主人 → deliver；访客 → reject；
  * - 项目经理频道 solo：主人 → deliver（没有前缀的 origin）；
- * - 项目经理频道 shared：@机器人 或在机器人消息的串里接话 → deliver（带署名的 origin），否则 → context；
+ * - 项目经理频道 shared：@机器人 → deliver（带署名的 origin），否则 → context；
  * - 访客以“/”开头的文字 → reject（厂商斜杠命令只给主人）；访客带的文件不收，droppedFiles 记个数。
- * deliver 的 anchor：顶层消息回顶层，串里的消息回同一个串。
  */
 export function routeSlackMessage(message: InboundMessage, ctx: SlackRoutingContext, now: number): SlackMessageRoute {
   throw new Error("未实现");

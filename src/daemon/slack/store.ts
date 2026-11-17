@@ -45,7 +45,6 @@ export interface SlackPostRecord {
   ref: SlackPostRef;
   channelId: SlackChannelId;
   ts: SlackTs;
-  threadTs: SlackTs | null;
   state: SlackPostState;
   updatedAt: number;
 }
@@ -76,7 +75,7 @@ export interface SlackStore {
   advanceWatermark(channelId: SlackChannelId, mark: { messageId?: MessageId; routerItemId?: RouterItemId; routerCommandId?: RouterCommandId }, now: number): void;
 
   postOf(ref: SlackPostRef): SlackPostRecord | null;
-  /** 后置：按 (频道, ts) 找回是哪样东西（按钮点击、串里接话时用）。 */
+  /** 后置：按 (频道, ts) 找回是哪样东西（按钮点击时用）。 */
   postAt(channelId: SlackChannelId, ts: SlackTs): SlackPostRecord | null;
   /** 后置：同一个 ref 已有时覆盖 ts、state（流式消息定稿、卡片定案）。 */
   savePost(record: Omit<SlackPostRecord, "updatedAt">, now: number): void;

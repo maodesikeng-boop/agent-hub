@@ -32,14 +32,13 @@ CREATE TABLE IF NOT EXISTS slack_channels (
 CREATE UNIQUE INDEX IF NOT EXISTS slack_channels_router ON slack_channels (target) WHERE target = 'router';
 CREATE UNIQUE INDEX IF NOT EXISTS slack_channels_pm ON slack_channels (pm_id) WHERE pm_id IS NOT NULL;
 
--- 账本里的东西发到 Slack 后是哪条消息：重发、改成已定案、补发都按它幂等。
+-- 账本里的东西发到 Slack 后是哪条消息（都在频道主聊天流里，没有串）：重发、改成已定案、补发都按它幂等。
 CREATE TABLE IF NOT EXISTS slack_posts (
   ref_kind    TEXT    NOT NULL CHECK (ref_kind IN ('message', 'file', 'router_item', 'router_command')),
   ref_id      INTEGER NOT NULL,       -- 消息编号、总助卡片编号或总助指令编号
   part        INTEGER NOT NULL,       -- 长消息拆成的第几段、第几个文件；没拆是 0
   channel_id  TEXT    NOT NULL REFERENCES slack_channels (channel_id) ON DELETE CASCADE,
   ts          TEXT    NOT NULL,
-  thread_ts   TEXT,
   state       TEXT    NOT NULL CHECK (state IN ('streaming', 'final', 'card_pending', 'card_settled')),
   updated_at  INTEGER NOT NULL,
   PRIMARY KEY (ref_kind, ref_id, part)

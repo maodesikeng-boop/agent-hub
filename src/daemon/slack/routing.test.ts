@@ -8,11 +8,10 @@ describe("routeSlackMessage", () => {
   it.todo("总助频道里主人说话 → deliver 给总助；访客说话 → reject");
   it.todo("项目经理频道只有主人时每句话都 deliver，origin 的 mode 是 solo");
   it.todo("项目经理频道有访客时，@机器人 的话 deliver，origin 带发言人名字和主客身份");
-  it.todo("项目经理频道有访客时，在机器人消息的串里接话 deliver，回复挂在同一个串");
-  it.todo("项目经理频道有访客时，没 @ 也不在机器人串里的话 → context");
+  it.todo("项目经理频道有访客时，没 @ 机器人的话 → context");
   it.todo("访客以“/”开头的话 → reject");
   it.todo("访客带的文件不收，droppedFiles 记个数，文字照常 deliver");
-  it.todo("顶层消息的 anchor.threadTs 是 null，串里的消息是串的根 ts");
+  it.todo("发在串里的话不唤醒、不记背景：主人 → reject 并提示在频道主聊天流里说，访客 → ignore；在串里 @机器人 也一样");
 });
 
 describe("routeSlackAction", () => {

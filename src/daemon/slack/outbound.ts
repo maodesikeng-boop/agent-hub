@@ -1,6 +1,7 @@
 // 出站投影（docs/slack-design.md）：账本的一条变化要不要在 Slack 里体现、体现成什么。只决定“要什么”，不发请求。
 // 不变量：
 // - 账本是唯一的真相：Slack 里的每条机器人消息都对应账本里的一样东西（slack_posts 的 ref），反过来不要求；
+// - 所有消息都发在频道主聊天流里，不发串回复；
 // - 遵守静默规矩：工具调用、Worker 汇报行、Worker 对话、后台写交接、只给人看的系统消息都不发；
 // - 网页上发的用户消息照样镜像到频道里（标明“网页”），两边看到的对话一致；从 Slack 来的用户消息不再镜像回去。
 import type { Change } from "../../shared/api.ts";
@@ -27,7 +28,7 @@ export type SlackOutboundIntent =
   | { kind: "ask_settled"; conversationId: ConversationId; message: Message }
   /** 总助的卡片：新的简报或拍板项，或它的状态变了。 */
   | { kind: "router_item"; item: RouterItem }
-  /** 总助指令有了结果（回答、已分派、失败）：回在发指令的那条消息下面；网页发的指令连同原话一起镜像。 */
+  /** 总助指令有了结果（回答、已分派、失败）：作为新消息发在总助频道主聊天流里；网页发的指令连同原话一起镜像。 */
   | { kind: "router_command"; command: RouterCommandRecord };
 
 export interface SlackProjectionContext {
