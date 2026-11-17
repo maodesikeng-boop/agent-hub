@@ -90,6 +90,9 @@ import {
   endedOnRevokedTokens,
 } from "./handlers.ts";
 import { createLaunchPreparer, createPersonaNoter } from "./launch.ts";
+import { createProjectCatalogRunner, type ProjectCatalogRunner } from "./project-catalog/runner.ts";
+import { resolveRouterModel } from "./router/model-resolver.ts";
+import { createRouterTurnPurposes, createRouterTurnRunner } from "./router/single-turn.ts";
 import { createLedger } from "./ledger/index.ts";
 import { DEFAULT_PM_NAME } from "./prompt.ts";
 import { prepareSentFilesDir } from "./sent-files.ts";
@@ -206,6 +209,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     archiveCleanup?: NodeJS.Timeout;
     worktreeCleanup?: WorktreeCleanup;
     handoverRunner?: HandoverRunner;
+    catalogRunner?: ProjectCatalogRunner;
     setup?: SetupRunner;
     executor?: ActionExecutor;
     driver?: Driver;
@@ -249,6 +253,13 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     if (handoverRunner) {
       await step("后台写交接", async () => {
         if (!(await within(handoverRunner.stop(), HANDOVER_STOP_GRACE_MS))) throw new Error(`${HANDOVER_STOP_GRACE_MS / 1000} 秒没收完，不再等`);
+      });
+    }
+    // 后台写档：在写的打断、报 shutdown（不算失败次数），要回报账本、结束总助会话，所以在驱动层、库之前
+    if (parts.catalogRunner) {
+      const catalogRunner = parts.catalogRunner;
+      await step("后台写项目档案", async () => {
+        if (!(await within(catalogRunner.stop(), HANDOVER_STOP_GRACE_MS))) throw new Error(`${HANDOVER_STOP_GRACE_MS / 1000} 秒没收完，不再等`);
       });
     }
     parts.stopFileCleanup?.();
@@ -404,6 +415,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       ...(options.autoRenew ? { autoRenew: options.autoRenew } : {}),
       // 账本有交接可以领了：叫醒跑腿的（它在下面才建，所以现用现取）
       onHandoverClaimable: () => parts.handoverRunner?.wake(),
+      // 有项目档案要写了：叫醒写档的跑腿的（同上，现用现取）
+      onCatalogClaimable: () => parts.catalogRunner?.wake(),
       log,
     });
     parts.unsubscribe.push(() => ledger.close());
@@ -424,6 +437,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const tokens = createSessionTokens();
     const sandboxGuard = createRouterSandboxGuard();
     parts.sandboxGuard = sandboxGuard;
+    // 总助单轮会话（分派、后台写档）各是什么用途：启动文件按它选提示词、发不发令牌（router/single-turn.ts）
+    const routerTurnPurposes = createRouterTurnPurposes();
     const agentApi = await startAgentApi({
       ledger,
       tokens,
@@ -464,6 +479,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       basePath: () => vendorRuntime.effectivePath(),
       // 项目经理提示词里“能用的厂商”只列这台设备上能用的（只看缓存，不等查询）
       vendorAvailability: () => Object.fromEntries(AGENT_VENDORS.map((vendor) => [vendor, models.availability(vendor)])),
+      routerPurposeOf: routerTurnPurposes.of,
     });
     // 性格设定、模式改了不重启，下一条消息前加说明（driver.ts 的“两轮之间自动重启”）
     const personaNote = createPersonaNoter((sessionId, since) => ledger.personaUpdate(sessionId, since), paths.launchDir);
@@ -673,6 +689,20 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     });
     parts.handoverRunner = handoverRunner;
     handoverRunner.start();
+    // 总助单轮会话：分派（轨道 B）和后台写项目档案共用（router/single-turn.ts）
+    const runRouterTurn = createRouterTurnRunner({ ledger, driver, tokens, purposes: routerTurnPurposes, stateDir, launchDir: paths.launchDir, log });
+    // 后台写项目档案（docs/router-project-catalog-design.md）：启动扫一遍，变化大的和还没档案的进队列，跑腿的一个一个写
+    const catalogRunner = createProjectCatalogRunner({
+      ledger: ledger.projectCatalog,
+      runTurn: runRouterTurn,
+      resolveModel: async () => resolveRouterModel(ledger.getRouterSettings(), await models.list()),
+      log,
+    });
+    parts.catalogRunner = catalogRunner;
+    catalogRunner.start();
+    const scanStartedAt = performance.now();
+    const queuedCatalogs = ledger.projectCatalog.scanAtStartup(Date.now());
+    log(`${LOG_PREFIX} 项目档案：启动扫描 ${(performance.now() - scanStartedAt).toFixed(1)} 毫秒，${queuedCatalogs} 个项目要写档`);
 
     // 8. 界面令牌；9. 界面服务，只监听 127.0.0.1
     const token = loadOrCreateUiToken(paths.uiTokenFile);
@@ -817,8 +847,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     parts.routerTargetRegistry = routerTargetRegistry;
     const routerDispatcher = createRouterDispatcher({
       ledger,
-      driver,
-      tokens,
+      runTurn: runRouterTurn,
       sandboxGuard,
       targetRegistry: routerTargetRegistry,
       models,
@@ -827,9 +856,6 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
         const att = resolveUpload(uploadsDir, id);
         return att === null ? null : { id: att.id, name: att.name, mime: att.mime, size: att.size };
       },
-      stateDir,
-      launchDir: paths.launchDir,
-      log,
     });
     parts.routerDispatcher = routerDispatcher;
     // 空闲排空热重启：有外壳监管（entry.ts 给了 onSelfReload）才建；带 --build 时网页构建到暂存目录，重启前才换上线
@@ -843,6 +869,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
           if (sessionsBusy > 0) reasons.push(`${sessionsBusy} 个会话还在跑、停止中、准备中或等后台命令`);
           if (routerDispatcher.busy()) reasons.push("总助分派引擎有规划中或在途分派");
           if (handoverRunner.busy()) reasons.push("后台在写交接");
+          if (catalogRunner.busy()) reasons.push("后台在写项目档案");
           if (db.get("SELECT 1 AS x FROM actions WHERE status = 'running' OR (status = 'pending' AND next_attempt_at <= ?) LIMIT 1", Date.now()) !== undefined) {
             reasons.push("执行器有待执行的动作");
           }

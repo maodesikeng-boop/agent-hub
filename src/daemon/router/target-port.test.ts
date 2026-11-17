@@ -287,8 +287,6 @@ describe("RouterTargetPort：本机账本与跨设备隧道代理统一端口", 
                 conversationId: 70,
                 activity: "idle",
                 project: { id: 3, name: "推理引擎", description: null, mainFolder: "/srv/infer", otherFolders: [] },
-                personaSummary: "负责 GPU 推理",
-                pmNote: null,
                 activeWorkers: [],
                 activeWorkerTotal: 0,
                 pendingDecisionCount: 0,
@@ -458,5 +456,76 @@ describe("RouterTargetPort：本机账本与跨设备隧道代理统一端口", 
     // 6. 设备从配对列表移除时缓存立即失效
     pairedDevices = [{ id: selfId, name: "MacBook", platform: "darwin", self: true, url: null }];
     expect(registry.portFor(remoteId)).toBeNull();
+  });
+});
+
+describe("project.show（docs/router-project-catalog-design.md）", () => {
+  const selfId = "00000000-0000-4000-8000-000000000001";
+  const remoteId = "00000000-0000-4000-8000-000000000002";
+  const catalog = { oneLiner: "后端", aliases: ["alpha"], focus: "重构", modules: [], decisions: [], openItems: [] };
+  const detail = { projectId: 3, projectName: "推理引擎", description: null, catalog, refreshedAt: 1 };
+
+  /** 一台远端设备：digest 计数，target-ops 按 respond 回。 */
+  function remoteRegistry(respond: (body: unknown) => Response) {
+    const counts = { digest: 0 };
+    const fakeFetch: typeof fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.endsWith("/api/router/digest")) {
+        counts.digest++;
+        return new Response(JSON.stringify({ generatedAt: now, pms: [] }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.endsWith("/api/router/target-ops")) return respond(JSON.parse(String(init?.body ?? "{}")));
+      return new Response("not found", { status: 404 });
+    };
+    const registry = createRouterTargetRegistry({
+      localPort: createLocalTargetPort({ deviceId: selfId, deviceName: () => "MacBook", ledger, uploadsDir }),
+      peers: {
+        selfId,
+        list: () => [
+          { id: selfId, name: "MacBook", platform: "darwin", self: true, url: null },
+          { id: remoteId, name: "Linux 工作站", platform: "linux", self: false, url: "https://linux.ts.net" },
+        ],
+        target: () => ({ name: "Linux 工作站", url: "https://linux.ts.net", token: "t" }),
+        forget: () => {},
+      },
+      uploadsDir,
+      fetch: fakeFetch,
+      now: () => now,
+    });
+    return { port: registry.portFor(remoteId)!, counts };
+  }
+
+  it("本机端口返回这个项目的完整档案，没有档案时返回 detail: null", async () => {
+    const port = createLocalTargetPort({ deviceId: selfId, deviceName: () => "MacBook", ledger, uploadsDir });
+    expect(await port.executeOp({ kind: "project.show", projectId: alphaProjectId })).toEqual({ kind: "project.show", projectId: alphaProjectId, detail: null });
+    const job = ledger.projectCatalog.claimCatalog(now)!;
+    ledger.projectCatalog.catalogWritten(job, catalog, null);
+    expect(await port.executeOp({ kind: "project.show", projectId: alphaProjectId })).toMatchObject({
+      kind: "project.show",
+      detail: { projectId: alphaProjectId, catalog, refreshedAt: now },
+    });
+    expect(await port.executeOp({ kind: "project.show", projectId: 9_999 })).toMatchObject({ detail: null });
+  });
+
+  it("远端端口经配对通道取对方设备的档案，不让对方名片缓存失效", async () => {
+    const received: unknown[] = [];
+    const { port, counts } = remoteRegistry((body) => {
+      received.push(body);
+      return new Response(JSON.stringify({ result: { kind: "project.show", projectId: 3, detail } }), { status: 200 });
+    });
+    await port.getDigest();
+    expect(await port.executeOp({ kind: "project.show", projectId: 3 })).toEqual({ kind: "project.show", projectId: 3, detail });
+    expect(received).toEqual([{ kind: "project.show", projectId: 3 }]);
+    await port.getDigest();
+    expect(counts.digest).toBe(1);
+  });
+
+  it("对方设备版本旧、不认识 project.show 时报 invalid 并说明对方版本不支持", async () => {
+    const { port } = remoteRegistry(() => new Response(JSON.stringify({ code: "invalid", error: "参数不对：kind" }), { status: 400 }));
+    await expect(port.executeOp({ kind: "project.show", projectId: 3 })).rejects.toMatchObject({
+      name: "RouterTargetError",
+      code: "invalid",
+      message: expect.stringContaining("版本旧"),
+    });
   });
 });

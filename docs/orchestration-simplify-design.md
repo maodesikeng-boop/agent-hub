@@ -455,7 +455,7 @@ Worker 崩溃、断网、额度用完、被用户停掉、建工作目录失败�
 | `hub ask` | 保留，扩展 | `hub ask [--node <步骤>] [--option <选项>...] [--recommended <选项>] --stdin` |
 | `hub router ask` | 合并进 `hub ask` | `hub ask` 本来就会同步进总助（`src/daemon/ledger/router.ts:431-470`） |
 | `hub router report` | 保留 | 图的交付由 `finish` 自动发；图以外的里程碑还用它 |
-| `hub router note` | 保留 | 不变 |
+| `hub router note` | 已删 | 被自动维护的项目档案取代，见 docs/router-project-catalog-design.md |
 | `hub worker start` | 保留，用途变了 | 不带 `--node`：派临时 Worker。带 `--node`：给等人的步骤换人，自动带前任记录。顺利时派下游这件事改由后台自动做 |
 | `hub worker send` | 保留 | 回答、打回 |
 | `hub worker end` | 保留，删 `--incomplete` | 只表示停掉这个 Worker；图里做完的步骤由后台收工 |
@@ -572,7 +572,7 @@ ${commandNote}
   - `hub project create|attach|detach|setup`：建项目、挂上或移除附加文件夹、设置新 worktree 开工前跑的准备脚本
   - `hub persona show|edit`：查看、修改性格设定和模式
   - `hub schedule add|list|pause|resume|remove`：定时任务，到点把正文发进你的对话（用户要日报才建）
-  - `hub router report|note`：任务图以外的里程碑给总助发一张汇报卡、更新一句话项目主线备忘
+  - `hub router report`：任务图以外的里程碑给总助发一张汇报卡
   - `hub self-reload [--build]`：${PRODUCT_ID} 自身代码合进来后让守护进程热重启
 ```
 

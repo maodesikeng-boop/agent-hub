@@ -2,13 +2,13 @@
 // 项目经理的剧本用 hub project setup 配准备命令，再 hub worker start 派活；Worker 的剧本第一步看准备命令的产物在不在。
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { HUB_COMMAND, REPORT_END, REPORT_START, workerEventOf, type StateSnapshot, type WorkerMessageMeta } from "../../src/shared/index.ts";
 import { openDatabase } from "../../src/daemon/store/index.ts";
 import { SETUP_RECEIPT_NOTE } from "../../src/daemon/prompt.ts";
 import type { FakeScript, FakeTurn } from "../fake-claude/fake-claude.ts";
-import { Client, isAlive, makeEnv, messagesOf, waitForStatus, waitUntil, type E2eEnv, type RunningDaemon } from "./harness.ts";
+import { Client, makeEnv, messagesOf, waitForStatus, waitUntil, type E2eEnv, type RunningDaemon } from "./harness.ts";
 
 const hub = HUB_COMMAND;
 
@@ -83,14 +83,10 @@ function waitLines(client: Client, pmConversationId: number, event: WorkerMessag
   );
 }
 
-const argValue = (argv: string[], flag: string) => (argv.includes(flag) ? argv[argv.indexOf(flag) + 1] : undefined);
-function procsOf(sessionId: number) {
-  return env.argvs().filter((a) => basename(dirname(argValue(a.argv, "--append-system-prompt-file") ?? "")) === String(sessionId));
-}
 const sessionOf = (state: StateSnapshot, conversationId: number) => state.sessions.find((s) => s.conversationId === conversationId)!;
 const workerSessionOf = async (client: Client, worker: WorkerRow) => sessionOf(await client.state(), worker.worker_conversation_id);
 /** 某个 Worker 起过的假 claude 第一次收到的话。 */
-const firstTextOf = async (client: Client, worker: WorkerRow) => env.stdinTextsOf(procsOf((await workerSessionOf(client, worker)).sessionId)[0]!.pid)[0];
+const firstTextOf = async (client: Client, worker: WorkerRow) => env.stdinTextsOf(env.procsOf((await workerSessionOf(client, worker)).sessionId)[0]!.pid)[0];
 const setupLog = (workerId: number) => join(env.home, "state", "logs", "setup", `worker-${workerId}.log`);
 
 /** 等某个文件出现，读出里面的 pid。 */
@@ -214,9 +210,9 @@ describe("worktree 准备命令端到端", { timeout: 60_000 }, () => {
     await waitUntil("preparing", async () => ((await workerSessionOf(client, worker!)).activity === "preparing" ? true : undefined));
     await waitForStatus(client, await client.post(pm.conversationId, "不要了，收工"), "replied");
     expect(env.bashRuns()[2]!.output).toContain("#1 修 X · 准备中");
-    await waitUntil("setup killed", () => (isAlive(pid) ? undefined : true));
+    await waitUntil("setup killed", () => (env.isAlive(pid) ? undefined : true));
     await waitUntil("idle", async () => ((await workerSessionOf(client, worker!)).activity === "idle" ? true : undefined));
-    expect(procsOf((await workerSessionOf(client, worker!)).sessionId)).toEqual([]);
+    expect(env.procsOf((await workerSessionOf(client, worker!)).sessionId)).toEqual([]);
     expect(query<{ status: string }>("SELECT status FROM messages WHERE conversation_id = ? AND sender = 'pm'", worker!.worker_conversation_id)).toEqual([
       { status: "stopped" },
     ]);
@@ -248,11 +244,11 @@ describe("worktree 准备命令端到端", { timeout: 60_000 }, () => {
     const sendRun = env.bashRuns()[2]!;
     expect(sendRun.exitCode).toBe(1);
     expect(sendRun.output).toContain("Worker 还在准备，等它开工后再发");
-    expect(procsOf((await workerSessionOf(client, worker!)).sessionId)).toEqual([]);
+    expect(env.procsOf((await workerSessionOf(client, worker!)).sessionId)).toEqual([]);
     expect((await workerSessionOf(client, worker!)).activity).toBe("preparing");
     writeFileSync(gate, "");
     await waitLines(client, pm.conversationId, "report");
-    const procs = procsOf((await workerSessionOf(client, worker!)).sessionId);
+    const procs = env.procsOf((await workerSessionOf(client, worker!)).sessionId);
     expect(env.stdinTextsOf(procs[0]!.pid)).toHaveLength(1);
     expect(env.stdinTextsOf(procs[0]!.pid)[0]).toMatch(/^【系统】已经在这个 worktree 里跑过[\s\S]*\n\n把 X 修好$/);
     await terminate(daemon);
@@ -275,7 +271,7 @@ describe("worktree 准备命令端到端", { timeout: 60_000 }, () => {
     const started = Date.now();
     expect(await terminate(first.daemon)).toEqual({ code: 0, signal: null });
     expect(Date.now() - started).toBeLessThan(8_000);
-    expect(isAlive(pid)).toBe(false);
+    expect(env.isAlive(pid)).toBe(false);
     const [worker] = workerRows();
     expect(query("SELECT base_commit FROM workers")).toEqual([{ base_commit: null }]);
 

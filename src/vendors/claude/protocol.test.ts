@@ -398,6 +398,13 @@ describe("子进程环境", () => {
     );
     expect(env).toEqual({ PATH: "/bin", HOME: "/h", CLAUDE_CONFIG_DIR: "/c" });
   });
+
+  it("守护进程自己环境里的 HUB_TOKEN、HUB_SOCK 不往下传，只认 extra 里给的", () => {
+    const host = { PATH: "/bin", HUB_TOKEN: "host-token", HUB_SOCK: "/host.sock" };
+    expect(buildChildEnv(host, undefined)).toEqual({ PATH: "/bin" });
+    expect(buildChildEnv(host, { HUB_TOKEN: "own", HUB_SOCK: "/own.sock" })).toEqual({ PATH: "/bin", HUB_TOKEN: "own", HUB_SOCK: "/own.sock" });
+    expect(buildChildEnv({ Path: "C:\\bin", hub_token: "host-token", Hub_Sock: "\\\\.\\pipe\\host" }, undefined, "win32")).toEqual({ Path: "C:\\bin" });
+  });
 });
 
 describe("打断标记", () => {

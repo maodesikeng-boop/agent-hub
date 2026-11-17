@@ -1,6 +1,7 @@
 // Router 轨道 B 只读隔离沙箱与令牌权限守卫（docs/router-design.md §5.2、§7）：
 // - 强制工作在 <stateDir>/router-home 隔离空目录（0700），禁挂任何业务目录（addDirs = []）；
 // - 对全部厂商统一走 buildReadonlyPolicy + VENDOR_DAEMONS[vendor].launchFiles（零单家硬编码），禁写文件、禁读敏感目录；
+// - 按单轮用途（single-turn.ts 的 RouterTurnPurpose）选提示词和凭证：分派拿总助提示词和 hub 令牌，后台写档拿写档提示词、没有令牌；
 // - 维护活跃 assistant 会话 → commandId 绑定表，严防 assistant 调普通 hub 命令，也严防 pm/worker 越权调 hub dispatch。
 import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -25,7 +26,9 @@ import { launchFingerprint } from "../../shared/launch.ts";
 import { removeSessionLaunchDir, sessionLaunchDir } from "../../shared/paths.ts";
 import { VENDOR_DAEMONS } from "../../vendors/daemon-registry.ts";
 import { osSandboxAvailable } from "../driver/write-scope.ts";
+import { buildCatalogSystemPrompt } from "../project-catalog/prompt.ts";
 import { buildRouterSystemPrompt } from "./prompt.ts";
+import type { RouterTurnPurpose } from "./single-turn.ts";
 
 export const ROUTER_HOME_DIR_NAME = "router-home";
 
@@ -72,9 +75,11 @@ export interface RouterSandboxLaunchOptions {
   hubBinDir: string;
   basePath?: string;
   vendorAvailability?: VendorAvailabilityMap;
+  /** 这一轮做什么，默认 dispatch。catalog 不发 hub 令牌、不给 hub 命令的路径，环境里没有 HUB_TOKEN / HUB_SOCK，厂商设置里也不放行 hub。 */
+  purpose?: RouterTurnPurpose;
 }
 
-/** 生成轨道 B 单轮只读规划会话的 LaunchFiles（统一适配全部厂商）。 */
+/** 生成总助单轮会话（分派、写档）的 LaunchFiles（统一适配全部厂商）。 */
 export function prepareRouterSandboxLaunch(
   session: AgentSessionRow,
   options: RouterSandboxLaunchOptions,
@@ -91,7 +96,8 @@ export function prepareRouterSandboxLaunch(
   const dataDir = realpathOr(options.dataDir);
   const basePath = options.basePath ?? process.env.PATH ?? process.env.Path ?? "";
 
-  const prompt = buildRouterSystemPrompt({ vendorAvailability: options.vendorAvailability });
+  const dispatch = (options.purpose ?? "dispatch") === "dispatch";
+  const prompt = dispatch ? buildRouterSystemPrompt({ vendorAvailability: options.vendorAvailability }) : buildCatalogSystemPrompt();
   const readonlyPolicy = buildReadonlyPolicy({
     homeDir,
     stateDir,
@@ -107,7 +113,7 @@ export function prepareRouterSandboxLaunch(
       ? VENDOR_DAEMONS[vendor].launchFiles?.({
           role: "worker",
           readonly: nativeReadonly ? { policy: readonlyPolicy, denyWrite: [routerHomeDir] } : undefined,
-          hubSock: options.hubSock,
+          ...(dispatch ? { hubSock: options.hubSock } : {}),
           stateDir,
           osSandboxed,
         })
@@ -138,9 +144,13 @@ export function prepareRouterSandboxLaunch(
     promptFile,
     ...(settingsFile === undefined ? {} : { settingsFile }),
     env: {
-      [ENV_HUB_TOKEN]: options.tokens.issue(session.id),
-      [ENV_HUB_SOCK]: options.hubSock,
-      PATH: basePath === "" ? options.hubBinDir : `${options.hubBinDir}${delimiter}${basePath}`,
+      ...(dispatch
+        ? {
+            [ENV_HUB_TOKEN]: options.tokens.issue(session.id),
+            [ENV_HUB_SOCK]: options.hubSock,
+            PATH: basePath === "" ? options.hubBinDir : `${options.hubBinDir}${delimiter}${basePath}`,
+          }
+        : { PATH: basePath }),
       ...vendorFiles?.env,
     },
     fingerprint: launchFingerprint({ prompt, settings: settings ?? "", readonly: readonlyPolicy }),

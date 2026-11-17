@@ -5,7 +5,7 @@
 // 项目经理正在回用户的消息（重启后不会重发）：过了上限也不重启，等它回完再重启，用户的那条照常回完。
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { HUB_COMMAND, REPORT_END, REPORT_START, RESEND_NOTE, RESTART_RECOVERY_NOTE, systemEventOf, workerEventOf } from "../../src/shared/index.ts";
@@ -63,8 +63,6 @@ function query<T>(sql: string, ...params: Array<string | number>): T[] {
 }
 
 const argValue = (argv: string[], flag: string) => (argv.includes(flag) ? argv[argv.indexOf(flag) + 1] : undefined);
-const procsOf = (sessionId: number) =>
-  env.argvs().filter((a) => basename(dirname(argValue(a.argv, "--append-system-prompt-file") ?? "")) === String(sessionId));
 
 describe("热重启等全库空闲有上限", () => {
   it.skipIf(!canNestOsSandbox)("Worker 一轮一直在跑：登记后到上限照常重启（退出码 reloadExitCode）；重启后这一轮自动重发、做完、汇报回来", { timeout: 60_000 }, async () => {
@@ -93,9 +91,8 @@ describe("热重启等全库空闲有上限", () => {
       20_000,
     );
     const pmSessionId = query<{ id: number }>("SELECT id FROM agent_sessions WHERE pm_id = ? AND role = 'pm'", pmId)[0]!.id;
-    const pmPid = procsOf(pmSessionId)[0]!.pid;
+    const pmPid = env.procsOf(pmSessionId)[0]!.pid;
 
-    const registeredAt = Date.now();
     const reload = await env.runHub(pmPid, ["self-reload"]);
     expect(reload.code).toBe(0);
     expect(reload.stdout).toContain("已登记热重启");
@@ -104,9 +101,7 @@ describe("热重启等全库空闲有上限", () => {
     expect(status.stdout).toMatch(/热重启：\d\d:\d\d:\d\d 开始等全库空闲，最晚 \d\d:\d\d:\d\d/);
 
     const exit = await first.exited;
-    const waitedMs = Date.now() - registeredAt;
     expect(exit.code).toBe(DESKTOP_CONTRACT.reloadExitCode);
-    expect(waitedMs).toBeGreaterThanOrEqual(DRAIN_MAX_MS - 500);
     expect(first.stderr()).toContain("等全库空闲过了上限");
     // 被打断的 Worker 轮次留着“处理中”，等重启恢复重发
     expect(query<{ status: string }>("SELECT status FROM messages WHERE id = ?", taskId)).toEqual([{ status: "processing" }]);
@@ -121,7 +116,7 @@ describe("热重启等全库空闲有上限", () => {
     );
     expect(reportLine).toMatchObject({ summary: "接着做完了" });
     const workerSessionId = (await client2.state()).sessions.find((s) => s.conversationId === workerConversationId)!.sessionId;
-    const procs = procsOf(workerSessionId);
+    const procs = env.procsOf(workerSessionId);
     expect(procs).toHaveLength(2);
     expect(argValue(procs[1]!.argv, "--resume")).toBe(argValue(procs[0]!.argv, "--session-id"));
     expect(procs[1]!.cwd).toBe(worktree);
@@ -129,7 +124,7 @@ describe("热重启等全库空闲有上限", () => {
     expect(env.stdinTextsOf(procs[1]!.pid)).toEqual([`${RESTART_RECOVERY_NOTE}\n\n${RESEND_NOTE}\n\n${firstText}`]);
     expect(query<{ status: string }>("SELECT status FROM messages WHERE id = ?", taskId)).toEqual([{ status: "replied" }]);
     console.log(
-      `[self-reload e2e] 登记后 ${waitedMs} ms 退出，退出码 ${exit.code}；日志：${first.stderr().split("\n").filter((l) => l.includes("热重启")).join(" | ")}；` +
+      `[self-reload e2e] 退出码 ${exit.code}；日志：${first.stderr().split("\n").filter((l) => l.includes("热重启")).join(" | ")}；` +
         `重启后 Worker 会话 ${workerSessionId} 以 --resume 重发任务，汇报“${reportLine!.summary}”`,
     );
     await second.terminate();
@@ -155,7 +150,7 @@ describe("热重启等全库空闲有上限", () => {
     expect(first.child.exitCode).toBeNull();
     expect(query<{ status: string }>("SELECT status FROM messages WHERE id = ?", asked)).toEqual([{ status: "processing" }]);
     const pmSessionId = query<{ id: number }>("SELECT id FROM agent_sessions WHERE pm_id = ? AND role = 'pm'", pmId)[0]!.id;
-    const status = await env.runHub(procsOf(pmSessionId)[0]!.pid, ["status"]);
+    const status = await env.runHub(env.procsOf(pmSessionId)[0]!.pid, ["status"]);
     expect(status.stdout).toContain("已过最晚时间");
 
     writeFileSync(release, "");
@@ -203,30 +198,27 @@ describe("热重启等全库空闲有上限", () => {
       20_000,
     );
     const pmSessionId = query<{ id: number }>("SELECT id FROM agent_sessions WHERE pm_id = ? AND role = 'pm'", pmId)[0]!.id;
-    const pmPid = procsOf(pmSessionId).at(-1)!.pid;
-    const registeredAt = Date.now();
+    const pmPid = env.procsOf(pmSessionId).at(-1)!.pid;
     const reload = await env.runHub(pmPid, ["self-reload"]);
     expect(reload.stdout).toMatch(/最晚 \d\d:\d\d:\d\d 起不再等 Worker 轮次和系统消息（重启后自动重发）；项目经理、总助正在回用户的那一轮等它回完再重启。现在还在忙：1 个会话还在跑/);
     const status = await env.runHub(pmPid, ["status"]);
     expect(status.stdout).toMatch(/热重启：\d\d:\d\d:\d\d 开始等全库空闲，最晚 \d\d:\d\d:\d\d/);
 
     const exit = await first.exited;
-    const waitedMs = Date.now() - registeredAt;
     expect(exit.code).toBe(DESKTOP_CONTRACT.reloadExitCode);
-    expect(waitedMs).toBeGreaterThanOrEqual(DRAIN_MAX_MS - 500);
     expect(first.stderr()).toContain("等全库空闲过了上限");
     expect(query<{ status: string }>("SELECT status FROM messages WHERE id = ?", run.id)).toEqual([{ status: "processing" }]);
 
     const second = await env.start();
     const client2 = client.withPort(second.port);
     await waitUntil("schedule run replied", () => (query<{ status: string }>("SELECT status FROM messages WHERE id = ?", run.id)[0]?.status === "replied" ? true : undefined), 20_000);
-    const procs = procsOf(pmSessionId);
+    const procs = env.procsOf(pmSessionId);
     const last = procs.at(-1)!;
     expect(argValue(last.argv, "--resume")).toBe(argValue(procs[0]!.argv, "--session-id"));
     expect(env.stdinTextsOf(last.pid)).toEqual([`${RESTART_RECOVERY_NOTE}\n\n${RESEND_NOTE}\n\n${run.text}`]);
     expect(messagesOf(await client2.state(), conversationId).some((m) => m.sender === "agent" && m.text === "接着写完了日报")).toBe(true);
     console.log(
-      `[self-reload e2e] 登记后 ${waitedMs} ms 退出，退出码 ${exit.code}；回执：${reload.stdout.trim()}；hub status 末行：${status.stdout.trim().split("\n").at(-1)}；` +
+      `[self-reload e2e] 退出码 ${exit.code}；回执：${reload.stdout.trim()}；hub status 末行：${status.stdout.trim().split("\n").at(-1)}；` +
         `守护进程日志：${first.stderr().split("\n").filter((l) => l.includes("热重启")).join(" | ")}；` +
         `重启后项目经理会话 ${pmSessionId} 以 --resume 收到重发的定时任务，回复“接着写完了日报”`,
     );

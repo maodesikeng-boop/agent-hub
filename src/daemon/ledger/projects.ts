@@ -49,6 +49,8 @@ export function createLedgerProjects(
   messages: LedgerMessages,
   persona: LedgerPersona,
   files: LedgerFiles,
+  /** 建项目的同一个事务里调：总助的项目档案马上建档（ledger/project-catalog.ts 的 markForcedIn）。 */
+  afterProjectCreatedIn: (p: Pending, projectId: ProjectId) => void = () => {},
 ) {
   const { db, now } = ctx;
   const { currentSession } = sessions;
@@ -178,6 +180,7 @@ export function createLedgerProjects(
     p.changes.push({ type: "project.created", data: { project } });
     foldersChanged(p, row);
     insertSystemMessage(p, conversation.id, { event: "project.created", projectId: project.id }, `项目已建好：${name}，主文件夹 ${path}`);
+    afterProjectCreatedIn(p, project.id);
     return { project, mainFolder };
   };
 

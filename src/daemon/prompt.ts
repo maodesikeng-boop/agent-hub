@@ -234,7 +234,7 @@ export const HUB_USAGE_PROMPT = `# 系统命令 ${HUB}
   - \`${HUB} project create|attach|detach|setup\`：建项目、增删附加文件夹、设新 worktree 准备脚本
   - \`${HUB} persona show|edit\`：查看、修改性格设定和干活模式
   - \`${HUB} schedule add|list|pause|resume|remove\`：定时任务（用户要日报才建）
-  - \`${HUB} router report|note\`：给总助发汇报卡（带本机文件用 \`--file\`）、更新一句话项目主线备忘
+  - \`${HUB} router report\`：给总助发汇报卡（带本机文件用 \`--file\`）
   - \`${HUB} self-reload [--build]\`：${PRODUCT_NAME} 自身代码合入后让守护进程热重启`;
 
 /** 发文件给用户（Worker 用；项目经理的在“交付与汇报”里写全）：只说能力。守护进程发出时存副本，网页显示图片和文件卡片（daemon/sent-files.ts）。 */

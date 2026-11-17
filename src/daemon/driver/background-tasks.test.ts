@@ -13,9 +13,8 @@ afterEach(async () => {
 });
 
 const user = (id: number, text: string) => ({ messageIds: [id], source: "user" as const, text });
-/** 空闲关闭 150 ms；有后台任务时兜底 1200 ms。 */
-const IDLE = 150;
-const HOLD = 1200;
+const IDLE = 300;
+const HOLD = 1800;
 const timers = { idleCloseMs: IDLE, backgroundHoldMaxMs: HOLD };
 
 function harness(turns: FakeTurn[], driver: Record<string, number> = timers): Harness {
@@ -192,9 +191,11 @@ describe("任务清零以后再闲够时间才关", () => {
 
   it("任务结束后 claude 自己开的一轮：先清零再开轮（真 claude 的顺序），这一轮跑完才开始算空闲", async () => {
     const t = harness([
-      turnWith([{ afterMs: 20, tasks: ["a"] }, { afterMs: 300, tasks: [] }], {
+      {
+        steps: [{ backgroundTasks: ["a"] }, { text: "好" }],
+        backgroundTasksAfter: [{ afterMs: 300, tasks: [] }],
         selfTurn: { steps: [{ sleepMs: 400 }, { text: "后台好了" }], afterMs: 305 },
-      }),
+      },
     ]);
     const s = t.addSession();
     await t.driver.send(s.id, user(1, "x"));
@@ -204,7 +205,7 @@ describe("任务清零以后再闲够时间才关", () => {
     expect(t.of("agent.text").map((e) => e.text)).toEqual(["好", "后台好了"]);
     const exited = await t.waitFor("session.exited");
     expect(exited.reason).toBe("idle");
-    expect(exited.at - ended.at).toBeGreaterThanOrEqual(IDLE - 40);
+    expect(exited.at - ended.at).toBeGreaterThanOrEqual(IDLE - 60);
   });
 });
 

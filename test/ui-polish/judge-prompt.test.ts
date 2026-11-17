@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { judgeBrief, type JudgeBriefInput } from "./judge-prompt.ts";
-import { DIMENSION_TITLES, DIMENSIONS, PRINCIPLES, SEVERITIES, SEVERITY_MEANS, parseScoreCard } from "./rubric.ts";
+import { ATTRIBUTION_RULES, DIMENSION_TITLES, DIMENSIONS, NINE_POINT_BAR, PRINCIPLES, SEVERITIES, SEVERITY_MEANS, parseScoreCard } from "./rubric.ts";
 
 const SHA_A = "1".repeat(64);
 const SHA_B = "2".repeat(64);
@@ -52,6 +52,16 @@ describe("judgeBrief", () => {
     expect(text).toContain("只看图");
     expect(text).toContain("不读");
     expect(text).toContain("不改仓库");
+  });
+
+  it("写出 9 分审美高线和归口规则", () => {
+    const text = judgeBrief(makeInput());
+    for (const line of [...NINE_POINT_BAR, ...ATTRIBUTION_RULES]) expect(text).toContain(line);
+  });
+
+  it("纪律里禁止跑像素差分、哈希比对脚本，禁止打开清单和盲测对照表", () => {
+    const text = judgeBrief(makeInput());
+    for (const word of ["ffmpeg", "ImageMagick", "像素差分", "哈希比对", "manifest.json", "blind.json"]) expect(text).toContain(word);
   });
 
   it("写出评分卡的 JSON 格式，例子能通过 parseScoreCard", () => {

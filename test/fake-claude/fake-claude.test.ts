@@ -253,6 +253,24 @@ describe("假 claude", () => {
     expect(texts(elsewhere.events)).toEqual(["顶层"]);
   });
 
+  it("总助的会话（工作目录是 router-home，环境变量和 Worker 一样）认成 assistant：不用 Worker 的剧本，也不占顶层剧本的轮数", async () => {
+    dir ??= mkdtempSync(join(tmpdir(), "fake-claude-"));
+    const routerHome = join(dir, "state", "router-home");
+    mkdirSync(routerHome, { recursive: true });
+    const script = {
+      turns: [{ steps: [{ text: "顶层第 0 轮" }] }, { steps: [{ text: "顶层第 1 轮" }] }],
+      sessions: [{ role: "worker", script: say("我是 Worker") }],
+    };
+    const assistant = await withScript(script, () => run(["--session-id", "r1"], [userLine("x")], 0, false, { cwd: routerHome, env: workerEnv }));
+    const pm = await withScript(script, () => run(["--session-id", "p2"], [userLine("x")]));
+    expect(texts(assistant.events)).toEqual(["ok"]);
+    expect(texts(pm.events)).toEqual(["顶层第 0 轮"]);
+
+    const withOwn = { ...script, sessions: [...script.sessions, { role: "assistant", script: say("我是总助") }] };
+    const own = await withScript(withOwn, () => run(["--session-id", "r2"], [userLine("x")], 0, false, { cwd: routerHome, env: workerEnv }));
+    expect(texts(own.events)).toEqual(["我是总助"]);
+  });
+
   it("选中的剧本按会话分开数轮数：另一个会话从第 0 轮起，--resume 接着数", async () => {
     const script = { sessions: [{ role: "worker", script: { turns: [{ steps: [{ text: "第 0 轮" }] }, { steps: [{ text: "第 1 轮" }] }] } }] };
     const opts = { env: workerEnv };

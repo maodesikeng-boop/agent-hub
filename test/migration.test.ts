@@ -1588,7 +1588,8 @@ describe("0023_router_and_task_graphs：从 0022 的旧库升级与幂等重跑"
 describe("0023 关联记录删除安全", () => {
   it.each(["workers", "messages", "agent_sessions"])("删除 %s 后引用正确置空或级联，外键检查通过", (table) => {
     const db = m3Db();
-    migrate(db, migrationsDir);
+    // 0032 删了 router_pm_notes：停在 0031 看 0023 的外键
+    migrate(db, migrationsUpTo(31));
     db.run("INSERT INTO messages (id, conversation_id, sender, kind, text, dedupe_key, created_at, updated_at) VALUES (900, 1, 'agent', 'text', 'ask', 'fk-ask', 0, 0)");
     db.run("INSERT INTO router_items (pm_id, project_id, conversation_id, session_id, kind, status, ask_message_id, created_at, updated_at) VALUES (1, 2, 1, 10, 'decision', 'pending', 900, 0, 0)");
     db.run("INSERT INTO router_pm_notes (pm_id, text, session_id, updated_at) VALUES (1, 'note', 10, 0)");
@@ -2229,5 +2230,47 @@ describe("0031_loaded_skills：项目经理加载过的技能", () => {
       .map((r) => r.detail)
       .join("\n");
     expect(plan).toContain("loaded_skills_generation");
+  });
+});
+
+describe("0032_project_catalogs：总助的项目目录", () => {
+  it.each([23, 30, 31])("从 %i 升级：建 project_catalogs、删 router_pm_notes，别的数据原样；回退 31 / 8 重跑不丢档案", (from) => {
+    const db = m3Db();
+    migrate(db, migrationsUpTo(from));
+    db.run("INSERT INTO router_pm_notes (pm_id, text, session_id, updated_at) VALUES (1, '旧备忘', NULL, 0)");
+    const projects = db.all("SELECT * FROM projects ORDER BY id");
+    const items = db.all("SELECT * FROM router_items ORDER BY id");
+
+    expect(migrate(db, migrationsDir)).toMatchObject({ from, to: LATEST_VERSION });
+    expect(tableNames(db)).toContain("project_catalogs");
+    expect(tableNames(db)).not.toContain("router_pm_notes");
+    expect(db.all("SELECT * FROM projects ORDER BY id")).toEqual(projects);
+    expect(db.all("SELECT * FROM router_items ORDER BY id")).toEqual(items);
+
+    db.run(
+      `INSERT INTO project_catalogs (project_id, catalog_json, cut_message_id, refreshed_at, forced, attempts, updated_at)
+       VALUES (2, '{"oneLiner":"x"}', 5, 10, 0, 0, 10)`,
+    );
+    expect(() => db.run("INSERT INTO project_catalogs (project_id, forced, updated_at) VALUES (2, 2, 0)")).toThrow();
+    const catalogs = db.all("SELECT * FROM project_catalogs");
+    for (const rewindTo of [31, 8]) {
+      db.exec(`PRAGMA user_version = ${rewindTo}`);
+      expect(() => migrate(db, migrationsDir)).not.toThrow();
+      expect(userVersion(db)).toBe(LATEST_VERSION);
+      expect(db.all("SELECT * FROM project_catalogs")).toEqual(catalogs);
+      expect(tableNames(db)).not.toContain("router_pm_notes");
+      expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+    }
+  });
+
+  it("删项目时档案跟着删", () => {
+    const db = m3Db();
+    migrate(db, migrationsDir);
+    db.run("INSERT INTO conversations (id, kind, pm_id, title, created_at) VALUES (50, 'project_group', 2, '旧', 0)");
+    db.run("INSERT INTO projects (id, name, status, pm_id, conversation_id, created_at, updated_at) VALUES (50, '旧', 'archived', 2, 50, 0, 0)");
+    db.run("INSERT INTO project_catalogs (project_id, forced, updated_at) VALUES (50, 1, 0)");
+    db.run("DELETE FROM projects WHERE id = 50");
+    expect(db.all("SELECT * FROM project_catalogs")).toEqual([]);
+    expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 });

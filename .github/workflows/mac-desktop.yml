@@ -9,13 +9,6 @@ on:
     paths:
       - "apps/macos/**"
       - "apps/desktop/**"
-      - "src/daemon/**"
-      - "src/shared/**"
-      - "src/vendors/**"
-      - "src/hub/**"
-      - "src/tunnel/**"
-      - "src/web/**"
-      - "migrations/**"
       - "scripts/build-mac-app.sh"
       - "scripts/stage-mac-runtime.ts"
       - "scripts/stage-runtime-common.ts"

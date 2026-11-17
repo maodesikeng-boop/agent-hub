@@ -12,6 +12,7 @@ import type {
   WorkerId,
 } from "./domain.ts";
 import type { Deliverable } from "./deliverables.ts";
+import type { ProjectCatalogCard } from "./project-catalog.ts";
 import type { AgentVendor } from "./vendors.ts";
 
 export interface RouterSettings {
@@ -80,12 +81,6 @@ export interface RouterReportItem {
 }
 
 export type RouterItem = RouterDecisionItem | RouterReportItem;
-
-export interface RouterPmNote {
-  pmId: PmId;
-  text: string;
-  updatedAt: number;
-}
 
 export type RouterAction =
   | {
@@ -202,7 +197,6 @@ export interface RouterSlice {
   items: RouterItem[];
   /** 比 items 里最早一条简报更早的简报还有没有（条数或字节截断时为 true）。 */
   briefingsHasMore: boolean;
-  notes: RouterPmNote[];
   /** 本机最近 ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX 条（另守 ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES）；经 deviceToken 跨机访问时为空数组。 */
   commands: RouterCommandRecord[];
   /** 本机比 commands 里最早一条更早的指令还有没有（条数或字节截断时为 true）；经 deviceToken 跨机访问时为 false。 */
@@ -231,9 +225,9 @@ export interface PmDigestEntry {
     description: string | null;
     mainFolder: string;
     otherFolders: string[];
+    /** 第一层项目档案（docs/router-project-catalog-design.md）；还没建档或对方设备版本旧时没有。 */
+    catalog?: ProjectCatalogCard | null;
   } | null;
-  personaSummary: string;
-  pmNote: string | null;
   activeWorkers: PmDigestActiveWorker[];
   activeWorkerTotal: number;
   pendingDecisionCount: number;
@@ -244,6 +238,8 @@ export interface PmDigestEntry {
 export interface DeviceRouterDigest {
   generatedAt: number;
   pms: PmDigestEntry[];
+  /** 超了体积上限没列出的项目经理个数（daemon/ledger/router-digest-fit.ts）；都列出了或对方设备版本旧时没有。 */
+  omittedPms?: number;
 }
 
 export function defaultRouterSettings(): RouterSettings {
@@ -255,7 +251,6 @@ export function emptyRouterSlice(): RouterSlice {
     settings: defaultRouterSettings(),
     items: [],
     briefingsHasMore: false,
-    notes: [],
     commands: [],
     commandsHasMore: false,
   };
@@ -307,6 +302,12 @@ export type RouterAgentDispatchInput =
       op: "worker-list";
       device: string;
       projectId?: ProjectId;
+    }
+  | {
+      /** 只读：展开一个项目的完整档案（docs/router-project-catalog-design.md 第二层），不算分派目标数。 */
+      op: "project-show";
+      device: string;
+      projectId: ProjectId;
     }
   | {
       op: "project-create";

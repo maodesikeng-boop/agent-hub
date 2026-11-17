@@ -240,8 +240,8 @@ export interface VendorCapabilityScan {
 /** 生成启动文件时守护进程给的（daemon/launch.ts）。 */
 interface VendorLaunchInput {
   role: SessionRole;
-  /** hub.sock 的真实路径（realpath 过）。 */
-  hubSock: string;
+  /** hub.sock 的真实路径（realpath 过）。不给就是这个会话不许敲 hub（总助后台写档），设置里不放行 hub。 */
+  hubSock?: string;
   /** 数据目录 state/ 的真实路径。 */
   stateDir: string;
   /** Worker 的进程会不会包进 OS 沙箱（daemon/driver/write-scope.ts 的 osSandboxAvailable）。 */

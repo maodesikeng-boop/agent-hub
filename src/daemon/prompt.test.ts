@@ -717,7 +717,7 @@ describe("提示词：项目经理（M3）", () => {
     for (const m of HUB_USAGE_PROMPT.matchAll(new RegExp(`\`${HUB_COMMAND} ([a-z-]+) ([a-z-]+(?:\\|[a-z-]+)+)\``, "g"))) {
       compressed.set(m[1]!, m[2]!.split("|"));
     }
-    expect([...compressed.keys()].sort()).toEqual(["graph", "persona", "project", "router", "schedule"]);
+    expect([...compressed.keys()].sort()).toEqual(["graph", "persona", "project", "schedule"]);
     const inPrompt = (cli: string): boolean => {
       if (HUB_USAGE_PROMPT.includes(`${HUB_COMMAND} ${cli}`)) return true;
       const [group, action] = cli.split(" ");
@@ -753,7 +753,7 @@ describe("提示词：项目经理（M3）", () => {
       `\`${hub} project create|attach|detach|setup\`：建项目、增删附加文件夹、设新 worktree 准备脚本`,
       `\`${hub} persona show|edit\`：查看、修改性格设定和干活模式`,
       `\`${hub} schedule add|list|pause|resume|remove\`：定时任务（用户要日报才建）`,
-      `\`${hub} router report|note\`：给总助发汇报卡（带本机文件用 \`--file\`）、更新一句话项目主线备忘`,
+      `\`${hub} router report\`：给总助发汇报卡（带本机文件用 \`--file\`）`,
       `\`${hub} self-reload [--build]\`：${PRODUCT_NAME} 自身代码合入后让守护进程热重启`,
     ]) {
       expect(HUB_USAGE_PROMPT, line).toContain(line);
@@ -775,7 +775,6 @@ describe("提示词：项目经理（M3）", () => {
       `${hub} schedule remove <编号>`,
       `${hub} ask [--node <步骤>] [--graph <图编号>] [--option <选项>...] [--recommended <选项>] [--replace <编号>] [--file [标签=]路径...] --stdin`,
       `${hub} router report (--summary <摘要> | --stdin) [--pr <URL>] [--worker <编号>] [--file [标签=]路径...] [--link <标签=网址>...]`,
-      `${hub} router note (--text <备忘> | --stdin | --clear)`,
       `${hub} self-reload [--build]`,
       "等所有会话这一轮收尾",
       `最多等 ${SELF_RELOAD_DRAIN_MAX_MS / 60_000} 分钟，之后不再等 Worker 轮次和系统消息`,

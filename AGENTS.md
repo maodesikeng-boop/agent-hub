@@ -14,7 +14,7 @@
 - 优先用成熟的第三方库，不要自己手搓基础轮子（比如前端状态订阅用 `zustand`、按需拉取与分页缓存用 `@tanstack/react-query`、UI 原语用 `shadcn/ui` 等），不要为了追求“零依赖”手写复杂的状态机、缓存淘汰或分页拼接。
 - 界面按 `docs/ui-standard.md`：间距、圆角、字号、颜色、控件尺寸、聚焦态、对齐都照它；标准没覆盖的先补进标准再改界面。
 - GitHub 操作一律用 `GH_TOKEN="$(gh auth token --user maodesikeng-boop)" gh ...`（本机 gh 默认账号不是仓库协作者）。
-- Mac 测试在本机跑（`pnpm typecheck`、本次改到的相关测试文件及涉及沙箱时的 `src/shared/write-scope.test.ts`），云端 CI 默认跑 Ubuntu（4 路并行分片），并在改动平台层、驱动层、进程/管道/git/同步、`apps/windows/**` 或 `test/windows/**` 等跨端路径时按路径自动触发 `.github/workflows/windows.yml`（`windows-latest`）。
+- 测试与合并策略：开发与独立审查阶段在本机只跑 `pnpm typecheck` 与本次改到的相关测试文件（涉及沙箱时加跑 `src/shared/write-scope.test.ts`），不跑本机全量 `vitest`，也不在 PR 上阻塞等桌面安装包编译（普通代码 PR 不触发 `mac-desktop` / `windows-desktop`，仅改动 `apps/**`、打包脚本或依赖锁文件时触发）。云端 CI 默认跑 Ubuntu（4 路并行分片），并在改动平台层、驱动层、进程/管道/git/同步、`apps/windows/**` 或 `test/windows/**` 等跨端路径时按路径自动触发 `.github/workflows/windows.yml`（`windows-latest`）。常规改动本机实测与审查通过后直接合入 `main`，由 `main` 后台异步跑全量回归与桌面安装包自检；只有本机无法真测的 Linux `bwrap` 沙箱或 Windows 底层/安装包改动，合并前才等对应的云端检查。
 - 写或审缓存、状态快照、会随时间变多的列表，必查 4 件事（守卫测试见 `src/web/selectors-cache.test.ts`、`src/daemon/store/db-cache.test.ts`、`src/web/sw-rules-cache.test.ts`）：
   1. 失效：底层文件、配置、数据变了要能感知；退出、删除要清掉；失败或空结果只短暂记（像 `FETCHED_QUOTA_RETRY_MS`），不当正常结果缓存几分钟到几小时。
   2. 上限：按跑了一个月（300 个已收工 Worker、3 万条消息、5 万步日志）算，内存里的 Map/数组、单次接口响应、给 agent 的命令输出都要有上限（数写进 `src/shared/limits.ts`），大响应要压缩。

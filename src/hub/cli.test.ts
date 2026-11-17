@@ -490,9 +490,6 @@ describe("hub cli", () => {
         ).code,
       ).toBe(0);
 
-      expect((await hub(["router", "note", "--text", "正在拆第 1 波 PR"])).code).toBe(0);
-      expect((await hub(["router", "note", "--clear"])).code).toBe(0);
-
       expect(ledger.calls).toEqual([
         {
           sessionId: 42,
@@ -527,8 +524,6 @@ describe("hub cli", () => {
             files: [{ label: null, path: join(cwd, "docs", "router-design.md") }],
           },
         },
-        { sessionId: 42, command: "router.note", args: { text: "正在拆第 1 波 PR" } },
-        { sessionId: 42, command: "router.note", args: { clear: true } },
       ]);
     });
 
@@ -1390,6 +1385,10 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
         const r7 = await hub(["dispatch", "worker-list", "--device", "self", "--project", "5"], { env: routerEnv });
         expect(r7.code).toBe(HUB_EXIT.ok);
 
+        // 7b. project-show（只读，展开项目档案）
+        const r7b = await hub(["dispatch", "project-show", "--device", "dev-2", "--project", "6"], { env: routerEnv });
+        expect(r7b.code).toBe(HUB_EXIT.ok);
+
         // 8. project-create (remote preserves ~/..., self expands local path)
         const r8 = await hub(
           [
@@ -1433,6 +1432,7 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
           { sessionId: 901, commandId: 77, payload: { op: "worker-send", device: "dev-2", workerId: 11, verbatim: true } },
           { sessionId: 901, commandId: 77, payload: { op: "worker-end", device: "self", workerId: 9 } },
           { sessionId: 901, commandId: 77, payload: { op: "worker-list", device: "self", projectId: 5 } },
+          { sessionId: 901, commandId: 77, payload: { op: "project-show", device: "dev-2", projectId: 6 } },
           {
             sessionId: 901,
             commandId: 77,
@@ -1462,6 +1462,24 @@ process.exitCode = await runHub({ argv: process.argv.slice(1), env: process.env,
       const neither = await hub(["dispatch", "pm", "--device", "self", "--pm", "2"]);
       expect(neither.code).toBe(HUB_EXIT.usage);
       expect(neither.stderr).toContain("--verbatim 或 --stdin");
+    });
+
+    it("hub dispatch project-show：解析 --device 和 --project，缺一个报用法错误", async () => {
+      const noProject = await hub(["dispatch", "project-show", "--device", "self"]);
+      expect(noProject.code).toBe(HUB_EXIT.usage);
+      expect(noProject.stderr).toContain("--project <projectId>");
+      const noDevice = await hub(["dispatch", "project-show", "--project", "7"]);
+      expect(noDevice.code).toBe(HUB_EXIT.usage);
+      expect(noDevice.stderr).toContain("--device <self|deviceId>");
+      const extra = await hub(["dispatch", "project-show", "--device", "self", "--project", "7", "--verbatim"]);
+      expect(extra.code).toBe(HUB_EXIT.usage);
+      expect(noProject.stderr).toContain("dispatch project-show --device <self|deviceId> --project <projectId>");
+    });
+
+    it("hub router note 不再是命令", async () => {
+      const r = await hub(["router", "note", "--text", "备忘"]);
+      expect(r.code).toBe(HUB_EXIT.usage);
+      expect(HUB_USAGE).not.toContain("router note");
     });
   });
 

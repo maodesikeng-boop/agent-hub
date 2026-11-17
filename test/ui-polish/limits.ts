@@ -56,9 +56,8 @@ export const CALIBRATION_RUNS = 3;
 export const CALIBRATION_MAX_SPREAD = 1;
 /** 校准：几成的校准图要满足上面那条。 */
 export const CALIBRATION_STABLE_SHARE = 0.9;
-/** 校准：基准图比“弄坏到 P0、P1”的图至少高几分；比“弄坏到 P2”的至少高几分。 */
-export const CALIBRATION_MIN_GAP_SEVERE = 3;
-export const CALIBRATION_MIN_GAP_MINOR = 1;
+/** 校准：基准图页面分（每家评委多次评分的中位数）应落在这个区间。基准图是没有硬伤的 6 到 7 分毛坯，评到 9 分以上说明审美高线没立住。 */
+export const CALIBRATION_BASELINE_PAGE_RANGE = { min: 6, max: 8 } as const;
 /** 校准：故意弄坏的地方 3 次里至少被指出几次才算抓到；P0、P1 的弄坏要有几成被抓到。 */
 export const CALIBRATION_MIN_HITS = 2;
 export const CALIBRATION_DETECT_SHARE = 0.9;
@@ -81,6 +80,8 @@ export const JUDGE_MAX_CONCURRENT = 6;
 export const JUDGE_MAX_WORKERS_PER_REVIEW = 10;
 /** 两家评委的发现算同一处：框的交并比不低于它，或同一张图引了同一条规则。 */
 export const FINDING_MATCH_IOU = 0.3;
+/** 对比度的严重度线（WCAG 1.4.3、1.4.11）：不到 P0_BELOW 记 P0，不到 P1_BELOW 记 P1。评委和机器检查都照它判。 */
+export const CONTRAST_SEVERITY_LINES = { P0_BELOW: 3, P1_BELOW: 4.5 } as const;
 /** 一张评分卡最多几条发现：超了多半是评委把同一个问题拆碎了，按格式错误打回重评。 */
 export const MAX_FINDINGS_PER_CARD = 20;
 /** 每条发现“哪里不对”“怎么改”各最多多少字。 */

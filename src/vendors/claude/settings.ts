@@ -48,8 +48,8 @@ export interface SessionSettingsInput {
    * 给了就整个换成只读档：default 模式、放行读和命令、拒绝编辑工具、claude 自带沙箱，不再看 osSandboxed（这时进程不包外层沙箱，嵌套会 exit 71）。
    */
   readonly?: SessionReadonlyInput;
-  /** hub.sock 的真实路径（realpath 过：macOS 上 /var 其实是 /private/var，写错了沙箱放行不生效）。 */
-  hubSock: string;
+  /** hub.sock 的真实路径（realpath 过：macOS 上 /var 其实是 /private/var，写错了沙箱放行不生效）。不给就不放行 hub 命令和 hub.sock。 */
+  hubSock?: string;
   /** 数据目录 state/ 的真实路径：Worker 的 stateDirDenyRule 用。 */
   stateDir: string;
   /**
@@ -84,24 +84,25 @@ interface PlainSandbox {
  * 每次返回新对象。
  */
 export function buildSessionSettings(input: SessionSettingsInput): SessionSettings {
+  const hubAllow = input.hubSock === undefined ? [] : [HUB_ALLOW_RULE];
   if (input.readonly) {
     const { allow, deny } = claudeReadonlyPermissions(input.readonly.policy);
     const platform = input.platform ?? process.platform;
     if (platform === "win32") {
       return {
-        permissions: { defaultMode: CLAUDE_READONLY_PERMISSION_MODE, allow: [HUB_ALLOW_RULE, ...allow], deny },
+        permissions: { defaultMode: CLAUDE_READONLY_PERMISSION_MODE, allow: [...hubAllow, ...allow], deny },
         sandbox: { enabled: false, network: { allowUnixSockets: [] } },
         autoMemoryEnabled: false,
       };
     }
     return {
-      permissions: { defaultMode: CLAUDE_READONLY_PERMISSION_MODE, allow: [HUB_ALLOW_RULE, ...allow], deny },
+      permissions: { defaultMode: CLAUDE_READONLY_PERMISSION_MODE, allow: [...hubAllow, ...allow], deny },
       sandbox: claudeReadonlySandbox(input.readonly.policy, { denyWrite: input.readonly.denyWrite, hubSock: input.hubSock }),
       autoMemoryEnabled: false,
     };
   }
-  const sandbox: PlainSandbox = { network: { allowUnixSockets: [input.hubSock] } };
-  const settings: SessionSettings = { permissions: { defaultMode: DEFAULT_PERMISSION_MODE, allow: [HUB_ALLOW_RULE] }, sandbox };
+  const sandbox: PlainSandbox = { network: { allowUnixSockets: input.hubSock === undefined ? [] : [input.hubSock] } };
+  const settings: SessionSettings = { permissions: { defaultMode: DEFAULT_PERMISSION_MODE, allow: hubAllow }, sandbox };
   // 2026-11-06 用户去掉了“Worker 不能改记忆文件”的拒绝规则；数据目录的保护在 writeScope（见上）
   if (input.role === "worker") {
     settings.permissions.deny = [...(settings.permissions.deny ?? []), stateDirDenyRule(input.stateDir)];

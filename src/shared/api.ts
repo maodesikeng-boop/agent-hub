@@ -27,7 +27,6 @@ import type {
   PostRouterCommandTarget,
   RouterCommandRecord,
   RouterItem,
-  RouterPmNote,
   RouterSettings,
   RouterSlice,
 } from "./router.ts";
@@ -513,7 +512,6 @@ export const CHANGE_TYPES = [
   "router.item.created",
   "router.item.updated",
   "router.reports.archived_all",
-  "router.note.updated",
   "router.command.created",
   "router.command.updated",
   "task_graph.created",
@@ -548,7 +546,6 @@ export interface ChangeDataMap {
   "router.item.created": { item: RouterItem };
   "router.item.updated": { item: RouterItem };
   "router.reports.archived_all": { archivedIds: RouterItemId[]; updatedAt: number };
-  "router.note.updated": { pmId: PmId; note: RouterPmNote | null };
   "router.command.created": { command: RouterCommandRecord };
   "router.command.updated": { command: RouterCommandRecord };
   "task_graph.created": { graph: TaskGraph };

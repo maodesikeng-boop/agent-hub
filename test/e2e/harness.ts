@@ -1,10 +1,10 @@
 // 端到端测试的零件：在临时数据目录里起真的守护进程（node src/daemon/main.ts），claude 换成假 claude；
 // 用 HTTP + cookie 登录、发消息、拉状态，用 WebSocket 收推送。
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FakeLogEntry, FakeScript } from "../fake-claude/fake-claude.ts";
 import { wrapScriptAsPlatformCli } from "../fake-cli-shim.ts";
@@ -57,10 +57,13 @@ export async function waitUntil<T>(what: string, fn: () => Promise<T | undefined
   }
 }
 
-/** Linux bwrap 内层假 claude 用 1_000_001+ 的合成 pid 并持有 fake-proc-<pid> 的打开 fd：在宿主机 /proc/<pid>/fd 里定位其真实宿主机 pid。 */
-function hostPidOfFake(fakePid: number): number | null {
+/**
+ * Linux bwrap 内层假 claude 用 1_000_001+ 的合成 pid 并持有 <fakeDir>/fake-proc-<pid> 的打开 fd：在宿主机 /proc/<pid>/fd 里定位其真实宿主机 pid。
+ * 只认这个测试环境的 fakeDir：并行跑的别的测试文件也有自己的 fake-proc-1000001，认错了会杀掉别人的进程。
+ */
+function hostPidOfFake(fakeDir: string, fakePid: number): number | null {
   if (process.platform !== "linux") return null;
-  const suffix = `/fake-proc-${fakePid}`;
+  const target = join(realpathSync(fakeDir), `fake-proc-${fakePid}`);
   let procs: string[];
   try {
     procs = readdirSync("/proc");
@@ -77,7 +80,7 @@ function hostPidOfFake(fakePid: number): number | null {
     }
     for (const fd of fds) {
       try {
-        if (readlinkSync(`/proc/${entry}/fd/${fd}`).endsWith(suffix)) return Number(entry);
+        if (readlinkSync(`/proc/${entry}/fd/${fd}`) === target) return Number(entry);
       } catch {
         // fd 已关闭或无权限
       }
@@ -86,8 +89,8 @@ function hostPidOfFake(fakePid: number): number | null {
   return null;
 }
 
+/** 真实进程号还在不在。假 claude 的进程号（可能是 bwrap 里的合成 pid）用 E2eEnv.isAlive。 */
 export function isAlive(pid: number): boolean {
-  if (pid >= 1_000_000) return hostPidOfFake(pid) !== null;
   try {
     process.kill(pid, 0);
     return true;
@@ -125,6 +128,13 @@ export interface E2eEnv {
   /** 同上，每条消息的 text 块分开。 */
   stdinBlocks(): string[][];
   argvs(): Array<{ pid: number; argv: string[]; cwd: string }>;
+  /**
+   * 某个会话起过的假 claude（按启动先后）：提示词文件在 launch/<会话编号>/ 下。
+   * 要某个会话的进程用它，别按 argvs()、envs() 的下标取：守护进程自己还会起探模型、后台写项目档案的进程。
+   */
+  procsOf(sessionId: number): Array<{ pid: number; argv: string[]; cwd: string }>;
+  /** 这个环境里某个假 claude 进程（日志里记的 pid）还在不在。 */
+  isAlive(pid: number): boolean;
   /** 假 claude 启动时记下的环境变量（HUB_TOKEN、HUB_SOCK、PATH……），按进程。 */
   envs(): Array<{ pid: number; env: Record<string, string> }>;
   /** 假 claude 的 bash 步骤跑过的命令和结果。 */
@@ -250,6 +260,15 @@ export function makeEnv(options: { root?: string; prefix?: string; detached?: bo
     stdinTextsOf: (pid) => userBlocks(log().filter((e) => e.pid === pid)).map((b) => b.join("\n\n")),
     argvs: () => log().flatMap((e) => (e.kind === "argv" ? [{ pid: e.pid, argv: e.argv, cwd: e.cwd }] : [])),
     envs: () => log().flatMap((e) => (e.kind === "env" ? [{ pid: e.pid, env: e.env }] : [])),
+    isAlive(pid) {
+      return pid >= 1_000_000 ? hostPidOfFake(fakeDir, pid) !== null : isAlive(pid);
+    },
+    procsOf(sessionId) {
+      return this.argvs().filter((a) => {
+        const i = a.argv.indexOf("--append-system-prompt-file");
+        return i >= 0 && basename(dirname(a.argv[i + 1] ?? "")) === String(sessionId);
+      });
+    },
     bashRuns: () => log().flatMap((e) => (e.kind === "bash" ? [{ pid: e.pid, command: e.command, exitCode: e.exitCode, output: e.output }] : [])),
     runHub(pid, args, options = {}) {
       const entry = log().find((e) => e.kind === "env" && e.pid === pid);
@@ -276,7 +295,7 @@ export function makeEnv(options: { root?: string; prefix?: string; detached?: bo
       await sleep(50);
       // 万一有假 claude 留下（测试失败时），也结束掉
       for (const { pid } of this.argvs()) {
-        const realPid = pid >= 1_000_000 ? hostPidOfFake(pid) : isAlive(pid) ? pid : null;
+        const realPid = pid >= 1_000_000 ? hostPidOfFake(fakeDir, pid) : isAlive(pid) ? pid : null;
         if (realPid !== null) {
           try {
             process.kill(realPid, "SIGKILL");
@@ -410,6 +429,12 @@ export class Client {
 
 export function messagesOf(state: StateSnapshot, conversationId: number): Message[] {
   return state.conversations.find((c) => c.conversation.id === conversationId)?.messages ?? [];
+}
+
+/** 某个对话当前会话第一次起的假 claude 进程（比如项目经理的，拿来 runHub）。 */
+export async function firstPidOfConversation(env: E2eEnv, client: Client, conversationId: number): Promise<number> {
+  const sessionId = (await client.state()).sessions.find((s) => s.conversationId === conversationId)!.sessionId;
+  return env.procsOf(sessionId)[0]!.pid;
 }
 
 export function messageById(state: StateSnapshot, id: number): Message | undefined {

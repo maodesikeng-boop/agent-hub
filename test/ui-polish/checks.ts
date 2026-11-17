@@ -3,14 +3,14 @@
 import { AxeBuilder } from "@axe-core/playwright";
 import type { Page } from "playwright";
 import { inPage } from "./in-page-api.ts";
-import { FINDING_TEXT_MAX_CHARS } from "./limits.ts";
-import type { Finding } from "./rubric.ts";
+import { CONTRAST_SEVERITY_LINES, FINDING_TEXT_MAX_CHARS } from "./limits.ts";
+import type { Finding, Severity } from "./rubric.ts";
 
 export const MACHINE_CHECKS = [
   { id: "clipped", severity: "P0", what: "元素的内容超出了会裁切它的祖先，露不全（没有截断样式的）", fix: "让装它的容器在这个方向上放得下（grid-cols-1、min-w-0、换行），或者给它截断样式和 title" },
   { id: "page-overflow", severity: "P0", what: "页面或弹窗出现横向滚动", fix: "找出最宽的那个子元素，限制宽度或允许换行" },
-  { id: "overlap", severity: "P0", what: "两个能点的东西的可点范围互相盖住", fix: "拉开两者的间距，或者让上面那个不再盖住下面那个" },
-  { id: "contrast", severity: "P1", what: "文字对比度不到 WCAG AA（axe-core 的 color-contrast）", fix: "字色换深一档，或底色换浅一档，到 4.5:1（大字 3:1）" },
+  { id: "overlap", severity: "P2", what: "两个能点的东西的可点范围边缘互相擦碰（两者中心都点得到）", fix: "拉开两者的间距，或者收小其中一个的可点范围" },
+  { id: "contrast", severity: "P1", what: "文字对比度不到 WCAG AA（axe-core 的 color-contrast），不到 3:1 的记 P0", fix: "字色换深一档，或底色换浅一档，到 4.5:1（大字 3:1）" },
   { id: "touch-target", severity: "P1", what: "触屏视口下可点范围小于 44×44px", fix: "可点范围扩到 44×44px（加内边距或用伪元素扩大点击区）" },
   { id: "truncated-no-title", severity: "P2", what: "文字被截成省略号，却没有 title 放全文", fix: "给截断的元素加 title 写全文" },
   { id: "off-scale-font", severity: "P2", what: "界面外壳的字号不在四档字号里", fix: "改用 text-xs、text-minor、text-body、text-title 四档之一" },
@@ -29,6 +29,8 @@ export interface RawHit {
   check: MachineCheckId;
   rect: { x: number; y: number; w: number; h: number };
   evidence: string;
+  /** 量到的数决定严重度时填（对比度），不填用 MACHINE_CHECKS 里的。 */
+  severity?: Severity;
 }
 
 /**
@@ -50,7 +52,7 @@ export async function runMachineChecks(page: Page, options: { touch: boolean }):
     const check = MACHINE_CHECKS.find((c) => c.id === hit.check)!;
     findings.push({
       rule: `machine:${check.id}`,
-      severity: check.severity,
+      severity: hit.severity ?? check.severity,
       box: toBox(hit.rect, viewport),
       what: clip(`${check.what}：${hit.evidence}`),
       fix: check.fix,
@@ -81,7 +83,8 @@ async function contrastHits(page: Page): Promise<RawHit[]> {
       const box = await page.locator(target).first().boundingBox().catch(() => null);
       const data = node.any[0]?.data as { contrastRatio?: number; fgColor?: string; bgColor?: string; expectedContrastRatio?: string } | undefined;
       const ratio = data?.contrastRatio === undefined ? "" : `${data.contrastRatio}:1，要 ${data.expectedContrastRatio ?? "4.5:1"}，字 ${data.fgColor} 底 ${data.bgColor}，`;
-      hits.push({ check: "contrast", rect: box === null ? { x: 0, y: 0, w: 1, h: 1 } : { x: box.x, y: box.y, w: box.width, h: box.height }, evidence: `${ratio}${target}` });
+      const severity: Severity = data?.contrastRatio !== undefined && data.contrastRatio < CONTRAST_SEVERITY_LINES.P0_BELOW ? "P0" : "P1";
+      hits.push({ check: "contrast", rect: box === null ? { x: 0, y: 0, w: 1, h: 1 } : { x: box.x, y: box.y, w: box.width, h: box.height }, evidence: `${ratio}${target}`, severity });
     }
   }
   return hits;
