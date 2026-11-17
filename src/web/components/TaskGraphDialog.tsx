@@ -8,6 +8,7 @@ import {
   userBlockerCardText,
   type ConversationId,
   type TaskGraph,
+  type TaskGraphId,
   type TaskNode,
 } from "../../shared/index.ts";
 import { useClient } from "../device-scope.tsx";
@@ -33,6 +34,11 @@ function readRootFontSizePx(): number {
 
 function readCoarsePointer(): boolean {
   return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches;
+}
+
+/** 一张卡的测量键，也是它的 React key：图、步骤、形态（拍板卡还是普通卡）有一个变了就是另一张卡，重新挂载、重新量。 */
+function measureKeyOf(graphId: TaskGraphId, nodeKey: string, waitingGate: boolean): string {
+  return `${graphId}:${nodeKey}:${waitingGate ? "gate" : "node"}`;
 }
 
 /** 四个状态的英文状态词（docs/ui-standard.md 第 3 条的词表）：等人按等谁分开，完了按是不是跳过的分开。 */
@@ -72,7 +78,8 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
   const client = useClient();
   const qc = useHubQueryClient();
   const [expandedNotes, setExpandedNotes] = useState<Record<string, boolean>>({});
-  // 每张卡画出来的实际高度（px）：量到了交给排版，同一列的下一张卡才不会压上来（拍板卡的摘要、折成两行的步骤名都估不准）
+  // 每张卡画出来的实际高度（px）：量到了交给排版，同一列的下一张卡才不会压上来（拍板卡的摘要、折成两行的步骤名都估不准）。
+  // 键是 measureKeyOf：换了图、同一步从拍板卡变成普通卡都是另一张卡，不沿用旧高度；卡卸载时把它那一项删掉，表里只有画着的卡
   const [measuredHeights, setMeasuredHeights] = useState<Readonly<Record<string, number>>>({});
   const observerRef = useRef<ResizeObserver | null>(null);
   const measureCard = useCallback((el: HTMLDivElement | null) => {
@@ -89,7 +96,16 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
       });
     });
     observerRef.current.observe(el);
-    return () => observerRef.current?.unobserve(el);
+    return () => {
+      observerRef.current?.unobserve(el);
+      const key = el.dataset.measureKey;
+      if (key === undefined) return;
+      setMeasuredHeights((prev) => {
+        if (!(key in prev)) return prev;
+        const { [key]: _gone, ...rest } = prev;
+        return rest;
+      });
+    };
   }, []);
   const [actionError, setActionError] = useState<ErrorLike | null>(null);
   /** Cancel graph 的二次确认弹窗（docs/ui-standard.md 第 12.1 条）：点了先确认，确认了才发请求。 */
@@ -118,6 +134,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
       graphId: graph.id,
       nodes: graph.nodes.map((n) => {
         const activeWaitingUser = isActive && isTaskNodeWaitingUser(n);
+        const measured = measuredHeights[measureKeyOf(graph.id, n.key, activeWaitingUser)];
         return {
           key: n.key,
           status: n.status,
@@ -134,7 +151,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
           ...(activeWaitingUser && n.userBlocker == null && n.artifact?.deliverables !== undefined
             ? { deliverables: n.artifact.deliverables }
             : {}),
-          ...(measuredHeights[n.key] !== undefined ? { measuredHeightPx: measuredHeights[n.key] } : {}),
+          ...(measured !== undefined ? { measuredHeightPx: measured } : {}),
         };
       }),
       edges: graph.edges.map((e) => ({ from: e.fromKey, to: e.toKey })),
@@ -284,13 +301,14 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
               const isWaitingPm = isTaskNodeWaitingPm(node);
               // 没轮到、等项目经理（没有 Worker 挂着）的步骤能跳过；在干、等用户、完了的不行
               const canSkip = graph.status === "active" && (isPending || (isWaitingPm && node.activeWorkerId === null));
+              const measureKey = measureKeyOf(graph.id, node.key, isWaitingGate);
 
               if (isWaitingGate) {
                 return (
                   <div
-                    key={box.id}
+                    key={measureKey}
                     ref={measureCard}
-                    data-measure-key={node.key}
+                    data-measure-key={measureKey}
                     style={{ left: `${box.x}px`, top: `${box.y}px`, width: `${box.width}px` }}
                     className="absolute"
                   >
@@ -323,17 +341,13 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
 
               return (
                 <div
-                  key={box.id}
+                  key={measureKey}
                   ref={measureCard}
-                  data-measure-key={node.key}
-                  style={{
-                    left: `${box.x}px`,
-                    top: `${box.y}px`,
-                    width: `${box.width}px`,
-                    minHeight: `${box.height}px`,
-                  }}
+                  data-measure-key={measureKey}
+                  // 高度只由内容定，下限是写死的一档：把量到的高度写回这里，卡变矮时（拍板、跳过之后）会被旧高度撑住
+                  style={{ left: `${box.x}px`, top: `${box.y}px`, width: `${box.width}px` }}
                   className={cn(
-                    "absolute flex flex-col justify-between gap-1.5 rounded-xl px-3 py-2.5",
+                    "absolute flex min-h-17 flex-col justify-between gap-1.5 rounded-xl px-3 py-2.5",
                     isPending
                       ? "border border-dashed border-line bg-transparent opacity-65"
                       : "border border-line bg-background",

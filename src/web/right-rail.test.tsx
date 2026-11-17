@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ConversationId, Message } from "../shared/index.ts";
+import type { ConversationId, Message, MessageId } from "../shared/index.ts";
 import { EMPTY_TOKEN_USAGE } from "../shared/index.ts";
 import { PieceMeta, RIGHT_RAIL_COLLAPSED_KEY, RIGHT_RAIL_VISIBLE_ROWS, RailGroups, RightRail, RightRailToggle } from "./components/RightRail.tsx";
 import { cleanPieceTitle } from "./format.ts";
@@ -26,7 +26,7 @@ const busy = (id: number) => worker(id, { activity: "working" });
 const done = (id: number) => worker(id, { ended: true });
 const ask = (id: number): Message => makeMessage({ id, text: `问题 ${id}`, meta: { needsUser: true } });
 
-function renderRail(props: { asks?: Message[]; workers?: WorkerEntry[]; openWorkerId?: ConversationId | null; avatarKey?: number; onOpenWorker?: (id: ConversationId) => void } = {}) {
+function renderRail(props: { asks?: Message[]; workers?: WorkerEntry[]; openWorkerId?: ConversationId | null; avatarKey?: number; onOpenAsk?: (id: MessageId) => void; onOpenWorker?: (id: ConversationId) => void } = {}) {
   render(
     <RightRail
       asks={props.asks ?? []}
@@ -34,7 +34,7 @@ function renderRail(props: { asks?: Message[]; workers?: WorkerEntry[]; openWork
       openWorkerId={props.openWorkerId ?? null}
       layout="side"
       avatarKey={props.avatarKey ?? 0}
-      onOpenAsk={() => {}}
+      onOpenAsk={props.onOpenAsk ?? (() => {})}
       onOpenWorker={props.onOpenWorker ?? (() => {})}
     />,
   );
@@ -333,15 +333,17 @@ describe("右栏：只列几条", () => {
 });
 
 describe("右栏：提问行", () => {
-  it("16px 图标 + 15px 一行摘要 + 右边向右的小箭头；点开在下面展开全文", async () => {
-    renderRail({ asks: [ask(1)] });
+  it("16px 图标 + 15px 一行摘要 + 右边向右的小箭头；点了只跳到对话里那张卡，行自己不展开", async () => {
+    const onOpenAsk = vi.fn();
+    renderRail({ asks: [ask(1)], onOpenAsk });
     const row = within(asksGroup()).getByRole("button", { name: /问题 1/ });
     expect(row).toHaveClass("px-2.5", "-mx-2.5", "gap-3", "rounded-xl");
     expect(row.querySelector("svg")).toHaveClass("size-4");
     expect(within(row).getByText("问题 1")).toHaveClass("text-body", "truncate");
-    expect(row).toHaveAttribute("aria-expanded", "false");
+    expect(row).not.toHaveAttribute("aria-expanded");
     await userEvent.setup().click(row);
-    expect(row).toHaveAttribute("aria-expanded", "true");
+    expect(onOpenAsk).toHaveBeenCalledWith(1);
+    expect(within(row).getByText("问题 1")).toHaveClass("truncate");
   });
 });
 

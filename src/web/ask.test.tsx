@@ -105,22 +105,17 @@ describe("右栏的“等你确定”", () => {
     expect(within(screen.getByRole("main")).queryByRole("button", { name: /Needs You/ })).not.toBeInTheDocument();
   });
 
-  it("点一行：在右栏里展开全文（Markdown），对话滚到那条消息并高亮；再点收起", async () => {
+  it("点一行：对话滚到那条消息并高亮；右栏里不展开全文、不出选项（作答在对话里那张卡上）", async () => {
     await boot(twoPms([ask({ id: 1, text: QUESTION }), makeMessage({ id: 2, text: "中间的话" }), ask({ id: 3, text: "再问一个" })]));
     const first = askRows()[0]!;
-    expect(first).toHaveAttribute("aria-expanded", "false");
+    expect(first).not.toHaveAttribute("aria-expanded");
     fireEvent.click(first);
-    expect(first).toHaveAttribute("aria-expanded", "true");
-    const body = first.parentElement!;
-    // 展开后标题就在这一行里（不截断），下面的全文不再重复一遍标题
     expect(first).toHaveTextContent("方案 A");
-    expect(within(body).getByText("B：单栏信息流")).toBeInTheDocument();
+    expect(within(asksGroup()!).queryByText("B：单栏信息流")).not.toBeInTheDocument();
+    expect(askRows()).toHaveLength(2);
     const target = document.querySelector('[data-message-id="1"]')!;
     expect(scrolled).toEqual([target]);
     expect(target).toHaveAttribute("data-highlighted", "true");
-    fireEvent.click(first);
-    expect(first).toHaveAttribute("aria-expanded", "false");
-    expect(within(body).queryByText("B：单栏信息流")).not.toBeInTheDocument();
   });
 
   it("那条消息上不另挂“等你确定”标签（细节藏起来，提问在别处列着）", async () => {
@@ -210,7 +205,7 @@ describe("跳到提问只生效一次", () => {
     fireEvent.click(askRows()[0]!);
     fireEvent.click(askRows()[0]!);
     fireEvent.click(askRows()[0]!);
-    expect(scrolled).toHaveLength(2);
+    expect(scrolled).toHaveLength(3);
     expect(messageOne()).toHaveAttribute("data-highlighted", "true");
   });
 });

@@ -262,6 +262,8 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - **标题和底部按钮固定，只有中间滚动**：内容超过一屏（展开“更多设置”）时，`DialogBody` 自己滚，“创建”一直在视野里。`DialogBody` 往下多伸 16px 再用内边距收回来（`-mb-4 pb-4`，落在和底部按钮之间的 24px 空隙里），滚动的内容在这 16px 里渐隐（`.dialog-body-fade`），不贴着底部按钮被硬切。表单弹窗把 `<form>` 做成 `DialogForm`（`flex min-h-0 flex-col`），里面放 `DialogBody` 和 `DialogFooter`。
 - 弹窗里的行照第 9 条：输入框 240px（带按钮的，输入框 + 按钮一起不超过行宽），占位符要能完整显示。新建项目经理的“名字”“主文件夹”两行右边控件同宽 288px（`w-72`，`NewPmDialog.tsx` 的 `FIELD_WIDTH`）：主文件夹的输入框和 `Choose…` 一起占这么宽，一行放得下、不折行，两行左右边线对齐。
 - **放大窗**（图表、任务流图全览，`ui/dialog.tsx` 的 `ZOOM_DIALOG`）：大小跟内容走，内容小弹窗就小，不留大片空白；最大到窗口的 96% 宽（封顶 1400px）、90% 高，再大在里面滚。
+- **文件预览窗**（`FilePreview`）按内容分两种大小：表格、Markdown、代码、音频、认不出的文件同放大窗，跟内容走（两行的 CSV 不撑出一个近全屏的空框）；内嵌的 PDF 和网页、视频、看大图的图片自己没有大小，开到接近全屏（`h-[90vh] w-[90vw]`）。滚动的是工具条下面那个带边框的内容框，表格的表头粘在它顶上。
+- **弹窗里只有一个输入框的表单**（登录时粘贴授权码）：输入框独占一行，提交键放 `DialogFooter` 最右、`Cancel` 在它左边（按钮用 `form` 属性连回表单），不把提交键挤在输入框同一行、底部只剩一个 `Cancel`。
 - 不写副标题和解释性的灰字；需要的说明放在行下面的小字里。
 
 **抽屉**（手机外壳里 Pieces、以及手机设置里的危险操作确认与短表单向导共用，`DrawerContent`，`src/web/ui/drawer.tsx`，底层 `vaul`，只有 bottom 方向）：
@@ -287,7 +289,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 对话右边的一栏（`RightRail`，`src/web/components/RightRail.tsx`），**照 Claude desktop 的右栏**：组标题加单行的列表或紧凑任务流图，一组一组用细线隔开，不加外框、不加阴影，**不密密麻麻**：列表每行只有一行字，行与行留出呼吸感。界面展示文案统一使用 `Piece` / `Pieces`，组名是 “Needs You”“Task Graph”“Pieces”“Completed”。
 
 - **四段式兼容结构**（没有内容的组不显示，单步零散任务照旧不建图）：
-  1. `Needs You`（在上，仅渲染未绑定任务图的独立 `hub ask`；带 `gateRef` 或已绑入任务图的 `gate` 门禁直接内联在下方 `Task Graph` 果皮轨中，绝不双卡重复渲染）；
+  1. `Needs You`（在上，仅渲染未绑定任务图的独立 `hub ask`；带 `gateRef` 或已绑入任务图的 `gate` 门禁是下方 `Task Graph` 果皮轨里那一步的一行，不在这里再列一遍）；
   2. `Task Graph`（活跃多阶段任务流图，`status === 'active'`，采用果皮轨 + 任务级小切面进度轮）；
   3. `Pieces`（未绑定任何活跃任务图节点的独立进行中 Piece；已绑入活跃任务图节点的 Piece 不在列表重复列出）；
   4. `Completed`（在下，默认折叠，按需游标拉取历史已完成/已取消任务图，并与独立已收工 Piece 合并收纳）。
@@ -299,8 +301,9 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
   - 收起后只剩标题这一行，不写个数。
   - 内容用网格行高度过渡（`grid-rows-[1fr]` ↔ `grid-rows-[0fr]`，150ms，`motion-reduce` 时关掉），不跳；收起后内容 `inert` + `aria-hidden`，键盘和读屏都够不着。**Completed 例外**：历史完成项会越来越多，收着时行**不挂载**（不渲染、不跑每行的 `usePieceMeta`、不触发历史任务图请求），点开才渲染并按需拉取，没有收起的高度动画。
   - **每组各自记住**：`localStorage` 的 `agent-hub.rightRail.collapsed`（`{ asks?: true, graphs?: true, workers?: true }`，没写的是展开），刷新、切对话都保持，不分项目经理；值坏了当都展开。收起的组里来了新内容不自动展开。Completed 默认收着、不记住，正开着的是收工的 Piece 时自动展开。
+- **作答只在对话里，右栏只有一行跳转**：同一道题不在对话和右栏各展开一张。对话里那张提问卡是完整的（正文、文件、选项、补充框，第 17 条）；右栏的 `Needs You` 和果皮轨里等你拍板的步骤（第 12.1 条）都只有一行，不展开全文、不列文件、不出选项和补充框。点这一行，对话平滑滚到那张卡（`block: "center"`，`prefers-reduced-motion` 时直接跳）并高亮 2 秒；正开着 Piece 的对话时先回到项目经理的对话再滚；手机上先关掉 Pieces 抽屉再滚。
 - **行**：
-  - “等你确定”：左边一个 16px 线条问号图标（`size-4`，`strokeWidth` 1.5，`text-muted-foreground`），中间名字（去掉 Markdown 符号后的第一行，15px，前景色，400，超长 `truncate`），右边一个向右的小箭头；点一下在这一行下面展开全文（13.5px Markdown，`bg-sidebar`），箭头转向下，同时对话滚到那条消息并高亮。展开后这一行和全文是同一块灰底（行只留上圆角、左右和全文对齐），行里的标题不再截断，全文里不重复一遍标题。一张卡只在用户回答这张卡（在对话里的卡上点选项或填写，或在总助工作台 `#/router` 拍板）、或项目经理 `hub ask close` / `--replace` 时，守护进程才标上（`meta.answered`），这一张从这一组、左栏的“等你确定”标签和标签页标题里的数字消失；用户在对话里发的普通消息不关任何卡，回答一张也不关别的卡。没有“知道了”按钮。
+  - “等你确定”：左边一个 16px 线条问号图标（`size-4`，`strokeWidth` 1.5，`text-muted-foreground`），中间名字（去掉 Markdown 符号后的第一行，15px，前景色，400，超长 `truncate`，全文放 `title`），右边一个向右的小箭头（不转向，这一行不展开）。一张卡只在用户回答这张卡（在对话里的卡上点选项或填写，或在总助工作台 `#/router` 拍板）、或项目经理 `hub ask close` / `--replace` 时，守护进程才标上（`meta.answered`），这一张从这一组、左栏的“等你确定”标签和标签页标题里的数字消失；用户在对话里发的普通消息不关任何卡，回答一张也不关别的卡。没有“知道了”按钮。
   - **行的尺寸**：`py-2 px-2.5 rounded-xl`（`-mx-2.5`，字和组标题对齐），单行 36px，触屏下 `pointer-coarse:min-h-11`；选中、悬停是水果果冻底（第 4 条，`bg-jelly` / `hover:bg-jelly-hover`）。
   - Piece 行：**只有一行**，左侧不放机器人图标，**只有标题**（15px 前景色，`truncate`），**右边不写状态词**（Working…、Thinking…、Idle 都不写）。**正在跑的 Piece（干活、准备中、等后台命令，`RightRail.tsx` 的 `isBusy`）标题字本身带流光** `.status-shimmer`（第 14 条，同一套，不另造），只挂在这几行上；空闲、停止中、收工的标题静态。**不显示第二行**：模型名、思考程度、对话长度（“158K context”）不常驻，收进整行的悬停提示（`title`，第一行是完整标题，后面每项一行，没有的项不写）；点进 Piece 的对话，顶栏右边一行 12px 灰字写模型、思考程度、对话长度（`PieceMeta`，`gap-3`，context 悬停看累计明细；720px 以下藏起来）。没指定模型、名单也没报默认是哪个时这一项不显示，不写一个孤零零的 `Default`。
   - **标题去掉机械前缀**：列表里显示的标题去掉开头的分类前缀（“界面：”“修复：”“功能：”……，`format.ts` 的 `cleanPieceTitle`，前缀表只在那一处），直接露出任务名；读屏名字（`aria-label`）和悬停提示保留完整标题。
@@ -318,7 +321,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 右栏 `Task Graph` 摒弃笨重的全框节点卡片堆叠，采用 **纵向果皮轨（Peel Track，`src/web/components/PeelTrack.tsx`）为主体 + 任务级小切面进度轮图标（`src/web/components/SliceWheelIcon.tsx`）+ 全屏横向拓扑弹窗（`src/web/components/TaskGraphDialog.tsx`）** 的双层视图，确保 `280px` 右栏净宽内呼吸通透、零横向滚动条：
 
 - **任务级小切面进度轮（`SliceWheelIcon`）与多任务手风琴**：
-  - 每个多阶段任务标题左侧配一枚小水果切面轮（默认 `20px` 换算为 `1.25rem`，随界面四档字号缩放）：取所属项目经理的水果配色（`paletteOf(avatarKey)`），按任务阶段数切瓣，对应步骤的四个状态（`docs/orchestration-simplify-design.md` 第 3 节）——完了（`done`）果肉饱满，跳过的（`done` 且 `skipped`）和没轮到（`pending`）一样留淡轮廓，在干（`running`）外圈柔淡、果心向生长，等人按等谁分开：等你拍板（`waiting` + `waitingFor: "user"`）强调色微凸，等项目经理（`waiting` + `waitingFor: "pm"`）琥珀色；同层相邻并行阶段刀口只切到果肉外半圈，果心相连。
+  - 每个多阶段任务标题左侧配一枚小水果切面轮（默认 `20px` 换算为 `1.25rem`，随界面四档字号缩放）：取所属项目经理的水果配色（`paletteOf(avatarKey)`），按任务阶段数切瓣，对应步骤的四个状态（`docs/orchestration-simplify-design.md` 第 3 节）——完了（`done`）果肉饱满，跳过的（`done` 且 `skipped`）和没轮到（`pending`）一样留淡轮廓，在干（`running`）外圈柔淡、果心向生长，等人按等谁分开：等你拍板（`waiting` + `waitingFor: "user"`）强调色微凸，等项目经理（`waiting` + `waitingFor: "pm"`）琥珀色；同层相邻并行阶段刀口只切到果肉外半圈，果心相连。只有一步的图也切一刀（整圈的起止线，从果心到 12 点方向）：没有刀口的实心圆在列表里像一个报错的状态点。
   - 任务标题行右侧配放大全览按钮（`Maximize2`，`aria-label="Zoom"`）与手风琴箭头（`ChevronRight`）；当活跃任务图全部步骤都完了（`done`，跳过也算完了）等待验收交付时，箭头左侧克制显示一行 `12px` 次要文字 `Ready to finish`（`text-xs text-muted-foreground`，全览弹窗左上状态词同样变为 `Ready to finish`），不加任何底色块或胶囊。
   - **多活跃任务优先级与折叠**：单项目同时有多个活跃任务图时，有步骤等你拍板或等项目经理的任务排在最前并默认展开；其余后台进行中任务默认收成带小切面进度轮的单行标题（无紧急任务时排第一的任务默认展开，其余收起），点击任务标题手风琴式展开/收起。
 - **果皮轨（Peel Track）纵向阶段与多股并行轨道**：
@@ -328,18 +331,19 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
   - **已完成 / 未轮到折叠卷**：连续已完成的上游前缀节点数 `>= 2`、后面仍有未完阶段、且折叠不会把尚未汇合的独立旁链混进同一个卷时，默认卷成一行螺旋果皮小卷 `N done`（点击展开全部已完成步骤；若用户正打开其中某个 Piece 对话则自动展开）；尾部连续未解锁 `pending` 且内部拓扑深度 `>= 2` 的链路默认折成一行 `N next`（点击展开全部下游步骤）。
 - **水果刀拍板焦点（等你拍板的步骤：`waiting` + `waitingFor: "user"`，节点类型只剩一种，拍板卡挂在步骤上）**：
   - 等你拍板的步骤在所属泳道卡住一把微缩水果刀（直接复用 `KnifeAvatar`，刀身 `<linearGradient>` 由 `useId()` 生成实例级唯一 ID），刀下方沿本泳道延伸受阻虚线直通底部，同时旁路并行泳道在拍板卡左侧原样穿过不断线。
-  - 右侧挂出整张图唯一一张浅果冻拍板卡（`rounded-2xl border border-primary bg-jelly px-3.5 py-3`）：标题用 `text-body font-semibold text-primary`，摘要支持 Markdown（`text-minor`）；推荐主选项按钮用 `rounded-xl bg-primary text-primary-foreground`（右标 `Recommended`），其余选项按钮用 `rounded-xl border border-border bg-background hover:bg-jelly-hover`；底部 `Add note` 展开补充输入框（`placeholder="Add a note, or type a custom reply…"`），同时支持**一键点选选项**、**输入备注后点选选项（选项 + 备注）**、以及**不选预设项直接 `Send` 自定义备注**，统一调用 `POST /api/task-graphs/:graphId/nodes/:nodeKey/decide`。
+  - **右栏里这一步只有一行**（整行是按钮，尺寸同普通步骤：`min-h-8`、`pointer-coarse:min-h-11`、`rounded-xl`、悬停 `bg-jelly-hover`）：水果刀后面是步骤名（`text-body font-semibold text-primary`，`truncate`，全名放 `title`），最右一个向右的小箭头（`ChevronRight` 14px，`text-muted-foreground`）。点了对话滚到这一步的拍板卡并高亮（第 12 条“作答只在对话里”）；对话里找不到那张卡时（消息还没加载到、老服务端没带消息号）改为打开放大全览弹窗，卡在弹窗里能作答。这一行和别的行一样高，轨道槽画满整行。
+  - **拍板卡画在放大全览弹窗里**（弹窗盖住了对话，在里面要能直接作答），浅果冻底（`rounded-2xl border border-primary bg-jelly px-3.5 py-3`）：卡上方一行步骤名（`text-minor font-semibold text-primary`）和 `Waiting on you`，摘要支持 Markdown（`text-minor`）；推荐主选项按钮用 `rounded-xl bg-primary text-primary-foreground`（右标 `Recommended`），其余选项按钮用 `rounded-xl border border-border bg-background hover:bg-jelly-hover`；底部 `Add note` 展开补充输入框（`placeholder="Add a note, or type a custom reply…"`），同时支持**一键点选选项**、**输入备注后点选选项（选项 + 备注）**、以及**不选预设项直接 `Send` 自定义备注**，统一调用 `POST /api/task-graphs/:graphId/nodes/:nodeKey/decide`。
   - **长内容不撑出卡片**（道理同第 11 条）：选项那一列的 `grid` 写 `grid-cols-1`，不然不换行的长选项（分支名、网址）会把整列撑得比卡宽，靠右的 `Recommended` 被推到卡外、右栏出现横向滚动条；选项文字和问题行写 `wrap-anywhere`，长词换行，不截断；`Recommended` `shrink-0`。
   - 标了 `confirm: true` 的用户检查点步骤（选项为「通过 / 打回」，推荐「通过」）自动默认展开底部补充输入框，方便用户在点「打回」或「通过」前一行填写修改意见，无需多点一次 `Add note`。
-  - 拍板通过（`done`，带定案）后水果刀收起、果冻卡收合，该节点变回紧凑果皮轨单行，并在右侧显示所选简称（`text-xs text-foreground`）。
+  - 拍板通过（`done`，带定案）后水果刀收起，该节点变回普通的果皮轨单行，并在右侧显示所选简称（`text-xs text-foreground`）。
 - **要你动手的提醒卡（`UserBlockerCard`，步骤 `waiting` + `waitingFor: "user"` 且带 `userBlocker`，docs/user-blockers-design.md）**：
-  - 水果刀与泳道照拍板步骤画，卡片换成提醒卡：外壳同拍板卡（`rounded-2xl border border-primary bg-jelly px-3.5 py-3`），顶上一行 `size-2 rounded-full bg-status-active` 圆点加 `text-xs font-medium text-foreground` 的 `Waiting on you`（压在果冻底上的小字不用强调色：同色系浅底上不到 4.5:1），正文是系统写的那句（在哪台设备做什么，`text-minor` Markdown），右下一个主按钮 `Done`（`Button size="sm"`），重查中显示 `Checking…` 加转圈并禁用；不加说明小字。放大全览弹窗里步骤标题行已经写了 `Waiting on you`，卡里那一行不再出。
+  - 右栏里和拍板步骤一样只有一行（水果刀、步骤名、小箭头），点了对话滚到那张提醒卡。提醒卡画在对话里和放大全览弹窗里：外壳同拍板卡（`rounded-2xl border border-primary bg-jelly px-3.5 py-3`），顶上一行 `size-2 rounded-full bg-status-active` 圆点加 `text-xs font-medium text-foreground` 的 `Waiting on you`（压在果冻底上的小字不用强调色：同色系浅底上不到 4.5:1），正文是系统写的那句（在哪台设备做什么，`text-minor` Markdown），右下一个主按钮 `Done`（`Button size="sm"`），重查中显示 `Checking…` 加转圈并禁用；不加说明小字。放大全览弹窗里步骤标题行已经写了 `Waiting on you`，卡里那一行不再出。
   - 对话里那条消息是同一张卡；处理完（重查能用）后卡变成 `border-border bg-background`（同已回答的提问卡），状态词改 `Done`（`text-muted-foreground`，圆点 `bg-muted-foreground`），不再有按钮。已挂在步骤上的那张不在 `Needs You` 重复出现。
 - **放大全览弹窗（`TaskGraphDialog`）**：
   - 点击任务头右上角 `Maximize2`（或 `Completed` 列表中的历史任务图行）打开 `Dialog`（第 10 条的放大窗 `ZOOM_DIALOG`，大小跟图走，滚动视口保持弹窗内边距 `p-6` 不外扩贴边，原生双向滚动）。左上只在不是进行中时写状态词（`Completed`、`Cancelled`、`Ready to finish`），进行中的图不再写一遍 `Task Graph`；步骤名最多两行（`line-clamp-2`，`title` 放全名）。
   - 调用 `src/web/task-graph-layout.ts` 的 `computeTaskGraphLayout(..., viewportMode: "dialog")`（横向 `rankdir: "LR"`，`lru-cache` 容量 64），底层单张 `<svg aria-hidden="true">` 绘制 `1.5px` 三次贝塞尔有向连线与 `3px` 轻量折角箭头（上游 `done` 实线，其余 `stroke-dasharray="4 3"` 虚线；跨多层且直连会擦碰中间卡片的长边沿 Dagre 分层拐点平滑绕行，绝不横穿中间卡片正文），上层渲染完整阶段卡片（已完成绿勾、在干同色系果皮浅晕圆环、等项目经理琥珀圆点）、绑定 Piece 跳转、产物摘要、内联拍板/跳过节点（`Skip step`）/取消任务图（`Cancel graph`）及历史拍板记录。
   - **`Cancel graph` 要二次确认**（取消会结束整张多阶段任务图，误触代价大）：全览弹窗右上角的 `Cancel graph`（ghost `sm`，灰字，悬停 `text-danger`）点一下**不发请求**，先叠一个第 10 条的窄确认弹窗（`DialogContent` `className="max-w-110"`，标题 `Cancel this task graph?`，正文一句写清后果，15px 前景色）；底部 `DialogFooter`：左 `outline` 的 `Keep going`（`DialogClose`，默认聚焦，Esc、点遮罩同样是不取消），右 `destructive` 按钮 `Cancel graph`（撤不回，不用会话的强调色），点了才发 `POST /api/task-graphs/:graphId/cancel`，请求中主按钮前转圈、两个按钮都不能点；成功后确认弹窗和全览弹窗一起关掉，失败时确认弹窗关掉、错误照常显示在全览弹窗顶部（`role="alert"`，`text-danger`）。`Skip step` 只跳一个节点，不加确认。
-  - **卡片先按估算高度排，画出来后按量到的高度重排一次**（`TaskGraphDialog` 用 `ResizeObserver` 量每张卡，交给 `computeTaskGraphLayout` 的 `measuredHeightPx`）：拍板卡的摘要是 Markdown、步骤名最多折两行，估不准，估矮了同一列的下一张卡会压上来。估算仍然要尽量准（第一帧用它），不在弹窗里加偏移：等拍板的卡（`task-graph-layout.ts` 的 `estimateNodeSizeRem`）按卡里每一块的实际高度加起来——标题行、问题行（`hasQuestion`）、摘要、交付物（`deliverable-size.ts` 的 `deliverablesHeightRem`，缩略图高度 `DELIVERABLE_MEDIA_HEIGHT_REM` 同时是 `DeliverableFiles` 里缩略图读的 `--deliverable-media-height`）、选项、`Add note`；触屏（`pointer: coarse`）下选项和 `Add note` 是 44px 热区，`coarsePointer` 传给布局。卡里加了新的一块，在这里加一项，并用实际渲染量一遍。文档行按一行算，链接多到折行时估算偏低。
+  - **卡片先按估算高度排，画出来后按量到的高度重排一次**（`TaskGraphDialog` 用 `ResizeObserver` 量每张卡，交给 `computeTaskGraphLayout` 的 `measuredHeightPx`）：拍板卡的摘要是 Markdown、步骤名最多折两行，估不准，估矮了同一列的下一张卡会压上来。**量到的高度只用来排位置，不写回卡片自己的 `min-height`**（普通卡只有一个写死的下限 `min-h-17`）：写回去的话，卡变矮时（在弹窗里拍板、点 `Skip step` 之后）会被旧高度撑住，中间空一大块。量到的值按“图、步骤、形态（拍板卡还是普通卡）”记，有一个变了就是另一张卡，重新量；卡卸载时删掉它那一项。估算仍然要尽量准（第一帧用它），不在弹窗里加偏移：等拍板的卡（`task-graph-layout.ts` 的 `estimateNodeSizeRem`）按卡里每一块的实际高度加起来——标题行、问题行（`hasQuestion`）、摘要、交付物（`deliverable-size.ts` 的 `deliverablesHeightRem`，缩略图高度 `DELIVERABLE_MEDIA_HEIGHT_REM` 同时是 `DeliverableFiles` 里缩略图读的 `--deliverable-media-height`）、选项、`Add note`；触屏（`pointer: coarse`）下选项和 `Add note` 是 44px 热区，`coarsePointer` 传给布局。卡里加了新的一块，在这里加一项，并用实际渲染量一遍。文档行按一行算，链接多到折行时估算偏低。
   - **跨设备**：果皮轨、全览弹窗、拍板卡、`Completed` 历史拉取一律用 `DeviceScope`（`src/web/device-scope.tsx` 的 `useClient()`）给的当前设备接口，不自己按设备编号另建 client；看远端项目经理时请求走那台的 `/d/<设备>/...`。
 
 ## 13. 字体、数字、列表行
@@ -386,7 +390,7 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 - **内联图片与文件链接**：`![]()` 写的、存了副本的图片继续内联显示：固定 240px 高、最宽 320px（`h-60 w-auto max-w-xs`，`object-contain` 靠左），加载前后高度不变，消息流不跳（第 17 条）；`rounded-xl`，鼠标是放大镜，点开预览窗看大图；文件过期换成“文件已过期”卡片。普通链接 `[文字](路径)` 写的本机文件不再渲染成文件卡片，而是保留链接原本写的文字、以行内蓝色链接样式（`[data-file-link]`）嵌在正文中，点开预览窗（`FilePreview`）；没存下副本（如指向文件夹 `not_file`、没找到文件 `missing` 等）的不渲染卡片、不显示失败原因，直接显示链接原本的文字。
 - **图表**（```` ```mermaid ````、```` ```vega-lite ```` / ```` ```vegalite ````，闭合后才渲染；`ChartBlock.tsx`、`src/web/charts/`，方案见 `docs/charts-diagrams-design.md`）：
   - **外壳**同代码块（`.md-code`：`rounded-xl`、`--muted` 底、1px 内描边、右上角工具条）；图区是白底（`--background`），四周 12px 内边距，没有自己的描边。工具条从左到右：语言名（12px 灰）、源码/图切换（`Code` / `ChartNetwork` 图标，`aria-pressed`）、放大（`Maximize2`）、复制（复制源码）；按钮都是第 6 条的图标按钮（`size-7`，悬停 `bg-accent`）。
-  - **尺寸**：宽跟消息列走，不撑破；加载中最小高 160px（`CHART_MIN_HEIGHT`），图最高 480px（`CHART_MAX_INLINE_HEIGHT`），更高的等比缩到这个高度，点放大看原尺寸。
+  - **尺寸**：宽跟消息列走，不撑破；加载中最小高 160px（`CHART_MIN_HEIGHT`），图最高 480px（`CHART_MAX_INLINE_HEIGHT`），更高的等比缩到这个高度，点放大看原尺寸。比列宽的图也等比缩小，但缩到图里的字只剩 12px（`CHART_MIN_INLINE_FONT_PX`，第 3 条最小的一档）就不再缩，放不下的在图区里横向滚（同表格、代码块）：手机上横排的四级流程图不会被缩到字只有 6px。
   - **渲染中**：占位里一个居中的 `Loader2` 转圈，不写字；离视口 600px 以内才开始渲染，缓存里有的同步出图。
   - **看源码**：点切换，图区藏起来、换成上色的源码，再点回图（不重画）；状态只在这一块里，不记住。
   - **失败**（源码有错、源码超过 5 万字、图表组件没加载下来）：显示成普通代码块，上面一行 `AlertCircle`（14px）+ 错误第一行（13.5px、`text-danger`、`truncate`），完整错误放 `title`；不弹 toast，源码不吞。没闭合的（流式中）照常是代码块，不报错。
@@ -563,11 +567,11 @@ lucide-react，默认 16px（`size-4`，按钮里自动）；聊天输入框的�
 
 ## 22. 交付物（方案、验收结论、截图、录屏）
 
-组件只有一个：`src/web/components/Deliverables.tsx` 的 `<CardBody>`（正文和文件）和它里面的 `<DeliverableFiles>`（文件）。对话里的提问卡、右栏 Needs You 和果皮轨门禁卡、Router 待拍板卡和简报都用它。方案见 `docs/deliverables-design.md`。
+组件只有一个：`src/web/components/Deliverables.tsx` 的 `<CardBody>`（正文和文件）和它里面的 `<DeliverableFiles>`（文件）。对话里的提问卡、放大全览弹窗里的拍板卡、Router 待拍板卡和简报都用它；右栏的 Needs You 和果皮轨里等拍板的步骤只有一行，不列文件（第 12 条）。方案见 `docs/deliverables-design.md`。
 
 - **顺序**：标题 → 摘要 → 文件 → 细节 → 选项。用户最要看的是“做了什么”和文件，手机托盘只有三分之一屏高，文件行要不滑就看得到。
   - **摘要**：正文的第一段（`shared/card-text.ts` 的 `splitLead`，代码块外的第一个空行分界）。收起时最多 3 行（`.card-lead-clamp`，行数只在 `styles.css` 改），超出的最后一行渐隐。写卡片正文的地方把最要紧的一句放第一段：检查点卡第一段是 `**摘要**：`，汇报摘要里的空行并成换行。
-  - **细节**：第一段以后的段落（交棒要点、提交、PR、附带说明），加上简报的链接行、拍板卡的 `N downstream steps waiting`。排在文件后面。**一行放得下就直接显示**（比如只有一两个链接、一行提交号）：这时 `Show more` 自己就占一行，收起来只是多点一下。**超过一行默认收起**。一行的判断：画出来量细节框的高度，比 2.4em（按细节的字号）矮算一行（`DETAILS_ONE_LINE_MAX_EM`）；卡片变宽变窄、内容变了重量一次，在绘制前定下来，不闪；量不到高度时当放不下。四处同一个规则，只在 `CardBody` 里写，不给哪一处单加判断。
+  - **细节**：第一段以后的段落（交棒要点、提交、PR、附带说明），加上简报的链接行、拍板卡的 `N downstream steps waiting`。排在文件后面。**一行放得下就直接显示**（比如只有一两个链接、一行提交号）：这时 `Show more` 自己就占一行，收起来只是多点一下。**超过一行默认收起**。一行的判断：画出来量细节框的高度，比 2.4em（按细节的字号）矮算一行（`DETAILS_ONE_LINE_MAX_EM`）；卡片变宽变窄、内容变了重量一次，在绘制前定下来，不闪；量不到高度时当放不下。各处同一个规则，只在 `CardBody` 里写，不给哪一处单加判断。
   - **一个开关**：摘要超过 3 行或细节被收起时，最下面一个 `Show more` / `Show less`（`text-minor` 灰字按钮，`aria-expanded`，`aria-controls` 指向整块正文），同时管摘要的收起和细节；都没有不出按钮。
   - 块与块之间 8px（`flex flex-col gap-2`）；没有的块不渲染，不留空。
 

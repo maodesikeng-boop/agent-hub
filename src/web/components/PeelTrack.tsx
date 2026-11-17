@@ -5,7 +5,6 @@ import {
   isTaskGraphReadyToFinish,
   isTaskNodeWaitingPm,
   isTaskNodeWaitingUser,
-  userBlockerCardText,
   type ConversationId,
   type TaskGraph,
   type TaskGraphId,
@@ -13,7 +12,6 @@ import {
   type WorkerId,
 } from "../../shared/index.ts";
 import type { HubClient } from "../client.ts";
-import { useClient } from "../device-scope.tsx";
 import { cleanPieceTitle, errorLine, errorText, errorTitle, type ErrorLike } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { useHubQueryClient } from "../query-client.ts";
@@ -22,7 +20,6 @@ import { Button } from "../ui/button.tsx";
 import { Input } from "../ui/input.tsx";
 import { KnifeAvatar } from "./KnifeAvatar.tsx";
 import { CardBody } from "./Deliverables.tsx";
-import { UserBlockerCard } from "./UserBlockerCard.tsx";
 import { computeGraphComponents, fruitTrackVars, SliceWheelIcon } from "./SliceWheelIcon.tsx";
 
 type GutterKind = "station" | "parA" | "parB" | "coil" | "gate";
@@ -82,11 +79,6 @@ function buildCoilPathD(baseX: number): string {
 
 interface GutterSegment {
   readonly d: string;
-  readonly style: "solid" | "dash";
-}
-
-interface LaneExit {
-  readonly x: number;
   readonly style: "solid" | "dash";
 }
 
@@ -202,7 +194,7 @@ function makeClientId(): string {
 }
 
 /**
- * 等用户拍板的步骤（status waiting、waitingFor user）的浅果冻拍板卡：
+ * 等用户拍板的步骤（status waiting、waitingFor user）的浅果冻拍板卡，画在放大全览弹窗里（右栏果皮轨里这一步只有一行，点了跳到对话里的卡）：
  * 支持一键点选推荐/普通项、点选选项+附言、或直接输入自定义备注提交（POST /api/task-graphs/:graphId/nodes/:nodeKey/decide）。
  */
 export function GateDecisionCard({
@@ -210,13 +202,11 @@ export function GateDecisionCard({
   node,
   client,
   onNoteToggle,
-  className,
 }: {
   graphId: TaskGraphId;
   node: TaskNode;
   client: HubClient;
   onNoteToggle?: (open: boolean) => void;
-  className?: string;
 }) {
   const qc = useHubQueryClient();
   const hasOptions = node.gateOptions.length > 0;
@@ -272,7 +262,7 @@ export function GateDecisionCard({
   return (
     <div
       data-testid="peel-gate-card"
-      className={cn("rounded-2xl border border-primary bg-jelly px-3.5 py-3", className)}
+      className="rounded-2xl border border-primary bg-jelly px-3.5 py-3"
     >
       {showQuestion && <p className="mb-1 text-minor font-medium wrap-anywhere text-foreground">{node.gateQuestion}</p>}
       <CardBody
@@ -362,97 +352,50 @@ export function resolveBoundWorker(
 }
 
 function PeelStageRow({
-  graphId,
   node,
   gutterKind,
   gutterWidth,
   dotX,
   segments,
-  exitLanes,
-  hasBelow,
   workerByKey,
   openWorkerId,
-  client,
   onOpenWorker,
+  onOpenStepAsk,
 }: {
-  graphId: TaskGraphId;
   node: TaskNode;
   gutterKind: GutterKind;
   gutterWidth: number;
   dotX: number;
   segments: readonly GutterSegment[];
-  exitLanes: readonly LaneExit[];
-  hasBelow: boolean;
   workerByKey: ReadonlyMap<WorkerId, WorkerEntry>;
   openWorkerId: ConversationId | null;
-  client: HubClient;
   onOpenWorker: (id: ConversationId) => void;
+  onOpenStepAsk: (node: TaskNode) => void;
 }) {
   if (isTaskNodeWaitingUser(node)) {
-    const gutterRem = peelLen(gutterWidth);
     // 水果刀 30px 宽，刀心对着泳道
     const knifeLeftRem = `calc(${peelLen(dotX)} - ${15 / 16}rem)`;
+    // 只有一行：作答在对话里那张卡上，这里点了跳过去（docs/ui-standard.md 第 12.1 条）
     return (
-      <div data-node-key={node.key} className="relative flex items-start">
-        {hasBelow && exitLanes.length > 0 && (
-          <svg
-            data-peel-gate-ext
-            aria-hidden="true"
-            style={{ width: gutterRem, top: peelLen(GUTTER_H), height: `calc(100% - ${peelLen(GUTTER_H)})` }}
-            className="pointer-events-none absolute left-0 block select-none"
-          >
-            {exitLanes.map((lane, idx) => {
-              const xPct = `${round2((lane.x / gutterWidth) * 100)}%`;
-              return lane.style === "solid" ? (
-                <line
-                  key={`ext-${idx}`}
-                  x1={xPct}
-                  y1="0"
-                  x2={xPct}
-                  y2="100%"
-                  stroke="var(--peel)"
-                  strokeWidth="3.6"
-                  strokeLinecap="round"
-                />
-              ) : (
-                <line
-                  key={`ext-${idx}`}
-                  x1={xPct}
-                  y1="0"
-                  x2={xPct}
-                  y2="100%"
-                  stroke="var(--ghost-line)"
-                  strokeWidth="1.6"
-                  strokeDasharray="2 4"
-                  strokeLinecap="round"
-                />
-              );
-            })}
-          </svg>
-        )}
-        <div style={{ width: gutterRem, height: peelLen(GUTTER_H) }} className="relative flex shrink-0 items-center">
+      <button
+        type="button"
+        data-node-key={node.key}
+        data-testid="peel-gate-row"
+        title={node.title}
+        onClick={() => onOpenStepAsk(node)}
+        className="-mx-2.5 flex min-h-8 pointer-coarse:min-h-11 w-[calc(100%+1.25rem)] cursor-pointer items-center rounded-xl px-2.5 text-left transition-colors outline-none hover:bg-jelly-hover focus-visible:ring-2 focus-visible:ring-ring/50"
+      >
+        <span style={{ width: peelLen(gutterWidth), height: peelLen(GUTTER_H) }} className="relative flex shrink-0 items-center">
           <PeelGutter kind="gate" gutterWidth={gutterWidth} dotX={dotX} segments={segments} />
           <span style={{ left: knifeLeftRem }} className="pointer-events-none absolute top-0 inline-flex">
             <KnifeAvatar size={30} />
           </span>
-        </div>
-        <div className="min-w-0 flex-1 pb-2">
-          <div className="flex min-h-8 pointer-coarse:min-h-11 items-center text-body font-semibold text-primary">
-            <span className="truncate" title={node.title}>{cleanPieceTitle(node.title)}</span>
-          </div>
-          {node.userBlocker != null ? (
-            <UserBlockerCard blockerId={node.userBlocker.id} text={userBlockerCardText(node.userBlocker)} className="rounded-tl-xl" />
-          ) : (
-            <GateDecisionCard
-              key={node.gateAskMessageId ?? node.key}
-              graphId={graphId}
-              node={node}
-              client={client}
-              className="rounded-tl-xl"
-            />
-          )}
-        </div>
-      </div>
+        </span>
+        <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
+          <span className="min-w-0 truncate text-body font-semibold text-primary">{cleanPieceTitle(node.title)}</span>
+          <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        </span>
+      </button>
     );
   }
 
@@ -727,8 +670,6 @@ interface RenderedTrackRow {
   readonly gutterKind: GutterKind;
   readonly dotX: number;
   readonly segments: readonly GutterSegment[];
-  readonly exitLanes: readonly LaneExit[];
-  readonly hasBelow: boolean;
 }
 
 function lowestFreeLane(lanes: readonly (string | null)[]): number {
@@ -771,7 +712,6 @@ function layoutDisplayTrack(
     item: DisplayItem;
     dotLane: number;
     ops: LogicalOp[];
-    exits: Array<{ lane: number; style: "solid" | "dash" }>;
     bottomLaneCount: number;
   }
 
@@ -850,27 +790,21 @@ function layoutDisplayTrack(
       ops.push({ kind: "out", lane: dotLane, source: outSource, style: styleByKey.get(item.key) ?? "dash" });
     }
 
-    const exits: Array<{ lane: number; style: "solid" | "dash" }> = [];
+    let bottomLaneCount = 0;
     activeLanes.forEach((k, l) => {
       if (k !== null) {
-        exits.push({ lane: l, style: styleByKey.get(k) ?? "dash" });
+        bottomLaneCount++;
         if (l > maxLaneUsed) maxLaneUsed = l;
       }
     });
     if (dotLane > maxLaneUsed) maxLaneUsed = dotLane;
 
-    logicalRows.push({
-      item,
-      dotLane,
-      ops,
-      exits,
-      bottomLaneCount: exits.length,
-    });
+    logicalRows.push({ item, dotLane, ops, bottomLaneCount });
   }
 
   const { gutterWidth, laneX } = computeGutterGeometry(maxLaneUsed + 1);
 
-  const rows: RenderedTrackRow[] = logicalRows.map((row, idx) => {
+  const rows: RenderedTrackRow[] = logicalRows.map((row) => {
     const dotX = laneX(row.dotLane);
     const segments: GutterSegment[] = [];
 
@@ -923,8 +857,6 @@ function layoutDisplayTrack(
       gutterKind,
       dotX,
       segments,
-      exitLanes: row.exits.map((e) => ({ x: laneX(e.lane), style: e.style })),
-      hasBelow: idx < logicalRows.length - 1,
     };
   });
 
@@ -959,11 +891,10 @@ function canFoldDonePrefix(
 }
 
 interface PeelRowContext {
-  graphId: TaskGraphId;
   workerByKey: ReadonlyMap<WorkerId, WorkerEntry>;
   openWorkerId: ConversationId | null;
-  client: HubClient;
   onOpenWorker: (id: ConversationId) => void;
+  onOpenStepAsk: (node: TaskNode) => void;
 }
 
 /** 一个连通子图的果皮轨：已完成卷与 N next 折叠只在本子图内生效，首尾不与别的子图相连。 */
@@ -1097,18 +1028,15 @@ function PeelComponentTrack({ component, ctx }: { component: TrackComponent; ctx
         return (
           <PeelStageRow
             key={row.item.node.key}
-            graphId={ctx.graphId}
             node={row.item.node}
             gutterKind={row.gutterKind}
             gutterWidth={gutterWidth}
             dotX={row.dotX}
             segments={row.segments}
-            exitLanes={row.exitLanes}
-            hasBelow={row.hasBelow}
             workerByKey={workerByKey}
             openWorkerId={openWorkerId}
-            client={ctx.client}
             onOpenWorker={ctx.onOpenWorker}
+            onOpenStepAsk={ctx.onOpenStepAsk}
           />
         );
       })}
@@ -1125,18 +1053,18 @@ function PeelTrackBody({
   colorKey,
   workerByKey,
   openWorkerId,
-  client,
   onOpenWorker,
+  onOpenStepAsk,
 }: {
   graph: TaskGraph;
   colorKey: number;
   workerByKey: ReadonlyMap<WorkerId, WorkerEntry>;
   openWorkerId: ConversationId | null;
-  client: HubClient;
   onOpenWorker: (id: ConversationId) => void;
+  onOpenStepAsk: (graph: TaskGraph, node: TaskNode) => void;
 }) {
   const components = useMemo(() => computeTrackComponents(graph), [graph]);
-  const ctx: PeelRowContext = { graphId: graph.id, workerByKey, openWorkerId, client, onOpenWorker };
+  const ctx: PeelRowContext = { workerByKey, openWorkerId, onOpenWorker, onOpenStepAsk: (node) => onOpenStepAsk(graph, node) };
 
   return (
     <div style={fruitTrackVars(colorKey)} className="space-y-1.5 pt-0.5 pb-1">
@@ -1151,7 +1079,8 @@ function PeelTrackBody({
  * 单个项目的活跃任务流图列表（PeelTrackList）：
  * - 有步骤等用户、等项目经理的任务排在最前并默认展开；
  * - 其余后台进行中任务在多任务并存时默认收成带 SliceWheelIcon 的单行标题，点击手风琴式展开/收起；
- * - 每个任务头右上角配 Zoom（Maximize2）按钮打开横向全览弹窗。
+ * - 每个任务头右上角配 Zoom（Maximize2）按钮打开横向全览弹窗；
+ * - 等你拍板的步骤只有一行，点了交给 onOpenStepAsk（对话滚到那张卡）。
  */
 export const PeelTrackList = memo(function PeelTrackList({
   graphs,
@@ -1160,6 +1089,7 @@ export const PeelTrackList = memo(function PeelTrackList({
   colorKey = 0,
   onOpenWorker,
   onZoomGraph,
+  onOpenStepAsk,
 }: {
   graphs: readonly TaskGraph[];
   workers: readonly WorkerEntry[];
@@ -1167,9 +1097,8 @@ export const PeelTrackList = memo(function PeelTrackList({
   colorKey?: number;
   onOpenWorker: (id: ConversationId) => void;
   onZoomGraph: (graph: TaskGraph) => void;
+  onOpenStepAsk: (graph: TaskGraph, node: TaskNode) => void;
 }) {
-  // 拍板走当前区域那台设备的接口（device-scope.tsx）：App 用 DeviceScope 包着当前设备的 hub.client，跨设备看远端项目经理时就是那台的
-  const client = useClient();
   const sorted = useMemo(() => sortActiveGraphs(graphs), [graphs]);
 
   const workerByKey = useMemo(() => workersByWorkerId(workers), [workers]);
@@ -1265,8 +1194,8 @@ export const PeelTrackList = memo(function PeelTrackList({
                 colorKey={colorKey}
                 workerByKey={workerByKey}
                 openWorkerId={openWorkerId}
-                client={client}
                 onOpenWorker={onOpenWorker}
+                onOpenStepAsk={onOpenStepAsk}
               />
             )}
           </div>

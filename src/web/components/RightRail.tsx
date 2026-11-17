@@ -1,9 +1,8 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { ChevronRight, Loader2, MessageCircleQuestionMark } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   askOf,
-  splitCardTitle,
   DEFAULT_AGENT_VENDOR,
   GRAPH_HISTORY_PAGE_SIZE,
   MAX_COMPLETED_GRAPH_PAGES,
@@ -12,7 +11,7 @@ import {
   isTaskNodeWaitingUser,
   modelShortLabel,
 } from "../../shared/index.ts";
-import type { ConversationId, Message, MessageId, ProjectId, TaskGraph, TaskGraphId, UserBlockerId } from "../../shared/index.ts";
+import type { ConversationId, Message, MessageId, ProjectId, TaskGraph, TaskGraphId, TaskNode, UserBlockerId } from "../../shared/index.ts";
 import { cleanPieceTitle, errorText, formatContext, formatTokenDetail, NEEDS_YOU, NO_DATA } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 import { useModelCatalog } from "../models.tsx";
@@ -24,8 +23,6 @@ import { normalizeTaskGraphs } from "../task-graph-compat.ts";
 import type { WorkerTone } from "../worker-status.ts";
 import { Button } from "../ui/button.tsx";
 import { Avatar } from "./Avatar.tsx";
-import { CardBody } from "./Deliverables.tsx";
-import { Markdown } from "./Markdown.tsx";
 import { PeelTrackList } from "./PeelTrack.tsx";
 import { SliceWheelIcon } from "./SliceWheelIcon.tsx";
 import { TaskGraphDialog } from "./TaskGraphDialog.tsx";
@@ -180,33 +177,16 @@ function askSummary(text: string): string {
   return "";
 }
 
-/** 一个提问一行：去掉 Markdown 的第一行；点开在下面看全文，同时让对话滚到那条消息。 */
-function AskRow({ ask, open, onToggle }: { ask: Message; open: boolean; onToggle: () => void }) {
+/** 一个提问一行：去掉 Markdown 的第一行。作答在对话里那张卡上，点这一行让对话滚到那张卡（docs/ui-standard.md 第 12 条）。 */
+function AskRow({ ask, onOpen }: { ask: Message; onOpen: () => void }) {
   const summary = askSummary(ask.text);
-  const { body } = splitCardTitle(ask.text);
-  const deliverables = askOf(ask)?.deliverables;
-  const hasDetail = body.trim() !== "" || (deliverables?.length ?? 0) > 0;
   return (
     <li>
-      {/* 展开后这一行和下面的全文是同一块灰底：行只留上圆角，标题不截断 */}
-      <button
-        type="button"
-        aria-expanded={open}
-        title={open ? undefined : summary}
-        className={cn(ROW, "items-start", open ? cn("bg-sidebar", hasDetail && "rounded-b-none") : ITEM_HOVER)}
-        onClick={onToggle}
-      >
-        <MessageCircleQuestionMark className={cn(ROW_ICON, "mt-0.5")} strokeWidth={ICON_STROKE} aria-hidden="true" />
-        <span className={cn("min-w-0 flex-1 text-body leading-5", open ? "wrap-anywhere" : "truncate")}>{summary}</span>
-        <ChevronRight className={cn(ROW_ICON, "mt-0.5 size-3.5 transition-transform", open && "rotate-90")} aria-hidden="true" />
+      <button type="button" title={summary} className={cn(ROW, "items-center", ITEM_HOVER)} onClick={onOpen}>
+        <MessageCircleQuestionMark className={ROW_ICON} strokeWidth={ICON_STROKE} aria-hidden="true" />
+        <span className="min-w-0 flex-1 truncate text-body leading-5">{summary}</span>
+        <ChevronRight className={cn(ROW_ICON, "size-3.5")} aria-hidden="true" />
       </button>
-      {open && hasDetail && (
-        <div className="-mx-2.5 rounded-b-xl bg-sidebar px-2.5 pb-3 text-minor">
-          <div data-ask-detail className="pl-7">
-            <CardBody text={body} deliverables={deliverables} messageId={ask.id} />
-          </div>
-        </div>
-      )}
     </li>
   );
 }
@@ -308,6 +288,8 @@ export const RightRailToggle = memo(function RightRailToggle({
     </Button>
   );
 });
+
+const NEVER = () => false;
 
 /** 一组最多列 RIGHT_RAIL_VISIBLE_ROWS 条，多了出 Show more；mustShow 的那一项在被收起的里面时自动展开，保证看得见。 */
 function useLimited<T>(items: readonly T[], mustShow: (item: T) => boolean) {
@@ -485,27 +467,32 @@ export function RailGroups({
   openWorkerId: ConversationId | null;
   toggle?: React.ReactNode;
   className?: string;
-  /** 点开一个提问：对话滚到那条消息。 */
+  /** 点一个提问、或果皮轨里等你拍板的步骤：对话滚到那条消息。 */
   onOpenAsk: (messageId: MessageId) => void;
   onOpenWorker: (conversationId: ConversationId) => void;
 }) {
-  const [openAsks, setOpenAsks] = useState<ReadonlySet<MessageId>>(new Set());
   const [zoomedState, setZoomedState] = useState<{ id: TaskGraphId; fallback: TaskGraph } | null>(null);
   // 稳定引用：PeelTrackList 是 memo 的，RailGroups 因别的原因重画时它不跟着重画
   const zoomGraph = useCallback((g: TaskGraph) => setZoomedState({ id: g.id, fallback: g }), []);
 
-  const toggleAsk = (id: MessageId) => {
-    const opening = !openAsks.has(id);
-    setOpenAsks((prev) => {
-      const next = new Set(prev);
-      if (opening) next.add(id);
-      else next.delete(id);
-      return next;
-    });
-    if (opening) onOpenAsk(id);
-  };
+  // 果皮轨里等你拍板的那一行点了：对话滚到这一步的卡（拍板卡，或要你动手的提醒卡）。那张卡不在还没了结的提问里时
+  // （消息没加载到、老服务端没带消息号）打开全览弹窗，卡在那里也能作答。asks 每来一条消息换一次引用，点的时候才读，回调保持稳定
+  const asksRef = useRef(asks);
+  asksRef.current = asks;
+  const openStepAsk = useCallback(
+    (graph: TaskGraph, node: TaskNode) => {
+      const ask = asksRef.current.find((m) => {
+        const meta = askOf(m);
+        if (node.userBlocker != null) return meta?.blockerRef?.blockerId === node.userBlocker.id;
+        return m.id === node.gateAskMessageId || (meta?.gateRef?.graphId === graph.id && meta.gateRef.nodeKey === node.key);
+      });
+      if (ask !== undefined) onOpenAsk(ask.id);
+      else zoomGraph(graph);
+    },
+    [onOpenAsk, zoomGraph],
+  );
 
-  // 同源去重：带 gateRef 或已绑定到活跃任务图门禁的提问直接内联在果皮轨中，不在 Needs You 重复渲染
+  // 同源去重：带 gateRef 或已绑定到活跃任务图门禁的提问是果皮轨里那一步的一行，不在 Needs You 重复渲染
   const visibleAsks = useMemo(() => {
     const gateMsgIds = new Set<MessageId>();
     const stepBlockerIds = new Set<UserBlockerId>();
@@ -541,7 +528,7 @@ export function RailGroups({
     [unboundWorkers],
   );
   const ended = useMemo(() => unboundWorkers.filter((w) => w.ended), [unboundWorkers]);
-  const shownAsks = useLimited(visibleAsks, (ask) => openAsks.has(ask.id));
+  const shownAsks = useLimited(visibleAsks, NEVER);
   const shownLive = useLimited(live, (w) => w.conversationId === openWorkerId);
   const groups = useCollapsedGroups();
 
@@ -577,7 +564,7 @@ export function RailGroups({
             <GroupBody id="rail-asks-body" collapsed={groups.collapsed.asks === true}>
               <ul>
                 {shownAsks.shown.map((ask) => (
-                  <AskRow key={ask.id} ask={ask} open={openAsks.has(ask.id)} onToggle={() => toggleAsk(ask.id)} />
+                  <AskRow key={ask.id} ask={ask} onOpen={() => onOpenAsk(ask.id)} />
                 ))}
               </ul>
               <ShowMore limited={shownAsks.limited} expanded={shownAsks.expanded} onToggle={shownAsks.toggle} />
@@ -604,6 +591,7 @@ export function RailGroups({
                 colorKey={avatarKey}
                 onOpenWorker={onOpenWorker}
                 onZoomGraph={zoomGraph}
+                onOpenStepAsk={openStepAsk}
               />
             </GroupBody>
           </section>

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -96,6 +96,7 @@ afterEach(() => {
   cleanup();
   resetQueryClient();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("SliceWheelIcon：小水果切面进度轮", () => {
@@ -213,59 +214,53 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
     expect(within(graphGroup).getByText("合并收尾")).toBeInTheDocument();
   });
 
-  it("waiting_user 门禁卡住微缩水果刀（useId 唯一渐变）并挂出果冻拍板卡：支持一键点选、选项+备注、纯备注提交，拍板后刀收起并显示所选简称", async () => {
-    const user = userEvent.setup();
-    const calls: { url: string; body: DecideTaskNodeRequest }[] = [];
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-      const body = JSON.parse(String(init?.body ?? "{}")) as DecideTaskNodeRequest;
-      calls.push({ url, body });
-      return jsonResponse({ graph: makeGraph({ id: 5, title: "ok" }), messageId: 100 });
+  const buildGateGraph = (id: number, updatedAt: number, decidedChoice: string | null = null): TaskGraph =>
+    makeGraph({
+      id,
+      updatedAt,
+      title: `同步任务 ${id}`,
+      nodes: [
+        makeNode({ key: "survey", title: "调研差异", status: "done", sortOrder: 0, workerIds: [10] }),
+        makeNode({
+          key: "gate-sync",
+          title: "确认同步范围",
+          status: decidedChoice === null ? "waiting" : "done",
+          waitingFor: decidedChoice === null ? "user" : null,
+          sortOrder: 1,
+          gateQuestion: "冲突的两个配置项如何处理？",
+          gateSummaryMd: "其中 4 项完全一致，2 项存在参数差异。",
+          gateOptions: ["全量同步并先备份", "仅同步无冲突项"],
+          gateRecommended: "全量同步并先备份",
+          gateAskMessageId: id * 10 + 7,
+          decision:
+            decidedChoice === null
+              ? null
+              : { choice: decidedChoice, note: null, decidedBy: "user", decidedAt: 9_000 },
+        }),
+        makeNode({ key: "impl", title: "执行同步", status: decidedChoice === null ? "pending" : "running", sortOrder: 2 }),
+      ],
+      edges: [
+        { fromKey: "survey", toKey: "gate-sync" },
+        { fromKey: "gate-sync", toKey: "impl" },
+      ],
+    });
+  const gateAsk = (graphId: number): Message =>
+    makeMessage({
+      id: graphId * 10 + 7,
+      sender: "agent",
+      text: "冲突的两个配置项如何处理？",
+      meta: { needsUser: true, options: ["全量同步并先备份", "仅同步无冲突项"], gateRef: { graphId, nodeKey: "gate-sync" } },
     });
 
-    const buildGateGraph = (id: number, updatedAt: number, decidedChoice: string | null = null): TaskGraph =>
-      makeGraph({
-        id,
-        updatedAt,
-        title: `同步任务 ${id}`,
-        nodes: [
-          makeNode({ key: "survey", title: "调研差异", status: "done", sortOrder: 0, workerIds: [10] }),
-          makeNode({
-            key: "gate-sync",
-            title: "确认同步范围",
-            status: decidedChoice === null ? "waiting" : "done",
-            waitingFor: decidedChoice === null ? "user" : null,
-            sortOrder: 1,
-            gateQuestion: "冲突的两个配置项如何处理？",
-            gateSummaryMd: "其中 4 项完全一致，2 项存在参数差异。",
-            gateOptions: ["全量同步并先备份", "仅同步无冲突项"],
-            gateRecommended: "全量同步并先备份",
-            gateAskMessageId: 77,
-            decision:
-              decidedChoice === null
-                ? null
-                : { choice: decidedChoice, note: null, decidedBy: "user", decidedAt: 9_000 },
-          }),
-          makeNode({ key: "impl", title: "执行同步", status: decidedChoice === null ? "pending" : "running", sortOrder: 2 }),
-        ],
-        edges: [
-          { fromKey: "survey", toKey: "gate-sync" },
-          { fromKey: "gate-sync", toKey: "impl" },
-        ],
-      });
+  it("等你拍板的步骤在右栏只有一行（水果刀 + 步骤名 + 箭头），没有选项按钮；点了让对话滚到那张卡；拍板后刀收起并显示所选简称", async () => {
+    const user = userEvent.setup();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const onOpenAsk = vi.fn();
+    const railProps = { workers: [] as WorkerEntry[], openWorkerId: null, layout: "side" as const, avatarKey: 1, onOpenAsk, onOpenWorker: () => {} };
 
     // 同屏渲染两个 waiting_user 任务以验证微缩水果刀渐变 ID 唯一不冲突
     const { rerender } = render(
-      <RightRail
-        asks={[]}
-        workers={[]}
-        activeGraphs={[buildGateGraph(5, 5_000), buildGateGraph(6, 4_000)]}
-        openWorkerId={null}
-        layout="side"
-        avatarKey={1}
-        onOpenAsk={() => {}}
-        onOpenWorker={() => {}}
-      />,
+      <RightRail {...railProps} asks={[gateAsk(5), gateAsk(6)]} activeGraphs={[buildGateGraph(5, 5_000), buildGateGraph(6, 4_000)]} />,
     );
 
     const knives = document.querySelectorAll("[data-slot='knife-avatar']");
@@ -275,18 +270,70 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
     );
     expect(gradIds.size).toBe(knives.length);
 
+    const rows = screen.getAllByTestId("peel-gate-row");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.tagName).toBe("BUTTON");
+    expect(rows[0]).toHaveClass("min-h-8", "pointer-coarse:min-h-11", "rounded-xl");
+    expect(within(rows[0]!).getByText("确认同步范围")).toHaveClass("truncate", "text-primary");
+    // 作答只在对话里：右栏不出选项、补充框，也不出门禁提问那一行
+    expect(screen.queryByTestId("peel-gate-card")).toBeNull();
+    expect(screen.queryByRole("button", { name: /全量同步并先备份/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add note" })).toBeNull();
+    expect(screen.queryByRole("region", { name: /^Needs You$/ })).toBeNull();
+
+    await user.click(rows[0]!);
+    expect(onOpenAsk).toHaveBeenLastCalledWith(57);
+    await user.click(rows[1]!);
+    expect(onOpenAsk).toHaveBeenLastCalledWith(67);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    // 拍板通过后：水果刀收起，门禁节点收合为紧凑单行并在右侧展示所选简称
+    rerender(<RightRail {...railProps} asks={[]} activeGraphs={[buildGateGraph(5, 6_000, "全量同步并先备份")]} />);
+    expect(screen.queryByTestId("peel-gate-row")).toBeNull();
+    expect(document.querySelector("[data-slot='knife-avatar']")).toBeNull();
+    expect(screen.getByText("确认同步范围")).toBeInTheDocument();
+    expect(screen.getByText("全量同步并先备份")).toBeInTheDocument();
+  });
+
+  it("对话里找不到那张卡（消息没加载到）时，点等你拍板的那一行打开全览弹窗，卡在弹窗里能作答", async () => {
+    const user = userEvent.setup();
+    const onOpenAsk = vi.fn();
+    render(
+      <RightRail asks={[]} workers={[]} activeGraphs={[buildGateGraph(5, 5_000)]} openWorkerId={null} layout="side" avatarKey={1} onOpenAsk={onOpenAsk} onOpenWorker={() => {}} />,
+    );
+    await user.click(screen.getByTestId("peel-gate-row"));
+    expect(onOpenAsk).not.toHaveBeenCalled();
+    const dialog = await screen.findByRole("dialog", { name: "同步任务 5" });
+    expect(within(dialog).getByTestId("peel-gate-card")).toBeInTheDocument();
+  });
+
+  it("全览弹窗里的果冻拍板卡：支持一键点选、选项+备注、纯备注提交", async () => {
+    const user = userEvent.setup();
+    const calls: { url: string; body: DecideTaskNodeRequest }[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const body = JSON.parse(String(init?.body ?? "{}")) as DecideTaskNodeRequest;
+      calls.push({ url, body });
+      return jsonResponse({ graph: makeGraph({ id: 5, title: "ok" }), messageId: 100 });
+    });
+    const openDialog = (id: number) =>
+      render(<TaskGraphDialog open graph={buildGateGraph(id, 5_000)} workers={[]} colorKey={1} onOpenChange={() => {}} onOpenWorker={() => {}} />);
+
     // 1) 一键点选推荐项
-    const cards = screen.getAllByTestId("peel-gate-card");
-    const firstCard = cards[0]!;
+    const first = openDialog(5);
+    const firstCard = screen.getByTestId("peel-gate-card");
     expect(firstCard).toHaveClass("rounded-2xl", "border-primary", "bg-jelly");
     await user.click(within(firstCard).getByRole("button", { name: /全量同步并先备份/ }));
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]!.url).toBe("/api/task-graphs/5/nodes/gate-sync/decide");
     expect(calls[0]!.body).toMatchObject({ choice: "全量同步并先备份" });
     expect(typeof calls[0]!.body.clientId).toBe("string");
+    first.unmount();
 
     // 2) 点选 + 补充备注
-    const secondCard = cards[1]!;
+    openDialog(6);
+    const secondCard = screen.getByTestId("peel-gate-card");
     await user.click(within(secondCard).getByRole("button", { name: "Add note" }));
     const noteInput = within(secondCard).getByPlaceholderText("Add a note, or type a custom reply…");
     await user.type(noteInput, "备份放到 .bak 目录");
@@ -301,24 +348,6 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
     await user.click(within(secondCard).getByRole("button", { name: "Send" }));
     await waitFor(() => expect(calls).toHaveLength(3));
     expect(calls[2]!.body).toMatchObject({ choice: null, note: "今天先不改生产目录" });
-
-    // 拍板通过后：水果刀收起，门禁节点收合为紧凑单行并在右侧展示所选简称
-    rerender(
-      <RightRail
-        asks={[]}
-        workers={[]}
-        activeGraphs={[buildGateGraph(5, 6_000, "全量同步并先备份")]}
-        openWorkerId={null}
-        layout="side"
-        avatarKey={1}
-        onOpenAsk={() => {}}
-        onOpenWorker={() => {}}
-      />,
-    );
-    expect(screen.queryByTestId("peel-gate-card")).toBeNull();
-    expect(document.querySelector("[data-slot='knife-avatar']")).toBeNull();
-    expect(screen.getByText("确认同步范围")).toBeInTheDocument();
-    expect(screen.getByText("全量同步并先备份")).toBeInTheDocument();
   });
 
   it("多任务排序与手风琴：紧急任务（waiting_user / attention）排最前自动展开，后台任务收成带切面轮的单行标题，点击手风琴切换", async () => {
@@ -777,18 +806,7 @@ describe("审查回归（PR #274）：几何边界、编号不混用、防重入
         }),
       ],
     });
-    render(
-      <RightRail
-        asks={[]}
-        workers={[]}
-        activeGraphs={[graph]}
-        openWorkerId={null}
-        layout="side"
-        avatarKey={0}
-        onOpenAsk={() => {}}
-        onOpenWorker={() => {}}
-      />,
-    );
+    render(<TaskGraphDialog open graph={graph} workers={[]} onOpenChange={() => {}} onOpenWorker={() => {}} />);
     const card = screen.getByTestId("peel-gate-card");
     const rec = within(card).getByRole("button", { name: /甲/ });
     fireEvent.click(rec);
@@ -803,6 +821,83 @@ describe("审查回归（PR #274）：几何边界、编号不混用、防重入
     await waitFor(() => expect(calls).toHaveLength(2));
     expect(calls[1]!.clientId).toBe(calls[0]!.clientId);
     await waitFor(() => expect(within(card).queryByRole("alert")).toBeNull());
+  });
+
+  it("全览弹窗：拍板后卡片按新内容的高度重排，不被拍板卡的旧高度撑住；换一张图也不沿用同名步骤量到的高度", () => {
+    // jsdom 不排版：拍板卡量出来 295px，普通卡 113px
+    const observed = new Set<Element>();
+    let notify: ResizeObserverCallback = () => {};
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: ResizeObserverCallback) {
+          notify = callback;
+        }
+        observe(el: Element) {
+          observed.add(el);
+        }
+        unobserve(el: Element) {
+          observed.delete(el);
+        }
+        disconnect() {}
+      },
+    );
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) {
+      return this.dataset.measureKey?.endsWith(":gate") ? 295 : 113;
+    });
+    const measureAll = () => act(() => notify([...observed].map((target) => ({ target }) as ResizeObserverEntry), {} as ResizeObserver));
+    const card = (nodeKey: string) => document.querySelector<HTMLElement>(`[data-measure-key*=":${nodeKey}:"]`)!;
+    const canvasHeight = () => Number.parseFloat(document.querySelector<HTMLElement>("[data-rankdir]")!.style.minHeight);
+
+    // 拍板步骤和“并行的活”在同一列，上下排着：拍板步骤多高，这一列（整张画布）就多高
+    const build = (id: number, decided: boolean): TaskGraph =>
+      makeGraph({
+        id,
+        title: "收缩回归",
+        nodes: [
+          makeNode({ key: "root", title: "起点", status: "done", sortOrder: 0 }),
+          makeNode({
+            key: "gate",
+            title: "确认超时",
+            status: decided ? "done" : "waiting",
+            waitingFor: decided ? null : "user",
+            sortOrder: 1,
+            gateQuestion: "超时设多少？",
+            gateOptions: ["60 秒", "5 分钟"],
+            gateRecommended: "60 秒",
+            decision: decided ? { choice: "60 秒", note: null, decidedBy: "user", decidedAt: 9_000 } : null,
+          }),
+          makeNode({ key: "side", title: "并行的活", status: "running", sortOrder: 2 }),
+        ],
+        edges: [
+          { fromKey: "root", toKey: "gate" },
+          { fromKey: "root", toKey: "side" },
+        ],
+      });
+    const dialogOf = (graph: TaskGraph) => <TaskGraphDialog open graph={graph} workers={[]} onOpenChange={() => {}} onOpenWorker={() => {}} />;
+
+    const { rerender } = render(dialogOf(build(70, false)));
+    measureAll();
+    expect(card("gate").dataset.measureKey).toBe("70:gate:gate");
+    const heightWithGateCard = canvasHeight();
+
+    rerender(dialogOf(build(70, true)));
+    // 形态变了是另一张卡：重新挂载，旧高度那一项跟着删掉，不写回 min-height
+    expect(card("gate").dataset.measureKey).toBe("70:gate:node");
+    expect(card("gate").style.minHeight).toBe("");
+    expect(card("gate").style.height).toBe("");
+    expect([...observed].map((el) => (el as HTMLElement).dataset.measureKey).toSorted()).toEqual(["70:gate:node", "70:root:node", "70:side:node"]);
+    measureAll();
+    expect(card("gate").style.minHeight).toBe("");
+    expect(heightWithGateCard - canvasHeight()).toBe(295 - 113);
+
+    // 换成另一张图（步骤名一样、还在等拍板）：第一帧按估算排，不用上一张图量到的数
+    rerender(dialogOf(build(71, false)));
+    expect([...observed].map((el) => (el as HTMLElement).dataset.measureKey).toSorted()).toEqual(["71:gate:gate", "71:root:node", "71:side:node"]);
+    const estimatedHeight = canvasHeight();
+    measureAll();
+    expect(canvasHeight()).toBe(heightWithGateCard);
+    expect(estimatedHeight).not.toBe(heightWithGateCard);
   });
 
   it("全览弹窗 Skip step / Cancel graph 同步防重入：同一帧连点只发一次", async () => {
@@ -987,13 +1082,8 @@ describe("果皮轨按真实连通关系排布：独立子图不假连、多起�
       if (kind === "gate") {
         addDir(pt(rowIdx, dotX, GATE_TOP_Y), pt(rowIdx, dotX, GUTTER_CY));
         addDir(pt(rowIdx, dotX, GUTTER_CY), pt(rowIdx, dotX, GATE_BOT_Y));
-        if (rowIdx < stageEls.length - 1 && bottom.size > 0) {
-          const extSvg = rowEl.querySelector("svg[data-peel-gate-ext]") as HTMLElement | null;
-          expect(extSvg).not.toBeNull();
-          expect(extSvg!.style.height).toBe("calc(100% - calc(32 * var(--peel-u)))");
-          const extLines = extSvg!.querySelectorAll("line");
-          expect(extLines).toHaveLength(bottom.size);
-        }
+        // 等你拍板的那一行和别的行一样高，轨道槽画满整行，下面不用再接一段延长线
+        expect(rowEl.querySelector("svg[data-peel-gate-ext]")).toBeNull();
       }
       rowBottoms.push([...bottom].toSorted((a, b) => a - b));
     });
