@@ -23,7 +23,8 @@ use url::Url;
 use crate::bootstrap::{BootstrapViewModel, DesktopController};
 use crate::dialog_bridge::DesktopDialogBridge;
 use crate::navigation::{
-    classify_navigation_url, is_embedded_bootstrap_origin, NavigationDecision,
+    classify_navigation_url, classify_new_window_url, is_embedded_bootstrap_origin,
+    NavigationDecision,
 };
 use crate::tray::{
     build_tauri_tray_menu, TrayMenuModel, MENU_ACTION_OPEN_LOGS, MENU_ACTION_OPEN_MAIN_WINDOW,
@@ -272,14 +273,10 @@ pub fn run() {
                 NavigationDecision::Block => false,
             })
             .on_new_window(move |target_url, _features| {
-                match classify_navigation_url(&target_url, daemon_port) {
-                    NavigationDecision::AllowInApp => NewWindowResponse::Allow,
-                    NavigationDecision::OpenExternalBrowser => {
-                        open_external_url_with_app(&app_for_new_win, &target_url);
-                        NewWindowResponse::Deny
-                    }
-                    NavigationDecision::Block => NewWindowResponse::Deny,
+                if classify_new_window_url(&target_url) == NavigationDecision::OpenExternalBrowser {
+                    open_external_url_with_app(&app_for_new_win, &target_url);
                 }
+                NewWindowResponse::Deny
             })
             .build()?;
 

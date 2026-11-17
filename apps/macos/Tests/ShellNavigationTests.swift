@@ -63,6 +63,40 @@ enum ShellNavigationTestsMain {
         let app = NSApplication.shared
         app.setActivationPolicy(.prohibited)
 
+        let policy = ShellNavigationPolicy(daemonPort: 4317)
+        let decisions: [(String?, ShellNavigationTarget, ShellNavigationDecision)] = [
+            ("about:blank", .mainFrame, .allow),
+            ("http://127.0.0.1:4317", .mainFrame, .allow),
+            ("http://127.0.0.1:4317/#/c/1", .mainFrame, .allow),
+            ("http://127.0.0.1:4317/auth?token=x", .mainFrame, .allow),
+            ("http://127.0.0.1:4317/api/sent-files/0123456789abcdef/a.html", .mainFrame, .openExternally),
+            ("http://127.0.0.1:4317/d/peer/", .mainFrame, .openExternally),
+            ("http://localhost:4317/", .mainFrame, .openExternally),
+            ("https://127.0.0.1:4317/", .mainFrame, .openExternally),
+            ("http://127.0.0.1:5173/", .mainFrame, .openExternally),
+            ("mailto:a@example.com", .mainFrame, .openExternally),
+            ("file:///etc/hosts", .mainFrame, .cancel),
+            ("javascript:alert(1)", .mainFrame, .cancel),
+            (nil, .mainFrame, .cancel),
+            ("http://127.0.0.1:4317/", .newWindow, .openExternally),
+            ("http://localhost:3000/", .newWindow, .openExternally),
+            ("https://example.com/", .newWindow, .openExternally),
+            ("about:blank", .newWindow, .cancel),
+            ("http://127.0.0.1:4317/api/sent-files/0123456789abcdef/a.pdf?inline=1", .subframe(linkActivated: false), .allow),
+            ("http://127.0.0.1:4317/api/sent-files/0123456789abcdef/a.html#sec", .subframe(linkActivated: true), .allow),
+            ("https://example.com/", .subframe(linkActivated: true), .openExternally),
+            ("https://example.com/embed", .subframe(linkActivated: false), .allow),
+            ("about:srcdoc", .subframe(linkActivated: true), .allow),
+        ]
+        for (raw, target, expected) in decisions {
+            let got = policy.decide(raw.flatMap(URL.init(string:)), target: target)
+            if got != expected {
+                fputs("FAIL policy \(raw ?? "nil") \(target): expected \(expected), got \(got)\n", stderr)
+                exit(1)
+            }
+        }
+        print("PASS ShellNavigationPolicy: \(decisions.count) cases")
+
         let root = (NSTemporaryDirectory() as NSString).appendingPathComponent("fusa-shell-nav-\(UUID().uuidString)")
         let daemonDir = "\(root)/daemon"
         let otherDir = "\(root)/other"
