@@ -8,7 +8,7 @@ import { HUB_COMMAND, REPORT_END, REPORT_START, workerEventOf, type StateSnapsho
 import { openDatabase } from "../../src/daemon/store/index.ts";
 import { SETUP_RECEIPT_NOTE } from "../../src/daemon/prompt.ts";
 import type { FakeScript, FakeTurn } from "../fake-claude/fake-claude.ts";
-import { Client, isAlive, makeEnv, messagesOf, waitForStatus, waitUntil, type E2eEnv, type RunningDaemon } from "./harness.ts";
+import { Client, makeEnv, messagesOf, waitForStatus, waitUntil, type E2eEnv, type RunningDaemon } from "./harness.ts";
 
 const hub = HUB_COMMAND;
 
@@ -210,7 +210,7 @@ describe("worktree 准备命令端到端", { timeout: 60_000 }, () => {
     await waitUntil("preparing", async () => ((await workerSessionOf(client, worker!)).activity === "preparing" ? true : undefined));
     await waitForStatus(client, await client.post(pm.conversationId, "不要了，收工"), "replied");
     expect(env.bashRuns()[2]!.output).toContain("#1 修 X · 准备中");
-    await waitUntil("setup killed", () => (isAlive(pid) ? undefined : true));
+    await waitUntil("setup killed", () => (env.isAlive(pid) ? undefined : true));
     await waitUntil("idle", async () => ((await workerSessionOf(client, worker!)).activity === "idle" ? true : undefined));
     expect(env.procsOf((await workerSessionOf(client, worker!)).sessionId)).toEqual([]);
     expect(query<{ status: string }>("SELECT status FROM messages WHERE conversation_id = ? AND sender = 'pm'", worker!.worker_conversation_id)).toEqual([
@@ -271,7 +271,7 @@ describe("worktree 准备命令端到端", { timeout: 60_000 }, () => {
     const started = Date.now();
     expect(await terminate(first.daemon)).toEqual({ code: 0, signal: null });
     expect(Date.now() - started).toBeLessThan(8_000);
-    expect(isAlive(pid)).toBe(false);
+    expect(env.isAlive(pid)).toBe(false);
     const [worker] = workerRows();
     expect(query("SELECT base_commit FROM workers")).toEqual([{ base_commit: null }]);
 

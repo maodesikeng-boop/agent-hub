@@ -23,7 +23,7 @@ import {
 } from "../../src/shared/index.ts";
 import { openDatabase } from "../../src/daemon/store/index.ts";
 import type { FakeScript, FakeTurn } from "../fake-claude/fake-claude.ts";
-import { Client, isAlive, makeEnv, messagesOf, waitForStatus, waitUntil, type E2eEnv, type RunningDaemon } from "./harness.ts";
+import { Client, makeEnv, messagesOf, waitForStatus, waitUntil, type E2eEnv, type RunningDaemon } from "./harness.ts";
 
 /** 命令名（names.ts）：改名只改那一处，剧本和断言跟着变。 */
 const hub = HUB_COMMAND;
@@ -257,7 +257,7 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     writeFileSync(gate, "");
     await waitLines(client, pm.conversationId, "ended", 1);
     await waitUntil("worker session ended", async () => (sessionOf(await client.state(), worker!.worker_conversation_id).status === "ended" ? true : undefined));
-    await waitUntil("worker claude exited", () => (isAlive(workerPid) ? undefined : true));
+    await waitUntil("worker claude exited", () => (env.isAlive(workerPid) ? undefined : true));
     expect(await rawHubStatus(token)).toBe(401);
     expect(workerRows()[0]!.status).toBe("ended");
     // worktree 和分支还在（由项目经理合并后自己删）
@@ -405,7 +405,7 @@ describe("M3 端到端：Worker", { timeout: 40_000 }, () => {
     const workerSessionId = sessionOf(await first.client.state(), worker.worker_conversation_id).sessionId;
     const [before] = env.procsOf(workerSessionId);
     expect(await terminate(first.daemon)).toEqual({ code: 0, signal: null });
-    await waitUntil("worker claude exited", () => (isAlive(before!.pid) ? undefined : true));
+    await waitUntil("worker claude exited", () => (env.isAlive(before!.pid) ? undefined : true));
     // 关机打断的这一轮：不发那一行，任务说明还是处理中
     expect(query<{ n: number }>("SELECT count(*) AS n FROM messages WHERE kind = 'worker' AND meta LIKE '%turn_failed%'")).toEqual([{ n: 0 }]);
     expect(query<{ status: string }>("SELECT status FROM messages WHERE id = ?", task.id)).toEqual([{ status: "processing" }]);

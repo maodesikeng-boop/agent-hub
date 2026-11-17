@@ -13,7 +13,6 @@ import { DEFAULT_MIGRATIONS_DIR, migrate, openDatabase } from "../../src/daemon/
 import {
   Client,
   agentTexts,
-  isAlive,
   makeEnv,
   messageById,
   messagesOf,
@@ -559,14 +558,14 @@ describe("M2 端到端（一个项目经理就是一个会话）", { timeout: 20
       query<{ status: string }>("SELECT status FROM actions WHERE type = 'session.end'")[0]?.status === "running" ? true : undefined,
     );
     // 不打断这一轮：进程还在、消息还在处理中，令牌还能用
-    expect(isAlive(pid)).toBe(true);
+    expect(env.isAlive(pid)).toBe(true);
     expect(messageById(await client.state(), id)!.status).toBe("processing");
     expect((await rawHub(token, "status", {})).status).toBe(200);
 
     writeFileSync(gate, "");
     await waitForStatus(client, id, "replied");
     await waitUntil("session ended", async () => (sessionsOf(await client.state(), privateId)[0]!.status === "ended" ? true : undefined));
-    await waitUntil("claude exited", () => (isAlive(pid) ? undefined : true));
+    await waitUntil("claude exited", () => (env.isAlive(pid) ? undefined : true));
     expect(env.log().filter((e) => e.pid === pid).map((e) => e.kind)).toContain("stdin_closed");
     expect(agentTexts(await client.state(), privateId)).toEqual(["这一轮说完了"]);
     expect(await rawHub(token, "status", {})).toEqual({ status: 401, body: expect.objectContaining({ ok: false, code: "unauthorized" }) });

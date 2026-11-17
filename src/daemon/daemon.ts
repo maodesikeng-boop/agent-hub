@@ -416,7 +416,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       // 账本有交接可以领了：叫醒跑腿的（它在下面才建，所以现用现取）
       onHandoverClaimable: () => parts.handoverRunner?.wake(),
       // 有项目档案要写了：叫醒写档的跑腿的（同上，现用现取）
-      onCatalogClaimable: () => (process.env.DIAG_NO_CATALOG ? undefined : parts.catalogRunner?.wake()),
+      onCatalogClaimable: () => parts.catalogRunner?.wake(),
       log,
     });
     parts.unsubscribe.push(() => ledger.close());
@@ -699,7 +699,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       log,
     });
     parts.catalogRunner = catalogRunner;
-    if (!process.env.DIAG_NO_CATALOG) catalogRunner.start();
+    catalogRunner.start();
     const scanStartedAt = performance.now();
     const queuedCatalogs = ledger.projectCatalog.scanAtStartup(Date.now());
     log(`${LOG_PREFIX} 项目档案：启动扫描 ${(performance.now() - scanStartedAt).toFixed(1)} 毫秒，${queuedCatalogs} 个项目要写档`);

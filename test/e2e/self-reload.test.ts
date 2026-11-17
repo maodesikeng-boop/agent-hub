@@ -18,7 +18,7 @@ import { Client, makeEnv, messagesOf, sleep, waitUntil, type E2eEnv } from "./ha
 const RELOAD_MAIN = fileURLToPath(new URL("./self-reload-daemon.ts", import.meta.url));
 const DRAIN_MAX_MS = 4_000;
 const hub = HUB_COMMAND;
-const SUPERVISED_ENV = { [DESKTOP_CONTRACT.supervisedEnv]: "test", E2E_SELF_RELOAD_DRAIN_MAX_MS: String(DRAIN_MAX_MS), DIAG_NO_CATALOG: "1" };
+const SUPERVISED_ENV = { [DESKTOP_CONTRACT.supervisedEnv]: "test", E2E_SELF_RELOAD_DRAIN_MAX_MS: String(DRAIN_MAX_MS) };
 
 const canNestOsSandbox =
   process.platform === "darwin"
@@ -103,11 +103,6 @@ describe("热重启等全库空闲有上限", () => {
 
     const exit = await first.exited;
     const waitedMs = Date.now() - registeredAt;
-    console.log("DIAG-LOG", JSON.stringify(env.log().filter((e) => e.kind !== "stdin").map((e) => ({ ...e, ...("argv" in e ? { argv: e.argv.slice(0, 6) } : {}) }))));
-    console.log("DIAG-SESS", JSON.stringify(query("SELECT id, role, status, cwd, worker_id FROM agent_sessions")));
-    console.log("DIAG-MSG", JSON.stringify(query("SELECT id, conversation_id, sender, kind, status, substr(text,1,300) AS t, substr(meta,1,400) AS m FROM messages ORDER BY id")));
-    console.log("DIAG-ERR", JSON.stringify(first.stderr()), "DIAG-RELOAD", JSON.stringify(reload.stdout), "DIAG-STATUS", JSON.stringify(status.stdout), "DIAG-T", registeredAt);
-    console.log("DIAG-ACT", JSON.stringify(query("SELECT * FROM actions ORDER BY id")).slice(0, 4000));
     expect(exit.code).toBe(DESKTOP_CONTRACT.reloadExitCode);
     expect(waitedMs).toBeGreaterThanOrEqual(DRAIN_MAX_MS - 500);
     expect(first.stderr()).toContain("等全库空闲过了上限");
