@@ -433,7 +433,7 @@ mod tests {
     }
 
     #[test]
-    fn navigation_whitelist_allows_bootstrap_and_daemon_port_only_and_intercepts_external_urls() {
+    fn main_frame_stays_on_bootstrap_and_daemon_shell_pages_and_sends_other_urls_to_system_browser() {
         let port = 4317u16;
 
         for internal in [
@@ -446,15 +446,26 @@ mod tests {
             assert_eq!(classify_navigation_url(&u, port), NavigationDecision::AllowInApp);
         }
 
-        let daemon_root = Url::parse("http://127.0.0.1:4317/").unwrap();
-        let daemon_deep = Url::parse("http://127.0.0.1:4317/project/7?tab=agents").unwrap();
-        assert!(!is_embedded_bootstrap_origin(&daemon_root));
-        assert!(!is_embedded_bootstrap_origin(&daemon_deep));
-        assert_eq!(classify_navigation_url(&daemon_root, port), NavigationDecision::AllowInApp);
-        assert_eq!(classify_navigation_url(&daemon_deep, port), NavigationDecision::AllowInApp);
+        for shell in [
+            "about:blank",
+            "http://127.0.0.1:4317/",
+            "http://127.0.0.1:4317",
+            "http://127.0.0.1:4317/#/c/12",
+            "http://127.0.0.1:4317/auth",
+            "http://127.0.0.1:4317/auth?token=abc",
+        ] {
+            let u = Url::parse(shell).unwrap();
+            assert!(!is_embedded_bootstrap_origin(&u));
+            assert_eq!(classify_navigation_url(&u, port), NavigationDecision::AllowInApp, "{shell}");
+        }
 
         for external in [
+            "http://127.0.0.1:4317/api/sent-files/0123456789abcdef/report.html",
+            "http://127.0.0.1:4317/tmp/out/report.html",
+            "http://127.0.0.1:4317/d/peer-1/",
+            "http://127.0.0.1:4317/project/7?tab=agents",
             "http://127.0.0.1:8080/",
+            "http://localhost:3000/",
             "https://127.0.0.1:4317/",
             "http://localhost:4317/",
             "https://github.com/maodesikeng-boop/agent-hub",
@@ -464,7 +475,8 @@ mod tests {
             assert!(!is_embedded_bootstrap_origin(&u));
             assert_eq!(
                 classify_navigation_url(&u, port),
-                NavigationDecision::OpenExternalBrowser
+                NavigationDecision::OpenExternalBrowser,
+                "{external}"
             );
         }
 
@@ -476,6 +488,33 @@ mod tests {
             let u = Url::parse(blocked).unwrap();
             assert!(!is_embedded_bootstrap_origin(&u));
             assert_eq!(classify_navigation_url(&u, port), NavigationDecision::Block);
+        }
+    }
+
+    #[test]
+    fn new_window_requests_never_open_in_app_and_send_web_links_to_system_browser() {
+        for external in [
+            "http://127.0.0.1:4317/",
+            "http://127.0.0.1:4317/api/sent-files/0123456789abcdef/report.html",
+            "http://localhost:3000/",
+            "https://github.com/maodesikeng-boop/agent-hub",
+            "mailto:support@example.com",
+        ] {
+            let u = Url::parse(external).unwrap();
+            assert_eq!(
+                classify_new_window_url(&u),
+                NavigationDecision::OpenExternalBrowser,
+                "{external}"
+            );
+        }
+        for blocked in [
+            "about:blank",
+            "tauri://localhost/index.html",
+            "javascript:alert(1)",
+            "file:///C:/Windows/System32/calc.exe",
+        ] {
+            let u = Url::parse(blocked).unwrap();
+            assert_eq!(classify_new_window_url(&u), NavigationDecision::Block, "{blocked}");
         }
     }
 

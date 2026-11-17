@@ -7,13 +7,19 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
     let webView: WKWebView
     private let supervisor: DaemonSupervisor
     private let onStatusUpdate: (Int, Int, Int) -> Void
+    private let openExternalURL: (URL) -> Void
     private var didAttemptTokenAuth = false
     private(set) var isShowingErrorPage = false
     private var downloadDestinations: [ObjectIdentifier: URL] = [:]
 
-    init(supervisor: DaemonSupervisor, onStatusUpdate: @escaping (Int, Int, Int) -> Void) {
+    init(
+        supervisor: DaemonSupervisor,
+        onStatusUpdate: @escaping (Int, Int, Int) -> Void,
+        openExternalURL: @escaping (URL) -> Void = { NSWorkspace.shared.open($0) }
+    ) {
         self.supervisor = supervisor
         self.onStatusUpdate = onStatusUpdate
+        self.openExternalURL = openExternalURL
 
         let contentController = WKUserContentController()
         let scriptSource = """
@@ -317,7 +323,7 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
            scheme == "http" || scheme == "https" {
             let host = url.host?.lowercased() ?? ""
             if host != "127.0.0.1" && host != "localhost" {
-                NSWorkspace.shared.open(url)
+                openExternalURL(url)
                 decisionHandler(.cancel, preferences)
                 return
             }
@@ -364,7 +370,7 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
             if host == "127.0.0.1" || host == "localhost" {
                 webView.load(URLRequest(url: url))
             } else {
-                NSWorkspace.shared.open(url)
+                openExternalURL(url)
             }
         }
         return nil

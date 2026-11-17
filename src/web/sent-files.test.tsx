@@ -133,13 +133,20 @@ describe("行内文件链接", () => {
 });
 
 describe("老消息、没对上的链接", () => {
-  it("没有 meta.files：本机图片显示成说明文字、不发请求；本机文件链接照原样", () => {
-    const { container } = agentSays("![截图](/tmp/a.png) 和 [报告](/tmp/b.pdf) 和 ![远程](https://example.com/c.png)", null);
-    expect(container).toHaveTextContent("截图");
-    expect(urls(container).src).toEqual(["https://example.com/c.png"]);
-    const link = screen.getByRole("link", { name: "报告" });
-    expect(link).toHaveAttribute("href", "/tmp/b.pdf");
+  it("没有 meta.files：本机图片、本机文件链接都显示成文字，不发请求、没有链接；网址照常", () => {
+    const { container } = agentSays("![截图](/tmp/a.png) 和 [报告](/tmp/b.pdf) 和 ![远程](https://example.com/c.png) 和 [官网](https://example.com)", null);
+    expect(container).toHaveTextContent("截图 和 报告 和");
+    expect(urls(container)).toEqual({ src: ["https://example.com/c.png"], href: ["https://example.com"] });
     expect(container.querySelector("[data-file-card]")).toBeNull();
+  });
+
+  it("预览的文档里没对上的本机链接（file://、~/、相对路径、带 `code`）：只留链接文字，不留跳去同源路径的链接", () => {
+    const { container } = agentSays("看 [report.html](/tmp/out/report.html)、[`a.md`](file:///tmp/a.md)、[b](~/b.txt)、[c](docs/c.md)", [
+      sent({ href: "/tmp/other.png", name: "other.png" }),
+    ]);
+    expect(container).toHaveTextContent("看 report.html、a.md、b、c");
+    expect(container.querySelector("code")).toHaveTextContent("a.md");
+    expect(urls(container).href).toEqual([]);
   });
 
   it("file:// 写的图片在老消息里也不发请求", () => {
@@ -156,7 +163,8 @@ describe("老消息、没对上的链接", () => {
 
   it("meta 形状不对（老数据、坏数据）：当没有，不报错", () => {
     const { container } = agentSays("[a](/tmp/a.pdf)", [{ href: "/tmp/a.pdf" } as SentFile]);
-    expect(within(container).getByRole("link", { name: "a" })).toHaveAttribute("href", "/tmp/a.pdf");
+    expect(container).toHaveTextContent("a");
+    expect(urls(container).href).toEqual([]);
   });
 });
 
