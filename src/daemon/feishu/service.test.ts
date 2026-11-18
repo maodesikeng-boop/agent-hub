@@ -1140,3 +1140,133 @@ describe("createFeishuService：本机图片、定稿拒收与停机重启收口
     expect(store().postOf({ kind: "message", messageId: latestAgentText(lin.conversationId), part: 0 })?.state).toBe("final");
   });
 });
+
+describe("createFeishuService：开轮即时反馈、关卡同步与附件分流", () => {
+  const delta = (sessionId: SessionId, text: string) => ev(sessionId, { type: "agent.text_delta", delta: text, at: Date.now() });
+  const tool = (sessionId: SessionId, name: string, input: unknown = {}) =>
+    ev(sessionId, { type: "agent.tool", uuid: `t-${++seq}`, toolUseId: `tu-${seq}`, name, input, at: Date.now() });
+  const outDir = () => {
+    const home = join(root, "out");
+    mkdirSync(home, { recursive: true });
+    return home;
+  };
+
+  it("项目经理开轮调工具、还没出正文时，群里立即有一张流式状态卡（带停止按钮）；正文到了在同一张卡上定稿，一轮只占一张卡", async () => {
+    await connect();
+    const chat = chatOf(lin.pmId);
+    running(lin.sessionId);
+    ev(lin.sessionId, { type: "turn.started", at: Date.now() });
+    tool(lin.sessionId, "Bash", { command: "ls" });
+    await settle();
+    const created = cardIdsCreated();
+    expect(created).toHaveLength(1);
+    expect(cardJsonOf(created[0]!.data).config.streaming_mode).toBe(true);
+    expect(buttonValues(created[0]!.data)).toEqual([{ kind: "stop", conversationId: lin.conversationId }]);
+    expect(created[0]!.data).toMatch(/…/);
+    ev(lin.sessionId, { type: "agent.text", uuid: "after-tools", text: "查完了：一切正常。", at: Date.now() });
+    ev(lin.sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [], durationMs: 1, at: Date.now() });
+    await settle();
+    expect(cardIdsCreated()).toHaveLength(1);
+    expect(fake.sent.filter((s) => s.chatId === chat)).toHaveLength(1);
+    const final = fake.callsOf("card.update").at(-1)!;
+    expect(final.card.data).toContain("查完了：一切正常。");
+    expect(cardJsonOf(final.card.data).config.streaming_mode).toBe(false);
+    expect(buttonValues(final.card.data)).toEqual([]);
+    expect(fake.callsOf("message.delete")).toHaveLength(0);
+  });
+
+  it("工具阶段点停止能停下这一轮；整轮没有正文时撤回状态卡，不留残卡", async () => {
+    await connect();
+    const stops: ConversationId[] = [];
+    ledger.onStopRequested((e) => stops.push(e.conversationId));
+    running(lin.sessionId);
+    ev(lin.sessionId, { type: "turn.started", at: Date.now() });
+    tool(lin.sessionId, "Bash", { command: "sleep 60" });
+    await settle();
+    const statusCard = fake.sent.at(-1)!;
+    expect(click(chatOf(lin.pmId), statusCard.messageId, { fusa: 1, kind: "stop", conversationId: lin.conversationId }).toast?.content).toBe("正在停");
+    expect(stops).toEqual([lin.conversationId]);
+    ev(lin.sessionId, { type: "turn.ended", ok: false, interrupted: true, messageIds: [], durationMs: 1, at: Date.now() });
+    await settle();
+    expect(fake.callsOf("message.delete")).toEqual([{ message_id: statusCard.messageId }]);
+  });
+
+  it("撤回被飞书拒绝（超过撤回时限）时把状态卡收成一行说明：关流式、去停止按钮", async () => {
+    await connect();
+    running(lin.sessionId);
+    ev(lin.sessionId, { type: "turn.started", at: Date.now() });
+    await settle();
+    fake.failNext["message.delete"] = { code: 230009, msg: "Message has expired when recall message.", httpStatus: 400 };
+    ev(lin.sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [], durationMs: 1, at: Date.now() });
+    await settle();
+    const last = fake.callsOf("card.update").at(-1)!;
+    expect(cardJsonOf(last.card.data).config.streaming_mode).toBe(false);
+    expect(buttonValues(last.card.data)).toEqual([]);
+    expect(last.card.data).not.toMatch(/Working/);
+  });
+
+  it("hub ask close 关掉的卡，项目群和总助单聊两处都立即改成已关闭、去掉按钮", async () => {
+    await connect();
+    const askId = await askInGroupFor(lin, ["A", "B"]);
+    const itemId = itemOfAsk(askId).id;
+    ledger.hubCall(lin.sessionId, "ask.close", { itemId } as never);
+    await settle();
+    for (const post of [postOfAsk(askId), postOfRouterItem(itemId)]) {
+      expect(post.state).toBe("card_settled");
+      const update = fake.callsOf("card.update").filter((u) => u.card_id === post.cardId).at(-1)!;
+      expect(buttonValues(update.card.data)).toEqual([]);
+    }
+  });
+
+  it("交付文件上传又慢又失败时，关卡、后续流式回复照常即时发出，不被上传挡住", async () => {
+    await connect();
+    const home = outDir();
+    writeFileSync(join(home, "big.png"), Buffer.from("89504e470d0a1a0a", "hex"));
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    fake.beforeUpload = () => gate;
+    const askId = ledger.hubCall(lin.sessionId, "ask", { text: "看看这张大图", options: ["通过", "打回"], files: [{ label: "大图", path: join(home, "big.png") }] }).data.messageId;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    ledger.hubCall(lin.sessionId, "ask.close", { itemId: itemOfAsk(askId).id } as never);
+    running(lin.sessionId);
+    ev(lin.sessionId, { type: "turn.started", at: Date.now() });
+    delta(lin.sessionId, "上传没完也照样说话");
+    ev(lin.sessionId, { type: "agent.text", uuid: "while-uploading", text: "上传没完也照样说话。", at: Date.now() });
+    await vi.waitFor(() => {
+      expect(postOfAsk(askId).state).toBe("card_settled");
+      expect(fake.callsOf("card.update").some((u) => u.card.data.includes("上传没完也照样说话。"))).toBe(true);
+    });
+    expect(fake.calls.some((c) => c.method === "uploadImage" && c.args.imageType === "message")).toBe(true);
+    expect(fake.callsOf("message.create").some((c) => c.msg_type === "image")).toBe(false);
+    release();
+    await vi.waitFor(() => expect(fake.callsOf("message.create").some((c) => c.msg_type === "image")).toBe(true));
+  });
+
+  it("交付文件上传暂时失败时自己重试，不挡文字，最后发出去", async () => {
+    await connect();
+    const home = outDir();
+    writeFileSync(join(home, "shot.png"), Buffer.from("89504e470d0a1a0a", "hex"));
+    let failures = 2;
+    fake.beforeUpload = async () => {
+      if (failures-- > 0) throw new Error("socket hang up");
+    };
+    ev(lin.sessionId, { type: "agent.text", uuid: "flaky", text: `截图 [图](${join(home, "shot.png")})`, at: Date.now() });
+    ev(lin.sessionId, { type: "agent.text", uuid: "after-flaky", text: "后面这句不用等", at: Date.now() });
+    await settle();
+    expect(cardsSentTo(chatOf(lin.pmId)).some((c) => JSON.stringify(c).includes("后面这句不用等"))).toBe(true);
+    await vi.waitFor(() => expect(fake.callsOf("message.create").filter((c) => c.msg_type === "image")).toHaveLength(1), { timeout: FEISHU_CONTROL_RETRY_MS * 8 });
+  });
+
+  it("mp4、pdf、md 附件都能发出：mp4 发成视频消息，不报 230055", async () => {
+    await connect();
+    const home = outDir();
+    for (const name of ["demo.mp4", "report.pdf", "notes.md"]) writeFileSync(join(home, name), "x");
+    const text = ["demo.mp4", "report.pdf", "notes.md"].map((n) => `[${n}](${join(home, n)})`).join(" ");
+    ev(lin.sessionId, { type: "agent.text", uuid: "media", text, at: Date.now() });
+    await settle();
+    await vi.waitFor(() => expect(store().postOf({ kind: "file", messageId: db.get<{ id: number }>("SELECT max(id) AS id FROM messages WHERE sender = 'agent'")!.id, part: 2 })).not.toBeNull());
+    const sends = fake.callsOf("message.create").filter((c) => c.receive_id === chatOf(lin.pmId) && c.msg_type !== "interactive");
+    expect(sends.map((c) => c.msg_type).sort()).toEqual(["file", "file", "media"]);
+    expect(svc.setup.status().lastError).toBeNull();
+  });
+});

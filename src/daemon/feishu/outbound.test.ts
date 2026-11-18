@@ -59,10 +59,17 @@ describe("projectFeishuChange", () => {
 
   it("项目经理对话的流式预览 → stream；会话回到空闲 → turn_end", () => {
     expect(project(change("session.status", { session: session({ streamingText: "正在写" }) }))).toEqual([{ kind: "stream", conversationId: PM_CONV, text: "正在写" }]);
-    expect(project(change("session.status", { session: session({ streamingText: null }) }))).toEqual([]);
     expect(project(change("session.status", { session: session({ status: "idle" }) }))).toEqual([{ kind: "turn_end", conversationId: PM_CONV }]);
     expect(project(change("session.status", { session: session({ activity: "idle" }) }))).toEqual([{ kind: "turn_end", conversationId: PM_CONV }]);
     expect(project(change("session.status", { session: session({ conversationId: WORKER_CONV, streamingText: "x" }) }))).toEqual([]);
+  });
+
+  it("项目经理开轮在干活、还没出正文 → working，带一行状态；Worker、总助的会话不出", () => {
+    expect(project(change("session.status", { session: session() }))).toEqual([{ kind: "working", conversationId: PM_CONV, status: "Working…" }]);
+    expect(project(change("session.status", { session: session({ step: { type: "thinking" } }) }))).toEqual([{ kind: "working", conversationId: PM_CONV, status: "Thinking…" }]);
+    expect(project(change("session.status", { session: session({ activity: "stopping" }) }))).toEqual([{ kind: "working", conversationId: PM_CONV, status: "Stopping…" }]);
+    expect(project(change("session.status", { session: session({ pmId: null }) }))).toEqual([]);
+    expect(project(change("session.status", { session: session({ pmId: null, streamingText: "x" }) }))).toEqual([]);
   });
 
   it("项目经理的文字消息 → agent_text，带它发的文件", () => {

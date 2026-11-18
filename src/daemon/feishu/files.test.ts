@@ -22,6 +22,11 @@ describe("planFeishuFile", () => {
     expect(types.map((t) => (t.kind === "file" ? t.fileType : t.kind))).toEqual(["pdf", "doc", "xls", "ppt", "mp4", "opus", "stream", "stream"]);
   });
 
+  it("消息类型和上传类型配对：mp4 发 media、opus 发 audio，其余发 file", () => {
+    const plans = ["r.mp4", "r.opus", "r.pdf", "r.md"].map((n) => planFeishuFile(file(n, "application/octet-stream", 10)));
+    expect(plans.map((p) => (p.kind === "file" ? p.msgType : p.kind))).toEqual(["media", "audio", "file", "file"]);
+  });
+
   it("超过 30 MB 的 too_large", () => {
     expect(planFeishuFile(file("big.zip", "application/octet-stream", FEISHU_FILE_MAX_BYTES + 1)).kind).toBe("too_large");
   });

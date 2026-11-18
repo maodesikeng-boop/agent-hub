@@ -38,6 +38,8 @@ export interface FakeFeishu extends FeishuTransport {
   resources: Map<string, Buffer>;
   /** 调用记录用的时钟。 */
   clock: () => number;
+  /** 每次上传图片、文件前先等它（测试用来模拟慢网、上传失败）；抛错就当这次上传失败。 */
+  beforeUpload: ((input: FeishuImageUpload | FeishuFileUpload) => Promise<void>) | null;
   callsOf<M extends FeishuMethod>(method: M): FeishuMethodArgs[M][];
   event(event: FeishuRawEvent): void;
   click(action: FeishuRawCardAction): ReturnType<FeishuConnectionHandlers["onCardAction"]>;
@@ -46,6 +48,16 @@ export interface FakeFeishu extends FeishuTransport {
 export function createFakeFeishu(options: { clock?: () => number; botOpenId?: string } = {}): FakeFeishu {
   let seq = 0;
   const next = (prefix: string) => `${prefix}${++seq}`;
+  const uploadedTypes = new Map<string, FeishuFileUpload["fileType"]>();
+  /** 照飞书的规矩：mp4 上传的只能发 media，opus 上传的只能发 audio，别的只能发 file，不配对回 230055。 */
+  const uploadMismatch = (msgType: string, content: string): FeishuApiResult | null => {
+    const fileKey = (JSON.parse(content) as { file_key?: unknown }).file_key;
+    if (typeof fileKey !== "string") return null;
+    const fileType = uploadedTypes.get(fileKey);
+    const expected = fileType === "mp4" ? "media" : fileType === "opus" ? "audio" : "file";
+    if (fileType === undefined || msgType === expected) return null;
+    return { code: 230055, msg: "The type of file upload does not match the type of message being sent.", httpStatus: 400 };
+  };
   const botOpenId = options.botOpenId ?? "ou_bot";
   const fake: FakeFeishu = {
     calls: [],
@@ -56,6 +68,7 @@ export function createFakeFeishu(options: { clock?: () => number; botOpenId?: st
     failNext: {},
     resources: new Map(),
     clock: options.clock ?? (() => 0),
+    beforeUpload: null,
     callsOf<M extends FeishuMethod>(method: M) {
       return fake.calls.filter((c) => c.method === method).map((c) => c.args as unknown as FeishuMethodArgs[M]);
     },
@@ -106,6 +119,8 @@ export function createFakeFeishu(options: { clock?: () => number; botOpenId?: st
           fake.chats.delete(String(a.chat_id));
           return { code: 0, data: {} };
         case "message.create": {
+          const mismatch = uploadMismatch(String(a.msg_type), String(a.content));
+          if (mismatch !== null) return mismatch;
           const messageId = next("om_fake");
           const chatId = a.receive_id_type === "chat_id" ? String(a.receive_id) : "oc_p2p";
           fake.sent.push({ chatId, messageId, content: String(a.content) });
@@ -113,6 +128,7 @@ export function createFakeFeishu(options: { clock?: () => number; botOpenId?: st
         }
         case "card.create":
           return { code: 0, data: { card_id: next("card") } };
+        case "message.delete":
         case "card.update":
         case "card.settings":
         case "card.element.content":
@@ -122,11 +138,15 @@ export function createFakeFeishu(options: { clock?: () => number; botOpenId?: st
     },
     async uploadImage(input: FeishuImageUpload) {
       fake.calls.push({ method: "uploadImage", args: { ...input }, at: fake.clock() });
+      await fake.beforeUpload?.(input);
       return { imageKey: next("img_") };
     },
     async uploadFile(input: FeishuFileUpload) {
       fake.calls.push({ method: "uploadFile", args: { ...input }, at: fake.clock() });
-      return { fileKey: next("file_") };
+      await fake.beforeUpload?.(input);
+      const fileKey = next("file_");
+      uploadedTypes.set(fileKey, input.fileType);
+      return { fileKey };
     },
     async downloadResource(messageId, fileKey, type, maxBytes) {
       fake.calls.push({ method: "downloadResource", args: { messageId, fileKey, type, maxBytes }, at: fake.clock() });
