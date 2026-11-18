@@ -357,6 +357,36 @@ describe("applyDriverEvent", () => {
     expect(ledger.snapshot().sessions).toEqual([states[3]]);
   });
 
+  describe("上一代遗留的额度用完标记", () => {
+    const stale = { status: "rejected", resetsAt: null, windows: {} };
+
+    it("新一轮开始处理时清掉：会话正常跑命令，状态不再带 rejected（不显示 Usage limit reached）", () => {
+      setSession({ status: "running", rateLimit: stale });
+      const id = post();
+      ev({ type: "session.started", at: 1, resumed: false, model: null, tools: [] });
+      ev({ type: "message.processing", at: 2, messageIds: [id] });
+      ev({ type: "agent.tool", at: 3, uuid: "u", toolUseId: "t", name: "Bash", input: { command: "hub status" } });
+      const state = sessionStates().at(-1)!;
+      expect([state.activity, state.currentTool, state.rateLimit?.status ?? null]).toEqual(["working", "Bash", null]);
+      expect(createSessionStore(db).get(sessionId)!.rateLimit).toBeNull();
+    });
+
+    it("新一轮开始（turn.started）也清掉", () => {
+      setSession({ status: "running", rateLimit: stale });
+      ev({ type: "turn.started", at: 2 });
+      expect(sessionStates().at(-1)!.rateLimit?.status ?? null).toBeNull();
+    });
+
+    it("这一轮里才报的额度用完不清：真的撞上额度时照常显示", () => {
+      setSession({ status: "running", rateLimit: stale });
+      const id = post();
+      ev({ type: "message.processing", at: 2, messageIds: [id] });
+      ev({ type: "rate_limit", at: 3, info: { status: "rejected", resetsAt: 99, windows: {} } });
+      ev({ type: "agent.tool", at: 4, uuid: "u", toolUseId: "t", name: "Bash", input: { command: "ls" } });
+      expect(sessionStates().at(-1)!.rateLimit?.status).toBe("rejected");
+    });
+  });
+
   it("会话状态带累计用量：驱动层写进那一行的，下一个事件时推给网页；老数据（没记过）是全 0", () => {
     setSession({ status: "running" });
     ev({ type: "session.started", at: 1, resumed: true, model: null, tools: [] });
