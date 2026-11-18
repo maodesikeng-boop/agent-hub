@@ -7,13 +7,21 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
     let webView: WKWebView
     private let supervisor: DaemonSupervisor
     private let onStatusUpdate: (Int, Int, Int) -> Void
+    private let openExternalURL: (URL) -> Void
+    private let navigationPolicy: ShellNavigationPolicy
     private var didAttemptTokenAuth = false
     private(set) var isShowingErrorPage = false
     private var downloadDestinations: [ObjectIdentifier: URL] = [:]
 
-    init(supervisor: DaemonSupervisor, onStatusUpdate: @escaping (Int, Int, Int) -> Void) {
+    init(
+        supervisor: DaemonSupervisor,
+        onStatusUpdate: @escaping (Int, Int, Int) -> Void,
+        openExternalURL: @escaping (URL) -> Void = { NSWorkspace.shared.open($0) }
+    ) {
         self.supervisor = supervisor
         self.onStatusUpdate = onStatusUpdate
+        self.openExternalURL = openExternalURL
+        self.navigationPolicy = ShellNavigationPolicy(daemonPort: supervisor.port)
 
         let contentController = WKUserContentController()
         let scriptSource = """
@@ -312,17 +320,25 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
             decisionHandler(.download, preferences)
             return
         }
-        if let url = navigationAction.request.url,
-           let scheme = url.scheme?.lowercased(),
-           scheme == "http" || scheme == "https" {
-            let host = url.host?.lowercased() ?? ""
-            if host != "127.0.0.1" && host != "localhost" {
-                NSWorkspace.shared.open(url)
-                decisionHandler(.cancel, preferences)
-                return
-            }
+        let target: ShellNavigationTarget
+        if let frame = navigationAction.targetFrame {
+            target = frame.isMainFrame ? .mainFrame : .subframe(linkActivated: navigationAction.navigationType == .linkActivated)
+        } else {
+            target = .newWindow
         }
-        decisionHandler(.allow, preferences)
+        decisionHandler(route(navigationAction.request.url, as: target), preferences)
+    }
+
+    private func route(_ url: URL?, as target: ShellNavigationTarget) -> WKNavigationActionPolicy {
+        switch navigationPolicy.decide(url, target: target) {
+        case .allow:
+            return .allow
+        case .openExternally:
+            if let url = url { openExternalURL(url) }
+            return .cancel
+        case .cancel:
+            return .cancel
+        }
     }
 
     func webView(
@@ -359,14 +375,7 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
         for navigationAction: WKNavigationAction,
         windowFeatures: WKWindowFeatures
     ) -> WKWebView? {
-        if let url = navigationAction.request.url {
-            let host = url.host?.lowercased() ?? ""
-            if host == "127.0.0.1" || host == "localhost" {
-                webView.load(URLRequest(url: url))
-            } else {
-                NSWorkspace.shared.open(url)
-            }
-        }
+        _ = route(navigationAction.request.url, as: .newWindow)
         return nil
     }
 

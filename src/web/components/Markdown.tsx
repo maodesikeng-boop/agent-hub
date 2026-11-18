@@ -26,10 +26,10 @@ import { useClient } from "../device-scope.tsx";
 const SENT_FILE_ATTR = "data-sent-file";
 
 /**
- * 引用式链接（`![a][r]`、`[a][r]` + `[r]: 地址`）指向本机路径的：守护进程不处理它们，这里一律换成文字（图片换成说明文字，
- * 链接只留链接文字），不让浏览器拿本机路径去请求。指向网址的照常。
+ * 指向本机路径、又没对上 meta.files 的图片和链接换成文字（图片换成说明文字，链接只留链接文字），不让浏览器拿本机路径去请求，
+ * 也不留一个点了会跳去同源路径的链接。引用式（`![a][r]`、`[a][r]` + `[r]: 地址`）守护进程不处理，指向本机路径的一律换。指向网址的照常。
  */
-function flattenLocalReferences(tree: MdNode): void {
+function flattenLocalLinks(tree: MdNode, unmatched: ReadonlySet<MdNode>): void {
   const definitions = new Map<string, string>();
   const collect = (node: MdNode) => {
     if (node.type === "definition" && node.identifier !== undefined && typeof node.url === "string") definitions.set(node.identifier, node.url);
@@ -37,19 +37,21 @@ function flattenLocalReferences(tree: MdNode): void {
   };
   collect(tree);
   const isLocal = (node: MdNode) => {
+    if (unmatched.has(node)) return true;
+    if (node.type !== "imageReference" && node.type !== "linkReference") return false;
     const url = node.identifier === undefined ? undefined : definitions.get(node.identifier);
     return url !== undefined && parseLocalHref(url) !== null;
   };
   const flatten = (node: MdNode) => {
     if (node.children === undefined) return;
     node.children = node.children.flatMap((child): MdNode[] => {
-      if (child.type === "imageReference" && isLocal(child)) return [{ type: "text", value: child.alt ?? "" }];
-      if (child.type === "linkReference" && isLocal(child)) {
+      if (!isLocal(child)) {
         flatten(child);
-        return child.children ?? [];
+        return [child];
       }
+      if (child.type === "image" || child.type === "imageReference") return [{ type: "text", value: child.alt ?? "" }];
       flatten(child);
-      return [child];
+      return child.children ?? [];
     });
   };
   flatten(tree);
@@ -58,22 +60,23 @@ function flattenLocalReferences(tree: MdNode): void {
 /**
  * remark 插件：按 href 把 Markdown 里的图片、链接对上这条消息的 meta.files（shared/sent-files.ts）。
  * 对上的：存了副本的地址换成取副本的接口，记下是第几个文件；没存下来的地址清空（不发请求）。
- * 没对上的本机图片（老消息、没有 meta.files、超过个数的）：换成说明文字，不让浏览器拿本机路径去请求。
+ * 没对上的本机图片、链接（老消息、没有 meta.files、超过个数的、预览文档里写的）：换成文字。
  */
 function remarkSentFiles(files: SentFile[], url: (path: string) => string) {
   const index = new Map(files.map((file, i) => [file.href, i]));
   return () => (tree: MdNode) => {
-    flattenLocalReferences(tree);
+    const unmatched = new Set<MdNode>();
     for (const node of linkNodesOf(tree)) {
       const i = index.get(node.url!);
       const file = i === undefined ? undefined : files[i]!;
       if (file !== undefined) {
         node.url = file.id === null ? "" : url(sentFileUrl({ id: file.id, name: file.name }));
         node.data = { ...node.data, hProperties: { [SENT_FILE_ATTR]: String(i) } };
-      } else if (node.type === "image" && parseLocalHref(node.url!) !== null) {
-        Object.assign(node, { type: "text", value: node.alt ?? "" });
+      } else if (parseLocalHref(node.url!) !== null) {
+        unmatched.add(node);
       }
     }
+    flattenLocalLinks(tree, unmatched);
   };
 }
 
