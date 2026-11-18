@@ -29,6 +29,7 @@ function run(events: [FeishuStreamEvent, number][], budget: FeishuCardkitBudget 
 }
 const opened = (sequence = 0): FeishuStreamEvent => ({ kind: "opened", cardId: CARD, messageId: OM, sequence });
 const text = (t: string): FeishuStreamEvent => ({ kind: "text", text: t });
+const working = (status: string): FeishuStreamEvent => ({ kind: "working", status });
 const kinds = (effects: FeishuStreamEffect[]) => effects.filter((e) => e.kind !== "schedule_tick").map((e) => e.kind);
 const pushes = (effects: FeishuStreamEffect[]) => effects.filter((e): e is Extract<FeishuStreamEffect, { kind: "push" }> => e.kind === "push");
 
@@ -120,10 +121,70 @@ describe("stepFeishuStream", () => {
 
   it("turn_end 时还在 live 发 abandon 回 idle；idle 时 turn_end 什么都不做", () => {
     const live = run([[text("a"), 0], [opened(), 0]]).state;
-    expect(stepFeishuStream(live, { kind: "turn_end" }, target, 1, always)).toEqual({ state: { phase: "idle" }, effects: [{ kind: "abandon", cardId: CARD, sequence: 1 }] });
+    expect(stepFeishuStream(live, { kind: "turn_end" }, target, 1, always)).toEqual({ state: { phase: "idle" }, effects: [{ kind: "abandon", cardId: CARD, sequence: 1, text: "a" }] });
     expect(stepFeishuStream({ phase: "idle" }, { kind: "turn_end" }, target, 1, always)).toEqual({ state: { phase: "idle" }, effects: [] });
     const opening = run([[text("a"), 0], [{ kind: "turn_end" }, 1], [opened(), 2]]);
     expect(kinds(opening.effects)).toEqual(["open", "abandon"]);
+  });
+
+  it("abandon 带最新的预览全文，不是上一次推上去的那部分", () => {
+    const { effects } = run([[text("a"), 0], [opened(), 0], [text("ab"), 1], [{ kind: "turn_end" }, 2]]);
+    expect(effects.at(-1)).toEqual({ kind: "abandon", cardId: CARD, sequence: 1, text: "ab" });
+  });
+
+  it("开轮、工具阶段（working）先开一张带状态的卡；正文来了在同一张卡上换成正文，定稿在这张卡上", () => {
+    const { effects, state } = run([
+      [working("Working…"), 0],
+      [opened(), 1],
+      [working("Running command…"), 1 + FEISHU_STREAM_FLUSH_MS],
+      [text("结论"), 1 + FEISHU_STREAM_FLUSH_MS * 2],
+      [{ kind: "segment_done", messageId: 5, text: "结论：没问题", turnActive: false }, 1 + FEISHU_STREAM_FLUSH_MS * 3],
+    ]);
+    expect(effects[0]).toEqual({ kind: "open", text: "Working…" });
+    expect(pushes(effects).map((p) => p.text)).toEqual(["Running command…", "结论"]);
+    expect(effects.filter((e) => e.kind === "open")).toHaveLength(1);
+    expect(effects.at(-1)).toEqual({ kind: "finalize", cardId: CARD, sequence: 3, messageId: 5, text: "结论：没问题" });
+    expect(state).toEqual({ phase: "idle" });
+  });
+
+  it("正文开始后状态行不再盖掉正文", () => {
+    const { effects } = run([
+      [text("正文"), 0],
+      [opened(), 0],
+      [working("Running command…"), FEISHU_STREAM_FLUSH_MS],
+    ]);
+    expect(pushes(effects)).toEqual([]);
+  });
+
+  it("整轮没有正文就结束（只调了工具或被停下）：发 discard 撤回状态卡，不留残卡", () => {
+    const live = run([[working("Working…"), 0], [opened(), 0]]);
+    expect(stepFeishuStream(live.state, { kind: "turn_end" }, target, 1, always)).toEqual({
+      state: { phase: "idle" },
+      effects: [{ kind: "discard", cardId: CARD, messageId: OM, sequence: 1 }],
+    });
+    const opening = run([[working("Working…"), 0], [{ kind: "turn_end" }, 1], [opened(), 2]]);
+    expect(kinds(opening.effects)).toEqual(["open", "discard"]);
+  });
+
+  it("这一轮定稿过一段后进 quiet：工具阶段不再开状态卡，下一段文字照常开卡，turn_end 回 idle", () => {
+    const done = run([
+      [working("Working…"), 0],
+      [opened(), 0],
+      [{ kind: "segment_done", messageId: 5, text: "先说一句", turnActive: true }, 1],
+    ]);
+    expect(done.state).toEqual({ phase: "quiet" });
+    expect(stepFeishuStream(done.state, working("Running command…"), target, 2, always)).toEqual({ state: { phase: "quiet" }, effects: [] });
+    expect(kinds(stepFeishuStream(done.state, text("第二段"), target, 2, always).effects)).toEqual(["open"]);
+    expect(stepFeishuStream(done.state, { kind: "segment_done", messageId: 6, text: "一次写完", turnActive: true }, target, 2, always).effects).toEqual([
+      { kind: "finalize", cardId: null, sequence: 0, messageId: 6, text: "一次写完" },
+    ]);
+    expect(stepFeishuStream(done.state, { kind: "turn_end" }, target, 2, always)).toEqual({ state: { phase: "idle" }, effects: [] });
+  });
+
+  it("一轮已经结束后才落库的段（turnActive 为 false）定稿后回 idle，下一轮照常开状态卡", () => {
+    const { state } = run([[{ kind: "segment_done", messageId: 7, text: "迟到的段", turnActive: false }, 0]]);
+    expect(state).toEqual({ phase: "idle" });
+    expect(kinds(stepFeishuStream(state, working("Working…"), target, 1, always).effects)).toEqual(["open"]);
   });
 
   it("同一个事件序列、同一个 now、同样的预算结果得到同一个结果", () => {

@@ -23,6 +23,7 @@ type InboundMessage = Extract<FeishuInbound, { kind: "message" }>;
 
 const NOT_YOUR_ASSISTANT = "这是主人的私人助手，只听主人的。";
 const GUEST_SLASH = "以“/”开头的命令只有主人能用。";
+export const GUEST_NO_FILES = "这个群里访客发的文件不收，有事用文字说。";
 const FILES_ONLY_TEXT = "（发了文件）";
 export const OWNER_ONLY_DECIDE = "只有主人能拍板";
 export const OWNER_ONLY_STOP = "只有主人能停止";
@@ -73,7 +74,7 @@ export type FeishuMessageRoute =
  *   - 唤醒：deliver，origin 带 mode、guestTier 和 ctx.pendingContext；
  *   - 不唤醒：context；
  * - 访客：observer 档一律不唤醒，说的话照样记成背景，主人下次唤醒时捎上；以“/”开头的文字 → reject（厂商斜杠命令只给主人）；
- *   本档不能 send_files 时文件不收，droppedFiles 记个数。
+ *   本档不能 send_files 时文件不收，droppedFiles 记个数；只发了文件、没写字的 → reject（GUEST_NO_FILES），不投空消息。
  */
 export function routeFeishuMessage(message: InboundMessage, ctx: FeishuRoutingContext): FeishuMessageRoute {
   const { ownerOpenId } = ctx;
@@ -99,6 +100,7 @@ export function routeFeishuMessage(message: InboundMessage, ctx: FeishuRoutingCo
   if (!feishuWakes(ctx, message.mentionedBot)) return { kind: "context", line };
   if (role === "guest" && message.text.startsWith("/")) return { kind: "reject", openId: speaker, reason: GUEST_SLASH };
   const filesAllowed = role === "owner" || feishuGuestMay(ctx.guestTier, "send_files");
+  if (!filesAllowed && message.text === "") return { kind: "reject", openId: speaker, reason: GUEST_NO_FILES };
   return {
     kind: "deliver",
     target: ctx.binding.target,

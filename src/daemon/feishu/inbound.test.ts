@@ -46,14 +46,15 @@ describe("parseFeishuEvent", () => {
     expect(parseFeishuEvent(msg({ senderOpenId: "user1" }), BOT)).toBeNull();
   });
 
-  it("图片和文件进 files，语音、视频、表情包只记 droppedMedia", () => {
+  it("图片、文件、视频、语音进 files（视频语音按文件下载、没名字时补一个），只有表情包记 droppedMedia", () => {
     const parsed = parseFeishuEvent(
       msg({
         resources: [
           { type: "image", fileKey: "img_1", fileName: null },
           { type: "file", fileKey: "file_1", fileName: "a.pdf" },
-          { type: "audio", fileKey: "a_1", fileName: null },
-          { type: "video", fileKey: "v_1", fileName: null },
+          { type: "audio", fileKey: "a_000001", fileName: null },
+          { type: "video", fileKey: "v_000001", fileName: "demo.mp4" },
+          { type: "video", fileKey: "v_000002", fileName: null },
           { type: "sticker", fileKey: "s_1", fileName: null },
         ],
       }),
@@ -63,9 +64,30 @@ describe("parseFeishuEvent", () => {
       files: [
         { type: "image", fileKey: "img_1", fileName: null },
         { type: "file", fileKey: "file_1", fileName: "a.pdf" },
+        { type: "file", fileKey: "a_000001", fileName: "飞书语音-a_000001.opus" },
+        { type: "file", fileKey: "v_000001", fileName: "demo.mp4" },
+        { type: "file", fileKey: "v_000002", fileName: "飞书视频-v_000002.mp4" },
       ],
-      droppedMedia: 3,
+      droppedMedia: 1,
     });
+  });
+
+  it("富文本里图片、文件、视频的占位从正文里去掉，正文只留用户写的字", () => {
+    const parsed = parseFeishuEvent(
+      msg({
+        content: '看这两张\n![image](img_a) ![image](img_b)\n<file key="file_c" name="报告.pdf"/>\n<video key="file_v" name="demo.mp4" duration="0:03"/>\n然后改一下',
+        resources: [
+          { type: "image", fileKey: "img_a", fileName: null },
+          { type: "image", fileKey: "img_b", fileName: null },
+          { type: "file", fileKey: "file_c", fileName: "报告.pdf" },
+          { type: "video", fileKey: "file_v", fileName: "demo.mp4" },
+        ],
+      }),
+      BOT,
+    );
+    expect(parsed).toMatchObject({ text: "看这两张\n然后改一下" });
+    expect(parsed?.kind === "message" ? parsed.files.map((f) => f.fileKey) : []).toEqual(["img_a", "img_b", "file_c", "file_v"]);
+    expect(parseFeishuEvent(msg({ content: "![image](img_only)", resources: [{ type: "image", fileKey: "img_only", fileName: null }] }), BOT)).toMatchObject({ text: "" });
   });
 
   it("成员进群、退群解析成 members_added / members_removed；机器人被移出和群解散都是 chat_gone；改群名是 chat_renamed", () => {

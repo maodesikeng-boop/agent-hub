@@ -34,6 +34,13 @@ export interface UserMessageMeta {
   rewound?: true;
   /** 从飞书来的（shared/feishu.ts 的 feishuOriginOf 读）；网页发的没有。 */
   origin?: FeishuMessageOrigin;
+  /** 账本代发的唤醒（任务图推进、拍板定案、检查点、取消任务图），不是人打的字（isLedgerWakeup 读）。 */
+  wakeup?: true;
+}
+
+/** 账本代发给项目经理的唤醒消息：sender 是 user，但不是网页或飞书里人打的字。 */
+export function isLedgerWakeup(message: { sender: string; meta: Record<string, unknown> | null }): boolean {
+  return message.sender === "user" && message.meta?.wakeup === true;
 }
 
 const IMAGE_MIME_BY_EXTENSION: Readonly<Record<string, string>> = {

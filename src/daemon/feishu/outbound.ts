@@ -8,12 +8,14 @@ import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
 import { unified } from "unified";
 import type { Change } from "../../shared/api.ts";
-import { askOf, isHandoverTraffic, userMessageDedupeKey, type ConversationId, type Message, type MessageId, type PmId } from "../../shared/domain.ts";
+import { askOf, isHandoverTraffic, type ConversationId, type Message, type MessageId, type PmId } from "../../shared/domain.ts";
+import { isLedgerWakeup } from "../../shared/attachments.ts";
 import type { Deliverable } from "../../shared/deliverables.ts";
 import { feishuOriginOf } from "../../shared/feishu.ts";
 import { FEISHU_CARD_MARKDOWN_JSON_BYTES, FEISHU_CARD_MAX_CHARS, FEISHU_CATCHUP_MAX_MESSAGES, FEISHU_FENCE_INFO_MAX_CHARS, FEISHU_FENCE_MARKER_MAX_CHARS } from "../../shared/limits.ts";
 import type { RouterCommandRecord, RouterItem } from "../../shared/router.ts";
 import { parseLocalHref, sentFilesOf, type SentFile } from "../../shared/sent-files.ts";
+import { describeStep, STEP_TEXT } from "../../shared/step-labels.ts";
 import type { FeishuChatBinding } from "./store.ts";
 
 export type FeishuOutboundIntent =
@@ -21,6 +23,8 @@ export type FeishuOutboundIntent =
   | { kind: "sync_chats" }
   /** 项目经理正在写的这一段（内存里的流式预览）。text 是到目前为止的全文。 */
   | { kind: "stream"; conversationId: ConversationId; text: string }
+  /** 用户发话触发的这一轮在干活（调工具、思考、正在停），还没在出正文：status 是一行状态。 */
+  | { kind: "working"; conversationId: ConversationId; status: string }
   /** 一段文字落库了：流式那张卡定稿，没流式过的直接发。 */
   | { kind: "agent_text"; conversationId: ConversationId; message: Message; files: SentFile[] }
   /** 这一轮结束（会话回到空闲）：收掉还开着的流式卡片。 */
@@ -42,12 +46,17 @@ export interface FeishuProjectionContext {
   /** 总助单聊；还没认主人时是 null（认主人后服务按主人 open_id 发第一条，从回包里拿到单聊编号记下）。 */
   routerChat(): FeishuChatBinding | null;
   pmOfConversation(conversationId: ConversationId): PmId | null;
+  /** 这个对话最近一条用户消息是用户打的字（网页或飞书）、还没回完：这一轮是用户在等的那一轮。Worker 汇报、系统唤醒的后台轮次是 false。 */
+  awaitingUser(conversationId: ConversationId): boolean;
 }
 
 /**
  * 后置：按不变量把一条变化变成零个或多个意图：
  * - pm.created / pm.updated / pm.removed → sync_chats；
- * - session.status 带 streamingText 且会话属于有群的项目经理对话 → stream；这一轮结束（activity 回到 idle，或 status 是 ended / broken）→ turn_end；
+ * - session.status 只认项目经理的会话（pmId 不为空，Worker、总助的不出）且对话有群：带 streamingText → stream；
+ *   没在出正文、activity 是 working / stopping 且 awaitingUser → working（状态行同网页的 describeStep，加省略号）；
+ *   后台轮次不出 working：等真有正文或挂卡时才建卡，整轮没正文也就没有要撤回的状态卡；
+ *   这一轮结束（activity 回到 idle，或 status 是 ended / broken）→ turn_end；
  * - message.created：项目经理的文字消息 → agent_text（带 meta 里的 SentFile）；askOf 不为 null → ask_card；
  *   没有 origin 的用户消息 → mirror_user；其余 → 无；
  * - message.updated：askOf 不为 null 且已回答或关掉 → ask_settled；
@@ -61,11 +70,13 @@ export function projectFeishuChange(change: Change, ctx: FeishuProjectionContext
     case "pm.removed":
       return [{ kind: "sync_chats" }];
     case "session.status": {
-      const { conversationId, streamingText, status, activity } = change.data.session;
-      if (conversationId === null || ctx.chatOfConversation(conversationId) === null) return [];
+      const { conversationId, pmId, streamingText, status, activity, step } = change.data.session;
+      if (conversationId === null || pmId === null || ctx.chatOfConversation(conversationId) === null) return [];
       if (typeof streamingText === "string" && streamingText !== "") return [{ kind: "stream", conversationId, text: streamingText }];
       // 一轮结束看 activity 回到 idle（进程还在，status 仍是 running），或会话结束、坏了
-      return status === "running" && activity !== "idle" ? [] : [{ kind: "turn_end", conversationId }];
+      if (status !== "running" || activity === "idle") return [{ kind: "turn_end", conversationId }];
+      if ((activity !== "working" && activity !== "stopping") || !ctx.awaitingUser(conversationId)) return [];
+      return [{ kind: "working", conversationId, status: `${activity === "stopping" ? STEP_TEXT.stopping : describeStep(step)}…` }];
     }
     case "message.created":
       return ctx.chatOfConversation(change.data.message.conversationId) === null ? [] : messageIntents(change.data.message);
@@ -87,7 +98,6 @@ export function projectFeishuChange(change: Change, ctx: FeishuProjectionContext
   }
 }
 
-const USER_TYPED_PREFIX = userMessageDedupeKey(0, "").split(":")[0]! + ":";
 const ROUTER_COMMAND_DONE: ReadonlySet<RouterCommandRecord["status"]> = new Set(["answered", "dispatched", "failed"]);
 
 /** 有群的项目经理对话里的一条消息要在群里体现成什么（补发也走它）。 */
@@ -101,8 +111,8 @@ function messageIntents(message: Message): FeishuOutboundIntent[] {
     if (message.text.trim() === "" && sentFilesOf(message).length === 0) return [];
     return [{ kind: "agent_text", conversationId, message, files: sentFilesOf(message) }];
   }
-  // 只镜像用户在网页上打的字（去重键是 userMessageDedupeKey 的 client:）；拍板唤醒这类账本代发的用户消息不镜像
-  if (message.sender === "user" && message.dedupeKey.startsWith(USER_TYPED_PREFIX) && feishuOriginOf(message) === null) {
+  // 只镜像用户在网页上打的字；拍板唤醒这类账本代发的用户消息不镜像
+  if (message.sender === "user" && !isLedgerWakeup(message) && feishuOriginOf(message) === null) {
     return [{ kind: "mirror_user", conversationId, message }];
   }
   return [];

@@ -11,10 +11,11 @@ import type { FeishuChatBinding } from "./store.ts";
 const PM_CONV = 10;
 const WORKER_CONV = 20;
 const binding = { chatId: "oc_pm" as FeishuChatId } as FeishuChatBinding;
-const ctx = (withRouter = true): FeishuProjectionContext => ({
+const ctx = (withRouter = true, awaitingUser = true): FeishuProjectionContext => ({
   chatOfConversation: (id) => (id === PM_CONV ? binding : null),
   routerChat: () => (withRouter ? ({ chatId: "oc_router" as FeishuChatId } as FeishuChatBinding) : null),
   pmOfConversation: (id) => (id === PM_CONV ? 1 : null),
+  awaitingUser: () => awaitingUser,
 });
 let seq = 0;
 const change = <T extends Change["type"]>(type: T, data: Extract<Change, { type: T }>["data"]): Change => ({ seq: ++seq, type, data }) as Change;
@@ -59,10 +60,25 @@ describe("projectFeishuChange", () => {
 
   it("项目经理对话的流式预览 → stream；会话回到空闲 → turn_end", () => {
     expect(project(change("session.status", { session: session({ streamingText: "正在写" }) }))).toEqual([{ kind: "stream", conversationId: PM_CONV, text: "正在写" }]);
-    expect(project(change("session.status", { session: session({ streamingText: null }) }))).toEqual([]);
     expect(project(change("session.status", { session: session({ status: "idle" }) }))).toEqual([{ kind: "turn_end", conversationId: PM_CONV }]);
     expect(project(change("session.status", { session: session({ activity: "idle" }) }))).toEqual([{ kind: "turn_end", conversationId: PM_CONV }]);
     expect(project(change("session.status", { session: session({ conversationId: WORKER_CONV, streamingText: "x" }) }))).toEqual([]);
+  });
+
+  it("项目经理开轮在干活、还没出正文 → working，带一行状态；Worker、总助的会话不出", () => {
+    expect(project(change("session.status", { session: session() }))).toEqual([{ kind: "working", conversationId: PM_CONV, status: "Working…" }]);
+    expect(project(change("session.status", { session: session({ step: { type: "thinking" } }) }))).toEqual([{ kind: "working", conversationId: PM_CONV, status: "Thinking…" }]);
+    expect(project(change("session.status", { session: session({ activity: "stopping" }) }))).toEqual([{ kind: "working", conversationId: PM_CONV, status: "Stopping…" }]);
+    expect(project(change("session.status", { session: session({ pmId: null }) }))).toEqual([]);
+    expect(project(change("session.status", { session: session({ pmId: null, streamingText: "x" }) }))).toEqual([]);
+  });
+
+  it("后台轮次（没有在等回复的用户消息）在干活不出 working，出正文照常 stream、结束照常 turn_end", () => {
+    const background = ctx(true, false);
+    expect(projectFeishuChange(change("session.status", { session: session() }), background)).toEqual([]);
+    expect(projectFeishuChange(change("session.status", { session: session({ activity: "stopping" }) }), background)).toEqual([]);
+    expect(projectFeishuChange(change("session.status", { session: session({ streamingText: "汇报来了" }) }), background)).toEqual([{ kind: "stream", conversationId: PM_CONV, text: "汇报来了" }]);
+    expect(projectFeishuChange(change("session.status", { session: session({ activity: "idle" }) }), background)).toEqual([{ kind: "turn_end", conversationId: PM_CONV }]);
   });
 
   it("项目经理的文字消息 → agent_text，带它发的文件", () => {
@@ -92,7 +108,7 @@ describe("projectFeishuChange", () => {
       meta: { origin: { kind: "feishu", openId: "ou_a", name: "张三", role: "owner", mode: "solo", guestTier: "chat_only", context: [] } },
     });
     expect(project(change("message.created", { message: fromFeishu }))).toEqual([]);
-    const wakeup = message({ sender: "user", dedupeKey: "router-resolve:1:2:c" });
+    const wakeup = message({ sender: "user", dedupeKey: `client:${PM_CONV}:router-resolve:1:c`, meta: { wakeup: true } });
     expect(project(change("message.created", { message: wakeup }))).toEqual([]);
   });
 

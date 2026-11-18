@@ -2,10 +2,12 @@
 // 这个包加载后守护进程多占约 40 MB：service.ts 只在配了飞书（有凭证或开始扫码）时才动态加载本文件。
 // 消息正文用 SDK 导出的 normalize 转成 markdown；开放接口统一走 Client.request（SDK 自己换取、续期 tenant_access_token），
 // 上传、下载走 SDK 的 im.v1.image / file / messageResource；长连接是 WSClient + EventDispatcher（卡片回调 card.action.trigger 同一条连接）。
+// 官方 HTTP 实例（defaultHttpInstance）不设超时，这里包一层按请求补上（withTimeouts）。
 import { createReadStream } from "node:fs";
 import type { Readable } from "node:stream";
 import * as lark from "@larksuiteoapi/node-sdk";
 import type { FeishuBrandName } from "../../shared/feishu.ts";
+import { FEISHU_HTTP_TIMEOUT_MS, FEISHU_TRANSFER_TIMEOUT_MS } from "../../shared/limits.ts";
 import type { FeishuAppAddons, FeishuAppPreset } from "./scopes.ts";
 import {
   FEISHU_RATE_LIMIT_CODES,
@@ -67,6 +69,8 @@ function routeOf<M extends FeishuMethod>(method: M, args: FeishuMethodArgs[M]): 
       const { receive_id_type, ...data } = a as FeishuMethodArgs["message.create"];
       return { method: "POST", url: "/open-apis/im/v1/messages", params: { receive_id_type }, data };
     }
+    case "message.delete":
+      return { method: "DELETE", url: `/open-apis/im/v1/messages/${enc(a.message_id)}` };
     case "card.create":
       return { method: "POST", url: "/open-apis/cardkit/v1/cards", data: a };
     case "card.update": {
@@ -105,6 +109,27 @@ function resultOfError(error: unknown): { result: FeishuApiResult | null; status
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** 上传图片、文件和下载消息里的资源：按 FEISHU_TRANSFER_TIMEOUT_MS 算超时，别的请求按 FEISHU_HTTP_TIMEOUT_MS。 */
+const TRANSFER_URL = /\/open-apis\/im\/v1\/(images|files)(\/|$)|\/open-apis\/im\/v1\/messages\/[^/]+\/resources\//;
+
+/** 官方的 HTTP 实例默认不设超时（慢网时一次上传能挂几分钟）：在它外面给每个请求补上超时，调用方自己给了的照用。 */
+function withTimeouts(http: lark.HttpInstance): lark.HttpInstance {
+  const timed = <D>(url: string | undefined, opts: lark.HttpRequestOptions<D> = {}): lark.HttpRequestOptions<D> => ({
+    ...opts,
+    timeout: opts.timeout ?? (url !== undefined && TRANSFER_URL.test(url) ? FEISHU_TRANSFER_TIMEOUT_MS : FEISHU_HTTP_TIMEOUT_MS),
+  });
+  return {
+    request: (opts) => http.request(timed(opts.url, opts)),
+    get: (url, opts) => http.get(url, timed(url, opts)),
+    delete: (url, opts) => http.delete(url, timed(url, opts)),
+    head: (url, opts) => http.head(url, timed(url, opts)),
+    options: (url, opts) => http.options(url, timed(url, opts)),
+    post: (url, data, opts) => http.post(url, data, timed(url, opts)),
+    put: (url, data, opts) => http.put(url, data, timed(url, opts)),
+    patch: (url, data, opts) => http.patch(url, data, timed(url, opts)),
+  };
+}
+
 function checkAuth(result: FeishuApiResult): void {
   if (AUTH_CODES.has(result.code)) throw new FeishuAuthError(result.code, result.msg ?? "");
 }
@@ -122,7 +147,9 @@ export function createFeishuSdkTransport(options: FeishuSdkOptions): FeishuTrans
     debug: () => {},
     trace: () => {},
   };
-  const client = new lark.Client({ appId: options.appId, appSecret: options.appSecret, domain, logger, loggerLevel: lark.LoggerLevel.warn });
+  // 官方实例的响应拦截器已把回包拆成 data（SDK 不传 httpInstance 时用的就是它），只是类型上还标成 AxiosInstance
+  const httpInstance = withTimeouts(lark.defaultHttpInstance as unknown as lark.HttpInstance);
+  const client = new lark.Client({ appId: options.appId, appSecret: options.appSecret, domain, logger, loggerLevel: lark.LoggerLevel.warn, httpInstance });
   let ws: lark.WSClient | null = null;
 
   const call = async <M extends FeishuMethod>(method: M, args: FeishuMethodArgs[M]): Promise<FeishuApiResult> => {

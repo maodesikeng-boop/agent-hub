@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Change } from "../../shared/api.ts";
+import { isLedgerWakeup } from "../../shared/attachments.ts";
 import { askOf } from "../../shared/domain.ts";
 import { ASK_CARD_TELL_USER, ASK_CARD_WHERE } from "../../shared/hub.ts";
 import type { ConversationId, MessageId, PmId, SessionId } from "../../shared/domain.ts";
@@ -250,6 +251,20 @@ describe("持久化", () => {
     db.close();
     open();
     expect([answered(dismissed), answered(replied), answered(open1), answered(other)]).toEqual([true, true, false, false]);
+  });
+
+  it("老数据：拍板唤醒补标 wakeup，人打的字和坏 meta 的行不动（迁移 0036）", () => {
+    const card = ask("要不要上线？");
+    const typed = post(lin.conversationId, "我先说一句");
+    const wake = ledger.answerAsk(card, { clientId: "old-click", note: "上" }).messageId!;
+    const broken = post(lin.conversationId, "坏数据");
+    db.run("UPDATE messages SET meta = NULL WHERE id = ?", wake);
+    db.run("UPDATE messages SET meta = '{not json' WHERE id = ?", broken);
+    db.exec("PRAGMA user_version = 35");
+    db.close();
+    open();
+    expect([wake, typed].map((id) => isLedgerWakeup(ledger.getMessage(id)!))).toEqual([true, false]);
+    expect(db.get<{ meta: string }>("SELECT meta FROM messages WHERE id = ?", broken)!.meta).toBe("{not json");
   });
 
   it("老数据：只点过“知道了”、后面没有用户消息的，迁移后是 answered，dismissed 留着（回滚到旧版本也不会冒出来）", () => {

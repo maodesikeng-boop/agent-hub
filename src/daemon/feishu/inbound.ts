@@ -1,6 +1,7 @@
 // 入站解析（docs/feishu-design.md）：长连接送来的原始事件变成领域事件，编号全部品牌化。
 // 不变量：
 // - 丢掉机器人（含自己）发的消息、外部企业的人、编号形状不对的事件，返回 null，不抛错；
+// - 图片、文件、视频、语音都收成附件（视频、语音按文件下载），只丢表情包；正文里这些资源的占位去掉，附件随消息带着；
 // - 不做 I/O，不读状态。
 import { parseFeishuChatId, parseFeishuMessageId, parseFeishuOpenId } from "../../shared/feishu.ts";
 import type { FeishuChatId, FeishuMessageId, FeishuOpenId } from "../../shared/feishu.ts";
@@ -25,7 +26,7 @@ export type FeishuInbound =
       mentionedBot: boolean;
       /** 发在话题里（Fusa 的群是对话群，正常不会有）。 */
       inThread: boolean;
-      /** 图片和文件；语音、视频、表情不收，记在 droppedMedia。 */
+      /** 图片、文件、视频、语音；表情包不收，记在 droppedMedia。 */
       files: FeishuInboundFile[];
       droppedMedia: number;
       at: number;
@@ -49,7 +50,8 @@ export interface FeishuInboundAction {
 
 /**
  * 后置：按上面的不变量解析；senderType 是 app、编号形状不对时返回 null。
- * 语音、视频、表情包进 droppedMedia，不进 files。
+ * 视频、语音进 files（type 为 file，没名字时补“飞书视频-…mp4”“飞书语音-…opus”）；表情包进 droppedMedia。
+ * 正文去掉收下的资源在 normalize 里的占位（![image](key)、<file key=…/>、<video key=…/>、<audio key=…/>）。
  */
 export function parseFeishuEvent(raw: FeishuRawEvent, botOpenId: FeishuOpenId): FeishuInbound | null {
   const chatId = parseFeishuChatId(raw.chatId);
@@ -62,11 +64,9 @@ export function parseFeishuEvent(raw: FeishuRawEvent, botOpenId: FeishuOpenId): 
       const files: FeishuInboundFile[] = [];
       let droppedMedia = 0;
       for (const resource of raw.resources) {
-        if ((resource.type === "image" || resource.type === "file") && resource.fileKey !== "") {
-          files.push({ type: resource.type, fileKey: resource.fileKey, fileName: resource.fileName });
-        } else {
-          droppedMedia += 1;
-        }
+        if (resource.type === "sticker" || resource.fileKey === "") droppedMedia += 1;
+        else if (resource.type === "image") files.push({ type: "image", fileKey: resource.fileKey, fileName: resource.fileName });
+        else files.push({ type: "file", fileKey: resource.fileKey, fileName: resource.fileName ?? DEFAULT_NAMES[resource.type]?.(resource.fileKey) ?? null });
       }
       return {
         kind: "message",
@@ -74,7 +74,7 @@ export function parseFeishuEvent(raw: FeishuRawEvent, botOpenId: FeishuOpenId): 
         chatId,
         chatType: raw.chatType,
         senderOpenId,
-        text: raw.content.trim(),
+        text: withoutPlaceholders(raw.content, files),
         mentionedBot: raw.mentionedBot,
         inThread: raw.threadId !== null && raw.threadId !== "",
         files,
@@ -94,6 +94,28 @@ export function parseFeishuEvent(raw: FeishuRawEvent, botOpenId: FeishuOpenId): 
     case "im.chat.updated_v1":
       return raw.name === null || raw.name.trim() === "" ? null : { kind: "chat_renamed", chatId, name: raw.name.trim() };
   }
+}
+
+const DEFAULT_NAMES: Partial<Record<string, (fileKey: string) => string>> = {
+  video: (fileKey) => `飞书视频-${fileKey.slice(-8)}.mp4`,
+  audio: (fileKey) => `飞书语音-${fileKey.slice(-8)}.opus`,
+};
+
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** 去掉收成附件的资源在正文里的占位；只剩占位的行整行去掉，用户自己空的行留着。 */
+function withoutPlaceholders(content: string, files: readonly FeishuInboundFile[]): string {
+  if (files.length === 0) return content.trim();
+  const keys = files.map((f) => escapeRegExp(f.fileKey)).join("|");
+  const placeholder = new RegExp(`!\\[[^\\]]*\\]\\((?:${keys})\\)|<(?:file|video|audio) key="(?:${keys})"[^>]*/>`, "g");
+  return content
+    .split("\n")
+    .flatMap((line) => {
+      const left = line.replace(placeholder, "").trimEnd();
+      return left.trim() === "" && line.trim() !== "" ? [] : [left];
+    })
+    .join("\n")
+    .trim();
 }
 
 /** 后置：按钮值能被 decodeFeishuActionValue 认出、编号形状对时返回动作；否则 null（被改过、老版本的卡）。 */
