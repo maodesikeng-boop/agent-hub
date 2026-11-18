@@ -5,7 +5,7 @@ import type { Message, SessionState } from "../../shared/domain.ts";
 import type { FeishuChatId } from "../../shared/feishu.ts";
 import { FEISHU_CARD_MAX_CHARS, FEISHU_CATCHUP_MAX_MESSAGES } from "../../shared/limits.ts";
 import type { RouterCommandRecord, RouterReportItem } from "../../shared/router.ts";
-import { catchUpIntents, projectFeishuChange, splitFeishuMarkdown, type FeishuProjectionContext } from "./outbound.ts";
+import { catchUpIntents, feishuMarkdownPrefix, projectFeishuChange, splitFeishuMarkdown, type FeishuProjectionContext } from "./outbound.ts";
 import type { FeishuChatBinding } from "./store.ts";
 
 const PM_CONV = 10;
@@ -203,5 +203,48 @@ describe("splitFeishuMarkdown", () => {
     }
     expect(chunks[1]!.startsWith("```ts\n")).toBe(true);
     expect(joinBack(chunks)).toBe(text);
+  });
+});
+
+describe("卡片里的本机图片和本机路径链接", () => {
+  const reply = [
+    "看结果：",
+    "",
+    "![总助长回复截图](/tmp/reverify/01.png)",
+    "",
+    "![](file:///tmp/reverify/02.png)",
+    "",
+    "- [复验报告](/tmp/reverify/report.md)",
+    "- [官网](https://example.com)",
+    "- ![远程图](https://example.com/x.png)",
+    "- ![已上传](img_v3_abc)",
+    "",
+    "`![行内代码](/tmp/a.png)`",
+  ].join("\n");
+  const expected = [
+    "看结果：",
+    "",
+    "图片「总助长回复截图」",
+    "",
+    "图片「02.png」",
+    "",
+    "- 复验报告",
+    "- [官网](https://example.com)",
+    "- [远程图](https://example.com/x.png)",
+    "- ![已上传](img_v3_abc)",
+    "",
+    "`![行内代码](/tmp/a.png)`",
+  ].join("\n");
+
+  it("定稿分块时本机图片换成图片名、本机路径链接只留文字，网页链接、飞书图片和代码原样", () => {
+    expect(splitFeishuMarkdown(reply)).toEqual([expected]);
+  });
+
+  it("流式推送的正文同样换掉", () => {
+    expect(feishuMarkdownPrefix(reply)).toBe(expected);
+  });
+
+  it("链接文字里套着本机图片时两层都换掉", () => {
+    expect(splitFeishuMarkdown("[![图](/tmp/a.png)](/tmp/a.png)")).toEqual(["图片「图」"]);
   });
 });

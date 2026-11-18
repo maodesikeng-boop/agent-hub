@@ -274,3 +274,14 @@ describe("renderChatPolicyCard", () => {
     expect(values).toContainEqual({ kind: "set_policy", pmId: 2, triggerMode: "mention_only" });
   });
 });
+
+describe("卡片正文里的本机图片", () => {
+  it("提问卡和简报卡的正文不带本机图片语法，飞书不会当成图片编号拒收", () => {
+    const ask: AskMeta = { needsUser: true, options: ["要", "不要"] };
+    const askCard = renderAskCard(message(31, "看图：![截图](/tmp/a.png)", ask), ask, { kind: "pending" });
+    expect(allText(askCard)).not.toContain("](/tmp");
+    expect(allText(askCard)).toContain("截图");
+    const report = { id: 1, pmId: 1, kind: "report", summary: "![截图](/tmp/a.png) 做完了", status: "pending", createdAt: 1, updatedAt: 1 } as unknown as RouterReportItem;
+    expect(allText(renderRouterItem(report, null, { kind: "pending" }, null))).not.toContain("](/tmp");
+  });
+});
