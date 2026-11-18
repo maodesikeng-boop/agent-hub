@@ -7,6 +7,7 @@ import { FEISHU_FILE_MAX_BYTES, FEISHU_IMAGE_MAX_BYTES, FEISHU_IMAGE_MAX_EDGE, M
 import { resolveUpload } from "../uploads.ts";
 import { createFeishuFileService, planFeishuFile, type FeishuOutboundFile } from "./files.ts";
 import { createFakeFeishu } from "./test-helpers.ts";
+import { isFeishuRejection } from "./transport.ts";
 
 const file = (name: string, mime: string, bytes: number): FeishuOutboundFile => ({ messageId: 1, part: 0, path: `/tmp/${name}`, name, mime, bytes });
 
@@ -71,6 +72,46 @@ describe("createFeishuFileService", () => {
     expect(seen!.width).toBe(FEISHU_IMAGE_MAX_EDGE);
     expect(existsSync(seen!.path)).toBe(false);
     expect(readFileSync(path).equals(original)).toBe(true);
+  });
+
+  it("avif 再小也转成飞书收的格式再传（飞书图片接口不收 avif）", async () => {
+    const sharp = (await import("sharp")).default;
+    const fake = createFakeFeishu();
+    const svc = createFeishuFileService({ transport: fake, uploadsDir: dir });
+    const path = join(dir, "small.avif");
+    await sharp({ create: { width: 64, height: 64, channels: 3, background: "#336699" } }).avif().toFile(path);
+    let format: string | undefined;
+    fake.beforeUpload = async (input) => {
+      format = (await sharp(input.path).metadata()).format;
+    };
+    expect(await svc.upload({ messageId: 1, part: 0, path, name: "small.avif", mime: "image/avif", bytes: readFileSync(path).length })).toMatchObject({ kind: "image" });
+    expect(format).toBe("jpeg");
+  });
+
+  it("超过 10 MB 的图缩不了（读不出来、加载不了 sharp）时不白传：按飞书拒收报错，不调上传图片", async () => {
+    const fake = createFakeFeishu();
+    const svc = createFeishuFileService({ transport: fake, uploadsDir: dir });
+    const path = join(dir, "broken.png");
+    writeFileSync(path, "not really a png");
+    const error = await svc.upload({ messageId: 1, part: 0, path, name: "broken.png", mime: "image/png", bytes: FEISHU_IMAGE_MAX_BYTES + 1 }).catch((e: unknown) => e);
+    expect(isFeishuRejection(error)).toBe(true);
+    expect(fake.calls.filter((c) => c.method === "uploadImage")).toEqual([]);
+  });
+
+  it("超过 10 MB 的动图取第一帧缩成静态图再传", async () => {
+    const sharp = (await import("sharp")).default;
+    const fake = createFakeFeishu();
+    const svc = createFeishuFileService({ transport: fake, uploadsDir: dir });
+    const frame = (color: string) => sharp({ create: { width: 32, height: 32, channels: 3, background: color } }).png().toBuffer();
+    const path = join(dir, "anim.webp");
+    await sharp([await frame("#ff0000"), await frame("#00ff00")], { join: { animated: true } }).webp().toFile(path);
+    expect((await sharp(path).metadata()).pages).toBe(2);
+    let pages: number | undefined;
+    fake.beforeUpload = async (input) => {
+      pages = (await sharp(input.path).metadata()).pages ?? 1;
+    };
+    expect(await svc.upload({ messageId: 1, part: 0, path, name: "anim.webp", mime: "image/webp", bytes: FEISHU_IMAGE_MAX_BYTES + 1 })).toMatchObject({ kind: "image" });
+    expect(pages).toBe(1);
   });
 
   it("下载超过 MAX_UPLOAD_BYTES 时返回 null，上传目录里不留文件", async () => {

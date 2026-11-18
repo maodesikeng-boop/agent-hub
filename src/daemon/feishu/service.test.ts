@@ -17,6 +17,7 @@ import {
   FEISHU_OUTBOUND_QUEUE_MAX,
   FEISHU_STREAM_RENEW_MS,
   FEISHU_STREAM_FLUSH_MS,
+  MAX_UPLOAD_BYTES,
 } from "../../shared/limits.ts";
 import type { RouterCommandRecord } from "../../shared/router.ts";
 import { createResolveFolder } from "../ledger/files.ts";
@@ -1487,5 +1488,174 @@ describe("createFeishuService：图文同发、超大图瘦身、重启补传与
     await settle();
     expect(cardIdsCreated()).toHaveLength(1);
     expect(buttonValues(cardIdsCreated()[0]!.data)).toEqual([{ kind: "stop", conversationId: lin.conversationId }]);
+  });
+});
+
+describe("createFeishuService：附件改卡失败重刷、内部唤醒不当用户发话、空入站不投递", () => {
+  const tool = (sessionId: SessionId, name: string, input: unknown = {}) =>
+    ev(sessionId, { type: "agent.tool", uuid: `t-${++seq}`, toolUseId: `tu-${seq}`, name, input, at: Date.now() });
+  const outDir = () => {
+    const home = join(root, "out");
+    mkdirSync(home, { recursive: true });
+    return home;
+  };
+  const png = () => Buffer.from("89504e470d0a1a0a", "hex");
+  const latestAgentText = (conversationId: ConversationId) =>
+    db.get<{ id: number }>("SELECT max(id) AS id FROM messages WHERE conversation_id = ? AND sender = 'agent' AND kind = 'text'", conversationId)!.id;
+  const updatesOf = (cardId: string | null) => fake.callsOf("card.update").filter((u) => u.card_id === cardId);
+  const textsTo = (chatId: string) =>
+    fake.callsOf("message.create").filter((c) => c.receive_id === chatId && c.msg_type === "text").map((c) => (JSON.parse(c.content) as { text: string }).text);
+  const slowUploads = () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    fake.beforeUpload = () => gate;
+    return () => release();
+  };
+
+  it("慢传的图传完、改原卡时网络闪断：之后补发重刷原卡，图嵌回去、Uploading 去掉", async () => {
+    await svc.close();
+    svc = makeService({ attachWaitMs: 40 });
+    await connect();
+    writeFileSync(join(outDir(), "slow.png"), png());
+    const release = slowUploads();
+    ev(lin.sessionId, { type: "agent.text", uuid: "slow-img", text: `截图 [图](${join(root, "out", "slow.png")})`, at: Date.now() });
+    const messageId = latestAgentText(lin.conversationId);
+    await vi.waitFor(() => expect(store().postOf({ kind: "file", messageId, part: 0 })?.state).toBe("uploading"));
+    const host = store().postOf({ kind: "message", messageId, part: 0 })!;
+    expect(fake.cards.get(host.cardId!)).toContain("Uploading slow.png");
+    fake.failNext["card.update"] = new Error("read ECONNRESET");
+    release();
+    await vi.waitFor(() => {
+      const updates = updatesOf(host.cardId);
+      expect(updates.length).toBeGreaterThanOrEqual(2);
+      expect(imgKeysOf(updates.at(-1)!.card.data)).toHaveLength(1);
+      expect(updates.at(-1)!.card.data).not.toContain("Uploading");
+    }, { timeout: FEISHU_CONTROL_RETRY_MS * 4 });
+    expect(store().postOf({ kind: "file", messageId, part: 0 })?.state).toBe("final");
+  });
+
+  it("慢传的文件已补发、原卡还没改成就停机：重启后重刷原卡标已送达，文件消息不重发", async () => {
+    await svc.close();
+    svc = makeService({ attachWaitMs: 40 });
+    await connect();
+    const chat = chatOf(lin.pmId);
+    writeFileSync(join(outDir(), "big.zip"), "x");
+    const release = slowUploads();
+    ev(lin.sessionId, { type: "agent.text", uuid: "slow-zip", text: `打包好了 [包](${join(root, "out", "big.zip")})`, at: Date.now() });
+    const messageId = latestAgentText(lin.conversationId);
+    await vi.waitFor(() => expect(store().postOf({ kind: "file", messageId, part: 0 })?.state).toBe("uploading"));
+    const host = store().postOf({ kind: "message", messageId, part: 0 })!;
+    fake.failNext["card.update"] = new Error("read ECONNRESET");
+    release();
+    await vi.waitFor(() => expect(updatesOf(host.cardId)).toHaveLength(1));
+    await svc.close();
+    fake.beforeUpload = null;
+    svc = makeService({ attachWaitMs: 40 });
+    await svc.start();
+    await vi.waitFor(() => expect(svc.setup.status().state).toBe("connected"));
+    await settle();
+    const sentFiles = fake.callsOf("message.create").filter((c) => c.receive_id === chat && c.msg_type === "file");
+    expect(sentFiles).toHaveLength(1);
+    expect(updatesOf(host.cardId).length).toBeGreaterThanOrEqual(2);
+    expect(updatesOf(host.cardId).at(-1)!.card.data).toContain("已送达");
+    expect(updatesOf(host.cardId).at(-1)!.card.data).not.toContain("Uploading");
+    expect(store().postOf({ kind: "file", messageId, part: 0 })?.state).toBe("final");
+  });
+
+  it("拍板定案唤醒项目经理的那一轮：群里不出「网页上说」，不建状态卡，整轮没正文也不撤回", async () => {
+    await connect();
+    const chat = chatOf(lin.pmId);
+    const askId = await askInGroupFor(lin, ["A", "B"]);
+    expect(click(chat, postOfAsk(askId).messageId, { fusa: 1, kind: "choose", card: { kind: "ask", askMessageId: askId }, optionIndex: 0 }).toast?.type).toBe("success");
+    await settle();
+    expect(userMessages(lin.conversationId)).toHaveLength(1);
+    running(lin.sessionId);
+    ev(lin.sessionId, { type: "turn.started", at: Date.now() });
+    tool(lin.sessionId, "Bash", { command: "hub worker start" });
+    await settle();
+    ev(lin.sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [], durationMs: 1, at: Date.now() });
+    await settle();
+    const everything = [...fake.sent.map((s) => s.content), ...fake.cards.values()].join("\n");
+    expect(everything).not.toContain("网页上说");
+    expect(streamCardMessage(chat)).toBeUndefined();
+    expect(fake.callsOf("message.delete")).toHaveLength(0);
+  });
+
+  it("项目群里单发超过上限的视频：回一句没收下，不往项目经理投空消息；带字的照常投递并提示文件没收下", async () => {
+    await connect();
+    const chat = chatOf(lin.pmId);
+    fake.resources.set("v_big", Buffer.alloc(MAX_UPLOAD_BYTES + 1));
+    say(chat, '<video key="v_big" name="huge.mp4"/>', { files: [{ type: "video", fileKey: "v_big", fileName: "huge.mp4" }] });
+    await settle();
+    expect(userMessages(lin.conversationId)).toEqual([]);
+    expect(textsTo(chat).some((t) => t.includes("huge.mp4"))).toBe(true);
+    say(chat, '看这个 <video key="v_big" name="again.mp4"/>', { files: [{ type: "video", fileKey: "v_big", fileName: "again.mp4" }] });
+    await settle();
+    expect(userMessages(lin.conversationId).map((m) => m.text)).toEqual(["看这个"]);
+    expect(textsTo(chat).some((t) => t.includes("again.mp4"))).toBe(true);
+  });
+
+  it("总助单聊里单发下载失败的文件：回一句没收下，不交给总助，不抛错", async () => {
+    await connect();
+    say(routerChat(), '<file key="file_missing" name="lost.pdf"/>', { p2p: true, files: [{ type: "file", fileKey: "file_missing", fileName: "lost.pdf" }] });
+    await settle();
+    expect(routerCalls).toEqual([]);
+    expect(textsTo(routerChat()).some((t) => t.includes("lost.pdf"))).toBe(true);
+  });
+
+  it("chat_only 档访客 @机器人 单发图片：图不收，回他一句，不往项目经理投空消息", async () => {
+    await connect();
+    const chat = chatOf(lin.pmId);
+    join_(chat);
+    await settle();
+    fake.resources.set("img_g", png());
+    say(chat, "![image](img_g)", { sender: GUEST, mention: true, files: [{ type: "image", fileKey: "img_g", fileName: null }] });
+    await settle();
+    expect(userMessages(lin.conversationId)).toEqual([]);
+    expect(fake.calls.some((c) => c.method === "downloadResource")).toBe(false);
+    expect(textsTo(chat).some((t) => t.includes(GUEST))).toBe(true);
+  });
+
+  it("非流式回复只带普通文件、文件消息被飞书拒收：原卡改成写着没发出去", async () => {
+    await connect();
+    const chat = chatOf(lin.pmId);
+    writeFileSync(join(outDir(), "report.pdf"), "%PDF");
+    const original = fake.call.bind(fake);
+    fake.call = async (method, args) => {
+      if (method === "message.create" && (args as { msg_type?: string }).msg_type === "file") {
+        fake.calls.push({ method, args: args as unknown as Record<string, unknown>, at: 0 });
+        return { code: 230028, msg: "The messages do NOT pass the audit.", httpStatus: 400 };
+      }
+      return original(method, args);
+    };
+    ev(lin.sessionId, { type: "agent.text", uuid: "pdf-only", text: `报告 [r](${join(root, "out", "report.pdf")})`, at: Date.now() });
+    await settle();
+    const messageId = latestAgentText(lin.conversationId);
+    const host = store().postOf({ kind: "message", messageId, part: 0 })!;
+    expect(host.chatId).toBe(chat);
+    expect(host.cardId).not.toBeNull();
+    expect(updatesOf(host.cardId).at(-1)?.card.data).toContain("「report.pdf」没发出去");
+  });
+
+  it("多附件里前一个文件的副本没了：后面附件的编号不变，照样传完、补发", async () => {
+    const { resolveUpload } = await import("../uploads.ts");
+    const { sentFilesOf } = await import("../../shared/sent-files.ts");
+    await svc.close();
+    svc = makeService({ attachWaitMs: 40 });
+    await connect();
+    const chat = chatOf(lin.pmId);
+    const home = outDir();
+    writeFileSync(join(home, "first.zip"), "1");
+    writeFileSync(join(home, "second.zip"), "2");
+    const release = slowUploads();
+    ev(lin.sessionId, { type: "agent.text", uuid: "two-files", text: `两个包 [1](${join(home, "first.zip")}) [2](${join(home, "second.zip")})`, at: Date.now() });
+    const messageId = latestAgentText(lin.conversationId);
+    await vi.waitFor(() => expect(store().postOf({ kind: "file", messageId, part: 1 })?.state).toBe("uploading"));
+    const firstCopy = resolveUpload(join(dataHome, "sent-files"), sentFilesOf(ledger.getMessage(messageId)!)[0]!.id!)!;
+    rmSync(firstCopy.path);
+    release();
+    await vi.waitFor(() => expect(store().postOf({ kind: "file", messageId, part: 1 })?.state).toBe("final"));
+    expect(store().postOf({ kind: "file", messageId, part: 1 })?.mediaKey).not.toBeNull();
+    expect(fake.callsOf("message.create").filter((c) => c.receive_id === chat && c.msg_type === "file").length).toBeGreaterThanOrEqual(1);
   });
 });
