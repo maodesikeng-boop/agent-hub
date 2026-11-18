@@ -20,6 +20,9 @@ const IN_IDS = "IN (SELECT value FROM json_each(?))";
 const ENDED_WORKER = `(EXISTS (SELECT 1 FROM workers w WHERE w.worker_conversation_id = c.id AND w.status = 'ended')
   OR EXISTS (SELECT 1 FROM agent_sessions s WHERE s.conversation_id = c.id AND s.status = 'ended'))`;
 
+/** 不是老项目群里的会话（11-03 拿掉了项目群，快照不给它们，数据还在库里）。 */
+const NOT_GROUP_SESSION = `(s.conversation_id IS NULL OR s.conversation_id NOT IN (SELECT id FROM conversations WHERE kind = 'project_group'))`;
+
 /** 活跃任务图上挂过的 Worker（在干的、干过的）：图的详情要按 Worker 编号找到它们的对话。 */
 function boundWorkerIds(graphs: readonly TaskGraph[]): Set<WorkerId> {
   const ids = new Set<WorkerId>();
@@ -142,10 +145,10 @@ export function createLedgerSnapshotQueries(db: Db, deps: { sessionState: (row: 
     const olderEndedWorkers: Record<PmId, ConversationId> = Object.fromEntries([...hasOlder].map((pmId) => [pmId, oldestKept.get(pmId)!]));
     const conversations = entriesOf(conversationRows(keep));
     const extra = db.all<AgentSessionDbRow>(
-      `SELECT s.* FROM agent_sessions s WHERE s.role != 'assistant' AND (
+      `SELECT s.* FROM agent_sessions s WHERE s.role != 'assistant' AND ${NOT_GROUP_SESSION} AND (
           (s.conversation_id IS NULL AND s.status != 'ended')
-          OR s.id IN (SELECT MAX(id) FROM agent_sessions WHERE role != 'assistant' GROUP BY vendor)
-          OR s.id IN (SELECT MAX(id) FROM agent_sessions WHERE role != 'assistant' AND rate_limit IS NOT NULL GROUP BY vendor))
+          OR s.id IN (SELECT MAX(s.id) FROM agent_sessions s WHERE s.role != 'assistant' AND ${NOT_GROUP_SESSION} GROUP BY s.vendor)
+          OR s.id IN (SELECT MAX(s.id) FROM agent_sessions s WHERE s.role != 'assistant' AND s.rate_limit IS NOT NULL AND ${NOT_GROUP_SESSION} GROUP BY s.vendor))
         ORDER BY s.id`,
     );
     const sessions = sessionsOf(keep);
