@@ -25,6 +25,8 @@ import type {
   EditPersonaRequest,
   HealthEntry,
   Message,
+  ConversationsLookup,
+  EndedWorkersPage,
   MessagesPage,
   PersonaChange,
   PersonaView,
@@ -323,6 +325,16 @@ export class FakeApi {
   older: (conversationId: number, before: number) => Reply | Promise<Reply> = () => ({
     status: 200,
     body: { messages: [], hasMore: false } satisfies MessagesPage,
+  });
+  /** GET /api/conversations/lookup。默认：一个都没有。 */
+  lookup: (query: URLSearchParams) => Reply | Promise<Reply> = () => ({
+    status: 200,
+    body: { conversations: [], sessions: [] } satisfies ConversationsLookup,
+  });
+  /** GET /api/pms/:id/ended-workers。默认：没有更早的。 */
+  endedWorkers: (pmId: number, before: number | null) => Reply | Promise<Reply> = () => ({
+    status: 200,
+    body: { conversations: [], sessions: [], nextBefore: null } satisfies EndedWorkersPage,
   });
   createPm: (body: CreatePmRequest) => Reply | Promise<Reply> = () => ({
     status: 201,
@@ -890,6 +902,12 @@ export class FakeApi {
     if (method === "GET" && url.pathname === "/api/state") return jsonResponse(await this.state());
     if (method === "GET" && url.pathname === "/api/models") return jsonResponse(await this.models());
     if (method === "GET" && url.pathname === "/api/quota") return jsonResponse(await this.quota());
+    if (method === "GET" && url.pathname === "/api/conversations/lookup") return jsonResponse(await this.lookup(url.searchParams));
+    const ended = /^\/api\/pms\/(\d+)\/ended-workers$/.exec(url.pathname);
+    if (method === "GET" && ended) {
+      const before = url.searchParams.get("before");
+      return jsonResponse(await this.endedWorkers(Number(ended[1]), before === null ? null : Number(before)));
+    }
     const m = /^\/api\/conversations\/(\d+)\/(messages|stop|rewind)$/.exec(url.pathname);
     if (m) {
       const id = Number(m[1]);

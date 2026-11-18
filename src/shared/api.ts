@@ -21,6 +21,7 @@ import type {
   TaskGraph,
   TaskGraphId,
   TaskNodeKey,
+  WorkerId,
 } from "./domain.ts";
 import type {
   DeviceRouterDigest,
@@ -50,11 +51,23 @@ export const API_PATHS = {
   auth: "/auth",
   state: "/api/state",
   messages: (conversationId: ConversationId) => `/api/conversations/${conversationId}/messages`,
+  /**
+   * GET ?ids=<对话编号,…>&workerIds=<Worker 编号,…> → ConversationsLookup：不在初始快照里的对话（早收工的 Worker）点开时单拉，
+   * 和快照里同一个形状。各最多 CONVERSATION_LOOKUP_MAX_IDS 个，不存在的、老项目群不回。
+   */
+  conversationsLookup: (q: { ids?: readonly ConversationId[]; workerIds?: readonly WorkerId[] }) =>
+    `/api/conversations/lookup?ids=${(q.ids ?? []).join(",")}&workerIds=${(q.workerIds ?? []).join(",")}`,
   stop: (conversationId: ConversationId) => `/api/conversations/${conversationId}/stop`,
   /** POST，没有请求体 → 200 RewindMessageResponse：把最后一条已停止/已取消或正在停止的用户消息标记回退。 */
   rewind: (conversationId: ConversationId) => `/api/conversations/${conversationId}/rewind`,
   /** POST：新建项目经理（CreatePmRequest → 201 CreatePmResponse）。没有单独建项目的入口：建项目经理时选主文件夹，或者在会话里说。 */
   pms: "/api/pms",
+  /**
+   * GET ?before=<对话编号> → EndedWorkersPage：这个项目经理比 before 早的已收工 Worker 对话（按对话编号从新到旧，一页 ENDED_WORKERS_PAGE_SIZE 个）。
+   * 不带 before 从最新的开始。项目经理不存在 → 404。
+   */
+  endedWorkers: (pmId: PmId, before: ConversationId | null) =>
+    `/api/pms/${pmId}/ended-workers${before === null ? "" : `?before=${before}`}`,
   /** GET → PersonaView；PUT（EditPersonaRequest）→ EditPersonaResponse。 */
   persona: (pmId: PmId) => `/api/pms/${pmId}/persona`,
   /** GET → PmCapabilitiesView；PATCH（PmCapabilitiesPatch → PmCapabilitiesView）：项目经理能用的技能、MCP、云端连接器。 */
@@ -287,6 +300,11 @@ export interface StateSnapshot {
   router: RouterSlice;
   /** 所有进行中项目的活跃任务图（status = 'active'）。 */
   activeTaskGraphs: TaskGraph[];
+  /**
+   * 还有更早的已收工 Worker 没放进快照的项目经理（快照每个项目经理只带最近 SNAPSHOT_ENDED_WORKERS_PER_PM 个）：
+   * 值是翻页的起点（GET endedWorkers 的 before）。没有更早的不带；老服务端整个不带。
+   */
+  olderEndedWorkers?: Record<PmId, ConversationId>;
   /** 守护进程所在的机器能做什么（界面服务补上的，不是账本的数据）：网页按它显示“选择…”和“在 Finder 中显示”等控件。 */
   server: ServerInfo;
   /** 连入方 ssh 隧道的状态（daemon/tunnel/，界面服务补上的）：没配隧道不带，没连过中心是 null。内部值，网页怎么说由块 E 定。 */
@@ -304,6 +322,17 @@ export interface StateSnapshot {
 export type LedgerSnapshot = Omit<StateSnapshot, "server" | "tunnel" | "publicEntry" | "bootId">;
 
 /** GET /api/conversations/:id/messages?before=<消息编号>：更早的 100 条，从小到大。 */
+/** 不在快照里的对话按需拉回来的一批（GET conversationsLookup）：对话和快照里同形状，sessions 是它们各自最新一代的会话。 */
+export interface ConversationsLookup {
+  conversations: ConversationSnapshot[];
+  sessions: SessionState[];
+}
+
+/** GET endedWorkers 的一页：nextBefore 是下一页的 before，没有更早的了是 null。 */
+export interface EndedWorkersPage extends ConversationsLookup {
+  nextBefore: ConversationId | null;
+}
+
 export interface MessagesPage {
   messages: Message[];
   hasMore: boolean;

@@ -13,6 +13,7 @@ import {
   MAX_PATH_BYTES,
   ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX,
   SNAPSHOT_DELIVERABLES_WORST_MAX_BYTES,
+  SNAPSHOT_ENDED_WORKERS_PER_PM,
   ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES,
   ROUTER_COMMAND_MAX_CHARS,
   ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES,
@@ -295,10 +296,13 @@ describe("初始快照的上限（一个月的量）", () => {
     const { pmConversation } = seedMonth();
     expect(db.get<{ n: number }>("SELECT count(*) AS n FROM messages")!.n).toBeGreaterThanOrEqual(30_000);
     const plan = db
-      .all<{ detail: string }>("EXPLAIN QUERY PLAN SELECT id, kind, meta, created_at FROM messages WHERE kind = 'worker' ORDER BY id")
+      .all<{ detail: string }>(
+        `EXPLAIN QUERY PLAN SELECT id, kind, meta, created_at FROM messages
+          WHERE kind = 'worker' AND worker_id IN (SELECT id FROM workers WHERE worker_conversation_id IN (SELECT value FROM json_each('[1]'))) ORDER BY id`,
+      )
       .map((r) => r.detail)
       .join(" | ");
-    expect(plan).toContain("USING INDEX messages_worker_lines");
+    expect(plan).toMatch(/USING INDEX messages_worker\b/);
     const routerPlan = db
       .all<{ detail: string }>(
         "EXPLAIN QUERY PLAN SELECT * FROM router_items WHERE status IN ('pending', 'unread') AND status = 'pending' ORDER BY created_at DESC, id DESC LIMIT 50",
@@ -323,9 +327,13 @@ describe("初始快照的上限（一个月的量）", () => {
     const t = performance.now();
     const snap = ledger.snapshot();
     const ms = performance.now() - t;
+    // 已收工的 Worker 只带最近 SNAPSHOT_ENDED_WORKERS_PER_PM 个，会话只带它们最新一代的，更早的给翻页起点
     const workers = snap.conversations.filter((c) => c.conversation.kind === "worker");
-    expect(workers).toHaveLength(WORKERS);
+    expect(workers).toHaveLength(SNAPSHOT_ENDED_WORKERS_PER_PM);
     expect(workers.every((c) => c.messages.length === 0 && c.hasMore && c.workerLine?.line.event === "ended" && c.workerLine.endedAt !== null)).toBe(true);
+    expect(snap.sessions.filter((s) => s.status === "ended")).toHaveLength(SNAPSHOT_ENDED_WORKERS_PER_PM);
+    const pmId = snap.pms[0]!.id;
+    expect(snap.olderEndedWorkers).toEqual({ [pmId]: Math.min(...workers.map((c) => c.conversation.id)) });
     expect(snap.conversations.find((c) => c.conversation.id === pmConversation)!.messages).toHaveLength(SNAPSHOT_RECENT_MESSAGES);
     expect(snap.activeTaskGraphs).toHaveLength(ACTIVE_GRAPHS);
     // 没有待拍板项；简报不分已读未读取最近 30 条（15 条未读 + 15 条最近读过的）

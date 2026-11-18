@@ -97,6 +97,10 @@ function query<T>(sql: string): T[] {
   }
 }
 
+/** 这个对话某一代会话在库里的状态（快照只带最新一代，上一代直接查库）。 */
+const generationStatus = (conversationId: number, generation: number) =>
+  query<{ status: string }>(`SELECT status FROM agent_sessions WHERE conversation_id = ${conversationId} AND generation = ${generation}`)[0]?.status;
+
 /** 在私聊里聊一句，让它起一个进程（拿到这个会话的 HUB_TOKEN，后面用 env.runHub 替它敲 hub）。 */
 async function warmUp(client: Client, conversationId: number, text = "在吗"): Promise<number> {
   const id = await client.post(conversationId, text);
@@ -703,14 +707,13 @@ describe("开新会话（资料页的按钮，ledger/handover.ts + daemon/handov
     expect(sessionsOf(state, privateId)).toHaveLength(1);
 
     writeFileSync(hold, "");
-    const g2 = await waitUntil("新一代会话", async () => sessionsOf(await client.state(), privateId)[1], 20_000);
+    const g2 = await waitUntil("新一代会话", async () => sessionsOf(await client.state(), privateId).find((s) => s.generation === 2), 20_000);
     const next = await client.post(privateId, "换代之后的");
     await waitForStatus(client, next, "replied", 20_000);
+    await waitUntil("上一代会话结束", () => (generationStatus(privateId, 1) === "ended" ? true : undefined));
     state = await client.state();
-    const [g1] = sessionsOf(state, privateId);
-    expect(sessionsOf(state, privateId)).toHaveLength(2);
-    expect(g2.generation).toBe(2);
-    expect(g1!.status).toBe("ended");
+    // 快照只带每个对话最新一代的会话（已结束的上一代留在库里，不进首屏）
+    expect(sessionsOf(state, privateId).map((s) => s.generation)).toEqual([2]);
     expect(messageById(state, next)!.sessionId).toBe(g2.sessionId);
     const proc = lastProcOf(g2.sessionId);
     expect(argValue(proc.argv, "--session-id")).not.toBe(oldVendor);
@@ -748,11 +751,12 @@ describe("开新会话（资料页的按钮，ledger/handover.ts + daemon/handov
     const daemon = await env.start();
     const c2 = client.withPort(daemon.port);
     await startedFork(1);
-    const g2 = await waitUntil("新一代会话", async () => sessionsOf(await c2.state(), privateId)[1], 20_000);
+    const g2 = await waitUntil("新一代会话", async () => sessionsOf(await c2.state(), privateId).find((s) => s.generation === 2), 20_000);
     await waitUntil("换代那一行", async () => renewedLine(await c2.state(), privateId)?.id);
     const next = await c2.post(privateId, "接着来");
     await waitForStatus(c2, next, "replied", 20_000);
-    expect(sessionsOf(await c2.state(), privateId)).toHaveLength(2);
+    expect(sessionsOf(await c2.state(), privateId).map((s) => s.generation)).toEqual([2]);
+    expect(generationStatus(privateId, 1)).toBe("ended");
     const [first] = env.stdinTextsOf(lastProcOf(g2.sessionId).pid);
     expect(first).toContain("交接：暗号是 蓝鲸");
     expect(first!.endsWith("接着来")).toBe(true);

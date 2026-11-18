@@ -6,6 +6,7 @@ import {
   MAX_REWOUND_PENDING_KEYS,
   workerEventOf,
   workerLineSummaries,
+  MAX_CONVERSATION_LOOKUP_STATES,
   type Message,
   type PersonaChangeId,
   type RouterCommandRecord,
@@ -14,6 +15,7 @@ import {
   type TaskGraph,
   type TaskNode,
 } from "../shared/index.ts";
+import { runningWorkerCount, totalRunningWorkers, waitingConversations } from "../shared/reminders.ts";
 import { revertedChangeIds } from "./components/Messages.tsx";
 import { fleetRouterStream, mergeRouterStream, routerStreamOf, type RouterStreamDeviceInput } from "./router-stream.ts";
 import {
@@ -222,6 +224,65 @@ describe("selector 缓存：300 个 Worker、3 万条消息", () => {
     expect(listConversations(next)).toBe(entriesBefore);
     expect(quotaUsage(next, 0)).toBe(quotaBefore);
     expect(quotaResetTimes(next)).toBe(resetsBefore);
+  });
+
+  it("在跑的 Worker 个数：所有项目经理一次算完、按 conversations + sessions 缓存；“等你”按项目经理问个数不再每个对话扫一遍全部 Worker", () => {
+    let state = monthState();
+    for (let pm = 2; pm <= 15; pm++) {
+      const conversationId = 100 + pm;
+      state = {
+        ...state,
+        conversations: {
+          ...state.conversations,
+          [conversationId]: { conversation: makeConversation({ id: conversationId, pmId: pm }), messages: [makeMessage({ id: 2_000_000 + pm, conversationId })], hasMore: false },
+        },
+      };
+    }
+    expect(runningWorkerCount(state, 1)).toBe(0);
+    const working = applyChange(state, sessionChange(state.seq + 1, makeSession({ sessionId: workerSessionOf(3), conversationId: workerConversationOf(3), status: "running", activity: "working" })));
+    expect(runningWorkerCount(working, 1)).toBe(1);
+    expect(totalRunningWorkers(working)).toBe(1);
+    expect(runningWorkerCount(state, 1)).toBe(0);
+
+    // 确定性守卫：数 conversations 被整表枚举了几次（不看墙钟）。14 个项目经理对话都有没看的回复，每个都会问一遍在跑个数
+    let enumerations = 0;
+    const counted = new Proxy(working.conversations, {
+      ownKeys(target) {
+        enumerations++;
+        return Reflect.ownKeys(target);
+      },
+    });
+    const probe = { ...working, conversations: counted };
+    expect(waitingConversations(probe, {}).length).toBeGreaterThanOrEqual(14);
+    // “等你”自己枚举 1 次 + 在跑个数缓存未命中时算 1 次；不缓存的话每个项目经理对话都再枚举一次（至少 15 次）
+    expect(enumerations).toBeLessThanOrEqual(2);
+    enumerations = 0;
+    waitingConversations(probe, {});
+    // 同一份 conversations + sessions 再问：在跑个数命中缓存，只剩“等你”自己的 1 次
+    expect(enumerations).toBe(1);
+    // 会话变了（新数组）才重算，且仍然只多一次
+    enumerations = 0;
+    waitingConversations({ ...probe, sessions: [...probe.sessions] }, {});
+    expect(enumerations).toBe(2);
+  });
+
+  it("按需拉回来的对话并进状态：已有的不覆盖、没新东西时 conversations、sessions 引用不变；lookups 有上限", () => {
+    const state = monthState();
+    const existing = state.conversations[workerConversationOf(0)]!;
+    const same = reducer(state, {
+      type: "lookupDone",
+      ids: [workerConversationOf(0)],
+      lookup: { conversations: [{ conversation: existing.conversation, messages: [], hasMore: true }], sessions: [state.sessions[0]!] },
+    });
+    expect(same.conversations).toBe(state.conversations);
+    expect(same.sessions).toBe(state.sessions);
+    expect(same.conversations[workerConversationOf(0)]).toBe(existing);
+    let lookups = state;
+    for (let i = 0; i < MAX_CONVERSATION_LOOKUP_STATES * 2; i++) {
+      lookups = reducer(lookups, { type: "lookupDone", ids: [500_000 + i], lookup: { conversations: [], sessions: [] } });
+    }
+    expect(Object.keys(lookups.lookups).length).toBeLessThanOrEqual(MAX_CONVERSATION_LOOKUP_STATES);
+    expect(workersOf(reducer(state, { type: "lookupStart", ids: [42] }), 1)).toBe(workersOf(state, 1));
   });
 
   it("二次 Esc 回退：pendingRewind 不击穿 conversations/workers 缓存且 rewoundKeys 严格受上限约束；messageRewind 立即失效左栏预览并保持后续引用稳定", () => {

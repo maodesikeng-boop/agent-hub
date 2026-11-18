@@ -1075,6 +1075,40 @@ describe("shell-model deviceSettings 引用稳定", () => {
   });
 });
 
+describe("shell-model 手机路由回退", () => {
+  const boot = async (hash: string) => {
+    window.location.hash = hash;
+    const api = new FakeApi(
+      makeSnapshot({
+        pms: [makePm({ id: 1, name: "小林" })],
+        conversations: [makeConvSnapshot([makeUserMessage({ id: 1, conversationId: 1, text: "hi" })], { conversation: { id: 1, pmId: 1, title: "小林" } })],
+      }),
+    );
+    api.install();
+    installFakeWebSocket();
+    const rendered = renderHook(() => useShellModel({ autoSelect: false }));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    act(() => FakeWebSocket.instances[0]!.open());
+    return { api, ...rendered };
+  };
+
+  afterEach(() => {
+    window.location.hash = "";
+  });
+
+  it("#/w/<项目经理对话编号>：编号已经在快照里且不是 Worker 对话，立即当无效路由退回列表，不单拉、不卡在空态", async () => {
+    const { api } = await boot("#/w/1");
+    await waitFor(() => expect(window.location.hash).toBe(""));
+    expect(api.calls.filter((c) => c.path === "/api/conversations/lookup")).toHaveLength(0);
+  });
+
+  it("#/w/<不存在的编号>：单拉过确认没有再退回列表", async () => {
+    const { api } = await boot("#/w/999");
+    await waitFor(() => expect(window.location.hash).toBe(""));
+    expect(api.calls.filter((c) => c.path === "/api/conversations/lookup").map((c) => c.query.get("ids"))).toEqual(["999"]);
+  });
+});
+
 describe("Providers 摘要 WeakMap 缓存与登录方法纯函数", () => {
   it("describeProvidersSummary：未加载返回 undefined，0 家就绪返回 Attention + 琥珀点，N 家就绪返回 N ready，同一数组引用恒定", () => {
     expect(describeProvidersSummary(undefined)).toEqual({ summary: undefined, attention: false });

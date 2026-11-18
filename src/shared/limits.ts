@@ -7,6 +7,17 @@ export const MESSAGE_PAGE_SIZE = 100;
  * 往前带到最近一条要算的消息为止（没回答的提问、没处理完的、最近一条非安静的，见 shared/snapshot.ts），最多 MESSAGE_PAGE_SIZE 条。
  */
 export const SNAPSHOT_RECENT_MESSAGES = 20;
+/**
+ * 初始快照里每个项目经理带最近几个已收工的 Worker 对话（按对话编号从新到旧；绑在活跃任务图上的另外照带）。
+ * 更早的不进快照：右栏 Completed 点 Load more 按 ENDED_WORKERS_PAGE_SIZE 一页页拉，直接点开的按编号单拉（ledger/snapshot.ts）。
+ */
+export const SNAPSHOT_ENDED_WORKERS_PER_PM = 20;
+/** GET /api/pms/:id/ended-workers 一页几个已收工的 Worker 对话。 */
+export const ENDED_WORKERS_PAGE_SIZE = 30;
+/** GET /api/conversations/lookup 一次最多查几个对话编号、几个 Worker 编号（各算各的）。 */
+export const CONVERSATION_LOOKUP_MAX_IDS = 50;
+/** 网页记“按需单拉过、没有这个对话”最多几个（web/state.ts 的 lookups），满了清掉。 */
+export const MAX_CONVERSATION_LOOKUP_STATES = 200;
 /** 初始快照按“跑了一个月”（300 个已收工的 Worker、3 万条消息）算的上限（未压缩，守卫见 daemon/ledger/snapshot-size.test.ts）。 */
 export const SNAPSHOT_MONTH_MAX_BYTES = 384 * 1024;
 /**

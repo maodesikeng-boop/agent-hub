@@ -6,6 +6,8 @@ import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AGENT_VENDORS,
+  API_PATHS,
+  CONVERSATION_LOOKUP_MAX_IDS,
   ConversationNotFoundError,
   LEDGER_ERROR_CODES,
   LedgerRequestError,
@@ -440,6 +442,30 @@ describe("GET /api/state 和 /messages?before=", () => {
       expect(ledger.messagesBeforeCalls).toEqual([]);
     },
   );
+
+  it("按需单拉对话：ids、workerIds 逗号分隔原样交给账本；不合法、超过上限 400 不调账本", async () => {
+    const res = await call("GET", API_PATHS.conversationsLookup({ ids: [1, 2], workerIds: [7] }));
+    expect(res.statusCode).toBe(200);
+    expect(ledger.lookupCalls).toEqual([{ ids: [1, 2], workerIds: [7] }]);
+    expect(res.json()).toEqual({ conversations: ledger.snapshotValue.conversations.filter((c) => c.conversation.id <= 2), sessions: [] });
+    const tooMany = Array.from({ length: CONVERSATION_LOOKUP_MAX_IDS + 1 }, (_, i) => i + 1);
+    for (const url of ["/api/conversations/lookup?ids=abc", "/api/conversations/lookup?ids=0", `/api/conversations/lookup?ids=${tooMany.join(",")}`]) {
+      expect((await call("GET", url)).statusCode).toBe(400);
+    }
+    expect(ledger.lookupCalls).toHaveLength(1);
+  });
+
+  it("项目经理更早的已收工 Worker 一页：before 可不带；项目经理不存在 404", async () => {
+    ledger.snapshotValue = {
+      ...ledger.snapshotValue,
+      pms: [{ id: 1, name: "小林", avatarFile: null, mode: "manage_only", vendor: "claude", defaultModel: null, effort: null, personaFile: null, createdAt: 1, archivedAt: null }],
+    };
+    expect((await call("GET", API_PATHS.endedWorkers(1, null))).json()).toEqual({ conversations: [], sessions: [], nextBefore: null });
+    expect((await call("GET", API_PATHS.endedWorkers(1, 40))).statusCode).toBe(200);
+    expect(ledger.endedWorkersCalls).toEqual([{ pmId: 1, before: null }, { pmId: 1, before: 40 }]);
+    expect((await call("GET", "/api/pms/1/ended-workers?before=abc")).statusCode).toBe(400);
+    expect((await call("GET", API_PATHS.endedWorkers(99, null))).statusCode).toBe(404);
+  });
 
   it("对话编号不是正整数：400", async () => {
     expect((await call("GET", "/api/conversations/abc/messages?before=3")).statusCode).toBe(400);

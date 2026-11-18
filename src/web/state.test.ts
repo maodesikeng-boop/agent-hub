@@ -16,7 +16,7 @@ import {
   type ScheduleRecord,
 } from "../shared/index.ts";
 import { groupMessages, isWaitingForQuota, listConversations, sessionOf, workersOf } from "./selectors.ts";
-import { MAX_LIVE_MESSAGES, applyChange, initialState, reducer, upsertMessage, type HubState } from "./state.ts";
+import { MAX_LIVE_MESSAGES, applyChange, initialState, reducer, referencesUnknownConversation, upsertMessage, type HubState } from "./state.ts";
 import {
   changeOf,
   makeConvSnapshot,
@@ -168,6 +168,48 @@ describe("loaded", () => {
     expect(reducer(s, { type: "loadFailed", unauthorized: false }).phase).toBe("ready");
     expect(reducer(initialState, { type: "loadFailed", unauthorized: false }).phase).toBe("error");
     expect(reducer(s, { type: "loadFailed", unauthorized: true }).phase).toBe("unauthorized");
+  });
+});
+
+describe("不在快照里的早收工 Worker", () => {
+  const worker = (id: number) =>
+    makeConvSnapshot([], { conversation: { id, kind: "worker", pmId: 1, title: `W${id}` }, hasMore: true });
+
+  it("快照的翻页起点记下来；拉一页并进对话和会话，起点换成下一页的，拉完删掉", () => {
+    const s0 = loaded({ olderEndedWorkers: { 1: 40 } });
+    expect(s0.olderEndedWorkers).toEqual({ 1: 40 });
+    const s1 = reducer(s0, {
+      type: "endedWorkersLoaded",
+      pmId: 1,
+      before: 40,
+      page: { conversations: [worker(39), worker(38)], sessions: [makeSession({ sessionId: 390, conversationId: 39, status: "ended" })], nextBefore: 38 },
+    });
+    expect(Object.keys(s1.conversations).map(Number)).toEqual(expect.arrayContaining([38, 39]));
+    expect(s1.sessions.map((x) => x.sessionId)).toContain(390);
+    expect(s1.olderEndedWorkers).toEqual({ 1: 38 });
+    const s2 = reducer(s1, { type: "endedWorkersLoaded", pmId: 1, before: 38, page: { conversations: [worker(37)], sessions: [], nextBefore: null } });
+    expect(s2.olderEndedWorkers).toEqual({});
+    // 请求发出后翻页起点已经变了（resync 重置、别处已经翻过）：迟到的页整页丢掉
+    const stale = reducer(s1, { type: "endedWorkersLoaded", pmId: 1, before: 40, page: { conversations: [worker(36)], sessions: [], nextBefore: 20 } });
+    expect(stale).toBe(s1);
+  });
+
+  it("按编号单拉：在拉记 loading，拉到删掉，没有、没拉成都记 missing；重拉快照清空（再拉一次）", () => {
+    const s0 = loaded();
+    const loading = reducer(s0, { type: "lookupStart", ids: [30, 31] });
+    expect(loading.lookups).toEqual({ 30: "loading", 31: "loading" });
+    const done = reducer(loading, { type: "lookupDone", ids: [30, 31], lookup: { conversations: [worker(30)], sessions: [] } });
+    expect(done.lookups).toEqual({ 31: "missing" });
+    expect(done.conversations[30]?.hasMore).toBe(true);
+    expect(reducer(loading, { type: "lookupFailed", ids: [30, 31] }).lookups).toEqual({ 30: "missing", 31: "missing" });
+    expect(reducer(done, { type: "loaded", snapshot: makeSnapshot() }).lookups).toEqual({});
+  });
+
+  it("不认识的对话：来了新消息要重拉快照；只是改了一条旧消息（早收工的 Worker 不在快照里）不重拉", () => {
+    const s = loaded();
+    const message = makeMessage({ id: 900, conversationId: 777 });
+    expect(referencesUnknownConversation(s, messageChange(s.seq + 1, "message.created", message))).toBe(true);
+    expect(referencesUnknownConversation(s, messageChange(s.seq + 1, "message.updated", message))).toBe(false);
   });
 });
 
