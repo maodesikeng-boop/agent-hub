@@ -5,7 +5,7 @@ import type { AnyActionRow } from "../../shared/actions.ts";
 import type { MessagesPage } from "../../shared/api.ts";
 import type { UserMessageMeta } from "../../shared/attachments.ts";
 import { mergeDeliverables, type Deliverable, type HubFileArg } from "../../shared/deliverables.ts";
-import { agentMessageDedupeKey, canTransitionMessage, clearRateLimitRejection, isQuotaExhausted, systemMessageDedupeKey, userMessageDedupeKey } from "../../shared/domain.ts";
+import { agentMessageDedupeKey, canTransitionMessage, systemMessageDedupeKey, userMessageDedupeKey } from "../../shared/domain.ts";
 import type { AgentRole, AgentSessionRow, AskMeta, BlockerRef, ConversationId, GateRef, Message, MessageId, MessageStatus, SessionId, SystemMessageMeta } from "../../shared/domain.ts";
 import { turnFailureReason } from "../../shared/driver.ts";
 import type { DriverEvent, SessionExitedEvent } from "../../shared/driver.ts";
@@ -290,18 +290,9 @@ export function createLedgerMessages(
     return row !== undefined && resumesAfterShutdown(session, row);
   };
 
-  /**
-   * 新一轮开始：这一轮开始前记下的“额度用完”（换代同厂商带过来的、上一轮报的）不再算数，不然会话正常跑命令也显示 Usage limit reached。
-   * 这一轮里再撞上额度，厂商会重新报（rate_limit 事件、Codex 一轮失败）。
-   */
-  const dropStaleRateLimit = (p: Pending, session: AgentSessionRow) => {
-    const info = liveOf(session.id).rateLimit ?? session.rateLimit;
-    if (!info || !isQuotaExhausted(info)) return;
-    const cleared = clearRateLimitRejection(info);
-    db.run("UPDATE agent_sessions SET rate_limit = ? WHERE id = ?", cleared === null ? null : JSON.stringify(cleared), session.id);
-    updateLive(p, session.id, (l) => {
-      l.rateLimit = cleared;
-    });
+  /** 开始干活（写进去、开始处理、自己开一轮）：上一轮结束后厂商没再报过额度的话，记着的“用完”是之前的轮次留下的，撤掉；这一轮再撞上厂商会重新报。 */
+  const dropCarriedRateLimit = (p: Pending, sessionId: SessionId) => {
+    if (liveOf(sessionId).rateLimitReported !== true) sessions.dropRateLimitRejection(p, sessionId);
   };
 
   const applyEvent = (p: Pending, session: AgentSessionRow, event: DriverEvent) => {
@@ -333,12 +324,12 @@ export function createLedgerMessages(
       case "message.processing": {
         const to = event.type === "message.delivered" ? "delivered" : "processing";
         for (const id of event.messageIds) transition(p, id, to);
-        if (to === "processing") dropStaleRateLimit(p, session);
+        dropCarriedRateLimit(p, sessionId);
         updateLive(p, sessionId, working(liveOf(sessionId).currentTool));
         return;
       }
       case "turn.started":
-        dropStaleRateLimit(p, session);
+        dropCarriedRateLimit(p, sessionId);
         // claude 自己开了一轮（后台任务完成等）：和写进去的消息开始处理一样显示在处理
         updateLive(p, sessionId, (l) => {
           clearStreaming(l);
@@ -405,7 +396,10 @@ export function createLedgerMessages(
           else if (event.ok || endedWithReply(sessionId, id)) transition(p, id, "replied");
           else transition(p, id, "failed", reason);
         }
-        updateLive(p, sessionId, idle);
+        updateLive(p, sessionId, (l) => {
+          idle(l);
+          l.rateLimitReported = false;
+        });
         return;
       }
       case "background.changed":
@@ -416,6 +410,7 @@ export function createLedgerMessages(
       case "rate_limit":
         updateLive(p, sessionId, (l) => {
           l.rateLimit = event.info;
+          l.rateLimitReported = true;
         });
         return;
       case "api_retry":
@@ -432,6 +427,7 @@ export function createLedgerMessages(
         updateLive(p, sessionId, (l) => {
           idle(l);
           l.backgroundTasks = undefined;
+          l.rateLimitReported = false;
         });
         return;
       }

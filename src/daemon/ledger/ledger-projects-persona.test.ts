@@ -591,8 +591,9 @@ describe("厂商、模型、思考程度（资料页的 Agent 一栏）", () => 
     expect(sessionRow(lin.sessionId)).toMatchObject({ model: "haiku", effort: "low", hasCompletedTurn: false, updatedAt: 3_000 });
     expect(sessionRow(zhou.sessionId)).toMatchObject({ model: null, effort: null });
     expect(messagesIn(lin.conversationId).at(-1)!.text).toBe("你改了小林的设置（模型：默认 → Haiku，思考程度：默认 → low）");
-    expect(changes.map((c) => c.type)).toEqual(["pm.updated", "message.created"]);
+    expect(changes.map((c) => c.type)).toEqual(["pm.updated", "message.created", "session.status"]);
     expect(changes[0]).toMatchObject({ data: { pm: { id: lin.pmId, vendor: "claude", defaultModel: "haiku", effort: "low" } } });
+    expect(changes[2]).toMatchObject({ data: { session: { sessionId: lin.sessionId, model: "haiku", effort: "low" } } });
     // 不登记重启动作：下一条消息前驱动层自己重启
     expect(enqueued).toEqual([]);
   });

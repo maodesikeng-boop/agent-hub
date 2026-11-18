@@ -153,7 +153,7 @@ export function createLedgerPersona(
   hooks: PersonaHandoverHooks = {},
 ) {
   const { db, now, write } = ctx;
-  const { insertSession } = sessions;
+  const { insertSession, dropRateLimitRejection, updateLive } = sessions;
   const { insertSystemMessage } = messages;
   const { pmHomeRoot, personasDir, pmMemoryDir, pmMemoryFallbackDir, writeFile } = files;
   const subfilesRoot = pmMemoryDir ?? pmMemoryFallbackDir;
@@ -332,13 +332,18 @@ export function createLedgerPersona(
         pm.id,
       );
       if (agentChanged) {
-        db.run(
-          "UPDATE agent_sessions SET model = ?, effort = ?, updated_at = ? WHERE pm_id = ? AND role = 'pm'",
+        const changed = db.all<{ id: SessionId }>(
+          "UPDATE agent_sessions SET model = ?, effort = ?, updated_at = ? WHERE pm_id = ? AND role = 'pm' AND status != 'ended' RETURNING id",
           next.agent.model,
           next.agent.effort,
           t,
           pm.id,
         );
+        for (const { id } of changed) {
+          // 旧模型报的额度用完不算新模型的，不撤的话 rateLimitWaitMs 按旧的恢复时间一直压着新消息
+          if (next.agent.model !== agentBefore.model) dropRateLimitRejection(p, id);
+          updateLive(p, id, () => {});
+        }
       }
       if (conversationId !== undefined) hooks.clearVendorSwitchIn?.(conversationId);
     }
