@@ -429,13 +429,13 @@ export function createLedgerRouter(
       .map((row) => ({ id: row.id, question: row.question ?? "" }));
 
   /** 用户在对话里的提问卡上点选项、填写：按卡上那条 ask 消息找到卡，只回答这一张（同 resolveItem，别的卡不动）。 */
-  const answerAsk = (askMessageId: MessageId, input: ResolveRouterItemRequest): ResolveRouterItemResponse => {
+  const answerAsk = (askMessageId: MessageId, input: ResolveRouterItemRequest, onDecisionWritten?: () => void): ResolveRouterItemResponse => {
     const row = db.get<{ id: number }>(
       "SELECT id FROM router_items WHERE ask_message_id = ? AND kind = 'decision' ORDER BY id DESC LIMIT 1",
       askMessageId,
     );
     if (row === undefined) throw fail("not_found", "这张卡不在了");
-    return resolveItem(row.id, input);
+    return resolveItem(row.id, input, onDecisionWritten);
   };
 
   /** hub ask close：项目经理关掉自己名下一张还在等的卡（用户在对话里打字答了、没点卡，或问题过时了）。 */
@@ -522,7 +522,7 @@ export function createLedgerRouter(
   };
 
   /** POST /api/router/items/:id/resolve：拍板决策卡或归档单条汇报。 */
-  const resolveItem = (itemId: RouterItemId, input: ResolveRouterItemRequest): ResolveRouterItemResponse =>
+  const resolveItem = (itemId: RouterItemId, input: ResolveRouterItemRequest, onDecisionWritten?: () => void): ResolveRouterItemResponse =>
     write((p) => {
       const row = getItemRow(itemId);
       if (row === undefined) throw fail("not_found", `没有编号 ${itemId} 的总助事项`);
@@ -619,6 +619,7 @@ export function createLedgerRouter(
       const updated = toRouterItem(getItemRow(row.id)!);
       p.changes.push({ type: "router.item.updated", data: { item: updated } });
       appendAuditIn("user", "router.decision.resolve", row.pm_id, row.id, { chosenIndex, clientId });
+      onDecisionWritten?.();
       return { item: updated, messageId: wakeMsg.id };
     });
 
@@ -1411,6 +1412,10 @@ export function createLedgerRouter(
     closeAskIn,
     reportIn,
     resolveItem,
+    getItem: (id: RouterItemId) => {
+      const row = getItemRow(id);
+      return row === undefined ? null : toRouterItem(row);
+    },
     archiveAllReports,
     updateSettings,
     getSettings,

@@ -3496,6 +3496,7 @@ export function createLedgerTaskGraphs(
     graphId: TaskGraphId,
     rawNodeKey: TaskNodeKey,
     input: DecideTaskNodeRequest,
+    onDecisionWritten?: () => void,
   ): DecideTaskNodeResponse =>
     write((p) => {
       const clientId = input.clientId.trim();
@@ -3567,6 +3568,7 @@ export function createLedgerTaskGraphs(
         decidedBy: "user",
         clientId,
       });
+      onDecisionWritten?.();
       return { graph: res.graph, messageId: res.messageId };
     });
 

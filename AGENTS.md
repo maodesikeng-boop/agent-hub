@@ -57,6 +57,7 @@
 - `@decimalturn/toml-patch`：保留注释与格式的 TOML 解析与局部补丁（`src/vendors/_common/sync/toml.ts`）。
 - `write-file-atomic`（npm 官方）：同目录临时文件 + fsync + rename 原子替换用户配置，目标是软链时替换真实文件、沿用原权限属主（`daemon/vendor-sync/backup.ts`）。
 - `@microsoft/mxc-sdk`（微软官方）：Windows 11 24H2+ 只读 Worker 的 MXC ProcessContainer 探测与只读容器执行，低版本 Windows 自动平滑回退写受限令牌（`daemon/platform/win32/mxc-readonly.ts`、`daemon/platform/win32/mxc-runner.ts`）。
+- `@larksuiteoapi/node-sdk`（飞书官方）：接入飞书的开放接口、长连接事件与卡片回调、扫码一键建应用 `registerApp`、消息正文 `normalize`；整个仓库只在 `daemon/feishu/sdk.ts` 引它，别处只认 `daemon/feishu/transport.ts` 的接口（docs/feishu-design.md）。
 - `unified` + `remark-parse` + `remark-gfm`：解析 Markdown（`sent-files.ts`）。
 - 数据库用 Node 自带的 `node:sqlite`（`store/`），不是第三方库；Skill 逐项软链同步直接用 Node 自带的 `node:fs`（`src/vendors/_common/sync/skills.ts`）。
 
@@ -67,7 +68,7 @@
 - `tailwindcss` + `@tailwindcss/vite`：样式（`styles.css`）。
 - `lucide-react`：图标（`App.tsx`、`components/Attachments.tsx`）。
 - `clsx` + `tailwind-merge`：合并 class，包成 `cn()`（`lib/utils.ts`）。`class-variance-authority`：按钮变体（`ui/button.tsx`）。
-- `qrcode-generator`：二维码（`components/QrCode.tsx`）。
+- `qrcode-generator`：二维码（`components/QrCode.tsx`；飞书终端命令 `src/feishu/main.ts` 在终端里画扫码二维码）。
 - 消息渲染：`react-markdown`、`remark-gfm`、`remark-breaks`、`remark-cjk-friendly`、`remark-cjk-friendly-gfm-strikethrough`（`components/Markdown.tsx`）。
 - 代码高亮：`shiki`（`highlight.ts`）。
 - 图表：`mermaid`、`vega`、`vega-lite`、`vega-embed`、`vega-interpreter`（`charts/`）；`dompurify` 清洗 mermaid 输出（`charts/mermaid-theme.ts`）。

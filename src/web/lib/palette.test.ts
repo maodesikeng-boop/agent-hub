@@ -1,19 +1,16 @@
 // 项目经理的颜色表（docs/ui-standard.md 第 4 条）：头像颜色和强调色共用一份，强调色按 WCAG 2.x AA 的文字对比度 4.5:1 配好。
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { PM_FRUITS, pmFruitOf } from "../../shared/fruits.ts";
 import { accentStyle, CHART_CATEGORY_COLORS, contrastRatio, PALETTE, paletteOf } from "./palette.ts";
 
 const WHITE = "#ffffff";
 
 describe("颜色表", () => {
-  it("有 8 种水果配色，名字、fruit 标识、切片与果瓣素材、主色、强调色都不重复", () => {
-    expect(PALETTE).toHaveLength(8);
-    expect(new Set(PALETTE.map((c) => c.name)).size).toBe(8);
-    expect(new Set(PALETTE.map((c) => c.fruit)).size).toBe(8);
-    expect(new Set(PALETTE.map((c) => c.slice)).size).toBe(8);
-    expect(new Set(PALETTE.map((c) => c.wedge)).size).toBe(8);
-    expect(new Set(PALETTE.map((c) => c.blob)).size).toBe(8);
-    expect(new Set(PALETTE.map((c) => c.accent)).size).toBe(8);
+  it("顺序和 shared/fruits.ts 的 PM_FRUITS 一样；名字、fruit 标识、切片与果瓣素材、主色、强调色都不重复", () => {
+    const n = PM_FRUITS.length;
+    expect(PALETTE.map((c) => c.fruit)).toEqual([...PM_FRUITS]);
+    for (const key of ["name", "fruit", "slice", "wedge", "blob", "accent"] as const) expect(new Set(PALETTE.map((c) => c[key])).size).toBe(n);
   });
 
   it.each(PALETTE.map((c) => [c.name, c] as const))("%s：强调色上的文字、白底上的链接和状态词，对比度都 ≥ 4.5:1（WCAG 1.4.3 AA）", (_name, c) => {
@@ -25,11 +22,14 @@ describe("颜色表", () => {
     expect(contrastRatio(c.accentForeground, darken(c.accent, 0.9))).toBeGreaterThanOrEqual(4.5);
   });
 
-  it("按 key 轮着取，负数和超过 8 的都能取到", () => {
+  it("按 key 轮着取，负数和超过水果个数的都能取到", () => {
+    const n = PALETTE.length;
     expect(paletteOf(0)).toBe(PALETTE[0]);
-    expect(paletteOf(8)).toBe(PALETTE[0]);
-    expect(paletteOf(9)).toBe(PALETTE[1]);
+    expect(paletteOf(n)).toBe(PALETTE[0]);
+    expect(paletteOf(n + 1)).toBe(PALETTE[1]);
     expect(paletteOf(-1)).toBe(PALETTE[1]);
+    // 飞书群头像按 pmFruitOf 取（daemon/feishu/avatars.ts），和网页头像是同一个水果
+    for (let key = 0; key <= n * 2; key++) expect(paletteOf(key).fruit).toBe(pmFruitOf(key));
   });
 
   it("accentStyle：换 key，--primary 和 --primary-foreground 跟着换", () => {
@@ -93,7 +93,7 @@ describe("次要文字和状态字的对比度（styles.css 的 --muted-foregrou
   const token = (name: string) => new RegExp(`\\n  --${name}: (#[0-9a-f]{6});`).exec(css)![1]!;
   const mixOf = (name: string) => Number(new RegExp(`--mix-${name}: ([0-9.]+)%;`).exec(css)?.[1]);
   const JELLY_PERCENT = 10;
-  /** 次要文字会压在上面的每一种底：中性的几种，加上 8 种水果各自的左栏底、对话区底，以及盖在它们上面的选中果冻底。 */
+  /** 次要文字会压在上面的每一种底：中性的几种，加上每种水果各自的左栏底、对话区底，以及盖在它们上面的选中果冻底。 */
   const surfaces = (): Array<[string, string]> => {
     const list: Array<[string, string]> = ["background", "sidebar", "sidebar-active", "sidebar-hover", "muted", "bubble-agent"].map((name) => [name, token(name)]);
     for (const c of PALETTE) {

@@ -107,6 +107,9 @@ import type { FolderPicker } from "./pick-folder.ts";
 import { defaultDeviceName, loadOrCreateDevice, saveDevice } from "./device.ts";
 import { createPeers, type Peers } from "./peers/index.ts";
 import { createPushService } from "./push/index.ts";
+import { FEISHU_AVATARS_DIR } from "./feishu/avatars.ts";
+import { createFeishuService, type FeishuService } from "./feishu/service.ts";
+import { createFeishuStore } from "./feishu/store.ts";
 import {
   createLocalTargetPort,
   createRouterDispatcher,
@@ -219,6 +222,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     commands?: CommandCatalogs;
     routerDispatcher?: RouterDispatcher;
     routerTargetRegistry?: RouterTargetRegistry;
+    feishu?: FeishuService;
     sandboxGuard?: RouterSandboxGuard;
     ui?: RunningUiServer;
     peers?: Peers;
@@ -266,6 +270,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     parts.stopFileCleanup?.();
     parts.stopWorkerRetention?.();
     if (setup) await step("准备命令", () => setup.shutdown());
+    if (parts.feishu) await step("飞书", () => parts.feishu!.close());
     if (parts.routerDispatcher) await step("总助分派引擎", () => parts.routerDispatcher!.close());
     if (executor) {
       await step("执行器", async () => {
@@ -666,7 +671,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     purgeArchivedPms();
     parts.archiveCleanup = setInterval(purgeArchivedPms, PM_ARCHIVE_CLEANUP_INTERVAL_MS);
     // 已收工 Worker 满保留期：清它们的对话（消息、步骤日志等），再把空出来的页还给文件系统（db-retention.ts）；启动时先来一轮
-    parts.stopWorkerRetention = startWorkerRetention({ ledger, db, log });
+    parts.stopWorkerRetention = startWorkerRetention({ ledger, db, feishuPosts: createFeishuStore(db), log });
     // 已收工 Worker 的 worktree：启动时先清一轮，之后每 WORKTREE_CLEANUP_INTERVAL_MS 清一轮（分支保留）
     parts.worktreeCleanup = startWorktreeCleanup({
       ledger,
@@ -826,6 +831,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
           }
         },
         service: tunnel,
+        feishu: () => parts.feishu?.setup,
         ...(options.onExternalShutdown ? { onShutdown: options.onExternalShutdown } : {}),
         log: (line) => log(`${LOG_PREFIX} ${line}`),
       });
@@ -864,6 +870,22 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       },
     });
     parts.routerDispatcher = routerDispatcher;
+    // 飞书（docs/feishu-design.md）：和推送提醒一样订阅账本往外投影；凭证在 state/feishu-secrets.json，没配过就只订阅不连。
+    // 连不上、凭证失效只记日志和状态，不影响网页和 agent
+    const feishu = createFeishuService({
+      db,
+      ledger,
+      router: routerDispatcher,
+      models,
+      secretsFile: paths.feishuSecretsFile,
+      uploadsDir,
+      sentFilesDir,
+      avatarsDir: FEISHU_AVATARS_DIR,
+      device,
+      log: (line) => log(`${LOG_PREFIX} ${line}`),
+    });
+    parts.feishu = feishu;
+    await feishu.start();
     // 空闲排空热重启：有外壳监管（entry.ts 给了 onSelfReload）才建；带 --build 时网页构建到暂存目录，重启前才换上线
     if (options.onSelfReload) {
       const onSelfReload = options.onSelfReload;
@@ -914,6 +936,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       push,
       peers,
       tunnel,
+      feishu: feishu.setup,
       routerDispatcher,
       routerLocalPort,
       ...(parts.selfReload ? { selfReload: parts.selfReload } : {}),

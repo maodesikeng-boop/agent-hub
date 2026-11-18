@@ -72,6 +72,10 @@ export interface SqliteLedger extends Ledger {
   createRouterCommand: LedgerRouter["createCommand"];
   updateRouterCommand: LedgerRouter["updateCommand"];
   getRouterCommand: LedgerRouter["getCommand"];
+  getRouterItem: LedgerRouter["getItem"];
+  resolveRouterItem: LedgerRouter["resolveItem"];
+  answerAsk: LedgerRouter["answerAsk"];
+  decideTaskNode: ReturnType<typeof createLedgerTaskGraphs>["decideNode"];
   listRouterCommands: LedgerRouter["listCommands"];
   createRouterAssistantSession: LedgerRouter["createAssistantSession"];
   endRouterAssistantSession: LedgerRouter["endAssistantSession"];
@@ -304,6 +308,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     },
 
     messagesBefore: messages.messagesBefore,
+    messagesAfter: messages.messagesAfter,
     lookupConversations: snapshotQueries.lookupConversations,
     endedWorkersPage: snapshotQueries.endedWorkersPage,
 
@@ -471,6 +476,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     createRouterCommand: router.createCommand,
     updateRouterCommand: router.updateCommand,
     getRouterCommand: router.getCommand,
+    getRouterItem: router.getItem,
     listRouterCommands: router.listCommands,
     createRouterAssistantSession: router.createAssistantSession,
     endRouterAssistantSession: router.endAssistantSession,

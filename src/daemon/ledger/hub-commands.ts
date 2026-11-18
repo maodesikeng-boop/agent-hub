@@ -4,6 +4,7 @@
 import { z } from "zod";
 import { PM_MODE_LABELS, validateAskOptions } from "../../shared/domain.ts";
 import type { AgentSessionRow, PmId, PmMode, SessionId } from "../../shared/domain.ts";
+import { feishuGuestTurnBlockReason, feishuOriginOf } from "../../shared/feishu.ts";
 import { ASK_CARD_TELL_USER, ASK_CARD_WHERE, hubCommandAllowed } from "../../shared/hub.ts";
 import type { HubArgs, HubCommand, HubResult, HubVendorModels, ProjectCard } from "../../shared/hub.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
@@ -349,6 +350,23 @@ export function createLedgerHubCommands(
   };
 
   /**
+   * 飞书群里访客的话触发的这一轮（docs/feishu-design.md「访客权限」）：项目经理手上正在处理（已送达、处理中）的用户消息里
+   * 有访客说的，就按那条的档位查 FEISHU_GUEST_BLOCKED_HUB_COMMANDS；中途插进来的访客消息也算（宁可多拦一次）。
+   */
+  const guestTurnBlockReason = (session: AgentSessionRow, command: HubCommand): string | null => {
+    const rows = db.all<{ meta: string | null }>(
+      // 部分索引 messages_in_flight（迁移 0034）只收在途的几行；没有统计信息时查询规划会挑 messages_session 扫全会话，所以点名用它
+      "SELECT meta FROM messages INDEXED BY messages_in_flight WHERE session_id = ? AND status IN ('delivered', 'processing') AND sender = 'user' AND meta IS NOT NULL",
+      session.id,
+    );
+    for (const row of rows) {
+      const reason = feishuGuestTurnBlockReason(command, feishuOriginOf({ meta: JSON.parse(row.meta!) as Record<string, unknown> }));
+      if (reason !== null) return reason;
+    }
+    return null;
+  };
+
+  /**
    * 认人、按角色放行（HUB_COMMAND_ROLES），再分派。项目经理的会话要有 pm_id；Worker 的会话要有 worker_id，
    * 而且只能用 status（m3-plan 第 2.1 节）。别的会话（总助、数据不一致的）一律 forbidden。
    */
@@ -371,6 +389,8 @@ export function createLedgerHubCommands(
     }
     const caller = pmSession(session.id);
     if (caller === null) throw fail("forbidden", "这个会话不是项目经理的会话，不能用 hub");
+    const guestBlock = guestTurnBlockReason(session, command);
+    if (guestBlock !== null) throw fail("forbidden", guestBlock);
     return runHub(p, caller, command, args, context);
   };
 

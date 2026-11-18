@@ -22,6 +22,7 @@ import type {
   UpdateRouterSettingsRequest,
 } from "./api.ts";
 import type { Attachment } from "./attachments.ts";
+import type { FeishuMessageOrigin } from "./feishu.ts";
 import type { DriverEvent } from "./driver.ts";
 import type { AnyActionRow, ReviewVerifyParams } from "./actions.ts";
 import type {
@@ -123,6 +124,8 @@ export interface PostUserMessageInput {
   attachments?: Attachment[];
   /** 输入框指定的派 Worker 的厂商、模型、思考程度（形状界面服务已校验）；写进 meta.workerPick。只能用在项目经理的对话里，别的对话 → LedgerRequestError("invalid")。 */
   workerPick?: WorkerPick;
+  /** 从飞书来的（daemon/feishu/）：谁在哪种群里说的、带着的背景；写进 meta.origin，发给 agent 时加署名和背景（deliveryParts）。网页发的没有。 */
+  origin?: FeishuMessageOrigin;
 }
 
 export interface PostUserMessageResult {
@@ -399,6 +402,8 @@ export interface Ledger extends LedgerHandoverWork {
    * 含 Worker 的对话（kind worker）和会话：网页左栏不显示，点项目经理对话里那一行打开。
    */
   snapshot(): LedgerSnapshot;
+  /** 编号大于 after 的消息，从小到大，最多 limit 条（飞书断线补发用）。对话不存在抛 ConversationNotFoundError。 */
+  messagesAfter(conversationId: ConversationId, after: MessageId, limit: number): Message[];
   /** 更早的 100 条（before 之前，从小到大）。对话不存在（包括老的项目群）抛 ConversationNotFoundError。 */
   messagesBefore(conversationId: ConversationId, before: MessageId): MessagesPage;
   /** 不在快照里的对话（早收工的 Worker）按对话编号、Worker 编号单拉，形状同快照；各最多 CONVERSATION_LOOKUP_MAX_IDS 个，多的不查。 */

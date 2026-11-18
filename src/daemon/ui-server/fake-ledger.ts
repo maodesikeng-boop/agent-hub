@@ -570,6 +570,7 @@ export class FakeLedger {
       composerTarget: unused("composerTarget"),
       snapshot: () => this.snapshot(),
       messagesBefore: (c, b) => this.messagesBefore(c, b),
+      messagesAfter: unused("messagesAfter"),
       lookupConversations: (q) => this.lookupConversations(q),
       endedWorkersPage: (p, b) => this.endedWorkersPage(p, b),
       changesSince: (s) => this.changesSince(s),

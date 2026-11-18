@@ -7,9 +7,14 @@
 //   GET  /tunnel/status                               → { status }
 //   POST /tunnel/slots         { name, publicKey }    → { port, entryPort, invite, expiresAt }
 //   POST /tunnel/slots/remove  { name }               → { removed: { port } | null }
+// 飞书终端命令（src/feishu/）也走这里，守护进程那一半是 daemon/feishu/setup.ts，和网页接口同一份：
+//   GET  /feishu/status | POST /feishu/registration | DELETE /feishu/registration | PUT /feishu/credentials
+//   POST /feishu/bind-code | PUT /feishu/policy { pmId, triggerMode?, guestTier? } | POST /feishu/resync | POST /feishu/disconnect
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { TUNNEL_ADMIN_MAX_BODY_BYTES } from "../../shared/limits.ts";
 import { listenOnRunSocket } from "../run-socket.ts";
+import { z } from "zod";
+import { FeishuSetupError, feishuChatPolicyBodySchema, feishuCredentialsSchema, feishuDisconnectSchema, type FeishuSetupService } from "../feishu/setup.ts";
 import { TunnelInputError, type TunnelService } from "./service.ts";
 
 export interface TunnelAdminOptions {
@@ -18,6 +23,8 @@ export interface TunnelAdminOptions {
   /** 认令牌：Authorization: Bearer <令牌>。 */
   authorize(token: string): boolean;
   service: Pick<TunnelService, "ensureKey" | "connect" | "status" | "addSlot" | "removeSlot">;
+  /** 飞书设置（守护进程起好飞书通道后才有，所以是函数）；没开飞书时 /feishu/* 回 400。 */
+  feishu?: () => FeishuSetupService | undefined;
   /** 桌面外壳经本机管理端点优雅关机（Windows 下替代外部无法送达的 SIGTERM）。 */
   onShutdown?: () => void;
   log?: (line: string) => void;
@@ -66,6 +73,29 @@ const str = (body: Record<string, unknown>, key: string): string => {
   return value;
 };
 
+const feishuPolicySchema = z.object({ pmId: z.number().int().positive() }).passthrough();
+
+function feishuRoutes(get: () => FeishuSetupService | undefined): Record<string, (body: Record<string, unknown>) => Promise<unknown> | unknown> {
+  const feishu = (): FeishuSetupService => {
+    const service = get();
+    if (service === undefined) throw new FeishuSetupError("守护进程没开飞书");
+    return service;
+  };
+  return {
+    "GET /feishu/status": () => feishu().status(),
+    "POST /feishu/registration": () => feishu().startRegistration(),
+    "DELETE /feishu/registration": () => feishu().cancelRegistration(),
+    "PUT /feishu/credentials": (body) => feishu().saveCredentials(feishuCredentialsSchema.parse(body)),
+    "POST /feishu/bind-code": () => feishu().issueBindCode(),
+    "PUT /feishu/policy": (body) => {
+      const { pmId, ...rest } = feishuPolicySchema.parse(body);
+      return feishu().setChatPolicy({ pmId, ...feishuChatPolicyBodySchema.parse(rest) });
+    },
+    "POST /feishu/resync": () => feishu().resync(),
+    "POST /feishu/disconnect": (body) => feishu().disconnect(feishuDisconnectSchema.parse(body)),
+  };
+}
+
 export async function startTunnelAdmin(opts: TunnelAdminOptions): Promise<RunningTunnelAdmin> {
   const { service } = opts;
   const routes: Record<string, (body: Record<string, unknown>) => Promise<unknown> | unknown> = {
@@ -74,6 +104,7 @@ export async function startTunnelAdmin(opts: TunnelAdminOptions): Promise<Runnin
     "GET /tunnel/status": () => ({ status: service.status() }),
     "POST /tunnel/slots": (body) => service.addSlot({ name: str(body, "name"), publicKey: str(body, "publicKey") }),
     "POST /tunnel/slots/remove": (body) => ({ removed: service.removeSlot(str(body, "name")) }),
+    ...feishuRoutes(() => opts.feishu?.()),
     "POST /admin/shutdown": () => {
       if (opts.onShutdown) setImmediate(() => opts.onShutdown?.());
       return { ok: true };
@@ -91,7 +122,8 @@ export async function startTunnelAdmin(opts: TunnelAdminOptions): Promise<Runnin
       if (route === undefined) return send(res, 404, { error: "守护进程没有这个接口（两边代码版本不一样？）" });
       send(res, 200, await route(await readBody(req)));
     } catch (error) {
-      if (error instanceof BadRequest || error instanceof TunnelInputError) return send(res, 400, { error: error.message });
+      if (error instanceof BadRequest || error instanceof TunnelInputError || error instanceof FeishuSetupError) return send(res, 400, { error: error.message });
+      if (error instanceof z.ZodError) return send(res, 400, { error: error.issues[0]?.message ?? "参数不对" });
       opts.log?.(`隧道管理接口出错：${error instanceof Error ? error.message : String(error)}`);
       send(res, 500, { error: `守护进程出错：${error instanceof Error ? error.message : String(error)}` });
     }

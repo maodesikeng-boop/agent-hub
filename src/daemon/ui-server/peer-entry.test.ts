@@ -132,6 +132,20 @@ describe.skipIf(process.platform === "win32")("设备入口：unix socket（连�
     }
   });
 
+  it("飞书设置接口只在本机网页上用：设备令牌访问 /api/feishu/* 一律 403 forbidden_peer", async () => {
+    const { at } = await setup();
+    for (const [method, path] of [
+      ["GET", API_PATHS.feishu],
+      ["POST", API_PATHS.feishuRegistration],
+      ["PUT", API_PATHS.feishuCredentials],
+      ["PUT", API_PATHS.feishuChatPolicy(1)],
+      ["POST", API_PATHS.feishuDisconnect],
+    ] as const) {
+      const res = await send(at, method, path, deviceAuth, method === "GET" ? undefined : {});
+      expect([method, path, res.status, JSON.parse(res.body).code]).toEqual([method, path, 403, "forbidden_peer"]);
+    }
+  });
+
   it("设备令牌 GET /api/state → 200，不查 Host、Origin；算不是本机，不出 Finder 按钮", async () => {
     const { d, at } = await setup();
     const res = await send(at, "GET", API_PATHS.state, { ...deviceAuth, host: "evil.example", origin: "https://evil.example" });

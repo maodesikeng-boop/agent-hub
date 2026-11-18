@@ -32,6 +32,8 @@ export interface HubPaths {
   uiTokenFile: string;
   /** state/provider-secrets.json：界面内填写的受管厂商 API Key / Token，权限 0600，只读 Worker 沙箱显式禁读。 */
   providerSecretsFile: string;
+  /** state/feishu-secrets.json：飞书应用的 App ID 和 App Secret（daemon/feishu/secrets.ts），0600，只读 Worker 沙箱显式禁读。 */
+  feishuSecretsFile: string;
   /** state/device.json：这台设备的身份 { id, name }（联机，daemon/device.ts），第一次启动生成，之后不变。 */
   deviceFile: string;
   /** state/push-vapid.json：Web Push 的 VAPID 密钥对（联机 P4，daemon/push/vapid.ts），0600，第一次启动生成，不进仓库。 */
@@ -154,6 +156,7 @@ export function resolveHubPaths(
     childProcessesFile: joinForBase(stateDir, "child-processes.json"),
     uiTokenFile: joinForBase(stateDir, "ui-token"),
     providerSecretsFile: joinForBase(stateDir, "provider-secrets.json"),
+    feishuSecretsFile: joinForBase(stateDir, "feishu-secrets.json"),
     deviceFile: joinForBase(stateDir, "device.json"),
     pushVapidFile: joinForBase(stateDir, "push-vapid.json"),
     pushSubscriptionsFile: joinForBase(stateDir, "push-subscriptions.json"),

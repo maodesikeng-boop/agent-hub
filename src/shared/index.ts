@@ -7,6 +7,8 @@ export * from "./decisions.ts";
 export * from "./deliverables.ts";
 export * from "./domain.ts";
 export * from "./driver.ts";
+export * from "./feishu.ts";
+export * from "./fruits.ts";
 export * from "./handover.ts";
 export * from "./hub.ts";
 export * from "./ledger.ts";

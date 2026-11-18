@@ -167,6 +167,13 @@ import { LOGIN_LINK_FRAGMENT_KEY, LOGIN_LINK_PAGE } from "./login-page.ts";
 import { funnelCommandFor, loadPublicEntryConfig, normalizePublicHostname, savePublicEntryConfig, type PublicEntryConfig } from "./public-entry.ts";
 import { createPublicAuthRateLimiter, extractPublicClientIp } from "./public-rate-limit.ts";
 import { createBrowserSessions, createLoginLinks } from "./sessions.ts";
+import {
+  FeishuSetupError,
+  feishuChatPolicyBodySchema,
+  feishuCredentialsSchema,
+  feishuDisconnectSchema,
+  type FeishuSetupService,
+} from "../feishu/setup.ts";
 import { UI_TOKEN_PATTERN, newUiToken } from "./token.ts";
 import {
   RouterTargetError,
@@ -226,6 +233,8 @@ export interface UiServerOptions {
     unsubscribe(endpoint: string): void;
     presence: PresenceBoard;
   };
+  /** 飞书（docs/feishu-design.md，daemon/feishu/）：设置接口 /api/feishu/*，和终端命令共用一份。不给 = 这些接口回 unavailable。 */
+  feishu?: FeishuSetupService;
   /** serve 转发到哪（daemon/platform/tailscale.ts）：unix 时 tailnet 名字只在 serve 的 socket 上认，TCP 端口只认本机。默认 tcp。 */
   serveTarget?: ServeTargetKind;
   /**
@@ -1154,7 +1163,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     if (isUpgrade(req)) req.raw.socket.destroy();
   });
 
-  app.setErrorHandler((err: FastifyError | ConversationNotFoundError | LedgerRequestError | RouterTargetError | UploadError | PickFolderError | TunnelInputError | ProviderRequestError, req, reply) => {
+  app.setErrorHandler((err: FastifyError | ConversationNotFoundError | LedgerRequestError | RouterTargetError | UploadError | PickFolderError | TunnelInputError | ProviderRequestError | FeishuSetupError, req, reply) => {
     const reason = err.message;
     if (err instanceof PickFolderError) return fail(reply, codeOfStatus(err.statusCode), reason);
     if (err instanceof ProviderRequestError) return fail(reply, codeOfStatus(err.statusCode), reason);
@@ -1173,6 +1182,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       return fail(reply, apiCode, reason);
     }
     if (err instanceof TunnelInputError) return fail(reply, "invalid", reason);
+    if (err instanceof FeishuSetupError) return fail(reply, "invalid", reason);
     const status = (err as FastifyError).statusCode;
     // 上传超过 MAX_UPLOAD_BYTES：Fastify 在收完之前就拒了，原因是英文；换成中文（别的接口 413 走默认中文）
     if (status === 413) {
@@ -1949,6 +1959,64 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
         return reply.code(204).send();
       });
     }
+
+    // 飞书设置（docs/feishu-design.md）：只在本机网页上配，别的设备经设备令牌转过来的一律 forbidden_peer
+    const feishuOf = (req: FastifyRequest, reply: FastifyReply): FeishuSetupService | null => {
+      if (peerOf(req) !== undefined) {
+        fail(reply, "forbidden_peer");
+        return null;
+      }
+      if (opts.feishu === undefined) {
+        fail(reply, "unavailable", "这台没开飞书");
+        return null;
+      }
+      return opts.feishu;
+    };
+    routes.get(API_PATHS.feishu, async (req, reply) => {
+      const feishu = feishuOf(req, reply);
+      return feishu === null ? reply : feishu.status();
+    });
+    routes.post(API_PATHS.feishuRegistration, async (req, reply) => {
+      const feishu = feishuOf(req, reply);
+      if (feishu === null) return reply;
+      parseWithSchema(emptyObjectBodySchema, req.body ?? {});
+      return feishu.startRegistration();
+    });
+    routes.delete(API_PATHS.feishuRegistration, async (req, reply) => {
+      const feishu = feishuOf(req, reply);
+      return feishu === null ? reply : feishu.cancelRegistration();
+    });
+    routes.put(API_PATHS.feishuCredentials, async (req, reply) => {
+      const feishu = feishuOf(req, reply);
+      if (feishu === null) return reply;
+      const body = parseWithSchema(feishuCredentialsSchema, req.body);
+      return feishu.saveCredentials(body);
+    });
+    routes.post(API_PATHS.feishuBindCode, async (req, reply) => {
+      const feishu = feishuOf(req, reply);
+      if (feishu === null) return reply;
+      parseWithSchema(emptyObjectBodySchema, req.body ?? {});
+      return feishu.issueBindCode();
+    });
+    routes.put("/api/feishu/chats/:pmId/policy", async (req, reply) => {
+      const feishu = feishuOf(req, reply);
+      if (feishu === null) return reply;
+      const pmId = parseId((req.params as { pmId?: unknown }).pmId, "pm id");
+      const body = parseWithSchema(feishuChatPolicyBodySchema, req.body);
+      return feishu.setChatPolicy({ pmId, ...body });
+    });
+    routes.post(API_PATHS.feishuResync, async (req, reply) => {
+      const feishu = feishuOf(req, reply);
+      if (feishu === null) return reply;
+      parseWithSchema(emptyObjectBodySchema, req.body ?? {});
+      return feishu.resync();
+    });
+    routes.post(API_PATHS.feishuDisconnect, async (req, reply) => {
+      const feishu = feishuOf(req, reply);
+      if (feishu === null) return reply;
+      const body = parseWithSchema(feishuDisconnectSchema, req.body);
+      return feishu.disconnect(body);
+    });
 
     routes.get(API_PATHS.ws, { websocket: true }, (socket, req) => {
       // 自己从 URL 取参数：injectWS 造的请求没有 req.query；重复的 since 当作不合法。
