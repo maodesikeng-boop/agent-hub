@@ -1106,11 +1106,17 @@ export const FEISHU_OUTBOUND_QUEUE_MAX = 500;
 /** 建群对齐、断线补发失败后隔多久再试（满载时也靠它从账本补回）。 */
 export const FEISHU_CONTROL_RETRY_MS = 1_000;
 /**
- * 交付文件（图片、视频、文档）走每个群自己的媒体队列，和文字卡片、改卡分开（大文件慢传不挡实时消息）：最多排几件；
- * 上传暂时失败（网络、超时、飞书 5xx）退避重试几次（第 n 次隔 FEISHU_CONTROL_RETRY_MS × 2^n），还不行放弃、记日志。
+ * 附件（图片、视频、文档）在出站队列外面并发预传，最多同时传 FEISHU_UPLOAD_CONCURRENCY 个、在途最多 FEISHU_MEDIA_QUEUE_MAX 个；
+ * 上传暂时失败（网络、超时、飞书 5xx）退避重试几次（第 n 次隔 FEISHU_CONTROL_RETRY_MS × 2^n），还不行在卡上标“没发出去”。
  */
 export const FEISHU_MEDIA_QUEUE_MAX = 200;
 export const FEISHU_MEDIA_RETRY_MAX = 3;
+export const FEISHU_UPLOAD_CONCURRENCY = 3;
+/** 发卡前最多等附件传多久（从开始传算）：传完的图嵌进卡、文件紧跟卡发；没传完的卡上先写 Uploading，传完再补。 */
+export const FEISHU_ATTACH_WAIT_MS = 2_500;
+/** 截图超过这个边长或体积时先缩到最长边 FEISHU_IMAGE_MAX_EDGE 再传（原文件不动）：手机上看足够清楚，传得快。 */
+export const FEISHU_IMAGE_MAX_EDGE = 2_400;
+export const FEISHU_IMAGE_SHRINK_BYTES = 2 * 1024 * 1024;
 /** 调飞书开放接口每次 HTTP 请求的超时；上传图片、文件和下载资源（最大 30 MB）另按 FEISHU_TRANSFER_TIMEOUT_MS。 */
 export const FEISHU_HTTP_TIMEOUT_MS = 30_000;
 export const FEISHU_TRANSFER_TIMEOUT_MS = 180_000;

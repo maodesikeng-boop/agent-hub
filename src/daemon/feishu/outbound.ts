@@ -22,7 +22,7 @@ export type FeishuOutboundIntent =
   | { kind: "sync_chats" }
   /** 项目经理正在写的这一段（内存里的流式预览）。text 是到目前为止的全文。 */
   | { kind: "stream"; conversationId: ConversationId; text: string }
-  /** 项目经理这一轮在干活（调工具、思考、正在停），还没在出正文：status 是一行状态。 */
+  /** 用户发话触发的这一轮在干活（调工具、思考、正在停），还没在出正文：status 是一行状态。 */
   | { kind: "working"; conversationId: ConversationId; status: string }
   /** 一段文字落库了：流式那张卡定稿，没流式过的直接发。 */
   | { kind: "agent_text"; conversationId: ConversationId; message: Message; files: SentFile[] }
@@ -45,13 +45,16 @@ export interface FeishuProjectionContext {
   /** 总助单聊；还没认主人时是 null（认主人后服务按主人 open_id 发第一条，从回包里拿到单聊编号记下）。 */
   routerChat(): FeishuChatBinding | null;
   pmOfConversation(conversationId: ConversationId): PmId | null;
+  /** 这个对话最近一条用户消息是用户打的字（网页或飞书）、还没回完：这一轮是用户在等的那一轮。Worker 汇报、系统唤醒的后台轮次是 false。 */
+  awaitingUser(conversationId: ConversationId): boolean;
 }
 
 /**
  * 后置：按不变量把一条变化变成零个或多个意图：
  * - pm.created / pm.updated / pm.removed → sync_chats；
  * - session.status 只认项目经理的会话（pmId 不为空，Worker、总助的不出）且对话有群：带 streamingText → stream；
- *   没在出正文、activity 是 working / stopping → working（状态行同网页的 describeStep，加省略号）；
+ *   没在出正文、activity 是 working / stopping 且 awaitingUser → working（状态行同网页的 describeStep，加省略号）；
+ *   后台轮次不出 working：等真有正文或挂卡时才建卡，整轮没正文也就没有要撤回的状态卡；
  *   这一轮结束（activity 回到 idle，或 status 是 ended / broken）→ turn_end；
  * - message.created：项目经理的文字消息 → agent_text（带 meta 里的 SentFile）；askOf 不为 null → ask_card；
  *   没有 origin 的用户消息 → mirror_user；其余 → 无；
@@ -71,9 +74,8 @@ export function projectFeishuChange(change: Change, ctx: FeishuProjectionContext
       if (typeof streamingText === "string" && streamingText !== "") return [{ kind: "stream", conversationId, text: streamingText }];
       // 一轮结束看 activity 回到 idle（进程还在，status 仍是 running），或会话结束、坏了
       if (status !== "running" || activity === "idle") return [{ kind: "turn_end", conversationId }];
-      if (activity === "working") return [{ kind: "working", conversationId, status: `${describeStep(step)}…` }];
-      if (activity === "stopping") return [{ kind: "working", conversationId, status: `${STEP_TEXT.stopping}…` }];
-      return [];
+      if ((activity !== "working" && activity !== "stopping") || !ctx.awaitingUser(conversationId)) return [];
+      return [{ kind: "working", conversationId, status: `${activity === "stopping" ? STEP_TEXT.stopping : describeStep(step)}…` }];
     }
     case "message.created":
       return ctx.chatOfConversation(change.data.message.conversationId) === null ? [] : messageIntents(change.data.message);

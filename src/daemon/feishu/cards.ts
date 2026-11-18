@@ -77,6 +77,41 @@ export function decodeFeishuActionValue(raw: unknown): FeishuActionValue | null 
   return parsed.success ? (parsed.data as FeishuActionValue) : null;
 }
 
+/**
+ * 卡片底下挂的一个附件（docs/feishu-design.md「交付与附件」）：传好的图片嵌成 img 元素；还在传的写 Uploading；
+ * 传完补发的文件写已送达；没传上、太大的写一行去网页看。紧跟卡片发出去的文件不进卡片。
+ */
+export type FeishuAttachmentView =
+  | { kind: "image"; name: string; imageKey: string }
+  | { kind: "uploading"; name: string }
+  | { kind: "sent"; name: string }
+  | { kind: "failed"; name: string }
+  | { kind: "too_large"; name: string; bytes: number };
+
+const megabytes = (bytes: number) => `${Math.ceil(bytes / 1024 / 1024)} MB`;
+
+function attachmentLine(view: Exclude<FeishuAttachmentView, { kind: "image" }>): string {
+  switch (view.kind) {
+    case "uploading":
+      return `Uploading ${view.name}…`;
+    case "sent":
+      return `已送达：${view.name}`;
+    case "failed":
+      return `「${view.name}」没发出去，去网页看`;
+    case "too_large":
+      return `「${view.name}」有 ${megabytes(view.bytes)}，超过飞书的上限，去网页看`;
+  }
+}
+
+/** 附件画成的卡片元素：图片按顺序一张一个 img（点开能看大图），其余合成一段灰字。 */
+function attachmentElements(views: readonly FeishuAttachmentView[]): Record<string, unknown>[] {
+  const images = views.flatMap((v) =>
+    v.kind === "image" ? [{ tag: "img", img_key: v.imageKey, alt: plain(v.name), scale_type: "fit_horizontal", preview: true }] : [],
+  );
+  const lines = views.flatMap((v) => (v.kind === "image" ? [] : [attachmentLine(v)]));
+  return lines.length === 0 ? images : [...images, { tag: "markdown", content: lines.join("\n"), text_size: "notation" }];
+}
+
 /** 卡片在飞书里的样子：等拍板、已定案（谁、选了什么、补充说明）、被项目经理关掉或替换。 */
 export type FeishuCardState =
   | { kind: "pending" }
@@ -217,17 +252,22 @@ function pendingElements(ref: FeishuCardRef, ask: AskMeta | null, options: reado
 /**
  * 前置：message 是 askOf(message) 不为 null 的项目经理消息，ask 是它的 meta。
  * 后置：pending 时卡片里有一个表单：“补充说明”输入框和选项按钮（推荐项排第一、标“推荐”），点哪个选项都连同输入框一起回传；
- * 检查点卡是“通过 / 打回”，提醒卡是“已处理”；answered / closed 时没有按钮，写明结论。交付物不放进卡片（files.ts 单独发）。
+ * 检查点卡是“通过 / 打回”，提醒卡是“已处理”；answered / closed 时没有按钮，写明结论。
+ * 交付物按 attachments 挂在正文下面、按钮上面（图片嵌在卡里，别的文件紧跟卡片发）。
  */
-export function renderAskCard(message: Message, ask: AskMeta, state: FeishuCardState): FeishuCardJson {
-  return askCard(message, ask, state, []);
+export function renderAskCard(message: Message, ask: AskMeta, state: FeishuCardState, attachments: readonly FeishuAttachmentView[] = []): FeishuCardJson {
+  return askCard(message, ask, state, attachments, []);
 }
 
-/** 提问卡，正文下面的按钮和说明之后再接 extra（总助单聊里的“打开项目群”）；正文按 fitBody 放。 */
-function askCard(message: Message, ask: AskMeta, state: FeishuCardState, extra: Record<string, unknown>[]): FeishuCardJson {
+/** 提问卡，正文下面挂附件，再是按钮和说明，最后接 extra（总助单聊里的“打开项目群”）；正文按 fitBody 放。 */
+function askCard(message: Message, ask: AskMeta, state: FeishuCardState, attachments: readonly FeishuAttachmentView[], extra: Record<string, unknown>[]): FeishuCardJson {
   const { title, template } = askTitle(ask);
   const ref = feishuCardRefOf(message, ask);
-  const rest = [...(state.kind === "pending" ? pendingElements(ref, ask, feishuAskOptions(ask), ask.recommended) : settledElements(state)), ...extra];
+  const rest = [
+    ...attachmentElements(attachments),
+    ...(state.kind === "pending" ? pendingElements(ref, ask, feishuAskOptions(ask), ask.recommended) : settledElements(state)),
+    ...extra,
+  ];
   return fitBody(message.text, (body) => card({ title, template, summary: message.text, elements: [markdown(body), ...rest] }));
 }
 
@@ -248,7 +288,7 @@ export function renderRouterItem(
   if (item.kind === "report") {
     return fitBody(item.summary, (body) => card({ title: "简报", template: "turquoise", summary: item.summary, elements: [markdown(body), ...openChat] }));
   }
-  if (ask !== null) return askCard(ask.message, ask.meta, state, openChat);
+  if (ask !== null) return askCard(ask.message, ask.meta, state, [], openChat);
   const ref: FeishuCardRef = { kind: "router_item", itemId: item.id };
   const text = item.context.trim() === "" ? item.question : `${item.question}\n\n${item.context}`;
   const rest = [...(state.kind === "pending" ? pendingElements(ref, null, item.options, undefined) : settledElements(state)), ...openChat];
@@ -256,11 +296,19 @@ export function renderRouterItem(
 }
 
 /**
- * 流式回复卡片：一个 element_id 为 FEISHU_STREAM_ELEMENT_ID 的 markdown 组件，withStop 时下面一个停止按钮。
- * 后置：streaming 为 true 时 config.streaming_mode 为 true，streaming_config 照 FEISHU_STREAM_PRINT_* 设，摘要是正文开头一行。
+ * 流式回复卡片：一个 element_id 为 FEISHU_STREAM_ELEMENT_ID 的 markdown 组件，下面挂附件，withStop 时最下面一个停止按钮。
+ * 后置：streaming 为 true 时 config.streaming_mode 为 true，streaming_config 照 FEISHU_STREAM_PRINT_* 设，摘要是正文开头一行；
+ * 只有附件、没有正文时不放正文组件。
  */
-export function renderReplyCard(input: { conversationId: ConversationId; text: string; streaming: boolean; withStop: boolean }): FeishuCardJson {
-  const elements: Record<string, unknown>[] = [markdown(input.text, FEISHU_STREAM_ELEMENT_ID)];
+export function renderReplyCard(input: {
+  conversationId: ConversationId;
+  text: string;
+  streaming: boolean;
+  withStop: boolean;
+  attachments?: readonly FeishuAttachmentView[];
+}): FeishuCardJson {
+  const attachments = attachmentElements(input.attachments ?? []);
+  const elements: Record<string, unknown>[] = input.text === "" && attachments.length > 0 ? [...attachments] : [markdown(input.text, FEISHU_STREAM_ELEMENT_ID), ...attachments];
   if (input.withStop) {
     elements.push(button({ text: "停止", type: "danger", elementId: FEISHU_STOP_ELEMENT_ID, value: { kind: "stop", conversationId: input.conversationId } }));
   }
@@ -317,7 +365,7 @@ export function unrenderableReplyText(code: number): string {
   return `这段回复飞书显示不了（错误码 ${code}），完整内容去网页看。`;
 }
 
-/** 不再改的一张通知卡：总助指令的结果、网页上发的话的镜像、断线补发的提示。 */
-export function renderTextCard(input: { title: string; text: string; template?: string }): FeishuCardJson {
-  return card({ title: input.title, template: input.template ?? "wathet", summary: input.text, elements: [markdown(input.text)] });
+/** 一张通知卡：总助指令的结果、网页上发的话的镜像（附件挂在正文下面）、断线补发的提示。 */
+export function renderTextCard(input: { title: string; text: string; template?: string; attachments?: readonly FeishuAttachmentView[] }): FeishuCardJson {
+  return card({ title: input.title, template: input.template ?? "wathet", summary: input.text, elements: [markdown(input.text), ...attachmentElements(input.attachments ?? [])] });
 }

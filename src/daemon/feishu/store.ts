@@ -1,4 +1,4 @@
-// 飞书的绑定与投影（迁移 0034：feishu_app、feishu_chats、feishu_posts、feishu_avatars；docs/feishu-design.md）。
+// 飞书的绑定与投影（迁移 0034：feishu_app、feishu_chats、feishu_posts、feishu_avatars，0035 给 feishu_posts 加附件；docs/feishu-design.md）。
 // 不变量：
 // - App Secret 不在这里（secrets.ts）；
 // - feishu_posts 是“账本里的这样东西发到了飞书的哪条消息、哪张卡片实体”，同一个 ref 只有一行，重发、定稿、改定案、补发都先查它；
@@ -59,7 +59,7 @@ export type FeishuPostRef =
   | { kind: "router_command"; commandId: RouterCommandId; part?: number }
   | { kind: "chat_policy"; pmId: PmId };
 
-export const FEISHU_POST_STATES = ["streaming", "final", "card_pending", "card_settled"] as const;
+export const FEISHU_POST_STATES = ["streaming", "final", "card_pending", "card_settled", "uploading"] as const;
 export type FeishuPostState = (typeof FEISHU_POST_STATES)[number];
 
 export interface FeishuPostRecord {
@@ -70,6 +70,8 @@ export interface FeishuPostRecord {
   /** 这张卡片实体上一次操作的 sequence。 */
   sequence: number;
   state: FeishuPostState;
+  /** file 行：嵌进卡片的图片编号或发出去的文件编号；没传上是 null。别的行是 null。 */
+  mediaKey: string | null;
   updatedAt: number;
 }
 
@@ -118,14 +120,16 @@ export interface FeishuStore {
   saveDecision(ref: FeishuCardRef, clientId: string, name: string, now: number): void;
 
   postOf(ref: FeishuPostRef): FeishuPostRecord | null;
-  /** 后置：按飞书消息编号找回是哪样东西（按钮点击时用）。 */
+  /** 后置：按飞书消息编号找回是哪张卡（按钮点击时用）；file 行（附件挂在卡上时记着卡的消息编号）不算。 */
   postByMessageId(messageId: FeishuMessageId): FeishuPostRecord | null;
-  /** 后置：同一个 ref 已有时覆盖消息编号、卡片编号、sequence、state（流式定稿、卡片定案）。sequence 不能比已存的小。 */
-  savePost(record: Omit<FeishuPostRecord, "updatedAt">, now: number): void;
+  /** 后置：同一个 ref 已有时覆盖消息编号、卡片编号、sequence、state、mediaKey（流式定稿、卡片定案、附件传完）。sequence 不能比已存的小。mediaKey 不给是 null。 */
+  savePost(record: Omit<FeishuPostRecord, "updatedAt" | "mediaKey"> & { mediaKey?: string | null }, now: number): void;
   /** 某个项目群里还在等拍板的卡（重连后对一遍账本现状）。 */
   pendingCards(pmId: PmId | null): Iterable<FeishuPostRecord>;
   /** 某个群里还停在 streaming 的卡（定稿没做完就停机、重启），按记下的先后最多 limit 张。 */
   streamingPosts(chatId: FeishuChatId, limit: number): FeishuPostRecord[];
+  /** 某个群里卡已发出、还没传完的附件（停机、重启后接着补传），按记下的先后最多 limit 个。 */
+  uploadingPosts(chatId: FeishuChatId, limit: number): FeishuPostRecord[];
   /** 后置：删掉 state 为 final / card_settled 且早于 before 的行，返回删了几行。等拍板的不删。 */
   prunePosts(before: number): number;
 
@@ -133,7 +137,7 @@ export interface FeishuStore {
   saveAvatarKey(fruit: PmFruit, imageKey: FeishuImageKey, now: number): void;
 }
 
-/** 前置：迁移 0034 已跑。 */
+/** 前置：迁移 0035 已跑。 */
 export function createFeishuStore(db: Db): FeishuStore {
   const app = (): FeishuAppRecord | null => {
     const row = db.get<AppRow>("SELECT * FROM feishu_app WHERE id = 1");
@@ -308,7 +312,7 @@ export function createFeishuStore(db: Db): FeishuStore {
       db.run("INSERT INTO feishu_decisions VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING", kind, id, clientId, name, now);
     },
     postOf,
-    postByMessageId: (messageId) => postWhere("message_id = ? ORDER BY updated_at DESC LIMIT 1", messageId),
+    postByMessageId: (messageId) => postWhere("message_id = ? AND ref_kind != 'file' ORDER BY updated_at DESC LIMIT 1", messageId),
     savePost(record, now) {
       const key = refKey(record.ref);
       db.transaction(() => {
@@ -317,10 +321,10 @@ export function createFeishuStore(db: Db): FeishuStore {
           throw new Error(`feishu post sequence went backwards: ${existing.sequence} -> ${record.sequence}`);
         }
         db.run(
-          `INSERT INTO feishu_posts (ref_kind, ref_id, part, chat_id, message_id, card_id, sequence, state, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO feishu_posts (ref_kind, ref_id, part, chat_id, message_id, card_id, sequence, state, media_key, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT (ref_kind, ref_id, part) DO UPDATE SET chat_id = excluded.chat_id, message_id = excluded.message_id,
-             card_id = excluded.card_id, sequence = excluded.sequence, state = excluded.state, updated_at = excluded.updated_at`,
+             card_id = excluded.card_id, sequence = excluded.sequence, state = excluded.state, media_key = excluded.media_key, updated_at = excluded.updated_at`,
           key.kind,
           key.id,
           key.part,
@@ -329,6 +333,7 @@ export function createFeishuStore(db: Db): FeishuStore {
           record.cardId,
           record.sequence,
           record.state,
+          record.mediaKey ?? null,
           now,
         );
       });
@@ -349,6 +354,9 @@ export function createFeishuStore(db: Db): FeishuStore {
     },
     streamingPosts(chatId, limit) {
       return db.all<PostRow>("SELECT * FROM feishu_posts WHERE chat_id = ? AND state = 'streaming' ORDER BY rowid LIMIT ?", chatId, limit).map(toPost);
+    },
+    uploadingPosts(chatId, limit) {
+      return db.all<PostRow>("SELECT * FROM feishu_posts WHERE chat_id = ? AND state = 'uploading' ORDER BY rowid LIMIT ?", chatId, limit).map(toPost);
     },
     prunePosts(before) {
       db.run("DELETE FROM feishu_decisions WHERE decided_at < ?", before);
@@ -404,6 +412,7 @@ interface PostRow {
   card_id: string | null;
   sequence: number;
   state: string;
+  media_key: string | null;
   updated_at: number;
 }
 
@@ -478,6 +487,7 @@ function toPost(row: PostRow): FeishuPostRecord {
     cardId: row.card_id as FeishuCardId | null,
     sequence: row.sequence,
     state: row.state as FeishuPostState,
+    mediaKey: row.media_key,
     updatedAt: row.updated_at,
   };
 }

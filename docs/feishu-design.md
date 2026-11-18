@@ -92,6 +92,7 @@
 | 流式卡片 | 卡片 JSON 2.0，`config.streaming_mode: true`；先 `POST cardkit/v1/cards` 建实体，再按 `card_id` 发消息；“流式更新文本” `PUT cardkit/v1/cards/:card_id/elements/:element_id/content` 传全文，前缀相同才打字机，`sequence` 必须严格递增，1000 次/分钟、50 次/秒；**每张卡 10 次/秒**；流式模式开了 **10 分钟自动关**；流式模式下卡片回调不能靠响应改卡片，要先关流式；卡片实体 **14 天**后不能再操作；要求客户端 ≥ 7.20。 | `feishu-cards/streaming-updates-openapi-overview.md`、`cardkit-v1/card-element/content.md`、`cardkit-v1/card/create.md` |
 | 卡片回调 | 3 秒内响应，可回 `toast`；`token` 30 分钟内最多改两次卡。 | `feishu-cards/card-callback-communication.md` |
 | 文件 | 上传文件 ≤ 30 MB；下载消息里的资源 `GET im/v1/messages/:message_id/resources/:file_key` ≤ 100 MB。发消息的 `msg_type` 要和上传时的 `file_type` 配对：`mp4` 发 `media`（视频，封面 `image_key` 可不填），`opus` 发 `audio`，`pdf`、`doc`、`xls`、`ppt`、`stream` 发 `file`；不配对回 230055。 | `reference/im-v1/file/create.md`、`im-v1/message/create_json.md`、`reference/im-v1/message/create.md`（错误码 230055）、`reference/im-v1/message-resource/get.md` |
+| 卡片里的图片 | 卡片 JSON 2.0 的图片组件 `{"tag": "img", "img_key", "alt", "scale_type": "fit_horizontal", "preview": true}`，`img_key` 用 `POST im/v1/images`（`image_type: message`）拿到的图片编号；`fit_horizontal` 完整展示不裁剪，`preview` 点开看大图。官方建议卡片里的图在 1500×3000 px 以内、≤ 10 MB。富文本组件 `text_size: notation` 是 12px 辅助文字。 | `feishu-cards/card-json-v2-components/content-components/image`、`.../rich-text`（2026-11-18 核实） |
 | 撤回消息 | `DELETE im/v1/messages/:message_id`，机器人撤回自己发的消息，`im:message:send_as_bot` 即可（模板已带）；受管理员设的撤回时限约束（默认 24 小时），超时回 230009。 | `reference/im-v1/message/delete.md`（2026-11-18 核实） |
 | 查权限 | `GET /open-apis/application/v6/scopes` 返回各权限授予状态，不要额外权限。 | `application-v6/scope/list` |
 | SDK 的 Channel | SDK 有高层的 `createLarkChannel`（长连接、去重、markdown 流式卡片、媒体），但只派发消息、卡片点击、表情、机器人进群、文档评论，**不派发成员进出**；卡片点击处理函数的返回值被丢掉（回不了 toast）；流式卡片只有一个 markdown 组件，放不了停止按钮。 | SDK `lib/index.js` 的 `registerDispatcherHandlers`、`docs/channel.zh.md` |
@@ -154,11 +155,11 @@
 
 **访客权限。** `feishuGuestMay(tier, action)` 是访客能做什么的唯一定义，入口（`routing.ts`）按它拦拍板、停止、附件；账本 `hubCall` 按 `origin.guestTier` 查 `FEISHU_GUEST_BLOCKED_HUB_COMMANDS` 拦越界命令。总助单聊、设置卡按钮只认主人。第一个访客进群时发访客权限卡（`renderChatPolicyCard`），主人点按钮走 `setChatPolicy`。
 
-**流式与急停。** 状态机见 `stream.ts`：项目经理一开轮（`session.status` 的 activity 变成 working，调工具、思考时）就建流式卡片实体（markdown 组件 + 停止按钮）发到群主聊天流，还没正文时卡上是一行状态，文案同网页的 `describeStep`（如“Running command…”），工具阶段点停止就能停；正文来了在同一张卡上换成正文，之后每 `FEISHU_STREAM_FLUSH_MS` 推一次全文，飞书客户端打字机上屏。一轮只开一张状态卡：定稿过一段之后工具阶段不再开新卡（下一段文字照常开卡）；整轮没写正文就结束（只调了工具、被停下）时撤回这张状态卡，撤不回（超过撤回时限）就收成一行“这一轮没有文字回复”。只投影项目经理会话（`pmId` 不为空）；子任务的事件账本本来就不改主会话的状态和流式预览。开了 9 分钟续开一次流式模式；落库时换成账本正文、关流式、删停止按钮。超过 `FEISHU_CARD_MAX_CHARS` 时前一张定稿、续到新卡。点停止：回调里先回 toast（流式模式下不能靠响应改卡片），调 `requestStop`，这一轮结束时卡片收尾。整个应用的卡片接口共用一份每秒预算，每个群发消息每秒不超过 4 条。定稿或收尾时正文被飞书拒收（内容不合规、超限），卡片换成一行“飞书显示不了，去网页看”再改一次，照样关流式、删停止按钮。停机（含 `hub self-reload`）先退订账本、最多等 `FEISHU_CLOSE_DRAIN_MS` 把排着的出站发完、把还在流式的卡收尾，再断开；定稿做到一半就停机留下的 `feishu_posts` `streaming` 记录，下次连上补发时照账本正文换下一个 sequence 再定稿，水位推过了也收。
+**流式与急停。** 状态机见 `stream.ts`：用户发话触发的那一轮，项目经理一开轮（`session.status` 的 activity 变成 working，调工具、思考时）就建流式卡片实体（markdown 组件 + 停止按钮）发到群主聊天流，还没正文时卡上是一行状态，文案同网页的 `describeStep`（如“Running command…”），工具阶段点停止就能停；正文来了在同一张卡上换成正文，之后每 `FEISHU_STREAM_FLUSH_MS` 推一次全文，飞书客户端打字机上屏。一轮只开一张状态卡：定稿过一段之后工具阶段不再开新卡（下一段文字照常开卡）；整轮没写正文就结束（只调了工具、被停下）时撤回这张状态卡，撤不回（超过撤回时限）就收成一行“这一轮没有文字回复”。“用户发话触发”看这个对话最近一条用户消息：是用户在网页或飞书里打的字（去重键是 `userMessageDedupeKey`）且还没回完（queued、delivered、processing）。Worker 汇报、系统唤醒这类后台轮次工具阶段不开状态卡，等真有正文或挂卡时才发，所以后台静默处理完不会撤回任何消息，群里不留一排“撤回了一条消息”。只投影项目经理会话（`pmId` 不为空）；子任务的事件账本本来就不改主会话的状态和流式预览。开了 9 分钟续开一次流式模式；落库时换成账本正文、关流式、删停止按钮。超过 `FEISHU_CARD_MAX_CHARS` 时前一张定稿、续到新卡。点停止：回调里先回 toast（流式模式下不能靠响应改卡片），调 `requestStop`，这一轮结束时卡片收尾。整个应用的卡片接口共用一份每秒预算，每个群发消息每秒不超过 4 条。定稿或收尾时正文被飞书拒收（内容不合规、超限），卡片换成一行“飞书显示不了，去网页看”再改一次，照样关流式、删停止按钮。停机（含 `hub self-reload`）先退订账本、最多等 `FEISHU_CLOSE_DRAIN_MS` 把排着的出站发完、把还在流式的卡收尾，再断开；定稿做到一半就停机留下的 `feishu_posts` `streaming` 记录，下次连上补发时照账本正文换下一个 sequence 再定稿，水位推过了也收。
 
 **拍板卡。** 提问卡、检查点卡、提醒卡画成卡片 JSON 2.0：一个表单里放“补充说明”输入框和选项按钮（推荐项排第一），点哪个选项都连同输入框回传，不需要弹窗。点了走账本原有接口，账本推变化后卡片改成“已定案”（谁、选了什么）。网页上答的卡也一样改。总助单聊里引用这张卡的拍板项也带同样的按钮（同一个 `FeishuCardRef`），两处点哪处都走同一个账本接口；账本按 `clientId` 只认第一次，后点的那处回 `conflict`，转成 toast“已经定过了”；定案后两处一起改。`hub ask close`、`hub graph cancel`、网页上回答或关掉的卡，账本在同一事务里推 `message.updated`（`settleAskIn`），飞书据此改掉项目群那张和总助单聊引用它的那条；补发时先改这些待定案的卡，再按水位重放消息，重放哪一件出错都不挡卡片去掉按钮。
 
-**文件。** 图片 ≤ 10 MB 发图片消息，其他 ≤ 30 MB 按扩展名上传并配对消息类型（mp4 发视频、opus 发语音、其余发文件，见上面「飞书官方接口」的文件一行），更大的发一行“去网页看”；同一个文件只传一次。文件走每个群自己的媒体队列，和文字卡片、流式推送、改卡分开：一张 9 MB 的图在慢网上传几分钟，也不挡后面的回复和按钮刷新（之前同一条串行队列里一次上传卡住过 8 条回复和一次关卡近 8 分钟）。上传暂时失败退避重试 `FEISHU_MEDIA_RETRY_MAX` 次，飞书拒收的放弃；断线时排着的文件记在内存里，重连后重新排上（进程重启时没传完的不补）。每次 HTTP 请求有超时：普通接口 `FEISHU_HTTP_TIMEOUT_MS`，上传下载 `FEISHU_TRANSFER_TIMEOUT_MS`（官方 HTTP 实例默认不设超时，`sdk.ts` 包一层补上）。卡片 Markdown 的图片地址只认上传后的图片编号（`img_` 开头），别的地址回 200570，所以正文进卡片前过一遍 `feishuCardMarkdown`：本机图片写成“图片「名字」”，网页图片改成链接，指向本机的链接只留文字；文件本身照上面单独发。主人（协作者档访客）发的图片和文件下载存成附件随消息交给项目经理。
+**文件。** 一条消息带的文件（项目经理发的文件、提问卡的交付物、网页上用户发的附件）和这条消息的卡同发同达：图片嵌进同一张卡（卡片图片组件，挂在正文下面、按钮上面），别的文件（pdf、md、mp4、zip、docx……）紧跟这张卡连着发成文件消息。做法：账本一落库就在出站队列外并发预传（`p-limit` 限 `FEISHU_UPLOAD_CONCURRENCY` 个同时传），排到发卡时最多再等到最后开始传的那个起算 `FEISHU_ATTACH_WAIT_MS`；传完的图嵌进卡、文件紧跟卡发，没传完的卡先发出去、卡底写一行 `Uploading <名字>…`，不挡后面的新消息；传完后文件补发成文件消息，再原地改这张卡（图嵌回去，文件那行改成“已送达”）。在途的附件记成 `feishu_posts` 的 `uploading` 行（挂着卡的消息编号和卡片编号），停机不等它，重连、重启后补发时接着传，传完照样补发、改卡。上传暂时失败退避重试 `FEISHU_MEDIA_RETRY_MAX` 次，飞书拒收或重试用尽时卡上写“没发出去，去网页看”。超过 `FEISHU_IMAGE_MAX_EDGE` 边长或 `FEISHU_IMAGE_SHRINK_BYTES` 的截图（png、jpeg、webp、avif），上传前用 `sharp` 在临时目录缩一份最长边 2400 的副本再传，传完删掉，磁盘上的原图不动（之前一张 4920×6990、8.7 MB 的截图在慢网上传了 8 分钟）；其他文件 ≤ 30 MB 按扩展名上传并配对消息类型（mp4 发视频、opus 发语音、其余发文件，见上面「飞书官方接口」的文件一行），更大的卡上写一行“去网页看”；同一个文件只传一次。每次 HTTP 请求有超时：普通接口 `FEISHU_HTTP_TIMEOUT_MS`，上传下载 `FEISHU_TRANSFER_TIMEOUT_MS`（官方 HTTP 实例默认不设超时，`sdk.ts` 包一层补上）。卡片 Markdown 的图片地址只认上传后的图片编号（`img_` 开头），别的地址回 200570，所以正文进卡片前过一遍 `feishuCardMarkdown`：本机图片写成“图片「名字」”，网页图片改成链接，指向本机的链接只留文字；文件本身照上面同发。主人（协作者档访客）在飞书里发的图片、文件、视频、语音（富文本里夹的多张图和视频也算）都下载存成附件随消息交给项目经理，正文里这些资源的占位去掉，只丢表情包。
 
 **网页和飞书一致。** 网页上发的用户消息镜像到群里（标“网页”），网页发的总助指令和结果也镜像到单聊；飞书发的消息本来就在账本里。
 
@@ -167,7 +168,7 @@
 ## 性能
 
 1. **失效。** 群成员缓存靠成员进出事件实时改；连上和重连时整份标过期；每 `FEISHU_MEMBERS_TTL_MS` 对一遍；查失败只记 `FEISHU_MEMBERS_RETRY_MS`，期间按多人处理。背景近窗按 `FEISHU_CONTEXT_TTL_MS` 过期，送达即清，群解散、机器人被移出、断开时清掉。绑定码 `FEISHU_BIND_CODE_TTL_MS` 后失效，用一次作废。权限检查结果在连上、重连、`resync` 时重查，不长期缓存。水果 `image_key` 不过期（头像图片是仓库里的固定文件）。
-2. **上限。** 内存：成员缓存用已有的 `lru-cache`，最多 `FEISHU_CHAT_CACHE_MAX` 个群，每群最多 `FEISHU_CHAT_MEMBERS_MAX` 人；背景近窗每群 `FEISHU_CONTEXT_MAX_LINES` 行、`FEISHU_CONTEXT_MAX_CHARS` 字，群数跟着成员缓存一起淘汰；流式状态每个项目经理对话最多一份，结束即删；进出队列各有上限。群数等于项目经理数，不随 Worker 和消息变多。数据库：`feishu_posts` 每条发出去的东西一行，按一个月 3 万条消息算最多约 3 万行（Worker 对话不投影，实际少得多）；卡片实体 14 天后飞书就不让改了，所以已定稿的行 `FEISHU_POST_RETENTION_DAYS` 天后由现有的保留清理删掉，等拍板的卡不删。接口响应 `FeishuStatusView` 只列群，几十行，不需要压缩。
+2. **上限。** 内存：成员缓存用已有的 `lru-cache`，最多 `FEISHU_CHAT_CACHE_MAX` 个群，每群最多 `FEISHU_CHAT_MEMBERS_MAX` 人；背景近窗每群 `FEISHU_CONTEXT_MAX_LINES` 行、`FEISHU_CONTEXT_MAX_CHARS` 字，群数跟着成员缓存一起淘汰；流式状态每个项目经理对话最多一份，结束即删；进出队列各有上限；在途附件的上传记录用 `lru-cache` 存最多 `FEISHU_MEDIA_QUEUE_MAX` 个，传完、补发完即删，断线打断的也删（重连按 `uploading` 行重传）。`sharp` 和飞书 SDK 一样只在真要发图片时才加载。群数等于项目经理数，不随 Worker 和消息变多。数据库：`feishu_posts` 每条发出去的东西一行，按一个月 3 万条消息算最多约 3 万行（Worker 对话不投影，实际少得多）；卡片实体 14 天后飞书就不让改了，所以已定稿的行 `FEISHU_POST_RETENTION_DAYS` 天后由现有的保留清理删掉，等拍板的卡和 `uploading` 的附件不删。接口响应 `FeishuStatusView` 只列群，几十行，不需要压缩。
 3. **前端引用稳定。** 这一步没有前端。状态接口在没有变化时返回内容相同的对象，以后设置页按它的 `chats` 数组做 `WeakMap` 缓存。
 4. **验证。** 实现步骤用 pstack 的 `benchmark-checklist` 量：项目经理写出第一段到手机上出字的延迟；一段 5,000 字回复期间“流式更新文本”调用次数；三个项目经理同时回复 5 分钟时有没有限流错误（230020、99991400）；开飞书前后守护进程 RSS；`blast-radius` 列出 `PostUserMessageInput`、`UserMessageMeta`、`deliveryParts`、`hubCall` 的调用方。数字写进 PR。
 
@@ -192,7 +193,9 @@
 | `FEISHU_BIND_CODE_TTL_MS` | 10 分钟 | 够人切到飞书里发 |
 | `FEISHU_IMAGE_MAX_BYTES` / `FEISHU_FILE_MAX_BYTES` | 10 MB / 30 MB | 飞书上传图片、上传文件的上限 |
 | `FEISHU_INBOUND_QUEUE_MAX` / `FEISHU_OUTBOUND_QUEUE_MAX` | 200 / 500 | 一个应用的正常事件量远低于此；进的满了先丢成员和改名事件（重连对账会补回），出的满了先合并流式推送 |
-| `FEISHU_MEDIA_QUEUE_MAX` / `FEISHU_MEDIA_RETRY_MAX` | 200 / 3 | 交付文件一条消息最多几个；排满了记日志不排。重试隔 1、2、4 秒 |
+| `FEISHU_MEDIA_QUEUE_MAX` / `FEISHU_MEDIA_RETRY_MAX` / `FEISHU_UPLOAD_CONCURRENCY` | 200 / 3 / 3 | 在途附件最多几个（满了先在卡上写 Uploading，重连补发时再传）；重试隔 1、2、4 秒；同时传 3 个，慢网上不互相抢带宽 |
+| `FEISHU_ATTACH_WAIT_MS` | 2.5 秒 | 发卡前等附件的窗口：常见截图、文档在这之内传完，和文字一起到；超大视频不拖住聊天 |
+| `FEISHU_IMAGE_MAX_EDGE` / `FEISHU_IMAGE_SHRINK_BYTES` | 2400 px / 2 MB | 手机视网膜屏看截图足够清楚；超过的先缩再传 |
 | `FEISHU_HTTP_TIMEOUT_MS` / `FEISHU_TRANSFER_TIMEOUT_MS` | 30 秒 / 180 秒 | 普通接口回包都在秒级；30 MB 在约 170 KB/s 的慢网上能传完 |
 | `FEISHU_SECRETS_FILE_MODE` | 0o600 | 和 `state/ui-token` 一样 |
 
@@ -283,7 +286,7 @@
   4. 拉一个测试账号进群：群里出现访客权限卡；之后你和访客不 @ 的话项目经理不回；@机器人 后项目经理的回复里提到刚才的讨论；驱动日志里写给 agent 的正文带“【飞书 · 名字（访客）】”和“群里之前的讨论”。
   5. 档位：仅对话档访客点拍板卡只看到“只有主人能拍板”的提示；切到协作者后能点；只读档访客 @机器人 项目经理也不回；任何档访客让项目经理挂载 `~/Documents`，`hub project attach` 返回 forbidden（日志）。
   6. 拍板卡：飞书点选项后网页卡片同时变已回答；网页回答另一张，飞书里那张变“已定案”、按钮消失。
-  7. 交付：项目经理发一张截图和一份 Markdown，飞书里是原生图片和文件。
+  7. 交付：项目经理发一张截图、一份 Markdown 和一个 mp4，飞书里截图嵌在回复卡里，Markdown 和视频紧跟这张卡；发一张 4920×6990 的截图，几秒内出现在卡里；网页上发带图和 pdf 的话，群里的镜像卡同样图文同发（录屏）。
   8. 断线：`kill -STOP` 守护进程 2 分钟期间在网页发消息、答卡，恢复后飞书补上这些消息、卡片改成已定案；重复恢复不重复发。
   9. 项目经理改名，群名跟着改；归档后群被解散；取消归档后出现一个新群，唤醒方式和访客档位沿用；重复触发不多建群（`feishu_chats` 行数不变）。
   10. 总助单聊里点一张拍板项的选项，项目群里同一张卡同时变已定案；再去群里点，提示“已经定过了”。
