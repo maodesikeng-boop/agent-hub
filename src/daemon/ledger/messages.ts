@@ -17,7 +17,7 @@ import type { SentFile } from "../../shared/sent-files.ts";
 import { deliverablesOfFileArgs } from "../deliverables.ts";
 import { fail } from "./context.ts";
 import type { LedgerContext, Pending } from "./context.ts";
-import { toMessage } from "./rows.ts";
+import { WEB_MESSAGE_COLUMNS, toMessage } from "./rows.ts";
 import type { MessageDbRow } from "./rows.ts";
 import type { LedgerSentFiles } from "./sent-files.ts";
 import { clearStreaming, idle, toolStarted, working } from "./sessions.ts";
@@ -599,7 +599,7 @@ export function createLedgerMessages(
     if (!conversationExists(conversationId)) throw new ConversationNotFoundError(conversationId);
     return page(
       db.all<MessageDbRow>(
-        "SELECT * FROM messages WHERE conversation_id = ? AND id < ? ORDER BY id DESC LIMIT ?",
+        `SELECT ${WEB_MESSAGE_COLUMNS} FROM messages WHERE conversation_id = ? AND id < ? ORDER BY id DESC LIMIT ?`,
         conversationId,
         before,
         MESSAGE_PAGE_SIZE + 1,

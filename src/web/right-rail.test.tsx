@@ -312,6 +312,23 @@ describe("右栏：只列几条", () => {
     expect(completedGroup().querySelectorAll("li")).toHaveLength(0);
   });
 
+  it("快照只带了最近几个收工的：Completed 底部 Load more 拉更早的，拉的时候写 Loading…，拉不到写原因；没有更早的不出按钮", async () => {
+    const user = userEvent.setup();
+    let finish: (() => void) | undefined;
+    const onLoadMoreWorkers = vi.fn(() => new Promise<void>((resolve) => (finish = resolve)));
+    const { rerender } = render(
+      <RightRail asks={[]} workers={[done(1)]} openWorkerId={null} layout="side" onOpenAsk={() => {}} onOpenWorker={() => {}} onLoadMoreWorkers={onLoadMoreWorkers} />,
+    );
+    await user.click(titleButton(completedGroup()));
+    await user.click(within(completedGroup()).getByRole("button", { name: "Load more" }));
+    expect(onLoadMoreWorkers).toHaveBeenCalledTimes(1);
+    expect(within(completedGroup()).getByRole("button", { name: "Loading…" })).toBeInTheDocument();
+    finish!();
+    expect(await within(completedGroup()).findByRole("button", { name: "Load more" })).toBeInTheDocument();
+    rerender(<RightRail asks={[]} workers={[done(1)]} openWorkerId={null} layout="side" onOpenAsk={() => {}} onOpenWorker={() => {}} />);
+    expect(within(completedGroup()).queryByRole("button", { name: "Load more" })).toBeNull();
+  });
+
   it("只有收工的（手动打开右栏）：只有 Completed 一组，开关放在它那一行", () => {
     render(<RightRail asks={[]} workers={[done(1)]} openWorkerId={null} layout="side" toggle={<button type="button" aria-label="Hide side panel" />} onOpenAsk={() => {}} onOpenWorker={() => {}} />);
     expect(screen.queryByRole("region", { name: /^Pieces/ })).toBeNull();

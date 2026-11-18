@@ -85,12 +85,37 @@ export function sessionOf(state: Pick<ReminderState, "sessions">, conversationId
   return cached.map.get(conversationId) ?? null;
 }
 
+const runningWorkersCache = new WeakMap<ReminderState["conversations"], WeakMap<readonly SessionState[], ReadonlyMap<PmId | null, number>>>();
+
+/** 每个项目经理派的 Worker 里在跑的个数（只有在跑的才有键，没挂项目经理的记在 null）：conversations、sessions 都没变就用上次那份，一次遍历算全部项目经理。 */
+function runningWorkersByPm(state: Pick<ReminderState, "sessions" | "conversations">): ReadonlyMap<PmId | null, number> {
+  let bySessions = runningWorkersCache.get(state.conversations);
+  if (bySessions === undefined) {
+    bySessions = new WeakMap();
+    runningWorkersCache.set(state.conversations, bySessions);
+  }
+  const hit = bySessions.get(state.sessions);
+  if (hit !== undefined) return hit;
+  const counts = new Map<PmId | null, number>();
+  for (const { conversation } of Object.values(state.conversations)) {
+    if (conversation.kind !== "worker") continue;
+    if ((sessionOf(state, conversation.id)?.activity ?? "idle") === "idle") continue;
+    counts.set(conversation.pmId, (counts.get(conversation.pmId) ?? 0) + 1);
+  }
+  bySessions.set(state.sessions, counts);
+  return counts;
+}
+
 /** 这个项目经理派的 Worker 里在跑的个数：Worker 对话的当前会话不是 idle（api.ts StateSnapshot 的注释）。 */
 export function runningWorkerCount(state: Pick<ReminderState, "sessions" | "conversations">, pmId: PmId): number {
-  return Object.values(state.conversations).filter(
-    ({ conversation }) =>
-      conversation.kind === "worker" && conversation.pmId === pmId && (sessionOf(state, conversation.id)?.activity ?? "idle") !== "idle",
-  ).length;
+  return runningWorkersByPm(state).get(pmId) ?? 0;
+}
+
+/** 所有项目经理派的 Worker 里在跑的总数（外壳的“N 个 Worker 在跑”）。 */
+export function totalRunningWorkers(state: Pick<ReminderState, "sessions" | "conversations">): number {
+  let total = 0;
+  for (const n of runningWorkersByPm(state).values()) total += n;
+  return total;
 }
 
 function pendingIn(state: Pick<ReminderState, "pending">, conversationId: ConversationId) {

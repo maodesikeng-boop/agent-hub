@@ -184,6 +184,17 @@ export function toConversation(row: ConversationDbRow): Conversation {
   };
 }
 
+/**
+ * 给网页的消息列（快照、往上翻页）：工具调用的 meta.input 在 SQLite 里就去掉，不把可能几百 KB 的文件内容读进 JS 再解析、丢掉。
+ * parseMessageMeta 照样兜底去 input。text 换成 '' 时只给算窗口用（ledger/snapshot.ts），不能发出去。
+ */
+const messageColumns = (text: "text" | "''") =>
+  `id, conversation_id, session_id, worker_id, sender, kind, ${text} AS text,
+   CASE WHEN kind = 'tool' THEN json_remove(meta, '$.input') ELSE meta END AS meta,
+   collapsed, dedupe_key, status, failure_reason, created_at, updated_at`;
+export const WEB_MESSAGE_COLUMNS = messageColumns("text");
+export const MESSAGE_SHAPE_COLUMNS = messageColumns("''");
+
 export function parseMessageMeta(kind: string, raw: string | null): Record<string, unknown> | null {
   if (raw === null) return null;
   const parsed = JSON.parse(raw) as Record<string, unknown>;

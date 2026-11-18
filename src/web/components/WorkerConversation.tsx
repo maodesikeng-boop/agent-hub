@@ -27,6 +27,7 @@ export function WorkerConversation({
   pm,
   meta,
   view,
+  loading = false,
   pending,
   session,
   older,
@@ -55,6 +56,8 @@ export function WorkerConversation({
   meta?: WorkerEntry;
   /** 找不到（还没同步过来）是 undefined。 */
   view: ConversationView | undefined;
+  /** view 还没有、正在按需拉（不在快照里的早收工 Worker）：显示加载中，不说找不到。 */
+  loading?: boolean;
   pending: PendingMessage[];
   session: SessionState | null;
   older: OlderState | undefined;
@@ -131,7 +134,7 @@ export function WorkerConversation({
       {top}
       {notices}
       {view === undefined ? (
-        <div className="flex flex-1 items-center justify-center text-muted-foreground">Piece not found</div>
+        <div className="flex flex-1 items-center justify-center text-muted-foreground">{loading ? "Loading…" : "Piece not found"}</div>
       ) : (
         <>
           {view.conversation.purgedAt !== undefined ? (

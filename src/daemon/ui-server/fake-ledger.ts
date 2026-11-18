@@ -19,6 +19,9 @@ import {
   type ChangeDataMap,
   type ChangesSince,
   type ConversationId,
+  type ConversationsLookup,
+  type EndedWorkersPage,
+  type WorkerId,
   type CreatePmInput,
   type CreatePmResult,
   type DecideTaskNodeRequest,
@@ -144,6 +147,8 @@ export class FakeLedger {
   readonly stopped: ConversationId[] = [];
   readonly rewoundConversations: ConversationId[] = [];
   readonly messagesBeforeCalls: Array<{ conversationId: ConversationId; before: MessageId }> = [];
+  readonly lookupCalls: Array<{ ids: readonly ConversationId[]; workerIds: readonly WorkerId[] }> = [];
+  readonly endedWorkersCalls: Array<{ pmId: PmId; before: ConversationId | null }> = [];
   readonly changesSinceCalls: number[] = [];
   readonly createdPms: CreatePmInput[] = [];
   readonly personaReads: PmId[] = [];
@@ -385,6 +390,20 @@ export class FakeLedger {
     return { messages: older.slice(-MESSAGE_PAGE_SIZE), hasMore: older.length > MESSAGE_PAGE_SIZE };
   }
 
+  lookupConversations(query: { ids: readonly ConversationId[]; workerIds: readonly WorkerId[] }): ConversationsLookup {
+    this.check();
+    this.lookupCalls.push(query);
+    const ids = new Set(query.ids);
+    return { conversations: this.snapshotValue.conversations.filter((c) => ids.has(c.conversation.id)), sessions: [] };
+  }
+
+  endedWorkersPage(pmId: PmId, before: ConversationId | null): EndedWorkersPage {
+    this.check();
+    this.endedWorkersCalls.push({ pmId, before });
+    if (!this.snapshotValue.pms.some((p) => p.id === pmId)) throw new LedgerRequestError("not_found", `没有编号 ${pmId} 的项目经理`);
+    return { conversations: [], sessions: [], nextBefore: null };
+  }
+
   changesSince(seq: number): ChangesSince {
     this.check();
     this.changesSinceCalls.push(seq);
@@ -551,6 +570,8 @@ export class FakeLedger {
       composerTarget: unused("composerTarget"),
       snapshot: () => this.snapshot(),
       messagesBefore: (c, b) => this.messagesBefore(c, b),
+      lookupConversations: (q) => this.lookupConversations(q),
+      endedWorkersPage: (p, b) => this.endedWorkersPage(p, b),
       changesSince: (s) => this.changesSince(s),
       onChange: (l) => this.onChange(l),
       onStopRequested: unused("onStopRequested"),

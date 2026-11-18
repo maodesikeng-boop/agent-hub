@@ -5,6 +5,8 @@ import { useCallback, useEffect, useState } from "react";
 import { createStore, useStore, type StoreApi } from "zustand";
 import {
   ATTACHMENTS_MISSING_MESSAGE,
+  CONVERSATION_LOOKUP_MAX_IDS,
+  MAX_CONVERSATION_LOOKUP_STATES,
   MAX_MESSAGE_BYTES,
   MAX_REWOUND_PENDING_KEYS,
   findRewindableMessage,
@@ -13,7 +15,9 @@ import {
   type ConversationId,
   type DeviceInfo,
   type MessageId,
+  type PmId,
   type PostMessageRequest,
+  type WorkerId,
   type WorkerPick,
   userMessageDedupeKey,
   workerPickOf,
@@ -48,6 +52,9 @@ export class DeviceHub {
   private buffer: Change[] | null = null;
   private streamStatus: ConnectionStatus = "connecting";
   private readonly olderInFlight = new Set<ConversationId>();
+  /** 按 Worker 编号单拉过的（任务图详情里找不到的 Worker）：这份快照里不再拉第二次；重拉快照清空，满了清空。 */
+  private readonly requestedWorkers = new Set<WorkerId>();
+  private readonly endedWorkersInFlight = new Set<PmId>();
   /** POST /messages 还在路上的记录：若用户在请求返回前就按了 Esc 停止或二次 Esc 回退，等入库返回后再补一次 stop / rewind。 */
   private readonly inFlightPosts = new Map<string, { conversationId: ConversationId; after: "none" | "stop" | "rewind" }>();
   // 待发气泡删除后，旧历史不能变成下一次 Esc 的候选。只保留有上限的消息 id 边界。
@@ -90,6 +97,7 @@ export class DeviceHub {
   }
 
   private dispatch(action: Action): void {
+    if (action.type === "loaded") this.requestedWorkers.clear();
     const before = this.state;
     this.state = reducer(this.state, action);
     if (this.state.phase === "ready" && before.phase !== "ready") this.openStream();
@@ -381,6 +389,47 @@ export class DeviceHub {
     this.dispatch({ type: "messageRewind", conversationId, messageId: target.id });
     persist();
     return { text: target.text, workerPick: workerPickOf(target) };
+  };
+
+  /** 不在快照里的对话（早收工的 Worker，网址、项目经理对话里的旧行点进来）：单拉一次。已经有、在拉、拉过没有的不再拉。 */
+  ensureConversation = (conversationId: ConversationId): void => {
+    if (this.state.phase !== "ready" || this.state.conversations[conversationId] || this.state.lookups[conversationId] !== undefined) return;
+    void this.lookup([conversationId], []);
+  };
+
+  /** 任务图详情里挂着、网页还没带的 Worker：按 Worker 编号拉它们的对话（接口一次最多 CONVERSATION_LOOKUP_MAX_IDS 个，超出分批）。 */
+  ensureWorkers = (workerIds: readonly WorkerId[]): void => {
+    if (this.state.phase !== "ready") return;
+    const fresh = workerIds.filter((id) => !this.requestedWorkers.has(id));
+    if (fresh.length === 0) return;
+    if (this.requestedWorkers.size + fresh.length > MAX_CONVERSATION_LOOKUP_STATES) this.requestedWorkers.clear();
+    for (const id of fresh) this.requestedWorkers.add(id);
+    for (let i = 0; i < fresh.length; i += CONVERSATION_LOOKUP_MAX_IDS) void this.lookup([], fresh.slice(i, i + CONVERSATION_LOOKUP_MAX_IDS));
+  };
+
+  private async lookup(ids: ConversationId[], workerIds: WorkerId[]): Promise<void> {
+    if (ids.length > 0) this.dispatch({ type: "lookupStart", ids });
+    try {
+      const lookup = await this.client.fetchConversationsLookup({ ids, workerIds });
+      if (this.alive) this.dispatch({ type: "lookupDone", ids, lookup });
+    } catch {
+      if (!this.alive) return;
+      if (ids.length > 0) this.dispatch({ type: "lookupFailed", ids });
+      for (const id of workerIds) this.requestedWorkers.delete(id);
+    }
+  }
+
+  /** 右栏 Completed 的 Load more：这个项目经理下一页更早的已收工 Worker。没有更早的、正在拉的不动。 */
+  loadEndedWorkers = async (pmId: PmId): Promise<void> => {
+    const before = this.state.olderEndedWorkers[pmId];
+    if (before === undefined || this.endedWorkersInFlight.has(pmId)) return;
+    this.endedWorkersInFlight.add(pmId);
+    try {
+      const page = await this.client.fetchEndedWorkers(pmId, before);
+      if (this.alive) this.dispatch({ type: "endedWorkersLoaded", pmId, before, page });
+    } finally {
+      this.endedWorkersInFlight.delete(pmId);
+    }
   };
 
   loadOlder = async (conversationId: ConversationId): Promise<void> => {

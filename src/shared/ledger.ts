@@ -7,8 +7,10 @@ import type {
   CancelTaskGraphRequest,
   CancelTaskGraphResponse,
   Change,
+  ConversationsLookup,
   DecideTaskNodeRequest,
   DecideTaskNodeResponse,
+  EndedWorkersPage,
   LedgerSnapshot,
   MessagesPage,
   ResolveRouterItemRequest,
@@ -399,6 +401,10 @@ export interface Ledger extends LedgerHandoverWork {
   snapshot(): LedgerSnapshot;
   /** 更早的 100 条（before 之前，从小到大）。对话不存在（包括老的项目群）抛 ConversationNotFoundError。 */
   messagesBefore(conversationId: ConversationId, before: MessageId): MessagesPage;
+  /** 不在快照里的对话（早收工的 Worker）按对话编号、Worker 编号单拉，形状同快照；各最多 CONVERSATION_LOOKUP_MAX_IDS 个，多的不查。 */
+  lookupConversations(query: { ids: readonly ConversationId[]; workerIds: readonly WorkerId[] }): ConversationsLookup;
+  /** 项目经理比 before 早的已收工 Worker 对话一页（按对话编号从新到旧）；before null 从最新的开始。项目经理不存在 → not_found。 */
+  endedWorkersPage(pmId: PmId, before: ConversationId | null): EndedWorkersPage;
   changesSince(seq: number): ChangesSince;
   /** 每产生一条变化调用一次监听者。 */
   onChange(listener: (change: Change) => void): Unsubscribe;

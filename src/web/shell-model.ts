@@ -8,6 +8,7 @@ import {
   type MessageId,
   type PersonaChangeId,
   type PmId,
+  type WorkerId,
 } from "../shared/index.ts";
 import type { SidebarGroup, SidebarRouterEntry } from "./components/Sidebar.tsx";
 import type { SettingsDialogSection } from "./components/SettingsDialog.tsx";
@@ -30,6 +31,7 @@ import {
   type ConversationEntry,
   type WorkerEntry,
 } from "./selectors.ts";
+import { totalRunningWorkers } from "../shared/reminders.ts";
 import { useDeviceReminders, type ConversationRef } from "./notify.ts";
 import { useDraftStore, useStagingStore } from "./upload.ts";
 import { mobileBack, settingsParent } from "./mobile/back.ts";
@@ -179,17 +181,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const reminderDevices = useMemo(() => fleet.devices.map((d) => ({ key: d.key, name: d.info.name, state: d.state })), [fleet.devices]);
   const reminders = useDeviceReminders(reminderDevices, activeId === null ? null : { device: current.key, id: activeId }, select);
   const runningWorkers = useMemo(
-    () =>
-      fleet.devices.reduce(
-        (sum, d) =>
-          d.state.phase !== "ready"
-            ? sum
-            : sum +
-              Object.values(d.state.conversations).filter(
-                ({ conversation }) => conversation.kind === "worker" && (sessionOf(d.state, conversation.id)?.activity ?? "idle") !== "idle",
-              ).length,
-        0,
-      ),
+    () => fleet.devices.reduce((sum, d) => (d.state.phase !== "ready" ? sum : sum + totalRunningWorkers(d.state)), 0),
     [fleet.devices],
   );
   const askingCount = reminders.asking.size;
@@ -294,9 +286,18 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       return !fleet.listed || pendingDevicePrefixes.has(k.slice(0, slash + 1));
     });
   }, [fleet.devices, fleet.listed, pendingCreated, drafts]);
+  const missingWorker = route?.view === "worker" && state.phase === "ready" && workerView === undefined && state.conversations[route.id] === undefined ? route.id : null;
+  const workerLookup = missingWorker === null ? undefined : state.lookups[missingWorker];
+  useEffect(() => {
+    if (missingWorker !== null && workerLookup === undefined) hub.ensureConversation(missingWorker);
+  }, [hub, missingWorker, workerLookup]);
   const invalidMobileRoute = !autoSelect && shellReady && routedDevice !== undefined && state.phase === "ready" && !awaitingCreated && route !== null &&
     route.view !== "router" && route.view !== "settings" &&
-    (route.view === "profile" ? profile === null : route.view === "worker" ? workerView === undefined || routedEntry === undefined : routedEntry === undefined);
+    (route.view === "profile"
+      ? profile === null
+      : route.view === "worker"
+        ? workerView === undefined ? state.conversations[route.id] !== undefined || workerLookup === "missing" : routedEntry === undefined
+        : routedEntry === undefined);
   useEffect(() => {
     if (invalidMobileRoute || (!autoSelect && route === null && window.location.hash !== "")) replace(null);
   }, [invalidMobileRoute, autoSelect, route, replace]);
@@ -363,6 +364,12 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const workerLine = useMemo(() => (openWorker === null ? null : workerLineOf(state, openWorker)), [state.conversations, openWorker]);
   const railPm = active?.pm?.id ?? null;
   const railWorkers = useMemo(() => (railPm === null ? EMPTY_WORKERS : workersOf(state, railPm)), [state.conversations, state.sessions, railPm]);
+  const railHasOlderWorkers = railPm !== null && state.olderEndedWorkers[railPm] !== undefined;
+  const railLoadMoreWorkers = useMemo(
+    () => (railPm !== null && railHasOlderWorkers ? () => hub.loadEndedWorkers(railPm) : undefined),
+    [hub, railPm, railHasOlderWorkers],
+  );
+  const ensureWorkers = useCallback((ids: WorkerId[]) => hub.ensureWorkers(ids), [hub]);
   const railAsks = useMemo(() => (active ? pendingAsks(state, active.id) : EMPTY_ASKS), [state.conversations, state.pms, state.pending, active?.id]);
   // 右栏的果皮轨：当前项目经理那个项目的活跃任务图（activeGraphsOf 按 state.activeTaskGraphs 的 WeakMap 缓存，流式帧里引用不变）
   const railProjectId = active?.project?.id ?? null;
@@ -593,6 +600,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       railAttention,
       railGraphs,
       railHasContent,
+      railLoadMoreWorkers,
       railOpen,
       railProjectId,
       railWorkers,
@@ -612,8 +620,10 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       toggleRail,
       view,
       workerLine,
+      workerLoading: workerLookup === "loading" || (missingWorker !== null && workerLookup === undefined),
       workerPmEntry,
       workerView,
+      ensureWorkers,
     },
   };
 }

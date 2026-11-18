@@ -404,7 +404,19 @@ describe("点开 Worker", () => {
     expect(within(region).queryByText("No messages yet")).not.toBeInTheDocument();
   });
 
-  it("找不到这个 Worker 的对话：写出来，能回去", async () => {
+  it("快照里没有的早收工 Worker：点开先单拉一次，拉到就显示它的对话", async () => {
+    const user = userEvent.setup();
+    const full = withWorker();
+    const worker = full.conversations.find((c) => c.conversation.id === 30)!;
+    await boot({ ...full, conversations: full.conversations.filter((c) => c.conversation.id !== 30) });
+    api.lookup = (query) => ({ status: 200, body: { conversations: query.get("ids") === "30" ? [worker] : [], sessions: [] } });
+    await user.click(workerButton());
+    const region = await screen.findByRole("region", { name: "Piece 修 X" });
+    expect(await within(region).findByText("已经修好了")).toBeInTheDocument();
+    expect(api.calls.filter((c) => c.path === "/api/conversations/lookup")).toHaveLength(1);
+  });
+
+  it("找不到这个 Worker 的对话：单拉过也没有，写出来，能回去", async () => {
     const user = userEvent.setup();
     await boot(
       withWorker({
@@ -412,7 +424,8 @@ describe("点开 Worker", () => {
       }),
     );
     await user.click(workerButton());
-    expect(screen.getByText("Piece not found")).toBeInTheDocument();
+    expect(await screen.findByText("Piece not found")).toBeInTheDocument();
+    expect(api.calls.filter((c) => c.path === "/api/conversations/lookup").map((c) => c.query.get("ids"))).toEqual(["30"]);
     await user.click(screen.getByRole("button", { name: "Back to 小林" }));
     expect(screen.getByRole("region", { name: "小林" })).toBeInTheDocument();
   });
