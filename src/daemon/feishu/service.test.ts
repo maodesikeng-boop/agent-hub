@@ -244,6 +244,73 @@ describe("createFeishuService：接入与建群", () => {
     expect(fake.callsOf("chat.update")).toHaveLength(before.updates + 1);
   });
 
+  /** 模拟升级：两个群上挂的都是旧图，重启后第一次对齐要原地换两个群的头像。 */
+  async function restartWithStaleAvatars(before: () => void) {
+    await connect();
+    await svc.close();
+    db.run("DELETE FROM feishu_avatars");
+    before();
+    svc = makeService();
+    await svc.start();
+    await vi.waitFor(() => expect(svc.setup.status().state).toBe("connected"));
+    await settle();
+  }
+
+  it("换头像时前面的群在离线期间被解散（232011）：记成已解散并重建，后面的群照常换头像，别的群出站不断", async () => {
+    let linChat = "" as FeishuChatId;
+    let zhouChat = "" as FeishuChatId;
+    await restartWithStaleAvatars(() => {
+      linChat = chatOf(lin.pmId);
+      zhouChat = chatOf(zhou.pmId);
+      fake.chats.delete(linChat);
+    });
+    expect(fake.callsOf("chat.update").filter((c) => c.chat_id === linChat)).toHaveLength(1);
+    expect(store().chatById(linChat)?.archivedAt).not.toBeNull();
+    const rebuilt = chatOf(lin.pmId);
+    expect(rebuilt).not.toBe(linChat);
+    expect(fake.chats.has(rebuilt)).toBe(true);
+    expect(store().chatById(zhouChat)?.avatarFruit).toBe(pmFruitOf(zhou.pmId));
+    const sentBefore = cardsSentTo(zhouChat).length;
+    ledger.postUserMessage({ conversationId: zhou.conversationId, clientId: "web-after-gone", text: "正常群还能收到消息吗" });
+    await settle();
+    expect(cardsSentTo(zhouChat).length).toBeGreaterThan(sentBefore);
+  });
+
+  it("换头像被飞书拒收（如没有改群信息的权限）：记日志、当作换过，不反复撞；后面的群照常换", async () => {
+    let linChat = "" as FeishuChatId;
+    let zhouChat = "" as FeishuChatId;
+    await restartWithStaleAvatars(() => {
+      linChat = chatOf(lin.pmId);
+      zhouChat = chatOf(zhou.pmId);
+      fake.failNext["chat.update"] = { code: 232018, msg: "no permission to update chat", httpStatus: 400 };
+    });
+    const updates = fake.callsOf("chat.update");
+    expect(updates.map((c) => c.chat_id)).toEqual([linChat, zhouChat]);
+    expect(store().chatById(linChat)?.avatarFruit).toBe(pmFruitOf(lin.pmId));
+    expect(store().chatById(zhouChat)?.avatarFruit).toBe(pmFruitOf(zhou.pmId));
+    expect(svc.setup.status().lastError).toContain("232018");
+    await svc.setup.resync();
+    await settle();
+    expect(fake.callsOf("chat.update")).toHaveLength(updates.length);
+  });
+
+  it("换头像碰上单群暂时性错误：其余群照常换、出站不断，失败的群隔一会儿重试补上", async () => {
+    let linChat = "" as FeishuChatId;
+    let zhouChat = "" as FeishuChatId;
+    await restartWithStaleAvatars(() => {
+      linChat = chatOf(lin.pmId);
+      zhouChat = chatOf(zhou.pmId);
+      fake.failNext["chat.update"] = new Error("socket hang up");
+    });
+    expect(store().chatById(zhouChat)?.avatarFruit).toBe(pmFruitOf(zhou.pmId));
+    const sentBefore = cardsSentTo(zhouChat).length;
+    ledger.postUserMessage({ conversationId: zhou.conversationId, clientId: "web-after-flaky", text: "正常群还能收到消息吗" });
+    await settle();
+    expect(cardsSentTo(zhouChat).length).toBeGreaterThan(sentBefore);
+    await vi.waitFor(() => expect(store().chatById(linChat)?.avatarFruit).toBe(pmFruitOf(lin.pmId)), { timeout: FEISHU_CONTROL_RETRY_MS * 3 });
+    expect(fake.callsOf("chat.update").filter((c) => c.chat_id === linChat)).toHaveLength(2);
+  });
+
   it("建群请求带同一个 uuid；崩在建好还没记下之间，重启后按群说明的标记认回来，不多建", async () => {
     await connect();
     const first = fake.callsOf("chat.create");
