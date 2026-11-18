@@ -227,12 +227,15 @@ export function createLedgerSessions(ctx: LedgerContext) {
     const row = getAgentSession(db, sessionId);
     if (row === null) return;
     const l = liveOf(sessionId);
+    const rowExhausted = row.rateLimit !== null && isQuotaExhausted(row.rateLimit);
+    const liveExhausted = l.rateLimit !== undefined && l.rateLimit !== null && isQuotaExhausted(l.rateLimit);
+    if (!rowExhausted && !liveExhausted) return;
     const info = l.rateLimit !== undefined ? l.rateLimit : row.rateLimit;
-    if (info === null || !isQuotaExhausted(info)) return;
-    const cleared = clearRateLimitRejection(info);
+    const cleared = info === null ? null : clearRateLimitRejection(info);
     db.run("UPDATE agent_sessions SET rate_limit = ? WHERE id = ?", cleared === null ? null : JSON.stringify(cleared), sessionId);
     updateLive(p, sessionId, (next) => {
       next.rateLimit = cleared;
+      next.rateLimitReported = false;
     });
   };
 

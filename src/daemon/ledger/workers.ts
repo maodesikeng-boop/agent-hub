@@ -273,7 +273,7 @@ export function createLedgerWorkers(
   },
 ) {
   const { db, now, write, enqueue } = ctx;
-  const { currentSession, insertSession, liveOf, updateLive } = sessions;
+  const { currentSession, dropRateLimitRejection, insertSession, liveOf, updateLive } = sessions;
   const { transition, stopIn } = messages;
   const { pmRow, assertPmNotArchived } = persona;
   const { activeProjectOf, projectCard, syncSessionFolders } = projects;
@@ -1127,6 +1127,7 @@ export function createLedgerWorkers(
     const blocked = ctx.commandBlockReason(session, text);
     if (blocked !== null) throw fail("invalid", blocked);
     options.taskGraphs?.onWorkerResumedIn(p, worker.id);
+    dropRateLimitRejection(p, session.id);
     const message = insertPmMessage(p, worker, session, text, sendDedupeKey(worker.id));
     enqueue(p, { type: "session.send", params: { sessionId: message.session_id!, messageId: message.id, source: "user" } });
     // /compact 这一轮只压缩上下文、没有汇报（afterDriverEvent）：别让项目经理干等

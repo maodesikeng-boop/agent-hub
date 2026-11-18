@@ -3,7 +3,7 @@
 import { randomUUID } from "node:crypto";
 import type { AnyActionRow } from "../../shared/actions.ts";
 import type { MessagesPage } from "../../shared/api.ts";
-import type { UserMessageMeta } from "../../shared/attachments.ts";
+import { isLedgerWakeup, type UserMessageMeta } from "../../shared/attachments.ts";
 import { mergeDeliverables, type Deliverable, type HubFileArg } from "../../shared/deliverables.ts";
 import { agentMessageDedupeKey, canTransitionMessage, systemMessageDedupeKey, userMessageDedupeKey } from "../../shared/domain.ts";
 import type { AgentRole, AgentSessionRow, AskMeta, BlockerRef, ConversationId, GateRef, Message, MessageId, MessageStatus, SessionId, SystemMessageMeta } from "../../shared/domain.ts";
@@ -77,7 +77,7 @@ export function createLedgerMessages(
   const afterUserPost = options.afterUserPost ?? (() => {});
   const onIndependentAskCreated = options.onIndependentAskCreated ?? (() => {});
   const { db, now, write, enqueue, reportHealthIn } = ctx;
-  const { currentSession, liveOf, updateLive, workingSessionIds } = sessions;
+  const { currentSession, dropRateLimitRejection, liveOf, updateLive, workingSessionIds } = sessions;
 
   /** 老的项目群（11-03 拿掉了）当作不存在。 */
   const conversationExists = (id: ConversationId) =>
@@ -499,6 +499,7 @@ export function createLedgerMessages(
         t,
         t,
       )!;
+      dropRateLimitRejection(p, session.id);
       enqueue(p, { type: "session.send", params: { sessionId: session.id, messageId: row.id, source: "user" } });
       p.changes.push({ type: "message.created", data: { message: toMessage(row) } });
       afterUserPost(p, input.conversationId);
@@ -661,6 +662,7 @@ export function createLedgerMessages(
         now(),
         messageId,
       );
+      if (!isLedgerWakeup(message)) dropRateLimitRejection(p, session.id);
       enqueue(p, { type: "session.send", params: { sessionId: session.id, messageId, source: "user" } });
       p.changes.push({ type: "message.updated", data: { message: getMessage(messageId)! } });
       return { messageId };

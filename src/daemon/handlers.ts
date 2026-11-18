@@ -17,11 +17,14 @@ import {
   SessionTokenRevokedError,
   WORKER_FIRST_TURN_RECHECK_MS,
   diffReviewSnapshot,
+  isLedgerWakeup,
   isQuotaExhausted,
   type ActionHandler,
   type ActionResult,
+  type ActionRow,
   type Driver,
   type Ledger,
+  type Message,
   type ReviewObservation,
   type SessionStore,
   type SessionTokens,
@@ -79,6 +82,16 @@ function rateLimitWaitMs(deps: Pick<HandlerDeps, "sessions" | "now">, sessionId:
   return wait > 0 ? wait : null;
 }
 
+function waitsForRateLimitReset(
+  action: ActionRow<"session.send">,
+  message: Pick<Message, "sender" | "meta">,
+): boolean {
+  const { source, resend, recovery } = action.params;
+  if (source === "system" || message.sender === "system") return true;
+  if (resend || recovery || action.attempts > 0) return true;
+  return isLedgerWakeup(message);
+}
+
 export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"session.send"> {
   return async (action): Promise<ActionResult> => {
     const { sessionId, messageId, source, resend, recovery } = action.params;
@@ -89,8 +102,10 @@ export function createSessionSendHandler(deps: HandlerDeps): ActionHandler<"sess
     if (deps.ledger.waitsForFirstTurn(sessionId, messageId)) return { kind: "later", delayMs: WORKER_FIRST_TURN_RECHECK_MS, reason: "worker_not_started" };
     // 项目经理在写交接、或者新会话的第一条（交接）还没发：先压着，换代后账本把它改发给新会话（ledger/handover.ts）
     if (deps.ledger.waitsForHandover(messageId)) return { kind: "later", delayMs: QUEUED_RECHECK_MS, reason: "handover" };
-    const wait = rateLimitWaitMs(deps, sessionId);
-    if (wait !== null) return { kind: "later", delayMs: Math.min(wait + RATE_LIMIT_RECHECK_PAD_MS, RATE_LIMIT_RECHECK_MAX_MS), reason: "rate_limited" };
+    if (waitsForRateLimitReset(action, message)) {
+      const wait = rateLimitWaitMs(deps, sessionId);
+      if (wait !== null) return { kind: "later", delayMs: Math.min(wait + RATE_LIMIT_RECHECK_PAD_MS, RATE_LIMIT_RECHECK_MAX_MS), reason: "rate_limited" };
+    }
     // 任务图待交付通知（task_graph.ready_to_finish）真正送入 PM 前，在事务外补探一次 git diff --numstat 与 PR 状态（探测失败不阻断）
     const probeTarget = deps.ledger.graphDeliveryProbeTarget?.(messageId) ?? null;
     if (probeTarget !== null && (deps.probeDiffNumstat || deps.probePr)) {

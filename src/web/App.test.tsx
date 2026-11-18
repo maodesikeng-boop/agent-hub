@@ -767,6 +767,28 @@ describe("等额度", () => {
     expect(screen.getByRole("status", { name: "Status" })).toHaveTextContent("Usage limit reached");
     expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
   });
+
+  it("未到 resetsAt 时用户手动发出“继续”：状态栏立即不再显示旧的 Usage limit reached", async () => {
+    const user = userEvent.setup();
+    await boot(
+      makeSnapshot({
+        pms: defaultSnapshot().pms,
+        conversations: defaultSnapshot().conversations,
+        sessions: [
+          makeSession({
+            conversationId: 1,
+            pmId: 1,
+            rateLimit: { status: "rejected", resetsAt: 1_900_000_000, windows: {} },
+          }),
+        ],
+      }),
+    );
+    expect(screen.getByRole("status", { name: "Status" })).toHaveTextContent(/^Usage limit reached, resets /);
+
+    await user.type(box(), "继续{Enter}");
+    await waitFor(() => expect(api.callsTo("POST", /messages$/)).toHaveLength(1));
+    expect(screen.queryByText(/Usage limit reached/)).not.toBeInTheDocument();
+  });
 });
 
 describe("断线重连", () => {

@@ -5,10 +5,14 @@ import {
   MAX_REWOUND_PENDING_KEYS,
   ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX,
   ROUTER_STREAM_LIVE_MAX,
+  clearRateLimitRejection,
   emptyRouterSlice,
+  isLedgerWakeup,
+  isQuotaExhausted,
   isRewoundMessage,
   isWorkerEndLine,
   serverInfoFor,
+  sessionOf,
   userMessageDedupeKey,
   workerEventOf,
   type Attachment,
@@ -202,6 +206,23 @@ function upsertBy<T>(list: T[], item: T, same: (a: T, b: T) => boolean): T[] {
   return index === -1 ? [...list, item] : list.with(index, item);
 }
 
+function dropSessionQuotaRejection(
+  sessions: SessionState[],
+  conversationId: ConversationId,
+  sessionId?: number | null,
+): SessionState[] {
+  const current = sessionOf({ sessions }, conversationId);
+  const targetId = sessionId ?? current?.sessionId;
+  if (targetId == null) return sessions;
+  if (current?.sessionId === targetId && !isQuotaExhausted(current.rateLimit)) return sessions;
+  if (!sessions.some((s) => s.sessionId === targetId && isQuotaExhausted(s.rateLimit))) return sessions;
+  return sessions.map((s) =>
+    s.sessionId === targetId && s.rateLimit !== null && isQuotaExhausted(s.rateLimit)
+      ? { ...s, rateLimit: clearRateLimitRejection(s.rateLimit) }
+      : s,
+  );
+}
+
 /** 分开按类型裁剪近窗：待拍板最多留 ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX 条，简报最多留 ROUTER_STREAM_LIVE_MAX 条，简报再多也不挤掉待拍板。 */
 function capRouterItems(items: RouterItem[]): { items: RouterItem[]; reportsTrimmed: boolean } {
   let decisions = 0;
@@ -272,7 +293,7 @@ export function applyChange(state: HubState, change: Change): HubState {
       const nextBase = wasRewoundPending
         ? { ...next, rewoundKeys: state.rewoundKeys!.filter((k) => k !== raw.dedupeKey) }
         : next;
-      const sessions =
+      const afterStreaming =
         change.type === "message.created" &&
         message.sender === "agent" &&
         message.sessionId !== null &&
@@ -283,6 +304,12 @@ export function applyChange(state: HubState, change: Change): HubState {
               return clean;
             })
           : state.sessions;
+      const sessions =
+        change.type === "message.created" &&
+        message.status === "queued" &&
+        ((message.sender === "user" && !isLedgerWakeup(message)) || message.sender === "pm")
+          ? dropSessionQuotaRejection(afterStreaming, message.conversationId, message.sessionId)
+          : afterStreaming;
       const view = state.conversations[message.conversationId];
       if (!view) return { ...nextBase, sessions }; // 不认识的对话，device-hub.ts 会重新拉快照
       // 初始快照未加载消息的 Worker 对话（messages 为空且 hasMore 为 true）：没点开加载前不往空列表里塞单条实时消息，等点开时一次拉齐最新一页
@@ -672,9 +699,23 @@ export function reducer(state: HubState, action: HubAction): HubState {
       return { ...state, ...merged, olderEndedWorkers };
     }
     case "pendingAdd":
-      return { ...state, pending: [...state.pending, action.pending] };
-    case "retryStart":
-      return { ...state, retry: { ...state.retry, [action.messageId]: "retrying" } };
+      return {
+        ...state,
+        sessions: dropSessionQuotaRejection(state.sessions, action.pending.conversationId),
+        pending: [...state.pending, action.pending],
+      };
+    case "retryStart": {
+      let retryConvId: ConversationId | null = null;
+      for (const view of Object.values(state.conversations)) {
+        const m = view.messages.find((x) => x.id === action.messageId);
+        if (m) {
+          if (m.sender === "user" && !isLedgerWakeup(m)) retryConvId = m.conversationId;
+          break;
+        }
+      }
+      const sessions = retryConvId === null ? state.sessions : dropSessionQuotaRejection(state.sessions, retryConvId);
+      return { ...state, sessions, retry: { ...state.retry, [action.messageId]: "retrying" } };
+    }
     case "retryFailed":
       return { ...state, retry: { ...state.retry, [action.messageId]: "error" } };
     case "pendingPhase":
