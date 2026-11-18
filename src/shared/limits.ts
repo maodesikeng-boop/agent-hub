@@ -1120,6 +1120,13 @@ export const FEISHU_IMAGE_SHRINK_BYTES = 2 * 1024 * 1024;
 /** 调飞书开放接口每次 HTTP 请求的超时；上传图片、文件和下载资源（最大 30 MB）另按 FEISHU_TRANSFER_TIMEOUT_MS。 */
 export const FEISHU_HTTP_TIMEOUT_MS = 30_000;
 export const FEISHU_TRANSFER_TIMEOUT_MS = 180_000;
+/**
+ * 飞书长连接（官方 WSClient）的心跳看门狗：发出 ping 后这么多秒没收到任何帧就断开重连。
+ * 不设时半开的假活连接（网络切换、梯子、NAT 回收）要等 TCP 自己报错才发现，期间入站事件全丢，只能等飞书几分钟后重推。
+ */
+export const FEISHU_WS_PING_TIMEOUT_S = 10;
+/** 长连接握手超时：代理、NAT 卡住时放弃这次握手进重试，不让连接一直挂着。 */
+export const FEISHU_WS_HANDSHAKE_TIMEOUT_MS = 15_000;
 /** state/feishu-secrets.json 的权限，和 state/ui-token 一样。 */
 export const FEISHU_SECRETS_FILE_MODE = 0o600;
 /** 群名最多几个字（飞书建议 ≤ 60）。 */

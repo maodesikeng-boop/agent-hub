@@ -26,6 +26,8 @@ export interface FeishuSdkOptions {
   appId: string;
   appSecret: string;
   log: (line: string) => void;
+  /** 开放接口和长连接的地址；不给时按 brand 用官方域名（测试指向本地假服务）。 */
+  domain?: string;
 }
 
 /** 限流（FEISHU_RATE_LIMIT_CODES 或 HTTP 429）退避后重试，最多 RATE_LIMIT_RETRIES 次。 */
@@ -139,7 +141,7 @@ function checkAuth(result: FeishuApiResult): void {
  * 后置：返回的传输层还没连长连接（start 时才连）；call 用 tenant_access_token，SDK 自己换取和续期。
  */
 export function createFeishuSdkTransport(options: FeishuSdkOptions): FeishuTransport {
-  const domain = options.brand === "lark" ? lark.Domain.Lark : lark.Domain.Feishu;
+  const domain = options.domain ?? (options.brand === "lark" ? lark.Domain.Lark : lark.Domain.Feishu);
   const logger = {
     error: (...msg: unknown[]) => options.log(`飞书 SDK：${msg.map(String).join(" ")}`),
     warn: (...msg: unknown[]) => options.log(`飞书 SDK：${msg.map(String).join(" ")}`),
