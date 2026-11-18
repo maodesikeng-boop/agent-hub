@@ -24,7 +24,7 @@ export type FeishuOutboundIntent =
   | { kind: "mirror_user"; conversationId: ConversationId; message: Message }
   /** 新的提问卡。 */
   | { kind: "ask_card"; conversationId: ConversationId; message: Message; deliverables: Deliverable[] }
-  /** 提问卡的状态变了（回答了、关掉了、替换了）：飞书里那张卡改成定案的样子。 */
+  /** 提问卡的状态变了（回答了、关掉了、替换了）：项目群里那张卡、总助单聊里引用它的那条一起改成定案的样子。 */
   | { kind: "ask_settled"; conversationId: ConversationId; message: Message }
   /** 总助的卡片：新的简报或拍板项，或它的状态变了。 */
   | { kind: "router_item"; item: RouterItem }

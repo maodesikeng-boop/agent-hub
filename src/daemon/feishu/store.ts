@@ -39,6 +39,7 @@ export interface FeishuChatBinding {
   avatarFruit: PmFruit | null;
   triggerMode: FeishuTriggerMode;
   guestTier: FeishuGuestTier;
+  /** 项目经理归档、群已解散的时间；取消归档重建群时作为建群 uuid 的 generation。 */
   archivedAt: number | null;
   /** 已投影到这个会话的最大编号（项目群看消息，总助单聊看卡片和指令）；没有是 null。 */
   lastMessageId: MessageId | null;
@@ -87,16 +88,19 @@ export interface FeishuStore {
   chats(): FeishuChatBinding[];
   chatById(chatId: FeishuChatId): FeishuChatBinding | null;
   chatOfTarget(target: FeishuChatTarget): FeishuChatBinding | null;
-  /** 后置：同一个 target 只有一行（数据库唯一索引）；已有时更新会话编号和名字，唤醒方式和访客档位不动。 */
+  /**
+   * 后置：同一个 target 只有一行（数据库唯一索引）；已有时换成新的会话编号和名字（取消归档重建的群），
+   * 旧群的 feishu_posts 和补发水位一并清掉，archivedAt 回到 null，唤醒方式和访客档位不动。
+   */
   upsertChat(input: { chatId: FeishuChatId; target: FeishuChatTarget; name: string; label: string }, now: number): FeishuChatBinding;
   /** label 不给时只记飞书里的新名字（用户在飞书里改的）。 */
   renameChat(chatId: FeishuChatId, name: string, label: string | null, now: number): void;
   setChatAvatar(chatId: FeishuChatId, fruit: PmFruit, now: number): void;
   /** 后置：只改给了的字段；返回改完的记录。没有这个项目经理的群抛错。 */
   setChatPolicy(pmId: PmId, policy: { triggerMode?: FeishuTriggerMode; guestTier?: FeishuGuestTier }, now: number): FeishuChatBinding;
-  /** archivedAt 为 null 是取消归档。 */
-  setChatArchived(chatId: FeishuChatId, archivedAt: number | null, now: number): void;
-  /** 后置：删掉这一行和它的 feishu_posts（群被解散、机器人被移出、retire 之后）。 */
+  /** 后置：群已解散，记下归档时间；这个群的 feishu_posts 删掉（消息随群没了）。 */
+  setChatArchived(chatId: FeishuChatId, archivedAt: number, now: number): void;
+  /** 后置：删掉这一行和它的 feishu_posts（retire 之后；或群被别人解散、机器人被移出，下一次对齐重建）。 */
   removeChat(chatId: FeishuChatId): void;
   /** 后置：水位只往大了改，传更小的值不变。 */
   advanceWatermark(chatId: FeishuChatId, mark: { messageId?: MessageId; routerItemId?: RouterItemId; routerCommandId?: RouterCommandId }, now: number): void;

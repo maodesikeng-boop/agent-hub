@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS feishu_app (
 ) STRICT;
 
 -- 总助是主人和机器人的单聊，每个项目经理一个私有群。
--- 项目经理删掉时 pm_id 置空（群在飞书里还在），下一次对齐给群改名、发说明后删掉这一行。
+-- 项目经理归档时群已解散，这一行留着（archived_at 记解散时间，取消归档重建群时换 chat_id）；
+-- 项目经理删掉时 pm_id 置空，下一次对齐解散群（还没解散的话）后删掉这一行。
 CREATE TABLE IF NOT EXISTS feishu_chats (
   chat_id               TEXT    PRIMARY KEY,
   target                TEXT    NOT NULL CHECK (target IN ('router', 'pm')),

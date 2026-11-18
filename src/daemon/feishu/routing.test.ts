@@ -12,10 +12,10 @@ describe("routeFeishuMessage", () => {
   it.todo("主人在单聊里说话 → deliver 给总助；别人在单聊里说话 → reject");
   it.todo("唤醒时 deliver，origin 带 mode、guestTier 和这个群的背景");
   it.todo("shared 下没 @机器人 的话 → context，送达时由调用方清空背景");
-  it.todo("observer 档访客的话不唤醒也不记背景 → ignore");
+  it.todo("observer 档访客的话 @机器人 也不唤醒，记成背景 → context");
   it.todo("访客以“/”开头的话 → reject");
   it.todo("chat_only 档访客带的文件不收，droppedFiles 记个数；collaborator 档收");
-  it.todo("话题里的话 → ignore；项目经理已归档 → reject");
+  it.todo("话题里的话 → ignore；记录已归档（群已解散）的迟到事件 → ignore");
 });
 
 describe("routeFeishuAction", () => {

@@ -82,7 +82,7 @@ export type FeishuTriggerMode = (typeof FEISHU_TRIGGER_MODES)[number];
  * 访客权限档位，按项目群设，默认 chat_only：
  * - chat_only：访客 @机器人 能和项目经理对话；拍板、停止、发附件只认主人；
  * - collaborator：再放开拍板卡、停止、发附件；
- * - observer：访客只能看，说话不唤醒项目经理、也不记成背景。
+ * - observer：访客说话不唤醒项目经理，只记成背景，主人下次唤醒时一起交给项目经理。
  * 不管哪一档，越出这个项目的操作（建项目、挂卸文件夹、准备命令、改性格设定）在访客的话触发的轮次里都由账本拦下。
  */
 export const FEISHU_GUEST_TIERS = ["chat_only", "collaborator", "observer"] as const;

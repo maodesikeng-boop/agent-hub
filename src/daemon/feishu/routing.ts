@@ -58,11 +58,11 @@ export type FeishuMessageRoute =
  * 前置：message 已过 parseFeishuEvent。
  * 后置（按顺序，命中即返回）：
  * - 单聊：没认主人且文字是有效绑定码 → bind_owner；主人 → deliver 给总助；别人 → reject（“这是 X 的私人助手”）；
- * - 不是 Fusa 的群，或还没认主人 → ignore；群对应的项目经理已归档 → reject；话题里的话 → ignore；
+ * - 不是 Fusa 的群，或还没认主人 → ignore；记录已归档（群已解散，迟到的事件）→ ignore；话题里的话 → ignore；
  * - 项目群里主人或访客发的话，是否唤醒按 wakes(ctx, mentionedBot) 定：
  *   - 唤醒：deliver，origin 带 mode、guestTier 和 ctx.pendingContext；
- *   - 不唤醒：context（observer 档的访客连背景也不记 → ignore）；
- * - 访客：observer 档一律不唤醒；以“/”开头的文字 → reject（厂商斜杠命令只给主人）；
+ *   - 不唤醒：context；
+ * - 访客：observer 档一律不唤醒，说的话照样记成背景，主人下次唤醒时捎上；以“/”开头的文字 → reject（厂商斜杠命令只给主人）；
  *   本档不能 send_files 时文件不收，droppedFiles 记个数。
  */
 export function routeFeishuMessage(message: InboundMessage, ctx: FeishuRoutingContext): FeishuMessageRoute {

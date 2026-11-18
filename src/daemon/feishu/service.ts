@@ -7,6 +7,8 @@
 // - 长连接回调 3 秒内返回（只解析、入队；卡片点击先回 toast），处理排队，上限 FEISHU_INBOUND_QUEUE_MAX / FEISHU_OUTBOUND_QUEUE_MAX；
 // - 飞书消息编号当 clientId（feishu:<message_id>），重推天然幂等；
 // - 发到同一个群每秒不超过 FEISHU_CHAT_SENDS_PER_SECOND 条（飞书同一个群里机器人共享 5 QPS）；
+// - 同一张拍板卡在项目群和总助单聊各有一份，点哪份都走同一个账本接口；后点的那份账本回 conflict，转成 toast“已经定过了”；
+// - 群被别人解散或机器人被移出（chat_gone）时：已归档的记录不动（是我们自己解散的），其余删记录，下一次对齐重建；
 // - 飞书挂了、凭证失效都不影响网页和 agent：这里的错误只记日志和状态，不往账本抛。
 import type { ConversationId, Message, MessageId } from "../../shared/domain.ts";
 import type { Ledger } from "../../shared/ledger.ts";

@@ -33,7 +33,7 @@ export interface FeishuMethodArgs {
   "chat.list": { page_token?: string; page_size: number };
   /** GET /open-apis/im/v1/chats/:chat_id/members：群成员和显示名（对账人数、署名用，不需要通讯录权限）。 */
   "chat.members": { chat_id: string; page_token?: string; page_size: number };
-  /** DELETE /open-apis/im/v1/chats/:chat_id：解散群（只在断开时用户选了解散）。 */
+  /** DELETE /open-apis/im/v1/chats/:chat_id：解散群（项目经理归档、删掉，或断开时用户选了解散）。 */
   "chat.delete": { chat_id: string };
   /** POST /open-apis/im/v1/messages：发消息。receive_id_type 为 chat_id 或 open_id（总助单聊按主人 open_id 发）。 */
   "message.create": {

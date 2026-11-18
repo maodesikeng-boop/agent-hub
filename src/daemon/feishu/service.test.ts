@@ -5,7 +5,9 @@ import { describe, it } from "vitest";
 describe("createFeishuService：接入与建群", () => {
   it.todo("扫码接入后给每个未归档项目经理建私有对话群：群名是项目经理名字、头像是它的水果、主人是群主、群说明带标记");
   it.todo("建群请求带同一个 uuid；崩在建好还没记下之间，重启后按群说明的标记认回来，不多建");
-  it.todo("新建项目经理建群、改名改群名、归档群名加（已归档）、取消归档改回、删掉后 retire；重复收到同一变化不多建群");
+  it.todo("新建项目经理建群、改名改群名；重复收到同一变化不多建群");
+  it.todo("项目经理归档时解散群；取消归档时新建一个群，唤醒方式和访客档位沿用归档前的；删掉时解散群、删记录");
+  it.todo("群被别人解散或机器人被移出后，下一次对齐重建群");
   it.todo("没配过凭证时 start 不连飞书，网页和 agent 照常");
   it.todo("凭证失效时状态变 auth_failed，不重试，不往账本抛错");
 });
@@ -23,7 +25,7 @@ describe("createFeishuService：访客权限", () => {
   it.todo("第一个访客进群时群里发一张访客权限卡；主人点按钮改档位，访客点收到 toast");
   it.todo("chat_only 档访客点拍板、停止只收到 toast，账本不变；发的文件不收");
   it.todo("collaborator 档访客点拍板记进账本，点停止能停，发的文件收成附件");
-  it.todo("observer 档访客说话不进账本、不记背景");
+  it.todo("observer 档访客 @机器人 也不唤醒；主人下次唤醒时，访客说的话作为背景一起交给项目经理");
   it.todo("任何档访客的话触发的那一轮里项目经理调 project.attach 被账本拒绝");
   it.todo("别人私聊机器人被拒，不进总助");
 });
@@ -42,7 +44,9 @@ describe("createFeishuService：流式、急停与卡片", () => {
 
 describe("createFeishuService：总助单聊", () => {
   it.todo("主人在单聊里说的话交给 submitCommand，结果作为新卡片发在单聊里");
-  it.todo("简报发到单聊；带提问卡的拍板项只发摘要和打开项目群的按钮");
+  it.todo("简报发到单聊；带提问卡的拍板项在单聊里也有选项按钮");
+  it.todo("在单聊里点选项后账本记下回答，项目群里那张卡同时改成已定案；反过来在群里点，单聊那条也改");
+  it.todo("两处都点时后点的那处收到“已经定过了”的 toast，账本只记一次");
 });
 
 describe("createFeishuService：断线与补发", () => {

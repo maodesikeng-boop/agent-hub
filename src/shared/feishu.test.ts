@@ -8,7 +8,7 @@ describe("parseFeishu*", () => {
 describe("feishuGuestMay", () => {
   it.todo("chat_only：能 talk，不能 answer_card、stop、send_files");
   it.todo("collaborator：talk、answer_card、stop、send_files 都能");
-  it.todo("observer：四件都不能");
+  it.todo("observer：四件都不能（说的话只记成背景，由 routing 处理）");
 });
 
 describe("feishuDeliveryPrefixes", () => {

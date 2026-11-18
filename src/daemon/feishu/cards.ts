@@ -66,10 +66,18 @@ export function renderAskCard(message: Message, ask: AskMeta, state: FeishuCardS
 }
 
 /**
- * 后置：总助单聊里的一条：简报是摘要；带 askMessageId 的拍板项写一行摘要和“去项目群拍板”按钮（打开那个群，不重复放选项）；
- * 没有 askMessageId 的拍板项带选项按钮。
+ * 总助单聊里的一条。
+ * 前置：ask 是 item 引用的那张提问卡（item 带 askMessageId 时调用方从账本取来），没有引用是 null。
+ * 后置：简报是摘要和“打开项目群”按钮；带 ask 的拍板项和项目群里那张卡用同一个 FeishuCardRef（kind ask / gate / blocker），
+ * 选项、补充说明和定案样子都照 renderAskCard，另加“打开项目群”按钮；没有 ask 的拍板项用 kind router_item 的选项按钮。
+ * 两处卡片点哪一处都走同一个账本接口，定案后两处一起改。
  */
-export function renderRouterItem(item: RouterItem, pmChatId: FeishuChatId | null): FeishuCardJson {
+export function renderRouterItem(
+  item: RouterItem,
+  ask: { message: Message; meta: AskMeta } | null,
+  state: FeishuCardState,
+  pmChatId: FeishuChatId | null,
+): FeishuCardJson {
   throw new Error("未实现");
 }
 

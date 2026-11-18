@@ -13,8 +13,9 @@ describe("renderAskCard", () => {
 });
 
 describe("renderRouterItem", () => {
-  it.todo("带 askMessageId 的拍板项只写摘要和打开项目群的按钮，不重复放选项");
-  it.todo("没有 askMessageId 的拍板项带选项按钮");
+  it.todo("带 ask 的拍板项和项目群那张卡的按钮值解码出同一个 FeishuCardRef，另有打开项目群的按钮");
+  it.todo("带 ask 的拍板项定案后和 renderAskCard 一样写明结论、没有按钮");
+  it.todo("没有 ask 的拍板项带 router_item 的选项按钮；简报只有摘要和打开项目群的按钮");
 });
 
 describe("renderReplyCard", () => {
