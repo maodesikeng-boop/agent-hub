@@ -1,4 +1,4 @@
-// 飞书的绑定与投影（迁移 0034：feishu_app、feishu_chats、feishu_posts、feishu_avatars，0035 给 feishu_posts 加附件；docs/feishu-design.md）。
+// 飞书的绑定与投影（迁移 0034：feishu_app、feishu_chats、feishu_posts、feishu_avatars，0035 给 feishu_posts 加附件，0037 给 feishu_avatars 记图片内容哈希；docs/feishu-design.md）。
 // 不变量：
 // - App Secret 不在这里（secrets.ts）；
 // - feishu_posts 是“账本里的这样东西发到了飞书的哪条消息、哪张卡片实体”，同一个 ref 只有一行，重发、定稿、改定案、补发都先查它；
@@ -41,6 +41,7 @@ export interface FeishuChatBinding {
   target: FeishuChatTarget | { kind: "pm"; pmId: null };
   name: string;
   label: string;
+  /** 群头像现在是哪个水果；没设过、或这个水果的头像图片换了还没给这个群换上（clearChatAvatars）是 null。 */
   avatarFruit: PmFruit | null;
   triggerMode: FeishuTriggerMode;
   guestTier: FeishuGuestTier;
@@ -102,6 +103,8 @@ export interface FeishuStore {
   /** label 不给时只记飞书里的新名字（用户在飞书里改的）。 */
   renameChat(chatId: FeishuChatId, name: string, label: string | null, now: number): void;
   setChatAvatar(chatId: FeishuChatId, fruit: PmFruit, now: number): void;
+  /** 后置：头像是这个水果的群全部改回“没设过”（这个水果的头像图片换了，下一次对齐给它们原地换上）。 */
+  clearChatAvatars(fruit: PmFruit, now: number): void;
   /** 后置：只改给了的字段；返回改完的记录。没有这个项目经理的群抛错。 */
   setChatPolicy(pmId: PmId, policy: { triggerMode?: FeishuTriggerMode; guestTier?: FeishuGuestTier }, now: number): FeishuChatBinding;
   /** 后置：群已解散，记下归档时间；这个群的 feishu_posts 删掉（消息随群没了）。 */
@@ -133,8 +136,9 @@ export interface FeishuStore {
   /** 后置：删掉 state 为 final / card_settled 且早于 before 的行，返回删了几行。等拍板的不删。 */
   prunePosts(before: number): number;
 
-  avatarKey(fruit: PmFruit): FeishuImageKey | null;
-  saveAvatarKey(fruit: PmFruit, imageKey: FeishuImageKey, now: number): void;
+  /** 后置：这个水果记下的 image_key，只有记下的图片内容哈希和 hash 相同才返回；没传过、图片换了都是 null。 */
+  avatarKey(fruit: PmFruit, hash: string): FeishuImageKey | null;
+  saveAvatarKey(fruit: PmFruit, imageKey: FeishuImageKey, hash: string, now: number): void;
 }
 
 /** 前置：迁移 0035 已跑。 */
@@ -248,6 +252,9 @@ export function createFeishuStore(db: Db): FeishuStore {
     },
     setChatAvatar(chatId, fruit, now) {
       db.run("UPDATE feishu_chats SET avatar_fruit = ?, updated_at = ? WHERE chat_id = ?", fruit, now, chatId);
+    },
+    clearChatAvatars(fruit, now) {
+      db.run("UPDATE feishu_chats SET avatar_fruit = NULL, updated_at = ? WHERE avatar_fruit = ?", now, fruit);
     },
     setChatPolicy(pmId, policy, now) {
       const chat = chatOfTarget({ kind: "pm", pmId });
@@ -363,15 +370,17 @@ export function createFeishuStore(db: Db): FeishuStore {
       return db.run("DELETE FROM feishu_posts WHERE state IN ('final', 'card_settled') AND updated_at < ?", before).changes;
     },
 
-    avatarKey(fruit) {
-      const row = db.get<{ image_key: string }>("SELECT image_key FROM feishu_avatars WHERE fruit = ?", fruit);
+    avatarKey(fruit, hash) {
+      const row = db.get<{ image_key: string }>("SELECT image_key FROM feishu_avatars WHERE fruit = ? AND content_sha256 = ?", fruit, hash);
       return row === undefined ? null : (row.image_key as FeishuImageKey);
     },
-    saveAvatarKey(fruit, imageKey, now) {
+    saveAvatarKey(fruit, imageKey, hash, now) {
       db.run(
-        "INSERT INTO feishu_avatars (fruit, image_key, uploaded_at) VALUES (?, ?, ?) ON CONFLICT (fruit) DO UPDATE SET image_key = excluded.image_key, uploaded_at = excluded.uploaded_at",
+        `INSERT INTO feishu_avatars (fruit, image_key, content_sha256, uploaded_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT (fruit) DO UPDATE SET image_key = excluded.image_key, content_sha256 = excluded.content_sha256, uploaded_at = excluded.uploaded_at`,
         fruit,
         imageKey,
+        hash,
         now,
       );
     },

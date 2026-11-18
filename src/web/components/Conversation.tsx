@@ -15,7 +15,7 @@ import { MessageList } from "./MessageList.tsx";
 import type { MessageActions } from "./Messages.tsx";
 import { RowError } from "./SettingsList.tsx";
 import { useStop } from "../useStop.ts";
-import { useAgentStatusNode } from "./AgentStatus.tsx";
+import { hasAgentStatus, useAgentStatusNode } from "./AgentStatus.tsx";
 
 function ArchivedBanner({ pmId, archivedAt }: { pmId: PmId; archivedAt: number }) {
   const client = useClient();
@@ -150,10 +150,10 @@ export function Conversation({
             className="touch-target shrink-0 cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
             onClick={() => entry.pm && onOpenProfile(entry.pm.id)}
           >
-            <Avatar colorKey={entry.avatarKey} size={34} />
+            <Avatar colorKey={entry.avatarKey} size={34} working={hasAgentStatus(session)} />
           </button>
         ) : (
-          <Avatar colorKey={entry.avatarKey} size={34} />
+          <Avatar colorKey={entry.avatarKey} size={34} working={hasAgentStatus(session)} />
         )}
         <div className="min-w-0 flex-1">
           <h1 title={entry.name} className="w-fit max-w-full truncate text-title leading-snug font-semibold">

@@ -11,7 +11,7 @@ const RIVET_FILL_COLOR = "#d4d4d8";
 
 /**
  * 水果刀矢量头像（docs/router-design.md 第 4.1 节、docs/ui-standard.md 第 4、21 条）：
- * 延续水果三元视觉（PM 整果切片 slice / Piece 果瓣 wedge / Router 45° 水果刀 knife）。
+ * 水果三元视觉（PM 水果史莱姆小动物 / Piece 它的纸片分身 / Router 45° 水果刀 knife）。
  * - size 是“标准”界面大小（根字号 16px）下的像素数，换算为 rem 跟随界面四档缩放（与 Avatar.tsx 完全对齐）。
  * - <linearGradient> 必须用 useId() 生成实例级唯一 ID，避免多实例同屏渲染再卸载其中一个时导致渐变引用断裂变黑。
  */

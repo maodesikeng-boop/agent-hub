@@ -227,7 +227,7 @@ Workers edit files and execute shell commands on your machine with your OS user'
 
 ## Third-party assets and licenses
 
-- The fruit avatar images in `assets/avatars/` are AI-generated.
+- The fruit avatars in `assets/avatars/` are pixel art drawn by `scripts/render-avatars.ts` (the sprites were authored with AI assistance).
 - Third-party npm dependencies are distributed under their respective licenses (see `pnpm-lock.yaml`). In particular, `mermaid` pulls in transitive dependencies `elkjs` (licensed under `EPL-2.0 OR GPL-3.0-or-later`) and `khroma` (no `license` field published in the npm package metadata; upstream repository is MIT). Please verify transitive licenses if you redistribute bundled builds.
 
 ## License
@@ -464,7 +464,7 @@ Worker 会在你的电脑上以当前系统用户的权限修改文件、执行�
 
 ## 第三方素材与许可
 
-- `assets/avatars/` 中的水果头像为 AI 生成。
+- `assets/avatars/` 中的水果头像是 `scripts/render-avatars.ts` 画的像素画（像素稿由 AI 协助绘制）。
 - 第三方依赖遵循各自的许可证（见 `pnpm-lock.yaml`）。其中 `mermaid` 引入的传递依赖 `elkjs` 许可证为 `EPL-2.0 OR GPL-3.0-or-later`，`khroma` 在 npm 包中未标注 `license` 字段（其上游仓库为 MIT）。如需打包再分发，请自行核对相关许可要求。
 
 ## License

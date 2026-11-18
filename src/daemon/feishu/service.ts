@@ -65,7 +65,7 @@ import type { RouterDispatcher } from "../router/dispatcher.ts";
 import type { ModelCatalogs } from "../driver/model-catalog.ts";
 import type { Db } from "../store/index.ts";
 import { resolveUpload } from "../uploads.ts";
-import { createFeishuAvatarCache, pmFruitImagePath } from "./avatars.ts";
+import { createFeishuAvatarCache, feishuAvatarHash, pmFruitImagePath, type PmFruit } from "./avatars.ts";
 import {
   feishuAskOptions,
   feishuCardRefOf,
@@ -704,7 +704,7 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
 
   // ---- 建群、对齐 ----
 
-  const uploadAvatar = async (fruit: Parameters<typeof pmFruitImagePath>[1]): Promise<FeishuImageKey> => {
+  const uploadAvatar = async (fruit: PmFruit): Promise<FeishuImageKey> => {
     if (transport === null) throw new Error("飞书没连上");
     const { imageKey } = await transport.uploadImage({ imageType: "avatar", path: pmFruitImagePath(options.avatarsDir, fruit) });
     return imageKey as FeishuImageKey;
@@ -739,10 +739,11 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
   const lastGeneration = new LRUCache<PmId, number>({ max: FEISHU_CHAT_CACHE_MAX });
   const dissolvedAt = (pmId: PmId | null) => Math.max(now(), (pmId === null ? 0 : (lastGeneration.get(pmId) ?? 0)) + 1);
 
-  const applyChatOp = async (op: FeishuChatOp, appId: string, ownerId: FeishuOpenId) => {
+  /** avatarHashOf：这一次对齐里各水果头像图片的内容哈希。 */
+  const applyChatOp = async (op: FeishuChatOp, appId: string, ownerId: FeishuOpenId, avatarHashOf: (fruit: PmFruit) => string) => {
     switch (op.kind) {
       case "create": {
-        const avatar = await avatars.imageKeyOf(op.spec.fruit, uploadAvatar);
+        const avatar = await avatars.imageKeyOf(op.spec.fruit, avatarHashOf(op.spec.fruit), uploadAvatar);
         const data = await api("chat.create", {
           uuid: feishuChatCreateUuid(appId, options.device.id, op.spec.pmId, op.generation),
           name: op.spec.name,
@@ -766,7 +767,7 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
         return;
       }
       case "adopt": {
-        const avatar = await avatars.imageKeyOf(op.spec.fruit, uploadAvatar);
+        const avatar = await avatars.imageKeyOf(op.spec.fruit, avatarHashOf(op.spec.fruit), uploadAvatar);
         await api("chat.update", { chat_id: op.chatId, name: op.spec.name, avatar });
         store.upsertChat({ chatId: op.chatId, target: { kind: "pm", pmId: op.spec.pmId }, name: op.spec.name, label: op.spec.label }, now());
         store.setChatAvatar(op.chatId, op.spec.fruit, now());
@@ -779,7 +780,7 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
         store.renameChat(op.chatId, op.name, op.label, now());
         return;
       case "set_avatar":
-        await api("chat.update", { chat_id: op.chatId, avatar: await avatars.imageKeyOf(op.fruit, uploadAvatar) });
+        await api("chat.update", { chat_id: op.chatId, avatar: await avatars.imageKeyOf(op.fruit, avatarHashOf(op.fruit), uploadAvatar) });
         store.setChatAvatar(op.chatId, op.fruit, now());
         return;
       case "dissolve": {
@@ -800,12 +801,23 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     if (transport === null || !linkUp || app === null || app.ownerOpenId === null) return;
     const pms = ledger.snapshot().pms;
     const desired = desiredFeishuChats(pms, options.device);
+    // 每次对齐现读头像文件算哈希（同一个水果只读一次）。图片换了（feishu_avatars 里记的不是这张图）：把头像是这个水果的群
+    // 改回“没设过”，下面照常出 set_avatar 原地换；中途断了，没换完的群还是“没设过”，下一次对齐接着换
+    const hashes = new Map<PmFruit, string>();
+    const avatarHashOf = (fruit: PmFruit) => {
+      let hash = hashes.get(fruit);
+      if (hash === undefined) hashes.set(fruit, (hash = feishuAvatarHash(options.avatarsDir, fruit)));
+      return hash;
+    };
+    for (const fruit of new Set(desired.filter((d) => !d.archived).map((d) => d.fruit))) {
+      if (store.avatarKey(fruit, avatarHashOf(fruit)) === null) store.clearChatAvatars(fruit, now());
+    }
     const bindings = store.chats().filter((c) => c.target.kind === "pm");
     const bound = new Set(bindings.flatMap((b) => (b.target.kind === "pm" && b.target.pmId !== null ? [b.target.pmId] : [])));
     const needsLookup = desired.some((d) => !d.archived && !bound.has(d.pmId));
     const marked = needsLookup ? await markedChats() : new Map<FeishuChatId, string>();
     for (const op of planFeishuChatSync(desired, bindings, marked, options.device.id)) {
-      await applyChatOp(op, app.appId, app.ownerOpenId);
+      await applyChatOp(op, app.appId, app.ownerOpenId, avatarHashOf);
     }
   };
 

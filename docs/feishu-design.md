@@ -11,7 +11,7 @@
 
 - 只装一个飞书自建应用。手机飞书扫一下二维码就建好应用，扫码的人自动成为主人，不用复制 App ID 和 App Secret；手动填 App ID、App Secret 留作兜底。
 - 不用话题、不用回复串。所有回复、拍板卡、截图、文件都直接发在聊天主界面里；回复用飞书卡片边写边出字（打字机效果），旁边有“停止”按钮。
-- 总助就是你和机器人的单聊。每个项目经理自动建一个私有群：群名是项目经理名字，群头像是它在网页上的那个水果横切面，你是群主。项目经理新建、改名时群跟着变，你不用手动拉群。
+- 总助就是你和机器人的单聊。每个项目经理自动建一个私有群：群名是项目经理名字，群头像是它在网页上的那只水果史莱姆小动物，你是群主。项目经理新建、改名时群跟着变，你不用手动拉群。
 - 唤醒规则（11-18 拍板）：群里只有你时每句话直达项目经理；拉进别人后自动改成 @机器人 才触发，没 @ 的讨论记下来，下次 @ 时一起交给项目经理。每个群也可以手动设成“一直要 @机器人”。
 - 访客权限按群设，三档，默认“仅对话”：
   - 仅对话：访客 @机器人 能和项目经理说话；拍板、停止、发附件只认你。
@@ -68,7 +68,7 @@
 - 实测（读代码）：hub 命令按角色放行只有一张表 `HUB_COMMAND_ROLES`，`hubCall` 在 `src/daemon/ledger/hub-commands.ts:352` 查它。访客轮次的拦截挂在同一处。
 - 实测（读代码）：只读 Worker 禁读的是 `READONLY_SECRET_STATE_FILES`。`src/shared/readonly-policy.ts:52`。所以 App Secret 放单独的 `state/feishu-secrets.json` 并加进这张表。
 - 实测（读代码）：用户上传走 `saveUpload`，单个最多 20 MB。`src/daemon/uploads.ts:71`、`src/shared/limits.ts:204`。飞书收进来的文件照用。
-- 实测（读代码）：项目经理的水果原来是 `paletteOf(pmId)` 按编号对颜色表长度取余，图片在 `src/web/assets/avatars/<水果>.webp`。安装包里的守护进程目录不带 `src/web`，网页构建产物的文件名带哈希，所以实现时把水果顺序提到 `src/shared/fruits.ts`（`PM_FRUITS`、`pmFruitOf`，取余只按 `PM_FRUITS.length`），横切面图挪到仓库根目录的 `assets/avatars/`，网页和守护进程都读这一处，`scripts/stage-runtime-common.ts` 打包时整个目录带走。
+- 实测（读代码）：项目经理的水果原来是 `paletteOf(pmId)` 按编号对颜色表长度取余，图片在 `src/web/assets/avatars/<水果>.webp`。安装包里的守护进程目录不带 `src/web`，网页构建产物的文件名带哈希，所以实现时把水果顺序提到 `src/shared/fruits.ts`（`PM_FRUITS`、`pmFruitOf`，取余只按 `PM_FRUITS.length`），头像图挪到仓库根目录的 `assets/avatars/`，网页和守护进程都读这一处，`scripts/stage-runtime-common.ts` 打包时整个目录带走。后来水果扩到 20 种、头像换成 `scripts/render-avatars.ts` 画的史莱姆小动物：网页用透明底的 `<水果>.svg`，飞书群头像接口只收位图，用同一份像素稿导出的 `<水果>.png`（衬满铺浅底色，每格放大整数倍到约 1024×1024，飞书裁圆后四周留边）。
 - 实测（读代码）：后端按单用户设计，没有多账号。`docs/multi-device-design.md:9`。“访客”只是飞书这一层的身份，不进 Fusa 的账号体系。
 - 实测（跑测试）：`pnpm exec vitest run src/shared/feishu.test.ts src/daemon/feishu src/feishu test/migration.test.ts`：94 过、171 条 todo；`migrate` 从 0 跑到 0034 通过。
 - 实测（查 PR）：开着的 PR 都没占 `0034`；被搁置的 Slack 方案 PR #348 已关闭，没有合进 `main`。
@@ -149,7 +149,7 @@
 
 **扫码接入。** ① 网页设置页或终端 `node src/feishu/main.ts connect` 发起 `startRegistration`，出二维码；② 手机飞书扫码，确认页已预填应用名（带设备名）和增量权限；③ 守护进程拿到凭证，验过存进 `state/feishu-secrets.json`，扫码人记为主人；④ 连长连接，查一遍权限授予状态；⑤ 给每个项目经理建群，给主人单聊发一句“已接上”。
 
-**项目群。** `desiredFeishuChats` 由账本现状算出应有的群，`planFeishuChatSync` 和 `feishu_chats` 比出操作。建群带 `owner_id`（主人）、`user_id_list`（主人）、`set_bot_manager: true`（转给主人后机器人仍是管理员，能改名换头像）、`edit_permission: only_owner`（访客改不了群名）、`group_message_type: chat`（对话群，不是话题群）。幂等靠三层：`feishu_chats` 记录；建群 `uuid`（10 小时）；群说明里的 `feishuChatMarker`，重启时在机器人所在的群里认回。项目经理归档时解散群（`DELETE /open-apis/im/v1/chats/:chat_id`），记录留着并记下归档时间；取消归档时重建，建群 `uuid` 带上这个归档时间作 generation，免得被飞书当成 10 小时内的重复请求；新群换进同一行，唤醒方式和访客档位沿用。项目经理删掉时解散群、删记录。群被别人解散或机器人被移出时，记录记下解散时间（和归档一样），下一次对齐按取消归档重建：唤醒方式和访客档位沿用，建群 uuid 换新的 generation，不会被飞书当成 10 小时内的重复请求。水果头像每种只传一次，`image_key` 记在 `feishu_avatars`。
+**项目群。** `desiredFeishuChats` 由账本现状算出应有的群，`planFeishuChatSync` 和 `feishu_chats` 比出操作。建群带 `owner_id`（主人）、`user_id_list`（主人）、`set_bot_manager: true`（转给主人后机器人仍是管理员，能改名换头像）、`edit_permission: only_owner`（访客改不了群名）、`group_message_type: chat`（对话群，不是话题群）。幂等靠三层：`feishu_chats` 记录；建群 `uuid`（10 小时）；群说明里的 `feishuChatMarker`，重启时在机器人所在的群里认回。项目经理归档时解散群（`DELETE /open-apis/im/v1/chats/:chat_id`），记录留着并记下归档时间；取消归档时重建，建群 `uuid` 带上这个归档时间作 generation，免得被飞书当成 10 小时内的重复请求；新群换进同一行，唤醒方式和访客档位沿用。项目经理删掉时解散群、删记录。群被别人解散或机器人被移出时，记录记下解散时间（和归档一样），下一次对齐按取消归档重建：唤醒方式和访客档位沿用，建群 uuid 换新的 generation，不会被飞书当成 10 小时内的重复请求。水果头像每种只传一次，`image_key` 记在 `feishu_avatars`。 **群头像按图片内容认。** `feishu_avatars` 记每个水果上传得到的 `image_key` 和那张图的 SHA-256，`feishu_chats.avatar_fruit` 记每个群现在挂的是哪个水果。每次对齐现读 `assets/avatars/<水果>.png` 算哈希：`feishu_avatars` 里记的不是这张图（升级带来新图，或还没传过），就把头像是这个水果的群的 `avatar_fruit` 清空；项目经理该用的水果变了（水果扩到 20 种后，编号 8 以后的项目经理换了水果）则记录的水果和应有的本来就不同。两种情况 `planFeishuChatSync` 都出 `set_avatar`：图没传过就重传一次拿新 `image_key`，再 `chat.update` 只带 `avatar` 原地换群头像。不解散重建，不带 `name`，用户在飞书里改过的群名不动；换完记回水果，下一次对齐不再换，中途断了没换完的群下一次接着换。
 
 **唤醒。** `feishuWakes`：auto 档单人直达、多人要 @；mention_only 一律要 @；没开 `im:message.group_msg` 时强制 mention_only。没唤醒的话（含只读档访客的话）记进内存近窗（`FeishuContextWindows`），下一次唤醒时随 `origin.context` 交给项目经理，送达后清空。单人还是多人由 `FeishuDirectory` 定：成员事件实时改，发言人不是主人就立刻算多人，定期对账兜底，查不到按多人（宁可多要一次 @，也不把访客当主人）。
 
@@ -213,7 +213,7 @@
 
 ## 骨架文件
 
-- `migrations/0034_feishu.sql`：`feishu_app`（应用、机器人、主人）、`feishu_chats`（总助单聊和项目群、唤醒方式、访客档位、补发水位）、`feishu_posts`（账本里的东西发到了哪条消息、哪张卡片实体、卡片操作序号）、`feishu_avatars`（水果头像的 image_key）。
+- `migrations/0034_feishu.sql`：`feishu_app`（应用、机器人、主人）、`feishu_chats`（总助单聊和项目群、唤醒方式、访客档位、补发水位）、`feishu_posts`（账本里的东西发到了哪条消息、哪张卡片实体、卡片操作序号）、`feishu_avatars`（水果头像的 image_key）。`migrations/0037_feishu_avatar_hash.sql` 重建 `feishu_avatars`，多一列 `content_sha256`（上传的那张图片内容的 SHA-256；这张表只是缓存，老行不搬）。
 - `src/shared/feishu.ts`：品牌化编号和解析函数、主客身份、单人多人、唤醒方式、访客档位和 `feishuGuestMay`、消息来源 `FeishuMessageOrigin`、署名与背景 `feishuDeliveryPrefixes`、访客禁用的 hub 命令和 `feishuGuestTurnBlockReason`、设置接口的形状。
 - `src/daemon/feishu/transport.ts`：外部边界：用到的开放接口、长连接事件、卡片回调与 toast、`FeishuTransport`、`FeishuAuthError`。
 - `src/daemon/feishu/sdk.ts`：用官方包实现传输层，包一层 `registerApp`。
@@ -222,7 +222,7 @@
 - `src/daemon/feishu/routing.ts`：消息和点击的分流、唤醒判断 `feishuWakes`、主客判断。
 - `src/daemon/feishu/directory.ts`：群成员和显示名缓存、单人多人、背景近窗。
 - `src/daemon/feishu/chats.ts`：项目群应有的样子、群说明标记、建群 uuid、对齐计划。
-- `src/daemon/feishu/avatars.ts`：项目经理对应的水果、头像图片、image_key 缓存。
+- `src/daemon/feishu/avatars.ts`：项目经理对应的水果、头像图片、图片内容哈希（`feishuAvatarHash`）、按哈希认的 image_key 缓存。
 - `src/daemon/feishu/outbound.ts`：账本变化投影成出站意图、补发、长文拆段。
 - `src/daemon/feishu/stream.ts`：流式卡片状态机和卡片接口预算。
 - `src/daemon/feishu/cards.ts`：按钮值编解码、拍板卡、总助卡、流式回复卡、访客权限卡。
@@ -247,7 +247,7 @@
 - `src/shared/readonly-policy.ts:52` 加 `feishu-secrets.json`；`src/shared/paths.ts` 的 `HubPaths` 加 `feishuSecretsFile`。
 - `src/daemon/db-retention.ts` 调 `prunePosts`。
 - `src/shared/limits.ts` 加上表的常量；`src/shared/index.ts` 导出 `feishu.ts`。
-- 水果：水果顺序在 `src/shared/fruits.ts`（`palette.ts` 和 `daemon/feishu/avatars.ts` 都按它取）；横切面图在仓库根目录 `assets/avatars/`，`scripts/stage-runtime-common.ts` 整个目录打包。
+- 水果：水果顺序在 `src/shared/fruits.ts`（`palette.ts` 和 `daemon/feishu/avatars.ts` 都按它取）；头像图在仓库根目录 `assets/avatars/`（`scripts/render-avatars.ts` 生成），`scripts/stage-runtime-common.ts` 整个目录打包。
 
 ## 实现时对骨架的调整
 
