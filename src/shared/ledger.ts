@@ -54,6 +54,7 @@ import type { DeviceRouterDigest, RouterSettings } from "./router.ts";
 import type { HandoverId, LedgerHandoverWork } from "./handover.ts";
 import type { HubArgs, HubCommand, HubResult, ProjectCard, WorkerPr, WorkerPrProbeResult } from "./hub.ts";
 import type { PmCapabilitiesPatch, PmCapabilitiesStart, PmCapabilityPolicy } from "./pm-capabilities.ts";
+import type { PmLookSetting } from "./slimes.ts";
 import type { ReviewSnapshot, ReviewVerifyResult } from "./review.ts";
 import type { SelfReloadStatus } from "./api.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
@@ -427,6 +428,11 @@ export interface Ledger extends LedgerHandoverWork {
   getPmCapabilityPolicy(pmId: PmId): PmCapabilityPolicy;
   /** 界面服务：更新项目经理的能力选择并发 pm.updated。不存在抛 not_found，超限或非法键抛 invalid。 */
   patchPmCapabilities(pmId: PmId, patch: PmCapabilitiesPatch): PmCapabilityPolicy;
+  /**
+   * 界面服务：存下项目经理的造型和颜色（null 是用默认），发 pm.updated；归档的也能改。不进性格设定的修改记录。
+   * 后置：返回改完的项目经理。错误：项目经理不存在 → not_found；造型、颜色不在名录里 → invalid。
+   */
+  setPmLook(pmId: PmId, look: PmLookSetting): Pm;
   /** 界面服务：返回该项目经理当前活跃项目的主文件夹路径（没有活跃项目返回 null；项目经理不存在抛 not_found）。 */
   pmProjectMainFolder(pmId: PmId): string | null;
   /**

@@ -2645,3 +2645,9 @@ describe("Router 与 TaskGraph 轨道 A 接口", () => {
     }
   });
 });
+
+describe("PUT /api/pms/:id/look（docs/slime-cohesion-design.md）", () => {
+  it.todo("两项都给（可为 null）时调 setPmLook，回 { pm }");
+  it.todo("少一项、多字段、不在名录里的值回 400，不调 setPmLook");
+  it.todo("项目经理不存在回 404");
+});

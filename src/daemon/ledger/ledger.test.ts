@@ -1216,3 +1216,13 @@ describe("送达回执独立于执行结果", () => {
     expect(ledger.getMessage(id)?.meta?.deliveryConfirmed).toBeUndefined();
   });
 });
+
+describe("项目经理的形象（docs/slime-cohesion-design.md）", () => {
+  it.todo("setPmLook：存下造型和颜色，返回改完的项目经理，发一条 pm.updated");
+  it.todo("setPmLook：传 null 回到默认，读出来的 avatarFruit、avatarColor 是 null");
+  it.todo("setPmLook：不写性格设定的修改记录");
+  it.todo("setPmLook：归档的项目经理也能改");
+  it.todo("setPmLook：项目经理不存在抛 not_found，造型或颜色不在名录里抛 invalid");
+  it.todo("新建项目经理：存下 pickNewPmLook 分的形象，和没归档的项目经理不撞造型");
+  it.todo("迁移前建的项目经理读出来 avatarFruit、avatarColor 是 null，头像和以前一样");
+});

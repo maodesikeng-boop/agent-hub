@@ -603,6 +603,7 @@ export class FakeLedger {
       deletePmMemoryFile: unused("deletePmMemoryFile"),
       getPmCapabilityPolicy: (p) => this.getPmCapabilityPolicy(p),
       patchPmCapabilities: (p, patch) => this.patchPmCapabilities(p, patch),
+      setPmLook: unused("setPmLook"),
       pmProjectMainFolder: (p) => this.pmProjectMainFolder(p),
       retryMessage: (m) => this.retryMessage(m),
       renewSession: (p) => this.renewSession(p),

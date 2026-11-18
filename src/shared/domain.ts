@@ -14,6 +14,8 @@ import { deliverablesOf, type Deliverable } from "./deliverables.ts";
 import type { ReviewTarget, ReviewVerdict } from "./review.ts";
 import type { ScheduleId } from "./schedule.ts";
 import type { UserBlocker, UserBlockerId } from "./user-blockers.ts";
+import type { PmFruit } from "./fruits.ts";
+import type { JellyColorId } from "./slimes.ts";
 import type { AgentVendor } from "./vendors.ts";
 import type { WorkerReportStatus } from "./worker.ts";
 
@@ -140,6 +142,10 @@ export interface Pm {
   id: PmId;
   name: string;
   avatarFile: string | null;
+  /** 换过的造型（shared/slimes.ts，存在 pm_looks 表）；缺了或 null 是按编号默认的那只。老版本的设备不带这个字段。 */
+  avatarFruit?: PmFruit | null;
+  /** 换过的颜色；缺了或 null 是造型自己的原色。 */
+  avatarColor?: JellyColorId | null;
   mode: PmMode;
   /** 用哪家的 agent（厂商清单 vendors.ts）。 */
   vendor: AgentVendor;

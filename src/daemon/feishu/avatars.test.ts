@@ -60,3 +60,10 @@ function fakeStore() {
     saveAvatarKey: (f: PmFruit, key: FeishuImageKey, hash: string) => void saved.set(f, { key, hash }),
   };
 }
+
+describe("按形象画群头像（docs/slime-cohesion-design.md）", () => {
+  it.todo("renderFeishuAvatar：同一个形象两次得到逐字节相同的 PNG，sha256 是它的哈希");
+  it.todo("renderFeishuAvatar：约 1026×1026，满铺这个颜色的浅底；原色的形象和加换色之前的群头像像素相同");
+  it.todo("renderFeishuAvatar：换了颜色或造型，哈希不同");
+  it.todo("头像缓存按形象认：同一个形象只传一次，换色后的新形象再传一次");
+});

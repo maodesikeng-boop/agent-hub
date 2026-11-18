@@ -403,6 +403,9 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     deletePmMemoryFile: persona.deletePmMemoryFile,
     getPmCapabilityPolicy: pmCapabilities.get,
     patchPmCapabilities: pmCapabilities.patch,
+    setPmLook() {
+      throw new Error("未实现");
+    },
     pmProjectMainFolder(pmId) {
       persona.requirePm(pmId);
       const proj = projects.activeProjectOf(pmId);

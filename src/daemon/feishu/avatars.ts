@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FeishuImageKey } from "../../shared/feishu.ts";
 import { pmFruitAvatarFile, type PmFruit } from "../../shared/fruits.ts";
+import type { SlimeLook } from "../../shared/slimes.ts";
 import type { FeishuStore } from "./store.ts";
 
 export { pmFruitOf, type PmFruit } from "../../shared/fruits.ts";
@@ -25,6 +26,14 @@ export function pmFruitImagePath(assetsDir: string, fruit: PmFruit): string {
 /** 后置：这个水果群头像文件内容的 SHA-256（十六进制）。每次现读文件，不缓存：图片换了下一次对齐就能发现。文件读不到抛错。 */
 export function feishuAvatarHash(assetsDir: string, fruit: PmFruit): string {
   return createHash("sha256").update(readFileSync(pmFruitImagePath(assetsDir, fruit))).digest("hex");
+}
+
+/**
+ * 这个形象的群头像（docs/slime-cohesion-design.md）：shared/slimes.ts 的 slimeBitmap 用 sharp 编成 PNG（约 1026×1026，满铺这个颜色的浅底）。
+ * 后置：同一个形象每次得到逐字节相同的 png，sha256 是它的十六进制哈希；换了颜色或造型，哈希不同。
+ */
+export async function renderFeishuAvatar(look: SlimeLook): Promise<{ png: Buffer; sha256: string }> {
+  throw new Error("未实现");
 }
 
 export interface FeishuAvatarCache {

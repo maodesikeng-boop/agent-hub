@@ -128,3 +128,8 @@ describe("planFeishuChatSync", () => {
     expect(plan([pm(1, "小林")], [binding(1)])).toEqual([]);
   });
 });
+
+describe("群头像跟着项目经理的形象（docs/slime-cohesion-design.md）", () => {
+  it.todo("desiredFeishuChats：每个群要的头像是 resolvePmLook(项目经理)，换过造型、颜色的按换过的");
+  it.todo("项目经理换了颜色：下一次对齐给它的群原地换头像，别的群不动");
+});

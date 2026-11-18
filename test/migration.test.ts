@@ -2374,3 +2374,8 @@ describe("0034_feishu", () => {
       .some((step) => step.detail.includes("messages_in_flight"))).toBe(true);
   });
 });
+
+describe("0038_pm_looks（docs/slime-cohesion-design.md）", () => {
+  it.todo("从 37 升级：建一张空的 pm_looks 表，老数据一个字不变；回退 8 / 37 重跑不报错、不丢已存的形象");
+  it.todo("删项目经理时它在 pm_looks 的那一行跟着删");
+});
