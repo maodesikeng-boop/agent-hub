@@ -872,6 +872,19 @@ export function isQuotaExhausted(info: RateLimitInfo | null | undefined, nowMs?:
 }
 
 /**
+ * 撤销一次“额度用完”的记录：新一轮开始了，说明之前记下的 rejected 已经过期（或根本没人知道什么时候恢复）。
+ * 窗口还在的保留用量，只把 rejected 改回 allowed，等厂商的下一条额度事件校正；一个窗口都没有的没东西可留，返回 null。
+ */
+export function clearRateLimitRejection(info: RateLimitInfo): RateLimitInfo | null {
+  const windows: Record<string, RateLimitWindow> = {};
+  for (const [k, w] of Object.entries(info.windows)) {
+    if (w) windows[k] = w.status === RATE_LIMIT_REJECTED ? { ...w, status: "allowed" } : w;
+  }
+  if (Object.keys(windows).length === 0) return null;
+  return { ...info, status: "allowed", windows };
+}
+
+/**
  * 标记额度已耗尽（如 Codex 一轮中途最后一次成功响应报 99%，紧接着下一条请求因 usage_limit_exceeded 失败、未再带 100% 响应头）：
  * - 若已有窗口为 rejected 或 utilization >= 1，将其规整为 utilization >= 1 且 status="rejected"；
  * - 否则将当前 utilization 最高（并列时取最早重置）的窗口置为 utilization=1、status="rejected"；

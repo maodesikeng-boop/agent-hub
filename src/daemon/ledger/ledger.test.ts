@@ -357,6 +357,100 @@ describe("applyDriverEvent", () => {
     expect(ledger.snapshot().sessions).toEqual([states[3]]);
   });
 
+  describe("上一代遗留的额度用完标记", () => {
+    const stale = { status: "rejected", resetsAt: null, windows: {} };
+
+    it("新一轮开始处理时清掉：会话正常跑命令，状态不再带 rejected（不显示 Usage limit reached）", () => {
+      setSession({ status: "running", rateLimit: stale });
+      const id = post();
+      ev({ type: "session.started", at: 1, resumed: false, model: null, tools: [] });
+      ev({ type: "message.processing", at: 2, messageIds: [id] });
+      ev({ type: "agent.tool", at: 3, uuid: "u", toolUseId: "t", name: "Bash", input: { command: "hub status" } });
+      const state = sessionStates().at(-1)!;
+      expect([state.activity, state.currentTool, state.rateLimit?.status ?? null]).toEqual(["working", "Bash", null]);
+      expect(createSessionStore(db).get(sessionId)!.rateLimit).toBeNull();
+    });
+
+    it("新一轮开始（turn.started）也清掉", () => {
+      setSession({ status: "running", rateLimit: stale });
+      ev({ type: "turn.started", at: 2 });
+      expect(sessionStates().at(-1)!.rateLimit?.status ?? null).toBeNull();
+    });
+
+    it("这一轮里才报的额度用完不清：真的撞上额度时照常显示", () => {
+      setSession({ status: "running", rateLimit: stale });
+      const id = post();
+      ev({ type: "message.processing", at: 2, messageIds: [id] });
+      ev({ type: "rate_limit", at: 3, info: { status: "rejected", resetsAt: 99, windows: {} } });
+      ev({ type: "agent.tool", at: 4, uuid: "u", toolUseId: "t", name: "Bash", input: { command: "ls" } });
+      expect(sessionStates().at(-1)!.rateLimit?.status).toBe("rejected");
+    });
+
+    it("新一轮写进去（message.delivered，进程重启、线程恢复期间）就清掉：显示在思考，不显示 Usage limit reached", () => {
+      setSession({ status: "running", rateLimit: stale });
+      const id = post();
+      ev({ type: "session.started", at: 1, resumed: true, model: null, tools: [] });
+      ev({ type: "message.delivered", at: 2, messageIds: [id] });
+      const state = sessionStates().at(-1)!;
+      expect([state.activity, state.step, state.rateLimit?.status ?? null]).toEqual(["working", { type: "thinking" }, null]);
+      expect(createSessionStore(db).get(sessionId)!.rateLimit).toBeNull();
+    });
+
+    it("上一轮结束时报的额度用完，下一轮开始时清掉", () => {
+      const first = post("c1");
+      ev({ type: "message.processing", at: 1, messageIds: [first] });
+      const info = { status: "rejected", resetsAt: null, windows: { five_hour: { utilization: 1, resetsAt: 99, status: "rejected" } } };
+      setSession({ rateLimit: info });
+      ev({ type: "rate_limit", at: 2, info });
+      ev({ type: "turn.ended", at: 3, ok: false, interrupted: false, messageIds: [first], durationMs: null, error: { subtype: "failed", message: "You’ve hit your usage limit." } });
+      expect(sessionStates().at(-1)!.rateLimit?.status).toBe("rejected");
+      const second = post("c2", "继续");
+      ev({ type: "message.delivered", at: 4, messageIds: [second] });
+      ev({ type: "message.processing", at: 5, messageIds: [second] });
+      ev({ type: "agent.tool", at: 6, uuid: "u", toolUseId: "t", name: "Bash", input: { command: "hub status" } });
+      expect(sessionStates().at(-1)!.rateLimit).toEqual({ status: "allowed", resetsAt: null, windows: { five_hour: { utilization: 1, resetsAt: 99, status: "allowed" } } });
+    });
+
+    it("claude 还没开始处理就被额度拒了：轮末补发的 message.processing 不清掉这一轮刚报的 rejected", () => {
+      const id = post();
+      const info = { status: "rejected", resetsAt: 1_900_000_000, windows: {} };
+      ev({ type: "session.started", at: 1, resumed: false, model: null, tools: [] });
+      ev({ type: "message.delivered", at: 2, messageIds: [id] });
+      setSession({ rateLimit: info });
+      ev({ type: "rate_limit", at: 3, info });
+      ev({ type: "message.processing", at: 4, messageIds: [id] });
+      ev({ type: "turn.ended", at: 5, ok: false, interrupted: false, messageIds: [id], durationMs: null, error: { subtype: "success", message: "Claude AI usage limit reached|1900000000" } });
+      expect(sessionStates().at(-1)!.rateLimit).toEqual(info);
+      expect(createSessionStore(db).get(sessionId)!.rateLimit).toEqual(info);
+    });
+
+    it("一轮中途报了额度用完，再插进来一条（steer）开始处理：不清掉", () => {
+      const first = post("c1");
+      const second = post("c2", "插一句");
+      ev({ type: "message.delivered", at: 1, messageIds: [first] });
+      ev({ type: "message.processing", at: 2, messageIds: [first] });
+      const info = { status: "rejected", resetsAt: 1_900_000_000, windows: {} };
+      setSession({ rateLimit: info });
+      ev({ type: "rate_limit", at: 3, info });
+      ev({ type: "message.delivered", at: 4, messageIds: [second], midTurn: true });
+      ev({ type: "message.processing", at: 5, messageIds: [second] });
+      expect(sessionStates().at(-1)!.rateLimit).toEqual(info);
+      expect(createSessionStore(db).get(sessionId)!.rateLimit).toEqual(info);
+    });
+
+    it("两轮之间报的额度用完是给下一轮的：排着的那条开始处理时不清掉", () => {
+      const first = post("c1");
+      ev({ type: "message.processing", at: 1, messageIds: [first] });
+      ev({ type: "turn.ended", at: 2, ok: true, interrupted: false, messageIds: [first], durationMs: null });
+      const second = post("c2");
+      const info = { status: "rejected", resetsAt: 1_900_000_000, windows: {} };
+      setSession({ rateLimit: info });
+      ev({ type: "rate_limit", at: 3, info });
+      ev({ type: "message.processing", at: 4, messageIds: [second] });
+      expect(sessionStates().at(-1)!.rateLimit).toEqual(info);
+    });
+  });
+
   it("会话状态带累计用量：驱动层写进那一行的，下一个事件时推给网页；老数据（没记过）是全 0", () => {
     setSession({ status: "running" });
     ev({ type: "session.started", at: 1, resumed: true, model: null, tools: [] });

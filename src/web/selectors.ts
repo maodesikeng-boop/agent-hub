@@ -40,6 +40,7 @@ import {
   type HealthEntry,
   type Message,
   type MessageId,
+  type MessageStatus,
   type PendingDecision,
   type TokenUsage,
   type Pm,
@@ -239,10 +240,13 @@ function isValidQuotaWindow(key: QuotaWindowKey, w: RateLimitWindow | undefined,
   return true;
 }
 
+/** 写给 agent 的消息到了这些状态，说明 agent 开始处理过它（排队中、已取消的没有）。 */
+const TURN_STARTED_STATUSES: ReadonlySet<MessageStatus> = new Set(["delivered", "processing", "replied", "failed", "stopped"]);
+
 /**
- * 查找该会话最近一次因额度耗尽（匹配厂商 quota 特征）而 turn_failed / failed 的毫秒时间戳：
- * - 若会话所在对话的最后一条失败消息属于该会话且匹配 quota，取其 updatedAt；
- * - 若会话是 Worker 对话，且其所属项目经理对话里该 Worker 的最新一行是 turn_failed 且匹配 quota，取该行的 createdAt。
+ * 该会话最近一轮因额度耗尽（匹配厂商 quota 特征）失败的毫秒时间戳；最近一轮不是额度失败的返回 null：
+ * - 会话所在对话里，属于该会话、agent 开始处理过的最后一条消息失败且匹配 quota，取其 updatedAt；那之后又开始处理了别的（新一轮）就不算；
+ * - 对话里没有这样的消息（Worker 对话没加载）：其所属项目经理对话里该 Worker 的最新一行是 turn_failed 且匹配 quota，取该行的 createdAt。
  */
 function sessionQuotaFailureAt(state: HubState, session: SessionState, vendor: AgentVendor): number | null {
   if (session.conversationId === null) return null;
@@ -251,9 +255,8 @@ function sessionQuotaFailureAt(state: HubState, session: SessionState, vendor: A
   if (convView) {
     for (let i = convView.messages.length - 1; i >= 0; i--) {
       const m = convView.messages[i]!;
-      if (m.sessionId === session.sessionId && m.status === "failed" && typeof m.failureReason === "string" && quotaPattern.test(m.failureReason)) {
-        return m.updatedAt;
-      }
+      if (m.sessionId !== session.sessionId || m.status === null || !TURN_STARTED_STATUSES.has(m.status)) continue;
+      return m.status === "failed" && typeof m.failureReason === "string" && quotaPattern.test(m.failureReason) ? m.updatedAt : null;
     }
     if (convView.conversation.kind === "worker" && convView.conversation.pmId !== null) {
       const latest = workerLinesOf(state, convView.conversation.pmId).latest.get(session.conversationId);

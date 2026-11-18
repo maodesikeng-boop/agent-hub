@@ -2,7 +2,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Change } from "../../shared/api.ts";
 import type { AnyActionRow } from "../../shared/actions.ts";
 import type { ConversationId, Message, PmId, SessionId } from "../../shared/domain.ts";
@@ -14,6 +14,7 @@ import { HUB_COMMAND } from "../../shared/names.ts";
 import { personaFilePath } from "../../shared/paths.ts";
 import { bundledModelCatalog, type ModelCatalog } from "../../shared/vendors.ts";
 import { listActions, setActionStatus } from "../actions/index.ts";
+import { createSessionSendHandler } from "../handlers.ts";
 import { createSessionStore } from "../store/index.ts";
 import type { Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
@@ -590,10 +591,49 @@ describe("厂商、模型、思考程度（资料页的 Agent 一栏）", () => 
     expect(sessionRow(lin.sessionId)).toMatchObject({ model: "haiku", effort: "low", hasCompletedTurn: false, updatedAt: 3_000 });
     expect(sessionRow(zhou.sessionId)).toMatchObject({ model: null, effort: null });
     expect(messagesIn(lin.conversationId).at(-1)!.text).toBe("你改了小林的设置（模型：默认 → Haiku，思考程度：默认 → low）");
-    expect(changes.map((c) => c.type)).toEqual(["pm.updated", "message.created"]);
+    expect(changes.map((c) => c.type)).toEqual(["pm.updated", "message.created", "session.status"]);
     expect(changes[0]).toMatchObject({ data: { pm: { id: lin.pmId, vendor: "claude", defaultModel: "haiku", effort: "low" } } });
+    expect(changes[2]).toMatchObject({ data: { session: { sessionId: lin.sessionId, model: "haiku", effort: "low" } } });
     // 不登记重启动作：下一条消息前驱动层自己重启
     expect(enqueued).toEqual([]);
+  });
+
+  it("同厂商切模型：旧模型记下的额度用完跟着解除，推 session.status，新消息照常写给 agent（不按旧的恢复时间压着）", async () => {
+    const rejected = { status: "rejected", resetsAt: 10_800, windows: { five_hour: { utilization: 1, resetsAt: 10_800, status: "rejected" } } };
+    createSessionStore(db).update(lin.sessionId, { rateLimit: rejected });
+    ledger.editPersona(lin.pmId, { model: "haiku" }, { kind: "user" });
+    expect(sessionRow(lin.sessionId).rateLimit).toEqual({ ...rejected, status: "allowed", windows: { five_hour: { ...rejected.windows.five_hour, status: "allowed" } } });
+    const pushed = changes.flatMap((c) => (c.type === "session.status" ? [c.data.session] : []));
+    expect(pushed.at(-1)).toMatchObject({ sessionId: lin.sessionId, model: "haiku", rateLimit: { status: "allowed" } });
+
+    const { messageId } = ledger.postUserMessage({ conversationId: lin.conversationId, clientId: "go", text: "继续" });
+    const send = vi.fn(async () => ({ kind: "written" as const }));
+    const handler = createSessionSendHandler({
+      driver: { start: vi.fn(), send, end: vi.fn() },
+      ledger,
+      sessions: createSessionStore(db),
+      tokens: { revoke: vi.fn() },
+      now: () => now,
+    });
+    const result = await handler({ id: 1, type: "session.send", dedupeKey: "k", params: { sessionId: lin.sessionId, messageId, source: "user" }, status: "running", attempts: 0, nextAttemptAt: 0, lastError: null, createdAt: 0, updatedAt: 0 });
+    expect(result).not.toMatchObject({ reason: "rate_limited" });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("同厂商切模型只改还没结束的会话，已结束的老会话不动", () => {
+    db.run("UPDATE agent_sessions SET status = 'ended', generation = 0, updated_at = 500 WHERE id = ?", lin.sessionId);
+    const current = Number(
+      db.run(
+        `INSERT INTO agent_sessions (role, conversation_id, pm_id, vendor, vendor_session_id, cwd, generation, created_at, updated_at)
+         VALUES ('pm', ?, ?, 'claude', 'v-2', '/tmp', 1, 600, 600)`,
+        lin.conversationId,
+        lin.pmId,
+      ).lastInsertRowid,
+    );
+    now = 3_000;
+    ledger.editPersona(lin.pmId, { model: "haiku" }, { kind: "user" });
+    expect(sessionRow(current)).toMatchObject({ model: "haiku", updatedAt: 3_000 });
+    expect(sessionRow(lin.sessionId)).toMatchObject({ model: null, updatedAt: 500 });
   });
 
   it("系统消息里的模型名用缓存着的模型名单的显示名；名单里没有的原样；还没有名单用打包的", () => {

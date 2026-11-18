@@ -14,6 +14,7 @@ import type {
   SessionState,
   WorkerId,
 } from "../../shared/domain.ts";
+import { clearRateLimitRejection, isQuotaExhausted } from "../../shared/domain.ts";
 import {
   MAX_STREAMING_TEXT_CHARS,
   MIN_TOOL_STEP_VISIBLE_MS,
@@ -30,6 +31,11 @@ export interface LiveSession {
   activity: SessionActivity;
   currentTool: string | null;
   rateLimit?: RateLimitInfo | null;
+  /**
+   * 上一轮结束（或进程退出）以后厂商报过额度（rate_limit 事件）。没报过的话，记着的 rateLimit 是之前的轮次留下的（库里的、换代抄来的），
+   * 新一轮开始时撤掉其中的“用完”（dropRateLimitRejection）；报过的是这一轮（或马上开始的这一轮）的，不撤。
+   */
+  rateLimitReported?: boolean;
   /** claude 正在重试（断网、过载）；下一个正常事件（working、idle）清掉。 */
   apiRetry?: ApiRetryInfo | null;
   /** 在做什么（见 AgentStep）；空闲时没有。 */
@@ -214,6 +220,20 @@ export function createLedgerSessions(ctx: LedgerContext) {
     if ((p.pushed.get(sessionId) ?? pushed.get(sessionId)) === key) return;
     p.pushed.set(sessionId, key);
     p.changes.push({ type: "session.status", data: { session: after } });
+  };
+
+  /** 撤掉会话记着的“额度用完”（clearRateLimitRejection）：库和内存一起改，推 session.status。没用完的不动。 */
+  const dropRateLimitRejection = (p: Pending, sessionId: SessionId) => {
+    const row = getAgentSession(db, sessionId);
+    if (row === null) return;
+    const l = liveOf(sessionId);
+    const info = l.rateLimit !== undefined ? l.rateLimit : row.rateLimit;
+    if (info === null || !isQuotaExhausted(info)) return;
+    const cleared = clearRateLimitRejection(info);
+    db.run("UPDATE agent_sessions SET rate_limit = ? WHERE id = ?", cleared === null ? null : JSON.stringify(cleared), sessionId);
+    updateLive(p, sessionId, (next) => {
+      next.rateLimit = cleared;
+    });
   };
 
   const isHiddenStreamingSession = (session: AgentSessionRow): boolean =>
@@ -506,6 +526,7 @@ export function createLedgerSessions(ctx: LedgerContext) {
     workingSessionIds,
     sessionState,
     updateLive,
+    dropRateLimitRejection,
     applyStreamingDelta,
     applyToolPreview,
     finishTools,
