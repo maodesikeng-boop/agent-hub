@@ -93,9 +93,14 @@ export interface RouterDispatcherOptions {
   maxConcurrentTrackB?: number;
 }
 
+/** background: true 时登记完就返回 planning 记录，管线在后台继续，终态靠账本变更推送；默认等到终态再返回。 */
+export interface RouterCommandRunOptions {
+  background?: boolean;
+}
+
 export interface RouterDispatcher {
-  submitCommand(input: PostRouterCommandRequest): Promise<RouterCommandRecord>;
-  retryCommand(commandId: RouterCommandId): Promise<RouterCommandRecord>;
+  submitCommand(input: PostRouterCommandRequest, options?: RouterCommandRunOptions): Promise<RouterCommandRecord>;
+  retryCommand(commandId: RouterCommandId, options?: RouterCommandRunOptions): Promise<RouterCommandRecord>;
   handleAgentDispatch(
     sessionId: SessionId,
     commandId: RouterCommandId,
@@ -1043,7 +1048,7 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
   };
 
   return {
-    async submitCommand(input: PostRouterCommandRequest): Promise<RouterCommandRecord> {
+    async submitCommand(input: PostRouterCommandRequest, _options?: RouterCommandRunOptions): Promise<RouterCommandRecord> {
       const clientId = input.clientId?.trim() ?? "";
       if (clientId === "") throw new LedgerRequestError("invalid", "缺少 clientId");
 
@@ -1101,7 +1106,7 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
       }));
     },
 
-    async retryCommand(commandId: RouterCommandId): Promise<RouterCommandRecord> {
+    async retryCommand(commandId: RouterCommandId, _options?: RouterCommandRunOptions): Promise<RouterCommandRecord> {
       const existing = ledger.getRouterCommand(commandId);
       if (existing === null) {
         throw new LedgerRequestError("not_found", `没有编号 ${commandId} 的总助指令`);

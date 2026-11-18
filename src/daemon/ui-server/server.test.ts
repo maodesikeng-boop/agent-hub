@@ -2538,4 +2538,63 @@ describe("Router 与 TaskGraph 轨道 A 接口", () => {
       await customApp.close();
     }
   });
+  it("Router 发令与重试：慢规划不占着请求，立即回 planning 记录（规划多久都不会撞上网页的请求超时）", async () => {
+    const planning = {
+      id: 77,
+      clientId: "cmd-slow",
+      inputText: "慢规划",
+      vendor: "claude" as const,
+      model: null,
+      effort: null,
+      status: "planning" as const,
+      plan: null,
+      dispatched: null,
+      error: null,
+      durationMs: null,
+      createdAt: 100,
+      updatedAt: 100,
+    };
+    /** 规划要 45 秒：不要求立即返回的调用一直挂着，等同一条指令跑完。 */
+    const slowDispatcher = {
+      busy: () => false,
+      submitCommand: (_input: unknown, options?: { background?: boolean }) =>
+        options?.background === true ? Promise.resolve(planning) : new Promise<never>(() => {}),
+      retryCommand: (_id: number, options?: { background?: boolean }) =>
+        options?.background === true ? Promise.resolve(planning) : new Promise<never>(() => {}),
+      handleAgentDispatch: async () => ({ text: "ok", data: {} }),
+      close: async () => {},
+    };
+    const slowApp = createUiServer({
+      ledger: ledger.asLedger(),
+      token: TOKEN,
+      staticDir,
+      uploadsDir,
+      sentFilesDir,
+      port: PORT,
+      db,
+      routerDispatcher: slowDispatcher as never,
+    });
+    await slowApp.ready();
+    try {
+      const headers = { host: HOST, cookie: COOKIE, origin: ORIGIN, "content-type": "application/json" };
+      const promptly = async (p: Promise<{ statusCode: number; json: () => unknown }>) => {
+        const timedOut = Symbol("timedOut");
+        const res = await Promise.race([p, new Promise<symbol>((r) => setTimeout(() => r(timedOut), 1_000))]);
+        if (res === timedOut) throw new Error("接口被占住等规划结束，没有立即返回");
+        return res as { statusCode: number; json: () => unknown };
+      };
+      const post = await promptly(
+        slowApp.inject({ method: "POST", url: "/api/router/commands", headers, payload: { clientId: "cmd-slow", text: "慢规划" } }),
+      );
+      expect(post.statusCode).toBe(200);
+      expect(post.json()).toEqual({ command: planning });
+      const retry = await promptly(
+        slowApp.inject({ method: "POST", url: "/api/router/commands/77/retry", headers, payload: {} }),
+      );
+      expect(retry.statusCode).toBe(200);
+      expect(retry.json()).toEqual({ command: planning });
+    } finally {
+      await slowApp.close();
+    }
+  });
 });
