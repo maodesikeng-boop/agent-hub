@@ -455,8 +455,8 @@ describe("右栏：每组可以收起", () => {
   });
 });
 
-describe("RightRailToggle: 切了的水果 Worker 果瓣图标", () => {
-  it("开关使用当前项目经理对应水果切出的 Worker 果瓣（Avatar neutral 26px，按根字号缩放）", () => {
+describe("RightRailToggle: Piece 纸片分身图标", () => {
+  it("开关使用当前项目经理那只小动物的纸片分身（Avatar neutral 26px，按根字号缩放）", () => {
     render(<RightRailToggle visible open={false} attention={false} avatarKey={3} onToggle={() => {}} />);
     const button = screen.getByRole("button", { name: "Show side panel" });
     const avatar = button.querySelector("[data-neutral='true']");

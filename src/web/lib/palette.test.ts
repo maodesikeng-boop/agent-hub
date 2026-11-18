@@ -7,10 +7,10 @@ import { accentStyle, CHART_CATEGORY_COLORS, contrastRatio, PALETTE, paletteOf }
 const WHITE = "#ffffff";
 
 describe("颜色表", () => {
-  it("顺序和 shared/fruits.ts 的 PM_FRUITS 一样；名字、fruit 标识、切片与果瓣素材、主色、强调色都不重复", () => {
+  it("顺序和 shared/fruits.ts 的 PM_FRUITS 一样；名字、fruit 标识、主形象与纸片分身素材、主色、强调色都不重复", () => {
     const n = PM_FRUITS.length;
     expect(PALETTE.map((c) => c.fruit)).toEqual([...PM_FRUITS]);
-    for (const key of ["name", "fruit", "slice", "wedge", "blob", "accent"] as const) expect(new Set(PALETTE.map((c) => c[key])).size).toBe(n);
+    for (const key of ["name", "fruit", "main", "piece", "blob", "accent"] as const) expect(new Set(PALETTE.map((c) => c[key])).size).toBe(n);
   });
 
   it.each(PALETTE.map((c) => [c.name, c] as const))("%s：强调色上的文字、白底上的链接和状态词，对比度都 ≥ 4.5:1（WCAG 1.4.3 AA）", (_name, c) => {

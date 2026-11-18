@@ -130,8 +130,8 @@ describe("界面标准：共用组件", () => {
     expect(avatars).toHaveLength(2);
     expect(avatars[0]).not.toHaveAttribute("data-neutral");
     expect(avatars[1]).toHaveAttribute("data-neutral", "true");
-    expect(avatars[0]!.querySelector("img")?.getAttribute("src")).toBe(PALETTE[0]!.slice);
-    expect(avatars[1]!.querySelector("img")?.getAttribute("src")).toBe(PALETTE[0]!.wedge);
+    expect(avatars[0]!.querySelector("img")?.getAttribute("src")).toBe(PALETTE[0]!.main);
+    expect(avatars[1]!.querySelector("img")?.getAttribute("src")).toBe(PALETTE[0]!.piece);
   });
 
   it("--ring 是中性灰，不是主色", () => {

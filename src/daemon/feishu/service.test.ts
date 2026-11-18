@@ -29,7 +29,7 @@ import { migrate } from "../store/migrate.ts";
 import { decodeFeishuActionValue } from "./cards.ts";
 import { feishuChatMarker } from "./chats.ts";
 import { FEISHU_GROUP_MSG_SCOPE, FEISHU_REQUIRED_SCOPES } from "./scopes.ts";
-import { FEISHU_AVATARS_DIR } from "./avatars.ts";
+import { FEISHU_AVATARS_DIR, feishuAvatarHash } from "./avatars.ts";
 import { createFeishuService, type FeishuService } from "./service.ts";
 import { FeishuSetupError } from "./setup.ts";
 import { createFeishuStore } from "./store.ts";
@@ -216,9 +216,32 @@ describe("createFeishuService：接入与建群", () => {
     expect(creates[0]!.description).toContain(feishuChatMarker(DEVICE.id, lin.pmId));
     const avatarUploads = fake.calls.filter((c) => c.method === "uploadImage");
     expect(avatarUploads).toHaveLength(1);
-    expect(String(avatarUploads[0]!.args.path)).toMatch(new RegExp(`${pmFruitOf(lin.pmId)}\\.webp$`));
-    expect(creates[0]!.avatar).toBe(store().avatarKey(pmFruitOf(lin.pmId)));
+    expect(String(avatarUploads[0]!.args.path)).toMatch(new RegExp(`${pmFruitOf(lin.pmId)}\\.png$`));
+    expect(creates[0]!.avatar).toBe(store().avatarKey(pmFruitOf(lin.pmId), feishuAvatarHash(FEISHU_AVATARS_DIR, pmFruitOf(lin.pmId))));
     expect(store().chatOfTarget({ kind: "router" })).not.toBeNull();
+  });
+
+  it("已建的群：头像图片换了（记下的哈希和现在的图不同）重传一次、原地换群头像，不重建群、不动群名", async () => {
+    await connect();
+    const chatId = chatOf(lin.pmId);
+    const fruit = pmFruitOf(lin.pmId);
+    const hash = feishuAvatarHash(FEISHU_AVATARS_DIR, fruit);
+    expect(store().chatById(chatId)?.avatarFruit).toBe(fruit);
+    // 模拟升级前：群上挂的是旧图（上传记录是另一张图的哈希），用户还在飞书里改过群名
+    db.run("UPDATE feishu_chats SET name = '用户改的群名' WHERE chat_id = ?", chatId);
+    db.run("UPDATE feishu_avatars SET content_sha256 = 'old-image', image_key = 'img_old' WHERE fruit = ?", fruit);
+    const before = { creates: fake.callsOf("chat.create").length, uploads: fake.calls.filter((c) => c.method === "uploadImage").length, updates: fake.callsOf("chat.update").length };
+    await svc.setup.resync();
+    await settle();
+    const updates = fake.callsOf("chat.update").slice(before.updates);
+    expect(updates).toEqual([{ chat_id: chatId, avatar: store().avatarKey(fruit, hash) }]);
+    expect(updates[0]!.avatar).not.toBe("img_old");
+    expect(fake.calls.filter((c) => c.method === "uploadImage")).toHaveLength(before.uploads + 1);
+    expect(fake.callsOf("chat.create")).toHaveLength(before.creates);
+    expect(store().chatById(chatId)).toMatchObject({ avatarFruit: fruit, name: "用户改的群名" });
+    await svc.setup.resync();
+    await settle();
+    expect(fake.callsOf("chat.update")).toHaveLength(before.updates + 1);
   });
 
   it("建群请求带同一个 uuid；崩在建好还没记下之间，重启后按群说明的标记认回来，不多建", async () => {

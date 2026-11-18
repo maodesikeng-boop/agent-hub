@@ -98,6 +98,15 @@ describe("planFeishuChatSync", () => {
     expect(plan([pm(1, "小林")], [binding(1, { avatarFruit: null })])).toEqual([{ kind: "set_avatar", chatId: "oc_1", fruit: pmFruitOf(1) }]);
   });
 
+  it("头像图片换了被清空（avatarFruit 是 null）：只出 set_avatar，用户在飞书里改过的群名不出 rename", () => {
+    expect(plan([pm(1, "小林")], [binding(1, { avatarFruit: null, name: "用户在飞书里改的名" })])).toEqual([{ kind: "set_avatar", chatId: "oc_1", fruit: pmFruitOf(1) }]);
+  });
+
+  it("水果扩充后编号对到了别的水果：记录的水果和应有的不同也 set_avatar", () => {
+    const other = PM_FRUITS.find((f) => f !== pmFruitOf(1))!;
+    expect(plan([pm(1, "小林")], [binding(1, { avatarFruit: other })])).toEqual([{ kind: "set_avatar", chatId: "oc_1", fruit: pmFruitOf(1) }]);
+  });
+
   it("项目经理归档 → dissolve；已归档的记录不再出 rename、set_avatar", () => {
     expect(plan([pm(1, "小林", 5)], [binding(1)])).toEqual([{ kind: "dissolve", chatId: "oc_1" }]);
     expect(plan([pm(1, "改名了", 5)], [binding(1, { archivedAt: 5, avatarFruit: null })])).toEqual([]);
