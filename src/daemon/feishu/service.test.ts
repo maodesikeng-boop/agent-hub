@@ -1,5 +1,5 @@
 // 用假的传输层（FeishuTransport）和真的账本跑，不连飞书。
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -121,7 +121,7 @@ async function connect(service = svc) {
 }
 const chatOf = (pmId: PmId): FeishuChatId => store().chatOfTarget({ kind: "pm", pmId })!.chatId;
 const routerChat = (): FeishuChatId => store().chatOfTarget({ kind: "router" })!.chatId;
-const say = (chatId: string, text: string, opts: { sender?: string; mention?: boolean; p2p?: boolean; files?: { type: "image" | "file"; fileKey: string; fileName: string | null }[] } = {}) => {
+const say = (chatId: string, text: string, opts: { sender?: string; mention?: boolean; p2p?: boolean; files?: { type: "image" | "file" | "audio" | "video" | "sticker"; fileKey: string; fileName: string | null }[] } = {}) => {
   const messageId = `om_in${++seq}`;
   fake.event({
     type: "im.message.receive_v1",
@@ -164,6 +164,18 @@ const buttonValues = (cardData: string) => {
   };
   visit(cardJsonOf(cardData).body.elements);
   return out.filter((v) => v !== null);
+};
+/** 卡片里嵌的图片（img 元素）的图片编号。 */
+const imgKeysOf = (cardData: string) => {
+  const out: string[] = [];
+  const visit = (els: Record<string, unknown>[]) => {
+    for (const el of els) {
+      if (el.tag === "img" && typeof el.img_key === "string") out.push(el.img_key);
+      if (Array.isArray(el.elements)) visit(el.elements as Record<string, unknown>[]);
+    }
+  };
+  visit(cardJsonOf(cardData).body.elements);
+  return out;
 };
 const cardIdsCreated = () =>
   fake.calls.filter((c) => c.method === "card.create").map((c, i) => ({ data: String(c.args.data), index: i }));
@@ -706,7 +718,7 @@ describe("createFeishuService：流式、急停与卡片", () => {
     expect(cardsSentTo(chatOf(lin.pmId)).some((c) => JSON.stringify(c).includes("飞书里说的话"))).toBe(false);
   });
 
-  it("项目经理发的文件、卡片的交付物发成群里的图片和文件消息，同一个文件只传一次", async () => {
+  it("项目经理发的图片嵌进回复卡、别的文件紧跟着发成文件消息，同一个文件只传一次", async () => {
     await connect();
     const home = join(root, "out");
     mkdirSync(home, { recursive: true });
@@ -716,8 +728,9 @@ describe("createFeishuService：流式、急停与卡片", () => {
     ev(lin.sessionId, { type: "agent.text", uuid: "files1", text, at: Date.now() });
     await settle();
     const kinds = fake.callsOf("message.create").filter((c) => c.receive_id === chatOf(lin.pmId)).map((c) => c.msg_type);
-    expect(kinds).toContain("image");
+    expect(kinds).not.toContain("image");
     expect(kinds).toContain("file");
+    expect([...fake.cards.values()].some((data) => imgKeysOf(data).length === 1)).toBe(true);
     const uploads = fake.calls.filter((c) => c.method === "uploadFile" || (c.method === "uploadImage" && c.args.imageType === "message")).length;
     await svc.setup.resync();
     await settle();
@@ -1159,9 +1172,11 @@ describe("createFeishuService：开轮即时反馈、关卡同步与附件分流
     return home;
   };
 
-  it("项目经理开轮调工具、还没出正文时，群里立即有一张流式状态卡（带停止按钮）；正文到了在同一张卡上定稿，一轮只占一张卡", async () => {
+  it("用户发消息后项目经理开轮调工具、还没出正文时，群里立即有一张流式状态卡（带停止按钮）；正文到了在同一张卡上定稿，一轮只占一张卡", async () => {
     await connect();
     const chat = chatOf(lin.pmId);
+    say(chat, "帮我看一下");
+    await settle();
     running(lin.sessionId);
     ev(lin.sessionId, { type: "turn.started", at: Date.now() });
     tool(lin.sessionId, "Bash", { command: "ls" });
@@ -1187,6 +1202,8 @@ describe("createFeishuService：开轮即时反馈、关卡同步与附件分流
     await connect();
     const stops: ConversationId[] = [];
     ledger.onStopRequested((e) => stops.push(e.conversationId));
+    say(chatOf(lin.pmId), "跑一下");
+    await settle();
     running(lin.sessionId);
     ev(lin.sessionId, { type: "turn.started", at: Date.now() });
     tool(lin.sessionId, "Bash", { command: "sleep 60" });
@@ -1201,6 +1218,8 @@ describe("createFeishuService：开轮即时反馈、关卡同步与附件分流
 
   it("撤回被飞书拒绝（超过撤回时限）时把状态卡收成一行说明：关流式、去停止按钮", async () => {
     await connect();
+    say(chatOf(lin.pmId), "跑一下");
+    await settle();
     running(lin.sessionId);
     ev(lin.sessionId, { type: "turn.started", at: Date.now() });
     await settle();
@@ -1227,6 +1246,8 @@ describe("createFeishuService：开轮即时反馈、关卡同步与附件分流
   });
 
   it("交付文件上传又慢又失败时，关卡、后续流式回复照常即时发出，不被上传挡住", async () => {
+    await svc.close();
+    svc = makeService({ attachWaitMs: 50 });
     await connect();
     const home = outDir();
     writeFileSync(join(home, "big.png"), Buffer.from("89504e470d0a1a0a", "hex"));
@@ -1247,10 +1268,13 @@ describe("createFeishuService：开轮即时反馈、关卡同步与附件分流
     expect(fake.calls.some((c) => c.method === "uploadImage" && c.args.imageType === "message")).toBe(true);
     expect(fake.callsOf("message.create").some((c) => c.msg_type === "image")).toBe(false);
     release();
-    await vi.waitFor(() => expect(fake.callsOf("message.create").some((c) => c.msg_type === "image")).toBe(true));
+    await vi.waitFor(() => expect(fake.callsOf("card.update").some((u) => u.card_id === postOfAsk(askId).cardId && imgKeysOf(u.card.data).length === 1)).toBe(true));
+    expect(fake.callsOf("message.create").some((c) => c.msg_type === "image")).toBe(false);
   });
 
   it("交付文件上传暂时失败时自己重试，不挡文字，最后发出去", async () => {
+    await svc.close();
+    svc = makeService({ attachWaitMs: 50 });
     await connect();
     const home = outDir();
     writeFileSync(join(home, "shot.png"), Buffer.from("89504e470d0a1a0a", "hex"));
@@ -1262,7 +1286,8 @@ describe("createFeishuService：开轮即时反馈、关卡同步与附件分流
     ev(lin.sessionId, { type: "agent.text", uuid: "after-flaky", text: "后面这句不用等", at: Date.now() });
     await settle();
     expect(cardsSentTo(chatOf(lin.pmId)).some((c) => JSON.stringify(c).includes("后面这句不用等"))).toBe(true);
-    await vi.waitFor(() => expect(fake.callsOf("message.create").filter((c) => c.msg_type === "image")).toHaveLength(1), { timeout: FEISHU_CONTROL_RETRY_MS * 8 });
+    await vi.waitFor(() => expect(fake.callsOf("card.update").some((u) => imgKeysOf(u.card.data).length === 1)).toBe(true), { timeout: FEISHU_CONTROL_RETRY_MS * 8 });
+    expect(fake.callsOf("message.create").filter((c) => c.msg_type === "image")).toHaveLength(0);
   });
 
   it("mp4、pdf、md 附件都能发出：mp4 发成视频消息，不报 230055", async () => {
@@ -1276,5 +1301,191 @@ describe("createFeishuService：开轮即时反馈、关卡同步与附件分流
     const sends = fake.callsOf("message.create").filter((c) => c.receive_id === chatOf(lin.pmId) && c.msg_type !== "interactive");
     expect(sends.map((c) => c.msg_type).sort()).toEqual(["file", "file", "media"]);
     expect(svc.setup.status().lastError).toBeNull();
+  });
+});
+
+describe("createFeishuService：图文同发、超大图瘦身、重启补传与后台轮次", () => {
+  const tool = (sessionId: SessionId, name: string, input: unknown = {}) =>
+    ev(sessionId, { type: "agent.tool", uuid: `t-${++seq}`, toolUseId: `tu-${seq}`, name, input, at: Date.now() });
+  const outDir = () => {
+    const home = join(root, "out");
+    mkdirSync(home, { recursive: true });
+    return home;
+  };
+  const png = () => Buffer.from("89504e470d0a1a0a", "hex");
+  const latestAgentText = (conversationId: ConversationId) =>
+    db.get<{ id: number }>("SELECT max(id) AS id FROM messages WHERE conversation_id = ? AND sender = 'agent' AND kind = 'text'", conversationId)!.id;
+  /** 群里每条消息按发出先后：卡片记 card、别的记 msg_type。 */
+  const timeline = (chatId: string) =>
+    fake.callsOf("message.create").filter((c) => c.receive_id === chatId).map((c) => c.msg_type);
+  const allCardData = () => [...fake.cards.values(), ...fake.callsOf("card.update").map((u) => u.card.data)];
+
+  it("回复里的图片随定稿嵌进同一张卡（img 元素），不再单发图片消息；pdf、md、mp4、zip 紧跟在这张卡后面连着发出", async () => {
+    await connect();
+    const chat = chatOf(lin.pmId);
+    const home = outDir();
+    writeFileSync(join(home, "a.png"), png());
+    writeFileSync(join(home, "b.png"), png());
+    for (const name of ["report.pdf", "notes.md", "demo.mp4", "bundle.zip"]) writeFileSync(join(home, name), "x");
+    const links = ["a.png", "b.png", "report.pdf", "notes.md", "demo.mp4", "bundle.zip"].map((n) => `[${n}](${join(home, n)})`).join("\n");
+    ev(lin.sessionId, { type: "agent.text", uuid: "together", text: `做好了，图和文件都在：\n${links}`, at: Date.now() });
+    await settle();
+    const sent = timeline(chat);
+    expect(sent).toEqual(["interactive", "file", "file", "media", "file"]);
+    const card = [...fake.cards.values()].find((d) => d.includes("做好了"))!;
+    expect(imgKeysOf(card)).toHaveLength(2);
+    expect(card).not.toContain("Uploading");
+    expect(svc.setup.status().lastError).toBeNull();
+  });
+
+  it("提问卡带的图片也嵌进同一张卡、和按钮在一起；点了定案后图片还在", async () => {
+    await connect();
+    const home = outDir();
+    writeFileSync(join(home, "shot.png"), png());
+    const askId = ledger.hubCall(lin.sessionId, "ask", { text: "这样改行吗", options: ["行", "不行"], files: [{ label: "截图", path: join(home, "shot.png") }] }).data.messageId;
+    await settle();
+    const post = postOfAsk(askId);
+    const created = fake.cards.get(post.cardId!)!;
+    expect(imgKeysOf(created)).toHaveLength(1);
+    expect(buttonValues(created).length).toBeGreaterThan(0);
+    expect(fake.callsOf("message.create").some((c) => c.msg_type === "image")).toBe(false);
+    click(chatOf(lin.pmId), post.messageId, { fusa: 1, kind: "choose", card: { kind: "ask", askMessageId: askId }, optionIndex: 0 });
+    await settle();
+    const settled = fake.callsOf("card.update").filter((u) => u.card_id === post.cardId).at(-1)!;
+    expect(buttonValues(settled.card.data)).toEqual([]);
+    expect(imgKeysOf(settled.card.data)).toEqual(imgKeysOf(created));
+  });
+
+  it("图和文件超过等待窗口还没传完：卡先发出（写着 Uploading），不挡后面的新消息；传完后图原地嵌回原卡、文件补发并在原卡标注已送达", async () => {
+    await svc.close();
+    svc = makeService({ attachWaitMs: 50 });
+    await connect();
+    const chat = chatOf(lin.pmId);
+    const home = outDir();
+    writeFileSync(join(home, "slow.png"), png());
+    writeFileSync(join(home, "big.zip"), "x");
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    fake.beforeUpload = () => gate;
+    ev(lin.sessionId, { type: "agent.text", uuid: "slow", text: `传大文件 [图](${join(home, "slow.png")}) [包](${join(home, "big.zip")})`, at: Date.now() });
+    ev(lin.sessionId, { type: "agent.text", uuid: "next", text: "下一句不等上传", at: Date.now() });
+    await vi.waitFor(() => expect(cardsSentTo(chat).some((c) => JSON.stringify(c).includes("下一句不等上传"))).toBe(true));
+    const host = store().postOf({ kind: "message", messageId: latestAgentText(lin.conversationId) - 1, part: 0 })!;
+    expect(host.cardId).not.toBeNull();
+    const first = fake.cards.get(host.cardId!)!;
+    expect(first).toContain("Uploading slow.png");
+    expect(first).toContain("Uploading big.zip");
+    expect(imgKeysOf(first)).toEqual([]);
+    expect(store().postOf({ kind: "file", messageId: host.ref.kind === "message" ? host.ref.messageId : 0, part: 1 })?.state).toBe("uploading");
+    release();
+    await vi.waitFor(() => {
+      const last = fake.callsOf("card.update").filter((u) => u.card_id === host.cardId).at(-1);
+      expect(last).toBeDefined();
+      expect(imgKeysOf(last!.card.data)).toHaveLength(1);
+      expect(last!.card.data).toContain("已送达");
+      expect(last!.card.data).not.toContain("Uploading");
+    });
+    expect(timeline(chat).filter((t) => t === "file")).toHaveLength(1);
+  });
+
+  it("在途附件记在 feishu_posts（uploading）：守护进程重启后自动补传，传完补发文件并改原卡", async () => {
+    await svc.close();
+    svc = makeService({ attachWaitMs: 50 });
+    await connect();
+    const chat = chatOf(lin.pmId);
+    const home = outDir();
+    writeFileSync(join(home, "huge.mp4"), "x");
+    fake.beforeUpload = () => new Promise<void>(() => {});
+    ev(lin.sessionId, { type: "agent.text", uuid: "restart", text: `视频 [demo](${join(home, "huge.mp4")})`, at: Date.now() });
+    const messageId = latestAgentText(lin.conversationId);
+    await vi.waitFor(() => expect(store().postOf({ kind: "file", messageId, part: 0 })?.state).toBe("uploading"));
+    await svc.close();
+    const host = store().postOf({ kind: "message", messageId, part: 0 })!;
+    fake.beforeUpload = null;
+    svc = makeService({ attachWaitMs: 50 });
+    await svc.start();
+    await vi.waitFor(() => expect(svc.setup.status().state).toBe("connected"));
+    await settle();
+    expect(store().postOf({ kind: "file", messageId, part: 0 })?.state).toBe("final");
+    expect(timeline(chat).filter((t) => t === "media")).toHaveLength(1);
+    const last = fake.callsOf("card.update").filter((u) => u.card_id === host.cardId).at(-1)!;
+    expect(last.card.data).toContain("已送达");
+    expect(last.card.data).not.toContain("Uploading");
+  });
+
+  it("超过 2400px 或 2 MB 的截图上传前缩到最长边 2400，磁盘上的原图不动；别的文件原样上传", async () => {
+    const sharp = (await import("sharp")).default;
+    await connect();
+    const home = outDir();
+    const tall = join(home, "tall.png");
+    await sharp({ create: { width: 600, height: 4800, channels: 3, background: { r: 200, g: 30, b: 30 } } }).png().toFile(tall);
+    const before = readFileSync(tall);
+    writeFileSync(join(home, "notes.md"), "# 笔记");
+    const seen: { path: string; width: number; height: number }[] = [];
+    fake.beforeUpload = async (input) => {
+      if (!("imageType" in input)) return;
+      const meta = await sharp(input.path).metadata();
+      seen.push({ path: input.path, width: meta.width ?? 0, height: meta.height ?? 0 });
+    };
+    ev(lin.sessionId, { type: "agent.text", uuid: "tall", text: `长截图 [图](${tall}) [笔记](${join(home, "notes.md")})`, at: Date.now() });
+    await settle();
+    expect(seen).toHaveLength(1);
+    expect(Math.max(seen[0]!.width, seen[0]!.height)).toBeLessThanOrEqual(2400);
+    expect(Math.max(seen[0]!.width, seen[0]!.height)).toBeGreaterThan(2000);
+    expect(readFileSync(tall).equals(before)).toBe(true);
+    const md = fake.calls.find((c) => c.method === "uploadFile")!;
+    expect(String(md.args.path)).toMatch(/notes\.md$/);
+    expect(existsSync(seen[0]!.path) && seen[0]!.path !== tall).toBe(false);
+  });
+
+  it("网页上发的带图和文件的用户消息镜像到群里：图嵌在同一张卡，文件紧跟着发", async () => {
+    const { saveUpload } = await import("../uploads.ts");
+    await connect();
+    const chat = chatOf(lin.pmId);
+    const photo = await saveUpload(join(dataHome, "uploads"), "photo.png", png());
+    const doc = await saveUpload(join(dataHome, "uploads"), "spec.pdf", Buffer.from("%PDF"));
+    ledger.postUserMessage({ conversationId: lin.conversationId, clientId: "web-files", text: "看这两个", attachments: [photo, doc] });
+    await settle();
+    expect(timeline(chat)).toEqual(["interactive", "file"]);
+    const mirrored = fake.cards.get([...fake.cards.keys()].find((id) => fake.cards.get(id)!.includes("看这两个"))!)!;
+    expect(mirrored).toContain("网页上说");
+    expect(imgKeysOf(mirrored)).toHaveLength(1);
+  });
+
+  it("飞书里发的富文本（文字 + 多张图 + 视频）完整收成附件，正文里不留占位", async () => {
+    await connect();
+    fake.resources.set("img_a", png());
+    fake.resources.set("img_b", png());
+    fake.resources.set("file_v", Buffer.from("mp4"));
+    say(chatOf(lin.pmId), '看这两张\n![image](img_a) ![image](img_b)\n<video key="file_v" name="demo.mp4"/>', {
+      files: [
+        { type: "image", fileKey: "img_a", fileName: null },
+        { type: "image", fileKey: "img_b", fileName: null },
+        { type: "video", fileKey: "file_v", fileName: "demo.mp4" },
+      ],
+    });
+    await settle();
+    const message = userMessages(lin.conversationId).at(-1)!;
+    expect(message.text).toBe("看这两张");
+    expect((message.meta?.attachments as { name: string }[]).map((a) => a.name)).toEqual([expect.stringMatching(/\.png$/), expect.stringMatching(/\.png$/), "demo.mp4"]);
+  });
+
+  it("后台轮次（Worker 汇报、系统唤醒）调工具时不建状态卡，整轮没正文也不撤回任何消息；用户发话的那一轮照常立即有状态卡", async () => {
+    await connect();
+    running(lin.sessionId);
+    ev(lin.sessionId, { type: "turn.started", at: Date.now() });
+    tool(lin.sessionId, "Bash", { command: "hub status" });
+    await settle();
+    ev(lin.sessionId, { type: "turn.ended", ok: true, interrupted: false, messageIds: [], durationMs: 1, at: Date.now() });
+    await settle();
+    expect(cardIdsCreated()).toHaveLength(0);
+    expect(fake.callsOf("message.delete")).toHaveLength(0);
+    say(chatOf(lin.pmId), "进展怎么样");
+    await settle();
+    ev(lin.sessionId, { type: "turn.started", at: Date.now() });
+    tool(lin.sessionId, "Bash", { command: "hub status" });
+    await settle();
+    expect(cardIdsCreated()).toHaveLength(1);
+    expect(buttonValues(cardIdsCreated()[0]!.data)).toEqual([{ kind: "stop", conversationId: lin.conversationId }]);
   });
 });
