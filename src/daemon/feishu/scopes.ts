@@ -2,6 +2,27 @@
 // 扫码建应用用平台的「智能体应用配置清单」做底（已含单聊和 @机器人 消息、建群改群、上传资源、卡片读写、卡片回传交互，
 // 事件与回调默认走长连接），这里只列底座之外要加的增量，经 registerApp 的 addons 预填到确认页。
 
+import { PRODUCT_NAME } from "../../shared/names.ts";
+
+/** 收群里所有消息的权限：没授予时所有群按 mention_only。 */
+export const FEISHU_GROUP_MSG_SCOPE = "im:message.group_msg";
+
+/**
+ * 平台「智能体应用配置清单」默认带的权限（docs/feishu-design.md「飞书官方接口」的默认模板一行）。addons 只能往上加。
+ */
+export const FEISHU_TEMPLATE_SCOPES: readonly string[] = [
+  "im:message:send_as_bot",
+  "im:message.p2p_msg:readonly",
+  "im:message.group_at_msg:readonly",
+  "im:message:readonly",
+  "im:message:update",
+  "im:resource",
+  "im:chat:create",
+  "im:chat:update",
+  "im:chat:read",
+  "cardkit:card:write",
+];
+
 /** registerApp 的 addons（形状和官方 AppAddons 一致）。 */
 export interface FeishuAppAddons {
   preset: true;
@@ -55,7 +76,11 @@ export const FEISHU_OPTIONAL_SCOPES: readonly string[] = ["im:message.group_msg"
 
 /** 后置：扫码确认页上预填的应用名和说明，应用名带设备名（如“Fusa · 东京”），一台设备一个应用。 */
 export function feishuAppPreset(deviceName: string): FeishuAppPreset {
-  throw new Error("未实现");
+  const device = deviceName.trim();
+  return {
+    name: device === "" ? PRODUCT_NAME : `${PRODUCT_NAME} · ${device}`,
+    desc: `${PRODUCT_NAME} 的飞书机器人：和总助单聊，每个项目经理一个项目群。一台设备一个应用。`,
+  };
 }
 
 export interface FeishuScopeCheck {
@@ -70,5 +95,6 @@ export interface FeishuScopeCheck {
  * 后置：missing 按 FEISHU_REQUIRED_SCOPES 的顺序列出没授予的；可选权限不进 missing。
  */
 export function checkFeishuScopes(granted: readonly string[]): FeishuScopeCheck {
-  throw new Error("未实现");
+  const have = new Set(granted);
+  return { missing: FEISHU_REQUIRED_SCOPES.filter((scope) => !have.has(scope)), mentionOnly: !have.has(FEISHU_GROUP_MSG_SCOPE) };
 }

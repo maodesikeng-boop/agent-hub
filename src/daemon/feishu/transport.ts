@@ -148,3 +148,33 @@ export class FeishuAuthError extends Error {
     this.code = code;
   }
 }
+
+/** 开放接口回了非 0 的 code（凭证失效除外，那是 FeishuAuthError）。 */
+export class FeishuApiError extends Error {
+  readonly code: number;
+  constructor(method: string, code: number, message: string) {
+    super(`feishu ${method} failed: ${code} ${message}`);
+    this.code = code;
+  }
+}
+
+/** 后置：code 为 0 返回 data（没有是空对象），否则抛 FeishuApiError。 */
+export function feishuDataOf(method: FeishuMethod, result: FeishuApiResult): Record<string, unknown> {
+  if (result.code !== 0) throw new FeishuApiError(method, result.code, result.msg ?? "");
+  return result.data ?? {};
+}
+
+/** 后置：回包 data 里的字符串字段；没有或不是字符串返回 null。 */
+export function feishuStringField(data: Record<string, unknown>, key: string): string | null {
+  const value = data[key];
+  return typeof value === "string" && value !== "" ? value : null;
+}
+
+/** 扫码建应用失败：access_denied（用户拒绝）、expired_token（过期）、abort（取消）或别的错误码。 */
+export class FeishuRegistrationError extends Error {
+  readonly code: string;
+  constructor(code: string, message: string) {
+    super(message);
+    this.code = code;
+  }
+}

@@ -16,6 +16,9 @@ import type {
   FeishuOpenId,
   FeishuTriggerMode,
 } from "../../shared/feishu.ts";
+import { isOneOf } from "../../shared/domain.ts";
+import { FEISHU_GUEST_TIERS, FEISHU_TRIGGER_MODES } from "../../shared/feishu.ts";
+import { PM_FRUITS } from "../../shared/fruits.ts";
 import type { Db } from "../store/index.ts";
 import type { PmFruit } from "./avatars.ts";
 
@@ -121,5 +124,314 @@ export interface FeishuStore {
 
 /** 前置：迁移 0034 已跑。 */
 export function createFeishuStore(db: Db): FeishuStore {
-  throw new Error("未实现");
+  const app = (): FeishuAppRecord | null => {
+    const row = db.get<AppRow>("SELECT * FROM feishu_app WHERE id = 1");
+    return row === undefined ? null : toApp(row);
+  };
+  const chatWhere = (where: string, ...params: (string | number)[]): FeishuChatBinding | null => {
+    const row = db.get<ChatRow>(`SELECT * FROM feishu_chats WHERE ${where}`, ...params);
+    return row === undefined ? null : toChat(row);
+  };
+  const chatById = (chatId: FeishuChatId) => chatWhere("chat_id = ?", chatId);
+  const mustChat = (chatId: FeishuChatId): FeishuChatBinding => {
+    const chat = chatById(chatId);
+    if (chat === null) throw new Error(`feishu chat ${chatId} not found`);
+    return chat;
+  };
+  const chatOfTarget = (target: FeishuChatTarget) =>
+    target.kind === "router" ? chatWhere("target = 'router'") : chatWhere("target = 'pm' AND pm_id = ?", target.pmId);
+  const clear = () =>
+    db.transaction(() => {
+      for (const table of ["feishu_posts", "feishu_chats", "feishu_avatars", "feishu_app"]) db.run(`DELETE FROM ${table}`);
+    });
+  const postWhere = (where: string, ...params: (string | number)[]): FeishuPostRecord | null => {
+    const row = db.get<PostRow>(`SELECT * FROM feishu_posts WHERE ${where}`, ...params);
+    return row === undefined ? null : toPost(row);
+  };
+  const postOf = (ref: FeishuPostRef) => {
+    const key = refKey(ref);
+    return postWhere("ref_kind = ? AND ref_id = ? AND part = ?", key.kind, key.id, key.part);
+  };
+
+  return {
+    app,
+    saveApp(input, now) {
+      return db.transaction(() => {
+        const existing = app();
+        if (existing !== null && existing.appId !== input.appId) clear();
+        const kept = existing !== null && existing.appId === input.appId ? existing : null;
+        const owner = kept?.ownerOpenId ?? input.ownerOpenId;
+        db.run(
+          `INSERT INTO feishu_app (id, app_id, brand, bot_open_id, bot_name, owner_open_id, enabled, created_at, updated_at)
+           VALUES (1, ?, ?, ?, ?, ?, 1, ?, ?)
+           ON CONFLICT (id) DO UPDATE SET brand = excluded.brand, bot_open_id = excluded.bot_open_id, bot_name = excluded.bot_name,
+             owner_open_id = excluded.owner_open_id, updated_at = excluded.updated_at`,
+          input.appId,
+          input.brand,
+          input.botOpenId,
+          input.botName,
+          owner,
+          kept?.createdAt ?? now,
+          now,
+        );
+        return app()!;
+      });
+    },
+    bindOwner(openId, now) {
+      const current = app();
+      if (current === null) throw new Error("feishu app not configured");
+      if (current.ownerOpenId !== null) return current;
+      db.run("UPDATE feishu_app SET owner_open_id = ?, updated_at = ? WHERE id = 1", openId, now);
+      return app()!;
+    },
+    setEnabled(enabled, now) {
+      db.run("UPDATE feishu_app SET enabled = ?, updated_at = ? WHERE id = 1", enabled ? 1 : 0, now);
+    },
+    clear,
+
+    chats: () => db.all<ChatRow>("SELECT * FROM feishu_chats ORDER BY target DESC, pm_id").map(toChat),
+    chatById,
+    chatOfTarget,
+    upsertChat(input, now) {
+      return db.transaction(() => {
+        const existing = chatOfTarget(input.target);
+        if (existing === null) {
+          db.run(
+            `INSERT INTO feishu_chats (chat_id, target, pm_id, name, label, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            input.chatId,
+            input.target.kind,
+            input.target.kind === "pm" ? input.target.pmId : null,
+            input.name,
+            input.label,
+            now,
+            now,
+          );
+        } else {
+          if (existing.chatId !== input.chatId) db.run("DELETE FROM feishu_posts WHERE chat_id = ?", existing.chatId);
+          db.run(
+            `UPDATE feishu_chats SET chat_id = ?, name = ?, label = ?, archived_at = NULL,
+               avatar_fruit = CASE WHEN chat_id = ? THEN avatar_fruit ELSE NULL END,
+               last_message_id = CASE WHEN chat_id = ? THEN last_message_id ELSE NULL END,
+               last_router_item_id = CASE WHEN chat_id = ? THEN last_router_item_id ELSE NULL END,
+               last_router_command_id = CASE WHEN chat_id = ? THEN last_router_command_id ELSE NULL END,
+               updated_at = ?
+             WHERE chat_id = ?`,
+            input.chatId,
+            input.name,
+            input.label,
+            input.chatId,
+            input.chatId,
+            input.chatId,
+            input.chatId,
+            now,
+            existing.chatId,
+          );
+        }
+        return mustChat(input.chatId);
+      });
+    },
+    renameChat(chatId, name, label, now) {
+      db.run("UPDATE feishu_chats SET name = ?, label = COALESCE(?, label), updated_at = ? WHERE chat_id = ?", name, label, now, chatId);
+    },
+    setChatAvatar(chatId, fruit, now) {
+      db.run("UPDATE feishu_chats SET avatar_fruit = ?, updated_at = ? WHERE chat_id = ?", fruit, now, chatId);
+    },
+    setChatPolicy(pmId, policy, now) {
+      const chat = chatOfTarget({ kind: "pm", pmId });
+      if (chat === null) throw new Error(`feishu chat of pm ${pmId} not found`);
+      db.run(
+        "UPDATE feishu_chats SET trigger_mode = COALESCE(?, trigger_mode), guest_tier = COALESCE(?, guest_tier), updated_at = ? WHERE chat_id = ?",
+        policy.triggerMode ?? null,
+        policy.guestTier ?? null,
+        now,
+        chat.chatId,
+      );
+      return mustChat(chat.chatId);
+    },
+    setChatArchived(chatId, archivedAt, now) {
+      db.transaction(() => {
+        db.run("DELETE FROM feishu_posts WHERE chat_id = ?", chatId);
+        db.run("UPDATE feishu_chats SET archived_at = ?, updated_at = ? WHERE chat_id = ?", archivedAt, now, chatId);
+      });
+    },
+    removeChat(chatId) {
+      db.run("DELETE FROM feishu_chats WHERE chat_id = ?", chatId);
+    },
+    advanceWatermark(chatId, mark, now) {
+      db.run(
+        `UPDATE feishu_chats SET
+           last_message_id = CASE WHEN ? IS NULL THEN last_message_id ELSE MAX(COALESCE(last_message_id, -1), ?) END,
+           last_router_item_id = CASE WHEN ? IS NULL THEN last_router_item_id ELSE MAX(COALESCE(last_router_item_id, -1), ?) END,
+           last_router_command_id = CASE WHEN ? IS NULL THEN last_router_command_id ELSE MAX(COALESCE(last_router_command_id, -1), ?) END,
+           updated_at = ?
+         WHERE chat_id = ?`,
+        mark.messageId ?? null,
+        mark.messageId ?? null,
+        mark.routerItemId ?? null,
+        mark.routerItemId ?? null,
+        mark.routerCommandId ?? null,
+        mark.routerCommandId ?? null,
+        now,
+        chatId,
+      );
+    },
+
+    postOf,
+    postByMessageId: (messageId) => postWhere("message_id = ? ORDER BY updated_at DESC LIMIT 1", messageId),
+    savePost(record, now) {
+      const key = refKey(record.ref);
+      db.transaction(() => {
+        const existing = postOf(record.ref);
+        if (existing !== null && record.sequence < existing.sequence) {
+          throw new Error(`feishu post sequence went backwards: ${existing.sequence} -> ${record.sequence}`);
+        }
+        db.run(
+          `INSERT INTO feishu_posts (ref_kind, ref_id, part, chat_id, message_id, card_id, sequence, state, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (ref_kind, ref_id, part) DO UPDATE SET chat_id = excluded.chat_id, message_id = excluded.message_id,
+             card_id = excluded.card_id, sequence = excluded.sequence, state = excluded.state, updated_at = excluded.updated_at`,
+          key.kind,
+          key.id,
+          key.part,
+          record.chatId,
+          record.messageId,
+          record.cardId,
+          record.sequence,
+          record.state,
+          now,
+        );
+      });
+    },
+    pendingCards(pmId) {
+      const chat = chatOfTarget(pmId === null ? { kind: "router" } : { kind: "pm", pmId });
+      if (chat === null) return [];
+      return db.all<PostRow>("SELECT * FROM feishu_posts WHERE chat_id = ? AND state = 'card_pending' ORDER BY ref_id", chat.chatId).map(toPost);
+    },
+    prunePosts(before) {
+      return db.run("DELETE FROM feishu_posts WHERE state IN ('final', 'card_settled') AND updated_at < ?", before).changes;
+    },
+
+    avatarKey(fruit) {
+      const row = db.get<{ image_key: string }>("SELECT image_key FROM feishu_avatars WHERE fruit = ?", fruit);
+      return row === undefined ? null : (row.image_key as FeishuImageKey);
+    },
+    saveAvatarKey(fruit, imageKey, now) {
+      db.run(
+        "INSERT INTO feishu_avatars (fruit, image_key, uploaded_at) VALUES (?, ?, ?) ON CONFLICT (fruit) DO UPDATE SET image_key = excluded.image_key, uploaded_at = excluded.uploaded_at",
+        fruit,
+        imageKey,
+        now,
+      );
+    },
+  };
+}
+
+interface AppRow {
+  app_id: string;
+  brand: string;
+  bot_open_id: string;
+  bot_name: string;
+  owner_open_id: string | null;
+  enabled: number;
+  created_at: number;
+  updated_at: number;
+}
+
+interface ChatRow {
+  chat_id: string;
+  target: string;
+  pm_id: number | null;
+  name: string;
+  label: string;
+  avatar_fruit: string | null;
+  trigger_mode: string;
+  guest_tier: string;
+  archived_at: number | null;
+  last_message_id: number | null;
+  last_router_item_id: number | null;
+  last_router_command_id: number | null;
+}
+
+interface PostRow {
+  ref_kind: string;
+  ref_id: number;
+  part: number;
+  chat_id: string;
+  message_id: string;
+  card_id: string | null;
+  sequence: number;
+  state: string;
+  updated_at: number;
+}
+
+function toApp(row: AppRow): FeishuAppRecord {
+  return {
+    appId: row.app_id as FeishuAppId,
+    brand: row.brand as FeishuBrandName,
+    botOpenId: row.bot_open_id as FeishuOpenId,
+    botName: row.bot_name,
+    ownerOpenId: row.owner_open_id as FeishuOpenId | null,
+    enabled: row.enabled === 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+/** 水位 0 表示“从头开始投影、还没发过东西”，和 null（还没开始记）不同。 */
+const watermark = (value: number | null) => (value === null || value < 0 ? null : value);
+
+function toChat(row: ChatRow): FeishuChatBinding {
+  return {
+    chatId: row.chat_id as FeishuChatId,
+    target: row.target === "router" ? { kind: "router" } : { kind: "pm", pmId: row.pm_id },
+    name: row.name,
+    label: row.label,
+    avatarFruit: isOneOf(PM_FRUITS, row.avatar_fruit) ? row.avatar_fruit : null,
+    triggerMode: isOneOf(FEISHU_TRIGGER_MODES, row.trigger_mode) ? row.trigger_mode : "auto",
+    guestTier: isOneOf(FEISHU_GUEST_TIERS, row.guest_tier) ? row.guest_tier : "chat_only",
+    archivedAt: row.archived_at,
+    lastMessageId: watermark(row.last_message_id),
+    lastRouterItemId: watermark(row.last_router_item_id),
+    lastRouterCommandId: watermark(row.last_router_command_id),
+  };
+}
+
+function refKey(ref: FeishuPostRef): { kind: FeishuPostRef["kind"]; id: number; part: number } {
+  switch (ref.kind) {
+    case "message":
+    case "file":
+      return { kind: ref.kind, id: ref.messageId, part: ref.part };
+    case "router_item":
+      return { kind: ref.kind, id: ref.itemId, part: 0 };
+    case "router_command":
+      return { kind: ref.kind, id: ref.commandId, part: 0 };
+    case "chat_policy":
+      return { kind: ref.kind, id: ref.pmId, part: 0 };
+  }
+}
+
+function toRef(row: PostRow): FeishuPostRef {
+  switch (row.ref_kind) {
+    case "message":
+    case "file":
+      return { kind: row.ref_kind, messageId: row.ref_id, part: row.part };
+    case "router_item":
+      return { kind: "router_item", itemId: row.ref_id };
+    case "router_command":
+      return { kind: "router_command", commandId: row.ref_id };
+    default:
+      return { kind: "chat_policy", pmId: row.ref_id };
+  }
+}
+
+function toPost(row: PostRow): FeishuPostRecord {
+  return {
+    ref: toRef(row),
+    chatId: row.chat_id as FeishuChatId,
+    messageId: row.message_id as FeishuMessageId,
+    cardId: row.card_id as FeishuCardId | null,
+    sequence: row.sequence,
+    state: row.state as FeishuPostState,
+    updatedAt: row.updated_at,
+  };
 }

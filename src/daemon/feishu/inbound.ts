@@ -2,8 +2,9 @@
 // 不变量：
 // - 丢掉机器人（含自己）发的消息、外部企业的人、编号形状不对的事件，返回 null，不抛错；
 // - 不做 I/O，不读状态。
+import { parseFeishuChatId, parseFeishuMessageId, parseFeishuOpenId } from "../../shared/feishu.ts";
 import type { FeishuChatId, FeishuMessageId, FeishuOpenId } from "../../shared/feishu.ts";
-import type { FeishuActionValue } from "./cards.ts";
+import { decodeFeishuActionValue, FEISHU_NOTE_FIELD, type FeishuActionValue } from "./cards.ts";
 import type { FeishuRawCardAction, FeishuRawEvent } from "./transport.ts";
 
 export interface FeishuInboundFile {
@@ -50,10 +51,58 @@ export interface FeishuInboundAction {
  * 语音、视频、表情包进 droppedMedia，不进 files。
  */
 export function parseFeishuEvent(raw: FeishuRawEvent, botOpenId: FeishuOpenId): FeishuInbound | null {
-  throw new Error("未实现");
+  const chatId = parseFeishuChatId(raw.chatId);
+  if (chatId === null) return null;
+  switch (raw.type) {
+    case "im.message.receive_v1": {
+      const messageId = parseFeishuMessageId(raw.messageId);
+      const senderOpenId = parseFeishuOpenId(raw.senderOpenId);
+      if (messageId === null || senderOpenId === null || raw.senderType !== "user" || senderOpenId === botOpenId) return null;
+      const files: FeishuInboundFile[] = [];
+      let droppedMedia = 0;
+      for (const resource of raw.resources) {
+        if ((resource.type === "image" || resource.type === "file") && resource.fileKey !== "") {
+          files.push({ type: resource.type, fileKey: resource.fileKey, fileName: resource.fileName });
+        } else {
+          droppedMedia += 1;
+        }
+      }
+      return {
+        kind: "message",
+        messageId,
+        chatId,
+        chatType: raw.chatType,
+        senderOpenId,
+        text: raw.content.trim(),
+        mentionedBot: raw.mentionedBot,
+        inThread: raw.threadId !== null && raw.threadId !== "",
+        files,
+        droppedMedia,
+        at: raw.createTime,
+      };
+    }
+    case "im.chat.member.user.added_v1":
+    case "im.chat.member.user.deleted_v1": {
+      const openIds = raw.openIds.map(parseFeishuOpenId).filter((id): id is FeishuOpenId => id !== null && id !== botOpenId);
+      if (openIds.length === 0) return null;
+      return { kind: raw.type === "im.chat.member.user.added_v1" ? "members_added" : "members_removed", chatId, openIds };
+    }
+    case "im.chat.member.bot.deleted_v1":
+    case "im.chat.disbanded_v1":
+      return { kind: "chat_gone", chatId };
+    case "im.chat.updated_v1":
+      return raw.name === null || raw.name.trim() === "" ? null : { kind: "chat_renamed", chatId, name: raw.name.trim() };
+  }
 }
 
 /** 后置：按钮值能被 decodeFeishuActionValue 认出、编号形状对时返回动作；否则 null（被改过、老版本的卡）。 */
 export function parseFeishuCardAction(raw: FeishuRawCardAction): FeishuInboundAction | null {
-  throw new Error("未实现");
+  const messageId = parseFeishuMessageId(raw.messageId);
+  const chatId = parseFeishuChatId(raw.chatId);
+  const operatorOpenId = parseFeishuOpenId(raw.operatorOpenId);
+  const value = decodeFeishuActionValue(raw.value);
+  if (messageId === null || chatId === null || operatorOpenId === null || value === null) return null;
+  const rawNote = raw.formValue?.[FEISHU_NOTE_FIELD];
+  const note = typeof rawNote === "string" && rawNote.trim() !== "" ? rawNote.trim() : null;
+  return { messageId, chatId, operatorOpenId, value, note };
 }

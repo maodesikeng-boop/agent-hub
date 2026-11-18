@@ -4,6 +4,7 @@
 // 访客的话触发的轮次里越界的 hub 命令由账本按 meta.origin 再拦一次（shared/feishu.ts 的 feishuGuestTurnBlockReason）。
 // 不变量：这里不做 I/O、不读别的状态；成员、显示名、绑定、群策略都由调用方查好放进上下文。
 import type { PmId } from "../../shared/domain.ts";
+import { feishuGuestMay } from "../../shared/feishu.ts";
 import type {
   FeishuChatMode,
   FeishuChatTarget,
@@ -18,6 +19,14 @@ import type { FeishuCardRef } from "./cards.ts";
 import type { FeishuInbound, FeishuInboundAction, FeishuInboundFile } from "./inbound.ts";
 
 type InboundMessage = Extract<FeishuInbound, { kind: "message" }>;
+
+const NOT_YOUR_ASSISTANT = "这是主人的私人助手，只听主人的。";
+const GUEST_SLASH = "以“/”开头的命令只有主人能用。";
+const FILES_ONLY_TEXT = "（发了文件）";
+export const OWNER_ONLY_DECIDE = "只有主人能拍板";
+export const OWNER_ONLY_STOP = "只有主人能停止";
+export const OWNER_ONLY_SETTINGS = "只有主人能改设置";
+const NOTE_REQUIRED = "先在输入框里写点什么再提交";
 
 export interface FeishuRoutingContext {
   /** 还没认主人时是 null：只认单聊里的绑定码，别的都不理。 */
@@ -66,7 +75,37 @@ export type FeishuMessageRoute =
  *   本档不能 send_files 时文件不收，droppedFiles 记个数。
  */
 export function routeFeishuMessage(message: InboundMessage, ctx: FeishuRoutingContext): FeishuMessageRoute {
-  throw new Error("未实现");
+  const { ownerOpenId } = ctx;
+  const speaker = message.senderOpenId;
+  if (message.chatType === "p2p") {
+    if (ownerOpenId === null) return ctx.isBindCode(message.text) ? { kind: "bind_owner", openId: speaker } : { kind: "ignore" };
+    if (speaker !== ownerOpenId) return { kind: "reject", openId: speaker, reason: NOT_YOUR_ASSISTANT };
+    if (message.text === "" && message.files.length === 0) return { kind: "ignore" };
+    return {
+      kind: "deliver",
+      target: { kind: "router" },
+      text: message.text,
+      origin: { kind: "feishu", openId: speaker, name: ctx.speakerName, role: "owner", mode: "solo", guestTier: ctx.guestTier, context: [] },
+      files: message.files,
+      droppedFiles: 0,
+    };
+  }
+  if (ownerOpenId === null || ctx.binding === null || ctx.binding.archived || ctx.binding.target.kind !== "pm" || message.inThread) return { kind: "ignore" };
+  if (message.text === "" && message.files.length === 0) return { kind: "ignore" };
+  const role = feishuSpeakerRole(speaker, ownerOpenId);
+  const line: FeishuContextLine = { name: ctx.speakerName, role, text: message.text === "" ? FILES_ONLY_TEXT : message.text, at: message.at };
+  if (role === "guest" && !feishuGuestMay(ctx.guestTier, "talk")) return { kind: "context", line };
+  if (!feishuWakes(ctx, message.mentionedBot)) return { kind: "context", line };
+  if (role === "guest" && message.text.startsWith("/")) return { kind: "reject", openId: speaker, reason: GUEST_SLASH };
+  const filesAllowed = role === "owner" || feishuGuestMay(ctx.guestTier, "send_files");
+  return {
+    kind: "deliver",
+    target: ctx.binding.target,
+    text: message.text,
+    origin: { kind: "feishu", openId: speaker, name: ctx.speakerName, role, mode: ctx.mode, guestTier: ctx.guestTier, context: [...ctx.pendingContext] },
+    files: filesAllowed ? message.files : [],
+    droppedFiles: filesAllowed ? 0 : message.files.length,
+  };
 }
 
 /**
@@ -74,7 +113,8 @@ export function routeFeishuMessage(message: InboundMessage, ctx: FeishuRoutingCo
  * 这是“单人群直聊，拉人进群后自动切 @机器人 才触发”的唯一实现。
  */
 export function feishuWakes(ctx: Pick<FeishuRoutingContext, "mode" | "triggerMode" | "mentionOnlyForced">, mentionedBot: boolean): boolean {
-  throw new Error("未实现");
+  if (!mentionedBot && ctx.triggerMode === "auto" && !ctx.mentionOnlyForced) return ctx.mode === "solo";
+  return mentionedBot;
 }
 
 export type FeishuActionRoute =
@@ -92,10 +132,44 @@ export type FeishuActionRoute =
  * answer 的 clientId 由这张卡的消息编号、点的人和动作派生：同一次点击重投得到同一个 clientId，账本按它幂等。
  */
 export function routeFeishuAction(action: FeishuInboundAction, ctx: Pick<FeishuRoutingContext, "ownerOpenId" | "binding" | "guestTier">): FeishuActionRoute {
-  throw new Error("未实现");
+  const { ownerOpenId, binding } = ctx;
+  if (ownerOpenId === null || binding === null) return { kind: "ignore" };
+  const role = feishuSpeakerRole(action.operatorOpenId, ownerOpenId);
+  const guest = role === "guest";
+  const { value } = action;
+  if (guest && (binding.target.kind === "router" || value.kind === "set_policy")) return { kind: "reject", toast: OWNER_ONLY_SETTINGS };
+  switch (value.kind) {
+    case "set_policy":
+      return {
+        kind: "set_policy",
+        pmId: value.pmId,
+        ...(value.triggerMode !== undefined ? { triggerMode: value.triggerMode } : {}),
+        ...(value.guestTier !== undefined ? { guestTier: value.guestTier } : {}),
+      };
+    case "stop":
+      if (guest && !feishuGuestMay(ctx.guestTier, "stop")) return { kind: "reject", toast: OWNER_ONLY_STOP };
+      return { kind: "stop", target: binding.target };
+    case "blocker_done":
+      if (guest && !feishuGuestMay(ctx.guestTier, "answer_card")) return { kind: "reject", toast: OWNER_ONLY_DECIDE };
+      return { kind: "blocker_done", card: value.card };
+    case "choose":
+    case "submit_note": {
+      if (guest && !feishuGuestMay(ctx.guestTier, "answer_card")) return { kind: "reject", toast: OWNER_ONLY_DECIDE };
+      const optionIndex = value.kind === "choose" ? value.optionIndex : null;
+      if (optionIndex === null && action.note === null) return { kind: "reject", toast: NOTE_REQUIRED };
+      return {
+        kind: "answer",
+        card: value.card,
+        optionIndex,
+        note: action.note,
+        clientId: `feishu:${action.messageId}:${action.operatorOpenId}:${optionIndex ?? "note"}`,
+        byOpenId: action.operatorOpenId,
+      };
+    }
+  }
 }
 
 /** 后置：openId 是主人返回 owner，否则 guest。ownerOpenId 为 null 时一律 guest。 */
 export function feishuSpeakerRole(openId: FeishuOpenId, ownerOpenId: FeishuOpenId | null): FeishuSpeakerRole {
-  throw new Error("未实现");
+  return ownerOpenId !== null && openId === ownerOpenId ? "owner" : "guest";
 }

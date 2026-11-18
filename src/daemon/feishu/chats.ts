@@ -7,9 +7,12 @@
 // - 用户在飞书里自己改了群名，Fusa 不改回去，只更新记录；项目经理改名时才按新名字改；
 // - 项目经理归档时解散它的群（聊天记录随群消失，账本里还在），记录留着、记下归档时间，唤醒方式和访客档位不丢；
 //   取消归档时新建一个群，换上新的群编号；项目经理删掉时解散群、删记录。
-import type { Pm, PmId } from "../../shared/domain.ts";
+import { createHash } from "node:crypto";
+import { truncateChars, type Pm, type PmId } from "../../shared/domain.ts";
 import type { FeishuChatId } from "../../shared/feishu.ts";
-import type { PmFruit } from "./avatars.ts";
+import { FEISHU_CHAT_NAME_MAX_CHARS, FEISHU_CHAT_UUID_MAX_CHARS } from "../../shared/limits.ts";
+import { PRODUCT_NAME } from "../../shared/names.ts";
+import { pmFruitOf, type PmFruit } from "./avatars.ts";
 import type { FeishuChatBinding } from "./store.ts";
 
 /** 账本里应该有的项目群。 */
@@ -25,14 +28,24 @@ export interface FeishuChatSpec {
   archived: boolean;
 }
 
-/** 后置：每个项目经理一个（含已归档的）；name、fruit 照上面的规则；deviceName 只进说明，不进群名。 */
-export function desiredFeishuChats(pms: readonly Pm[], deviceName: string): FeishuChatSpec[] {
-  throw new Error("未实现");
+/** 后置：每个项目经理一个（含已归档的）；name、fruit 照上面的规则；设备名只进说明，不进群名。 */
+export function desiredFeishuChats(pms: readonly Pm[], device: { id: string; name: string }): FeishuChatSpec[] {
+  return pms.map((pm) => ({
+    pmId: pm.id,
+    label: pm.name,
+    name: truncateChars(pm.name, FEISHU_CHAT_NAME_MAX_CHARS),
+    description: `${PRODUCT_NAME}（${device.name}）上的项目经理「${pm.name}」。\n${feishuChatMarker(device.id, pm.id)}`,
+    fruit: pmFruitOf(pm.id),
+    archived: pm.archivedAt !== null && pm.archivedAt !== undefined,
+  }));
 }
+
+/** 群说明里认 Fusa 标记的写法；markedChats 由调用方用它从群说明里抠出来。 */
+export const FEISHU_CHAT_MARKER_PATTERN = /fusa:[0-9a-f-]+:pm:\d+/;
 
 /** 后置：写进群说明的机器可读标记，如“fusa:<设备编号>:pm:<编号>”；同一台设备、同一个项目经理总是同一个。 */
 export function feishuChatMarker(deviceId: string, pmId: PmId): string {
-  throw new Error("未实现");
+  return `fusa:${deviceId}:pm:${pmId}`;
 }
 
 /**
@@ -41,7 +54,8 @@ export function feishuChatMarker(deviceId: string, pmId: PmId): string {
  * 不会被飞书当成 10 小时内的重复请求。
  */
 export function feishuChatCreateUuid(appId: string, deviceId: string, pmId: PmId, generation: number): string {
-  throw new Error("未实现");
+  const digest = createHash("sha256").update(`${appId}\n${deviceId}\n${pmId}\n${generation}`).digest("hex");
+  return `fusa-${digest}`.slice(0, FEISHU_CHAT_UUID_MAX_CHARS);
 }
 
 export type FeishuChatOp =
@@ -63,7 +77,7 @@ export type FeishuChatOp =
  * - 有记录、记录已归档、项目经理取消了归档：create，generation 是记录的 archivedAt；
  * - 有记录、未归档、项目经理归档了：dissolve；已归档的记录不再出 rename、set_avatar；
  * - 未归档的记录：label 变了 rename，水果变了 set_avatar；
- * - pm_id 为 null 的记录 retire（记录已归档时 dissolved 为 true，不再解散）；
+ * - pm_id 为 null（或项目经理已不在账本里）的记录 retire（记录已归档时 dissolved 为 true，不再解散）；
  * - 没有记录的已归档项目经理什么都不做。已对齐时返回空数组。
  */
 export function planFeishuChatSync(
@@ -72,5 +86,36 @@ export function planFeishuChatSync(
   markedChats: ReadonlyMap<FeishuChatId, string>,
   deviceId: string,
 ): FeishuChatOp[] {
-  throw new Error("未实现");
+  const ops: FeishuChatOp[] = [];
+  const byPm = new Map<PmId, FeishuChatBinding>();
+  for (const binding of bindings) if (binding.target.kind === "pm" && binding.target.pmId !== null) byPm.set(binding.target.pmId, binding);
+  const bound = new Set(bindings.map((b) => b.chatId));
+  const wanted = new Set(desired.map((spec) => spec.pmId));
+  for (const spec of desired) {
+    const binding = byPm.get(spec.pmId);
+    if (binding === undefined) {
+      if (spec.archived) continue;
+      const marker = feishuChatMarker(deviceId, spec.pmId);
+      const adopted = [...markedChats].find(([chatId, mark]) => mark === marker && !bound.has(chatId));
+      ops.push(adopted === undefined ? { kind: "create", spec, generation: 0 } : { kind: "adopt", chatId: adopted[0], spec });
+      continue;
+    }
+    if (binding.archivedAt !== null) {
+      if (!spec.archived) ops.push({ kind: "create", spec, generation: binding.archivedAt });
+      continue;
+    }
+    if (spec.archived) {
+      ops.push({ kind: "dissolve", chatId: binding.chatId });
+      continue;
+    }
+    if (binding.label !== spec.label) ops.push({ kind: "rename", chatId: binding.chatId, name: spec.name, label: spec.label });
+    if (binding.avatarFruit !== spec.fruit) ops.push({ kind: "set_avatar", chatId: binding.chatId, fruit: spec.fruit });
+  }
+  for (const binding of bindings) {
+    if (binding.target.kind !== "pm") continue;
+    if (binding.target.pmId === null || !wanted.has(binding.target.pmId)) {
+      ops.push({ kind: "retire", chatId: binding.chatId, dissolved: binding.archivedAt !== null });
+    }
+  }
+  return ops;
 }

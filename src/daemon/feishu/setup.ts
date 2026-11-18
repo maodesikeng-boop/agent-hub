@@ -5,6 +5,8 @@
 // - 凭证验过才存：换得到 tenant_access_token、拿得到机器人信息；不对时原有的凭证和连接不动；
 // - 扫码建应用时主人就是扫码的人，不用绑定码；手动接入才发绑定码，码只在内存里，一次一个，FEISHU_BIND_CODE_TTL_MS 后失效，用一次作废；
 // - 任何返回值都不含 App Secret。
+import { z } from "zod";
+import { FEISHU_BRANDS, FEISHU_GUEST_TIERS, FEISHU_TRIGGER_MODES } from "../../shared/feishu.ts";
 import type {
   FeishuBindCodeResponse,
   FeishuChatPolicyRequest,
@@ -16,6 +18,16 @@ import type {
 
 /** 凭证不对、状态不允许：message 是给人看的，界面服务回 400。 */
 export class FeishuSetupError extends Error {}
+
+// 界面服务的 /api/feishu/* 和管理 socket 的 /feishu/* 共用这几个请求体的校验
+export const feishuCredentialsSchema = z
+  .object({ brand: z.enum(FEISHU_BRANDS), appId: z.string().trim().min(1).max(64), appSecret: z.string().trim().min(1).max(256) })
+  .strict();
+export const feishuChatPolicyBodySchema = z
+  .object({ triggerMode: z.enum(FEISHU_TRIGGER_MODES).optional(), guestTier: z.enum(FEISHU_GUEST_TIERS).optional() })
+  .strict()
+  .refine((v) => v.triggerMode !== undefined || v.guestTier !== undefined, "triggerMode 和 guestTier 至少给一个");
+export const feishuDisconnectSchema = z.object({ dissolveChats: z.boolean() }).strict();
 
 export interface FeishuSetupService {
   status(): FeishuStatusView;
