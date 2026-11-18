@@ -14,6 +14,7 @@ import { feishuOriginOf } from "../../shared/feishu.ts";
 import { FEISHU_CARD_MARKDOWN_JSON_BYTES, FEISHU_CARD_MAX_CHARS, FEISHU_CATCHUP_MAX_MESSAGES, FEISHU_FENCE_INFO_MAX_CHARS, FEISHU_FENCE_MARKER_MAX_CHARS } from "../../shared/limits.ts";
 import type { RouterCommandRecord, RouterItem } from "../../shared/router.ts";
 import { parseLocalHref, sentFilesOf, type SentFile } from "../../shared/sent-files.ts";
+import { describeStep, STEP_TEXT } from "../../shared/step-labels.ts";
 import type { FeishuChatBinding } from "./store.ts";
 
 export type FeishuOutboundIntent =
@@ -21,6 +22,8 @@ export type FeishuOutboundIntent =
   | { kind: "sync_chats" }
   /** 项目经理正在写的这一段（内存里的流式预览）。text 是到目前为止的全文。 */
   | { kind: "stream"; conversationId: ConversationId; text: string }
+  /** 项目经理这一轮在干活（调工具、思考、正在停），还没在出正文：status 是一行状态。 */
+  | { kind: "working"; conversationId: ConversationId; status: string }
   /** 一段文字落库了：流式那张卡定稿，没流式过的直接发。 */
   | { kind: "agent_text"; conversationId: ConversationId; message: Message; files: SentFile[] }
   /** 这一轮结束（会话回到空闲）：收掉还开着的流式卡片。 */
@@ -47,7 +50,9 @@ export interface FeishuProjectionContext {
 /**
  * 后置：按不变量把一条变化变成零个或多个意图：
  * - pm.created / pm.updated / pm.removed → sync_chats；
- * - session.status 带 streamingText 且会话属于有群的项目经理对话 → stream；这一轮结束（activity 回到 idle，或 status 是 ended / broken）→ turn_end；
+ * - session.status 只认项目经理的会话（pmId 不为空，Worker、总助的不出）且对话有群：带 streamingText → stream；
+ *   没在出正文、activity 是 working / stopping → working（状态行同网页的 describeStep，加省略号）；
+ *   这一轮结束（activity 回到 idle，或 status 是 ended / broken）→ turn_end；
  * - message.created：项目经理的文字消息 → agent_text（带 meta 里的 SentFile）；askOf 不为 null → ask_card；
  *   没有 origin 的用户消息 → mirror_user；其余 → 无；
  * - message.updated：askOf 不为 null 且已回答或关掉 → ask_settled；
@@ -61,11 +66,14 @@ export function projectFeishuChange(change: Change, ctx: FeishuProjectionContext
     case "pm.removed":
       return [{ kind: "sync_chats" }];
     case "session.status": {
-      const { conversationId, streamingText, status, activity } = change.data.session;
-      if (conversationId === null || ctx.chatOfConversation(conversationId) === null) return [];
+      const { conversationId, pmId, streamingText, status, activity, step } = change.data.session;
+      if (conversationId === null || pmId === null || ctx.chatOfConversation(conversationId) === null) return [];
       if (typeof streamingText === "string" && streamingText !== "") return [{ kind: "stream", conversationId, text: streamingText }];
       // 一轮结束看 activity 回到 idle（进程还在，status 仍是 running），或会话结束、坏了
-      return status === "running" && activity !== "idle" ? [] : [{ kind: "turn_end", conversationId }];
+      if (status !== "running" || activity === "idle") return [{ kind: "turn_end", conversationId }];
+      if (activity === "working") return [{ kind: "working", conversationId, status: `${describeStep(step)}…` }];
+      if (activity === "stopping") return [{ kind: "working", conversationId, status: `${STEP_TEXT.stopping}…` }];
+      return [];
     }
     case "message.created":
       return ctx.chatOfConversation(change.data.message.conversationId) === null ? [] : messageIntents(change.data.message);

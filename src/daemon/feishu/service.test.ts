@@ -167,6 +167,13 @@ const buttonValues = (cardData: string) => {
 };
 const cardIdsCreated = () =>
   fake.calls.filter((c) => c.method === "card.create").map((c, i) => ({ data: String(c.args.data), index: i }));
+/** 群里最近一张建出来时在流式的卡（带停止按钮的回复卡）的消息。 */
+const streamCardMessage = (chatId: string) =>
+  fake.sent.findLast((entry) => {
+    const cardId = (JSON.parse(entry.content) as { data?: { card_id?: string } }).data?.card_id;
+    const data = cardId === undefined ? undefined : fake.cards.get(cardId);
+    return entry.chatId === chatId && data !== undefined && cardJsonOf(data).config.streaming_mode === true;
+  });
 const click = (chatId: string, feishuMessageId: string, value: unknown, operator = OWNER, note: string | null = null) =>
   fake.click({ messageId: feishuMessageId, chatId, operatorOpenId: operator, value, formValue: note === null ? null : { note } });
 async function askInGroupFor(who: typeof lin, options = ["要", "不要"]) {
@@ -452,7 +459,7 @@ describe("createFeishuService：访客权限", () => {
     expect(askOf(ledger.getMessage(askId)!)).toMatchObject({ answered: true, chosenOption: "不要" });
     ev(lin.sessionId, { type: "agent.text_delta", delta: "正在处理", at: Date.now() });
     await settle();
-    const sent = fake.sent.findLast((entry) => entry.chatId === chat)!;
+    const sent = streamCardMessage(chat)!;
     expect(click(chat, sent.messageId, { fusa: 1, kind: "stop", conversationId: lin.conversationId }, GUEST).toast?.content).toBe("正在停");
     expect(stops).toEqual([lin.conversationId]);
     fake.resources.set("file_c", Buffer.from("collab file"));
@@ -597,7 +604,8 @@ describe("createFeishuService：流式、急停与卡片", () => {
     delta(lin.sessionId, "临时预览");
     ev(lin.sessionId, { type: "agent.text", uuid: "first-final", text: "失败后仍定稿", at: Date.now() });
     await settle();
-    expect(cardsSentTo(oldChat).some((card) => JSON.stringify(card).includes("失败后仍定稿"))).toBe(true);
+    // 开轮时的状态卡建卡失败后，正文来了重新开卡，定稿在新开的这张上
+    expect(cardsSentTo(oldChat).some((card) => JSON.stringify(card).includes("失败后仍定稿")) || fake.callsOf("card.update").some((u) => u.card.data.includes("失败后仍定稿"))).toBe(true);
     ledger.archivePm(lin.pmId);
     await settle();
     ledger.unarchivePm(lin.pmId);

@@ -29,6 +29,8 @@ export interface FakeFeishu extends FeishuTransport {
   calls: FakeCall[];
   chats: Map<string, FakeChat>;
   sent: { chatId: string; messageId: string; content: string }[];
+  /** 建过的卡片实体：卡片编号 → 建卡时的卡片 JSON。 */
+  cards: Map<string, string>;
   /** 授予的权限（application.scopes 回它）。 */
   granted: string[];
   handlers: FeishuConnectionHandlers | null;
@@ -63,6 +65,7 @@ export function createFakeFeishu(options: { clock?: () => number; botOpenId?: st
     calls: [],
     chats: new Map(),
     sent: [],
+    cards: new Map(),
     granted: [],
     handlers: null,
     failNext: {},
@@ -126,8 +129,11 @@ export function createFakeFeishu(options: { clock?: () => number; botOpenId?: st
           fake.sent.push({ chatId, messageId, content: String(a.content) });
           return { code: 0, data: { message_id: messageId, chat_id: chatId } };
         }
-        case "card.create":
-          return { code: 0, data: { card_id: next("card") } };
+        case "card.create": {
+          const cardId = next("card");
+          fake.cards.set(cardId, String(a.data));
+          return { code: 0, data: { card_id: cardId } };
+        }
         case "message.delete":
         case "card.update":
         case "card.settings":

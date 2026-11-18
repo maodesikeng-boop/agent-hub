@@ -1,7 +1,8 @@
 // 文件进出（docs/feishu-design.md「交付与附件」）：项目经理发的文件、卡片的交付物传成群里的原生图片和文件消息；
 // 主人（或本档允许的访客）在飞书里发的图片、文件下载存成附件，随消息交给项目经理。
 // 不变量：
-// - 图片 ≤ 10 MB 走上传图片发成图片消息；其他文件 ≤ 30 MB 走上传文件发成文件消息；超过的不传，发一行“文件太大，去网页看”；
+// - 图片 ≤ 10 MB 走上传图片发成图片消息；其他文件 ≤ 30 MB 走上传文件，消息类型和上传类型照飞书配对（mp4 发视频 media、
+//   opus 发语音 audio、其余发文件 file，不配对飞书回 230055）；超过的不传，发一行“文件太大，去网页看”；
 // - 同一个账本文件（feishu_posts 的 file ref）只传一次；
 // - 下载最多 MAX_UPLOAD_BYTES（和网页上传同一个上限），超了不存、回一句提示；存法和网页上传一样走 saveUpload。
 import { extname } from "node:path";
@@ -12,7 +13,7 @@ import { FEISHU_FILE_MAX_BYTES, FEISHU_IMAGE_MAX_BYTES, MAX_UPLOAD_BYTES } from 
 import { saveUpload } from "../uploads.ts";
 import type { FeishuInboundFile } from "./inbound.ts";
 import type { FeishuStore } from "./store.ts";
-import { feishuDataOf, feishuStringField, type FeishuTransport } from "./transport.ts";
+import { feishuDataOf, feishuStringField, type FeishuFileUpload, type FeishuTransport } from "./transport.ts";
 
 export interface FeishuOutboundFile {
   /** 账本消息编号和第几个文件，记 feishu_posts 用。 */
@@ -27,17 +28,21 @@ export interface FeishuOutboundFile {
 
 export type FeishuFilePlan =
   | { kind: "image"; file: FeishuOutboundFile }
-  | { kind: "file"; file: FeishuOutboundFile; fileType: "pdf" | "doc" | "xls" | "ppt" | "mp4" | "opus" | "stream" }
+  | { kind: "file"; file: FeishuOutboundFile; fileType: FeishuFileUpload["fileType"]; msgType: "file" | "media" | "audio" }
   | { kind: "too_large"; file: FeishuOutboundFile };
 
-/** 后置：按 mime 和大小定怎么发：image/* 且 ≤ FEISHU_IMAGE_MAX_BYTES 发图片；其余 ≤ FEISHU_FILE_MAX_BYTES 发文件（按扩展名定 fileType）；更大的 too_large。 */
+/**
+ * 后置：按 mime 和大小定怎么发：image/* 且 ≤ FEISHU_IMAGE_MAX_BYTES 发图片；其余 ≤ FEISHU_FILE_MAX_BYTES 发文件
+ * （按扩展名定 fileType，msgType 和它配对：mp4 → media，opus → audio，其余 → file）；更大的 too_large。
+ */
 export function planFeishuFile(file: FeishuOutboundFile): FeishuFilePlan {
   if (isImageMime(file.mime) && file.bytes <= FEISHU_IMAGE_MAX_BYTES) return { kind: "image", file };
   if (file.bytes > FEISHU_FILE_MAX_BYTES) return { kind: "too_large", file };
-  return { kind: "file", file, fileType: FILE_TYPES[extname(file.name).slice(1).toLowerCase()] ?? "stream" };
+  const fileType = FILE_TYPES[extname(file.name).slice(1).toLowerCase()] ?? "stream";
+  return { kind: "file", file, fileType, msgType: fileType === "mp4" ? "media" : fileType === "opus" ? "audio" : "file" };
 }
 
-const FILE_TYPES: Readonly<Record<string, Exclude<FeishuFilePlan, { kind: "image" | "too_large" }>["fileType"]>> = {
+const FILE_TYPES: Readonly<Record<string, FeishuFileUpload["fileType"]>> = {
   pdf: "pdf",
   doc: "doc",
   docx: "doc",
@@ -74,7 +79,7 @@ export interface FeishuFileServiceDeps {
 
 export function createFeishuFileService(deps: FeishuFileServiceDeps): FeishuFileService {
   const { transport, store } = deps;
-  const create = async (chatId: FeishuChatId, file: FeishuOutboundFile, msgType: "image" | "file" | "text", content: Record<string, string>) => {
+  const create = async (chatId: FeishuChatId, file: FeishuOutboundFile, msgType: "image" | "file" | "media" | "audio" | "text", content: Record<string, string>) => {
     const result = await transport.call("message.create", {
       receive_id_type: "chat_id",
       receive_id: chatId,
@@ -98,7 +103,7 @@ export function createFeishuFileService(deps: FeishuFileServiceDeps): FeishuFile
         messageId = await create(chatId, file, "image", { image_key: imageKey });
       } else if (plan.kind === "file") {
         const { fileKey } = await transport.uploadFile({ path: file.path, fileName: file.name, fileType: plan.fileType });
-        messageId = await create(chatId, file, "file", { file_key: fileKey });
+        messageId = await create(chatId, file, plan.msgType, { file_key: fileKey });
       } else {
         messageId = await create(chatId, file, "text", { text: `文件「${file.name}」有 ${megabytes(file.bytes)}，超过飞书的上限，去网页看。` });
       }

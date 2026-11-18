@@ -1,9 +1,11 @@
 // 流式回复的状态机（docs/feishu-design.md「流式与急停」）：用卡片 JSON 2.0 的流式更新模式（streaming_mode），
 // 飞书客户端按全量文本自己算增量、打字机上屏。一个项目经理对话同一时间最多一张在流式的卡片。
-// 流程：第一块文字来了 → 建卡片实体（streaming_mode 开、带停止按钮）并发到群主聊天流 → 之后按 FEISHU_STREAM_FLUSH_MS
-// 调“流式更新文本”推全文 → 一段落库时把正文换成账本里这段文字、关掉流式模式、删掉停止按钮。
+// 流程：项目经理开轮在干活（调工具、思考）或第一块文字来了 → 建卡片实体（streaming_mode 开、带停止按钮）并发到群主聊天流，
+// 还没正文时卡上是一行状态（如“Running command…”）→ 之后按 FEISHU_STREAM_FLUSH_MS 调“流式更新文本”推全文，正文来了换成正文
+// → 一段落库时把正文换成账本里这段文字、关掉流式模式、删掉停止按钮；整轮没写正文就结束时撤回这张状态卡。
 // 不变量：
 // - 账本的一段文字在飞书里只对应一张卡（超过 FEISHU_CARD_MAX_CHARS 时按 splitFeishuMarkdown 续到下一张），定稿后卡片正文等于账本这段文字（按 feishuCardMarkdown 换过图片和本机链接），不另发；
+// - 一轮里只开一张状态卡：定稿过一段之后（quiet）工具阶段不再开新卡，下一段文字照常开卡；
 // - 同一张卡片实体上的操作 sequence 严格递增（状态里记着，落库在 feishu_posts.sequence）；
 // - 每张卡两次推送间隔不小于 FEISHU_STREAM_FLUSH_MS（飞书每张卡 10 次/秒）；整个应用共用 FEISHU_CARDKIT_BUDGET_PER_SECOND 的预算
 //   （“流式更新文本”接口 50 次/秒），拿不到预算只合并不排队；定稿不走预算、不丢；
@@ -17,15 +19,18 @@ import { feishuMarkdownPrefix } from "./outbound.ts";
 
 export type FeishuStreamState =
   | { phase: "idle" }
+  /** 这一轮已经定稿过一段：工具阶段不再开状态卡，等下一段文字或这一轮结束。 */
+  | { phase: "quiet" }
   /**
-   * 第一块文字来了，建卡和发消息在路上。sentText 是建卡时用的正文，text 是之后来的最新全文；
-   * 建卡期间这一段落库了或这一轮结束了，记在 pending 里，opened 之后再定稿或收尾。
+   * 开轮在干活或第一块文字来了，建卡和发消息在路上。sentText 是建卡时用的正文，text 是之后来的最新全文（还没正文是空串），
+   * status 是最新一行状态；建卡期间这一段落库了或这一轮结束了，记在 pending 里，opened 之后再定稿或收尾。
    */
   | {
       phase: "opening";
       sentText: string;
       text: string;
-      pending: { kind: "finalize"; messageId: MessageId; text: string } | { kind: "abandon" } | null;
+      status: string;
+      pending: { kind: "finalize"; messageId: MessageId; text: string; turnActive: boolean } | { kind: "abandon" } | null;
     }
   | {
       phase: "live";
@@ -35,17 +40,21 @@ export type FeishuStreamState =
       sequence: number;
       /** 已推到飞书的全文。 */
       sentText: string;
-      /** 最新的预览全文（可能比 sentText 新）。 */
+      /** 最新的预览全文（可能比 sentText 新）；还没正文是空串，卡上显示 status。 */
       text: string;
+      status: string;
       lastFlushAt: number;
       streamingSince: number;
     };
 
 export type FeishuStreamEvent =
   | { kind: "text"; text: string }
+  /** 这一轮在干活、还没在出正文：status 是一行状态（describeStep 加省略号）。 */
+  | { kind: "working"; status: string }
   | { kind: "open_failed" }
   | { kind: "opened"; cardId: FeishuCardId; messageId: FeishuMessageId; sequence: number }
-  | { kind: "segment_done"; messageId: MessageId; text: string }
+  /** turnActive：落库时这一轮还在跑（定稿后进 quiet）；没给按已结束算。 */
+  | { kind: "segment_done"; messageId: MessageId; text: string; turnActive?: boolean }
   | { kind: "turn_end" }
   | { kind: "tick" };
 
@@ -59,8 +68,10 @@ export type FeishuStreamEffect =
    * text 超过 FEISHU_CARD_MAX_CHARS 时调用方按 splitFeishuMarkdown 拆，余下的发成新卡。之后记 feishu_posts。
    */
   | { kind: "finalize"; cardId: FeishuCardId | null; sequence: number; messageId: MessageId; text: string }
-  /** 这一轮被打断、没落库：关流式、删停止按钮，正文留着已推的部分。 */
-  | { kind: "abandon"; cardId: FeishuCardId; sequence: number }
+  /** 这一轮被打断、没落库：关流式、删停止按钮，正文换成最新的预览全文。 */
+  | { kind: "abandon"; cardId: FeishuCardId; sequence: number; text: string }
+  /** 整轮没写正文（只调了工具、被停下）：撤回这张状态卡；撤不回时调用方把它收成一行说明。 */
+  | { kind: "discard"; cardId: FeishuCardId; messageId: FeishuMessageId; sequence: number }
   | { kind: "schedule_tick"; at: number };
 
 export interface FeishuStreamTarget {
@@ -71,13 +82,14 @@ export interface FeishuStreamTarget {
 /**
  * 纯函数：给定现状、一个事件和现在的时间，算出新状态和要做的事。
  * 后置：
- * - idle 收到 text → opening，发 open；opening 期间来的文字只记下，opened 之后按间隔补推；
- * - live 收到 text：距上次推送不足 FEISHU_STREAM_FLUSH_MS 或拿不到预算（budget.tryTake 为 false）只记下、发 schedule_tick；
- *   否则发 push，sequence 加一；
- * - live 收到 tick：streamingSince 起超过 FEISHU_STREAM_RENEW_MS 发 renew；有没推的文字照上一条处理；
- * - segment_done → idle，发 finalize（opening 期间落库时等 opened 之后再定稿）；流式卡片上只推前 FEISHU_CARD_MAX_CHARS 字，
- *   定稿时调用方按 splitFeishuMarkdown 把余下的发成新卡；
- * - turn_end 时还在 live（被打断、没落库）发 abandon，回 idle；在 opening 时等 opened 之后再 abandon；
+ * - idle（或 quiet）收到 text → opening，发 open；idle 收到 working → opening，按状态行发 open；quiet 收到 working 不动；
+ *   opening 期间来的文字、状态只记下，opened 之后按间隔补推；
+ * - live 收到 text、working：卡上显示的（有正文显示正文，否则状态行）没变不推；距上次推送不足 FEISHU_STREAM_FLUSH_MS
+ *   或拿不到预算（budget.tryTake 为 false）只记下、发 schedule_tick；否则发 push，sequence 加一；
+ * - live 收到 tick：streamingSince 起超过 FEISHU_STREAM_RENEW_MS 发 renew；有没推的照上一条处理；
+ * - segment_done 发 finalize（opening 期间落库时等 opened 之后再定稿），之后 turnActive 为 true 进 quiet，否则回 idle；
+ *   流式卡片上只推前 FEISHU_CARD_MAX_CHARS 字，定稿时调用方按 splitFeishuMarkdown 把余下的发成新卡；
+ * - turn_end 时还在 live（没落库）：有正文发 abandon，没正文发 discard，回 idle；在 opening 时等 opened 之后再收尾；quiet 回 idle；
  * - 同一个事件序列、同一个 now、同一份预算结果总得到同一个结果。
  */
 export function stepFeishuStream(
@@ -88,36 +100,48 @@ export function stepFeishuStream(
   budget: FeishuCardkitBudget,
 ): { state: FeishuStreamState; effects: FeishuStreamEffect[] } {
   const idle: FeishuStreamState = { phase: "idle" };
+  const afterSegment = (turnActive: boolean | undefined): FeishuStreamState => (turnActive === true ? { phase: "quiet" } : idle);
   switch (state.phase) {
     case "idle":
+    case "quiet":
       if (event.kind === "text" && event.text !== "") {
         const sentText = feishuMarkdownPrefix(event.text);
-        return { state: { phase: "opening", sentText, text: event.text, pending: null }, effects: [{ kind: "open", text: sentText }] };
+        return { state: { phase: "opening", sentText, text: event.text, status: "", pending: null }, effects: [{ kind: "open", text: sentText }] };
+      }
+      if (event.kind === "working" && state.phase === "idle" && event.status !== "") {
+        return { state: { phase: "opening", sentText: event.status, text: "", status: event.status, pending: null }, effects: [{ kind: "open", text: event.status }] };
       }
       if (event.kind === "segment_done") {
-        return { state: idle, effects: [{ kind: "finalize", cardId: null, sequence: 0, messageId: event.messageId, text: event.text }] };
+        return { state: afterSegment(event.turnActive), effects: [{ kind: "finalize", cardId: null, sequence: 0, messageId: event.messageId, text: event.text }] };
       }
+      if (event.kind === "turn_end") return { state: idle, effects: [] };
       return { state, effects: [] };
     case "opening":
       switch (event.kind) {
         case "text":
           return { state: { ...state, text: event.text }, effects: [] };
+        case "working":
+          return { state: { ...state, status: event.status }, effects: [] };
         case "segment_done":
-          return { state: { ...state, pending: { kind: "finalize", messageId: event.messageId, text: event.text } }, effects: [] };
+          return {
+            state: { ...state, pending: { kind: "finalize", messageId: event.messageId, text: event.text, turnActive: event.turnActive === true } },
+            effects: [],
+          };
         case "turn_end":
           return state.pending === null ? { state: { ...state, pending: { kind: "abandon" } }, effects: [] } : { state, effects: [] };
         case "tick":
           return { state, effects: [] };
         case "open_failed":
           return state.pending?.kind === "finalize"
-            ? { state: idle, effects: [{ kind: "finalize", cardId: null, sequence: 0, messageId: state.pending.messageId, text: state.pending.text }] }
+            ? { state: afterSegment(state.pending.turnActive), effects: [{ kind: "finalize", cardId: null, sequence: 0, messageId: state.pending.messageId, text: state.pending.text }] }
             : { state: idle, effects: [] };
         case "opened": {
           const sequence = event.sequence + 1;
           if (state.pending?.kind === "finalize") {
-            return { state: idle, effects: [{ kind: "finalize", cardId: event.cardId, sequence, messageId: state.pending.messageId, text: state.pending.text }] };
+            const { messageId, text, turnActive } = state.pending;
+            return { state: afterSegment(turnActive), effects: [{ kind: "finalize", cardId: event.cardId, sequence, messageId, text }] };
           }
-          if (state.pending?.kind === "abandon") return { state: idle, effects: [{ kind: "abandon", cardId: event.cardId, sequence }] };
+          if (state.pending?.kind === "abandon") return { state: idle, effects: [closing(event.cardId, event.messageId, sequence, state.text)] };
           const live: Live = {
             phase: "live",
             cardId: event.cardId,
@@ -125,6 +149,7 @@ export function stepFeishuStream(
             sequence: event.sequence,
             sentText: state.sentText,
             text: state.text,
+            status: state.status,
             lastFlushAt: now,
             streamingSince: now,
           };
@@ -136,6 +161,8 @@ export function stepFeishuStream(
       switch (event.kind) {
         case "text":
           return keepTicking(flush({ ...state, text: event.text }, now, budget));
+        case "working":
+          return keepTicking(flush({ ...state, status: event.status }, now, budget));
         case "tick": {
           if (now - state.streamingSince < FEISHU_STREAM_RENEW_MS) return keepTicking(flush(state, now, budget));
           const renewed: Live = { ...state, sequence: state.sequence + 1, streamingSince: now };
@@ -143,14 +170,22 @@ export function stepFeishuStream(
           return { state: after.state, effects: [{ kind: "renew", cardId: state.cardId, sequence: renewed.sequence }, ...after.effects] };
         }
         case "segment_done":
-          return { state: idle, effects: [{ kind: "finalize", cardId: state.cardId, sequence: state.sequence + 1, messageId: event.messageId, text: event.text }] };
+          return {
+            state: afterSegment(event.turnActive),
+            effects: [{ kind: "finalize", cardId: state.cardId, sequence: state.sequence + 1, messageId: event.messageId, text: event.text }],
+          };
         case "turn_end":
-          return { state: idle, effects: [{ kind: "abandon", cardId: state.cardId, sequence: state.sequence + 1 }] };
+          return { state: idle, effects: [closing(state.cardId, state.messageId, state.sequence + 1, state.text)] };
         case "open_failed":
         case "opened":
           return { state, effects: [] };
       }
   }
+}
+
+/** 没落库就结束的卡：写过正文的留着最新正文收尾，只有状态行的撤回。 */
+function closing(cardId: FeishuCardId, messageId: FeishuMessageId, sequence: number, text: string): FeishuStreamEffect {
+  return text === "" ? { kind: "discard", cardId, messageId, sequence } : { kind: "abandon", cardId, sequence, text: feishuMarkdownPrefix(text) };
 }
 
 type Live = Extract<FeishuStreamState, { phase: "live" }>;
@@ -161,9 +196,9 @@ function keepTicking(result: { state: FeishuStreamState; effects: FeishuStreamEf
   return { state: result.state, effects: [...result.effects, { kind: "schedule_tick", at: result.state.streamingSince + FEISHU_STREAM_RENEW_MS }] };
 }
 
-/** 有没推的文字：到间隔、拿到预算就推全文，否则只记下、约下一次 tick。 */
+/** 卡上显示的有没推的：到间隔、拿到预算就推全文，否则只记下、约下一次 tick。有正文显示正文，否则状态行。 */
 function flush(live: Live, now: number, budget: FeishuCardkitBudget): { state: FeishuStreamState; effects: FeishuStreamEffect[] } {
-  const text = feishuMarkdownPrefix(live.text);
+  const text = live.text === "" ? live.status : feishuMarkdownPrefix(live.text);
   if (text === live.sentText) return { state: live, effects: [] };
   const due = live.lastFlushAt + FEISHU_STREAM_FLUSH_MS;
   if (now < due) return { state: live, effects: [{ kind: "schedule_tick", at: due }] };
