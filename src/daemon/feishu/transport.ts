@@ -60,6 +60,8 @@ export interface FeishuApiResult {
   code: number;
   msg?: string;
   data?: Record<string, unknown>;
+  /** 不是 2xx 时的 HTTP 状态码（飞书在 4xx、5xx 里照样回 code）。 */
+  httpStatus?: number;
 }
 
 /** 上传给发消息用的图片（≤ 10 MB）或设群头像（image_type avatar）。 */
@@ -153,15 +155,30 @@ export class FeishuAuthError extends Error {
 /** 开放接口回了非 0 的 code（凭证失效除外，那是 FeishuAuthError）。 */
 export class FeishuApiError extends Error {
   readonly code: number;
-  constructor(method: string, code: number, message: string) {
+  readonly httpStatus: number | null;
+  constructor(method: string, code: number, message: string, httpStatus: number | null = null) {
     super(`feishu ${method} failed: ${code} ${message}`);
     this.code = code;
+    this.httpStatus = httpStatus;
   }
+}
+
+/** 限流：HTTP 429、230020（发消息太快）、99991400（接口频率）。 */
+export const FEISHU_RATE_LIMIT_CODES: ReadonlySet<number> = new Set([230020, 99991400]);
+/** 卡片超过 30 KB 时飞书回的错误码；发送前本地核出超限也按它抛。 */
+export const FEISHU_CARD_TOO_LARGE_CODE = 230025;
+
+/**
+ * 飞书明确拒收了这一次请求（卡片过期、消息撤回、群没了、内容超限）：同样的请求再发还是被拒，调用方放弃这一件、不重试。
+ * 限流（重试用尽）、飞书服务端 5xx、回包坏了（code -1）、网络错误不算，那些稍后再试。
+ */
+export function isFeishuRejection(error: unknown): boolean {
+  return error instanceof FeishuApiError && error.code > 0 && !FEISHU_RATE_LIMIT_CODES.has(error.code) && (error.httpStatus === null || error.httpStatus < 500);
 }
 
 /** 后置：code 为 0 返回 data（没有是空对象），否则抛 FeishuApiError。 */
 export function feishuDataOf(method: FeishuMethod, result: FeishuApiResult): Record<string, unknown> {
-  if (result.code !== 0) throw new FeishuApiError(method, result.code, result.msg ?? "");
+  if (result.code !== 0) throw new FeishuApiError(method, result.code, result.msg ?? "", result.httpStatus ?? null);
   return result.data ?? {};
 }
 

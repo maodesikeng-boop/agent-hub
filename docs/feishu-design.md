@@ -261,6 +261,13 @@
   - 总助单聊的补发不再用两个编号水位，改成 `feishu_router_events`：账本写总助卡片、指令完成时由触发器在同一事务里按完成顺序记一行，发出去后删掉并推进 `last_router_event_id`。离线期间定案的总助卡按 `getRouterItem` 查现状改掉（快照只含待拍板的）。
   - 定案人署名存进 `feishu_decisions`，在账本定案的同一事务里写（`answerAsk`、`resolveRouterItem`、`decideTaskNode` 多一个可选的写入回调），先成功的点击为准；同一次点击重投按 `clientId`（卡片回调的 token 摘要）幂等。
   - 进出队列都按条数封顶；建群对齐和断线补发不进队列，只记标记，满载时不丢，失败隔 `FEISHU_CONTROL_RETRY_MS` 重试；出站排不进时改从账本按水位整段补发。认回已有的群时水位初始化成当前最新消息。
+- 复验后的调整（PR #350 第二轮复验 FAIL 的四项）：
+  - 给人看的错误（设置页 `lastError`、接口 400 的原因）不带飞书、网络的原文，原文只进日志；`FeishuSetupError` 和别的业务错误一样由界面服务统一的错误处理转成 `invalid`。
+  - 提问卡、总助拍板项、简报的正文先扣掉按钮、定案说明和“打开项目群”，放不下的截到放得下，末尾写“完整内容去网页看”，整张卡不超过 `FEISHU_CARD_MAX_BYTES`。
+  - 出错分两种：飞书明确拒收（业务错误码，含卡片过期、撤回、群没了、超过 30 KB 的 230025）再发也一样，放弃这一件、水位推过去，待拍板卡记成已结算；网络、限流用尽、飞书 5xx 是暂时性的，只把出错的那个群记下，隔 `FEISHU_CONTROL_RETRY_MS` 从水位整段补发。补发按群隔离，一个群出错不挡别的群。
+  - 只有在补的、等着补的群不排新任务；建群对齐时出站任务排着等对齐做完再发，不丢、不触发补发。流式预览排不进直接丢（下一块文字带着全文），不触发补发。补发最后只收尾断线期间已经结束的那几轮留下的流式卡，还在写的不动。
+  - 总助单聊刚连上时也最多补 `FEISHU_CATCHUP_MAX_MESSAGES` 条，更早的发一行“还有 N 条，去网页看”。
+  - 提醒卡点“已处理”：回调先回“正在重查”，排队后和网页一样先 `models.list({ vendor, refresh: true })` 再 `recheckUserBlocker`；解开了账本推变化、卡跟着改，还不能用在群里说一句。
 - 管理 socket 的客户端从 `src/tunnel/main.ts` 抽到 `src/tunnel/admin-client.ts`，隧道和飞书命令共用；`/feishu/*` 路由挂在 `daemon/tunnel/admin.ts`，请求体校验和界面服务共用 `daemon/feishu/setup.ts` 里的 zod schema。
 
 ## 验收方法

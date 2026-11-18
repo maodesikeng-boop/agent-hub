@@ -876,6 +876,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       db,
       ledger,
       router: routerDispatcher,
+      models,
       secretsFile: paths.feishuSecretsFile,
       uploadsDir,
       sentFilesDir,

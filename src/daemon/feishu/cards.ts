@@ -9,9 +9,10 @@ import { CONFIRM_CHECKPOINT_OPTIONS } from "../../shared/domain.ts";
 import type { AskMeta, ConversationId, Message, MessageId, PmId, RouterItemId, TaskGraphId, TaskNodeKey } from "../../shared/domain.ts";
 import { FEISHU_GUEST_TIERS, FEISHU_TRIGGER_MODES } from "../../shared/feishu.ts";
 import type { FeishuChatId, FeishuGuestTier, FeishuTriggerMode } from "../../shared/feishu.ts";
-import { FEISHU_STREAM_PRINT_FREQUENCY_MS, FEISHU_STREAM_PRINT_STEP } from "../../shared/limits.ts";
+import { FEISHU_CARD_MAX_BYTES, FEISHU_CARD_MAX_CHARS, FEISHU_STREAM_PRINT_FREQUENCY_MS, FEISHU_STREAM_PRINT_STEP } from "../../shared/limits.ts";
 import type { RouterItem } from "../../shared/router.ts";
 import type { UserBlockerId } from "../../shared/user-blockers.ts";
+import { feishuMarkdownFit } from "./outbound.ts";
 
 /** 卡片 JSON 2.0（只在这一层拼，序列化后交给传输层）。 */
 export interface FeishuCardJson {
@@ -132,6 +133,20 @@ function card(input: { title: string; template: string; summary: string; element
   };
 }
 
+const TRUNCATED_NOTE = "\n\n……后面太长，完整内容去网页看";
+const cardBytes = (c: FeishuCardJson) => Buffer.byteLength(JSON.stringify(c));
+
+/**
+ * 正文放进一张卡：放得下原样放；字数超过 FEISHU_CARD_MAX_CHARS，或连同按钮、定案说明超过 FEISHU_CARD_MAX_BYTES 时，
+ * 截到放得下并在末尾写明去网页看。build 用给它的正文拼整张卡，正文以外的部分（按钮、说明、摘要）不随正文变。
+ */
+function fitBody(text: string, build: (body: string) => FeishuCardJson): FeishuCardJson {
+  const whole = build(text);
+  if (feishuMarkdownFit(text, FEISHU_CARD_MAX_CHARS, Infinity).length === text.length && cardBytes(whole) <= FEISHU_CARD_MAX_BYTES) return whole;
+  const room = FEISHU_CARD_MAX_BYTES - cardBytes(build(TRUNCATED_NOTE));
+  return build(feishuMarkdownFit(text, FEISHU_CARD_MAX_CHARS - TRUNCATED_NOTE.length, room) + TRUNCATED_NOTE);
+}
+
 /** 卡片摘要（会话列表里看到的那一行）：正文第一行非空的字，最多 60 字。 */
 function summaryLine(text: string): string {
   const line = text.split("\n").find((l) => l.trim() !== "")?.trim() ?? "";
@@ -204,14 +219,15 @@ function pendingElements(ref: FeishuCardRef, ask: AskMeta | null, options: reado
  * 检查点卡是“通过 / 打回”，提醒卡是“已处理”；answered / closed 时没有按钮，写明结论。交付物不放进卡片（files.ts 单独发）。
  */
 export function renderAskCard(message: Message, ask: AskMeta, state: FeishuCardState): FeishuCardJson {
+  return askCard(message, ask, state, []);
+}
+
+/** 提问卡，正文下面的按钮和说明之后再接 extra（总助单聊里的“打开项目群”）；正文按 fitBody 放。 */
+function askCard(message: Message, ask: AskMeta, state: FeishuCardState, extra: Record<string, unknown>[]): FeishuCardJson {
   const { title, template } = askTitle(ask);
   const ref = feishuCardRefOf(message, ask);
-  return card({
-    title,
-    template,
-    summary: message.text,
-    elements: [markdown(message.text), ...(state.kind === "pending" ? pendingElements(ref, ask, feishuAskOptions(ask), ask.recommended) : settledElements(state))],
-  });
+  const rest = [...(state.kind === "pending" ? pendingElements(ref, ask, feishuAskOptions(ask), ask.recommended) : settledElements(state)), ...extra];
+  return fitBody(message.text, (body) => card({ title, template, summary: message.text, elements: [markdown(body), ...rest] }));
 }
 
 /**
@@ -229,20 +245,13 @@ export function renderRouterItem(
 ): FeishuCardJson {
   const openChat = pmChatId === null ? [] : [linkButton("打开项目群", feishuChatAppLink(pmChatId))];
   if (item.kind === "report") {
-    return card({ title: "简报", template: "turquoise", summary: item.summary, elements: [markdown(item.summary), ...openChat] });
+    return fitBody(item.summary, (body) => card({ title: "简报", template: "turquoise", summary: item.summary, elements: [markdown(body), ...openChat] }));
   }
-  if (ask !== null) {
-    const base = renderAskCard(ask.message, ask.meta, state);
-    return { ...base, body: { elements: [...base.body.elements, ...openChat] } };
-  }
+  if (ask !== null) return askCard(ask.message, ask.meta, state, openChat);
   const ref: FeishuCardRef = { kind: "router_item", itemId: item.id };
   const text = item.context.trim() === "" ? item.question : `${item.question}\n\n${item.context}`;
-  return card({
-    title: "等你确定",
-    template: "blue",
-    summary: item.question,
-    elements: [markdown(text), ...(state.kind === "pending" ? pendingElements(ref, null, item.options, undefined) : settledElements(state)), ...openChat],
-  });
+  const rest = [...(state.kind === "pending" ? pendingElements(ref, null, item.options, undefined) : settledElements(state)), ...openChat];
+  return fitBody(text, (body) => card({ title: "等你确定", template: "blue", summary: item.question, elements: [markdown(body), ...rest] }));
 }
 
 /**

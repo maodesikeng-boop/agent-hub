@@ -136,8 +136,13 @@ function markdownWindow(text: string, start: number, chars: number, bytes: numbe
   return end;
 }
 
+/** 后置：text 的前缀，最多 chars 个字、转成 JSON 字符串后最多 bytes 字节（不含两边引号）。 */
+export function feishuMarkdownFit(text: string, chars: number, bytes: number): string {
+  return text.slice(0, markdownWindow(text, 0, chars, bytes));
+}
+
 export function feishuMarkdownPrefix(text: string): string {
-  return text.slice(0, markdownWindow(text, 0, FEISHU_CARD_MAX_CHARS, FEISHU_CARD_MARKDOWN_JSON_BYTES));
+  return feishuMarkdownFit(text, FEISHU_CARD_MAX_CHARS, FEISHU_CARD_MARKDOWN_JSON_BYTES);
 }
 
 type Fence = { marker: string; opener: string };

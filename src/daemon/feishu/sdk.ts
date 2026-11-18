@@ -8,6 +8,7 @@ import * as lark from "@larksuiteoapi/node-sdk";
 import type { FeishuBrandName } from "../../shared/feishu.ts";
 import type { FeishuAppAddons, FeishuAppPreset } from "./scopes.ts";
 import {
+  FEISHU_RATE_LIMIT_CODES,
   FeishuAuthError,
   FeishuRegistrationError,
   type FeishuApiResult,
@@ -25,8 +26,7 @@ export interface FeishuSdkOptions {
   log: (line: string) => void;
 }
 
-/** 限流：HTTP 429、230020（发消息太快）、99991400（接口频率）。退避后重试，最多 RATE_LIMIT_RETRIES 次。 */
-const RATE_LIMIT_CODES = new Set([230020, 99991400]);
+/** 限流（FEISHU_RATE_LIMIT_CODES 或 HTTP 429）退避后重试，最多 RATE_LIMIT_RETRIES 次。 */
 const RATE_LIMIT_RETRIES = 4;
 const RATE_LIMIT_BACKOFF_MS = 500;
 /** 凭证失效、应用停用：不重试，状态改 auth_failed。 */
@@ -145,8 +145,8 @@ export function createFeishuSdkTransport(options: FeishuSdkOptions): FeishuTrans
         status = failed.status;
       }
       checkAuth(result);
-      const limited = status === 429 || RATE_LIMIT_CODES.has(result.code);
-      if (!limited || attempt >= RATE_LIMIT_RETRIES) return result;
+      const limited = status === 429 || FEISHU_RATE_LIMIT_CODES.has(result.code);
+      if (!limited || attempt >= RATE_LIMIT_RETRIES) return status !== null && (status < 200 || status >= 300) ? { ...result, httpStatus: status } : result;
       await sleep(RATE_LIMIT_BACKOFF_MS * 2 ** attempt);
     }
   };

@@ -109,7 +109,10 @@ export interface FeishuStore {
   /** 后置：水位只往大了改，传更小的值不变。 */
   advanceWatermark(chatId: FeishuChatId, mark: { messageId?: MessageId; routerEventId?: number }, now: number): void;
 
+  /** 后置：水位推到 id，删掉编号不大于它的事件。 */
   ackRouterEvent(chatId: FeishuChatId, id: number, now: number): void;
+  /** after 之后的事件超过 keep 条时，返回要跳过的条数和其中最后一条的编号；没超过是 null。 */
+  routerEventBacklog(after: number, keep: number): { skipped: number; lastSkippedId: number } | null;
   routerEventsAfter(after: number, limit: number): { id: number; item_id: RouterItemId | null; command_id: RouterCommandId | null }[];
   decision(ref: FeishuCardRef): { clientId: string; name: string } | null;
   saveDecision(ref: FeishuCardRef, clientId: string, name: string, now: number): void;
@@ -283,9 +286,15 @@ export function createFeishuStore(db: Db): FeishuStore {
     ackRouterEvent(chatId, id, now) {
       db.transaction(() => {
         if (db.run("UPDATE feishu_chats SET last_router_event_id = ?, updated_at = ? WHERE chat_id = ?", id, now, chatId).changes > 0) {
-          db.run("DELETE FROM feishu_router_events WHERE id = ?", id);
+          db.run("DELETE FROM feishu_router_events WHERE id <= ?", id);
         }
       });
+    },
+    routerEventBacklog(after, keep) {
+      const { n } = db.get<{ n: number }>("SELECT count(*) AS n FROM feishu_router_events WHERE id > ?", after)!;
+      if (n <= keep) return null;
+      const last = db.get<{ id: number }>("SELECT id FROM feishu_router_events WHERE id > ? ORDER BY id LIMIT 1 OFFSET ?", after, n - keep - 1)!;
+      return { skipped: n - keep, lastSkippedId: last.id };
     },
     routerEventsAfter: (after, limit) => db.all("SELECT id, item_id, command_id FROM feishu_router_events WHERE id > ? ORDER BY id LIMIT ?", after, limit),
     decision(ref) {

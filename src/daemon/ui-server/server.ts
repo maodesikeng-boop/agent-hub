@@ -1163,7 +1163,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     if (isUpgrade(req)) req.raw.socket.destroy();
   });
 
-  app.setErrorHandler((err: FastifyError | ConversationNotFoundError | LedgerRequestError | RouterTargetError | UploadError | PickFolderError | TunnelInputError | ProviderRequestError, req, reply) => {
+  app.setErrorHandler((err: FastifyError | ConversationNotFoundError | LedgerRequestError | RouterTargetError | UploadError | PickFolderError | TunnelInputError | ProviderRequestError | FeishuSetupError, req, reply) => {
     const reason = err.message;
     if (err instanceof PickFolderError) return fail(reply, codeOfStatus(err.statusCode), reason);
     if (err instanceof ProviderRequestError) return fail(reply, codeOfStatus(err.statusCode), reason);
@@ -1182,6 +1182,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       return fail(reply, apiCode, reason);
     }
     if (err instanceof TunnelInputError) return fail(reply, "invalid", reason);
+    if (err instanceof FeishuSetupError) return fail(reply, "invalid", reason);
     const status = (err as FastifyError).statusCode;
     // 上传超过 MAX_UPLOAD_BYTES：Fastify 在收完之前就拒了，原因是英文；换成中文（别的接口 413 走默认中文）
     if (status === 413) {
@@ -1971,14 +1972,6 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       }
       return opts.feishu;
     };
-    const feishuCall = async <T>(reply: FastifyReply, fn: () => T | Promise<T>): Promise<T> => {
-      try {
-        return await fn();
-      } catch (error) {
-        if (error instanceof FeishuSetupError) return fail(reply, "invalid", error.message) as never;
-        throw error;
-      }
-    };
     routes.get(API_PATHS.feishu, async (req, reply) => {
       const feishu = feishuOf(req, reply);
       return feishu === null ? reply : feishu.status();
@@ -1987,7 +1980,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       const feishu = feishuOf(req, reply);
       if (feishu === null) return reply;
       parseWithSchema(emptyObjectBodySchema, req.body ?? {});
-      return feishuCall(reply, () => feishu.startRegistration());
+      return feishu.startRegistration();
     });
     routes.delete(API_PATHS.feishuRegistration, async (req, reply) => {
       const feishu = feishuOf(req, reply);
@@ -1997,32 +1990,32 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       const feishu = feishuOf(req, reply);
       if (feishu === null) return reply;
       const body = parseWithSchema(feishuCredentialsSchema, req.body);
-      return feishuCall(reply, () => feishu.saveCredentials(body));
+      return feishu.saveCredentials(body);
     });
     routes.post(API_PATHS.feishuBindCode, async (req, reply) => {
       const feishu = feishuOf(req, reply);
       if (feishu === null) return reply;
       parseWithSchema(emptyObjectBodySchema, req.body ?? {});
-      return feishuCall(reply, () => feishu.issueBindCode());
+      return feishu.issueBindCode();
     });
     routes.put("/api/feishu/chats/:pmId/policy", async (req, reply) => {
       const feishu = feishuOf(req, reply);
       if (feishu === null) return reply;
       const pmId = parseId((req.params as { pmId?: unknown }).pmId, "pm id");
       const body = parseWithSchema(feishuChatPolicyBodySchema, req.body);
-      return feishuCall(reply, () => feishu.setChatPolicy({ pmId, ...body }));
+      return feishu.setChatPolicy({ pmId, ...body });
     });
     routes.post(API_PATHS.feishuResync, async (req, reply) => {
       const feishu = feishuOf(req, reply);
       if (feishu === null) return reply;
       parseWithSchema(emptyObjectBodySchema, req.body ?? {});
-      return feishuCall(reply, () => feishu.resync());
+      return feishu.resync();
     });
     routes.post(API_PATHS.feishuDisconnect, async (req, reply) => {
       const feishu = feishuOf(req, reply);
       if (feishu === null) return reply;
       const body = parseWithSchema(feishuDisconnectSchema, req.body);
-      return feishuCall(reply, () => feishu.disconnect(body));
+      return feishu.disconnect(body);
     });
 
     routes.get(API_PATHS.ws, { websocket: true }, (socket, req) => {
