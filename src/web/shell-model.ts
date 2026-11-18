@@ -286,7 +286,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       return !fleet.listed || pendingDevicePrefixes.has(k.slice(0, slash + 1));
     });
   }, [fleet.devices, fleet.listed, pendingCreated, drafts]);
-  const missingWorker = route?.view === "worker" && state.phase === "ready" && workerView === undefined ? route.id : null;
+  const missingWorker = route?.view === "worker" && state.phase === "ready" && workerView === undefined && state.conversations[route.id] === undefined ? route.id : null;
   const workerLookup = missingWorker === null ? undefined : state.lookups[missingWorker];
   useEffect(() => {
     if (missingWorker !== null && workerLookup === undefined) hub.ensureConversation(missingWorker);
@@ -296,7 +296,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
     (route.view === "profile"
       ? profile === null
       : route.view === "worker"
-        ? workerView === undefined ? workerLookup === "missing" : routedEntry === undefined
+        ? workerView === undefined ? state.conversations[route.id] !== undefined || workerLookup === "missing" : routedEntry === undefined
         : routedEntry === undefined);
   useEffect(() => {
     if (invalidMobileRoute || (!autoSelect && route === null && window.location.hash !== "")) replace(null);

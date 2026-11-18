@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createClient, localClient } from "./client.ts";
 import { DeviceHub, DevicesStore } from "./device-hub.ts";
+import { CONVERSATION_LOOKUP_MAX_IDS } from "../shared/index.ts";
 import { LOCAL_DEVICE } from "./devices.ts";
 import {
   FakeApi,
@@ -89,6 +90,52 @@ describe("DeviceHub（zustand store 驱动）", () => {
     expect(hub.state.conversations[1]?.messages.map((m) => m.text)).toEqual(["更早", "较新"]);
     expect(hub.state.conversations[1]?.hasMore).toBe(false);
 
+    hub.dispose();
+  });
+});
+
+describe("DeviceHub 按需拉取", () => {
+  const bootHub = async (over: Parameters<typeof makeSnapshot>[0] = {}) => {
+    const api = new FakeApi(makeSnapshot({ seq: 1, pms: [makePm({ id: 1 })], ...over }));
+    api.install();
+    installFakeWebSocket();
+    const hub = new DeviceHub(LOCAL_DEVICE, localClient, () => {});
+    hub.start();
+    await vi.waitFor(() => expect(hub.state.phase).toBe("ready"));
+    return { api, hub };
+  };
+
+  it("ensureWorkers 超过接口单次上限的 Worker 编号分批拉：每批不超过上限，合起来一个不漏、不重复", async () => {
+    const { api, hub } = await bootHub();
+    const ids = Array.from({ length: CONVERSATION_LOOKUP_MAX_IDS + 5 }, (_, i) => 1000 + i);
+    hub.ensureWorkers(ids);
+    await vi.waitFor(() => expect(api.calls.filter((c) => c.path === "/api/conversations/lookup")).toHaveLength(2));
+    const batches = api.calls.filter((c) => c.path === "/api/conversations/lookup").map((c) => (c.query.get("workerIds") ?? "").split(",").map(Number));
+    expect(batches.map((b) => b.length)).toEqual([CONVERSATION_LOOKUP_MAX_IDS, 5]);
+    expect(batches.flat()).toEqual(ids);
+    hub.ensureWorkers(ids);
+    expect(api.calls.filter((c) => c.path === "/api/conversations/lookup")).toHaveLength(2);
+    hub.dispose();
+  });
+
+  it("loadEndedWorkers：请求在途时 resync 重置了翻页起点，迟到的旧页不并进状态、不跳过中间页", async () => {
+    const worker = (id: number) => makeConvSnapshot([], { conversation: { id, kind: "worker", pmId: 1, title: `W${id}` } });
+    const { api, hub } = await bootHub({ olderEndedWorkers: { 1: 40 } });
+    let release!: () => void;
+    api.endedWorkers = () =>
+      new Promise((resolve) => {
+        release = () => resolve({ status: 200, body: { conversations: [worker(39)], sessions: [], nextBefore: 20 } });
+      });
+    const loading = hub.loadEndedWorkers(1);
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+    api.state = () => ({ status: 200, body: makeSnapshot({ seq: 5, pms: [makePm({ id: 1 })], olderEndedWorkers: { 1: 45 } }) });
+    FakeWebSocket.last.open();
+    FakeWebSocket.last.push({ type: "resync" });
+    await vi.waitFor(() => expect(hub.state.olderEndedWorkers).toEqual({ 1: 45 }));
+    release();
+    await loading;
+    expect(hub.state.olderEndedWorkers).toEqual({ 1: 45 });
+    expect(hub.state.conversations[39]).toBeUndefined();
     hub.dispose();
   });
 });

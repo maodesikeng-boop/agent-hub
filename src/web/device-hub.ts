@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { createStore, useStore, type StoreApi } from "zustand";
 import {
   ATTACHMENTS_MISSING_MESSAGE,
+  CONVERSATION_LOOKUP_MAX_IDS,
   MAX_CONVERSATION_LOOKUP_STATES,
   MAX_MESSAGE_BYTES,
   MAX_REWOUND_PENDING_KEYS,
@@ -396,14 +397,14 @@ export class DeviceHub {
     void this.lookup([conversationId], []);
   };
 
-  /** 任务图详情里挂着、网页还没带的 Worker：按 Worker 编号拉它们的对话。 */
+  /** 任务图详情里挂着、网页还没带的 Worker：按 Worker 编号拉它们的对话（接口一次最多 CONVERSATION_LOOKUP_MAX_IDS 个，超出分批）。 */
   ensureWorkers = (workerIds: readonly WorkerId[]): void => {
     if (this.state.phase !== "ready") return;
     const fresh = workerIds.filter((id) => !this.requestedWorkers.has(id));
     if (fresh.length === 0) return;
     if (this.requestedWorkers.size + fresh.length > MAX_CONVERSATION_LOOKUP_STATES) this.requestedWorkers.clear();
     for (const id of fresh) this.requestedWorkers.add(id);
-    void this.lookup([], fresh);
+    for (let i = 0; i < fresh.length; i += CONVERSATION_LOOKUP_MAX_IDS) void this.lookup([], fresh.slice(i, i + CONVERSATION_LOOKUP_MAX_IDS));
   };
 
   private async lookup(ids: ConversationId[], workerIds: WorkerId[]): Promise<void> {
@@ -425,7 +426,7 @@ export class DeviceHub {
     this.endedWorkersInFlight.add(pmId);
     try {
       const page = await this.client.fetchEndedWorkers(pmId, before);
-      if (this.alive) this.dispatch({ type: "endedWorkersLoaded", pmId, page });
+      if (this.alive) this.dispatch({ type: "endedWorkersLoaded", pmId, before, page });
     } finally {
       this.endedWorkersInFlight.delete(pmId);
     }

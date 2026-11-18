@@ -181,13 +181,17 @@ describe("不在快照里的早收工 Worker", () => {
     const s1 = reducer(s0, {
       type: "endedWorkersLoaded",
       pmId: 1,
+      before: 40,
       page: { conversations: [worker(39), worker(38)], sessions: [makeSession({ sessionId: 390, conversationId: 39, status: "ended" })], nextBefore: 38 },
     });
     expect(Object.keys(s1.conversations).map(Number)).toEqual(expect.arrayContaining([38, 39]));
     expect(s1.sessions.map((x) => x.sessionId)).toContain(390);
     expect(s1.olderEndedWorkers).toEqual({ 1: 38 });
-    const s2 = reducer(s1, { type: "endedWorkersLoaded", pmId: 1, page: { conversations: [worker(37)], sessions: [], nextBefore: null } });
+    const s2 = reducer(s1, { type: "endedWorkersLoaded", pmId: 1, before: 38, page: { conversations: [worker(37)], sessions: [], nextBefore: null } });
     expect(s2.olderEndedWorkers).toEqual({});
+    // 请求发出后翻页起点已经变了（resync 重置、别处已经翻过）：迟到的页整页丢掉
+    const stale = reducer(s1, { type: "endedWorkersLoaded", pmId: 1, before: 40, page: { conversations: [worker(36)], sessions: [], nextBefore: 20 } });
+    expect(stale).toBe(s1);
   });
 
   it("按编号单拉：在拉记 loading，拉到删掉，没有、没拉成都记 missing；重拉快照清空（再拉一次）", () => {

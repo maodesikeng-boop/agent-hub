@@ -162,7 +162,7 @@ export type HubAction =
   | { type: "lookupStart"; ids: readonly ConversationId[] }
   | { type: "lookupDone"; ids: readonly ConversationId[]; lookup: ConversationsLookup }
   | { type: "lookupFailed"; ids: readonly ConversationId[] }
-  | { type: "endedWorkersLoaded"; pmId: PmId; page: EndedWorkersPage }
+  | { type: "endedWorkersLoaded"; pmId: PmId; before: ConversationId; page: EndedWorkersPage }
   | { type: "retryStart"; messageId: MessageId }
   | { type: "retryFailed"; messageId: MessageId };
 
@@ -654,6 +654,8 @@ export function reducer(state: HubState, action: HubAction): HubState {
       return { ...state, ...merged, lookups: withLookups(withLookups(state.lookups, found, undefined), missing, "missing") };
     }
     case "endedWorkersLoaded": {
+      // 请求在途时 resync 把翻页起点重置过：迟到的旧页不合并、不改起点，免得跳过中间页
+      if (state.olderEndedWorkers[action.pmId] !== action.before) return state;
       const merged = mergeLoaded(state, action.page);
       const { [action.pmId]: _done, ...rest } = state.olderEndedWorkers;
       const olderEndedWorkers = action.page.nextBefore === null ? rest : { ...rest, [action.pmId]: action.page.nextBefore };
