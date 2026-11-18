@@ -51,7 +51,9 @@ export type BundledNodeTarget = keyof typeof BUNDLED_NODE_ARCHIVES;
 /** 裁剪随包 node_modules 的目标：两个分发平台，或本机冒烟（不裁平台二进制）。 */
 export type StageTargetOs = "win32" | "darwin-arm64" | "host";
 
-const DAEMON_SOURCE_SUBDIRS = ["daemon", "shared", "vendors", "hub", "tunnel"] as const;
+const DAEMON_SOURCE_SUBDIRS = ["daemon", "shared", "vendors", "hub", "tunnel", "feishu"] as const;
+/** 守护进程运行时要读的仓库根目录资源，整个目录原样带走（飞书群头像读 assets/avatars/）。 */
+const DAEMON_ASSET_DIRS = ["assets/avatars"] as const;
 
 const MXC_WIN_X64_KEEP_FILES = new Set([
   "mxc_ffi.dll",
@@ -312,7 +314,7 @@ export interface StageDaemonTreeOptions {
 }
 
 /**
- * 组装 daemon/：守护进程源码、迁移 SQL、桌面契约、打包好的前端静态资源、精简 package.json，
+ * 组装 daemon/：守护进程源码、迁移 SQL、头像资源、桌面契约、打包好的前端静态资源、精简 package.json，
  * 再装平铺（hoisted、无软链、无生命周期脚本）生产期后端依赖并按目标平台裁剪。
  */
 export function stageDaemonTree(opts: StageDaemonTreeOptions): void {
@@ -328,6 +330,7 @@ export function stageDaemonTree(opts: StageDaemonTreeOptions): void {
     copyFilteredSourceTree(join(repoRoot, "src", sub), join(daemonOutDir, "src", sub));
   }
   cpSync(join(repoRoot, "migrations"), join(daemonOutDir, "migrations"), { recursive: true });
+  for (const dir of DAEMON_ASSET_DIRS) cpSync(join(repoRoot, dir), join(daemonOutDir, dir), { recursive: true });
   cpSync(distWebDir, join(daemonOutDir, "dist", "web"), { recursive: true });
   mkdirSync(join(daemonOutDir, "apps", "desktop"), { recursive: true });
   copyFileSync(

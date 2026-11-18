@@ -189,6 +189,23 @@ export const API_PATHS = {
   /** POST（PushUnsubscribeRequest）→ 204。没有这条订阅也是 204。 */
   pushUnsubscribe: "/api/push/unsubscribe",
 
+  // ---- 飞书（docs/feishu-design.md；只在本机网页上配，经设备令牌访问回 forbidden_peer） ----
+
+  /** GET → FeishuStatusView（不含 App Secret）。 */
+  feishu: "/api/feishu",
+  /** POST，没有请求体 → FeishuStatusView（registering，带二维码链接）：开始扫码建应用；DELETE → FeishuStatusView：取消扫码。 */
+  feishuRegistration: "/api/feishu/registration",
+  /** PUT（FeishuCredentialsRequest）→ FeishuStatusView：手动填 App ID、App Secret；凭证不对 400。 */
+  feishuCredentials: "/api/feishu/credentials",
+  /** POST，没有请求体 → FeishuBindCodeResponse：手动接入后认主人的绑定码。 */
+  feishuBindCode: "/api/feishu/bind-code",
+  /** PUT（triggerMode、guestTier，至少一个）→ FeishuChatView：改一个项目群的唤醒方式和访客档位。 */
+  feishuChatPolicy: (pmId: PmId) => `/api/feishu/chats/${pmId}/policy`,
+  /** POST，没有请求体 → FeishuStatusView：照账本重新对一遍项目群。 */
+  feishuResync: "/api/feishu/resync",
+  /** POST（FeishuDisconnectRequest）→ FeishuStatusView：断开，删凭证和四张表。 */
+  feishuDisconnect: "/api/feishu/disconnect",
+
   // ---- 联机：浏览器登录（每个浏览器一条，能单独退出；只在入口上，浏览器从不拿别的设备的令牌） ----
 
   /** GET → AuthStatusResponse：查询当前浏览器会话状态（active / pending_approval / unauthenticated）。 */

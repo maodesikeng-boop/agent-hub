@@ -164,6 +164,13 @@ import { LOGIN_LINK_FRAGMENT_KEY, LOGIN_LINK_PAGE } from "./login-page.ts";
 import { funnelCommandFor, loadPublicEntryConfig, normalizePublicHostname, savePublicEntryConfig, type PublicEntryConfig } from "./public-entry.ts";
 import { createPublicAuthRateLimiter, extractPublicClientIp } from "./public-rate-limit.ts";
 import { createBrowserSessions, createLoginLinks } from "./sessions.ts";
+import {
+  FeishuSetupError,
+  feishuChatPolicyBodySchema,
+  feishuCredentialsSchema,
+  feishuDisconnectSchema,
+  type FeishuSetupService,
+} from "../feishu/setup.ts";
 import { UI_TOKEN_PATTERN, newUiToken } from "./token.ts";
 import {
   RouterTargetError,
@@ -223,6 +230,8 @@ export interface UiServerOptions {
     unsubscribe(endpoint: string): void;
     presence: PresenceBoard;
   };
+  /** 飞书（docs/feishu-design.md，daemon/feishu/）：设置接口 /api/feishu/*，和终端命令共用一份。不给 = 这些接口回 unavailable。 */
+  feishu?: FeishuSetupService;
   /** serve 转发到哪（daemon/platform/tailscale.ts）：unix 时 tailnet 名字只在 serve 的 socket 上认，TCP 端口只认本机。默认 tcp。 */
   serveTarget?: ServeTargetKind;
   /**
@@ -1926,6 +1935,72 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
         return reply.code(204).send();
       });
     }
+
+    // 飞书设置（docs/feishu-design.md）：只在本机网页上配，别的设备经设备令牌转过来的一律 forbidden_peer
+    const feishuOf = (req: FastifyRequest, reply: FastifyReply): FeishuSetupService | null => {
+      if (peerOf(req) !== undefined) {
+        fail(reply, "forbidden_peer");
+        return null;
+      }
+      if (opts.feishu === undefined) {
+        fail(reply, "unavailable", "这台没开飞书");
+        return null;
+      }
+      return opts.feishu;
+    };
+    const feishuCall = async <T>(reply: FastifyReply, fn: () => T | Promise<T>): Promise<T> => {
+      try {
+        return await fn();
+      } catch (error) {
+        if (error instanceof FeishuSetupError) return fail(reply, "invalid", error.message) as never;
+        throw error;
+      }
+    };
+    routes.get(API_PATHS.feishu, async (req, reply) => {
+      const feishu = feishuOf(req, reply);
+      return feishu === null ? reply : feishu.status();
+    });
+    routes.post(API_PATHS.feishuRegistration, async (req, reply) => {
+      const feishu = feishuOf(req, reply);
+      if (feishu === null) return reply;
+      parseWithSchema(emptyObjectBodySchema, req.body ?? {});
+      return feishuCall(reply, () => feishu.startRegistration());
+    });
+    routes.delete(API_PATHS.feishuRegistration, async (req, reply) => {
+      const feishu = feishuOf(req, reply);
+      return feishu === null ? reply : feishu.cancelRegistration();
+    });
+    routes.put(API_PATHS.feishuCredentials, async (req, reply) => {
+      const feishu = feishuOf(req, reply);
+      if (feishu === null) return reply;
+      const body = parseWithSchema(feishuCredentialsSchema, req.body);
+      return feishuCall(reply, () => feishu.saveCredentials(body));
+    });
+    routes.post(API_PATHS.feishuBindCode, async (req, reply) => {
+      const feishu = feishuOf(req, reply);
+      if (feishu === null) return reply;
+      parseWithSchema(emptyObjectBodySchema, req.body ?? {});
+      return feishuCall(reply, () => feishu.issueBindCode());
+    });
+    routes.put("/api/feishu/chats/:pmId/policy", async (req, reply) => {
+      const feishu = feishuOf(req, reply);
+      if (feishu === null) return reply;
+      const pmId = parseId((req.params as { pmId?: unknown }).pmId, "pm id");
+      const body = parseWithSchema(feishuChatPolicyBodySchema, req.body);
+      return feishuCall(reply, () => feishu.setChatPolicy({ pmId, ...body }));
+    });
+    routes.post(API_PATHS.feishuResync, async (req, reply) => {
+      const feishu = feishuOf(req, reply);
+      if (feishu === null) return reply;
+      parseWithSchema(emptyObjectBodySchema, req.body ?? {});
+      return feishuCall(reply, () => feishu.resync());
+    });
+    routes.post(API_PATHS.feishuDisconnect, async (req, reply) => {
+      const feishu = feishuOf(req, reply);
+      if (feishu === null) return reply;
+      const body = parseWithSchema(feishuDisconnectSchema, req.body);
+      return feishuCall(reply, () => feishu.disconnect(body));
+    });
 
     routes.get(API_PATHS.ws, { websocket: true }, (socket, req) => {
       // 自己从 URL 取参数：injectWS 造的请求没有 req.query；重复的 since 当作不合法。
