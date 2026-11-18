@@ -27,8 +27,15 @@ export type TurnReplyState =
 
 /** 后置：message 是用户消息且 meta.replyId 是正整数时返回它，其他情况返回 null。 */
 export function replyIdOf(message: Pick<Message, "sender" | "meta">): MessageId | null {
-  throw new Error("未实现");
+  if (message.sender !== "user") return null;
+  const id = message.meta?.["replyId"];
+  return typeof id === "number" && Number.isInteger(id) && id > 0 ? id : null;
 }
+
+// 结果对象按 request 缓存：同一个 request 对象在 reply 没变时拿到同一个状态，memo 的组件不白画
+const stateCache = new WeakMap<Message, { reply: Message | null; state: TurnReplyState }>();
+const WAITING: TurnReplyState = { kind: "waiting" };
+const SILENT: TurnReplyState = { kind: "silent" };
 
 /**
  * 前置：reply 不是 null 时，reply.id 等于 replyIdOf(request)；replyIdOf(request) 不是 null 而手上没有那条回复时不调，先去取。
@@ -36,5 +43,26 @@ export function replyIdOf(message: Pick<Message, "sender" | "meta">): MessageId 
  * 同样的 request 和 reply 对象返回同一个结果对象。
  */
 export function turnReplyStateOf(request: Message, reply: Message | null): TurnReplyState {
-  throw new Error("未实现");
+  const cached = stateCache.get(request);
+  if (cached !== undefined && cached.reply === reply) return cached.state;
+  const state = computeState(request, reply);
+  stateCache.set(request, { reply, state });
+  return state;
+}
+
+function computeState(request: Message, reply: Message | null): TurnReplyState {
+  switch (request.status) {
+    case "replied":
+      return reply === null ? SILENT : { kind: "replied", reply };
+    case "stopped":
+    case "cancelled":
+      return { kind: "ended", status: request.status, reason: null };
+    case "failed":
+      return { kind: "ended", status: "failed", reason: request.failureReason };
+    case "queued":
+    case "delivered":
+    case "processing":
+    case null:
+      return WAITING;
+  }
 }

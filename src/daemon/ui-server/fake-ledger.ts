@@ -58,6 +58,7 @@ import {
   type TaskGraph,
   type TaskGraphId,
   type TaskGraphsPage,
+  type TurnReplyView,
   type TaskNodeKey,
   type Unsubscribe,
   type UpdateRouterSettingsRequest,
@@ -185,6 +186,8 @@ export class FakeLedger {
   taskGraphsPageValue: TaskGraphsPage = { graphs: [], hasMore: false };
   /** getMessage 能取到的消息（测试自己放）。 */
   readonly storedMessages = new Map<MessageId, Message>();
+  /** turnReplyOf 能取到的转交回复（测试自己放，按原消息编号）。 */
+  readonly turnReplies = new Map<MessageId, TurnReplyView>();
   /** sentFileAllows 的判断，默认都允许。 */
   sentFileAllows: (sessionId: SessionId, realPath: string) => boolean = () => true;
   /** 抛出它来模拟账本出错（普通 Error 是内部出错，LedgerRequestError 是被拒绝）；所有方法都抛。 */
@@ -585,6 +588,7 @@ export class FakeLedger {
       unarchivePm: (p) => this.unarchivePm(p),
       purgeExpiredArchivedPms: unused("purgeExpiredArchivedPms"),
       getMessage: (id) => this.storedMessages.get(id) ?? null,
+      turnReplyOf: (id) => this.turnReplies.get(id) ?? null,
       sentFileAllows: (s, p) => this.sentFileAllows(s, p),
       onActionFailed: unused("onActionFailed"),
       stopMessage: unused("stopMessage"),

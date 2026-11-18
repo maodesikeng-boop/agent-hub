@@ -123,6 +123,7 @@ import {
   type ServerInfo,
   type SkipTaskNodeResponse,
   type StateSnapshot,
+  type TurnReplyView,
   type SelfReloadRequestBody,
   type SelfReloadResponse,
   type SelfReloadStatus,
@@ -1760,6 +1761,11 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     routes.post("/api/pms/:id/unarchive", async (req): Promise<ArchivePmResponse> => {
       const pmId = parseId((req.params as { id?: unknown }).id, "pm id");
       return { pm: ledger.unarchivePm(pmId) };
+    });
+
+    routes.get("/api/messages/:id/turn-reply", async (req, reply): Promise<TurnReplyView | FastifyReply> => {
+      const view = ledger.turnReplyOf(parseId((req.params as { id?: unknown }).id, "message id"));
+      return view === null ? fail(reply, "not_found") : view;
     });
 
     routes.post("/api/messages/:id/retry", async (req, reply) => {

@@ -610,7 +610,6 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
       ...(params.projectId !== undefined ? { projectId: params.projectId } : {}),
       text: params.bodyText,
       ...(params.attachmentIds.length > 0 ? { attachmentIds: params.attachmentIds } : {}),
-      sourceCommandId: params.commandId,
     };
 
     try {
@@ -1252,7 +1251,6 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
             ...(payload.projectId !== undefined ? { projectId: payload.projectId } : {}),
             text,
             ...(state.attachmentIds.length > 0 ? { attachmentIds: state.attachmentIds } : {}),
-            sourceCommandId: commandId,
           };
           break;
         }

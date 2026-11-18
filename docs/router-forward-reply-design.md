@@ -112,3 +112,11 @@
 - 配对路径：`test/e2e/multi-device.test.ts` 加一条：两台回环守护进程配对，第一台的总助用 `@` 指定第二台的项目经理发两条相近的问题，假 claude 各答一句；断言第一台网页拿到的两个 `TurnReplyView` 各是自己那一句，第二台掉线时补取失败、上线后补齐。
 - 真界面：本机守护进程加网页，在总助里分别用自动路由和 `@agent-hub` 问一句，录从发问到项目经理回复出现在总助里的 mp4，另截一张两条相近问答各自对上的图；配对路径用 `test/fake-devices/main.ts --devices two` 加上转交和回复的假数据截一张。证据放进实现 PR 和汇报的“文件”栏。
 - 复现回归：用 #76089 那段（转交后说一句“我查一下”就被下一条消息打断）做一条测试，总助里显示 `Stopped`，不出现 #76090 或下一轮的内容。
+
+## 实现备注
+
+- 一轮中途插进来的消息（`message.delivered` 带 `midTurn`）以 agent 取走它的那一刻（`message.processing`）为界：送达到取走之间 agent 还在答前面的话，那几段不算它的回复。开一轮的消息、批量一起送达的以送达为界。重复的 `delivered`、`processing` 不改已记的界。
+- `turn.ended` 里状态变成 `replied` 和写 `replyId` 在同一个事务里，只推一条带 `replyId` 的 `message.updated`（把同事务里状态变化那一条换掉），网页不会先看到 `replied`、再等一条才有回复。
+- 补取结果 `ok` / `missing`（404）/ `failed`（其他错误）三种都存在 react-query 里，不抛错：已定的永不过期，处理中的每次挂载重取，`missing` 和 `failed` 记 `ROUTER_FORWARD_REPLY_MISS_RETRY_MS`；那台设备连接从断开变回 open 时，没定的结果作废重取。
+- `hub(key)` 找不到设备时会退回本机，所以网页里按设备键找仓库用 `shell-model.ts` 的 `storeForDevice`：键对不上就是 null，不拿本机的同号消息顶替。
+

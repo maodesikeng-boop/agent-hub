@@ -60,6 +60,7 @@ import { API_ERRORS } from "./errors.ts";
 import type { AgentVendor, ModelCatalog } from "./vendors.ts";
 import type { UserBlockerId } from "./user-blockers.ts";
 import type { WorkerPick } from "./worker.ts";
+import type { TurnReplyView } from "./turn-reply.ts";
 
 /**
  * 账本拒绝一个请求的原因（M2 起的新方法都用它）：
@@ -683,6 +684,11 @@ export interface Ledger extends LedgerHandoverWork {
   removeSchedule(scheduleId: ScheduleId): void;
   /** 给执行器处理函数用：读动作要发的消息。找不到返回 null。 */
   getMessage(id: MessageId): Message | null;
+  /**
+   * 项目经理对话里一条用户消息和它那一轮的正式回复（GET /api/messages/:id/turn-reply，规则见 shared/turn-reply.ts）。
+   * 不存在、不是用户消息、不在项目经理对话里返回 null。
+   */
+  turnReplyOf(messageId: MessageId): TurnReplyView | null;
   /**
    * 这个会话现在能不能分享这个文件（realPath 已 realpath）：不在敏感路径、.git/ 里，在这个会话所属项目的文件夹、worktrees 目录、
    * 会话自己的 cwd 和附加文件夹、uploads、临时目录之内（和存副本时同一套规则，daemon/sent-files.ts 的 isShareable）。

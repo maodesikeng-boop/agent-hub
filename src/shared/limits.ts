@@ -698,6 +698,8 @@ export const ROUTER_STREAM_LIVE_MAX = 200;
 /** Router 时间流历史每页条数，和每个来源最多往回翻几页（到了就不再出 Load earlier）。 */
 export const ROUTER_STREAM_PAGE_SIZE = 30;
 export const ROUTER_STREAM_MAX_PAGES = 10;
+/** 总助时间流里转交回复补取失败（404、设备离线、请求出错）后，多久内不再重取；成功定下来的结果不过期。 */
+export const ROUTER_FORWARD_REPLY_MISS_RETRY_MS = 60_000;
 /** Digest 中单个 PM 附带的在跑 Worker 上限（超出只计总数）。 */
 export const ROUTER_PM_ACTIVE_WORKERS_MAX = 6;
 /** 单份 Fleet Digest JSON 字节上限（24 KB）。 */

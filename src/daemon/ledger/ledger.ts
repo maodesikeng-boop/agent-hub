@@ -33,6 +33,7 @@ import { createLedgerHubCommands } from "./hub-commands.ts";
 import { createLedgerLaunchContext } from "./launch-context.ts";
 import { createLedgerLoadedSkills } from "./loaded-skills.ts";
 import { createLedgerMessages } from "./messages.ts";
+import { createLedgerTurnReplies } from "./turn-replies.ts";
 import { createLedgerPersona } from "./persona.ts";
 import { createLedgerPmCapabilities } from "./pm-capabilities.ts";
 import { createLedgerProjectCatalog } from "./project-catalog.ts";
@@ -187,6 +188,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     afterUserPost: (p, id) => handover.userPostedIn(p, id),
     onIndependentAskCreated: (p, session, message, askOptions) => router.bridgeAskIn(p, session, message, askOptions),
   });
+  const turnReplies = createLedgerTurnReplies(ctx);
   const persona = createLedgerPersona(ctx, sessions, messages, files, {
     switchVendorIn: (p, conversationId, agent) => handover.switchVendorIn(p, conversationId, agent),
     clearVendorSwitchIn: (conversationId) => handover.clearVendorSwitchIn(conversationId),
@@ -330,6 +332,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       if (session === null || session.role === "assistant") return;
       write((p) => {
         messages.applyEvent(p, session, event);
+        turnReplies.afterDriverEvent(p, session, event);
         steps.afterDriverEvent(session, event);
         loadedSkills.afterDriverEvent(session, event);
         workers.afterDriverEvent(p, session, event);
@@ -367,6 +370,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     },
 
     getMessage: messages.getMessage,
+    turnReplyOf: turnReplies.turnReplyOf,
     sentFileAllows(sessionId, realPath) {
       const session = getAgentSession(db, sessionId);
       return session !== null && sentFiles.allows(session, realPath);

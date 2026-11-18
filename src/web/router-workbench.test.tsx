@@ -44,10 +44,13 @@ import {
   installFakeNotification,
   installFakeWebSocket,
   makeConvSnapshot,
+  makeMessage,
   makePm,
   makeProject,
   makeSession,
   makeSnapshot,
+  makeUserMessage,
+  messageChange,
   sessionChange,
 } from "./test-utils.ts";
 
@@ -1153,6 +1156,110 @@ describe("时间流：指令回合", () => {
     );
     expect(await within(turnOf("发不出去的指令")).findByText("收到。")).toBeInTheDocument();
     expect(turns().filter((t) => t.querySelector("[data-bubble]")?.textContent === "发不出去的指令")).toHaveLength(1);
+  });
+});
+
+describe("时间流：转交回复", () => {
+  const forwardTo = (deviceId: string, deviceName: string, pmId: number, pmName: string, conversationId: number, messageId: number) => [
+    { deviceId, deviceName, pmId, pmName, projectId: pmId * 10, projectName: pmId === 1 ? "agent-hub" : "tokyo-svc", conversationId, messageId, ok: true, op: "pm.forward" as const },
+  ];
+  const command = (id: number, inputText: string, dispatched: RouterCommandRecord["dispatched"], createdAt: number) =>
+    makeCommandRecord({ id, clientId: `fr-${id}`, inputText, dispatched, createdAt });
+  const pmSnapshot = (pmId: number, name: string, conversationId: number, messages: ReturnType<typeof makeMessage>[], router = emptyRouterSlice()) =>
+    makeSnapshot({
+      pms: [makePm({ id: pmId, name })],
+      projects: [makeProject({ id: pmId * 10, name: pmId === 1 ? "agent-hub" : "tokyo-svc", pmId, conversationId })],
+      conversations: [makeConvSnapshot(messages, { conversation: { id: conversationId, pmId, projectId: pmId * 10, title: name } })],
+      router,
+    });
+  const replyUnder = (text: string) => within(turnOf(text)).getByText(/./, { selector: "[data-forward-reply] [data-message-id] p" });
+
+  it("同一个项目经理先后收到两条相近的转交：各自回合下只出现自己那一轮的回复，直发给项目经理的话和别的轮次不串进来", async () => {
+    const now = Date.now();
+    const messages = [
+      makeUserMessage({ id: 88, text: "飞书接入做到哪里了", meta: { replyId: 89 } }),
+      makeMessage({ id: 89, text: "飞书接入：扫码建应用已完成" }),
+      // 你在项目经理对话里直接说的话，不是总助转的
+      makeUserMessage({ id: 90, text: "顺便看下 CI", meta: { replyId: 91 } }),
+      makeMessage({ id: 91, text: "CI 绿了，直接对话里的回答" }),
+      makeUserMessage({ id: 92, text: "飞书接入的 PR 合了吗", meta: { replyId: 94 } }),
+      makeMessage({ id: 93, kind: "tool", text: "Bash: gh pr view" }),
+      makeMessage({ id: 94, text: "飞书接入的 PR 还没合，在审查" }),
+    ];
+    const commands = [
+      command(321, "飞书接入的 PR 合了吗", forwardTo(LOCAL_ID, "MacBook", 1, "小林", 1, 92), now - 10_000),
+      command(320, "飞书接入做到哪里了", forwardTo(LOCAL_ID, "MacBook", 1, "小林", 1, 88), now - 30_000),
+    ];
+    installFleet({ local: pmSnapshot(1, "小林", 1, messages, { ...emptyRouterSlice(), commands }) });
+    await openRouter();
+    await waitFor(() => expect(turns()).toHaveLength(2));
+
+    expect(replyUnder("飞书接入做到哪里了")).toHaveTextContent("飞书接入：扫码建应用已完成");
+    expect(replyUnder("飞书接入的 PR 合了吗")).toHaveTextContent("飞书接入的 PR 还没合，在审查");
+    const text = timeline().textContent ?? "";
+    expect(text).not.toContain("CI 绿了");
+    expect(within(turnOf("飞书接入做到哪里了")).queryByText("飞书接入的 PR 还没合，在审查")).toBeNull();
+    expect(within(turnOf("飞书接入的 PR 合了吗")).queryByText("飞书接入：扫码建应用已完成")).toBeNull();
+  });
+
+  it("本机和配对设备上编号相同的两条消息互不串；点回复的头像进那台设备上的项目经理对话；项目经理新说的话推来时已画的回复不重画", async () => {
+    const now = Date.now();
+    const localMessages = [makeUserMessage({ id: 88, text: "本机的问题", meta: { replyId: 89 } }), makeMessage({ id: 89, text: "本机项目经理的回答" })];
+    const tokyoMessages = [makeUserMessage({ id: 88, conversationId: 2, text: "东京的问题", meta: { replyId: 89 } }), makeMessage({ id: 89, conversationId: 2, text: "东京项目经理的回答" })];
+    const commands = [
+      command(331, "东京的问题", forwardTo(TOKYO_ID, "Tokyo", 2, "阿青", 2, 88), now - 10_000),
+      command(330, "本机的问题", forwardTo(LOCAL_ID, "MacBook", 1, "小林", 1, 88), now - 30_000),
+    ];
+    installFleet({ local: pmSnapshot(1, "小林", 1, localMessages, { ...emptyRouterSlice(), commands }), tokyo: pmSnapshot(2, "阿青", 2, tokyoMessages) });
+    const user = userEvent.setup();
+    await openRouter();
+    await waitFor(() => expect(turns()).toHaveLength(2));
+    await waitFor(() => expect(replyUnder("东京的问题")).toHaveTextContent("东京项目经理的回答"));
+    expect(replyUnder("本机的问题")).toHaveTextContent("本机项目经理的回答");
+
+    // 本机项目经理流式打字、又来了无关的新消息：已画的两条回复一次也不重画
+    const before = renders.markdown.filter((t) => t.includes("项目经理的回答")).length;
+    act(() => localSocket().push(messageChange(40, "message.created", makeMessage({ id: 120, text: "无关的新消息" }))));
+    expect(renders.markdown.filter((t) => t.includes("项目经理的回答")).length - before).toBe(0);
+
+    const head = within(turnOf("东京的问题")).getAllByRole("button", { name: /阿青/ }).find((b) => !b.hasAttribute("data-destination"))!;
+    await user.click(head);
+    expect(window.location.hash).toBe(`#/d/${TOKYO_ID}/c/2`);
+  });
+
+  it("复现 #76089：转交后项目经理只说一句就被打断，总助里显示 Stopped，不出现那半句话和下一轮的回答", async () => {
+    const now = Date.now();
+    const messages = [
+      makeUserMessage({ id: 76089, text: "飞书接入做到哪里了", status: "stopped" }),
+      makeMessage({ id: 76090, text: "我查一下飞书任务图和 PR……" }),
+      makeUserMessage({ id: 76102, text: "我只是测试一下总助", meta: { replyId: 76103 } }),
+      makeMessage({ id: 76103, text: "收到，总助测试正常" }),
+    ];
+    const commands = [command(311, "飞书接入做到哪里了", forwardTo(LOCAL_ID, "MacBook", 1, "小林", 1, 76089), now - 20_000)];
+    installFleet({ local: pmSnapshot(1, "小林", 1, messages, { ...emptyRouterSlice(), commands }) });
+    await openRouter();
+    await waitFor(() => expect(turns()).toHaveLength(1));
+    const turn = turnOf("飞书接入做到哪里了");
+    expect(await within(turn).findByText("Stopped")).toBeInTheDocument();
+    expect(turn.textContent).not.toContain("我查一下");
+    expect(turn.textContent).not.toContain("总助测试正常");
+  });
+
+  it("项目经理还在处理时显示 Working…，答完推来原消息和回复后换成回复正文", async () => {
+    const now = Date.now();
+    const asked = makeUserMessage({ id: 88, text: "还在处理的问题", status: "processing" });
+    const commands = [command(340, "还在处理的问题", forwardTo(LOCAL_ID, "MacBook", 1, "小林", 1, 88), now - 5_000)];
+    installFleet({ local: pmSnapshot(1, "小林", 1, [asked], { ...emptyRouterSlice(), commands }) });
+    await openRouter();
+    await waitFor(() => expect(turns()).toHaveLength(1));
+    expect(await within(turnOf("还在处理的问题")).findByText("Working…")).toBeInTheDocument();
+
+    act(() => {
+      localSocket().push(messageChange(41, "message.created", makeMessage({ id: 89, text: "答完了" })));
+      localSocket().push(messageChange(42, "message.updated", { ...asked, status: "replied", meta: { replyId: 89 } }));
+    });
+    expect(await within(turnOf("还在处理的问题")).findByText("答完了")).toBeInTheDocument();
+    expect(within(turnOf("还在处理的问题")).queryByText("Working…")).toBeNull();
   });
 });
 

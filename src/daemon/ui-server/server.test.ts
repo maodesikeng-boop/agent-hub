@@ -206,6 +206,7 @@ describe("没登录", () => {
     ["PUT", "/api/schedules/1", { enabled: false }],
     ["DELETE", "/api/schedules/1"],
     ["POST", "/api/messages/1/retry"],
+    ["GET", "/api/messages/1/turn-reply"],
     ["POST", "/api/pms/1/renew-session"],
   ];
 
@@ -983,6 +984,26 @@ describe("POST /api/messages/:id/retry 重试失败的消息", () => {
     const res = await call("POST", "/api/messages/12/retry");
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ error: "只有失败的消息能重试", code: "conflict" });
+  });
+});
+
+describe("GET /api/messages/:id/turn-reply 转交问题的正式回复", () => {
+  it("账本有这条消息：回原消息和回复；回复还没有时 reply 是 null", async () => {
+    const request = { ...makeMessage(12, 1, "飞书接入做到哪里了"), sender: "user" as const, status: "replied" as const, meta: { replyId: 13 } };
+    const reply = makeMessage(13, 1, "做到一半");
+    ledger.turnReplies.set(12, { request, reply });
+    const res = await call("GET", "/api/messages/12/turn-reply");
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ request, reply });
+    ledger.turnReplies.set(14, { request: { ...request, id: 14, status: "processing", meta: null }, reply: null });
+    expect((await call("GET", "/api/messages/14/turn-reply")).json()).toMatchObject({ request: { id: 14 }, reply: null });
+  });
+
+  it("账本里没有（不存在、不是项目经理对话里的用户消息）→ 404；编号不是正整数 → 400", async () => {
+    const res = await call("GET", "/api/messages/12/turn-reply");
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ code: "not_found" });
+    for (const id of ["abc", "0", "-1", "1.5", "007"]) expect((await call("GET", `/api/messages/${id}/turn-reply`)).statusCode).toBe(400);
   });
 });
 

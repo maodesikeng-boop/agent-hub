@@ -111,6 +111,7 @@ export function App() {
     avatarKey,
     clearFocus,
     clientForDevice,
+    storeForDevice,
     compact,
     created,
     creating,
@@ -242,6 +243,7 @@ export function App() {
                 draft={drafts.of(ROUTER_DRAFT_KEY)}
                 staging={staging.of(ROUTER_DRAFT_KEY)}
                 clientForDevice={clientForDevice}
+                storeForDevice={storeForDevice}
                 onOpenConversation={openDeviceConversation}
                 onOpenWorker={openDeviceWorker}
                 onManageProviders={openLocalProviders}

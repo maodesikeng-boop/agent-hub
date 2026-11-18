@@ -51,6 +51,7 @@ import { KnifeAvatar } from "./KnifeAvatar.tsx";
 import { RIGHT_RAIL_VISIBLE_ROWS } from "./RightRail.tsx";
 import { RouterDecisionCard } from "./RouterDecisionCard.tsx";
 import { RouterModelPicker } from "./RouterModelPicker.tsx";
+import type { DeviceStoreLookup } from "../forward-reply.ts";
 import { RouterStream } from "./RouterStream.tsx";
 
 const ROUTER_COMMAND_MUTATION_KEY = ["router-command"] as const;
@@ -263,6 +264,7 @@ export function RouterWorkbench({
   draft,
   staging,
   clientForDevice,
+  storeForDevice,
   onOpenConversation,
   onOpenWorker,
   onManageProviders,
@@ -275,6 +277,7 @@ export function RouterWorkbench({
   draft: DraftSlot;
   staging: StagedFiles;
   clientForDevice: (deviceKey: string) => HubClient;
+  storeForDevice: DeviceStoreLookup;
   onOpenConversation: (deviceKey: string, conversationId: ConversationId) => void;
   onOpenWorker: (deviceKey: string, conversationId: ConversationId) => void;
   onManageProviders?: () => void;
@@ -662,6 +665,7 @@ export function RouterWorkbench({
           pendingTurns={pendingTurns}
           hasDecisions={visibleDecisions.length > 0}
           clientForDevice={clientForDevice}
+          storeForDevice={storeForDevice}
           onRetryUnsent={handleRetryUnsent}
           onOpenConversation={onOpenConversation}
           onOpenWorker={onOpenWorker}

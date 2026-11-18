@@ -98,7 +98,6 @@ export const routerTargetOpSchema = z.discriminatedUnion("kind", [
       projectId: opIdSchema.optional(),
       text: opTextSchema,
       attachmentIds: opAttachmentIdsSchema,
-      sourceCommandId: opIdSchema.optional(),
     })
     .strict(),
   z
@@ -773,18 +772,12 @@ export function createRouterTargetRegistry(options: RouterTargetRegistryOptions)
           remoteIds.push(parsedUp.attachment.id);
         }
         // 远端不共享本机 router_commands 自增主键，跨机派发剥离本机 sourceCommandId
-        if (op.kind === "pm.forward") {
-          const { sourceCommandId: _omit, ...rest } = op;
-          forwardedOp = { ...rest, attachmentIds: remoteIds };
-        } else if (op.kind === "worker.start") {
+        if (op.kind === "worker.start") {
           const { sourceCommandId: _omit, ...rest } = op;
           forwardedOp = { ...rest, attachmentIds: remoteIds };
         } else {
           forwardedOp = { ...op, attachmentIds: remoteIds };
         }
-      } else if (op.kind === "pm.forward" && op.sourceCommandId !== undefined) {
-        const { sourceCommandId: _omit, ...rest } = op;
-        forwardedOp = rest;
       } else if (op.kind === "worker.start" && op.sourceCommandId !== undefined) {
         const { sourceCommandId: _omit, ...rest } = op;
         forwardedOp = rest;

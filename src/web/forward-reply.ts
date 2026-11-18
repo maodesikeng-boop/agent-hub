@@ -4,10 +4,17 @@
 // - 只认投递记录里的消息编号（RouterTurnDestination.forwardMessageId）和原消息上的 meta.replyId，不按时间、不按内容猜哪段话是回复。
 // - 近窗里有原消息时以近窗为准；补取的结果只在近窗里没有原消息时用。
 // - 同一台设备、同一个消息编号只补取一次；那台设备重拉快照（断线重连）后在途状态的补取结果作废、重新取。
+import { useQuery } from "@tanstack/react-query";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
 import type { StoreApi } from "zustand";
-import type { MessageId } from "../shared/domain.ts";
-import type { TurnReplyState } from "../shared/turn-reply.ts";
+import { ROUTER_FORWARD_REPLY_MISS_RETRY_MS } from "../shared/limits.ts";
+import type { DeviceKey } from "./devices.ts";
+import type { Message, MessageId } from "../shared/domain.ts";
+import { replyIdOf, turnReplyStateOf } from "../shared/turn-reply.ts";
+import type { TurnReplyState, TurnReplyView } from "../shared/turn-reply.ts";
+import { ApiError } from "./client.ts";
 import type { HubClient } from "./client.ts";
+import { useHubQueryClient } from "./query-client.ts";
 import type { RouterTurnDestination } from "./router-stream.ts";
 import type { ConversationView, HubState } from "./state.ts";
 
@@ -17,13 +24,45 @@ export type ForwardReplyState = TurnReplyState | { kind: "unknown" };
 /** 按设备键找那台设备的状态仓库；设备刚被删时是 null。 */
 export type DeviceStoreLookup = (deviceKey: string) => StoreApi<HubState> | null;
 
+const UNKNOWN: ForwardReplyState = { kind: "unknown" };
+const SILENT: ForwardReplyState = { kind: "silent" };
+const SETTLED_STATUSES: ReadonlySet<Message["status"]> = new Set(["replied", "stopped", "cancelled", "failed"]);
+const noopSubscribe = () => () => {};
+
+/** 消息按编号从小到大：二分找一条，近窗最多 MAX_LIVE_MESSAGES 条，每次重画都找也不贵。 */
+function findById(messages: readonly Message[], id: MessageId): Message | undefined {
+  let lo = 0;
+  let hi = messages.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const m = messages[mid]!;
+    if (m.id === id) return m;
+    if (m.id < id) lo = mid + 1;
+    else hi = mid - 1;
+  }
+  return undefined;
+}
+
 /**
  * 后置：近窗里有 messageId 这条用户消息时返回它的状态；它有 replyId 但那条回复不在近窗里、或近窗里没有这条消息时返回 null（要补取）。
- * view 的 messages 数组没变时，同一个 messageId 返回同一个对象。
+ * 对话里来了无关的新消息，已定的状态对象不变（turnReplyStateOf 按原消息和回复对象缓存）。
  */
 export function forwardReplyOf(view: ConversationView | undefined, messageId: MessageId): TurnReplyState | null {
-  throw new Error("未实现");
+  if (view === undefined) return null;
+  const request = findById(view.messages, messageId);
+  if (request === undefined || request.sender !== "user") return null;
+  const replyId = request.status === "replied" ? replyIdOf(request) : null;
+  if (replyId === null) return turnReplyStateOf(request, null);
+  const reply = findById(view.messages, replyId);
+  return reply === undefined ? null : turnReplyStateOf(request, reply);
 }
+
+type Fetched = { outcome: "ok"; view: TurnReplyView } | { outcome: "missing" } | { outcome: "failed" };
+
+/** 补取结果缓存在 react-query 里，键带设备键：本机和配对设备上编号相同的两条消息互不串。 */
+export const forwardReplyQueryKey = (deviceKey: DeviceKey, messageId: MessageId) => ["router-forward-reply", deviceKey, messageId] as const;
+
+const isSettled = (data: Fetched | undefined) => data?.outcome === "ok" && SETTLED_STATUSES.has(data.view.request.status);
 
 /**
  * 前置：dest.forwardMessageId 不是 null。
@@ -31,5 +70,44 @@ export function forwardReplyOf(view: ConversationView | undefined, messageId: Me
  * 补取返回 404 时是 silent。同样的状态返回同一个对象，不让 memo 的组件白画。
  */
 export function useForwardReply(dest: RouterTurnDestination, stores: DeviceStoreLookup, client: HubClient): ForwardReplyState {
-  throw new Error("未实现");
+  const messageId = dest.forwardMessageId!;
+  const { deviceKey, conversationId } = dest;
+  const qc = useHubQueryClient();
+  const store = stores(deviceKey);
+  const subscribe = useCallback((listener: () => void) => (store === null ? noopSubscribe() : store.subscribe(listener)), [store]);
+  const windowed = useSyncExternalStore(subscribe, () => (store === null ? null : forwardReplyOf(store.getState().conversations[conversationId], messageId)));
+  const needFetch = windowed === null && store !== null;
+
+  const { data } = useQuery(
+    {
+      queryKey: forwardReplyQueryKey(deviceKey, messageId),
+      enabled: needFetch,
+      queryFn: async (): Promise<Fetched> => {
+        try {
+          return { outcome: "ok", view: await client.fetchTurnReply(messageId) };
+        } catch (err) {
+          return err instanceof ApiError && err.status === 404 ? { outcome: "missing" } : { outcome: "failed" };
+        }
+      },
+      // 已经定了的（有回复、已停止、已失败）不再取；没取到、404 只短暂记；还在处理中的每次挂载都重取
+      staleTime: (query) => (isSettled(query.state.data) ? Infinity : query.state.data?.outcome === "ok" ? 0 : ROUTER_FORWARD_REPLY_MISS_RETRY_MS),
+    },
+    qc,
+  );
+
+  // 那台设备断线重连、重拉快照之后，还没定的结果作废重取（断线期间错过的推送不会补发给近窗以外的消息）
+  useEffect(() => {
+    if (store === null || !needFetch || isSettled(data)) return;
+    let open = store.getState().connection === "open";
+    return store.subscribe((state) => {
+      const nowOpen = state.connection === "open";
+      if (nowOpen && !open) void qc.invalidateQueries({ queryKey: forwardReplyQueryKey(deviceKey, messageId) });
+      open = nowOpen;
+    });
+  }, [needFetch, data, store, qc, deviceKey, messageId]);
+
+  if (windowed !== null) return windowed;
+  if (data?.outcome === "ok") return turnReplyStateOf(data.view.request, data.view.reply);
+  if (data?.outcome === "missing") return SILENT;
+  return UNKNOWN;
 }
