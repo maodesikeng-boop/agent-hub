@@ -33,6 +33,7 @@ export * from "./store.ts";
 export * from "./task-graph-compat.ts";
 export * from "./task-graph-skill.ts";
 export * from "./tunnel.ts";
+export * from "./turn-reply.ts";
 export * from "./user-blockers.ts";
 export * from "./vendor-sync.ts";
 export * from "./worker.ts";

@@ -1,6 +1,7 @@
 // 聊天框上传的文件（附件）：存在数据目录的 uploads/（paths.ts 的 uploadsDir），消息的 meta 里记着它们，
 // 发给 agent 的正文里带上每个文件的完整绝对路径，agent 用自己的读文件工具去读（不做图片内容块）。
 // 前后端都用这一个文件认附件、拼正文；接口地址在 api.ts 的 API_PATHS.uploads / upload。
+import type { MessageId } from "./domain.ts";
 import { API_PATHS } from "./api.ts";
 import { MAX_ATTACHMENTS_PER_MESSAGE, MAX_UPLOAD_BYTES } from "./limits.ts";
 import type { FeishuMessageOrigin } from "./feishu.ts";
@@ -23,6 +24,8 @@ export interface Attachment {
  * 驱动确认送达后记录 deliveryConfirmed；尚未送达且没有选择、附件时 meta 是 null。
  */
 export interface UserMessageMeta {
+  /** 项目经理对话里这条消息那一轮的正式回复（shared/turn-reply.ts 的 replyIdOf 读）；没回复、没写文字时没有。 */
+  replyId?: MessageId;
   attachments?: Attachment[];
   workerPick?: WorkerPick;
   /** 服务端驱动确认已交给 agent；执行失败不撤销送达回执，重发时清空。 */

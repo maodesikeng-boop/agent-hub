@@ -311,7 +311,7 @@ function AskCard({
 const NO_DELIVERABLES: readonly Deliverable[] = [];
 
 /** agent 说的一段文字（Markdown）。hub ask 问你的不另挂“等你确定”标签：右栏已经列着，点过去会高亮这一条。 */
-const AgentText = memo(function AgentText({
+export const AgentText = memo(function AgentText({
   message,
   highlighted,
   onAnswerAsk,

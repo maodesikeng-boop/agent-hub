@@ -11,7 +11,10 @@ import {
   type DeviceInfo,
   type DeviceInviteResponse,
   type DevicesResponse,
+  type RouterCommandRecord,
+  type RouterCommandsPage,
   type StateSnapshot,
+  type TurnReplyView,
   type WsServerMessage,
 } from "../../src/shared/index.ts";
 import { Client, LOOPBACK_MAIN, agentTexts, makeEnv, waitUntil, type E2eEnv, type RunningDaemon } from "./harness.ts";
@@ -144,4 +147,103 @@ describe.skipIf(process.platform === "win32")("联机：两台守护进程", () 
     expect(stale.status).toBe(401);
     expect((await a.client.get(devicePath(b.id, API_PATHS.state))).status).toBe(404);
   }, 60_000);
+
+  it("总助转交配对设备上的项目经理：回复经入口按原消息编号取回，相近的两问各答各的，直发的话不混入，第二台掉线时取不到、上线后补齐", async () => {
+    const envA = makeEnv();
+    const envB = makeEnv();
+    envs.push(envA, envB);
+    envA.setScript({ defaultTurn: { steps: [{ text: "本机收到" }] } });
+    envB.setScript({
+      turns: [
+        { steps: [{ text: "飞书接入做到一半：扫码建应用已完成" }] },
+        { steps: [{ text: "飞书接入的 PR 还没合，在审查" }] },
+        { steps: [{ text: "直接对话里的回答" }] },
+      ],
+      defaultTurn: { steps: [{ text: "多余的一轮" }] },
+    });
+    const a = await boot(envA);
+    let b = await boot(envB);
+    const invite = (await (await send(b.client, "POST", API_PATHS.deviceInvites)).json()) as DeviceInviteResponse;
+    expect((await send(a.client, "POST", API_PATHS.devices, { url: invite.url, code: invite.code })).status).toBe(201);
+    await waitUntil("B 确认配对", async () => ((await devices(b.client)).some((d) => d.id === a.id) ? true : undefined));
+
+    const bState = (await (await a.client.get(devicePath(b.id, API_PATHS.state))).json()) as StateSnapshot;
+    const pmId = bState.pms[0]!.id;
+    const conversationId = bState.conversations[0]!.conversation.id;
+    const turnReply = async (client: Client, deviceId: string | null, messageId: number): Promise<{ status: number; view: TurnReplyView | null }> => {
+      const res = await client.get(deviceId === null ? API_PATHS.messageTurnReply(messageId) : devicePath(deviceId, API_PATHS.messageTurnReply(messageId)));
+      return { status: res.status, view: res.status === 200 ? ((await res.json()) as TurnReplyView) : null };
+    };
+    const forward = async (text: string): Promise<number> => {
+      const clientId = crypto.randomUUID();
+      const res = await send(a.client, "POST", API_PATHS.routerCommands, { clientId, text, target: { deviceId: b.id, pmId } });
+      expect(res.status, await res.clone().text()).toBe(200);
+      // 转交成功：投递记录里带着第二台上那条消息的编号
+      return waitUntil("总助记下转交的消息编号", async () => {
+        const page = (await (await a.client.get(API_PATHS.routerCommands)).json()) as RouterCommandsPage;
+        const command = page.commands.find((c: RouterCommandRecord) => c.clientId === clientId);
+        const dest = command?.dispatched?.find((d) => d.ok);
+        return dest?.messageId;
+      }, 15_000);
+    };
+    const settled = (messageId: number) =>
+      waitUntil(`第二台答完消息 ${messageId}`, async () => {
+        const { view } = await turnReply(a.client, b.id, messageId);
+        return view?.request.status === "replied" && view.reply !== null ? view : undefined;
+      }, 20_000);
+
+    // 1. 相近的两问，各转交一次，各自对上自己那一轮
+    const first = await forward("飞书接入做到哪里了");
+    const firstView = await settled(first);
+    expect(firstView.request.text).toBe("飞书接入做到哪里了");
+    expect(firstView.reply!.text).toBe("飞书接入做到一半：扫码建应用已完成");
+    const second = await forward("飞书接入的 PR 合了吗");
+    const secondView = await settled(second);
+    expect(second).not.toBe(first);
+    expect(secondView.request.text).toBe("飞书接入的 PR 合了吗");
+    expect(secondView.reply!.text).toBe("飞书接入的 PR 还没合，在审查");
+    expect(secondView.reply!.id).not.toBe(firstView.reply!.id);
+    expect((await turnReply(a.client, b.id, first)).view!.reply!.text).toBe("飞书接入做到一半：扫码建应用已完成");
+
+    // 2. 直接对第二台项目经理说的话：它自己的一轮，不在总助的转交记录里，也不改前两条的回复
+    const direct = await send(a.client, "POST", devicePath(b.id, API_PATHS.messages(conversationId)), { clientId: crypto.randomUUID(), text: "我直接问一句" });
+    expect(direct.status).toBe(200);
+    const directId = ((await direct.json()) as { messageId: number }).messageId;
+    const directView = await settled(directId);
+    expect(directView.reply!.text).toBe("直接对话里的回答");
+    const commands = ((await (await a.client.get(API_PATHS.routerCommands)).json()) as RouterCommandsPage).commands;
+    const forwarded = commands.flatMap((c) => c.dispatched ?? []).map((d) => d.messageId);
+    expect(forwarded.toSorted()).toEqual([first, second].toSorted());
+    expect(forwarded).not.toContain(directId);
+    expect((await turnReply(a.client, b.id, first)).view!.reply!.id).toBe(firstView.reply!.id);
+
+    // 3. 本机上编号相同的消息是另一条：按设备分开取，互不串
+    const localState = (await (await a.client.get(API_PATHS.state)).json()) as StateSnapshot;
+    const localConversation = localState.conversations[0]!.conversation.id;
+    const localPost = await send(a.client, "POST", API_PATHS.messages(localConversation), { clientId: crypto.randomUUID(), text: "本机的问题" });
+    const localId = ((await localPost.json()) as { messageId: number }).messageId;
+    const localView = await waitUntil("本机答完", async () => {
+      const { view } = await turnReply(a.client, null, localId);
+      return view?.reply === null || view === null ? undefined : view;
+    });
+    expect(localView.reply!.text).toBe("本机收到");
+    expect((await turnReply(a.client, b.id, localId)).view?.request.text).not.toBe("本机的问题");
+
+    // 4. 不是项目经理对话里的用户消息 → 404
+    expect((await turnReply(a.client, b.id, 9_999_999)).status).toBe(404);
+    expect((await turnReply(a.client, b.id, firstView.reply!.id)).status).toBe(404);
+
+    // 5. 第二台掉线：经入口取不到（502 device_offline）；重新上线后同一个编号补齐，回复一字不差
+    expect(await terminate(b.daemon)).toEqual({ code: 0, signal: null });
+    const offline = await turnReply(a.client, b.id, first);
+    expect(offline.status).toBe(502);
+    b = await boot(envB);
+    await waitUntil("A 收到 B 的新网址", async () => ((await devices(a.client)).find((d) => d.id === b.id)?.url === `http://127.0.0.1:${b.daemon.port}` ? true : undefined));
+    const back = await waitUntil("上线后补取到回复", async () => {
+      const { view } = await turnReply(a.client, b.id, first);
+      return view ?? undefined;
+    });
+    expect(back.reply!.id).toBe(firstView.reply!.id);
+    expect(back.reply!.text).toBe("飞书接入做到一半：扫码建应用已完成");
+  }, 120_000);
 });

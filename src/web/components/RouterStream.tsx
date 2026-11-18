@@ -50,6 +50,7 @@ import {
 import { Button } from "../ui/button.tsx";
 import { useMessageEnter, type EnterItem } from "../useMessageEnter.ts";
 import { useStickToBottom } from "../useStickToBottom.ts";
+import type { DeviceStoreLookup } from "../forward-reply.ts";
 import { DeviceScopeOf } from "../device-scope.tsx";
 import { AttachmentList } from "./Attachments.tsx";
 import { Avatar } from "./Avatar.tsx";
@@ -57,6 +58,7 @@ import { CardBody, INLINE_LINK_CLASS } from "./Deliverables.tsx";
 import { KnifeAvatar } from "./KnifeAvatar.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { AgentHead, BUBBLE, CopyButton, SentBody, TEXT_BUTTON, UnsentMark } from "./Messages.tsx";
+import { ForwardReply } from "./ForwardReply.tsx";
 
 const ROUTER_IDENTITY = { name: "Router", avatarKey: 0 } as const;
 
@@ -191,6 +193,8 @@ function DestinationRow({
 const TurnRow = memo(function TurnRow({
   entry,
   multiDevice,
+  clientForDevice,
+  storeForDevice,
   retryPending,
   retryError,
   onRetryCommand,
@@ -200,6 +204,8 @@ const TurnRow = memo(function TurnRow({
 }: {
   entry: RouterTurnEntry;
   multiDevice: boolean;
+  clientForDevice: (deviceKey: string) => HubClient;
+  storeForDevice: DeviceStoreLookup;
   retryPending: boolean;
   retryError: ErrorLike | undefined;
   onRetryCommand: (commandId: RouterCommandId, updatedAt: number) => void;
@@ -321,6 +327,18 @@ const TurnRow = memo(function TurnRow({
                 </div>
               )}
             </div>
+            {entry.destinations.map(
+              (dest) =>
+                dest.forwardMessageId !== null && (
+                  <ForwardReply
+                    key={dest.key}
+                    dest={dest}
+                    stores={storeForDevice}
+                    client={clientForDevice(dest.deviceKey)}
+                    onOpenConversation={onOpenConversation}
+                  />
+                ),
+            )}
           </div>
         )}
       </div>
@@ -574,6 +592,7 @@ export const RouterStream = memo(function RouterStream({
   pendingTurns,
   hasDecisions,
   clientForDevice,
+  storeForDevice,
   onRetryUnsent,
   onOpenConversation,
   onOpenWorker,
@@ -583,6 +602,7 @@ export const RouterStream = memo(function RouterStream({
   pendingTurns: readonly RouterTurnEntry[];
   hasDecisions: boolean;
   clientForDevice: (deviceKey: string) => HubClient;
+  storeForDevice: DeviceStoreLookup;
   onRetryUnsent: (clientId: string) => void;
   onOpenConversation: (deviceKey: string, conversationId: ConversationId) => void;
   onOpenWorker: (deviceKey: string, conversationId: ConversationId) => void;
@@ -957,6 +977,8 @@ export const RouterStream = memo(function RouterStream({
                   key={entry.key}
                   entry={entry}
                   multiDevice={stream.multiDevice}
+                  clientForDevice={clientForDevice}
+                  storeForDevice={storeForDevice}
                   retryPending={retryPending}
                   retryError={retryError}
                   onRetryCommand={handleRetryCommand}

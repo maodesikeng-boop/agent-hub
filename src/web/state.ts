@@ -72,6 +72,11 @@ export interface ConversationView {
   hasMore: boolean;
   /** Worker 对话：快照时刻项目经理对话里指向它的最近一行（selectors.ts 再拿项目经理对话里实时来的新行比）。 */
   workerLine?: ConversationSnapshot["workerLine"];
+  /**
+   * 比 messages 里最早一条还早的消息来了更新、被近窗丢掉的次数（只增不减）。近窗外的消息状态变了，网页只能拿它知道“有变化”，
+   * 想看新状态的（总助里转交的回复）据此重取；重拉快照后从 0 起算（那时由 HubState.snapshotRev 通知）。
+   */
+  outsideRev?: number;
 }
 
 type Phase = "loading" | "ready" | "error" | "unauthorized";
@@ -89,6 +94,8 @@ export interface HubState {
   folders: ProjectFolder[];
   /** 项目经理收到 pm.updated 的次数；资料页据此重新拉性格设定。 */
   personaRev: Record<PmId, number | undefined>;
+  /** 重拉快照（loaded）的次数：快照之前近窗外错过的变化不会补发，靠它让只在近窗外才有的数据（总助里转交的回复）重取。 */
+  snapshotRev: number;
   conversations: Record<ConversationId, ConversationView>;
   sessions: SessionState[];
   health: HealthEntry[];
@@ -132,6 +139,7 @@ export const initialState: HubState = {
   projects: [],
   folders: [],
   personaRev: {},
+  snapshotRev: 0,
   conversations: {},
   sessions: [],
   health: [],
@@ -293,7 +301,8 @@ export function applyChange(state: HubState, change: Change): HubState {
       }
       // 比已带的最早一条还早（快照、实时只带最近一段）：插进来会和往上翻页拉的那一段接不上，留给翻页时拉
       if (view.hasMore && view.messages.length > 0 && message.id < view.messages[0]!.id) {
-        const conversations = advanceWorkerLine(state.conversations, message);
+        const advanced = advanceWorkerLine(state.conversations, message);
+        const conversations = { ...advanced, [message.conversationId]: { ...view, outsideRev: (view.outsideRev ?? 0) + 1 } };
         return { ...nextBase, sessions, conversations, pending: dropConfirmed(state.pending, [message]), retry: dropRetryIfSettled(state.retry, message) };
       }
       const updated = upsertMessage(view.messages, message);
@@ -580,6 +589,7 @@ function fromSnapshot(state: HubState, snapshot: StateSnapshot): HubState {
     ...base,
     phase: "ready",
     seq: snapshot.seq,
+    snapshotRev: state.snapshotRev + 1,
     pms: snapshot.pms,
     projects: snapshot.projects,
     folders: snapshot.folders,

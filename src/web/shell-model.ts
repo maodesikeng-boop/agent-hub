@@ -14,6 +14,7 @@ import type { SidebarGroup, SidebarRouterEntry } from "./components/Sidebar.tsx"
 import type { SettingsDialogSection } from "./components/SettingsDialog.tsx";
 import type { DeviceSettings } from "./settings-model.ts";
 import { useDevices } from "./device-hub.ts";
+import type { DeviceStoreLookup } from "./forward-reply.ts";
 import { LOCAL_DEVICE, conversationKey, deviceKeyOf, deviceNotices, isReadOnly, routeDeviceOf, type DeviceKey } from "./devices.ts";
 import { useServerModelCatalogs } from "./models.tsx";
 import { useHubQueryClient } from "./query-client.ts";
@@ -507,6 +508,14 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   );
   const fleetHub = fleet.hub;
   const clientForDevice = useCallback((deviceKey: string) => fleetHub(deviceKey).client, [fleetHub]);
+  // hub(key) 找不到设备时退回本机：转交回复只认键对得上的那台，设备刚被删就是 null，不拿本机的同号消息顶替
+  const storeForDevice = useCallback<DeviceStoreLookup>(
+    (deviceKey) => {
+      const hub = fleetHub(deviceKey);
+      return hub.key === deviceKey ? hub.store : null;
+    },
+    [fleetHub],
+  );
   const openDeviceWorker = useCallback(
     (deviceKey: string, id: ConversationId) => {
       navigate({ view: "worker", id, ...routeDeviceOf(deviceKey) });
@@ -565,6 +574,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       avatarKey,
       clearFocus,
       clientForDevice,
+      storeForDevice,
       compact,
       created,
       creating,
