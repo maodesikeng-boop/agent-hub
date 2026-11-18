@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AskMeta, Message } from "../../shared/domain.ts";
 import type { FeishuChatId } from "../../shared/feishu.ts";
+import { ASK_MAX_OPTION_CHARS, ASK_MAX_OPTIONS, FEISHU_CARD_MAX_BYTES, MAX_DECISION_CHOICE_CHARS, MAX_DECISION_NOTE_CHARS } from "../../shared/limits.ts";
 import type { RouterDecisionItem, RouterReportItem } from "../../shared/router.ts";
 import {
   decodeFeishuActionValue,
@@ -189,6 +190,48 @@ describe("renderRouterItem", () => {
     expect(callbackButtons(r)).toEqual([]);
     expect(buttons(r).map(textOf)).toEqual(["打开项目群"]);
     expect(allText(r)).toContain("登录页做完了");
+  });
+});
+
+describe("卡片体积", () => {
+  const bytes = (c: FeishuCardJson) => Buffer.byteLength(JSON.stringify(c));
+  const longText = "请看方案对比：\n" + "长文\"内容\\".repeat(4_000) + "\n最后一句";
+  const options = Array.from({ length: ASK_MAX_OPTIONS }, (_, i) => `${i}`.padEnd(ASK_MAX_OPTION_CHARS, "选"));
+  const ask: AskMeta = { needsUser: true, options, recommended: options[3]! };
+  const msg = message(41, longText, ask);
+  const answered = {
+    kind: "answered" as const,
+    chosenOption: "".padEnd(MAX_DECISION_CHOICE_CHARS, "定"),
+    note: "".padEnd(MAX_DECISION_NOTE_CHARS, "注"),
+    byName: "张三",
+  };
+
+  it("正文超长的提问卡扣掉按钮和定案说明后不超过 FEISHU_CARD_MAX_BYTES，按钮一个不少，写明去网页看全文", () => {
+    for (const state of [{ kind: "pending" as const }, answered, { kind: "closed" as const }]) {
+      const c = renderAskCard(msg, ask, state);
+      expect(bytes(c)).toBeLessThanOrEqual(FEISHU_CARD_MAX_BYTES);
+      expect(allText(c)).toContain("去网页看");
+      expect(JSON.stringify(c.body.elements[0])).toContain("请看方案对比");
+    }
+    expect(callbackButtons(renderAskCard(msg, ask, { kind: "pending" }))).toHaveLength(ASK_MAX_OPTIONS);
+  });
+
+  it("总助单聊里引用超长提问卡的拍板项也不超过 FEISHU_CARD_MAX_BYTES，打开项目群按钮还在", () => {
+    const item: RouterDecisionItem = {
+      id: 51, kind: "decision", status: "pending", pmId: 1, projectId: null, conversationId: 1,
+      question: "选哪个？", context: "", options: [], askMessageId: 41, resolution: null, createdAt: 1, updatedAt: 1,
+    };
+    for (const state of [{ kind: "pending" as const }, answered]) {
+      const c = renderRouterItem(item, { message: msg, meta: ask }, state, "oc_pm1" as FeishuChatId);
+      expect(bytes(c)).toBeLessThanOrEqual(FEISHU_CARD_MAX_BYTES);
+      expect(buttons(c).map(textOf)).toContain("打开项目群");
+    }
+  });
+
+  it("没超的正文原样放进卡片，不加提示", () => {
+    const short = message(42, "短问题", ask);
+    expect(renderAskCard(short, ask, { kind: "pending" }).body.elements[0]).toMatchObject({ tag: "markdown", content: "短问题" });
+    expect(allText(renderAskCard(short, ask, { kind: "pending" }))).not.toContain("去网页看");
   });
 });
 

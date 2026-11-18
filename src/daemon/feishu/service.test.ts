@@ -12,6 +12,7 @@ import {
   FEISHU_CARDKIT_BUDGET_PER_SECOND,
   FEISHU_CATCHUP_MAX_MESSAGES,
   FEISHU_CHAT_SENDS_PER_SECOND,
+  FEISHU_CONTROL_RETRY_MS,
   FEISHU_INBOUND_QUEUE_MAX,
   FEISHU_OUTBOUND_QUEUE_MAX,
   FEISHU_STREAM_RENEW_MS,
@@ -29,9 +30,10 @@ import { feishuChatMarker } from "./chats.ts";
 import { FEISHU_GROUP_MSG_SCOPE, FEISHU_REQUIRED_SCOPES } from "./scopes.ts";
 import { FEISHU_AVATARS_DIR } from "./avatars.ts";
 import { createFeishuService, type FeishuService } from "./service.ts";
+import { FeishuSetupError } from "./setup.ts";
 import { createFeishuStore } from "./store.ts";
 import { createFakeFeishu, type FakeFeishu } from "./test-helpers.ts";
-import type { FeishuRawEvent } from "./transport.ts";
+import type { FeishuApiResult, FeishuMethod, FeishuRawEvent } from "./transport.ts";
 
 const OWNER = "ou_owner";
 const GUEST = "ou_guest";
@@ -898,5 +900,121 @@ describe("createFeishuService：断线与补发", () => {
     expect(fake.callsOf("card.element.content").length).toBeLessThan(50);
     expect(fake.callsOf("card.update").some((u) => u.card.data.includes("最终正文")) || cardsSentTo(chatOf(lin.pmId)).some((c) => JSON.stringify(c).includes("最终正文"))).toBe(true);
     expect(postOfAsk(askId)).not.toBeNull();
+  });
+});
+
+describe("createFeishuService：单点失败隔离与流式保护", () => {
+  /** 飞书对符合条件的请求一直回业务错误（卡片过期、已撤回、内容不合规这类，再发也一样）。 */
+  const rejectWhile = (match: (method: FeishuMethod, args: Record<string, unknown>) => boolean, result: FeishuApiResult = { code: 230099, msg: "Failed to create card content, ext=ErrCode: 11310" }) => {
+    const original = fake.call.bind(fake);
+    fake.call = async (method, args) => {
+      if (!match(method, args as unknown as Record<string, unknown>)) return original(method, args);
+      fake.calls.push({ method, args: args as unknown as Record<string, unknown>, at: 0 });
+      return result;
+    };
+  };
+  const waitRetries = async () => {
+    await settle();
+    await new Promise((resolve) => setTimeout(resolve, FEISHU_CONTROL_RETRY_MS * 2 + 200));
+    await settle();
+  };
+  const deliveredTo = (pmId: PmId, text: string) => fake.sent.some((s) => s.chatId === chatOf(pmId) && s.content.includes(text));
+
+  it("飞书拒收一张卡时只放弃这一张：别的群照常收，这个群的水位推过去，不反复重试", async () => {
+    await connect();
+    rejectWhile((method, args) => method === "card.create" && String(args.data).includes("被拒收的提问"));
+    const askId = ledger.hubCall(lin.sessionId, "ask", { text: "被拒收的提问", options: ["要", "不要"] }).data.messageId;
+    await settle();
+    ev(zhou.sessionId, { type: "agent.text", uuid: "zhou-ok", text: "阿周照常回复", at: Date.now() });
+    ev(lin.sessionId, { type: "agent.text", uuid: "lin-after", text: "小林后面的话", at: Date.now() });
+    await waitRetries();
+    expect(deliveredTo(zhou.pmId, "阿周照常回复")).toBe(true);
+    expect(deliveredTo(lin.pmId, "小林后面的话")).toBe(true);
+    expect(store().chatOfTarget({ kind: "pm", pmId: lin.pmId })!.lastMessageId).toBeGreaterThanOrEqual(askId);
+    // 项目群一次、总助单聊一次，之后不再重试
+    expect(fake.callsOf("card.create").filter((c) => c.data.includes("被拒收的提问"))).toHaveLength(2);
+    expect(svc.setup.status().lastError).not.toContain("ErrCode");
+  });
+
+  it("飞书不让再改的待拍板卡（过期、撤回）记成已结算，重连也不再改，不挡别的群", async () => {
+    await connect();
+    const askId = await askInGroupFor(lin);
+    const post = postOfAsk(askId);
+    rejectWhile((method, args) => method === "card.update" && args.card_id === post.cardId, { code: 200850, msg: "card is expired" });
+    ledger.answerAsk(askId, { clientId: "web-late", choice: "要" });
+    ev(zhou.sessionId, { type: "agent.text", uuid: "zhou-ok", text: "阿周照常回复", at: Date.now() });
+    await waitRetries();
+    expect(postOfAsk(askId).state).toBe("card_settled");
+    expect(deliveredTo(zhou.pmId, "阿周照常回复")).toBe(true);
+    fake.handlers!.onConnected();
+    await settle();
+    expect(fake.callsOf("card.update").filter((u) => u.card_id === post.cardId)).toHaveLength(1);
+  });
+
+  it("对齐群（建群慢）期间正在流式的回复照常推，一段回复只有一张卡", async () => {
+    await connect();
+    const chat = chatOf(lin.pmId);
+    const original = fake.call.bind(fake);
+    fake.call = async (method, args) => {
+      if (method === "chat.create") await new Promise((resolve) => setTimeout(resolve, 80));
+      return original(method, args);
+    };
+    running(lin.sessionId);
+    ev(lin.sessionId, { type: "turn.started", at: Date.now() });
+    ev(lin.sessionId, { type: "agent.text_delta", delta: "前半截", at: Date.now() });
+    await settle();
+    ledger.createPm({ name: "小美", mode: "manage_only", persona: "" });
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    ev(lin.sessionId, { type: "agent.text_delta", delta: "中半截", at: Date.now() });
+    await settle();
+    ev(lin.sessionId, { type: "agent.text", uuid: "lin-1", text: "前半截中半截全文完", at: Date.now() });
+    await settle();
+    expect(fake.sent.filter((s) => s.chatId === chat)).toHaveLength(1);
+    const updates = fake.callsOf("card.update").map((u) => cardJsonOf(u.card.data).body.elements[0]!.content);
+    expect(updates).toEqual(["前半截中半截全文完"]);
+  });
+
+  it("重连补发时还在写的那一轮不收尾：流式卡留着，落库后定稿在同一张卡上", async () => {
+    await connect();
+    const chat = chatOf(lin.pmId);
+    running(lin.sessionId);
+    ev(lin.sessionId, { type: "turn.started", at: Date.now() });
+    ev(lin.sessionId, { type: "agent.text_delta", delta: "写到一半", at: Date.now() });
+    await settle();
+    fake.handlers!.onDisconnected("网络抖了一下");
+    fake.handlers!.onConnected();
+    await settle();
+    ev(lin.sessionId, { type: "agent.text", uuid: "lin-2", text: "写到一半，写完了", at: Date.now() });
+    await settle();
+    expect(fake.sent.filter((s) => s.chatId === chat)).toHaveLength(1);
+    expect(fake.callsOf("card.update").map((u) => cardJsonOf(u.card.data).body.elements[0]!.content)).toEqual(["写到一半，写完了"]);
+  });
+
+  it("重连后总助单聊最多补 FEISHU_CATCHUP_MAX_MESSAGES 条，更早的发一行提示", async () => {
+    await connect();
+    const chat = routerChat();
+    fake.handlers!.onDisconnected("网络断了");
+    for (let i = 0; i < FEISHU_CATCHUP_MAX_MESSAGES + 3; i++) ledger.hubCall(lin.sessionId, "router.report", { summary: `离线简报${i}` });
+    await settle();
+    fake.handlers!.onConnected();
+    await settle();
+    expect(fake.callsOf("card.create").filter((c) => c.data.includes("离线简报"))).toHaveLength(FEISHU_CATCHUP_MAX_MESSAGES);
+    expect(fake.sent.some((s) => s.chatId === chat && s.content.includes("还有 3 条"))).toBe(true);
+    fake.handlers!.onConnected();
+    await settle();
+    expect(fake.callsOf("card.create").filter((c) => c.data.includes("离线简报"))).toHaveLength(FEISHU_CATCHUP_MAX_MESSAGES);
+  });
+
+  it("凭证验不过、扫码失败时给人看的话不带飞书或网络的原文", async () => {
+    fake.failNext["bot.info"] = { code: 1663, msg: "raw english detail from open platform" };
+    const error = await svc.setup.saveCredentials({ brand: "feishu", appId: "cli_manual", appSecret: "secret" }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(FeishuSetupError);
+    expect((error as Error).message).not.toContain("raw english");
+    await svc.close();
+    svc = makeService({ register: async () => { throw new Error("socket hang up 10.0.0.1:443"); } });
+    await svc.start();
+    await svc.setup.startRegistration();
+    await vi.waitFor(() => expect(svc.setup.status().lastError).not.toBeNull());
+    expect(svc.setup.status().lastError).not.toContain("socket");
   });
 });
