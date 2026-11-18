@@ -561,6 +561,71 @@ describe("selectors", () => {
     expect(isWaitingForQuota(null)).toBe(false);
   });
 
+  it("真人发消息（pendingAdd / message.created）、点重试（retryStart）、项目经理发给 Worker（sender pm）撤掉会话旧 rejected；wakeup 与系统消息保留；未限额时 sessions 引用不变", () => {
+    const rejected = {
+      status: "rejected",
+      resetsAt: 1_900_000_000,
+      windows: { five_hour: { utilization: 1, resetsAt: 1_900_000_000, status: "rejected" } },
+    };
+    const cleared = {
+      ...rejected,
+      status: "allowed",
+      windows: { five_hour: { ...rejected.windows.five_hour, status: "allowed" } },
+    };
+    const base = loaded({
+      seq: 10,
+      conversations: [
+        makeConvSnapshot([makeUserMessage({ id: 5, conversationId: 1, sessionId: 2, status: "failed", failureReason: "rate_limit" })], {
+          conversation: { id: 1, pmId: 1 },
+        }),
+      ],
+      sessions: [
+        makeSession({ sessionId: 1, conversationId: 1, generation: 1, rateLimit: rejected }),
+        makeSession({ sessionId: 2, conversationId: 1, generation: 2, rateLimit: rejected }),
+      ],
+    });
+
+    const afterPending = reducer(base, {
+      type: "pendingAdd",
+      pending: { clientId: "c1", conversationId: 1, text: "继续", attachments: [], phase: "sending", createdAt: 100 },
+    });
+    expect(sessionOf(afterPending, 1)?.rateLimit).toEqual(cleared);
+
+    const afterRetry = reducer(base, { type: "retryStart", messageId: 5 });
+    expect(sessionOf(afterRetry, 1)?.rateLimit).toEqual(cleared);
+
+    const afterPmSend = applyChange(
+      base,
+      messageChange(11, "message.created", makeMessage({ id: 6, conversationId: 1, sessionId: 2, sender: "pm", status: "queued", text: "接着做" })),
+    );
+    expect(sessionOf(afterPmSend, 1)?.rateLimit).toEqual(cleared);
+
+    const afterWakeup = applyChange(
+      base,
+      messageChange(11, "message.created", makeUserMessage({ id: 7, conversationId: 1, sessionId: 2, status: "queued", meta: { wakeup: true } })),
+    );
+    expect(sessionOf(afterWakeup, 1)?.rateLimit).toEqual(rejected);
+
+    const afterSystem = applyChange(
+      base,
+      messageChange(11, "message.created", makeSystemMessage({ id: 8, conversationId: 1, sessionId: 2, status: "queued" })),
+    );
+    expect(sessionOf(afterSystem, 1)?.rateLimit).toEqual(rejected);
+
+    const afterRequeued = applyChange(
+      base,
+      messageChange(11, "message.updated", makeUserMessage({ id: 5, conversationId: 1, sessionId: 2, status: "queued" })),
+    );
+    expect(sessionOf(afterRequeued, 1)?.rateLimit).toEqual(rejected);
+
+    const normal = loaded({ seq: 10, sessions: [makeSession({ sessionId: 2, conversationId: 1 })] });
+    const normalAfterPending = reducer(normal, {
+      type: "pendingAdd",
+      pending: { clientId: "c2", conversationId: 1, text: "你好", attachments: [], phase: "sending", createdAt: 100 },
+    });
+    expect(normalAfterPending.sessions).toBe(normal.sessions);
+  });
+
   it("listConversations：每个项目经理一行，用它的名字；项目按对话找，文件夹主文件夹在前；按最后一条消息排序", () => {
     const s = loaded({
       pms: [makePm({ id: 1, name: "小林" }), makePm({ id: 2, name: "阿周" })],

@@ -9,6 +9,7 @@ import { ConversationNotFoundError } from "../../shared/ledger.ts";
 import { MIN_TOOL_STEP_VISIBLE_MS, SNAPSHOT_RECENT_MESSAGES } from "../../shared/limits.ts";
 import type { ConversationId, MessageId, MessageStatus, SessionId } from "../../shared/domain.ts";
 import { enqueueAction, getAction, listActions, setActionStatus } from "../actions/index.ts";
+import { createSessionSendHandler } from "../handlers.ts";
 import { createSessionStore } from "../store/index.ts";
 import type { Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
@@ -448,6 +449,77 @@ describe("applyDriverEvent", () => {
       ev({ type: "rate_limit", at: 3, info });
       ev({ type: "message.processing", at: 4, messageIds: [second] });
       expect(sessionStates().at(-1)!.rateLimit).toEqual(info);
+    });
+
+    it("未到 resetsAt 时真人手动发消息（postUserMessage）：立即撤掉旧 rejected、推 session.status，session.send 直接拉起 driver.send", async () => {
+      const first = post("c1", "开始做");
+      const rejected = {
+        status: "rejected",
+        resetsAt: 10_800,
+        windows: { five_hour: { utilization: 1, resetsAt: 10_800, status: "rejected" } },
+      };
+      ev({ type: "message.delivered", at: 1, messageIds: [first] });
+      setSession({ rateLimit: rejected });
+      ev({ type: "rate_limit", at: 2, info: rejected });
+      ev({ type: "turn.ended", at: 3, ok: false, interrupted: false, messageIds: [first], durationMs: null, error: { subtype: "failed", message: "You've hit your 5-hour limit · resets 7:40pm (Asia/Shanghai)" } });
+      changes = [];
+
+      now = 2_000;
+      const second = post("c2", "继续");
+      const expectedCleared = {
+        ...rejected,
+        status: "allowed",
+        windows: { five_hour: { ...rejected.windows.five_hour, status: "allowed" } },
+      };
+      expect(createSessionStore(db).get(sessionId)!.rateLimit).toEqual(expectedCleared);
+      expect(sessionStates().at(-1)).toMatchObject({ sessionId, rateLimit: expectedCleared });
+
+      const send = vi.fn(async () => {
+        ev({ type: "message.delivered", at: 4, messageIds: [second] });
+        return { kind: "written" as const };
+      });
+      const actionRow = listActions(db).find((a) => a.type === "session.send" && a.params.messageId === second)!;
+      if (actionRow.type !== "session.send") throw new Error("expected session.send");
+      const res = await createSessionSendHandler({
+        driver: { start: vi.fn(), send, end: vi.fn() },
+        ledger,
+        sessions: createSessionStore(db),
+        tokens: { revoke: vi.fn() },
+        now: () => now,
+      })(actionRow);
+      expect(res).toEqual({ kind: "done" });
+      expect(send).toHaveBeenCalledTimes(1);
+    });
+
+    it("未到 resetsAt 时真人点重试（retryMessage）：立即撤掉旧 rejected、推 session.status，session.send 直接拉起 driver.send", async () => {
+      const first = post("c1", "开始做");
+      const rejected = { status: "rejected", resetsAt: 10_800, windows: {} };
+      ev({ type: "message.delivered", at: 1, messageIds: [first] });
+      setSession({ rateLimit: rejected });
+      ev({ type: "rate_limit", at: 2, info: rejected });
+      ev({ type: "turn.ended", at: 3, ok: false, interrupted: false, messageIds: [first], durationMs: null, error: { subtype: "failed", message: "rate_limit" } });
+      changes = [];
+
+      now = 2_000;
+      ledger.retryMessage(first);
+      expect(createSessionStore(db).get(sessionId)!.rateLimit).toBeNull();
+      expect(sessionStates().at(-1)).toMatchObject({ sessionId, rateLimit: null });
+
+      const send = vi.fn(async () => {
+        ev({ type: "message.delivered", at: 4, messageIds: [first] });
+        return { kind: "written" as const };
+      });
+      const actionRow = listActions(db).find((a) => a.type === "session.send" && a.params.messageId === first)!;
+      if (actionRow.type !== "session.send") throw new Error("expected session.send");
+      const res = await createSessionSendHandler({
+        driver: { start: vi.fn(), send, end: vi.fn() },
+        ledger,
+        sessions: createSessionStore(db),
+        tokens: { revoke: vi.fn() },
+        now: () => now,
+      })(actionRow);
+      expect(res).toEqual({ kind: "done" });
+      expect(send).toHaveBeenCalledTimes(1);
     });
   });
 

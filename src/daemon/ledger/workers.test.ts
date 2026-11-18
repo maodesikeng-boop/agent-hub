@@ -16,6 +16,7 @@ import { MAX_SETUP_COMMAND_BYTES, MAX_TASK_BYTES, MAX_WORKER_TITLE_CHARS, SETUP_
 import { projectWorktreesDir, workerWorktreePath } from "../../shared/paths.ts";
 import { REPORT_END, REPORT_START, workerBranchName } from "../../shared/worker.ts";
 import { listActions } from "../actions/index.ts";
+import { createSessionSendHandler } from "../handlers.ts";
 import { buildLaunchPrompt, SETUP_RECEIPT_NOTE, setupNote } from "../prompt.ts";
 import { createSessionStore } from "../store/index.ts";
 import type { Db } from "../store/index.ts";
@@ -929,6 +930,100 @@ describe("打回", () => {
     expectLedgerError(() => hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "/model opus" }), "invalid", /资料页/);
     expect(tableCounts()).toEqual(before);
     expect(hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "/compact" }).data.messageId).toBeGreaterThan(0);
+  });
+
+  it("Worker 撞上限额未到 resetsAt 时，项目经理调 worker.send 或用户直接发消息：立即撤掉旧 rejected、推 session.status，session.send 直接拉起进程；账本代发唤醒（wakeup）仍按 resetsAt 冷却等待", async () => {
+    const worker = start().data.worker;
+    const sessionId = workerSessionId(worker.id);
+    const firstId = taskMessage(worker).id;
+    const rejected = {
+      status: "rejected",
+      resetsAt: 10_800,
+      windows: { five_hour: { utilization: 1, resetsAt: 10_800, status: "rejected" } },
+    };
+    const expectedCleared = {
+      ...rejected,
+      status: "allowed",
+      windows: { five_hour: { ...rejected.windows.five_hour, status: "allowed" } },
+    };
+
+    ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [firstId], at: now });
+    createSessionStore(db).update(sessionId, { rateLimit: rejected });
+    ledger.applyDriverEvent(sessionId, { type: "rate_limit", info: rejected, at: now });
+    ledger.applyDriverEvent(sessionId, {
+      type: "turn.ended",
+      ok: false,
+      interrupted: false,
+      messageIds: [firstId],
+      durationMs: 10,
+      at: now,
+      error: { subtype: "failed", message: "You've hit your 5-hour limit · resets 7:40pm (Asia/Shanghai)" },
+    });
+    changes = [];
+
+    now = 2_000;
+    const pmSent = hub(lin.sessionId, "worker.send", { workerId: worker.id, text: "额度已恢复，继续" }).data.messageId;
+    expect(sessionRow(sessionId).rateLimit).toEqual(expectedCleared);
+    const pushedAfterPmSend = changes.flatMap((c) => (c.type === "session.status" && c.data.session.sessionId === sessionId ? [c.data.session] : []));
+    expect(pushedAfterPmSend.at(-1)).toMatchObject({ sessionId, rateLimit: expectedCleared });
+
+    const sendDriver = vi.fn(async (_sid: number, opts: { messageIds: readonly number[] }) => {
+      ledger.applyDriverEvent(sessionId, { type: "message.delivered", messageIds: [...opts.messageIds], at: now });
+      return { kind: "written" as const };
+    });
+    const sendHandler = createSessionSendHandler({
+      driver: { start: vi.fn(), send: sendDriver, end: vi.fn() },
+      ledger,
+      sessions: createSessionStore(db),
+      tokens: { revoke: vi.fn() },
+      now: () => now,
+    });
+    const pmSendAction = listActions(db).find((a) => a.type === "session.send" && a.params.messageId === pmSent)!;
+    if (pmSendAction.type !== "session.send") throw new Error("expected session.send");
+    expect(await sendHandler(pmSendAction)).toEqual({ kind: "done" });
+    expect(sendDriver).toHaveBeenCalledTimes(1);
+
+    createSessionStore(db).update(sessionId, { rateLimit: rejected });
+    ledger.applyDriverEvent(sessionId, { type: "rate_limit", info: rejected, at: now });
+    ledger.applyDriverEvent(sessionId, {
+      type: "turn.ended",
+      ok: false,
+      interrupted: false,
+      messageIds: [pmSent],
+      durationMs: 10,
+      at: now,
+      error: { subtype: "failed", message: "You've hit your 5-hour limit · resets 7:40pm (Asia/Shanghai)" },
+    });
+    changes = [];
+
+    now = 3_000;
+    const userSent = ledger.postUserMessage({ conversationId: worker.workerConversationId, clientId: "user-continue", text: "继续" }).messageId;
+    expect(sessionRow(sessionId).rateLimit).toEqual(expectedCleared);
+    const pushedAfterUserSend = changes.flatMap((c) => (c.type === "session.status" && c.data.session.sessionId === sessionId ? [c.data.session] : []));
+    expect(pushedAfterUserSend.at(-1)).toMatchObject({ sessionId, rateLimit: expectedCleared });
+
+    const userSendAction = listActions(db).find((a) => a.type === "session.send" && a.params.messageId === userSent)!;
+    if (userSendAction.type !== "session.send") throw new Error("expected session.send");
+    expect(await sendHandler(userSendAction)).toEqual({ kind: "done" });
+    expect(sendDriver).toHaveBeenCalledTimes(2);
+
+    createSessionStore(db).update(lin.sessionId, { rateLimit: rejected });
+    ledger.applyDriverEvent(lin.sessionId, { type: "rate_limit", info: rejected, at: now });
+    const askId = ledger.hubCall(lin.sessionId, "ask", { text: "确认发布吗？", options: ["发", "不发"] }).data.messageId;
+    const wakeId = ledger.answerAsk(askId, { clientId: "ans-1", choice: "发" }).messageId!;
+    expect(sessionRow(lin.sessionId).rateLimit).toEqual(rejected);
+    const wakeAction = listActions(db).find((a) => a.type === "session.send" && a.params.messageId === wakeId)!;
+    if (wakeAction.type !== "session.send") throw new Error("expected session.send");
+    const wakeDriver = vi.fn(async () => ({ kind: "written" as const }));
+    const pmHandler = createSessionSendHandler({
+      driver: { start: vi.fn(), send: wakeDriver, end: vi.fn() },
+      ledger,
+      sessions: createSessionStore(db),
+      tokens: { revoke: vi.fn() },
+      now: () => now,
+    });
+    expect(await pmHandler(wakeAction)).toMatchObject({ kind: "later", reason: "rate_limited" });
+    expect(wakeDriver).not.toHaveBeenCalled();
   });
 });
 

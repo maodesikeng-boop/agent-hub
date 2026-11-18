@@ -202,16 +202,42 @@ describe("session.send 处理函数", () => {
     await expect(createSessionSendHandler(d)(sendAction())).rejects.toBeInstanceOf(DriverError);
   });
 
-  it("额度用完 → later 到恢复之后，不调 driver", async () => {
-    const resetsAt = NOW / 1000 + 60;
-    const { d, send } = deps({ rateLimit: { status: "rejected", resetsAt, windows: {} } });
-    expect(await createSessionSendHandler(d)(sendAction())).toEqual({ kind: "later", delayMs: 61_000, reason: "rate_limited" });
-    expect(send).not.toHaveBeenCalled();
+  it("真人主动发消息（!isLedgerWakeup）与项目经理 worker.send（sender pm）：即使旧 resetsAt 未到期也直接调 driver.send，不压着", async () => {
+    const rateLimit = { status: "rejected", resetsAt: NOW / 1000 + 3600, windows: {} };
+    for (const m of [
+      message({ sender: "user", meta: null, text: "继续" }),
+      message({ sender: "user", meta: { origin: { chatType: "p2p", chatId: "oc_1", openId: "ou_1", senderName: "张三" } }, text: "继续" }),
+      message({ workerId: 3, sender: "pm", meta: null, text: "继续" }),
+    ]) {
+      const { d, send, getMessage } = deps({ rateLimit });
+      getMessage.mockReturnValueOnce(m).mockReturnValueOnce({ ...m, status: "delivered" });
+      expect(await createSessionSendHandler(d)(sendAction())).toEqual({ kind: "done" });
+      expect(send).toHaveBeenCalledTimes(1);
+    }
   });
 
-  it("额度很久以后才恢复：最多推迟 5 分钟再看", async () => {
-    const { d } = deps({ rateLimit: { status: "rejected", resetsAt: NOW / 1000 + 3600, windows: {} } });
-    expect(await createSessionSendHandler(d)(sendAction())).toMatchObject({ kind: "later", delayMs: 300_000 });
+  it("系统消息、账本代发唤醒（isLedgerWakeup）、重启恢复与退避重试：额度用完时 later 到恢复之后，不调 driver", async () => {
+    const resetsAt = NOW / 1000 + 60;
+    const rateLimit = { status: "rejected", resetsAt, windows: {} };
+    for (const [m, act] of [
+      [message({ sender: "system", meta: { event: "schedule.run", scheduleId: 1, name: "早报" } }), action("session.send", { sessionId: 1, messageId: 7, source: "system" })],
+      [message({ sender: "user", meta: { wakeup: true } }), sendAction()],
+      [message({ status: "processing" }), sendAction({ resend: true })],
+      [message({ status: "processing" }), action("session.send", { sessionId: 1, messageId: 7, source: "user", resend: true, recovery: true })],
+      [message(), { ...sendAction(), attempts: 1 }],
+    ] as const) {
+      const { d, send } = deps({ message: m, rateLimit });
+      expect(await createSessionSendHandler(d)(act)).toEqual({ kind: "later", delayMs: 61_000, reason: "rate_limited" });
+      expect(send).not.toHaveBeenCalled();
+    }
+  });
+
+  it("自动唤醒在额度很久以后才恢复时：最多推迟 5 分钟再看", async () => {
+    const { d } = deps({
+      message: message({ sender: "user", meta: { wakeup: true } }),
+      rateLimit: { status: "rejected", resetsAt: NOW / 1000 + 3600, windows: {} },
+    });
+    expect(await createSessionSendHandler(d)(sendAction())).toMatchObject({ kind: "later", delayMs: 300_000, reason: "rate_limited" });
   });
 
   it("额度快用完（allowed_warning）、或者恢复时间已经过了：照常发", async () => {
