@@ -248,6 +248,8 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
   let files: FeishuFileService | null = null;
   let secrets: FeishuSecrets | null = null;
   let linkUp = false;
+  /** 长连接上次断开的时刻；连上后清空，重连时据此记断了多久。 */
+  let downSince: number | null = null;
   let authFailed = false;
   let lastError: string | null = null;
   let missing: string[] = [];
@@ -623,6 +625,7 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     transport = null;
     files = null;
     linkUp = false;
+    downSince = null;
     if (retryControl !== null) clearTimeout(retryControl);
     retryControl = null;
     for (const [id, slot] of streams) dropStream(id, slot);
@@ -640,6 +643,8 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
   };
 
   const onConnected = () => {
+    if (downSince !== null) log(`飞书：长连接已重连，断了 ${Math.round((now() - downSince) / 1000)} 秒`);
+    downSince = null;
     linkUp = true;
     directory.markAllStale();
     if (retryControl !== null) clearTimeout(retryControl);
@@ -659,6 +664,10 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
         onCardAction: (raw) => onRawCardAction(raw),
         onConnected,
         onDisconnected: (reason) => {
+          if (downSince === null) {
+            downSince = now();
+            log(`飞书：长连接断了：${reason}`);
+          }
           linkUp = false;
           lastError = reason;
           contexts.clearAll();

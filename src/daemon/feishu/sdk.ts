@@ -3,11 +3,12 @@
 // 消息正文用 SDK 导出的 normalize 转成 markdown；开放接口统一走 Client.request（SDK 自己换取、续期 tenant_access_token），
 // 上传、下载走 SDK 的 im.v1.image / file / messageResource；长连接是 WSClient + EventDispatcher（卡片回调 card.action.trigger 同一条连接）。
 // 官方 HTTP 实例（defaultHttpInstance）不设超时，这里包一层按请求补上（withTimeouts）。
+// WSClient 默认不查心跳、握手不限时，半开的连接会一直假活：这里开官方的心跳看门狗（wsConfig.pingTimeout）和握手超时。
 import { createReadStream } from "node:fs";
 import type { Readable } from "node:stream";
 import * as lark from "@larksuiteoapi/node-sdk";
 import type { FeishuBrandName } from "../../shared/feishu.ts";
-import { FEISHU_HTTP_TIMEOUT_MS, FEISHU_TRANSFER_TIMEOUT_MS } from "../../shared/limits.ts";
+import { FEISHU_HTTP_TIMEOUT_MS, FEISHU_TRANSFER_TIMEOUT_MS, FEISHU_WS_HANDSHAKE_TIMEOUT_MS, FEISHU_WS_PING_TIMEOUT_S } from "../../shared/limits.ts";
 import type { FeishuAppAddons, FeishuAppPreset } from "./scopes.ts";
 import {
   FEISHU_RATE_LIMIT_CODES,
@@ -276,6 +277,8 @@ export function createFeishuSdkTransport(options: FeishuSdkOptions): FeishuTrans
         logger,
         loggerLevel: lark.LoggerLevel.warn,
         autoReconnect: true,
+        handshakeTimeoutMs: FEISHU_WS_HANDSHAKE_TIMEOUT_MS,
+        wsConfig: { pingTimeout: FEISHU_WS_PING_TIMEOUT_S },
         onReady: () => handlers.onConnected(),
         onReconnected: () => handlers.onConnected(),
         onReconnecting: () => handlers.onDisconnected("长连接断了，正在重连"),

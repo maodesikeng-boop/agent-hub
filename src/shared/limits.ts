@@ -1122,7 +1122,7 @@ export const FEISHU_HTTP_TIMEOUT_MS = 30_000;
 export const FEISHU_TRANSFER_TIMEOUT_MS = 180_000;
 /**
  * 飞书长连接（官方 WSClient）的心跳看门狗：发出 ping 后这么多秒没收到任何帧就断开重连。
- * 不设时半开的假活连接（网络切换、梯子、NAT 回收）要等 TCP 自己报错才发现，期间入站事件全丢，只能等飞书几分钟后重推。
+ * 不设时半开的假活连接（网络切换、梯子、NAT 回收）要等 TCP 自己报错才发现，期间入站事件送不到，要等飞书几分钟后重推。
  */
 export const FEISHU_WS_PING_TIMEOUT_S = 10;
 /** 长连接握手超时：代理、NAT 卡住时放弃这次握手进重试，不让连接一直挂着。 */
