@@ -254,6 +254,13 @@
 - `FeishuCliIo` 多一个 `sleep`（等扫码时轮询状态的间隔，测试换成立刻返回）。
 - `cards.ts` 多一个 `renderTextCard`（总助指令结果、网页消息的镜像），以及 `feishuCardRefOf`、`feishuAskOptions`、`feishuCardStateOf`、`feishuChatAppLink` 几个由账本现状算卡片的小函数。
 - 水位 0 表示“这个群从头开始投影、还没发过东西”，和 `null`（还没开始记）不同：新建的空群也能补发离线期间的消息。
+- 审查后的调整（PR #350 审查 FAIL 的六项）：
+  - 卡片点击只认本群发出的卡：按 `action.messageId` 查 `feishu_posts`，必须是这个群的、卡上的引用和本地记录一致、目标消息归这个群的项目经理；群归档、项目经理删掉或项目不再进行时一律回“已过期”。总助拍板项只有主人能点，停止按钮只认这一轮正在流式的那张卡。
+  - 分块和流式前缀按字数和转成 JSON 后的字节数一起算（`FEISHU_CARD_MARKDOWN_JSON_BYTES`），补的围栏只照抄有上限的记号和语言名，保证每段至少前进一个字；发送前再按 `FEISHU_CARD_MAX_BYTES` 核一遍。
+  - 流式状态机多一个 `open_failed`：建卡失败回 `idle`，已经落库的那段直接发普通定稿卡。回 `idle` 即清计时器、删状态；群解散、换群时清掉旧群的流式状态，定稿前核对群没换。
+  - 总助单聊的补发不再用两个编号水位，改成 `feishu_router_events`：账本写总助卡片、指令完成时由触发器在同一事务里按完成顺序记一行，发出去后删掉并推进 `last_router_event_id`。离线期间定案的总助卡按 `getRouterItem` 查现状改掉（快照只含待拍板的）。
+  - 定案人署名存进 `feishu_decisions`，在账本定案的同一事务里写（`answerAsk`、`resolveRouterItem`、`decideTaskNode` 多一个可选的写入回调），先成功的点击为准；同一次点击重投按 `clientId`（卡片回调的 token 摘要）幂等。
+  - 进出队列都按条数封顶；建群对齐和断线补发不进队列，只记标记，满载时不丢，失败隔 `FEISHU_CONTROL_RETRY_MS` 重试；出站排不进时改从账本按水位整段补发。认回已有的群时水位初始化成当前最新消息。
 - 管理 socket 的客户端从 `src/tunnel/main.ts` 抽到 `src/tunnel/admin-client.ts`，隧道和飞书命令共用；`/feishu/*` 路由挂在 `daemon/tunnel/admin.ts`，请求体校验和界面服务共用 `daemon/feishu/setup.ts` 里的 zod schema。
 
 ## 验收方法

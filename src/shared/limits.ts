@@ -1053,6 +1053,13 @@ export const PM_CAPABILITY_APPS_CACHE_MAX_BYTES = 16 * 1024 * 1024;
 // ---- 接入飞书（docs/feishu-design.md 的性能一节） ----
 /** 一张卡片正文最多多少字：卡片 ≤ 30 KB，中文 UTF-8 每字 3 字节约 10,000 字，留出按钮和 JSON 的余量。超过的续到新卡。 */
 export const FEISHU_CARD_MAX_CHARS = 8_000;
+/** 飞书一张卡片序列化后的体积上限（字节），发送前按它核一遍。 */
+export const FEISHU_CARD_MAX_BYTES = 30_000;
+/** 一张卡里正文转成 JSON 字符串后最多多少字节：余下的留给标题、摘要、按钮和流式配置。 */
+export const FEISHU_CARD_MARKDOWN_JSON_BYTES = FEISHU_CARD_MAX_BYTES - 1_000;
+/** 分块时补的代码围栏：记号最长几个字符、语言名最长几个字符，超出的不照抄，免得补的围栏把正文挤没。 */
+export const FEISHU_FENCE_MARKER_MAX_CHARS = 16;
+export const FEISHU_FENCE_INFO_MAX_CHARS = 32;
 /** 流式卡片两次推全文的最小间隔：每张卡每秒约 3 次，低于飞书每张卡 10 次/秒。 */
 export const FEISHU_STREAM_FLUSH_MS = 300;
 /** 流式卡片打字机的速度（飞书默认值，写死免得各端默认不同）：每隔多少毫秒出几个字。 */
@@ -1092,6 +1099,8 @@ export const FEISHU_FILE_MAX_BYTES = 30 * 1024 * 1024;
 /** 进、出队列各最多排几件：进的满了先丢成员和改名事件（重连对账会补回），出的满了先合并流式推送。 */
 export const FEISHU_INBOUND_QUEUE_MAX = 200;
 export const FEISHU_OUTBOUND_QUEUE_MAX = 500;
+/** 建群对齐、断线补发失败后隔多久再试（满载时也靠它从账本补回）。 */
+export const FEISHU_CONTROL_RETRY_MS = 1_000;
 /** state/feishu-secrets.json 的权限，和 state/ui-token 一样。 */
 export const FEISHU_SECRETS_FILE_MODE = 0o600;
 /** 群名最多几个字（飞书建议 ≤ 60）。 */

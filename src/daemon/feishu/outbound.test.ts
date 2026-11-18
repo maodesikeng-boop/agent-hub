@@ -1,3 +1,4 @@
+import { renderReplyCard } from "./cards.ts";
 import { describe, expect, it } from "vitest";
 import type { Change } from "../../shared/api.ts";
 import type { Message, SessionState } from "../../shared/domain.ts";
@@ -179,6 +180,16 @@ describe("splitFeishuMarkdown", () => {
     for (const c of chunks) expect([...c].length).toBeLessThanOrEqual(FEISHU_CARD_MAX_CHARS);
     for (const c of chunks.slice(0, -1)) expect(c.endsWith("\n\n")).toBe(true);
     expect(chunks.join("")).toBe(text);
+  });
+
+  it("超长围栏和 JSON 转义文字分块后，每张卡的序列化体积都在上限内", () => {
+    const text = `\`\`\`txt\n${"😀\u0000".repeat(FEISHU_CARD_MAX_CHARS)}\n\`\`\``;
+    const chunks = splitFeishuMarkdown(text);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect([...chunk].length).toBeLessThanOrEqual(FEISHU_CARD_MAX_CHARS);
+      expect(Buffer.byteLength(JSON.stringify(renderReplyCard({ conversationId: 1, text: chunk, streaming: true, withStop: true })))).toBeLessThanOrEqual(30_000);
+    }
   });
 
   it("不在代码块中间断；必须断时补上闭合和重新打开的围栏，去掉补的围栏拼回等于原文", () => {

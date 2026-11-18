@@ -227,6 +227,7 @@ export function createFeishuSdkTransport(options: FeishuSdkOptions): FeishuTrans
           const action = (data.action ?? {}) as { value?: unknown; form_value?: Record<string, unknown> };
           try {
             return handlers.onCardAction({
+              ...(data.token ? { token: data.token } : {}),
               messageId: data.context?.open_message_id ?? data.open_message_id ?? "",
               chatId: data.context?.open_chat_id ?? data.open_chat_id ?? "",
               operatorOpenId: data.operator?.open_id ?? "",

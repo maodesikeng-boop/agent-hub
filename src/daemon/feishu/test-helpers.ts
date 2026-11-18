@@ -28,6 +28,7 @@ export interface FakeChat {
 export interface FakeFeishu extends FeishuTransport {
   calls: FakeCall[];
   chats: Map<string, FakeChat>;
+  sent: { chatId: string; messageId: string; content: string }[];
   /** 授予的权限（application.scopes 回它）。 */
   granted: string[];
   handlers: FeishuConnectionHandlers | null;
@@ -49,6 +50,7 @@ export function createFakeFeishu(options: { clock?: () => number; botOpenId?: st
   const fake: FakeFeishu = {
     calls: [],
     chats: new Map(),
+    sent: [],
     granted: [],
     handlers: null,
     failNext: {},
@@ -103,8 +105,12 @@ export function createFakeFeishu(options: { clock?: () => number; botOpenId?: st
         case "chat.delete":
           fake.chats.delete(String(a.chat_id));
           return { code: 0, data: {} };
-        case "message.create":
-          return { code: 0, data: { message_id: next("om_fake"), chat_id: a.receive_id_type === "chat_id" ? a.receive_id : "oc_p2p" } };
+        case "message.create": {
+          const messageId = next("om_fake");
+          const chatId = a.receive_id_type === "chat_id" ? String(a.receive_id) : "oc_p2p";
+          fake.sent.push({ chatId, messageId, content: String(a.content) });
+          return { code: 0, data: { message_id: messageId, chat_id: chatId } };
+        }
         case "card.create":
           return { code: 0, data: { card_id: next("card") } };
         case "card.update":

@@ -30,8 +30,7 @@ const binding = (pmId: number | null, patch: Partial<FeishuChatBinding> = {}): F
   guestTier: "chat_only",
   archivedAt: null,
   lastMessageId: null,
-  lastRouterItemId: null,
-  lastRouterCommandId: null,
+  lastRouterEventId: null,
   ...patch,
 });
 const plan = (pms: Pm[], bindings: FeishuChatBinding[], marked: [string, string][] = []) =>

@@ -29,8 +29,7 @@ CREATE TABLE IF NOT EXISTS feishu_chats (
   archived_at           INTEGER,
   -- 已投影到这个会话的最大账本编号，重连后从这里往后补发
   last_message_id       INTEGER,
-  last_router_item_id   INTEGER,
-  last_router_command_id INTEGER,
+  last_router_event_id  INTEGER,
   created_at            INTEGER NOT NULL,
   updated_at            INTEGER NOT NULL,
   CHECK (target = 'pm' OR pm_id IS NULL)
@@ -52,6 +51,7 @@ CREATE TABLE IF NOT EXISTS feishu_posts (
   PRIMARY KEY (ref_kind, ref_id, part)
 ) STRICT;
 CREATE INDEX IF NOT EXISTS feishu_posts_message ON feishu_posts (message_id);
+CREATE INDEX IF NOT EXISTS feishu_posts_pending ON feishu_posts (chat_id) WHERE state = 'card_pending';
 CREATE INDEX IF NOT EXISTS feishu_posts_retention ON feishu_posts (state, updated_at);
 
 -- 水果头像上传一次得到的 image_key，各群共用。
@@ -64,3 +64,42 @@ CREATE TABLE IF NOT EXISTS feishu_avatars (
 -- 账本 hubCall 每次查“这一轮是不是飞书访客的话触发的”（daemon/ledger/hub-commands.ts 的 guestTurnBlockReason）：
 -- 只看这个会话里已送达、处理中的用户消息。部分索引只收在途的几行，会话再长也不扫已回复的历史消息。
 CREATE INDEX IF NOT EXISTS messages_in_flight ON messages (session_id) WHERE status IN ('delivered', 'processing');
+
+-- 总助单聊的补发队列：卡片和指令回复按完成先后各记一行，和账本写入同一事务（较早的指令可能比较晚的后完成）。
+-- 只在已有总助单聊时记；发到飞书后按编号删掉，重连从 feishu_chats.last_router_event_id 往后补。
+CREATE TABLE IF NOT EXISTS feishu_router_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  item_id INTEGER REFERENCES router_items(id) ON DELETE CASCADE,
+  command_id INTEGER REFERENCES router_commands(id) ON DELETE CASCADE,
+  CHECK ((item_id IS NULL) <> (command_id IS NULL))
+) STRICT;
+CREATE INDEX IF NOT EXISTS feishu_router_events_item ON feishu_router_events(item_id) WHERE item_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS feishu_router_events_command ON feishu_router_events(command_id) WHERE command_id IS NOT NULL;
+
+CREATE TRIGGER IF NOT EXISTS feishu_router_item_insert AFTER INSERT ON router_items
+WHEN EXISTS (SELECT 1 FROM feishu_chats WHERE target = 'router')
+BEGIN
+  INSERT INTO feishu_router_events(item_id) VALUES (NEW.id);
+END;
+CREATE TRIGGER IF NOT EXISTS feishu_router_command_insert AFTER INSERT ON router_commands
+WHEN NEW.status IN ('answered', 'dispatched', 'failed') AND EXISTS (SELECT 1 FROM feishu_chats WHERE target = 'router')
+BEGIN
+  INSERT INTO feishu_router_events(command_id) VALUES (NEW.id);
+END;
+CREATE TRIGGER IF NOT EXISTS feishu_router_command_complete AFTER UPDATE OF status ON router_commands
+WHEN NEW.status IN ('answered', 'dispatched', 'failed') AND OLD.status NOT IN ('answered', 'dispatched', 'failed')
+ AND EXISTS (SELECT 1 FROM feishu_chats WHERE target = 'router')
+BEGIN
+  INSERT INTO feishu_router_events(command_id) VALUES (NEW.id);
+END;
+
+-- 谁在飞书里定的案（卡片改成“已定案”时写名字）：和账本定案同一事务写，先成功的那次点击为准，重启后不变。
+CREATE TABLE IF NOT EXISTS feishu_decisions (
+  ref_kind TEXT NOT NULL CHECK (ref_kind IN ('ask', 'router_item')),
+  ref_id INTEGER NOT NULL,
+  client_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  decided_at INTEGER NOT NULL,
+  PRIMARY KEY (ref_kind, ref_id)
+) STRICT;
+CREATE INDEX IF NOT EXISTS feishu_decisions_retention ON feishu_decisions(decided_at);

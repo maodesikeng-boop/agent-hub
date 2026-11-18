@@ -8,7 +8,7 @@ import type { Change } from "../../shared/api.ts";
 import { askOf, isHandoverTraffic, userMessageDedupeKey, type ConversationId, type Message, type MessageId, type PmId } from "../../shared/domain.ts";
 import type { Deliverable } from "../../shared/deliverables.ts";
 import { feishuOriginOf } from "../../shared/feishu.ts";
-import { FEISHU_CARD_MAX_CHARS, FEISHU_CATCHUP_MAX_MESSAGES } from "../../shared/limits.ts";
+import { FEISHU_CARD_MARKDOWN_JSON_BYTES, FEISHU_CARD_MAX_CHARS, FEISHU_CATCHUP_MAX_MESSAGES, FEISHU_FENCE_INFO_MAX_CHARS, FEISHU_FENCE_MARKER_MAX_CHARS } from "../../shared/limits.ts";
 import type { RouterCommandRecord, RouterItem } from "../../shared/router.ts";
 import { sentFilesOf, type SentFile } from "../../shared/sent-files.ts";
 import type { FeishuChatBinding } from "./store.ts";
@@ -112,64 +112,82 @@ function messageIntents(message: Message): FeishuOutboundIntent[] {
 export function catchUpIntents(
   conversationId: ConversationId,
   messages: readonly Message[],
+  limit = FEISHU_CATCHUP_MAX_MESSAGES,
 ): { intents: FeishuOutboundIntent[]; omitted: number; lastMessageId: MessageId | null } {
   const lastMessageId = messages.length === 0 ? null : Math.max(...messages.map((m) => m.id));
   const all = messages.filter((m) => m.conversationId === conversationId).flatMap(messageIntents);
-  const kept = all.slice(-FEISHU_CATCHUP_MAX_MESSAGES);
+  const kept = all.slice(-limit);
   return { intents: kept, omitted: all.length - kept.length, lastMessageId };
 }
 
-/**
- * 后置：把 Markdown 正文按 FEISHU_CARD_MAX_CHARS 拆成几段，优先在空行、换行处断，不在代码块中间断
- * （必须断时在断点补上闭合和重新打开的代码围栏）。空正文返回空数组。拼回去等于原文（去掉补的围栏）。
- * 每段都是前一段的独立续写，不依赖流式前缀：流式卡片超长时前一张定稿，后面的发新卡。
- */
-const CLOSE_FENCE_RESERVE = 16;
-
-/** 在窗口里找最靠后的空行，其次换行，都没有就整段切。返回切点（不含）。 */
-function breakPoint(window: string): number {
-  const min = Math.floor(window.length / 2);
-  const blank = window.lastIndexOf("\n\n");
-  if (blank >= min) return blank + 2;
-  const line = window.lastIndexOf("\n");
-  if (line >= min) return line + 1;
-  return window.length;
-}
-
-/** 这段文字结束时还开着的代码围栏：marker 是 ``` 或 ~~~ 那串记号，line 是整行（带语言名，重新打开时照抄）。没有是 null。 */
-function openFenceAfter(text: string): { marker: string; line: string } | null {
-  let open: { marker: string; line: string } | null = null;
-  for (const line of text.split("\n")) {
-    const m = /^ {0,3}(`{3,}|~{3,})/.exec(line);
-    if (m === null) continue;
-    const marker = m[1]!;
-    if (open === null) open = { marker, line: line.trim() };
-    else if (marker[0] === open.marker[0] && marker.length >= open.marker.length && line.trim() === marker) open = null;
+/** 从 start 起最多取 chars 个字、转成 JSON 字符串后最多 bytes 字节，返回结束下标（不含）。 */
+function markdownWindow(text: string, start: number, chars: number, bytes: number): number {
+  let end = start;
+  while (end < text.length && chars > 0) {
+    const code = text.codePointAt(end)!;
+    const width = code > 0xffff ? 2 : 1;
+    const escapedBytes = code === 34 || code === 92 || code === 8 || code === 9 || code === 10 || code === 12 || code === 13
+      ? 2 : code < 32 || (code >= 0xd800 && code <= 0xdfff) ? 6 : code < 0x80 ? 1 : code < 0x800 ? 2 : width === 2 ? 4 : 3;
+    if (escapedBytes > bytes) break;
+    bytes -= escapedBytes;
+    chars--;
+    end += width;
   }
-  return open;
+  return end;
 }
 
+export function feishuMarkdownPrefix(text: string): string {
+  return text.slice(0, markdownWindow(text, 0, FEISHU_CARD_MAX_CHARS, FEISHU_CARD_MARKDOWN_JSON_BYTES));
+}
+
+type Fence = { marker: string; opener: string };
+
+function fenceAtLine(text: string, start: number, open: Fence | null): Fence | null {
+  const end = text.indexOf("\n", start);
+  const match = /^ {0,3}(`{3,}|~{3,})([^\r\n]*)/.exec(text.slice(start, end === -1 ? undefined : end));
+  if (match === null) return open;
+  const [, marker, info] = match;
+  if (marker === undefined || info === undefined) return open;
+  if (open !== null) return marker[0] === open.marker[0] && marker.length >= open.marker.length && info.trim() === "" ? null : open;
+  if (marker.length > FEISHU_FENCE_MARKER_MAX_CHARS || (marker[0] === "`" && info.includes("`"))) return null;
+  const language = info.trim();
+  const suffix = language.length <= FEISHU_FENCE_INFO_MAX_CHARS && /^[\w+.-]*$/.test(language) ? language : "";
+  return { marker, opener: `${marker}${suffix}\n` };
+}
+
+/**
+ * 后置：把 Markdown 正文拆成几段，每段字数不超过 FEISHU_CARD_MAX_CHARS、转成 JSON 后不超过 FEISHU_CARD_MARKDOWN_JSON_BYTES；
+ * 优先在空行、换行处断。断在代码块里时在断点补闭合围栏、下一段补重新打开的围栏（只照抄有上限的记号和语言名），
+ * 所以每段都至少前进一个字。空正文返回空数组。
+ */
 export function splitFeishuMarkdown(text: string): string[] {
-  if (text === "") return [];
   const chunks: string[] = [];
-  let rest = text;
-  let reopen = "";
-  while (rest !== "") {
-    const body = reopen + rest;
-    if ([...body].length <= FEISHU_CARD_MAX_CHARS) {
-      chunks.push(body);
+  let start = 0;
+  let nextLine = 0;
+  let open: Fence | null = null;
+  const closingReserve = FEISHU_FENCE_MARKER_MAX_CHARS + 4;
+  while (start < text.length) {
+    const reopen = open?.opener ?? "";
+    const chars = FEISHU_CARD_MAX_CHARS - reopen.length;
+    const bytes = FEISHU_CARD_MARKDOWN_JSON_BYTES - (reopen === "" ? 0 : reopen.length + 1);
+    const full = markdownWindow(text, start, chars, bytes);
+    if (full === text.length) {
+      chunks.push(reopen + text.slice(start));
       break;
     }
-    // 留出补闭合围栏的位置
-    const budget = FEISHU_CARD_MAX_CHARS - [...reopen].length - CLOSE_FENCE_RESERVE;
-    const window = [...rest].slice(0, budget).join("");
-    let piece = rest.slice(0, breakPoint(window));
-    // 断在代码块里时退到行尾，补的闭合围栏单独占一行
-    if (openFenceAfter(reopen + piece) !== null && !piece.endsWith("\n") && piece.includes("\n")) piece = piece.slice(0, piece.lastIndexOf("\n") + 1);
-    rest = rest.slice(piece.length);
-    const fence = openFenceAfter(reopen + piece);
-    chunks.push(fence === null ? reopen + piece : `${reopen + piece}${piece.endsWith("\n") ? "" : "\n"}${fence.marker}\n`);
-    reopen = fence === null ? "" : `${fence.line}\n`;
+    const limit = markdownWindow(text, start, chars - closingReserve, bytes - closingReserve);
+    const min = start + Math.floor((limit - start) / 2);
+    const blank = text.lastIndexOf("\n\n", limit - 2);
+    const line = text.lastIndexOf("\n", limit - 1);
+    const end = blank >= min ? blank + 2 : line >= min ? line + 1 : limit;
+    while (nextLine < end) {
+      open = fenceAtLine(text, nextLine, open);
+      const newline = text.indexOf("\n", nextLine);
+      nextLine = newline === -1 ? text.length : newline + 1;
+    }
+    const piece = text.slice(start, end);
+    chunks.push(open === null ? reopen + piece : `${reopen}${piece}${piece.endsWith("\n") ? "" : "\n"}${open.marker}\n`);
+    start = end;
   }
   return chunks;
 }

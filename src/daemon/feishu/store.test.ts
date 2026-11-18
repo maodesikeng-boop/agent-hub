@@ -110,9 +110,9 @@ describe("createFeishuStore", () => {
 
   it("advanceWatermark 只往大了改", () => {
     fill();
-    store.advanceWatermark(chat("a"), { messageId: 10, routerItemId: 3 }, 2);
-    store.advanceWatermark(chat("a"), { messageId: 5, routerCommandId: 4 }, 3);
-    expect(store.chatById(chat("a"))).toMatchObject({ lastMessageId: 10, lastRouterItemId: 3, lastRouterCommandId: 4 });
+    store.advanceWatermark(chat("a"), { messageId: 10, routerEventId: 3 }, 2);
+    store.advanceWatermark(chat("a"), { messageId: 5, routerEventId: 4 }, 3);
+    expect(store.chatById(chat("a"))).toMatchObject({ lastMessageId: 10, lastRouterEventId: 4 });
   });
 
   it("savePost 同一个 ref 覆盖；sequence 比已存的小时抛错", () => {
@@ -129,7 +129,7 @@ describe("createFeishuStore", () => {
     store.savePost({ ref: { kind: "router_item", itemId: 8 }, chatId: chat("a"), messageId: om("ri"), cardId: null, sequence: 0, state: "card_pending" }, 2);
     expect(store.postByMessageId(om("ri"))?.ref).toEqual({ kind: "router_item", itemId: 8 });
     expect(store.postByMessageId(om("none"))).toBeNull();
-    expect(store.pendingCards(pmA).map((p) => p.ref)).toEqual([{ kind: "router_item", itemId: 8 }]);
+    expect([...store.pendingCards(pmA)].map((p) => p.ref)).toEqual([{ kind: "router_item", itemId: 8 }]);
   });
 
   it("prunePosts 只删早于 before 的 final / card_settled，等拍板的不删", () => {

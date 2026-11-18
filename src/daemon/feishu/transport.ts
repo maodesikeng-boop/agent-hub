@@ -99,6 +99,7 @@ export type FeishuRawEvent =
 
 /** 卡片回传交互（card.action.trigger），也走同一条长连接。 */
 export interface FeishuRawCardAction {
+  token?: string;
   messageId: string;
   chatId: string;
   operatorOpenId: string;

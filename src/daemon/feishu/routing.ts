@@ -3,6 +3,7 @@
 // 主客权限的硬边界在这里和账本两处：总助单聊、设置只认主人；访客能不能拍板、停止、发附件看本群档位（feishuGuestMay）；
 // 访客的话触发的轮次里越界的 hub 命令由账本按 meta.origin 再拦一次（shared/feishu.ts 的 feishuGuestTurnBlockReason）。
 // 不变量：这里不做 I/O、不读别的状态；成员、显示名、绑定、群策略都由调用方查好放进上下文。
+import { createHash } from "node:crypto";
 import type { PmId } from "../../shared/domain.ts";
 import { feishuGuestMay } from "../../shared/feishu.ts";
 import type {
@@ -133,7 +134,7 @@ export type FeishuActionRoute =
  */
 export function routeFeishuAction(action: FeishuInboundAction, ctx: Pick<FeishuRoutingContext, "ownerOpenId" | "binding" | "guestTier">): FeishuActionRoute {
   const { ownerOpenId, binding } = ctx;
-  if (ownerOpenId === null || binding === null) return { kind: "ignore" };
+  if (ownerOpenId === null || binding === null || binding.archived) return { kind: "ignore" };
   const role = feishuSpeakerRole(action.operatorOpenId, ownerOpenId);
   const guest = role === "guest";
   const { value } = action;
@@ -154,7 +155,7 @@ export function routeFeishuAction(action: FeishuInboundAction, ctx: Pick<FeishuR
       return { kind: "blocker_done", card: value.card };
     case "choose":
     case "submit_note": {
-      if (guest && !feishuGuestMay(ctx.guestTier, "answer_card")) return { kind: "reject", toast: OWNER_ONLY_DECIDE };
+      if (guest && (value.card.kind === "router_item" || !feishuGuestMay(ctx.guestTier, "answer_card"))) return { kind: "reject", toast: OWNER_ONLY_DECIDE };
       const optionIndex = value.kind === "choose" ? value.optionIndex : null;
       if (optionIndex === null && action.note === null) return { kind: "reject", toast: NOTE_REQUIRED };
       return {
@@ -162,7 +163,7 @@ export function routeFeishuAction(action: FeishuInboundAction, ctx: Pick<FeishuR
         card: value.card,
         optionIndex,
         note: action.note,
-        clientId: `feishu:${action.messageId}:${action.operatorOpenId}:${optionIndex ?? "note"}`,
+        clientId: `feishu:${createHash("sha256").update(JSON.stringify([action.messageId, action.operatorOpenId, action.token ?? [optionIndex, action.note]])).digest("hex")}`,
         byOpenId: action.operatorOpenId,
       };
     }

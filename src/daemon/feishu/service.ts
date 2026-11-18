@@ -13,6 +13,7 @@
 // - 所有发送都在主聊天流里：不传 reply_in_thread，不回复某条消息；
 // - 飞书挂了、凭证失效都不影响网页和 agent：这里的错误只记日志和状态，不往账本抛。
 import { randomInt, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import type { Change } from "../../shared/api.ts";
 import { askOf, type ConversationId, type Message, type MessageId, type PmId } from "../../shared/domain.ts";
 import type { Deliverable } from "../../shared/deliverables.ts";
@@ -34,14 +35,17 @@ import {
   type FeishuOpenId,
   type FeishuStatusView,
 } from "../../shared/feishu.ts";
-import type { Ledger } from "../../shared/ledger.ts";
+import type { SqliteLedger } from "../ledger/index.ts";
 import { ConversationNotFoundError, LedgerRequestError } from "../../shared/ledger.ts";
 import {
   FEISHU_BIND_CODE_TTL_MS,
   FEISHU_CARD_ACTION_DEADLINE_MS,
+  FEISHU_CARD_MAX_BYTES,
   FEISHU_CARDKIT_BUDGET_PER_SECOND,
   FEISHU_CHAT_CACHE_MAX,
   FEISHU_CHAT_SENDS_PER_SECOND,
+  FEISHU_CONTROL_RETRY_MS,
+  FEISHU_CATCHUP_MAX_MESSAGES,
   FEISHU_INBOUND_QUEUE_MAX,
   FEISHU_OUTBOUND_QUEUE_MAX,
   FEISHU_PAGE_SIZE,
@@ -69,7 +73,7 @@ import {
 import { desiredFeishuChats, FEISHU_CHAT_MARKER_PATTERN, feishuChatCreateUuid, planFeishuChatSync, type FeishuChatOp } from "./chats.ts";
 import { createFeishuContextWindows, createFeishuDirectory, type FeishuMember } from "./directory.ts";
 import { createFeishuFileService, type FeishuFileService, type FeishuOutboundFile } from "./files.ts";
-import { parseFeishuCardAction, parseFeishuEvent, type FeishuInbound } from "./inbound.ts";
+import { parseFeishuCardAction, parseFeishuEvent, type FeishuInbound, type FeishuInboundAction } from "./inbound.ts";
 import { catchUpIntents, projectFeishuChange, splitFeishuMarkdown, type FeishuOutboundIntent, type FeishuProjectionContext } from "./outbound.ts";
 import { routeFeishuAction, routeFeishuMessage, type FeishuActionRoute } from "./routing.ts";
 import { checkFeishuScopes, FEISHU_APP_ADDONS, feishuAppPreset } from "./scopes.ts";
@@ -93,7 +97,7 @@ import {
 
 /** 通道用到的账本接口。 */
 export type FeishuLedgerPort = Pick<
-  Ledger,
+  SqliteLedger,
   | "snapshot"
   | "onChange"
   | "getMessage"
@@ -104,6 +108,8 @@ export type FeishuLedgerPort = Pick<
   | "decideTaskNode"
   | "recheckUserBlocker"
   | "messagesAfter"
+  | "getRouterItem"
+  | "getRouterCommand"
 >;
 
 export interface FeishuServiceOptions {
@@ -138,13 +144,13 @@ export interface FeishuService {
 const FEISHU_CLIENT_PREFIX = "feishu:";
 /** 解散群时群已经没了（被别人解散、机器人被移出）：不算错。 */
 const CHAT_GONE_CODES = new Set([232011, 232006, 232010]);
+const isCardJson = (value: unknown): value is FeishuCardJson => typeof value === "object" && value !== null && "schema" in value && value.schema === "2.0";
 const ALREADY_DECIDED = "已经定过了";
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /** 一条串行的工作线（一个群一条）：保证同一个群里的发送有先后，各群之间并行。 */
 interface Lane {
   tasks: { key: string | null; run: () => Promise<void> }[];
-  running: boolean;
 }
 
 /** 一个项目经理对话的流式卡片：状态机现状、计时器、已推上去的正文（abandon 时留着它）。 */
@@ -153,6 +159,7 @@ interface StreamSlot {
   chatId: FeishuChatId;
   timer: ReturnType<typeof setTimeout> | null;
   timerAt: number | null;
+  posted: { cardId: FeishuCardId; messageId: FeishuMessageId; text: string } | null;
 }
 
 /** 前置：迁移 0034 已跑。后置：返回的服务还没 start。 */
@@ -183,56 +190,125 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
   const avatars = createFeishuAvatarCache(store, now);
   const budget = createFeishuCardkitBudget(FEISHU_CARDKIT_BUDGET_PER_SECOND);
   const streams = new Map<ConversationId, StreamSlot>();
-  /** 谁在飞书里点的定案（卡片改成“已定案”时写名字）；网页上点的是主人。 */
-  const deciders = new LRUCache<string, string>({ max: FEISHU_CHAT_CACHE_MAX });
   /** 每个群最近几次发消息的时间（同一个群每秒不超过 FEISHU_CHAT_SENDS_PER_SECOND 条）。 */
   const sendTimes = new LRUCache<string, number[]>({ max: FEISHU_CHAT_CACHE_MAX });
 
   // ---- 排队 ----
 
-  const lanes = new Map<string, Lane>();
-  let queued = 0;
-  let inboundQueued = 0;
+  const inbound = { lanes: new Map<string, Lane>(), count: 0, limit: FEISHU_INBOUND_QUEUE_MAX };
+  const outbound = { lanes: new Map<string, Lane>(), count: 0, limit: FEISHU_OUTBOUND_QUEUE_MAX };
+  let syncRequested = false;
+  let replayRequested = false;
+  let replayAllRequested = false;
+  let connectionRequested = false;
+  let controlling = false;
+  let retryControl: ReturnType<typeof setTimeout> | null = null;
   const idleWaiters: (() => void)[] = [];
+  const busy = () => inbound.count > 0 || outbound.count > 0 || controlling ||
+    (linkUp && retryControl === null && (syncRequested || replayRequested || connectionRequested));
   const settleIdle = () => {
-    if (queued > 0 || [...lanes.values()].some((l) => l.running)) return;
+    if (busy()) return;
     for (const resolve of idleWaiters.splice(0)) resolve();
   };
-  const drain = async (name: string, lane: Lane) => {
-    if (lane.running) return;
-    lane.running = true;
-    while (lane.tasks.length > 0) {
-      const task = lane.tasks.shift()!;
-      queued--;
+
+  // 建群对齐和断线补发不进队列，只记一个“要做”的标记：满载时不会被丢，出站队列排空后合并成一次执行，失败隔 FEISHU_CONTROL_RETRY_MS 再试。
+  const requestControl = (kind: "sync" | "replay" | "connection") => {
+    if (kind === "sync") syncRequested = true;
+    else if (kind === "replay") {
+      replayRequested = true;
+      replayAllRequested = true;
+    }
+    else connectionRequested = true;
+    pumpControl();
+  };
+
+  const pumpControl = () => {
+    if (closed || !linkUp || controlling || retryControl !== null || outbound.count > 0) return;
+    const connection = connectionRequested;
+    const sync = syncRequested || connection;
+    const replay = replayRequested || connection;
+    if (!sync && !replay) return;
+    const replayAll = replayAllRequested;
+    connectionRequested = syncRequested = replayRequested = replayAllRequested = false;
+    controlling = true;
+    void Promise.resolve().then(async () => {
+      if (connection) await checkScopes();
+      if (owner() === null) return;
+      if (sync) {
+        await ensureRouterChat();
+        await syncChats();
+      }
+      if (replay) await catchUp(replayAll);
+    }).catch((error: unknown) => {
+      handleError(error);
+      if (!linkUp || closed) return;
+      connectionRequested ||= connection;
+      syncRequested ||= sync;
+      replayRequested ||= replay;
+      replayAllRequested ||= replayAll;
+      retryControl = setTimeout(() => {
+        retryControl = null;
+        pumpControl();
+      }, FEISHU_CONTROL_RETRY_MS);
+      retryControl.unref?.();
+    }).finally(() => {
+      controlling = false;
+      pumpControl();
+      settleIdle();
+    });
+  };
+
+  const drain = async (queue: typeof outbound, name: string, lane: Lane) => {
+    for (let task = lane.tasks.shift(); task !== undefined; task = lane.tasks.shift()) {
       try {
-        await task.run();
+        if (!closed && linkUp) await task.run();
       } catch (error) {
         handleError(error);
+        if (queue === outbound) {
+          queue.count -= lane.tasks.length;
+          lane.tasks.length = 0;
+          requestControl("replay");
+        }
+      } finally {
+        queue.count--;
       }
     }
-    lane.running = false;
-    lanes.delete(name);
+    queue.lanes.delete(name);
+    pumpControl();
     settleIdle();
   };
-  /** key 相同、还没开始的任务直接换成新的（流式推送只要最新的全文）。 */
-  const enqueue = (name: string, run: () => Promise<void>, key: string | null = null) => {
-    if (closed) return;
-    let lane = lanes.get(name);
-    if (lane === undefined) {
-      lane = { tasks: [], running: false };
-      lanes.set(name, lane);
+
+  const admit = (queue: typeof outbound, name: string, run: () => Promise<void>, key: string | null, limit = queue.limit): boolean => {
+    if (closed || !linkUp) return false;
+    let lane = queue.lanes.get(name);
+    const last = lane?.tasks.at(-1);
+    if (key !== null && last?.key === key) {
+      last.run = run;
+      return true;
     }
-    if (key !== null) {
-      const pending = lane.tasks.find((t) => t.key === key);
-      if (pending !== undefined) {
-        pending.run = run;
-        return;
-      }
-      if (queued >= FEISHU_OUTBOUND_QUEUE_MAX) return;
+    if (queue.count >= limit) return false;
+    const start = lane === undefined;
+    if (lane === undefined) {
+      lane = { tasks: [] };
+      queue.lanes.set(name, lane);
     }
     lane.tasks.push({ key, run });
-    queued++;
-    void drain(name, lane);
+    queue.count++;
+    if (start) {
+      const created = lane;
+      queueMicrotask(() => { void drain(queue, name, created); });
+    }
+    return true;
+  };
+
+  /** 出站任务排不进（满了，或补发正要跑）就不排了，改成从账本整段补发：账本是准的，队列只是加速。 */
+  const enqueue = (name: string, run: () => Promise<void>, key: string | null = null) => {
+    if (controlling || replayRequested || connectionRequested) {
+      requestControl("replay");
+    } else if (!admit(outbound, name, run, key)) {
+      if (linkUp && !closed) lastError = "飞书出站队列已满，正在从账本补发";
+      requestControl("replay");
+    }
   };
 
   const handleError = (error: unknown) => {
@@ -255,11 +331,16 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
   };
 
   const waitSendSlot = async (chatId: string) => {
-    const times = (sendTimes.get(chatId) ?? []).filter((t) => now() - t < 1000);
-    if (times.length >= FEISHU_CHAT_SENDS_PER_SECOND) {
-      await new Promise((resolve) => setTimeout(resolve, Math.max(0, 1000 - (now() - times[0]!))));
+    for (;;) {
+      const current = now();
+      const times = (sendTimes.get(chatId) ?? []).filter((t) => current - t < 1000);
+      const oldest = times[0];
+      if (times.length < FEISHU_CHAT_SENDS_PER_SECOND || oldest === undefined) {
+        sendTimes.set(chatId, [...times, current]);
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, oldest + 1000 - current));
     }
-    sendTimes.set(chatId, [...times.filter((t) => now() - t < 1000), now()]);
   };
 
   /** 在主聊天流里发一条（不带 reply_in_thread、不回复某条消息）。to 是群或主人（总助单聊还没有编号时按 open_id 发）。 */
@@ -275,7 +356,7 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
       receive_id_type: "chatId" in to ? "chat_id" : "open_id",
       receive_id: receive,
       msg_type: msgType,
-      content: JSON.stringify(content),
+      content: msgType === "interactive" && isCardJson(content) ? serializeCard(content) : JSON.stringify(content),
       uuid: uuid.slice(0, 50),
     });
     const messageId = parseFeishuMessageId(feishuStringField(data, "message_id"));
@@ -283,17 +364,23 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     return { messageId, chatId: parseFeishuChatId(feishuStringField(data, "chat_id")) };
   };
 
+  const serializeCard = (card: FeishuCardJson) => {
+    const json = JSON.stringify(card);
+    if (Buffer.byteLength(json) > FEISHU_CARD_MAX_BYTES) throw new Error("飞书卡片超过体积上限");
+    return json;
+  };
+
   /** 卡片实体（以后要改的卡）：先建实体再按 card_id 发。 */
   const postCardEntity = async (chatId: FeishuChatId, card: FeishuCardJson, uuid: string) => {
-    const data = await api("card.create", { type: "card_json", data: JSON.stringify(card) });
+    const data = await api("card.create", { type: "card_json", data: serializeCard(card) });
     const cardId = parseFeishuCardId(feishuStringField(data, "card_id"));
     if (cardId === null) throw new Error("飞书建卡片没回卡片编号");
     const { messageId } = await sendMessage({ chatId }, "interactive", { type: "card", data: { card_id: cardId } }, uuid);
     return { cardId, messageId };
   };
 
-  const updateCard = async (cardId: FeishuCardId, sequence: number, card: FeishuCardJson) => {
-    await api("card.update", { card_id: cardId, card: { type: "card_json", data: JSON.stringify(card) }, sequence, uuid: randomUUID() });
+  const updateCard = async (cardId: FeishuCardId, sequence: number, card: FeishuCardJson, uuid: string = randomUUID()) => {
+    await api("card.update", { card_id: cardId, card: { type: "card_json", data: serializeCard(card) }, sequence, uuid });
   };
 
   const sendText = (to: { chatId: FeishuChatId } | { openId: FeishuOpenId }, text: string) => sendMessage(to, "text", { text }, `fusa-t-${randomUUID()}`);
@@ -306,9 +393,18 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     db.get<{ id: number }>("SELECT id FROM conversations WHERE kind = 'pm' AND pm_id = ? ORDER BY id LIMIT 1", pmId)?.id ?? null;
   const latestMessageId = (conversationId: ConversationId): MessageId | null =>
     db.get<{ id: number | null }>("SELECT max(id) AS id FROM messages WHERE conversation_id = ?", conversationId)?.id ?? null;
+  const isActivePm = (pmId: PmId) => db.get(
+    "SELECT 1 FROM pms WHERE id = ? AND NOT EXISTS (SELECT 1 FROM pm_archives WHERE pm_id = ?)", pmId, pmId,
+  ) !== undefined;
+  const activeTarget = (chat: FeishuChatBinding | null): FeishuChatTarget | null => {
+    if (chat === null || chat.archivedAt !== null) return null;
+    if (chat.target.kind === "router") return chat.target;
+    const pmId = chat.target.pmId;
+    return pmId !== null && isActivePm(pmId) ? { kind: "pm", pmId } : null;
+  };
   const liveChatOfPm = (pmId: PmId): FeishuChatBinding | null => {
     const chat = store.chatOfTarget({ kind: "pm", pmId });
-    return chat !== null && chat.archivedAt === null ? chat : null;
+    return activeTarget(chat) === null ? null : chat;
   };
   const projection: FeishuProjectionContext = {
     chatOfConversation: (conversationId) => {
@@ -394,8 +490,9 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     transport = null;
     files = null;
     linkUp = false;
-    for (const slot of streams.values()) if (slot.timer !== null) clearTimeout(slot.timer);
-    streams.clear();
+    if (retryControl !== null) clearTimeout(retryControl);
+    retryControl = null;
+    for (const [id, slot] of streams) dropStream(id, slot);
     if (old !== null) await old.stop().catch((error: unknown) => log(`飞书：断开时出错：${errorText(error)}`));
   };
 
@@ -412,14 +509,9 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
   const onConnected = () => {
     linkUp = true;
     directory.markAllStale();
-    enqueue("control", async () => {
-      await checkScopes();
-      if (owner() !== null) {
-        await ensureRouterChat();
-        await syncChats();
-        await catchUp();
-      }
-    });
+    if (retryControl !== null) clearTimeout(retryControl);
+    retryControl = null;
+    requestControl("connection");
   };
 
   const startTransport = async (s: FeishuSecrets) => {
@@ -506,12 +598,11 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     } catch (error) {
       if (!CHAT_GONE_CODES.has((error as { code?: number }).code ?? 0)) throw error;
     }
-    directory.forget(chatId);
-    contexts.clear(chatId);
+    clearChatRuntime(chatId);
   };
 
   /** 每个项目经理上次建群用的 generation：解散时间要比它大，同一毫秒里连着解散两次也不会撞上同一个建群 uuid。 */
-  const lastGeneration = new Map<PmId, number>();
+  const lastGeneration = new LRUCache<PmId, number>({ max: FEISHU_CHAT_CACHE_MAX });
   const dissolvedAt = (pmId: PmId | null) => Math.max(now(), (pmId === null ? 0 : (lastGeneration.get(pmId) ?? 0)) + 1);
 
   const applyChatOp = async (op: FeishuChatOp, appId: string, ownerId: FeishuOpenId) => {
@@ -545,6 +636,8 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
         await api("chat.update", { chat_id: op.chatId, name: op.spec.name, avatar });
         store.upsertChat({ chatId: op.chatId, target: { kind: "pm", pmId: op.spec.pmId }, name: op.spec.name, label: op.spec.label }, now());
         store.setChatAvatar(op.chatId, op.spec.fruit, now());
+        const conversationId = conversationOfPm(op.spec.pmId);
+        store.advanceWatermark(op.chatId, { messageId: (conversationId === null ? null : latestMessageId(conversationId)) ?? 0 }, now());
         return;
       }
       case "rename":
@@ -591,13 +684,13 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
 
   // ---- 出站 ----
 
-  const deciderKey = (ref: FeishuCardRef) => JSON.stringify(ref);
+  const decisionOf = (ref: FeishuCardRef) => store.decision(ref);
 
   /** 一张提问卡现在该画成什么样。 */
   const askStateOf = (message: Message): FeishuCardState => {
     const ask = askOf(message);
     if (ask === null) return { kind: "closed" };
-    return feishuCardStateOf(ask, deciders.get(deciderKey(feishuCardRefOf(message, ask))) ?? displayOwner());
+    return feishuCardStateOf(ask, decisionOf(feishuCardRefOf(message, ask))?.name ?? displayOwner());
   };
 
   const routerItemState = (item: RouterItem, ask: Message | null): FeishuCardState => {
@@ -608,7 +701,7 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
       kind: "answered",
       chosenOption: item.resolution?.chosenOption ?? null,
       note: item.resolution?.note ? item.resolution.note : null,
-      byName: deciders.get(deciderKey({ kind: "router_item", itemId: item.id })) ?? displayOwner(),
+      byName: decisionOf({ kind: "router_item", itemId: item.id })?.name ?? displayOwner(),
     };
   };
 
@@ -624,27 +717,27 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     }
   };
 
-  // 流式卡片：每个项目经理对话最多一张在流式，所以这两张表跟着 streams 一样有上限，定稿或收尾就删
-  /** 流式卡片实体 → 发出去的那条飞书消息（定稿时记 feishu_posts）。 */
-  const openedMessage = new Map<FeishuCardId, FeishuMessageId>();
-  /** abandon 时卡上留下的正文。 */
-  const sentTextOf = new Map<FeishuCardId, string>();
-
   /** 一段文字定稿：流式那张卡换成账本正文（关流式、去停止按钮），超长的续到新卡；再发它带的文件。 */
-  const finalizeSegment = async (chatId: FeishuChatId, conversationId: ConversationId, effect: Extract<FeishuStreamEffect, { kind: "finalize" }>) => {
+  const finalizeSegment = async (chatId: FeishuChatId, conversationId: ConversationId, effect: Extract<FeishuStreamEffect, { kind: "finalize" }>, posted: StreamSlot["posted"] = null) => {
     const message = ledger.getMessage(effect.messageId);
     const chunks = splitFeishuMarkdown(effect.text);
     for (const [part, chunk] of chunks.entries()) {
+      if (projection.chatOfConversation(conversationId)?.chatId !== chatId) return;
       const ref: FeishuPostRef = { kind: "message", messageId: effect.messageId, part };
-      if (store.postOf(ref) !== null) continue;
+      let post = store.postOf(ref);
+      if (post?.state === "final") continue;
       const card = renderReplyCard({ conversationId, text: chunk, streaming: false, withStop: false });
-      if (part === 0 && effect.cardId !== null) {
-        await updateCard(effect.cardId, effect.sequence, card);
-        const feishuMessageId = openedMessage.get(effect.cardId);
-        openedMessage.delete(effect.cardId);
-        if (feishuMessageId !== undefined) store.savePost({ ref, chatId, messageId: feishuMessageId, cardId: effect.cardId, sequence: effect.sequence, state: "final" }, now());
+      if (part === 0 && posted !== null && post === null) {
+        store.savePost({ ref, chatId, messageId: posted.messageId, cardId: posted.cardId, sequence: effect.sequence, state: "streaming" }, now());
+        post = store.postOf(ref);
+      }
+      if (post?.cardId) {
+        await updateCard(post.cardId, post.sequence, card, `fusa-final-${effect.messageId}`);
+        if (projection.chatOfConversation(conversationId)?.chatId !== chatId) return;
+        store.savePost({ ...post, state: "final" }, now());
       } else {
         const { messageId } = await sendMessage({ chatId }, "interactive", card, `fusa-m-${effect.messageId}-${part}`);
+        if (projection.chatOfConversation(conversationId)?.chatId !== chatId) return;
         store.savePost({ ref, chatId, messageId, cardId: null, sequence: 0, state: "final" }, now());
       }
     }
@@ -652,90 +745,115 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     store.advanceWatermark(chatId, { messageId: effect.messageId }, now());
   };
 
-  const runStreamEffects = async (conversationId: ConversationId, slot: StreamSlot, effects: FeishuStreamEffect[]) => {
-    for (const effect of effects) {
+  const dropStream = (id: ConversationId, slot: StreamSlot) => {
+    if (slot.timer !== null) clearTimeout(slot.timer);
+    if (streams.get(id) === slot) streams.delete(id);
+  };
+
+  const clearChatRuntime = (chatId: FeishuChatId) => {
+    directory.forget(chatId);
+    contexts.clear(chatId);
+    sendTimes.delete(chatId);
+    for (const [id, slot] of streams) if (slot.chatId === chatId) dropStream(id, slot);
+  };
+
+  const feedStream = async (id: ConversationId, event: FeishuStreamEvent, chatId: FeishuChatId, expected?: StreamSlot) => {
+    let slot = streams.get(id);
+    if (expected !== undefined && slot !== expected) return;
+    if (projection.chatOfConversation(id)?.chatId !== chatId) {
+      if (slot?.chatId === chatId) dropStream(id, slot);
+      return;
+    }
+    if (slot?.chatId !== chatId) {
+      if (slot !== undefined) dropStream(id, slot);
+      if (event.kind !== "text" && event.kind !== "segment_done") return;
+      slot = { state: { phase: "idle" }, chatId, timer: null, timerAt: null, posted: null };
+      streams.set(id, slot);
+    }
+    const current = slot;
+    const step = stepFeishuStream(current.state, event, { conversationId: id, chatId }, now(), budget);
+    current.state = step.state;
+    if (current.state.phase === "idle") dropStream(id, current);
+    for (const effect of step.effects) {
       switch (effect.kind) {
         case "open": {
-          const card = renderReplyCard({ conversationId, text: effect.text, streaming: true, withStop: true });
-          const opened = await postCardEntity(slot.chatId, card, `fusa-s-${conversationId}-${randomUUID()}`);
-          openedMessage.set(opened.cardId, opened.messageId);
-          sentTextOf.set(opened.cardId, effect.text);
-          await feedStream(conversationId, { kind: "opened", cardId: opened.cardId, messageId: opened.messageId, sequence: 0 });
+          const card = renderReplyCard({ conversationId: id, text: effect.text, streaming: true, withStop: true });
+          let posted: Awaited<ReturnType<typeof postCardEntity>>;
+          try {
+            posted = await postCardEntity(chatId, card, `fusa-s-${randomUUID()}`);
+          } catch (error) {
+            handleError(error);
+            await feedStream(id, { kind: "open_failed" }, chatId, current);
+            break;
+          }
+          current.posted = { ...posted, text: effect.text };
+          await feedStream(id, { kind: "opened", ...posted, sequence: 0 }, chatId, current);
           break;
         }
         case "push":
           await api("card.element.content", { card_id: effect.cardId, element_id: "reply", content: effect.text, sequence: effect.sequence, uuid: randomUUID() });
-          sentTextOf.set(effect.cardId, effect.text);
+          if (current.posted !== null) current.posted.text = effect.text;
           break;
         case "renew":
           await api("card.settings", { card_id: effect.cardId, settings: JSON.stringify({ config: { streaming_mode: true } }), sequence: effect.sequence, uuid: randomUUID() });
           break;
         case "finalize":
-          await finalizeSegment(slot.chatId, conversationId, effect);
-          if (effect.cardId !== null) sentTextOf.delete(effect.cardId);
+          await finalizeSegment(chatId, id, effect, current.posted);
           break;
         case "abandon": {
-          const text = sentTextOf.get(effect.cardId) ?? "";
-          await updateCard(effect.cardId, effect.sequence, renderReplyCard({ conversationId, text: text === "" ? "（这一轮停下了）" : text, streaming: false, withStop: false }));
-          sentTextOf.delete(effect.cardId);
-          openedMessage.delete(effect.cardId);
+          const text = current.posted?.text || "（这一轮停下了）";
+          await updateCard(effect.cardId, effect.sequence, renderReplyCard({ conversationId: id, text, streaming: false, withStop: false }));
           break;
         }
         case "schedule_tick":
-          scheduleTick(conversationId, slot, effect.at);
+          scheduleTick(id, current, effect.at);
           break;
       }
     }
   };
 
-  const scheduleTick = (conversationId: ConversationId, slot: StreamSlot, at: number) => {
-    if (slot.timer !== null && slot.timerAt !== null && slot.timerAt <= at) return;
+  const scheduleTick = (id: ConversationId, slot: StreamSlot, at: number) => {
+    if (slot.timerAt !== null && slot.timerAt <= at) return;
     if (slot.timer !== null) clearTimeout(slot.timer);
     slot.timerAt = at;
     slot.timer = setTimeout(() => {
       slot.timer = null;
       slot.timerAt = null;
-      enqueue(slot.chatId, () => feedStream(conversationId, { kind: "tick" }), `tick:${conversationId}`);
+      if (streams.get(id) === slot) enqueue(slot.chatId, () => feedStream(id, { kind: "tick" }, slot.chatId, slot), `tick:${id}`);
     }, Math.max(0, at - now()));
     slot.timer.unref?.();
   };
 
-  const feedStream = async (conversationId: ConversationId, event: FeishuStreamEvent) => {
-    const binding = projection.chatOfConversation(conversationId);
-    let slot = streams.get(conversationId);
-    if (slot === undefined) {
-      if (binding === null) return;
-      slot = { state: { phase: "idle" }, chatId: binding.chatId, timer: null, timerAt: null };
-      streams.set(conversationId, slot);
-    }
-    const step = stepFeishuStream(slot.state, event, { conversationId, chatId: slot.chatId }, now(), budget);
-    slot.state = step.state;
-    await runStreamEffects(conversationId, slot, step.effects);
-    if (slot.state.phase === "idle" && slot.timer === null) streams.delete(conversationId);
-  };
-
   const postAskCard = async (chatId: FeishuChatId, message: Message, deliverables: readonly Deliverable[]) => {
+    if (projection.chatOfConversation(message.conversationId)?.chatId !== chatId) return;
     const ref: FeishuPostRef = { kind: "message", messageId: message.id, part: 0 };
     if (store.postOf(ref) === null) {
       const ask = askOf(message);
       if (ask === null) return;
       const state = askStateOf(message);
-      if (state.kind !== "pending") return;
+      if (state.kind !== "pending") {
+        store.advanceWatermark(chatId, { messageId: message.id }, now());
+        return;
+      }
       const posted = await postCardEntity(chatId, renderAskCard(message, ask, state), `fusa-a-${message.id}`);
+      if (projection.chatOfConversation(message.conversationId)?.chatId !== chatId) return;
       store.savePost({ ref, chatId, messageId: posted.messageId, cardId: posted.cardId, sequence: 0, state: "card_pending" }, now());
     }
     await sendDeliverables(chatId, message.id, deliverables);
     store.advanceWatermark(chatId, { messageId: message.id }, now());
   };
 
-  const settleAskCard = async (message: Message) => {
-    const post = store.postOf({ kind: "message", messageId: message.id, part: 0 });
+  const settleAskCard = async (messageId: MessageId) => {
+    const post = store.postOf({ kind: "message", messageId, part: 0 });
+    if (post?.state !== "card_pending" || post.cardId === null) return;
+    const message = ledger.getMessage(messageId);
+    if (message === null) return closeMissingCard(post);
     const ask = askOf(message);
-    if (post === null || post.state !== "card_pending" || post.cardId === null || ask === null) return;
+    if (ask === null) return closeMissingCard(post);
     const state = askStateOf(message);
     if (state.kind === "pending") return;
     await updateCard(post.cardId, post.sequence + 1, renderAskCard(message, ask, state));
-    store.savePost({ ...post, sequence: post.sequence + 1, state: "card_settled" }, now());
+    if (store.chatById(post.chatId) !== null) store.savePost({ ...post, sequence: post.sequence + 1, state: "card_settled" }, now());
   };
 
   const routerItemCard = (item: RouterItem) => {
@@ -758,13 +876,13 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     if (post === null) {
       if (item.kind === "decision" && settled) return;
       const posted = await postCardEntity(chat.chatId, card, `fusa-r-${item.id}`);
+      if (store.chatById(chat.chatId) === null) return;
       store.savePost({ ref, chatId: chat.chatId, messageId: posted.messageId, cardId: posted.cardId, sequence: 0, state: item.kind === "report" ? "final" : "card_pending" }, now());
-      store.advanceWatermark(chat.chatId, { routerItemId: item.id }, now());
       return;
     }
     if (post.state !== "card_pending" || !settled || post.cardId === null) return;
     await updateCard(post.cardId, post.sequence + 1, card);
-    store.savePost({ ...post, sequence: post.sequence + 1, state: "card_settled" }, now());
+    if (store.chatById(post.chatId) !== null) store.savePost({ ...post, sequence: post.sequence + 1, state: "card_settled" }, now());
   };
 
   const routerReplyText = (command: RouterCommandRecord): string => {
@@ -775,31 +893,35 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     return targets.length > 0 ? `已交给：${targets.join("、")}` : "好的。";
   };
 
+  const postTextChunks = async (chatId: FeishuChatId, title: string, text: string, key: string, refForPart: (part: number) => FeishuPostRef, template?: string) => {
+    for (const [part, chunk] of splitFeishuMarkdown(text).entries()) {
+      if (activeTarget(store.chatById(chatId)) === null) return;
+      const ref = refForPart(part);
+      if (store.postOf(ref) !== null) continue;
+      const { messageId } = await sendMessage({ chatId }, "interactive", renderTextCard({ title, text: chunk, ...(template ? { template } : {}) }), `${key}-${part}`);
+      if (activeTarget(store.chatById(chatId)) === null) return;
+      store.savePost({ ref, chatId, messageId, cardId: null, sequence: 0, state: "final" }, now());
+    }
+  };
+
   const postRouterCommand = async (command: RouterCommandRecord) => {
     const chat = store.chatOfTarget({ kind: "router" });
     if (chat === null) return;
-    const ref: FeishuPostRef = { kind: "router_command", commandId: command.id };
-    if (store.postOf(ref) !== null) return;
     const fromFeishu = command.clientId.startsWith(FEISHU_CLIENT_PREFIX);
     const text = fromFeishu ? routerReplyText(command) : `**网页上说**：${command.inputText}\n\n${routerReplyText(command)}`;
-    const { messageId } = await sendMessage({ chatId: chat.chatId }, "interactive", renderTextCard({ title: "总助", text }), `fusa-c-${command.id}`);
-    store.savePost({ ref, chatId: chat.chatId, messageId, cardId: null, sequence: 0, state: "final" }, now());
-    store.advanceWatermark(chat.chatId, { routerCommandId: command.id }, now());
+    await postTextChunks(chat.chatId, "总助", text, `fusa-c-${command.id}`, (part) => ({ kind: "router_command", commandId: command.id, part }));
   };
 
   const mirrorUser = async (chatId: FeishuChatId, message: Message) => {
-    const ref: FeishuPostRef = { kind: "message", messageId: message.id, part: 0 };
-    if (store.postOf(ref) !== null) return;
     const text = message.text.trim() === "" ? "（发了文件）" : message.text;
-    const { messageId } = await sendMessage({ chatId }, "interactive", renderTextCard({ title: "网页上说", text, template: "grey" }), `fusa-u-${message.id}`);
-    store.savePost({ ref, chatId, messageId, cardId: null, sequence: 0, state: "final" }, now());
+    await postTextChunks(chatId, "网页上说", text, `fusa-u-${message.id}`, (part) => ({ kind: "message", messageId: message.id, part }), "grey");
     store.advanceWatermark(chatId, { messageId: message.id }, now());
   };
 
   const runIntent = (intent: FeishuOutboundIntent) => {
     switch (intent.kind) {
       case "sync_chats":
-        enqueue("control", syncChats, "sync");
+        requestControl("sync");
         return;
       case "stream":
       case "agent_text":
@@ -809,30 +931,40 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
         const chat = projection.chatOfConversation(intent.conversationId);
         if (chat === null) return;
         const id = intent.conversationId;
-        if (intent.kind === "stream") enqueue(chat.chatId, () => feedStream(id, { kind: "text", text: intent.text }), `stream:${id}`);
+        if (intent.kind === "stream") enqueue(chat.chatId, () => feedStream(id, { kind: "text", text: intent.text }, chat.chatId), `stream:${id}`);
         else if (intent.kind === "agent_text")
           enqueue(chat.chatId, async () => {
-            if (store.postOf({ kind: "message", messageId: intent.message.id, part: 0 }) !== null) return;
-            await feedStream(id, { kind: "segment_done", messageId: intent.message.id, text: intent.message.text });
+            if ((store.chatById(chat.chatId)?.lastMessageId ?? 0) >= intent.message.id) return;
+            await feedStream(id, { kind: "segment_done", messageId: intent.message.id, text: intent.message.text }, chat.chatId);
           });
-        else if (intent.kind === "turn_end") enqueue(chat.chatId, () => feedStream(id, { kind: "turn_end" }));
+        else if (intent.kind === "turn_end") enqueue(chat.chatId, () => feedStream(id, { kind: "turn_end" }, chat.chatId));
         else if (intent.kind === "mirror_user") enqueue(chat.chatId, () => mirrorUser(chat.chatId, intent.message));
         else enqueue(chat.chatId, () => postAskCard(chat.chatId, intent.message, intent.deliverables));
         return;
       }
       case "ask_settled": {
         const chat = projection.chatOfConversation(intent.conversationId);
-        enqueue(chat?.chatId ?? "control", () => settleAskCard(intent.message));
+        if (chat !== null) enqueue(chat.chatId, () => settleAskCard(intent.message.id));
+        const routerChat = projection.routerChat();
+        if (routerChat !== null) enqueue(routerChat.chatId, async () => {
+          const row = db.get<{ id: number }>("SELECT id FROM router_items WHERE ask_message_id = ? ORDER BY id DESC LIMIT 1", intent.message.id);
+          if (row !== undefined) await settleRouterItem(row.id);
+        });
         return;
       }
       case "router_item": {
         const chat = store.chatOfTarget({ kind: "router" });
-        if (chat !== null) enqueue(chat.chatId, () => postRouterItem(intent.item));
+        if (chat !== null) {
+          enqueue(chat.chatId, () => replayRouterEvents(chat), "router-events");
+          if (intent.item.kind === "decision" && intent.item.status !== "pending") {
+            enqueue(chat.chatId, () => settleRouterItem(intent.item.id));
+          }
+        }
         return;
       }
       case "router_command": {
         const chat = store.chatOfTarget({ kind: "router" });
-        if (chat !== null) enqueue(chat.chatId, () => postRouterCommand(intent.command));
+        if (chat !== null) enqueue(chat.chatId, () => replayRouterEvents(chat), "router-events");
         return;
       }
     }
@@ -849,53 +981,103 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
 
   // ---- 断线补发 ----
 
-  const catchUp = async () => {
+  const replayPmIntent = async (chatId: FeishuChatId, intent: FeishuOutboundIntent) => {
+    if (intent.kind === "agent_text") {
+      await feedStream(intent.conversationId, { kind: "segment_done", messageId: intent.message.id, text: intent.message.text }, chatId);
+    } else if (intent.kind === "mirror_user") await mirrorUser(chatId, intent.message);
+    else if (intent.kind === "ask_card") await postAskCard(chatId, intent.message, intent.deliverables);
+  };
+
+  /** all 为 false（刚连上）：每个项目群只补最后 FEISHU_CATCHUP_MAX_MESSAGES 条，前面的只计数；为 true（出站满载后）：从水位起逐页全补。 */
+  const catchUp = async (all: boolean) => {
     for (const chat of store.chats()) {
-      if (chat.target.kind !== "pm" || chat.target.pmId === null || chat.archivedAt !== null) continue;
+      if (!linkUp || closed) return;
+      if (chat.target.kind !== "pm" || chat.target.pmId === null || activeTarget(chat) === null) continue;
       const conversationId = conversationOfPm(chat.target.pmId);
       if (conversationId === null) continue;
       if (chat.lastMessageId === null) {
         const latest = latestMessageId(conversationId);
-        if (latest !== null) store.advanceWatermark(chat.chatId, { messageId: latest }, now());
-        continue;
+        store.advanceWatermark(chat.chatId, { messageId: latest ?? 0 }, now());
       }
-      // 只留最后一页，前面的只计数：内存不随离线时长变大
-      let after: MessageId = chat.lastMessageId;
+      let after: MessageId = chat.lastMessageId ?? latestMessageId(conversationId) ?? 0;
       let skipped = 0;
-      let tail: Message[] = [];
+      let tail: FeishuOutboundIntent[] = [];
+      let scanned = after;
       for (;;) {
         const page = ledger.messagesAfter(conversationId, after, FEISHU_PAGE_SIZE);
         if (page.length === 0) break;
-        skipped += catchUpIntents(conversationId, tail).intents.length;
-        tail = page;
-        after = page.at(-1)!.id;
+        if (!linkUp || closed) return;
+        if (all) {
+          const batch = catchUpIntents(conversationId, page, FEISHU_PAGE_SIZE);
+          for (const intent of batch.intents) await replayPmIntent(chat.chatId, intent);
+          if (batch.lastMessageId !== null) store.advanceWatermark(chat.chatId, { messageId: batch.lastMessageId }, now());
+        } else {
+          const batch = catchUpIntents(conversationId, page);
+          const combined = [...tail, ...batch.intents];
+          tail = combined.slice(-FEISHU_CATCHUP_MAX_MESSAGES);
+          skipped += batch.omitted + combined.length - tail.length;
+        }
+        scanned = after = page.at(-1)!.id;
         if (page.length < FEISHU_PAGE_SIZE) break;
       }
-      const { intents, omitted, lastMessageId } = catchUpIntents(conversationId, tail);
-      const hidden = skipped + omitted;
-      if (hidden > 0) await sendText({ chatId: chat.chatId }, `离线期间还有 ${hidden} 条，去网页看。`);
-      for (const intent of intents) {
-        if (intent.kind === "agent_text") await finalizeSegment(chat.chatId, conversationId, { kind: "finalize", cardId: null, sequence: 0, messageId: intent.message.id, text: intent.message.text });
-        else if (intent.kind === "mirror_user") await mirrorUser(chat.chatId, intent.message);
-        else if (intent.kind === "ask_card") await postAskCard(chat.chatId, intent.message, intent.deliverables);
+      if (!all) {
+        if (skipped > 0) await sendText({ chatId: chat.chatId }, `离线期间还有 ${skipped} 条，去网页看。`);
+        for (const intent of tail) await replayPmIntent(chat.chatId, intent);
+        if (scanned > (chat.lastMessageId ?? 0)) store.advanceWatermark(chat.chatId, { messageId: scanned }, now());
       }
-      if (lastMessageId !== null) store.advanceWatermark(chat.chatId, { messageId: lastMessageId }, now());
       // 离线期间在网页上定案的卡
       for (const post of store.pendingCards(chat.target.pmId)) {
         if (post.ref.kind !== "message") continue;
-        const message = ledger.getMessage(post.ref.messageId);
-        if (message !== null) await settleAskCard(message);
+        await settleAskCard(post.ref.messageId);
       }
     }
-    const pendingRouter = store.pendingCards(null);
-    if (pendingRouter.length > 0) {
-      const items = new Map(ledger.snapshot().router.items.map((i) => [i.id, i]));
-      for (const post of pendingRouter) {
-        if (post.ref.kind !== "router_item") continue;
-        const item = items.get(post.ref.itemId);
-        if (item !== undefined) await postRouterItem(item);
-      }
+    const routerChat = projection.routerChat();
+    if (routerChat !== null) {
+      await replayRouterEvents(routerChat);
+      await settleRouterCards(routerChat);
     }
+    for (const [id, slot] of streams) await feedStream(id, { kind: "turn_end" }, slot.chatId, slot);
+  };
+
+  const replayRouterEvents = async (chat: FeishuChatBinding) => {
+    const current = store.chatOfTarget({ kind: "router" });
+    if (current?.chatId !== chat.chatId) return;
+    let after = current.lastRouterEventId ?? 0;
+    for (;;) {
+      if (!linkUp || closed || store.chatById(chat.chatId) === null) return;
+      const page = store.routerEventsAfter(after, FEISHU_PAGE_SIZE);
+      for (const event of page) {
+        if (event.item_id !== null) {
+          const item = ledger.getRouterItem(event.item_id);
+          if (item !== null) await postRouterItem(item);
+        } else if (event.command_id !== null) {
+          const command = ledger.getRouterCommand(event.command_id);
+          if (command !== null && (command.status === "answered" || command.status === "dispatched" || command.status === "failed")) await postRouterCommand(command);
+        }
+        after = event.id;
+        store.ackRouterEvent(chat.chatId, after, now());
+      }
+      if (page.length < FEISHU_PAGE_SIZE) return;
+    }
+  };
+
+  const settleRouterItem = async (itemId: number) => {
+    const post = store.postOf({ kind: "router_item", itemId });
+    if (post?.state !== "card_pending" || post.cardId === null) return;
+    const item = ledger.getRouterItem(itemId);
+    if (item !== null) await postRouterItem(item);
+    else await closeMissingCard(post);
+  };
+
+  const closeMissingCard = async (post: NonNullable<ReturnType<typeof store.postOf>>) => {
+    if (post.cardId === null) return;
+    await updateCard(post.cardId, post.sequence + 1, renderTextCard({ title: "已关闭", text: "这张拍板卡已关闭。" }));
+    if (store.chatById(post.chatId) !== null) store.savePost({ ...post, sequence: post.sequence + 1, state: "card_settled" }, now());
+  };
+
+  const settleRouterCards = async (chat: FeishuChatBinding) => {
+    if (store.chatOfTarget({ kind: "router" })?.chatId !== chat.chatId) return;
+    for (const post of store.pendingCards(null)) if (post.ref.kind === "router_item") await settleRouterItem(post.ref.itemId);
   };
 
   // ---- 入站 ----
@@ -905,13 +1087,16 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     if (app === null) return;
     const event = parseFeishuEvent(raw, app.botOpenId);
     if (event === null) return;
-    // 进的满了先丢成员和改名事件（重连对账会补回）
-    if (inboundQueued >= FEISHU_INBOUND_QUEUE_MAX && event.kind !== "message") return;
-    inboundQueued++;
-    enqueue(`in:${event.chatId}`, async () => {
-      inboundQueued--;
-      await handleInbound(event);
-    });
+    if (closed) return;
+    if (event.kind === "chat_gone") {
+      applyChatGone(event.chatId);
+      return;
+    }
+    const limit = event.kind === "message" ? inbound.limit : Math.floor(inbound.limit / 2);
+    if (!admit(inbound, event.chatId, () => handleInbound(event), null, limit)) {
+      directory.markAllStale();
+      lastError = "飞书入站队列已满，请重发未收到回复的消息";
+    }
   };
 
   const isBindCode = (text: string) => bindCode !== null && bindCode.expiresAt > now() && text.trim() === bindCode.code;
@@ -922,35 +1107,34 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     const ref: FeishuPostRef = { kind: "chat_policy", pmId };
     if (store.postOf(ref) !== null) return;
     const posted = await postCardEntity(chat.chatId, renderChatPolicyCard({ pmId, triggerMode: chat.triggerMode, guestTier: chat.guestTier, mentionOnlyForced: mentionOnly }), `fusa-p-${chat.chatId}`);
-    store.savePost({ ref, chatId: chat.chatId, messageId: posted.messageId, cardId: posted.cardId, sequence: 0, state: "final" }, now());
+    if (activeTarget(store.chatById(chat.chatId)) !== null) store.savePost({ ref, chatId: chat.chatId, messageId: posted.messageId, cardId: posted.cardId, sequence: 0, state: "final" }, now());
   };
 
-  const handleInbound = async (event: FeishuInbound) => {
+  const applyChatGone = (chatId: FeishuChatId) => {
+    clearChatRuntime(chatId);
+    const chat = store.chatById(chatId);
+    if (chat === null || chat.archivedAt !== null) return;
+    if (chat.target.kind === "router") {
+      store.removeChat(chatId);
+      return;
+    }
+    // 记成“已解散”而不是删掉：唤醒方式和访客档位留着，下一次对齐按这个时间当 generation 重建（建群 uuid 不会撞上 10 小时内的旧请求）
+    store.setChatArchived(chatId, dissolvedAt(chat.target.pmId), now());
+    requestControl("sync");
+  };
+
+  const handleInbound = async (event: Exclude<FeishuInbound, { kind: "chat_gone" }>) => {
     const o = owner();
     switch (event.kind) {
       case "members_added": {
         directory.applyJoined(event.chatId, event.openIds.map((openId) => ({ openId, name: "" })), now());
         const chat = store.chatById(event.chatId);
-        if (chat !== null && o !== null && event.openIds.some((id) => id !== o)) await policyCardFor(chat);
+        if (chat !== null && activeTarget(chat)?.kind === "pm" && o !== null && event.openIds.some((id) => id !== o)) await policyCardFor(chat);
         return;
       }
       case "members_removed":
         directory.applyLeft(event.chatId, event.openIds, now());
         return;
-      case "chat_gone": {
-        directory.forget(event.chatId);
-        contexts.clear(event.chatId);
-        const chat = store.chatById(event.chatId);
-        if (chat === null || chat.archivedAt !== null) return;
-        if (chat.target.kind === "router") {
-          store.removeChat(event.chatId);
-          return;
-        }
-        // 记成“已解散”而不是删掉：唤醒方式和访客档位留着，下一次对齐按这个时间当 generation 重建（建群 uuid 不会撞上 10 小时内的旧请求）
-        store.setChatArchived(event.chatId, dissolvedAt(chat.target.pmId), now());
-        enqueue("control", syncChats, "sync");
-        return;
-      }
       case "chat_renamed":
         if (store.chatById(event.chatId) !== null) store.renameChat(event.chatId, event.name, null, now());
         return;
@@ -965,13 +1149,15 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     if (message.chatType === "p2p" && o !== null && message.senderOpenId === o && store.chatOfTarget({ kind: "router" }) === null) {
       store.upsertChat({ chatId: message.chatId, target: { kind: "router" }, name: "总助", label: "总助" }, t);
     }
-    const chat = message.chatType === "p2p" ? store.chatOfTarget({ kind: "router" }) : store.chatById(message.chatId);
-    const group = message.chatType === "group" && chat !== null && chat.target.kind === "pm";
+    const chat = store.chatById(message.chatId);
+    const target = activeTarget(chat);
+    const group = message.chatType === "group" && target?.kind === "pm";
     const mode = group && o !== null ? await directory.modeOf(message.chatId, o, message.senderOpenId, t) : "solo";
+    if (message.chatType === "p2p" && message.senderOpenId === o && target?.kind !== "router") return;
     const speakerName = group ? await directory.nameOf(message.chatId, message.senderOpenId, "", t) : message.senderOpenId === o ? displayOwner() : "";
     const route = routeFeishuMessage(message, {
       ownerOpenId: o,
-      binding: chat === null || (message.chatType === "group" && chat.target.kind !== "pm") ? null : { target: chat.target as FeishuChatTarget, archived: chat.archivedAt !== null },
+      binding: group ? { target, archived: false } : null,
       mode,
       triggerMode: chat?.triggerMode ?? "auto",
       guestTier: chat?.guestTier ?? "chat_only",
@@ -988,9 +1174,7 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
         store.bindOwner(route.openId, t);
         store.upsertChat({ chatId: message.chatId, target: { kind: "router" }, name: "总助", label: "总助" }, t);
         await sendText({ chatId: message.chatId }, "认好了：你是这个机器人的主人。在这里和总助说话；每个项目经理会有自己的项目群。");
-        enqueue("control", async () => {
-          await syncChats();
-        });
+        requestControl("sync");
         return;
       case "reject":
         await sendText({ chatId: message.chatId }, message.chatType === "p2p" ? route.reason : `<at user_id="${route.openId}"></at> ${route.reason}`);
@@ -1013,6 +1197,7 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
           await options.router.submitCommand({ clientId, text: route.text, ...(attachments.length > 0 ? { attachmentIds: attachments.map((a) => a.id) } : {}) });
           return;
         }
+        if (activeTarget(store.chatById(message.chatId))?.kind !== "pm") return;
         const conversationId = conversationOfPm(route.target.pmId);
         if (conversationId === null) return;
         try {
@@ -1030,18 +1215,71 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     }
   };
 
-  /** 卡片点击：账本接口都是同步的，在回调里直接调，结果转成 toast。 */
+  const postedCardRef = (post: NonNullable<ReturnType<typeof store.postByMessageId>>, target: FeishuChatTarget): FeishuCardRef | null => {
+    const { ref } = post;
+    if (post.state !== "card_pending" && post.state !== "card_settled") return null;
+    if (ref.kind === "message" && ref.part === 0 && target.kind === "pm") {
+      const message = ledger.getMessage(ref.messageId);
+      if (message === null || pmOfConversation(message.conversationId) !== target.pmId) return null;
+      const ask = askOf(message);
+      return ask === null ? null : feishuCardRefOf(message, ask);
+    }
+    if (ref.kind !== "router_item" || target.kind !== "router") return null;
+    const item = ledger.getRouterItem(ref.itemId);
+    if (item?.kind !== "decision" || !isActivePm(item.pmId)) return null;
+    if (item.askMessageId === null) return { kind: "router_item", itemId: item.id };
+    const message = ledger.getMessage(item.askMessageId);
+    if (message === null || pmOfConversation(message.conversationId) !== item.pmId) return null;
+    const ask = askOf(message);
+    return ask === null ? null : feishuCardRefOf(message, ask);
+  };
+
+  /** 点的是不是这个群自己发出、还归这个群的项目经理管的卡：只信本地发送记录和账本，不信按钮里带的编号。 */
+  const ownsAction = (action: FeishuInboundAction, target: FeishuChatTarget): boolean => {
+    const { value, chatId, messageId } = action;
+    if (value.kind === "stop") {
+      if (target.kind !== "pm" || pmOfConversation(value.conversationId) !== target.pmId) return false;
+      const slot = streams.get(value.conversationId);
+      return slot?.chatId === chatId && slot.state.phase === "live" && slot.posted?.messageId === messageId;
+    }
+    const post = store.postByMessageId(messageId);
+    if (post === null || post.chatId !== chatId || post.cardId === null) return false;
+    if (value.kind === "set_policy") {
+      return target.kind === "pm" && post.ref.kind === "chat_policy" && post.ref.pmId === target.pmId && value.pmId === target.pmId;
+    }
+    const ref = postedCardRef(post, target);
+    if (ref === null || !isDeepStrictEqual(ref, value.card)) return false;
+    if (ref.kind === "gate") {
+      return db.get(`SELECT 1 FROM task_graphs g JOIN projects p ON p.id = g.project_id
+        JOIN messages m ON m.id = ? AND m.conversation_id = g.conversation_id
+        WHERE g.id = ? AND p.status = 'active'`, ref.askMessageId, ref.graphId) !== undefined;
+    }
+    if (ref.kind === "blocker") {
+      return value.kind === "blocker_done" && db.get("SELECT 1 FROM user_blocker_cards WHERE message_id = ? AND blocker_id = ?", ref.askMessageId, ref.blockerId) !== undefined;
+    }
+    if (ref.kind === "router_item" || ref.kind === "ask") {
+      const row = ref.kind === "router_item"
+        ? db.get<{ active: number }>(`SELECT r.project_id IS NULL OR p.status = 'active' AS active
+            FROM router_items r LEFT JOIN projects p ON p.id = r.project_id WHERE r.id = ?`, ref.itemId)
+        : db.get<{ active: number }>(`SELECT r.project_id IS NULL OR p.status = 'active' AS active
+            FROM router_items r LEFT JOIN projects p ON p.id = r.project_id WHERE r.ask_message_id = ? ORDER BY r.id DESC LIMIT 1`, ref.askMessageId);
+      return row?.active === 1;
+    }
+    return true;
+  };
+
   const onRawCardAction = (raw: FeishuRawCardAction): FeishuCardActionResponse => {
     const started = now();
     const action = parseFeishuCardAction(raw);
-    if (action === null) return { toast: { type: "warning", content: "这张卡已过期，去网页看" } };
-    const app = store.app();
-    const chat = store.chatById(action.chatId);
+    const chat = action === null ? null : store.chatById(action.chatId);
+    const target = activeTarget(chat);
+    if (action === null || target === null || chat === null) return toast("warning", "这张卡已过期，去网页看");
     const route = routeFeishuAction(action, {
-      ownerOpenId: app?.ownerOpenId ?? null,
-      binding: chat === null ? null : { target: chat.target as FeishuChatTarget, archived: chat.archivedAt !== null },
-      guestTier: chat?.guestTier ?? "chat_only",
+      ownerOpenId: owner(),
+      binding: { target, archived: false },
+      guestTier: chat.guestTier,
     });
+    if (route.kind !== "ignore" && route.kind !== "reject" && !ownsAction(action, target)) return toast("warning", "这张卡已过期，去网页看");
     const response = applyAction(route, action.operatorOpenId, action.chatId);
     if (now() - started > FEISHU_CARD_ACTION_DEADLINE_MS) log(`飞书：卡片点击处理了 ${now() - started} 毫秒，超过 ${FEISHU_CARD_ACTION_DEADLINE_MS}`);
     return response;
@@ -1062,17 +1300,22 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
           if (conversationId !== null) ledger.requestStop(conversationId);
           return toast("info", "正在停");
         }
-        case "set_policy":
-          void setup.setChatPolicy({ pmId: route.pmId, ...(route.triggerMode ? { triggerMode: route.triggerMode } : {}), ...(route.guestTier ? { guestTier: route.guestTier } : {}) }).catch(handleError);
-          return toast("success", "已改");
+        case "set_policy": {
+          const admitted = admit(inbound, chatId, async () => {
+            if (activeTarget(store.chatById(chatId)) === null) return;
+            await setup.setChatPolicy({ pmId: route.pmId, ...(route.triggerMode ? { triggerMode: route.triggerMode } : {}), ...(route.guestTier ? { guestTier: route.guestTier } : {}) });
+          }, null);
+          return admitted ? toast("success", "已改") : toast("warning", "飞书正忙，请再点一次");
+        }
         case "blocker_done": {
           const result = ledger.recheckUserBlocker(route.card.blockerId);
           return result.resolved ? toast("success", "已解开，接着派") : toast("warning", "还不能用，卡先留着");
         }
         case "answer": {
           const name = operator === owner() ? displayOwner() : (directory.peekMembers(chatId)?.find((m) => m.openId === operator)?.name || "访客");
-          deciders.set(deciderKey(route.card), name);
-          answerCard(route);
+          const previous = decisionOf(route.card);
+          if (previous?.clientId === route.clientId) return toast("success", "已定案");
+          answerCard(route, () => store.saveDecision(route.card, route.clientId, feishuDisplayName(name), now()));
           return toast("success", "已定案");
         }
       }
@@ -1084,22 +1327,24 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     }
   };
 
-  const answerCard = (route: Extract<FeishuActionRoute, { kind: "answer" }>) => {
+  const answerCard = (route: Extract<FeishuActionRoute, { kind: "answer" }>, onDecisionWritten: () => void) => {
     const { card, optionIndex, note, clientId } = route;
     if (card.kind === "router_item") {
-      ledger.resolveRouterItem(card.itemId, { clientId, ...(optionIndex !== null ? { optionIndex } : {}), ...(note !== null ? { note } : {}) });
+      ledger.resolveRouterItem(card.itemId, { clientId, ...(optionIndex !== null ? { optionIndex } : {}), ...(note !== null ? { note } : {}) }, onDecisionWritten);
       return;
     }
     const message = ledger.getMessage(card.askMessageId);
     const ask = message === null ? null : askOf(message);
     if (ask === null) throw new LedgerRequestError("not_found", "这张卡已经不在了");
-    if (ask.answered === true || ask.closed === true) throw new LedgerRequestError("conflict", ALREADY_DECIDED);
+    if (card.kind === "blocker") throw new LedgerRequestError("invalid", "这张卡只能标记已处理");
     const choice = optionIndex === null ? null : (feishuAskOptions(ask)[optionIndex] ?? null);
+    if (optionIndex !== null && choice === null) throw new LedgerRequestError("invalid", "选项不在有效范围内");
     if (card.kind === "gate") {
-      ledger.decideTaskNode(card.graphId, card.nodeKey, { clientId, choice, note });
+      if (ask.answered === true || ask.closed === true) throw new LedgerRequestError("conflict", ALREADY_DECIDED);
+      ledger.decideTaskNode(card.graphId, card.nodeKey, { clientId, choice, note }, onDecisionWritten);
       return;
     }
-    ledger.answerAsk(card.askMessageId, { clientId, choice, ...(note !== null ? { note } : {}) });
+    ledger.answerAsk(card.askMessageId, { clientId, choice, ...(note !== null ? { note } : {}) }, onDecisionWritten);
   };
 
   // ---- 设置 ----
@@ -1227,7 +1472,7 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
       void startTransport(secrets);
     },
     idle() {
-      if (queued === 0 && ![...lanes.values()].some((l) => l.running)) return Promise.resolve();
+      if (!busy()) return Promise.resolve();
       return new Promise((resolve) => idleWaiters.push(resolve));
     },
     async close() {
@@ -1238,8 +1483,12 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
       registration?.abort.abort();
       registration = null;
       await stopTransport();
-      lanes.clear();
-      queued = 0;
+      for (const queue of [inbound, outbound]) {
+        for (const lane of queue.lanes.values()) {
+          queue.count -= lane.tasks.length;
+          lane.tasks.length = 0;
+        }
+      }
       directory.clear();
       contexts.clearAll();
       settleIdle();

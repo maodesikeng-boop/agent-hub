@@ -38,6 +38,7 @@ export type FeishuInbound =
   | { kind: "chat_renamed"; chatId: FeishuChatId; name: string };
 
 export interface FeishuInboundAction {
+  token?: string;
   messageId: FeishuMessageId;
   chatId: FeishuChatId;
   operatorOpenId: FeishuOpenId;
@@ -104,5 +105,5 @@ export function parseFeishuCardAction(raw: FeishuRawCardAction): FeishuInboundAc
   if (messageId === null || chatId === null || operatorOpenId === null || value === null) return null;
   const rawNote = raw.formValue?.[FEISHU_NOTE_FIELD];
   const note = typeof rawNote === "string" && rawNote.trim() !== "" ? rawNote.trim() : null;
-  return { messageId, chatId, operatorOpenId, value, note };
+  return { messageId, chatId, operatorOpenId, value, note, ...(raw.token ? { token: raw.token } : {}) };
 }

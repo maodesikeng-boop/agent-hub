@@ -2318,3 +2318,59 @@ describe("0033_pm_capabilities：每个项目经理的能力选择", () => {
     expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 });
+
+describe("0034_feishu", () => {
+  it("从 0033 升级保留账本，约束群绑定与投影，并可重复启动", () => {
+    const db = m3Db();
+    migrate(db, migrationsUpTo(33));
+    const pms = db.all("SELECT * FROM pms ORDER BY id");
+    expect(migrate(db, migrationsUpTo(34))).toMatchObject({ from: 33, to: 34 });
+    expect(db.all("SELECT * FROM pms ORDER BY id")).toEqual(pms);
+
+    const insertChat = (id: string, target: string, pmId: number | null) => db.run(
+      `INSERT INTO feishu_chats (chat_id, target, pm_id, name, label, created_at, updated_at) VALUES (?, ?, ?, '群', '群', 0, 0)`,
+      id, target, pmId,
+    );
+    insertChat("oc_router", "router", null);
+    insertChat("oc_pm", "pm", 1);
+    expect(() => insertChat("oc_duplicate_router", "router", null)).toThrow(/UNIQUE/);
+    expect(() => insertChat("oc_duplicate_pm", "pm", 1)).toThrow(/UNIQUE/);
+    expect(() => insertChat("oc_bad_router", "router", 2)).toThrow(/CHECK/);
+    expect(() => insertChat("oc_missing_pm", "pm", 999_999)).toThrow(/FOREIGN KEY/);
+    expect(() => db.run("UPDATE feishu_chats SET guest_tier = 'invalid'")).toThrow(/CHECK/);
+    expect(() => db.run("UPDATE feishu_chats SET trigger_mode = 'invalid'")).toThrow(/CHECK/);
+    db.run("INSERT INTO feishu_app VALUES (1, 'cli_fixture', 'feishu', 'ou_fixture_bot', '机器人', 'ou_fixture_owner', 1, 0, 0)");
+    expect(() => db.run("INSERT INTO feishu_app VALUES (2, 'cli_other', 'feishu', 'ou_fixture_bot', '机器人', NULL, 1, 0, 0)")).toThrow(/CHECK/);
+    const insertPost = (chatId: string, state: string) => db.run(
+      "INSERT INTO feishu_posts VALUES ('message', 1, 0, ?, 'om_fixture', 'card_fixture', 0, ?, 0)", chatId, state,
+    );
+    expect(() => insertPost("oc_missing", "final")).toThrow(/FOREIGN KEY/);
+    expect(() => insertPost("oc_pm", "invalid")).toThrow(/CHECK/);
+    insertPost("oc_pm", "card_pending");
+    expect(() => insertPost("oc_pm", "final")).toThrow(/UNIQUE/);
+
+    const command = (clientId: string) => db.run(
+      `INSERT INTO router_commands (client_id, input_text, vendor, status, created_at, updated_at) VALUES (?, '内容', 'claude', 'planning', 0, 0)`, clientId,
+    ).lastInsertRowid;
+    const older = command("older");
+    const newer = command("newer");
+    for (const id of [newer, older]) db.run("UPDATE router_commands SET status = 'answered' WHERE id = ?", id);
+    expect(db.all("SELECT command_id FROM feishu_router_events ORDER BY id")).toEqual([{ command_id: newer }, { command_id: older }]);
+    expect(() => db.run("INSERT INTO feishu_router_events DEFAULT VALUES")).toThrow(/CHECK/);
+    const chats = db.all("SELECT * FROM feishu_chats ORDER BY chat_id");
+    const posts = db.all("SELECT * FROM feishu_posts");
+    db.exec("PRAGMA user_version = 33");
+    expect(migrate(db, migrationsUpTo(34))).toMatchObject({ from: 33, to: 34 });
+    expect(migrate(db, migrationsUpTo(34))).toMatchObject({ from: 34, to: 34 });
+    expect(db.all("SELECT * FROM feishu_chats ORDER BY chat_id")).toEqual(chats);
+    expect(db.all("SELECT * FROM feishu_posts")).toEqual(posts);
+    expect(db.all("SELECT command_id FROM feishu_router_events ORDER BY id")).toHaveLength(2);
+    db.run("DELETE FROM router_commands WHERE id = ?", newer);
+    db.run("DELETE FROM feishu_chats WHERE chat_id = 'oc_pm'");
+    expect(db.all("SELECT command_id FROM feishu_router_events")).toEqual([{ command_id: older }]);
+    expect(db.all("SELECT * FROM feishu_posts")).toEqual([]);
+    expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+    expect(db.all<{ detail: string }>("EXPLAIN QUERY PLAN SELECT session_id FROM messages WHERE session_id = ? AND status IN ('delivered', 'processing')", 1)
+      .some((step) => step.detail.includes("messages_in_flight"))).toBe(true);
+  });
+});

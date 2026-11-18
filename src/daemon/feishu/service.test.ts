@@ -12,6 +12,9 @@ import {
   FEISHU_CARDKIT_BUDGET_PER_SECOND,
   FEISHU_CATCHUP_MAX_MESSAGES,
   FEISHU_CHAT_SENDS_PER_SECOND,
+  FEISHU_INBOUND_QUEUE_MAX,
+  FEISHU_OUTBOUND_QUEUE_MAX,
+  FEISHU_STREAM_RENEW_MS,
   FEISHU_STREAM_FLUSH_MS,
 } from "../../shared/limits.ts";
 import type { RouterCommandRecord } from "../../shared/router.ts";
@@ -212,6 +215,13 @@ describe("createFeishuService：接入与建群", () => {
     expect(fake.chats.size).toBe(2);
     expect(store().chats().filter((c) => c.target.kind === "pm")).toHaveLength(2);
     expect(uuidLin.length).toBeLessThanOrEqual(50);
+    const adopted = chatOf(lin.pmId);
+    expect(store().chatById(adopted)?.lastMessageId).toBe(0);
+    fake.handlers!.onDisconnected("暂时离线");
+    ev(lin.sessionId, { type: "agent.text", uuid: "adopted-offline", text: "认回空群后补发", at: Date.now() });
+    fake.handlers!.onConnected();
+    await settle();
+    expect(fake.sent.find((entry) => entry.chatId === adopted && entry.content.includes("认回空群后补发"))).toBeDefined();
   });
 
   it("新建项目经理建群、改名改群名；重复收到同一变化不多建群", async () => {
@@ -438,12 +448,36 @@ describe("createFeishuService：访客权限", () => {
     ev(lin.sessionId, { type: "turn.started", at: Date.now() });
     expect(click(chat, post.messageId, { fusa: 1, kind: "choose", card: { kind: "ask", askMessageId: askId }, optionIndex: 1 }, GUEST).toast?.type).toBe("success");
     expect(askOf(ledger.getMessage(askId)!)).toMatchObject({ answered: true, chosenOption: "不要" });
-    expect(click(chat, post.messageId, { fusa: 1, kind: "stop", conversationId: lin.conversationId }, GUEST).toast?.content).toBe("正在停");
+    ev(lin.sessionId, { type: "agent.text_delta", delta: "正在处理", at: Date.now() });
+    await settle();
+    const sent = fake.sent.findLast((entry) => entry.chatId === chat)!;
+    expect(click(chat, sent.messageId, { fusa: 1, kind: "stop", conversationId: lin.conversationId }, GUEST).toast?.content).toBe("正在停");
+    expect(stops).toEqual([lin.conversationId]);
     fake.resources.set("file_c", Buffer.from("collab file"));
     say(chat, "附件给你", { sender: GUEST, mention: true, files: [{ type: "file", fileKey: "file_c", fileName: "c.txt" }] });
     await settle();
     const m = userMessages(lin.conversationId).find((x) => x.text === "附件给你")!;
     expect((m.meta?.attachments as { name: string }[])[0]!.name).toBe("c.txt");
+  });
+
+  it("只接受当前群实际发出的卡片，归档与删除即时拒绝回调", async () => {
+    await connect();
+    const chat = chatOf(lin.pmId);
+    const ask = await askInGroupFor(lin);
+    const post = postOfAsk(ask);
+    const choose = { fusa: 1, kind: "choose", card: { kind: "ask", askMessageId: ask }, optionIndex: 0 };
+    expect(click(chatOf(zhou.pmId), post.messageId, choose).toast?.type).toBe("warning");
+    expect(click(chat, "om_fixture_unknown", choose).toast?.type).toBe("warning");
+    await svc.setup.setChatPolicy({ pmId: lin.pmId, guestTier: "collaborator" });
+    const routerPost = postOfRouterItem(itemOfAsk(ask).id);
+    expect(click(routerChat(), routerPost.messageId, choose, GUEST).toast?.type).toBe("warning");
+    ledger.archivePm(lin.pmId);
+    expect(click(chat, post.messageId, choose).toast?.type).toBe("warning");
+    expect(click(routerChat(), routerPost.messageId, choose).toast?.type).toBe("warning");
+    ledger.purgeExpiredArchivedPms(Date.now() + 8 * 24 * 60 * 60 * 1000);
+    expect(click(chat, post.messageId, choose).toast?.type).toBe("warning");
+    expect(click(routerChat(), routerPost.messageId, choose).toast?.type).toBe("warning");
+    expect(ledger.getMessage(ask)).toBeNull();
   });
 
   it("observer 档访客 @机器人 也不唤醒；主人下次唤醒时，访客说的话作为背景一起交给项目经理", async () => {
@@ -552,6 +586,57 @@ describe("createFeishuService：流式、急停与卡片", () => {
     expect(bodies.join("")).toBe(text);
   });
 
+  it.each(["card.create", "message.create"] as const)("%s 临时失败后仍能定稿，归档重建后的下一轮发到新群", async (method) => {
+    await connect();
+    const oldChat = chatOf(lin.pmId);
+    running(lin.sessionId);
+    ev(lin.sessionId, { type: "turn.started", at: Date.now() });
+    fake.failNext[method] = new Error("临时网络错误");
+    delta(lin.sessionId, "临时预览");
+    ev(lin.sessionId, { type: "agent.text", uuid: "first-final", text: "失败后仍定稿", at: Date.now() });
+    await settle();
+    expect(cardsSentTo(oldChat).some((card) => JSON.stringify(card).includes("失败后仍定稿"))).toBe(true);
+    ledger.archivePm(lin.pmId);
+    await settle();
+    ledger.unarchivePm(lin.pmId);
+    await settle();
+    const newChat = chatOf(lin.pmId);
+    expect(newChat).not.toBe(oldChat);
+    const session = ledger.snapshot().sessions.find((session) => session.conversationId === lin.conversationId && session.status !== "ended")?.sessionId ?? lin.sessionId;
+    running(session);
+    ev(session, { type: "turn.ended", ok: true, interrupted: false, messageIds: [], durationMs: 1, at: Date.now() });
+    ev(session, { type: "turn.started", at: Date.now() });
+    delta(session, "新群预览");
+    await settle();
+    ev(session, { type: "agent.text", uuid: "second-final", text: "只在新群定稿", at: Date.now() });
+    await settle();
+    expect(fake.callsOf("card.update").some((call) => call.card.data.includes("只在新群定稿"))).toBe(true);
+    expect(fake.sent.filter((entry) => entry.chatId === newChat)).toHaveLength(1);
+    expect(svc.setup.status().lastError).not.toContain("FOREIGN KEY");
+  });
+
+  it("定稿清掉续期计时器，已结束的停止按钮不能影响下一轮", async () => {
+    await connect();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      const chat = chatOf(lin.pmId);
+      running(lin.sessionId);
+      ev(lin.sessionId, { type: "turn.started", at: Date.now() });
+      delta(lin.sessionId, "开始写");
+      await settle();
+      const sent = fake.sent.at(-1)!;
+      ev(lin.sessionId, { type: "agent.text", uuid: "stopped-final", text: "已经定稿", at: Date.now() });
+      await settle();
+      expect(click(chat, sent.messageId, { fusa: 1, kind: "stop", conversationId: lin.conversationId }).toast?.type).toBe("warning");
+      await vi.advanceTimersByTimeAsync(FEISHU_STREAM_RENEW_MS);
+      await settle();
+      expect(fake.callsOf("card.settings")).toHaveLength(0);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("主人点停止调 requestStop，回 toast，这一轮停下后卡片收尾", async () => {
     await connect();
     const stops: ConversationId[] = [];
@@ -561,7 +646,7 @@ describe("createFeishuService：流式、急停与卡片", () => {
     delta(lin.sessionId, "写到一半");
     await settle();
     expect(cardIdsCreated()).toHaveLength(1);
-    const response = click(chatOf(lin.pmId), "om_streamcard", { fusa: 1, kind: "stop", conversationId: lin.conversationId });
+    const response = click(chatOf(lin.pmId), fake.sent.at(-1)!.messageId, { fusa: 1, kind: "stop", conversationId: lin.conversationId });
     expect(response.toast?.content).toBe("正在停");
     expect(stops).toEqual([lin.conversationId]);
     ev(lin.sessionId, { type: "turn.ended", ok: false, interrupted: true, messageIds: [], durationMs: 1, at: Date.now() });
@@ -744,6 +829,61 @@ describe("createFeishuService：断线与补发", () => {
     fake.handlers!.onConnected();
     await settle();
     expect(postOfAsk(askId).state).toBe("card_settled");
+  });
+
+  it("重连补齐总助简报和倒序完成的回复，定案署名保留首位点击者", async () => {
+    await connect();
+    const chat = chatOf(lin.pmId);
+    await svc.setup.setChatPolicy({ pmId: lin.pmId, guestTier: "collaborator" });
+    join_(chat);
+    await settle();
+    say(chat, "填充成员名称", { sender: GUEST });
+    await settle();
+    const askId = await askInGroupFor(lin);
+    const card = { kind: "ask", askMessageId: askId };
+    const first = { fusa: 1, kind: "choose", card, optionIndex: 0 };
+    const groupPost = postOfAsk(askId);
+    const routerPost = postOfRouterItem(itemOfAsk(askId).id);
+    fake.handlers!.onDisconnected("离线");
+    expect(click(chat, groupPost.messageId, first, GUEST).toast?.type).toBe("success");
+    expect(click(chat, groupPost.messageId, first, GUEST).toast?.type).toBe("success");
+    expect(click(routerChat(), routerPost.messageId, { ...first, optionIndex: 1 }).toast?.content).toBe("已经定过了");
+    const older = ledger.createRouterCommand({ clientId: "older", inputText: "先建", vendor: "claude", status: "planning" }).command;
+    const newer = ledger.createRouterCommand({ clientId: "newer", inputText: "后建", vendor: "claude", status: "planning" }).command;
+    ledger.updateRouterCommand(newer.id, { status: "answered", plan: { intent: "answer", reply: "先完成", actions: [] } });
+    ledger.hubCall(lin.sessionId, "router.report", { summary: "离线简报" });
+    await svc.close();
+    svc = makeService();
+    await svc.start();
+    await vi.waitFor(() => expect(svc.setup.status().state).toBe("connected"));
+    await settle();
+    ledger.updateRouterCommand(older.id, { status: "answered", plan: { intent: "answer", reply: "后完成", actions: [] } });
+    await settle();
+    fake.handlers!.onConnected();
+    await settle();
+    for (const text of ["先完成", "后完成"]) expect(fake.sent.filter((entry) => entry.content.includes(text))).toHaveLength(1);
+    expect(fake.callsOf("card.create").filter((call) => call.data.includes("离线简报"))).toHaveLength(1);
+    expect(fake.callsOf("card.update").filter((call) => call.card_id === groupPost.cardId || call.card_id === routerPost.cardId).map((call) => call.card.data))
+      .toEqual([expect.stringContaining("李四 选了「要」"), expect.stringContaining("李四 选了「要」")]);
+  });
+
+  it("进出队列满载时在各自的上限内处理，账本补齐出站并对齐新项目群", { timeout: 15_000 }, async () => {
+    let clock = Date.now();
+    svc = makeService({ now: () => (clock += 1_001) });
+    await connect();
+    const chat = chatOf(lin.pmId);
+    for (let i = 0; i < FEISHU_INBOUND_QUEUE_MAX + 9; i++) say(chat, `入站 ${i}`);
+    expect(svc.setup.status().lastError).toContain("入站队列已满");
+    await settle();
+    expect(userMessages(lin.conversationId).filter((message) => message.text.startsWith("入站 "))).toHaveLength(FEISHU_INBOUND_QUEUE_MAX);
+    for (let i = 0; i < FEISHU_OUTBOUND_QUEUE_MAX + 7; i++) {
+      ev(lin.sessionId, { type: "agent.text", uuid: `load-${i}`, text: `出站 ${i}`, at: Date.now() });
+    }
+    expect(svc.setup.status().lastError).toContain("出站队列已满");
+    const created = ledger.createPm({ name: "满载时创建", mode: "manage_only", persona: "" });
+    await settle();
+    expect(fake.chats.get(chatOf(created.pm.id))?.name).toBe("满载时创建");
+    expect(fake.sent.filter((entry) => entry.chatId === chat && entry.content.includes("出站 "))).toHaveLength(FEISHU_OUTBOUND_QUEUE_MAX + 7);
   });
 
   it("排队超过 FEISHU_OUTBOUND_QUEUE_MAX 时先合并同一张卡的流式推送，不丢定稿和卡片", async () => {

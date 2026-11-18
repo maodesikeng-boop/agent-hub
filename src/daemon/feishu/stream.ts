@@ -11,7 +11,9 @@
 // - 流式模式开着时，卡片回调响应不能改卡片：停止按钮的点击只回 toast，卡片由这一轮结束时的定稿改。
 import type { ConversationId, MessageId } from "../../shared/domain.ts";
 import type { FeishuCardId, FeishuChatId, FeishuMessageId } from "../../shared/feishu.ts";
-import { FEISHU_CARD_MAX_CHARS, FEISHU_STREAM_FLUSH_MS, FEISHU_STREAM_RENEW_MS } from "../../shared/limits.ts";
+import { FEISHU_STREAM_FLUSH_MS, FEISHU_STREAM_RENEW_MS } from "../../shared/limits.ts";
+
+import { feishuMarkdownPrefix } from "./outbound.ts";
 
 export type FeishuStreamState =
   | { phase: "idle" }
@@ -41,6 +43,7 @@ export type FeishuStreamState =
 
 export type FeishuStreamEvent =
   | { kind: "text"; text: string }
+  | { kind: "open_failed" }
   | { kind: "opened"; cardId: FeishuCardId; messageId: FeishuMessageId; sequence: number }
   | { kind: "segment_done"; messageId: MessageId; text: string }
   | { kind: "turn_end" }
@@ -88,7 +91,7 @@ export function stepFeishuStream(
   switch (state.phase) {
     case "idle":
       if (event.kind === "text" && event.text !== "") {
-        const sentText = streamPrefix(event.text);
+        const sentText = feishuMarkdownPrefix(event.text);
         return { state: { phase: "opening", sentText, text: event.text, pending: null }, effects: [{ kind: "open", text: sentText }] };
       }
       if (event.kind === "segment_done") {
@@ -105,6 +108,10 @@ export function stepFeishuStream(
           return state.pending === null ? { state: { ...state, pending: { kind: "abandon" } }, effects: [] } : { state, effects: [] };
         case "tick":
           return { state, effects: [] };
+        case "open_failed":
+          return state.pending?.kind === "finalize"
+            ? { state: idle, effects: [{ kind: "finalize", cardId: null, sequence: 0, messageId: state.pending.messageId, text: state.pending.text }] }
+            : { state: idle, effects: [] };
         case "opened": {
           const sequence = event.sequence + 1;
           if (state.pending?.kind === "finalize") {
@@ -139,6 +146,7 @@ export function stepFeishuStream(
           return { state: idle, effects: [{ kind: "finalize", cardId: state.cardId, sequence: state.sequence + 1, messageId: event.messageId, text: event.text }] };
         case "turn_end":
           return { state: idle, effects: [{ kind: "abandon", cardId: state.cardId, sequence: state.sequence + 1 }] };
+        case "open_failed":
         case "opened":
           return { state, effects: [] };
       }
@@ -153,15 +161,9 @@ function keepTicking(result: { state: FeishuStreamState; effects: FeishuStreamEf
   return { state: result.state, effects: [...result.effects, { kind: "schedule_tick", at: result.state.streamingSince + FEISHU_STREAM_RENEW_MS }] };
 }
 
-/** 流式卡片上只放一张卡装得下的前缀；超出的部分定稿时续到新卡。 */
-function streamPrefix(text: string): string {
-  const chars = [...text];
-  return chars.length <= FEISHU_CARD_MAX_CHARS ? text : chars.slice(0, FEISHU_CARD_MAX_CHARS).join("");
-}
-
 /** 有没推的文字：到间隔、拿到预算就推全文，否则只记下、约下一次 tick。 */
 function flush(live: Live, now: number, budget: FeishuCardkitBudget): { state: FeishuStreamState; effects: FeishuStreamEffect[] } {
-  const text = streamPrefix(live.text);
+  const text = feishuMarkdownPrefix(live.text);
   if (text === live.sentText) return { state: live, effects: [] };
   const due = live.lastFlushAt + FEISHU_STREAM_FLUSH_MS;
   if (now < due) return { state: live, effects: [{ kind: "schedule_tick", at: due }] };
