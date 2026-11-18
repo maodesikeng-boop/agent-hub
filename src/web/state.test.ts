@@ -205,6 +205,22 @@ describe("不在快照里的早收工 Worker", () => {
     expect(reducer(done, { type: "loaded", snapshot: makeSnapshot() }).lookups).toEqual({});
   });
 
+  it("比近窗最早一条还早的 message.updated 不进近窗，但近窗外更新计数加一；近窗内的更新不计数", () => {
+    const s0 = loaded({ conversations: [makeConvSnapshot([makeMessage({ id: 50 }), makeMessage({ id: 51 })], { hasMore: true })] });
+    expect(s0.conversations[1]?.outsideRev ?? 0).toBe(0);
+    const s1 = applyChange(s0, messageChange(s0.seq + 1, "message.updated", makeUserMessage({ id: 40, status: "replied" })));
+    expect(s1.conversations[1]?.messages.map((m) => m.id)).toEqual([50, 51]);
+    expect(s1.conversations[1]?.outsideRev).toBe(1);
+    const s2 = applyChange(s1, messageChange(s1.seq + 1, "message.updated", makeMessage({ id: 51, text: "改" })));
+    expect(s2.conversations[1]?.outsideRev).toBe(1);
+  });
+
+  it("每次重拉快照 snapshotRev 加一", () => {
+    const s0 = loaded();
+    const s1 = reducer(s0, { type: "loaded", snapshot: makeSnapshot() });
+    expect(s1.snapshotRev).toBe(s0.snapshotRev + 1);
+  });
+
   it("不认识的对话：来了新消息要重拉快照；只是改了一条旧消息（早收工的 Worker 不在快照里）不重拉", () => {
     const s = loaded();
     const message = makeMessage({ id: 900, conversationId: 777 });

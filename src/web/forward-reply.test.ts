@@ -145,6 +145,67 @@ describe("useForwardReply", () => {
     expect(fetchTurnReply).toHaveBeenCalledTimes(2);
   });
 
+  it("消息滑出近窗：补取到 waiting 后，那台设备丢掉的近窗外更新（outsideRev 变了）让未决补取作废重取", async () => {
+    const waiting = question(10, { status: "processing" });
+    const done = question(10, { meta: { replyId: 11 } });
+    const reply = answer(11, "滑出近窗后答完的");
+    let calls = 0;
+    const fetchTurnReply = vi.fn(async () => (++calls === 1 ? { request: waiting, reply: null } : { request: done, reply }));
+    const store = storeWith({ 1: view([]) });
+    const { result } = render(dest(), () => store, clientOf(fetchTurnReply));
+    await waitFor(() => expect(result.current).toEqual({ kind: "waiting" }));
+    act(() => store.setState((s) => ({ ...s, conversations: { 1: { ...s.conversations[1]!, outsideRev: 1 } } })));
+    await waitFor(() => expect(result.current).toEqual({ kind: "replied", reply }));
+    expect(fetchTurnReply).toHaveBeenCalledTimes(2);
+  });
+
+  it("连接一直是 open、只是重拉了快照（snapshotRev 变了）：未决补取作废重取", async () => {
+    const waiting = question(10, { status: "processing" });
+    const done = question(10, { meta: { replyId: 11 } });
+    const reply = answer(11, "resync 后答完的");
+    let calls = 0;
+    const fetchTurnReply = vi.fn(async () => (++calls === 1 ? { request: waiting, reply: null } : { request: done, reply }));
+    const store = storeWith({ 1: view([]) });
+    const { result } = render(dest(), () => store, clientOf(fetchTurnReply));
+    await waitFor(() => expect(result.current).toEqual({ kind: "waiting" }));
+    act(() => store.setState((s) => ({ ...s, snapshotRev: s.snapshotRev + 1 })));
+    await waitFor(() => expect(result.current).toEqual({ kind: "replied", reply }));
+    expect(fetchTurnReply).toHaveBeenCalledTimes(2);
+  });
+
+  it("已经定了的补取结果不因快照重拉再取", async () => {
+    const done = question(10, { meta: { replyId: 11 } });
+    const fetchTurnReply = vi.fn(async () => ({ request: done, reply: answer(11) }));
+    const store = storeWith({ 1: view([]) });
+    const { result } = render(dest(), () => store, clientOf(fetchTurnReply));
+    await waitFor(() => expect(result.current.kind).toBe("replied"));
+    act(() => store.setState((s) => ({ ...s, snapshotRev: s.snapshotRev + 1 })));
+    expect(fetchTurnReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("目标设备首份快照还没到（phase 不是 ready）：不提前补取，快照到了近窗里有就直接用", async () => {
+    const fetchTurnReply = vi.fn(async () => ({ request: question(10, { status: "processing" }), reply: null }));
+    const store = storeWith({}, "connecting");
+    store.setState((s) => ({ ...s, phase: "loading" }));
+    const { result } = render(dest({ deviceKey: "tokyo" }), (key) => (key === "tokyo" ? store : null), clientOf(fetchTurnReply));
+    expect(result.current).toEqual({ kind: "unknown" });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fetchTurnReply).not.toHaveBeenCalled();
+    act(() => store.setState((s) => ({ ...s, phase: "ready", conversations: { 1: view([question(10, { status: "processing" })]) } })));
+    expect(result.current).toEqual({ kind: "waiting" });
+    expect(fetchTurnReply).not.toHaveBeenCalled();
+  });
+
+  it("目标设备快照拉不到（phase error）：不补取", async () => {
+    const fetchTurnReply = vi.fn();
+    const store = storeWith({}, "reconnecting");
+    store.setState((s) => ({ ...s, phase: "error" }));
+    const { result } = render(dest({ deviceKey: "tokyo" }), (key) => (key === "tokyo" ? store : null), clientOf(fetchTurnReply));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(result.current).toEqual({ kind: "unknown" });
+    expect(fetchTurnReply).not.toHaveBeenCalled();
+  });
+
   it("配对设备离线：返回 unknown，不报错；重连后补齐", async () => {
     const request = question(10, { meta: { replyId: 11 } });
     const reply = answer(11, "重连后补齐的回复");

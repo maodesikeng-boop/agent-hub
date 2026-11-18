@@ -1245,6 +1245,12 @@ describe("时间流：转交回复", () => {
     expect(turn.textContent).not.toContain("总助测试正常");
   });
 
+  it("投递记录里消息编号不是正整数（异常或旧记录的 0）：不当成转交，不去补取回复", () => {
+    const entry = turnEntryOfCommand(command(350, "异常记录", forwardTo(LOCAL_ID, "MacBook", 1, "小林", 1, 0), Date.now()), undefined, false);
+    expect(entry.destinations).toHaveLength(1);
+    expect(entry.destinations[0]!.forwardMessageId).toBeNull();
+  });
+
   it("项目经理还在处理时显示 Working…，答完推来原消息和回复后换成回复正文", async () => {
     const now = Date.now();
     const asked = makeUserMessage({ id: 88, text: "还在处理的问题", status: "processing" });

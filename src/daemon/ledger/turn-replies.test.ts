@@ -261,6 +261,41 @@ describe("createLedgerTurnReplies：afterDriverEvent", () => {
     expect(p.changes).toHaveLength(0);
   });
 
+  it("在途消息都被取消、重排或失败移除、又没有未结的文字时，不留这个会话的在途记录", () => {
+    const ctx = createLedgerContext(db, { now: () => now, initialSeq: 1 });
+    const turnReplies = createLedgerTurnReplies(ctx);
+    const session = { id: pm.sessionId, role: "pm", conversationId: pm.conversationId } as AgentSessionRow;
+    const p: Pending = { changes: [], actions: [], stops: [], pushed: new Map(), after: [] };
+    const removals: DriverEvent[] = [
+      { type: "message.cancelled", messageIds: [], reason: "stop", at: 3 },
+      { type: "message.requeued", messageIds: [], at: 3 },
+      { type: "driver.error", code: "invalid_input", message: "x", messageIds: [], at: 3 },
+    ];
+    for (const removal of removals) {
+      const a = post("问");
+      turnReplies.afterDriverEvent(p, session, { type: "message.delivered", messageIds: [a], at: 1 });
+      turnReplies.afterDriverEvent(p, session, { type: "message.processing", messageIds: [a], at: 2 });
+      expect(turnReplies.activeTurns()).toBe(1);
+      turnReplies.afterDriverEvent(p, session, { ...removal, messageIds: [a] } as DriverEvent);
+      expect(turnReplies.activeTurns()).toBe(0);
+    }
+  });
+
+  it("移除了一条在途消息但还有别的在途消息或未结的文字时，记录保留", () => {
+    const ctx = createLedgerContext(db, { now: () => now, initialSeq: 1 });
+    const turnReplies = createLedgerTurnReplies(ctx);
+    const session = { id: pm.sessionId, role: "pm", conversationId: pm.conversationId } as AgentSessionRow;
+    const p: Pending = { changes: [], actions: [], stops: [], pushed: new Map(), after: [] };
+    const a = post("问一");
+    const b = post("问二");
+    turnReplies.afterDriverEvent(p, session, { type: "message.delivered", messageIds: [a, b], at: 1 });
+    turnReplies.afterDriverEvent(p, session, { type: "message.cancelled", messageIds: [a], reason: "stop", at: 2 });
+    expect(turnReplies.activeTurns()).toBe(1);
+    turnReplies.afterDriverEvent(p, session, { type: "agent.text", uuid: say("答"), text: "答", at: 3 });
+    turnReplies.afterDriverEvent(p, session, { type: "message.cancelled", messageIds: [b], reason: "stop", at: 4 });
+    expect(turnReplies.activeTurns()).toBe(1);
+  });
+
   it("会话退出（session.exited）后在途记录清空，内存里不留这个会话", () => {
     const a = post("问");
     deliver([a]);

@@ -60,11 +60,21 @@ describe("ForwardReply", () => {
     const reply = makeMessage({ id: 11, text: "飞书接入的 PR 还在审查", createdAt: new Date(2026, 10, 18, 12, 31).getTime() });
     const { container } = renderReply(stores([makeUserMessage({ id: 10, meta: { replyId: 11 } }), reply]));
     expect(screen.getByText("飞书接入的 PR 还在审查")).toBeInTheDocument();
-    // MessageBubble 里的 AgentText 带 data-message-id
+    // 和项目经理对话里一轮回复同一个 AgentText，带 data-message-id
     expect(container.querySelector(`[data-message-id="11"]`)).not.toBeNull();
     expect(screen.getByRole("button", { name: "Copy" })).toBeInTheDocument();
     expect(screen.getByText("12:31")).toBeInTheDocument();
     expect(screen.queryByText("Working…")).toBeNull();
+  });
+
+  it("长回复和项目经理对话里一样全文展开、标题保留层级，不套任务说明的截断", () => {
+    const text = `## 飞书接入整体进度\n\n${Array.from({ length: 14 }, (_, i) => `${i + 1}. 第 ${i + 1} 项`).join("\n")}`;
+    const { container } = renderReply(stores([makeUserMessage({ id: 10, meta: { replyId: 11 } }), makeMessage({ id: 11, text })]));
+    expect(container.querySelector("[data-brief]")).toBeNull();
+    expect(container.querySelector(".brief-clamp")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Show more/ })).toBeNull();
+    expect(screen.getByRole("heading", { level: 2, name: "飞书接入整体进度" })).toBeInTheDocument();
+    expect(screen.getByText("第 14 项")).toBeInTheDocument();
   });
 
   it("ended stopped：一行 Stopped，没有 Retry", () => {
