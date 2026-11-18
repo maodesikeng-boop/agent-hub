@@ -1071,6 +1071,8 @@ export const FEISHU_STREAM_PRINT_STEP = 1;
 export const FEISHU_CARDKIT_BUDGET_PER_SECOND = 40;
 /** 流式模式开着超过这么久续开一次：飞书 10 分钟自动关。 */
 export const FEISHU_STREAM_RENEW_MS = 9 * 60_000;
+/** 停机时最多等多久把排着的出站发完、还在流式的卡收尾（关流式、去停止按钮）：要在 SHUTDOWN_TOTAL_MS 里留出别的步骤。 */
+export const FEISHU_CLOSE_DRAIN_MS = 5_000;
 /** 同一个群每秒最多发几条：飞书同一个群里机器人共享 5 QPS。 */
 export const FEISHU_CHAT_SENDS_PER_SECOND = 4;
 /** 卡片回调多久内必须回：飞书要求 3 秒。 */

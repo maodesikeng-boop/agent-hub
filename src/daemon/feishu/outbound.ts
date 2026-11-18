@@ -4,13 +4,16 @@
 // - 所有消息都发在主聊天流里，不发话题回复，不引用回复；
 // - 遵守静默规矩：工具调用、Worker 汇报行、Worker 对话、后台写交接、只给人看的系统消息都不发；
 // - 网页上发的用户消息照样镜像到群里（标明“网页”），两边看到的对话一致；从飞书来的用户消息不再镜像回去。
+import remarkGfm from "remark-gfm";
+import remarkParse from "remark-parse";
+import { unified } from "unified";
 import type { Change } from "../../shared/api.ts";
 import { askOf, isHandoverTraffic, userMessageDedupeKey, type ConversationId, type Message, type MessageId, type PmId } from "../../shared/domain.ts";
 import type { Deliverable } from "../../shared/deliverables.ts";
 import { feishuOriginOf } from "../../shared/feishu.ts";
 import { FEISHU_CARD_MARKDOWN_JSON_BYTES, FEISHU_CARD_MAX_CHARS, FEISHU_CATCHUP_MAX_MESSAGES, FEISHU_FENCE_INFO_MAX_CHARS, FEISHU_FENCE_MARKER_MAX_CHARS } from "../../shared/limits.ts";
 import type { RouterCommandRecord, RouterItem } from "../../shared/router.ts";
-import { sentFilesOf, type SentFile } from "../../shared/sent-files.ts";
+import { parseLocalHref, sentFilesOf, type SentFile } from "../../shared/sent-files.ts";
 import type { FeishuChatBinding } from "./store.ts";
 
 export type FeishuOutboundIntent =
@@ -141,8 +144,73 @@ export function feishuMarkdownFit(text: string, chars: number, bytes: number): s
   return text.slice(0, markdownWindow(text, 0, chars, bytes));
 }
 
+/** 流式卡片上推的正文：前 FEISHU_CARD_MAX_CHARS 字按 feishuCardMarkdown 换过图片和本机链接。 */
 export function feishuMarkdownPrefix(text: string): string {
-  return feishuMarkdownFit(text, FEISHU_CARD_MAX_CHARS, FEISHU_CARD_MARKDOWN_JSON_BYTES);
+  const fit = (t: string) => feishuMarkdownFit(t, FEISHU_CARD_MAX_CHARS, FEISHU_CARD_MARKDOWN_JSON_BYTES);
+  return fit(feishuCardMarkdown(fit(text)));
+}
+
+interface MdastNode {
+  type: string;
+  url?: string;
+  alt?: string | null;
+  children?: MdastNode[];
+  position?: { start: { offset?: number }; end: { offset?: number } };
+}
+
+const markdownParser = unified().use(remarkParse).use(remarkGfm);
+/** 飞书卡片 Markdown 里图片地址只认上传后拿到的图片编号（img_ 开头），别的一律回 200570。 */
+const FEISHU_IMAGE_KEY = /^img_[\w-]+$/;
+const WEB_URL = /^https?:\/\//i;
+const MAY_CONTAIN_LINK = /\]\(|\]\[|<[a-z][a-z0-9+.-]*:/i;
+
+const fileNameOf = (path: string) => path.split(/[\\/]/).filter((part) => part !== "").at(-1) ?? "";
+
+/**
+ * 账本正文 → 飞书卡片能收的 Markdown（docs/feishu-design.md「交付与附件」）。
+ * 后置：
+ * - 图片地址不是飞书图片编号时不留图片语法：网页图片变成同地址的链接，本机、别的地址和套在链接里的网页图片写成“图片「名字」”；
+ * - 指向本机的链接（绝对路径、file://、~/、相对路径，同 parseLocalHref）只留链接文字：手机上点不开，文件本身由 files.ts 单独发；
+ * - 网页链接、飞书图片编号、代码块和行内代码里的原样；
+ * - 只在这一层改，账本正文不动。
+ */
+export function feishuCardMarkdown(text: string): string {
+  if (!MAY_CONTAIN_LINK.test(text)) return text;
+  const edits: { start: number; end: number; text: string }[] = [];
+  const visit = (node: MdastNode, inLink: boolean) => {
+    const start = node.position?.start.offset;
+    const end = node.position?.end.offset;
+    if (start === undefined || end === undefined) return;
+    if (node.type === "image" || node.type === "imageReference") {
+      const url = node.url ?? "";
+      if (FEISHU_IMAGE_KEY.test(url)) return;
+      const label = node.alt?.trim() || fileNameOf(url);
+      if (WEB_URL.test(url) && !inLink) edits.push({ start, end: start + 1, text: "" });
+      else edits.push({ start, end, text: label === "" ? "图片" : `图片「${label}」` });
+      return;
+    }
+    let linked = inLink;
+    if (node.type === "link" || node.type === "linkReference") {
+      linked = true;
+      const children = node.children ?? [];
+      const first = children[0]?.position?.start.offset;
+      const last = children.at(-1)?.position?.end.offset;
+      if (node.type === "link" && parseLocalHref(node.url ?? "") !== null) {
+        if (first === undefined || last === undefined) {
+          edits.push({ start, end, text: fileNameOf(node.url ?? "") });
+          return;
+        }
+        edits.push({ start, end: first, text: "" }, { start: last, end, text: "" });
+      }
+    }
+    for (const child of node.children ?? []) visit(child, linked);
+  };
+  visit(markdownParser.parse(text) as MdastNode, false);
+  if (edits.length === 0) return text;
+  edits.sort((a, b) => b.start - a.start);
+  let out = text;
+  for (const edit of edits) out = out.slice(0, edit.start) + edit.text + out.slice(edit.end);
+  return out;
 }
 
 type Fence = { marker: string; opener: string };
@@ -161,11 +229,12 @@ function fenceAtLine(text: string, start: number, open: Fence | null): Fence | n
 }
 
 /**
- * 后置：把 Markdown 正文拆成几段，每段字数不超过 FEISHU_CARD_MAX_CHARS、转成 JSON 后不超过 FEISHU_CARD_MARKDOWN_JSON_BYTES；
+ * 后置：先按 feishuCardMarkdown 换掉图片和本机链接，再把 Markdown 正文拆成几段，每段字数不超过 FEISHU_CARD_MAX_CHARS、转成 JSON 后不超过 FEISHU_CARD_MARKDOWN_JSON_BYTES；
  * 优先在空行、换行处断。断在代码块里时在断点补闭合围栏、下一段补重新打开的围栏（只照抄有上限的记号和语言名），
  * 所以每段都至少前进一个字。空正文返回空数组。
  */
-export function splitFeishuMarkdown(text: string): string[] {
+export function splitFeishuMarkdown(markdown: string): string[] {
+  const text = feishuCardMarkdown(markdown);
   const chunks: string[] = [];
   let start = 0;
   let nextLine = 0;

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { askOf, type ConversationId, type Message, type PmId, type SessionId } from "../../shared/domain.ts";
 import type { DriverEvent } from "../../shared/driver.ts";
-import type { FeishuChatId } from "../../shared/feishu.ts";
+import type { FeishuCardId, FeishuChatId, FeishuMessageId } from "../../shared/feishu.ts";
 import { pmFruitOf } from "../../shared/fruits.ts";
 import {
   FEISHU_CARD_MAX_CHARS,
@@ -1016,5 +1016,127 @@ describe("createFeishuService：单点失败隔离与流式保护", () => {
     await svc.setup.startRegistration();
     await vi.waitFor(() => expect(svc.setup.status().lastError).not.toBeNull());
     expect(svc.setup.status().lastError).not.toContain("socket");
+  });
+});
+
+describe("createFeishuService：本机图片、定稿拒收与停机重启收口", () => {
+  const delta = (sessionId: SessionId, text: string) => ev(sessionId, { type: "agent.text_delta", delta: text, at: Date.now() });
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  /** 照飞书的规矩：卡片 Markdown 里 ![](...) 的地址不是 img_ 开头的图片编号就回 200570。 */
+  const rejectNonImageKeys = () => {
+    const original = fake.call.bind(fake);
+    fake.call = async (method, args) => {
+      if (/!\[[^\]]*\]\((?!img_)[^)]+\)/.test(JSON.stringify(args))) {
+        fake.calls.push({ method, args: args as unknown as Record<string, unknown>, at: 0 });
+        return { code: 200570, msg: "ErrMsg: card contains invalid image keys; ErrorValue: image key /tmp/reverify/01.png;" };
+      }
+      return original(method, args);
+    };
+  };
+  const rejected = () => fake.calls.filter((c) => JSON.stringify(c.args).includes("](/tmp")).length;
+  const lastUpdateOf = (cardId?: string) => fake.callsOf("card.update").filter((u) => cardId === undefined || u.card_id === cardId).at(-1)!;
+  const latestAgentText = (conversationId: ConversationId) =>
+    db.get<{ id: number }>("SELECT max(id) AS id FROM messages WHERE conversation_id = ? AND sender = 'agent' AND kind = 'text'", conversationId)!.id;
+
+  it("回复里带本机图片和本机文件链接时，流式推送和定稿都不被飞书拒收，卡片定稿成账本正文", async () => {
+    await connect();
+    rejectNonImageKeys();
+    const body = "复验做完了。\n\n![总助截图](/tmp/reverify/01.png)\n\n- [复验报告](/tmp/reverify/report.md)";
+    running(lin.sessionId);
+    ev(lin.sessionId, { type: "turn.started", at: Date.now() });
+    delta(lin.sessionId, "复验做完了。\n\n");
+    await settle();
+    await wait(FEISHU_STREAM_FLUSH_MS + 50);
+    delta(lin.sessionId, "![总助截图](/tmp/reverify/01.png)\n\n- [复验报告](/tmp/reverify/report.md)");
+    await wait(FEISHU_STREAM_FLUSH_MS * 2);
+    await settle();
+    ev(lin.sessionId, { type: "agent.text", uuid: "local-image", text: body, at: Date.now() });
+    await settle();
+    expect(rejected()).toBe(0);
+    expect(svc.setup.status().lastError).toBeNull();
+    const final = lastUpdateOf();
+    expect(cardJsonOf(final.card.data).config.streaming_mode).toBe(false);
+    expect(buttonValues(final.card.data)).toEqual([]);
+    expect(final.card.data).toContain("总助截图");
+    expect(final.card.data).toContain("复验报告");
+    expect(store().postOf({ kind: "message", messageId: latestAgentText(lin.conversationId), part: 0 })?.state).toBe("final");
+  });
+
+  it("定稿正文被飞书拒收时换成一行说明再收尾：卡片不停在流式，不留停止按钮", async () => {
+    await connect();
+    const original = fake.call.bind(fake);
+    fake.call = async (method, args) => {
+      if (method === "card.update" && JSON.stringify(args).includes("飞书不收的正文")) {
+        fake.calls.push({ method, args: args as unknown as Record<string, unknown>, at: 0 });
+        return { code: 230099, msg: "Failed to create card content" };
+      }
+      return original(method, args);
+    };
+    running(lin.sessionId);
+    ev(lin.sessionId, { type: "turn.started", at: Date.now() });
+    delta(lin.sessionId, "写到一半");
+    await settle();
+    ev(lin.sessionId, { type: "agent.text", uuid: "rejected-final", text: "飞书不收的正文", at: Date.now() });
+    await settle();
+    const last = lastUpdateOf();
+    expect(last.card.data).not.toContain("飞书不收的正文");
+    expect(last.card.data).toContain("去网页看");
+    expect(cardJsonOf(last.card.data).config.streaming_mode).toBe(false);
+    expect(buttonValues(last.card.data)).toEqual([]);
+    expect(store().postOf({ kind: "message", messageId: latestAgentText(lin.conversationId), part: 0 })?.state).toBe("final");
+  });
+
+  it("重启后收掉上一个进程没定稿的流式卡：关流式、去停止按钮、补齐账本里的完整回复，水位已推过也照收", async () => {
+    await connect();
+    const chat = chatOf(lin.pmId);
+    await svc.close();
+    ev(lin.sessionId, { type: "agent.text", uuid: "left-over", text: "上一个进程的完整回复\n\n![截图](/tmp/reverify/01.png)", at: Date.now() });
+    const messageId = latestAgentText(lin.conversationId);
+    const cardId = "card_left" as FeishuCardId;
+    store().savePost({ ref: { kind: "message", messageId, part: 0 }, chatId: chat, messageId: "om_left" as FeishuMessageId, cardId, sequence: 17, state: "streaming" }, Date.now());
+    store().advanceWatermark(chat, { messageId }, Date.now());
+    rejectNonImageKeys();
+    svc = makeService();
+    await svc.start();
+    await vi.waitFor(() => expect(svc.setup.status().state).toBe("connected"));
+    await settle();
+    const last = lastUpdateOf(cardId);
+    expect(last.sequence).toBeGreaterThan(17);
+    expect(cardJsonOf(last.card.data).config.streaming_mode).toBe(false);
+    expect(buttonValues(last.card.data)).toEqual([]);
+    expect(last.card.data).toContain("上一个进程的完整回复");
+    expect(store().postOf({ kind: "message", messageId, part: 0 })?.state).toBe("final");
+    fake.handlers!.onDisconnected("网络抖了一下");
+    fake.handlers!.onConnected();
+    await settle();
+    expect(fake.callsOf("card.update").filter((u) => u.card_id === cardId)).toHaveLength(1);
+  });
+
+  it("停机时先排空在途的定稿，再把还在流式的卡收尾，之后才断开", async () => {
+    await connect();
+    const original = fake.call.bind(fake);
+    fake.call = async (method, args) => {
+      if (method === "card.update") await wait(30);
+      return original(method, args);
+    };
+    running(lin.sessionId);
+    running(zhou.sessionId);
+    ev(lin.sessionId, { type: "turn.started", at: Date.now() });
+    ev(zhou.sessionId, { type: "turn.started", at: Date.now() });
+    delta(lin.sessionId, "小林写到一半");
+    delta(zhou.sessionId, "阿周写到一半");
+    await settle();
+    expect(cardIdsCreated()).toHaveLength(2);
+    ev(lin.sessionId, { type: "agent.text", uuid: "before-close", text: "小林停机前写完的回复", at: Date.now() });
+    await svc.close();
+    const updates = fake.callsOf("card.update").map((u) => u.card.data);
+    const linFinal = updates.find((d) => d.includes("小林停机前写完的回复"));
+    const zhouClosed = updates.find((d) => d.includes("阿周写到一半"));
+    for (const data of [linFinal, zhouClosed]) {
+      expect(data).toBeDefined();
+      expect(cardJsonOf(data!).config.streaming_mode).toBe(false);
+      expect(buttonValues(data!)).toEqual([]);
+    }
+    expect(store().postOf({ kind: "message", messageId: latestAgentText(lin.conversationId), part: 0 })?.state).toBe("final");
   });
 });
