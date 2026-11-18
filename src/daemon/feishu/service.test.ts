@@ -1102,6 +1102,20 @@ describe("createFeishuService：单点失败隔离与流式保护", () => {
     expect(fake.callsOf("card.update").map((u) => cardJsonOf(u.card.data).body.elements[0]!.content)).toEqual(["写到一半，写完了"]);
   });
 
+  it("长连接断开和重连都记进日志，重连那行带断了多久", async () => {
+    const lines: string[] = [];
+    await svc.close();
+    svc = makeService({ log: (line) => lines.push(line) });
+    await connect();
+    expect(lines.filter((line) => line.includes("长连接"))).toEqual([]);
+    fake.handlers!.onDisconnected("长连接断了，正在重连");
+    expect(lines.filter((line) => line.includes("长连接"))).toEqual(["飞书：长连接断了：长连接断了，正在重连"]);
+    fake.handlers!.onConnected();
+    await settle();
+    expect(lines.filter((line) => line.includes("长连接"))).toHaveLength(2);
+    expect(lines.at(-1)).toMatch(/^飞书：长连接已重连，断了 \d+ 秒$/);
+  });
+
   it("重连后总助单聊最多补 FEISHU_CATCHUP_MAX_MESSAGES 条，更早的发一行提示", async () => {
     await connect();
     const chat = routerChat();
