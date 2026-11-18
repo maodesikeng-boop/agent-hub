@@ -68,7 +68,7 @@
 - 实测（读代码）：hub 命令按角色放行只有一张表 `HUB_COMMAND_ROLES`，`hubCall` 在 `src/daemon/ledger/hub-commands.ts:352` 查它。访客轮次的拦截挂在同一处。
 - 实测（读代码）：只读 Worker 禁读的是 `READONLY_SECRET_STATE_FILES`。`src/shared/readonly-policy.ts:52`。所以 App Secret 放单独的 `state/feishu-secrets.json` 并加进这张表。
 - 实测（读代码）：用户上传走 `saveUpload`，单个最多 20 MB。`src/daemon/uploads.ts:71`、`src/shared/limits.ts:204`。飞书收进来的文件照用。
-- 实测（读代码）：项目经理的水果是 `paletteOf(pmId)`，按编号对 8 种水果取余，图片是 `src/web/assets/avatars/<水果>.webp`。`src/web/lib/palette.ts:29`、`src/web/lib/palette.ts:52`。安装包里的守护进程目录不带 `src/web`（`scripts/stage-runtime-common.ts:82`），网页构建产物的文件名带哈希，所以实现步骤要把水果顺序提到 `src/shared` 一处、把 8 张横切面图放到守护进程也能读到的目录。
+- 实测（读代码）：项目经理的水果原来是 `paletteOf(pmId)` 按编号对颜色表长度取余，图片在 `src/web/assets/avatars/<水果>.webp`。安装包里的守护进程目录不带 `src/web`，网页构建产物的文件名带哈希，所以实现时把水果顺序提到 `src/shared/fruits.ts`（`PM_FRUITS`、`pmFruitOf`，取余只按 `PM_FRUITS.length`），横切面图挪到仓库根目录的 `assets/avatars/`，网页和守护进程都读这一处，`scripts/stage-runtime-common.ts` 打包时整个目录带走。
 - 实测（读代码）：后端按单用户设计，没有多账号。`docs/multi-device-design.md:9`。“访客”只是飞书这一层的身份，不进 Fusa 的账号体系。
 - 实测（跑测试）：`pnpm exec vitest run src/shared/feishu.test.ts src/daemon/feishu src/feishu test/migration.test.ts`：94 过、171 条 todo；`migrate` 从 0 跑到 0034 通过。
 - 实测（查 PR）：开着的 PR 都没占 `0034`；被搁置的 Slack 方案 PR #348 已关闭，没有合进 `main`。
@@ -119,7 +119,7 @@
 | B. `createLarkChannel` | 官方高层封装，省掉去重和流式节流 | 不派发成员进出事件，单人和多人没法实时切；卡片点击回不了 toast；流式卡片放不了停止按钮。同一个应用不能再开第二条长连接补事件（集群模式会被随机分走） |
 | C. 自己写 `ws` + `fetch` | 已有 `ws` | 不用：长连接协议是 protobuf 分帧，鉴权、重连、限流都要手搓 |
 
-外部包只在 `src/daemon/feishu/sdk.ts` 里引，其余代码只认 `transport.ts` 的接口，测试用假的传输层。本步不装包；实现步骤 `pnpm add @larksuiteoapi/node-sdk`（≥ 1.61.1，现在最新 1.76.0），同一个 PR 更新 `AGENTS.md`「我们用的组件」。
+外部包只在 `src/daemon/feishu/sdk.ts` 里引，其余代码只认 `transport.ts` 的接口，测试用假的传输层（`daemon/feishu/test-helpers.ts`）。装的是 `@larksuiteoapi/node-sdk` 1.76.0，`AGENTS.md`「我们用的组件」已加。
 
 ### 项目经理在飞书里是什么
 
@@ -147,7 +147,7 @@
 
 **扫码接入。** ① 网页设置页或终端 `node src/feishu/main.ts connect` 发起 `startRegistration`，出二维码；② 手机飞书扫码，确认页已预填应用名（带设备名）和增量权限；③ 守护进程拿到凭证，验过存进 `state/feishu-secrets.json`，扫码人记为主人；④ 连长连接，查一遍权限授予状态；⑤ 给每个项目经理建群，给主人单聊发一句“已接上”。
 
-**项目群。** `desiredFeishuChats` 由账本现状算出应有的群，`planFeishuChatSync` 和 `feishu_chats` 比出操作。建群带 `owner_id`（主人）、`user_id_list`（主人）、`set_bot_manager: true`（转给主人后机器人仍是管理员，能改名换头像）、`edit_permission: only_owner`（访客改不了群名）、`group_message_type: chat`（对话群，不是话题群）。幂等靠三层：`feishu_chats` 记录；建群 `uuid`（10 小时）；群说明里的 `feishuChatMarker`，重启时在机器人所在的群里认回。项目经理归档时解散群（`DELETE /open-apis/im/v1/chats/:chat_id`），记录留着并记下归档时间；取消归档时重建，建群 `uuid` 带上这个归档时间作 generation，免得被飞书当成 10 小时内的重复请求；新群换进同一行，唤醒方式和访客档位沿用。项目经理删掉时解散群、删记录。群被别人解散或机器人被移出时删记录，下一次对齐重建。水果头像每种只传一次，`image_key` 记在 `feishu_avatars`。
+**项目群。** `desiredFeishuChats` 由账本现状算出应有的群，`planFeishuChatSync` 和 `feishu_chats` 比出操作。建群带 `owner_id`（主人）、`user_id_list`（主人）、`set_bot_manager: true`（转给主人后机器人仍是管理员，能改名换头像）、`edit_permission: only_owner`（访客改不了群名）、`group_message_type: chat`（对话群，不是话题群）。幂等靠三层：`feishu_chats` 记录；建群 `uuid`（10 小时）；群说明里的 `feishuChatMarker`，重启时在机器人所在的群里认回。项目经理归档时解散群（`DELETE /open-apis/im/v1/chats/:chat_id`），记录留着并记下归档时间；取消归档时重建，建群 `uuid` 带上这个归档时间作 generation，免得被飞书当成 10 小时内的重复请求；新群换进同一行，唤醒方式和访客档位沿用。项目经理删掉时解散群、删记录。群被别人解散或机器人被移出时，记录记下解散时间（和归档一样），下一次对齐按取消归档重建：唤醒方式和访客档位沿用，建群 uuid 换新的 generation，不会被飞书当成 10 小时内的重复请求。水果头像每种只传一次，`image_key` 记在 `feishu_avatars`。
 
 **唤醒。** `feishuWakes`：auto 档单人直达、多人要 @；mention_only 一律要 @；没开 `im:message.group_msg` 时强制 mention_only。没唤醒的话（含只读档访客的话）记进内存近窗（`FeishuContextWindows`），下一次唤醒时随 `origin.context` 交给项目经理，送达后清空。单人还是多人由 `FeishuDirectory` 定：成员事件实时改，发言人不是主人就立刻算多人，定期对账兜底，查不到按多人（宁可多要一次 @，也不把访客当主人）。
 
@@ -170,7 +170,7 @@
 3. **前端引用稳定。** 这一步没有前端。状态接口在没有变化时返回内容相同的对象，以后设置页按它的 `chats` 数组做 `WeakMap` 缓存。
 4. **验证。** 实现步骤用 pstack 的 `benchmark-checklist` 量：项目经理写出第一段到手机上出字的延迟；一段 5,000 字回复期间“流式更新文本”调用次数；三个项目经理同时回复 5 分钟时有没有限流错误（230020、99991400）；开飞书前后守护进程 RSS；`blast-radius` 列出 `PostUserMessageInput`、`UserMessageMeta`、`deliveryParts`、`hubCall` 的调用方。数字写进 PR。
 
-准备加进 `src/shared/limits.ts` 的常量（本步不改该文件，实现步骤加）：
+`src/shared/limits.ts` 里的飞书常量（另有实现时补的 `FEISHU_CHAT_NAME_MAX_CHARS`、`FEISHU_CHAT_UUID_MAX_CHARS`、`FEISHU_PAGE_SIZE`、`FEISHU_CLI_POLL_MS`、`FEISHU_POST_RETENTION_MS`）：
 
 | 常量 | 值 | 怎么算的 |
 | --- | --- | --- |
@@ -197,7 +197,7 @@
 
 - **厂商。** 飞书通道在账本之上，只看消息、会话状态和卡片，不看是哪家 agent；`src/shared/vendors.ts` 里的所有厂商都一样走。以后加一家新厂商，飞书这一层不用改任何文件。
 - **三个平台。** 只有出站 HTTPS 和 WSS，macOS、Windows、Linux 一样，`src/daemon/platform/index.ts` 不用改。凭证文件的保护沿用 `READONLY_SECRET_STATE_FILES`（各平台的只读策略按这张表禁读，Windows 走 ACL）。
-- **一处定义。** 权限和事件只在 `src/daemon/feishu/scopes.ts`；唤醒规则只在 `feishuWakes`；访客能做什么只在 `feishuGuestMay`，访客禁用的 hub 命令只在 `FEISHU_GUEST_BLOCKED_HUB_COMMANDS`（都在 `src/shared/feishu.ts`）；可调的数只在 `src/shared/limits.ts`；外部包只在 `src/daemon/feishu/sdk.ts`；项目经理的水果顺序实现步骤提到 `src/shared` 一处，网页和群头像共用。
+- **一处定义。** 权限和事件只在 `src/daemon/feishu/scopes.ts`；唤醒规则只在 `feishuWakes`；访客能做什么只在 `feishuGuestMay`，访客禁用的 hub 命令只在 `FEISHU_GUEST_BLOCKED_HUB_COMMANDS`（都在 `src/shared/feishu.ts`）；可调的数只在 `src/shared/limits.ts`；外部包只在 `src/daemon/feishu/sdk.ts`；项目经理的水果顺序只在 `src/shared/fruits.ts`，网页和群头像共用。
 - **两个入口一份逻辑。** 界面服务的飞书接口和终端命令 `src/feishu/cli.ts`（经 `run/admin.sock`）都只调 `FeishuSetupService`。
 - **以后接别的聊天软件。** 唤醒、访客档位、署名这些规则现在写在飞书的类型上。真要再接一家时，先把 `feishuWakes`、`feishuGuestMay`、`FeishuMessageOrigin` 抽成与平台无关的一份，再接新平台；现在只有一家，不提前抽。
 
@@ -228,7 +228,7 @@
 - `src/feishu/cli.ts`：终端命令。
 - 测试骨架：上面每个文件旁边的 `*.test.ts`，以及 `src/daemon/feishu/ledger-wiring.test.ts`（账本一侧的接线，实现步骤可以挪到 `src/daemon/ledger/`）。
 
-接线留给实现步骤（本步按并发边界没碰这些文件；性能根治图 #34 正在改其中的 `limits.ts`、`api.ts`、账本和界面服务，实现步骤要等 #34 合入后从最新 `main` 开分支）：
+主仓接线（实现步骤已接上）：
 
 - `package.json`、`pnpm-lock.yaml`：`pnpm add @larksuiteoapi/node-sdk`；`AGENTS.md`「我们用的组件」加一条。
 - `src/daemon/daemon.ts`：在推送服务旁边（`daemon.ts:763`）建 `createFeishuService`，关机时 `close`。
@@ -241,7 +241,20 @@
 - `src/shared/readonly-policy.ts:52` 加 `feishu-secrets.json`；`src/shared/paths.ts` 的 `HubPaths` 加 `feishuSecretsFile`。
 - `src/daemon/db-retention.ts` 调 `prunePosts`。
 - `src/shared/limits.ts` 加上表的常量；`src/shared/index.ts` 导出 `feishu.ts`。
-- 水果：把 `src/web/lib/palette.ts` 里的水果顺序提到 `src/shared` 一处；8 张横切面图放到守护进程能读的目录，`scripts/stage-runtime-common.ts` 打包时带上。
+- 水果：水果顺序在 `src/shared/fruits.ts`（`palette.ts` 和 `daemon/feishu/avatars.ts` 都按它取）；横切面图在仓库根目录 `assets/avatars/`，`scripts/stage-runtime-common.ts` 整个目录打包。
+
+## 实现时对骨架的调整
+
+- `FeishuStreamState` 去掉 `finalizing`：定稿是一次性的效果，发出去就回 `idle`；`opening` 多了 `sentText`（建卡时的正文）和 `pending`（建卡期间落库或这一轮结束，等 `opened` 之后再定稿或收尾）。流式卡片上只推前 `FEISHU_CARD_MAX_CHARS` 字，`live` 时总约着下一次 tick（没东西推时约在该续开流式的时候）。
+- `desiredFeishuChats(pms, device)`：群说明末尾要带 `feishuChatMarker(deviceId, pmId)`，所以第二个参数从设备名换成 `{ id, name }`。
+- 群被别人解散（`chat_gone`）不删记录，见上面「项目群」一段。总助单聊被解散才删记录，主人下次私聊时认回。
+- `pmFruitOf`、`PmFruit` 挪到 `src/shared/fruits.ts`，`avatars.ts` 转出；默认头像目录 `FEISHU_AVATARS_DIR` 在 `avatars.ts`。
+- `FeishuDirectory` 多一个 `peekMembers`（状态接口用，不发请求）；只从事件知道、还不知道名字的人，查名字时重拉一次成员。
+- `FeishuService` 多一个 `idle()`（测试和关机前等队列排空）；`start()` 不等长连接连上。
+- `FeishuCliIo` 多一个 `sleep`（等扫码时轮询状态的间隔，测试换成立刻返回）。
+- `cards.ts` 多一个 `renderTextCard`（总助指令结果、网页消息的镜像），以及 `feishuCardRefOf`、`feishuAskOptions`、`feishuCardStateOf`、`feishuChatAppLink` 几个由账本现状算卡片的小函数。
+- 水位 0 表示“这个群从头开始投影、还没发过东西”，和 `null`（还没开始记）不同：新建的空群也能补发离线期间的消息。
+- 管理 socket 的客户端从 `src/tunnel/main.ts` 抽到 `src/tunnel/admin-client.ts`，隧道和飞书命令共用；`/feishu/*` 路由挂在 `daemon/tunnel/admin.ts`，请求体校验和界面服务共用 `daemon/feishu/setup.ts` 里的 zod schema。
 
 ## 验收方法
 
