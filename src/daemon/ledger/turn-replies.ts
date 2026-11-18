@@ -25,6 +25,8 @@ export interface LedgerTurnReplies {
    * 不存在、不是用户消息、不在项目经理对话里返回 null（界面服务回 404）。
    */
   turnReplyOf(messageId: MessageId): TurnReplyView | null;
+  /** 内存里还留着在途记录的项目经理会话数：测试和上限核对用，不会超过在跑的项目经理会话数。 */
+  activeTurns(): number;
 }
 
 /** 项目经理会话在途的轮次：这一轮最后一段顶层文字，和每条在途用户消息送达时全库最大的消息编号（它之后写下的文字才可能是它的回复）。 */
@@ -44,6 +46,14 @@ export function createLedgerTurnReplies(ctx: LedgerContext): LedgerTurnReplies {
       turns.set(sessionId, st);
     }
     return st;
+  };
+
+  /** 在途消息被取消、重排、失败移除后：没有别的在途消息、也没有未结的文字，就不留这个会话的记录。 */
+  const dropDelivered = (sessionId: SessionId, ids: readonly MessageId[]) => {
+    const st = turns.get(sessionId);
+    if (st === undefined) return;
+    for (const id of ids) st.deliveredAt.delete(id);
+    if (st.deliveredAt.size === 0 && st.lastText === null) turns.delete(sessionId);
   };
 
   const maxMessageId = (): MessageId => db.get<{ id: number | null }>("SELECT max(id) AS id FROM messages")!.id ?? 0;
@@ -113,10 +123,10 @@ export function createLedgerTurnReplies(ctx: LedgerContext): LedgerTurnReplies {
           return;
         case "message.cancelled":
         case "message.requeued":
-          for (const id of event.messageIds) turns.get(session.id)?.deliveredAt.delete(id);
+          dropDelivered(session.id, event.messageIds);
           return;
         case "driver.error":
-          for (const id of event.messageIds ?? []) turns.get(session.id)?.deliveredAt.delete(id);
+          dropDelivered(session.id, event.messageIds ?? []);
           return;
         case "agent.text":
           if (event.parentToolUseId === undefined) recordText(session, event.uuid);
@@ -131,6 +141,8 @@ export function createLedgerTurnReplies(ctx: LedgerContext): LedgerTurnReplies {
           return;
       }
     },
+
+    activeTurns: () => turns.size,
 
     turnReplyOf(messageId) {
       const row = db.get<MessageDbRow>(

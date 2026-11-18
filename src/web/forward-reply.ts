@@ -3,7 +3,9 @@
 // 不变量：
 // - 只认投递记录里的消息编号（RouterTurnDestination.forwardMessageId）和原消息上的 meta.replyId，不按时间、不按内容猜哪段话是回复。
 // - 近窗里有原消息时以近窗为准；补取的结果只在近窗里没有原消息时用。
-// - 同一台设备、同一个消息编号只补取一次；那台设备重拉快照（断线重连）后在途状态的补取结果作废、重新取。
+// - 同一台设备、同一个消息编号只补取一次；在途状态的补取结果在三种情况下作废重取：那台设备重新连上、重拉了快照（HubState.snapshotRev），
+//   或那台设备推来的这条消息所在对话的更新被近窗丢掉了（ConversationView.outsideRev：消息已滑出近窗，状态变化只有重取才看得到）。
+// - 那台设备的首份快照到了（phase ready）才补取：快照一到，近窗里多半就有这条消息，不用先发请求。
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import type { StoreApi } from "zustand";
@@ -76,7 +78,8 @@ export function useForwardReply(dest: RouterTurnDestination, stores: DeviceStore
   const store = stores(deviceKey);
   const subscribe = useCallback((listener: () => void) => (store === null ? noopSubscribe() : store.subscribe(listener)), [store]);
   const windowed = useSyncExternalStore(subscribe, () => (store === null ? null : forwardReplyOf(store.getState().conversations[conversationId], messageId)));
-  const needFetch = windowed === null && store !== null;
+  const ready = useSyncExternalStore(subscribe, () => store !== null && store.getState().phase === "ready");
+  const needFetch = windowed === null && ready;
 
   const { data } = useQuery(
     {
@@ -95,16 +98,18 @@ export function useForwardReply(dest: RouterTurnDestination, stores: DeviceStore
     qc,
   );
 
-  // 那台设备断线重连、重拉快照之后，还没定的结果作废重取（断线期间错过的推送不会补发给近窗以外的消息）
+  // 在途状态的补取结果什么时候作废：重新连上、重拉了快照，或这条消息所在对话有被近窗丢掉的更新（断线期间错过的推送不会补发给近窗以外的消息）
   useEffect(() => {
     if (store === null || !needFetch || isSettled(data)) return;
-    let open = store.getState().connection === "open";
+    const signalOf = (state: HubState) => ({ open: state.connection === "open", snapshotRev: state.snapshotRev, outsideRev: state.conversations[conversationId]?.outsideRev ?? 0 });
+    let last = signalOf(store.getState());
     return store.subscribe((state) => {
-      const nowOpen = state.connection === "open";
-      if (nowOpen && !open) void qc.invalidateQueries({ queryKey: forwardReplyQueryKey(deviceKey, messageId) });
-      open = nowOpen;
+      const now = signalOf(state);
+      const changed = (now.open && !last.open) || now.snapshotRev !== last.snapshotRev || now.outsideRev !== last.outsideRev;
+      last = now;
+      if (changed) void qc.invalidateQueries({ queryKey: forwardReplyQueryKey(deviceKey, messageId) });
     });
-  }, [needFetch, data, store, qc, deviceKey, messageId]);
+  }, [needFetch, data, store, qc, deviceKey, messageId, conversationId]);
 
   if (windowed !== null) return windowed;
   if (data?.outcome === "ok") return turnReplyStateOf(data.view.request, data.view.reply);

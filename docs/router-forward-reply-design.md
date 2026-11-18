@@ -30,7 +30,7 @@
 - 实测（读代码）：网页把去向画成一行可点的跳转，消息编号在 `buildDestinations` 里被丢掉了，`src/web/router-stream.ts:153`；轨道 A 转交成功后连模板回执都不画，`src/web/components/RouterStream.tsx:216`。所以现在总助里只看得到“转给了谁”，看不到回复。
 - 实测（读代码）：一轮结束时驱动层的 `turn.ended` 带着这一轮处理的用户消息编号，账本据此把它们标成 `replied`、`stopped` 或 `failed`，`src/daemon/ledger/messages.ts:384`。agent 写的文字一段一行（`sender = 'agent'`、`kind = 'text'`），行上不记属于哪一轮，也不记是不是子代理说的，`src/daemon/ledger/messages.ts:123`、`src/daemon/ledger/messages.ts:352`。
 - 实测（读代码）：Worker 汇报已经有“这一轮从开始起最后一段文字”的取法（记下这一轮开始时的最大消息编号），`src/daemon/ledger/workers.ts:1453`。
-- 实测（读代码）：网页每台设备一个 `DeviceHub`，拉快照再按 seq 收推送，断线重连各补各的，`src/web/device-hub.ts:46`。快照里每个对话只带最近 `SNAPSHOT_RECENT_MESSAGES`（20）条，`src/shared/limits.ts:9`；之后推来的消息即使比近窗旧也会按编号插进去，`src/web/state.ts:175`。入口把 `/d/<设备>/api/*` 原样转给配对设备，`src/daemon/peers/proxy.ts:1`。
+- 实测（读代码）：网页每台设备一个 `DeviceHub`，拉快照再按 seq 收推送，断线重连各补各的，`src/web/device-hub.ts:46`。快照里每个对话只带最近 `SNAPSHOT_RECENT_MESSAGES`（20）条，`src/shared/limits.ts:9`；网页对话里最多留 `MAX_LIVE_MESSAGES`（200）条，之后推来的消息比近窗最早一条还早时不插进近窗，只给 `ConversationView.outsideRev` 加一（`src/web/state.ts` 的 `applyChange`），所以消息滑出近窗后它的状态变化只能靠补取看到，见下面归属和去重的规则。入口把 `/d/<设备>/api/*` 原样转给配对设备，`src/daemon/peers/proxy.ts:1`。
 - 实测（只读查本机账本 `sqlite3 "file:$HOME/.agent-hub/state/hub.sqlite?mode=ro"`）：总助第 11 条指令「飞书接入做到哪里了」转给 PM #9，对话 205，消息 #76089。这条消息的状态是 `stopped`：项目经理只说了一句“我查一下飞书任务图和 PR……”（#76090），你 31 秒后发的 #76102「我只是测试一下总助……」把那一轮打断了，之后几轮答的都是别的问题。也就是说，这次真实复现里项目经理并没有给出正式回复。按“转交之后项目经理说的最后一段话”去猜，会把 #76090 的半句话或别的问题的答案当成回复。
 - 实测（`git diff main...origin/hub/708-…`）：飞书图 #35 的 PR #350 还没合，占了迁移 `0034_feishu.sql`，改了 `messages.ts`（发用户消息时记飞书来源、`messagesAfter`）、`attachments.ts`（`UserMessageMeta.origin`）、`shared/ledger.ts`、`ledger.ts`、`server.ts`、`api.ts`、`limits.ts`、`index.ts`、`fake-ledger.ts`。飞书总助单聊会镜像网页发的总助指令和结果（`docs/feishu-design.md:162`，在那个分支上）。`main` 上迁移到 `0033`。
 - 推断：本机现在没有配对设备（`state/peers.json` 是空的），配对路径要用测试里的两台回环守护进程验证（`test/e2e/loopback-daemon.ts`）。
@@ -53,12 +53,12 @@
 - 一轮同时处理了几条用户消息（排队后一起送达，或中途插话）：这几条的 `replyId` 是同一条回复，总助里各自的回合下面显示同一段。
 - 一次转给几个项目经理：每个去向一个消息编号，各接各的回复，顺序同去向行。
 - 本机和配对设备上编号相同的消息互不串：网页按“设备键 + 消息编号”找。
-- 重复推送：`message.updated` 按消息编号覆盖，同一个 `turn.ended` 重放不重复写。断线重连：那台设备重拉快照，近窗里有就用近窗，没有就补取；补取到的在途结果在重拉快照后作废重取。
+- 重复推送：`message.updated` 按消息编号覆盖，同一个 `turn.ended` 重放不重复写。断线重连：那台设备重拉快照，近窗里有就用近窗，没有就补取。消息滑出近窗后状态变化不会再经 `upsertMessage` 进近窗（`state.ts` 丢掉比近窗最早一条还早的 `message.updated`），所以补取到的在途结果在三种情况下作废重取：重新连上、重拉了快照（`HubState.snapshotRev` 加一，连接不断线只收到 `resync` 时也一样）、那台设备丢掉了这条消息所在对话的近窗外更新（`ConversationView.outsideRev` 加一）。目标设备的首份快照到了（`phase` 是 `ready`）才补取，加载期、拉取失败时不发请求。
 - 只认投递记录里的消息编号，项目经理对话里你直接说的话、它的其他轮次都不会出现在总助里。
 
 ## 性能
 
-1. **失效。** `replyId` 写在消息上，消息被清理时跟着没了，补取回 `reply: null`。网页以近窗为准，近窗的变化靠那台设备的推送；补取的结果按“设备键 + 消息编号”缓存在 react-query 里：已经定了（有回复、已停止、已失败）的不再取；在途的在那台设备重拉快照后作废；404（老版本设备、消息已清理）只记 `ROUTER_FORWARD_REPLY_MISS_RETRY_MS`。
+1. **失效。** `replyId` 写在消息上，消息被清理时跟着没了，补取回 `reply: null`。网页以近窗为准，近窗的变化靠那台设备的推送；补取的结果按“设备键 + 消息编号”缓存在 react-query 里：已经定了（有回复、已停止、已失败）的不再取；在途的在重新连上、重拉快照（`snapshotRev`）、近窗外更新到达（`outsideRev`）时作废重取；404（老版本设备、消息已清理）只记 `ROUTER_FORWARD_REPLY_MISS_RETRY_MS`。
 2. **上限。** 守护进程内存里每个在跑的项目经理会话一条（这一轮最后一段顶层文字的编号）加在途消息的送达水位，这一轮结束、会话退出就清掉，最多是在跑的会话数乘在途消息数。补取接口一次只回两条消息，大的走 `@fastify/compress`。网页的补取缓存只给时间流里画出来的转交回合建，回合数受 `ROUTER_STREAM_LIVE_MAX` 和翻页上限 `ROUTER_STREAM_MAX_PAGES` 管，卸载后按 react-query 默认的回收时间清掉。快照不加字段，每条项目经理对话里的用户消息 meta 多十几个字节。
 
    | 常量（`src/shared/limits.ts`） | 值 | 怎么定的 |

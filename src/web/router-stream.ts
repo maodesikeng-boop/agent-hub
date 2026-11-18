@@ -180,7 +180,7 @@ function buildDestinations(command: RouterCommandRecord, selfId: string | undefi
       projectName: d.projectName ?? null,
       avatarKey: d.pmId,
       opLabel: opLabelOf(d.op),
-      forwardMessageId: !worker && (d.op ?? "pm.forward") === "pm.forward" ? d.messageId : null,
+      forwardMessageId: !worker && (d.op ?? "pm.forward") === "pm.forward" && d.messageId > 0 ? d.messageId : null,
     });
   }
   return out.length === 0 ? NO_DESTINATIONS : out;

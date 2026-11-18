@@ -1,5 +1,5 @@
 // 总助时间流里转交问题下面的项目经理回复（docs/router-forward-reply-design.md，docs/ui-standard.md 第 21 条“转交回复”）。
-// 回复正文用项目经理对话里同一个 MessageBubble 画，包在目标设备的 DeviceScopeOf 里，文件链接、预览按那台设备的。
+// 回复正文用项目经理对话里一轮回复（TurnView）同一个 AgentText 画：全文展开、标题保留层级。包在目标设备的 DeviceScopeOf 里，文件链接、预览按那台设备的。
 import { CircleAlert } from "lucide-react";
 import { memo } from "react";
 import type { ConversationId } from "../../shared/domain.ts";
@@ -10,16 +10,7 @@ import { useForwardReply } from "../forward-reply.ts";
 import type { DeviceStoreLookup } from "../forward-reply.ts";
 import { formatTime } from "../format.ts";
 import type { RouterTurnDestination } from "../router-stream.ts";
-import { AgentHead, CopyButton, MessageBubble, SECONDARY } from "./Messages.tsx";
-import type { MessageActions } from "./Messages.tsx";
-
-// 总助里的回复只读：重试、撤销、点开 Worker 都在项目经理自己的对话里做
-const READ_ONLY_ACTIONS: MessageActions = {
-  onOpenWorker: () => {},
-  retry: {},
-  onRetryMessage: () => {},
-  onRevertPersona: () => Promise.resolve(),
-};
+import { AgentHead, AgentText, CopyButton, SECONDARY } from "./Messages.tsx";
 
 /**
  * 前置：dest.forwardMessageId 不是 null。
@@ -55,10 +46,8 @@ export const ForwardReply = memo(function ForwardReply({
       )}
       {state.kind === "replied" && (
         <DeviceScopeOf deviceKey={dest.deviceKey}>
-          <div className="flex min-w-0 flex-col gap-1.5">
-            <div className="*:mt-0!">
-              <MessageBubble message={state.reply} identity={identity} head={false} actions={READ_ONLY_ACTIONS} />
-            </div>
+          <div className="flex min-w-0 flex-col gap-2.5">
+            <AgentText message={state.reply} highlighted={false} />
             <div className="flex items-center gap-1 text-xs text-muted-foreground tabular-nums">
               <CopyButton text={state.reply.text} />
               <span>{formatTime(state.reply.createdAt)}</span>
