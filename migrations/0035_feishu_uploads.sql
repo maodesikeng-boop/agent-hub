@@ -6,11 +6,11 @@ CREATE TABLE feishu_posts_new (
   ref_id      INTEGER NOT NULL,
   part        INTEGER NOT NULL,
   chat_id     TEXT    NOT NULL REFERENCES feishu_chats (chat_id) ON DELETE CASCADE,
-  message_id  TEXT    NOT NULL,       -- file 行：发出去的文件消息；嵌进卡的图片、还在传的、没发出去的记挂着它的那张卡的消息
+  message_id  TEXT    NOT NULL,       -- file 行：紧跟卡发出去的文件记文件消息；挂在卡上的（嵌进卡的图片、补发后标已送达的文件、还在传的、没发出去的）记那张卡的消息
   card_id     TEXT,                   -- file 行：卡上列着这个附件的那张卡（传完要改它）；紧跟卡发出去的文件是 NULL
   sequence    INTEGER NOT NULL DEFAULT 0,
   state       TEXT    NOT NULL CHECK (state IN ('streaming', 'final', 'card_pending', 'card_settled', 'uploading')),
-  media_key   TEXT,                   -- file 行：图片编号（img_）或文件编号；没传上是 NULL
+  media_key   TEXT,                   -- file 行：图片编号（img_）或文件编号；没传上是 NULL；uploading 行带编号表示传完、只差改卡
   updated_at  INTEGER NOT NULL,
   PRIMARY KEY (ref_kind, ref_id, part)
 ) STRICT;

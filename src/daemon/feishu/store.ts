@@ -70,7 +70,7 @@ export interface FeishuPostRecord {
   /** 这张卡片实体上一次操作的 sequence。 */
   sequence: number;
   state: FeishuPostState;
-  /** file 行：嵌进卡片的图片编号或发出去的文件编号；没传上是 null。别的行是 null。 */
+  /** file 行：嵌进卡片的图片编号或发出去的文件编号；没传上是 null（uploading 行带编号表示传完、文件也发了，只差改卡）。别的行是 null。 */
   mediaKey: string | null;
   updatedAt: number;
 }

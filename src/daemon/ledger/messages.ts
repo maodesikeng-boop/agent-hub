@@ -235,7 +235,7 @@ export function createLedgerMessages(
 
   /**
    * 在同一个事务里向 PM 对话插入一条结构化拍板唤醒消息（sender = 'user'，排队送给当前会话），
-   * 按 dedupeKey 严格幂等。
+   * 按 dedupeKey 严格幂等。meta 标 wakeup（UserMessageMeta），和人打的字分开（isLedgerWakeup）。
    */
   const enqueueWakeupUserMessageIn = (
     p: Pending,
@@ -250,11 +250,12 @@ export function createLedgerMessages(
     const t = now();
     const row = db.get<MessageDbRow>(
       `INSERT INTO messages (conversation_id, session_id, worker_id, sender, kind, text, meta, dedupe_key, status, created_at, updated_at)
-       VALUES (?, ?, ?, 'user', 'text', ?, NULL, ?, 'queued', ?, ?) RETURNING *`,
+       VALUES (?, ?, ?, 'user', 'text', ?, ?, ?, 'queued', ?, ?) RETURNING *`,
       input.conversationId,
       session.id,
       session.workerId,
       input.text,
+      JSON.stringify({ wakeup: true } satisfies UserMessageMeta),
       input.dedupeKey,
       t,
       t,

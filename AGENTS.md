@@ -58,7 +58,7 @@
 - `write-file-atomic`（npm 官方）：同目录临时文件 + fsync + rename 原子替换用户配置，目标是软链时替换真实文件、沿用原权限属主（`daemon/vendor-sync/backup.ts`）。
 - `@microsoft/mxc-sdk`（微软官方）：Windows 11 24H2+ 只读 Worker 的 MXC ProcessContainer 探测与只读容器执行，低版本 Windows 自动平滑回退写受限令牌（`daemon/platform/win32/mxc-readonly.ts`、`daemon/platform/win32/mxc-runner.ts`）。
 - `@larksuiteoapi/node-sdk`（飞书官方）：接入飞书的开放接口、长连接事件与卡片回调、扫码一键建应用 `registerApp`、消息正文 `normalize`；整个仓库只在 `daemon/feishu/sdk.ts` 引它，别处只认 `daemon/feishu/transport.ts` 的接口（docs/feishu-design.md）。
-- `sharp`（libvips）：飞书发截图前把超过 2400px 或 2 MB 的位图在临时目录缩一份再传，原图不动；只在要发图片时动态加载（`daemon/feishu/files.ts`）。
+- `sharp`（libvips）：飞书发截图前把超过 2400px 或 2 MB 的位图在临时目录缩一份再传，avif 转成 jpeg、超过 10 MB 的动图取第一帧，原图不动；只在要发图片时动态加载（`daemon/feishu/files.ts`）。
 - `p-limit`（sindresorhus）：飞书附件并发预传的并发上限（`daemon/feishu/service.ts`）。
 - `unified` + `remark-parse` + `remark-gfm`：解析 Markdown（`sent-files.ts`）。
 - 数据库用 Node 自带的 `node:sqlite`（`store/`），不是第三方库；Skill 逐项软链同步直接用 Node 自带的 `node:fs`（`src/vendors/_common/sync/skills.ts`）。

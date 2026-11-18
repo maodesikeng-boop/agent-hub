@@ -15,7 +15,7 @@
 import { randomInt, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { Change } from "../../shared/api.ts";
-import { askOf, userMessageDedupeKey, type ConversationId, type Message, type MessageId, type PmId } from "../../shared/domain.ts";
+import { askOf, type ConversationId, type Message, type MessageId, type PmId } from "../../shared/domain.ts";
 import {
   feishuDisplayName,
   parseFeishuAppId,
@@ -53,10 +53,11 @@ import {
   FEISHU_OUTBOUND_QUEUE_MAX,
   FEISHU_PAGE_SIZE,
   FEISHU_UPLOAD_CONCURRENCY,
+  MAX_UPLOAD_BYTES,
 } from "../../shared/limits.ts";
 import { LRUCache } from "lru-cache";
 import pLimit from "p-limit";
-import { attachmentsOf } from "../../shared/attachments.ts";
+import { attachmentsOf, isLedgerWakeup } from "../../shared/attachments.ts";
 import type { RouterCommandRecord, RouterItem } from "../../shared/router.ts";
 import type { UserBlockerId } from "../../shared/user-blockers.ts";
 import { sentFilesOf } from "../../shared/sent-files.ts";
@@ -85,7 +86,7 @@ import { createFeishuContextWindows, createFeishuDirectory, type FeishuMember } 
 import { createFeishuFileService, planFeishuFile, type FeishuFileService, type FeishuOutboundFile, type FeishuUploaded } from "./files.ts";
 import { parseFeishuCardAction, parseFeishuEvent, type FeishuInbound, type FeishuInboundAction } from "./inbound.ts";
 import { catchUpIntents, projectFeishuChange, splitFeishuMarkdown, type FeishuOutboundIntent, type FeishuProjectionContext } from "./outbound.ts";
-import { routeFeishuAction, routeFeishuMessage, type FeishuActionRoute } from "./routing.ts";
+import { GUEST_NO_FILES, routeFeishuAction, routeFeishuMessage, type FeishuActionRoute } from "./routing.ts";
 import { checkFeishuScopes, FEISHU_APP_ADDONS, feishuAppPreset } from "./scopes.ts";
 import type { FeishuSdkOptions, registerFeishuApp } from "./sdk.ts";
 import { readFeishuSecrets, removeFeishuSecrets, writeFeishuSecrets, type FeishuSecrets } from "./secrets.ts";
@@ -170,6 +171,9 @@ const AWAITING_REPLY: ReadonlySet<string> = new Set(["queued", "delivered", "pro
 const MIRROR_TITLE = "网页上说";
 /** 整轮没写正文、状态卡又撤不回时，卡上留的一行。 */
 const NO_REPLY_TEXT = "（这一轮没有文字回复）";
+/** 飞书里发的文件没收下（超过 MAX_UPLOAD_BYTES、下载失败）时回的一句。 */
+const missedFilesText = (names: readonly string[]) =>
+  `没收下：${names.map((n) => `「${n}」`).join("、")}（超过 ${MAX_UPLOAD_BYTES / 1024 / 1024} MB 或下载失败），去网页上传。`;
 /** 原文只进日志。 */
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -535,11 +539,12 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     pmOfConversation,
     awaitingUser: (conversationId) => {
       // sender != 'agent' 让查询走 messages_conversation_non_agent 部分索引，不用扫过一长串工具调用
-      const row = db.get<{ dedupe_key: string; status: string | null }>(
-        "SELECT dedupe_key, status FROM messages WHERE conversation_id = ? AND sender != 'agent' AND sender = 'user' ORDER BY id DESC LIMIT 1",
+      const row = db.get<{ meta: string | null; status: string | null }>(
+        "SELECT meta, status FROM messages WHERE conversation_id = ? AND sender != 'agent' AND sender = 'user' ORDER BY id DESC LIMIT 1",
         conversationId,
       );
-      return row !== undefined && row.dedupe_key.startsWith(userMessageDedupeKey(conversationId, "")) && AWAITING_REPLY.has(row.status ?? "");
+      if (row === undefined || !AWAITING_REPLY.has(row.status ?? "")) return false;
+      return !isLedgerWakeup({ sender: "user", meta: row.meta === null ? null : (JSON.parse(row.meta) as Record<string, unknown>) });
     },
   };
 
@@ -836,19 +841,21 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
 
   // ---- 附件（docs/feishu-design.md「交付与附件」）----
 
-  /** 一条消息要带到飞书的文件：提问卡的交付物、项目经理发的文件、网页上用户的附件；找不到副本的跳过，part 按剩下的顺序编。 */
+  /**
+   * 一条消息要带到飞书的文件：提问卡的交付物、项目经理发的文件、网页上用户的附件；找不到副本的跳过。
+   * part 是它在消息附件列表里的下标，前面的副本事后没了也不变（feishu_posts 按它记）。
+   */
   const outboundFilesOf = (message: Message): FeishuOutboundFile[] => {
     const user = message.sender === "user";
     const ask = askOf(message);
     const list: readonly { id: string | null }[] = user ? attachmentsOf(message) : ask !== null ? (ask.deliverables ?? []) : sentFilesOf(message);
     const dir = user ? options.uploadsDir : options.sentFilesDir;
-    const out: FeishuOutboundFile[] = [];
-    for (const item of list) {
+    return list.flatMap((item, part) => {
       const copy = item.id === null ? null : resolveUpload(dir, item.id);
-      if (copy !== null) out.push({ messageId: message.id, part: out.length, path: copy.path, name: copy.name, mime: copy.mime, bytes: copy.size });
-    }
-    return out;
+      return copy === null ? [] : [{ messageId: message.id, part, path: copy.path, name: copy.name, mime: copy.mime, bytes: copy.size }];
+    });
   };
+  const outboundFileOf = (message: Message | null, part: number) => message === null ? undefined : outboundFilesOf(message).find((f) => f.part === part);
 
   const fileRef = (file: Pick<FeishuOutboundFile, "messageId" | "part">): FeishuPostRef => ({ kind: "file", messageId: file.messageId, part: file.part });
   const uploadKey = (file: Pick<FeishuOutboundFile, "messageId" | "part">) => `${file.messageId}:${file.part}`;
@@ -915,7 +922,7 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
   const attachmentSlots = (message: Message, sending = false): AttachmentSlot[] =>
     outboundFilesOf(message).map((file) => {
       const row = store.postOf(fileRef(file));
-      const job = row === null ? (uploads.get(uploadKey(file)) ?? null) : null;
+      const job = row === null || row.state === "uploading" ? (uploads.get(uploadKey(file)) ?? null) : null;
       return { file, row, job, result: job?.result, sending };
     });
 
@@ -940,7 +947,8 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     const plan = planFeishuFile(file);
     const name = file.name;
     if (plan.kind === "too_large") return { kind: "too_large", name, bytes: file.bytes };
-    if (row?.state === "uploading") return { kind: "uploading", name };
+    // uploading 行带了编号是传完（文件也发了）、只差改卡；没带编号的看在途那一份传没传上
+    if (row?.state === "uploading" && row.mediaKey === null) return result === null ? { kind: "failed", name } : { kind: "uploading", name };
     if (row !== null) {
       // 不挂在卡上的是单发的文件消息（含 0035 之前单发的图片）
       if (row.cardId === null) return null;
@@ -956,9 +964,10 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
 
   /**
    * 卡发出去之后：已传好的文件紧跟着发出去；嵌进卡的图片、没传上、太大的记成 final；还在传的记成 uploading（挂在 host 上），
-   * 传完再补发、改卡。已有记录的不动。
+   * 传完再补发、改卡。已有记录的不动。紧跟着发的文件被飞书拒收时也记成 uploading，交给 completeUpload 把 host 改成写着没发出去。
    */
   const followUpAttachments = async (chatId: FeishuChatId, slots: readonly AttachmentSlot[], host: HostCard) => {
+    const rejected: FeishuOutboundFile[] = [];
     for (const { file, row, result } of slots) {
       if (row !== null) continue;
       const ref = fileRef(file);
@@ -974,10 +983,18 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
       } else if (result.kind === "file") {
         const sent = await sendUploadedFile(chatId, file, result);
         if (sent === undefined) continue;
-        store.savePost(sent === null ? { ...onHost, state: "final", mediaKey: null } : { ref, chatId, messageId: sent, cardId: null, sequence: 0, state: "final", mediaKey: result.fileKey }, now());
+        if (sent === null) {
+          const job = uploads.get(uploadKey(file));
+          if (job !== undefined) job.result = null;
+          store.savePost({ ...onHost, state: "uploading" }, now());
+          rejected.push(file);
+          continue;
+        }
+        store.savePost({ ref, chatId, messageId: sent, cardId: null, sequence: 0, state: "final", mediaKey: result.fileKey }, now());
       }
       uploads.delete(uploadKey(file));
     }
+    for (const file of rejected) await completeUpload(chatId, file.messageId, file.part);
   };
 
   /** 发一个传好的文件：返回消息编号；飞书拒收返回 null（卡上标没发出去）；没连上返回 undefined（留着下次补）。暂时性错误往外抛。 */
@@ -1002,32 +1019,39 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     });
   };
 
-  /** 在途附件传完了：文件补发成文件消息，图片记下编号，然后把挂它的那张卡原地改掉（图嵌回去、文件标已送达）。 */
+  /**
+   * 在途附件传完了：图片记下编号、文件补发成文件消息，再把挂它的那张卡原地改掉（图嵌回去、文件标已送达、没传上的标没发出去），
+   * 改成了才记 final。编号先记在 uploading 行上（行里的消息编号一直是 host 的）：改卡遇到暂时性错误、停机重启后，
+   * 补发和 resumeUploads 按这一行重新改卡，不重传、不重发文件。
+   */
   const completeUpload = async (chatId: FeishuChatId, messageId: MessageId, part: number) => {
     const ref = fileRef({ messageId, part });
     const row = store.postOf(ref);
     if (row?.state !== "uploading" || row.chatId !== chatId) return;
     const message = ledger.getMessage(messageId);
-    const file = message === null ? undefined : outboundFilesOf(message)[part];
-    const onHost = { ref, chatId, messageId: row.messageId, cardId: row.cardId, sequence: 0, state: "final" as const };
-    if (message === null || file === undefined) {
-      store.savePost({ ...onHost, mediaKey: null }, now());
-      return;
+    const file = outboundFileOf(message, part);
+    const key = uploadKey({ messageId, part });
+    if (file !== undefined && row.mediaKey === null) {
+      const job = uploads.get(key);
+      if (job?.result === undefined) {
+        followUpload(chatId, file);
+        return;
+      }
+      const result = job.result;
+      let mediaKey: string | null = null;
+      if (result?.kind === "image") mediaKey = result.imageKey;
+      else if (result?.kind === "file") {
+        const sent = await sendUploadedFile(chatId, file, result);
+        if (sent === undefined) return;
+        if (sent === null) job.result = null;
+        else mediaKey = result.fileKey;
+      }
+      if (mediaKey !== null) store.savePost({ ...row, mediaKey }, now());
     }
-    const result = uploads.get(uploadKey(file))?.result;
-    if (result === undefined) {
-      followUpload(chatId, file);
-      return;
-    }
-    if (result === null || result.kind === "too_large") store.savePost({ ...onHost, mediaKey: null }, now());
-    else if (result.kind === "image") store.savePost({ ...onHost, mediaKey: result.imageKey }, now());
-    else {
-      const sent = await sendUploadedFile(chatId, file, result);
-      if (sent === undefined) return;
-      store.savePost(sent === null ? { ...onHost, mediaKey: null } : { ...onHost, messageId: sent, mediaKey: result.fileKey }, now());
-    }
-    uploads.delete(uploadKey(file));
-    await refreshHostCard(message, row.messageId);
+    if (message !== null) await refreshHostCard(message, row.messageId);
+    const latest = store.postOf(ref);
+    if (latest !== null && store.chatById(chatId) !== null) store.savePost({ ...latest, state: "final" }, now());
+    uploads.delete(key);
   };
 
   /** 挂附件的卡按账本现状和附件现状重画一遍、原地改掉：提问卡照拍板状态画，回复卡和网页镜像卡用最后一段正文。 */
@@ -1047,19 +1071,16 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     if (store.chatById(post.chatId) !== null) store.savePost({ ...post, sequence: post.sequence + 1 }, now());
   };
 
-  /** 重连、重启后接着传卡已发出、附件还没传完的：传完的直接收尾，没传完的接着等。 */
+  /** 重连、重启后接着做卡已发出、附件还没收尾的：传完（或只差改卡）的直接收尾，没传完的接着等。 */
   const resumeUploads = async (chat: FeishuChatBinding) => {
     for (const post of store.uploadingPosts(chat.chatId, FEISHU_PAGE_SIZE)) {
       if (post.ref.kind !== "file") continue;
       const { messageId, part } = post.ref;
-      const result = uploads.get(uploadKey({ messageId, part }))?.result;
-      if (result !== undefined) await completeUpload(chat.chatId, messageId, part);
-      else {
-        const message = ledger.getMessage(messageId);
-        const file = message === null ? undefined : outboundFilesOf(message)[part];
-        if (file === undefined) await completeUpload(chat.chatId, messageId, part);
-        else followUpload(chat.chatId, file);
-      }
+      const file = post.mediaKey === null && uploads.get(uploadKey({ messageId, part }))?.result === undefined
+        ? outboundFileOf(ledger.getMessage(messageId), part)
+        : undefined;
+      if (file === undefined) await completeUpload(chat.chatId, messageId, part);
+      else followUpload(chat.chatId, file);
     }
   };
 
@@ -1145,7 +1166,7 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
         store.savePost({ ...post, sequence, state: "final" }, now());
         host = { messageId: post.messageId, cardId: post.cardId };
       } else {
-        host = await sendReplyCard(chatId, conversationId, chunk, `fusa-m-${effect.messageId}-${part}`, attachments, attachments.length > 0);
+        host = await sendReplyCard(chatId, conversationId, chunk, `fusa-m-${effect.messageId}-${part}`, attachments, part === chunks.length - 1 && slots.length > 0);
         if (projection.chatOfConversation(conversationId)?.chatId !== chatId) return;
         store.savePost({ ref, chatId, messageId: host.messageId, cardId: host.cardId, sequence: 0, state: "final" }, now());
       }
@@ -1718,18 +1739,30 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
         contexts.add(message.chatId, route.line);
         return;
       case "deliver": {
+        // 超过上限、下载失败的文件回一句；收下的附件和正文都没有时不投递（账本、总助都不收空消息）
         const attachments = [];
+        const missed: string[] = [];
         for (const file of route.files) {
           const saved = await files?.receive(message.messageId, file);
           if (saved) attachments.push(saved);
+          else missed.push(file.fileName ?? (file.type === "image" ? "图片" : "文件"));
         }
+        const at = message.chatType === "group" && message.senderOpenId !== o ? `<at user_id="${message.senderOpenId}"></at> ` : "";
+        if (missed.length > 0) await sendText({ chatId: message.chatId }, `${at}${missedFilesText(missed)}`);
+        if (route.droppedFiles > 0) await sendText({ chatId: message.chatId }, `${at}${GUEST_NO_FILES}`);
+        if (route.text === "" && attachments.length === 0) return;
         const clientId = `${FEISHU_CLIENT_PREFIX}${message.messageId}`;
         if (route.target.kind === "router") {
           if (options.router === null) {
             await sendText({ chatId: message.chatId }, "总助没开：去网页的总助工作台选一家 agent。");
             return;
           }
-          await options.router.submitCommand({ clientId, text: route.text, ...(attachments.length > 0 ? { attachmentIds: attachments.map((a) => a.id) } : {}) });
+          try {
+            await options.router.submitCommand({ clientId, text: route.text, ...(attachments.length > 0 ? { attachmentIds: attachments.map((a) => a.id) } : {}) });
+          } catch (error) {
+            if (!(error instanceof LedgerRequestError)) throw error;
+            await sendText({ chatId: message.chatId }, `没送到：${error.message}`);
+          }
           return;
         }
         if (activeTarget(store.chatById(message.chatId))?.kind !== "pm") return;

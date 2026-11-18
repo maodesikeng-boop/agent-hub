@@ -8,7 +8,8 @@ import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
 import { unified } from "unified";
 import type { Change } from "../../shared/api.ts";
-import { askOf, isHandoverTraffic, userMessageDedupeKey, type ConversationId, type Message, type MessageId, type PmId } from "../../shared/domain.ts";
+import { askOf, isHandoverTraffic, type ConversationId, type Message, type MessageId, type PmId } from "../../shared/domain.ts";
+import { isLedgerWakeup } from "../../shared/attachments.ts";
 import type { Deliverable } from "../../shared/deliverables.ts";
 import { feishuOriginOf } from "../../shared/feishu.ts";
 import { FEISHU_CARD_MARKDOWN_JSON_BYTES, FEISHU_CARD_MAX_CHARS, FEISHU_CATCHUP_MAX_MESSAGES, FEISHU_FENCE_INFO_MAX_CHARS, FEISHU_FENCE_MARKER_MAX_CHARS } from "../../shared/limits.ts";
@@ -97,7 +98,6 @@ export function projectFeishuChange(change: Change, ctx: FeishuProjectionContext
   }
 }
 
-const USER_TYPED_PREFIX = userMessageDedupeKey(0, "").split(":")[0]! + ":";
 const ROUTER_COMMAND_DONE: ReadonlySet<RouterCommandRecord["status"]> = new Set(["answered", "dispatched", "failed"]);
 
 /** 有群的项目经理对话里的一条消息要在群里体现成什么（补发也走它）。 */
@@ -111,8 +111,8 @@ function messageIntents(message: Message): FeishuOutboundIntent[] {
     if (message.text.trim() === "" && sentFilesOf(message).length === 0) return [];
     return [{ kind: "agent_text", conversationId, message, files: sentFilesOf(message) }];
   }
-  // 只镜像用户在网页上打的字（去重键是 userMessageDedupeKey 的 client:）；拍板唤醒这类账本代发的用户消息不镜像
-  if (message.sender === "user" && message.dedupeKey.startsWith(USER_TYPED_PREFIX) && feishuOriginOf(message) === null) {
+  // 只镜像用户在网页上打的字；拍板唤醒这类账本代发的用户消息不镜像
+  if (message.sender === "user" && !isLedgerWakeup(message) && feishuOriginOf(message) === null) {
     return [{ kind: "mirror_user", conversationId, message }];
   }
   return [];

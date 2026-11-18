@@ -170,6 +170,8 @@ export class FeishuApiError extends Error {
 export const FEISHU_RATE_LIMIT_CODES: ReadonlySet<number> = new Set([230020, 99991400]);
 /** 卡片超过 30 KB 时飞书回的错误码；发送前本地核出超限也按它抛。 */
 export const FEISHU_CARD_TOO_LARGE_CODE = 230025;
+/** 上传图片时飞书认不出图片格式回的错误码；本地核出转不成飞书收的图（avif、超过 10 MB）时也按它抛。 */
+export const FEISHU_IMAGE_REJECTED_CODE = 234011;
 
 /**
  * 飞书明确拒收了这一次请求（卡片过期、消息撤回、群没了、内容超限）：同样的请求再发还是被拒，调用方放弃这一件、不重试。

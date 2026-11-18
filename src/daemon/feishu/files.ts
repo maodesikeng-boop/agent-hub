@@ -3,7 +3,8 @@
 // 下载存成附件，随消息交给项目经理。
 // 不变量：
 // - 图片 ≤ 10 MB 走上传图片（嵌进卡片）；超过 FEISHU_IMAGE_MAX_EDGE 边长或 FEISHU_IMAGE_SHRINK_BYTES 的位图先在临时目录缩一份再传，
-//   传完删掉临时文件，磁盘上的原文件不动；
+//   avif（飞书图片接口不收）一律转一份，超过 10 MB 的动图取第一帧；传完删掉临时文件，磁盘上的原文件不动；
+//   要转、要缩却转不成（读不出来、加载不了 sharp）的不白传，按飞书拒收报 FEISHU_IMAGE_REJECTED_CODE；
 // - 其他文件 ≤ 30 MB 走上传文件，消息类型和上传类型照飞书配对（mp4 发视频 media、opus 发语音 audio、其余发文件 file，
 //   不配对飞书回 230055）；超过的不传，卡上写一行“文件太大，去网页看”；
 // - 发文件消息带 uuid fusa-file-<消息编号>-<第几个>，重发同一个文件飞书只收一次；
@@ -18,7 +19,7 @@ import { parseFeishuMessageId, type FeishuChatId, type FeishuMessageId } from ".
 import { FEISHU_FILE_MAX_BYTES, FEISHU_IMAGE_MAX_BYTES, FEISHU_IMAGE_MAX_EDGE, FEISHU_IMAGE_SHRINK_BYTES, MAX_UPLOAD_BYTES } from "../../shared/limits.ts";
 import { saveUpload } from "../uploads.ts";
 import type { FeishuInboundFile } from "./inbound.ts";
-import { feishuDataOf, feishuStringField, type FeishuFileUpload, type FeishuTransport } from "./transport.ts";
+import { FEISHU_IMAGE_REJECTED_CODE, FeishuApiError, feishuDataOf, feishuStringField, type FeishuFileUpload, type FeishuTransport } from "./transport.ts";
 
 export interface FeishuOutboundFile {
   /** 账本消息编号和第几个文件，记 feishu_posts 用。 */
@@ -64,9 +65,13 @@ const FILE_TYPES: Readonly<Record<string, FeishuFileUpload["fileType"]>> = {
   opus: "opus",
 };
 
+/** 原样传飞书一定不收、非转一份不可的图：avif，或超过 FEISHU_IMAGE_MAX_BYTES 的。 */
+const mustConvert = (file: Pick<FeishuOutboundFile, "mime" | "bytes">) => file.mime === "image/avif" || file.bytes > FEISHU_IMAGE_MAX_BYTES;
+
 /**
- * 位图超过 FEISHU_IMAGE_MAX_EDGE 边长或 FEISHU_IMAGE_SHRINK_BYTES 时，在临时目录写一份最长边 ≤ FEISHU_IMAGE_MAX_EDGE 的副本，返回它的路径；
- * 不用缩、缩不了（动图、读不出来、这台机器加载不了 sharp）返回 null，照原图传。png 照旧出 png，缩完还超过 FEISHU_IMAGE_SHRINK_BYTES 改出 jpeg；webp 出 webp；别的出 jpeg。
+ * 位图超过 FEISHU_IMAGE_MAX_EDGE 边长或 FEISHU_IMAGE_SHRINK_BYTES、是 avif 时，在临时目录写一份最长边 ≤ FEISHU_IMAGE_MAX_EDGE 的副本，返回它的路径；
+ * 动图不超过 FEISHU_IMAGE_MAX_BYTES 时照原图传（保留动画），超过的只取第一帧。
+ * 不用缩、缩不了（读不出来、这台机器加载不了 sharp）返回 null。png 照旧出 png，缩完还超过 FEISHU_IMAGE_SHRINK_BYTES 改出 jpeg；webp 出 webp；别的出 jpeg。
  * 官方 sharp 只在要发图片时才加载（docs/feishu-design.md「性能」）。
  */
 export async function shrinkFeishuImage(file: Pick<FeishuOutboundFile, "path" | "mime" | "bytes">): Promise<string | null> {
@@ -74,8 +79,10 @@ export async function shrinkFeishuImage(file: Pick<FeishuOutboundFile, "path" | 
   try {
     const { default: sharp } = await import("sharp");
     const meta = await sharp(file.path).metadata();
-    if ((meta.pages ?? 1) > 1) return null;
-    if (Math.max(meta.width ?? 0, meta.height ?? 0) <= FEISHU_IMAGE_MAX_EDGE && file.bytes <= FEISHU_IMAGE_SHRINK_BYTES) return null;
+    if (!mustConvert(file)) {
+      if ((meta.pages ?? 1) > 1) return null;
+      if (Math.max(meta.width ?? 0, meta.height ?? 0) <= FEISHU_IMAGE_MAX_EDGE && file.bytes <= FEISHU_IMAGE_SHRINK_BYTES) return null;
+    }
     const resized = () => sharp(file.path).rotate().resize({ width: FEISHU_IMAGE_MAX_EDGE, height: FEISHU_IMAGE_MAX_EDGE, fit: "inside", withoutEnlargement: true });
     let ext = meta.format === "png" ? "png" : meta.format === "webp" ? "webp" : "jpg";
     let data = ext === "png" ? await resized().png({ compressionLevel: 9 }).toBuffer() : ext === "webp" ? await resized().webp({ quality: 85 }).toBuffer() : null;
@@ -130,6 +137,9 @@ export function createFeishuFileService(deps: FeishuFileServiceDeps): FeishuFile
         return { kind: "file", fileKey, msgType: plan.msgType };
       }
       const shrunk = await shrinkFeishuImage(file);
+      if (shrunk === null && mustConvert(file)) {
+        throw new FeishuApiError("image.create", FEISHU_IMAGE_REJECTED_CODE, `「${file.name}」转不成飞书收的图片（avif 或超过 10 MB）`);
+      }
       try {
         const { imageKey } = await transport.uploadImage({ imageType: "message", path: shrunk ?? file.path });
         return { kind: "image", imageKey };
