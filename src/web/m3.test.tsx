@@ -1397,6 +1397,43 @@ describe("selectors", () => {
     ]);
   });
 
+  // 2026-11-18 对话 #205：会话 #867 12:25 因额度失败，12:26 切到另一个模型后发“继续”，新一轮正常在跑
+  describe("quotaUsage：会话因额度失败后又开始了新一轮", () => {
+    const RESET = 1_794_990_000;
+    const now = (RESET - 3600) * 1000;
+    const quotaFailed = (id: number) =>
+      makeUserMessage({ id, conversationId: 205, sessionId: 867, status: "failed", failureReason: "failed: You’ve hit your usage limit. Try again at 3:48 PM.", updatedAt: now - 120_000 });
+    const stateOf = (messages: Message[]) =>
+      loaded(
+        withWorker({
+          conversations: [makeConvSnapshot(messages, { conversation: { id: 205, pmId: 1, title: "PM" } })],
+          sessions: [
+            makeSession({
+              sessionId: 867,
+              conversationId: 205,
+              vendor: "codex",
+              lastEventAt: now - 60_000,
+              rateLimit: { status: "allowed", resetsAt: null, windows: { five_hour: { utilization: 1, resetsAt: RESET, status: "allowed" } } },
+            }),
+          ],
+        }),
+      );
+
+    it("最近一轮就是这次额度失败：标用完", () => {
+      expect(quotaUsage(stateOf([quotaFailed(1)]), now)[0]!.exhausted).toBe(true);
+    });
+
+    it("失败之后又有一条开始处理了：旧的失败不再把它标回用完", () => {
+      const state = stateOf([quotaFailed(1), makeMessage({ id: 2, conversationId: 205, sessionId: 867 }), makeUserMessage({ id: 3, conversationId: 205, sessionId: 867, status: "processing", text: "继续" })]);
+      expect(quotaUsage(state, now)[0]!.exhausted).toBe(false);
+    });
+
+    it("失败之后只是又排了一条（还没开始）：仍是用完", () => {
+      const state = stateOf([quotaFailed(1), makeUserMessage({ id: 3, conversationId: 205, sessionId: 867, status: "queued", text: "继续" })]);
+      expect(quotaUsage(state, now)[0]!.exhausted).toBe(true);
+    });
+  });
+
   // 真实日志（2026-11-04）：5 小时窗口 14:30 重置（resetsAt 1793773800），重置前 0.96~0.99；重置后第一条事件 14:3x 才带来新窗口 resetsAt 1793791800
   describe("quotaUsage：重置前后的真实序列", () => {
     const RESET = 1_793_773_800;
