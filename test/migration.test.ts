@@ -1189,6 +1189,7 @@ describe("0011_message_cancelled：从 0010 的库升级", () => {
     ).toEqual([
       { name: "messages_conversation" },
       { name: "messages_conversation_non_agent" },
+      { name: "messages_in_flight" },
       { name: "messages_session" },
       { name: "messages_worker" },
       { name: "messages_worker_lines" },

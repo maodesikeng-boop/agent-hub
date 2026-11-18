@@ -344,6 +344,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     },
 
     messagesBefore: messages.messagesBefore,
+    messagesAfter: messages.messagesAfter,
 
     changesSince: (seq) => log.since(seq),
     onChange: (listener) => subscribe(changeListeners, listener),

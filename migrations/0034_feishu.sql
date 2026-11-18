@@ -60,3 +60,7 @@ CREATE TABLE IF NOT EXISTS feishu_avatars (
   image_key   TEXT    NOT NULL,
   uploaded_at INTEGER NOT NULL
 ) STRICT;
+
+-- 账本 hubCall 每次查“这一轮是不是飞书访客的话触发的”（daemon/ledger/hub-commands.ts 的 guestTurnBlockReason）：
+-- 只看这个会话里已送达、处理中的用户消息。部分索引只收在途的几行，会话再长也不扫已回复的历史消息。
+CREATE INDEX IF NOT EXISTS messages_in_flight ON messages (session_id) WHERE status IN ('delivered', 'processing');

@@ -48,8 +48,9 @@ export const READONLY_SECRET_HOME_PATHS: readonly string[] = [
  * - 库里没有任何一张表存了现行的令牌，所以没有要单独禁读的表（SQLite 是单个文件，也没法按表禁读）。
  *   只有 messages 的工具记录（text、meta）里留着别的守护进程（测试用）打印的登录链接 ?token=…，已经作废，不算。
  * 以后要在库里存令牌：先挪到 state/ 下单独的文件，再把文件名加到这里，别让只读 Worker 读到整库。
+ * feishu-secrets.json：飞书应用的 App ID 和 App Secret（daemon/feishu/secrets.ts），不进库。
  */
-export const READONLY_SECRET_STATE_FILES: readonly string[] = ["ui-token", "provider-secrets.json"];
+export const READONLY_SECRET_STATE_FILES: readonly string[] = ["ui-token", "provider-secrets.json", "feishu-secrets.json"];
 
 /** 默认禁读的通配。 */
 export const READONLY_SECRET_GLOBS: readonly string[] = ["**/.env", "**/.env.*", "**/*.pem", "**/*.key", "**/id_rsa*", "**/id_ed25519*"];

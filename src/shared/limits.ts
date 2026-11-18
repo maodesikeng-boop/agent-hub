@@ -1038,3 +1038,56 @@ export const PM_CAPABILITY_DESCRIPTION_MAX_CHARS = 200;
 export const PM_CAPABILITY_PATCH_MAX_KEYS = 500;
 /** Codex 云端连接器工具缓存 JSON（含完整工具 Schema，本机实测 2.8 MB）只读扫描字节上限。 */
 export const PM_CAPABILITY_APPS_CACHE_MAX_BYTES = 16 * 1024 * 1024;
+
+// ---- 接入飞书（docs/feishu-design.md 的性能一节） ----
+/** 一张卡片正文最多多少字：卡片 ≤ 30 KB，中文 UTF-8 每字 3 字节约 10,000 字，留出按钮和 JSON 的余量。超过的续到新卡。 */
+export const FEISHU_CARD_MAX_CHARS = 8_000;
+/** 流式卡片两次推全文的最小间隔：每张卡每秒约 3 次，低于飞书每张卡 10 次/秒。 */
+export const FEISHU_STREAM_FLUSH_MS = 300;
+/** 流式卡片打字机的速度（飞书默认值，写死免得各端默认不同）：每隔多少毫秒出几个字。 */
+export const FEISHU_STREAM_PRINT_FREQUENCY_MS = 70;
+export const FEISHU_STREAM_PRINT_STEP = 1;
+/** 整个应用每秒最多调几次流式更新文本：接口 50 次/秒，留余量；300 ms 一推时够 12 个对话同时流式。 */
+export const FEISHU_CARDKIT_BUDGET_PER_SECOND = 40;
+/** 流式模式开着超过这么久续开一次：飞书 10 分钟自动关。 */
+export const FEISHU_STREAM_RENEW_MS = 9 * 60_000;
+/** 同一个群每秒最多发几条：飞书同一个群里机器人共享 5 QPS。 */
+export const FEISHU_CHAT_SENDS_PER_SECOND = 4;
+/** 卡片回调多久内必须回：飞书要求 3 秒。 */
+export const FEISHU_CARD_ACTION_DEADLINE_MS = 2_500;
+/** 成员缓存最多几个群：群数 = 项目经理数 + 1，留十倍。 */
+export const FEISHU_CHAT_CACHE_MAX = 200;
+/** 每个群最多缓存几个成员：私人项目群不会超过几十人。 */
+export const FEISHU_CHAT_MEMBERS_MAX = 1_000;
+/** 成员缓存多久对一次账（事件实时改为主）；查失败多久内不再查。 */
+export const FEISHU_MEMBERS_TTL_MS = 10 * 60_000;
+export const FEISHU_MEMBERS_RETRY_MS = 30_000;
+/** 署名里的显示名最多几个字。 */
+export const FEISHU_DISPLAY_NAME_MAX_CHARS = 40;
+/** 群里没 @机器人 的话，每个群最多记几行、几个字、多久（太久以前的讨论当背景反而误导）。 */
+export const FEISHU_CONTEXT_MAX_LINES = 30;
+export const FEISHU_CONTEXT_MAX_CHARS = 4_000;
+export const FEISHU_CONTEXT_TTL_MS = 2 * 60 * 60_000;
+/** feishu_posts 里已定稿的行留几天：飞书卡片实体 14 天后不能再操作。 */
+export const FEISHU_POST_RETENTION_DAYS = 14;
+export const FEISHU_POST_RETENTION_MS = FEISHU_POST_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+/** 断线重连后每个群最多补发几条，更早的发一行“还有 N 条，去网页看”。 */
+export const FEISHU_CATCHUP_MAX_MESSAGES = 20;
+/** 手动接入的绑定码多久失效。 */
+export const FEISHU_BIND_CODE_TTL_MS = 10 * 60_000;
+/** 飞书上传图片、上传文件的上限。 */
+export const FEISHU_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+export const FEISHU_FILE_MAX_BYTES = 30 * 1024 * 1024;
+/** 进、出队列各最多排几件：进的满了先丢成员和改名事件（重连对账会补回），出的满了先合并流式推送。 */
+export const FEISHU_INBOUND_QUEUE_MAX = 200;
+export const FEISHU_OUTBOUND_QUEUE_MAX = 500;
+/** state/feishu-secrets.json 的权限，和 state/ui-token 一样。 */
+export const FEISHU_SECRETS_FILE_MODE = 0o600;
+/** 群名最多几个字（飞书建议 ≤ 60）。 */
+export const FEISHU_CHAT_NAME_MAX_CHARS = 60;
+/** 建群 uuid 最多几个字（飞书要求 ≤ 50）。 */
+export const FEISHU_CHAT_UUID_MAX_CHARS = 50;
+/** 列群、列群成员每页几条（飞书上限 100）。 */
+export const FEISHU_PAGE_SIZE = 100;
+/** 等扫码确认时 status 被问的间隔（终端命令轮询状态用）。 */
+export const FEISHU_CLI_POLL_MS = 2_000;

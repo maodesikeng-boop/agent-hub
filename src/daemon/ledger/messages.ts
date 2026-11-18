@@ -464,10 +464,14 @@ export function createLedgerMessages(
       const blocked = ctx.commandBlockReason(session, input.text);
       if (blocked !== null) throw fail("invalid", blocked);
       const t = now();
-      // 有附件、有 workerPick 才写 meta（UserMessageMeta）；两样都没有的用户消息 meta 还是 null，和老消息一样
+      // 有附件、有 workerPick、从飞书来的才写 meta（UserMessageMeta）；都没有的用户消息 meta 还是 null，和老消息一样
       const meta: UserMessageMeta | null =
-        input.attachments?.length || input.workerPick !== undefined
-          ? { ...(input.attachments?.length ? { attachments: input.attachments } : {}), ...(input.workerPick !== undefined ? { workerPick: input.workerPick } : {}) }
+        input.attachments?.length || input.workerPick !== undefined || input.origin !== undefined
+          ? {
+              ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+              ...(input.workerPick !== undefined ? { workerPick: input.workerPick } : {}),
+              ...(input.origin !== undefined ? { origin: input.origin } : {}),
+            }
           : null;
       // Worker 对话里用户的话带上 Worker 编号（写给 Worker 时据此加标签，见 shared/worker.ts 的 deliveryText）
       const row = db.get<MessageDbRow>(
@@ -595,6 +599,13 @@ export function createLedgerMessages(
     });
   };
 
+  const messagesAfter = (conversationId: ConversationId, after: MessageId, limit: number): Message[] => {
+    if (!conversationExists(conversationId)) throw new ConversationNotFoundError(conversationId);
+    return db
+      .all<MessageDbRow>("SELECT * FROM messages WHERE conversation_id = ? AND id > ? ORDER BY id LIMIT ?", conversationId, after, Math.max(0, limit))
+      .map(toMessage);
+  };
+
   const messagesBefore = (conversationId: ConversationId, before: MessageId): MessagesPage => {
     if (!conversationExists(conversationId)) throw new ConversationNotFoundError(conversationId);
     return page(
@@ -659,6 +670,7 @@ export function createLedgerMessages(
     stopIn,
     turnsLostOnShutdown,
     messagesBefore,
+    messagesAfter,
     actionFailedIn,
     stopMessage,
     retryMessage,

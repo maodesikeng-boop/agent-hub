@@ -6,7 +6,9 @@
 // - App Secret 只在 state/feishu-secrets.json，不进数据库、不进任何接口响应。
 
 import type { HubCommand } from "./hub.ts";
-import type { PmId } from "./domain.ts";
+
+import { truncateChars, type PmId } from "./domain.ts";
+import { FEISHU_DISPLAY_NAME_MAX_CHARS } from "./limits.ts";
 
 declare const feishuBrand: unique symbol;
 type FeishuBrand<T extends string> = string & { readonly [feishuBrand]: T };
@@ -24,34 +26,45 @@ export type FeishuCardId = FeishuBrand<"FeishuCardId">;
 /** 上传图片得到的 image_key（群头像、图片消息）。 */
 export type FeishuImageKey = FeishuBrand<"FeishuImageKey">;
 
+const ID_PATTERNS = {
+  cli: /^cli_[A-Za-z0-9]+$/,
+  ou: /^ou_[A-Za-z0-9]+$/,
+  oc: /^oc_[A-Za-z0-9]+$/,
+  om: /^om_[A-Za-z0-9_-]+$/,
+} as const;
+
+function brandIf<T extends string>(raw: unknown, pattern: RegExp): T | null {
+  return typeof raw === "string" && pattern.test(raw) ? (raw as T) : null;
+}
+
 /** 后置：形状对（cli_ 开头、只含字母数字）返回品牌值，否则 null。不查飞书。 */
 export function parseFeishuAppId(raw: unknown): FeishuAppId | null {
-  throw new Error("未实现");
+    return brandIf(raw, ID_PATTERNS.cli);
 }
 
 /** 后置：形状对（ou_ 开头）返回品牌值，否则 null。 */
 export function parseFeishuOpenId(raw: unknown): FeishuOpenId | null {
-  throw new Error("未实现");
+    return brandIf(raw, ID_PATTERNS.ou);
 }
 
 /** 后置：形状对（oc_ 开头）返回品牌值，否则 null。 */
 export function parseFeishuChatId(raw: unknown): FeishuChatId | null {
-  throw new Error("未实现");
+    return brandIf(raw, ID_PATTERNS.oc);
 }
 
 /** 后置：形状对（om_ 开头）返回品牌值，否则 null。 */
 export function parseFeishuMessageId(raw: unknown): FeishuMessageId | null {
-  throw new Error("未实现");
+    return brandIf(raw, ID_PATTERNS.om);
 }
 
 /** 后置：非空、只含数字和字母的字符串返回品牌值，否则 null。 */
 export function parseFeishuCardId(raw: unknown): FeishuCardId | null {
-  throw new Error("未实现");
+    return brandIf(raw, /^[A-Za-z0-9]+$/);
 }
 
 /** 后置：非空字符串返回品牌值，否则 null。 */
 export function parseFeishuImageKey(raw: unknown): FeishuImageKey | null {
-  throw new Error("未实现");
+    return typeof raw === "string" && raw !== "" ? (raw as FeishuImageKey) : null;
 }
 
 /** 飞书还是 Lark（国际版）：决定开放平台域名。扫码建应用时由 registerApp 返回，手动接入时用户选。 */
@@ -91,9 +104,15 @@ export type FeishuGuestTier = (typeof FEISHU_GUEST_TIERS)[number];
 /** 访客想做的事。 */
 export type FeishuGuestAction = "talk" | "answer_card" | "stop" | "send_files";
 
+const GUEST_ACTIONS: Readonly<Record<FeishuGuestTier, readonly FeishuGuestAction[]>> = {
+  chat_only: ["talk"],
+  collaborator: ["talk", "answer_card", "stop", "send_files"],
+  observer: [],
+};
+
 /** 后置：按上面档位的定义回答这一档的访客能不能做这件事。这张表是访客权限的唯一定义。 */
 export function feishuGuestMay(tier: FeishuGuestTier, action: FeishuGuestAction): boolean {
-  throw new Error("未实现");
+    return GUEST_ACTIONS[tier].includes(action);
 }
 
 /** 一个会话对应谁：总助（主人和机器人的单聊），或某个项目经理的群。Worker 不建群。 */
@@ -124,6 +143,50 @@ export interface FeishuMessageOrigin {
   context: FeishuContextLine[];
 }
 
+export const FEISHU_ROLE_LABELS: Readonly<Record<FeishuSpeakerRole, string>> = { owner: "主人", guest: "访客" };
+const FEISHU_CONTEXT_HEADING = "群里之前的讨论（没 @机器人 的话，按时间先后）：";
+
+/** 显示名去掉首尾空白和换行，最多 FEISHU_DISPLAY_NAME_MAX_CHARS 字；空的叫“飞书用户”。 */
+export function feishuDisplayName(raw: string): string {
+  const name = truncateChars(raw.replace(/\s+/g, " ").trim(), FEISHU_DISPLAY_NAME_MAX_CHARS);
+  return name === "" ? "飞书用户" : name;
+}
+
+const isOne = <T extends string>(values: readonly T[], value: unknown): value is T => typeof value === "string" && (values as readonly string[]).includes(value);
+
+function isContextLine(value: unknown): value is FeishuContextLine {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return typeof v.name === "string" && isOne(FEISHU_SPEAKER_ROLES, v.role) && typeof v.text === "string" && typeof v.at === "number";
+}
+
+/** 一条用户消息的飞书来源（meta.origin）；网页发的、形状不对的都是 null（和 attachmentsOf 一样宽松）。 */
+export function feishuOriginOf(message: { meta: Record<string, unknown> | null }): FeishuMessageOrigin | null {
+  const raw = message.meta?.origin;
+  if (typeof raw !== "object" || raw === null) return null;
+  const o = raw as Record<string, unknown>;
+  if (
+    o.kind !== "feishu" ||
+    parseFeishuOpenId(o.openId) === null ||
+    typeof o.name !== "string" ||
+    !isOne(FEISHU_SPEAKER_ROLES, o.role) ||
+    !isOne(FEISHU_CHAT_MODES, o.mode) ||
+    !isOne(FEISHU_GUEST_TIERS, o.guestTier) ||
+    !Array.isArray(o.context)
+  ) {
+    return null;
+  }
+  return {
+    kind: "feishu",
+    openId: o.openId as FeishuOpenId,
+    name: o.name,
+    role: o.role,
+    mode: o.mode,
+    guestTier: o.guestTier,
+    context: o.context.filter(isContextLine),
+  };
+}
+
 /**
  * 发给 agent 时放在正文前的几段（交给 shared/worker.ts 的 deliveryParts 拼进 prefixes）。
  * 后置：
@@ -132,7 +195,13 @@ export interface FeishuMessageOrigin {
  * - context 不为空时多一段“群里之前的讨论”，每行“名字（主人/访客）：原话”。
  */
 export function feishuDeliveryPrefixes(origin: FeishuMessageOrigin): string[] {
-  throw new Error("未实现");
+    const prefixes: string[] = [];
+  if (origin.mode === "shared") prefixes.push(`【飞书 · ${feishuDisplayName(origin.name)}（${FEISHU_ROLE_LABELS[origin.role]}）】`);
+  if (origin.context.length > 0) {
+    const lines = origin.context.map((line) => `${feishuDisplayName(line.name)}（${FEISHU_ROLE_LABELS[line.role]}）：${line.text}`);
+    prefixes.push([FEISHU_CONTEXT_HEADING, ...lines].join("\n"));
+  }
+  return prefixes;
 }
 
 /**
@@ -151,7 +220,9 @@ export const FEISHU_GUEST_BLOCKED_HUB_COMMANDS: Readonly<Record<FeishuGuestTier,
  * 主人的话、网页的话、不在表里的命令返回 null。
  */
 export function feishuGuestTurnBlockReason(command: HubCommand, origin: FeishuMessageOrigin | null): string | null {
-  throw new Error("未实现");
+    if (origin === null || origin.role !== "guest") return null;
+  if (!FEISHU_GUEST_BLOCKED_HUB_COMMANDS[origin.guestTier].includes(command)) return null;
+  return `这一轮是飞书群里的访客（${feishuDisplayName(origin.name)}）说的话触发的，访客不能让你做 ${command}。要做的话请等主人自己说。`;
 }
 
 // ---- 连接状态与设置接口（界面服务与终端命令共用）----

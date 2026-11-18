@@ -2,6 +2,7 @@
 // 格式说明（给 Worker 的提示词用）和解析函数放在一起，改格式只改这里。
 import { agentTextOf } from "./attachments.ts";
 import { truncateChars } from "./domain.ts";
+import { feishuDeliveryPrefixes, feishuOriginOf } from "./feishu.ts";
 import type { Message, WorkerId, WorkerEvent, WorkerLineStatus } from "./domain.ts";
 import { WORKER_BRANCH_SLUG_CHARS, WORKER_LINE_SUMMARY_CHARS } from "./limits.ts";
 import { WORKER_BRANCH_PREFIX } from "./names.ts";
@@ -307,7 +308,8 @@ export function workerPickOf(message: { meta: Record<string, unknown> | null }):
  * - text：用户写的字 + 附件的完整路径（attachments.ts 的 agentTextOf），原文以 / 开头的照样以 / 开头；
  * - prefixes：驱动层把它们放在原文前面、各自单独一块（原文单独放最后一块，/ 命令才会被展开，见 docs/composer-commands.md 的 T4）：
  *   Worker 对话里用户说的（sender user、带 workerId）带 USER_TO_WORKER_TAG；
- *   用户消息带 workerPick（项目经理对话）再加 workerPickNote；别的没有标签。
+ *   用户消息带 workerPick（项目经理对话）再加 workerPickNote；从飞书来的（meta.origin）再加署名和群里之前的讨论（feishuDeliveryPrefixes）；
+ *   别的没有标签。
  * 库里存的是原文，网页照原文显示。
  */
 export function deliveryParts(message: Pick<Message, "workerId" | "sender" | "text" | "meta">): { prefixes: string[]; text: string } {
@@ -317,6 +319,8 @@ export function deliveryParts(message: Pick<Message, "workerId" | "sender" | "te
     if (message.workerId !== null) prefixes.push(USER_TO_WORKER_TAG);
     const pick = workerPickOf(message);
     if (pick !== null) prefixes.push(workerPickNote(pick));
+    const origin = feishuOriginOf(message);
+    if (origin !== null) prefixes.push(...feishuDeliveryPrefixes(origin));
   }
   return { prefixes, text };
 }
