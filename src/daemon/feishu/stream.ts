@@ -3,7 +3,7 @@
 // 流程：第一块文字来了 → 建卡片实体（streaming_mode 开、带停止按钮）并发到群主聊天流 → 之后按 FEISHU_STREAM_FLUSH_MS
 // 调“流式更新文本”推全文 → 一段落库时把正文换成账本里这段文字、关掉流式模式、删掉停止按钮。
 // 不变量：
-// - 账本的一段文字在飞书里只对应一张卡（超过 FEISHU_CARD_MAX_CHARS 时按 splitFeishuMarkdown 续到下一张），定稿后卡片正文等于账本这段文字，不另发；
+// - 账本的一段文字在飞书里只对应一张卡（超过 FEISHU_CARD_MAX_CHARS 时按 splitFeishuMarkdown 续到下一张），定稿后卡片正文等于账本这段文字（按 feishuCardMarkdown 换过图片和本机链接），不另发；
 // - 同一张卡片实体上的操作 sequence 严格递增（状态里记着，落库在 feishu_posts.sequence）；
 // - 每张卡两次推送间隔不小于 FEISHU_STREAM_FLUSH_MS（飞书每张卡 10 次/秒）；整个应用共用 FEISHU_CARDKIT_BUDGET_PER_SECOND 的预算
 //   （“流式更新文本”接口 50 次/秒），拿不到预算只合并不排队；定稿不走预算、不丢；

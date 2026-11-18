@@ -124,6 +124,8 @@ export interface FeishuStore {
   savePost(record: Omit<FeishuPostRecord, "updatedAt">, now: number): void;
   /** 某个项目群里还在等拍板的卡（重连后对一遍账本现状）。 */
   pendingCards(pmId: PmId | null): Iterable<FeishuPostRecord>;
+  /** 某个群里还停在 streaming 的卡（定稿没做完就停机、重启），按记下的先后最多 limit 张。 */
+  streamingPosts(chatId: FeishuChatId, limit: number): FeishuPostRecord[];
   /** 后置：删掉 state 为 final / card_settled 且早于 before 的行，返回删了几行。等拍板的不删。 */
   prunePosts(before: number): number;
 
@@ -344,6 +346,9 @@ export function createFeishuStore(db: Db): FeishuStore {
         }
         if (rows.length < FEISHU_PAGE_SIZE) return;
       }
+    },
+    streamingPosts(chatId, limit) {
+      return db.all<PostRow>("SELECT * FROM feishu_posts WHERE chat_id = ? AND state = 'streaming' ORDER BY rowid LIMIT ?", chatId, limit).map(toPost);
     },
     prunePosts(before) {
       db.run("DELETE FROM feishu_decisions WHERE decided_at < ?", before);

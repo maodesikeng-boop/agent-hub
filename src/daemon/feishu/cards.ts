@@ -12,7 +12,7 @@ import type { FeishuChatId, FeishuGuestTier, FeishuTriggerMode } from "../../sha
 import { FEISHU_CARD_MAX_BYTES, FEISHU_CARD_MAX_CHARS, FEISHU_STREAM_PRINT_FREQUENCY_MS, FEISHU_STREAM_PRINT_STEP } from "../../shared/limits.ts";
 import type { RouterItem } from "../../shared/router.ts";
 import type { UserBlockerId } from "../../shared/user-blockers.ts";
-import { feishuMarkdownFit } from "./outbound.ts";
+import { feishuCardMarkdown, feishuMarkdownFit } from "./outbound.ts";
 
 /** 卡片 JSON 2.0（只在这一层拼，序列化后交给传输层）。 */
 export interface FeishuCardJson {
@@ -137,19 +137,20 @@ const TRUNCATED_NOTE = "\n\n……后面太长，完整内容去网页看";
 const cardBytes = (c: FeishuCardJson) => Buffer.byteLength(JSON.stringify(c));
 
 /**
- * 正文放进一张卡：放得下原样放；字数超过 FEISHU_CARD_MAX_CHARS，或连同按钮、定案说明超过 FEISHU_CARD_MAX_BYTES 时，
+ * 正文按 feishuCardMarkdown 换掉图片和本机链接后放进一张卡：放得下原样放；字数超过 FEISHU_CARD_MAX_CHARS，或连同按钮、定案说明超过 FEISHU_CARD_MAX_BYTES 时，
  * 截到放得下并在末尾写明去网页看。build 用给它的正文拼整张卡，正文以外的部分（按钮、说明、摘要）不随正文变。
  */
-function fitBody(text: string, build: (body: string) => FeishuCardJson): FeishuCardJson {
+function fitBody(markdown: string, build: (body: string) => FeishuCardJson): FeishuCardJson {
+  const text = feishuCardMarkdown(markdown);
   const whole = build(text);
   if (feishuMarkdownFit(text, FEISHU_CARD_MAX_CHARS, Infinity).length === text.length && cardBytes(whole) <= FEISHU_CARD_MAX_BYTES) return whole;
   const room = FEISHU_CARD_MAX_BYTES - cardBytes(build(TRUNCATED_NOTE));
   return build(feishuMarkdownFit(text, FEISHU_CARD_MAX_CHARS - TRUNCATED_NOTE.length, room) + TRUNCATED_NOTE);
 }
 
-/** 卡片摘要（会话列表里看到的那一行）：正文第一行非空的字，最多 60 字。 */
+/** 卡片摘要（会话列表里看到的那一行）：正文第一行非空的字（图片和本机链接照 feishuCardMarkdown 换过），最多 60 字。 */
 function summaryLine(text: string): string {
-  const line = text.split("\n").find((l) => l.trim() !== "")?.trim() ?? "";
+  const line = feishuCardMarkdown(text.split("\n").find((l) => l.trim() !== "")?.trim() ?? "");
   return [...line].length > 60 ? `${[...line].slice(0, 59).join("")}…` : line;
 }
 
@@ -309,6 +310,11 @@ export function renderChatPolicyCard(input: {
     button({ text: TIER_LABELS[tier], disabled: tier === input.guestTier, type: tier === input.guestTier ? "primary" : "default", value: { kind: "set_policy", pmId: input.pmId, guestTier: tier } }),
   );
   return card({ title: "访客权限", template: "grey", summary: "访客权限", elements: [markdown(lines.join("\n")), ...triggerButtons, ...tierButtons] });
+}
+
+/** 回复正文被飞书拒收（内容不合规、超限）时卡片上换成的话：卡片照样能关流式、去停止按钮。 */
+export function unrenderableReplyText(code: number): string {
+  return `这段回复飞书显示不了（错误码 ${code}），完整内容去网页看。`;
 }
 
 /** 不再改的一张通知卡：总助指令的结果、网页上发的话的镜像、断线补发的提示。 */
