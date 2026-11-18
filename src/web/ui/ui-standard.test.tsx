@@ -119,7 +119,7 @@ describe("界面标准：共用组件", () => {
     expect(sw.firstElementChild).toHaveClass("size-4");
   });
 
-  it("头像（第 17 条）：项目经理渲染完整水果切片（slice），Worker（neutral）渲染对应水果切下的果瓣（wedge）", () => {
+  it("头像（第 17 条）：项目经理渲染水果小动物（main），Worker（neutral）渲染同一只小动物的纸片分身（piece）", () => {
     const { container } = render(
       <>
         <Avatar colorKey={0} size={44} />
@@ -130,8 +130,8 @@ describe("界面标准：共用组件", () => {
     expect(avatars).toHaveLength(2);
     expect(avatars[0]).not.toHaveAttribute("data-neutral");
     expect(avatars[1]).toHaveAttribute("data-neutral", "true");
-    expect(avatars[0]!.querySelector("img")?.getAttribute("src")).toBe(PALETTE[0]!.slice);
-    expect(avatars[1]!.querySelector("img")?.getAttribute("src")).toBe(PALETTE[0]!.wedge);
+    expect(avatars[0]!.querySelector("img")?.getAttribute("src")).toBe(PALETTE[0]!.main);
+    expect(avatars[1]!.querySelector("img")?.getAttribute("src")).toBe(PALETTE[0]!.piece);
   });
 
   it("--ring 是中性灰，不是主色", () => {

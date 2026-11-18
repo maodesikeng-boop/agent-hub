@@ -65,7 +65,7 @@ import type { RouterDispatcher } from "../router/dispatcher.ts";
 import type { ModelCatalogs } from "../driver/model-catalog.ts";
 import type { Db } from "../store/index.ts";
 import { resolveUpload } from "../uploads.ts";
-import { createFeishuAvatarCache, pmFruitImagePath } from "./avatars.ts";
+import { createFeishuAvatarCache, feishuAvatarHash, pmFruitImagePath, type PmFruit } from "./avatars.ts";
 import {
   feishuAskOptions,
   feishuCardRefOf,
@@ -323,6 +323,11 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     retryControl.unref?.();
   };
 
+  const retrySyncLater = () => {
+    syncRequested = true;
+    scheduleRetry();
+  };
+
   const pumpControl = () => {
     if (closed || !linkUp || control !== null || retryControl !== null || outbound.count > 0) return;
     const connection = connectionRequested;
@@ -335,16 +340,24 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     void Promise.resolve().then(async () => {
       if (connection) await checkScopes();
       if (owner() === null) return;
+      // 对齐出错不挡补发：补发只管已经建好的群，没对齐完的稍后再对齐
+      let syncSettled = true;
       if (sync) {
-        await ensureRouterChat();
-        await syncChats();
+        try {
+          await ensureRouterChat();
+          syncSettled = await syncChats();
+        } catch (error) {
+          if (error instanceof FeishuAuthError) throw error;
+          handleError(error);
+          syncSettled = false;
+        }
       }
       if (connection || replaying.size > 0) {
         const failed = await catchUp(connection, replaying);
-        if (failed.size === 0) return;
         for (const chatId of failed) dirtyChats.add(chatId);
-        scheduleRetry();
+        if (failed.size > 0) scheduleRetry();
       }
+      if (!syncSettled) retrySyncLater();
     }).catch((error: unknown) => {
       handleError(error);
       connectionRequested ||= connection;
@@ -704,7 +717,7 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
 
   // ---- 建群、对齐 ----
 
-  const uploadAvatar = async (fruit: Parameters<typeof pmFruitImagePath>[1]): Promise<FeishuImageKey> => {
+  const uploadAvatar = async (fruit: PmFruit): Promise<FeishuImageKey> => {
     if (transport === null) throw new Error("飞书没连上");
     const { imageKey } = await transport.uploadImage({ imageType: "avatar", path: pmFruitImagePath(options.avatarsDir, fruit) });
     return imageKey as FeishuImageKey;
@@ -725,24 +738,42 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     return marked;
   };
 
+  const isChatGone = (error: unknown) => error instanceof FeishuApiError && CHAT_GONE_CODES.has(error.code);
+
   /** 解散群；群已经没了不算错。 */
   const deleteChat = async (chatId: FeishuChatId) => {
     try {
       await api("chat.delete", { chat_id: chatId });
     } catch (error) {
-      if (!CHAT_GONE_CODES.has((error as { code?: number }).code ?? 0)) throw error;
+      if (!isChatGone(error)) throw error;
     }
     clearChatRuntime(chatId);
+  };
+
+  /**
+   * 改已有群的群名、头像。群已经没了返回 false。
+   * 飞书拒收（比如群主不让机器人改群信息）记日志、当作改过了，不然每次对齐都再撞一次。
+   */
+  const updateChat = async (args: FeishuMethodArgs["chat.update"]): Promise<boolean> => {
+    try {
+      await api("chat.update", args);
+    } catch (error) {
+      if (isChatGone(error)) return false;
+      if (!isFeishuRejection(error)) throw error;
+      handleError(error);
+    }
+    return true;
   };
 
   /** 每个项目经理上次建群用的 generation：解散时间要比它大，同一毫秒里连着解散两次也不会撞上同一个建群 uuid。 */
   const lastGeneration = new LRUCache<PmId, number>({ max: FEISHU_CHAT_CACHE_MAX });
   const dissolvedAt = (pmId: PmId | null) => Math.max(now(), (pmId === null ? 0 : (lastGeneration.get(pmId) ?? 0)) + 1);
 
-  const applyChatOp = async (op: FeishuChatOp, appId: string, ownerId: FeishuOpenId) => {
+  /** avatarHashOf：这一次对齐里各水果头像图片的内容哈希。返回 false：这一步没落地，稍后再对齐。 */
+  const applyChatOp = async (op: FeishuChatOp, appId: string, ownerId: FeishuOpenId, avatarHashOf: (fruit: PmFruit) => string): Promise<boolean> => {
     switch (op.kind) {
       case "create": {
-        const avatar = await avatars.imageKeyOf(op.spec.fruit, uploadAvatar);
+        const avatar = await avatars.imageKeyOf(op.spec.fruit, avatarHashOf(op.spec.fruit), uploadAvatar);
         const data = await api("chat.create", {
           uuid: feishuChatCreateUuid(appId, options.device.id, op.spec.pmId, op.generation),
           name: op.spec.name,
@@ -763,50 +794,74 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
         // 新群只从现在往后投影，不把历史消息倒进来
         const conversationId = conversationOfPm(op.spec.pmId);
         store.advanceWatermark(chatId, { messageId: (conversationId === null ? null : latestMessageId(conversationId)) ?? 0 }, now());
-        return;
+        return true;
       }
       case "adopt": {
-        const avatar = await avatars.imageKeyOf(op.spec.fruit, uploadAvatar);
-        await api("chat.update", { chat_id: op.chatId, name: op.spec.name, avatar });
+        const avatar = await avatars.imageKeyOf(op.spec.fruit, avatarHashOf(op.spec.fruit), uploadAvatar);
+        // 要认回的群刚没了：下一次对齐列群时就没有它了，改成新建
+        if (!(await updateChat({ chat_id: op.chatId, name: op.spec.name, avatar }))) return false;
         store.upsertChat({ chatId: op.chatId, target: { kind: "pm", pmId: op.spec.pmId }, name: op.spec.name, label: op.spec.label }, now());
         store.setChatAvatar(op.chatId, op.spec.fruit, now());
         const conversationId = conversationOfPm(op.spec.pmId);
         store.advanceWatermark(op.chatId, { messageId: (conversationId === null ? null : latestMessageId(conversationId)) ?? 0 }, now());
-        return;
+        return true;
       }
+      // 群在离线期间被解散、机器人被移出：按收到解散事件处理，记成已解散，下一次对齐重建
       case "rename":
-        await api("chat.update", { chat_id: op.chatId, name: op.name });
-        store.renameChat(op.chatId, op.name, op.label, now());
-        return;
+        if (await updateChat({ chat_id: op.chatId, name: op.name })) store.renameChat(op.chatId, op.name, op.label, now());
+        else applyChatGone(op.chatId);
+        return true;
       case "set_avatar":
-        await api("chat.update", { chat_id: op.chatId, avatar: await avatars.imageKeyOf(op.fruit, uploadAvatar) });
-        store.setChatAvatar(op.chatId, op.fruit, now());
-        return;
+        if (await updateChat({ chat_id: op.chatId, avatar: await avatars.imageKeyOf(op.fruit, avatarHashOf(op.fruit), uploadAvatar) })) store.setChatAvatar(op.chatId, op.fruit, now());
+        else applyChatGone(op.chatId);
+        return true;
       case "dissolve": {
         const chat = store.chatById(op.chatId);
         await deleteChat(op.chatId);
         store.setChatArchived(op.chatId, dissolvedAt(chat?.target.kind === "pm" ? chat.target.pmId : null), now());
-        return;
+        return true;
       }
       case "retire":
         if (!op.dissolved) await deleteChat(op.chatId);
         store.removeChat(op.chatId);
-        return;
+        return true;
     }
   };
 
-  const syncChats = async () => {
+  /**
+   * 按账本对齐项目群。一个群出错不影响别的群：飞书拒收的那一步放弃（等下一次对齐），暂时性错误返回 false，稍后整体再对齐一次。
+   */
+  const syncChats = async (): Promise<boolean> => {
     const app = store.app();
-    if (transport === null || !linkUp || app === null || app.ownerOpenId === null) return;
+    if (transport === null || !linkUp || app === null || app.ownerOpenId === null) return true;
     const pms = ledger.snapshot().pms;
     const desired = desiredFeishuChats(pms, options.device);
+    // 每次对齐现读头像文件算哈希（同一个水果只读一次）。图片换了（feishu_avatars 里记的不是这张图）：把头像是这个水果的群
+    // 改回“没设过”，下面照常出 set_avatar 原地换；中途断了，没换完的群还是“没设过”，下一次对齐接着换
+    const hashes = new Map<PmFruit, string>();
+    const avatarHashOf = (fruit: PmFruit) => {
+      let hash = hashes.get(fruit);
+      if (hash === undefined) hashes.set(fruit, (hash = feishuAvatarHash(options.avatarsDir, fruit)));
+      return hash;
+    };
+    for (const fruit of new Set(desired.filter((d) => !d.archived).map((d) => d.fruit))) {
+      if (store.avatarKey(fruit, avatarHashOf(fruit)) === null) store.clearChatAvatars(fruit, now());
+    }
     const bindings = store.chats().filter((c) => c.target.kind === "pm");
     const bound = new Set(bindings.flatMap((b) => (b.target.kind === "pm" && b.target.pmId !== null ? [b.target.pmId] : [])));
     const needsLookup = desired.some((d) => !d.archived && !bound.has(d.pmId));
     const marked = needsLookup ? await markedChats() : new Map<FeishuChatId, string>();
+    let settled = true;
     for (const op of planFeishuChatSync(desired, bindings, marked, options.device.id)) {
-      await applyChatOp(op, app.appId, app.ownerOpenId);
+      try {
+        if (!(await applyChatOp(op, app.appId, app.ownerOpenId, avatarHashOf))) settled = false;
+      } catch (error) {
+        if (error instanceof FeishuAuthError) throw error;
+        handleError(error);
+        if (!isFeishuRejection(error)) settled = false;
+      }
     }
+    return settled;
   };
 
   const ensureRouterChat = async () => {
@@ -2008,7 +2063,7 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
       directory.markAllStale();
       await checkScopes();
       await ensureRouterChat();
-      await syncChats();
+      if (!(await syncChats())) retrySyncLater();
       return status();
     },
     async disconnect(input) {

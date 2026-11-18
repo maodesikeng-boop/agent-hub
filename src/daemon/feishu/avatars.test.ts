@@ -1,8 +1,10 @@
-import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import sharp from "sharp";
 import { describe, expect, it, vi } from "vitest";
 import type { FeishuImageKey } from "../../shared/feishu.ts";
 import { PM_FRUITS } from "../../shared/fruits.ts";
-import { createFeishuAvatarCache, FEISHU_AVATARS_DIR, pmFruitImagePath, pmFruitOf, type PmFruit } from "./avatars.ts";
+import { createFeishuAvatarCache, FEISHU_AVATARS_DIR, feishuAvatarHash, pmFruitImagePath, pmFruitOf, type PmFruit } from "./avatars.ts";
 
 describe("水果头像", () => {
   it("pmFruitOf 和网页 paletteOf(pmId).fruit 相同（覆盖编号 0 到颜色表长度的两倍）", () => {
@@ -10,25 +12,51 @@ describe("水果头像", () => {
     for (let pmId = 0; pmId <= PM_FRUITS.length * 2; pmId++) expect(pmFruitOf(pmId)).toBe(PM_FRUITS[pmId % PM_FRUITS.length]);
   });
 
-  it("pmFruitImagePath 指向存在的完整横切面图片", () => {
+  it("pmFruitImagePath 指向存在的群头像：PNG、正方形、边长 1000px 以上、满铺不透明", async () => {
     for (const fruit of PM_FRUITS) {
       const path = pmFruitImagePath(FEISHU_AVATARS_DIR, fruit);
-      expect(path.endsWith(`${fruit}.webp`)).toBe(true);
-      expect(existsSync(path), path).toBe(true);
+      expect(path.endsWith(`${fruit}.png`)).toBe(true);
+      const meta = await sharp(path).metadata();
+      expect([meta.format, meta.width === meta.height, meta.width >= 1000, meta.hasAlpha], path).toEqual(["png", true, true, false]);
     }
   });
 
-  it("同一个水果只上传一次，并发两次也只传一次；之后从 feishu_avatars 读", async () => {
-    const saved = new Map<PmFruit, FeishuImageKey>();
-    const store = { avatarKey: (f: PmFruit) => saved.get(f) ?? null, saveAvatarKey: (f: PmFruit, k: FeishuImageKey) => void saved.set(f, k) };
+  it("feishuAvatarHash 是图片文件内容的 SHA-256", () => {
+    const path = pmFruitImagePath(FEISHU_AVATARS_DIR, "kiwi");
+    expect(feishuAvatarHash(FEISHU_AVATARS_DIR, "kiwi")).toBe(createHash("sha256").update(readFileSync(path)).digest("hex"));
+  });
+
+  it("同一张图只上传一次，并发两次也只传一次；之后从 feishu_avatars 读", async () => {
+    const store = fakeStore();
     const upload = vi.fn(async (f: PmFruit) => `img_${f}` as FeishuImageKey);
     const cache = createFeishuAvatarCache(store, () => 1);
-    const [a, b] = await Promise.all([cache.imageKeyOf("kiwi", upload), cache.imageKeyOf("kiwi", upload)]);
+    const [a, b] = await Promise.all([cache.imageKeyOf("kiwi", "h1", upload), cache.imageKeyOf("kiwi", "h1", upload)]);
     expect([a, b]).toEqual(["img_kiwi", "img_kiwi"]);
     expect(upload).toHaveBeenCalledTimes(1);
-    expect(saved.get("kiwi")).toBe("img_kiwi");
     const again = createFeishuAvatarCache(store, () => 2);
-    expect(await again.imageKeyOf("kiwi", upload)).toBe("img_kiwi");
+    expect(await again.imageKeyOf("kiwi", "h1", upload)).toBe("img_kiwi");
     expect(upload).toHaveBeenCalledTimes(1);
   });
+
+  it("图片内容变了（哈希不同）重传一次，记下新的 image_key", async () => {
+    const store = fakeStore();
+    store.saved.set("kiwi", { key: "img_old" as FeishuImageKey, hash: "h0" });
+    let n = 0;
+    const upload = vi.fn(async () => `img_new_${++n}` as FeishuImageKey);
+    const cache = createFeishuAvatarCache(store, () => 1);
+    expect(await cache.imageKeyOf("kiwi", "h1", upload)).toBe("img_new_1");
+    expect(await cache.imageKeyOf("kiwi", "h1", upload)).toBe("img_new_1");
+    expect(await cache.imageKeyOf("kiwi", "h2", upload)).toBe("img_new_2");
+    expect(upload).toHaveBeenCalledTimes(2);
+    expect(store.saved.get("kiwi")).toEqual({ key: "img_new_2", hash: "h2" });
+  });
 });
+
+function fakeStore() {
+  const saved = new Map<PmFruit, { key: FeishuImageKey; hash: string }>();
+  return {
+    saved,
+    avatarKey: (f: PmFruit, hash: string) => (saved.get(f)?.hash === hash ? saved.get(f)!.key : null),
+    saveAvatarKey: (f: PmFruit, key: FeishuImageKey, hash: string) => void saved.set(f, { key, hash }),
+  };
+}

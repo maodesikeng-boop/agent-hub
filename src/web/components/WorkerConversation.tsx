@@ -13,7 +13,7 @@ import { FileDropZone } from "./FileDropZone.tsx";
 import { MessageList } from "./MessageList.tsx";
 import type { MessageActions } from "./Messages.tsx";
 import { useStop } from "../useStop.ts";
-import { useAgentStatusNode } from "./AgentStatus.tsx";
+import { hasAgentStatus, useAgentStatusNode } from "./AgentStatus.tsx";
 import { PieceMeta } from "./RightRail.tsx";
 
 /**
@@ -119,7 +119,7 @@ export function WorkerConversation({
             <ArrowLeft aria-hidden="true" />
           </Button>
         )}
-        <Avatar colorKey={identity.avatarKey} size={34} neutral />
+        <Avatar colorKey={identity.avatarKey} size={34} neutral working={hasAgentStatus(session)} />
         <div className="flex min-w-0 flex-1 items-center justify-between gap-3 overflow-hidden">
           <div className="flex min-w-[40%] shrink-[9999] items-center gap-3 overflow-hidden">
             <h1 title={title} className="min-w-0 truncate text-title leading-snug font-semibold">

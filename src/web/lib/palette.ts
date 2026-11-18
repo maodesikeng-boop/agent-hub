@@ -1,48 +1,28 @@
 import type { CSSProperties } from "react";
-import bellPepperSlice from "../../../assets/avatars/bell_pepper.webp";
-import bellPepperWedge from "../../../assets/avatars/bell_pepper_wedge.webp";
-import grapefruitSlice from "../../../assets/avatars/grapefruit.webp";
-import grapefruitWedge from "../../../assets/avatars/grapefruit_wedge.webp";
-import kiwiSlice from "../../../assets/avatars/kiwi.webp";
-import kiwiWedge from "../../../assets/avatars/kiwi_wedge.webp";
-import lemonSlice from "../../../assets/avatars/lemon.webp";
-import lemonWedge from "../../../assets/avatars/lemon_wedge.webp";
-import limeSlice from "../../../assets/avatars/lime.webp";
-import limeWedge from "../../../assets/avatars/lime_wedge.webp";
-import orangeSlice from "../../../assets/avatars/orange.webp";
-import orangeWedge from "../../../assets/avatars/orange_wedge.webp";
-import pomeloSlice from "../../../assets/avatars/pomelo.webp";
-import pomeloWedge from "../../../assets/avatars/pomelo_wedge.webp";
-import strawberrySlice from "../../../assets/avatars/strawberry.webp";
-import strawberryWedge from "../../../assets/avatars/strawberry_wedge.webp";
-import { PM_FRUITS, pmFruitOf, type PmFruit } from "../../shared/fruits.ts";
+import { FRUITS, pmFruitAvatarFile, pmFruitOf, type PmFruit } from "../../shared/fruits.ts";
+
+const AVATAR_DIR = "../../../assets/avatars/";
+const AVATAR_URLS = import.meta.glob<string>("../../../assets/avatars/*.svg", { eager: true, query: "?url", import: "default" });
+
+function avatarUrl(fruit: PmFruit, kind: "main" | "piece"): string {
+  const url = AVATAR_URLS[AVATAR_DIR + pmFruitAvatarFile(fruit, kind)];
+  if (url === undefined) throw new Error(`assets/avatars 里没有 ${pmFruitAvatarFile(fruit, kind)}：先跑 node scripts/render-avatars.ts`);
+  return url;
+}
 
 /**
- * 项目经理的水果配色表（docs/ui-standard.md 第 4 条、第 17 条）：头像切片（slice）、Worker 果瓣（wedge）、主色（blob）和会话强调色（accent）共用这一份，别处不再写颜色。
- * - slice：项目经理的完整水果横切面头像。
- * - wedge：Worker 的自然果瓣头像（从所属项目经理那片水果上顺着果络切下一瓣）。
- * - blob：水果主色（明亮原色，不放文字）。
- * - accent：这个会话里的 `--primary`（气泡、主按钮、选中、在忙的状态词）：同一个色相，深一档，
- *   既当“白字的底色”，也当“白底上的文字色”，两种用法对白色的对比度都要 ≥ 4.5:1。
- * - accentForeground：放在 accent 上的字（`--primary-foreground`）。
+ * 项目经理的水果配色表（docs/ui-standard.md 第 4 条、第 17 条）：水果名录和颜色在 shared/fruits.ts 的 FRUITS（飞书群头像也按它取），这里只配上头像图。
+ * - main：项目经理的史莱姆小动物头像（透明底 SVG）。
+ * - piece：Piece 的纸片分身头像（同一只小动物压薄）。
+ * - blob、accent、accentForeground：见 shared/fruits.ts。
  * 对比度按 WCAG 2.x 1.4.3（AA，普通文字 4.5:1）算：https://www.w3.org/TR/WCAG21/#contrast-minimum ，
  * 公式见 https://www.w3.org/TR/WCAG21/#dfn-contrast-ratio ；palette.test.ts 逐色校验。
  */
-const FRUIT_STYLES = {
-  grapefruit: { name: "粉红西柚", fruit: "grapefruit", slice: grapefruitSlice, wedge: grapefruitWedge, blob: "#ff6b57", accent: "#c83220", accentForeground: "#ffffff" },
-  orange: { name: "橙", fruit: "orange", slice: orangeSlice, wedge: orangeWedge, blob: "#ff7a1a", accent: "#c2410c", accentForeground: "#ffffff" },
-  kiwi: { name: "奇异果", fruit: "kiwi", slice: kiwiSlice, wedge: kiwiWedge, blob: "#5fb327", accent: "#3b6e14", accentForeground: "#ffffff" },
-  strawberry: { name: "草莓", fruit: "strawberry", slice: strawberrySlice, wedge: strawberryWedge, blob: "#e6392e", accent: "#b91c1c", accentForeground: "#ffffff" },
-  lime: { name: "青柠", fruit: "lime", slice: limeSlice, wedge: limeWedge, blob: "#4cb82a", accent: "#15803d", accentForeground: "#ffffff" },
-  lemon: { name: "柠檬", fruit: "lemon", slice: lemonSlice, wedge: lemonWedge, blob: "#f5b400", accent: "#8f6200", accentForeground: "#ffffff" },
-  pomelo: { name: "白柚", fruit: "pomelo", slice: pomeloSlice, wedge: pomeloWedge, blob: "#d99b38", accent: "#855814", accentForeground: "#ffffff" },
-  bell_pepper: { name: "青椒", fruit: "bell_pepper", slice: bellPepperSlice, wedge: bellPepperWedge, blob: "#2f9e44", accent: "#1b6e2d", accentForeground: "#ffffff" },
-} as const satisfies { [F in PmFruit]: { fruit: F } & Record<string, string> };
+export const PALETTE = FRUITS.map((style) => ({ ...style, main: avatarUrl(style.fruit, "main"), piece: avatarUrl(style.fruit, "piece") }));
 
-/** 顺序照 shared/fruits.ts 的 PM_FRUITS（飞书群头像也按它取），这里只配颜色和图。 */
-export const PALETTE = PM_FRUITS.map((fruit) => FRUIT_STYLES[fruit]);
+export type PaletteColor = (typeof PALETTE)[number];
 
-export type PaletteColor = (typeof FRUIT_STYLES)[PmFruit];
+const BY_FRUIT = new Map<PmFruit, PaletteColor>(PALETTE.map((color) => [color.fruit, color]));
 
 /**
  * 数据图表的分类色（docs/ui-standard.md 第 15 条“图表”）：取颜色表的 accent 一组（都已过白底对比度校验），不另起一套。
@@ -54,7 +34,7 @@ export const CHART_CATEGORY_COLORS: readonly string[] = CHART_ORDER.map((name) =
 
 /** 按 key 在颜色表里轮着取（项目经理用它的编号）。 */
 export function paletteOf(key: number): PaletteColor {
-  return FRUIT_STYLES[pmFruitOf(key)];
+  return BY_FRUIT.get(pmFruitOf(key))!;
 }
 
 /** 这个会话的强调色：设在外层容器上，里面的 `bg-primary`、`text-primary` 等都跟着变。 */

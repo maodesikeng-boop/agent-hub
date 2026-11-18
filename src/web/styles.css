@@ -85,7 +85,7 @@ html[data-ui-scale="xl"] {
   --secondary: #f3f3f5;
   --secondary-foreground: #18181b;
   --muted: #f3f3f5;
-  /* 次要文字：要压在左栏底、选中底、8 种水果的果冻底上都 ≥ 4.5:1（lib/palette.test.ts 逐个底色校验），所以比 zinc-500 深一档 */
+  /* 次要文字：要压在左栏底、选中底、每种水果的果冻底上都 ≥ 4.5:1（lib/palette.test.ts 逐个底色校验），所以比 zinc-500 深一档 */
   --muted-foreground: #5f5f69;
   --accent: #f1f1f3;
   --border: #ececef;
@@ -321,7 +321,7 @@ input[type="search"]::-webkit-search-cancel-button {
 }
 /* 聊天输入框外框的阴影和聚焦态（Composer.tsx 的 FRAME_CLASS，docs/ui-standard.md 第 7 条）：平时一层轻阴影；聚焦只多出一团光晕，边框不变。
    光晕 = 当前强调色（--primary，水果色）掺透明的纯模糊阴影，两层（近一层小半径、远一层大半径），没有 spread（不是硬圈），也没有黑色影子，
-   所以不会像描边加粗；8 种水果走同一个公式，数值只在这里改 */
+   所以不会像描边加粗；每种水果走同一个公式，数值只在这里改 */
 .composer-frame {
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
   transition: box-shadow var(--motion-focus) ease-out;
@@ -347,6 +347,73 @@ input[type="search"]::-webkit-search-cancel-button {
 }
 @media (prefers-reduced-motion: reduce) {
   .composer-send-bounce {
+    animation: none;
+  }
+}
+/* 史莱姆小动物头像（Avatar.tsx）：蓄力压扁 → 跃起 → 落地压扁 → 回弹。只动 transform，不触发排版；以脚底为原点，压扁时脚不离地。
+   - 鼠标停在头像上：跳一次（--motion-hop）。
+   - 它正在干活（data-working）：每 --motion-hop-cycle 跳一次，其余时间站着不动；这是“不循环”之外的第二处例外（docs/ui-standard.md 第 14 条）。
+   空闲时没有任何动画；系统设了“减少动态效果”就全不播 */
+:root {
+  --motion-hop: 520ms;
+  --motion-hop-cycle: 1.8s;
+}
+.slime-pet {
+  transform-origin: 50% 100%;
+}
+@media (hover: hover) {
+  .slime-pet:hover {
+    animation: slime-hop var(--motion-hop) ease-out;
+  }
+}
+.slime-pet[data-working] {
+  animation: slime-hop-working var(--motion-hop-cycle) ease-out infinite;
+}
+@keyframes slime-hop {
+  0% {
+    transform: translateY(0) scale(1, 1);
+  }
+  20% {
+    transform: translateY(0) scale(1.1, 0.86);
+  }
+  50% {
+    transform: translateY(-16%) scale(0.94, 1.08);
+  }
+  75% {
+    transform: translateY(0) scale(1.08, 0.9);
+  }
+  88% {
+    transform: translateY(0) scale(0.98, 1.03);
+  }
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+}
+/* 同一跳，放在周期的前 30%，后面站着歇 */
+@keyframes slime-hop-working {
+  0% {
+    transform: translateY(0) scale(1, 1);
+  }
+  6% {
+    transform: translateY(0) scale(1.1, 0.86);
+  }
+  15% {
+    transform: translateY(-16%) scale(0.94, 1.08);
+  }
+  22.5% {
+    transform: translateY(0) scale(1.08, 0.9);
+  }
+  26.5% {
+    transform: translateY(0) scale(0.98, 1.03);
+  }
+  30%,
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .slime-pet:hover,
+  .slime-pet[data-working] {
     animation: none;
   }
 }

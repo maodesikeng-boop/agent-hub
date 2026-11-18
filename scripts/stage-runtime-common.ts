@@ -52,7 +52,7 @@ export type BundledNodeTarget = keyof typeof BUNDLED_NODE_ARCHIVES;
 export type StageTargetOs = "win32" | "darwin-arm64" | "host";
 
 const DAEMON_SOURCE_SUBDIRS = ["daemon", "shared", "vendors", "hub", "tunnel", "feishu"] as const;
-/** 守护进程运行时要读的仓库根目录资源，整个目录原样带走（飞书群头像读 assets/avatars/）。 */
+/** 守护进程运行时要读的仓库根目录资源，整个目录原样带走（飞书群头像读 assets/avatars/ 里的 PNG）。 */
 const DAEMON_ASSET_DIRS = ["assets/avatars"] as const;
 
 const MXC_WIN_X64_KEEP_FILES = new Set([
