@@ -318,9 +318,9 @@ export function createClient(device: DeviceId | null) {
     putRouterSettings: (body: UpdateRouterSettingsRequest) =>
       putJson<UpdateRouterSettingsResponse>(at(API_PATHS.routerSettings), body),
     postRouterCommand: (body: PostRouterCommandRequest) =>
-      postJson<PostRouterCommandResponse>(at(API_PATHS.routerCommands), body, SLOW_API_REQUEST_TIMEOUT_MS),
+      postJson<PostRouterCommandResponse>(at(API_PATHS.routerCommands), body),
     postRetryRouterCommand: (id: RouterCommandId) =>
-      postJson<PostRouterCommandResponse>(at(API_PATHS.routerCommandRetry(id)), {}, SLOW_API_REQUEST_TIMEOUT_MS),
+      postJson<PostRouterCommandResponse>(at(API_PATHS.routerCommandRetry(id)), {}),
     fetchProjectTaskGraphs: (projectId: ProjectId, options: { before?: TaskGraphId; limit?: number } = {}) => {
       const params = new URLSearchParams({ status: "history" });
       if (options.before !== undefined) params.set("before", String(options.before));

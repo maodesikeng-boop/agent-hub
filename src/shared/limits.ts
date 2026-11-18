@@ -691,8 +691,11 @@ export const ROUTER_STREAM_MAX_PAGES = 10;
 export const ROUTER_PM_ACTIVE_WORKERS_MAX = 6;
 /** 单份 Fleet Digest JSON 字节上限（24 KB）。 */
 export const ROUTER_FLEET_DIGEST_MAX_BYTES = 24_576;
-/** Router Agent 单次只读规划超时（毫秒）。 */
-export const ROUTER_AGENT_TIMEOUT_MS = 25_000;
+/**
+ * 总助单轮规划的兜底上限（毫秒）：只防卡死的厂商进程永久占着并发槽，不是给正常慢思考设的时限。
+ * 和别的后台长任务的安全回收同一量级（10 分钟）；平时规划多慢都不打断，也不出超时提醒。
+ */
+export const ROUTER_AGENT_TIMEOUT_MS = 10 * 60_000;
 /** 用户单条 Router 指令字数上限。 */
 export const ROUTER_COMMAND_MAX_CHARS = 4_000;
 /** 单条指令最多同时派发的目标 PM 数。 */

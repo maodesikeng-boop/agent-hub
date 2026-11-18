@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveUpload, saveUpload } from "../uploads.ts";
 import {
   createSessionTokens,
@@ -731,7 +731,7 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
       }
     });
 
-    it("规划超时前已投出一部分：整条重跑会重复投递，retry 直接拒绝", async () => {
+    it("已成功 hub dispatch 且无 failedOps：单轮收尾卡住被兜底回收时仍记 dispatched、不报错，retry 拒绝（避免重复投递）", async () => {
       driver.onTurn = async ({ sessionId }) => {
         const commandId = sandboxGuard.commandOf(sessionId)!;
         await dispatcher.handleAgentDispatch(sessionId, commandId, {
@@ -740,19 +740,131 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
           pmId: pm1Id,
           verbatim: true,
         });
-        // 之后一直不结束本轮 → 超时
+        // 之后一直不结束本轮 → 触到兜底上限
       };
-      const cmd = await dispatcher.submitCommand({ clientId: "cid-partial-timeout", text: "投一半就超时" });
-      expect(cmd.status).toBe("failed");
+      const cmd = await dispatcher.submitCommand({ clientId: "cid-partial-timeout", text: "投完收尾卡住" });
+      expect(cmd.status).toBe("dispatched");
+      expect(cmd.error).toBeNull();
       expect(cmd.dispatched).toHaveLength(1);
-      expect(cmd.plan?.retryOps ?? []).toHaveLength(0);
+      expect(cmd.dispatched?.[0]?.ok).toBe(true);
 
       const userMsgs = () =>
         ledger.messagesBefore(pm1ConvId, Number.MAX_SAFE_INTEGER).messages.filter((m) => m.sender === "user");
       expect(userMsgs()).toHaveLength(1);
-      await expect(dispatcher.retryCommand(cmd.id)).rejects.toThrow(/重复投递/);
+      await expect(dispatcher.retryCommand(cmd.id)).rejects.toThrow(/只有失败状态/);
       expect(userMsgs()).toHaveLength(1);
-      expect(ledger.getRouterCommand(cmd.id)?.status).toBe("failed");
+      expect(ledger.getRouterCommand(cmd.id)?.status).toBe("dispatched");
+      expectAssistantRowsSettled(db);
+    });
+
+    it("已成功 hub dispatch 后单轮以错误结束（进程提前退出）：仍记 dispatched、不报错", async () => {
+      driver.onTurn = async ({ sessionId, emit }) => {
+        const commandId = sandboxGuard.commandOf(sessionId)!;
+        await dispatcher.handleAgentDispatch(sessionId, commandId, {
+          op: "pm",
+          device: "self",
+          pmId: pm1Id,
+          verbatim: true,
+        });
+        emit({ type: "session.exited", reason: "crash", exitCode: 1, signal: null, hadResult: false, messageIds: [], at: Date.now() });
+      };
+      const cmd = await dispatcher.submitCommand({ clientId: "cid-dispatched-then-exit", text: "投完进程退出" });
+      expect(cmd.status).toBe("dispatched");
+      expect(cmd.error).toBeNull();
+    });
+
+    describe("总助单轮不被低超时打断（默认兜底上限）", () => {
+      const defaultTimeoutDispatcher = () =>
+        createRouterDispatcher({
+          ledger,
+          runTurn: createRouterTurnRunner({ ledger, driver, tokens, purposes: createRouterTurnPurposes(), stateDir, launchDir, cleanupGraceMs: 50 }),
+          sandboxGuard,
+          targetRegistry: {
+            selfDeviceId: () => "dev-local",
+            getPort: (id: string) => (id === "self" || id === "dev-local" ? localPort : null),
+            listPorts: () => [localPort],
+            listAllDigests: async () => [{ port: localPort, result: await localPort.getDigest() }],
+          },
+          models: { list: async () => catalogs },
+          resolveAttachment: (id: string) => attachmentMetaOf(uploadsDir, id),
+        });
+
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      /** 假时钟下请求不该一直挂着等终态：让出几轮真实事件循环还没返回就当作被占住。 */
+      const returnsPromptly = async (p: Promise<RouterCommandRecord>): Promise<RouterCommandRecord> => {
+        const blocked = Symbol("blocked");
+        const first = await Promise.race([p, new Promise<symbol>((r) => setImmediate(() => r(blocked)))]);
+        if (first === blocked) throw new Error("请求被占住等终态，没有立即返回 planning 记录");
+        return first as RouterCommandRecord;
+      };
+
+      it("规划 45 秒才分派完并结束：照常 dispatched，不出超时提醒", async () => {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+        const d = defaultTimeoutDispatcher();
+        driver.onTurn = async ({ sessionId, input, emit }) => {
+          await new Promise((r) => setTimeout(r, 45_000));
+          const commandId = sandboxGuard.commandOf(sessionId)!;
+          await d.handleAgentDispatch(sessionId, commandId, { op: "pm", device: "self", pmId: pm1Id, verbatim: true });
+          emit({ type: "turn.ended", ok: true, interrupted: false, messageIds: input.messageIds, durationMs: 5, at: Date.now() });
+        };
+        try {
+          const pending = d.submitCommand({ clientId: "cid-slow-45s", text: "慢思考 45 秒" });
+          await vi.advanceTimersByTimeAsync(45_000);
+          const cmd = await pending;
+          expect(cmd.status).toBe("dispatched");
+          expect(cmd.error).toBeNull();
+          expect(cmd.error ?? "").not.toContain("25 秒");
+        } finally {
+          await d.close();
+        }
+      });
+
+      it("background：立即返回 planning 记录，45 秒后的终态靠账本推送，不占着请求等", async () => {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+        const d = defaultTimeoutDispatcher();
+        driver.onTurn = async ({ sessionId, input, emit }) => {
+          await new Promise((r) => setTimeout(r, 45_000));
+          const commandId = sandboxGuard.commandOf(sessionId)!;
+          await d.handleAgentDispatch(sessionId, commandId, { op: "pm", device: "self", pmId: pm1Id, verbatim: true });
+          emit({ type: "turn.ended", ok: true, interrupted: false, messageIds: input.messageIds, durationMs: 5, at: Date.now() });
+        };
+        try {
+          const accepted = await returnsPromptly(d.submitCommand({ clientId: "cid-bg-45s", text: "后台慢规划" }, { background: true }));
+          expect(accepted.status).toBe("planning");
+          expect(d.busy()).toBe(true);
+          await vi.advanceTimersByTimeAsync(45_000);
+          await vi.waitFor(() => expect(ledger.getRouterCommand(accepted.id)?.status).toBe("dispatched"));
+          expect(ledger.getRouterCommand(accepted.id)?.error).toBeNull();
+        } finally {
+          await d.close();
+        }
+      });
+
+      it("retry 的 background：失败指令立即回到 planning，不占着请求", async () => {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+        const d = defaultTimeoutDispatcher();
+        driver.onTurn = async ({ input, emit }) => {
+          emit({ type: "turn.ended", ok: false, interrupted: false, error: { subtype: "error_during_execution", message: "boom" }, messageIds: input.messageIds, durationMs: 5, at: Date.now() });
+        };
+        try {
+          const failed = await d.submitCommand({ clientId: "cid-bg-retry", text: "先失败" });
+          expect(failed.status).toBe("failed");
+          driver.onTurn = async ({ input, emit }) => {
+            await new Promise((r) => setTimeout(r, 45_000));
+            emit({ type: "agent.text", uuid: "u-r", text: "答复", at: Date.now() });
+            emit({ type: "turn.ended", ok: true, interrupted: false, messageIds: input.messageIds, durationMs: 5, at: Date.now() });
+          };
+          const accepted = await returnsPromptly(d.retryCommand(failed.id, { background: true }));
+          expect(accepted.status).toBe("planning");
+          await vi.advanceTimersByTimeAsync(45_000);
+          await vi.waitFor(() => expect(ledger.getRouterCommand(failed.id)?.status).toBe("answered"));
+        } finally {
+          await d.close();
+        }
+      });
     });
 
     it("模型并发调用 hub dispatch 也不能突破 ROUTER_MAX_DISPATCH_TARGETS", async () => {

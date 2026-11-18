@@ -1834,7 +1834,8 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       if (peerOf(req) !== undefined) return fail(reply, "forbidden_peer") as never;
       if (!opts.routerDispatcher) return fail(reply, "unavailable", "当前服务未启用总助分派引擎") as never;
       const raw = parseWithSchema(postRouterCommandBodySchema, req.body);
-      const command = await opts.routerDispatcher.submitCommand(raw);
+      // 规划可能很慢：登记完立即回 planning 记录，终态由 router.command.updated 推给网页
+      const command = await opts.routerDispatcher.submitCommand(raw, { background: true });
       return { command };
     });
 
@@ -1843,7 +1844,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       if (!opts.routerDispatcher) return fail(reply, "unavailable", "当前服务未启用总助分派引擎") as never;
       const commandId = parseId((req.params as { id?: unknown }).id, "router command id");
       parseWithSchema(emptyObjectBodySchema, req.body ?? {});
-      const command = await opts.routerDispatcher.retryCommand(commandId);
+      const command = await opts.routerDispatcher.retryCommand(commandId, { background: true });
       return { command };
     });
 

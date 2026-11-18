@@ -93,9 +93,14 @@ export interface RouterDispatcherOptions {
   maxConcurrentTrackB?: number;
 }
 
+/** background: true 时登记完就返回 planning 记录，管线在后台继续，终态靠账本变更推送；默认等到终态再返回。 */
+export interface RouterCommandRunOptions {
+  background?: boolean;
+}
+
 export interface RouterDispatcher {
-  submitCommand(input: PostRouterCommandRequest): Promise<RouterCommandRecord>;
-  retryCommand(commandId: RouterCommandId): Promise<RouterCommandRecord>;
+  submitCommand(input: PostRouterCommandRequest, options?: RouterCommandRunOptions): Promise<RouterCommandRecord>;
+  retryCommand(commandId: RouterCommandId, options?: RouterCommandRunOptions): Promise<RouterCommandRecord>;
   handleAgentDispatch(
     sessionId: SessionId,
     commandId: RouterCommandId,
@@ -490,6 +495,13 @@ function planBaseOf(plan: RouterAgentPlan | null): PlanBase {
   };
 }
 
+/** 兜底回收（ROUTER_AGENT_TIMEOUT_MS）触发、且一条都没投出去时给用户看的话。 */
+function agentTimeoutMessage(timeoutMs: number): string {
+  const minutes = timeoutMs / 60_000;
+  const span = minutes >= 1 ? `${Math.round(minutes)} 分钟` : `${Math.max(1, Math.round(timeoutMs / 1000))} 秒`;
+  return `总助规划超时（超过 ${span} 仍没结束，已自动停止），请重试或用 @设备名/项目名 直通发令`;
+}
+
 /** 写进指令的错误：error 永远是人话；非预期异常的原文另放 errorRaw（只进悬停提示）。 */
 interface CommandFailure {
   error: string;
@@ -824,29 +836,6 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
       const durationMs = Math.max(0, Date.now() - params.startedAt);
       const replyPart = cleanReply([result.ok ? result.text : result.partialText]);
 
-      if (timedOut) {
-        const timeoutMsg = `总助单轮规划超时（超过 ${Math.max(1, Math.round(agentTimeoutMs / 1000))} 秒），请重试或用 @设备名/项目名 直通发令`;
-        return ledger.updateRouterCommand(params.commandId, {
-          status: "failed",
-          dispatched: state.dispatched.length > 0 ? state.dispatched : null,
-          error: timeoutMsg,
-          durationMs,
-          plan: {
-            intent: state.dispatched.length > 0 ? "dispatch" : "answer",
-            ...replyPart,
-            actions: [],
-            track: "B",
-            ...params.planBase,
-            ...(state.failedOps.length > 0
-              ? { retryOps: state.failedOps.map((f) => ({ deviceId: f.deviceId, op: f.op })) }
-              : {}),
-          },
-          auditAction: "router.command.timeout",
-          auditActor: "router_agent",
-          auditDetail: { durationMs, dispatchedCount: state.dispatched.length },
-        });
-      }
-
       if (state.failedOps.length > 0) {
         const errText = state.failedOps.map((f) => f.error).join("；");
         return ledger.updateRouterCommand(params.commandId, {
@@ -895,8 +884,9 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
         });
       }
 
+      // 走到这里说明一条都没投出去（投出去的上面已按 dispatched / partial_failed 落定，兜底回收或收尾出错都不改写）
       if (!turnOutcome.ok) {
-        const errMsg = turnOutcome.error ?? "总助单轮规划失败";
+        const errMsg = timedOut ? agentTimeoutMessage(agentTimeoutMs) : (turnOutcome.error ?? "总助单轮规划失败");
         return ledger.updateRouterCommand(params.commandId, {
           status: "failed",
           error: errMsg,
@@ -909,9 +899,9 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
             ...params.planBase,
             ...(turnOutcome.errorRaw !== undefined ? { errorRaw: turnOutcome.errorRaw } : {}),
           },
-          auditAction: "router.command.failed",
+          auditAction: timedOut ? "router.command.timeout" : "router.command.failed",
           auditActor: "router_agent",
-          auditDetail: { error: turnOutcome.errorRaw ?? errMsg },
+          auditDetail: timedOut ? { durationMs } : { error: turnOutcome.errorRaw ?? errMsg },
         });
       }
 
@@ -1042,8 +1032,24 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
     });
   };
 
+  /**
+   * 后台模式：不等管线落定，先把当前（planning）记录交回去，终态靠账本变更推送。
+   * 管线本身会把每种失败写成 failed；这里兜只有它自己抛错时才会漏的那一类，别让指令永远挂在 planning、也别留未处理的拒绝。
+   */
+  const detach = (command: RouterCommandRecord, settled: Promise<RouterCommandRecord>): RouterCommandRecord => {
+    settled.catch((err: unknown) => {
+      try {
+        if (ledger.getRouterCommand(command.id)?.status !== "planning") return;
+        ledger.updateRouterCommand(command.id, { status: "failed", error: failureOf(err).error });
+      } catch {
+        // 关机时库可能已经关了
+      }
+    });
+    return command;
+  };
+
   return {
-    async submitCommand(input: PostRouterCommandRequest): Promise<RouterCommandRecord> {
+    async submitCommand(input: PostRouterCommandRequest, options?: RouterCommandRunOptions): Promise<RouterCommandRecord> {
       const clientId = input.clientId?.trim() ?? "";
       if (clientId === "") throw new LedgerRequestError("invalid", "缺少 clientId");
 
@@ -1092,16 +1098,17 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
 
       if (deduplicated) return command;
 
-      return track(runCommandPipeline({
+      const settled = track(runCommandPipeline({
         commandId: command.id,
         clientId,
         text: rawText,
         attachmentIds,
         planBase,
       }));
+      return options?.background === true ? detach(command, settled) : settled;
     },
 
-    async retryCommand(commandId: RouterCommandId): Promise<RouterCommandRecord> {
+    async retryCommand(commandId: RouterCommandId, options?: RouterCommandRunOptions): Promise<RouterCommandRecord> {
       const existing = ledger.getRouterCommand(commandId);
       if (existing === null) {
         throw new LedgerRequestError("not_found", `没有编号 ${commandId} 的总助指令`);
@@ -1117,62 +1124,67 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
       // 若上次已有明确失败的目标操作列表（含部分成功场景），仅补跑失败项，绝不重复投递已成功项
       if (retryOps.length > 0) {
         const startedAt = Date.now();
-        ledger.updateRouterCommand(commandId, { status: "planning", error: null });
-        const succeeded: RouterCommandDispatchedTarget[] = [...(existing.dispatched ?? [])];
-        const stillFailed: Array<{ deviceId: string; op: RouterTargetOp } & CommandFailure> = [];
+        const planning = ledger.updateRouterCommand(commandId, { status: "planning", error: null });
+        const settled = track(
+          (async (): Promise<RouterCommandRecord> => {
+            const succeeded: RouterCommandDispatchedTarget[] = [...(existing.dispatched ?? [])];
+            const stillFailed: Array<{ deviceId: string; op: RouterTargetOp } & CommandFailure> = [];
 
-        for (const item of retryOps) {
-          const op = item.op as RouterTargetOp;
-          try {
-            const port = resolvePortByDeviceSpec(item.deviceId);
-            const res = await port.executeOp(op);
-            const target = toDispatchedTarget(port, res);
-            if (target !== null) succeeded.push(target);
-          } catch (err) {
-            stillFailed.push({ deviceId: item.deviceId, op, ...failureOf(err) });
-          }
-        }
+            for (const item of retryOps) {
+              const op = item.op as RouterTargetOp;
+              try {
+                const port = resolvePortByDeviceSpec(item.deviceId);
+                const res = await port.executeOp(op);
+                const target = toDispatchedTarget(port, res);
+                if (target !== null) succeeded.push(target);
+              } catch (err) {
+                stillFailed.push({ deviceId: item.deviceId, op, ...failureOf(err) });
+              }
+            }
 
-        const durationMs = Math.max(0, Date.now() - startedAt);
-        if (stillFailed.length === 0) {
-          return ledger.updateRouterCommand(commandId, {
-            status: "dispatched",
-            dispatched: succeeded,
-            error: null,
-            durationMs,
-            plan: {
-              intent: "dispatch",
-              reply: existing.plan?.reply ?? "",
-              ...(existing.plan?.replyTruncated ? { replyTruncated: true } : {}),
-              actions: [],
-              track: existing.plan?.track ?? "B",
-              ...planBase,
-            },
-            auditAction: "router.command.retry_succeeded",
-            auditActor: "user",
-          });
-        }
+            const durationMs = Math.max(0, Date.now() - startedAt);
+            if (stillFailed.length === 0) {
+              return ledger.updateRouterCommand(commandId, {
+                status: "dispatched",
+                dispatched: succeeded,
+                error: null,
+                durationMs,
+                plan: {
+                  intent: "dispatch",
+                  reply: existing.plan?.reply ?? "",
+                  ...(existing.plan?.replyTruncated ? { replyTruncated: true } : {}),
+                  actions: [],
+                  track: existing.plan?.track ?? "B",
+                  ...planBase,
+                },
+                auditAction: "router.command.retry_succeeded",
+                auditActor: "user",
+              });
+            }
 
-        const errMsg = stillFailed.map((f) => f.error).join("；");
-        const raws = stillFailed.flatMap((f) => (f.errorRaw !== undefined ? [f.errorRaw] : []));
-        return ledger.updateRouterCommand(commandId, {
-          status: "failed",
-          dispatched: succeeded.length > 0 ? succeeded : null,
-          error: errMsg,
-          durationMs,
-          plan: {
-            intent: "dispatch",
-            reply: existing.plan?.reply ?? "",
-            ...(existing.plan?.replyTruncated ? { replyTruncated: true } : {}),
-            actions: [],
-            track: existing.plan?.track ?? "B",
-            ...planBase,
-            ...(raws.length > 0 ? { errorRaw: raws.join("\n") } : {}),
-            retryOps: stillFailed.map((f) => ({ deviceId: f.deviceId, op: f.op })),
-          },
-          auditAction: "router.command.retry_failed",
-          auditActor: "user",
-        });
+            const errMsg = stillFailed.map((f) => f.error).join("；");
+            const raws = stillFailed.flatMap((f) => (f.errorRaw !== undefined ? [f.errorRaw] : []));
+            return ledger.updateRouterCommand(commandId, {
+              status: "failed",
+              dispatched: succeeded.length > 0 ? succeeded : null,
+              error: errMsg,
+              durationMs,
+              plan: {
+                intent: "dispatch",
+                reply: existing.plan?.reply ?? "",
+                ...(existing.plan?.replyTruncated ? { replyTruncated: true } : {}),
+                actions: [],
+                track: existing.plan?.track ?? "B",
+                ...planBase,
+                ...(raws.length > 0 ? { errorRaw: raws.join("\n") } : {}),
+                retryOps: stillFailed.map((f) => ({ deviceId: f.deviceId, op: f.op })),
+              },
+              auditAction: "router.command.retry_failed",
+              auditActor: "user",
+            });
+          })(),
+        );
+        return options?.background === true ? detach(planning, settled) : settled;
       }
 
       // 已有目标投递成功、又没有明确的失败操作（如规划超时、重启中断时已投出一部分）：整条重跑会让模型再投一遍，拒绝
@@ -1184,15 +1196,16 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
       }
 
       // 否则（例如设备之前离线尚未拿到名片、模型曾未登录或规划曾超时）重新执行完整管线
-      ledger.updateRouterCommand(commandId, { status: "planning", error: null });
+      const planning = ledger.updateRouterCommand(commandId, { status: "planning", error: null });
       // 带回显式目标：直转失败的重试仍走轨道 A，不改走模型
-      return track(runCommandPipeline({
+      const settled = track(runCommandPipeline({
         commandId,
         clientId: existing.clientId,
         text: existing.inputText,
         attachmentIds,
         planBase,
       }));
+      return options?.background === true ? detach(planning, settled) : settled;
     },
 
     async handleAgentDispatch(
