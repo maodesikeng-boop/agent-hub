@@ -119,7 +119,7 @@ describe("界面标准：共用组件", () => {
     expect(sw.firstElementChild).toHaveClass("size-4");
   });
 
-  it("头像（第 17 条）：项目经理渲染完整水果切片（slice），Worker（neutral）渲染对应水果切下的果瓣（wedge）", () => {
+  it("头像（第 17 条）：项目经理渲染水果小动物（main），Worker（neutral）渲染同一只小动物的纸片分身（piece）", () => {
     const { container } = render(
       <>
         <Avatar colorKey={0} size={44} />
