@@ -4,6 +4,7 @@
 import {
   type Attachment,
   type ConversationId,
+  type MessageId,
   type Pm,
   type PmId,
   type Project,
@@ -29,6 +30,8 @@ export interface RouterTurnDestination {
   projectName: string | null;
   avatarKey: number;
   opLabel: string | null;
+  /** 转给项目经理的那条消息在目标设备上的编号（pm.forward）；起 Worker、追发、新建项目等别的去向是 null。 */
+  forwardMessageId: MessageId | null;
 }
 
 export interface RouterTurnEntry {
@@ -177,6 +180,7 @@ function buildDestinations(command: RouterCommandRecord, selfId: string | undefi
       projectName: d.projectName ?? null,
       avatarKey: d.pmId,
       opLabel: opLabelOf(d.op),
+      forwardMessageId: !worker && (d.op ?? "pm.forward") === "pm.forward" ? d.messageId : null,
     });
   }
   return out.length === 0 ? NO_DESTINATIONS : out;

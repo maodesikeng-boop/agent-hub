@@ -86,6 +86,11 @@ export const API_PATHS = {
   unarchivePm: (id: PmId) => `/api/pms/${id}/unarchive`,
   /** POST，没有请求体 → 202 RetryMessageResponse。 */
   retryMessage: (messageId: MessageId) => `/api/messages/${messageId}/retry`,
+  /**
+   * GET → TurnReplyView（shared/turn-reply.ts）：项目经理对话里一条用户消息和它那一轮的正式回复。总助时间流里转交的问题不在近窗时按它补取，
+   * 配对设备经入口的 /d/<设备>/api/* 转发。消息不存在、不是项目经理对话里的用户消息 → 404。
+   */
+  messageTurnReply: (messageId: MessageId) => `/api/messages/${messageId}/turn-reply`,
   /** POST，没有请求体 → RecheckUserBlockerResponse：用户在“要你动手”的提醒卡上点了 Done，重查这家厂商，能用就接着派（docs/user-blockers-design.md）。 */
   recheckUserBlocker: (id: UserBlockerId) => `/api/user-blockers/${id}/recheck`,
   /**

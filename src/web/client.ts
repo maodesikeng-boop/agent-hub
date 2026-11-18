@@ -92,6 +92,7 @@ import {
   type VendorSyncPreviewResponse,
 } from "../shared/index.ts";
 import { GENERIC_ERROR_TEXT, LOCAL_ERRORS, humanize, type ErrorCode, type HumanError } from "../shared/errors.ts";
+import type { TurnReplyView } from "../shared/turn-reply.ts";
 import { checkConnections } from "./connection.ts";
 
 /** 服务端回了非 2xx，或根本没连上。text/hint/raw 都来自 humanize（docs/user-facing-errors-design.md），message 就是 text；组件用 format.ts 的 errorText 拿来显示。 */
@@ -215,6 +216,8 @@ export function createClient(device: DeviceId | null) {
     fetchConversationsLookup: (query: { ids?: readonly ConversationId[]; workerIds?: readonly WorkerId[] }) =>
       request<ConversationsLookup>(at(API_PATHS.conversationsLookup(query))),
     fetchEndedWorkers: (pmId: PmId, before: ConversationId | null) => request<EndedWorkersPage>(at(API_PATHS.endedWorkers(pmId, before))),
+    /** 总助时间流里转交的问题不在近窗时补取它和它的正式回复（shared/turn-reply.ts）。 */
+    fetchTurnReply: (messageId: MessageId) => request<TurnReplyView>(at(API_PATHS.messageTurnReply(messageId))),
     postMessage: (conversationId: ConversationId, body: PostMessageRequest) => postJson<PostMessageResponse>(at(API_PATHS.messages(conversationId)), body),
     /**
      * 上传一个文件：请求体是文件原样的字节（不是 JSON，也不说发给谁），文件名放在 ?name=。服务端清理文件名、给每个文件单独一个目录。
