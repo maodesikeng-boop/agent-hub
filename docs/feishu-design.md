@@ -98,6 +98,7 @@
 | 文件 | 上传文件 ≤ 30 MB；下载消息里的资源 `GET im/v1/messages/:message_id/resources/:file_key` ≤ 100 MB。发消息的 `msg_type` 要和上传时的 `file_type` 配对：`mp4` 发 `media`（视频，封面 `image_key` 可不填），`opus` 发 `audio`，`pdf`、`doc`、`xls`、`ppt`、`stream` 发 `file`；不配对回 230055。 | `reference/im-v1/file/create.md`、`im-v1/message/create_json.md`、`reference/im-v1/message/create.md`（错误码 230055）、`reference/im-v1/message-resource/get.md` |
 | 卡片里的图片 | 卡片 JSON 2.0 的图片组件 `{"tag": "img", "img_key", "alt", "scale_type": "fit_horizontal", "preview": true}`，`img_key` 用 `POST im/v1/images`（`image_type: message`）拿到的图片编号；`fit_horizontal` 完整展示不裁剪，`preview` 点开看大图。官方建议卡片里的图在 1500×3000 px 以内、≤ 10 MB。富文本组件 `text_size: notation` 是 12px 辅助文字。 | `feishu-cards/card-json-v2-components/content-components/image`、`.../rich-text`（2026-11-18 核实） |
 | 撤回消息 | `DELETE im/v1/messages/:message_id`，机器人撤回自己发的消息，`im:message:send_as_bot` 即可（模板已带）；受管理员设的撤回时限约束（默认 24 小时），超时回 230009。 | `reference/im-v1/message/delete.md`（2026-11-18 核实） |
+| 拉历史消息 | `GET im/v1/messages`（`container_id_type: chat`），`start_time` 与 `end_time` 为秒级时间戳字符串（传 `start_time` 时须一并给 `end_time`），回包 `create_time` 为毫秒字符串，`page_size` 范围 1～50；`mentions[].id` 为裸 `open_id` 字符串，经适配后走官方 `normalize`。单聊需 `im:message:readonly`（模板已带），群聊还需 `im:message.group_msg`；缺权限（230027）时单群静默降级。 | `reference/im-v1/message/list.md`（2026-11-19 核实） |
 | 置顶消息 | `POST / DELETE im/v1/pins`，通过可选权限 `im:message.pins:write_only` 随 `addons` 预填；未授予或群只许群主 Pin（230046）时记日志静默降级。 | `reference/im-v1/pin/create.md` |
 | 查权限 | `GET /open-apis/application/v6/scopes` 返回各权限授予状态，不要额外权限。 | `application-v6/scope/list` |
 | SDK 的 Channel | SDK 有高层的 `createLarkChannel`（长连接、去重、markdown 流式卡片、媒体），但只派发消息、卡片点击、表情、机器人进群、文档评论，**不派发成员进出**；卡片点击处理函数的返回值被丢掉（回不了 toast）；流式卡片只有一个 markdown 组件，放不了停止按钮。 | SDK `lib/index.js` 的 `registerDispatcherHandlers`、`docs/channel.zh.md` |
@@ -162,13 +163,15 @@
 
 **流式与急停。** 状态机见 `stream.ts`：用户发话触发的那一轮，项目经理一开轮（`session.status` 的 activity 变成 working，调工具、思考时）就建流式卡片实体（markdown 组件 + 停止按钮）发到群主聊天流，还没正文时卡上是一行状态，文案同网页的 `describeStep`（如“Running command…”），工具阶段点停止就能停；正文来了在同一张卡上换成正文，之后每 `FEISHU_STREAM_FLUSH_MS` 推一次全文，飞书客户端打字机上屏。一轮只开一张状态卡：定稿过一段之后工具阶段不再开新卡（下一段文字照常开卡）；整轮没写正文就结束（只调了工具、被停下）时撤回这张状态卡，撤不回（超过撤回时限）就收成一行“这一轮没有文字回复”。“用户发话触发”看这个对话最近一条用户消息：是用户在网页或飞书里打的字（不是账本代发的唤醒，唤醒消息的 meta 标 `wakeup`，见 `isLedgerWakeup`）且还没回完（queued、delivered、processing）。任务图推进、拍板定案、检查点、取消任务图这些唤醒同理不镜像成“网页上说”。Worker 汇报、系统唤醒这类后台轮次工具阶段不开状态卡，等真有正文或挂卡时才发，所以后台静默处理完不会撤回任何消息，群里不留一排“撤回了一条消息”。只投影项目经理会话（`pmId` 不为空）；子任务的事件账本本来就不改主会话的状态和流式预览。开了 9 分钟续开一次流式模式；落库时换成账本正文、关流式、删停止按钮。超过 `FEISHU_CARD_MAX_CHARS` 时前一张定稿、续到新卡。点停止：回调里先回 toast（流式模式下不能靠响应改卡片），调 `requestStop`，这一轮结束时卡片收尾。整个应用的卡片接口共用一份每秒预算，每个群发消息每秒不超过 4 条。定稿或收尾时正文被飞书拒收（内容不合规、超限），卡片换成一行“飞书显示不了，去网页看”再改一次，照样关流式、删停止按钮。停机（含 `hub self-reload`）先退订账本、最多等 `FEISHU_CLOSE_DRAIN_MS` 把排着的出站发完、把还在流式的卡收尾，再断开；定稿做到一半就停机留下的 `feishu_posts` `streaming` 记录，下次连上补发时照账本正文换下一个 sequence 再定稿，水位推过了也收。
 
-**拍板卡。** 提问卡、检查点卡、提醒卡画成卡片 JSON 2.0：一个表单里放“补充说明”输入框和选项按钮（推荐项排第一），点哪个选项都连同输入框回传，不需要弹窗。点了走账本原有接口，账本推变化后卡片改成“已定案”（谁、选了什么）。网页上答的卡也一样改。总助单聊里引用这张卡的拍板项也带同样的按钮（同一个 `FeishuCardRef`），两处点哪处都走同一个账本接口；账本按 `clientId` 只认第一次，后点的那处回 `conflict`，转成 toast“已经定过了”；定案后两处一起改。`hub ask close`、`hub graph cancel`、网页上回答或关掉的卡，账本在同一事务里推 `message.updated`（`settleAskIn`），飞书据此改掉项目群那张和总助单聊引用它的那条；补发时先改这些待定案的卡，再按水位重放消息，重放哪一件出错都不挡卡片去掉按钮。
+**拍板卡。** 提问卡、检查点卡、提醒卡画成卡片 JSON 2.0：一个表单里放“补充说明”输入框和选项按钮（推荐项排第一），点哪个选项都连同输入框回传，不需要弹窗。除了建 `router_items` 的独立 `hub ask`，任务图检查点与门禁拍板卡（带 `gateRef`，含步骤交付物图片与文件附件）及 `user_blocker` 自动提醒卡（带 `blockerRef`）同样经 `feishu_router_events(ask_message_id)` 同步发到总助单聊（`feishu_posts` 记 `router_ask` 与 `router_file`，同一份交付物跨会话复用已上传编号不重传）。两处卡片带同一个 `FeishuCardRef`，在总助单聊点、在项目群点、或在网页拍板、跳过、取消、重查解开，账本在同一事务里推 `message.updated`（`settleAskIn`），项目群与总助单聊两张卡一起改成已定案或已关闭；后点旧卡按钮回 toast“已经定过了”，不重复触发下游；提醒卡重查未过更新正文时两处待处理卡同步刷新。补发时先改这些待定案的卡，再按水位重放消息，重放哪一件出错都不挡卡片去掉按钮。
 
 **文件。** 一条消息带的文件（项目经理发的文件、提问卡的交付物、网页上用户发的附件）和这条消息的卡同发同达：图片嵌进同一张卡（卡片图片组件，挂在正文下面、按钮上面），别的文件（pdf、md、mp4、zip、docx……）紧跟这张卡连着发成文件消息。做法：账本一落库就在出站队列外并发预传（`p-limit` 限 `FEISHU_UPLOAD_CONCURRENCY` 个同时传），排到发卡时最多再等到最后开始传的那个起算 `FEISHU_ATTACH_WAIT_MS`；传完的图嵌进卡、文件紧跟卡发，没传完的卡先发出去、卡底写一行 `Uploading <名字>…`，不挡后面的新消息；传完后文件补发成文件消息，再原地改这张卡（图嵌回去，文件那行改成“已送达”）。在途的附件记成 `feishu_posts` 的 `uploading` 行（挂着卡的消息编号和卡片编号），停机不等它，重连、重启后补发时接着传，传完照样补发、改卡。传完先把图片编号、文件编号记在这一行上，卡改成了才记 `final`：改卡遇到网络错误、停机重启时，补发按这一行重新改卡，不重传、不重发文件。紧跟卡发的文件被飞书拒收时，也回头把卡改成写着“没发出去”。上传暂时失败退避重试 `FEISHU_MEDIA_RETRY_MAX` 次，飞书拒收或重试用尽时卡上写“没发出去，去网页看”。超过 `FEISHU_IMAGE_MAX_EDGE` 边长或 `FEISHU_IMAGE_SHRINK_BYTES` 的截图（png、jpeg、webp、avif），上传前用 `sharp` 在临时目录缩一份最长边 2400 的副本再传，传完删掉，磁盘上的原图不动（之前一张 4920×6990、8.7 MB 的截图在慢网上传了 8 分钟）；飞书图片接口不收 avif，再小也转一份 jpeg；超过 10 MB 的动图取第一帧；要转却转不成的不白传，卡上写“没发出去”；其他文件 ≤ 30 MB 按扩展名上传并配对消息类型（mp4 发视频、opus 发语音、其余发文件，见上面「飞书官方接口」的文件一行），更大的卡上写一行“去网页看”；同一个文件只传一次。每次 HTTP 请求有超时：普通接口 `FEISHU_HTTP_TIMEOUT_MS`，上传下载 `FEISHU_TRANSFER_TIMEOUT_MS`（官方 HTTP 实例默认不设超时，`sdk.ts` 包一层补上）。卡片 Markdown 的图片地址只认上传后的图片编号（`img_` 开头），别的地址回 200570，所以正文进卡片前过一遍 `feishuCardMarkdown`：本机图片写成“图片「名字」”，网页图片改成链接，指向本机的链接只留文字；文件本身照上面同发。主人（协作者档访客）在飞书里发的图片、文件、视频、语音（富文本里夹的多张图和视频也算）都下载存成附件随消息交给项目经理，正文里这些资源的占位去掉，只丢表情包。超过 `MAX_UPLOAD_BYTES`、下载失败的文件回一句“没收下”；本档不能发文件的访客发的文件不收（他这条带的和前面气泡里他发的都算），回他一句，告诉他请主人在「访客权限」卡上切到“协作者”；文件都没收下、又没写字的消息不交给项目经理和总助。下载失败记一行日志，带消息编号和出错原因（飞书权限不够、资源过期都能从日志看出来）。
 
 **网页和飞书一致。** 网页上发的用户消息镜像到群里（标“网页”），网页发的总助指令和结果也镜像到单聊；飞书发的消息本来就在账本里。
 
-**断线与补发。** 官方 `WSClient` 默认不查心跳、握手不限时，半开的假活连接（网络切换、梯子、NAT 回收）要等 TCP 报错才发现，期间飞书推来的事件送不到，只能等飞书按 15 秒、5 分钟的节奏重推（2026-11-18 现场：18:09 发的两条消息 18:14 才进账本）。所以 `sdk.ts` 开官方的心跳看门狗 `wsConfig.pingTimeout`（`FEISHU_WS_PING_TIMEOUT_S`）和握手超时 `handshakeTimeoutMs`（`FEISHU_WS_HANDSHAKE_TIMEOUT_MS`），断开、重连各记一行日志（重连那行带断了多久）。重连后：成员缓存标过期；按 `feishu_chats` 的水位补发离线期间的消息，每个群最多 20 条，更早的发一行“还有 N 条，去网页看”；把离线期间已经定案的卡改掉。飞书挂了、凭证失效都不影响网页和 agent，只在状态里报。
+**断线与补发（出站补发 + 入站补拉）。** 官方 `WSClient` 默认不查心跳、握手不限时，半开的假活连接（网络切换、梯子、NAT 回收）要等 TCP 报错才发现，期间飞书推来的事件送不到。`sdk.ts` 开官方的心跳看门狗 `wsConfig.pingTimeout`（`FEISHU_WS_PING_TIMEOUT_S`）和握手超时 `handshakeTimeoutMs`（`FEISHU_WS_HANDSHAKE_TIMEOUT_MS`），断开、重连各记一行日志。启动连接与每次断线重连后双向追平：
+- **入站主动补拉**：按 `feishu_inbound_cursors` 记录的各活跃会话（总助单聊 + 未归档项目群）最近入站锚点与最大回溯窗口 `FEISHU_INBOUND_CATCHUP_WINDOW_MS`（进程内重连往前多留 `FEISHU_INBOUND_CATCHUP_OVERLAP_MS` 覆盖半开盲区），单飞串行调用 `GET im/v1/messages`（单群最多翻 `FEISHU_INBOUND_CATCHUP_MAX_PAGES` 页、`FEISHU_INBOUND_CATCHUP_MAX_MESSAGES` 条），过滤机器人自身消息、撤回消息和合并转发子消息，按时间升序前插到该会话重连后暂存的实时事件之前投递，保留多人群 `@` 与跨气泡带文件语义；内存 `seenInboundMessages`（LRU 上限 `FEISHU_SEEN_MESSAGES_MAX`）与账本 `client:<conv>:feishu:<message_id>`、`router_commands.client_id` 双重去重，飞书服务端稍后经长连接迟到重推同一 `message_id` 直接跳过；未授予 `im:message.group_msg` 或单群接口报错时按单群记结构化日志静默降级，不阻塞总助单聊与其他群；并发多次闪断重连合并为同一时间只跑一轮。
+- **出站补发**：成员缓存标过期；先把离线期间已经定案的卡（含总助单聊 `router_item` 与 `router_ask`）改掉，再按 `feishu_chats` 的水位补发离线期间的消息（每群最多 `FEISHU_CATCHUP_MAX_MESSAGES` 条，更早的发一行“还有 N 条，去网页看”），并恢复未传完的附件。飞书挂了、凭证失效都不影响网页和 agent，只在状态里报。
 
 ## 性能
 
@@ -198,6 +201,10 @@
 | `FEISHU_SELECT_OPTIONS_MAX` | 100 | 单个 `select_static` 下拉最多保留多少个模型选项（当前选中项必留），防止聚合厂商几百个模型撑爆 30 KB 卡片上限 |
 | `FEISHU_POST_RETENTION_DAYS` | 14 | 卡片实体 14 天后不能再操作 |
 | `FEISHU_CATCHUP_MAX_MESSAGES` | 20 | 离线一夜回来不刷屏 |
+| `FEISHU_MESSAGE_LIST_PAGE_SIZE` | 50 | `GET im/v1/messages` 单页条数上限（飞书校验 1～50） |
+| `FEISHU_INBOUND_CATCHUP_WINDOW_MS` / `FEISHU_INBOUND_CATCHUP_OVERLAP_MS` | 15 分钟 / 30 秒 | 入站主动补拉最大回溯窗口（不翻陈旧历史）与进程内重连半开盲区重叠缓冲 |
+| `FEISHU_INBOUND_CATCHUP_MAX_PAGES` / `FEISHU_INBOUND_CATCHUP_MAX_MESSAGES` | 4 / 200 | 单群单次重连最多翻页数与保留最新条数上限，与 `FEISHU_INBOUND_QUEUE_MAX` 对齐 |
+| `FEISHU_SEEN_MESSAGES_MAX` | 2,000 | 内存 LRU 记住最近已处理的飞书入站消息编号上限，拦截重叠窗口与长连接迟到重推 |
 | `FEISHU_BIND_CODE_TTL_MS` | 10 分钟 | 够人切到飞书里发 |
 | `FEISHU_IMAGE_MAX_BYTES` / `FEISHU_FILE_MAX_BYTES` | 10 MB / 30 MB | 飞书上传图片、上传文件的上限 |
 | `FEISHU_INBOUND_QUEUE_MAX` / `FEISHU_OUTBOUND_QUEUE_MAX` | 200 / 500 | 一个应用的正常事件量远低于此；进的满了先丢成员和改名事件（重连对账会补回），出的满了先合并流式推送 |
@@ -221,7 +228,7 @@
 
 ## 骨架文件
 
-- `migrations/0034_feishu.sql`：`feishu_app`（应用、机器人、主人）、`feishu_chats`（总助单聊和项目群、唤醒方式、访客档位、补发水位）、`feishu_posts`（账本里的东西发到了哪条消息、哪张卡片实体、卡片操作序号）、`feishu_avatars`（头像的 image_key）。`migrations/0037_feishu_avatar_hash.sql` 重建 `feishu_avatars` 加 `content_sha256`。`migrations/0039_feishu_avatar_look.sql` 把 `feishu_avatars` 改按形象键 `look` 缓存。`migrations/0040_feishu_router_settings_post.sql` 重建 `feishu_posts`，`ref_kind` 加 `router_settings` 记总助单聊最新那张设置卡。
+- `migrations/0034_feishu.sql`：`feishu_app`（应用、机器人、主人）、`feishu_chats`（总助单聊和项目群、唤醒方式、访客档位、补发水位）、`feishu_posts`（账本里的东西发到了哪条消息、哪张卡片实体、卡片操作序号）、`feishu_avatars`（头像的 image_key）。`migrations/0037_feishu_avatar_hash.sql` 重建 `feishu_avatars` 加 `content_sha256`。`migrations/0039_feishu_avatar_look.sql` 把 `feishu_avatars` 改按形象键 `look` 缓存。`migrations/0040_feishu_router_settings_post.sql` 重建 `feishu_posts`，`ref_kind` 加 `router_settings` 记总助单聊最新那张设置卡。`migrations/0041_feishu_router_asks_and_inbound_cursor.sql` 给 `feishu_posts` 加 `router_ask` 与 `router_file`、给 `feishu_router_events` 加 `ask_message_id` 与触发器，并建 `feishu_inbound_cursors` 记各会话入站补拉锚点。
 - `src/shared/feishu.ts`：品牌化编号和解析函数、主客身份、单人多人、唤醒方式、访客档位和 `feishuGuestMay`、消息来源 `FeishuMessageOrigin`、署名与背景 `feishuDeliveryPrefixes`、访客禁用的 hub 命令和 `feishuGuestTurnBlockReason`、设置接口的形状。
 - `src/daemon/feishu/transport.ts`：外部边界：用到的开放接口、长连接事件、卡片回调与 toast、`FeishuTransport`、`FeishuAuthError`。
 - `src/daemon/feishu/sdk.ts`：用官方包实现传输层，包一层 `registerApp`。

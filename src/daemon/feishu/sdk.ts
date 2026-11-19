@@ -14,6 +14,8 @@ import {
   FEISHU_RATE_LIMIT_CODES,
   FeishuAuthError,
   FeishuRegistrationError,
+  feishuDataOf,
+  feishuStringField,
   type FeishuApiResult,
   type FeishuCardActionResponse,
   type FeishuListMessagesInput,
@@ -21,6 +23,7 @@ import {
   type FeishuMethod,
   type FeishuMethodArgs,
   type FeishuRawEvent,
+  type FeishuRawMessageEvent,
   type FeishuTransport,
 } from "./transport.ts";
 
@@ -196,8 +199,78 @@ export function createFeishuSdkTransport(options: FeishuSdkOptions): FeishuTrans
 
   return {
     call,
-    async listMessages(_input: FeishuListMessagesInput): Promise<FeishuListMessagesPage> {
-      return { items: [], pageToken: null, hasMore: false };
+    async listMessages(input: FeishuListMessagesInput): Promise<FeishuListMessagesPage> {
+      const data = feishuDataOf(
+        "message.list",
+        await call("message.list", {
+          container_id_type: "chat",
+          container_id: input.chatId,
+          start_time: input.startTimeSec,
+          end_time: input.endTimeSec,
+          sort_type: input.sortType ?? "ByCreateTimeAsc",
+          page_size: input.pageSize,
+          ...(input.pageToken ? { page_token: input.pageToken } : {}),
+        }),
+      );
+      interface RawListedItem {
+        message_id?: string;
+        root_id?: string;
+        parent_id?: string;
+        thread_id?: string;
+        upper_message_id?: string;
+        msg_type?: string;
+        create_time?: string;
+        deleted?: boolean;
+        chat_id?: string;
+        sender?: { id?: string; id_type?: string; sender_type?: string };
+        body?: { content?: string };
+        mentions?: { key?: string; id?: string; id_type?: string; name?: string; tenant_key?: string }[];
+      }
+      const botIdentity = { openId: input.botOpenId, name: "" };
+      const items: FeishuRawMessageEvent[] = [];
+      for (const raw of (data.items as RawListedItem[] | undefined) ?? []) {
+        if (raw.deleted === true || Boolean(raw.upper_message_id) || !raw.message_id) continue;
+        // im/v1/messages 的 mentions[].id 是裸 open_id 字符串，转换成 normalize 预期的 { open_id } 结构
+        const adapted = {
+          sender: {
+            sender_id: { open_id: raw.sender?.id_type === "open_id" ? (raw.sender.id ?? "") : "" },
+            sender_type: raw.sender?.sender_type ?? "unknown",
+          },
+          message: {
+            message_id: raw.message_id,
+            chat_id: raw.chat_id ?? input.chatId,
+            chat_type: input.chatType,
+            message_type: raw.msg_type ?? "text",
+            content: raw.body?.content ?? "",
+            mentions: (raw.mentions ?? []).map((m) => ({
+              key: m.key ?? "",
+              id: { open_id: m.id_type === "open_id" ? (m.id ?? "") : "" },
+              name: m.name ?? "",
+              ...(m.tenant_key ? { tenant_key: m.tenant_key } : {}),
+            })),
+            root_id: raw.root_id,
+            parent_id: raw.parent_id,
+            thread_id: raw.thread_id,
+            create_time: raw.create_time ?? "0",
+          },
+        } as unknown as lark.RawMessageEvent;
+        const normalized = await lark.normalize(adapted, { botIdentity, stripBotMentions: true });
+        items.push({
+          type: "im.message.receive_v1",
+          messageId: normalized.messageId,
+          chatId: normalized.chatId,
+          chatType: normalized.chatType,
+          senderOpenId: normalized.senderId,
+          senderType: raw.sender?.sender_type === "user" ? "user" : "app",
+          content: normalized.content,
+          mentionedBot: normalized.mentionedBot,
+          threadId: normalized.threadId ?? null,
+          resources: normalized.resources.map((r) => ({ type: r.type, fileKey: r.fileKey, fileName: r.fileName ?? null })),
+          createTime: normalized.createTime,
+        });
+      }
+      const pageToken = data.has_more === true ? feishuStringField(data, "page_token") : null;
+      return { items, pageToken, hasMore: data.has_more === true && pageToken !== null };
     },
     async uploadImage(input) {
       const image = "data" in input ? input.data : createReadStream(input.path);

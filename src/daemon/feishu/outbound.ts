@@ -88,12 +88,15 @@ export function projectFeishuChange(change: Change, ctx: FeishuProjectionContext
       return [{ kind: "working", conversationId, status: `${activity === "stopping" ? STEP_TEXT.stopping : describeStep(step)}…` }];
     }
     case "message.created":
-      return ctx.chatOfConversation(change.data.message.conversationId) === null ? [] : messageIntents(change.data.message);
+      return createdMessageIntents(change.data.message, ctx);
     case "message.updated": {
       const { message } = change.data;
       const ask = askOf(message);
-      if (ask === null || (ask.answered !== true && ask.closed !== true)) return [];
-      return ctx.chatOfConversation(message.conversationId) === null && ctx.routerChat() === null ? [] : [{ kind: "ask_settled", conversationId: message.conversationId, message }];
+      if (ask === null || (ctx.chatOfConversation(message.conversationId) === null && ctx.routerChat() === null)) return [];
+      if (ask.answered === true || ask.closed === true) {
+        return [{ kind: "ask_settled", conversationId: message.conversationId, message }];
+      }
+      return ask.blockerRef !== undefined ? [{ kind: "ask_updated", conversationId: message.conversationId, message }] : [];
     }
     case "router.item.created":
     case "router.item.updated":
@@ -108,6 +111,18 @@ export function projectFeishuChange(change: Change, ctx: FeishuProjectionContext
 }
 
 const ROUTER_COMMAND_DONE: ReadonlySet<RouterCommandRecord["status"]> = new Set(["answered", "dispatched", "failed"]);
+
+function isRouterSyncedAsk(message: Message): boolean {
+  if (message.workerId !== null || message.kind !== "text" || message.sender !== "agent" || isHandoverTraffic(message)) return false;
+  const ask = askOf(message);
+  return ask !== null && (ask.gateRef !== undefined || ask.blockerRef !== undefined);
+}
+
+function createdMessageIntents(message: Message, ctx: FeishuProjectionContext): FeishuOutboundIntent[] {
+  const pmIntents = ctx.chatOfConversation(message.conversationId) === null ? [] : messageIntents(message);
+  const syncToRouter = ctx.routerChat() !== null && ctx.pmOfConversation(message.conversationId) !== null && isRouterSyncedAsk(message);
+  return syncToRouter ? [...pmIntents, { kind: "router_ask", message }] : pmIntents;
+}
 
 /** 有群的项目经理对话里的一条消息要在群里体现成什么（补发也走它）。 */
 function messageIntents(message: Message): FeishuOutboundIntent[] {

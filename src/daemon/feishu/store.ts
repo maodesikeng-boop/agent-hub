@@ -175,7 +175,7 @@ export function createFeishuStore(db: Db): FeishuStore {
     target.kind === "router" ? chatWhere("target = 'router'") : chatWhere("target = 'pm' AND pm_id = ?", target.pmId);
   const clear = () =>
     db.transaction(() => {
-      for (const table of ["feishu_posts", "feishu_chats", "feishu_avatars", "feishu_router_events", "feishu_decisions", "feishu_app"]) db.run(`DELETE FROM ${table}`);
+      for (const table of ["feishu_inbound_cursors", "feishu_posts", "feishu_chats", "feishu_avatars", "feishu_router_events", "feishu_decisions", "feishu_app"]) db.run(`DELETE FROM ${table}`);
     });
   const postWhere = (where: string, ...params: (string | number)[]): FeishuPostRecord | null => {
     const row = db.get<PostRow>(`SELECT * FROM feishu_posts WHERE ${where}`, ...params);
@@ -240,7 +240,10 @@ export function createFeishuStore(db: Db): FeishuStore {
             now,
           );
         } else {
-          if (existing.chatId !== input.chatId) db.run("DELETE FROM feishu_posts WHERE chat_id = ?", existing.chatId);
+          if (existing.chatId !== input.chatId) {
+            db.run("DELETE FROM feishu_posts WHERE chat_id = ?", existing.chatId);
+            db.run("DELETE FROM feishu_inbound_cursors WHERE chat_id = ?", existing.chatId);
+          }
           db.run(
             `UPDATE feishu_chats SET chat_id = ?, name = ?, label = ?, archived_at = NULL,
                avatar_fruit = CASE WHEN chat_id = ? THEN avatar_fruit ELSE NULL END,
@@ -286,6 +289,7 @@ export function createFeishuStore(db: Db): FeishuStore {
     setChatArchived(chatId, archivedAt, now) {
       db.transaction(() => {
         db.run("DELETE FROM feishu_posts WHERE chat_id = ?", chatId);
+        db.run("DELETE FROM feishu_inbound_cursors WHERE chat_id = ?", chatId);
         db.run("UPDATE feishu_chats SET archived_at = ?, updated_at = ? WHERE chat_id = ?", archivedAt, now, chatId);
       });
     },
@@ -324,9 +328,37 @@ export function createFeishuStore(db: Db): FeishuStore {
       const last = db.get<{ id: number }>("SELECT id FROM feishu_router_events WHERE id > ? ORDER BY id LIMIT 1 OFFSET ?", after, n - keep - 1)!;
       return { skipped: n - keep, lastSkippedId: last.id };
     },
-    routerEventsAfter: (after, limit) => db.all("SELECT id, item_id, command_id FROM feishu_router_events WHERE id > ? ORDER BY id LIMIT ?", after, limit),
-    inboundCursor: () => null,
-    saveInboundCursor: () => {},
+    routerEventsAfter: (after, limit) =>
+      db.all("SELECT id, item_id, command_id, ask_message_id FROM feishu_router_events WHERE id > ? ORDER BY id LIMIT ?", after, limit),
+    inboundCursor(chatId) {
+      const row = db.get<{ created_at: number; last_inbound_at: number | null; last_message_id: string | null }>(
+        `SELECT c.created_at, i.last_inbound_at, i.last_message_id
+         FROM feishu_chats c LEFT JOIN feishu_inbound_cursors i ON i.chat_id = c.chat_id
+         WHERE c.chat_id = ?`,
+        chatId,
+      );
+      if (row === undefined) return null;
+      return {
+        chatCreatedAt: row.created_at,
+        lastInboundAt: row.last_inbound_at,
+        lastMessageId: (row.last_message_id as FeishuMessageId | null) ?? null,
+      };
+    },
+    saveInboundCursor(chatId, cursor, now) {
+      if (chatById(chatId) === null) return;
+      db.run(
+        `INSERT INTO feishu_inbound_cursors (chat_id, last_inbound_at, last_message_id, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT (chat_id) DO UPDATE SET
+           last_message_id = CASE WHEN excluded.last_inbound_at >= feishu_inbound_cursors.last_inbound_at THEN excluded.last_message_id ELSE feishu_inbound_cursors.last_message_id END,
+           last_inbound_at = MAX(feishu_inbound_cursors.last_inbound_at, excluded.last_inbound_at),
+           updated_at = excluded.updated_at`,
+        chatId,
+        cursor.lastInboundAt,
+        cursor.lastMessageId,
+        now,
+      );
+    },
     decision(ref) {
       const [kind, id] = decisionKey(ref);
       return db.get<{ clientId: string; name: string }>("SELECT client_id AS clientId, name FROM feishu_decisions WHERE ref_kind = ? AND ref_id = ?", kind, id) ?? null;
@@ -336,7 +368,7 @@ export function createFeishuStore(db: Db): FeishuStore {
       db.run("INSERT INTO feishu_decisions VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING", kind, id, clientId, name, now);
     },
     postOf,
-    postByMessageId: (messageId) => postWhere("message_id = ? AND ref_kind != 'file' ORDER BY updated_at DESC LIMIT 1", messageId),
+    postByMessageId: (messageId) => postWhere("message_id = ? AND ref_kind NOT IN ('file', 'router_file') ORDER BY updated_at DESC LIMIT 1", messageId),
     savePost(record, now) {
       const key = refKey(record.ref);
       db.transaction(() => {

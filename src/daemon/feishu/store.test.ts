@@ -53,9 +53,10 @@ const fill = () => {
 describe("createFeishuStore", () => {
   it("saveApp 换了 appId 时四张表在一个事务里清空，主人取入参", () => {
     fill();
+    store.saveInboundCursor(chat("a"), { lastInboundAt: 100, lastMessageId: om("in1") }, 1);
     const next = saveApp("cli_b" as FeishuAppId, null);
     expect(next).toMatchObject({ appId: "cli_b", ownerOpenId: null });
-    expect([count("feishu_chats"), count("feishu_posts"), count("feishu_avatars"), count("feishu_app")]).toEqual([0, 0, 0, 1]);
+    expect([count("feishu_chats"), count("feishu_posts"), count("feishu_avatars"), count("feishu_inbound_cursors"), count("feishu_app")]).toEqual([0, 0, 0, 0, 1]);
   });
 
   it("saveApp 同一个 appId 只更新机器人信息，主人和群保留", () => {

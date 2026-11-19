@@ -2476,7 +2476,7 @@ describe("createFeishuService：检查点拍板卡（含交付物文件附件）
     expect(ledger.hubCall(lin.sessionId, "graph.show", { graphId }).data.graph.nodes.find((n) => n.key === "impl")!.activeWorkerId).toBe(implWorkerId);
   });
 
-  it("在项目群点打回或在网页上拍板/跳过时，总助单聊与项目群两边的检查点卡同样实时收口", async () => {
+  it("在项目群点打回、在网页上拍板或取消任务图（含断线期间网页处理后重连）时，总助单聊与项目群两边的检查点卡均实时同步收口", async () => {
     await connect();
     const first = await raiseCheckpointWithDeliverables();
     const rejectAction = { fusa: 1, kind: "choose", card: { kind: "gate", askMessageId: first.askMsgId, graphId: first.graphId, nodeKey: "design" }, optionIndex: 1 };
@@ -2492,11 +2492,23 @@ describe("createFeishuService：检查点拍板卡（含交付物文件附件）
     expect(secondAskId).not.toBe(first.askMsgId);
     expect(store().postOf({ kind: "router_ask", messageId: secondAskId })?.state).toBe("card_pending");
 
-    ledger.skipTaskNode(first.graphId, "design", { reason: "直接往下走" });
+    fake.handlers!.onDisconnected("offline during web decide");
+    ledger.decideTaskNode(first.graphId, "design", { clientId: "web-reject-2", choice: "打回", note: "再补一处" });
+    fake.handlers!.onConnected();
     await settle();
     expect(postOfAsk(secondAskId).state).toBe("card_settled");
     expect(store().postOf({ kind: "router_ask", messageId: secondAskId })?.state).toBe("card_settled");
-    const routerSettled = fake.callsOf("card.update").filter((u) => u.card_id === store().postOf({ kind: "router_ask", messageId: secondAskId })!.cardId).at(-1)!;
+
+    finishWorkerTurn(w1, "无", "第三版就绪");
+    await settle();
+    const thirdAskId = ledger.hubCall(lin.sessionId, "graph.show", { graphId: first.graphId }).data.graph.nodes.find((n) => n.key === "design")!.gateAskMessageId!;
+    expect(store().postOf({ kind: "router_ask", messageId: thirdAskId })?.state).toBe("card_pending");
+
+    ledger.cancelTaskGraph(first.graphId, { reason: "直接取消" });
+    await settle();
+    expect(postOfAsk(thirdAskId).state).toBe("card_settled");
+    expect(store().postOf({ kind: "router_ask", messageId: thirdAskId })?.state).toBe("card_settled");
+    const routerSettled = fake.callsOf("card.update").filter((u) => u.card_id === store().postOf({ kind: "router_ask", messageId: thirdAskId })!.cardId).at(-1)!;
     expect(routerSettled.card.data).toContain("已关闭");
     expect(buttonValues(routerSettled.card.data)).toEqual([]);
   });
