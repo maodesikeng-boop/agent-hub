@@ -4,6 +4,9 @@ import { EMPTY_TOKEN_USAGE } from "../../shared/index.ts";
 import { buildReadonlyPolicy } from "../../shared/readonly-policy.ts";
 import { dataDirReadScope } from "../../shared/write-scope.ts";
 import {
+  buildThreadResumeRequest,
+  buildThreadStartRequest,
+  buildTurnStartRequest,
   codexReadonlyConfig,
   decideMcpElicitation,
   exhaustCodexRateLimitOnTurnError,
@@ -125,10 +128,11 @@ describe("parseCodexRateLimits：窗口按 windowDurationMins 归类，不按 pr
 const policy = (connectors: { extraAllow?: string[]; deny?: string[] } = {}) => buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: "/Users/u/.agent-hub/state", connectors });
 
 describe("codexReadonlyConfig：只读 Worker 的 codex 配置（设计 2.3 / 第 5 节；S5 实测只有 profile 这种写法的 deny_read 生效）", () => {
-  it("密钥禁读：default_permissions 指向 :read-only 的 profile，密钥路径设成 none", () => {
+  it("密钥禁读：default_permissions 指向 :read-only 的 profile，密钥路径设成 none；网络照旧开着（连 hub.sock）", () => {
     const cfg = codexReadonlyConfig(policy());
     expect(cfg["default_permissions"]).toBe("hub_readonly");
     expect(cfg["permissions.hub_readonly.extends"]).toBe(":read-only");
+    expect(cfg["permissions.hub_readonly.network.enabled"]).toBe(true);
     const fs = cfg["permissions.hub_readonly.filesystem"] as Record<string, string>;
     expect(fs["/Users/u/.ssh"]).toBe("none");
     expect(fs["/Users/u/.codex/auth.json"]).toBe("none");
@@ -178,6 +182,33 @@ describe("codexReadonlyConfig：只读 Worker 的 codex 配置（设计 2.3 / �
     expect(ro.readonly).toBe(true);
     expect(ro.config["default_permissions"]).toBe("hub_readonly");
     expect(ro.config["shell_environment_policy.inherit"]).toBe("all");
+  });
+});
+
+describe("只读 Worker 的线程和轮次请求不带 sandbox / sandboxPolicy（codex-cli 0.169.0 实测：带了就换成内置 read-only，权限档的读边界失效）", () => {
+  const session = { cwd: "/Users/u/.agent-hub/worktrees/1/2", model: null, vendorSessionId: "t1", addDirs: [], effort: null };
+  const launch = (readonly: boolean) => ({
+    developerInstructions: "",
+    readonly,
+    readonlyPolicy: readonly ? policy() : null,
+    config: readonly ? codexReadonlyConfig(policy()) : {},
+    skillRoots: [],
+  });
+  const params = (line: string) => (JSON.parse(line) as { params: Record<string, unknown> }).params;
+
+  it("thread/start、thread/resume：只读不传 sandbox，靠 config 的 default_permissions；普通 Worker 照旧 workspace-write", () => {
+    for (const build of [buildThreadStartRequest, buildThreadResumeRequest]) {
+      const ro = params(build(1, session, launch(true)));
+      expect(ro).not.toHaveProperty("sandbox");
+      expect((ro.config as Record<string, unknown>)["default_permissions"]).toBe("hub_readonly");
+      expect(params(build(1, session, launch(false))).sandbox).toBe("workspace-write");
+    }
+  });
+
+  it("turn/start：只读不传 sandboxPolicy（沿用线程的权限档）；普通 Worker 照旧带", () => {
+    const turn = (readonly: boolean) => params(buildTurnStartRequest(1, { threadId: "t1", combinedText: "hi", session, readonly, osSandboxed: true }));
+    expect(turn(true)).not.toHaveProperty("sandboxPolicy");
+    expect(turn(false).sandboxPolicy).toEqual({ type: "externalSandbox", networkAccess: "enabled" });
   });
 });
 
