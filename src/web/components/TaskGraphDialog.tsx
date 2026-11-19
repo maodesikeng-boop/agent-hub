@@ -56,7 +56,7 @@ function beadOf(node: TaskNode): StepBead {
 
 /** 卡片左上角的两位步骤号：底色看状态（docs/ui-standard.md 第 12.1 条）。 */
 const STEP_TAG: Readonly<Record<"done" | "running" | "gate" | "other", string>> = {
-  done: "bg-[var(--peel)] text-foreground",
+  done: "bg-[var(--step-done-bg)] text-foreground",
   running: "bg-background text-foreground shadow-[inset_0_0_0_1px_var(--peel)]",
   gate: "bg-primary text-primary-foreground",
   other: "bg-accent text-muted-foreground",

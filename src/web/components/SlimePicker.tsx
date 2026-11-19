@@ -1,6 +1,6 @@
 import { useRef, type KeyboardEvent, type ReactElement, type ReactNode } from "react";
 import { PM_FRUITS } from "../../shared/fruits.ts";
-import { JELLY_COLOR_IDS, jellyColorOf, SLIME_SHAPE_LABELS, type SlimeLook } from "../../shared/slimes.ts";
+import { JELLY_COLOR_IDS, jellyColorOf, SLIME_SHAPE_LABELS, slimeLookOf, type SlimeLook } from "../../shared/slimes.ts";
 import { errorLine, errorTitle, type ErrorLike } from "../format.ts";
 import { jellyStyleOf } from "../lib/palette.ts";
 import { cn } from "../lib/utils.ts";
@@ -70,6 +70,7 @@ export function SlimePicker({
           >
             {PM_FRUITS.map((fruit) => {
               const checked = fruit === look.fruit;
+              const candidate = slimeLookOf(fruit, look.color);
               return (
                 <button
                   key={fruit}
@@ -79,13 +80,13 @@ export function SlimePicker({
                   aria-label={SLIME_SHAPE_LABELS[fruit]}
                   title={SLIME_SHAPE_LABELS[fruit]}
                   tabIndex={checked ? 0 : -1}
-                  onClick={() => onChange({ fruit, color: look.color })}
+                  onClick={() => onChange(candidate)}
                   className={cn(
                     "flex size-12 cursor-pointer items-center justify-center rounded-xl transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
                     checked ? "bg-jelly" : "hover:bg-jelly-hover",
                   )}
                 >
-                  <Avatar look={{ fruit, color: look.color }} size={34} />
+                  <Avatar look={candidate} size={34} />
                 </button>
               );
             })}
@@ -108,7 +109,7 @@ export function SlimePicker({
                   aria-label={color.label}
                   title={color.label}
                   tabIndex={checked ? 0 : -1}
-                  onClick={() => onChange({ fruit: look.fruit, color: id })}
+                  onClick={() => onChange(slimeLookOf(look.fruit, id))}
                   className={cn(
                     "flex size-8 cursor-pointer items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
                     checked && "ring-2 ring-ring",

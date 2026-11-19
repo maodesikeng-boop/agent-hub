@@ -26,19 +26,22 @@ export const tintStyleOf = cachedBy((id): CSSProperties => ({ "--fruit": jellyCo
 /** 列表行的果冻底（styles.css 的 bg-jelly）：选中、悬停是这一行项目经理颜色的极淡底。 */
 export const jellyStyleOf = cachedBy((id): CSSProperties => ({ "--jelly": jellyColorOf(id).accent }) as CSSProperties);
 
+type FruitTrackVars = CSSProperties & Record<"--tube-line" | "--tube-core" | "--tube-glint" | "--tube-shade" | "--peel" | "--step-done-bg", string>;
+
 /**
  * 任务图（果皮轨、放大全览、进度图标）的颜色变量：走通的果冻管道和珠子用这个颜色的描边、身体、浅色、暗面；
  * 没走通的空管子、没轮到的珠子、等项目经理的琥珀色珠子是 styles.css 里的固定色（--tube-empty-*、--bead-*）。
  */
-export const fruitTrackVars = cachedBy((id): CSSProperties => {
-  const { roles, blob } = jellyColorOf(id);
+export const fruitTrackVars = cachedBy((id): FruitTrackVars => {
+  const { roles, blob, backdrop } = jellyColorOf(id);
   return {
     "--tube-line": roles.outline,
     "--tube-core": roles.body,
     "--tube-glint": roles.light,
     "--tube-shade": roles.shade,
     "--peel": blob,
-  } as CSSProperties;
+    "--step-done-bg": backdrop,
+  };
 });
 
 /**

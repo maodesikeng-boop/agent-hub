@@ -9,10 +9,16 @@ import { MessageList } from "./components/MessageList.tsx";
 import { RouterAvatar } from "./components/RouterAvatar.tsx";
 import { SlimePicker } from "./components/SlimePicker.tsx";
 import { Sidebar, type SidebarLayout } from "./components/Sidebar.tsx";
-import { FakeApi, FakeWebSocket, installFakeWebSocket, makeConvSnapshot, makeMessage, makePm, makeSnapshot, makeUserMessage, openFirstConversation } from "./test-utils.ts";
+import { FakeApi, FakeWebSocket, installFakeWebSocket, makeConvSnapshot, makeMessage, makePm, makeSnapshot, makeUserMessage, openFirstConversation, type Reply } from "./test-utils.ts";
 
 const look: SlimeLook = { fruit: "orange", color: "sky" };
 const avatarArt = (root: ParentNode) => [...root.querySelectorAll("svg path")].map((path) => ({ d: path.getAttribute("d"), fill: path.getAttribute("fill") }));
+
+function deferredReply() {
+  let resolve!: (reply: Reply) => void;
+  const promise = new Promise<Reply>((done) => { resolve = done; });
+  return { promise, resolve };
+}
 
 describe("史莱姆与总助", () => {
   it("嫩芽铃用共享像素稿、透明头像与 rem 尺寸，只有工作时摇摆", () => {
@@ -94,6 +100,46 @@ describe("换水果和颜色", () => {
     expect(screen.getByRole("radiogroup", { name: "Fruit" })).toBeVisible();
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("radiogroup", { name: "Fruit" })).not.toBeInTheDocument();
+  });
+
+  it("连点换色再点回原色，旧请求的回推不会让资料页头像闪回", async () => {
+    const user = userEvent.setup();
+    const orange = makePm({ id: 1, name: "Fern", avatarFruit: "orange", avatarColor: "orange" });
+    const sky = { ...orange, avatarColor: "sky" } satisfies typeof orange;
+    const snapshot = makeSnapshot({
+      pms: [orange],
+      conversations: [makeConvSnapshot([], { conversation: { id: 1, pmId: 1, title: "Fern" } })],
+    });
+    openFirstConversation(snapshot);
+    const api = new FakeApi(snapshot);
+    const first = deferredReply();
+    const second = deferredReply();
+    api.putPmLook = (_id, body) => body.color === "sky" ? first.promise : second.promise;
+    api.install();
+    installFakeWebSocket();
+    render(<App />);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    act(() => FakeWebSocket.last.open());
+    await user.click(await screen.findByRole("button", { name: "View Fern's profile" }));
+    const trigger = await screen.findByRole("button", { name: "Change look" });
+    await user.click(trigger);
+    const colors = within(screen.getByRole("radiogroup", { name: "Color" }));
+    const avatar = () => trigger.querySelector("[data-look]");
+    await user.click(colors.getByRole("radio", { name: "Sky" }));
+    expect(avatar()).toHaveAttribute("data-look", "orange:sky");
+    await user.click(colors.getByRole("radio", { name: "Orange" }));
+    expect(avatar()).toHaveAttribute("data-look", "orange:orange");
+
+    await act(async () => first.resolve({ status: 200, body: { pm: sky } }));
+    await waitFor(() => expect(api.calls.filter((call) => call.method === "PUT" && call.path === "/api/pms/1/look")).toHaveLength(2));
+    await act(async () => second.resolve({ status: 200, body: { pm: orange } }));
+    const pushLook = (seq: number, pm: typeof orange) => act(() => FakeWebSocket.last.push({ seq, type: "pm.updated", data: { pm } }));
+    pushLook(snapshot.seq + 1, sky);
+    expect(avatar()).toHaveAttribute("data-look", "orange:orange");
+    pushLook(snapshot.seq + 2, orange);
+    expect(avatar()).toHaveAttribute("data-look", "orange:orange");
+    pushLook(snapshot.seq + 3, sky);
+    expect(avatar()).toHaveAttribute("data-look", "orange:sky");
   });
 
   it("资料页保存失败后恢复旧形象，新建弹窗也能打开选择器", async () => {

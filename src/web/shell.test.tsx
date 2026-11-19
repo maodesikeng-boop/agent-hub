@@ -161,14 +161,21 @@ describe("Sidebar", () => {
     expect(time()).toBeInTheDocument();
   });
 
-  it("没有消息的行：只有名字、和头像垂直居中，行高和别的行一样（文字块最少两行高）", async () => {
+  it("没有消息时保留第二行占位，名字与有预览的行对齐", async () => {
     await boot();
-    expect(row("新来的").querySelector("span.block")).toBeNull();
-    expect(row("新来的").querySelector("span.min-h-12")).toHaveClass("flex-col", "justify-center");
-    expect(row("小林").querySelector("span.min-h-12")).not.toBeNull();
+    const empty = row("新来的");
+    const withPreview = row("小林");
+    const placeholder = empty.querySelector("span.block");
+    const preview = within(withPreview).getByText("小林你好");
+    expect(placeholder).toHaveAttribute("aria-hidden", "true");
+    expect(placeholder?.textContent).toBe("\u00a0");
+    expect(placeholder?.className).toBe(preview.className);
+    expect(empty).toHaveClass("h-18");
+    expect(withPreview).toHaveClass("h-18");
+    expect(empty).toHaveAccessibleName("新来的");
   });
 
-  it("左栏底部：不渲染“我”头像与文字；左侧放额度入口，右侧设置按钮 ml-auto 固定靠右；额度、设置、新建都是同一种 ghost 按钮", async () => {
+  it("额度在桌面对话顶栏，没有对话顶栏时移回左栏；额度、设置和新建都用工具格", async () => {
     const user = userEvent.setup();
     const ws = await boot();
     const sidebar = screen.getByRole("complementary", { name: "Sidebar" });
@@ -192,11 +199,17 @@ describe("Sidebar", () => {
         }),
       ),
     );
-    const quotaBtn = within(sidebar).getByRole("button", { name: "5h usage 37%" });
+    const quotaName = "5h usage 37%";
+    const quotaBtn = screen.getByRole("button", { name: quotaName });
+    expect(quotaBtn.closest("header")).toBeInTheDocument();
+    expect(within(sidebar).queryByRole("button", { name: quotaName })).not.toBeInTheDocument();
     for (const button of [quotaBtn, settingsBtn, screen.getByRole("button", { name: "New project manager" })]) {
-      expect(button).toHaveClass("text-muted-foreground", "hover:bg-accent");
-      expect(button.className).not.toMatch(/(^|\s)bg-/);
+      expect(button).toHaveClass("tool-slot");
     }
+    await user.click(screen.getByRole("button", { name: "View 小林's profile" }));
+    const sidebarQuota = await within(sidebar).findByRole("button", { name: quotaName });
+    expect(sidebarQuota).toHaveClass("tool-slot");
+    expect(screen.getAllByRole("button", { name: quotaName })).toEqual([sidebarQuota]);
     await user.click(settingsBtn);
     expect(screen.getByRole("dialog", { name: "Settings" })).toBeInTheDocument();
   });

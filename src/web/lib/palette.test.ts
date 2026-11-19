@@ -29,7 +29,7 @@ describe("颜色表", () => {
   });
 
   it("fruitTrackVars：果冻管道的三层和珠子的暗面取这个颜色的描边、身体、浅色、暗面", () => {
-    const vars = fruitTrackVars("sakura") as Record<string, string>;
+    const vars = fruitTrackVars("sakura");
     const { roles } = jellyColorOf("sakura");
     expect([vars["--tube-line"], vars["--tube-core"], vars["--tube-glint"], vars["--tube-shade"]]).toEqual([roles.outline, roles.body, roles.light, roles.shade]);
   });
@@ -68,6 +68,11 @@ describe("水果色的掺入比例（styles.css 的 --mix-*，docs/ui-standard.m
   const css = readFileSync("src/web/styles.css", "utf8");
   const mixOf = (name: string) => Number(new RegExp(`--mix-${name}: ([0-9.]+)%;`).exec(css)?.[1]);
   const foreground = /--foreground: (#[0-9a-f]{6});/.exec(css)![1]!;
+
+  it.each(JELLY_COLOR_IDS)("%s：已完成步骤角标与前景色字的对比度 ≥ 4.5:1", (id) => {
+    const vars = fruitTrackVars(id);
+    expect(contrastRatio(foreground, vars["--step-done-bg"])).toBeGreaterThanOrEqual(4.5);
+  });
 
   it("外壳底色不超过 5%、分割线不超过 10%，不让界面发黄发粉", () => {
     expect(mixOf("chat")).toBeGreaterThan(0);

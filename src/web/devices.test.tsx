@@ -408,8 +408,7 @@ describe("设置 → 设备", () => {
     }
     expect(within(mine).getByTestId("device-row")).toHaveTextContent("Mac");
     expect(within(others).getByTestId("device-row")).toHaveTextContent("东京");
-    // 设备行左边是系统的线条图标，状态点在小字里（在线 bg-success）
-    expect(within(others).getByTestId("device-row").querySelector("svg.lucide-server")).not.toBeNull();
+    expect(within(others).getByTestId("device-row").querySelector("svg[data-icon='pixel']")).toBeInTheDocument();
     expect(within(others).getByTestId("device-row").querySelector(".bg-success")).not.toBeNull();
     const rows = within(devices).getAllByTestId("device-row");
     expect(rows.map((r) => r.textContent)).toEqual([expect.stringContaining("Mac"), expect.stringContaining("东京")]);

@@ -574,30 +574,39 @@ function RenewSessionGroup({
   );
 }
 
-/** 项目经理资料页（设计第 3.6 节）：头像、名字、项目名居中，下面是模型、工作方式、文件夹、定时任务、性格设定、修改记录、会话几组设置。 */
-/**
- * 资料页头部的头像：点开换形象的浮层（SlimePicker）。点了先显示新形象，保存失败退回原来的、浮层最下面写原因；
- * 保存成功后等账本推来的 pm.updated 追上再用回项目经理身上的形象，中间不闪回旧的。
- */
 function LookButton({ pm }: { pm: Pm }) {
   const client = useClient();
   const saved = resolvePmLook(pm);
-  const [shown, setShown] = useState<SlimeLook | null>(null);
+  const [preview, setPreview] = useState<{ look: SlimeLook; awaitingEchoFrom: Pm | null } | null>(null);
   const [error, setError] = useState<ErrorLike | null>(null);
-  const seq = useRef(0);
+  const queued = useRef<{ look: SlimeLook; before: Pm } | null>(null);
+  const saving = useRef(false);
   useEffect(() => {
-    if (shown?.fruit === saved.fruit && shown.color === saved.color) setShown(null);
-  }, [shown, saved]);
-  const look = shown ?? saved;
-  const change = (next: SlimeLook) => {
-    const n = ++seq.current;
-    setShown(next);
+    if (preview?.look === saved && preview.awaitingEchoFrom !== null && pm !== preview.awaitingEchoFrom) {
+      setPreview(null);
+    }
+  }, [preview, saved, pm]);
+  const look = preview?.look ?? saved;
+  const change = async (next: SlimeLook) => {
+    queued.current = { look: next, before: pm };
+    setPreview({ look: next, awaitingEchoFrom: null });
     setError(null);
-    client.putPmLook(pm.id, { fruit: next.fruit, color: next.color }).catch((err: unknown) => {
-      if (seq.current !== n) return;
-      setShown(null);
-      setError(errorText(err));
-    });
+    if (saving.current) return;
+    saving.current = true;
+    while (queued.current !== null) {
+      const { look: pending, before } = queued.current;
+      queued.current = null;
+      try {
+        await client.putPmLook(pm.id, pending);
+        if (queued.current === null) setPreview({ look: pending, awaitingEchoFrom: before });
+      } catch (err) {
+        if (queued.current === null) {
+          setPreview(null);
+          setError(errorText(err));
+        }
+      }
+    }
+    saving.current = false;
   };
   return (
     <SlimePicker look={look} onChange={change} error={error}>

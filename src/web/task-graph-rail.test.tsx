@@ -30,7 +30,7 @@ import {
   sessionChange,
 } from "./test-utils.ts";
 
-import { defaultLookOf, jellyColorOf } from "../shared/slimes.ts";
+import { defaultLookOf, jellyColorOf, pixelArtPaths } from "../shared/slimes.ts";
 function makeNode(over: Partial<TaskNode> & Pick<TaskNode, "key" | "title">): TaskNode {
   return {
     status: "pending",
@@ -101,6 +101,26 @@ afterEach(() => {
 });
 
 describe("TaskProgressIcon：嫩芽进度图标", () => {
+  it("16 层压进 7 节时，同侧的待办芽不会盖掉已完成叶片的根部", () => {
+    const nodes = Array.from({ length: 16 }, (_, i) =>
+      makeNode({ key: `s${i}`, title: `步骤 ${i + 1}`, sortOrder: i, status: i === 0 ? "done" : "pending" }),
+    );
+    const edges = nodes.slice(1).map((node, i) => ({ fromKey: nodes[i]!.key, toKey: node.key }));
+    const color = jellyColorOf("orange");
+    const leaf = taskProgressPaths({ nodes, edges }, color).find((path) => path.fill === color.blob);
+    expect(leaf).toEqual(pixelArtPaths([
+      "..........", "..........", "..........", "..........", "..........",
+      "..........", ".xx.......", "..xx......", "..........", "..........",
+    ], { x: color.blob })[0]);
+  });
+
+  it("所有步骤都没轮到时，茎画成虚线，底节也不例外", () => {
+    const nodes = [makeNode({ key: "s1", title: "准备", sortOrder: 0, status: "pending" })];
+    const paths = taskProgressPaths({ nodes, edges: [] }, jellyColorOf("orange"));
+    expect(paths.map((path) => path.fill)).toContain("#c9d1bd");
+    expect(paths.map((path) => path.fill)).not.toContain("#7a8a5a");
+  });
+
   it("一层一节、叶子按步骤状态上色，跟随项目经理颜色并用 rem 缩放；同层并行的两步长在同一节的左右两边", () => {
     const graph = makeGraph({
       id: 1,

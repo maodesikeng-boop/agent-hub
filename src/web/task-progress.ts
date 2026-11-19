@@ -55,25 +55,26 @@ export function taskProgressPaths(graph: Pick<TaskGraph, "nodes" | "edges">, col
   // 第 i 节在第几行：从下（第 7 行）往上排到第 1 行，节多了几节挤在同一行
   const rowOf = (i: number) => 8 - Math.max(1, Math.round(((i + 1) * 7) / n));
   const reached = layers.findLastIndex((states) => states.some((s) => s !== "bud"));
-  const solidFrom = rowOf(Math.max(0, reached));
+  const solidFrom = reached < 0 ? TASK_PROGRESS_GRID - 1 : rowOf(reached);
   for (let y = 1; y < 9; y++) grid[y]![4] = y >= solidFrom ? "t" : y % 2 === 1 ? "d" : ".";
+  const leaves = Array.from({ length: TASK_PROGRESS_GRID }, (): { left: LeafState[]; right: LeafState[] } => ({ left: [], right: [] }));
   layers.forEach((states, i) => {
-    const y = rowOf(i);
-    const sides: Array<["left" | "right", LeafState]> =
-      states.length === 1
-        ? [[i % 2 === 0 ? "left" : "right", states[0]!]]
-        : [
-            ["left", merge(states.slice(0, Math.ceil(states.length / 2)))],
-            ["right", merge(states.slice(Math.ceil(states.length / 2)))],
-          ];
-    for (const [side, state] of sides) {
-      const dir = side === "left" ? -1 : 1;
+    const { left, right } = leaves[rowOf(i)]!;
+    if (states.length === 1) {
+      (i % 2 === 0 ? left : right).push(states[0]!);
+    } else {
+      const split = Math.ceil(states.length / 2);
+      left.push(merge(states.slice(0, split)));
+      right.push(merge(states.slice(split)));
+    }
+  });
+  leaves.forEach(({ left, right }, y) => {
+    for (const [dir, states] of [[-1, left], [1, right]] as const) {
+      if (states.length === 0) continue;
+      const state = merge(states);
       const ch = LEAF_CHAR[state];
-      if (state === "bud") {
-        grid[y]![4 + dir] = ch;
-        continue;
-      }
       grid[y]![4 + dir] = ch;
+      if (state === "bud") continue;
       grid[y]![4 + 2 * dir] = ch;
       grid[y - 1]![4 + 2 * dir] = ch;
       grid[y - 1]![4 + 3 * dir] = ch;

@@ -700,7 +700,7 @@ export function jellyColorOf(id: JellyColorId): JellyColor {
 
 const LOOKS = new Map<string, SlimeLook>();
 
-function internLook(fruit: PmFruit, color: JellyColorId): SlimeLook {
+export function slimeLookOf(fruit: PmFruit, color: JellyColorId): SlimeLook {
   const key = `${fruit}:${color}`;
   let look = LOOKS.get(key);
   if (look === undefined) {
@@ -713,7 +713,7 @@ function internLook(fruit: PmFruit, color: JellyColorId): SlimeLook {
 /** 后置：编号对应的默认形象，造型是 pmFruitOf(pmId)，颜色是这个造型的原色。同样的编号每次返回同一个对象。 */
 export function defaultLookOf(pmId: PmId): SlimeLook {
   const fruit = pmFruitOf(pmId);
-  return internLook(fruit, fruit);
+  return slimeLookOf(fruit, fruit);
 }
 
 /**
@@ -723,7 +723,7 @@ export function defaultLookOf(pmId: PmId): SlimeLook {
 export function resolvePmLook(pm: Pick<Pm, "id" | "avatarFruit" | "avatarColor">): SlimeLook {
   const fruit = isPmFruit(pm.avatarFruit) ? pm.avatarFruit : pmFruitOf(pm.id);
   const color = isJellyColorId(pm.avatarColor) ? pm.avatarColor : fruit;
-  return internLook(fruit, color);
+  return slimeLookOf(fruit, color);
 }
 
 /**
@@ -733,7 +733,7 @@ export function resolvePmLook(pm: Pick<Pm, "id" | "avatarFruit" | "avatarColor">
 export function pickNewPmLook(taken: readonly SlimeLook[], pmId: PmId): SlimeLook {
   const used = new Set(taken.map((look) => look.fruit));
   const free = PM_FRUITS.find((fruit) => !used.has(fruit));
-  return free === undefined ? defaultLookOf(pmId) : internLook(free, free);
+  return free === undefined ? defaultLookOf(pmId) : slimeLookOf(free, free);
 }
 
 /** 后置：形象的字符串键（如 "persimmon:sky"），飞书头像缓存按它认。parseLookKey(lookKey(x)) 等于 x。 */
@@ -745,7 +745,7 @@ export function lookKey(look: SlimeLook): string {
 export function parseLookKey(key: string): SlimeLook | null {
   const [fruit, color, ...rest] = key.split(":");
   if (rest.length > 0 || !isPmFruit(fruit) || !isJellyColorId(color)) return null;
-  return internLook(fruit, color);
+  return slimeLookOf(fruit, color);
 }
 
 const PATHS = new Map<string, readonly SlimePath[]>();
