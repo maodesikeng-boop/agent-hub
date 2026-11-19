@@ -289,10 +289,11 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
   /** 每个群最近几次发消息的时间（同一个群每秒不超过 FEISHU_CHAT_SENDS_PER_SECOND 条）。 */
   const sendTimes = new LRUCache<string, number[]>({ max: FEISHU_CHAT_CACHE_MAX });
   const seenInboundMessages = new LRUCache<FeishuMessageId, true>({ max: FEISHU_SEEN_MESSAGES_MAX });
-  const inboundGateChats = new Set<FeishuChatId>();
+  const inboundGateEpochs = new Map<FeishuChatId, number>();
   const inboundCursorHold = new Map<FeishuChatId, number>();
+  let inboundEpoch = 0;
+  let inboundCatchUpTargetEpoch = 0;
   let inboundCatchUpInflight: Promise<void> | null = null;
-  let inboundCatchUpRequested = false;
   let hadLiveSession = false;
   let scopesInflight: Promise<void> | null = null;
   let scopesChecked = false;
@@ -300,7 +301,7 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
 
   // ---- 排队 ----
 
-  const inbound = { lanes: new Map<FeishuChatId, Lane>(), count: 0, limit: FEISHU_INBOUND_QUEUE_MAX, paused: (chatId: FeishuChatId) => inboundGateChats.has(chatId) };
+  const inbound = { lanes: new Map<FeishuChatId, Lane>(), count: 0, limit: FEISHU_INBOUND_QUEUE_MAX, paused: (chatId: FeishuChatId) => inboundGateEpochs.has(chatId) };
   // 建群对齐、补发时出站任务先排着不发（两边会改同一批群和水位），做完再接着发
   const outbound = { lanes: new Map<FeishuChatId, Lane>(), count: 0, limit: FEISHU_OUTBOUND_QUEUE_MAX, paused: (_chatId: FeishuChatId) => control !== null };
   type Queue = typeof outbound;
@@ -322,7 +323,7 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
   const activeTurns = new Set<ConversationId>();
   const idleWaiters: { resolve: () => void; uploads: boolean }[] = [];
   const busy = () => connectingCount > 0 || inbound.count > 0 || outbound.count > 0 || control !== null || inboundCatchUpInflight !== null ||
-    (linkUp && inboundCatchUpRequested) ||
+    (linkUp && inboundCatchUpTargetEpoch > 0) ||
     (linkUp && retryControl === null && (syncRequested || connectionRequested || dirtyChats.size > 0));
   const settleIdle = () => {
     for (const waiter of idleWaiters.splice(0)) {
@@ -677,6 +678,8 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     disconnectError = null;
     scopesChecked = false;
     scopesInflight = null;
+    inboundEpoch++;
+    inboundCatchUpTargetEpoch = 0;
     releaseAllInboundGates();
     if (retryControl !== null) clearTimeout(retryControl);
     retryControl = null;
@@ -703,25 +706,31 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     return scopesInflight;
   };
 
-  const releaseInboundGate = (chatId: FeishuChatId) => {
-    if (!inboundGateChats.delete(chatId)) return;
+  const releaseInboundGate = (chatId: FeishuChatId, maxEpoch?: number) => {
+    const gateEpoch = inboundGateEpochs.get(chatId);
+    if (gateEpoch === undefined) return;
+    if (maxEpoch !== undefined && gateEpoch > maxEpoch) return;
+    inboundGateEpochs.delete(chatId);
     const lane = inbound.lanes.get(chatId);
     if (lane !== undefined) startLane(inbound, chatId, lane);
   };
 
-  const releaseAllInboundGates = () => {
-    for (const chatId of [...inboundGateChats]) releaseInboundGate(chatId);
+  const releaseAllInboundGates = (maxEpoch?: number) => {
+    for (const chatId of [...inboundGateEpochs.keys()]) releaseInboundGate(chatId, maxEpoch);
   };
+
+  const isCatchUpStale = (runEpoch: number) => closed || !linkUp || transport === null || inboundEpoch !== runEpoch;
 
   const noteInboundQueueDrop = (chatId: FeishuChatId, at: number) => {
     const prev = inboundCursorHold.get(chatId);
     inboundCursorHold.set(chatId, prev === undefined ? at : Math.min(prev, at));
   };
 
-  const catchUpInboundChat = async (chat: FeishuChatBinding, includeOverlap: boolean) => {
+  const catchUpInboundChat = async (chat: FeishuChatBinding, includeOverlap: boolean, runEpoch: number) => {
     const app = store.app();
     const target = activeTarget(chat);
-    if (app === null || target === null || transport === null || !linkUp || closed) return;
+    const activeTransport = transport;
+    if (app === null || target === null || activeTransport === null || isCatchUpStale(runEpoch)) return;
     if (target.kind === "pm" && mentionOnly) {
       log(`飞书：入站补拉跳过项目群 chatId=${chat.chatId} pmId=${target.pmId} reason=missing_scope:${FEISHU_GROUP_MSG_SCOPE}`);
       return;
@@ -744,8 +753,8 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     let pageToken: string | undefined;
     let pages = 0;
     while (pages < FEISHU_INBOUND_CATCHUP_MAX_PAGES && fetched.length < FEISHU_INBOUND_CATCHUP_MAX_MESSAGES) {
-      if (!linkUp || closed || transport === null) return;
-      const page = await transport.listMessages({
+      if (isCatchUpStale(runEpoch)) return;
+      const page = await activeTransport.listMessages({
         chatId: chat.chatId,
         chatType,
         botOpenId: app.botOpenId,
@@ -755,6 +764,7 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
         pageSize: Math.min(FEISHU_MESSAGE_LIST_PAGE_SIZE, FEISHU_INBOUND_CATCHUP_MAX_MESSAGES - fetched.length),
         ...(pageToken !== undefined ? { pageToken } : {}),
       });
+      if (isCatchUpStale(runEpoch)) return;
       pages++;
       let reachedBeforeFloor = false;
       for (const raw of page.items) {
@@ -779,7 +789,7 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
       missedEvents.push(parsed);
     }
 
-    if (closed || !linkUp) return;
+    if (isCatchUpStale(runEpoch)) return;
     if (missedEvents.length === 0) {
       inboundCursorHold.delete(chat.chatId);
       return;
@@ -795,6 +805,7 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
       }
       lane.tasks.unshift(...accepted.map((ev) => inboundTask(() => handleInbound(ev))));
       inbound.count += accepted.length;
+      startLane(inbound, chat.chatId, lane);
     }
     if (dropped.length > 0) {
       const firstDropped = dropped[0]!;
@@ -811,8 +822,9 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
   };
 
   const pumpInboundCatchUp = () => {
-    if (closed || !linkUp || inboundCatchUpInflight !== null || !inboundCatchUpRequested) return;
-    inboundCatchUpRequested = false;
+    if (closed || !linkUp || inboundCatchUpInflight !== null || inboundCatchUpTargetEpoch === 0) return;
+    const runEpoch = inboundCatchUpTargetEpoch;
+    inboundCatchUpTargetEpoch = 0;
     const includeOverlap = hadLiveSession;
     inboundCatchUpInflight = (async () => {
       try {
@@ -822,18 +834,18 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
         else log(`飞书：入站补拉前检查权限出错：${errorText(error)}`);
         return;
       }
-      if (!linkUp || closed || owner() === null || store.app() === null) return;
+      if (isCatchUpStale(runEpoch) || owner() === null || store.app() === null) return;
       const catchUpLimit = pLimit(FEISHU_INBOUND_CATCHUP_CONCURRENCY);
       let abortedByAuth = false;
       await Promise.all(
         store.chats().map((chat) =>
           catchUpLimit(async () => {
-            if (!linkUp || closed || abortedByAuth || activeTarget(chat) === null) {
-              releaseInboundGate(chat.chatId);
+            if (isCatchUpStale(runEpoch) || abortedByAuth || activeTarget(chat) === null) {
+              releaseInboundGate(chat.chatId, runEpoch);
               return;
             }
             try {
-              await catchUpInboundChat(chat, includeOverlap);
+              await catchUpInboundChat(chat, includeOverlap, runEpoch);
             } catch (error) {
               if (error instanceof FeishuAuthError) {
                 abortedByAuth = true;
@@ -844,21 +856,22 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
               const targetKind = chat.target.kind === "router" ? "router" : `pm:${chat.target.pmId ?? "none"}`;
               log(`飞书：入站补拉跳过会话 chatId=${chat.chatId} target=${targetKind} code=${code} reason=${errorText(error)}`);
             } finally {
-              releaseInboundGate(chat.chatId);
+              releaseInboundGate(chat.chatId, runEpoch);
             }
           }),
         ),
       );
-      if (linkUp && !closed && !abortedByAuth) hadLiveSession = true;
+      if (!isCatchUpStale(runEpoch) && !abortedByAuth) hadLiveSession = true;
     })().finally(() => {
-      releaseAllInboundGates();
+      releaseAllInboundGates(runEpoch);
       inboundCatchUpInflight = null;
-      if (inboundCatchUpRequested && linkUp && !closed) pumpInboundCatchUp();
+      if (inboundCatchUpTargetEpoch > 0 && linkUp && !closed) pumpInboundCatchUp();
       settleIdle();
     });
   };
 
   const onConnected = () => {
+    const epoch = ++inboundEpoch;
     if (downSince !== null) {
       hadLiveSession = true;
       log(`飞书：长连接已重连，断了 ${Math.round((now() - downSince) / 1000)} 秒`);
@@ -873,10 +886,11 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     retryControl = null;
     const existingActive = store.chats().filter((c) => activeTarget(c) !== null);
     if (existingActive.length > 0) {
-      for (const chat of existingActive) inboundGateChats.add(chat.chatId);
-      inboundCatchUpRequested = true;
+      for (const chat of existingActive) inboundGateEpochs.set(chat.chatId, epoch);
+      inboundCatchUpTargetEpoch = epoch;
       pumpInboundCatchUp();
     } else {
+      inboundCatchUpTargetEpoch = 0;
       hadLiveSession = true;
     }
     requestControl("connection");
@@ -902,6 +916,8 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
           }
           linkUp = false;
           lastError = disconnectError = reason;
+          inboundEpoch++;
+          inboundCatchUpTargetEpoch = 0;
           releaseAllInboundGates();
           contexts.clearAll();
         },
@@ -2290,7 +2306,7 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
       const holdAt = inboundCursorHold.get(message.chatId);
       if (
         message.at > 0 &&
-        !inboundGateChats.has(message.chatId) &&
+        !inboundGateEpochs.has(message.chatId) &&
         (holdAt === undefined || message.at < holdAt) &&
         store.chatById(message.chatId) !== null
       ) {
@@ -2829,7 +2845,8 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
           }
         }
         dirtyChats.clear();
-        inboundCatchUpRequested = false;
+        inboundEpoch++;
+        inboundCatchUpTargetEpoch = 0;
         releaseAllInboundGates();
         seenInboundMessages.clear();
         inboundCursorHold.clear();
