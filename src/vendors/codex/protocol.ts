@@ -145,18 +145,25 @@ function configKeySegment(name: string): string {
 
 /**
  * 只读 Worker 追加的 codex 配置（设计 2.3）。sandbox 本身（read-only）由 thread/start 的参数给，这里只补两样：
- * - 密钥禁读：2026-11-07 S5 实测，只有“default_permissions + profile 继承 :read-only + filesystem 路径 none”生效，
- *   permissions.filesystem.deny_read 和 profile 里的 deny_read 都无效。通配（secretGlobs）这种写法表达不了，不写；
- *   数据目录按读边界展开的禁读清单（dataDirDenied：state/ 整个、run/admin.sock……）也写成 none；codex 只把工具命令放进沙箱，
- *   它自己读启动文件不受影响；run/bin（hub 命令）和 hub.sock 不在清单里，照常能用；
+ * - 禁读：2026-11-07 S5 实测，只有“default_permissions + profile 继承 :read-only + filesystem 路径 none”生效，
+ *   permissions.filesystem.deny_read 和 profile 里的 deny_read 都无效。通配（secretGlobs）这种写法表达不了，不写。
+ *   数据目录和外层 OS 沙箱用同一套读边界（dataDirScope）：整个数据目录 none，放行项（worktrees、uploads、tools、run/bin、
+ *   这次会话的启动目录）和 hub.sock 再写 read（codex 按更具体的路径为准），启动后才建的文件也落在 none 的子树里。
+ *   codex 只把工具命令放进沙箱，它自己读启动文件、~/.codex/auth.json 不受影响；
  * - 连接器：codex 原生放行 readOnlyHint 的，补充 → approval_mode="approve"，排除 → disabled_tools（整个服务器 → enabled=false）。
  *   codex 配置要确切的服务器名和工具名，通配的写不进去；补充的通配项靠 elicitation 兜底（decideMcpElicitation）。
  */
 export function codexReadonlyConfig(policy: ReadonlyPolicy): Record<string, unknown> {
+  const filesystem: Record<string, "none" | "read"> = Object.fromEntries(policy.secretPaths.map((p) => [p, "none"]));
+  const scope = policy.dataDirScope;
+  if (scope !== undefined) {
+    filesystem[scope.dataDir] = "none";
+    for (const p of [...scope.readable, ...scope.connectable]) filesystem[p] = "read";
+  }
   const config: Record<string, unknown> = {
     default_permissions: CODEX_READONLY_PROFILE,
     [`permissions.${CODEX_READONLY_PROFILE}.extends`]: ":read-only",
-    [`permissions.${CODEX_READONLY_PROFILE}.filesystem`]: Object.fromEntries([...policy.secretPaths, ...(policy.dataDirDenied ?? [])].map((p) => [p, "none"])),
+    [`permissions.${CODEX_READONLY_PROFILE}.filesystem`]: filesystem,
   };
   const split = (rule: string): [string, string] => {
     const slash = rule.indexOf("/");

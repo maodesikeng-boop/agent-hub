@@ -13,6 +13,7 @@ import {
   EMPTY_TOKEN_USAGE,
   MAX_CATALOG_MODELS,
   MAX_COMMANDS,
+  dataDirReadScope,
   type AgentSessionRow,
   type DriverEvent,
   type LaunchFiles,
@@ -489,6 +490,7 @@ child.on("exit", (code, sig) => {
               secretPaths: [join(homeDir, ".cursor", "auth.json")],
               secretGlobs: ["**/.env"],
               connectors: { extraAllow: [], deny: [] },
+              dataDirScope: dataDirReadScope({ dataDir: join(dir, "data"), launchDir: join(dir, "data", "state", "launch", "1") }),
             },
           }
         : {}),
@@ -850,6 +852,8 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       expect(runtimeDirs.every((d) => existsSync(d))).toBe(true);
       expect(capturedInput!.writableDirs).not.toContain(join(isolatedHome, ".cursor"));
       expect(capturedInput!.writableFileGlobs).toContain(join(isolatedHome, ".cursor", "statsig-cache.json"));
+      // 数据目录读边界原样交给外层只读沙箱（整个数据目录禁读，只放行几处）
+      expect(capturedInput!.dataDirScope).toEqual(dataDirReadScope({ dataDir: join(dir, "data"), launchDir: join(dir, "data", "state", "launch", "1") }));
 
       const perms = h.logs().filter((e) => e.event === "permission_outcome");
       expect(perms).toEqual([

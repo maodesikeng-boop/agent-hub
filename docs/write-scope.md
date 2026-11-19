@@ -14,7 +14,8 @@
 - 其余一律禁读：`state/`（`ui-token`、`*-secrets.json`、`mesh/`、`push-*.json`、`hub.sqlite*`、`peers*.json`、`pm-memory/`、`personas/`、`router-home/`、`logs/`、别的会话的启动目录……）、`backups/`、`pm-home/`、`sent-files/`，以及以后新加的、历史遗留的顶层项（默认禁读，新顶层项要放行得改 `DATA_DIR_READABLE_ENTRIES`）。
 - 各层怎么落实：
   - 包整个进程的 OS 沙箱按边界精确执行：macOS `seatbeltProfile` / `readonlySeatbeltProfile` 先 `(deny file-read* (subpath 数据目录))`、放行元数据（往上找配置的工具 stat 不会撞上 EPERM）、再放开放行项，`network-outbound` 只放行 `hub.sock`；Linux `bwrapArgs` / `readonlyBwrapArgs` 把数据目录换成 0700 空 tmpfs，放行项只读挂回、`hub.sock` 绑回，最后 `--remount-ro`；Windows 见下文。
-  - 表达不了“禁读区里再放行”的工具层用同一个边界展开的禁读清单（`dataDirDenyList`，`state/` 整个禁）：claude 只读的 Read 规则和自带沙箱 `denyRead`、codex 只读权限档的 `none`、agy 只读规则的 `read_file`；Windows MXC 的 `deniedPaths` 用精确展开（放行启动目录）。
+  - codex 只读不包外层（它自己的 `readOnly` 沙箱不能嵌套），权限档写同一套边界：整个数据目录 `none`，放行项和 `hub.sock` 再写 `read`（codex 按更具体的路径为准），启动后才建的文件也落在 `none` 的子树里；codex 进程自己读启动文件和 `~/.codex/auth.json` 不受影响。
+  - 表达不了“禁读区里再放行”的工具层用同一个边界展开的禁读清单（`dataDirDenyList`，`state/` 整个禁）：claude 只读的 Read 规则和自带沙箱 `denyRead`、agy 只读规则的 `read_file`；Windows MXC 的 `deniedPaths` 用精确展开（放行启动目录）。清单除了列目录看到的，还按 `paths.ts` 的布局补上启动时还没有的已知项（`provider-secrets.json`、`backups/`、`pm-home/`、`run/admin.sock`、`hub.sqlite-wal` 等），布局之外、启动后新冒出来的名字要等下次启动；MXC 只收已存在的路径。列目录出错（目录没了、是个文件除外）一律拒绝启动。
   - 分享（`daemon/sent-files.ts` 的 `isShareable`）在数据目录里也不超出这个边界。
 - Worker 自己的准备命令日志（`state/logs/setup/worker-<编号>.log`）也在禁读区里；准备命令失败时，任务说明里已经附了命令和输出末尾。
 

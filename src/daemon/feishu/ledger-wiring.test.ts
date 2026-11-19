@@ -116,7 +116,7 @@ describe("账本接线", () => {
     const launchDir = `${paths.launchDir}/7`;
     const scope = dataDirReadScope({ dataDir: paths.home, launchDir });
     expect(scope.readable.some((p) => paths.feishuSecretsFile.startsWith(`${p}/`))).toBe(false);
-    expect(dataDirDenyList(toolLayerReadScope(scope, launchDir), (dir) => (dir === paths.home ? ["state", "worktrees"] : []))).toEqual([paths.stateDir]);
+    expect(dataDirDenyList(toolLayerReadScope(scope, launchDir), (dir) => (dir === paths.home ? ["state", "worktrees"] : []))).toContain(paths.stateDir);
   });
 
   it("db-retention 每天清理时调 prunePosts，删掉超过 FEISHU_POST_RETENTION_DAYS 的已定稿记录", async () => {

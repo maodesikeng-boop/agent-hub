@@ -6,13 +6,16 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { dataDirReadScope, workerWriteScope } from "../../shared/index.ts";
-import { EXPECTED_PROBE_OUTPUT, makeSandboxDataDir, readProbeScript } from "./data-dir-fixture.ts";
+import { AGENT_VENDORS, buildReadonlyPolicy, dataDirReadScope, workerWriteScope } from "../../shared/index.ts";
+import { agyReadonlySandboxInput } from "../../vendors/agy/readonly.ts";
+import { piReadonlySandboxInput } from "../../vendors/pi/readonly.ts";
+import { EXPECTED_PROBE_OUTPUT, makeSandboxDataDir, readProbeScript, writeProbeCli } from "./data-dir-fixture.ts";
 import { forceKill, isAlive, signalChild, signalTarget, termGroupAfterExit } from "./process.ts";
 import { FAKE_CLAUDE, makeHarness, realSleep, type Harness } from "./test-helpers.ts";
 import {
   osSandboxAvailable,
   scanSecretGlobs,
+  spawnInWriteScope,
   wrapInOsSandbox,
   wrapInReadonlyOsSandbox,
 } from "./write-scope.ts";
@@ -140,6 +143,45 @@ describe.runIf(process.platform === "linux" && osSandboxAvailable("linux"))("真
         "linux",
       );
       expect(await run(readonly)).toEqual(EXPECTED_PROBE_OUTPUT);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it("六家厂商：普通 Worker 照各自的包法起、外层只读的 agy 和 pi 照各自的只读参数起，hub 外壳能跑、hub.sock 连得上，密钥和沙箱命令拼好之后才建的敏感文件都读不到", async () => {
+    const vbRoot = join(root, "vb");
+    const fakeHome = join(vbRoot, "user");
+    mkdirSync(fakeHome, { recursive: true });
+    const fixture = await makeSandboxDataDir(vbRoot);
+    const cli = writeProbeCli(vbRoot);
+    try {
+      const run = async (command: { command: string; args: string[] }) => {
+        fixture.createLate();
+        const child = spawn(command.command, command.args, { cwd: fixture.own, env: { ...process.env, ...fixture.env }, stdio: ["ignore", "pipe", "ignore"] });
+        let out = "";
+        child.stdout!.on("data", (chunk: Buffer) => (out += chunk.toString("utf8")));
+        await new Promise((resolve) => child.on("close", resolve));
+        return out.trim().split("\n");
+      };
+      const scope = workerWriteScope({ role: "worker", dataDir: fixture.dataDir, cwd: fixture.own, launchDir: fixture.launchDir })!;
+      for (const vendor of AGENT_VENDORS) {
+        expect(await run(spawnInWriteScope(vendor, { command: cli, args: [] }, scope, undefined, undefined, "linux")), vendor).toEqual(EXPECTED_PROBE_OUTPUT);
+      }
+      const policy = buildReadonlyPolicy({
+        homeDir: fakeHome,
+        stateDir: fixture.stateDir,
+        dataDirScope: dataDirReadScope({ dataDir: fixture.dataDir, launchDir: fixture.launchDir, extraReadable: [fixture.own] }),
+      });
+      for (const [vendor, build] of [
+        ["agy", (tmpDir: string) => agyReadonlySandboxInput({ homeDir: fakeHome, tmpDir, policy })],
+        ["pi", (tmpDir: string) => piReadonlySandboxInput({ homeDir: fakeHome, tmpDir, policy })],
+      ] as const) {
+        const tmpDir = join(vbRoot, `${vendor}-ro-tmp`);
+        mkdirSync(tmpDir, { recursive: true });
+        const readonly = wrapInReadonlyOsSandbox({ command: cli, args: [] }, build(tmpDir), "linux");
+        expect(readonly.osSandboxed).toBe(true);
+        expect(await run(readonly), vendor).toEqual(EXPECTED_PROBE_OUTPUT);
+      }
     } finally {
       await fixture.close();
     }

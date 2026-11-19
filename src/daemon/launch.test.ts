@@ -346,6 +346,12 @@ describe("prepareLaunch（M2、M3）", () => {
       expect(settings.sandbox).toMatchObject({ enabled: false });
     } else {
       expect(settings.sandbox).toMatchObject({ enabled: true, failIfUnavailable: true, enableWeakerNetworkIsolation: true });
+      // 数据目录里启动时还没有的已知敏感项（备份、遗留的 run/tunnel）也进了 claude 的禁读：运行期才建的照样读不到
+      for (const known of [join(dir, "backups"), join(dir, "run", "tunnel")]) {
+        expect(existsSync(known)).toBe(false);
+        expect(settings.sandbox.filesystem.denyRead).toContain(known);
+        expect(settings.permissions.deny.filter((rule: string) => rule.startsWith("Read(") && rule.includes(known))).not.toEqual([]);
+      }
     }
     expect(readonly.writeScope).toBeUndefined();
     expect(normal.writeScope).toMatchObject({ dataDir: dir, protectedRoots: [dir], writableDirs: [wt] });
@@ -384,7 +390,7 @@ describe("prepareLaunch（M2、M3）", () => {
     expect((await make2()(row(1))).readonly).toBeUndefined();
   });
 
-  it("数据目录读边界：普通 Worker 的 writeScope.readScope、只读 Worker 的 readonly.dataDirScope 都放行这次会话自己的启动目录；工具层禁读清单列出数据目录里别的顶层项和 run/admin.sock", async () => {
+  it("数据目录读边界：普通 Worker 的 writeScope.readScope、只读 Worker 的 readonly.dataDirScope 都放行这次会话自己的启动目录；工具层禁读清单列出数据目录里别的顶层项、run/admin.sock 和遗留的 run/tunnel", async () => {
     const make2 = () => createLaunchPreparer({ launchDir, dataDir: dir, stateDir: join(dir, "state"), homeDir: "/Users/u", osSandboxed: true, worktreesDir, getLaunchContext: (id) => contexts.get(id)!, tokens, hubSock, hubBinDir: "/agent-hub/run/bin" });
     for (const name of ["state", "backups", "pm-home", "pm-notes", "sent-files", "uploads", "tools"]) mkdirSync(join(dir, name), { recursive: true });
     mkdirSync(join(dir, "run", "bin"), { recursive: true });
@@ -404,7 +410,7 @@ describe("prepareLaunch（M2、M3）", () => {
     const readonly = await make2()({ ...row(9, wt, "worker"), vendor: "agy" });
     expect(readonly.readonly?.dataDirScope?.readable).toContain(ownLaunch);
     expect([...(readonly.readonly?.dataDirDenied ?? [])].sort()).toEqual(
-      [join(dir, "backups"), join(dir, "pm-home"), join(dir, "pm-notes"), join(dir, "sent-files"), join(dir, "state"), join(dir, "run", "admin.sock")].sort(),
+      [join(dir, "backups"), join(dir, "pm-home"), join(dir, "pm-notes"), join(dir, "sent-files"), join(dir, "state"), join(dir, "run", "admin.sock"), join(dir, "run", "tunnel")].sort(),
     );
     expect(readonly.readonly?.secretPaths.some((p) => p.startsWith(`${dir}/`))).toBe(false);
   });

@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { AGENT_VENDORS, DriverError, buildReadonlyPolicy, dataDirReadScope, workerWriteScope } from "../../shared/index.ts";
-import { EXPECTED_PROBE_OUTPUT, makeSandboxDataDir, readProbeScript, type SandboxDataDir } from "./data-dir-fixture.ts";
+import { EXPECTED_PROBE_OUTPUT, makeSandboxDataDir, readProbeScript, writeProbeCli, type SandboxDataDir } from "./data-dir-fixture.ts";
+import { agyReadonlySandboxInput } from "../../vendors/agy/readonly.ts";
+import { piReadonlySandboxInput } from "../../vendors/pi/readonly.ts";
 import { isAlive, signalChild, termGroupAfterExit, waitForExit } from "./process.ts";
 import { FAKE_CLAUDE, makeHarness, realSleep, type Harness } from "./test-helpers.ts";
 import {
@@ -392,6 +394,57 @@ describe.runIf(canRunSandboxExec)("真 sandbox-exec：数据目录读边界", ()
     mkdirSync(join(root, "ro-tmp"), { recursive: true });
     expect(probe(run).trim().split("\n")).toEqual(EXPECTED_PROBE_OUTPUT);
   });
+});
+
+// 六家厂商的进程照各自的包法起（普通 Worker 带上关掉自带沙箱的参数，外层只读的厂商用各自的只读参数）：起得来、hub 外壳能跑、hub.sock 连得上，
+// 数据目录的密钥、库、备份连同沙箱命令拼好之后才建的都读不到
+describe.runIf(canRunSandboxExec)("真 sandbox-exec：六家厂商的 Worker 起进程、调 hub、守读边界", () => {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ah-vb-")));
+  const fakeHome = join(root, "user");
+  let fixture: SandboxDataDir;
+  let cli: string;
+  beforeAll(async () => {
+    fixture = await makeSandboxDataDir(root);
+    cli = writeProbeCli(root);
+    mkdirSync(fakeHome, { recursive: true });
+  });
+  afterAll(async () => {
+    await fixture?.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const probe = (command: SpawnCommand) => {
+    fixture.createLate();
+    return execFileSync(command.command, command.args, { cwd: fixture.own, env: { ...process.env, ...fixture.env }, stdio: ["ignore", "pipe", "ignore"], encoding: "utf8" })
+      .trim()
+      .split("\n");
+  };
+  const readonlyPolicy = () =>
+    buildReadonlyPolicy({
+      homeDir: fakeHome,
+      stateDir: fixture.stateDir,
+      dataDirScope: dataDirReadScope({ dataDir: fixture.dataDir, launchDir: fixture.launchDir, extraReadable: [fixture.own] }),
+    });
+
+  for (const vendor of AGENT_VENDORS) {
+    it(`${vendor} 普通 Worker`, () => {
+      const scope = workerWriteScope({ role: "worker", dataDir: fixture.dataDir, cwd: fixture.own, launchDir: fixture.launchDir })!;
+      expect(probe(spawnInWriteScope(vendor, { command: cli, args: [] }, scope, undefined, undefined, "darwin"))).toEqual(EXPECTED_PROBE_OUTPUT);
+    });
+  }
+
+  for (const [vendor, input] of [
+    ["agy", (tmpDir: string) => agyReadonlySandboxInput({ homeDir: fakeHome, tmpDir, policy: readonlyPolicy() })],
+    ["pi", (tmpDir: string) => piReadonlySandboxInput({ homeDir: fakeHome, tmpDir, policy: readonlyPolicy() })],
+  ] as const) {
+    it(`${vendor} 只读 Worker（外层只读沙箱）`, () => {
+      const tmpDir = join(root, `${vendor}-ro-tmp`);
+      mkdirSync(tmpDir, { recursive: true });
+      const run = wrapInReadonlyOsSandbox({ command: cli, args: [] }, input(tmpDir), "darwin");
+      expect(run.osSandboxed).toBe(true);
+      expect(probe(run)).toEqual(EXPECTED_PROBE_OUTPUT);
+    });
+  }
 });
 
 // 驱动层真的用上了：claude 驱动起 Worker 时包了沙箱（假 claude 启动时往数据目录里写一个文件，写不成），项目经理不包

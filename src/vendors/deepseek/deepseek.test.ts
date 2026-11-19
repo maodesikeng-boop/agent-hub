@@ -22,6 +22,7 @@ import {
   READONLY_SECRET_HOME_PATHS,
   agentLaunchArgs,
   buildReadonlyPolicy,
+  dataDirReadScope,
   bundledModelCatalog,
   notFoundCode,
   vendorFailureOf,
@@ -814,9 +815,11 @@ rl.on("line", (line) => {
     writeFileSync(otherVendorSecret, "{}", { mode: 0o600 });
 
     const basePolicy = buildReadonlyPolicy({ homeDir: homedir(), stateDir: join(h.dir, "ro-state") });
+    const dataDirScope = dataDirReadScope({ dataDir: join(h.dir, "data"), launchDir: join(h.dir, "data", "state", "launch", "1") });
     h.setReadonly({
       ...basePolicy,
       secretPaths: [...basePolicy.secretPaths, ownCredFile, ownEnvFile, otherVendorSecret],
+      dataDirScope,
     });
 
     const row = h.addSession();
@@ -859,6 +862,8 @@ rl.on("line", (line) => {
     expect(spawned.input.secretPaths).not.toContain(realpathSync(ownEnvFile));
     expect(spawned.input.secretPaths).toContain(otherVendorSecret);
     expect(spawned.input.secretGlobs).toContain("**/.env");
+    // 数据目录读边界原样交给外层只读沙箱（整个数据目录禁读，只放行几处）
+    expect(spawned.input.dataDirScope).toEqual(dataDirScope);
 
     // 核对 ACP request_permission 裁决结果
     const outcomes = Object.fromEntries(

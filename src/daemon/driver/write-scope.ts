@@ -7,14 +7,15 @@
 // - 已在 OS 沙箱里的进程不能再开自带沙箱：
 //   - claude：--settings 里写 sandbox.enabled: false（src/vendors/claude/settings.ts 的 buildSessionSettings）。
 //   - agy：包了的进程加 --settings {"enableTerminalSandbox":false}（agy 的 spec 的 capabilities.ownSandboxOffArgs）。
-//   - codex：turn/start 的 sandboxPolicy 用 externalSandbox；只读 Worker 不包外层，照用 codex 自己的 readOnly 沙箱。
+//   - codex：turn/start 的 sandboxPolicy 用 externalSandbox；只读 Worker 不包外层，照用 codex 自己的 readOnly 沙箱，权限档写同一套数据目录读边界。
 // 详见 docs/write-scope.md 与 docs/linux-sandbox-design.md。
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync, type Dirent } from "node:fs";
-import { readdir } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { opendir, realpath, stat } from "node:fs/promises";
+import { basename, dirname, join, relative, sep } from "node:path";
 import { LOCAL_ERRORS } from "../../shared/errors.ts";
 import { DATA_DIR_DENY_LIST_MAX } from "../../shared/limits.ts";
+import { resolveHubPaths } from "../../shared/paths.ts";
 import {
   AGENT_VENDORS,
   DATA_DIR_READABLE_ENTRIES,
@@ -744,11 +745,31 @@ export interface SecretScanLimits {
   maxMs?: number;
   maxMatches?: number;
   now?: () => number;
+  /** 逐项列一个目录（默认 fs/promises 的 opendir），单测注入用。 */
+  openDir?: (dir: string) => Promise<AsyncIterable<Dirent>>;
+}
+
+async function realpathOrNull(path: string): Promise<string | null> {
+  try {
+    return await realpath(path);
+  } catch {
+    return null;
+  }
+}
+
+async function statIs(path: string, kind: "file" | "directory"): Promise<boolean> {
+  try {
+    const st = await stat(path);
+    return kind === "file" ? st.isFile() : st.isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /**
- * 非递归栈遍历去重后的 roots（[row.cwd, ...row.addDirs]），找出匹配 secretGlobs 的已存在敏感文件绝对路径。异步列目录，起进程的链路里 await 它，不卡事件循环。
- * 跳过 SECRET_SCAN_SKIP_DIRS 和符号链接目录；任一上限（目录项数、耗时、命中数）触发立即抛 DriverError("spawn_failed", ...) 拒绝启动。
+ * 非递归栈遍历去重后的 roots（[row.cwd, ...row.addDirs]），找出匹配 secretGlobs 的已存在敏感文件绝对路径。异步逐项列目录（opendir），起进程的链路里 await 它，不卡事件循环。
+ * 跳过 SECRET_SCAN_SKIP_DIRS 和符号链接目录；列不出的目录（没有读权限）里有什么看不到，整个当敏感目录返回；
+ * 任一上限（目录项数、耗时、命中数）边列边查，触发立即抛 DriverError("spawn_failed", ...) 拒绝启动，列目录出别的错也一样。
  */
 export async function scanSecretGlobs(
   roots: readonly string[],
@@ -760,14 +781,14 @@ export async function scanSecretGlobs(
   const maxMs = limits?.maxMs ?? SECRET_SCAN_MAX_MS;
   const maxMatches = limits?.maxMatches ?? SECRET_SCAN_MAX_MATCHES;
   const now = limits?.now ?? Date.now;
+  const openDir = limits?.openDir ?? ((dir: string) => opendir(dir));
 
   const matchers = globs.map((g) => new RegExp(secretGlobRegex(g)));
   const uniqueRoots: string[] = [];
   const seenRoots = new Set<string>();
   for (const r of roots) {
-    if (!existsSync(r)) continue;
-    const real = realpathOrSelf(r);
-    if (seenRoots.has(real) || !isDirSync(real)) continue;
+    const real = await realpathOrNull(r);
+    if (real === null || seenRoots.has(real) || !(await statIs(real, "directory"))) continue;
     seenRoots.add(real);
     uniqueRoots.push(real);
   }
@@ -775,49 +796,56 @@ export async function scanSecretGlobs(
   const startAt = now();
   let entriesVisited = 0;
   const matched = new Set<string>();
+  const checkTime = (root: string) => {
+    if (now() - startAt > maxMs) {
+      throw new DriverError("spawn_failed", `只读沙箱扫描敏感文件耗时超限（超过 ${maxMs} ms，目录 ${root}）`);
+    }
+  };
+  const match = (path: string, root: string) => {
+    matched.add(path);
+    if (matched.size > maxMatches) {
+      throw new DriverError("spawn_failed", `只读沙箱扫描敏感文件超出命中数量上限（超过 ${maxMatches} 个，目录 ${root}）`);
+    }
+  };
+  const listFailed = (dir: string, error: unknown) =>
+    new DriverError("spawn_failed", `只读沙箱扫描敏感文件出错（列不出 ${dir}：${(error as NodeJS.ErrnoException).code ?? String(error)}）`);
 
   for (const root of uniqueRoots) {
     const stack: string[] = [root];
     while (stack.length > 0) {
-      if (now() - startAt > maxMs) {
-        throw new DriverError("spawn_failed", `只读沙箱扫描敏感文件耗时超限（超过 ${maxMs} ms，目录 ${root}）`);
-      }
+      checkTime(root);
       const dir = stack.pop()!;
-      let entries: Dirent[];
+      let entries: AsyncIterable<Dirent>;
       try {
-        entries = await readdir(dir, { withFileTypes: true });
-      } catch {
-        continue;
-      }
-      for (const entry of entries) {
-        entriesVisited++;
-        if (entriesVisited > maxEntries) {
-          throw new DriverError("spawn_failed", `只读沙箱扫描敏感文件超出目录项上限（超过 ${maxEntries} 项，目录 ${root}）`);
-        }
-        if (now() - startAt > maxMs) {
-          throw new DriverError("spawn_failed", `只读沙箱扫描敏感文件耗时超限（超过 ${maxMs} ms，目录 ${root}）`);
-        }
-        if (entry.isDirectory()) {
-          // Dirent.isDirectory() 对符号链接为 false，天然跳过符号链接目录
-          if (!SECRET_SCAN_SKIP_DIRS.has(entry.name)) {
-            stack.push(join(dir, entry.name));
-          }
+        entries = await openDir(dir);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "ENOENT" || code === "ENOTDIR") continue;
+        if (code === "EACCES" || code === "EPERM") {
+          match(dir, root);
           continue;
         }
-        const testName = `/${entry.name}`;
-        if (!matchers.some((re) => re.test(testName))) continue;
-        const fullPath = join(dir, entry.name);
-        if (entry.isSymbolicLink()) {
-          try {
-            if (!statSync(fullPath).isFile()) continue;
-          } catch {
+        throw listFailed(dir, error);
+      }
+      try {
+        for await (const entry of entries) {
+          entriesVisited++;
+          if (entriesVisited > maxEntries) {
+            throw new DriverError("spawn_failed", `只读沙箱扫描敏感文件超出目录项上限（超过 ${maxEntries} 项，目录 ${root}）`);
+          }
+          checkTime(root);
+          if (entry.isDirectory()) {
+            // Dirent.isDirectory() 对符号链接为 false，天然跳过符号链接目录
+            if (!SECRET_SCAN_SKIP_DIRS.has(entry.name)) stack.push(join(dir, entry.name));
             continue;
           }
+          if (!matchers.some((re) => re.test(`/${entry.name}`))) continue;
+          const fullPath = join(dir, entry.name);
+          if (entry.isSymbolicLink() && !(await statIs(fullPath, "file"))) continue;
+          match((await realpathOrNull(fullPath)) ?? fullPath, root);
         }
-        matched.add(realpathOrSelf(fullPath));
-        if (matched.size > maxMatches) {
-          throw new DriverError("spawn_failed", `只读沙箱扫描敏感文件超出命中数量上限（超过 ${maxMatches} 个，目录 ${root}）`);
-        }
+      } catch (error) {
+        throw error instanceof DriverError ? error : listFailed(dir, error);
       }
     }
   }
@@ -827,36 +855,69 @@ export async function scanSecretGlobs(
 
 // ---- 读边界展开成纯禁读清单 ----
 
+/** paths.ts 布局里没有、旧版本留下的敏感项（相对数据目录）。 */
+const LEGACY_DATA_DIR_ENTRIES: readonly string[] = [join("run", "tunnel")];
+
+/** 数据目录里已知的每一项（paths.ts 的布局，加库的 -wal、-shm、-journal 和旧版本留下的）：不管现在有没有。 */
+function knownDataDirPaths(dataDir: string): string[] {
+  const { home: _home, vendorPaths: _vendorPaths, ...layout } = resolveHubPaths({}, dataDir, { home: dataDir });
+  const db = layout.dbFile;
+  const inside = (p: string) => normalizePathForComparison(p) !== normalizePathForComparison(dataDir) && isPathInsideOrEqual(dataDir, p);
+  return [...Object.values(layout), `${db}-wal`, `${db}-shm`, `${db}-journal`, ...LEGACY_DATA_DIR_ENTRIES.map((rel) => join(dataDir, rel))].filter(inside);
+}
+
 /**
- * 把读边界展开成纯禁读清单，给表达不了“禁读区里再放行”的那几层用（claude 的 Read 规则和自带沙箱、codex 的权限档、agy 的规则、
- * Windows MXC 的 deniedPaths）：从数据目录往下，放行项（readable、connectable）及其子树跳过，放行项的上级目录展开成它下面的各项，
- * 别的整项禁读。只列已存在的；数据目录里新冒出来的顶层项要等下次启动才进清单（包整个进程的 OS 沙箱没有这个局限）。
- * 超过 DATA_DIR_DENY_LIST_MAX 项抛 DriverError("spawn_failed") 拒绝启动，不截断。
+ * 把读边界展开成纯禁读清单，给表达不了“禁读区里再放行”的那几层用（claude 的 Read 规则和自带沙箱、agy 的规则、Windows MXC 的 deniedPaths）：
+ * 从数据目录往下，放行项（readable、connectable）及其子树跳过，放行项的上级目录展开成它下面的各项，别的整项禁读。
+ * 列目录只看得到现在有的：paths.ts 布局里的已知项不管有没有都补进来（取它最上面一层不通往放行项的祖先），
+ * 启动后才建的密钥、备份、项目经理目录照样禁读；布局之外、启动后新冒出来的名字要等下次启动（包整个进程的 OS 沙箱没有这个局限）。
+ * 列目录出错（目录没了、是个文件除外）、超过 DATA_DIR_DENY_LIST_MAX 项都抛 DriverError("spawn_failed") 拒绝启动，不截断、不放行。
  */
 export function dataDirDenyList(scope: DataDirReadScope, listDir: (dir: string) => string[] = (dir) => readdirSync(dir)): string[] {
   const allowed = [...scope.readable, ...scope.connectable];
   const covered = (p: string) => allowed.some((a) => isPathInsideOrEqual(a, p));
   const leadsTo = (p: string) => allowed.some((a) => a !== p && isPathInsideOrEqual(p, a));
-  const out: string[] = [];
+  const denied: string[] = [];
+  const seen = new Set<string>();
+  const deny = (p: string) => {
+    const key = normalizePathForComparison(p);
+    if (seen.has(key)) return;
+    seen.add(key);
+    denied.push(p);
+    if (denied.length > DATA_DIR_DENY_LIST_MAX) {
+      throw new DriverError("spawn_failed", `数据目录读边界展开后超过 ${DATA_DIR_DENY_LIST_MAX} 项（${scope.dataDir}），拒绝启动`);
+    }
+  };
   const walk = (dir: string) => {
     let names: string[];
     try {
       names = listDir(dir);
-    } catch {
-      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") return;
+      if (code === "ENOTDIR") return deny(dir);
+      throw new DriverError("spawn_failed", `数据目录读边界展开失败：列不出 ${dir}（${code ?? String(error)}），拒绝启动`);
     }
     for (const name of [...names].sort()) {
       const child = join(dir, name);
       if (covered(child)) continue;
       if (leadsTo(child)) walk(child);
-      else out.push(child);
-      if (out.length > DATA_DIR_DENY_LIST_MAX) {
-        throw new DriverError("spawn_failed", `数据目录读边界展开后超过 ${DATA_DIR_DENY_LIST_MAX} 项（${scope.dataDir}），拒绝启动`);
-      }
+      else deny(child);
     }
   };
   walk(scope.dataDir);
-  return out;
+  for (const known of knownDataDirPaths(scope.dataDir)) {
+    let current = scope.dataDir;
+    for (const part of relative(scope.dataDir, known).split(sep)) {
+      current = join(current, part);
+      if (covered(current)) break;
+      if (!leadsTo(current)) {
+        deny(current);
+        break;
+      }
+    }
+  }
+  return denied.sort();
 }
 
 /**

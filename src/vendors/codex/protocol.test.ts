@@ -126,16 +126,12 @@ const policy = (connectors: { extraAllow?: string[]; deny?: string[] } = {}) => 
 
 describe("codexReadonlyConfig：只读 Worker 的 codex 配置（设计 2.3 / 第 5 节；S5 实测只有 profile 这种写法的 deny_read 生效）", () => {
   it("密钥禁读：default_permissions 指向 :read-only 的 profile，密钥路径设成 none", () => {
-    const cfg = codexReadonlyConfig({ ...policy(), dataDirDenied: ["/Users/u/.agent-hub/state", "/Users/u/.agent-hub/run/admin.sock"] });
+    const cfg = codexReadonlyConfig(policy());
     expect(cfg["default_permissions"]).toBe("hub_readonly");
     expect(cfg["permissions.hub_readonly.extends"]).toBe(":read-only");
     const fs = cfg["permissions.hub_readonly.filesystem"] as Record<string, string>;
     expect(fs["/Users/u/.ssh"]).toBe("none");
     expect(fs["/Users/u/.codex/auth.json"]).toBe("none");
-    // 数据目录：state/ 整个和 admin.sock 设成 none；run/bin（hub 命令）、hub.sock 不在清单里
-    expect(fs["/Users/u/.agent-hub/state"]).toBe("none");
-    expect(fs["/Users/u/.agent-hub/run/admin.sock"]).toBe("none");
-    expect(fs["/Users/u/.agent-hub/run/bin"]).toBeUndefined();
     expect(Object.values(fs).every((v) => v === "none")).toBe(true);
   });
 

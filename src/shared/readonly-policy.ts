@@ -30,12 +30,13 @@ export interface ReadonlyPolicy {
   protectedRoots?: string[];
   /**
    * 数据目录读边界（shared/write-scope.ts 的 dataDirReadScope）：包整个进程的外层只读沙箱按它禁读整个数据目录，只放行几处
-   * （worktrees、uploads、tools、run/bin、这次会话自己的启动目录），数据目录里只能连 hub.sock。启动准备（launch.ts、router/sandbox.ts）一定给。
+   * （worktrees、uploads、tools、run/bin、这次会话自己的启动目录），数据目录里只能连 hub.sock；codex 的权限档也照它写。
+   * 启动准备（launch.ts、router/sandbox.ts）一定给。
    */
   dataDirScope?: DataDirReadScope;
   /**
-   * 同一个边界展开成的禁读清单（daemon/driver/write-scope.ts 的 dataDirDenyList，列目录得到）：数据目录顶层除放行项外的每一项（state/ 整个）、
-   * run/ 里除 bin、hub.sock 外的每一项。只管工具调用、表达不了“禁读区里再放行”的那几层用：claude 的 Read 规则和自带沙箱、codex 的权限档、agy 的规则。
+   * 同一个边界展开成的禁读清单（daemon/driver/write-scope.ts 的 dataDirDenyList，列目录再补上 paths.ts 布局里的已知项）：数据目录顶层除放行项外的每一项（state/ 整个）、
+   * run/ 里除 bin、hub.sock 外的每一项。只管工具调用、表达不了“禁读区里再放行”的那几层用：claude 的 Read 规则和自带沙箱、agy 的规则。
    */
   dataDirDenied?: string[];
 }
