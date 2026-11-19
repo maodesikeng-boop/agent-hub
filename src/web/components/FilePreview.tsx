@@ -33,8 +33,8 @@ export interface PreviewFile {
   target: FileActionTarget | null;
 }
 
-/** 放进 iframe、播放器、<img> 的地址：?inline=1 让服务端把 pdf、html 内联发（daemon/ui-server/server.ts）。 */
-const inlineUrl = (url: string) => `${url}?inline=1`;
+/** 放进 iframe、播放器、<img> 的地址：?inline=1 让服务端按扩展名回类型、把 pdf、html 内联发（daemon/ui-server/server.ts）。 */
+export const inlineUrl = (url: string) => `${url}?inline=1`;
 
 const OPEN_BLOCKED_TITLE = "This file type may run when opened, so it can only be shown in Finder";
 const COPY_NOTICE = "The original file is gone. Showing the copy saved when it was sent";
@@ -277,7 +277,7 @@ function PreviewContent({ file, kind }: { file: PreviewFile; kind: PreviewKind }
     // 只给 allow-scripts，不给 allow-same-origin：页面拿不到界面的 cookie，也发不了带登录的请求
     content = <iframe title={file.name} src={src} sandbox="allow-scripts" className="size-full border-0 bg-white" />;
   } else if (kind === "video") {
-    content = <video src={src} controls className="size-full bg-black object-contain" />;
+    content = <video src={src} aria-label={file.name} controls preload="metadata" playsInline className="size-full bg-black object-contain" />;
   } else if (kind === "audio") {
     content = (
       <Centered>

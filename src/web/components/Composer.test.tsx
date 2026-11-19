@@ -93,6 +93,13 @@ describe("Composer 布局", () => {
     expect(list.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it("待发的视频（.mov、.mp4）用摄像机图标，别的文件用文件图标", () => {
+    setup({ files: [{ key: "a", file: new File(["x"], "录屏.mov") }, { key: "b", file: new File(["x"], "clip.MP4") }, { key: "c", file: new File(["x"], "a.txt") }] });
+    const icons = screen.getAllByRole("listitem").map((li) => li.querySelector("svg path")!.getAttribute("d"));
+    expect(icons[0]).toBe(icons[1]);
+    expect(icons[2]).not.toBe(icons[0]);
+  });
+
   it("待发文件列表和文字的左边距一致（文件条 20px，多行时文字区 12px + 外层 8px）", () => {
     setup({ files: [{ key: "a", file: new File(["x"], "a.txt") }] });
     expect(screen.getByRole("list", { name: "Files to send" })).toHaveClass("px-5");

@@ -1,10 +1,10 @@
-import { FileText } from "../ui/icons.ts";
+import { FileText, Play } from "../ui/icons.ts";
 import { useEffect, useState, type ReactNode } from "react";
-import { FILE_EXPIRED_TEXT, isImageMime, sentFileMime, uploadUrl, type Attachment } from "../../shared/index.ts";
+import { FILE_EXPIRED_TEXT, isImageMime, previewKindOf, sentFileMime, uploadUrl, type Attachment } from "../../shared/index.ts";
 import { useClient } from "../device-scope.tsx";
 import { cn } from "../lib/utils.ts";
 import { formatBytes } from "../upload.ts";
-import { FilePreview, type PreviewFile } from "./FilePreview.tsx";
+import { FilePreview, inlineUrl, type PreviewFile } from "./FilePreview.tsx";
 
 const CARD = "flex items-center gap-2.5 rounded-2xl bg-muted py-1.5 pr-3.5 pl-1.5";
 
@@ -28,7 +28,7 @@ export function useFileExpired(url: string | undefined, probe: boolean): [boolea
 }
 
 /**
- * 一个文件的卡片：图片是小缩略图，别的是文件图标；文件名一行，下面一行写大小（或没存下来的原因）。
+ * 一个文件的卡片：图片是小缩略图，视频是第一帧盖播放键，别的是文件图标；文件名一行，下面一行写大小（或没存下来的原因）。
  * 有 preview 是个按钮，点了打开预览窗（FilePreview）；没有 preview（文件没存下来）只是个卡片，点不了。
  * 聊天框附件（AttachmentList）和 agent 发来的文件（Markdown 里的文件链接）共用。
  */
@@ -49,10 +49,19 @@ export function FileCard({
   const [expired, markExpired] = useFileExpired(preview?.url, preview !== undefined && !isImageMime(mime));
   if (expired) preview = undefined;
   const imageUrl = preview !== undefined && isImageMime(mime) ? preview.url : undefined;
+  // 取 ?inline=1 的地址：上传的视频服务端才按扩展名回 video/*。#t=0.1 让只预载元数据时也画出第一帧
+  const videoUrl = preview !== undefined && previewKindOf(name, mime) === "video" ? `${inlineUrl(preview.url)}#t=0.1` : undefined;
   const body = (
     <>
       {imageUrl !== undefined ? (
         <img src={imageUrl} alt={name} loading="lazy" onError={markExpired} className="size-10 shrink-0 rounded-xl bg-background object-cover" />
+      ) : videoUrl !== undefined ? (
+        <span className="relative size-10 shrink-0 overflow-hidden rounded-xl bg-black">
+          <video src={videoUrl} preload="metadata" muted playsInline aria-hidden="true" tabIndex={-1} className="size-full object-cover" />
+          <span data-play-badge className="absolute inset-0 m-auto flex size-5 items-center justify-center rounded-full bg-black/55 text-white">
+            <Play className="size-pixel-sm translate-x-px fill-current" aria-hidden="true" />
+          </span>
+        </span>
       ) : (
         <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-background text-muted-foreground">
           <FileText className="size-pixel" aria-hidden="true" />
@@ -86,7 +95,7 @@ export function FileCard({
   );
 }
 
-/** 消息里的附件：图片是小缩略图，别的是文件图标；都带文件名和大小，点开看预览（上传的文件和 agent 发来的文件同一个预览窗）。没有附件什么也不画。 */
+/** 消息里的附件：图片是小缩略图，视频是第一帧，别的是文件图标；都带文件名和大小，点开看预览（上传的文件和 agent 发来的文件同一个预览窗）。没有附件什么也不画。 */
 export function AttachmentList({ attachments }: { attachments: Attachment[] }) {
   const client = useClient();
   if (attachments.length === 0) return null;

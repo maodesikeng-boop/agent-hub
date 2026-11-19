@@ -302,19 +302,19 @@ describe("发出之后", () => {
 });
 
 describe("检查文件", () => {
-  it("超过 20 MB：不加入列表，用中文说是哪个文件、上限多少", async () => {
+  it("超过 50 MB：不加入列表，用中文说是哪个文件、上限多少", async () => {
     const user = userEvent.setup();
     await boot();
     await user.upload(picker(), [hugeFile("录屏.mov", MAX_UPLOAD_BYTES + 1), file("小的.txt")]);
     const alert = screen.getByRole("alert");
     expect(alert).toHaveTextContent("录屏.mov");
-    expect(alert).toHaveTextContent("超过 20 MB");
+    expect(alert).toHaveTextContent("超过 50 MB");
     const list = within(pendingList() as HTMLElement);
     expect(list.queryByText("录屏.mov")).toBeNull();
     expect(list.getByText("小的.txt")).toBeInTheDocument(); // 别的文件不受影响
   });
 
-  it("刚好 20 MB 可以加入", async () => {
+  it("刚好 50 MB 可以加入", async () => {
     const user = userEvent.setup();
     await boot();
     await user.upload(picker(), hugeFile("刚好.bin", MAX_UPLOAD_BYTES));
@@ -373,8 +373,8 @@ describe("上传失败：消息不发出，提示可见，输入的文字和待�
     await failWith(() => ({ status: 500, body: { error: "internal_error" } }), "上传失败");
   });
 
-  it("服务端说文件太大（413）：中文提示 20 MB，不是“1 MB”", async () => {
-    await failWith(() => ({ status: 413, body: { error: "Request body is too large" } }), "文件太大，单个文件最多 20 MB");
+  it("服务端说文件太大（413）：中文提示 50 MB，不是“1 MB”", async () => {
+    await failWith(() => ({ status: 413, body: { error: "Request body is too large" } }), "文件太大，单个文件最多 50 MB");
   });
 
   it("服务端拒绝（400，带中文原因）：原因原样显示", async () => {

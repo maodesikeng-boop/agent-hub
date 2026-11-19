@@ -3,9 +3,11 @@
 // agent 拿到的路径末尾还是用户的原文件名；文件名只留最后一段、去掉控制字符，所以怎么写都出不了这个目录。
 // 上传接口不绑定接收方：谁来用（项目经理、以后的 Worker 输入框）都是先上传拿到 Attachment，再在发消息时带上编号。
 import { randomBytes } from "node:crypto";
-import { mkdir, rm, writeFile } from "node:fs/promises";
-import { lstatSync, readdirSync } from "node:fs";
+import { createWriteStream, lstatSync, readdirSync } from "node:fs";
+import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import {
   MAX_UPLOAD_BYTES,
   MAX_UPLOAD_EXTENSION_BYTES,
@@ -67,21 +69,37 @@ function toAttachment(uploadsDir: string, id: string, name: string, size: number
   return { id, name, path: join(uploadsDir, id, name), size, mime: mimeOfFileName(name) };
 }
 
-/** 存一个文件，返回它的附件信息。空文件、超过 MAX_UPLOAD_BYTES 抛 UploadError（磁盘上不留东西）。 */
-export async function saveUpload(uploadsDir: string, rawName: string, data: Buffer): Promise<Attachment> {
-  if (data.length === 0) throw new UploadError(400, UPLOAD_EMPTY_MESSAGE);
-  if (data.length > MAX_UPLOAD_BYTES) throw new UploadError(413, UPLOAD_TOO_LARGE_MESSAGE);
+/**
+ * 存一个文件，返回它的附件信息。data 是流时边收边写盘（视频几十 MB，不整个读进内存）。
+ * 空文件、超过 MAX_UPLOAD_BYTES 抛 UploadError；出错（含流中途断开）时磁盘上不留东西。
+ */
+export async function saveUpload(uploadsDir: string, rawName: string, data: Buffer | Readable): Promise<Attachment> {
+  if (Buffer.isBuffer(data) && data.length > MAX_UPLOAD_BYTES) throw new UploadError(413, UPLOAD_TOO_LARGE_MESSAGE);
+  const source = Buffer.isBuffer(data) ? Readable.from([data]) : data;
+  // 建目录的时候连接就断了：错误先接住不让进程崩，下面的 pipeline 照样拿到它
+  const ignore = () => {};
+  source.once("error", ignore);
   const name = sanitizeFileName(rawName);
   const id = randomBytes(8).toString("hex");
   const dir = join(uploadsDir, id);
   await mkdir(dir, { recursive: true, mode: 0o700 });
+  let size = 0;
+  const limit = new Transform({
+    transform(chunk: Buffer, _encoding, done) {
+      size += chunk.length;
+      done(size > MAX_UPLOAD_BYTES ? new UploadError(413, UPLOAD_TOO_LARGE_MESSAGE) : null, chunk);
+    },
+  });
   try {
-    await writeFile(join(dir, name), data, { flag: "wx", mode: 0o600 });
+    await pipeline(source, limit, createWriteStream(join(dir, name), { flags: "wx", mode: 0o600 }));
+    if (size === 0) throw new UploadError(400, UPLOAD_EMPTY_MESSAGE);
   } catch (error) {
     await rm(dir, { recursive: true, force: true });
     throw error;
+  } finally {
+    source.off("error", ignore);
   }
-  return toAttachment(uploadsDir, id, name, data.length);
+  return toAttachment(uploadsDir, id, name, size);
 }
 
 /**

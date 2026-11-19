@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
+import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MAX_UPLOAD_BYTES, MAX_UPLOAD_NAME_BYTES, utf8Bytes } from "../shared/index.ts";
 import { UploadError, resolveUpload, sanitizeFileName, saveUpload } from "./uploads.ts";
@@ -101,10 +102,40 @@ describe("存文件", () => {
   it("超过上限：拒绝，中文原因里写明上限；刚好等于上限的收下", async () => {
     const error = await saveUpload(dir, "big.bin", Buffer.alloc(MAX_UPLOAD_BYTES + 1)).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(UploadError);
-    expect((error as UploadError).message).toBe("文件太大，单个文件最多 20 MB");
+    expect((error as UploadError).message).toBe("文件太大，单个文件最多 50 MB");
     expect(readdirSync(dir)).toEqual([]);
     const ok = await saveUpload(dir, "edge.bin", Buffer.alloc(MAX_UPLOAD_BYTES));
     expect(ok.size).toBe(MAX_UPLOAD_BYTES);
+  });
+
+  it("请求体是流：边收边写盘，内容、大小对；视频的 mime 从扩展名认出来", async () => {
+    const chunks = Array.from({ length: 5 }, (_, i) => Buffer.alloc(64 * 1024, i));
+    const saved = await saveUpload(dir, "录屏.mov", Readable.from(chunks));
+    expect(saved.size).toBe(5 * 64 * 1024);
+    expect(readFileSync(saved.path)).toEqual(Buffer.concat(chunks));
+  });
+
+  it("流在中途超过上限：413，已经写下的半截文件和目录都删掉", async () => {
+    const half = MAX_UPLOAD_BYTES / 2;
+    const error = await saveUpload(dir, "big.mp4", Readable.from([Buffer.alloc(half), Buffer.alloc(half), Buffer.alloc(1)])).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(UploadError);
+    expect((error as UploadError).statusCode).toBe(413);
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it("流中途断了（浏览器关掉）：抛错，磁盘上不留东西", async () => {
+    const source = new Readable({ read() {} });
+    source.push(Buffer.alloc(1024));
+    const pending = saveUpload(dir, "断了.mp4", source).catch((e: unknown) => e);
+    setImmediate(() => source.destroy(new Error("aborted")));
+    expect(await pending).toBeInstanceOf(Error);
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it("空的流：400，磁盘上不留东西", async () => {
+    const error = await saveUpload(dir, "空.mp4", Readable.from([])).catch((e: unknown) => e);
+    expect((error as UploadError).statusCode).toBe(400);
+    expect(readdirSync(dir)).toEqual([]);
   });
 });
 

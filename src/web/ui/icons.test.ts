@@ -5,7 +5,7 @@ import { createElement } from "react";
 import { describe, expect, it } from "vitest";
 import * as icons from "./icons.ts";
 
-const LINE_ICONS = new Set(["ComposerAdd", "ComposerSend", "ComposerStop", "ComposerFile", "ComposerRemove", "ComposerBot"]);
+const LINE_ICONS = new Set(["ComposerAdd", "ComposerSend", "ComposerStop", "ComposerFile", "ComposerVideo", "ComposerRemove", "ComposerBot"]);
 const exported = Object.entries(icons).filter((entry): entry is [string, icons.Icon] => typeof entry[1] === "function" || typeof entry[1] === "object");
 
 function svgOf(name: string, props: Record<string, unknown> = {}): SVGSVGElement {

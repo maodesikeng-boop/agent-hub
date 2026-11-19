@@ -93,7 +93,7 @@ export async function peerRoutes(app: FastifyInstance, opts: PeerRoutesOptions):
   });
 
   // ---- 入口转发：/d/<设备>/api/* ----
-  // 单独一个插件：请求体不解析，原样流给对方（上传最大 20 MB，不在入口落地）
+  // 单独一个插件：请求体不解析，原样流给对方（上传最大 MAX_UPLOAD_BYTES，不在入口落地）
   app.register(async (proxy) => {
     proxy.removeAllContentTypeParsers();
     proxy.addContentTypeParser("*", (_req, _payload, done) => done(null));
