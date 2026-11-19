@@ -252,13 +252,25 @@ async function shareOne(path: string, local: LocalHref, name: string, budget: nu
       await mkdir(partial, { mode: 0o700 });
       const copied = await copyFromHandle(handle, stat, join(partial, name));
       const id = sentFileId(name, copied.sha256);
-      // 同样的文件已经存过（别的消息发过、重放）：用那一份，这一份扔掉
-      if (resolveUpload(scope.sentFilesDir, id) !== null) {
-        await rm(partial, { recursive: true, force: true });
-        // 命中已有副本：刷新目录修改时间，刚发过的不会被定期清理（file-cleanup.ts）删掉
-        const now = new Date();
-        await utimes(join(scope.sentFilesDir, id), now, now);
-      } else await renameWithWindowsRetry(partial, join(scope.sentFilesDir, id));
+      const target = join(scope.sentFilesDir, id);
+      // 编号由文件名和内容算出：目录里正好是这个名字、这个大小的文件，就是同一份已发布的副本
+      const published = () => {
+        const existing = resolveUpload(scope.sentFilesDir, id);
+        return existing !== null && existing.name === name && existing.size === copied.bytes;
+      };
+      if (!published()) {
+        try {
+          await renameWithWindowsRetry(partial, target);
+          return { status: "saved", id, size: copied.bytes, mtime: stat.mtimeMs };
+        } catch (error) {
+          // 同时发同一个文件的另一个请求先改名成功了（ENOTEMPTY、EEXIST、Windows 的 EPERM）：用它那份；别的出错照实报
+          if (!published()) throw error;
+        }
+      }
+      // 同样的文件已经存过（别的消息发过、重放、并发的请求）：用那一份，这一份扔掉；刷新目录修改时间，刚发过的不会被定期清理（file-cleanup.ts）删掉
+      await rm(partial, { recursive: true, force: true });
+      const now = new Date();
+      await utimes(target, now, now);
       return { status: "saved", id, size: copied.bytes, mtime: stat.mtimeMs };
     } catch (error) {
       await rm(partial, { recursive: true, force: true });

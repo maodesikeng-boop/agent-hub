@@ -675,9 +675,12 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
       }
       const body = req.body as Record<string, unknown>;
       checkFields(command, body);
+      const stillAuthorized = () => tokens.resolve(auth.token) === auth.sessionId;
+      // 收请求体期间令牌可能已经作废（会话结束了）：先认一次再准备（存附件副本、探 git），作废的请求不在磁盘上留副本
+      if (!stillAuthorized()) return fail(reply, "unauthorized", UNAUTHORIZED_MESSAGE);
       const context = await prepare(auth.sessionId, command, body);
-      // 收请求体、探 git 期间令牌可能已经作废（会话结束了）：调账本前再认一次。
-      if (tokens.resolve(auth.token) !== auth.sessionId) return fail(reply, "unauthorized", UNAUTHORIZED_MESSAGE);
+      // 准备期间（拷大文件、探 git）也可能作废：调账本前再认一次。这时已存的副本按内容去重，没被引用的由定期清理（file-cleanup.ts）删
+      if (!stillAuthorized()) return fail(reply, "unauthorized", UNAUTHORIZED_MESSAGE);
       // 请求体的形状已经按 BODY_SCHEMAS 查过，就是这个命令的 HubArgs。
       const result = ledger.hubCall(auth.sessionId, command, body as never, context);
       reportHealth(null);
