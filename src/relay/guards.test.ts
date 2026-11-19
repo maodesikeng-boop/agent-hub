@@ -33,6 +33,22 @@ describe("createIpRateLimiter", () => {
     expect(limiter.allow("abuser", 11)).toBe(false);
   });
 
+  it("计数表满了、都还在窗口里：海量只来一次的新键挤不掉已经在累加、还没超限的计数", () => {
+    const limiter = createIpRateLimiter(options);
+    expect([0, 1].map((t) => limiter.allow("live", t))).toEqual([true, true]);
+    for (let i = 0; i < 100; i++) expect(limiter.allow(`k${i}`, 10)).toBe(true);
+    expect([11, 12].map((t) => limiter.allow("live", t))).toEqual([true, false]);
+  });
+
+  it("累加表满了、都还在窗口里：新客户端第二次来先拒绝，不挤掉别人的计数；别人的窗口过了照常累加", () => {
+    const limiter = createIpRateLimiter({ ...options, max: 2 });
+    for (const key of ["a", "b"]) expect([0, 1].map((t) => limiter.allow(key, t))).toEqual([true, true]);
+    expect([10, 11].map((t) => limiter.allow("c", t))).toEqual([true, false]);
+    expect(limiter.allow("a", 12)).toBe(true);
+    // a、b 的窗口到 1000 结束：累加表清掉它们，c 照常累加
+    expect([1_010, 1_011, 1_012].map((t) => limiter.allow("c", t))).toEqual([true, true, true]);
+  });
+
   it("计数表满了先清窗口已过的，还在窗口里的计数不被冲掉", () => {
     const limiter = createIpRateLimiter({ ...options, max: 3 });
     limiter.allow("old1", 0);
