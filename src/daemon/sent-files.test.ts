@@ -464,15 +464,22 @@ describe("边界", () => {
     }
   });
 
-  it("副本的位置被别的东西占着（文件、名字或大小对不上的目录）：不当成已有副本，照实报读不了，不留半截目录", async () => {
+  it("副本的位置被别的东西占着：名字或大小对不上的目录不当成已有副本，照实报读不了，不留半截目录；被普通文件占着时 POSIX 同样报读不了", async () => {
     const src = write(join(proj, "a.md"), "v1");
     const id = sentFileId("a.md", sha256("v1"));
     mkdirSync(sentDir, { recursive: true });
     writeFileSync(join(sentDir, id), "not a copy");
-    expect((await share(`[a](${src})`)).map((f) => [f.status, f.id])).toEqual([["unreadable", null]]);
+    const overFile = (await share(`[a](${src})`)).map((f) => [f.status, f.id]);
+    if (process.platform === "win32") {
+      // Windows 的 rename 把目录换到同名文件的位置上：占位的文件被换成了真副本
+      expect(overFile).toEqual([["saved", id]]);
+      expect(readFileSync(join(sentDir, id, "a.md"), "utf8")).toBe("v1");
+    } else {
+      expect(overFile).toEqual([["unreadable", null]]);
+    }
     expect(copies()).toEqual([id]);
 
-    rmSync(join(sentDir, id));
+    rmSync(join(sentDir, id), { recursive: true });
     write(join(sentDir, id, "other.md"), "v1");
     expect((await share(`[a](${src})`)).map((f) => [f.status, f.id])).toEqual([["unreadable", null]]);
     rmSync(join(sentDir, id), { recursive: true });
