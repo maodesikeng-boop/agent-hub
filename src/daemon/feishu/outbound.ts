@@ -68,9 +68,12 @@ export interface FeishuProjectionContext {
 export function projectFeishuChange(change: Change, ctx: FeishuProjectionContext): FeishuOutboundIntent[] {
   switch (change.type) {
     case "pm.created":
-    case "pm.updated":
     case "pm.removed":
       return [{ kind: "sync_chats" }];
+    case "pm.updated":
+      return [{ kind: "sync_chats" }, { kind: "refresh_policy_card", pmId: change.data.pm.id }];
+    case "router.settings.updated":
+      return ctx.routerChat() === null ? [] : [{ kind: "refresh_router_settings_card" }];
     case "session.status": {
       const { conversationId, pmId, streamingText, status, activity, step } = change.data.session;
       if (conversationId === null || pmId === null || ctx.chatOfConversation(conversationId) === null) return [];

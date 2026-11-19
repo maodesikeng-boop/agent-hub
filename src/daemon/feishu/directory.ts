@@ -65,7 +65,6 @@ interface ChatEntry {
   stale: boolean;
   /** 只从事件、发言知道、还不知道名字的人：查名字时为他们重拉一次。 */
   unnamed: Set<FeishuOpenId>;
-  /** 上次在这个群发群设置卡的时间，自动附卡按它冷却；跟着群的缓存一起淘汰、清掉。 */
   policyCardAt: number | null;
 }
 

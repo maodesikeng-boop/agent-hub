@@ -487,6 +487,8 @@ function toRef(row: PostRow): FeishuPostRef {
       return { kind: "router_item", itemId: row.ref_id };
     case "router_command":
       return { kind: "router_command", commandId: row.ref_id, ...(row.part > 0 ? { part: row.part } : {}) };
+    case "router_settings":
+      return { kind: "router_settings" };
     default:
       return { kind: "chat_policy", pmId: row.ref_id };
   }

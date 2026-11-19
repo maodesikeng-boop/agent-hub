@@ -154,9 +154,9 @@ describe("buildRouterModelSection 与 resolveRouterModelEdit（总助模型与�
 
   it("总助切模型时保留兼容思考程度，不兼容时回退到新模型首档", () => {
     const cats = catalogs();
-    expect(resolveRouterModelEdit({ vendor: "codex", model: "gpt-6-luna", effort: "max", updatedAt: 1 }, cats, "model", "gpt-6.1-sol")).toEqual({
+    expect(resolveRouterModelEdit({ vendor: "codex", model: "gpt-6.1-sol", effort: "ultra", updatedAt: 1 }, cats, "model", "gpt-5.6-luna")).toEqual({
       ok: true,
-      next: { vendor: "codex", model: "gpt-6.1-sol", effort: "low" },
+      next: { vendor: "codex", model: "gpt-5.6-luna", effort: "low" },
     });
     expect(resolveRouterModelEdit({ vendor: "codex", model: "gpt-6-luna", effort: "high", updatedAt: 1 }, cats, "model", "gpt-6.1-sol")).toEqual({
       ok: true,

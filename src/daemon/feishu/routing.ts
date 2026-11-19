@@ -35,9 +35,9 @@ const NOTE_REQUIRED = "先在输入框里写点什么再提交";
 
 /**
  * 叫出设置卡的斜杠命令：去掉 @机器人 后整句（去首尾空白）等于其中一个才算，区分大小写，带文件不算。
- * 不带斜杠的“设置”“权限”是自然语言，照常交给项目经理。
+ * 不带斜杠的“设置”“模型”“权限”是自然语言，照常交给项目经理或总助。
  */
-export const FEISHU_SETTINGS_COMMANDS: readonly string[] = ["/群设置", "/policy"];
+export const FEISHU_SETTINGS_COMMANDS: readonly string[] = ["/群设置", "/设置", "/policy", "/model", "/settings"];
 
 const isSettingsCommand = (message: InboundMessage) => message.files.length === 0 && FEISHU_SETTINGS_COMMANDS.includes(message.text.trim());
 
@@ -101,6 +101,7 @@ export function routeFeishuMessage(message: InboundMessage, ctx: FeishuRoutingCo
   if (message.chatType === "p2p") {
     if (ownerOpenId === null) return ctx.isBindCode(message.text) ? { kind: "bind_owner", openId: speaker } : { kind: "ignore" };
     if (speaker !== ownerOpenId) return { kind: "reject", openId: speaker, reason: NOT_YOUR_ASSISTANT };
+    if (!message.inThread && isSettingsCommand(message)) return { kind: "settings_card" };
     if (message.text === "" && message.files.length === 0) return { kind: "ignore" };
     return {
       kind: "deliver",
@@ -174,8 +175,13 @@ export function routeFeishuAction(action: FeishuInboundAction, ctx: Pick<FeishuR
         ...(value.guestTier !== undefined ? { guestTier: value.guestTier } : {}),
       };
     case "set_pm_model":
+      if (guest) return { kind: "reject", toast: OWNER_ONLY_SETTINGS };
+      if (binding.target.kind !== "pm" || action.option === undefined || action.option.trim() === "") return { kind: "ignore" };
+      return { kind: "set_pm_model", pmId: value.pmId, field: value.field, option: action.option.trim() };
     case "set_router_model":
-      return { kind: "ignore" };
+      if (guest) return { kind: "reject", toast: OWNER_ONLY_SETTINGS };
+      if (binding.target.kind !== "router" || action.option === undefined || action.option.trim() === "") return { kind: "ignore" };
+      return { kind: "set_router_model", field: value.field, option: action.option.trim() };
     case "stop":
       if (guest && !feishuGuestMay(ctx.guestTier, "stop")) return { kind: "reject", toast: OWNER_ONLY_STOP, guestDenied: true };
       return { kind: "stop", target: binding.target };

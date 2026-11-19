@@ -13,7 +13,15 @@ import { FEISHU_CARD_MAX_BYTES, FEISHU_CARD_MAX_CHARS, FEISHU_STREAM_PRINT_FREQU
 import type { RouterItem, RouterSettings } from "../../shared/router.ts";
 import type { UserBlockerId } from "../../shared/user-blockers.ts";
 import type { ModelCatalog } from "../../shared/vendors.ts";
-import { FEISHU_MODEL_FIELDS, type FeishuModelField, type FeishuPmModelView } from "./model-picker.ts";
+import {
+  buildPmModelSection,
+  buildRouterModelSection,
+  FEISHU_MODEL_FIELDS,
+  type FeishuModelField,
+  type FeishuModelSectionView,
+  type FeishuPmModelView,
+  type FeishuSelectOption,
+} from "./model-picker.ts";
 import { feishuCardMarkdown, feishuMarkdownFit } from "./outbound.ts";
 
 /** 卡片 JSON 2.0（只在这一层拼，序列化后交给传输层）。 */
@@ -44,7 +52,6 @@ export type FeishuActionValue =
   | { kind: "submit_note"; card: FeishuCardRef }
   | { kind: "blocker_done"; card: Extract<FeishuCardRef, { kind: "blocker" }> }
   | { kind: "stop"; conversationId: ConversationId }
-  /** 群里那张“访客权限”卡上的按钮。 */
   | { kind: "set_policy"; pmId: PmId; triggerMode?: FeishuTriggerMode; guestTier?: FeishuGuestTier }
   | { kind: "set_pm_model"; pmId: PmId; field: FeishuModelField }
   | { kind: "set_router_model"; field: FeishuModelField };
@@ -349,10 +356,8 @@ const TIER_DESCRIPTIONS: Readonly<Record<FeishuGuestTier, string>> = {
   chat_only: "只能文字聊天，不收文件",
   observer: "只旁听，@机器人 也不唤醒",
 };
-/** 卡上三档从宽到严排。 */
 const TIER_ORDER: readonly FeishuGuestTier[] = ["collaborator", "chat_only", "observer"];
 
-/** 一组单选按钮排成一行（手机上放不下自动折行）：当前项 primary 并带 ✓，其余 default。 */
 function choiceRow(choices: readonly { text: string; chosen: boolean; value: FeishuActionValue }[]): Record<string, unknown> {
   return {
     tag: "column_set",
@@ -368,9 +373,56 @@ function choiceRow(choices: readonly { text: string; chosen: boolean; value: Fei
 
 const HR = { tag: "hr" };
 
+function selectRow(input: {
+  label: string;
+  initialOption: string;
+  options: readonly FeishuSelectOption[];
+  value: FeishuActionValue;
+}): Record<string, unknown> {
+  return {
+    tag: "column_set",
+    flex_mode: "none",
+    horizontal_spacing: "8px",
+    columns: [
+      {
+        tag: "column",
+        width: "auto",
+        vertical_align: "center",
+        elements: [markdown(input.label)],
+      },
+      {
+        tag: "column",
+        width: "weighted",
+        weight: 1,
+        vertical_align: "center",
+        elements: [
+          {
+            tag: "select_static",
+            width: "fill",
+            initial_option: input.initialOption,
+            options: input.options.map((o) => ({ text: plain(o.label), value: o.value })),
+            behaviors: callback(input.value),
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function modelSectionElements(
+  section: FeishuModelSectionView,
+  actionFor: (field: FeishuModelField) => FeishuActionValue,
+): Record<string, unknown>[] {
+  return [
+    markdown(`**模型与思考程度**\n${section.summary}`),
+    ...section.selects.map((s) => selectRow({ label: s.label, initialOption: s.initialOption, options: s.options, value: actionFor(s.field) })),
+    ...(section.fixedEffortNote !== null ? [markdown(section.fixedEffortNote)] : []),
+  ];
+}
+
 /**
- * 群设置卡：唤醒方式（要不要 @机器人）和群成员权限（访客能做什么）分成两组，中间一条分割线；每组写明当前生效的一项，
- * 按钮只改本组那一项，当前项 primary 带 ✓。主人随时发 /群设置 叫出新卡，访客被档位拦下时也会自动附一张。
+ * 群设置卡：拆为模型与思考程度、唤醒方式、群成员权限三大独立模块（hr 分割线隔开）；
+ * 模型用原生 select_static 下拉，唤醒与权限用按钮组（当前项 primary 带 ✓）。
  * 后置：mentionOnlyForced 为 true（应用没开 im:message.group_msg）时按 mention_only 画，不给切回 auto。
  */
 export function renderChatPolicyCard(input: {
@@ -381,6 +433,11 @@ export function renderChatPolicyCard(input: {
   guestTier: FeishuGuestTier;
   mentionOnlyForced: boolean;
 }): FeishuCardJson {
+  const models = modelSectionElements(buildPmModelSection(input.agent, input.catalogs), (field) => ({
+    kind: "set_pm_model",
+    pmId: input.pmId,
+    field,
+  }));
   const trigger: FeishuTriggerMode = input.mentionOnlyForced ? "mention_only" : input.triggerMode;
   const forcedNote = input.mentionOnlyForced ? "\n应用没开收群消息的权限，只能 @机器人。" : "";
   const wake = [
@@ -398,12 +455,17 @@ export function renderChatPolicyCard(input: {
     markdown(`**群成员权限** · 访客能做什么\n当前：**${TIER_LABELS[input.guestTier]}**\n${tierLines.join("\n")}`),
     choiceRow(TIER_ORDER.map((tier) => ({ text: TIER_LABELS[tier], chosen: tier === input.guestTier, value: { kind: "set_policy", pmId: input.pmId, guestTier: tier } }))),
   ];
-  const footer = { tag: "markdown", content: "只有主人能改。随时在群里发 /群设置 叫出这张卡。", text_size: "notation" };
-  return card({ title: "群设置", template: "grey", summary: "群设置", elements: [...wake, HR, ...members, HR, footer] });
+  const footer = { tag: "markdown", content: "只有主人能改。随时在群里发 /群设置 或 /设置 叫出这张卡。", text_size: "notation" };
+  return card({ title: "群设置", template: "grey", summary: "群设置", elements: [...models, HR, ...wake, HR, ...members, HR, footer] });
 }
 
-export function renderRouterSettingsCard(_input: { settings: RouterSettings; catalogs: readonly ModelCatalog[] }): FeishuCardJson {
-  return card({ title: "总助设置", template: "grey", summary: "总助设置", elements: [] });
+export function renderRouterSettingsCard(input: { settings: RouterSettings; catalogs: readonly ModelCatalog[] }): FeishuCardJson {
+  const models = modelSectionElements(buildRouterModelSection(input.settings, input.catalogs), (field) => ({
+    kind: "set_router_model",
+    field,
+  }));
+  const footer = { tag: "markdown", content: "只有主人能改。随时在单聊发 /设置 或 /model 叫出这张卡。", text_size: "notation" };
+  return card({ title: "总助设置", template: "grey", summary: "总助设置", elements: [...models, HR, footer] });
 }
 
 /** 回复正文被飞书拒收（内容不合规、超限）时卡片上换成的话：卡片照样能关流式、去停止按钮。 */

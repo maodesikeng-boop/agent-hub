@@ -259,7 +259,7 @@ export function createFeishuSdkTransport(options: FeishuSdkOptions): FeishuTrans
         "im.chat.updated_v1": async (data: { chat_id?: string; after_change?: { name?: string } }) =>
           safe(() => handlers.onEvent({ type: "im.chat.updated_v1", chatId: data.chat_id ?? "", name: data.after_change?.name ?? null })),
         "card.action.trigger": async (data: lark.RawCardActionEvent): Promise<FeishuCardActionResponse> => {
-          const action = (data.action ?? {}) as { value?: unknown; form_value?: Record<string, unknown> };
+          const action = (data.action ?? {}) as { value?: unknown; option?: unknown; form_value?: Record<string, unknown> };
           try {
             return handlers.onCardAction({
               ...(data.token ? { token: data.token } : {}),
@@ -267,6 +267,7 @@ export function createFeishuSdkTransport(options: FeishuSdkOptions): FeishuTrans
               chatId: data.context?.open_chat_id ?? data.open_chat_id ?? "",
               operatorOpenId: data.operator?.open_id ?? "",
               value: action.value,
+              ...(typeof action.option === "string" ? { option: action.option } : {}),
               formValue: action.form_value ?? null,
             });
           } catch (error) {

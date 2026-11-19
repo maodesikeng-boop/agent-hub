@@ -873,11 +873,15 @@ describe("createFeishuService：群设置卡随叫随到", () => {
   it("切到未登录厂商时当场回 warning toast、账本不变，并重刷卡片把下拉弹回原厂商", async () => {
     const signedOutCodex = { ...bundledModelCatalog("codex"), availability: "signed_out" as const };
     const availableClaude = { ...bundledModelCatalog("claude"), availability: "available" as const };
+    let warmed = true;
     svc = makeService({
       models: {
-        list: async () => [availableClaude, signedOutCodex],
-        current: (v: string) => (v === "codex" ? signedOutCodex : availableClaude),
-        availability: (v: string) => (v === "codex" ? "signed_out" : "available"),
+        list: async () => {
+          warmed = true;
+          return [availableClaude, signedOutCodex];
+        },
+        current: (v: string) => (!warmed ? null : v === "codex" ? signedOutCodex : availableClaude),
+        availability: (v: string) => (!warmed ? "unknown" : v === "codex" ? "signed_out" : "available"),
       } as never,
     });
     await connect();
@@ -892,6 +896,13 @@ describe("createFeishuService：群设置卡随叫随到", () => {
     await settle();
     expect(ledger.getPersona(lin.pmId).vendor).toBe("claude");
     expect(fake.callsOf("card.update").filter((u) => u.card_id === post.cardId).length).toBeGreaterThan(updatesBefore);
+
+    warmed = false;
+    const cold = chooseOption(chat, post.messageId, { fusa: 1, kind: "set_pm_model", pmId: lin.pmId, field: "vendor" }, "codex", OWNER);
+    expect(cold.toast?.type).toBe("info");
+    await settle();
+    expect(ledger.getPersona(lin.pmId).vendor).toBe("claude");
+    expect(textsTo(chat).some((t) => t.includes("登录"))).toBe(true);
   });
 });
 
