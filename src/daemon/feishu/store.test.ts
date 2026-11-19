@@ -53,9 +53,10 @@ const fill = () => {
 describe("createFeishuStore", () => {
   it("saveApp 换了 appId 时四张表在一个事务里清空，主人取入参", () => {
     fill();
+    store.saveInboundCursor(chat("a"), { lastInboundAt: 100, lastMessageId: om("in1") }, 1);
     const next = saveApp("cli_b" as FeishuAppId, null);
     expect(next).toMatchObject({ appId: "cli_b", ownerOpenId: null });
-    expect([count("feishu_chats"), count("feishu_posts"), count("feishu_avatars"), count("feishu_app")]).toEqual([0, 0, 0, 1]);
+    expect([count("feishu_chats"), count("feishu_posts"), count("feishu_avatars"), count("feishu_inbound_cursors"), count("feishu_app")]).toEqual([0, 0, 0, 0, 1]);
   });
 
   it("saveApp 同一个 appId 只更新机器人信息，主人和群保留", () => {
@@ -139,8 +140,22 @@ describe("createFeishuStore", () => {
     store.savePost({ ref: { kind: "router_settings" }, chatId: chat("r"), messageId: om("rs1"), cardId: "c_rs" as FeishuCardId, sequence: 1, state: "final" }, 3);
     expect(store.postOf({ kind: "router_settings" })?.messageId).toBe("om_rs1");
     expect(store.postByMessageId(om("rs1"))?.ref).toEqual({ kind: "router_settings" });
+
+    store.savePost({ ref: { kind: "router_ask", messageId: 12 }, chatId: chat("r"), messageId: om("ra1"), cardId: "c_ra" as FeishuCardId, sequence: 0, state: "card_pending" }, 4);
+    store.savePost({ ref: { kind: "router_file", messageId: 12, part: 0 }, chatId: chat("r"), messageId: om("ra1"), cardId: "c_ra" as FeishuCardId, sequence: 0, state: "final", mediaKey: "img_x" }, 4);
+    expect(store.postByMessageId(om("ra1"))?.ref).toEqual({ kind: "router_ask", messageId: 12 });
+    expect([...store.pendingCards(null)].map((p) => p.ref)).toEqual([{ kind: "router_ask", messageId: 12 }]);
   });
 
+  it("inboundCursor / saveInboundCursor 记住单会话最近入站锚点，水位不倒退，换群或删群自动清掉", () => {
+    fill();
+    expect(store.inboundCursor(chat("a"))).toEqual({ chatCreatedAt: 1, lastInboundAt: null, lastMessageId: null });
+    store.saveInboundCursor(chat("a"), { lastInboundAt: 2_000, lastMessageId: om("m2") }, 2);
+    store.saveInboundCursor(chat("a"), { lastInboundAt: 1_500, lastMessageId: om("m1") }, 3);
+    expect(store.inboundCursor(chat("a"))).toEqual({ chatCreatedAt: 1, lastInboundAt: 2_000, lastMessageId: om("m2") });
+    store.removeChat(chat("a"));
+    expect(store.inboundCursor(chat("a"))).toBeNull();
+  });
   it("prunePosts 只删早于 before 的 final / card_settled，等拍板的不删", () => {
     fill();
     store.savePost({ ref: { kind: "message", messageId: 2, part: 0 }, chatId: chat("a"), messageId: om("2"), cardId: null, sequence: 0, state: "card_pending" }, 1);

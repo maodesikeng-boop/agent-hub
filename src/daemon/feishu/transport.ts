@@ -46,6 +46,16 @@ export interface FeishuMethodArgs {
   };
   /** DELETE /open-apis/im/v1/messages/:message_id：撤回机器人自己发的消息（整轮没写正文的状态卡）；受管理员设的撤回时限约束。 */
   "message.delete": { message_id: string };
+  /** GET /open-apis/im/v1/messages：拉取指定会话历史消息（start_time / end_time 为秒级时间戳字符串，page_size 为 1～50）。 */
+  "message.list": {
+    container_id_type: "chat";
+    container_id: string;
+    start_time?: string;
+    end_time?: string;
+    sort_type?: "ByCreateTimeAsc" | "ByCreateTimeDesc";
+    page_size: number;
+    page_token?: string;
+  };
   /** POST /open-apis/cardkit/v1/cards：建卡片实体（卡片 JSON 2.0）。 */
   "card.create": { type: "card_json"; data: string };
   /** PUT /open-apis/cardkit/v1/cards/:card_id：整张卡换掉（定稿、改成已定案）。 */
@@ -103,6 +113,25 @@ export type FeishuRawEvent =
   | { type: "im.chat.member.bot.deleted_v1" | "im.chat.disbanded_v1"; chatId: string }
   | { type: "im.chat.updated_v1"; chatId: string; name: string | null };
 
+export type FeishuRawMessageEvent = Extract<FeishuRawEvent, { type: "im.message.receive_v1" }>;
+
+export interface FeishuListMessagesInput {
+  chatId: string;
+  chatType: "p2p" | "group";
+  botOpenId: string;
+  startTimeSec: string;
+  endTimeSec: string;
+  sortType?: "ByCreateTimeAsc" | "ByCreateTimeDesc";
+  pageSize: number;
+  pageToken?: string;
+}
+
+export interface FeishuListMessagesPage {
+  items: FeishuRawMessageEvent[];
+  pageToken: string | null;
+  hasMore: boolean;
+}
+
 /** 卡片回传交互（card.action.trigger），也走同一条长连接。 */
 export interface FeishuRawCardAction {
   token?: string;
@@ -141,6 +170,8 @@ export interface FeishuConnectionHandlers {
  */
 export interface FeishuTransport {
   call<M extends FeishuMethod>(method: M, args: FeishuMethodArgs[M]): Promise<FeishuApiResult>;
+  /** 拉一页会话历史消息并用官方 normalize 转成和长连接一致的消息事件形状（跳过撤回消息与合并转发子消息）。 */
+  listMessages(input: FeishuListMessagesInput): Promise<FeishuListMessagesPage>;
   uploadImage(input: FeishuImageUpload): Promise<{ imageKey: string }>;
   uploadFile(input: FeishuFileUpload): Promise<{ fileKey: string }>;
   /** GET /open-apis/im/v1/messages/:message_id/resources/:file_key。返回响应流，不整包读进内存；大小上限由调用方在写盘时卡。 */

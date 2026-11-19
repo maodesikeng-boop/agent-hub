@@ -1118,7 +1118,7 @@ export const FEISHU_BIND_CODE_TTL_MS = 10 * 60_000;
 export const FEISHU_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 export const FEISHU_FILE_MAX_BYTES = 30 * 1024 * 1024;
 /** 进、出队列各最多排几件：进的满了先丢成员和改名事件（重连对账会补回），出的满了先合并流式推送。 */
-export const FEISHU_INBOUND_QUEUE_MAX = 200;
+export const FEISHU_INBOUND_QUEUE_MAX = 500;
 export const FEISHU_OUTBOUND_QUEUE_MAX = 500;
 /** 建群对齐、断线补发失败后隔多久再试（满载时也靠它从账本补回）。 */
 export const FEISHU_CONTROL_RETRY_MS = 1_000;
@@ -1152,5 +1152,18 @@ export const FEISHU_CHAT_NAME_MAX_CHARS = 60;
 export const FEISHU_CHAT_UUID_MAX_CHARS = 50;
 /** 列群、列群成员每页几条（飞书上限 100）。 */
 export const FEISHU_PAGE_SIZE = 100;
+/** 飞书拉会话历史消息 GET /open-apis/im/v1/messages 单页上限（飞书校验范围 1～50）。 */
+export const FEISHU_MESSAGE_LIST_PAGE_SIZE = 50;
+/** 启动连接与断线重连入站主动补拉的最大回溯时间窗口（超过 15 分钟的陈旧历史不翻）。 */
+export const FEISHU_INBOUND_CATCHUP_WINDOW_MS = 15 * 60_000;
+/** 进程内闪断重连时在最近入站锚点前多回看 30 秒，覆盖半开连接探测盲区与秒级时间戳取整边界（靠已见消息与账本唯一键去重）。 */
+export const FEISHU_INBOUND_CATCHUP_OVERLAP_MS = 30_000;
+/** 单会话单次重连入站补拉最多翻几页、最多取最新几条消息，防极端刷屏打满队列或配额。 */
+export const FEISHU_INBOUND_CATCHUP_MAX_PAGES = 4;
+export const FEISHU_INBOUND_CATCHUP_MAX_MESSAGES = FEISHU_MESSAGE_LIST_PAGE_SIZE * FEISHU_INBOUND_CATCHUP_MAX_PAGES;
+/** 启动与断线重连入站主动补拉的会话并发路数上限，兼顾百群低延迟与飞书频控。 */
+export const FEISHU_INBOUND_CATCHUP_CONCURRENCY = 6;
+/** 内存里记住最近已处理的飞书入站消息编号上限，拦截补拉重叠窗口与 WebSocket 迟到重推。 */
+export const FEISHU_SEEN_MESSAGES_MAX = 2_000;
 /** 等扫码确认时 status 被问的间隔（终端命令轮询状态用）。 */
 export const FEISHU_CLI_POLL_MS = 2_000;

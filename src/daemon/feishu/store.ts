@@ -57,6 +57,8 @@ export type FeishuPostRef =
   | { kind: "message"; messageId: MessageId; part: number }
   | { kind: "file"; messageId: MessageId; part: number }
   | { kind: "router_item"; itemId: RouterItemId }
+  | { kind: "router_ask"; messageId: MessageId }
+  | { kind: "router_file"; messageId: MessageId; part: number }
   | { kind: "router_command"; commandId: RouterCommandId; part?: number }
   | { kind: "chat_policy"; pmId: PmId }
   | { kind: "router_settings" };
@@ -75,6 +77,12 @@ export interface FeishuPostRecord {
   /** file 行：嵌进卡片的图片编号或发出去的文件编号；没传上是 null（uploading 行带编号表示传完、文件也发了，只差改卡）。别的行是 null。 */
   mediaKey: string | null;
   updatedAt: number;
+}
+
+export interface FeishuInboundCursor {
+  chatCreatedAt: number;
+  lastInboundAt: number | null;
+  lastMessageId: FeishuMessageId | null;
 }
 
 export interface FeishuStore {
@@ -119,7 +127,12 @@ export interface FeishuStore {
   ackRouterEvent(chatId: FeishuChatId, id: number, now: number): void;
   /** after 之后的事件超过 keep 条时，返回要跳过的条数和其中最后一条的编号；没超过是 null。 */
   routerEventBacklog(after: number, keep: number): { skipped: number; lastSkippedId: number } | null;
-  routerEventsAfter(after: number, limit: number): { id: number; item_id: RouterItemId | null; command_id: RouterCommandId | null }[];
+  routerEventsAfter(
+    after: number,
+    limit: number,
+  ): { id: number; item_id: RouterItemId | null; command_id: RouterCommandId | null; ask_message_id: MessageId | null }[];
+  inboundCursor(chatId: FeishuChatId): FeishuInboundCursor | null;
+  saveInboundCursor(chatId: FeishuChatId, cursor: { lastInboundAt: number; lastMessageId: FeishuMessageId | null }, now: number): void;
   decision(ref: FeishuCardRef): { clientId: string; name: string } | null;
   saveDecision(ref: FeishuCardRef, clientId: string, name: string, now: number): void;
 
@@ -162,7 +175,7 @@ export function createFeishuStore(db: Db): FeishuStore {
     target.kind === "router" ? chatWhere("target = 'router'") : chatWhere("target = 'pm' AND pm_id = ?", target.pmId);
   const clear = () =>
     db.transaction(() => {
-      for (const table of ["feishu_posts", "feishu_chats", "feishu_avatars", "feishu_router_events", "feishu_decisions", "feishu_app"]) db.run(`DELETE FROM ${table}`);
+      for (const table of ["feishu_inbound_cursors", "feishu_posts", "feishu_chats", "feishu_avatars", "feishu_router_events", "feishu_decisions", "feishu_app"]) db.run(`DELETE FROM ${table}`);
     });
   const postWhere = (where: string, ...params: (string | number)[]): FeishuPostRecord | null => {
     const row = db.get<PostRow>(`SELECT * FROM feishu_posts WHERE ${where}`, ...params);
@@ -227,7 +240,10 @@ export function createFeishuStore(db: Db): FeishuStore {
             now,
           );
         } else {
-          if (existing.chatId !== input.chatId) db.run("DELETE FROM feishu_posts WHERE chat_id = ?", existing.chatId);
+          if (existing.chatId !== input.chatId) {
+            db.run("DELETE FROM feishu_posts WHERE chat_id = ?", existing.chatId);
+            db.run("DELETE FROM feishu_inbound_cursors WHERE chat_id = ?", existing.chatId);
+          }
           db.run(
             `UPDATE feishu_chats SET chat_id = ?, name = ?, label = ?, archived_at = NULL,
                avatar_fruit = CASE WHEN chat_id = ? THEN avatar_fruit ELSE NULL END,
@@ -273,6 +289,7 @@ export function createFeishuStore(db: Db): FeishuStore {
     setChatArchived(chatId, archivedAt, now) {
       db.transaction(() => {
         db.run("DELETE FROM feishu_posts WHERE chat_id = ?", chatId);
+        db.run("DELETE FROM feishu_inbound_cursors WHERE chat_id = ?", chatId);
         db.run("UPDATE feishu_chats SET archived_at = ?, updated_at = ? WHERE chat_id = ?", archivedAt, now, chatId);
       });
     },
@@ -311,7 +328,37 @@ export function createFeishuStore(db: Db): FeishuStore {
       const last = db.get<{ id: number }>("SELECT id FROM feishu_router_events WHERE id > ? ORDER BY id LIMIT 1 OFFSET ?", after, n - keep - 1)!;
       return { skipped: n - keep, lastSkippedId: last.id };
     },
-    routerEventsAfter: (after, limit) => db.all("SELECT id, item_id, command_id FROM feishu_router_events WHERE id > ? ORDER BY id LIMIT ?", after, limit),
+    routerEventsAfter: (after, limit) =>
+      db.all("SELECT id, item_id, command_id, ask_message_id FROM feishu_router_events WHERE id > ? ORDER BY id LIMIT ?", after, limit),
+    inboundCursor(chatId) {
+      const row = db.get<{ created_at: number; last_inbound_at: number | null; last_message_id: string | null }>(
+        `SELECT c.created_at, i.last_inbound_at, i.last_message_id
+         FROM feishu_chats c LEFT JOIN feishu_inbound_cursors i ON i.chat_id = c.chat_id
+         WHERE c.chat_id = ?`,
+        chatId,
+      );
+      if (row === undefined) return null;
+      return {
+        chatCreatedAt: row.created_at,
+        lastInboundAt: row.last_inbound_at,
+        lastMessageId: (row.last_message_id as FeishuMessageId | null) ?? null,
+      };
+    },
+    saveInboundCursor(chatId, cursor, now) {
+      if (chatById(chatId) === null) return;
+      db.run(
+        `INSERT INTO feishu_inbound_cursors (chat_id, last_inbound_at, last_message_id, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT (chat_id) DO UPDATE SET
+           last_message_id = CASE WHEN excluded.last_inbound_at >= feishu_inbound_cursors.last_inbound_at THEN excluded.last_message_id ELSE feishu_inbound_cursors.last_message_id END,
+           last_inbound_at = MAX(feishu_inbound_cursors.last_inbound_at, excluded.last_inbound_at),
+           updated_at = excluded.updated_at`,
+        chatId,
+        cursor.lastInboundAt,
+        cursor.lastMessageId,
+        now,
+      );
+    },
     decision(ref) {
       const [kind, id] = decisionKey(ref);
       return db.get<{ clientId: string; name: string }>("SELECT client_id AS clientId, name FROM feishu_decisions WHERE ref_kind = ? AND ref_id = ?", kind, id) ?? null;
@@ -321,7 +368,7 @@ export function createFeishuStore(db: Db): FeishuStore {
       db.run("INSERT INTO feishu_decisions VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING", kind, id, clientId, name, now);
     },
     postOf,
-    postByMessageId: (messageId) => postWhere("message_id = ? AND ref_kind != 'file' ORDER BY updated_at DESC LIMIT 1", messageId),
+    postByMessageId: (messageId) => postWhere("message_id = ? AND ref_kind NOT IN ('file', 'router_file') ORDER BY updated_at DESC LIMIT 1", messageId),
     savePost(record, now) {
       const key = refKey(record.ref);
       db.transaction(() => {
@@ -475,7 +522,10 @@ function refKey(ref: FeishuPostRef): { kind: FeishuPostRef["kind"]; id: number; 
   switch (ref.kind) {
     case "message":
     case "file":
+    case "router_file":
       return { kind: ref.kind, id: ref.messageId, part: ref.part };
+    case "router_ask":
+      return { kind: ref.kind, id: ref.messageId, part: 0 };
     case "router_item":
       return { kind: ref.kind, id: ref.itemId, part: 0 };
     case "router_command":
@@ -492,6 +542,10 @@ function toRef(row: PostRow): FeishuPostRef {
     case "message":
     case "file":
       return { kind: row.ref_kind, messageId: row.ref_id, part: row.part };
+    case "router_file":
+      return { kind: "router_file", messageId: row.ref_id, part: row.part };
+    case "router_ask":
+      return { kind: "router_ask", messageId: row.ref_id };
     case "router_item":
       return { kind: "router_item", itemId: row.ref_id };
     case "router_command":
