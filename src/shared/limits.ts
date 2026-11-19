@@ -436,6 +436,8 @@ export const DAEMON_LOG_MAX_BYTES = 2 * 1024 * 1024;
 export const AGENT_API_CLOSE_MS = 3_000;
 /** 关机时等账本把排着的驱动事件（回复里的文件在存副本）落库最多多久；到点没落完的，重启后驱动层重放同一条消息时再存。 */
 export const LEDGER_SETTLE_ON_SHUTDOWN_MS = 5_000;
+/** 同一会话排着等落库的驱动事件（前面有回复在存副本）最多几条：到了就不再等附件，排着的按顺序直接落库。 */
+export const MAX_PENDING_DRIVER_EVENTS_PER_SESSION = 1_000;
 
 /**
  * 界面登录后设的 cookie 名的前缀（HttpOnly、SameSite=Strict）。值是随机的会话令牌（每个浏览器一条，库里只存它的 sha256，

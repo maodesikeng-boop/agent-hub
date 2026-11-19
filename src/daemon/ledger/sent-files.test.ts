@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Change } from "../../shared/api.ts";
+import { MAX_PENDING_DRIVER_EVENTS_PER_SESSION } from "../../shared/limits.ts";
 import type { ConversationId, Message, SessionId } from "../../shared/domain.ts";
 import { workerWorktreePath } from "../../shared/paths.ts";
 import { sentFilesOf } from "../../shared/sent-files.ts";
@@ -12,6 +13,42 @@ import { openTestDb } from "../store/test-helpers.ts";
 import { createResolveFolder } from "./files.ts";
 import { createLedger } from "./index.ts";
 import type { LedgerOptions, SqliteLedger } from "./index.ts";
+
+/** 拦住某个文件的 open，模拟读得很慢的附件（网络盘、被占用）：opened 表示已经开始读，放行后 closed 表示那个句柄已关。 */
+type Gate = { promise: Promise<void>; resolve: () => void };
+const slowOpen = vi.hoisted(() => ({ hold: null as null | { path: string; opened: Gate; release: Gate; closed: Gate } }));
+
+vi.mock("../platform/index.ts", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../platform/index.ts")>();
+  return {
+    ...original,
+    openRegularFileNoFollow: async (...args: Parameters<typeof original.openRegularFileNoFollow>) => {
+      const hold = slowOpen.hold;
+      if (hold === null || args[0] !== hold.path) return original.openRegularFileNoFollow(...args);
+      hold.opened.resolve();
+      await hold.release.promise;
+      const handle = await original.openRegularFileNoFollow(...args);
+      const close = handle.close.bind(handle);
+      handle.close = async () => {
+        await close();
+        hold.closed.resolve();
+      };
+      return handle;
+    },
+  };
+});
+
+function gate(): Gate {
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => (resolve = r));
+  return { promise, resolve };
+}
+
+function holdOpen(path: string) {
+  const hold = { path, opened: gate(), release: gate(), closed: gate() };
+  slowOpen.hold = hold;
+  return hold;
+}
 
 let db: Db;
 let root: string;
@@ -55,6 +92,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  slowOpen.hold?.release.resolve();
+  slowOpen.hold = null;
   db.close();
   rmSync(root, { recursive: true, force: true });
 });
@@ -152,6 +191,59 @@ describe("agent 文字消息入库时存副本", () => {
     const message = lastMessage(worker.workerConversationId);
     expect(message.sender).toBe("agent");
     expect(sentFilesOf(message).map((f) => f.status)).toEqual(["saved", "saved", "not_allowed"]);
+  });
+});
+
+describe("关机与排队上限：慢附件不丢已收到的回复", () => {
+  const agentTexts = () =>
+    db
+      .all<{ text: string; meta: string | null }>("SELECT text, meta FROM messages WHERE conversation_id = ? AND sender = 'agent' ORDER BY id", pm.conversationId)
+      .map((r) => ({ text: r.text, meta: r.meta === null ? null : (JSON.parse(r.meta) as Record<string, unknown>) }));
+
+  it("关机时附件还在读：close() 中断拷贝，已收到的两条回复按顺序同步落库；之后放行的读取不再碰库、不留副本", async () => {
+    const slow = file(join(main, "slow.txt"), "ordinary attachment\n");
+    const hold = holdOpen(slow);
+    const errors = vi.spyOn(console, "error");
+    send(pm.sessionId, `[附件](${slow})`, "first");
+    send(pm.sessionId, "下一句", "second");
+    await hold.opened.promise;
+    ledger.close();
+    expect(agentTexts()).toEqual([
+      { text: `[附件](${slow})`, meta: null },
+      { text: "下一句", meta: null },
+    ]);
+    const writes = vi.spyOn(db, "transaction");
+    hold.release.resolve();
+    await hold.closed.promise;
+    await ledger.settleDriverEvents();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(writes).not.toHaveBeenCalled();
+    expect(errors).not.toHaveBeenCalled();
+    expect(existsSync(sentFilesDir) ? readdirSync(sentFilesDir) : []).toEqual([]);
+  });
+
+  it("关机之后驱动层再交来的事件不落库", () => {
+    ledger.close();
+    send(pm.sessionId, "关机后才到");
+    expect(agentTexts()).toEqual([]);
+  });
+
+  it(`同一会话排着的事件到 ${MAX_PENDING_DRIVER_EVENTS_PER_SESSION} 条：不再等附件，排着的按顺序直接落库`, async () => {
+    const slow = file(join(main, "slow.txt"));
+    const hold = holdOpen(slow);
+    send(pm.sessionId, `[附件](${slow})`, "head");
+    await hold.opened.promise;
+    for (let i = 1; i < MAX_PENDING_DRIVER_EVENTS_PER_SESSION; i++) send(pm.sessionId, `第 ${i} 句`, `n${i}`);
+    expect(agentTexts()).toEqual([]);
+    send(pm.sessionId, "满了", "full");
+    const texts = agentTexts();
+    expect(texts).toHaveLength(MAX_PENDING_DRIVER_EVENTS_PER_SESSION + 1);
+    expect(texts[0]).toEqual({ text: `[附件](${slow})`, meta: null });
+    expect(texts.at(-1)!.text).toBe("满了");
+    hold.release.resolve();
+    await hold.closed.promise;
+    await ledger.settleDriverEvents();
+    expect(agentTexts()).toHaveLength(MAX_PENDING_DRIVER_EVENTS_PER_SESSION + 1);
   });
 });
 
