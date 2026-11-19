@@ -374,6 +374,7 @@ writeFileSync(
     mkdirSync(roLaunchDir, { recursive: true });
     writeFileSync(join(roLaunchDir, "prompt.md"), "RO_PROMPT");
     writeFileSync(join(stateDir, "ui-token"), "UI_TOKEN");
+    writeFileSync(join(extraProtectedRoot, "peer.txt"), "PEER");
     const policy = buildReadonlyPolicy({
       homeDir: realpathSync.native(homedir()),
       stateDir,
@@ -399,7 +400,9 @@ let secretReadBlocked = false;
 try { fs.readFileSync(${JSON.stringify(join(stateDir, "ui-token"))}); } catch { secretReadBlocked = true; }
 let launchReadable = false;
 try { launchReadable = fs.readFileSync(${JSON.stringify(join(roLaunchDir, "prompt.md"))}, "utf8") === "RO_PROMPT"; } catch {}
-fs.writeFileSync(${JSON.stringify(join(tmpRo, "result.json"))}, JSON.stringify({ stateBlocked, wtBlocked, extraRootBlocked, secretReadBlocked, launchReadable }));
+let extraRootReadable = false;
+try { extraRootReadable = fs.readFileSync(${JSON.stringify(join(extraProtectedRoot, "peer.txt"))}, "utf8") === "PEER"; } catch {}
+fs.writeFileSync(${JSON.stringify(join(tmpRo, "result.json"))}, JSON.stringify({ stateBlocked, wtBlocked, extraRootBlocked, secretReadBlocked, launchReadable, extraRootReadable }));
 `,
         ],
       },
@@ -428,6 +431,7 @@ fs.writeFileSync(${JSON.stringify(join(tmpRo, "result.json"))}, JSON.stringify({
       extraRootBlocked: true,
       secretReadBlocked: true,
       launchReadable: true,
+      extraRootReadable: true,
     });
 
     // 2) 验证真实非 codex 驱动（以 Pi 驱动 + .cmd 垫片为例）启动只读会话不报错、带出工具禁写参数并发射 driver.warning

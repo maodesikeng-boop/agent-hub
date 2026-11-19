@@ -7,8 +7,7 @@ use std::io;
 use std::path::Path;
 use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{
-    ERROR_PIPE_BUSY, ERROR_SUCCESS, GENERIC_ALL, GENERIC_WRITE, HLOCAL, INVALID_HANDLE_VALUE,
-    LocalFree,
+    ERROR_PIPE_BUSY, ERROR_SUCCESS, GENERIC_ALL, HLOCAL, INVALID_HANDLE_VALUE, LocalFree,
 };
 use windows_sys::Win32::Security::Authorization::{
     GetNamedSecurityInfoW, GetSecurityInfo, SetEntriesInAclW, SetNamedSecurityInfoW,
@@ -16,9 +15,10 @@ use windows_sys::Win32::Security::Authorization::{
     SE_KERNEL_OBJECT, SET_ACCESS, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
 };
 use windows_sys::Win32::Security::{
-    EqualSid, GetAce, GetSecurityDescriptorControl, ACCESS_ALLOWED_ACE, ACCESS_DENIED_ACE,
-    ACE_HEADER, ACL, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, OBJECT_INHERIT_ACE,
-    PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, SE_DACL_PROTECTED,
+    DeleteAce, EqualSid, GetAce, GetSecurityDescriptorControl, ACCESS_ALLOWED_ACE,
+    ACCESS_DENIED_ACE, ACE_HEADER, ACL, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION,
+    INHERITED_ACE, OBJECT_INHERIT_ACE, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+    SE_DACL_PROTECTED,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, DELETE, FILE_APPEND_DATA, FILE_ATTRIBUTE_NORMAL, FILE_DELETE_CHILD,
@@ -33,12 +33,13 @@ use windows_sys::Win32::System::SystemServices::{
 
 const INHERIT_CI_OI: u32 = CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE;
 
-pub const WORKER_DENY_WRITE_MASK: u32 = FILE_GENERIC_WRITE
-    | FILE_WRITE_DATA
+/// Write side of every `DENY FusaWorker` ACE, specific write rights only: `FILE_GENERIC_WRITE` / `GENERIC_WRITE` also
+/// carry `READ_CONTROL | SYNCHRONIZE`, and with a restricted (not `WRITE_RESTRICTED`) token those would stop Workers
+/// from even opening files for reading anywhere under a protected root, e.g. their own cross-volume `.fusa-wt` worktree.
+pub const WORKER_DENY_WRITE_MASK: u32 = FILE_WRITE_DATA
     | FILE_APPEND_DATA
     | FILE_WRITE_EA
     | FILE_WRITE_ATTRIBUTES
-    | GENERIC_WRITE
     | DELETE
     | FILE_DELETE_CHILD
     | WRITE_DAC
@@ -56,6 +57,9 @@ pub const WORKER_DENY_READ_MASK: u32 = FILE_READ_DATA | FILE_READ_EA | FILE_EXEC
 
 /// Re-allowed entries (`worktrees\`, `uploads\`, `tools\`, `run\bin\`, a session's own launch dir): read and execute.
 pub const WORKER_ALLOW_READ_MASK: u32 = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
+
+/// Everything an explicit `DENY FusaWorker` ACE may carry; anything else was left by an older build.
+const WORKER_DENY_ANY_MASK: u32 = WORKER_DENY_WRITE_MASK | WORKER_DENY_READ_MASK;
 
 const CHECK_DENY_BITS: u32 =
     FILE_WRITE_DATA | FILE_APPEND_DATA | DELETE | FILE_DELETE_CHILD | WRITE_DAC | WRITE_OWNER;
@@ -111,6 +115,40 @@ unsafe fn dacl_has_ace(
     false
 }
 
+/// Deletes in place the explicit `DENY <sid>` ACEs carrying bits outside `WORKER_DENY_ANY_MASK` (older builds denied
+/// `FILE_GENERIC_WRITE | GENERIC_WRITE`, see `WORKER_DENY_WRITE_MASK`) and returns their legitimate bits for the caller
+/// to deny again; `None` when there was nothing to narrow.
+unsafe fn take_overbroad_denies(dacl: *mut ACL, sid: *mut c_void) -> Option<u32> {
+    if dacl.is_null() || sid.is_null() {
+        return None;
+    }
+    let mut kept: Option<u32> = None;
+    let count = unsafe { (*dacl).AceCount as u32 };
+    for idx in (0..count).rev() {
+        let mut raw_ace: *mut c_void = std::ptr::null_mut();
+        if unsafe { GetAce(dacl, idx, &mut raw_ace) } == 0 || raw_ace.is_null() {
+            continue;
+        }
+        let header = unsafe { &*(raw_ace as *const ACE_HEADER) };
+        if header.AceType != ACCESS_DENIED_ACE_TYPE as u8
+            || (header.AceFlags & INHERITED_ACE as u8) != 0
+        {
+            continue;
+        }
+        let ace = unsafe { &*(raw_ace as *const ACCESS_DENIED_ACE) };
+        let mask = ace.Mask;
+        if mask & !WORKER_DENY_ANY_MASK == 0
+            || unsafe { EqualSid(&ace.SidStart as *const u32 as *mut c_void, sid) } == 0
+        {
+            continue;
+        }
+        if unsafe { DeleteAce(dacl, idx) } != 0 {
+            kept = Some(kept.unwrap_or(0) | (mask & WORKER_DENY_ANY_MASK));
+        }
+    }
+    kept
+}
+
 fn make_explicit_access(
     sid: *mut c_void,
     mode: i32,
@@ -158,7 +196,7 @@ fn read_named_dacl(path: &Path) -> io::Result<(*mut ACL, PSECURITY_DESCRIPTOR)> 
 
 /// Applies inheritable `DENY FusaWorker` write ACE + `OWNER RIGHTS (S-1-3-4): READ_CONTROL` ACE
 /// to a protected root (`dataDir` or cross-volume `X:\.fusa-wt\<hash>`).
-/// Idempotently skips rewriting when the DACL already has both ACEs.
+/// Idempotently skips rewriting when the DACL already has both ACEs and no overbroad deny from an older build.
 pub fn protect_root(state_dir: &Path, root_path: &Path) -> io::Result<bool> {
     fs::create_dir_all(root_path)?;
     let store = load_or_create_sid_store(state_dir)?;
@@ -166,23 +204,25 @@ pub fn protect_root(state_dir: &Path, root_path: &Path) -> io::Result<bool> {
     let owner_rights = LocalSid::from_string("S-1-3-4")?;
 
     let (dacl, sd) = read_named_dacl(root_path)?;
-    let already_ok = unsafe {
-        dacl_has_ace(
-            dacl,
-            worker_group.as_ptr(),
-            ACCESS_DENIED_ACE_TYPE as u8,
-            INHERIT_CI_OI as u8,
-            CHECK_DENY_BITS,
-            false,
-        ) && dacl_has_ace(
-            dacl,
-            owner_rights.as_ptr(),
-            ACCESS_ALLOWED_ACE_TYPE as u8,
-            INHERIT_CI_OI as u8,
-            READ_CONTROL,
-            true,
-        )
-    };
+    let legacy = unsafe { take_overbroad_denies(dacl, worker_group.as_ptr()) };
+    let already_ok = legacy.is_none()
+        && unsafe {
+            dacl_has_ace(
+                dacl,
+                worker_group.as_ptr(),
+                ACCESS_DENIED_ACE_TYPE as u8,
+                INHERIT_CI_OI as u8,
+                CHECK_DENY_BITS,
+                false,
+            ) && dacl_has_ace(
+                dacl,
+                owner_rights.as_ptr(),
+                ACCESS_ALLOWED_ACE_TYPE as u8,
+                INHERIT_CI_OI as u8,
+                READ_CONTROL,
+                true,
+            )
+        };
     if already_ok {
         if !sd.is_null() {
             unsafe {
@@ -196,7 +236,7 @@ pub fn protect_root(state_dir: &Path, root_path: &Path) -> io::Result<bool> {
         make_explicit_access(
             worker_group.as_ptr(),
             DENY_ACCESS,
-            WORKER_DENY_WRITE_MASK,
+            WORKER_DENY_WRITE_MASK | legacy.unwrap_or(0),
             INHERIT_CI_OI,
         ),
         make_explicit_access(
@@ -348,7 +388,9 @@ pub fn harden_private_dir(state_dir: &Path, dir_path: &Path) -> io::Result<bool>
     let mut revision = 0u32;
     let ctrl_ok = unsafe { GetSecurityDescriptorControl(sd, &mut control, &mut revision) };
     let is_protected = ctrl_ok != 0 && (control & SE_DACL_PROTECTED) != 0;
-    let already_ok = is_protected
+    let legacy = unsafe { take_overbroad_denies(dacl, worker_group.as_ptr()) };
+    let already_ok = legacy.is_none()
+        && is_protected
         && unsafe {
             dacl_has_ace(
                 dacl,
@@ -737,4 +779,86 @@ pub fn allow_current_user_on_named_pipe(pipe_path: &str) -> io::Result<()> {
         0,
     );
     add_pipe_ace(pipe_path, &explicit, "allow_pipe")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows_sys::Win32::Foundation::{GENERIC_EXECUTE, GENERIC_READ, GENERIC_WRITE};
+    use windows_sys::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES;
+
+    fn explicit_denies(path: &Path, sid: *mut c_void) -> Vec<u32> {
+        let (dacl, sd) = read_named_dacl(path).expect("read dacl");
+        let mut masks = Vec::new();
+        let count = unsafe { (*dacl).AceCount as u32 };
+        for idx in 0..count {
+            let mut raw_ace: *mut c_void = std::ptr::null_mut();
+            if unsafe { GetAce(dacl, idx, &mut raw_ace) } == 0 {
+                continue;
+            }
+            let header = unsafe { &*(raw_ace as *const ACE_HEADER) };
+            if header.AceType != ACCESS_DENIED_ACE_TYPE as u8
+                || (header.AceFlags & INHERITED_ACE as u8) != 0
+            {
+                continue;
+            }
+            let ace = unsafe { &*(raw_ace as *const ACCESS_DENIED_ACE) };
+            if unsafe { EqualSid(&ace.SidStart as *const u32 as *mut c_void, sid) } != 0 {
+                masks.push(ace.Mask);
+            }
+        }
+        unsafe {
+            LocalFree(sd as HLOCAL);
+        }
+        masks
+    }
+
+    #[test]
+    fn deny_masks_leave_handle_and_metadata_rights_alone() {
+        let handle_and_metadata = READ_CONTROL
+            | SYNCHRONIZE
+            | FILE_READ_ATTRIBUTES
+            | GENERIC_READ
+            | GENERIC_WRITE
+            | GENERIC_EXECUTE
+            | GENERIC_ALL;
+        assert_eq!(WORKER_DENY_WRITE_MASK & handle_and_metadata, 0);
+        assert_eq!(WORKER_DENY_WRITE_MASK & WORKER_DENY_READ_MASK, 0);
+        assert_eq!(WORKER_DENY_READ_MASK & handle_and_metadata, 0);
+    }
+
+    #[test]
+    fn protect_root_narrows_overbroad_deny_from_older_builds() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = tmp.path().join("state");
+        let root = tmp.path().join("root");
+        fs::create_dir_all(&root).expect("root");
+        let store = load_or_create_sid_store(&state).expect("sid store");
+        let group = LocalSid::from_string(&store.worker_group_sid).expect("group sid");
+        // What older builds left: the generic write rights (with READ_CONTROL | SYNCHRONIZE), here merged with a read deny.
+        let legacy =
+            FILE_GENERIC_WRITE | GENERIC_WRITE | WORKER_DENY_WRITE_MASK | WORKER_DENY_READ_MASK;
+        ensure_inheritable_ace(
+            &root,
+            group.as_ptr(),
+            DENY_ACCESS,
+            legacy,
+            ACCESS_DENIED_ACE_TYPE as u8,
+            CHECK_DENY_BITS,
+            "legacy",
+        )
+        .expect("legacy deny");
+
+        assert!(protect_root(&state, &root).expect("protect root"));
+        let masks = explicit_denies(&root, group.as_ptr());
+        assert!(!masks.is_empty());
+        assert!(
+            masks.iter().all(|m| m & !WORKER_DENY_ANY_MASK == 0),
+            "{masks:x?}"
+        );
+        let denied = masks.iter().fold(0, |acc, m| acc | m);
+        assert_eq!(denied & WORKER_DENY_WRITE_MASK, WORKER_DENY_WRITE_MASK);
+        assert_eq!(denied & WORKER_DENY_READ_MASK, WORKER_DENY_READ_MASK);
+        assert!(!protect_root(&state, &root).expect("protect root again"));
+    }
 }

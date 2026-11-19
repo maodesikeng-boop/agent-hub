@@ -180,7 +180,14 @@ fn main() {
                 allowed_file,
                 outside_file,
                 secret_file,
-            } => probe::run_internal_probe_child(&denied_file, &allowed_file, &outside_file, &secret_file),
+                peer_file,
+            } => probe::run_internal_probe_child(
+                &denied_file,
+                &allowed_file,
+                &outside_file,
+                &secret_file,
+                &peer_file,
+            ),
         };
         std::process::exit(exit_code);
     }

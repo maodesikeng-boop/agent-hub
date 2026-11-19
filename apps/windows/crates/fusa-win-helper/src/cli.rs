@@ -69,6 +69,7 @@ pub enum FusaRunCommand {
         allowed_file: PathBuf,
         outside_file: PathBuf,
         secret_file: PathBuf,
+        peer_file: PathBuf,
     },
 }
 
@@ -189,14 +190,15 @@ pub fn parse_fusa_run_args(raw_args: &[String]) -> Result<FusaRunCommand, String
             };
         }
         "internal-probe-child" => {
-            if raw_args.len() != 5 {
-                return Err("internal-probe-child requires 4 file paths".to_string());
+            if raw_args.len() != 6 {
+                return Err("internal-probe-child requires 5 file paths".to_string());
             }
             return Ok(FusaRunCommand::InternalProbeChild {
                 denied_file: PathBuf::from(&raw_args[1]),
                 allowed_file: PathBuf::from(&raw_args[2]),
                 outside_file: PathBuf::from(&raw_args[3]),
                 secret_file: PathBuf::from(&raw_args[4]),
+                peer_file: PathBuf::from(&raw_args[5]),
             });
         }
         _ => {}

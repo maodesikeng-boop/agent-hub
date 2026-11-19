@@ -11,6 +11,7 @@ pub fn run_internal_probe_child(
     allowed_file: &Path,
     outside_file: &Path,
     secret_file: &Path,
+    peer_file: &Path,
 ) -> i32 {
     if fs::read(secret_file).is_ok() {
         eprintln!(
@@ -18,6 +19,13 @@ pub fn run_internal_probe_child(
             secret_file.display()
         );
         return 14;
+    }
+    if let Err(err) = fs::read(peer_file) {
+        eprintln!(
+            "sandbox probe failed: read under a write-protected root outside the data dir failed ({}): {err}",
+            peer_file.display()
+        );
+        return 15;
     }
     if fs::write(denied_file, b"should-fail").is_ok() {
         eprintln!(
@@ -84,8 +92,11 @@ pub fn run_sandbox_probe(custom_state_dir: Option<&Path>) -> io::Result<()> {
     let protected_dir = base_tmp.join("protected");
     let allowed_dir = protected_dir.join("worktrees").join("probe");
     let outside_dir = base_tmp.join("outside");
+    // Like a cross-volume `.fusa-wt` root: write-protected, but no read boundary, so other Workers' files stay readable.
+    let peer_dir = base_tmp.join("peer-root").join("other-worker");
     fs::create_dir_all(&protected_dir)?;
     fs::create_dir_all(&outside_dir)?;
+    fs::create_dir_all(&peer_dir)?;
 
     let secret_file = protected_dir.join("secret.txt");
     fs::write(&secret_file, b"secret")?;
@@ -93,6 +104,9 @@ pub fn run_sandbox_probe(custom_state_dir: Option<&Path>) -> io::Result<()> {
     deny_read(&probe_state, &protected_dir)?;
     allow_worker_worktree(&probe_state, "probe", &allowed_dir)?;
     allow_read(&probe_state, None, &protected_dir.join("worktrees"))?;
+    let peer_file = peer_dir.join("peer.txt");
+    fs::write(&peer_file, b"peer")?;
+    protect_root(&probe_state, &base_tmp.join("peer-root"))?;
 
     let exe = env::current_exe()?;
     let exe_str = exe.to_string_lossy().into_owned();
@@ -112,6 +126,7 @@ pub fn run_sandbox_probe(custom_state_dir: Option<&Path>) -> io::Result<()> {
         allowed_file.to_string_lossy().into_owned(),
         outside_file.to_string_lossy().into_owned(),
         secret_file.to_string_lossy().into_owned(),
+        peer_file.to_string_lossy().into_owned(),
     ];
     let code = run_session(RunSessionSpec {
         sandbox: &sandbox,
