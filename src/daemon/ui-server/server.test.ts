@@ -1528,12 +1528,12 @@ describe("POST /api/uploads", () => {
     expect(existsSync(uploadsDir) ? readdirSync(uploadsDir) : []).toEqual([]);
   });
 
-  it("刚好 50 MB 收下；多 1 字节：413，中文原因，磁盘上没有东西", async () => {
+  it("刚好 100 MB 收下；多 1 字节：413，中文原因，磁盘上没有东西", async () => {
     expect((await upload("edge.bin", Buffer.alloc(MAX_UPLOAD_BYTES))).statusCode).toBe(200);
     const before = readdirSync(uploadsDir).length;
     const res = await upload("big.bin", Buffer.alloc(MAX_UPLOAD_BYTES + 1));
     expect(res.statusCode).toBe(413);
-    expect(res.json()).toEqual({ code: "too_large", error: "文件太大，单个文件最多 50 MB" });
+    expect(res.json()).toEqual({ code: "too_large", error: "文件太大，单个文件最多 100 MB" });
     expect(readdirSync(uploadsDir)).toHaveLength(before);
   });
 
@@ -1555,11 +1555,11 @@ describe("POST /api/uploads", () => {
       payload: Buffer.alloc(16),
     });
     expect(res.statusCode).toBe(413);
-    expect(res.json()).toEqual({ code: "too_large", error: "文件太大，单个文件最多 50 MB" });
+    expect(res.json()).toEqual({ code: "too_large", error: "文件太大，单个文件最多 100 MB" });
     expect(existsSync(uploadsDir) ? readdirSync(uploadsDir).length : 0).toBe(before);
   });
 
-  it("50 MB 的上限只属于上传接口：普通消息接口超过 1 MB 照样 413", async () => {
+  it("100 MB 的上限只属于上传接口：普通消息接口超过 1 MB 照样 413", async () => {
     const res = await call("POST", "/api/conversations/1/messages", {
       rawBody: JSON.stringify({ clientId: "c", text: "hi", pad: " ".repeat(2 * 1024 * 1024) }),
     });

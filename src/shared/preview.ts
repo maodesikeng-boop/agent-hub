@@ -103,6 +103,7 @@ const OPEN_ALLOWED_EXTENSIONS: readonly string[] = [
   "mp4",
   "m4v",
   "mov",
+  "webm",
   "m4a",
   "mp3",
   "wav",

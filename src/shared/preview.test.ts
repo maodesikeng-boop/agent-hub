@@ -57,7 +57,7 @@ describe("canOpenWithDefault：能不能用默认程序打开（白名单）", (
     for (const name of ["a.txt", "a.md", "a.csv", "a.tsv", "a.json", "a.log", "a.pdf", "a.rtf", "a.png", "a.jpg", "a.jpeg", "a.gif", "a.webp", "a.heic"]) {
       expect(canOpenWithDefault(name), name).toBe(true);
     }
-    for (const name of ["a.mp4", "a.mov", "a.m4a", "a.mp3", "a.wav", "a.docx", "a.xlsx", "a.pptx", "a.doc", "a.xls", "a.ppt", "a.pages", "a.numbers", "a.key", "a.html", "a.htm"]) {
+    for (const name of ["a.mp4", "a.mov", "a.webm", "a.m4a", "a.mp3", "a.wav", "a.docx", "a.xlsx", "a.pptx", "a.doc", "a.xls", "a.ppt", "a.pages", "a.numbers", "a.key", "a.html", "a.htm"]) {
       expect(canOpenWithDefault(name), name).toBe(true);
     }
     for (const name of ["A.PDF", "报告.Docx", "x.y.PNG"]) expect(canOpenWithDefault(name), name).toBe(true);

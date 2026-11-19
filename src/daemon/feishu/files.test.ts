@@ -1,6 +1,7 @@
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FeishuChatId, FeishuMessageId } from "../../shared/feishu.ts";
 import { FEISHU_FILE_MAX_BYTES, FEISHU_IMAGE_MAX_BYTES, FEISHU_IMAGE_MAX_EDGE, MAX_UPLOAD_BYTES } from "../../shared/limits.ts";
@@ -10,6 +11,26 @@ import { createFakeFeishu } from "./test-helpers.ts";
 import { isFeishuRejection } from "./transport.ts";
 
 const file = (name: string, mime: string, bytes: number): FeishuOutboundFile => ({ messageId: 1, part: 0, path: `/tmp/${name}`, name, mime, bytes });
+
+const MB = 1024 * 1024;
+
+/** 像慢网上的飞书下载连接：给够 total 字节后停住，不结束也不报错，只有被销毁才断开。第一块以 png 文件头开头。 */
+function stalledDownload(total: number): Readable {
+  let sent = 0;
+  return new Readable({
+    read() {
+      if (sent >= total) return;
+      const chunk = Buffer.alloc(MB);
+      if (sent === 0) chunk.write("89504e470d0a1a0a", "hex");
+      sent += chunk.length;
+      this.push(chunk);
+    },
+  });
+}
+
+/** 等 promise，2 秒还没结果当挂住了。 */
+const settleWithin = <T>(promise: Promise<T>): Promise<T | "挂住了"> =>
+  Promise.race([promise, new Promise<"挂住了">((resolve) => setTimeout(() => resolve("挂住了"), 2000))]);
 
 describe("planFeishuFile", () => {
   it("图片发图片（能缩的位图不限大小，上传前缩）；超过 10 MB 又不能缩的图片（gif）按文件发", () => {
@@ -122,6 +143,31 @@ describe("createFeishuFileService", () => {
     expect(await svc.receive("om_1" as FeishuMessageId, { type: "file", fileKey: "file_big", fileName: "big.bin" })).toBeNull();
     expect(await svc.receive("om_1" as FeishuMessageId, { type: "file", fileKey: "missing", fileName: "x" })).toBeNull();
     expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it("图片下载超过 MAX_UPLOAD_BYTES 而飞书那头还没发完：立刻返回 null，断开下载连接，不留文件", async () => {
+    const fake = createFakeFeishu();
+    const download = stalledDownload(MAX_UPLOAD_BYTES + 2 * MB);
+    fake.resources.set("img_big", download);
+    const svc = createFeishuFileService({ transport: fake, uploadsDir: dir, log: () => {} });
+    expect(await settleWithin(svc.receive("om_1" as FeishuMessageId, { type: "image", fileKey: "img_big", fileName: null }))).toBeNull();
+    expect(download.destroyed).toBe(true);
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it("写不了盘（上传目录建不出来）：图片和文件都立刻返回 null，断开下载连接", async () => {
+    const notDir = join(dir, "not-a-dir");
+    writeFileSync(notDir, "");
+    const fake = createFakeFeishu();
+    const image = stalledDownload(MB);
+    const doc = stalledDownload(MB);
+    fake.resources.set("img_k", image);
+    fake.resources.set("file_k", doc);
+    const svc = createFeishuFileService({ transport: fake, uploadsDir: notDir, log: () => {} });
+    expect(await settleWithin(svc.receive("om_1" as FeishuMessageId, { type: "image", fileKey: "img_k", fileName: null }))).toBeNull();
+    expect(await settleWithin(svc.receive("om_1" as FeishuMessageId, { type: "file", fileKey: "file_k", fileName: "a.mov" }))).toBeNull();
+    expect(image.destroyed).toBe(true);
+    expect(doc.destroyed).toBe(true);
   });
 
   it("下载失败返回 null 并记一行日志，带上消息编号和出错原因（飞书权限不够、资源过期不再悄悄吞掉）", async () => {

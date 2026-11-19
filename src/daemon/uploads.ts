@@ -71,7 +71,7 @@ function toAttachment(uploadsDir: string, id: string, name: string, size: number
 
 /**
  * 存一个文件，返回它的附件信息。data 是流时边收边写盘（视频几十 MB，不整个读进内存）。
- * 空文件、超过 MAX_UPLOAD_BYTES 抛 UploadError；出错（含流中途断开）时磁盘上不留东西。
+ * 空文件、超过 MAX_UPLOAD_BYTES 抛 UploadError；出错（含流中途断开、建不了目录）时销毁 data 流、磁盘上不留东西。
  */
 export async function saveUpload(uploadsDir: string, rawName: string, data: Buffer | Readable): Promise<Attachment> {
   if (Buffer.isBuffer(data) && data.length > MAX_UPLOAD_BYTES) throw new UploadError(413, UPLOAD_TOO_LARGE_MESSAGE);
@@ -82,7 +82,6 @@ export async function saveUpload(uploadsDir: string, rawName: string, data: Buff
   const name = sanitizeFileName(rawName);
   const id = randomBytes(8).toString("hex");
   const dir = join(uploadsDir, id);
-  await mkdir(dir, { recursive: true, mode: 0o700 });
   let size = 0;
   const limit = new Transform({
     transform(chunk: Buffer, _encoding, done) {
@@ -91,9 +90,11 @@ export async function saveUpload(uploadsDir: string, rawName: string, data: Buff
     },
   });
   try {
+    await mkdir(dir, { recursive: true, mode: 0o700 });
     await pipeline(source, limit, createWriteStream(join(dir, name), { flags: "wx", mode: 0o600 }));
     if (size === 0) throw new UploadError(400, UPLOAD_EMPTY_MESSAGE);
   } catch (error) {
+    source.destroy();
     await rm(dir, { recursive: true, force: true });
     throw error;
   } finally {

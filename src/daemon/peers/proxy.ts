@@ -218,6 +218,9 @@ export async function proxyHttp(req: FastifyRequest, reply: FastifyReply, target
     req.raw.off("data", onBodyProgress);
   }
 
+  // 对端没读完请求体就回了（413、429 等）：回完关掉这条连接，免得浏览器接着往里传剩下的
+  if (hasBody && !req.raw.complete) reply.header("connection", "close");
+
   if (res.status === 401) {
     const raw = Buffer.from(await res.arrayBuffer().catch(() => new ArrayBuffer(0)));
     let text = "";

@@ -457,12 +457,12 @@ describe("右栏：每组可以收起", () => {
 });
 
 describe("RightRailToggle: Piece 纸片分身图标", () => {
-  it("开关使用当前项目经理那只小动物的纸片分身（Avatar neutral 26px，按根字号缩放）", () => {
+  it("开关使用当前项目经理那只小动物的纸片分身（Avatar neutral 20px，按根字号缩放）", () => {
     render(<RightRailToggle visible open={false} attention={false} look={defaultLookOf(3)} onToggle={() => {}} />);
     const button = screen.getByRole("button", { name: "Show side panel" });
     const avatar = button.querySelector("[data-neutral='true']");
     expect(avatar).toBeInTheDocument();
-    expect((avatar as HTMLElement).style.width).toBe("1.625rem");
+    expect((avatar as HTMLElement).style.width).toBe("1.25rem");
   });
 
   it("有等你确定且收起时右上角显示 6px 强调色小圆点", () => {
