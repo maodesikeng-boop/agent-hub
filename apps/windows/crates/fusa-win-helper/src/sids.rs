@@ -5,6 +5,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 pub const SANDBOX_SIDS_FILE: &str = "win-sandbox-sids.json";
+/// Lock file next to the SID store: every `fusa-run` process takes it before a read-modify-write.
+pub const SANDBOX_SIDS_LOCK_FILE: &str = "win-sandbox-sids.lock";
 pub const MAX_PERSISTED_WORKER_SIDS: usize = 1024;
 /// Store-key prefix of per-session reader SIDs (`FusaRead-<key>`), kept apart from worker write SIDs.
 const READER_KEY_PREFIX: &str = "read-";
@@ -103,16 +105,30 @@ fn persist_store(state_dir: &Path, store: &SandboxSidStore) -> io::Result<()> {
     Ok(())
 }
 
-pub fn load_or_create_sid_store(state_dir: &Path) -> io::Result<SandboxSidStore> {
-    let file = sids_file_path(state_dir);
-    if file.exists() {
-        if let Ok(raw) = fs::read_to_string(&file) {
-            if let Ok(parsed) = serde_json::from_str::<SandboxSidStore>(&raw) {
-                if is_valid_cap_sid_syntax(&parsed.worker_group_sid) {
-                    return Ok(parsed);
-                }
-            }
-        }
+fn read_store(state_dir: &Path) -> Option<SandboxSidStore> {
+    let raw = fs::read_to_string(sids_file_path(state_dir)).ok()?;
+    let parsed = serde_json::from_str::<SandboxSidStore>(&raw).ok()?;
+    is_valid_cap_sid_syntax(&parsed.worker_group_sid).then_some(parsed)
+}
+
+/// Exclusive lock held until the returned file is dropped. The store is replaced by rename, so
+/// readers never see a torn file; writers take this lock so a concurrent update is not lost.
+fn lock_store(state_dir: &Path) -> io::Result<fs::File> {
+    fs::create_dir_all(state_dir)?;
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(state_dir.join(SANDBOX_SIDS_LOCK_FILE))?;
+    lock.lock()?;
+    Ok(lock)
+}
+
+/// Caller holds `lock_store`.
+fn load_or_create_locked(state_dir: &Path) -> io::Result<SandboxSidStore> {
+    if let Some(store) = read_store(state_dir) {
+        return Ok(store);
     }
     let created = SandboxSidStore {
         version: 1,
@@ -121,6 +137,14 @@ pub fn load_or_create_sid_store(state_dir: &Path) -> io::Result<SandboxSidStore>
     };
     persist_store(state_dir, &created)?;
     Ok(created)
+}
+
+pub fn load_or_create_sid_store(state_dir: &Path) -> io::Result<SandboxSidStore> {
+    if let Some(store) = read_store(state_dir) {
+        return Ok(store);
+    }
+    let _lock = lock_store(state_dir)?;
+    load_or_create_locked(state_dir)
 }
 
 pub fn ensure_worker_sid(
@@ -134,11 +158,20 @@ pub fn ensure_worker_sid(
             format!("invalid worker id: {worker_id}"),
         ));
     }
-    let mut store = load_or_create_sid_store(state_dir)?;
-    if let Some(existing) = store.worker_sids.get(key) {
-        if is_valid_cap_sid_syntax(&existing.sid) {
-            return Ok((store.worker_group_sid, existing.sid.clone()));
-        }
+    let existing = |store: &SandboxSidStore| {
+        store
+            .worker_sids
+            .get(key)
+            .filter(|entry| is_valid_cap_sid_syntax(&entry.sid))
+            .map(|entry| (store.worker_group_sid.clone(), entry.sid.clone()))
+    };
+    if let Some(found) = read_store(state_dir).as_ref().and_then(existing) {
+        return Ok(found);
+    }
+    let _lock = lock_store(state_dir)?;
+    let mut store = load_or_create_locked(state_dir)?;
+    if let Some(found) = existing(&store) {
+        return Ok(found);
     }
     let next_seq = store
         .worker_sids

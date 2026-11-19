@@ -11,6 +11,7 @@
 //   POST /mesh/devices/remove { id }
 // 桌面外壳：POST /admin/shutdown。
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { Socket } from "node:net";
 import { z } from "zod";
 import { isDeviceId } from "../../shared/api.ts";
 import { ADMIN_SOCKET_MAX_BODY_BYTES } from "../../shared/limits.ts";
@@ -29,7 +30,19 @@ export interface AdminSocketOptions {
   mesh?: () => Mesh | undefined;
   /** 桌面外壳经本机管理端点优雅关机（Windows 下替代外部无法送达的 SIGTERM）。 */
   onShutdown?: () => void;
+  /**
+   * 起好监听之后、服务第一个请求之前的加固（Windows：给管理管道设 DENY FusaWorker）。做完之前请求一律 503，做完断开这期间连上的连接；
+   * 做失败就关掉 socket、startAdminSocket 抛 AdminSocketInsecureError：没加固好的管道不服务。
+   */
+  secure?: (socketPath: string) => Promise<void>;
   log?: (line: string) => void;
+}
+
+export class AdminSocketInsecureError extends Error {
+  constructor(socketPath: string, cause: unknown) {
+    super(`管理 socket ${socketPath} 加固失败，已关掉：${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    this.name = "AdminSocketInsecureError";
+  }
 }
 
 export interface RunningAdminSocket {
@@ -164,7 +177,10 @@ export async function startAdminSocket(opts: AdminSocketOptions): Promise<Runnin
   const send = (res: ServerResponse, status: number, body: unknown) => {
     res.writeHead(status, { "content-type": "application/json; charset=utf-8" }).end(JSON.stringify(body));
   };
+  let secured = opts.secure === undefined;
+  const beforeSecured = new Set<Socket>();
   const server = createServer(async (req, res) => {
+    if (!secured) return send(res, 503, { error: "管理接口还在启动，稍后再试" });
     const auth = req.headers.authorization ?? "";
     const token = auth.startsWith("Bearer ") ? auth.slice("Bearer ".length) : "";
     if (token === "" || !opts.authorize(token)) return send(res, 401, { error: "令牌不对：要用跑守护进程的那个用户跑这个命令" });
@@ -185,6 +201,13 @@ export async function startAdminSocket(opts: AdminSocketOptions): Promise<Runnin
       server.close(() => resolve());
       server.closeAllConnections();
     });
+  if (!secured) {
+    server.on("connection", (socket: Socket) => {
+      if (secured) return;
+      beforeSecured.add(socket);
+      socket.once("close", () => beforeSecured.delete(socket));
+    });
+  }
   const socketPath = await listenOnRunSocket(
     opts.socketPath,
     (path) =>
@@ -197,5 +220,16 @@ export async function startAdminSocket(opts: AdminSocketOptions): Promise<Runnin
       }),
     close,
   );
+  if (opts.secure !== undefined) {
+    try {
+      await opts.secure(socketPath);
+    } catch (error) {
+      await close();
+      throw new AdminSocketInsecureError(socketPath, error);
+    }
+    secured = true;
+    for (const socket of beforeSecured) socket.destroy();
+    beforeSecured.clear();
+  }
   return { socketPath, close };
 }

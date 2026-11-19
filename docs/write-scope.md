@@ -54,11 +54,11 @@ Windows 原生版通过 `apps/windows/crates/fusa-win-helper`（`fusa-run.exe`�
   - 数据目录（`%USERPROFILE%\.agent-hub`）以及跨盘项目同卷上的 `<卷根>\.fusa-wt\<数据目录指纹8>` 一并纳入 `protectedRoots`（macOS `seatbeltProfile`、Linux `bwrapArgs` 与 Windows ACL 三平台语义一致）。
 - **普通 Worker（`fusa-run.exe --sandbox worker --state-dir <state> --worker <id>`）**：
   - 无需管理员权限，Win10 1809+ / Win11 通用；
-  - 持久化两个随机能力 SID（`state\win-sandbox-sids.json`）：所有 Worker 共用的 `FusaWorker` 与每个 Worker 独立的 `FusaWorker-<id>`；
+  - 持久化两个随机能力 SID（`state\win-sandbox-sids.json`）：所有 Worker 共用的 `FusaWorker` 与每个 Worker 独立的 `FusaWorker-<id>`；多个 `fusa-run` 同时登记时先拿 `state\win-sandbox-sids.lock` 的排他文件锁再读改写，登记不会互相覆盖；
   - 在每个受保护根设置可继承的 `DENY FusaWorker`（拒绝写、追加、删除、子项删除、`WRITE_DAC`、`WRITE_OWNER`）与 `OWNER RIGHTS (S-1-3-4): READ_CONTROL`（压掉文件所有者的隐含 `WRITE_DAC`，防止 `icacls` / `Set-Acl` 自改权限绕过），先读 DACL 已满足则幂等跳过；
   - 新建 worktree 时先建空目录并设置可继承的 `ALLOW FusaWorker-<id>` 修改权限，再执行 `git worktree add`，checkout 与 `pnpm install` 子文件自动继承、零传播开销；
   - `CreateRestrictedToken(..., DISABLE_MAX_PRIVILEGE | LUA_TOKEN, ...)`（不再用 `WRITE_RESTRICTED`：那样限制 SID 只参与写检查，禁读 ACE 不起作用）完整复制当前令牌用户 SID + 全部已启用组 SID（保证 `D:\` 等靠 `Authenticated Users` 赋权的数据卷、工具链缓存、`%TEMP%` 与命名管道照常读写）+ `FusaWorker` + `FusaWorker-<id>` + 这次会话的 `FusaRead-<会话>`（`--reader`，只放行读、从不放行写），并在 Job 上附加 `JOB_OBJECT_UILIMIT_HANDLES | UILIMIT_DESKTOP | UILIMIT_GLOBALATOMS` 收窄 UI 句柄边界；
-  - 读边界：起 Worker 前（`prepareOsSandboxForLaunch`，异步调 `fusa-run.exe`）在数据目录设可继承的 `DENY FusaWorker` 读（`acl deny-read`，内容、扩展属性、执行；属性照常可读），`state\`、`run\`、`backups\` 的受保护 DACL 里同样带这一条；`worktrees\`、`uploads\`、`tools\`、`run\bin\` 显式 `ALLOW FusaWorker` 读，这次会话的启动目录只 `ALLOW FusaRead-<会话>` 读（`acl allow-read`，显式 ACE 排在继承下来的拒绝前面）；管理命名管道（admin）启动后设 `DENY FusaWorker`（`acl deny-pipe`）。
+  - 读边界：起 Worker 前（`prepareOsSandboxForLaunch`，异步调 `fusa-run.exe`）在数据目录设可继承的 `DENY FusaWorker` 读（`acl deny-read`，内容、扩展属性、执行；属性照常可读），`state\`、`run\`、`backups\` 的受保护 DACL 里同样带这一条；`worktrees\`、`uploads\`、`tools\`、`run\bin\` 显式 `ALLOW FusaWorker` 读，这次会话的启动目录只 `ALLOW FusaRead-<会话>` 读（`acl allow-read`，显式 ACE 排在继承下来的拒绝前面）；管理命名管道（admin）设好 `DENY FusaWorker`（`acl deny-pipe`）才服务：设好之前请求一律 503、这期间连上的连接设好后断开，设失败就关掉管道（守护进程照常跑，终端的飞书、账号组网命令和桌面外壳的优雅关机暂时用不了）。
 - **只读 Worker**：
   - `codex`：继续使用其自带的 `readOnly` 沙箱与驱动审批回调；
   - 其余 5 家（`claude, agy, pi, deepseek, cursor`）：通过 `src/daemon/platform/win32/mxc-readonly.ts` 与 `mxc-runner.ts` 按需动态加载微软官方 `@microsoft/mxc-sdk/v1`：

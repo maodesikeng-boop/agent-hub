@@ -112,7 +112,7 @@ import { loadOrCreateUiToken, loginUrl, rotateUiToken, startUiServer, type Runni
 import type { FolderPicker } from "./pick-folder.ts";
 import { defaultDeviceName, loadOrCreateDevice, saveDevice } from "./device.ts";
 import { createPeers, type Peers } from "./peers/index.ts";
-import { startAdminSocket, type RunningAdminSocket } from "./admin/socket.ts";
+import { AdminSocketInsecureError, startAdminSocket, type RunningAdminSocket } from "./admin/socket.ts";
 import { createMesh, type CenterLease, type Mesh, type MeshOptions } from "./mesh/index.ts";
 import { createPushService } from "./push/index.ts";
 import {
@@ -843,22 +843,22 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
         feishu: () => parts.feishu?.setup,
         mesh: () => parts.mesh,
         ...(options.onExternalShutdown ? { onShutdown: options.onExternalShutdown } : {}),
+        // Windows 的管理管道不在数据目录里，读边界管不到：设好 DENY FusaWorker 才服务，沙箱里的 Worker 连不上（POSIX 由 OS 沙箱禁连 run/admin.sock）
+        ...(process.platform === "win32" ? { secure: (pipe: string) => denyWin32WorkerPipeAccess(stateDir, pipe, { env }) } : {}),
         log: (line) => log(`${LOG_PREFIX} ${line}`),
       });
-      // Windows 的管理管道不在数据目录里，读边界管不到：单独给它设 DENY FusaWorker，沙箱里的 Worker 连不上（POSIX 由 OS 沙箱禁连 run/admin.sock）
-      if (process.platform === "win32") {
-        await denyWin32WorkerPipeAccess(stateDir, paths.adminSock, { env }).catch((err: unknown) =>
-          log(`${LOG_PREFIX} 管理管道禁止 Worker 连接的 ACL 没设上：${err instanceof Error ? err.message : String(err)}`),
-        );
-      }
     } catch (adminErr) {
-      if (
+      if (adminErr instanceof AdminSocketInsecureError) {
+        // 管理管道已经关掉：守护进程照常跑，终端的飞书、账号组网命令和桌面外壳的优雅关机暂时用不了（外壳超时后结束进程）
+        log(`${LOG_PREFIX} ${adminErr.message}`);
+      } else if (
         (adminErr as NodeJS.ErrnoException | null)?.code === "EADDRINUSE" ||
         (adminErr instanceof Error && adminErr.message.includes("已有守护进程在跑"))
       ) {
         throw new DaemonAlreadyRunningError(0);
+      } else {
+        throw adminErr;
       }
-      throw adminErr;
     }
     const routerLocalPort = createLocalTargetPort({
       deviceId: device.id,
