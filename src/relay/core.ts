@@ -137,7 +137,7 @@ export interface RelayAccountRoom {
   /**
    * 收下一条数据通道的一端。
    * 后置：channel 没在 dial 里登记、设备或会话令牌对不上、超出 RELAY_MAX_CHANNELS_PER_DEVICE 或当天流量时回 error，外壳关掉连接；
-   * 两端到齐后一端收到的帧原样发给另一端；一端关了另一端也关；超过 RELAY_CHANNEL_IDLE_MS 没有数据两端都关。
+   * 两端到齐后给拨号方的控制连接发 dial.connected，一端收到的帧原样发给另一端；一端关了另一端也关；超过 RELAY_CHANNEL_IDLE_MS 没有数据两端都关。
    */
   openChannel(query: { channel: string; device: DeviceId; session: string }, socket: RelaySocket): RelayChannelHandle | { error: RelayErrorCode };
   /** 按时间收拾：租约过期改授、等批准的设备过期删除、空闲通道关闭。外壳在每条消息后和定时器里调，可以重复调。 */
@@ -577,6 +577,7 @@ export function createRelayAccountRoom(options: RelayAccountRoomOptions): RelayA
         dial.lastDataAt = now();
         for (const chunk of dial.pending.splice(0)) socket.send(chunk);
         dial.pendingBytes = 0;
+        sendTo(dial.from, { type: "dial.connected", to: dial.to, channel: query.channel });
       }
       return {
         receive(data) {

@@ -123,6 +123,8 @@ export type RelayServerFrame =
   | { type: "lease"; name: MeshLeaseName; grant: MeshLeaseGrant | null }
   | { type: "lease.yield"; name: MeshLeaseName; epoch: number }
   | { type: "incoming"; from: DeviceId; channel: string }
+  /** 拨号方：对方已经接起这条通道，两端配好了。 */
+  | { type: "dial.connected"; to: DeviceId; channel: string }
   | { type: "dial.failed"; to: DeviceId; channel: string; code: RelayErrorCode }
   | { type: "signal"; from: DeviceId; payload: string }
   | { type: "removed" }
@@ -234,6 +236,7 @@ const serverFrameSchema = z.discriminatedUnion("type", [
   }),
   z.strictObject({ type: z.literal("lease.yield"), name: leaseNameSchema, epoch: epochSchema }),
   z.strictObject({ type: z.literal("incoming"), from: deviceIdSchema, channel: tokenSchema }),
+  z.strictObject({ type: z.literal("dial.connected"), to: deviceIdSchema, channel: tokenSchema }),
   z.strictObject({ type: z.literal("dial.failed"), to: deviceIdSchema, channel: tokenSchema, code: errorCodeSchema }),
   z.strictObject({ type: z.literal("signal"), from: deviceIdSchema, payload: signalPayloadSchema }),
   z.strictObject({ type: z.literal("removed") }),

@@ -25,8 +25,8 @@ export interface NodeRelayOptions {
   host?: string;
   /** 账号数据库文件（node:sqlite）。 */
   dbFile: string;
-  /** 对外的 origin（https://…），签名消息里要用；放在反代后面时填反代的地址。 */
-  publicOrigin: string;
+  /** 对外的 origin（https://…），签名消息里要用；放在反代后面时填反代的地址。不给按实际听的地址（测试用）。 */
+  publicOrigin?: string;
   /** 放在反代后面时打开，按 X-Forwarded-For 算登记限流的 IP。 */
   trustProxy?: boolean;
   /** 测试换成假的 GitHub。 */
@@ -79,7 +79,7 @@ export async function startNodeRelay(options: NodeRelayOptions): Promise<Running
   const db = new DatabaseSync(options.dbFile);
   let open = true;
   db.exec("CREATE TABLE IF NOT EXISTS accounts (account_id TEXT PRIMARY KEY, record TEXT NOT NULL)");
-  const relayOrigin = new URL(options.publicOrigin).origin;
+  let relayOrigin = options.publicOrigin === undefined ? "" : new URL(options.publicOrigin).origin;
   const rooms = new Map<AccountId, { room: RelayAccountRoom; sockets: Set<WebSocket> }>();
   const registerHits = new LRUCache<string, { windowStart: number; count: number }>({ max: RELAY_IP_LIMITER_MAX });
 
@@ -194,6 +194,7 @@ export async function startNodeRelay(options: NodeRelayOptions): Promise<Running
   await app.listen({ port: options.port, host: options.host ?? "127.0.0.1" });
   const address = app.server.address();
   const port = address !== null && typeof address === "object" ? address.port : options.port;
+  if (relayOrigin === "") relayOrigin = `http://${options.host ?? "127.0.0.1"}:${port}`;
   log(`中继在听 ${options.host ?? "127.0.0.1"}:${port}，对外地址 ${relayOrigin}`);
 
   return {

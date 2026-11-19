@@ -3,10 +3,33 @@
 // - 一直只有一条控制连接；断了按 MESH_RELAY_BACKOFF_MIN_MS → MESH_RELAY_BACKOFF_MAX_MS 退避重连，连上后重报候选地址；
 // - 数据通道交出去的是原始字节流（Duplex），上面跑的 TLS 由 dialer.ts 负责，这里不看内容；
 // - 中继推来的设备表只用来显示和找人，进不进信任表由 trust.ts 决定。
-import type { Duplex } from "node:stream";
+import { Duplex } from "node:stream";
+import { WebSocket } from "ws";
 import type { DeviceId } from "../../shared/api.ts";
-import type { AccountId, MeshCandidate, MeshDeviceState, MeshLeaseGrant, MeshLeaseName, RelayConnectionState } from "../../shared/mesh.ts";
-import type { RelayClientFrame, RelayDeviceView, RelayErrorCode, RelayPresenceView, RelayRegisterResponse } from "../../relay/protocol.ts";
+import {
+  MESH_DIAL_TIMEOUT_MS,
+  MESH_RELAY_BACKOFF_MAX_MS,
+  MESH_RELAY_BACKOFF_MIN_MS,
+  MESH_RELAY_PING_MS,
+  MESH_RELAY_STABLE_MS,
+  RELAY_MAX_DATA_FRAME_BYTES,
+} from "../../shared/limits.ts";
+import { parseAccountId, type AccountId, type MeshCandidate, type MeshDeviceState, type MeshLeaseGrant, type MeshLeaseName, type RelayConnectionState } from "../../shared/mesh.ts";
+import {
+  RELAY_PATHS,
+  RELAY_PROTOCOL_VERSION,
+  encodeRelayFrame,
+  newRelayToken,
+  parseRelayServerFrame,
+  relayControlMessage,
+  relayRegisterMessage,
+  type RelayClientFrame,
+  type RelayDeviceView,
+  type RelayErrorCode,
+  type RelayPresenceView,
+  type RelayRegisterRequest,
+  type RelayRegisterResponse,
+} from "../../relay/protocol.ts";
 import type { MeshIdentity } from "./identity.ts";
 
 /**
@@ -14,15 +37,55 @@ import type { MeshIdentity } from "./identity.ts";
  * 后置：带设备证书、公钥和 relayRegisterMessage 的签名 POST /v1/register；成功回账号编号和本机状态；
  * 中继拒绝时抛错（message 给人看，不带原文）；githubToken 只出现在这一次请求里。
  */
-export function registerWithRelay(input: {
+export async function registerWithRelay(input: {
   relayUrl: string;
   githubToken: string;
   identity: MeshIdentity;
   device: { id: DeviceId; name: string; platform: string };
   fetch?: typeof fetch;
 }): Promise<RelayRegisterResponse> {
-  throw new Error("未实现");
+  const relayOrigin = new URL(input.relayUrl).origin;
+  const body: RelayRegisterRequest = {
+    provider: "github",
+    token: input.githubToken,
+    device: { ...input.device, certPem: input.identity.certPem, publicKey: input.identity.publicKey },
+    signature: input.identity.sign(relayRegisterMessage({ relayOrigin, provider: "github", device: input.device.id, fingerprint: input.identity.fingerprint })),
+  };
+  let res: Response;
+  try {
+    res = await (input.fetch ?? fetch)(new URL(RELAY_PATHS.register, relayOrigin), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    throw new Error("连不上中继，请检查网络或中继网址");
+  }
+  let parsed: unknown = null;
+  try {
+    parsed = await res.json();
+  } catch {
+    parsed = null;
+  }
+  if (res.status === 200) {
+    const ok = parsed as Partial<RelayRegisterResponse> | null;
+    const accountId = parseAccountId(ok?.accountId);
+    if (accountId !== null && (ok?.state === "active" || ok?.state === "pending") && typeof ok.login === "string") {
+      return { accountId, login: ok.login, state: ok.state };
+    }
+    throw new Error("中继回的登记结果不对");
+  }
+  const code = (parsed as { error?: unknown } | null)?.error;
+  throw new Error(REGISTER_ERRORS[typeof code === "string" ? code : ""] ?? `中继拒绝了登记（HTTP ${res.status}）`);
 }
+
+const REGISTER_ERRORS: Record<string, string> = {
+  unauthorized: "中继没认这次 GitHub 登录，请重新登录",
+  too_many_devices: "这个账号的设备已经满了，先在别的设备上移除一台",
+  rate_limited: "登记太频繁，请一分钟后再试",
+  github_unreachable: "中继连不上 GitHub，请稍后再试",
+  bad_frame: "这台的版本和中继不匹配，请升级",
+};
 
 export interface RelayClientEvents {
   /** welcome 时带着全部，之后每次设备表或中心顺序变化。 */
@@ -59,7 +122,7 @@ export interface RelayClient {
   refreshCandidates(): void;
   /**
    * 经中继拨一条数据通道。
-   * 后置：对方接起后回字节流；对方离线、不是 active、超限时按 dial.failed 的 code 抛 RelayDialError；超过 MESH_DIAL_TIMEOUT_MS 抛超时。
+   * 后置：中继回 dial.connected（对方接起）后回字节流；对方离线、不是 active、超限时按 dial.failed 的 code 抛 RelayDialError；超过 MESH_DIAL_TIMEOUT_MS 抛超时。
    */
   openChannel(to: DeviceId): Promise<Duplex>;
   /** 接起 incoming 推来的通道。后置：回字节流；通道已过期时抛 RelayDialError。 */
@@ -77,6 +140,307 @@ export class RelayDialError extends Error {
   }
 }
 
-export function createRelayClient(options: RelayClientOptions): RelayClient {
-  throw new Error("未实现");
+/** 中继网址 → WebSocket 的 origin（http → ws，https → wss）。 */
+const wsOrigin = (relayUrl: string) => new URL(relayUrl).origin.replace(/^http/, "ws");
+
+/**
+ * 一条数据通道的 WebSocket 包成字节流：写进来的按 RELAY_MAX_DATA_FRAME_BYTES 切成二进制帧，收到的帧原样读出；
+ * 读的一侧满了先停收，WebSocket 关了流就结束。
+ */
+export function relayByteStream(ws: WebSocket): Duplex {
+  const stream = new Duplex({
+    read() {
+      if (ws.isPaused) ws.resume();
+    },
+    write(chunk: Buffer, _encoding, callback) {
+      if (ws.readyState !== WebSocket.OPEN) return callback(new Error("中继通道已关闭"));
+      let pending = 0;
+      let failed = false;
+      for (let offset = 0; offset < chunk.length; offset += RELAY_MAX_DATA_FRAME_BYTES) {
+        pending++;
+        ws.send(chunk.subarray(offset, offset + RELAY_MAX_DATA_FRAME_BYTES), { binary: true }, (error) => {
+          if (failed) return;
+          if (error) {
+            failed = true;
+            return callback(error);
+          }
+          if (--pending === 0) callback();
+        });
+      }
+      if (pending === 0) callback();
+    },
+    final(callback) {
+      ws.close(1000);
+      callback();
+    },
+    destroy(error, callback) {
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) ws.terminate();
+      callback(error);
+    },
+  });
+  ws.on("message", (data: Buffer, isBinary: boolean) => {
+    if (!isBinary) return stream.destroy(new Error("中继通道收到了文本帧"));
+    if (!stream.push(data)) ws.pause();
+  });
+  ws.once("close", () => {
+    stream.push(null);
+    stream.end();
+  });
+  ws.once("error", (error) => stream.destroy(error));
+  return stream;
 }
+
+export function createRelayClient(options: RelayClientOptions): RelayClient {
+  const now = options.now ?? Date.now;
+  const relayOrigin = new URL(options.relayUrl).origin;
+  const listeners = new Map<keyof RelayClientEvents, Set<(...args: never[]) => void>>();
+  const emit = <K extends keyof RelayClientEvents>(event: K, ...args: Parameters<RelayClientEvents[K]>) => {
+    for (const listener of listeners.get(event) ?? []) (listener as (...a: Parameters<RelayClientEvents[K]>) => void)(...args);
+  };
+  let state: RelayConnectionState = "connecting";
+  let socket: WebSocket | null = null;
+  let session: string | null = null;
+  let stopped = false;
+  let backoff = MESH_RELAY_BACKOFF_MIN_MS;
+  let reconnectTimer: NodeJS.Timeout | null = null;
+  let pingTimer: NodeJS.Timeout | null = null;
+  let stableTimer: NodeJS.Timeout | null = null;
+  let lastCandidates = "";
+  /** 等对方接起（dial.connected）或中继回 dial.failed 的拨号。 */
+  const dials = new Map<string, { resolve: () => void; reject: (error: RelayDialError) => void }>();
+  const channels = new Set<WebSocket>();
+
+  const setState = (next: RelayConnectionState) => {
+    if (state === next) return;
+    state = next;
+    emit("state", next);
+  };
+  const clearTimers = () => {
+    for (const timer of [pingTimer, stableTimer]) if (timer !== null) clearTimeout(timer);
+    pingTimer = null;
+    stableTimer = null;
+  };
+  const sendRaw = (frame: RelayClientFrame) => {
+    if (socket?.readyState !== WebSocket.OPEN) return false;
+    socket.send(encodeRelayFrame(frame));
+    return true;
+  };
+  const reportCandidates = (force: boolean) => {
+    const candidates = options.candidates();
+    const key = JSON.stringify(candidates);
+    if (!force && key === lastCandidates) return;
+    if (state === "connected" && sendRaw({ type: "presence", candidates })) lastCandidates = key;
+  };
+
+  const scheduleReconnect = () => {
+    if (stopped || reconnectTimer !== null) return;
+    const delay = backoff;
+    backoff = Math.min(backoff * 2, MESH_RELAY_BACKOFF_MAX_MS);
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      connect();
+    }, delay);
+    reconnectTimer.unref?.();
+  };
+
+  const connect = () => {
+    if (stopped) return;
+    const ws = new WebSocket(wsOrigin(options.relayUrl) + RELAY_PATHS.control(options.accountId), { perMessageDeflate: false, handshakeTimeout: MESH_DIAL_TIMEOUT_MS });
+    socket = ws;
+    let alive = true;
+    ws.on("pong", () => {
+      alive = true;
+    });
+    ws.on("message", (data: Buffer, isBinary: boolean) => {
+      if (isBinary || socket !== ws) return;
+      const frame = parseRelayServerFrame(data.toString("utf8"));
+      if (frame === null) {
+        options.log("中继：收到不认识的消息，断开重连");
+        ws.terminate();
+        return;
+      }
+      switch (frame.type) {
+        case "challenge":
+          sendRaw({
+            type: "hello",
+            device: options.identity.deviceId,
+            version: RELAY_PROTOCOL_VERSION,
+            signature: options.identity.sign(relayControlMessage({ relayOrigin, accountId: options.accountId, device: options.identity.deviceId, nonce: frame.nonce })),
+          });
+          return;
+        case "welcome":
+          session = frame.session;
+          setState("connected");
+          stableTimer = setTimeout(() => {
+            backoff = MESH_RELAY_BACKOFF_MIN_MS;
+          }, MESH_RELAY_STABLE_MS);
+          stableTimer.unref?.();
+          pingTimer = setInterval(() => {
+            if (!alive) {
+              options.log("中继：心跳没回，断开重连");
+              ws.terminate();
+              return;
+            }
+            alive = false;
+            ws.ping();
+          }, MESH_RELAY_PING_MS);
+          pingTimer.unref?.();
+          emit("self", frame.self);
+          emit("devices", frame.devices, frame.priority);
+          emit("presence", frame.presence);
+          reportCandidates(true);
+          return;
+        case "devices": {
+          emit("devices", frame.devices, frame.priority);
+          const self = frame.devices.find((d) => d.id === options.identity.deviceId);
+          if (self !== undefined) emit("self", self.state);
+          return;
+        }
+        case "presence":
+          emit("presence", frame.presence);
+          return;
+        case "lease":
+          emit("lease", frame.name, frame.grant);
+          return;
+        case "lease.yield":
+          emit("leaseYield", frame.name, frame.epoch);
+          return;
+        case "incoming":
+          emit("incoming", frame.from, frame.channel);
+          return;
+        case "dial.connected": {
+          const dial = dials.get(frame.channel);
+          dials.delete(frame.channel);
+          dial?.resolve();
+          return;
+        }
+        case "dial.failed": {
+          const dial = dials.get(frame.channel);
+          dials.delete(frame.channel);
+          dial?.reject(new RelayDialError(frame.code, DIAL_ERRORS[frame.code] ?? "经中继连不上对方"));
+          return;
+        }
+        case "signal":
+          emit("signal", frame.from, frame.payload);
+          return;
+        case "removed":
+          stopped = true;
+          options.log("中继：本机已被移出账号");
+          emit("removed");
+          ws.close(1000);
+          return;
+        case "error":
+          options.log(`中继：报错 ${frame.code}`);
+          return;
+      }
+    });
+    ws.once("close", () => {
+      if (socket !== ws) return;
+      socket = null;
+      session = null;
+      clearTimers();
+      for (const [channel, dial] of dials) {
+        dials.delete(channel);
+        dial.reject(new RelayDialError("offline", "和中继断开了"));
+      }
+      lastCandidates = "";
+      setState("unreachable");
+      scheduleReconnect();
+    });
+    ws.on("error", () => {
+      // close 跟着来，在 close 里重连
+    });
+  };
+
+  const openChannelSocket = (channel: string): WebSocket => {
+    const url = `${wsOrigin(options.relayUrl)}${RELAY_PATHS.channel(options.accountId, channel)}?device=${options.identity.deviceId}&session=${session ?? ""}`;
+    const ws = new WebSocket(url, { perMessageDeflate: false, handshakeTimeout: MESH_DIAL_TIMEOUT_MS, maxPayload: RELAY_MAX_DATA_FRAME_BYTES });
+    channels.add(ws);
+    ws.once("close", () => channels.delete(ws));
+    return ws;
+  };
+
+  const waitOpen = (ws: WebSocket, onFail: () => RelayDialError) =>
+    new Promise<Duplex>((resolve, reject) => {
+      ws.once("open", () => resolve(relayByteStream(ws)));
+      ws.once("unexpected-response", (request) => {
+        request.destroy();
+        reject(onFail());
+      });
+      ws.once("error", () => reject(onFail()));
+    });
+
+  return {
+    state: () => state,
+    start() {
+      if (socket !== null || stopped) return;
+      setState("connecting");
+      connect();
+    },
+    send: (frame) => state === "connected" && sendRaw(frame),
+    refreshCandidates: () => reportCandidates(false),
+    async openChannel(to) {
+      if (state !== "connected" || session === null) throw new RelayDialError("offline", "没连上中继");
+      const channel = newRelayToken();
+      let timer: NodeJS.Timeout | undefined;
+      const accepted = new Promise<void>((resolve, reject) => {
+        dials.set(channel, { resolve, reject });
+        timer = setTimeout(() => reject(new RelayDialError("timeout", "经中继拨号超时")), MESH_DIAL_TIMEOUT_MS);
+      });
+      sendRaw({ type: "dial", to, channel });
+      const ws = openChannelSocket(channel);
+      const opened = waitOpen(ws, () => new RelayDialError("offline", "经中继连不上对方"));
+      try {
+        const [stream] = await Promise.all([opened, accepted]);
+        return stream;
+      } catch (error) {
+        ws.terminate();
+        opened.then((stream) => stream.destroy(), () => {});
+        throw error;
+      } finally {
+        clearTimeout(timer);
+        dials.delete(channel);
+      }
+    },
+    async acceptChannel(_from, channel) {
+      if (state !== "connected" || session === null) throw new RelayDialError("offline", "没连上中继");
+      const ws = openChannelSocket(channel);
+      return waitOpen(ws, () => new RelayDialError("offline", "中继通道已过期"));
+    },
+    on(event, listener) {
+      let set = listeners.get(event);
+      if (set === undefined) {
+        set = new Set();
+        listeners.set(event, set);
+      }
+      const added = listener as (...args: never[]) => void;
+      set.add(added);
+      return () => set.delete(added);
+    },
+    async close() {
+      stopped = true;
+      if (reconnectTimer !== null) clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+      clearTimers();
+      for (const ws of channels) ws.terminate();
+      channels.clear();
+      const ws = socket;
+      socket = null;
+      if (ws !== null && ws.readyState !== WebSocket.CLOSED) {
+        const closed = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+        ws.close(1000);
+        const timer = setTimeout(() => ws.terminate(), 1_000);
+        await closed;
+        clearTimeout(timer);
+      }
+    },
+  };
+}
+
+const DIAL_ERRORS: Partial<Record<RelayErrorCode, string>> = {
+  offline: "对方不在线",
+  not_active: "对方还没被批准",
+  unknown_device: "账号里没有这台设备",
+  rate_limited: "经中继的连接太多了",
+  quota_exceeded: "今天经中继的流量用完了",
+};

@@ -50,6 +50,7 @@ const serverFrames: RelayServerFrame[] = [
   { type: "lease", name: "feishu", grant: null },
   { type: "lease.yield", name: "feishu", epoch: 2 },
   { type: "incoming", from: DEV_A, channel: TOKEN },
+  { type: "dial.connected", to: DEV_B, channel: TOKEN },
   { type: "dial.failed", to: DEV_B, channel: TOKEN, code: "offline" },
   { type: "signal", from: DEV_A, payload: "x" },
   { type: "removed" },

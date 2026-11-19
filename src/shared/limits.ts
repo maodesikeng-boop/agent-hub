@@ -498,6 +498,9 @@ export const ENV_TAILNET_OWNER = "AGENT_HUB_TAILNET_OWNER";
 export const ENV_SERVE_TARGET = "AGENT_HUB_SERVE_TARGET";
 /** 只给开发用：`pnpm dev` 时 vite 把 /api、/auth 和 WebSocket 代理到这个端口上的守护进程。 */
 export const ENV_DEV_DAEMON_PORT = "AGENT_HUB_DAEMON_PORT";
+/** 账号组网：换中继网址（自建中继）、换 GitHub OAuth App 的 Client ID。 */
+export const ENV_RELAY_URL = "FUSA_RELAY_URL";
+export const ENV_GITHUB_CLIENT_ID = "FUSA_GITHUB_CLIENT_ID";
 
 /** 界面服务默认端口。固定端口：重启后浏览器刷新同一个地址就能接着用。 */
 export const DEFAULT_UI_PORT = 4317;
@@ -1169,6 +1172,18 @@ export const FEISHU_SEEN_MESSAGES_MAX = 2_000;
 export const FEISHU_CLI_POLL_MS = 2_000;
 
 // ───────────── 账号组网（docs/account-mesh-design.md「性能」节）─────────────
+/**
+ * 公共中继和 GitHub OAuth App 的 Client ID：都是公开值，开源仓库里只放这两样，不放任何密钥（GitHub 设备码登录不需要 client secret）。
+ * 空串 = 这个版本还没配，登录时提示用户自建中继（ENV_RELAY_URL）或设 ENV_GITHUB_CLIENT_ID。
+ */
+export const MESH_DEFAULT_RELAY_URL = "";
+export const MESH_GITHUB_CLIENT_ID = "";
+/** GitHub 设备码登录的网页和接口地址（测试换成假的）。 */
+export const GITHUB_WEB_ORIGIN = "https://github.com";
+/** GitHub 轮询授权结果的默认间隔（GitHub 没给 interval 时）。 */
+export const GITHUB_DEVICE_POLL_DEFAULT_MS = 5_000;
+/** state/account.json 的权限。 */
+export const MESH_ACCOUNT_FILE_MODE = 0o600;
 /** state/mesh/ 目录和里面设备私钥的权限。 */
 export const MESH_STATE_DIR_MODE = 0o700;
 export const MESH_KEY_FILE_MODE = 0o600;
@@ -1188,11 +1203,17 @@ export const MESH_CANDIDATES_REFRESH_MS = 30_000;
 export const MESH_DIRECT_HEAD_START_MS = 250;
 /** 对一台设备直连失败后，这么久内不再试直连（网络变了立刻清）。 */
 export const MESH_DIRECT_RETRY_MS = 60_000;
+/** 组网 TLS 握手最多等多久（直连和经中继都是）。 */
+export const MESH_HANDSHAKE_TIMEOUT_MS = 5_000;
 /** 一次拨号（直连和中继一起）最多等多久。 */
 export const MESH_DIAL_TIMEOUT_MS = 10_000;
 /** 到中继的控制连接断了以后第一次等多久再连；每失败一次翻倍，封顶 MESH_RELAY_BACKOFF_MAX_MS。 */
 export const MESH_RELAY_BACKOFF_MIN_MS = 1_000;
 export const MESH_RELAY_BACKOFF_MAX_MS = 60_000;
+/** 到中继的控制连接隔多久发一次协议层 ping；下一次该发时还没收到 pong 就断开重连。 */
+export const MESH_RELAY_PING_MS = 20_000;
+/** 控制连接要连上多久才算稳定、把退避清零。 */
+export const MESH_RELAY_STABLE_MS = 10_000;
 /** 中心租约多久没续约就作废。 */
 export const MESH_LEASE_TTL_MS = 15_000;
 /** 候选设备隔多久发一次 lease.claim（持有者的 claim 就是续约）。 */
