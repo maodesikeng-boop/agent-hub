@@ -31,7 +31,10 @@ export interface FeishuPeerRoutesPort {
 export interface PeerRoutesOptions {
   peers: Peers;
   /** 账号与设备（GET /api/account 等）。不给 = /api/account* 回 404。 */
-  mesh?: Pick<Mesh, "status" | "startLogin" | "cancelLogin" | "logout" | "beginApproval" | "answerApproval" | "setCenterPriority" | "trustStatements" | "receiveTrustStatements">;
+  mesh?: Pick<
+    Mesh,
+    "status" | "startLogin" | "cancelLogin" | "logout" | "beginApproval" | "answerApproval" | "setCenterPriority" | "trustStatements" | "receiveTrustStatements" | "leaseSnapshot"
+  >;
   /** 全账号单飞书机器人的跨设备接口（/api/peer/feishu/*）。 */
   feishuPeer?: FeishuPeerRoutesPort;
   /** 这次请求是组网入口来的哪台设备（server.ts 的认证钩子认出来的）；浏览器来的是 undefined。 */
@@ -53,7 +56,10 @@ const notFound = (reply: FastifyReply) =>
   reply.code(404).send({ error: API_ERRORS.device_not_found.text, code: "device_not_found" } satisfies ApiErrorBody);
 
 const accountSchemas = {
-  login: z.strictObject({ relayUrl: z.string().url("中继网址不对").optional() }),
+  login: z.strictObject({
+    relayUrl: z.string().url("中继网址不对").optional(),
+    githubClientId: z.string().min(1, "Client ID 不能为空").max(128, "Client ID 太长").optional(),
+  }),
   answer: z.strictObject({ match: z.boolean({ error: "match 要是 true 或 false" }) }),
   priority: z.strictObject({ priority: z.array(z.string().refine((v) => isDeviceId(v), "设备编号不对")).max(64) }),
 };
@@ -146,6 +152,12 @@ export async function peerRoutes(app: FastifyInstance, opts: PeerRoutesOptions):
       requirePeer(req);
       return { statements: mesh.trustStatements() };
     });
+    if (typeof mesh.leaseSnapshot === "function") {
+      app.get(API_PATHS.peerLease, async (req) => {
+        requirePeer(req);
+        return mesh.leaseSnapshot();
+      });
+    }
     app.post(API_PATHS.peerTrust, async (req, reply) => {
       const from = requirePeer(req);
       try {

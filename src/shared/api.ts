@@ -179,6 +179,8 @@ export const API_PATHS = {
   peerRenamed: "/api/peer/renamed",
   /** GET → TrustStatementsBody：本机信任表的签名声明（批准和撤销），对齐用；POST（TrustStatementsBody）→ 204：收下对方转来的声明。 */
   peerTrust: "/api/peer/trust",
+  /** GET → { relayConnected, holders }：降级持有租约前经局域网探查对方是否正持有租约。 */
+  peerLease: "/api/peer/lease",
   /** POST（FeishuForwardedEvent）→ FeishuCardActionResponse：中心把飞书群消息或卡片点击转给群归属电脑。 */
   peerFeishuInbound: "/api/peer/feishu/inbound",
   /** POST（{ chats }）→ 204：可信设备对齐完项目群后把群归属广播给账号里的其他设备。 */
@@ -714,9 +716,10 @@ export interface RenameDeviceRequest {
   name: string;
 }
 
-/** POST /api/account/login 的请求体（可空）：换自建中继的网址。 */
+/** POST /api/account/login 的请求体（可空）：换自建中继的网址或 GitHub OAuth Client ID。 */
 export interface StartLoginRequest {
   relayUrl?: string;
+  githubClientId?: string;
 }
 
 /** POST /api/account/approvals/:id/answer。 */

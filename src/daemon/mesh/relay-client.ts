@@ -29,6 +29,7 @@ import {
   type RelayPresenceView,
   type RelayRegisterRequest,
   type RelayRegisterResponse,
+  type RelayRevocationEnvelope,
 } from "../../relay/protocol.ts";
 import type { MeshIdentity } from "./identity.ts";
 
@@ -89,7 +90,7 @@ const REGISTER_ERRORS: Record<string, string> = {
 
 export interface RelayClientEvents {
   /** welcome 时带着全部，之后每次设备表或中心顺序变化。 */
-  devices: (devices: RelayDeviceView[], priority: DeviceId[]) => void;
+  devices: (devices: RelayDeviceView[], priority: DeviceId[], revocations?: RelayRevocationEnvelope[]) => void;
   presence: (presence: RelayPresenceView[]) => void;
   self: (state: MeshDeviceState) => void;
   lease: (name: MeshLeaseName, grant: MeshLeaseGrant | null) => void;
@@ -352,12 +353,12 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
           }, MESH_RELAY_PING_MS);
           pingTimer.unref?.();
           emit("self", frame.self);
-          emit("devices", frame.devices, frame.priority);
+          emit("devices", frame.devices, frame.priority, frame.revocations);
           emit("presence", frame.presence);
           reportCandidates(true);
           return;
         case "devices": {
-          emit("devices", frame.devices, frame.priority);
+          emit("devices", frame.devices, frame.priority, frame.revocations);
           const self = frame.devices.find((d) => d.id === options.identity.deviceId);
           if (self !== undefined) emit("self", self.state);
           return;

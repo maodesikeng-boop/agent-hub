@@ -9,13 +9,16 @@ import type { DeviceId } from "../shared/api.ts";
 import {
   MESH_LEASE_TTL_MS,
   MESH_MAX_DEVICES_PER_ACCOUNT,
+  MESH_TRUST_TOMBSTONES_MAX,
   RELAY_ACCOUNT_DAILY_BYTES,
   RELAY_CHANNEL_ACCEPT_TIMEOUT_MS,
   RELAY_CHANNEL_IDLE_MS,
   RELAY_CHANNEL_PENDING_BYTES,
   RELAY_CONTROL_FRAMES_PER_SECOND,
+  RELAY_HELLO_TIMEOUT_MS,
   RELAY_MAX_CHANNELS_PER_DEVICE,
   RELAY_MAX_DATA_FRAME_BYTES,
+  RELAY_MAX_UNAUTH_CONTROLS_PER_ACCOUNT,
   RELAY_PENDING_DEVICE_TTL_MS,
   RELAY_REMOVED_DEVICES_MAX,
   RELAY_USAGE_SAVE_MS,
@@ -30,11 +33,12 @@ import {
   type MeshDeviceState,
   type MeshLeaseName,
 } from "../shared/mesh.ts";
-import { fingerprintOfPem, verifyDeviceSignature } from "./auth.ts";
+import { fingerprintOfPem, verifyCertPublicKey, verifyDeviceSignature } from "./auth.ts";
 import {
   RELAY_PROTOCOL_VERSION,
   encodeRelayFrame,
   newRelayToken,
+  parseLenientPresenceFrame,
   parseRelayClientFrame,
   relayControlMessage,
   relayRegisterMessage,
@@ -44,6 +48,7 @@ import {
   type RelayPresenceView,
   type RelayRegisterRequest,
   type RelayRegisterResponse,
+  type RelayRevocationEnvelope,
   type RelayServerFrame,
 } from "./protocol.ts";
 
@@ -68,6 +73,8 @@ export interface RelayAccountRecord {
   priority: DeviceId[];
   /** 最近被移除的设备（最多 RELAY_REMOVED_DEVICES_MAX 台）：它们再登入收到 removed，重新登记才清掉。 */
   removed: DeviceId[];
+  /** 最近由可信设备提交的签名撤销墓碑（最多 MESH_TRUST_TOMBSTONES_MAX 条）：离线设备上线时随 welcome/devices 取回验签。 */
+  revocations?: RelayRevocationEnvelope[];
   /** 每个租约名最近一次授予的 epoch：中继重启后接着加，不回到 1。 */
   leaseEpochs: Partial<Record<MeshLeaseName, number>>;
   /** 当天（UTC）经数据通道的字节数，按 RELAY_USAGE_SAVE_MS 落盘。 */
@@ -91,6 +98,7 @@ export interface RelayControlAttachment {
   device: DeviceId | null;
   session: string | null;
   nonce: string;
+  openedAt?: number;
   candidates: MeshCandidate[];
   lastClaimAt: Partial<Record<MeshLeaseName, number>>;
   /** 这台持有的租约：醒来后按它恢复持有者和 epoch。 */
@@ -157,6 +165,7 @@ export function createRelayAccountRoom(options: RelayAccountRoomOptions): RelayA
 
   /** 已登入的控制连接，一台设备一条。 */
   const controls = new Map<DeviceId, ControlConn>();
+  const unauthenticated = new Set<ControlConn>();
   const lastSeenAt = new Map<DeviceId, number>();
   const leases = new Map<MeshLeaseName, LeaseState>();
   const dials = new Map<string, DialRecord>();
@@ -177,6 +186,7 @@ export function createRelayAccountRoom(options: RelayAccountRoomOptions): RelayA
     if (conn !== undefined) send(conn, frame);
   };
   const closeConn = (conn: ControlConn, code: number, reason: string) => {
+    unauthenticated.delete(conn);
     if (conn.closed) return;
     conn.closed = true;
     conn.socket.close(code, reason);
@@ -189,6 +199,8 @@ export function createRelayAccountRoom(options: RelayAccountRoomOptions): RelayA
 
   const deviceViews = (): RelayDeviceView[] =>
     (record?.devices ?? []).map((d) => ({ id: d.id, name: d.name, platform: d.platform, certPem: d.certPem, fingerprint: d.fingerprint, state: d.state, addedAt: d.addedAt }));
+  const revocationsPayload = (): { revocations?: RelayRevocationEnvelope[] } =>
+    record?.revocations !== undefined && record.revocations.length > 0 ? { revocations: record.revocations } : {};
   const presenceFor = (viewer: DeviceId): RelayPresenceView[] =>
     (record?.devices ?? []).map((d) => {
       const conn = controls.get(d.id);
@@ -197,7 +209,8 @@ export function createRelayAccountRoom(options: RelayAccountRoomOptions): RelayA
     });
   const broadcastDevices = () => {
     const devices = deviceViews();
-    for (const conn of controls.values()) send(conn, { type: "devices", devices, priority: record?.priority ?? [] });
+    const extra = revocationsPayload();
+    for (const conn of controls.values()) send(conn, { type: "devices", devices, priority: record?.priority ?? [], ...extra });
   };
   const broadcastPresence = () => {
     for (const [id, conn] of controls) send(conn, { type: "presence", presence: presenceFor(id) });
@@ -288,17 +301,23 @@ export function createRelayAccountRoom(options: RelayAccountRoomOptions): RelayA
 
   // ---- 控制连接 ----
   const detach = (conn: ControlConn) => {
+    unauthenticated.delete(conn);
     if (conn.device === null || controls.get(conn.device) !== conn) return false;
     controls.delete(conn.device);
     lastSeenAt.set(conn.device, now());
     return true;
   };
 
-  const removeDevice = async (id: DeviceId) => {
+  const removeDevice = async (id: DeviceId, revocation?: RelayRevocationEnvelope) => {
     if (record === null) return;
     record.devices = record.devices.filter((d) => d.id !== id);
     record.priority = record.priority.filter((p) => p !== id);
     record.removed = [...record.removed.filter((r) => r !== id), id].slice(-RELAY_REMOVED_DEVICES_MAX);
+    if (revocation !== undefined) {
+      const prev = record.revocations ?? [];
+      record.revocations = [...prev.filter((r) => r.statement.fingerprint !== revocation.statement.fingerprint), revocation].slice(-MESH_TRUST_TOMBSTONES_MAX);
+    }
+    lastSeenAt.delete(id);
     await save();
     const conn = controls.get(id);
     if (conn !== undefined) {
@@ -321,6 +340,7 @@ export function createRelayAccountRoom(options: RelayAccountRoomOptions): RelayA
   };
 
   const welcome = (conn: ControlConn, device: RelayDeviceRecord) => {
+    unauthenticated.delete(conn);
     const previous = controls.get(device.id);
     if (previous !== undefined && previous !== conn) {
       closeConn(previous, WS_CLOSE_REPLACED, "replaced");
@@ -337,6 +357,7 @@ export function createRelayAccountRoom(options: RelayAccountRoomOptions): RelayA
       devices: deviceViews(),
       priority: record?.priority ?? [],
       presence: presenceFor(device.id),
+      ...revocationsPayload(),
     });
     if (device.state === "active") for (const name of MESH_LEASE_NAMES) send(conn, leaseFrame(name));
     broadcastPresence();
@@ -417,6 +438,9 @@ export function createRelayAccountRoom(options: RelayAccountRoomOptions): RelayA
         if (target === undefined || target.state === "active") return;
         target.state = "active";
         if (record !== null && !record.priority.includes(target.id) && record.priority.length < MESH_MAX_DEVICES_PER_ACCOUNT) record.priority.push(target.id);
+        if (record?.revocations !== undefined) {
+          record.revocations = record.revocations.filter((r) => r.statement.fingerprint !== target.fingerprint);
+        }
         await save();
         broadcastDevices();
         broadcastPresence();
@@ -426,8 +450,16 @@ export function createRelayAccountRoom(options: RelayAccountRoomOptions): RelayA
       }
       case "device.remove": {
         if (!selfActive) return fail(conn, "not_active");
-        if (deviceOf(frame.id) === undefined) return;
-        return removeDevice(frame.id);
+        const target = deviceOf(frame.id);
+        if (target === undefined) return;
+        const validRevocation =
+          frame.revocation !== undefined &&
+          frame.revocation.statement.device === target.id &&
+          frame.revocation.statement.fingerprint === target.fingerprint &&
+          frame.revocation.statement.by === self
+            ? frame.revocation
+            : undefined;
+        return removeDevice(frame.id, validRevocation);
       }
       case "priority.set": {
         if (!selfActive) return fail(conn, "not_active");
@@ -456,9 +488,10 @@ export function createRelayAccountRoom(options: RelayAccountRoomOptions): RelayA
       } catch {
         return { error: "unauthorized" };
       }
+      if (!(await verifyCertPublicKey(request.device.certPem, request.device.publicKey))) return { error: "unauthorized" };
       const message = relayRegisterMessage({ relayOrigin, provider: request.provider, device: request.device.id, fingerprint });
       if (!(await verifyDeviceSignature(request.device.publicKey, message, request.signature))) return { error: "unauthorized" };
-      const current: RelayAccountRecord = record ?? { accountId, login, devices: [], priority: [], removed: [], leaseEpochs: {}, usage: { day: "", bytes: 0 } };
+      const current: RelayAccountRecord = record ?? { accountId, login, devices: [], priority: [], removed: [], revocations: [], leaseEpochs: {}, usage: { day: "", bytes: 0 } };
       const existing = current.devices.find((d) => d.id === request.device.id);
       if (existing === undefined && current.devices.length >= MESH_MAX_DEVICES_PER_ACCOUNT) return { error: "too_many_devices" };
       const nobodyActive = !current.devices.some((d) => d.state === "active" && d.id !== request.device.id);
@@ -477,6 +510,9 @@ export function createRelayAccountRoom(options: RelayAccountRoomOptions): RelayA
       current.login = login;
       current.devices = existing === undefined ? [...current.devices, device] : current.devices.map((d) => (d.id === device.id ? device : d));
       current.removed = current.removed.filter((id) => id !== device.id);
+      if (state === "active" && current.revocations !== undefined) {
+        current.revocations = current.revocations.filter((r) => r.statement.fingerprint !== fingerprint);
+      }
       if (state === "active" && !current.priority.includes(device.id)) current.priority.push(device.id);
       if (state === "pending") current.priority = current.priority.filter((id) => id !== device.id);
       record = current;
@@ -497,6 +533,7 @@ export function createRelayAccountRoom(options: RelayAccountRoomOptions): RelayA
         device: null,
         session: null,
         nonce: restored?.nonce ?? randomToken(),
+        openedAt: restored?.openedAt ?? now(),
         candidates: restored?.candidates ?? [],
         lastClaimAt: { ...(restored?.lastClaimAt ?? {}) },
         frameTimes: [],
@@ -513,15 +550,22 @@ export function createRelayAccountRoom(options: RelayAccountRoomOptions): RelayA
             leases.set(held.name, { holder: restored.device, epoch: held.epoch, renewedAt: held.renewedAt, yielding: false });
           }
         }
-      } else if (restored === undefined) {
-        send(conn, { type: "challenge", nonce: conn.nonce });
+      } else {
+        if (unauthenticated.size >= RELAY_MAX_UNAUTH_CONTROLS_PER_ACCOUNT) {
+          const oldest = unauthenticated.values().next().value;
+          if (oldest !== undefined) fail(oldest, "rate_limited");
+        }
+        unauthenticated.add(conn);
+        if (restored === undefined) send(conn, { type: "challenge", nonce: conn.nonce });
       }
       const handle: RelayControlHandle = {
         receive(text) {
           const run = async () => {
             if (conn.closed) return;
             if (!allowFrame(conn)) return fail(conn, "rate_limited");
-            const frame = parseRelayClientFrame(text);
+            if (conn.device === null && now() - conn.openedAt > RELAY_HELLO_TIMEOUT_MS) return fail(conn, "unauthorized");
+            let frame = parseRelayClientFrame(text);
+            if (frame === null && conn.device !== null) frame = parseLenientPresenceFrame(text);
             if (frame === null) return fail(conn, "bad_frame");
             await ensureLoaded();
             if (conn.device === null) {
@@ -536,6 +580,7 @@ export function createRelayAccountRoom(options: RelayAccountRoomOptions): RelayA
         },
         closed() {
           conn.closed = true;
+          unauthenticated.delete(conn);
           const run = async () => {
             await ensureLoaded();
             const was = conn.device;
@@ -559,7 +604,7 @@ export function createRelayAccountRoom(options: RelayAccountRoomOptions): RelayA
           for (const [name, lease] of leases) {
             if (conn.device !== null && lease.holder === conn.device) held.push({ name, epoch: lease.epoch, renewedAt: lease.renewedAt });
           }
-          return { device: conn.device, session: conn.session, nonce: conn.nonce, candidates: conn.candidates, lastClaimAt: { ...conn.lastClaimAt }, held };
+          return { device: conn.device, session: conn.session, nonce: conn.nonce, openedAt: conn.openedAt, candidates: conn.candidates, lastClaimAt: { ...conn.lastClaimAt }, held };
         },
       };
       return handle;
@@ -611,6 +656,9 @@ export function createRelayAccountRoom(options: RelayAccountRoomOptions): RelayA
     async sweep() {
       await ensureLoaded();
       const t = now();
+      for (const conn of [...unauthenticated]) {
+        if (t - conn.openedAt > RELAY_HELLO_TIMEOUT_MS) fail(conn, "unauthorized");
+      }
       for (const [channel, dial] of dials) {
         const paired = dial.dialer !== undefined && dial.acceptor !== undefined;
         if (!paired && t - dial.createdAt > RELAY_CHANNEL_ACCEPT_TIMEOUT_MS) {
@@ -636,6 +684,7 @@ interface ControlConn {
   device: DeviceId | null;
   session: string | null;
   nonce: string;
+  openedAt: number;
   candidates: MeshCandidate[];
   lastClaimAt: Partial<Record<MeshLeaseName, number>>;
   /** 最近一秒内收到的帧的时刻（限流）。 */
@@ -679,6 +728,7 @@ function normalizeRecord(stored: RelayAccountRecord): RelayAccountRecord {
   return {
     ...stored,
     removed: stored.removed ?? [],
+    revocations: stored.revocations ?? [],
     leaseEpochs: stored.leaseEpochs ?? {},
     usage: stored.usage ?? { day: "", bytes: 0 },
   };

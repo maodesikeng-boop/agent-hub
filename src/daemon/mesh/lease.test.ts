@@ -82,6 +82,23 @@ describe("stepCenterLease", () => {
     expect(effects).toEqual([{ kind: "disconnect" }, { kind: "claim" }]);
   });
 
+  it("局域网探到其他设备持有租约（peerHolding）时不进入 orphan_holder，已在 orphan_holder 时发 disconnect 让出", () => {
+    const blocked = run(
+      [
+        { kind: "relay", state: "unreachable", at: 1_000 },
+        { kind: "tick", at: 1_000 + MESH_LEASE_ORPHAN_MS },
+      ],
+      undefined,
+      { ...ctx, peerHolding: true },
+    );
+    expect(blocked.state.kind).toBe("candidate");
+    expect(blocked.effects.some((e) => e.kind === "connect")).toBe(false);
+
+    const yielded = run([{ kind: "tick", at: 2_000 }], { kind: "orphan_holder", since: 1_000, relayDownSince: 0 }, { ...ctx, peerHolding: true });
+    expect(yielded.state).toEqual({ kind: "candidate", relayDownSince: 0 });
+    expect(yielded.effects).toEqual([{ kind: "disconnect" }, { kind: "claim" }]);
+  });
+
   it("eligible 变成 false 时持有的先 disconnect 再 release，回到 idle", () => {
     const { state, effects } = run([{ kind: "eligible", eligible: false, at: 1 }], { kind: "holder", epoch: 5, lastAckAt: 0, relayDownSince: null });
     expect(state.kind).toBe("idle");
@@ -107,7 +124,7 @@ describe("stepCenterLease", () => {
         { kind: "disconnected", at },
         { kind: "tick", at },
       ] as CenterLeaseEvent[]);
-      const context = { ...ctx, firstInPriority: rand() < 0.5 ? DEVICE_A : DEVICE_B };
+      const context = { ...ctx, firstInPriority: rand() < 0.5 ? DEVICE_A : DEVICE_B, peerHolding: rand() < 0.3 };
       const result = stepCenterLease(state, event, context);
       if (holding(state) && !holding(result.state)) expect(result.effects.some((e) => e.kind === "disconnect")).toBe(true);
       if (result.effects.some((e) => e.kind === "connect")) expect(holding(result.state)).toBe(true);

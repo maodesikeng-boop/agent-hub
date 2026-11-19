@@ -89,3 +89,77 @@ export async function verifyDeviceSignature(publicKey: string, message: Uint8Arr
     return false;
   }
 }
+
+interface DerElement {
+  tag: number;
+  start: number;
+  contentStart: number;
+  end: number;
+}
+
+function readDerElement(buf: Uint8Array, offset: number): DerElement | null {
+  if (offset + 2 > buf.length) return null;
+  const tag = buf[offset]!;
+  const first = buf[offset + 1]!;
+  let headerLen = 2;
+  let contentLen = 0;
+  if ((first & 0x80) === 0) {
+    contentLen = first;
+  } else {
+    const count = first & 0x7f;
+    if (count === 0 || count > 4 || offset + 2 + count > buf.length) return null;
+    if (buf[offset + 2] === 0) return null;
+    for (let i = 0; i < count; i++) contentLen = contentLen * 256 + buf[offset + 2 + i]!;
+    if (contentLen < 128) return null;
+    headerLen = 2 + count;
+  }
+  const contentStart = offset + headerLen;
+  const end = contentStart + contentLen;
+  return end <= buf.length ? { tag, start: offset, contentStart, end } : null;
+}
+
+/** 后置：核对 certPem 中的 SubjectPublicKeyInfo 与 publicKey 完全一致，且证书本身的 Ed25519 自签名有效。 */
+export async function verifyCertPublicKey(certPem: string, publicKey: string): Promise<boolean> {
+  const expectedSpki = base64UrlDecode(publicKey);
+  if (expectedSpki === null) return false;
+  let der: Uint8Array;
+  try {
+    der = derOfCertPem(certPem);
+  } catch {
+    return false;
+  }
+  const cert = readDerElement(der, 0);
+  if (cert === null || cert.tag !== 0x30 || cert.end !== der.length) return false;
+  const tbs = readDerElement(der, cert.contentStart);
+  if (tbs === null || tbs.tag !== 0x30 || tbs.end >= cert.end) return false;
+  const sigAlg = readDerElement(der, tbs.end);
+  if (sigAlg === null || sigAlg.tag !== 0x30 || sigAlg.end >= cert.end) return false;
+  const sigVal = readDerElement(der, sigAlg.end);
+  if (sigVal === null || sigVal.tag !== 0x03 || sigVal.end !== cert.end) return false;
+  if (sigVal.contentStart >= sigVal.end || der[sigVal.contentStart] !== 0x00) return false;
+
+  let cursor = tbs.contentStart;
+  const maybeVersion = readDerElement(der, cursor);
+  if (maybeVersion === null || maybeVersion.end > tbs.end) return false;
+  if (maybeVersion.tag === 0xa0) cursor = maybeVersion.end;
+  for (const expectedTag of [0x02, 0x30, 0x30, 0x30, 0x30]) {
+    const field = readDerElement(der, cursor);
+    if (field === null || field.tag !== expectedTag || field.end > tbs.end) return false;
+    cursor = field.end;
+  }
+  const spki = readDerElement(der, cursor);
+  if (spki === null || spki.tag !== 0x30 || spki.end > tbs.end) return false;
+  const certSpki = der.subarray(spki.start, spki.end);
+  if (certSpki.length !== expectedSpki.length) return false;
+  for (let i = 0; i < certSpki.length; i++) {
+    if (certSpki[i] !== expectedSpki[i]) return false;
+  }
+  try {
+    const key = await crypto.subtle.importKey("spki", expectedSpki, { name: "Ed25519" }, false, ["verify"]);
+    const tbsBytes = Uint8Array.from(der.subarray(tbs.start, tbs.end));
+    const certSig = Uint8Array.from(der.subarray(sigVal.contentStart + 1, sigVal.end));
+    return await crypto.subtle.verify({ name: "Ed25519" }, key, certSig, tbsBytes);
+  } catch {
+    return false;
+  }
+}

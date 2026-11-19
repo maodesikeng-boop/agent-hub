@@ -6,6 +6,8 @@ import { API_PATHS, type DeviceId } from "../../shared/api.ts";
 import {
   MESH_APPROVAL_TTL_MS,
   MESH_CANDIDATES_REFRESH_MS,
+  MESH_LAN_PROBE_TIMEOUT_MS,
+  MESH_LOGOUT_REVOKE_TIMEOUT_MS,
   MESH_MAX_DEVICES_PER_ACCOUNT,
   MESH_REQUEST_TIMEOUT_MS,
   MESH_TRUST_SYNC_ATTEMPTS,
@@ -14,7 +16,8 @@ import {
   RELAY_PENDING_DEVICE_TTL_MS,
 } from "../../shared/limits.ts";
 import type { AccountStatusView, MeshApprovalView, MeshCandidate, MeshDeviceView, MeshLeaseName, RelayConnectionState } from "../../shared/mesh.ts";
-import { newRelayToken, type RelayDeviceView, type RelayPresenceView } from "../../relay/protocol.ts";
+import { MESH_LEASE_NAMES } from "../../shared/mesh.ts";
+import { newRelayToken, type RelayDeviceView, type RelayPresenceView, type RelayRevocationEnvelope } from "../../relay/protocol.ts";
 import { createAccountService, type AccountFile } from "./account.ts";
 import { agentFetch } from "./agent-fetch.ts";
 import { createMeshDialer, localCandidates, startMeshListener, type MeshConnection, type MeshDialer, type MeshListener } from "./dialer.ts";
@@ -83,7 +86,7 @@ export interface Mesh {
   readonly dialer: MeshDialer;
   /** GET /api/account。 */
   status(): AccountStatusView;
-  startLogin(input?: { relayUrl?: string }): Promise<AccountStatusView>;
+  startLogin(input?: { relayUrl?: string; githubClientId?: string }): Promise<AccountStatusView>;
   cancelLogin(): void;
   logout(): Promise<void>;
   /** 本机用户在“等批准”那一条上点“核对”：开始批准仪式（本机当批准方）。requestId 是那台的设备编号。 */
@@ -104,6 +107,8 @@ export interface Mesh {
   trustStatements(): SignedTrustStatement[];
   /** POST /api/peer/trust：收下 from 转来的声明。后置：body 不对抛错；撤销本机的声明生效时本机退出账号。 */
   receiveTrustStatements(from: DeviceId, body: unknown): void;
+  /** GET /api/peer/lease：本机所知的中心租约持有情况（局域网降级前防双活探测用）。 */
+  leaseSnapshot(): { relayConnected: boolean; holders: Partial<Record<MeshLeaseName, DeviceId | null>> };
   /** 账号状态、设备表、在线、租约任一变化时调（界面服务据此推 account.updated）。 */
   onChange(listener: () => void): () => void;
   close(): Promise<void>;
@@ -240,6 +245,21 @@ export async function createMesh(options: MeshOptions): Promise<Mesh> {
       });
     }
   };
+  const deliverStatements = async (statements: SignedTrustStatement[], timeoutMs: number) => {
+    const peers = trust.list().slice(1).filter((peer) => isOnline(peer.id));
+    if (peers.length === 0) return;
+    await Promise.allSettled(
+      peers.map(async (peer) => {
+        const res = await request(peer.id, API_PATHS.peerTrust, {
+          method: "POST",
+          body: JSON.stringify({ statements }),
+          timeoutMs,
+        });
+        await res.body?.cancel();
+        if (res.status !== 204) throw new Error(`HTTP ${res.status}`);
+      }),
+    );
+  };
 
   // ---- 信任表对齐 ----
   let syncTimer: NodeJS.Timeout | null = null;
@@ -260,11 +280,33 @@ export async function createMesh(options: MeshOptions): Promise<Mesh> {
   const applyStatements = (from: DeviceId, body: unknown) => {
     const raw = (body as { statements?: unknown } | null)?.statements;
     if (!Array.isArray(raw) || raw.length > MESH_MAX_DEVICES_PER_ACCOUNT + MESH_TRUST_TOMBSTONES_MAX) throw new Error("statements 不对");
+    const gossipRevokes: SignedTrustStatement[] = [];
     for (const item of raw) {
       const signed = parseSignedTrustStatement(item);
       if (signed === null || signed.statement.by !== from) continue;
       const result = acceptTrustStatement(trust, signed);
       if (result === "applied" && signed.statement.kind === "revoke" && signed.statement.device === selfId) {
+        void handleRemoved("这台已被别的设备移出账号");
+        return;
+      }
+      if (result === "applied" && signed.statement.kind === "revoke") {
+        gossipRevokes.push(
+          signTrustStatement(
+            { kind: "revoke", device: signed.statement.device, fingerprint: signed.statement.fingerprint, by: selfId, at: signed.statement.at },
+            identity,
+          ),
+        );
+      }
+    }
+    if (gossipRevokes.length > 0) broadcast(gossipRevokes, from);
+  };
+  const applyRelayRevocations = (revocations: RelayRevocationEnvelope[] | undefined) => {
+    if (revocations === undefined || revocations.length === 0) return;
+    for (const item of revocations) {
+      const signed = parseSignedTrustStatement(item);
+      if (signed === null || signed.statement.kind !== "revoke") continue;
+      const result = acceptTrustStatement(trust, signed);
+      if (result === "applied" && signed.statement.device === selfId) {
         void handleRemoved("这台已被别的设备移出账号");
         return;
       }
@@ -345,25 +387,41 @@ export async function createMesh(options: MeshOptions): Promise<Mesh> {
   expiryTimer.unref?.();
 
   // ---- 中继推来的 ----
-  relay.on("devices", (devices, nextPriority) => {
+  relay.on("devices", (devices, nextPriority, revocations) => {
     relayDevices = devices;
     priority = nextPriority;
+    const knownIds = new Set(devices.map((d) => d.id));
+    for (const id of [...presence.keys()]) {
+      if (!knownIds.has(id)) {
+        presence.delete(id);
+        dialer.forget(id);
+      }
+    }
     for (const [peer, ceremony] of ceremonies) {
       if (ceremony.role === "approver" && relayDevice(peer)?.state !== "pending") {
         sendSignals(peer, ceremony.cancel("cancelled"));
         ceremonies.delete(peer);
       }
     }
+    applyRelayRevocations(revocations);
     refreshLeases();
     syncAttempts = 0;
     scheduleTrustSync();
     changed();
   });
   relay.on("presence", (list) => {
+    const seen = new Set<DeviceId>();
     for (const entry of list) {
+      seen.add(entry.id);
       const was = presence.get(entry.id)?.online ?? false;
       presence.set(entry.id, entry);
       if (was && !entry.online) dialer.forget(entry.id);
+    }
+    for (const id of [...presence.keys()]) {
+      if (!seen.has(id)) {
+        presence.delete(id);
+        dialer.forget(id);
+      }
     }
     changed();
   });
@@ -533,6 +591,35 @@ export async function createMesh(options: MeshOptions): Promise<Mesh> {
     };
   };
 
+  const leaseSnapshot = () => {
+    const relayConnected = relay.state() === "connected";
+    const holders: Partial<Record<MeshLeaseName, DeviceId | null>> = {};
+    for (const name of MESH_LEASE_NAMES) {
+      if (leases.get(name)?.holding()) holders[name] = selfId;
+      else if (relayConnected) holders[name] = leaseHolders.get(name) ?? null;
+      else holders[name] = null;
+    }
+    return { relayConnected, holders };
+  };
+  const probePeerLeaseHolder = async (name: MeshLeaseName): Promise<boolean> => {
+    const peers = trust.list().slice(1);
+    if (peers.length === 0) return false;
+    dialer.networkChanged();
+    const results = await Promise.allSettled(
+      peers.map(async (peer) => {
+        const res = await request(peer.id, API_PATHS.peerLease, { timeoutMs: MESH_LAN_PROBE_TIMEOUT_MS });
+        if (res.status !== 200) {
+          await res.body?.cancel();
+          return false;
+        }
+        const snap = (await res.json()) as { holders?: Partial<Record<MeshLeaseName, unknown>> } | null;
+        const holder = snap?.holders?.[name];
+        return typeof holder === "string" && holder !== selfId;
+      }),
+    );
+    return results.some((r) => r.status === "fulfilled" && r.value);
+  };
+
   return {
     selfId,
     trust,
@@ -548,13 +635,23 @@ export async function createMesh(options: MeshOptions): Promise<Mesh> {
       const current = signedIn();
       if (current === null) return;
       if (current.state === "active") {
-        broadcast([signTrustStatement({ kind: "revoke", device: selfId, fingerprint: identity.fingerprint, by: selfId, at: now() }, identity)]);
-        relay.send({ type: "device.remove", id: selfId });
+        const revokeAt = Math.max(
+          now(),
+          ...trust.list().map((d) => d.since + 1),
+          ...relayDevices.filter((d) => d.id === selfId).map((d) => d.addedAt + 1),
+        );
+        const selfRevoke = signTrustStatement(
+          { kind: "revoke", device: selfId, fingerprint: identity.fingerprint, by: selfId, at: revokeAt },
+          identity,
+        );
+        await deliverStatements([selfRevoke], MESH_LOGOUT_REVOKE_TIMEOUT_MS);
+        relay.send({ type: "device.remove", id: selfId, revocation: selfRevoke as RelayRevocationEnvelope });
       }
       removedReason = null;
       trust.clear();
       await account.logout();
       await sessionChange;
+      removedReason = null;
     },
     async beginApproval(requestId) {
       const peer = relayDevices.find((d) => d.id === requestId && d.state === "pending");
@@ -577,7 +674,10 @@ export async function createMesh(options: MeshOptions): Promise<Mesh> {
       return status();
     },
     async setCenterPriority(next) {
-      const active = new Set(relayDevices.filter((d) => d.state === "active").map((d) => d.id));
+      const active = new Set([
+        ...relayDevices.filter((d) => d.state === "active").map((d) => d.id),
+        ...trust.list().map((d) => d.id),
+      ]);
       const filtered = [...new Set(next)].filter((id) => active.has(id));
       if (!relay.send({ type: "priority.set", priority: filtered })) throw new Error("没连上中继，稍后再试");
     },
@@ -585,16 +685,18 @@ export async function createMesh(options: MeshOptions): Promise<Mesh> {
       if (id === selfId) throw new Error("不能移除本机：本机请退出账号");
       const trusted = trust.get(id);
       if (trusted === undefined && relayDevice(id) === undefined) throw new Error("账号里没有这台设备");
+      let signedRevoke: SignedTrustStatement | undefined;
       if (trusted !== undefined) {
         trust.remove(id);
         const revocation = trust.revocations().find((r) => r.fingerprint === trusted.fingerprint);
         if (revocation !== undefined) {
-          broadcast([signTrustStatement({ kind: "revoke", device: id, fingerprint: trusted.fingerprint, by: selfId, at: revocation.at }, identity)]);
+          signedRevoke = signTrustStatement({ kind: "revoke", device: id, fingerprint: trusted.fingerprint, by: selfId, at: revocation.at }, identity);
+          broadcast([signedRevoke]);
         }
       }
       ceremonies.delete(id);
       dialer.forget(id);
-      relay.send({ type: "device.remove", id });
+      relay.send({ type: "device.remove", id, ...(signedRevoke !== undefined ? { revocation: signedRevoke as RelayRevocationEnvelope } : {}) });
       changed();
     },
     isOnline,
@@ -608,6 +710,7 @@ export async function createMesh(options: MeshOptions): Promise<Mesh> {
           relay,
           eligible: () => activeSelf() && priority.includes(selfId) && hooks.eligible(),
           priority: () => priority,
+          hasPeerHolder: () => probePeerLeaseHolder(name),
           connect: hooks.connect,
           disconnect: hooks.disconnect,
           now,
@@ -629,6 +732,7 @@ export async function createMesh(options: MeshOptions): Promise<Mesh> {
       if (trust.get(from) === undefined) throw new Error("不是可信设备");
       applyStatements(from, body);
     },
+    leaseSnapshot,
     onChange(listenerFn) {
       changeListeners.add(listenerFn);
       return () => changeListeners.delete(listenerFn);

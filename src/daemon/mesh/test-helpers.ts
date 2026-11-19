@@ -146,7 +146,11 @@ export async function startTestMeshNode(
   const http = createServer((req, res) => {
     const from = peerOf.get(req.socket)!;
     requests.push({ from, path: req.url ?? "" });
-    if (options.handler !== undefined && req.url !== API_PATHS.peerTrust) return options.handler(req, res, from);
+    if (options.handler !== undefined && req.url !== API_PATHS.peerTrust && req.url !== API_PATHS.peerLease) return options.handler(req, res, from);
+    if (req.url === API_PATHS.peerLease && req.method === "GET") {
+      res.setHeader("content-type", "application/json");
+      return res.end(JSON.stringify(mesh.leaseSnapshot()));
+    }
     if (req.url === API_PATHS.peerTrust && req.method === "GET") {
       res.setHeader("content-type", "application/json");
       return res.end(JSON.stringify({ statements: mesh.trustStatements() }));

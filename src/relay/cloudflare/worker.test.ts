@@ -9,7 +9,14 @@ import { unstable_startWorker } from "wrangler";
 import { loadOrCreateMeshIdentity, type MeshIdentity } from "../../daemon/mesh/identity.ts";
 import { createRelayClient, registerWithRelay } from "../../daemon/mesh/relay-client.ts";
 import { startFakeGithub, type FakeGithub } from "../../../test/e2e/fake-github.ts";
-import { MESH_LEASE_TTL_MS, RELAY_PENDING_DEVICE_TTL_MS, RELAY_REGISTER_PER_IP_PER_MINUTE } from "../../shared/limits.ts";
+import {
+  MESH_LEASE_TTL_MS,
+  RELAY_CONCURRENT_SOCKETS_PER_IP,
+  RELAY_MAX_UNAUTH_CONTROLS_PER_ACCOUNT,
+  RELAY_PENDING_DEVICE_TTL_MS,
+  RELAY_REGISTER_PER_IP_PER_MINUTE,
+  RELAY_UPGRADES_PER_IP_PER_MINUTE,
+} from "../../shared/limits.ts";
 import type { AccountId, MeshLeaseGrant } from "../../shared/mesh.ts";
 import { encodeRelayFrame, parseRelayServerFrame, relayControlMessage, relayRegisterMessage, RELAY_PATHS, RELAY_PROTOCOL_VERSION } from "../protocol.ts";
 
@@ -236,6 +243,27 @@ describe("handleRelayRequest", () => {
           method: "POST",
           headers: { "cf-connecting-ip": "198.51.100.77", "content-type": "application/json" },
           body: "{}",
+        }),
+        env,
+      );
+      lastStatus = res.status;
+    }
+    expect(lastStatus).toBe(429);
+  });
+
+  it("同一 IP 每分钟升级超过 RELAY_UPGRADES_PER_IP_PER_MINUTE 次回 429", async () => {
+    const stub = { fetch: async () => new Response(null, { status: 200 }) };
+    const env = {
+      ACCOUNTS: { idFromName: (n: string) => n, get: () => stub },
+      PUBLIC_ORIGIN: "https://relay.test",
+      GITHUB_API_ORIGIN: github.origin,
+    };
+    const accountId = "acct_abcdefghijklmnopqrstuvwxyz" as AccountId;
+    let lastStatus = 0;
+    for (let i = 0; i <= RELAY_UPGRADES_PER_IP_PER_MINUTE; i++) {
+      const res = await workerMod.handleRelayRequest(
+        new Request(`https://relay.test${RELAY_PATHS.control(accountId)}`, {
+          headers: { "cf-connecting-ip": "198.51.100.88", upgrade: "websocket" },
         }),
         env,
       );
@@ -485,3 +513,60 @@ describe("RelayAccountObject", () => {
     }
   });
 });
+  it("同一 IP 在单个账号 DO 上并发连接超过 RELAY_CONCURRENT_SOCKETS_PER_IP 时回 429", async () => {
+    const origin = "https://relay.test";
+    const accountId = "acct_abcdefghijklmnopqrstuvwxyz" as AccountId;
+    const hibernated = Array.from({ length: RELAY_CONCURRENT_SOCKETS_PER_IP }, () => {
+      const s = makeFakeSocket();
+      s.tags = ["channel", "ip:203.0.113.9"];
+      return s;
+    });
+    const state = makeFakeDoState(new Map(), hibernated);
+    const doObj = new workerMod.RelayAccountObject(state, { PUBLIC_ORIGIN: origin });
+    vi.stubGlobal(
+      "WebSocketPair",
+      class {
+        0 = makeFakeSocket();
+        1 = makeFakeSocket();
+      },
+    );
+    vi.stubGlobal(
+      "Response",
+      class extends globalThis.Response {
+        webSocket?: unknown;
+        constructor(body?: ConstructorParameters<typeof globalThis.Response>[0], init?: ResponseInit & { webSocket?: unknown }) {
+          const { status, ...rest } = init ?? {};
+          super(body, { ...rest, status: status === 101 ? 200 : status });
+          this.webSocket = init?.webSocket;
+        }
+      },
+    );
+    try {
+      const blocked = await doObj.fetch(
+        new Request(`${origin}${RELAY_PATHS.control(accountId)}`, {
+          headers: { "cf-connecting-ip": "203.0.113.9", upgrade: "websocket" },
+        }),
+      );
+      expect(blocked.status).toBe(429);
+      const otherIp = await doObj.fetch(
+        new Request(`${origin}${RELAY_PATHS.control(accountId)}`, {
+          headers: { "cf-connecting-ip": "203.0.113.10", upgrade: "websocket" },
+        }),
+      );
+      expect(otherIp.status).toBe(200);
+
+      const unauthState = makeFakeDoState();
+      const unauthDo = new workerMod.RelayAccountObject(unauthState, { PUBLIC_ORIGIN: origin });
+      for (let i = 0; i < RELAY_MAX_UNAUTH_CONTROLS_PER_ACCOUNT + 5; i++) {
+        const ok = await unauthDo.fetch(
+          new Request(`${origin}${RELAY_PATHS.control(accountId)}`, {
+            headers: { "cf-connecting-ip": `198.51.100.${i + 1}`, upgrade: "websocket" },
+          }),
+        );
+        expect(ok.status).toBe(200);
+      }
+      expect(unauthState.getWebSockets("control").length).toBe(RELAY_MAX_UNAUTH_CONTROLS_PER_ACCOUNT);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });

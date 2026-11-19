@@ -169,7 +169,7 @@ export interface AccountService {
    * 后置：立刻返回 signing_in（带 8 位码）；之后后台轮询，用户授权后把本机登记进中继、写 account.json、变成 signed_in 并通知 onChange；
    * 用户拒绝、码过期、中继拒绝时回到 signed_out 并通知，原因进 lastError。已经 signed_in 时抛错。
    */
-  startLogin(input?: { relayUrl?: string }): Promise<AccountLoginState>;
+  startLogin(input?: { relayUrl?: string; githubClientId?: string }): Promise<AccountLoginState>;
   /** 后置：停止轮询，回到 signed_out；不在登录中时什么也不做。 */
   cancelLogin(): void;
   /** 后置：本机登记状态变了（中继把本机从 pending 改成 active）时写回 account.json。 */
@@ -220,12 +220,12 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
     return account;
   };
 
-  const poll = async (code: GithubDeviceCode, relayUrl: string, signal: AbortSignal) => {
+  const poll = async (code: GithubDeviceCode, relayUrl: string, clientId: string, signal: AbortSignal) => {
     let interval = code.intervalMs;
     for (;;) {
       await sleep(interval, signal);
       if (now() > code.expiresAt) throw new Error("登录码过期了，请重新登录");
-      const result = await pollGithubDeviceToken(options.githubClientId, code.deviceCode, github);
+      const result = await pollGithubDeviceToken(clientId, code.deviceCode, github);
       if (signal.aborted) return;
       if (result.kind === "pending") continue;
       if (result.kind === "slow_down") {
@@ -249,19 +249,20 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
       if (current.kind === "signed_in") throw new Error("已经登录了，先退出再换账号");
       if (current.kind === "signing_in") return current;
       const relayUrl = input?.relayUrl ?? options.relayUrl;
+      const clientId = input?.githubClientId?.trim() || options.githubClientId;
       if (relayUrl === "") throw new Error("还没配中继网址：在设置里填自建中继的网址");
-      if (options.githubClientId === "") throw new Error("这个版本还没配 GitHub 登录");
+      if (clientId === "") throw new Error("这个版本还没配 GitHub 登录：请设环境变量 FUSA_GITHUB_CLIENT_ID 或在登录时指定 clientId");
       try {
         new URL(relayUrl);
       } catch {
         throw new Error("中继网址不对");
       }
       error = null;
-      const code = await requestGithubDeviceCode(options.githubClientId, github);
+      const code = await requestGithubDeviceCode(clientId, github);
       const controller = new AbortController();
       polling = controller;
       set({ kind: "signing_in", userCode: code.userCode, verificationUri: code.verificationUri, expiresAt: code.expiresAt });
-      poll(code, relayUrl, controller.signal).catch((failure: unknown) => {
+      poll(code, relayUrl, clientId, controller.signal).catch((failure: unknown) => {
         if (controller.signal.aborted) return;
         polling = null;
         error = failure instanceof Error ? failure.message : "登录失败";

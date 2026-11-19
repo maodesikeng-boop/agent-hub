@@ -96,7 +96,10 @@ function feishuRoutes(get: () => FeishuSetupService | undefined): Record<string,
 
 const deviceIdSchema = z.string().refine((v) => isDeviceId(v), "设备编号不对");
 const meshSchemas = {
-  login: z.strictObject({ relayUrl: z.string().url("中继网址不对").optional() }),
+  login: z.strictObject({
+    relayUrl: z.string().url("中继网址不对").optional(),
+    githubClientId: z.string().min(1, "Client ID 不能为空").max(128, "Client ID 太长").optional(),
+  }),
   begin: z.strictObject({ requestId: deviceIdSchema }),
   answer: z.strictObject({ requestId: deviceIdSchema, match: z.boolean() }),
   priority: z.strictObject({ priority: z.array(deviceIdSchema).max(64) }),

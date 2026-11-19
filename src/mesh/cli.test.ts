@@ -220,4 +220,16 @@ describe("runMeshCli", () => {
     expect(await h.run()).toBe(2);
     expect(h.err()).toContain("用法：");
   });
+
+  it("login 支持同时传 --relay 与 --client-id", async () => {
+    const h = harness(["login", "--relay", "https://relay.self.test", "--client-id", "Iv1.custom"], {
+      "POST /mesh/login": () => signedIn(),
+    });
+    expect(await h.run()).toBe(0);
+    expect(h.calls[0]).toEqual({
+      method: "POST",
+      path: "/mesh/login",
+      body: { relayUrl: "https://relay.self.test", githubClientId: "Iv1.custom" },
+    });
+  });
 });

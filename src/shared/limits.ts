@@ -1158,6 +1158,10 @@ export const MESH_TRUST_SYNC_RETRY_MS = 2_000;
 export const MESH_TRUST_SYNC_ATTEMPTS = 5;
 /** 设备之间的组网控制请求（同步信任声明、改名）最多等多久。 */
 export const MESH_REQUEST_TIMEOUT_MS = 10_000;
+/** 退出账号时等待自签撤销声明送达在线可信设备的最长耗时。 */
+export const MESH_LOGOUT_REVOKE_TIMEOUT_MS = 3_000;
+/** 中继失联准备降级持有租约前，经局域网探测其他可信设备租约状态的超时。 */
+export const MESH_LAN_PROBE_TIMEOUT_MS = 2_000;
 /** 新设备批准（核对码）从发起到两边都点“一致”的时限。 */
 export const MESH_APPROVAL_TTL_MS = 10 * 60_000;
 /** 核对码几位十进制数字。 */
@@ -1180,8 +1184,16 @@ export const RELAY_ACCOUNT_DAILY_BYTES = 4 * 1024 * 1024 * 1024;
 export const RELAY_CHANNEL_IDLE_MS = 5 * 60_000;
 /** 拨号后等对方接起数据通道最多多久。 */
 export const RELAY_CHANNEL_ACCEPT_TIMEOUT_MS = 10_000;
+/** 控制连接建立后多久内必须完成 hello 认证，超时断开。 */
+export const RELAY_HELLO_TIMEOUT_MS = 10_000;
+/** 单个账号同时最多挂几条尚未完成 hello 的控制连接。 */
+export const RELAY_MAX_UNAUTH_CONTROLS_PER_ACCOUNT = MESH_MAX_DEVICES_PER_ACCOUNT;
 /** 每个 IP 每分钟最多注册几次。 */
 export const RELAY_REGISTER_PER_IP_PER_MINUTE = 10;
+/** 每个 IP 每分钟最多升级几次 WebSocket（控制连接 + 数据通道）。 */
+export const RELAY_UPGRADES_PER_IP_PER_MINUTE = 120;
+/** 每个 IP 同时最多保持几条活跃 WebSocket 连接。 */
+export const RELAY_CONCURRENT_SOCKETS_PER_IP = 64;
 /** 数据通道另一端还没接起时，中继最多替先到的一端攒多少字节（TLS 握手的头几条记录）。 */
 export const RELAY_CHANNEL_PENDING_BYTES = 4 * RELAY_MAX_DATA_FRAME_BYTES;
 /** 自建中继：数据通道一端积压超过这么多字节就先停读另一端，写空再读。 */

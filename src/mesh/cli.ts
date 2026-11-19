@@ -7,7 +7,7 @@ import { MESH_CLI_MAX_POLLS, MESH_CLI_POLL_MS } from "../shared/limits.ts";
 import type { AccountStatusView, MeshApprovalView } from "../shared/mesh.ts";
 
 export const MESH_USAGE = `用法：node src/mesh/main.ts <子命令>
-  login [--relay <网址>]    用 GitHub 设备码登录
+  login [--relay <网址>] [--client-id <ClientID>]  用 GitHub 设备码登录
   status                    查看账号、中继状态、设备列表与中心顺序
   approve <请求编号>        核对并批准新设备加入
   priority <设备编号…>      设置中心顺序
@@ -89,10 +89,15 @@ async function confirmSas(io: MeshCliIo, approval: MeshApprovalView): Promise<Ac
 }
 
 async function handleLogin(io: MeshCliIo, args: string[]): Promise<number> {
-  const { values, positionals } = parse(args, { relay: { type: "string" } });
+  const { values, positionals } = parse(args, { relay: { type: "string" }, "client-id": { type: "string" } });
   if (positionals.length > 0) throw new UsageError("login 不收位置参数");
   const relayUrl = typeof values.relay === "string" && values.relay.trim() !== "" ? values.relay.trim() : undefined;
-  let status = (await io.admin("POST", "/mesh/login", relayUrl === undefined ? {} : { relayUrl })) as AccountStatusView;
+  const githubClientId = typeof values["client-id"] === "string" && values["client-id"].trim() !== "" ? values["client-id"].trim() : undefined;
+  const body = {
+    ...(relayUrl === undefined ? {} : { relayUrl }),
+    ...(githubClientId === undefined ? {} : { githubClientId }),
+  };
+  let status = (await io.admin("POST", "/mesh/login", body)) as AccountStatusView;
   if (status.state === "signing_in") {
     io.stdout.write(`请在浏览器打开 ${status.verificationUri} 输入登录码：${status.userCode}\n`);
   }

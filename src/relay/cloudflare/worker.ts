@@ -7,10 +7,12 @@
 // 实现时加 wrangler.toml 和 Workers 的类型包，把这个文件从根 tsconfig.json 挪到 src/relay/cloudflare/tsconfig.json；下面的接口只是骨架阶段让根类型检查能过的最小形状。
 import { isDeviceId } from "../../shared/api.ts";
 import {
+  RELAY_CONCURRENT_SOCKETS_PER_IP,
   RELAY_IP_LIMITER_MAX,
   RELAY_MAX_CONTROL_FRAME_BYTES,
   RELAY_MAX_DATA_FRAME_BYTES,
   RELAY_REGISTER_PER_IP_PER_MINUTE,
+  RELAY_UPGRADES_PER_IP_PER_MINUTE,
 } from "../../shared/limits.ts";
 import { parseAccountId, type AccountId, type AccountLogin } from "../../shared/mesh.ts";
 import { accountIdOf, verifyGithubToken } from "../auth.ts";
@@ -77,23 +79,27 @@ const REGISTER_ERROR_STATUS: Record<RelayErrorCode, number> = {
 };
 
 const registerHits = new Map<string, { windowStart: number; count: number }>();
+const upgradeHits = new Map<string, { windowStart: number; count: number }>();
 
-function allowRegisterIp(ip: string, now: number): boolean {
-  const hit = registerHits.get(ip);
+function allowIpWindow(hits: Map<string, { windowStart: number; count: number }>, ip: string, now: number, limit: number): boolean {
+  const hit = hits.get(ip);
   if (hit !== undefined && now - hit.windowStart < 60_000) {
-    registerHits.delete(ip);
+    hits.delete(ip);
     hit.count++;
-    registerHits.set(ip, hit);
-    return hit.count <= RELAY_REGISTER_PER_IP_PER_MINUTE;
+    hits.set(ip, hit);
+    return hit.count <= limit;
   }
-  registerHits.delete(ip);
-  if (registerHits.size >= RELAY_IP_LIMITER_MAX) {
-    const oldest = registerHits.keys().next().value;
-    if (oldest !== undefined) registerHits.delete(oldest);
+  hits.delete(ip);
+  if (hits.size >= RELAY_IP_LIMITER_MAX) {
+    const oldest = hits.keys().next().value;
+    if (oldest !== undefined) hits.delete(oldest);
   }
-  registerHits.set(ip, { windowStart: now, count: 1 });
+  hits.set(ip, { windowStart: now, count: 1 });
   return true;
 }
+
+const allowRegisterIp = (ip: string, now: number) => allowIpWindow(registerHits, ip, now, RELAY_REGISTER_PER_IP_PER_MINUTE);
+const allowUpgradeIp = (ip: string, now: number) => allowIpWindow(upgradeHits, ip, now, RELAY_UPGRADES_PER_IP_PER_MINUTE);
 
 function clientIpOf(request: Request): string {
   const cfIp = request.headers.get("cf-connecting-ip")?.trim();
@@ -246,6 +252,9 @@ export async function handleRelayRequest(request: Request, env: RelayWorkerEnv):
     if (request.method !== "GET" || request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
       return jsonResponse(426, { error: "upgrade_required" }, { upgrade: "websocket" });
     }
+    if (!allowUpgradeIp(clientIpOf(request), Date.now())) {
+      return jsonResponse(429, { error: "rate_limited" });
+    }
     const stub = env.ACCOUNTS.get(env.ACCOUNTS.idFromName(route.accountId));
     return stub.fetch(request);
   }
@@ -334,6 +343,10 @@ export class RelayAccountObject {
     if (route === null || request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
       return jsonResponse(426, { error: "upgrade_required" }, { upgrade: "websocket" });
     }
+    const ipTag = `ip:${clientIpOf(request)}`;
+    if (this.state.getWebSockets(ipTag).length >= RELAY_CONCURRENT_SOCKETS_PER_IP) {
+      return jsonResponse(429, { error: "rate_limited" });
+    }
 
     const room = this.ensureRoom(route.accountId, publicOriginOf(request, this.env));
     const pair = new WebSocketPair();
@@ -341,7 +354,7 @@ export class RelayAccountObject {
     const server = pair[1] as unknown as CfWebSocket;
 
     if (route.kind === "control") {
-      this.state.acceptWebSocket(server, ["control"]);
+      this.state.acceptWebSocket(server, ["control", ipTag]);
       const handle = room.openControl(wrapSocket(server));
       this.controls.set(server, handle);
       this.syncAttachments();
@@ -351,7 +364,7 @@ export class RelayAccountObject {
 
     const device = url.searchParams.get("device") ?? "";
     const session = url.searchParams.get("session") ?? "";
-    this.state.acceptWebSocket(server, ["channel", `ch:${route.channel}`]);
+    this.state.acceptWebSocket(server, ["channel", `ch:${route.channel}`, ipTag]);
     if (!isRelayToken(route.channel) || !isDeviceId(device) || !isRelayToken(session)) {
       wrapSocket(server).close(WS_CLOSE_POLICY, "bad_frame");
       return new Response(null, { status: 101, webSocket: client });

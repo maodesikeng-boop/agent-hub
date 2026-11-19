@@ -9,7 +9,7 @@ import type { DeviceId } from "../../shared/api.ts";
 import { MESH_CANDIDATES_MAX } from "../../shared/limits.ts";
 import type { MeshCandidate } from "../../shared/mesh.ts";
 import { encodeRelayFrame, parseRelayClientFrame } from "../../relay/protocol.ts";
-import { createMeshDialer, localCandidates, MESH_ALPN, startMeshListener, type MeshConnection, type MeshDialer, type MeshListener } from "./dialer.ts";
+import { createMeshDialer, isAllowedDirectHost, localCandidates, MESH_ALPN, startMeshListener, type MeshConnection, type MeshDialer, type MeshListener } from "./dialer.ts";
 import type { MeshIdentity } from "./identity.ts";
 import { createRelayClient, type RelayClient } from "./relay-client.ts";
 import { DEVICE_A, DEVICE_B, DEVICE_C, makeIdentity, startTestRelay, tempDir, waitFor } from "./test-helpers.ts";
@@ -61,6 +61,15 @@ describe("localCandidates", () => {
     expect(parseRelayClientFrame(encodeRelayFrame({ type: "presence", candidates: withScope }))).not.toBeNull();
     const zeroScope = localCandidates({ [name]: [iface("192.168.1.20", "IPv4"), ll6("fe80::1c2d:3e4f:5a6b:7c8d", 0)] }, 4320);
     expect(parseRelayClientFrame(encodeRelayFrame({ type: "presence", candidates: zeroScope }))).not.toBeNull();
+  });
+
+  it("isAllowedDirectHost 只放行私网、回环、ULA 与合法链路本地地址", () => {
+    for (const ok of ["10.0.0.1", "172.16.0.1", "172.31.255.254", "192.168.1.20", "127.0.0.1", "::1", "fd00::1", "fe80::1%12", "fe80::1%en0"]) {
+      expect(isAllowedDirectHost(ok), ok).toBe(true);
+    }
+    for (const bad of ["8.8.8.8", "172.15.0.1", "172.32.0.1", "169.254.169.254", "0.0.0.0", "2001:db8::1", "::ffff:192.168.1.1", "fe80::1%以太网", "10.0.0.1%en0", "localhost"]) {
+      expect(isAllowedDirectHost(bad), bad).toBe(false);
+    }
   });
 });
 

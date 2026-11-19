@@ -9,6 +9,7 @@ import { isDeviceId, type DeviceId } from "../shared/api.ts";
 import {
   MESH_CANDIDATES_MAX,
   MESH_MAX_DEVICES_PER_ACCOUNT,
+  MESH_TRUST_TOMBSTONES_MAX,
   RELAY_MAX_CONTROL_FRAME_BYTES,
   RELAY_MAX_SIGNAL_BYTES,
 } from "../shared/limits.ts";
@@ -87,6 +88,18 @@ export interface RelayPresenceView {
   lastSeenAt: number | null;
 }
 
+/** 设备私钥签名的撤销墓碑：中继只暂存转发，接收方按自己的信任表验签后才采纳。 */
+export interface RelayRevocationEnvelope {
+  statement: {
+    kind: "revoke";
+    device: DeviceId;
+    fingerprint: DeviceFingerprint;
+    by: DeviceId;
+    at: number;
+  };
+  signature: string;
+}
+
 export type RelayErrorCode =
   | "bad_frame"
   | "unauthorized"
@@ -110,15 +123,24 @@ export type RelayClientFrame =
   | { type: "signal"; to: DeviceId; payload: string }
   /** 可用设备告诉中继：这台等批准的已经两边核对过、批准了。 */
   | { type: "device.activate"; id: DeviceId }
-  | { type: "device.remove"; id: DeviceId }
+  | { type: "device.remove"; id: DeviceId; revocation?: RelayRevocationEnvelope }
   | { type: "priority.set"; priority: DeviceId[] };
 
 /** 中继 → 设备（控制连接）。 */
 export type RelayServerFrame =
   | { type: "challenge"; nonce: string }
   /** session 是这条控制连接的会话令牌，开数据通道时带上。 */
-  | { type: "welcome"; accountId: AccountId; self: MeshDeviceState; session: string; devices: RelayDeviceView[]; priority: DeviceId[]; presence: RelayPresenceView[] }
-  | { type: "devices"; devices: RelayDeviceView[]; priority: DeviceId[] }
+  | {
+      type: "welcome";
+      accountId: AccountId;
+      self: MeshDeviceState;
+      session: string;
+      devices: RelayDeviceView[];
+      priority: DeviceId[];
+      presence: RelayPresenceView[];
+      revocations?: RelayRevocationEnvelope[];
+    }
+  | { type: "devices"; devices: RelayDeviceView[]; priority: DeviceId[]; revocations?: RelayRevocationEnvelope[] }
   | { type: "presence"; presence: RelayPresenceView[] }
   | { type: "lease"; name: MeshLeaseName; grant: MeshLeaseGrant | null }
   | { type: "lease.yield"; name: MeshLeaseName; epoch: number }
@@ -171,6 +193,17 @@ const fingerprintSchema = z.string().transform((v, ctx) => parseDeviceFingerprin
 const deviceStateSchema = z.enum(["pending", "active"]);
 const candidateSchema = z.strictObject({ host: z.string().refine(isIpLiteral), port: z.number().int().min(1).max(65535) });
 const candidatesSchema = z.array(candidateSchema).max(MESH_CANDIDATES_MAX);
+const revocationEnvelopeSchema = z.strictObject({
+  statement: z.strictObject({
+    kind: z.literal("revoke"),
+    device: deviceIdSchema,
+    fingerprint: fingerprintSchema,
+    by: deviceIdSchema,
+    at: timestampSchema,
+  }),
+  signature: signatureSchema,
+});
+const revocationsSchema = z.array(revocationEnvelopeSchema).max(MESH_TRUST_TOMBSTONES_MAX);
 const prioritySchema = z
   .array(deviceIdSchema)
   .max(MESH_MAX_DEVICES_PER_ACCOUNT)
@@ -212,7 +245,7 @@ const clientFrameSchema = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("dial"), to: deviceIdSchema, channel: tokenSchema }),
   z.strictObject({ type: z.literal("signal"), to: deviceIdSchema, payload: signalPayloadSchema }),
   z.strictObject({ type: z.literal("device.activate"), id: deviceIdSchema }),
-  z.strictObject({ type: z.literal("device.remove"), id: deviceIdSchema }),
+  z.strictObject({ type: z.literal("device.remove"), id: deviceIdSchema, revocation: revocationEnvelopeSchema.optional() }),
   z.strictObject({ type: z.literal("priority.set"), priority: prioritySchema }),
 ]);
 
@@ -226,8 +259,9 @@ const serverFrameSchema = z.discriminatedUnion("type", [
     devices: devicesSchema,
     priority: prioritySchema,
     presence: z.array(presenceViewSchema).max(MESH_MAX_DEVICES_PER_ACCOUNT),
+    revocations: revocationsSchema.optional(),
   }),
-  z.strictObject({ type: z.literal("devices"), devices: devicesSchema, priority: prioritySchema }),
+  z.strictObject({ type: z.literal("devices"), devices: devicesSchema, priority: prioritySchema, revocations: revocationsSchema.optional() }),
   z.strictObject({ type: z.literal("presence"), presence: z.array(presenceViewSchema).max(MESH_MAX_DEVICES_PER_ACCOUNT) }),
   z.strictObject({
     type: z.literal("lease"),
@@ -271,6 +305,23 @@ function parseJsonFrame<T>(text: string, schema: z.ZodType<T>): T | null {
 /** 后置：形状、字段类型、长度都合规回帧，否则 null（超过 RELAY_MAX_CONTROL_FRAME_BYTES、未知 type、多余字段都算不合规）。 */
 export function parseRelayClientFrame(text: string): RelayClientFrame | null {
   return parseJsonFrame(text, clientFrameSchema) as RelayClientFrame | null;
+}
+
+const rawPresenceFrameSchema = z.strictObject({
+  type: z.literal("presence"),
+  candidates: z.array(z.unknown()).max(MESH_CANDIDATES_MAX),
+});
+
+/** 后置：对 presence 帧逐条过滤候选地址，丢弃单条不合规候选、保留合规项；非 presence 帧或顶层结构不合规回 null。 */
+export function parseLenientPresenceFrame(text: string): Extract<RelayClientFrame, { type: "presence" }> | null {
+  const raw = parseJsonFrame(text, rawPresenceFrameSchema);
+  if (raw === null) return null;
+  const candidates: MeshCandidate[] = [];
+  for (const item of raw.candidates) {
+    const parsed = candidateSchema.safeParse(item);
+    if (parsed.success) candidates.push(parsed.data);
+  }
+  return { type: "presence", candidates };
 }
 
 /** 后置：同 parseRelayClientFrame，方向相反。 */

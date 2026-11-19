@@ -31,7 +31,7 @@ const account: AccountFile = {
   state: "active",
 };
 
-async function service(script: Array<Record<string, unknown>>, options: { relayUrl?: string; logs?: string[] } = {}) {
+async function service(script: Array<Record<string, unknown>>, options: { relayUrl?: string; githubClientId?: string; logs?: string[] } = {}) {
   const relay = options.relayUrl === undefined ? await startTestRelay() : null;
   const identity = await makeIdentity(DEVICE_A);
   const file = join(tempDir(), "account.json");
@@ -42,7 +42,7 @@ async function service(script: Array<Record<string, unknown>>, options: { relayU
     identity,
     device: { id: DEVICE_A, name: "Mac", platform: "darwin" },
     relayUrl: options.relayUrl ?? relay!.url,
-    githubClientId: "Iv1.public",
+    githubClientId: options.githubClientId ?? "Iv1.public",
     fetch: github.fetchImpl,
     githubWebOrigin: FAKE_GITHUB,
     githubApiOrigin: FAKE_GITHUB,
@@ -216,5 +216,14 @@ describe("createAccountService", () => {
     await svc.startLogin();
     await waitFor(() => svc.state().kind === "signed_in");
     await expect(svc.startLogin()).rejects.toThrow("已经登录");
+  });
+
+  it("内置常量为空串时，startLogin 传 relayUrl 与 githubClientId 可完整跑通登录", async () => {
+    const relay = await startTestRelay();
+    const { svc, github } = await service([{ access_token: "TOKEN" }], { relayUrl: "", githubClientId: "" });
+    await expect(svc.startLogin({ relayUrl: relay.url })).rejects.toThrow("FUSA_GITHUB_CLIENT_ID");
+    await svc.startLogin({ relayUrl: relay.url, githubClientId: "Iv1.cli" });
+    await waitFor(() => svc.state().kind === "signed_in");
+    expect(github.calls[0]?.body).toContain("client_id=Iv1.cli");
   });
 });

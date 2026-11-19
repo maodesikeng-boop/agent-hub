@@ -42,6 +42,8 @@ export interface CenterLeaseContext {
   selfId: DeviceId;
   /** 中心顺序里的第一台（降级判断用）。 */
   firstInPriority: DeviceId | null;
+  /** 局域网探测发现其他设备正持有该租约时为 true，禁止进入或继续保持 orphan_holder。 */
+  peerHolding?: boolean;
   ttlMs: number;
   fenceMarginMs: number;
   orphanMs: number;
@@ -61,6 +63,10 @@ export function stepCenterLease(state: CenterLeaseState, event: CenterLeaseEvent
   const effects: CenterLeaseEffect[] = [];
   // 持有者先看自己是不是该掐断了：任何事件都算一次检查
   if (state.kind === "holder" && event.at - state.lastAckAt > context.ttlMs - context.fenceMarginMs) {
+    effects.push({ kind: "disconnect" });
+    state = { kind: "candidate", relayDownSince: state.relayDownSince };
+  }
+  if (state.kind === "orphan_holder" && context.peerHolding) {
     effects.push({ kind: "disconnect" });
     state = { kind: "candidate", relayDownSince: state.relayDownSince };
   }
@@ -108,7 +114,7 @@ export function stepCenterLease(state: CenterLeaseState, event: CenterLeaseEvent
     }
     case "tick": {
       if (state.kind === "candidate") {
-        if (down !== null && event.at - down >= context.orphanMs && context.firstInPriority === context.selfId) {
+        if (down !== null && event.at - down >= context.orphanMs && context.firstInPriority === context.selfId && !context.peerHolding) {
           return done({ kind: "orphan_holder", since: event.at, relayDownSince: down }, { kind: "connect" });
         }
         return done(state, { kind: "claim" });
@@ -126,6 +132,8 @@ export interface CenterLeaseOptions {
   /** 有这个聊天软件的凭证且在中心顺序里。变化时调 refresh。 */
   eligible: () => boolean;
   priority: () => DeviceId[];
+  /** 中继失联准备降级持有（或处于降级持有）时经局域网探测是否有其他设备正持有该租约。 */
+  hasPeerHolder?: () => Promise<boolean>;
   /** 挂上 / 断开长连接。断开完成后 resolve。 */
   connect: () => void;
   disconnect: () => Promise<void>;
@@ -152,6 +160,8 @@ export function createCenterLease(options: CenterLeaseOptions): CenterLease {
   let state: CenterLeaseState = INITIAL_CENTER_LEASE_STATE;
   let relayHolder: DeviceId | null = null;
   let reported: DeviceId | null = null;
+  let peerHolding = false;
+  let probing = false;
   let queue: Promise<void> = Promise.resolve();
   let closed = false;
 
@@ -166,6 +176,7 @@ export function createCenterLease(options: CenterLeaseOptions): CenterLease {
   const context = (): CenterLeaseContext => ({
     selfId: options.selfId,
     firstInPriority: options.priority()[0] ?? null,
+    peerHolding,
     ttlMs: MESH_LEASE_TTL_MS,
     fenceMarginMs: MESH_LEASE_FENCE_MARGIN_MS,
     orphanMs: MESH_LEASE_ORPHAN_MS,
@@ -213,10 +224,34 @@ export function createCenterLease(options: CenterLeaseOptions): CenterLease {
     options.relay.on("state", (relayState) => {
       if (closed) return;
       if (relayState !== "connected") relayHolder = null;
+      else peerHolding = false;
       step({ kind: "relay", state: relayState, at: now() });
     }),
   ];
-  const timer = setInterval(() => step({ kind: "tick", at: now() }), MESH_LEASE_RENEW_MS);
+  const tick = async () => {
+    if (closed) return;
+    const t = now();
+    const shouldProbe =
+      options.hasPeerHolder !== undefined &&
+      options.relay.state() !== "connected" &&
+      (state.kind === "orphan_holder" ||
+        (state.kind === "candidate" &&
+          state.relayDownSince !== null &&
+          t - state.relayDownSince >= MESH_LEASE_ORPHAN_MS &&
+          (options.priority()[0] ?? null) === options.selfId));
+    if (shouldProbe && !probing) {
+      probing = true;
+      try {
+        peerHolding = await options.hasPeerHolder!();
+      } catch {
+        peerHolding = false;
+      } finally {
+        probing = false;
+      }
+    }
+    if (!closed) step({ kind: "tick", at: now() });
+  };
+  const timer = setInterval(() => void tick(), MESH_LEASE_RENEW_MS);
   timer.unref?.();
   step({ kind: "relay", state: options.relay.state(), at: now() });
   step({ kind: "eligible", eligible: options.eligible(), at: now() });

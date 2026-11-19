@@ -8,10 +8,12 @@ import { DatabaseSync } from "node:sqlite";
 import type { RawData, WebSocket } from "ws";
 import {
   RELAY_CHANNEL_HIGH_WATER_BYTES,
+  RELAY_CONCURRENT_SOCKETS_PER_IP,
   RELAY_IP_LIMITER_MAX,
   RELAY_MAX_DATA_FRAME_BYTES,
   RELAY_REGISTER_PER_IP_PER_MINUTE,
   RELAY_SWEEP_MS,
+  RELAY_UPGRADES_PER_IP_PER_MINUTE,
 } from "../../shared/limits.ts";
 import { isDeviceId } from "../../shared/api.ts";
 import { parseAccountId, type AccountId } from "../../shared/mesh.ts";
@@ -86,6 +88,8 @@ export async function startNodeRelay(options: NodeRelayOptions): Promise<Running
   let relayOrigin = options.publicOrigin === undefined ? "" : new URL(options.publicOrigin).origin;
   const rooms = new Map<AccountId, { room: RelayAccountRoom; sockets: Set<WebSocket> }>();
   const registerHits = new LRUCache<string, { windowStart: number; count: number }>({ max: RELAY_IP_LIMITER_MAX });
+  const upgradeHits = new LRUCache<string, { windowStart: number; count: number }>({ max: RELAY_IP_LIMITER_MAX });
+  const activeSocketsByIp = new LRUCache<string, number>({ max: RELAY_IP_LIMITER_MAX });
 
   const roomFor = (accountId: AccountId) => {
     let entry = rooms.get(accountId);
@@ -113,6 +117,27 @@ export async function startNodeRelay(options: NodeRelayOptions): Promise<Running
     return hit.count <= RELAY_REGISTER_PER_IP_PER_MINUTE;
   };
 
+  const allowUpgrade = (ip: string) => {
+    if ((activeSocketsByIp.get(ip) ?? 0) >= RELAY_CONCURRENT_SOCKETS_PER_IP) return false;
+    const t = now();
+    const hit = upgradeHits.get(ip);
+    if (hit === undefined || t - hit.windowStart >= 60_000) {
+      upgradeHits.set(ip, { windowStart: t, count: 1 });
+      return true;
+    }
+    hit.count++;
+    return hit.count <= RELAY_UPGRADES_PER_IP_PER_MINUTE;
+  };
+
+  const trackIpSocket = (ip: string, socket: WebSocket) => {
+    activeSocketsByIp.set(ip, (activeSocketsByIp.get(ip) ?? 0) + 1);
+    socket.once("close", () => {
+      const rest = (activeSocketsByIp.get(ip) ?? 1) - 1;
+      if (rest <= 0) activeSocketsByIp.delete(ip);
+      else activeSocketsByIp.set(ip, rest);
+    });
+  };
+
   const app = Fastify({ logger: false, trustProxy: options.trustProxy ?? false, bodyLimit: 64 * 1024 });
   await app.register(fastifyWebsocket, { options: { maxPayload: RELAY_MAX_DATA_FRAME_BYTES, perMessageDeflate: false } });
 
@@ -136,28 +161,47 @@ export async function startNodeRelay(options: NodeRelayOptions): Promise<Running
 
   const accountParam = (req: FastifyRequest) => parseAccountId((req.params as { account?: unknown }).account);
 
-  app.get("/v1/accounts/:account/control", { websocket: true }, (socket, req) => {
-    const accountId = accountParam(req);
-    if (accountId === null) return socket.close(WS_CLOSE_POLICY, "bad_frame");
-    const room = track(accountId, socket);
-    const handle = room.openControl({ send: (data) => socket.send(data), close: (code, reason) => socket.close(code, reason) });
-    socket.on("message", (data, isBinary) => {
-      if (isBinary) return socket.close(WS_CLOSE_POLICY, "bad_frame");
-      void handle.receive(Buffer.from(toBytes(data)).toString("utf8"));
-    });
-    socket.once("close", () => handle.closed());
-  });
+  app.get(
+    "/v1/accounts/:account/control",
+    {
+      websocket: true,
+      preHandler: async (req, reply) => {
+        if (!allowUpgrade(req.ip)) return reply.code(429).send({ error: "rate_limited" });
+      },
+    },
+    (socket, req) => {
+      const accountId = accountParam(req);
+      if (accountId === null) return socket.close(WS_CLOSE_POLICY, "bad_frame");
+      trackIpSocket(req.ip, socket);
+      const room = track(accountId, socket);
+      const handle = room.openControl({ send: (data) => socket.send(data), close: (code, reason) => socket.close(code, reason) });
+      socket.on("message", (data, isBinary) => {
+        if (isBinary) return socket.close(WS_CLOSE_POLICY, "bad_frame");
+        void handle.receive(Buffer.from(toBytes(data)).toString("utf8"));
+      });
+      socket.once("close", () => handle.closed());
+    },
+  );
 
   /** 数据通道两端：一端发得快、另一端收得慢时先停读快的那端，等慢的那端写空再接着读。 */
   const channelEnds = new Map<string, Set<WebSocket>>();
-  app.get("/v1/accounts/:account/channels/:channel", { websocket: true }, (socket, req) => {
-    const accountId = accountParam(req);
-    const channel = String((req.params as { channel?: unknown }).channel ?? "");
-    const query = req.query as { device?: unknown; session?: unknown };
-    const device = typeof query.device === "string" ? query.device : "";
-    const session = typeof query.session === "string" ? query.session : "";
-    if (accountId === null || !isRelayToken(channel) || !isDeviceId(device) || !isRelayToken(session)) return socket.close(WS_CLOSE_POLICY, "bad_frame");
-    const room = track(accountId, socket);
+  app.get(
+    "/v1/accounts/:account/channels/:channel",
+    {
+      websocket: true,
+      preHandler: async (req, reply) => {
+        if (!allowUpgrade(req.ip)) return reply.code(429).send({ error: "rate_limited" });
+      },
+    },
+    (socket, req) => {
+      const accountId = accountParam(req);
+      const channel = String((req.params as { channel?: unknown }).channel ?? "");
+      const query = req.query as { device?: unknown; session?: unknown };
+      const device = typeof query.device === "string" ? query.device : "";
+      const session = typeof query.session === "string" ? query.session : "";
+      if (accountId === null || !isRelayToken(channel) || !isDeviceId(device) || !isRelayToken(session)) return socket.close(WS_CLOSE_POLICY, "bad_frame");
+      trackIpSocket(req.ip, socket);
+      const room = track(accountId, socket);
     const ends = channelEnds.get(channel) ?? new Set<WebSocket>();
     const relaySocket: RelaySocket = {
       send: (data) => {
@@ -186,12 +230,13 @@ export async function startNodeRelay(options: NodeRelayOptions): Promise<Running
       options.onDataFrame?.(bytes);
       handle.receive(bytes);
     });
-    socket.once("close", () => {
-      ends.delete(socket);
-      if (ends.size === 0) channelEnds.delete(channel);
-      handle.closed();
-    });
-  });
+      socket.once("close", () => {
+        ends.delete(socket);
+        if (ends.size === 0) channelEnds.delete(channel);
+        handle.closed();
+      });
+    },
+  );
 
   const sweeper = setInterval(() => {
     for (const [accountId, entry] of rooms) {
