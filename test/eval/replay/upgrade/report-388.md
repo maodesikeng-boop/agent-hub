@@ -1,4 +1,4 @@
-用户的目标是将本机（macOS arm64）上 Fusa 支持的全部 6 家 Agent CLI 升级或补装至最新可用版本，保证正在运行的 `agy` 会话不受影响，并确认最新模型目录与可用性状态就绪。用户和项目经理在派发新会话或查看模型列表时，将直接用到最新版本的各家 CLI 与最新模型目录，维护者无需改动任何仓库文件即可在当前环境运行全部 6 家驱动。
+用户的目标是将本机（macOS arm64）上 Bellwood 支持的全部 6 家 Agent CLI 升级或补装至最新可用版本，保证正在运行的 `agy` 会话不受影响，并确认最新模型目录与可用性状态就绪。用户和项目经理在派发新会话或查看模型列表时，将直接用到最新版本的各家 CLI 与最新模型目录，维护者无需改动任何仓库文件即可在当前环境运行全部 6 家驱动。
 
 **应用的原则。**
 - 阅读并应用了 [`principle-sequence-verifiable-units`](~/agent-hub/.agents/skills/principle-sequence-verifiable-units/SKILL.md)。先采集全部 6 家升级前基线并只读审计 `agy` 安装脚本，再对共享 mise 全局 `node_modules` 的 `pi`、`dsh`、`codex` 逐个串行升级与校验，避免并发写冲突。

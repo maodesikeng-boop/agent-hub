@@ -64,7 +64,7 @@
 
 ```mermaid
 flowchart LR
-  shell["Fusa.exe（Tauri 2 壳）"] -->|"起 / 停 / 探活<br/>admin 管道关机"| node["node.exe（随包）<br/>src/daemon/main.ts"]
+  shell["Bellwood.exe（Tauri 2 壳）"] -->|"起 / 停 / 探活<br/>admin 管道关机"| node["node.exe（随包）<br/>src/daemon/main.ts"]
   web["WebView2 / 手机浏览器"] -->|"127.0.0.1:4317"| node
   node -->|"每个会话一个"| run["fusa-run.exe<br/>Job Object（kill-on-close）<br/>Worker 再加写受限令牌"]
   run --> cli["厂商 CLI<br/>claude.exe / codex.exe / node + cli.js …"]

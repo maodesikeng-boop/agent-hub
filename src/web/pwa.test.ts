@@ -1,7 +1,7 @@
 // 联机 P4：加到主屏（manifest、图标）、Service Worker 只缓存外壳、推送订阅、前台上报（docs/multi-device-design.md 第 6.1、6.2 节）。
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
-import { API_PATHS, PRESENCE_REPORT_MS, PRODUCT_NAME, type PresenceMessage, type PushPayload } from "../shared/index.ts";
+import { API_PATHS, gateBellPaths, PRESENCE_REPORT_MS, PRODUCT_NAME, routerBellPaths, type PresenceMessage, type PushPayload, type SlimePath } from "../shared/index.ts";
 import { APP_ICONS, THEME_COLOR, webManifest } from "./pwa-manifest.ts";
 import { presenceMessage, startPresence } from "./presence.ts";
 import { hasPushSubscription, pushSupport, subscribePush, unsubscribePush } from "./push.ts";
@@ -23,6 +23,12 @@ describe("manifest", () => {
     for (const icon of [...webManifest().icons.map((i) => i.src), APP_ICONS.appleTouch, APP_ICONS.favicon]) {
       expect(() => readFileSync(`src/web/public${icon}`)).not.toThrow();
     }
+  });
+
+  it("favicon 的铃铛逐条路径取自 shared/slimes.ts 的像素原稿（拍板小铃或总助嫩芽铃）", () => {
+    const svg = readFileSync(`src/web/public${APP_ICONS.favicon}`, "utf8");
+    const drawn = (paths: readonly SlimePath[]) => paths.every(({ d, fill }) => svg.includes(`<path d="${d}" fill="${fill}"/>`));
+    expect(drawn(gateBellPaths()) || drawn(routerBellPaths())).toBe(true);
   });
 
   it("index.html 挂上 manifest、apple-touch-icon、主题色", () => {

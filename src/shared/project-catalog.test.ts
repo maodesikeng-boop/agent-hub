@@ -105,9 +105,9 @@ describe("parseCatalogReply", () => {
 
   it("别名去掉空白和重复的", () => {
     const parsed = parseCatalogReply(
-      JSON.stringify({ ...catalog, aliases: ["Fusa", " ", "", "fusa", "agent-hub", ...Array.from({ length: 20 }, (_, i) => `a${i}`)] }),
+      JSON.stringify({ ...catalog, aliases: ["Bellwood", " ", "", "bellwood", "agent-hub", ...Array.from({ length: 20 }, (_, i) => `a${i}`)] }),
     )!;
-    expect(parsed.aliases.slice(0, 3)).toEqual(["Fusa", "agent-hub", "a0"]);
+    expect(parsed.aliases.slice(0, 3)).toEqual(["Bellwood", "agent-hub", "a0"]);
     expect(parsed.aliases).toHaveLength(PROJECT_CATALOG_ALIASES_MAX);
   });
 

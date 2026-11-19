@@ -25,7 +25,7 @@
 ### PM #9 项目经理A [device=self | activity=working | pending=1]
 - project: #7 agent-hub (/Users/me/agent-hub)
 - 做什么: 给用户自己用的多 agent 系统：总助（Router）加每个项目一个项目经理，再派 Worker 进独立 git worktree 并行干活，每个角色可选不…
-- 别名: agent-hub、Fusa
+- 别名: agent-hub、Bellwood
 - 主线: 后台自动维护项目目录，让总助认得每个项目
 - 最近: 方案 PR 已开，等用户拍板
 - 档案: 3 小时前更新（细节：hub dispatch project-show --device self --project 7）
@@ -64,7 +64,7 @@ $ hub dispatch project-show --device self --project 7
 # 项目 #7 agent-hub（本机）
 
 - 做什么：给用户自己用的多 agent 系统：总助（Router）加每个项目一个项目经理，再派 Worker 进独立 git worktree 并行干活，每个角色可选不…
-- 别名：agent-hub、Fusa
+- 别名：agent-hub、Bellwood
 - 主线：材料没有写明当前主线。现阶段是先在这台 Mac 上试跑，设计背景和下一步在主文件夹的 HANDOVER.md。
 
 ## 核心模块
@@ -72,7 +72,7 @@ $ hub dispatch project-show --device self --project 7
 - 项目经理（PM）：每个项目一个，用户在一个对话里和它定目标、拍板；它拆任务、派 Worker、审 diff 和测试结果、合 PR。
 - Worker：PM 用 hub worker start 派出的执行单元，在自己的 git worktree 和分支里做活，界面上叫 Pieces。
 - 守护进程（daemon）：后端服务，提供 HTTP 与 WebSocket 接口，管理各角色的 agent 会话、数据库和缓存。
-- 网页界面与桌面外壳：网页界面基于 React，桌面外壳有 macOS 原生 Fusa.app 与 Windows 版，手机可通过浏览器或 PWA 查看与回复。
+- 网页界面与桌面外壳：网页界面基于 React，桌面外壳有 macOS 原生 Bellwood.app 与 Windows 版，手机可通过浏览器或 PWA 查看与回复。
 
 ## 已定的事
 - 每个项目只对接一个项目经理，总助负责分流，Worker 不占用左侧会话列表。

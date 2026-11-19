@@ -41,12 +41,12 @@ describe("runFeishuCli", () => {
     const ok = harness((method, path) => {
       if (method === "POST" && path === "/feishu/registration") return { ...base, state: "registering", registration: { url: "https://qr/1", expiresAt: Date.now() + 600_000 } };
       polls++;
-      return polls < 2 ? { ...base, state: "registering", registration: { url: "https://qr/1", expiresAt: 0 } } : { ...base, state: "connected", appId: "cli_a", botName: "Fusa 机器人" };
+      return polls < 2 ? { ...base, state: "registering", registration: { url: "https://qr/1", expiresAt: 0 } } : { ...base, state: "connected", appId: "cli_a", botName: "Bellwood 机器人" };
     });
     expect(await runFeishuCli(ok.io(["connect"]))).toBe(0);
     expect(ok.out()).toContain("[QR https://qr/1]");
     expect(ok.out()).toContain("cli_a");
-    expect(ok.out()).toContain("Fusa 机器人");
+    expect(ok.out()).toContain("Bellwood 机器人");
     const denied = harness((method) =>
       method === "POST" ? { ...base, state: "registering", registration: { url: "https://qr/2", expiresAt: Date.now() } } : { ...base, lastError: "扫码后点了拒绝" },
     );

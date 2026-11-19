@@ -142,7 +142,7 @@ jobs:
           $outDir = "apps/windows/target/release/unsigned-preview-artifacts"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
-          $previewName = "Fusa_${version}_x64-setup-unsigned-preview.exe"
+          $previewName = "Bellwood_${version}_x64-setup-unsigned-preview.exe"
           $previewPath = Join-Path $outDir $previewName
           Copy-Item -Path $setupExe.FullName -Destination $previewPath -Force
 

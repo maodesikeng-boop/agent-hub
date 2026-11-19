@@ -377,7 +377,7 @@ export const deepseekSetupAdapter: VendorSetupAdapter = {
         }
         res
           .writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" })
-          .end("<!doctype html><meta charset='utf-8'><title>Signed in</title><p>Sign-in completed. You may return to Fusa.</p>");
+          .end("<!doctype html><meta charset='utf-8'><title>Signed in</title><p>Sign-in completed. You may return to Bellwood.</p>");
         receivedCodeResolve?.(code);
       });
 

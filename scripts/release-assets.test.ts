@@ -36,19 +36,19 @@ describe("scripts/release-assets.ts 发版辅助", () => {
     try {
       const win = join(root, "win");
       const mac = join(root, "mac");
-      writeArtifact(win, "Fusa_0.1.0_x64-setup-unsigned-preview.exe", "win-bytes");
-      writeArtifact(mac, "Fusa_0.1.0_arm64-unsigned-preview.dmg", "mac-bytes");
+      writeArtifact(win, "Bellwood_0.1.0_x64-setup-unsigned-preview.exe", "win-bytes");
+      writeArtifact(mac, "Bellwood_0.1.0_arm64-unsigned-preview.dmg", "mac-bytes");
       const out = join(root, "out");
       const written = prepareReleaseAssets({ dirs: { windows: win, macos: mac }, outDir: out, appVersion: "0.1.0" });
       expect(written).toEqual([
-        "Fusa-windows-x64-setup.exe",
-        "Fusa-windows-x64-setup.exe.sha256",
-        "Fusa-macos-arm64.dmg",
-        "Fusa-macos-arm64.dmg.sha256",
+        "Bellwood-windows-x64-setup.exe",
+        "Bellwood-windows-x64-setup.exe.sha256",
+        "Bellwood-macos-arm64.dmg",
+        "Bellwood-macos-arm64.dmg.sha256",
       ]);
-      expect(readFileSync(join(out, "Fusa-macos-arm64.dmg"), "utf8")).toBe("mac-bytes");
-      const sha = readFileSync(join(out, "Fusa-windows-x64-setup.exe.sha256"), "utf8");
-      expect(sha).toBe(`${sha256FileHex(join(out, "Fusa-windows-x64-setup.exe"))}  Fusa-windows-x64-setup.exe\n`);
+      expect(readFileSync(join(out, "Bellwood-macos-arm64.dmg"), "utf8")).toBe("mac-bytes");
+      const sha = readFileSync(join(out, "Bellwood-windows-x64-setup.exe.sha256"), "utf8");
+      expect(sha).toBe(`${sha256FileHex(join(out, "Bellwood-windows-x64-setup.exe"))}  Bellwood-windows-x64-setup.exe\n`);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -59,13 +59,13 @@ describe("scripts/release-assets.ts 发版辅助", () => {
     try {
       const win = join(root, "win");
       const mac = join(root, "mac");
-      writeArtifact(win, "Fusa_0.1.0_x64-setup-unsigned-preview.exe", "w");
-      writeArtifact(mac, "Fusa_0.1.0_arm64-unsigned-preview.dmg", "m");
+      writeArtifact(win, "Bellwood_0.1.0_x64-setup-unsigned-preview.exe", "w");
+      writeArtifact(mac, "Bellwood_0.1.0_arm64-unsigned-preview.dmg", "m");
       const dirs = { windows: win, macos: mac };
       expect(() => prepareReleaseAssets({ dirs, outDir: join(root, "o1"), appVersion: "0.2.0" })).toThrow(/不一致/);
 
       const badMac = join(root, "badmac");
-      writeArtifact(badMac, "Fusa_0.1.0_arm64-unsigned-preview.dmg", "m", "0".repeat(64));
+      writeArtifact(badMac, "Bellwood_0.1.0_arm64-unsigned-preview.dmg", "m", "0".repeat(64));
       expect(() => prepareReleaseAssets({ dirs: { windows: win, macos: badMac }, outDir: join(root, "o2"), appVersion: "0.1.0" })).toThrow(/SHA-256/);
 
       expect(() => prepareReleaseAssets({ dirs: { windows: win, macos: join(root, "nope") }, outDir: join(root, "o3"), appVersion: "0.1.0" })).toThrow(/不存在/);

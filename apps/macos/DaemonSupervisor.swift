@@ -112,7 +112,7 @@ struct DaemonIdentity: Codable, Equatable {
     let instanceId: String
 }
 
-/// 单次探活结果：已核验的兼容 Fusa 后台、端口被非 Fusa / 不兼容服务占用的冲突、或尚未连通。
+/// 单次探活结果：已核验的兼容 Bellwood 后台、端口被非 Bellwood / 不兼容服务占用的冲突、或尚未连通。
 enum DaemonProbeResult: Equatable {
     case verified(DaemonIdentity)
     case conflict(String)
@@ -279,15 +279,15 @@ enum DaemonRuntimeLocator {
             return .failure(DaemonRuntimeLocateError(
                 code: 1,
                 message: runtimeMode == .bundled
-                    ? "安装包里的 Fusa 运行环境不完整，请重新下载安装 Fusa"
-                    : "找不到 Fusa 仓库目录（请检查 AGENT_HUB_REPO_DIR 或重新运行 pnpm app:mac）"
+                    ? "安装包里的 Bellwood 运行环境不完整，请重新下载安装 Bellwood"
+                    : "找不到 Bellwood 仓库目录（请检查 AGENT_HUB_REPO_DIR 或重新运行 pnpm app:mac）"
             ))
         }
         guard let nodePath = resolveNodePath(inputs, mode: runtimeMode) else {
             return .failure(DaemonRuntimeLocateError(
                 code: 2,
                 message: runtimeMode == .bundled
-                    ? "安装包里的 Node.js 缺失，请重新下载安装 Fusa"
+                    ? "安装包里的 Node.js 缺失，请重新下载安装 Bellwood"
                     : "找不到 Node.js 可执行文件（需要 Node 24+，请检查 AGENT_HUB_NODE）"
             ))
         }
@@ -511,7 +511,7 @@ final class DaemonSupervisor {
         task.resume()
     }
 
-    /// 布尔探活封装：仅当端口响应通过 Fusa 身份与协议版本校验时才返回 true。
+    /// 布尔探活封装：仅当端口响应通过 Bellwood 身份与协议版本校验时才返回 true。
     func probe(completion: @escaping (Bool) -> Void) {
         probeIdentity { result in
             if case .verified = result {
@@ -522,7 +522,7 @@ final class DaemonSupervisor {
         }
     }
 
-    /// 先通过 `/api/auth/status` 核验兼容 Fusa 身份，核验通过后才允许读取 `state/ui-token` 通过 `POST /auth` 兑换会话 Cookie。
+    /// 先通过 `/api/auth/status` 核验兼容 Bellwood 身份，核验通过后才允许读取 `state/ui-token` 通过 `POST /auth` 兑换会话 Cookie。
     /// 若端口被其他程序或协议不兼容版本占用，立即返回冲突错误，绝不读取或发送本机令牌。
     func exchangeUiTokenForCookies(completion: @escaping (Result<[HTTPCookie], Error>) -> Void) {
         probeIdentity { [weak self] probeResult in
@@ -578,8 +578,8 @@ final class DaemonSupervisor {
     }
 
     /// 确保守护进程在运行：
-    /// - 若已有兼容的外部 Fusa 后台：只复用并标记为外部管理（不接管）；
-    /// - 若端口被非 Fusa 服务或协议不兼容进程占用：进入冲突报错状态，绝不误认、不发令牌、不误杀；
+    /// - 若已有兼容的外部 Bellwood 后台：只复用并标记为外部管理（不接管）；
+    /// - 若端口被非 Bellwood 服务或协议不兼容进程占用：进入冲突报错状态，绝不误认、不发令牌、不误杀；
     /// - 若端口空闲：后台拉起 node src/daemon/main.ts 并轮询核验身份直至就绪。
     func ensureRunning(completion: @escaping (Result<Void, Error>) -> Void) {
         probeIdentity { [weak self] result in
@@ -626,7 +626,7 @@ final class DaemonSupervisor {
 
     /// 用户主动点菜单“重启后台服务”：
     /// - 仅停止本次由 DaemonSupervisor 自己拉起的进程（禁用自动重启 -> SIGTERM -> 最多等 40s -> 确认旧实例退出后再拉起新实例）；
-    /// - 若当前是外部兼容 Fusa 后台或未拥有任何子进程，绝不发送信号或阻塞等待外部进程退出。
+    /// - 若当前是外部兼容 Bellwood 后台或未拥有任何子进程，绝不发送信号或阻塞等待外部进程退出。
     func restartDaemon(completion: @escaping (Result<Void, Error>) -> Void) {
         lock.lock()
         if isRestarting || isShuttingDown || stoppingProcess != nil {
@@ -874,7 +874,7 @@ final class DaemonSupervisor {
         }
         guard http.statusCode == 200 else {
             return .conflict(
-                "端口 \(port) 已被其他 HTTP 服务占用（状态码 \(http.statusCode)，非 Fusa 后台），请关闭占用该端口的程序或更换 AGENT_HUB_PORT。"
+                "端口 \(port) 已被其他 HTTP 服务占用（状态码 \(http.statusCode)，非 Bellwood 后台），请关闭占用该端口的程序或更换 AGENT_HUB_PORT。"
             )
         }
         guard let data = data,
@@ -882,29 +882,29 @@ final class DaemonSupervisor {
               let raw = try? JSONSerialization.jsonObject(with: data, options: []),
               let dict = raw as? [String: Any] else {
             return .conflict(
-                "端口 \(port) 已被其他服务占用（响应不是有效的 Fusa 身份 JSON），请关闭占用该端口的程序或更换 AGENT_HUB_PORT。"
+                "端口 \(port) 已被其他服务占用（响应不是有效的 Bellwood 身份 JSON），请关闭占用该端口的程序或更换 AGENT_HUB_PORT。"
             )
         }
         guard let product = dict["product"] as? String, product == contract.product else {
             return .conflict(
-                "端口 \(port) 已被其他服务或旧版 Fusa 后台占用，请先关闭旧后台或占用程序，再重试；也可更换 AGENT_HUB_PORT。"
+                "端口 \(port) 已被其他服务或旧版 Bellwood 后台占用，请先关闭旧后台或占用程序，再重试；也可更换 AGENT_HUB_PORT。"
             )
         }
         guard let versionNumber = dict["protocolVersion"] as? NSNumber,
               CFGetTypeID(versionNumber) != CFBooleanGetTypeID(),
               versionNumber.doubleValue == Double(versionNumber.intValue) else {
             return .conflict(
-                "端口 \(port) 上的 Fusa 后台缺少有效的协议版本号，请停止旧进程或更新应用。"
+                "端口 \(port) 上的 Bellwood 后台缺少有效的协议版本号，请停止旧进程或更新应用。"
             )
         }
         let version = versionNumber.intValue
         guard version == contract.protocolVersion else {
             return .conflict(
-                "端口 \(port) 上的 Fusa 后台协议版本不兼容（后台版本 \(version)，当前外壳需要版本 \(contract.protocolVersion)），请停止旧进程或更新应用。"
+                "端口 \(port) 上的 Bellwood 后台协议版本不兼容（后台版本 \(version)，当前外壳需要版本 \(contract.protocolVersion)），请停止旧进程或更新应用。"
             )
         }
         guard let rawInstanceId = dict["instanceId"] as? String else {
-            return .conflict("端口 \(port) 上的服务缺少 Fusa 实例标识（instanceId），拒绝连接。")
+            return .conflict("端口 \(port) 上的服务缺少 Bellwood 实例标识（instanceId），拒绝连接。")
         }
         let instanceId = rawInstanceId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !instanceId.isEmpty, instanceId.utf8.count <= 128,

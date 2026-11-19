@@ -312,7 +312,7 @@ interface GenerationAnchor {
 6 家厂商中最小主力上下文窗口为 **`128K`（`131,072` tokens，如 `deepseek` 的 `deepseek-v4-pro / deepseek-flash` 及 `agy` 的 `gpt-oss-120b`）**。按首轮最严苛水位反推：
 
 - 厂商内置系统指令 + 工具定义 + Skills 清单 + `AGENTS.md`：约 `20K～25K` tokens；
-- Fusa PM 系统提示词 + `MEMORY.md`（上限 `25 KB`）：约 `10K～12K` tokens；
+- Bellwood PM 系统提示词 + `MEMORY.md`（上限 `25 KB`）：约 `10K～12K` tokens；
 - 活跃任务图快照（`HANDOVER_GRAPHS_MAX_CHARS = 8,000` 字 ≈ `5K` tokens）+ 当轮用户新消息 + 首轮推理与工具输出余量（预留 `20K` tokens）：约 `25K` tokens；
 - **留给本代上下文继承包的安全净预算**：约 `65K～75K` tokens（中英代码混排按 `1 字 ≈ 0.6 token` 折算约 **`110,000～125,000` 字**）。
 

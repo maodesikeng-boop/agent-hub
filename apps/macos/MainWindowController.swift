@@ -110,7 +110,7 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
         contentController.add(self, name: "sendNotification")
         contentController.add(self, name: "activateWindow")
 
-        window.title = "Fusa"
+        window.title = "Bellwood"
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = false
@@ -137,8 +137,8 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
         loadHub()
     }
 
-    /// 免手输登录：先经 `/api/auth/status` 严格核验 Fusa 身份与协议版本，通过后才检查或用本机 `state/ui-token` 经 `POST /auth` 兑换 Cookie。
-    /// 若端口被非 Fusa 服务或协议不兼容进程占用，直接展示冲突错误页，绝不加载未知服务或发送本机令牌。
+    /// 免手输登录：先经 `/api/auth/status` 严格核验 Bellwood 身份与协议版本，通过后才检查或用本机 `state/ui-token` 经 `POST /auth` 兑换 Cookie。
+    /// 若端口被非 Bellwood 服务或协议不兼容进程占用，直接展示冲突错误页，绝不加载未知服务或发送本机令牌。
     func loadHub() {
         isShowingErrorPage = false
         supervisor.probeIdentity { [weak self] probeResult in
@@ -275,7 +275,7 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
         case "sendNotification":
             guard let body = message.body as? [String: Any] else { return }
             let id = body["id"] as? String ?? UUID().uuidString
-            let title = body["title"] as? String ?? "Fusa"
+            let title = body["title"] as? String ?? "Bellwood"
             let text = body["body"] as? String ?? ""
             let tag = body["tag"] as? String ?? id
             postNativeNotification(id: id, title: title, body: text, tag: tag)

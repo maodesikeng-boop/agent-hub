@@ -1051,7 +1051,7 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
   describe("hub dispatch project-show（docs/router-project-catalog-design.md）", () => {
     const CATALOG = {
       oneLiner: "给用户自己用的多 agent 系统",
-      aliases: ["Fusa", "agent-hub"],
+      aliases: ["Bellwood", "agent-hub"],
       focus: "后台维护项目目录",
       modules: [{ name: "总助", summary: "分派用户的话" }],
       decisions: ["每个项目一个项目经理"],
@@ -1118,10 +1118,10 @@ describe("RouterDispatcher (Track A zero-model pass-through & Track B read-only 
         prompt = input.text;
         endTurn(emit, input);
       };
-      await dispatcher.submitCommand({ clientId: "cid-card", text: "改一下 Fusa 的设置页" });
+      await dispatcher.submitCommand({ clientId: "cid-card", text: "改一下 Bellwood 的设置页" });
       expect(prompt).toContain("- 说明: 多 agent 工作台（用户写的）");
       expect(prompt).toContain("- 做什么: 给用户自己用的多 agent 系统");
-      expect(prompt).toContain("- 别名: Fusa、agent-hub");
+      expect(prompt).toContain("- 别名: Bellwood、agent-hub");
       expect(prompt).toContain(`hub dispatch project-show --device self --project ${proj1Id}`);
       expect(prompt).not.toContain("负责核心仓库研发");
       expect(prompt).not.toContain("- summary:");

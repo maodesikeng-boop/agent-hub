@@ -56,7 +56,7 @@
 >
 > 2026-11-18 用户拍板定案：「先做飞书：单人群直聊，拉人进群后自动切 @机器人 才触发」
 
-用户在手机上用原生飞书代替 Fusa 网页做日常高频的事：和总助、各项目经理说话（边写边出字的回复）、随时停、点拍板卡、看交付的截图和文件。接入要像扫码登录一样简单，项目群自动建好、长得像联系人列表（每个项目经理一个带水果头像的群）。用户能把别人拉进某个项目群一起聊，别人能做什么按群可调。每个人各装各的 Fusa、各建各的应用，默认彻底隔离。守护进程在本机或远端服务器上都行，主动连出去，不要公网地址，国内手机网络直连。
+用户在手机上用原生飞书代替 Bellwood 网页做日常高频的事：和总助、各项目经理说话（边写边出字的回复）、随时停、点拍板卡、看交付的截图和文件。接入要像扫码登录一样简单，项目群自动建好、长得像联系人列表（每个项目经理一个带水果头像的群）。用户能把别人拉进某个项目群一起聊，别人能做什么按群可调。每个人各装各的 Bellwood、各建各的应用，默认彻底隔离。守护进程在本机或远端服务器上都行，主动连出去，不要公网地址，国内手机网络直连。
 
 ## 现状
 
@@ -73,7 +73,7 @@
 - 实测（读代码）：只读 Worker 禁读的是 `READONLY_SECRET_STATE_FILES`。`src/shared/readonly-policy.ts:52`。所以 App Secret 放单独的 `state/feishu-secrets.json` 并加进这张表。
 - 实测（读代码）：用户上传走 `saveUpload`，单个最多 100 MB。`src/daemon/uploads.ts:76`、`src/shared/limits.ts:218`。飞书收进来的文件照用。
 - 实测（读代码）：项目经理的水果原来是 `paletteOf(pmId)` 按编号对颜色表长度取余，图片在 `src/web/assets/avatars/<水果>.webp`。安装包里的守护进程目录不带 `src/web`，网页构建产物的文件名带哈希，所以实现时把水果顺序提到 `src/shared/fruits.ts`（`PM_FRUITS`、`pmFruitOf`，取余只按 `PM_FRUITS.length`），头像图挪到仓库根目录的 `assets/avatars/`，网页和守护进程都读这一处，`scripts/stage-runtime-common.ts` 打包时整个目录带走。后来水果扩到 20 种、头像换成 `scripts/render-avatars.ts` 画的史莱姆小动物：网页用透明底的 `<水果>.svg`，飞书群头像接口只收位图，用同一份像素稿导出的 `<水果>.png`（衬满铺浅底色，每格放大整数倍到约 1024×1024，飞书裁圆后四周留边）。
-- 实测（读代码）：后端按单用户设计，没有多账号。`docs/multi-device-design.md:9`。“访客”只是飞书这一层的身份，不进 Fusa 的账号体系。
+- 实测（读代码）：后端按单用户设计，没有多账号。`docs/multi-device-design.md:9`。“访客”只是飞书这一层的身份，不进 Bellwood 的账号体系。
 - 实测（跑测试）：`pnpm exec vitest run src/shared/feishu.test.ts src/daemon/feishu src/feishu test/migration.test.ts`：94 过、171 条 todo；`migrate` 从 0 跑到 0034 通过。
 - 实测（查 PR）：开着的 PR 都没占 `0034`；被搁置的 Slack 方案 PR #348 已关闭，没有合进 `main`。
 
@@ -148,7 +148,7 @@
 
 | 做法 | 结论 |
 | --- | --- |
-| A. 开 `im:message.group_msg` 收全部群消息，Fusa 按“单人 / 多人 + 有没有 @”自己判断（`feishuWakes` 一处） | 推荐：只有这样才能做到单人群不用 @ |
+| A. 开 `im:message.group_msg` 收全部群消息，Bellwood 按“单人 / 多人 + 有没有 @”自己判断（`feishuWakes` 一处） | 推荐：只有这样才能做到单人群不用 @ |
 | B. 只收 @机器人 的消息 | 做不到“单人群直聊”；作为没开权限时的降级 |
 
 ### 关键流程

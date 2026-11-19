@@ -3,7 +3,7 @@ name = "fusa-desktop"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Tauri 2 native Windows desktop shell, bundled Node daemon supervisor, and system tray for Fusa"
+description = "Tauri 2 native Windows desktop shell, bundled Node daemon supervisor, and system tray for Bellwood"
 
 [lib]
 name = "fusa_desktop"

@@ -40,7 +40,7 @@ describe("buildCatalogTurnText", () => {
     expect(first).toContain("给自己用的多 agent 系统");
     expect(first).toContain("用户写的说明：多 agent 工作台");
 
-    const previous = { oneLiner: "旧的一句话", aliases: ["Fusa"], focus: "旧主线", modules: [], decisions: [], openItems: [] };
+    const previous = { oneLiner: "旧的一句话", aliases: ["Bellwood"], focus: "旧主线", modules: [], decisions: [], openItems: [] };
     const next = buildCatalogTurnText({ ...base, previous, files: [], handover: "交接正文", graphs: [{ title: "导出", goal: "CSV" }], workerReports: ["Worker #3：做完了"] });
     expect(next).not.toContain("首次建档");
     expect(next).toContain("<previous_catalog>");

@@ -45,7 +45,7 @@
     if (!view) return;
 
     statusDot.dataset.tone = view.tone || "working";
-    stageTitle.textContent = view.title || "Starting Fusa…";
+    stageTitle.textContent = view.title || "Starting Bellwood…";
     const detail = view.detail || "";
     stageDetail.textContent = detail;
     stageDetail.hidden = !detail;

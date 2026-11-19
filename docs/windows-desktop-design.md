@@ -1,12 +1,12 @@
 # Windows 桌面版与 README 定位方案
 
-> **状态更新（已退役 / 已被取代）：** 本文档早期设计的 WSL2 专用发行版路线（`fusa-wsl` + `scripts/wsl-*.sh`）已于 2026-11-13 正式退役，**全面由 [`docs/windows-native-design.md`](windows-native-design.md)（Windows 原生桌面版：Tauri 2 外壳随包内置 Node 24 LTS + `fusa-win-helper` 原生进程树与沙箱 + Win11 24H2+ MXC 只读后端）取代**。以下正文仅作为历史方案存档保留，现行架构与实现请以 [`docs/windows-native-design.md`](windows-native-design.md) 为准。
+> **状态更新（已退役 / 已被取代）：** 本文档早期设计的 WSL2 专用发行版路线（`fusa-wsl` + `scripts/wsl-*.sh`）已于 2026-11-13 正式退役，**全面由 [`docs/windows-native-design.md`](windows-native-design.md)（Windows 原生桌面版：Tauri 2 外壳随包内置 Node 24 LTS + `fusa-win-helper` 原生进程树与沙箱 + Win11 24H2+ MXC 只读后端）取代**；对外产品名现已统一改为 **Bellwood**（现行双语文档见仓库根目录 [`README.md`](../README.md) 与 [`README.zh-CN.md`](../README.zh-CN.md)）。以下正文仅作为历史方案存档保留，现行架构与实现请以 [`docs/windows-native-design.md`](windows-native-design.md) 为准。
 
 历史状态记录（2026-11-11）：原路线 A（WSL2 独立发行版 + Tauri 2 外壳，Mac 保留 Swift 外壳）；核对基线 `4e18b20`。
 
 ## 1. 推荐先做 WSL2 后台 + Tauri 桌面壳
 
-Windows 用户双击 Fusa，在独立应用窗口里使用现有界面。外壳负责安装引导、后台监管、登录、托盘和更新；Node 后台及 Worker 在 WSL2 的 Linux 环境运行。手机继续通过网页或添加到主屏幕的 PWA 访问。
+Windows 用户双击 Bellwood，在独立应用窗口里使用现有界面。外壳负责安装引导、后台监管、登录、托盘和更新；Node 后台及 Worker 在 WSL2 的 Linux 环境运行。手机继续通过网页或添加到主屏幕的 PWA 访问。
 
 推荐 **A 路线：WSL2 + Tauri 2**，首发支持 Windows 11 x64，使用独立的 Ubuntu 24.04 发行版实例。Mac 保留 Swift 外壳。Windows ARM64 和 Windows 10 暂不承诺，等有对应真机再扩展。
 
@@ -28,7 +28,7 @@ Windows 用户双击 Fusa，在独立应用窗口里使用现有界面。外壳�
 外壳先显示本地的准备页面，缺后台时也能给出原因和操作入口。所有首次准备按阶段记录完成状态，失败可重试，不覆盖已有项目和登录信息。
 
 1. 用 `wsl.exe --status`、`wsl.exe --version`、`wsl.exe --list --verbose` 检查 WSL 和发行版。按退出码及结构化后的结果判断，不能匹配某一句英文报错；测试覆盖中文系统与 UTF-16 输出。
-2. 缺 WSL 时，用户在引导中选择安装，外壳通过系统提权执行 `wsl --install --no-distribution`。检测虚拟化和系统组件失败时显示微软排障入口。需要重启就保存阶段，用户重启后再打开 Fusa；外壳本身始终以普通用户运行。
+2. 缺 WSL 时，用户在引导中选择安装，外壳通过系统提权执行 `wsl --install --no-distribution`。检测虚拟化和系统组件失败时显示微软排障入口。需要重启就保存阶段，用户重启后再打开 Bellwood；外壳本身始终以普通用户运行。
 3. 默认创建名为 `Fusa` 的独立 WSL2 实例。按 Ubuntu 官方安装资料取得 Ubuntu 24.04 官方镜像，锁定下载地址、版本、校验值和许可，采用微软支持的 `wsl --import Fusa <安装目录> <rootfs.tar> --version 2`。镜像格式必须先在真机确认可导入；不自行发布来路不明的根文件系统。安装目录放当前用户的本地应用数据目录，不能放网络盘。
 4. 导入后以 root 仅执行系统依赖安装及创建普通 Linux 用户 `fusa`，日常命令显式带 `--distribution Fusa --user fusa`，不依赖用户的默认发行版。发现同名而无安装标记的发行版时停止导入，提示解决名称冲突，不能删除或接管。
 5. 第一版不自动改已有 Ubuntu。高级用户复用现有发行版的入口后置，因为下述 interop 隔离设置会影响其工作流。卸载 Windows 壳也保留发行版和数据；删除数据另行明确操作。
@@ -41,7 +41,7 @@ Windows 用户双击 Fusa，在独立应用窗口里使用现有界面。外壳�
 
 Node 使用官方 Linux 预编译包，锁定经验证的 Node 24 补丁版本且不低于仓库要求 24.12，校验官方校验值，装到应用管理的 Linux 用户目录。pnpm 按 `package.json` 的 `packageManager` 锁到当前 `10.34.5`，例如用该 Node 的 npm 安装指定版本到用户前缀，不用 `latest`，不依赖系统预装 Corepack。来源：[Node 下载](https://nodejs.org/en/download)、[pnpm 安装](https://pnpm.io/installation)。
 
-首发在首次准备阶段下载经过校验的 Fusa 发布包，包含后台源码、锁文件和已构建的 `dist/web`，在版本目录内完成依赖安装。开发模式才从仓库运行 `pnpm install --frozen-lockfile`、`pnpm build`。平时直接用确定的 Node 路径运行 `src/daemon/main.ts`，不走会重建网页的 `pnpm start`。
+首发在首次准备阶段下载经过校验的 Bellwood 发布包，包含后台源码、锁文件和已构建的 `dist/web`，在版本目录内完成依赖安装。开发模式才从仓库运行 `pnpm install --frozen-lockfile`、`pnpm build`。平时直接用确定的 Node 路径运行 `src/daemon/main.ts`，不走会重建网页的 `pnpm start`。
 
 外壳从厂商注册表读取“支持的平台、安装说明、登录命令、探测结果”，只显示用户选用的厂商。安装和登录动作放在各家 `src/vendors/<id>/` 内；按插件方案扩展可选的安装元数据，不能在 Windows 壳或公共准备器里写三家分支。下表只是本次核查现有插件的事实，不是新的公共名单。
 
@@ -77,7 +77,7 @@ Windows 外壳通过带独立参数的 `wsl.exe -d Fusa -u fusa --exec <node绝�
 
 ### 2.5 文件和登录令牌只有一个主位置
 
-- 发行版内 `~/.agent-hub` 存账本、日志、worktree 和运行 socket；用户项目放 `/home/fusa/projects`。Fusa 运行包另放 `/home/fusa/.local/share/fusa/releases/<版本>`。数据库和 `node_modules` 不落在 `/mnt/c`。
+- 发行版内 `~/.agent-hub` 存账本、日志、worktree 和运行 socket；用户项目放 `/home/fusa/projects`。Bellwood 运行包另放 `/home/fusa/.local/share/fusa/releases/<版本>`。数据库和 `node_modules` 不落在 `/mnt/c`。
 - Windows 侧只存壳设置、WebView 用户数据、引导日志及发行版 VHDX 的安装位置。VHDX 物理上在 Windows 盘，不等于从 `/mnt/c` 读写项目文件。
 - 选项目用应用内的 Linux 目录选择器，Windows 本地仓库通过明确的“导入到 Linux”流程复制或重新 clone；展示其新位置。不能偷偷复制后继续让用户编辑旧目录。
 - 文件上传和下载通过现有 HTTP 服务。需要在资源管理器显示文件时由壳打开 `\\wsl$\Fusa\home\fusa\...`，只在用户操作时访问，不在那里扫描项目。
@@ -96,7 +96,7 @@ Windows 外壳通过带独立参数的 `wsl.exe -d Fusa -u fusa --exec <node绝�
 | `run-socket.ts`、hub CLI、agent API、ui 与 peer 入口 | 用 Node 支持的 Windows 命名管道 `\\.\pipe\fusa-<用户>-<实例>-hub`；统一生成端点，保留 `HUB_SOCK` 为端点字符串。Unix 分支才做 realpath、chmod、路径长度检查和 unlink；Windows 处理管道生命周期与当前用户 ACL | 3–5 人日。hub、ui、peer、public 端点一起梳理；跨用户连接拒绝。Token 校验继续保留。公网转发工具是否支持管道另验，不能照抄 Unix socket 配置 |
 | `setup/setup.ts`、`installHubShim`、`scripts/`、测试假程序 | 准备命令显式支持 PowerShell 或选定 Bash，写清项目脚本兼容要求；hub 启动器生成 `.cmd` 或原生入口；安装与发布用 Tauri 和标准 CI 工具 | 3–5 人日。去掉 `/bin/sh`、shebang、chmod、osascript 等假设；同测退出码、空格、中文、参数引用和 Ctrl+C |
 | `shared/paths.ts`、worktree、文件分享与各插件 paths | 用 `node:path`、`path.delimiter`、文件 URL；区分磁盘路径、URL 和容器路径；处理盘符、UNC、大小写、长路径、junction、`.exe` 与 `.cmd` 查找 | 3–5 人日。路径测试和真 git worktree 通过，不对所有字符串统一替换斜杠 |
-| 各家 `src/vendors/<id>/` | 各插件声明平台支持并提供安装、登录及 CLI 参数。官方支持 Windows 不等于 Fusa 的流式协议、恢复、审批和沙箱组合已通过 | 2–4 人日。逐家跑驱动契约与真实一轮、停止、恢复、连接器；不支持的能力明确禁用 |
+| 各家 `src/vendors/<id>/` | 各插件声明平台支持并提供安装、登录及 CLI 参数。官方支持 Windows 不等于 Bellwood 的流式协议、恢复、审批和沙箱组合已通过 | 2–4 人日。逐家跑驱动契约与真实一轮、停止、恢复、连接器；不支持的能力明确禁用 |
 
 [AppContainer 官方说明](https://learn.microsoft.com/en-us/windows/win32/secauthz/appcontainer-isolation)提供文件、网络与进程隔离原语；把任意开发工具跑进去仍是本项目的适配工作。[Job Object](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects)提供进程集合管理。[Node IPC](https://nodejs.org/api/net.html#ipc-support)确认 Windows 使用命名管道。未找到可以直接替换本项目 bwrap、适用于所有 CLI 且已验证的成熟通用库，不能宣称装一个包就完成隔离。Codex 的官方 Windows 沙箱也不等于其他插件的通用沙箱。
 
@@ -114,7 +114,7 @@ rg -l HUB_SOCK src scripts test apps | rg -v '(test|smoke)' | wc -l
 
 | 方案 | 大小与内存的依据 | 更新、签名、托盘、自启 | 本项目取舍 |
 | --- | --- | --- | --- |
-| Tauri 2 | Windows 复用 WebView2，不额外带一份 Chromium；实际包体和工作集须测，不能引用空白示例当 Fusa 数据 | 官方有 NSIS/MSI 打包、updater、Windows 签名、托盘、autostart 插件 | 推荐。安装、托盘和更新直接用成熟组件，新增少量 Rust 负责 WSL 进程监管 |
+| Tauri 2 | Windows 复用 WebView2，不额外带一份 Chromium；实际包体和工作集须测，不能引用空白示例当 Bellwood 数据 | 官方有 NSIS/MSI 打包、updater、Windows 签名、托盘、autostart 插件 | 推荐。安装、托盘和更新直接用成熟组件，新增少量 Rust 负责 WSL 进程监管 |
 | Electron + Forge | 随程序分发 Chromium 和 Node；不能免掉 WSL 内后台。具体 MB、启动秒数未对本项目实测 | Forge 是官方推荐打包工具；有 autoUpdater、Tray、登录启动 API 和签名流程 | 成熟度足够，但重复携带浏览器和 Node，不符合当前轻量外壳的优先级 |
 | C#/.NET + WPF + WebView2 | 同样复用 WebView2；自包含 .NET 包还要带运行时，依赖安装模式则需先装 .NET | 托盘可用 NotifyIcon；需另选 MSIX/App Installer 或其他成熟安装更新体系，并接 Windows 签名与自启 | Windows 原生集成合适，但本项目需要更多安装更新组装，没有跨平台外壳复用收益 |
 
@@ -126,7 +126,7 @@ Windows 发布用 Tauri 的 NSIS 用户安装包和 WebView2 Evergreen 检测、
 
 窗口使用现有 `src/web`，只给受信任的本机界面必要的窄桥接能力。网页不能传任意 shell 命令或任意 WSL 路径让壳执行。外链交给系统浏览器，远程页面不获得本地能力。初版用系统标题栏，避免先做一套自绘 Windows 控件。
 
-菜单与 Mac 对齐：显示 Fusa、重启后台服务、上次崩溃时间与原因、打开日志、登录时启动、彻底退出。关闭窗口只隐藏到托盘，彻底退出才停自己拉起的后台；复用外部后台时显示“外部管理”，不把退出壳说成停掉了所有服务。自启默认关闭，指“Windows 用户登录后启动壳并准备后台”，不是未登录时开机运行系统服务。
+菜单与 Mac 对齐：显示 Bellwood、重启后台服务、上次崩溃时间与原因、打开日志、登录时启动、彻底退出。关闭窗口只隐藏到托盘，彻底退出才停自己拉起的后台；复用外部后台时显示“外部管理”，不把退出壳说成停掉了所有服务。自启默认关闭，指“Windows 用户登录后启动壳并准备后台”，不是未登录时开机运行系统服务。
 
 Mac 保留已经工作的 Swift/AppKit/WKWebView，不为 Windows 首发重写。两端共用前端、发布版本和监管约定，比立即迁移外壳风险小。若未来两套壳频繁重复修改，再用 Tauri 的 Mac 原型对比现有功能、体积与启动性能，另提迁移方案。
 
@@ -178,7 +178,7 @@ GitHub 官方说明 hosted runner 的嵌套虚拟化不受正式支持，因此�
 
 用户本人需要完成一次 Windows 11 真机验收，工程师提供签名或明确标记的内测安装包、逐项脚本和脱敏日志导出：
 
-1. 同意安装 WSL、启用虚拟化或按提示进 BIOS、必要时重启。双击 Fusa 完成发行版准备，确认可直接进应用窗口。
+1. 同意安装 WSL、启用虚拟化或按提示进 BIOS、必要时重启。双击 Bellwood 完成发行版准备，确认可直接进应用窗口。
 2. 对自己要用的各家 CLI 在指定 Linux 用户下登录，处理浏览器授权和钥匙环。无需把凭据发给项目经理。
 3. 在 WSL 内导入测试仓库，派一个 Worker，验证允许写工作目录、拒写数据目录，不能从 Worker 调用 Windows 程序绕过限制。
 4. 测试停止、手动重启、后台故意崩溃五次、托盘隐藏、彻底退出、再次打开、睡眠唤醒与卸载保留数据（登录自启与自动更新在第 5 步完成后补测）；用系统工具核对 Linux 子孙进程已退出。
@@ -209,7 +209,7 @@ GitHub 官方说明 hosted runner 的嵌套虚拟化不受正式支持，因此�
 
 ### 8.3 README 与文档节奏（分两阶段，约 1–2 人日）
 
-- **第一阶段（现在先行）**：不等 Windows 完成，**先行把中英文 `README.md` 改为桌面应用为主**（Mac 打开 `Fusa.app`，Linux 服务器跑后台，手机继续用网页或添加到主屏幕的 PWA，**暂不写尚未交付的 Windows 安装包**），同时纠正过时的平台与 Linux 说明。
+- **第一阶段（现在先行）**：不等 Windows 完成，**先行把中英文 `README.md` 改为桌面应用为主**（Mac 打开 `Bellwood.app`，Linux 服务器跑后台，手机继续用网页或添加到主屏幕的 PWA，**暂不写尚未交付的 Windows 安装包**），同时纠正过时的平台与 Linux 说明。
 - **第二阶段（MVP 真机验收通过后）**：等第 1～3 步 MVP 通过 Windows 11 真机验收、安装包可用后，再在 `README.md` 补上 Windows 安装段落。
 
 全量合计仍约 15–24 人日。未通过真机验收的 Windows 功能保持内测，不在 README 提前宣称已发布。
@@ -220,18 +220,18 @@ GitHub 官方说明 hosted runner 的嵌套虚拟化不受正式支持，因此�
 
 ### 中文开头
 
-> # Fusa
+> # Bellwood
 >
 > **通过一个会话管理整个项目。**
 >
-> Fusa 是面向个人开发者的桌面应用：每个项目你只跟项目经理（PM）在一个会话里沟通目标和拍板，由它拆分任务、调度多个代码助手（Worker，界面里叫 Pieces）在各自的 git worktree 里并行干活、审代码跑测试、合 PR；每个角色都可以任选不同厂商的官方命令行助手，使用你自己的账号运行。
+> Bellwood 是面向个人开发者的桌面应用：每个项目你只跟项目经理（PM）在一个会话里沟通目标和拍板，由它拆分任务、调度多个代码助手（Worker，界面里叫 Pieces）在各自的 git worktree 里并行干活、审代码跑测试、合 PR；每个角色都可以任选不同厂商的官方命令行助手，使用你自己的账号运行。
 >
-> Mac 打开 `Fusa.app`，Windows 安装 Fusa（Windows 半句待真机跑通后合入）。需要常开的后台时，也可以部署到 Linux 服务器。手机用浏览器访问，或添加到主屏幕，继续查看和回复同一批对话。
+> Mac 打开 `Bellwood.app`，Windows 安装 Bellwood（Windows 半句待真机跑通后合入）。需要常开的后台时，也可以部署到 Linux 服务器。手机用浏览器访问，或添加到主屏幕，继续查看和回复同一批对话。
 
 ### 中文“安装”结构
 
-- **Mac 桌面应用**：正式下载包可用时列下载入口和依赖说明；从源码使用下列命令，生成并安装 Fusa.app，再双击打开。现有壳仍需要本机 Node、已构建网页和源码目录，不能移动源码后声称应用独立运行。
-- **Windows 桌面应用**（待真机跑通后合入）：下载 Windows 安装包，安装后双击 Fusa。首次按引导安装 Linux 运行环境，可能需要管理员授权和重启；在引导里安装并登录要用的助手。项目保存在应用的 Linux 环境里，附项目目录与导入说明。
+- **Mac 桌面应用**：正式下载包可用时列下载入口和依赖说明；从源码使用下列命令，生成并安装 `Bellwood.app`，再双击打开。现有壳仍需要本机 Node、已构建网页和源码目录，不能移动源码后声称应用独立运行。
+- **Windows 桌面应用**（待真机跑通后合入）：下载 Windows 安装包，安装后双击 Bellwood。首次按引导安装 Linux 运行环境，可能需要管理员授权和重启；在引导里安装并登录要用的助手。项目保存在应用的 Linux 环境里，附项目目录与导入说明。
 - **Linux 服务器**：链接 `docs/linux.md`，说明安装依赖、启动后台和安全连接。将原来的 clone、build、start 教程移到这里及开发文档。
 - **手机访问**：在已登录的电脑里生成手机登录入口，扫码并批准。手机用网页，也可添加到主屏幕；链接已有公网入口和通知配置。
 
@@ -247,19 +247,19 @@ bash scripts/build-mac-app.sh --install
 
 ### English opening
 
-> # Fusa
+> # Bellwood
 >
 > **Manage an entire project through a single conversation.**
 >
-> Fusa is a desktop app for individual developers: for each project, you talk to a single Project Manager (PM) in one conversation to set goals and make decisions, while the PM breaks down the work, dispatches multiple coding assistants (Workers, called Pieces in the UI) to work in parallel in isolated git worktrees, reviews diffs and tests, and merges PRs—with each role running your choice of official CLI agent under your own account.
+> Bellwood is a desktop app for individual developers: for each project, you talk to a single Project Manager (PM) in one conversation to set goals and make decisions, while the PM breaks down the work, dispatches multiple coding assistants (Workers, called Pieces in the UI) to work in parallel in isolated git worktrees, reviews diffs and tests, and merges PRs, with each role running your choice of official CLI agent under your own account.
 >
-> Open `Fusa.app` on Mac, or install Fusa on Windows *(Windows clause added after on-device MVP verification)*. When you need an always-on backend, run it on a Linux server. On your phone, use the web app or add it to your home screen to read and reply to the same conversations.
+> Open `Bellwood.app` on Mac, or install Bellwood on Windows *(Windows clause added after on-device MVP verification)*. When you need an always-on backend, run it on a Linux server. On your phone, use the web app or add it to your home screen to read and reply to the same conversations.
 
 ### English “Install” structure
 
-- **Mac desktop app**: Link the download when a release is available and state its requirements. For a source build, use the commands above to build and install Fusa.app, then open it. The current shell requires local Node, built web assets, and the source directory.
-- **Windows desktop app** *(added after on-device MVP verification)*: Download the Windows installer, install Fusa, and open it. Follow the first-run setup to install the Linux runtime and sign in to the assistants you use. Setup may need administrator approval and a restart. Projects live in the app's Linux environment, with instructions for preparing or importing repositories.
+- **Mac desktop app**: Link the download when a release is available and state its requirements. For a source build, use the commands above to build and install `Bellwood.app`, then open it. The current shell requires local Node, built web assets, and the source directory.
+- **Windows desktop app** *(added after on-device MVP verification)*: Download the Windows installer, install Bellwood, and open it. Follow the first-run setup to install the Linux runtime and sign in to the assistants you use. Setup may need administrator approval and a restart. Projects live in the app's Linux environment, with instructions for preparing or importing repositories.
 - **Linux server**: Link the backend setup and secure connection guide. Keep the clone, build, and service commands here or in the development guide.
 - **Phone**: Create a phone sign-in link on an already signed-in computer, scan it, and approve access. Use the web app or add it to the home screen. Link the existing remote access and notification guide.
 
-正文同时把“可选 macOS 壳”“一张网页管理”改成桌面应用入口；保留网页技术说明、手机 PWA 和 Linux 后台。平台要求按桌面与服务器分别写，不堆环境变量，也不引用其他产品来解释 Fusa。
+正文同时把“可选 macOS 壳”“一张网页管理”改成桌面应用入口；保留网页技术说明、手机 PWA 和 Linux 后台。平台要求按桌面与服务器分别写，不堆环境变量，也不引用其他产品来解释 Bellwood。

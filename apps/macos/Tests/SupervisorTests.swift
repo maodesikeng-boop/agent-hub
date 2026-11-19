@@ -85,7 +85,7 @@ enum SupervisorTestsMain {
         // MARK: - 0a. 运行环境定位：源码开发模式与分发模式（Contents/Resources/runtime）
 
         do {
-            let fakeResources = "/fake/Fusa.app/Contents/Resources"
+            let fakeResources = "/fake/Bellwood.app/Contents/Resources"
             let bundledDaemon = "\(fakeResources)/runtime/daemon"
             let bundledNode = "\(fakeResources)/runtime/node/bin/node"
             let devRepo = "/dev/agent-hub"
@@ -178,7 +178,7 @@ enum SupervisorTestsMain {
             check(actual == expected, "backoff for crash #\(idx + 1): expected \(expected), got \(actual)")
         }
 
-        // 验证 Bundle 资源加载路径（模拟 Fusa.app/Contents/Resources/contract.json）
+        // 验证 Bundle 资源加载路径（模拟 Bellwood.app/Contents/Resources/contract.json）
         let fakeAppPath = (tempRoot as NSString).appendingPathComponent("FakeFusa.app")
         let fakeResourcesPath = (fakeAppPath as NSString).appendingPathComponent("Contents/Resources")
         try! fm.createDirectory(atPath: fakeResourcesPath, withIntermediateDirectories: true)
@@ -195,7 +195,7 @@ enum SupervisorTestsMain {
             check(false, "Failed to construct NSBundle for FakeFusa.app")
         }
 
-        // MARK: - 准备可切换模式的假 HTTP 服务（测试非 Fusa 冲突 + 外部兼容 Fusa 复用）
+        // MARK: - 准备可切换模式的假 HTTP 服务（测试非 Bellwood 冲突 + 外部兼容 Bellwood 复用）
 
         let mockPort = findFreePort()
         let modeFilePath = (tempRoot as NSString).appendingPathComponent("mock-mode.txt")
@@ -295,7 +295,7 @@ enum SupervisorTestsMain {
         try! fm.createDirectory(atPath: (conflictHome as NSString).appendingPathComponent("state"), withIntermediateDirectories: true)
         try! secretToken.write(toFile: (conflictHome as NSString).appendingPathComponent("state/ui-token"), atomically: true, encoding: .utf8)
 
-        // MARK: - 1. 端口被非 Fusa 服务或协议不兼容服务占用：报冲突、不发 token、不误杀
+        // MARK: - 1. 端口被非 Bellwood 服务或协议不兼容服务占用：报冲突、不发 token、不误杀
 
         for mode in ["html200", "json200_other", "http401", "fusa_v99", "legacy", "empty_id", "bool_version", "redirect"] {
             try! mode.write(toFile: modeFilePath, atomically: true, encoding: .utf8)
@@ -312,7 +312,7 @@ enum SupervisorTestsMain {
             if case .failure(let err) = ensureResult! {
                 check(err.localizedDescription.contains(String(mockPort)), "conflict error should mention port for mode=\(mode)")
             } else {
-                check(false, "ensureRunning must fail on non-Fusa / incompatible server (mode=\(mode))")
+                check(false, "ensureRunning must fail on non-Bellwood / incompatible server (mode=\(mode))")
             }
 
             check(sup.currentConflictReason != nil, "currentConflictReason must be set for mode=\(mode)")
@@ -342,7 +342,7 @@ enum SupervisorTestsMain {
             check(waitUntil(timeout: 1.0) { stoppedDone }, "stopOwned must finish immediately when nothing owned")
             sup.stopIfOwned()
 
-            check(kill(mockServerPid, 0) == 0, "external non-Fusa process must never be killed (mode=\(mode))")
+            check(kill(mockServerPid, 0) == 0, "external non-Bellwood process must never be killed (mode=\(mode))")
         }
 
         // 核对请求日志：在全部 4 种非兼容模式下，ui-token 从未出现在任何 URL、Header 或 Body 中，也从未请求过 /auth
@@ -350,7 +350,7 @@ enum SupervisorTestsMain {
         check(!conflictReqLogs.contains(secretToken), "ui-token MUST NEVER be sent to unverified servers!")
         check(!conflictReqLogs.contains("\"/auth"), "/auth MUST NEVER be called against unverified servers!")
 
-        // MARK: - 2. 外部兼容 Fusa 后台：只复用并标记为外部管理，核验通过后允许 POST /auth 换 Cookie，退出/重启不误杀
+        // MARK: - 2. 外部兼容 Bellwood 后台：只复用并标记为外部管理，核验通过后允许 POST /auth 换 Cookie，退出/重启不误杀
 
         try! "fusa_v1".write(toFile: modeFilePath, atomically: true, encoding: .utf8)
         let extSup = DaemonSupervisor(homeDir: conflictHome, port: mockPort)
@@ -365,13 +365,13 @@ enum SupervisorTestsMain {
         if case .failure(let err) = extEnsure! {
             check(false, "extSup.ensureRunning failed unexpectedly: \(err)")
         }
-        check(extSup.currentPid == nil, "reusing external Fusa must not spawn a child process")
+        check(extSup.currentPid == nil, "reusing external Bellwood must not spawn a child process")
         check(extSup.currentOwnership == .external(instanceId: "ext-fusa-001"), "ownership must be .external(ext-fusa-001)")
         check(extSup.isExternallyManaged, "isExternallyManaged must be true")
-        check(extSup.currentConflictReason == nil, "conflictReason must be nil for compatible external Fusa")
+        check(extSup.currentConflictReason == nil, "conflictReason must be nil for compatible external Bellwood")
         check(extBar.currentSummaryTitle == "后台服务运行中（外部管理）", "status bar should show 外部管理, got: \(extBar.currentSummaryTitle)")
         check(!extBar.isRestartEnabled, "restart menu item must be disabled for external daemon")
-        check(extBar.currentQuitTitle == "退出 Fusa（保留外部后台）", "quit menu item should clarify external daemon is preserved")
+        check(extBar.currentQuitTitle == "退出 Bellwood（保留外部后台）", "quit menu item should clarify external daemon is preserved")
 
         var exchangedCookies: [HTTPCookie]?
         extSup.exchangeUiTokenForCookies { res in
@@ -379,7 +379,7 @@ enum SupervisorTestsMain {
                 exchangedCookies = cookies
             }
         }
-        check(waitUntil(timeout: 3.0) { exchangedCookies != nil }, "exchangeUiTokenForCookies failed on verified external Fusa")
+        check(waitUntil(timeout: 3.0) { exchangedCookies != nil }, "exchangeUiTokenForCookies failed on verified external Bellwood")
         check(exchangedCookies?.count == 1, "expected 1 session cookie, got \(exchangedCookies?.count ?? -1)")
         check(exchangedCookies?.first?.name == "agent_hub_ui_\(mockPort)", "cookie name mismatch")
         check(exchangedCookies?.first?.value == "session_from_ext_fusa", "cookie value mismatch")
@@ -408,15 +408,15 @@ enum SupervisorTestsMain {
         extSup.restartDaemon { res in
             if case .success = res { extRestartDone = true }
         }
-        check(waitUntil(timeout: 3.0) { extRestartDone }, "restartDaemon on external Fusa should succeed by keeping reuse")
-        check(Date().timeIntervalSince(extRestartStart) < 2.0, "restartDaemon on external Fusa must not wait stopGraceMs")
+        check(waitUntil(timeout: 3.0) { extRestartDone }, "restartDaemon on external Bellwood should succeed by keeping reuse")
+        check(Date().timeIntervalSince(extRestartStart) < 2.0, "restartDaemon on external Bellwood must not wait stopGraceMs")
         check(extSup.currentOwnership == .external(instanceId: "ext-fusa-001"), "must remain externally managed")
 
         var extStopDone = false
         extSup.stopOwned { extStopDone = true }
-        check(waitUntil(timeout: 1.0) { extStopDone }, "stopOwned on external Fusa must complete immediately")
+        check(waitUntil(timeout: 1.0) { extStopDone }, "stopOwned on external Bellwood must complete immediately")
         extSup.stopIfOwned()
-        check(kill(mockServerPid, 0) == 0, "external Fusa daemon must still be alive after stopOwned / stopIfOwned")
+        check(kill(mockServerPid, 0) == 0, "external Bellwood daemon must still be alive after stopOwned / stopIfOwned")
 
         // MARK: - 3. 慢优雅关闭（5 秒退出 > 旧版 3 秒强杀）在真实 40 秒契约预算内优雅退出，且超时才对自有子进程 SIGKILL
 

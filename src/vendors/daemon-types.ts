@@ -274,7 +274,7 @@ interface FallbackPathsInput {
   platform: string;
   /** Linux 上各家官方安装方式放可执行文件的目录（shared/paths.ts 的 linuxInstallDirs）。 */
   linuxInstallDirs: readonly string[];
-  /** Fusa 受管免管理员 npm 全局导出目录（win32 为 `<hubHome>\tools\npm`，POSIX 为 `<hubHome>/tools/npm/bin`）。 */
+  /** Bellwood 受管免管理员 npm 全局导出目录（win32 为 `<hubHome>\tools\npm`，POSIX 为 `<hubHome>/tools/npm/bin`）。 */
   toolsNpmBinDir?: string;
   join: (...parts: string[]) => string;
 }

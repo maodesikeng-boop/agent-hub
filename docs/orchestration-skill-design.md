@@ -250,7 +250,7 @@ Worker 每干完一轮，你会收到 `【Worker #编号 · 标题 的汇报】`
 ```markdown
 ---
 name: task-graph
-description: Fusa 任务图手册。要用 hub graph 建图或改图、给图里的节点派 Worker 或换人、挂门禁让用户拍板、加审查节点之前，先加载。一段就能做完的活不建图，不用加载。
+description: Bellwood 任务图手册。要用 hub graph 建图或改图、给图里的节点派 Worker 或换人、挂门禁让用户拍板、加审查节点之前，先加载。一段就能做完的活不建图，不用加载。
 ---
 
 # 任务图手册
@@ -314,7 +314,7 @@ frontmatter 里的 `name` 按目标填：claude 插件里是 `task-graph`，加�
 | deepseek | 能。会话开头给一份技能目录，模型调 `skill` 工具加载 | `--patch` 里设 `customSkillDirs` | 本机实测通过（第 12.2 节） | 读文件 |
 | cursor | 能，但只认项目目录和用户目录里的技能 | **没有**。ACP 下 `--plugin-dir`、`--add-dir` 里的技能都读不到 | 本机实测没有 | 只有读文件 |
 
-“读文件”兜底六家都一样：基础提示词里写着正文的绝对路径，模型用读文件工具或 `cat` 读它。这和 Fusa 记忆的做法是同一个思路：`MEMORY.md` 这份薄索引常驻在提示词里，专题子文件用到时再读（`src/daemon/pm-memory.ts:40-41`）。
+“读文件”兜底六家都一样：基础提示词里写着正文的绝对路径，模型用读文件工具或 `cat` 读它。这和 Bellwood 记忆的做法是同一个思路：`MEMORY.md` 这份薄索引常驻在提示词里，专题子文件用到时再读（`src/daemon/pm-memory.ts:40-41`）。
 
 ### 6.2 每家的出处
 
@@ -330,14 +330,14 @@ frontmatter 里的 `name` 按目标填：claude 插件里是 `task-graph`，加�
 
 - 官方文档 <https://developers.openai.com/codex/skills>：渐进加载，“start with each skill's name and description, then load the full `SKILL.md` instructions when they decide to use that skill”，清单里带文件路径，最多占上下文的 2%；读的位置是仓库的 `.agents/skills`、`~/.agents/skills`、`/etc/codex/skills` 和内置的；任务和说明对得上时会自己选用。
 - 会话级入口：`codex app-server generate-ts` 生成的协议里有 `skills/extraRoots/set`，参数 `extraRoots: AbsolutePathBuf[]`。官方文档没有这一项，app-server 本身标着 experimental。
-- 本机实测：`skills/list` 原来 62 项；先发 `skills/extraRoots/set` 再查是 63 项，多出的那项 `scope: "user"`、`enabled: true`，路径在临时目录。每个 Fusa 会话有自己的 app-server 进程（`src/vendors/codex/protocol.ts:38`），所以只影响这一个会话。
+- 本机实测：`skills/list` 原来 62 项；先发 `skills/extraRoots/set` 再查是 63 项，多出的那项 `scope: "user"`、`enabled: true`，路径在临时目录。每个 Bellwood 会话有自己的 app-server 进程（`src/vendors/codex/protocol.ts:38`），所以只影响这一个会话。
 - 未核实：真模型对这样加进来的技能会不会主动选用。
 
 **agy**
 
 - 官方文档 <https://antigravity.google/docs/skills>：“On every turn, the agent sees a list of available skills with their names and descriptions. If a skill looks relevant to your task, the agent reads the full instructions”；位置是工作区的 `.agents/skills/` 和全局的 `~/.gemini/config/skills/`。
 - 本机实测：`agy -p "/skills" --output-format json` 原来 11 项；加 `--add-dir <目录>`（里面放 `.agents/skills/…/SKILL.md`）后 12 项，多出的那项 `model_invocable: true`。
-- Fusa 起 agy 时本来就带 `--add-dir <启动目录>/agy-rules`（`docs/system-prompt-channels.md` 第 2 节，`src/vendors/agy/rules.ts`），技能放进这个目录就行，不用多加参数。
+- Bellwood 起 agy 时本来就带 `--add-dir <启动目录>/agy-rules`（`docs/system-prompt-channels.md` 第 2 节，`src/vendors/agy/rules.ts`），技能放进这个目录就行，不用多加参数。
 - `CLAUDE.md` 里写的“agy 里这些技能只能手打”说的是 pstack：58 个里 57 个自己设了 `disable-model-invocation: true`。这是技能自己的设置，不是 agy 的限制。
 - 未核实：技能清单占不占 agy 那 60,000 字节的规则预算。
 
@@ -345,12 +345,12 @@ frontmatter 里的 `name` 按目标填：claude 插件里是 `task-graph`，加�
 
 - 随包文档 `docs/skills.md`（同 <https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/skills.md>）：“At startup, Pi scans configured skill locations and adds each skill's name, description, and path to the system prompt… When a task matches, the model reads `SKILL.md`”；也写明“A model might fail to load a relevant skill”。`pi --help`：`--skill <path>  Load a skill file or directory`。
 - 本机实测：`pi --mode rpc --no-session --offline --no-mcp --no-approve --skill <目录>`，`get_commands` 里有 `skill:fusa-orchestration`，`scope: "temporary"`。
-- Fusa 起 pi 时本来就用 `--skill` 传项目的技能目录（`src/vendors/pi/composer.ts:38` 的 `buildPiSkillArgs`，实测记录在 `docs/vendors/pi.md:46-55`），再加一个参数即可。
+- Bellwood 起 pi 时本来就用 `--skill` 传项目的技能目录（`src/vendors/pi/composer.ts:38` 的 `buildPiSkillArgs`，实测记录在 `docs/vendors/pi.md:46-55`），再加一个参数即可。
 
 **deepseek（dsh）**
 
 - 随包文档 `@deepseek-ai/dsh-tool-skill` 的 README：会话开头给模型一份技能目录（名字和说明），模型调 `skill` 工具拿到正文。`@deepseek-ai/dsh-skill-filesystem` 的 README：扫描项目的 `.dsh/skills`、`.agents/skills`，配置项 `customSkillDirs`，再是 `$DSH_HOME/skills`、`~/.agents/skills`。
-- 会话级入口：用 `--patch` 给 `dsh-skill-filesystem` 设 `customSkillDirs`。Fusa 已经用 `--patch` 写系统提示词（`docs/system-prompt-channels.md` 第 3 节）。那里记过一个坑：`--patch` 改一行时整行配置被替换，默认值要照抄。
+- 会话级入口：用 `--patch` 给 `dsh-skill-filesystem` 设 `customSkillDirs`。Bellwood 已经用 `--patch` 写系统提示词（`docs/system-prompt-channels.md` 第 3 节）。那里记过一个坑：`--patch` 改一行时整行配置被替换，默认值要照抄。
 - 未实测：这条路没有真跑过。另外技能目录是一条用户角色的消息，厂商内部压缩后还在不在，未核实。
 
 **cursor**
@@ -456,7 +456,7 @@ T2 的上限取决于第 11.1 节怎么定：选 A 是 0；选 B 时“只管理
 | | |
 |---|---|
 | 来源 | 11-10 17:33:14，本项目 PM 的对话（`conversation_id=205`），消息 #34762；PR 238 |
-| 需求原文 | 可以合吧<br>（前情：PM 17:31 的回复原文 #34719，README 已改成 Fusa、在 PR 238 里、合并还要等什么） |
+| 需求原文 | 可以合吧<br>（前情：PM 17:31 的回复原文 #34719，README 已改成 Bellwood、在 PR 238 里、合并还要等什么） |
 | 注入事件 | `gh` 回放 PR 238 当时的真实状态：检查全绿，可以合并 |
 | 期望行为 | 不建图，不派 Worker。先看检查结果再合并，不读代码 diff |
 | 判定方法 | T1、T2（上限 0）、R6、A1、L2 |

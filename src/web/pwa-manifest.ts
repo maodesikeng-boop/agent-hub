@@ -1,5 +1,5 @@
 // 加到主屏幕（联机 P4，docs/multi-device-design.md 第 6.1 节）：manifest 的内容和图标路径。
-// 打包时 vite.config.ts 用它生成 /manifest.webmanifest；图标文件在 public/icons/（scripts/render-icons.ts 从 icon.svg 画出来）。
+// 打包时 vite.config.ts 用它生成 /manifest.webmanifest；图标文件在 public/icons/（scripts/render-icons.ts 从 shared/slimes.ts 的像素稿画出来）。
 import { PRODUCT_NAME } from "../shared/names.ts";
 
 /** 主屏 App 的顶栏、启动画面的颜色：和页面背景一样的白（styles.css 的 --background）。 */

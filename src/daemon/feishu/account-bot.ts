@@ -44,7 +44,7 @@ export type FeishuChatOwner =
   /** 主人和机器人的单聊：归中心的总助。 */
   | { kind: "router" }
   | { kind: "device"; deviceId: DeviceId; pmId: PmId }
-  /** 不是 Fusa 建的群，或还没查到。 */
+  /** 不是 Bellwood 建的群，或还没查到。 */
   | { kind: "unknown" };
 
 /** 后置：群说明里带合法的 fusa:<设备编号>:pm:<编号> 标记时回设备和项目经理，否则 null。和 chats.ts 的 feishuChatMarker 互逆。 */

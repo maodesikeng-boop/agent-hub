@@ -3,7 +3,7 @@ import Darwin
 import Foundation
 import WebKit
 
-// 真 WKWebView 里点链接：主窗口必须一直停在 Fusa 页面，网页交给系统浏览器，预览窗 iframe 照常显示。
+// 真 WKWebView 里点链接：主窗口必须一直停在 Bellwood 页面，网页交给系统浏览器，预览窗 iframe 照常显示。
 // 编译运行：
 //   swiftc -framework AppKit -framework WebKit -framework UserNotifications \
 //     apps/macos/MainWindowController.swift apps/macos/DaemonSupervisor.swift apps/macos/ShellNavigationPolicy.swift \
@@ -106,7 +106,7 @@ enum ShellNavigationTestsMain {
         let previewPath = "/api/sent-files/0123456789abcdef/preview.html"
 
         write("\(daemonDir)/index.html", """
-        <!doctype html><meta charset="utf-8"><title>Fusa</title>
+        <!doctype html><meta charset="utf-8"><title>Bellwood</title>
         <a id="blank-report" target="_blank" href="http://127.0.0.1:\(daemonPort)/tmp/out/report.html">report</a>
         <a id="blank-localhost" target="_blank" href="http://localhost:\(otherPort)/">localhost</a>
         <a id="blank-api" target="_blank" href="/api/sent-files/0123456789abcdef/report.html">api</a>
@@ -182,7 +182,7 @@ enum ShellNavigationTestsMain {
             opened.removeAll()
             _ = js("document.getElementById('\(c.id)').click()")
             pump(1.5)
-            expect(webView.url?.absoluteString == shell, "#\(c.id): main window stays on Fusa (url=\(webView.url?.absoluteString ?? "nil"))")
+            expect(webView.url?.absoluteString == shell, "#\(c.id): main window stays on Bellwood (url=\(webView.url?.absoluteString ?? "nil"))")
             expect(opened.map(\.absoluteString) == [c.expected], "#\(c.id): system browser opens \(c.expected) exactly once (opened=\(opened.map(\.absoluteString)))")
         }
 
@@ -202,7 +202,7 @@ enum ShellNavigationTestsMain {
             expect((js("document.getElementById('pv').contentWindow.location.hash") as? String) == "#sec", "preview iframe: #anchor jump works")
             _ = js("document.getElementById('pv').contentDocument.getElementById('ext').click()")
             pump(1.5)
-            expect(webView.url?.absoluteString == shell, "preview iframe ext link: main window stays on Fusa")
+            expect(webView.url?.absoluteString == shell, "preview iframe ext link: main window stays on Bellwood")
             expect((js("document.getElementById('pv').contentDocument?.getElementById('ok')?.textContent") as? String) == "preview",
                    "preview iframe ext link: preview stays rendered")
             expect(opened.map(\.absoluteString) == ["http://127.0.0.1:\(otherPort)/ext.html"],

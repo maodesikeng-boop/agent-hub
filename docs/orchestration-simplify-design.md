@@ -956,4 +956,4 @@ Worker 提示词。
 - Anthropic，《Building effective agents》，2024-12-19，<https://www.anthropic.com/engineering/building-effective-agents>。用到的一点：先找最简单的方案，只在确实需要时才增加复杂度。
 - stablyai/orca 的 orchestration，<https://www.onorca.dev/docs/cli/orchestration>，<https://github.com/stablyai/orca/blob/main/skill-guides/orchestration.md>。
   - 借用的：每次派活只发一次 `worker_done`，失败也要发，带明确的成败；卡住时上报（escalation）而不是自己停着；worker 的问题先到协调者，协调者能按任务和用户的话回答就回答，否则才问用户；协调者不轮询，由运行时叫醒。
-  - 没有照搬的：Run、Dispatch、心跳、收件箱确认这几层，以及独立的 decision gate 对象。Fusa 已经有轮末汇报和消息投递，用它们就够了。
+  - 没有照搬的：Run、Dispatch、心跳、收件箱确认这几层，以及独立的 decision gate 对象。Bellwood 已经有轮末汇报和消息投递，用它们就够了。

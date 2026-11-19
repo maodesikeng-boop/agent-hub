@@ -1,4 +1,4 @@
-# 在 Linux（Ubuntu）上用 Fusa
+# 在 Linux（Ubuntu）上用 Bellwood
 
 适用 Ubuntu 22.04 / 24.04，普通用户（不是 root）跑。每一步后面附官方出处，命令以出处为准（版本号会变）。
 
@@ -85,7 +85,7 @@ journalctl --user -u agent-hub -f
 
 热重启（项目经理 `hub self-reload [--build]`、网页 `POST /api/self-reload`）：守护进程看到 systemd 设的 `INVOCATION_ID` 就知道退出后有人拉起；
 等全库空闲后正常关机（最多等 10 分钟，`src/shared/limits.ts` 的 `SELF_RELOAD_DRAIN_MAX_MS`；之后不再等 Worker 轮次和系统消息，它们重启后自动重发，只等项目经理、总助正在回用户的那一轮回完），以退出码 75（`apps/desktop/contract.json` 的 `reloadExitCode`）退出，`Restart=on-failure` 过 `RestartSec` 拉起新进程。
-`--build` 先把网页构建到 `dist/` 下的暂存目录，构建失败就取消，不动正在用的 `dist/web`。不是 systemd、也不是 Fusa 应用拉起的（终端里 `pnpm start`）不接受热重启。
+`--build` 先把网页构建到 `dist/` 下的暂存目录，构建失败就取消，不动正在用的 `dist/web`。不是 systemd、也不是 Bellwood 应用拉起的（终端里 `pnpm start`）不接受热重启。
 
 - `Environment=`、`Restart=`、`TimeoutStopSec=`：<https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html>、<https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html>。
 - `loginctl enable-linger`（让用户管理器开机就起、退出登录后不结束）：<https://www.freedesktop.org/software/systemd/man/latest/loginctl.html>。
