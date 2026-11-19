@@ -2,8 +2,9 @@ import { execFileSync, spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { AGENT_VENDORS, DriverError, buildReadonlyPolicy } from "../../shared/index.ts";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { AGENT_VENDORS, DriverError, buildReadonlyPolicy, workerWriteScope } from "../../shared/index.ts";
+import { EXPECTED_PROBE_OUTPUT, makeSandboxDataDir, readProbeScript, type SandboxDataDir } from "./data-dir-fixture.ts";
 import { isAlive, signalChild, termGroupAfterExit, waitForExit } from "./process.ts";
 import { FAKE_CLAUDE, makeHarness, realSleep, type Harness } from "./test-helpers.ts";
 import {
@@ -36,6 +37,7 @@ import {
   wrapInOsSandbox,
   wrapInReadonlyOsSandbox,
   type ReadonlySandboxInput,
+  type SpawnCommand,
 } from "./write-scope.ts";
 import {
   ENV_WIN_HELPERS,
@@ -284,6 +286,92 @@ describe.runIf(canRunSandboxExec)("真 sandbox-exec", () => {
     expect(existsSync(join(own, "a.txt"))).toBe(true);
     expect(existsSync(join(own, "b.txt"))).toBe(true);
     expect(existsSync(join(own, "node_modules", "p"))).toBe(true);
+  });
+});
+
+describe("数据目录读边界：seatbelt 与 bwrap 规则（纯函数）", () => {
+  const dataDir = "/Users/u/.agent-hub";
+  const launchDir = `${dataDir}/state/launch/7`;
+  const own = `${dataDir}/worktrees/1/2`;
+  const readable = [`${dataDir}/worktrees`, `${dataDir}/uploads`, `${dataDir}/tools`, `${dataDir}/run/bin`, launchDir];
+  const scoped = () => workerWriteScope({ role: "worker", dataDir, cwd: own, launchDir })!;
+  const readScope = { dataDir, readable, connectable: [`${dataDir}/run/hub.sock`] };
+  const boundaryRules = [
+    `(deny file-read* (subpath "${dataDir}"))`,
+    `(allow file-read-metadata (subpath "${dataDir}"))`,
+    ...readable.map((r) => `(allow file-read* (subpath "${r}"))`),
+    `(deny network-outbound (regex #"^/Users/u/\\.agent-hub/"))`,
+    `(allow network-outbound (literal "${dataDir}/run/hub.sock"))`,
+  ];
+
+  it("普通 Worker（seatbelt）：整个数据目录禁读、元数据照常，放行项再放开读；数据目录里只能连 hub.sock", () => {
+    const lines = seatbeltProfile(scoped()).split("\n");
+    const start = lines.indexOf(boundaryRules[0]!);
+    expect(start).toBeGreaterThan(lines.indexOf(`(allow file-write* (subpath "${own}"))`));
+    expect(lines.slice(start, start + boundaryRules.length)).toEqual(boundaryRules);
+  });
+
+  it("只读 Worker（seatbelt）：读边界在密钥禁读之前（放行项里的 .env、密钥照样禁读），自己的凭据文件最后放行", () => {
+    const lines = readonlySeatbeltProfile({ ...roInput, dataDirScope: readScope }).split("\n");
+    const start = lines.indexOf(boundaryRules[0]!);
+    expect(start).toBeGreaterThan(0);
+    expect(lines.slice(start, start + boundaryRules.length)).toEqual(boundaryRules);
+    expect(lines.indexOf('(deny file-read* (subpath "/Users/u/.ssh"))')).toBeGreaterThan(start + boundaryRules.length - 1);
+  });
+
+  it("普通 Worker（bwrap）：数据目录换成空 tmpfs，放行项只读挂回、hub.sock 绑回，自己的 worktree 可写绑回，最后把 tmpfs 改成只读", () => {
+    const args = bwrapArgs(base, scoped(), { uid: 1000, exists: () => true, realpath: (p) => p });
+    const at = (...seq: string[]) => args.findIndex((_, i) => seq.every((x, j) => args[i + j] === x));
+    const tmpfs = at("--perms", "0700", "--tmpfs", dataDir);
+    expect(tmpfs).toBeGreaterThan(0);
+    for (const r of readable) expect(at("--ro-bind", r, r)).toBeGreaterThan(tmpfs);
+    expect(at("--bind", `${dataDir}/run/hub.sock`, `${dataDir}/run/hub.sock`)).toBeGreaterThan(tmpfs);
+    expect(at("--bind", own, own)).toBeGreaterThan(at("--ro-bind", `${dataDir}/worktrees`, `${dataDir}/worktrees`));
+    expect(at("--remount-ro", dataDir)).toBeGreaterThan(at("--bind", own, own));
+    expect(at("--ro-bind", dataDir, dataDir)).toBe(-1);
+  });
+
+  it("只读 Worker（bwrap）：同样换 tmpfs 再挂回放行项，可写目录绑在放行项之后、密钥遮蔽在最后", () => {
+    const args = readonlyBwrapArgs(base, { ...roInput, dataDirScope: readScope }, { uid: 1000, exists: () => true, realpath: (p) => p, isDirectory: () => true, expandGlobs: () => [] });
+    const at = (...seq: string[]) => args.findIndex((_, i) => seq.every((x, j) => args[i + j] === x));
+    const tmpfs = at("--perms", "0700", "--tmpfs", dataDir);
+    expect(tmpfs).toBeGreaterThan(at("--ro-bind", "/", "/"));
+    for (const r of readable) expect(at("--ro-bind", r, r)).toBeGreaterThan(tmpfs);
+    expect(at("--bind", roInput.tmpDir, roInput.tmpDir)).toBeGreaterThan(at("--ro-bind", launchDir, launchDir));
+    expect(at("--tmpfs", "/Users/u/.ssh")).toBeGreaterThan(at("--bind", roInput.tmpDir, roInput.tmpDir));
+    expect(at("--remount-ro", dataDir)).toBeGreaterThan(at("--tmpfs", "/Users/u/.ssh"));
+  });
+});
+
+describe.runIf(canRunSandboxExec)("真 sandbox-exec：数据目录读边界", () => {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ah-rb-")));
+  let fixture: SandboxDataDir;
+  beforeAll(async () => {
+    fixture = await makeSandboxDataDir(root);
+  });
+  afterAll(async () => {
+    await fixture?.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const probe = (command: SpawnCommand) =>
+    execFileSync(command.command, command.args, { cwd: fixture.own, env: { ...process.env, ...fixture.env }, stdio: ["ignore", "pipe", "ignore"], encoding: "utf8" });
+
+  it("普通 Worker：令牌、密钥、库、记忆、日志、备份、别的会话启动目录、遗留顶层项都读不到，admin.sock 连不上；自己的启动目录、hub 外壳、放行项照常", () => {
+    const scope = workerWriteScope({ role: "worker", dataDir: fixture.dataDir, cwd: fixture.own, launchDir: fixture.launchDir })!;
+    const run = wrapInOsSandbox({ command: "/bin/sh", args: ["-c", readProbeScript()] }, scope, "darwin");
+    expect(probe(run).trim().split("\n")).toEqual(EXPECTED_PROBE_OUTPUT);
+  });
+
+  it("只读 Worker：同样的读边界", () => {
+    const scope = workerWriteScope({ role: "worker", dataDir: fixture.dataDir, cwd: fixture.own, launchDir: fixture.launchDir })!;
+    const run = wrapInReadonlyOsSandbox(
+      { command: "/bin/sh", args: ["-c", readProbeScript()] },
+      { tmpDir: join(root, "ro-tmp"), writableDirs: [], writableFileRegexes: [], secretPaths: [], secretGlobs: [], dataDirScope: scope.readScope },
+      "darwin",
+    );
+    mkdirSync(join(root, "ro-tmp"), { recursive: true });
+    expect(probe(run).trim().split("\n")).toEqual(EXPECTED_PROBE_OUTPUT);
   });
 });
 

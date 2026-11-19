@@ -382,6 +382,31 @@ describe("prepareLaunch（M2、M3）", () => {
     expect((await make2()(row(1))).readonly).toBeUndefined();
   });
 
+  it("数据目录读边界：普通 Worker 的 writeScope.readScope、只读 Worker 的 readonly.dataDirScope 都放行这次会话自己的启动目录；工具层禁读清单列出数据目录里别的顶层项和 run/admin.sock", async () => {
+    const make2 = () => createLaunchPreparer({ launchDir, dataDir: dir, stateDir: join(dir, "state"), homeDir: "/Users/u", osSandboxed: true, worktreesDir, getLaunchContext: (id) => contexts.get(id)!, tokens, hubSock, hubBinDir: "/agent-hub/run/bin" });
+    for (const name of ["backups", "pm-home", "pm-notes", "sent-files", "uploads", "tools"]) mkdirSync(join(dir, name), { recursive: true });
+    mkdirSync(join(dir, "run", "bin"), { recursive: true });
+    writeFileSync(join(dir, "run", "admin.sock"), "");
+    writeFileSync(join(dir, "run", "hub.sock"), "");
+    const wt = join(worktreesDir, "1", "9");
+    mkdirSync(wt, { recursive: true });
+    const ownLaunch = join(launchDir, "9");
+    contexts.set(9, workerContext());
+    const normal = await make2()({ ...row(9, wt, "worker"), vendor: "agy" });
+    expect(normal.writeScope?.readScope).toEqual({
+      dataDir: dir,
+      readable: [join(dir, "worktrees"), join(dir, "uploads"), join(dir, "tools"), join(dir, "run", "bin"), ownLaunch],
+      connectable: [join(dir, "run", "hub.sock")],
+    });
+    contexts.set(9, workerContext({ readonly: true }));
+    const readonly = await make2()({ ...row(9, wt, "worker"), vendor: "agy" });
+    expect(readonly.readonly?.dataDirScope?.readable).toContain(ownLaunch);
+    expect([...(readonly.readonly?.dataDirDenied ?? [])].sort()).toEqual(
+      [join(dir, "backups"), join(dir, "pm-home"), join(dir, "pm-notes"), join(dir, "sent-files"), join(dir, "state"), join(dir, "run", "admin.sock")].sort(),
+    );
+    expect(readonly.readonly?.secretPaths.some((p) => p.startsWith(`${dir}/`))).toBe(false);
+  });
+
   it("只读 Worker：策略变了 fingerprint 跟着变（驱动层下一条消息前重启）；同样的策略 fingerprint 不变", () => {
     const policy = buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: "/s" });
     const base = { prompt: "p", settings: "{}" };

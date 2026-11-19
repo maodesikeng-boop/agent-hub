@@ -92,3 +92,20 @@ describe("buildReadonlyPolicy：密钥清单", () => {
     expect(b.secretGlobs.length).toBeGreaterThan(0);
   });
 });
+
+describe("数据目录读边界（dataDirScope、dataDirDenied）", () => {
+  const dataDir = "/Users/u/.agent-hub";
+  const scope = {
+    dataDir,
+    readable: [`${dataDir}/worktrees`, `${dataDir}/uploads`, `${dataDir}/tools`, `${dataDir}/run/bin`, `${dataDir}/state/launch/7`],
+    connectable: [`${dataDir}/run/hub.sock`],
+  };
+  const denied = [`${dataDir}/state`, `${dataDir}/backups`, `${dataDir}/pm-home`, `${dataDir}/run/admin.sock`];
+
+  it("策略带上 OS 沙箱用的读边界和工具层用的禁读清单；state/ 里的令牌、密钥、库不再逐个列（整个数据目录按边界禁读）", () => {
+    const p = buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: `${dataDir}/state`, dataDirScope: scope, dataDirDenied: denied });
+    expect(p.dataDirScope).toEqual(scope);
+    expect(p.dataDirDenied).toEqual(denied);
+    expect(p.secretPaths.filter((x) => x.startsWith(`${dataDir}/`))).toEqual([]);
+  });
+});

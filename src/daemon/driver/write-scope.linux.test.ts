@@ -6,6 +6,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { workerWriteScope } from "../../shared/index.ts";
+import { EXPECTED_PROBE_OUTPUT, makeSandboxDataDir, readProbeScript } from "./data-dir-fixture.ts";
 import { forceKill, isAlive, signalChild, signalTarget, termGroupAfterExit } from "./process.ts";
 import { FAKE_CLAUDE, makeHarness, realSleep, type Harness } from "./test-helpers.ts";
 import {
@@ -113,6 +115,34 @@ describe.runIf(process.platform === "linux" && osSandboxAvailable("linux"))("真
     expect(existsSync(join(own, "a.txt"))).toBe(true);
     expect(existsSync(join(own, "sub", "b.txt"))).toBe(true);
     expect(existsSync(join(root, "tmp-ok"))).toBe(true);
+  });
+
+  it("普通 Worker 与只读 Worker：数据目录读边界——令牌、密钥、库、记忆、日志、备份、别的会话启动目录、遗留顶层项读不到，admin.sock 连不上；自己的启动目录、hub 外壳、放行项照常", async () => {
+    const rbRoot = join(root, "rb");
+    mkdirSync(rbRoot, { recursive: true });
+    const fixture = await makeSandboxDataDir(rbRoot);
+    try {
+      const scope = workerWriteScope({ role: "worker", dataDir: fixture.dataDir, cwd: fixture.own, launchDir: fixture.launchDir })!;
+      const run = async (command: { command: string; args: string[] }) => {
+        const child = spawn(command.command, command.args, { cwd: fixture.own, env: { ...process.env, ...fixture.env }, stdio: ["ignore", "pipe", "ignore"] });
+        let out = "";
+        child.stdout!.on("data", (chunk: Buffer) => (out += chunk.toString("utf8")));
+        await new Promise((resolve) => child.on("close", resolve));
+        return out.trim().split("\n");
+      };
+      const normal = wrapInOsSandbox({ command: "/bin/sh", args: ["-c", readProbeScript()] }, scope, "linux");
+      expect(await run(normal)).toEqual(EXPECTED_PROBE_OUTPUT);
+      const roTmp = join(rbRoot, "ro-tmp");
+      mkdirSync(roTmp, { recursive: true });
+      const readonly = wrapInReadonlyOsSandbox(
+        { command: "/bin/sh", args: ["-c", readProbeScript()] },
+        { tmpDir: roTmp, writableDirs: [], writableFileRegexes: [], secretPaths: [], secretGlobs: [], dataDirScope: scope.readScope },
+        "linux",
+      );
+      expect(await run(readonly)).toEqual(EXPECTED_PROBE_OUTPUT);
+    } finally {
+      await fixture.close();
+    }
   });
 
   it("只读 Worker：除 tmpDir、writableDirs、已存在匹配 writableFileGlobs 外全盘禁写；敏感目录与敏感文件（含 scanSecretGlobs 扫出的 .env）禁读", () => {
