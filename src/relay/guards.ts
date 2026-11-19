@@ -35,30 +35,40 @@ export interface IpRateLimiterOptions {
   /** 一个窗口里最多放行几次。 */
   limit: number;
   windowMs: number;
-  /** 计数表最多记几个客户端。 */
+  /** 新客表、累加表各最多记几个客户端。 */
   max: number;
   /** 封禁表最多记几个客户端。 */
   blockedMax: number;
-  /** 计数表满了时，最多隔多久清一次窗口已过的（清一次要扫整张表）。 */
+  /** 累加表满了时，最多隔多久清一次窗口已过的（清一次要扫整张表）。 */
   pruneIntervalMs: number;
 }
 
 /**
- * 固定窗口计数。超过上限的客户端挪进单独的封禁表，封到它这个窗口结束：
- * 大量新客户端挤满计数表只会挤掉还没超限的计数（LRU），挤不掉已经封住的；往封禁表里挤，每个键都得先打满一个窗口的上限。
- * 计数表满了先清窗口已过的再收新键，清理按 pruneIntervalMs 节流，持续挤满时也不会每个请求都扫一遍。
+ * 固定窗口计数，客户端按这个窗口来了几次分三张表：
+ * - 新客表：只来过一次的，LRU。大量只来一次的新键只能挤掉彼此，被挤掉的最多少记一次。
+ * - 累加表：同一窗口第二次来挪进来，不按 LRU 挤掉。满了先清窗口已过的，还满就拒绝这次，已经累加的计数只随窗口结束清掉。
+ * - 封禁表：超过上限挪进来，封到它这个窗口结束。往里挤的每个键都得先打满一个窗口的上限。
+ * 清理按 pruneIntervalMs 节流，持续挤满时也不会每个请求都扫一遍。
  */
 export function createIpRateLimiter(options: IpRateLimiterOptions): IpRateLimiter {
-  const windows = new LRUCache<string, { start: number; count: number }>({ max: options.max });
+  const fresh = new LRUCache<string, number>({ max: options.max });
+  const counting = new Map<string, { start: number; count: number }>();
   const blocked = new LRUCache<string, number>({ max: options.blockedMax });
   let lastPrune = Number.NEGATIVE_INFINITY;
 
   const pruneExpired = (now: number) => {
     if (now - lastPrune < options.pruneIntervalMs) return;
     lastPrune = now;
-    const expired: string[] = [];
-    for (const [key, hit] of windows.entries()) if (now - hit.start >= options.windowMs) expired.push(key);
-    for (const key of expired) windows.delete(key);
+    for (const [key, hit] of counting) if (now - hit.start >= options.windowMs) counting.delete(key);
+  };
+  const count = (key: string, hit: { start: number; count: number }): boolean => {
+    if (hit.count <= options.limit) {
+      counting.set(key, hit);
+      return true;
+    }
+    counting.delete(key);
+    blocked.set(key, hit.start + options.windowMs);
+    return false;
   };
 
   return {
@@ -68,17 +78,21 @@ export function createIpRateLimiter(options: IpRateLimiterOptions): IpRateLimite
         if (now < until) return false;
         blocked.delete(key);
       }
-      const hit = windows.get(key);
-      if (hit !== undefined && now - hit.start < options.windowMs) {
-        hit.count++;
-        if (hit.count <= options.limit) return true;
-        windows.delete(key);
-        blocked.set(key, hit.start + options.windowMs);
-        return false;
+      const live = (start: number) => now - start < options.windowMs;
+      const hit = counting.get(key);
+      if (hit !== undefined) {
+        if (live(hit.start)) return count(key, { start: hit.start, count: hit.count + 1 });
+        counting.delete(key);
       }
-      if (hit === undefined && windows.size >= options.max) pruneExpired(now);
-      windows.set(key, { start: now, count: 1 });
-      return true;
+      const start = fresh.get(key);
+      if (start === undefined || !live(start)) {
+        fresh.set(key, now);
+        return true;
+      }
+      if (counting.size >= options.max) pruneExpired(now);
+      if (counting.size >= options.max) return false;
+      fresh.delete(key);
+      return count(key, { start, count: 2 });
     },
   };
 }

@@ -1210,13 +1210,13 @@ export const RELAY_CHANNEL_PENDING_BYTES = 4 * RELAY_MAX_DATA_FRAME_BYTES;
 export const RELAY_CHANNEL_HIGH_WATER_BYTES = 1024 * 1024;
 /** 自建中继隔多久收拾一次各账号（租约过期、等批准过期、空闲通道）。 */
 export const RELAY_SWEEP_MS = 1_000;
-/** 中继按客户端（IPv4 地址或 IPv6 /64，relay/guards.ts 的 clientKeyOf）记登记、升级次数，计数表最多记几个客户端。 */
+/** 中继按客户端（IPv4 地址或 IPv6 /64，relay/guards.ts 的 clientKeyOf）记登记、升级次数：新客表、累加表各最多记几个客户端。 */
 export const RELAY_IP_LIMITER_MAX = 10_000;
 /** 中继限流的固定窗口长度（RELAY_REGISTER_PER_IP_PER_MINUTE、RELAY_UPGRADES_PER_IP_PER_MINUTE 按它算）。 */
 export const RELAY_RATE_WINDOW_MS = 60_000;
 /** 超限客户端单独记在封禁表里直到窗口结束，最多记几个（新客户端挤满计数表也挤不掉它们）。 */
 export const RELAY_IP_BLOCKED_MAX = 10_000;
-/** 计数表满了时最多隔多久清一次窗口已过的计数（清一次要扫整张表）。 */
+/** 累加表满了时最多隔多久清一次窗口已过的计数（清一次要扫整张表）。 */
 export const RELAY_IP_LIMITER_PRUNE_MS = 1_000;
 /** /v1/register 验过的 GitHub token 按 SHA-256 摘要缓存几个（不存明文）。 */
 export const RELAY_TOKEN_CACHE_MAX = 1_024;
