@@ -25,6 +25,7 @@ function walk(card: FeishuCardJson): El[] {
     for (const el of els) {
       out.push(el);
       if (Array.isArray(el.elements)) visit(el.elements as El[]);
+      if (Array.isArray(el.columns)) visit(el.columns as El[]);
     }
   };
   visit(card.body.elements);
@@ -253,25 +254,82 @@ describe("renderReplyCard", () => {
   });
 });
 
-describe("renderChatPolicyCard", () => {
-  it("写明当前唤醒方式和访客档位，当前选中的按钮禁用，其余按钮值解码为 set_policy", () => {
-    const c = renderChatPolicyCard({ pmId: 2, triggerMode: "auto", guestTier: "chat_only", mentionOnlyForced: false });
-    expect(allText(c)).toContain("仅对话");
-    const bs = callbackButtons(c);
-    const disabled = bs.filter((b) => b.disabled === true).map(valueOf);
-    expect(disabled).toEqual([
+describe("renderChatPolicyCard（群设置卡：唤醒方式、群成员权限分两组）", () => {
+  const policy = (patch: Partial<Parameters<typeof renderChatPolicyCard>[0]> = {}) =>
+    renderChatPolicyCard({ pmId: 2, triggerMode: "auto", guestTier: "chat_only", mentionOnlyForced: false, ...patch });
+  /** 卡片顶层元素按分割线切成几组。 */
+  const groups = (card: FeishuCardJson): El[][] => {
+    const out: El[][] = [[]];
+    for (const el of card.body.elements) {
+      if (el.tag === "hr") out.push([]);
+      else out.at(-1)!.push(el);
+    }
+    return out;
+  };
+  const groupCard = (els: El[]): FeishuCardJson => ({ schema: "2.0", config: {}, body: { elements: els } });
+
+  it("标题是“群设置”；唤醒方式在上、群成员权限在下，中间一条分割线，各组按钮只改各自那一项", () => {
+    const c = policy();
+    expect(JSON.stringify(c.header)).toContain("群设置");
+    const [wake, members] = groups(c);
+    expect(groups(c).length).toBeGreaterThanOrEqual(2);
+    expect(JSON.stringify(wake)).toContain("唤醒方式");
+    expect(JSON.stringify(wake)).not.toContain("群成员权限");
+    expect(JSON.stringify(members)).toContain("群成员权限");
+    const wakeValues = callbackButtons(groupCard(wake!)).map(valueOf);
+    const tierValues = callbackButtons(groupCard(members!)).map(valueOf);
+    expect(wakeValues).toEqual([
       { kind: "set_policy", pmId: 2, triggerMode: "auto" },
-      { kind: "set_policy", pmId: 2, guestTier: "chat_only" },
+      { kind: "set_policy", pmId: 2, triggerMode: "mention_only" },
     ]);
-    for (const b of bs) expect(valueOf(b)?.kind).toBe("set_policy");
-    expect(bs.map(valueOf)).toContainEqual({ kind: "set_policy", pmId: 2, guestTier: "observer" });
+    expect(tierValues).toEqual([
+      { kind: "set_policy", pmId: 2, guestTier: "collaborator" },
+      { kind: "set_policy", pmId: 2, guestTier: "chat_only" },
+      { kind: "set_policy", pmId: 2, guestTier: "observer" },
+    ]);
   });
 
-  it("mentionOnlyForced 时不给切回 auto", () => {
-    const c = renderChatPolicyCard({ pmId: 2, triggerMode: "auto", guestTier: "chat_only", mentionOnlyForced: true });
+  it("三档各有一句直白说明：协作者能发文件、点拍板和停止；仅对话不收文件；只读只旁听", () => {
+    const members = JSON.stringify(groups(policy())[1]);
+    expect(members).toMatch(/协作者[^"]*可对话、发文件、点拍板卡与停止/);
+    expect(members).toMatch(/仅对话[^"]*只能文字聊天，不收文件/);
+    expect(members).toMatch(/只读[^"]*只旁听，@机器人 也不唤醒/);
+  });
+
+  it("当前生效的那项按钮是 primary 且带 ✓，别的是 default、不带 ✓；当前项不禁用", () => {
+    const c = policy({ triggerMode: "mention_only", guestTier: "collaborator" });
+    const bs = callbackButtons(c);
+    const chosen = bs.filter((b) => b.type === "primary");
+    expect(chosen.map(valueOf)).toEqual([
+      { kind: "set_policy", pmId: 2, triggerMode: "mention_only" },
+      { kind: "set_policy", pmId: 2, guestTier: "collaborator" },
+    ]);
+    for (const b of chosen) expect(textOf(b).startsWith("✓")).toBe(true);
+    for (const b of bs.filter((x) => x.type !== "primary")) {
+      expect(b.type).toBe("default");
+      expect(textOf(b)).not.toContain("✓");
+    }
+    expect(bs.some((b) => b.disabled === true)).toBe(false);
+  });
+
+  it("每组写明当前生效的是哪一项", () => {
+    const [wake, members] = groups(policy({ triggerMode: "mention_only", guestTier: "observer" }));
+    expect(JSON.stringify(wake)).toMatch(/当前[^"]*仅 @ 唤醒/);
+    expect(JSON.stringify(members)).toMatch(/当前[^"]*只读/);
+  });
+
+  it("卡底提示随时发 /群设置 叫出这张卡，只有主人能改", () => {
+    const text = allText(policy());
+    expect(text).toContain("/群设置");
+    expect(text).toContain("只有主人能改");
+  });
+
+  it("mentionOnlyForced 时不给切回 auto，按仅 @ 唤醒画", () => {
+    const c = policy({ mentionOnlyForced: true });
     const values = callbackButtons(c).map(valueOf);
     expect(values).not.toContainEqual({ kind: "set_policy", pmId: 2, triggerMode: "auto" });
     expect(values).toContainEqual({ kind: "set_policy", pmId: 2, triggerMode: "mention_only" });
+    expect(callbackButtons(c).find((b) => b.type === "primary" && valueOf(b)?.kind === "set_policy" && "triggerMode" in valueOf(b)!)).toBeDefined();
   });
 });
 

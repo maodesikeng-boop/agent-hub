@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { FeishuChatId, FeishuMessageId, FeishuOpenId } from "../../shared/feishu.ts";
 import type { FeishuInbound, FeishuInboundAction } from "./inbound.ts";
-import { feishuWakes, GUEST_NO_FILES, routeFeishuAction, routeFeishuMessage, type FeishuRoutingContext } from "./routing.ts";
+import { feishuWakes, GUEST_NO_FILES, OWNER_ONLY_POLICY_CARD, routeFeishuAction, routeFeishuMessage, type FeishuRoutingContext } from "./routing.ts";
 
 const OWNER = "ou_owner" as FeishuOpenId;
 const GUEST = "ou_guest" as FeishuOpenId;
@@ -166,7 +166,7 @@ describe("routeFeishuMessage", () => {
 
     it("仅对话档访客只 @机器人、前面只有自己发的文件：回他一句文件不收，不投空消息", () => {
       const route = routeFeishuMessage(msg({ senderOpenId: GUEST, mentionedBot: true, text: "" }), ctx({ ...mentionOnly, pendingFiles: [guestDoc] }));
-      expect(route).toMatchObject({ kind: "reject", openId: GUEST, reason: GUEST_NO_FILES });
+      expect(route).toEqual({ kind: "reject", openId: GUEST, reason: GUEST_NO_FILES, guestDenied: true });
     });
 
     it("没唤醒的文件气泡仍记成背景“（发了文件）”，文件留给下一次唤醒", () => {
@@ -175,14 +175,57 @@ describe("routeFeishuMessage", () => {
     });
   });
 
-  it("仅对话档访客的文件不收时，回的那句告诉主人去「访客权限」卡切到协作者", () => {
-    expect(GUEST_NO_FILES).toContain("访客权限");
+  it("仅对话档访客的文件不收时，回的那句告诉主人去「群设置」卡切到协作者", () => {
+    expect(GUEST_NO_FILES).toContain("群设置");
     expect(GUEST_NO_FILES).toContain("协作者");
   });
 
   it("话题里的话 → ignore；记录已归档（群已解散）的迟到事件 → ignore", () => {
     expect(routeFeishuMessage(msg({ inThread: true }), ctx())).toEqual({ kind: "ignore" });
     expect(routeFeishuMessage(msg(), ctx({ binding: { target: { kind: "pm", pmId: 7 }, archived: true } }))).toEqual({ kind: "ignore" });
+  });
+});
+
+describe("群设置命令（只认带斜杠的整句，不碰自然语言）", () => {
+  const shared = { mode: "shared" as const };
+
+  it("主人发「设置」「权限」「群设置」这类不带斜杠的话：照常交给项目经理", () => {
+    for (const text of ["设置", "权限", "群设置", "policy", "设置一下", "帮我看看群设置"]) {
+      expect(routeFeishuMessage(msg({ text }), ctx())).toMatchObject({ kind: "deliver", text });
+      expect(routeFeishuMessage(msg({ text, mentionedBot: true }), ctx(shared))).toMatchObject({ kind: "deliver", text });
+    }
+  });
+
+  it("主人发 /群设置 或 /policy（去掉 @ 后整句）：叫出群设置卡，不进账本；@ 不 @ 都认", () => {
+    for (const text of ["/群设置", "/policy", " /群设置 ", "/policy\n"]) {
+      expect(routeFeishuMessage(msg({ text }), ctx())).toEqual({ kind: "policy_card" });
+      expect(routeFeishuMessage(msg({ text }), ctx(shared))).toEqual({ kind: "policy_card" });
+      expect(routeFeishuMessage(msg({ text, mentionedBot: true }), ctx(shared))).toEqual({ kind: "policy_card" });
+    }
+  });
+
+  it("斜杠命令后面还带了字、带了文件，或大小写不同：不算群设置命令", () => {
+    expect(routeFeishuMessage(msg({ text: "/群设置 改成协作者" }), ctx())).toMatchObject({ kind: "deliver" });
+    expect(routeFeishuMessage(msg({ text: "/Policy" }), ctx())).toMatchObject({ kind: "deliver" });
+    const files = [{ type: "image" as const, fileKey: "img_1", fileName: null }];
+    expect(routeFeishuMessage(msg({ text: "/群设置", files }), ctx())).toMatchObject({ kind: "deliver" });
+  });
+
+  it("访客发 /群设置 或 /policy：回他只有主人能叫，@ 不 @、哪一档都一样", () => {
+    for (const guestTier of ["chat_only", "collaborator", "observer"] as const) {
+      for (const mentionedBot of [false, true]) {
+        expect(routeFeishuMessage(msg({ senderOpenId: GUEST, text: "/群设置", mentionedBot }), ctx({ ...shared, guestTier }))).toEqual({
+          kind: "reject",
+          openId: GUEST,
+          reason: OWNER_ONLY_POLICY_CARD,
+        });
+      }
+    }
+    expect(routeFeishuMessage(msg({ senderOpenId: GUEST, text: "/policy", mentionedBot: true }), ctx(shared))).toMatchObject({ kind: "reject" });
+  });
+
+  it("总助单聊里发 /群设置：不是项目群，照常交给总助", () => {
+    expect(routeFeishuMessage(msg({ chatType: "p2p", text: "/群设置" }), ctx())).toMatchObject({ kind: "deliver", target: { kind: "router" } });
   });
 });
 
@@ -213,8 +256,10 @@ describe("routeFeishuAction", () => {
   it("chat_only 档访客点选项、停止 → reject 并给 toast；collaborator 档访客能点", () => {
     const guestChoose = action({ operatorOpenId: GUEST });
     const guestStop = action({ operatorOpenId: GUEST, value: { kind: "stop", conversationId: 1 } });
-    expect(routeFeishuAction(guestChoose, actx())).toEqual({ kind: "reject", toast: "只有主人能拍板" });
-    expect(routeFeishuAction(guestStop, actx())).toEqual({ kind: "reject", toast: "只有主人能停止" });
+    expect(routeFeishuAction(guestChoose, actx())).toEqual({ kind: "reject", toast: "只有主人能拍板", guestDenied: true });
+    expect(routeFeishuAction(guestStop, actx())).toEqual({ kind: "reject", toast: "只有主人能停止", guestDenied: true });
+    const guestDone = action({ operatorOpenId: GUEST, value: { kind: "blocker_done", card: { kind: "blocker", askMessageId: 3, blockerId: 1 } } });
+    expect(routeFeishuAction(guestDone, actx())).toEqual({ kind: "reject", toast: "只有主人能拍板", guestDenied: true });
     expect(routeFeishuAction(guestChoose, actx({ guestTier: "collaborator" }))).toMatchObject({ kind: "answer", byOpenId: GUEST });
     expect(routeFeishuAction(guestStop, actx({ guestTier: "collaborator" }))).toEqual({ kind: "stop", target: { kind: "pm", pmId: 7 } });
   });
@@ -222,7 +267,7 @@ describe("routeFeishuAction", () => {
   it("set_policy 只认主人，访客点 → reject", () => {
     const value = { kind: "set_policy" as const, pmId: 7, guestTier: "observer" as const };
     expect(routeFeishuAction(action({ value }), actx())).toEqual({ kind: "set_policy", pmId: 7, guestTier: "observer" });
-    expect(routeFeishuAction(action({ value, operatorOpenId: GUEST }), actx({ guestTier: "collaborator" }))).toMatchObject({ kind: "reject" });
+    expect(routeFeishuAction(action({ value, operatorOpenId: GUEST }), actx({ guestTier: "collaborator" }))).toEqual({ kind: "reject", toast: "只有主人能改设置" });
   });
 
   it("还没认主人 → ignore", () => {

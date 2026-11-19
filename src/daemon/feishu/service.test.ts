@@ -15,6 +15,7 @@ import {
   FEISHU_CONTROL_RETRY_MS,
   FEISHU_INBOUND_QUEUE_MAX,
   FEISHU_OUTBOUND_QUEUE_MAX,
+  FEISHU_POLICY_CARD_COOLDOWN_MS,
   FEISHU_STREAM_RENEW_MS,
   FEISHU_STREAM_FLUSH_MS,
   MAX_UPLOAD_BYTES,
@@ -162,6 +163,7 @@ const buttonValues = (cardData: string) => {
     for (const el of els) {
       if (el.tag === "button") out.push(decodeFeishuActionValue((el.behaviors as { type: string; value?: unknown }[]).find((b) => b.type === "callback")?.value));
       if (Array.isArray(el.elements)) visit(el.elements as Record<string, unknown>[]);
+      if (Array.isArray(el.columns)) visit(el.columns as Record<string, unknown>[]);
     }
   };
   visit(cardJsonOf(cardData).body.elements);
@@ -474,7 +476,7 @@ describe("createFeishuService：唤醒规则", () => {
     expect(userMessages(lin.conversationId).map((m) => m.text)).toEqual(["@ 了"]);
   });
 
-  it("应用没开 im:message.group_msg 时所有群按 mention_only，访客权限卡不给切回 auto", async () => {
+  it("应用没开 im:message.group_msg 时所有群按 mention_only，群设置卡不给切回 auto", async () => {
     fake.granted = [...FEISHU_REQUIRED_SCOPES];
     await connect();
     say(chatOf(lin.pmId), "不 @");
@@ -482,7 +484,7 @@ describe("createFeishuService：唤醒规则", () => {
     expect(userMessages(lin.conversationId)).toHaveLength(0);
     join_(chatOf(lin.pmId));
     await settle();
-    const policy = cardIdsCreated().find((c) => c.data.includes("访客权限"))!;
+    const policy = cardIdsCreated().find((c) => c.data.includes("群设置"))!;
     const values = buttonValues(policy.data);
     expect(values).not.toContainEqual({ kind: "set_policy", pmId: lin.pmId, triggerMode: "auto" });
   });
@@ -512,17 +514,20 @@ describe("createFeishuService：唤醒规则", () => {
 });
 
 describe("createFeishuService：访客权限", () => {
-  it("第一个访客进群时群里发一张访客权限卡；主人点按钮改档位，访客点收到 toast", async () => {
+  it("第一个访客进群时群里发一张群设置卡；主人点按钮改档位，访客点收到 toast、档位不变", async () => {
     await connect();
     const chat = chatOf(lin.pmId);
     join_(chat);
     join_(chat, "ou_guest2", "王五");
     await settle();
-    const policyCards = cardIdsCreated().filter((c) => c.data.includes("访客权限"));
+    const policyCards = cardIdsCreated().filter((c) => c.data.includes("群设置"));
     expect(policyCards).toHaveLength(1);
     const post = store().postOf({ kind: "chat_policy", pmId: lin.pmId })!;
     const toCollab = { fusa: 1, kind: "set_policy", pmId: lin.pmId, guestTier: "collaborator" };
     expect(click(chat, post.messageId, toCollab, GUEST).toast?.content).toBe("只有主人能改设置");
+    await settle();
+    expect(store().chatOfTarget({ kind: "pm", pmId: lin.pmId })!.guestTier).toBe("chat_only");
+    expect(cardIdsCreated().filter((c) => c.data.includes("群设置"))).toHaveLength(1);
     expect(click(chat, post.messageId, toCollab, OWNER).toast?.type).toBe("success");
     await settle();
     expect(store().chatOfTarget({ kind: "pm", pmId: lin.pmId })!.guestTier).toBe("collaborator");
@@ -634,6 +639,180 @@ describe("createFeishuService：访客权限", () => {
     expect(routerCalls).toEqual([]);
     const reply = fake.callsOf("message.create").find((c) => c.receive_id === "oc_stranger");
     expect(JSON.parse(reply!.content).text).toContain("私人助手");
+  });
+});
+
+describe("createFeishuService：群设置卡随叫随到", () => {
+  const policyCards = () => cardIdsCreated().filter((c) => c.data.includes("群设置"));
+  const policyPost = () => store().postOf({ kind: "chat_policy", pmId: lin.pmId });
+  const textsTo = (chatId: string) =>
+    fake.callsOf("message.create").filter((c) => c.receive_id === chatId && c.msg_type === "text").map((c) => (JSON.parse(c.content) as { text: string }).text);
+
+  it("主人发「设置」「权限」「@机器人 设置」：照常进账本交给项目经理，不发群设置卡", async () => {
+    await connect();
+    const chat = chatOf(lin.pmId);
+    say(chat, "设置");
+    say(chat, "权限");
+    await settle();
+    join_(chat);
+    await settle();
+    const before = policyCards().length;
+    say(chat, "设置", { mention: true });
+    await settle();
+    expect(userMessages(lin.conversationId).map((m) => m.text)).toEqual(["设置", "权限", "设置"]);
+    expect(policyCards()).toHaveLength(before);
+  });
+
+  it("主人发 /群设置 或 /policy：群底马上发一张新的群设置卡，不进账本、不交给项目经理", async () => {
+    await connect();
+    const chat = chatOf(lin.pmId);
+    say(chat, "/群设置");
+    await settle();
+    expect(policyCards()).toHaveLength(1);
+    const first = policyPost()!;
+    expect(first.chatId).toBe(chat);
+    say(chat, "/policy", { mention: true });
+    await settle();
+    expect(policyCards()).toHaveLength(2);
+    expect(policyPost()!.messageId).not.toBe(first.messageId);
+    expect(fake.sent.at(-1)!.messageId).toBe(policyPost()!.messageId);
+    expect(userMessages(lin.conversationId)).toHaveLength(0);
+  });
+
+  it("新卡点得动、改完原地刷新；旧卡点了提示去叫新卡，档位不变", async () => {
+    await connect();
+    const chat = chatOf(lin.pmId);
+    say(chat, "/群设置");
+    await settle();
+    const old = policyPost()!;
+    say(chat, "/群设置");
+    await settle();
+    const fresh = policyPost()!;
+    const toObserver = { fusa: 1, kind: "set_policy", pmId: lin.pmId, guestTier: "observer" };
+    const stale = click(chat, old.messageId, toObserver);
+    expect(stale.toast?.type).toBe("warning");
+    expect(stale.toast?.content).toContain("/群设置");
+    await settle();
+    expect(store().chatOfTarget({ kind: "pm", pmId: lin.pmId })!.guestTier).toBe("chat_only");
+    expect(click(chat, fresh.messageId, toObserver).toast?.type).toBe("success");
+    await settle();
+    expect(store().chatOfTarget({ kind: "pm", pmId: lin.pmId })!.guestTier).toBe("observer");
+    const update = fake.callsOf("card.update").findLast((u) => u.card_id === fresh.cardId)!;
+    expect(update.sequence).toBeGreaterThan(fresh.sequence);
+    expect(update.card.data).toContain("✓ 只读");
+  });
+
+  it("每发一张新卡就置顶它，并取消上一张设置卡的置顶", async () => {
+    await connect();
+    const chat = chatOf(lin.pmId);
+    say(chat, "/群设置");
+    await settle();
+    const first = policyPost()!.messageId;
+    expect(fake.callsOf("pin.create")).toEqual([{ message_id: first }]);
+    expect(fake.callsOf("pin.delete")).toEqual([]);
+    say(chat, "/群设置");
+    await settle();
+    const second = policyPost()!.messageId;
+    expect(fake.callsOf("pin.create")).toEqual([{ message_id: first }, { message_id: second }]);
+    expect(fake.callsOf("pin.delete")).toEqual([{ message_id: first }]);
+  });
+
+  it("置顶被飞书拒（缺权限、群里只许群主置顶）：记一行日志，卡照发、照样能用", async () => {
+    const lines: string[] = [];
+    svc = makeService({ log: (line) => lines.push(line) });
+    await connect();
+    const chat = chatOf(lin.pmId);
+    fake.failNext["pin.create"] = { code: 230027, msg: "Lack of necessary permissions." };
+    say(chat, "/群设置");
+    await settle();
+    expect(policyCards()).toHaveLength(1);
+    expect(lines.some((line) => line.includes("置顶") && line.includes("230027"))).toBe(true);
+    expect(svc.setup.status().state).toBe("connected");
+    const post = policyPost()!;
+    expect(click(chat, post.messageId, { fusa: 1, kind: "set_policy", pmId: lin.pmId, guestTier: "collaborator" }).toast?.type).toBe("success");
+    fake.failNext["pin.delete"] = new Error("network down");
+    say(chat, "/群设置");
+    await settle();
+    expect(policyCards()).toHaveLength(2);
+    expect(store().chatOfTarget({ kind: "pm", pmId: lin.pmId })!.guestTier).toBe("collaborator");
+  });
+
+  it("访客发 /群设置：回他只有主人能叫，不发卡、不进账本", async () => {
+    await connect();
+    const chat = chatOf(lin.pmId);
+    join_(chat);
+    await settle();
+    const before = policyCards().length;
+    say(chat, "/群设置", { sender: GUEST, mention: true });
+    say(chat, "/policy", { sender: GUEST });
+    await settle();
+    expect(policyCards()).toHaveLength(before);
+    expect(userMessages(lin.conversationId)).toHaveLength(0);
+    expect(textsTo(chat).filter((t) => t.includes("只有主人"))).toHaveLength(2);
+  });
+
+  it("访客发文件被拒（含前面气泡里的待收文件）：提示之外在群底附一张群设置卡；冷却内不再附，过了冷却再附", async () => {
+    let offset = 0;
+    svc = makeService({ now: () => Date.now() + offset });
+    await connect();
+    const chat = chatOf(lin.pmId);
+    join_(chat);
+    await settle();
+    const joined = policyCards().length;
+    offset += FEISHU_POLICY_CARD_COOLDOWN_MS;
+    say(chat, "看这个", { sender: GUEST, mention: true, files: [{ type: "file", fileKey: "file_g1", fileName: "g.txt" }] });
+    await settle();
+    expect(policyCards()).toHaveLength(joined + 1);
+    expect(fake.sent.at(-1)!.messageId).toBe(policyPost()!.messageId);
+    say(chat, "", { sender: GUEST, files: [{ type: "file", fileKey: "file_g2", fileName: "h.txt" }] });
+    say(chat, "", { sender: GUEST, mention: true });
+    await settle();
+    expect(policyCards()).toHaveLength(joined + 1);
+    expect(textsTo(chat).filter((t) => t.includes("文件不收"))).toHaveLength(2);
+    offset += FEISHU_POLICY_CARD_COOLDOWN_MS;
+    say(chat, "", { sender: GUEST, files: [{ type: "file", fileKey: "file_g3", fileName: "i.txt" }] });
+    say(chat, "", { sender: GUEST, mention: true });
+    await settle();
+    expect(policyCards()).toHaveLength(joined + 2);
+    expect(fake.calls.some((c) => c.method === "downloadResource")).toBe(false);
+  });
+
+  it("访客点拍板、停止权限不够：toast 之外附一张群设置卡，冷却内只附一次；主人发 /群设置 不受冷却限制", async () => {
+    let offset = 0;
+    svc = makeService({ now: () => Date.now() + offset });
+    await connect();
+    const chat = chatOf(lin.pmId);
+    join_(chat);
+    await settle();
+    offset += FEISHU_POLICY_CARD_COOLDOWN_MS;
+    const joined = policyCards().length;
+    const askId = await askInGroupFor(lin);
+    const post = postOfAsk(askId);
+    const choose = { fusa: 1, kind: "choose", card: { kind: "ask", askMessageId: askId }, optionIndex: 0 };
+    expect(click(chat, post.messageId, choose, GUEST).toast?.content).toBe("只有主人能拍板");
+    await settle();
+    expect(policyCards()).toHaveLength(joined + 1);
+    expect(click(chat, post.messageId, { fusa: 1, kind: "stop", conversationId: lin.conversationId }, GUEST).toast?.content).toBe("只有主人能停止");
+    await settle();
+    expect(policyCards()).toHaveLength(joined + 1);
+    expect(askOf(ledger.getMessage(askId)!)?.answered).toBeUndefined();
+    say(chat, "/群设置");
+    await settle();
+    expect(policyCards()).toHaveLength(joined + 2);
+  });
+
+  it("访客点群设置卡被拒：只 toast，不另附新卡", async () => {
+    let offset = 0;
+    svc = makeService({ now: () => Date.now() + offset });
+    await connect();
+    const chat = chatOf(lin.pmId);
+    join_(chat);
+    await settle();
+    offset += FEISHU_POLICY_CARD_COOLDOWN_MS;
+    const joined = policyCards().length;
+    expect(click(chat, policyPost()!.messageId, { fusa: 1, kind: "set_policy", pmId: lin.pmId, guestTier: "collaborator" }, GUEST).toast?.content).toBe("只有主人能改设置");
+    await settle();
+    expect(policyCards()).toHaveLength(joined);
   });
 });
 
