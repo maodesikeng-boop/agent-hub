@@ -176,6 +176,8 @@ export interface FeishuContextWindows {
   peek(chatId: FeishuChatId, now: number): FeishuContextLine[];
   /** 后置：返回这个群未过期、还没交出的文件（按时间先后），不清空。 */
   peekFiles(chatId: FeishuChatId, now: number): FeishuPendingFile[];
+  /** 后置：摘掉这个群里满足条件的待收文件（已下载、已拒收、已回过提示的），背景和别的文件不动。 */
+  dropFiles(chatId: FeishuChatId, shouldDrop: (file: FeishuPendingFile) => boolean): void;
   /** 后置：这一轮已送达，清空这个群的背景和文件。 */
   clear(chatId: FeishuChatId): void;
   clearAll(): void;
@@ -191,7 +193,9 @@ export function createFeishuContextWindows(): FeishuContextWindows {
       const window = windows.get(chatId);
       const lines = [...(window?.lines ?? []), { ...line, text: truncateChars(line.text, FEISHU_CONTEXT_MAX_CHARS) }];
       while (lines.length > FEISHU_CONTEXT_MAX_LINES || (lines.length > 1 && chars(lines) > FEISHU_CONTEXT_MAX_CHARS)) lines.shift();
-      const files = [...(window?.files ?? []), ...added].slice(-FEISHU_CONTEXT_MAX_FILES);
+      const known = window?.files ?? [];
+      const isNew = (item: FeishuPendingFile) => !known.some((k) => k.messageId === item.messageId && k.file.fileKey === item.file.fileKey);
+      const files = [...known, ...added.filter(isNew)].slice(-FEISHU_CONTEXT_MAX_FILES);
       windows.set(chatId, { lines, files });
     },
     peek(chatId, now) {
@@ -199,6 +203,11 @@ export function createFeishuContextWindows(): FeishuContextWindows {
     },
     peekFiles(chatId, now) {
       return (windows.get(chatId)?.files ?? []).filter(fresh(now));
+    },
+    dropFiles(chatId, shouldDrop) {
+      const window = windows.get(chatId);
+      if (window === undefined) return;
+      windows.set(chatId, { lines: window.lines, files: window.files.filter((file) => !shouldDrop(file)) });
     },
     clear(chatId) {
       windows.delete(chatId);

@@ -1799,6 +1799,7 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
         return;
       case "reject":
         await sendText({ chatId: message.chatId }, message.chatType === "p2p" ? route.reason : `<at user_id="${route.openId}"></at> ${route.reason}`);
+        if (route.reason === GUEST_NO_FILES) contexts.dropFiles(message.chatId, (file) => file.speaker === route.openId);
         return;
       case "context":
         contexts.add(message.chatId, route.line, message.files.map((file) => ({ messageId: message.messageId, speaker: message.senderOpenId, file, at: message.at })));
@@ -1812,6 +1813,9 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
           if (saved) attachments.push(saved);
           else missed.push(file.fileName ?? (file.type === "image" ? "图片" : "文件"));
         }
+        // 下载过的、被拒收的待收文件已经处置过，后面提前返回也不能留在近窗里让下一次 @ 再下一遍、再报一遍
+        const handled = new Set(route.files.map(({ messageId }) => messageId));
+        contexts.dropFiles(message.chatId, (file) => handled.has(file.messageId) || (route.droppedFiles > 0 && file.speaker === message.senderOpenId));
         const at = message.chatType === "group" && message.senderOpenId !== o ? `<at user_id="${message.senderOpenId}"></at> ` : "";
         if (missed.length > 0) await sendText({ chatId: message.chatId }, `${at}${missedFilesText(missed)}`);
         if (route.droppedFiles > 0) await sendText({ chatId: message.chatId }, `${at}${GUEST_NO_FILES}`);
