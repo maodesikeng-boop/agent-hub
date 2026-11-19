@@ -8,7 +8,15 @@ import type { AgentSessionRow } from "../../shared/domain.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
 import { projectWorktreesDir } from "../../shared/paths.ts";
 import { normalizePathForComparison } from "../platform/index.ts";
-import { isShareable, localLinksIn, shareFilePaths, shareLinkedFiles, type LocalLink, type ShareScope } from "../sent-files.ts";
+import {
+  createSentFileIoSlots,
+  isShareable,
+  localLinksIn,
+  shareFilePaths,
+  shareLinkedFiles,
+  type LocalLink,
+  type ShareScope,
+} from "../sent-files.ts";
 import type { Db } from "../store/index.ts";
 
 export interface SentFilesOptions {
@@ -25,6 +33,7 @@ export interface SentFilesOptions {
 export type LedgerSentFiles = ReturnType<typeof createLedgerSentFiles>;
 
 export function createLedgerSentFiles(db: Db, opts: SentFilesOptions) {
+  const ioSlots = createSentFileIoSlots();
   /** 会话属于哪个项目：Worker 看 workers 表，项目经理看它进行中的项目；没有项目是 null。 */
   const projectOf = (session: AgentSessionRow): number | null => {
     if (session.workerId !== null) {
@@ -62,6 +71,7 @@ export function createLedgerSentFiles(db: Db, opts: SentFilesOptions) {
       roots: [...folders, ...worktrees, session.cwd, ...session.addDirs, opts.uploadsDir, ...opts.tmpDirs],
       dataHome: opts.dataHome,
       dataExceptions: [opts.uploadsDir, ...worktrees],
+      io: { slots: ioSlots, owner: session.id },
     };
   };
 

@@ -263,6 +263,11 @@ export const MAX_SENT_FILES_TOTAL_BYTES = 200 * 1024 * 1024;
 export const MAX_SENT_FILES_PER_MESSAGE = 10;
 /** 存发出文件副本时一次从文件句柄读多少字节（daemon/sent-files.ts）。 */
 export const SENT_FILE_COPY_CHUNK_BYTES = 1024 * 1024;
+/**
+ * 存副本时同时在读的原文件最多几个（从发起 open 到句柄关掉，含已经取消、底层还没落定的）：满了不再发起新的 open，这个附件记“读不了”，回复照常落库。
+ * 按守护进程算，不按会话；同一会话还有取消了没落定的读取时，这个会话也不再发起新的（daemon/sent-files.ts 的 createSentFileIoSlots）。
+ */
+export const MAX_SENT_FILE_IO_INFLIGHT = 32;
 
 // ---- 交付物（方案、验收结论、截图、录屏，shared/deliverables.ts，docs/deliverables-design.md）----
 

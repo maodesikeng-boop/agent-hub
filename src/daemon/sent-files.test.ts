@@ -29,6 +29,7 @@ import {
 import {
   SENSITIVE_HOME_PATHS,
   copyFromHandle,
+  createSentFileIoSlots,
   isShareable,
   localLinksIn,
   prepareSentFilesDir,
@@ -571,5 +572,20 @@ describe("链接后面带行号", () => {
   it("去掉行号后也不存在：照旧没找到", async () => {
     expect((await link(`${join(proj, "nope.ts")}#L1-L2`))[0]).toMatchObject({ status: "missing", name: "nope.ts#L1-L2", id: null });
     expect((await link(`${join(proj, "nope.ts")}:7`))[0]).toMatchObject({ status: "missing", id: null });
+  });
+});
+
+describe("createSentFileIoSlots：原文件读取的在途槽位", () => {
+  it("总数到上限不再给；会话有取消了没落定的读取时不再给这个会话，别的会话照给；放回后恢复", () => {
+    const slots = createSentFileIoSlots(3);
+    const cancelled = new AbortController();
+    const held = slots.acquire(1, cancelled.signal)!;
+    expect(slots.acquire(1, undefined)).not.toBeNull();
+    cancelled.abort();
+    expect(slots.acquire(1, undefined)).toBeNull();
+    expect(slots.acquire(2, undefined)).not.toBeNull();
+    expect(slots.acquire(3, undefined)).toBeNull();
+    held();
+    expect(slots.acquire(1, undefined)).not.toBeNull();
   });
 });

@@ -22,6 +22,7 @@ import {
   DATA_DIR_READABLE_ENTRIES,
   LOG_PREFIX,
   MAX_SENT_FILE_BYTES,
+  MAX_SENT_FILE_IO_INFLIGHT,
   MAX_SENT_FILES_PER_MESSAGE,
   MAX_SENT_FILES_TOTAL_BYTES,
   SENT_FILE_COPY_CHUNK_BYTES,
@@ -33,6 +34,7 @@ import {
   type MdNode,
   type SentFile,
   type SentFileStatus,
+  type SessionId,
   VENDOR_LIST,
 } from "../shared/index.ts";
 import { resolveUpload, sanitizeFileName } from "./uploads.ts";
@@ -65,6 +67,27 @@ export interface ShareScope {
   /** 数据目录：里面只有 dataExceptions 下面的能分享（state/、ui-token、sent-files/ 都不行），哪怕它落在某个允许的文件夹里。 */
   dataHome: string;
   dataExceptions: string[];
+  /** 底层读取的在途槽位和占槽的会话；不给就不限（只有直接调的测试不给）。 */
+  io?: { slots: SentFileIoSlots; owner: SessionId };
+}
+
+type SentFileIoSlots = ReturnType<typeof createSentFileIoSlots>;
+
+/**
+ * 原文件读取的在途槽位：从发起 open 到句柄关掉才算落定。signal 取消只是不再等，卡在 open 上的读取还占着槽位。
+ * 拿不到槽位（总数到 MAX_SENT_FILE_IO_INFLIGHT，或这个会话还有取消了没落定的）时不发起新的 open：取消的旧读取没落定，同一会话不再累积新的。
+ */
+export function createSentFileIoSlots(max = MAX_SENT_FILE_IO_INFLIGHT) {
+  const inflight = new Set<{ owner: SessionId; signal: AbortSignal | undefined }>();
+  return {
+    acquire(owner: SessionId, signal: AbortSignal | undefined): (() => void) | null {
+      if (inflight.size >= max) return null;
+      for (const slot of inflight) if (slot.owner === owner && slot.signal?.aborted === true) return null;
+      const slot = { owner, signal };
+      inflight.add(slot);
+      return () => inflight.delete(slot);
+    },
+  };
 }
 
 /** 拷了一半的副本先放在这种名字的目录里，拷完改名成编号；守护进程启动时清掉残留的（prepareSentFilesDir）。 */
@@ -240,6 +263,25 @@ async function shareOne(
   }
   if (!isShareable(real, scope, sensitive)) return before.isFile() ? reject("not_allowed") : { status: "skip" };
   if (!before.isFile()) return reject("not_file", before);
+  const release = scope.io === undefined ? () => {} : scope.io.slots.acquire(scope.io.owner, signal);
+  if (release === null) return reject("unreadable", before);
+  try {
+    return await copyOpened(path, real, before, name, budget, scope, signal);
+  } finally {
+    release();
+  }
+}
+
+/** 打开检查过的文件、核对还是它、拷进副本目录。返回时句柄已经关掉。 */
+async function copyOpened(
+  path: string,
+  real: string,
+  before: Stats,
+  name: string,
+  budget: number,
+  scope: ShareScope,
+  signal: AbortSignal | undefined,
+): Promise<Outcome> {
   let handle: FileHandle;
   try {
     handle = await openRegularFileNoFollow(real, { nonBlock: true });
