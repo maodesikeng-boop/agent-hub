@@ -286,8 +286,8 @@ export const RightRailToggle = memo(function RightRailToggle({
       className={cn("relative shrink-0", open && "text-foreground")}
       onClick={onToggle}
     >
-      <Avatar look={look} size={26} neutral />
-      {!open && attention && <span className="absolute top-2 right-2 size-1.5 rounded-full bg-primary" aria-hidden="true" />}
+      <Avatar look={look} size={20} neutral />
+      {!open && attention && <span className="absolute top-1 right-1 size-1.5 rounded-full bg-primary" aria-hidden="true" />}
     </Button>
   );
 });

@@ -50,6 +50,11 @@
   width: round(nearest, 1.375rem, 12px);
   height: round(nearest, 1.375rem, 12px);
 }
+/* 工具格里的图标（18px）：工具格比搜索框小一圈，24px 图标会顶满格子。6px 的整数倍，2 倍屏上每一笔仍是整像素 */
+@utility size-pixel-md {
+  width: round(nearest, 1.03rem, 6px);
+  height: round(nearest, 1.03rem, 6px);
+}
 @utility size-pixel-sm {
   width: round(nearest, 0.6875rem, 12px);
   height: round(nearest, 0.6875rem, 12px);
@@ -362,16 +367,21 @@ input[type="search"]::-webkit-search-cancel-button {
     transition: none;
   }
 }
-/* 工具图标格（ui/button.tsx 的 slot，docs/ui-standard.md 第 6 条）：像星露谷物品栏里的小方格，但克制——1px 边框、暖白底、
-   底下 2px 的内阴影当键帽托底；悬停底色深一点，按下整格沉 1px、托底变 1px。颜色只在这里改 */
+/* 工具格（ui/button.tsx 的 slot，docs/ui-standard.md 第 6 条）：星露谷物品栏的小方格，颜色取自总助嫩芽铃的铃身——麦芽奶油黄底、
+   琥珀色 1px 描边、底下 2px 的内阴影当键帽托底、焦糖棕的字和图标；悬停底色暖一档蜂蜜黄，按下整格沉 1px、托底变 1px。
+   格子里的 text-foreground / text-muted-foreground 换成焦糖棕两档，模型选择长格里的灰字也跟着变暖。颜色只在这里改 */
 :root {
-  --slot-bg: #fbfaf7;
-  --slot-hover: #f3f1ea;
-  --slot-line: #e2dfd6;
-  --slot-shade: #e6e2d8;
+  --slot-bg: #ffefb5;
+  --slot-hover: #ffe48f;
+  --slot-line: #d9a336;
+  --slot-shade: #e8bf55;
+  --slot-ink: #4a2e00;
+  --slot-ink-soft: #6e4a00;
 }
 .tool-slot,
 .tool-badge {
+  --foreground: var(--slot-ink);
+  --muted-foreground: var(--slot-ink-soft);
   border-radius: 4px;
   border: 1px solid var(--slot-line);
   background-color: var(--slot-bg);
