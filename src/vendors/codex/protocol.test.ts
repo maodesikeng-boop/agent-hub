@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { TurnUsage } from "../../daemon/driver/usage.ts";
 import { EMPTY_TOKEN_USAGE } from "../../shared/index.ts";
 import { buildReadonlyPolicy } from "../../shared/readonly-policy.ts";
+import { dataDirReadScope } from "../../shared/write-scope.ts";
 import {
   codexReadonlyConfig,
   decideMcpElicitation,
@@ -136,6 +137,22 @@ describe("codexReadonlyConfig：只读 Worker 的 codex 配置（设计 2.3 / �
     expect(fs["/Users/u/.agent-hub/run/admin.sock"]).toBe("none");
     expect(fs["/Users/u/.agent-hub/run/bin"]).toBeUndefined();
     expect(Object.values(fs).every((v) => v === "none")).toBe(true);
+  });
+
+  it("数据目录和外层沙箱同一套读边界：整个数据目录 none，放行项（含自己的启动目录）和 hub.sock 再放开 read；运行期才建的文件也落在 none 的子树里", () => {
+    const dataDir = "/Users/u/.agent-hub";
+    const dataDirScope = dataDirReadScope({ dataDir, launchDir: `${dataDir}/state/launch/7` });
+    const cfg = codexReadonlyConfig({ ...policy(), dataDirScope, dataDirDenied: [`${dataDir}/state`, `${dataDir}/run/admin.sock`] });
+    const fs = cfg["permissions.hub_readonly.filesystem"] as Record<string, string>;
+    expect(fs[dataDir]).toBe("none");
+    for (const p of [...dataDirScope.readable, ...dataDirScope.connectable]) expect(fs[p], p).toBe("read");
+    expect(fs[`${dataDir}/state/launch/7`]).toBe("read");
+    expect(fs[`${dataDir}/run/hub.sock`]).toBe("read");
+    // 不再逐项列启动时已有的顶层项：数据目录整个 none 已经盖住
+    expect(fs[`${dataDir}/state`]).toBeUndefined();
+    expect(fs[`${dataDir}/run/admin.sock`]).toBeUndefined();
+    expect(fs["/Users/u/.ssh"]).toBe("none");
+    expect(fs["/Users/u/.codex/auth.json"]).toBe("none");
   });
 
   it("连接器补充：approval_mode=approve；排除：disabled_tools；排除整个服务器：enabled=false", () => {

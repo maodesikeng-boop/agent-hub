@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync, type Dirent } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -22,6 +22,7 @@ import {
   WSL_SANITIZED_ENV_VARS,
   bwrapArgs,
   bwrapProbeArgs,
+  dataDirDenyList,
   expandWritableFileGlobs,
   osSandboxAvailable,
   parseWslDrvfsMounts,
@@ -34,6 +35,7 @@ import {
   secretGlobRegex,
   seatbeltProfile,
   spawnInWriteScope,
+  toolLayerReadScope,
   wrapInOsSandbox,
   win32WorkerSandboxArgs,
   wrapInReadonlyOsSandbox,
@@ -47,6 +49,7 @@ import {
 } from "../../shared/limits.ts";
 import {
   buildWin32MxcFilesystemPolicy,
+  isPathInsideOrEqual,
   probeWin32MxcSupport,
   resetVerifiedProtectedRootsForTest,
   resetWin32MxcCacheForTest,
@@ -903,6 +906,118 @@ describe("scanSecretGlobs（只读通配扫描与硬上限 fail-closed）", () =
       ).rejects.toThrow(/耗时超限（超过 200 ms/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("scanSecretGlobs：逐项列目录、列不出的目录", () => {
+  const fakeEntry = (name: string) =>
+    ({ name, isDirectory: () => false, isSymbolicLink: () => false, isFile: () => true }) as unknown as Dirent;
+
+  it("单个超大目录：边列边数，超上限立即停，不先把整个目录读进来", async () => {
+    const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "ah-secret-huge-")));
+    let listed = 0;
+    async function* endless() {
+      for (;;) yield fakeEntry(`f${++listed}`);
+    }
+    try {
+      await expect(scanSecretGlobs([dir], ["**/.env"], { maxEntries: 50, openDir: async () => endless() })).rejects.toThrow(/超出目录项上限（超过 50 项/);
+      expect(listed).toBeLessThanOrEqual(51);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("列目录出了权限以外的错（句柄用光、读盘出错）：抛 spawn_failed 拒绝启动，不当成没有敏感文件", async () => {
+    const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "ah-secret-err-")));
+    try {
+      for (const code of ["EMFILE", "EIO"]) {
+        const openDir = async () => {
+          throw Object.assign(new Error(code), { code });
+        };
+        await expect(scanSecretGlobs([dir], ["**/.env"], { openDir })).rejects.toThrowError(DriverError);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("没有读权限、列不出的目录：整个当敏感目录遮掉", async () => {
+    const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "ah-secret-locked-")));
+    const locked = join(dir, "locked");
+    mkdirSync(locked);
+    writeFileSync(join(locked, ".env"), "A=1");
+    chmodSync(locked, 0o300);
+    try {
+      expect(await scanSecretGlobs([dir], ["**/.env"])).toEqual([locked]);
+    } finally {
+      chmodSync(locked, 0o700);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("dataDirDenyList：列目录失败拒绝启动，已知敏感项不管存不存在都禁读", () => {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ah-deny-")));
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+  const fresh = (name: string) => {
+    const dataDir = join(root, name);
+    mkdirSync(join(dataDir, "worktrees", "1", "2"), { recursive: true });
+    return dataDir;
+  };
+  const workerScope = (dataDir: string) => {
+    const launch = join(dataDir, "state", "launch", "7");
+    return toolLayerReadScope(dataDirReadScope({ dataDir, launchDir: launch }), launch);
+  };
+
+  it("列目录出错（权限不够、句柄用光、读盘出错）：抛 spawn_failed，不当成没东西可禁", () => {
+    const scope = workerScope(fresh("err"));
+    for (const code of ["EACCES", "EPERM", "EMFILE", "EIO"]) {
+      const listDir = () => {
+        throw Object.assign(new Error(code), { code });
+      };
+      expect(() => dataDirDenyList(scope, listDir)).toThrowError(DriverError);
+    }
+  });
+
+  it("启动时还没有的已知敏感项（state/、备份、项目经理目录、副本、admin.sock、遗留的 run/tunnel）也在清单里，运行期才建的照样禁读", () => {
+    const dataDir = fresh("empty");
+    const adminSock = process.platform === "win32" ? [] : [join(dataDir, "run", "admin.sock")];
+    expect(dataDirDenyList(workerScope(dataDir))).toEqual(
+      [join(dataDir, "backups"), join(dataDir, "pm-home"), join(dataDir, "run", "tunnel"), join(dataDir, "sent-files"), join(dataDir, "state"), ...adminSock].sort(),
+    );
+  });
+
+  it("目录在展开时没了（ENOENT）：跳过，已知敏感项照样在清单里", () => {
+    const dataDir = fresh("gone");
+    mkdirSync(join(dataDir, "run", "bin"), { recursive: true });
+    const listDir = (dir: string) => {
+      if (dir === join(dataDir, "run")) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      return readdirSync(dir);
+    };
+    expect(dataDirDenyList(workerScope(dataDir), listDir)).toContain(join(dataDir, "run", "tunnel"));
+  });
+
+  it("总助（cwd 在 state/router-home）：state/ 展开，已知的令牌、密钥、库（含 -wal、-shm）、记忆、日志、启动目录不管存不存在都禁读，router-home 不禁", () => {
+    const dataDir = fresh("router");
+    const routerHome = join(dataDir, "state", "router-home");
+    mkdirSync(routerHome, { recursive: true });
+    const launch = join(dataDir, "state", "launch", "9");
+    const denied = dataDirDenyList(toolLayerReadScope(dataDirReadScope({ dataDir, launchDir: launch, extraReadable: [routerHome] }), launch));
+    for (const rel of ["ui-token", "provider-secrets.json", "feishu-secrets.json", "push-vapid.json", "push-subscriptions.json", "peers.json", "mesh", "hub.sqlite", "hub.sqlite-wal", "hub.sqlite-shm", "pm-memory", "personas", "logs", "launch"]) {
+      expect(denied, rel).toContain(join(dataDir, "state", rel));
+    }
+    expect(denied).not.toContain(join(dataDir, "state"));
+    expect(denied.filter((p) => isPathInsideOrEqual(p, routerHome) || isPathInsideOrEqual(routerHome, p))).toEqual([]);
+  });
+
+  it("放行项（worktrees、uploads、tools、run/bin、hub.sock、自己的启动目录）和它们的上级从不整项禁读", () => {
+    const dataDir = fresh("allowed");
+    const launch = join(dataDir, "state", "launch", "7");
+    const scope = dataDirReadScope({ dataDir, launchDir: launch });
+    const denied = dataDirDenyList(scope);
+    for (const allowed of [...scope.readable, ...scope.connectable]) {
+      expect(denied.filter((p) => isPathInsideOrEqual(p, allowed)), allowed).toEqual([]);
     }
   });
 });
