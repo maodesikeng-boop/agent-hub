@@ -273,8 +273,17 @@ export function renderAskCard(message: Message, ask: AskMeta, state: FeishuCardS
 }
 
 /** 提问卡，正文下面挂附件，再是按钮和说明，最后接 extra（总助单聊里的“打开项目群”）；正文按 fitBody 放。 */
-function askCard(message: Message, ask: AskMeta, state: FeishuCardState, attachments: readonly FeishuAttachmentView[], extra: Record<string, unknown>[]): FeishuCardJson {
-  const { title, template } = askTitle(ask);
+function askCard(
+  message: Message,
+  ask: AskMeta,
+  state: FeishuCardState,
+  attachments: readonly FeishuAttachmentView[],
+  extra: Record<string, unknown>[],
+  pmName?: string,
+): FeishuCardJson {
+  const base = askTitle(ask);
+  const title = pmName !== undefined && pmName.trim() !== "" ? `${base.title} · ${pmName.trim()}` : base.title;
+  const { template } = base;
   const ref = feishuCardRefOf(message, ask);
   const rest = [
     ...attachmentElements(attachments),
@@ -282,6 +291,19 @@ function askCard(message: Message, ask: AskMeta, state: FeishuCardState, attachm
     ...extra,
   ];
   return fitBody(message.text, (body) => card({ title, template, summary: message.text, elements: [markdown(body), ...rest] }));
+}
+
+/** 总助单聊里同步投影的任务图检查点与门禁拍板卡及 user_blocker 提醒卡（含步骤交付物附件与“打开项目群”入口）。 */
+export function renderRouterAskCard(
+  message: Message,
+  ask: AskMeta,
+  state: FeishuCardState,
+  pmChatId: FeishuChatId | null,
+  attachments: readonly FeishuAttachmentView[] = [],
+  pmName?: string,
+): FeishuCardJson {
+  const openChat = pmChatId === null ? [] : [linkButton("打开项目群", feishuChatAppLink(pmChatId))];
+  return askCard(message, ask, state, attachments, openChat, pmName);
 }
 
 /**
@@ -296,12 +318,13 @@ export function renderRouterItem(
   ask: { message: Message; meta: AskMeta } | null,
   state: FeishuCardState,
   pmChatId: FeishuChatId | null,
+  attachments: readonly FeishuAttachmentView[] = [],
 ): FeishuCardJson {
   const openChat = pmChatId === null ? [] : [linkButton("打开项目群", feishuChatAppLink(pmChatId))];
   if (item.kind === "report") {
     return fitBody(item.summary, (body) => card({ title: "简报", template: "turquoise", summary: item.summary, elements: [markdown(body), ...openChat] }));
   }
-  if (ask !== null) return askCard(ask.message, ask.meta, state, [], openChat);
+  if (ask !== null) return askCard(ask.message, ask.meta, state, attachments, openChat);
   const ref: FeishuCardRef = { kind: "router_item", itemId: item.id };
   const text = item.context.trim() === "" ? item.question : `${item.question}\n\n${item.context}`;
   const rest = [...(state.kind === "pending" ? pendingElements(ref, null, item.options, undefined) : settledElements(state)), ...openChat];

@@ -2461,3 +2461,72 @@ describe("0040_feishu_router_settings_post", () => {
     expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 });
+
+describe("0041_feishu_router_asks_and_inbound_cursor", () => {
+  it("从 0040 升级保留已有数据，支持 router_ask/router_file、feishu_router_events.ask_message_id 触发器与 feishu_inbound_cursors，回退 40 重跑幂等", () => {
+    const db = m3Db();
+    migrate(db, migrationsUpTo(40));
+    db.run("INSERT INTO feishu_chats (chat_id, target, pm_id, name, label, created_at, updated_at) VALUES ('oc_router', 'router', NULL, '总助', '总助', 10, 10)");
+    db.run("INSERT INTO feishu_chats (chat_id, target, pm_id, name, label, created_at, updated_at) VALUES ('oc_pm', 'pm', 1, '小林', '小林', 10, 10)");
+    db.run(
+      "INSERT INTO feishu_chats (chat_id, target, pm_id, name, label, archived_at, created_at, updated_at) VALUES ('oc_archived', 'pm', NULL, '旧群', '旧群', 9, 5, 9)",
+    );
+    db.run("INSERT INTO feishu_posts VALUES ('router_settings', 1, 0, 'oc_router', 'om_rs1', 'card_rs1', 0, 'final', NULL, 20)");
+    const cmdId = Number(
+      db.run("INSERT INTO router_commands (client_id, input_text, vendor, status, created_at, updated_at) VALUES ('c1', '进展', 'claude', 'answered', 1, 1)").lastInsertRowid,
+    );
+    expect(db.all("SELECT command_id FROM feishu_router_events")).toEqual([{ command_id: cmdId }]);
+
+    const beforeMigrateMs = Date.now() - 10;
+    expect(migrate(db, migrationsUpTo(41))).toMatchObject({ from: 40, to: 41 });
+    const afterMigrateMs = Date.now() + 10;
+    const seededCursors = db.all<{ chat_id: string; last_inbound_at: number; last_message_id: string | null }>(
+      "SELECT chat_id, last_inbound_at, last_message_id FROM feishu_inbound_cursors ORDER BY chat_id",
+    );
+    expect(seededCursors.map((r) => r.chat_id)).toEqual(["oc_pm", "oc_router"]);
+    for (const row of seededCursors) {
+      expect(row.last_inbound_at).toBeGreaterThanOrEqual(beforeMigrateMs);
+      expect(row.last_inbound_at).toBeLessThanOrEqual(afterMigrateMs);
+      expect(row.last_message_id).toBeNull();
+    }
+
+    db.run("INSERT INTO feishu_posts VALUES ('router_ask', 99, 0, 'oc_router', 'om_ra1', 'card_ra1', 0, 'card_pending', NULL, 30)");
+    db.run("INSERT INTO feishu_posts VALUES ('router_file', 99, 0, 'oc_router', 'om_rf1', NULL, 0, 'final', 'file_k1', 30)");
+    db.run("UPDATE feishu_inbound_cursors SET last_inbound_at = 5000, last_message_id = 'om_in_1', updated_at = 35 WHERE chat_id = 'oc_pm'");
+
+    const gateMsgId = Number(
+      db.run(
+        `INSERT INTO messages (conversation_id, sender, kind, text, meta, dedupe_key, created_at, updated_at)
+         VALUES (1, 'agent', 'text', '请确认', '{"needsUser":true,"gateRef":{"graphId":1,"nodeKey":"s1","checkpoint":true}}', 'ask:g1', 40, 40)`,
+      ).lastInsertRowid,
+    );
+    const blockerMsgId = Number(
+      db.run(
+        `INSERT INTO messages (conversation_id, sender, kind, text, meta, dedupe_key, created_at, updated_at)
+         VALUES (1, 'agent', 'text', '请登录', '{"needsUser":true,"blockerRef":{"blockerId":2}}', 'ask:b2', 41, 41)`,
+      ).lastInsertRowid,
+    );
+    db.run(
+      `INSERT INTO messages (conversation_id, sender, kind, text, meta, dedupe_key, created_at, updated_at)
+       VALUES (1, 'agent', 'text', '普通提问', '{"needsUser":true,"options":["A","B"]}', 'ask:plain', 42, 42)`,
+    );
+    expect(db.all("SELECT command_id, ask_message_id FROM feishu_router_events ORDER BY id")).toEqual([
+      { command_id: cmdId, ask_message_id: null },
+      { command_id: null, ask_message_id: gateMsgId },
+      { command_id: null, ask_message_id: blockerMsgId },
+    ]);
+
+    const postsAfter = db.all("SELECT * FROM feishu_posts ORDER BY ref_kind, ref_id");
+    const eventsAfter = db.all("SELECT * FROM feishu_router_events ORDER BY id");
+    const cursorsAfter = db.all("SELECT * FROM feishu_inbound_cursors ORDER BY chat_id");
+    db.exec("PRAGMA user_version = 40");
+    expect(() => migrate(db, migrationsDir)).not.toThrow();
+    expect(db.all("SELECT * FROM feishu_posts ORDER BY ref_kind, ref_id")).toEqual(postsAfter);
+    expect(db.all("SELECT * FROM feishu_router_events ORDER BY id")).toEqual(eventsAfter);
+    expect(db.all("SELECT * FROM feishu_inbound_cursors ORDER BY chat_id")).toEqual(cursorsAfter);
+
+    db.run("DELETE FROM feishu_chats WHERE chat_id IN ('oc_pm', 'oc_router')");
+    expect(db.all("SELECT * FROM feishu_inbound_cursors")).toEqual([]);
+    expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+});

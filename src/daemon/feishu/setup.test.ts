@@ -216,7 +216,7 @@ describe("FeishuSetupService：设置", () => {
     expect(status.state).toBe("unconfigured");
     expect(fake.callsOf("chat.delete").map((c) => c.chat_id)).toEqual(chatIds);
     expect(existsSync(secretsFile)).toBe(false);
-    for (const table of ["feishu_app", "feishu_chats", "feishu_posts", "feishu_avatars"]) {
+    for (const table of ["feishu_app", "feishu_chats", "feishu_posts", "feishu_avatars", "feishu_inbound_cursors"]) {
       expect(db.get<{ n: number }>(`SELECT count(*) AS n FROM ${table}`)!.n).toBe(0);
     }
   });

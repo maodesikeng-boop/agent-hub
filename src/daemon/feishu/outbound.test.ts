@@ -102,6 +102,33 @@ describe("projectFeishuChange", () => {
     expect(project(change("message.updated", { message: closed }))).toMatchObject([{ kind: "ask_settled" }]);
   });
 
+  it("任务图检查点/门禁卡与 user_blocker 提醒卡同时投影 ask_card 与 router_ask；重查未过更新正文时出 ask_updated", () => {
+    const checkpoint = message({ id: 77, meta: { needsUser: true, options: ["通过", "打回"], gateRef: { graphId: 3, nodeKey: "s1", checkpoint: true } } });
+    expect(project(change("message.created", { message: checkpoint }), true)).toEqual([
+      { kind: "ask_card", conversationId: PM_CONV, message: checkpoint, deliverables: [] },
+      { kind: "router_ask", message: checkpoint },
+    ]);
+    expect(project(change("message.created", { message: checkpoint }), false)).toEqual([
+      { kind: "ask_card", conversationId: PM_CONV, message: checkpoint, deliverables: [] },
+    ]);
+    const routerOnlyCtx: FeishuProjectionContext = {
+      chatOfConversation: () => null,
+      routerChat: () => ({ chatId: "oc_router" as FeishuChatId }) as FeishuChatBinding,
+      pmOfConversation: (id) => (id === PM_CONV ? 1 : null),
+      awaitingUser: () => false,
+    };
+    expect(projectFeishuChange(change("message.created", { message: checkpoint }), routerOnlyCtx)).toEqual([{ kind: "router_ask", message: checkpoint }]);
+
+    const blocker = message({ id: 88, text: "Claude 没登录。", meta: { needsUser: true, blockerRef: { blockerId: 5 } } });
+    expect(project(change("message.created", { message: blocker }), true)).toEqual([
+      { kind: "ask_card", conversationId: PM_CONV, message: blocker, deliverables: [] },
+      { kind: "router_ask", message: blocker },
+    ]);
+    const revised = message({ id: 88, text: "Claude 没登录。\n\n刚查过，还是没登录。", meta: { needsUser: true, blockerRef: { blockerId: 5 } } });
+    expect(project(change("message.updated", { message: revised }), true)).toEqual([
+      { kind: "ask_updated", conversationId: PM_CONV, message: revised },
+    ]);
+  });
   it("网页发的用户消息 → mirror_user；从飞书来的（带 origin）不镜像", () => {
     const web = message({ sender: "user", dedupeKey: `client:${PM_CONV}:abc`, status: "queued" });
     expect(project(change("message.created", { message: web }))).toEqual([{ kind: "mirror_user", conversationId: PM_CONV, message: web }]);

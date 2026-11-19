@@ -33,8 +33,12 @@ export type FeishuOutboundIntent =
   | { kind: "mirror_user"; conversationId: ConversationId; message: Message }
   /** 新的提问卡。 */
   | { kind: "ask_card"; conversationId: ConversationId; message: Message; deliverables: Deliverable[] }
+  /** 提问卡正文还在等用户期间改了（比如 user_blocker 重查未过补了提示）：项目群和总助单聊的待处理卡同步刷新。 */
+  | { kind: "ask_updated"; conversationId: ConversationId; message: Message }
   /** 提问卡的状态变了（回答了、关掉了、替换了）：项目群里那张卡、总助单聊里引用它的那条一起改成定案的样子。 */
   | { kind: "ask_settled"; conversationId: ConversationId; message: Message }
+  /** 不走 router_items 的待用户拍板或待动手卡（任务图检查点与门禁卡、user_blocker 提醒卡）同步推到总助单聊。 */
+  | { kind: "router_ask"; message: Message }
   /** 总助的卡片：新的简报或拍板项，或它的状态变了。 */
   | { kind: "router_item"; item: RouterItem }
   /** 总助指令有了结果：作为新卡片发在总助单聊里；网页发的指令连同原话一起镜像。 */
@@ -84,12 +88,15 @@ export function projectFeishuChange(change: Change, ctx: FeishuProjectionContext
       return [{ kind: "working", conversationId, status: `${activity === "stopping" ? STEP_TEXT.stopping : describeStep(step)}…` }];
     }
     case "message.created":
-      return ctx.chatOfConversation(change.data.message.conversationId) === null ? [] : messageIntents(change.data.message);
+      return createdMessageIntents(change.data.message, ctx);
     case "message.updated": {
       const { message } = change.data;
       const ask = askOf(message);
-      if (ask === null || (ask.answered !== true && ask.closed !== true)) return [];
-      return ctx.chatOfConversation(message.conversationId) === null && ctx.routerChat() === null ? [] : [{ kind: "ask_settled", conversationId: message.conversationId, message }];
+      if (ask === null || (ctx.chatOfConversation(message.conversationId) === null && ctx.routerChat() === null)) return [];
+      if (ask.answered === true || ask.closed === true) {
+        return [{ kind: "ask_settled", conversationId: message.conversationId, message }];
+      }
+      return ask.blockerRef !== undefined ? [{ kind: "ask_updated", conversationId: message.conversationId, message }] : [];
     }
     case "router.item.created":
     case "router.item.updated":
@@ -104,6 +111,18 @@ export function projectFeishuChange(change: Change, ctx: FeishuProjectionContext
 }
 
 const ROUTER_COMMAND_DONE: ReadonlySet<RouterCommandRecord["status"]> = new Set(["answered", "dispatched", "failed"]);
+
+function isRouterSyncedAsk(message: Message): boolean {
+  if (message.workerId !== null || message.kind !== "text" || message.sender !== "agent" || isHandoverTraffic(message)) return false;
+  const ask = askOf(message);
+  return ask !== null && (ask.gateRef !== undefined || ask.blockerRef !== undefined);
+}
+
+function createdMessageIntents(message: Message, ctx: FeishuProjectionContext): FeishuOutboundIntent[] {
+  const pmIntents = ctx.chatOfConversation(message.conversationId) === null ? [] : messageIntents(message);
+  const syncToRouter = ctx.routerChat() !== null && ctx.pmOfConversation(message.conversationId) !== null && isRouterSyncedAsk(message);
+  return syncToRouter ? [...pmIntents, { kind: "router_ask", message }] : pmIntents;
+}
 
 /** 有群的项目经理对话里的一条消息要在群里体现成什么（补发也走它）。 */
 function messageIntents(message: Message): FeishuOutboundIntent[] {
