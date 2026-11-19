@@ -153,6 +153,23 @@ describe("createFeishuContextWindows", () => {
       expect(w.peekFiles(chat(), 0)).toHaveLength(FEISHU_CONTEXT_MAX_FILES);
     });
 
+    it("同一条消息的同一个资源重复推送只记一份", () => {
+      const w = createFeishuContextWindows();
+      w.add(chat(), line("（发了文件）"), [pending(1)]);
+      w.add(chat(), line("（发了文件）"), [pending(1)]);
+      w.add(chat(), line("（发了文件）"), [pending(2)]);
+      expect(w.peekFiles(chat(), 0).map((f) => f.file.fileKey)).toEqual(["img_1", "img_2"]);
+    });
+
+    it("dropFiles 只摘掉满足条件的文件，背景和别的文件不动", () => {
+      const w = createFeishuContextWindows();
+      w.add(chat(1), line("一"), [pending(1), { ...pending(2), speaker: "ou_other" as FeishuOpenId }]);
+      w.dropFiles(chat(1), (f) => f.speaker === OWNER);
+      expect(w.peekFiles(chat(1), 0).map((f) => f.file.fileKey)).toEqual(["img_2"]);
+      expect(w.peek(chat(1), 0)).toHaveLength(1);
+      expect(() => w.dropFiles(chat(9), () => true)).not.toThrow();
+    });
+
     it("超过 FEISHU_CONTEXT_TTL_MS 的文件不返回；peekFiles 不清空，clear、clearAll 一起清掉", () => {
       const w = createFeishuContextWindows();
       w.add(chat(1), line("旧", 0), [pending(1, 0)]);
