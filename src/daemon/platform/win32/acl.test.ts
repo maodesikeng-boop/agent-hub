@@ -1,10 +1,10 @@
 // acl.ts 运行期调 fusa-run.exe：异步执行不卡事件循环，(Worker, 目录) 去重。用假的 fusa-run.exe（shell 脚本）记下每次调用，只在 POSIX 上跑。
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ENV_WIN_HELPERS } from "../../../shared/limits.ts";
-import { allowWin32WorkerWorktreeAcl, ensureWin32ProtectedRootAcl, resetVerifiedProtectedRootsForTest } from "./acl.ts";
+import { allowWin32WorkerReadAcl, allowWin32WorkerWorktreeAcl, ensureWin32ProtectedRootAcl, resetVerifiedProtectedRootsForTest } from "./acl.ts";
 
 let root: string;
 let stateDir: string;
@@ -58,6 +58,7 @@ describe.skipIf(process.platform === "win32")("acl.ts 运行期调 fusa-run.exe"
   it("allow-worker：异步执行、不卡事件循环；同一个 Worker 同一个目录只调一次", async () => {
     fakeHelper();
     const wt = join(root, "worktrees", "1", "7");
+    mkdirSync(wt, { recursive: true });
     const ticks = await ticksDuring(async () => {
       await allowWin32WorkerWorktreeAcl(stateDir, 7, wt, { env });
       await allowWin32WorkerWorktreeAcl(stateDir, "7", wt, { env });
@@ -75,6 +76,54 @@ describe.skipIf(process.platform === "win32")("acl.ts 运行期调 fusa-run.exe"
     await allowWin32WorkerWorktreeAcl(stateDir, "8", wt, { env });
     await allowWin32WorkerWorktreeAcl(stateDir, "7", join(root, "worktrees", "1", "9"), { env });
     expect(invocations()).toHaveLength(4);
+  });
+
+  it("allow-worker：同一路径的目录被删掉重建（ACE 跟着旧目录没了）：再调一次", async () => {
+    fakeHelper({ delay: 0 });
+    const wt = join(root, "worktrees", "1", "7");
+    mkdirSync(wt, { recursive: true });
+    await allowWin32WorkerWorktreeAcl(stateDir, 7, wt, { env });
+    renameSync(wt, `${wt}-old`);
+    mkdirSync(wt);
+    await allowWin32WorkerWorktreeAcl(stateDir, 7, wt, { env });
+    await allowWin32WorkerWorktreeAcl(stateDir, 7, wt, { env });
+    expect(invocations()).toHaveLength(2);
+  });
+
+  it("allow-worker：目录还不存在时不记缓存，建好后照常设", async () => {
+    fakeHelper({ delay: 0 });
+    const wt = join(root, "worktrees", "1", "7");
+    await allowWin32WorkerWorktreeAcl(stateDir, 7, wt, { env });
+    mkdirSync(wt, { recursive: true });
+    await allowWin32WorkerWorktreeAcl(stateDir, 7, wt, { env });
+    expect(invocations()).toHaveLength(2);
+  });
+
+  it("allow-worker / allow-read：SID 表里这个 Worker、会话的 SID 轮换掉了（或整张表重建），再调一次", async () => {
+    fakeHelper({ delay: 0 });
+    const wt = join(root, "worktrees", "1", "7");
+    const launch = join(root, "state", "launch", "42");
+    mkdirSync(wt, { recursive: true });
+    mkdirSync(launch, { recursive: true });
+    const sids = (group: string, worker: string, reader: string) =>
+      writeFileSync(
+        join(stateDir, "win-sandbox-sids.json"),
+        JSON.stringify({ version: 1, worker_group_sid: group, worker_sids: { "7": { sid: worker, seq: 1 }, "read-42": { sid: reader, seq: 2 } } }),
+      );
+    const apply = async () => {
+      await allowWin32WorkerWorktreeAcl(stateDir, 7, wt, { env });
+      await allowWin32WorkerReadAcl(stateDir, launch, { reader: "42", env });
+    };
+    sids("S-1-5-21-1-1-1-1", "S-1-5-21-2-2-2-2", "S-1-5-21-3-3-3-3");
+    await apply();
+    await apply();
+    expect(invocations()).toHaveLength(2);
+    sids("S-1-5-21-1-1-1-1", "S-1-5-21-4-4-4-4", "S-1-5-21-3-3-3-3");
+    await apply();
+    expect(invocations()).toHaveLength(3);
+    sids("S-1-5-21-5-5-5-5", "S-1-5-21-4-4-4-4", "S-1-5-21-3-3-3-3");
+    await apply();
+    expect(invocations()).toHaveLength(5);
   });
 
   it("protect-root：异步执行、不卡事件循环；同一个根只调一次", async () => {
