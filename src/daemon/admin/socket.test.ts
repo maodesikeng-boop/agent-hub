@@ -1,7 +1,9 @@
 // 本机管理 socket run/admin.sock：飞书和账号组网的终端命令经它找守护进程。
 // socket 0600，另外要带界面令牌（state/ui-token，agent 读不到 state/）。
+import { once } from "node:events";
 import { request } from "node:http";
 import { mkdtempSync, statSync } from "node:fs";
+import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -107,5 +109,63 @@ describe("管理 socket", () => {
     expect(await call(sock, "POST", "/admin/shutdown", {})).toEqual({ status: 200, body: { ok: true } });
     await new Promise((r) => setImmediate(r));
     expect(triggered).toBe(true);
+  });
+});
+
+describe("管理 socket 的加固（Windows 给管理管道设 DENY FusaWorker）", () => {
+  const where = () => {
+    const dir = mkdtempSync(join(tmpdir(), "hub-adm-"));
+    return { runDir: join(dir, "run"), socketPath: process.platform === "win32" ? resolveHubPaths({}, dir).adminSock : join(dir, "run", "admin.sock") };
+  };
+
+  it("加固没做完前请求一律 503（令牌对也不服务），做完断开这期间连上的连接，之后照常服务", async () => {
+    let finish!: () => void;
+    let securing!: (socketPath: string) => void;
+    const started = new Promise<string>((resolve) => (securing = resolve));
+    const pending = startAdminSocket({
+      ...where(),
+      authorize: (t) => t === TOKEN,
+      mesh: () => fakeMesh,
+      secure: (socketPath) => {
+        securing(socketPath);
+        return new Promise<void>((resolve) => (finish = resolve));
+      },
+    });
+    const sock = await Promise.race([
+      started,
+      pending.then((running) => {
+        admin = running;
+        throw new Error("没等加固就开始服务了");
+      }),
+    ]);
+    expect(await call(sock, "GET", "/mesh/status")).toEqual({ status: 503, body: { error: expect.any(String) } });
+    const early = createConnection(sock);
+    await once(early, "connect");
+    const earlyClosed = once(early, "close");
+    finish();
+    admin = await pending;
+    await earlyClosed;
+    expect(await call(admin.socketPath, "GET", "/mesh/status")).toEqual({ status: 200, body: { state: "signed_out", lastError: null } });
+  });
+
+  it("加固失败：startAdminSocket 报错并关掉 socket，谁都连不上", async () => {
+    let socketPath = "";
+    const outcome = await startAdminSocket({
+      ...where(),
+      authorize: () => true,
+      secure: async (path) => {
+        socketPath = path;
+        throw new Error("deny-pipe failed");
+      },
+    }).then(
+      (running) => {
+        admin = running;
+        return null;
+      },
+      (error: unknown) => error,
+    );
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toMatch(/deny-pipe failed/);
+    await expect(call(socketPath, "GET", "/mesh/status", undefined)).rejects.toMatchObject({ code: expect.stringMatching(/^(ENOENT|ECONNREFUSED)$/) });
   });
 });

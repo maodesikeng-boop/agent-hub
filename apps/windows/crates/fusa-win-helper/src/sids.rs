@@ -201,6 +201,36 @@ mod tests {
         assert_eq!(loaded.worker_sids.len(), MAX_PERSISTED_WORKER_SIDS);
     }
 
+    /// Each thread opens the store on its own, the same way separate `fusa-run` processes do.
+    #[test]
+    fn concurrent_writers_keep_every_sid_and_one_group() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let threads: Vec<_> = (0..16)
+            .map(|t| {
+                let dir = tmp.path().to_path_buf();
+                std::thread::spawn(move || {
+                    (0..8)
+                        .map(|i| {
+                            let key = format!("w{t}-{i}");
+                            let (group, sid) = ensure_worker_sid(&dir, &key).expect("sid");
+                            (key, group, sid)
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        let issued: Vec<_> = threads
+            .into_iter()
+            .flat_map(|t| t.join().expect("thread"))
+            .collect();
+        let store = load_or_create_sid_store(tmp.path()).expect("load");
+        assert_eq!(store.worker_sids.len(), issued.len());
+        for (key, group, sid) in &issued {
+            assert_eq!(group, &store.worker_group_sid, "group SID of {key}");
+            assert_eq!(&store.worker_sids[key].sid, sid, "SID of {key}");
+        }
+    }
+
     #[test]
     fn reader_sids_are_separate_from_worker_sids() {
         let tmp = tempfile::tempdir().expect("tempdir");
