@@ -1,13 +1,13 @@
 import { describe, it } from "vitest";
 
 describe("RouterAvatar", () => {
-  it.todo("按 size 换成 rem，透明底，aria-hidden，不设 --fruit、--jelly");
-  it.todo("working 时带在干活的动画标记，空闲时没有；减弱动态效果时样式表不播");
+  it.todo("画的是嫩芽铃；按 size 换成 rem，透明底，aria-hidden，不设 --fruit、--jelly");
+  it.todo("working 时带左右摇的动画标记，空闲时没有；减弱动态效果时样式表不播");
   it.todo("左栏宽栏、窄栏、手机列表、Router 顶栏、时间流、空状态都用它，页面里不再出现 KnifeAvatar");
 });
 
 describe("GateMark", () => {
-  it.todo("等你拍板的那一步在果皮轨和放大全览里显示 GateMark，aria-hidden");
+  it.todo("等你拍板的那一步在果皮轨和放大全览里显示小铃 GateMark，aria-hidden");
   it.todo("拍板通过后标记收起，这一步变回普通的果皮轨单行");
 });
 
@@ -48,14 +48,15 @@ describe("聊天里的头像跟跳", () => {
   it.todo("总助在执行时，时间流里执行中那一条的总助头像跟跳");
 });
 
-describe("像素字", () => {
-  it.todo("右栏组标题（Needs You、Task Graph、Pieces、Completed）、果皮轨的 #编号、N done、N next、Waiting on PM、Ready to finish 用 font-pixel");
-  it.todo("在忙的状态词（Working…、Thinking…）用 font-pixel，流光照旧");
-  it.todo("项目经理名字、Router 名字、步骤名、消息正文、按钮里的字、输入框不用 font-pixel");
+describe("任务图的果冻管道", () => {
+  it.todo("果皮轨的轨道、分叉汇合由 tubePaths 画，状态点由 stepBeadPaths 画；轨道槽 <svg> 是 crispEdges，没有 <circle> 和曲线");
+  it.todo("走通的管子用项目经理的描边、身体、浅色三层，没走通的是浅灰空管子");
+  it.todo("放大全览的连线是正交的果冻管道加像素箭头，上游做完是灌满的管子，其余是空管子");
+  it.todo("放大全览的节点卡左上角有步骤号角标：做完是项目经理的 blob、等你拍板是强调色、其余是灰");
 });
 
-describe("像素任务图", () => {
-  it.todo("果皮轨的轨道、分叉汇合、状态点都由 pixel-path 画，轨道槽 <svg> 是 crispEdges，没有 <circle> 和曲线");
-  it.todo("放大全览的连线是正交折线加像素箭头，上游做完是实线，其余是点阵");
-  it.todo("放大全览的节点卡左上角有步骤号角标：做完是项目经理的 blob、等你拍板是强调色、其余是灰");
+describe("输入框", () => {
+  it.todo("外框是 rounded-xl 的方框，聚焦时照旧只多一团光晕");
+  it.todo("左边是 ComposerAdd，右边发送键是圆角方块里的 ComposerSend；输入框里没有像素图标");
+  it.todo("单行、多行两种布局切换时文字区是同一个节点，焦点和光标不丢");
 });

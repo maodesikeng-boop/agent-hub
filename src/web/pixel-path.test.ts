@@ -1,15 +1,8 @@
 import { describe, it } from "vitest";
 
-describe("pixelRailPath", () => {
-  it.todo("solid 是一格宽的竖条，宽高都是 cell 的整数倍");
-  it.todo("dotted 是一格见方的点，点和点之间空一格，最后一个点不越过 y2");
-  it.todo("y1 等于 y2 时返回空字符串");
-});
-
-describe("pixelPolylinePath", () => {
-  it.todo("横竖两段的折线在拐角削成一格台阶，线宽处处是一格");
-  it.todo("输出只有横竖边，没有 C、Q、A 曲线命令，也没有斜线");
-  it.todo("不越过输入折线的外包框");
+describe("tubePaths", () => {
+  it.todo("center 依次连过每个点，只有横竖线段，没有 C、Q、A 曲线命令");
+  it.todo("highlight 是 center 往左上各挪半格：竖段在芯的左半，横段在芯的上半");
   it.todo("相邻两点不横平也不竖直时抛错");
 });
 
@@ -18,13 +11,14 @@ describe("orthogonalRoute", () => {
   it.todo("首尾两点对齐到格子后和输入相同，没有连续重复的点");
 });
 
-describe("pixelArrowPath", () => {
-  it.todo("朝右的箭头尖端落在 tip，高 5 格、宽 3 格，三级台阶");
+describe("pixelArrowPaths", () => {
+  it.todo("朝右的箭头尖端落在 tip，高 9 格、宽 5 格，外圈描边、里面是芯");
   it.todo("朝下的箭头是朝右的转过来");
 });
 
-describe("stepGlyphPath", () => {
-  it.todo("每种状态都画在以 center 为中心的 5×5 格内");
-  it.todo("done、waitingPm 实心，running 空心带芯，pending 空心，doneCoil 三道横杠，nextCoil 竖排三个点");
-  it.todo("同样的输入两次得到同一个字符串");
+describe("stepBeadPaths", () => {
+  it.todo("每种珠子都画在以 center 为中心的 7×7 格内，四角各缺一格");
+  it.todo("done 有高光和暗面，running 中间 3×3 是芯，pending 只有灰描边，waitingPm 是琥珀色");
+  it.todo("doneCoil 两道实心横条，nextCoil 同样形状但空心");
+  it.todo("同样的输入两次得到同样的结果");
 });

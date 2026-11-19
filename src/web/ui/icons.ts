@@ -1,12 +1,12 @@
 import type { ComponentType, SVGProps } from "react";
 
-// 全站唯一的图标出口（docs/slime-cohesion-design.md）：像素图标，组件名沿用原来 lucide-react 的叫法，调用方只改 import 路径。
+// 全站唯一的图标出口（docs/slime-cohesion-design.md）：组件名沿用原来 lucide-react 的叫法，调用方只改 import 路径。
 // 不变量：
-// - 每个图标是 24 格画布、2 格一笔的像素画，渲染成 shape-rendering="crispEdges"、fill="currentColor" 的 <svg>，
-//   没有描边、渐变和位图；颜色跟文字走（docs/ui-standard.md 第 5 条）。
-// - 尺寸只由调用方的 class 给：size-pixel（默认“大”档正好 24px）、size-pixel-sm（正好 12px）；
-//   strokeWidth 这类线条图标的参数传进来不起作用。
-// - 没有 aria-label 时 aria-hidden；换一套图标只改这个文件。
+// - 输入框专用的 ComposerAdd、ComposerSend 是线条图标（输入框里不用像素）；其余都是像素图标：
+//   24 格画布、2 格一笔，渲染成 shape-rendering="crispEdges"、fill="currentColor" 的 <svg>，没有描边、渐变和位图。
+// - 颜色跟文字走（docs/ui-standard.md 第 5 条）；像素图标的尺寸只由调用方的 class 给：size-pixel（默认“大”档正好 24px）、
+//   size-pixel-sm（正好 12px），strokeWidth 这类线条图标的参数传进来不起作用。
+// - 没有 aria-label 时 aria-hidden；换一套图标只改这个文件，别的文件不直接 import 图标库。
 
 export type IconProps = SVGProps<SVGSVGElement>;
 
@@ -16,6 +16,11 @@ export type Icon = ComponentType<IconProps>;
 function notImplemented(): never {
   throw new Error("未实现");
 }
+
+/** 输入框左边“加文件”的线条加号。 */
+export const ComposerAdd: Icon = notImplemented;
+/** 输入框右边发送键里的线条向上箭头。 */
+export const ComposerSend: Icon = notImplemented;
 
 export const AlertCircle: Icon = notImplemented;
 export const ArrowLeft: Icon = notImplemented;

@@ -1,34 +1,39 @@
-// 任务图的像素画法（docs/slime-cohesion-design.md）：右栏果皮轨的轨道和状态点、放大全览的连线和箭头，都画在同一套格子上，
-// 和 12×12 的史莱姆、24 格的像素图标一个画法。
-// 不变量：输入坐标先对齐到 cell 的整数倍；输出是一条 SVG path 的 d，只有横竖边（M/h/v/z 画出的小方块和长条），
-// 没有圆、斜线和贝塞尔；同样的输入每次得到同一个字符串。调用方用 fill 上色，<svg> 上写 shape-rendering="crispEdges"。
+// 任务图的像素画法（docs/slime-cohesion-design.md）：右栏果皮轨和放大全览里，步骤之间用“果冻管道”连，步骤是“果冻珠子”，
+// 和 12×12 的史莱姆一个画法：深色描边、果冻色芯、左上一道高光。走通的管子灌满项目经理的颜色，没走通的是空的浅灰管子。
+// 不变量：输入坐标先对齐到 cell 的整数倍；输出是 SVG path 的 d，只有横竖线段，没有圆、斜线和贝塞尔；
+// 同样的输入每次得到同一个字符串。调用方按层用 fill 或 stroke 上色，<svg> 上写 shape-rendering="crispEdges"。
 
 export interface PixelPoint {
   x: number;
   y: number;
 }
 
-/** solid 是一格宽的实线；dotted 是一格见方的点，点和点之间空一格（点阵轨）。 */
-export type PixelLineStyle = "solid" | "dotted";
+/** filled 是走通了（灌满果冻），empty 是没走通（空管子）。 */
+export type TubeState = "filled" | "empty";
 
-/** 步骤状态的像素小图标（5×5 格）。等你拍板不在这里，用 GateMark。 */
-export type StepGlyph = "done" | "running" | "waitingPm" | "pending" | "doneCoil" | "nextCoil";
+/** 一段管道的两层中线：先用 4 格宽的描边色画 center，再用 2 格宽的芯色画 center，filled 时再用 1 格宽的高光色画 highlight。 */
+export interface TubePaths {
+  center: string;
+  highlight: string;
+}
 
-/**
- * 果皮轨里一段竖直的轨道。
- * 前置：cell > 0，y1 <= y2。
- * 后置：中心线在 x，宽一格，从 y1 到 y2；y1 等于 y2 时返回空字符串。
- */
-export function pixelRailPath(x: number, y1: number, y2: number, style: PixelLineStyle, cell: number): string {
-  throw new Error("未实现");
+/** 步骤珠子（7×7 格）。等你拍板不在这里，用 GateMark。 */
+export type StepBead = "done" | "running" | "waitingPm" | "pending" | "doneCoil" | "nextCoil";
+
+/** 一颗珠子按颜色角色分的几层，空字符串表示这一层没有格子。 */
+export interface BeadPaths {
+  outline: string;
+  fill: string;
+  highlight: string;
+  shade: string;
 }
 
 /**
- * 一条正交折线画成一格宽的像素线：每个拐角削成一格台阶。
+ * 一条正交折线画成管道。
  * 前置：points 至少两个点，相邻两点横平或竖直（不是的先过 orthogonalRoute）。
- * 后置：线从第一个点画到最后一个点，不越过 points 的外包框；dotted 时拐角的台阶格也按点阵的节奏留空。
+ * 后置：center 依次连过 points；highlight 是 center 往左上各挪半格，竖段落在芯的左半、横段落在芯的上半。
  */
-export function pixelPolylinePath(points: readonly PixelPoint[], style: PixelLineStyle, cell: number): string {
+export function tubePaths(points: readonly PixelPoint[], cell: number): TubePaths {
   throw new Error("未实现");
 }
 
@@ -40,16 +45,16 @@ export function orthogonalRoute(points: readonly PixelPoint[], cell: number): re
   throw new Error("未实现");
 }
 
-/** 后置：终点箭头，三级台阶的实心三角，尖端落在 tip，朝 dir 指；高 5 格、宽 3 格（朝下时转过来）。 */
-export function pixelArrowPath(tip: PixelPoint, dir: "right" | "down", cell: number): string {
+/** 后置：管道终点的像素箭头，三级台阶的三角，外圈描边、里面一格芯，尖端落在 tip，朝 dir 指；高 9 格、宽 5 格（朝下时转过来）。 */
+export function pixelArrowPaths(tip: PixelPoint, dir: "right" | "down", cell: number): Pick<BeadPaths, "outline" | "fill"> {
   throw new Error("未实现");
 }
 
 /**
- * 步骤状态图标，中心落在 center（对齐到格子）。
- * 后置：done、waitingPm 是实心的圆角方块；running 是空心方框中间一格；pending 是空心方框；
- * doneCoil 是三道横杠（N done 折叠）；nextCoil 是竖排三个点（N next 折叠）。都在 5×5 格内。
+ * 步骤珠子，中心落在 center（对齐到格子）。
+ * 后置：done 是实心珠子，左上高光、右下暗面；running 是浅色珠子中间 3×3 一块芯；waitingPm 是琥珀色珠子；
+ * pending 是灰描边的空珠子；doneCoil 是两道叠起来的实心横条（N done 折叠），nextCoil 是同样形状的空心横条（N next 折叠）。都在 7×7 格内。
  */
-export function stepGlyphPath(glyph: StepGlyph, center: PixelPoint, cell: number): string {
+export function stepBeadPaths(bead: StepBead, center: PixelPoint, cell: number): BeadPaths {
   throw new Error("未实现");
 }
