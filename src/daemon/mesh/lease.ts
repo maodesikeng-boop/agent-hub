@@ -229,25 +229,27 @@ export function createCenterLease(options: CenterLeaseOptions): CenterLease {
     }),
   ];
   const tick = async () => {
-    if (closed) return;
+    if (closed || probing) return;
     const t = now();
     const shouldProbe =
       options.hasPeerHolder !== undefined &&
       options.relay.state() !== "connected" &&
       (state.kind === "orphan_holder" ||
-        (state.kind === "candidate" &&
+        ((state.kind === "candidate" || state.kind === "holder") &&
           state.relayDownSince !== null &&
           t - state.relayDownSince >= MESH_LEASE_ORPHAN_MS &&
           (options.priority()[0] ?? null) === options.selfId));
-    if (shouldProbe && !probing) {
+    if (shouldProbe) {
       probing = true;
+      let detected = false;
       try {
-        peerHolding = await options.hasPeerHolder!();
+        detected = await options.hasPeerHolder!();
       } catch {
-        peerHolding = false;
+        detected = false;
       } finally {
         probing = false;
       }
+      if (options.relay.state() !== "connected") peerHolding = detected;
     }
     if (!closed) step({ kind: "tick", at: now() });
   };

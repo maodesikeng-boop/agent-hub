@@ -1168,8 +1168,12 @@ export const MESH_APPROVAL_TTL_MS = 10 * 60_000;
 export const MESH_SAS_DIGITS = 6;
 /** 批准仪式里每方随机数的字节数。 */
 export const MESH_SAS_NONCE_BYTES = 32;
-/** 中继控制消息单条最大字节数（JSON 文本帧）。 */
+/** 设备发往中继的单条控制消息最大字节数（JSON 文本帧，严控上行防刷）。 */
 export const RELAY_MAX_CONTROL_FRAME_BYTES = 16 * 1024;
+/** 中继发往设备的单条控制消息最大字节数（容纳满额 20 台最大长度设备名与候选地址的数学上界）。 */
+export const RELAY_MAX_SERVER_FRAME_BYTES = 48 * 1024;
+/** 中继独立下发撤销墓碑时每帧最多携带的条数（单帧上界 < 8 KB，64 条墓碑分批下发）。 */
+export const RELAY_REVOCATIONS_PAGE_SIZE = 16;
 /** signal（设备之间经中继转的小消息，比如批准仪式）的 payload 最大字节数。 */
 export const RELAY_MAX_SIGNAL_BYTES = 4 * 1024;
 /** 数据通道单帧最大字节数（二进制帧）。 */

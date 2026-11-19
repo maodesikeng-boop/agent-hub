@@ -21,6 +21,7 @@ import {
   RELAY_MAX_UNAUTH_CONTROLS_PER_ACCOUNT,
   RELAY_PENDING_DEVICE_TTL_MS,
   RELAY_REMOVED_DEVICES_MAX,
+  RELAY_REVOCATIONS_PAGE_SIZE,
   RELAY_USAGE_SAVE_MS,
 } from "../shared/limits.ts";
 import {
@@ -198,9 +199,12 @@ export function createRelayAccountRoom(options: RelayAccountRoomOptions): RelayA
   };
 
   const deviceViews = (): RelayDeviceView[] =>
-    (record?.devices ?? []).map((d) => ({ id: d.id, name: d.name, platform: d.platform, certPem: d.certPem, fingerprint: d.fingerprint, state: d.state, addedAt: d.addedAt }));
-  const revocationsPayload = (): { revocations?: RelayRevocationEnvelope[] } =>
-    record?.revocations !== undefined && record.revocations.length > 0 ? { revocations: record.revocations } : {};
+    (record?.devices ?? []).map((d) => ({ id: d.id, name: d.name, platform: d.platform, fingerprint: d.fingerprint, state: d.state, addedAt: d.addedAt }));
+  const sendRevocations = (conn: ControlConn, list: readonly RelayRevocationEnvelope[]) => {
+    for (let i = 0; i < list.length; i += RELAY_REVOCATIONS_PAGE_SIZE) {
+      send(conn, { type: "revocations", revocations: list.slice(i, i + RELAY_REVOCATIONS_PAGE_SIZE) });
+    }
+  };
   const presenceFor = (viewer: DeviceId): RelayPresenceView[] =>
     (record?.devices ?? []).map((d) => {
       const conn = controls.get(d.id);
@@ -209,8 +213,7 @@ export function createRelayAccountRoom(options: RelayAccountRoomOptions): RelayA
     });
   const broadcastDevices = () => {
     const devices = deviceViews();
-    const extra = revocationsPayload();
-    for (const conn of controls.values()) send(conn, { type: "devices", devices, priority: record?.priority ?? [], ...extra });
+    for (const conn of controls.values()) send(conn, { type: "devices", devices, priority: record?.priority ?? [] });
   };
   const broadcastPresence = () => {
     for (const [id, conn] of controls) send(conn, { type: "presence", presence: presenceFor(id) });
@@ -335,6 +338,9 @@ export function createRelayAccountRoom(options: RelayAccountRoomOptions): RelayA
       }
     }
     broadcastDevices();
+    if (revocation !== undefined) {
+      for (const conn of controls.values()) sendRevocations(conn, [revocation]);
+    }
     broadcastPresence();
     await arbitrateAll();
   };
@@ -357,8 +363,8 @@ export function createRelayAccountRoom(options: RelayAccountRoomOptions): RelayA
       devices: deviceViews(),
       priority: record?.priority ?? [],
       presence: presenceFor(device.id),
-      ...revocationsPayload(),
     });
+    if (record?.revocations !== undefined && record.revocations.length > 0) sendRevocations(conn, record.revocations);
     if (device.state === "active") for (const name of MESH_LEASE_NAMES) send(conn, leaseFrame(name));
     broadcastPresence();
   };
@@ -552,11 +558,11 @@ export function createRelayAccountRoom(options: RelayAccountRoomOptions): RelayA
         }
       } else {
         if (unauthenticated.size >= RELAY_MAX_UNAUTH_CONTROLS_PER_ACCOUNT) {
-          const oldest = unauthenticated.values().next().value;
-          if (oldest !== undefined) fail(oldest, "rate_limited");
+          fail(conn, "rate_limited");
+        } else {
+          unauthenticated.add(conn);
+          if (restored === undefined) send(conn, { type: "challenge", nonce: conn.nonce });
         }
-        unauthenticated.add(conn);
-        if (restored === undefined) send(conn, { type: "challenge", nonce: conn.nonce });
       }
       const handle: RelayControlHandle = {
         receive(text) {
@@ -728,7 +734,7 @@ function normalizeRecord(stored: RelayAccountRecord): RelayAccountRecord {
   return {
     ...stored,
     removed: stored.removed ?? [],
-    revocations: stored.revocations ?? [],
+    revocations: (stored.revocations ?? []).slice(-MESH_TRUST_TOMBSTONES_MAX),
     leaseEpochs: stored.leaseEpochs ?? {},
     usage: stored.usage ?? { day: "", bytes: 0 },
   };

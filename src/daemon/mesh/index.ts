@@ -65,6 +65,8 @@ export interface MeshOptions {
   onConnection: (connection: MeshConnection) => void;
   /** 本机报给中继的局域网候选地址（测试换成回环）。不给按本机网卡（localCandidates）。 */
   candidates?: (port: number) => MeshCandidate[];
+  /** 仅本机单测与 e2e 打开：允许向 127.0.0.0/8 与 ::1 发起直连。生产默认关闭。 */
+  allowLoopback?: boolean;
   /** 测试换：假 GitHub 的地址、轮询之间等多久。 */
   github?: { webOrigin?: string; apiOrigin?: string; sleep?: (ms: number, signal: AbortSignal) => Promise<void> };
   fetch?: typeof fetch;
@@ -80,6 +82,11 @@ export interface CenterLeaseHooks {
   disconnect: () => Promise<void>;
 }
 
+export interface MeshLogoutResult {
+  /** 连不上中继且未送达任何在线设备时为 true，需在其他设备上手动移除本机。 */
+  remoteRevokePending: boolean;
+}
+
 export interface Mesh {
   readonly selfId: DeviceId;
   readonly trust: MeshTrust;
@@ -88,7 +95,7 @@ export interface Mesh {
   status(): AccountStatusView;
   startLogin(input?: { relayUrl?: string; githubClientId?: string }): Promise<AccountStatusView>;
   cancelLogin(): void;
-  logout(): Promise<void>;
+  logout(): Promise<MeshLogoutResult>;
   /** 本机用户在“等批准”那一条上点“核对”：开始批准仪式（本机当批准方）。requestId 是那台的设备编号。 */
   beginApproval(requestId: string): Promise<AccountStatusView>;
   /** 本机用户点“一致”或“不一致”。requestId 是对方的设备编号（批准方和新设备都一样）。 */
@@ -114,8 +121,9 @@ export interface Mesh {
   close(): Promise<void>;
 }
 
-const RELAY_EVENTS: Array<keyof RelayClientEvents> = ["devices", "presence", "self", "lease", "leaseYield", "signal", "incoming", "removed", "state"];
+const RELAY_EVENTS: Array<keyof RelayClientEvents> = ["devices", "revocations", "presence", "self", "lease", "leaseYield", "signal", "incoming", "removed", "state"];
 const PLATFORM_PATTERN = /^[a-z0-9]{1,32}$/;
+const LOGOUT_REMOTE_REMOVE_HINT = "已在本机退出；因未连上中继且无在线设备，请在其他设备上手动移除本机";
 
 /** 登录、退出时换底下的中继客户端；拨号、组网入口、租约一直认这一个。 */
 function createSwitchableRelay(): RelayClient & { attach(client: RelayClient): void; detach(): Promise<void> } {
@@ -200,13 +208,22 @@ export async function createMesh(options: MeshOptions): Promise<Mesh> {
   /** 别的设备连进来的连接：对方被移出信任表、证书变了时当场断开。 */
   const inbound = new Map<TLSSocket, { id: DeviceId; fingerprint: string }>();
   let removedReason: string | null = null;
+  let remoteRevokePending = false;
   let listener: MeshListener | null = null;
   let session: { client: RelayClient; account: AccountFile } | null = null;
   let sessionChange: Promise<void> = Promise.resolve();
   let closed = false;
 
   const currentCandidates = () => (listener === null ? [] : candidatesFor(listener.port));
-  const dialer = createMeshDialer({ identity, trust, relay, candidatesOf: (id) => presence.get(id)?.candidates ?? [], now, log });
+  const dialer = createMeshDialer({
+    identity,
+    trust,
+    relay,
+    candidatesOf: (id) => presence.get(id)?.candidates ?? [],
+    ...(options.allowLoopback ? { allowLoopback: true } : {}),
+    now,
+    log,
+  });
 
   const signedIn = () => {
     const state = account.state();
@@ -245,10 +262,15 @@ export async function createMesh(options: MeshOptions): Promise<Mesh> {
       });
     }
   };
-  const deliverStatements = async (statements: SignedTrustStatement[], timeoutMs: number) => {
-    const peers = trust.list().slice(1).filter((peer) => isOnline(peer.id));
-    if (peers.length === 0) return;
-    await Promise.allSettled(
+  const deliverStatements = async (statements: SignedTrustStatement[], timeoutMs: number): Promise<number> => {
+    const relayOffline = relay.state() !== "connected";
+    const peers = trust
+      .list()
+      .slice(1)
+      .filter((peer) => isOnline(peer.id) || (relayOffline && (presence.get(peer.id)?.candidates.length ?? 0) > 0));
+    if (peers.length === 0) return 0;
+    if (relayOffline) dialer.networkChanged();
+    const results = await Promise.allSettled(
       peers.map(async (peer) => {
         const res = await request(peer.id, API_PATHS.peerTrust, {
           method: "POST",
@@ -259,6 +281,7 @@ export async function createMesh(options: MeshOptions): Promise<Mesh> {
         if (res.status !== 204) throw new Error(`HTTP ${res.status}`);
       }),
     );
+    return results.filter((r) => r.status === "fulfilled").length;
   };
 
   // ---- 信任表对齐 ----
@@ -387,7 +410,7 @@ export async function createMesh(options: MeshOptions): Promise<Mesh> {
   expiryTimer.unref?.();
 
   // ---- 中继推来的 ----
-  relay.on("devices", (devices, nextPriority, revocations) => {
+  relay.on("devices", (devices, nextPriority) => {
     relayDevices = devices;
     priority = nextPriority;
     const knownIds = new Set(devices.map((d) => d.id));
@@ -403,10 +426,13 @@ export async function createMesh(options: MeshOptions): Promise<Mesh> {
         ceremonies.delete(peer);
       }
     }
-    applyRelayRevocations(revocations);
     refreshLeases();
     syncAttempts = 0;
     scheduleTrustSync();
+    changed();
+  });
+  relay.on("revocations", (revocations) => {
+    applyRelayRevocations(revocations);
     changed();
   });
   relay.on("presence", (list) => {
@@ -533,6 +559,7 @@ export async function createMesh(options: MeshOptions): Promise<Mesh> {
   const handleRemoved = async (reason: string) => {
     if (signedIn() === null) return;
     removedReason = reason;
+    remoteRevokePending = false;
     log(reason);
     trust.clear();
     await account.logout();
@@ -565,7 +592,13 @@ export async function createMesh(options: MeshOptions): Promise<Mesh> {
   });
   const status = (): AccountStatusView => {
     const state = account.state();
-    if (state.kind === "signed_out") return { state: "signed_out", lastError: account.lastError() ?? removedReason };
+    if (state.kind === "signed_out") {
+      return {
+        state: "signed_out",
+        lastError: account.lastError() ?? removedReason,
+        ...(remoteRevokePending ? { remoteRevokePending: true } : {}),
+      };
+    }
     if (state.kind === "signing_in") return { state: "signing_in", userCode: state.userCode, verificationUri: state.verificationUri, expiresAt: state.expiresAt };
     const relayState = relay.state();
     if (state.account.state === "pending") {
@@ -627,13 +660,15 @@ export async function createMesh(options: MeshOptions): Promise<Mesh> {
     status,
     async startLogin(input) {
       removedReason = null;
+      remoteRevokePending = false;
       await account.startLogin(input);
       return status();
     },
     cancelLogin: () => account.cancelLogin(),
     async logout() {
       const current = signedIn();
-      if (current === null) return;
+      if (current === null) return { remoteRevokePending: false };
+      let pendingRemoteRevoke = false;
       if (current.state === "active") {
         const revokeAt = Math.max(
           now(),
@@ -644,14 +679,19 @@ export async function createMesh(options: MeshOptions): Promise<Mesh> {
           { kind: "revoke", device: selfId, fingerprint: identity.fingerprint, by: selfId, at: revokeAt },
           identity,
         );
-        await deliverStatements([selfRevoke], MESH_LOGOUT_REVOKE_TIMEOUT_MS);
-        relay.send({ type: "device.remove", id: selfId, revocation: selfRevoke as RelayRevocationEnvelope });
+        const delivered = await deliverStatements([selfRevoke], MESH_LOGOUT_REVOKE_TIMEOUT_MS);
+        const sentToRelay = relay.send({ type: "device.remove", id: selfId, revocation: selfRevoke as RelayRevocationEnvelope });
+        pendingRemoteRevoke = signedIn() !== null && !sentToRelay && delivered === 0;
       }
       removedReason = null;
+      remoteRevokePending = false;
       trust.clear();
       await account.logout();
       await sessionChange;
-      removedReason = null;
+      removedReason = pendingRemoteRevoke ? LOGOUT_REMOTE_REMOVE_HINT : null;
+      remoteRevokePending = pendingRemoteRevoke;
+      if (pendingRemoteRevoke) changed();
+      return { remoteRevokePending: pendingRemoteRevoke };
     },
     async beginApproval(requestId) {
       const peer = relayDevices.find((d) => d.id === requestId && d.state === "pending");

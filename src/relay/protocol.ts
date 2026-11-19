@@ -9,9 +9,10 @@ import { isDeviceId, type DeviceId } from "../shared/api.ts";
 import {
   MESH_CANDIDATES_MAX,
   MESH_MAX_DEVICES_PER_ACCOUNT,
-  MESH_TRUST_TOMBSTONES_MAX,
   RELAY_MAX_CONTROL_FRAME_BYTES,
+  RELAY_MAX_SERVER_FRAME_BYTES,
   RELAY_MAX_SIGNAL_BYTES,
+  RELAY_REVOCATIONS_PAGE_SIZE,
 } from "../shared/limits.ts";
 import {
   ACCOUNT_PROVIDERS,
@@ -74,7 +75,6 @@ export interface RelayDeviceView {
   id: DeviceId;
   name: string;
   platform: string;
-  certPem: string;
   fingerprint: DeviceFingerprint;
   state: MeshDeviceState;
   addedAt: number;
@@ -138,9 +138,9 @@ export type RelayServerFrame =
       devices: RelayDeviceView[];
       priority: DeviceId[];
       presence: RelayPresenceView[];
-      revocations?: RelayRevocationEnvelope[];
     }
-  | { type: "devices"; devices: RelayDeviceView[]; priority: DeviceId[]; revocations?: RelayRevocationEnvelope[] }
+  | { type: "devices"; devices: RelayDeviceView[]; priority: DeviceId[] }
+  | { type: "revocations"; revocations: RelayRevocationEnvelope[] }
   | { type: "presence"; presence: RelayPresenceView[] }
   | { type: "lease"; name: MeshLeaseName; grant: MeshLeaseGrant | null }
   | { type: "lease.yield"; name: MeshLeaseName; epoch: number }
@@ -164,6 +164,8 @@ const MAX_SIGNATURE_CHARS = 256;
 
 const encoder = new TextEncoder();
 const byteLength = (text: string) => encoder.encode(text).length;
+const UNSAFE_INLINE_TEXT = /[\u0000-\u001f\u007f-\u009f]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
+const isSafeInlineText = (value: string) => !UNSAFE_INLINE_TEXT.test(value);
 
 /** host 是 IPv4 或 IPv6 字面量（链路本地可以带 %网卡名），不收域名。 */
 export function isIpLiteral(host: string): boolean {
@@ -203,7 +205,7 @@ const revocationEnvelopeSchema = z.strictObject({
   }),
   signature: signatureSchema,
 });
-const revocationsSchema = z.array(revocationEnvelopeSchema).max(MESH_TRUST_TOMBSTONES_MAX);
+const revocationsPageSchema = z.array(revocationEnvelopeSchema).min(1).max(RELAY_REVOCATIONS_PAGE_SIZE);
 const prioritySchema = z
   .array(deviceIdSchema)
   .max(MESH_MAX_DEVICES_PER_ACCOUNT)
@@ -222,9 +224,8 @@ const errorCodeSchema = z.enum([
 ]);
 const deviceViewSchema = z.strictObject({
   id: deviceIdSchema,
-  name: z.string().min(1).max(MAX_NAME_CHARS),
-  platform: z.string().min(1).max(MAX_PLATFORM_CHARS),
-  certPem: z.string().max(MAX_CERT_PEM_CHARS),
+  name: z.string().min(1).max(MAX_NAME_CHARS).refine(isSafeInlineText),
+  platform: z.string().min(1).max(MAX_PLATFORM_CHARS).refine(isSafeInlineText),
   fingerprint: fingerprintSchema,
   state: deviceStateSchema,
   addedAt: timestampSchema,
@@ -259,9 +260,9 @@ const serverFrameSchema = z.discriminatedUnion("type", [
     devices: devicesSchema,
     priority: prioritySchema,
     presence: z.array(presenceViewSchema).max(MESH_MAX_DEVICES_PER_ACCOUNT),
-    revocations: revocationsSchema.optional(),
   }),
-  z.strictObject({ type: z.literal("devices"), devices: devicesSchema, priority: prioritySchema, revocations: revocationsSchema.optional() }),
+  z.strictObject({ type: z.literal("devices"), devices: devicesSchema, priority: prioritySchema }),
+  z.strictObject({ type: z.literal("revocations"), revocations: revocationsPageSchema }),
   z.strictObject({ type: z.literal("presence"), presence: z.array(presenceViewSchema).max(MESH_MAX_DEVICES_PER_ACCOUNT) }),
   z.strictObject({
     type: z.literal("lease"),
@@ -282,16 +283,16 @@ const registerRequestSchema = z.strictObject({
   token: z.string().min(1).max(512),
   device: z.strictObject({
     id: deviceIdSchema,
-    name: z.string().min(1).max(MAX_NAME_CHARS),
-    platform: z.string().min(1).max(MAX_PLATFORM_CHARS),
+    name: z.string().min(1).max(MAX_NAME_CHARS).refine(isSafeInlineText),
+    platform: z.string().min(1).max(MAX_PLATFORM_CHARS).refine(isSafeInlineText),
     certPem: z.string().max(MAX_CERT_PEM_CHARS),
     publicKey: z.string().max(MAX_SIGNATURE_CHARS).regex(BASE64URL_PATTERN),
   }),
   signature: signatureSchema,
 });
 
-function parseJsonFrame<T>(text: string, schema: z.ZodType<T>): T | null {
-  if (text.length > RELAY_MAX_CONTROL_FRAME_BYTES || byteLength(text) > RELAY_MAX_CONTROL_FRAME_BYTES) return null;
+function parseJsonFrame<T>(text: string, schema: z.ZodType<T>, maxBytes: number): T | null {
+  if (text.length > maxBytes || byteLength(text) > maxBytes) return null;
   let value: unknown;
   try {
     value = JSON.parse(text);
@@ -304,7 +305,7 @@ function parseJsonFrame<T>(text: string, schema: z.ZodType<T>): T | null {
 
 /** 后置：形状、字段类型、长度都合规回帧，否则 null（超过 RELAY_MAX_CONTROL_FRAME_BYTES、未知 type、多余字段都算不合规）。 */
 export function parseRelayClientFrame(text: string): RelayClientFrame | null {
-  return parseJsonFrame(text, clientFrameSchema) as RelayClientFrame | null;
+  return parseJsonFrame(text, clientFrameSchema, RELAY_MAX_CONTROL_FRAME_BYTES) as RelayClientFrame | null;
 }
 
 const rawPresenceFrameSchema = z.strictObject({
@@ -314,7 +315,7 @@ const rawPresenceFrameSchema = z.strictObject({
 
 /** 后置：对 presence 帧逐条过滤候选地址，丢弃单条不合规候选、保留合规项；非 presence 帧或顶层结构不合规回 null。 */
 export function parseLenientPresenceFrame(text: string): Extract<RelayClientFrame, { type: "presence" }> | null {
-  const raw = parseJsonFrame(text, rawPresenceFrameSchema);
+  const raw = parseJsonFrame(text, rawPresenceFrameSchema, RELAY_MAX_CONTROL_FRAME_BYTES);
   if (raw === null) return null;
   const candidates: MeshCandidate[] = [];
   for (const item of raw.candidates) {
@@ -324,9 +325,9 @@ export function parseLenientPresenceFrame(text: string): Extract<RelayClientFram
   return { type: "presence", candidates };
 }
 
-/** 后置：同 parseRelayClientFrame，方向相反。 */
+/** 后置：同 parseRelayClientFrame，方向相反，上限按 RELAY_MAX_SERVER_FRAME_BYTES。 */
 export function parseRelayServerFrame(text: string): RelayServerFrame | null {
-  return parseJsonFrame(text, serverFrameSchema) as RelayServerFrame | null;
+  return parseJsonFrame(text, serverFrameSchema, RELAY_MAX_SERVER_FRAME_BYTES) as RelayServerFrame | null;
 }
 
 /** 后置：POST /v1/register 的请求体合规回它，否则 null。 */
@@ -335,10 +336,34 @@ export function parseRelayRegisterRequest(value: unknown): RelayRegisterRequest 
   return parsed.success ? (parsed.data as RelayRegisterRequest) : null;
 }
 
-/** 后置：parse 能原样读回；结果不超过 RELAY_MAX_CONTROL_FRAME_BYTES，超了抛 RangeError。 */
+function isServerFrame(frame: RelayClientFrame | RelayServerFrame): frame is RelayServerFrame {
+  switch (frame.type) {
+    case "challenge":
+    case "welcome":
+    case "devices":
+    case "revocations":
+    case "lease":
+    case "lease.yield":
+    case "incoming":
+    case "dial.connected":
+    case "dial.failed":
+    case "removed":
+    case "error":
+      return true;
+    case "presence":
+      return "presence" in frame;
+    case "signal":
+      return "from" in frame;
+    default:
+      return false;
+  }
+}
+
+/** 后置：parse 能原样读回；客户端帧限 RELAY_MAX_CONTROL_FRAME_BYTES，服务端帧限 RELAY_MAX_SERVER_FRAME_BYTES，超了抛 RangeError。 */
 export function encodeRelayFrame(frame: RelayClientFrame | RelayServerFrame): string {
   const text = JSON.stringify(frame);
-  if (byteLength(text) > RELAY_MAX_CONTROL_FRAME_BYTES) throw new RangeError(`中继控制帧超过 ${RELAY_MAX_CONTROL_FRAME_BYTES} 字节`);
+  const limit = isServerFrame(frame) ? RELAY_MAX_SERVER_FRAME_BYTES : RELAY_MAX_CONTROL_FRAME_BYTES;
+  if (byteLength(text) > limit) throw new RangeError(`中继控制帧超过 ${limit} 字节`);
   return text;
 }
 

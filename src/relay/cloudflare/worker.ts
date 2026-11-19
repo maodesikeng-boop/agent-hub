@@ -354,9 +354,17 @@ export class RelayAccountObject {
     const server = pair[1] as unknown as CfWebSocket;
 
     if (route.kind === "control") {
+      let closedOnOpen = false;
+      const socketWrapper = wrapSocket(server);
       this.state.acceptWebSocket(server, ["control", ipTag]);
-      const handle = room.openControl(wrapSocket(server));
-      this.controls.set(server, handle);
+      const handle = room.openControl({
+        send: (data) => socketWrapper.send(data),
+        close: (code, reason) => {
+          closedOnOpen = true;
+          socketWrapper.close(code, reason);
+        },
+      });
+      if (!closedOnOpen) this.controls.set(server, handle);
       this.syncAttachments();
       await room.sweep();
       return new Response(null, { status: 101, webSocket: client });
@@ -395,9 +403,14 @@ export class RelayAccountObject {
         wrapSocket(ws).close(WS_CLOSE_POLICY, "bad_frame");
         return;
       }
-      await control.receive(message);
-      await this.room?.sweep();
-      this.syncAttachments();
+      try {
+        await control.receive(message);
+        await this.room?.sweep();
+        this.syncAttachments();
+      } catch {
+        this.controls.delete(ws);
+        wrapSocket(ws).close(1011, "internal_error");
+      }
       return;
     }
     const channel = this.channels.get(ws);
@@ -417,9 +430,11 @@ export class RelayAccountObject {
     const control = this.controls.get(ws);
     if (control !== undefined) {
       this.controls.delete(ws);
-      await control.closed();
-      await this.room?.sweep();
-      this.syncAttachments();
+      try {
+        await control.closed();
+        await this.room?.sweep();
+        this.syncAttachments();
+      } catch {}
       return;
     }
     const channel = this.channels.get(ws);

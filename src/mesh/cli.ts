@@ -201,8 +201,11 @@ async function dispatch(io: MeshCliIo): Promise<number> {
     case "logout": {
       const { positionals } = parse(rest);
       if (positionals.length > 0) throw new UsageError("logout 不收参数");
-      await io.admin("POST", "/mesh/logout", {});
+      const next = (await io.admin("POST", "/mesh/logout", {})) as AccountStatusView | undefined;
       io.stdout.write("已退出账号\n");
+      if (next?.state === "signed_out" && next.remoteRevokePending && next.lastError) {
+        io.stdout.write(`${next.lastError}\n`);
+      }
       return 0;
     }
     default:

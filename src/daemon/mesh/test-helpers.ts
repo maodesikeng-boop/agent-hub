@@ -178,6 +178,7 @@ export async function startTestMeshNode(
     listenPort: 0,
     listenHost: "127.0.0.1",
     candidates: options.lan === false ? () => [] : (port) => [{ host: "127.0.0.1", port }],
+    allowLoopback: true,
     onConnection: (connection) => {
       peerOf.set(connection.socket, connection.peer.id);
       http.emit("connection", connection.socket);

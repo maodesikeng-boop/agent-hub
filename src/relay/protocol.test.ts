@@ -40,11 +40,15 @@ const serverFrames: RelayServerFrame[] = [
     accountId: ACCOUNT,
     self: "active",
     session: TOKEN,
-    devices: [{ id: DEV_A, name: "Mac", platform: "darwin", certPem: "-----BEGIN CERTIFICATE-----", fingerprint: FP, state: "active", addedAt: 1 }],
+    devices: [{ id: DEV_A, name: "Mac", platform: "darwin", fingerprint: FP, state: "active", addedAt: 1 }],
     priority: [DEV_A],
     presence: [{ id: DEV_A, online: true, candidates: [{ host: "10.0.0.2", port: 4320 }], lastSeenAt: null }],
   },
   { type: "devices", devices: [], priority: [] },
+  {
+    type: "revocations",
+    revocations: [{ statement: { kind: "revoke", device: DEV_B, fingerprint: FP, by: DEV_A, at: 1 }, signature: "c2lnbmF0dXJl" }],
+  },
   { type: "presence", presence: [] },
   { type: "lease", name: "feishu", grant: { name: "feishu", holder: DEV_A, epoch: 1, ttlMs: 15_000 } },
   { type: "lease", name: "feishu", grant: null },
@@ -85,6 +89,8 @@ describe("parseRelayClientFrame / parseRelayServerFrame / encodeRelayFrame", () 
   it("超过 RELAY_MAX_CONTROL_FRAME_BYTES 的文本回 null，encode 超长抛 RangeError", () => {
     const padded = `{"type":"lease.claim","name":"feishu"}${" ".repeat(RELAY_MAX_CONTROL_FRAME_BYTES)}`;
     expect(parseRelayClientFrame(padded)).toBeNull();
+    const hugeClient = { type: "signal", to: DEV_B, payload: "x".repeat(RELAY_MAX_CONTROL_FRAME_BYTES) } as RelayClientFrame;
+    expect(() => encodeRelayFrame(hugeClient)).toThrow(RangeError);
     const huge = { type: "signal", from: DEV_A, payload: "汉".repeat(RELAY_MAX_CONTROL_FRAME_BYTES) } as RelayServerFrame;
     expect(() => encodeRelayFrame(huge)).toThrow(RangeError);
   });

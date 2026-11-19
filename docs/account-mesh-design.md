@@ -209,7 +209,7 @@
 #### 连法：局域网直连优先，中继兜底
 
 - 每台守护进程多听一个 TCP 端口（`MESH_LISTEN_PORT`，默认 4320，IPv4 和 IPv6 的所有地址），只说 TLS 1.3，要求对方出示证书，ALPN 是 `fusa-mesh/1`。握手后查对方指纹在不在信任表里，不在就断。这个端口暴露在局域网里是安全的，没有可信证书什么也做不了（同 Syncthing 的 22000 端口）。
-- 每台连上中继后报自己的局域网候选地址：`os.networkInterfaces()` 里的私有 IPv4、ULA 和链路本地 IPv6，加上端口，最多 8 个。每 30 秒比一次，变了再报。中继只转给同账号的设备。
+- 每台连上中继后报自己的局域网候选地址：`os.networkInterfaces()` 里的私有 IPv4 和 ULA IPv6，加上端口，最多 8 个（不报跨机作用域不互通的 `fe80::` 链路本地地址，拨号端生产默认禁连回环地址）。每 30 秒比一次，变了再报。中继只转给同账号的设备。
 - 拨号 `dial(设备)`：先对候选地址并发做 TCP + TLS，直连先跑 250 毫秒；没成就同时经中继拨，谁先握手成功用谁，另一条关掉。直连失败的设备 60 秒内不再试直连。
 - 经中继拨号：A 在控制连接上发 `dial { to: N, channel }`，channel 是 A 生成的 128 位随机数；中继给 N 推 `incoming { from: A, channel }`；A、N 各开一条 WebSocket 连 `/v1/accounts/<账号>/channels/<channel>`；中继把两条配成一对，之后收到的二进制帧原样转给对面（单帧最多 64 KB）。A 在这条字节流上当 TLS 客户端，N 当 TLS 服务端，和直连一样。
 - TLS 里面跑 HTTP/1.1。守护进程把握手成功的连接交给一个专给组网用的 `http.Server`（照 `listenSide` 的写法，`src/daemon/ui-server/server.ts:2098`），请求记成 `meshEntry` 入口并带上对方设备编号，再交给同一个 Fastify。现有的 `/api/*`、WebSocket、`/api/peer/*` 原样可用。
@@ -303,7 +303,7 @@
 | `MESH_LEASE_ORPHAN_MS` | 60 秒 | 中继真挂了才降级，网络抖一下不降级 |
 | `MESH_APPROVAL_TTL_MS` | 10 分钟 | 同现在的邀请码 |
 | `MESH_SAS_DIGITS` / `MESH_SAS_NONCE_BYTES` | 6 / 32 | 中继凑中的概率百万分之一；随机数 256 位，猜不到 |
-| `RELAY_MAX_CONTROL_FRAME_BYTES` / `RELAY_MAX_SIGNAL_BYTES` | 16 KB / 4 KB | 设备表 20 台约 20 × 700 字节（证书）；批准消息几百字节 |
+| `RELAY_MAX_CONTROL_FRAME_BYTES` / `RELAY_MAX_SERVER_FRAME_BYTES` / `RELAY_MAX_SIGNAL_BYTES` | 16 KB / 48 KB / 4 KB | 客户端上行严限 16 KB；服务端下行 48 KB 容纳 20 台设备摘要与在线候选，64 条撤销墓碑按每帧最多 16 条独立下发 |
 | `RELAY_MAX_DATA_FRAME_BYTES` | 64 KB | 一个 TLS 记录最大 16 KB，攒几个再发；远低于 32 MiB 上限 |
 | `RELAY_CONTROL_FRAMES_PER_SECOND` | 20 | 正常每秒不到 1 条 |
 | `RELAY_MAX_CHANNELS_PER_DEVICE` | 32 | 浏览器看 3 台 × 每台约 6 条 keep-alive + WebSocket，留余量 |

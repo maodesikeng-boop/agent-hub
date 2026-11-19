@@ -249,7 +249,10 @@ describe("createMesh", () => {
   });
 
   it("中心第一顺位连不上中继时，先经局域网探在线设备：有持有者时不降级双活，无持有者时才降级接管", async () => {
-    let clock = 1_700_000_000_000;
+    let sharedOffset = 0;
+    let orphanOffset = 0;
+    const sharedNow = () => Date.now() + sharedOffset;
+    const aNow = () => sharedNow() + orphanOffset;
     let relayPort = 0;
     const aSockets = new Set<Socket>();
     const allSockets = new Set<Socket>();
@@ -285,18 +288,22 @@ describe("createMesh", () => {
     proxy.listen(0, "127.0.0.1");
     await once(proxy, "listening");
     const proxyUrl = `http://127.0.0.1:${(proxy.address() as { port: number }).port}`;
-    const relay = await startTestRelay({ now: () => clock, publicOrigin: proxyUrl });
+    const relay = await startTestRelay({ now: sharedNow, publicOrigin: proxyUrl });
     relayPort = Number(new URL(relay.url).port);
 
     try {
-      const a = await startTestMeshNode(relay, DEVICE_A, { relayUrl: proxyUrl, now: () => clock });
+      const a = await startTestMeshNode(relay, DEVICE_A, { relayUrl: proxyUrl, now: aNow });
       await loginNode(a);
       tagAsA = false;
-      const b = await startTestMeshNode(relay, DEVICE_B, { relayUrl: proxyUrl, now: () => clock });
+      const b = await startTestMeshNode(relay, DEVICE_B, { relayUrl: proxyUrl, now: sharedNow });
       await loginNode(b);
       await approveNode(a, b);
       await a.mesh.setCenterPriority([DEVICE_A, DEVICE_B]);
-      await waitFor(() => signedIn(b).centerPriority.join() === [DEVICE_A, DEVICE_B].join());
+      await waitFor(
+        () =>
+          signedIn(b).centerPriority.join() === [DEVICE_A, DEVICE_B].join() &&
+          signedIn(a).devices.find((d) => d.id === DEVICE_B)?.online === true,
+      );
       await (await a.mesh.request(DEVICE_B, "/warm")).text();
 
       const aLease = a.mesh.lease("feishu", { eligible: () => true, connect: () => {}, disconnect: async () => {} });
@@ -306,17 +313,21 @@ describe("createMesh", () => {
       blockRelayForA = true;
       for (const s of aSockets) s.destroy();
       await waitFor(() => signedIn(a).relay === "unreachable");
-      clock += MESH_LEASE_TTL_MS + 1_000;
+      sharedOffset += MESH_LEASE_TTL_MS + 1_000;
       await waitFor(() => bLease.holding() && !aLease.holding());
 
-      clock += MESH_LEASE_ORPHAN_MS + MESH_LEASE_RENEW_MS;
-      await new Promise((r) => setTimeout(r, MESH_LEASE_RENEW_MS + 300));
+      const leaseProbesBefore = b.requests.filter((r) => r.path === API_PATHS.peerLease).length;
+      orphanOffset += MESH_LEASE_ORPHAN_MS + MESH_LEASE_RENEW_MS;
+      await waitFor(
+        () => b.requests.filter((r) => r.path === API_PATHS.peerLease).length > leaseProbesBefore,
+        MESH_LEASE_RENEW_MS + 3_000,
+      );
+      await new Promise((r) => setTimeout(r, 100));
       expect(bLease.holding()).toBe(true);
       expect(aLease.holding()).toBe(false);
 
       await b.close();
-      clock += MESH_LEASE_RENEW_MS;
-      await waitFor(() => aLease.holding(), MESH_LEASE_RENEW_MS + 2_000);
+      await waitFor(() => aLease.holding(), MESH_LEASE_RENEW_MS + 3_000);
     } finally {
       for (const s of allSockets) s.destroy();
       await new Promise<void>((resolve) => proxy.close(() => resolve()));

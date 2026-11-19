@@ -305,10 +305,7 @@ describe("startNodeRelay", () => {
       await c1.close();
 
       const seenRevoked = new Set<string>();
-      c2.on("devices", (_d, _p, revs) => {
-        for (const r of revs ?? []) seenRevoked.add(r.statement.device);
-      });
-      (c2 as unknown as { on(ev: string, fn: (revs: RelayRevocationEnvelope[]) => void): () => void }).on("revocations", (revs) => {
+      c2.on("revocations", (revs) => {
         for (const r of revs) seenRevoked.add(r.statement.device);
       });
       c2.start();

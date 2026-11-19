@@ -134,4 +134,24 @@ describe("AccountSettings", () => {
     expect(within(order).getByText("2. Win")).toBeInTheDocument();
     expect(within(order).getByText("Hosting the Feishu bot now")).toBeInTheDocument();
   });
+
+  it("离线退出账号且未送达其他设备时，退出后展示手动移除提示", async () => {
+    const api = withAccount(
+      signedIn({
+        relay: "unreachable",
+        devices: [{ id: MAC, name: "Mac", platform: "darwin", fingerprint: FP, self: true, online: true, link: "local", lastSeenAt: null }],
+      }),
+    );
+    api.accountLogout = () => ({
+      status: 200,
+      body: {
+        state: "signed_out",
+        lastError: "已在本机退出；因未连上中继且无在线设备，请在其他设备上手动移除本机",
+        remoteRevokePending: true,
+      } satisfies AccountStatusView,
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Sign out" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("请在其他设备上手动移除本机");
+    expect(api.callsTo("POST", /^\/api\/account\/logout$/)).toHaveLength(1);
+  });
 });

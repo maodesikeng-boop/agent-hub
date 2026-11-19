@@ -68,6 +68,9 @@ describe("localCandidates", () => {
     for (const ok of ["10.0.0.1", "172.16.0.1", "172.31.255.254", "192.168.1.20", "fd00::1", "fe80::1%12", "fe80::1%en0"]) {
       expect(isAllowedDirectHost(ok), ok).toBe(true);
     }
+    for (const loopback of ["127.0.0.1", "127.0.0.2", "::1", "0:0:0:0:0:0:0:1"]) {
+      expect(isAllowedDirectHost(loopback, { allowLoopback: true }), loopback).toBe(true);
+    }
     for (const bad of [
       "127.0.0.1",
       "127.0.0.2",
@@ -136,6 +139,7 @@ async function mesh(names: DeviceId[], options: { trustAll?: boolean; serveHttp?
       trust,
       relay: relayClient,
       candidatesOf: (id) => node.candidates ?? [{ host: "127.0.0.1", port: nodes.find((n) => n.identity.deviceId === id)?.listener.port ?? 1 }],
+      allowLoopback: true,
       log: () => {},
     });
     cleanups.push(async () => {

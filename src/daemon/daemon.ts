@@ -160,7 +160,7 @@ export interface DaemonOptions {
   /** 自动换新会话的门槛、空闲多久、写交接最多多久（默认见 limits.ts）；只给冒烟测试改小。 */
   autoRenew?: LedgerOptions["autoRenew"];
   /** 账号组网的测试钩子：假中继、假 GitHub、只听回环、回环当局域网候选。正式入口不传（中继网址和 Client ID 按环境变量和 limits.ts）。 */
-  mesh?: Partial<Pick<MeshOptions, "relayUrl" | "githubClientId" | "listenPort" | "listenHost" | "candidates" | "github" | "fetch">>;
+  mesh?: Partial<Pick<MeshOptions, "relayUrl" | "githubClientId" | "listenPort" | "listenHost" | "candidates" | "allowLoopback" | "github" | "fetch">>;
   /** 飞书的测试钩子：多机端到端测试换成连父进程假飞书的传输层和扫码。正式入口不传。 */
   feishu?: Pick<FeishuServiceOptions, "createTransport" | "register">;
   /**
@@ -796,6 +796,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       listenPort: meshOptions.listenPort ?? (port === 0 ? 0 : MESH_LISTEN_PORT),
       ...(meshOptions.listenHost !== undefined ? { listenHost: meshOptions.listenHost } : {}),
       ...(meshOptions.candidates ? { candidates: meshOptions.candidates } : {}),
+      ...(meshOptions.allowLoopback ? { allowLoopback: true } : {}),
       ...(meshOptions.github ? { github: meshOptions.github } : {}),
       ...(meshOptions.fetch ? { fetch: meshOptions.fetch } : {}),
       onConnection: (connection) => {

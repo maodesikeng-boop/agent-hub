@@ -13,6 +13,7 @@ import {
   MESH_RELAY_PING_MS,
   MESH_RELAY_STABLE_MS,
   RELAY_MAX_DATA_FRAME_BYTES,
+  RELAY_MAX_SERVER_FRAME_BYTES,
 } from "../../shared/limits.ts";
 import { parseAccountId, type AccountId, type MeshCandidate, type MeshDeviceState, type MeshLeaseGrant, type MeshLeaseName, type RelayConnectionState } from "../../shared/mesh.ts";
 import {
@@ -90,7 +91,8 @@ const REGISTER_ERRORS: Record<string, string> = {
 
 export interface RelayClientEvents {
   /** welcome 时带着全部，之后每次设备表或中心顺序变化。 */
-  devices: (devices: RelayDeviceView[], priority: DeviceId[], revocations?: RelayRevocationEnvelope[]) => void;
+  devices: (devices: RelayDeviceView[], priority: DeviceId[]) => void;
+  revocations: (revocations: RelayRevocationEnvelope[]) => void;
   presence: (presence: RelayPresenceView[]) => void;
   self: (state: MeshDeviceState) => void;
   lease: (name: MeshLeaseName, grant: MeshLeaseGrant | null) => void;
@@ -312,7 +314,11 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
 
   const connect = () => {
     if (stopped) return;
-    const ws = new WebSocket(wsOrigin(options.relayUrl) + RELAY_PATHS.control(options.accountId), { perMessageDeflate: false, handshakeTimeout: MESH_DIAL_TIMEOUT_MS });
+    const ws = new WebSocket(wsOrigin(options.relayUrl) + RELAY_PATHS.control(options.accountId), {
+      perMessageDeflate: false,
+      handshakeTimeout: MESH_DIAL_TIMEOUT_MS,
+      maxPayload: RELAY_MAX_SERVER_FRAME_BYTES,
+    });
     socket = ws;
     let alive = true;
     ws.on("pong", () => {
@@ -353,16 +359,19 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
           }, MESH_RELAY_PING_MS);
           pingTimer.unref?.();
           emit("self", frame.self);
-          emit("devices", frame.devices, frame.priority, frame.revocations);
+          emit("devices", frame.devices, frame.priority);
           emit("presence", frame.presence);
           reportCandidates(true);
           return;
         case "devices": {
-          emit("devices", frame.devices, frame.priority, frame.revocations);
+          emit("devices", frame.devices, frame.priority);
           const self = frame.devices.find((d) => d.id === options.identity.deviceId);
           if (self !== undefined) emit("self", self.state);
           return;
         }
+        case "revocations":
+          emit("revocations", frame.revocations);
+          return;
         case "presence":
           emit("presence", frame.presence);
           return;

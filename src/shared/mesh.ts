@@ -75,7 +75,7 @@ export type RelayConnectionState = "connecting" | "connected" | "unreachable";
 /** GET /api/account。 */
 export type AccountStatusView =
   /** lastError：最近一次登录失败或被移出账号的原因（给人看的）。 */
-  | { state: "signed_out"; lastError: string | null }
+  | { state: "signed_out"; lastError: string | null; remoteRevokePending?: true }
   | { state: "signing_in"; userCode: string; verificationUri: string; expiresAt: number }
   | { state: "awaiting_approval"; login: AccountLogin; relay: RelayConnectionState; approval: MeshApprovalView | null }
   | {

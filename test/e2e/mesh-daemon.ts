@@ -25,6 +25,7 @@ await runDaemonProcess({
     listenPort: 0,
     listenHost: "127.0.0.1",
     candidates: process.env.FUSA_TEST_LAN === "0" ? () => [] : (port) => [{ host: "127.0.0.1", port }],
+    allowLoopback: true,
     ...(github !== undefined ? { github: { webOrigin: github, apiOrigin: github } } : {}),
   },
   ...(feishuOrigin !== undefined ? { feishu: createRemoteFakeFeishuHooks(feishuOrigin, readDeviceId) } : {}),

@@ -73,6 +73,7 @@ export async function startTestDevice(opts: TestDeviceOptions): Promise<TestDevi
       listenPort: 0,
       listenHost: "127.0.0.1",
       candidates: opts.lan === false ? () => [] : (p) => [{ host: "127.0.0.1", port: p }],
+      allowLoopback: true,
       onConnection: (connection) => server.acceptMeshConnection(connection),
       github: { webOrigin: FAKE_GITHUB, apiOrigin: FAKE_GITHUB, sleep: async () => {} },
       fetch: fakeGithubDeviceFlow("tok_alice"),

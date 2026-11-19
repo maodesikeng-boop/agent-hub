@@ -22,8 +22,8 @@ const ZONE_ID_PATTERN = /^[A-Za-z0-9_.-]{1,32}$/;
 
 /**
  * 本机的局域网候选地址。
- * 后置：只收私有 IPv4（10/8、172.16/12、192.168/16）、IPv6 ULA（fc00::/7）和链路本地（fe80::/10，优先数字 scopeid，否则合法 ASCII 网卡名）；
- * 跳过回环、内部网卡、公网地址；去重后最多 MESH_CANDIDATES_MAX 个，IPv4 在前；同样的输入顺序稳定。
+ * 后置：只收私有 IPv4（10/8、172.16/12、192.168/16）和 IPv6 ULA（fc00::/7）；
+ * 跳过链路本地 fe80::/10（跨机作用域对端无法拨通）、回环、内部网卡、公网地址；去重后最多 MESH_CANDIDATES_MAX 个，IPv4 在前；同样的输入顺序稳定。
  */
 export function localCandidates(interfaces: NodeJS.Dict<NetworkInterfaceInfo[]>, port: number): MeshCandidate[] {
   const v4: MeshCandidate[] = [];
@@ -36,21 +36,15 @@ export function localCandidates(interfaces: NodeJS.Dict<NetworkInterfaceInfo[]>,
         if (!seen.has(info.address)) v4.push({ host: info.address, port });
         seen.add(info.address);
       } else if (info.family === "IPv6") {
-        const lower = info.address.toLowerCase();
-        const host = isLinkLocalIpv6(lower) ? linkLocalHost(lower, info.scopeid, name) : isUlaIpv6(lower) ? lower : null;
-        if (host !== null && !seen.has(host)) v6.push({ host, port });
-        if (host !== null) seen.add(host);
+        const lower = info.address.split("%", 1)[0]!.toLowerCase();
+        if (isUlaIpv6(lower) && isIP(lower) === 6 && !seen.has(lower)) {
+          v6.push({ host: lower, port });
+          seen.add(lower);
+        }
       }
     }
   }
   return [...v4, ...v6].slice(0, MESH_CANDIDATES_MAX);
-}
-
-function linkLocalHost(address: string, scopeid: number | undefined, name: string): string | null {
-  const bare = address.split("%", 1)[0]!;
-  if (typeof scopeid === "number" && Number.isInteger(scopeid) && scopeid > 0) return `${bare}%${scopeid}`;
-  if (ZONE_ID_PATTERN.test(name)) return `${bare}%${name}`;
-  return null;
 }
 
 function isPrivateIpv4(address: string): boolean {
@@ -64,19 +58,20 @@ const isUlaIpv6 = (address: string) => /^f[cd][0-9a-f]{2}:/.test(address);
 const isLinkLocalIpv6 = (address: string) => /^fe[89ab][0-9a-f]:/.test(address);
 const isLoopbackIpv6 = (address: string) => address === "::1" || /^(?:0+:){7}0*1$/.test(address);
 
-/** 直连候选白名单：只允许 RFC1918 私网 IPv4、127/8 回环、IPv6 回环、ULA（fc00::/7）与链路本地（fe80::/10），拒绝公网与云元数据网段。 */
-export function isAllowedDirectHost(host: string): boolean {
+/** 直连候选白名单：生产默认仅允许 RFC1918 私网 IPv4、ULA（fc00::/7）与合法链路本地（fe80::/10），禁连 127/8、::1、公网与云元数据网段；仅测试显式传 allowLoopback 时放行回环。 */
+export function isAllowedDirectHost(host: string, options?: { allowLoopback?: boolean }): boolean {
+  const allowLoopback = options?.allowLoopback === true;
   const parts = host.split("%");
   if (parts.length > 2) return false;
   const bare = parts[0]!.toLowerCase();
   const zone = parts[1];
   if (zone !== undefined && !ZONE_ID_PATTERN.test(zone)) return false;
   const family = isIP(bare);
-  if (family === 4) return zone === undefined && (isPrivateIpv4(bare) || isLoopbackIpv4(bare));
+  if (family === 4) return zone === undefined && (isPrivateIpv4(bare) || (allowLoopback && isLoopbackIpv4(bare)));
   if (family === 6) {
     if (bare.startsWith("::ffff:")) return false;
     if (zone !== undefined) return isLinkLocalIpv6(bare);
-    return isLoopbackIpv6(bare) || isUlaIpv6(bare) || isLinkLocalIpv6(bare);
+    return (allowLoopback && isLoopbackIpv6(bare)) || isUlaIpv6(bare) || isLinkLocalIpv6(bare);
   }
   return false;
 }
@@ -94,6 +89,8 @@ export interface MeshDialerOptions {
   relay: RelayClient;
   /** 中继最近推来的这台设备的候选地址。 */
   candidatesOf: (deviceId: DeviceId) => MeshCandidate[];
+  /** 仅本机单测与 e2e 打开：允许直连 127.0.0.0/8 与 ::1。生产默认关闭。 */
+  allowLoopback?: boolean;
   now?: () => number;
   log: (line: string) => void;
 }
@@ -172,7 +169,9 @@ export function createMeshDialer(options: MeshDialerOptions): MeshDialer {
     const failedAt = directFailedAt.get(deviceId);
     const tryDirect = failedAt === undefined || now() - failedAt >= MESH_DIRECT_RETRY_MS;
     const candidates = tryDirect
-      ? options.candidatesOf(deviceId).filter((c) => Number.isInteger(c.port) && c.port >= 1 && c.port <= 65535 && isAllowedDirectHost(c.host))
+      ? options
+          .candidatesOf(deviceId)
+          .filter((c) => Number.isInteger(c.port) && c.port >= 1 && c.port <= 65535 && isAllowedDirectHost(c.host, { allowLoopback: options.allowLoopback }))
       : [];
 
     return new Promise<MeshConnection>((resolve, reject) => {
