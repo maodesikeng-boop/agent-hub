@@ -199,6 +199,7 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
   - **看得出来**：光晕加光标就是信号，键盘聚焦（Tab 进来）同样有；柠檬、青柠这类浅色水果的强调色本来就是深一档（白底对比度 ≥ 4.5:1），光晕在白底上也看得见，草莓、西柚是淡淡的粉晕，不会像校验报错的红边。
   - **过渡**：`box-shadow` 180ms `ease-out`（`--motion-focus`），`prefers-reduced-motion: reduce` 时直接切换。只动阴影，不触发排版。
 - **聊天输入框的单行 / 多行**：空或只有一行字时，加文件的“+”键、文字区、发送键（或停止键）在**同一行**，垂直居中，整条高 48px（标准档；36px 按钮 + 上下 5px + 1px 边框，随界面大小缩放）；文字超过一行（有换行符或自动换行）或有待发文件时，文字区占满上一行，加文件的“+”键（左）和发送键（右）落到文字区**下面一行**（文件小条在最上面）。两种布局是同一个网格里的同一个文字区节点（只换网格位置），切换时不重建、光标和焦点不丢；高度判断在 `Composer.tsx` 调高度的 `useLayoutEffect` 里做（只读一次 `scrollHeight`，布尔值变了才重渲染），多行退回单行时用 canvas 量文字宽度、放得进加文件的“+”键和发送键中间才退回（`composer-layout.ts`），避免来回切。
+- **待发文件条与消息附件卡片**：输入框里的待发文件条（`rounded-full bg-muted py-1 pr-1 pl-3 text-minor`）左边 16px 线条图标，视频（`.mp4`、`.mov`、`.m4v`、`.webm`，按扩展名认）用 `ComposerVideo`，别的用 `ComposerFile`；然后文件名、大小、`×`。消息里的附件卡片（`FileCard`）左边 40px 方块（`size-10 rounded-xl`）：图片是缩略图；视频取第一帧（`preload="metadata"`、静音、地址带 `?inline=1#t=0.1`，黑底 `object-cover`），正中盖一个 20px 圆形深色半透明底的 `Play`（12px），不自动播；别的是文件图标。点卡片打开预览窗，视频用原生播放器（`controls`、`preload="metadata"`、`playsInline`）。
 - **聊天输入框发送键**：36px、10px 圆角，图标是线条向上箭头。没有内容时是中性灰、不可点（`disabled`）；输入文字或添加待发文件后变为当前项目经理的强调色（水果色）且可点；在“从空变有内容”的那一下做一次 150ms 的轻微放大回弹（`composer-send-bounce`，`@keyframes` 在 `styles.css`），打字过程中不重复播；系统开启 `prefers-reduced-motion: reduce` 时不播放。
 - 按钮、列表项、单选行、开关这类点的东西：键盘聚焦时显示 `focus-visible:ring-2 focus-visible:ring-ring/50`（单选行在框里，用 `ring-inset`）。只在键盘聚焦（`focus-visible`）时出现，鼠标点不出圈。
 - 不合规的输入：`aria-invalid` 时红边框（组件自带），原因写在那一行下面。

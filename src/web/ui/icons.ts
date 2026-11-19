@@ -95,6 +95,7 @@ export const ComposerAdd = line("ComposerAdd", "M12 5v14M5 12h14");
 export const ComposerSend = line("ComposerSend", "M12 19V5m-6 6 6-6 6 6", 2.25);
 export const ComposerStop = line("ComposerStop", "M5 5h14v14H5z", 2, "currentColor");
 export const ComposerFile = line("ComposerFile", "M6 3h8l4 4v14H6zM14 3v5h4M9 12h6m-6 4h6");
+export const ComposerVideo = line("ComposerVideo", "M3 6h12v12H3zM15 10l6-3v10l-6-3");
 export const ComposerRemove = line("ComposerRemove", "m6 6 12 12M18 6 6 18", 2);
 export const ComposerBot = line("ComposerBot", "M12 3v4M5 7h14v12H5zM2 12v3m20-3v3M9 12v1m6-1v1");
 

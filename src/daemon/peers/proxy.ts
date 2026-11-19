@@ -184,8 +184,11 @@ export async function proxyHttp(req: FastifyRequest, reply: FastifyReply, target
   if (hasBody && length !== undefined) headers["content-length"] = length;
 
   // 等响应头有时限（对方睡着了 TCP 不回）；响应头到了就不再限时（大文件下载）。浏览器中途断了也停掉上游。
+  // 请求体每往上游流过一块就重新计时：慢链路上传视频要传好几分钟，只要一直在传就不算离线，卡住不动才算。
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), PEER_PROXY_HEADERS_TIMEOUT_MS);
+  const onBodyProgress = () => timer.refresh();
+  if (hasBody) req.raw.on("data", onBodyProgress);
   // （请求的 close 在请求体读完时就会触发，所以看响应的：还没发完就关了 = 浏览器走了）
   const onClientGone = () => {
     if (!reply.raw.writableFinished) controller.abort();
@@ -207,9 +210,12 @@ export async function proxyHttp(req: FastifyRequest, reply: FastifyReply, target
   } catch {
     reply.raw.off("close", onClientGone);
     target.onOffline?.();
+    // 上传没传完就放弃了：回完 502 关掉这条连接，浏览器不再接着往一个没人读的连接里传
+    if (hasBody && !req.raw.complete) reply.header("connection", "close");
     return reply.code(502).send(offlineBody(target.name));
   } finally {
     clearTimeout(timer);
+    req.raw.off("data", onBodyProgress);
   }
 
   if (res.status === 401) {

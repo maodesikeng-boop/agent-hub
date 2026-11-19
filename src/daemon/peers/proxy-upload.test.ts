@@ -15,12 +15,13 @@ afterEach(async () => {
   for (const c of cleanups.splice(0).reverse()) await c();
 });
 
-/** 假的对方：每 stepMs 才读一块请求体（上行慢），读完才回响应头；stallAfter 块之后再也不读。 */
+/** 假的对方：每 stepMs 才读一块请求体（上行慢），读完才回响应头；stallAfter 块之后再也不读。被取消时像 undici 一样取消请求体。 */
 const slowPeer = (stepMs: number, stallAfter = Infinity) =>
   (async (_url: string | URL | Request, init?: RequestInit) => {
-    const signal = init!.signal!;
-    const aborted = new Promise<never>((_ok, fail) => signal.addEventListener("abort", () => fail(new Error("aborted")), { once: true }));
     const reader = (init!.body as ReadableStream<Uint8Array>).getReader();
+    const aborted = new Promise<never>((_ok, fail) =>
+      init!.signal!.addEventListener("abort", () => void reader.cancel().finally(() => fail(new Error("aborted"))), { once: true }),
+    );
     let received = 0;
     for (let chunks = 0; ; chunks++) {
       if (chunks >= stallAfter) await aborted;

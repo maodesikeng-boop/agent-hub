@@ -1,7 +1,7 @@
-import { CircleAlert, ComposerAdd, ComposerFile, ComposerRemove, ComposerSend, ComposerStop, Info, X } from "../ui/icons.ts";
+import { CircleAlert, ComposerAdd, ComposerFile, ComposerRemove, ComposerSend, ComposerStop, ComposerVideo, Info, X } from "../ui/icons.ts";
 import { memo, useEffect, useEffectEvent, useId, useLayoutEffect, useRef, useState, type ComponentProps } from "react";
 import { useStore } from "zustand";
-import { MAX_MESSAGE_BYTES, type WorkerPick } from "../../shared/index.ts";
+import { MAX_MESSAGE_BYTES, previewKindOf, sentFileMime, type WorkerPick } from "../../shared/index.ts";
 import { type ComposerSource, useComposerSuggest } from "../composer-suggest.ts";
 import { WORKER_COMMAND } from "../composer-trigger.ts";
 import { fitsBetweenButtons, isWrapped } from "../composer-layout.ts";
@@ -390,16 +390,19 @@ export function Composer({
                 }}
               />
             )}
-            {files.map(({ key, file }) => (
-              <li key={key} className="flex max-w-full items-center gap-2 rounded-full bg-muted py-1 pr-1 pl-3 text-minor">
-                <ComposerFile className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                <span className="min-w-0 truncate">{file.name}</span>
-                <span className="shrink-0 text-xs text-muted-foreground">{formatBytes(file.size)}</span>
-                <button type="button" aria-label={`Remove ${file.name}`} disabled={busy} className={CHIP_CLOSE_CLASS} onClick={() => staging.remove(key)}>
-                  <ComposerRemove className="size-3.5" aria-hidden="true" />
-                </button>
-              </li>
-            ))}
+            {files.map(({ key, file }) => {
+              const FileIcon = previewKindOf(file.name, sentFileMime(file.name)) === "video" ? ComposerVideo : ComposerFile;
+              return (
+                <li key={key} className="flex max-w-full items-center gap-2 rounded-full bg-muted py-1 pr-1 pl-3 text-minor">
+                  <FileIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  <span className="min-w-0 truncate">{file.name}</span>
+                  <span className="shrink-0 text-xs text-muted-foreground">{formatBytes(file.size)}</span>
+                  <button type="button" aria-label={`Remove ${file.name}`} disabled={busy} className={CHIP_CLOSE_CLASS} onClick={() => staging.remove(key)}>
+                    <ComposerRemove className="size-3.5" aria-hidden="true" />
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         )}
         <div className={cn(ROW_CLASS, multiline && ROW_MULTI_CLASS)}>

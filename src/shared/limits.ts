@@ -211,13 +211,16 @@ export const MAX_SCHEDULE_NAME_CHARS = MAX_NAME_CHARS;
 
 // ---- 聊天框上传文件 ----
 
-/** 单个上传文件最多 20 MB。上传走单独的接口（POST /api/uploads，请求体就是文件原样的字节），不动普通消息接口 1 MB 的请求体上限。 */
-export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+/**
+ * 单个上传文件最多 50 MB（Mac 录屏、手机视频常有几十 MB；和 agent 发出文件的上限 MAX_SENT_FILE_BYTES 一样）。
+ * 上传走单独的接口（POST /api/uploads，请求体就是文件原样的字节，边收边写盘），不动普通消息接口 1 MB 的请求体上限。
+ */
+export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 /** 一条消息最多带几个文件。 */
 export const MAX_ATTACHMENTS_PER_MESSAGE = 10;
 /** 拖进来的文件夹最多看多少项（文件和子文件夹都算）：误拖一个大项目文件夹时不把整棵树都翻一遍。 */
 export const MAX_DROPPED_FOLDER_ENTRIES = 1_000;
-/** 服务端同时在收的上传最多几个（超出的回 429，不收）：每个上传整个读进内存，不限的话一次拖一堆大文件会撑爆。 */
+/** 服务端同时在收的上传最多几个（超出的回 429，不收）：上传边收边写盘，限的是同时开着的连接和写盘的文件数。 */
 export const MAX_CONCURRENT_UPLOADS = 4;
 /** 网页一条消息的文件同时最多传几个（要小于 MAX_CONCURRENT_UPLOADS，留出别的页面的余地）。 */
 export const UPLOAD_CLIENT_CONCURRENCY = 3;
@@ -570,7 +573,7 @@ export const MAX_REMOVED_PEERS = 100;
 export const MAX_PEERS = 100;
 /** 设备之间的控制请求（配对、同步、移除、介绍、改名）最多等多久。 */
 export const PEER_REQUEST_TIMEOUT_MS = 10_000;
-/** 转发：等对方回响应头最多多久（含连接）；超了回 502 device_offline。响应体（下载）不限时。 */
+/** 转发：等对方回响应头最多多久（含连接）；超了回 502 device_offline。上传时请求体每流过一块重新计时（按“多久没进展”算），响应体（下载）不限时。 */
 export const PEER_PROXY_HEADERS_TIMEOUT_MS = 30_000;
 /** 转发 WebSocket：连对方最多等多久。 */
 export const PEER_WS_CONNECT_TIMEOUT_MS = 10_000;

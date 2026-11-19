@@ -224,7 +224,7 @@ export function createClient(device: DeviceId | null) {
     /**
      * 上传一个文件：请求体是文件原样的字节（不是 JSON，也不说发给谁），文件名放在 ?name=。服务端清理文件名、给每个文件单独一个目录。
      * 一律声明 application/octet-stream（File 自带的类型是 application/json 之类时，服务端不会当 JSON 去解析，但这里也不依赖它）。
-     * 413：界面服务对普通请求说“最多 1 MB”，上传接口的上限是 20 MB，换成上传自己的说法。
+     * 413：界面服务对普通请求说“最多 1 MB”，上传接口的上限是 MAX_UPLOAD_BYTES，换成上传自己的说法。
      */
     postUpload: async (file: Blob, name: string): Promise<Attachment> => {
       try {

@@ -7,6 +7,7 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { createReadStream, existsSync, unlinkSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { dirname, resolve } from "node:path";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import fastifyCompress from "@fastify/compress";
 import fastifyStatic from "@fastify/static";
@@ -1203,10 +1204,8 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     if (err instanceof TunnelInputError) return fail(reply, "invalid", reason);
     if (err instanceof FeishuSetupError) return fail(reply, "invalid", reason);
     const status = (err as FastifyError).statusCode;
-    // 上传超过 MAX_UPLOAD_BYTES：Fastify 在收完之前就拒了，原因是英文；换成中文（别的接口 413 走默认中文）
-    if (status === 413) {
-      return fail(reply, "too_large", pathOf(req) === API_PATHS.uploads ? UPLOAD_TOO_LARGE_MESSAGE : undefined);
-    }
+    // 请求体超过 1 MB：Fastify 在收完之前就拒了，原因是英文；换成默认中文（上传超限是 UploadError，上面已经处理）
+    if (status === 413) return fail(reply, "too_large");
     // 请求体校验没过（含 JSON 解析失败、HttpError）英文原文只记日志，对外统一回默认中文。
     if (status !== undefined && status >= 400 && status < 500) {
       req.log.warn({ err }, "ui-server bad request");
@@ -1237,11 +1236,12 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
   // 上传文件（不绑定接收方，谁来用都是先上传、再在发消息时带编号）：请求体是文件原样的字节，上限 MAX_UPLOAD_BYTES，只对这个接口放大。
   // 放进单独的插件里：内容类型解析器只在这个插件里生效（别的接口照旧只收 JSON、上限 1 MB）；
   // 先去掉 Fastify 自带的 JSON、文本解析器，免得 .json、.txt 文件被当成文本解析坏掉。
+  // 解析器不读请求体，把流原样交给 saveUpload 边收边写盘（几十 MB 的视频不进内存），上限由 saveUpload 数着字节管。
   app.register(async (uploads) => {
     uploads.removeAllContentTypeParsers();
-    uploads.addContentTypeParser("*", { parseAs: "buffer" }, (_req, body, done) => done(null, body));
+    uploads.addContentTypeParser("*", (_req, payload, done) => done(null, payload));
 
-    // 同时在收的上传有上限：每个都整个读进内存。名额占到响应结束（正常结束、连接中途断掉都会释放）
+    // 同时在收的上传有上限。名额占到响应结束（正常结束、连接中途断掉都会释放）
     let activeUploads = 0;
     uploads.addHook("onRequest", async (req, reply) => {
       if (req.method !== "POST") return;
@@ -1252,9 +1252,14 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       });
     });
 
-    uploads.post(API_PATHS.uploads, { bodyLimit: MAX_UPLOAD_BYTES }, async (req) => {
+    uploads.post(API_PATHS.uploads, async (req, reply) => {
+      // 声明的长度已经超了：不收请求体，回完关掉连接
+      if (Number(req.headers["content-length"]) > MAX_UPLOAD_BYTES) {
+        reply.header("connection", "close");
+        throw new UploadError(413, UPLOAD_TOO_LARGE_MESSAGE);
+      }
       const { name } = req.query as { name?: unknown };
-      return saveUpload(uploadsDir, typeof name === "string" ? name : "", Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0));
+      return saveUpload(uploadsDir, typeof name === "string" ? name : "", req.body instanceof Readable ? req.body : Buffer.alloc(0));
     });
 
     // 地址里的文件名只是给浏览器看的（取文件只认编号），用通配：命名参数 Fastify 默认最多 100 个字符，长文件名会 404
