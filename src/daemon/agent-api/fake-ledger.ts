@@ -83,7 +83,7 @@ export class FakeHubLedger
   /** 每次 shareHubFiles 收到的路径；返回的副本一律算存好了。 */
   readonly sharedFileCalls: { sessionId: SessionId; paths: string[] }[] = [];
 
-  async shareHubFiles(sessionId: SessionId, args: readonly HubFileArg[]): Promise<SentFile[]> {
+  async shareHubFiles(sessionId: SessionId, args: readonly HubFileArg[], _signal?: AbortSignal): Promise<SentFile[]> {
     this.sharedFileCalls.push({ sessionId, paths: args.map((a) => a.path) });
     return args.map((a, i) => ({ href: a.path, path: a.path, name: `f${i}`, mime: "application/octet-stream", id: `${i}`.padStart(16, "0"), size: 0, status: "saved", mtime: 0 }));
   }

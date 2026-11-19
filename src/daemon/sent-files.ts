@@ -345,7 +345,7 @@ async function shareLinks(links: readonly LocalLink[], scope: ShareScope, strict
 /**
  * signal 取消时不等 work（卡在 open 上的读取取消不了）：马上返回 onAbort()。work 自己看到 signal 后收尾，不发布副本。
  */
-function unlessAborted<T>(work: Promise<T>, signal: AbortSignal | undefined, onAbort: () => T): Promise<T> {
+export function unlessAborted<T>(work: Promise<T>, signal: AbortSignal | undefined, onAbort: () => T): Promise<T> {
   if (signal === undefined) return work;
   if (signal.aborted) return Promise.resolve(onAbort());
   return new Promise<T>((resolve, reject) => {

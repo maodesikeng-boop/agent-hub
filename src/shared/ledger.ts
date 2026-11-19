@@ -720,8 +720,9 @@ export interface Ledger extends LedgerHandoverWork {
   /**
    * agent 接口在 ask、router.report 之前调：按这个会话能分享的文件夹给 --file 存副本（异步拷，不在事务里），结果作为 HubCallContext.sharedFiles 交给 hubCall。
    * 后置：和 args 一一对应、顺序相同；会话不存在返回空数组。不抛错，单个文件出错记成 unreadable。
+   * signal 取消（agent 接口在关闭）时马上返回，没存下的记 unreadable。
    */
-  shareHubFiles(sessionId: SessionId, args: readonly HubFileArg[]): Promise<SentFile[]>;
+  shareHubFiles(sessionId: SessionId, args: readonly HubFileArg[], signal?: AbortSignal): Promise<SentFile[]>;
   /**
    * 执行器：动作彻底失败（次数用完）或被放弃（坏行、没有处理函数，error 以“放弃：”开头）时调用。
    * session.send → 那条消息标 failed，failureReason = error；

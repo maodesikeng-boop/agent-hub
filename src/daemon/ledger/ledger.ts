@@ -439,9 +439,9 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     async settleDriverEvents() {
       while (driverEventQueues.size > 0) await Promise.all([...driverEventQueues.values()].map((q) => q.drained));
     },
-    async shareHubFiles(sessionId, args) {
+    async shareHubFiles(sessionId, args, signal) {
       const session = getAgentSession(db, sessionId);
-      return session === null ? [] : sentFiles.filesForArgs(session, args, closing.signal);
+      return session === null ? [] : sentFiles.filesForArgs(session, args, signal === undefined ? closing.signal : AbortSignal.any([closing.signal, signal]));
     },
     refreshSessionState: sessions.refreshSessionState,
     // 消息的重发（sessions.ts），再把还没开工的 worktree Worker 重新登记建 worktree（workers.ts：准备命令被关机打断的从头再跑），

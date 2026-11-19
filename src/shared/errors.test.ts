@@ -65,7 +65,7 @@ describe("错误码表", () => {
 
   it("两张状态表从 API_ERRORS 派生，对外状态码不变", () => {
     expect(LEDGER_ERROR_HTTP_STATUS).toEqual({ invalid: 400, not_found: 404, forbidden: 403, conflict: 409, git_failed: 409 });
-    expect(HUB_ERROR_HTTP_STATUS).toEqual({ invalid: 400, not_found: 404, forbidden: 403, conflict: 409, git_failed: 409, unauthorized: 401, internal: 500 });
+    expect(HUB_ERROR_HTTP_STATUS).toEqual({ invalid: 400, not_found: 404, forbidden: 403, conflict: 409, git_failed: 409, unauthorized: 401, internal: 500, shutting_down: 503 });
     for (const [code, status] of Object.entries({ ...LEDGER_ERROR_HTTP_STATUS, ...HUB_ERROR_HTTP_STATUS })) {
       expect(API_ERRORS[code as ApiErrorCode].status, code).toBe(status);
     }

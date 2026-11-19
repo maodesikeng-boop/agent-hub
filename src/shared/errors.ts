@@ -33,6 +33,7 @@ export const API_ERRORS = {
   unavailable: { status: 501, text: "这台机器不支持这个操作" },
   git_failed: { status: 409, text: "git 没跑成", hint: "可以重试；或加 --no-worktree 在主文件夹里干" },
   internal: { status: 500, text: "守护进程出了意外的错，已记进日志", hint: "重试一次；还不行看日志" },
+  shutting_down: { status: 503, text: "守护进程正在关闭，这次没有处理", hint: "等它重新启动后再试" },
 } as const satisfies Record<string, { status: number; text: string; hint?: string }>;
 
 /** 本地错误：只在客户端、命令行、启动时用，没有 status，不可能被当成 HTTP 应答发出去。 */

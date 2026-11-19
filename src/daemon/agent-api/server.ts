@@ -49,6 +49,7 @@ import { LOG_PREFIX } from "../../shared/names.ts";
 import { runHubSafely } from "../../hub/cli.ts";
 import { isCrossPlatformAbsolutePath, isWindowsNamedPipe } from "../platform/index.ts";
 import { listenOnRunSocket } from "../run-socket.ts";
+import { unlessAborted } from "../sent-files.ts";
 import type { RouterSandboxGuard } from "../router/sandbox.ts";
 import type { WorkerPr, WorkerPrProbeResult } from "../../shared/hub.ts";
 import type { SelfReloadStatus } from "../../shared/api.ts";
@@ -534,13 +535,13 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
    * hubCall 之前要异步准备的东西：worker.start（没带 noWorktree、有项目）要探 git，worker.show 要查 PR，models 要查模型目录，
    * ask、router.report 带 --file 要先存副本（大文件分块拷，不进账本的事务）。
    */
-  const prepare = async (sessionId: SessionId, command: HubCommand, body: Record<string, unknown>): Promise<HubCallContext> => {
+  const prepare = async (sessionId: SessionId, command: HubCommand, body: Record<string, unknown>, signal: AbortSignal): Promise<HubCallContext> => {
     const role = ledger.sessionRole(sessionId);
     if (role === null || !hubCommandAllowed(role, command)) return {};
     if (command === "ask" || command === "router.report") {
       const files = body.files as HubFileArg[] | undefined;
       if (files === undefined || files.length === 0 || files.length > HUB_FILE_ARGS_MAX) return {};
-      return { sharedFiles: await ledger.shareHubFiles(sessionId, files) };
+      return { sharedFiles: await ledger.shareHubFiles(sessionId, files, signal) };
     }
     if (command === "status") {
       const selfReload = role === "pm" ? opts.selfReloadStatus?.() : undefined;
@@ -619,6 +620,38 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
   });
   const authOf = new WeakMap<FastifyRequest, { sessionId: SessionId; token: string }>();
 
+  // 关闭时：先标记关闭、取消在途的准备（preClose），断开连接后等在途的处理函数都退出（onClose），close() 才返回。
+  // 守护进程在 close() 之后关库，所以处理函数在 await 之后、调账本之前都要看一眼 closing，关了就回 503。
+  const closing = new AbortController();
+  const handlers = new Set<Promise<unknown>>();
+  app.addHook("preClose", (done) => {
+    closing.abort();
+    done();
+  });
+  app.addHook("onClose", async () => {
+    while (handlers.size > 0) await Promise.all(handlers);
+  });
+  const shuttingDown = (reply: FastifyReply) => fail(reply, "shutting_down", API_ERRORS.shutting_down.text);
+  /** 路由处理函数套一层：关了的不进；记进 handlers 给 onClose 等；出错时接口已经关了的回 503（不走错误处理里的记健康状态）。 */
+  const tracked =
+    (handler: (req: FastifyRequest, reply: FastifyReply) => Promise<FastifyReply>) =>
+    async (req: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
+      if (closing.signal.aborted) return shuttingDown(reply);
+      const run = handler(req, reply);
+      const settled = run.then(
+        () => undefined,
+        () => undefined,
+      );
+      handlers.add(settled);
+      void settled.then(() => handlers.delete(settled));
+      try {
+        return await run;
+      } catch (error) {
+        if (closing.signal.aborted) return shuttingDown(reply);
+        throw error;
+      }
+    };
+
   /** 报健康状态失败不能影响回答。 */
   const reportHealth = (error: string | null) => {
     try {
@@ -639,6 +672,7 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
   });
 
   app.setErrorHandler((err: FastifyError | HubError | LedgerRequestError, req, reply) => {
+    if (closing.signal.aborted) return shuttingDown(reply);
     if (err instanceof HubError || err instanceof LedgerRequestError) return fail(reply, err.code, reasonOf(err));
     if ((err as FastifyError).code === "FST_ERR_CTP_BODY_TOO_LARGE") {
       return fail(reply, "invalid", `参数不对：请求体不能超过 ${HUB_MAX_BODY_BYTES} 字节`);
@@ -664,7 +698,7 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
   app.setNotFoundHandler((req, reply) => fail(reply, "invalid", `未知命令：${req.method} ${req.url.split("?", 1)[0]}`));
 
   for (const command of HUB_COMMANDS) {
-    app.post(hubPath(command), { schema: { body: BODY_SCHEMAS[command] } }, async (req, reply) => {
+    app.post(hubPath(command), { schema: { body: BODY_SCHEMAS[command] } }, tracked(async (req, reply) => {
       const auth = authOf.get(req);
       if (auth === undefined) throw new Error("agent-api: request reached a route without a session");
       const role = ledger.sessionRole(auth.sessionId);
@@ -678,18 +712,20 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
       const stillAuthorized = () => tokens.resolve(auth.token) === auth.sessionId;
       // 收请求体期间令牌可能已经作废（会话结束了）：先认一次再准备（存附件副本、探 git），作废的请求不在磁盘上留副本
       if (!stillAuthorized()) return fail(reply, "unauthorized", UNAUTHORIZED_MESSAGE);
-      const context = await prepare(auth.sessionId, command, body);
+      // 关闭时不等准备做完（附件卡在 open 上也不等），null 表示放弃了
+      const context = await unlessAborted(prepare(auth.sessionId, command, body, closing.signal), closing.signal, () => null);
+      if (context === null || closing.signal.aborted) return shuttingDown(reply);
       // 准备期间（拷大文件、探 git）也可能作废：调账本前再认一次。这时已存的副本按内容去重，没被引用的由定期清理（file-cleanup.ts）删
       if (!stillAuthorized()) return fail(reply, "unauthorized", UNAUTHORIZED_MESSAGE);
       // 请求体的形状已经按 BODY_SCHEMAS 查过，就是这个命令的 HubArgs。
       const result = ledger.hubCall(auth.sessionId, command, body as never, context);
       reportHealth(null);
       return send(reply, { ok: true, text: result.text, data: result.data });
-    });
+    }));
   }
 
   const selfReloadSchema = { type: "object", additionalProperties: false, properties: { build: { type: "boolean" } } };
-  app.post(SELF_RELOAD_AGENT_PATH, { schema: { body: selfReloadSchema } }, async (req, reply) => {
+  app.post(SELF_RELOAD_AGENT_PATH, { schema: { body: selfReloadSchema } }, tracked(async (req, reply) => {
     const auth = authOf.get(req);
     if (auth === undefined) throw new Error("agent-api: request reached self.reload without a session");
     // 只有项目经理能让整个守护进程重启：Worker（含只读）、总助一律 forbidden
@@ -698,7 +734,7 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
     const result = opts.selfReload({ sessionId: auth.sessionId, build: (req.body as { build?: boolean }).build === true });
     reportHealth(null);
     return reply.code(200).send({ ok: true, text: result.text, data: result.data });
-  });
+  }));
 
   const routerDispatchSchema = {
     type: "object",
@@ -729,7 +765,7 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
     },
   };
 
-  app.post(ROUTER_DISPATCH_AGENT_PATH, { schema: { body: routerDispatchSchema } }, async (req, reply) => {
+  app.post(ROUTER_DISPATCH_AGENT_PATH, { schema: { body: routerDispatchSchema } }, tracked(async (req, reply) => {
     const auth = authOf.get(req);
     if (auth === undefined) throw new Error("agent-api: request reached router.dispatch without a session");
     const role = ledger.sessionRole(auth.sessionId);
@@ -767,9 +803,11 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
       commandId,
       body as unknown as RouterAgentDispatchInput,
     );
+    // 调度本身要改账本，不在中途放弃（onClose 等它做完）；做完时接口已经关了就不再记健康状态
+    if (closing.signal.aborted) return shuttingDown(reply);
     reportHealth(null);
     return reply.code(200).send({ ok: true, text: result.text, data: result.data });
-  });
+  }));
 
   const hubCliPipeSchema = {
     type: "object",
@@ -785,7 +823,7 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
     },
   };
 
-  app.post("/hub/cli", { bodyLimit: HUB_MAX_BODY_BYTES * 4, schema: { body: hubCliPipeSchema } }, async (req, reply) => {
+  app.post("/hub/cli", { bodyLimit: HUB_MAX_BODY_BYTES * 4, schema: { body: hubCliPipeSchema } }, tracked(async (req, reply) => {
     const auth = authOf.get(req);
     if (auth === undefined) throw new Error("agent-api: request reached /hub/cli without a session");
     const sock = opts.boundSocketPath?.() ?? "";
@@ -821,7 +859,7 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
       stderr: { write: (chunk: string) => { stderr += chunk; } },
     });
     return reply.code(200).send({ exitCode, stdout, stderr });
-  });
+  }));
 
   return app;
 }
