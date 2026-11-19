@@ -3,14 +3,14 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   API_PATHS,
   DEVICE_PROXY_PREFIX,
-  PEER_DEVICE_HEADER,
-  TAILSCALE_USER_LOGIN_HEADER,
+  ENTRY_ONLY_API_PREFIXES,
   devicePath,
   isDeviceId,
   type ApiErrorBody,
   type ApiErrorCode,
+  type DeviceFingerprint,
   type DeviceInfo,
-  type PeerTransport,
+  type MeshLinkKind,
   type PushPayload,
   type WsClientMessage,
 } from "./index.ts";
@@ -18,13 +18,17 @@ import {
 const MAC = "3f2b8c1e-4d5a-4b6c-9e7f-0a1b2c3d4e5f";
 
 describe("联机接口路径", () => {
-  it("设备、配对、推送、浏览器会话", () => {
+  it("设备、账号、设备之间、推送、浏览器会话", () => {
     expect(API_PATHS.devices).toBe("/api/devices");
     expect(API_PATHS.device(MAC)).toBe(`/api/devices/${MAC}`);
-    expect(API_PATHS.deviceInvites).toBe("/api/devices/invites");
-    expect(API_PATHS.peerPair).toBe("/api/peer/pair");
-    expect(API_PATHS.peerDevices).toBe("/api/peer/devices");
-    expect(API_PATHS.peerUnpair).toBe("/api/peer/unpair");
+    expect(API_PATHS.account).toBe("/api/account");
+    expect(API_PATHS.accountLogin).toBe("/api/account/login");
+    expect(API_PATHS.accountApprovalBegin(MAC)).toBe(`/api/account/approvals/${MAC}/begin`);
+    expect(API_PATHS.accountApprovalAnswer(MAC)).toBe(`/api/account/approvals/${MAC}/answer`);
+    expect(API_PATHS.accountPriority).toBe("/api/account/priority");
+    expect(API_PATHS.peerTrust).toBe("/api/peer/trust");
+    expect(API_PATHS.peerName).toBe("/api/peer/name");
+    expect(API_PATHS.peerRenamed).toBe("/api/peer/renamed");
     expect(API_PATHS.pushKey).toBe("/api/push/key");
     expect(API_PATHS.pushSubscriptions).toBe("/api/push/subscriptions");
     expect(API_PATHS.pushUnsubscribe).toBe("/api/push/unsubscribe");
@@ -50,9 +54,11 @@ describe("联机接口路径", () => {
     expect(isDeviceId("")).toBe(false);
   });
 
-  it("身份头、设备头都是小写（Node 收到的头名是小写）", () => {
-    expect(TAILSCALE_USER_LOGIN_HEADER).toBe("tailscale-user-login");
-    expect(PEER_DEVICE_HEADER).toBe("x-agent-hub-device");
+  it("账号、设备管理只给本机浏览器：组网入口来的设备碰不到", () => {
+    for (const path of [API_PATHS.devices, API_PATHS.account, API_PATHS.accountLogin]) {
+      expect(ENTRY_ONLY_API_PREFIXES.some((prefix) => path.startsWith(prefix)), path).toBe(true);
+    }
+    expect(ENTRY_ONLY_API_PREFIXES.some((prefix) => API_PATHS.peerTrust.startsWith(prefix))).toBe(false);
   });
 });
 
@@ -72,8 +78,9 @@ describe("联机接口类型", () => {
       name: string;
       platform: string;
       self: boolean;
-      url: string | null;
-      transport?: PeerTransport;
+      online: boolean;
+      link: MeshLinkKind | null;
+      fingerprint: DeviceFingerprint | null;
     }>();
   });
 

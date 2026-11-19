@@ -1,4 +1,6 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { Agent, createServer, type IncomingHttpHeaders, type ServerResponse } from "node:http";
+import { connect as netConnect, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -6,7 +8,6 @@ import type { DeviceInfo } from "../../shared/index.ts";
 import {
   MAX_PATH_BYTES,
   MAX_TASK_BYTES,
-  PEER_DEVICE_HEADER,
   ROUTER_ATTACHMENT_ID_MAX_CHARS,
   ROUTER_OP_CLIENT_ID_MAX_CHARS,
   ROUTER_PEER_DIGEST_TTL_MS,
@@ -15,7 +16,6 @@ import {
 import { createResolveFolder } from "../ledger/files.ts";
 import { createLedger, type SqliteLedger } from "../ledger/index.ts";
 import type { ProxyTarget } from "../peers/proxy.ts";
-import { PEER_UNAUTHORIZED } from "../peers/service.ts";
 import { openDatabase, type Db } from "../store/db.ts";
 import { migrate } from "../store/migrate.ts";
 import { saveUpload } from "../uploads.ts";
@@ -24,6 +24,49 @@ import {
   createLocalTargetPort,
   createRouterTargetRegistry,
 } from "./target-port.ts";
+
+interface FakeRequest {
+  url: string;
+  method: string;
+  headers: IncomingHttpHeaders;
+  body: Buffer;
+}
+
+const closers: Array<() => Promise<void>> = [];
+afterEach(async () => {
+  for (const close of closers.splice(0)) await close();
+});
+
+/** 一台假的远端设备：本机 HTTP 服务 + 连到它的 http.Agent（和组网的 dialer.agentFor 一样交给 ProxyTarget）；online 关了连接直接失败。 */
+async function fakePeer(handler: (req: FakeRequest, res: ServerResponse) => void) {
+  const state = { online: true };
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => chunks.push(c));
+    req.on("end", () => handler({ url: req.url ?? "", method: req.method ?? "GET", headers: req.headers, body: Buffer.concat(chunks) }, res));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as { port: number }).port;
+  class FakeAgent extends Agent {
+    override createConnection(_options: unknown, callback?: (error: Error | null, socket: Socket) => void): Socket {
+      if (!state.online) {
+        setImmediate(() => callback?.(new Error("connect ECONNREFUSED"), undefined as unknown as Socket));
+        return undefined as unknown as Socket;
+      }
+      return netConnect(port, "127.0.0.1");
+    }
+  }
+  const agent = new FakeAgent();
+  closers.push(
+    () =>
+      new Promise<void>((resolve) => {
+        agent.destroy();
+        server.closeAllConnections();
+        server.close(() => resolve());
+      }),
+  );
+  return { agent, state };
+}
 
 let root: string;
 let db: Db;
@@ -236,46 +279,29 @@ describe("RouterTargetPort：本机账本与跨设备隧道代理统一端口", 
   it("PeerTargetPort 遵守缓存 4 条军规：Digest 10s 缓存与移除即刻失效、离线 5s 短暂退避、跨机流式上传附件后原样投递、超时/离线返回结构化中文错误", async () => {
     const selfId = "00000000-0000-4000-8000-000000000001";
     const remoteId = "00000000-0000-4000-8000-000000000002";
-    let peerOnline = true;
     let peerHang = false;
-    let peerUnauth = false;
     let pairedDevices: DeviceInfo[] = [
-      { id: selfId, name: "MacBook", platform: "darwin", self: true, url: null },
-      { id: remoteId, name: "Linux 工作站", platform: "linux", self: false, url: "https://linux.ts.net" },
+      { id: selfId, name: "MacBook", platform: "darwin", self: true, online: true, link: "local", fingerprint: null },
+      { id: remoteId, name: "Linux 工作站", platform: "linux", self: false, online: true, link: "relay", fingerprint: null },
     ];
-    const remoteTargets = new Map<string, ProxyTarget>([
-      [
-        remoteId,
-        {
-          name: "Linux 工作站",
-          url: "https://linux.ts.net",
-          token: "peer-secret-token",
-        },
-      ],
-    ]);
 
     let digestFetchCount = 0;
-    const uploadedFiles: Array<{ name: string; body: string; headers: Record<string, string> }> = [];
+    const uploadedFiles: Array<{ name: string; body: string; headers: IncomingHttpHeaders }> = [];
     const targetOpsReceived: unknown[] = [];
-    let forgottenId: string | null = null;
 
-    const fakeFetch: typeof fetch = async (input, init) => {
-      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-      if (peerHang) {
-        await new Promise((_, reject) => {
-          init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
-        });
-      }
-      if (!peerOnline) {
-        throw new TypeError("fetch failed: ECONNREFUSED");
-      }
-      if (peerUnauth) {
-        return new Response(JSON.stringify({ code: PEER_UNAUTHORIZED, error: PEER_UNAUTHORIZED }), { status: 401 });
-      }
+    const json = (res: ServerResponse, status: number, body: unknown) => {
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(JSON.stringify(body));
+    };
+    const peer = await fakePeer((req, res) => {
+      if (peerHang) return;
+      const url = req.url;
       if (url.endsWith("/api/router/digest")) {
         digestFetchCount += 1;
-        return new Response(
-          JSON.stringify({
+        return json(
+          res,
+          200,
+          {
             generatedAt: now,
             pms: [
               {
@@ -294,52 +320,39 @@ describe("RouterTargetPort：本机账本与跨设备隧道代理统一端口", 
                 lastActiveAt: now,
               },
             ],
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
+          },
         );
       }
       if (url.includes("/api/uploads")) {
-        const parsedUrl = new URL(url);
-        const rawBytes = init?.body instanceof Uint8Array ? Buffer.from(init.body) : Buffer.from(String(init?.body ?? ""));
-        const hdrs = (init?.headers ?? {}) as Record<string, string>;
-        uploadedFiles.push({
-          name: parsedUrl.searchParams.get("name") ?? "",
-          body: rawBytes.toString("utf8"),
-          headers: hdrs,
+        const parsedUrl = new URL(url, "http://peer");
+        uploadedFiles.push({ name: parsedUrl.searchParams.get("name") ?? "", body: req.body.toString("utf8"), headers: req.headers });
+        return json(res, 201, {
+          attachment: {
+            id: "aaaa1111bbbb2222",
+            name: parsedUrl.searchParams.get("name") ?? "file",
+            path: "/remote/uploads/aaaa1111bbbb2222/spec.md",
+            size: req.body.length,
+            mime: "application/octet-stream",
+          },
         });
-        return new Response(
-          JSON.stringify({
-            attachment: {
-              id: "aaaa1111bbbb2222",
-              name: parsedUrl.searchParams.get("name") ?? "file",
-              path: "/remote/uploads/aaaa1111bbbb2222/spec.md",
-              size: rawBytes.length,
-              mime: "application/octet-stream",
-            },
-          }),
-          { status: 201, headers: { "content-type": "application/json" } },
-        );
       }
       if (url.endsWith("/api/router/target-ops")) {
-        const parsed = JSON.parse(String(init?.body ?? "{}"));
-        targetOpsReceived.push(parsed);
-        return new Response(
-          JSON.stringify({
-            result: {
-              kind: "pm.forward",
-              pmId: 7,
-              pmName: "远端小林",
-              projectId: 3,
-              projectName: "推理引擎",
-              conversationId: 70,
-              messageId: 888,
-            },
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
+        targetOpsReceived.push(JSON.parse(req.body.toString("utf8") || "{}"));
+        return json(res, 200, {
+          result: {
+            kind: "pm.forward",
+            pmId: 7,
+            pmName: "远端小林",
+            projectId: 3,
+            projectName: "推理引擎",
+            conversationId: 70,
+            messageId: 888,
+          },
+        });
       }
-      return new Response("not found", { status: 404 });
-    };
+      res.writeHead(404).end("not found");
+    });
+    const remoteTargets = new Map<string, ProxyTarget>([[remoteId, { name: "Linux 工作站", agent: peer.agent }]]);
 
     const localPort = createLocalTargetPort({
       deviceId: selfId,
@@ -354,13 +367,8 @@ describe("RouterTargetPort：本机账本与跨设备隧道代理统一端口", 
         selfId,
         list: () => pairedDevices,
         target: (id) => remoteTargets.get(id) ?? null,
-        forget: (id) => {
-          forgottenId = id;
-          remoteTargets.delete(id);
-        },
       },
       uploadsDir,
-      fetch: fakeFetch,
       now: () => now,
       peerDigestTimeoutMs: 60,
       peerDispatchTimeoutMs: 80,
@@ -397,8 +405,8 @@ describe("RouterTargetPort：本机账本与跨设备隧道代理统一端口", 
       name: "spec.md",
       body: "# 设计原稿\n零改写直达",
     });
-    expect(uploadedFiles[0]!.headers[PEER_DEVICE_HEADER]).toBe(selfId);
-    expect(uploadedFiles[0]!.headers.authorization).toBe("Bearer peer-secret-token");
+    // 对方按组网的 TLS 证书认人，请求里不带任何令牌
+    expect(uploadedFiles[0]!.headers.authorization).toBeUndefined();
     expect(targetOpsReceived[0]).toMatchObject({
       kind: "pm.forward",
       pmId: 7,
@@ -408,7 +416,7 @@ describe("RouterTargetPort：本机账本与跨设备隧道代理统一端口", 
 
     // 3. 远端离线：5s 短暂负向退避（不当正常结果缓存几分钟），且 executeOp 返回人话中文错误
     now += ROUTER_PEER_DIGEST_TTL_MS + 100;
-    peerOnline = false;
+    peer.state.online = false;
     const offDigest = await rPort.getDigest();
     expect(offDigest.online).toBe(false);
     expect(offDigest.error).toContain("Linux 工作站");
@@ -421,12 +429,12 @@ describe("RouterTargetPort：本机账本与跨设备隧道代理统一端口", 
 
     // 超过 5 秒退避后恢复在线，立刻拉取成功！
     now += ROUTER_PEER_OFFLINE_BACKOFF_MS + 100;
-    peerOnline = true;
+    peer.state.online = true;
     const recoveredDigest = await rPort.getDigest();
     expect(recoveredDigest.online).toBe(true);
 
     // 4. executeOp 离线与超时的人话结构化错误
-    peerOnline = false;
+    peer.state.online = false;
     await expect(
       rPort.executeOp({ kind: "pm.forward", clientId: "off-1", pmId: 7, text: "hi" }),
     ).rejects.toMatchObject({
@@ -435,7 +443,7 @@ describe("RouterTargetPort：本机账本与跨设备隧道代理统一端口", 
       message: expect.stringContaining("Linux 工作站"),
     });
 
-    peerOnline = true;
+    peer.state.online = true;
     peerHang = true;
     await expect(
       rPort.executeOp({ kind: "pm.forward", clientId: "hang-1", pmId: 7, text: "hi" }),
@@ -446,15 +454,8 @@ describe("RouterTargetPort：本机账本与跨设备隧道代理统一端口", 
     });
     peerHang = false;
 
-    // 5. 对端返回 401 peer_unauthorized 时自动 forget 并清除缓存
-    peerUnauth = true;
-    await expect(
-      rPort.executeOp({ kind: "pm.forward", clientId: "unauth-1", pmId: 7, text: "hi" }),
-    ).rejects.toBeInstanceOf(RouterTargetError);
-    expect(forgottenId).toBe(remoteId);
-
-    // 6. 设备从配对列表移除时缓存立即失效
-    pairedDevices = [{ id: selfId, name: "MacBook", platform: "darwin", self: true, url: null }];
+    // 5. 设备移出账号（不在信任表里）时缓存立即失效
+    pairedDevices = [{ id: selfId, name: "MacBook", platform: "darwin", self: true, online: true, link: "local", fingerprint: null }];
     expect(registry.portFor(remoteId)).toBeNull();
   });
 });
@@ -466,30 +467,32 @@ describe("project.show（docs/router-project-catalog-design.md）", () => {
   const detail = { projectId: 3, projectName: "推理引擎", description: null, catalog, refreshedAt: 1 };
 
   /** 一台远端设备：digest 计数，target-ops 按 respond 回。 */
-  function remoteRegistry(respond: (body: unknown) => Response) {
+  async function remoteRegistry(respond: (body: unknown) => Response) {
     const counts = { digest: 0 };
-    const fakeFetch: typeof fetch = async (input, init) => {
-      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-      if (url.endsWith("/api/router/digest")) {
+    const peer = await fakePeer((req, res) => {
+      if (req.url.endsWith("/api/router/digest")) {
         counts.digest++;
-        return new Response(JSON.stringify({ generatedAt: now, pms: [] }), { status: 200, headers: { "content-type": "application/json" } });
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ generatedAt: now, pms: [] }));
+        return;
       }
-      if (url.endsWith("/api/router/target-ops")) return respond(JSON.parse(String(init?.body ?? "{}")));
-      return new Response("not found", { status: 404 });
-    };
+      if (req.url.endsWith("/api/router/target-ops")) {
+        const response = respond(JSON.parse(req.body.toString("utf8") || "{}"));
+        void response.text().then((text) => res.writeHead(response.status, { "content-type": "application/json" }).end(text));
+        return;
+      }
+      res.writeHead(404).end("not found");
+    });
     const registry = createRouterTargetRegistry({
       localPort: createLocalTargetPort({ deviceId: selfId, deviceName: () => "MacBook", ledger, uploadsDir }),
       peers: {
         selfId,
         list: () => [
-          { id: selfId, name: "MacBook", platform: "darwin", self: true, url: null },
-          { id: remoteId, name: "Linux 工作站", platform: "linux", self: false, url: "https://linux.ts.net" },
+          { id: selfId, name: "MacBook", platform: "darwin", self: true, online: true, link: "local", fingerprint: null },
+          { id: remoteId, name: "Linux 工作站", platform: "linux", self: false, online: true, link: "lan", fingerprint: null },
         ],
-        target: () => ({ name: "Linux 工作站", url: "https://linux.ts.net", token: "t" }),
-        forget: () => {},
+        target: () => ({ name: "Linux 工作站", agent: peer.agent }),
       },
       uploadsDir,
-      fetch: fakeFetch,
       now: () => now,
     });
     return { port: registry.portFor(remoteId)!, counts };
@@ -509,7 +512,7 @@ describe("project.show（docs/router-project-catalog-design.md）", () => {
 
   it("远端端口经配对通道取对方设备的档案，不让对方名片缓存失效", async () => {
     const received: unknown[] = [];
-    const { port, counts } = remoteRegistry((body) => {
+    const { port, counts } = await remoteRegistry((body) => {
       received.push(body);
       return new Response(JSON.stringify({ result: { kind: "project.show", projectId: 3, detail } }), { status: 200 });
     });
@@ -521,7 +524,7 @@ describe("project.show（docs/router-project-catalog-design.md）", () => {
   });
 
   it("对方设备版本旧、不认识 project.show 时报 invalid 并说明对方版本不支持", async () => {
-    const { port } = remoteRegistry(() => new Response(JSON.stringify({ code: "invalid", error: "参数不对：kind" }), { status: 400 }));
+    const { port } = await remoteRegistry(() => new Response(JSON.stringify({ code: "invalid", error: "参数不对：kind" }), { status: 400 }));
     await expect(port.executeOp({ kind: "project.show", projectId: 3 })).rejects.toMatchObject({
       name: "RouterTargetError",
       code: "invalid",

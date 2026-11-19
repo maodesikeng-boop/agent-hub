@@ -24,6 +24,8 @@ export interface TestDevice {
   peers: Peers;
   mesh: Mesh;
   ledger: FakeLedger;
+  /** 这台的库（浏览器会话在这里）。 */
+  db: Db;
   server: RunningUiServer;
   /** 浏览器的 cookie 头（已登录）。 */
   cookie: string;
@@ -116,6 +118,7 @@ export async function startTestDevice(opts: TestDeviceOptions): Promise<TestDevi
       return mesh;
     },
     ledger,
+    db,
     get server() {
       return server;
     },

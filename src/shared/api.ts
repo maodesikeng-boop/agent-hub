@@ -223,7 +223,7 @@ export const API_PATHS = {
 
   // ---- 联机：浏览器登录（每个浏览器一条，能单独退出；只在入口上，浏览器从不拿别的设备的令牌） ----
 
-  /** GET → AuthStatusResponse：查询当前浏览器会话状态（active / pending_approval / unauthenticated）。 */
+  /** GET → AuthStatusResponse：查询当前浏览器会话状态（active / unauthenticated）。 */
   authStatus: "/api/auth/status",
   /** GET → DesktopHealthResponse：需有效登录会话 Cookie 的本机健康探活端点（供桌面外壳 `--self-test` 验证鉴权与服务状态）。 */
   health: "/api/health",
@@ -231,8 +231,6 @@ export const API_PATHS = {
   browserSessions: "/api/sessions",
   /** DELETE → 204：退出这一个浏览器（可以是自己）。 */
   browserSession: (id: string) => `/api/sessions/${encodeURIComponent(id)}`,
-  /** POST → 204：已登录设备批准公网待批准（pending_approval）的浏览器会话。 */
-  approveBrowserSession: (id: string) => `/api/sessions/${encodeURIComponent(id)}/approve`,
   /** POST，没有请求体 → 204：全部退出 = 换主钥匙（state/ui-token）+ 清所有会话，包括自己。 */
   logoutAll: "/api/sessions/logout-all",
   /** POST，没有请求体 → 201 LoginLinkResponse：给手机扫的一次性登录链接（5 分钟、用一次就失效）。 */
@@ -755,11 +753,9 @@ export interface PushPayload {
 
 // ---- 联机：浏览器登录（第 3.4 节） ----
 
-export type BrowserSessionStatus = "active" | "pending_approval";
-
 /** GET /api/auth/status：当前浏览器的登录状态。 */
 export interface AuthStatusResponse {
-  status: BrowserSessionStatus | "unauthenticated";
+  status: "active" | "unauthenticated";
 }
 
 /** 一个已登录的浏览器。时间是毫秒时间戳。 */
@@ -771,12 +767,6 @@ export interface BrowserSessionInfo {
   lastSeenAt: number;
   /** 是不是发这个请求的浏览器自己。 */
   current: boolean;
-  /** 会话状态：本机/tailnet 直接为 active；公网扫码后为 pending_approval，已登录设备点允许后变为 active。 */
-  status?: BrowserSessionStatus;
-  /** 是否经公网入口（run/public.sock）登录。 */
-  viaPublic?: boolean;
-  /** 公网登录时的客户端 IP（可选）。 */
-  clientIp?: string;
 }
 
 /** GET /api/sessions，按最后活动从新到旧。 */
