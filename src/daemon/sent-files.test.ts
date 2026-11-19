@@ -333,6 +333,21 @@ describe("边界", () => {
     expect(share(`[e](${edge})`)[0]).toMatchObject({ status: "saved", size: MAX_SENT_FILE_BYTES });
   });
 
+  it("存大文件副本时事件循环照常转：分块异步读写、边拷边算 sha256，不一次同步拷完", async () => {
+    const big = write(join(proj, "big40.bin"));
+    truncateSync(big, 40 * 1024 * 1024);
+    let ticks = 0;
+    const timer = setInterval(() => ticks++, 0);
+    let files: SentFile[];
+    try {
+      files = await share(`[b](${big})`);
+    } finally {
+      clearInterval(timer);
+    }
+    expect(files[0]).toMatchObject({ status: "saved", size: 40 * 1024 * 1024 });
+    expect(ticks).toBeGreaterThan(0);
+  });
+
   it("一条消息合计超过 200 MB：超出的那个不拷，后面小的照拷", () => {
     const each = 45 * 1024 * 1024; // 4 个 180 MB，第 5 个超
     const names = [1, 2, 3, 4, 5].map((i) => {

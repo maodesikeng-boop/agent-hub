@@ -1,8 +1,8 @@
 // agent 的文字消息入库时存副本、meta 记 files（ledger/sent-files.ts、messages.ts 的 agent.text）。
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Change } from "../../shared/api.ts";
 import type { ConversationId, Message, SessionId } from "../../shared/domain.ts";
 import { workerWorktreePath } from "../../shared/paths.ts";
@@ -77,6 +77,28 @@ describe("agent 文字消息入库时存副本", () => {
     const created = changes.find((c) => c.type === "message.created");
     expect(created?.type === "message.created" && sentFilesOf(created.data.message)).toHaveLength(1);
     expect(readdirSync(sentFilesDir)).toHaveLength(1);
+  });
+
+  it("回复里的大文件：存副本不占着写事务、不卡事件循环，同一会话后面的事件仍按顺序落在它后面", async () => {
+    const big = file(join(main, "big.bin"));
+    truncateSync(big, 40 * 1024 * 1024);
+    const texts = () =>
+      db
+        .all<{ text: string }>("SELECT text FROM messages WHERE conversation_id = ? AND sender = 'agent' ORDER BY id", pm.conversationId)
+        .map((r) => r.text);
+    let ticks = 0;
+    const timer = setInterval(() => ticks++, 0);
+    try {
+      say(pm.sessionId, `大文件：[b](${big})`, "u-big");
+      say(pm.sessionId, "后面一句", "u-next");
+      await vi.waitFor(() => expect(texts()).toHaveLength(2), { timeout: 20_000 });
+    } finally {
+      clearInterval(timer);
+    }
+    expect(ticks).toBeGreaterThan(0);
+    expect(texts()).toEqual([`大文件：[b](${big})`, "后面一句"]);
+    const row = db.get<{ id: number }>("SELECT id FROM messages WHERE conversation_id = ? AND text LIKE '大文件%'", pm.conversationId)!;
+    expect(sentFilesOf(ledger.getMessage(row.id)!)).toEqual([expect.objectContaining({ status: "saved", size: 40 * 1024 * 1024 })]);
   });
 
   it("没有本机链接的回复：meta 还是 null（和老消息一样），不建 sent-files/", () => {
