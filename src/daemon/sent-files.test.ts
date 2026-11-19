@@ -15,10 +15,11 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
-import { open } from "node:fs/promises";
+import fsPromises, { open } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MAX_SENT_FILE_BYTES,
   MAX_SENT_FILES_PER_MESSAGE,
@@ -587,5 +588,56 @@ describe("createSentFileIoSlots：原文件读取的在途槽位", () => {
     expect(slots.acquire(3, undefined)).toBeNull();
     held();
     expect(slots.acquire(1, undefined)).not.toBeNull();
+  });
+});
+
+describe("取消信号在每次 await 恢复后都要看：已取消的不占槽、不发起新的 open", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    syncBuiltinESMExports();
+  });
+
+  it("stat 还没回来时取消：stat 回来后既不占槽，也不再 open 源文件", async () => {
+    const file = write(join(proj, "a.txt"), "ordinary temporary attachment");
+    const originalStat = fsPromises.stat;
+    const originalOpen = fsPromises.open;
+    let statStarted!: () => void;
+    const started = new Promise<void>((resolve) => (statStarted = resolve));
+    let finishStat!: () => void;
+    const finished = new Promise<void>((resolve) => (finishStat = resolve));
+    let sourceOpens = 0;
+    vi.spyOn(fsPromises, "stat").mockImplementation(async (path, ...rest) => {
+      if (path === file) {
+        statStarted();
+        await finished;
+      }
+      return originalStat(path as never, ...(rest as []));
+    });
+    vi.spyOn(fsPromises, "open").mockImplementation(async (path, ...rest) => {
+      if (path === file) sourceOpens++;
+      return originalOpen(path as never, ...(rest as []));
+    });
+    syncBuiltinESMExports();
+    const slots = createSentFileIoSlots();
+    const acquire = vi.spyOn(slots, "acquire");
+    const controller = new AbortController();
+    const job = shareFilePaths([file], { ...scope, io: { slots, owner: 1 } }, controller.signal);
+    await started;
+    controller.abort();
+    const [attachment] = await job;
+    expect(attachment).toMatchObject({ status: "unreadable", id: null });
+    finishStat();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(sourceOpens).toBe(0);
+    expect(acquire).not.toHaveBeenCalled();
+    expect(copies()).toEqual([]);
+  });
+
+  it("已取消的信号拿不到槽位，也不影响别的会话", () => {
+    const slots = createSentFileIoSlots(2);
+    const cancelled = new AbortController();
+    cancelled.abort();
+    expect(slots.acquire(1, cancelled.signal)).toBeNull();
+    expect(slots.acquire(2, undefined)).not.toBeNull();
   });
 });

@@ -609,6 +609,77 @@ describe("agent api over inject", () => {
     });
   });
 
+  describe("close() 与在途的异步准备（探 git、查 PR、刷新厂商）", () => {
+    const cases: { name: string; command: HubCommand; args: object; arrange: (hold: () => Promise<void>) => Partial<Parameters<typeof createAgentApi>[0]> }[] = [
+      {
+        name: "worker.show：PR 查完后不再查原始记录",
+        command: "worker.show",
+        args: { workerId: 5 },
+        arrange: (hold) => ({ probePr: async () => {
+            await hold();
+            return null;
+          } }),
+      },
+      {
+        name: "worker.start：刷新厂商完成后不再查项目文件夹",
+        command: "worker.start",
+        args: { title: "修 X", task: "修好", vendor: "claude" },
+        arrange: (hold) => ({ refreshVendor: hold }),
+      },
+      {
+        name: "graph.create：探完工作区后不再查自动派发的厂商",
+        command: "graph.create",
+        args: { title: "图", specJson: '{"nodes":[{"key":"n1","title":"第一步"}]}' },
+        arrange: (hold) => ({ probeWorkspace: async () => {
+            await hold();
+            return {} as WorkspaceProbe;
+          },
+          refreshVendor: async () => {} }),
+      },
+    ];
+
+    it.each(cases)("$name；close() 等到准备落定才返回", async ({ command, args, arrange }) => {
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => (entered = resolve));
+      ledger.prTarget = { cwd: "/wt/1/5", branch: "hub/5" };
+      ledger.startFolder = "/proj";
+      const touched = vi.fn();
+      ledger.workerTranscriptTarget = (...a) => (touched(...a), null);
+      const startFolder = ledger.workerStartFolder.bind(ledger);
+      let afterRelease = false;
+      ledger.workerStartFolder = (sessionId) => {
+        if (afterRelease) touched("workerStartFolder");
+        return startFolder(sessionId);
+      };
+      Object.assign(ledger, { graphAutoDispatchVendors: (...a: unknown[]) => (touched(...a), []) });
+      await app.close();
+      app = createAgentApi({
+        ledger,
+        tokens,
+        ...arrange(async () => {
+          entered();
+          await held;
+          afterRelease = true;
+        }),
+      });
+      await app.ready();
+      const res = call(command, args);
+      await started;
+      let closed = false;
+      const closing = app.close().then(() => (closed = true));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(closed).toBe(false);
+      release();
+      await closing;
+      const reply = await res;
+      expect(reply.statusCode).toBe(503);
+      expect(touched).not.toHaveBeenCalled();
+      expect(ledger.calls).toEqual([]);
+    });
+  });
+
   describe("hub models：调 hubCall 之前先异步取模型目录", () => {
     it("把 refresh 和可选的 vendor 传给 models.list，拿到的目录作为 context.modelCatalogs 交给 hubCall", async () => {
       const listCalls: unknown[] = [];
