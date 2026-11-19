@@ -58,7 +58,8 @@ export type FeishuPostRef =
   | { kind: "file"; messageId: MessageId; part: number }
   | { kind: "router_item"; itemId: RouterItemId }
   | { kind: "router_command"; commandId: RouterCommandId; part?: number }
-  | { kind: "chat_policy"; pmId: PmId };
+  | { kind: "chat_policy"; pmId: PmId }
+  | { kind: "router_settings" };
 
 export const FEISHU_POST_STATES = ["streaming", "final", "card_pending", "card_settled", "uploading"] as const;
 export type FeishuPostState = (typeof FEISHU_POST_STATES)[number];
@@ -472,6 +473,8 @@ function refKey(ref: FeishuPostRef): { kind: FeishuPostRef["kind"]; id: number; 
       return { kind: ref.kind, id: ref.commandId, part: ref.part ?? 0 };
     case "chat_policy":
       return { kind: ref.kind, id: ref.pmId, part: 0 };
+    case "router_settings":
+      return { kind: ref.kind, id: 1, part: 0 };
   }
 }
 

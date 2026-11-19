@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { AskMeta, Message } from "../../shared/domain.ts";
 import type { FeishuChatId } from "../../shared/feishu.ts";
 import { ASK_MAX_OPTION_CHARS, ASK_MAX_OPTIONS, FEISHU_CARD_MAX_BYTES, MAX_DECISION_CHOICE_CHARS, MAX_DECISION_NOTE_CHARS } from "../../shared/limits.ts";
-import type { RouterDecisionItem, RouterReportItem } from "../../shared/router.ts";
+import { defaultRouterSettings, type RouterDecisionItem, type RouterReportItem } from "../../shared/router.ts";
+import { AGENT_VENDORS, bundledModelCatalog } from "../../shared/vendors.ts";
 import {
   decodeFeishuActionValue,
   encodeFeishuActionValue,
@@ -13,9 +14,11 @@ import {
   renderChatPolicyCard,
   renderReplyCard,
   renderRouterItem,
+  renderRouterSettingsCard,
   type FeishuActionValue,
   type FeishuCardJson,
 } from "./cards.ts";
+import { FEISHU_AUTO_OPTION, FEISHU_DEFAULT_OPTION } from "./model-picker.ts";
 
 type El = Record<string, unknown>;
 
@@ -32,6 +35,7 @@ function walk(card: FeishuCardJson): El[] {
   return out;
 }
 const buttons = (card: FeishuCardJson) => walk(card).filter((el) => el.tag === "button");
+const selects = (card: FeishuCardJson) => walk(card).filter((el) => el.tag === "select_static");
 const callbackButtons = (card: FeishuCardJson) =>
   buttons(card).filter((b) => (b.behaviors as { type: string }[]).some((x) => x.type === "callback"));
 const valueOf = (b: El) => decodeFeishuActionValue((b.behaviors as { type: string; value?: unknown }[]).find((x) => x.type === "callback")!.value);
@@ -254,9 +258,19 @@ describe("renderReplyCard", () => {
   });
 });
 
-describe("renderChatPolicyCard（群设置卡：唤醒方式、群成员权限分两组）", () => {
+const defaultCatalogs = AGENT_VENDORS.map((vendor) => ({ ...bundledModelCatalog(vendor), availability: "available" as const }));
+
+describe("renderChatPolicyCard（群设置卡：模型与思考程度、唤醒方式、群成员权限三大独立分区）", () => {
   const policy = (patch: Partial<Parameters<typeof renderChatPolicyCard>[0]> = {}) =>
-    renderChatPolicyCard({ pmId: 2, triggerMode: "auto", guestTier: "chat_only", mentionOnlyForced: false, ...patch });
+    renderChatPolicyCard({
+      pmId: 2,
+      agent: { vendor: "claude", model: null, effort: null },
+      catalogs: defaultCatalogs,
+      triggerMode: "auto",
+      guestTier: "chat_only",
+      mentionOnlyForced: false,
+      ...patch,
+    });
   /** 卡片顶层元素按分割线切成几组。 */
   const groups = (card: FeishuCardJson): El[][] => {
     const out: El[][] = [[]];
@@ -268,14 +282,23 @@ describe("renderChatPolicyCard（群设置卡：唤醒方式、群成员权限�
   };
   const groupCard = (els: El[]): FeishuCardJson => ({ schema: "2.0", config: {}, body: { elements: els } });
 
-  it("标题是“群设置”；唤醒方式在上、群成员权限在下，中间一条分割线，各组按钮只改各自那一项", () => {
+  it("标题是“群设置”；按 hr 分成三大模块（模型与思考程度、唤醒方式、群成员权限）与页脚，下拉和按钮各司其职", () => {
     const c = policy();
     expect(JSON.stringify(c.header)).toContain("群设置");
-    const [wake, members] = groups(c);
-    expect(groups(c).length).toBeGreaterThanOrEqual(2);
+    const [models, wake, members] = groups(c);
+    expect(groups(c).length).toBeGreaterThanOrEqual(4);
+    expect(JSON.stringify(models)).toContain("模型与思考程度");
+    expect(JSON.stringify(models)).not.toContain("唤醒方式");
     expect(JSON.stringify(wake)).toContain("唤醒方式");
     expect(JSON.stringify(wake)).not.toContain("群成员权限");
     expect(JSON.stringify(members)).toContain("群成员权限");
+    const modelSelects = selects(groupCard(models!));
+    expect(modelSelects.map(valueOf)).toEqual([
+      { kind: "set_pm_model", pmId: 2, field: "vendor" },
+      { kind: "set_pm_model", pmId: 2, field: "model" },
+      { kind: "set_pm_model", pmId: 2, field: "effort" },
+    ]);
+    expect(modelSelects.map((s) => s.initial_option)).toEqual(["claude", FEISHU_DEFAULT_OPTION, FEISHU_DEFAULT_OPTION]);
     const wakeValues = callbackButtons(groupCard(wake!)).map(valueOf);
     const tierValues = callbackButtons(groupCard(members!)).map(valueOf);
     expect(wakeValues).toEqual([
@@ -289,8 +312,19 @@ describe("renderChatPolicyCard（群设置卡：唤醒方式、群成员权限�
     ]);
   });
 
+  it("模型不支持调思考程度时不画思考程度下拉，第一区写明原因", () => {
+    const c = policy({ agent: { vendor: "agy", model: "gpt-oss-120b", effort: null } });
+    const [models] = groups(c);
+    expect(selects(groupCard(models!)).map(valueOf)).toEqual([
+      { kind: "set_pm_model", pmId: 2, field: "vendor" },
+      { kind: "set_pm_model", pmId: 2, field: "model" },
+    ]);
+    expect(JSON.stringify(models)).toContain("思考程度");
+    expect(JSON.stringify(models)).toContain("不支持");
+  });
+
   it("三档各有一句直白说明：协作者能发文件、点拍板和停止；仅对话不收文件；只读只旁听", () => {
-    const members = JSON.stringify(groups(policy())[1]);
+    const members = JSON.stringify(groups(policy())[2]);
     expect(members).toMatch(/协作者[^"]*可对话、发文件、点拍板卡与停止/);
     expect(members).toMatch(/仅对话[^"]*只能文字聊天，不收文件/);
     expect(members).toMatch(/只读[^"]*只旁听，@机器人 也不唤醒/);
@@ -313,7 +347,11 @@ describe("renderChatPolicyCard（群设置卡：唤醒方式、群成员权限�
   });
 
   it("每组写明当前生效的是哪一项", () => {
-    const [wake, members] = groups(policy({ triggerMode: "mention_only", guestTier: "observer" }));
+    const [models, wake, members] = groups(
+      policy({ agent: { vendor: "codex", model: "gpt-6-luna", effort: "high" }, triggerMode: "mention_only", guestTier: "observer" }),
+    );
+    expect(JSON.stringify(models)).toContain("Codex");
+    expect(JSON.stringify(models)).toContain("GPT-6-Luna");
     expect(JSON.stringify(wake)).toMatch(/当前[^"]*仅 @ 唤醒/);
     expect(JSON.stringify(members)).toMatch(/当前[^"]*只读/);
   });
@@ -330,6 +368,41 @@ describe("renderChatPolicyCard（群设置卡：唤醒方式、群成员权限�
     expect(values).not.toContainEqual({ kind: "set_policy", pmId: 2, triggerMode: "auto" });
     expect(values).toContainEqual({ kind: "set_policy", pmId: 2, triggerMode: "mention_only" });
     expect(callbackButtons(c).find((b) => b.type === "primary" && valueOf(b)?.kind === "set_policy" && "triggerMode" in valueOf(b)!)).toBeDefined();
+  });
+});
+
+describe("renderRouterSettingsCard（总助单聊模型设置卡）", () => {
+  it("Auto 时只有厂商下拉（选中 -auto），写明自动选用的快模型与斜杠呼出说明", () => {
+    const c = renderRouterSettingsCard({ settings: defaultRouterSettings(), catalogs: defaultCatalogs });
+    expect(JSON.stringify(c.header)).toContain("总助设置");
+    const ss = selects(c);
+    expect(ss.map(valueOf)).toEqual([{ kind: "set_router_model", field: "vendor" }]);
+    expect(ss[0]!.initial_option).toBe(FEISHU_AUTO_OPTION);
+    expect(allText(c)).toContain("Auto");
+    expect(allText(c)).toContain("/设置");
+  });
+
+  it("指定厂商时画出厂商、模型、思考程度三个下拉；单档位模型隐藏思考程度下拉并说明原因", () => {
+    const explicit = renderRouterSettingsCard({
+      settings: { vendor: "codex", model: "gpt-6-luna", effort: "high", updatedAt: 1 },
+      catalogs: defaultCatalogs,
+    });
+    expect(selects(explicit).map(valueOf)).toEqual([
+      { kind: "set_router_model", field: "vendor" },
+      { kind: "set_router_model", field: "model" },
+      { kind: "set_router_model", field: "effort" },
+    ]);
+    expect(selects(explicit).map((s) => s.initial_option)).toEqual(["codex", "gpt-6-luna", "high"]);
+
+    const fixed = renderRouterSettingsCard({
+      settings: { vendor: "cursor", model: "gemini-3.8-flash", effort: "medium", updatedAt: 1 },
+      catalogs: defaultCatalogs,
+    });
+    expect(selects(fixed).map(valueOf)).toEqual([
+      { kind: "set_router_model", field: "vendor" },
+      { kind: "set_router_model", field: "model" },
+    ]);
+    expect(allText(fixed)).toContain("不支持");
   });
 });
 

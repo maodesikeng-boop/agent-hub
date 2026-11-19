@@ -19,6 +19,7 @@ import type {
 import type { FeishuCardRef } from "./cards.ts";
 import type { FeishuPendingFile } from "./directory.ts";
 import type { FeishuInbound, FeishuInboundAction, FeishuInboundFileRef } from "./inbound.ts";
+import type { FeishuModelField } from "./model-picker.ts";
 
 type InboundMessage = Extract<FeishuInbound, { kind: "message" }>;
 
@@ -146,6 +147,8 @@ export type FeishuActionRoute =
   | { kind: "blocker_done"; card: Extract<FeishuCardRef, { kind: "blocker" }> }
   | { kind: "stop"; target: FeishuChatTarget }
   | { kind: "set_policy"; pmId: PmId; triggerMode?: FeishuTriggerMode; guestTier?: FeishuGuestTier }
+  | { kind: "set_pm_model"; pmId: PmId; field: FeishuModelField; option: string }
+  | { kind: "set_router_model"; field: FeishuModelField; option: string }
   /** 拒绝：toast 给点的人看。guestDenied：访客因本档权限点不了拍板、停止，调用方按冷却附一张群设置卡。 */
   | { kind: "reject"; toast: string; guestDenied?: true }
   | { kind: "ignore" };
@@ -170,6 +173,9 @@ export function routeFeishuAction(action: FeishuInboundAction, ctx: Pick<FeishuR
         ...(value.triggerMode !== undefined ? { triggerMode: value.triggerMode } : {}),
         ...(value.guestTier !== undefined ? { guestTier: value.guestTier } : {}),
       };
+    case "set_pm_model":
+    case "set_router_model":
+      return { kind: "ignore" };
     case "stop":
       if (guest && !feishuGuestMay(ctx.guestTier, "stop")) return { kind: "reject", toast: OWNER_ONLY_STOP, guestDenied: true };
       return { kind: "stop", target: binding.target };

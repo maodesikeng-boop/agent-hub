@@ -51,11 +51,14 @@ const session = (patch: Partial<SessionState> = {}): SessionState => ({
 const project = (c: Change, withRouter = true) => projectFeishuChange(c, ctx(withRouter));
 
 describe("projectFeishuChange", () => {
-  it("项目经理建了、改名、归档、删了 → sync_chats", () => {
+  it("项目经理建了、删了 → sync_chats；更新时同时刷新该群设置卡；总助改模型时刷新单聊设置卡", () => {
     const pm = { id: 1, name: "小林" } as never;
     expect(project(change("pm.created", { pm }))).toEqual([{ kind: "sync_chats" }]);
-    expect(project(change("pm.updated", { pm }))).toEqual([{ kind: "sync_chats" }]);
+    expect(project(change("pm.updated", { pm }))).toEqual([{ kind: "sync_chats" }, { kind: "refresh_policy_card", pmId: 1 }]);
     expect(project(change("pm.removed", { pmId: 1 }))).toEqual([{ kind: "sync_chats" }]);
+    const settings = { vendor: "codex" as const, model: "gpt-6-luna", effort: "low", updatedAt: 2 };
+    expect(project(change("router.settings.updated", { settings }), true)).toEqual([{ kind: "refresh_router_settings_card" }]);
+    expect(project(change("router.settings.updated", { settings }), false)).toEqual([]);
   });
 
   it("项目经理对话的流式预览 → stream；会话回到空闲 → turn_end", () => {

@@ -38,7 +38,9 @@ export type FeishuOutboundIntent =
   /** 总助的卡片：新的简报或拍板项，或它的状态变了。 */
   | { kind: "router_item"; item: RouterItem }
   /** 总助指令有了结果：作为新卡片发在总助单聊里；网页发的指令连同原话一起镜像。 */
-  | { kind: "router_command"; command: RouterCommandRecord };
+  | { kind: "router_command"; command: RouterCommandRecord }
+  | { kind: "refresh_policy_card"; pmId: PmId }
+  | { kind: "refresh_router_settings_card" };
 
 export interface FeishuProjectionContext {
   /** 项目经理对话 → 它的群；不是项目经理对话（Worker 对话）或还没建群是 null。 */

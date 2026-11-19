@@ -110,6 +110,8 @@ export interface FeishuRawCardAction {
   operatorOpenId: string;
   /** 按钮 behaviors.callback 里放的值。 */
   value: unknown;
+  /** select_static 下拉回传的选项值（options[].value）。 */
+  option?: string | null;
   /** 表单里填的（补充说明输入框）；没有表单是 null。 */
   formValue: Record<string, unknown> | null;
 }

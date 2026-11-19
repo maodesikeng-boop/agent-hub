@@ -10,8 +10,10 @@ import type { AskMeta, ConversationId, Message, MessageId, PmId, RouterItemId, T
 import { FEISHU_GUEST_TIERS, FEISHU_TRIGGER_MODES } from "../../shared/feishu.ts";
 import type { FeishuChatId, FeishuGuestTier, FeishuTriggerMode } from "../../shared/feishu.ts";
 import { FEISHU_CARD_MAX_BYTES, FEISHU_CARD_MAX_CHARS, FEISHU_STREAM_PRINT_FREQUENCY_MS, FEISHU_STREAM_PRINT_STEP } from "../../shared/limits.ts";
-import type { RouterItem } from "../../shared/router.ts";
+import type { RouterItem, RouterSettings } from "../../shared/router.ts";
 import type { UserBlockerId } from "../../shared/user-blockers.ts";
+import type { ModelCatalog } from "../../shared/vendors.ts";
+import { FEISHU_MODEL_FIELDS, type FeishuModelField, type FeishuPmModelView } from "./model-picker.ts";
 import { feishuCardMarkdown, feishuMarkdownFit } from "./outbound.ts";
 
 /** 卡片 JSON 2.0（只在这一层拼，序列化后交给传输层）。 */
@@ -43,7 +45,9 @@ export type FeishuActionValue =
   | { kind: "blocker_done"; card: Extract<FeishuCardRef, { kind: "blocker" }> }
   | { kind: "stop"; conversationId: ConversationId }
   /** 群里那张“访客权限”卡上的按钮。 */
-  | { kind: "set_policy"; pmId: PmId; triggerMode?: FeishuTriggerMode; guestTier?: FeishuGuestTier };
+  | { kind: "set_policy"; pmId: PmId; triggerMode?: FeishuTriggerMode; guestTier?: FeishuGuestTier }
+  | { kind: "set_pm_model"; pmId: PmId; field: FeishuModelField }
+  | { kind: "set_router_model"; field: FeishuModelField };
 
 /** 按钮值里的版本标记：以后改形状时换版本，老卡片的点击解不出来，回“这张卡已过期”。 */
 const ACTION_MARKER = "fusa";
@@ -63,6 +67,8 @@ const actionValueSchema = z.discriminatedUnion("kind", [
   z
     .object({ kind: z.literal("set_policy"), pmId: id, triggerMode: z.enum(FEISHU_TRIGGER_MODES).optional(), guestTier: z.enum(FEISHU_GUEST_TIERS).optional() })
     .refine((v) => v.triggerMode !== undefined || v.guestTier !== undefined),
+  z.object({ kind: z.literal("set_pm_model"), pmId: id, field: z.enum(FEISHU_MODEL_FIELDS) }),
+  z.object({ kind: z.literal("set_router_model"), field: z.enum(FEISHU_MODEL_FIELDS) }),
 ]);
 
 /** 后置：返回放进按钮 behaviors.callback.value 的对象。decodeFeishuActionValue(encode(v)) 深等于 v。 */
@@ -369,6 +375,8 @@ const HR = { tag: "hr" };
  */
 export function renderChatPolicyCard(input: {
   pmId: PmId;
+  agent: FeishuPmModelView;
+  catalogs: readonly ModelCatalog[];
   triggerMode: FeishuTriggerMode;
   guestTier: FeishuGuestTier;
   mentionOnlyForced: boolean;
@@ -392,6 +400,10 @@ export function renderChatPolicyCard(input: {
   ];
   const footer = { tag: "markdown", content: "只有主人能改。随时在群里发 /群设置 叫出这张卡。", text_size: "notation" };
   return card({ title: "群设置", template: "grey", summary: "群设置", elements: [...wake, HR, ...members, HR, footer] });
+}
+
+export function renderRouterSettingsCard(_input: { settings: RouterSettings; catalogs: readonly ModelCatalog[] }): FeishuCardJson {
+  return card({ title: "总助设置", template: "grey", summary: "总助设置", elements: [] });
 }
 
 /** 回复正文被飞书拒收（内容不合规、超限）时卡片上换成的话：卡片照样能关流式、去停止按钮。 */

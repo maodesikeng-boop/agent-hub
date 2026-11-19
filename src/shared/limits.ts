@@ -1102,6 +1102,8 @@ export const FEISHU_CONTEXT_TTL_MS = 2 * 60 * 60_000;
 export const FEISHU_CONTEXT_MAX_FILES = 20;
 /** 访客因档位被拦（发文件、点拍板或停止）时，同一个群隔多久才再自动附一张群设置卡；主人发 /群设置 不受它限。 */
 export const FEISHU_POLICY_CARD_COOLDOWN_MS = 5 * 60_000;
+/** 飞书卡片 select_static 单个下拉最多放多少个选项（防聚合厂商几百个模型撑爆 30 KB 卡片上限；当前选中的模型总保留）。 */
+export const FEISHU_SELECT_OPTIONS_MAX = 100;
 /** feishu_posts 里已定稿的行留几天：飞书卡片实体 14 天后不能再操作。 */
 export const FEISHU_POST_RETENTION_DAYS = 14;
 export const FEISHU_POST_RETENTION_MS = FEISHU_POST_RETENTION_DAYS * 24 * 60 * 60 * 1000;

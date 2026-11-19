@@ -82,6 +82,7 @@ import {
   type FeishuCardRef,
   type FeishuCardState,
 } from "./cards.ts";
+import { AGENT_VENDORS, bundledModelCatalog } from "../../shared/vendors.ts";
 import { desiredFeishuChats, FEISHU_CHAT_MARKER_PATTERN, feishuChatCreateUuid, planFeishuChatSync, type FeishuChatOp } from "./chats.ts";
 import { createFeishuContextWindows, createFeishuDirectory, type FeishuMember } from "./directory.ts";
 import { createFeishuFileService, planFeishuFile, type FeishuFileService, type FeishuOutboundFile, type FeishuUploaded } from "./files.ts";
@@ -1528,6 +1529,9 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
         if (chat !== null) enqueue(chat.chatId, () => replayRouterEvents(chat, false), { key: "router-events" });
         return;
       }
+      case "refresh_policy_card":
+      case "refresh_router_settings_card":
+        return;
     }
   };
 
@@ -1729,7 +1733,7 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     const ref: FeishuPostRef = { kind: "chat_policy", pmId };
     const previous = store.postOf(ref);
     directory.notePolicyCard(chat.chatId, now());
-    const posted = await postCardEntity(chat.chatId, renderChatPolicyCard({ pmId, triggerMode: chat.triggerMode, guestTier: chat.guestTier, mentionOnlyForced: mentionOnly }), uuid);
+    const posted = await postCardEntity(chat.chatId, renderChatPolicyCard({ pmId, agent: { vendor: "claude", model: null, effort: null }, catalogs: AGENT_VENDORS.map(bundledModelCatalog), triggerMode: chat.triggerMode, guestTier: chat.guestTier, mentionOnlyForced: mentionOnly }), uuid);
     if (activeTarget(store.chatById(chat.chatId)) === null) return;
     // 卡片的 sequence 只要在同一张卡上递增；接着旧卡的往上记，这一行的序号不倒退
     store.savePost({ ref, chatId: chat.chatId, messageId: posted.messageId, cardId: posted.cardId, sequence: previous?.sequence ?? 0, state: "final" }, now());
@@ -1915,6 +1919,9 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     if (value.kind === "set_policy") {
       return target.kind === "pm" && post.ref.kind === "chat_policy" && post.ref.pmId === target.pmId && value.pmId === target.pmId;
     }
+    if (value.kind === "set_pm_model" || value.kind === "set_router_model") {
+      return false;
+    }
     const ref = postedCardRef(post, target);
     if (ref === null || !isDeepStrictEqual(ref, value.card)) return false;
     if (ref.kind === "gate") {
@@ -1978,6 +1985,9 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
           }));
           return admitted ? toast("success", "已改") : toast("warning", "飞书正忙，请再点一次");
         }
+        case "set_pm_model":
+        case "set_router_model":
+          return {};
         case "blocker_done": {
           // 重问厂商要跑它的命令行，可能超过回调时限：先回 toast，排队去查；解开了账本推变化，这张卡跟着改
           const blockerId = route.card.blockerId;
@@ -2101,7 +2111,7 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
       }
       const post = store.postOf({ kind: "chat_policy", pmId: input.pmId });
       if (post !== null && post.cardId !== null && transport !== null) {
-        await updateCard(post.cardId, post.sequence + 1, renderChatPolicyCard({ pmId: input.pmId, triggerMode: chat.triggerMode, guestTier: chat.guestTier, mentionOnlyForced: mentionOnly }));
+        await updateCard(post.cardId, post.sequence + 1, renderChatPolicyCard({ pmId: input.pmId, agent: { vendor: "claude", model: null, effort: null }, catalogs: AGENT_VENDORS.map(bundledModelCatalog), triggerMode: chat.triggerMode, guestTier: chat.guestTier, mentionOnlyForced: mentionOnly }));
         store.savePost({ ...post, sequence: post.sequence + 1 }, now());
       }
       return chatView(chat)!;

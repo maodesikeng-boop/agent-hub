@@ -50,6 +50,7 @@ export interface FeishuInboundAction {
   chatId: FeishuChatId;
   operatorOpenId: FeishuOpenId;
   value: FeishuActionValue;
+  option?: string;
   /** 卡片表单里“补充说明”输入框的内容；没填是 null。 */
   note: string | null;
 }

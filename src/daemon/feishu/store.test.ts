@@ -134,6 +134,11 @@ describe("createFeishuStore", () => {
     expect(store.postByMessageId(om("ri"))?.ref).toEqual({ kind: "router_item", itemId: 8 });
     expect(store.postByMessageId(om("none"))).toBeNull();
     expect([...store.pendingCards(pmA)].map((p) => p.ref)).toEqual([{ kind: "router_item", itemId: 8 }]);
+
+    store.upsertChat({ chatId: chat("r"), target: { kind: "router" }, name: "总助", label: "总助" }, 2);
+    store.savePost({ ref: { kind: "router_settings" }, chatId: chat("r"), messageId: om("rs1"), cardId: "c_rs" as FeishuCardId, sequence: 1, state: "final" }, 3);
+    expect(store.postOf({ kind: "router_settings" })?.messageId).toBe("om_rs1");
+    expect(store.postByMessageId(om("rs1"))?.ref).toEqual({ kind: "router_settings" });
   });
 
   it("prunePosts 只删早于 before 的 final / card_settled，等拍板的不删", () => {

@@ -188,44 +188,47 @@ describe("routeFeishuMessage", () => {
 
 describe("群设置命令（只认带斜杠的整句，不碰自然语言）", () => {
   const shared = { mode: "shared" as const };
+  const slashCommands = ["/群设置", "/设置", "/policy", "/model", "/settings"] as const;
 
-  it("主人发「设置」「权限」「群设置」这类不带斜杠的话：照常交给项目经理", () => {
-    for (const text of ["设置", "权限", "群设置", "policy", "设置一下", "帮我看看群设置"]) {
+  it("主人发「设置」「模型」「权限」「群设置」这类不带斜杠的话：项目群和单聊都照常交给账本/总助，绝不误拦", () => {
+    for (const text of ["设置", "模型", "权限", "群设置", "policy", "model", "settings", "设置一下", "帮我看看群设置"]) {
       expect(routeFeishuMessage(msg({ text }), ctx())).toMatchObject({ kind: "deliver", text });
       expect(routeFeishuMessage(msg({ text, mentionedBot: true }), ctx(shared))).toMatchObject({ kind: "deliver", text });
+      expect(routeFeishuMessage(msg({ chatType: "p2p", text }), ctx())).toMatchObject({ kind: "deliver", target: { kind: "router" }, text });
     }
   });
 
-  it("主人发 /群设置 或 /policy（去掉 @ 后整句）：叫出群设置卡，不进账本；@ 不 @ 都认", () => {
-    for (const text of ["/群设置", "/policy", " /群设置 ", "/policy\n"]) {
-      expect(routeFeishuMessage(msg({ text }), ctx())).toEqual({ kind: "settings_card" });
-      expect(routeFeishuMessage(msg({ text }), ctx(shared))).toEqual({ kind: "settings_card" });
-      expect(routeFeishuMessage(msg({ text, mentionedBot: true }), ctx(shared))).toEqual({ kind: "settings_card" });
+  it("主人发 /群设置、/设置、/policy、/model、/settings（去掉 @ 后整句）：项目群和总助单聊都叫出设置卡，不进账本", () => {
+    for (const cmd of slashCommands) {
+      for (const text of [cmd, ` ${cmd} `, `${cmd}\n`]) {
+        expect(routeFeishuMessage(msg({ text }), ctx())).toEqual({ kind: "settings_card" });
+        expect(routeFeishuMessage(msg({ text }), ctx(shared))).toEqual({ kind: "settings_card" });
+        expect(routeFeishuMessage(msg({ text, mentionedBot: true }), ctx(shared))).toEqual({ kind: "settings_card" });
+        expect(routeFeishuMessage(msg({ chatType: "p2p", text }), ctx())).toEqual({ kind: "settings_card" });
+      }
     }
   });
 
   it("斜杠命令后面还带了字、带了文件，或大小写不同：不算群设置命令", () => {
     expect(routeFeishuMessage(msg({ text: "/群设置 改成协作者" }), ctx())).toMatchObject({ kind: "deliver" });
+    expect(routeFeishuMessage(msg({ text: "/model sonnet" }), ctx())).toMatchObject({ kind: "deliver" });
     expect(routeFeishuMessage(msg({ text: "/Policy" }), ctx())).toMatchObject({ kind: "deliver" });
     const files = [{ type: "image" as const, fileKey: "img_1", fileName: null }];
     expect(routeFeishuMessage(msg({ text: "/群设置", files }), ctx())).toMatchObject({ kind: "deliver" });
   });
 
-  it("访客发 /群设置 或 /policy：回他只有主人能叫，@ 不 @、哪一档都一样", () => {
+  it("访客发任意设置斜杠命令：回他只有主人能叫，@ 不 @、哪一档都一样", () => {
     for (const guestTier of ["chat_only", "collaborator", "observer"] as const) {
       for (const mentionedBot of [false, true]) {
-        expect(routeFeishuMessage(msg({ senderOpenId: GUEST, text: "/群设置", mentionedBot }), ctx({ ...shared, guestTier }))).toEqual({
-          kind: "reject",
-          openId: GUEST,
-          reason: OWNER_ONLY_SETTINGS_CARD,
-        });
+        for (const text of slashCommands) {
+          expect(routeFeishuMessage(msg({ senderOpenId: GUEST, text, mentionedBot }), ctx({ ...shared, guestTier }))).toEqual({
+            kind: "reject",
+            openId: GUEST,
+            reason: OWNER_ONLY_SETTINGS_CARD,
+          });
+        }
       }
     }
-    expect(routeFeishuMessage(msg({ senderOpenId: GUEST, text: "/policy", mentionedBot: true }), ctx(shared))).toMatchObject({ kind: "reject" });
-  });
-
-  it("总助单聊里发 /群设置：不是项目群，照常交给总助", () => {
-    expect(routeFeishuMessage(msg({ chatType: "p2p", text: "/群设置" }), ctx())).toMatchObject({ kind: "deliver", target: { kind: "router" } });
   });
 });
 
@@ -268,6 +271,27 @@ describe("routeFeishuAction", () => {
     const value = { kind: "set_policy" as const, pmId: 7, guestTier: "observer" as const };
     expect(routeFeishuAction(action({ value }), actx())).toEqual({ kind: "set_policy", pmId: 7, guestTier: "observer" });
     expect(routeFeishuAction(action({ value, operatorOpenId: GUEST }), actx({ guestTier: "collaborator" }))).toEqual({ kind: "reject", toast: "只有主人能改设置" });
+  });
+
+  it("set_pm_model 与 set_router_model 只认主人，访客（含协作者）点下拉 → reject", () => {
+    const pmValue = { kind: "set_pm_model" as const, pmId: 7, field: "vendor" as const };
+    expect(routeFeishuAction(action({ value: pmValue, option: "codex" }), actx())).toEqual({ kind: "set_pm_model", pmId: 7, field: "vendor", option: "codex" });
+    expect(routeFeishuAction(action({ value: pmValue, option: "codex", operatorOpenId: GUEST }), actx({ guestTier: "collaborator" }))).toEqual({
+      kind: "reject",
+      toast: "只有主人能改设置",
+    });
+
+    const routerCtx = { ownerOpenId: OWNER, binding: { target: { kind: "router" as const }, archived: false }, guestTier: "collaborator" as const };
+    const routerValue = { kind: "set_router_model" as const, field: "model" as const };
+    expect(routeFeishuAction(action({ value: routerValue, option: "gpt-6-luna" }), routerCtx)).toEqual({
+      kind: "set_router_model",
+      field: "model",
+      option: "gpt-6-luna",
+    });
+    expect(routeFeishuAction(action({ value: routerValue, option: "gpt-6-luna", operatorOpenId: GUEST }), routerCtx)).toEqual({
+      kind: "reject",
+      toast: "只有主人能改设置",
+    });
   });
 
   it("还没认主人 → ignore", () => {
