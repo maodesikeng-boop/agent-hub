@@ -24,7 +24,7 @@ pub fn is_embedded_bootstrap_origin(url: &Url) -> bool {
     }
 }
 
-/// 判断给定 URL 是否属于当前受监管的本机 Fusa 守护进程回环源 `http://127.0.0.1:<daemon_port>`。
+/// 判断给定 URL 是否属于当前受监管的本机 Bellwood 守护进程回环源 `http://127.0.0.1:<daemon_port>`。
 pub fn is_local_daemon_origin(url: &Url, daemon_port: u16) -> bool {
     url.scheme() == "http"
         && url.host_str() == Some("127.0.0.1")

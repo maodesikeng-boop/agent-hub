@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# 构建 Fusa.app。两种模式（docs/mac-distribution-design.md）：
-#   默认（源码开发模式）：build/Fusa.app，Info.plist 写本机仓库与本机 Node 的路径；--install 装到 /Applications（hub self-reload 靠它）。
-#   --dist（分发模式）：build/dist/Fusa.app，随包内置官方 Node 与守护进程（Contents/Resources/runtime），
+# 构建 Bellwood.app。两种模式（docs/mac-distribution-design.md）：
+#   默认（源码开发模式）：build/Bellwood.app，Info.plist 写本机仓库与本机 Node 的路径；--install 装到 /Applications（hub self-reload 靠它）。
+#   --dist（分发模式）：build/dist/Bellwood.app，随包内置官方 Node 与守护进程（Contents/Resources/runtime），
 #                       内层二进制先签、整包再签，打 arm64 DMG 与 .sha256。不会装到 /Applications。
 # 分发模式的签名参数（第二期 Developer ID 只需补这几个环境变量）：
 #   MAC_SIGN_IDENTITY       签名身份，默认 "-"（ad-hoc，unsigned preview）；填 "Developer ID Application: …" 时自动开 hardened runtime 与时间戳
@@ -44,7 +44,7 @@ if [[ "$BUILD_WEB" -eq 1 ]]; then
   pnpm build
 fi
 
-APP_NAME="Fusa.app"
+APP_NAME="Bellwood.app"
 BUILD_DIR="$REPO_DIR/build"
 if [[ "$DIST" -eq 1 ]]; then
   OUT_DIR="$BUILD_DIR/dist"
@@ -63,7 +63,7 @@ TMP_BUILD_DIR="$OUT_DIR/.tmp"
 
 rm -rf "$APP_DIR" "$ICONSET_DIR" "$TMP_BUILD_DIR"
 if [[ "$DIST" -eq 0 ]]; then
-  rm -rf "$BUILD_DIR/Agent Hub.app"
+  rm -rf "$BUILD_DIR/Agent Hub.app" "$BUILD_DIR/Fusa.app"
 fi
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$ICONSET_DIR" "$TMP_BUILD_DIR"
 ORIGINAL_TMPDIR="${TMPDIR:-/tmp}"
@@ -109,9 +109,9 @@ write_info_plist() {
 <plist version="1.0">
 <dict>
   <key>CFBundleName</key>
-  <string>Fusa</string>
+  <string>Bellwood</string>
   <key>CFBundleDisplayName</key>
-  <string>Fusa</string>
+  <string>Bellwood</string>
   <key>CFBundleIdentifier</key>
   <string>com.agenthub.desktop</string>
   <key>CFBundleVersion</key>
@@ -160,9 +160,11 @@ if [[ "$DIST" -eq 0 ]]; then
   if [[ "$INSTALL" -eq 1 ]]; then
     /usr/bin/ditto "$APP_DIR" "/Applications/$APP_NAME"
     echo "Installed to /Applications/$APP_NAME"
-    if [[ -d "/Applications/Agent Hub.app" ]]; then
-      echo "提示：检测到旧版 /Applications/Agent Hub.app，可手动删除。"
-    fi
+    for legacy in "Agent Hub.app" "Fusa.app"; do
+      if [[ -d "/Applications/$legacy" ]]; then
+        echo "提示：检测到旧版 /Applications/$legacy，可手动删除。"
+      fi
+    done
   else
     echo "Built $APP_DIR"
   fi
@@ -212,9 +214,9 @@ rm -rf "$TMP_BUILD_DIR"
 export TMPDIR="$ORIGINAL_TMPDIR"
 
 if [[ "$SIGN_IDENTITY" == "-" ]]; then
-  DMG_NAME="Fusa_${VERSION}_arm64-unsigned-preview.dmg"
+  DMG_NAME="Bellwood_${VERSION}_arm64-unsigned-preview.dmg"
 else
-  DMG_NAME="Fusa_${VERSION}_arm64.dmg"
+  DMG_NAME="Bellwood_${VERSION}_arm64.dmg"
 fi
 DMG_PATH="$OUT_DIR/$DMG_NAME"
 DMG_STAGE="$(mktemp -d "$TMPDIR/fusa-dmg.XXXXXX")"
@@ -223,7 +225,7 @@ trap 'rm -rf "$DMG_STAGE"' EXIT
 ln -s /Applications "$DMG_STAGE/Applications"
 rm -f "$DMG_PATH" "$DMG_PATH.sha256"
 # ULMO（LZMA）压缩率最高，macOS 10.15+ 可挂载（本应用最低 13.0）
-/usr/bin/hdiutil create -volname "Fusa" -srcfolder "$DMG_STAGE" -fs HFS+ -format ULMO -ov "$DMG_PATH" >/dev/null
+/usr/bin/hdiutil create -volname "Bellwood" -srcfolder "$DMG_STAGE" -fs HFS+ -format ULMO -ov "$DMG_PATH" >/dev/null
 
 if [[ "$SIGN_IDENTITY" != "-" ]]; then
   /usr/bin/codesign --force --sign "$SIGN_IDENTITY" --timestamp "$DMG_PATH"

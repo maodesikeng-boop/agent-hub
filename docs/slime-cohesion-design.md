@@ -228,7 +228,7 @@ Piece 分身（用户已选 P1 便签小灵）：P2 果冻小水滴、P3 拼图�
 - 截图（放 `docs/screenshots/slime-cohesion/`）：真实网页的左栏宽栏、72px 窄栏、手机列表；Router 工作台顶栏、时间流和空状态；右栏的果冻管道、进度图标和小铃；放大全览的节点卡和管道；Piece 汇报行、Piece 对话顶栏、右栏开关；左下角的像素图标（悬停、按下各一张）；输入框空着、有字、多行各一张；资料页换形象浮层，换造型、换颜色各一张；同一个项目经理换色前后的对话页（强调色、气泡、果冻底、Piece 分身一起变）；换字体前后同一页各一张，Mac 和 Windows 各一张。
 - 录屏（mp4，H.264，50 MB 以内）：项目经理干活时消息流里正在进行的那一轮头像跟跳，Piece 汇报行的便签小灵跟跳，总助嫩芽铃左右摇，这一轮结束后停下，历史轮一直不动。
 - 飞书：用测试应用把一个项目经理换成天蓝狐狸，守护进程日志里出现一次上传和一次改群头像，`feishu_avatars` 多一行 `persimmon:sky`；再换回原色，不再上传（哈希命中）。
-- 应用图标：`node scripts/render-icons.ts /tmp/fusa-icon.png` 的输出、`tauri icon` 生成的 Windows 图标、`pnpm app:mac` 打出的 `Fusa.app` 在 Dock 里的截图。
+- 应用图标：`node scripts/render-icons.ts /tmp/fusa-icon.png` 的输出、`tauri icon` 生成的 Windows 图标、`pnpm app:mac` 打出的 `Bellwood.app` 在 Dock 里的截图。
 
 ## 附录：像素稿、管道和对照表
 

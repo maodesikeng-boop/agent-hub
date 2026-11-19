@@ -36,7 +36,7 @@ const VARIANT_SUFFIX_RE = /-(?:fast|thinking|extra-high|xhigh|high|medium|low|ma
 const LABEL_VARIANT_RE = /\s+(?:fast|thinking|extra high|xhigh|high|medium|low|max|minimal|none)$/iu;
 const LEGACY_CLAUDE_RE = /^claude-(\d+)(?:\.(\d+))?-(opus|sonnet|haiku|fable)$/u;
 
-/** Fusa 未选模型时用的 Cursor 自动路由（ACP 里是 default[]）。 */
+/** Bellwood 未选模型时用的 Cursor 自动路由（ACP 里是 default[]）。 */
 export const CURSOR_AUTO_MODEL = "auto";
 
 export interface CursorCatalogRaw {

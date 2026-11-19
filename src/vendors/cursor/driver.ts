@@ -131,7 +131,7 @@ function handleCursorBlockingRequest(ctx: AcpExtensionRequestContext): unknown {
     return {
       outcome: {
         outcome: "rejected",
-        reason: "Interactive plan approval is disabled in unattended Fusa sessions.",
+        reason: "Interactive plan approval is disabled in unattended Bellwood sessions.",
       },
     };
   }
@@ -176,7 +176,7 @@ export interface CursorDriverOptions extends DriverOptions {
 }
 
 /**
- * ps 里那一行是不是 Fusa 起的 cursor-agent ACP 进程：要有 cursor-agent（或配置的可执行文件），带 --trust 和 --approve-mcps，
+ * ps 里那一行是不是 Bellwood 起的 cursor-agent ACP 进程：要有 cursor-agent（或配置的可执行文件），带 --trust 和 --approve-mcps，
  * 且最后一个参数是 acp。启动脚本 `exec -a "$0" node index.js …` 保留了调用路径和参数顺序；Linux 包一层 bwrap 时末尾也还是 acp。
  * 用户自己在终端或 IDE 跑的 `cursor-agent acp` 不带这两个标志，旧 PID 被它复用时不误杀。
  */

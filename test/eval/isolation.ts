@@ -4,7 +4,7 @@
 // 2. 真仓库、真 PR：主文件夹是基准提交的一份克隆，远端是本地裸仓库（gitconfig 的 insteadOf 把 GitHub 地址改写到它）；
 //    gh、git push 换成 PATH 最前面的替身（只记录不外发）；真 gh 没有登录态（GH_CONFIG_DIR 空目录、GH_TOKEN 清空），沙箱里也不许执行。
 // 3. 真部署：ssh、scp、sftp、rsync、launchctl、osascript、pkill、killall、open 换成只记录的替身；沙箱里真的那几个不许执行，
-//    出站 22 端口禁掉，SSH_AUTH_SOCK 清空；不能给沙箱外的进程发信号（杀不到真守护进程、Fusa.app）。
+//    出站 22 端口禁掉，SSH_AUTH_SOCK 清空；不能给沙箱外的进程发信号（杀不到真守护进程、Bellwood.app）。
 // 4. 现任项目经理的上下文：被测项目经理的性格设定是中性的空设定（scenarios/），沙箱里禁读真仓库（node_modules 除外）、
 //    ~/.agent-hub（性格设定、记忆目录、pm-notes）、claude 给真仓库和真 worktree 存的会话记录与自动记忆。
 // 每次运行开头 preflight 在真沙箱里逐条试一遍，有一条没挡住就不跑。
@@ -231,7 +231,7 @@ export interface PmSandboxInput {
   readDenied?: string[];
   dependencies?: string[];
   mainRepo?: string;
-  /** 真的 Fusa 数据目录（默认 ~/.agent-hub，用户设了 AGENT_HUB_HOME 也算上）。 */
+  /** 真的 Bellwood 数据目录（默认 ~/.agent-hub，用户设了 AGENT_HUB_HOME 也算上）。 */
   realDataDirs: string[];
   /** 跑评测的这份仓库（用户的主文件夹）：禁读禁写，node_modules 放行读（被测版本的 node_modules 软链到这里）。 */
   realRepo: string;
@@ -335,7 +335,7 @@ export function pmSandboxProfile(input: PmSandboxInput): string {
     ";; 真的 ssh、rsync、gh、launchctl……不许执行（PATH 里的替身之外的第二道）",
     // 列表为空时不能写：`(deny process-exec )` 不带过滤条件等于禁掉所有 exec，sandbox-exec 连 /bin/sh 都起不来（退出码 71）
     ...(input.denyExec.length ? [`(deny process-exec ${input.denyExec.map((p) => `(literal ${sbString(p)})`).join(" ")})`] : []),
-    ";; 只能给同一个沙箱里的进程发信号：杀不到真守护进程、Fusa.app、评测自己的守护进程。",
+    ";; 只能给同一个沙箱里的进程发信号：杀不到真守护进程、Bellwood.app、评测自己的守护进程。",
     ";; 不能只拒 others 这一类：others 不含同进程组的进程，而评测进程和沙箱里的 sh 同组（spawnSync 不 detached），",
     ";; 那样信号还是发得出去。先整条 deny，再只放同沙箱。",
     "(deny signal)",

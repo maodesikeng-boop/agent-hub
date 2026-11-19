@@ -45,7 +45,7 @@ pub enum SupervisorError {
     #[error("健康探活请求失败：{0}")]
     HealthCheckFailed(String),
 
-    #[error("当前端口由外部兼容 Fusa 实例管理，外壳只复用连接，拒绝重启或停止外部实例")]
+    #[error("当前端口由外部兼容 Bellwood 实例管理，外壳只复用连接，拒绝重启或停止外部实例")]
     ExternalManagedCannotRestart,
 
     #[error("监管操作已被更新的重启世代或退出请求取消")]

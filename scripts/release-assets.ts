@@ -19,13 +19,13 @@ export interface ReleaseAssetSpec {
 export const RELEASE_ASSETS: readonly ReleaseAssetSpec[] = [
   {
     platform: "windows",
-    sourcePattern: /^Fusa_(\d+\.\d+\.\d+)_x64-setup-unsigned-preview\.exe$/,
-    fixedName: "Fusa-windows-x64-setup.exe",
+    sourcePattern: /^Bellwood_(\d+\.\d+\.\d+)_x64-setup-unsigned-preview\.exe$/,
+    fixedName: "Bellwood-windows-x64-setup.exe",
   },
   {
     platform: "macos",
-    sourcePattern: /^Fusa_(\d+\.\d+\.\d+)_arm64(?:-unsigned-preview)?\.dmg$/,
-    fixedName: "Fusa-macos-arm64.dmg",
+    sourcePattern: /^Bellwood_(\d+\.\d+\.\d+)_arm64(?:-unsigned-preview)?\.dmg$/,
+    fixedName: "Bellwood-macos-arm64.dmg",
   },
 ];
 

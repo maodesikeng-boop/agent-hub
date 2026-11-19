@@ -546,7 +546,7 @@ child.on("exit", (code, sig) => {
     expect(resolveCursorModelValue("claude-opus-5-5", null)).toBeNull();
   });
 
-  it("isFusaCursorAcpCommand：只认 Fusa 起的 cursor-agent --trust --approve-mcps … acp，不误杀用户自己跑的 cursor-agent acp", () => {
+  it("isFusaCursorAcpCommand：只认 Bellwood 起的 cursor-agent --trust --approve-mcps … acp，不误杀用户自己跑的 cursor-agent acp", () => {
     const exe = "/Users/u/.local/bin/cursor-agent";
     const node = "/Users/u/.local/share/cursor-agent/versions/2026.10.22-27dcf5f";
     // 启动脚本 exec -a "$0" node index.js …：ps 里是调用路径 + node 参数 + index.js + 原参数

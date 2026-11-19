@@ -158,7 +158,7 @@ export interface DaemonOptions {
   allowLoopbackPeers?: boolean;
   /**
    * 空闲排空热重启（hub self-reload、POST /api/self-reload）排空到点后调它：entry.ts 正常关机，以 apps/desktop/contract.json 的
-   * reloadExitCode 退出，由外壳（Fusa.app、Windows 桌面端、systemd）立即拉起。不给 = 没有外壳监管，不接受热重启（409）。
+   * reloadExitCode 退出，由外壳（Bellwood.app、Windows 桌面端、systemd）立即拉起。不给 = 没有外壳监管，不接受热重启（409）。
    */
   onSelfReload?: () => void;
   /** 热重启登记后最多等全库空闲多久（默认 SELF_RELOAD_DRAIN_MAX_MS）；只给测试改小。 */

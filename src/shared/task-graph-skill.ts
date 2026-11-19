@@ -23,7 +23,7 @@ export function isInternalSkillCommand(name: string): boolean {
 
 /** 技能的说明：各家靠它决定要不要加载，先写什么时候加载，再写什么时候不用（上限 TASK_GRAPH_SKILL_DESCRIPTION_MAX_CHARS）。 */
 export const TASK_GRAPH_SKILL_DESCRIPTION =
-  `Fusa 任务图手册。要用 ${HUB} graph 建图或改图、排自动交棒步骤、加独立审查步骤、处理偏离或换人接手、挂拍板卡之前，先加载。一段就能做完的活不建图，不用加载。`;
+  `Bellwood 任务图手册。要用 ${HUB} graph 建图或改图、排自动交棒步骤、加独立审查步骤、处理偏离或换人接手、挂拍板卡之前，先加载。一段就能做完的活不建图，不用加载。`;
 
 /**
  * 四类审查红线：碰到任意一条就在实现后面加审查节点。完整的在技能正文里；基础提示词第 2 步只用 PM_REVIEW_REDLINES_BRIEF 那一句压缩版

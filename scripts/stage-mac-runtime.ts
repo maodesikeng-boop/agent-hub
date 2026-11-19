@@ -1,4 +1,4 @@
-// 组装 macOS 分发版 Fusa.app 的随包运行时目录（放进 Fusa.app/Contents/Resources/runtime，见 docs/mac-distribution-design.md）：
+// 组装 macOS 分发版 Bellwood.app 的随包运行时目录（放进 Bellwood.app/Contents/Resources/runtime，见 docs/mac-distribution-design.md）：
 //   <outDir>/
 //     node/bin/node                 （官方 Node 24 LTS darwin-arm64，与 Windows 随包同一版本，经 SHA-256 严格校验）
 //     node/bin/npm、node/bin/npx    （官方压缩包里的相对软链，指向 ../lib/node_modules/npm/bin/*-cli.js）
@@ -182,7 +182,7 @@ if (process.argv[1] && realOrSelf(fileURLToPath(import.meta.url)) === realOrSelf
     strict: true,
   });
   if (!values["out-dir"]) {
-    console.error("Usage: node scripts/stage-mac-runtime.ts --out-dir <Fusa.app/Contents/Resources/runtime> [--cache-dir <dir>]");
+    console.error("Usage: node scripts/stage-mac-runtime.ts --out-dir <Bellwood.app/Contents/Resources/runtime> [--cache-dir <dir>]");
     process.exit(2);
   }
   stageMacRuntime({

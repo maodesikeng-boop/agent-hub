@@ -47,9 +47,9 @@ describe("命令列表", () => {
 
   it("内部按需技能 fusa-task-graph（裸名、fusa: 前缀、skill: 前缀）不在网页 / 列表里出现，普通技能照常保留", async () => {
     const internalAndUser: ComposerCommand[] = [
-      { name: "fusa-task-graph", description: "Fusa 任务图手册" },
-      { name: "fusa:fusa-task-graph", description: "(fusa) Fusa 任务图手册" },
-      { name: "skill:fusa-task-graph", description: "Fusa 任务图手册" },
+      { name: "fusa-task-graph", description: "Bellwood 任务图手册" },
+      { name: "fusa:fusa-task-graph", description: "(fusa) Bellwood 任务图手册" },
+      { name: "skill:fusa-task-graph", description: "Bellwood 任务图手册" },
       { name: "skill:my-skill", description: "用户自己的 Pi 技能" },
       { name: "my-plugin:helper", description: "用户自己的插件技能" },
     ];

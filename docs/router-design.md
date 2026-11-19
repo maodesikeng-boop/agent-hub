@@ -12,7 +12,7 @@
 现在每个项目经理（PM）遇到需要用户拍板的问题或阶段汇报时，各自在自己的聊天对话里发长段文字或 `hub ask`。设备一多（本机 Mac + 东京 Linux 等）、项目一多，用户得挨个点进不同对话阅读上下文、打字回复；给不同项目派活也要先找对话再切过去。
 
 ### 核心定位：Router 是一把水果刀（Knife）
-延续 Fusa 的水果视觉体系：项目经理是整果横切面（`slice`），Worker（Piece）是切下的一瓣果肉（`wedge`），**Router 是切开与调度所有水果的那把水果刀（`knife`）**：
+延续 Bellwood 的水果视觉体系：项目经理是整果横切面（`slice`），Worker（Piece）是切下的一瓣果肉（`wedge`），**Router 是切开与调度所有水果的那把水果刀（`knife`）**：
 1. **收口拍板（PM → Router → 用户点一下）**：所有设备上 PM 需要用户决定的事统一汇总到 Router，渲染为**可一键点选、也可顺手补字**的选项卡片；阶段成果渲染为带证据链接的精简汇报卡。用户在一个面板点一下即原样回传对应设备的 PM。
 2. **非对话式工作台**：Router **绝不是**从上往下堆气泡的聊天窗口，而是干净克制的行动卡片面板（待决选项卡片 + 近期指令回执 + 阶段汇报卡 + 底部常驻单行发令框），处理完即归档收起。
 3. **跨设备极速直达（用户 → Router → 任意设备 PM / 项目 Piece）**：底部发令框支持文字与附件。Router 走**双轨机制**——选项点击、汇报归档、`@设备/项目` 显式指派走**轨道 A（0 模型调用、0 token、毫秒级代码直通）**；自由自然语言指令走**轨道 B（无历史单轮极快模型 + `--verbatim` 原文零拷贝直传）**，既能原样转交 PM，也能直接在任意设备的目标项目里派/停/关 Piece 或新建项目。
@@ -398,7 +398,7 @@ hub dispatch worker-start --device <self|deviceId> --project <projectId> \
   [--readonly] [--no-worktree] [--verbatim | --stdin]
 
 # 3. 直接操作目标设备上已有的 Piece（暂停当前轮 / 继续追发指令 / 结束收工 / 查列表）
-# 说明：Fusa 的 Piece 暂停 = worker-stop（调 driver.interrupt 中断当前轮回到 idle，保留会话与 worktree）；
+# 说明：Bellwood 的 Piece 暂停 = worker-stop（调 driver.interrupt 中断当前轮回到 idle，保留会话与 worktree）；
 #       继续 = worker-send（往同一会话追发后续指令恢复执行）；彻底收工 = worker-end（关闭会话标 ended）。
 hub dispatch worker-stop --device <self|deviceId> --worker <workerId>
 hub dispatch worker-send --device <self|deviceId> --worker <workerId> [--verbatim | --stdin]

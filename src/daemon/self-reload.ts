@@ -3,7 +3,7 @@
 // 执行器手上没有动作）再静默 SELF_RELOAD_QUIET_MS，期间又忙起来就顺延，重新等空闲。等待有上限：登记后过了 SELF_RELOAD_DRAIN_MAX_MS
 // 还没等到，就不再等重启后会重发的轮次（Worker 轮次、系统消息，靠重启恢复重发），只等重启后不会重发的（项目经理、总助正在回用户）
 // 回完，回完立即重启。最后交给 restart()（entry.ts：正常关机，
-// 以 apps/desktop/contract.json 的 reloadExitCode 退出，Fusa.app / Windows 外壳 / systemd Restart=on-failure 立即拉起新进程）。
+// 以 apps/desktop/contract.json 的 reloadExitCode 退出，Bellwood.app / Windows 外壳 / systemd Restart=on-failure 立即拉起新进程）。
 // 带 build：登记时就在后台把网页构建到暂存目录（不碰正在用的 dist/web），构建失败取消本次重启；重启前一刻才把暂存产物原子换上线。
 // 多次登记合并成同一次；关机（close）清掉定时器、取消构建。
 import { existsSync, lstatSync, readFileSync, renameSync, rmSync } from "node:fs";

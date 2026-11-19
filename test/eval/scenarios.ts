@@ -183,7 +183,7 @@ const passChecks = (runId: number, firstJob: number) => ({
 const PR_238: GhPr = {
   number: 238,
   title: "docs: rewrite README opening around managing a project in one conversation",
-  body: "README 开头改成 Fusa：一个会话管住整个项目；安全说明、Linux 文档同步改名。",
+  body: "README 开头改成 Bellwood：一个会话管住整个项目；安全说明、Linux 文档同步改名。",
   headRefName: "hub/340-重写-readme-开头-突出-一个会话管住整个项目",
   headRefOid: "227e024da6a4b3bb0ee62aa4165f1202123f8c9e",
   state: "OPEN",

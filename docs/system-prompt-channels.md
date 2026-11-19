@@ -72,7 +72,7 @@ prompt.md（`daemon/launch.ts` 每次启动前写：角色说明、hub 命令表
 - cursor 服务端压缩前会让 CLI 执行 `preCompact` 钩子（带 auto/manual、上下文用量），但钩子只能配在 `~/.cursor/hooks.json`（用户全局）或项目的 `.cursor/hooks.json`。
 
 做法：声明 `first_message`，ACP 底座首轮拼、声明 `session.compaction`、收到 `compaction_update` 重拼。**已知缺口**：cursor 现在不发压缩信号，
-自动压缩后产品提示词仍会丢。保留信号重拼兜底，cursor 以后按 ACP 标准发 `compaction_update` 时生效；Fusa 不修改用户全局 `~/.cursor/hooks.json`。
+自动压缩后产品提示词仍会丢。保留信号重拼兜底，cursor 以后按 ACP 标准发 `compaction_update` 时生效；Bellwood 不修改用户全局 `~/.cursor/hooks.json`。
 
 ## 5. 重放
 
