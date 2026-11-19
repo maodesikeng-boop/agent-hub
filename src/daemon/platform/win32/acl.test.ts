@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ENV_WIN_HELPERS } from "../../../shared/limits.ts";
+import { ENV_WIN_HELPERS, WIN_ACL_REVERIFY_ATTEMPTS_MAX } from "../../../shared/limits.ts";
 import { allowWin32WorkerReadAcl, allowWin32WorkerWorktreeAcl, ensureWin32ProtectedRootAcl, resetVerifiedProtectedRootsForTest } from "./acl.ts";
 
 let root: string;
@@ -88,6 +88,37 @@ describe.skipIf(process.platform === "win32")("acl.ts 运行期调 fusa-run.exe"
     await allowWin32WorkerWorktreeAcl(stateDir, 7, wt, { env });
     await allowWin32WorkerWorktreeAcl(stateDir, 7, wt, { env });
     expect(invocations()).toHaveLength(2);
+  });
+
+  it("allow-worker：在途期间同一路径的目录被替换，后来的调用等在途的跑完再对新目录调一次", async () => {
+    fakeHelper({ delay: 0.3 });
+    const wt = join(root, "worktrees", "1", "7");
+    mkdirSync(wt, { recursive: true });
+    const first = allowWin32WorkerWorktreeAcl(stateDir, 7, wt, { env });
+    for (let i = 0; i < 100 && invocations().length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(invocations()).toHaveLength(1);
+    renameSync(wt, `${wt}-old`);
+    mkdirSync(wt);
+    const second = allowWin32WorkerWorktreeAcl(stateDir, 7, wt, { env });
+    await Promise.all([first, second]);
+    expect(invocations()).toHaveLength(2);
+    await allowWin32WorkerWorktreeAcl(stateDir, 7, wt, { env });
+    expect(invocations()).toHaveLength(2);
+  });
+
+  it("allow-worker：每次调用期间目录都被换掉，重试几次仍对不上就报错，不当成功", async () => {
+    const dir = join(root, "helpers");
+    mkdirSync(dir, { recursive: true });
+    const helper = join(dir, "fusa-run.exe");
+    // 最后一个参数是目录：每次调用都把它换成新目录
+    writeFileSync(helper, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${logFile}'\nfor last do :; done\nmv "$last" "$last-$(date +%s%N)-$$"\nmkdir "$last"\n`);
+    chmodSync(helper, 0o755);
+    env = { [ENV_WIN_HELPERS]: dir };
+    const wt = join(root, "worktrees", "1", "7");
+    mkdirSync(wt, { recursive: true });
+    await expect(allowWin32WorkerWorktreeAcl(stateDir, 7, wt, { env })).rejects.toThrow();
+    expect(invocations().length).toBeGreaterThan(1);
+    expect(invocations().length).toBeLessThanOrEqual(WIN_ACL_REVERIFY_ATTEMPTS_MAX);
   });
 
   it("allow-worker：目录还不存在时不记缓存，建好后照常设", async () => {

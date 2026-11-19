@@ -872,6 +872,8 @@ export const WIN_PROTECTED_ROOTS_CACHE_MAX = 64;
  * 命中还要目录身份和 SID 表里的 SID 都没变（platform/win32/acl.ts），轮换掉的 SID 不会误跳过；上限不超过 WIN_WORKER_SIDS_MAX。
  */
 export const WIN_WORKER_ACL_CACHE_MAX = 512;
+/** 设 ACL 期间目录被换掉（调用前后目录身份对不上）时最多调几次辅助程序：还对不上就报错，不当成设好了（platform/win32/acl.ts）。 */
+export const WIN_ACL_REVERIFY_ATTEMPTS_MAX = 3;
 /** `state/win-sandbox-sids.json` 持久化的 SID 条目上限（Worker 写 SID 和会话读 SID 共用，同 fusa-win-helper sids.rs 的 MAX_PERSISTED_WORKER_SIDS）。 */
 export const WIN_WORKER_SIDS_MAX = 1024;
 /** `state/worktree-roots.json` 登记的历史与当前跨卷 worktree 根目录上限。 */
