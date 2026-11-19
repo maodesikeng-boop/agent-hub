@@ -20,11 +20,13 @@ describe("项目经理的形象", () => {
 });
 
 describe("画史莱姆", () => {
-  it.todo("slimePaths：原色画出来和加换色之前的 20 只（主形象、纸片分身）每种颜色、每条路径都相同");
+  it.todo("slimePaths：原色画出来的主形象和加换色之前的 20 只每种颜色、每条路径都相同");
+  it.todo("slimePaths(piece)：同一种颜色下 20 个造型画出来完全一样，换颜色才不同");
+  it.todo("slimePaths(piece)：只有描边、身体、暗面、浅色和眼睛五种颜色，占的格子上下居中");
   it.todo("slimePaths：换颜色只换描边、身体、暗面、浅色、腮红、花纹，眼睛、叶子、喙、牙不变");
-  it.todo("slimePaths：所有造型 × 所有颜色、主形象和纸片分身，坐标都在 12×12 格内，没有 NaN");
+  it.todo("slimePaths：所有造型 × 所有颜色、主形象和 Piece 分身，坐标都在 12×12 格内，没有 NaN");
   it.todo("slimePaths：同样的输入两次返回同一个数组");
-  it.todo("opticalLiftOf：主形象在 0 到 2 格之间，上移后身体上下中点落在画布中线；纸片分身是 0");
+  it.todo("opticalLiftOf：主形象在 0 到 2 格之间，上移后身体上下中点落在画布中线；Piece 分身是 0");
   it.todo("slimeSvg：viewBox 12×12、crispEdges、透明底，没有 id、渐变、滤镜和位图");
   it.todo("slimeBitmap：边长是格子数的整数倍、最接近目标边长，底色是这个颜色的 backdrop，圆形裁切后像素角离圆边至少 padCells 格");
   it.todo("slimeBitmap：同样的输入两次得到逐字节相同的 rgb，换颜色后不同");

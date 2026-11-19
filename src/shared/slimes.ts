@@ -4,7 +4,9 @@
 //   前 20 种是各水果的原色（id 和水果同名），后面是新加的颜色。
 // - 像素稿只用“角色字符”标颜色：描边、身体、暗面、浅色、腮红、花纹跟着颜色换；眼睛、叶子、喙、牙这类配件不换色。
 // - 没存造型按编号取（pmFruitOf），没存颜色用这个造型自己的原色：老数据看起来和以前一模一样。
-// - 网页头像、Piece 纸片分身、飞书群头像、应用图标都从这里画，不另存图片文件；同一个形象在哪画出来都一样。
+// - Piece 分身和造型无关：一个独立的小形象（拍板选定的那一套），只有一双眼睛，跟着项目经理的颜色换色；
+//   同一种颜色下 20 个造型的项目经理，分出来的 Piece 长得一样。
+// - 网页头像、Piece 分身、飞书群头像、应用图标都从这里画，不另存图片文件；同一个形象在哪画出来都一样。
 import type { Pm, PmId } from "./domain.ts";
 import { PM_FRUITS, type PmFruit } from "./fruits.ts";
 
@@ -47,7 +49,7 @@ export interface PmLookSetting {
   color: JellyColorId | null;
 }
 
-/** main 是项目经理的主形象；piece 是 Piece 的纸片分身（同一只压薄，不画明暗）。 */
+/** main 是项目经理的主形象；piece 是 Piece 分身（和造型无关，只看颜色）。 */
 export type SlimeKind = "main" | "piece";
 
 /** 同一种颜色的格子并成的一条路径，坐标是 12×12 的格子。 */
@@ -98,15 +100,16 @@ export function parseLookKey(key: string): SlimeLook | null {
 }
 
 /**
- * 后置：这只史莱姆按 look 上色后的路径，一种颜色一条，坐标落在 12×12 格内。
- * 原色（color 等于 fruit）画出来和加换色之前的头像逐格相同。同样的输入每次返回同一个数组。
+ * 后置：这只史莱姆按 look 上色后的路径，一种颜色一条，坐标落在 12×12 格内。同样的输入每次返回同一个数组。
+ * main：原色（color 等于 fruit）画出来和加换色之前的头像逐格相同。
+ * piece：只看 look.color，不看 look.fruit；只用描边、身体、暗面、浅色和眼睛，没有腮红、花纹、耳朵、叶子；在画布里上下居中。
  */
 export function slimePaths(look: SlimeLook, kind: SlimeKind): readonly SlimePath[] {
   throw new Error("未实现");
 }
 
 /**
- * 光学对齐要往上挪的格数：身体（不算耳朵、叶子、触角）的上下中点到画布中线的距离，纸片分身是 0。
+ * 光学对齐要往上挪的格数：身体（不算耳朵、叶子、触角）的上下中点到画布中线的距离，Piece 分身是 0。
  * 后置：0 到 2 之间；头像框里按它上移后，各只的身体都在框的正中。
  */
 export function opticalLiftOf(fruit: PmFruit, kind: SlimeKind): number {

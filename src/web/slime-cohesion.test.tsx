@@ -19,8 +19,9 @@ describe("任务进度图标", () => {
 });
 
 describe("Avatar 按形象画", () => {
-  it.todo("look 换颜色后头像、纸片分身、会话强调色、气泡底、果冻底一起换");
-  it.todo("主形象按 opticalLiftOf 上移，耳朵伸出框外不被裁；纸片分身上下居中");
+  it.todo("look 换颜色后头像、Piece 分身、会话强调色、气泡底、果冻底一起换");
+  it.todo("主形象按 opticalLiftOf 上移，耳朵伸出框外不被裁；Piece 分身上下居中");
+  it.todo("Piece 分身（neutral）用的是 slimePaths(look, \"piece\")：换造型不变，换颜色才变");
   it.todo("同一个 look 重渲染时 memo 的头像不重画");
 });
 
@@ -43,6 +44,18 @@ describe("左栏项目经理行", () => {
 describe("聊天里的头像跟跳", () => {
   it.todo("项目经理在干活时，消息流里正在进行的那一轮开头的头像带在干活的动画标记");
   it.todo("已经结束的轮、更早的历史轮的头像都不动");
-  it.todo("Piece 的对话里正在进行的那一轮，纸片分身头像同样跟跳；收工后不动");
+  it.todo("Piece 的对话里正在进行的那一轮，Piece 分身头像同样跟跳；收工后不动");
   it.todo("总助在执行时，时间流里执行中那一条的总助头像跟跳");
+});
+
+describe("像素字", () => {
+  it.todo("右栏组标题（Needs You、Task Graph、Pieces、Completed）、果皮轨的 #编号、N done、N next、Waiting on PM、Ready to finish 用 font-pixel");
+  it.todo("在忙的状态词（Working…、Thinking…）用 font-pixel，流光照旧");
+  it.todo("项目经理名字、Router 名字、步骤名、消息正文、按钮里的字、输入框不用 font-pixel");
+});
+
+describe("像素任务图", () => {
+  it.todo("果皮轨的轨道、分叉汇合、状态点都由 pixel-path 画，轨道槽 <svg> 是 crispEdges，没有 <circle> 和曲线");
+  it.todo("放大全览的连线是正交折线加像素箭头，上游做完是实线，其余是点阵");
+  it.todo("放大全览的节点卡左上角有步骤号角标：做完是项目经理的 blob、等你拍板是强调色、其余是灰");
 });
