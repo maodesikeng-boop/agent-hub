@@ -12,6 +12,7 @@ import { startFakeGithub, type FakeGithub } from "../../../test/e2e/fake-github.
 import {
   MESH_LEASE_TTL_MS,
   RELAY_CONCURRENT_SOCKETS_PER_IP,
+  RELAY_IP_LIMITER_MAX,
   RELAY_MAX_UNAUTH_CONTROLS_PER_ACCOUNT,
   RELAY_PENDING_DEVICE_TTL_MS,
   RELAY_REGISTER_PER_IP_PER_MINUTE,
@@ -270,6 +271,95 @@ describe("handleRelayRequest", () => {
       lastStatus = res.status;
     }
     expect(lastStatus).toBe(429);
+  });
+});
+
+describe("handleRelayRequest：限流键与登记鉴权缓存", () => {
+  const ACCOUNT = "acct_abcdefghijklmnopqrstuvwxyz" as AccountId;
+  const stubEnv = () => ({
+    ACCOUNTS: {
+      idFromName: (n: string) => n,
+      get: () => ({
+        fetch: async () =>
+          new Response(JSON.stringify({ accountId: ACCOUNT, login: "alice", state: "active" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      }),
+    },
+    PUBLIC_ORIGIN: "https://relay.test",
+    GITHUB_API_ORIGIN: github.origin,
+  });
+  const upgrade = (headers: Record<string, string>) =>
+    workerMod.handleRelayRequest(
+      new Request(`https://relay.test${RELAY_PATHS.control(ACCOUNT)}`, { headers: { upgrade: "websocket", ...headers } }),
+      stubEnv(),
+    );
+  /** 在进程里直接走 handleRelayRequest 登记（registerWithRelay 签好名），带上指定的 CF-Connecting-IP。 */
+  const register = (token: string, ip: string) =>
+    registerWithRelay({
+      relayUrl: "https://relay.test",
+      githubToken: token,
+      identity: idA,
+      device: { id: DEVICE_A, name: "Mac", platform: "darwin" },
+      fetch: (async (url: string | URL | Request, init?: RequestInit) => {
+        const req = new Request(url, init);
+        req.headers.set("cf-connecting-ip", ip);
+        return workerMod.handleRelayRequest(req, stubEnv());
+      }) as typeof fetch,
+    });
+  const githubUserCalls = (spy: ReturnType<typeof vi.spyOn>) =>
+    spy.mock.calls.filter(([input]) => String(input instanceof Request ? input.url : input).startsWith(`${github.origin}/user`)).length;
+
+  it("没有 CF-Connecting-IP 时不认客户端自报的 X-Forwarded-For：换着伪造首跳也绕不开登记限流", async () => {
+    const statuses: number[] = [];
+    for (let i = 0; i <= RELAY_REGISTER_PER_IP_PER_MINUTE; i++) {
+      const res = await workerMod.handleRelayRequest(
+        new Request("https://relay.test/v1/register", {
+          method: "POST",
+          headers: { "x-forwarded-for": `203.0.113.${i + 1}, 10.0.0.1`, "content-type": "application/json" },
+          body: "{}",
+        }),
+        stubEnv(),
+      );
+      statuses.push(res.status);
+    }
+    expect(statuses.at(-1)).toBe(429);
+  });
+
+  it("同一个 IPv6 /64 换着地址发也算同一个客户端", async () => {
+    let last = 0;
+    for (let i = 0; i <= RELAY_UPGRADES_PER_IP_PER_MINUTE; i++) {
+      const res = await upgrade({ "cf-connecting-ip": `2001:db8:77:1:${(i + 1).toString(16)}::1` });
+      last = res.status;
+    }
+    expect(last).toBe(429);
+  });
+
+  it("大量随机新 IP 挤满计数表也冲不掉已经被限流的 IP", async () => {
+    const abuser = "198.51.100.199";
+    for (let i = 0; i <= RELAY_UPGRADES_PER_IP_PER_MINUTE; i++) await upgrade({ "cf-connecting-ip": abuser });
+    expect((await upgrade({ "cf-connecting-ip": abuser })).status).toBe(429);
+    for (let i = 0; i < RELAY_IP_LIMITER_MAX + 16; i++) {
+      await upgrade({ "cf-connecting-ip": `10.${(i >> 16) & 255}.${(i >> 8) & 255}.${i & 255}` });
+    }
+    expect((await upgrade({ "cf-connecting-ip": abuser })).status).toBe(429);
+  });
+
+  it("/v1/register 验过的 GitHub token 短暂缓存：同一个 token 再登记不再问 GitHub，验不过的不缓存", async () => {
+    const spy = vi.spyOn(globalThis, "fetch");
+    try {
+      expect((await register("tok_alice", "192.0.2.11")).login).toBe("alice");
+      expect((await register("tok_alice", "192.0.2.12")).login).toBe("alice");
+      expect(githubUserCalls(spy)).toBe(1);
+      await expect(register("tok_nobody", "192.0.2.13")).rejects.toThrow();
+      await expect(register("tok_nobody", "192.0.2.14")).rejects.toThrow();
+      expect(githubUserCalls(spy)).toBe(3);
+      await register("tok_bob", "192.0.2.15");
+      expect(githubUserCalls(spy)).toBe(4);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
