@@ -234,10 +234,10 @@ export interface WorktreeHandlerDeps {
     sessionId: number;
     repo: string;
     worktreePath: string;
-  }) => {
+  }) => Promise<{
     worktreePath: string;
     prepareDir?: (worktreePath: string) => Promise<void> | void;
-  };
+  }>;
 }
 
 /**
@@ -252,7 +252,7 @@ export function createWorktreeCreateHandler(deps: WorktreeHandlerDeps): ActionHa
     const task = deps.ledger.getWorktreeTask(workerId);
     if (task === null || task.status === "ended") return { kind: "done" };
     const placement = deps.resolveWorktreePlacement
-      ? deps.resolveWorktreePlacement({
+      ? await deps.resolveWorktreePlacement({
           workerId,
           sessionId: task.sessionId,
           repo: task.repo,

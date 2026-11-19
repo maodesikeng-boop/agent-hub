@@ -19,6 +19,7 @@ import {
   protectedRootsOf,
   vendorSpec,
   type AgentVendor,
+  type ReadonlyPolicy,
   type WriteScope,
 } from "../../shared/index.ts";
 import {
@@ -75,8 +76,6 @@ export interface OsSandboxWrapOptions {
   workerId?: string;
   /** Windows `fusa-run.exe` 路径覆盖（单测跨平台断言命令行时注入）。 */
   winHelperPath?: string;
-  /** 单测只生成命令参数、跳过真机 NTFS ACL 写入。 */
-  skipAclSetup?: boolean;
   /** 单测强制跳过 Windows MXC（模拟不支持 MXC 的低版本 Windows 回退分支）。 */
   disableWin32Mxc?: boolean;
 }
@@ -770,17 +769,6 @@ export function win32WorkerSandboxArgs(
   const workerId = inferWin32WorkerId(scope, options);
   const ownSandboxOffArgs = options?.ownSandboxOffArgs ?? [];
 
-  if (!options?.skipAclSetup && process.platform === "win32") {
-    for (const root of protectedRootsOf(scope)) {
-      if (existsSync(root)) {
-        ensureWin32ProtectedRootAcl(stateDir, root, { env: options?.env });
-      }
-    }
-    for (const dir of scope.writableDirs) {
-      allowWin32WorkerWorktreeAcl(stateDir, workerId, dir, { env: options?.env });
-    }
-  }
-
   return {
     command: helper,
     args: [
@@ -810,23 +798,6 @@ export function win32ReadonlyFallbackSandboxArgs(
   const stateDir = inferStateDirFromReadonlyInput(input, options);
   const ownSandboxOffArgs = options?.ownSandboxOffArgs ?? [];
 
-  if (!options?.skipAclSetup && process.platform === "win32") {
-    const dataDir = dirname(stateDir);
-    const defaultWorktreesDir = join(dataDir, "worktrees");
-    const roots = [
-      dataDir,
-      ...(input.protectedRoots ?? []),
-      ...loadManagedWorktreeRoots(stateDir, defaultWorktreesDir),
-    ];
-    const seen = new Set<string>();
-    for (const r of roots) {
-      const key = normalizePathForComparison(r);
-      if (seen.has(key) || !existsSync(r)) continue;
-      seen.add(key);
-      ensureWin32ProtectedRootAcl(stateDir, r, { env: options?.env });
-    }
-  }
-
   return {
     command: helper,
     args: [
@@ -841,6 +812,45 @@ export function win32ReadonlyFallbackSandboxArgs(
       ...base.args,
     ],
   };
+}
+
+export interface OsSandboxLaunchPrep {
+  /** 数据目录（realpath 过）。 */
+  dataDir: string;
+  /** 数据目录 state/（realpath 过）：Windows 辅助程序在这里记能力 SID。 */
+  stateDir: string;
+  /** 普通 Worker（包外层沙箱）的范围；项目经理、用设置文件落实只读的厂商是 null。 */
+  writeScope: WriteScope | null;
+  /** 只读 Worker 的统一策略（LaunchFiles.readonly）。 */
+  readonly: ReadonlyPolicy | undefined;
+}
+
+/**
+ * 起厂商进程之前（启动准备里，异步）把 OS 沙箱要的东西备好；包命令行的 wrapInOsSandbox / wrapInReadonlyOsSandbox 只拼参数、不碰文件系统。
+ * Windows：受保护根设拒写 ACL，普通 Worker 自己的 worktree 设放行 ACL（异步调 fusa-run.exe，设过的有缓存）；
+ * macOS、Linux 的沙箱规则都在命令行上，不用准备。
+ */
+export async function prepareOsSandboxForLaunch(
+  input: OsSandboxLaunchPrep,
+  platform: NodeJS.Platform = process.platform,
+  options?: { env?: Record<string, string | undefined> },
+): Promise<void> {
+  if (platform !== "win32") return;
+  const { stateDir, writeScope } = input;
+  if (writeScope === null && input.readonly === undefined) return;
+  const roots = writeScope !== null
+    ? protectedRootsOf(writeScope)
+    : [input.dataDir, ...(input.readonly?.protectedRoots ?? []), ...loadManagedWorktreeRoots(stateDir, join(input.dataDir, "worktrees"))];
+  const seen = new Set<string>();
+  for (const root of roots) {
+    const key = normalizePathForComparison(root);
+    if (seen.has(key) || !existsSync(root)) continue;
+    seen.add(key);
+    await ensureWin32ProtectedRootAcl(stateDir, root, { env: options?.env });
+  }
+  if (writeScope === null) return;
+  const workerId = inferWin32WorkerId(writeScope);
+  for (const dir of writeScope.writableDirs) await allowWin32WorkerWorktreeAcl(stateDir, workerId, dir, { env: options?.env });
 }
 
 const seatbeltBackend: OsSandboxBackend = {

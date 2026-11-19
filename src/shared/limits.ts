@@ -863,6 +863,8 @@ export const WIN_CMD_SHIM_CACHE_MAX = 256;
 export const WIN_CMD_SHIM_MAX_BYTES = 64 * 1024;
 /** 已完成受保护根 ACL 校验的目录缓存上限（按进程生命周期去重避免每次派活重查 DACL）。 */
 export const WIN_PROTECTED_ROOTS_CACHE_MAX = 64;
+/** 已给过 `ALLOW FusaWorker-<编号>` 的 (Worker, worktree 目录) 缓存上限：建 worktree 时给过，起进程时不再调一次 fusa-run.exe。 */
+export const WIN_WORKER_ACL_CACHE_MAX = 512;
 /** `state/win-sandbox-sids.json` 持久化的单 Worker SID 条目上限。 */
 export const WIN_WORKER_SIDS_MAX = 512;
 /** `state/worktree-roots.json` 登记的历史与当前跨卷 worktree 根目录上限。 */

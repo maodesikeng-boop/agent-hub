@@ -41,7 +41,7 @@ import type {
 } from "../shared/index.ts";
 import { VENDOR_DAEMONS } from "../vendors/daemon-registry.ts";
 import { launchFingerprint } from "../shared/launch.ts";
-import { osSandboxAvailable } from "./driver/write-scope.ts";
+import { osSandboxAvailable, prepareOsSandboxForLaunch, type OsSandboxLaunchPrep } from "./driver/write-scope.ts";
 import type { CapabilityInventoryService } from "./pm-capabilities/inventory.ts";
 import { truncatePmMemoryForPrompt } from "./pm-memory.ts";
 import { projectWorktreesDir, sessionLaunchDir } from "../shared/paths.ts";
@@ -82,6 +82,8 @@ export interface LaunchPreparerOptions {
   getPmCapabilityPolicy?: (pmId: PmId) => PmCapabilityPolicy;
   /** 本机能力库存服务（daemon/pm-capabilities/inventory.ts）；只读缓存。 */
   capabilityInventory?: Pick<CapabilityInventoryService, "get">;
+  /** 起进程前备好 OS 沙箱（Windows 设 ACL），默认 driver/write-scope.ts 的 prepareOsSandboxForLaunch；测试可以换。 */
+  prepareOsSandbox?: (input: OsSandboxLaunchPrep) => Promise<void>;
 }
 
 function realpathOr(path: string): string {
@@ -112,10 +114,11 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
       ? options.basePath()
       : (options.basePath ?? process.env.PATH ?? process.env.Path ?? "");
   const homeDir = realpathOr(options.homeDir ?? homedir());
+  const prepareOsSandbox = options.prepareOsSandbox ?? ((input: OsSandboxLaunchPrep) => prepareOsSandboxForLaunch(input));
   return async (session) => {
     const basePath = resolveBasePath();
     if (session.role === "assistant") {
-      return prepareRouterSandboxLaunch(session, {
+      const files = prepareRouterSandboxLaunch(session, {
         launchDir,
         dataDir,
         stateDir,
@@ -129,6 +132,8 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
         vendorAvailability: options.vendorAvailability?.(),
         purpose: options.routerPurposeOf?.(session.id) ?? "dispatch",
       });
+      await prepareOsSandbox({ dataDir, stateDir, writeScope: files.writeScope ?? null, readonly: files.readonly });
+      return files;
     }
     const osSandboxed = typeof options.osSandboxed === "function" ? options.osSandboxed() : (options.osSandboxed ?? osSandboxAvailable());
     const rawCtx = getLaunchContext(session.id);
@@ -205,6 +210,7 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
           ...(extraRoots && extraRoots.length > 0 ? { protectedRoots: extraRoots } : {}),
           cwd: session.cwd,
         });
+    await prepareOsSandbox({ dataDir, stateDir, writeScope, readonly: readonlyPolicy });
     return {
       promptFile,
       ...(settingsFile === undefined ? {} : { settingsFile }),

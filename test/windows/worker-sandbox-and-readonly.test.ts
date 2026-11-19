@@ -10,6 +10,7 @@ import { MemorySessionStore } from "../../src/daemon/driver/test-helpers.ts";
 import {
   WIN32_READONLY_FALLBACK_WARNING,
   osSandboxAvailable,
+  prepareOsSandboxForLaunch,
   resetOsSandboxCacheForTest,
   spawnInWriteScope,
   wrapInReadonlyOsSandbox,
@@ -96,10 +97,10 @@ describe.runIf(process.platform === "win32")("Windows 真机集成：写受限�
     writeFileSync(join(stateDir, "secret.txt"), "protected");
     writeFileSync(join(otherWt, "other.txt"), "untouched");
 
-    ensureWin32ProtectedRootAcl(stateDir, dataDir);
+    await ensureWin32ProtectedRootAcl(stateDir, dataDir);
     hardenWin32PrivateDirAcl(stateDir, stateDir);
-    allowWin32WorkerWorktreeAcl(stateDir, "524", ownWt);
-    allowWin32WorkerWorktreeAcl(stateDir, "525", otherWt);
+    await allowWin32WorkerWorktreeAcl(stateDir, "524", ownWt);
+    await allowWin32WorkerWorktreeAcl(stateDir, "525", otherWt);
 
     // 启动一个真实命名管道供沙箱内 Worker 连接测试
     const paths = resolveHubPaths({}, dataDir);
@@ -310,8 +311,8 @@ writeFileSync(
     mkdirSync(extraProtectedRoot, { recursive: true });
     mkdirSync(tmpRo, { recursive: true });
 
-    ensureWin32ProtectedRootAcl(stateDir, dataDir);
-    allowWin32WorkerWorktreeAcl(stateDir, "600", wtDir);
+    await ensureWin32ProtectedRootAcl(stateDir, dataDir);
+    await allowWin32WorkerWorktreeAcl(stateDir, "600", wtDir);
 
     // 1) 验证 --readonly-fallback 内核级效果：连 worktree 目录本身与额外 protectedRoots 也一并禁止写入！
     const policy = buildReadonlyPolicy({
@@ -319,6 +320,8 @@ writeFileSync(
       stateDir,
       protectedRoots: [dataDir, extraProtectedRoot],
     });
+    // 起进程前的异步准备（launch.ts 调）给 extraProtectedRoot 设拒写 ACL；包命令行本身不碰 ACL
+    await prepareOsSandboxForLaunch({ dataDir, stateDir, writeScope: null, readonly: policy }, "win32");
     const roWrapped = wrapInReadonlyOsSandbox(
       {
         command: process.execPath,

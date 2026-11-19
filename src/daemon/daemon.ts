@@ -367,7 +367,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       mkdirSync(paths.syncBackupsDir, { recursive: true, mode: 0o700 });
       // Windows 0600/0700 等价保护 + 数据目录受保护根拒写 ACL（幂等检查，已满足则跳过）
       try {
-        ensureWin32ProtectedRootAcl(stateDir, dataDir, { env });
+        await ensureWin32ProtectedRootAcl(stateDir, dataDir, { env });
         hardenWin32PrivateDirAcl(stateDir, stateDir, { env });
         hardenWin32PrivateDirAcl(stateDir, paths.runDir, { env });
         hardenWin32PrivateDirAcl(stateDir, dirname(paths.syncBackupsDir), { env });
@@ -618,10 +618,10 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
         addWorktree,
         setup,
         setupLogPath: (workerId) => workerSetupLogPath(paths.setupLogsDir, workerId),
-        resolveWorktreePlacement: ({ workerId, sessionId, repo, worktreePath }) => {
+        resolveWorktreePlacement: async ({ workerId, sessionId, repo, worktreePath }) => {
           let targetPath = worktreePath;
           if (isPathInsideOrEqual(worktreesDir, worktreePath)) {
-            const selected = selectWorktreeRootForProject({
+            const selected = await selectWorktreeRootForProject({
               projectFolder: repo,
               dataDir,
               defaultWorktreesDir: worktreesDir,
@@ -646,11 +646,11 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
           }
           return {
             worktreePath: targetPath,
-            prepareDir: (wtDir) => {
+            prepareDir: async (wtDir) => {
               mkdirSync(wtDir, { recursive: true });
               if (process.platform === "win32") {
-                ensureWin32ProtectedRootAcl(stateDir, dataDir, { env });
-                allowWin32WorkerWorktreeAcl(stateDir, workerId, wtDir, { env });
+                await ensureWin32ProtectedRootAcl(stateDir, dataDir, { env });
+                await allowWin32WorkerWorktreeAcl(stateDir, workerId, wtDir, { env });
               }
             },
           };

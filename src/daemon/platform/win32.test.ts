@@ -401,7 +401,7 @@ describe("文件安全打开、重试与目录链接回退（fs-safe）", () => 
 });
 
 describe("跨卷同盘 worktree 选根、回退与上限（worktree-roots）", () => {
-  it("同卷沿用默认 worktreesDir；跨卷落同盘 .fusa-wt 并登记；ACL/建目录失败自动安全回退；拒绝网络共享", () => {
+  it("同卷沿用默认 worktreesDir；跨卷落同盘 .fusa-wt 并登记；ACL/建目录失败自动安全回退；拒绝网络共享", async () => {
     const root = makeTempDir("wt-roots-");
     const dataDir = join(root, "c-drive-data");
     const stateDir = join(dataDir, "state");
@@ -412,7 +412,7 @@ describe("跨卷同盘 worktree 选根、回退与上限（worktree-roots）", (
     mkdirSync(projectOnD, { recursive: true });
 
     // 1. 同卷 -> 直接用 defaultWt
-    const sameVol = selectWorktreeRootForProject({
+    const sameVol = await selectWorktreeRootForProject({
       projectFolder: projectOnD,
       dataDir,
       defaultWorktreesDir: defaultWt,
@@ -423,7 +423,7 @@ describe("跨卷同盘 worktree 选根、回退与上限（worktree-roots）", (
 
     // 2. 跨卷且 ACL 成功 -> 落 dVolumeSim/.fusa-wt/<指纹> 并写进 worktree-roots.json
     const protectedCalled: string[] = [];
-    const crossOk = selectWorktreeRootForProject({
+    const crossOk = await selectWorktreeRootForProject({
       projectFolder: projectOnD,
       dataDir,
       defaultWorktreesDir: defaultWt,
@@ -442,7 +442,7 @@ describe("跨卷同盘 worktree 选根、回退与上限（worktree-roots）", (
 
     // 3. 跨卷但设置 ACL 或写权限失败（如 FAT32/exFAT 或卷根只读） -> 自动回退到 defaultWt 并打日志
     const logs: string[] = [];
-    const crossFallback = selectWorktreeRootForProject({
+    const crossFallback = await selectWorktreeRootForProject({
       projectFolder: projectOnD,
       dataDir,
       defaultWorktreesDir: defaultWt,
@@ -460,7 +460,7 @@ describe("跨卷同盘 worktree 选根、回退与上限（worktree-roots）", (
     expect(logs.some((l) => l.includes("已自动回退到数据目录"))).toBe(true);
 
     // 4. 网络共享路径直接拒绝
-    expect(() =>
+    await expect(
       selectWorktreeRootForProject({
         projectFolder: "\\\\fileserver\\share\\repo",
         dataDir,
@@ -468,7 +468,7 @@ describe("跨卷同盘 worktree 选根、回退与上限（worktree-roots）", (
         stateDir,
         platform: "win32",
       }),
-    ).toThrow(NetworkProjectFolderUnsupportedError);
+    ).rejects.toThrow(NetworkProjectFolderUnsupportedError);
 
     // 5. 已登记根列表受 MAX_WORKTREE_ROOTS 上限保护
     for (let i = 0; i < MAX_WORKTREE_ROOTS + 10; i++) {

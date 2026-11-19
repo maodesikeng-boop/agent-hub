@@ -43,7 +43,7 @@ describe.skipIf(!isWin32)("Windows 真机：@microsoft/mxc-sdk 探测、自动�
     }
   });
 
-  it("实跑 @microsoft/mxc-sdk 原生探测并遵守短暂负缓存 TTL；不支持 ProcessContainer 时无 mock 自动平滑回退且正常执行", () => {
+  it("实跑 @microsoft/mxc-sdk 原生探测并遵守短暂负缓存 TTL；不支持 ProcessContainer 时无 mock 自动平滑回退且正常执行", async () => {
     let now = 100_000;
     const first = probeWin32MxcSupport({ forceRefresh: true, now: () => now });
     console.info(
@@ -76,8 +76,8 @@ describe.skipIf(!isWin32)("Windows 真机：@microsoft/mxc-sdk 探测、自动�
       mkdirSync(privateTmp, { recursive: true });
       writeFileSync(join(wtDir, "readme.txt"), "READ_OK");
 
-      ensureWin32ProtectedRootAcl(stateDir, dataDir);
-      allowWin32WorkerWorktreeAcl(stateDir, "701", wtDir);
+      await ensureWin32ProtectedRootAcl(stateDir, dataDir);
+      await allowWin32WorkerWorktreeAcl(stateDir, "701", wtDir);
 
       const policy = buildReadonlyPolicy({
         homeDir: realpathSync.native(homedir()),

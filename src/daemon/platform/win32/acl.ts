@@ -1,16 +1,48 @@
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
+import { promisify } from "node:util";
 import { LRUCache } from "lru-cache";
 import {
   WIN_HELPER_PROBE_TIMEOUT_MS,
   WIN_PROTECTED_ROOTS_CACHE_MAX,
+  WIN_WORKER_ACL_CACHE_MAX,
 } from "../../../shared/limits.ts";
 import { findWinHelperBinary, requireWinHelperBinary } from "./helper-bins.ts";
 import { normalizePathForComparison } from "./path-key.ts";
 
-const verifiedProtectedRoots = new LRUCache<string, true>({ max: WIN_PROTECTED_ROOTS_CACHE_MAX });
+const execFileAsync = promisify(execFile);
+
+/**
+ * 运行期（建 worktree、起 Worker 前）调 fusa-run.exe 设 ACL 都走异步 execFile，不卡守护进程的事件循环。
+ * 设成功的记进有界缓存，同一个键在途时共用一次调用；失败的不记，下次重试。
+ */
+function createAclRunner(max: number) {
+  const done = new LRUCache<string, true>({ max });
+  const inflight = new Map<string, Promise<void>>();
+  return {
+    run(key: string, apply: () => Promise<unknown>, force = false): Promise<void> {
+      if (!force && done.has(key)) return Promise.resolve();
+      const pending = inflight.get(key);
+      if (pending !== undefined) return pending;
+      const next = apply()
+        .then(() => {
+          done.set(key, true);
+        })
+        .finally(() => inflight.delete(key));
+      inflight.set(key, next);
+      return next;
+    },
+    clear() {
+      done.clear();
+    },
+  };
+}
+
+const protectedRoots = createAclRunner(WIN_PROTECTED_ROOTS_CACHE_MAX);
+const workerWorktrees = createAclRunner(WIN_WORKER_ACL_CACHE_MAX);
 
 export function resetVerifiedProtectedRootsForTest(): void {
-  verifiedProtectedRoots.clear();
+  protectedRoots.clear();
+  workerWorktrees.clear();
 }
 
 /** Runs `fusa-run.exe probe` to verify Job Object + `WRITE_RESTRICTED` token + NTFS ACL enforcement. */
@@ -42,18 +74,17 @@ export function ensureWin32ProtectedRootAcl(
   stateDir: string,
   rootPath: string,
   options?: { force?: boolean; env?: Record<string, string | undefined> },
-): void {
-  const cacheKey = `${normalizePathForComparison(stateDir)}\0${normalizePathForComparison(rootPath)}`;
-  if (!options?.force && verifiedProtectedRoots.has(cacheKey)) {
-    return;
-  }
-  const helper = requireWinHelperBinary("fusa-run.exe", { env: options?.env });
-  execFileSync(helper, ["acl", "protect-root", "--state-dir", stateDir, "--path", rootPath], {
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: WIN_HELPER_PROBE_TIMEOUT_MS * 4,
-    windowsHide: true,
-  });
-  verifiedProtectedRoots.set(cacheKey, true);
+): Promise<void> {
+  const key = `${normalizePathForComparison(stateDir)}\0${normalizePathForComparison(rootPath)}`;
+  return protectedRoots.run(
+    key,
+    () =>
+      execFileAsync(requireWinHelperBinary("fusa-run.exe", { env: options?.env }), ["acl", "protect-root", "--state-dir", stateDir, "--path", rootPath], {
+        timeout: WIN_HELPER_PROBE_TIMEOUT_MS * 4,
+        windowsHide: true,
+      }),
+    options?.force === true,
+  );
 }
 
 /** Grants `ALLOW FusaWorker-<workerId>` Modify ACE on an empty worktree directory before `git worktree add`. */
@@ -62,16 +93,14 @@ export function allowWin32WorkerWorktreeAcl(
   workerId: string | number,
   worktreePath: string,
   options?: { env?: Record<string, string | undefined> },
-): void {
-  const helper = requireWinHelperBinary("fusa-run.exe", { env: options?.env });
-  execFileSync(
-    helper,
-    ["acl", "allow-worker", "--state-dir", stateDir, "--worker", String(workerId), "--path", worktreePath],
-    {
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: WIN_HELPER_PROBE_TIMEOUT_MS * 2,
-      windowsHide: true,
-    },
+): Promise<void> {
+  const key = `${normalizePathForComparison(stateDir)}\0${String(workerId)}\0${normalizePathForComparison(worktreePath)}`;
+  return workerWorktrees.run(key, () =>
+    execFileAsync(
+      requireWinHelperBinary("fusa-run.exe", { env: options?.env }),
+      ["acl", "allow-worker", "--state-dir", stateDir, "--worker", String(workerId), "--path", worktreePath],
+      { timeout: WIN_HELPER_PROBE_TIMEOUT_MS * 2, windowsHide: true },
+    ),
   );
 }
 

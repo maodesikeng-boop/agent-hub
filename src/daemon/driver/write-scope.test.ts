@@ -1,9 +1,9 @@
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { AGENT_VENDORS, DriverError } from "../../shared/index.ts";
+import { AGENT_VENDORS, DriverError, buildReadonlyPolicy } from "../../shared/index.ts";
 import { isAlive, signalChild, termGroupAfterExit, waitForExit } from "./process.ts";
 import { FAKE_CLAUDE, makeHarness, realSleep, type Harness } from "./test-helpers.ts";
 import {
@@ -24,6 +24,7 @@ import {
   expandWritableFileGlobs,
   osSandboxAvailable,
   parseWslDrvfsMounts,
+  prepareOsSandboxForLaunch,
   readonlyBwrapArgs,
   readonlySeatbeltProfile,
   registerWin32MxcReadonlyProvider,
@@ -37,12 +38,14 @@ import {
   type ReadonlySandboxInput,
 } from "./write-scope.ts";
 import {
+  ENV_WIN_HELPERS,
   WIN_MXC_NEGATIVE_CACHE_TTL_MS,
   WIN_MXC_POSITIVE_CACHE_TTL_MS,
 } from "../../shared/limits.ts";
 import {
   buildWin32MxcFilesystemPolicy,
   probeWin32MxcSupport,
+  resetVerifiedProtectedRootsForTest,
   resetWin32MxcCacheForTest,
   supportsWin32MxcNodeVersion,
   wrapReadonlyWithWin32Mxc,
@@ -86,7 +89,7 @@ describe("WRITE_SCOPE_ENFORCERS", () => {
   it("macOS 上包 sandbox-exec，Linux 上包 bwrap（codex 换 externalSandbox，不再自己起沙箱）；未支持系统不包", () => {
     const darwinOpts = { available: true };
     const linuxOpts = { available: true, uid: 1000, exists: () => true, realpath: (p: string) => p };
-    const winOpts = { available: true, skipAclSetup: true, winHelperPath: "C:\\bin\\fusa-run.exe", stateDir: "C:\\state" };
+    const winOpts = { available: true, winHelperPath: "C:\\bin\\fusa-run.exe", stateDir: "C:\\state" };
     const wrappedDarwin = { command: SANDBOX_EXEC, args: ["-p", seatbeltProfile(scope), "/bin/agent", "--x", "y"], osSandboxed: true };
     const wrappedLinux = { command: BWRAP, args: bwrapArgs(base, scope, linuxOpts), osSandboxed: true };
     expect(wrapInOsSandbox(base, scope, "darwin", darwinOpts)).toEqual(wrappedDarwin);
@@ -367,7 +370,6 @@ describe("readonlySeatbeltProfile", () => {
     resetOsSandboxCacheForTest();
     const fallback = wrapInReadonlyOsSandbox(base, roInput, "win32", {
       available: true,
-      skipAclSetup: true,
       disableWin32Mxc: true,
       winHelperPath: FUSA_RUN_EXE,
       stateDir: "C:\\Users\\u\\.agent-hub\\state",
@@ -828,6 +830,59 @@ describe.runIf(canRunSandboxExec)("真 sandbox-exec：只读", () => {
     expect(existsSync(join(root, "outside.txt"))).toBe(false);
     expect(existsSync(join(tmp, "p"))).toBe(true);
     expect(existsSync(join(runtime, "p"))).toBe(true);
+  });
+});
+
+describe.skipIf(process.platform === "win32")("prepareOsSandboxForLaunch（Windows 起进程前异步设 ACL，用假的 fusa-run.exe）", () => {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ah-prep-")));
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+  afterEach(() => resetVerifiedProtectedRootsForTest());
+
+  const fakeHelper = (logFile: string) => {
+    const dir = join(root, `helpers-${Math.random().toString(16).slice(2)}`);
+    mkdirSync(dir, { recursive: true });
+    const helper = join(dir, "fusa-run.exe");
+    writeFileSync(helper, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${logFile}'\n`);
+    chmodSync(helper, 0o755);
+    return { [ENV_WIN_HELPERS]: dir };
+  };
+  const calls = (logFile: string) => (existsSync(logFile) ? readFileSync(logFile, "utf8").trim().split("\n") : []);
+
+  it("普通 Worker：受保护根 protect-root、自己的 worktree allow-worker；同一会话再起不重复调；macOS、Linux 什么也不做", async () => {
+    const dataDir = join(root, "home");
+    const stateDir = join(dataDir, "state");
+    const own = join(dataDir, "worktrees", "1", "42");
+    mkdirSync(own, { recursive: true });
+    mkdirSync(stateDir, { recursive: true });
+    const logFile = join(root, "normal.log");
+    const env = fakeHelper(logFile);
+    const prep = { dataDir, stateDir, writeScope: { dataDir, writableDirs: [own] }, readonly: undefined };
+    await prepareOsSandboxForLaunch(prep, "darwin", { env });
+    await prepareOsSandboxForLaunch(prep, "linux", { env });
+    expect(calls(logFile)).toEqual([]);
+    await prepareOsSandboxForLaunch(prep, "win32", { env });
+    await prepareOsSandboxForLaunch(prep, "win32", { env });
+    expect(calls(logFile)).toEqual([
+      `acl protect-root --state-dir ${stateDir} --path ${dataDir}`,
+      `acl allow-worker --state-dir ${stateDir} --worker 42 --path ${own}`,
+    ]);
+  });
+
+  it("项目经理（没有范围、不是只读）不调；只读 Worker 只设受保护根，不给任何目录放行写", async () => {
+    const dataDir = join(root, "home-ro");
+    const stateDir = join(dataDir, "state");
+    const extra = join(root, "cross-vol");
+    for (const d of [stateDir, extra]) mkdirSync(d, { recursive: true });
+    const logFile = join(root, "ro.log");
+    const env = fakeHelper(logFile);
+    await prepareOsSandboxForLaunch({ dataDir, stateDir, writeScope: null, readonly: undefined }, "win32", { env });
+    expect(calls(logFile)).toEqual([]);
+    const readonly = buildReadonlyPolicy({ homeDir: root, stateDir, protectedRoots: [dataDir, extra] });
+    await prepareOsSandboxForLaunch({ dataDir, stateDir, writeScope: null, readonly }, "win32", { env });
+    expect(calls(logFile)).toEqual([
+      `acl protect-root --state-dir ${stateDir} --path ${dataDir}`,
+      `acl protect-root --state-dir ${stateDir} --path ${extra}`,
+    ]);
   });
 });
 
