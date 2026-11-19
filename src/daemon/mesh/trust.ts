@@ -47,6 +47,8 @@ export interface MeshTrust {
   /** 后置：表里这台的证书就是 revocation 里那张、且加入得比撤销早时删掉它；记下墓碑（更早的墓碑被换掉）。删了回 true。不能撤销本机。 */
   revoke(revocation: TrustRevocation): boolean;
   rename(id: DeviceId, name: string): void;
+  /** 后置：只留本机、清掉墓碑、写盘（退出账号、被移出账号时用）。 */
+  clear(): void;
   isRevoked(fingerprint: DeviceFingerprint): boolean;
   /** 这张证书最近一次被撤销的时刻；没被撤销过是 null。 */
   revokedAt(fingerprint: DeviceFingerprint): number | null;
@@ -187,6 +189,10 @@ export function openMeshTrust(file: string, self: MeshIdentity, selfInfo: { name
       const existing = find(id);
       if (existing === undefined || normalized === null || existing.name === normalized) return;
       existing.name = normalized;
+      persist();
+    },
+    clear() {
+      data = { version: 2, devices: data.devices.filter((d) => d.id === self.deviceId), revoked: [] };
       persist();
     },
     isRevoked: (fingerprint) => data.revoked.some((r) => r.fingerprint === fingerprint),

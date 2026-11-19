@@ -198,8 +198,27 @@ export const API_PATHS = {
    * 请求方再拿它去那台 peerPair。“第三台配一次就全通”靠它；谁去配对按设备编号定（小的那台），不会两边同时配。
    */
   peerIntroductions: "/api/peer/introductions",
-  /** PUT（RenameDeviceRequest）→ 204：入口上给这台改名，名字归这台自己管，改完它再同步给所有已配对的设备。 */
+  /** PUT（RenameDeviceRequest）→ 204：入口上给这台改名，名字归这台自己管，改完它再告诉所有可信设备（peerRenamed）。 */
   peerName: "/api/peer/name",
+  /** PUT（RenameDeviceRequest）→ 204：发请求的那台（按 TLS 证书认）告诉本机它改名了。 */
+  peerRenamed: "/api/peer/renamed",
+  /** GET → TrustStatementsBody：本机信任表的签名声明（批准和撤销），对齐用；POST（TrustStatementsBody）→ 204：收下对方转来的声明。 */
+  peerTrust: "/api/peer/trust",
+
+  // ---- 账号组网（docs/account-mesh-design.md）：浏览器 → 本机，不转发 ----
+
+  /** GET → AccountStatusView。 */
+  account: "/api/account",
+  /** POST（StartLoginRequest，可空）→ AccountStatusView：开始 GitHub 设备码登录；DELETE → AccountStatusView：取消。 */
+  accountLogin: "/api/account/login",
+  /** POST → AccountStatusView：退出账号（别的设备也删掉这台）。 */
+  accountLogout: "/api/account/logout",
+  /** POST → AccountStatusView：对一台等批准的设备开始核对（本机当批准方）。requestId 是那台的设备编号。 */
+  accountApprovalBegin: (requestId: string) => `/api/account/approvals/${encodeURIComponent(requestId)}/begin`,
+  /** POST（AnswerApprovalRequest）→ AccountStatusView：本机用户点“一致”或“不一致”。 */
+  accountApprovalAnswer: (requestId: string) => `/api/account/approvals/${encodeURIComponent(requestId)}/answer`,
+  /** PUT（SetCenterPriorityRequest）→ AccountStatusView：中心顺序。 */
+  accountPriority: "/api/account/priority",
 
   // ---- 联机：推送（只在“提醒设备”上用，手机 PWA 装在哪个来源就是哪台） ----
 

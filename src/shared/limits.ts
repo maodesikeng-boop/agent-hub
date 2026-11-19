@@ -1222,6 +1222,11 @@ export const MESH_LEASE_RENEW_MS = 5_000;
 export const MESH_LEASE_FENCE_MARGIN_MS = 5_000;
 /** 中继连不上超过这么久，中心顺序排第一的设备不经租约自己挂长连接（降级）。 */
 export const MESH_LEASE_ORPHAN_MS = 60_000;
+/** 信任表和中继的设备表对不上时，隔多久再去别的设备拉一次声明；最多拉几次（中继推来新设备表时重新数）。 */
+export const MESH_TRUST_SYNC_RETRY_MS = 2_000;
+export const MESH_TRUST_SYNC_ATTEMPTS = 5;
+/** 设备之间的组网控制请求（同步信任声明、改名）最多等多久。 */
+export const MESH_REQUEST_TIMEOUT_MS = 10_000;
 /** 新设备批准（核对码）从发起到两边都点“一致”的时限。 */
 export const MESH_APPROVAL_TTL_MS = 10 * 60_000;
 /** 核对码几位十进制数字。 */

@@ -91,3 +91,117 @@ export async function waitFor<T>(check: () => T | null | undefined | false, time
     await new Promise((r) => setTimeout(r, 5));
   }
 }
+
+// ---- 一台完整的组网设备（createMesh），带一个最小的组网入口 HTTP 服务 ----
+
+/** 假 GitHub 的设备码登录：立刻授权，token 由 tokenOf 给。 */
+export function fakeGithubDeviceFlow(token: string): typeof fetch {
+  return (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url === `${FAKE_GITHUB}/login/device/code`) {
+      return Response.json({ device_code: "dev", user_code: "ABCD-EFGH", verification_uri: "https://github.com/login/device", expires_in: 900, interval: 5 });
+    }
+    if (url === `${FAKE_GITHUB}/login/oauth/access_token`) return Response.json({ access_token: token, token_type: "bearer", scope: "" });
+    return fakeGithubFetch(input, init);
+  }) as typeof fetch;
+}
+
+export interface TestMeshNode {
+  mesh: import("./index.ts").Mesh;
+  dir: string;
+  /** 本机组网入口收到的请求路径（对方编号 + 路径）。 */
+  requests: Array<{ from: DeviceId; path: string }>;
+  close(): Promise<void>;
+}
+
+const nodes: TestMeshNode[] = [];
+afterEach(async () => {
+  for (const node of nodes.splice(0)) await node.close();
+});
+
+export async function startTestMeshNode(relay: TestRelay, deviceId: DeviceId, options: { token?: string; dir?: string; lan?: boolean } = {}): Promise<TestMeshNode> {
+  const { createMesh } = await import("./index.ts");
+  const { createServer } = await import("node:http");
+  const { API_PATHS } = await import("../../shared/api.ts");
+  const dir = options.dir ?? tempDir("node-");
+  const requests: TestMeshNode["requests"] = [];
+  const peerOf = new WeakMap<object, DeviceId>();
+  let mesh!: import("./index.ts").Mesh;
+  const http = createServer((req, res) => {
+    const from = peerOf.get(req.socket)!;
+    requests.push({ from, path: req.url ?? "" });
+    if (req.url === API_PATHS.peerTrust && req.method === "GET") {
+      res.setHeader("content-type", "application/json");
+      return res.end(JSON.stringify({ statements: mesh.trustStatements() }));
+    }
+    if (req.url === API_PATHS.peerTrust && req.method === "POST") {
+      let body = "";
+      req.on("data", (c: Buffer) => (body += c));
+      req.on("end", () => {
+        mesh.receiveTrustStatements(from, JSON.parse(body));
+        res.statusCode = 204;
+        res.end();
+      });
+      return;
+    }
+    res.end(`pong from ${deviceId} to ${from} ${req.url}`);
+  });
+  mesh = await createMesh({
+    identityDir: join(dir, "mesh"),
+    accountFile: join(dir, "account.json"),
+    trustFile: join(dir, "peers.json"),
+    device: { id: deviceId, name: `dev-${deviceId.slice(0, 4)}` },
+    platform: "linux",
+    relayUrl: relay.url,
+    githubClientId: "Iv1.test",
+    listenPort: 0,
+    listenHost: "127.0.0.1",
+    candidates: options.lan === false ? () => [] : (port) => [{ host: "127.0.0.1", port }],
+    onConnection: (connection) => {
+      peerOf.set(connection.socket, connection.peer.id);
+      http.emit("connection", connection.socket);
+    },
+    github: { webOrigin: FAKE_GITHUB, apiOrigin: FAKE_GITHUB, sleep: async () => {} },
+    fetch: fakeGithubDeviceFlow(options.token ?? "tok_alice"),
+    log: () => {},
+  });
+  const node: TestMeshNode = {
+    mesh,
+    dir,
+    requests,
+    async close() {
+      await mesh.close();
+      http.close();
+    },
+  };
+  nodes.push(node);
+  return node;
+}
+
+/** 登录并等到 signed_in（账号第一台）或 awaiting_approval。 */
+export async function loginNode(node: TestMeshNode): Promise<void> {
+  await node.mesh.startLogin();
+  await waitFor(() => {
+    const state = node.mesh.status().state;
+    return (state === "signed_in" || state === "awaiting_approval") && (node.mesh.status() as { relay?: string }).relay === "connected";
+  });
+}
+
+/** approver 批准 joiner：两边核对码一致、都点“一致”，等 joiner 变成 signed_in 且两边信任表都有对方。 */
+export async function approveNode(approver: TestMeshNode, joiner: TestMeshNode): Promise<string> {
+  const joinerId = joiner.mesh.selfId;
+  await waitFor(() => approver.mesh.status().state === "signed_in" && (approver.mesh.status() as { approvals: Array<{ requestId: string }> }).approvals.some((a) => a.requestId === joinerId));
+  await approver.mesh.beginApproval(joinerId);
+  const sas = await waitFor(() => {
+    const a = approver.mesh.status() as { approvals?: Array<{ requestId: string; sas: string | null }> };
+    const j = joiner.mesh.status() as { approval?: { sas: string | null } | null };
+    const sa = a.approvals?.find((x) => x.requestId === joinerId)?.sas ?? null;
+    const sj = j.approval?.sas ?? null;
+    return sa !== null && sj !== null ? ([sa, sj] as const) : null;
+  });
+  if (sas[0] !== sas[1]) throw new Error(`核对码不一致：${sas[0]} / ${sas[1]}`);
+  await joiner.mesh.answerApproval(approver.mesh.selfId, true);
+  await approver.mesh.answerApproval(joinerId, true);
+  await waitFor(() => joiner.mesh.status().state === "signed_in" && approver.mesh.trust.get(joinerId) !== undefined && joiner.mesh.trust.get(approver.mesh.selfId) !== undefined);
+  return sas[0];
+}
