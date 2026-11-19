@@ -57,7 +57,7 @@ afterEach(async () => {
   for (const relay of relays.splice(0)) await relay.close();
 });
 
-export async function startTestRelay(options: { log?: (line: string) => void } = {}): Promise<TestRelay> {
+export async function startTestRelay(options: { log?: (line: string) => void; now?: () => number; publicOrigin?: string } = {}): Promise<TestRelay> {
   const { startNodeRelay } = await import("../../relay/node/server.ts");
   const running = await startNodeRelay({
     port: 0,
@@ -65,6 +65,8 @@ export async function startTestRelay(options: { log?: (line: string) => void } =
     fetch: fakeGithubFetch,
     githubApiOrigin: FAKE_GITHUB,
     ...(options.log ? { log: options.log } : {}),
+    ...(options.now ? { now: options.now } : {}),
+    ...(options.publicOrigin ? { publicOrigin: options.publicOrigin } : {}),
   });
   const port = running.port;
   const url = `http://127.0.0.1:${port}`;
@@ -125,7 +127,14 @@ afterEach(async () => {
 export async function startTestMeshNode(
   relay: TestRelay,
   deviceId: DeviceId,
-  options: { token?: string; dir?: string; lan?: boolean; handler?: (req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse, from: DeviceId) => void } = {},
+  options: {
+    token?: string;
+    dir?: string;
+    lan?: boolean;
+    relayUrl?: string;
+    now?: () => number;
+    handler?: (req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse, from: DeviceId) => void;
+  } = {},
 ): Promise<TestMeshNode> {
   const { createMesh } = await import("./index.ts");
   const { createServer } = await import("node:http");
@@ -160,7 +169,7 @@ export async function startTestMeshNode(
     trustFile: join(dir, "peers.json"),
     device: { id: deviceId, name: `dev-${deviceId.slice(0, 4)}` },
     platform: "linux",
-    relayUrl: relay.url,
+    relayUrl: options.relayUrl ?? relay.url,
     githubClientId: "Iv1.test",
     listenPort: 0,
     listenHost: "127.0.0.1",
@@ -171,6 +180,7 @@ export async function startTestMeshNode(
     },
     github: { webOrigin: FAKE_GITHUB, apiOrigin: FAKE_GITHUB, sleep: async () => {} },
     fetch: fakeGithubDeviceFlow(options.token ?? "tok_alice"),
+    ...(options.now ? { now: options.now } : {}),
     log: () => {},
   });
   const node: TestMeshNode = {

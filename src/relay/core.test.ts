@@ -70,6 +70,15 @@ describe("createRelayAccountRoom：登记与登入", () => {
     // 证书和签名的公钥不是一对也不行
     const swapped = { ...registerRequest(ids.a!), device: { ...registerRequest(ids.a!).device, publicKey: ids.b!.publicKey } };
     expect(await room.register(LOGIN, swapped)).toEqual({ error: "unauthorized" });
+    const forged = {
+      provider: "github" as const,
+      token: "gho_test",
+      device: { id: DEVICE_A, name: "forged", platform: "linux", certPem: ids.a!.certPem, publicKey: ids.b!.publicKey },
+      signature: ids.b!.sign(
+        new TextEncoder().encode(["fusa-relay-register", RELAY_PROTOCOL_VERSION, RELAY_ORIGIN, "github", DEVICE_A, ids.a!.fingerprint].join("\n")),
+      ),
+    };
+    expect(await room.register(LOGIN, forged)).toEqual({ error: "unauthorized" });
   });
 
   it("设备满 MESH_MAX_DEVICES_PER_ACCOUNT 台后再登记回 too_many_devices", async () => {
@@ -131,6 +140,36 @@ describe("createRelayAccountRoom：登记与登入", () => {
     await h2.receive(encodeRelayFrame({ type: "hello", device: DEVICE_C, version: 1, signature: ids.c!.sign(relayControlMessage({ relayOrigin: RELAY_ORIGIN, accountId, device: DEVICE_C, nonce: nonce2 })) }));
     expect(stranger.last("error")).toEqual({ type: "error", code: "unknown_device" });
     expect(stranger.closed).not.toBeNull();
+  });
+
+  it("未认证控制连接超过 10 秒没发 hello，sweep 主动回 unauthorized 并关闭", async () => {
+    const { room } = newRoom();
+    await room.register(LOGIN, registerRequest(ids.a!));
+    const idle = new FakeSocket();
+    room.openControl(idle);
+    expect(idle.last("challenge")).toBeDefined();
+    advance(10_001);
+    await room.sweep();
+    expect(idle.last("error")).toEqual({ type: "error", code: "unauthorized" });
+    expect(idle.closed).not.toBeNull();
+  });
+
+  it("presence 帧混入单条坏候选时只丢弃坏条，保留合规候选且不踢断控制连接", async () => {
+    const { devices } = await activeRoom(["a", "b"]);
+    devices.b!.socket.clear();
+    await devices.a!.handle.receive(
+      JSON.stringify({
+        type: "presence",
+        candidates: [
+          { host: "192.168.1.20", port: 4320 },
+          { host: "fe80::1%以太网", port: 4320 },
+          { host: "evil.example.com", port: 4320 },
+        ],
+      }),
+    );
+    expect(devices.a!.socket.closed).toBeNull();
+    const presence = devices.b!.socket.last("presence");
+    expect(presence?.presence.find((p) => p.id === DEVICE_A)?.candidates).toEqual([{ host: "192.168.1.20", port: 4320 }]);
   });
 
   it("pending 设备超过 RELAY_PENDING_DEVICE_TTL_MS 没被激活就从账号里删掉", async () => {

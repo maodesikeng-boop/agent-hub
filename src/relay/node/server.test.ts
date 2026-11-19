@@ -189,6 +189,45 @@ describe("startNodeRelay", () => {
     expect(logs.length).toBeGreaterThan(0);
     for (const secret of ["SECRET-PAYLOAD", "tok_alice", ca.session, cb.session, channel]) expect(text).not.toContain(secret);
   });
+
+  it("同一 IP 并发 WebSocket 连接超过上限时拒绝升级，关闭后恢复可连", async () => {
+    const { base, ws } = await start();
+    const a = await makeIdentity(DEVICE_A);
+    const { body } = await register(base, a, "tok_alice");
+    const alphabet = "abcdefghijklmnopqrstuvwxyz234567";
+    const accountAt = (i: number) => `acct_${Array.from({ length: 26 }, (_, k) => alphabet[(i + k) % 32]).join("")}` as AccountId;
+    const sockets: WebSocket[] = [];
+    try {
+      let rejectedStatus: number | null = null;
+      for (let i = 0; i < 80; i++) {
+        const sock = new WebSocket(ws + RELAY_PATHS.control(accountAt(i)));
+        const result = await new Promise<"open" | number>((resolve, reject) => {
+          sock.once("open", () => resolve("open"));
+          sock.once("unexpected-response", (req, res) => {
+            req.destroy();
+            resolve(res.statusCode ?? 0);
+          });
+          sock.once("error", reject);
+        });
+        if (result === "open") {
+          sockets.push(sock);
+        } else {
+          rejectedStatus = result;
+          break;
+        }
+      }
+      expect(rejectedStatus).toBe(429);
+      for (const s of sockets.splice(0)) {
+        const closed = once(s, "close");
+        s.close();
+        await closed;
+      }
+      const after = await login(ws, a, body.accountId);
+      after.client.socket.close();
+    } finally {
+      for (const s of sockets) s.terminate();
+    }
+  });
 });
 
 describe("runRelayCli", () => {

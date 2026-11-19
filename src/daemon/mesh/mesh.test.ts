@@ -1,7 +1,13 @@
+import { once } from "node:events";
+import { createServer as createNetServer, connect as netConnect, type Socket } from "node:net";
 import { join } from "node:path";
+import { connect as tlsConnect } from "node:tls";
 import { describe, expect, it } from "vitest";
 import { API_PATHS } from "../../shared/api.ts";
+import { MESH_LEASE_ORPHAN_MS, MESH_LEASE_RENEW_MS, MESH_LEASE_TTL_MS } from "../../shared/limits.ts";
+import type { MeshCandidate } from "../../shared/mesh.ts";
 import { readAccountFile } from "./account.ts";
+import { MESH_ALPN } from "./dialer.ts";
 import { loadOrCreateMeshIdentity } from "./identity.ts";
 import { createRelayClient } from "./relay-client.ts";
 import { DEVICE_A, DEVICE_B, DEVICE_C, approveNode, loginNode, startTestMeshNode, startTestRelay, waitFor, type TestMeshNode } from "./test-helpers.ts";
@@ -134,4 +140,167 @@ describe("createMesh", () => {
     await (await b.mesh.request(DEVICE_A, "/x")).text();
     expect(signedIn(b).devices.find((d) => d.id === DEVICE_A)).toMatchObject({ online: true, link: "lan" });
   });
+
+  it("logout 后在线可信设备立即撤销这台并清掉在线状态，原磁盘私钥经局域网直连被拒", async () => {
+    const { relay, nodes } = await account(3);
+    const [a, b, c] = nodes as [TestMeshNode, TestMeshNode, TestMeshNode];
+    await waitFor(() => b.mesh.trust.get(DEVICE_C) !== undefined && a.mesh.trust.get(DEVICE_C) !== undefined);
+    await (await a.mesh.request(DEVICE_C, "/warm")).text();
+    const accountId = signedIn(a).accountId;
+
+    await c.mesh.logout();
+    expect(c.mesh.status()).toEqual({ state: "signed_out", lastError: null });
+
+    const bIdentity = await loadOrCreateMeshIdentity(join(b.dir, "mesh"), DEVICE_B);
+    let aCandidates: MeshCandidate[] = [];
+    const probe = createRelayClient({ relayUrl: relay.url, accountId, identity: bIdentity, candidates: () => [], log: () => {} });
+    probe.on("presence", (list) => {
+      const entry = list.find((p) => p.id === DEVICE_A);
+      if (entry !== undefined && entry.candidates.length > 0) aCandidates = entry.candidates;
+    });
+    probe.start();
+    await waitFor(() => aCandidates.length > 0);
+    await probe.close();
+
+    const cIdentity = await loadOrCreateMeshIdentity(join(c.dir, "mesh"), DEVICE_C);
+    const target = aCandidates[0]!;
+    const body = await new Promise<string>((resolve) => {
+      const socket = tlsConnect({
+        host: target.host,
+        port: target.port,
+        key: cIdentity.keyPem,
+        cert: cIdentity.certPem,
+        minVersion: "TLSv1.3",
+        ALPNProtocols: [MESH_ALPN],
+        rejectUnauthorized: false,
+        checkServerIdentity: () => undefined,
+      });
+      let out = "";
+      socket.once("secureConnect", () => socket.write("GET /after-logout HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"));
+      socket.on("data", (d: Buffer) => (out += d.toString("utf8")));
+      socket.once("end", () => resolve(out));
+      socket.once("close", () => resolve(out));
+      socket.once("error", () => resolve(out));
+      setTimeout(() => {
+        socket.destroy();
+        resolve(out);
+      }, 2_000);
+    });
+    expect(body).not.toContain(`pong from ${DEVICE_A} to ${DEVICE_C}`);
+    expect(a.mesh.trust.get(DEVICE_C)).toBeUndefined();
+    expect(b.mesh.trust.get(DEVICE_C)).toBeUndefined();
+    expect(a.mesh.isOnline(DEVICE_C)).toBe(false);
+    expect(signedIn(a).devices.some((d) => d.id === DEVICE_C)).toBe(false);
+  });
+
+  it("离线设备重新上线后能对齐到移除与退出撤销（含全部其他设备离线时退出的情况）", async () => {
+    const { relay, nodes } = await account(3);
+    const [a, b, c] = nodes as [TestMeshNode, TestMeshNode, TestMeshNode];
+    await waitFor(() => b.mesh.trust.get(DEVICE_C) !== undefined);
+    const bDir = b.dir;
+    await b.close();
+    await waitFor(() => !a.mesh.isOnline(DEVICE_B));
+    await c.mesh.logout();
+    await waitFor(() => a.mesh.trust.get(DEVICE_C) === undefined);
+
+    const b2 = await startTestMeshNode(relay, DEVICE_B, { dir: bDir });
+    await waitFor(() => b2.mesh.status().state === "signed_in");
+    await waitFor(() => b2.mesh.trust.get(DEVICE_C) === undefined, 5_000);
+
+    const aDir = a.dir;
+    await a.close();
+    await waitFor(() => !b2.mesh.isOnline(DEVICE_A));
+    await b2.mesh.logout();
+    const a2 = await startTestMeshNode(relay, DEVICE_A, { dir: aDir });
+    await waitFor(() => a2.mesh.status().state === "signed_in");
+    await waitFor(() => a2.mesh.trust.get(DEVICE_B) === undefined, 5_000);
+  });
+
+  it("B 离线时 A 移除 C，B 重启后信任表里没有 C", async () => {
+    const { relay, nodes } = await account(3);
+    const [a, b] = nodes as [TestMeshNode, TestMeshNode, TestMeshNode];
+    await waitFor(() => b.mesh.trust.get(DEVICE_C) !== undefined);
+    const bDir = b.dir;
+    await b.close();
+    await waitFor(() => !a.mesh.isOnline(DEVICE_B));
+    await a.mesh.removeDevice(DEVICE_C);
+    const b2 = await startTestMeshNode(relay, DEVICE_B, { dir: bDir });
+    await waitFor(() => b2.mesh.status().state === "signed_in");
+    await waitFor(() => b2.mesh.trust.get(DEVICE_C) === undefined, 5_000);
+  });
+
+  it("中心第一顺位连不上中继时，先经局域网探在线设备：有持有者时不降级双活，无持有者时才降级接管", async () => {
+    let clock = 1_700_000_000_000;
+    let relayPort = 0;
+    const aSockets = new Set<Socket>();
+    const allSockets = new Set<Socket>();
+    let tagAsA = true;
+    let blockRelayForA = false;
+    const proxy = createNetServer((inbound) => {
+      if (blockRelayForA) {
+        inbound.destroy();
+        return;
+      }
+      const upstream = netConnect(relayPort, "127.0.0.1");
+      allSockets.add(inbound);
+      allSockets.add(upstream);
+      if (tagAsA) {
+        aSockets.add(inbound);
+        aSockets.add(upstream);
+      }
+      inbound.pipe(upstream);
+      upstream.pipe(inbound);
+      const drop = () => {
+        aSockets.delete(inbound);
+        aSockets.delete(upstream);
+        allSockets.delete(inbound);
+        allSockets.delete(upstream);
+        inbound.destroy();
+        upstream.destroy();
+      };
+      inbound.on("error", drop);
+      upstream.on("error", drop);
+      inbound.on("close", drop);
+      upstream.on("close", drop);
+    });
+    proxy.listen(0, "127.0.0.1");
+    await once(proxy, "listening");
+    const proxyUrl = `http://127.0.0.1:${(proxy.address() as { port: number }).port}`;
+    const relay = await startTestRelay({ now: () => clock, publicOrigin: proxyUrl });
+    relayPort = Number(new URL(relay.url).port);
+
+    try {
+      const a = await startTestMeshNode(relay, DEVICE_A, { relayUrl: proxyUrl, now: () => clock });
+      await loginNode(a);
+      tagAsA = false;
+      const b = await startTestMeshNode(relay, DEVICE_B, { relayUrl: proxyUrl, now: () => clock });
+      await loginNode(b);
+      await approveNode(a, b);
+      await a.mesh.setCenterPriority([DEVICE_A, DEVICE_B]);
+      await waitFor(() => signedIn(b).centerPriority.join() === [DEVICE_A, DEVICE_B].join());
+      await (await a.mesh.request(DEVICE_B, "/warm")).text();
+
+      const aLease = a.mesh.lease("feishu", { eligible: () => true, connect: () => {}, disconnect: async () => {} });
+      const bLease = b.mesh.lease("feishu", { eligible: () => true, connect: () => {}, disconnect: async () => {} });
+      await waitFor(() => aLease.holding() && !bLease.holding());
+
+      blockRelayForA = true;
+      for (const s of aSockets) s.destroy();
+      await waitFor(() => signedIn(a).relay === "unreachable");
+      clock += MESH_LEASE_TTL_MS + 1_000;
+      await waitFor(() => bLease.holding() && !aLease.holding());
+
+      clock += MESH_LEASE_ORPHAN_MS + MESH_LEASE_RENEW_MS;
+      await new Promise((r) => setTimeout(r, MESH_LEASE_RENEW_MS + 300));
+      expect(bLease.holding()).toBe(true);
+      expect(aLease.holding()).toBe(false);
+
+      await b.close();
+      clock += MESH_LEASE_RENEW_MS;
+      await waitFor(() => aLease.holding(), MESH_LEASE_RENEW_MS + 2_000);
+    } finally {
+      for (const s of allSockets) s.destroy();
+      await new Promise<void>((resolve) => proxy.close(() => resolve()));
+    }
+  }, 30_000);
 });

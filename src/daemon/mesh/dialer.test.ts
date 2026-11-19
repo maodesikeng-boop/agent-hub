@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DeviceId } from "../../shared/api.ts";
 import { MESH_CANDIDATES_MAX } from "../../shared/limits.ts";
 import type { MeshCandidate } from "../../shared/mesh.ts";
+import { encodeRelayFrame, parseRelayClientFrame } from "../../relay/protocol.ts";
 import { createMeshDialer, localCandidates, MESH_ALPN, startMeshListener, type MeshConnection, type MeshDialer, type MeshListener } from "./dialer.ts";
 import type { MeshIdentity } from "./identity.ts";
 import { createRelayClient, type RelayClient } from "./relay-client.ts";
@@ -44,6 +45,22 @@ describe("localCandidates", () => {
     expect(result.every((c) => c.host.startsWith("10."))).toBe(true);
     expect(new Set(result.map((c) => c.host)).size).toBe(result.length);
     expect(localCandidates(many, 1)).toEqual(result);
+  });
+
+  it.each(["以太网", "vEthernet (WSL)", "Ethernet 2"])("Windows 网卡「%s」生成的候选能通过中继 presence 校验", (name) => {
+    const ll6 = (address: string, scopeid: number): NetworkInterfaceInfo => ({
+      address,
+      netmask: "ffff:ffff:ffff:ffff::",
+      family: "IPv6",
+      mac: "00:00:00:00:00:00",
+      internal: false,
+      cidr: `${address}/64`,
+      scopeid,
+    });
+    const withScope = localCandidates({ [name]: [iface("192.168.1.20", "IPv4"), ll6("fe80::1c2d:3e4f:5a6b:7c8d", 12)] }, 4320);
+    expect(parseRelayClientFrame(encodeRelayFrame({ type: "presence", candidates: withScope }))).not.toBeNull();
+    const zeroScope = localCandidates({ [name]: [iface("192.168.1.20", "IPv4"), ll6("fe80::1c2d:3e4f:5a6b:7c8d", 0)] }, 4320);
+    expect(parseRelayClientFrame(encodeRelayFrame({ type: "presence", candidates: zeroScope }))).not.toBeNull();
   });
 });
 
@@ -267,5 +284,23 @@ describe("createMeshDialer + startMeshListener", () => {
     expect(all.includes("SECRET-PATH")).toBe(false);
     expect(all.includes("hello from")).toBe(false);
     for (const chunk of seen) expect([0x14, 0x15, 0x16, 0x17]).toContain(chunk[0]);
+  });
+
+  it("直连候选只尝试私网与回环地址，忽略公网、链路本地 IPv4 与 IPv4 映射地址", async () => {
+    const { nodes } = await mesh([DEVICE_A, DEVICE_B]);
+    const [a] = nodes as [Node, Node];
+    const bad = await closedPortServer();
+    const openChannel = vi.spyOn(a.relay, "openChannel");
+    a.candidates = [
+      { host: "8.8.8.8", port: bad.port },
+      { host: "169.254.169.254", port: bad.port },
+      { host: "2001:db8::1", port: bad.port },
+      { host: "::ffff:127.0.0.1", port: bad.port },
+    ];
+    const conn = await a.dialer.dial(DEVICE_B);
+    expect(conn.link).toBe("relay");
+    expect(bad.hits()).toBe(0);
+    expect(openChannel).toHaveBeenCalledTimes(1);
+    conn.socket.destroy();
   });
 });
