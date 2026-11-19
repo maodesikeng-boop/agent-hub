@@ -1,7 +1,7 @@
 -- 0041_feishu_router_asks_and_inbound_cursor：
 -- 1. feishu_posts.ref_kind 增加 router_ask、router_file，记录同步发往总助单聊的任务图检查点与门禁卡、user_blocker 提醒卡及其交付物附件；
 -- 2. feishu_router_events 增加 ask_message_id 列与触发器 feishu_router_ask_insert，用 NATURAL LEFT JOIN 兼容从 0040 升级与回退重跑；
--- 3. 新增 feishu_inbound_cursors 记录各会话最近入站锚点，随 feishu_chats 级联删除。
+-- 3. 新增 feishu_inbound_cursors 记录各会话最近入站锚点（随 feishu_chats 级联删除），并为存量活跃会话写入迁移时刻基线锚点。
 DROP TABLE IF EXISTS feishu_posts_new;
 CREATE TABLE feishu_posts_new (
   ref_kind    TEXT    NOT NULL CHECK (ref_kind IN ('message', 'file', 'router_item', 'router_ask', 'router_file', 'router_command', 'chat_policy', 'router_settings')),
@@ -78,3 +78,11 @@ CREATE TABLE IF NOT EXISTS feishu_inbound_cursors (
   last_message_id  TEXT,
   updated_at       INTEGER NOT NULL
 ) STRICT;
+
+WITH migration_clock(now_ms) AS (
+  SELECT CAST(unixepoch('subsec') * 1000 AS INTEGER)
+)
+INSERT OR IGNORE INTO feishu_inbound_cursors (chat_id, last_inbound_at, last_message_id, updated_at)
+  SELECT c.chat_id, m.now_ms, NULL, m.now_ms
+  FROM feishu_chats c, migration_clock m
+  WHERE c.archived_at IS NULL AND (c.target = 'router' OR c.pm_id IS NOT NULL);

@@ -230,7 +230,7 @@ export function createFeishuSdkTransport(options: FeishuSdkOptions): FeishuTrans
       const items: FeishuRawMessageEvent[] = [];
       for (const raw of (data.items as RawListedItem[] | undefined) ?? []) {
         if (raw.deleted === true || Boolean(raw.upper_message_id) || !raw.message_id) continue;
-        // im/v1/messages 的 mentions[].id 是裸 open_id 字符串，转换成 normalize 预期的 { open_id } 结构
+        // im/v1/messages 的 mentions[].id 是裸字符串且机器人可能标为 app_id，转换成 normalize 预期的 { open_id } 结构
         const adapted = {
           sender: {
             sender_id: { open_id: raw.sender?.id_type === "open_id" ? (raw.sender.id ?? "") : "" },
@@ -244,7 +244,14 @@ export function createFeishuSdkTransport(options: FeishuSdkOptions): FeishuTrans
             content: raw.body?.content ?? "",
             mentions: (raw.mentions ?? []).map((m) => ({
               key: m.key ?? "",
-              id: { open_id: m.id_type === "open_id" ? (m.id ?? "") : "" },
+              id: {
+                open_id:
+                  m.id_type === "open_id"
+                    ? (m.id ?? "")
+                    : m.id_type === "app_id" && m.id === options.appId
+                      ? input.botOpenId
+                      : "",
+              },
               name: m.name ?? "",
               ...(m.tenant_key ? { tenant_key: m.tenant_key } : {}),
             })),

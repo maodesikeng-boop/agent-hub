@@ -98,7 +98,7 @@
 | 文件 | 上传文件 ≤ 30 MB；下载消息里的资源 `GET im/v1/messages/:message_id/resources/:file_key` ≤ 100 MB。发消息的 `msg_type` 要和上传时的 `file_type` 配对：`mp4` 发 `media`（视频，封面 `image_key` 可不填），`opus` 发 `audio`，`pdf`、`doc`、`xls`、`ppt`、`stream` 发 `file`；不配对回 230055。 | `reference/im-v1/file/create.md`、`im-v1/message/create_json.md`、`reference/im-v1/message/create.md`（错误码 230055）、`reference/im-v1/message-resource/get.md` |
 | 卡片里的图片 | 卡片 JSON 2.0 的图片组件 `{"tag": "img", "img_key", "alt", "scale_type": "fit_horizontal", "preview": true}`，`img_key` 用 `POST im/v1/images`（`image_type: message`）拿到的图片编号；`fit_horizontal` 完整展示不裁剪，`preview` 点开看大图。官方建议卡片里的图在 1500×3000 px 以内、≤ 10 MB。富文本组件 `text_size: notation` 是 12px 辅助文字。 | `feishu-cards/card-json-v2-components/content-components/image`、`.../rich-text`（2026-11-18 核实） |
 | 撤回消息 | `DELETE im/v1/messages/:message_id`，机器人撤回自己发的消息，`im:message:send_as_bot` 即可（模板已带）；受管理员设的撤回时限约束（默认 24 小时），超时回 230009。 | `reference/im-v1/message/delete.md`（2026-11-18 核实） |
-| 拉历史消息 | `GET im/v1/messages`（`container_id_type: chat`），`start_time` 与 `end_time` 为秒级时间戳字符串（传 `start_time` 时须一并给 `end_time`），回包 `create_time` 为毫秒字符串，`page_size` 范围 1～50；`mentions[].id` 为裸 `open_id` 字符串，经适配后走官方 `normalize`。单聊需 `im:message:readonly`（模板已带），群聊还需 `im:message.group_msg`；缺权限（230027）时单群静默降级。 | `reference/im-v1/message/list.md`（2026-11-19 核实） |
+| 拉历史消息 | `GET im/v1/messages`（`container_id_type: chat`），`start_time` 与 `end_time` 为秒级时间戳字符串（传 `start_time` 时须一并给 `end_time`），回包 `create_time` 为毫秒字符串，`page_size` 范围 1～50；`mentions[].id` 为裸字符串（用户为 `open_id`，机器人可能标为 `app_id`），适配本机器人 `app_id` 后走官方 `normalize`。单聊需 `im:message:readonly`（模板已带），群聊还需 `im:message.group_msg`；缺权限（230027）时单群静默降级。 | `reference/im-v1/message/list.md`（2026-11-19 核实） |
 | 置顶消息 | `POST / DELETE im/v1/pins`，通过可选权限 `im:message.pins:write_only` 随 `addons` 预填；未授予或群只许群主 Pin（230046）时记日志静默降级。 | `reference/im-v1/pin/create.md` |
 | 查权限 | `GET /open-apis/application/v6/scopes` 返回各权限授予状态，不要额外权限。 | `application-v6/scope/list` |
 | SDK 的 Channel | SDK 有高层的 `createLarkChannel`（长连接、去重、markdown 流式卡片、媒体），但只派发消息、卡片点击、表情、机器人进群、文档评论，**不派发成员进出**；卡片点击处理函数的返回值被丢掉（回不了 toast）；流式卡片只有一个 markdown 组件，放不了停止按钮。 | SDK `lib/index.js` 的 `registerDispatcherHandlers`、`docs/channel.zh.md` |
@@ -170,7 +170,7 @@
 **网页和飞书一致。** 网页上发的用户消息镜像到群里（标“网页”），网页发的总助指令和结果也镜像到单聊；飞书发的消息本来就在账本里。
 
 **断线与补发（出站补发 + 入站补拉）。** 官方 `WSClient` 默认不查心跳、握手不限时，半开的假活连接（网络切换、梯子、NAT 回收）要等 TCP 报错才发现，期间飞书推来的事件送不到。`sdk.ts` 开官方的心跳看门狗 `wsConfig.pingTimeout`（`FEISHU_WS_PING_TIMEOUT_S`）和握手超时 `handshakeTimeoutMs`（`FEISHU_WS_HANDSHAKE_TIMEOUT_MS`），断开、重连各记一行日志。启动连接与每次断线重连后双向追平：
-- **入站主动补拉**：按 `feishu_inbound_cursors` 记录的各活跃会话（总助单聊 + 未归档项目群）最近入站锚点与最大回溯窗口 `FEISHU_INBOUND_CATCHUP_WINDOW_MS`（进程内重连往前多留 `FEISHU_INBOUND_CATCHUP_OVERLAP_MS` 覆盖半开盲区），单飞串行调用 `GET im/v1/messages`（单群最多翻 `FEISHU_INBOUND_CATCHUP_MAX_PAGES` 页、`FEISHU_INBOUND_CATCHUP_MAX_MESSAGES` 条），过滤机器人自身消息、撤回消息和合并转发子消息，按时间升序前插到该会话重连后暂存的实时事件之前投递，保留多人群 `@` 与跨气泡带文件语义；内存 `seenInboundMessages`（LRU 上限 `FEISHU_SEEN_MESSAGES_MAX`）与账本 `client:<conv>:feishu:<message_id>`、`router_commands.client_id` 双重去重，飞书服务端稍后经长连接迟到重推同一 `message_id` 直接跳过；未授予 `im:message.group_msg` 或单群接口报错时按单群记结构化日志静默降级，不阻塞总助单聊与其他群；并发多次闪断重连合并为同一时间只跑一轮。
+- **入站主动补拉**：按 `feishu_inbound_cursors` 记录的各活跃会话（总助单聊 + 未归档项目群）最近入站锚点与最大回溯窗口 `FEISHU_INBOUND_CATCHUP_WINDOW_MS`（进程内重连往前多留 `FEISHU_INBOUND_CATCHUP_OVERLAP_MS` 覆盖半开盲区；`0041` 迁移与空游标会话按当前时刻建锚点，不回放升级前的非幂等消息），用 `p-limit` 控制 `FEISHU_INBOUND_CATCHUP_CONCURRENCY` 路并发调用 `GET im/v1/messages`（单群最多翻 `FEISHU_INBOUND_CATCHUP_MAX_PAGES` 页、`FEISHU_INBOUND_CATCHUP_MAX_MESSAGES` 条），过滤机器人自身消息、撤回消息和合并转发子消息，按时间升序前插到该会话重连后暂存的实时事件之前投递，保留多人群 `@` 与跨气泡带文件语义；游标仅在单条消息真正处理完毕后推进，断线、停机或入站队列满溢出丢弃时不跨过缺口推进游标（溢出时按时间先收最早消息并记结构化日志）；内存 `seenInboundMessages`（LRU 上限 `FEISHU_SEEN_MESSAGES_MAX`）与账本 `client:<conv>:feishu:<message_id>`、`router_commands.client_id` 双重去重，飞书服务端稍后经长连接迟到重推同一 `message_id` 直接跳过；未授予 `im:message.group_msg` 或单群接口报错时按单群记结构化日志静默降级，不阻塞总助单聊与其他群；并发多次闪断重连合并为同一时间只跑一轮。
 - **出站补发**：成员缓存标过期；先把离线期间已经定案的卡（含总助单聊 `router_item` 与 `router_ask`）改掉，再按 `feishu_chats` 的水位补发离线期间的消息（每群最多 `FEISHU_CATCHUP_MAX_MESSAGES` 条，更早的发一行“还有 N 条，去网页看”），并恢复未传完的附件。飞书挂了、凭证失效都不影响网页和 agent，只在状态里报。
 
 ## 性能
@@ -203,11 +203,12 @@
 | `FEISHU_CATCHUP_MAX_MESSAGES` | 20 | 离线一夜回来不刷屏 |
 | `FEISHU_MESSAGE_LIST_PAGE_SIZE` | 50 | `GET im/v1/messages` 单页条数上限（飞书校验 1～50） |
 | `FEISHU_INBOUND_CATCHUP_WINDOW_MS` / `FEISHU_INBOUND_CATCHUP_OVERLAP_MS` | 15 分钟 / 30 秒 | 入站主动补拉最大回溯窗口（不翻陈旧历史）与进程内重连半开盲区重叠缓冲 |
-| `FEISHU_INBOUND_CATCHUP_MAX_PAGES` / `FEISHU_INBOUND_CATCHUP_MAX_MESSAGES` | 4 / 200 | 单群单次重连最多翻页数与保留最新条数上限，与 `FEISHU_INBOUND_QUEUE_MAX` 对齐 |
+| `FEISHU_INBOUND_CATCHUP_MAX_PAGES` / `FEISHU_INBOUND_CATCHUP_MAX_MESSAGES` | 4 / 200 | 单群单次重连最多翻页数与保留最新条数上限 |
+| `FEISHU_INBOUND_CATCHUP_CONCURRENCY` | 6 | 单轮入站补拉并发拉取的会话数上限，消除百群串行阻塞实时消息并压在飞书频控以内 |
 | `FEISHU_SEEN_MESSAGES_MAX` | 2,000 | 内存 LRU 记住最近已处理的飞书入站消息编号上限，拦截重叠窗口与长连接迟到重推 |
 | `FEISHU_BIND_CODE_TTL_MS` | 10 分钟 | 够人切到飞书里发 |
 | `FEISHU_IMAGE_MAX_BYTES` / `FEISHU_FILE_MAX_BYTES` | 10 MB / 30 MB | 飞书上传图片、上传文件的上限 |
-| `FEISHU_INBOUND_QUEUE_MAX` / `FEISHU_OUTBOUND_QUEUE_MAX` | 200 / 500 | 一个应用的正常事件量远低于此；进的满了先丢成员和改名事件（重连对账会补回），出的满了先合并流式推送 |
+| `FEISHU_INBOUND_QUEUE_MAX` / `FEISHU_OUTBOUND_QUEUE_MAX` | 500 / 500 | 容纳多群并发补拉与突发事件；进的满了先丢成员和改名事件（重连对账会补回），消息溢出记日志并锁住补拉锚点，出的满了先合并流式推送 |
 | `FEISHU_MEDIA_QUEUE_MAX` / `FEISHU_MEDIA_RETRY_MAX` / `FEISHU_UPLOAD_CONCURRENCY` | 200 / 3 / 3 | 在途附件最多几个（满了先在卡上写 Uploading，重连补发时再传）；重试隔 1、2、4 秒；同时传 3 个，慢网上不互相抢带宽 |
 | `FEISHU_ATTACH_WAIT_MS` | 2.5 秒 | 发卡前等附件的窗口：常见截图、文档在这之内传完，和文字一起到；超大视频不拖住聊天 |
 | `FEISHU_IMAGE_MAX_EDGE` / `FEISHU_IMAGE_SHRINK_BYTES` | 2400 px / 2 MB | 手机视网膜屏看截图足够清楚；超过的先缩再传 |

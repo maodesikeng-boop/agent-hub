@@ -48,6 +48,7 @@ import {
   FEISHU_CONTROL_RETRY_MS,
   FEISHU_CATCHUP_MAX_MESSAGES,
   FEISHU_ATTACH_WAIT_MS,
+  FEISHU_INBOUND_CATCHUP_CONCURRENCY,
   FEISHU_INBOUND_CATCHUP_MAX_MESSAGES,
   FEISHU_INBOUND_CATCHUP_MAX_PAGES,
   FEISHU_INBOUND_CATCHUP_OVERLAP_MS,
@@ -289,6 +290,7 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
   const sendTimes = new LRUCache<string, number[]>({ max: FEISHU_CHAT_CACHE_MAX });
   const seenInboundMessages = new LRUCache<FeishuMessageId, true>({ max: FEISHU_SEEN_MESSAGES_MAX });
   const inboundGateChats = new Set<FeishuChatId>();
+  const inboundCursorHold = new Map<FeishuChatId, number>();
   let inboundCatchUpInflight: Promise<void> | null = null;
   let inboundCatchUpRequested = false;
   let hadLiveSession = false;
@@ -403,7 +405,9 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
   };
 
   const drain = async (queue: Queue, name: FeishuChatId, lane: Lane) => {
-    for (let task = lane.tasks.shift(); task !== undefined; task = lane.tasks.shift()) {
+    while (!queue.paused(name)) {
+      const task = lane.tasks.shift();
+      if (task === undefined) break;
       try {
         if (!closed && linkUp) await task.run();
       } catch (error) {
@@ -423,6 +427,7 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     }
     lane.running = false;
     if (lane.tasks.length === 0 && queue.lanes.get(name) === lane) queue.lanes.delete(name);
+    else startLane(queue, name, lane);
     pumpControl();
     settleIdle();
   };
@@ -708,6 +713,11 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     for (const chatId of [...inboundGateChats]) releaseInboundGate(chatId);
   };
 
+  const noteInboundQueueDrop = (chatId: FeishuChatId, at: number) => {
+    const prev = inboundCursorHold.get(chatId);
+    inboundCursorHold.set(chatId, prev === undefined ? at : Math.min(prev, at));
+  };
+
   const catchUpInboundChat = async (chat: FeishuChatBinding, includeOverlap: boolean) => {
     const app = store.app();
     const target = activeTarget(chat);
@@ -718,13 +728,13 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     }
     const catchUpNow = now();
     const cursor = store.inboundCursor(chat.chatId);
-    const windowFloorMs = Math.max(cursor?.chatCreatedAt ?? 0, catchUpNow - FEISHU_INBOUND_CATCHUP_WINDOW_MS);
-    const anchorMs =
-      cursor?.lastInboundAt === null || cursor?.lastInboundAt === undefined
-        ? windowFloorMs
-        : includeOverlap
-          ? cursor.lastInboundAt - FEISHU_INBOUND_CATCHUP_OVERLAP_MS
-          : cursor.lastInboundAt;
+    if (cursor === null) return;
+    if (cursor.lastInboundAt === null) {
+      store.saveInboundCursor(chat.chatId, { lastInboundAt: catchUpNow, lastMessageId: null }, catchUpNow);
+      return;
+    }
+    const windowFloorMs = Math.max(cursor.chatCreatedAt, catchUpNow - FEISHU_INBOUND_CATCHUP_WINDOW_MS);
+    const anchorMs = includeOverlap ? cursor.lastInboundAt - FEISHU_INBOUND_CATCHUP_OVERLAP_MS : cursor.lastInboundAt;
     const sinceMs = Math.max(windowFloorMs, anchorMs);
     const startSec = Math.max(0, Math.floor(sinceMs / 1000));
     const endSec = Math.max(startSec + 1, Math.ceil(catchUpNow / 1000) + 60);
@@ -761,35 +771,42 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
 
     fetched.reverse();
     const missedEvents: Extract<FeishuInbound, { kind: "message" }>[] = [];
-    let maxSeenAt = cursor?.lastInboundAt ?? null;
-    let maxSeenId = cursor?.lastMessageId ?? null;
     for (const raw of fetched) {
-      if (!includeOverlap && cursor?.lastMessageId !== null && raw.messageId === cursor?.lastMessageId) continue;
+      if (!includeOverlap && cursor.lastMessageId !== null && raw.messageId === cursor.lastMessageId) continue;
       const parsed = parseFeishuEvent(raw, app.botOpenId);
       if (parsed === null || parsed.kind !== "message") continue;
-      if (parsed.at > 0 && (maxSeenAt === null || parsed.at >= maxSeenAt)) {
-        maxSeenAt = parsed.at;
-        maxSeenId = parsed.messageId;
-      }
       if (seenInboundMessages.has(parsed.messageId)) continue;
       missedEvents.push(parsed);
     }
 
-    if (missedEvents.length > 0 && !closed && linkUp) {
+    if (closed || !linkUp) return;
+    if (missedEvents.length === 0) {
+      inboundCursorHold.delete(chat.chatId);
+      return;
+    }
+    const available = Math.max(0, inbound.limit - inbound.count);
+    const accepted = missedEvents.slice(0, available);
+    const dropped = missedEvents.slice(available);
+    if (accepted.length > 0) {
       let lane = inbound.lanes.get(chat.chatId);
       if (lane === undefined) {
         lane = { tasks: [], running: false };
         inbound.lanes.set(chat.chatId, lane);
       }
-      const available = Math.max(0, inbound.limit - inbound.count);
-      const toPrepend = missedEvents.slice(-available).map((ev) => inboundTask(() => handleInbound(ev)));
-      if (toPrepend.length > 0) {
-        lane.tasks.unshift(...toPrepend);
-        inbound.count += toPrepend.length;
-      }
+      lane.tasks.unshift(...accepted.map((ev) => inboundTask(() => handleInbound(ev))));
+      inbound.count += accepted.length;
     }
-    if (maxSeenAt !== null && store.chatById(chat.chatId) !== null) {
-      store.saveInboundCursor(chat.chatId, { lastInboundAt: maxSeenAt, lastMessageId: maxSeenId }, now());
+    if (dropped.length > 0) {
+      const firstDropped = dropped[0]!;
+      if (firstDropped.at > 0) noteInboundQueueDrop(chat.chatId, firstDropped.at);
+      directory.markAllStale();
+      lastError = "飞书入站队列已满，请重发未收到回复的消息";
+      const targetKind = chat.target.kind === "router" ? "router" : `pm:${chat.target.pmId ?? "none"}`;
+      log(
+        `飞书：入站补拉队列已满 chatId=${chat.chatId} target=${targetKind} dropped=${dropped.length} queued=${accepted.length} limit=${inbound.limit} firstDroppedId=${firstDropped.messageId}`,
+      );
+    } else {
+      inboundCursorHold.delete(chat.chatId);
     }
   };
 
@@ -806,27 +823,33 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
         return;
       }
       if (!linkUp || closed || owner() === null || store.app() === null) return;
-      for (const chat of store.chats()) {
-        if (!linkUp || closed) break;
-        if (activeTarget(chat) === null) {
-          releaseInboundGate(chat.chatId);
-          continue;
-        }
-        try {
-          await catchUpInboundChat(chat, includeOverlap);
-        } catch (error) {
-          if (error instanceof FeishuAuthError) {
-            handleError(error);
-            break;
-          }
-          const code = error instanceof FeishuApiError ? String(error.code) : "network";
-          const targetKind = chat.target.kind === "router" ? "router" : `pm:${chat.target.pmId ?? "none"}`;
-          log(`飞书：入站补拉跳过会话 chatId=${chat.chatId} target=${targetKind} code=${code} reason=${errorText(error)}`);
-        } finally {
-          releaseInboundGate(chat.chatId);
-        }
-      }
-      if (linkUp && !closed) hadLiveSession = true;
+      const catchUpLimit = pLimit(FEISHU_INBOUND_CATCHUP_CONCURRENCY);
+      let abortedByAuth = false;
+      await Promise.all(
+        store.chats().map((chat) =>
+          catchUpLimit(async () => {
+            if (!linkUp || closed || abortedByAuth || activeTarget(chat) === null) {
+              releaseInboundGate(chat.chatId);
+              return;
+            }
+            try {
+              await catchUpInboundChat(chat, includeOverlap);
+            } catch (error) {
+              if (error instanceof FeishuAuthError) {
+                abortedByAuth = true;
+                handleError(error);
+                return;
+              }
+              const code = error instanceof FeishuApiError ? String(error.code) : "network";
+              const targetKind = chat.target.kind === "router" ? "router" : `pm:${chat.target.pmId ?? "none"}`;
+              log(`飞书：入站补拉跳过会话 chatId=${chat.chatId} target=${targetKind} code=${code} reason=${errorText(error)}`);
+            } finally {
+              releaseInboundGate(chat.chatId);
+            }
+          }),
+        ),
+      );
+      if (linkUp && !closed && !abortedByAuth) hadLiveSession = true;
     })().finally(() => {
       releaseAllInboundGates();
       inboundCatchUpInflight = null;
@@ -921,6 +944,7 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
       directory.clear();
       contexts.clearAll();
       seenInboundMessages.clear();
+      inboundCursorHold.clear();
       hadLiveSession = false;
     }
     store.saveApp({ appId, brand: s.brand, botOpenId: bot.botOpenId, botName: bot.botName, ownerOpenId }, now());
@@ -1499,6 +1523,8 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     directory.forget(chatId);
     contexts.clear(chatId);
     sendTimes.delete(chatId);
+    inboundCursorHold.delete(chatId);
+    releaseInboundGate(chatId);
     for (const [id, slot] of streams) if (slot.chatId === chatId) dropStream(id, slot);
   };
 
@@ -2068,6 +2094,10 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     }
     const limit = event.kind === "message" ? inbound.limit : Math.floor(inbound.limit / 2);
     if (!admit(inbound, event.chatId, inboundTask(() => handleInbound(event)), limit)) {
+      if (linkUp && !closed && event.kind === "message") {
+        if (event.at > 0) noteInboundQueueDrop(event.chatId, event.at);
+        log(`飞书：实时入站队列已满 chatId=${event.chatId} dropped=1 limit=${limit} firstDroppedId=${event.messageId}`);
+      }
       directory.markAllStale();
       lastError = "飞书入站队列已满，请重发未收到回复的消息";
     }
@@ -2257,7 +2287,13 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     if (seenInboundMessages.has(message.messageId)) return;
     const recordSeen = () => {
       seenInboundMessages.set(message.messageId, true);
-      if (message.at > 0 && !inboundGateChats.has(message.chatId) && store.chatById(message.chatId) !== null) {
+      const holdAt = inboundCursorHold.get(message.chatId);
+      if (
+        message.at > 0 &&
+        !inboundGateChats.has(message.chatId) &&
+        (holdAt === undefined || message.at < holdAt) &&
+        store.chatById(message.chatId) !== null
+      ) {
         store.saveInboundCursor(message.chatId, { lastInboundAt: message.at, lastMessageId: message.messageId }, now());
       }
     };
@@ -2302,13 +2338,12 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
         requestControl("sync");
         return;
       case "reject":
-        recordSeen();
         await sendText({ chatId: message.chatId }, message.chatType === "p2p" ? route.reason : `<at user_id="${route.openId}"></at> ${route.reason}`);
         if (route.reason === GUEST_NO_FILES) contexts.dropFiles(message.chatId, (file) => file.speaker === route.openId);
         if (route.guestDenied === true) await offerPolicyCard(message.chatId);
+        recordSeen();
         return;
       case "settings_card":
-        recordSeen();
         if (chat !== null) {
           if (target?.kind === "pm") {
             await postPolicyCard(chat);
@@ -2318,10 +2353,11 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
             refreshCatalogsInBackground(target);
           }
         }
+        recordSeen();
         return;
       case "context":
-        recordSeen();
         contexts.add(message.chatId, route.line, message.files.map((file) => ({ messageId: message.messageId, speaker: message.senderOpenId, file, at: message.at })));
+        recordSeen();
         return;
       case "deliver": {
         const clientId = `${FEISHU_CLIENT_PREFIX}${message.messageId}`;
@@ -2360,8 +2396,8 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
         }
         if (route.target.kind === "router") {
           if (options.router === null) {
-            recordSeen();
             await sendText({ chatId: message.chatId }, "总助没开：去网页的总助工作台选一家 agent。");
+            recordSeen();
             return;
           }
           try {
@@ -2369,8 +2405,8 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
             recordSeen();
           } catch (error) {
             if (!(error instanceof LedgerRequestError)) throw error;
-            recordSeen();
             await sendText({ chatId: message.chatId }, `没送到：${error.message}`);
+            recordSeen();
           }
           return;
         }
@@ -2389,8 +2425,8 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
           recordSeen();
         } catch (error) {
           if (error instanceof LedgerRequestError || error instanceof ConversationNotFoundError) {
-            recordSeen();
             await sendText({ chatId: message.chatId }, `没送到：${error.message}`);
+            recordSeen();
             return;
           }
           throw error;
@@ -2748,6 +2784,7 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
       ownerName = null;
       hadLiveSession = false;
       seenInboundMessages.clear();
+      inboundCursorHold.clear();
       directory.clear();
       contexts.clearAll();
       pendingCatalogRefreshPms.clear();
@@ -2795,6 +2832,7 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
         inboundCatchUpRequested = false;
         releaseAllInboundGates();
         seenInboundMessages.clear();
+        inboundCursorHold.clear();
         activeTurns.clear();
         directory.clear();
         contexts.clearAll();
