@@ -30,7 +30,7 @@ const now = Date.now();
 const minutes = (n: number) => now - n * 60_000;
 
 function pm(id: number, name: string, vendor: Pm["vendor"] = "claude"): Pm {
-  return { id, name, avatarFile: null, mode: "manage_only", vendor, defaultModel: null, effort: null, personaFile: null, createdAt: minutes(600) };
+  return { id, name, mode: "manage_only", vendor, defaultModel: null, effort: null, personaFile: null, createdAt: minutes(600) };
 }
 
 let nextId = 1;

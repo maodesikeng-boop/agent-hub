@@ -1,5 +1,5 @@
 // 设备的状态点、状态词、系统图标（左栏组头、设置里的设备列表共用，docs/multi-device-design.md 第 4.3 节）。
-import { Laptop, Monitor, Server } from "lucide-react";
+import { Laptop, Monitor, Server } from "../ui/icons.ts";
 import type { DeviceStatus } from "../devices.ts";
 import { formatAgo } from "../format.ts";
 import { cn } from "../lib/utils.ts";
@@ -30,5 +30,5 @@ export function StatusText({ status, lastOnlineAt, online = false }: { status: D
 /** 系统图标：Mac 笔记本、Linux 服务器，别的显示器。 */
 export function PlatformIcon({ platform, className }: { platform: string; className?: string }) {
   const Icon = platform === "darwin" ? Laptop : platform === "linux" ? Server : Monitor;
-  return <Icon className={cn("size-4 shrink-0", className)} aria-hidden="true" />;
+  return <Icon className={cn("size-pixel-sm shrink-0", className)} aria-hidden="true" />;
 }

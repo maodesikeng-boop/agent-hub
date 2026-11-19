@@ -10,6 +10,7 @@ import { ModelCatalogProvider } from "./models.tsx";
 import type { WorkerEntry } from "./selectors.ts";
 import { makeMessage } from "./test-utils.ts";
 
+import { defaultLookOf, type SlimeLook } from "../shared/slimes.ts";
 beforeEach(() => localStorage.clear());
 afterEach(cleanup);
 
@@ -26,14 +27,14 @@ const busy = (id: number) => worker(id, { activity: "working" });
 const done = (id: number) => worker(id, { ended: true });
 const ask = (id: number): Message => makeMessage({ id, text: `问题 ${id}`, meta: { needsUser: true } });
 
-function renderRail(props: { asks?: Message[]; workers?: WorkerEntry[]; openWorkerId?: ConversationId | null; avatarKey?: number; onOpenAsk?: (id: MessageId) => void; onOpenWorker?: (id: ConversationId) => void } = {}) {
+function renderRail(props: { asks?: Message[]; workers?: WorkerEntry[]; openWorkerId?: ConversationId | null; look?: SlimeLook; onOpenAsk?: (id: MessageId) => void; onOpenWorker?: (id: ConversationId) => void } = {}) {
   render(
     <RightRail
       asks={props.asks ?? []}
       workers={props.workers ?? []}
       openWorkerId={props.openWorkerId ?? null}
       layout="side"
-      avatarKey={props.avatarKey ?? 0}
+      look={props.look ?? defaultLookOf(0)}
       onOpenAsk={props.onOpenAsk ?? (() => {})}
       onOpenWorker={props.onOpenWorker ?? (() => {})}
     />,
@@ -50,7 +51,7 @@ const titleButton = (group: HTMLElement) => within(group).getByRole("heading").q
 
 describe("右栏：照 Claude desktop 的样子", () => {
   it("三组标题（Needs You、Pieces、Completed）一模一样：12px、灰、500，不带个数；后面一个普通箭头；“等你确定”前一个 6px 强调色圆点", () => {
-    renderRail({ asks: [ask(1)], workers: [busy(30), done(31)], avatarKey: 2 });
+    renderRail({ asks: [ask(1)], workers: [busy(30), done(31)], look: defaultLookOf(2) });
     const classes = new Set<string>();
     for (const [name, group] of [["Needs You", asksGroup()], ["Pieces", workerGroup()], ["Completed", completedGroup()]] as const) {
       const heading = within(group).getByRole("heading");
@@ -75,7 +76,7 @@ describe("右栏：照 Claude desktop 的样子", () => {
   });
 
   it("Piece 行：单行，无左侧图标，只有 15px 标题，不写状态词；行距舒展（py-2 px-2.5）", () => {
-    renderRail({ workers: [busy(30)], avatarKey: 2 });
+    renderRail({ workers: [busy(30)], look: defaultLookOf(2) });
     const row = within(workerGroup()).getByRole("button", { name: /活 30/ });
     expect(row).toHaveClass("px-2.5", "-mx-2.5", "py-2", "rounded-xl");
     expect(row.className).not.toMatch(/rounded-2xl|rounded-lg/);
@@ -396,13 +397,13 @@ describe("右栏：每组可以收起", () => {
     expect(cls).toMatch(/motion-reduce:transition-none/);
   });
 
-  it("普通箭头：14px、次要文字色（text-muted-foreground），三组共用同一个；转向 200ms 以内，减弱动效时关掉", () => {
-    renderRail({ asks: [ask(1)], workers: [busy(30), done(31)], avatarKey: 3 });
+  it("普通箭头：12px 的像素图标（size-pixel-sm）、次要文字色（text-muted-foreground），三组共用同一个；转向 200ms 以内，减弱动效时关掉", () => {
+    renderRail({ asks: [ask(1)], workers: [busy(30), done(31)], look: defaultLookOf(3) });
     const shapes = new Set<string>();
     for (const group of [asksGroup(), workerGroup(), completedGroup()]) {
       const arrow = arrowOf(group);
       const cls = arrow.getAttribute("class")!;
-      expect(arrow).toHaveClass("size-3.5", "text-muted-foreground", "transition-transform", "motion-reduce:transition-none");
+      expect(arrow).toHaveClass("size-pixel-sm", "text-muted-foreground", "transition-transform", "motion-reduce:transition-none");
       expect(cls).toMatch(/duration-(100|150|200)\b/);
       // 不带水果强调色
       expect(cls).not.toMatch(/text-primary/);
@@ -457,7 +458,7 @@ describe("右栏：每组可以收起", () => {
 
 describe("RightRailToggle: Piece 纸片分身图标", () => {
   it("开关使用当前项目经理那只小动物的纸片分身（Avatar neutral 26px，按根字号缩放）", () => {
-    render(<RightRailToggle visible open={false} attention={false} avatarKey={3} onToggle={() => {}} />);
+    render(<RightRailToggle visible open={false} attention={false} look={defaultLookOf(3)} onToggle={() => {}} />);
     const button = screen.getByRole("button", { name: "Show side panel" });
     const avatar = button.querySelector("[data-neutral='true']");
     expect(avatar).toBeInTheDocument();
@@ -465,7 +466,7 @@ describe("RightRailToggle: Piece 纸片分身图标", () => {
   });
 
   it("有等你确定且收起时右上角显示 6px 强调色小圆点", () => {
-    render(<RightRailToggle visible open={false} attention={true} avatarKey={1} onToggle={() => {}} />);
+    render(<RightRailToggle visible open={false} attention={true} look={defaultLookOf(1)} onToggle={() => {}} />);
     const button = screen.getByRole("button", { name: /needs you/ });
     expect(button.querySelector("span.bg-primary")).toHaveClass("size-1.5", "rounded-full");
   });

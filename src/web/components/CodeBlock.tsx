@@ -1,4 +1,4 @@
-import { Check, Copy } from "lucide-react";
+import { Check, Copy } from "../ui/icons.ts";
 import { Children, isValidElement, useEffect, useRef, useState, type ComponentProps, type ReactElement, type ReactNode } from "react";
 import { highlightHtml } from "../highlight.ts";
 import { cn } from "../lib/utils.ts";
@@ -106,7 +106,7 @@ export function CopyCodeButton({ code }: { code: string }) {
         });
       }}
     >
-      <Icon className="size-3.5" />
+      <Icon className="size-pixel-sm" />
     </BarButton>
   );
 }

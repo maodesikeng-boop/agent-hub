@@ -1,5 +1,7 @@
 # 水果刀总助工作台 v2：待拍板托盘 + 指令与简报时间流
 
+> 现行视觉规则见 [史莱姆视觉方案](slime-cohesion-design.md) 与 [界面标准](ui-standard.md)。旧方案里的小刀、切面与纸片分身名称仅保留作设计记录。
+
 状态：待用户拍板。纯设计文档，不改 `src/`，不改 `docs/ui-standard.md`。拍板后按第 8 节拆 PR 实现。
 
 替代范围：`docs/router-design.md` 第 4.3、4.4 节（四段式非对话工作台）和 `docs/ui-standard.md` 第 21 条的工作台部分。`router-design.md` 的其余内容继续有效：双轨分派、`--verbatim`、名片摘要、只读沙箱、6 家厂商快模型预设、`hub router ask / report / note`。

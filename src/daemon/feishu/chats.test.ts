@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { Pm } from "../../shared/domain.ts";
 import type { FeishuChatId } from "../../shared/feishu.ts";
-import { PM_FRUITS } from "../../shared/fruits.ts";
+import { PM_FRUITS, pmFruitOf } from "../../shared/fruits.ts";
 import { FEISHU_CHAT_NAME_MAX_CHARS, FEISHU_CHAT_UUID_MAX_CHARS } from "../../shared/limits.ts";
-import { pmFruitOf } from "../../shared/fruits.ts";
+import { defaultLookOf, resolvePmLook } from "../../shared/slimes.ts";
 import { desiredFeishuChats, feishuChatCreateUuid, feishuChatMarker, planFeishuChatSync } from "./chats.ts";
 import type { FeishuChatBinding } from "./store.ts";
 
@@ -11,7 +11,6 @@ const DEVICE = { id: "11111111-2222-3333-4444-555555555555", name: "东京" };
 const pm = (id: number, name: string, archivedAt: number | null = null): Pm => ({
   id,
   name,
-  avatarFile: null,
   mode: "manage_only",
   vendor: "claude",
   defaultModel: null,
@@ -25,7 +24,7 @@ const binding = (pmId: number | null, patch: Partial<FeishuChatBinding> = {}): F
   target: pmId === null ? { kind: "pm", pmId: null } : { kind: "pm", pmId },
   name: "小林",
   label: "小林",
-  avatarFruit: PM_FRUITS[(pmId ?? 0) % PM_FRUITS.length]!,
+  avatarLook: defaultLookOf(pmId ?? 0),
   triggerMode: "auto",
   guestTier: "chat_only",
   archivedAt: null,
@@ -50,10 +49,10 @@ describe("desiredFeishuChats", () => {
     expect(specs[0]!.name).not.toContain("东京");
   });
 
-  it("水果和网页上项目经理的头像一致（同一份 shared/fruits.ts）；群说明带 feishuChatMarker", () => {
+  it("形象和网页上项目经理的头像一致（同一份 shared/slimes.ts）；群说明带 feishuChatMarker", () => {
     const specs = desiredFeishuChats(Array.from({ length: PM_FRUITS.length + 2 }, (_, i) => pm(i, `p${i}`)), DEVICE);
     for (const spec of specs) {
-      expect(spec.fruit).toBe(pmFruitOf(spec.pmId));
+      expect(spec.look).toBe(defaultLookOf(spec.pmId));
       expect(spec.description.endsWith(feishuChatMarker(DEVICE.id, spec.pmId))).toBe(true);
       expect(spec.description).toContain("东京");
     }
@@ -94,22 +93,22 @@ describe("planFeishuChatSync", () => {
     expect(plan([pm(1, "小林")], [binding(1, { name: "别人改的名字" })])).toEqual([]);
   });
 
-  it("水果变了 set_avatar", () => {
-    expect(plan([pm(1, "小林")], [binding(1, { avatarFruit: null })])).toEqual([{ kind: "set_avatar", chatId: "oc_1", fruit: pmFruitOf(1) }]);
+  it("没记过头像 set_avatar", () => {
+    expect(plan([pm(1, "小林")], [binding(1, { avatarLook: null })])).toEqual([{ kind: "set_avatar", chatId: "oc_1", look: defaultLookOf(1) }]);
   });
 
-  it("头像图片换了被清空（avatarFruit 是 null）：只出 set_avatar，用户在飞书里改过的群名不出 rename", () => {
-    expect(plan([pm(1, "小林")], [binding(1, { avatarFruit: null, name: "用户在飞书里改的名" })])).toEqual([{ kind: "set_avatar", chatId: "oc_1", fruit: pmFruitOf(1) }]);
+  it("头像图片换了被清空（avatarLook 是 null）：只出 set_avatar，用户在飞书里改过的群名不出 rename", () => {
+    expect(plan([pm(1, "小林")], [binding(1, { avatarLook: null, name: "用户在飞书里改的名" })])).toEqual([{ kind: "set_avatar", chatId: "oc_1", look: defaultLookOf(1) }]);
   });
 
-  it("水果扩充后编号对到了别的水果：记录的水果和应有的不同也 set_avatar", () => {
+  it("记录的形象和应有的不同（造型不同）也 set_avatar", () => {
     const other = PM_FRUITS.find((f) => f !== pmFruitOf(1))!;
-    expect(plan([pm(1, "小林")], [binding(1, { avatarFruit: other })])).toEqual([{ kind: "set_avatar", chatId: "oc_1", fruit: pmFruitOf(1) }]);
+    expect(plan([pm(1, "小林")], [binding(1, { avatarLook: { fruit: other, color: other } })])).toEqual([{ kind: "set_avatar", chatId: "oc_1", look: defaultLookOf(1) }]);
   });
 
   it("项目经理归档 → dissolve；已归档的记录不再出 rename、set_avatar", () => {
     expect(plan([pm(1, "小林", 5)], [binding(1)])).toEqual([{ kind: "dissolve", chatId: "oc_1" }]);
-    expect(plan([pm(1, "改名了", 5)], [binding(1, { archivedAt: 5, avatarFruit: null })])).toEqual([]);
+    expect(plan([pm(1, "改名了", 5)], [binding(1, { archivedAt: 5, avatarLook: null })])).toEqual([]);
   });
 
   it("取消归档 → create，generation 是记录的 archivedAt", () => {
@@ -126,5 +125,19 @@ describe("planFeishuChatSync", () => {
     const bindings = [binding(1), binding(2, { archivedAt: 3 })];
     expect(plan(pms, bindings)).toEqual(plan(pms, bindings));
     expect(plan([pm(1, "小林")], [binding(1)])).toEqual([]);
+  });
+});
+
+describe("群头像跟着项目经理的形象（docs/slime-cohesion-design.md）", () => {
+  it("desiredFeishuChats：每个群要的头像是 resolvePmLook(项目经理)，换过造型、颜色的按换过的", () => {
+    const pms = [{ ...pm(1, "小林"), avatarFruit: "persimmon", avatarColor: "sky" } as const, { ...pm(2, "阿周"), avatarColor: "teal" } as const, pm(3, "新来的")];
+    expect(desiredFeishuChats(pms, DEVICE).map((s) => s.look)).toEqual(pms.map((p) => resolvePmLook(p)));
+    expect(desiredFeishuChats(pms, DEVICE)[0]!.look).toEqual({ fruit: "persimmon", color: "sky" });
+    expect(desiredFeishuChats(pms, DEVICE)[1]!.look).toEqual({ fruit: pmFruitOf(2), color: "teal" });
+  });
+
+  it("项目经理换了颜色：下一次对齐给它的群原地换头像，别的群不动", () => {
+    const recolored = { ...pm(1, "小林"), avatarColor: "sakura" } as const;
+    expect(plan([recolored, pm(2, "阿周")], [binding(1), binding(2, { name: "阿周", label: "阿周" })])).toEqual([{ kind: "set_avatar", chatId: "oc_1", look: { fruit: pmFruitOf(1), color: "sakura" } }]);
   });
 });

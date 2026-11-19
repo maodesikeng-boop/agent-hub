@@ -1,4 +1,4 @@
-import { Loader2, TriangleAlert, WifiOff } from "lucide-react";
+import { Loader2, TriangleAlert, WifiOff } from "../ui/icons.ts";
 import { HEALTH_FAILURE_THRESHOLD, type HealthEntry } from "../../shared/index.ts";
 import { describeFailure } from "../../shared/errors.ts";
 import { cn } from "../lib/utils.ts";
@@ -56,14 +56,14 @@ export function Notices({
       )}
       {listFailed && (
         <div className={PILL} role="status" data-severity="info">
-          <Loader2 className={cn(ICON, "animate-spin text-muted-foreground")} aria-hidden="true" />
+          <Loader2 className={cn(ICON, " text-muted-foreground")} aria-hidden="true" />
           <span>Can't see other devices right now</span>
           <span className="text-muted-foreground">Retrying…</span>
         </div>
       )}
       {reconnecting && (
         <div className={PILL} data-severity="info">
-          <Loader2 className={cn(ICON, "animate-spin text-muted-foreground")} aria-hidden="true" />
+          <Loader2 className={cn(ICON, " text-muted-foreground")} aria-hidden="true" />
           <span>Reconnecting…</span>
         </div>
       )}

@@ -52,8 +52,6 @@ export type BundledNodeTarget = keyof typeof BUNDLED_NODE_ARCHIVES;
 export type StageTargetOs = "win32" | "darwin-arm64" | "host";
 
 const DAEMON_SOURCE_SUBDIRS = ["daemon", "shared", "vendors", "hub", "tunnel", "feishu"] as const;
-/** 守护进程运行时要读的仓库根目录资源，整个目录原样带走（飞书群头像读 assets/avatars/ 里的 PNG）。 */
-const DAEMON_ASSET_DIRS = ["assets/avatars"] as const;
 
 const MXC_WIN_X64_KEEP_FILES = new Set([
   "mxc_ffi.dll",
@@ -330,7 +328,6 @@ export function stageDaemonTree(opts: StageDaemonTreeOptions): void {
     copyFilteredSourceTree(join(repoRoot, "src", sub), join(daemonOutDir, "src", sub));
   }
   cpSync(join(repoRoot, "migrations"), join(daemonOutDir, "migrations"), { recursive: true });
-  for (const dir of DAEMON_ASSET_DIRS) cpSync(join(repoRoot, dir), join(daemonOutDir, dir), { recursive: true });
   cpSync(distWebDir, join(daemonOutDir, "dist", "web"), { recursive: true });
   mkdirSync(join(daemonOutDir, "apps", "desktop"), { recursive: true });
   copyFileSync(

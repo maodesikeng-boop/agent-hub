@@ -31,6 +31,7 @@ import type {
   PersonaChange,
   PersonaView,
   Pm,
+  PmLookRequest,
   PmMemoryFilesList,
   PostMessageRequest,
   PostRouterCommandRequest,
@@ -65,7 +66,6 @@ export function makePm(over: Partial<Pm> = {}): Pm {
   return {
     id: 1,
     name: "项目经理",
-    avatarFile: null,
     mode: "manage_only",
     vendor: DEFAULT_AGENT_VENDOR,
     defaultModel: null,
@@ -344,6 +344,11 @@ export class FakeApi {
   putPersona: (pmId: number, body: EditPersonaRequest) => Reply | Promise<Reply> = (pmId) => ({
     status: 200,
     body: { changed: true, persona: makePersonaView({ pmId }) },
+  });
+  /** PUT /api/pms/:id/look。默认：照收到的两项改好返回。 */
+  putPmLook: (pmId: number, body: PmLookRequest) => Reply | Promise<Reply> = (pmId, body) => ({
+    status: 200,
+    body: { pm: makePm({ id: pmId, avatarFruit: body.fruit, avatarColor: body.color }) },
   });
   revertPersona: (changeId: number) => Reply | Promise<Reply> = () => ({
     status: 200,
@@ -965,6 +970,8 @@ export class FakeApi {
     const persona = /^\/api\/pms\/(\d+)\/persona$/.exec(url.pathname);
     if (persona && method === "GET") return jsonResponse(await this.getPersona(Number(persona[1])));
     if (persona && method === "PUT") return jsonResponse(await this.putPersona(Number(persona[1]), body));
+    const look = /^\/api\/pms\/(\d+)\/look$/.exec(url.pathname);
+    if (look && method === "PUT") return jsonResponse(await this.putPmLook(Number(look[1]), body));
     const revert = /^\/api\/persona-changes\/(\d+)\/revert$/.exec(url.pathname);
     if (revert && method === "POST") return jsonResponse(await this.revertPersona(Number(revert[1])));
     const memFiles = /^\/api\/pms\/(\d+)\/memory-files$/.exec(url.pathname);

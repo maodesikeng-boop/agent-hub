@@ -1,6 +1,6 @@
 // #/settings/browsers：进页拉一次已登录浏览器（staleTime 0）。待批准的公网会话单独置顶一组（Deny / Allow）；
 // 其余会话整行可点，本机置顶；任何退出（单个、本机、全部）一律拉起底部确认抽屉，红色 destructive 确认才提交（第 6 节决策 6）。
-import { Loader2, Monitor, Smartphone, Tablet } from "lucide-react";
+import { Loader2, Monitor, Smartphone, Tablet } from "../../ui/icons.ts";
 import { useMemo, useState } from "react";
 import type { BrowserSessionInfo } from "../../../shared/index.ts";
 import { describeUserAgent, formatAgo, userAgentKind } from "../../browser-sessions.ts";
@@ -52,11 +52,11 @@ export function BrowsersPage({ onSignedOut }: { onSignedOut?: () => void }) {
               {() => (
                 <>
                   <Button variant="outline" size="sm" disabled={busy !== null} onClick={() => signOut(session)}>
-                    {busy === `exit:${session.id}` && <Loader2 className="animate-spin" aria-hidden="true" />}
+                    {busy === `exit:${session.id}` && <Loader2 aria-hidden="true" />}
                     Deny
                   </Button>
                   <Button size="sm" disabled={busy !== null} onClick={() => approve(session)}>
-                    {busy === `approve:${session.id}` && <Loader2 className="animate-spin" aria-hidden="true" />}
+                    {busy === `approve:${session.id}` && <Loader2 aria-hidden="true" />}
                     Allow
                   </Button>
                 </>
@@ -68,7 +68,7 @@ export function BrowsersPage({ onSignedOut }: { onSignedOut?: () => void }) {
       <SettingsGroup label="Signed-in browsers">
         {sessions === null && loadError === null && (
           <div className="flex min-h-12 items-center justify-center">
-            <Loader2 className="size-4 animate-spin text-muted-foreground" aria-label="Loading" />
+            <Loader2 className="size-pixel text-muted-foreground" aria-label="Loading" />
           </div>
         )}
         {loadError !== null && (

@@ -1,4 +1,4 @@
-// M3 网页（W4）：项目经理会话里的 Worker 汇报那一行、点开看 Worker 的过程、左下角的额度、顶栏的 Worker 列表面板。接口和 WebSocket 都是假的。
+// M3 网页（W4）：项目经理会话里的 Worker 汇报那一行、点开看 Worker 的过程、顶栏的额度、顶栏的 Worker 列表面板。接口和 WebSocket 都是假的。
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -456,7 +456,7 @@ describe("点开 Worker", () => {
   });
 });
 
-describe("左下角的额度", () => {
+describe("顶栏的额度", () => {
   const win = (utilization: number, over: Partial<RateLimitWindow> = {}): RateLimitWindow => ({ utilization, resetsAt: 1_793_619_600, status: "allowed", ...over });
   const limit = (windows: Record<string, RateLimitWindow>, status = "allowed"): RateLimitInfo => ({ status, resetsAt: null, windows });
   const quota = (five: number, seven: number) => limit({ five_hour: win(five), seven_day: win(seven, { resetsAt: 1_793_646_000 }) });
@@ -481,7 +481,7 @@ describe("左下角的额度", () => {
     };
     const ask = () => api.calls.filter((c) => c.path === "/api/quota").length;
 
-    it("打开面板才问；问到的每一组一块，窗口各一行；不改左下角按钮", async () => {
+    it("打开面板才问；问到的每一组一块，窗口各一行；不改顶栏按钮", async () => {
       const user = userEvent.setup();
       await boot(claudeAndAgy());
       api.quota = () => ({ status: 200, body: reply });
@@ -510,7 +510,7 @@ describe("左下角的额度", () => {
       expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
     });
 
-    it("现查厂商（agy）某个窗口耗尽（100% 已用 / 0% 剩余）：左下角额度按钮保持单色不随用量变色，不显示“额度用完”文字", async () => {
+    it("现查厂商（agy）某个窗口耗尽（100% 已用 / 0% 剩余）：顶栏额度按钮保持单色不随用量变色，不显示“额度用完”文字", async () => {
       const user = userEvent.setup();
       await boot(claudeAndAgy());
       api.quota = () => ({
@@ -554,15 +554,16 @@ describe("左下角的额度", () => {
     expect(screen.queryByRole("button", { name: /usage/i })).not.toBeInTheDocument();
   });
 
-  it("只渲染干净的线性图标按钮（无旁白文字），保留 aria-label 与 title；和设置按钮同一种 ghost icon-sm 按钮，不是胶囊底色", async () => {
+  it("顶栏额度和设置共用方格，读屏和悬停保留窗口及百分比", async () => {
     await boot(withQuota(quota(0.37, 0.59)));
     expect(badge().textContent).toBe("");
     expect(badge()).toHaveAccessibleName("5h usage 37%");
     expect(badge()).toHaveAttribute("title", "5h usage 37%");
     expect(badge()).not.toHaveClass("text-warn-foreground", "text-danger");
-    expect(badge()).toHaveClass("size-8", "text-muted-foreground", "hover:bg-accent");
-    expect(badge().className).not.toMatch(/(^|\s)bg-/);
-    expect(badge().querySelector("svg")).toBeInTheDocument();
+    expect(badge()).toHaveClass("size-9", "tool-slot");
+    expect(badge().closest("header")).toBeInTheDocument();
+    expect(badge().querySelector("svg")).toHaveAttribute("data-icon", "pixel");
+    expect(screen.getByRole("button", { name: "Settings" })).toHaveClass("tool-slot");
   });
 
   it("推 session.status 带来新的额度：跟着变", async () => {
@@ -786,15 +787,14 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     expect(within(rail()!).getAllByRole("heading").map((h) => h.textContent)).toEqual(["Pieces", "Completed"]);
   });
 
-  it("开关：右栏展开时在右栏顶部、收起时回到窗口右上角（顶栏右边）；ghost 图标按钮（没有底色、描边、字）；点一下收起，再点展开", async () => {
+  it("开关：右栏展开时在右栏顶部、收起时回到窗口右上角（顶栏右边）；用方格图标按钮；点一下收起，再点展开", async () => {
     const user = userEvent.setup();
     await boot(crowd());
     const header = screen.getByRole("heading", { name: "小林" }).closest("header")!;
     expect(within(rail()!).getByRole("button", { name: "Hide side panel" })).toBe(toggle());
     expect(within(header).queryByRole("button", { name: /右栏/ })).not.toBeInTheDocument();
     expect(toggle()).toHaveAttribute("aria-expanded", "true");
-    expect(toggle()).toHaveClass("text-foreground", "hover:bg-accent");
-    expect(toggle()!.className).not.toMatch(/(^|\s)(bg-|border)/);
+    expect(toggle()).toHaveClass("text-foreground", "tool-slot");
     expect(toggle()).toHaveTextContent("");
     await user.click(toggle()!);
     expect(rail()).not.toBeInTheDocument();
@@ -1113,7 +1113,7 @@ describe("右栏（等你确定和 Worker，推开对话）", () => {
     // 点头像切换对话
     await user.click(within(nav()).getByRole("button", { name: /老马/ }));
     expect(within(nav()).getByRole("button", { name: /老马/ })).toHaveClass("bg-jelly");
-    // 底部 3 个 icon-sm 按钮：新建项目经理、QuotaPopover、设置
+    // 窄栏底部的常驻工具格
     expect(within(sidebar).getByRole("button", { name: "New project manager" })).toHaveClass("touch-target");
     expect(within(sidebar).getByRole("button", { name: "Settings" })).toHaveClass("touch-target");
   });

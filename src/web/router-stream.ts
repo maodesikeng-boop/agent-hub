@@ -28,7 +28,8 @@ export interface RouterTurnDestination {
   conversationId: ConversationId;
   name: string;
   projectName: string | null;
-  avatarKey: number;
+  /** 去向的项目经理在 deviceKey 那台设备上的编号：头像按 FleetRouterView.lookOf 取。 */
+  pmId: PmId;
   opLabel: string | null;
   /** 转给项目经理的那条消息在目标设备上的编号（pm.forward）；起 Worker、追发、新建项目等别的去向是 null。 */
   forwardMessageId: MessageId | null;
@@ -59,7 +60,8 @@ export interface RouterBriefingEntry {
   self: boolean;
   pmName: string;
   projectName: string | null;
-  avatarKey: number;
+  /** 简报的项目经理在 deviceKey 那台设备上的编号：头像按 FleetRouterView.lookOf 取。 */
+  pmId: PmId;
   live: boolean;
 }
 
@@ -178,7 +180,7 @@ function buildDestinations(command: RouterCommandRecord, selfId: string | undefi
       conversationId,
       name,
       projectName: d.projectName ?? null,
-      avatarKey: d.pmId,
+      pmId: d.pmId,
       opLabel: opLabelOf(d.op),
       forwardMessageId: !worker && (d.op ?? "pm.forward") === "pm.forward" && d.messageId > 0 ? d.messageId : null,
     });
@@ -266,7 +268,7 @@ export function briefingEntryOfReport(
     self: ctx.self,
     pmName,
     projectName,
-    avatarKey: report.pmId,
+    pmId: report.pmId,
     live: ctx.live,
   };
   briefingEntryCache.set(report, entry);

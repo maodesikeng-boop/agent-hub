@@ -214,10 +214,10 @@ export const SCREEN_INVENTORY: readonly ScreenSpec[] = [
   s("m-settings.public-access", "手机设置：公网入口", M, "normal", "standard", "#/settings/public-access"),
   s("m-settings.drawer-confirm", "手机设置：危险操作的确认抽屉", M, "normal", "standard", "浏览器页点 Sign out all browsers…", "抽屉"),
   s("m-settings.drawer-form", "手机设置：短表单抽屉（改名）", M, "normal", "two-devices", "电脑页点改名", "抽屉"),
-  s("quota.normal", "额度浮层：两家各两个窗口", D, "normal", "standard", "点左下角额度按钮，补丁 quota-normal", "浮层"),
+  s("quota.normal", "额度浮层：两家各两个窗口", D, "normal", "standard", "点顶栏额度槽，补丁 quota-normal", "浮层"),
   s("quota.max", "额度浮层：用满、偏高、Antigravity 两个模型族", D, "long", "standard", "同上，补丁 quota-max", "浮层"),
   s("quota.short-window", "额度浮层：窗口矮时在浮层里滚动", ["slim"], "long", "standard", "同上，补丁 quota-max", "浮层"),
-  s("quota.rail", "额度浮层：从 72px 窄栏打开", ["narrow"], "normal", "standard", "窄栏底部点额度按钮，补丁 quota-normal", "浮层"),
+  s("quota.rail", "额度浮层：在窄屏打开", ["narrow"], "normal", "standard", "点顶栏额度槽，补丁 quota-normal", "浮层"),
 ];
 
 const NAV = 'role=navigation[name="Conversations"]';
@@ -243,7 +243,7 @@ const openProfile = (name: string): ScreenStep[] => [...openPm(name), { click: `
 const openSettings = (tab?: string): ScreenStep[] => [{ waitFor: SIDEBAR }, { click: btn("Settings", SIDEBAR) }, { waitFor: DIALOG }, ...(tab === undefined ? [] : [{ click: `role=tab[name="${tab}"]` }])];
 /** 手机设置：列表页点齿轮，再点一行。 */
 const openMobileSettings = (row?: string): ScreenStep[] => [{ waitFor: SIDEBAR }, { click: btn("Settings", SIDEBAR) }, { waitFor: 'role=heading[name="Settings"]' }, ...(row === undefined ? [] : [{ click: btn(row, "role=main") }])];
-const openQuota = (patch: string): ScreenStep[] => [{ patch }, { waitFor: SIDEBAR }, { click: `${SIDEBAR} >> role=button[name=/usage|Usage/]` }, { crop: 'role=dialog[name="Usage"]' }];
+const openQuota = (patch: string): ScreenStep[] => [{ patch }, { waitFor: SIDEBAR }, { click: `role=button[name=/usage/i]` }, { crop: 'role=dialog[name="Usage"]' }];
 /** 断线满 30 秒（src/web/devices.ts 的 OFFLINE_AFTER_MS）才从“重连中”变“离线”：截图的时间是钉住的，要拨过去。 */
 const PAST_OFFLINE: ScreenStep = { clock: 31_000 };
 const typeInComposer = (text: string): ScreenStep => ({ type: { into: COMPOSER, text } });

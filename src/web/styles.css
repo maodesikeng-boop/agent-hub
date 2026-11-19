@@ -1,4 +1,6 @@
 @import "tailwindcss";
+/* 界面的英文和数字字体：Geist（Vercel 开源，OFL），Fontsource 的可变字体包随网页打包，离线能用（docs/ui-standard.md 第 13 条） */
+@import "@fontsource-variable/geist";
 
 /* 主题变量：中性色，只有浅色；强调色（--primary）在项目经理的会话里由外层容器按它的颜色设（lib/palette.ts）。shadcn 组件和 Tailwind 的颜色类都从这里取值；怎么用见 docs/ui-standard.md */
 @theme inline {
@@ -42,6 +44,21 @@
   --font-mono: var(--font-code);
 }
 
+/* 像素图标的尺寸（ui/icons.ts，docs/ui-standard.md 第 0、5 条）：pixelarticons 是 24 格画布、2 格一笔，边长取 12px 的整数倍，
+   四档界面大小下每一笔都是整像素，不糊。默认“大”档 1.375rem 正好 24px */
+@utility size-pixel {
+  width: round(nearest, 1.375rem, 12px);
+  height: round(nearest, 1.375rem, 12px);
+}
+@utility size-pixel-sm {
+  width: round(nearest, 0.6875rem, 12px);
+  height: round(nearest, 0.6875rem, 12px);
+}
+@utility size-pixel-lg {
+  width: round(nearest, 2.75rem, 12px);
+  height: round(nearest, 2.75rem, 12px);
+}
+
 /* 字号档位（docs/ui-standard.md 第 3 条）：界面只有 4 档 text-xs 12 / text-minor 13.5 / text-body 15 / text-title 17，左栏、对话区、右栏同一套；
    组件里写 text-title、text-body 这些，不写 text-[15px]。单位 rem，跟着根字号（界面大小）一起缩放；注释里的 px 是“标准”档（根字号 16px）下的值。
    text-xs（12px）用 Tailwind 自带的。text-display 只给资料页头部的名字一处 */
@@ -69,9 +86,10 @@ html[data-ui-scale="xl"] {
 }
 
 :root {
-  /* 字体栈只在这里定义（docs/ui-standard.md 第 13 条，照 Claude desktop 和 t3code 用系统字体）：英文字体全排在中文字体前面，
-     英文和数字不会落到中文字体上，汉字在英文字体里没有字形，自动落到后面的苹方 / 冬青 / 雅黑。代码用等宽栈。 */
-  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  /* 字体栈只在这里定义（docs/ui-standard.md 第 13 条）：英文和数字用打包进来的 Geist，三个平台长一样；
+     系统英文字体排在它后面兜底（字体还没加载完、Geist 没有的符号），中文字体排在最后：汉字在英文字体里没有字形，
+     自动落到苹方 / 冬青 / 雅黑。代码用等宽栈。 */
+  --font-ui: "Geist Variable", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   --font-code: "SF Mono", ui-monospace, Menlo, Consolas, "PingFang SC", "Microsoft YaHei", monospace;
 
   --background: #ffffff;
@@ -101,6 +119,14 @@ html[data-ui-scale="xl"] {
   /* 黄色的状态色（Worker 汇报“有问题”的色点、用量条、果皮轨圆点）：只当图形的填充色，对白底不到 3:1，不能当字色；
      琥珀色的字用 --warn-foreground（text-warn-foreground） */
   --caution: #dba10b;
+  /* 任务图的果冻管道和珠子（pixel-path.ts，docs/ui-standard.md 第 12.1 条）：走通的管子是项目经理的颜色（lib/palette.ts 的 fruitTrackVars），
+     这里是不跟项目经理走的几种：没走通的空管子、没轮到的空珠子、等项目经理的琥珀色珠子 */
+  --tube-empty-line: #d4d4d8;
+  --tube-empty-core: #f1f1f3;
+  --bead-pending-line: #a1a1aa;
+  --bead-wait-line: #9a6a00;
+  --bead-wait-core: var(--caution);
+  --bead-wait-glint: #f6d77a;
   /* 水果色的掺入比例（docs/ui-standard.md 第 4 条）：只在这里调。外壳底色上限 5%、分割线上限 10%，再多就发黄发粉；
      用户气泡的浅果冻底配前景色字，对比度 ≥ 4.5:1（lib/palette.test.ts 按这里的数逐色校验） */
   --mix-chat: 2.5%; /* 对话区（main）和右栏的底 */
@@ -336,6 +362,41 @@ input[type="search"]::-webkit-search-cancel-button {
     transition: none;
   }
 }
+/* 工具图标格（ui/button.tsx 的 slot，docs/ui-standard.md 第 6 条）：像星露谷物品栏里的小方格，但克制——1px 边框、暖白底、
+   底下 2px 的内阴影当键帽托底；悬停底色深一点，按下整格沉 1px、托底变 1px。颜色只在这里改 */
+:root {
+  --slot-bg: #fbfaf7;
+  --slot-hover: #f3f1ea;
+  --slot-line: #e2dfd6;
+  --slot-shade: #e6e2d8;
+}
+.tool-slot,
+.tool-badge {
+  border-radius: 4px;
+  border: 1px solid var(--slot-line);
+  background-color: var(--slot-bg);
+  box-shadow: inset 0 -2px 0 var(--slot-shade);
+}
+.tool-slot:hover:not(:disabled),
+.tool-slot[data-state="open"],
+.tool-slot[aria-expanded="true"] {
+  background-color: var(--slot-hover);
+}
+.tool-slot:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: inset 0 -1px 0 var(--slot-shade);
+}
+/* 状态方框徽标（数字、额度百分比）：同一套方格，不能点、不沉 */
+.tool-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tool-slot:active:not(:disabled) {
+    transform: none;
+  }
+}
 /* 聊天输入框发送键从“空”变“有内容”时放大回弹一次（Composer.tsx 在那一下加上这个类，之后不循环）；系统设了“减少动态效果”就不播 */
 .composer-send-bounce {
   animation: composer-send-bounce 150ms ease-out;
@@ -411,9 +472,82 @@ input[type="search"]::-webkit-search-cancel-button {
     transform: translateY(0) scale(1, 1);
   }
 }
+/* 总助嫩芽铃（RouterAvatar.tsx）：以提钮为轴左右摇（--bell-pivot 由组件按像素稿算好），和史莱姆蹦跳同一个节奏、同样只在干活和悬停时动 */
+.bell-swing {
+  transform-origin: 50% var(--bell-pivot, 25%);
+}
+@media (hover: hover) {
+  .bell-swing:hover {
+    animation: bell-swing var(--motion-hop) ease-out;
+  }
+}
+.bell-swing[data-working] {
+  animation: bell-swing-working var(--motion-hop-cycle) ease-out infinite;
+}
+@keyframes bell-swing {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  25% {
+    transform: rotate(-14deg);
+  }
+  55% {
+    transform: rotate(14deg);
+  }
+  80% {
+    transform: rotate(-6deg);
+  }
+}
+@keyframes bell-swing-working {
+  0%,
+  30%,
+  100% {
+    transform: rotate(0deg);
+  }
+  7.5% {
+    transform: rotate(-14deg);
+  }
+  16.5% {
+    transform: rotate(14deg);
+  }
+  24% {
+    transform: rotate(-6deg);
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   .slime-pet:hover,
-  .slime-pet[data-working] {
+  .slime-pet[data-working],
+  .bell-swing:hover,
+  .bell-swing[data-working] {
+    animation: none;
+  }
+}
+/* 在忙的转圈（ui/icons.ts 的 Loader2）：像素图标的 8 根按顺时针一根根亮，画布不转，格子一直对齐；减弱动态效果时停在全亮 */
+:root {
+  --motion-loader: 800ms;
+}
+.pixel-loader > path {
+  animation: pixel-loader var(--motion-loader) steps(1, end) infinite;
+  animation-delay: calc(var(--arm) * var(--motion-loader) / 8 - var(--motion-loader));
+}
+@keyframes pixel-loader {
+  0% {
+    opacity: 1;
+  }
+  12.5% {
+    opacity: 0.7;
+  }
+  25% {
+    opacity: 0.45;
+  }
+  37.5%,
+  100% {
+    opacity: 0.25;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pixel-loader > path {
     animation: none;
   }
 }
@@ -751,6 +885,46 @@ input[type="search"]::-webkit-search-cancel-button {
   text-align: right;
   color: var(--muted-foreground);
   user-select: none;
+}
+
+/* 放大全览（TaskGraphDialog.tsx，docs/ui-standard.md 第 12.1 条）：画布底是 16px 一格的浅灰点阵；节点卡四角切两级 3px 台阶，
+   外层是边框色、里层是卡片底，两层同一个切角，1px 边框在切角处不断 */
+.graph-canvas {
+  background-image: radial-gradient(circle at 1px 1px, var(--tube-empty-line) 1px, transparent 0);
+  background-size: 16px 16px;
+}
+.pixel-card,
+.pixel-card-body {
+  --step: 3px;
+  clip-path: polygon(
+    calc(2 * var(--step)) 0,
+    calc(100% - 2 * var(--step)) 0,
+    calc(100% - 2 * var(--step)) var(--step),
+    calc(100% - var(--step)) var(--step),
+    calc(100% - var(--step)) calc(2 * var(--step)),
+    100% calc(2 * var(--step)),
+    100% calc(100% - 2 * var(--step)),
+    calc(100% - var(--step)) calc(100% - 2 * var(--step)),
+    calc(100% - var(--step)) calc(100% - var(--step)),
+    calc(100% - 2 * var(--step)) calc(100% - var(--step)),
+    calc(100% - 2 * var(--step)) 100%,
+    calc(2 * var(--step)) 100%,
+    calc(2 * var(--step)) calc(100% - var(--step)),
+    var(--step) calc(100% - var(--step)),
+    var(--step) calc(100% - 2 * var(--step)),
+    0 calc(100% - 2 * var(--step)),
+    0 calc(2 * var(--step)),
+    var(--step) calc(2 * var(--step)),
+    var(--step) var(--step),
+    calc(2 * var(--step)) var(--step)
+  );
+}
+.pixel-card {
+  padding: 1px;
+  background: var(--pixel-card-line, var(--color-line));
+}
+.pixel-card-body {
+  background: var(--pixel-card-fill, var(--background));
 }
 
 /* 果皮轨轨道槽的画布单位（PeelTrack.tsx 的 peelLen）：平时 1/16rem（一行 32 个单位 = 2rem）；触屏下行高 44px，单位跟着放大到 44/32，

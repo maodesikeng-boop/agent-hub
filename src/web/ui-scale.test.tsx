@@ -8,6 +8,7 @@ import { SettingsDialog } from "./components/SettingsDialog.tsx";
 import { cn } from "./lib/utils.ts";
 import { DEFAULT_UI_SCALE, readUiScale, UI_SCALE_KEY } from "./ui-scale.ts";
 
+import { defaultLookOf } from "../shared/slimes.ts";
 const notify = { permission: "granted" as const, enabled: false, setEnabled: async () => {} };
 
 afterEach(() => {
@@ -76,7 +77,7 @@ describe("Interface scale", () => {
   });
 
   it("头像写成 rem（标准档的像素 / 16）", () => {
-    const { container } = render(<Avatar colorKey={1} size={44} />);
+    const { container } = render(<Avatar look={defaultLookOf(1)} size={44} />);
     expect((container.querySelector("[data-slot='avatar']") as HTMLElement).style.width).toBe("2.75rem");
   });
 

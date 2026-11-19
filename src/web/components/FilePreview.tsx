@@ -1,4 +1,4 @@
-import { Check, Copy, Download, ExternalLink, FileText, FolderSearch, Loader2 } from "lucide-react";
+import { Check, Copy, Download, ExternalLink, FileText, FolderSearch, Loader2 } from "../ui/icons.ts";
 import { useEffect, useMemo, useState } from "react";
 import {
   FALLBACK_MIME,
@@ -205,7 +205,7 @@ function OtherInfo({ file }: { file: PreviewFile }) {
   return (
     <Centered>
       <div className="flex flex-col items-center gap-2">
-        <FileText className="size-10" aria-hidden="true" />
+        <FileText className="size-pixel-lg" aria-hidden="true" />
         <span className="text-body font-medium text-foreground">{file.name}</span>
         {file.size !== null && <span className="text-minor">{formatBytes(file.size)}</span>}
       </div>
@@ -260,7 +260,7 @@ function PreviewContent({ file, kind }: { file: PreviewFile; kind: PreviewKind }
   if (pending) {
     content = (
       <Centered>
-        <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+        <Loader2 className="size-pixel" aria-hidden="true" />
         <span className="ml-2 text-minor">Loading…</span>
       </Centered>
     );

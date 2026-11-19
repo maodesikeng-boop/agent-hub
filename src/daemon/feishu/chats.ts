@@ -5,8 +5,8 @@
 // - 群按 feishu_chats 里记的编号认，不按群名认；建群请求带 feishuChatCreateUuid，崩在“建好了还没记下”之间时，
 //   10 小时内重试不会多建，超过 10 小时由群说明里的 feishuChatMarker 在机器人所在的群里认回来；
 // - 用户在飞书里自己改了群名，Fusa 不改回去，只更新记录；项目经理改名时才按新名字改；
-// - 群头像原地换，不重建群、不带群名：项目经理该用的水果变了，或水果没变但头像图片换了（service.ts 对齐前发现图片内容哈希
-//   对不上，把用这个水果的群的 avatarFruit 清空），这里都看成“记录的水果和应有的不同”，出 set_avatar；
+// - 群头像原地换，不重建群、不带群名：项目经理换了造型或颜色，或形象没变但画出来的图换了（service.ts 对齐前发现图片内容哈希
+//   对不上，把用这个形象的群的 avatarLook 清空），这里都看成“记录的形象和应有的不同”，出 set_avatar；
 // - 项目经理归档时解散它的群（聊天记录随群消失，账本里还在），记录留着、记下归档时间，唤醒方式和访客档位不丢；
 //   取消归档时新建一个群，换上新的群编号；项目经理删掉时解散群、删记录。
 import { createHash } from "node:crypto";
@@ -14,7 +14,7 @@ import { truncateChars, type Pm, type PmId } from "../../shared/domain.ts";
 import type { FeishuChatId } from "../../shared/feishu.ts";
 import { FEISHU_CHAT_NAME_MAX_CHARS, FEISHU_CHAT_UUID_MAX_CHARS } from "../../shared/limits.ts";
 import { PRODUCT_NAME } from "../../shared/names.ts";
-import { pmFruitOf, type PmFruit } from "./avatars.ts";
+import { lookKey, resolvePmLook, type SlimeLook } from "../../shared/slimes.ts";
 import type { FeishuChatBinding } from "./store.ts";
 
 /** 账本里应该有的项目群。 */
@@ -26,18 +26,19 @@ export interface FeishuChatSpec {
   name: string;
   /** 群说明：写清是哪台设备上 Fusa 的哪个项目经理，末尾带 feishuChatMarker。 */
   description: string;
-  fruit: PmFruit;
+  /** 群头像：项目经理现在的形象（shared/slimes.ts 的 resolvePmLook，和网页头像同一只）。 */
+  look: SlimeLook;
   archived: boolean;
 }
 
-/** 后置：每个项目经理一个（含已归档的）；name、fruit 照上面的规则；设备名只进说明，不进群名。 */
+/** 后置：每个项目经理一个（含已归档的）；name、look 照上面的规则；设备名只进说明，不进群名。 */
 export function desiredFeishuChats(pms: readonly Pm[], device: { id: string; name: string }): FeishuChatSpec[] {
   return pms.map((pm) => ({
     pmId: pm.id,
     label: pm.name,
     name: truncateChars(pm.name, FEISHU_CHAT_NAME_MAX_CHARS),
     description: `${PRODUCT_NAME}（${device.name}）上的项目经理「${pm.name}」。\n${feishuChatMarker(device.id, pm.id)}`,
-    fruit: pmFruitOf(pm.id),
+    look: resolvePmLook(pm),
     archived: pm.archivedAt !== null && pm.archivedAt !== undefined,
   }));
 }
@@ -67,7 +68,7 @@ export type FeishuChatOp =
   | { kind: "adopt"; chatId: FeishuChatId; spec: FeishuChatSpec }
   | { kind: "rename"; chatId: FeishuChatId; name: string; label: string }
   /** 只换头像，不带群名（用户在飞书里改的群名不动）。 */
-  | { kind: "set_avatar"; chatId: FeishuChatId; fruit: PmFruit }
+  | { kind: "set_avatar"; chatId: FeishuChatId; look: SlimeLook }
   /** 项目经理归档：解散群，记录记下归档时间。 */
   | { kind: "dissolve"; chatId: FeishuChatId }
   /** 项目经理已删掉（记录的 pm_id 是 null）：群还在就解散，删记录。 */
@@ -79,7 +80,7 @@ export type FeishuChatOp =
  * - 没有记录的未归档项目经理：markedChats 里有它的标记就 adopt，没有才 create（generation 0）；
  * - 有记录、记录已归档、项目经理取消了归档：create，generation 是记录的 archivedAt；
  * - 有记录、未归档、项目经理归档了：dissolve；已归档的记录不再出 rename、set_avatar；
- * - 未归档的记录：label 变了 rename，记录的水果和应有的不同（含头像图片换了被清空成 null）set_avatar；
+ * - 未归档的记录：label 变了 rename，记录的形象和应有的不同（含头像图片换了被清空成 null）set_avatar；
  * - pm_id 为 null（或项目经理已不在账本里）的记录 retire（记录已归档时 dissolved 为 true，不再解散）；
  * - 没有记录的已归档项目经理什么都不做。已对齐时返回空数组。
  */
@@ -112,7 +113,7 @@ export function planFeishuChatSync(
       continue;
     }
     if (binding.label !== spec.label) ops.push({ kind: "rename", chatId: binding.chatId, name: spec.name, label: spec.label });
-    if (binding.avatarFruit !== spec.fruit) ops.push({ kind: "set_avatar", chatId: binding.chatId, fruit: spec.fruit });
+    if (binding.avatarLook === null || lookKey(binding.avatarLook) !== lookKey(spec.look)) ops.push({ kind: "set_avatar", chatId: binding.chatId, look: spec.look });
   }
   for (const binding of bindings) {
     if (binding.target.kind !== "pm") continue;

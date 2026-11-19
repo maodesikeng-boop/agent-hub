@@ -1,6 +1,6 @@
 // 全局设置 → 通用 → 跨厂商连接器、MCP 与技能并集同步入口及预览确认弹窗（docs/ui-standard.md 第 10 条）。
 // 完全由接口返回的数据驱动渲染，零硬编码单家厂商分支、零符号拼接（不用 · / | / /）；状态与请求由 settings-model.ts 统一管理。
-import { Loader2 } from "lucide-react";
+import { Loader2 } from "../ui/icons.ts";
 import type { VendorSyncVendorBadge } from "../../shared/index.ts";
 import type { HubClient } from "../client.ts";
 import { VENDOR_STATUS_LABELS, useVendorSyncSetting, visibleMcpVendorBadges } from "../settings-model.ts";
@@ -59,7 +59,7 @@ export function VendorSyncSettings({ client }: { client?: HubClient } = {}) {
               disabled={scanning}
               onClick={previewVendorSync}
             >
-              {scanning && <Loader2 className="animate-spin" aria-hidden="true" />}
+              {scanning && <Loader2 aria-hidden="true" />}
               {scanning ? "Scanning…" : "Scan…"}
             </Button>
           )}
@@ -189,7 +189,7 @@ export function VendorSyncSettings({ client }: { client?: HubClient } = {}) {
               Cancel
             </Button>
             <Button type="button" disabled={applying || !hasSyncableItems} onClick={applyVendorSync}>
-              {applying && <Loader2 className="animate-spin" aria-hidden="true" />}
+              {applying && <Loader2 aria-hidden="true" />}
               Sync
             </Button>
           </DialogFooter>

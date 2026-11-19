@@ -35,6 +35,7 @@ import type { LedgerErrorCode, PersonaView } from "./ledger.ts";
 import type { PeerTransport, RemotePeerTransportKind } from "./peer-transport.ts";
 import type { PmCapabilitiesStart } from "./pm-capabilities.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
+import type { PmLookSetting } from "./slimes.ts";
 import type { WorkerLineSummary } from "./snapshot.ts";
 import type { TunnelStatus } from "./tunnel.ts";
 import type { UserBlocker, UserBlockerId } from "./user-blockers.ts";
@@ -70,6 +71,8 @@ export const API_PATHS = {
     `/api/pms/${pmId}/ended-workers${before === null ? "" : `?before=${before}`}`,
   /** GET → PersonaView；PUT（EditPersonaRequest）→ EditPersonaResponse。 */
   persona: (pmId: PmId) => `/api/pms/${pmId}/persona`,
+  /** PUT（PmLookRequest）→ PmLookResponse：换造型、换颜色（docs/slime-cohesion-design.md）。不进性格设定的修改记录。 */
+  pmLook: (pmId: PmId) => `/api/pms/${pmId}/look`,
   /** GET → PmCapabilitiesView；PATCH（PmCapabilitiesPatch → PmCapabilitiesView）：项目经理能用的技能、MCP、云端连接器。 */
   pmCapabilities: (pmId: PmId) => `/api/pms/${pmId}/capabilities`,
   /** GET → PmMemoryFilesList：项目经理专属记忆目录 `<topic>.md` 子文件列表与合计字节数。 */
@@ -414,6 +417,14 @@ export interface EditPersonaRequest {
   model?: string | null;
   effort?: string | null;
   reason?: string;
+}
+
+/** PUT /api/pms/:id/look：两项都要给，null 是回到默认。 */
+export type PmLookRequest = PmLookSetting;
+
+/** PUT /api/pms/:id/look 的响应：改完的项目经理。 */
+export interface PmLookResponse {
+  pm: Pm;
 }
 
 /** PUT persona、POST revert 的响应：改完之后的样子（没改动时 changed 为 false）。 */

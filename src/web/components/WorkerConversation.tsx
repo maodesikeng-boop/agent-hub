@@ -1,4 +1,4 @@
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft } from "../ui/icons.ts";
 import { useCallback, useMemo } from "react";
 import { WORKER_RETENTION_DAYS, type ConversationId, type Message, type SessionState, type WorkerPick } from "../../shared/index.ts";
 import type { WorkerEntry, WorkerPhase } from "../selectors.ts";
@@ -6,6 +6,7 @@ import type { ConversationView, OlderState, PendingMessage } from "../state.ts";
 import type { DraftSlot, StagedFiles } from "../upload.ts";
 import { Button } from "../ui/button.tsx";
 import { Avatar } from "./Avatar.tsx";
+import type { SlimeLook } from "../../shared/slimes.ts";
 import { conversationSource } from "../composer-suggest.ts";
 import { useClient } from "../device-scope.tsx";
 import { DraftComposer, type ComposerLink } from "./Composer.tsx";
@@ -51,7 +52,7 @@ export function WorkerConversation({
   readonly: boolean;
   phase: WorkerPhase;
   /** 派它的项目经理：返回按钮上的名字，也是 Worker 对话里项目经理那些话（任务、打回）的署名。 */
-  pm: { name: string; avatarKey: number };
+  pm: { name: string; look: SlimeLook };
   /** 右栏里这个 Piece 的那一项：顶栏右边显示它的模型、思考程度、对话长度；找不到不显示。 */
   meta?: WorkerEntry;
   /** 找不到（还没同步过来）是 undefined。 */
@@ -102,8 +103,8 @@ export function WorkerConversation({
   const source = useMemo(() => (id === undefined ? undefined : conversationSource(id, client.url)), [id, client]);
 
   // Worker 头像用所属项目经理对应水果切下的一瓣（docs/ui-standard.md 第 17 条）
-  const identity = useMemo(() => ({ name: title, avatarKey: pm.avatarKey, neutral: true }), [title, pm.avatarKey]);
-  const pmIdentity = useMemo(() => ({ name: pm.name, avatarKey: pm.avatarKey }), [pm.name, pm.avatarKey]);
+  const identity = useMemo(() => ({ name: title, look: pm.look, neutral: true }), [title, pm.look]);
+  const pmIdentity = useMemo(() => ({ name: pm.name, look: pm.look }), [pm.name, pm.look]);
   const agentOf = useCallback((message: Message) => (message.sender === "pm" ? pmIdentity : identity), [pmIdentity, identity]);
   const handleLoadOlder = useCallback(() => {
     if (id !== undefined) onLoadOlder(id);
@@ -115,17 +116,17 @@ export function WorkerConversation({
       <header data-window-drag className="flex min-h-16 min-w-0 shrink-0 items-center gap-3 overflow-hidden py-3 pr-[var(--header-gutter-end)] pl-[var(--header-gutter-start)]">
         {leading}
         {!mobile && (
-          <Button variant="ghost" size="icon" className="shrink-0" aria-label={`Back to ${pm.name}`} onClick={onBack}>
+          <Button variant="slot" size="icon" className="shrink-0" aria-label={`Back to ${pm.name}`} onClick={onBack}>
             <ArrowLeft aria-hidden="true" />
           </Button>
         )}
-        <Avatar colorKey={identity.avatarKey} size={34} neutral working={hasAgentStatus(session)} />
+        <Avatar look={identity.look} size={34} neutral working={hasAgentStatus(session)} />
         <div className="flex min-w-0 flex-1 items-center justify-between gap-3 overflow-hidden">
           <div className="flex min-w-[40%] shrink-[9999] items-center gap-3 overflow-hidden">
             <h1 title={title} className="min-w-0 truncate text-title leading-snug font-semibold">
               {title}
             </h1>
-            {!mobile && readonly && <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs font-medium">Read-only</span>}
+            {!mobile && readonly && <span className="tool-badge shrink-0 px-2 py-0.5 text-xs font-medium">Read-only</span>}
           </div>
           {!mobile && meta && <PieceMeta worker={meta} />}
         </div>

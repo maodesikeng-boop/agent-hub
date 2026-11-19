@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { CircleGauge } from "lucide-react";
+import { CircleGauge } from "../ui/icons.ts";
 import { useState } from "react";
 import { useClient } from "../device-scope.tsx";
 import { formatQuotaReset } from "../format.ts";
@@ -48,14 +48,11 @@ function groupByVendor(blocks: QuotaVendor[]): { name: string; blocks: QuotaVend
   return sections;
 }
 
-/**
- * 左下角的额度按钮（docs/ui-standard.md 第 16 条）：ghost 图标按钮（size="icon-sm"），使用 CircleGauge 线性图标，
- * 与设置齿轮统一风格（单色不随用量填充或变色，与齿轮同色），无障碍名称与悬停提示保留完整状态。
- * 用量只在点开的浮层里显示。没有数据不显示。
- * fetchable：有厂商的额度要按需查（事件里没有，agy），没有别家的数据时按钮也在；
- * 每次点开向服务端要一次（服务端缓存 5 分钟）并在打开期间定时刷新，问不到、问失败就没有那几块。
- */
-export function QuotaPopover({ quota, fetchable = false }: { quota: QuotaVendor[]; fetchable?: boolean }) {
+export function QuotaPopover({ quota, fetchable = false, placement = "sidebar" }: {
+  quota: QuotaVendor[];
+  fetchable?: boolean;
+  placement?: "sidebar" | "header";
+}) {
   const [open, setOpen] = useState(false);
   const client = useClient();
   const qc = useHubQueryClient();
@@ -75,6 +72,7 @@ export function QuotaPopover({ quota, fetchable = false }: { quota: QuotaVendor[
     },
     qc,
   );
+  const inHeader = placement === "header";
   const head = quota[0];
   const window = head?.windows[0];
   if (!window && !fetchable) return null;
@@ -86,8 +84,8 @@ export function QuotaPopover({ quota, fetchable = false }: { quota: QuotaVendor[
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button
-          variant="ghost"
-          size="icon-sm"
+          variant="slot"
+          size="icon"
           aria-label={label}
           title={label}
           className="shrink-0"
@@ -95,7 +93,7 @@ export function QuotaPopover({ quota, fetchable = false }: { quota: QuotaVendor[
           <CircleGauge aria-hidden="true" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent side="top" align="end" aria-label="Usage">
+      <PopoverContent side={inHeader ? "bottom" : "top"} align="end" aria-label="Usage">
         <div className="grid gap-6">
           {groupByVendor(blocks).map((section) => (
             <section key={section.name} className="grid gap-2" aria-label={section.name}>

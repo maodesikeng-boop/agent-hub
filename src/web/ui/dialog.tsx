@@ -1,5 +1,5 @@
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { X } from "lucide-react";
+import { X } from "./icons.ts";
 import type * as React from "react";
 import { useAccentContainer } from "../lib/accent-scope.tsx";
 import { cn } from "../lib/utils.ts";
@@ -65,7 +65,7 @@ export function DialogContent({
               aria-label="Close"
               className="touch-target absolute top-4 right-4 flex size-8 cursor-pointer items-center justify-center rounded-full text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
             >
-              <X className="size-4" aria-hidden="true" />
+              <X className="size-pixel" aria-hidden="true" />
             </DialogPrimitive.Close>
           </>
         )}

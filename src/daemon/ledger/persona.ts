@@ -50,6 +50,7 @@ import {
 import type { AgentSetting, AgentVendor } from "../../shared/vendors.ts";
 import { personaFilePath, pmMemoryDirPath, removeSessionLaunchDir } from "../../shared/paths.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
+import { isJellyColorId, isPmFruit, pickNewPmLook, resolvePmLook, type PmLookSetting, type SlimeLook } from "../../shared/slimes.ts";
 import {
   deletePmMemoryFile as deleteMemorySubfile,
   listPmMemoryFiles as listMemorySubfiles,
@@ -64,7 +65,7 @@ import { fail } from "./context.ts";
 import type { LedgerContext, LedgerFiles, Pending } from "./context.ts";
 import { contentHash } from "./files.ts";
 import type { LedgerMessages } from "./messages.ts";
-import { toConversation, toPersonaChange, toPm } from "./rows.ts";
+import { PM_SELECT, toConversation, toPersonaChange, toPm } from "./rows.ts";
 import type { ConversationDbRow, PersonaChangeDbRow, PmDbRow } from "./rows.ts";
 import type { LedgerSessions } from "./sessions.ts";
 
@@ -167,7 +168,7 @@ export function createLedgerPersona(
   };
 
   const pmRow = (id: PmId): PmDbRow | null =>
-    db.get<PmDbRow>("SELECT p.*, a.archived_at FROM pms p LEFT JOIN pm_archives a ON a.pm_id = p.id WHERE p.id = ?", id) ?? null;
+    db.get<PmDbRow>(`${PM_SELECT} WHERE p.id = ?`, id) ?? null;
 
   const isPmArchived = (pmId: PmId): boolean =>
     db.get("SELECT 1 AS x FROM pm_archives WHERE pm_id = ?", pmId) !== undefined;
@@ -537,9 +538,43 @@ export function createLedgerPersona(
     return "recorded";
   };
 
+  /** 没归档的项目经理（除了 except）现在的形象：新建时分形象不和它们撞造型。 */
+  const activePmLooks = (except: PmId): SlimeLook[] =>
+    db.all<PmDbRow>(`${PM_SELECT} WHERE a.archived_at IS NULL AND p.id <> ? ORDER BY p.id`, except).map((row) => resolvePmLook(toPm(row)));
+
+  const validLook = (look: PmLookSetting): PmLookSetting => {
+    if (look.fruit !== null && !isPmFruit(look.fruit)) throw fail("invalid", `没有叫 ${String(look.fruit)} 的造型`);
+    if (look.color !== null && !isJellyColorId(look.color)) throw fail("invalid", `没有叫 ${String(look.color)} 的颜色`);
+    return look;
+  };
+
+  /** 换造型、换颜色（null 是回到默认）：纯外观，不进性格设定的修改记录，归档的也能改。 */
+  const setPmLook = (pmId: PmId, look: PmLookSetting): Pm => {
+    const { fruit, color } = validLook(look);
+    return write((p) => {
+      requirePm(pmId);
+      if (fruit === null && color === null) {
+        db.run("DELETE FROM pm_looks WHERE pm_id = ?", pmId);
+      } else {
+        db.run(
+          `INSERT INTO pm_looks (pm_id, fruit, color, updated_at) VALUES (?, ?, ?, ?)
+           ON CONFLICT (pm_id) DO UPDATE SET fruit = excluded.fruit, color = excluded.color, updated_at = excluded.updated_at`,
+          pmId,
+          fruit,
+          color,
+          now(),
+        );
+      }
+      const pm = toPm(pmRow(pmId)!);
+      p.changes.push({ type: "pm.updated", data: { pm } });
+      return pm;
+    });
+  };
+
   /** 建项目经理、它唯一的对话和会话（cwd 是 pm-home/<编号>/），在调用方的事务里。项目另建（见 ledger.ts 的 createPm）。 */
   const createPmIn = (p: Pending, input: CreatePmInput): Omit<CreatePmResult, "project"> => {
     const name = validName(input.name, "项目经理");
+    if (input.look !== undefined) validLook(input.look);
     const mode = validMode(input.mode);
     validPersonaText(input.persona);
     const agent = validAgent({ vendor: input.vendor ?? DEFAULT_AGENT_VENDOR, model: input.defaultModel, effort: input.effort }, ctx.modelCatalog);
@@ -565,6 +600,8 @@ export function createLedgerPersona(
       t,
     ).lastInsertRowid;
     if (personasDir !== undefined) db.run("UPDATE pms SET persona_file = ? WHERE id = ?", personaFilePath(personasDir, pmId), pmId);
+    const look = input.look ?? pickNewPmLook(activePmLooks(pmId), pmId);
+    db.run("INSERT INTO pm_looks (pm_id, fruit, color, updated_at) VALUES (?, ?, ?, ?)", pmId, look.fruit, look.color, t);
     const pm = toPm(pmRow(pmId)!);
     const conversationRow = db.get<ConversationDbRow>(
       "INSERT INTO conversations (kind, pm_id, title, created_at) VALUES ('pm', ?, ?, ?) RETURNING *",
@@ -612,7 +649,7 @@ export function createLedgerPersona(
   const syncPersonaFiles = (): SyncPersonaFilesResult => {
     const result: SyncPersonaFilesResult = { recordedPmIds: [], rewrittenPmIds: [] };
     if (personasDir === undefined) return result;
-    for (const pm of db.all<PmDbRow>("SELECT p.*, a.archived_at FROM pms p LEFT JOIN pm_archives a ON a.pm_id = p.id ORDER BY p.id")) {
+    for (const pm of db.all<PmDbRow>(`${PM_SELECT} ORDER BY p.id`)) {
       const outcome = syncPersonaFile(pm);
       if (outcome === "recorded") result.recordedPmIds.push(pm.id);
       else if (outcome === "rewritten") result.rewrittenPmIds.push(pm.id);
@@ -890,6 +927,7 @@ export function createLedgerPersona(
     editPersonaChecked,
     editPersona,
     createPmIn,
+    setPmLook,
     revertPersonaChange,
     syncPersonaFiles,
     archivePm,

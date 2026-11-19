@@ -5,9 +5,10 @@ import { Sidebar, type SidebarLayout } from "./components/Sidebar.tsx";
 import type { ConversationEntry } from "./selectors.ts";
 import { makeMessage } from "./test-utils.ts";
 
+import { defaultLookOf } from "../shared/slimes.ts";
 afterEach(cleanup);
 
-const entry: ConversationEntry = { id: 1, name: "小林", avatarKey: 1, lastMessage: makeMessage({ id: 9, text: "好的" }), lastAt: 1, pm: null, project: null, folders: [] };
+const entry: ConversationEntry = { id: 1, name: "小林", look: defaultLookOf(1), lastMessage: makeMessage({ id: 9, text: "好的" }), lastAt: 1, pm: null, project: null, folders: [] };
 const groups = [{ key: "", name: "本机", platform: "darwin", status: "online" as const, lastOnlineAt: null, entries: [entry] }];
 const props = { waiting: new Set<string>(), asking: new Set<string>(), notify: { permission: "granted" as const, enabled: true, setEnabled: async () => {} }, quota: [], onNewPm: () => {} };
 

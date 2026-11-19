@@ -39,7 +39,7 @@ import { createLedgerPmCapabilities } from "./pm-capabilities.ts";
 import { createLedgerProjectCatalog } from "./project-catalog.ts";
 import type { LedgerProjectCatalog, ProjectCatalogLedgerOptions } from "./project-catalog.ts";
 import { createLedgerProjects } from "./projects.ts";
-import { toHealth, toPm, toProject, toProjectFolder } from "./rows.ts";
+import { PM_SELECT, toHealth, toPm, toProject, toProjectFolder } from "./rows.ts";
 import type { HealthDbRow, PmDbRow, ProjectDbRow, ProjectFolderDbRow } from "./rows.ts";
 import { createLedgerRouter } from "./router.ts";
 import type { LedgerRouter } from "./router.ts";
@@ -291,7 +291,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       const { conversations, sessions, olderEndedWorkers } = snapshotQueries.snapshotConversations(activeTaskGraphs);
       return {
         seq: log.seq,
-        pms: db.all<PmDbRow>("SELECT p.*, a.archived_at FROM pms p LEFT JOIN pm_archives a ON a.pm_id = p.id ORDER BY p.id").map(toPm),
+        pms: db.all<PmDbRow>(`${PM_SELECT} ORDER BY p.id`).map(toPm),
         projects: db.all<ProjectDbRow>("SELECT * FROM projects WHERE status = 'active' ORDER BY id").map(toProject),
         folders: db
           .all<ProjectFolderDbRow>(
@@ -403,6 +403,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     deletePmMemoryFile: persona.deletePmMemoryFile,
     getPmCapabilityPolicy: pmCapabilities.get,
     patchPmCapabilities: pmCapabilities.patch,
+    setPmLook: persona.setPmLook,
     pmProjectMainFolder(pmId) {
       persona.requirePm(pmId);
       const proj = projects.activeProjectOf(pmId);

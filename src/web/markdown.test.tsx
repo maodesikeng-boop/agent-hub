@@ -7,7 +7,8 @@ import type { ConversationEntry } from "./selectors.ts";
 import { makeMessage, makeUserMessage } from "./test-utils.ts";
 import { stripMarkdown } from "./plainText.ts";
 
-const identity = { name: "小林", avatarKey: 1 };
+import { defaultLookOf } from "../shared/slimes.ts";
+const identity = { name: "小林", look: defaultLookOf(1) };
 const actions: MessageActions = { retry: {}, onOpenWorker: () => {}, onRetryMessage: () => {}, onRevertPersona: () => Promise.resolve() };
 const sidebarProps = { waiting: new Set<string>(), asking: new Set<string>(), notify: { permission: "granted" as const, enabled: true, setEnabled: async () => {} }, quota: [], onNewPm: () => {} };
 /** 只有入口本机一台（没有设备分组）。 */
@@ -139,7 +140,7 @@ describe("stripMarkdown", () => {
 
 describe("左栏预览", () => {
   function entry(text: string): ConversationEntry {
-    return { id: 1, name: "小林", avatarKey: 1, lastMessage: makeMessage({ id: 9, text }), lastAt: 1, pm: null, project: null, folders: [] };
+    return { id: 1, name: "小林", look: defaultLookOf(1), lastMessage: makeMessage({ id: 9, text }), lastAt: 1, pm: null, project: null, folders: [] };
   }
 
   it("agent 的最后一条消息去掉 Markdown 符号", () => {

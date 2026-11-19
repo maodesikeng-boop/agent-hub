@@ -1,7 +1,8 @@
 // 页面里一块区域属于哪台设备（docs/multi-device-design.md 第 4.1 节）：里面的组件取数据、拼文件链接、看平台能力、选模型都用这台的。
 // 没有 DeviceScope（单个组件的测试、只有本机时的外层）就是入口本机。
 import { createContext, useContext, type ReactNode } from "react";
-import type { ServerInfo } from "../shared/index.ts";
+import type { PmId, ServerInfo } from "../shared/index.ts";
+import { defaultLookOf, type SlimeLook } from "../shared/slimes.ts";
 import { localClient, type HubClient } from "./client.ts";
 import { ServerInfoProvider } from "./server-info.tsx";
 
@@ -40,4 +41,18 @@ export function DeviceScopeOf({ deviceKey, children }: { deviceKey: string; chil
       {children}
     </DeviceScope>
   );
+}
+
+/** 舰队视图（总助）里某台设备上某个项目经理现在的形象（selectors.ts 的 FleetRouterView.lookOf）。 */
+export type FleetLookOf = (deviceKey: string, pmId: PmId) => SlimeLook;
+
+const LooksContext = createContext<FleetLookOf>((_deviceKey, pmId) => defaultLookOf(pmId));
+
+/** 总助时间流里的去向行、简报、转回来的回复按设备和编号找项目经理的头像；外面没给时按编号取默认的那只。 */
+export function FleetLooks({ lookOf, children }: { lookOf: FleetLookOf; children: ReactNode }) {
+  return <LooksContext.Provider value={lookOf}>{children}</LooksContext.Provider>;
+}
+
+export function useFleetLookOf(): FleetLookOf {
+  return useContext(LooksContext);
 }

@@ -1,6 +1,6 @@
 // #/settings/public-access：整行开关（没填域名又没开时灰）+ 全宽域名输入框（url 键盘、关自动大写纠错）；开着时改了域名才出现 Save domain；
 // 开着时下面一组是 Funnel 命令和全宽 Copy command。软键盘弹起时内容区底部垫 --bottom-inset，输入框和按钮不被盖住。
-import { Loader2 } from "lucide-react";
+import { Loader2 } from "../../ui/icons.ts";
 import { SettingsGroup } from "../../components/SettingsList.tsx";
 import { usePublicEntrySetting, type DeviceSettings } from "../../settings-model.ts";
 import { Button } from "../../ui/button.tsx";
@@ -39,7 +39,7 @@ export function PublicAccessPage({ devices }: { devices: DeviceSettings }) {
               />
               {entry.enabled && hostnameDirty && (
                 <Button variant="outline" className={DRAWER_BUTTON} disabled={busy} onClick={() => void saveHostname()}>
-                  {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
+                  {busy && <Loader2 aria-hidden="true" />}
                   Save domain
                 </Button>
               )}

@@ -1,4 +1,4 @@
-import { ArrowUp, CircleAlert, FileText, Info, Paperclip, Square, X } from "lucide-react";
+import { CircleAlert, ComposerAdd, ComposerFile, ComposerRemove, ComposerSend, ComposerStop, Info, X } from "../ui/icons.ts";
 import { memo, useEffect, useEffectEvent, useId, useLayoutEffect, useRef, useState, type ComponentProps } from "react";
 import { useStore } from "zustand";
 import { MAX_MESSAGE_BYTES, type WorkerPick } from "../../shared/index.ts";
@@ -47,10 +47,15 @@ function isOtherEditable(target: EventTarget | null, ownTextarea: HTMLTextAreaEl
   return false;
 }
 
-/** 聊天输入框外框：1px 中性灰边框；平时的轻阴影和聚焦态（只多一团强调色的模糊光晕，边框不变，不套圈）都在 styles.css 的 .composer-frame（docs/ui-standard.md 第 7 条） */
-const FRAME_CLASS = "composer-frame rounded-[26px] border border-border bg-background";
+/**
+ * 聊天输入框外框（docs/ui-standard.md 第 7 条）：四角 12px 的方框（rounded-xl），1px 中性灰边框；平时的轻阴影和聚焦态
+ * （只多一团强调色的模糊光晕，边框不变，不套圈）都在 styles.css 的 .composer-frame。框里只用线条图标，不用像素。
+ */
+const FRAME_CLASS = "composer-frame rounded-xl border border-border bg-background";
+/** 框里的“+”和发送、停止键：36px 的圆角方块，圆角 10px（第 2 条的例外）。 */
+const SQUARE_BUTTON = "rounded-[10px]";
 
-/** 回形针、文字区、按钮组在同一个网格里：单行时三者同一行；多行时文字区占满上一行，回形针和按钮组落到下一行（同一个文字区节点，不重建，光标不丢） */
+/** “+”、文字区、按钮组在同一个网格里：单行时三者同一行；多行时文字区占满上一行，“+”和按钮组落到下一行（同一个文字区节点，不重建，光标不丢） */
 const ROW_CLASS = "grid grid-cols-[auto_minmax(0,1fr)_auto] items-center px-2 py-1.25";
 const ROW_MULTI_CLASS = "pb-2";
 const TEXTAREA_CLASS =
@@ -62,8 +67,8 @@ const ACTIONS_CLASS = ["col-start-3 row-start-1", "col-start-3 row-start-2"] as 
 /** “停止”键：和发送键同一个按钮（同位置、同大小），图标是方块；正在停止时不可点。 */
 function StopButton({ stop }: { stop: StopControl }) {
   return (
-    <Button size="icon" aria-label="Stop" disabled={stop.stopping} onClick={stop.onStop}>
-      <Square className="size-4 fill-current" aria-hidden="true" />
+    <Button size="icon" aria-label="Stop" disabled={stop.stopping} onClick={stop.onStop} className={SQUARE_BUTTON}>
+      <ComposerStop className="size-3.5" aria-hidden="true" />
     </Button>
   );
 }
@@ -92,10 +97,10 @@ function WorkerPickChip({ pick, disabled, onEdit, onRemove }: { pick: WorkerPick
         onMouseDown={keepFocus}
         onClick={onEdit}
       >
-        <WorkerPickParts labels={labels} />
+        <WorkerPickParts labels={labels} inComposer />
       </button>
       <button type="button" aria-label="Remove" disabled={disabled} className={CHIP_CLOSE_CLASS} onPointerDown={keepFocus} onMouseDown={keepFocus} onClick={onRemove}>
-        <X className="size-3.5" aria-hidden="true" />
+        <ComposerRemove className="size-3.5" aria-hidden="true" />
       </button>
     </li>
   );
@@ -114,10 +119,10 @@ function NoticeBar({ notice, onDismiss }: { notice: ComposerNotice; onDismiss: (
       title={errorTitle(notice.message)}
       className={cn("mb-2 flex items-center gap-2 pr-3 pl-5 text-minor leading-snug", failed ? "text-danger" : "text-muted-foreground")}
     >
-      <Icon className="size-3.5 shrink-0" aria-hidden="true" />
+      <Icon className="size-pixel-sm shrink-0" aria-hidden="true" />
       <span className="min-w-0 flex-1">{errorLine(notice.message)}</span>
       <button type="button" aria-label="Dismiss" className={CHIP_CLOSE_CLASS} onClick={onDismiss}>
-        <X className="size-3.5" aria-hidden="true" />
+        <X className="size-pixel-sm" aria-hidden="true" />
       </button>
     </div>
   );
@@ -387,11 +392,11 @@ export function Composer({
             )}
             {files.map(({ key, file }) => (
               <li key={key} className="flex max-w-full items-center gap-2 rounded-full bg-muted py-1 pr-1 pl-3 text-minor">
-                <FileText className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                <ComposerFile className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                 <span className="min-w-0 truncate">{file.name}</span>
                 <span className="shrink-0 text-xs text-muted-foreground">{formatBytes(file.size)}</span>
                 <button type="button" aria-label={`Remove ${file.name}`} disabled={busy} className={CHIP_CLOSE_CLASS} onClick={() => staging.remove(key)}>
-                  <X className="size-3.5" aria-hidden="true" />
+                  <ComposerRemove className="size-3.5" aria-hidden="true" />
                 </button>
               </li>
             ))}
@@ -416,9 +421,9 @@ export function Composer({
             aria-label="Add files"
             disabled={busy || disabled}
             onClick={() => picker.current?.click()}
-            className={ATTACH_CLASS[+multiline]}
+            className={cn(SQUARE_BUTTON, ATTACH_CLASS[+multiline])}
           >
-            <Paperclip className="size-5" aria-hidden="true" />
+            <ComposerAdd className="size-5" aria-hidden="true" />
           </Button>
           <textarea
             ref={ref}
@@ -468,8 +473,8 @@ export function Composer({
             {showStop ? (
               <StopButton stop={stop} />
             ) : (
-              <Button size="icon" aria-label="Send" disabled={!canSend || picking} onClick={submit} className={cn(bounce && "composer-send-bounce")}>
-                <ArrowUp className="size-5" aria-hidden="true" />
+              <Button size="icon" aria-label="Send" disabled={!canSend || picking} onClick={submit} className={cn(SQUARE_BUTTON, bounce && "composer-send-bounce")}>
+                <ComposerSend className="size-5" aria-hidden="true" />
               </Button>
             )}
           </div>

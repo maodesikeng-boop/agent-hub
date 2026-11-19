@@ -1,7 +1,7 @@
 // #/settings/computers：清爽行列表 + 底部抽屉（docs/mobile-settings-design.md 第 2.3 节子页 3）。
 // 行上不放小图标按钮（根治相邻 32px 改名 / 移除按钮热区重叠误删）：本机行点了改名，远程电脑行点了拉起管理抽屉（改名…、移除电脑…二次确认）；
 // 隧道报错原因直接写在行里（触屏看不到 title）；连到中心、邀请、添加都是整行入口 + 全宽表单抽屉。状态与接口全来自 settings-model.ts。
-import { Cable, Loader2, Plus, Send } from "lucide-react";
+import { Cable, Loader2, Plus, Send } from "../../ui/icons.ts";
 import { useState, type ReactNode } from "react";
 import { PEER_TRANSPORT_SPECS, type TunnelStatus } from "../../../shared/index.ts";
 import { PlatformIcon, StatusDot, StatusText } from "../../components/DeviceBadges.tsx";
@@ -55,7 +55,7 @@ function TunnelRow({ tunnel, onChanged }: { tunnel: TunnelStatus; onChanged: () 
   const spec = TUNNEL_STATE_SPECS[tunnel.state];
   return (
     <div data-testid="tunnel-row" className="flex min-h-12 items-center gap-3 px-4 py-3">
-      <span className="flex shrink-0 text-muted-foreground [&_svg]:size-4 [&_svg]:stroke-[1.5]">
+      <span className="flex shrink-0 text-muted-foreground [&_svg]:size-pixel">
         <Cable aria-hidden="true" />
       </span>
       <div className="min-w-0 flex-1">
@@ -68,7 +68,7 @@ function TunnelRow({ tunnel, onChanged }: { tunnel: TunnelStatus; onChanged: () 
       </div>
       {spec.canRetry && (
         <Button variant="outline" size="sm" className="shrink-0" disabled={busy} onClick={() => void retry()}>
-          {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
+          {busy && <Loader2 aria-hidden="true" />}
           Retry
         </Button>
       )}
@@ -102,7 +102,7 @@ function RenameForm({ device, onChanged, onDone, onCancel }: { device: DeviceVie
       </div>
       <div className="grid grid-cols-1 gap-2">
         <Button type="submit" className={DRAWER_BUTTON} disabled={clean === null || busy}>
-          {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
+          {busy && <Loader2 aria-hidden="true" />}
           Save
         </Button>
         <Button type="button" variant="outline" className={DRAWER_BUTTON} disabled={busy} onClick={onCancel}>
@@ -174,7 +174,7 @@ function TunnelForm({ repoDir, onConnected }: { repoDir?: string; onConnected: (
         )}
       </FieldBlock>
       <Button type="submit" className={DRAWER_BUTTON} disabled={!ready}>
-        {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
+        {busy && <Loader2 aria-hidden="true" />}
         Connect
       </Button>
     </form>
@@ -188,7 +188,7 @@ function InviteView() {
     return (
       <>
         <Button className={DRAWER_BUTTON} disabled={busy} onClick={() => void generate()}>
-          {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
+          {busy && <Loader2 aria-hidden="true" />}
           Generate
         </Button>
         {error && <RowError error={error} />}
@@ -239,7 +239,7 @@ function AddForm({ onAdded }: { onAdded: () => void }) {
         {(id) => <Input id={id} {...NO_AUTOCORRECT} value={code} className={`${TOUCH_INPUT} font-mono`} onChange={(e) => setCode(e.target.value)} />}
       </FieldBlock>
       <Button type="submit" className={DRAWER_BUTTON} disabled={!ready}>
-        {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
+        {busy && <Loader2 aria-hidden="true" />}
         Add
       </Button>
     </form>

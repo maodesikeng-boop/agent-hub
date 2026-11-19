@@ -7,7 +7,6 @@ import { FEISHU_BIND_CODE_TTL_MS } from "../../shared/limits.ts";
 import { createLedger, type SqliteLedger } from "../ledger/index.ts";
 import type { Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
-import { FEISHU_AVATARS_DIR } from "./avatars.ts";
 import { FEISHU_GROUP_MSG_SCOPE, FEISHU_REQUIRED_SCOPES } from "./scopes.ts";
 import type { FeishuRegistrationResult, registerFeishuApp } from "./sdk.ts";
 import { FeishuRegistrationError } from "./transport.ts";
@@ -50,7 +49,6 @@ beforeEach(() => {
     secretsFile,
     uploadsDir: join(root, "uploads"),
     sentFilesDir: join(root, "sent-files"),
-    avatarsDir: FEISHU_AVATARS_DIR,
     device: { id: "11111111-2222-3333-4444-555555555555", name: "东京" },
     log: () => {},
     createTransport: () => fake,

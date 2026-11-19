@@ -1,11 +1,11 @@
 // 总助时间流里转交问题下面的项目经理回复（docs/router-forward-reply-design.md，docs/ui-standard.md 第 21 条“转交回复”）。
 // 回复正文用项目经理对话里一轮回复（TurnView）同一个 AgentText 画：全文展开、标题保留层级。包在目标设备的 DeviceScopeOf 里，文件链接、预览按那台设备的。
-import { CircleAlert } from "lucide-react";
+import { CircleAlert } from "../ui/icons.ts";
 import { memo } from "react";
 import type { ConversationId } from "../../shared/domain.ts";
 import { describeFailure } from "../../shared/errors.ts";
 import type { HubClient } from "../client.ts";
-import { DeviceScopeOf } from "../device-scope.tsx";
+import { DeviceScopeOf, useFleetLookOf } from "../device-scope.tsx";
 import { useForwardReply } from "../forward-reply.ts";
 import type { DeviceStoreLookup } from "../forward-reply.ts";
 import { formatTime } from "../format.ts";
@@ -33,9 +33,10 @@ export const ForwardReply = memo(function ForwardReply({
   onOpenConversation: (deviceKey: string, conversationId: ConversationId) => void;
 }) {
   const state = useForwardReply(dest, stores, client);
+  const lookOf = useFleetLookOf();
   if (state.kind === "silent" || state.kind === "unknown") return null;
   const failure = state.kind === "ended" && state.status === "failed" ? describeFailure(state.reason ?? "") : null;
-  const identity = { name: dest.name, avatarKey: dest.avatarKey };
+  const identity = { name: dest.name, look: lookOf(dest.deviceKey, dest.pmId) };
   return (
     <div data-forward-reply data-state={state.kind} data-side="left" className="mt-4 flex min-w-0 flex-col">
       <AgentHead identity={identity} onClick={() => onOpenConversation(dest.deviceKey, dest.conversationId)} />
@@ -58,7 +59,7 @@ export const ForwardReply = memo(function ForwardReply({
       {state.kind === "ended" &&
         (failure !== null ? (
           <div className="flex items-start gap-2 text-minor leading-5">
-            <CircleAlert className="mt-0.75 size-3.5 shrink-0 text-danger" aria-hidden="true" />
+            <CircleAlert className="mt-0.75 size-pixel-sm shrink-0 text-danger" aria-hidden="true" />
             <span className="min-w-0 text-minor text-muted-foreground [overflow-wrap:anywhere]" title={failure.raw}>
               {failure.text}
             </span>

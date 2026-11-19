@@ -1,4 +1,4 @@
-import { Blocks, Monitor, Settings, Shield, type LucideIcon } from "lucide-react";
+import { Blocks, Monitor, Settings, Shield, type Icon } from "../ui/icons.ts";
 import { useRef, useState, type ReactNode } from "react";
 import { LOCAL_DEVICE, type DeviceKey } from "../devices.ts";
 import type { NotifySettings } from "../notify.ts";
@@ -27,7 +27,7 @@ function UiScaleRow() {
 export type SettingsDialogSection = "general" | "providers" | "computers" | "security";
 
 /** 左栏的分类（照 Grok Bot 设置页）：顺序就是左栏从上到下；“电脑”只在守护进程支持联机时有。 */
-const SECTIONS: readonly { id: SettingsDialogSection; label: string; icon: LucideIcon }[] = [
+const SECTIONS: readonly { id: SettingsDialogSection; label: string; icon: Icon }[] = [
   { id: "general", label: "General", icon: Settings },
   { id: "providers", label: "Providers", icon: Blocks },
   { id: "computers", label: "Computers", icon: Monitor },
@@ -135,7 +135,7 @@ export function SettingsDialog({
                 value={id}
                 className="flex h-9 shrink-0 cursor-pointer items-center gap-3 rounded-xl px-3 text-body whitespace-nowrap transition-colors outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50 data-[state=active]:bg-sidebar-active"
               >
-                <Icon className="size-4 shrink-0 stroke-[1.5] max-[719px]:hidden" aria-hidden="true" />
+                <Icon className="size-pixel shrink-0 max-[719px]:hidden" aria-hidden="true" />
                 {label}
               </TabsTrigger>
             ))}

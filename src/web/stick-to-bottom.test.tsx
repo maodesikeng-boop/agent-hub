@@ -6,6 +6,7 @@ import { MessageList } from "./components/MessageList.tsx";
 import type { MessageActions } from "./components/Messages.tsx";
 import { makeMessage, makeUserMessage } from "./test-utils.ts";
 
+import { defaultLookOf } from "../shared/slimes.ts";
 const actions: MessageActions = { retry: {}, onOpenWorker: () => {}, onRetryMessage: () => {}, onRevertPersona: () => Promise.resolve() };
 
 /** 记下所有 ResizeObserver 的回调，测试里手动触发“尺寸变了”。 */
@@ -53,14 +54,14 @@ function fakeLayout(el: HTMLElement, initial: { scrollHeight: number; clientHeig
 const messages: Message[] = [makeUserMessage({ id: 1, text: "看图" }), makeMessage({ id: 2, text: "![图](/files/a.png)" })];
 
 function setup(list: Message[] = messages) {
-  const view = render(<MessageList messages={list} pending={[]} agentOf={() => ({ name: "小林", avatarKey: 1 })} hasMore={false} older={undefined} onLoadOlder={() => {}} onRetry={() => {}} actions={actions} />);
+  const view = render(<MessageList messages={list} pending={[]} agentOf={() => ({ name: "小林", look: defaultLookOf(1) })} hasMore={false} older={undefined} onLoadOlder={() => {}} onRetry={() => {}} actions={actions} />);
   const log = screen.getByRole("log");
   const box = fakeLayout(log, { scrollHeight: 1000, clientHeight: 400 });
   log.scrollTop = 600;
   fireEvent.scroll(log);
   const rerender = (next: Message[]) =>
     view.rerender(
-      <MessageList messages={next} pending={[]} agentOf={() => ({ name: "小林", avatarKey: 1 })} hasMore={false} older={undefined} onLoadOlder={() => {}} onRetry={() => {}} actions={actions} />,
+      <MessageList messages={next} pending={[]} agentOf={() => ({ name: "小林", look: defaultLookOf(1) })} hasMore={false} older={undefined} onLoadOlder={() => {}} onRetry={() => {}} actions={actions} />,
     );
   return { log, box, rerender };
 }

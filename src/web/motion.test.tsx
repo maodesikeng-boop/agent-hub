@@ -9,6 +9,7 @@ import { useRoute } from "./route.ts";
 import type { PendingMessage } from "./state.ts";
 import { makeMessage, makeUserMessage } from "./test-utils.ts";
 
+import { defaultLookOf } from "../shared/slimes.ts";
 const actions: MessageActions = { retry: {}, onOpenWorker: () => {}, onRetryMessage: () => {}, onRevertPersona: () => Promise.resolve() };
 
 class NoopResizeObserver {
@@ -30,7 +31,7 @@ function list(messages: Message[], extra: { pending?: PendingMessage[]; hasMore?
     <MessageList
       messages={messages}
       pending={extra.pending ?? []}
-      agentOf={() => ({ name: "小林", avatarKey: 1 })}
+      agentOf={() => ({ name: "小林", look: defaultLookOf(1) })}
       hasMore={extra.hasMore ?? false}
       older={undefined}
       onLoadOlder={() => {}}

@@ -38,6 +38,7 @@ import {
   type PersonaChangeId,
   type PersonaView,
   type Pm,
+  type PmLookSetting,
   type PmCapabilitiesPatch,
   type PmCapabilityPolicy,
   type PmId,
@@ -163,6 +164,7 @@ export class FakeLedger {
   readonly renewed: PmId[] = [];
   readonly archived: PmId[] = [];
   readonly unarchived: PmId[] = [];
+  readonly lookCalls: Array<{ pmId: PmId; look: PmLookSetting }> = [];
   readonly capabilityReads: PmId[] = [];
   readonly capabilityPatches: Array<{ pmId: PmId; patch: PmCapabilitiesPatch }> = [];
   readonly pmPolicies = new Map<PmId, PmCapabilityPolicy>();
@@ -278,7 +280,6 @@ export class FakeLedger {
       pm: {
         id: 7,
         name: input.name,
-        avatarFile: null,
         mode: input.mode,
         vendor: input.vendor ?? "claude",
         defaultModel: input.defaultModel ?? null,
@@ -352,7 +353,6 @@ export class FakeLedger {
     return {
       id: pmId,
       name: `pm-${pmId}`,
-      avatarFile: null,
       mode: "manage_only",
       vendor: "claude",
       defaultModel: null,
@@ -363,13 +363,24 @@ export class FakeLedger {
     };
   }
 
+  /** 换形象：快照里有这个项目经理才改（照账本：不存在抛 not_found），改完推 pm.updated。 */
+  setPmLook(pmId: PmId, look: PmLookSetting): Pm {
+    this.check();
+    this.lookCalls.push({ pmId, look });
+    const index = this.snapshotValue.pms.findIndex((p) => p.id === pmId);
+    if (index === -1) throw new LedgerRequestError("not_found", `没有编号 ${pmId} 的项目经理`);
+    const pm: Pm = { ...this.snapshotValue.pms[index]!, avatarFruit: look.fruit, avatarColor: look.color };
+    this.snapshotValue = { ...this.snapshotValue, pms: this.snapshotValue.pms.with(index, pm) };
+    this.emitChange("pm.updated", { pm });
+    return pm;
+  }
+
   unarchivePm(pmId: PmId): Pm {
     this.check();
     this.unarchived.push(pmId);
     return {
       id: pmId,
       name: `pm-${pmId}`,
-      avatarFile: null,
       mode: "manage_only",
       vendor: "claude",
       defaultModel: null,
@@ -603,6 +614,7 @@ export class FakeLedger {
       deletePmMemoryFile: unused("deletePmMemoryFile"),
       getPmCapabilityPolicy: (p) => this.getPmCapabilityPolicy(p),
       patchPmCapabilities: (p, patch) => this.patchPmCapabilities(p, patch),
+      setPmLook: (p, look) => this.setPmLook(p, look),
       pmProjectMainFolder: (p) => this.pmProjectMainFolder(p),
       retryMessage: (m) => this.retryMessage(m),
       renewSession: (p) => this.renewSession(p),

@@ -1,4 +1,4 @@
-import { FileText } from "lucide-react";
+import { FileText } from "../ui/icons.ts";
 import { useEffect, useState, type ReactNode } from "react";
 import { FILE_EXPIRED_TEXT, isImageMime, sentFileMime, uploadUrl, type Attachment } from "../../shared/index.ts";
 import { useClient } from "../device-scope.tsx";
@@ -55,7 +55,7 @@ export function FileCard({
         <img src={imageUrl} alt={name} loading="lazy" onError={markExpired} className="size-10 shrink-0 rounded-xl bg-background object-cover" />
       ) : (
         <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-background text-muted-foreground">
-          <FileText className="size-5" aria-hidden="true" />
+          <FileText className="size-pixel" aria-hidden="true" />
         </span>
       )}
       <span className="min-w-0 text-left">

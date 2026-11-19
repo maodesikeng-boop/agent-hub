@@ -179,9 +179,12 @@ describe("task-graph-layout（Dagre 自动分层拓扑布局与 LRU 缓存引擎
     expect(edgeFromDone.solid).toBe(true);
     expect(edgeFromGate.solid).toBe(false);
 
-    for (const edge of rail.edges) {
-      expect(edge.d).toMatch(/^M -?\d+(\.\d+)? -?\d+(\.\d+)? C /);
-      expect(edge.arrowD).toMatch(/^M -?\d+(\.\d+)? -?\d+(\.\d+)? L /);
+    // 果冻管道：只有横竖线段（M 后面接 H / V），没有曲线；终点一个像素箭头（一块块矩形格子）
+    for (const edge of [...rail.edges, ...computeTaskGraphLayout({ nodes, edges, viewportMode: "dialog", rootFontSizePx: 16 }).edges]) {
+      expect(edge.d).toMatch(/^M-?[\d.]+ -?[\d.]+([HV]-?[\d.]+)+$/);
+      expect(edge.highlightD).toMatch(/^M-?[\d.]+ -?[\d.]+([HV]-?[\d.]+)+$/);
+      expect(edge.arrowOutlineD).toMatch(/^(M-?[\d.]+ -?[\d.]+h-?[\d.]+v-?[\d.]+h-?[\d.]+Z)+$/);
+      expect(edge.arrowFillD).toMatch(/^(M-?[\d.]+ -?[\d.]+h-?[\d.]+v-?[\d.]+h-?[\d.]+Z)+$/);
     }
 
     // dialog (LR) 横向展开：不折叠任何并行节点，10 个节点与 12 条边完整呈现
@@ -443,7 +446,7 @@ describe("task-graph-layout（Dagre 自动分层拓扑布局与 LRU 缓存引擎
     expect(medianOf(hit32DialogMs)).toBeLessThan(1);
   });
 
-  it("放大弹窗（dialog LR）：任务图 #6 跨层长边 s1->s2 沿 Dagre 哑节点绕开中间卡片 s1-review，不横穿卡片正文", () => {
+  it("放大弹窗（dialog LR）：任务图 #6 跨层长边 s1->s2 的管道绕开中间卡片 s1-review，不横穿卡片正文", () => {
     const nodes: LayoutInputNode[] = [
       { key: "s1", status: "running", position: 0 },
       { key: "eval-plan", status: "done", position: 1 },
@@ -468,36 +471,15 @@ describe("task-graph-layout（Dagre 自动分层拓扑布局与 LRU 缓存引擎
     const chordEdge = dialog.edges.find((e) => e.from === "s1" && e.to === "s2")!;
     expect(chordEdge).toBeDefined();
 
-    // 解析 M x0 y0 C x1 y1, x2 y2, x3 y3 (C ...) 并采样验证整条曲线不穿过 s1-review 卡片内部
-    const tokens = chordEdge.d.match(/[MC]|-?\d+(?:\.\d+)?/g) ?? [];
+    // 沿正交折线逐段采样，验证整条管道不穿过 s1-review 卡片内部
+    const samples: Array<[number, number]> = [];
     let cx = 0;
     let cy = 0;
-    const samples: Array<[number, number]> = [];
-    for (let i = 0; i < tokens.length; ) {
-      const cmd = tokens[i++]!;
-      if (cmd === "M") {
-        cx = Number(tokens[i++]!);
-        cy = Number(tokens[i++]!);
-        samples.push([cx, cy]);
-      } else if (cmd === "C") {
-        const x1 = Number(tokens[i++]!);
-        const y1 = Number(tokens[i++]!);
-        const x2 = Number(tokens[i++]!);
-        const y2 = Number(tokens[i++]!);
-        const x3 = Number(tokens[i++]!);
-        const y3 = Number(tokens[i++]!);
-        for (let step = 1; step <= 40; step++) {
-          const t = step / 40;
-          const mt = 1 - t;
-          const px = mt * mt * mt * cx + 3 * mt * mt * t * x1 + 3 * mt * t * t * x2 + t * t * t * x3;
-          const py = mt * mt * mt * cy + 3 * mt * mt * t * y1 + 3 * mt * t * t * y2 + t * t * t * y3;
-          samples.push([px, py]);
-        }
-        cx = x3;
-        cy = y3;
-      }
+    for (const [, cmd, a, b] of chordEdge.d.matchAll(/([MHV])(-?[\d.]+)(?: (-?[\d.]+))?/g)) {
+      const [nx, ny] = cmd === "M" ? [Number(a), Number(b)] : cmd === "H" ? [Number(a), cy] : [cx, Number(a)];
+      if (cmd !== "M") for (let step = 0; step <= 40; step++) samples.push([cx + ((nx - cx) * step) / 40, cy + ((ny - cy) * step) / 40]);
+      [cx, cy] = [nx, ny];
     }
-
     const hitsInsideReview = samples.filter(
       ([px, py]) =>
         px > reviewBox.x + 1 &&

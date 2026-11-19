@@ -1,4 +1,4 @@
-import { ChevronRight, Loader2 } from "lucide-react";
+import { ChevronRight, Loader2 } from "../ui/icons.ts";
 import { useEffect, useState, type ReactNode } from "react";
 import {
   DEFAULT_AGENT_SETTING,
@@ -13,6 +13,7 @@ import {
   type ServerInfo,
 } from "../../shared/index.ts";
 import type { HubClient } from "../client.ts";
+import { pickNewPmLook, type SlimeLook } from "../../shared/slimes.ts";
 import { DeviceScope, useClient } from "../device-scope.tsx";
 import { isReadOnly, type DeviceKey, type DeviceStatus } from "../devices.ts";
 import { errorText, nameError, errorLine, errorTitle, type ErrorLike } from "../format.ts";
@@ -25,7 +26,9 @@ import { Dialog, DialogBody, DialogContent, DialogFooter, DialogForm } from "../
 import { Input, Select, Textarea } from "../ui/input.tsx";
 import { useIsMobile } from "../useMediaQuery.ts";
 import { AgentRows, draftOf, settingOf } from "./AgentRows.tsx";
+import { Avatar } from "./Avatar.tsx";
 import { ModeRows } from "./ModeRows.tsx";
+import { SlimePicker } from "./SlimePicker.tsx";
 import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
 /** 名字、主文件夹两行右边控件的宽度（288px）：两行左右边线对齐；主文件夹的输入框和 Choose… 一起占这么宽，一行放得下、不折行。 */
@@ -38,21 +41,28 @@ export interface NewPmDevice {
   status: DeviceStatus;
   client: HubClient;
   server: ServerInfo;
+  /** 这台设备上没归档的项目经理现在的形象：新建时默认分一个不撞造型的（和账本的 pickNewPmLook 同一个算法）。 */
+  takenLooks: readonly SlimeLook[];
 }
 
 /** deviceRow：两台以上设备时最上面一行“设备”；表单的接口、模型名单、能不能“选择…”都按外面 DeviceScope 的那台。 */
 function NewPmForm({
   mobile,
   deviceRow,
+  takenLooks,
   onCreated,
   onManageProviders,
 }: {
   mobile: boolean;
   deviceRow: ReactNode;
+  takenLooks: readonly SlimeLook[];
   onCreated: (conversationId: ConversationId) => void;
   onManageProviders?: () => void;
 }) {
   const client = useClient();
+  // 没动过就不带 look，账本按同一个算法分；换过才带上
+  const [pickedLook, setPickedLook] = useState<SlimeLook | null>(null);
+  const look = pickedLook ?? pickNewPmLook(takenLooks, 0);
   const allCatalogs = useModelCatalogs();
   const [name, setName] = useState("");
   const [folder, setFolder] = useState("");
@@ -112,6 +122,7 @@ function NewPmForm({
         ...(effort !== null ? { effort } : {}),
         persona,
         ...(mainFolder ? { folder: mainFolder } : {}),
+        ...(pickedLook !== null ? { look: pickedLook } : {}),
       });
       onCreated(res.conversationId);
     } catch (err) {
@@ -139,6 +150,21 @@ function NewPmForm({
               />
             )}
           </SettingsRow>
+          <SettingsRow label="Look" stacked={mobile}>
+            {(id) => (
+              <SlimePicker look={look} onChange={setPickedLook}>
+                <button
+                  id={id}
+                  type="button"
+                  aria-label="Change look"
+                  className="flex cursor-pointer items-center gap-2 rounded-xl px-1.5 py-1 text-minor text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+                >
+                  <Avatar look={look} size={34} />
+                  <ChevronRight className="size-pixel-sm" aria-hidden="true" />
+                </button>
+              </SlimePicker>
+            )}
+          </SettingsRow>
           <SettingsRow label="Main folder" stacked={mobile} error={pickError}>
             {(id) => (
               <div className={cn("flex items-center gap-2", mobile ? "min-w-0 flex-1" : FIELD_WIDTH)}>
@@ -155,7 +181,7 @@ function NewPmForm({
                 />
                 {canPick && (
                   <Button type="button" variant="outline" className="shrink-0" disabled={picking || busy} onClick={() => void pickFolder()}>
-                    {picking && <Loader2 className="animate-spin" aria-hidden="true" />}
+                    {picking && <Loader2 aria-hidden="true" />}
                     Choose…
                   </Button>
                 )}
@@ -168,7 +194,7 @@ function NewPmForm({
         </SettingsGroup>
         <Collapsible open={moreOpen} onOpenChange={setMoreOpen}>
           <CollapsibleTrigger className="touch-target group flex cursor-pointer items-center gap-1 rounded-full px-4 text-minor font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
-            <ChevronRight className="size-3.5 transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />
+            <ChevronRight className="size-pixel-sm transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />
             More settings
           </CollapsibleTrigger>
           <CollapsibleContent className="mt-3 grid gap-6">
@@ -206,7 +232,7 @@ function NewPmForm({
       )}
       <DialogFooter className={mobile ? "border-t border-border bg-surface-sidebar px-4 py-3" : undefined}>
         <Button type="submit" disabled={!canSubmit} className={mobile ? "h-11 w-full" : undefined}>
-          {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
+          {busy && <Loader2 aria-hidden="true" />}
           {busy ? "Creating…" : "Create"}
         </Button>
       </DialogFooter>
@@ -282,8 +308,10 @@ function DevicePicker({
   return (
     <DeviceScope client={device.client} server={device.server}>
       <NewPmForm
+        key={device.key}
         mobile={mobile}
         deviceRow={deviceRow}
+        takenLooks={device.takenLooks}
         onCreated={(conversationId) => onCreated(device.key, conversationId)}
         {...(onManageProviders !== undefined ? { onManageProviders: () => onManageProviders(device.key) } : {})}
       />

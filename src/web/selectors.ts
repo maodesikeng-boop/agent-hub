@@ -58,6 +58,7 @@ import {
   type WorkerId,
   type WorkerMessageMeta,
 } from "../shared/index.ts";
+import { defaultLookOf, resolvePmLook, type SlimeLook } from "../shared/slimes.ts";
 import { computeGateImpact } from "../shared/decisions.ts";
 import {
   isQuietMessage,
@@ -76,8 +77,8 @@ export interface ConversationEntry {
   id: ConversationId;
   /** 项目经理的名字；找不到项目经理（还没同步）用对话标题。 */
   name: string;
-  /** 头像的颜色取自它。 */
-  avatarKey: number;
+  /** 头像：项目经理现在的形象（造型 × 颜色）；找不到项目经理时按对话编号取默认的那只。同样的形象是同一个对象。 */
+  look: SlimeLook;
   lastMessage: Message | null;
   lastAt: number;
   pm: Pm | null;
@@ -128,7 +129,7 @@ function computeConversationList(state: HubState): ConversationEntry[] {
       return {
         id: conversation.id,
         name: pm?.name ?? conversation.title,
-        avatarKey: pm?.id ?? conversation.id,
+        look: pm !== null ? resolvePmLook(pm) : defaultLookOf(conversation.id),
         lastMessage: previewMessage(view.messages),
         lastAt: last?.createdAt ?? conversation.createdAt,
         pm,
@@ -870,7 +871,7 @@ export interface FleetDecisionEntry {
   deviceName: string;
   self: boolean;
   online: boolean;
-  avatarKey: number;
+  look: SlimeLook;
 }
 
 export interface RouterTargetCandidate {
@@ -885,7 +886,7 @@ export interface RouterTargetCandidate {
   projectId: ProjectId | null;
   projectName: string | null;
   conversationId: ConversationId;
-  avatarKey: number;
+  look: SlimeLook;
   label: string;
 }
 
@@ -894,6 +895,8 @@ export interface FleetRouterView {
   targets: RouterTargetCandidate[];
   summary: RouterReminderSummary;
   multiDevice: boolean;
+  /** 某台设备上某个项目经理现在的形象（时间流里的去向行、简报用）：含已归档的；找不到按编号取默认的那只。 */
+  lookOf: (deviceKey: string, pmId: PmId) => SlimeLook;
 }
 
 /** 还没就绪的设备共用同一份空视图：每次给新的 [] 会让下面的指纹比较永远不等，整个舰队视图次次重算。 */
@@ -995,7 +998,7 @@ export function fleetRouterView(devices: readonly FleetRouterDeviceInput[]): Fle
         deviceName: d.name,
         self: d.self,
         online: d.online,
-        avatarKey: dec.pmId,
+        look: lookOfPm(pmById.get(dec.pmId), dec.pmId),
       });
     }
 
@@ -1016,7 +1019,7 @@ export function fleetRouterView(devices: readonly FleetRouterDeviceInput[]): Fle
         projectId: proj?.id ?? null,
         projectName: proj?.name ?? null,
         conversationId: conversation.id,
-        avatarKey: pm.id,
+        look: resolvePmLook(pm),
         label: proj?.name ?? pm.name,
       });
     }
@@ -1030,15 +1033,22 @@ export function fleetRouterView(devices: readonly FleetRouterDeviceInput[]): Fle
       .map((d) => ({ deviceId: d.self ? "local" : d.id, state: d.state })),
   );
 
+  const looks = new Map<string, SlimeLook>();
+  for (let i = 0; i < devices.length; i++) {
+    for (const pm of devices[i]!.state.pms) looks.set(`${deps[i]!.key}:${pm.id}`, resolvePmLook(pm));
+  }
   const value: FleetRouterView = {
     decisions,
     targets,
     summary,
     multiDevice: devices.length > 1,
+    lookOf: (deviceKey, pmId) => looks.get(`${deviceKey}:${pmId}`) ?? defaultLookOf(pmId),
   };
   lastFleetMemo = { deps, value };
   return value;
 }
+
+const lookOfPm = (pm: Pm | undefined, pmId: PmId): SlimeLook => (pm === undefined ? defaultLookOf(pmId) : resolvePmLook(pm));
 
 // ---- 任务流图（Task Graph）与同源拍板（PendingDecision）选择器 ----
 

@@ -61,8 +61,11 @@ describe("已登录的浏览器列表", () => {
     expect(screen.queryByRole("button", { name: "Sign out all" })).not.toBeInTheDocument();
     fireEvent.click(toggle());
     expect(toggle()).toHaveAttribute("aria-expanded", "true");
-    expect(rowOf("Mac Chrome").querySelector("svg.lucide-monitor")).not.toBeNull();
-    expect(rowOf("iPhone Safari").querySelector("svg.lucide-smartphone")).not.toBeNull();
+    const iconOf = (name: string) => rowOf(name).querySelector("svg[data-icon='pixel']")!;
+    expect(iconOf("Mac Chrome")).not.toBeNull();
+    expect(iconOf("iPhone Safari")).not.toBeNull();
+    // 电脑和手机是两个不同的图标
+    expect(iconOf("Mac Chrome").innerHTML).not.toBe(iconOf("iPhone Safari").innerHTML);
     expect(screen.getByRole("button", { name: "Sign out all" })).toBeInTheDocument();
     fireEvent.click(toggle());
     expect(screen.queryByText("iPhone Safari")).not.toBeInTheDocument();

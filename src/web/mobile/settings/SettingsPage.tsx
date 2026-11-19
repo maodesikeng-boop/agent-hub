@@ -1,7 +1,7 @@
 // 手机设置的整屏骨架（docs/mobile-settings-design.md 第 2.1、2.3 节，docs/ui-standard.md 第 20 条）：
 // 画布 bg-surface-sidebar，顶上垫刘海安全区；h-16 顶栏（一级：ghost ArrowLeft + 左对齐标题；二级：ghost “‹ Settings” + 居中标题）；
 // 内容区 px-4、组间距 gap-6，自己纵向滚动，底部垫横条与软键盘（--bottom-inset）；可选一条固定在底部的主操作栏。
-import { ArrowLeft, ChevronLeft } from "lucide-react";
+import { ArrowLeft, ChevronLeft } from "../../ui/icons.ts";
 import type { ReactNode } from "react";
 import { cn } from "../../lib/utils.ts";
 import { Button } from "../../ui/button.tsx";
@@ -31,7 +31,7 @@ export function SettingsPage({
       >
         {home ? (
           <>
-            <Button variant="ghost" size="icon" className="shrink-0" aria-label="Back" onClick={onBack}>
+            <Button variant="slot" size="icon" className="shrink-0" aria-label="Back" onClick={onBack}>
               <ArrowLeft aria-hidden="true" />
             </Button>
             <h1 className="min-w-0 truncate text-title font-semibold">{title}</h1>
@@ -63,7 +63,7 @@ export function SettingsPage({
 function BackToSettings({ onClick }: { onClick: () => void }) {
   return (
     <Button variant="ghost" className="shrink-0 gap-0.5 px-1.5 text-body font-normal" onClick={onClick}>
-      <ChevronLeft className="size-5" aria-hidden="true" />
+      <ChevronLeft className="size-pixel-sm" aria-hidden="true" />
       Settings
     </Button>
   );

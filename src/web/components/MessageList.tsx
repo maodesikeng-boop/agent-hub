@@ -1,4 +1,4 @@
-import { ChevronDown } from "lucide-react";
+import { ChevronDown } from "../ui/icons.ts";
 import { memo, useEffect, useMemo, useState } from "react";
 import { attachmentsOf, isHandoverTraffic, isRewoundMessage, isSilentTriggerMessage, userMessageDedupeKey, type Message, type MessageId } from "../../shared/index.ts";
 import { groupMessages } from "../selectors.ts";

@@ -5,12 +5,13 @@ import { MobileSettings } from "./mobile/settings/MobileSettings.tsx";
 import { mobileBack } from "./mobile/back.ts";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { ArrowLeft, Loader2 } from "./ui/icons.ts";
 import { AccentScope, FruitTint } from "./lib/accent-scope.tsx";
 import { Conversation } from "./components/Conversation.tsx";
 import { NewPmDialog } from "./components/NewPmDialog.tsx";
 import { Notices } from "./components/Notices.tsx";
 import { RightRail, RightRailToggle } from "./components/RightRail.tsx";
+import { QuotaPopover } from "./components/QuotaPopover.tsx";
 import { RouterWorkbench } from "./components/RouterWorkbench.tsx";
 import { WorkerConversation } from "./components/WorkerConversation.tsx";
 import { PmProfile } from "./components/PmProfile.tsx";
@@ -33,7 +34,7 @@ function FullPage({ title, lines = [], titleTip, busy = false, action, testId }:
       <div className="flex max-w-88 flex-col items-center gap-2">
         {busy ? (
           <>
-            <Loader2 className="size-5 animate-spin text-muted-foreground" aria-hidden="true" />
+            <Loader2 className="size-pixel text-muted-foreground" aria-hidden="true" />
             <p className="text-minor text-muted-foreground">{title}</p>
           </>
         ) : (
@@ -75,11 +76,11 @@ export function App() {
           visible={content.railHasContent}
           open={content.railOpen}
           attention={railAttention}
-          avatarKey={content.avatarKey}
+          look={content.look}
           onToggle={content.toggleRail}
         />
       ),
-    [content === null, content?.railHasContent, content?.railOpen, railAttention, content?.avatarKey, content?.toggleRail],
+    [content === null, content?.railHasContent, content?.railOpen, railAttention, content?.look, content?.toggleRail],
   );
   const openLocalProviders = useCallback(
     () => openManageProvidersRef?.(LOCAL_DEVICE),
@@ -108,7 +109,7 @@ export function App() {
   const {
     active,
     actions,
-    avatarKey,
+    look,
     clearFocus,
     clientForDevice,
     storeForDevice,
@@ -166,10 +167,14 @@ export function App() {
     ensureWorkers,
   } = content;
   // 开关跟着右栏走：并排的右栏展开时在右栏顶部，其余（收起、太窄时右栏在顶栏下面）在顶栏右边，也就是窗口右上角
-  const mobileToggle = <RightRailToggle visible={railHasContent} open={drawerOpen} attention={railAttention} avatarKey={avatarKey} onToggle={() => setDrawerOpen(!drawerOpen)} />;
-  const toolbar = mobile ? mobileToggle : railOpen && !compact ? null : railToggle;
+  const mobileToggle = <RightRailToggle visible={railHasContent} open={drawerOpen} attention={railAttention} look={look} onToggle={() => setDrawerOpen(!drawerOpen)} />;
+  const quota = quotaUsage(state);
+  const quotaInHeader = routerActive || (state.phase === "ready" && !profile && (openWorker !== null || (active && view)));
+  const quotaSlot = quotaInHeader ? <QuotaPopover quota={quota} fetchable={quotaFetchable} placement="header" /> : null;
+  const railControl = mobile ? mobileToggle : railOpen && !compact ? null : railToggle;
+  const toolbar = <>{quotaSlot}{railControl}</>;
   const back = () => mobileBack(route?.view !== "conversation" && active ? { view: "conversation", id: active.id, ...routeDeviceOf(current.key) } : null, replace);
-  const leading = mobile ? <Button variant="ghost" size="icon" className="shrink-0" aria-label="Back" onClick={back}><ArrowLeft aria-hidden="true" /></Button> : undefined;
+  const leading = mobile ? <Button variant="slot" size="icon" className="shrink-0" aria-label="Back" onClick={back}><ArrowLeft aria-hidden="true" /></Button> : undefined;
   const rail = !routerActive && railOpen ? (
     <RightRail
       asks={railAsks}
@@ -179,7 +184,7 @@ export function App() {
       openWorkerId={openWorker}
       layout={compact ? "top" : "side"}
       toggle={railToggle}
-      avatarKey={avatarKey}
+      look={look}
       onOpenAsk={openAsk}
       onOpenWorker={openWorkerConversation}
       onLoadMoreWorkers={railLoadMoreWorkers}
@@ -205,8 +210,8 @@ export function App() {
       asking={reminders.asking}
       notify={reminders.notify}
       devices={deviceSettings}
-      quota={quotaUsage(state)}
-      quotaFetchable={quotaFetchable}
+      quota={quotaInHeader && !mobile ? undefined : quota}
+      quotaFetchable={!quotaInHeader || mobile ? quotaFetchable : false}
       layout={mobile ? "page" : narrow ? "rail" : "wide"}
       settingsOpen={desktopSettingsOpen}
       {...(desktopSettingsSection !== undefined ? { defaultSettingsSection: desktopSettingsSection } : {})}
@@ -218,9 +223,9 @@ export function App() {
     />
   );
   const settingsRoute = mobile && route?.view === "settings" ? route : null;
-  const tintKey = routerActive || settingsRoute !== null ? null : (active?.avatarKey ?? null);
+  const tintColor = routerActive || settingsRoute !== null ? null : (active?.look.color ?? null);
   const chat = (
-    <AccentScope colorKey={tintKey}>
+    <AccentScope color={tintColor}>
       {settingsRoute !== null ? (
         <MobileSettings
           section={settingsRoute.section}
@@ -236,6 +241,7 @@ export function App() {
             {routerActive ? (
               <RouterWorkbench
                 leading={leading}
+                toolbar={quotaSlot}
                 notices={notices}
                 view={routerView}
                 devices={fleet.devices}
@@ -273,7 +279,7 @@ export function App() {
                 title={workerLine?.title ?? workerView?.conversation.title ?? "Piece"}
                 readonly={workerLine?.readonly ?? false}
                 phase={workerPhaseOf(state, openWorker)}
-                pm={{ name: workerPmEntry?.name ?? "Project manager", avatarKey: workerPmEntry?.avatarKey ?? 0 }}
+                pm={{ name: workerPmEntry?.name ?? "Project manager", look: workerPmEntry?.look ?? look }}
                 meta={railWorkers.find((w) => w.conversationId === openWorker)}
                 view={workerView}
                 loading={workerLoading}
@@ -336,7 +342,7 @@ export function App() {
               workers={railWorkers}
               activeGraphs={railGraphs}
               projectId={railProjectId}
-              avatarKey={avatarKey}
+              look={look}
               openWorkerId={openWorker}
               onOpenAsk={openAsk}
               onOpenWorker={openWorkerConversation}
@@ -354,7 +360,7 @@ export function App() {
         <ModelCatalogProvider>
           <div className="relative flex h-full">
             {/* 外壳底色掺当前项目经理的水果色（左栏、对话区、右栏、分割线）；Router 下传 null 保持纯白与碳黑中性调 */}
-            <FruitTint colorKey={tintKey}>
+            <FruitTint color={tintColor}>
               <MobileShell mobile={mobile} list={route === null} sidebar={sidebar}>{chat}</MobileShell>
               <NewPmDialog
                 open={creating}

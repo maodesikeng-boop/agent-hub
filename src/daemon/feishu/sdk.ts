@@ -189,7 +189,8 @@ export function createFeishuSdkTransport(options: FeishuSdkOptions): FeishuTrans
   return {
     call,
     async uploadImage(input) {
-      const res = await client.im.v1.image.create({ data: { image_type: input.imageType, image: createReadStream(input.path) } });
+      const image = "data" in input ? input.data : createReadStream(input.path);
+      const res = await client.im.v1.image.create({ data: { image_type: input.imageType, image } });
       return { imageKey: unwrap(res?.image_key, "上传图片") };
     },
     async uploadFile(input) {

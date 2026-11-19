@@ -1079,6 +1079,11 @@ export const FEISHU_CHAT_SENDS_PER_SECOND = 4;
 export const FEISHU_CARD_ACTION_DEADLINE_MS = 2_500;
 /** 成员缓存最多几个群：群数 = 项目经理数 + 1，留十倍。 */
 export const FEISHU_CHAT_CACHE_MAX = 200;
+/**
+ * 画好的飞书群头像（daemon/feishu/avatars.ts）在内存里最多记几张：一张约 4.5 KB、画一次约 40ms；在用的形象不超过项目经理数，
+ * 64 张约 0.3 MB。形象一共 20 × 24 = 480 种，超过的按最久没用的丢，下次用到再画。
+ */
+export const FEISHU_AVATAR_RENDER_CACHE_MAX = 64;
 /** 每个群最多缓存几个成员：私人项目群不会超过几十人。 */
 export const FEISHU_CHAT_MEMBERS_MAX = 1_000;
 /** 成员缓存多久对一次账（事件实时改为主）；查失败多久内不再查。 */

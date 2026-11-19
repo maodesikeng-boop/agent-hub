@@ -8,7 +8,8 @@ import { MessageBubble, type MessageActions } from "./components/Messages.tsx";
 import type { Message } from "../shared/index.ts";
 import { makeMessage, makeToolMessage, makeUserMessage } from "./test-utils.ts";
 
-const identity = { name: "小林", avatarKey: 1 };
+import { defaultLookOf } from "../shared/slimes.ts";
+const identity = { name: "小林", look: defaultLookOf(1) };
 const actions: MessageActions = { retry: {}, onOpenWorker: () => {}, onRetryMessage: () => {}, onRevertPersona: () => Promise.resolve() };
 
 function list(messages: Message[]) {

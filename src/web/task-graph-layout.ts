@@ -1,7 +1,8 @@
-import { Graph, layout as dagreLayout, type EdgeLabel, type GraphLabel, type NodeLabel } from "@dagrejs/dagre";
+import { Graph, graphlib, layout as dagreLayout, type EdgeLabel, type GraphLabel, type NodeLabel } from "@dagrejs/dagre";
 import { LRUCache } from "lru-cache";
-import type { Deliverable } from "../shared/index.ts";
+import type { Deliverable, TaskGraph, TaskNode } from "../shared/index.ts";
 import { deliverablesHeightRem } from "./deliverable-size.ts";
+import { orthogonalRoute, pixelArrowPaths, TUBE_WIDTH_CELLS, tubePaths } from "./pixel-path.ts";
 
 /** Dagre 拓扑布局结果 LRU 缓存上限（对齐 docs/task-graph-design.md 第 5.2、5.3 节）。 */
 export const GRAPH_LAYOUT_CACHE_MAX = 64;
@@ -138,15 +139,23 @@ export interface LayoutEdgePath {
   readonly id: string;
   readonly from: string;
   readonly to: string;
-  /** 平滑三次贝塞尔 SVG path d。 */
+  /** 果冻管道的正交折线中线（pixel-path.ts 的 tubePaths）：只有横竖线段，管道停在箭头的底边。 */
   readonly d: string;
-  /** 终点 3px 轻量小折角箭头 SVG path d。 */
-  readonly arrowD: string;
+  /** 管道的高光线（中线往左上挪半格）。 */
+  readonly highlightD: string;
+  /** 终点像素箭头的描边和芯（pixelArrowPaths），尖端落在 end。 */
+  readonly arrowOutlineD: string;
+  readonly arrowFillD: string;
   readonly start: LayoutPoint;
   readonly end: LayoutPoint;
-  /** 上游已完成（done）时为实线 true，其余状态为虚线 false。 */
+  /** 上游已完成（done）时为 true：管道灌满果冻；其余是空管子。 */
   readonly solid: boolean;
 }
+
+/** 放大全览、右栏里果冻管道的一格（px）：管道 4 格宽、箭头 9×5 格。 */
+export const GRAPH_TUBE_CELL_PX = 2;
+/** 箭头朝前的长度（5 格）：管道停在箭头底边。 */
+const ARROW_LEN_PX = 5 * GRAPH_TUBE_CELL_PX;
 
 export interface TaskGraphLayoutResult {
   readonly viewportMode: LayoutViewportMode;
@@ -400,81 +409,74 @@ function computeRailWidthsForRow(rowNodes: readonly VirtualNode[], fontPx: numbe
   return [colW, colW, RAIL_MAX_CONTENT_WIDTH_PX - 2 * gap - 2 * colW];
 }
 
-function sampleCubicPoint(
-  p0: LayoutPoint,
-  c1: LayoutPoint,
-  c2: LayoutPoint,
-  p3: LayoutPoint,
-  t: number,
-): LayoutPoint {
-  const mt = 1 - t;
-  return {
-    x: mt * mt * mt * p0.x + 3 * mt * mt * t * c1.x + 3 * mt * t * t * c2.x + t * t * t * p3.x,
-    y: mt * mt * mt * p0.y + 3 * mt * mt * t * c1.y + 3 * mt * t * t * c2.y + t * t * t * p3.y,
-  };
+/** 一列（同一层）卡片的左右边界：dagre 横排时同一层的卡片中心 x 相同。 */
+interface LayoutColumn {
+  readonly center: number;
+  readonly left: number;
+  readonly right: number;
 }
 
-function directLrCurveHitsBox(start: LayoutPoint, end: LayoutPoint, box: LayoutNodeBox, pad = 4): boolean {
-  const span = Math.max(16, Math.abs(end.x - start.x) * 0.5);
-  const c1: LayoutPoint = { x: start.x + span, y: start.y };
-  const c2: LayoutPoint = { x: end.x - span, y: end.y };
-  for (let i = 1; i < 32; i++) {
-    const pt = sampleCubicPoint(start, c1, c2, end, i / 32);
-    if (
-      pt.x >= box.x - pad &&
-      pt.x <= box.x + box.width + pad &&
-      pt.y >= box.y - pad &&
-      pt.y <= box.y + box.height + pad
-    ) {
-      return true;
+function columnsOf(boxes: readonly LayoutNodeBox[]): LayoutColumn[] {
+  const columns: { center: number; left: number; right: number }[] = [];
+  for (const box of [...boxes].sort((a, b) => a.x + a.width / 2 - (b.x + b.width / 2))) {
+    const center = box.x + box.width / 2;
+    const last = columns.at(-1);
+    if (last !== undefined && Math.abs(last.center - center) <= 2) {
+      last.left = Math.min(last.left, box.x);
+      last.right = Math.max(last.right, box.x + box.width);
+    } else {
+      columns.push({ center, left: box.x, right: box.x + box.width });
     }
   }
-  return false;
+  return columns;
 }
 
-function buildMultiPointLrSplineAndArrow(points: readonly LayoutPoint[]): { d: string; arrowD: string } {
-  const first = points[0]!;
-  const last = points[points.length - 1]!;
-  const segs: string[] = [`M ${round2(first.x)} ${round2(first.y)}`];
-  for (let i = 0; i < points.length - 1; i++) {
-    const a = points[i]!;
-    const b = points[i + 1]!;
-    const span = Math.max(12, Math.abs(b.x - a.x) * 0.45);
-    segs.push(
-      `C ${round2(a.x + span)} ${round2(a.y)}, ${round2(b.x - span)} ${round2(b.y)}, ${round2(b.x)} ${round2(b.y)}`,
-    );
-  }
-  const ex = round2(last.x);
-  const ey = round2(last.y);
-  const arrowD = `M ${round2(ex - 3.5)} ${round2(ey - 3)} L ${ex} ${ey} L ${round2(ex - 3.5)} ${round2(ey + 3)}`;
-  return { d: segs.join(" "), arrowD };
+/** 横着跑的一段（y 上下各留半根管子加 4px）会不会穿过这些卡片。 */
+function runHitsBoxes(y: number, x0: number, x1: number, boxes: readonly LayoutNodeBox[]): LayoutNodeBox[] {
+  const pad = (TUBE_WIDTH_CELLS.outline * GRAPH_TUBE_CELL_PX) / 2 + 4;
+  const [lo, hi] = x0 < x1 ? [x0, x1] : [x1, x0];
+  return boxes.filter((b) => b.x < hi && b.x + b.width > lo && y > b.y - pad && y < b.y + b.height + pad);
 }
 
-function buildCubicBezierAndArrow(
-  start: LayoutPoint,
-  end: LayoutPoint,
-  rankdir: "TB" | "LR",
-): { d: string; arrowD: string } {
-  const sx = round2(start.x);
-  const sy = round2(start.y);
-  const ex = round2(end.x);
-  const ey = round2(end.y);
-
-  if (rankdir === "TB") {
-    const span = Math.max(12, Math.abs(ey - sy) * 0.5);
-    const c1y = round2(sy + span);
-    const c2y = round2(ey - span);
-    const d = `M ${sx} ${sy} C ${sx} ${c1y}, ${ex} ${c2y}, ${ex} ${ey}`;
-    const arrowD = `M ${round2(ex - 3)} ${round2(ey - 3.5)} L ${ex} ${ey} L ${round2(ex + 3)} ${round2(ey - 3.5)}`;
-    return { d, arrowD };
+/**
+ * 横排（LR）一条边的正交走线：从上游卡片右边中点出发，在它右边那道空隙的正中竖着拐到要去的高度，跨过中间几列时沿一条
+ * 不穿卡片的横线走（先试出发的高度、再试到达的高度，都挡着就从挡着的卡片上面或下面绕），到目标左边那道空隙正中再竖着拐回来，
+ * 横着进目标卡片左边中点前的箭头。同一列出发、到同一列的边共用拐弯的竖线，分叉、汇合看着是一根管子分开、并上。
+ */
+function routeLr(start: LayoutPoint, end: LayoutPoint, from: LayoutNodeBox, to: LayoutNodeBox, columns: readonly LayoutColumn[], boxes: readonly LayoutNodeBox[]) {
+  const colOf = (box: LayoutNodeBox) => columns.findIndex((c) => Math.abs(c.center - (box.x + box.width / 2)) <= 2);
+  const a = colOf(from);
+  const b = colOf(to);
+  const tubeEnd = end.x - ARROW_LEN_PX;
+  if (a < 0 || b <= a) {
+    const mid = (start.x + tubeEnd) / 2;
+    return [start, { x: mid, y: start.y }, { x: mid, y: end.y }, { x: tubeEnd, y: end.y }];
   }
+  const gapMid = (i: number) => (columns[i]!.right + columns[i + 1]!.left) / 2;
+  const bendOut = gapMid(a);
+  const bendIn = Math.min(gapMid(b - 1), tubeEnd - GRAPH_TUBE_CELL_PX * 2);
+  const between = boxes.filter((box) => box !== from && box !== to);
+  let runY = start.y;
+  if (bendIn > bendOut) {
+    const candidates = [start.y, end.y];
+    const clear = candidates.find((y) => runHitsBoxes(y, bendOut, bendIn, between).length === 0);
+    if (clear !== undefined) {
+      runY = clear;
+    } else {
+      const hits = runHitsBoxes(start.y, bendOut, bendIn, between);
+      const above = Math.min(...hits.map((h) => h.y)) - 14;
+      const below = Math.max(...hits.map((h) => h.y + h.height)) + 14;
+      runY = above >= 6 && start.y - above <= below - start.y ? above : below;
+    }
+  }
+  return [start, { x: bendOut, y: start.y }, { x: bendOut, y: runY }, { x: bendIn, y: runY }, { x: bendIn, y: end.y }, { x: tubeEnd, y: end.y }];
+}
 
-  const span = Math.max(16, Math.abs(ex - sx) * 0.5);
-  const c1x = round2(sx + span);
-  const c2x = round2(ex - span);
-  const d = `M ${sx} ${sy} C ${c1x} ${sy}, ${c2x} ${ey}, ${ex} ${ey}`;
-  const arrowD = `M ${round2(ex - 3.5)} ${round2(ey - 3)} L ${ex} ${ey} L ${round2(ex - 3.5)} ${round2(ey + 3)}`;
-  return { d, arrowD };
+/** 竖排（TB，右栏紧凑态）：从上游卡片底边中点往下，在两层中间横着拐到目标的 x，再往下进箭头。 */
+function routeTb(start: LayoutPoint, end: LayoutPoint) {
+  const tubeEnd = end.y - ARROW_LEN_PX;
+  const mid = (start.y + tubeEnd) / 2;
+  return [start, { x: start.x, y: mid }, { x: end.x, y: mid }, { x: end.x, y: tubeEnd }];
 }
 
 /**
@@ -681,7 +683,6 @@ export function computeTaskGraphLayoutUncached(input: TaskGraphLayoutInput): Tas
   let canvasWidth = 0;
   let canvasHeight = 0;
 
-  let dialogShiftY = 0;
   if (input.viewportMode === "rail") {
     // 按 Dagre 实际计算出的中心 y 坐标聚类同排节点（容差 1px），若某排因松弛滑移超过 3 项则自动切分子排
     const withDagre = virtualNodes.map((vn) => {
@@ -797,7 +798,6 @@ export function computeTaskGraphLayoutUncached(input: TaskGraphLayoutInput): Tas
 
     const shiftX = marginPx - (Number.isFinite(minX) ? minX : 0);
     const shiftY = marginPx - (Number.isFinite(minY) ? minY : 0);
-    dialogShiftY = shiftY;
 
     for (const { vn, x, y, dagreRank } of rawCoords) {
       const bx = round2(x + shiftX);
@@ -824,8 +824,9 @@ export function computeTaskGraphLayoutUncached(input: TaskGraphLayoutInput): Tas
     canvasHeight = round2(canvasHeight + marginPx);
   }
 
-  // ─── 生成平滑三次贝塞尔 SVG 有向连线 ──────────────────────────────────────
+  // ─── 生成果冻管道的正交连线 ─────────────────────────────────────────────
   const allBoxes = [...positionedBoxes.values()];
+  const columns = rankdir === "LR" ? columnsOf(allBoxes) : [];
   const edgePaths: LayoutEdgePath[] = [];
   for (const ve of virtualEdges) {
     const fromBox = positionedBoxes.get(ve.from);
@@ -842,58 +843,27 @@ export function computeTaskGraphLayoutUncached(input: TaskGraphLayoutInput): Tas
         ? Object.freeze({ x: round2(toBox.x + toBox.width / 2), y: round2(toBox.y) })
         : Object.freeze({ x: round2(toBox.x), y: round2(toBox.y + toBox.height / 2) });
 
-    let built = buildCubicBezierAndArrow(start, end, rankdir);
-    if (rankdir === "LR" && end.x > start.x + 24) {
-      const obstacles = allBoxes
-        .filter(
-          (b) =>
-            b.id !== ve.from &&
-            b.id !== ve.to &&
-            b.x + b.width > start.x + 2 &&
-            b.x < end.x - 2 &&
-            directLrCurveHitsBox(start, end, b),
-        )
-        .sort((a, b) => a.x - b.x);
-
-      if (obstacles.length > 0) {
-        const dagrePts: ReadonlyArray<{ x: number; y: number }> = g.edge(ve.from, ve.to)?.points ?? [];
-        const midYs = dagrePts.slice(1, -1).map((p) => p.y + dialogShiftY);
-        const hintY = midYs.length > 0 ? midYs.reduce((s, v) => s + v, 0) / midYs.length : (start.y + end.y) / 2;
-
-        const waypoints: LayoutPoint[] = [start];
-        let lastX = start.x + 8;
-        for (const obs of obstacles) {
-          const obsMidY = obs.y + obs.height / 2;
-          const aboveY = round2(obs.y - 14);
-          const belowY = round2(obs.y + obs.height + 14);
-          const clearY = hintY <= obsMidY && aboveY >= 6 ? aboveY : belowY;
-          if (clearY + 8 > canvasHeight) canvasHeight = round2(clearY + 8);
-
-          const xEnter = round2(Math.max(lastX, obs.x - 6));
-          const xExit = round2(Math.min(end.x - 8, obs.x + obs.width + 6));
-          if (xEnter < end.x - 8) {
-            waypoints.push({ x: xEnter, y: clearY });
-            lastX = xEnter + 4;
-          }
-          if (xExit > lastX && xExit < end.x - 8) {
-            waypoints.push({ x: xExit, y: clearY });
-            lastX = xExit + 4;
-          }
-        }
-        waypoints.push(end);
-        if (waypoints.length >= 3) {
-          built = buildMultiPointLrSplineAndArrow(waypoints);
-        }
-      }
+    const route = orthogonalRoute(rankdir === "LR" ? routeLr(start, end, fromBox, toBox, columns, allBoxes) : routeTb(start, end), GRAPH_TUBE_CELL_PX);
+    for (const p of route) {
+      if (p.y + 8 > canvasHeight) canvasHeight = round2(p.y + 8);
     }
+    const tube = tubePaths(route, GRAPH_TUBE_CELL_PX);
+    const tip = route.at(-1)!;
+    const arrow = pixelArrowPaths(
+      rankdir === "LR" ? { x: tip.x + ARROW_LEN_PX, y: tip.y } : { x: tip.x, y: tip.y + ARROW_LEN_PX },
+      rankdir === "LR" ? "right" : "down",
+      GRAPH_TUBE_CELL_PX,
+    );
 
     edgePaths.push(
       Object.freeze({
         id: `${ve.from}->${ve.to}`,
         from: ve.from,
         to: ve.to,
-        d: built.d,
-        arrowD: built.arrowD,
+        d: tube.center,
+        highlightD: tube.highlight,
+        arrowOutlineD: arrow.outline,
+        arrowFillD: arrow.fill,
         start,
         end,
         solid: ve.solid,
@@ -929,4 +899,95 @@ export function computeTaskGraphLayout(input: TaskGraphLayoutInput): TaskGraphLa
   const computed = computeTaskGraphLayoutUncached(input);
   layoutCache.set(cacheKey, computed);
   return computed;
+}
+
+// ─── 按连通子图、拓扑层拆任务图（果皮轨、任务进度图标共用） ───────────────────────
+
+export type GraphShape = Pick<TaskGraph, "nodes" | "edges">;
+
+const compareNodeOrder = (a: TaskNode, b: TaskNode) => a.sortOrder - b.sortOrder || a.key.localeCompare(b.key);
+
+/** 按正向最长拓扑路径将任务图节点划分为有序层级，同层按 sortOrder 与 key 稳定排序。 */
+export function computeGraphLayers(graph: GraphShape): TaskNode[][] {
+  if (graph.nodes.length === 0) return [];
+  const inDegree = new Map<string, number>();
+  const adj = new Map<string, string[]>();
+  const rank = new Map<string, number>();
+
+  for (const node of graph.nodes) {
+    inDegree.set(node.key, 0);
+    adj.set(node.key, []);
+    rank.set(node.key, 0);
+  }
+  for (const edge of graph.edges) {
+    if (edge.fromKey === edge.toKey || !inDegree.has(edge.fromKey) || !inDegree.has(edge.toKey)) continue;
+    adj.get(edge.fromKey)!.push(edge.toKey);
+    inDegree.set(edge.toKey, (inDegree.get(edge.toKey) ?? 0) + 1);
+  }
+
+  const queue: string[] = [];
+  for (const node of graph.nodes) {
+    if ((inDegree.get(node.key) ?? 0) === 0) queue.push(node.key);
+  }
+  let head = 0;
+  while (head < queue.length) {
+    const u = queue[head++]!;
+    const uRank = rank.get(u) ?? 0;
+    for (const v of adj.get(u) ?? []) {
+      const nextRank = uRank + 1;
+      if (nextRank > (rank.get(v) ?? 0)) rank.set(v, nextRank);
+      const deg = (inDegree.get(v) ?? 1) - 1;
+      inDegree.set(v, deg);
+      if (deg === 0) queue.push(v);
+    }
+  }
+
+  const byRank = new Map<number, TaskNode[]>();
+  for (const node of graph.nodes) {
+    const r = rank.get(node.key) ?? 0;
+    const list = byRank.get(r);
+    if (list) list.push(node);
+    else byRank.set(r, [node]);
+  }
+
+  return [...byRank.entries()]
+    .toSorted(([a], [b]) => a - b)
+    .map(([, list]) => list.toSorted(compareNodeOrder));
+}
+
+/**
+ * 按无向连通性（弱连通分量，@dagrejs/dagre 自带的 graphlib.alg.components，O(V + E)）把任务图拆成互不相连的子图，
+ * 子图按各自最靠前节点的 sortOrder（再按 key）稳定排序；每个子图只带自己内部的边。
+ * 互不依赖的独立事项不能被拍扁到同一组拓扑层里假装首尾相连。
+ */
+export function computeGraphComponents(graph: GraphShape): GraphShape[] {
+  if (graph.nodes.length === 0) return [];
+  const g = new graphlib.Graph();
+  for (const node of graph.nodes) g.setNode(node.key);
+  for (const edge of graph.edges) {
+    if (edge.fromKey !== edge.toKey && g.hasNode(edge.fromKey) && g.hasNode(edge.toKey)) g.setEdge(edge.fromKey, edge.toKey);
+  }
+  const componentOf = new Map<string, number>();
+  // dagre 自带类型里 graph-lib 是无扩展名相对导入，nodenext 下解析成 any，这里在边界处钉住返回类型
+  const keyGroups: string[][] = graphlib.alg.components(g);
+  keyGroups.forEach((keys, idx) => {
+    for (const key of keys) componentOf.set(key, idx);
+  });
+  const groups = new Map<number, { first: TaskNode; nodes: TaskNode[]; edges: TaskGraph["edges"][number][] }>();
+  for (const node of graph.nodes) {
+    const idx = componentOf.get(node.key)!;
+    const group = groups.get(idx);
+    if (!group) groups.set(idx, { first: node, nodes: [node], edges: [] });
+    else {
+      group.nodes.push(node);
+      if (compareNodeOrder(node, group.first) < 0) group.first = node;
+    }
+  }
+  for (const edge of graph.edges) {
+    const idx = componentOf.get(edge.fromKey);
+    if (idx !== undefined && idx === componentOf.get(edge.toKey)) groups.get(idx)!.edges.push(edge);
+  }
+  return [...groups.values()]
+    .toSorted((a, b) => compareNodeOrder(a.first, b.first))
+    .map(({ nodes, edges }) => ({ nodes, edges }));
 }

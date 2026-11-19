@@ -1,4 +1,5 @@
-// 飞书的绑定与投影（迁移 0034：feishu_app、feishu_chats、feishu_posts、feishu_avatars，0035 给 feishu_posts 加附件，0037 给 feishu_avatars 记图片内容哈希；docs/feishu-design.md）。
+// 飞书的绑定与投影（迁移 0034：feishu_app、feishu_chats、feishu_posts、feishu_avatars，0035 给 feishu_posts 加附件，0037 给 feishu_avatars 记图片内容哈希，
+// 0039 群头像改按形象认；docs/feishu-design.md）。
 // 不变量：
 // - App Secret 不在这里（secrets.ts）；
 // - feishu_posts 是“账本里的这样东西发到了飞书的哪条消息、哪张卡片实体”，同一个 ref 只有一行，重发、定稿、改定案、补发都先查它；
@@ -19,10 +20,9 @@ import type {
 import { isOneOf } from "../../shared/domain.ts";
 import { FEISHU_GUEST_TIERS, FEISHU_TRIGGER_MODES } from "../../shared/feishu.ts";
 import { FEISHU_PAGE_SIZE } from "../../shared/limits.ts";
-import { PM_FRUITS } from "../../shared/fruits.ts";
 import type { FeishuCardRef } from "./cards.ts";
 import type { Db } from "../store/index.ts";
-import type { PmFruit } from "./avatars.ts";
+import { lookKey, parseLookKey, type SlimeLook } from "../../shared/slimes.ts";
 
 export interface FeishuAppRecord {
   appId: FeishuAppId;
@@ -41,8 +41,8 @@ export interface FeishuChatBinding {
   target: FeishuChatTarget | { kind: "pm"; pmId: null };
   name: string;
   label: string;
-  /** 群头像现在是哪个水果；没设过、或这个水果的头像图片换了还没给这个群换上（clearChatAvatars）是 null。 */
-  avatarFruit: PmFruit | null;
+  /** 群头像现在是哪个形象；没设过、或这个形象画出来的图换了还没给这个群换上（clearChatAvatars）是 null。 */
+  avatarLook: SlimeLook | null;
   triggerMode: FeishuTriggerMode;
   guestTier: FeishuGuestTier;
   /** 项目经理归档、群已解散的时间；取消归档重建群时作为建群 uuid 的 generation。 */
@@ -102,9 +102,9 @@ export interface FeishuStore {
   upsertChat(input: { chatId: FeishuChatId; target: FeishuChatTarget; name: string; label: string }, now: number): FeishuChatBinding;
   /** label 不给时只记飞书里的新名字（用户在飞书里改的）。 */
   renameChat(chatId: FeishuChatId, name: string, label: string | null, now: number): void;
-  setChatAvatar(chatId: FeishuChatId, fruit: PmFruit, now: number): void;
-  /** 后置：头像是这个水果的群全部改回“没设过”（这个水果的头像图片换了，下一次对齐给它们原地换上）。 */
-  clearChatAvatars(fruit: PmFruit, now: number): void;
+  setChatAvatar(chatId: FeishuChatId, look: SlimeLook, now: number): void;
+  /** 后置：头像是这个形象的群全部改回“没设过”（这个形象画出来的图换了，下一次对齐给它们原地换上）。 */
+  clearChatAvatars(look: SlimeLook, now: number): void;
   /** 后置：只改给了的字段；返回改完的记录。没有这个项目经理的群抛错。 */
   setChatPolicy(pmId: PmId, policy: { triggerMode?: FeishuTriggerMode; guestTier?: FeishuGuestTier }, now: number): FeishuChatBinding;
   /** 后置：群已解散，记下归档时间；这个群的 feishu_posts 删掉（消息随群没了）。 */
@@ -136,9 +136,9 @@ export interface FeishuStore {
   /** 后置：删掉 state 为 final / card_settled 且早于 before 的行，返回删了几行。等拍板的不删。 */
   prunePosts(before: number): number;
 
-  /** 后置：这个水果记下的 image_key，只有记下的图片内容哈希和 hash 相同才返回；没传过、图片换了都是 null。 */
-  avatarKey(fruit: PmFruit, hash: string): FeishuImageKey | null;
-  saveAvatarKey(fruit: PmFruit, imageKey: FeishuImageKey, hash: string, now: number): void;
+  /** 后置：这个形象记下的 image_key，只有记下的图片内容哈希和 hash 相同才返回；没传过、图片换了都是 null。 */
+  avatarKey(look: SlimeLook, hash: string): FeishuImageKey | null;
+  saveAvatarKey(look: SlimeLook, imageKey: FeishuImageKey, hash: string, now: number): void;
 }
 
 /** 前置：迁移 0035 已跑。 */
@@ -250,11 +250,12 @@ export function createFeishuStore(db: Db): FeishuStore {
     renameChat(chatId, name, label, now) {
       db.run("UPDATE feishu_chats SET name = ?, label = COALESCE(?, label), updated_at = ? WHERE chat_id = ?", name, label, now, chatId);
     },
-    setChatAvatar(chatId, fruit, now) {
-      db.run("UPDATE feishu_chats SET avatar_fruit = ?, updated_at = ? WHERE chat_id = ?", fruit, now, chatId);
+    // avatar_fruit 这一列从 0039 起记形象键（lookKey），列名沿用
+    setChatAvatar(chatId, look, now) {
+      db.run("UPDATE feishu_chats SET avatar_fruit = ?, updated_at = ? WHERE chat_id = ?", lookKey(look), now, chatId);
     },
-    clearChatAvatars(fruit, now) {
-      db.run("UPDATE feishu_chats SET avatar_fruit = NULL, updated_at = ? WHERE avatar_fruit = ?", now, fruit);
+    clearChatAvatars(look, now) {
+      db.run("UPDATE feishu_chats SET avatar_fruit = NULL, updated_at = ? WHERE avatar_fruit = ?", now, lookKey(look));
     },
     setChatPolicy(pmId, policy, now) {
       const chat = chatOfTarget({ kind: "pm", pmId });
@@ -370,15 +371,15 @@ export function createFeishuStore(db: Db): FeishuStore {
       return db.run("DELETE FROM feishu_posts WHERE state IN ('final', 'card_settled') AND updated_at < ?", before).changes;
     },
 
-    avatarKey(fruit, hash) {
-      const row = db.get<{ image_key: string }>("SELECT image_key FROM feishu_avatars WHERE fruit = ? AND content_sha256 = ?", fruit, hash);
+    avatarKey(look, hash) {
+      const row = db.get<{ image_key: string }>("SELECT image_key FROM feishu_avatars WHERE look = ? AND content_sha256 = ?", lookKey(look), hash);
       return row === undefined ? null : (row.image_key as FeishuImageKey);
     },
-    saveAvatarKey(fruit, imageKey, hash, now) {
+    saveAvatarKey(look, imageKey, hash, now) {
       db.run(
-        `INSERT INTO feishu_avatars (fruit, image_key, content_sha256, uploaded_at) VALUES (?, ?, ?, ?)
-         ON CONFLICT (fruit) DO UPDATE SET image_key = excluded.image_key, content_sha256 = excluded.content_sha256, uploaded_at = excluded.uploaded_at`,
-        fruit,
+        `INSERT INTO feishu_avatars (look, image_key, content_sha256, uploaded_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT (look) DO UPDATE SET image_key = excluded.image_key, content_sha256 = excluded.content_sha256, uploaded_at = excluded.uploaded_at`,
+        lookKey(look),
         imageKey,
         hash,
         now,
@@ -447,7 +448,7 @@ function toChat(row: ChatRow): FeishuChatBinding {
     target: row.target === "router" ? { kind: "router" } : { kind: "pm", pmId: row.pm_id },
     name: row.name,
     label: row.label,
-    avatarFruit: isOneOf(PM_FRUITS, row.avatar_fruit) ? row.avatar_fruit : null,
+    avatarLook: row.avatar_fruit === null ? null : parseLookKey(row.avatar_fruit),
     triggerMode: isOneOf(FEISHU_TRIGGER_MODES, row.trigger_mode) ? row.trigger_mode : "auto",
     guestTier: isOneOf(FEISHU_GUEST_TIERS, row.guest_tier) ? row.guest_tier : "chat_only",
     archivedAt: row.archived_at,

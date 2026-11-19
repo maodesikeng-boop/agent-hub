@@ -7,8 +7,8 @@ import { Drawer, DrawerContent, DrawerTitle } from "./drawer.tsx";
 import { Input, Select, Textarea } from "./input.tsx";
 import { Switch } from "./switch.tsx";
 import { Avatar } from "../components/Avatar.tsx";
-import { PALETTE } from "../lib/palette.ts";
 
+import { defaultLookOf, slimePaths } from "../../shared/slimes.ts";
 const classOf = (el: HTMLElement) => el.className.split(/\s+/);
 
 describe("界面标准：共用组件", () => {
@@ -119,19 +119,20 @@ describe("界面标准：共用组件", () => {
     expect(sw.firstElementChild).toHaveClass("size-4");
   });
 
-  it("头像（第 17 条）：项目经理渲染水果小动物（main），Worker（neutral）渲染同一只小动物的纸片分身（piece）", () => {
+  it("头像（第 17 条）：项目经理渲染史莱姆小动物（main），Worker（neutral）渲染同色的便签小灵（piece）", () => {
     const { container } = render(
       <>
-        <Avatar colorKey={0} size={44} />
-        <Avatar colorKey={0} size={24} neutral />
+        <Avatar look={defaultLookOf(0)} size={44} />
+        <Avatar look={defaultLookOf(0)} size={24} neutral />
       </>,
     );
     const avatars = container.querySelectorAll("[data-slot='avatar']");
     expect(avatars).toHaveLength(2);
     expect(avatars[0]).not.toHaveAttribute("data-neutral");
     expect(avatars[1]).toHaveAttribute("data-neutral", "true");
-    expect(avatars[0]!.querySelector("img")?.getAttribute("src")).toBe(PALETTE[0]!.main);
-    expect(avatars[1]!.querySelector("img")?.getAttribute("src")).toBe(PALETTE[0]!.piece);
+    const fills = (el: Element) => [...el.querySelectorAll("path")].map((p) => p.getAttribute("fill"));
+    expect(fills(avatars[0]!)).toEqual(slimePaths(defaultLookOf(0), "main").map((p) => p.fill));
+    expect(fills(avatars[1]!)).toEqual(slimePaths(defaultLookOf(0), "piece").map((p) => p.fill));
   });
 
   it("--ring 是中性灰，不是主色", () => {
@@ -140,15 +141,16 @@ describe("界面标准：共用组件", () => {
     expect(css).toMatch(/--ring: #a1a1aa;/);
   });
 
-  it("界面字体用系统字体（-apple-system、SF Pro Text 在前，中文字体在后），不打包 Inter", () => {
+  it("界面字体（第 13 条）：英文和数字是打包进来的 Geist，系统英文字体兜底，中文字体在最后；只在 styles.css 引一次，不用像素字", () => {
     const css = readFileSync("src/web/styles.css", "utf8");
     const stack = /--font-ui:\s*([^;]+);/.exec(css)![1]!;
-    expect(stack).not.toMatch(/Inter/);
-    const order = ["-apple-system", "BlinkMacSystemFont", '"SF Pro Text"', '"PingFang SC"', "sans-serif"].map((f) => stack.indexOf(f));
+    expect(stack).not.toMatch(/Inter|Pixel|Tiny5|Silkscreen/);
+    const order = ['"Geist Variable"', "-apple-system", "BlinkMacSystemFont", '"SF Pro Text"', '"PingFang SC"', '"Microsoft YaHei"', "sans-serif"].map((f) => stack.indexOf(f));
     expect(order.every((i) => i >= 0)).toBe(true);
     expect(order).toEqual(order.toSorted((a, b) => a - b));
+    expect(css.match(/@import "@fontsource-variable\/geist";/g)).toHaveLength(1);
     expect(readFileSync("src/web/main.tsx", "utf8")).not.toMatch(/fontsource/);
-    expect(readFileSync("package.json", "utf8")).not.toMatch(/fontsource/);
+    expect(JSON.parse(readFileSync("package.json", "utf8")).dependencies).toHaveProperty("@fontsource-variable/geist");
   });
 });
 

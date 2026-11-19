@@ -70,7 +70,7 @@ const dest = (over: Partial<RouterTurnDestination> = {}): RouterTurnDestination 
   conversationId: 1,
   name: "小林",
   projectName: "agent-hub",
-  avatarKey: 1,
+  pmId: 1,
   opLabel: null,
   forwardMessageId: 10,
   ...over,

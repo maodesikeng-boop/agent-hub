@@ -139,7 +139,7 @@ async function bootSingle(snapshot: StateSnapshot) {
   return { api, ws: FakeWebSocket.last };
 }
 
-describe("桌面右栏：App 接通果皮轨与切面轮", () => {
+describe("桌面右栏：App 接通果冻管道与嫩芽进度图标", () => {
   it("渲染当前项目的活跃任务图；绑图 Piece 不进 Pieces，门禁提问不进 Needs You；点节点进那个 Piece 的对话", async () => {
     const user = userEvent.setup();
     await bootSingle(graphSnapshot());
@@ -147,7 +147,7 @@ describe("桌面右栏：App 接通果皮轨与切面轮", () => {
 
     const graphs = within(rail).getByRole("region", { name: /^Task Graph$/ });
     expect(within(graphs).getByText("发布流水线")).toBeInTheDocument();
-    expect(graphs.querySelector("[data-slot='slice-wheel']")).toBeInTheDocument();
+    expect(graphs.querySelector("[data-slot='task-progress']")).toBeInTheDocument();
     // 等你拍板的步骤在右栏只有一行，作答在对话里
     expect(within(graphs).getByTestId("peel-gate-row")).toHaveTextContent("确认上线");
     expect(within(graphs).queryByTestId("peel-gate-card")).toBeNull();
@@ -369,8 +369,7 @@ describe("桌面右栏：App 接通果皮轨与切面轮", () => {
     const graphs = await waitFor(() => within(sidePanel()).getByRole("region", { name: /^Task Graph$/ }));
     await user.click(within(graphs).getByRole("button", { name: "Zoom" }));
     const zoom = await screen.findByRole("dialog", { name: "发布流水线" });
-    // running 节点展示同色系果皮浅晕圆环，且滚动视口不带 -mx-6 防止贴边裁切
-    expect(zoom.querySelector("[data-running-ring]")).not.toBeNull();
+    expect(zoom.querySelector("[data-step='running']")).toHaveTextContent("构建产物");
     expect(zoom.querySelector("[data-slot='dialog-body']")?.className).not.toContain("-mx-6");
 
     await user.click(within(zoom).getByRole("button", { name: "Cancel graph" }));
@@ -426,7 +425,7 @@ describe("桌面右栏：App 接通果皮轨与切面轮", () => {
 });
 
 describe("手机抽屉：同一份 RailGroups", () => {
-  it("抽屉里有果皮轨与切面轮，门禁提问同样去重；点节点先关抽屉再进 Piece", async () => {
+  it("抽屉里有果冻管道与嫩芽进度图标，门禁提问同样去重；点节点先关抽屉再进 Piece", async () => {
     vi.stubGlobal("matchMedia", (query: string) => ({
       matches: query.includes("coarse"),
       addEventListener() {},
@@ -438,7 +437,7 @@ describe("手机抽屉：同一份 RailGroups", () => {
     fireEvent.click(toggle);
     const drawer = await screen.findByRole("dialog", { name: "Pieces" });
     const graphs = within(drawer).getByRole("region", { name: /^Task Graph$/ });
-    expect(graphs.querySelector("[data-slot='slice-wheel']")).toBeInTheDocument();
+    expect(graphs.querySelector("[data-slot='task-progress']")).toBeInTheDocument();
     expect(within(drawer).queryByText(/门禁提问/)).toBeNull();
     expect(within(drawer).queryByRole("button", { name: "绑图的活" })).toBeNull();
     fireEvent.click(within(graphs).getByRole("button", { name: /构建产物/ }));

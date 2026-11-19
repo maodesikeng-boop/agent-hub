@@ -1,4 +1,5 @@
 // 数据库行 ↔ src/shared 的形状（驼峰 ↔ 下划线、JSON、布尔）。
+import { isJellyColorId, isPmFruit } from "../../shared/slimes.ts";
 import type {
   Conversation,
   ConversationKind,
@@ -23,10 +24,16 @@ import { parseReviewTarget } from "../../shared/review.ts";
 import type { ScheduleKind, ScheduleRecord, ScheduleStatus } from "../../shared/schedule.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
 
+/**
+ * 读项目经理一律用它（再接 WHERE、ORDER BY）：带上归档时间和换过的形象（pm_looks，没换过是 NULL）。
+ * pms.avatar_file 从 0001 就有，一直没人写，不读。
+ */
+export const PM_SELECT =
+  "SELECT p.*, a.archived_at, l.fruit AS look_fruit, l.color AS look_color FROM pms p LEFT JOIN pm_archives a ON a.pm_id = p.id LEFT JOIN pm_looks l ON l.pm_id = p.id";
+
 export interface PmDbRow {
   id: number;
   name: string;
-  avatar_file: string | null;
   mode: string;
   default_model: string | null;
   persona_file: string | null;
@@ -38,6 +45,9 @@ export interface PmDbRow {
   persona_file_hash: string | null;
   created_at: number;
   archived_at?: number | null;
+  /** pm_looks 的造型、颜色（PM_SELECT 带出来）；没换过、或不是用 PM_SELECT 读的是 NULL / 没有。 */
+  look_fruit?: string | null;
+  look_color?: string | null;
 }
 
 export interface ProjectDbRow {
@@ -160,7 +170,9 @@ export function toPm(row: PmDbRow): Pm {
   return {
     id: row.id,
     name: row.name,
-    avatarFile: row.avatar_file,
+    // 别的版本写进来的、名录里没有的值当默认（shared/slimes.ts 的 resolvePmLook 也会兜底）
+    avatarFruit: isPmFruit(row.look_fruit) ? row.look_fruit : null,
+    avatarColor: isJellyColorId(row.look_color) ? row.look_color : null,
     mode: row.mode as PmMode,
     vendor: row.vendor as AgentVendor,
     defaultModel: row.default_model,

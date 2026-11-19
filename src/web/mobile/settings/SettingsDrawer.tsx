@@ -1,6 +1,6 @@
 // 手机设置的底部抽屉（docs/ui-standard.md 第 10 条“抽屉”）：承载短表单向导（改名、连到中心、邀请、添加）与危险操作二次确认。
 // 底层是 ui/drawer.tsx（vaul），调用方不直接 import vaul；按钮全宽 44px（h-11），危险确认是红色 destructive + outline Cancel。
-import { Loader2 } from "lucide-react";
+import { Loader2 } from "../../ui/icons.ts";
 import { useCallback, useState, type ReactNode } from "react";
 import type { ErrorLike } from "../../format.ts";
 import { RowError } from "../../components/SettingsList.tsx";
@@ -53,7 +53,7 @@ export function ConfirmBody({
       {error && <RowError error={error} />}
       <div className="grid grid-cols-1 gap-2">
         <Button variant="destructive" className={DRAWER_BUTTON} disabled={busy} onClick={onConfirm}>
-          {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
+          {busy && <Loader2 aria-hidden="true" />}
           {confirmLabel}
         </Button>
         <Button variant="outline" className={DRAWER_BUTTON} disabled={busy} onClick={onCancel}>

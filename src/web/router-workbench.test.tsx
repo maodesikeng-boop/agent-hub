@@ -315,11 +315,11 @@ describe("Router 第 2 波：路由与默认落地页", () => {
     expect(screen.queryByRole("region", { name: "Needs You" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Load earlier" })).toBeNull();
 
-    // 空态：半透明水果刀 + All clear
+    // 空态：半透明嫩芽铃 + All clear
     const main = container.querySelector("main")!;
     const allClear = within(main).getByText("All clear");
     expect(allClear).toBeInTheDocument();
-    expect(allClear.parentElement?.querySelector("[data-slot='knife-avatar']")).toHaveClass("opacity-40");
+    expect(allClear.parentElement?.querySelector("[data-slot='router-avatar']")).toHaveClass("opacity-40");
   });
 
   it("手机外壳空 hash 保持列表页首页（置顶挂 Router 入口且不带激活底色），点击进入 #/router，左上角 Back 退回列表页", async () => {
@@ -347,8 +347,8 @@ describe("Router 第 2 波：路由与默认落地页", () => {
   });
 });
 
-describe("左栏置顶水果刀入口（宽栏 / 72px 窄栏 / 多机去重）", () => {
-  it("宽栏与窄栏置顶渲染 KnifeAvatar，副标题与徽标按优先级实时刷新，选中态中性灰不含 --jelly，多设备不再重复渲染左栏 Needs You 分组", async () => {
+describe("左栏置顶嫩芽铃入口（宽栏 / 72px 窄栏 / 多机去重）", () => {
+  it("宽栏与窄栏置顶渲染 RouterAvatar，副标题与徽标按优先级实时刷新，选中态中性灰不含 --jelly，多设备不再重复渲染左栏 Needs You 分组", async () => {
     const localSnap = makeSnapshot({
       pms: [makePm({ id: 1, name: "小林" })],
       projects: [makeProject({ id: 10, name: "agent-hub", pmId: 1, conversationId: 1 })],
@@ -427,7 +427,7 @@ describe("左栏置顶水果刀入口（宽栏 / 72px 窄栏 / 多机去重）",
     const railAside = await screen.findByRole("complementary");
     const railBtn = await within(railAside).findByRole("button", { name: /Router/ });
     expect(railBtn).toHaveAttribute("aria-current", "page");
-    expect(railBtn.querySelector("[data-slot='knife-avatar']")).not.toBeNull();
+    expect(railBtn.querySelector("[data-slot='router-avatar']")).not.toBeNull();
     expect(railBtn.querySelector(".bg-status-active")).not.toBeNull();
   });
 });
@@ -854,9 +854,9 @@ describe("时间流：指令回合", () => {
     expect(bubble.className).toContain("bg-bubble-me");
     expect(bubble.className).toContain("rounded-[22px]");
     expect(bubble.closest("[data-side='right']")).not.toBeNull();
-    // 总助的结果：水果刀头像 + Router，Markdown 全文
+    // 总助的结果：嫩芽铃头像 + Router，Markdown 全文
     expect(within(turn).getByText("Router")).toBeInTheDocument();
-    expect(turn.querySelector("[data-slot='knife-avatar']")).not.toBeNull();
+    expect(turn.querySelector("[data-slot='router-avatar']")).not.toBeNull();
     const reply = turn.querySelector(".markdown")!;
     expect(reply.querySelector("strong")).toHaveTextContent("本机（MacBook）");
     expect(reply.textContent).not.toContain("**");

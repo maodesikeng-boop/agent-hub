@@ -186,7 +186,8 @@ const ledgerCalls = () =>
   ledger.archived.length +
   ledger.unarchived.length +
   ledger.capabilityReads.length +
-  ledger.capabilityPatches.length;
+  ledger.capabilityPatches.length +
+  ledger.lookCalls.length;
 
 describe("没登录", () => {
   const apiRequests: Array<[Method, string, unknown?]> = [
@@ -396,7 +397,7 @@ describe("GET /api/state 和 /messages?before=", () => {
       ...ledger.snapshotValue,
       seq: 0,
       pms: [
-        { id: 1, name: "项目经理", avatarFile: null, mode: "manage_only", vendor: "claude", defaultModel: null, effort: null, personaFile: null, createdAt: 1 },
+        { id: 1, name: "项目经理", mode: "manage_only", vendor: "claude", defaultModel: null, effort: null, personaFile: null, createdAt: 1 },
       ],
       projects: [],
       folders: [],
@@ -459,7 +460,7 @@ describe("GET /api/state 和 /messages?before=", () => {
   it("项目经理更早的已收工 Worker 一页：before 可不带；项目经理不存在 404", async () => {
     ledger.snapshotValue = {
       ...ledger.snapshotValue,
-      pms: [{ id: 1, name: "小林", avatarFile: null, mode: "manage_only", vendor: "claude", defaultModel: null, effort: null, personaFile: null, createdAt: 1, archivedAt: null }],
+      pms: [{ id: 1, name: "小林", mode: "manage_only", vendor: "claude", defaultModel: null, effort: null, personaFile: null, createdAt: 1, archivedAt: null }],
     };
     expect((await call("GET", API_PATHS.endedWorkers(1, null))).json()).toEqual({ conversations: [], sessions: [], nextBefore: null });
     expect((await call("GET", API_PATHS.endedWorkers(1, 40))).statusCode).toBe(200);
@@ -649,6 +650,7 @@ describe("停止 POST /api/conversations/:id/stop", () => {
 const NEW_ENDPOINTS: Array<[string, Method, string, unknown?]> = [
   ["POST /api/pms", "POST", "/api/pms", NEW_PM],
   ["PUT persona", "PUT", "/api/pms/1/persona", { text: "新正文" }],
+  ["PUT look", "PUT", "/api/pms/1/look", { fruit: "kiwi", color: null }],
   ["PATCH capabilities", "PATCH", "/api/pms/1/capabilities", { set: { "skill:aws-auth": false } }],
   ["POST revert", "POST", "/api/persona-changes/1/revert"],
   ["POST schedule", "POST", "/api/pms/1/schedules", { name: "晨报", prompt: "x", daily: "09:00" }],
@@ -2643,5 +2645,46 @@ describe("Router 与 TaskGraph 轨道 A 接口", () => {
     } finally {
       await slowApp.close();
     }
+  });
+});
+
+describe("PUT /api/pms/:id/look（docs/slime-cohesion-design.md）", () => {
+  const withPm = () => {
+    ledger.snapshotValue = { ...ledger.snapshotValue, pms: [{ id: 3, name: "小林", mode: "manage_only", vendor: "claude", defaultModel: null, effort: null, personaFile: null, createdAt: 1 }] };
+  };
+
+  it("两项都给（可为 null）时调 setPmLook，回 { pm }", async () => {
+    withPm();
+    const res = await call("PUT", "/api/pms/3/look", { body: { fruit: "persimmon", color: "sky" } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ pm: { id: 3, avatarFruit: "persimmon", avatarColor: "sky" } });
+    expect((await call("PUT", "/api/pms/3/look", { body: { fruit: null, color: null } })).statusCode).toBe(200);
+    expect(ledger.lookCalls).toEqual([
+      { pmId: 3, look: { fruit: "persimmon", color: "sky" } },
+      { pmId: 3, look: { fruit: null, color: null } },
+    ]);
+  });
+
+  it.each([
+    ["少一项", { fruit: "kiwi" }],
+    ["多字段", { fruit: "kiwi", color: "sky", extra: 1 }],
+    ["造型不在名录里", { fruit: "durian", color: null }],
+    ["颜色不在名录里", { fruit: null, color: "neon" }],
+    ["不是字符串", { fruit: 3, color: null }],
+  ])("%s 回 400，不调 setPmLook", async (_name, body) => {
+    withPm();
+    expect((await call("PUT", "/api/pms/3/look", { body })).statusCode).toBe(400);
+    expect(ledger.lookCalls).toEqual([]);
+  });
+
+  it("项目经理不存在回 404", async () => {
+    const res = await call("PUT", "/api/pms/9/look", { body: { fruit: "kiwi", color: null } });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("POST /api/pms 可以带新建弹窗里选的形象，两项都要是名录里的", async () => {
+    expect((await call("POST", "/api/pms", { body: { ...NEW_PM, look: { fruit: "kiwi", color: "teal" } } })).statusCode).toBe(201);
+    expect(ledger.createdPms.at(-1)).toMatchObject({ look: { fruit: "kiwi", color: "teal" } });
+    expect((await call("POST", "/api/pms", { body: { ...NEW_PM, look: { fruit: "kiwi", color: null } } })).statusCode).toBe(400);
   });
 });

@@ -8,11 +8,12 @@ import { MessageList } from "./components/MessageList.tsx";
 import { displayText, type AgentIdentity, type MessageActions } from "./components/Messages.tsx";
 import type { PendingMessage } from "./state.ts";
 import { makeMessage, makeSession, makeSystemMessage, makeToolMessage, makeUserMessage, makeWorkerLine } from "./test-utils.ts";
-import { PALETTE } from "./lib/palette.ts";
+import { jellyColorOf, slimePaths } from "../shared/slimes.ts";
 
-const ORANGE = PALETTE.find((c) => c.fruit === "orange")!;
+import { defaultLookOf } from "../shared/slimes.ts";
+const ORANGE = jellyColorOf("orange");
 
-const pm: AgentIdentity = { name: "小林", avatarKey: 1 };
+const pm: AgentIdentity = { name: "小林", look: defaultLookOf(1) };
 const actions = (over: Partial<MessageActions> = {}): MessageActions => ({
   retry: {},
   onOpenWorker: () => {},
@@ -254,7 +255,7 @@ describe("Worker 的发言", () => {
   });
 
   it("Worker 对话里：项目经理的话是项目经理的水果小动物头像 + 名字，Worker 自己是同一只小动物的纸片分身头像", () => {
-    const worker: AgentIdentity = { name: "修 X", avatarKey: pm.avatarKey, neutral: true };
+    const worker: AgentIdentity = { name: "修 X", look: pm.look, neutral: true };
     const { container } = list([makeMessage({ id: 1, sender: "pm", text: "任务：修 X", status: "replied" }), makeMessage({ id: 2, text: "好的" })], {
       agentOf: (m) => (m.sender === "pm" ? pm : worker),
     });
@@ -262,17 +263,17 @@ describe("Worker 的发言", () => {
     expect(all.map((h) => h.textContent)).toEqual(["小林", "修 X"]);
     expect(all[0]!.querySelector("[data-slot='avatar']")).not.toHaveAttribute("data-neutral");
     expect(all[1]!.querySelector("[data-slot='avatar']")).toHaveAttribute("data-neutral", "true");
-    const pmImg = all[0]!.querySelector("img") as HTMLImageElement;
-    const workerImg = all[1]!.querySelector("img") as HTMLImageElement;
-    expect(pmImg.getAttribute("src")).toBe(ORANGE.main);
-    expect(workerImg.getAttribute("src")).toBe(ORANGE.piece);
+    const fillsOf = (el: Element) => [...el.querySelectorAll("[data-slot='avatar'] path")].map((p) => p.getAttribute("fill"));
+    expect(fillsOf(all[0]!)).toEqual(slimePaths(pm.look, "main").map((p) => p.fill));
+    expect(fillsOf(all[1]!)).toEqual(slimePaths(pm.look, "piece").map((p) => p.fill));
   });
 
-  it("项目经理对话里 Worker 汇报的头像使用所属项目经理那只小动物的纸片分身（而非按 workerId 取）", () => {
+  it("项目经理对话里 Worker 汇报的头像是所属项目经理颜色的便签小灵（而非按 workerId 取）", () => {
     const { container } = list([report()]);
     const row = container.querySelector("[data-worker-report]") as HTMLElement;
-    const img = row.querySelector("[data-slot='avatar'] img") as HTMLImageElement;
-    expect(img.getAttribute("src")).toBe(ORANGE.piece);
+    const avatar = row.querySelector("[data-slot='avatar']")!;
+    expect(avatar).toHaveAttribute("data-neutral", "true");
+    expect([...avatar.querySelectorAll("path")].map((p) => p.getAttribute("fill"))).toContain(ORANGE.roles.light);
   });
 });
 

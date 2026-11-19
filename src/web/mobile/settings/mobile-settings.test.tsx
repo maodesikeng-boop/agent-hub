@@ -227,7 +227,7 @@ describe("一级设置主页", () => {
     expect(main.textContent).not.toMatch(/[·|]/);
     for (const row of within(main).getAllByRole("button").filter((b) => b.dataset.slot === "settings-nav-row")) {
       expect(row.className).toContain("min-h-12");
-      expect(row.querySelector("svg.lucide-chevron-right")).not.toBeNull();
+      expect(row.querySelector(":scope > svg[data-icon='pixel']:last-child")).toBeInTheDocument();
     }
   });
 
