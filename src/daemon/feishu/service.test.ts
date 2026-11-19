@@ -3013,4 +3013,424 @@ describe("createFeishuService：启动与断线重连入站主动补拉（Inboun
     expect(peakConcurrent).toBeLessThanOrEqual(FEISHU_INBOUND_CATCHUP_CONCURRENCY);
     expect(waited).toBeLessThan(650);
   });
+
+  it("N1 第一轮补拉还在跑时又闪断并重连：第一轮整轮收尾不得放开第二次重连加的闸门，避免实时消息抢跑跳过两段断线消息", async () => {
+    let clockNow = 1_730_090_000_000;
+    await svc.close();
+    fake = createFakeFeishu({ clock: () => clockNow });
+    fake.granted = [...FEISHU_REQUIRED_SCOPES, FEISHU_GROUP_MSG_SCOPE];
+    svc = makeService({ now: () => clockNow });
+    await connect();
+    const linChat = chatOf(lin.pmId);
+    const rChat = routerChat();
+    clockNow += 5_000;
+    fake.handlers!.onDisconnected("drop 1");
+    offlineUserMessage(linChat, "第一次断网", { createTime: clockNow + 1_000 });
+    clockNow += 60_000;
+    let releaseRouter!: () => void;
+    const routerHold = new Promise<void>((r) => { releaseRouter = r; });
+    let linFirst = true;
+    let routerFirst = true;
+    let linReturned!: () => void;
+    const linDone = new Promise<void>((r) => { linReturned = r; });
+    fake.beforeListMessages = async (args) => {
+      if (args.container_id === rChat && routerFirst) {
+        routerFirst = false;
+        await routerHold;
+      }
+      if (args.container_id === linChat && linFirst) {
+        linFirst = false;
+        fake.handlers!.onDisconnected("drop 2 during catch-up");
+        offlineUserMessage(linChat, "第二次断网", { createTime: clockNow + 1_000 });
+        clockNow += 60_000;
+        linReturned();
+      }
+    };
+    fake.handlers!.onConnected();
+    await linDone;
+    await new Promise((r) => setTimeout(r, 20));
+    const origCall = fake.call.bind(fake);
+    fake.call = (async (method: string, args: unknown) => {
+      if (method === "application.scopes") await new Promise((r) => setTimeout(r, 100));
+      return origCall(method as never, args as never);
+    }) as typeof fake.call;
+    fake.handlers!.onConnected();
+    fake.event({
+      type: "im.message.receive_v1",
+      messageId: "om_n1_live",
+      chatId: linChat,
+      chatType: "group",
+      senderOpenId: OWNER,
+      senderType: "user",
+      content: "重连后实时",
+      mentionedBot: false,
+      threadId: null,
+      resources: [],
+      createTime: clockNow,
+    });
+    releaseRouter();
+    await settle();
+    fake.beforeListMessages = null;
+    fake.call = origCall;
+    expect(userMessages(lin.conversationId).map((m) => m.text)).toEqual(["第一次断网", "第二次断网", "重连后实时"]);
+    clockNow += 5_000;
+    fake.handlers!.onDisconnected("drop 3");
+    clockNow += 5_000;
+    fake.handlers!.onConnected();
+    await settle();
+    expect(userMessages(lin.conversationId).map((m) => m.text)).toEqual(["第一次断网", "第二次断网", "重连后实时"]);
+  });
+
+  it("N1b 第一轮整轮尚未结束时先返回的单会话 finally 不得提前放开第二次重连加的该会话闸门", async () => {
+    let clockNow = 1_730_100_000_000;
+    await svc.close();
+    fake = createFakeFeishu({ clock: () => clockNow });
+    fake.granted = [...FEISHU_REQUIRED_SCOPES, FEISHU_GROUP_MSG_SCOPE];
+    svc = makeService({ now: () => clockNow });
+    await connect();
+    const linChat = chatOf(lin.pmId);
+    const zhouChat = chatOf(zhou.pmId);
+    const rChat = routerChat();
+    clockNow += 5_000;
+    fake.handlers!.onDisconnected("drop 1");
+    offlineUserMessage(linChat, "第一次断网", { createTime: clockNow + 1_000 });
+    clockNow += 80_000;
+
+    let releaseLin!: () => void;
+    const linHold = new Promise<void>((r) => { releaseLin = r; });
+    let releaseZhou!: () => void;
+    const zhouHold = new Promise<void>((r) => { releaseZhou = r; });
+    let linFirst = true;
+    let zhouFirst = true;
+    let routerFirst = true;
+    let bothHeld = 0;
+    let notifyHeld!: () => void;
+    const heldReady = new Promise<void>((r) => { notifyHeld = r; });
+    let droppedInRouter!: () => void;
+    const routerDropped = new Promise<void>((r) => { droppedInRouter = r; });
+    fake.beforeListMessages = async (args) => {
+      if (args.container_id === linChat && linFirst) {
+        linFirst = false;
+        if (++bothHeld === 2) notifyHeld();
+        await linHold;
+      }
+      if (args.container_id === zhouChat && zhouFirst) {
+        zhouFirst = false;
+        if (++bothHeld === 2) notifyHeld();
+        await zhouHold;
+      }
+      if (args.container_id === rChat && routerFirst) {
+        routerFirst = false;
+        await heldReady;
+        fake.handlers!.onDisconnected("drop 2 while lin and zhou still in flight");
+        clockNow += 80_000;
+        offlineUserMessage(linChat, "第二次断网", { createTime: clockNow + 1_000 });
+        clockNow += 60_000;
+        droppedInRouter();
+      }
+    };
+
+    fake.handlers!.onConnected();
+    await routerDropped;
+    await new Promise((r) => setTimeout(r, 15));
+    const origCall = fake.call.bind(fake);
+    fake.call = (async (method: string, args: unknown) => {
+      if (method === "application.scopes") await new Promise((r) => setTimeout(r, 80));
+      return origCall(method as never, args as never);
+    }) as typeof fake.call;
+    fake.handlers!.onConnected();
+    fake.event({
+      type: "im.message.receive_v1",
+      messageId: "om_n1b_live",
+      chatId: linChat,
+      chatType: "group",
+      senderOpenId: OWNER,
+      senderType: "user",
+      content: "重连后实时",
+      mentionedBot: false,
+      threadId: null,
+      resources: [],
+      createTime: clockNow,
+    });
+    releaseLin();
+    await new Promise((r) => setTimeout(r, 30));
+    fake.beforeListMessages = null;
+    releaseZhou();
+    await settle();
+    fake.call = origCall;
+    expect(userMessages(lin.conversationId).map((m) => m.text)).toEqual(["第一次断网", "第二次断网", "重连后实时"]);
+  });
+
+  it("N1c 未经 onDisconnected 直接连续触发 onConnected 时，第一轮旧时间窗在途请求返回后不得放闸门漏掉空档消息", async () => {
+    let clockNow = 1_730_110_000_000;
+    await svc.close();
+    fake = createFakeFeishu({ clock: () => clockNow });
+    fake.granted = [...FEISHU_REQUIRED_SCOPES, FEISHU_GROUP_MSG_SCOPE];
+    svc = makeService({ now: () => clockNow });
+    await connect();
+    const linChat = chatOf(lin.pmId);
+    clockNow += 5_000;
+    fake.handlers!.onDisconnected("drop 1");
+    offlineUserMessage(linChat, "第一段漏收", { createTime: clockNow + 1_000 });
+    clockNow += 60_000;
+
+    let releaseLin!: () => void;
+    const linHold = new Promise<void>((r) => { releaseLin = r; });
+    let linEntered!: () => void;
+    const linReady = new Promise<void>((r) => { linEntered = r; });
+    let linFirst = true;
+    fake.beforeListMessages = async (args) => {
+      if (args.container_id === linChat && linFirst) {
+        linFirst = false;
+        linEntered();
+        await linHold;
+      }
+    };
+
+    fake.handlers!.onConnected();
+    await linReady;
+    clockNow += 90_000;
+    offlineUserMessage(linChat, "重握手空档漏收", { createTime: clockNow });
+    clockNow += 60_000;
+    const origCall = fake.call.bind(fake);
+    fake.call = (async (method: string, args: unknown) => {
+      if (method === "application.scopes") await new Promise((r) => setTimeout(r, 50));
+      return origCall(method as never, args as never);
+    }) as typeof fake.call;
+    fake.handlers!.onConnected();
+    fake.event({
+      type: "im.message.receive_v1",
+      messageId: "om_n1c_live",
+      chatId: linChat,
+      chatType: "group",
+      senderOpenId: OWNER,
+      senderType: "user",
+      content: "重握手后实时",
+      mentionedBot: false,
+      threadId: null,
+      resources: [],
+      createTime: clockNow,
+    });
+    fake.beforeListMessages = null;
+    releaseLin();
+    await settle();
+    fake.call = origCall;
+    expect(userMessages(lin.conversationId).map((m) => m.text)).toEqual(["第一段漏收", "重握手空档漏收", "重握手后实时"]);
+  });
+
+  it("N1d 总助单聊在补拉期间二次闪断重连，不因首轮收尾误放闸门而漏收主人指令", async () => {
+    let clockNow = 1_730_120_000_000;
+    await svc.close();
+    fake = createFakeFeishu({ clock: () => clockNow });
+    fake.granted = [...FEISHU_REQUIRED_SCOPES, FEISHU_GROUP_MSG_SCOPE];
+    svc = makeService({ now: () => clockNow });
+    await connect();
+    const linChat = chatOf(lin.pmId);
+    const zhouChat = chatOf(zhou.pmId);
+    const rChat = routerChat();
+    routerCalls = [];
+    clockNow += 5_000;
+    fake.handlers!.onDisconnected("drop 1");
+    offlineUserMessage(rChat, "总助断网指令一", { p2p: true, createTime: clockNow + 1_000 });
+    clockNow += 60_000;
+
+    let releaseZhou!: () => void;
+    const zhouHold = new Promise<void>((r) => { releaseZhou = r; });
+    let zhouEntered!: () => void;
+    const zhouReady = new Promise<void>((r) => { zhouEntered = r; });
+    let linFirst = true;
+    let zhouFirst = true;
+    let linDone!: () => void;
+    const linDropped = new Promise<void>((r) => { linDone = r; });
+    fake.beforeListMessages = async (args) => {
+      if (args.container_id === zhouChat && zhouFirst) {
+        zhouFirst = false;
+        zhouEntered();
+        await zhouHold;
+      }
+      if (args.container_id === linChat && linFirst) {
+        linFirst = false;
+        await zhouReady;
+        fake.handlers!.onDisconnected("drop 2");
+        offlineUserMessage(rChat, "总助断网指令二", { p2p: true, createTime: clockNow + 1_000 });
+        clockNow += 60_000;
+        linDone();
+      }
+    };
+
+    fake.handlers!.onConnected();
+    await linDropped;
+    await new Promise((r) => setTimeout(r, 15));
+    const origCall = fake.call.bind(fake);
+    fake.call = (async (method: string, args: unknown) => {
+      if (method === "application.scopes") await new Promise((r) => setTimeout(r, 60));
+      return origCall(method as never, args as never);
+    }) as typeof fake.call;
+    fake.handlers!.onConnected();
+    fake.event({
+      type: "im.message.receive_v1",
+      messageId: "om_n1d_live",
+      chatId: rChat,
+      chatType: "p2p",
+      senderOpenId: OWNER,
+      senderType: "user",
+      content: "总助实时指令三",
+      mentionedBot: false,
+      threadId: null,
+      resources: [],
+      createTime: clockNow,
+    });
+    fake.beforeListMessages = null;
+    releaseZhou();
+    await settle();
+    fake.call = origCall;
+    expect(routerCalls.map((c) => c.text)).toEqual(["总助断网指令一", "总助断网指令二", "总助实时指令三"]);
+  });
+
+  it("N1e 连续三次闪断重连跨三代交错：前两轮收尾均不得放开第三代闸门，三段断网消息全部找回", async () => {
+    let clockNow = 1_730_130_000_000;
+    await svc.close();
+    fake = createFakeFeishu({ clock: () => clockNow });
+    fake.granted = [...FEISHU_REQUIRED_SCOPES, FEISHU_GROUP_MSG_SCOPE];
+    svc = makeService({ now: () => clockNow });
+    await connect();
+    const linChat = chatOf(lin.pmId);
+    const rChat = routerChat();
+    clockNow += 5_000;
+    fake.handlers!.onDisconnected("drop 1");
+    offlineUserMessage(linChat, "断网一", { createTime: clockNow + 1_000 });
+    clockNow += 60_000;
+
+    let releaseR1!: () => void;
+    const holdR1 = new Promise<void>((r) => { releaseR1 = r; });
+    let releaseR2!: () => void;
+    const holdR2 = new Promise<void>((r) => { releaseR2 = r; });
+    let routerRound = 0;
+    let linRound = 0;
+    let drop2Done!: () => void;
+    const drop2Ready = new Promise<void>((r) => { drop2Done = r; });
+    let drop3Done!: () => void;
+    const drop3Ready = new Promise<void>((r) => { drop3Done = r; });
+    fake.beforeListMessages = async (args) => {
+      if (args.container_id === rChat) {
+        routerRound++;
+        if (routerRound === 1) await holdR1;
+        else if (routerRound === 2) await holdR2;
+      }
+      if (args.container_id === linChat) {
+        linRound++;
+        if (linRound === 1) {
+          fake.handlers!.onDisconnected("drop 2");
+          offlineUserMessage(linChat, "断网二", { createTime: clockNow + 1_000 });
+          clockNow += 60_000;
+          drop2Done();
+        } else if (linRound === 2) {
+          fake.handlers!.onDisconnected("drop 3");
+          offlineUserMessage(linChat, "断网三", { createTime: clockNow + 1_000 });
+          clockNow += 60_000;
+          drop3Done();
+        }
+      }
+    };
+
+    fake.handlers!.onConnected();
+    await drop2Ready;
+    await new Promise((r) => setTimeout(r, 15));
+    fake.handlers!.onConnected();
+    releaseR1();
+    await drop3Ready;
+    await new Promise((r) => setTimeout(r, 15));
+    const origCall = fake.call.bind(fake);
+    fake.call = (async (method: string, args: unknown) => {
+      if (method === "application.scopes") await new Promise((r) => setTimeout(r, 60));
+      return origCall(method as never, args as never);
+    }) as typeof fake.call;
+    fake.handlers!.onConnected();
+    fake.event({
+      type: "im.message.receive_v1",
+      messageId: "om_n1e_live",
+      chatId: linChat,
+      chatType: "group",
+      senderOpenId: OWNER,
+      senderType: "user",
+      content: "三次重连实时",
+      mentionedBot: false,
+      threadId: null,
+      resources: [],
+      createTime: clockNow,
+    });
+    fake.beforeListMessages = null;
+    releaseR2();
+    await settle();
+    fake.call = origCall;
+    expect(userMessages(lin.conversationId).map((m) => m.text)).toEqual(["断网一", "断网二", "断网三", "三次重连实时"]);
+  });
+
+  it("N1f 短时二次闪断重连落在 30 秒重叠窗口内时，不得因首轮误放闸门导致补拉队列失活或实时消息乱序抢跑", async () => {
+    let clockNow = 1_730_140_000_000;
+    await svc.close();
+    fake = createFakeFeishu({ clock: () => clockNow });
+    fake.granted = [...FEISHU_REQUIRED_SCOPES, FEISHU_GROUP_MSG_SCOPE];
+    svc = makeService({ now: () => clockNow });
+    await connect();
+    const linChat = chatOf(lin.pmId);
+    const rChat = routerChat();
+    clockNow += 3_000;
+    fake.handlers!.onDisconnected("short drop 1");
+    offlineUserMessage(linChat, "先发的断网一", { createTime: clockNow + 1_000 });
+    clockNow += 5_000;
+
+    let releaseRouter!: () => void;
+    const routerHold = new Promise<void>((r) => { releaseRouter = r; });
+    let linFirst = true;
+    let routerFirst = true;
+    let linDone!: () => void;
+    const linDropped = new Promise<void>((r) => { linDone = r; });
+    fake.beforeListMessages = async (args) => {
+      if (args.container_id === rChat && routerFirst) {
+        routerFirst = false;
+        await routerHold;
+      }
+      if (args.container_id === linChat && linFirst) {
+        linFirst = false;
+        fake.handlers!.onDisconnected("short drop 2");
+        offlineUserMessage(linChat, "再发的断网二", { createTime: clockNow + 1_000 });
+        clockNow += 5_000;
+        linDone();
+      }
+    };
+
+    fake.handlers!.onConnected();
+    await linDropped;
+    await new Promise((r) => setTimeout(r, 15));
+    const origCall = fake.call.bind(fake);
+    fake.call = (async (method: string, args: unknown) => {
+      if (method === "application.scopes") await new Promise((r) => setTimeout(r, 60));
+      return origCall(method as never, args as never);
+    }) as typeof fake.call;
+    fake.handlers!.onConnected();
+    fake.event({
+      type: "im.message.receive_v1",
+      messageId: "om_n1f_live",
+      chatId: linChat,
+      chatType: "group",
+      senderOpenId: OWNER,
+      senderType: "user",
+      content: "最后发的实时三",
+      mentionedBot: false,
+      threadId: null,
+      resources: [],
+      createTime: clockNow,
+    });
+    fake.beforeListMessages = null;
+    releaseRouter();
+    const settled = await Promise.race([
+      settle().then(() => true),
+      new Promise<boolean>((r) => setTimeout(() => r(false), 400)),
+    ]);
+    fake.call = origCall;
+    if (!settled) fake.handlers!.onDisconnected("drain deadlocked lane before close");
+    expect(userMessages(lin.conversationId).map((m) => m.text)).toEqual(["先发的断网一", "再发的断网二", "最后发的实时三"]);
+    expect(settled).toBe(true);
+  });
 });
