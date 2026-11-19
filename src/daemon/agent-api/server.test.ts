@@ -518,6 +518,21 @@ describe("agent api over inject", () => {
       expect((await call("ask", { text: "看看", files: [{ label: null, path: "/work/foo/plan.md" }] })).statusCode).toBe(403);
       expect(ledger.sharedFileCalls).toEqual([]);
     });
+
+    it("认过人之后、存副本之前令牌作废了（会话结束）：401，不存副本、不调账本", async () => {
+      await app.close();
+      app = createAgentApi({ ledger, tokens });
+      // 排在认人的钩子和请求体校验后面、路由处理前面：模拟收请求体期间会话结束
+      app.addHook("preHandler", async () => {
+        tokens.revoke(11);
+      });
+      await app.ready();
+      const res = await call("ask", { text: "看看", files: [{ label: null, path: "/work/foo/plan.md" }] });
+      expect(res.statusCode).toBe(401);
+      expect(res.json().code).toBe("unauthorized");
+      expect(ledger.sharedFileCalls).toEqual([]);
+      expect(ledger.calls).toHaveLength(0);
+    });
   });
 
   describe("hub models：调 hubCall 之前先异步取模型目录", () => {

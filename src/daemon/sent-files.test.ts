@@ -34,6 +34,7 @@ import {
   prepareSentFilesDir,
   sentFileId,
   sensitivePathsOf,
+  shareFilePaths,
   shareLinkedFiles,
   type ShareScope,
 } from "./sent-files.ts";
@@ -448,6 +449,37 @@ describe("边界", () => {
     utimesSync(dir, old, old);
     (await share(`[a](${md})`));
     expect(Date.now() - statSync(dir).mtimeMs).toBeLessThan(60_000);
+  });
+
+  it("同一个文件并发发 80 次（10 轮、每轮 8 个同时发）：全部存下、编号相同，每轮只留一份副本", async () => {
+    const src = write(join(proj, "ordinary.txt"), Buffer.alloc(256 * 1024, 65));
+    for (let round = 0; round < 10; round++) {
+      const dir = join(base, `sent-${round}`);
+      const results = await Promise.all(Array.from({ length: 8 }, () => shareFilePaths([src], { ...scope, sentFilesDir: dir })));
+      const files = results.map(([file]) => file!);
+      expect(files.map((f) => f.status)).toEqual(Array(8).fill("saved"));
+      expect(new Set(files.map((f) => f.id)).size).toBe(1);
+      expect(readdirSync(dir)).toEqual([files[0]!.id]);
+      expect(readFileSync(join(dir, files[0]!.id!, "ordinary.txt"))).toEqual(Buffer.alloc(256 * 1024, 65));
+    }
+  });
+
+  it("副本的位置被别的东西占着（文件、名字或大小对不上的目录）：不当成已有副本，照实报读不了，不留半截目录", async () => {
+    const src = write(join(proj, "a.md"), "v1");
+    const id = sentFileId("a.md", sha256("v1"));
+    mkdirSync(sentDir, { recursive: true });
+    writeFileSync(join(sentDir, id), "not a copy");
+    expect((await share(`[a](${src})`)).map((f) => [f.status, f.id])).toEqual([["unreadable", null]]);
+    expect(copies()).toEqual([id]);
+
+    rmSync(join(sentDir, id));
+    write(join(sentDir, id, "other.md"), "v1");
+    expect((await share(`[a](${src})`)).map((f) => [f.status, f.id])).toEqual([["unreadable", null]]);
+    rmSync(join(sentDir, id), { recursive: true });
+    write(join(sentDir, id, "a.md"), "v1-truncated");
+    expect((await share(`[a](${src})`)).map((f) => [f.status, f.id])).toEqual([["unreadable", null]]);
+    expect(copies()).toEqual([id]);
+    expect(readdirSync(join(sentDir, id))).toEqual(["a.md"]);
   });
 
   it("同样内容、不同文件名：各存一份（副本目录里放的是文件名）", async () => {
