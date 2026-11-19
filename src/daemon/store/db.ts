@@ -19,8 +19,9 @@ export interface Db {
   get<T = Record<string, unknown>>(sql: string, ...params: SqlValue[]): T | undefined;
   all<T = Record<string, unknown>>(sql: string, ...params: SqlValue[]): T[];
   /**
-   * BEGIN IMMEDIATE / COMMIT，fn 抛错就 ROLLBACK 再抛出去。fn 必须是同步的。
-   * 已经在事务里时直接并入外层（外层回滚时一起回滚）。
+   * BEGIN IMMEDIATE / COMMIT，fn 抛错就 ROLLBACK 再抛出去。
+   * 已经在事务里时开 SAVEPOINT：fn 抛错只回滚到这个 savepoint 并释放它，外层接住后照常提交；fn 正常返回就释放，随外层一起提交或回滚。
+   * fn 必须是同步的：返回 Promise（在事务里 await）按出错处理，回滚后抛错。
    */
   transaction<T>(fn: () => T): T;
   readonly inTransaction: boolean;
@@ -50,6 +51,36 @@ export function openDatabase(file: string, options: { maxStatements?: number } =
     return stmt;
   };
 
+  const runSync = <T>(fn: () => T): T => {
+    const result = fn();
+    if (typeof (result as { then?: unknown } | null)?.then === "function") {
+      // 这次调用已经按出错回滚；那个 Promise 之后再失败也不该变成未处理的拒绝
+      Promise.resolve(result).catch(() => undefined);
+      throw new Error("db.transaction 的回调必须是同步的：异步 I/O 放在开事务之前做完，事务里不能 await");
+    }
+    return result;
+  };
+
+  const nested = <T>(fn: () => T): T => {
+    const savepoint = `sp_${depth}`;
+    raw.exec(`SAVEPOINT ${savepoint}`);
+    depth++;
+    try {
+      const result = runSync(fn);
+      raw.exec(`RELEASE SAVEPOINT ${savepoint}`);
+      return result;
+    } catch (error) {
+      // SQLite 自己整体回滚过（磁盘满、I/O 错）时 savepoint 已经不在了，交给外层的 ROLLBACK
+      if (raw.isTransaction) {
+        raw.exec(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+        raw.exec(`RELEASE SAVEPOINT ${savepoint}`);
+      }
+      throw error;
+    } finally {
+      depth--;
+    }
+  };
+
   return {
     exec(sql) {
       raw.exec(sql);
@@ -65,15 +96,15 @@ export function openDatabase(file: string, options: { maxStatements?: number } =
       return prepare(sql).all(...params) as T[];
     },
     transaction(fn) {
-      if (depth > 0) return fn();
+      if (depth > 0) return nested(fn);
       raw.exec("BEGIN IMMEDIATE");
       depth++;
       try {
-        const result = fn();
+        const result = runSync(fn);
         raw.exec("COMMIT");
         return result;
       } catch (error) {
-        raw.exec("ROLLBACK");
+        if (raw.isTransaction) raw.exec("ROLLBACK");
         throw error;
       } finally {
         depth--;
