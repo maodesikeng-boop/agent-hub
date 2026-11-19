@@ -14,7 +14,7 @@ function headerRecord(headers: RequestInit["headers"]): Record<string, string> {
  * 后置：path 以 / 开头；回的 Response 体是流（大文件不落内存）；连不上、被 signal 叫停时 reject。
  * 101、204、205、304 和 HEAD 的响应体是 null。
  */
-export function agentFetch(agent: Agent, path: string, init: RequestInit = {}): Promise<Response> {
+export function agentFetch(agent: Agent, path: string, init: Omit<RequestInit, "body"> & { body?: RequestInit["body"] | Readable } = {}): Promise<Response> {
   const method = init.method ?? "GET";
   return new Promise<Response>((resolve, reject) => {
     const req = httpRequest(
@@ -40,6 +40,9 @@ export function agentFetch(agent: Agent, path: string, init: RequestInit = {}): 
       req.end();
     } else if (typeof body === "string" || body instanceof Uint8Array) {
       req.end(body);
+    } else if (body instanceof Readable) {
+      body.on("error", (error) => req.destroy(error));
+      body.pipe(req);
     } else if (body instanceof ReadableStream) {
       const stream = Readable.fromWeb(body as NodeReadableStream);
       stream.on("error", (error) => req.destroy(error));

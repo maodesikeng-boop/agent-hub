@@ -158,7 +158,7 @@ export async function proxyHttp(req: FastifyRequest, reply: FastifyReply, target
       method: req.method,
       headers,
       signal: controller.signal,
-      ...(hasBody ? { body: Readable.toWeb(req.raw) as ReadableStream<Uint8Array> } : {}),
+      ...(hasBody ? { body: req.raw } : {}),
     });
   } catch {
     reply.raw.off("close", onClientGone);
