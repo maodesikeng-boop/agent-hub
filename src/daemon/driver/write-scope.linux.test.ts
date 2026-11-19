@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { workerWriteScope } from "../../shared/index.ts";
+import { dataDirReadScope, workerWriteScope } from "../../shared/index.ts";
 import { EXPECTED_PROBE_OUTPUT, makeSandboxDataDir, readProbeScript } from "./data-dir-fixture.ts";
 import { forceKill, isAlive, signalChild, signalTarget, termGroupAfterExit } from "./process.ts";
 import { FAKE_CLAUDE, makeHarness, realSleep, type Harness } from "./test-helpers.ts";
@@ -98,7 +98,7 @@ describe.runIf(process.platform === "linux" && osSandboxAvailable("linux"))("真
       'if unshare -U true 2>/dev/null; then echo UNSHARE_OK; else echo UNSHARE_BLOCKED; fi',
     ].join("; ");
 
-    const run = wrapInOsSandbox({ command: "/bin/sh", args: ["-c", script] }, { dataDir, writableDirs: [own] }, "linux");
+    const run = wrapInOsSandbox({ command: "/bin/sh", args: ["-c", script] }, { dataDir, writableDirs: [own], readScope: dataDirReadScope({ dataDir }) }, "linux");
     expect(run.osSandboxed).toBe(true);
     const out = execFileSync(run.command, run.args, {
       env: { ...process.env, D: dataDir, O: own, TMPDIR: root },
@@ -145,7 +145,7 @@ describe.runIf(process.platform === "linux" && osSandboxAvailable("linux"))("真
     }
   });
 
-  it("只读 Worker：除 tmpDir、writableDirs、已存在匹配 writableFileGlobs 外全盘禁写；敏感目录与敏感文件（含 scanSecretGlobs 扫出的 .env）禁读", () => {
+  it("只读 Worker：除 tmpDir、writableDirs、已存在匹配 writableFileGlobs 外全盘禁写；敏感目录与敏感文件（含 scanSecretGlobs 扫出的 .env）禁读", async () => {
     const roRoot = join(root, "ro");
     const work = join(roRoot, "work");
     const tmp = join(roRoot, "tmp");
@@ -169,7 +169,7 @@ describe.runIf(process.platform === "linux" && osSandboxAvailable("linux"))("真
     writeFileSync(agentapi, "old");
     writeFileSync(otherBin, "old");
 
-    const scanned = scanSecretGlobs([work], ["**/.env", "**/.env.*"]);
+    const scanned = await scanSecretGlobs([work], ["**/.env", "**/.env.*"]);
     expect(scanned.sort()).toEqual([envFile, envLocalFile].sort());
 
     const script = [
@@ -224,7 +224,7 @@ describe.runIf(process.platform === "linux" && osSandboxAvailable("linux"))("真
       writeFileSync(${JSON.stringify(readyFile)}, "1");
       setInterval(() => {}, 1000);
     `;
-    const wrapped = wrapInOsSandbox({ command: process.execPath, args: ["-e", cliScript] }, { dataDir, writableDirs: [own] }, "linux");
+    const wrapped = wrapInOsSandbox({ command: process.execPath, args: ["-e", cliScript] }, { dataDir, writableDirs: [own], readScope: dataDirReadScope({ dataDir }) }, "linux");
     const child = spawn(wrapped.command, wrapped.args, { stdio: ["pipe", "pipe", "pipe"], detached: true });
     leftovers.push(child.pid!);
 
@@ -255,7 +255,7 @@ describe.runIf(process.platform === "linux" && osSandboxAvailable("linux"))("真
         writeFileSync(${JSON.stringify(readyFile)}, String(bg.pid));
         setInterval(() => {}, 1000);
       `;
-      const wrapped = wrapInOsSandbox({ command: process.execPath, args: ["-e", cliScript] }, { dataDir, writableDirs: [own] }, "linux");
+      const wrapped = wrapInOsSandbox({ command: process.execPath, args: ["-e", cliScript] }, { dataDir, writableDirs: [own], readScope: dataDirReadScope({ dataDir }) }, "linux");
       const child = spawn(wrapped.command, wrapped.args, { stdio: ["pipe", "pipe", "pipe"], detached: true });
       const bwrapPid = child.pid!;
       leftovers.push(bwrapPid);
@@ -306,7 +306,7 @@ describe.runIf(process.platform === "linux" && osSandboxAvailable("linux"))("真
     mkdirSync(cwd, { recursive: true });
     const probe = join(dataDir, "probe.txt");
     h.launch.env = { FAKE_CLAUDE_PROBE: probe };
-    h.launch.writeScope = { dataDir, writableDirs: [cwd] };
+    h.launch.writeScope = { dataDir, writableDirs: [cwd], readScope: dataDirReadScope({ dataDir }) };
 
     const s = h.addSession({ role: "worker", cwd });
     await h.driver.send(s.id, { messageIds: [1], source: "user", text: "hi" });
@@ -321,7 +321,7 @@ describe.runIf(process.platform === "linux" && osSandboxAvailable("linux"))("真
     const straySessionId = "stray-linux-bwrap-session";
     const strayWrapped = wrapInOsSandbox(
       { command: FAKE_CLAUDE, args: ["-p", "--session-id", straySessionId] },
-      { dataDir, writableDirs: [cwd] },
+      { dataDir, writableDirs: [cwd], readScope: dataDirReadScope({ dataDir }) },
       "linux",
     );
     const stray: ChildProcess = spawn(strayWrapped.command, strayWrapped.args, {

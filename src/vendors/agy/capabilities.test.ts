@@ -3,6 +3,7 @@ import { EMPTY_TOKEN_USAGE, type AgentSessionRow } from "../../shared/domain.ts"
 import type { LaunchFiles } from "../../shared/driver.ts";
 import type { SessionCapabilities } from "../../shared/pm-capabilities.ts";
 import { buildReadonlyPolicy } from "../../shared/readonly-policy.ts";
+import { dataDirReadScope } from "../../shared/write-scope.ts";
 import { vendorSpec } from "../../shared/vendors.ts";
 import { agyCapabilityDenyRules } from "./capabilities.ts";
 import { buildAgyArgs } from "./protocol.ts";
@@ -75,7 +76,7 @@ describe("buildAgyArgs 能力路径的 --settings（agy 只认最后一个 --set
       promptFile: "/launch/1/prompt.md",
       env: {},
       fingerprint: "fp",
-      writeScope: { dataDir: "/Users/test/.agent-hub", writableDirs: ["/repo"] },
+      writeScope: { dataDir: "/Users/test/.agent-hub", writableDirs: ["/repo"], readScope: dataDirReadScope({ dataDir: "/Users/test/.agent-hub" }) },
       capabilities: caps,
     };
     const argv = [...(vendorSpec("agy").capabilities.ownSandboxOffArgs ?? []), ...buildAgyArgs(agySession(), files, false)];

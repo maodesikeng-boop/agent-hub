@@ -19,6 +19,7 @@ import remarkParse from "remark-parse";
 import { unified } from "unified";
 import {
   CREDENTIAL_HOME_PATHS,
+  DATA_DIR_READABLE_ENTRIES,
   LOG_PREFIX,
   MAX_SENT_FILE_BYTES,
   MAX_SENT_FILES_PER_MESSAGE,
@@ -111,7 +112,7 @@ export function sensitivePathsOf(userHome: string): string[] {
 
 /**
  * realpath 之后的路径能不能分享：不在敏感路径清单里（sensitivePathsOf）、不在任何 .git/ 里；
- * 在数据目录里的只认 dataExceptions；其余要在某个允许的文件夹里。sensitive 不传就现算（单个路径判断用）；一条消息里判断多个链接时算一次传下去。
+ * 在数据目录里的只认 dataExceptions，而且要在 Worker 的读边界之内；其余要在某个允许的文件夹里。sensitive 不传就现算（单个路径判断用）；一条消息里判断多个链接时算一次传下去。
  * 边界：硬链接查不出来（项目里一个硬链接指向 ~/.ssh/id_rsa 的同一个 inode，路径看着在项目里）。不拦：agent 本来就有 shell，
  * 能把任何文件 cp 进项目再发；这里防的是误发、被诱导写出敏感路径，不是防 agent 本身。也不查 nlink：nlink>1 会误拦 pnpm 硬链接出来的
  * node_modules 文件，又拦不住 cp。
@@ -125,7 +126,11 @@ export function isShareable(
   if (sensitive.some((dir) => within(real, dir))) return false;
   const reals = (paths: string[]) => paths.map(realOrNull).filter((p): p is string => p !== null);
   const dataHome = realOrNull(scope.dataHome);
-  if (dataHome !== null && within(real, dataHome)) return reals(scope.dataExceptions).some((dir) => within(real, dir));
+  if (dataHome !== null && within(real, dataHome)) {
+    // 数据目录里分享的不能超出 Worker 的读边界（shared/write-scope.ts 的 DATA_DIR_READABLE_ENTRIES）：state/、backups/ 等哪怕配进了例外也不分享
+    const readable = reals(DATA_DIR_READABLE_ENTRIES.map((entry) => join(dataHome, entry)));
+    return readable.some((dir) => within(real, dir)) && reals(scope.dataExceptions).some((dir) => within(real, dir));
+  }
   return reals(scope.roots).some((dir) => within(real, dir));
 }
 

@@ -39,13 +39,46 @@ function createAclRunner(max: number) {
 
 const protectedRoots = createAclRunner(WIN_PROTECTED_ROOTS_CACHE_MAX);
 const workerWorktrees = createAclRunner(WIN_WORKER_ACL_CACHE_MAX);
+const readBoundary = createAclRunner(WIN_WORKER_ACL_CACHE_MAX);
 
 export function resetVerifiedProtectedRootsForTest(): void {
   protectedRoots.clear();
   workerWorktrees.clear();
+  readBoundary.clear();
 }
 
-/** Runs `fusa-run.exe probe` to verify Job Object + `WRITE_RESTRICTED` token + NTFS ACL enforcement. */
+function runAclHelper(args: string[], env: Record<string, string | undefined> | undefined) {
+  return execFileAsync(requireWinHelperBinary("fusa-run.exe", { env }), args, { timeout: WIN_HELPER_PROBE_TIMEOUT_MS * 2, windowsHide: true });
+}
+
+/** 数据目录读边界：数据目录设可继承的 `DENY FusaWorker` 读（内容、扩展属性、执行），沙箱里的 Worker 列不了、读不了。 */
+export function denyWin32WorkerReadAcl(stateDir: string, dataDir: string, options?: { env?: Record<string, string | undefined> }): Promise<void> {
+  const key = `deny\0${normalizePathForComparison(stateDir)}\0${normalizePathForComparison(dataDir)}`;
+  return readBoundary.run(key, () => runAclHelper(["acl", "deny-read", "--state-dir", stateDir, "--path", dataDir], options?.env));
+}
+
+/**
+ * 在禁读的数据目录里放行读：不带 reader 时给所有 Worker（worktrees、uploads、tools、run\bin），
+ * 带 reader 时只给这一个会话的 `FusaRead-<reader>`（它自己的启动目录）。
+ */
+export function allowWin32WorkerReadAcl(
+  stateDir: string,
+  path: string,
+  options?: { reader?: string; env?: Record<string, string | undefined> },
+): Promise<void> {
+  const reader = options?.reader;
+  const key = `allow\0${normalizePathForComparison(stateDir)}\0${reader ?? ""}\0${normalizePathForComparison(path)}`;
+  return readBoundary.run(key, () =>
+    runAclHelper(["acl", "allow-read", "--state-dir", stateDir, ...(reader === undefined ? [] : ["--reader", reader]), "--path", path], options?.env),
+  );
+}
+
+/** 管理命名管道（admin）设 `DENY FusaWorker`：沙箱里的 Worker 连不上，哪怕和守护进程是同一个用户。 */
+export function denyWin32WorkerPipeAccess(stateDir: string, pipePath: string, options?: { env?: Record<string, string | undefined> }): Promise<void> {
+  return runAclHelper(["acl", "deny-pipe", "--state-dir", stateDir, "--path", pipePath], options?.env).then(() => undefined);
+}
+
+/** Runs `fusa-run.exe probe` to verify Job Object + restricted token + NTFS ACL enforcement (write deny and data-dir read deny). */
 export function runWin32SandboxProbe(options?: {
   stateDir?: string;
   env?: Record<string, string | undefined>;

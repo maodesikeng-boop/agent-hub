@@ -81,9 +81,10 @@ Use Chat only and Collaborator with people you trust. Guest messages can instruc
 ### Worker 系统沙箱与只读模式
 
 - 在受保护根目录内，普通 Worker 只能写分给自己的 worktree。受保护根包含 Bellwood 数据目录和其他卷上的 worktree 根。在这些根目录之外，普通 Worker 拥有当前系统用户的读写与联网权限。项目经理以当前系统用户身份运行，不进沙箱。
-- macOS 使用 `sandbox-exec`。Linux 使用 `bubblewrap`。Windows 使用 `fusa-run.exe`，以 Job Object 管理进程树，并通过写受限令牌与拒写 NTFS ACL 保护目录。
-- 只读策略仅允许写会话私有临时目录和厂商运行所需的路径，并限制读取已知凭据路径，包括界面令牌、飞书凭据及组网私钥。文件通配规则的覆盖因平台和厂商而异。账本、日志与网络仍可访问。MCP 连接器默认放行声明 `readOnlyHint: true` 且未声明 `destructiveHint: true` 的工具，并可以通过显式规则调整。
-- Windows 11 24H2 或更新版本在能力探测通过时可使用 `@microsoft/mxc-sdk` 的 ProcessContainer 实施外层只读沙箱。旧版 Windows 或 MXC 不可用时，需要外层沙箱的只读 Worker 会降级为写受限令牌和工具层检查。Bellwood 会显示告警，因为降级路径无法保证全盘只读或禁止读取所有配置的凭据路径。
+- Worker（普通与只读）读不到数据目录，只能读 `worktrees/`、`uploads/`、`tools/`、`run/bin/` 与本会话的启动目录，只能连 `run/hub.sock`。界面令牌、各类密钥、账本数据库、日志、备份、项目经理记忆与 `run/admin.sock` 都在边界之外。
+- macOS 使用 `sandbox-exec`。Linux 使用 `bubblewrap`。Windows 使用 `fusa-run.exe`，以 Job Object 管理进程树，并通过受限令牌与 NTFS ACL 实施数据目录的禁写与禁读。
+- 只读策略仅允许写会话私有临时目录和厂商运行所需的路径，并限制读取已知凭据路径与整个数据目录。文件通配规则的覆盖因平台和厂商而异。网络仍可访问。MCP 连接器默认放行声明 `readOnlyHint: true` 且未声明 `destructiveHint: true` 的工具，并可以通过显式规则调整。
+- Windows 11 24H2 或更新版本在能力探测通过时可使用 `@microsoft/mxc-sdk` 的 ProcessContainer 实施外层只读沙箱。旧版 Windows 或 MXC 不可用时，需要外层沙箱的只读 Worker 会降级为受限令牌和工具层检查。Bellwood 会显示告警，因为降级路径无法保证全盘只读或禁止读取所有配置的凭据路径。
 
 ### 账号组网与盲转中继
 

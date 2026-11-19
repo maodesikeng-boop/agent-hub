@@ -1,4 +1,4 @@
-use crate::sids::{ensure_worker_sid, load_or_create_sid_store};
+use crate::sids::{ensure_reader_sid, ensure_worker_sid, load_or_create_sid_store};
 use crate::win::token::current_user_sid_bytes;
 use crate::win::util::{to_wide, win32_code_error, LocalSid, OwnedHandle};
 use std::ffi::c_void;
@@ -22,9 +22,9 @@ use windows_sys::Win32::Security::{
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, DELETE, FILE_APPEND_DATA, FILE_ATTRIBUTE_NORMAL, FILE_DELETE_CHILD,
-    FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ,
-    FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES, FILE_WRITE_DATA, FILE_WRITE_EA, OPEN_EXISTING,
-    READ_CONTROL, SYNCHRONIZE, WRITE_DAC, WRITE_OWNER,
+    FILE_EXECUTE, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_READ_DATA,
+    FILE_READ_EA, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES, FILE_WRITE_DATA,
+    FILE_WRITE_EA, OPEN_EXISTING, READ_CONTROL, SYNCHRONIZE, WRITE_DAC, WRITE_OWNER,
 };
 use windows_sys::Win32::System::Pipes::WaitNamedPipeW;
 use windows_sys::Win32::System::SystemServices::{
@@ -50,8 +50,17 @@ pub const WORKER_ALLOW_MODIFY_MASK: u32 = FILE_GENERIC_READ
     | DELETE
     | FILE_DELETE_CHILD;
 
+/// Read side of the data-dir boundary: content, extended attributes and execute/traverse. Attributes stay readable
+/// (tools walking up for config files stat these paths); traversal itself is bypassed by `SeChangeNotifyPrivilege`.
+pub const WORKER_DENY_READ_MASK: u32 = FILE_READ_DATA | FILE_READ_EA | FILE_EXECUTE;
+
+/// Re-allowed entries (`worktrees\`, `uploads\`, `tools\`, `run\bin\`, a session's own launch dir): read and execute.
+pub const WORKER_ALLOW_READ_MASK: u32 = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
+
 const CHECK_DENY_BITS: u32 =
     FILE_WRITE_DATA | FILE_APPEND_DATA | DELETE | FILE_DELETE_CHILD | WRITE_DAC | WRITE_OWNER;
+const CHECK_DENY_READ_BITS: u32 = FILE_READ_DATA | FILE_EXECUTE;
+const CHECK_ALLOW_READ_BITS: u32 = FILE_READ_DATA | FILE_EXECUTE;
 const CHECK_ALLOW_BITS: u32 =
     FILE_WRITE_DATA | FILE_APPEND_DATA | DELETE | FILE_DELETE_CHILD;
 
@@ -323,8 +332,8 @@ pub fn allow_worker_worktree(
 
 /// Windows 0700 equivalent for `state\`, `run\`, `backups\`:
 /// Sets a protected DACL (`SE_DACL_PROTECTED`) granting FULL_CONTROL only to current user + SYSTEM,
-/// while explicitly retaining `DENY FusaWorker` write ACE + `OWNER RIGHTS: READ_CONTROL` so
-/// blocking parent inheritance never lets sandboxed Workers write into `state\`!
+/// while explicitly retaining `DENY FusaWorker` write + read ACE + `OWNER RIGHTS: READ_CONTROL` so
+/// blocking parent inheritance never lets sandboxed Workers write into or read `state\`!
 pub fn harden_private_dir(state_dir: &Path, dir_path: &Path) -> io::Result<bool> {
     fs::create_dir_all(dir_path)?;
     let store = load_or_create_sid_store(state_dir)?;
@@ -347,6 +356,13 @@ pub fn harden_private_dir(state_dir: &Path, dir_path: &Path) -> io::Result<bool>
                 ACCESS_DENIED_ACE_TYPE as u8,
                 INHERIT_CI_OI as u8,
                 CHECK_DENY_BITS,
+                false,
+            ) && dacl_has_ace(
+                dacl,
+                worker_group.as_ptr(),
+                ACCESS_DENIED_ACE_TYPE as u8,
+                INHERIT_CI_OI as u8,
+                CHECK_DENY_READ_BITS,
                 false,
             ) && dacl_has_ace(
                 dacl,
@@ -377,7 +393,7 @@ pub fn harden_private_dir(state_dir: &Path, dir_path: &Path) -> io::Result<bool>
         make_explicit_access(
             worker_group.as_ptr(),
             DENY_ACCESS,
-            WORKER_DENY_WRITE_MASK,
+            WORKER_DENY_WRITE_MASK | WORKER_DENY_READ_MASK,
             INHERIT_CI_OI,
         ),
         make_explicit_access(
@@ -440,6 +456,206 @@ pub fn harden_private_dir(state_dir: &Path, dir_path: &Path) -> io::Result<bool>
         }
     }
     res
+}
+
+/// Adds an inheritable explicit ACE for `sid` on `path` unless one with `check_bits` already exists.
+fn ensure_inheritable_ace(
+    path: &Path,
+    sid: *mut c_void,
+    mode: i32,
+    mask: u32,
+    ace_type: u8,
+    check_bits: u32,
+    what: &str,
+) -> io::Result<bool> {
+    let (dacl, sd) = read_named_dacl(path)?;
+    let already_ok =
+        unsafe { dacl_has_ace(dacl, sid, ace_type, INHERIT_CI_OI as u8, check_bits, false) };
+    if already_ok {
+        if !sd.is_null() {
+            unsafe {
+                LocalFree(sd as HLOCAL);
+            }
+        }
+        return Ok(false);
+    }
+    let explicit = make_explicit_access(sid, mode, mask, INHERIT_CI_OI);
+    let mut new_dacl: *mut ACL = std::ptr::null_mut();
+    let code = unsafe { SetEntriesInAclW(1, &explicit, dacl, &mut new_dacl) };
+    let res = if code != ERROR_SUCCESS {
+        Err(win32_code_error(&format!("SetEntriesInAclW({what})"), code))
+    } else {
+        let mut wide = to_wide(path);
+        let set_code = unsafe {
+            SetNamedSecurityInfoW(
+                wide.as_mut_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                new_dacl,
+                std::ptr::null(),
+            )
+        };
+        if set_code != ERROR_SUCCESS {
+            Err(win32_code_error(
+                &format!("SetNamedSecurityInfoW({what} {})", path.display()),
+                set_code,
+            ))
+        } else {
+            Ok(true)
+        }
+    };
+    if !new_dacl.is_null() {
+        unsafe {
+            LocalFree(new_dacl as HLOCAL);
+        }
+    }
+    if !sd.is_null() {
+        unsafe {
+            LocalFree(sd as HLOCAL);
+        }
+    }
+    res
+}
+
+/// Data-dir read boundary: inheritable `DENY FusaWorker` read ACE on the data dir, so sandboxed Workers can neither
+/// list nor read anything under it except what `allow_read` re-opens (explicit ACEs sort before inherited ones).
+pub fn deny_read(state_dir: &Path, path: &Path) -> io::Result<bool> {
+    let store = load_or_create_sid_store(state_dir)?;
+    let worker_group = LocalSid::from_string(&store.worker_group_sid)?;
+    ensure_inheritable_ace(
+        path,
+        worker_group.as_ptr(),
+        DENY_ACCESS,
+        WORKER_DENY_READ_MASK,
+        ACCESS_DENIED_ACE_TYPE as u8,
+        CHECK_DENY_READ_BITS,
+        "deny_read",
+    )
+}
+
+/// Re-opens read inside the data dir: for every Worker (`FusaWorker`) when `reader` is `None`
+/// (`worktrees\`, `uploads\`, `tools\`, `run\bin\`), or only for one session's `FusaRead-<reader>`
+/// (its own `state\launch\<id>`).
+pub fn allow_read(state_dir: &Path, reader: Option<&str>, path: &Path) -> io::Result<bool> {
+    let sid_str = match reader {
+        Some(key) => ensure_reader_sid(state_dir, key)?,
+        None => load_or_create_sid_store(state_dir)?.worker_group_sid,
+    };
+    let sid = LocalSid::from_string(&sid_str)?;
+    ensure_inheritable_ace(
+        path,
+        sid.as_ptr(),
+        GRANT_ACCESS,
+        WORKER_ALLOW_READ_MASK,
+        ACCESS_ALLOWED_ACE_TYPE as u8,
+        CHECK_ALLOW_READ_BITS,
+        "allow_read",
+    )
+}
+
+fn open_pipe_for_dacl_edit(pipe_path: &str) -> io::Result<OwnedHandle> {
+    let wide = to_wide(pipe_path);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let raw = unsafe {
+            CreateFileW(
+                wide.as_ptr(),
+                READ_CONTROL | WRITE_DAC,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                std::ptr::null(),
+                OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL,
+                std::ptr::null_mut(),
+            )
+        };
+        if !raw.is_null() && raw != INVALID_HANDLE_VALUE {
+            return Ok(OwnedHandle(raw));
+        }
+        let err = io::Error::last_os_error();
+        if err.raw_os_error() == Some(ERROR_PIPE_BUSY as i32) && Instant::now() < deadline {
+            unsafe {
+                let _ = WaitNamedPipeW(wide.as_ptr(), 50);
+            }
+            continue;
+        }
+        return Err(err);
+    }
+}
+
+fn add_pipe_ace(pipe_path: &str, explicit: &EXPLICIT_ACCESS_W, what: &str) -> io::Result<()> {
+    let handle = open_pipe_for_dacl_edit(pipe_path)?;
+    let mut dacl: *mut ACL = std::ptr::null_mut();
+    let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+    let get_code = unsafe {
+        GetSecurityInfo(
+            handle.0,
+            SE_KERNEL_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut dacl,
+            std::ptr::null_mut(),
+            &mut sd,
+        )
+    };
+    if get_code != ERROR_SUCCESS {
+        return Err(win32_code_error(
+            &format!("GetSecurityInfo(pipe {pipe_path})"),
+            get_code,
+        ));
+    }
+    let mut new_dacl: *mut ACL = std::ptr::null_mut();
+    let res = unsafe {
+        let acl_code = SetEntriesInAclW(1, explicit, dacl, &mut new_dacl);
+        if acl_code != ERROR_SUCCESS {
+            Err(win32_code_error(&format!("SetEntriesInAclW({what})"), acl_code))
+        } else {
+            let set_code = SetSecurityInfo(
+                handle.0,
+                SE_KERNEL_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                new_dacl,
+                std::ptr::null(),
+            );
+            if set_code != ERROR_SUCCESS {
+                Err(win32_code_error(
+                    &format!("SetSecurityInfo(pipe {pipe_path})"),
+                    set_code,
+                ))
+            } else {
+                Ok(())
+            }
+        }
+    };
+    if !new_dacl.is_null() {
+        unsafe {
+            LocalFree(new_dacl as HLOCAL);
+        }
+    }
+    if !sd.is_null() {
+        unsafe {
+            LocalFree(sd as HLOCAL);
+        }
+    }
+    res
+}
+
+/// Denies every sandboxed Worker (`FusaWorker`) on a named pipe (the admin pipe): restricted tokens carry
+/// `FusaWorker`, so opening it fails even though the same user owns the pipe.
+pub fn deny_worker_on_named_pipe(state_dir: &Path, pipe_path: &str) -> io::Result<()> {
+    let store = load_or_create_sid_store(state_dir)?;
+    let worker_group = LocalSid::from_string(&store.worker_group_sid)?;
+    let explicit = make_explicit_access(
+        worker_group.as_ptr(),
+        DENY_ACCESS,
+        FILE_GENERIC_READ | FILE_GENERIC_WRITE,
+        0,
+    );
+    add_pipe_ace(pipe_path, &explicit, "deny_pipe")
 }
 
 /// Ensures `\\.\NUL` allows read/write/exec for the given capability SID so `> NUL` works inside restricted tokens.
@@ -511,100 +727,14 @@ pub fn allow_null_device(psid: *mut c_void) {
 /// When the daemon runs under an elevated Administrator token (e.g. CI runners or UAC-off setups),
 /// libuv's default pipe DACL grants write access to `BUILTIN\Administrators` rather than the personal user SID,
 /// which `LUA_TOKEN` disables in sandboxed Workers (`EPERM`). Adding `current_user_sid` allows same-user
-/// sandboxed Workers through both normal and `WRITE_RESTRICTED` checks while keeping other OS users out.
+/// sandboxed Workers through both the normal and the restricted access check while keeping other OS users out.
 pub fn allow_current_user_on_named_pipe(pipe_path: &str) -> io::Result<()> {
     let user_sid = current_user_sid_bytes()?;
-    let user_sid_ptr = user_sid.as_ptr() as *mut c_void;
-    let wide = to_wide(pipe_path);
-    let deadline = Instant::now() + Duration::from_secs(3);
-
-    let handle = loop {
-        let raw = unsafe {
-            CreateFileW(
-                wide.as_ptr(),
-                READ_CONTROL | WRITE_DAC,
-                FILE_SHARE_READ | FILE_SHARE_WRITE,
-                std::ptr::null(),
-                OPEN_EXISTING,
-                FILE_ATTRIBUTE_NORMAL,
-                std::ptr::null_mut(),
-            )
-        };
-        if !raw.is_null() && raw != INVALID_HANDLE_VALUE {
-            break OwnedHandle(raw);
-        }
-        let err = io::Error::last_os_error();
-        if err.raw_os_error() == Some(ERROR_PIPE_BUSY as i32) && Instant::now() < deadline {
-            unsafe {
-                let _ = WaitNamedPipeW(wide.as_ptr(), 50);
-            }
-            continue;
-        }
-        return Err(err);
-    };
-
-    let mut dacl: *mut ACL = std::ptr::null_mut();
-    let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
-    let get_code = unsafe {
-        GetSecurityInfo(
-            handle.0,
-            SE_KERNEL_OBJECT,
-            DACL_SECURITY_INFORMATION,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            &mut dacl,
-            std::ptr::null_mut(),
-            &mut sd,
-        )
-    };
-    if get_code != ERROR_SUCCESS {
-        return Err(win32_code_error(
-            &format!("GetSecurityInfo(pipe {pipe_path})"),
-            get_code,
-        ));
-    }
-
     let explicit = make_explicit_access(
-        user_sid_ptr,
+        user_sid.as_ptr() as *mut c_void,
         GRANT_ACCESS,
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | SYNCHRONIZE,
         0,
     );
-    let mut new_dacl: *mut ACL = std::ptr::null_mut();
-    let res = unsafe {
-        let acl_code = SetEntriesInAclW(1, &explicit, dacl, &mut new_dacl);
-        if acl_code != ERROR_SUCCESS {
-            Err(win32_code_error("SetEntriesInAclW(allow_pipe)", acl_code))
-        } else {
-            let set_code = SetSecurityInfo(
-                handle.0,
-                SE_KERNEL_OBJECT,
-                DACL_SECURITY_INFORMATION,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                new_dacl,
-                std::ptr::null(),
-            );
-            if set_code != ERROR_SUCCESS {
-                Err(win32_code_error(
-                    &format!("SetSecurityInfo(pipe {pipe_path})"),
-                    set_code,
-                ))
-            } else {
-                Ok(())
-            }
-        }
-    };
-
-    if !new_dacl.is_null() {
-        unsafe {
-            LocalFree(new_dacl as HLOCAL);
-        }
-    }
-    if !sd.is_null() {
-        unsafe {
-            LocalFree(sd as HLOCAL);
-        }
-    }
-    res
+    add_pipe_ace(pipe_path, &explicit, "allow_pipe")
 }

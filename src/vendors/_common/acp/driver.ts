@@ -556,10 +556,10 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
     throw new DriverError("spawn_failed", detail);
   }
 
-  #buildReadonlySandboxInput(launch: AcpLaunchContext, policy: ReadonlyPolicy): {
+  async #buildReadonlySandboxInput(launch: AcpLaunchContext, policy: ReadonlyPolicy): Promise<{
     input: ReadonlySandboxInput;
     cleanupTmp: () => void;
-  } {
+  }> {
     const rawTmp = mkdtempSync(join(tmpdir(), "agent-hub-acp-ro-"));
     const tmpDir = realpathOrSelf(rawTmp);
     let cleaned = false;
@@ -600,7 +600,7 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
         ? [
             ...new Set([
               ...policy.secretPaths.map(realpathOrSelf),
-              ...scanSecretGlobs([realCwd, ...row.addDirs.map(realpathOrSelf)], policy.secretGlobs),
+              ...(await scanSecretGlobs([realCwd, ...row.addDirs.map(realpathOrSelf)], policy.secretGlobs)),
             ]),
           ]
         : policy.secretPaths.map(realpathOrSelf);
@@ -618,6 +618,7 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
         secretPaths,
         secretGlobs: [...policy.secretGlobs],
         ...(readableFiles.length > 0 ? { readableFiles } : {}),
+        ...(policy.dataDirScope ? { dataDirScope: policy.dataDirScope } : {}),
       },
       cleanupTmp,
     };
@@ -643,7 +644,7 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
     const extraEnv: Record<string, string> = { ...files.env };
 
     if (files.readonly) {
-      const { input, cleanupTmp } = this.#buildReadonlySandboxInput(launchCtx, files.readonly);
+      const { input, cleanupTmp } = await this.#buildReadonlySandboxInput(launchCtx, files.readonly);
       cleanupReadonlyTmp = cleanupTmp;
       const ownOffArgs = vendorSpec(this.vendor).capabilities.ownSandboxOffArgs ?? [];
       const wrapped = this.#readonlySpawn(

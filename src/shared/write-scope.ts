@@ -1,6 +1,7 @@
 // Worker 可写范围（用户 2026-11-06 定的硬规则）：数据目录（~/.agent-hub）里 Worker 只能写自己的工作目录，别处一律不能新建、改动；
 // 数据目录以外原样不管。项目经理不受限（没有可写范围）。state/（数据库、令牌、性格设定）的保护也在这条里，不再单独一套。
-// 这里只定“能写哪儿”，跟厂商无关；每家怎么落实（OS 沙箱、厂商自己的沙箱和审批……）在 daemon/driver/write-scope.ts 的 WRITE_SCOPE_ENFORCERS。
+// 读也一样按最小权限（DataDirReadScope）：数据目录整个禁读，只放行 Worker 干活要的几处，令牌、密钥、库、记忆和管理 socket 都碰不到。
+// 这里只定“能写、能读哪儿”，跟厂商无关；每家怎么落实（OS 沙箱、厂商自己的沙箱和审批……）在 daemon/driver/write-scope.ts 的 WRITE_SCOPE_ENFORCERS。
 import type { AgentRole } from "./domain.ts";
 
 export interface WriteScope {
@@ -13,10 +14,15 @@ export interface WriteScope {
   protectedRoots?: string[];
   /** 受保护根里仍能写的目录：Worker 自己的 worktree（realpath 过）。在主文件夹干活的 Worker（--no-worktree）是空的。 */
   writableDirs: string[];
+  /** 数据目录的读边界：OS 沙箱按它禁读整个数据目录、只放行几处（dataDirReadScope）。 */
+  readScope: DataDirReadScope;
 }
 
+/** 只判断“能不能写”的函数（scopeAllowsWrite、commandMayWriteOutsideScope、codex 的审批）用到的那几项。 */
+export type WriteBounds = Pick<WriteScope, "dataDir" | "protectedRoots" | "writableDirs">;
+
 /** 取出 WriteScope 的全部去重受保护根目录（始终包含 dataDir）。 */
-export function protectedRootsOf(scope: WriteScope): string[] {
+export function protectedRootsOf(scope: WriteBounds): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   for (const raw of [scope.dataDir, ...(scope.protectedRoots ?? [])]) {
@@ -31,6 +37,51 @@ export function protectedRootsOf(scope: WriteScope): string[] {
 }
 
 /**
+ * 数据目录的读与连接边界（docs/write-scope.md「读边界」）：Worker（普通、只读）和总助单轮会话都按它包 OS 沙箱。
+ * 整个 dataDir 禁读，readable 里的子树放行读（目录按子树，文件按自己），connectable 里的 Unix socket 放行连接，数据目录里别的 socket 一律连不上。
+ * 路径都在 dataDir 里、realpath 过。
+ */
+export interface DataDirReadScope {
+  dataDir: string;
+  readable: string[];
+  connectable: string[];
+}
+
+/**
+ * 数据目录顶层放行读的几项（paths.ts 的 resolveHubPaths 定布局）：Worker 的 worktree、用户上传的文件、受管 npm 装的厂商 CLI。
+ * 其余顶层项（state/、run/、backups/、pm-home/、sent-files/，以及以后新加的、历史遗留的）一律禁读。
+ */
+export const DATA_DIR_READABLE_ENTRIES: readonly string[] = ["worktrees", "uploads", "tools"];
+/** run/ 里放行读的：hub 命令外壳（run/bin/hub、Windows 的 hub.exe）。 */
+export const RUN_DIR_READABLE_ENTRIES: readonly string[] = ["bin"];
+/** run/ 里放行连接的：agent 接口 hub.sock（受会话级 AGENT_HUB_TOKEN 鉴权）。admin.sock、历史遗留的 tunnel 都连不上。 */
+export const RUN_DIR_CONNECTABLE_ENTRIES: readonly string[] = ["hub.sock"];
+
+function joinUnder(base: string, ...parts: string[]): string {
+  const sep = base.includes("\\") && !base.includes("/") ? "\\" : "/";
+  return [base.replace(/[\\/]+$/, ""), ...parts].join(sep);
+}
+
+/**
+ * 一个会话的数据目录读边界。launchDir 是这次会话自己的启动目录 state/launch/<会话>/（提示词、设置文件、技能、规则、审查的 pre-push 钩子），
+ * extraReadable 是会话的 cwd、addDirs：落在数据目录里、又不在放行项下的（总助的 state/router-home）单独放行。
+ */
+export function dataDirReadScope(input: { dataDir: string; launchDir?: string; extraReadable?: readonly string[] }): DataDirReadScope {
+  const dataDir = trimSlash(input.dataDir);
+  const readable = [
+    ...DATA_DIR_READABLE_ENTRIES.map((e) => joinUnder(dataDir, e)),
+    ...RUN_DIR_READABLE_ENTRIES.map((e) => joinUnder(dataDir, "run", e)),
+  ];
+  const covered = (p: string) => readable.some((r) => insideLower(resolveLower(p), resolveLower(r)));
+  for (const raw of [...(input.launchDir === undefined ? [] : [input.launchDir]), ...(input.extraReadable ?? [])]) {
+    const p = trimSlash(raw);
+    if (!isStrictlyInside(p, dataDir) || covered(p)) continue;
+    readable.push(p);
+  }
+  return { dataDir, readable, connectable: RUN_DIR_CONNECTABLE_ENTRIES.map((e) => joinUnder(dataDir, "run", e)) };
+}
+
+/**
  * 这个会话的可写范围：Worker 才有，项目经理（和别的角色）返回 null。
  * 工作目录在任意受保护根（数据目录或同卷 worktree 根）里就放行它；在受保护根外（主文件夹）本来就不受限，不用放行。
  */
@@ -39,6 +90,10 @@ export function workerWriteScope(input: {
   dataDir: string;
   protectedRoots?: readonly string[];
   cwd: string;
+  /** 会话的附加目录：落在数据目录禁读区里的放行读（见 dataDirReadScope）。 */
+  addDirs?: readonly string[];
+  /** 这次会话自己的启动目录 state/launch/<会话>/，放行读。 */
+  launchDir?: string;
 }): WriteScope | null {
   if (input.role !== "worker") return null;
   const dataDir = trimSlash(input.dataDir);
@@ -63,6 +118,11 @@ export function workerWriteScope(input: {
     dataDir,
     protectedRoots: roots,
     writableDirs: insideAnyRoot ? [cwd] : [],
+    readScope: dataDirReadScope({
+      dataDir,
+      ...(input.launchDir === undefined ? {} : { launchDir: input.launchDir }),
+      extraReadable: [cwd, ...(input.addDirs ?? [])],
+    }),
   };
 }
 
@@ -196,7 +256,7 @@ function isStrictlyInside(p: string, dir: string): boolean {
  * 按可写范围这个路径能不能写：不在任何受保护根里、或在放行的目录里就能写。相对路径按 cwd 解析，~/$HOME/%USERPROFILE% 按 homeDir 展开。
  * 给要自己判断路径的地方用（codex 的审批）；能用 OS 沙箱的厂商不靠它。
  */
-export function scopeAllowsWrite(scope: WriteScope, targetPath: string, cwd?: string, homeDir?: string): boolean {
+export function scopeAllowsWrite(scope: WriteBounds, targetPath: string, cwd?: string, homeDir?: string): boolean {
   if (targetPath.trim() === "") return true;
   if (hasUnsafeWindowsColonSyntax(targetPath)) return false;
   const p = resolveLower(targetPath, cwd, homeDir);
@@ -238,7 +298,7 @@ function cdTarget(verb: string, rawArgs: string, dir: string | null): string | n
 }
 
 /** 一段命令会不会写到范围外：工作目录看不出、在范围外，或某个词落在范围外，并且不是只读命令。 */
-function segmentMayWriteOutsideScope(segment: string, scope: WriteScope, dir: string | null, homeDir?: string): boolean {
+function segmentMayWriteOutsideScope(segment: string, scope: WriteBounds, dir: string | null, homeDir?: string): boolean {
   const tokens = segment
     .split(/[\s><|&;'"`()=]+/)
     .map((t) => t.trim())
@@ -254,7 +314,7 @@ function segmentMayWriteOutsideScope(segment: string, scope: WriteScope, dir: st
  * 按 ; && || | 拆成一段段，跟着 cd 换工作目录，每段判断：工作目录在范围外、或某个词按工作目录解析后落在范围外，并且不是 cat、ls 这类只读命令。
  * 看不出不写字面路径的写法（变量、脚本里拼出来的路径、软链接），已知局限见 docs/write-scope.md。
  */
-export function commandMayWriteOutsideScope(command: string, scope: WriteScope, cwd: string, homeDir?: string): boolean {
+export function commandMayWriteOutsideScope(command: string, scope: WriteBounds, cwd: string, homeDir?: string): boolean {
   let dir: string | null = cwd;
   for (const segment of splitShellSegments(command)) {
     const cd = CD_SEGMENT.exec(segment);

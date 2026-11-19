@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { createServer as createNetServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -17,6 +18,7 @@ import {
 } from "../../src/daemon/driver/write-scope.ts";
 import {
   allowWin32WorkerWorktreeAcl,
+  denyWin32WorkerPipeAccess,
   ensureWin32ProtectedRootAcl,
   hardenWin32PrivateDirAcl,
   removeTreeWithRetry,
@@ -25,6 +27,7 @@ import {
 import {
   EMPTY_TOKEN_USAGE,
   buildReadonlyPolicy,
+  dataDirReadScope,
   workerWriteScope,
   type AgentSessionRow,
   type DriverEvent,
@@ -77,7 +80,7 @@ afterEach(async () => {
   }
 });
 
-describe.runIf(process.platform === "win32")("Windows 真机集成：写受限令牌 + ACL 沙箱与无 MXC 只读 Worker 回退", () => {
+describe.runIf(process.platform === "win32")("Windows 真机集成：受限令牌 + ACL 沙箱（禁写、数据目录禁读）与无 MXC 只读 Worker 回退", () => {
   it("fusa-run probe 通过；普通 Worker 拒写 state\\ 与别的 worktree，icacls/takeown/Set-Acl 全败，写本 worktree / %TEMP% / 外部目录与连 hub 管道全通；PM 无沙箱可写 state\\", { timeout: 45_000 }, async () => {
     expect(osSandboxAvailable("win32")).toBe(true);
 
@@ -115,7 +118,20 @@ describe.runIf(process.platform === "win32")("Windows 真机集成：写受限�
     cleanups.push(() => api.close());
     const sessionTok = tokens.issue(524);
 
-    const scope = workerWriteScope({ role: "worker", dataDir, cwd: ownWt })!;
+    // 数据目录读边界：state\ 的令牌、备份读不到，自己会话的启动目录、别的 worktree 读得到，管理管道连不上
+    const launchDir = join(stateDir, "launch", "7");
+    mkdirSync(launchDir, { recursive: true });
+    writeFileSync(join(stateDir, "ui-token"), "UI_TOKEN");
+    writeFileSync(join(launchDir, "prompt.md"), "OWN_PROMPT");
+    mkdirSync(join(dataDir, "backups", "sync"), { recursive: true });
+    writeFileSync(join(dataDir, "backups", "sync", "settings.json.bak"), "BACKUP");
+    const scope = workerWriteScope({ role: "worker", dataDir, cwd: ownWt, launchDir })!;
+    await prepareOsSandboxForLaunch({ dataDir, stateDir, writeScope: scope, readonly: undefined }, "win32");
+    const adminPipe = `\\\\.\\pipe\\fusa-test-admin-${process.pid}`;
+    const adminServer = createNetServer((socket) => socket.end());
+    await new Promise<void>((resolve) => adminServer.listen(adminPipe, () => resolve()));
+    cleanups.push(() => new Promise<void>((resolve) => adminServer.close(() => resolve())));
+    await denyWin32WorkerPipeAccess(stateDir, adminPipe);
     const probeScript = join(externalProj, "sandbox-check.mjs");
     const reportFile = join(externalProj, "report.json");
 
@@ -125,6 +141,7 @@ describe.runIf(process.platform === "win32")("Windows 真机集成：写受限�
 import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
+import { connect } from "node:net";
 import { join } from "node:path";
 
 const tryWrite = (p) => {
@@ -135,6 +152,23 @@ const tryWrite = (p) => {
     return e.code || "err";
   }
 };
+const tryRead = (p) => {
+  try {
+    readFileSync(p);
+    return "read";
+  } catch (e) {
+    return e.code || "err";
+  }
+};
+const uiTokenRead = tryRead(${JSON.stringify(join(stateDir, "ui-token"))});
+const backupRead = tryRead(${JSON.stringify(join(dataDir, "backups", "sync", "settings.json.bak"))});
+const launchRead = tryRead(${JSON.stringify(join(launchDir, "prompt.md"))});
+const otherWtRead = tryRead(${JSON.stringify(join(otherWt, "other.txt"))});
+const adminPipe = await new Promise((resolve) => {
+  const s = connect(${JSON.stringify(adminPipe)});
+  s.on("connect", () => { s.destroy(); resolve("connected"); });
+  s.on("error", (e) => resolve(e.code || "err"));
+});
 
 const stateWrite = tryWrite(${JSON.stringify(join(stateDir, "pwn.txt"))});
 const dataRootWrite = tryWrite(${JSON.stringify(join(dataDir, "pwn.txt"))});
@@ -220,6 +254,11 @@ writeFileSync(
     setAclCode: setAclRes.status,
     nulCode: nulRedir.status,
     pipeStatus,
+    uiTokenRead,
+    backupRead,
+    launchRead,
+    otherWtRead,
+    adminPipe,
   }),
 );
 `,
@@ -256,6 +295,11 @@ writeFileSync(
     expect(report.setAclCode).not.toBe(0);
     expect(report.nulCode).toBe(0);
     expect(report.pipeStatus).toBe(200);
+    expect(report.uiTokenRead).not.toBe("read");
+    expect(report.backupRead).not.toBe("read");
+    expect(report.launchRead).toBe("read");
+    expect(report.otherWtRead).toBe("read");
+    expect(report.adminPipe).not.toBe("connected");
 
     // 兄弟 Worker 525 尝试篡改或删除 Worker 524 新建的嵌套子目录文件必须被拒绝；随后主守护进程可正常删除
     const siblingScope = workerWriteScope({ role: "worker", dataDir, cwd: otherWt })!;
@@ -297,7 +341,7 @@ writeFileSync(
     expect(readFileSync(pmFile, "utf8")).toBe("pm-ok");
   });
 
-  it("非 codex 只读 Worker 在无 MXC 环境下绝不硬拒：自动回退为 4.4.2 写受限令牌 + 受保护根禁写 + 工具层禁写，并发出清晰降级告警", { timeout: 30_000 }, async () => {
+  it("非 codex 只读 Worker 在无 MXC 环境下绝不硬拒：自动回退为 4.4.2 受限令牌 + 受保护根禁写、数据目录禁读 + 工具层禁写，并发出清晰降级告警", { timeout: 30_000 }, async () => {
     const root = realpathSync.native(mkdtempSync(join(tmpdir(), "fusa-win-ro-fallback-")));
     cleanups.push(() => removeTreeWithRetry(root));
 
@@ -315,12 +359,17 @@ writeFileSync(
     await allowWin32WorkerWorktreeAcl(stateDir, "600", wtDir);
 
     // 1) 验证 --readonly-fallback 内核级效果：连 worktree 目录本身与额外 protectedRoots 也一并禁止写入！
+    const roLaunchDir = join(stateDir, "launch", "600");
+    mkdirSync(roLaunchDir, { recursive: true });
+    writeFileSync(join(roLaunchDir, "prompt.md"), "RO_PROMPT");
+    writeFileSync(join(stateDir, "ui-token"), "UI_TOKEN");
     const policy = buildReadonlyPolicy({
       homeDir: realpathSync.native(homedir()),
       stateDir,
       protectedRoots: [dataDir, extraProtectedRoot],
+      dataDirScope: dataDirReadScope({ dataDir, launchDir: roLaunchDir, extraReadable: [wtDir] }),
     });
-    // 起进程前的异步准备（launch.ts 调）给 extraProtectedRoot 设拒写 ACL；包命令行本身不碰 ACL
+    // 起进程前的异步准备（launch.ts 调）给 extraProtectedRoot 设拒写 ACL、数据目录设读边界；包命令行本身不碰 ACL
     await prepareOsSandboxForLaunch({ dataDir, stateDir, writeScope: null, readonly: policy }, "win32");
     const roWrapped = wrapInReadonlyOsSandbox(
       {
@@ -335,7 +384,11 @@ let extraRootBlocked = false;
 try { fs.writeFileSync(${JSON.stringify(join(stateDir, "ro.txt"))}, "x"); } catch { stateBlocked = true; }
 try { fs.writeFileSync(${JSON.stringify(join(wtDir, "ro.txt"))}, "x"); } catch { wtBlocked = true; }
 try { fs.writeFileSync(${JSON.stringify(join(extraProtectedRoot, "ro.txt"))}, "x"); } catch { extraRootBlocked = true; }
-fs.writeFileSync(${JSON.stringify(join(tmpRo, "result.json"))}, JSON.stringify({ stateBlocked, wtBlocked, extraRootBlocked }));
+let secretReadBlocked = false;
+try { fs.readFileSync(${JSON.stringify(join(stateDir, "ui-token"))}); } catch { secretReadBlocked = true; }
+let launchReadable = false;
+try { launchReadable = fs.readFileSync(${JSON.stringify(join(roLaunchDir, "prompt.md"))}, "utf8") === "RO_PROMPT"; } catch {}
+fs.writeFileSync(${JSON.stringify(join(tmpRo, "result.json"))}, JSON.stringify({ stateBlocked, wtBlocked, extraRootBlocked, secretReadBlocked, launchReadable }));
 `,
         ],
       },
@@ -347,6 +400,7 @@ fs.writeFileSync(${JSON.stringify(join(tmpRo, "result.json"))}, JSON.stringify({
         writableFileRegexes: [],
         secretPaths: policy.secretPaths,
         secretGlobs: policy.secretGlobs,
+        ...(policy.dataDirScope ? { dataDirScope: policy.dataDirScope } : {}),
       },
       "win32",
       { disableWin32Mxc: true },
@@ -361,6 +415,8 @@ fs.writeFileSync(${JSON.stringify(join(tmpRo, "result.json"))}, JSON.stringify({
       stateBlocked: true,
       wtBlocked: true,
       extraRootBlocked: true,
+      secretReadBlocked: true,
+      launchReadable: true,
     });
 
     // 2) 验证真实非 codex 驱动（以 Pi 驱动 + .cmd 垫片为例）启动只读会话不报错、带出工具禁写参数并发射 driver.warning
@@ -431,10 +487,10 @@ fs.writeFileSync(${JSON.stringify(join(tmpRo, "result.json"))}, JSON.stringify({
     expect(events.some((e) => e.type === "turn.ended" && e.ok)).toBe(true);
     expect(
       events.some(
-        (e) => e.type === "driver.warning" && e.message.includes("写受限令牌 + 受保护根拒写 ACL + 工具层只读拦截"),
+        (e) => e.type === "driver.warning" && e.message === WIN32_READONLY_FALLBACK_WARNING,
       ),
     ).toBe(true);
-    expect(logs.some((l) => l.includes("写受限令牌"))).toBe(true);
+    expect(logs.some((l) => l.includes("受限令牌"))).toBe(true);
     const piArgv = fakePi.readLogs().find((e) => Array.isArray(e.argv))?.argv ?? [];
     expect(piArgv).toContain("--exclude-tools");
     expect(piArgv).toContain("edit,write");

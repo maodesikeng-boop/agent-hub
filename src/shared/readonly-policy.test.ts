@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   READONLY_SECRET_GLOBS,
   READONLY_SECRET_HOME_PATHS,
-  READONLY_SECRET_STATE_FILES,
   buildReadonlyPolicy,
   connectorToolAllowed,
   type ReadonlyPolicy,
@@ -50,7 +49,7 @@ describe("connectorToolAllowed：连接器按 readOnlyHint 自动放行，补充
 });
 
 describe("buildReadonlyPolicy：密钥清单", () => {
-  it("主目录下的密钥按主目录展开，数据目录里的令牌文件按 state/ 展开", () => {
+  it("主目录下的密钥按主目录展开；数据目录不逐个列（整个按读边界禁读）", () => {
     const p = policy();
     expect(p.secretPaths).toContain("/Users/u/.ssh");
     expect(p.secretPaths).toContain("/Users/u/.config/gh");
@@ -58,9 +57,7 @@ describe("buildReadonlyPolicy：密钥清单", () => {
     expect(p.secretPaths).toContain("/Users/u/.claude/.credentials.json");
     expect(p.secretPaths).toContain("/Users/u/.gemini/oauth_creds.json");
     expect(p.secretPaths).toContain("/Users/u/Library/Keychains");
-    expect(p.secretPaths).toContain("/Users/u/.agent-hub/state/ui-token");
-    expect(p.secretPaths).toContain("/Users/u/.agent-hub/state/provider-secrets.json");
-    expect(p.secretPaths).toHaveLength(READONLY_SECRET_HOME_PATHS.length + READONLY_SECRET_STATE_FILES.length);
+    expect(p.secretPaths).toHaveLength(READONLY_SECRET_HOME_PATHS.length);
     expect(p.secretPaths.every((x) => x.startsWith("/") && !x.includes("~"))).toBe(true);
   });
 

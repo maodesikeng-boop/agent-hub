@@ -57,7 +57,7 @@ beforeEach(() => {
   root = realpathSync.native(mkdtempSync(join(tmpdir(), "agent-hub-router-sandbox-")));
   dataDir = join(root, ".agent-hub");
   stateDir = join(dataDir, "state");
-  launchDir = join(dataDir, "launch");
+  launchDir = join(stateDir, "launch");
   homeDir = join(root, "home");
   hubBinDir = join(dataDir, "bin");
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
@@ -99,7 +99,11 @@ describe("Router 轨道 B 只读沙箱与令牌权限守卫", () => {
       expect(files.env[ENV_HUB_SOCK]).toBe(hubSock);
       expect(files.env.PATH).toBe(`${hubBinDir}${delimiter}/usr/bin:/bin`);
       expect(files.readonly).toBeDefined();
-      expect(files.readonly!.secretPaths.some((p) => p.includes(stateDir))).toBe(true);
+      // 数据目录按读边界禁读：总助只放行自己的启动目录和 state/router-home
+      expect(files.readonly!.dataDirScope?.readable).toContain(realpathSync.native(routerHome));
+      // 工具层清单：state/ 展开到 router-home 为止，router-home 本身不禁，state/ 里别的（令牌、库、别的会话的启动目录）都禁
+      expect(files.readonly!.dataDirDenied).not.toContain(realpathSync.native(routerHome));
+      expect(files.readonly!.dataDirDenied).toContain(join(realpathSync.native(stateDir), "launch"));
 
       if (vendorSpec(vendor).capabilities.readonly === "settings") {
         expect(files.settingsFile).toBeDefined();

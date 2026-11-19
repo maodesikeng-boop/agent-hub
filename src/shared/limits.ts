@@ -862,6 +862,8 @@ export const WIN_CMD_SHIM_CACHE_MAX = 256;
 /** 单个 `.cmd` 垫片文件最多读取字节数（64 KiB），防误读巨大非垫片文件。 */
 export const WIN_CMD_SHIM_MAX_BYTES = 64 * 1024;
 /** 已完成受保护根 ACL 校验的目录缓存上限（按进程生命周期去重避免每次派活重查 DACL）。 */
+/** 数据目录读边界展开成禁读清单（driver/write-scope.ts 的 dataDirDenyList）最多几项：超了拒绝启动，不截断。 */
+export const DATA_DIR_DENY_LIST_MAX = 4_096;
 export const WIN_PROTECTED_ROOTS_CACHE_MAX = 64;
 /** 已给过 `ALLOW FusaWorker-<编号>` 的 (Worker, worktree 目录) 缓存上限：建 worktree 时给过，起进程时不再调一次 fusa-run.exe。 */
 export const WIN_WORKER_ACL_CACHE_MAX = 512;

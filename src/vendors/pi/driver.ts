@@ -526,7 +526,7 @@ export class PiDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
             secretPaths: [
               ...new Set([
                 ...files.readonly.secretPaths,
-                ...scanSecretGlobs([row.cwd, ...row.addDirs], files.readonly.secretGlobs),
+                ...(await scanSecretGlobs([row.cwd, ...row.addDirs], files.readonly.secretGlobs)),
               ]),
             ],
           };

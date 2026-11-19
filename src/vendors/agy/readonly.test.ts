@@ -39,10 +39,13 @@ describe("agyReadonlySettings", () => {
 
   it("密钥路径按真实路径拒读（目录连子树）；通配 agy 的规则表达不了，不写（外层沙箱的正则管）", () => {
     const real = (p: string) => p.replace("/Users/u", "/private/Users/u");
-    const deny = agyReadonlySettings(policy(), undefined, real).permissions.deny;
+    const deny = agyReadonlySettings({ ...policy(), dataDirDenied: ["/Users/u/.agent-hub/state", "/Users/u/.agent-hub/run/admin.sock"] }, undefined, real).permissions.deny;
     expect(deny).toContain("read_file(/private/Users/u/.ssh)");
     expect(deny).toContain("read_file(/private/Users/u/.ssh/*)");
-    expect(deny).toContain("read_file(/private/Users/u/.agent-hub/state/ui-token)");
+    // 数据目录按读边界展开的禁读清单也拒读（state/ 整个、admin.sock）
+    expect(deny).toContain("read_file(/private/Users/u/.agent-hub/state)");
+    expect(deny).toContain("read_file(/private/Users/u/.agent-hub/state/*)");
+    expect(deny).toContain("read_file(/private/Users/u/.agent-hub/run/admin.sock)");
     expect(deny.some((r) => r.includes("*.env") || r.includes("**"))).toBe(false);
   });
 

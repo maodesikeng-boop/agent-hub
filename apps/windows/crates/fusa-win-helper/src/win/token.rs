@@ -1,4 +1,4 @@
-use crate::sids::{ensure_worker_sid, load_or_create_sid_store};
+use crate::sids::{ensure_reader_sid, ensure_worker_sid, load_or_create_sid_store};
 use crate::win::acl::allow_null_device;
 use crate::win::util::{last_os_error, win32_code_error, LocalSid, OwnedHandle};
 use std::ffi::c_void;
@@ -14,7 +14,7 @@ use windows_sys::Win32::Security::{
     SetTokenInformation, TokenDefaultDacl, TokenGroups, TokenUser, ACL, DISABLE_MAX_PRIVILEGE,
     LUA_TOKEN, SID_AND_ATTRIBUTES, TOKEN_ADJUST_DEFAULT, TOKEN_ADJUST_PRIVILEGES,
     TOKEN_ADJUST_SESSIONID, TOKEN_ASSIGN_PRIMARY, TOKEN_DEFAULT_DACL, TOKEN_DUPLICATE,
-    TOKEN_GROUPS, TOKEN_QUERY, TOKEN_USER, WRITE_RESTRICTED,
+    TOKEN_GROUPS, TOKEN_QUERY, TOKEN_USER,
 };
 use windows_sys::Win32::Storage::FileSystem::READ_CONTROL;
 use windows_sys::Win32::System::SystemServices::{
@@ -148,15 +148,21 @@ fn contains_sid(list: &[Vec<u8>], candidate: *mut c_void) -> bool {
         .any(|existing| unsafe { EqualSid(existing.as_ptr() as *mut c_void, candidate) != 0 })
 }
 
-/// Creates a `WRITE_RESTRICTED` token copying:
+/// Creates a restricted token whose restricting SIDs copy:
 /// - Current token's `TokenUser` SID
-/// - All enabled `TokenGroups` SIDs (so `Authenticated Users`, `Users`, logon SID, etc. remain writable outside protected roots, e.g. `D:\`)
+/// - All enabled `TokenGroups` SIDs (so `Authenticated Users`, `Users`, logon SID, etc. keep the same access outside the data dir, e.g. `D:\`)
 /// - `Everyone` (`S-1-1-0`)
-/// - Persistent `FusaWorker` SID (denied write on protected roots)
+/// - Persistent `FusaWorker` SID (denied write on protected roots, denied read on the data dir except the allowed entries)
 /// - Optional `FusaWorker-<workerId>` SID (allowed write on this worker's own worktree; omitted in `--readonly-fallback` mode)
+/// - Optional `FusaRead-<reader>` SID (allowed read on this session's own launch dir; never granted write)
+///
+/// Not `WRITE_RESTRICTED`: with it the restricting SIDs only take part in write checks, so a `DENY FusaWorker` read ACE
+/// would never apply. Every SID the normal pass can use is also a restricting SID, so outside the `FusaWorker` deny ACEs
+/// both passes grant the same access.
 pub fn create_worker_restricted_token(
     state_dir: &Path,
     worker_id: Option<&str>,
+    reader: Option<&str>,
     readonly_fallback: bool,
 ) -> io::Result<OwnedHandle> {
     let (group_sid_str, worker_sid_str) = if readonly_fallback {
@@ -233,6 +239,11 @@ pub fn create_worker_restricted_token(
         owned_sids.push(unsafe { copy_sid_bytes(ws.as_ptr())? });
     }
 
+    if let Some(key) = reader {
+        let rs = LocalSid::from_string(&ensure_reader_sid(state_dir, key)?)?;
+        owned_sids.push(unsafe { copy_sid_bytes(rs.as_ptr())? });
+    }
+
     let restricting: Vec<SID_AND_ATTRIBUTES> = owned_sids
         .iter()
         .map(|bytes| SID_AND_ATTRIBUTES {
@@ -245,7 +256,7 @@ pub fn create_worker_restricted_token(
     let ok = unsafe {
         CreateRestrictedToken(
             base.0,
-            DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED,
+            DISABLE_MAX_PRIVILEGE | LUA_TOKEN,
             0,
             std::ptr::null(),
             0,

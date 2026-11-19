@@ -136,6 +136,7 @@ import {
 import {
   allowWin32WorkerWorktreeAcl,
   createSleepInhibitor,
+  denyWin32WorkerPipeAccess,
   ensureProjectWorktreeBridge,
   ensureWin32ProtectedRootAcl,
   hardenWin32PrivateDirAcl,
@@ -844,6 +845,12 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
         ...(options.onExternalShutdown ? { onShutdown: options.onExternalShutdown } : {}),
         log: (line) => log(`${LOG_PREFIX} ${line}`),
       });
+      // Windows 的管理管道不在数据目录里，读边界管不到：单独给它设 DENY FusaWorker，沙箱里的 Worker 连不上（POSIX 由 OS 沙箱禁连 run/admin.sock）
+      if (process.platform === "win32") {
+        await denyWin32WorkerPipeAccess(stateDir, paths.adminSock, { env }).catch((err: unknown) =>
+          log(`${LOG_PREFIX} 管理管道禁止 Worker 连接的 ACL 没设上：${err instanceof Error ? err.message : String(err)}`),
+        );
+      }
     } catch (adminErr) {
       if (
         (adminErr as NodeJS.ErrnoException | null)?.code === "EADDRINUSE" ||

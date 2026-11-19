@@ -190,6 +190,14 @@ describe("安全：不在可分享的文件夹里的一律拒绝、不拷", () =
     expect((await share("[n](~/notes.md)", homeScope))[0]!.status).toBe("saved");
   });
 
+  it("数据目录里分享不超出 Worker 的读边界：state/ 哪怕被配进例外也不分享，uploads、worktrees 照常", async () => {
+    const leaked = { ...scope, dataExceptions: [...scope.dataExceptions, join(dataHome, "state")] };
+    await rejected(`[t](${join(dataHome, "state", "ui-token")})`, leaked);
+    expect(isShareable(realpathSync.native(join(dataHome, "state", "ui-token")), leaked)).toBe(false);
+    const upload = write(join(uploads, "u.txt"));
+    expect(isShareable(realpathSync.native(upload), leaked)).toBe(true);
+  });
+
   it("已经存的副本（sent-files/）也不能再当原文件发", async () => {
     const homeScope = { ...scope, roots: [home] };
     write(join(sentDir, "0123456789abcdef", "a.png"));

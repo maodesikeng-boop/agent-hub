@@ -88,6 +88,7 @@ export function agyReadonlySandboxInput(input: { homeDir: string; tmpDir: string
     writableFileRegexes: writableFileGlobs.map(fileRegex),
     secretPaths: input.policy.secretPaths.map(real).filter((p) => !needed.has(cmpKey(p))),
     secretGlobs: [...input.policy.secretGlobs],
+    ...(input.policy.dataDirScope ? { dataDirScope: input.policy.dataDirScope } : {}),
   };
 }
 
@@ -105,6 +106,7 @@ export function connectorProbeSandboxInput(input: { homeDir: string; tmpDir: str
     writableFileRegexes: [],
     secretPaths: input.policy.secretPaths.map(real),
     secretGlobs: [...input.policy.secretGlobs],
+    ...(input.policy.dataDirScope ? { dataDirScope: input.policy.dataDirScope } : {}),
   };
 }
 
@@ -164,7 +166,7 @@ export function agyReadonlySettings(
   connectors: AgyConnectorRules = { allow: [], deny: [] },
   realpath: (p: string) => string = realpathOrSelf,
 ): { permissions: { allow: string[]; deny: string[] }; enableTerminalSandbox: false } {
-  const secretRules = policy.secretPaths.flatMap((p) => {
+  const secretRules = [...policy.secretPaths, ...(policy.dataDirDenied ?? [])].flatMap((p) => {
     const real = trimSlash(realpath(p));
     return [`read_file(${real})`, `read_file(${real}/*)`];
   });

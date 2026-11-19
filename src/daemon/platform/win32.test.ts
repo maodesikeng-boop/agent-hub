@@ -644,7 +644,7 @@ describe("hub.exe 垫片安装、Git Bash MSYSTEM 斜杠拦截、准备命令 sh
       stateDir: "C:\\Users\\u\\.agent-hub\\state\\",
       protectedRoots: ["C:\\Users\\u\\.agent-hub", "D:\\.fusa-wt\\12345678"],
     });
-    expect(winRoPolicy.secretPaths).toContain("C:\\Users\\u\\.agent-hub\\state\\ui-token");
+    expect(winRoPolicy.secretPaths).toContain("C:\\Users\\u\\.ssh");
     expect(winRoPolicy.protectedRoots).toEqual(["C:\\Users\\u\\.agent-hub", "D:\\.fusa-wt\\12345678"]);
 
     const md = "截图 ![pic](C:\\Users\\u\\.agent-hub\\uploads\\a.png) 与密钥 [k](<C:\\Users\\u\\.ssh\\id_rsa>)";

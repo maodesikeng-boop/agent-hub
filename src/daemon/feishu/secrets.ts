@@ -1,7 +1,7 @@
 // 应用凭证文件 state/feishu-secrets.json（docs/feishu-design.md「统一」）。
 // 不变量：
 // - 文件权限 FEISHU_SECRETS_FILE_MODE（0600），用 write-file-atomic 原子替换，不留半截文件；
-// - "feishu-secrets.json" 在 shared/readonly-policy.ts 的 READONLY_SECRET_STATE_FILES 里，只读 Worker 读不到；
+// - feishu-secrets.json 在 state/ 里，Worker（普通、只读）按数据目录读边界（shared/write-scope.ts 的 DataDirReadScope）读不到；
 // - App Secret 不进日志、不进任何接口响应。
 import { mkdir, readFile, rm } from "node:fs/promises";
 import { dirname } from "node:path";

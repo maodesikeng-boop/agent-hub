@@ -1,6 +1,6 @@
 // 设备密钥和证书（docs/account-mesh-design.md「设备身份与信任」）：首次登录时生成 Ed25519 私钥和自签证书，证书 CN 是设备编号。
 // Node 能用证书不能生成证书，生成用 @peculiar/x509（实现时 pnpm add，整个仓库只有这个文件引它）。
-// 不变量：私钥只在 state/mesh/key.pem（0600，在 READONLY_SECRET_STATE_FILES 里）；设备指纹 = 证书 DER 的 SHA-256，和 relay/auth.ts 的 fingerprintOfPem 一致。
+// 不变量：私钥只在 state/mesh/key.pem（0600；Worker 按数据目录读边界整个 state/ 禁读）；设备指纹 = 证书 DER 的 SHA-256，和 relay/auth.ts 的 fingerprintOfPem 一致。
 import "reflect-metadata";
 import { X509CertificateGenerator, cryptoProvider } from "@peculiar/x509";
 import { X509Certificate, createHash, createPrivateKey, createPublicKey, sign as cryptoSign, verify as cryptoVerify, webcrypto, type KeyObject } from "node:crypto";

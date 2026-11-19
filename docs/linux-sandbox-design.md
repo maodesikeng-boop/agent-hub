@@ -62,13 +62,17 @@ export function osSandboxAvailable(platform = process.platform) { return OS_SAND
 
 ### 4.2 `bwrap` 参数与只读通配扫描
 
-**普通 Worker**：
+**普通 Worker**（2026-11-19 起带数据目录读边界，见 `docs/write-scope.md`）：
 
 ```
 bwrap --unshare-user --disable-userns --unshare-pid --proc /proc \
       --bind / / --dev-bind /dev /dev --perms 0700 --tmpfs /run/user/<uid> \
-      --ro-bind <dataDir> <dataDir> \
+      --perms 0700 --tmpfs <dataDir> \
+      --ro-bind <dataDir>/worktrees … --ro-bind <dataDir>/run/bin … --ro-bind <本会话启动目录> … \
+      --bind <dataDir>/run/hub.sock <dataDir>/run/hub.sock \
+      --ro-bind <别的受保护根> … \
       --bind <writableDir> <writableDir> … \
+      --remount-ro <dataDir> \
       -- <cli> <ownSandboxOffArgs…> <args…>
 ```
 
@@ -77,15 +81,17 @@ bwrap --unshare-user --disable-userns --unshare-pid --proc /proc \
 ```
 bwrap --unshare-user --disable-userns --unshare-pid --proc /proc \
       --ro-bind / / --dev-bind /dev /dev --perms 0700 --tmpfs /run/user/<uid> \
+      --perms 0700 --tmpfs <dataDir> --ro-bind <放行项> … --bind <dataDir>/run/hub.sock … \
       --bind <tmpDir> <tmpDir> --bind <writableDir> … --bind <writableFile> … \
       --tmpfs <秘密目录> … --ro-bind /dev/null <秘密文件> … \
+      --remount-ro <dataDir> \
       -- <cli> <args…>
 ```
 
 - 路径一律先 `realpath`；只对**已存在**的路径生成 `--bind` / `--tmpfs` / `--ro-bind /dev/null`（不存在的路径 `bwrap` 会报错退出）。
 - **只读通配扫描（每次启动只扫一遍，连接器探测直接复用）**：
   - 在启动只读 agy 时（`agy-driver.ts` 的 `#spawn` 开头，调 `#catalogFor` 之前），对去重后的 `[row.cwd, ...row.addDirs]` 调用一次 `scanSecretGlobs(roots, readonlyPolicy.secretGlobs)`，将扫出的敏感文件绝对路径并入本次启动的 `readonlyPolicy.secretPaths`，再同时传给 `#catalogFor(policy)`（起各个 stdio MCP 服务器探测 `tools/list`）和 `agyReadonlySandboxInput({ ..., policy })`。
-  - **扫描实现与上限**：用 `readdirSync(dir, { withFileTypes: true })` 非递归栈遍历，跳过 `.git`、`node_modules` 及符号链接目录；匹配 `READONLY_SECRET_GLOBS`（`**/.env`、`**/.env.*`、`**/*.pem`、`**/*.key`、`**/id_rsa*`、`**/id_ed25519*`）。设硬上限：**最多遍历 20,000 个目录项、耗时不超过 200 ms、命中敏感文件不超过 500 个**。
+  - **扫描实现与上限**：用异步 `readdir(dir, { withFileTypes: true })` 非递归栈遍历（起进程的链路里 await，不卡事件循环），跳过 `SECRET_SCAN_SKIP_DIRS`（`.git`、`node_modules`、`target`、`.venv`、`vendor`、`dist`、`build`、`.next`、`.gradle`、`.cargo`、`.codegraph` 等依赖和构建目录）及符号链接目录；匹配 `READONLY_SECRET_GLOBS`（`**/.env`、`**/.env.*`、`**/*.pem`、`**/*.key`、`**/id_rsa*`、`**/id_ed25519*`）。设硬上限：**最多遍历 20,000 个目录项、耗时不超过 200 ms、命中敏感文件不超过 500 个**。
   - **超限处理（fail-closed）**：任一上限触发时**立即中止并拒绝启动该只读 Worker**（抛 `DriverError("spawn_failed", ...)` 说明哪个目录超限），绝不截断后带漏绑的沙箱启动。
   - **实测耗时**：扫描 `agent-hub` 仓库（跳过 `.git`、`node_modules`），本机 Mac（172 目录 / 1,150 文件）平均 **3.9 ms**；东京真机（175 目录 / 1,549 文件）平均 **2.5 ms**。
 

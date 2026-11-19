@@ -8,12 +8,12 @@ const scope = { dataDir, protectedRoots: [dataDir], writableDirs: [cwd] };
 
 describe("workerWriteScope", () => {
   it("Worker 在 worktree 里：数据目录里只放行自己的工作目录", () => {
-    expect(workerWriteScope({ role: "worker", dataDir, cwd })).toEqual(scope);
-    expect(workerWriteScope({ role: "worker", dataDir: `${dataDir}/`, cwd: `${cwd}/` })).toEqual(scope);
+    expect(workerWriteScope({ role: "worker", dataDir, cwd })).toMatchObject(scope);
+    expect(workerWriteScope({ role: "worker", dataDir: `${dataDir}/`, cwd: `${cwd}/` })).toMatchObject(scope);
   });
 
   it("Worker 在主文件夹干活（--no-worktree）：数据目录整个不能写，主文件夹本来就在外面", () => {
-    expect(workerWriteScope({ role: "worker", dataDir, cwd: "/Users/u/code/app" })).toEqual({
+    expect(workerWriteScope({ role: "worker", dataDir, cwd: "/Users/u/code/app" })).toMatchObject({
       dataDir,
       protectedRoots: [dataDir],
       writableDirs: [],
@@ -41,7 +41,7 @@ describe("workerWriteScope", () => {
       protectedRoots: [winDataDir, dWtRoot],
       cwd: ownWt,
     })!;
-    expect(winScope).toEqual({
+    expect(winScope).toMatchObject({
       dataDir: winDataDir,
       protectedRoots: [winDataDir, dWtRoot],
       writableDirs: [ownWt],

@@ -55,7 +55,10 @@ export {
 } from "./win32/ipc-endpoint.ts";
 export {
   allowWin32NamedPipeUserAccess,
+  allowWin32WorkerReadAcl,
   allowWin32WorkerWorktreeAcl,
+  denyWin32WorkerPipeAccess,
+  denyWin32WorkerReadAcl,
   ensureWin32ProtectedRootAcl,
   formatWin32LockHolders,
   hardenWin32PrivateDirAcl,

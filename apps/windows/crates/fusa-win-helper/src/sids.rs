@@ -5,7 +5,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 pub const SANDBOX_SIDS_FILE: &str = "win-sandbox-sids.json";
-pub const MAX_PERSISTED_WORKER_SIDS: usize = 512;
+pub const MAX_PERSISTED_WORKER_SIDS: usize = 1024;
+/// Store-key prefix of per-session reader SIDs (`FusaRead-<key>`), kept apart from worker write SIDs.
+const READER_KEY_PREFIX: &str = "read-";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SandboxSidStore {
@@ -169,6 +171,13 @@ pub fn ensure_worker_sid(
     Ok((store.worker_group_sid, worker_sid))
 }
 
+/// Per-session reader SID (`FusaRead-<key>`): only ever granted read on that session's own files
+/// (`acl allow-read --reader <key>`), never write, so readonly Workers can carry it too.
+pub fn ensure_reader_sid(state_dir: &Path, key: &str) -> io::Result<String> {
+    let (_, sid) = ensure_worker_sid(state_dir, &format!("{READER_KEY_PREFIX}{}", key.trim()))?;
+    Ok(sid)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,5 +199,15 @@ mod tests {
         }
         let loaded = load_or_create_sid_store(tmp.path()).expect("load");
         assert_eq!(loaded.worker_sids.len(), MAX_PERSISTED_WORKER_SIDS);
+    }
+
+    #[test]
+    fn reader_sids_are_separate_from_worker_sids() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let (_, worker) = ensure_worker_sid(tmp.path(), "7").expect("worker sid");
+        let reader = ensure_reader_sid(tmp.path(), "7").expect("reader sid");
+        assert_ne!(worker, reader);
+        assert_eq!(reader, ensure_reader_sid(tmp.path(), "7").expect("reader sid again"));
+        assert!(ensure_reader_sid(tmp.path(), "bad key").is_err());
     }
 }

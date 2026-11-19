@@ -201,7 +201,7 @@
    - 执行 `kind: "npm"` 安装配方时，守护进程**不经过任何 shell**，直接用 `spawnOwnedProcess(process.execPath, [npmCliJsPath, "install", "-g", "--prefix", paths.toolsNpmDir, "--no-fund", "--no-audit", "--loglevel", "error", ...extraArgs, packageSpec])` 执行：
      - **零管理员 / 零 `sudo`**：读写全在用户自己的 `<hubHome>/tools/npm` 下，彻底消灭 Linux/macOS 系统 Node 全局安装报 `EACCES` 和 Windows 写 `Program Files` 报权限不足的问题；
      - **零 PowerShell 执行策略干扰**：直接由 `node.exe` 运行 `npm-cli.js`；
-     - **自动继承沙箱受保护根防篡改**：`<hubHome>` 在守护进程启动时已挂有 `ensureWin32ProtectedRootAcl`（Windows 写受限令牌显式拒写）与 macOS/Linux Worker `writeScope` 禁写保护，普通 Worker 与只读 Worker 只能读/执行其中的 CLI，**绝无可能覆写篡改受管 CLI 垫片实现沙箱逃逸**。
+     - **自动继承沙箱受保护根防篡改**：`<hubHome>` 在守护进程启动时已挂有 `ensureWin32ProtectedRootAcl`（Windows 受限令牌显式拒写）与 macOS/Linux Worker `writeScope` 禁写保护，普通 Worker 与只读 Worker 只能读/执行其中的 CLI，**绝无可能覆写篡改受管 CLI 垫片实现沙箱逃逸**。
 3. **运行期子进程 `PATH` 闭环**：
    - Windows `fusa-supervisor` 启动守护进程时已将随包 `node/` 目录放入守护进程 `PATH`（`supervisor.rs:445`）；
    - 守护进程自身在 `buildChildEnv` 及 `VendorRuntimeResolver` 中确保 `toolsNpmBinDir` 与 `dirname(process.execPath)` 位于查找链与子进程 `PATH` 中（末尾兜底不抢占用户自己在项目里装的 `node` 版本，裸机无系统 Node 时又能保证 `dsh.cmd`、`codex.cmd` 内部的 `node` 调用 100% 命中随包 Node 24）。

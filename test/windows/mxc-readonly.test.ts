@@ -4,7 +4,7 @@
 // 2. 若当前机器（如 Windows Server CI runner）不支持无 DACL 污染的 ProcessContainer，
 //    真容器用例显式标 `it.skip`（汇总中可见“未覆盖”，留待 Win11 24H2+ 真机验收），绝不伪装通过；
 // 3. 同时在同一台无 MXC 机器上，不注入任何 mock 直接调用 `wrapInReadonlyOsSandbox`，
-//    实跑断言自动平滑回退到「写受限令牌 + 受保护根拒写 ACL + 降级提示」且进程正常执行返回 0，绝不硬拒报错！
+//    实跑断言自动平滑回退到「受限令牌 + 受保护根拒写 ACL + 降级提示」且进程正常执行返回 0，绝不硬拒报错！
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";

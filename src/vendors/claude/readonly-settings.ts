@@ -26,12 +26,13 @@ function connectorDenyRule(rule: string): string | null {
 }
 
 /**
- * 权限规则：放行内置读/命令/上网（hub 命令的放行规则由 settings.ts 的 buildSessionSettings 加，两种角色都有）；拒绝编辑工具、读密钥（路径和通配，claude 还会拿它查 Bash 命令行里写明的路径）、手动排除的连接器。
+ * 权限规则：放行内置读/命令/上网（hub 命令的放行规则由 settings.ts 的 buildSessionSettings 加，两种角色都有）；拒绝编辑工具、
+ * 读密钥和数据目录禁读清单（路径和通配，claude 还会拿它查 Bash 命令行里写明的路径）、手动排除的连接器。
  * 手动补充的连接器不写进放行规则：驱动在 can_use_tool 里判断时查 extraAllow（连接器的判断只有一处）。每次返回新数组。
  */
 export function claudeReadonlyPermissions(policy: ReadonlyPolicy): { allow: string[]; deny: string[] } {
   const deny: string[] = [...CLAUDE_READONLY_DENY_TOOLS];
-  for (const path of policy.secretPaths) deny.push(`Read(${absoluteRulePath(path)})`, `Read(${absoluteRulePath(path)}/**)`);
+  for (const path of [...policy.secretPaths, ...(policy.dataDirDenied ?? [])]) deny.push(`Read(${absoluteRulePath(path)})`, `Read(${absoluteRulePath(path)}/**)`);
   for (const glob of policy.secretGlobs) deny.push(`Read(//${glob})`);
   for (const rule of policy.connectors.deny) {
     const denyRule = connectorDenyRule(rule);
@@ -61,7 +62,8 @@ export interface ClaudeReadonlySandbox {
 /**
  * claude 自带沙箱（只读档）：
  * - 起不来就报错（failIfUnavailable）、不许绕出沙箱（allowUnsandboxedCommands: false）；
- * - denyRead：密钥路径，和通配（**\/ 开头的换成绝对根 /**\/：实测 S3 里 <绝对路径>/**\/.env 的写法有效）；
+ * - denyRead：密钥路径，数据目录按读边界展开的禁读清单（dataDirDenied，不用 allowRead 开口子：它会压过 denyRead，把放行目录里的 .env 也放出来），
+ *   和通配（**\/ 开头的换成绝对根 /**\/：实测 S3 里 <绝对路径>/**\/.env 的写法有效）；
  * - 网络：域名全放（只读 Worker 能联网，设计第 8 节第 1 条；curl、git 实测能通）；
  * - enableWeakerNetworkIsolation：macOS 沙箱放行 mach 服务 com.apple.trustd.agent。gh 等 Go 程序在 macOS 上用系统证书服务（trustd）验 TLS 证书，
  *   沙箱挡了它就报 `tls: failed to verify certificate: x509: OSStatus -26276`（curl、git 用自带的证书库所以没事）。
@@ -76,7 +78,7 @@ export function claudeReadonlySandbox(policy: ReadonlyPolicy, input: ClaudeReado
     enableWeakerNetworkIsolation: true,
     filesystem: {
       denyWrite: [...input.denyWrite],
-      denyRead: [...policy.secretPaths, ...policy.secretGlobs.map((glob) => (glob.startsWith("**/") ? `/${glob}` : glob))],
+      denyRead: [...policy.secretPaths, ...(policy.dataDirDenied ?? []), ...policy.secretGlobs.map((glob) => (glob.startsWith("**/") ? `/${glob}` : glob))],
     },
     network: { allowedDomains: ["*"], allowUnixSockets: input.hubSock === undefined ? [] : [input.hubSock] },
   };

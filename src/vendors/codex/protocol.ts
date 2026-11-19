@@ -15,7 +15,7 @@ import {
   type ReadonlyPolicy,
   type RateLimitWindow,
   type SessionCapabilities,
-  type WriteScope,
+  type WriteBounds,
   type QuotaWindowKey,
   windowKeyByMinutes,
 } from "../../shared/index.ts";
@@ -147,6 +147,8 @@ function configKeySegment(name: string): string {
  * 只读 Worker 追加的 codex 配置（设计 2.3）。sandbox 本身（read-only）由 thread/start 的参数给，这里只补两样：
  * - 密钥禁读：2026-11-07 S5 实测，只有“default_permissions + profile 继承 :read-only + filesystem 路径 none”生效，
  *   permissions.filesystem.deny_read 和 profile 里的 deny_read 都无效。通配（secretGlobs）这种写法表达不了，不写；
+ *   数据目录按读边界展开的禁读清单（dataDirDenied：state/ 整个、run/admin.sock……）也写成 none；codex 只把工具命令放进沙箱，
+ *   它自己读启动文件不受影响；run/bin（hub 命令）和 hub.sock 不在清单里，照常能用；
  * - 连接器：codex 原生放行 readOnlyHint 的，补充 → approval_mode="approve"，排除 → disabled_tools（整个服务器 → enabled=false）。
  *   codex 配置要确切的服务器名和工具名，通配的写不进去；补充的通配项靠 elicitation 兜底（decideMcpElicitation）。
  */
@@ -154,7 +156,7 @@ export function codexReadonlyConfig(policy: ReadonlyPolicy): Record<string, unkn
   const config: Record<string, unknown> = {
     default_permissions: CODEX_READONLY_PROFILE,
     [`permissions.${CODEX_READONLY_PROFILE}.extends`]: ":read-only",
-    [`permissions.${CODEX_READONLY_PROFILE}.filesystem`]: Object.fromEntries(policy.secretPaths.map((p) => [p, "none"])),
+    [`permissions.${CODEX_READONLY_PROFILE}.filesystem`]: Object.fromEntries([...policy.secretPaths, ...(policy.dataDirDenied ?? [])].map((p) => [p, "none"])),
   };
   const split = (rule: string): [string, string] => {
     const slash = rule.indexOf("/");
@@ -259,7 +261,7 @@ export function buildThreadResumeRequest(
 export function buildSandboxPolicy(
   session: Pick<AgentSessionRow, "cwd" | "addDirs">,
   readonly: boolean,
-  writeScope: WriteScope | null = null,
+  writeScope: WriteBounds | null = null,
   osSandboxed = false,
 ): CodexSandboxPolicy {
   if (readonly) {
@@ -296,7 +298,7 @@ export function buildTurnStartRequest(
     combinedText: string;
     session: Pick<AgentSessionRow, "cwd" | "addDirs" | "model" | "effort">;
     readonly: boolean;
-    writeScope?: WriteScope | null;
+    writeScope?: WriteBounds | null;
     /** 进程包进了 OS 沙箱（driver/write-scope.ts 的 ScopedSpawn.osSandboxed）。 */
     osSandboxed?: boolean;
   },
@@ -718,7 +720,7 @@ export function exhaustCodexRateLimitOnTurnError(current: RateLimitInfo | null, 
 export interface CodexApprovalContext {
   readonly: boolean;
   /** Worker 的可写范围；项目经理是 null（不拦）。 */
-  writeScope: WriteScope | null;
+  writeScope: WriteBounds | null;
   cwd: string;
 }
 

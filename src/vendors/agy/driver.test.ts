@@ -23,6 +23,7 @@ import {
 import { AGY_DENIED_CONTINUE_MAX } from "./limits.ts";
 import { createAgyDriver, type AgyDriver, type AgyDriverOptions } from "./driver.ts";
 import { describeStep } from "../../shared/step-labels.ts";
+import { dataDirReadScope } from "../../shared/write-scope.ts";
 import { toolFinished, toolStarted, working, type LiveSession } from "../../daemon/ledger/sessions.ts";
 import { stepOfTool } from "../../daemon/ledger/tool-summary.ts";
 import type { AgyConnectorCatalog } from "./readonly.ts";
@@ -765,7 +766,7 @@ describe("agy-protocol 纯函数", () => {
 
   it("checkWorkerToolViolation：没有 OS 沙箱时兜底——写类工具的路径、命令行写到可写范围外就拦；读、写自己的工作目录、数据目录外不拦", () => {
     const cwd = "/Users/u/.agent-hub/worktrees/1/2";
-    const fallbackScope = { dataDir: "/Users/u/.agent-hub", writableDirs: [cwd] };
+    const fallbackScope = { dataDir: "/Users/u/.agent-hub", writableDirs: [cwd], readScope: dataDirReadScope({ dataDir: "/Users/u/.agent-hub" }) };
     const check = (toolName: string, parameters: Record<string, unknown>) => checkWorkerToolViolation({ toolName, parameters, fallbackScope, cwd });
     expect(check("write_to_file", { TargetFile: "/Users/u/.agent-hub/state/x" })).toBe(WRITE_SCOPE_VIOLATION_MESSAGE);
     expect(check("edit_file", { file_path: "../3/a.ts" })).toBe(WRITE_SCOPE_VIOLATION_MESSAGE);
@@ -1118,7 +1119,7 @@ describe("4. Worker 安全拦截（数据目录由 OS 沙箱管，只读模式�
       mkdirSync(cwd, { recursive: true });
       const probe = join(dataDir, "probe.txt");
       t.launch.env = { FAKE_AGY_PROBE: probe };
-      if (scoped) t.launch.writeScope = { dataDir, writableDirs: [cwd] };
+      if (scoped) t.launch.writeScope = { dataDir, writableDirs: [cwd], readScope: dataDirReadScope({ dataDir }) };
       const s = t.addSession({ role, cwd, ...(role === "worker" ? { workerId: 11 } : {}) });
       await t.driver.send(s.id, user(1, "hi"));
       const ended = await t.waitFor("turn.ended");

@@ -7,7 +7,8 @@ import type { ConversationId, SessionId } from "../../shared/domain.ts";
 import { feishuOriginOf, type FeishuMessageOrigin, type FeishuOpenId } from "../../shared/feishu.ts";
 import { FEISHU_POST_RETENTION_MS } from "../../shared/limits.ts";
 import { LedgerRequestError } from "../../shared/ledger.ts";
-import { buildReadonlyPolicy, READONLY_SECRET_STATE_FILES } from "../../shared/readonly-policy.ts";
+import { dataDirReadScope } from "../../shared/write-scope.ts";
+import { dataDirDenyList, toolLayerReadScope } from "../driver/write-scope.ts";
 import { resolveHubPaths } from "../../shared/paths.ts";
 import { deliveryParts } from "../../shared/worker.ts";
 import { runRetentionRound } from "../db-retention.ts";
@@ -110,11 +111,12 @@ describe("账本接线", () => {
     expect(() => ledger.messagesAfter(9999, 0, 1)).toThrow();
   });
 
-  it("只读 Worker 读不到 state/feishu-secrets.json", () => {
-    expect(READONLY_SECRET_STATE_FILES).toContain("feishu-secrets.json");
+  it("Worker 读不到 state/feishu-secrets.json：数据目录读边界不放行 state/，工具层禁读清单里有整个 state/", () => {
     const paths = resolveHubPaths({}, "/Users/u");
-    const policy = buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: paths.stateDir });
-    expect(policy.secretPaths).toContain(paths.feishuSecretsFile);
+    const launchDir = `${paths.launchDir}/7`;
+    const scope = dataDirReadScope({ dataDir: paths.home, launchDir });
+    expect(scope.readable.some((p) => paths.feishuSecretsFile.startsWith(`${p}/`))).toBe(false);
+    expect(dataDirDenyList(toolLayerReadScope(scope, launchDir), (dir) => (dir === paths.home ? ["state", "worktrees"] : []))).toEqual([paths.stateDir]);
   });
 
   it("db-retention 每天清理时调 prunePosts，删掉超过 FEISHU_POST_RETENTION_DAYS 的已定稿记录", async () => {
