@@ -24,10 +24,10 @@ describe("加文件时检查", () => {
     expect(next.map((f) => f.file.name)).toEqual(["a.txt", "b.txt"]);
   });
 
-  it("空文件、超过 50 MB 的不加，提示带文件名；刚好 50 MB 加", () => {
+  it("空文件、超过 100 MB 的不加，提示带文件名；刚好 100 MB 加", () => {
     const { files, notice } = stageFiles([], [new File([], "空.txt"), sized("大.mov", MAX_UPLOAD_BYTES + 1), sized("刚好.bin", MAX_UPLOAD_BYTES), file("好.txt")]);
     expect(files.map((f) => f.file.name)).toEqual(["刚好.bin", "好.txt"]);
-    expect(notice).toBe("「空.txt」是空文件，没有加入；「大.mov」超过 50 MB，没有加入");
+    expect(notice).toBe("「空.txt」是空文件，没有加入；「大.mov」超过 100 MB，没有加入");
   });
 
   it("Mac 录屏、手机视频（几十 MB 的 .mov、.mp4、.m4v、.webm，MIME 可能是空的）照常加进去", () => {

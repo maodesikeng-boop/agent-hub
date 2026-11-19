@@ -2186,6 +2186,10 @@ describe("createFeishuService：附件改卡失败重刷、内部唤醒不当用
     await settle();
     expect(userMessages(lin.conversationId)).toEqual([]);
     expect(textsTo(chat).some((t) => t.includes("huge.mp4"))).toBe(true);
+    const missed = textsTo(chat).find((t) => t.includes("huge.mp4"))!;
+    expect(missed).toContain("超过 100 MB 或下载失败");
+    expect(missed).toContain("压小一点重发试试");
+    expect(missed).not.toContain("网页");
     say(chat, '看这个 <video key="v_big" name="again.mp4"/>', { files: [{ type: "video", fileKey: "v_big", fileName: "again.mp4" }] });
     await settle();
     expect(userMessages(lin.conversationId).map((m) => m.text)).toEqual(["看这个"]);

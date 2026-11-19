@@ -1,4 +1,5 @@
 // 测试用的假飞书：记下每次调用，按飞书的回包形状回编号；长连接的回调存下来，测试直接喂事件和点击。
+import { Readable } from "node:stream";
 import {
   feishuDataOf,
   feishuStringField,
@@ -47,8 +48,8 @@ export interface FakeFeishu extends FeishuTransport {
   failListForChat: Map<string, FeishuApiResult | Error>;
   /** 每次拉历史消息前可选钩子（测试模拟慢请求与并发闪断重连合并）。 */
   beforeListMessages: ((args: FeishuMethodArgs["message.list"]) => Promise<void>) | null;
-  /** 下载资源时回的内容；没有就抛错。 */
-  resources: Map<string, Buffer>;
+  /** 下载资源时回的内容（给流就原样回这条流）；没有就抛错。 */
+  resources: Map<string, Buffer | Readable>;
   /** 调用记录用的时钟。 */
   clock: () => number;
   /** 每次上传图片、文件前先等它（测试用来模拟慢网、上传失败）；抛错就当这次上传失败。 */
@@ -245,12 +246,11 @@ export function createFakeFeishu(options: { clock?: () => number; botOpenId?: st
       uploadedTypes.set(fileKey, input.fileType);
       return { fileKey };
     },
-    async downloadResource(messageId, fileKey, type, maxBytes) {
-      fake.calls.push({ method: "downloadResource", args: { messageId, fileKey, type, maxBytes }, at: fake.clock() });
+    async downloadResource(messageId, fileKey, type) {
+      fake.calls.push({ method: "downloadResource", args: { messageId, fileKey, type }, at: fake.clock() });
       const data = fake.resources.get(fileKey);
       if (data === undefined) throw new Error("no such resource");
-      if (data.length > maxBytes) throw new Error("too large");
-      return data;
+      return Buffer.isBuffer(data) ? Readable.from([data]) : data;
     },
     async start(handlers) {
       fake.handlers = handlers;
