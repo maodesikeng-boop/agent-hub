@@ -1,4 +1,5 @@
 // 测试用的假飞书：记下每次调用，按飞书的回包形状回编号；长连接的回调存下来，测试直接喂事件和点击。
+import { Readable } from "node:stream";
 import type {
   FeishuApiResult,
   FeishuConnectionHandlers,
@@ -154,12 +155,11 @@ export function createFakeFeishu(options: { clock?: () => number; botOpenId?: st
       uploadedTypes.set(fileKey, input.fileType);
       return { fileKey };
     },
-    async downloadResource(messageId, fileKey, type, maxBytes) {
-      fake.calls.push({ method: "downloadResource", args: { messageId, fileKey, type, maxBytes }, at: fake.clock() });
+    async downloadResource(messageId, fileKey, type) {
+      fake.calls.push({ method: "downloadResource", args: { messageId, fileKey, type }, at: fake.clock() });
       const data = fake.resources.get(fileKey);
       if (data === undefined) throw new Error("no such resource");
-      if (data.length > maxBytes) throw new Error("too large");
-      return data;
+      return Readable.from([data]);
     },
     async start(handlers) {
       fake.handlers = handlers;

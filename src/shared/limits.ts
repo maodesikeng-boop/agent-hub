@@ -212,10 +212,10 @@ export const MAX_SCHEDULE_NAME_CHARS = MAX_NAME_CHARS;
 // ---- 聊天框上传文件 ----
 
 /**
- * 单个上传文件最多 50 MB（Mac 录屏、手机视频常有几十 MB；和 agent 发出文件的上限 MAX_SENT_FILE_BYTES 一样）。
- * 上传走单独的接口（POST /api/uploads，请求体就是文件原样的字节，边收边写盘），不动普通消息接口 1 MB 的请求体上限。
+ * 单个上传文件最多 100 MB（Mac 录屏、手机视频常有几十到上百 MB；也是飞书开放平台 messageResource.get 的单文件硬上限，网页和飞书收文件用同一个数）。
+ * 上传走单独的接口（POST /api/uploads，请求体就是文件原样的字节，边收边写盘），不动普通消息接口 1 MB 的请求体上限；飞书收文件同样走流写盘。
  */
-export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+export const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 /** 一条消息最多带几个文件。 */
 export const MAX_ATTACHMENTS_PER_MESSAGE = 10;
 /** 拖进来的文件夹最多看多少项（文件和子文件夹都算）：误拖一个大项目文件夹时不把整棵树都翻一遍。 */

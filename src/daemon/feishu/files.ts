@@ -8,15 +8,16 @@
 // - 其他文件 ≤ 30 MB 走上传文件，消息类型和上传类型照飞书配对（mp4 发视频 media、opus 发语音 audio、其余发文件 file，
 //   不配对飞书回 230055）；超过的不传，卡上写一行“文件太大，去网页看”；
 // - 发文件消息带 uuid fusa-file-<消息编号>-<第几个>，重发同一个文件飞书只收一次；
-// - 下载最多 MAX_UPLOAD_BYTES（和网页上传同一个上限），超了不存、回一句提示；存法和网页上传一样走 saveUpload。
+// - 下载是流，边收边写盘，最多 MAX_UPLOAD_BYTES（和网页上传同一个上限），超了不存、回一句提示；存法和网页上传一样走 saveUpload。
 import { randomUUID } from "node:crypto";
 import { rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { Readable } from "node:stream";
 import { extname, join } from "node:path";
 import type { MessageId } from "../../shared/domain.ts";
 import { isImageMime, type Attachment } from "../../shared/attachments.ts";
 import { parseFeishuMessageId, type FeishuChatId, type FeishuMessageId } from "../../shared/feishu.ts";
-import { FEISHU_FILE_MAX_BYTES, FEISHU_IMAGE_MAX_BYTES, FEISHU_IMAGE_MAX_EDGE, FEISHU_IMAGE_SHRINK_BYTES, MAX_UPLOAD_BYTES } from "../../shared/limits.ts";
+import { FEISHU_FILE_MAX_BYTES, FEISHU_IMAGE_MAX_BYTES, FEISHU_IMAGE_MAX_EDGE, FEISHU_IMAGE_SHRINK_BYTES } from "../../shared/limits.ts";
 import { saveUpload } from "../uploads.ts";
 import type { FeishuInboundFile } from "./inbound.ts";
 import { FEISHU_IMAGE_REJECTED_CODE, FeishuApiError, feishuDataOf, feishuStringField, type FeishuFileUpload, type FeishuTransport } from "./transport.ts";
@@ -105,6 +106,20 @@ function imageNameOf(fileKey: string, data: Buffer): string {
   return `飞书图片-${fileKey.slice(-8)}.${ext}`;
 }
 
+/** 先读出第一块用来认图片格式，再把它接回流前面，整条流照样边收边写盘。 */
+async function peekFirstChunk(stream: Readable): Promise<{ head: Buffer; rest: Readable }> {
+  const iterator = stream[Symbol.asyncIterator]();
+  const first = await iterator.next();
+  if (first.done) return { head: Buffer.alloc(0), rest: Readable.from([]) };
+  const head = first.value as Buffer;
+  const rest = Readable.from(
+    (async function* () {
+      yield head;
+      yield* iterator;
+    })(),
+  );
+  return { head, rest };
+}
 
 /** 一个附件传完的结果：图片编号（嵌进卡片）、文件编号和要配的消息类型，或太大没传。 */
 export type FeishuUploaded =
@@ -162,10 +177,11 @@ export function createFeishuFileService(deps: FeishuFileServiceDeps): FeishuFile
     },
     async receive(messageId, file) {
       try {
-        const data = await transport.downloadResource(messageId, file.fileKey, file.type, MAX_UPLOAD_BYTES);
-        if (data.length === 0 || data.length > MAX_UPLOAD_BYTES) return null;
-        const name = file.fileName ?? (file.type === "image" ? imageNameOf(file.fileKey, data) : `飞书文件-${file.fileKey.slice(-8)}`);
-        return await saveUpload(deps.uploadsDir, name, data);
+        const stream = await transport.downloadResource(messageId, file.fileKey, file.type);
+        if (file.fileName !== null) return await saveUpload(deps.uploadsDir, file.fileName, stream);
+        if (file.type === "file") return await saveUpload(deps.uploadsDir, `飞书文件-${file.fileKey.slice(-8)}`, stream);
+        const { head, rest } = await peekFirstChunk(stream);
+        return await saveUpload(deps.uploadsDir, imageNameOf(file.fileKey, head), rest);
       } catch (error) {
         deps.log(`下载 ${messageId} 里的${file.type === "image" ? "图片" : "文件"}没成：${error instanceof Error ? error.message : String(error)}`);
         return null;

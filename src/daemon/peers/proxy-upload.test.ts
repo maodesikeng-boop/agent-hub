@@ -1,6 +1,7 @@
 // 转发上传到别的设备（比如跨境 SSH 隧道后面的“东京”）：等响应头的时限不能把上传请求体的时间也算进去。
 // 时限换成 1 秒（vi.mock），不然要等真的 30 秒。
 import { randomUUID } from "node:crypto";
+import { request, type IncomingMessage } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { API_PATHS } from "../../shared/index.ts";
 import type { PeerRecord } from "./store.ts";
@@ -55,6 +56,22 @@ describe("转发上传到慢链路上的设备", () => {
     expect(res.status, await res.clone().text()).toBe(200);
     expect(await res.json()).toEqual({ received: data.length });
     expect(Date.now() - started).toBeGreaterThan(TIMEOUT_MS);
+  });
+
+  it("对方没读完请求体就回了 413：回完关掉这条连接", async () => {
+    const early413 = (async () => new Response(JSON.stringify({ error: "文件太大" }), { status: 413, headers: { "content-type": "application/json" } })) as typeof fetch;
+    const { device, peer } = await entryWith(early413);
+    const url = new URL(`${device.url}/d/${peer.id}${API_PATHS.uploads}?name=clip.mp4`);
+    // fetch 会在连接被关时报 ECONNRESET 丢掉响应，这里直接用 node:http 读响应头
+    const response = await new Promise<IncomingMessage>((resolve, reject) => {
+      const req = request(url, { method: "POST", headers: { cookie: device.cookie, origin: device.url, "content-type": "application/octet-stream", "content-length": String(64 * 1024 * 1024) } }, resolve);
+      req.on("error", () => {});
+      req.once("close", () => reject(new Error("没拿到响应")));
+      req.write(Buffer.alloc(1024 * 1024, 1));
+    });
+    expect(response.statusCode).toBe(413);
+    expect(response.headers.connection).toBe("close");
+    response.destroy();
   });
 
   it("请求体传到一半就不动了：过了时限回 502 离线", async () => {

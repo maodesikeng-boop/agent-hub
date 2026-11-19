@@ -201,20 +201,9 @@ export function createFeishuSdkTransport(options: FeishuSdkOptions): FeishuTrans
       const res = await client.im.v1.file.create({ data: { file_type: input.fileType, file_name: input.fileName, file: createReadStream(input.path) } });
       return { fileKey: unwrap(res?.file_key, "上传文件") };
     },
-    async downloadResource(messageId, fileKey, type, maxBytes) {
+    async downloadResource(messageId, fileKey, type) {
       const res = await client.im.v1.messageResource.get({ path: { message_id: messageId, file_key: fileKey }, params: { type } });
-      const stream: Readable = res.getReadableStream();
-      const chunks: Buffer[] = [];
-      let size = 0;
-      for await (const chunk of stream) {
-        size += (chunk as Buffer).length;
-        if (size > maxBytes) {
-          stream.destroy();
-          throw new Error(`飞书文件超过 ${maxBytes} 字节`);
-        }
-        chunks.push(chunk as Buffer);
-      }
-      return Buffer.concat(chunks);
+      return res.getReadableStream() as Readable;
     },
     async start(handlers) {
       const bot = toResult(await client.request({ method: "GET", url: "/open-apis/bot/v3/info" }));

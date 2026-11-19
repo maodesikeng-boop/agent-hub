@@ -181,7 +181,7 @@ const MIRROR_TITLE = "网页上说";
 const NO_REPLY_TEXT = "（这一轮没有文字回复）";
 /** 飞书里发的文件没收下（超过 MAX_UPLOAD_BYTES、下载失败）时回的一句。 */
 const missedFilesText = (names: readonly string[]) =>
-  `没收下：${names.map((n) => `「${n}」`).join("、")}（超过 ${MAX_UPLOAD_BYTES / 1024 / 1024} MB 或下载失败），去网页上传。`;
+  `没收下：${names.map((n) => `「${n}」`).join("、")}（超过 ${MAX_UPLOAD_BYTES / 1024 / 1024} MB 或下载失败），压小一点重发试试。`;
 /** 原文只进日志。 */
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 

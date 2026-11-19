@@ -6,6 +6,7 @@
 // - 所有发送都在主聊天流里：不传 reply_in_thread，不建话题群（group_message_type 固定 chat）；
 // - 长连接收到的每个事件 3 秒内必须处理完，否则飞书重推：onEvent 只做解析和入队，重活在队列里做。
 
+import type { Readable } from "node:stream";
 /** 用到的开放接口和参数（只列 Fusa 传的字段）。路径见 docs/feishu-design.md「飞书官方接口」。 */
 export interface FeishuMethodArgs {
   /** GET /open-apis/bot/v3/info：机器人自己的 open_id 和名字。 */
@@ -142,8 +143,8 @@ export interface FeishuTransport {
   call<M extends FeishuMethod>(method: M, args: FeishuMethodArgs[M]): Promise<FeishuApiResult>;
   uploadImage(input: FeishuImageUpload): Promise<{ imageKey: string }>;
   uploadFile(input: FeishuFileUpload): Promise<{ fileKey: string }>;
-  /** GET /open-apis/im/v1/messages/:message_id/resources/:file_key。超过 maxBytes 中止并抛错，不返回半截内容。 */
-  downloadResource(messageId: string, fileKey: string, type: "image" | "file", maxBytes: number): Promise<Buffer>;
+  /** GET /open-apis/im/v1/messages/:message_id/resources/:file_key。返回响应流，不整包读进内存；大小上限由调用方在写盘时卡。 */
+  downloadResource(messageId: string, fileKey: string, type: "image" | "file"): Promise<Readable>;
   /** 开长连接（WSClient），断了自己重连，直到 stop。 */
   start(handlers: FeishuConnectionHandlers): Promise<void>;
   stop(): Promise<void>;

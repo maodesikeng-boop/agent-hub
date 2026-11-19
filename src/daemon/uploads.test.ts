@@ -102,7 +102,7 @@ describe("存文件", () => {
   it("超过上限：拒绝，中文原因里写明上限；刚好等于上限的收下", async () => {
     const error = await saveUpload(dir, "big.bin", Buffer.alloc(MAX_UPLOAD_BYTES + 1)).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(UploadError);
-    expect((error as UploadError).message).toBe("文件太大，单个文件最多 50 MB");
+    expect((error as UploadError).message).toBe("文件太大，单个文件最多 100 MB");
     expect(readdirSync(dir)).toEqual([]);
     const ok = await saveUpload(dir, "edge.bin", Buffer.alloc(MAX_UPLOAD_BYTES));
     expect(ok.size).toBe(MAX_UPLOAD_BYTES);

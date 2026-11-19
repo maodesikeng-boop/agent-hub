@@ -112,11 +112,11 @@ describe("上传文件", () => {
     expect(new Headers(init.headers).get("content-type")).toBe("application/octet-stream");
   });
 
-  it("413：说的是上传的上限（50 MB），不是普通请求的 1 MB", async () => {
-    stubFetch(new Response(JSON.stringify({ error: "文件太大，单个文件最多 50 MB" }), { status: 413 }));
+  it("413：说的是上传的上限（100 MB），不是普通请求的 1 MB", async () => {
+    stubFetch(new Response(JSON.stringify({ error: "文件太大，单个文件最多 100 MB" }), { status: 413 }));
     const err = await caught(postUpload(new File(["x"], "a.bin"), "a.bin"));
     expect(err.status).toBe(413);
-    expect(errorText(err).text).toBe("文件太大，单个文件最多 50 MB");
+    expect(errorText(err).text).toBe("文件太大，单个文件最多 100 MB");
   });
 
   it("400 带中文原因：原样给用户；连不上：说连不上", async () => {
