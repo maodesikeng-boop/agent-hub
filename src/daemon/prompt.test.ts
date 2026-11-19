@@ -250,7 +250,7 @@ describe("提示词：项目经理的结构（照参考稿）", () => {
     const name = (l: string) => (l.startsWith("# ") ? "标题" : (/^- \*\*(.+?)\*\*/.exec(l)?.[1] ?? l));
     expect(onlyManage.map(name)).toEqual(["标题", "自己做", "切换长期模式"]);
     expect(onlyHands.map(name)).toEqual(["标题", "自己做", "拿不准先问", "切换长期模式"]);
-    expect(buildPmModePrompt("manage_only")).toContain("只管理模式下要改项目里文件的活交给 Worker");
+    expect(buildPmModePrompt("manage_only")).not.toContain("只管理模式下要改项目里文件的活交给 Worker");
     expect(buildPmModePrompt("hands_on")).toContain("包括改几行简单文件");
     expect(buildPmModePrompt("hands_on")).toContain("做完告诉用户做了什么、改了哪些文件");
   });
@@ -550,7 +550,7 @@ describe("提示词：项目经理（M3）", () => {
       // 旧的三档判断和“怎么拆”的细节没有了
       for (const gone of ["先定这件事走哪一档", "不建图", "分析要快", "这是默认判断"]) expect(analyze, gone).not.toContain(gone);
     }
-    expect(manage).toContain("- **自己做**：做得快（耗时短），或者不用读大量上下文（消耗 Token 少）的事，你自己直接做（只管理模式下要改项目里文件的活交给 Worker）。");
+    expect(manage).toContain("- **自己做**：做得快（耗时短），或者不用读大量上下文（消耗 Token 少）的事，你自己直接做。");
     expect(hands).toContain("- **自己做**：做得快（耗时短），或者不用读大量上下文（消耗 Token 少）的事，你自己直接做，包括改几行简单文件；做完告诉用户做了什么、改了哪些文件。");
     for (const ctx of [projectContext(), noProjectContext()]) {
       const prompt = buildLaunchPrompt(ctx, dir);
