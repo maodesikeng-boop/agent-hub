@@ -6,8 +6,8 @@ import { App } from "./App.tsx";
 import { DevicesStore } from "./device-hub.ts";
 import { FakeApi, installFakeWebSocket, makeSnapshot } from "./test-utils.ts";
 
-const mac: DeviceInfo = { id: "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d", name: "Mac", platform: "darwin", self: true, url: null };
-const tokyo: DeviceInfo = { id: "3f2b8c1e-4d5a-4b6c-9e7f-0a1b2c3d4e5f", name: "东京", platform: "linux", self: false, url: "https://tokyo.example.ts.net" };
+const mac: DeviceInfo = { id: "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d", name: "Mac", platform: "darwin", self: true, online: true, link: "local", fingerprint: null };
+const tokyo: DeviceInfo = { id: "3f2b8c1e-4d5a-4b6c-9e7f-0a1b2c3d4e5f", name: "东京", platform: "linux", self: false, online: true, link: "relay", fingerprint: null };
 
 type Reply = DeviceInfo[] | number | "network";
 

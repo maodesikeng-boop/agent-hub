@@ -32,7 +32,7 @@ Bellwood 给每个项目配一位专属的**项目经理（PM）**，把繁琐�
 
 如果你同时推进不止一个需求或仓库、混用不止一家命令行 Agent，或者希望在手机和飞书群里随时拍板验收，它就适合你。如果你平时只在一个仓库里开一个终端跑单个 Agent 而且够用，那就不需要它。
 
-支持 **macOS 13+**（`Bellwood.app` 原生窗口）、**Windows x64**（Tauri 2 原生桌面应用，随包自带官方 Node 24 LTS，无需管理员权限、无需 WSL 2）、**Linux**（`systemd` 常驻守护进程）、**手机浏览器与主屏幕 PWA**，以及**飞书**。
+支持 **macOS 13+**（`Bellwood.app` 原生窗口）、**Windows x64**（Tauri 2 原生桌面应用，随包自带官方 Node 24 LTS，无需管理员权限、无需 WSL 2）、**Linux**（`systemd` 常驻守护进程），以及手机和电脑上的**飞书**。
 
 ## 整体结构
 
@@ -41,7 +41,7 @@ Bellwood 给每个项目配一位专属的**项目经理（PM）**，把繁琐�
 <div align="center">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme/architecture-zh-dark.svg">
-  <img src="docs/screenshots/readme/architecture-zh.svg" width="900" alt="Bellwood 整体结构：桌面端、飞书单聊与项目群、手机 PWA 与多设备联机经总助、一项目一会话 PM 与沙箱独立工作树驱动本机 6 家官方命令行 Agent">
+  <img src="docs/screenshots/readme/architecture-zh.svg" width="900" alt="Bellwood 整体结构：桌面端、飞书会话、支持自动接管的账号级机器人和账号组网，经总助、项目经理与沙箱工作树调用本机命令行 Agent">
 </picture>
 </div>
 
@@ -130,11 +130,11 @@ Worker 交活时把方案文档、验收结论、真机截图和 H.264 录屏（
 | :-- | :-- |
 | **无状态单轮分派** | 总助不维护长对话会话。你每发一句话，后台在隔离的只读空目录里起一个一次性单轮会话，只喂跨设备 PM 名片（上限 `24 KB`）和最近 5 条跨厂商通用的指令回执（上限 `600 B`），分派完当场销毁。切换总助自己的厂商和模型也是 0 秒生效。 |
 | **后台增量维护的两层项目档案** | 每当某个项目切点后的加权对话字数满 `20,000`（用户字数 × 4 + PM 字数，间隔至少 2 小时）或任务图完结时，守护进程在后台单独跑一轮轻量模型读账本与最新交接单，自动刷新结构化项目档案，不打扰项目经理会话。总助每轮默认只读**第一层名片**（一句话定位、口头别名、近期主线）；拿不准细节时才调 `hub dispatch project-show` 按需展开**第二层完整档案**（上限 `4,000` 字），绝不碰百万字原始记录。 |
-| **各管各账、名片互联** | 每台电脑各跑自己的守护进程和本地 SQLite 账本，各自维护本机项目档案。设备之间经中心 Linux 服务器 SSH 隧道（受限转发账号 `agenthub-tunnel`）或 Tailscale 配对后，跨机只传轻量名片摘要（10 秒缓存）、转发指令和拍板结果，仓库代码与工具日志全留在原机。 |
+| **各管各账、名片互联** | 每台电脑各跑自己的守护进程和本地 SQLite 账本，各自维护本机项目档案。同一账号下的设备优先走局域网直连，跨网通过端到端加密中继通信。总助跨设备交换项目名片摘要、转发指令和拍板结果，仓库代码和工具日志留在原机。 |
 
 ## 飞书入口：在群里讨论，@机器人自动完成验证
 
-除了桌面窗口和手机网页，Bellwood 还内置了原生飞书（及 Lark）通道，个人手机遥控和团队群聊协作都能直接跑在飞书里：
+在手机或电脑上打开飞书（或 Lark），可以直接操作 Bellwood，也可以和团队在群里协作。
 
 <div align="center">
 <picture>
@@ -200,11 +200,11 @@ Worker 交活时把方案文档、验收结论、真机截图和 H.264 录屏（
 
 </details>
 
-### 3. 接入飞书、手机 PWA 或 Linux 常驻服务器（可选）
+### 3. 接入飞书与其他电脑（可选）
 
-- **接入飞书机器人与项目群**：守护进程运行期间，在终端执行 `node src/feishu/main.ts connect` 并用手机飞书扫码即可（`node src/feishu/main.ts status` 查看状态与群策略；多台电脑接飞书时每台各扫一次码建独立应用）。
-- **手机浏览器与主屏幕 PWA**：在已登录电脑打开 **Settings → Security & Access → Sign in on phone** 生成一次性二维码，手机扫码后在电脑端 **Signed-in browsers** 点 **Allow** 批准；在手机浏览器点“添加到主屏幕”即可全屏运行并开启 Web Push 锁屏通知。
-- **Linux 常驻后台与多设备联机**：在 Ubuntu 服务器上部署 `systemd` 用户服务，跑一次 `sudo scripts/linux-sandbox-setup.sh` 配好 `bubblewrap` 沙箱，再通过 **Settings → Computers** 经 SSH 隧道或 Tailscale 配对多台电脑。详见 [docs/linux.md](docs/linux.md)、[docs/multi-device-design.md](docs/multi-device-design.md) 与 [docs/hub-tunnel-design.md](docs/hub-tunnel-design.md)。
+- **接入飞书机器人与项目群**：守护进程运行期间，在终端执行 `node src/feishu/main.ts connect` 并用手机飞书扫码即可。运行 `node src/feishu/main.ts status` 查看绑定状态。同一账号的设备共用一个机器人，当前设备离线后由另一台自动接管。
+- **多台电脑组网**：配置中继地址和 GitHub OAuth App Client ID，在每台电脑的 **Settings → Computers** 登录同一个 GitHub 账号。批准新设备时核对两台电脑显示的六位数字码。手机通过飞书操作这些设备。
+- **Linux 常驻后台**：在 Ubuntu 上部署 `systemd` 用户服务，运行一次 `sudo scripts/linux-sandbox-setup.sh` 配置 `bubblewrap` 沙箱。详见 [Linux 部署指南](docs/linux.md)与[账号组网设计](docs/account-mesh-design.md)。
 
 <details>
 <summary><b>从源码构建或直接在终端启动守护进程</b></summary>
@@ -249,7 +249,8 @@ pnpm start                          # 构建 dist/web 并在 127.0.0.1:4317 启�
 | `AGENT_HUB_PORT` | `4317` | 本机网页服务端口，只监听 `127.0.0.1`。设为 `0` 由系统分配空闲端口。 |
 | `AGENT_HUB_CLAUDE` / `AGY` / `CODEX` / `PI` / `DEEPSEEK` / `CURSOR` | `claude` / `agy` / `codex` / `pi` / `dsh` / `cursor-agent` | 覆盖各家 CLI 的命令名或可执行文件路径（支持 `~/` 展开）。 |
 | `AGENT_HUB_DEFAULT_MODEL` | 未设置 | 首次启动自动创建默认项目经理时使用的模型。 |
-| `AGENT_HUB_TAILSCALE` / `TAILNET_NAME` / `TAILNET_OWNER` / `SERVE_TARGET` | 自动探测 | `tailscale` 路径、tailnet 域名、设备主人登录名（打了 tag 的设备必填）以及 `tailscale serve` 目标类型（Linux 为 `unix`，macOS 为 `tcp`）。 |
+| `FUSA_RELAY_URL` | 未设置 | 账号组网的中继地址。同一账号下的设备使用同一个中继。 |
+| `FUSA_GITHUB_CLIENT_ID` | 未设置 | 已启用 Device Flow 的 GitHub OAuth App Client ID。 |
 | `AGENT_HUB_REPO_DIR` / `AGENT_HUB_NODE` | `Info.plist` 内置值 | 仅源码编译的 `Bellwood.app`：运行时覆盖仓库目录或 Node 可执行文件路径。 |
 
 当项目配置了 `hub project setup` 准备脚本时，守护进程在新建 worktree 执行脚本时会自动注入 `AGENT_HUB_ROOT_PATH` 与 `AGENT_HUB_WORKTREE_PATH`。

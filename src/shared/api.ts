@@ -32,16 +32,15 @@ import type {
   RouterSlice,
 } from "./router.ts";
 import type { LedgerErrorCode, PersonaView } from "./ledger.ts";
-import type { PeerTransport, RemotePeerTransportKind } from "./peer-transport.ts";
 import type { PmCapabilitiesStart } from "./pm-capabilities.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
 import type { PmLookSetting } from "./slimes.ts";
 import type { WorkerLineSummary } from "./snapshot.ts";
-import type { TunnelStatus } from "./tunnel.ts";
 import type { UserBlocker, UserBlockerId } from "./user-blockers.ts";
 import type { AgentVendor, ModelCatalog, QuotaWindowKey } from "./vendors.ts";
 import type { FileAction } from "./preview.ts";
 import type { ServerInfo } from "./server-info.ts";
+import type { DeviceFingerprint, MeshLinkKind } from "./mesh.ts";
 import type { WorkerPick } from "./worker.ts";
 
 export const API_PATHS = {
@@ -167,39 +166,42 @@ export const API_PATHS = {
   // 别的设备的接口都是 devicePath(id, 上面的路径)，入口原样转发（HTTP 和 WebSocket）；对方连不上 → 502 code device_offline，
   // 设备编号不认识 → 404 code not_found。下面这些是入口自己的，不转发。
 
-  /** GET → DevicesResponse（含本机，本机排第一）；POST（AddDeviceRequest：对方网址 + 对方给的邀请码）→ 201 DeviceInfo，配对失败回中文原因。 */
+  /** GET → DevicesResponse（信任表里的设备，本机排第一）。加设备不在这里：新设备登录同一个账号，在“账号与设备”里核对批准。 */
   devices: "/api/devices",
-  /** PATCH（RenameDeviceRequest）→ DeviceInfo；DELETE → 204：删本机记录并通知对方删（对方离线只删本机）。不能删本机（400）。 */
+  /** PATCH（RenameDeviceRequest）→ DeviceInfo；DELETE → 204：把这台移出账号（签撤销声明发给其他设备，告诉中继删掉它）。不能删本机（400）。 */
   device: (id: DeviceId) => `/api/devices/${id}`,
-  /** POST，没有请求体 → 201 DeviceInviteResponse：邀请别的设备加入本机（邀请码 128 位随机、10 分钟、只能用一次）。 */
-  deviceInvites: "/api/devices/invites",
-  /** POST（TunnelConnectRequest）→ TunnelStatusResponse：连入方贴入 ahtun1_ 连接码连向中心。 */
-  tunnelConnect: "/api/devices/tunnel/connect",
-  /** POST，空对象或无请求体 → TunnelStatusResponse：立刻重试当前隧道连接。 */
-  tunnelRetry: "/api/devices/tunnel/retry",
-  /** PUT（SetPublicEntryRequest）→ PublicEntryStatus：开启或关闭公网入口（run/public.sock）。 */
-  publicEntry: "/api/devices/public-entry",
 
-  // ---- 联机：设备 → 设备（带 Authorization: Bearer <设备令牌>、PEER_DEVICE_HEADER；只经 tailscale serve 进来，还要过身份头） ----
+  // ---- 联机：设备 → 设备（docs/account-mesh-design.md）：只走组网入口，双向认证的 TLS 里认出是哪台，不带令牌 ----
 
-  /** POST（PeerPairRequest，不带 Bearer，凭邀请码）→ PeerPairResponse。主人登录名和本机不一致、邀请码不对 / 过期 / 用过 → 403；错 5 次锁定。 */
-  peerPair: "/api/peer/pair",
-  /** PUT（PeerDeviceListRequest）→ 204：已配对的设备互相同步设备清单（只有谁是谁、网址，不带令牌）。 */
-  peerDevices: "/api/peer/devices",
-  /** POST，没有请求体 → 204：对方把本机移除了，本机也删掉它的记录。 */
-  peerUnpair: "/api/peer/unpair",
-  /**
-   * POST（PeerInviteRequest）→ 201 DeviceInviteResponse：已配对的设备替第三台要一个邀请码（介绍用，见 peerIntroductions）。
-   * 邀请码只给 deviceId 那台用；它是本机移除过的设备、或邀请码被锁住时 → 403。
-   */
-  peerInvites: "/api/peer/invites",
-  /**
-   * POST（PeerIntroductionRequest）→ PeerIntroductionResponse：请本机把它介绍给本机已配对的另一台。本机去那台要一个邀请码交回来，
-   * 请求方再拿它去那台 peerPair。“第三台配一次就全通”靠它；谁去配对按设备编号定（小的那台），不会两边同时配。
-   */
-  peerIntroductions: "/api/peer/introductions",
-  /** PUT（RenameDeviceRequest）→ 204：入口上给这台改名，名字归这台自己管，改完它再同步给所有已配对的设备。 */
+  /** PUT（RenameDeviceRequest）→ 204：入口上给这台改名，名字归这台自己管，改完它再告诉所有可信设备（peerRenamed）。 */
   peerName: "/api/peer/name",
+  /** PUT（RenameDeviceRequest）→ 204：发请求的那台（按 TLS 证书认）告诉本机它改名了。 */
+  peerRenamed: "/api/peer/renamed",
+  /** GET → TrustStatementsBody：本机信任表的签名声明（批准和撤销），对齐用；POST（TrustStatementsBody）→ 204：收下对方转来的声明。 */
+  peerTrust: "/api/peer/trust",
+  /** GET → { relayConnected, holders }：降级持有租约前经局域网探查对方是否正持有租约。 */
+  peerLease: "/api/peer/lease",
+  /** POST（FeishuForwardedEvent）→ FeishuCardActionResponse：中心把飞书群消息或卡片点击转给群归属电脑。 */
+  peerFeishuInbound: "/api/peer/feishu/inbound",
+  /** POST（{ chats }）→ 204：可信设备对齐完项目群后把群归属广播给账号里的其他设备。 */
+  peerFeishuChats: "/api/peer/feishu/chats",
+  /** GET → { app: FeishuPeerAppSync | null }；PUT（FeishuPeerAppSync）→ 204：可信设备之间同步飞书应用凭证或断开通知。 */
+  peerFeishuApp: "/api/peer/feishu/app",
+
+  // ---- 账号组网（docs/account-mesh-design.md）：浏览器 → 本机，不转发 ----
+
+  /** GET → AccountStatusView。 */
+  account: "/api/account",
+  /** POST（StartLoginRequest，可空）→ AccountStatusView：开始 GitHub 设备码登录；DELETE → AccountStatusView：取消。 */
+  accountLogin: "/api/account/login",
+  /** POST → AccountStatusView：退出账号（别的设备也删掉这台）。 */
+  accountLogout: "/api/account/logout",
+  /** POST → AccountStatusView：对一台等批准的设备开始核对（本机当批准方）。requestId 是那台的设备编号。 */
+  accountApprovalBegin: (requestId: string) => `/api/account/approvals/${encodeURIComponent(requestId)}/begin`,
+  /** POST（AnswerApprovalRequest）→ AccountStatusView：本机用户点“一致”或“不一致”。 */
+  accountApprovalAnswer: (requestId: string) => `/api/account/approvals/${encodeURIComponent(requestId)}/answer`,
+  /** PUT（SetCenterPriorityRequest）→ AccountStatusView：中心顺序。 */
+  accountPriority: "/api/account/priority",
 
   // ---- 联机：推送（只在“提醒设备”上用，手机 PWA 装在哪个来源就是哪台） ----
 
@@ -229,7 +231,7 @@ export const API_PATHS = {
 
   // ---- 联机：浏览器登录（每个浏览器一条，能单独退出；只在入口上，浏览器从不拿别的设备的令牌） ----
 
-  /** GET → AuthStatusResponse：查询当前浏览器会话状态（active / pending_approval / unauthenticated）。 */
+  /** GET → AuthStatusResponse：查询当前浏览器会话状态（active / unauthenticated）。 */
   authStatus: "/api/auth/status",
   /** GET → DesktopHealthResponse：需有效登录会话 Cookie 的本机健康探活端点（供桌面外壳 `--self-test` 验证鉴权与服务状态）。 */
   health: "/api/health",
@@ -237,8 +239,6 @@ export const API_PATHS = {
   browserSessions: "/api/sessions",
   /** DELETE → 204：退出这一个浏览器（可以是自己）。 */
   browserSession: (id: string) => `/api/sessions/${encodeURIComponent(id)}`,
-  /** POST → 204：已登录设备批准公网待批准（pending_approval）的浏览器会话。 */
-  approveBrowserSession: (id: string) => `/api/sessions/${encodeURIComponent(id)}/approve`,
   /** POST，没有请求体 → 204：全部退出 = 换主钥匙（state/ui-token）+ 清所有会话，包括自己。 */
   logoutAll: "/api/sessions/logout-all",
   /** POST，没有请求体 → 201 LoginLinkResponse：给手机扫的一次性登录链接（5 分钟、用一次就失效）。 */
@@ -315,10 +315,6 @@ export interface StateSnapshot {
   olderEndedWorkers?: Record<PmId, ConversationId>;
   /** 守护进程所在的机器能做什么（界面服务补上的，不是账本的数据）：网页按它显示“选择…”和“在 Finder 中显示”等控件。 */
   server: ServerInfo;
-  /** 连入方 ssh 隧道的状态（daemon/tunnel/，界面服务补上的）：没配隧道不带，没连过中心是 null。内部值，网页怎么说由块 E 定。 */
-  tunnel?: TunnelStatus | null;
-  /** 公网入口（run/public.sock）状态与 Funnel 命令（界面服务补上的）。 */
-  publicEntry?: PublicEntryStatus;
   /**
    * 这次启动的唯一标识（界面服务补上的，同 /api/auth/status 的 instanceId）：守护进程重启就变。
    * 网页（只看入口本机这台）发现它变了，保存草稿后自动刷新拿新网页（web/auto-reload.ts）。老服务端没带是 undefined。
@@ -326,8 +322,8 @@ export interface StateSnapshot {
   bootId?: string;
 }
 
-/** 账本给出的快照：界面服务在 /api/state 里再补上 server、tunnel、publicEntry。 */
-export type LedgerSnapshot = Omit<StateSnapshot, "server" | "tunnel" | "publicEntry" | "bootId">;
+/** 账本给出的快照：界面服务在 /api/state 里再补上 server、bootId。 */
+export type LedgerSnapshot = Omit<StateSnapshot, "server" | "bootId">;
 
 /** GET /api/conversations/:id/messages?before=<消息编号>：更早的 100 条，从小到大。 */
 /** 不在快照里的对话按需拉回来的一批（GET conversationsLookup）：对话和快照里同形状，sessions 是它们各自最新一代的会话。 */
@@ -624,7 +620,12 @@ interface ResyncMessage {
   type: "resync";
 }
 
-export type WsServerMessage = Change | ResyncMessage;
+/** 账号组网的状态变了（登录、批准、设备上下线、中心换手）：网页重拉 GET /api/account。 */
+export interface AccountUpdatedMessage {
+  type: "account.updated";
+}
+
+export type WsServerMessage = Change | ResyncMessage | AccountUpdatedMessage;
 
 /**
  * 服务端每 WS_HEARTBEAT_MS 推一条，证明这条连接还通（daemon/ws-keepalive.ts）。网页的 connection.ts 收到只记“最后收到”的时间，
@@ -675,25 +676,20 @@ export function devicePath(device: DeviceId | null, path: string): string {
   return device === null ? path : `${DEVICE_PROXY_PREFIX}/${device}${path}`;
 }
 
-/** tailscale serve 放进请求头的请求者登录名（serve 会删掉客户端自己带的同名头）。只有经 serve 进来的请求才有。 */
-export const TAILSCALE_USER_LOGIN_HEADER = "tailscale-user-login";
-
-/** 设备 → 设备的请求带上自己的设备编号（和 Bearer 设备令牌一起查）。 */
-export const PEER_DEVICE_HEADER = "x-agent-hub-device";
 /** 入口转发 `/d/<设备>/api/*` 时注入的当前浏览器会话不可逆摘要头（隔离不同浏览器窗口的远端登录流，不带原始会话凭证）。 */
 export const PEER_CLIENT_SCOPE_HEADER = "x-agent-hub-client-scope";
 
 /**
- * 只给浏览器用、设备令牌不能访问的接口（入口自己的：设备管理、浏览器登录、推送订阅）。新加这类接口要加进来。
- * 设备令牌也不能访问 /d/（不能借别的设备的转发去第三台）和 /auth。
+ * 只给浏览器用、别的设备（组网入口来的请求）不能访问的接口：入口自己的设备管理、账号、浏览器登录、推送订阅。新加这类接口要加进来。
+ * 组网入口来的请求也不能访问 /d/（不能借别的设备的转发去第三台）和 /auth。
  */
-export const ENTRY_ONLY_API_PREFIXES: readonly string[] = ["/api/devices", "/api/sessions", "/api/login-links", "/api/push/", "/api/auth/", "/api/health", "/api/self-reload"];
+export const ENTRY_ONLY_API_PREFIXES: readonly string[] = ["/api/devices", "/api/account", "/api/sessions", "/api/login-links", "/api/push/", "/api/auth/", "/api/health", "/api/self-reload"];
 
 /** 入口转发的 WebSocket 因为对方连不上（握手失败、心跳没回）被关时的状态码和原因。网页按断线重连处理。 */
 export const DEVICE_OFFLINE_WS_CLOSE_CODE = 4502;
 export const DEVICE_OFFLINE_REASON = "device_offline";
 
-/** GET /api/devices 里的一台。 */
+/** GET /api/devices 里的一台（信任表里的设备）。 */
 export interface DeviceInfo {
   id: DeviceId;
   /** 默认是主机名，能改。 */
@@ -702,21 +698,17 @@ export interface DeviceInfo {
   platform: string;
   /** 是不是入口本机。 */
   self: boolean;
-  /** 那台的 tailnet 网址（https://<机器>.<tailnet>.ts.net），没有 Tailscale 的本机或隧道设备是 null。 */
-  url: string | null;
-  /** 这台设备的连法（本机 / tailscale / ssh-tunnel）。 */
-  transport?: PeerTransport;
+  /** 中继说它在线（本机永远 true）。 */
+  online: boolean;
+  /** 本机现在连它用的哪种：本机 / 同局域网直连 / 经中继；没连过或离线是 null。 */
+  link: MeshLinkKind | null;
+  /** 设备证书指纹（核对、排查用）；没开组网（只有本机）时是 null。 */
+  fingerprint: DeviceFingerprint | null;
 }
 
-/** GET /api/devices。在线状态不在这里：由网页到这台设备的 WebSocket 状态得出。 */
+/** GET /api/devices。 */
 export interface DevicesResponse {
   devices: DeviceInfo[];
-}
-
-/** POST /api/devices：在已有设备上添加新设备。url 是新设备的 tailnet 网址，code 是新设备给的邀请码。 */
-export interface AddDeviceRequest {
-  url: string;
-  code: string;
 }
 
 /** PATCH /api/devices/:id。name 按 normalizeName。 */
@@ -724,55 +716,20 @@ export interface RenameDeviceRequest {
   name: string;
 }
 
-/** POST /api/devices/invites → 201。url 是本机的 tailnet 网址（没有 Tailscale 时 null，网页提示先装）；expiresAt 是毫秒时间戳。 */
-export interface DeviceInviteResponse {
-  code: string;
-  url: string | null;
-  expiresAt: number;
+/** POST /api/account/login 的请求体（可空）：换自建中继的网址或 GitHub OAuth Client ID。 */
+export interface StartLoginRequest {
+  relayUrl?: string;
+  githubClientId?: string;
 }
 
-/** POST /api/devices/tunnel/connect：贴入 ahtun1_ 连接码连向中心。 */
-export interface TunnelConnectRequest {
-  code: string;
+/** POST /api/account/approvals/:id/answer。 */
+export interface AnswerApprovalRequest {
+  match: boolean;
 }
 
-/** POST /api/devices/tunnel/connect 与 /api/devices/tunnel/retry 的响应。 */
-export interface TunnelStatusResponse {
-  status: TunnelStatus | null;
-}
-
-/** 公网入口状态（随 /api/state 的 publicEntry 与 PUT /api/devices/public-entry 响应下发）。 */
-export interface PublicEntryStatus {
-  enabled: boolean;
-  hostname: string | null;
-  funnelCommand: string;
-}
-
-/** PUT /api/devices/public-entry 的请求体。 */
-export interface SetPublicEntryRequest {
-  enabled: boolean;
-  hostname?: string | null;
-}
-
-/** 设备之间互相告知的“谁是谁”（不带令牌）。 */
-export interface PeerDevice {
-  id: DeviceId;
-  name: string;
-  platform: string;
-  url: string;
-  transport?: RemotePeerTransportKind;
-}
-
-/** 新设备回自己的身份和发给对方用的设备令牌。双方都只存对方令牌的 sha256。 */
-export interface PeerPairResponse {
-  device: PeerDevice;
-  token: string;
-}
-
-/** 那台是谁（对方记的）和它给的邀请码（10 分钟、一次性），请求方拿去那台 POST /api/peer/pair。 */
-export interface PeerIntroductionResponse {
-  device: PeerDevice;
-  code: string;
+/** PUT /api/account/priority。 */
+export interface SetCenterPriorityRequest {
+  priority: DeviceId[];
 }
 
 // ---- 联机：推送（第 6.2 节） ----
@@ -805,11 +762,9 @@ export interface PushPayload {
 
 // ---- 联机：浏览器登录（第 3.4 节） ----
 
-export type BrowserSessionStatus = "active" | "pending_approval";
-
 /** GET /api/auth/status：当前浏览器的登录状态。 */
 export interface AuthStatusResponse {
-  status: BrowserSessionStatus | "unauthenticated";
+  status: "active" | "unauthenticated";
 }
 
 /** 一个已登录的浏览器。时间是毫秒时间戳。 */
@@ -821,12 +776,6 @@ export interface BrowserSessionInfo {
   lastSeenAt: number;
   /** 是不是发这个请求的浏览器自己。 */
   current: boolean;
-  /** 会话状态：本机/tailnet 直接为 active；公网扫码后为 pending_approval，已登录设备点允许后变为 active。 */
-  status?: BrowserSessionStatus;
-  /** 是否经公网入口（run/public.sock）登录。 */
-  viaPublic?: boolean;
-  /** 公网登录时的客户端 IP（可选）。 */
-  clientIp?: string;
 }
 
 /** GET /api/sessions，按最后活动从新到旧。 */

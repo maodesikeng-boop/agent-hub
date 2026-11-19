@@ -54,15 +54,12 @@ describe("W5 组装 + 端到端", () => {
     // 新建的项目经理没有默认性格设定，文件是空的
     expect(readFileSync(join(env.home, "state", "personas", `pm-${state.pms[0]!.id}.md`), "utf8")).toBe("");
 
-    // 联机：设备身份第一次生成；Linux 上另听给 tailscale serve 的 socket（0600），关掉后删掉
+    // 联机：设备身份和组网的设备密钥第一次生成（私钥 0600）
     const device = JSON.parse(readFileSync(join(env.home, "state", "device.json"), "utf8")) as { id: string; name: string };
     expect(isDeviceId(device.id)).toBe(true);
-    const uiSock = join(env.home, "run", "ui.sock");
-    if (process.platform === "linux") expect(statSync(uiSock).mode & 0o777).toBe(0o600);
-    else expect(existsSync(uiSock)).toBe(false);
+    if (process.platform !== "win32") expect(statSync(join(env.home, "state", "mesh", "key.pem")).mode & 0o777).toBe(0o600);
 
     expect(await terminate(daemon)).toEqual({ code: 0, signal: null });
-    expect(existsSync(uiSock)).toBe(false);
     const again = await env.start();
     const s2 = await client.withPort(again.port).state();
     expect(s2.pms).toHaveLength(1);

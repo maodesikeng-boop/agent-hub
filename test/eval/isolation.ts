@@ -269,7 +269,7 @@ export function claudeScratchRules(uid: number | undefined): string[] {
 }
 
 /** 真守护进程在数据目录 run/ 下的 socket（src/shared/paths.ts）。 */
-const DAEMON_SOCKETS = ["run/hub.sock", "run/admin.sock", "run/ui.sock", "run/public.sock", "run/peer.sock", "run/tunnel/hub.sock"];
+const DAEMON_SOCKETS = ["run/hub.sock", "run/admin.sock"];
 
 export function sbString(s: string): string {
   if (/[\x00-\x1f\x7f]/.test(s)) throw new Error("SBPL 路径含控制字符");

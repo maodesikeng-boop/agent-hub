@@ -155,7 +155,7 @@ export interface FeishuConnectionHandlers {
   /** 每个事件调一次；必须同步返回（只解析、入队），出错不影响回执。 */
   onEvent(event: FeishuRawEvent): void;
   /** 卡片按钮点击；返回的 toast 显示给点的人。必须在 FEISHU_CARD_ACTION_DEADLINE_MS 内返回。 */
-  onCardAction(action: FeishuRawCardAction): FeishuCardActionResponse;
+  onCardAction(action: FeishuRawCardAction): FeishuCardActionResponse | Promise<FeishuCardActionResponse>;
   /** 连上（含重连成功）时调：服务据此对账群成员、补发离线期间的消息。 */
   onConnected(): void;
   /** 断开时调；传输层自己重连。 */

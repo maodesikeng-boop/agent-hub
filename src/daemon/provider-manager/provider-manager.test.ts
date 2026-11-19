@@ -7,7 +7,6 @@ import {
   AGENT_VENDORS,
   API_PATHS,
   PEER_CLIENT_SCOPE_HEADER,
-  PEER_DEVICE_HEADER,
   PROVIDER_JOB_LOG_MAX_BYTES,
   PROVIDER_JOB_LOG_MAX_LINES,
   uiCookieName,
@@ -29,8 +28,8 @@ import {
 } from "../../vendors/deepseek/setup.ts";
 import { readPiAuthMap, resolvePiAuthJsonPath } from "../../vendors/pi/setup.ts";
 import { createModelCatalogs } from "../driver/model-catalog.ts";
-import { createPeers, type PeerRecord } from "../peers/index.ts";
-import { newPeerToken, sha256Hex } from "../peers/tokens.ts";
+import { approveNode, loginNode, startTestRelay } from "../mesh/test-helpers.ts";
+import { startTestDevice } from "../peers/test-helpers.ts";
 import * as win32Platform from "../platform/win32/process-tree.ts";
 import { openTestDb } from "../store/test-helpers.ts";
 import { FakeLedger } from "../ui-server/fake-ledger.ts";
@@ -457,7 +456,7 @@ describe("provider-manager + ui-server：0 子进程读取、免重启安装/登
     }
   });
 
-  it("GET /api/providers 严格 0 子进程拉起，一键安装 + BROWSER 登录免重启立即刷新 VendorRuntimeResolver 与 ModelCatalogs，且隔离跨窗口会话与拦截 pending_approval", async () => {
+  it("GET /api/providers 严格 0 子进程拉起，一键安装 + BROWSER 登录免重启立即刷新 VendorRuntimeResolver 与 ModelCatalogs，且隔离跨窗口会话", async () => {
     const root = makeTempDir("fusa-providers-e2e-");
     tempDirs.push(root);
     const userHome = join(root, "home");
@@ -588,21 +587,6 @@ describe("provider-manager + ui-server：0 子进程读取、免重启安装/登
     try {
       const clientA = testLogin(db, port);
       const clientB = testLogin(db, port);
-      const pendingClient = createBrowserSessions(db).create({
-        userAgent: "mobile-public",
-        entry: "public.example.com",
-        viaPublic: true,
-      });
-      const pendingCookie = `${uiCookieName(host)}=${pendingClient.token}`;
-
-      // 1. 公网待批准会话访问 /api/providers 一律 403 拒绝
-      const pendingRes = await app.inject({
-        method: "GET",
-        url: API_PATHS.providers,
-        headers: { host, cookie: pendingCookie },
-      });
-      expect(pendingRes.statusCode).toBe(403);
-
       // 2. 默认 GET /api/providers 严格 0 子进程拉起，且延迟与体积轻量
       const spawnSpy = vi.spyOn(win32Platform, "spawnOwnedProcess");
       const t0 = performance.now();
@@ -1002,81 +986,18 @@ describe("provider-manager + ui-server：0 子进程读取、免重启安装/登
       },
     });
 
-    const entryId = "11111111-1111-4111-8111-111111111111";
-    const tokyoId = "22222222-2222-4222-8222-222222222222";
-    const sharedPeerToken = newPeerToken();
-
-    // 上游东京服务器
-    const tokyoDb = openTestDb();
-    const entryRecordOnTokyo: PeerRecord = {
-      id: entryId,
-      name: "Mac",
-      platform: "darwin",
-      url: "http://127.0.0.1:9",
-      state: "paired",
-      since: Date.now(),
-      inboundTokenSha256: sha256Hex(sharedPeerToken),
-      outboundToken: newPeerToken(),
-    };
-    const tokyoPeersFile = join(root, "tokyo-peers.json");
-    writeFileSync(tokyoPeersFile, JSON.stringify({ version: 1, devices: [entryRecordOnTokyo], removed: [] }));
-    const tokyoPeersLoaded = createPeers({
-      file: tokyoPeersFile,
-      device: { id: tokyoId, name: "Tokyo" },
-      platform: "linux",
-      saveName: () => {},
-      selfUrl: () => null,
-      allowLoopback: true,
-    });
-    const tokyoApp = createUiServer({
-      ledger: new FakeLedger().asLedger(),
-      token: "tokyo-ui-token-0123456789abcdef",
-      db: tokyoDb,
-      port: 4392,
-      uploadsDir: tokyoPaths.uploadsDir,
-      sentFilesDir: tokyoPaths.sentFilesDir,
-      staticDir: join(root, "no-static"),
-      peers: tokyoPeersLoaded,
-      providers: tokyoManager,
-    });
-    await tokyoApp.listen({ host: "127.0.0.1", port: 0 });
-    const tokyoAddress = tokyoApp.server.address();
-    const tokyoPort = typeof tokyoAddress === "object" && tokyoAddress ? tokyoAddress.port : 0;
-
-    // 入口本机服务器（挂两个不同的已登录浏览器会话 browser1 / browser2，共享同一条配对隧道连向 Tokyo）
-    const entryDb = openTestDb();
-    const tokyoRecordOnEntry: PeerRecord = {
-      id: tokyoId,
-      name: "Tokyo",
-      platform: "linux",
-      url: `http://127.0.0.1:${tokyoPort}`,
-      state: "paired",
-      since: Date.now(),
-      inboundTokenSha256: sha256Hex(newPeerToken()),
-      outboundToken: sharedPeerToken,
-    };
-    const entryPeersFile = join(root, "entry-peers.json");
-    writeFileSync(entryPeersFile, JSON.stringify({ version: 1, devices: [tokyoRecordOnEntry], removed: [] }));
-    const entryPeers = createPeers({
-      file: entryPeersFile,
-      device: { id: entryId, name: "Mac" },
-      platform: "darwin",
-      saveName: () => {},
-      selfUrl: () => null,
-      allowLoopback: true,
-    });
-    const entryPort = 4393;
+    // 上游东京和入口 Mac 登进同一个账号，入口经组网（回环直连）转发到东京
+    const relay = await startTestRelay();
+    const tokyo = await startTestDevice({ relay, name: "Tokyo", serverOptions: { providers: tokyoManager } });
+    const entry = await startTestDevice({ relay, name: "Mac" });
+    await loginNode(tokyo);
+    await loginNode(entry);
+    await approveNode(tokyo, entry);
+    const tokyoId = tokyo.id;
+    const entryPort = entry.port;
     const entryHost = `127.0.0.1:${entryPort}`;
-    const entryApp = createUiServer({
-      ledger: new FakeLedger().asLedger(),
-      token: "entry-ui-token-0123456789abcdef",
-      db: entryDb,
-      port: entryPort,
-      uploadsDir: tokyoPaths.uploadsDir,
-      sentFilesDir: tokyoPaths.sentFilesDir,
-      staticDir: join(root, "no-static"),
-      peers: entryPeers,
-    });
+    const entryApp = entry.server.app;
+    const entryDb = entry.db;
 
     try {
       const browser1 = testLogin(entryDb, entryPort);
@@ -1130,10 +1051,6 @@ describe("provider-manager + ui-server：0 子进程读取、免重启安装/登
       releaseAuth();
       await tokyoManager.close();
       await tokyoModels.close();
-      await entryApp.close();
-      await tokyoApp.close();
-      entryDb.close();
-      tokyoDb.close();
     }
   });
 });

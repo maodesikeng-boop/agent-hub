@@ -2,7 +2,7 @@
 // 一级主页 6～7 行摘要全从内存、localStorage 与 react-query 已有缓存同步读，打开时 0 次 HTTP 请求；进子页时一级主页用 <Activity hidden> 保活（滚动位置不丢）。
 // 桌面外壳不经过这里（Sidebar 打开 SettingsDialog）；两边的状态与接口都来自 settings-model.ts。
 import { Activity, memo, type ReactNode } from "react";
-import { ArrowLeftRight, Bell, Blocks, Globe, Loader2, Monitor, QrCode, Smartphone, Type } from "../../ui/icons.ts";
+import { ArrowLeftRight, Bell, Blocks, Loader2, Monitor, QrCode, Smartphone, Type } from "../../ui/icons.ts";
 import { SettingsGroup } from "../../components/SettingsList.tsx";
 import { LOCAL_DEVICE, type DeviceKey } from "../../devices.ts";
 import type { NotifySettings } from "../../notify.ts";
@@ -10,7 +10,6 @@ import type { SettingsSection } from "../../route.ts";
 import {
   describeComputersSummary,
   describeNotifySummary,
-  describePublicEntrySummary,
   useCachedBrowserSessionsSummary,
   useCachedProvidersSummary,
   useUiScaleSetting,
@@ -21,7 +20,6 @@ import { BrowsersPage } from "./BrowsersPage.tsx";
 import { ComputersPage } from "./ComputersPage.tsx";
 import { NotificationsPage } from "./NotificationsPage.tsx";
 import { ProvidersPage } from "./ProvidersPage.tsx";
-import { PublicAccessPage } from "./PublicAccessPage.tsx";
 import { ScalePage } from "./ScalePage.tsx";
 import { SettingsNavRow } from "./SettingsNavRow.tsx";
 import { SettingsPage } from "./SettingsPage.tsx";
@@ -83,7 +81,6 @@ const SUBPAGES: Record<SettingsSection, SubpageSpec> = {
   computers: { title: "Computers", render: (ctx) => withDevices(ctx, (devices) => <ComputersPage devices={devices} />) },
   "sign-in": { title: "Sign in on another device", render: () => <SignInPage /> },
   browsers: { title: "Signed-in browsers", render: (ctx) => <BrowsersPage {...(ctx.onSignedOut !== undefined ? { onSignedOut: ctx.onSignedOut } : {})} /> },
-  "public-access": { title: "Public access", render: (ctx) => withDevices(ctx, (devices) => <PublicAccessPage devices={devices} />) },
 };
 
 function SettingsHome({
@@ -135,18 +132,8 @@ function SettingsHome({
           icon={<Smartphone aria-hidden="true" />}
           label="Signed-in browsers"
           summary={browsers.summary}
-          attention={browsers.hasPending}
-          attentionTestId="browsers-attention"
           onClick={() => onOpen("browsers")}
         />
-        {devices !== null && (
-          <SettingsNavRow
-            icon={<Globe aria-hidden="true" />}
-            label="Public access"
-            summary={describePublicEntrySummary(devices.publicEntry)}
-            onClick={() => onOpen("public-access")}
-          />
-        )}
       </SettingsGroup>
     </SettingsPage>
   );

@@ -7,6 +7,7 @@
 - `src/vendors/`：各家模型 CLI 驱动、协议适配、模型目录与配置同步。
 - `src/web/`：React 前端工作台与组件库（`src/web/ui/`）。
 - `src/hub/`、`src/feishu/`：Agent 调用的 `hub` 命令入口与终端工具。
+- `src/mesh/`：账号登录与设备管理的终端工具。`src/daemon/mesh/` 管理设备信任、连接与飞书租约，`src/relay/` 提供 Node 与 Cloudflare 中继。
 - `src/shared/`：前后端共用的类型、上限常量（`limits.ts`）、像素资产与纯函数。
 - `apps/`：桌面端监管契约（`desktop/`）、macOS Swift 原生壳（`macos/`）与 Windows Rust/Tauri 原生壳及沙箱辅助程序（`windows/`）。
 - `migrations/`：SQLite 顺序迁移脚本。
@@ -46,8 +47,9 @@
 - `@fastify/static`：托管打包后的网页（`ui-server/server.ts`）。
 - `@fastify/compress`：大响应压缩（`ui-server/server.ts`、`peers/proxy.ts`）。
 - `zod`：校验输入（`ledger/hub-commands.ts`、`peers/service.ts`）。
-- `lru-cache`：带上限的缓存（`commands-catalog.ts`、`driver/model-catalog.ts`、`shared/paths.ts`、`platform/win32/`、`skill-files.ts`、`ledger/loaded-skills.ts`、`daemon/feishu/service.ts`）。
+- `lru-cache`：带上限的缓存（`commands-catalog.ts`、`driver/model-catalog.ts`、`shared/paths.ts`、`platform/win32/`、`skill-files.ts`、`ledger/loaded-skills.ts`、`daemon/feishu/service.ts`、`src/relay/node/server.ts`）。
 - `web-push`：Web Push 推送（`push/sender.ts`、`push/vapid.ts`）。
+- `@peculiar/x509`：生成设备的 Ed25519 自签证书。`reflect-metadata` 提供该库初始化所需的元数据接口（`src/daemon/mesh/identity.ts`）。
 - `@agentclientprotocol/sdk`：标准 ACP（Agent Client Protocol）客户端与服务端协议层（`src/vendors/_common/acp/`）。
 - `jsonc-parser`：保留注释与格式的 JSON/JSONC 解析与局部补丁（`src/vendors/_common/sync/jsonc.ts`）。
 - `@decimalturn/toml-patch`：保留注释与格式的 TOML 解析与局部补丁（`src/vendors/_common/sync/toml.ts`）。
@@ -94,6 +96,7 @@
 **工程工具**
 - `typescript`：类型检查（`pnpm typecheck`）。`knip`：死代码扫描（按需运行 `pnpm exec knip`）。`@types/*`（node、react、react-dom、ws、web-push、write-file-atomic）：类型定义。
 - `oxc-parser`：AST 语法树解析，供 `src/web/web-guard.test.ts` 静态检查定时器调用。
+- `wrangler`：部署 Cloudflare Workers 中继（`wrangler.toml`），并启动本地运行时做集成测试（`src/relay/cloudflare/worker.test.ts`）。`@cloudflare/workers-types` 为中继及其 SQLite Durable Object 提供类型（`src/relay/cloudflare/tsconfig.json`）。
 
 ## 项目内技能（pstack）
 

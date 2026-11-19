@@ -96,28 +96,19 @@ journalctl --user -u agent-hub -f
 
 ## 5. 从别的电脑安全访问
 
-守护进程只听 `127.0.0.1`，所以不需要也不应该开公网端口。用 SSH 隧道，把本机端口转到服务器的 `127.0.0.1`（`ssh -L`：<https://man.openbsd.org/ssh.1>）：
+在服务器和个人电脑上登录同一个 GitHub 账号即可自动互通（同网直连、跨网走端到端加密中继，无需开公网端口或装 VPN，见 `docs/account-mesh-design.md`）：
+
+```sh
+node src/mesh/main.ts login
+```
+
+临时单独看这台服务器的网页时，也可以用 `ssh -L` 把本机端口转到服务器的 `127.0.0.1`（<https://man.openbsd.org/ssh.1>）：
 
 ```sh
 ssh -N -L 4317:127.0.0.1:4317 <用户>@<服务器>
 ```
 
 然后在本机浏览器打开日志里那条登录链接（`http://127.0.0.1:4317/auth?token=…`）。**本机端口必须和服务器上的 `AGENT_HUB_PORT` 一样**：界面服务会校验 `Host` 和 `Origin` 的端口（防 DNS 重绑定，`server.ts`），端口对不上回 403。
-
-不想对公网暴露 SSH：用 Tailscale 把两台机器放进同一个私有网络，再照上面的命令 ssh 到服务器的 tailnet 名字（或 `tailscale ssh`），服务器上关掉公网的 22。出处：<https://tailscale.com/docs/features/tailscale-ssh>、<https://tailscale.com/docs/reference/ssh-over-tailscale>。注意：不要用 `tailscale serve` / 反向代理直接把网页端口转出去——请求的 `Host` 会变成 tailnet 名字，被上面的校验拒绝；要用就走 SSH 隧道。
-
-### 手机公网访问：开启免费 Tailscale Funnel 与 iPhone 主屏 App
-
-需要让手机在公网（5G / 任意 Wi-Fi，手机与 Mac 均无需安装或开启 Tailscale VPN）访问并接收 iOS 锁屏推送时，走守护进程独立的 `run/public.sock` 公网入口与 Tailscale Funnel（`docs/mac-app-and-mobile-design.md` 第 2 节）：
-
-1. **开启公网入口**：在已登录电脑打开“设置 → 设备 → 公网入口”，确认公网域名（如 `tokyo.tailnet.ts.net`）并点**“开启”**，守护进程开始监听 `~/.agent-hub/run/public.sock`（权限 `0600`）。
-2. **东京运行一次 Funnel 命令**：复制设置页给出的命令，在东京服务器终端执行：
-   ```sh
-   sudo tailscale funnel --bg unix:/home/ubuntu/.agent-hub/run/public.sock
-   ```
-   （若首次使用 Funnel，按终端输出的链接开启 tailnet 的 Funnel 权限即可。出处：<https://tailscale.com/kb/1223/funnel>。）
-3. **iPhone 扫码与电脑批准**：在已登录电脑打开“设置 → 登录 → 在手机上登录”点“显示二维码”；用 iPhone 系统相机扫码（Safari 打开 `https://<tokyo>.<tailnet>.ts.net/auth#link=…`，显示“已扫码，请在已登录的电脑上点「允许」完成登录…”），在电脑“设置 → 已登录的浏览器”顶部点**“允许”**，手机即自动进入首页。
-4. **添加到主屏幕与开启推送**：在 iPhone Safari 底部点“分享”→**“添加到主屏幕”**→“添加”；从手机主屏幕打开 `Bellwood` 全屏图标，点左下角“设置”打开**“通知”**开关并在系统弹窗点“允许”，即可收到端到端加密的 iOS 原生锁屏推送。
 
 ## 6. Worker 沙箱：Linux 上由 `bubblewrap`（`bwrap`）强制隔离
 

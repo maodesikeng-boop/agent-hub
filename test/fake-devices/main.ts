@@ -101,8 +101,8 @@ const tokyo = snapshot("linux", [pm(1, "阿青", "codex"), pm(2, "小周", "code
   conversation(2, 2, "小周", [message(2, "agent", "昨晚的数据库备份做完了，3.2 GB。", minutes(300))]),
 ]);
 
-const self: DeviceInfo = { id: MAC_ID, name: "Mac", platform: "darwin", self: true, url: null };
-const tokyoInfo: DeviceInfo = { id: TOKYO_ID, name: "东京", platform: "linux", self: false, url: "https://tokyo.tail1234.ts.net" };
+const self: DeviceInfo = { id: MAC_ID, name: "Mac", platform: "darwin", self: true, online: true, link: "local", fingerprint: null };
+const tokyoInfo: DeviceInfo = { id: TOKYO_ID, name: "东京", platform: "linux", self: false, online: true, link: "relay", fingerprint: null };
 const devices = values.devices === "one" ? [self] : [self, tokyoInfo];
 
 let tokyoOnline = true;

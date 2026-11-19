@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FeishuStatusView } from "../shared/feishu.ts";
-import { AdminUnavailableError } from "../tunnel/cli.ts";
+import { AdminUnavailableError } from "../admin/client.ts";
 import { runFeishuCli, type FeishuCliIo } from "./cli.ts";
 
 const base: FeishuStatusView = {
@@ -79,6 +79,16 @@ describe("runFeishuCli", () => {
     });
     expect(await runFeishuCli(h.io(["status"]))).toBe(1);
     expect(h.err()).toContain("连不上本机守护进程");
+  });
+
+  it("status 在多设备组网下区分中心与非中心角色", async () => {
+    const center = harness(() => ({ ...base, state: "connected", appId: "cli_a", hosting: true }));
+    expect(await runFeishuCli(center.io(["status"]))).toBe(0);
+    expect(center.out()).toContain("中心（挂长连接）");
+
+    const standby = harness(() => ({ ...base, state: "connected", appId: "cli_a", hosting: false }));
+    expect(await runFeishuCli(standby.io(["status"]))).toBe(0);
+    expect(standby.out()).toContain("非中心（入站由中心转发，出站本机直发）");
   });
 
   it("不认识的子命令打印用法，退出码 2", async () => {

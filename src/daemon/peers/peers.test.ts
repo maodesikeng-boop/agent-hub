@@ -1,19 +1,8 @@
-// 设备配对、改名、移除、对端同步或失联遗忘时，向已连接的浏览器 WebSocket 推 { type: "resync" }。
-import { randomUUID } from "node:crypto";
-import { afterEach, describe, expect, it } from "vitest";
+// 设备改名、移除时向已连接的浏览器 WebSocket 推 resync / account.updated；组网入口来的请求只能碰设备之间该碰的接口。
+import { describe, expect, it } from "vitest";
 import { API_PATHS } from "../../shared/index.ts";
-import { pair, settle, startTestDevice, type TestDevice } from "./test-helpers.ts";
-import { newPeerToken } from "./tokens.ts";
-
-const devices: TestDevice[] = [];
-async function device(opts: Parameters<typeof startTestDevice>[0] = {}) {
-  const d = await startTestDevice(opts);
-  devices.push(d);
-  return d;
-}
-afterEach(async () => {
-  await Promise.all(devices.splice(0).map((d) => d.close()));
-});
+import { waitFor } from "../mesh/test-helpers.ts";
+import { startTestAccount, type TestDevice } from "./test-helpers.ts";
 
 async function connectWs(d: TestDevice) {
   const host = `127.0.0.1:${d.port}`;
@@ -29,82 +18,67 @@ async function connectWs(d: TestDevice) {
   };
 }
 
-describe("设备变更推送 resync", () => {
-  it("配对、改名、移除时，双方已连接的 WebSocket 均收到 { type: 'resync' }", async () => {
-    const a = await device({ name: "mac" });
-    const b = await device({ name: "tokyo" });
+describe("设备变更推送", () => {
+  it("改名、移除时，双方已连接的 WebSocket 都收到通知", async () => {
+    const { devices } = await startTestAccount(2);
+    const [a, b] = devices as [TestDevice, TestDevice];
     const wsA = await connectWs(a);
     const wsB = await connectWs(b);
 
-    // 1. 配对（A 调 POST /api/devices，B 收到 POST /api/peer/pair 和 PUT /api/peer/devices）
-    const pairRes = await pair(a, b);
-    expect(pairRes.status).toBe(201);
-    await settle([a, b]);
-    expect(wsA.messages).toContainEqual({ type: "resync" });
-    expect(wsB.messages).toContainEqual({ type: "resync" });
-
-    // 2. 改名（A 调 PATCH /api/devices/:id，B 收到 PUT /api/peer/name 并广播 PUT /api/peer/devices）
-    wsA.clear();
-    wsB.clear();
+    // 改名（A 调 PATCH /api/devices/:id，B 收到 PUT /api/peer/name，改完再 PUT /api/peer/renamed 告诉 A）
     const renameRes = await a.browser(API_PATHS.device(b.id), { method: "PATCH", body: { name: "东京服务器" } });
     expect(renameRes.status).toBe(200);
-    await settle([a, b]);
-    expect(wsA.messages).toContainEqual({ type: "resync" });
-    expect(wsB.messages).toContainEqual({ type: "resync" });
+    expect(((await renameRes.json()) as { name: string }).name).toBe("东京服务器");
+    await waitFor(() => wsA.messages.some((m) => (m as { type: string }).type === "resync") && wsB.messages.some((m) => (m as { type: string }).type === "resync"));
+    expect(b.name).toBe("东京服务器");
+    expect(a.mesh.trust.get(b.id)!.name).toBe("东京服务器");
 
-    // 3. 移除（A 调 DELETE /api/devices/:id，B 收到 POST /api/peer/unpair）
+    // 移除（A 调 DELETE /api/devices/:id：B 收到撤销声明或中继的 removed，退出账号）
     wsA.clear();
     wsB.clear();
     const removeRes = await a.browser(API_PATHS.device(b.id), { method: "DELETE" });
     expect(removeRes.status).toBe(204);
-    await settle([a, b]);
-    expect(wsA.messages).toContainEqual({ type: "resync" });
-    expect(wsB.messages).toContainEqual({ type: "resync" });
+    await waitFor(() => wsA.messages.some((m) => (m as { type: string }).type === "resync"));
+    await waitFor(() => wsB.messages.some((m) => (m as { type: string }).type === "account.updated"));
+    await waitFor(() => b.mesh.status().state === "signed_out");
 
     wsA.ws.terminate();
     wsB.ws.terminate();
   });
 
-  it("转发请求收到对端 401 peer_unauthorized 触发 forget 时，WebSocket 收到 { type: 'resync' }", async () => {
-    const a = await device({ name: "mac" });
-    const b = await device({ name: "tokyo" });
-    await pair(a, b);
-    await settle([a, b]);
+  it("本机改名会告诉账号里的别的设备", async () => {
+    const { devices } = await startTestAccount(2);
+    const [a, b] = devices as [TestDevice, TestDevice];
+    expect((await a.browser(API_PATHS.device(a.id), { method: "PATCH", body: { name: "随身 Mac" } })).status).toBe(200);
+    await waitFor(() => b.mesh.trust.get(a.id)?.name === "随身 Mac");
+    const listed = (await (await b.browser(API_PATHS.devices)).json()) as { devices: Array<{ id: string; name: string; online: boolean; link: string | null }> };
+    expect(listed.devices.find((d) => d.id === a.id)).toMatchObject({ name: "随身 Mac", online: true });
+  });
+});
 
-    // B 离线期间单方面把 A 删掉（模拟 B 重置或离线移除）
-    await a.stop();
-    await b.browser(API_PATHS.device(a.id), { method: "DELETE" });
-    await settle([b]);
-    await a.restart();
-
-    const wsA = await connectWs(a);
-    const proxyRes = await a.browser(`/d/${b.id}${API_PATHS.state}`);
-    expect(proxyRes.status).toBe(404);
-    expect(wsA.messages).toContainEqual({ type: "resync" });
-
-    wsA.ws.terminate();
+describe("组网入口的边界", () => {
+  it("别的设备不能借本机的转发去第三台，也不能碰入口专用的接口", async () => {
+    const { devices } = await startTestAccount(3);
+    const [a, b, c] = devices as [TestDevice, TestDevice, TestDevice];
+    const viaB = async (path: string, method = "GET") => (await a.mesh.request(b.id, path, { method })).status;
+    expect(await viaB(`/d/${c.id}${API_PATHS.state}`)).toBe(403);
+    for (const path of [API_PATHS.devices, API_PATHS.account, API_PATHS.browserSessions, API_PATHS.pushKey]) expect(await viaB(path), path).toBe(403);
+    expect(await viaB(API_PATHS.state)).toBe(200);
   });
 
-  it("省略可选校验字段时保留业务错误码：/api/peer/pair 缺 inviteCode 回 403 forbidden，introduce 缺 deviceId 回 404 device_not_found", async () => {
-    const a = await device({ name: "mac" });
-    const b = await device({ name: "tokyo" });
-    await pair(a, b);
-    await settle([a, b]);
+  it("浏览器入口上的 /api/peer/* 一律 403，带了 cookie 也不行", async () => {
+    const { devices } = await startTestAccount(1);
+    const [a] = devices as [TestDevice];
+    expect((await a.browser(API_PATHS.peerTrust)).status).toBe(403);
+    expect((await fetch(a.url + API_PATHS.peerTrust)).status).toBe(403);
+  });
 
-    const pairRes = await fetch(a.url + API_PATHS.peerPair, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        device: { id: randomUUID(), name: "remote", platform: "linux", url: "http://127.0.0.1:9999" },
-        token: newPeerToken(),
-      }),
-    });
-    expect(pairRes.status).toBe(403);
-    expect(await pairRes.json()).toMatchObject({ code: "forbidden" });
-
-    await expect(a.peers.introduce(b.id, {})).rejects.toMatchObject({
-      statusCode: 404,
-      code: "device_not_found",
-    });
+  it("被移出信任表的设备，已经连着的组网连接也当场断开", async () => {
+    const { devices } = await startTestAccount(2);
+    const [a, b] = devices as [TestDevice, TestDevice];
+    expect((await a.mesh.request(b.id, API_PATHS.state)).status).toBe(200);
+    await b.mesh.removeDevice(a.id);
+    await waitFor(() => a.mesh.status().state === "signed_out");
+    await expect(a.mesh.request(b.id, API_PATHS.state)).rejects.toThrow();
   });
 });

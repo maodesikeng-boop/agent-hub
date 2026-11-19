@@ -337,7 +337,7 @@ export function createFeishuSdkTransport(options: FeishuSdkOptions): FeishuTrans
         "card.action.trigger": async (data: lark.RawCardActionEvent): Promise<FeishuCardActionResponse> => {
           const action = (data.action ?? {}) as { value?: unknown; option?: unknown; form_value?: Record<string, unknown> };
           try {
-            return handlers.onCardAction({
+            return await handlers.onCardAction({
               ...(data.token ? { token: data.token } : {}),
               messageId: data.context?.open_message_id ?? data.open_message_id ?? "",
               chatId: data.context?.open_chat_id ?? data.open_chat_id ?? "",

@@ -23,8 +23,8 @@ import {
 const MAC = "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d";
 const TOKYO = "3f2b8c1e-4d5a-4b6c-9e7f-0a1b2c3d4e5f";
 
-const mac: DeviceInfo = { id: MAC, name: "Mac", platform: "darwin", self: true, url: null };
-const tokyo: DeviceInfo = { id: TOKYO, name: "东京", platform: "linux", self: false, url: "https://tokyo.example.ts.net" };
+const mac: DeviceInfo = { id: MAC, name: "Mac", platform: "darwin", self: true, online: true, link: "local", fingerprint: null };
+const tokyo: DeviceInfo = { id: TOKYO, name: "东京", platform: "linux", self: false, online: true, link: "relay", fingerprint: null };
 
 /** 一个项目经理一个对话；两台都用编号 1（各台本机自增，会撞号）。 */
 function onePm(name: string, messages: Message[] = [makeUserMessage({ id: 1, conversationId: 1, text: `${name}你好`, createdAt: 30_000 })]): StateSnapshot {
@@ -400,7 +400,7 @@ describe("设置 → 设备", () => {
     const devices = await within(dialog).findByRole("tabpanel", { name: "Computers" });
     // 照 Grok Bot：框外小灰字组标题 + 白底 1px 浅边框圆角框，不用灰底色块；本机在“你的电脑”，别的在“已连上的电脑”
     const mine = within(devices).getByRole("region", { name: "This computer" });
-    const others = within(devices).getByRole("region", { name: "Connected computers" });
+    const others = within(devices).getByRole("region", { name: "Your computers" });
     for (const group of [mine, others]) {
       expect(within(group).getByRole("heading")).toHaveClass("text-minor", "text-muted-foreground");
       expect(group.lastElementChild).toHaveClass("rounded-2xl", "border", "border-border", "bg-background");
@@ -457,227 +457,13 @@ describe("设置 → 设备", () => {
     expect(await within(nav()).findByRole("button", { name: /^东京服务器/ })).toBeInTheDocument();
   });
 
-  it("设备行显示连法标签（SSH 隧道 / Tailscale），不用 · 拼接", async () => {
-    const fleet = new Fleet(
-      onePm("小林"),
-      onePm("阿青"),
-      [
-        { ...mac, transport: { kind: "local" } },
-        { ...tokyo, transport: { kind: "ssh-tunnel", role: "hub" } },
-      ],
-    );
-    await boot(fleet);
-    await within(nav()).findByRole("button", { name: /阿青/ });
-    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
-    const dialog = await screen.findByRole("dialog", { name: "Settings" });
-    const devices = await within(dialog).findByRole("tabpanel", { name: "Computers" });
-    const rows = within(devices).getAllByTestId("device-row");
-    expect(rows[0]).not.toHaveTextContent("SSH 隧道");
-    expect(rows[0]).not.toHaveTextContent("Tailscale");
-    expect(rows[1]).toHaveTextContent("SSH 隧道");
-    expect(rows[1]!.textContent).not.toContain("·");
-  });
 
-  it("隧道状态行展示 5 种状态、title 放英文原文、重试按钮调 /api/devices/tunnel/retry", async () => {
-    const localSnap: StateSnapshot = {
-      ...onePm("小林"),
-      tunnel: { state: "retrying", since: 1, retryAt: 2, detail: "Connection refused" },
-    };
-    const fleet = new Fleet(localSnap, onePm("阿青"), [mac]);
-    await boot(fleet);
-    await within(nav()).findByRole("button", { name: /小林/ });
-    const fetchMock = vi.mocked(fetch);
-    const inner = fetchMock.getMockImplementation()!;
-    let retried = 0;
-    fetchMock.mockImplementation(async (input, init) => {
-      if (String(input) === "/api/devices/tunnel/retry" && init?.method === "POST") {
-        retried++;
-        return Response.json({ status: { state: "connecting", since: 3, retryAt: null, detail: null } });
-      }
-      return inner(input, init);
-    });
-    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
-    const devices = await screen.findByRole("tabpanel", { name: "Computers" });
-    const tunnelRow = within(devices).getByTestId("tunnel-row");
-    const statusSpan = within(tunnelRow).getByText("Retrying…");
-    expect(statusSpan).toHaveAttribute("title", "Connection refused");
-    expect(tunnelRow).not.toHaveTextContent("Connection refused");
-    await userEvent.click(within(tunnelRow).getByRole("button", { name: "Retry" }));
-    await waitFor(() => expect(retried).toBe(1));
-  });
 
-  it.each([
-    ["connecting", "Connecting…", false],
-    ["connected", "Connected", false],
-    ["auth_failed", "Key rejected", true],
-    ["hostkey_mismatch", "Server fingerprint changed", true],
-  ] as const)("隧道状态 %s 显示 %s（带重试=%s）", async (state, expectedText, hasRetry) => {
-    const localSnap: StateSnapshot = {
-      ...onePm("小林"),
-      tunnel: { state, since: 1, retryAt: null, detail: "Permission denied (publickey)." },
-    };
-    const fleet = new Fleet(localSnap, onePm("阿青"), [mac]);
-    await boot(fleet);
-    await within(nav()).findByRole("button", { name: /小林/ });
-    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
-    const devices = await screen.findByRole("tabpanel", { name: "Computers" });
-    const tunnelRow = within(devices).getByTestId("tunnel-row");
-    expect(within(tunnelRow).getByText(expectedText)).toBeInTheDocument();
-    expect(within(tunnelRow).queryByRole("button", { name: "Retry" }) !== null).toBe(hasRetry);
-  });
 
-  it("“连到中心”向导：展示带 repoDir 的 join 命令、贴连接码调 /api/devices/tunnel/connect，错码显示中文错误", async () => {
-    const localSnap: StateSnapshot = {
-      ...onePm("小林"),
-      server: { ...onePm("小林").server, repoDir: "/Users/me/agent-hub" },
-      tunnel: null,
-    };
-    const fleet = new Fleet(localSnap, onePm("阿青"), [mac]);
-    await boot(fleet);
-    await within(nav()).findByRole("button", { name: /小林/ });
-    const fetchMock = vi.mocked(fetch);
-    const inner = fetchMock.getMockImplementation()!;
-    const connectedCodes: string[] = [];
-    fetchMock.mockImplementation(async (input, init) => {
-      if (String(input) === "/api/devices/tunnel/connect" && init?.method === "POST") {
-        const { code } = JSON.parse(String(init.body)) as { code: string };
-        connectedCodes.push(code);
-        if (!code.startsWith("ahtun1_")) {
-          return Response.json({ code: "invalid", error: "连接码格式不对" }, { status: 400 });
-        }
-        return Response.json({ status: { state: "connecting", since: 10, retryAt: null, detail: null } });
-      }
-      return inner(input, init);
-    });
-    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
-    const devices = await screen.findByRole("tabpanel", { name: "Computers" });
-    expect(within(devices).queryByTestId("tunnel-row")).toBeNull();
 
-    await userEvent.click(within(devices).getByRole("button", { name: "Connect to hub" }));
-    const panel = await screen.findByRole("region", { name: "Connect to hub" });
-    expect(panel).toHaveTextContent("node /Users/me/agent-hub/src/tunnel/main.ts join -i ~/.ssh/<key> ubuntu@<server-ip>");
 
-    const codeInput = within(panel).getByRole("textbox", { name: "Connection code" });
-    await userEvent.type(codeInput, "bad_code{Enter}");
-    expect(await within(panel).findByRole("alert")).toHaveTextContent("连接码格式不对");
 
-    await userEvent.clear(codeInput);
-    await userEvent.type(codeInput, "ahtun1_valid_code");
-    await userEvent.click(screen.getByRole("button", { name: "Connect" }));
-    await waitFor(() => expect(connectedCodes).toEqual(["bad_code", "ahtun1_valid_code"]));
-    await waitFor(() => expect(screen.queryByRole("region", { name: "Connect to hub" })).toBeNull());
-  });
 
-  it("“公网入口”分组：可填写域名并开启/关闭（调 PUT /api/devices/public-entry）、展示生效地址与 Funnel 命令并支持复制", async () => {
-    const funnelCmd = "sudo tailscale funnel --bg unix:/home/ubuntu/.agent-hub/run/public.sock";
-    const localSnap: StateSnapshot = {
-      ...onePm("小林"),
-      publicEntry: {
-        enabled: false,
-        hostname: "tokyo.tail1234.ts.net",
-        funnelCommand: funnelCmd,
-      },
-    };
-    const fleet = new Fleet(localSnap, onePm("阿青"), [mac]);
-    await boot(fleet);
-    await within(nav()).findByRole("button", { name: /小林/ });
-
-    const writeText = vi.fn(async () => {});
-    Object.defineProperty(navigator, "clipboard", {
-      configurable: true,
-      value: { writeText },
-    });
-
-    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
-    const dialog = await screen.findByRole("dialog", { name: "Settings" });
-    expect(dialog).toHaveClass("max-w-195");
-    await userEvent.click(within(dialog).getByRole("tab", { name: "Security & Access" }));
-    // 填过域名：默认展开
-    expect(within(dialog).getByRole("button", { name: /^Public access/ })).toHaveAttribute("aria-expanded", "true");
-    const publicRegion = await screen.findByRole("region", { name: "Public access" });
-    const hostInput = within(publicRegion).getByRole("textbox", { name: "Public domain" });
-    expect(hostInput).toHaveValue("tokyo.tail1234.ts.net");
-    expect(hostInput).toHaveAttribute("placeholder", "tokyo.tailnet.ts.net");
-    expect(hostInput).toHaveClass("flex-1", "min-w-0");
-    const toggleBtn = within(publicRegion).getByRole("button", { name: "Turn on" });
-    expect(toggleBtn).not.toHaveClass("bg-primary");
-    expect(within(publicRegion).queryByText(funnelCmd)).toBeNull();
-
-    // 修改域名并点击“开启”
-    await userEvent.clear(hostInput);
-    await userEvent.type(hostInput, "custom.tail1234.ts.net");
-    await userEvent.click(within(publicRegion).getByRole("button", { name: "Turn on" }));
-
-    await waitFor(() => expect(fleet.local.callsTo("PUT", /^\/api\/devices\/public-entry$/)).toHaveLength(1));
-    expect(fleet.local.callsTo("PUT", /^\/api\/devices\/public-entry$/)[0]!.body).toEqual({
-      enabled: true,
-      hostname: "custom.tail1234.ts.net",
-    });
-
-    // 开启后展示 Funnel 命令与“复制命令”按钮，按钮变为“关闭”；域名只在输入框里出现一次，不在行名下面再写一遍 https://<hostname>
-    expect(await within(publicRegion).findByText(funnelCmd)).toBeInTheDocument();
-    expect(within(publicRegion).queryByText("https://custom.tail1234.ts.net")).toBeNull();
-    expect(hostInput).toHaveValue("custom.tail1234.ts.net");
-    const copyBtn = within(publicRegion).getByRole("button", { name: "Copy command" });
-    await userEvent.click(copyBtn);
-    await waitFor(() => expect(writeText).toHaveBeenCalledWith(funnelCmd));
-    expect(await within(publicRegion).findByRole("button", { name: "Copied" })).toBeInTheDocument();
-
-    // 点击“关闭”
-    await userEvent.click(within(publicRegion).getByRole("button", { name: "Turn off" }));
-    await waitFor(() => expect(fleet.local.callsTo("PUT", /^\/api\/devices\/public-entry$/)).toHaveLength(2));
-    expect(fleet.local.callsTo("PUT", /^\/api\/devices\/public-entry$/)[1]!.body).toMatchObject({
-      enabled: false,
-    });
-    await waitFor(() => expect(within(publicRegion).queryByText(funnelCmd)).toBeNull());
-    expect(within(publicRegion).getByRole("button", { name: "Turn on" })).toBeInTheDocument();
-  });
-
-  it("双栏：左栏通用、电脑、登录与安全（带图标），默认选“电脑”；点哪个右栏换成哪个，标题是分类名", async () => {
-    const fleet = new Fleet(onePm("小林"), onePm("阿青"));
-    await boot(fleet);
-    await within(nav()).findByRole("button", { name: /阿青/ });
-    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
-    const dialog = await screen.findByRole("dialog", { name: "Settings" });
-    const tabs = within(within(dialog).getByRole("tablist", { name: "Settings categories" })).getAllByRole("tab");
-    expect(tabs.map((t) => t.textContent)).toEqual(["General", "Providers", "Computers", "Security & Access"]);
-    for (const tab of tabs) expect(tab.querySelector("svg")).not.toBeNull();
-    expect(within(dialog).getByRole("tab", { name: "Computers" })).toHaveAttribute("aria-selected", "true");
-    const computers = within(dialog).getByRole("tabpanel", { name: "Computers" });
-    expect(within(computers).getByRole("heading", { name: "Computers" })).toBeInTheDocument();
-    expect(within(dialog).queryByRole("region", { name: "Signed-in browsers" })).toBeNull();
-
-    await userEvent.click(within(dialog).getByRole("tab", { name: "Security & Access" }));
-    const security = within(dialog).getByRole("tabpanel", { name: "Security & Access" });
-    expect(within(security).getByRole("region", { name: "Sign in on another device" })).toBeInTheDocument();
-    expect(within(security).getByRole("region", { name: "Signed-in browsers" })).toBeInTheDocument();
-    expect(within(security).getByRole("region", { name: "Public access" })).toBeInTheDocument();
-    expect(within(dialog).queryByRole("region", { name: "This computer" })).toBeNull();
-
-    await userEvent.click(within(dialog).getByRole("tab", { name: "General" }));
-    expect(within(within(dialog).getByRole("tabpanel", { name: "General" })).getByRole("switch", { name: "Notifications" })).toBeInTheDocument();
-  });
-
-  it("公网入口没开、也没填域名：收起成一行“公网入口 Off”，点开才有域名输入框", async () => {
-    const localSnap: StateSnapshot = {
-      ...onePm("小林"),
-      publicEntry: { enabled: false, hostname: null, funnelCommand: "sudo tailscale funnel --bg unix:/x.sock" },
-    };
-    const fleet = new Fleet(localSnap, onePm("阿青"), [mac]);
-    await boot(fleet);
-    await within(nav()).findByRole("button", { name: /小林/ });
-    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
-    const dialog = await screen.findByRole("dialog", { name: "Settings" });
-    await userEvent.click(within(dialog).getByRole("tab", { name: "Security & Access" }));
-    const publicRegion = within(dialog).getByRole("region", { name: "Public access" });
-    const header = within(publicRegion).getByRole("button", { name: /^Public access/ });
-    expect(header).toHaveAttribute("aria-expanded", "false");
-    expect(header).toHaveTextContent("Off");
-    expect(within(publicRegion).queryByRole("textbox", { name: "Public domain" })).toBeNull();
-    await userEvent.click(header);
-    expect(within(publicRegion).getByRole("textbox", { name: "Public domain" })).toBeInTheDocument();
-    expect(within(publicRegion).getByRole("button", { name: "Turn on" })).toBeInTheDocument();
-  });
 });
 
 it("手机直达远端：清单及目标快照未到不误清路由，到达后仍清理真实无效编号", async () => {

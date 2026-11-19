@@ -32,7 +32,7 @@ Bellwood puts one **Project Manager (PM)** agent in front of each project and ha
 
 Bellwood is for you if you juggle multiple tasks or repositories, combine more than one agent CLI or subscription, or want to review and trigger work from your phone or Feishu group. If you run one agent in one terminal on one repository and that already covers your day, you do not need it.
 
-Runs natively on **macOS 13+** (`Bellwood.app`), **Windows x64** (native Tauri 2 desktop app with bundled Node 24 LTS, no WSL 2, and no admin rights), **Linux** (`systemd` daemon), **mobile browsers and PWA**, and **Feishu**.
+Runs natively on **macOS 13+** (`Bellwood.app`), **Windows x64** (native Tauri 2 desktop app with bundled Node 24 LTS, no WSL 2, and no admin rights), **Linux** (`systemd` daemon), and **Feishu** on mobile and desktop.
 
 ## How it fits together
 
@@ -41,7 +41,7 @@ A local daemon at `127.0.0.1:4317` stores conversations, task graphs, persistent
 <div align="center">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme/architecture-dark.svg">
-  <img src="docs/screenshots/readme/architecture.svg" width="900" alt="Bellwood architecture: desktop apps, Feishu bot and groups, mobile PWA, and paired machines connect through Router, Project Managers, and sandboxed git worktrees to your local agent CLIs">
+  <img src="docs/screenshots/readme/architecture.svg" width="900" alt="Bellwood architecture: desktop apps, Feishu chats, one bot per account with automatic failover, and account-linked devices connect through Router, Project Managers, and sandboxed git worktrees to local agent CLIs">
 </picture>
 </div>
 
@@ -130,7 +130,7 @@ Three mechanisms let Router cover every project and machine without overflowing 
 | :-- | :-- |
 | **Stateless single-turn dispatch** | Router never keeps a long-lived chat session. Each command spawns a one-shot read-only session in an isolated empty directory, feeds it compact PM cards (capped at `24 KB`) and the last 5 cross-vendor command receipts (`600 B`), and exits right after dispatching. Switching Router's model takes 0 seconds. |
 | **Background two-tier project catalog** | Whenever a project accumulates `20,000` weighted dialogue characters (user characters × 4 + PM characters, at least 2 hours apart) or finishes a Task Graph, the daemon runs a lightweight background turn over the ledger and latest handover to refresh a structured catalog entry without touching the PM session. Router sees **Tier 1** (one-liner, casual aliases, current focus) on every turn and calls `hub dispatch project-show` for **Tier 2** (modules, decisions, open items, capped at `4,000` chars) only when needed, never raw transcripts. |
-| **Local ledgers, card-only peering** | Each machine owns its SQLite ledger and refreshes its own project cards locally. Paired daemons connect over SSH tunnels through a restricted `agenthub-tunnel` account or Tailscale, exchanging only compact digests (10-second cache), forwarded prompts, and card resolutions while gigabytes of repos and tool logs stay put. |
+| **Local ledgers, card-only peering** | Each machine owns its SQLite ledger and refreshes its own project cards locally. Devices on the same account connect directly over the local network when possible and fall back to an end-to-end encrypted relay. Router exchanges compact project digests, forwarded prompts, and decisions. Repositories and tool logs stay on their original machines. |
 
 ## Feishu: chat in the group, mention the bot to verify
 
@@ -200,11 +200,11 @@ Launch **Bellwood**. When **Settings → Providers** opens, click **Install** ne
 
 </details>
 
-### 3. Connect Feishu, mobile PWA, or a Linux server (optional)
+### 3. Connect Feishu and other computers (optional)
 
-- **Feishu bot and project groups.** With the daemon running, execute `node src/feishu/main.ts connect` and scan the QR code in Feishu. Run `node src/feishu/main.ts status` to inspect active bindings. Each paired machine uses its own Feishu app.
-- **Mobile browser and PWA.** Open **Settings → Security & Access → Sign in on phone**, scan the one-time QR code, and click **Allow** under **Signed-in browsers** on your computer. Add the page to your phone's home screen for full-screen PWA mode and optional Web Push notifications.
-- **Always-on Linux daemon and multi-device hub.** Deploy as a `systemd` user service on Ubuntu, run `sudo scripts/linux-sandbox-setup.sh` once for `bubblewrap` sandboxing, and pair machines in **Settings → Computers** over SSH tunnels or Tailscale. See [docs/linux.md](docs/linux.md), [docs/multi-device-design.md](docs/multi-device-design.md), and [docs/hub-tunnel-design.md](docs/hub-tunnel-design.md).
+- **Feishu bot and project groups.** With the daemon running, execute `node src/feishu/main.ts connect` and scan the QR code in Feishu. Run `node src/feishu/main.ts status` to inspect active bindings. Devices in the same account share one bot. If the active device goes offline, another takes over automatically.
+- **Multiple computers.** Set a relay URL and a GitHub OAuth App client ID. In **Settings → Computers**, sign in to the same GitHub account on each computer. Compare the six-digit code when you approve a new device. Use Feishu to reach these devices from your phone.
+- **Always-on Linux daemon.** Deploy as a `systemd` user service on Ubuntu and run `sudo scripts/linux-sandbox-setup.sh` once to set up `bubblewrap`. See the [Linux setup guide](docs/linux.md) and [account mesh design](docs/account-mesh-design.md).
 
 <details>
 <summary><b>Build from source or run the daemon directly</b></summary>
@@ -249,7 +249,8 @@ pnpm start                          # builds dist/web and starts daemon on 127.0
 | `AGENT_HUB_PORT` | `4317` | Loopback web UI port (`127.0.0.1` only). Set `0` for an OS-assigned port. |
 | `AGENT_HUB_CLAUDE` / `AGY` / `CODEX` / `PI` / `DEEPSEEK` / `CURSOR` | `claude` / `agy` / `codex` / `pi` / `dsh` / `cursor-agent` | Override executable name or path for each supported agent CLI (`~/` supported). |
 | `AGENT_HUB_DEFAULT_MODEL` | unset | Default model for the initial PM created on first launch. |
-| `AGENT_HUB_TAILSCALE` / `TAILNET_NAME` / `TAILNET_OWNER` / `SERVE_TARGET` | auto-detected | Tailscale binary path, tailnet hostname, owner login (required on tagged devices), and `tailscale serve` target (`unix` on Linux, `tcp` on macOS). |
+| `FUSA_RELAY_URL` | unset | Relay URL for account networking. Use the same relay on all devices in the account. |
+| `FUSA_GITHUB_CLIENT_ID` | unset | Client ID of the GitHub OAuth App with Device Flow enabled. |
 | `AGENT_HUB_REPO_DIR` / `AGENT_HUB_NODE` | `Info.plist` values | Override repository or Node executable path at runtime for source-built `Bellwood.app`. |
 
 When `hub project setup` runs in a new worktree, the daemon also injects `AGENT_HUB_ROOT_PATH` and `AGENT_HUB_WORKTREE_PATH`.

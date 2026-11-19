@@ -151,15 +151,15 @@ describe("DevicesStore（zustand store 驱动）", () => {
 
     const remoteId = "3f2b8c1e-4d5a-4b6c-9e7f-0a1b2c3d4e5f";
     store.setDevices([
-      { id: "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d", name: "Mac", platform: "darwin", self: true, url: null },
-      { id: remoteId, name: "东京", platform: "linux", self: false, url: "https://tokyo.example.ts.net" },
+      { id: "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d", name: "Mac", platform: "darwin", self: true, online: true, link: "local", fingerprint: null },
+      { id: remoteId, name: "东京", platform: "linux", self: false, online: true, link: "relay", fingerprint: null },
     ]);
 
     expect(store.getSnapshot().devices).toHaveLength(2);
     expect(store.hub(remoteId).key).toBe(remoteId);
     expect(snapshots).toEqual([2]);
 
-    store.setDevices([{ id: "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d", name: "Mac", platform: "darwin", self: true, url: null }]);
+    store.setDevices([{ id: "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d", name: "Mac", platform: "darwin", self: true, online: true, link: "local", fingerprint: null }]);
     expect(store.getSnapshot().devices).toHaveLength(1);
     expect(snapshots).toEqual([2, 1]);
 
@@ -170,8 +170,8 @@ describe("DevicesStore（zustand store 驱动）", () => {
   it("网址里带了设备编号：这台的快照和设备清单一起拉，不等清单回来；清单里有它就接着用，没有就关掉", async () => {
     const TOKYO = "3f2b8c1e-4d5a-4b6c-9e7f-0a1b2c3d4e5f";
     const OTHER = "0f0e0d0c-0b0a-4908-8706-050403020100";
-    const mac = { id: "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d", name: "Mac", platform: "darwin", self: true, url: null };
-    const tokyo = { id: TOKYO, name: "东京", platform: "linux", self: false, url: "https://tokyo.example.ts.net" };
+    const mac = { id: "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d", name: "Mac", platform: "darwin", self: true, online: true, link: "local", fingerprint: null };
+    const tokyo = { id: TOKYO, name: "东京", platform: "linux", self: false, online: true, link: "relay", fingerprint: null };
     installFakeWebSocket();
     const paths: string[] = [];
     let releaseList: (devices: unknown[]) => void = () => {};
@@ -210,5 +210,40 @@ describe("DevicesStore（zustand store 驱动）", () => {
     expect(gone.getSnapshot().devices.map((d) => d.key)).toEqual([LOCAL_DEVICE, TOKYO]);
     expect(gone.hub(OTHER).key).toBe(LOCAL_DEVICE);
     gone.dispose();
+  });
+
+  it("DevicesStore 引用稳定：online、link 没变时不换 DeviceInfo、DeviceView 和 devices 数组引用", () => {
+    installFakeWebSocket();
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json(makeSnapshot())));
+    const store = new DevicesStore();
+    const mac = () => ({ id: "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d", name: "Mac", platform: "darwin", self: true, online: true, link: "local" as const, fingerprint: null });
+    const tokyo = (link: "lan" | "relay" = "relay", online = true) => ({
+      id: "3f2b8c1e-4d5a-4b6c-9e7f-0a1b2c3d4e5f",
+      name: "东京",
+      platform: "linux",
+      self: false,
+      online,
+      link,
+      fingerprint: null,
+    });
+
+    store.setDevices([mac(), tokyo("relay", true)]);
+    const first = store.getSnapshot();
+
+    store.setDevices([mac(), tokyo("relay", true)]);
+    const second = store.getSnapshot();
+    expect(second.devices).toBe(first.devices);
+    expect(second.devices[0]).toBe(first.devices[0]);
+    expect(second.devices[1]).toBe(first.devices[1]);
+    expect(second.devices[1]!.info).toBe(first.devices[1]!.info);
+
+    store.setDevices([mac(), tokyo("lan", true)]);
+    const third = store.getSnapshot();
+    expect(third.devices).not.toBe(second.devices);
+    expect(third.devices[0]).toBe(second.devices[0]);
+    expect(third.devices[1]).not.toBe(second.devices[1]);
+    expect(third.devices[1]!.info.link).toBe("lan");
+
+    store.dispose();
   });
 });

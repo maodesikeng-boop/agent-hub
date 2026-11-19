@@ -118,7 +118,7 @@ flowchart LR
 - 端点统一由 `platform/ipc-endpoint.ts` 生成。POSIX 原样返回 `run/*.sock`；Windows：
   - hub：`\\.\pipe\fusa-<数据目录哈希12>-<本次启动随机16>-hub`。随机后缀照 orca，避免可猜；经 `HUB_SOCK` 传给 Agent，**变量名与语义不变**（"端点字符串"）。
   - admin：`\\.\pipe\fusa-<数据目录哈希12>-admin`，固定名，兼做单实例互斥；壳与隧道命令靠它找后台。
-  - ui / public / peer：Windows 首发不开（它们只服务 Tailscale serve/Funnel 与 ssh 转发 Unix socket，见 4.6）。
+  - 设备组网已统一为跨平台 TCP + TLS 1.3 与 E2EE 中继（见 `docs/account-mesh-design.md`），不再使用命名管道或 Unix socket。
 - Node 原生支持：`server.listen(pipeName)`、`http.request({ socketPath: pipeName })`；Fastify `listen({ path })` 直接透传。不需要新依赖。
 - `listenOnRunSocket` 拆分：Windows 分支跳过 realpath / chmod / 长度检查 / unlink / `isSocket`——管道不在文件系统里，名字上限 256 字符，`assertSocketPathFits` 只在 POSIX 用；也没有"残留 socket"问题（进程死了管道就消失）。
 - 权限：libuv 用系统默认安全描述符——SYSTEM、Administrators、创建者完全控制，Everyone 与匿名只读（`pipe.c` 的 `CreateNamedPipeW(…, NULL)`）。只读身份打不开双工请求；真正的授权仍是每个会话的 `HUB_TOKEN`（`TOKEN_CHARS` 校验不变）。远程 SMB 访问需对方以本机管理员或本人身份认证，可接受。若以后要收紧到"只给本人 SID + `PIPE_REJECT_REMOTE_CLIENTS`"，由 `fusa-run.exe` 代建管道，首发不做。
@@ -263,9 +263,8 @@ Windows 删不掉目录的三类原因：①还有进程的**当前目录**在�
 | `pick-folder.ts` | `osascript` | 桌面壳里用 Tauri 官方 `tauri-plugin-dialog`（经窄桥接回传路径）；纯浏览器访问时隐藏"选择…"（`server-info.ts` 的 `folderPicker` 按"是否经壳"给） |
 | `open-file.ts`、`ui-server/server.ts:185` | `open` | `%SystemRoot%\explorer.exe /select,<路径>`（定位）与 `explorer.exe <路径>`（默认程序打开），绝对路径、`shell:false`；不用 `cmd /c start`（会经 cmd 解析） |
 | `platform/sleep.ts` | `caffeinate` / `systemd-inhibit` | `fusa-run.exe keep-awake --parent <pid>`（`SetThreadExecutionState(ES_CONTINUOUS \| ES_SYSTEM_REQUIRED)`），父进程死它就退 |
-| `platform/tailscale.ts` | macOS App 路径、Linux Unix socket | `%ProgramFiles%\Tailscale\tailscale.exe`；serve 走 TCP（现有非 Linux 分支） |
 | `server-info.ts:23` | 只有 darwin 给"选择文件夹 / 在 Finder 显示" | win32 经壳时也给，按钮文案"在资源管理器中显示" |
-| 联机隧道（`tunnel/`、`peers/`：ssh `-R/-L` 转发 Unix socket，`id -u`） | `peer.sock`、`run/tunnel/hub.sock` | Windows 首发不做"连入方 / 中心"角色，界面显示不可用；以后改 TCP 回环端口 + 设备令牌（中心本就用 TCP） |
+| 账号组网（`daemon/mesh/`、`peers/`） | 局域网 TCP + TLS 1.3 与 WebSocket 中继 | 三平台共用同一套实现（`docs/account-mesh-design.md`） |
 | `store/lock.ts`、`process-ledger.ts` | `ps -o lstart=` | `fusa-run.exe inspect`；单实例以 admin 管道独占为准（4.1） |
 | `_common/acp/driver.ts:594` | 只读的 secret 扫描只在 Linux | 4.4.3 的 MXC 后端同样扫描 |
 | `HOME` | `main.ts` 已用 `homedir()`；`shared/paths.ts:156`、`write-scope.ts` 仍读 `env.HOME` | 统一 `os.homedir()`（Windows 取 `USERPROFILE`） |
@@ -452,9 +451,7 @@ CI 覆盖不了、必须真机的：WebView2 窗口与托盘、真实 6 家 CLI 
 | `src/daemon/open-file.ts`、`src/daemon/ui-server/server.ts:185` | `open` | 4.6 |
 | `src/daemon/pick-folder.ts` | `osascript` | 4.6 |
 | `src/daemon/platform/sleep.ts` | `caffeinate` / `systemd-inhibit` | 4.6 |
-| `src/daemon/platform/tailscale.ts` | macOS / Linux 路径 | 4.6 |
 | `src/shared/server-info.ts:23` | 只认 darwin 桌面 | 4.6 |
-| `src/daemon/tunnel/*`、`src/daemon/peers/*`、`src/tunnel/*` | ssh 转发 Unix socket、`id -u` | 4.6（首发不做） |
 | `src/vendors/_common/acp/driver.ts:594` | secret 扫描只在 Linux | 4.4.3 |
 | `src/vendors/*/paths.ts`（6 家） | 只有 darwin/linux 兜底路径、`curl \| bash` 安装命令 | 5.1 |
 | `src/daemon/entry.ts:176-177` | 进程外 SIGTERM 关机 | 4.1（admin 关机入口） |

@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -44,7 +45,7 @@ import { PickFolderError, type FolderPicker } from "../pick-folder.ts";
 import { openTestDb } from "../store/test-helpers.ts";
 import type { Db } from "../store/index.ts";
 import { FakeLedger, makeMessage } from "./fake-ledger.ts";
-import { ROOT_DIR, createUiServer, startUiServer } from "./server.ts";
+import { ROOT_DIR, createUiServer, startUiServer, type RunningUiServer } from "./server.ts";
 import { testLogin } from "./test-login.ts";
 
 const TOKEN = "test-token-0123456789abcdef";
@@ -64,6 +65,54 @@ let app: FastifyInstance;
 let db: Db;
 let login: ReturnType<typeof testLogin>;
 let COOKIE: string;
+
+function makeTrustedPeer(peerId: string) {
+  return {
+    id: peerId,
+    name: "LinuxBox",
+    platform: "linux",
+    certPem: "",
+    fingerprint: "a".repeat(64) as never,
+    approvedBy: peerId,
+    since: 1,
+  };
+}
+
+function makeFakeMeshOpts(peerId: string) {
+  const trusted = makeTrustedPeer(peerId);
+  return {
+    mesh: {
+      trust: {
+        get: (id: string) => (id === peerId ? trusted : undefined),
+      },
+    } as never,
+    peers: {
+      list: () => [],
+      proxyTarget: () => null,
+      close: async () => {},
+    } as never,
+  };
+}
+
+async function startMeshTestBridge(ui: RunningUiServer, peerId: string): Promise<{ origin: string; close(): Promise<void> }> {
+  const peer = makeTrustedPeer(peerId);
+  const server = createNetServer((socket) => {
+    ui.acceptMeshConnection({
+      socket: socket as never,
+      peer,
+      link: "lan",
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as { port: number }).port;
+  return {
+    origin: `http://127.0.0.1:${port}`,
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      }),
+  };
+}
 
 beforeEach(async () => {
   staticDir = mkdtempSync(join(tmpdir(), "hub-static-"));
@@ -2388,47 +2437,27 @@ describe("Router 与 TaskGraph 轨道 A 接口", () => {
     expect(localRes.json().router.briefingsHasMore).toBe(true);
 
     const peerId = "11111111-2222-3333-4444-555555555555";
-    const peerApp = createUiServer({
+    const peerUi = await startUiServer({
       ledger: ledger.asLedger(),
       token: TOKEN,
       staticDir,
       uploadsDir,
       sentFilesDir,
-      port: PORT,
+      port: 0,
       db,
-      peers: {
-        authenticate: (deviceHeader: unknown, authHeader: unknown) =>
-          deviceHeader === peerId && authHeader === "Bearer peer-secret"
-            ? {
-                id: peerId,
-                name: "LinuxBox",
-                platform: "linux",
-                url: "https://linux.tail.ts.net",
-                state: "paired",
-                inboundHash: "h",
-                outboundToken: "t",
-                createdAt: 1,
-              }
-            : null,
-      } as never,
+      ...makeFakeMeshOpts(peerId),
     });
-    await peerApp.ready();
+    const meshBridge = await startMeshTestBridge(peerUi, peerId);
     try {
-      const peerRes = await peerApp.inject({
-        method: "GET",
-        url: "/api/state",
-        headers: {
-          host: HOST,
-          authorization: "Bearer peer-secret",
-          "x-agent-hub-device": peerId,
-        },
-      });
-      expect(peerRes.statusCode).toBe(200);
-      expect(peerRes.json().router.commands).toEqual([]);
-      expect(peerRes.json().router.commandsHasMore).toBe(false);
-      expect(peerRes.json().router.briefingsHasMore).toBe(true);
+      const peerRes = await fetch(`${meshBridge.origin}/api/state`);
+      expect(peerRes.status).toBe(200);
+      const body = (await peerRes.json()) as { router: { commands: unknown[]; commandsHasMore: boolean; briefingsHasMore: boolean } };
+      expect(body.router.commands).toEqual([]);
+      expect(body.router.commandsHasMore).toBe(false);
+      expect(body.router.briefingsHasMore).toBe(true);
     } finally {
-      await peerApp.close();
+      await meshBridge.close();
+      await peerUi.close();
     }
   });
 
@@ -2454,14 +2483,15 @@ describe("Router 与 TaskGraph 轨道 A 接口", () => {
       updatedAt: 105,
     };
 
-    const customApp = createUiServer({
+    const customUi = await startUiServer({
       ledger: ledger.asLedger(),
       token: TOKEN,
       staticDir,
       uploadsDir,
       sentFilesDir,
-      port: PORT,
+      port: 0,
       db,
+      ...makeFakeMeshOpts(peerId),
       routerDispatcher: {
         busy: () => false,
         submitCommand: async (input) => {
@@ -2493,31 +2523,14 @@ describe("Router 与 TaskGraph 轨道 A 接口", () => {
           };
         },
       },
-      peers: {
-        authenticate: (deviceHeader: unknown, authHeader: unknown) =>
-          deviceHeader === peerId && authHeader === "Bearer peer-secret"
-            ? {
-                id: peerId,
-                name: "LinuxBox",
-                platform: "linux",
-                url: "https://linux.tail.ts.net",
-                state: "paired",
-                inboundHash: "h",
-                outboundToken: "t",
-                createdAt: 1,
-              }
-            : null,
-      } as never,
     });
-    await customApp.ready();
+    const customApp = customUi.app;
+    const customHost = `127.0.0.1:${customUi.port}`;
+    const customOrigin = `http://${customHost}`;
+    const customCookie = login.cookie(customUi.port);
+    const meshBridge = await startMeshTestBridge(customUi, peerId);
     try {
-      const browserHeaders = { host: HOST, cookie: COOKIE, origin: ORIGIN, "content-type": "application/json" };
-      const peerHeaders = {
-        host: HOST,
-        authorization: "Bearer peer-secret",
-        "x-agent-hub-device": peerId,
-        "content-type": "application/json",
-      };
+      const browserHeaders = { host: customHost, cookie: customCookie, origin: customOrigin, "content-type": "application/json" };
 
       // 1. Browser POST /api/router/commands -> 200（含不带 deviceId 的本机显式 target）
       const postRes = await customApp.inject({
@@ -2543,7 +2556,7 @@ describe("Router 与 TaskGraph 轨道 A 接口", () => {
       const getCmdsRes = await customApp.inject({
         method: "GET",
         url: "/api/router/commands?cursor=200:10&limit=15",
-        headers: { host: HOST, cookie: COOKIE },
+        headers: { host: customHost, cookie: customCookie },
       });
       expect(getCmdsRes.statusCode).toBe(200);
       expect(ledger.routerCalls).toContainEqual({ call: "listCommands", args: ["200:10", 15] });
@@ -2558,22 +2571,18 @@ describe("Router 与 TaskGraph 轨道 A 接口", () => {
       expect(retryRes.statusCode).toBe(200);
       expect(retried).toEqual([42]);
 
-      // 4. Peer deviceToken is strictly forbidden on /api/router/commands & retry
       for (const reqSpec of [
         { method: "GET" as const, url: "/api/router/commands" },
         { method: "POST" as const, url: "/api/router/commands", payload: { clientId: "p1", text: "hi" } },
         { method: "POST" as const, url: "/api/router/commands/42/retry", payload: {} },
       ]) {
-        const pRes = await customApp.inject({
+        const pRes = await fetch(`${meshBridge.origin}${reqSpec.url}`, {
           method: reqSpec.method,
-          url: reqSpec.url,
-          headers: peerHeaders,
-          ...(reqSpec.payload ? { payload: reqSpec.payload } : {}),
+          ...(reqSpec.payload ? { headers: { "content-type": "application/json" }, body: JSON.stringify(reqSpec.payload) } : {}),
         });
-        expect(pRes.statusCode).toBe(403);
+        expect(pRes.status).toBe(403);
       }
 
-      // 5. POST /api/router/items/:id/decide (with choice or optionIndex) & /archive work for both browser and peer!
       const decideBrowser = await customApp.inject({
         method: "POST",
         url: "/api/router/items/5/decide",
@@ -2582,31 +2591,29 @@ describe("Router 与 TaskGraph 轨道 A 接口", () => {
       });
       expect(decideBrowser.statusCode).toBe(200);
 
-      const archivePeer = await customApp.inject({
+      const archivePeer = await fetch(`${meshBridge.origin}/api/router/items/6/archive`, {
         method: "POST",
-        url: "/api/router/items/6/archive",
-        headers: peerHeaders,
-        payload: {},
+        headers: { "content-type": "application/json" },
+        body: "{}",
       });
-      expect(archivePeer.statusCode).toBe(200);
+      expect(archivePeer.status).toBe(200);
 
-      // 6. POST /api/router/target-ops works for peer deviceToken (PeerTargetPort tunnel execution)
-      const targetOpRes = await customApp.inject({
+      const targetOpRes = await fetch(`${meshBridge.origin}/api/router/target-ops`, {
         method: "POST",
-        url: "/api/router/target-ops",
-        headers: peerHeaders,
-        payload: {
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
           kind: "pm.forward",
           clientId: "fwd-1",
           pmId: 1,
           text: "远端原样投递",
-        },
+        }),
       });
-      expect(targetOpRes.statusCode).toBe(200);
-      expect(targetOpRes.json().result).toMatchObject({ kind: "pm.forward", pmId: 1, messageId: 77 });
+      expect(targetOpRes.status).toBe(200);
+      expect(((await targetOpRes.json()) as { result: unknown }).result).toMatchObject({ kind: "pm.forward", pmId: 1, messageId: 77 });
       expect(targetOps).toHaveLength(1);
     } finally {
-      await customApp.close();
+      await meshBridge.close();
+      await customUi.close();
     }
   });
   it("Router 发令与重试：慢规划不占着请求，立即回 planning 记录（规划多久都不会撞上网页的请求超时）", async () => {

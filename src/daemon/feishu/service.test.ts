@@ -536,11 +536,11 @@ describe("createFeishuService：访客权限", () => {
     expect(policyCards).toHaveLength(1);
     const post = store().postOf({ kind: "chat_policy", pmId: lin.pmId })!;
     const toCollab = { fusa: 1, kind: "set_policy", pmId: lin.pmId, guestTier: "collaborator" };
-    expect(click(chat, post.messageId, toCollab, GUEST).toast?.content).toBe("只有主人能改设置");
+    expect((await click(chat, post.messageId, toCollab, GUEST)).toast?.content).toBe("只有主人能改设置");
     await settle();
     expect(store().chatOfTarget({ kind: "pm", pmId: lin.pmId })!.guestTier).toBe("chat_only");
     expect(cardIdsCreated().filter((c) => c.data.includes("群设置"))).toHaveLength(1);
-    expect(click(chat, post.messageId, toCollab, OWNER).toast?.type).toBe("success");
+    expect((await click(chat, post.messageId, toCollab, OWNER)).toast?.type).toBe("success");
     await settle();
     expect(store().chatOfTarget({ kind: "pm", pmId: lin.pmId })!.guestTier).toBe("collaborator");
     expect(fake.callsOf("card.update").some((u) => u.card_id === post.cardId && u.card.data.includes("协作者"))).toBe(true);
@@ -554,8 +554,8 @@ describe("createFeishuService：访客权限", () => {
     const askId = await askInGroupFor(lin);
     const post = postOfAsk(askId);
     const choose = { fusa: 1, kind: "choose", card: { kind: "ask", askMessageId: askId }, optionIndex: 0 };
-    expect(click(chat, post.messageId, choose, GUEST).toast?.content).toBe("只有主人能拍板");
-    expect(click(chat, post.messageId, { fusa: 1, kind: "stop", conversationId: lin.conversationId }, GUEST).toast?.content).toBe("只有主人能停止");
+    expect((await click(chat, post.messageId, choose, GUEST)).toast?.content).toBe("只有主人能拍板");
+    expect((await click(chat, post.messageId, { fusa: 1, kind: "stop", conversationId: lin.conversationId }, GUEST)).toast?.content).toBe("只有主人能停止");
     expect(askOf(ledger.getMessage(askId)!)?.answered).toBeUndefined();
     fake.resources.set("file_g", Buffer.from("guest file"));
     say(chat, "看这个", { sender: GUEST, mention: true, files: [{ type: "file", fileKey: "file_g", fileName: "g.txt" }] });
@@ -577,12 +577,12 @@ describe("createFeishuService：访客权限", () => {
     ledger.onStopRequested((e) => stops.push(e.conversationId));
     running(lin.sessionId);
     ev(lin.sessionId, { type: "turn.started", at: Date.now() });
-    expect(click(chat, post.messageId, { fusa: 1, kind: "choose", card: { kind: "ask", askMessageId: askId }, optionIndex: 1 }, GUEST).toast?.type).toBe("success");
+    expect((await click(chat, post.messageId, { fusa: 1, kind: "choose", card: { kind: "ask", askMessageId: askId }, optionIndex: 1 }, GUEST)).toast?.type).toBe("success");
     expect(askOf(ledger.getMessage(askId)!)).toMatchObject({ answered: true, chosenOption: "不要" });
     ev(lin.sessionId, { type: "agent.text_delta", delta: "正在处理", at: Date.now() });
     await settle();
     const sent = streamCardMessage(chat)!;
-    expect(click(chat, sent.messageId, { fusa: 1, kind: "stop", conversationId: lin.conversationId }, GUEST).toast?.content).toBe("正在停");
+    expect((await click(chat, sent.messageId, { fusa: 1, kind: "stop", conversationId: lin.conversationId }, GUEST)).toast?.content).toBe("正在停");
     expect(stops).toEqual([lin.conversationId]);
     fake.resources.set("file_c", Buffer.from("collab file"));
     say(chat, "附件给你", { sender: GUEST, mention: true, files: [{ type: "file", fileKey: "file_c", fileName: "c.txt" }] });
@@ -597,17 +597,17 @@ describe("createFeishuService：访客权限", () => {
     const ask = await askInGroupFor(lin);
     const post = postOfAsk(ask);
     const choose = { fusa: 1, kind: "choose", card: { kind: "ask", askMessageId: ask }, optionIndex: 0 };
-    expect(click(chatOf(zhou.pmId), post.messageId, choose).toast?.type).toBe("warning");
-    expect(click(chat, "om_fixture_unknown", choose).toast?.type).toBe("warning");
+    expect((await click(chatOf(zhou.pmId), post.messageId, choose)).toast?.type).toBe("warning");
+    expect((await click(chat, "om_fixture_unknown", choose)).toast?.type).toBe("warning");
     await svc.setup.setChatPolicy({ pmId: lin.pmId, guestTier: "collaborator" });
     const routerPost = postOfRouterItem(itemOfAsk(ask).id);
-    expect(click(routerChat(), routerPost.messageId, choose, GUEST).toast?.type).toBe("warning");
+    expect((await click(routerChat(), routerPost.messageId, choose, GUEST)).toast?.type).toBe("warning");
     ledger.archivePm(lin.pmId);
-    expect(click(chat, post.messageId, choose).toast?.type).toBe("warning");
-    expect(click(routerChat(), routerPost.messageId, choose).toast?.type).toBe("warning");
+    expect((await click(chat, post.messageId, choose)).toast?.type).toBe("warning");
+    expect((await click(routerChat(), routerPost.messageId, choose)).toast?.type).toBe("warning");
     ledger.purgeExpiredArchivedPms(Date.now() + 8 * 24 * 60 * 60 * 1000);
-    expect(click(chat, post.messageId, choose).toast?.type).toBe("warning");
-    expect(click(routerChat(), routerPost.messageId, choose).toast?.type).toBe("warning");
+    expect((await click(chat, post.messageId, choose)).toast?.type).toBe("warning");
+    expect((await click(routerChat(), routerPost.messageId, choose)).toast?.type).toBe("warning");
     expect(ledger.getMessage(ask)).toBeNull();
   });
 
@@ -705,12 +705,12 @@ describe("createFeishuService：群设置卡随叫随到", () => {
     await settle();
     const fresh = policyPost()!;
     const toObserver = { fusa: 1, kind: "set_policy", pmId: lin.pmId, guestTier: "observer" };
-    const stale = click(chat, old.messageId, toObserver);
+    const stale = await click(chat, old.messageId, toObserver);
     expect(stale.toast?.type).toBe("warning");
     expect(stale.toast?.content).toContain("/群设置");
     await settle();
     expect(store().chatOfTarget({ kind: "pm", pmId: lin.pmId })!.guestTier).toBe("chat_only");
-    expect(click(chat, fresh.messageId, toObserver).toast?.type).toBe("success");
+    expect((await click(chat, fresh.messageId, toObserver)).toast?.type).toBe("success");
     await settle();
     expect(store().chatOfTarget({ kind: "pm", pmId: lin.pmId })!.guestTier).toBe("observer");
     const update = fake.callsOf("card.update").findLast((u) => u.card_id === fresh.cardId)!;
@@ -745,7 +745,7 @@ describe("createFeishuService：群设置卡随叫随到", () => {
     expect(lines.some((line) => line.includes("置顶") && line.includes("230027"))).toBe(true);
     expect(svc.setup.status().state).toBe("connected");
     const post = policyPost()!;
-    expect(click(chat, post.messageId, { fusa: 1, kind: "set_policy", pmId: lin.pmId, guestTier: "collaborator" }).toast?.type).toBe("success");
+    expect((await click(chat, post.messageId, { fusa: 1, kind: "set_policy", pmId: lin.pmId, guestTier: "collaborator" })).toast?.type).toBe("success");
     fake.failNext["pin.delete"] = new Error("network down");
     say(chat, "/群设置");
     await settle();
@@ -805,10 +805,10 @@ describe("createFeishuService：群设置卡随叫随到", () => {
     const askId = await askInGroupFor(lin);
     const post = postOfAsk(askId);
     const choose = { fusa: 1, kind: "choose", card: { kind: "ask", askMessageId: askId }, optionIndex: 0 };
-    expect(click(chat, post.messageId, choose, GUEST).toast?.content).toBe("只有主人能拍板");
+    expect((await click(chat, post.messageId, choose, GUEST)).toast?.content).toBe("只有主人能拍板");
     await settle();
     expect(policyCards()).toHaveLength(joined + 1);
-    expect(click(chat, post.messageId, { fusa: 1, kind: "stop", conversationId: lin.conversationId }, GUEST).toast?.content).toBe("只有主人能停止");
+    expect((await click(chat, post.messageId, { fusa: 1, kind: "stop", conversationId: lin.conversationId }, GUEST)).toast?.content).toBe("只有主人能停止");
     await settle();
     expect(policyCards()).toHaveLength(joined + 1);
     expect(askOf(ledger.getMessage(askId)!)?.answered).toBeUndefined();
@@ -826,7 +826,7 @@ describe("createFeishuService：群设置卡随叫随到", () => {
     await settle();
     offset += FEISHU_POLICY_CARD_COOLDOWN_MS;
     const joined = policyCards().length;
-    expect(click(chat, policyPost()!.messageId, { fusa: 1, kind: "set_policy", pmId: lin.pmId, guestTier: "collaborator" }, GUEST).toast?.content).toBe("只有主人能改设置");
+    expect((await click(chat, policyPost()!.messageId, { fusa: 1, kind: "set_policy", pmId: lin.pmId, guestTier: "collaborator" }, GUEST)).toast?.content).toBe("只有主人能改设置");
     await settle();
     expect(policyCards()).toHaveLength(joined);
   });
@@ -846,27 +846,27 @@ describe("createFeishuService：群设置卡随叫随到", () => {
     const modelAction = { fusa: 1, kind: "set_pm_model", pmId: lin.pmId, field: "model" };
     const effortAction = { fusa: 1, kind: "set_pm_model", pmId: lin.pmId, field: "effort" };
 
-    expect(chooseOption(chat, post.messageId, vendorAction, "codex", GUEST).toast?.content).toBe("只有主人能改设置");
+    expect((await chooseOption(chat, post.messageId, vendorAction, "codex", GUEST)).toast?.content).toBe("只有主人能改设置");
     expect(ledger.getPersona(lin.pmId).vendor).toBe("claude");
 
-    expect(chooseOption(chat, oldCard.messageId, vendorAction, "codex", OWNER).toast?.content).toContain("已换新");
+    expect((await chooseOption(chat, oldCard.messageId, vendorAction, "codex", OWNER)).toast?.content).toContain("已换新");
     expect(ledger.getPersona(lin.pmId).vendor).toBe("claude");
 
-    expect(chooseOption(chat, post.messageId, vendorAction, "codex", OWNER).toast?.type).not.toBe("error");
+    expect((await chooseOption(chat, post.messageId, vendorAction, "codex", OWNER)).toast?.type).not.toBe("error");
     await settle();
     expect(ledger.getPersona(lin.pmId)).toMatchObject({ vendor: "codex", model: null, effort: null });
     let latestCard = fake.callsOf("card.update").findLast((u) => u.card_id === post.cardId)!.card.data;
     expect(latestCard).toContain("gpt-6-luna");
 
-    expect(chooseOption(chat, post.messageId, modelAction, "gpt-6-luna", OWNER).toast?.type).toBe("success");
+    expect((await chooseOption(chat, post.messageId, modelAction, "gpt-6-luna", OWNER)).toast?.type).toBe("success");
     await settle();
-    expect(chooseOption(chat, post.messageId, effortAction, "high", OWNER).toast?.type).toBe("success");
+    expect((await chooseOption(chat, post.messageId, effortAction, "high", OWNER)).toast?.type).toBe("success");
     await settle();
     expect(ledger.getPersona(lin.pmId)).toMatchObject({ vendor: "codex", model: "gpt-6-luna", effort: "high" });
 
-    expect(chooseOption(chat, post.messageId, vendorAction, "agy", OWNER).toast?.type).not.toBe("error");
+    expect((await chooseOption(chat, post.messageId, vendorAction, "agy", OWNER)).toast?.type).not.toBe("error");
     await settle();
-    expect(chooseOption(chat, post.messageId, modelAction, "gpt-oss-120b", OWNER).toast?.type).toBe("success");
+    expect((await chooseOption(chat, post.messageId, modelAction, "gpt-oss-120b", OWNER)).toast?.type).toBe("success");
     await settle();
     latestCard = fake.callsOf("card.update").findLast((u) => u.card_id === post.cardId)!.card.data;
     expect(latestCard).toContain("不支持");
@@ -899,7 +899,7 @@ describe("createFeishuService：群设置卡随叫随到", () => {
     await settle();
     const post = policyPost()!;
     const updatesBefore = fake.callsOf("card.update").filter((u) => u.card_id === post.cardId).length;
-    const res = chooseOption(chat, post.messageId, { fusa: 1, kind: "set_pm_model", pmId: lin.pmId, field: "vendor" }, "codex", OWNER);
+    const res = await chooseOption(chat, post.messageId, { fusa: 1, kind: "set_pm_model", pmId: lin.pmId, field: "vendor" }, "codex", OWNER);
     expect(res.toast?.type).toBe("warning");
     expect(res.toast?.content).toContain("登录");
     await settle();
@@ -907,7 +907,7 @@ describe("createFeishuService：群设置卡随叫随到", () => {
     expect(fake.callsOf("card.update").filter((u) => u.card_id === post.cardId).length).toBeGreaterThan(updatesBefore);
 
     warmed = false;
-    const cold = chooseOption(chat, post.messageId, { fusa: 1, kind: "set_pm_model", pmId: lin.pmId, field: "vendor" }, "codex", OWNER);
+    const cold = await chooseOption(chat, post.messageId, { fusa: 1, kind: "set_pm_model", pmId: lin.pmId, field: "vendor" }, "codex", OWNER);
     expect(cold.toast?.type).toBe("info");
     await settle();
     expect(ledger.getPersona(lin.pmId).vendor).toBe("claude");
@@ -992,20 +992,20 @@ describe("createFeishuService：群设置卡随叫随到", () => {
     const vendorAction = { fusa: 1, kind: "set_pm_model", pmId: lin.pmId, field: "vendor" };
     const modelAction = { fusa: 1, kind: "set_pm_model", pmId: lin.pmId, field: "model" };
 
-    const switchRes = chooseOption(chat, post.messageId, vendorAction, "codex", OWNER);
+    const switchRes = await chooseOption(chat, post.messageId, vendorAction, "codex", OWNER);
     expect(switchRes.toast?.content).toContain("Codex");
     await settle();
     expect(ledger.getPersona(lin.pmId).switchingToVendor).toBe("codex");
 
     const updatesBefore = fake.callsOf("card.update").filter((u) => u.card_id === post.cardId).length;
-    const revertAttempt = chooseOption(chat, post.messageId, vendorAction, "claude", OWNER);
+    const revertAttempt = await chooseOption(chat, post.messageId, vendorAction, "claude", OWNER);
     expect(revertAttempt.toast?.type).toBe("warning");
     expect(revertAttempt.toast?.content).toContain("当前这一轮");
     await settle();
     expect(ledger.getPersona(lin.pmId)).toMatchObject({ vendor: "codex", switchingToVendor: "codex" });
     expect(fake.callsOf("card.update").filter((u) => u.card_id === post.cardId).length).toBeGreaterThan(updatesBefore);
 
-    expect(chooseOption(chat, post.messageId, modelAction, "gpt-6-luna", OWNER).toast?.type).toBe("success");
+    expect((await chooseOption(chat, post.messageId, modelAction, "gpt-6-luna", OWNER)).toast?.type).toBe("success");
     await settle();
     expect(ledger.getPersona(lin.pmId)).toMatchObject({ vendor: "codex", model: "gpt-6-luna", switchingToVendor: "codex" });
   });
@@ -1035,7 +1035,7 @@ describe("createFeishuService：群设置卡随叫随到", () => {
       throw new LedgerRequestError("invalid", "账本拒收该模型");
     });
     const pmUpdatesBefore = fake.callsOf("card.update").filter((u) => u.card_id === pmPost.cardId).length;
-    const syncReject = chooseOption(chat, pmPost.messageId, { fusa: 1, kind: "set_pm_model", pmId: lin.pmId, field: "model" }, "sonnet", OWNER);
+    const syncReject = await chooseOption(chat, pmPost.messageId, { fusa: 1, kind: "set_pm_model", pmId: lin.pmId, field: "model" }, "sonnet", OWNER);
     expect(syncReject.toast).toEqual({ type: "warning", content: "账本拒收该模型" });
     await settle();
     expect(fake.callsOf("card.update").filter((u) => u.card_id === pmPost.cardId).length).toBeGreaterThan(pmUpdatesBefore);
@@ -1044,7 +1044,7 @@ describe("createFeishuService：群设置卡随叫随到", () => {
       throw new LedgerRequestError("invalid", "总助拒收该档位");
     });
     const routerUpdatesBefore = fake.callsOf("card.update").filter((u) => u.card_id === routerPost.cardId).length;
-    const routerReject = chooseOption(rChat, routerPost.messageId, { fusa: 1, kind: "set_router_model", field: "vendor" }, "codex", OWNER);
+    const routerReject = await chooseOption(rChat, routerPost.messageId, { fusa: 1, kind: "set_router_model", field: "vendor" }, "codex", OWNER);
     expect(routerReject.toast).toEqual({ type: "warning", content: "总助拒收该档位" });
     await settle();
     expect(fake.callsOf("card.update").filter((u) => u.card_id === routerPost.cardId).length).toBeGreaterThan(routerUpdatesBefore);
@@ -1054,7 +1054,7 @@ describe("createFeishuService：群设置卡随叫随到", () => {
       throw new LedgerRequestError("invalid", "冷目录异步拒收");
     });
     const asyncUpdatesBefore = fake.callsOf("card.update").filter((u) => u.card_id === pmPost.cardId).length;
-    expect(chooseOption(chat, pmPost.messageId, { fusa: 1, kind: "set_pm_model", pmId: lin.pmId, field: "vendor" }, "codex", OWNER).toast?.type).toBe("info");
+    expect((await chooseOption(chat, pmPost.messageId, { fusa: 1, kind: "set_pm_model", pmId: lin.pmId, field: "vendor" }, "codex", OWNER)).toast?.type).toBe("info");
     await settle();
     expect(textsTo(chat).some((t) => t.includes("冷目录异步拒收"))).toBe(true);
     expect(fake.callsOf("card.update").filter((u) => u.card_id === pmPost.cardId).length).toBeGreaterThan(asyncUpdatesBefore);
@@ -1186,7 +1186,7 @@ describe("createFeishuService：流式、急停与卡片", () => {
       const sent = fake.sent.at(-1)!;
       ev(lin.sessionId, { type: "agent.text", uuid: "stopped-final", text: "已经定稿", at: Date.now() });
       await settle();
-      expect(click(chat, sent.messageId, { fusa: 1, kind: "stop", conversationId: lin.conversationId }).toast?.type).toBe("warning");
+      expect((await click(chat, sent.messageId, { fusa: 1, kind: "stop", conversationId: lin.conversationId })).toast?.type).toBe("warning");
       await vi.advanceTimersByTimeAsync(FEISHU_STREAM_RENEW_MS);
       await settle();
       expect(fake.callsOf("card.settings")).toHaveLength(0);
@@ -1205,7 +1205,7 @@ describe("createFeishuService：流式、急停与卡片", () => {
     delta(lin.sessionId, "写到一半");
     await settle();
     expect(cardIdsCreated()).toHaveLength(1);
-    const response = click(chatOf(lin.pmId), fake.sent.at(-1)!.messageId, { fusa: 1, kind: "stop", conversationId: lin.conversationId });
+    const response = await click(chatOf(lin.pmId), fake.sent.at(-1)!.messageId, { fusa: 1, kind: "stop", conversationId: lin.conversationId });
     expect(response.toast?.content).toBe("正在停");
     expect(stops).toEqual([lin.conversationId]);
     ev(lin.sessionId, { type: "turn.ended", ok: false, interrupted: true, messageIds: [], durationMs: 1, at: Date.now() });
@@ -1223,7 +1223,7 @@ describe("createFeishuService：流式、急停与卡片", () => {
     expect(post.state).toBe("card_pending");
     const created = cardIdsCreated().find((c) => c.data.includes("要不要上线"))!;
     expect(buttonValues(created.data)).toContainEqual({ kind: "choose", card: { kind: "ask", askMessageId: askId }, optionIndex: 0 });
-    expect(click(chatOf(lin.pmId), post.messageId, { fusa: 1, kind: "choose", card: { kind: "ask", askMessageId: askId }, optionIndex: 0 }, OWNER, "快点").toast?.type).toBe("success");
+    expect((await click(chatOf(lin.pmId), post.messageId, { fusa: 1, kind: "choose", card: { kind: "ask", askMessageId: askId }, optionIndex: 0 }, OWNER, "快点")).toast?.type).toBe("success");
     expect(askOf(ledger.getMessage(askId)!)).toMatchObject({ answered: true, chosenOption: "要", answerNote: "快点" });
     await settle();
     expect(postOfAsk(askId).state).toBe("card_settled");
@@ -1331,13 +1331,13 @@ describe("createFeishuService：总助单聊", () => {
     await connect();
     const a1 = await askInGroupFor(lin, ["A", "B"]);
     const routerPost = postOfRouterItem(itemOfAsk(a1).id);
-    expect(click(routerChat(), routerPost.messageId, { fusa: 1, kind: "choose", card: { kind: "ask", askMessageId: a1 }, optionIndex: 1 }).toast?.type).toBe("success");
+    expect((await click(routerChat(), routerPost.messageId, { fusa: 1, kind: "choose", card: { kind: "ask", askMessageId: a1 }, optionIndex: 1 })).toast?.type).toBe("success");
     await settle();
     expect(askOf(ledger.getMessage(a1)!)).toMatchObject({ answered: true, chosenOption: "B" });
     expect(postOfAsk(a1).state).toBe("card_settled");
     expect(postOfRouterItem(itemOfAsk(a1).id).state).toBe("card_settled");
     const a2 = await askInGroupFor(lin, ["C", "D"]);
-    expect(click(chatOf(lin.pmId), postOfAsk(a2).messageId, { fusa: 1, kind: "choose", card: { kind: "ask", askMessageId: a2 }, optionIndex: 0 }).toast?.type).toBe("success");
+    expect((await click(chatOf(lin.pmId), postOfAsk(a2).messageId, { fusa: 1, kind: "choose", card: { kind: "ask", askMessageId: a2 }, optionIndex: 0 })).toast?.type).toBe("success");
     await settle();
     expect(postOfRouterItem(itemOfAsk(a2).id).state).toBe("card_settled");
     const routerUpdate = fake.callsOf("card.update").find((u) => u.card_id === postOfRouterItem(itemOfAsk(a2).id).cardId)!;
@@ -1348,8 +1348,8 @@ describe("createFeishuService：总助单聊", () => {
     await connect();
     const askId = await askInGroupFor(lin, ["A", "B"]);
     const value = (i: number) => ({ fusa: 1, kind: "choose", card: { kind: "ask", askMessageId: askId }, optionIndex: i });
-    expect(click(chatOf(lin.pmId), postOfAsk(askId).messageId, value(0)).toast?.type).toBe("success");
-    const later = click(routerChat(), postOfRouterItem(itemOfAsk(askId).id).messageId, value(1));
+    expect((await click(chatOf(lin.pmId), postOfAsk(askId).messageId, value(0))).toast?.type).toBe("success");
+    const later = await click(routerChat(), postOfRouterItem(itemOfAsk(askId).id).messageId, value(1));
     expect(later.toast?.content).toBe("已经定过了");
     expect(askOf(ledger.getMessage(askId)!)?.chosenOption).toBe("A");
     const wakeups = db.all("SELECT id FROM messages WHERE conversation_id = ? AND sender = 'user'", lin.conversationId);
@@ -1381,18 +1381,18 @@ describe("createFeishuService：总助单聊", () => {
     const modelAction = { fusa: 1, kind: "set_router_model", field: "model" };
     const effortAction = { fusa: 1, kind: "set_router_model", field: "effort" };
 
-    expect(chooseOption(chat, first.messageId, vendorAction, "codex", OWNER).toast?.content).toContain("已换新");
-    expect(chooseOption(chat, fresh.messageId, vendorAction, "codex", OWNER).toast?.type).toBe("success");
+    expect((await chooseOption(chat, first.messageId, vendorAction, "codex", OWNER)).toast?.content).toContain("已换新");
+    expect((await chooseOption(chat, fresh.messageId, vendorAction, "codex", OWNER)).toast?.type).toBe("success");
     await settle();
     expect(ledger.getRouterSettings()).toMatchObject({ vendor: "codex", model: "gpt-6-luna", effort: "low" });
 
-    expect(chooseOption(chat, fresh.messageId, modelAction, "gpt-6.1-sol", OWNER).toast?.type).toBe("success");
+    expect((await chooseOption(chat, fresh.messageId, modelAction, "gpt-6.1-sol", OWNER)).toast?.type).toBe("success");
     await settle();
-    expect(chooseOption(chat, fresh.messageId, effortAction, "high", OWNER).toast?.type).toBe("success");
+    expect((await chooseOption(chat, fresh.messageId, effortAction, "high", OWNER)).toast?.type).toBe("success");
     await settle();
     expect(ledger.getRouterSettings()).toMatchObject({ vendor: "codex", model: "gpt-6.1-sol", effort: "high" });
 
-    expect(chooseOption(chat, fresh.messageId, vendorAction, "-auto", OWNER).toast?.type).toBe("success");
+    expect((await chooseOption(chat, fresh.messageId, vendorAction, "-auto", OWNER)).toast?.type).toBe("success");
     await settle();
     expect(ledger.getRouterSettings()).toMatchObject({ vendor: null, model: null, effort: null });
 
@@ -1452,9 +1452,9 @@ describe("createFeishuService：断线与补发", () => {
     const groupPost = postOfAsk(askId);
     const routerPost = postOfRouterItem(itemOfAsk(askId).id);
     fake.handlers!.onDisconnected("离线");
-    expect(click(chat, groupPost.messageId, first, GUEST).toast?.type).toBe("success");
-    expect(click(chat, groupPost.messageId, first, GUEST).toast?.type).toBe("success");
-    expect(click(routerChat(), routerPost.messageId, { ...first, optionIndex: 1 }).toast?.content).toBe("已经定过了");
+    expect((await click(chat, groupPost.messageId, first, GUEST)).toast?.type).toBe("success");
+    expect((await click(chat, groupPost.messageId, first, GUEST)).toast?.type).toBe("success");
+    expect((await click(routerChat(), routerPost.messageId, { ...first, optionIndex: 1 })).toast?.content).toBe("已经定过了");
     const older = ledger.createRouterCommand({ clientId: "older", inputText: "先建", vendor: "claude", status: "planning" }).command;
     const newer = ledger.createRouterCommand({ clientId: "newer", inputText: "后建", vendor: "claude", status: "planning" }).command;
     ledger.updateRouterCommand(newer.id, { status: "answered", plan: { intent: "answer", reply: "先完成", actions: [] } });
@@ -1807,7 +1807,7 @@ describe("createFeishuService：开轮即时反馈、关卡同步与附件分流
     tool(lin.sessionId, "Bash", { command: "sleep 60" });
     await settle();
     const statusCard = fake.sent.at(-1)!;
-    expect(click(chatOf(lin.pmId), statusCard.messageId, { fusa: 1, kind: "stop", conversationId: lin.conversationId }).toast?.content).toBe("正在停");
+    expect((await click(chatOf(lin.pmId), statusCard.messageId, { fusa: 1, kind: "stop", conversationId: lin.conversationId })).toast?.content).toBe("正在停");
     expect(stops).toEqual([lin.conversationId]);
     ev(lin.sessionId, { type: "turn.ended", ok: false, interrupted: true, messageIds: [], durationMs: 1, at: Date.now() });
     await settle();
@@ -1947,7 +1947,7 @@ describe("createFeishuService：图文同发、超大图瘦身、重启补传与
     expect(imgKeysOf(created)).toHaveLength(1);
     expect(buttonValues(created).length).toBeGreaterThan(0);
     expect(fake.callsOf("message.create").some((c) => c.msg_type === "image")).toBe(false);
-    click(chatOf(lin.pmId), post.messageId, { fusa: 1, kind: "choose", card: { kind: "ask", askMessageId: askId }, optionIndex: 0 });
+    await click(chatOf(lin.pmId), post.messageId, { fusa: 1, kind: "choose", card: { kind: "ask", askMessageId: askId }, optionIndex: 0 });
     await settle();
     const settled = fake.callsOf("card.update").filter((u) => u.card_id === post.cardId).at(-1)!;
     expect(buttonValues(settled.card.data)).toEqual([]);
@@ -2163,7 +2163,7 @@ describe("createFeishuService：附件改卡失败重刷、内部唤醒不当用
     await connect();
     const chat = chatOf(lin.pmId);
     const askId = await askInGroupFor(lin, ["A", "B"]);
-    expect(click(chat, postOfAsk(askId).messageId, { fusa: 1, kind: "choose", card: { kind: "ask", askMessageId: askId }, optionIndex: 0 }).toast?.type).toBe("success");
+    expect((await click(chat, postOfAsk(askId).messageId, { fusa: 1, kind: "choose", card: { kind: "ask", askMessageId: askId }, optionIndex: 0 })).toast?.type).toBe("success");
     await settle();
     expect(userMessages(lin.conversationId)).toHaveLength(1);
     running(lin.sessionId);
@@ -2463,7 +2463,7 @@ describe("createFeishuService：检查点拍板卡（含交付物文件附件）
     expect(fileUploads).toHaveLength(1);
 
     const passAction = { fusa: 1, kind: "choose", card: { kind: "gate", askMessageId: askMsgId, graphId, nodeKey: "design" }, optionIndex: 0 };
-    expect(click(rChatId, routerPost!.messageId, passAction).toast?.type).toBe("success");
+    expect((await click(rChatId, routerPost!.messageId, passAction)).toast?.type).toBe("success");
     await settle();
     expect(postOfAsk(askMsgId).state).toBe("card_settled");
     expect(store().postOf({ kind: "router_ask", messageId: askMsgId })?.state).toBe("card_settled");
@@ -2476,7 +2476,7 @@ describe("createFeishuService：检查点拍板卡（含交付物文件附件）
     expect(implNode.activeWorkerId).not.toBeNull();
     const implWorkerId = implNode.activeWorkerId;
 
-    const dup = click(pmChatId, groupPost.messageId, passAction);
+    const dup = await click(pmChatId, groupPost.messageId, passAction);
     expect(dup.toast).toEqual({ type: "info", content: "已经定过了" });
     expect(ledger.hubCall(lin.sessionId, "graph.show", { graphId }).data.graph.nodes.find((n) => n.key === "impl")!.activeWorkerId).toBe(implWorkerId);
   });
@@ -2485,7 +2485,7 @@ describe("createFeishuService：检查点拍板卡（含交付物文件附件）
     await connect();
     const first = await raiseCheckpointWithDeliverables();
     const rejectAction = { fusa: 1, kind: "choose", card: { kind: "gate", askMessageId: first.askMsgId, graphId: first.graphId, nodeKey: "design" }, optionIndex: 1 };
-    expect(click(first.pmChatId, postOfAsk(first.askMsgId).messageId, rejectAction, OWNER, "补一段边界说明").toast?.type).toBe("success");
+    expect((await click(first.pmChatId, postOfAsk(first.askMsgId).messageId, rejectAction, OWNER, "补一段边界说明")).toast?.type).toBe("success");
     await settle();
     expect(postOfAsk(first.askMsgId).state).toBe("card_settled");
     expect(store().postOf({ kind: "router_ask", messageId: first.askMsgId })?.state).toBe("card_settled");

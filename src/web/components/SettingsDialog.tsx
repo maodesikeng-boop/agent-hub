@@ -8,7 +8,7 @@ import { Segmented } from "../ui/segmented.tsx";
 import { Switch } from "../ui/switch.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs.tsx";
 import { BrowserSessionsSettings } from "./BrowserSessions.tsx";
-import { ComputersSection, PublicEntrySection } from "./DeviceSettings.tsx";
+import { ComputersSection } from "./DeviceSettings.tsx";
 import { ProvidersSettings } from "./ProvidersSettings.tsx";
 import { SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
@@ -107,12 +107,7 @@ export function SettingsDialog({
       />
     ),
     computers: devices && <ComputersSection {...devices} />,
-    security: (
-      <>
-        <BrowserSessionsSettings />
-        {devices && <PublicEntrySection {...(devices.publicEntry !== undefined ? { publicEntry: devices.publicEntry } : {})} onChanged={devices.onChanged} />}
-      </>
-    ),
+    security: <BrowserSessionsSettings />,
   };
 
   return (

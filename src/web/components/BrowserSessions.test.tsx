@@ -92,46 +92,6 @@ describe("已登录的浏览器列表", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("登录过期了，重新登录");
     expect(toggle()).toHaveAttribute("aria-expanded", "true");
   });
-
-  it("待批准（pending_approval）浏览器会话排在最前，展示“允许”与“拒绝”按钮；点“允许”调 POST /api/sessions/:id/approve 后变为已登录并标出“经公网”", async () => {
-    list = [
-      session({ id: "mac", current: true }),
-      session({ id: "phone-pending", userAgent: IPHONE, status: "pending_approval", viaPublic: true, lastSeenAt: Date.now() - 60_000 }),
-    ];
-    render(<BrowserSessionsSettings onSignedOut={onSignedOut} />);
-    // 有待批准的：不用点，自己展开
-    await screen.findByText("iPhone Safari");
-    expect(toggle()).toHaveAttribute("aria-expanded", "true");
-    const region = screen.getByRole("region", { name: "Signed-in browsers" });
-    const rows = region.querySelectorAll("[data-slot='settings-row']");
-    // pending_approval 排在第一行
-    expect(rows[0]).toHaveTextContent("iPhone Safari");
-    expect(rows[0]).toHaveTextContent("Pending approval");
-    expect(rows[0]).toHaveTextContent("Via public access");
-    expect(rows[0]!.textContent).not.toContain("·");
-
-    const phoneRow = rowOf("iPhone Safari");
-    expect(within(phoneRow).getByRole("button", { name: "Deny" })).toBeInTheDocument();
-    const approveBtn = within(phoneRow).getByRole("button", { name: "Allow" });
-    fireEvent.click(approveBtn);
-
-    await waitFor(() => expect(api.callsTo("POST", /^\/api\/sessions\/phone-pending\/approve$/)).toHaveLength(1));
-    await waitFor(() => expect(within(phoneRow).queryByText("Pending approval")).not.toBeInTheDocument());
-    expect(within(phoneRow).getByText("Via public access")).toBeInTheDocument();
-    expect(within(phoneRow).getByRole("button", { name: /^Sign out/ })).toBeInTheDocument();
-  });
-
-  it("待批准（pending_approval）会话点“拒绝”调 DELETE /api/sessions/:id 并从列表移除", async () => {
-    list = [
-      session({ id: "mac", current: true }),
-      session({ id: "phone-pending", userAgent: IPHONE, status: "pending_approval", viaPublic: true }),
-    ];
-    await show();
-    const phoneRow = rowOf("iPhone Safari");
-    fireEvent.click(within(phoneRow).getByRole("button", { name: "Deny" }));
-    await waitFor(() => expect(screen.queryByText("iPhone Safari")).not.toBeInTheDocument());
-    expect(api.callsTo("DELETE", /^\/api\/sessions\/phone-pending$/)).toHaveLength(1);
-  });
 });
 
 describe("单个退出", () => {

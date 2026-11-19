@@ -1,12 +1,11 @@
-// #/settings/browsers：进页拉一次已登录浏览器（staleTime 0）。待批准的公网会话单独置顶一组（Deny / Allow）；
-// 其余会话整行可点，本机置顶；任何退出（单个、本机、全部）一律拉起底部确认抽屉，红色 destructive 确认才提交（第 6 节决策 6）。
+// #/settings/browsers：进页拉一次已登录浏览器（staleTime 0），整行可点，本机置顶；
+// 任何退出（单个、本机、全部）一律拉起底部确认抽屉，红色 destructive 确认才提交（第 6 节决策 6）。
 import { Loader2, Monitor, Smartphone, Tablet } from "../../ui/icons.ts";
 import { useMemo, useState } from "react";
 import type { BrowserSessionInfo } from "../../../shared/index.ts";
 import { describeUserAgent, formatAgo, userAgentKind } from "../../browser-sessions.ts";
-import { RowError, SettingsGroup, SettingsRow } from "../../components/SettingsList.tsx";
+import { RowError, SettingsGroup } from "../../components/SettingsList.tsx";
 import { useBrowserSessions } from "../../settings-model.ts";
-import { Button } from "../../ui/button.tsx";
 import { ConfirmBody, SettingsDrawer, useDrawerTarget } from "./SettingsDrawer.tsx";
 import { SettingsNavRow } from "./SettingsNavRow.tsx";
 
@@ -21,50 +20,18 @@ function KindIcon({ userAgent }: { userAgent: string }) {
 const byRecency = (a: BrowserSessionInfo, b: BrowserSessionInfo) => Number(b.current) - Number(a.current) || b.lastSeenAt - a.lastSeenAt;
 
 export function BrowsersPage({ onSignedOut }: { onSignedOut?: () => void }) {
-  const { sessions, loadError, rowErrors, allError, busy, signOut, signOutAsync, approve, signOutAllAsync } = useBrowserSessions(
+  const { sessions, loadError, rowErrors, allError, busy, signOutAsync, signOutAllAsync } = useBrowserSessions(
     onSignedOut !== undefined ? { onSignedOut } : {},
   );
   const confirm = useDrawerTarget<BrowserSessionInfo>();
   const [allOpen, setAllOpen] = useState(false);
   const now = Date.now();
-  const pending = useMemo(() => sessions?.filter((s) => s.status === "pending_approval") ?? [], [sessions]);
-  const active = useMemo(() => sessions?.filter((s) => s.status !== "pending_approval").toSorted(byRecency) ?? [], [sessions]);
+  const active = useMemo(() => sessions?.toSorted(byRecency) ?? [], [sessions]);
   const target = confirm.target;
   const targetName = target === null ? "" : describeUserAgent(target.userAgent);
 
   return (
     <>
-      {pending.length > 0 && (
-        <SettingsGroup title="Pending approval">
-          {pending.map((session) => (
-            <SettingsRow
-              key={session.id}
-              label={describeUserAgent(session.userAgent)}
-              icon={<KindIcon userAgent={session.userAgent} />}
-              error={rowErrors[session.id]}
-              detail={
-                <span className="flex flex-wrap items-center gap-x-3">
-                  {session.viaPublic && <span>Via public access</span>}
-                  <span>{formatAgo(session.lastSeenAt, now)}</span>
-                </span>
-              }
-            >
-              {() => (
-                <>
-                  <Button variant="outline" size="sm" disabled={busy !== null} onClick={() => signOut(session)}>
-                    {busy === `exit:${session.id}` && <Loader2 aria-hidden="true" />}
-                    Deny
-                  </Button>
-                  <Button size="sm" disabled={busy !== null} onClick={() => approve(session)}>
-                    {busy === `approve:${session.id}` && <Loader2 aria-hidden="true" />}
-                    Allow
-                  </Button>
-                </>
-              )}
-            </SettingsRow>
-          ))}
-        </SettingsGroup>
-      )}
       <SettingsGroup label="Signed-in browsers">
         {sessions === null && loadError === null && (
           <div className="flex min-h-12 items-center justify-center">
@@ -84,7 +51,6 @@ export function BrowsersPage({ onSignedOut }: { onSignedOut?: () => void }) {
             detail={
               <span className="flex flex-wrap items-center gap-x-3">
                 {session.current && <span>This browser</span>}
-                {session.viaPublic && <span>Via public access</span>}
                 <span>{formatAgo(session.lastSeenAt, now)}</span>
               </span>
             }

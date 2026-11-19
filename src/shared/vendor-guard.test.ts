@@ -44,7 +44,7 @@ interface Rule {
 }
 
 /** test/ 里的公共测试零件（起守护进程、发消息、清环境、查进程）：和公共代码一样不许认识具体哪家。具体某家的冒烟场景不在这里。 */
-const TEST_TOOL_FILES = ["test/clean-env.ts", "test/spawn-guard.ts", "test/e2e/harness.ts", "test/e2e/loopback-daemon.ts", "test/smoke/kit.ts", "test/smoke/main.ts"];
+const TEST_TOOL_FILES = ["test/clean-env.ts", "test/spawn-guard.ts", "test/e2e/harness.ts", "test/e2e/mesh-daemon.ts", "test/e2e/fake-github.ts", "test/smoke/kit.ts", "test/smoke/main.ts"];
 
 /** 公共代码：src/ 里厂商文件夹（src/vendors/ 下的名单、类型、加载器不算厂商文件夹）以外的源码，加上测试零件。 */
 const commonTs = [

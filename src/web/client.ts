@@ -5,7 +5,6 @@ import {
   SLOW_API_REQUEST_TIMEOUT_MS,
   UPLOAD_TOO_LARGE_MESSAGE,
   devicePath,
-  type AddDeviceRequest,
   type AgentVendor,
   type ArchiveAllReportsResponse,
   type ArchivePmResponse,
@@ -22,8 +21,11 @@ import {
   type CreatePmResponse,
   type DeviceId,
   type DeviceInfo,
-  type DeviceInviteResponse,
   type DevicesResponse,
+  type AccountStatusView,
+  type AnswerApprovalRequest,
+  type SetCenterPriorityRequest,
+  type StartLoginRequest,
   type RenameDeviceRequest,
   type AddScheduleRequest,
   type EditPersonaRequest,
@@ -62,7 +64,6 @@ import {
   type ProviderStatusItem,
   type ProviderSubmitAuthRequest,
   type ProvidersStatusResponse,
-  type PublicEntryStatus,
   type PutPmMemoryFileRequest,
   type PutPmMemoryFileResponse,
   type QuotaResponse,
@@ -77,15 +78,12 @@ import {
   type RouterItemId,
   type RouterItemsKind,
   type RouterItemsPage,
-  type SetPublicEntryRequest,
   type SkipTaskNodeRequest,
   type SkipTaskNodeResponse,
   type StateSnapshot,
   type TaskGraphId,
   type TaskGraphsPage,
   type TaskNodeKey,
-  type TunnelConnectRequest,
-  type TunnelStatusResponse,
   type UpdateRouterSettingsRequest,
   type UpdateRouterSettingsResponse,
   type UserBlockerId,
@@ -365,23 +363,24 @@ export const { fetchState, postMessage, postUpload, fetchVendorSyncPreview, post
 
 /** GET /api/devices。老的守护进程（还没有联机）回 404：调用方当成只有本机一台。 */
 export const fetchDevices = () => request<DevicesResponse>(API_PATHS.devices);
-export const postAddDevice = (body: AddDeviceRequest) => postJson<DeviceInfo>(API_PATHS.devices, body);
 export const patchDevice = (id: DeviceId, body: RenameDeviceRequest) =>
   request<DeviceInfo>(API_PATHS.device(id), { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 export const deleteDevice = (id: DeviceId) => request<void>(API_PATHS.device(id), { method: "DELETE" });
-export const postDeviceInvite = () => postJson<DeviceInviteResponse>(API_PATHS.deviceInvites);
-export const postTunnelConnect = (code: string) => postJson<TunnelStatusResponse>(API_PATHS.tunnelConnect, { code } satisfies TunnelConnectRequest);
-export const postTunnelRetry = () => postJson<TunnelStatusResponse>(API_PATHS.tunnelRetry, {});
-export const putPublicEntry = (body: SetPublicEntryRequest): Promise<PublicEntryStatus> => putJson<PublicEntryStatus>(API_PATHS.publicEntry, body);
+
+// ---- 入口自己的：账号与设备（docs/account-mesh-design.md，不转发） ----
+
+export const fetchAccount = () => request<AccountStatusView>(API_PATHS.account);
+export const postAccountLogin = (body: StartLoginRequest = {}) => postJson<AccountStatusView>(API_PATHS.accountLogin, body);
+export const cancelAccountLogin = () => request<AccountStatusView>(API_PATHS.accountLogin, { method: "DELETE" });
+export const postAccountLogout = () => postJson<AccountStatusView>(API_PATHS.accountLogout, {});
+export const postApprovalBegin = (requestId: string) => postJson<AccountStatusView>(API_PATHS.accountApprovalBegin(requestId), {});
+export const postApprovalAnswer = (requestId: string, match: boolean) =>
+  postJson<AccountStatusView>(API_PATHS.accountApprovalAnswer(requestId), { match } satisfies AnswerApprovalRequest);
+export const putCenterPriority = (priority: DeviceId[]) => putJson<AccountStatusView>(API_PATHS.accountPriority, { priority } satisfies SetCenterPriorityRequest);
 
 /** 已登录的浏览器（设置里的列表）。 */
 export function fetchBrowserSessions(): Promise<BrowserSessionsResponse> {
   return request<BrowserSessionsResponse>(API_PATHS.browserSessions);
-}
-
-/** 已登录设备批准公网待批准（pending_approval）的浏览器会话。 */
-export function postApproveBrowserSession(id: string): Promise<void> {
-  return postJson<void>(API_PATHS.approveBrowserSession(id));
 }
 
 /** 退出一个浏览器（可以是自己）。 */

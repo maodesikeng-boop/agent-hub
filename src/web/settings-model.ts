@@ -1,5 +1,5 @@
 // 桌面弹窗（SettingsDialog）与手机二级钻取设置页（mobile/settings/*）100% 共用的无 UI 设置模型层。
-// 集中管理：界面大小、通知受阻原因与摘要、电脑与隧道操作/摘要、登录链接与浏览器会话缓存、公网入口、跨厂商连接器同步及复制反馈。
+// 集中管理：界面大小、通知受阻原因与摘要、电脑与账号操作/摘要、登录链接与浏览器会话缓存、跨厂商连接器同步及复制反馈。
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
@@ -7,8 +7,9 @@ import {
   isSelectable,
   normalizeName,
   type AgentVendor,
+  type AccountStatusView,
   type BrowserSessionInfo,
-  type DeviceInviteResponse,
+  type DeviceId,
   type LoginLinkResponse,
   type ModelCatalog,
   type ProviderAuthFlowPhase,
@@ -22,9 +23,6 @@ import {
   type ProviderStatusItem,
   type ProviderSubmitAuthRequest,
   type ProvidersStatusResponse,
-  type PublicEntryStatus,
-  type TunnelState,
-  type TunnelStatus,
   type VendorAvailability,
   type VendorSyncApplyRequest,
   type VendorSyncApplyResponse,
@@ -35,20 +33,21 @@ import {
 } from "../shared/index.ts";
 import {
   ApiError,
+  cancelAccountLogin,
   createClient,
   deleteBrowserSession,
   deleteDevice,
+  fetchAccount,
   fetchBrowserSessions,
   localClient,
   patchDevice,
-  postAddDevice,
-  postApproveBrowserSession,
-  postDeviceInvite,
+  postAccountLogin,
+  postAccountLogout,
+  postApprovalAnswer,
+  postApprovalBegin,
   postLoginLink,
   postLogoutAll,
-  postTunnelConnect,
-  postTunnelRetry,
-  putPublicEntry,
+  putCenterPriority,
   type HubClient,
 } from "./client.ts";
 import { COPIED_RESET_MS, copyText } from "./components/CodeBlock.tsx";
@@ -57,7 +56,9 @@ import { LOCAL_DEVICE, isReadOnly, type DeviceKey, type DeviceView } from "./dev
 import { errorText, nameError, type ErrorLike } from "./format.ts";
 import { modelsQueryKey, refreshDeviceModels } from "./models.tsx";
 import type { NotifySettings } from "./notify.ts";
-import { useHubQueryClient } from "./query-client.ts";
+import { ACCOUNT_QUERY_KEY, useHubQueryClient } from "./query-client.ts";
+
+export { ACCOUNT_QUERY_KEY };
 import {
   DEFAULT_UI_SCALE,
   UI_SCALES,
@@ -70,12 +71,9 @@ import {
 
 export { COPIED_RESET_MS };
 
-/** 设置模块所需的设备与入口状态：所有设备（入口本机第一）、本机隧道状态、公网入口状态与仓库路径，变更后回调刷新清单。 */
+/** 设置模块所需的设备状态：所有设备（入口本机第一），变更后回调刷新清单。 */
 export interface DeviceSettings {
   devices: readonly DeviceView[];
-  tunnel?: TunnelStatus | null;
-  publicEntry?: PublicEntryStatus;
-  repoDir?: string;
   onChanged: () => void;
 }
 
@@ -119,33 +117,13 @@ export function describeNotifySummary(notify: Pick<NotifySettings, "enabled" | "
   return notify.enabled && !isNotifyBlocked(notify) ? "On" : "Off";
 }
 
-// ---- 3. 电脑与隧道摘要 ----
+// ---- 3. 电脑摘要 ----
 
-export const TUNNEL_STATE_SPECS: Readonly<Record<TunnelState, { text: string; canRetry: boolean }>> = {
-  connecting: { text: "Connecting…", canRetry: false },
-  connected: { text: "Connected", canRetry: false },
-  retrying: { text: "Retrying…", canRetry: true },
-  auth_failed: { text: "Key rejected", canRetry: true },
-  hostkey_mismatch: { text: "Server fingerprint changed", canRetry: true },
-};
+export type ComputersSummaryInput = { devices: readonly Pick<DeviceView, "info" | "status">[] } | readonly Pick<DeviceView, "info" | "status">[];
 
-export type ComputersSummaryInput =
-  | { devices: readonly Pick<DeviceView, "info" | "status">[]; tunnel?: TunnelStatus | null }
-  | readonly Pick<DeviceView, "info" | "status">[];
+const computersSummaryCache = new WeakMap<object, { devices: readonly Pick<DeviceView, "info" | "status">[]; summary: string }>();
 
-interface CachedComputersSummary {
-  devices: readonly Pick<DeviceView, "info" | "status">[];
-  tunnel: TunnelStatus | null | undefined;
-  summary: string;
-}
-
-const computersSummaryCache = new WeakMap<object, CachedComputersSummary>();
-
-function computeComputersSummary(
-  list: readonly Pick<DeviceView, "info" | "status">[],
-  tunnel?: TunnelStatus | null,
-): string {
-  if (tunnel != null && TUNNEL_STATE_SPECS[tunnel.state].canRetry) return "Attention";
+function computeComputersSummary(list: readonly Pick<DeviceView, "info" | "status">[]): string {
   const others = list.filter((d) => !d.info.self);
   if (others.length === 0) {
     if (list.some((d) => d.status === "offline" || d.status === "unreachable")) return "Offline";
@@ -164,15 +142,11 @@ function computeComputersSummary(
 
 /** 计算电脑分组的一级单一摘要（严禁用 · / | / / 拼接），并按输入引用缓存。 */
 export function describeComputersSummary(input: ComputersSummaryInput): string {
-  const hasDevices = "devices" in input;
-  const list = hasDevices ? input.devices : input;
-  const tunnel = hasDevices ? input.tunnel : undefined;
+  const list = "devices" in input ? input.devices : input;
   const cached = computersSummaryCache.get(input);
-  if (cached !== undefined && cached.devices === list && cached.tunnel === tunnel) {
-    return cached.summary;
-  }
-  const summary = computeComputersSummary(list, tunnel);
-  computersSummaryCache.set(input, { devices: list, tunnel, summary });
+  if (cached !== undefined && cached.devices === list) return cached.summary;
+  const summary = computeComputersSummary(list);
+  computersSummaryCache.set(input, { devices: list, summary });
   return summary;
 }
 
@@ -208,7 +182,7 @@ export function useCopyFeedback(resetMs: number = COPIED_RESET_MS): {
   return useMemo(() => ({ copied, copy }), [copied, copy]);
 }
 
-// ---- 5. 设备改名、移除、邀请、添加、隧道与公网入口 ----
+// ---- 5. 设备改名、移除，账号与设备（登录、批准、中心顺序） ----
 
 export function useDeviceRename(device: Pick<DeviceView, "info">, onChanged?: () => void) {
   const [name, setName] = useState(device.info.name);
@@ -269,199 +243,59 @@ export function useDeviceRemove(device: Pick<DeviceView, "info">, onChanged?: ()
   return { busy, error, remove, clearError };
 }
 
-export function useDeviceInvite() {
-  const [invite, setInvite] = useState<DeviceInviteResponse | null>(null);
-  const [busy, setBusy] = useState(false);
+/** GET /api/account：中继推变化时网页收到 account.updated 就让它失效（device-hub.ts），不轮询。 */
+export function useAccount() {
+  const qc = useHubQueryClient();
+  const query = useQuery({ queryKey: ACCOUNT_QUERY_KEY, queryFn: fetchAccount, staleTime: Infinity }, qc);
   const [error, setError] = useState<ErrorLike | null>(null);
-  const codeCopy = useCopyFeedback();
-  const urlCopy = useCopyFeedback();
-
-  const generate = useCallback(async (): Promise<DeviceInviteResponse | null> => {
-    if (busy) return null;
-    setBusy(true);
-    setError(null);
-    try {
-      const created = await postDeviceInvite();
-      setInvite(created);
-      return created;
-    } catch (err) {
-      setError(errorText(err));
-      return null;
-    } finally {
-      setBusy(false);
-    }
-  }, [busy]);
-
-  const copyCode = useCallback(() => {
-    if (invite !== null) codeCopy.copy(invite.code);
-  }, [codeCopy, invite]);
-
-  const copyUrl = useCallback(() => {
-    if (invite?.url) urlCopy.copy(invite.url);
-  }, [invite, urlCopy]);
-
-  return {
-    invite,
-    busy,
-    error,
-    generate,
-    codeCopied: codeCopy.copied,
-    copyCode,
-    urlCopied: urlCopy.copied,
-    copyUrl,
-  };
-}
-
-export function useAddDevice(onAdded?: () => void) {
-  const [url, setUrl] = useState("");
-  const [code, setCode] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<ErrorLike | null>(null);
-  const ready = url.trim() !== "" && code.trim() !== "" && !busy;
-  const submit = useCallback(async (): Promise<boolean> => {
-    if (url.trim() === "" || code.trim() === "" || busy) return false;
-    setBusy(true);
-    setError(null);
-    try {
-      await postAddDevice({ url: url.trim(), code: code.trim() });
-      setUrl("");
-      setCode("");
-      onAdded?.();
-      return true;
-    } catch (err) {
-      setError(errorText(err));
-      return false;
-    } finally {
-      setBusy(false);
-    }
-  }, [busy, code, onAdded, url]);
-  return { url, setUrl, code, setCode, ready, busy, error, submit };
-}
-
-export function buildTunnelJoinCommand(repoDir?: string): string {
-  return `node ${repoDir ?? "~/agent-hub"}/src/tunnel/main.ts join -i ~/.ssh/<key> ubuntu@<server-ip>`;
-}
-
-export function useTunnelConnect(repoDir?: string, onConnected?: () => void) {
-  const [code, setCode] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<ErrorLike | null>(null);
-  const { copied, copy } = useCopyFeedback();
-  const command = buildTunnelJoinCommand(repoDir);
-  const ready = code.trim() !== "" && !busy;
-  const copyCommand = useCallback(() => copy(command), [command, copy]);
-  const submit = useCallback(async (): Promise<boolean> => {
-    if (code.trim() === "" || busy) return false;
-    setBusy(true);
-    setError(null);
-    try {
-      await postTunnelConnect(code.trim());
-      setCode("");
-      onConnected?.();
-      return true;
-    } catch (err) {
-      setError(errorText(err));
-      return false;
-    } finally {
-      setBusy(false);
-    }
-  }, [busy, code, onConnected]);
-  return { command, code, setCode, ready, busy, error, copied, copyCommand, submit };
-}
-
-export function useTunnelRetry(onChanged?: () => void) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<ErrorLike | null>(null);
-  const retry = useCallback(async (): Promise<boolean> => {
-    if (busy) return false;
-    setBusy(true);
-    setError(null);
-    try {
-      await postTunnelRetry();
-      onChanged?.();
-      return true;
-    } catch (err) {
-      setError(errorText(err));
-      return false;
-    } finally {
-      setBusy(false);
-    }
-  }, [busy, onChanged]);
-  return { busy, error, retry };
-}
-
-export const DEFAULT_PUBLIC_ENTRY: PublicEntryStatus = {
-  enabled: false,
-  hostname: null,
-  funnelCommand: "sudo tailscale funnel --bg unix:/home/ubuntu/.agent-hub/run/public.sock",
-};
-
-export function describePublicEntrySummary(publicEntry?: Pick<PublicEntryStatus, "enabled"> | null): "On" | "Off" {
-  return publicEntry?.enabled ? "On" : "Off";
-}
-
-export function usePublicEntrySetting(publicEntry?: PublicEntryStatus, onChanged?: () => void) {
-  const initial = publicEntry ?? DEFAULT_PUBLIC_ENTRY;
-  const [entry, setEntry] = useState<PublicEntryStatus>(initial);
-  const [hostname, setHostname] = useState(initial.hostname ?? "");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<ErrorLike | null>(null);
-  const { copied, copy } = useCopyFeedback();
-
+  const [busy, setBusy] = useState<string | null>(null);
+  const mountedRef = useRef(true);
   useEffect(() => {
-    if (publicEntry !== undefined) {
-      setEntry(publicEntry);
-      setHostname(publicEntry.hostname ?? "");
-    }
-  }, [publicEntry]);
-
-  const apply = useCallback(
-    async (nextEnabled: boolean): Promise<boolean> => {
-      if (busy) return false;
-      const trimmed = hostname.trim();
-      setBusy(true);
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+  const run = useCallback(
+    async (key: string, action: () => Promise<AccountStatusView | void>): Promise<boolean> => {
+      if (busy !== null) return false;
+      setBusy(key);
       setError(null);
       try {
-        const next = await putPublicEntry({
-          enabled: nextEnabled,
-          ...(trimmed !== "" ? { hostname: trimmed } : {}),
-        });
-        setEntry(next);
-        if (next.hostname !== null) setHostname(next.hostname);
-        onChanged?.();
+        const next = await action();
+        if (mountedRef.current && next !== undefined) qc.setQueryData(ACCOUNT_QUERY_KEY, next);
         return true;
       } catch (err) {
-        setError(errorText(err));
+        if (mountedRef.current) setError(errorText(err));
         return false;
       } finally {
-        setBusy(false);
+        if (mountedRef.current) setBusy(null);
       }
     },
-    [busy, hostname, onChanged],
+    [busy, qc],
   );
-
-  const toggle = useCallback(() => apply(!entry.enabled), [apply, entry.enabled]);
-  const setEnabled = useCallback((nextEnabled: boolean) => apply(nextEnabled), [apply]);
-  const saveHostname = useCallback(() => apply(entry.enabled), [apply, entry.enabled]);
-  const copyCommand = useCallback(() => copy(entry.funnelCommand), [copy, entry.funnelCommand]);
-  const trimmedHostname = hostname.trim();
-  const hostnameDirty = trimmedHostname !== "" && trimmedHostname !== (entry.hostname ?? "");
-  const summary: "On" | "Off" = describePublicEntrySummary(entry);
-
   return {
-    entry,
-    summary,
-    hostname,
-    setHostname,
-    hostnameDirty,
-    busy,
+    status: query.data ?? null,
+    loadError: query.error ? errorText(query.error) : null,
     error,
-    copied,
-    toggle,
-    setEnabled,
-    saveHostname,
-    copyCommand,
+    busy,
+    signIn: (relayUrl?: string) => run("login", () => postAccountLogin(relayUrl ? { relayUrl } : {})),
+    cancelSignIn: () => run("cancel", cancelAccountLogin),
+    signOut: () => run("logout", postAccountLogout),
+    beginApproval: (requestId: string) => run(`begin:${requestId}`, () => postApprovalBegin(requestId)),
+    answerApproval: (requestId: string, match: boolean) => run(`answer:${requestId}`, () => postApprovalAnswer(requestId, match)),
+    setPriority: (priority: DeviceId[]) => run("priority", () => putCenterPriority(priority)),
   };
+}
+
+/** 中心顺序里把 id 往前（delta -1）或往后（+1）挪一格；挪不动原样返回。 */
+export function movePriority(priority: readonly DeviceId[], id: DeviceId, delta: -1 | 1): DeviceId[] {
+  const from = priority.indexOf(id);
+  const to = from + delta;
+  if (from === -1 || to < 0 || to >= priority.length) return [...priority];
+  const next = [...priority];
+  [next[from], next[to]] = [next[to]!, next[from]!];
+  return next;
 }
 
 // ---- 6. 一次性登录链接与已登录浏览器会话 ----
@@ -598,14 +432,7 @@ export function useBrowserSessions({
     qc,
   );
 
-  const sessions = useMemo(
-    () =>
-      !enabled || rawSessions === undefined
-        ? null
-        : rawSessions.toSorted((a, b) => (a.status === "pending_approval" ? 0 : 1) - (b.status === "pending_approval" ? 0 : 1)),
-    [enabled, rawSessions],
-  );
-  const hasPending = useMemo(() => sessions?.some((s) => s.status === "pending_approval") ?? false, [sessions]);
+  const sessions = !enabled || rawSessions === undefined ? null : rawSessions;
   const loadError: ErrorLike | null = enabled && queryError ? errorText(queryError) : null;
 
   useEffect(() => {
@@ -647,24 +474,6 @@ export function useBrowserSessions({
     qc,
   );
 
-  const approveMutation = useMutation(
-    {
-      mutationFn: (session: BrowserSessionInfo) => postApproveBrowserSession(session.id),
-      onMutate: (session) => {
-        setRowErrors(({ [session.id]: _gone, ...rest }) => rest);
-      },
-      onSuccess: (_data, session) => {
-        qc.setQueryData<BrowserSessionInfo[]>(BROWSER_SESSIONS_QUERY_KEY, (list) =>
-          list?.map((s) => (s.id === session.id ? { ...s, status: "active" } : s)),
-        );
-      },
-      onError: (err, session) => {
-        setRowErrors((errors) => ({ ...errors, [session.id]: errorText(err) }));
-      },
-    },
-    qc,
-  );
-
   const exitAllMutation = useMutation(
     {
       mutationFn: () => postLogoutAll(),
@@ -674,25 +483,16 @@ export function useBrowserSessions({
     qc,
   );
 
-  const busy = exitMutation.isPending
-    ? `exit:${exitMutation.variables.id}`
-    : approveMutation.isPending
-      ? `approve:${approveMutation.variables.id}`
-      : exitAllMutation.isPending
-        ? "all"
-        : null;
+  const busy = exitMutation.isPending ? `exit:${exitMutation.variables.id}` : exitAllMutation.isPending ? "all" : null;
   const allError: ErrorLike | null = exitAllMutation.error ? errorText(exitAllMutation.error) : null;
 
   const signOut = useCallback((session: BrowserSessionInfo) => exitMutation.mutate(session), [exitMutation]);
   const signOutAsync = useCallback((session: BrowserSessionInfo) => exitMutation.mutateAsync(session), [exitMutation]);
-  const approve = useCallback((session: BrowserSessionInfo) => approveMutation.mutate(session), [approveMutation]);
-  const approveAsync = useCallback((session: BrowserSessionInfo) => approveMutation.mutateAsync(session), [approveMutation]);
   const signOutAll = useCallback(() => exitAllMutation.mutate(), [exitAllMutation]);
   const signOutAllAsync = useCallback(() => exitAllMutation.mutateAsync(), [exitAllMutation]);
 
   return {
     sessions,
-    hasPending,
     loadError,
     rowErrors,
     allError,
@@ -703,8 +503,6 @@ export function useBrowserSessions({
     setConfirmingAll,
     signOut,
     signOutAsync,
-    approve,
-    approveAsync,
     signOutAll,
     signOutAllAsync,
   };
@@ -713,15 +511,12 @@ export function useBrowserSessions({
 export interface BrowserSessionsSummary {
   /** 已缓存的会话数；尚未拉取过时为 null。 */
   count: number | null;
-  /** 是否存在待批准（pending_approval）的公网会话。 */
-  hasPending: boolean;
-  /** 一级导航行右侧直接展示的单一摘要文案（未拉取为 undefined，有待批为 "Pending"，否则为数量字符串）。 */
+  /** 一级导航行右侧直接展示的单一摘要文案（未拉取为 undefined，否则为数量字符串）。 */
   summary: string | undefined;
 }
 
 const EMPTY_BROWSER_SESSIONS_SUMMARY: BrowserSessionsSummary = {
   count: null,
-  hasPending: false,
   summary: undefined,
 };
 
@@ -738,12 +533,7 @@ export function useCachedBrowserSessionsSummary(): BrowserSessionsSummary {
   );
   return useMemo(() => {
     if (data === undefined) return EMPTY_BROWSER_SESSIONS_SUMMARY;
-    const hasPending = data.some((s) => s.status === "pending_approval");
-    return {
-      count: data.length,
-      hasPending,
-      summary: hasPending ? "Pending" : String(data.length),
-    };
+    return { count: data.length, summary: String(data.length) };
   }, [data]);
 }
 

@@ -198,7 +198,7 @@ export function App() {
     routerActive || state.phase === "ready" ? null : current.status === "connecting" ? (
       <FullPage busy title="Loading…" />
     ) : (
-      <FullPage title="Not connected to this computer yet" lines={[`Check that Tailscale is on and the daemon is running on ${current.info.name}`]} />
+      <FullPage title="Not connected to this computer yet" lines={[`Check that the daemon is running on ${current.info.name}`]} />
     );
 
   const sidebar = (

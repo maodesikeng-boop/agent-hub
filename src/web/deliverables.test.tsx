@@ -542,8 +542,8 @@ describe("各处入口", () => {
       const localApi = new FakeApi(local);
       const tokyoApi = tokyo ? new FakeApi(tokyo) : null;
       const devices: DeviceInfo[] = [
-        { id: LOCAL_ID, name: "MacBook", self: true, platform: "darwin", url: null },
-        ...(tokyoApi ? [{ id: TOKYO_ID, name: "Tokyo", self: false, platform: "linux", url: "https://tokyo.tailnet.ts.net" }] : []),
+        { id: LOCAL_ID, name: "MacBook", self: true, platform: "darwin", online: true, link: "local" as const, fingerprint: null },
+        ...(tokyoApi ? [{ id: TOKYO_ID, name: "Tokyo", self: false, platform: "linux", online: true, link: "relay" as const, fingerprint: null }] : []),
       ];
       vi.stubGlobal(
         "fetch",

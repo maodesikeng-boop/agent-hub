@@ -464,21 +464,6 @@ export const LOGIN_LINK_TTL_MS = 5 * 60 * 1000;
 export const MAX_PENDING_LOGIN_LINKS = 20;
 /** state/ui-token 的权限：只有自己能读写。启动时发现权限更宽要改回来。 */
 export const UI_TOKEN_FILE_MODE = 0o600;
-/** 公网入口会话的不活动有效期：30 天（本机与 tailnet 会话为 SESSION_MAX_AGE_MS = 365 天）。 */
-export const PUBLIC_SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
-/** 公网扫码后待已登录设备批准的会话超时：10 分钟未批准自动作废。 */
-export const PENDING_SESSION_TTL_MS = 10 * 60 * 1000;
-/** 公网 /auth 失败限流：单 IP 每分钟最多失败 5 次。 */
-export const PUBLIC_AUTH_IP_MAX_FAILURES = 5;
-export const PUBLIC_AUTH_IP_WINDOW_MS = 60_000;
-/** 公网 /auth 失败限流：全局每小时最多失败 30 次。 */
-export const PUBLIC_AUTH_GLOBAL_MAX_FAILURES = 30;
-export const PUBLIC_AUTH_GLOBAL_WINDOW_MS = 3_600_000;
-/** 公网 /auth 触发任一失败阈值后的锁定时长：15 分钟。 */
-export const PUBLIC_AUTH_LOCKOUT_MS = 15 * 60_000;
-/** 公网 /auth 按 IP 限流桶数量上限（防公网扫描撑大内存）。 */
-export const MAX_PUBLIC_AUTH_IP_BUCKETS = 1_000;
-
 /** 环境变量（各家可执行文件的 AGENT_HUB_<大写编号> 在各自 spec 的 cli.envVar）。 */
 export const ENV_HOME = "AGENT_HUB_HOME";
 /** 界面服务的端口，默认 DEFAULT_UI_PORT；0 表示由系统分配（测试用）。 */
@@ -488,25 +473,14 @@ export const ENV_DEFAULT_MODEL = "AGENT_HUB_DEFAULT_MODEL";
 /** 准备命令里能用的：项目主文件夹（比如 cp "$AGENT_HUB_ROOT_PATH/.env" .）、这个 worktree 的目录。 */
 export const ENV_SETUP_ROOT_PATH = "AGENT_HUB_ROOT_PATH";
 export const ENV_SETUP_WORKTREE_PATH = "AGENT_HUB_WORKTREE_PATH";
-/** 联机（daemon/platform/）：tailscale 命令行在哪，默认 macOS 用 App 里的、别的系统用 PATH 里的 tailscale。 */
-export const ENV_TAILSCALE = "AGENT_HUB_TAILSCALE";
-/** 联机：本机的 tailnet 名字（<机器>.<tailnet>.ts.net）写死，不问 tailscale status。 */
-export const ENV_TAILNET_NAME = "AGENT_HUB_TAILNET_NAME";
-/** 联机：设备主人的 Tailscale 登录名写死。打了 tag 的设备 status 里没有主人，必须写这个，否则经 serve 的请求一律 403。 */
-export const ENV_TAILNET_OWNER = "AGENT_HUB_TAILNET_OWNER";
-/** 联机：serve 转发目标 unix | tcp，默认 Linux unix、macOS tcp（老版本 tailscale 不支持 unix: 时改 tcp）。 */
-export const ENV_SERVE_TARGET = "AGENT_HUB_SERVE_TARGET";
 /** 只给开发用：`pnpm dev` 时 vite 把 /api、/auth 和 WebSocket 代理到这个端口上的守护进程。 */
 export const ENV_DEV_DAEMON_PORT = "AGENT_HUB_DAEMON_PORT";
+/** 账号组网：换中继网址（自建中继）、换 GitHub OAuth App 的 Client ID。 */
+export const ENV_RELAY_URL = "FUSA_RELAY_URL";
+export const ENV_GITHUB_CLIENT_ID = "FUSA_GITHUB_CLIENT_ID";
 
 /** 界面服务默认端口。固定端口：重启后浏览器刷新同一个地址就能接着用。 */
 export const DEFAULT_UI_PORT = 4317;
-/**
- * 设备入口（docs/hub-tunnel-design.md 第 4 节）在中心（东京）上听的 TCP 端口，只听 127.0.0.1。连入设备经 ssh -L 连到它；
- * 隧道用户读不了守护进程的 socket，所以中心用端口。连入方用 unix socket（paths.ts 的 peerSock）。
- */
-export const DEFAULT_PEER_ENTRY_PORT = 4319;
-
 /** system/api_retry 里的 error 字符串最多留多少个字符（Claude 给的是类别，正常很短；防着异常长的）。 */
 export const MAX_API_RETRY_ERROR_CHARS = 200;
 
@@ -549,30 +523,7 @@ export const FETCHED_QUOTA_RETRY_MS = 30_000;
 /** 问一次最多等多久；超了当没有。 */
 export const FETCHED_QUOTA_TIMEOUT_MS = 30_000;
 
-/** 联机：tailscale status 的结果缓存多久（毫秒）。问到了 5 分钟，没问到（没装、没开）30 秒后再问；都是有请求时才在后台问，不是每个请求都跑。 */
-export const TAILNET_PROBE_OK_TTL_MS = 5 * 60_000;
-export const TAILNET_PROBE_FAIL_TTL_MS = 30_000;
-/** 联机：跑一次 tailscale status --json 最多等多久。 */
-export const TAILSCALE_STATUS_TIMEOUT_MS = 5_000;
-
-// ---- 联机：设备配对、转发（daemon/peers/，docs/multi-device-design.md 第 3.2 节） ----
-/** 邀请码：随机 128 位，10 分钟内、只能用一次。 */
-export const PEER_INVITE_BYTES = 16;
-export const PEER_INVITE_TTL_MS = 10 * 60_000;
-/** 同一台来配对的设备（按它报的设备编号）邀请码错这么多次：锁住这一台，直到用户在本机重新生成邀请码。别的设备不受影响。 */
-export const PEER_INVITE_MAX_FAILURES = 5;
-/** 错误次数最多记这么多台来源，满了丢最早的（只在内存里）。 */
-export const PEER_INVITE_FAILURE_SOURCES = 1_000;
-/** 设备令牌：随机 32 字节（base64url 43 个字符）。对方的只存 sha256。 */
-export const PEER_TOKEN_BYTES = 32;
-/** 应邀配对后对方一直没来确认（它那边没存下来）：这么久后丢掉这条“待确认”。 */
-export const PEER_PENDING_TTL_MS = PEER_INVITE_TTL_MS;
-/** 记住移除过的设备（不让同步、介绍又把它配回来），最多这么多条，满了丢最早的。 */
-export const MAX_REMOVED_PEERS = 100;
-/** 设备清单最多这么多台（对方发来的清单超过就拒绝）。 */
-export const MAX_PEERS = 100;
-/** 设备之间的控制请求（配对、同步、移除、介绍、改名）最多等多久。 */
-export const PEER_REQUEST_TIMEOUT_MS = 10_000;
+// ---- 联机：设备列表、转发（daemon/peers/，docs/account-mesh-design.md） ----
 /** 转发：等对方回响应头最多多久（含连接）；超了回 502 device_offline。上传时请求体每流过一块重新计时（按“多久没进展”算），响应体（下载）不限时。 */
 export const PEER_PROXY_HEADERS_TIMEOUT_MS = 30_000;
 /** 转发 WebSocket：连对方最多等多久。 */
@@ -603,31 +554,11 @@ export const SLOW_API_REQUEST_TIMEOUT_MS = Math.max(FETCHED_QUOTA_TIMEOUT_MS, PE
 /** 有会话在跑时起防闲置睡眠进程（macOS 的 caffeinate）；全部回到空闲后等这么久（2 分钟）再结束，免得两轮之间来回起停。 */
 export const SLEEP_INHIBIT_GRACE_MS = 120_000;
 
-// ───────────── ssh 隧道（docs/hub-tunnel-design.md 第 3、6、7 节）─────────────
-/** 中心给连入设备分的 -R 端口（槽位）：从这个起往上取最小的空的，一台一个。 */
-export const TUNNEL_FIRST_SLOT_PORT = 4401;
-/** 槽位端口最大到这个（最多 99 台连入设备）。 */
-export const TUNNEL_LAST_SLOT_PORT = 4499;
-/** ssh 断了以后第一次等多久再连；每失败一次翻倍。 */
-export const TUNNEL_BACKOFF_MIN_MS = 1_000;
-/** 退避封顶。 */
-export const TUNNEL_BACKOFF_MAX_MS = 60_000;
-/** 连上后稳定这么久再断，退避从头算（也开始一个新的“退避周期”：提前重连又能用一次）。 */
-export const TUNNEL_STABLE_MS = 60_000;
-/** ssh 心跳：每隔几秒一次（ServerAliveInterval，秒）。东京那边 sshd 片段的 ClientAliveInterval 用同一个数。 */
-export const TUNNEL_ALIVE_INTERVAL_S = 15;
-/** 心跳几次没回就断（ServerAliveCountMax）：15 × 3 = 45 秒内发现断线。 */
-export const TUNNEL_ALIVE_COUNT_MAX = 3;
-/** ssh 连中心最多等几秒（ConnectTimeout）。 */
-export const TUNNEL_CONNECT_TIMEOUT_S = 15;
-/** 停隧道：SIGTERM 之后等这么久还没退就 SIGKILL。 */
-export const TUNNEL_STOP_GRACE_MS = 3_000;
-/** 隧道状态里留 ssh 最后一行报错，最多这么多字符。 */
-export const TUNNEL_DETAIL_MAX_CHARS = 200;
-/** 隧道命令等守护进程的管理 socket 回话最多多久。 */
-export const TUNNEL_ADMIN_TIMEOUT_MS = 30_000;
+// ───────────── 本机管理 socket（daemon/admin/socket.ts）：终端命令找守护进程 ─────────────
+/** 终端命令等守护进程的管理 socket 回话最多多久。 */
+export const ADMIN_SOCKET_TIMEOUT_MS = 30_000;
 /** 管理 socket 收的请求体上限。 */
-export const TUNNEL_ADMIN_MAX_BODY_BYTES = 16 * 1024;
+export const ADMIN_SOCKET_MAX_BODY_BYTES = 16 * 1024;
 
 // ---- 项目经理归档（migrations/0016_pm_archives.sql、daemon/ledger/persona.ts）----
 /** 项目经理归档后保留多少天，到期由守护进程清理该 PM 的全部账本与内部磁盘数据。 */
@@ -1167,3 +1098,127 @@ export const FEISHU_INBOUND_CATCHUP_CONCURRENCY = 6;
 export const FEISHU_SEEN_MESSAGES_MAX = 2_000;
 /** 等扫码确认时 status 被问的间隔（终端命令轮询状态用）。 */
 export const FEISHU_CLI_POLL_MS = 2_000;
+/** mesh 终端命令等授权、等核对时轮询本机管理 socket 的间隔与最大次数（覆盖 15 分钟 GitHub 设备码有效期）。 */
+export const MESH_CLI_POLL_MS = 1_500;
+export const MESH_CLI_MAX_POLLS = 600;
+
+// ───────────── 账号组网（docs/account-mesh-design.md「性能」节）─────────────
+/**
+ * 公共中继和 GitHub OAuth App 的 Client ID：都是公开值，开源仓库里只放这两样，不放任何密钥（GitHub 设备码登录不需要 client secret）。
+ * 空串 = 这个版本还没配，登录时提示用户自建中继（ENV_RELAY_URL）或设 ENV_GITHUB_CLIENT_ID。
+ */
+export const MESH_DEFAULT_RELAY_URL = "";
+export const MESH_GITHUB_CLIENT_ID = "";
+/** GitHub 设备码登录的网页和接口地址（测试换成假的）。 */
+export const GITHUB_WEB_ORIGIN = "https://github.com";
+/** GitHub 轮询授权结果的默认间隔（GitHub 没给 interval 时）。 */
+export const GITHUB_DEVICE_POLL_DEFAULT_MS = 5_000;
+/** state/account.json 的权限。 */
+export const MESH_ACCOUNT_FILE_MODE = 0o600;
+/** state/mesh/ 目录和里面设备私钥的权限。 */
+export const MESH_STATE_DIR_MODE = 0o700;
+export const MESH_KEY_FILE_MODE = 0o600;
+/** state/peers.json（设备信任表）的权限。 */
+export const MESH_TRUST_FILE_MODE = 0o600;
+/** 信任表最多记几条墓碑（被撤销的证书）。 */
+export const MESH_TRUST_TOMBSTONES_MAX = 64;
+/** 组网入口：局域网直连听的 TCP 端口（所有地址，只说双向认证的 TLS 1.3）。 */
+export const MESH_LISTEN_PORT = 4320;
+/** 一个账号最多几台设备（守护进程的信任表和中继的设备表共用）。 */
+export const MESH_MAX_DEVICES_PER_ACCOUNT = 20;
+/** 每台报给中继的局域网候选地址最多几个。 */
+export const MESH_CANDIDATES_MAX = 8;
+/** 隔多久比一次本机网卡地址，变了才重报给中继。 */
+export const MESH_CANDIDATES_REFRESH_MS = 30_000;
+/** 拨号时直连先跑这么久，还没握手成功就同时经中继拨。 */
+export const MESH_DIRECT_HEAD_START_MS = 250;
+/** 对一台设备直连失败后，这么久内不再试直连（网络变了立刻清）。 */
+export const MESH_DIRECT_RETRY_MS = 60_000;
+/** 组网 TLS 握手最多等多久（直连和经中继都是）。 */
+export const MESH_HANDSHAKE_TIMEOUT_MS = 5_000;
+/** 一次拨号（直连和中继一起）最多等多久。 */
+export const MESH_DIAL_TIMEOUT_MS = 10_000;
+/** 到中继的控制连接断了以后第一次等多久再连；每失败一次翻倍，封顶 MESH_RELAY_BACKOFF_MAX_MS。 */
+export const MESH_RELAY_BACKOFF_MIN_MS = 1_000;
+export const MESH_RELAY_BACKOFF_MAX_MS = 60_000;
+/** 到中继的控制连接隔多久发一次协议层 ping；下一次该发时还没收到 pong 就断开重连。 */
+export const MESH_RELAY_PING_MS = 20_000;
+/** 控制连接要连上多久才算稳定、把退避清零。 */
+export const MESH_RELAY_STABLE_MS = 10_000;
+/** 中心租约多久没续约就作废。 */
+export const MESH_LEASE_TTL_MS = 15_000;
+/** 候选设备隔多久发一次 lease.claim（持有者的 claim 就是续约）。 */
+export const MESH_LEASE_RENEW_MS = 5_000;
+/** 持有者在 TTL 到之前提前这么久自己掐断长连接：TTL - 这个数之内没收到续约回执就断。 */
+export const MESH_LEASE_FENCE_MARGIN_MS = 5_000;
+/** 中继连不上超过这么久，中心顺序排第一的设备不经租约自己挂长连接（降级）。 */
+export const MESH_LEASE_ORPHAN_MS = 60_000;
+/** 信任表和中继的设备表对不上时，隔多久再去别的设备拉一次声明；最多拉几次（中继推来新设备表时重新数）。 */
+export const MESH_TRUST_SYNC_RETRY_MS = 2_000;
+export const MESH_TRUST_SYNC_ATTEMPTS = 5;
+/** 设备之间的组网控制请求（同步信任声明、改名）最多等多久。 */
+export const MESH_REQUEST_TIMEOUT_MS = 10_000;
+/** 退出账号时等待自签撤销声明送达在线可信设备的最长耗时。 */
+export const MESH_LOGOUT_REVOKE_TIMEOUT_MS = 3_000;
+/** 中继失联准备降级持有租约前，经局域网探测其他可信设备租约状态的超时。 */
+export const MESH_LAN_PROBE_TIMEOUT_MS = 2_000;
+/** 新设备批准（核对码）从发起到两边都点“一致”的时限。 */
+export const MESH_APPROVAL_TTL_MS = 10 * 60_000;
+/** 核对码几位十进制数字。 */
+export const MESH_SAS_DIGITS = 6;
+/** 批准仪式里每方随机数的字节数。 */
+export const MESH_SAS_NONCE_BYTES = 32;
+/** 设备发往中继的单条控制消息最大字节数（JSON 文本帧，严控上行防刷）。 */
+export const RELAY_MAX_CONTROL_FRAME_BYTES = 16 * 1024;
+/** 中继发往设备的单条控制消息最大字节数（容纳满额 20 台最大长度设备名与候选地址的数学上界）。 */
+export const RELAY_MAX_SERVER_FRAME_BYTES = 48 * 1024;
+/** 中继独立下发撤销墓碑时每帧最多携带的条数（单帧上界 < 8 KB，64 条墓碑分批下发）。 */
+export const RELAY_REVOCATIONS_PAGE_SIZE = 16;
+/** signal（设备之间经中继转的小消息，比如批准仪式）的 payload 最大字节数。 */
+export const RELAY_MAX_SIGNAL_BYTES = 4 * 1024;
+/** 数据通道单帧最大字节数（二进制帧）。 */
+export const RELAY_MAX_DATA_FRAME_BYTES = 64 * 1024;
+/** 每台设备每秒最多发几条控制消息，超了中继断开它。 */
+export const RELAY_CONTROL_FRAMES_PER_SECOND = 20;
+/** 每台设备同时最多几条数据通道。 */
+export const RELAY_MAX_CHANNELS_PER_DEVICE = 32;
+/** 每个账号每天经中继的数据通道总字节数，超了当天拒绝新通道。 */
+export const RELAY_ACCOUNT_DAILY_BYTES = 4 * 1024 * 1024 * 1024;
+/** 数据通道这么久没有数据就关。 */
+export const RELAY_CHANNEL_IDLE_MS = 5 * 60_000;
+/** 拨号后等对方接起数据通道最多多久。 */
+export const RELAY_CHANNEL_ACCEPT_TIMEOUT_MS = 10_000;
+/** 控制连接建立后多久内必须完成 hello 认证，超时断开。 */
+export const RELAY_HELLO_TIMEOUT_MS = 10_000;
+/** 单个账号同时最多挂几条尚未完成 hello 的控制连接。 */
+export const RELAY_MAX_UNAUTH_CONTROLS_PER_ACCOUNT = MESH_MAX_DEVICES_PER_ACCOUNT;
+/** 每个 IP 每分钟最多注册几次。 */
+export const RELAY_REGISTER_PER_IP_PER_MINUTE = 10;
+/** 每个 IP 每分钟最多升级几次 WebSocket（控制连接 + 数据通道）。 */
+export const RELAY_UPGRADES_PER_IP_PER_MINUTE = 120;
+/** 每个 IP 同时最多保持几条活跃 WebSocket 连接。 */
+export const RELAY_CONCURRENT_SOCKETS_PER_IP = 64;
+/** 数据通道另一端还没接起时，中继最多替先到的一端攒多少字节（TLS 握手的头几条记录）。 */
+export const RELAY_CHANNEL_PENDING_BYTES = 4 * RELAY_MAX_DATA_FRAME_BYTES;
+/** 自建中继：数据通道一端积压超过这么多字节就先停读另一端，写空再读。 */
+export const RELAY_CHANNEL_HIGH_WATER_BYTES = 1024 * 1024;
+/** 自建中继隔多久收拾一次各账号（租约过期、等批准过期、空闲通道）。 */
+export const RELAY_SWEEP_MS = 1_000;
+/** 自建中继按 IP 记登记次数，最多记几个 IP。 */
+export const RELAY_IP_LIMITER_MAX = 10_000;
+/** 中继记住最近被移除的几台设备（它们再登入收到 removed）。 */
+export const RELAY_REMOVED_DEVICES_MAX = 64;
+/** 中继当天流量计数多久落一次盘（Cloudflare 按写入行数计费，不每帧都写）。 */
+export const RELAY_USAGE_SAVE_MS = 60_000;
+/** 等批准的设备这么久没被批准就从账号里删掉。 */
+export const RELAY_PENDING_DEVICE_TTL_MS = MESH_APPROVAL_TTL_MS;
+/** 中心把卡片点击转给归属电脑后，最多等多久拿它算出的 toast（要在 FEISHU_CARD_ACTION_DEADLINE_MS 之内）。 */
+export const FEISHU_FORWARD_CARD_TIMEOUT_MS = 1_500;
+/** 中心把普通事件转给归属电脑最多等多久，超时按离线处理。 */
+export const FEISHU_FORWARD_TIMEOUT_MS = 10_000;
+/** 归属电脑离线时，中心替每台最多暂存几条飞书消息。 */
+export const FEISHU_OFFLINE_INBOX_MAX_PER_DEVICE = 50;
+/** 暂存的飞书消息存多久，过期在群里说一声后删掉。 */
+export const FEISHU_OFFLINE_INBOX_TTL_MS = 24 * 60 * 60_000;
+/** 卡片接口每秒预算按接着飞书的设备数平分后，每台至少这么多。 */
+export const FEISHU_CARDKIT_MIN_SHARE_PER_SECOND = 5;

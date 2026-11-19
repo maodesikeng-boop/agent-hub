@@ -1,5 +1,7 @@
 # 联机方案：一个网页管所有设备（手机可用）
 
+> 设备之间的连接、认证与手机接入已改为账号组网与全账号一个飞书机器人，见 `docs/account-mesh-design.md`。本文只保留仍在使用的浏览器会话（第 3.4 节）、网页 `/d/<设备>` 多设备模型（第 4 节）、PWA 与 Web Push（第 6 节）和性能约束（第 7 节）。
+
 状态：用户已拍板（第 9 节），按第 11 节分批实现。
 前提：PR #112（Linux 兼容，`shared/server-info.ts` 报平台能力）已合。
 
@@ -22,69 +24,18 @@
 | 平台差异 | PR #112：`/api/state` 带 `server: { platform, folderPicker, fileActions }`，非 macOS 隐藏“选择…”和“在 Finder 中显示” | `shared/server-info.ts`（PR #112） |
 
 直接影响方案的两点：
-1. Host/Origin 只认 127.0.0.1，PR #112 的 `docs/linux.md` 明说“不能用 `tailscale serve` 反代”。要用 serve 就得把 tailnet 域名加进白名单（第 3.3 节）。
+1. Host/Origin 只认 `127.0.0.1` 和 `localhost`；设备之间的组网入口走双向认证的 TLS 1.3（`docs/account-mesh-design.md`）。
 2. 各台的编号（对话、项目经理、seq）都是本机自增，**多设备时会撞号**：网页里所有键都要带设备。
 
-## 2. 总体结构（推荐：Tailscale + 无主入口转发）
-
-```
-手机(PWA, 装 Tailscale) ──https──▶ 东京 tailscale serve ──▶ 东京守护进程（入口）
-                                                          ├─ 本机 /api/*
-                                                          └─ /d/<mac>/api/* ──tailnet https──▶ Mac tailscale serve ──▶ Mac 守护进程
-Mac 浏览器 ──http://127.0.0.1:4317──▶ Mac 守护进程（入口）── /d/<tokyo>/api/* ──▶ 东京
-```
-
-- **数据不动**：每台的项目、Worker、会话、消息、文件都只在本机 sqlite 和数据目录里，别的设备不存副本。
-- **没有固定的主**：每台守护进程都能当入口。浏览器打开哪台的网页，哪台就是入口：本机的接口自己回，别的设备的接口按 `/d/<设备编号>/...` 原样转发过去（HTTP 和 WebSocket 都转）。入口挂了，换一台的网址打开，网页一样。
-- **为什么不让浏览器直连每台**：直连就是多个来源（`mac.xxx.ts.net`、`tokyo.xxx.ts.net`），要开 CORS、cookie 变第三方（Safari 默认拦）、令牌只能放 localStorage；手机 PWA 和推送订阅都绑一个来源，多来源基本做不成。入口转发后浏览器只面对一个来源，现有的 cookie、Origin 检查、PWA、Service Worker、推送都照旧成立。代价是看别的设备多一跳（tailnet 内，消息体小，可接受，见第 7 节）。
-- **手机的入口建议固定成东京**（常开）；Mac 合盖睡了就显示离线，不影响看东京。
-
-## 3. 认证
-
-### 3.1 三层
-
-| 层 | 防什么 | 怎么做 |
-|---|---|---|
-| 网络 | 公网扫描、陌生人 | 守护进程照旧只听本机；对外只经 `tailscale serve`（**不用 Funnel**），只有用户 tailnet 里的设备能连。不在安全组 / 防火墙开端口；东京公网 22 也可以关，改用 `tailscale ssh`。 |
-| 人 | tailnet 里别的人（以后共享设备给朋友） | serve 会把请求者的 `Tailscale-User-Login` 放进请求头，并且**删掉客户端自己带的同名头**（官方文档 Identity headers 一节）。守护进程只放行等于“设备主人”的登录名（配对时记下）。 |
-| 浏览器 / 设备 | 拿到 tailnet 访问的进程、丢了的手机 | 浏览器：沿用 cookie，但改成**每个浏览器一条登录记录**（3.4）。设备之间：配对时互发的“设备令牌”（3.2）。 |
-
-只有经 serve 进来的请求才带身份头；本机 127.0.0.1 直连（Mac 上自己打开网页）不带，照旧只看 cookie。身份头不单独作为登录凭据（本机别的进程能直连端口伪造它），只做“必须是主人”的附加条件。Linux 上 serve 可以转发到 Unix socket（`unix:/path`，serve 源码支持），守护进程另听一个 0600 的 socket 专收 serve 流量，伪造面更小；macOS 的 Tailscale 客户端有沙箱，统一走 127.0.0.1 端口。这一处差异放在平台模块里（第 5 节）。
-
-### 3.2 设备之间：配对、发令牌、撤销
-
-- **设备身份**：每台第一次启动生成 `state/device.json`：`{ id: <随机 UUID>, name: <主机名，可改> }`。
-- **配对**（一次性，约 1 分钟）：
-  1. 新设备上：网页“设置 → 设备 → 邀请别的设备”或命令 `hub-device invite`，给出一个邀请码（随机 128 位、10 分钟内、只能用一次）和本机的 tailnet 网址。
-  2. 已有设备上：“添加设备”，填网址 + 邀请码。它带着自己的 id、名字、网址去新设备 `POST /api/peer/pair`。
-  3. 双方各给对方发一个长期设备令牌（32 字节随机），**存对方令牌的 sha256**，自己要用的那份明文存 `state/peers.json`（0600）。同时记下对方 serve 带来的 `Tailscale-User-Login`，必须和本机主人一致，否则拒绝配对（防把别人的设备加进来）。
-  4. 已配对的设备之间互相同步设备清单（只同步“谁是谁、网址”，不同步令牌），第三台配一次就全通。
-- **转发时**：入口去掉浏览器的 cookie 和所有 `Tailscale-*` 头，加 `Authorization: Bearer <设备令牌>`、`X-Agent-Hub-Device: <入口 id>`。对方查令牌 + serve 给的身份头。
-- **撤销**：“设置 → 设备 → 移除”：删本机记录，并通知对方删它那边（对方离线就只删本机，对方上线后令牌被拒会自己标成“已移除”）。紧急情况（设备丢了、被入侵）：在 Tailscale 后台把设备踢出 tailnet，网络层立刻断，比改令牌快。
-- **已实现（P2，`daemon/peers/`）**：
-  - 存在 `state/peers.json`（0600，不进 sqlite，免得和账本迁移抢编号）。设备表一行一台：`id/name/platform/url`、`state`（`pending | paired`）、`inboundTokenSha256`（对方来访出示的令牌，只存哈希）、`outboundToken`（本机去访问对方出示的，明文）；外加移除过的设备编号（墓碑，同步、介绍不会把它配回来，用户手动添加时清掉）。邀请码只在内存里、只存哈希。
-  - 配对状态机：应邀方收到 `POST /api/peer/pair` 记成 `pending`（对方可能还没存下本机，这时只收它的请求、不主动找它、不进设备列表、不转发）→ 对方第一次带令牌来访（就是它配好后的清单同步）改成 `paired` 并同步自己的清单；`pending` 10 分钟没等到就丢掉。发起方拿到对方令牌直接 `paired`。移除 / 对方通知移除 / 对方拒了本机令牌（401 `peer_unauthorized`）→ 删掉并记墓碑。
-  - 第三台配一次就全通：收到的清单里有没配过的设备，编号小的那台请发清单的设备介绍（新增 `POST /api/peer/introductions`，它去那台 `POST /api/peer/invites` 要一个只给请求方用的邀请码，绑定发起介绍的那台：那台不再配着就作废；那台已经认得的设备编号不发），再直接配对；应邀配对时设备编号已经有了（配好的或待确认的）一律 409，不覆盖；编号大的不动，同一对不会两边同时发起。清单同步只信发送方说它自己的名字和网址。
-  - 改名：名字归设备自己管；在入口给别的设备改名走新增的 `PUT /api/peer/name`，它改完同步给大家。
-  - 设备网址只认 `https://<机器>.<tailnet>.ts.net`；测试入口（`test/e2e/loopback-daemon.ts`，`DaemonOptions.allowLoopbackPeers`）另认 `http://127.0.0.1:<端口>`（同机两个守护进程用）；正式入口没有这个开关，环境变量也打不开，免得配对设备借 `/d/` 访问本机回环服务。
-  - 设备令牌（`Authorization: Bearer` + `x-agent-hub-device`）只能访问 `/api/` 下除 `ENTRY_ONLY_API_PREFIXES`（设备管理、浏览器登录、推送订阅）之外的接口，不能用 `/d/`（不能借本机的转发去第三台）；不查 Origin。`/api/peer/*` 只认设备令牌（pair 凭邀请码）。
-  - 转发自己写（fetch + ws），没用 `@fastify/http-proxy`：上游按设备编号查、要换令牌、两个方向的头都要白名单过滤。请求头只带 `accept/content-type/range/if-*`，加设备令牌；响应头只放 `content-*/accept-ranges/cache-control/etag/last-modified` 回去（不放 Set-Cookie、Location），一律加沙箱 CSP 和 nosniff（对方回的东西在入口的来源下显示，不能让它在入口的来源里跑脚本）。路径必须是 `/api/` 开头、规范化后不变（挡 `../`、`%2e%2e`、`\`）。请求体、响应体都是流（100 MB 上传不在入口落地）。等响应头最多 30 秒，上传时请求体每流过一块重新计时（慢链路传视频只要一直在传就不算离线）；连不上回 502 `device_offline`，上传没传完就放弃时回完关掉连接。
-  - WebSocket 转发：浏览器那条握手后连对方（`since` 原样带），消息、关闭双向转；每 5 秒 ping 对方，下一次还没 pong 就当离线，用 4502 `device_offline` 关浏览器那条（断网 10 秒内发现）。连接复用：HTTP 走 fetch 的 keep-alive 连接池，每台设备一个 origin 一组长连接；不轮询，清单只在配对、确认、改名、启动时同步一次。
-- **Tailscale 侧的设置**（写进 docs/linux.md 和新文档）：所有设备用用户本人账号登录（**别用 tag**：tag 设备发出的请求不带身份头）；服务器关掉 key 过期（默认 180 天，过期就掉线）；身份提供方（Google / GitHub / Apple）开两步验证；可选 Tailnet Lock。
-
-### 3.3 Host / Origin 校验怎么改
-
-- 白名单从“127.0.0.1、localhost”扩成“再加本机的 tailnet 名字”（`<机器>.<tailnet>.ts.net`）。名字启动时问 `tailscale status --json` 的 `Self.DNSName`，也可以用环境变量写死；问不到就只认本机，和现在一样。
-- Origin 同理：`https://<tailnet 名字>` 算同源。别的 `*.ts.net` 一律 403。
-- https 来源的 cookie 加 `Secure`。
+## 3. 浏览器登录
 
 ### 3.4 浏览器登录：每个浏览器一条，单独撤
 
 - `ui-token` 只当“主钥匙”：用来生成登录链接。登录成功后发一个**随机的会话 cookie**（不再把令牌本身放进 cookie），会话存库：浏览器 UA、从哪台入口登的、最后活动时间。
-- “设置 → 已登录的浏览器”：列出、单个退出；“全部退出”= 换主钥匙 + 清会话。手机丢了：这里退掉它 + Tailscale 后台踢掉手机。
+- “设置 → 已登录的浏览器”：列出、单个退出；“全部退出”= 换主钥匙 + 清会话。设备丢了：这里退掉浏览器会话，并在“账号与设备”里移除该电脑。
 - 手机第一次登录：电脑网页“在手机上打开”显示二维码（内容是入口的登录链接，5 分钟有效、用一次就失效），手机扫码打开即登录。不用手抄令牌。
 - 会话只在入口上：浏览器从不直接拿别的设备的任何令牌。
-- **已实现（P6）**：会话在库表 `browser_sessions`（只存令牌 sha256）；cookie 名 `agent_hub_ui_<网址里的端口>`（同一浏览器里 127.0.0.1 的不同端口各用各的，`ssh -L` 转来的东京不会顶掉本机）；退出 / 全部退出当场关掉那些浏览器的 WebSocket；全部退出换 `state/ui-token` 并作废没用掉的登录链接，新的登录链接打在守护进程日志里；登录链接 `/auth#link=<码>`（码放在 # 片段里，浏览器不发给服务器，不进代理 / 访问日志 / Referer；落地页读出后先清地址栏再 POST `/auth` 兑换；老的 `?link=` 不再认）只放内存、只存哈希；会话满 100 条挤掉最旧的，和退出一样关它的 WebSocket；经 tailnet/https 登录的 cookie 带 Secure，二维码地址有 tailnet 名字时用 `https://<名字>`。老 cookie（值是令牌本身）失效，要重新点一次登录链接。
+- **已实现（P6）**：会话在库表 `browser_sessions`（只存令牌 sha256）；cookie 名 `agent_hub_ui_<网址里的端口>`（同一浏览器里 127.0.0.1 的不同端口各用各的）；退出 / 全部退出当场关掉那些浏览器的 WebSocket；全部退出换 `state/ui-token` 并作废没用掉的登录链接，新的登录链接打在守护进程日志里；登录链接 `/auth#link=<码>`（码放在 # 片段里，浏览器不发给服务器，不进代理 / 访问日志 / Referer；落地页读出后先清地址栏再 POST `/auth` 兑换；老的 `?link=` 不再认）只放内存、只存哈希；会话满 100 条挤掉最旧的，和退出一样关它的 WebSocket。老 cookie（值是令牌本身）失效，要重新点一次登录链接。
 
 ## 4. 网页
 
@@ -111,7 +62,7 @@ Mac 浏览器 ──http://127.0.0.1:4317──▶ Mac 守护进程（入口）�
 | 在线 | 绿色点（颜色用 ui-standard 第 4 节的成功色） | 正常 |
 | 重连中（断了 <30 秒） | 黄点，“重连中” | 内容照常显示，输入框可以打字，发送按钮等连上 |
 | 离线 | 灰点，“离线 · 3 分钟前” | 顶上一条提示“东京服务器离线，显示的是 3 分钟前的内容”；内容只读；输入框禁用并说明原因；不报错弹窗 |
-| 从没连上过 | 灰点，“离线” | “还没连上这台设备”+ 排查提示（Tailscale 开了没、对方守护进程在不在） |
+| 从没连上过 | 灰点，“离线” | “还没连上这台设备”+ 排查提示（对方守护进程在不在） |
 
 离线时内容来自这次打开网页期间的内存（不落盘，第一版够用）。Mac 合盖 = 离线，是正常状态，不是错误。
 
@@ -119,8 +70,8 @@ Mac 浏览器 ──http://127.0.0.1:4317──▶ Mac 守护进程（入口）�
 
 - **厂商**：联机在账本、驱动层之上。每台守护进程自己管自己的 claude / codex / agy，驱动层、`daemon/vendors/*`、提示词、hub 命令**一行都不改**。网页按设备取模型名单就自然支持“东京只装了 codex”这种情况。验收：`multi-vendor.test.ts` 不改、照过；新增“两台设备名单不同，建项目经理用目标设备的名单”的网页测试。
 - **系统差异**：
-  - 网页只认 PR #112 的 `ServerInfo`（按设备），不看浏览器的系统。这次往里加的字段：`serveTarget: "unix" | "tcp"`（只给设置页展示）。
-  - 守护进程里和系统有关的事收进 `daemon/platform/`：osascript 选文件夹、`open`、Worker 沙箱（已有）、**新增** tailscale 命令在哪（macOS 是 `/Applications/Tailscale.app/Contents/MacOS/Tailscale`，Linux 是 `tailscale`）、serve 转发目标（Linux socket / macOS 端口）、后台服务（launchd / systemd 的说明）。其他代码只调这里，不自己判断 `process.platform`。
+  - 网页只认 PR #112 的 `ServerInfo`（按设备），不看浏览器的系统。
+  - 守护进程里和系统有关的事收进 `daemon/platform/`：osascript 选文件夹、`open`、Worker 沙箱、后台服务（launchd / systemd / Windows supervisor）。其他代码只调这里，不自己判断 `process.platform`。
 - **agent 的 hub 命令**：仍是本机 Unix socket，不经过网络，不受影响。
 
 ## 6. 手机
@@ -128,7 +79,7 @@ Mac 浏览器 ──http://127.0.0.1:4317──▶ Mac 守护进程（入口）�
 ### 6.1 形态：PWA（推荐）
 
 - 加 `manifest.webmanifest`（名字、图标、`display: standalone`、主题色）+ Service Worker（`/sw.js`，范围 `/`）。Safari / Chrome “添加到主屏幕”后像 App 一样全屏打开。
-- Service Worker 只缓存网页外壳（打包出来的 js、css、图标），**不缓存接口数据**。好处：Tailscale 没开时 PWA 仍能打开，显示“连不上：请打开 Tailscale”，而不是白屏。
+- Service Worker 只缓存网页外壳（打包出来的 js、css、图标），**不缓存接口数据**。好处：断网或守护进程没开时 PWA 仍能打开，显示“连不上”，而不是白屏。
 - 不做原生 App：要上架、要另一套代码，收益只有“通知更稳一点”，不值。
 
 ### 6.2 推送提醒（hub ask、Worker 汇报、“等你”）
@@ -140,7 +91,7 @@ Mac 浏览器 ──http://127.0.0.1:4317──▶ Mac 守护进程（入口）�
   - 对话停稳等你（Worker 汇报完、项目经理说完话停下）：停稳 3 秒后推。
 - **别吵**：网页开着并且在前台看着的时候不推。浏览器每 30 秒在 WebSocket 上报一次“前台 / 后台 + 正在看哪个对话”，提醒设备据此跳过。（iOS 要求每条推送都必须显示出来，所以只能在服务端少发，不能在 Service Worker 里吞。）
 - **只推标题**（第 9 节拍板）：只推“东京 · 项目 A：等你确定”，不带正文，也不做开关。
-- **点通知**：打开 `/#/d/<设备>/c/<对话>`；Tailscale 没连上时显示 6.1 的提示。iOS 的 Tailscale 可以开“按需连接”，基本不用手动开。
+- **点通知**：打开 `/#/d/<设备>/c/<对话>`；连不上时显示 6.1 的提示。
 - **实现**：服务端用 `web-push`（npm，新依赖）；订阅存库，推送服务回 404/410 就删订阅，临时失败（网络错误、5xx、429）隔 30 秒重试一次。提醒设备要能出公网访问 `*.push.apple.com`、`fcm.googleapis.com`（东京默认可以）。订阅的 endpoint 只收已知推送服务的主机（`daemon/push/endpoints.ts`：`fcm.googleapis.com`、`updates.push.services.mozilla.com`、`*.push.apple.com`、`*.notify.windows.com`），名单外的 400，状态文件里已存的加载时丢掉（防 SSRF）。推送接口和 WebSocket 前台上报只给入口本机已登录的浏览器，设备令牌来的一律拒。
 - 备选（不推荐，列着备用）：ntfy / Bark / Telegram 机器人。好处是不用装 PWA；坏处是多一个第三方、正文过第三方。
 
@@ -167,27 +118,11 @@ Mac 浏览器 ──http://127.0.0.1:4317──▶ Mac 守护进程（入口）�
 - **设备多了会不会变慢**：每台设备是独立的连接和独立的 reducer，一台慢或离线不拖累别的；网页只在 `useDevices` 层做汇总（等你列表、标题数字），计算量和“所有设备的对话数”成正比，几百个对话都是毫秒级。
 - 验收指标（写进测试计划的手动部分）：手机 4G 上冷启动到看到对话 < 3 秒；一台设备断网后 15 秒内显示离线。
 
-## 8. 三个方案对比
+## 9. 仍在使用的历史定案
 
-| | **Tailscale（推荐）** | 自建中转服务器 | Cloudflare Tunnel + Access |
-|---|---|---|---|
-| 怎么连 | 各设备、手机进同一个 tailnet；`tailscale serve` 给每台一个 https 地址，只有 tailnet 能访问 | 公网一台服务器（可以就是东京），各设备主动连它，网页也连它 | 各设备跑 `cloudflared`，在用户自己的域名下出一个公网地址，Access 在前面挡一道登录 |
-| 安全 | 没有公网入口；WireGuard 端到端加密，Tailscale 也看不到内容；身份 = 用户的 Google/GitHub/Apple 登录 + 设备密钥。风险点：Tailscale 账号被盗（开两步验证、可选 Tailnet Lock） | **攻击面最大**：自己写的认证、TLS、限流直接面对公网，出漏洞就是全部设备的 shell 级权限；中转上能看到明文，除非再做端到端加密 | 地址在公网上，但先过 Access（SSO / 邮箱验证码）；**Cloudflare 终止 TLS，能看到所有聊天和代码内容**；agent-hub 自己的登录仍要留着 |
-| 手机体验 | 要装 Tailscale App 并保持连接（可设按需连接）。**iPhone 同时只能开一个 VPN**：开着公司 VPN 时 Tailscale 会被顶掉 | 只要浏览器，最好 | 只要浏览器 + 登录，最好 |
-| 推送 | Web Push，三者一样（都有 https） | 同左 | 同左 |
-| 成本 | 免费（Personal 方案，个人非商用，6 个用户、用户设备不限） | 服务器（可复用东京，0 元起）+ 域名 + 证书，主要成本是开发时间 | Zero Trust 免费档（50 人内）+ 一个托管在 Cloudflare 的域名（约 10 美元/年） |
-| 维护量 | 小：每台装一次、`tailscale serve --bg` 一条命令、证书自动续；关掉服务器的 key 过期 | **大**：认证、配对、重连、证书、升级、安全补丁都是我们的 | 中：每台一个 cloudflared + DNS + Access 规则；地址多了要管多条 |
-| 对代码的改动 | 第 2–7 节全部 | 第 2–7 节 + 中转服务本身（新服务、协议、部署） | 和 Tailscale 差不多；身份头换成 `Cf-Access-Jwt-Assertion`（要验 JWT 签名） |
-
-结论：个人使用、设备都在自己手上，Tailscale 安全最好、维护最少、免费；唯一硬伤是手机要装 App、和公司 VPN 互斥。第 2–7 节的入口转发、设备配对、网页、PWA、推送**和用哪种网络无关**，以后要换 Cloudflare，只换第 3.1 节的“人”那一层（身份头 → Access JWT）和部署文档。
-
-## 9. 用户已拍板（2026-11-07）
-
-1. **网络用 Tailscale**。
-2. **手机入口和提醒设备定成东京**（常开）。Mac 合盖会离线，只影响看 Mac 上的东西。
-3. **提醒用 PWA + Web Push**（iOS 要先“添加到主屏幕”）。
-4. **推送只带标题，不带正文**（第 6.2 节的“隐私开关”不做，`PushPayload` 没有正文字段）。
-5. **登录改成“每个浏览器一条、能单独退出”**（老的 cookie 会失效一次，要重新点一次登录链接）。
+1. **提醒用 PWA + Web Push**（iOS 要先“添加到主屏幕”），推送只带标题，不带正文（`PushPayload` 没有正文字段）。
+2. **浏览器登录改成“每个浏览器一条、能单独退出”**。
+3. **设备互联与手机日常入口已切到 `docs/account-mesh-design.md`**（账号组网 + 全账号单飞书机器人）。
 
 ## 10. 测试计划（TDD：先写失败的测试，再写代码）
 
@@ -195,47 +130,15 @@ Mac 浏览器 ──http://127.0.0.1:4317──▶ Mac 守护进程（入口）�
 
 | 子任务 | 先写的测试 | 测试文件 |
 |---|---|---|
-| Host/Origin 白名单 | tailnet 名字的 Host、`https://` Origin 放行；别的 `*.ts.net`、端口不对 403；没配 tailnet 名字时行为和现在完全一样；https 来源 cookie 带 Secure | `ui-server/server.test.ts` |
-| 身份头 | 经 serve 来、登录名不是主人 → 403；本机直连不带头 → 只看 cookie；身份头单独不能登录 | `ui-server/server.test.ts` |
-| 浏览器会话 | 登录发随机会话 cookie 不是令牌；单个退出后该 cookie 401、别的不受影响；全部退出；二维码登录链接一次性、5 分钟过期 | `ui-server/sessions.test.ts`（新） |
-| 设备身份、配对 | `device.json` 首次生成后不变；邀请码一次性、10 分钟过期、同一台来配对的设备错 5 次锁住那一台（别的设备不受影响）；不能冒充已有的设备编号配对；令牌只存 hash；主人登录名不一致拒绝配对；移除后对方令牌 401；设备清单同步不带令牌 | `daemon/peers/*.test.ts`（新） |
-| 转发 | 方法、请求体、状态码、上传（100 MB）原样转；去掉 cookie 和 `Tailscale-*` 头、加设备令牌；WS 带 `since` 转发、双向关闭；对方不在 → 502 `device_offline`；未知设备 404；`/d/x/../` 之类路径拒绝；只能转到已配对设备的网址（防 SSRF） | `daemon/peers/proxy.test.ts`（新） |
+| 浏览器会话 | 登录发随机会话 cookie 不是令牌；单个退出后该 cookie 401、别的不受影响；全部退出；二维码登录链接一次性、5 分钟过期 | `ui-server/sessions.test.ts` |
+| 转发 | 方法、请求体、状态码、上传（50 MB）原样转；去掉浏览器 cookie、经组网双向 TLS 通道转发；WS 带 `since` 转发、双向关闭；对方不在 → 502 `device_offline`；未知设备 404；`/d/x/../` 之类路径拒绝 | `daemon/peers/proxy.test.ts` |
 | 网页多设备 | 两台设备同一个对话编号互不串；新老网址解析；单设备时左栏和现在快照一致；离线提示 + 输入框禁用；一台重连只补那一台；建项目经理发到选中的设备、用那台的模型名单；手机看 Mac 文件时不出“在 Finder 中显示” | `web/devices.test.tsx`（新）、`web/route.test.ts` |
 | 提醒规则搬家 | 现有 `notify.test.ts` 的用例搬到 `shared/reminders.test.ts` 照过（行为不变） | `shared/reminders.test.ts` |
 | 推送 | hub ask 推一次；停稳 3 秒才推；同一个项目经理 tag 相同；前台在看时不推；410 删订阅；payload 没有正文；提醒设备对每台常开一条流、断了按退避重连 | `daemon/push/*.test.ts`（新，假推送服务） |
 | PWA | manifest 字段、Service Worker 只缓存外壳不缓存 `/api/` | `web/pwa.test.ts`（新） |
 | 小屏 | ui-standard 新条目的检查（输入框 coarse 下 16px、安全区变量、44px 点击区） | `web/ui/ui-standard.test.tsx` |
-| 端到端 | 一个测试里起两个守护进程（端口 0、不同 `AGENT_HUB_HOME`），配对、经入口发消息到第二台、看到回复；停掉第二台 → 离线；再起来 → 自动恢复并补齐 | `test/e2e/multi-device.test.ts`（新） |
+| 端到端 | 一个测试里起多台守护进程（端口 0、不同 `AGENT_HUB_HOME`），登录组网、经入口发消息到远端设备、看到回复；停掉设备 → 离线；再起来 → 自动恢复并补齐 | `test/e2e/account-mesh.test.ts` |
 | 厂商不受影响 | `multi-vendor.test.ts` 不改、照过 | 现有 |
-
-手动验收（真机，测试跑不到的）：Mac + 东京真配对；iPhone 添加到主屏、授权、收到 hub ask 推送、点开跳到对话；关 Tailscale 时 PWA 的提示；合上 Mac 看离线显示；4G 冷启动时间。
-
-## 11. 实现拆分（标出能并行的）
-
-```
-P0 接口约定（小，先合）
- ├─ P1 守护进程底座 ──┐
- ├─ P3 网页多设备 ────┤（用假设备先做，P2 合了再接真的）
- ├─ P5 小屏布局 ──────┤（独立）
- └─ P6 浏览器会话 ────┤（独立）
-      P2 配对 + 转发 ◀┘（依赖 P1）
-      P4 PWA + 推送  ◀── 本机推送可和 P2 并行；跨设备推送依赖 P2
-      P7 文档 + 真机验收（最后）
-```
-
-| 编号 | 内容 | 依赖 | 难度 |
-|---|---|---|---|
-| P0 | `shared/api.ts` 加类型和路径：`DeviceInfo`、`/api/devices`、`/d/:id/*`、`/api/peer/*`、`/api/push/*`、`device_offline` 错误码；网址格式。只有类型和注释 | PR #112 | 低 |
-| P1 | `device.json`；`daemon/platform/`（tailscale 命令路径、serve 目标、tailnet 名字探测）；Host/Origin 白名单；Secure cookie；身份头校验 | P0 | 中 |
-| P2 | `daemon/peers/`：配对、设备令牌、设备清单同步、移除；HTTP + WS 转发（可评估 `@fastify/http-proxy`） | P1 | 高 |
-| P3 | 网页：`client` 带 base、`useDevices`、按设备的 state、网址、左栏分组、跨设备“等你”、离线显示、新建项目经理选设备、设置 → 设备 | P0（用假数据），接真的要 P2 | 高 |
-|  | 已做（用假设备）：`web/devices.ts`（键、状态）、`web/device-hub.ts`（每台一个 DeviceHub，放在 Map 里）、`web/device-scope.tsx`；左栏最上面只汇总“等你确定”，“等你”在各组里标；右栏仍只看当前项目经理。假后端 `test/fake-devices/main.ts`，截图在 `docs/screenshots/multi-device/` | | |
-| P4 | manifest、Service Worker、图标；`shared/reminders.ts` 搬家；订阅接口、`web-push`、前台上报、提醒设备的常驻流 | P0；跨设备部分要 P2 | 中高 |
-| P5 | ui-standard 补第 6.3 节的条目 + 样式改动 + 截图 | 无 | 低中 |
-| P6 | 浏览器会话表、登录 / 退出 / 全部退出、二维码登录链接 | P0 | 中 |
-| P7 | `docs/linux.md` 更新（删掉“不能用 serve”）、新增“联机设置”文档（Tailscale 设置、key 过期、配对步骤）、`HANDOVER.md`；真机验收 | 全部 | 低 |
-
-第一批可以同时派 4 个 Worker：P1、P3、P5、P6（P0 很小，可以由派 P1 的 Worker 先做完合掉，其他人基于它开工）。第二批 P2、P4。
 
 ### P4 实现说明（2026-11-07）
 

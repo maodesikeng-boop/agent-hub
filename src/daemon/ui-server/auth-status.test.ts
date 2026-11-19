@@ -207,24 +207,6 @@ describe("桌面壳共用监管契约与 /api/auth/status 轻量身份响应", (
       instanceId,
     });
 
-    // 待批准会话（pending_approval）
-    const pendingSession = createBrowserSessions(db).create(
-      { userAgent: "TestPhone", entry: "example.ts.net" },
-      { viaPublic: true, clientIp: "198.51.100.1" },
-    );
-    const pendingCookie = `${uiCookieName(HOST)}=${pendingSession.token}`;
-    const pendingRes = await app.inject({
-      method: "GET",
-      url: API_PATHS.authStatus,
-      headers: { host: HOST, cookie: pendingCookie },
-    });
-    expect(pendingRes.statusCode).toBe(200);
-    expect(pendingRes.json()).toEqual({
-      status: "pending_approval",
-      product: contract.product,
-      protocolVersion: contract.protocolVersion,
-      instanceId,
-    });
   });
 
   it("重启后的新服务实例生成不同的 instanceId，且无 Cookie 探活零数据库查询、响应增量几十字节", async () => {

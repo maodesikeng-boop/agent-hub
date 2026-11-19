@@ -18,7 +18,6 @@ import {
   ENV_HUB_SOCK,
   ENV_HUB_TOKEN,
   ENV_PORT,
-  ENV_TAILSCALE,
   HUB_COMMAND,
   VENDOR_LIST,
   WS_HEARTBEAT_TEXT,
@@ -34,7 +33,7 @@ import { resolveHubPaths } from "../../src/shared/paths.ts";
 
 const MAIN = fileURLToPath(new URL("../../src/daemon/main.ts", import.meta.url));
 /** 认本机回环网址当设备网址的测试入口（联机端到端，同机两个守护进程互相配对）。 */
-export const LOOPBACK_MAIN = fileURLToPath(new URL("./loopback-daemon.ts", import.meta.url));
+export const MESH_MAIN = fileURLToPath(new URL("./mesh-daemon.ts", import.meta.url));
 const FAKE_CLAUDE = fileURLToPath(new URL("../fake-claude/fake-claude.ts", import.meta.url));
 
 const LOGIN_URL = /http:\/\/127\.0\.0\.1:(\d+)\/auth\?token=([A-Za-z0-9_-]+)/;
@@ -170,8 +169,6 @@ export function makeEnv(options: { root?: string; prefix?: string; detached?: bo
     [ENV_HOME]: home,
     ...Object.fromEntries(VENDOR_LIST.map(({ id, cli }) => [cli.envVar, id === DEFAULT_AGENT_VENDOR ? vendorPath : join(fakeDir, `no-${id}`)])),
     [ENV_PORT]: "0",
-    // 不去问这台机器真的 Tailscale：没有这个命令 = 没装，只认本机
-    [ENV_TAILSCALE]: join(fakeDir, "no-tailscale"),
     FAKE_CLAUDE_LOG: logFile,
     FAKE_CLAUDE_SCRIPT: scriptFile,
     FAKE_CLAUDE_STATE: fakeDir,

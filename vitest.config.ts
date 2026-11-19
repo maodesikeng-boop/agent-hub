@@ -17,18 +17,25 @@ export default defineConfig({
             "src/vendors/**/*.test.ts",
             "src/daemon/**/*.test.ts",
             "src/hub/**/*.test.ts",
-            "src/tunnel/**/*.test.ts",
+            "src/relay/**/*.test.ts",
+            "src/mesh/**/*.test.ts",
             "scripts/**/*.test.ts",
             "test/**/*.test.ts",
           ],
-          ...(process.platform === "win32"
-            ? {
-                exclude: [
-                  "**/node_modules/**",
-                  "test/eval/**",
-                ],
-              }
-            : {}),
+          exclude: [
+            "**/node_modules/**",
+            "src/relay/cloudflare/**",
+            ...(process.platform === "win32" ? ["test/eval/**"] : []),
+          ],
+        },
+      },
+      {
+        test: {
+          name: "cloudflare",
+          ...timeouts,
+          environment: "node",
+          setupFiles: ["test/clean-env.ts"],
+          include: ["src/relay/cloudflare/**/*.test.ts"],
         },
       },
       {

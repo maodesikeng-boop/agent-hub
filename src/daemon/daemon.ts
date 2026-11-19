@@ -12,17 +12,22 @@ import { homedir, hostname } from "node:os";
 import { fileURLToPath } from "node:url";
 import {
   AGENT_API_CLOSE_MS,
+  API_PATHS,
   DEFAULT_PM_MODE,
-  DEFAULT_PEER_ENTRY_PORT,
   DEFAULT_UI_PORT,
   DEFAULT_AGENT_VENDOR,
   ENV_DEFAULT_MODEL,
+  ENV_GITHUB_CLIENT_ID,
   ENV_PORT,
-  ENV_TAILNET_OWNER,
+  ENV_RELAY_URL,
   EXECUTOR_STOP_GRACE_MS,
+  FEISHU_CONTROL_RETRY_MS,
   HANDOVER_STOP_GRACE_MS,
   LedgerRequestError,
   MAX_VENDOR_SYNC_PROJECT_FOLDERS,
+  MESH_DEFAULT_RELAY_URL,
+  MESH_GITHUB_CLIENT_ID,
+  MESH_LISTEN_PORT,
   PM_ARCHIVE_CLEANUP_INTERVAL_MS,
   SCHEDULER_TICK_MS,
   VENDOR_LIST,
@@ -106,8 +111,17 @@ import { loadOrCreateUiToken, loginUrl, rotateUiToken, startUiServer, type Runni
 import type { FolderPicker } from "./pick-folder.ts";
 import { defaultDeviceName, loadOrCreateDevice, saveDevice } from "./device.ts";
 import { createPeers, type Peers } from "./peers/index.ts";
+import { startAdminSocket, type RunningAdminSocket } from "./admin/socket.ts";
+import { createMesh, type CenterLease, type Mesh, type MeshOptions } from "./mesh/index.ts";
 import { createPushService } from "./push/index.ts";
-import { createFeishuService, type FeishuService } from "./feishu/service.ts";
+import {
+  createFeishuAccountBot,
+  createFeishuOfflineInbox,
+  feishuPeerAppSyncSchema,
+  type FeishuAccountBot,
+  type FeishuPeerAppSync,
+} from "./feishu/account-bot.ts";
+import { createFeishuService, type FeishuService, type FeishuServiceOptions } from "./feishu/service.ts";
 import { createFeishuStore } from "./feishu/store.ts";
 import {
   createLocalTargetPort,
@@ -118,24 +132,17 @@ import {
   type RouterSandboxGuard,
   type RouterTargetRegistry,
 } from "./router/index.ts";
-import { createTunnelService, startTunnelAdmin, type RunningTunnelAdmin, type TunnelService } from "./tunnel/index.ts";
 import {
   allowWin32WorkerWorktreeAcl,
   createSleepInhibitor,
-  createTailnetProbe,
   ensureProjectWorktreeBridge,
   ensureWin32ProtectedRootAcl,
   hardenWin32PrivateDirAcl,
   isPathInsideOrEqual,
   loadManagedWorktreeRoots,
   normalizePathForComparison,
-  runTailscaleStatus,
   selectWorktreeRootForProject,
-  serveCommandLine,
-  serveTargetKind,
-  tailscaleCommand,
   type SleepInhibitor,
-  type TailnetProbe,
 } from "./platform/index.ts";
 
 /** 网页打包产物（pnpm build 的输出）。 */
@@ -150,12 +157,12 @@ export interface DaemonOptions {
   userHome: string;
   staticDir?: string;
   log?: (line: string) => void;
-  /** 本机 tailnet 名字和主人的探测（联机）。不给就真的问 tailscale status（结果缓存，见 daemon/platform/tailnet.ts）。 */
-  tailnet?: TailnetProbe;
   /** 自动换新会话的门槛、空闲多久、写交接最多多久（默认见 limits.ts）；只给冒烟测试改小。 */
   autoRenew?: LedgerOptions["autoRenew"];
-  /** 联机：认本机回环网址当设备网址（同机两个守护进程互相配对）。只给测试入口 test/e2e/loopback-daemon.ts，正式入口不传、没有环境变量开关。 */
-  allowLoopbackPeers?: boolean;
+  /** 账号组网的测试钩子：假中继、假 GitHub、只听回环、回环当局域网候选。正式入口不传（中继网址和 Client ID 按环境变量和 limits.ts）。 */
+  mesh?: Partial<Pick<MeshOptions, "relayUrl" | "githubClientId" | "listenPort" | "listenHost" | "candidates" | "allowLoopback" | "github" | "fetch">>;
+  /** 飞书的测试钩子：多机端到端测试换成连父进程假飞书的传输层和扫码。正式入口不传。 */
+  feishu?: Pick<FeishuServiceOptions, "createTransport" | "register">;
   /**
    * 空闲排空热重启（hub self-reload、POST /api/self-reload）排空到点后调它：entry.ts 正常关机，以 apps/desktop/contract.json 的
    * reloadExitCode 退出，由外壳（Bellwood.app、Windows 桌面端、systemd）立即拉起。不给 = 没有外壳监管，不接受热重启（409）。
@@ -221,12 +228,13 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     commands?: CommandCatalogs;
     routerDispatcher?: RouterDispatcher;
     routerTargetRegistry?: RouterTargetRegistry;
+    feishuAccountBot?: FeishuAccountBot;
     feishu?: FeishuService;
     sandboxGuard?: RouterSandboxGuard;
     ui?: RunningUiServer;
     peers?: Peers;
-    tunnel?: TunnelService;
-    tunnelAdmin?: RunningTunnelAdmin;
+    mesh?: Mesh;
+    admin?: RunningAdminSocket;
     agentApi?: RunningAgentApi;
     db?: Db;
     lock?: DirLock;
@@ -245,7 +253,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     }
   };
   const shutdown = async () => {
-    const { scheduler, autoRenew, archiveCleanup, worktreeCleanup, handoverRunner, setup, executor, driver, models, commands, ui, peers, tunnel, tunnelAdmin, agentApi, db, lock } = parts;
+    const { scheduler, autoRenew, archiveCleanup, worktreeCleanup, handoverRunner, setup, executor, driver, models, commands, ui, peers, mesh, admin, agentApi, db, lock } = parts;
     // 热重启的定时器、构建先停（关机由它触发时它已在 restarting，只清订阅）
     parts.selfReload?.close();
     if (scheduler) clearInterval(scheduler);
@@ -269,6 +277,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     parts.stopFileCleanup?.();
     parts.stopWorkerRetention?.();
     if (setup) await step("准备命令", () => setup.shutdown());
+    parts.feishuAccountBot?.close();
     if (parts.feishu) await step("飞书", () => parts.feishu!.close());
     if (parts.routerDispatcher) await step("总助分派引擎", () => parts.routerDispatcher!.close());
     if (executor) {
@@ -285,12 +294,11 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     if (parts.providerManager) await step("厂商安装与登录管理", () => parts.providerManager!.close());
     if (models) await step("模型名单", () => models.close());
     if (commands) await step("命令列表", () => commands.close());
-    // 隧道：先关管理 socket（不再收命令），再停 ssh 子进程
-    if (tunnelAdmin) await step("隧道管理 socket", () => tunnelAdmin.close());
-    if (tunnel) await step("隧道", () => tunnel.close());
-    // 先停设备之间在途的请求，再关界面服务（经入口转发的 WebSocket 跟着浏览器那条一起关）
+    if (admin) await step("管理 socket", () => admin.close());
+    // 先停设备之间在途的请求、断开组网（中继、局域网入口），再关界面服务（经入口转发的 WebSocket 跟着浏览器那条一起关）
     parts.routerTargetRegistry?.close();
     peers?.close();
+    if (mesh) await step("账号组网", () => mesh.close());
     if (ui) await step("界面服务", () => ui.close());
     if (agentApi) {
       await step("agent 接口", async () => {
@@ -669,8 +677,15 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     };
     purgeArchivedPms();
     parts.archiveCleanup = setInterval(purgeArchivedPms, PM_ARCHIVE_CLEANUP_INTERVAL_MS);
+    const feishuOfflineInbox = createFeishuOfflineInbox(db);
     // 已收工 Worker 满保留期：清它们的对话（消息、步骤日志等），再把空出来的页还给文件系统（db-retention.ts）；启动时先来一轮
-    parts.stopWorkerRetention = startWorkerRetention({ ledger, db, feishuPosts: createFeishuStore(db), log });
+    parts.stopWorkerRetention = startWorkerRetention({
+      ledger,
+      db,
+      feishuPosts: createFeishuStore(db),
+      feishuOfflineInbox,
+      log,
+    });
     // 已收工 Worker 的 worktree：启动时先清一轮，之后每 WORKTREE_CLEANUP_INTERVAL_MS 清一轮（分支保留）
     parts.worktreeCleanup = startWorktreeCleanup({
       ledger,
@@ -759,10 +774,6 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       log(`${LOG_PREFIX} 已全部退出，新的登录链接：${loginUrl(parts.ui?.port ?? port, next)}`);
       return next;
     };
-    // 联机：本机 tailnet 名字（后台问，不拖慢启动）；serve 转发目标（Linux 另听 run/ui.sock）。设备身份在前面 agent 接口之前就读了
-    const tailscaleCli = tailscaleCommand({ env });
-    const tailnet = options.tailnet ?? createTailnetProbe({ run: runTailscaleStatus(tailscaleCli), env });
-    const serveTarget = serveTargetKind({ env });
     // 推送提醒（联机 P4）：VAPID 密钥、订阅在 state/；按账本的变化判断要不要推。关的时候随账本订阅一起取消
     const push = createPushService({
       vapidFile: paths.pushVapidFile,
@@ -772,54 +783,42 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       log: (line) => log(`${LOG_PREFIX} ${line}`),
     });
     parts.unsubscribe.push(() => push.close());
-    // 已配对的设备（state/peers.json）。本机网址：tailnet 名字；测试入口下没有 Tailscale 时用本机回环地址
-    const allowLoopbackPeers = options.allowLoopbackPeers === true;
-    let listeningPort: number | undefined;
+    // 账号组网（docs/account-mesh-design.md）：没登录也建，单机照常用；登录了就连中继、开局域网入口。别的设备连进来交给界面服务的组网入口
+    const meshOptions = options.mesh ?? {};
+    const mesh = await createMesh({
+      identityDir: paths.meshDir,
+      accountFile: paths.accountFile,
+      trustFile: paths.peersFile,
+      device,
+      platform: process.platform,
+      relayUrl: meshOptions.relayUrl ?? env[ENV_RELAY_URL] ?? MESH_DEFAULT_RELAY_URL,
+      githubClientId: meshOptions.githubClientId ?? env[ENV_GITHUB_CLIENT_ID] ?? MESH_GITHUB_CLIENT_ID,
+      listenPort: meshOptions.listenPort ?? (port === 0 ? 0 : MESH_LISTEN_PORT),
+      ...(meshOptions.listenHost !== undefined ? { listenHost: meshOptions.listenHost } : {}),
+      ...(meshOptions.candidates ? { candidates: meshOptions.candidates } : {}),
+      ...(meshOptions.allowLoopback ? { allowLoopback: true } : {}),
+      ...(meshOptions.github ? { github: meshOptions.github } : {}),
+      ...(meshOptions.fetch ? { fetch: meshOptions.fetch } : {}),
+      onConnection: (connection) => {
+        if (parts.ui === undefined) connection.socket.destroy();
+        else parts.ui.acceptMeshConnection(connection);
+      },
+      log: (line) => log(`${LOG_PREFIX} ${line}`),
+    });
+    parts.mesh = mesh;
     const peers = createPeers({
-      file: paths.peersFile,
       device,
       saveName: (name) => {
         device.name = name;
         saveDevice(paths.deviceFile, device);
       },
-      selfUrl: () => {
-        const self = tailnet.current();
-        if (self !== null) return `https://${self.dnsName}`;
-        return allowLoopbackPeers && listeningPort !== undefined ? `http://127.0.0.1:${listeningPort}` : null;
-      },
-      allowLoopback: allowLoopbackPeers,
-      tunnelsFile: paths.tunnelsFile,
-      hubSocket: paths.tunnelHubSock,
-      reconnectTunnel: () => parts.tunnel?.reconnectNow() ?? false,
+      mesh,
       log,
     });
     parts.peers = peers;
-    // ssh 隧道（docs/hub-tunnel-design.md 第 6、7 节）：连入方起 ssh 子进程看着它；中心分槽位、出邀请码。
-    // 隧道命令（src/tunnel/）经 run/admin.sock 找它，要带界面令牌（每次现读 state/ui-token：全部退出换了令牌也跟着变）
-    const tunnel = createTunnelService({
-      paths: {
-        tableFile: paths.tunnelsFile,
-        keyFile: join(paths.tunnelDir, "id_ed25519"),
-        knownHostsFile: join(paths.tunnelDir, "known_hosts"),
-        pidFile: join(paths.tunnelDir, "ssh.pid"),
-        peerSocket: paths.peerSock,
-        hubSocket: paths.tunnelHubSock,
-      },
-      entryPort: DEFAULT_PEER_ENTRY_PORT,
-      createInvite: (slotPort) => peers.createTunnelInvite(slotPort),
-      onRemoveDevice: (deviceId) => peers.removeByTunnelSlot(deviceId),
-    });
-    parts.tunnel = tunnel;
-    tunnel.onChange((status) => {
-      if (status !== null) log(`${LOG_PREFIX} 隧道：${status.state}${status.detail ? `（${status.detail}）` : ""}`);
-      if (status?.state === "connected") peers.onTunnelConnected();
-    });
-    if (process.platform !== "win32") {
-      await tunnel.start();
-    }
     const sha = (value: string) => createHash("sha256").update(value).digest();
     try {
-      parts.tunnelAdmin = await startTunnelAdmin({
+      parts.admin = await startAdminSocket({
         runDir: paths.runDir,
         socketPath: paths.adminSock,
         authorize: (given) => {
@@ -829,8 +828,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
             return false;
           }
         },
-        service: tunnel,
         feishu: () => parts.feishu?.setup,
+        mesh: () => parts.mesh,
         ...(options.onExternalShutdown ? { onShutdown: options.onExternalShutdown } : {}),
         log: (line) => log(`${LOG_PREFIX} ${line}`),
       });
@@ -871,6 +870,105 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     parts.routerDispatcher = routerDispatcher;
     // 飞书（docs/feishu-design.md）：和推送提醒一样订阅账本往外投影；凭证在 state/feishu-secrets.json，没配过就只订阅不连。
     // 连不上、凭证失效只记日志和状态，不影响网页和 agent
+    const inAccountMode = () => {
+      const st = mesh.status().state;
+      return st === "signed_in" || st === "awaiting_approval";
+    };
+    const leaseListeners = new Set<(holder: string | null) => void>();
+    const meshFeishuLease = mesh.lease("feishu", {
+      eligible: () => parts.feishu?.eligibleForLease() ?? false,
+      connect: () => {
+        void parts.feishu?.syncLeaseConnection();
+      },
+      disconnect: async () => {
+        if (!inAccountMode()) return;
+        await parts.feishu?.syncLeaseConnection();
+      },
+    });
+    let lastEffectiveHolding = !inAccountMode() || meshFeishuLease.holding();
+    const notifyFeishuLease = () => {
+      const holding = !inAccountMode() || meshFeishuLease.holding();
+      if (holding === lastEffectiveHolding) return;
+      lastEffectiveHolding = holding;
+      for (const fn of leaseListeners) fn(holding ? device.id : meshFeishuLease.holder());
+    };
+    const feishuLease: CenterLease = {
+      holding: () => !inAccountMode() || meshFeishuLease.holding(),
+      holder: () => (!inAccountMode() ? device.id : meshFeishuLease.holder()),
+      refresh: () => {
+        meshFeishuLease.refresh();
+        notifyFeishuLease();
+      },
+      onChange: (fn) => {
+        leaseListeners.add(fn);
+        return () => leaseListeners.delete(fn);
+      },
+      close: () => meshFeishuLease.close(),
+    };
+
+    const pushFeishuToPeer = (peerId: string, payload: { app?: FeishuPeerAppSync | null; chats?: { chatId: string; pmId: number }[] }, attempt = 0) => {
+      if (mesh.status().state !== "signed_in" || !mesh.isOnline(peerId) || mesh.trust.get(peerId) === undefined) return;
+      void (async () => {
+        if (payload.app !== undefined && payload.app !== null) {
+          const res = await mesh.request(peerId, API_PATHS.peerFeishuApp, { method: "PUT", body: JSON.stringify(payload.app) });
+          await res.body?.cancel();
+          if (!res.ok) throw new Error(`PUT app HTTP ${res.status}`);
+        } else if (payload.app === null && parts.feishu !== undefined) {
+          const res = await mesh.request(peerId, API_PATHS.peerFeishuApp);
+          if (res.ok) {
+            const raw = (await res.json()) as { app?: unknown };
+            const parsed = feishuPeerAppSyncSchema.safeParse(raw?.app);
+            if (parsed.success) await parts.feishu.applyPeerApp(parsed.data);
+          } else {
+            await res.body?.cancel();
+          }
+        }
+        if (payload.chats !== undefined && payload.chats.length > 0) {
+          const res = await mesh.request(peerId, API_PATHS.peerFeishuChats, { method: "POST", body: JSON.stringify({ chats: payload.chats }) });
+          await res.body?.cancel();
+          if (!res.ok) throw new Error(`POST chats HTTP ${res.status}`);
+        }
+      })().catch((error: unknown) => {
+        if (attempt < 4 && mesh.isOnline(peerId)) {
+          const timer = setTimeout(() => pushFeishuToPeer(peerId, payload, attempt + 1), FEISHU_CONTROL_RETRY_MS * (attempt + 1));
+          timer.unref?.();
+          return;
+        }
+        log(`${LOG_PREFIX} 飞书跨机同步给 ${peerId} 没成：${error instanceof Error ? error.message : String(error)}`);
+      });
+    };
+
+    const onlinePeers = new Set<string>();
+    const onlineListeners = new Set<(id: string) => void>();
+    const checkPeerTransitions = () => {
+      const signed = mesh.status().state === "signed_in";
+      const trustedPeers = signed ? mesh.trust.list().slice(1) : [];
+      const trustedIds = new Set(trustedPeers.map((p) => p.id));
+      for (const prevId of [...onlinePeers]) {
+        if (!trustedIds.has(prevId) || !mesh.isOnline(prevId)) onlinePeers.delete(prevId);
+      }
+      for (const peer of trustedPeers) {
+        if (!mesh.isOnline(peer.id) || onlinePeers.has(peer.id)) continue;
+        onlinePeers.add(peer.id);
+        for (const fn of onlineListeners) fn(peer.id);
+        if (parts.feishu !== undefined) {
+          pushFeishuToPeer(peer.id, { app: parts.feishu.exportPeerApp(), chats: parts.feishu.localPmChats() });
+        }
+      }
+    };
+
+    parts.unsubscribe.push(
+      meshFeishuLease.onChange(() => notifyFeishuLease()),
+      mesh.onChange(() => {
+        meshFeishuLease.refresh();
+        notifyFeishuLease();
+        checkPeerTransitions();
+      }),
+      mesh.trust.onChange(() => {
+        checkPeerTransitions();
+      }),
+    );
+
     const feishu = createFeishuService({
       db,
       ledger,
@@ -880,10 +978,62 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       uploadsDir,
       sentFilesDir,
       device,
+      lease: feishuLease,
+      mesh: {
+        activeDevices: () => {
+          const st = mesh.status();
+          return st.state === "signed_in" ? Math.max(1, st.devices.filter((d) => d.online).length) : 1;
+        },
+        onAppChanged: (sync) => {
+          if (mesh.status().state !== "signed_in") return;
+          for (const peer of mesh.trust.list().slice(1)) {
+            if (mesh.isOnline(peer.id)) pushFeishuToPeer(peer.id, { app: sync });
+          }
+        },
+        onChatsSynced: (chats) => {
+          if (mesh.status().state !== "signed_in" || chats.length === 0) return;
+          for (const peer of mesh.trust.list().slice(1)) {
+            if (mesh.isOnline(peer.id)) pushFeishuToPeer(peer.id, { chats });
+          }
+        },
+        approvals: () => {
+          const st = mesh.status();
+          return st.state === "signed_in" ? { approvals: st.approvals, joinedIds: new Set(st.devices.map((d) => d.id)) } : null;
+        },
+        beginApproval: (requestId) => mesh.beginApproval(requestId),
+        answerApproval: (requestId, match) => mesh.answerApproval(requestId, match),
+        onChange: (fn) => mesh.onChange(fn),
+      },
+      ...(options.feishu ? options.feishu : {}),
       log: (line) => log(`${LOG_PREFIX} ${line}`),
     });
+    const feishuAccountBot = createFeishuAccountBot({
+      mesh: {
+        selfId: device.id,
+        deviceName: (id) => (id === device.id ? device.name : (mesh.trust.get(id)?.name ?? null)),
+        isOnline: (id) => mesh.isOnline(id),
+        post: async (id, path, body, timeoutMs) => {
+          const res = await mesh.request(id, path, { method: "POST", body: JSON.stringify(body), timeoutMs });
+          if (!res.ok) {
+            const text = await res.text().catch(() => "");
+            throw new Error(`HTTP ${res.status} ${text}`);
+          }
+          return await res.json();
+        },
+        onOnline: (fn) => {
+          onlineListeners.add(fn);
+          return () => onlineListeners.delete(fn);
+        },
+      },
+      local: feishu,
+      inbox: feishuOfflineInbox,
+      log: (line) => log(`${LOG_PREFIX} ${line}`),
+    });
+    feishu.useAccountBot(feishuAccountBot);
+    parts.feishuAccountBot = feishuAccountBot;
     parts.feishu = feishu;
     await feishu.start();
+    checkPeerTransitions();
     // 空闲排空热重启：有外壳监管（entry.ts 给了 onSelfReload）才建；带 --build 时网页构建到暂存目录，重启前才换上线
     if (options.onSelfReload) {
       const onSelfReload = options.onSelfReload;
@@ -929,38 +1079,21 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       providers: providerManager,
       db,
       rotateToken,
-      tailnet,
-      serveTarget,
       push,
       peers,
-      tunnel,
+      mesh,
       feishu: feishu.setup,
+      feishuPeer: {
+        acceptInbound: (body) => feishuAccountBot.acceptForwarded(body),
+        learnChats: (from, chats) => feishuAccountBot.learnChats(from, chats),
+        exportApp: () => feishu.exportPeerApp(),
+        applyApp: (sync) => feishu.applyPeerApp(sync),
+      },
       routerDispatcher,
       routerLocalPort,
       ...(parts.selfReload ? { selfReload: parts.selfReload } : {}),
       ...(options.folderPicker ? { folderPicker: options.folderPicker } : {}),
-      ...(process.platform === "win32" ? {} : { publicSock: paths.publicSock }),
-      publicEntryFile: paths.publicEntryFile,
-      ...(process.platform === "win32"
-        ? {}
-        : {
-            peerEntry: {
-              socket: paths.peerSock,
-              ...(process.platform === "linux" ? { port: port === 0 ? 0 : DEFAULT_PEER_ENTRY_PORT } : {}),
-            },
-          }),
-      ...(serveTarget === "unix" ? { serveSocket: paths.uiSock } : {}),
     });
-    const uiPort = parts.ui.port;
-    listeningPort = uiPort;
-    void tailnet.refresh().then((self) => {
-      if (self === null) return;
-      const target = serveTarget === "unix" ? { kind: "unix" as const, path: paths.uiSock } : { kind: "tcp" as const, port: uiPort };
-      log(`${LOG_PREFIX} 联机：这台是 ${device.name}（${device.id}），tailnet 名字 ${self.dnsName}。别的设备、手机要访问，先跑一次：${serveCommandLine({ cli: tailscaleCli, target })}`);
-      if (self.owner === null) log(`${LOG_PREFIX} 联机：这台打了 tag，问不到设备主人，经 tailnet 的访问会被拒绝；请设 ${ENV_TAILNET_OWNER}=<你的 Tailscale 登录名>`);
-    });
-    // 上线时把设备清单同步一遍：离线期间别的设备改了名、换了网址、加了新设备，这时补上；离线期间被移除的，对方会拒（401），这边自己删
-    void tailnet.refresh().then(() => peers.announce());
 
     let stopping: Promise<void> | undefined;
     return {

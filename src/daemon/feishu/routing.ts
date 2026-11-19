@@ -150,6 +150,7 @@ export type FeishuActionRoute =
   | { kind: "set_policy"; pmId: PmId; triggerMode?: FeishuTriggerMode; guestTier?: FeishuGuestTier }
   | { kind: "set_pm_model"; pmId: PmId; field: FeishuModelField; option: string }
   | { kind: "set_router_model"; field: FeishuModelField; option: string }
+  | { kind: "mesh_approval"; step: "begin" | "match" | "mismatch"; requestId: string }
   /** 拒绝：toast 给点的人看。guestDenied：访客因本档权限点不了拍板、停止，调用方按冷却附一张群设置卡。 */
   | { kind: "reject"; toast: string; guestDenied?: true }
   | { kind: "ignore" };
@@ -167,6 +168,9 @@ export function routeFeishuAction(action: FeishuInboundAction, ctx: Pick<FeishuR
   const { value } = action;
   if (guest && (binding.target.kind === "router" || value.kind === "set_policy")) return { kind: "reject", toast: OWNER_ONLY_SETTINGS };
   switch (value.kind) {
+    case "mesh_approval":
+      if (binding.target.kind !== "router") return { kind: "ignore" };
+      return { kind: "mesh_approval", step: value.step, requestId: value.requestId };
     case "set_policy":
       return {
         kind: "set_policy",

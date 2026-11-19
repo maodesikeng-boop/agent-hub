@@ -1,5 +1,5 @@
-// 设置弹窗右栏的宽度约束（docs/ui-standard.md 第 10 条）：任何宽度下行右边的按钮（Allow、Deny、Sign out、Turn on……）都完整可见。
-// jsdom 不排版，所以这里守住的是让浏览器做对的那几个类名（根因：长域名这类放不下的内容把右栏撑出弹窗，按钮被 overflow 裁掉）；真实排版的截图见 PR。
+// 设置弹窗右栏的宽度约束（docs/ui-standard.md 第 10 条）：任何宽度下行右边的按钮（Sign out、Show QR code、Sign in……）都完整可见。
+// jsdom 不排版，所以这里守住的是让浏览器做对的那几个类名（根因：放不下的内容把右栏撑出弹窗，按钮被 overflow 裁掉）；真实排版的截图见 PR。
 import { render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,16 +10,14 @@ import { SettingsDialog } from "./SettingsDialog.tsx";
 
 const ANDROID = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/130.0.0.0 Mobile Safari/537.36";
 const MAC = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36";
-const LONG_HOSTNAME = "dev-macbook-pro.tail1a2b3c.ts.net";
 
 const sessions: BrowserSessionInfo[] = [
-  { id: "android", userAgent: ANDROID, createdAt: 0, lastSeenAt: Date.now(), current: false, status: "pending_approval", viaPublic: true },
+  { id: "android", userAgent: ANDROID, createdAt: 0, lastSeenAt: Date.now(), current: false },
   { id: "mac", userAgent: MAC, createdAt: 0, lastSeenAt: Date.now(), current: true },
 ];
 const notify: NotifySettings = { permission: "granted", enabled: false, setEnabled: vi.fn(async () => {}) };
 const devices = {
   devices: [],
-  publicEntry: { enabled: true, hostname: LONG_HOSTNAME, funnelCommand: "tailscale funnel --bg 4821" },
   onChanged: vi.fn(),
 };
 
@@ -36,6 +34,7 @@ async function openSecurity() {
   render(<SettingsDialog open onOpenChange={() => {}} notify={notify} devices={devices} />);
   await user.click(screen.getByRole("tab", { name: "Security & Access" }));
   const panel = screen.getByRole("tabpanel", { name: "Security & Access" });
+  await user.click(within(panel).getByRole("button", { name: /Signed-in browsers/ }));
   await within(panel).findByText("Android Chrome");
   return panel;
 }
@@ -45,7 +44,7 @@ const rowOf = (el: HTMLElement) => el.closest("[data-slot='settings-row']") as H
 const controlsOf = (row: HTMLElement) => row.firstElementChild!.lastElementChild as HTMLElement;
 
 describe("设置弹窗：右栏宽度跟着弹窗走，按钮不被挤出去", () => {
-  it("右栏 min-w-0、分组那一列 grid-cols-1：内容再长也撑不开右栏（长域名曾把 Allow / Show 挤到弹窗外面）", async () => {
+  it("右栏 min-w-0、分组那一列 grid-cols-1：内容再长也撑不开右栏（长内容曾把按钮挤到弹窗外面）", async () => {
     const panel = await openSecurity();
     expect(classOf(panel)).toContain("min-w-0");
     const scroller = panel.lastElementChild as HTMLElement;
@@ -57,19 +56,17 @@ describe("设置弹窗：右栏宽度跟着弹窗走，按钮不被挤出去", (
     }
   });
 
-  it("待批准那一行：Deny、Allow 在行右边那块里，那块靠右、不收缩、不比行宽；左边名字和小字能收（截断、换行）让路", async () => {
+  it("会话那一行：Sign out 在行右边那块里，那块靠右、不收缩、不比行宽；左边名字和小字能收（截断、换行）让路", async () => {
     const panel = await openSecurity();
     const row = rowOf(within(panel).getByText("Android Chrome"));
     const controls = controlsOf(row);
-    expect(within(controls).getByRole("button", { name: "Deny" })).toBeVisible();
-    expect(within(controls).getByRole("button", { name: "Allow" })).toBeVisible();
+    expect(within(controls).getByRole("button", { name: /^Sign out/ })).toBeVisible();
     expect(classOf(controls)).toEqual(expect.arrayContaining(["ml-auto", "shrink-0", "max-w-full"]));
     const line = row.firstElementChild as HTMLElement;
     expect(classOf(line)).toContain("flex-wrap"); // 放不下时按钮换到下一行，不出界
     const left = line.firstElementChild as HTMLElement;
     expect(classOf(left)).toEqual(expect.arrayContaining(["min-w-32", "flex-1"]));
     expect(classOf(within(row).getByText("Android Chrome"))).toContain("line-clamp-2");
-    expect(classOf(within(row).getByText("Pending approval").parentElement!)).toContain("flex-wrap");
   });
 
   it("所有行的右边块（Sign out、Sign out all、Show QR code）都是同一套：靠右、不收缩、不比行宽", async () => {
@@ -78,17 +75,6 @@ describe("设置弹窗：右栏宽度跟着弹窗走，按钮不被挤出去", (
       const controls = controlsOf(rowOf(within(panel).getByRole("button", { name })));
       expect(classOf(controls)).toEqual(expect.arrayContaining(["ml-auto", "shrink-0", "max-w-full"]));
     }
-  });
-
-  it("公网域名那一行上下排：输入框 min-w-0 flex-1 占满整行、能跟着收窄，域名只在输入框里出现一次", async () => {
-    const panel = await openSecurity();
-    const input = within(panel).getByRole("textbox");
-    expect(classOf(input)).toEqual(expect.arrayContaining(["flex-1", "min-w-0"]));
-    const controls = controlsOf(rowOf(input));
-    expect(classOf(controls)).toContain("max-w-full");
-    expect(within(controls).getByRole("button", { name: "Turn off" })).toBeVisible();
-    expect(input).toHaveValue(LONG_HOSTNAME);
-    expect(within(panel).queryByText(`https://${LONG_HOSTNAME}`)).toBeNull();
   });
 
   it("切到别的分类（General、Computers）右栏同一套约束", async () => {

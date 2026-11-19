@@ -1,33 +1,29 @@
-// 入口转发 /d/<设备>/api/*（docs/multi-device-design.md 第 2、3.2 节）：浏览器只面对入口一个来源，别的设备的接口由入口原样转过去。
-// 没用 @fastify/http-proxy：它按固定上游配置，这里上游按设备编号查、要换令牌、要严格过滤两个方向的头、要把“连不上”统一成 device_offline，
-// 自己写（fetch + ws）更短也更好查。
+// 入口转发 /d/<设备>/api/*（docs/account-mesh-design.md「连法」）：浏览器只面对入口一个来源，别的设备的接口由入口经组网原样转过去。
+// 没用 @fastify/http-proxy：它按固定上游配置，这里上游按设备编号查、连接走组网的 http.Agent（局域网直连或中继，TLS 双向认证）、
+// 要严格过滤两个方向的头、要把“连不上”统一成 device_offline，自己写（http.Agent + ws）更短也更好查。
 //
 // 安全：
-// - 请求头只带白名单里的（浏览器的 cookie、Origin、Referer、Tailscale-*、Authorization 一律不带），加本机的设备令牌和设备编号；
-// - 只转 /api/ 下、规范化后路径不变的地址（挡住 ../、%2e%2e、反斜杠），只发到已配对设备存着的网址（不收浏览器给的地址，防 SSRF）；
+// - 请求头只带白名单里的（浏览器的 cookie、Origin、Referer、Authorization 一律不带）；对方按 TLS 证书认出是本机，不看任何头；
+// - 只转 /api/ 下、规范化后路径不变的地址（挡住 ../、%2e%2e、反斜杠），只发到信任表里的设备（不收浏览器给的地址，防 SSRF）；
 // - 响应头也只放白名单里的回浏览器（不放 Set-Cookie、Location），并且一律加上沙箱 CSP 和 nosniff：
 //   对方回的东西是在入口的来源下显示的，不能让它在入口的来源里跑脚本、借浏览器的 cookie 访问入口本机。
-// - 设备令牌来的请求不能用 /d/（server.ts 的认证钩子拦）：别的设备不能借本机的转发去第三台。
+// - 组网入口来的请求不能用 /d/（server.ts 的认证钩子拦）：别的设备不能借本机的转发去第三台。
+import type { Agent } from "node:http";
 import { Readable } from "node:stream";
-import { gunzipSync } from "node:zlib";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { WebSocket } from "ws";
 import {
   DEVICE_OFFLINE_REASON,
   DEVICE_OFFLINE_WS_CLOSE_CODE,
   PEER_CLIENT_SCOPE_HEADER,
-  PEER_DEVICE_HEADER,
   PEER_PROXY_HEADERS_TIMEOUT_MS,
   PEER_WS_CONNECT_TIMEOUT_MS,
   PEER_WS_PING_MS,
   WS_HEARTBEAT_TEXT,
   type ApiErrorBody,
 } from "../../shared/index.ts";
+import { MESH_HTTP_HOST, agentFetch } from "../mesh/agent-fetch.ts";
 import { keepAlive } from "../ws-keepalive.ts";
-import { PEER_UNAUTHORIZED } from "./service.ts";
-import { createUnixHttpPool, type ResolvedPeerTarget, type UnixHttpPool } from "./transport.ts";
-
-const defaultUnixPool = createUnixHttpPool();
 
 /** 转发给对方的请求头（小写）。别的都不带。 */
 const FORWARD_REQUEST_HEADERS = ["accept", "content-type", "range", "if-range", "if-none-match", "if-modified-since"];
@@ -41,8 +37,6 @@ const CSP_SVG = `${CSP_DEFAULT}; style-src 'unsafe-inline'`;
 
 /** 浏览器 → 对方的 WebSocket 关闭码：ws 不让发 1005、1006、1015（只表示“没有关闭帧”），换成正常关闭。 */
 const sendableCode = (code: number, fallback: number) => (code === 1000 || (code >= 1001 && code <= 1014 && ![1004, 1005, 1006].includes(code)) || (code >= 3000 && code <= 4999) ? code : fallback);
-/** 对方已经不认本机了（它把本机移除了）：浏览器那条用这个码关。 */
-const WS_CLOSE_NOT_FOUND = 4404;
 /** 对方发来的心跳：入口自己给浏览器发（对方是老版本、不发也不影响），对方的这条不转。先比长度，别的消息不用逐字节比。 */
 const HEARTBEAT_FRAME = Buffer.from(WS_HEARTBEAT_TEXT);
 const isHeartbeat = (data: Buffer, isBinary: boolean) => !isBinary && data.length === HEARTBEAT_FRAME.length && data.equals(HEARTBEAT_FRAME);
@@ -51,15 +45,8 @@ const reasonOf = (reason: Buffer) => reason.subarray(0, 123).toString("utf8");
 
 export interface ProxyTarget {
   name: string;
-  /** 已配对设备存着的网址（origin）；隧道设备为 ""。 */
-  url: string;
-  token: string;
-  /** 解析实际传输目标（TCP origin 或 unix socket；中心槽位端口在此做 UID 校验，不过回 null）。不给则按 url 走 TCP。 */
-  resolve?: () => ResolvedPeerTarget | null;
-  /** 连不上时回调（连入方访问中心失败时触发 tunnel.reconnectNow()）。 */
-  onOffline?: () => void;
-  /** unix socket HTTP 连接池（由 peers 统一管理复用与关闭）。 */
-  unixPool?: UnixHttpPool;
+  /** 这台设备的组网连接（MeshDialer.agentFor）：HTTP 和 WebSocket 都经它，按设备复用 keep-alive。 */
+  agent: Agent;
 }
 
 /**
@@ -82,36 +69,13 @@ export function splitProxyUrl(rawUrl: string): { device: string; rest: string } 
   return { device: match[1]!, rest };
 }
 
-const authHeaders = (target: ProxyTarget, selfId: string) => ({ authorization: `Bearer ${target.token}`, [PEER_DEVICE_HEADER]: selfId });
-
-function resolveEndpoint(target: ProxyTarget): ResolvedPeerTarget | null {
-  if (target.resolve !== undefined) return target.resolve();
-  return target.url !== "" ? { kind: "tcp", origin: target.url } : null;
-}
-
 function offlineBody(name: string): ApiErrorBody {
   return { error: `连不上“${name}”`, code: "device_offline" };
 }
 
-/** 对方回 401 peer_unauthorized：它已经不认本机了。 */
-const isPeerUnauthorized = (status: number, body: string) => {
-  if (status !== 401) return false;
-  try {
-    const parsed = JSON.parse(body) as { code?: unknown; error?: unknown };
-    return parsed.code === PEER_UNAUTHORIZED || parsed.error === PEER_UNAUTHORIZED;
-  } catch {
-    return false;
-  }
-};
-
 export interface ProxyContext {
-  selfId: string;
-  /** 对方说不认本机了：本机也删掉它。 */
-  forget: () => void;
   /** 入口当前客户端会话的不可逆隔离摘要（仅注入上游请求头，不透传任何浏览器原始凭证）。 */
   clientScope?: string;
-  fetch?: typeof fetch;
-  unixPool?: UnixHttpPool;
   /** WebSocket 心跳间隔，默认 PEER_WS_PING_MS。 */
   pingMs?: number;
   /** 给浏览器那条发心跳的间隔（ws-keepalive.ts），默认 WS_HEARTBEAT_MS。 */
@@ -163,14 +127,8 @@ const isGzipBuffer = (buf: Buffer | null): boolean =>
 
 /** 转发一个 HTTP 请求。请求体原样流过去（上传不在入口落地），响应体原样流回来。 */
 export async function proxyHttp(req: FastifyRequest, reply: FastifyReply, target: ProxyTarget, rest: string, ctx: ProxyContext): Promise<FastifyReply> {
-  const endpoint = resolveEndpoint(target);
-  if (endpoint === null) {
-    target.onOffline?.();
-    return reply.code(502).send(offlineBody(target.name));
-  }
   const wantGzip = req.headers.range === undefined && acceptsGzip(req.headers["accept-encoding"]);
   const headers: Record<string, string> = {
-    ...authHeaders(target, ctx.selfId),
     "accept-encoding": wantGzip ? "gzip" : "identity",
     ...(ctx.clientScope ? { [PEER_CLIENT_SCOPE_HEADER]: ctx.clientScope } : {}),
   };
@@ -196,20 +154,14 @@ export async function proxyHttp(req: FastifyRequest, reply: FastifyReply, target
   reply.raw.once("close", onClientGone);
   let res: Response;
   try {
-    const init = {
+    res = await agentFetch(target.agent, rest, {
       method: req.method,
       headers,
-      redirect: "manual",
       signal: controller.signal,
-      ...(hasBody ? { body: Readable.toWeb(req.raw) as ReadableStream<Uint8Array>, duplex: "half" } : {}),
-    } as RequestInit;
-    res =
-      endpoint.kind === "unix"
-        ? await (ctx.unixPool ?? target.unixPool ?? defaultUnixPool).fetch(endpoint.socketPath, rest, init)
-        : await (ctx.fetch ?? fetch)(endpoint.origin + rest, init);
+      ...(hasBody ? { body: req.raw } : {}),
+    });
   } catch {
     reply.raw.off("close", onClientGone);
-    target.onOffline?.();
     // 上传没传完就放弃了：回完 502 关掉这条连接，浏览器不再接着往一个没人读的连接里传
     if (hasBody && !req.raw.complete) reply.header("connection", "close");
     return reply.code(502).send(offlineBody(target.name));
@@ -220,22 +172,6 @@ export async function proxyHttp(req: FastifyRequest, reply: FastifyReply, target
 
   // 对端没读完请求体就回了（413、429 等）：回完关掉这条连接，免得浏览器接着往里传剩下的
   if (hasBody && !req.raw.complete) reply.header("connection", "close");
-
-  if (res.status === 401) {
-    const raw = Buffer.from(await res.arrayBuffer().catch(() => new ArrayBuffer(0)));
-    let text = "";
-    try {
-      text = (isGzipBuffer(raw) ? gunzipSync(raw) : raw).toString("utf8");
-    } catch {
-      text = raw.toString("utf8");
-    }
-    reply.raw.off("close", onClientGone);
-    if (isPeerUnauthorized(res.status, text)) {
-      ctx.forget();
-      return reply.code(404).send({ error: `“${target.name}”已经把这台移除了`, code: "device_not_found" } satisfies ApiErrorBody);
-    }
-    return reply.code(401).type("application/json").send(text);
-  }
 
   reply.code(res.status);
   for (const name of FORWARD_RESPONSE_HEADERS) {
@@ -259,14 +195,13 @@ export async function proxyHttp(req: FastifyRequest, reply: FastifyReply, target
       buf = Buffer.from(await res.arrayBuffer());
     } catch {
       reply.raw.off("close", onClientGone);
-      target.onOffline?.();
       return reply.code(502).send(offlineBody(target.name));
     }
     reply.raw.off("close", onClientGone);
     if (isGzipBuffer(buf)) {
       reply.header("content-encoding", "gzip").header("vary", "Accept-Encoding").header("content-length", buf.length);
     } else {
-      // fetch（undici）已自动解压响应体或上游回明文：去掉上游旧的 content-length，交由外层 server.ts 的 @fastify/compress 统一按需压缩
+      // 上游回明文：去掉上游旧的 content-length，交由外层 server.ts 的 @fastify/compress 统一按需压缩
       reply.removeHeader("content-length");
     }
     return reply.send(buf);
@@ -277,7 +212,7 @@ export async function proxyHttp(req: FastifyRequest, reply: FastifyReply, target
 }
 
 /**
- * 转发一条 WebSocket：浏览器那条已经连上（downstream），这里连对方（带 since 原样转），消息原样双向转，关闭也双向转。
+ * 转发一条 WebSocket：浏览器那条已经连上（downstream），这里经组网连对方（带 since 原样转），消息原样双向转，关闭也双向转。
  * 连不上、对方心跳没回：用 DEVICE_OFFLINE_WS_CLOSE_CODE 关浏览器那条（网页按断线重连，重连时 /d/ 的请求回 502 就显示离线）。
  * 两段各管各的保活：对方那段入口 ping（PEER_WS_PING_MS），浏览器那段入口发心跳（keepAlive），对方发来的心跳不转。
  */
@@ -286,21 +221,8 @@ export function proxyWebSocket(downstream: WebSocket, target: ProxyTarget, rest:
   const closeDownstream = (code: number, reason: string) => {
     if (downstream.readyState === WebSocket.OPEN || downstream.readyState === WebSocket.CONNECTING) downstream.close(code, reason);
   };
-  let reportedOffline = false;
-  const notifyOffline = () => {
-    if (reportedOffline) return;
-    reportedOffline = true;
-    target.onOffline?.();
-  };
-  const endpoint = resolveEndpoint(target);
-  if (endpoint === null) {
-    notifyOffline();
-    closeDownstream(DEVICE_OFFLINE_WS_CLOSE_CODE, DEVICE_OFFLINE_REASON);
-    return;
-  }
-  const url = endpoint.kind === "unix" ? `ws+unix://${endpoint.socketPath}:${rest}` : endpoint.origin.replace(/^http/, "ws") + rest;
-  const upstream = new WebSocket(url, {
-    headers: authHeaders(target, ctx.selfId),
+  const upstream = new WebSocket(`ws://${MESH_HTTP_HOST}${rest}`, {
+    agent: target.agent,
     handshakeTimeout: PEER_WS_CONNECT_TIMEOUT_MS,
     perMessageDeflate: false,
     followRedirects: false,
@@ -336,7 +258,6 @@ export function proxyWebSocket(downstream: WebSocket, target: ProxyTarget, rest:
       if (!alive) {
         stop();
         upstream.terminate();
-        notifyOffline();
         closeDownstream(DEVICE_OFFLINE_WS_CLOSE_CODE, DEVICE_OFFLINE_REASON);
         return;
       }
@@ -350,39 +271,21 @@ export function proxyWebSocket(downstream: WebSocket, target: ProxyTarget, rest:
   upstream.on("message", (data: Buffer, isBinary: boolean) => {
     if (downstream.readyState === WebSocket.OPEN && !isHeartbeat(data, isBinary)) downstream.send(data, { binary: isBinary });
   });
-  // 对方没接受握手（回了 HTTP 响应）：读完响应体再定怎么关浏览器那条，之后的 error、close 不再管
+  // 对方没接受握手（回了 HTTP 响应）：当离线关浏览器那条，之后的 error、close 不再管
   let rejected = false;
-  upstream.once("unexpected-response", (request, res) => {
+  upstream.once("unexpected-response", (request) => {
     rejected = true;
     stop();
-    let text = "";
-    res.setEncoding("utf8");
-    res.on("data", (chunk: string) => {
-      if (text.length < 4096) text += chunk;
-    });
-    const settle = () => {
-      if (isPeerUnauthorized(res.statusCode ?? 0, text)) {
-        ctx.forget();
-        closeDownstream(WS_CLOSE_NOT_FOUND, "not_found");
-      } else {
-        closeDownstream(DEVICE_OFFLINE_WS_CLOSE_CODE, DEVICE_OFFLINE_REASON);
-      }
-      request.destroy();
-    };
-    res.once("end", settle);
-    res.once("error", settle);
+    closeDownstream(DEVICE_OFFLINE_WS_CLOSE_CODE, DEVICE_OFFLINE_REASON);
+    request.destroy();
   });
   upstream.on("error", () => {
     stop();
-    if (!rejected) {
-      notifyOffline();
-      closeDownstream(DEVICE_OFFLINE_WS_CLOSE_CODE, DEVICE_OFFLINE_REASON);
-    }
+    if (!rejected) closeDownstream(DEVICE_OFFLINE_WS_CLOSE_CODE, DEVICE_OFFLINE_REASON);
   });
   upstream.once("close", (code: number, reason: Buffer) => {
     stop();
     if (rejected) return;
-    if (code === 1006) notifyOffline();
     // 1006 = 连接断了没有关闭帧：对方掉线
     closeDownstream(code === 1006 ? DEVICE_OFFLINE_WS_CLOSE_CODE : sendableCode(code, 1000), code === 1006 ? DEVICE_OFFLINE_REASON : reasonOf(reason));
   });

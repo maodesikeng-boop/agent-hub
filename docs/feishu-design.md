@@ -23,7 +23,7 @@
   - 项目群设置卡拆成三个模块（用分割线隔开）：① 模型与思考程度（JSON 2.0 `select_static` 下拉选厂商、模型、思考程度，走 `editPersona` 零交接切厂商或改模型，模型固定档位时不画无效下拉并写明原因）；② 唤醒方式（自动或仅 `@` 唤醒，独立按钮组高亮当前项）；③ 群成员权限（协作者、仅对话、只读三档说明与独立按钮组高亮当前项）。
   - 总助单聊设置卡：支持 `Auto` 或指定 `厂商 + 模型 + 思考程度`，走 `updateRouterSettings`，与网页 `RouterModelPicker` 双向同步。
   - 免爬楼呼出（不碰自然语言）：只认整句斜杠命令 `/群设置`、`/设置`、`/policy`、`/model`、`/settings`；不带斜杠的“设置”“模型”原样进账本。第一个访客进群时发第一张群设置卡；访客因档位被拒（发文件、点拍板或停止）时按 `FEISHU_POLICY_CARD_COOLDOWN_MS`（5 分钟）冷却在群底附一张新卡；每次发新设置卡尝试置顶（`pin.create`）并取消上一张设置卡的置顶（`pin.delete`），缺权限只记日志。所有设置卡回调只认 `ownerOpenId`。
-- Mac 和东京服务器都要接时，每台各扫一次码、各建一个应用（应用名带设备名，比如“Bellwood · 东京”）。飞书的长连接是“同一个应用多台连上时随机分给一台”，两台共用一个应用会互相抢消息，所以必须一台一个。
+- 多台电脑登录同一账号时，全账号共用一个飞书机器人，由中心顺序排最前且在线的设备持有租约挂长连接并按群转发（见 `docs/account-mesh-design.md`）。单机未登录账号时照常本机独立使用。
 
 - 你 11-18 打回时选了三个 B：
   - 项目经理归档时解散它的群（飞书里清爽，群聊天记录跟着没了，账本里还有）。取消归档时自动新建一个群，之前设的唤醒方式和访客档位照旧。项目经理删掉时也解散群。
@@ -167,11 +167,11 @@
 
 **文件。** 一条消息带的文件（项目经理发的文件、提问卡的交付物、网页上用户发的附件）和这条消息的卡同发同达：图片嵌进同一张卡（卡片图片组件，挂在正文下面、按钮上面），别的文件（pdf、md、mp4、zip、docx……）紧跟这张卡连着发成文件消息。做法：账本一落库就在出站队列外并发预传（`p-limit` 限 `FEISHU_UPLOAD_CONCURRENCY` 个同时传），排到发卡时最多再等到最后开始传的那个起算 `FEISHU_ATTACH_WAIT_MS`；传完的图嵌进卡、文件紧跟卡发，没传完的卡先发出去、卡底写一行 `Uploading <名字>…`，不挡后面的新消息；传完后文件补发成文件消息，再原地改这张卡（图嵌回去，文件那行改成“已送达”）。在途的附件记成 `feishu_posts` 的 `uploading` 行（挂着卡的消息编号和卡片编号），停机不等它，重连、重启后补发时接着传，传完照样补发、改卡。传完先把图片编号、文件编号记在这一行上，卡改成了才记 `final`：改卡遇到网络错误、停机重启时，补发按这一行重新改卡，不重传、不重发文件。紧跟卡发的文件被飞书拒收时，也回头把卡改成写着“没发出去”。上传暂时失败退避重试 `FEISHU_MEDIA_RETRY_MAX` 次，飞书拒收或重试用尽时卡上写“没发出去，去网页看”。超过 `FEISHU_IMAGE_MAX_EDGE` 边长或 `FEISHU_IMAGE_SHRINK_BYTES` 的截图（png、jpeg、webp、avif），上传前用 `sharp` 在临时目录缩一份最长边 2400 的副本再传，传完删掉，磁盘上的原图不动（之前一张 4920×6990、8.7 MB 的截图在慢网上传了 8 分钟）；飞书图片接口不收 avif，再小也转一份 jpeg；超过 10 MB 的动图取第一帧；要转却转不成的不白传，卡上写“没发出去”；其他文件 ≤ 30 MB 按扩展名上传并配对消息类型（mp4 发视频、opus 发语音、其余发文件，见上面「飞书官方接口」的文件一行），更大的卡上写一行“去网页看”；同一个文件只传一次。每次 HTTP 请求有超时：普通接口 `FEISHU_HTTP_TIMEOUT_MS`，上传下载 `FEISHU_TRANSFER_TIMEOUT_MS`（官方 HTTP 实例默认不设超时，`sdk.ts` 包一层补上）。卡片 Markdown 的图片地址只认上传后的图片编号（`img_` 开头），别的地址回 200570，所以正文进卡片前过一遍 `feishuCardMarkdown`：本机图片写成“图片「名字」”，网页图片改成链接，指向本机的链接只留文字；文件本身照上面同发。主人（协作者档访客）在飞书里发的图片、文件、视频、语音（富文本里夹的多张图和视频也算）都下载存成附件随消息交给项目经理，正文里这些资源的占位去掉，只丢表情包。下载走 `messageResource.get` 的响应流，边收边写盘（和网页上传同走 `saveUpload`），不整包进内存；单文件上限 `MAX_UPLOAD_BYTES`（100 MB，也是飞书这个接口的硬上限）。超过上限、下载失败的文件回一句“没收下……压小一点重发试试”（群里访客没有网页权限，不提“去网页上传”）；本档不能发文件的访客发的文件不收（他这条带的和前面气泡里他发的都算），回他一句，告诉他请主人在「访客权限」卡上切到“协作者”；文件都没收下、又没写字的消息不交给项目经理和总助。下载失败记一行日志，带消息编号和出错原因（飞书权限不够、资源过期都能从日志看出来）。
 
-**网页和飞书一致。** 网页上发的用户消息镜像到群里（标“网页”），网页发的总助指令和结果也镜像到单聊；飞书发的消息本来就在账本里。
+**网页和飞书一致（总助单聊与多设备中心）。** 网页上发的用户消息镜像到项目群里（标“网页”），飞书发的消息本来就在账本里。多台电脑登录同一账号时（`docs/account-mesh-design.md`）：全账号共用一份飞书凭证，每台电脑各自建本机项目经理的群并直接调飞书 HTTP 接口发流式卡片和文件，卡片流式接口预算按当前在线设备数平分（`feishuCardkitBudgetShare`，每台最少每秒 5 次）；只有持有 `feishu` 中心租约的那台电脑连 `WSClient` 长连接，并把本机总助的指令、简报、拍板项和“新电脑请求加入”核对卡投影到主人单聊，非中心设备不连 `WSClient`、也不把本机网页上的总助对话往单聊发（各台网页上的总助记录各自保留）。中心收到项目群事件或卡片点击后按群说明里的 `fusa:<设备编号>:pm:<编号>` 标记（及可信设备对齐后的归属广播）分流：归属本机直接处理；归属在线远端设备经双向认证 TLS 转到 `/api/peer/feishu/inbound`（卡片点击最多等 `FEISHU_FORWARD_CARD_TIMEOUT_MS` 拿回 toast，超时先回“已收到，正在处理”）。
 
 **断线与补发（出站补发 + 入站补拉）。** 官方 `WSClient` 默认不查心跳、握手不限时，半开的假活连接（网络切换、梯子、NAT 回收）要等 TCP 报错才发现，期间飞书推来的事件送不到。`sdk.ts` 开官方的心跳看门狗 `wsConfig.pingTimeout`（`FEISHU_WS_PING_TIMEOUT_S`）和握手超时 `handshakeTimeoutMs`（`FEISHU_WS_HANDSHAKE_TIMEOUT_MS`），断开、重连各记一行日志。启动连接与每次断线重连后双向追平：
 - **入站主动补拉**：按 `feishu_inbound_cursors` 记录的各活跃会话（总助单聊 + 未归档项目群）最近入站锚点与最大回溯窗口 `FEISHU_INBOUND_CATCHUP_WINDOW_MS`（进程内重连往前多留 `FEISHU_INBOUND_CATCHUP_OVERLAP_MS` 覆盖半开盲区；`0041` 迁移与空游标会话按当前时刻建锚点，不回放升级前的非幂等消息），用 `p-limit` 控制 `FEISHU_INBOUND_CATCHUP_CONCURRENCY` 路并发调用 `GET im/v1/messages`（单群最多翻 `FEISHU_INBOUND_CATCHUP_MAX_PAGES` 页、`FEISHU_INBOUND_CATCHUP_MAX_MESSAGES` 条），过滤机器人自身消息、撤回消息和合并转发子消息，按时间升序前插到该会话重连后暂存的实时事件之前投递，保留多人群 `@` 与跨气泡带文件语义；游标仅在单条消息真正处理完毕后推进，断线、停机或入站队列满溢出丢弃时不跨过缺口推进游标（溢出时按时间先收最早消息并记结构化日志）；内存 `seenInboundMessages`（LRU 上限 `FEISHU_SEEN_MESSAGES_MAX`）与账本 `client:<conv>:feishu:<message_id>`、`router_commands.client_id` 双重去重，飞书服务端稍后经长连接迟到重推同一 `message_id` 直接跳过；未授予 `im:message.group_msg` 或单群接口报错时按单群记结构化日志静默降级，不阻塞总助单聊与其他群；并发多次闪断重连合并为同一时间只跑一轮，入站闸门按重连代次收放，旧轮收尾不放开新轮闸门。
-- **出站补发**：成员缓存标过期；先把离线期间已经定案的卡（含总助单聊 `router_item` 与 `router_ask`）改掉，再按 `feishu_chats` 的水位补发离线期间的消息（每群最多 `FEISHU_CATCHUP_MAX_MESSAGES` 条，更早的发一行“还有 N 条，去网页看”），并恢复未传完的附件。飞书挂了、凭证失效都不影响网页和 agent，只在状态里报。
+- **出站补发与多设备暂存**：成员缓存标过期；先把离线期间已经定案的卡（含总助单聊 `router_item` 与 `router_ask`）改掉，再按 `feishu_chats` 的水位补发本机项目群离线期间的消息（中心同时补发本机总助单聊，非中心只补本机项目群，每群最多 `FEISHU_CATCHUP_MAX_MESSAGES` 条，更早的发一行“还有 N 条，去网页看”），并恢复未传完的附件。多设备下，中心掉线后下一顺位在线设备在租约到期或让出后自动接管 `WSClient`；非中心设备离线（合盖、关机）期间发到它项目群的消息，由中心立刻在群里回一句离线提示并存进 `feishu_offline_inbox`（每台最多 `FEISHU_OFFLINE_INBOX_MAX_PER_DEVICE` 条、保留 `FEISHU_OFFLINE_INBOX_TTL_MS`），归属设备重新上线后中心按顺序补送，归属设备在正文前标上原发送时刻，超过 24 小时未送达的删掉并在群里提示；卡片点击遇到归属设备离线时直接回 toast 提示上线后再点，不暂存。飞书挂了、凭证失效都不影响网页和 agent，只在状态里报。
 
 ## 性能
 
@@ -248,6 +248,7 @@
 - `src/daemon/feishu/secrets.ts`：凭证文件。
 - `src/daemon/feishu/setup.ts`：设置服务（状态、扫码、手动接入、绑定码、群策略、对齐、断开）。
 - `src/daemon/feishu/service.ts`：通道本身：接账本和传输层，`FeishuLedgerPort` 写明用到的账本接口（含要新加的 `messagesAfter`）。
+- `src/daemon/feishu/account-bot.ts` + `migrations/0042_feishu_offline_inbox.sql`：多设备共用一个飞书机器人时的群归属识别、入站分流、卡片点击转发、离线提示与暂存箱、卡片预算平分（`docs/account-mesh-design.md`）。
 - `src/feishu/cli.ts`：终端命令。
 - 测试骨架：上面每个文件旁边的 `*.test.ts`，以及 `src/daemon/feishu/ledger-wiring.test.ts`（账本一侧的接线，实现步骤可以挪到 `src/daemon/ledger/`）。
 
@@ -291,7 +292,7 @@
   - 只有在补的、等着补的群不排新任务；建群对齐时出站任务排着等对齐做完再发，不丢、不触发补发。流式预览排不进直接丢（下一块文字带着全文），不触发补发。补发最后只收尾断线期间已经结束的那几轮留下的流式卡，还在写的不动。
   - 总助单聊刚连上时也最多补 `FEISHU_CATCHUP_MAX_MESSAGES` 条，更早的发一行“还有 N 条，去网页看”。
   - 提醒卡点“已处理”：回调先回“正在重查”，排队后和网页一样先 `models.list({ vendor, refresh: true })` 再 `recheckUserBlocker`；解开了账本推变化、卡跟着改，还不能用在群里说一句。
-- 管理 socket 的客户端从 `src/tunnel/main.ts` 抽到 `src/tunnel/admin-client.ts`，隧道和飞书命令共用；`/feishu/*` 路由挂在 `daemon/tunnel/admin.ts`，请求体校验和界面服务共用 `daemon/feishu/setup.ts` 里的 zod schema。
+- 管理 socket 的客户端在 `src/admin/client.ts`，飞书命令和组网命令共用；`/feishu/*` 与 `/mesh/*` 路由挂在 `daemon/admin/socket.ts`，请求体校验和界面服务共用 `daemon/feishu/setup.ts` 里的 zod schema。
 
 ## 验收方法
 

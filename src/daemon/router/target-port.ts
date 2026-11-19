@@ -1,7 +1,7 @@
 // Router 跨设备统一目标端口（docs/router-design.md §6.3）：
 // - LocalTargetPort：直通本机 SqliteLedger，O(1) 索引解析目标，零拷贝转发原话与已上传附件引用；
-// - PeerTargetPort：经 peers/（Tailscale TCP 或 SSH 隧道 Unix Socket）跨设备拉取 Digest、流式上传附件并转发操作；
-// - RouterTargetRegistry：按设备管理端口，使用 lru-cache（上限 MAX_PEERS）做 10s Digest 缓存、5s 离线短暂退避，设备移除/地址变化即刻失效。
+// - PeerTargetPort：经组网（局域网直连或中继，daemon/mesh/）跨设备拉取 Digest、上传附件并转发操作；
+// - RouterTargetRegistry：按设备管理端口，使用 lru-cache（上限 MESH_MAX_DEVICES_PER_ACCOUNT）做 10s Digest 缓存、5s 离线短暂退避，设备移除/地址变化即刻失效。
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
@@ -18,10 +18,9 @@ import {
   MAX_ATTACHMENTS_PER_MESSAGE,
   MAX_MODEL_CHARS,
   MAX_PATH_BYTES,
-  MAX_PEERS,
+  MESH_MAX_DEVICES_PER_ACCOUNT,
   MAX_TASK_BYTES,
   PM_MODES,
-  PEER_DEVICE_HEADER,
   PRODUCT_NAME,
   ROUTER_ATTACHMENT_ID_MAX_CHARS,
   ROUTER_OP_CLIENT_ID_MAX_CHARS,
@@ -50,9 +49,8 @@ import {
 } from "../../shared/index.ts";
 import { probeWorkspace as defaultProbeWorkspace } from "../git/index.ts";
 import type { SqliteLedger } from "../ledger/index.ts";
+import { agentFetch } from "../mesh/agent-fetch.ts";
 import type { ProxyTarget } from "../peers/proxy.ts";
-import { PEER_UNAUTHORIZED } from "../peers/service.ts";
-import { createUnixHttpPool, type ResolvedPeerTarget, type UnixHttpPool } from "../peers/transport.ts";
 import { resolveUpload } from "../uploads.ts";
 import type { ProjectCatalogDetail } from "../../shared/project-catalog.ts";
 
@@ -516,7 +514,6 @@ export interface PeersLike {
   readonly selfId: DeviceId;
   list(): DeviceInfo[];
   target(id: string): ProxyTarget | null;
-  forget(id: DeviceId): void;
 }
 
 interface CachedPeerDigestEntry {
@@ -531,8 +528,6 @@ export interface RouterTargetRegistryOptions {
   localPort: RouterTargetPort;
   peers?: PeersLike;
   uploadsDir?: string;
-  fetch?: typeof fetch;
-  unixPool?: UnixHttpPool;
   now?: () => number;
   peerDigestTtlMs?: number;
   peerDigestTimeoutMs?: number;
@@ -552,14 +547,9 @@ export interface RouterTargetRegistry {
   close(): void;
 }
 
-function resolvePeerEndpoint(target: ProxyTarget): ResolvedPeerTarget | null {
-  if (target.resolve !== undefined) return target.resolve();
-  return target.url !== "" ? { kind: "tcp", origin: target.url } : null;
-}
-
-function endpointFingerprint(endpoint: ResolvedPeerTarget | null): string {
-  if (endpoint === null) return "none";
-  return endpoint.kind === "unix" ? `unix:${endpoint.socketPath}` : `tcp:${endpoint.origin}`;
+/** 缓存按“能不能连”分开记：设备进出信任表时作废。 */
+function endpointFingerprint(target: ProxyTarget | null): string {
+  return target === null ? "none" : "mesh";
 }
 
 function isAbortTimeoutError(err: unknown): boolean {
@@ -570,21 +560,8 @@ function isAbortTimeoutError(err: unknown): boolean {
   return false;
 }
 
-function isPeerUnauthorizedBody(status: number, text: string): boolean {
-  if (status !== 401) return false;
-  try {
-    const parsed = JSON.parse(text) as { code?: unknown; error?: unknown };
-    return parsed.code === PEER_UNAUTHORIZED || parsed.error === PEER_UNAUTHORIZED;
-  } catch {
-    return false;
-  }
-}
-
 export function createRouterTargetRegistry(options: RouterTargetRegistryOptions): RouterTargetRegistry {
   const { localPort, peers, uploadsDir } = options;
-  const fetchImpl = options.fetch ?? fetch;
-  const unixPool = options.unixPool ?? createUnixHttpPool();
-  const ownsUnixPool = options.unixPool === undefined;
   const now = options.now ?? Date.now;
   const digestTtlMs = options.peerDigestTtlMs ?? ROUTER_PEER_DIGEST_TTL_MS;
   const digestTimeoutMs = options.peerDigestTimeoutMs ?? ROUTER_PEER_DIGEST_TIMEOUT_MS;
@@ -592,8 +569,8 @@ export function createRouterTargetRegistry(options: RouterTargetRegistryOptions)
   const dispatchTimeoutMs = options.peerDispatchTimeoutMs ?? ROUTER_PEER_DISPATCH_TIMEOUT_MS;
 
   const closing = new AbortController();
-  // 严守缓存军规：带硬上限 MAX_PEERS，按时间窗校验正/负缓存，设备移除或连法变更立即失效
-  const digestCache = new LRUCache<DeviceId, CachedPeerDigestEntry>({ max: MAX_PEERS });
+  // 严守缓存军规：带硬上限 MESH_MAX_DEVICES_PER_ACCOUNT，按时间窗校验正/负缓存，设备移除立即失效
+  const digestCache = new LRUCache<DeviceId, CachedPeerDigestEntry>({ max: MESH_MAX_DEVICES_PER_ACCOUNT });
 
   const pruneUnpairedFromCache = (devices: readonly DeviceInfo[]) => {
     const activeIds = new Set(devices.filter((d) => !d.self).map((d) => d.id));
@@ -603,40 +580,27 @@ export function createRouterTargetRegistry(options: RouterTargetRegistryOptions)
   };
 
   const callPeer = async (
-    peerId: DeviceId,
     target: ProxyTarget,
-    endpoint: ResolvedPeerTarget,
     path: string,
-    init: { method: string; headers?: Record<string, string>; body?: RequestInit["body"]; timeoutMs: number },
+    init: { method: string; headers?: Record<string, string>; body?: string | Uint8Array; timeoutMs: number },
   ): Promise<{ status: number; text: string }> => {
-    const headers: Record<string, string> = {
-      authorization: `Bearer ${target.token}`,
-      [PEER_DEVICE_HEADER]: peers?.selfId ?? localPort.deviceId,
-      ...init.headers,
-    };
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), init.timeoutMs);
     const signal = AbortSignal.any([controller.signal, closing.signal]);
     try {
-      const reqInit: RequestInit = {
+      const res = await agentFetch(target.agent, path, {
         method: init.method,
-        headers,
-        redirect: "manual",
+        headers: init.headers ?? {},
         signal,
         ...(init.body !== undefined ? { body: init.body } : {}),
-      };
-      const res =
-        endpoint.kind === "unix"
-          ? await (target.unixPool ?? unixPool).fetch(endpoint.socketPath, path, reqInit)
-          : await fetchImpl(endpoint.origin + path, reqInit);
+      });
       const text = await res.text();
       return { status: res.status, text };
     } catch (err) {
-      target.onOffline?.();
       if (controller.signal.aborted || isAbortTimeoutError(err)) {
         throw new RouterTargetError(
           "device_timeout",
-          `连接设备「${target.name}」超时，请检查网络或隧道状态后重试`,
+          `连接设备「${target.name}」超时，请检查网络后重试`,
         );
       }
       throw new RouterTargetError(
@@ -655,8 +619,7 @@ export function createRouterTargetRegistry(options: RouterTargetRegistryOptions)
 
     async getDigest(): Promise<DigestFetchResult> {
       const target = peers?.target(info.id) ?? null;
-      const endpoint = target ? resolvePeerEndpoint(target) : null;
-      const epKey = endpointFingerprint(endpoint);
+      const epKey = endpointFingerprint(target);
       const t = now();
       const cached = digestCache.get(info.id);
       if (cached !== undefined && cached.endpointKey === epKey && t < cached.expiresAt) {
@@ -666,8 +629,7 @@ export function createRouterTargetRegistry(options: RouterTargetRegistryOptions)
         return { online: false, digest: null, error: cached.error };
       }
 
-      if (target === null || endpoint === null) {
-        target?.onOffline?.();
+      if (target === null) {
         const errText = `设备「${info.name}」当前离线`;
         digestCache.set(info.id, {
           endpointKey: epKey,
@@ -680,15 +642,10 @@ export function createRouterTargetRegistry(options: RouterTargetRegistryOptions)
       }
 
       try {
-        const { status, text } = await callPeer(info.id, target, endpoint, API_PATHS.routerDigest, {
+        const { status, text } = await callPeer(target, API_PATHS.routerDigest, {
           method: "GET",
           timeoutMs: digestTimeoutMs,
         });
-        if (isPeerUnauthorizedBody(status, text)) {
-          digestCache.delete(info.id);
-          peers?.forget(info.id);
-          return { online: false, digest: null, error: `设备「${info.name}」已解除与本机的配对` };
-        }
         if (status < 200 || status >= 300) {
           const errText = `设备「${info.name}」返回异常（HTTP ${status}）`;
           digestCache.set(info.id, {
@@ -723,9 +680,7 @@ export function createRouterTargetRegistry(options: RouterTargetRegistryOptions)
 
     async executeOp(op: RouterTargetOp): Promise<RouterTargetOpResult> {
       const target = peers?.target(info.id) ?? null;
-      const endpoint = target ? resolvePeerEndpoint(target) : null;
-      if (target === null || endpoint === null) {
-        target?.onOffline?.();
+      if (target === null) {
         throw new RouterTargetError(
           "device_offline",
           `设备「${info.name}」当前离线，请确认设备在线后再试`,
@@ -744,17 +699,12 @@ export function createRouterTargetRegistry(options: RouterTargetRegistryOptions)
         for (const att of localAttachments) {
           const bytes = await readFile(att.path);
           const uploadPath = `${API_PATHS.uploads}?name=${encodeURIComponent(att.name)}`;
-          const upRes = await callPeer(info.id, target, endpoint, uploadPath, {
+          const upRes = await callPeer(target, uploadPath, {
             method: "POST",
             headers: { "content-type": att.mime || "application/octet-stream" },
             body: bytes,
             timeoutMs: dispatchTimeoutMs,
           });
-          if (isPeerUnauthorizedBody(upRes.status, upRes.text)) {
-            digestCache.delete(info.id);
-            peers?.forget(info.id);
-            throw new RouterTargetError("device_not_found", `设备「${info.name}」已解除与本机的配对`);
-          }
           if (upRes.status < 200 || upRes.status >= 300) {
             let reason = `上传附件「${att.name}」到设备「${info.name}」失败`;
             try {
@@ -783,18 +733,12 @@ export function createRouterTargetRegistry(options: RouterTargetRegistryOptions)
         forwardedOp = rest;
       }
 
-      const res = await callPeer(info.id, target, endpoint, API_PATHS.routerTargetOps, {
+      const res = await callPeer(target, API_PATHS.routerTargetOps, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(forwardedOp),
         timeoutMs: dispatchTimeoutMs,
       });
-
-      if (isPeerUnauthorizedBody(res.status, res.text)) {
-        digestCache.delete(info.id);
-        peers?.forget(info.id);
-        throw new RouterTargetError("device_not_found", `设备「${info.name}」已解除与本机的配对`);
-      }
 
       // 旧版设备不认识 project.show：按严格结构拒成 400
       if (op.kind === "project.show" && res.status === 400) {
@@ -840,8 +784,9 @@ export function createRouterTargetRegistry(options: RouterTargetRegistryOptions)
           name: localPort.deviceName,
           platform: process.platform,
           self: true,
-          url: null,
-          transport: { kind: "local" },
+          online: true,
+          link: "local",
+          fingerprint: null,
         },
       ];
     }
@@ -893,7 +838,6 @@ export function createRouterTargetRegistry(options: RouterTargetRegistryOptions)
     close() {
       closing.abort();
       digestCache.clear();
-      if (ownsUnixPool) unixPool.closeAll();
     },
   };
 }

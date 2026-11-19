@@ -181,12 +181,10 @@ describe.runIf(process.platform === "win32")("Windows 真机集成：命名管�
       [ENV_HOME]: dataHome,
       [ENV_PORT]: "0",
     };
-    const noTailnet = { current: () => null, refresh: async () => null };
 
     const first: RunningDaemon = await startDaemon({
       userHome,
       env,
-      tailnet: noTailnet,
       log: () => {},
     });
     cleanups.push(() => first.stop());
@@ -195,8 +193,7 @@ describe.runIf(process.platform === "win32")("Windows 真机集成：命名管�
       startDaemon({
         userHome,
         env,
-        tailnet: noTailnet,
-        log: () => {},
+          log: () => {},
       }),
     ).rejects.toThrow(DaemonAlreadyRunningError);
 

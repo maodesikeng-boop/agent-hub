@@ -9,8 +9,10 @@ import {
   DEVICE_OFFLINE_WS_CLOSE_CODE,
   vendorSpec,
   type AgentVendor,
+  type AccountStatusView,
   type ApiErrorBody,
   type BrowserSessionsResponse,
+  type DeviceFingerprint,
   type LoginLinkResponse,
   type ModelsResponse,
   type PmMemoryFileDetail,
@@ -48,9 +50,9 @@ export const PATCH_NAMES = [
   "provider-login-code",
   "provider-failed",
   "vendor-sync-preview",
-  "browsers-pending",
-  "public-access-on",
-  "public-access-long-domain",
+  "browsers-multi",
+  "account-approvals",
+  "account-long-name",
 ] as const;
 export type PatchName = (typeof PATCH_NAMES)[number];
 
@@ -377,24 +379,42 @@ const PATCHES: Record<PatchName, (page: Page) => Promise<unknown>> = {
     ),
   "provider-failed": (page) => providers(page, (v) => (v === "agy" ? { installed: false, version: null, accountSummary: null, canInstall: true, canUpdate: false, canSignOut: false, availability: "not_installed", job: job("failed", INSTALL_LOG) } : {})),
   "vendor-sync-preview": (page) => fixedJson(page, anyDevice(API_PATHS.vendorSyncPreview), SYNC_PREVIEW),
-  "browsers-pending": (page) =>
+  "browsers-multi": (page) =>
     editJson<BrowserSessionsResponse>(page, localOnly(API_PATHS.browserSessions), (body) => ({
       sessions: [
         ...body.sessions,
-        { id: "pending-1", userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 19_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/19.1 Mobile/15E148 Safari/604.1", createdAt: NOW - 120_000, lastSeenAt: NOW - 60_000, current: false, status: "pending_approval", viaPublic: true, clientIp: "203.0.113.24" },
-        { id: "old-1", userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/19.1 Safari/605.1.15", createdAt: NOW - 30 * 24 * HOUR, lastSeenAt: NOW - 3 * 24 * HOUR, current: false, status: "active" },
+        { id: "iphone-1", userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 19_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/19.1 Mobile/15E148 Safari/604.1", createdAt: NOW - 2 * HOUR, lastSeenAt: NOW - 60_000, current: false },
+        { id: "old-1", userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/19.1 Safari/605.1.15", createdAt: NOW - 30 * 24 * HOUR, lastSeenAt: NOW - 3 * 24 * HOUR, current: false },
       ],
     })),
-  "public-access-on": (page) => editState(page, (state) => ({ ...state, publicEntry: { enabled: true, hostname: "studio-mac.tail1234.ts.net", funnelCommand: "tailscale funnel --bg --https=443 unix:/tmp/fusa-ui-shots/standard/home/run/public.sock" } }), localOnly(API_PATHS.state)),
-  "public-access-long-domain": (page) =>
-    editState(page, (state) => ({
-      ...state,
-      publicEntry: {
-        enabled: true,
-        hostname: "studio-mac-pro-with-an-unusually-long-machine-name.tailnet-of-a-very-long-organization-name-1234.ts.net",
-        funnelCommand: "tailscale funnel --bg --https=443 unix:/tmp/fusa-ui-shots/standard/home/run/a-very-long-nested-directory-name/another-level/public.sock",
-      },
-    }), localOnly(API_PATHS.state)),
+  "account-approvals": (page) =>
+    editJson<AccountStatusView>(page, localOnly(API_PATHS.account), (body) =>
+      body.state === "signed_in"
+        ? {
+            ...body,
+            feishuHolder: body.devices[0]?.id ?? null,
+            approvals: [
+              {
+                requestId: "33333333-3333-4333-8333-333333333333",
+                device: {
+                  id: "33333333-3333-4333-8333-333333333333",
+                  name: "Home Windows",
+                  platform: "win32",
+                  fingerprint: "a".repeat(64) as DeviceFingerprint,
+                },
+                requestedAt: NOW - 60_000,
+                expiresAt: NOW + 540_000,
+                sas: "042917",
+              },
+            ],
+          }
+        : body,
+    ),
+  "account-long-name": (page) =>
+    fixedJson(page, localOnly(API_PATHS.account), {
+      state: "signed_out",
+      lastError: null,
+    } satisfies AccountStatusView),
 };
 
 /**
@@ -406,10 +426,9 @@ export async function applyPatch(page: Page, name: string): Promise<void> {
   await PATCHES[name as PatchName](page);
 }
 
-/** 只是取东西、不改数据的 POST：给固定的回包，界面上的二维码、邀请码才每次一样。 */
+/** 只是取东西、不改数据的 POST：给固定的回包，界面上的二维码才每次一样。 */
 const READ_LIKE_POSTS: ReadonlyArray<{ url: RegExp; body: unknown }> = [
   { url: localOnly(API_PATHS.loginLinks), body: { url: "http://127.0.0.1:4317/auth?link=ui-polish-fixed-link", expiresAt: NOW + 10 * 60_000 } satisfies LoginLinkResponse },
-  { url: localOnly(API_PATHS.deviceInvites), body: { code: "FUSA-7Q2K-9XWD", url: "https://studio-mac.tail1234.ts.net", expiresAt: NOW + 10 * 60_000 } },
 ];
 
 /**

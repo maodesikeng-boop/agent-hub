@@ -12,7 +12,6 @@ import { resolveHubPaths } from "../shared/paths.ts";
 import { startDaemon, type RunningDaemon } from "./daemon.ts";
 import { DESKTOP_CONTRACT, reportFatalError, reportStartupFailure, runDaemonProcess } from "./entry.ts";
 
-const NO_TAILNET = { current: () => null, refresh: async () => null };
 
 describe("守护进程启动失败：终端上的输出", () => {
   let dir: string;
@@ -48,10 +47,10 @@ describe("守护进程启动失败：终端上的输出", () => {
   });
 
   it("同一个端口起两个守护进程：终端上只有一句话加 hint，没有堆栈、没有英文异常", async () => {
-    const first = await startDaemon({ userHome, env: envOf("first", "0"), tailnet: NO_TAILNET, log: () => {} });
+    const first = await startDaemon({ userHome, env: envOf("first", "0"), log: () => {} });
     running.push(first);
 
-    await runDaemonProcess({ userHome, env: envOf("second", String(first.port)), tailnet: NO_TAILNET });
+    await runDaemonProcess({ userHome, env: envOf("second", String(first.port)) });
 
     expect(process.exitCode).toBe(1);
     expect(logs).toEqual([]);
@@ -66,7 +65,7 @@ describe("守护进程启动失败：终端上的输出", () => {
   });
 
   it("AGENT_HUB_PORT=abc：中文，写出填的是什么，不是英文异常", async () => {
-    await runDaemonProcess({ userHome, env: envOf("bad", "abc"), tailnet: NO_TAILNET });
+    await runDaemonProcess({ userHome, env: envOf("bad", "abc") });
 
     expect(process.exitCode).toBe(1);
     expect(errors).toEqual([`${LOG_PREFIX} ${LOCAL_ERRORS.bad_port.text}（现在是 abc）。${LOCAL_ERRORS.bad_port.hint}`]);
@@ -75,8 +74,8 @@ describe("守护进程启动失败：终端上的输出", () => {
 
   it("已经有守护进程在跑：一句话，不再启动第二个", async () => {
     const env = envOf("same", "0");
-    running.push(await startDaemon({ userHome, env, tailnet: NO_TAILNET, log: () => {} }));
-    await runDaemonProcess({ userHome, env, tailnet: NO_TAILNET });
+    running.push(await startDaemon({ userHome, env, log: () => {} }));
+    await runDaemonProcess({ userHome, env });
 
     expect(process.exitCode).toBe(1);
     expect(errors).toHaveLength(1);
@@ -125,11 +124,9 @@ describe("守护进程启动失败：终端上的输出", () => {
       const subHome = home(`sub-${kind}`);
       const script = `
         import { runDaemonProcess } from "./src/daemon/entry.ts";
-        const NO_TAILNET = { current: () => null, refresh: async () => null };
         await runDaemonProcess({
           userHome: ${JSON.stringify(userHome)},
           env: { ...process.env, AGENT_HUB_HOME: ${JSON.stringify(subHome)}, AGENT_HUB_PORT: "0" },
-          tailnet: NO_TAILNET,
         });
         if (${JSON.stringify(kind)} === "uncaughtException") {
           setImmediate(() => { throw new Error("crash-by-uncaught"); });
@@ -167,11 +164,9 @@ describe("守护进程启动失败：终端上的输出", () => {
     const subHome = home("sub-double");
     const script = `
       import { runDaemonProcess } from "./src/daemon/entry.ts";
-      const NO_TAILNET = { current: () => null, refresh: async () => null };
       await runDaemonProcess({
         userHome: ${JSON.stringify(userHome)},
         env: { ...process.env, AGENT_HUB_HOME: ${JSON.stringify(subHome)}, AGENT_HUB_PORT: "0" },
-        tailnet: NO_TAILNET,
       });
       setImmediate(() => {
         setImmediate(() => { throw new Error("second-during-shutdown"); });
@@ -201,7 +196,7 @@ describe("守护进程启动失败：终端上的输出", () => {
       if (supervised) env[DESKTOP_CONTRACT.supervisedEnv] = "test";
       const script = `
         import { runDaemonProcess } from "./src/daemon/entry.ts";
-        await runDaemonProcess({ userHome: ${JSON.stringify(userHome)}, tailnet: { current: () => null, refresh: async () => null } });
+        await runDaemonProcess({ userHome: ${JSON.stringify(userHome)} });
         // 守护进程的子进程（agent）拿不到监管标识
         console.log("child-env:" + (process.env[${JSON.stringify(DESKTOP_CONTRACT.supervisedEnv)}] ?? "none"));
       `;
@@ -277,7 +272,7 @@ describe("守护进程启动失败：终端上的输出", () => {
         `console.error("Fatal: simulated database corruption");\nprocess.exit(1);\n`,
       );
 
-      const external = await startDaemon({ userHome, env: envOf("ext", "0"), tailnet: NO_TAILNET, log: () => {} });
+      const external = await startDaemon({ userHome, env: envOf("ext", "0"), log: () => {} });
       running.push(external);
 
       const swiftMainPath = join(dir, "main.swift");

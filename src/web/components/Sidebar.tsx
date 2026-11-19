@@ -267,7 +267,7 @@ function DeviceGroup({ group, open, onToggle, children }: { group: SidebarGroup;
 function sameDeviceSettings(a: DeviceSettings | null | undefined, b: DeviceSettings | null | undefined): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
-  if (a.tunnel !== b.tunnel || a.publicEntry !== b.publicEntry || a.repoDir !== b.repoDir || a.onChanged !== b.onChanged) return false;
+  if (a.onChanged !== b.onChanged) return false;
   if (a.devices.length !== b.devices.length) return false;
   return a.devices.every((d, i) => {
     const o = b.devices[i]!;

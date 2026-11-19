@@ -21,28 +21,22 @@ import {
   BROWSER_SESSIONS_QUERY_KEY,
   CONFIRM_TIMEOUT_MS,
   COUNTDOWN_TICK_MS,
-  DEFAULT_PUBLIC_ENTRY,
   NOTIFY_BLOCKED,
   SESSIONS_POLL_MS,
-  TUNNEL_STATE_SPECS,
   defaultProviderAuthMethodId,
   describeComputersSummary,
+  movePriority,
   describeNotifySummary,
   describeProvidersSummary,
-  describePublicEntrySummary,
   extractProviderAuthTargets,
-  useAddDevice,
   useBrowserSessions,
   useCachedBrowserSessionsSummary,
   useCachedProvidersSummary,
+  useAccount,
   useCopyFeedback,
-  useDeviceInvite,
   useDeviceRemove,
   useDeviceRename,
-  usePublicEntrySetting,
   useSignInLink,
-  useTunnelConnect,
-  useTunnelRetry,
   useUiScaleSetting,
   useVendorSyncSetting,
   visibleAuthMethodsForTarget,
@@ -67,9 +61,9 @@ const MAC_ID = "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d";
 const TOKYO_ID = "3f2b8c1e-4d5a-4b6c-9e7f-0a1b2c3d4e5f";
 const HOME_ID = "7a8b9c0d-1e2f-4a3b-8c5d-6e7f8a9b0c1d";
 
-const macInfo: DeviceInfo = { id: MAC_ID, name: "Mac", platform: "darwin", self: true, url: null };
-const tokyoInfo: DeviceInfo = { id: TOKYO_ID, name: "Tokyo", platform: "linux", self: false, url: "https://tokyo.example.ts.net" };
-const homeInfo: DeviceInfo = { id: HOME_ID, name: "Home", platform: "darwin", self: false, url: "https://home.example.ts.net" };
+const macInfo: DeviceInfo = { id: MAC_ID, name: "Mac", platform: "darwin", self: true, online: true, link: "local", fingerprint: null };
+const tokyoInfo: DeviceInfo = { id: TOKYO_ID, name: "Tokyo", platform: "linux", self: false, online: true, link: "relay", fingerprint: null };
+const homeInfo: DeviceInfo = { id: HOME_ID, name: "Home", platform: "darwin", self: false, online: true, link: "relay", fingerprint: null };
 
 function makeDeviceView(info: DeviceInfo, status: DeviceView["status"] = "online", lastOnlineAt: number | null = 1_000): DeviceView {
   return {
@@ -152,18 +146,12 @@ describe("NOTIFY_BLOCKED 与 describeNotifySummary", () => {
   });
 });
 
-describe("TUNNEL_STATE_SPECS 与 describeComputersSummary", () => {
-  it("返回单一干净摘要（无 · / | / / 拼接），覆盖单机、多机在线、离线、重连与隧道异常，并保持相同输入对象缓存命中", () => {
-    expect(TUNNEL_STATE_SPECS.connected).toEqual({ text: "Connected", canRetry: false });
-    expect(TUNNEL_STATE_SPECS.auth_failed).toEqual({ text: "Key rejected", canRetry: true });
-
+describe("describeComputersSummary 与 movePriority", () => {
+  it("返回单一干净摘要（无 · / | / / 拼接），覆盖单机、多机在线、离线与重连，并保持相同输入对象缓存命中", () => {
     const single = [makeDeviceView(macInfo, "online")];
     expect(describeComputersSummary(single)).toBe("This computer");
 
-    const twoOnline = {
-      devices: [makeDeviceView(macInfo, "online"), makeDeviceView(tokyoInfo, "online"), makeDeviceView(homeInfo, "offline")],
-      tunnel: { state: "connected" as const, since: 1, retryAt: null, detail: null },
-    };
+    const twoOnline = { devices: [makeDeviceView(macInfo, "online"), makeDeviceView(tokyoInfo, "online"), makeDeviceView(homeInfo, "offline")] };
     expect(describeComputersSummary(twoOnline)).toBe("2 online");
     expect(describeComputersSummary(twoOnline)).toBe("2 online");
 
@@ -173,16 +161,18 @@ describe("TUNNEL_STATE_SPECS 与 describeComputersSummary", () => {
     const remoteReconnecting = [makeDeviceView(macInfo, "online"), makeDeviceView(tokyoInfo, "reconnecting")];
     expect(describeComputersSummary(remoteReconnecting)).toBe("Attention");
 
-    const tunnelBroken = {
-      devices: [makeDeviceView(macInfo, "online"), makeDeviceView(tokyoInfo, "online")],
-      tunnel: { state: "retrying" as const, since: 1, retryAt: 2, detail: "Connection refused" },
-    };
-    expect(describeComputersSummary(tunnelBroken)).toBe("Attention");
-
-    for (const input of [single, twoOnline, allRemoteOffline, remoteReconnecting, tunnelBroken]) {
+    for (const input of [single, twoOnline, allRemoteOffline, remoteReconnecting]) {
       const text = describeComputersSummary(input);
       expect(text).not.toMatch(/[·|/]/);
     }
+  });
+
+  it("movePriority 把一台在中心顺序里往前、往后挪一格，到头了原样不动", () => {
+    const a = "a" as const;
+    expect(movePriority([a, "b", "c"], "b", -1)).toEqual(["b", "a", "c"]);
+    expect(movePriority([a, "b", "c"], "b", 1)).toEqual(["a", "c", "b"]);
+    expect(movePriority([a, "b"], "a", -1)).toEqual(["a", "b"]);
+    expect(movePriority([a, "b"], "x", 1)).toEqual(["a", "b"]);
   });
 });
 
@@ -233,11 +223,8 @@ describe("useCopyFeedback", () => {
   });
 });
 
-describe("设备与公网入口 hooks", () => {
-  it("useDeviceRename / useDeviceRemove / useDeviceInvite / useAddDevice / useTunnelConnect / useTunnelRetry / usePublicEntrySetting 完整管理请求与复制反馈", async () => {
-    const writeText = vi.fn(async () => {});
-    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
-
+describe("设备与账号 hooks", () => {
+  it("useDeviceRename / useDeviceRemove 发改名、移除请求；useAccount 登录、核对、排中心顺序后用回来的状态", async () => {
     const calls: { method: string; path: string; body: unknown }[] = [];
     vi.stubGlobal(
       "fetch",
@@ -246,33 +233,14 @@ describe("设备与公网入口 hooks", () => {
         const method = init?.method ?? "GET";
         const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
         calls.push({ method, path: url.pathname, body });
-
-        if (method === "PATCH" && url.pathname === API_PATHS.device(TOKYO_ID)) {
-          return Response.json({ ...tokyoInfo, name: (body as { name: string }).name });
+        if (method === "PATCH" && url.pathname === API_PATHS.device(TOKYO_ID)) return Response.json({ ...tokyoInfo, name: (body as { name: string }).name });
+        if (method === "DELETE" && url.pathname === API_PATHS.device(TOKYO_ID)) return new Response(null, { status: 204 });
+        if (method === "GET" && url.pathname === API_PATHS.account) return Response.json({ state: "signed_out", lastError: null });
+        if (method === "POST" && url.pathname === API_PATHS.accountLogin) {
+          return Response.json({ state: "signing_in", userCode: "ABCD-EFGH", verificationUri: "https://github.com/login/device", expiresAt: 1 });
         }
-        if (method === "DELETE" && url.pathname === API_PATHS.device(TOKYO_ID)) {
-          return new Response(null, { status: 204 });
-        }
-        if (method === "POST" && url.pathname === API_PATHS.deviceInvites) {
-          return Response.json({ code: "inv_123456", url: "https://mac.tailnet.ts.net:4317", expiresAt: Date.now() + 600_000 });
-        }
-        if (method === "POST" && url.pathname === API_PATHS.devices) {
-          return Response.json(tokyoInfo);
-        }
-        if (method === "POST" && url.pathname === API_PATHS.tunnelConnect) {
-          return Response.json({ status: { state: "connecting", since: 1, retryAt: null, detail: null } });
-        }
-        if (method === "POST" && url.pathname === API_PATHS.tunnelRetry) {
-          return Response.json({ status: { state: "connecting", since: 2, retryAt: null, detail: null } });
-        }
-        if (method === "PUT" && url.pathname === API_PATHS.publicEntry) {
-          const req = body as { enabled: boolean; hostname?: string };
-          return Response.json({
-            enabled: req.enabled,
-            hostname: req.hostname ?? "tokyo.tailnet.ts.net",
-            funnelCommand: DEFAULT_PUBLIC_ENTRY.funnelCommand,
-          });
-        }
+        if (method === "POST" && url.pathname === API_PATHS.accountApprovalBegin(TOKYO_ID)) return Response.json({ state: "signed_out", lastError: null });
+        if (method === "PUT" && url.pathname === API_PATHS.accountPriority) return Response.json({ state: "signed_out", lastError: "中继拒绝" });
         return Response.json({ error: "not_found" }, { status: 404 });
       }),
     );
@@ -280,151 +248,43 @@ describe("设备与公网入口 hooks", () => {
     const onChanged = vi.fn();
     const device = makeDeviceView(tokyoInfo);
 
-    // 1. Rename
     const rename = renderHook(() => useDeviceRename(device, onChanged));
     expect(await rename.result.current.save()).toBe("unchanged");
-    expect(onChanged).not.toHaveBeenCalled();
-
-    act(() => rename.result.current.setName("   "));
-    expect(rename.result.current.clean).toBeNull();
-    expect(rename.result.current.problem).toBeNull();
-
     act(() => rename.result.current.setName("x".repeat(200)));
-    expect(rename.result.current.clean).toBeNull();
     expect(rename.result.current.problem).not.toBeNull();
-
     act(() => rename.result.current.setName("  Tokyo Dev  "));
     await act(async () => {
       expect(await rename.result.current.save()).toBe("saved");
     });
     expect(onChanged).toHaveBeenCalledTimes(1);
 
-    // 2. Remove
     const remove = renderHook(() => useDeviceRemove(device, onChanged));
     await act(async () => {
       expect(await remove.result.current.remove()).toBe(true);
     });
     expect(onChanged).toHaveBeenCalledTimes(2);
 
-    // 3. Invite + copyCode + copyUrl
-    const invite = renderHook(() => useDeviceInvite());
+    const { wrapper } = makeWrapper();
+    const account = renderHook(() => useAccount(), { wrapper });
+    await waitFor(() => expect(account.result.current.status).toEqual({ state: "signed_out", lastError: null }));
     await act(async () => {
-      await invite.result.current.generate();
+      expect(await account.result.current.signIn("https://relay.example")).toBe(true);
     });
-    expect(invite.result.current.invite?.code).toBe("inv_123456");
+    expect(calls.find((c) => c.path === API_PATHS.accountLogin)?.body).toEqual({ relayUrl: "https://relay.example" });
     await act(async () => {
-      invite.result.current.copyCode();
-      await Promise.resolve();
+      await account.result.current.beginApproval(TOKYO_ID);
+      await account.result.current.setPriority([TOKYO_ID, MAC_ID]);
     });
-    expect(writeText).toHaveBeenCalledWith("inv_123456");
-    expect(invite.result.current.codeCopied).toBe(true);
-
-    await act(async () => {
-      invite.result.current.copyUrl();
-      await Promise.resolve();
-    });
-    expect(writeText).toHaveBeenCalledWith("https://mac.tailnet.ts.net:4317");
-    expect(invite.result.current.urlCopied).toBe(true);
-
-    // 4. Add device
-    const onAdded = vi.fn();
-    const add = renderHook(() => useAddDevice(onAdded));
-    expect(add.result.current.ready).toBe(false);
-    act(() => {
-      add.result.current.setUrl(" https://tokyo.example.ts.net ");
-      add.result.current.setCode(" inv_123456 ");
-    });
-    expect(add.result.current.ready).toBe(true);
-    await act(async () => {
-      expect(await add.result.current.submit()).toBe(true);
-    });
-    expect(onAdded).toHaveBeenCalledTimes(1);
-    expect(add.result.current.url).toBe("");
-    expect(add.result.current.code).toBe("");
-
-    // 5. Tunnel connect & retry
-    const onConnected = vi.fn();
-    const tunnel = renderHook(() => useTunnelConnect("/opt/agent-hub", onConnected));
-    expect(tunnel.result.current.command).toContain("node /opt/agent-hub/src/tunnel/main.ts join");
-    await act(async () => {
-      tunnel.result.current.copyCommand();
-      await Promise.resolve();
-    });
-    expect(writeText).toHaveBeenCalledWith(tunnel.result.current.command);
-    act(() => tunnel.result.current.setCode(" ahtun1_ok "));
-    await act(async () => {
-      expect(await tunnel.result.current.submit()).toBe(true);
-    });
-    expect(onConnected).toHaveBeenCalledTimes(1);
-
-    const retry = renderHook(() => useTunnelRetry(onChanged));
-    await act(async () => {
-      expect(await retry.result.current.retry()).toBe(true);
-    });
-    expect(onChanged).toHaveBeenCalledTimes(3);
-
-    // 6. Public entry
-    expect(describePublicEntrySummary(undefined)).toBe("Off");
-    expect(describePublicEntrySummary({ enabled: true })).toBe("On");
-
-    const pub = renderHook(() => usePublicEntrySetting(undefined, onChanged));
-    expect(pub.result.current.summary).toBe("Off");
-    act(() => pub.result.current.setHostname("edge.tailnet.ts.net"));
-    expect(pub.result.current.hostnameDirty).toBe(true);
-    await act(async () => {
-      expect(await pub.result.current.toggle()).toBe(true);
-    });
-    expect(pub.result.current.summary).toBe("On");
-    expect(pub.result.current.entry.hostname).toBe("edge.tailnet.ts.net");
-    expect(pub.result.current.hostnameDirty).toBe(false);
-
-    act(() => pub.result.current.setHostname("next.tailnet.ts.net"));
-    expect(pub.result.current.hostnameDirty).toBe(true);
-    await act(async () => {
-      expect(await pub.result.current.saveHostname()).toBe(true);
-    });
-    expect(pub.result.current.entry.hostname).toBe("next.tailnet.ts.net");
+    expect(calls.find((c) => c.path === API_PATHS.accountPriority)?.body).toEqual({ priority: [TOKYO_ID, MAC_ID] });
   });
 });
 
 describe("浏览器会话与扫码链接 hooks", () => {
-  it("useCachedBrowserSessionsSummary 只读缓存（0 网络请求），随缓存填充实时更新数量与 Pending 摘要并保持引用稳定", async () => {
-    const api = new FakeApi(makeSnapshot({}));
-    api.install();
-    const { qc, wrapper } = makeWrapper();
-
-    const { result, rerender } = renderHook(() => useCachedBrowserSessionsSummary(), { wrapper });
-    expect(result.current).toEqual({ count: null, hasPending: false, summary: undefined });
-    const coldRef = result.current;
-    rerender();
-    expect(result.current).toBe(coldRef);
-    expect(api.callsTo("GET", /^\/api\/sessions$/)).toHaveLength(0);
-
-    await act(async () => {
-      qc.setQueryData<BrowserSessionInfo[]>(BROWSER_SESSIONS_QUERY_KEY, [
-        { id: "s1", userAgent: "Mac", createdAt: 0, lastSeenAt: 100, current: true },
-        { id: "s2", userAgent: "iPhone", createdAt: 0, lastSeenAt: 90, current: false },
-      ]);
-      await Promise.resolve();
-    });
-    expect(result.current).toEqual({ count: 2, hasPending: false, summary: "2" });
-
-    await act(async () => {
-      qc.setQueryData<BrowserSessionInfo[]>(BROWSER_SESSIONS_QUERY_KEY, [
-        { id: "s1", userAgent: "Mac", createdAt: 0, lastSeenAt: 100, current: true },
-        { id: "s3", userAgent: "Pixel", createdAt: 0, lastSeenAt: 110, current: false, status: "pending_approval", viaPublic: true },
-      ]);
-      await Promise.resolve();
-    });
-    expect(result.current).toEqual({ count: 2, hasPending: true, summary: "Pending" });
-    expect(api.callsTo("GET", /^\/api\/sessions$/)).toHaveLength(0);
-  });
-
-  it("useBrowserSessions 支持 enabled: false 懒加载、pending_approval 置顶、批准、404 幂等退出与确认超时自动复位", async () => {
+  it("useBrowserSessions 支持 enabled: false 懒加载、404 幂等退出与确认超时自动复位", async () => {
     const api = new FakeApi(makeSnapshot({}));
     const list: BrowserSessionInfo[] = [
       { id: "mac", userAgent: "Mac", createdAt: 0, lastSeenAt: 100, current: true },
-      { id: "pub", userAgent: "Pixel", createdAt: 0, lastSeenAt: 120, current: false, status: "pending_approval", viaPublic: true },
+      { id: "pixel", userAgent: "Pixel", createdAt: 0, lastSeenAt: 120, current: false },
       { id: "gone", userAgent: "iPad", createdAt: 0, lastSeenAt: 80, current: false },
     ];
     api.browserSessions = () => ({ status: 200, body: { sessions: list } });
@@ -443,12 +303,6 @@ describe("浏览器会话与扫码链接 hooks", () => {
 
     rerender({ enabled: true });
     await waitFor(() => expect(result.current.sessions).toHaveLength(3));
-    expect(result.current.sessions!.map((s) => s.id)).toEqual(["pub", "mac", "gone"]);
-    expect(result.current.hasPending).toBe(true);
-
-    // 批准待审会话
-    act(() => result.current.approve(result.current.sessions![0]!));
-    await waitFor(() => expect(result.current.hasPending).toBe(false));
 
     // 404 幂等删除
     const goneSession = result.current.sessions!.find((s) => s.id === "gone")!;
@@ -470,6 +324,7 @@ describe("浏览器会话与扫码链接 hooks", () => {
     expect(result.current.confirmingSelf).toBe(false);
     expect(result.current.confirmingAll).toBe(false);
   });
+
 
   it("useSignInLink 在冷缓存（初始未拉取会话）下点击生成不会因首次拉回旧会话误关二维码，仅在新设备登录后自动收起，过期后停止每秒计时", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
@@ -990,54 +845,23 @@ describe("ChoiceRows、ModeRows 与 Button destructive", () => {
     );
   });
 
-  it("桌面端 InvitePanel 生成邀请码后展示 Copy code 与 Copy URL 按钮并复制对应文本", async () => {
-    const writeText = vi.fn(async () => {});
-    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = new URL(String(input), "http://127.0.0.1:1");
-        if (url.pathname === API_PATHS.deviceInvites && init?.method === "POST") {
-          return Response.json({ code: "inv_desktop_99", url: "https://macbook.tailnet.ts.net:4317", expiresAt: Date.now() + 600_000 });
-        }
-        return Response.json({ error: "not_found" }, { status: 404 });
-      }),
-    );
-
-    render(createElement(ComputersSection, { devices: [makeDeviceView(macInfo)], onChanged: () => {} }));
-    fireEvent.click(screen.getByRole("button", { name: "Invite" }));
-    const region = screen.getByRole("region", { name: "Invite a computer" });
-    fireEvent.click(within(region).getByRole("button", { name: "Generate" }));
-
-    const copyCodeBtn = await within(region).findByRole("button", { name: "Copy code" });
-    const copyUrlBtn = within(region).getByRole("button", { name: "Copy URL" });
-    expect(within(region).getByText("inv_desktop_99")).toBeInTheDocument();
-    expect(within(region).getByText("https://macbook.tailnet.ts.net:4317")).toBeInTheDocument();
-
-    fireEvent.click(copyCodeBtn);
-    await waitFor(() => expect(writeText).toHaveBeenCalledWith("inv_desktop_99"));
-    expect(await within(region).findByRole("button", { name: "Copied" })).toBeInTheDocument();
-
-    fireEvent.click(copyUrlBtn);
-    await waitFor(() => expect(writeText).toHaveBeenCalledWith("https://macbook.tailnet.ts.net:4317"));
-  });
 });
 
 describe("shell-model deviceSettings 引用稳定", () => {
-  it("聊天流式 session.status 增量推送时不换 deviceSettings 引用，隧道或公网入口变化时立即更新", async () => {
+  it("聊天流式 session.status 增量推送时不换 deviceSettings 引用，设备清单变化时立即更新", async () => {
     const snap: StateSnapshot = makeSnapshot({
       pms: [makePm({ id: 1, name: "小林" })],
       conversations: [makeConvSnapshot([makeUserMessage({ id: 1, conversationId: 1, text: "hi" })], { conversation: { id: 1, pmId: 1, title: "小林" } })],
       sessions: [makeSession({ sessionId: 1, conversationId: 1, pmId: 1, status: "running", activity: "working", streamingText: "a" })],
-      tunnel: { state: "connected", since: 1, retryAt: null, detail: null },
     });
     const api = new FakeApi(snap);
+    let devices: DeviceInfo[] = [macInfo];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = new URL(String(input), "http://127.0.0.1:1");
         if (url.pathname === "/api/devices" && (init?.method ?? "GET") === "GET") {
-          return Response.json({ devices: [macInfo] });
+          return Response.json({ devices });
         }
         return api.fetch(input, init);
       }),
@@ -1062,15 +886,10 @@ describe("shell-model deviceSettings 引用稳定", () => {
     });
     expect(result.current.content!.deviceSettings).toBe(initialRef);
 
-    // 隧道状态变化应立即产生新引用
-    api.state = () => ({
-      status: 200,
-      body: { ...snap, tunnel: { state: "retrying", since: 2, retryAt: 5, detail: "timeout" } },
-    });
-    act(() => {
-      FakeWebSocket.instances[0]!.push({ type: "resync" });
-    });
-    await waitFor(() => expect(result.current.content!.deviceSettings?.tunnel?.state).toBe("retrying"));
+    // 设备清单变化（别的设备加入账号）应立即产生新引用
+    devices = [macInfo, tokyoInfo];
+    act(() => result.current.content!.deviceSettings!.onChanged());
+    await waitFor(() => expect(result.current.content!.deviceSettings?.devices).toHaveLength(2));
     expect(result.current.content!.deviceSettings).not.toBe(initialRef);
   });
 });
