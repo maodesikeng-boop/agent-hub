@@ -24,10 +24,23 @@ describe("加文件时检查", () => {
     expect(next.map((f) => f.file.name)).toEqual(["a.txt", "b.txt"]);
   });
 
-  it("空文件、超过 20 MB 的不加，提示带文件名；刚好 20 MB 加", () => {
+  it("空文件、超过 50 MB 的不加，提示带文件名；刚好 50 MB 加", () => {
     const { files, notice } = stageFiles([], [new File([], "空.txt"), sized("大.mov", MAX_UPLOAD_BYTES + 1), sized("刚好.bin", MAX_UPLOAD_BYTES), file("好.txt")]);
     expect(files.map((f) => f.file.name)).toEqual(["刚好.bin", "好.txt"]);
-    expect(notice).toBe("「空.txt」是空文件，没有加入；「大.mov」超过 20 MB，没有加入");
+    expect(notice).toBe("「空.txt」是空文件，没有加入；「大.mov」超过 50 MB，没有加入");
+  });
+
+  it("Mac 录屏、手机视频（几十 MB 的 .mov、.mp4、.m4v、.webm，MIME 可能是空的）照常加进去", () => {
+    const video = (name: string, type: string, mb: number) => Object.defineProperty(new File(["x"], name, { type }), "size", { value: mb * 1024 * 1024 }) as File;
+    const incoming = [
+      video("录屏 2026-11-19 14.42.03.mov", "video/quicktime", 38),
+      video("微信视频.mp4", "", 26),
+      video("clip.m4v", "video/x-m4v", 21),
+      video("demo.webm", "video/webm", 45),
+    ];
+    const { files, notice } = stageFiles([], incoming);
+    expect(notice).toBeNull();
+    expect(files.map((f) => f.file)).toEqual(incoming);
   });
 
   it("超出一条消息的个数上限：多的不加", () => {

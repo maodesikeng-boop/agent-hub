@@ -1528,16 +1528,38 @@ describe("POST /api/uploads", () => {
     expect(existsSync(uploadsDir) ? readdirSync(uploadsDir) : []).toEqual([]);
   });
 
-  it("刚好 20 MB 收下；多 1 字节：413，中文原因，磁盘上没有东西", async () => {
+  it("刚好 50 MB 收下；多 1 字节：413，中文原因，磁盘上没有东西", async () => {
     expect((await upload("edge.bin", Buffer.alloc(MAX_UPLOAD_BYTES))).statusCode).toBe(200);
     const before = readdirSync(uploadsDir).length;
     const res = await upload("big.bin", Buffer.alloc(MAX_UPLOAD_BYTES + 1));
     expect(res.statusCode).toBe(413);
-    expect(res.json()).toEqual({ code: "too_large", error: "文件太大，单个文件最多 20 MB" });
+    expect(res.json()).toEqual({ code: "too_large", error: "文件太大，单个文件最多 50 MB" });
     expect(readdirSync(uploadsDir)).toHaveLength(before);
   });
 
-  it("20 MB 的上限只属于上传接口：普通消息接口超过 1 MB 照样 413", async () => {
+  it("Mac 录屏 .mov（38 MB，浏览器报 video/quicktime）：200，原样落盘", async () => {
+    const data = Buffer.alloc(38 * 1024 * 1024, 7);
+    const res = await upload("录屏 2026-11-19 14.42.03.mov", data, { contentType: "video/quicktime" });
+    expect(res.statusCode).toBe(200);
+    const a = res.json() as Attachment;
+    expect(a.size).toBe(data.length);
+    expect(readFileSync(a.path).equals(data)).toBe(true);
+  });
+
+  it("Content-Length 一看就超过上限：不读请求体直接 413，磁盘上没有东西", async () => {
+    const before = existsSync(uploadsDir) ? readdirSync(uploadsDir).length : 0;
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/uploads?name=huge.mp4",
+      headers: { host: HOST, cookie: COOKIE, origin: ORIGIN, "content-type": "video/mp4", "content-length": String(MAX_UPLOAD_BYTES + 1) },
+      payload: Buffer.alloc(16),
+    });
+    expect(res.statusCode).toBe(413);
+    expect(res.json()).toEqual({ code: "too_large", error: "文件太大，单个文件最多 50 MB" });
+    expect(existsSync(uploadsDir) ? readdirSync(uploadsDir).length : 0).toBe(before);
+  });
+
+  it("50 MB 的上限只属于上传接口：普通消息接口超过 1 MB 照样 413", async () => {
     const res = await call("POST", "/api/conversations/1/messages", {
       rawBody: JSON.stringify({ clientId: "c", text: "hi", pad: " ".repeat(2 * 1024 * 1024) }),
     });

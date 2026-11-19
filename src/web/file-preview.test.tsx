@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { API_PATHS, MAX_PREVIEW_CSV_ROWS, MAX_PREVIEW_TEXT_BYTES, sentFileMime, serverInfoFor, type FileActionResponse } from "../shared/index.ts";
+import { AttachmentList } from "./components/Attachments.tsx";
 import { FilePreview, type PreviewFile } from "./components/FilePreview.tsx";
 import { ServerInfoProvider } from "./server-info.tsx";
 
@@ -160,6 +161,8 @@ describe("按类型选渲染方式", () => {
     const { unmount } = show(file("a.mp4"));
     expect(document.querySelector("video")).toHaveAttribute("src", `${API_PATHS.sentFile(ID, "a.mp4")}?inline=1`);
     expect(document.querySelector("video")).toHaveAttribute("controls");
+    expect(document.querySelector("video")).toHaveAttribute("preload", "metadata");
+    expect(document.querySelector("video")).toHaveAttribute("playsinline");
     unmount();
     show(file("a.mp3"));
     expect(document.querySelector("audio")).toHaveAttribute("src", `${API_PATHS.sentFile(ID, "a.mp3")}?inline=1`);
@@ -260,5 +263,31 @@ describe("三个按钮", () => {
     expect(screen.getByRole("dialog", { name: "报告.pdf" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
     fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+  });
+});
+
+describe("消息里的视频附件", () => {
+  const MB = 1024 * 1024;
+  const attachment = (name: string) => ({ id: ID, name, path: `/uploads/${ID}/${name}`, size: 38 * MB, mime: "application/octet-stream" });
+
+  it.each(["录屏.mov", "clip.mp4", "clip.m4v", "clip.webm"])("%s：卡片是视频第一帧（只取元数据、静音），点开用原生播放器", async (name) => {
+    render(<AttachmentList attachments={[attachment(name)]} />);
+    const card = screen.getByRole("button", { name: new RegExp(name.replace(".", "\\.")) });
+    const thumb = card.querySelector("video")!;
+    expect(thumb).toHaveAttribute("src", `${API_PATHS.upload(ID, name)}?inline=1#t=0.1`);
+    expect(thumb).toHaveAttribute("preload", "metadata");
+    expect(thumb.muted).toBe(true);
+    expect(thumb).not.toHaveAttribute("controls");
+    expect(within(card).getByText("38 MB")).toBeInTheDocument();
+    await user.click(card);
+    const player = within(screen.getByRole("dialog")).getByLabelText(name, { selector: "video" });
+    expect(player).toHaveAttribute("src", `${API_PATHS.upload(ID, name)}?inline=1`);
+    expect(player).toHaveAttribute("controls");
+    expect(player).toHaveAttribute("preload", "metadata");
+  });
+
+  it("图片、别的文件不放 <video>", () => {
+    render(<AttachmentList attachments={[attachment("a.png"), attachment("a.pdf")]} />);
+    expect(document.querySelector("video")).toBeNull();
   });
 });
