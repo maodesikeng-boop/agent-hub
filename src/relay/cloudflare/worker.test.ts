@@ -308,8 +308,8 @@ describe("handleRelayRequest：限流键与登记鉴权缓存", () => {
         return workerMod.handleRelayRequest(req, stubEnv());
       }) as typeof fetch,
     });
-  const githubUserCalls = (spy: ReturnType<typeof vi.spyOn>) =>
-    spy.mock.calls.filter(([input]) => String(input instanceof Request ? input.url : input).startsWith(`${github.origin}/user`)).length;
+  const githubUserCalls = (calls: readonly (readonly unknown[])[]) =>
+    calls.filter(([input]) => String(input instanceof Request ? input.url : input).startsWith(`${github.origin}/user`)).length;
 
   it("没有 CF-Connecting-IP 时不认客户端自报的 X-Forwarded-For：换着伪造首跳也绕不开登记限流", async () => {
     const statuses: number[] = [];
@@ -351,12 +351,12 @@ describe("handleRelayRequest：限流键与登记鉴权缓存", () => {
     try {
       expect((await register("tok_alice", "192.0.2.11")).login).toBe("alice");
       expect((await register("tok_alice", "192.0.2.12")).login).toBe("alice");
-      expect(githubUserCalls(spy)).toBe(1);
+      expect(githubUserCalls(spy.mock.calls)).toBe(1);
       await expect(register("tok_nobody", "192.0.2.13")).rejects.toThrow();
       await expect(register("tok_nobody", "192.0.2.14")).rejects.toThrow();
-      expect(githubUserCalls(spy)).toBe(3);
+      expect(githubUserCalls(spy.mock.calls)).toBe(3);
       await register("tok_bob", "192.0.2.15");
-      expect(githubUserCalls(spy)).toBe(4);
+      expect(githubUserCalls(spy.mock.calls)).toBe(4);
     } finally {
       spy.mockRestore();
     }
