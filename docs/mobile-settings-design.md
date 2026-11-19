@@ -4,6 +4,8 @@
 
 **一句话结论**：废除原 `docs/mobile-ui-design.md` 第 2.4 节与 PR 5 中“把电脑双栏 `SettingsDialog` 弹窗拉满手机整屏 + 保留顶部横滑标签栏 + 右上角小叉号”的网页补丁方案；手机外壳（`src/web/mobile/`）改用对标 iOS 原生设置、Claude iOS、ChatGPT iOS 与 Linear Mobile 的**整屏二级路由钻取架构（Inset Grouped List + Sub-page Drill-down，`#/settings` → `#/settings/<section>`）**：一级主页用圆角分组卡片一眼给出各项当前状态摘要，点行进入聚焦子页重排触屏交互（整行勾选单选、整行 `Switch`、底部确认抽屉 `Drawer` 承载危险操作与输入向导、扫码页补齐复制链接与系统分享）；同时把分散在设置组件里的状态拉取、变更提交与校验逻辑抽成无 UI 的共用 `src/web/settings-model.ts`，让桌面双栏弹窗与手机原生设置页 **100% 共用同一份逻辑**，打开一级设置页 **0 额外网络请求**。
 
+> 注：设备配对邀请码、SSH 隧道、Tailscale URL 与手机公网入口（`#/settings/public-access`、`PublicAccessPage`、`pending_approval`）已随 `docs/account-mesh-design.md` 退役，`Computers` 子页已升级为账号登录、SAS 核对批准与中心优先级管理，二级设置子页现为 7 项（不含 `public-access`）。
+
 本文件只出设计方案，不改业务代码。用户拍板后按第 5 节拆 3 个独立小 PR 实施。
 
 ---
