@@ -210,4 +210,69 @@ describe("createFeishuSdkTransport.listMessages（im/v1/messages 开放接口与
       },
     ]);
   });
+
+  it("历史消息 mentions 返回 id_type=app_id 时按本应用 appId 兜底识别 @机器人，不把其他机器人误判为 @本机器人", async ({ onTestFinished }) => {
+    const server = createServer((req, res) => {
+      if (req.url?.startsWith("/open-apis/auth/v3/")) return json(res, { code: 0, tenant_access_token: "t-test", app_access_token: "a-test", expire: 7200 });
+      if (req.url?.startsWith("/open-apis/im/v1/messages")) {
+        return json(res, {
+          code: 0,
+          data: {
+            has_more: false,
+            items: [
+              {
+                message_id: "om_at_self_app",
+                msg_type: "text",
+                create_time: "1700000005000",
+                deleted: false,
+                chat_id: "oc_g1",
+                sender: { id: "ou_owner", id_type: "open_id", sender_type: "user" },
+                body: { content: JSON.stringify({ text: "@_user_1 跟进一下 @_user_2 的告警" }) },
+                mentions: [
+                  { key: "@_user_1", id: "cli_0123456789abcdef", id_type: "app_id", name: "Fusa" },
+                  { key: "@_user_2", id: "cli_other_bot", id_type: "app_id", name: "告警助手" },
+                ],
+              },
+              {
+                message_id: "om_at_other_app",
+                msg_type: "text",
+                create_time: "1700000006000",
+                deleted: false,
+                chat_id: "oc_g1",
+                sender: { id: "ou_owner", id_type: "open_id", sender_type: "user" },
+                body: { content: JSON.stringify({ text: "@_user_1 查状态" }) },
+                mentions: [{ key: "@_user_1", id: "cli_other_bot", id_type: "app_id", name: "告警助手" }],
+              },
+            ],
+          },
+        });
+      }
+      res.writeHead(404).end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    onTestFinished(() => new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()); }));
+    const { port } = server.address() as AddressInfo;
+    const transport = transportFor(onTestFinished, `http://127.0.0.1:${port}`, []);
+    const page = await transport.listMessages({
+      chatId: "oc_g1",
+      chatType: "group",
+      botOpenId: "ou_bot",
+      startTimeSec: "1700000000",
+      endTimeSec: "1700000060",
+      sortType: "ByCreateTimeAsc",
+      pageSize: 50,
+    });
+    expect(page.items).toEqual([
+      expect.objectContaining({
+        messageId: "om_at_self_app",
+        content: "跟进一下 @告警助手 的告警",
+        mentionedBot: true,
+      }),
+      expect.objectContaining({
+        messageId: "om_at_other_app",
+        content: "@告警助手 查状态",
+        mentionedBot: false,
+      }),
+    ]);
+  });
 });

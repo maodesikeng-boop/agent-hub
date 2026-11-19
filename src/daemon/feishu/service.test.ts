@@ -14,6 +14,7 @@ import {
   FEISHU_CATCHUP_MAX_MESSAGES,
   FEISHU_CHAT_SENDS_PER_SECOND,
   FEISHU_CONTROL_RETRY_MS,
+  FEISHU_INBOUND_CATCHUP_CONCURRENCY,
   FEISHU_INBOUND_CATCHUP_MAX_MESSAGES,
   FEISHU_INBOUND_CATCHUP_MAX_PAGES,
   FEISHU_INBOUND_CATCHUP_WINDOW_MS,
@@ -2726,19 +2727,20 @@ describe("createFeishuService：启动与断线重连入站主动补拉（Inboun
     offlineUserMessage(linChat, "lin 报错被隔离", { createTime: clockNow + 1_000 });
     offlineUserMessage(zhouChat, "zhou 正常补拉", { createTime: clockNow + 1_500 });
 
-    let activeRounds = 0;
-    let maxConcurrent = 0;
+    const activeByChat = new Map<string, number>();
+    let maxSameChatConcurrent = 0;
     let releaseFirst!: () => void;
     const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
     let gated = true;
-    fake.beforeListMessages = async () => {
-      activeRounds++;
-      maxConcurrent = Math.max(maxConcurrent, activeRounds);
+    fake.beforeListMessages = async (args) => {
+      const nextCount = (activeByChat.get(args.container_id) ?? 0) + 1;
+      activeByChat.set(args.container_id, nextCount);
+      maxSameChatConcurrent = Math.max(maxSameChatConcurrent, nextCount);
       if (gated) {
         gated = false;
         await firstGate;
       }
-      activeRounds--;
+      activeByChat.set(args.container_id, (activeByChat.get(args.container_id) ?? 1) - 1);
     };
     clockNow += 5_000;
     fake.handlers!.onConnected();
@@ -2749,7 +2751,7 @@ describe("createFeishuService：启动与断线重连入站主动补拉（Inboun
     await settle();
     fake.beforeListMessages = null;
 
-    expect(maxConcurrent).toBe(1);
+    expect(maxSameChatConcurrent).toBe(1);
     expect(userMessages(zhou.conversationId).map((m) => m.text)).toEqual(["zhou 正常补拉"]);
     expect(logs.some((l) => l.includes("230027") && l.includes(linChat))).toBe(true);
     expect(svc.setup.status().state).toBe("connected");
@@ -2757,5 +2759,258 @@ describe("createFeishuService：启动与断线重连入站主动补拉（Inboun
     say(linChat, "实时消息正常收");
     await settle();
     expect(userMessages(lin.conversationId).map((m) => m.text)).toEqual(["实时消息正常收"]);
+  });
+
+  it("R1 补拉 listMessages 在途时再次断线：拉到的消息未入队时不推进游标，下次重连完整补回", async () => {
+    let clockNow = 1_730_010_000_000;
+    await svc.close();
+    fake = createFakeFeishu({ clock: () => clockNow });
+    fake.granted = [...FEISHU_REQUIRED_SCOPES, FEISHU_GROUP_MSG_SCOPE];
+    svc = makeService({ now: () => clockNow });
+    await connect();
+    const linChat = chatOf(lin.pmId);
+    clockNow += 5_000;
+    fake.handlers!.onDisconnected("drop 1");
+    offlineUserMessage(linChat, "断网第一条", { createTime: clockNow + 1_000 });
+    offlineUserMessage(linChat, "断网第二条", { createTime: clockNow + 90_000 });
+    clockNow += 120_000;
+    let dropped = false;
+    fake.beforeListMessages = async (args) => {
+      if (!dropped && args.container_id === linChat) {
+        dropped = true;
+        fake.handlers!.onDisconnected("drop 2 during catch-up");
+      }
+    };
+    fake.handlers!.onConnected();
+    await settle();
+    fake.beforeListMessages = null;
+    clockNow += 5_000;
+    fake.handlers!.onConnected();
+    await settle();
+    expect(userMessages(lin.conversationId).map((m) => m.text)).toEqual(["断网第一条", "断网第二条"]);
+  });
+
+  it("R2 补拉已入队、处理到一半又断线：未处理的剩余消息不推进游标，下次重连全部找回", async () => {
+    let clockNow = 1_730_020_000_000;
+    await svc.close();
+    fake = createFakeFeishu({ clock: () => clockNow });
+    fake.granted = [...FEISHU_REQUIRED_SCOPES, FEISHU_GROUP_MSG_SCOPE];
+    let first = true;
+    svc = makeService({
+      now: () => clockNow,
+      router: {
+        submitCommand: async (input) => {
+          routerCalls.push({ clientId: input.clientId, text: input.text });
+          if (first) {
+            first = false;
+            fake.handlers!.onDisconnected("drop while draining catch-up");
+          }
+          const { command } = ledger.createRouterCommand({ clientId: input.clientId, inputText: input.text, vendor: "claude", status: "planning" });
+          return ledger.updateRouterCommand(command.id, { status: "answered", plan: { intent: "answer", reply: "ok", actions: [] } }) as RouterCommandRecord;
+        },
+      },
+    });
+    await connect();
+    const rChat = routerChat();
+    first = true;
+    routerCalls = [];
+    clockNow += 5_000;
+    fake.handlers!.onDisconnected("drop 1");
+    offlineUserMessage(rChat, "r1", { p2p: true, createTime: clockNow + 1_000 });
+    offlineUserMessage(rChat, "r2", { p2p: true, createTime: clockNow + 5_000 });
+    offlineUserMessage(rChat, "r3", { p2p: true, createTime: clockNow + 100_000 });
+    clockNow += 120_000;
+    fake.handlers!.onConnected();
+    await settle();
+    clockNow += 5_000;
+    fake.handlers!.onConnected();
+    await settle();
+    expect(routerCalls.map((c) => c.text)).toEqual(["r1", "r2", "r3"]);
+  });
+
+  it("R3 停机时补拉在途：排空或重启后漏收消息不丢失且不重复", async () => {
+    let clockNow = 1_730_030_000_000;
+    await svc.close();
+    fake = createFakeFeishu({ clock: () => clockNow });
+    fake.granted = [...FEISHU_REQUIRED_SCOPES, FEISHU_GROUP_MSG_SCOPE];
+    svc = makeService({ now: () => clockNow });
+    await connect();
+    const linChat = chatOf(lin.pmId);
+    clockNow += 5_000;
+    fake.handlers!.onDisconnected("drop");
+    offlineUserMessage(linChat, "停机前漏收", { createTime: clockNow + 1_000 });
+    clockNow += 10_000;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    fake.beforeListMessages = async (args) => { if (args.container_id === linChat) await gate; };
+    fake.handlers!.onConnected();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const closing = svc.close();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    release();
+    await closing;
+    fake.beforeListMessages = null;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    clockNow += 2_000;
+    svc = makeService({ now: () => clockNow });
+    await svc.start();
+    await vi.waitFor(() => expect(svc.setup.status().state).toBe("connected"));
+    await settle();
+    expect(userMessages(lin.conversationId).map((m) => m.text)).toEqual(["停机前漏收"]);
+  });
+
+  it("入站队列满导致补拉部分丢弃时按时间先入最早消息、记结构化日志并冻结游标，后续实时消息不跨过缺口，下次重连完整补回", async () => {
+    let clockNow = 1_730_035_000_000;
+    const logs: string[] = [];
+    let releaseRouter!: () => void;
+    const routerGate = new Promise<void>((resolve) => { releaseRouter = resolve; });
+    let blockRouter = false;
+    await svc.close();
+    fake = createFakeFeishu({ clock: () => clockNow });
+    fake.granted = [...FEISHU_REQUIRED_SCOPES, FEISHU_GROUP_MSG_SCOPE];
+    svc = makeService({
+      now: () => clockNow,
+      log: (line) => logs.push(line),
+      router: {
+        submitCommand: async (input) => {
+          if (blockRouter) await routerGate;
+          const { command } = ledger.createRouterCommand({ clientId: input.clientId, inputText: input.text, vendor: "claude", status: "planning" });
+          if (input.text.startsWith("占坑-")) return command;
+          return ledger.updateRouterCommand(command.id, { status: "answered", plan: { intent: "answer", reply: "ok", actions: [] } }) as RouterCommandRecord;
+        },
+      },
+    });
+    await connect();
+    const rChat = routerChat();
+    const linChat = chatOf(lin.pmId);
+
+    blockRouter = true;
+    for (let i = 0; i < FEISHU_INBOUND_QUEUE_MAX - 1; i++) {
+      clockNow += 10;
+      fake.event({
+        type: "im.message.receive_v1",
+        messageId: `om_fill_${i}`,
+        chatId: rChat,
+        chatType: "p2p",
+        senderOpenId: OWNER,
+        senderType: "user",
+        content: `占坑-${i}`,
+        mentionedBot: false,
+        threadId: null,
+        resources: [],
+        createTime: clockNow,
+      });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    clockNow += 5_000;
+    fake.handlers!.onDisconnected("drop while full");
+    offlineUserMessage(linChat, "队列满第一条", { createTime: clockNow + 1_000 });
+    offlineUserMessage(linChat, "队列满第二条", { createTime: clockNow + 80_000 });
+    clockNow += 100_000;
+    fake.handlers!.onConnected();
+    await vi.waitFor(() => expect(logs.some((l) => l.includes(linChat) && l.includes("dropped=1"))).toBe(true));
+    expect(svc.setup.status().lastError).toContain("入站队列已满");
+
+    blockRouter = false;
+    releaseRouter();
+    await settle();
+    expect(userMessages(lin.conversationId).map((m) => m.text)).toEqual(["队列满第一条"]);
+
+    clockNow += 60_000;
+    fake.event({
+      type: "im.message.receive_v1",
+      messageId: "om_after_overflow",
+      chatId: linChat,
+      chatType: "group",
+      senderOpenId: OWNER,
+      senderType: "user",
+      content: "溢出后实时消息",
+      mentionedBot: false,
+      threadId: null,
+      resources: [],
+      createTime: clockNow,
+    });
+    await settle();
+
+    fake.handlers!.onDisconnected("drop 2");
+    clockNow += 5_000;
+    fake.handlers!.onConnected();
+    await settle();
+    expect(userMessages(lin.conversationId).map((m) => m.text)).toEqual(["队列满第一条", "溢出后实时消息", "队列满第二条"]);
+  });
+
+  it("R4 升级 0041 后首次启动（会话游标为空）建立当前时刻锚点，不重放过去 15 分钟的非幂等 /群设置", async () => {
+    let clockNow = 1_730_040_000_000;
+    await svc.close();
+    fake = createFakeFeishu({ clock: () => clockNow });
+    fake.granted = [...FEISHU_REQUIRED_SCOPES, FEISHU_GROUP_MSG_SCOPE];
+    svc = makeService({ now: () => clockNow });
+    await connect();
+    const linChat = chatOf(lin.pmId);
+    clockNow += 60_000;
+    fake.event({ type: "im.message.receive_v1", messageId: "om_rv_settings", chatId: linChat, chatType: "group", senderOpenId: OWNER, senderType: "user", content: "/群设置", mentionedBot: false, threadId: null, resources: [], createTime: clockNow });
+    await settle();
+    const before = cardIdsCreated().filter((c) => c.data.includes("群设置")).length;
+    await svc.close();
+    db.run("DELETE FROM feishu_inbound_cursors");
+    clockNow += 60_000;
+    svc = makeService({ now: () => clockNow });
+    await svc.start();
+    await vi.waitFor(() => expect(svc.setup.status().state).toBe("connected"));
+    await settle();
+    expect(cardIdsCreated().filter((c) => c.data.includes("群设置"))).toHaveLength(before);
+  });
+
+  it("多群重连按 FEISHU_INBOUND_CATCHUP_CONCURRENCY 并发补拉，避免串行长队阻塞末尾群实时消息", async () => {
+    const extraCount = 35;
+    const pms: { pmId: PmId; conversationId: ConversationId }[] = [];
+    for (let i = 0; i < extraCount; i++) {
+      const p = ledger.createPm({ name: `并发${i}`, mode: "manage_only", persona: "" });
+      pms.push({ pmId: p.pm.id, conversationId: p.conversation.id });
+    }
+    await svc.close();
+    fake = createFakeFeishu();
+    fake.granted = [...FEISHU_REQUIRED_SCOPES, FEISHU_GROUP_MSG_SCOPE];
+    svc = makeService();
+    await connect();
+    const lastPm = pms.at(-1)!;
+    const lastChat = chatOf(lastPm.pmId);
+
+    let inFlight = 0;
+    let peakConcurrent = 0;
+    fake.handlers!.onDisconnected("drop");
+    fake.beforeListMessages = async () => {
+      inFlight++;
+      peakConcurrent = Math.max(peakConcurrent, inFlight);
+      await new Promise((r) => setTimeout(r, 25));
+      inFlight--;
+    };
+    const t0 = Date.now();
+    fake.handlers!.onConnected();
+    fake.event({
+      type: "im.message.receive_v1",
+      messageId: "om_live_last_concurrent",
+      chatId: lastChat,
+      chatType: "group",
+      senderOpenId: OWNER,
+      senderType: "user",
+      content: "末尾群实时消息",
+      mentionedBot: false,
+      threadId: null,
+      resources: [],
+      createTime: Date.now(),
+    });
+    await vi.waitFor(() => expect(userMessages(lastPm.conversationId).map((m) => m.text)).toEqual(["末尾群实时消息"]), {
+      timeout: 10_000,
+      interval: 10,
+    });
+    const waited = Date.now() - t0;
+    fake.beforeListMessages = null;
+    await settle();
+
+    expect(peakConcurrent).toBeGreaterThan(1);
+    expect(peakConcurrent).toBeLessThanOrEqual(FEISHU_INBOUND_CATCHUP_CONCURRENCY);
+    expect(waited).toBeLessThan(650);
   });
 });
