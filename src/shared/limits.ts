@@ -1167,3 +1167,66 @@ export const FEISHU_INBOUND_CATCHUP_CONCURRENCY = 6;
 export const FEISHU_SEEN_MESSAGES_MAX = 2_000;
 /** 等扫码确认时 status 被问的间隔（终端命令轮询状态用）。 */
 export const FEISHU_CLI_POLL_MS = 2_000;
+
+// ───────────── 账号组网（docs/account-mesh-design.md「性能」节）─────────────
+/** 组网入口：局域网直连听的 TCP 端口（所有地址，只说双向认证的 TLS 1.3）。 */
+export const MESH_LISTEN_PORT = 4320;
+/** 一个账号最多几台设备（守护进程的信任表和中继的设备表共用）。 */
+export const MESH_MAX_DEVICES_PER_ACCOUNT = 20;
+/** 每台报给中继的局域网候选地址最多几个。 */
+export const MESH_CANDIDATES_MAX = 8;
+/** 隔多久比一次本机网卡地址，变了才重报给中继。 */
+export const MESH_CANDIDATES_REFRESH_MS = 30_000;
+/** 拨号时直连先跑这么久，还没握手成功就同时经中继拨。 */
+export const MESH_DIRECT_HEAD_START_MS = 250;
+/** 对一台设备直连失败后，这么久内不再试直连（网络变了立刻清）。 */
+export const MESH_DIRECT_RETRY_MS = 60_000;
+/** 一次拨号（直连和中继一起）最多等多久。 */
+export const MESH_DIAL_TIMEOUT_MS = 10_000;
+/** 到中继的控制连接断了以后第一次等多久再连；每失败一次翻倍，封顶 MESH_RELAY_BACKOFF_MAX_MS。 */
+export const MESH_RELAY_BACKOFF_MIN_MS = 1_000;
+export const MESH_RELAY_BACKOFF_MAX_MS = 60_000;
+/** 中心租约多久没续约就作废。 */
+export const MESH_LEASE_TTL_MS = 15_000;
+/** 候选设备隔多久发一次 lease.claim（持有者的 claim 就是续约）。 */
+export const MESH_LEASE_RENEW_MS = 5_000;
+/** 持有者在 TTL 到之前提前这么久自己掐断长连接：TTL - 这个数之内没收到续约回执就断。 */
+export const MESH_LEASE_FENCE_MARGIN_MS = 5_000;
+/** 中继连不上超过这么久，中心顺序排第一的设备不经租约自己挂长连接（降级）。 */
+export const MESH_LEASE_ORPHAN_MS = 60_000;
+/** 新设备批准（核对码）从发起到两边都点“一致”的时限。 */
+export const MESH_APPROVAL_TTL_MS = 10 * 60_000;
+/** 核对码几位十进制数字。 */
+export const MESH_SAS_DIGITS = 6;
+/** 批准仪式里每方随机数的字节数。 */
+export const MESH_SAS_NONCE_BYTES = 32;
+/** 中继控制消息单条最大字节数（JSON 文本帧）。 */
+export const RELAY_MAX_CONTROL_FRAME_BYTES = 16 * 1024;
+/** signal（设备之间经中继转的小消息，比如批准仪式）的 payload 最大字节数。 */
+export const RELAY_MAX_SIGNAL_BYTES = 4 * 1024;
+/** 数据通道单帧最大字节数（二进制帧）。 */
+export const RELAY_MAX_DATA_FRAME_BYTES = 64 * 1024;
+/** 每台设备每秒最多发几条控制消息，超了中继断开它。 */
+export const RELAY_CONTROL_FRAMES_PER_SECOND = 20;
+/** 每台设备同时最多几条数据通道。 */
+export const RELAY_MAX_CHANNELS_PER_DEVICE = 32;
+/** 每个账号每天经中继的数据通道总字节数，超了当天拒绝新通道。 */
+export const RELAY_ACCOUNT_DAILY_BYTES = 4 * 1024 * 1024 * 1024;
+/** 数据通道这么久没有数据就关。 */
+export const RELAY_CHANNEL_IDLE_MS = 5 * 60_000;
+/** 拨号后等对方接起数据通道最多多久。 */
+export const RELAY_CHANNEL_ACCEPT_TIMEOUT_MS = 10_000;
+/** 每个 IP 每分钟最多注册几次。 */
+export const RELAY_REGISTER_PER_IP_PER_MINUTE = 10;
+/** 等批准的设备这么久没被批准就从账号里删掉。 */
+export const RELAY_PENDING_DEVICE_TTL_MS = MESH_APPROVAL_TTL_MS;
+/** 中心把卡片点击转给归属电脑后，最多等多久拿它算出的 toast（要在 FEISHU_CARD_ACTION_DEADLINE_MS 之内）。 */
+export const FEISHU_FORWARD_CARD_TIMEOUT_MS = 1_500;
+/** 中心把普通事件转给归属电脑最多等多久，超时按离线处理。 */
+export const FEISHU_FORWARD_TIMEOUT_MS = 10_000;
+/** 归属电脑离线时，中心替每台最多暂存几条飞书消息。 */
+export const FEISHU_OFFLINE_INBOX_MAX_PER_DEVICE = 50;
+/** 暂存的飞书消息存多久，过期在群里说一声后删掉。 */
+export const FEISHU_OFFLINE_INBOX_TTL_MS = 24 * 60 * 60_000;
+/** 卡片接口每秒预算按接着飞书的设备数平分后，每台至少这么多。 */
+export const FEISHU_CARDKIT_MIN_SHARE_PER_SECOND = 5;

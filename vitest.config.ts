@@ -18,6 +18,8 @@ export default defineConfig({
             "src/daemon/**/*.test.ts",
             "src/hub/**/*.test.ts",
             "src/tunnel/**/*.test.ts",
+            "src/relay/**/*.test.ts",
+            "src/mesh/**/*.test.ts",
             "scripts/**/*.test.ts",
             "test/**/*.test.ts",
           ],

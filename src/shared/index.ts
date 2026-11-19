@@ -13,6 +13,7 @@ export * from "./handover.ts";
 export * from "./hub.ts";
 export * from "./ledger.ts";
 export * from "./limits.ts";
+export * from "./mesh.ts";
 export * from "./names.ts";
 export * from "./peer-transport.ts";
 export * from "./pm-capabilities.ts";
