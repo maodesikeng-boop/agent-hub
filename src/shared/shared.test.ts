@@ -542,8 +542,8 @@ describe("M2：agent 接口", () => {
     expect(HUB_EXIT).toEqual({ ok: 0, rejected: 1, usage: 2, unreachable: 3, internal: 4 });
   });
 
-  it("错误码到 HTTP 状态：账本的五种 + 令牌不对 + 守护进程自己出错", () => {
-    expect(HUB_ERROR_HTTP_STATUS).toEqual({ invalid: 400, not_found: 404, forbidden: 403, conflict: 409, git_failed: 409, unauthorized: 401, internal: 500 });
+  it("错误码到 HTTP 状态：账本的五种 + 令牌不对 + 守护进程自己出错 + 接口在关闭", () => {
+    expect(HUB_ERROR_HTTP_STATUS).toEqual({ invalid: 400, not_found: 404, forbidden: 403, conflict: 409, git_failed: 409, unauthorized: 401, internal: 500, shutting_down: 503 });
   });
 
   it("应答按 ok 收窄", () => {
