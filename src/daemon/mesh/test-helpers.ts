@@ -108,6 +108,9 @@ export function fakeGithubDeviceFlow(token: string): typeof fetch {
 
 export interface TestMeshNode {
   mesh: import("./index.ts").Mesh;
+  id: DeviceId;
+  /** 组网入口后面的 HTTP 服务（测试可以挂 WebSocket 的 upgrade）。 */
+  http: import("node:http").Server;
   dir: string;
   /** 本机组网入口收到的请求路径（对方编号 + 路径）。 */
   requests: Array<{ from: DeviceId; path: string }>;
@@ -119,7 +122,11 @@ afterEach(async () => {
   for (const node of nodes.splice(0)) await node.close();
 });
 
-export async function startTestMeshNode(relay: TestRelay, deviceId: DeviceId, options: { token?: string; dir?: string; lan?: boolean } = {}): Promise<TestMeshNode> {
+export async function startTestMeshNode(
+  relay: TestRelay,
+  deviceId: DeviceId,
+  options: { token?: string; dir?: string; lan?: boolean; handler?: (req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse, from: DeviceId) => void } = {},
+): Promise<TestMeshNode> {
   const { createMesh } = await import("./index.ts");
   const { createServer } = await import("node:http");
   const { API_PATHS } = await import("../../shared/api.ts");
@@ -130,6 +137,7 @@ export async function startTestMeshNode(relay: TestRelay, deviceId: DeviceId, op
   const http = createServer((req, res) => {
     const from = peerOf.get(req.socket)!;
     requests.push({ from, path: req.url ?? "" });
+    if (options.handler !== undefined && req.url !== API_PATHS.peerTrust) return options.handler(req, res, from);
     if (req.url === API_PATHS.peerTrust && req.method === "GET") {
       res.setHeader("content-type", "application/json");
       return res.end(JSON.stringify({ statements: mesh.trustStatements() }));
@@ -167,6 +175,8 @@ export async function startTestMeshNode(relay: TestRelay, deviceId: DeviceId, op
   });
   const node: TestMeshNode = {
     mesh,
+    id: deviceId,
+    http,
     dir,
     requests,
     async close() {
@@ -179,7 +189,7 @@ export async function startTestMeshNode(relay: TestRelay, deviceId: DeviceId, op
 }
 
 /** 登录并等到 signed_in（账号第一台）或 awaiting_approval。 */
-export async function loginNode(node: TestMeshNode): Promise<void> {
+export async function loginNode(node: Pick<TestMeshNode, "mesh">): Promise<void> {
   await node.mesh.startLogin();
   await waitFor(() => {
     const state = node.mesh.status().state;
@@ -188,7 +198,7 @@ export async function loginNode(node: TestMeshNode): Promise<void> {
 }
 
 /** approver 批准 joiner：两边核对码一致、都点“一致”，等 joiner 变成 signed_in 且两边信任表都有对方。 */
-export async function approveNode(approver: TestMeshNode, joiner: TestMeshNode): Promise<string> {
+export async function approveNode(approver: Pick<TestMeshNode, "mesh">, joiner: Pick<TestMeshNode, "mesh">): Promise<string> {
   const joinerId = joiner.mesh.selfId;
   await waitFor(() => approver.mesh.status().state === "signed_in" && (approver.mesh.status() as { approvals: Array<{ requestId: string }> }).approvals.some((a) => a.requestId === joinerId));
   await approver.mesh.beginApproval(joinerId);

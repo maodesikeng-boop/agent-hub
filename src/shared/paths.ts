@@ -40,17 +40,13 @@ export interface HubPaths {
   pushVapidFile: string;
   /** state/push-subscriptions.json：这台收到的推送订阅（手机 PWA、浏览器），0600。 */
   pushSubscriptionsFile: string;
-  /** state/peers.json：已配对的设备和设备令牌（联机，daemon/peers/store.ts），权限 0600。对方的令牌只存 sha256。 */
+  /** state/peers.json：账号组网的设备信任表（daemon/mesh/trust.ts），权限 0600。 */
   peersFile: string;
-  /** state/tunnels.json：ssh 隧道表（docs/hub-tunnel-design.md 第 5 节，daemon/tunnel/table.ts），0600。中心记槽位，连入方记中心。 */
-  tunnelsFile: string;
-  /** state/public-entry.json：公网入口配置 { enabled, hostname }（0600，daemon/ui-server/public-entry.ts）。 */
-  publicEntryFile: string;
-  /** state/tunnel/：连入方的专用钥匙 id_ed25519（0600）、钉死中心主机公钥的 known_hosts、ssh 子进程号文件。 */
-  tunnelDir: string;
-  /** run/tunnel/hub.sock：连入方 ssh -L 建的 socket（0600），转到中心的设备入口。 */
-  tunnelHubSock: string;
-  /** run/admin.sock：本机管理 socket（0600，还要带界面令牌），隧道命令（src/tunnel/）经它找守护进程。 */
+  /** state/account.json：登录的账号和中继网址（daemon/mesh/account.ts），权限 0600，里面没有令牌。 */
+  accountFile: string;
+  /** state/mesh/：设备私钥 key.pem（0600）和自签证书 cert.pem（daemon/mesh/identity.ts）。 */
+  meshDir: string;
+  /** run/admin.sock：本机管理 socket（0600，还要带界面令牌），飞书和账号组网的终端命令经它找守护进程。 */
   adminSock: string;
   launchDir: string;
   logsDir: string;
@@ -68,15 +64,6 @@ export interface HubPaths {
    * macOS 上 Unix socket 路径最多 MAX_UNIX_SOCKET_PATH_BYTES 字节：agent 接口 listen 之前用 assertSocketPathFits 查 realpath 后的路径。
    */
   hubSock: string;
-  /** run/ui.sock：界面服务另听的 socket，权限 0600，只给 tailscale serve 转发用（Linux，见 daemon/platform/tailscale.ts）。 */
-  uiSock: string;
-  /** run/public.sock：公网入口 Unix socket，权限 0600，只给 Tailscale Funnel 或公网反代转发（daemon/ui-server/server.ts）。 */
-  publicSock: string;
-  /**
-   * run/peer.sock：设备入口（docs/hub-tunnel-design.md 第 4 节），权限 0600。连入方（Mac、以后的 Linux）的 ssh -R 把中心来的请求转到这里；
-   * 这里只认设备令牌。中心（东京）不用它，听 TCP 127.0.0.1:DEFAULT_PEER_ENTRY_PORT。
-   */
-  peerSock: string;
   /** run/bin/：守护进程生成的 hub 外壳所在目录，放在 claude 的 PATH 最前面。 */
   hubBinDir: string;
   /**
@@ -161,10 +148,8 @@ export function resolveHubPaths(
     pushVapidFile: joinForBase(stateDir, "push-vapid.json"),
     pushSubscriptionsFile: joinForBase(stateDir, "push-subscriptions.json"),
     peersFile: joinForBase(stateDir, "peers.json"),
-    tunnelsFile: joinForBase(stateDir, "tunnels.json"),
-    publicEntryFile: joinForBase(stateDir, "public-entry.json"),
-    tunnelDir: joinForBase(stateDir, "tunnel"),
-    tunnelHubSock: joinForBase(home, "run", "tunnel", "hub.sock"),
+    accountFile: joinForBase(stateDir, "account.json"),
+    meshDir: joinForBase(stateDir, "mesh"),
     adminSock: platform === "win32" ? `\\\\.\\pipe\\fusa-${pipeHash}-admin` : joinForBase(home, "run", "admin.sock"),
     launchDir: joinForBase(stateDir, "launch"),
     logsDir,
@@ -174,9 +159,6 @@ export function resolveHubPaths(
     pmMemoryDir: joinForBase(stateDir, "pm-memory"),
     runDir: joinForBase(home, "run"),
     hubSock: platform === "win32" ? `\\\\.\\pipe\\fusa-${pipeHash}-${hubPipeNonce}-hub` : joinForBase(home, "run", "hub.sock"),
-    uiSock: joinForBase(home, "run", "ui.sock"),
-    publicSock: joinForBase(home, "run", "public.sock"),
-    peerSock: joinForBase(home, "run", "peer.sock"),
     hubBinDir: joinForBase(home, "run", "bin"),
     worktreesDir: joinForBase(home, "worktrees"),
     uploadsDir: joinForBase(home, "uploads"),

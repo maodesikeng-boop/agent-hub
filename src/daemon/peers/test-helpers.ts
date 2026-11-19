@@ -1,17 +1,17 @@
-// 测试用：在本进程里起一台“设备”（真的界面服务 + 假账本 + 真的 peers），网址是 http://127.0.0.1:<端口>（认本机回环网址）。
+// 测试用：在本进程里起几台“设备”（真的界面服务 + 假账本 + 真的账号组网），登进同一个账号、互相批准，经本机的自建中继或回环直连互通。
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
+import { afterEach } from "vitest";
 import { uiCookieName, type DeviceId, type DeviceInfo } from "../../shared/index.ts";
-import type { TailnetSelf } from "../platform/index.ts";
+import { createMesh, type Mesh } from "../mesh/index.ts";
+import { FAKE_GITHUB, approveNode, fakeGithubDeviceFlow, loginNode, startTestRelay, waitFor, type TestRelay } from "../mesh/test-helpers.ts";
 import { migrate, openDatabase, type Db } from "../store/index.ts";
 import { FakeLedger } from "../ui-server/fake-ledger.ts";
-import { startUiServer, type PeerEntryListen, type RunningUiServer, type UiServerOptions } from "../ui-server/server.ts";
+import { startUiServer, type RunningUiServer, type UiServerOptions } from "../ui-server/server.ts";
 import { createBrowserSessions } from "../ui-server/sessions.ts";
 import { createPeers, type Peers } from "./service.ts";
-import type { PeerRecord } from "./store.ts";
-import type { ProcNetCheckOptions, UnixHttpPool } from "./transport.ts";
 
 export const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -21,108 +21,99 @@ export interface TestDevice {
   port: number;
   url: string;
   dir: string;
-  peersFile: string;
-  tunnelsFile: string;
-  hubSocket: string;
   peers: Peers;
+  mesh: Mesh;
   ledger: FakeLedger;
   server: RunningUiServer;
   /** 浏览器的 cookie 头（已登录）。 */
   cookie: string;
   /** 像浏览器一样访问这台：带 cookie 和同源 Origin。 */
   browser(path: string, init?: { method?: string; body?: unknown; headers?: Record<string, string> }): Promise<Response>;
-  /** peers.json 里存的设备（直接读文件）。 */
-  records(): PeerRecord[];
-  /** 停掉界面服务（模拟离线），之后可以 restart 在同一个端口上再起来。 */
+  /** 停掉界面服务和组网（模拟离线），之后可以 restart 在同一个端口上再起来。 */
   stop(): Promise<void>;
   restart(): Promise<void>;
   close(): Promise<void>;
 }
 
 export interface TestDeviceOptions {
+  relay: TestRelay;
   name?: string;
-  now?: () => number;
-  /** 经 serve 进来时认的 tailnet 名字和主人。 */
-  tailnet?: TailnetSelf | null;
-  /** 默认 true；测生产环境拒回环网址时传 false。 */
-  allowLoopback?: boolean;
-  /** 覆盖本机自报网址（如没装 Tailscale 的隧道设备传 () => null）。 */
-  selfUrl?: () => string | null;
-  tunnelsFile?: string;
-  hubSocket?: string;
-  reconnectTunnel?: () => unknown;
-  procNet?: ProcNetCheckOptions;
-  unixPool?: UnixHttpPool;
-  fetch?: typeof fetch;
+  /** 回环地址当局域网候选（默认 true）；false = 只能经中继。 */
+  lan?: boolean;
   serverOptions?: Partial<UiServerOptions>;
-  /** 启动前写进 peers.json 的设备（比如指向一个假的上游）。 */
-  seed?: PeerRecord[];
-  /** 另开设备入口（ui-server/server.ts 的 startUiServer）。 */
-  peerEntry?: PeerEntryListen;
 }
 
-export async function startTestDevice(opts: TestDeviceOptions = {}): Promise<TestDevice> {
+const devices: TestDevice[] = [];
+afterEach(async () => {
+  for (const d of devices.splice(0)) await d.close();
+});
+
+export async function startTestDevice(opts: TestDeviceOptions): Promise<TestDevice> {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "hub-peers-")));
   const id = randomUUID();
-  const name = opts.name ?? `dev-${id.slice(0, 4)}`;
-  const peersFile = join(dir, "state", "peers.json");
-  const tunnelsFile = opts.tunnelsFile ?? join(dir, "state", "tunnels.json");
-  const hubSocket = opts.hubSocket ?? join(dir, "run", "hub.sock");
-  if (opts.seed !== undefined) {
-    mkdirSync(dirname(peersFile), { recursive: true });
-    writeFileSync(peersFile, JSON.stringify({ version: 1, devices: opts.seed, removed: [] }), { mode: 0o600 });
-  }
+  const deviceRecord = { id, name: opts.name ?? `dev-${id.slice(0, 4)}` };
   const ledger = new FakeLedger();
   const db: Db = openDatabase(":memory:");
   migrate(db);
+  let server!: RunningUiServer;
+  let mesh!: Mesh;
+  let peers!: Peers;
   let port = 0;
-  const allowLoopback = opts.allowLoopback ?? true;
-  const makePeers = () =>
-    createPeers({
-      file: peersFile,
-      device: { id, name },
-      saveName: () => {},
-      selfUrl: opts.selfUrl ?? (() => (port === 0 ? null : `http://127.0.0.1:${port}`)),
-      allowLoopback,
-      tunnelsFile,
-      hubSocket,
-      ...(opts.reconnectTunnel ? { reconnectTunnel: opts.reconnectTunnel } : {}),
-      ...(opts.procNet ? { procNet: opts.procNet } : {}),
-      ...(opts.unixPool ? { unixPool: opts.unixPool } : {}),
-      ...(opts.now ? { now: opts.now } : {}),
-      ...(opts.fetch ? { fetch: opts.fetch } : {}),
+  const start = async () => {
+    mesh = await createMesh({
+      identityDir: join(dir, "state", "mesh"),
+      accountFile: join(dir, "state", "account.json"),
+      trustFile: join(dir, "state", "peers.json"),
+      device: deviceRecord,
+      platform: "linux",
+      relayUrl: opts.relay.url,
+      githubClientId: "Iv1.test",
+      listenPort: 0,
+      listenHost: "127.0.0.1",
+      candidates: opts.lan === false ? () => [] : (p) => [{ host: "127.0.0.1", port: p }],
+      onConnection: (connection) => server.acceptMeshConnection(connection),
+      github: { webOrigin: FAKE_GITHUB, apiOrigin: FAKE_GITHUB, sleep: async () => {} },
+      fetch: fakeGithubDeviceFlow("tok_alice"),
+      log: () => {},
     });
-  let peers = makePeers();
-  const start = (p: number, current: Peers) =>
-    startUiServer({
+    peers = createPeers({ device: deviceRecord, saveName: () => {}, mesh });
+    server = await startUiServer({
       ledger: ledger.asLedger(),
       token: "test-token-0123456789abcdef",
       db,
-      port: p,
+      port,
       staticDir: join(dir, "no-static"),
       uploadsDir: join(dir, "uploads"),
       sentFilesDir: join(dir, "sent-files"),
-      peers: current,
-      ...(opts.tailnet !== undefined ? { tailnet: { current: () => opts.tailnet ?? null } } : {}),
-      ...(opts.peerEntry !== undefined ? { peerEntry: opts.peerEntry } : {}),
+      peers,
+      mesh,
       ...opts.serverOptions,
     });
-  let server = await start(0, peers);
-  port = server.port;
+    port = server.port;
+  };
+  await start();
   const session = createBrowserSessions(db).create({ userAgent: "test", entry: `127.0.0.1:${port}` });
   const cookie = `${uiCookieName(`127.0.0.1:${port}`)}=${session.token}`;
   const base = `http://127.0.0.1:${port}`;
+  let closed = false;
+  const stop = async () => {
+    peers.close();
+    await mesh.close();
+    await server.close();
+  };
   const device: TestDevice = {
     id,
-    name,
+    get name() {
+      return deviceRecord.name;
+    },
     port,
     url: base,
     dir,
-    peersFile,
-    tunnelsFile,
-    hubSocket,
     get peers() {
       return peers;
+    },
+    get mesh() {
+      return mesh;
     },
     ledger,
     get server() {
@@ -134,44 +125,32 @@ export async function startTestDevice(opts: TestDeviceOptions = {}): Promise<Tes
       if (init.body !== undefined) headers["content-type"] = "application/json";
       return fetch(base + path, { method: init.method ?? "GET", headers, ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }) });
     },
-    records() {
-      try {
-        return (JSON.parse(readFileSync(peersFile, "utf8")) as { devices: PeerRecord[] }).devices;
-      } catch {
-        return [];
-      }
-    },
-    async stop() {
-      peers.close();
-      await server.close();
-    },
-    async restart() {
-      // 重新读 peers.json（像守护进程重启那样），在同一个端口上起
-      peers = makePeers();
-      server = await start(port, peers);
-    },
+    stop,
+    restart: start,
     async close() {
-      peers.close();
-      await server.close().catch(() => {});
+      if (closed) return;
+      closed = true;
+      await stop().catch(() => {});
       db.close();
       rmSync(dir, { recursive: true, force: true });
     },
   };
+  devices.push(device);
   return device;
 }
 
-/** 等几台设备之间的后台同步、介绍都做完（一台做完可能又触发别的台）。 */
-export async function settle(devices: TestDevice[], rounds = 6): Promise<void> {
-  for (let i = 0; i < rounds; i++) {
-    await Promise.all(devices.map((d) => d.peers.idle()));
-    await sleep(20);
+/** 起一个中继和 count 台设备，登进同一个账号，第一台批准其余的，等到每台的信任表都齐。 */
+export async function startTestAccount(count: number, options: Omit<TestDeviceOptions, "relay"> = {}): Promise<{ relay: TestRelay; devices: TestDevice[] }> {
+  const relay = await startTestRelay();
+  const list: TestDevice[] = [];
+  for (let i = 0; i < count; i++) {
+    const d = await startTestDevice({ ...options, relay });
+    await loginNode(d);
+    if (i > 0) await approveNode(list[0]!, d);
+    list.push(d);
   }
-}
-
-/** b 生成邀请码，a 用它添加 b。返回 a 的 POST /api/devices 的响应。 */
-export async function pair(a: TestDevice, b: TestDevice): Promise<Response> {
-  const invite = (await (await b.browser("/api/devices/invites", { method: "POST" })).json()) as { code: string; url: string };
-  return a.browser("/api/devices", { method: "POST", body: { url: invite.url, code: invite.code } });
+  await waitFor(() => list.every((d) => d.mesh.trust.list().length === count), 10_000);
+  return { relay, devices: list };
 }
 
 export async function deviceIds(d: TestDevice): Promise<string[]> {

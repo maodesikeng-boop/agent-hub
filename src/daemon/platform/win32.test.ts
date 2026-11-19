@@ -31,7 +31,6 @@ import {
   NetworkProjectFolderUnsupportedError,
   SLEEP_INHIBIT_COMMANDS,
   WIN32_KEEP_AWAKE_BIN,
-  WIN32_TAILSCALE_DEFAULT_CLI,
   WindowsCmdLineBreakError,
   WindowsPowerShellScriptUnsupportedError,
   buildWindowsCmdShimCommandLine,
@@ -58,7 +57,6 @@ import {
   resolveSpawn,
   resolveWindowsCmdShim,
   selectWorktreeRootForProject,
-  tailscaleCommand,
   writeFileAtomicSyncWithRetry,
 } from "./index.ts";
 
@@ -569,7 +567,7 @@ describe("hub.exe 垫片安装、Git Bash MSYSTEM 斜杠拦截、准备命令 sh
     });
   });
 
-  it("Windows explorer 文件定位、Tailscale 路径与防睡眠 keep-awake 参数一致", () => {
+  it("Windows explorer 文件定位与防睡眠 keep-awake 参数一致", () => {
     expect(
       buildWindowsExplorerInvocation(["-R", "--", "D:\\repo\\out.png"], { SystemRoot: "C:\\Windows" }),
     ).toEqual({
@@ -582,14 +580,6 @@ describe("hub.exe 垫片安装、Git Bash MSYSTEM 斜杠拦截、准备命令 sh
       file: "C:\\Windows\\explorer.exe",
       args: ["D:\\repo\\doc.pdf"],
     });
-
-    expect(
-      tailscaleCommand({
-        platform: "win32",
-        env: { ProgramFiles: "C:\\Program Files" },
-        exists: (p) => p === WIN32_TAILSCALE_DEFAULT_CLI,
-      }),
-    ).toBe(WIN32_TAILSCALE_DEFAULT_CLI);
 
     expect(SLEEP_INHIBIT_COMMANDS.win32?.command).toBe(WIN32_KEEP_AWAKE_BIN);
     const spawned: Array<{ cmd: string; args: string[] }> = [];

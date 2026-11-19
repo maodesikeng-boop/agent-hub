@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FeishuStatusView } from "../shared/feishu.ts";
-import { AdminUnavailableError } from "../tunnel/cli.ts";
+import { AdminUnavailableError } from "../admin/client.ts";
 import { runFeishuCli, type FeishuCliIo } from "./cli.ts";
 
 const base: FeishuStatusView = {

@@ -1,10 +1,9 @@
 // 界面服务（设计第 4.2、4.3 节；m1-plan 第 3 节接口约定第 1、2 条）：HTTP + WebSocket，只监听 127.0.0.1。
-// 联机（docs/multi-device-design.md 第 3 节）：经 tailscale serve 进来的请求另外认本机的 tailnet 名字，并且只放行设备主人；
-// Linux 上 serve 转发到另听的 0600 Unix socket（startUiServer 的 serveSocket）。
-// 设备入口（docs/hub-tunnel-design.md 第 4 节）：ssh 隧道只接到另听的这一个（startUiServer 的 peerEntry），只认设备令牌。
-// 几种入口各认什么、查什么，见 Entry 和 createUiServer 里的 entryRules。
+// 组网入口（docs/account-mesh-design.md「连法」）：别的设备经双向认证的 TLS 连进来（daemon/mesh/），握手认出是哪台后交给这里
+// （startUiServer 返回的 acceptMeshConnection），只认 TLS 证书，不看任何头。
+// 两种入口各认什么、查什么，见 Entry 和 createUiServer 里的 entryRules。
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
-import { createReadStream, existsSync, unlinkSync } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { dirname, resolve } from "node:path";
 import { Readable } from "node:stream";
@@ -40,7 +39,6 @@ import {
   MAX_UPLOAD_BYTES,
   PM_CAPABILITY_PATCH_MAX_KEYS,
   PM_MODES,
-  PUBLIC_SESSION_MAX_AGE_MS,
   ROUTER_COMMAND_MAX_CHARS,
   SESSION_MAX_AGE_MS,
   uiCookieName,
@@ -58,21 +56,19 @@ import {
   isLoopbackAddress,
   serverInfoForClient,
   vendorSpec,
-  TAILSCALE_USER_LOGIN_HEADER,
   DEVICE_PROXY_PREFIX,
   ENTRY_ONLY_API_PREFIXES,
   PEER_CLIENT_SCOPE_HEADER,
-  PEER_DEVICE_HEADER,
   utf8Bytes,
   type AgentVendor,
   type ArchiveAllReportsResponse,
   type ArchivePmResponse,
   type AuthStatusResponse,
-  type BrowserSessionStatus,
   type BrowserSessionsResponse,
   type CancelTaskGraphResponse,
   type DecideTaskNodeResponse,
   type RecheckUserBlockerResponse,
+  type DeviceId,
   type DeviceRouterDigest,
   type LoginLinkResponse,
   CONVERSATION_LOOKUP_MAX_IDS,
@@ -96,7 +92,6 @@ import {
   type Ledger,
   type ModelCatalog,
   type ModelsResponse,
-  type PublicEntryStatus,
   type QuotaResponse,
   type PersonaResponse,
   type PickFolderResponse,
@@ -136,8 +131,6 @@ import {
   type SelfReloadStatus,
   SELF_RELOAD_UNSUPPORTED_MESSAGE,
   type TaskGraphsPage,
-  type TunnelStatus,
-  type TunnelStatusResponse,
   type UpdateRouterSettingsResponse,
   type VendorSyncApplyRequest,
   type VendorSyncApplyResponse,
@@ -162,18 +155,14 @@ import {
   runOpenCommand,
   type RunOpen,
 } from "../open-file.ts";
-import { listenOnRunSocket } from "../run-socket.ts";
 import { openDatabase, migrate, type Db } from "../store/index.ts";
 import { UploadError, resolveUpload, saveUpload } from "../uploads.ts";
 import { keepAlive } from "../ws-keepalive.ts";
-import type { ServeTargetKind, TailnetSelf } from "../platform/index.ts";
-import { isCompressibleType, peerRoutes, type PeerRecord, type PeerRoutesOptions, type Peers } from "../peers/index.ts";
-import { TunnelInputError } from "../tunnel/index.ts";
+import type { Mesh, MeshConnection } from "../mesh/index.ts";
+import { isCompressibleType, peerRoutes, type PeerRoutesOptions, type Peers } from "../peers/index.ts";
 import { parsePresence, type PresenceBoard } from "../push/presence.ts";
 import { parseSubscription, type PushSubscriptionRecord } from "../push/subscriptions.ts";
 import { LOGIN_LINK_FRAGMENT_KEY, LOGIN_LINK_PAGE } from "./login-page.ts";
-import { funnelCommandFor, loadPublicEntryConfig, normalizePublicHostname, savePublicEntryConfig, type PublicEntryConfig } from "./public-entry.ts";
-import { createPublicAuthRateLimiter, extractPublicClientIp } from "./public-rate-limit.ts";
 import { createBrowserSessions, createLoginLinks } from "./sessions.ts";
 import {
   FeishuSetupError,
@@ -232,8 +221,6 @@ export interface UiServerOptions {
   runOpen?: RunOpen;
   /** 这台机器能做什么，原样放进 /api/state 的 server，网页按它显示控件。默认按 process.platform（shared/server-info.ts）。 */
   serverInfo?: ServerInfo;
-  /** 本机的 tailnet 名字和主人（daemon/platform/tailnet.ts 的探测，读缓存）。不给 = 只认本机 127.0.0.1，和联机之前一样。 */
-  tailnet?: { current(): TailnetSelf | null };
   /** 推送（联机 P4，daemon/push/）：订阅接口和 WebSocket 上的前台上报。不给 = 推送接口 404，上报忽略。 */
   push?: {
     publicKey: string;
@@ -243,33 +230,17 @@ export interface UiServerOptions {
   };
   /** 飞书（docs/feishu-design.md，daemon/feishu/）：设置接口 /api/feishu/*，和终端命令共用一份。不给 = 这些接口回 unavailable。 */
   feishu?: FeishuSetupService;
-  /** serve 转发到哪（daemon/platform/tailscale.ts）：unix 时 tailnet 名字只在 serve 的 socket 上认，TCP 端口只认本机。默认 tcp。 */
-  serveTarget?: ServeTargetKind;
   /**
-   * 联机（daemon/peers/）：已配对的设备、设备令牌、入口转发。不给 = 没有 /api/devices、/api/peer/*、/d/，带设备令牌的请求一律 401。
-   * 设备令牌（Authorization: Bearer + x-agent-hub-device）能访问的：/api/ 下除了 ENTRY_ONLY_API_PREFIXES 的；不能用 /d/、/auth。
+   * 联机（daemon/peers/）：设备列表、入口转发。不给 = 没有 /api/devices、/api/peer/*、/d/，组网入口来的请求一律 401。
+   * 组网入口来的设备能访问的：/api/ 下除了 ENTRY_ONLY_API_PREFIXES 的；不能用 /d/、/auth。
    */
   peers?: Peers;
+  /** 账号组网（daemon/mesh/）：/api/account*、/api/peer/trust；组网入口来的设备按它的信任表再认一次。状态一变给浏览器推 account.updated。 */
+  mesh?: NonNullable<PeerRoutesOptions["mesh"]> & Pick<Mesh, "onChange" | "trust">;
   /** 入口转发的可调项（测试里换 fetch、调短心跳）。 */
   peerProxy?: PeerRoutesOptions["proxy"];
   /** /api/ws 给浏览器发心跳的间隔（ws-keepalive.ts），默认 WS_HEARTBEAT_MS；测试调短。 */
   wsHeartbeatMs?: number;
-  /**
-   * ssh 隧道（daemon/tunnel/，docs/hub-tunnel-design.md 第 6 节）：状态原样进 /api/state 的 tunnel（没连过中心是 null）；
-   * 状态一变给每条 WebSocket 发 resync，网页重拉快照。不给 = /api/state 不带 tunnel，/api/devices/tunnel/* 回 404。
-   */
-  tunnel?: {
-    status(): TunnelStatus | null;
-    onChange(listener: (status: TunnelStatus | null) => void): () => void;
-    connect?(code: string): Promise<TunnelStatus>;
-    retry?(): void;
-  };
-  /** 公网入口 Unix socket 路径（paths.ts 的 publicSock，run/public.sock）。 */
-  publicSock?: string;
-  /** 公网入口配置文件路径（paths.ts 的 publicEntryFile，state/public-entry.json）。 */
-  publicEntryFile?: string;
-  /** 初始公网入口配置（测试用）。 */
-  publicEntry?: PublicEntryConfig;
   /** Router 跨设备分派引擎（处理本机 /api/router/commands 发令与重试）。 */
   routerDispatcher?: RouterDispatcher;
   /** 本机 Router 目标端口（供远端对等设备经 /api/router/target-ops 执行操作）。 */
@@ -281,7 +252,7 @@ export interface UiServerOptions {
   };
 }
 
-/** 仓库根目录（供本机向导拼 node <repoDir>/src/tunnel/main.ts join 命令）。 */
+/** 仓库根目录（打包产物、自热重启找代码用）。 */
 export const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
 /** 登录 cookie 的有效期：一年（和库里会话的有效期一样，shared/limits.ts 的 SESSION_MAX_AGE_MS）。 */
@@ -296,37 +267,30 @@ const HOST_HEADER = /^(?:127\.0\.0\.1|localhost):(\d+)$/i;
 /** 浏览器发的 Origin 是 scheme://host:port，没有路径和末尾斜杠；主机名那三种跟 Host 检查一致。 */
 const ORIGIN_HEADER = /^http:\/\/(?:127\.0\.0\.1|localhost):(\d+)$/i;
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
-/** serve 的 https 默认端口：Host 可能带上 :443。 */
-const HTTPS_DEFAULT_PORT_SUFFIX = ":443";
 
 /**
- * 守护进程在哪听：界面端口（127.0.0.1 TCP）、serve 的 socket（Linux 上 tailscale serve 转来，startUiServer 的 serveSocket）、
- * 设备入口（隧道只接到它，startUiServer 的 peerEntry）、公网入口（Tailscale Funnel 转来，run/public.sock）。
- * 后三个另起 HTTP 服务，把请求记进 listenerOf 再交给同一个 Fastify；没记的是界面端口。
+ * 请求从哪来：界面端口（127.0.0.1 TCP），或组网入口（startUiServer 的 acceptMeshConnection 交进来的 TLS 连接）。
+ * 组网入口的请求记进 listenerOf 再交给同一个 Fastify；没记的是界面端口。
  */
-type Listener = "uiPort" | "serveSocket" | "peerEntry" | "publicSocket";
+type Listener = "uiPort" | "mesh";
 const listenerOf = new WeakMap<IncomingMessage, Listener>();
+/** 组网入口的连接是哪台设备的（TLS 握手时按证书认出来的）。 */
+const meshPeerOf = new WeakMap<object, DeviceId>();
 
 /** 请求从哪个入口进来：每个请求在第一个钩子里按“在哪听到的 + Host”定一次（resolveEntry），之后各处都按它和 EntryRule 办。 */
 type Entry =
   /** 本机浏览器：界面端口，Host 是 127.0.0.1 / localhost:<界面端口>。 */
   | { kind: "loopback" }
-  /** 经 tailscale serve：Host 是本机的 tailnet 名字，serve 带的身份是设备主人。 */
-  | { kind: "tailnet"; dnsName: string }
-  /** 设备入口：经 ssh 隧道来的别的设备（docs/hub-tunnel-design.md 第 4 节）。 */
-  | { kind: "peer" }
-  /** 公网入口：经 run/public.sock（Tailscale Funnel 或公网反代）进来的手机浏览器（docs/mac-app-and-mobile-design.md 第 2.2 节）。 */
-  | { kind: "public"; hostname: string };
+  /** 组网入口：账号里的别的设备（TLS 证书认出来的）。 */
+  | { kind: "mesh" };
 type EntryKind = Entry["kind"];
 
 /** 请求带的身份。 */
 type Identity =
   /** 已登录浏览器的会话 cookie（只在 /api/、/d/ 上查）。 */
-  | { kind: "cookie"; sessionId: string; status: BrowserSessionStatus; viaPublic: boolean }
-  /** 设备令牌（Authorization: Bearer + x-agent-hub-device）：别的设备，或别的设备转发来的浏览器请求。 */
-  | { kind: "deviceToken"; peer: PeerRecord }
-  /** POST /api/peer/pair：凭请求体里的邀请码，由配对自己查。 */
-  | { kind: "invite" }
+  | { kind: "cookie"; sessionId: string }
+  /** 组网入口来的设备：别的设备，或别的设备转发来的浏览器请求。 */
+  | { kind: "meshDevice"; peer: DeviceId }
   | { kind: "none" };
 type IdentityKind = Exclude<Identity["kind"], "none">;
 
@@ -337,18 +301,16 @@ type EntryRejection = "forbidden_host" | "forbidden_identity";
 interface EntryRule {
   /** 在哪几个地方听到的请求可能是这种入口。同一个地方有几种时按表里的顺序认 Host。 */
   listeners: readonly Listener[];
-  /** 查 Host（和 serve 带的身份）：是这种入口回 Entry，不是回 null（试下一种），是但不放行回原因。null = 不查 Host，听到就是。 */
+  /** 查 Host：是这种入口回 Entry，不是回 null（试下一种），是但不放行回原因。null = 不查 Host，听到就是。 */
   host: ((req: FastifyRequest) => Entry | EntryRejection | null) | null;
   /** cookie 身份的改状态请求和 WebSocket 握手：Origin 要对上的。null = 不查（这个入口不认 cookie）。 */
   origin: ((origin: string, entry: Entry) => boolean) | null;
-  /** 认哪些身份。不认 cookie 的入口上，没带 Authorization 的一律 401（邀请码那一个除外）。 */
+  /** 认哪些身份。 */
   identities: readonly IdentityKind[];
   /** 浏览器算不算在这台机器上（serverInfoForClient：出不出“在 Finder 中显示”）。 */
   sameMachine: boolean;
-  /** 能不能碰浏览器才用的：/auth、静态文件、/d/ 转发、ENTRY_ONLY_API_PREFIXES。能的入口上也只有 cookie 身份能碰，设备令牌在哪都不行。 */
+  /** 能不能碰浏览器才用的：/auth、静态文件、/d/ 转发、ENTRY_ONLY_API_PREFIXES。能的入口上也只有 cookie 身份能碰。 */
   browserPaths: boolean;
-  /** 设 cookie 时加 Secure（https 进来的）。 */
-  secureCookie: boolean;
 }
 
 /** 认出入口和身份之后记下的（按原始请求对象记，WebSocket 握手和 HTTP 一样）。 */
@@ -376,7 +338,7 @@ export interface DesktopHealthResponse {
 }
 
 const pathOf = (req: FastifyRequest) => req.url.split("?", 1)[0] ?? "";
-/** 设备令牌能碰的：/api/ 下除了入口专用的（不能借本机的转发 /d/ 去别的设备，也不能碰 /auth、静态文件）。 */
+/** 组网入口来的设备能碰的：/api/ 下除了入口专用的（不能借本机的转发 /d/ 去别的设备，也不能碰 /auth、静态文件）。 */
 const inDeviceScope = (path: string) => path.startsWith("/api/") && !ENTRY_ONLY_API_PREFIXES.some((prefix) => path.startsWith(prefix));
 
 const STATUS_TO_CODE: Readonly<Record<number, ApiErrorCode>> = {
@@ -604,8 +566,6 @@ function parsePostBody(body: unknown): { clientId: string; text: string; attachm
   return { clientId, text, attachmentIds: ids, ...(workerPick !== undefined ? { workerPick } : {}) };
 }
 
-const publicEntryBodySchema = z.object({ enabled: z.boolean(), hostname: z.string().nullable().optional() }).strict();
-const tunnelConnectBodySchema = z.object({ code: z.string() }).strict();
 const emptyObjectBodySchema = z.object({}).strict();
 const addScheduleBodySchema = z
   .object({
@@ -863,21 +823,6 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
   }
   const sessions = createBrowserSessions((opts.db ?? ownedDb)!, { ...(opts.now ? { now: opts.now } : {}) });
   const loginLinks = createLoginLinks({ ...(opts.now ? { now: opts.now } : {}) });
-  const publicRateLimit = createPublicAuthRateLimiter({ ...(opts.now ? { now: opts.now } : {}) });
-  let publicEntryConfigured = opts.publicSock !== undefined || opts.publicEntryFile !== undefined || opts.publicEntry !== undefined;
-  let publicEntryState: PublicEntryConfig =
-    opts.publicEntryFile !== undefined ? loadPublicEntryConfig(opts.publicEntryFile) : { enabled: false, hostname: null };
-  if (opts.publicEntry !== undefined && !publicEntryState.enabled && publicEntryState.hostname === null) {
-    const normalized = opts.publicEntry.hostname ? normalizePublicHostname(opts.publicEntry.hostname) : null;
-    const validHost = normalized === "invalid" ? null : normalized;
-    publicEntryState = { enabled: opts.publicEntry.enabled === true && validHost !== null, hostname: validHost };
-    if (opts.publicEntryFile !== undefined) savePublicEntryConfig(opts.publicEntryFile, publicEntryState);
-  }
-  const currentPublicEntryStatus = (): PublicEntryStatus => ({
-    enabled: publicEntryState.enabled,
-    hostname: publicEntryState.hostname ?? opts.tailnet?.current()?.dnsName?.toLowerCase() ?? null,
-    funnelCommand: funnelCommandFor(opts.publicSock ?? resolve(ROOT_DIR, "../.agent-hub/run/public.sock")),
-  });
   const wsSenders = new Set<(message: WsServerMessage) => void>();
   const broadcastResync = () => {
     for (const send of wsSenders) send({ type: "resync" });
@@ -899,23 +844,23 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     const identity = contextOf(req)?.identity;
     return identity?.kind === "cookie" ? identity.sessionId : undefined;
   };
-  /** 带设备令牌来的请求 → 是哪台。 */
+  /** 组网入口来的请求 → 是哪台设备。 */
   const peerOf = (req: FastifyRequest) => {
     const identity = contextOf(req)?.identity;
-    return identity?.kind === "deviceToken" ? identity.peer : undefined;
+    return identity?.kind === "meshDevice" ? identity.peer : undefined;
   };
   /** 登录流与状态快照的发起方会话隔离标识（本机浏览器按 sessionId，跨机 Peer 代理按配对设备 ID + 入口会话摘要）。 */
   const clientOwnerKeyOf = (req: FastifyRequest): string => {
     const identity = contextOf(req)?.identity;
     if (identity?.kind === "cookie") return `session:${identity.sessionId}`;
-    if (identity?.kind === "deviceToken") {
+    if (identity?.kind === "meshDevice") {
       const rawScope = req.headers[PEER_CLIENT_SCOPE_HEADER];
       const scope = typeof rawScope === "string" && /^[0-9a-f]{16,64}$/u.test(rawScope) ? rawScope : null;
-      return scope ? `peer:${identity.peer.id}:${scope}` : `peer:${identity.peer.id}`;
+      return scope ? `peer:${identity.peer}:${scope}` : `peer:${identity.peer}`;
     }
     return "anonymous";
   };
-  /** 记下这条 WebSocket 属于哪个会话：那个会话被退出时当场关掉。设备令牌来的没有会话，不记。 */
+  /** 记下这条 WebSocket 属于哪个会话：那个会话被退出时当场关掉。组网入口来的没有会话，不记。 */
   const trackSocket = (req: FastifyRequest, socket: { close(code?: number, reason?: string): void; once(event: "close", fn: () => void): unknown }) => {
     const sessionId = sessionOf(req);
     if (sessionId === undefined) return;
@@ -930,36 +875,6 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
   const folderPicker = opts.folderPicker ?? createFolderPicker({ available: serverInfo.folderPicker });
   const app = Fastify({ logger: opts.logger ?? false });
 
-  let publicServer: Server | null = null;
-  let publicServerTransition: Promise<void> = Promise.resolve();
-  const startPublicListener = async () => {
-    if (!opts.publicSock || publicServer !== null) return;
-    publicServer = await listenSide(app, "publicSocket", { socket: opts.publicSock });
-  };
-  const stopPublicListener = async () => {
-    const srv = publicServer;
-    publicServer = null;
-    if (srv !== null) {
-      const closed = new Promise<void>((resolve) => srv.close(() => resolve()));
-      srv.closeAllConnections();
-      await closed;
-    }
-    if (opts.publicSock && existsSync(opts.publicSock)) {
-      try {
-        unlinkSync(opts.publicSock);
-      } catch {
-        // 已由 server.close 删除
-      }
-    }
-  };
-  const syncPublicListener = (enable: boolean): Promise<void> => {
-    publicServerTransition = publicServerTransition.then(
-      () => (enable ? startPublicListener() : stopPublicListener()),
-      () => (enable ? startPublicListener() : stopPublicListener()),
-    );
-    return publicServerTransition;
-  };
-
   const listeningPort = (): number | undefined => {
     const addr = app.server.address();
     return addr !== null && typeof addr === "object" ? addr.port : opts.port;
@@ -968,40 +883,26 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
   /** cookie 名带着网址里的端口（uiCookieName）：同一浏览器里不同端口的界面各用各的。 */
   const sessionToken = (req: FastifyRequest) => readCookie(req.headers.cookie, uiCookieName(req.headers.host));
 
-  /** 设（或清：value 空、maxAge 0）这个浏览器的会话 cookie。 */
+  /** 设（或清：value 空、maxAge 0）这个浏览器的会话 cookie。本机 http://127.0.0.1 不能加 Secure（浏览器会丢掉这个 cookie）。 */
   const sessionCookie = (req: FastifyRequest, value: string, maxAgeSeconds: number) =>
-    // 经 serve 来的是 https：加 Secure。本机 http://127.0.0.1 不能加（浏览器会丢掉这个 cookie）
-    `${uiCookieName(req.headers.host)}=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAgeSeconds}${contextOf(req)?.rule.secureCookie ? "; Secure" : ""}`;
-
-  /** tailscale serve/funnel 转发到 unix socket 时会把 Host 改写成 localhost，真实外部 Host 放在 X-Forwarded-Host。 */
-  const proxySocketHost = (req: FastifyRequest): string => {
-    const raw = (req.headers.host ?? "").toLowerCase();
-    const forwarded = typeof req.headers["x-forwarded-host"] === "string"
-      ? req.headers["x-forwarded-host"].split(",", 1)[0]?.trim().toLowerCase()
-      : undefined;
-    return raw === "localhost" && forwarded ? forwarded : raw;
-  };
+    `${uiCookieName(req.headers.host)}=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAgeSeconds}`;
 
   /** 登录成功：开一个新会话、设 cookie。这个浏览器已经有会话就换掉（不让同一个浏览器的记录越堆越多）；满了被挤掉的和被换掉的一样，走撤销的路（关 WebSocket）。 */
-  const startSession = (req: FastifyRequest, reply: FastifyReply, sessionOpts?: { viaPublic?: boolean; clientIp?: string }) => {
+  const startSession = (req: FastifyRequest, reply: FastifyReply) => {
     const previous = sessions.authenticate(sessionToken(req));
     if (previous !== null) {
       sessions.revoke(previous.id);
       closeSockets(previous.id);
     }
-    const session = sessions.create({ userAgent: req.headers["user-agent"] ?? "", entry: proxySocketHost(req) }, sessionOpts);
+    const session = sessions.create({ userAgent: req.headers["user-agent"] ?? "", entry: (req.headers.host ?? "").toLowerCase() });
     for (const id of session.evicted) closeSockets(id);
-    const maxAgeSeconds = sessionOpts?.viaPublic ? PUBLIC_SESSION_MAX_AGE_MS / 1000 : COOKIE_MAX_AGE_SECONDS;
-    reply.header("set-cookie", sessionCookie(req, session.token, maxAgeSeconds)).header("referrer-policy", "no-referrer");
+    reply.header("set-cookie", sessionCookie(req, session.token, COOKIE_MAX_AGE_SECONDS)).header("referrer-policy", "no-referrer");
     return session;
   };
 
   const fail = (reply: FastifyReply, code: ApiErrorCode, reason?: string) =>
     reply.code(API_ERRORS[code].status).send(errorBody(code, reason));
 
-  const serveTarget = opts.serveTarget ?? "tcp";
-  /** tailscale serve 转到哪：unix 时 tailnet 名字只在 serve 的 socket 上认，TCP 端口只认本机（本机别的进程连端口伪造不了 serve 流量）。 */
-  const serveListener: Listener = serveTarget === "unix" ? "serveSocket" : "uiPort";
 
   /** 本机 Origin：http://127.0.0.1|localhost:<实际端口>，端口要逐字相同（不接受 04000 这种写法）。 */
   const isLoopbackOrigin = (origin: string) => {
@@ -1022,56 +923,18 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
         return port !== undefined && Number(local[1]) === port ? { kind: "loopback" } : "forbidden_host";
       },
       origin: isLoopbackOrigin,
-      identities: ["cookie", "deviceToken", "invite"],
+      identities: ["cookie"],
       sameMachine: true,
       browserPaths: true,
-      secureCookie: false,
     },
-    // 联机：Host 是本机的 tailnet 名字（只在 serve 转发来的那条路上认），serve 给的身份头必须是设备主人。
-    // 身份头只是附加条件，不代替 cookie（本机别的进程能直连端口自己带这个头）。浏览器在别的设备上：不算本机。
-    tailnet: {
-      listeners: [serveListener],
-      host: (req) => {
-        const self = opts.tailnet?.current() ?? null;
-        const host = proxySocketHost(req);
-        if (self === null || (host !== self.dnsName && host !== self.dnsName + HTTPS_DEFAULT_PORT_SUFFIX)) return null;
-        const login = req.headers[TAILSCALE_USER_LOGIN_HEADER];
-        if (self.owner === null || typeof login !== "string" || login.trim().toLowerCase() !== self.owner) return "forbidden_identity";
-        return { kind: "tailnet", dnsName: self.dnsName };
-      },
-      // serve 是 443，浏览器不写端口
-      origin: (origin, entry) => entry.kind === "tailnet" && origin.toLowerCase() === `https://${entry.dnsName}`,
-      identities: ["cookie", "deviceToken", "invite"],
-      sameMachine: false,
-      browserPaths: true,
-      secureCookie: true,
-    },
-    // 设备入口：经隧道来的连接在本机看都是 127.0.0.1，Host、Origin 是对方随便写的，不查；只认设备令牌，cookie 完全不看。
-    peer: {
-      listeners: ["peerEntry"],
+    // 组网入口：TLS 握手已经按证书认出是哪台，Host、Origin 是对方随便写的，不查；cookie 完全不看。
+    mesh: {
+      listeners: ["mesh"],
       host: null,
       origin: null,
-      identities: ["deviceToken", "invite"],
+      identities: ["meshDevice"],
       sameMachine: false,
       browserPaths: false,
-      secureCookie: false,
-    },
-    // 公网入口：只认从 run/public.sock 进来的请求，Host 匹配配置的公网域名（含可选 :443），Origin 匹配 https://<公网域名>，
-    // 严拒 Authorization 设备令牌与 /api/peer/*（403 forbidden_peer），种下的 Cookie 强制带 Secure。
-    public: {
-      listeners: ["publicSocket"],
-      host: (req) => {
-        if (!publicEntryState.enabled || !publicEntryState.hostname) return null;
-        const expected = publicEntryState.hostname.toLowerCase();
-        const host = proxySocketHost(req);
-        if (host !== expected && host !== expected + HTTPS_DEFAULT_PORT_SUFFIX) return null;
-        return { kind: "public", hostname: expected };
-      },
-      origin: (origin, entry) => entry.kind === "public" && origin.toLowerCase() === `https://${entry.hostname}`,
-      identities: ["cookie"],
-      sameMachine: false,
-      browserPaths: true,
-      secureCookie: true,
     },
   };
   const entryKinds = Object.keys(entryRules) as EntryKind[];
@@ -1100,38 +963,25 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     // 过了入口检查后的所有回应（含认不出设备令牌的 401）都不许缓存。
     reply.header("cache-control", "no-store");
 
-    // 不认设备令牌的入口（如 public 入口）：一律拒绝任何 Authorization 头与 /api/peer/*，回 403 forbidden_peer
-    if (!rule.identities.includes("deviceToken") && (req.headers.authorization !== undefined || path.startsWith("/api/peer/"))) {
-      return fail(reply, "forbidden_peer");
-    }
+    // 浏览器入口上没有设备之间的接口：/api/peer/* 一律 403 forbidden_peer
+    if (!rule.identities.includes("meshDevice") && path.startsWith("/api/peer/")) return fail(reply, "forbidden_peer");
 
-    // 设备之间：带了 Authorization 就按设备令牌认。认不出一律 401 peer_unauthorized，对方据此知道本机已经不认它了。
-    // 没配联机（没给 peers）、入口不认设备令牌，也是 401。
+    // 组网入口：TLS 证书认出来的设备，还要仍在本机信任表里（握手之后被移除的，这里拒）。认不出一律 401 peer_unauthorized。
     let identity: Identity = { kind: "none" };
-    if (req.headers.authorization !== undefined) {
-      const peer = rule.identities.includes("deviceToken")
-        ? (opts.peers?.authenticate(req.headers[PEER_DEVICE_HEADER], req.headers.authorization) ?? null)
-        : null;
-      if (peer === null) return fail(reply, "peer_unauthorized");
-      identity = { kind: "deviceToken", peer };
-    } else if (rule.identities.includes("invite") && req.method === "POST" && path === API_PATHS.peerPair) {
-      identity = { kind: "invite" };
+    if (rule.identities.includes("meshDevice")) {
+      const peer = meshPeerOf.get(req.raw.socket);
+      if (peer === undefined || opts.mesh?.trust.get(peer) === undefined || opts.peers === undefined) return fail(reply, "peer_unauthorized");
+      identity = { kind: "meshDevice", peer };
+      if (!inDeviceScope(path)) return fail(reply, "forbidden_peer");
     }
-
-    // 设备令牌、不认 cookie 的入口：只能碰 /api/ 下不是入口专用的
-    if ((identity.kind === "deviceToken" || !rule.browserPaths) && !inDeviceScope(path)) return fail(reply, "forbidden_peer");
-    if (identity.kind === "none" && !rule.identities.includes("cookie")) return fail(reply, "peer_unauthorized");
 
     if (identity.kind === "none") {
       // 防别的本机端口上的网页借 cookie 动手：浏览器认为 localhost 不同端口是同一个站点，SameSite=Strict 拦不住。
       // 会改状态的请求和 WebSocket 握手必须带同源的 Origin，没带也拒绝；GET 不查。
-      // 设备令牌、配对不查：设备令牌不像 cookie 会被浏览器自动带上，借不了；配对凭邀请码，也不是浏览器发的。
       const unsafe = !SAFE_METHODS.has(req.method) || path === API_PATHS.ws || isUpgrade(req);
       if (unsafe && rule.origin !== null && !rule.origin(req.headers.origin ?? "", entry)) return fail(reply, "forbidden_origin");
 
       // /api/ 下（含 WebSocket 握手）和转发 /d/ 一律要 cookie。静态文件不要：网页要先加载出来，才能在 401 时提示用户怎么登录。
-      // /api/peer/ 只认设备令牌（pair 凭邀请码），浏览器 cookie 不行。
-      if (path.startsWith("/api/peer/")) return fail(reply, "peer_unauthorized");
       if (path.startsWith("/api/") || path.startsWith(`${DEVICE_PROXY_PREFIX}/`)) {
         const session = sessions.authenticate(sessionToken(req));
         if (session === null) {
@@ -1139,14 +989,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
             return fail(reply, "unauthorized");
           }
         } else {
-          identity = { kind: "cookie", sessionId: session.id, status: session.status, viaPublic: session.viaPublic };
-          if (session.status === "pending_approval") {
-            const isAuthStatus = req.method === "GET" && path === API_PATHS.authStatus;
-            const isRevokeSelf = req.method === "DELETE" && path === API_PATHS.browserSession(session.id);
-            if (!isAuthStatus && !isRevokeSelf) {
-              return fail(reply, "session_pending_approval");
-            }
-          }
+          identity = { kind: "cookie", sessionId: session.id };
         }
       }
     }
@@ -1183,7 +1026,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     if (isUpgrade(req)) req.raw.socket.destroy();
   });
 
-  app.setErrorHandler((err: FastifyError | ConversationNotFoundError | LedgerRequestError | RouterTargetError | UploadError | PickFolderError | TunnelInputError | ProviderRequestError | FeishuSetupError, req, reply) => {
+  app.setErrorHandler((err: FastifyError | ConversationNotFoundError | LedgerRequestError | RouterTargetError | UploadError | PickFolderError | ProviderRequestError | FeishuSetupError, req, reply) => {
     const reason = err.message;
     if (err instanceof PickFolderError) return fail(reply, codeOfStatus(err.statusCode), reason);
     if (err instanceof ProviderRequestError) return fail(reply, codeOfStatus(err.statusCode), reason);
@@ -1201,7 +1044,6 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
               : "conflict";
       return fail(reply, apiCode, reason);
     }
-    if (err instanceof TunnelInputError) return fail(reply, "invalid", reason);
     if (err instanceof FeishuSetupError) return fail(reply, "invalid", reason);
     const status = (err as FastifyError).statusCode;
     // 请求体超过 1 MB：Fastify 在收完之前就拒了，原因是英文；换成默认中文（上传超限是 UploadError，上面已经处理）
@@ -1223,13 +1065,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     customTypes: isCompressibleType,
   });
   app.register(fastifyWebsocket);
-  app.addHook("onReady", async () => {
-    if (publicEntryState.enabled && publicEntryState.hostname !== null) {
-      await syncPublicListener(true);
-    }
-  });
   app.addHook("onClose", async () => {
-    await stopPublicListener();
     if (ownedDb !== undefined) ownedDb.close();
   });
 
@@ -1288,41 +1124,20 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
   // 路由放进插件里：@fastify/websocket 的 onRoute 钩子只管它注册完之后才定义的路由，直接写在根上会比它先定义。
   app.register(async (routes) => {
     // 登录有两条路：
-    // - GET /auth?token=<主钥匙>：启动时打印的链接（公网入口严禁主钥匙直登）。
+    // - GET /auth?token=<主钥匙>：启动时打印的链接。
     // - 二维码的一次性链接 `/auth#link=<码>`：码在 # 片段里不会发给服务器（不进代理、访问日志，也不进 Referer）。
     //   GET /auth（不带参数）是读片段的落地页，页面再 POST /auth {link} 兑换。老的 /auth?link=<码> 不再认（码会进日志）。
     routes.get(API_PATHS.auth, async (req, reply) => {
-      const entry = contextOf(req)?.entry;
-      if (entry?.kind === "public" && publicRateLimit.isLocked()) {
-        return fail(reply, "public_auth_locked");
-      }
       const { token, link } = req.query as { token?: unknown; link?: unknown };
       if (token === undefined && link === undefined) return reply.type("text/html; charset=utf-8").header("referrer-policy", "no-referrer").send(LOGIN_LINK_PAGE);
-      if (entry?.kind === "public") {
-        publicRateLimit.recordFailure(extractPublicClientIp(req.headers["x-forwarded-for"]));
-        return fail(reply, "unauthorized");
-      }
       if (token === undefined || link !== undefined || !tokenEquals(expectedToken, token)) return fail(reply, "unauthorized");
       startSession(req, reply);
       return reply.redirect("/", 302);
     });
 
     routes.post(API_PATHS.auth, async (req, reply) => {
-      const entry = contextOf(req)?.entry;
-      if (entry?.kind === "public") {
-        if (publicRateLimit.isLocked()) return fail(reply, "public_auth_locked");
-        const link = (req.body as { link?: unknown } | null | undefined)?.link;
-        const clientIp = extractPublicClientIp(req.headers["x-forwarded-for"]);
-        if (!loginLinks.consume(link)) {
-          publicRateLimit.recordFailure(clientIp);
-          return fail(reply, "unauthorized");
-        }
-        startSession(req, reply, { viaPublic: true, clientIp });
-        broadcastResync();
-        return reply.code(202).send({ status: "pending_approval" } satisfies AuthStatusResponse);
-      }
       const body = (req.body ?? {}) as { link?: unknown; token?: unknown };
-      if (entry?.kind === "loopback" && body.token !== undefined && body.link === undefined) {
+      if (body.token !== undefined && body.link === undefined) {
         if (!tokenEquals(expectedToken, body.token)) return fail(reply, "unauthorized");
         startSession(req, reply);
         return reply.code(204).send();
@@ -1334,7 +1149,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
 
     routes.get(API_PATHS.authStatus, async (req): Promise<DesktopAuthStatusResponse> => {
       const identity = contextOf(req)?.identity;
-      const status = identity?.kind === "cookie" ? identity.status : "unauthenticated";
+      const status = identity?.kind === "cookie" ? "active" : "unauthenticated";
       return {
         status,
         product: DESKTOP_PRODUCT,
@@ -1353,13 +1168,6 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     routes.get(API_PATHS.browserSessions, async (req): Promise<BrowserSessionsResponse> => {
       const current = sessionOf(req);
       return { sessions: sessions.list().map((s) => ({ ...s, current: s.id === current })) };
-    });
-
-    routes.post("/api/sessions/:id/approve", async (req, reply) => {
-      const id = String((req.params as { id?: unknown }).id ?? "");
-      if (!sessions.approve(id)) return fail(reply, "not_found");
-      broadcastResync();
-      return reply.code(204).send();
     });
 
     routes.delete("/api/sessions/:id", async (req, reply) => {
@@ -1384,43 +1192,15 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
 
     routes.post(API_PATHS.loginLinks, async (req, reply) => {
       const { code, expiresAt } = loginLinks.issue();
-      // 开启了公网入口且有公网域名时优先用公网域名；否则用 tailnet 名字（经 serve 来或本机认得）；都没有则用请求的 Host。
-      const entry = contextOf(req)?.entry;
-      const publicHost = publicEntryState.enabled && publicEntryState.hostname ? publicEntryState.hostname : undefined;
-      const tailnetName = entry?.kind === "tailnet" ? entry.dnsName : opts.tailnet?.current()?.dnsName;
-      const httpsHost = publicHost ?? tailnetName;
-      const origin = httpsHost !== undefined ? `https://${httpsHost}` : `${req.headers["x-forwarded-proto"] === "https" ? "https" : "http"}://${req.headers.host}`;
+      const origin = `http://${req.headers.host}`;
       return reply.code(201).send({ url: `${origin}/auth#${LOGIN_LINK_FRAGMENT_KEY}=${code}`, expiresAt } satisfies LoginLinkResponse);
-    });
-
-    routes.put(API_PATHS.publicEntry, async (req): Promise<PublicEntryStatus> => {
-      const raw = parseWithSchema(publicEntryBodySchema, req.body);
-      const givenHostname = typeof raw.hostname === "string" ? normalizePublicHostname(raw.hostname) : null;
-      if (givenHostname === "invalid") throw new LedgerRequestError("invalid", "公网域名格式不对");
-
-      publicEntryConfigured = true;
-      if (raw.enabled) {
-        const resolvedHostname = givenHostname ?? publicEntryState.hostname ?? opts.tailnet?.current()?.dnsName?.toLowerCase() ?? null;
-        if (resolvedHostname === null) throw new LedgerRequestError("invalid", "请先填写公网域名");
-        publicEntryState = { enabled: true, hostname: resolvedHostname };
-        if (opts.publicEntryFile !== undefined) savePublicEntryConfig(opts.publicEntryFile, publicEntryState);
-        await syncPublicListener(true);
-      } else {
-        const nextHostname = raw.hostname === null ? null : (givenHostname ?? publicEntryState.hostname);
-        publicEntryState = { enabled: false, hostname: nextHostname };
-        if (opts.publicEntryFile !== undefined) savePublicEntryConfig(opts.publicEntryFile, publicEntryState);
-        const revoked = sessions.revokePublic();
-        for (const id of revoked) closeSockets(id);
-        await syncPublicListener(false);
-      }
-      broadcastResync();
-      return currentPublicEntryStatus();
     });
 
     // 联机：设备管理、设备之间、入口转发（daemon/peers/routes.ts）
     if (opts.peers !== undefined) {
       routes.register(peerRoutes, {
         peers: opts.peers,
+        ...(opts.mesh ? { mesh: opts.mesh } : {}),
         peerOf,
         clientScopeOf: (req) => createHash("sha256").update(clientOwnerKeyOf(req)).digest("hex").slice(0, 24),
         trackSocket,
@@ -1428,19 +1208,6 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
         ...(opts.peerProxy ? { proxy: opts.peerProxy } : {}),
       });
     }
-
-    routes.post(API_PATHS.tunnelConnect, async (req, reply) => {
-      if (!opts.tunnel?.connect) return fail(reply, "not_found");
-      const raw = parseWithSchema(tunnelConnectBodySchema, req.body);
-      return { status: await opts.tunnel.connect(raw.code) } satisfies TunnelStatusResponse;
-    });
-
-    routes.post(API_PATHS.tunnelRetry, async (req, reply) => {
-      if (!opts.tunnel?.retry) return fail(reply, "not_found");
-      parseWithSchema(emptyObjectBodySchema, req.body ?? {});
-      opts.tunnel.retry();
-      return { status: opts.tunnel.status() } satisfies TunnelStatusResponse;
-    });
 
     const selfReloadBodySchema = z.object({ build: z.boolean().optional() }).strict();
     routes.post(API_PATHS.selfReload, async (req): Promise<SelfReloadResponse> => {
@@ -1461,8 +1228,6 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
         ...snap,
         router,
         server: serverInfoForClient(serverInfo, clientAddress(req)),
-        ...(opts.tunnel ? { tunnel: opts.tunnel.status() } : {}),
-        ...(publicEntryConfigured ? { publicEntry: currentPublicEntryStatus() } : {}),
         bootId: instanceId,
       };
     });
@@ -1994,7 +1759,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       });
     }
 
-    // 飞书设置（docs/feishu-design.md）：只在本机网页上配，别的设备经设备令牌转过来的一律 forbidden_peer
+    // 飞书设置（docs/feishu-design.md）：只在本机网页上配，别的设备经组网转过来的一律 forbidden_peer
     const feishuOf = (req: FastifyRequest, reply: FastifyReply): FeishuSetupService | null => {
       if (peerOf(req) !== undefined) {
         fail(reply, "forbidden_peer");
@@ -2069,13 +1834,13 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       const unsubscribe = ledger.onChange(send);
       socket.once("close", unsubscribe);
       socket.once("error", unsubscribe);
-      // 隧道状态不在账本的变化流里：变了让网页重拉快照（不常变：连上、断开、重连）
-      if (opts.tunnel) {
-        const offTunnel = opts.tunnel.onChange(() => send({ type: "resync" }));
-        socket.once("close", offTunnel);
-        socket.once("error", offTunnel);
+      // 账号组网的状态不在账本的变化流里：变了让本机浏览器重拉 GET /api/account（别的设备来的不推，它们看不到本机的账号接口）
+      if (opts.mesh && !isPeerSocket) {
+        const offAccount = opts.mesh.onChange(() => send({ type: "account.updated" }));
+        socket.once("close", offAccount);
+        socket.once("error", offAccount);
       }
-      // 网页 → 服务端只有前台上报（WsClientMessage）；别的、坏的忽略。设备令牌来的（别的设备直连或转发来的浏览器）不收：
+      // 网页 → 服务端只有前台上报（WsClientMessage）；别的、坏的忽略。组网入口来的（别的设备直连或转发来的浏览器）不收：
       // 前台状态只属于入口本机已登录的浏览器（跟 /api/push/* 一样）
       if (push !== undefined && sessionOf(req) !== undefined) {
         socket.on("message", (data: Buffer, isBinary: boolean) => {
@@ -2110,82 +1875,38 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
 export interface RunningUiServer {
   app: FastifyInstance;
   port: number;
-  /** 设备入口听 TCP 时的实际端口（peerEntry 给了 port）。没开或听 socket 时没有。 */
-  peerEntryPort?: number;
-  /** 优雅关闭：断开 WebSocket、停止监听。 */
+  /** 组网入口：把验过身份的 TLS 连接（daemon/mesh/ 的 onConnection）交给界面服务，按这台设备的身份认。 */
+  acceptMeshConnection(connection: MeshConnection): void;
+  /** 优雅关闭：断开 WebSocket、停止监听、断开组网连接。 */
   close(): Promise<void>;
 }
 
-/** 设备入口听哪：连入方用 unix socket（paths.ts 的 peerSock，0600），中心用 TCP 127.0.0.1（limits.ts 的 DEFAULT_PEER_ENTRY_PORT，0 = 系统分配）；Linux 同时听两个。 */
-export type PeerEntryListen = { socket?: string; port?: number };
-
-/**
- * 另起一个 HTTP 服务听 Unix socket 或 127.0.0.1 的端口：收到的请求（含 WebSocket 握手）记下是从哪听到的，交给同一个 Fastify 处理。
- * socket：准备和 hub.sock 同一套（run-socket.ts 的 listenOnRunSocket）：run/ 0700、残留的死 socket 删掉、有活监听者就拒绝、听上之后改成 0600。
- */
-async function listenSide(app: FastifyInstance, listener: Exclude<Listener, "uiPort">, at: { socket: string } | { port: number }): Promise<Server> {
-  const server = createServer((req, res) => {
-    listenerOf.set(req, listener);
-    app.routing(req, res);
-  });
-  server.on("upgrade", (req: IncomingMessage, socket, head) => {
-    listenerOf.set(req, listener);
-    app.server.emit("upgrade", req, socket, head);
-  });
-  const listenTo = (listen: (done: () => void) => void) =>
-    new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      listen(() => {
-        server.off("error", reject);
-        resolve();
-      });
-    });
-  if ("socket" in at) {
-    await listenOnRunSocket(
-      at.socket,
-      (path) => listenTo((done) => server.listen(path, done)),
-      () => new Promise<void>((resolve) => server.close(() => resolve())),
-    );
-  } else {
-    await listenTo((done) => server.listen(at.port, "127.0.0.1", done));
-  }
-  return server;
-}
-
-/**
- * 只监听 127.0.0.1，不提供改地址的选项。port 为 0 时由系统分配，实际端口看返回值。
- * serveSocket：再听一个 Unix socket 给 tailscale serve 转发（serveTarget 为 unix 时，daemon/platform/tailscale.ts）。
- * peerEntry：再听一个设备入口（docs/hub-tunnel-design.md 第 4 节），只认设备令牌；隧道只接到这里。不给就不开。
- */
-export async function startUiServer(opts: UiServerOptions & { port: number; serveSocket?: string; peerEntry?: PeerEntryListen }): Promise<RunningUiServer> {
+/** 只监听 127.0.0.1，不提供改地址的选项。port 为 0 时由系统分配，实际端口看返回值。组网入口不另听端口：连接由 daemon/mesh/ 交进来。 */
+export async function startUiServer(opts: UiServerOptions & { port: number }): Promise<RunningUiServer> {
   const app = createUiServer(opts);
   await app.listen({ host: "127.0.0.1", port: opts.port });
   const addr = app.server.address();
   if (addr === null || typeof addr !== "object") throw new Error("ui-server is not listening on a TCP port");
-  const sideServers: Server[] = [];
-  let peerEntryPort: number | undefined;
-  try {
-    if (opts.serveSocket !== undefined) sideServers.push(await listenSide(app, "serveSocket", { socket: opts.serveSocket }));
-    if (opts.peerEntry?.socket !== undefined) {
-      sideServers.push(await listenSide(app, "peerEntry", { socket: opts.peerEntry.socket }));
-    }
-    if (opts.peerEntry?.port !== undefined) {
-      const peerServer = await listenSide(app, "peerEntry", { port: opts.peerEntry.port });
-      sideServers.push(peerServer);
-      const peerAddr = peerServer.address();
-      if (peerAddr !== null && typeof peerAddr === "object") peerEntryPort = peerAddr.port;
-    }
-  } catch (err) {
-    await Promise.all(sideServers.map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
-    await app.close();
-    throw err;
-  }
+  const meshServer: Server = createServer((req, res) => {
+    listenerOf.set(req, "mesh");
+    app.routing(req, res);
+  });
+  meshServer.on("upgrade", (req: IncomingMessage, socket, head) => {
+    listenerOf.set(req, "mesh");
+    app.server.emit("upgrade", req, socket, head);
+  });
   const close = async () => {
-    const closed = sideServers.map((server) => new Promise<void>((resolve) => server.close(() => resolve())));
-    // 先关 Fastify（断开 WebSocket），再断另听的地方上剩下的连接；socket 文件由 Node 在关闭时删掉
+    // 先关 Fastify（断开 WebSocket），再断组网入口上剩下的连接
     await app.close();
-    for (const server of sideServers) server.closeAllConnections();
-    await Promise.all(closed);
+    meshServer.closeAllConnections();
   };
-  return { app, port: addr.port, ...(peerEntryPort !== undefined ? { peerEntryPort } : {}), close };
+  return {
+    app,
+    port: addr.port,
+    acceptMeshConnection(connection) {
+      meshPeerOf.set(connection.socket, connection.peer.id);
+      meshServer.emit("connection", connection.socket);
+    },
+    close,
+  };
 }

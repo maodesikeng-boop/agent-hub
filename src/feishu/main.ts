@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 import qrcode from "qrcode-generator";
 import { resolveHubPaths } from "../shared/paths.ts";
-import { createAdminClient } from "../tunnel/admin-client.ts";
+import { createAdminClient } from "../admin/client.ts";
 import { runFeishuCli } from "./cli.ts";
 
 const paths = resolveHubPaths(process.env, homedir());
