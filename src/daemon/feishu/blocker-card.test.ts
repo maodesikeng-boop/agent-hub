@@ -104,7 +104,9 @@ async function blockerCard() {
   const row = db.get<{ blocker_id: number; message_id: number }>("SELECT blocker_id, message_id FROM user_blocker_cards")!;
   const store = createFeishuStore(db);
   const chatId = store.chatOfTarget({ kind: "pm", pmId: lin.pmId })!.chatId;
+  const routerChatId = store.chatOfTarget({ kind: "router" })!.chatId;
   const post = store.postOf({ kind: "message", messageId: row.message_id, part: 0 })!;
+  const routerPost = () => store.postOf({ kind: "router_ask", messageId: row.message_id });
   const click = () =>
     fake.click({
       messageId: post.messageId,
@@ -113,8 +115,16 @@ async function blockerCard() {
       value: { fusa: 1, kind: "blocker_done", card: { kind: "blocker", askMessageId: row.message_id, blockerId: row.blocker_id } },
       formValue: null,
     });
+  const clickInRouter = () =>
+    fake.click({
+      messageId: routerPost()!.messageId,
+      chatId: routerChatId,
+      operatorOpenId: OWNER,
+      value: { fusa: 1, kind: "blocker_done", card: { kind: "blocker", askMessageId: row.message_id, blockerId: row.blocker_id } },
+      formValue: null,
+    });
   const status = () => db.get<{ status: string }>("SELECT status FROM user_blockers WHERE id = ?", row.blocker_id)!.status;
-  return { click, status, chatId, post };
+  return { row, store, click, clickInRouter, status, chatId, routerChatId, post, routerPost };
 }
 
 it("在电脑上登录好后在飞书点“已处理”：先重问这家厂商再重查，解开并把提醒卡改成定案", async () => {
@@ -132,4 +142,49 @@ it("还没处理好时点“已处理”：卡留着，群里说一句还不能�
   await settle();
   expect(card.status()).toBe("open");
   expect(fake.sent.some((s) => s.chatId === card.chatId && s.content.includes("还不能用"))).toBe(true);
+});
+
+it("user_blocker 提醒卡同步推到飞书总助单聊；在总助单聊点“已处理”或网页解开后，总助与项目群两边卡片实时收口且不重触发", async () => {
+  const card = await blockerCard();
+  const inRouter = card.routerPost();
+  expect(inRouter).not.toBeNull();
+  expect(inRouter?.chatId).toBe(card.routerChatId);
+  expect(inRouter?.state).toBe("card_pending");
+  const routerCardData = fake.cards.get(inRouter!.cardId!)!;
+  expect(routerCardData).toContain("已处理");
+  expect(routerCardData).toContain("打开项目群");
+
+  expect(card.clickInRouter().toast?.type).toBe("info");
+  await settle();
+  expect(card.status()).toBe("open");
+  expect(fake.sent.some((s) => s.chatId === card.routerChatId && s.content.includes("还不能用"))).toBe(true);
+  expect(fake.callsOf("card.update").some((u) => u.card_id === card.post.cardId && u.card.data.includes("刚查过"))).toBe(true);
+  expect(fake.callsOf("card.update").some((u) => u.card_id === inRouter!.cardId && u.card.data.includes("刚查过"))).toBe(true);
+
+  claude = "available";
+  expect(card.clickInRouter().toast?.type).toBe("info");
+  await settle();
+  expect(card.status()).not.toBe("open");
+  expect(card.store.postOf({ kind: "message", messageId: card.row.message_id, part: 0 })?.state).toBe("card_settled");
+  expect(card.routerPost()?.state).toBe("card_settled");
+  const lastGroupUpdate = fake.callsOf("card.update").filter((u) => u.card_id === card.post.cardId).at(-1)!;
+  const lastRouterUpdate = fake.callsOf("card.update").filter((u) => u.card_id === inRouter!.cardId).at(-1)!;
+  expect(lastGroupUpdate.card.data).toContain("已定案");
+  expect(lastRouterUpdate.card.data).toContain("已定案");
+  expect(lastGroupUpdate.card.data).not.toContain("blocker_done");
+  expect(lastRouterUpdate.card.data).not.toContain("blocker_done");
+
+  const again = card.click();
+  expect(again.toast).toEqual({ type: "info", content: "已经定过了" });
+});
+
+it("在网页上调 recheckUserBlocker 解开后，总助单聊和项目群两边的提醒卡同步收口", async () => {
+  const card = await blockerCard();
+  expect(card.routerPost()?.state).toBe("card_pending");
+  claude = "available";
+  models.report("claude", "available");
+  expect(ledger.recheckUserBlocker(card.row.blocker_id).resolved).toBe(true);
+  await settle();
+  expect(card.store.postOf({ kind: "message", messageId: card.row.message_id, part: 0 })?.state).toBe("card_settled");
+  expect(card.routerPost()?.state).toBe("card_settled");
 });

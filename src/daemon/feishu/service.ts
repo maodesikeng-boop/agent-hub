@@ -1521,6 +1521,9 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
         });
         return;
       }
+      case "ask_updated":
+      case "router_ask":
+        return;
       case "router_item": {
         const chat = store.chatOfTarget({ kind: "router" });
         if (chat !== null) {

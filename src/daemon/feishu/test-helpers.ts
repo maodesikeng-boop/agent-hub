@@ -1,14 +1,19 @@
 // 测试用的假飞书：记下每次调用，按飞书的回包形状回编号；长连接的回调存下来，测试直接喂事件和点击。
-import type {
-  FeishuApiResult,
-  FeishuConnectionHandlers,
-  FeishuFileUpload,
-  FeishuImageUpload,
-  FeishuMethod,
-  FeishuMethodArgs,
-  FeishuRawCardAction,
-  FeishuRawEvent,
-  FeishuTransport,
+import {
+  feishuDataOf,
+  feishuStringField,
+  type FeishuApiResult,
+  type FeishuConnectionHandlers,
+  type FeishuFileUpload,
+  type FeishuImageUpload,
+  type FeishuListMessagesInput,
+  type FeishuListMessagesPage,
+  type FeishuMethod,
+  type FeishuMethodArgs,
+  type FeishuRawCardAction,
+  type FeishuRawEvent,
+  type FeishuRawMessageEvent,
+  type FeishuTransport,
 } from "./transport.ts";
 
 export interface FakeCall {
@@ -29,6 +34,8 @@ export interface FakeFeishu extends FeishuTransport {
   calls: FakeCall[];
   chats: Map<string, FakeChat>;
   sent: { chatId: string; messageId: string; content: string }[];
+  /** 飞书服务端存下的各会话历史消息（含机器人自己发的 app 消息与用户发的 user 消息）。 */
+  history: Map<string, FeishuRawMessageEvent[]>;
   /** 建过的卡片实体：卡片编号 → 建卡时的卡片 JSON。 */
   cards: Map<string, string>;
   /** 授予的权限（application.scopes 回它）。 */
@@ -36,6 +43,10 @@ export interface FakeFeishu extends FeishuTransport {
   handlers: FeishuConnectionHandlers | null;
   /** 某个方法下一次调用回这个结果（用完即删）。 */
   failNext: Partial<Record<FeishuMethod, FeishuApiResult | Error>>;
+  /** 某个会话拉历史消息时固定或单次回这个结果（测试单群缺权限、单群报错隔离）。 */
+  failListForChat: Map<string, FeishuApiResult | Error>;
+  /** 每次拉历史消息前可选钩子（测试模拟慢请求与并发闪断重连合并）。 */
+  beforeListMessages: ((args: FeishuMethodArgs["message.list"]) => Promise<void>) | null;
   /** 下载资源时回的内容；没有就抛错。 */
   resources: Map<string, Buffer>;
   /** 调用记录用的时钟。 */
@@ -43,6 +54,8 @@ export interface FakeFeishu extends FeishuTransport {
   /** 每次上传图片、文件前先等它（测试用来模拟慢网、上传失败）；抛错就当这次上传失败。 */
   beforeUpload: ((input: FeishuImageUpload | FeishuFileUpload) => Promise<void>) | null;
   callsOf<M extends FeishuMethod>(method: M): FeishuMethodArgs[M][];
+  /** 模拟消息已落入飞书服务端会话历史，但未通过 WebSocket 推给客户端（断线窗口漏消息）。 */
+  recordMessage(event: FeishuRawMessageEvent): void;
   event(event: FeishuRawEvent): void;
   click(action: FeishuRawCardAction): ReturnType<FeishuConnectionHandlers["onCardAction"]>;
 }
@@ -61,14 +74,24 @@ export function createFakeFeishu(options: { clock?: () => number; botOpenId?: st
     return { code: 230055, msg: "The type of file upload does not match the type of message being sent.", httpStatus: 400 };
   };
   const botOpenId = options.botOpenId ?? "ou_bot";
+  const appendHistory = (event: FeishuRawMessageEvent) => {
+    const list = fake.history.get(event.chatId) ?? [];
+    if (!list.some((m) => m.messageId === event.messageId)) {
+      list.push(event);
+      fake.history.set(event.chatId, list);
+    }
+  };
   const fake: FakeFeishu = {
     calls: [],
     chats: new Map(),
     sent: [],
+    history: new Map(),
     cards: new Map(),
     granted: [],
     handlers: null,
     failNext: {},
+    failListForChat: new Map(),
+    beforeListMessages: null,
     resources: new Map(),
     clock: options.clock ?? (() => 0),
     beforeUpload: null,
@@ -127,7 +150,55 @@ export function createFakeFeishu(options: { clock?: () => number; botOpenId?: st
           const messageId = next("om_fake");
           const chatId = a.receive_id_type === "chat_id" ? String(a.receive_id) : "oc_p2p";
           fake.sent.push({ chatId, messageId, content: String(a.content) });
+          appendHistory({
+            type: "im.message.receive_v1",
+            messageId,
+            chatId,
+            chatType: a.receive_id_type === "open_id" || chatId === "oc_p2p" ? "p2p" : "group",
+            senderOpenId: botOpenId,
+            senderType: "app",
+            content: String(a.content),
+            mentionedBot: false,
+            threadId: null,
+            resources: [],
+            createTime: fake.clock() || Date.now(),
+          });
           return { code: 0, data: { message_id: messageId, chat_id: chatId } };
+        }
+        case "message.list": {
+          const listArgs = a as unknown as FeishuMethodArgs["message.list"];
+          await fake.beforeListMessages?.(listArgs);
+          const chatErr = fake.failListForChat.get(listArgs.container_id);
+          if (chatErr !== undefined) {
+            if (chatErr instanceof Error) throw chatErr;
+            return chatErr;
+          }
+          if (listArgs.page_size < 1 || listArgs.page_size > 50) {
+            return { code: 230001, msg: "Your request contains an invalid request parameter: page_size", httpStatus: 400 };
+          }
+          const hasStart = listArgs.start_time !== undefined && listArgs.start_time !== "";
+          const hasEnd = listArgs.end_time !== undefined && listArgs.end_time !== "";
+          if (hasStart && (!hasEnd || Number(listArgs.end_time) < Number(listArgs.start_time))) {
+            return { code: 230001, msg: "end_time earlier than start_time", httpStatus: 400 };
+          }
+          const startMs = hasStart ? Number(listArgs.start_time) * 1000 : 0;
+          const endMs = hasEnd ? Number(listArgs.end_time) * 1000 + 999 : Number.MAX_SAFE_INTEGER;
+          const filtered = (fake.history.get(listArgs.container_id) ?? []).filter(
+            (m) => m.createTime >= startMs && m.createTime <= endMs,
+          );
+          const ordered = listArgs.sort_type === "ByCreateTimeDesc" ? [...filtered].reverse() : [...filtered];
+          const offset = listArgs.page_token ? Number(listArgs.page_token) : 0;
+          const slice = ordered.slice(offset, offset + listArgs.page_size);
+          const nextOffset = offset + slice.length;
+          const hasMore = nextOffset < ordered.length;
+          return {
+            code: 0,
+            data: {
+              items: slice,
+              has_more: hasMore,
+              ...(hasMore ? { page_token: String(nextOffset) } : {}),
+            },
+          };
         }
         case "card.create": {
           const cardId = next("card");
@@ -141,6 +212,26 @@ export function createFakeFeishu(options: { clock?: () => number; botOpenId?: st
           return { code: 0, data: {} };
       }
       return { code: 0, data: {} };
+    },
+    async listMessages(input: FeishuListMessagesInput): Promise<FeishuListMessagesPage> {
+      const data = feishuDataOf(
+        "message.list",
+        await fake.call("message.list", {
+          container_id_type: "chat",
+          container_id: input.chatId,
+          start_time: input.startTimeSec,
+          end_time: input.endTimeSec,
+          sort_type: input.sortType ?? "ByCreateTimeAsc",
+          page_size: input.pageSize,
+          ...(input.pageToken ? { page_token: input.pageToken } : {}),
+        }),
+      );
+      const items = ((data.items as FeishuRawMessageEvent[] | undefined) ?? []).map((m) => ({
+        ...m,
+        chatType: input.chatType,
+      }));
+      const pageToken = data.has_more === true ? feishuStringField(data, "page_token") : null;
+      return { items, pageToken, hasMore: data.has_more === true && pageToken !== null };
     },
     async uploadImage(input: FeishuImageUpload) {
       fake.calls.push({ method: "uploadImage", args: { ...input }, at: fake.clock() });
@@ -168,7 +259,11 @@ export function createFakeFeishu(options: { clock?: () => number; botOpenId?: st
     async stop() {
       fake.handlers = null;
     },
+    recordMessage(event) {
+      appendHistory(event);
+    },
     event(event) {
+      if (event.type === "im.message.receive_v1") appendHistory(event);
       fake.handlers!.onEvent(event);
     },
     click(action) {

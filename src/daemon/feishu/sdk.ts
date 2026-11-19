@@ -16,6 +16,8 @@ import {
   FeishuRegistrationError,
   type FeishuApiResult,
   type FeishuCardActionResponse,
+  type FeishuListMessagesInput,
+  type FeishuListMessagesPage,
   type FeishuMethod,
   type FeishuMethodArgs,
   type FeishuRawEvent,
@@ -74,6 +76,8 @@ function routeOf<M extends FeishuMethod>(method: M, args: FeishuMethodArgs[M]): 
     }
     case "message.delete":
       return { method: "DELETE", url: `/open-apis/im/v1/messages/${enc(a.message_id)}` };
+    case "message.list":
+      return { method: "GET", url: "/open-apis/im/v1/messages", params: { ...a } };
     case "pin.create":
       return { method: "POST", url: "/open-apis/im/v1/pins", data: { message_id: a.message_id } };
     case "pin.delete":
@@ -192,6 +196,9 @@ export function createFeishuSdkTransport(options: FeishuSdkOptions): FeishuTrans
 
   return {
     call,
+    async listMessages(_input: FeishuListMessagesInput): Promise<FeishuListMessagesPage> {
+      return { items: [], pageToken: null, hasMore: false };
+    },
     async uploadImage(input) {
       const image = "data" in input ? input.data : createReadStream(input.path);
       const res = await client.im.v1.image.create({ data: { image_type: input.imageType, image } });

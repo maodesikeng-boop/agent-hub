@@ -1,9 +1,10 @@
 // 用假的传输层（FeishuTransport）和真的账本跑，不连飞书。
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { askOf, type ConversationId, type Message, type PmId, type SessionId } from "../../shared/domain.ts";
+import { askOf, type ConversationId, type Message, type PmId, type SessionId, type WorkerId } from "../../shared/domain.ts";
 import type { DriverEvent } from "../../shared/driver.ts";
 import type { FeishuCardId, FeishuChatId, FeishuMessageId } from "../../shared/feishu.ts";
 import { lookKey, resolvePmLook, type SlimeLook } from "../../shared/slimes.ts";
@@ -13,6 +14,9 @@ import {
   FEISHU_CATCHUP_MAX_MESSAGES,
   FEISHU_CHAT_SENDS_PER_SECOND,
   FEISHU_CONTROL_RETRY_MS,
+  FEISHU_INBOUND_CATCHUP_MAX_MESSAGES,
+  FEISHU_INBOUND_CATCHUP_MAX_PAGES,
+  FEISHU_INBOUND_CATCHUP_WINDOW_MS,
   FEISHU_INBOUND_QUEUE_MAX,
   FEISHU_OUTBOUND_QUEUE_MAX,
   FEISHU_POLICY_CARD_COOLDOWN_MS,
@@ -22,6 +26,7 @@ import {
 } from "../../shared/limits.ts";
 import type { RouterCommandRecord } from "../../shared/router.ts";
 import { bundledModelCatalog } from "../../shared/vendors.ts";
+import { REPORT_END, REPORT_START } from "../../shared/worker.ts";
 import { createResolveFolder } from "../ledger/files.ts";
 import { createLedger, type SqliteLedger } from "../ledger/index.ts";
 import { openDatabase } from "../store/db.ts";
@@ -88,6 +93,8 @@ beforeEach(() => {
   ledger = createLedger(db, {
     pmHomeRoot: join(dataHome, "pm-home"),
     dataHome,
+    userHome: root,
+    osSandboxed: () => true,
     worktreesDir: join(dataHome, "worktrees"),
     resolveFolder: createResolveFolder({ dataHome, userHome: root }),
   });
@@ -2356,5 +2363,387 @@ describe("createFeishuService：多人群里前面气泡的文件随 @机器人 
     await settle();
     expect(attachmentNames(userMessages(lin.conversationId)[0])).toEqual([]);
     expect(downloads()).toEqual([]);
+  });
+});
+
+describe("createFeishuService：检查点拍板卡（含交付物文件附件）同步总助单聊与三端双向收口", () => {
+  const pngBytes = () => Buffer.from("89504e470d0a1a0a", "hex");
+
+  function prepareRepo(): string {
+    const repo = join(root, "checkpoint-repo");
+    mkdirSync(repo, { recursive: true });
+    const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: repo });
+    git("init", "-b", "main");
+    writeFileSync(join(repo, "README.md"), "# repo\n");
+    git("add", ".");
+    git("commit", "-m", "init");
+    ledger.hubCall(lin.sessionId, "project.create", { name: "检查点项目", folder: repo });
+    return repo;
+  }
+
+  function finishWorkerTurn(workerId: WorkerId, filesLines: string, summary = "方案就绪"): void {
+    const ws = db.get<{ id: number; conversation_id: number }>(
+      "SELECT id, conversation_id FROM agent_sessions WHERE worker_id = ? ORDER BY generation DESC LIMIT 1",
+      workerId,
+    )!;
+    const input = db.get<{ id: number }>(
+      "SELECT id FROM messages WHERE conversation_id = ? AND sender IN ('pm', 'user') ORDER BY id DESC LIMIT 1",
+      ws.conversation_id,
+    )!;
+    const ss = createSessionStore(db);
+    ss.update(ws.id, { status: "running", pid: 60_000 + workerId });
+    const at = Date.now();
+    ev(ws.id, { type: "message.delivered", messageIds: [input.id], at });
+    ev(ws.id, { type: "message.processing", messageIds: [input.id], at: at + 1 });
+    const reply = [
+      REPORT_START,
+      "状态: 做完了",
+      `摘要: ${summary}`,
+      "提交: abc1234",
+      "PR: 无",
+      "测试: pnpm typecheck 通过",
+      "偏离: 无",
+      "交棒: 无",
+      `文件: ${filesLines}`,
+      "问题: 无",
+      REPORT_END,
+    ].join("\n");
+    ev(ws.id, { type: "agent.text", uuid: `w-${workerId}-${++seq}`, text: reply, at: at + 2 });
+    ev(ws.id, { type: "turn.ended", ok: true, interrupted: false, messageIds: [input.id], durationMs: 10, at: at + 3 });
+    ss.update(ws.id, { status: "ended", pid: null });
+  }
+
+  async function raiseCheckpointWithDeliverables() {
+    const repo = prepareRepo();
+    writeFileSync(join(repo, "plan.md"), "# 方案详情\n");
+    writeFileSync(join(repo, "preview.png"), pngBytes());
+    const graph = ledger.hubCall(lin.sessionId, "graph.create", {
+      specJson: JSON.stringify({
+        title: "检查点任务图",
+        steps: [
+          { key: "design", title: "写方案", brief: "出方案", confirm: true },
+          { key: "impl", title: "实现", brief: "写代码", deps: ["design"] },
+        ],
+      }),
+    }).data.graph;
+    const w1 = graph.nodes.find((n) => n.key === "design")!.activeWorkerId!;
+    finishWorkerTurn(w1, `\n- [方案文档](${join(repo, "plan.md")})\n- [界面预览](${join(repo, "preview.png")})`);
+    await settle();
+    const refreshed = ledger.hubCall(lin.sessionId, "graph.show", { graphId: graph.id }).data.graph;
+    const askMsgId = refreshed.nodes.find((n) => n.key === "design")!.gateAskMessageId!;
+    return { graphId: graph.id, askMsgId, pmChatId: chatOf(lin.pmId), rChatId: routerChat() };
+  }
+
+  it("confirm: true 检查点拍板卡连同步骤交付物截图与文件同步推到飞书总助单聊，文件只上传一次；总助单聊点通过后两边同步收口且不重复触发下游", async () => {
+    await connect();
+    const uploadsBefore = fake.calls.filter((c) => c.method === "uploadFile" || (c.method === "uploadImage" && c.args.imageType === "message")).length;
+    const { graphId, askMsgId, pmChatId, rChatId } = await raiseCheckpointWithDeliverables();
+
+    const groupPost = postOfAsk(askMsgId);
+    const routerPost = store().postOf({ kind: "router_ask", messageId: askMsgId });
+    expect(routerPost).not.toBeNull();
+    expect(routerPost?.chatId).toBe(rChatId);
+    expect(routerPost?.state).toBe("card_pending");
+
+    const groupCard = fake.cards.get(groupPost.cardId!)!;
+    const routerCard = fake.cards.get(routerPost!.cardId!)!;
+    expect(imgKeysOf(groupCard)).toHaveLength(1);
+    expect(imgKeysOf(routerCard)).toEqual(imgKeysOf(groupCard));
+    expect(routerCard).toContain("打开项目群");
+    expect(fake.callsOf("message.create").filter((c) => c.receive_id === pmChatId && c.msg_type === "file")).toHaveLength(1);
+    expect(fake.callsOf("message.create").filter((c) => c.receive_id === rChatId && c.msg_type === "file")).toHaveLength(1);
+    const msgImageUploads = fake.calls.slice(uploadsBefore).filter((c) => c.method === "uploadImage" && c.args.imageType === "message");
+    const fileUploads = fake.calls.slice(uploadsBefore).filter((c) => c.method === "uploadFile");
+    expect(msgImageUploads).toHaveLength(1);
+    expect(fileUploads).toHaveLength(1);
+
+    const passAction = { fusa: 1, kind: "choose", card: { kind: "gate", askMessageId: askMsgId, graphId, nodeKey: "design" }, optionIndex: 0 };
+    expect(click(rChatId, routerPost!.messageId, passAction).toast?.type).toBe("success");
+    await settle();
+    expect(postOfAsk(askMsgId).state).toBe("card_settled");
+    expect(store().postOf({ kind: "router_ask", messageId: askMsgId })?.state).toBe("card_settled");
+    for (const cid of [groupPost.cardId!, routerPost!.cardId!]) {
+      const last = fake.callsOf("card.update").filter((u) => u.card_id === cid).at(-1)!;
+      expect(buttonValues(last.card.data)).toEqual([]);
+      expect(last.card.data).toContain("已定案");
+    }
+    const implNode = ledger.hubCall(lin.sessionId, "graph.show", { graphId }).data.graph.nodes.find((n) => n.key === "impl")!;
+    expect(implNode.activeWorkerId).not.toBeNull();
+    const implWorkerId = implNode.activeWorkerId;
+
+    const dup = click(pmChatId, groupPost.messageId, passAction);
+    expect(dup.toast).toEqual({ type: "info", content: "已经定过了" });
+    expect(ledger.hubCall(lin.sessionId, "graph.show", { graphId }).data.graph.nodes.find((n) => n.key === "impl")!.activeWorkerId).toBe(implWorkerId);
+  });
+
+  it("在项目群点打回或在网页上拍板/跳过时，总助单聊与项目群两边的检查点卡同样实时收口", async () => {
+    await connect();
+    const first = await raiseCheckpointWithDeliverables();
+    const rejectAction = { fusa: 1, kind: "choose", card: { kind: "gate", askMessageId: first.askMsgId, graphId: first.graphId, nodeKey: "design" }, optionIndex: 1 };
+    expect(click(first.pmChatId, postOfAsk(first.askMsgId).messageId, rejectAction, OWNER, "补一段边界说明").toast?.type).toBe("success");
+    await settle();
+    expect(postOfAsk(first.askMsgId).state).toBe("card_settled");
+    expect(store().postOf({ kind: "router_ask", messageId: first.askMsgId })?.state).toBe("card_settled");
+
+    const w1 = ledger.hubCall(lin.sessionId, "graph.show", { graphId: first.graphId }).data.graph.nodes.find((n) => n.key === "design")!.activeWorkerId!;
+    finishWorkerTurn(w1, "无", "已补充边界说明");
+    await settle();
+    const secondAskId = ledger.hubCall(lin.sessionId, "graph.show", { graphId: first.graphId }).data.graph.nodes.find((n) => n.key === "design")!.gateAskMessageId!;
+    expect(secondAskId).not.toBe(first.askMsgId);
+    expect(store().postOf({ kind: "router_ask", messageId: secondAskId })?.state).toBe("card_pending");
+
+    ledger.skipTaskNode(first.graphId, "design", { reason: "直接往下走" });
+    await settle();
+    expect(postOfAsk(secondAskId).state).toBe("card_settled");
+    expect(store().postOf({ kind: "router_ask", messageId: secondAskId })?.state).toBe("card_settled");
+    const routerSettled = fake.callsOf("card.update").filter((u) => u.card_id === store().postOf({ kind: "router_ask", messageId: secondAskId })!.cardId).at(-1)!;
+    expect(routerSettled.card.data).toContain("已关闭");
+    expect(buttonValues(routerSettled.card.data)).toEqual([]);
+  });
+});
+
+describe("createFeishuService：启动与断线重连入站主动补拉（Inbound catch-up）", () => {
+  const pngBytes = () => Buffer.from("89504e470d0a1a0a", "hex");
+  const attachmentNames = (m: Message | undefined) => ((m?.meta?.attachments as { name: string }[] | undefined) ?? []).map((a) => a.name);
+
+  function offlineUserMessage(
+    chatId: string,
+    text: string,
+    opts: {
+      messageId?: string;
+      sender?: string;
+      mention?: boolean;
+      p2p?: boolean;
+      createTime?: number;
+      files?: { type: "image" | "file" | "audio" | "video" | "sticker"; fileKey: string; fileName: string | null }[];
+    } = {},
+  ) {
+    const event = {
+      type: "im.message.receive_v1" as const,
+      messageId: opts.messageId ?? `om_missed_${++seq}`,
+      chatId,
+      chatType: (opts.p2p ? "p2p" : "group") as "p2p" | "group",
+      senderOpenId: opts.sender ?? OWNER,
+      senderType: "user" as const,
+      content: text,
+      mentionedBot: opts.mention ?? false,
+      threadId: null,
+      resources: opts.files ?? [],
+      createTime: opts.createTime ?? Date.now(),
+    };
+    fake.recordMessage(event);
+    return event;
+  }
+
+  it("20 秒闪断重连主动补拉总助单聊与项目群漏收消息，过滤机器人自身消息，且先于重连瞬间的第二条实时消息按时间顺序入库", async () => {
+    let clockNow = 1_730_000_000_000;
+    await svc.close();
+    fake = createFakeFeishu({ clock: () => clockNow });
+    fake.granted = [...FEISHU_REQUIRED_SCOPES, FEISHU_GROUP_MSG_SCOPE];
+    svc = makeService({ now: () => clockNow });
+    await connect();
+    const pmChat = chatOf(lin.pmId);
+    const rChat = routerChat();
+
+    clockNow += 5_000;
+    fake.handlers!.onDisconnected("network drop");
+    clockNow += 5_000;
+    offlineUserMessage(pmChat, "断网期间第一条", { createTime: clockNow });
+    offlineUserMessage(rChat, "断网期间问总助", { p2p: true, createTime: clockNow + 100 });
+    fake.recordMessage({
+      type: "im.message.receive_v1",
+      messageId: "om_bot_noise",
+      chatId: pmChat,
+      chatType: "group",
+      senderOpenId: "ou_bot",
+      senderType: "app",
+      content: "机器人自己的卡片",
+      mentionedBot: false,
+      threadId: null,
+      resources: [],
+      createTime: clockNow + 200,
+    });
+
+    clockNow += 15_000;
+    let releaseList!: () => void;
+    const listGate = new Promise<void>((resolve) => { releaseList = resolve; });
+    fake.beforeListMessages = () => listGate;
+    fake.handlers!.onConnected();
+    fake.event({
+      type: "im.message.receive_v1",
+      messageId: "om_live_second",
+      chatId: pmChat,
+      chatType: "group",
+      senderOpenId: OWNER,
+      senderType: "user",
+      content: "重连瞬间第二条",
+      mentionedBot: false,
+      threadId: null,
+      resources: [],
+      createTime: clockNow + 50,
+    });
+    fake.beforeListMessages = null;
+    releaseList();
+    await settle();
+
+    expect(userMessages(lin.conversationId).map((m) => m.text)).toEqual(["断网期间第一条", "重连瞬间第二条"]);
+    expect(routerCalls.map((c) => c.text)).toEqual(["断网期间问总助"]);
+  });
+
+  it("多人群断线期间跨气泡发图片 + @机器人 补拉生效；飞书稍后 WebSocket 迟到重推同一 message_id 100% 幂等跳过，守护进程重启冷启动同样按游标补拉并按唯一键去重", async () => {
+    let clockNow = 1_730_000_100_000;
+    await svc.close();
+    fake = createFakeFeishu({ clock: () => clockNow });
+    fake.granted = [...FEISHU_REQUIRED_SCOPES, FEISHU_GROUP_MSG_SCOPE];
+    svc = makeService({ now: () => clockNow });
+    await connect();
+    const chat = chatOf(lin.pmId);
+    join_(chat);
+    await settle();
+
+    clockNow += 3_000;
+    fake.handlers!.onDisconnected("drop");
+    fake.resources.set("img_catchup", pngBytes());
+    const imgEv = offlineUserMessage(chat, "![image](img_catchup)", {
+      messageId: "om_catch_img",
+      createTime: clockNow + 1_000,
+      files: [{ type: "image", fileKey: "img_catchup", fileName: null }],
+    });
+    const wakeEv = offlineUserMessage(chat, "看下这张断网发的图", {
+      messageId: "om_catch_wake",
+      mention: true,
+      createTime: clockNow + 2_000,
+    });
+    const settingsEv = offlineUserMessage(chat, "/群设置", {
+      messageId: "om_catch_settings",
+      createTime: clockNow + 3_000,
+    });
+    const policyCardsBefore = cardIdsCreated().filter((c) => c.data.includes("群设置")).length;
+
+    clockNow += 10_000;
+    fake.handlers!.onConnected();
+    await settle();
+
+    expect(userMessages(lin.conversationId).map((m) => m.text)).toEqual(["看下这张断网发的图"]);
+    expect(attachmentNames(userMessages(lin.conversationId)[0])).toEqual([expect.stringMatching(/\.png$/)]);
+    const downloadsAfterCatchUp = fake.calls.filter((c) => c.method === "downloadResource").length;
+    expect(downloadsAfterCatchUp).toBe(1);
+    const policyCardsAfterCatchUp = cardIdsCreated().filter((c) => c.data.includes("群设置")).length;
+    expect(policyCardsAfterCatchUp).toBe(policyCardsBefore + 1);
+
+    clockNow += 15_000;
+    fake.event(imgEv);
+    fake.event(wakeEv);
+    fake.event(settingsEv);
+    await settle();
+    expect(userMessages(lin.conversationId)).toHaveLength(1);
+    expect(fake.calls.filter((c) => c.method === "downloadResource")).toHaveLength(downloadsAfterCatchUp);
+    expect(cardIdsCreated().filter((c) => c.data.includes("群设置"))).toHaveLength(policyCardsAfterCatchUp);
+
+    await svc.close();
+    clockNow += 5_000;
+    offlineUserMessage(chatOf(zhou.pmId), "重启空档发给阿周", { messageId: "om_restart_zhou", createTime: clockNow });
+    clockNow += 2_000;
+    svc = makeService({ now: () => clockNow });
+    await svc.start();
+    await vi.waitFor(() => expect(svc.setup.status().state).toBe("connected"));
+    await settle();
+    expect(userMessages(zhou.conversationId).map((m) => m.text)).toEqual(["重启空档发给阿周"]);
+    expect(userMessages(lin.conversationId)).toHaveLength(1);
+  });
+
+  it("遵守最大回溯时间窗与单群分页条数硬上限：超窗旧消息不拉，极端刷屏只按页数上限取最新窗口消息", async () => {
+    let clockNow = 1_730_001_000_000;
+    await svc.close();
+    fake = createFakeFeishu({ clock: () => clockNow });
+    fake.granted = [...FEISHU_REQUIRED_SCOPES, FEISHU_GROUP_MSG_SCOPE];
+    svc = makeService({ now: () => clockNow });
+    await connect();
+    const linChat = chatOf(lin.pmId);
+    const zhouChat = chatOf(zhou.pmId);
+
+    fake.handlers!.onDisconnected("long offline");
+    offlineUserMessage(zhouChat, "太久以前的消息", { createTime: clockNow + 5_000 });
+    clockNow += FEISHU_INBOUND_CATCHUP_WINDOW_MS + 60_000;
+    offlineUserMessage(zhouChat, "窗口内的新消息", { createTime: clockNow - 10_000 });
+
+    const totalSpam = FEISHU_INBOUND_CATCHUP_MAX_MESSAGES + 35;
+    for (let i = 1; i <= totalSpam; i++) {
+      offlineUserMessage(linChat, `刷屏-${i}`, { createTime: clockNow - (totalSpam - i + 1) * 100 });
+    }
+
+    fake.handlers!.onConnected();
+    await settle();
+
+    expect(userMessages(zhou.conversationId).map((m) => m.text)).toEqual(["窗口内的新消息"]);
+    const linCalls = fake.callsOf("message.list").filter((c) => c.container_id === linChat);
+    expect(linCalls.length).toBeLessThanOrEqual(FEISHU_INBOUND_CATCHUP_MAX_PAGES);
+    const delivered = userMessages(lin.conversationId).map((m) => m.text);
+    expect(delivered).toHaveLength(FEISHU_INBOUND_CATCHUP_MAX_MESSAGES);
+    expect(delivered[0]).toBe("刷屏-36");
+    expect(delivered.at(-1)).toBe(`刷屏-${totalSpam}`);
+  });
+
+  it("缺少读群历史消息权限或单群接口报错时隔离单群静默降级记结构化日志，不阻塞总助单聊与其他群；并发多次闪断重连同一时间只跑一轮补拉", async () => {
+    let clockNow = 1_730_002_000_000;
+    const logs: string[] = [];
+    await svc.close();
+    fake = createFakeFeishu({ clock: () => clockNow });
+    fake.granted = [...FEISHU_REQUIRED_SCOPES];
+    svc = makeService({ now: () => clockNow, log: (line) => logs.push(line) });
+    await connect();
+    const linChat = chatOf(lin.pmId);
+    const zhouChat = chatOf(zhou.pmId);
+    const rChat = routerChat();
+
+    clockNow += 3_000;
+    fake.handlers!.onDisconnected("drop 1");
+    offlineUserMessage(linChat, "缺群权限时的群消息", { mention: true, createTime: clockNow + 1_000 });
+    offlineUserMessage(rChat, "缺群权限时的总助单聊消息", { p2p: true, createTime: clockNow + 1_500 });
+    clockNow += 5_000;
+    fake.handlers!.onConnected();
+    await settle();
+    expect(routerCalls.map((c) => c.text)).toEqual(["缺群权限时的总助单聊消息"]);
+    expect(svc.setup.status().lastError).toBeNull();
+    expect(logs.some((l) => l.includes(linChat))).toBe(true);
+
+    fake.granted = [...FEISHU_REQUIRED_SCOPES, FEISHU_GROUP_MSG_SCOPE];
+    fake.failListForChat.set(linChat, { code: 230027, msg: "Lack of necessary permissions", httpStatus: 400 });
+    clockNow += 5_000;
+    fake.handlers!.onDisconnected("drop 2");
+    offlineUserMessage(linChat, "lin 报错被隔离", { createTime: clockNow + 1_000 });
+    offlineUserMessage(zhouChat, "zhou 正常补拉", { createTime: clockNow + 1_500 });
+
+    let activeRounds = 0;
+    let maxConcurrent = 0;
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    let gated = true;
+    fake.beforeListMessages = async () => {
+      activeRounds++;
+      maxConcurrent = Math.max(maxConcurrent, activeRounds);
+      if (gated) {
+        gated = false;
+        await firstGate;
+      }
+      activeRounds--;
+    };
+    clockNow += 5_000;
+    fake.handlers!.onConnected();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    fake.handlers!.onConnected();
+    fake.handlers!.onConnected();
+    releaseFirst();
+    await settle();
+    fake.beforeListMessages = null;
+
+    expect(maxConcurrent).toBe(1);
+    expect(userMessages(zhou.conversationId).map((m) => m.text)).toEqual(["zhou 正常补拉"]);
+    expect(logs.some((l) => l.includes("230027") && l.includes(linChat))).toBe(true);
+    expect(svc.setup.status().state).toBe("connected");
+
+    say(linChat, "实时消息正常收");
+    await settle();
+    expect(userMessages(lin.conversationId).map((m) => m.text)).toEqual(["实时消息正常收"]);
   });
 });

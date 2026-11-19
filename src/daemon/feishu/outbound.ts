@@ -33,8 +33,12 @@ export type FeishuOutboundIntent =
   | { kind: "mirror_user"; conversationId: ConversationId; message: Message }
   /** 新的提问卡。 */
   | { kind: "ask_card"; conversationId: ConversationId; message: Message; deliverables: Deliverable[] }
+  /** 提问卡正文还在等用户期间改了（比如 user_blocker 重查未过补了提示）：项目群和总助单聊的待处理卡同步刷新。 */
+  | { kind: "ask_updated"; conversationId: ConversationId; message: Message }
   /** 提问卡的状态变了（回答了、关掉了、替换了）：项目群里那张卡、总助单聊里引用它的那条一起改成定案的样子。 */
   | { kind: "ask_settled"; conversationId: ConversationId; message: Message }
+  /** 不走 router_items 的待用户拍板或待动手卡（任务图检查点与门禁卡、user_blocker 提醒卡）同步推到总助单聊。 */
+  | { kind: "router_ask"; message: Message }
   /** 总助的卡片：新的简报或拍板项，或它的状态变了。 */
   | { kind: "router_item"; item: RouterItem }
   /** 总助指令有了结果：作为新卡片发在总助单聊里；网页发的指令连同原话一起镜像。 */

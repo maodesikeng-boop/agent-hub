@@ -57,6 +57,8 @@ export type FeishuPostRef =
   | { kind: "message"; messageId: MessageId; part: number }
   | { kind: "file"; messageId: MessageId; part: number }
   | { kind: "router_item"; itemId: RouterItemId }
+  | { kind: "router_ask"; messageId: MessageId }
+  | { kind: "router_file"; messageId: MessageId; part: number }
   | { kind: "router_command"; commandId: RouterCommandId; part?: number }
   | { kind: "chat_policy"; pmId: PmId }
   | { kind: "router_settings" };
@@ -75,6 +77,12 @@ export interface FeishuPostRecord {
   /** file 行：嵌进卡片的图片编号或发出去的文件编号；没传上是 null（uploading 行带编号表示传完、文件也发了，只差改卡）。别的行是 null。 */
   mediaKey: string | null;
   updatedAt: number;
+}
+
+export interface FeishuInboundCursor {
+  chatCreatedAt: number;
+  lastInboundAt: number | null;
+  lastMessageId: FeishuMessageId | null;
 }
 
 export interface FeishuStore {
@@ -119,7 +127,12 @@ export interface FeishuStore {
   ackRouterEvent(chatId: FeishuChatId, id: number, now: number): void;
   /** after 之后的事件超过 keep 条时，返回要跳过的条数和其中最后一条的编号；没超过是 null。 */
   routerEventBacklog(after: number, keep: number): { skipped: number; lastSkippedId: number } | null;
-  routerEventsAfter(after: number, limit: number): { id: number; item_id: RouterItemId | null; command_id: RouterCommandId | null }[];
+  routerEventsAfter(
+    after: number,
+    limit: number,
+  ): { id: number; item_id: RouterItemId | null; command_id: RouterCommandId | null; ask_message_id: MessageId | null }[];
+  inboundCursor(chatId: FeishuChatId): FeishuInboundCursor | null;
+  saveInboundCursor(chatId: FeishuChatId, cursor: { lastInboundAt: number; lastMessageId: FeishuMessageId | null }, now: number): void;
   decision(ref: FeishuCardRef): { clientId: string; name: string } | null;
   saveDecision(ref: FeishuCardRef, clientId: string, name: string, now: number): void;
 
@@ -312,6 +325,8 @@ export function createFeishuStore(db: Db): FeishuStore {
       return { skipped: n - keep, lastSkippedId: last.id };
     },
     routerEventsAfter: (after, limit) => db.all("SELECT id, item_id, command_id FROM feishu_router_events WHERE id > ? ORDER BY id LIMIT ?", after, limit),
+    inboundCursor: () => null,
+    saveInboundCursor: () => {},
     decision(ref) {
       const [kind, id] = decisionKey(ref);
       return db.get<{ clientId: string; name: string }>("SELECT client_id AS clientId, name FROM feishu_decisions WHERE ref_kind = ? AND ref_id = ?", kind, id) ?? null;
@@ -475,7 +490,10 @@ function refKey(ref: FeishuPostRef): { kind: FeishuPostRef["kind"]; id: number; 
   switch (ref.kind) {
     case "message":
     case "file":
+    case "router_file":
       return { kind: ref.kind, id: ref.messageId, part: ref.part };
+    case "router_ask":
+      return { kind: ref.kind, id: ref.messageId, part: 0 };
     case "router_item":
       return { kind: ref.kind, id: ref.itemId, part: 0 };
     case "router_command":
@@ -492,6 +510,10 @@ function toRef(row: PostRow): FeishuPostRef {
     case "message":
     case "file":
       return { kind: row.ref_kind, messageId: row.ref_id, part: row.part };
+    case "router_file":
+      return { kind: "router_file", messageId: row.ref_id, part: row.part };
+    case "router_ask":
+      return { kind: "router_ask", messageId: row.ref_id };
     case "router_item":
       return { kind: "router_item", itemId: row.ref_id };
     case "router_command":

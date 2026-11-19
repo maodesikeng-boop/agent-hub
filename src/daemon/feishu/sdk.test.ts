@@ -84,3 +84,130 @@ describe("飞书长连接半死检测", () => {
     expect(onConnected).not.toHaveBeenCalled();
   }, FEISHU_WS_HANDSHAKE_TIMEOUT_MS + 10_000);
 });
+
+describe("createFeishuSdkTransport.listMessages（im/v1/messages 开放接口与官方 normalize）", () => {
+  it("请求 /open-apis/im/v1/messages 并将字符串 mentions、图片、文件转成与长连接一致的入站事件，跳过撤回与合并转发子消息", async ({ onTestFinished }) => {
+    const seenUrls: string[] = [];
+    const server = createServer((req, res) => {
+      if (req.url?.startsWith("/open-apis/auth/v3/")) return json(res, { code: 0, tenant_access_token: "t-test", app_access_token: "a-test", expire: 7200 });
+      if (req.url?.startsWith("/open-apis/im/v1/messages")) {
+        seenUrls.push(req.url);
+        return json(res, {
+          code: 0,
+          data: {
+            has_more: true,
+            page_token: "next_tok",
+            items: [
+              {
+                message_id: "om_recalled",
+                msg_type: "text",
+                create_time: "1700000001000",
+                deleted: true,
+                chat_id: "oc_g1",
+                sender: { id: "ou_owner", id_type: "open_id", sender_type: "user" },
+                body: { content: JSON.stringify({ text: "This message was recalled" }) },
+              },
+              {
+                message_id: "om_child",
+                upper_message_id: "om_parent",
+                msg_type: "text",
+                create_time: "1700000001500",
+                deleted: false,
+                chat_id: "oc_g1",
+                sender: { id: "ou_owner", id_type: "open_id", sender_type: "user" },
+                body: { content: JSON.stringify({ text: "转发子消息" }) },
+              },
+              {
+                message_id: "om_bot_self",
+                msg_type: "interactive",
+                create_time: "1700000002000",
+                deleted: false,
+                chat_id: "oc_g1",
+                sender: { id: "cli_bot", id_type: "app_id", sender_type: "app" },
+                body: { content: JSON.stringify({ text: "机器人发的" }) },
+              },
+              {
+                message_id: "om_user_at",
+                msg_type: "text",
+                create_time: "1700000003000",
+                deleted: false,
+                chat_id: "oc_g1",
+                sender: { id: "ou_owner", id_type: "open_id", sender_type: "user" },
+                body: { content: JSON.stringify({ text: "@_user_1 帮我看下 @_user_2 的代码" }) },
+                mentions: [
+                  { key: "@_user_1", id: "ou_bot", id_type: "open_id", name: "Fusa" },
+                  { key: "@_user_2", id: "ou_guest", id_type: "open_id", name: "李四" },
+                ],
+              },
+              {
+                message_id: "om_user_img",
+                msg_type: "image",
+                create_time: "1700000004000",
+                deleted: false,
+                chat_id: "oc_g1",
+                sender: { id: "ou_owner", id_type: "open_id", sender_type: "user" },
+                body: { content: JSON.stringify({ image_key: "img_v3_123" }) },
+              },
+            ],
+          },
+        });
+      }
+      res.writeHead(404).end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    onTestFinished(() => new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()); }));
+    const { port } = server.address() as AddressInfo;
+    const transport = transportFor(onTestFinished, `http://127.0.0.1:${port}`, []);
+    const page = await transport.listMessages({
+      chatId: "oc_g1",
+      chatType: "group",
+      botOpenId: "ou_bot",
+      startTimeSec: "1700000000",
+      endTimeSec: "1700000060",
+      sortType: "ByCreateTimeDesc",
+      pageSize: 50,
+    });
+    expect(seenUrls).toHaveLength(1);
+    const query = new URL(seenUrls[0]!, "http://127.0.0.1").searchParams;
+    expect(query.get("container_id_type")).toBe("chat");
+    expect(query.get("container_id")).toBe("oc_g1");
+    expect(query.get("start_time")).toBe("1700000000");
+    expect(query.get("end_time")).toBe("1700000060");
+    expect(query.get("sort_type")).toBe("ByCreateTimeDesc");
+    expect(query.get("page_size")).toBe("50");
+    expect(page.hasMore).toBe(true);
+    expect(page.pageToken).toBe("next_tok");
+    expect(page.items).toEqual([
+      expect.objectContaining({
+        messageId: "om_bot_self",
+        senderType: "app",
+      }),
+      {
+        type: "im.message.receive_v1",
+        messageId: "om_user_at",
+        chatId: "oc_g1",
+        chatType: "group",
+        senderOpenId: "ou_owner",
+        senderType: "user",
+        content: "帮我看下 @李四 的代码",
+        mentionedBot: true,
+        threadId: null,
+        resources: [],
+        createTime: 1700000003000,
+      },
+      {
+        type: "im.message.receive_v1",
+        messageId: "om_user_img",
+        chatId: "oc_g1",
+        chatType: "group",
+        senderOpenId: "ou_owner",
+        senderType: "user",
+        content: "![image](img_v3_123)",
+        mentionedBot: false,
+        threadId: null,
+        resources: [{ type: "image", fileKey: "img_v3_123", fileName: null }],
+        createTime: 1700000004000,
+      },
+    ]);
+  });
+});
