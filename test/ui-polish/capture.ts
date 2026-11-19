@@ -25,6 +25,8 @@ import { assertIsolated } from "./isolation.ts";
 import { applyMutation } from "./mutations.ts";
 import { applyPatch, blockWrites, heldRequests } from "./patches.ts";
 import { SCREEN_INVENTORY, SCREEN_STEPS, expandShots, type Scenario, type ScreenStep, type Shot } from "./screens.ts";
+import { startNodeRelay } from "../../src/relay/node/server.ts";
+import { startFakeGithub } from "../e2e/fake-github.ts";
 import { peerHomeOf, seedScenario, startIsolatedDaemon, type IsolatedDaemon, type SeedResult } from "./seed.ts";
 
 export interface CaptureOptions {
@@ -146,12 +148,32 @@ async function startBackend(scenario: Scenario, repoRoot: string, workDir: strin
     const daemon = await startIsolatedDaemon({ home, repoRoot });
     return { daemon, seed, cookies: [], stop: () => daemon.stop() };
   }
-  const peer = await startIsolatedDaemon({ home: peerHomeOf(home), repoRoot });
+  // 两台登进同一个账号：本机起假 GitHub 和自建中继，两个守护进程都指过去
+  const github = await startFakeGithub();
+  const relay = await startNodeRelay({ port: 0, dbFile: join(workDir, scenario, "relay.sqlite"), githubApiOrigin: github.origin });
+  const mesh = { relayUrl: `http://127.0.0.1:${relay.port}`, github: github.origin };
+  const closeMesh = async () => {
+    await relay.close();
+    await github.close();
+  };
+  const peer = await startIsolatedDaemon({ home: peerHomeOf(home), repoRoot, mesh }).catch(async (error: unknown) => {
+    await closeMesh();
+    throw error;
+  });
   try {
-    const daemon = await startIsolatedDaemon({ home, repoRoot, pairWith: peer });
-    return { daemon, seed, cookies: [], stop: async () => void (await Promise.all([daemon.stop(), peer.stop()])) };
+    const daemon = await startIsolatedDaemon({ home, repoRoot, pairWith: peer, mesh });
+    return {
+      daemon,
+      seed,
+      cookies: [],
+      stop: async () => {
+        await Promise.all([daemon.stop(), peer.stop()]);
+        await closeMesh();
+      },
+    };
   } catch (error) {
     await peer.stop();
+    await closeMesh();
     throw error;
   }
 }

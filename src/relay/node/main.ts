@@ -3,7 +3,8 @@ import { parseArgs } from "node:util";
 import { pathToFileURL } from "node:url";
 import { startNodeRelay } from "./server.ts";
 
-const USAGE = "用法：node src/relay/node/main.ts --port <端口> --origin https://<对外地址> [--db <文件，默认 relay.sqlite>] [--host <地址，默认 0.0.0.0>] [--trust-proxy]\n";
+const USAGE =
+  "用法：node src/relay/node/main.ts --port <端口> --origin https://<对外地址> [--db <文件，默认 relay.sqlite>] [--host <地址，默认 0.0.0.0>] [--trust-proxy] [--debug-frames]\n";
 
 /** 后置：解析参数并起 startNodeRelay，收到 SIGINT / SIGTERM 时关掉再退出；参数不对打印用法，返回 2。 */
 export async function runRelayCli(
@@ -15,7 +16,14 @@ export async function runRelayCli(
   try {
     ({ values } = parseArgs({
       args: argv,
-      options: { port: { type: "string" }, origin: { type: "string" }, db: { type: "string" }, host: { type: "string" }, "trust-proxy": { type: "boolean" } },
+      options: {
+        port: { type: "string" },
+        origin: { type: "string" },
+        db: { type: "string" },
+        host: { type: "string" },
+        "trust-proxy": { type: "boolean" },
+        "debug-frames": { type: "boolean" },
+      },
       strict: true,
     }));
   } catch {
@@ -39,6 +47,7 @@ export async function runRelayCli(
     dbFile: values.db ?? "relay.sqlite",
     publicOrigin: origin.origin,
     trustProxy: values["trust-proxy"] ?? false,
+    debugFrames: values["debug-frames"] ?? false,
     log: (line) => io.stdout.write(`${line}\n`),
   });
   await new Promise<void>((resolve) => {

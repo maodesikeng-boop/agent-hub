@@ -3,7 +3,7 @@
 //
 // 键：入口本机是 LOCAL_DEVICE（""，不是合法的 UUID，不会和真设备撞）；别的设备是它的 DeviceId。
 // 只有一台（入口本机）时界面和没有联机时一模一样：所有“按设备”的显示都看 devices.length > 1。
-import type { ConversationId, DeviceId, DeviceInfo } from "../shared/index.ts";
+import type { ConversationId, DeviceId, DeviceInfo, MeshLinkKind } from "../shared/index.ts";
 import { formatAgo, JUST_NOW } from "./format.ts";
 import type { HubState } from "./state.ts";
 
@@ -82,9 +82,37 @@ export function platformLabel(platform: string): string {
   return platform;
 }
 
+/** 本机连别的电脑用的哪种（设置 → 电脑里那一行的小字）。 */
+export const LINK_LABELS: Readonly<Record<Exclude<MeshLinkKind, "local">, string>> = {
+  lan: "Same network",
+  relay: "Via relay",
+};
+
+const placeholderSelfCache = new Map<string, DeviceInfo>();
+
 /** 还没拉到设备清单（或者守护进程还没有联机）时，入口本机的样子。 */
 export function placeholderSelf(platform: string): DeviceInfo {
-  return { id: LOCAL_DEVICE, name: "This computer", platform, self: true, url: null };
+  const cached = placeholderSelfCache.get(platform);
+  if (cached !== undefined) return cached;
+  const info: DeviceInfo = { id: LOCAL_DEVICE, name: "This computer", platform, self: true, online: true, link: "local", fingerprint: null };
+  if (placeholderSelfCache.size >= 8) {
+    const oldest = placeholderSelfCache.keys().next().value;
+    if (oldest !== undefined) placeholderSelfCache.delete(oldest);
+  }
+  placeholderSelfCache.set(platform, info);
+  return info;
+}
+
+export function sameDeviceInfo(a: DeviceInfo, b: DeviceInfo): boolean {
+  return (
+    a.id === b.id &&
+    a.name === b.name &&
+    a.platform === b.platform &&
+    a.self === b.self &&
+    a.online === b.online &&
+    a.link === b.link &&
+    a.fingerprint === b.fingerprint
+  );
 }
 
 /**

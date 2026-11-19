@@ -15,7 +15,7 @@ import {
   DEFAULT_PM_MODE,
   ENV_HOME,
   ENV_PORT,
-  ENV_TAILSCALE,
+  ENV_RELAY_URL,
   VENDOR_LIST,
   bundledModelCatalog,
   type AgentVendor,
@@ -23,7 +23,8 @@ import {
   type RouterAgentPlan,
   type RouterCommandDispatchedTarget,
   type WorkerRecord,
-  type DeviceInviteResponse,
+  type AccountStatusView,
+  type DevicesResponse,
   type SessionId,
   type VendorAvailability,
 } from "../../src/shared/index.ts";
@@ -480,18 +481,18 @@ export interface IsolatedDaemon {
   stop(): Promise<void>;
 }
 
-/** 和 src/daemon/main.ts 一样，另外认本机回环网址当设备网址（two-devices 要同机两个守护进程配对）。 */
-const LOOPBACK_MAIN = fileURLToPath(new URL("../e2e/loopback-daemon.ts", import.meta.url));
+/** 和 src/daemon/main.ts 一样，另外把账号组网接到本机的假 GitHub 和自建中继（two-devices 要同机两个守护进程登进同一个账号）。 */
+const MESH_MAIN = fileURLToPath(new URL("../e2e/mesh-daemon.ts", import.meta.url));
 const FAKE_CLAUDE = fileURLToPath(new URL("../fake-claude/fake-claude.ts", import.meta.url));
 const FROZEN_CLOCK = fileURLToPath(new URL("./frozen-clock.ts", import.meta.url));
 const LOGIN_URL = /http:\/\/127\.0\.0\.1:(\d+)\/auth\?token=([A-Za-z0-9_-]+)/;
 
 /**
- * 在灌好种子的数据目录上起真守护进程：端口随机，各厂商命令都换成不存在的路径或假命令，不问真的 Tailscale，
+ * 在灌好种子的数据目录上起真守护进程：端口随机，各厂商命令都换成不存在的路径或假命令，
  * 发的是当前工作区 `pnpm build` 出来的网页。
  * 后置：返回时已经能登录；stop 之后进程退出、端口释放。同一台机器上可以同时起几个（two-devices 剧本要两个）。
  */
-export async function startIsolatedDaemon(options: { home: string; repoRoot: string; pairWith?: IsolatedDaemon }): Promise<IsolatedDaemon> {
+export async function startIsolatedDaemon(options: { home: string; repoRoot: string; pairWith?: IsolatedDaemon; mesh?: { relayUrl: string; github: string } }): Promise<IsolatedDaemon> {
   const home = resolve(options.home);
   const scratch = join(home, "..", `${home.split(sep).pop()}-scratch`);
   assertIsolated(home);
@@ -505,14 +506,14 @@ export async function startIsolatedDaemon(options: { home: string; repoRoot: str
     HOME: join(scratch, "user-home"),
     [ENV_HOME]: home,
     [ENV_PORT]: "0",
-    [ENV_TAILSCALE]: join(scratch, "no-tailscale"),
+    ...(options.mesh !== undefined ? { [ENV_RELAY_URL]: options.mesh.relayUrl, FUSA_TEST_GITHUB: options.mesh.github } : {}),
     UI_POLISH_NOW_MS: String(Date.parse(BROWSER_NOW_ISO)),
     // 默认厂商用假 claude（装着、能用），别家指到不存在的路径（没装）；种子里的动作都标了做完，假 claude 不会被真的叫起来干活
     ...Object.fromEntries(VENDOR_LIST.map(({ id, cli }) => [cli.envVar, id === DEFAULT_AGENT_VENDOR ? wrapScriptAsPlatformCli(FAKE_CLAUDE, scratch, "fake-claude") : join(scratch, `no-${id}`)])),
     FAKE_CLAUDE_LOG: join(scratch, "fake-claude.log"),
     FAKE_CLAUDE_STATE: scratch,
   };
-  const child = spawn(process.execPath, ["--import", FROZEN_CLOCK, LOOPBACK_MAIN], { cwd: options.repoRoot, env, stdio: ["pipe", "pipe", "pipe"] });
+  const child = spawn(process.execPath, ["--import", FROZEN_CLOCK, MESH_MAIN], { cwd: options.repoRoot, env, stdio: ["pipe", "pipe", "pipe"] });
   let out = "";
   let err = "";
   child.stdout.setEncoding("utf8").on("data", (c: string) => (out += c));
@@ -548,23 +549,52 @@ export async function startIsolatedDaemon(options: { home: string; repoRoot: str
   return daemon;
 }
 
-/** 和网页“设置 → 电脑”一样：在 peer 上发邀请，在 entry 上添加。 */
+/** 和网页“设置 → 账号与设备”一样：两台登录同一个账号，entry 核对批准 peer，两边都点“一致”。 */
 async function pair(entry: IsolatedDaemon, peer: IsolatedDaemon): Promise<void> {
   const login = async (d: IsolatedDaemon) => {
     const res = await fetch(d.loginUrl, { redirect: "manual" });
     return { cookie: (res.headers.get("set-cookie") ?? "").split(";", 1)[0]!, origin: d.origin };
   };
-  const send = async (c: { cookie: string; origin: string }, path: string, body?: unknown) => {
+  const call = async <T,>(c: { cookie: string; origin: string }, method: string, path: string, body?: unknown): Promise<T> => {
     const res = await fetch(c.origin + path, {
-      method: "POST",
+      method,
       headers: { cookie: c.cookie, origin: c.origin, ...(body === undefined ? {} : { "content-type": "application/json" }) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-    if (!res.ok) throw new Error(`配对失败 ${path}：${res.status} ${await res.text()}`);
-    return res;
+    if (!res.ok) throw new Error(`登录组网失败 ${path}：${res.status} ${await res.text()}`);
+    return (await res.json()) as T;
   };
-  const invite = (await (await send(await login(peer), API_PATHS.deviceInvites)).json()) as DeviceInviteResponse;
-  await send(await login(entry), API_PATHS.devices, { url: invite.url, code: invite.code });
+  const until = async <T,>(check: () => Promise<T | null>): Promise<T> => {
+    for (let i = 0; i < 300; i++) {
+      const value = await check();
+      if (value !== null) return value;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    throw new Error("等组网太久了");
+  };
+  const e = await login(entry);
+  const p = await login(peer);
+  const status = (c: typeof e) => call<AccountStatusView>(c, "GET", API_PATHS.account);
+  await call(e, "POST", API_PATHS.accountLogin, {});
+  await until(async () => ((await status(e)).state === "signed_in" ? true : null));
+  await call(p, "POST", API_PATHS.accountLogin, {});
+  await until(async () => ((await status(p)).state === "awaiting_approval" ? true : null));
+  const entryId = (await call<DevicesResponse>(e, "GET", API_PATHS.devices)).devices.find((d) => d.self)!.id;
+  const peerId = (await call<DevicesResponse>(p, "GET", API_PATHS.devices)).devices.find((d) => d.self)!.id;
+  await until(async () => {
+    const s = await status(e);
+    return s.state === "signed_in" && s.approvals.some((a) => a.requestId === peerId) ? true : null;
+  });
+  await call(e, "POST", API_PATHS.accountApprovalBegin(peerId), {});
+  await until(async () => {
+    const [se, sp] = [await status(e), await status(p)];
+    const a = se.state === "signed_in" ? se.approvals.find((x) => x.requestId === peerId)?.sas : null;
+    const b = sp.state === "awaiting_approval" ? sp.approval?.sas : null;
+    return a && b && a === b ? true : null;
+  });
+  await call(p, "POST", API_PATHS.accountApprovalAnswer(entryId), { match: true });
+  await call(e, "POST", API_PATHS.accountApprovalAnswer(peerId), { match: true });
+  await until(async () => ((await status(p)).state === "signed_in" ? true : null));
 }
 
 /** 1×1 的灰色 PNG：附件里的“图片”。 */

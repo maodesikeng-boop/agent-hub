@@ -28,7 +28,6 @@ import {
   type PmId,
   type Project,
   type ProjectFolder,
-  type PublicEntryStatus,
   type RouterItem,
   type RouterSlice,
   type ScheduleRecord,
@@ -36,7 +35,6 @@ import {
   type SessionState,
   type StateSnapshot,
   type TaskGraph,
-  type TunnelStatus,
   type WorkerPick,
 } from "../shared/index.ts";
 import type { ErrorInfo } from "./format.ts";
@@ -118,10 +116,6 @@ export interface HubState {
   lookups: Record<ConversationId, "loading" | "missing" | undefined>;
   /** 服务端所在机器能做什么（界面按它显示控件，见 server-info.tsx）；还没加载时是 macOS 的占位，加载完才会显示界面。 */
   server: ServerInfo;
-  /** 连入方 ssh 隧道状态（来自 /api/state 的 tunnel）。 */
-  tunnel?: TunnelStatus | null;
-  /** 公网入口状态（来自 /api/state 的 publicEntry）。 */
-  publicEntry?: PublicEntryStatus;
   pending: PendingMessage[];
   older: Record<ConversationId, OlderState | undefined>;
   /** 用户主动翻过页（olderStart / olderDone）的对话：不再按 MAX_LIVE_MESSAGES 自动截断顶部旧消息；重拉快照时重置。 */
@@ -611,7 +605,7 @@ function fromSnapshot(state: HubState, snapshot: StateSnapshot): HubState {
       : { conversation: c.conversation, messages: c.messages, hasMore: c.hasMore, ...workerLine };
   }
   const all = snapshot.conversations.flatMap((c) => c.messages);
-  const { tunnel: _oldTunnel, publicEntry: _oldPublicEntry, ...base } = withoutLoadError(state);
+  const base = withoutLoadError(state);
   return {
     ...base,
     phase: "ready",
@@ -629,8 +623,6 @@ function fromSnapshot(state: HubState, snapshot: StateSnapshot): HubState {
     olderEndedWorkers: snapshot.olderEndedWorkers ?? {},
     lookups: {},
     server: snapshot.server,
-    ...(snapshot.tunnel !== undefined ? { tunnel: snapshot.tunnel } : {}),
-    ...(snapshot.publicEntry !== undefined ? { publicEntry: snapshot.publicEntry } : {}),
     pending: dropConfirmed(state.pending, all),
     older: {},
     olderLoaded: {},

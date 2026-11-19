@@ -50,8 +50,9 @@
 - `@fastify/static`：托管打包后的网页（`ui-server/server.ts`）。
 - `@fastify/compress`：大响应压缩（`ui-server/server.ts`、`peers/proxy.ts`）。
 - `zod`：校验输入（`ledger/hub-commands.ts`、`peers/service.ts`）。
-- `lru-cache`：带上限的缓存（`commands-catalog.ts`、`driver/model-catalog.ts`、`shared/paths.ts`、`platform/win32/`、`skill-files.ts`、`ledger/loaded-skills.ts`、`daemon/feishu/service.ts`）。
+- `lru-cache`：带上限的缓存（`commands-catalog.ts`、`driver/model-catalog.ts`、`shared/paths.ts`、`platform/win32/`、`skill-files.ts`、`ledger/loaded-skills.ts`、`daemon/feishu/service.ts`、`relay/node/server.ts`）。
 - `web-push`：手机推送（`push/sender.ts`、`push/vapid.ts`）。
+- `@peculiar/x509`：纯 JS（基于 WebCrypto）生成与解析设备 Ed25519 自签证书（`daemon/mesh/identity.ts`）。
 - `@agentclientprotocol/sdk`：标准 ACP（Agent Client Protocol）客户端与服务端协议层（`src/vendors/_common/acp/`）。
 - `jsonc-parser`：保留注释与格式的 JSON/JSONC 解析与局部补丁（`src/vendors/_common/sync/jsonc.ts`）。
 - `@decimalturn/toml-patch`：保留注释与格式的 TOML 解析与局部补丁（`src/vendors/_common/sync/toml.ts`）。
@@ -98,6 +99,7 @@
 **工程工具**
 - `typescript`：类型检查（`pnpm typecheck`）。`knip`：死代码检查，没接脚本和 CI，需要时手动跑 `pnpm exec knip`（上次全仓清理见 PR #193）。`@types/*`（node、react、react-dom、ws、web-push、write-file-atomic）：类型。
 - `oxc-parser`：把源码解析成语法树，`src/web/web-guard.test.ts` 用它按调用节点找定时器数字字面量（TS 7 是原生版，没有 `createSourceFile` 的 JS 接口；它原本只是 knip 的传递依赖）。
+- `wrangler` + `@cloudflare/workers-types`：Cloudflare Workers + SQLite Durable Objects 中继（`src/relay/cloudflare/worker.ts`、`wrangler.toml`）的构建部署、类型检查与本地 `workerd` 运行时集成测试（`src/relay/cloudflare/worker.test.ts`）。
 
 **使用规则**
 - 要新功能，先查这一节有没有；没有再找行业成熟库；实在没有才自己写，并在 PR 里说明为什么。

@@ -199,19 +199,25 @@ describe("createRelayClient", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     const a = await makeIdentity(DEVICE_A);
     const c = createRelayClient({ relayUrl: `http://127.0.0.1:${port}`, accountId: "acct_abcdefghijklmnopqrstuvwxyz" as AccountId, identity: a, candidates: () => [], log: () => {} });
+    /** 不用受假时钟冻结的 vi.waitFor，直接按真实 I/O 轮询到条件成立。 */
+    const settleIo = async (predicate: () => boolean) => {
+      for (let tick = 0; tick < 2_000; tick++) {
+        if (predicate()) return;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      throw new Error("timed out waiting for real socket I/O");
+    };
     /** 推进 delay 毫秒：差 1 毫秒时还没重连，到点后重连一次。 */
     const expectReconnectAfter = async (delay: number) => {
       const before = connects;
       await vi.advanceTimersByTimeAsync(delay - 1);
       expect(connects).toBe(before);
       await vi.advanceTimersByTimeAsync(1);
-      await vi.waitFor(() => expect(connects).toBe(before + 1));
-      await vi.waitFor(() => expect(c.state()).not.toBe("connecting"));
+      await settleIo(() => connects === before + 1 && vi.getTimerCount() >= 1);
     };
     try {
       c.start();
-      await vi.waitFor(() => expect(connects).toBe(1));
-      await vi.waitFor(() => expect(c.state()).toBe("unreachable"));
+      await settleIo(() => connects === 1 && c.state() === "unreachable" && vi.getTimerCount() >= 1);
       let delay = MESH_RELAY_BACKOFF_MIN_MS;
       for (let i = 0; i < 8; i++) {
         await expectReconnectAfter(delay);
@@ -220,11 +226,11 @@ describe("createRelayClient", () => {
       expect(delay).toBe(MESH_RELAY_BACKOFF_MAX_MS);
       accept = true;
       await vi.advanceTimersByTimeAsync(MESH_RELAY_BACKOFF_MAX_MS);
-      await vi.waitFor(() => expect(c.state()).toBe("connected"));
+      await settleIo(() => c.state() === "connected");
       await vi.advanceTimersByTimeAsync(MESH_RELAY_STABLE_MS);
       accept = false;
       for (const socket of wss.clients) socket.terminate();
-      await vi.waitFor(() => expect(c.state()).toBe("unreachable"));
+      await settleIo(() => c.state() === "unreachable" && vi.getTimerCount() >= 1);
       await expectReconnectAfter(MESH_RELAY_BACKOFF_MIN_MS);
     } finally {
       vi.useRealTimers();

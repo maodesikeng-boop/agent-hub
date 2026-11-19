@@ -124,10 +124,9 @@ describe("守护进程启动失败：终端上的输出", () => {
       const subHome = home(`sub-${kind}`);
       const script = `
         import { runDaemonProcess } from "./src/daemon/entry.ts";
-                await runDaemonProcess({
+        await runDaemonProcess({
           userHome: ${JSON.stringify(userHome)},
           env: { ...process.env, AGENT_HUB_HOME: ${JSON.stringify(subHome)}, AGENT_HUB_PORT: "0" },
-          tailnet: NO_TAILNET,
         });
         if (${JSON.stringify(kind)} === "uncaughtException") {
           setImmediate(() => { throw new Error("crash-by-uncaught"); });
@@ -165,10 +164,9 @@ describe("守护进程启动失败：终端上的输出", () => {
     const subHome = home("sub-double");
     const script = `
       import { runDaemonProcess } from "./src/daemon/entry.ts";
-            await runDaemonProcess({
+      await runDaemonProcess({
         userHome: ${JSON.stringify(userHome)},
         env: { ...process.env, AGENT_HUB_HOME: ${JSON.stringify(subHome)}, AGENT_HUB_PORT: "0" },
-        tailnet: NO_TAILNET,
       });
       setImmediate(() => {
         setImmediate(() => { throw new Error("second-during-shutdown"); });
@@ -198,7 +196,7 @@ describe("守护进程启动失败：终端上的输出", () => {
       if (supervised) env[DESKTOP_CONTRACT.supervisedEnv] = "test";
       const script = `
         import { runDaemonProcess } from "./src/daemon/entry.ts";
-        await runDaemonProcess({ userHome: ${JSON.stringify(userHome)}, tailnet: { current: () => null, refresh: async () => null } });
+        await runDaemonProcess({ userHome: ${JSON.stringify(userHome)} });
         // 守护进程的子进程（agent）拿不到监管标识
         console.log("child-env:" + (process.env[${JSON.stringify(DESKTOP_CONTRACT.supervisedEnv)}] ?? "none"));
       `;

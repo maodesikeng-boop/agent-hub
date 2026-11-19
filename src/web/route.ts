@@ -24,7 +24,6 @@ export const SETTINGS_SECTIONS = [
   "computers",
   "sign-in",
   "browsers",
-  "public-access",
 ] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 /** 手机设置页：不写 section 是一级主页。 */

@@ -13,11 +13,11 @@
     "build": "vite build",
     "prestart": "vite build",
     "start": "node src/daemon/main.ts",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p src/web/tsconfig.json && tsc --noEmit -p src/web/tsconfig.sw.json && tsc --noEmit -p test/ui-polish/tsconfig.in-page.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p src/relay/cloudflare/tsconfig.json && tsc --noEmit -p src/web/tsconfig.json && tsc --noEmit -p src/web/tsconfig.sw.json && tsc --noEmit -p test/ui-polish/tsconfig.in-page.json",
     "test": "vitest run",
     "test:quiet": "vitest run --reporter=dot",
     "test:ci": "vitest run --reporter=verbose --reporter=github-actions --reporter=junit --outputFile.junit=vitest-junit.xml",
-    "check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p src/web/tsconfig.json && tsc --noEmit -p src/web/tsconfig.sw.json && tsc --noEmit -p test/ui-polish/tsconfig.in-page.json && vitest run --reporter=dot",
+    "check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p src/relay/cloudflare/tsconfig.json && tsc --noEmit -p src/web/tsconfig.json && tsc --noEmit -p src/web/tsconfig.sw.json && tsc --noEmit -p test/ui-polish/tsconfig.in-page.json && vitest run --reporter=dot",
     "smoke": "node test/smoke/main.ts",
     "eval": "node test/eval/cli.ts",
     "ui:polish": "node test/ui-polish/cli.ts",
@@ -25,6 +25,7 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "4.14.0",
+    "@cloudflare/workers-types": "^5.20261119.1",
     "@tailwindcss/vite": "^4.3.4",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
@@ -43,7 +44,8 @@
     "tailwindcss": "^4.3.4",
     "typescript": "^7.0.2",
     "vite": "^8.3.5",
-    "vitest": "^5.0.5"
+    "vitest": "^5.0.5",
+    "wrangler": "^4.165.0"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^2.5.0",

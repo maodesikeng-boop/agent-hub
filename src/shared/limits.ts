@@ -1098,6 +1098,9 @@ export const FEISHU_INBOUND_CATCHUP_CONCURRENCY = 6;
 export const FEISHU_SEEN_MESSAGES_MAX = 2_000;
 /** 等扫码确认时 status 被问的间隔（终端命令轮询状态用）。 */
 export const FEISHU_CLI_POLL_MS = 2_000;
+/** mesh 终端命令等授权、等核对时轮询本机管理 socket 的间隔与最大次数（覆盖 15 分钟 GitHub 设备码有效期）。 */
+export const MESH_CLI_POLL_MS = 1_500;
+export const MESH_CLI_MAX_POLLS = 600;
 
 // ───────────── 账号组网（docs/account-mesh-design.md「性能」节）─────────────
 /**

@@ -244,7 +244,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   // 手机设置：不认识的子页归一为 #/settings；确定未开联机（fleet.listed && !fleet.managed）时直达电脑/公网入口退回一级设置（拉清单期间等待）
   useEffect(() => {
     if (autoSelect || route?.view !== "settings") return;
-    const unmanagedSection = fleet.listed && !fleet.managed && (route.section === "computers" || route.section === "public-access");
+    const unmanagedSection = fleet.listed && !fleet.managed && route.section === "computers";
     if (unmanagedSection || window.location.hash !== routeHash(route)) {
       replace({ view: "settings" });
     }
@@ -418,17 +418,11 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
     }
     const next: DeviceSettings = {
       devices: fleet.devices,
-      ...(local.state.tunnel !== undefined ? { tunnel: local.state.tunnel } : {}),
-      ...(local.state.publicEntry !== undefined ? { publicEntry: local.state.publicEntry } : {}),
-      ...(local.state.server.repoDir !== undefined ? { repoDir: local.state.server.repoDir } : {}),
       onChanged: refreshFleet,
     };
     const prev = deviceSettingsRef.current;
     if (
       prev !== null &&
-      prev.tunnel === next.tunnel &&
-      prev.publicEntry === next.publicEntry &&
-      prev.repoDir === next.repoDir &&
       prev.onChanged === next.onChanged &&
       prev.devices.length === next.devices.length &&
       next.devices.every((d, i) => {
@@ -440,7 +434,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
     }
     deviceSettingsRef.current = next;
     return next;
-  }, [fleet.managed, fleet.devices, local.state.tunnel, local.state.publicEntry, local.state.server.repoDir, refreshFleet]);
+  }, [fleet.managed, fleet.devices, refreshFleet]);
   const created = useCallback(
     (device: string, conversationId: ConversationId) => {
       setCreating(false);

@@ -15,7 +15,6 @@ export function BrowserSessionsSettings({ onSignedOut }: { onSignedOut?: () => v
   const signIn = useSignInLink();
   const {
     sessions,
-    hasPending,
     loadError,
     rowErrors,
     allError,
@@ -25,7 +24,6 @@ export function BrowserSessionsSettings({ onSignedOut }: { onSignedOut?: () => v
     confirmingAll,
     setConfirmingAll,
     signOut,
-    approve,
     signOutAll,
   } = useBrowserSessions({
     pollWhileActive: signIn.polling,
@@ -72,7 +70,7 @@ export function BrowserSessionsSettings({ onSignedOut }: { onSignedOut?: () => v
       <CollapsibleGroup
         title="Signed-in browsers"
         summary={sessions === null ? undefined : String(sessions.length)}
-        defaultOpen={hasPending || loadError !== null}
+        defaultOpen={loadError !== null}
       >
         {sessions === null && loadError === null && (
           <div className="flex min-h-13 items-center justify-center">
@@ -87,30 +85,18 @@ export function BrowserSessionsSettings({ onSignedOut }: { onSignedOut?: () => v
         {sessions?.map((session) => {
           const name = describeUserAgent(session.userAgent);
           const ago = formatAgo(session.lastSeenAt, signIn.now);
-          const pending = session.status === "pending_approval";
           const confirming = session.current && confirmingSelf;
           const KindIcon = KIND_ICONS[userAgentKind(session.userAgent)];
           const detail = (
             <span className="flex flex-wrap items-center gap-x-3">
               {session.current && <span>This browser</span>}
-              {pending && <span>Pending approval</span>}
-              {session.viaPublic && <span>Via public access</span>}
               <span>{ago}</span>
             </span>
           );
           return (
             <SettingsRow key={session.id} label={name} icon={<KindIcon />} detail={detail} error={rowErrors[session.id]}>
               {(id) =>
-                pending ? (
-                  <span className="-mr-3 flex items-center gap-1">
-                    <Button variant="ghost" size="sm" aria-label="Deny" disabled={busy !== null} onClick={() => signOut(session)}>
-                      {busy === `exit:${session.id}` && <Loader2 aria-hidden="true" />}Deny
-                    </Button>
-                    <Button id={id} variant="ghost" size="sm" aria-label="Allow" disabled={busy !== null} onClick={() => approve(session)}>
-                      {busy === `approve:${session.id}` && <Loader2 aria-hidden="true" />}Allow
-                    </Button>
-                  </span>
-                ) : confirming ? (
+                confirming ? (
                   <span className="-mr-3 flex items-center gap-1">
                     <Button variant="ghost" size="sm" disabled={busy !== null} onClick={() => setConfirmingSelf(false)}>
                       Cancel

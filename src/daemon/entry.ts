@@ -1,4 +1,4 @@
-// 守护进程的进程外壳（main.ts、测试入口 test/e2e/loopback-daemon.ts 共用）：启动，打印登录链接；Ctrl+C 或 SIGTERM 按顺序关机，退出码 0（出错或超过总上限 SHUTDOWN_TOTAL_MS 是 1）。
+// 守护进程的进程外壳（main.ts、测试入口 test/e2e/mesh-daemon.ts 共用）：启动，打印登录链接；Ctrl+C 或 SIGTERM 按顺序关机，退出码 0（出错或超过总上限 SHUTDOWN_TOTAL_MS 是 1）。
 // 启动失败退出码 1：已知的原因（已有守护进程在跑、端口被占、AGENT_HUB_PORT 不对）只打一句话 + 怎么办；
 // 不认识的异常打一句话 + 日志路径，堆栈和原文写进 state/logs/daemon.log，不上终端。
 // 运行期 uncaughtException / unhandledRejection：把完整错误写进 state/logs/daemon.log 和标准错误，再试着正常关机（最多 FATAL_SHUTDOWN_MS，

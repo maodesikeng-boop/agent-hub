@@ -29,6 +29,10 @@ export interface NodeRelayOptions {
   publicOrigin?: string;
   /** 放在反代后面时打开，按 X-Forwarded-For 算登记限流的 IP。 */
   trustProxy?: boolean;
+  /** 调试开关：每条数据帧只打印长度和前 8 个字节的十六进制（验证 TLS 记录头，不打印正文）。 */
+  debugFrames?: boolean;
+  /** 测试观察中继收到的原始密文帧。 */
+  onDataFrame?: (bytes: Uint8Array) => void;
   /** 测试换成假的 GitHub。 */
   fetch?: typeof fetch;
   githubApiOrigin?: string;
@@ -174,7 +178,13 @@ export async function startNodeRelay(options: NodeRelayOptions): Promise<Running
     channelEnds.set(channel, ends);
     socket.on("message", (data, isBinary) => {
       if (!isBinary) return socket.close(WS_CLOSE_POLICY, "bad_frame");
-      handle.receive(toBytes(data));
+      const bytes = toBytes(data);
+      if (options.debugFrames) {
+        const head = Buffer.from(bytes.subarray(0, 8)).toString("hex").match(/.{1,2}/g)?.join(" ") ?? "";
+        log(`数据帧 ${bytes.byteLength}B 头8B: ${head}`);
+      }
+      options.onDataFrame?.(bytes);
+      handle.receive(bytes);
     });
     socket.once("close", () => {
       ends.delete(socket);

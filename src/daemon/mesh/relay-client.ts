@@ -143,37 +143,103 @@ export class RelayDialError extends Error {
 /** 中继网址 → WebSocket 的 origin（http → ws，https → wss）。 */
 const wsOrigin = (relayUrl: string) => new URL(relayUrl).origin.replace(/^http/, "ws");
 
+/** 大块字节按 RELAY_MAX_DATA_FRAME_BYTES 分帧；若是连续 TLS 记录则沿完整记录边界攒帧，避免把单条 TLS 记录劈成两半。 */
+function splitRelayFrames(chunk: Buffer, maxBytes: number): Buffer[] {
+  if (chunk.length <= maxBytes) return [chunk];
+  const frames: Buffer[] = [];
+  let start = 0;
+  while (start < chunk.length) {
+    if (chunk.length - start <= maxBytes) {
+      frames.push(chunk.subarray(start));
+      break;
+    }
+    let end = start;
+    while (end + 5 <= chunk.length) {
+      const type = chunk[end]!;
+      const major = chunk[end + 1]!;
+      const recLen = 5 + chunk.readUInt16BE(end + 3);
+      if (type < 0x14 || type > 0x17 || major !== 0x03 || recLen > maxBytes || end + recLen - start > maxBytes) break;
+      end += recLen;
+    }
+    if (end === start) end = Math.min(start + maxBytes, chunk.length);
+    frames.push(chunk.subarray(start, end));
+    start = end;
+  }
+  return frames;
+}
+
 /**
  * 一条数据通道的 WebSocket 包成字节流：写进来的按 RELAY_MAX_DATA_FRAME_BYTES 切成二进制帧，收到的帧原样读出；
- * 读的一侧满了先停收，WebSocket 关了流就结束。
+ * TLS 流上被 OpenSSL 环形缓冲拆成两半的单条记录拼齐后再发，保证每条数据帧对齐完整 TLS 记录边界。
  */
 export function relayByteStream(ws: WebSocket): Duplex {
+  let tlsMode: boolean | null = null;
+  let carry: Buffer = Buffer.alloc(0);
+
+  const sendFrames = (parts: Buffer[], callback: (error?: Error | null) => void) => {
+    if (parts.length === 0) return callback();
+    let pending = 0;
+    let failed = false;
+    for (const part of parts) {
+      pending++;
+      ws.send(part, { binary: true }, (error) => {
+        if (failed) return;
+        if (error) {
+          failed = true;
+          return callback(error);
+        }
+        if (--pending === 0) callback();
+      });
+    }
+  };
+
   const stream = new Duplex({
     read() {
       if (ws.isPaused) ws.resume();
     },
     write(chunk: Buffer, _encoding, callback) {
       if (ws.readyState !== WebSocket.OPEN) return callback(new Error("中继通道已关闭"));
-      let pending = 0;
-      let failed = false;
-      for (let offset = 0; offset < chunk.length; offset += RELAY_MAX_DATA_FRAME_BYTES) {
-        pending++;
-        ws.send(chunk.subarray(offset, offset + RELAY_MAX_DATA_FRAME_BYTES), { binary: true }, (error) => {
-          if (failed) return;
-          if (error) {
-            failed = true;
-            return callback(error);
-          }
-          if (--pending === 0) callback();
-        });
+      if (tlsMode === null) {
+        tlsMode = chunk.length >= 3 && chunk[0] === 0x16 && chunk[1] === 0x03 && (chunk[2] === 0x01 || chunk[2] === 0x03);
       }
-      if (pending === 0) callback();
+      if (!tlsMode) {
+        sendFrames(splitRelayFrames(chunk, RELAY_MAX_DATA_FRAME_BYTES), callback);
+        return;
+      }
+      const buf = carry.length === 0 ? chunk : Buffer.concat([carry, chunk]);
+      let offset = 0;
+      while (offset + 5 <= buf.length) {
+        const type = buf[offset]!;
+        const major = buf[offset + 1]!;
+        const recLen = 5 + buf.readUInt16BE(offset + 3);
+        if (type < 0x14 || type > 0x17 || major !== 0x03 || recLen > RELAY_MAX_DATA_FRAME_BYTES) {
+          tlsMode = false;
+          carry = Buffer.alloc(0);
+          sendFrames(splitRelayFrames(buf.subarray(offset), RELAY_MAX_DATA_FRAME_BYTES), callback);
+          return;
+        }
+        if (offset + recLen > buf.length) break;
+        offset += recLen;
+      }
+      const ready = offset === 0 ? Buffer.alloc(0) : buf.subarray(0, offset);
+      carry = offset === buf.length ? Buffer.alloc(0) : Buffer.from(buf.subarray(offset));
+      sendFrames(ready.length === 0 ? [] : splitRelayFrames(ready, RELAY_MAX_DATA_FRAME_BYTES), callback);
     },
     final(callback) {
+      const tail = carry;
+      carry = Buffer.alloc(0);
+      if (tail.length > 0 && ws.readyState === WebSocket.OPEN) {
+        sendFrames(splitRelayFrames(tail, RELAY_MAX_DATA_FRAME_BYTES), (err) => {
+          ws.close(1000);
+          callback(err);
+        });
+        return;
+      }
       ws.close(1000);
       callback();
     },
     destroy(error, callback) {
+      carry = Buffer.alloc(0);
       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) ws.terminate();
       callback(error);
     },

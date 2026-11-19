@@ -102,7 +102,7 @@ export interface RelayControlHandle {
   /** 收到一条文本帧。 */
   receive(text: string): Promise<void>;
   /** 连接关了（正常或异常）。 */
-  closed(): void;
+  closed(): Promise<void>;
   /** 现在该存进 attachment 的东西。 */
   attachment(): RelayControlAttachment;
 }
@@ -537,6 +537,7 @@ export function createRelayAccountRoom(options: RelayAccountRoomOptions): RelayA
         closed() {
           conn.closed = true;
           const run = async () => {
+            await ensureLoaded();
             const was = conn.device;
             if (!detach(conn) || was === null) return;
             broadcastPresence();
@@ -551,6 +552,7 @@ export function createRelayAccountRoom(options: RelayAccountRoomOptions): RelayA
             await arbitrateAll();
           };
           conn.queue = conn.queue.then(run, run);
+          return conn.queue;
         },
         attachment() {
           const held: RelayControlAttachment["held"] = [];

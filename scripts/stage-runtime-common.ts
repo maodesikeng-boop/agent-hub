@@ -51,7 +51,7 @@ export type BundledNodeTarget = keyof typeof BUNDLED_NODE_ARCHIVES;
 /** 裁剪随包 node_modules 的目标：两个分发平台，或本机冒烟（不裁平台二进制）。 */
 export type StageTargetOs = "win32" | "darwin-arm64" | "host";
 
-const DAEMON_SOURCE_SUBDIRS = ["daemon", "shared", "vendors", "hub", "tunnel", "feishu"] as const;
+const DAEMON_SOURCE_SUBDIRS = ["admin", "daemon", "shared", "vendors", "hub", "feishu", "mesh", "relay"] as const;
 
 const MXC_WIN_X64_KEEP_FILES = new Set([
   "mxc_ffi.dll",
@@ -91,7 +91,7 @@ export function collectDaemonRuntimeDependencyNames(repoRoot: string = REPO_ROOT
     for (const ent of readdirSync(dir, { withFileTypes: true })) {
       const full = join(dir, ent.name);
       if (ent.isDirectory()) {
-        if (ent.name === "fixtures" || ent.name === "__snapshots__") continue;
+        if (ent.name === "fixtures" || ent.name === "__snapshots__" || ent.name === "cloudflare") continue;
         walk(full);
         continue;
       }
@@ -158,7 +158,7 @@ function copyFilteredSourceTree(srcDir: string, dstDir: string): void {
     const srcPath = join(srcDir, ent.name);
     const dstPath = join(dstDir, ent.name);
     if (ent.isDirectory()) {
-      if (ent.name === "fixtures" || ent.name === "__snapshots__") continue;
+      if (ent.name === "fixtures" || ent.name === "__snapshots__" || ent.name === "cloudflare") continue;
       copyFilteredSourceTree(srcPath, dstPath);
       continue;
     }

@@ -478,8 +478,8 @@ describe("跨设备：右栏的请求走当前设备的接口", () => {
   const MAC = "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d";
   const TOKYO = "3f2b8c1e-4d5a-4b6c-9e7f-0a1b2c3d4e5f";
   const devices: DeviceInfo[] = [
-    { id: MAC, name: "Mac", platform: "darwin", self: true, url: null },
-    { id: TOKYO, name: "东京", platform: "linux", self: false, url: "https://tokyo.example.ts.net" },
+    { id: MAC, name: "Mac", platform: "darwin", self: true, online: true, link: "local", fingerprint: null },
+    { id: TOKYO, name: "东京", platform: "linux", self: false, online: true, link: "relay", fingerprint: null },
   ];
 
   async function bootFleet() {

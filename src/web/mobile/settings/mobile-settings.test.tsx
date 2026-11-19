@@ -10,7 +10,6 @@ import {
   type BrowserSessionInfo,
   type DeviceInfo,
   type ProvidersStatusResponse,
-  type TunnelStatus,
   type VendorSyncPreviewResponse,
 } from "../../../shared/index.ts";
 import { App } from "../../App.tsx";
@@ -25,8 +24,8 @@ import { MobileSettings } from "./MobileSettings.tsx";
 
 const MAC_ID = "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d";
 const TOKYO_ID = "3f2b8c1e-4d5a-4b6c-9e7f-0a1b2c3d4e5f";
-const macInfo: DeviceInfo = { id: MAC_ID, name: "Mac", platform: "darwin", self: true, url: null };
-const tokyoInfo: DeviceInfo = { id: TOKYO_ID, name: "Tokyo", platform: "linux", self: false, url: "https://tokyo.example.ts.net", transport: { kind: "tailscale", url: "https://tokyo.example.ts.net" } };
+const macInfo: DeviceInfo = { id: MAC_ID, name: "Mac", platform: "darwin", self: true, online: true, link: "local", fingerprint: null };
+const tokyoInfo: DeviceInfo = { id: TOKYO_ID, name: "Tokyo", platform: "linux", self: false, online: true, link: "relay", fingerprint: null };
 
 const MAC_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36";
 const ANDROID_UA = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/130.0.0.0 Mobile Safari/537.36";
@@ -75,7 +74,7 @@ function renderSettings(hash: string, { notify = notifyOf(), devices = null as D
   return render(<Harness notify={notify} devices={devices} {...(onSignedOut !== undefined ? { onSignedOut } : {})} />);
 }
 
-/** 入口本机的假后端，再加上设备、隧道接口（FakeApi 没有）。 */
+/** 入口本机的假后端，再加上设备改名与移除接口。 */
 function installDeviceApi(api: FakeApi) {
   const extra: { method: string; path: string; body: unknown }[] = [];
   vi.stubGlobal(
@@ -84,13 +83,8 @@ function installDeviceApi(api: FakeApi) {
       const url = new URL(String(input), "http://127.0.0.1:1");
       const method = init?.method ?? "GET";
       const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
-      if (url.pathname.startsWith("/api/devices") && url.pathname !== "/api/devices/public-entry") {
+      if (url.pathname.startsWith("/api/devices/")) {
         extra.push({ method, path: url.pathname, body });
-        if (method === "POST" && url.pathname === "/api/devices/invites") {
-          return Response.json({ code: "INV-7Q2K", url: "https://mac.tail1a2b.ts.net", expiresAt: Date.now() + 600_000 }, { status: 201 });
-        }
-        if (method === "POST" && url.pathname === "/api/devices") return Response.json({ ...tokyoInfo, id: "new" }, { status: 201 });
-        if (method === "POST" && url.pathname.startsWith("/api/devices/tunnel/")) return Response.json({ status: null });
         if (method === "PATCH") return Response.json({ ...tokyoInfo, name: body.name });
         if (method === "DELETE") return new Response(null, { status: 204 });
       }
@@ -139,12 +133,13 @@ describe("App 路由接入（手机外壳）", () => {
     expect(screen.getByRole("button", { name: /Vendor sync/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Sign in on another device/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Signed-in browsers/ })).toBeInTheDocument();
-    // 守护进程没开联机：没有电脑组、没有公网入口
+    // 守护进程没开联机：没有电脑组；公网入口已经退役
     expect(screen.queryByRole("button", { name: /Computers/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /Public access/ })).toBeNull();
     await settled();
     expect(api.calls.slice(before)).toEqual([]);
   });
+
 
   it("一级 → 子页 → 逐级返回都走 history.back，一级主页节点保活，最后回到列表", async () => {
     bootMobile();
@@ -207,12 +202,9 @@ describe("App 路由接入（手机外壳）", () => {
 });
 
 describe("一级设置主页", () => {
-  beforeEach(() => new FakeApi(makeSnapshot({})).install());
-
-  it("三组钻取行：摘要只有一个结论（不拼 · | /），有联机时显示电脑与公网入口，右边是 ›", () => {
+  it("三组钻取行：摘要只有一个结论（不拼 · | /），有联机时显示电脑（没有公网入口），右边是 ›", () => {
     const devices: DeviceSettings = {
       devices: [deviceView(macInfo), deviceView(tokyoInfo)],
-      publicEntry: { enabled: true, hostname: "mac.example.ts.net", funnelCommand: "tailscale funnel" },
       onChanged: vi.fn(),
     };
     renderSettings("#/settings", { notify: notifyOf({ enabled: true }), devices });
@@ -222,7 +214,7 @@ describe("一级设置主页", () => {
     expect(screen.getByRole("region", { name: "Security & Access" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Notifications/ })).toHaveTextContent(/On$/);
     expect(screen.getByRole("button", { name: /^Computers/ })).toHaveTextContent("2 online");
-    expect(screen.getByRole("button", { name: /Public access/ })).toHaveTextContent(/On$/);
+    expect(screen.queryByRole("button", { name: /Public access/ })).toBeNull();
     const main = screen.getByRole("main");
     expect(main.textContent).not.toMatch(/[·|]/);
     for (const row of within(main).getAllByRole("button").filter((b) => b.dataset.slot === "settings-nav-row")) {
@@ -230,26 +222,9 @@ describe("一级设置主页", () => {
       expect(row.querySelector(":scope > svg[data-icon='pixel']:last-child")).toBeInTheDocument();
     }
   });
+  beforeEach(() => new FakeApi(makeSnapshot({})).install());
 
-  it("已登录浏览器只读缓存：没拉取过不显示数字；进过子页后有待批准显示琥珀点和 Pending", async () => {
-    const api = new FakeApi(makeSnapshot({}));
-    const sessions: BrowserSessionInfo[] = [
-      { id: "android", userAgent: ANDROID_UA, createdAt: 0, lastSeenAt: Date.now(), current: false, status: "pending_approval", viaPublic: true },
-      { id: "mac", userAgent: MAC_UA, createdAt: 0, lastSeenAt: Date.now(), current: true },
-    ];
-    api.browserSessions = () => ({ status: 200, body: { sessions } });
-    api.install();
-    renderSettings("#/settings");
-    const row = screen.getByRole("button", { name: /Signed-in browsers/ });
-    expect(row).not.toHaveTextContent(/\d|Pending/);
-    expect(api.calls).toEqual([]);
-    fireEvent.click(row);
-    expect(await screen.findByRole("region", { name: "Pending approval" })).toBeInTheDocument();
-    expect(api.callsTo("GET", /^\/api\/sessions$/)).toHaveLength(1);
-    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: /Signed-in browsers/ })).toHaveTextContent("Pending"));
-    expect(screen.getByTestId("browsers-attention")).toHaveClass("bg-caution");
-  });
+
 });
 
 describe("子页", () => {
@@ -379,7 +354,6 @@ describe("子页", () => {
   });
 
   describe("电脑", () => {
-    const tunnel: TunnelStatus = { state: "auth_failed", since: 0, retryAt: null, detail: "Permission denied (publickey)" };
     let calls: { method: string; path: string; body: unknown }[];
     let onChanged: ReturnType<typeof vi.fn<() => void>>;
     beforeEach(() => {
@@ -388,19 +362,9 @@ describe("子页", () => {
     });
     const open = () =>
       renderSettings("#/settings/computers", {
-        devices: { devices: [deviceView(macInfo), deviceView(tokyoInfo)], tunnel, repoDir: "/Users/me/agent-hub", onChanged },
+        devices: { devices: [deviceView(macInfo), deviceView(tokyoInfo)], onChanged },
       });
 
-    it("隧道报错原因直接写在行里（不藏在 title），远程电脑行上没有小图标按钮", () => {
-      open();
-      const row = screen.getByTestId("tunnel-row");
-      expect(row).toHaveTextContent("Key rejected");
-      expect(within(row).getByText("Permission denied (publickey)")).toBeVisible();
-      expect(row.querySelector("[title]")).toBeNull();
-      const tokyo = screen.getByRole("button", { name: /Tokyo/ });
-      expect(tokyo.querySelectorAll("button")).toHaveLength(0);
-      expect(screen.queryByRole("button", { name: /Remove Tokyo|Rename Tokyo/ })).toBeNull();
-    });
 
     it("点远程电脑拉起管理抽屉：改名提交 PATCH；移除先切二次确认，红色 Remove 提交 DELETE", async () => {
       open();
@@ -426,64 +390,7 @@ describe("子页", () => {
       await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     });
 
-    it("本机行拉起改名抽屉；连到中心抽屉给命令与连接码，提交 POST connect", async () => {
-      open();
-      fireEvent.click(screen.getByRole("button", { name: /^Mac/ }));
-      const rename = await screen.findByRole("dialog", { name: "Rename computer" });
-      expect(within(rename).getByRole("textbox", { name: "Computer name" })).toHaveValue("Mac");
-      fireEvent.click(within(rename).getByRole("button", { name: "Cancel" }));
-      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 
-      fireEvent.click(screen.getByRole("button", { name: /Connect to hub/ }));
-      const hub = await screen.findByRole("dialog", { name: "Connect to hub" });
-      expect(hub).toHaveTextContent("node /Users/me/agent-hub/src/tunnel/main.ts join");
-      expect(within(hub).getByRole("button", { name: "Copy command" })).toBeInTheDocument();
-      const code = within(hub).getByRole("textbox", { name: "Connection code" });
-      expect(code).toHaveAttribute("autocapitalize", "none");
-      expect(code).toHaveAttribute("autocorrect", "off");
-      expect(code).toHaveAttribute("spellcheck", "false");
-      expect(code.className).not.toContain("w-60");
-      fireEvent.change(code, { target: { value: "ahtun1_abc" } });
-      fireEvent.click(within(hub).getByRole("button", { name: "Connect" }));
-      await waitFor(() => expect(calls).toContainEqual({ method: "POST", path: "/api/devices/tunnel/connect", body: { code: "ahtun1_abc" } }));
-      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    });
-
-    it("邀请抽屉：生成后邀请码与完整 URL 各配一键复制；添加抽屉：全宽输入、关掉自动大写纠错，提交 POST /api/devices", async () => {
-      const writeText = vi.fn(async () => {});
-      Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
-      open();
-      fireEvent.click(screen.getByRole("button", { name: /Invite a computer/ }));
-      const invite = await screen.findByRole("dialog", { name: "Invite a computer" });
-      fireEvent.click(within(invite).getByRole("button", { name: "Generate" }));
-      expect(await within(invite).findByText("INV-7Q2K")).toBeInTheDocument();
-      expect(within(invite).getByText("https://mac.tail1a2b.ts.net")).toBeInTheDocument();
-      fireEvent.click(within(invite).getByRole("button", { name: "Copy code" }));
-      await waitFor(() => expect(writeText).toHaveBeenCalledWith("INV-7Q2K"));
-      fireEvent.click(within(invite).getByRole("button", { name: "Copy URL" }));
-      await waitFor(() => expect(writeText).toHaveBeenCalledWith("https://mac.tail1a2b.ts.net"));
-      fireEvent.keyDown(invite, { key: "Escape" });
-      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-
-      fireEvent.click(screen.getByRole("button", { name: /Add a computer/ }));
-      const add = await screen.findByRole("dialog", { name: "Add a computer" });
-      const url = within(add).getByRole("textbox", { name: "URL" });
-      const code = within(add).getByRole("textbox", { name: "Invite code" });
-      for (const field of [url, code]) {
-        expect(field).toHaveAttribute("autocapitalize", "none");
-        expect(field).toHaveAttribute("autocorrect", "off");
-        expect(field).toHaveAttribute("spellcheck", "false");
-        expect(field.className).toContain("w-full");
-        expect(field.className).not.toContain("w-60");
-      }
-      expect(url).toHaveAttribute("inputmode", "url");
-      expect(within(add).getByRole("button", { name: "Add" })).toBeDisabled();
-      fireEvent.change(url, { target: { value: "https://home.ts.net" } });
-      fireEvent.change(code, { target: { value: "INV-1" } });
-      fireEvent.click(within(add).getByRole("button", { name: "Add" }));
-      await waitFor(() => expect(calls).toContainEqual({ method: "POST", path: "/api/devices", body: { url: "https://home.ts.net", code: "INV-1" } }));
-      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    });
   });
 
   it("扫码登录：进页不请求；点 Create sign-in link 才生成，192px 二维码 + 倒计时 + Copy link；离开子页后轮询与倒计时彻底清零", async () => {
@@ -538,8 +445,8 @@ describe("子页", () => {
 
   describe("已登录浏览器", () => {
     const sessions: BrowserSessionInfo[] = [
-      { id: "android", userAgent: ANDROID_UA, createdAt: 0, lastSeenAt: Date.now(), current: false, status: "pending_approval", viaPublic: true },
-      { id: "iphone", userAgent: IPHONE_UA, createdAt: 0, lastSeenAt: Date.now() - 180_000, current: false, viaPublic: true },
+      { id: "android", userAgent: ANDROID_UA, createdAt: 0, lastSeenAt: Date.now(), current: false },
+      { id: "iphone", userAgent: IPHONE_UA, createdAt: 0, lastSeenAt: Date.now() - 180_000, current: false },
       { id: "mac", userAgent: MAC_UA, createdAt: 0, lastSeenAt: Date.now(), current: true },
     ];
     let api: FakeApi;
@@ -549,26 +456,6 @@ describe("子页", () => {
       api.install();
     });
 
-    it("待批准置顶组 Allow 直接批准；会话行点了拉起红色确认抽屉，确认才 DELETE", async () => {
-      renderSettings("#/settings/browsers");
-      const pending = await screen.findByRole("region", { name: "Pending approval" });
-      fireEvent.click(within(pending).getByRole("button", { name: "Allow" }));
-      await waitFor(() => expect(api.callsTo("POST", /^\/api\/sessions\/android\/approve$/)).toHaveLength(1));
-
-      const active = screen.getByRole("region", { name: "Signed-in browsers" });
-      const rows = within(active).getAllByRole("button");
-      expect(rows[0]).toHaveTextContent("This browser");
-      fireEvent.click(within(active).getByRole("button", { name: /iPhone/ }));
-      const drawer = await screen.findByRole("dialog", { name: /Sign out/ });
-      const confirm = within(drawer).getByRole("button", { name: "Sign out" });
-      expect(confirm.className).toContain("bg-danger");
-      expect(confirm.className).toContain("w-full");
-      expect(api.callsTo("DELETE", /^\/api\/sessions\//)).toHaveLength(0);
-      fireEvent.click(confirm);
-      await waitFor(() => expect(api.callsTo("DELETE", /^\/api\/sessions\/iphone$/)).toHaveLength(1));
-      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-      await waitFor(() => expect(within(active).queryByRole("button", { name: /iPhone/ })).toBeNull());
-    });
 
     it("本机会话确认按钮写 Sign out this browser；Cancel 关抽屉不退出", async () => {
       renderSettings("#/settings/browsers");
@@ -593,31 +480,6 @@ describe("子页", () => {
     });
   });
 
-  it("公网入口：整行开关 + 全宽域名输入（url 键盘、关自动大写纠错），填了域名才能开；开了显示 Funnel 命令和 Copy command", async () => {
-    const api = new FakeApi(makeSnapshot({}));
-    api.install();
-    const onChanged = vi.fn();
-    renderSettings("#/settings/public-access", {
-      devices: { devices: [deviceView(macInfo)], publicEntry: { enabled: false, hostname: null, funnelCommand: "sudo tailscale funnel --bg 4821" }, onChanged },
-    });
-    const toggle = screen.getByRole("switch", { name: "Public access" });
-    expect(toggle).toBeDisabled();
-    const domain = screen.getByRole("textbox", { name: "Public domain" });
-    expect(domain).toHaveAttribute("inputmode", "url");
-    expect(domain).toHaveAttribute("autocapitalize", "none");
-    expect(domain).toHaveAttribute("autocorrect", "off");
-    expect(domain).toHaveAttribute("spellcheck", "false");
-    expect(domain.className).toContain("w-full");
-    fireEvent.change(domain, { target: { value: "tokyo.tailnet.ts.net" } });
-    expect(toggle).toBeEnabled();
-    fireEvent.click(toggle);
-    await waitFor(() => expect(api.callsTo("PUT", /^\/api\/devices\/public-entry$/)).toHaveLength(1));
-    expect(api.callsTo("PUT", /^\/api\/devices\/public-entry$/)[0]!.body).toEqual({ enabled: true, hostname: "tokyo.tailnet.ts.net" });
-    expect(await screen.findByRole("region", { name: "Funnel command" })).toHaveTextContent("sudo tailscale funnel --bg");
-    expect(screen.getByRole("button", { name: "Copy command" })).toBeInTheDocument();
-    expect(screen.getByRole("switch", { name: "Public access" })).toHaveAttribute("aria-checked", "true");
-    expect(onChanged).toHaveBeenCalled();
-  });
 
   it("Providers 子页与底部抽屉：进子页拉取状态、一级主页回显 N ready 或 Attention，抽屉全宽防自动纠错输入保存 API Key，离开子页停止轮询", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });

@@ -26,8 +26,9 @@ import { createAutoReloader, installAutoReloadListeners, type AutoReloadEnv, typ
 import { byteLength } from "./format.ts";
 import { ApiError, createClient, fetchDevices, localClient, onUnauthorized, type HubClient } from "./client.ts";
 import { openChangeStream, reconnectDelay, type ConnectionStatus } from "./connection.ts";
-import { LOCAL_DEVICE, OFFLINE_AFTER_MS, deviceStatus, placeholderSelf, type DeviceKey, type DeviceView, type LinkHistory } from "./devices.ts";
+import { LOCAL_DEVICE, OFFLINE_AFTER_MS, deviceStatus, placeholderSelf, sameDeviceInfo, type DeviceKey, type DeviceView, type LinkHistory } from "./devices.ts";
 import { ErrorNotice, errorText, newClientId } from "./format.ts";
+import { ACCOUNT_QUERY_KEY, queryClient } from "./query-client.ts";
 import { parseRoute } from "./route.ts";
 import { uploadFiles } from "./upload.ts";
 import { initialState, oldestMessageId, referencesUnknownConversation, reducer, type HubState } from "./state.ts";
@@ -233,7 +234,9 @@ export class DeviceHub {
         this.dispatch({ type: "connection", status: this.buffer ? "reconnecting" : status });
       },
       onMessage: (message) => {
-        if (message.type === "resync") {
+        if (message.type === "account.updated") {
+          void queryClient.invalidateQueries({ queryKey: ACCOUNT_QUERY_KEY });
+        } else if (message.type === "resync") {
           void this.resync();
         } else if (this.buffer) {
           this.buffer.push(message);
@@ -466,6 +469,7 @@ export interface DevicesSnapshot {
 export class DevicesStore {
   private readonly hubs = new Map<DeviceKey, DeviceHub>();
   private infos: readonly DeviceInfo[] | null = null;
+  private prevDevices: readonly DeviceView[] = [];
   private managed = false;
   readonly store: StoreApi<DevicesSnapshot>;
   private running = false;
@@ -516,13 +520,26 @@ export class DevicesStore {
     const local = this.hubs.get(LOCAL_DEVICE)!;
     const selfInfo = this.infos?.find((d) => d.self) ?? placeholderSelf(local.state.server.platform);
     const others = (this.infos ?? []).filter((d) => !d.self);
+    const prevByKey = new Map(this.prevDevices.map((d) => [d.key, d]));
     const view = (key: DeviceKey, info: DeviceInfo): DeviceView[] => {
       const hub = this.hubs.get(key);
       if (!hub) return [];
-      return [{ key, info, state: hub.state, status: deviceStatus(hub.state, hub.link, now), lastOnlineAt: hub.link.lastOnlineAt }];
+      const status = deviceStatus(hub.state, hub.link, now);
+      const lastOnlineAt = hub.link.lastOnlineAt;
+      const prev = prevByKey.get(key);
+      if (prev !== undefined && prev.info === info && prev.state === hub.state && prev.status === status && prev.lastOnlineAt === lastOnlineAt) {
+        return [prev];
+      }
+      return [{ key, info, state: hub.state, status, lastOnlineAt }];
     };
+    const nextDevices = [...view(LOCAL_DEVICE, selfInfo), ...others.flatMap((info) => view(info.id, info))];
+    const devices =
+      nextDevices.length === this.prevDevices.length && nextDevices.every((d, i) => d === this.prevDevices[i])
+        ? this.prevDevices
+        : nextDevices;
+    this.prevDevices = devices;
     return {
-      devices: [...view(LOCAL_DEVICE, selfInfo), ...others.flatMap((info) => view(info.id, info))],
+      devices,
       selfId: this.infos?.find((d) => d.self)?.id ?? null,
       managed: this.managed,
       listed: this.infos !== null,
@@ -575,7 +592,11 @@ export class DevicesStore {
 
   /** 换一份设备清单（测试和假数据也从这里进）。 */
   setDevices(infos: readonly DeviceInfo[]): void {
-    this.infos = infos;
+    const prevById = new Map((this.infos ?? []).map((d) => [d.id, d]));
+    this.infos = infos.map((next) => {
+      const prev = prevById.get(next.id);
+      return prev !== undefined && sameDeviceInfo(prev, next) ? prev : next;
+    });
     const wanted = new Set(infos.filter((d) => !d.self).map((d) => d.id));
     for (const [key, hub] of this.hubs) {
       if (key !== LOCAL_DEVICE && !wanted.has(key)) {

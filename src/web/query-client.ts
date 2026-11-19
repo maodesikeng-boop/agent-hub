@@ -25,6 +25,9 @@ function createHubQueryClient(): QueryClient {
 
 export const queryClient: QueryClient = createHubQueryClient();
 
+/** GET /api/account 的缓存键（settings-model.ts 的 useAccount）：入口本机推 account.updated 时让它失效。 */
+export const ACCOUNT_QUERY_KEY = ["account"] as const;
+
 /** 测试用例结束后清空全局查询缓存，防止跨用例状态污染。 */
 export function resetQueryClient(): void {
   queryClient.clear();

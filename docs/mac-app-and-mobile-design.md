@@ -1,25 +1,19 @@
-# Mac 原生桌面应用与 iPhone 免费公网入口方案
+# Mac 原生桌面应用方案
 
 状态：用户已拍板（第 0 节），按第 5 节分块实现。
-关联文档：`docs/multi-device-design.md`（联机、浏览器会话、PWA 与 Web Push）、`docs/hub-tunnel-design.md`（东京中心 SSH 隧道、设备入口与公网入口安全要求）、`docs/ui-standard.md`（界面与安全区标准）。
+关联文档：`docs/account-mesh-design.md`（账号组网与手机飞书接入；早期手机公网入口已退役）、`docs/multi-device-design.md`（浏览器会话、PWA 与 Web Push）、`docs/ui-standard.md`（界面与安全区标准）。
 
 ---
 
 ## 0. 目标与已拍板取舍
 
-用户要把 `agent-hub` 做成 **Mac 桌面应用（`/Applications/Agent Hub.app`）** 和 **苹果手机 App（iPhone 端）**，并已拍板全部采用**免费方案 + 推荐路线**：
-
-1. **Mac 桌面应用**：采用 **macOS 原生 Swift + AppKit + `WKWebView` 轻量壳**（本机 `/usr/bin/swiftc` 直接编译打包成 `< 5 MB` 的 `/Applications/Agent Hub.app`，本机 `codesign -s -` 免费签名，零 Electron 200 MB 负担）。
-2. **iPhone 手机 App**：采用已实现的 **iOS 主屏全屏 Web App（PWA，添加到主屏幕）+ iOS 原生 Web Push 锁屏推送**（免费、永不过期，避开免费 Apple ID 签名 `.ipa` 每 7 天过期和无 APNs 推送的限制），两端 100% 共用现有响应式前端。
-3. **iPhone 连回东京与 Mac 的公网 HTTPS 入口**：采用 **东京服务器免费的 Tailscale Funnel**（`https://<东京机器>.<tailnet>.ts.net`），不用买域名、不用开 Lightsail 防火墙端口、不用装 Caddy，且**手机和 Mac 都不需要装或开 Tailscale VPN**（东京再通过已合入的 SSH 隧道 `agenthub-tunnel` 连回 Mac）。
+用户要把 `agent-hub` 做成 **Mac 桌面应用（`/Applications/Agent Hub.app`）**，采用 **macOS 原生 Swift + AppKit + `WKWebView` 轻量壳**（本机 `/usr/bin/swiftc` 直接编译打包成 `< 5 MB` 的 `/Applications/Agent Hub.app`，本机 `codesign -s -` 免费签名，零 Electron 200 MB 负担）。手机接入见 `docs/account-mesh-design.md`（不再暴露公网网页入口，统一经全账号唯一的飞书机器人访问）。
 
 ### 为什么这样取舍
 
 | 端 / 环节 | 备选方案 | 为什么不选备选 | 为什么选拍板方案 |
 |---|---|---|---|
 | **Mac 桌面端** | Electron / Tauri | Electron 把整套 Chromium + Node 打包进 `.app`，磁盘占用 `~220 MB`、常驻内存多出几百 MB；Tauri 需额外装 Rust 工具链且仍是一层 WebView 包装 | macOS 自带 `swiftc`、`AppKit` 和系统级 `WebKit.framework`，几百行纯 Swift 即可编译出 **< 2 MB** 的原生 `.app`，自动拉起本机已有的 Node 守护进程并自动读取 `state/ui-token` 免手输登录 |
-| **iPhone 手机端** | 1. 免费 Apple ID 侧载原生 `.ipa`<br>2. React Native / SwiftUI 重写原生 UI | 1. 免费 Apple ID（Personal Team）签名的 `.ipa` **每 7 天强制过期变砖**，必须连 Mac 重签；且免费账号**苹果完全不给 APNs 远程推送权限**，手机锁屏收不到任何提醒。<br>2. 重写原生 UI 等于维护两套前端，每次加功能都要双端改动 | iOS 16.4+ 官方支持主屏 Web App（`display: standalone`）与标准 **Web Push（APNs 通道）**，**完全免费、永不过期、有原生锁屏通知**，且 100% 复用 `src/web/` 现有界面 |
-| **手机公网 HTTPS 入口** | 1. 手机装 Tailscale VPN<br>2. 买域名 + Lightsail 开 443 + Caddy<br>3. Let's Encrypt IP 证书 / `sslip.io` | 1. iPhone 同时只能开一个 VPN，开公司 VPN 时 Tailscale 会被顶掉，且耗电。<br>2. 买域名要花钱、要改防火墙和装 Caddy（留作以后可选升级）。<br>3. IP 证书不支持将来扩展 Passkey，换 IP 主屏 App 与推送全作废；`sslip.io` DNS 归第三方不安全 | **东京 Tailscale Funnel** 完全免费，自带自动续期的 Let's Encrypt HTTPS 证书，给固定 `<tokyo>.<tailnet>.ts.net` 域名（供 iOS 主屏 App 与 Web Push 绑定来源），TLS 在东京本机解开，**手机和 Mac 都不装 VPN** |
 
 ---
 
@@ -191,140 +185,6 @@ document.documentElement.dataset.macosApp = "true";
 
 ---
 
-## 2. 第二部分：iPhone 主屏全屏 App 与东京免费 Tailscale Funnel 公网入口
-
-### 2.1 整体链路（手机与 Mac 均不装 VPN）
-
-```
-iPhone 主屏 Web App (5G / 任意 Wi-Fi，不装 Tailscale)
-  │
-  │ https://<tokyo>.<tailnet>.ts.net (TLS 1.3 直连东京，Funnel 边缘只转密文)
-  ▼
-东京服务器 Tailscale Funnel (tailscaled 守护进程解开 TLS)
-  │
-  │ unix:/home/ubuntu/.agent-hub/run/public.sock (viaPublic 公网入口)
-  ▼
-东京 agent-hub 守护进程 (入口 + Web Push 提醒设备)
-  ├─ 东京本机项目经理与 Worker：直接处理 /api/* 与 /api/ws
-  └─ Mac 项目经理与 Worker：/d/<mac-id>/api/* 与 /d/<mac-id>/api/ws
-       │
-       │ 127.0.0.1:4401 ═══ SSH 隧道 (agenthub-tunnel, 已合入) ═══▶ Mac run/peer.sock
-       ▼
-     Mac agent-hub 守护进程 (peerEntry 设备入口)
-```
-
-- **手机不装 Tailscale**：iPhone 直接用蜂窝网络（5G/4G）或任意 Wi-Fi 访问 `https://<tokyo>.<tailnet>.ts.net`，不会占用 iPhone 唯一的 VPN 槽位，不与公司 VPN 冲突，也不额外耗电。
-- **Mac 不装 Tailscale**：Mac 通过已实现的系统自带 OpenSSH 隧道（`agenthub-tunnel`）主动连入东京；Mac 在家、在办公室或连手机热点都能自动重连，Mac 本地用 `/Applications/Agent Hub.app` 直连 `127.0.0.1:4317`。
-- **端到端加密**：Tailscale Funnel 的中继节点只转发原始 TCP/TLS 字节流，TLS 私钥（Let's Encrypt 自动签发）保存在东京服务器的 `tailscaled` 本地，Tailscale 官方也看不到任何聊天和代码明文。
-
-### 2.2 为什么必须走单独的 `public.sock`（`viaPublic`），不能直接复用现有的 `serve.sock`
-
-在现有代码 `src/daemon/ui-server/server.ts`（第 570–588 行）中，`serveSocket`（`run/ui.sock` → `entry.kind = "tailnet"`）专门为 **Tailscale Serve（仅 tailnet 内部可见）** 设计：
-1. `tailscale serve` 只允许同一 tailnet 内的已登录设备访问，并由 `tailscaled` 注入 `Tailscale-User-Login` 请求头；`server.ts` 强制检查该头必须等于 `self.owner`，否则返回 `403 forbidden_identity`。
-2. 而 **Tailscale Funnel 面向全公网开放**：任何知道 `https://<tokyo>.<tailnet>.ts.net` 域名的人（包括公网证书透明度日志 CT log 爬虫和扫描器）都能在公网连上它，且**公网请求不经过 Tailscale 客户端认证，绝不会带 `Tailscale-User-Login` 请求头**。
-3. 如果直接把 Funnel 指到 `serve.sock`，所有手机公网请求都会因没有 `Tailscale-User-Login` 头被 `403` 拦死；反过来如果把 `serve.sock` 的身份头检查关掉，又会破坏 tailnet 内部入口的“人”这一层防线，且让设备配对接口 `/api/peer/*` 暴露到公网。
-
-因此，必须严格按 `docs/hub-tunnel-design.md` 第 9.3 节，在守护进程中实现独立的**公网入口 `run/public.sock`（`Listener = "publicSocket"`，`Entry = { kind: "public"; hostname: string }`）**及以下 4 道公网安全防线：
-
-#### 防线 1：Host / Origin、路径白名单与 Cookie 加固
-
-在 `src/daemon/ui-server/server.ts` 的 `entryRules` 中新增 `public` 规则：
-
-| 检查项 | `public` 入口规则（`run/public.sock`） | 说明 |
-|---|---|---|
-| `listeners` | `["publicSocket"]` | 只认从 `run/public.sock` 进来的流量；公网开关关闭时根本不监听该 socket |
-| `host` | 必须严格等于配置的 `publicHostname`（或带 `:443`） | 其它任何 Host 一律 `403 forbidden_host` |
-| `origin` | `origin.toLowerCase() === "https://" + entry.hostname` | 所有改状态的请求（POST/PUT/PATCH/DELETE）与 WebSocket 握手必须带同源 HTTPS Origin |
-| `identities` | `["cookie"]`（**不含 `deviceToken` 和 `invite`**） | 公网入口**一律拒绝任何 `Authorization` 头与 `/api/peer/*`（直接回 `403 forbidden_peer`）**，设备之间永远不走公网 |
-| `sameMachine` | `false` | 不出“在 Finder 中显示 / 用默认程序打开”和选文件夹按钮，`requireLocal` 严拒 |
-| `browserPaths` | `true`（仅开放网页静态文件、`/auth`、`/api/*` 浏览器接口、`/d/*`） | `/api/peer/*` 在 `onRequest` 钩子第一道即回 `403` |
-| `secureCookie` | `true` | 种下的会话 Cookie 强制带 `Secure; HttpOnly; SameSite=Strict; Path=/` |
-
-#### 防线 2：新浏览器扫码后须已登录设备点“允许”（待批准会话 `pending_approval`）
-
-公网暴露面下，万一一次性登录链接 `/auth#link=<码>` 被截屏或剪贴板泄露，单靠链接本身不够安全。加上**已登录设备二次批准**：
-
-1. **数据库表扩展（迁移 `0017_public_entry.sql`）**：
-   新建附属表 `browser_session_public`（采用 `CREATE TABLE IF NOT EXISTS` 保证迁移重跑幂等）：
-   ```sql
-   CREATE TABLE IF NOT EXISTS browser_session_public (
-     session_id TEXT PRIMARY KEY REFERENCES browser_sessions (id) ON DELETE CASCADE,
-     status     TEXT NOT NULL,
-     client_ip  TEXT NOT NULL
-   ) STRICT;
-   ```
-   - 凡在 `browser_session_public` 中有记录的会话即为 `viaPublic = true`，其 `status` 为 `'pending_approval' | 'active'`；不在该表中的会话即普通本机/tailnet 会话（`viaPublic = false, status = 'active'`）。
-2. **兑换与拦截流程**：
-   - 本机 `loopback` 或 `tailnet` 入口兑换登录链接：直接创建 `status = 'active'` 会话（保持现有体验不变）；
-   - **公网 `public` 入口**调用 `POST /auth { link }` 兑换一次性链接（注：公网入口**禁止** `GET /auth?token=` 主钥匙直登，只允许一次性 `#link=`）：
-     - 创建一条 `status = 'pending_approval'`、`via_public = 1` 的会话并种下 Cookie，返回 `202 { status: "pending_approval" }`；
-     - `sessions.authenticate(token)` 查库时返回 `{ id, status, viaPublic }`；
-     - 在 `server.ts` 的 `onRequest` 认证钩子中：若会话 `status === "pending_approval"`，除 `GET /api/auth/status`（返回 `{ status: "pending_approval" }` 供手机端等待页轮询）和退出自身会话外，**访问 `/api/state`、`/api/ws`、`/d/*` 等一切接口均返回 `403 { code: "session_pending_approval", error: "等待已登录设备批准登录" }`**，拿不到任何项目或消息数据。
-   - **手机端等待界面**：`/auth` 落地页收到 `202`（或首页收到 `session_pending_approval`）时显示：“已扫码，请在已登录的电脑上点「允许」完成登录…”，每 2 秒查一次 `GET /api/auth/status`，一旦变成 `active` 立即进入首页 `/`；若被拒绝或 10 分钟未批准（自动清除），提示“登录未获批准或已超时，请重新扫码”。
-   - **已登录电脑端弹出批准提示**：
-     - 当有新的 `pending_approval` 会话产生时，守护进程向所有已登录（`active`）的 WebSocket 发送 `{ type: "resync" }`（并在 `/api/sessions` 或 `/api/state` 中包含待批准列表）；
-     - 已登录的电脑端（Mac `.app` 或浏览器）在“设置 → 已登录的浏览器”顶部以及主界面顶部提示条醒目展示：
-       > **允许 iPhone Safari（经公网 · 刚刚）登录？**  `[拒绝]` `[允许]`
-     - 点“允许”调用 `POST /api/sessions/:id/approve`（将该会话 `status` 改为 `'active'`），手机端 2 秒内自动进入对话主界面；点“拒绝”调用 `DELETE /api/sessions/:id` 直接删除。
-
-#### 防线 3：公网 `/auth` 失败限流
-
-防止公网扫描器对 `/auth` 进行高频猜测或资源消耗，新建 `src/daemon/ui-server/public-rate-limit.ts`，只对 `entry.kind === "public"` 的 `/auth` 请求生效：
-
-- **双层限流阈值**（常数定义在 `src/shared/limits.ts`）：
-  - **单来源桶**：每分钟最多失败 **5 次**（`PUBLIC_AUTH_IP_MAX_FAILURES = 5`，窗口 `60_000 ms`）；
-  - **全局公网桶**：每小时最多失败 **30 次**（`PUBLIC_AUTH_GLOBAL_MAX_FAILURES = 30`，窗口 `3_600_000 ms`）；
-  - **锁定时长**：任一阈值触发后，公网入口的 `/auth` 登录锁定 **15 分钟**（`PUBLIC_AUTH_LOCKOUT_MS = 15 * 60_000`），并向守护进程日志打印一条警告。
-- **锁定期间行为**：
-  - 公网入口上的 `POST /auth`（及带参数的 `GET /auth`）直接返回 `429 { code: "busy", error: "公网登录尝试过多，已锁定 15 分钟后再试" }`，不查 `loginLinks`；
-  - **不影响**已经登录（`active`）的手机正常收发消息，也**不影响**本机 `loopback` 和 `tailnet` 入口登录。
-
-#### 防线 4：公网会话 30 天不活动过期 + 一键开关与 Funnel 开启说明
-
-1. **公网会话 30 天不活动过期**：
-   - 在 `src/shared/limits.ts` 定义 `PUBLIC_SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000`（30 天），待批准会话超时 `PENDING_SESSION_TTL_MS = 10 * 60 * 1000`（10 分钟）；
-   - `sessions.authenticate` 校验时：
-     - 若 `status === 'pending_approval'` 且 `now - created_at > PENDING_SESSION_TTL_MS`：当场删除并返回 `null`；
-     - 若 `via_public === 1` 且 `now - last_seen_at > PUBLIC_SESSION_MAX_AGE_MS`：当场删除并返回 `null`（本机与 tailnet 会话仍为 `SESSION_MAX_AGE_MS = 365 天`）；
-   - `GET /api/sessions` 返回的 `BrowserSessionInfo` 增加 `status: "active" | "pending_approval"` 与 `viaPublic: boolean`，“设置 → 已登录的浏览器”中对 `viaPublic: true` 的行显示 `经公网 · 3 分钟前`。
-2. **设置页“公网入口”一键开关与东京 Funnel 命令**：
-   - 配置文件 `~/.agent-hub/state/public-entry.json`（权限 `0600`）：`{ enabled: boolean, hostname: string | null }`。开启时若用户未填自定义域名，默认取 `tailnet.current()?.dnsName`（即 `<tokyo>.<tailnet>.ts.net`）；
-   - 接口：`PUT /api/devices/public-entry`（请求体 `{ enabled: boolean, hostname?: string }`），状态随 `/api/state` 的 `publicEntry: { enabled: boolean, hostname: string | null, funnelCommand: string }` 下发；
-   - **打开开关时**：守护进程立即调用 `listenSide(app, "publicSocket", { socket: paths.publicSock })` 监听 `~/.agent-hub/run/public.sock`（权限 `0600`，root 跑的 `tailscaled` 可直接连接），界面下方给出可一键复制的东京终端命令：
-     ```bash
-     sudo tailscale funnel --bg unix:/home/ubuntu/.agent-hub/run/public.sock
-     ```
-   - **关闭开关时**：
-     1. 守护进程立即关闭 `publicSocket` 监听并删除 `run/public.sock`（外部 Funnel 请求立刻收到 502，无法再触达守护进程）；
-     2. 调用 `sessions.revokePublic()` **删除所有 `via_public = 1` 的会话（含待批准和已批准），并当场调用 `closeSockets(id)` 断开这些公网会话正在连接的全部 WebSocket**；
-     3. 同时在 `src/tunnel/main.ts`（或管理 socket `run/admin.sock`）提供 `public off` 命令，方便用户在 SSH 终端里一键关闭公网入口。
-3. **二维码自动切公网地址**：
-   - 在 `server.ts` 的 `POST /api/login-links`（第 788–796 行）中：当本机开启了公网入口且有 `publicHostname` 时，生成的二维码链接优先使用 `https://${publicHostname}/auth#link=${code}`。
-
-### 2.3 iPhone 端安装与推送完整体验
-
-首次配置只需 1 分钟，之后永久免折腾：
-
-1. **东京开一次 Funnel**：在东京服务器上跑一次守护进程提示的命令：
-   ```bash
-   sudo tailscale funnel --bg unix:/home/ubuntu/.agent-hub/run/public.sock
-   ```
-   （若 Tailscale 后台首次使用 Funnel，点一下命令输出的授权链接开启 Funnel ACL 即可。）
-2. **电脑端生成二维码**：在电脑（或已连上东京的页面）打开“设置 → 设备”确认“公网入口”已打开，到“设置 → 登录 → 在手机上登录”点“显示二维码”。
-3. **iPhone 扫码与电脑点“允许”**：
-   - iPhone（无需安装 Tailscale，直接用 5G 或普通 Wi-Fi）用系统相机扫码，自动在 Safari 打开 `https://<tokyo>.<tailnet>.ts.net/auth#link=...`；
-   - 手机屏幕显示“等待已登录设备批准…”；
-   - 电脑端弹出“允许 iPhone Safari（经公网）登录？”，点**“允许”**，手机立即进入对话列表，同时看到东京和 Mac 两台设备上的所有项目经理。
-4. **添加到主屏幕（变成全屏 App）**：
-   - 在 iPhone Safari 底部点“分享”按钮 → 选**“添加到主屏幕”** → 点“添加”；
-   - 桌面生成 `Agent Hub` 图标（复用已有的 `apple-touch-icon.png` 与 `manifest.webmanifest` 的 `display: standalone`），从主屏幕点开即全屏运行，无 Safari 地址栏与底部工具栏，完美适配 iPhone 灵动岛/刘海（`--safe-top`）与底部横条（`--safe-bottom`）。
-5. **开启锁屏推送**：
-   - 在主屏打开的 `Agent Hub` 中点左下角“设置” → 打开**“通知”**开关，弹出 iOS 系统原生通知授权框点“允许”；
-   - 推送订阅保存在东京服务器的 `state/push-subscriptions.json`；东京作为常开的提醒设备，一方面监听东京本机账本，另一方面经 `agenthub-tunnel` SSH 隧道常开一条到 Mac 的 `/api/ws` 变化流（`PushService.watch`）；
-   - 无论东京还是 Mac 上的项目经理调用 `hub ask`（“等你确定”）或回复完停稳 3 秒（“等你”），iPhone 锁屏都会立刻收到端到端加密的 APNs Web Push 通知（如 `Mac · 项目经理：等你确定`），点通知直接跳进对应对话。
-
----
-
 ## 3. 性能与效率
 
 ### 3.1 Mac 桌面端（`/Applications/Agent Hub.app`）
@@ -336,38 +196,21 @@ iPhone 主屏 Web App (5G / 任意 Wi-Fi，不装 Tailscale)
 | **冷启动出窗口耗时** | **< 300 ms**（守护进程已跑时） | `1.5–3 s` | 原生 `NSWindow` 毫秒级创建；本机回环 `127.0.0.1:4317` 探测与加载静态资源均在毫秒级完成 |
 | **后台 CPU 占用** | **0%（无后台轮询）** | 常有后台 timer | 守护进程就绪后停止轮询；菜单栏 `NSStatusItem` 的 Worker 计数与“等你”计数由网页已有 WebSocket 变化流经 `WKScriptMessageHandler` 推送驱动，平时零轮询 |
 
-### 3.2 公网入口与手机端
-
-- **限流器固定内存上限（防公网扫描撑爆内存）**：
-  - 公网 `/auth` 限流器的按 IP 计数桶采用 `Map<string, { count: number; resetAt: number }>`，严格限制最多保存 **`MAX_PUBLIC_AUTH_IP_BUCKETS = 1000` 个 IP 桶**；新增桶时若超过上限，先清理已过期桶，仍满则按插入顺序淘汰最旧的桶（`O(1)`），内存占用恒定在几十 KB 以内。
-- **待批准会话清理与防挤占**：
-  - `pending_approval` 会话 10 分钟不批准即自动过期删除；且在 `browser_sessions` 满 `MAX_BROWSER_SESSIONS = 100` 淘汰旧会话时，**优先淘汰 `pending_approval` 会话**，保证公网恶意扫码即使拿到链接也绝不可能把用户已登录的正式会话（`active`）挤下线。
-- **东京 2 GB 内存零额外负担**：
-  - Tailscale Funnel 直接由东京已常驻的 `tailscaled` 转发到 `unix:run/public.sock`，无需額外安装或运行 Caddy（省下 `30–50 MB` 常驻内存），守护进程内仅多听一个 Unix domain socket，额外内存开销 `< 100 KB`。
-
 ---
 
 ## 4. 统一与可维护性
 
 1. **一套前端三端共用（零第二套 UI）**：
-   - Mac 桌面应用（`/Applications/Agent Hub.app`）、iPhone 主屏全屏 App、桌面浏览器 100% 共用 `src/web/` 同一套 React 组件与 `docs/ui-standard.md` 界面标准；
+   - Mac 桌面应用（`/Applications/Agent Hub.app`）、响应式窄屏与桌面浏览器 100% 共用 `src/web/` 同一套 React 组件与 `docs/ui-standard.md` 界面标准；
    - 平台外观适配全部收敛在 `src/web/styles.css` 的 CSS 变量中：iPhone 刘海与底部横条走 `--safe-top` / `--safe-bottom`，Mac 窗口左上角红黄绿交通灯走 `html[data-macos-app="true"]` 下的 `--macos-traffic-lights-height`（`28px`）与 `--macos-traffic-lights-width`（`72px`），业务组件不写平台分支判断。
-2. **公网入口与以后买域名 + Caddy 100% 兼容**：
-   - 守护进程只认“从 `run/public.sock`（`viaPublic`）进来的请求”以及配置的 `publicHostname`；
-   - 今天免费期用 Tailscale Funnel，只需把 `publicHostname` 设为 `<tokyo>.<tailnet>.ts.net` 并跑 `sudo tailscale funnel --bg unix:.../run/public.sock`；
-   - 以后如果用户买了自己的域名（如 `hub.example.com`）并装了 Caddy，只需把 Caddyfile 配成 `reverse_proxy unix//.../run/public.sock`、设置里把公网域名改成 `hub.example.com`，**守护进程代码、认证限流逻辑和前端代码一行不用改**。
-3. **所有厂商（`claude`、`agy`、`codex`）与连接器自动生效**：
-   - Mac 原生桌面壳与 `public.sock` 公网入口都工作在 HTTP / WebSocket 界面服务层（`src/daemon/ui-server/`），完全位于账本（`ledger`）和驱动层（`driver` / `vendors`）之上；
+2. **所有厂商（`claude`、`agy`、`codex`）与连接器自动生效**：
+   - Mac 原生桌面壳工作在 HTTP / WebSocket 界面服务层（`src/daemon/ui-server/`），完全位于账本（`ledger`）和驱动层（`driver` / `vendors`）之上；
    - 任何厂商的命令列表（`/`）、文件搜索（`@`）、模型目录、额度查询、MCP 连接器、Worktree 沙箱或后台写交接逻辑，在 Mac `.app` 与 iPhone 端天然 100% 一致生效，以后新增厂商或工具无需改动桌面壳与公网入口。
 
 ---
 
 ## 5. 实现拆分（验证单元）
 
-按互不冲突、可独立验证、遵循 TDD 的原则拆分为 3 个实现块（PR）：
-
 | 块 | 范围 | 先写的测试（TDD） | 验收标准 |
 |---|---|---|---|
-| **块 G1：公网入口 `public.sock` 与登录防线后端** | 1. `src/shared/paths.ts` 新增 `publicSock`（`run/public.sock`）与 `publicEntryFile`（`state/public-entry.json`）；`src/shared/limits.ts` 新增公网限流与 30 天过期常数；`src/shared/api.ts` 新增公网入口状态、会话批准接口与类型。<br>2. 数据库迁移 `0017_public_entry.sql`（`browser_sessions` 加 `status`、`via_public`、`client_ip`）与 `ui-server/sessions.ts` 改造（支持 `pending_approval`、批准、30 天过期、10 分钟待批准超时、优先淘汰待批准、一键清公网会话）。<br>3. `ui-server/public-rate-limit.ts`（每 IP 5 次/分钟、全局 30 次/小时、锁 15 分钟、固定桶上限）。<br>4. `ui-server/server.ts`：新增 `publicSocket` 监听与 `entryRules.public`（Host/Origin/Secure Cookie、拒设备令牌与 `/api/peer/*`）；公网 `POST /auth { link }` 创建待批准会话；`GET /api/auth/status` 与 `POST /api/sessions/:id/approve`；`PUT /api/devices/public-entry` 动态启停 `public.sock` 并在关闭时断开全部公网会话；`POST /api/login-links` 在公网开启时优先用公网域名；`loopback` 入口下 `POST /auth` 支持 `{ token }` 直接兑换 Cookie。 | `src/daemon/ui-server/public-entry.test.ts`：<br>1. `public.sock` 上 Host/Origin 不匹配 → 403；Cookie 带 `Secure`；<br>2. 带 `Authorization` 设备令牌或访问 `/api/peer/*` → 403；<br>3. 公网 `GET /auth?token=` → 401/403（禁止主钥匙在公网直登）；<br>4. 公网 `POST /auth { link }` 生成 `pending_approval` 会话，未批准前读 `/api/state` → 403 `session_pending_approval`；已登录会话调 `approve` 后读 `/api/state` → 200；<br>5. 单 IP 连续 5 次失败或全局 30 次失败 → 锁定 15 分钟回 429，且不影响本机 `loopback` 登录；<br>6. 公网会话 30 天不活动过期，本机会话 30 天仍有效；<br>7. 关闭公网开关当场停止 `public.sock`、撤销所有公网会话并关闭其 WebSocket；<br>8. `loopback` 下 `POST /auth { token }` 成功种 Cookie。 | `pnpm typecheck` 与 `public-entry.test.ts`、`server.test.ts`、`sessions.test.ts` 全绿 |
-| **块 G2：网页端公网入口开关、登录批准提示与 Funnel 说明** | 1. `src/web/components/DeviceSettings.tsx` 新增“公网入口”分组/开关行，开启时展示公网域名与东京一键开启命令 `sudo tailscale funnel --bg unix:...`（支持一键复制）。<br>2. `src/web/components/BrowserSessions.tsx` 与顶部提醒：展示 `pending_approval` 待批准浏览器的“允许 / 拒绝”按钮；已登录浏览器列表对 `viaPublic` 标出“经公网”。<br>3. `src/daemon/ui-server/login-page.ts` 与前端登录等待态：公网扫码返回 `pending_approval` 时展示“等待已登录设备批准…”并自动轮询 `GET /api/auth/status`，批准后自动跳入首页。<br>4. 更新 `docs/linux.md` 补充东京开启 Tailscale Funnel 与 iPhone 添加到主屏幕步骤。 | `src/web/public-entry.test.tsx`（或扩展 `devices.test.tsx` / `sessions` 测试）：<br>1. 设置页切换公网入口开关、显示 Funnel 命令；<br>2. 出现 `pending_approval` 会话时显示“允许 / 拒绝”按钮，点允许调 `POST /api/sessions/:id/approve`；<br>3. 列表正确渲染“经公网”标注。 | `pnpm typecheck` 与前端单测全绿，符合 `docs/ui-standard.md` |
 | **块 M：Mac 原生桌面应用 `apps/macos/` 与标题栏安全区适配** | 1. `docs/ui-standard.md` 第 16 条补入 Mac 桌面应用红黄绿交通灯避让与顶部拖拽规则。<br>2. `src/web/styles.css`、`Sidebar.tsx`、`Conversation.tsx`、`WorkerConversation.tsx`、`PmProfile.tsx`、`App.tsx`：适配 `html[data-macos-app="true"]` 下的 `--macos-traffic-lights-height: 28px`（展开左栏时左栏顶部避让）与窄屏 `--macos-traffic-lights-width: 72px`（收起左栏时顶栏左侧按钮避让），以及顶部窗口拖拽桥接与菜单栏状态上报。<br>3. 编写 `apps/macos/*.swift`（`DaemonSupervisor` 自动探测/拉起守护进程、读取 `state/ui-token` 调 `POST /auth { token }` 免手输登录、透明标题栏 `WKWebView`、`NSStatusItem` 菜单栏常驻与 Dock 角标、文件上传 `NSOpenPanel` / 下载 `~/Downloads` / 外链默认浏览器打开）。<br>4. 编写 `scripts/build-mac-app.sh` 与 `package.json` 的 `app:mac` 脚本。 | 1. `src/web/ui/ui-standard.test.tsx` 增加 `data-macos-app="true"` 下安全区变量与顶栏避让校验；<br>2. 本机运行 `scripts/build-mac-app.sh --install` 编译打包 `/Applications/Agent Hub.app`。 | 1. `/Applications/Agent Hub.app` 体积 `< 5 MB`，`codesign -dv` 验证签名有效；<br>2. 守护进程未跑时双击打开 App 自动后台拉起并免手输登录直接进对话页；<br>3. 宽屏展开左栏与窄屏收起左栏时红黄绿按钮与搜索框/顶栏按钮零重叠；<br>4. 点红叉隐藏窗口、菜单栏图标常驻、点 Dock 重新显示窗口。 |

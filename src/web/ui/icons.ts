@@ -1,3 +1,4 @@
+import { ArrowDown as PxArrowDown } from "pixelarticons/react/ArrowDown.js";
 import { Archive as PxArchive } from "pixelarticons/react/Archive.js";
 import { ArrowLeft as PxArrowLeft } from "pixelarticons/react/ArrowLeft.js";
 import { ArrowsHorizontal as PxArrowsHorizontal } from "pixelarticons/react/ArrowsHorizontal.js";
@@ -126,6 +127,7 @@ export const Loader2: Icon = Object.assign(
 
 export const AlertCircle = pixel(PxSquareAlert, "AlertCircle");
 export const Archive = pixel(PxArchive, "Archive");
+export const ArrowDown = pixel(PxArrowDown, "ArrowDown");
 export const ArrowLeft = pixel(PxArrowLeft, "ArrowLeft");
 export const ArrowLeftRight = pixel(PxArrowsHorizontal, "ArrowLeftRight");
 export const ArrowUp = pixel(PxArrowUp, "ArrowUp");

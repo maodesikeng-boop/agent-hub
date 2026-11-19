@@ -50,10 +50,12 @@ import type {
   ResolveRouterItemRequest,
   RouterItemsPage,
   SessionState,
-  SetPublicEntryRequest,
   StateSnapshot,
   SystemMessageMeta,
   UpdateRouterSettingsRequest,
+  AnswerApprovalRequest,
+  SetCenterPriorityRequest,
+  StartLoginRequest,
   VendorSyncApplyRequest,
   VendorSyncPreviewResponse,
   WorkerMessageMeta,
@@ -400,23 +402,29 @@ export class FakeApi {
     status: 200,
     body: { sessions: [{ id: "s1", userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36", createdAt: 0, lastSeenAt: Date.now(), current: true }] },
   });
-  /** POST /api/sessions/:id/approve。 */
-  approveBrowserSession: (id: string) => Reply | Promise<Reply> = () => ({ status: 204 });
   /** DELETE /api/sessions/:id。 */
   deleteBrowserSession: (id: string) => Reply | Promise<Reply> = () => ({ status: 204 });
   /** POST /api/sessions/logout-all。 */
   logoutAll: () => Reply | Promise<Reply> = () => ({ status: 204 });
   /** POST /api/login-links。 */
   loginLink: () => Reply | Promise<Reply> = () => ({ status: 201, body: { url: "http://127.0.0.1:4317/auth#link=fake-code", expiresAt: Date.now() + 300_000 } });
-  /** PUT /api/devices/public-entry。 */
-  putPublicEntry: (body: SetPublicEntryRequest) => Reply | Promise<Reply> = (body) => ({
+  /** GET /api/account。默认没登录。 */
+  account: () => Reply | Promise<Reply> = () => ({ status: 200, body: { state: "signed_out", lastError: null } });
+  /** POST /api/account/login。 */
+  accountLogin: (_body: StartLoginRequest) => Reply | Promise<Reply> = () => ({
     status: 200,
-    body: {
-      enabled: body.enabled,
-      hostname: body.hostname ?? "tokyo.tailnet.ts.net",
-      funnelCommand: "sudo tailscale funnel --bg unix:/home/ubuntu/.agent-hub/run/public.sock",
-    },
+    body: { state: "signing_in", userCode: "ABCD-EFGH", verificationUri: "https://github.com/login/device", expiresAt: Date.now() + 900_000 },
   });
+  /** DELETE /api/account/login。 */
+  accountCancelLogin: () => Reply | Promise<Reply> = () => ({ status: 200, body: { state: "signed_out", lastError: null } });
+  /** POST /api/account/logout。 */
+  accountLogout: () => Reply | Promise<Reply> = () => ({ status: 200, body: { state: "signed_out", lastError: null } });
+  /** POST /api/account/approvals/:id/begin。 */
+  accountApprovalBegin: (_id: string) => Reply | Promise<Reply> = () => ({ status: 200, body: { state: "signed_out", lastError: null } });
+  /** POST /api/account/approvals/:id/answer。 */
+  accountApprovalAnswer: (_id: string, _body: AnswerApprovalRequest) => Reply | Promise<Reply> = () => ({ status: 200, body: { state: "signed_out", lastError: null } });
+  /** PUT /api/account/priority。 */
+  accountPriority: (_body: SetCenterPriorityRequest) => Reply | Promise<Reply> = () => ({ status: 200, body: { state: "signed_out", lastError: null } });
   /** GET /api/models。默认 404：网页用打包的名单。 */
   models: () => Reply | Promise<Reply> = () => ({ status: 404, body: { error: "not found" } });
   /** GET /api/quota。默认 404：不显示那一块。 */
@@ -927,11 +935,17 @@ export class FakeApi {
     if (method === "GET" && url.pathname === "/api/sessions") return jsonResponse(await this.browserSessions());
     if (method === "POST" && url.pathname === "/api/sessions/logout-all") return jsonResponse(await this.logoutAll());
     if (method === "POST" && url.pathname === "/api/login-links") return jsonResponse(await this.loginLink());
-    const approveSession = /^\/api\/sessions\/([^/]+)\/approve$/.exec(url.pathname);
-    if (approveSession && method === "POST") return jsonResponse(await this.approveBrowserSession(decodeURIComponent(approveSession[1]!)));
     const browserSession = /^\/api\/sessions\/([^/]+)$/.exec(url.pathname);
     if (browserSession && method === "DELETE") return jsonResponse(await this.deleteBrowserSession(decodeURIComponent(browserSession[1]!)));
-    if (method === "PUT" && url.pathname === API_PATHS.publicEntry) return jsonResponse(await this.putPublicEntry(body));
+    if (method === "GET" && url.pathname === API_PATHS.account) return jsonResponse(await this.account());
+    if (method === "POST" && url.pathname === API_PATHS.accountLogin) return jsonResponse(await this.accountLogin(body));
+    if (method === "DELETE" && url.pathname === API_PATHS.accountLogin) return jsonResponse(await this.accountCancelLogin());
+    if (method === "POST" && url.pathname === API_PATHS.accountLogout) return jsonResponse(await this.accountLogout());
+    if (method === "PUT" && url.pathname === API_PATHS.accountPriority) return jsonResponse(await this.accountPriority(body));
+    const approvalBegin = /^\/api\/account\/approvals\/([^/]+)\/begin$/.exec(url.pathname);
+    if (approvalBegin && method === "POST") return jsonResponse(await this.accountApprovalBegin(decodeURIComponent(approvalBegin[1]!)));
+    const approvalAnswer = /^\/api\/account\/approvals\/([^/]+)\/answer$/.exec(url.pathname);
+    if (approvalAnswer && method === "POST") return jsonResponse(await this.accountApprovalAnswer(decodeURIComponent(approvalAnswer[1]!), body));
     const vendorSyncScoped = /^(?:\/d\/([^/]+))?(\/api\/vendor-sync\/.*)$/.exec(url.pathname);
     if (vendorSyncScoped) {
       const device = vendorSyncScoped[1] === undefined ? null : decodeURIComponent(vendorSyncScoped[1]);
