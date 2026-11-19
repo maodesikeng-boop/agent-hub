@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { FeishuChatId, FeishuMessageId, FeishuOpenId } from "../../shared/feishu.ts";
 import type { FeishuInbound, FeishuInboundAction } from "./inbound.ts";
-import { feishuWakes, GUEST_NO_FILES, OWNER_ONLY_POLICY_CARD, routeFeishuAction, routeFeishuMessage, type FeishuRoutingContext } from "./routing.ts";
+import { feishuWakes, GUEST_NO_FILES, OWNER_ONLY_SETTINGS_CARD, routeFeishuAction, routeFeishuMessage, type FeishuRoutingContext } from "./routing.ts";
 
 const OWNER = "ou_owner" as FeishuOpenId;
 const GUEST = "ou_guest" as FeishuOpenId;
@@ -198,9 +198,9 @@ describe("群设置命令（只认带斜杠的整句，不碰自然语言）", (
 
   it("主人发 /群设置 或 /policy（去掉 @ 后整句）：叫出群设置卡，不进账本；@ 不 @ 都认", () => {
     for (const text of ["/群设置", "/policy", " /群设置 ", "/policy\n"]) {
-      expect(routeFeishuMessage(msg({ text }), ctx())).toEqual({ kind: "policy_card" });
-      expect(routeFeishuMessage(msg({ text }), ctx(shared))).toEqual({ kind: "policy_card" });
-      expect(routeFeishuMessage(msg({ text, mentionedBot: true }), ctx(shared))).toEqual({ kind: "policy_card" });
+      expect(routeFeishuMessage(msg({ text }), ctx())).toEqual({ kind: "settings_card" });
+      expect(routeFeishuMessage(msg({ text }), ctx(shared))).toEqual({ kind: "settings_card" });
+      expect(routeFeishuMessage(msg({ text, mentionedBot: true }), ctx(shared))).toEqual({ kind: "settings_card" });
     }
   });
 
@@ -217,7 +217,7 @@ describe("群设置命令（只认带斜杠的整句，不碰自然语言）", (
         expect(routeFeishuMessage(msg({ senderOpenId: GUEST, text: "/群设置", mentionedBot }), ctx({ ...shared, guestTier }))).toEqual({
           kind: "reject",
           openId: GUEST,
-          reason: OWNER_ONLY_POLICY_CARD,
+          reason: OWNER_ONLY_SETTINGS_CARD,
         });
       }
     }

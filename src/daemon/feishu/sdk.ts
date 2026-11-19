@@ -74,6 +74,10 @@ function routeOf<M extends FeishuMethod>(method: M, args: FeishuMethodArgs[M]): 
     }
     case "message.delete":
       return { method: "DELETE", url: `/open-apis/im/v1/messages/${enc(a.message_id)}` };
+    case "pin.create":
+      return { method: "POST", url: "/open-apis/im/v1/pins", data: { message_id: a.message_id } };
+    case "pin.delete":
+      return { method: "DELETE", url: `/open-apis/im/v1/pins/${enc(a.message_id)}` };
     case "card.create":
       return { method: "POST", url: "/open-apis/cardkit/v1/cards", data: a };
     case "card.update": {

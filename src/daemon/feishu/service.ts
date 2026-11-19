@@ -164,6 +164,7 @@ const FEISHU_CLIENT_PREFIX = "feishu:";
 const CHAT_GONE_CODES = new Set([232011, 232006, 232010]);
 const isCardJson = (value: unknown): value is FeishuCardJson => typeof value === "object" && value !== null && "schema" in value && value.schema === "2.0";
 const ALREADY_DECIDED = "已经定过了";
+const STALE_POLICY_CARD = "这张设置卡已换新，在群里发 /群设置 叫出最新的";
 /** 用户消息还没回完的状态：排着、送达、在处理。 */
 const AWAITING_REPLY: ReadonlySet<string> = new Set(["queued", "delivered", "processing"]);
 /** 网页上发的话镜像到群里时卡片的标题。 */
@@ -1717,13 +1718,38 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
 
   const isBindCode = (text: string) => bindCode !== null && bindCode.expiresAt > now() && text.trim() === bindCode.code;
 
-  const policyCardFor = async (chat: FeishuChatBinding) => {
-    if (chat.target.kind !== "pm" || chat.target.pmId === null) return;
-    const pmId = chat.target.pmId;
+  /**
+   * 在群底发一张新的群设置卡，记成这个项目经理的那一张（之后改档位只改它，旧卡点了提示去叫新卡），置顶它并取消上一张的置顶。
+   * 置顶是锦上添花：飞书拒了（缺权限、群里只许群主 Pin）或网络出错只记日志，不影响发卡。
+   */
+  const postPolicyCard = async (chat: FeishuChatBinding, uuid = `fusa-p-${randomUUID()}`) => {
+    const target = activeTarget(chat);
+    if (target?.kind !== "pm") return;
+    const pmId = target.pmId;
     const ref: FeishuPostRef = { kind: "chat_policy", pmId };
-    if (store.postOf(ref) !== null) return;
-    const posted = await postCardEntity(chat.chatId, renderChatPolicyCard({ pmId, triggerMode: chat.triggerMode, guestTier: chat.guestTier, mentionOnlyForced: mentionOnly }), `fusa-p-${chat.chatId}`);
-    if (activeTarget(store.chatById(chat.chatId)) !== null) store.savePost({ ref, chatId: chat.chatId, messageId: posted.messageId, cardId: posted.cardId, sequence: 0, state: "final" }, now());
+    const previous = store.postOf(ref);
+    directory.notePolicyCard(chat.chatId, now());
+    const posted = await postCardEntity(chat.chatId, renderChatPolicyCard({ pmId, triggerMode: chat.triggerMode, guestTier: chat.guestTier, mentionOnlyForced: mentionOnly }), uuid);
+    if (activeTarget(store.chatById(chat.chatId)) === null) return;
+    // 卡片的 sequence 只要在同一张卡上递增；接着旧卡的往上记，这一行的序号不倒退
+    store.savePost({ ref, chatId: chat.chatId, messageId: posted.messageId, cardId: posted.cardId, sequence: previous?.sequence ?? 0, state: "final" }, now());
+    await pinQuietly("pin.create", posted.messageId);
+    if (previous !== null && previous.messageId !== posted.messageId) await pinQuietly("pin.delete", previous.messageId);
+  };
+
+  const pinQuietly = async (method: "pin.create" | "pin.delete", messageId: FeishuMessageId) => {
+    try {
+      await api(method, { message_id: messageId });
+    } catch (error) {
+      log(`飞书：${method === "pin.create" ? "置顶" : "取消置顶"}群设置卡没成，卡照常在群里：${errorText(error)}`);
+    }
+  };
+
+  /** 访客被档位拦下时附一张群设置卡，方便主人低头就改；同一个群 FEISHU_POLICY_CARD_COOLDOWN_MS 内只附一次。 */
+  const offerPolicyCard = async (chatId: FeishuChatId) => {
+    const chat = store.chatById(chatId);
+    if (chat === null || activeTarget(chat)?.kind !== "pm" || !directory.policyCardDue(chatId, now())) return;
+    await postPolicyCard(chat);
   };
 
   const applyChatGone = (chatId: FeishuChatId) => {
@@ -1745,7 +1771,9 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
       case "members_added": {
         directory.applyJoined(event.chatId, event.openIds.map((openId) => ({ openId, name: "" })), now());
         const chat = store.chatById(event.chatId);
-        if (chat !== null && activeTarget(chat)?.kind === "pm" && o !== null && event.openIds.some((id) => id !== o)) await policyCardFor(chat);
+        const target = activeTarget(chat);
+        const firstGuest = target?.kind === "pm" && o !== null && event.openIds.some((id) => id !== o) && store.postOf({ kind: "chat_policy", pmId: target.pmId }) === null;
+        if (chat !== null && firstGuest) await postPolicyCard(chat, `fusa-p-${chat.chatId}`);
         return;
       }
       case "members_removed":
@@ -1796,6 +1824,10 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
       case "reject":
         await sendText({ chatId: message.chatId }, message.chatType === "p2p" ? route.reason : `<at user_id="${route.openId}"></at> ${route.reason}`);
         if (route.reason === GUEST_NO_FILES) contexts.dropFiles(message.chatId, (file) => file.speaker === route.openId);
+        if (route.guestDenied === true) await offerPolicyCard(message.chatId);
+        return;
+      case "settings_card":
+        if (chat !== null) await postPolicyCard(chat);
         return;
       case "context":
         contexts.add(message.chatId, route.line, message.files.map((file) => ({ messageId: message.messageId, speaker: message.senderOpenId, file, at: message.at })));
@@ -1814,7 +1846,10 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
         contexts.dropFiles(message.chatId, (file) => handled.has(file.messageId) || (route.droppedFiles > 0 && file.speaker === message.senderOpenId));
         const at = message.chatType === "group" && message.senderOpenId !== o ? `<at user_id="${message.senderOpenId}"></at> ` : "";
         if (missed.length > 0) await sendText({ chatId: message.chatId }, `${at}${missedFilesText(missed)}`);
-        if (route.droppedFiles > 0) await sendText({ chatId: message.chatId }, `${at}${GUEST_NO_FILES}`);
+        if (route.droppedFiles > 0) {
+          await sendText({ chatId: message.chatId }, `${at}${GUEST_NO_FILES}`);
+          await offerPolicyCard(message.chatId);
+        }
         if (route.text === "" && attachments.length === 0) return;
         const clientId = `${FEISHU_CLIENT_PREFIX}${message.messageId}`;
         if (route.target.kind === "router") {
@@ -1912,7 +1947,9 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
       binding: { target, archived: false },
       guestTier: chat.guestTier,
     });
-    if (route.kind !== "ignore" && route.kind !== "reject" && !ownsAction(action, target)) return toast("warning", "这张卡已过期，去网页看");
+    if (route.kind !== "ignore" && route.kind !== "reject" && !ownsAction(action, target)) {
+      return toast("warning", action.value.kind === "set_policy" ? STALE_POLICY_CARD : "这张卡已过期，去网页看");
+    }
     const response = applyAction(route, action.operatorOpenId, action.chatId);
     if (now() - started > FEISHU_CARD_ACTION_DEADLINE_MS) log(`飞书：卡片点击处理了 ${now() - started} 毫秒，超过 ${FEISHU_CARD_ACTION_DEADLINE_MS}`);
     return response;
@@ -1926,6 +1963,7 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
         case "ignore":
           return {};
         case "reject":
+          if (route.guestDenied === true) admit(inbound, chatId, inboundTask(() => offerPolicyCard(chatId)));
           return toast("warning", route.toast);
         case "stop": {
           if (route.target.kind !== "pm") return {};

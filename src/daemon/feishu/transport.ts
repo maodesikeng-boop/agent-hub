@@ -53,6 +53,10 @@ export interface FeishuMethodArgs {
   "card.settings": { card_id: string; settings: string; sequence: number; uuid: string };
   /** PUT /open-apis/cardkit/v1/cards/:card_id/elements/:element_id/content：流式更新文本（全量，平台算增量打字机）。 */
   "card.element.content": { card_id: string; element_id: string; content: string; sequence: number; uuid: string };
+  /** POST /open-apis/im/v1/pins：把一条消息置顶到群顶（Pin），已 Pin 的照样回成功。im:message:send_as_bot 就够；群里只许群主 Pin 时回 230046。 */
+  "pin.create": { message_id: string };
+  /** DELETE /open-apis/im/v1/pins/:message_id：取消置顶，没 Pin 过、已撤回的照样回成功。 */
+  "pin.delete": { message_id: string };
 }
 
 export type FeishuMethod = keyof FeishuMethodArgs;

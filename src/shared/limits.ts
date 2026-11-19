@@ -1100,6 +1100,8 @@ export const FEISHU_CONTEXT_TTL_MS = 2 * 60 * 60_000;
  * 飞书手机上多选的图片逐张发成单独的图片消息，一次最多 9 张，留一倍余量。
  */
 export const FEISHU_CONTEXT_MAX_FILES = 20;
+/** 访客因档位被拦（发文件、点拍板或停止）时，同一个群隔多久才再自动附一张群设置卡；主人发 /群设置 不受它限。 */
+export const FEISHU_POLICY_CARD_COOLDOWN_MS = 5 * 60_000;
 /** feishu_posts 里已定稿的行留几天：飞书卡片实体 14 天后不能再操作。 */
 export const FEISHU_POST_RETENTION_DAYS = 14;
 export const FEISHU_POST_RETENTION_MS = FEISHU_POST_RETENTION_DAYS * 24 * 60 * 60 * 1000;

@@ -21,6 +21,7 @@ import {
   FEISHU_CONTEXT_TTL_MS,
   FEISHU_MEMBERS_RETRY_MS,
   FEISHU_MEMBERS_TTL_MS,
+  FEISHU_POLICY_CARD_COOLDOWN_MS,
 } from "../../shared/limits.ts";
 
 export interface FeishuMember {
@@ -44,6 +45,10 @@ export interface FeishuDirectory {
   /** 成员进出事件：直接改缓存，不发请求。 */
   applyJoined(chatId: FeishuChatId, members: readonly FeishuMember[], now: number): void;
   applyLeft(chatId: FeishuChatId, openIds: readonly FeishuOpenId[], now: number): void;
+  /** 后置：这个群上次发群设置卡已过 FEISHU_POLICY_CARD_COOLDOWN_MS（或没发过）时返回 true。 */
+  policyCardDue(chatId: FeishuChatId, now: number): boolean;
+  /** 群里刚发了一张群设置卡（不管是主人叫的还是自动附的），冷却从这里算起。 */
+  notePolicyCard(chatId: FeishuChatId, now: number): void;
   /** 连上或重连：全部标过期，下一次 members 时重拉。 */
   markAllStale(): void;
   forget(chatId: FeishuChatId): void;
@@ -60,6 +65,8 @@ interface ChatEntry {
   stale: boolean;
   /** 只从事件、发言知道、还不知道名字的人：查名字时为他们重拉一次。 */
   unnamed: Set<FeishuOpenId>;
+  /** 上次在这个群发群设置卡的时间，自动附卡按它冷却；跟着群的缓存一起淘汰、清掉。 */
+  policyCardAt: number | null;
 }
 
 export function createFeishuDirectory(fetch: (chatId: FeishuChatId) => Promise<FeishuMember[]>): FeishuDirectory {
@@ -69,7 +76,7 @@ export function createFeishuDirectory(fetch: (chatId: FeishuChatId) => Promise<F
   const entryOf = (chatId: FeishuChatId): ChatEntry => {
     let entry = chats.get(chatId);
     if (entry === undefined) {
-      entry = { members: new Map(), fetchedAt: null, failedAt: null, stale: true, unnamed: new Set() };
+      entry = { members: new Map(), fetchedAt: null, failedAt: null, stale: true, unnamed: new Set(), policyCardAt: null };
       chats.set(chatId, entry);
     }
     return entry;
@@ -150,6 +157,13 @@ export function createFeishuDirectory(fetch: (chatId: FeishuChatId) => Promise<F
       const entry = chats.get(chatId);
       if (entry === undefined) return;
       for (const openId of openIds) entry.members.delete(openId);
+    },
+    policyCardDue(chatId, now) {
+      const at = chats.peek(chatId)?.policyCardAt ?? null;
+      return at === null || now - at >= FEISHU_POLICY_CARD_COOLDOWN_MS;
+    },
+    notePolicyCard(chatId, now) {
+      entryOf(chatId).policyCardAt = now;
     },
     markAllStale() {
       for (const entry of chats.values()) entry.stale = true;
