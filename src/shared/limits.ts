@@ -867,7 +867,10 @@ export const WIN_CMD_SHIM_MAX_BYTES = 64 * 1024;
 export const DATA_DIR_DENY_LIST_MAX = 4_096;
 /** 已完成受保护根 ACL 校验的目录缓存上限（按进程生命周期去重避免每次派活重查 DACL）。 */
 export const WIN_PROTECTED_ROOTS_CACHE_MAX = 64;
-/** 已给过 `ALLOW FusaWorker-<编号>` 的 (Worker, worktree 目录) 缓存上限：建 worktree 时给过，起进程时不再调一次 fusa-run.exe。 */
+/**
+ * 已给过 `ALLOW FusaWorker-<编号>` 的 (Worker, worktree 目录) 缓存上限：建 worktree 时给过，起进程时不再调一次 fusa-run.exe。
+ * 命中还要目录身份和 SID 表里的 SID 都没变（platform/win32/acl.ts），轮换掉的 SID 不会误跳过；上限不超过 WIN_WORKER_SIDS_MAX。
+ */
 export const WIN_WORKER_ACL_CACHE_MAX = 512;
 /** `state/win-sandbox-sids.json` 持久化的 SID 条目上限（Worker 写 SID 和会话读 SID 共用，同 fusa-win-helper sids.rs 的 MAX_PERSISTED_WORKER_SIDS）。 */
 export const WIN_WORKER_SIDS_MAX = 1024;
