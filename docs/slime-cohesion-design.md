@@ -1,37 +1,41 @@
-# 史莱姆视觉收口：总助新形象、Piece 分身、像素按钮和像素字、左栏对齐、聊天跟跳、换水果换颜色
+# 史莱姆视觉收口：总助嫩芽铃、便签小灵、像素图标、整体字体、果冻管道任务图、方框输入框、左栏对齐、聊天跟跳、换水果换颜色
 
 ## 给用户看
 
 要验收的文件：
 
-- [第二版对比大图](/tmp/fusa-slime-cohesion-v2.png)，仓库里同一张在 `docs/screenshots/slime-cohesion/candidates.png`。最上面是推荐组合放进整屏的样子（默认“大”界面、真实字号），下面五块：一、Piece 分身 3 选 1；二、像素图标和两档按钮质感；三、像素字和像素任务图；四、总助新形象 3 选 1；五、第一版的左栏、换颜色、聊天跟跳，按第二版重画。
+- [第三版对比大图](/tmp/fusa-slime-cohesion-v3.png)，仓库里同一张在 `docs/screenshots/slime-cohesion/candidates.png`。最上面是已定的加推荐的放进整屏（默认“大”界面、真实字号），下面五块：一、整体换字体（三款对比）；二、任务图的线加粗；三、输入框换方框；四、已经定了的总助嫩芽铃、Piece 便签小灵、像素图标，画了全套；五、第一版还没定的三件。
+
+已经定了（你选的）：总助用 C 嫩芽铃（连着嫩芽生长的进度图标、小铃拍板标记、深绿底应用图标）；Piece 分身用 P1 便签小灵；工具按钮的图标换成像素图标，按钮形状不变；不用像素字；输入框里不用像素。
 
 要你拍板的事：
 
-1. Piece 分身（新）。三个都只有一双豆豆眼，颜色跟着项目经理，和造型无关（20 只项目经理分出来的 Piece 长一样）。
-   - P1 便签小灵：一张卷了角的小便签，纸面浅色，卷角露出项目经理的颜色。
-   - P2 果冻小水滴：8×8 的一小滴果冻，没有耳朵和花纹，比项目经理小一圈。
-   - P3 拼图块：一块像素拼图，顶上和右边各一个凸起。
-   - 推荐 P1。它保留了你最早说的“像纸一样”，形状是方的，和圆团有耳朵的项目经理一眼分开；便签本来就是“一件活”，放在右栏开关、汇报行里意思也对。P2 最可爱，但还是圆团加眼睛，缩小以后仍像项目经理的小号；P3 容易被认成“插件”图标。
-2. 按钮。两档都把图标换成像素画（开源的 pixelarticons，全站一次换掉）。
-   - 档位 1：按钮形状、底色、悬停浅底都不变，只换图标。
-   - 档位 2：按钮四角切成两级台阶，实心按钮底边多一条深色“键帽”，按下沉 1px。
-   - 推荐档位 1。像素只出现在图标、头像这类小东西上，输入框、气泡、卡片保持圆润，最耐看；档位 2 要把创建、保存、拍板选项这些按钮一起换，和圆角的输入框、气泡放在一起是两种几何。
-3. 像素字。只用在外壳里的英文短标签：右栏组标题（Needs You、Task Graph、Pieces、Completed）、状态词（Working…）、编号（#764）、计数（2 done）。名字、步骤名、正文、按钮里的字照旧。
-   - Tiny5、Geist Pixel、Silkscreen，或者不换。
-   - 推荐 Tiny5。大小写都有、数字不会认错，16px 时一格正好 2px，普通屏也清楚，看着和现在 12px 的组标题一样大。Geist Pixel 在这个字号下看着就是普通字，没有像素感；Silkscreen 只有大写、太宽；另外试过 Pixelify Sans，小字号下“#772”像“#ꞁꞁ8”、“finish”像“Anish”，不推荐。
-4. 任务图（新）。
-   - 像素版：右栏果皮轨和放大全览的连线都走横竖线，拐弯处一格台阶；没走通的轨是点阵；状态点是像素小方块；放大全览的节点卡左上角一枚像素角标写步骤号。
-   - 只换状态点，连线保持现在的圆滑曲线。
-   - 推荐像素版，和史莱姆、像素图标一个画法，整屏才统一。
-5. 总助形象（第一版提过，还没定）。A 珍珠领队、B 藤编果篮、C 嫩芽铃，每套连着右栏进度图标、拍板标记和桌面应用图标一起换。推荐 A：它本身就是一只史莱姆，和项目经理排在左栏里最统一，动画直接用现有的蹦跳；也可以混搭（比如 A 的形象配 C 的进度图标）。
-6. 左栏（第一版）。名字 17px（推荐，用现有的标题字号）或 16px（要在界面标准里新加一档）；没有预览的行，名字固定在第一行（推荐，整列名字一条线）或放到行正中（现在的做法）。
-7. 换形象从哪进（第一版）。资料页点头像，加上新建项目经理弹窗里点头像（推荐）；或者再让对话顶栏点头像直接弹出（顶栏头像现在是打开资料页，改了以后进资料页要多点一下）。
-8. 颜色几种（第一版）。20 种水果原色加天蓝、青碧、樱粉、石墨，共 24 种（推荐）；或只用 20 种原色。
+1. 整体字体。字体只在一处定义，换了就是整屏一起换。
+   - Geist：英文和数字换成 Vercel 开源的 Geist，中文仍是苹方。
+   - Nunito：英文和数字换成开源圆体 Nunito，中文仍是苹方。
+   - 霞鹜文楷：中文英文一起换成开源楷体。
+   - 不换，照旧用系统字体。
+   - 推荐 Geist。字形利落、数字好看，比系统字紧凑有个性，和像素图标是同一路“现代工具”的气质，Windows 上英文也和 Mac 长一样。Nunito 最可爱但正文偏软；霞鹜文楷变化最大、最暖，但界面里的小字不如黑体清楚，字体包每种粗细约 4 MB。
+2. 任务图的线。
+   - 果冻管道：4 格宽的管子，深色描边、果冻色芯、一道高光；走通的管子灌满项目经理的颜色，没走通的是空的浅灰管子；点换成果冻珠子。
+   - 粗实线：线加粗到 2 格，点换成方块。
+   - 推荐果冻管道。它和史莱姆是一个画法，有体积，不再是“一根细线过去”；右栏和放大全览用同一套。
+3. 输入框。
+   - 方框单行：四角 12px 的方框，空着时一行，字多了按钮落到下一行（和现在的规则一样）。
+   - 方框两行：一直分两行，上面写字，下面一条工具栏。
+   - 图标：左边“+”加文件，右边方形发送键里是向上箭头（推荐）；也可以换纸飞机、回车，或者左边留回形针。都是线条图标，不是像素。
+   - 推荐方框单行加“+”和箭头：空着时占地方最少，有字时一眼看到能发送。
+4. 第一版还没定的三件，没意见就照推荐做：左栏名字 17px、没有预览的行名字固定在第一行、史莱姆按身体对齐；换形象从资料页头像和新建项目经理弹窗进；颜色用 20 种水果原色加天蓝、青碧、樱粉、石墨，共 24 种。
 
 ## 用户目标
 
-用户看完第一版对比图后的反馈（2026-11-19，优先级最高）：
+用户看完第二版对比图后的拍板和修改意见（2026-11-19，优先级最高）：
+
+> 我喜欢这个铃铛，然后字体还是不要像素字了，可以换个别的字体，看看，整体都换了？，图标是ok的，还不错，可以把图的线粗一点？？？，不知道你明不明白我的意思，就是图就这样一根过去，有点廉价，然后输入框的像素也不要了，把圆框换成方框，输入的那一个图标也换
+
+> 然后我喜欢那个便签的
+
+用户看完第一版对比图后的反馈（2026-11-19）：
 
 > 我感觉纸片分身和pm形象同质化太高了？
 > 但是我们的按钮可以像素画一点，比如设置，
@@ -52,7 +56,7 @@
 
 > 我喜欢A的右边的那个小动物版本的，很可爱，用这个，还可以做动画，蹦蹦跳跳的，piece也是它不过薄一点，像纸一样，因为它的概念可能就是史莱姆，不会被切了就成片了，而是一个小生命，不然就太残忍了
 
-我理解的目标：界面里的“角色”和“小东西”都换成和 20 只水果史莱姆同一套像素画法。角色是总助、Piece 分身、拍板标记、任务进度图标、应用图标；小东西是工具按钮的图标、右栏的英文短标签、任务图的点和线。正文、名字、输入框、气泡、卡片保持现在的清爽排版。Piece 分身换成和项目经理一眼分得开的小形象，仍然是个小生命。左栏每行等高、名字更大、史莱姆在框里看着居中。项目经理干活时，聊天里正在进行的那一轮的头像也跳。每个项目经理能单独换造型、单独换颜色，网页和飞书群头像一起变。README 换图和新安装包是后面的步骤，这里先把应用图标定下来。
+我理解的目标：角色（总助、Piece 分身、拍板标记、任务进度图标、应用图标）和工具按钮的图标用和 20 只水果史莱姆同一套像素画法；字、输入框、气泡、卡片不用像素，保持清爽，整屏换一款更有个性的字体。总助是嫩芽铃，Piece 分身是便签小灵。任务图的线要有分量，不能是一根细线串几个点。输入框从胶囊圆框换成方框，图标换成线条的“+”和发送箭头。左栏每行等高、名字更大、史莱姆在框里看着居中。项目经理干活时，聊天里正在进行的那一轮的头像也跳。每个项目经理能单独换造型、单独换颜色，网页和飞书群头像一起变。README 换图和新安装包是后面的步骤，这里先把应用图标定下来。
 
 ## 现状
 
@@ -66,12 +70,13 @@
 8. 只有对话顶栏的头像会跳。`working` 只在 `Conversation.tsx:153`、`:156` 和 `WorkerConversation.tsx:122` 传了；消息流里每一轮开头的头像是 `AgentHead`（`Messages.tsx:100`），`Messages.tsx:499` 已经算出这一轮在不在跑（`running`），但没传给头像。实测：grep `working={`。
 9. 飞书群头像按水果认。`src/daemon/feishu/chats.ts:40` 用 `pmFruitOf(pm.id)`，`service.ts:843` 对齐时读 `assets/avatars/<水果>.png` 算哈希；`feishu_avatars`（0037）和 `feishu_chats.avatar_fruit`（0034）都按水果名存。实测：读代码。
 10. 迁移要能从 `user_version = 8` 重跑（`test/migration.test.ts` 逐个版本回退重跑），`ALTER TABLE ADD COLUMN` 重跑会报重复列。实测：先给 `pms` 加列写了一版 0038，21 个迁移测试挂了；改成单独建表后全部通过。
-11. Piece 分身就是项目经理那张脸抽掉几行。`scripts/render-avatars.ts:455` 的 `pieceGrid` 照 `SPRITES[水果].piece` 抽行、暗面改回身体色。它出现在 6 处：Piece 汇报行（`Messages.tsx:749`）、Piece 对话里每一轮的头像（`Messages.tsx:115`）、Piece 对话的空状态 120px（`Messages.tsx:1020`）、右栏开关（`RightRail.tsx:286`）、总助时间流的去向行（`RouterStream.tsx:178`）、Piece 对话顶栏（`WorkerConversation.tsx:122`）。实测：grep `neutral`。缩到 26px 以下和项目经理分不出来，对比图第一块“现在”那一行就是这个。
+11. Piece 分身就是项目经理那张脸抽掉几行。`scripts/render-avatars.ts:455` 的 `pieceGrid` 照 `SPRITES[水果].piece` 抽行、暗面改回身体色。它出现在 6 处：Piece 汇报行（`Messages.tsx:749`）、Piece 对话里每一轮的头像（`Messages.tsx:115`）、Piece 对话的空状态 120px（`Messages.tsx:1020`）、右栏开关（`RightRail.tsx:286`）、总助时间流的去向行（`RouterStream.tsx:178`）、Piece 对话顶栏（`WorkerConversation.tsx:122`）。实测：grep `neutral`。
 12. 图标全是 lucide 线条图标。`src/web` 里 47 个文件从 `lucide-react` 引了 47 种图标，另有 `LucideIcon` 类型在 `SettingsDialog.tsx:1`、`Messages.tsx:21`。界面标准第 5 条定的是 lucide、16px、圆头线条。实测：grep `from "lucide-react"`。
-13. 字体只用系统字体，不打包字体文件。`styles.css:74` 的 `--font-ui`，界面标准第 13 条。右栏组标题 12px、500、灰（第 3 条、第 12 条）。实测：读代码。
-14. 任务图全是圆滑画法。果皮轨的轨道是圆头线、`2 4` 虚线，状态点是 `<circle>`（`PeelTrack.tsx:85`、`:102`），分叉汇合是弧线；放大全览的连线是三次贝塞尔加 3px 折角箭头（`task-graph-layout.ts:141`、`:435`），卡片 `rounded-2xl`。实测：读代码。
-15. 几款像素字在我们的字号下差别很大。Tiny5 一个字 8 格高（80px 渲染 “H”，竖笔 10px），16px 时一格正好 2px；Geist Pixel 的格子细，12～17px 下 1 倍屏和 2 倍屏看着都是普通等宽字；Pixelify Sans 的 7、2 和 fi 连字是花体，13px 时 “#772” 读成 “#ꞁꞁ8”、“finish” 读成 “Anish”；Silkscreen 小写也画成大写。实测：Playwright 在 1 倍、2 倍下渲染同一组标签截图比较（对比图第三块）。
-16. pixelarticons 是 24 格画布、2 格一笔（读它的 SVG path：笔画宽 2 个单位），一笔正好是图标宽的 1/12，和史莱姆一格描边占头像宽的比例一样；免费 1036 个，MIT，带 React 组件和逐个 import。默认“大”档下 1.375rem 是 24.06px，正好是它的原生尺寸。我们用的 47 种里 41 种有同名或同义的，另外 6 种用近似的（附录有对照表）。实测：读 npm 包 `pixelarticons@2.4.2`。
+13. 字体只用系统字体，不打包字体文件。`styles.css:74` 的 `--font-ui`（`-apple-system`、`SF Pro Text` 在前，苹方、微软雅黑在后），界面标准第 13 条。Mac 上是 SF Pro 加苹方，Windows 上是 Segoe UI 加微软雅黑，两边英文长得不一样。实测：读代码。
+14. 字体文件大小：Geist 拉丁字母的可变字体 29 KB，Nunito 39 KB（都含全部粗细）；霞鹜文楷 Lite 按字切片，常规体全部切片 4.1 MB、粗体 4.1 MB，网页只下用到的切片，安装包要全带。实测：npm 包 `@fontsource-variable/geist@5.3.0`、`@fontsource-variable/nunito@5.3.0`、`lxgw-wenkai-lite-webfont@1.7.0` 解包量的。第二版试过的像素字（Tiny5 等）用户不要了，不再考虑。
+15. 任务图全是圆滑细线。果皮轨的轨道是 3.6 单位宽的圆头线和 1.6 宽的 `2 4` 虚线，状态点是 `<circle>`（`PeelTrack.tsx:85`、`:102`），分叉汇合是弧线；放大全览的连线是 1.5px 三次贝塞尔加 3px 折角箭头（`task-graph-layout.ts:141`、`:435`），卡片 `rounded-2xl`。实测：读代码。用户说的“图就这样一根过去”就是这些细线（推断，第二版的像素细线也是一格宽）。
+16. 输入框是胶囊圆框。`Composer.tsx:51` 的 `FRAME_CLASS` 是 `rounded-[26px]`，阴影和聚焦光晕在 `styles.css:325` 的 `.composer-frame`；左边回形针（`Composer.tsx:421`），右边圆形发送键里是向上箭头（`:472`）。实测：读代码。
+17. pixelarticons 是 24 格画布、2 格一笔，一笔正好是图标宽的 1/12，和史莱姆一格描边占头像宽的比例一样；免费 1036 个，MIT，带 React 组件和逐个 import。默认“大”档下 1.375rem 是 24.06px，正好是它的原生尺寸。我们用的 47 种里 41 种有同名或同义的，另外 6 种用近似的（附录有对照表）。实测：读 npm 包 `pixelarticons@2.4.2`。
 
 ## 做法比较
 
@@ -80,7 +85,7 @@
 | 做法 | 好处 | 坏处 |
 | --- | --- | --- |
 | 运行时按共享的像素稿和色板画：网页内联 SVG，守护进程用 sharp 出 PNG（推荐） | 只有一份数据；加一种颜色只加一条；不用生成和打包图片文件；飞书按需画 | 每个头像在页面里多几条 path（不到 10 条），要记住算过的结果 |
-| 预先生成全部组合：主形象和 Piece SVG 960 个、飞书 PNG 480 张 | 网页照旧用 `<img>` | 仓库和安装包多上千个文件；加一种颜色要重跑脚本、提交几十个文件 |
+| 预先生成全部组合：主形象 SVG 480 个、飞书 PNG 480 张 | 网页照旧用 `<img>` | 仓库和安装包多上千个文件；加一种颜色要重跑脚本、提交几十个文件 |
 | SVG 文件里写 CSS 变量，用 `<use>` 引用换色 | 文件少 | `<img>` 里变量不生效，还是得改成内联；飞书 PNG 要另画一套 |
 
 推荐第一种：像素稿本来就是数据（`SPRITES`），画法也已有（`render-avatars.ts` 的 `outline`），搬进 `src/shared/` 就能三处共用；sharp 已经是依赖（`AGENTS.md`「我们用的组件」）。
@@ -108,65 +113,54 @@
 | 统一往上挪 1.25 格 | 一个数 | 白柚小狗、青柠青蛙身体本来就高，会偏上 |
 | 重画 20 只，把身体挪到画布中间 | 不用算 | 兔耳、触角要出画布，等于重画 |
 
-Piece 分身（用户拍板，见第一节）：
+整体字体（用户拍板，见第一节）：
+
+| 做法 | 好处 | 坏处 |
+| --- | --- | --- |
+| Geist + 苹方（推荐） | 利落现代，数字好看；29 KB；Mac 和 Windows 的英文长一样 | 中文还是各平台自己的字（苹方、微软雅黑） |
+| Nunito + 苹方 | 圆体，和果冻史莱姆最搭；39 KB | 正文偏软；圆的英文配方的中文 |
+| 霞鹜文楷（中英一起） | 整屏都变，最暖；三个平台中文也一样 | 小字不如黑体清楚；安装包多约 8 MB（常规加粗体） |
+| 不换 | 不用改 | 用户想换 |
+
+怎么加载：用 Fontsource 的 `@fontsource-variable/geist`（或拍板的那一款），Vite 打包进 `assets/`，离线能用；`sw-rules.ts` 已经认 CSS 里引的字体文件（`sw-rules-cache.test.ts:37`）。字体栈只改 `styles.css` 的 `--font-ui` 一处：选定的英文字体排第一，苹方、冬青黑体、微软雅黑照旧排在后面接住中文（界面标准第 13 条“英文字体排在中文字体前面”）。不用 Google Fonts 的网址（离线和内网用不了）。
+
+任务图的线（用户拍板，见第一节）：
+
+| 做法 | 好处 | 坏处 |
+| --- | --- | --- |
+| 果冻管道（推荐） | 有描边、有高光、有体积，和史莱姆一个画法；“灌满 / 空管子”直接说出走没走通 | 轨道槽里东西多一点，管子交叉处要按格子算好 |
+| 粗实线 | 简单 | 只是变粗，还是“一根过去” |
+| 第二版的一格细线 | 已经画好 | 用户嫌廉价 |
+
+画法放在新文件 `src/web/pixel-path.ts`，只管“怎么画”，果皮轨和放大全览的排布（泳道、dagre 分层）不动：
+
+| 做法 | 好处 | 坏处 |
+| --- | --- | --- |
+| `pixel-path.ts` 出管道中线和珠子的路径，`PeelTrack`、`TaskGraphDialog` 只负责上色（推荐） | 画法一处定义、纯函数好测；排布算法零改动，现有的布局测试照样守着 | 放大全览的连线要先把 dagre 的折线改成正交折线 |
+| 在 `PeelTrack.tsx`、`task-graph-layout.ts` 里各自改 | 少一个文件 | 两处各写一套管道和珠子，容易不一致 |
+
+管子用三层 `stroke` 画同一条正交折线（描边色 4 格宽、芯 2 格宽、高光 1 格宽且往左上挪半格），比拼一堆小方块简单，`crispEdges` 下边缘一样是整格。
+
+输入框（用户拍板，见第一节）：
+
+| 做法 | 好处 | 坏处 |
+| --- | --- | --- |
+| 方框单行（推荐） | 空着时只占一行；单行、多行的切换规则不变（界面标准第 7 条），只改外框和按钮形状 | 多行时按钮落到下一行，和现在一样 |
+| 方框两行 | 像 Claude 桌面版，工具栏位置固定 | 空着时也占两行高，对话区少一行 |
+
+图标：左边“+”加文件，发送键里向上箭头（推荐）；纸飞机、回车可选。都是线条图标，用 lucide 的 `Plus`、`ArrowUp`，从 `src/web/ui/icons.ts` 以 `ComposerAdd`、`ComposerSend` 导出，`lucide-react` 只在这个文件里引。外框 `rounded-xl`（12px），发送键和“+”是 36px 的圆角方块，圆角 10px（界面标准第 2 条要加这一条例外）。
+
+总助形象（用户已选 C 嫩芽铃）：
 
 | 方案 | 好处 | 坏处 |
 | --- | --- | --- |
-| P1 便签小灵 | 方形，和圆团有耳朵的项目经理形状最远；保留“像纸一样”；便签就是“一件活”，放右栏开关、汇报行意思对 | 浅色纸面在浅色颜色（柠檬、椰子）上靠描边撑着 |
-| P2 果冻小水滴 | 同一物种的小生命，最可爱，蹦跳最自然 | 还是圆团加眼睛，26px 以下像项目经理的小号，“同质化”只减轻一半 |
-| P3 拼图块 | 形状最特别，Piece 的字面意思 | 是物件不是生命；像浏览器的“插件”图标 |
+| A 珍珠领队 | 同一物种，最统一 | 和椰子小奶牛都是浅色身体 |
+| B 藤编果篮 | “大家的家”，暖 | 是个物件不是角色 |
+| C 嫩芽铃（已选） | “召唤”的意思最直接；拍板标记小铃很好懂 | 黄色和柠檬小鸡、菠萝接近，靠铃形和嫩芽区分；要单独做摇摆动画 |
 
-三个都是 12×12 格里的独立小稿，只用描边、身体、暗面、浅色和眼睛五种角色字符，按项目经理的颜色上色。像素稿在附录，拍板后只把选中的那一套写进 `src/shared/slimes.ts`。
+Piece 分身（用户已选 P1 便签小灵）：P2 果冻小水滴、P3 拼图块不做。三个都只用描边、身体、暗面、浅色和眼睛五种角色字符，按项目经理的颜色上色。
 
-像素图标从哪来：
-
-| 做法 | 好处 | 坏处 |
-| --- | --- | --- |
-| pixelarticons（推荐） | MIT；免费 1036 个，我们用的 47 种都能对上（6 种用近似的）；24 格画布 2 格一笔，和史莱姆的笔触比例一样；有 React 组件，可以逐个 import | 6 种没有同名的，用近似的；部分图标比 lucide 的小一圈，按 24px 用 |
-| HackerNoon pixel-icon-library | MIT；也是像素图标 | 1 格一笔，24px 下笔画只有 1px，像素感弱；常规图标只有 248 个，缺的多 |
-| 照史莱姆的 12 格自己画 | 和史莱姆完全一个格子 | 自己维护 47 个图标，违反“优先用成熟的库” |
-| 保留 lucide | 不用改 | 用户要的就是按钮像素一点 |
-
-按钮质感（用户拍板，见第一节）：
-
-| 方案 | 好处 | 坏处 |
-| --- | --- | --- |
-| 档位 1：只换图标 | 改动只在图标出口一个文件；和圆角输入框、气泡、卡片同一种几何；界面标准第 2 条、第 6 条不动 | 像素感只在图标上 |
-| 档位 2：像素切角 + 键帽 | 像素感最强，按下有手感 | 所有 `Button` 变体、拍板选项、发送键一起改；切角用 `clip-path`，聚焦圈要改成 `ring-inset`；圆角输入框里放一个方角发送键看着别扭 |
-
-像素字（用户拍板，见第一节）：
-
-| 做法 | 好处 | 坏处 |
-| --- | --- | --- |
-| Tiny5（推荐） | 大小写都有，数字清楚；字只有 9KB；8 格一个字，16px 时一格 2px | 只有一种字重，标签不分 500 和 400 |
-| Pixelify Sans | 字形圆润，有 4 种字重 | 小字号下 7、2、fi 认错 |
-| Geist Pixel | 做工最好 | 12～17px 下看不出像素，等于没换 |
-| Silkscreen | 像素感最强 | 只有大写、很宽，“Needs You”被迫全大写，挤 |
-
-怎么加载：用 Fontsource 的 `@fontsource/tiny5`（Vite 打包进 `assets/`，离线能用；`sw-rules.ts` 已经认 CSS 里引的字体文件，见 `sw-rules-cache.test.ts:37`），不用 Google Fonts 的网址（离线和内网用不了，也多一个外部请求）。
-
-像素字和像素图标的尺寸：
-
-| 做法 | 好处 | 坏处 |
-| --- | --- | --- |
-| 对齐到格子：字 `round(nearest, 0.9143rem, 8px)`，图标 `round(nearest, 1.375rem, 12px)`（推荐） | 四档界面大小下都是整格，1 倍屏也不糊；默认“大”档正好 16px、24px | 这两样不跟着界面大小缩放，是第 0 条的例外，要写进界面标准 |
-| 照旧写 rem | 跟着界面大小缩放 | 只有“大”档是整格，别的档 1 倍屏上像素一格宽一格窄 |
-
-任务图怎么像素化：
-
-| 做法 | 好处 | 坏处 |
-| --- | --- | --- |
-| 新建 `src/web/pixel-path.ts` 只管“怎么画”，果皮轨和放大全览的排布（泳道、dagre 分层）不动（推荐） | 画法一处定义、纯函数好测；排布算法零改动，现有的布局测试照样守着 | 放大全览的连线要先把 dagre 的折线改成正交折线 |
-| 在 `PeelTrack.tsx`、`task-graph-layout.ts` 里各自改 | 少一个文件 | 两处各写一套台阶和点阵，容易不一致 |
-| 只换状态点 | 改得少 | 圆滑连线配像素点，两种画法混在一起 |
-
-总助新形象（用户拍板，见第一节）：
-
-| 方案 | 好处 | 坏处 |
-| --- | --- | --- |
-| A 珍珠领队 | 同一物种，最统一；动画复用 `.slime-pet`；白色中性 | 和椰子小奶牛都是浅色身体，靠金冠和冷灰描边区分 |
-| B 藤编果篮 | “大家的家”，暖；一眼是果篮 | 是个物件不是角色，在时间流里“说话”有点怪；要单独做探头动画 |
-| C 嫩芽铃 | “召唤”的意思最直接；拍板标记小铃很好懂 | 黄色和柠檬小鸡、菠萝接近；要单独做摇摆动画 |
+像素图标（用户已选）：pixelarticons，按钮形状不变（第二版的“档位 1”）。另一个选项 HackerNoon pixel-icon-library 是 1 格一笔、常规图标只有 248 个；自己照 12 格画 47 个违反“优先用成熟的库”。像素图标尺寸对齐到格子：`round(nearest, 1.375rem, 12px)`，默认“大”档正好 24px，四档界面大小下都是整格（第 0 条的例外，要写进界面标准）。
 
 换形象的入口用现有的 Radix Popover（`src/web/ui/popover.tsx`，界面标准第 11 条），不另做弹窗：换个头像开一个大弹窗太重。
 
@@ -178,30 +172,30 @@ Piece 分身（用户拍板，见第一节）：
 - `resolvePmLook` 对同样的造型和颜色返回同一个对象，最多 20 × 24 = 480 个。
 - 守护进程画飞书头像：一次对齐里每个用到的形象只画一次，用对齐函数里的局部 Map，对齐完就丢。`feishu_avatars` 每个形象一行，上限 480 行，实际不超过项目经理数。
 - `pm_looks` 每个项目经理最多一行，项目经理删掉时跟着删。
-- 像素任务图：`pixel-path.ts` 是纯函数，结果跟着现有的 `useMemo`（`PeelTrack.tsx:951`）和放大全览布局的 `lru-cache`（容量 64，`task-graph-layout.ts`）一起缓存，不另加缓存。点阵轨按格子数出小方块，一段轨最多几十个，路径合成一个 `d`。
-- 像素字一个 9KB 的 woff2；像素图标逐个 import，只打包用到的 47 个。
+- 任务图：`pixel-path.ts` 是纯函数，结果跟着现有的 `useMemo`（`PeelTrack.tsx:951`）和放大全览布局的 `lru-cache`（容量 64，`task-graph-layout.ts`）一起缓存，不另加缓存。一张图最多 `MAX_GRAPH_NODES` = 32 步（`limits.ts:770`），每步一颗珠子、每条边一根管子。
+- 字体一个 29 KB 的 woff2（选 Geist 时）；像素图标逐个 import，只打包用到的。
 
 逐条回答 `AGENTS.md` 的 4 件事：
 
 1. 失效：像素稿、颜色、字体、图标都跟着构建走，不会在运行中变。项目经理换形象时账本发 `pm.updated`，网页拿到新的 `avatarFruit`、`avatarColor` 重新算。飞书缓存的键里有图片内容的哈希，像素稿或颜色改了哈希就变，下一次对齐重传、原地换。上传失败不记缓存，下一次对齐重试（沿用 `createFeishuAvatarCache` 现有逻辑）。字体文件名带内容哈希，换版后 `staleAssetUrls` 清掉旧的。
-2. 上限：上面每一项都由“造型数 × 颜色数”或任务图的步数封顶（`MAX_GRAPH_NODES` = 32，`limits.ts:770`），没有随时间增长的部分。
+2. 上限：上面每一项都由“造型数 × 颜色数”或任务图的步数（`MAX_GRAPH_NODES`）封顶，没有随时间增长的部分。
 
    | 准备加进 `src/shared/limits.ts` 的常量 | 值 | 怎么算的 |
    | --- | --- | --- |
    | 无 | | 上限由名录长度决定（20 × 24），不是可调的数；`slimes.test.ts` 遍历全部组合，加颜色时一起覆盖 |
 
 3. 前端引用稳定：`resolvePmLook`、`slimePaths` 同样的输入返回同一个引用；`Avatar` 包 `memo`，props 只有形象对象和尺寸。图标是模块级常量组件。
-4. 验证：用 pstack 的 `benchmark-checklist` 量左栏 300 个项目经理首次渲染和切换会话的 React 提交耗时，改前（`<img>`）、改后（内联 SVG）各量 5 次取中位数写进 PR；右栏 32 步任务图展开的提交耗时，改前（圆滑）、改后（像素）各量 5 次；`blast-radius` 列出改到的组件。
+4. 验证：用 pstack 的 `benchmark-checklist` 量左栏 300 个项目经理首次渲染和切换会话的 React 提交耗时，改前（`<img>`）、改后（内联 SVG）各量 5 次取中位数写进 PR；右栏 32 步任务图展开的提交耗时，改前（圆滑细线）、改后（果冻管道）各量 5 次；`blast-radius` 列出改到的组件。
 
 ## 统一
 
 - 一处定义：
   - `src/shared/slimes.ts` 管造型、颜色、上色、Piece 分身、光学对齐、默认形象和新建时的分配。网页头像、Piece 分身、总助头像、进度图标、飞书群头像（守护进程）、应用图标（`scripts/render-icons.ts`）都从它画。
-  - `src/web/ui/icons.ts` 是全站唯一的图标出口，换一套图标只改它。
-  - `src/web/pixel-path.ts` 管任务图的像素线、点阵、台阶、箭头和状态点。
-  - 像素字的字体栈和字号只在 `styles.css` 的 `--font-pixel`、`--text-pixel` 一处，组件里写 `font-pixel text-pixel`。
+  - `src/web/ui/icons.ts` 是全站唯一的图标出口：工具按钮用像素图标，输入框用两个线条图标；换图标只改它。
+  - `src/web/pixel-path.ts` 管任务图的果冻管道、珠子和箭头。
+  - 字体只在 `styles.css` 的 `--font-ui` 一处。
 - 和厂商无关：头像、图标、字体不分厂商，`src/shared/vendors.ts` 不动，以后加一家厂商这里什么都不用改。
-- 三个平台：网页三平台一样；像素字打包进来，macOS、Windows、Linux 显示一样（系统字体各平台本来就不同，像素字不受影响）。飞书 PNG 用 sharp（官方预编译包覆盖 macOS、Windows、Linux）；应用图标由 `render-icons.ts` 出一张 1024 的母图，Mac 照旧由 `build-mac-app.sh` 转 icns，Windows 用 Tauri 官方的 `tauri icon` 从母图生成 `icons/` 全套，替代现在手工提交的 5 个文件。这些都不经过 `src/daemon/platform/`。
+- 三个平台：网页三平台一样；打包进来的英文字体在 macOS、Windows、Linux 上长一样，中文仍各用系统字（选霞鹜文楷时中文也一样）。飞书 PNG 用 sharp（官方预编译包覆盖 macOS、Windows、Linux）；应用图标由 `render-icons.ts` 出一张 1024 的母图，Mac 照旧由 `build-mac-app.sh` 转 icns，Windows 用 Tauri 官方的 `tauri icon` 从母图生成 `icons/` 全套，替代现在手工提交的 5 个文件。这些都不经过 `src/daemon/platform/`。
 - 加一种颜色：在 `slimes.ts` 的颜色名录加一条，对比度测试自动覆盖。加一只造型：`fruits.ts` 加一个水果，`slimes.ts` 加一只像素稿和它自己的原色。加一个图标：`icons.ts` 加一行。
 
 ## 删掉什么
@@ -210,15 +204,16 @@ Piece 分身（用户拍板，见第一节）：
 
 - `src/web/components/KnifeAvatar.tsx`、`src/web/ui/knife-avatar.test.tsx`，以及现状第 4 条列的 7 处用法（换成 `RouterAvatar`、`GateMark`）。
 - `src/web/components/SliceWheelIcon.tsx` 和 `src/web/task-graph-rail.test.tsx` 里切面轮的测试（换成 `TaskProgressIcon`）。`computeGraphLayers`、`computeGraphComponents` 挪进 `src/web/task-graph-layout.ts`；`fruitTrackVars` 改成按颜色取，挪进 `src/web/lib/palette.ts`。
-- `scripts/render-avatars.ts`、`scripts/render-avatars.test.ts` 和 `assets/avatars/` 下 60 个文件：像素稿搬进 `src/shared/slimes.ts`，每只的 `piece` 抽行表和 `pieceGrid` 一起删（Piece 换成独立小稿）。`scripts/stage-runtime-common.ts` 不再打包这个目录；`README.md` 两处说明（第 230、467 行）改成指向 `src/shared/slimes.ts`。
+- `scripts/render-avatars.ts`、`scripts/render-avatars.test.ts` 和 `assets/avatars/` 下 60 个文件：像素稿搬进 `src/shared/slimes.ts`，每只的 `piece` 抽行表和 `pieceGrid` 一起删（Piece 换成便签小灵）。`scripts/stage-runtime-common.ts` 不再打包这个目录；`README.md` 两处说明（第 230、467 行）改成指向 `src/shared/slimes.ts`。
 - `src/shared/fruits.ts` 的 `pmFruitAvatarFile`；`FRUITS` 里的 `blob`、`accent`、`accentForeground` 挪进颜色名录，`fruits.ts` 只留水果名录和 `pmFruitOf`。
 - `src/web/lib/palette.ts` 的 `PALETTE`（含 `piece`）和按编号取色的 `paletteOf(key)`、`accentStyle(key)`、`tintStyle(key)`，改成按形象取；`Avatar` 的 `colorKey` 改成 `look`；`ConversationEntry` 等处的 `avatarKey` 改成 `look`（`selectors.ts:80`、`:131`、`:873`、`:888`、`:998`、`:1019`）。
 - `src/daemon/feishu/avatars.ts` 的 `FEISHU_AVATARS_DIR`、`pmFruitImagePath`、`feishuAvatarHash`，换成 `renderFeishuAvatar`；`chats.ts` 的 `fruit` 改成 `look`；`store.ts` 的 `avatarFruit` 改成按形象键记。
 - `Pm.avatarFile` 字段、`rows.ts` 里它的映射和测试里的 `null`。`pms.avatar_file` 这一列留着不读不写：删列要重建 `pms`（见做法比较），不值得。
 - `scripts/render-icons.ts` 里画橘瓣的 `WEDGE`、`sectorPath`、`roundedSector`、`wedge`。
-- `lucide-react` 依赖和 47 个文件里的 `from "lucide-react"`，改成 `from "../ui/icons.ts"`；`LucideIcon` 类型改成 `Icon`。`AGENTS.md`「我们用的组件」里 lucide 那一行换成 pixelarticons，再加上 `@fontsource/tiny5`。
-- `PeelTrack.tsx` 的 `TrackPath`、`TrackDot`（`:85`～`:127`）和画弧线的那段，换成 `pixel-path.ts`；`task-graph-layout.ts` 的 `buildMultiPointLrSplineAndArrow` 和另外两个出贝塞尔的函数（`:435`～`:477`），换成 `orthogonalRoute` + `pixelPolylinePath` + `pixelArrowPath`，`LayoutEdgePath.d` 的注释改成“正交像素折线”。
-- `docs/ui-standard.md`：第 4 条“水果三元视觉与 Router 水果刀中性色规则”，第 5 条（lucide），第 12 条的 `SliceWheelIcon`，第 12.1 条标题里的“小切面进度轮与门禁水果刀”和“水果刀拍板焦点”、果皮轨和放大全览的画法，第 13 条字体栈，第 16 条“左栏 Router 水果刀三档置顶规则”，第 21 条 `KnifeAvatar` 一节。换成新形象、Piece 分身、像素图标、像素字（含第 0 条的尺寸例外）、像素任务图的规则；第 3 条、第 16 条的左栏名字和行高照拍板改；第 17 条补上“正在进行的那一轮头像跟跳”。拍板选了档位 2 时，第 2 条、第 6 条的按钮形状一起改。`docs/router-design.md`、`docs/router-workbench-v2-design.md`、`docs/orchestration-simplify-design.md` 提到小刀、切面轮、纸片分身的地方一起改。
+- 47 个文件里的 `from "lucide-react"`，改成 `from "../ui/icons.ts"`；`LucideIcon` 类型改成 `Icon`。`lucide-react` 依赖留着，只给 `icons.ts` 的两个输入框图标用。`Composer.tsx` 里的 `Paperclip`、`ArrowUp` 换成 `ComposerAdd`、`ComposerSend`，`icons.ts` 里没人用的导出一起删。`AGENTS.md`「我们用的组件」加上 pixelarticons 和选定的字体包，lucide 那一行改成“只用于输入框”。
+- `Composer.tsx:51` 的 `rounded-[26px]` 和发送键的 `rounded-full`。
+- `PeelTrack.tsx` 的 `TrackPath`、`TrackDot`（`:85`～`:127`）和画弧线的那段，换成 `pixel-path.ts`；`task-graph-layout.ts` 的 `buildMultiPointLrSplineAndArrow` 和另外两个出贝塞尔的函数（`:435`～`:477`），换成 `orthogonalRoute` + `tubePaths` + `pixelArrowPaths`，`LayoutEdgePath.d` 的注释改成“正交折线中线”。
+- `docs/ui-standard.md`：第 4 条“水果三元视觉与 Router 水果刀中性色规则”，第 5 条（lucide），第 7 条输入框的形状，第 12 条的 `SliceWheelIcon`，第 12.1 条标题里的“小切面进度轮与门禁水果刀”和“水果刀拍板焦点”、果皮轨和放大全览的画法，第 13 条字体栈，第 16 条“左栏 Router 水果刀三档置顶规则”，第 21 条 `KnifeAvatar` 一节。换成嫩芽铃、便签小灵、像素图标（含第 0 条的尺寸例外）、新字体、果冻管道、方框输入框（第 2 条加圆角例外）的规则；第 3 条、第 16 条的左栏名字和行高照拍板改；第 17 条补上“正在进行的那一轮头像跟跳”。`docs/router-design.md`、`docs/router-workbench-v2-design.md`、`docs/orchestration-simplify-design.md` 提到小刀、切面轮、纸片分身的地方一起改。
 
 ## 骨架文件
 
@@ -228,215 +223,35 @@ Piece 分身（用户拍板，见第一节）：
 - `src/shared/domain.ts`：`Pm` 加可选的 `avatarFruit`、`avatarColor`（老版本设备不带）。
 - `src/shared/api.ts`：`API_PATHS.pmLook`、`PmLookRequest`、`PmLookResponse`。
 - `src/shared/ledger.ts`：`setPmLook` 的签名和契约；`src/daemon/ledger/ledger.ts`、`src/daemon/ui-server/fake-ledger.ts` 先放“未实现”。
-- `src/web/components/RouterAvatar.tsx`：总助头像，取代 `KnifeAvatar`。
-- `src/web/components/GateMark.tsx`：任务图里“等你拍板”的标记，取代小刀。
-- `src/web/task-progress.ts`、`src/web/components/TaskProgressIcon.tsx`：任务进度图标的格子和组件，取代 `SliceWheelIcon`。
+- `src/web/components/RouterAvatar.tsx`：总助头像（嫩芽铃，干活时左右摇），取代 `KnifeAvatar`。
+- `src/web/components/GateMark.tsx`：任务图里“等你拍板”的小铃，取代小刀。
+- `src/web/task-progress.ts`、`src/web/components/TaskProgressIcon.tsx`：嫩芽生长的进度图标，取代 `SliceWheelIcon`。
 - `src/web/components/SlimePicker.tsx`：换形象的浮层。
-- `src/web/ui/icons.ts`、`src/web/ui/icons.test.ts`：全站图标出口，47 个组件沿用 lucide 的名字，加 `Icon` 类型。
-- `src/web/pixel-path.ts`、`src/web/pixel-path.test.ts`：任务图的像素轨道、正交折线、箭头和状态点。
-- `src/web/slime-cohesion.test.tsx`：总助头像、进度图标、拍板标记、按形象画的 `Avatar`、Piece 分身、浮层、左栏行、聊天跟跳、像素字、像素任务图的 `it.todo`。
+- `src/web/ui/icons.ts`、`src/web/ui/icons.test.ts`：全站图标出口，47 个像素图标沿用 lucide 的名字，加输入框的 `ComposerAdd`、`ComposerSend` 和 `Icon` 类型。
+- `src/web/pixel-path.ts`、`src/web/pixel-path.test.ts`：任务图的果冻管道、正交折线、像素箭头和珠子。
+- `src/web/slime-cohesion.test.tsx`：总助头像、进度图标、拍板标记、按形象画的 `Avatar`、Piece 分身、浮层、左栏行、聊天跟跳、果冻管道、输入框的 `it.todo`。
 - `src/daemon/feishu/avatars.ts`：`renderFeishuAvatar` 的签名；`avatars.test.ts`、`chats.test.ts` 加 `it.todo`。
 - `src/daemon/ledger/ledger.test.ts`、`src/daemon/ui-server/server.test.ts`、`test/migration.test.ts`：`setPmLook`、`PUT /api/pms/:id/look`、0038 的 `it.todo`。
 
 骨架没改已有签名（`Avatar` 的 `colorKey`、`paletteOf(key)`、`SliceWheelIcon`、47 处 lucide import 等）：改了以后 30 多处调用都要先走到还没实现的函数，页面会坏。实现步骤一次改完，新签名已经写在上面的新文件里。
 
-没写进骨架、等拍板的：Piece 分身的像素稿（三选一，附录有三套）、像素字的字体和 CSS token（`--font-pixel`、`--text-pixel`，要先 `pnpm add @fontsource/tiny5`）、像素图标的尺寸 token（`size-pixel`、`size-pixel-sm`）、档位 2 的按钮样式。
+没写进骨架、等拍板或只在 CSS 里的：字体包和 `--font-ui`（要先 `pnpm add` 拍板的那一款）、像素图标的尺寸 token（`size-pixel`、`size-pixel-sm`）、输入框和发送键的圆角、管道三层的颜色变量。便签小灵、嫩芽铃的像素稿已定，在附录，实现时写进 `slimes.ts` 和 `RouterAvatar`。
 
 实现步骤另加 `migrations/0039_feishu_avatar_look.sql`：照 0037 重建 `feishu_avatars`，主键改成形象键（`lookKey`）；照 0026 的重建法把 `feishu_chats.avatar_fruit` 换成 `avatar_look`，旧值不搬（每个群下次对齐重设一次头像）。这一份要和 `store.ts` 的改动一起上，骨架里先不加。合并前确认 0038、0039 没被别的 PR 占用。
 
 ## 验收方法
 
-- 测试：`src/shared/slimes.test.ts`、`src/web/slime-cohesion.test.tsx`、`src/web/pixel-path.test.ts`、`src/web/ui/icons.test.ts` 全部；`avatars.test.ts`“按形象画群头像”、`chats.test.ts`“群头像跟着项目经理的形象”、`ledger.test.ts`“项目经理的形象”、`server.test.ts`“PUT /api/pms/:id/look”、`test/migration.test.ts`“0038_pm_looks”；`src/web/lib/palette.test.ts` 改成遍历全部颜色；`ui-scale.test.tsx` 加上像素字、像素图标两处尺寸例外。加上 `pnpm typecheck`。
-- 截图（放 `docs/screenshots/slime-cohesion/`）：真实网页的左栏宽栏、72px 窄栏、手机列表；Router 工作台顶栏、时间流和空状态；右栏的像素组标题、像素果皮轨、进度图标和拍板标记；放大全览的像素节点卡和连线；Piece 汇报行、Piece 对话顶栏、右栏开关；左下角和输入框的像素图标（悬停、按下各一张）；资料页换形象浮层，换造型、换颜色各一张；同一个项目经理换色前后的对话页（强调色、气泡、果冻底、Piece 分身一起变）。像素字和图标在默认“大”档下 1 倍、2 倍各截一张，放大看没有一格宽一格窄。
-- 录屏（mp4，H.264，50 MB 以内）：项目经理干活时消息流里正在进行的那一轮头像跟跳，Piece 汇报行的分身跟跳，这一轮结束后停下，历史轮一直不动。
+- 测试：`src/shared/slimes.test.ts`、`src/web/slime-cohesion.test.tsx`、`src/web/pixel-path.test.ts`、`src/web/ui/icons.test.ts` 全部；`avatars.test.ts`“按形象画群头像”、`chats.test.ts`“群头像跟着项目经理的形象”、`ledger.test.ts`“项目经理的形象”、`server.test.ts`“PUT /api/pms/:id/look”、`test/migration.test.ts`“0038_pm_looks”；`src/web/lib/palette.test.ts` 改成遍历全部颜色；`ui-scale.test.tsx` 加上像素图标的尺寸例外。加上 `pnpm typecheck`。
+- 截图（放 `docs/screenshots/slime-cohesion/`）：真实网页的左栏宽栏、72px 窄栏、手机列表；Router 工作台顶栏、时间流和空状态；右栏的果冻管道、进度图标和小铃；放大全览的节点卡和管道；Piece 汇报行、Piece 对话顶栏、右栏开关；左下角的像素图标（悬停、按下各一张）；输入框空着、有字、多行各一张；资料页换形象浮层，换造型、换颜色各一张；同一个项目经理换色前后的对话页（强调色、气泡、果冻底、Piece 分身一起变）；换字体前后同一页各一张，Mac 和 Windows 各一张。
+- 录屏（mp4，H.264，50 MB 以内）：项目经理干活时消息流里正在进行的那一轮头像跟跳，Piece 汇报行的便签小灵跟跳，总助嫩芽铃左右摇，这一轮结束后停下，历史轮一直不动。
 - 飞书：用测试应用把一个项目经理换成天蓝狐狸，守护进程日志里出现一次上传和一次改群头像，`feishu_avatars` 多一行 `persimmon:sky`；再换回原色，不再上传（哈希命中）。
 - 应用图标：`node scripts/render-icons.ts` 的输出、`tauri icon` 生成的 Windows 图标、`pnpm app:mac` 打出的 `Fusa.app` 在 Dock 里的截图。
 
-## 附录：候选像素稿、新颜色和对照表
+## 附录：像素稿、管道和对照表
 
-像素稿的写法和 `scripts/render-avatars.ts` 一样：12 行，每行 12 个字符，`.` 透明。
+像素稿的写法和 `scripts/render-avatars.ts` 一样：每行一样长，`.` 透明。
 
-### Piece 分身三个候选
-
-字符：`o` 描边、`b` 身体、`s` 暗面、`c` 浅色、`e` 眼睛（`#3a1e14`），前四种跟着项目经理的颜色。在 12×12 画布里按占的行上下居中。
-
-P1 便签小灵：
-
-```
-............
-............
-..oooooooo..
-..occcccco..
-..ocecceco..
-..ocecceco..
-..occcccco..
-..occccbbo..
-..occcbboo..
-..oooooo....
-............
-............
-```
-
-
-P2 果冻小水滴：
-
-```
-............
-............
-.....oo.....
-....obbo....
-..oobcbboo..
-..obcbbbbo..
-..obebbebo..
-..obebbebo..
-..obbbbbso..
-...oooooo...
-............
-............
-```
-
-P3 拼图块：
-
-```
-............
-............
-.....oo.....
-....obbo....
-..ooobbooo..
-..obbbbbbo..
-..obebbebboo
-..obebbebbbo
-..obbbbbboo.
-..obbbbbso..
-..oooooooo..
-............
-```
-
-干活时三个都用项目经理的蹦跳（`.slime-pet`，站、蓄力、跃起、落地四帧）。
-
-### 像素状态点（5×5 格，`#` 是填色格）
-
-```
-做完、等项目经理     在干            没轮到、跳过      N done          N next
-.###.               .###.           .###.            #####           ..#..
-#####               #...#           #...#            .....           .....
-#####               #.#.#           #...#            #####           ..#..
-#####               #...#           #...#            .....           .....
-.###.               .###.           .###.            #####           ..#..
-```
-
-颜色：做完和 N done 用项目经理的 `blob`；在干用 `blob` 掺 35% 白；等项目经理用 `--caution`；没轮到、跳过、N next 用 `#a1a1aa`。轨道：走通的是一格宽实线（`blob`），没走通的是一格见方的点、点和点之间空一格（`#c4c4cc`）。果皮轨一格是 2 个画布单位（`--peel-u`），放大全览一格是 2px。
-
-### 放大全览的节点卡
-
-卡片四角切两级台阶（`clip-path`，每级 3px），1px 边框画在里面（`inset` 阴影，切角处不断）。左上角角标贴着卡角，写两位步骤号（`font-pixel`，约 11px 高），底色：做完 `blob` 配深色字，在干白底加 `blob` 细边，等你拍板 `--primary` 配白字，其余 `#f1f1f3` 配灰字。底行写 `#编号` 和状态词（`font-pixel`）。连线是正交折线，拐角一格台阶，终点是三级台阶的实心箭头；上游做完是实线，其余是点阵。画布底是 16px 一格的浅灰点阵。
-
-### 档位 2 的按钮（拍板选了才做）
-
-四角切两级台阶：`clip-path: polygon(0 6px, 3px 6px, 3px 3px, 6px 3px, 6px 0, …)`，四个角对称。实心按钮加 `inset 0 -3px 0 rgb(0 0 0 / .22), inset 0 2px 0 rgb(255 255 255 / .2)`，按下时 `translateY(1px)`、底边阴影收到 1px。描边按钮用两层（外层边框色，里层白底各收 1px）。
-
-### 像素图标对照（lucide → pixelarticons）
-
-| lucide | pixelarticons | lucide | pixelarticons |
-| --- | --- | --- | --- |
-| AlertCircle | square-alert | Laptop | laptop |
-| ArrowLeft | arrow-left | Loader2 | loader（按 8 步转） |
-| ArrowLeftRight | arrows-horizontal | Maximize2 | scale |
-| ArrowUp | arrow-up | MessageCircleQuestionMark | circle-question |
-| Bell | bell | Monitor | monitor |
-| Blocks | blocks | Paperclip | attachment |
-| Bot | robot | Pencil | pencil |
-| Cable | plug（近似） | Play | play |
-| ChartNetwork | git-branch（近似） | Plus | plus |
-| Check | check | QrCode | qr-code |
-| ChevronDown | chevron-down | Search | search |
-| ChevronLeft | chevron-left | Send | send |
-| ChevronRight | chevron-right | Server | server |
-| ChevronsUpDown | chevrons-vertical | Settings | settings-cog |
-| CircleAlert | square-alert | Shield | shield |
-| CircleGauge | speed-medium | Smartphone | smartphone |
-| Code | code | Square | stop |
-| Copy | copy | Tablet | tablet |
-| Download | download | Trash2 | trash |
-| ExternalLink | external-link | TriangleAlert | warning-diamond（近似） |
-| FileText | file-text | Type | text-cursor（近似） |
-| FolderSearch | folder（近似） | WifiOff | cellular-signal-0（近似） |
-| Globe | globe | X | close |
-| Info | circle-info | | |
-
-### 像素字
-
-`--font-pixel: "Tiny5", var(--font-ui)`；`--text-pixel: round(nearest, 0.9143rem, 8px)`，默认“大”档正好 16px。只用在第一节第 3 条列的英文短标签上；中文、名字、正文、按钮字不用。Tiny5 只有 400 一种字重，标签不加 `font-medium`。
-
-### A 珍珠领队
-
-颜色：`o #45475a`（描边）、`b #fbfbfe`（身体）、`s #e2e4ee`（暗面）、`e #3a1e14`（眼睛）、`p #ffb3c0`（腮红）、`y #ffcc33`（金冠）、`Y #c08a00`（金冠描边）、`j #ff7a1a`（宝石）。
-
-```
-............
-...Y.YY.Y...
-...YyYYyY...
-..oYyyjyYo..
-.obYYYYYYbo.
-obbbbbbbbbbo
-obbebbbbebbo
-obbebbbbebbo
-obpbbeebbpbo
-obbbbbbbbbso
-.oossssssoo.
-...oooooo...
-```
-
-拍板标记（小金冠，8×6，颜色同上）：
-
-```
-Y..YY..Y
-YY.YY.YY
-YyYyyYyY
-YyyjjyyY
-YyyyyyyY
-YYYYYYYY
-```
-
-进度图标（千层果冻，10×10）：倒扣碗形的果冻模子，`#71717a` 描边，`#d4d4d8` 托盘；模子里 7 行从下往上按步骤分层，一步一层，步数多于 7 时按比例并层；同层并行的步骤左右平分。
-
-应用图标：底色 `#ff7a1a`，地影 `#d95d08`。
-
-### B 藤编果篮
-
-颜色：`o #6b4423`、`h #b98a52`（提手）、`b #dcab68`、`s #b8813f`、`w #f2cf92`（编纹）、`r #ff8a2a`、`R #d0560f`（橙）、`g #8fd14f`、`G #4f9a2a`、`l #3f8a1c`（青苹和叶）、`m #ef4a6a`、`M #b51f45`（莓）。
-
-```
-...oooooo...
-..oh....ho..
-.oh...l..ho.
-.o...ggG..o.
-.o.rrgggGmo.
-.orrRgggGmMo
-oooooooooooo
-owbwbwbwbwbo
-obsbsbsbsbso
-owbwbwbwbwbo
-.osbsbsbsbo.
-..oooooooo..
-```
-
-拍板标记（小旗，6×6）：旗杆 `o #6b4423`，旗面 `F` 用会话强调色 `--primary`。
-
-```
-oFFFF.
-oFFFFF
-oFFFF.
-o.....
-o.....
-o.....
-```
-
-进度图标（浆果花环，10×10）：一圈 `#a9cf7f` 的藤，一步一颗 2×2 的浆果，从 12 点顺时针排；没轮到的是 `#e3ecd6` 的小苞。
-
-应用图标：底色 `#cfe5a8`，地影 `#a9c97c`。干活时：篮里的果子往上探一格再缩回。
-
-### C 嫩芽铃
+### 总助：C 嫩芽铃（已选）
 
 颜色：`o #8a5300`、`b #ffcb3d`、`s #e9a417`、`w #fff1a8`（高光）、`e #3a1e14`、`p #ff9a7a`、`g #8ed04f`、`G #3f9a4c`（嫩芽）、`k #c98800`（铃口）、`c #ff7a1a`（铃舌）。
 
@@ -466,14 +281,102 @@ oooooo
 ..cc..
 ```
 
-进度图标（嫩芽生长，10×10）：一根茎，一步一节，叶子左右交替往上长；没长到的节只有虚线茎。
+进度图标（嫩芽生长，10×10）：一根茎，一步一节，叶子左右交替往上长；没长到的节只有虚线茎。叶子的颜色看步骤状态：做完是项目经理颜色的 `blob`，在干是 `blob` 掺 55% 白，等你拍板是 `accent`，等项目经理是 `--caution`，没轮到和跳过只有茎上一个小芽。
 
-应用图标：底色 `#2f6f43`，地影 `#235634`。干活时：以提钮为轴左右各摇 14°。
+应用图标：画布 16 个单位，圆角方块 `rx 3.6` 满铺 `#2f6f43`，像素稿放在 (2, 1.75)，脚下两条地影 `#235634`：(3, 13.5) 宽 10 高 1、(4, 14.5) 宽 8 高 0.5。favicon 16px、32px 时像素稿改放 (2, 1)，一格正好 1px、2px。Mac 照现在 `padded` 的规则四周留透明边。
 
-### 三套共用的规则
+干活时：以提钮（第 2、3 行中间）为轴左右各摇 14°，和项目经理蹦跳同一个节奏。
 
-- 进度图标的颜色看步骤状态：做完是项目经理颜色的 `blob`，在干是 `blob` 掺 55% 白，等你拍板是 `accent`，等项目经理是 `--caution`，没轮到和跳过只留轮廓。
-- 应用图标的画布是 16 个单位：圆角方块 `rx 3.6` 满铺底色，像素稿放在 (2, 1.75)，脚下两条地影 (3, 13.5) 宽 10 高 1、(4, 14.5) 宽 8 高 0.5。favicon 16px、32px 时像素稿改放 (2, 1)，一格正好 1px、2px，不糊。Mac 照现在 `padded` 的规则四周留透明边。
+### Piece 分身：P1 便签小灵（已选）
+
+字符：`o` 描边、`b` 身体、`s` 暗面、`c` 浅色、`e` 眼睛（`#3a1e14`），前四种跟着项目经理的颜色。在 12×12 画布里按占的行上下居中。
+
+```
+............
+............
+..oooooooo..
+..occcccco..
+..ocecceco..
+..ocecceco..
+..occcccco..
+..occccbbo..
+..occcbboo..
+..oooooo....
+............
+............
+```
+
+干活时和项目经理一样蹦（站、蓄力、跃起、落地四帧）。
+
+### 果冻管道和珠子
+
+管道：同一条正交折线画三层。第一层描边色、4 格宽；第二层芯、2 格宽；第三层高光、1 格宽，折线往左上各挪半格。走通的三层依次是项目经理颜色的描边、身体、浅色；没走通的只画前两层，用 `#d4d4d8` 和 `#f1f1f3`。拐角是直角，线头是方头。果皮轨一格是 2 个画布单位（`--peel-u`），管道中心线落在泳道的 x 上；放大全览一格是 2px。
+
+珠子（7×7 格，`O` 描边、`f` 芯、`h` 高光、`s` 暗面、`l` 白、`L` 浅色）：
+
+```
+做完               在干               没轮到、跳过        N done 折叠
+.OOOOO.            .OOOOO.            .OOOOO.            .OOOOO.
+OhhfffO            OllllLO            OwwwwwO            OfffffO
+OhffffO            OlfffLO            OwwwwwO            .OOOOO.
+OfffffO            OlfffLO            OwwwwwO            .......
+OffffsO            OlfffLO            OwwwwwO            .OOOOO.
+OfffssO            OLLLLLO            OwwwwwO            OfffffO
+.OOOOO.            .OOOOO.            .OOOOO.            .OOOOO.
+```
+
+颜色：做完、在干、N done 用项目经理颜色的描边、身体、浅色、暗面；等项目经理是琥珀色（描边 `#9a6a00`、芯 `#dba10b`、高光 `#f6d77a`），形状同“做完”；没轮到、跳过是 `#a1a1aa` 描边、白芯；N next 同 N done 的形状，用没轮到的颜色。等你拍板那一步不画珠子，画小铃。
+
+箭头（放大全览，9 行 5 列，尖朝右）：
+
+```
+O....
+OO...
+OfO..
+OffO.
+OfffO
+OffO.
+OfO..
+OO...
+O....
+```
+
+### 放大全览的节点卡
+
+卡片四角切两级台阶（`clip-path`，每级 3px），1px 边框画在里面（`inset` 阴影，切角处不断）。左上角角标贴着卡角，写两位步骤号（约 11px 高），底色：做完 `blob` 配深色字，在干白底加 `blob` 细边，等你拍板 `--primary` 配白字，其余 `#f1f1f3` 配灰字。底行写 `#编号` 和状态词。画布底是 16px 一格的浅灰点阵。
+
+### 输入框
+
+外框 `rounded-xl`（12px），1px `border-border`，阴影和聚焦光晕照旧（`.composer-frame`）。单行时一行里依次是“+”键、文字区、发送键，整条高 48px；多行或有待发文件时，文字区占满上一行，“+”和发送键落到下一行（界面标准第 7 条现有规则）。“+”键是 36px 的 ghost 圆角方块（圆角 10px），图标 20px 灰色，悬停浅底；发送键是 36px、圆角 10px 的实心方块，没内容时中性灰、不可点，有内容时项目经理的强调色加白色箭头，“从空变有内容”那一下照旧轻轻放大回弹。停止键同一个方块，里面是实心小方块。
+
+### 像素图标对照（lucide → pixelarticons）
+
+| lucide | pixelarticons | lucide | pixelarticons |
+| --- | --- | --- | --- |
+| AlertCircle | square-alert | Laptop | laptop |
+| ArrowLeft | arrow-left | Loader2 | loader（按 8 步转） |
+| ArrowLeftRight | arrows-horizontal | Maximize2 | scale |
+| ArrowUp | arrow-up（输入框里用线条的 ComposerSend） | MessageCircleQuestionMark | circle-question |
+| Bell | bell | Monitor | monitor |
+| Blocks | blocks | Paperclip | attachment（输入框里换成线条的 ComposerAdd） |
+| Bot | robot | Pencil | pencil |
+| Cable | plug（近似） | Play | play |
+| ChartNetwork | git-branch（近似） | Plus | plus |
+| Check | check | QrCode | qr-code |
+| ChevronDown | chevron-down | Search | search |
+| ChevronLeft | chevron-left | Send | send |
+| ChevronRight | chevron-right | Server | server |
+| ChevronsUpDown | chevrons-vertical | Settings | settings-cog |
+| CircleAlert | square-alert | Shield | shield |
+| CircleGauge | speed-medium | Smartphone | smartphone |
+| Code | code | Square | stop |
+| Copy | copy | Tablet | tablet |
+| Download | download | Trash2 | trash |
+| ExternalLink | external-link | TriangleAlert | warning-diamond（近似） |
+| FileText | file-text | Type | text-cursor（近似） |
+| FolderSearch | folder（近似） | WifiOff | cellular-signal-0（近似） |
+| Globe | globe | X | close |
+| Info | circle-info | | |
 
 ### 跟着颜色换的字符
 
