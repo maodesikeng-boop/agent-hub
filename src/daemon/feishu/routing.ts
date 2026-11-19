@@ -17,13 +17,14 @@ import type {
   FeishuTriggerMode,
 } from "../../shared/feishu.ts";
 import type { FeishuCardRef } from "./cards.ts";
-import type { FeishuInbound, FeishuInboundAction, FeishuInboundFile } from "./inbound.ts";
+import type { FeishuPendingFile } from "./directory.ts";
+import type { FeishuInbound, FeishuInboundAction, FeishuInboundFileRef } from "./inbound.ts";
 
 type InboundMessage = Extract<FeishuInbound, { kind: "message" }>;
 
 const NOT_YOUR_ASSISTANT = "这是主人的私人助手，只听主人的。";
 const GUEST_SLASH = "以“/”开头的命令只有主人能用。";
-export const GUEST_NO_FILES = "这个群里访客发的文件不收，有事用文字说。";
+export const GUEST_NO_FILES = "这个群的访客发的文件不收，有事先用文字说。要发文件，请主人在群里的「访客权限」卡上切到“协作者”。";
 const FILES_ONLY_TEXT = "（发了文件）";
 export const OWNER_ONLY_DECIDE = "只有主人能拍板";
 export const OWNER_ONLY_STOP = "只有主人能停止";
@@ -44,6 +45,8 @@ export interface FeishuRoutingContext {
   speakerName: string;
   /** 这个群上次唤醒以来记下的背景（调用方从 FeishuContextWindows 取，送达时才清）。 */
   pendingContext: readonly FeishuContextLine[];
+  /** 上次唤醒以来没唤醒的气泡里带的文件（同上，送达时才清）。 */
+  pendingFiles: readonly FeishuPendingFile[];
   /** 单聊里的文字是不是当前有效的绑定码。 */
   isBindCode: (text: string) => boolean;
 }
@@ -55,8 +58,9 @@ export type FeishuMessageRoute =
       target: FeishuChatTarget;
       text: string;
       origin: FeishuMessageOrigin;
-      /** 要下载、放进附件的文件；本档访客不能发附件时不收，记在 droppedFiles。 */
-      files: FeishuInboundFile[];
+      /** 要下载、放进附件的文件，按发的先后：前面没唤醒的气泡里的在前，这条带的在后。 */
+      files: FeishuInboundFileRef[];
+      /** 发话的访客本档不能发附件时，他这条和前面气泡里的文件都不收，记个数。 */
       droppedFiles: number;
     }
   /** 不唤醒，记成背景，下次唤醒时捎上。 */
@@ -75,6 +79,8 @@ export type FeishuMessageRoute =
  *   - 不唤醒：context；
  * - 访客：observer 档一律不唤醒，说的话照样记成背景，主人下次唤醒时捎上；以“/”开头的文字 → reject（厂商斜杠命令只给主人）；
  *   本档不能 send_files 时文件不收，droppedFiles 记个数；只发了文件、没写字的 → reject（GUEST_NO_FILES），不投空消息。
+ * - 文件气泡带不了 @：没唤醒的消息带的文件由调用方记进近窗，唤醒时 ctx.pendingFiles 里主人和本档能发附件的访客发的随这次 deliver 交出；
+ *   只 @机器人 没写字的气泡，前面有文件就照样 deliver，没有就 ignore。
  */
 export function routeFeishuMessage(message: InboundMessage, ctx: FeishuRoutingContext): FeishuMessageRoute {
   const { ownerOpenId } = ctx;
@@ -88,26 +94,28 @@ export function routeFeishuMessage(message: InboundMessage, ctx: FeishuRoutingCo
       target: { kind: "router" },
       text: message.text,
       origin: { kind: "feishu", openId: speaker, name: ctx.speakerName, role: "owner", mode: "solo", guestTier: ctx.guestTier, context: [] },
-      files: message.files,
+      files: message.files.map((file) => ({ messageId: message.messageId, file })),
       droppedFiles: 0,
     };
   }
   if (ownerOpenId === null || ctx.binding === null || ctx.binding.archived || ctx.binding.target.kind !== "pm" || message.inThread) return { kind: "ignore" };
-  if (message.text === "" && message.files.length === 0) return { kind: "ignore" };
   const role = feishuSpeakerRole(speaker, ownerOpenId);
-  const line: FeishuContextLine = { name: ctx.speakerName, role, text: message.text === "" ? FILES_ONLY_TEXT : message.text, at: message.at };
-  if (role === "guest" && !feishuGuestMay(ctx.guestTier, "talk")) return { kind: "context", line };
-  if (!feishuWakes(ctx, message.mentionedBot)) return { kind: "context", line };
+  const wakes = (role === "owner" || feishuGuestMay(ctx.guestTier, "talk")) && feishuWakes(ctx, message.mentionedBot);
+  if (message.text === "" && message.files.length === 0 && !(wakes && ctx.pendingFiles.length > 0)) return { kind: "ignore" };
+  if (!wakes) return { kind: "context", line: { name: ctx.speakerName, role, text: message.text === "" ? FILES_ONLY_TEXT : message.text, at: message.at } };
   if (role === "guest" && message.text.startsWith("/")) return { kind: "reject", openId: speaker, reason: GUEST_SLASH };
-  const filesAllowed = role === "owner" || feishuGuestMay(ctx.guestTier, "send_files");
-  if (!filesAllowed && message.text === "") return { kind: "reject", openId: speaker, reason: GUEST_NO_FILES };
+  const mayAttach = (openId: FeishuOpenId) => feishuSpeakerRole(openId, ownerOpenId) === "owner" || feishuGuestMay(ctx.guestTier, "send_files");
+  const candidates = [...ctx.pendingFiles, ...message.files.map((file) => ({ messageId: message.messageId, speaker, file }))];
+  const files = candidates.filter((c) => mayAttach(c.speaker)).map(({ messageId, file }) => ({ messageId, file }));
+  const droppedFiles = mayAttach(speaker) ? 0 : candidates.filter((c) => c.speaker === speaker).length;
+  if (message.text === "" && files.length === 0) return droppedFiles > 0 ? { kind: "reject", openId: speaker, reason: GUEST_NO_FILES } : { kind: "ignore" };
   return {
     kind: "deliver",
     target: ctx.binding.target,
     text: message.text,
     origin: { kind: "feishu", openId: speaker, name: ctx.speakerName, role, mode: ctx.mode, guestTier: ctx.guestTier, context: [...ctx.pendingContext] },
-    files: filesAllowed ? message.files : [],
-    droppedFiles: filesAllowed ? 0 : message.files.length,
+    files,
+    droppedFiles,
   };
 }
 

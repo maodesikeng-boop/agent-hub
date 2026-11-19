@@ -117,13 +117,14 @@ export interface FeishuFileService {
   upload(file: FeishuOutboundFile): Promise<FeishuUploaded>;
   /** 后置：把传好的文件发到 chatId 的主聊天流，返回飞书消息编号。 */
   sendFile(chatId: FeishuChatId, file: FeishuOutboundFile, uploaded: Extract<FeishuUploaded, { kind: "file" }>): Promise<FeishuMessageId>;
-  /** 后置：下载并存成附件；超过上限或下载失败返回 null，不存半截文件。 */
+  /** 后置：下载并存成附件；超过上限或下载失败返回 null，不存半截文件，下载失败记一行日志。 */
   receive(messageId: FeishuMessageId, file: FeishuInboundFile): Promise<Attachment | null>;
 }
 
 export interface FeishuFileServiceDeps {
   transport: Pick<FeishuTransport, "call" | "uploadImage" | "uploadFile" | "downloadResource">;
   uploadsDir: string;
+  log: (line: string) => void;
 }
 
 export function createFeishuFileService(deps: FeishuFileServiceDeps): FeishuFileService {
@@ -165,7 +166,8 @@ export function createFeishuFileService(deps: FeishuFileServiceDeps): FeishuFile
         if (data.length === 0 || data.length > MAX_UPLOAD_BYTES) return null;
         const name = file.fileName ?? (file.type === "image" ? imageNameOf(file.fileKey, data) : `飞书文件-${file.fileKey.slice(-8)}`);
         return await saveUpload(deps.uploadsDir, name, data);
-      } catch {
+      } catch (error) {
+        deps.log(`下载 ${messageId} 里的${file.type === "image" ? "图片" : "文件"}没成：${error instanceof Error ? error.message : String(error)}`);
         return null;
       }
     },

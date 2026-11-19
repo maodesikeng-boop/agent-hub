@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { FeishuChatId, FeishuMessageId, FeishuOpenId } from "../../shared/feishu.ts";
 import type { FeishuInbound, FeishuInboundAction } from "./inbound.ts";
-import { feishuWakes, routeFeishuAction, routeFeishuMessage, type FeishuRoutingContext } from "./routing.ts";
+import { feishuWakes, GUEST_NO_FILES, routeFeishuAction, routeFeishuMessage, type FeishuRoutingContext } from "./routing.ts";
 
 const OWNER = "ou_owner" as FeishuOpenId;
 const GUEST = "ou_guest" as FeishuOpenId;
@@ -31,6 +31,7 @@ const ctx = (patch: Partial<FeishuRoutingContext> = {}): FeishuRoutingContext =>
   mentionOnlyForced: false,
   speakerName: "张三",
   pendingContext: [],
+  pendingFiles: [],
   isBindCode: (text) => text === "123456",
   ...patch,
 });
@@ -112,7 +113,71 @@ describe("routeFeishuMessage", () => {
     const files = [{ type: "image" as const, fileKey: "img_1", fileName: null }];
     const input = msg({ senderOpenId: GUEST, mentionedBot: true, files });
     expect(routeFeishuMessage(input, ctx({ mode: "shared", guestTier: "chat_only" }))).toMatchObject({ kind: "deliver", files: [], droppedFiles: 1 });
-    expect(routeFeishuMessage(input, ctx({ mode: "shared", guestTier: "collaborator" }))).toMatchObject({ kind: "deliver", files, droppedFiles: 0 });
+    expect(routeFeishuMessage(input, ctx({ mode: "shared", guestTier: "collaborator" }))).toMatchObject({
+      kind: "deliver",
+      files: [{ messageId: "om_1", file: files[0] }],
+      droppedFiles: 0,
+    });
+  });
+
+  describe("多人群里文件气泡带不了 @：前面没唤醒的气泡里的文件随下一次 @机器人 交出", () => {
+    const image = { type: "image" as const, fileKey: "img_0", fileName: null };
+    const doc = { type: "file" as const, fileKey: "file_g", fileName: "brief.pdf" };
+    const ownerImage = { messageId: "om_0" as FeishuMessageId, speaker: OWNER, file: image, at: 90 };
+    const guestDoc = { messageId: "om_g" as FeishuMessageId, speaker: GUEST, file: doc, at: 95 };
+    const mentionOnly = { mode: "shared" as const, triggerMode: "mention_only" as const, pendingFiles: [ownerImage, guestDoc] };
+
+    it("主人 @机器人：主人前面发的图一起交出；仅对话档访客发的文件不交", () => {
+      expect(routeFeishuMessage(msg({ mentionedBot: true, text: "照图里的写一版" }), ctx(mentionOnly))).toMatchObject({
+        kind: "deliver",
+        text: "照图里的写一版",
+        files: [{ messageId: "om_0", file: image }],
+        droppedFiles: 0,
+      });
+    });
+
+    it("协作者档：访客前面发的文件也交出，先后照发的顺序，本条带的文件排最后", () => {
+      const own = { type: "image" as const, fileKey: "img_1", fileName: null };
+      const route = routeFeishuMessage(msg({ mentionedBot: true, files: [own] }), ctx({ ...mentionOnly, guestTier: "collaborator" }));
+      expect(route).toMatchObject({
+        kind: "deliver",
+        files: [
+          { messageId: "om_0", file: image },
+          { messageId: "om_g", file: doc },
+          { messageId: "om_1", file: own },
+        ],
+        droppedFiles: 0,
+      });
+    });
+
+    it("仅对话档访客 @机器人：自己前面发的文件按档位不收，droppedFiles 记上；主人发的照交", () => {
+      const route = routeFeishuMessage(msg({ senderOpenId: GUEST, mentionedBot: true, text: "看我刚发的" }), ctx({ ...mentionOnly, speakerName: "李四" }));
+      expect(route).toMatchObject({ kind: "deliver", files: [{ messageId: "om_0", file: image }], droppedFiles: 1 });
+    });
+
+    it("下一个气泡只 @机器人、没写字：照样把前面的文件交出；前面没有文件时不理", () => {
+      expect(routeFeishuMessage(msg({ mentionedBot: true, text: "" }), ctx(mentionOnly))).toMatchObject({
+        kind: "deliver",
+        text: "",
+        files: [{ messageId: "om_0", file: image }],
+      });
+      expect(routeFeishuMessage(msg({ mentionedBot: true, text: "" }), ctx({ mode: "shared" }))).toEqual({ kind: "ignore" });
+    });
+
+    it("仅对话档访客只 @机器人、前面只有自己发的文件：回他一句文件不收，不投空消息", () => {
+      const route = routeFeishuMessage(msg({ senderOpenId: GUEST, mentionedBot: true, text: "" }), ctx({ ...mentionOnly, pendingFiles: [guestDoc] }));
+      expect(route).toMatchObject({ kind: "reject", openId: GUEST, reason: GUEST_NO_FILES });
+    });
+
+    it("没唤醒的文件气泡仍记成背景“（发了文件）”，文件留给下一次唤醒", () => {
+      const route = routeFeishuMessage(msg({ text: "", files: [image] }), ctx(mentionOnly));
+      expect(route).toEqual({ kind: "context", line: { name: "张三", role: "owner", text: "（发了文件）", at: 100 } });
+    });
+  });
+
+  it("仅对话档访客的文件不收时，回的那句告诉主人去「访客权限」卡切到协作者", () => {
+    expect(GUEST_NO_FILES).toContain("访客权限");
+    expect(GUEST_NO_FILES).toContain("协作者");
   });
 
   it("话题里的话 → ignore；记录已归档（群已解散）的迟到事件 → ignore", () => {

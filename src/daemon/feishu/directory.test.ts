@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type { FeishuChatId, FeishuOpenId } from "../../shared/feishu.ts";
+import type { FeishuChatId, FeishuMessageId, FeishuOpenId } from "../../shared/feishu.ts";
 import {
   FEISHU_CHAT_CACHE_MAX,
   FEISHU_CONTEXT_MAX_CHARS,
+  FEISHU_CONTEXT_MAX_FILES,
   FEISHU_CONTEXT_MAX_LINES,
   FEISHU_CONTEXT_TTL_MS,
   FEISHU_MEMBERS_RETRY_MS,
@@ -131,5 +132,56 @@ describe("createFeishuContextWindows", () => {
     expect(w.peek(chat(2), 0)).toHaveLength(1);
     w.clearAll();
     expect(w.peek(chat(2), 0)).toEqual([]);
+  });
+
+  describe("没唤醒的气泡里带的文件", () => {
+    const pending = (n: number, at = 0) => ({
+      messageId: `om_${n}` as FeishuMessageId,
+      speaker: OWNER,
+      file: { type: "image" as const, fileKey: `img_${n}`, fileName: null },
+      at,
+    });
+
+    it("和背景一起记，按先后返回；每群最多 FEISHU_CONTEXT_MAX_FILES 个，超过丢最早的", () => {
+      const w = createFeishuContextWindows();
+      for (let i = 0; i < FEISHU_CONTEXT_MAX_FILES + 2; i++) w.add(chat(), line("（发了文件）"), [pending(i)]);
+      const files = w.peekFiles(chat(), 0);
+      expect(files).toHaveLength(FEISHU_CONTEXT_MAX_FILES);
+      expect(files[0]!.file.fileKey).toBe("img_2");
+      expect(files.at(-1)!.file.fileKey).toBe(`img_${FEISHU_CONTEXT_MAX_FILES + 1}`);
+      w.add(chat(), line("纯文字"));
+      expect(w.peekFiles(chat(), 0)).toHaveLength(FEISHU_CONTEXT_MAX_FILES);
+    });
+
+    it("同一条消息的同一个资源重复推送只记一份", () => {
+      const w = createFeishuContextWindows();
+      w.add(chat(), line("（发了文件）"), [pending(1)]);
+      w.add(chat(), line("（发了文件）"), [pending(1)]);
+      w.add(chat(), line("（发了文件）"), [pending(2)]);
+      expect(w.peekFiles(chat(), 0).map((f) => f.file.fileKey)).toEqual(["img_1", "img_2"]);
+    });
+
+    it("dropFiles 只摘掉满足条件的文件，背景和别的文件不动", () => {
+      const w = createFeishuContextWindows();
+      w.add(chat(1), line("一"), [pending(1), { ...pending(2), speaker: "ou_other" as FeishuOpenId }]);
+      w.dropFiles(chat(1), (f) => f.speaker === OWNER);
+      expect(w.peekFiles(chat(1), 0).map((f) => f.file.fileKey)).toEqual(["img_2"]);
+      expect(w.peek(chat(1), 0)).toHaveLength(1);
+      expect(() => w.dropFiles(chat(9), () => true)).not.toThrow();
+    });
+
+    it("超过 FEISHU_CONTEXT_TTL_MS 的文件不返回；peekFiles 不清空，clear、clearAll 一起清掉", () => {
+      const w = createFeishuContextWindows();
+      w.add(chat(1), line("旧", 0), [pending(1, 0)]);
+      w.add(chat(1), line("新", FEISHU_CONTEXT_TTL_MS), [pending(2, FEISHU_CONTEXT_TTL_MS)]);
+      w.add(chat(2), line("二"), [pending(3)]);
+      expect(w.peekFiles(chat(1), FEISHU_CONTEXT_TTL_MS + 1).map((f) => f.file.fileKey)).toEqual(["img_2"]);
+      expect(w.peekFiles(chat(1), FEISHU_CONTEXT_TTL_MS + 1)).toHaveLength(1);
+      w.clear(chat(1));
+      expect(w.peekFiles(chat(1), 0)).toEqual([]);
+      expect(w.peekFiles(chat(2), 0)).toHaveLength(1);
+      w.clearAll();
+      expect(w.peekFiles(chat(2), 0)).toEqual([]);
+    });
   });
 });

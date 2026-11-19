@@ -14,6 +14,12 @@ export interface FeishuInboundFile {
   fileName: string | null;
 }
 
+/** 下载消息里的资源要用资源所在那条消息的编号。 */
+export interface FeishuInboundFileRef {
+  messageId: FeishuMessageId;
+  file: FeishuInboundFile;
+}
+
 export type FeishuInbound =
   | {
       kind: "message";

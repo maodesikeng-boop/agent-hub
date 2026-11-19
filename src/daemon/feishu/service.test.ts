@@ -1763,3 +1763,113 @@ describe("createFeishuService：附件改卡失败重刷、内部唤醒不当用
     expect(fake.callsOf("message.create").filter((c) => c.receive_id === chat && c.msg_type === "file").length).toBeGreaterThanOrEqual(1);
   });
 });
+
+describe("createFeishuService：多人群里前面气泡的文件随 @机器人 交出（「怡然」群）", () => {
+  const png = () => Buffer.from("89504e470d0a1a0a", "hex");
+  const textsTo = (chatId: string) =>
+    fake.callsOf("message.create").filter((c) => c.receive_id === chatId && c.msg_type === "text").map((c) => (JSON.parse(c.content) as { text: string }).text);
+  const downloads = () => fake.calls.filter((c) => c.method === "downloadResource").map((c) => c.args as { messageId: string; fileKey: string });
+  const attachmentNames = (m: Message | undefined) => ((m?.meta?.attachments ?? []) as { name: string }[]).map((a) => a.name);
+  async function mentionOnlyGroupWithGuest() {
+    await connect();
+    const chat = chatOf(lin.pmId);
+    await svc.setup.setChatPolicy({ pmId: lin.pmId, triggerMode: "mention_only" });
+    join_(chat, GUEST, "yee");
+    await settle();
+    return chat;
+  }
+
+  it("主人先单发图片和文件（气泡里带不了 @），下一个气泡 @机器人：前面的图和文件下载成附件随这条交给项目经理，之后清空", async () => {
+    const chat = await mentionOnlyGroupWithGuest();
+    fake.resources.set("img_p", png());
+    fake.resources.set("file_p", Buffer.from("%PDF"));
+    const imageBubble = say(chat, "![image](img_p)", { files: [{ type: "image", fileKey: "img_p", fileName: null }] });
+    const fileBubble = say(chat, '<file key="file_p" name="brief.pdf"/>', { files: [{ type: "file", fileKey: "file_p", fileName: "brief.pdf" }] });
+    await settle();
+    expect(userMessages(lin.conversationId)).toEqual([]);
+    expect(downloads()).toEqual([]);
+    say(chat, "test", { mention: true });
+    await settle();
+    const [m] = userMessages(lin.conversationId);
+    expect(m?.text).toBe("test");
+    expect(attachmentNames(m)).toEqual([expect.stringMatching(/\.png$/), "brief.pdf"]);
+    expect(downloads()).toEqual([
+      expect.objectContaining({ messageId: imageBubble, fileKey: "img_p" }),
+      expect.objectContaining({ messageId: fileBubble, fileKey: "file_p" }),
+    ]);
+    say(chat, "再看下首页", { mention: true });
+    await settle();
+    expect(attachmentNames(userMessages(lin.conversationId)[1])).toEqual([]);
+    expect(downloads()).toHaveLength(2);
+  });
+
+  it("前面发了图、下一个气泡只 @机器人 没写字：图照样交给项目经理", async () => {
+    const chat = await mentionOnlyGroupWithGuest();
+    fake.resources.set("img_q", png());
+    say(chat, "![image](img_q)", { files: [{ type: "image", fileKey: "img_q", fileName: null }] });
+    say(chat, "", { mention: true });
+    await settle();
+    const [m] = userMessages(lin.conversationId);
+    expect(m?.text).toBe("");
+    expect(attachmentNames(m)).toEqual([expect.stringMatching(/\.png$/)]);
+  });
+
+  it("仅对话档访客先单发图片再 @机器人：图不下载，回她一句怎么开（切到协作者）；被拒的旧图不补收，切到协作者后她重新发的图再 @ 才收下", async () => {
+    const chat = await mentionOnlyGroupWithGuest();
+    fake.resources.set("img_y", png());
+    say(chat, "![image](img_y)", { sender: GUEST, files: [{ type: "image", fileKey: "img_y", fileName: null }] });
+    say(chat, "图里这种直给类的文案写一版", { sender: GUEST, mention: true });
+    await settle();
+    expect(downloads()).toEqual([]);
+    const notice = textsTo(chat).find((t) => t.includes(GUEST));
+    expect(notice).toContain("协作者");
+    expect(attachmentNames(userMessages(lin.conversationId)[0])).toEqual([]);
+    const resent = say(chat, "![image](img_y)", { sender: GUEST, files: [{ type: "image", fileKey: "img_y", fileName: null }] });
+    await svc.setup.setChatPolicy({ pmId: lin.pmId, guestTier: "collaborator" });
+    say(chat, "看这张", { sender: GUEST, mention: true });
+    await settle();
+    expect(attachmentNames(userMessages(lin.conversationId)[1])).toEqual([expect.stringMatching(/\.png$/)]);
+    expect(downloads()).toEqual([expect.objectContaining({ messageId: resent, fileKey: "img_y" })]);
+  });
+
+  it("前面的文件下载失败、下一个气泡只 @机器人：只回一次“没收下”，失败的文件不留在近窗里，换发正常文件再 @ 不再重下坏文件", async () => {
+    const chat = await mentionOnlyGroupWithGuest();
+    const badBubble = say(chat, "![image](img_bad)", { files: [{ type: "image", fileKey: "img_bad", fileName: null }] });
+    say(chat, "", { mention: true });
+    await settle();
+    fake.resources.set("img_good", png());
+    const goodBubble = say(chat, "![image](img_good)", { files: [{ type: "image", fileKey: "img_good", fileName: null }] });
+    say(chat, "", { mention: true });
+    await settle();
+    expect(downloads().map((d) => d.messageId)).toEqual([badBubble, goodBubble]);
+    expect(textsTo(chat).filter((t) => t.includes("没收下"))).toHaveLength(1);
+    expect(attachmentNames(userMessages(lin.conversationId)[0])).toEqual([expect.stringMatching(/\.png$/)]);
+  });
+
+  it("仅对话档访客先发图再纯 @ 被拒后，改发纯文字 @：不再重复回“访客发的文件不收”", async () => {
+    const chat = await mentionOnlyGroupWithGuest();
+    fake.resources.set("img_y", png());
+    say(chat, "![image](img_y)", { sender: GUEST, files: [{ type: "image", fileKey: "img_y", fileName: null }] });
+    say(chat, "", { sender: GUEST, mention: true });
+    await settle();
+    expect(textsTo(chat).filter((t) => t.includes("访客发的文件不收"))).toHaveLength(1);
+    say(chat, "那我用文字说：写一版文案", { sender: GUEST, mention: true });
+    await settle();
+    expect(textsTo(chat).filter((t) => t.includes("访客发的文件不收"))).toHaveLength(1);
+    expect(userMessages(lin.conversationId).map((m) => m.text)).toEqual(["那我用文字说：写一版文案"]);
+  });
+
+  it("长连接断开时前面没交出的文件跟背景一起清掉，重连后 @机器人 不再带上", async () => {
+    const chat = await mentionOnlyGroupWithGuest();
+    fake.resources.set("img_d", png());
+    say(chat, "![image](img_d)", { files: [{ type: "image", fileKey: "img_d", fileName: null }] });
+    await settle();
+    fake.handlers!.onDisconnected("断了");
+    fake.handlers!.onConnected();
+    await settle();
+    say(chat, "看图", { mention: true });
+    await settle();
+    expect(attachmentNames(userMessages(lin.conversationId)[0])).toEqual([]);
+    expect(downloads()).toEqual([]);
+  });
+});
