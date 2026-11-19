@@ -7,6 +7,7 @@ import {
   buildRouterModelSection,
   FEISHU_AUTO_OPTION,
   FEISHU_DEFAULT_OPTION,
+  type FeishuPmModelView,
   resolvePmModelEdit,
   resolveRouterModelEdit,
 } from "./model-picker.ts";
@@ -112,6 +113,15 @@ describe("buildPmModelSection 与 resolvePmModelEdit（项目经理模型与思�
     expect(resolvePmModelEdit({ vendor: "claude", model: null, effort: "high" }, cats, "effort", FEISHU_DEFAULT_OPTION)).toEqual({
       ok: true,
       next: { vendor: "claude", model: null, effort: null },
+    });
+
+    const switching: FeishuPmModelView = { vendor: "codex", model: null, effort: null, switchingToVendor: "codex" };
+    const blockedSwitch = resolvePmModelEdit(switching, cats, "vendor", "claude");
+    expect(blockedSwitch.ok).toBe(false);
+    if (!blockedSwitch.ok) expect(blockedSwitch.toast).toContain("Codex");
+    expect(resolvePmModelEdit(switching, cats, "model", "gpt-6-luna")).toEqual({
+      ok: true,
+      next: { vendor: "codex", model: "gpt-6-luna", effort: null },
     });
   });
 });

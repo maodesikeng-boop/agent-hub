@@ -28,6 +28,7 @@ import { openDatabase } from "../store/db.ts";
 import type { Db } from "../store/index.ts";
 import { createSessionStore } from "../store/index.ts";
 import { migrate } from "../store/migrate.ts";
+import { LedgerRequestError } from "../../shared/ledger.ts";
 import { decodeFeishuActionValue } from "./cards.ts";
 import { feishuChatMarker } from "./chats.ts";
 import { FEISHU_GROUP_MSG_SCOPE, FEISHU_REQUIRED_SCOPES } from "./scopes.ts";
@@ -903,6 +904,172 @@ describe("createFeishuService：群设置卡随叫随到", () => {
     await settle();
     expect(ledger.getPersona(lin.pmId).vendor).toBe("claude");
     expect(textsTo(chat).some((t) => t.includes("登录"))).toBe(true);
+  });
+
+  it("B1：pm.updated 刷卡与访客被动附卡只读缓存目录不调 models.list，不阻塞出站镜像；主人发 /设置 秒发卡并在后台异步重问一次", async () => {
+    const waitMs = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    const slowMs = 350;
+    let codexStatus: "signed_out" | "available" = "signed_out";
+    const listCalls: unknown[] = [];
+    let clock = Date.now();
+    const makeCatalog = (v: string) => ({
+      ...bundledModelCatalog(v as "claude" | "codex" | "agy"),
+      availability: (v === "codex" ? codexStatus : "available") as "available" | "signed_out",
+    });
+    await svc.close();
+    svc = makeService({
+      now: () => clock,
+      models: {
+        list: async (opts?: unknown) => {
+          listCalls.push(opts ?? {});
+          await waitMs(slowMs);
+          codexStatus = "available";
+          return ["claude", "codex", "agy"].map(makeCatalog);
+        },
+        current: (v: string) => (v === "codex" && codexStatus === "signed_out" ? null : makeCatalog(v)),
+        availability: (v: string) => (v === "codex" ? codexStatus : "available"),
+      } as never,
+    });
+    await connect();
+    const chat = chatOf(lin.pmId);
+
+    join_(chat);
+    await settle();
+    const passiveCalls = [...listCalls];
+    listCalls.length = 0;
+
+    for (let i = 0; i < 3; i++) {
+      ledger.editPersona(lin.pmId, { text: `规则 ${i}` }, { kind: "user" });
+    }
+    const startedAt = Date.now();
+    ledger.editPersona(lin.pmId, { text: "紧跟镜像前改一次" }, { kind: "user" });
+    ledger.postUserMessage({ conversationId: lin.conversationId, clientId: "web-fast-mirror", text: "不该被慢目录卡住的镜像" });
+    await waitMs(80);
+    expect(cardsSentTo(chat).some((c) => JSON.stringify(c).includes("不该被慢目录卡住的镜像"))).toBe(true);
+    expect(Date.now() - startedAt).toBeLessThan(slowMs);
+    expect(listCalls).toEqual([]);
+    expect(passiveCalls).toEqual([]);
+
+    clock += FEISHU_POLICY_CARD_COOLDOWN_MS + 1_000;
+    codexStatus = "signed_out";
+    say(chat, "看图", { sender: GUEST, mention: true, files: [{ type: "image", fileKey: "img_b1", fileName: null }] });
+    await settle();
+    expect(policyCards()).toHaveLength(2);
+    expect(listCalls).toEqual([]);
+
+    say(chat, "/设置");
+    say(chat, "/群设置");
+    await waitMs(80);
+    expect(policyCards()).toHaveLength(4);
+    const post = policyPost()!;
+    expect(fake.cards.get(post.cardId!)).toContain("Codex（未登录）");
+    expect(listCalls).toEqual([{ refresh: "unusable" }]);
+
+    await waitMs(slowMs + 80);
+    await settle();
+    expect(listCalls).toHaveLength(1);
+    const refreshed = fake.callsOf("card.update").findLast((u) => u.card_id === post.cardId)?.card.data ?? "";
+    expect(refreshed).not.toContain("Codex（未登录）");
+  });
+
+  it("N1：切厂商途中再在设置卡下拉换厂商时拦截提示等待本轮结束并弹回下拉，换模型和思考程度照常更新交接目标", async () => {
+    await connect();
+    const chat = chatOf(lin.pmId);
+    say(chat, "/设置");
+    await settle();
+    const post = policyPost()!;
+
+    running(lin.sessionId);
+    ev(lin.sessionId, { type: "turn.started", at: Date.now() });
+    const vendorAction = { fusa: 1, kind: "set_pm_model", pmId: lin.pmId, field: "vendor" };
+    const modelAction = { fusa: 1, kind: "set_pm_model", pmId: lin.pmId, field: "model" };
+
+    const switchRes = chooseOption(chat, post.messageId, vendorAction, "codex", OWNER);
+    expect(switchRes.toast?.content).toContain("Codex");
+    await settle();
+    expect(ledger.getPersona(lin.pmId).switchingToVendor).toBe("codex");
+
+    const updatesBefore = fake.callsOf("card.update").filter((u) => u.card_id === post.cardId).length;
+    const revertAttempt = chooseOption(chat, post.messageId, vendorAction, "claude", OWNER);
+    expect(revertAttempt.toast?.type).toBe("warning");
+    expect(revertAttempt.toast?.content).toContain("当前这一轮");
+    await settle();
+    expect(ledger.getPersona(lin.pmId)).toMatchObject({ vendor: "codex", switchingToVendor: "codex" });
+    expect(fake.callsOf("card.update").filter((u) => u.card_id === post.cardId).length).toBeGreaterThan(updatesBefore);
+
+    expect(chooseOption(chat, post.messageId, modelAction, "gpt-6-luna", OWNER).toast?.type).toBe("success");
+    await settle();
+    expect(ledger.getPersona(lin.pmId)).toMatchObject({ vendor: "codex", model: "gpt-6-luna", switchingToVendor: "codex" });
+  });
+
+  it("N3：账本拒收下拉值或冷目录异步改模型报错时，补刷设置卡弹回真实值并在异步路径发提示", async () => {
+    let warmed = true;
+    const availableClaude = { ...bundledModelCatalog("claude"), availability: "available" as const };
+    const availableCodex = { ...bundledModelCatalog("codex"), availability: "available" as const };
+    await svc.close();
+    svc = makeService({
+      models: {
+        list: async () => [availableClaude, availableCodex],
+        current: (v: string) => (!warmed ? null : v === "codex" ? availableCodex : availableClaude),
+        availability: () => "available" as const,
+      } as never,
+    });
+    await connect();
+    const chat = chatOf(lin.pmId);
+    const rChat = routerChat();
+    say(chat, "/设置");
+    say(rChat, "/设置", { p2p: true });
+    await settle();
+    const pmPost = policyPost()!;
+    const routerPost = store().postOf({ kind: "router_settings" })!;
+
+    const editSpy = vi.spyOn(ledger, "editPersona").mockImplementationOnce(() => {
+      throw new LedgerRequestError("invalid", "账本拒收该模型");
+    });
+    const pmUpdatesBefore = fake.callsOf("card.update").filter((u) => u.card_id === pmPost.cardId).length;
+    const syncReject = chooseOption(chat, pmPost.messageId, { fusa: 1, kind: "set_pm_model", pmId: lin.pmId, field: "model" }, "sonnet", OWNER);
+    expect(syncReject.toast).toEqual({ type: "warning", content: "账本拒收该模型" });
+    await settle();
+    expect(fake.callsOf("card.update").filter((u) => u.card_id === pmPost.cardId).length).toBeGreaterThan(pmUpdatesBefore);
+
+    const routerSpy = vi.spyOn(ledger, "updateRouterSettings").mockImplementationOnce(() => {
+      throw new LedgerRequestError("invalid", "总助拒收该档位");
+    });
+    const routerUpdatesBefore = fake.callsOf("card.update").filter((u) => u.card_id === routerPost.cardId).length;
+    const routerReject = chooseOption(rChat, routerPost.messageId, { fusa: 1, kind: "set_router_model", field: "vendor" }, "codex", OWNER);
+    expect(routerReject.toast).toEqual({ type: "warning", content: "总助拒收该档位" });
+    await settle();
+    expect(fake.callsOf("card.update").filter((u) => u.card_id === routerPost.cardId).length).toBeGreaterThan(routerUpdatesBefore);
+
+    warmed = false;
+    editSpy.mockImplementationOnce(() => {
+      throw new LedgerRequestError("invalid", "冷目录异步拒收");
+    });
+    const asyncUpdatesBefore = fake.callsOf("card.update").filter((u) => u.card_id === pmPost.cardId).length;
+    expect(chooseOption(chat, pmPost.messageId, { fusa: 1, kind: "set_pm_model", pmId: lin.pmId, field: "vendor" }, "codex", OWNER).toast?.type).toBe("info");
+    await settle();
+    expect(textsTo(chat).some((t) => t.includes("冷目录异步拒收"))).toBe(true);
+    expect(fake.callsOf("card.update").filter((u) => u.card_id === pmPost.cardId).length).toBeGreaterThan(asyncUpdatesBefore);
+
+    editSpy.mockRestore();
+    routerSpy.mockRestore();
+  });
+
+  it("N5：超过保留期执行 prunePosts 后再发 /设置，仍取消上一张设置卡的置顶，不留下双置顶", async () => {
+    let clock = 1_000;
+    await svc.close();
+    svc = makeService({ now: () => clock });
+    await connect();
+    const chat = chatOf(lin.pmId);
+    say(chat, "/设置");
+    await settle();
+    const firstMsgId = policyPost()!.messageId;
+
+    clock += 15 * 24 * 60 * 60 * 1_000;
+    store().prunePosts(clock - 14 * 24 * 60 * 60 * 1_000);
+    say(chat, "/设置");
+    await settle();
+    expect(fake.callsOf("pin.delete")).toContainEqual({ message_id: firstMsgId });
   });
 });
 

@@ -32,4 +32,10 @@ describe("飞书应用权限", () => {
     const requested = new Set([...FEISHU_TEMPLATE_SCOPES, ...FEISHU_APP_ADDONS.scopes.tenant]);
     for (const scope of [...FEISHU_REQUIRED_SCOPES, ...FEISHU_OPTIONAL_SCOPES]) expect(requested.has(scope), scope).toBe(true);
   });
+
+  it("im:message.pins:write_only 作为可选权限通过 addons 预填申请，未授予时不进 missing", () => {
+    expect(FEISHU_OPTIONAL_SCOPES).toContain("im:message.pins:write_only");
+    expect(FEISHU_APP_ADDONS.scopes.tenant).toContain("im:message.pins:write_only");
+    expect(checkFeishuScopes(FEISHU_REQUIRED_SCOPES).missing).toEqual([]);
+  });
 });
