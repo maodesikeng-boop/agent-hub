@@ -246,7 +246,7 @@ pnpm start                          # 构建 dist/web 并在 127.0.0.1:4317 启�
   bash scripts/build-mac-app.sh --install   # 仅生成 build/Bellwood.app 可用 `pnpm app:mac`
   ```
   开发模式打出的 `.app` 会在 `Info.plist` 里记录当前仓库路径（`AgentHubRepoDir`）与 Node 路径（`AgentHubNodePath`），挪动目录后请重跑脚本；独立自包含 DMG 用 `--dist` 模式打包（见 [docs/mac-distribution-design.md](docs/mac-distribution-design.md)）。
-- **在 Windows 上从源码编译 NSIS 安装包**（需 Rust `x86_64-pc-windows-msvc` 与 VS C++ Build Tools；未发版提交也可在 GitHub Actions `windows-desktop` 工作流底部下载 `fusa-windows-x64-nsis-unsigned-preview` 产物，解压运行 `Bellwood_0.1.0_x64-setup-unsigned-preview.exe`）：
+- **在 Windows 上从源码编译 NSIS 安装包**（需 Rust `x86_64-pc-windows-msvc` 与 VS C++ Build Tools；未发版提交也可在 GitHub Actions `windows-desktop` 工作流底部下载 `fusa-windows-x64-nsis-unsigned-preview` 产物，解压运行 `Bellwood_<version>_x64-setup-unsigned-preview.exe`）：
   ```powershell
   pnpm install --frozen-lockfile
   pnpm build

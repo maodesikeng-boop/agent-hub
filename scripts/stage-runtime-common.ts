@@ -76,7 +76,9 @@ export function sha256FileHex(filePath: string): string {
 /** 分发包版本号的单一来源：apps/windows/Cargo.toml 的 workspace 版本（Windows NSIS 与 Mac DMG 同号）。 */
 export function readDesktopAppVersion(repoRoot: string = REPO_ROOT): string {
   const cargoToml = readFileSync(join(repoRoot, "apps", "windows", "Cargo.toml"), "utf8");
-  return /version\s*=\s*"([^"]+)"/.exec(cargoToml)?.[1] ?? "0.1.0";
+  const version = /^version\s*=\s*"([^"]+)"/m.exec(cargoToml)?.[1];
+  if (!version) throw new Error("apps/windows/Cargo.toml 缺少桌面应用版本号");
+  return version;
 }
 
 /** 扫描后端与共享源码（排除 src/web、测试与测试夹具）实际引用的全部第三方包名，防止打包遗漏或混入巨型前端库。 */
@@ -145,7 +147,7 @@ export function buildStagedDaemonPackageJson(repoRoot: string = REPO_ROOT): {
   }
   return {
     name: "fusa-daemon-runtime",
-    version: rootPkg.version ?? "0.1.0",
+    version: rootPkg.version ?? readDesktopAppVersion(repoRoot),
     private: true,
     type: "module",
     dependencies,

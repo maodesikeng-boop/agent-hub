@@ -2,7 +2,7 @@ import { once } from "node:events";
 import { createServer as createNetServer, connect as netConnect, type Socket } from "node:net";
 import { join } from "node:path";
 import { connect as tlsConnect } from "node:tls";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { API_PATHS } from "../../shared/api.ts";
 import { MESH_LEASE_ORPHAN_MS, MESH_LEASE_RENEW_MS, MESH_LEASE_TTL_MS } from "../../shared/limits.ts";
 import type { MeshCandidate } from "../../shared/mesh.ts";
@@ -249,10 +249,7 @@ describe("createMesh", () => {
   });
 
   it("中心第一顺位连不上中继时，先经局域网探在线设备：有持有者时不降级双活，无持有者时才降级接管", async () => {
-    let sharedOffset = 0;
-    let orphanOffset = 0;
-    const sharedNow = () => Date.now() + sharedOffset;
-    const aNow = () => sharedNow() + orphanOffset;
+    let aOffset = 0;
     let relayPort = 0;
     const aSockets = new Set<Socket>();
     const allSockets = new Set<Socket>();
@@ -288,14 +285,14 @@ describe("createMesh", () => {
     proxy.listen(0, "127.0.0.1");
     await once(proxy, "listening");
     const proxyUrl = `http://127.0.0.1:${(proxy.address() as { port: number }).port}`;
-    const relay = await startTestRelay({ now: sharedNow, publicOrigin: proxyUrl });
+    const relay = await startTestRelay({ publicOrigin: proxyUrl });
     relayPort = Number(new URL(relay.url).port);
 
     try {
-      const a = await startTestMeshNode(relay, DEVICE_A, { relayUrl: proxyUrl, now: aNow });
+      const a = await startTestMeshNode(relay, DEVICE_A, { relayUrl: proxyUrl, now: () => Date.now() + aOffset });
       await loginNode(a);
       tagAsA = false;
-      const b = await startTestMeshNode(relay, DEVICE_B, { relayUrl: proxyUrl, now: sharedNow });
+      const b = await startTestMeshNode(relay, DEVICE_B, { relayUrl: proxyUrl });
       await loginNode(b);
       await approveNode(a, b);
       await a.mesh.setCenterPriority([DEVICE_A, DEVICE_B]);
@@ -306,29 +303,34 @@ describe("createMesh", () => {
       );
       await (await a.mesh.request(DEVICE_B, "/warm")).text();
 
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const tick = () => vi.advanceTimersByTime(MESH_LEASE_RENEW_MS);
+      const tickUntil = (check: () => boolean) => waitFor(() => {
+        if (check()) return true;
+        tick();
+        return false;
+      });
       const aLease = a.mesh.lease("feishu", { eligible: () => true, connect: () => {}, disconnect: async () => {} });
       const bLease = b.mesh.lease("feishu", { eligible: () => true, connect: () => {}, disconnect: async () => {} });
       await waitFor(() => aLease.holding() && !bLease.holding());
 
       blockRelayForA = true;
       for (const s of aSockets) s.destroy();
-      await waitFor(() => signedIn(a).relay === "unreachable");
-      sharedOffset += MESH_LEASE_TTL_MS + 1_000;
+      await waitFor(() => signedIn(a).relay === "unreachable" && !b.mesh.isOnline(DEVICE_A));
+      aOffset += MESH_LEASE_TTL_MS;
+      tick();
       await waitFor(() => bLease.holding() && !aLease.holding());
 
-      const leaseProbesBefore = b.requests.filter((r) => r.path === API_PATHS.peerLease).length;
-      orphanOffset += MESH_LEASE_ORPHAN_MS + MESH_LEASE_RENEW_MS;
-      await waitFor(
-        () => b.requests.filter((r) => r.path === API_PATHS.peerLease).length > leaseProbesBefore,
-        MESH_LEASE_RENEW_MS + 3_000,
-      );
-      await new Promise((r) => setTimeout(r, 100));
+      aOffset += MESH_LEASE_ORPHAN_MS;
+      // 下一次探测开始时，上一轮已处理完响应并推进租约状态。
+      await tickUntil(() => b.requests.filter((r) => r.path === API_PATHS.peerLease).length >= 2);
       expect(bLease.holding()).toBe(true);
       expect(aLease.holding()).toBe(false);
 
       await b.close();
-      await waitFor(() => aLease.holding(), MESH_LEASE_RENEW_MS + 3_000);
+      await tickUntil(() => aLease.holding());
     } finally {
+      vi.useRealTimers();
       for (const s of allSockets) s.destroy();
       await new Promise<void>((resolve) => proxy.close(() => resolve()));
     }

@@ -246,7 +246,7 @@ pnpm start                          # builds dist/web and starts daemon on 127.0
   bash scripts/build-mac-app.sh --install   # or pnpm app:mac for build/Bellwood.app only
   ```
   Source-mode `.app` bundles embed your checkout path (`AgentHubRepoDir`) and local `node` path (`AgentHubNodePath`). Re-run the script if you move either, or pass `--dist` to stage a standalone bundle ([docs/mac-distribution-design.md](docs/mac-distribution-design.md)).
-- **Build the Windows x64 NSIS installer from source** (requires Rust `x86_64-pc-windows-msvc` and VS C++ Build Tools, or download unreleased CI builds from the `windows-desktop` GitHub Actions artifact `fusa-windows-x64-nsis-unsigned-preview` containing `Bellwood_0.1.0_x64-setup-unsigned-preview.exe`):
+- **Build the Windows x64 NSIS installer from source** (requires Rust `x86_64-pc-windows-msvc` and VS C++ Build Tools, or download unreleased CI builds from the `windows-desktop` GitHub Actions artifact `fusa-windows-x64-nsis-unsigned-preview` containing `Bellwood_<version>_x64-setup-unsigned-preview.exe`):
   ```powershell
   pnpm install --frozen-lockfile
   pnpm build
