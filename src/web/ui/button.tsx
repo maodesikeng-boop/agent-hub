@@ -27,7 +27,11 @@ export const buttonVariants = cva(
     // 纯图标的 ghost 按钮照旧是次要色
     compoundVariants: [
       { variant: "ghost", size: ["default", "sm"], class: "text-foreground" },
-      { variant: "slot", class: "rounded-[4px]" },
+      // 工具格比旁边 36px 的搜索框、顶栏控件小一圈，靠父级 items-center 居中：常驻的 30px，贴着单行标题的 24px
+      { variant: "slot", class: "rounded-[4px] [&_svg:not([class*='size-'])]:size-pixel-md" },
+      { variant: "slot", size: "default", class: "h-7.5 px-3" },
+      { variant: "slot", size: "icon", class: "size-7.5" },
+      { variant: "slot", size: "icon-sm", class: "size-6 [&_svg:not([class*='size-'])]:size-pixel-sm" },
     ],
     defaultVariants: { variant: "default", size: "default" },
   },

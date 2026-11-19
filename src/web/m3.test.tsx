@@ -560,7 +560,7 @@ describe("顶栏的额度", () => {
     expect(badge()).toHaveAccessibleName("5h usage 37%");
     expect(badge()).toHaveAttribute("title", "5h usage 37%");
     expect(badge()).not.toHaveClass("text-warn-foreground", "text-danger");
-    expect(badge()).toHaveClass("size-9", "tool-slot");
+    expect(badge()).toHaveClass("size-7.5", "tool-slot");
     expect(badge().closest("header")).toBeInTheDocument();
     expect(badge().querySelector("svg")).toHaveAttribute("data-icon", "pixel");
     expect(screen.getByRole("button", { name: "Settings" })).toHaveClass("tool-slot");

@@ -182,8 +182,10 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
 - **危险主操作按钮**：`Button variant="destructive"`（`bg-danger text-primary-foreground hover:brightness-90 disabled:bg-sidebar-active disabled:text-muted-foreground`），专用于确认弹窗与底部确认抽屉中的不可逆危险主操作（移除设备、退出会话、退出所有浏览器），一屏最多一个。
 - **触屏输入防纠错与全宽排布**：URL、域名、邀请码、连接码等非自然语言输入框一律声明 `autoCapitalize="none" autoCorrect="off" spellCheck={false}`（网址类再加 `inputMode="url"`），防止 iOS 软键盘自动首字母大写与拼写替换；手机设置子页与底部抽屉里的输入框和主操作按钮一律全宽 `h-11 w-full`，不写死 `w-60`。
 
-- **常驻工具格**：设置、新建、额度、返回、右栏开关和任务图放大键用 `Button variant="slot" size="icon"`（36px）。模型选择用能容纳文字的长槽。共用暖白底、1px 描边、4px 圆角和底部 2px 内阴影。悬停和展开加深底色，按下下沉 1px、托底缩成 1px。减弱动态效果时取消下沉。触屏热区至少 44px。
-- **只读方格**：总助行待处理和未读计数、Piece 顶栏的 `Read-only` 用 `.tool-badge`，与工具格共用静态外观。
+- **常驻工具格**：设置、新建、额度、返回和右栏开关用 `Button variant="slot" size="icon"`（30px，`size-7.5`，图标 `size-pixel-md` 18px）；模型选择用同高的长槽（`size="default"`，`h-7.5 px-3`）。工具格比旁边 36px 的搜索框和顶栏控件小一圈，父级用 `items-center` 让它在行里居中，不和搜索框上下边对齐。
+- **行内工具格**：贴着单行标题的附属键（任务图标题右边的放大键）用 `size="icon-sm"`（24px，`size-6`，图标 `size-pixel-sm` 12px）。
+- **工具格外观**：颜色取自总助嫩芽铃的铃身，变量都在 `styles.css` 的 `--slot-*`：麦芽奶油黄底 `#ffefb5`、琥珀 1px 描边 `#d9a336`、4px 圆角、底部 2px 内阴影 `#e8bf55`；字和图标是焦糖棕 `#4a2e00`（对底色 10.9:1），格子里的次要字 `#6e4a00`（6.9:1）。悬停和展开换成蜂蜜黄 `#ffe48f`，按下下沉 1px、托底缩成 1px。减弱动态效果时取消下沉。触屏热区至少 44px。不用荧光黄、渐变和木纹。只有工具格和只读方格是黄色：聊天输入框的发送键、行内文字按钮、复制等小图标、拍板卡选项行、弹窗里的取消键保持原样。
+- **只读方格**：总助行待处理和未读计数、Piece 顶栏的 `Read-only` 用 `.tool-badge`，与工具格共用静态的暖黄外观。
 - **行内操作**：`Manage…`、`Refresh`、`Invite` 这类文字操作仍用 `Button variant="ghost"`。
 
 ## 7. 聚焦态
@@ -299,7 +301,7 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
   4. `Completed`（在下，默认折叠，按需游标拉取历史已完成/已取消任务图，并与独立已收工 Piece 合并收纳）。
 - **推开对话，不浮在上面**：和对话（`main`）并排放在它右边，宽 320px，`border-l border-line bg-surface-chat`（第 4 条的外壳底色），左右 20px（`px-5`），内部纵向滚动；对话区跟着变窄。窄屏（1100px 以下）也一样推开。
 - **太窄放不下时（720px 以下）**：右栏不再并排，改成顶栏下面的一块（`border-b`，最高 `40dvh`，里面滚动），把消息往下推；不自动展开，点顶栏的开关才出来。不盖住消息和输入框。
-- **展开和收起**：只在有要关心的事时自动出来：有活跃任务图、有没收工的 Piece（在干活、等验收）或有“等你确定”。**只有收工的 Piece / 已完结任务图、或什么都没有时，整栏不渲染、不占位置**，对话照常居中；只有历史完成项时开关还在，点开关手动打开看“Completed”（这次打开期间一直开着，不记成“收起”），再点收起。有了新的活跃任务图、新的没收工 Piece 或新的提问，再自动出来。开关是当前项目经理颜色的便签小灵（`Avatar` `look={look}` `size={26}` `neutral`，第 6 条的工具格，右栏有内容就显示，收工的也算），跟着右栏走：并排的右栏展开时，**和第一个可见组的标题在同一行、靠右**（不单独占一行，右栏顶上不留空；第一组 `py-3` 加上 36px 高的开关，标题和对话顶栏的头像、标题大致在一条线上；图标离右边 12px，和收起时在顶栏的位置一样，点的时候不跳）；收起时在顶栏最右边（窗口右上角）；太窄、右栏在顶栏下面时，开关留在顶栏右边。用户手动收起后记住（`localStorage`），之后来了新内容也不自己弹开，收着时有没回答的提问或待拍板门禁，开关右上角一个 6px 的强调色圆点。资料页不显示右栏。
+- **展开和收起**：只在有要关心的事时自动出来：有活跃任务图、有没收工的 Piece（在干活、等验收）或有“等你确定”。**只有收工的 Piece / 已完结任务图、或什么都没有时，整栏不渲染、不占位置**，对话照常居中；只有历史完成项时开关还在，点开关手动打开看“Completed”（这次打开期间一直开着，不记成“收起”），再点收起。有了新的活跃任务图、新的没收工 Piece 或新的提问，再自动出来。开关是当前项目经理颜色的便签小灵（`Avatar` `look={look}` `size={20}` `neutral`，第 6 条的工具格，右栏有内容就显示，收工的也算），跟着右栏走：并排的右栏展开时，**和第一个可见组的标题在同一行、靠右**（不单独占一行，右栏顶上不留空；第一组 `py-3` 加上 30px 高的开关（在 32px 的标题行里居中），标题和对话顶栏的头像、标题大致在一条线上；图标离右边 12px，和收起时在顶栏的位置一样，点的时候不跳）；收起时在顶栏最右边（窗口右上角）；太窄、右栏在顶栏下面时，开关留在顶栏右边。用户手动收起后记住（`localStorage`），之后来了新内容也不自己弹开，收着时有没回答的提问或待拍板门禁，开关右上角一个 6px 的强调色圆点。资料页不显示右栏。
 - **组**：组和组之间一条 1px 细线（`divide-y divide-line`，线和字对齐在同一条线上，不顶到栏边），每组上下各 12px（`py-3`）。**各组的标题一模一样**：12px（`text-xs`）、500、`text-muted-foreground`，高 32px（`h-8`），**不带数字**（收起、展开都不带）；`Needs You`（及含 `waiting_user` 门禁的 `Task Graph`）标题前一个 6px 的强调色圆点；标题前不放头像，标题直接是字 + 普通箭头。标题下面直接是行，不留空。
 - **每一组都能收起**（和整栏的开关是两回事，两个都要有）：组标题整行是一个按钮（`aria-expanded`、`aria-controls`，Enter 和空格都能按，键盘聚焦有圈，悬停 `bg-sidebar-hover`），点一下收起或展开，标题后面一个**普通细线箭头**（`ChevronRight` 14px，`text-muted-foreground`，各组共用）：**展开转 90° 朝下、收起朝右**，转向 200ms（`motion-reduce` 时直接换）。
   - 收起后只剩标题这一行，不写个数。
@@ -528,7 +530,7 @@ agent-hub 网页的统一规则。**以左栏为准**（`src/web/components/Side
 
 - `useMediaQuery.ts` 的 `MOBILE_SHELL_QUERY` 是唯一分流条件：主指针 `coarse`，且窗口短边小于 600px；横屏同样使用手机外壳。鼠标窗口缩到 390px 仍用电脑外壳。
 - 首页网址为空，是整屏 `Sidebar layout="page"`，不自动选对话、不标选中底色。进入聊天时用 React 19 `Activity hidden` 保留列表 DOM、搜索和滚动位置。
-- 聊天 `#/c/<id>`、Piece `#/w/<id>`、资料 `#/pm/<id>` 一次显示整屏一页。聊天顶栏只放 36px 返回箭头（触屏热区至少 44px）（措辞：返回 → Back）、头像名字、Pieces 开关；输入框占位 `Message…`，不自动聚焦。手机输入框底距为安全区 + 8px。
+- 聊天 `#/c/<id>`、Piece `#/w/<id>`、资料 `#/pm/<id>` 一次显示整屏一页。聊天顶栏只放 30px 返回工具格（触屏热区至少 44px）（措辞：返回 → Back）、头像名字、Pieces 开关；输入框占位 `Message…`，不自动聚焦。手机输入框底距为安全区 + 8px。
 - Pieces 使用 `ui/drawer.tsx` 底部抽屉，共用 `RailGroups` 三组内容；没有 Piece 和提问时隐藏开关。新提问只亮点，不自动弹出；点行先关抽屉再导航，提问复用消息 focus。
 - 层级：列表 → 聊天 → Piece/资料。进下一层 push，`history.state = { hub: true, previous: <上一页网址> }`；同层切换（Piece 切 Piece、聊天里跳到别的聊天）replace 当前条目并保留原 state；其余 replace 不写标记。顶栏返回只在 `previous` 正好是上级时 `history.back()`，否则 replace 到上级（聊天到列表、Piece/资料到所属聊天），直达、同层切换后都不循环。抽屉里点提问等同返回所属聊天。无效路由在目标设备快照就绪后 replace 到列表；刚新建、WebSocket 还没同步到的对话不算无效。路由、设备变化或抽屉内容消失时关闭抽屉。
 - 全局设置采用整屏二级路由钻取（`src/web/mobile/settings/`）：列表 `#/` → 一级设置 `#/settings`（`General`、`Providers`、`Computers`、`Security & Access` 四组，其中 `Providers` 组含 `Providers` 与 `Vendor sync` 两行）→ 二级子页 `#/settings/<section>`（`scale`、`notifications`、`providers`、`vendor-sync`、`computers`、`sign-in`、`browsers`、`public-access`），返回统一走 `mobileBack`，不调 `withViewTransition`；在 `#/settings*` 下拉宽切回电脑外壳时自动打开对应分类的 `SettingsDialog`（`providers` 与 `vendor-sync` 均映射到桌面 `Providers` 分类）并将网址替换回首页。

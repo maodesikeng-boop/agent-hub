@@ -800,8 +800,7 @@ describe("资料页", () => {
     expect(within(page).queryByRole("region", { name: "Folders" })).not.toBeInTheDocument();
     expect(within(page).queryByRole("list", { name: "Folders" })).not.toBeInTheDocument();
     expect(within(page).queryByText("还没有")).not.toBeInTheDocument();
-    // 返回按钮和对话顶栏的按钮一样大（36px）
-    expect(screen.getByRole("button", { name: "Back" })).toHaveClass("size-9");
+    expect(screen.getByRole("button", { name: "Back" })).toHaveClass("size-7.5");
     await user.click(screen.getByRole("button", { name: "Back" }));
     expect(screen.getByRole("heading", { level: 1, name: "阿周" })).toBeInTheDocument();
   });
