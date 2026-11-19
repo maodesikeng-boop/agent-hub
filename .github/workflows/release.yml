@@ -1,7 +1,7 @@
 name: release
 
 # 推 v* 标签：复用 Windows 与 Mac 的构建，建 GitHub Release 并挂上 .exe / .dmg / .sha256（固定文件名）。
-# workflow_dispatch 与改到本工作流的 PR 只做“试运行”：构建并组装发布文件，作为产物上传，不建 Release。
+# PR 只校验版本和脚本。手动运行可在分支上试打包，或选已有标签发布。
 # 标签 vX.Y.Z 是正式版（releases/latest 指向它）；vX.Y.Z-rc.1 之类带后缀的是预发布（GitHub 的 latest 不含预发布）。
 on:
   push:
@@ -15,6 +15,9 @@ on:
       - ".github/release-notes.md"
       - "scripts/release-assets.ts"
       - "scripts/release-assets.test.ts"
+      - "scripts/stage-runtime-common.ts"
+      - "apps/windows/Cargo.toml"
+      - "apps/windows/crates/fusa-desktop/tauri.conf.json"
 
 concurrency:
   group: release-${{ github.ref }}
@@ -50,10 +53,12 @@ jobs:
           fi
 
   windows:
+    if: github.event_name != 'pull_request'
     needs: verify
     uses: ./.github/workflows/windows-desktop.yml
 
   mac:
+    if: github.event_name != 'pull_request'
     needs: verify
     uses: ./.github/workflows/mac-desktop.yml
 
@@ -98,7 +103,6 @@ jobs:
 
   publish:
     name: publish GitHub Release
-    # 只有推 v* 标签才发布；试运行（dispatch / PR）到上一步为止
     if: github.ref_type == 'tag'
     needs: assemble
     runs-on: ubuntu-latest
