@@ -1090,6 +1090,11 @@ export const FEISHU_DISPLAY_NAME_MAX_CHARS = 40;
 export const FEISHU_CONTEXT_MAX_LINES = 30;
 export const FEISHU_CONTEXT_MAX_CHARS = 4_000;
 export const FEISHU_CONTEXT_TTL_MS = 2 * 60 * 60_000;
+/**
+ * 没 @机器人 的气泡里带的文件（只记编号，唤醒时才下载），每个群最多记几个，超过丢最早的。
+ * 飞书手机上多选的图片逐张发成单独的图片消息，一次最多 9 张，留一倍余量。
+ */
+export const FEISHU_CONTEXT_MAX_FILES = 20;
 /** feishu_posts 里已定稿的行留几天：飞书卡片实体 14 天后不能再操作。 */
 export const FEISHU_POST_RETENTION_DAYS = 14;
 export const FEISHU_POST_RETENTION_MS = FEISHU_POST_RETENTION_DAYS * 24 * 60 * 60 * 1000;

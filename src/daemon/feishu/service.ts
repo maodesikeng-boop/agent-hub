@@ -670,7 +670,7 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     authFailed = false;
     const t = (await transportFactory())({ brand: s.brand, appId: s.appId, appSecret: s.appSecret, log: (line) => log(`飞书：${line}`) });
     transport = t;
-    files = createFeishuFileService({ transport: t, uploadsDir: options.uploadsDir });
+    files = createFeishuFileService({ transport: t, uploadsDir: options.uploadsDir, log: (line) => log(`飞书：${line}`) });
     try {
       await t.start({
         onEvent: (raw) => onRawEvent(raw),
@@ -1784,6 +1784,7 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
       mentionOnlyForced: mentionOnly,
       speakerName: feishuDisplayName(speakerName),
       pendingContext: contexts.peek(message.chatId, t),
+      pendingFiles: contexts.peekFiles(message.chatId, t),
       isBindCode,
     });
     switch (route.kind) {
@@ -1800,14 +1801,14 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
         await sendText({ chatId: message.chatId }, message.chatType === "p2p" ? route.reason : `<at user_id="${route.openId}"></at> ${route.reason}`);
         return;
       case "context":
-        contexts.add(message.chatId, route.line);
+        contexts.add(message.chatId, route.line, message.files.map((file) => ({ messageId: message.messageId, speaker: message.senderOpenId, file, at: message.at })));
         return;
       case "deliver": {
         // 超过上限、下载失败的文件回一句；收下的附件和正文都没有时不投递（账本、总助都不收空消息）
         const attachments = [];
         const missed: string[] = [];
-        for (const file of route.files) {
-          const saved = await files?.receive(message.messageId, file);
+        for (const { messageId, file } of route.files) {
+          const saved = await files?.receive(messageId, file);
           if (saved) attachments.push(saved);
           else missed.push(file.fileName ?? (file.type === "image" ? "图片" : "文件"));
         }

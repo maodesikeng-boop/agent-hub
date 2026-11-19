@@ -4,16 +4,19 @@
 //   每 FEISHU_MEMBERS_TTL_MS 对一遍，查失败只记 FEISHU_MEMBERS_RETRY_MS，期间按 shared 处理（宁可多要一次 @，不把访客当主人）；
 // - 发言人不是主人时，这个群立刻算 shared，不等对账（访客的话本身就证明群里有别人）；
 // - 背景近窗每群最多 FEISHU_CONTEXT_MAX_LINES 行、FEISHU_CONTEXT_MAX_CHARS 字，超过丢最早的；超过 FEISHU_CONTEXT_TTL_MS 的行丢掉；
+//   没唤醒的气泡里带的文件另记编号（不下载），每群最多 FEISHU_CONTEXT_MAX_FILES 个，过期和行一样；
 //   守护进程重启后近窗为空（不落库，只是背景）；
 // - 群解散、机器人被移出、断开时清掉这个群的全部缓存。
 import { LRUCache } from "lru-cache";
 import { truncateChars } from "../../shared/domain.ts";
 import { feishuDisplayName } from "../../shared/feishu.ts";
 import type { FeishuChatId, FeishuChatMode, FeishuContextLine, FeishuOpenId } from "../../shared/feishu.ts";
+import type { FeishuInboundFileRef } from "./inbound.ts";
 import {
   FEISHU_CHAT_CACHE_MAX,
   FEISHU_CHAT_MEMBERS_MAX,
   FEISHU_CONTEXT_MAX_CHARS,
+  FEISHU_CONTEXT_MAX_FILES,
   FEISHU_CONTEXT_MAX_LINES,
   FEISHU_CONTEXT_TTL_MS,
   FEISHU_MEMBERS_RETRY_MS,
@@ -160,28 +163,42 @@ export function createFeishuDirectory(fetch: (chatId: FeishuChatId) => Promise<F
   };
 }
 
+/** 没唤醒的气泡里带的一个文件：唤醒时按发的人和当时的档位决定交不交。 */
+export interface FeishuPendingFile extends FeishuInboundFileRef {
+  speaker: FeishuOpenId;
+  at: number;
+}
+
 export interface FeishuContextWindows {
-  /** 后置：记下这一行；超出行数或字数上限时丢最早的。 */
-  add(chatId: FeishuChatId, line: FeishuContextLine): void;
+  /** 后置：记下这一行和它带的文件；超出行数、字数或文件个数上限时丢最早的。 */
+  add(chatId: FeishuChatId, line: FeishuContextLine, files?: readonly FeishuPendingFile[]): void;
   /** 后置：返回这个群未过期的背景（按时间先后），不清空。 */
   peek(chatId: FeishuChatId, now: number): FeishuContextLine[];
-  /** 后置：这一轮已送达，清空这个群的背景。 */
+  /** 后置：返回这个群未过期、还没交出的文件（按时间先后），不清空。 */
+  peekFiles(chatId: FeishuChatId, now: number): FeishuPendingFile[];
+  /** 后置：这一轮已送达，清空这个群的背景和文件。 */
   clear(chatId: FeishuChatId): void;
   clearAll(): void;
 }
 
 export function createFeishuContextWindows(): FeishuContextWindows {
   // 群数跟着成员缓存一起有上限：同一个 FEISHU_CHAT_CACHE_MAX
-  const windows = new LRUCache<FeishuChatId, FeishuContextLine[]>({ max: FEISHU_CHAT_CACHE_MAX });
+  const windows = new LRUCache<FeishuChatId, { lines: FeishuContextLine[]; files: FeishuPendingFile[] }>({ max: FEISHU_CHAT_CACHE_MAX });
   const chars = (lines: readonly FeishuContextLine[]) => lines.reduce((sum, line) => sum + [...line.text].length, 0);
+  const fresh = (now: number) => (item: { at: number }) => now - item.at <= FEISHU_CONTEXT_TTL_MS;
   return {
-    add(chatId, line) {
-      const lines = [...(windows.get(chatId) ?? []), { ...line, text: truncateChars(line.text, FEISHU_CONTEXT_MAX_CHARS) }];
+    add(chatId, line, added = []) {
+      const window = windows.get(chatId);
+      const lines = [...(window?.lines ?? []), { ...line, text: truncateChars(line.text, FEISHU_CONTEXT_MAX_CHARS) }];
       while (lines.length > FEISHU_CONTEXT_MAX_LINES || (lines.length > 1 && chars(lines) > FEISHU_CONTEXT_MAX_CHARS)) lines.shift();
-      windows.set(chatId, lines);
+      const files = [...(window?.files ?? []), ...added].slice(-FEISHU_CONTEXT_MAX_FILES);
+      windows.set(chatId, { lines, files });
     },
     peek(chatId, now) {
-      return (windows.get(chatId) ?? []).filter((line) => now - line.at <= FEISHU_CONTEXT_TTL_MS);
+      return (windows.get(chatId)?.lines ?? []).filter(fresh(now));
+    },
+    peekFiles(chatId, now) {
+      return (windows.get(chatId)?.files ?? []).filter(fresh(now));
     },
     clear(chatId) {
       windows.delete(chatId);
