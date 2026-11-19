@@ -5,7 +5,7 @@ import { createConnection, createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AGENT_VENDORS,
   HUB_COMMANDS,
@@ -532,6 +532,80 @@ describe("agent api over inject", () => {
       expect(res.json().code).toBe("unauthorized");
       expect(ledger.sharedFileCalls).toEqual([]);
       expect(ledger.calls).toHaveLength(0);
+    });
+
+    it("close() 时附件还在准备：取消准备，等处理函数退出才返回；这个请求回 503，之后不再调账本、不记健康状态", async () => {
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => (entered = resolve));
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      let signal: AbortSignal | undefined;
+      // 卡住不理 signal 的准备（模拟卡在 open 上的读取）
+      Object.assign(ledger, {
+        shareHubFiles: async (_sessionId: number, _args: unknown, s?: AbortSignal) => {
+          signal = s;
+          entered();
+          await held;
+          return [];
+        },
+      });
+      const res = call("ask", { text: "看看", files: [{ label: null, path: "/work/foo/plan.md" }] });
+      await started;
+      const closed = await Promise.race([
+        app.close().then(() => "closed" as const),
+        new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 2_000).unref()),
+      ]);
+      const roleChecks = vi.spyOn(ledger, "sessionRole");
+      release();
+      const reply = await res;
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(closed).toBe("closed");
+      expect(signal?.aborted).toBe(true);
+      expect(reply.statusCode).toBe(503);
+      expect(reply.json()).toMatchObject({ ok: false, code: "shutting_down" });
+      expect(ledger.calls).toEqual([]);
+      expect(ledger.healthReports).toEqual([]);
+      expect(roleChecks).not.toHaveBeenCalled();
+    });
+
+    it("close() 等在途的总助调度做完才返回；关闭后它才出错的回 503，不记健康状态", async () => {
+      const { createRouterSandboxGuard } = await import("../router/sandbox.ts");
+      const sandboxGuard = createRouterSandboxGuard();
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => (entered = resolve));
+      let fail!: (error: Error) => void;
+      const failing = new Promise<never>((_resolve, reject) => (fail = reject));
+      await app.close();
+      app = createAgentApi({
+        ledger,
+        tokens,
+        sandboxGuard,
+        onRouterDispatch: () => {
+          entered();
+          return failing;
+        },
+      });
+      await app.ready();
+      const token = tokens.issue(103);
+      ledger.sessionRoles.set(103, "assistant");
+      sandboxGuard.bind(103, 55);
+      const res = app.inject({
+        method: "POST",
+        url: "/v1/router.dispatch",
+        headers: { authorization: `Bearer ${token}` },
+        payload: { op: "pm", device: "self", pmId: 1, verbatim: true },
+      });
+      await started;
+      let closed = false;
+      const closing = app.close().then(() => (closed = true));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(closed).toBe(false);
+      fail(new Error("database is not open"));
+      await closing;
+      const reply = await res;
+      expect(reply.statusCode).toBe(503);
+      expect(reply.json()).toMatchObject({ ok: false, code: "shutting_down" });
+      expect(ledger.healthReports).toEqual([]);
     });
   });
 
