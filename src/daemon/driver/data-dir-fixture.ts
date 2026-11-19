@@ -91,7 +91,7 @@ export async function makeSandboxDataDir(root: string): Promise<SandboxDataDir> 
 }
 
 /**
- * 在沙箱里跑的探测脚本（/bin/sh -c）：读到一个就打一行标记，能列 state/、能连上 socket 也打。
+ * 在沙箱里跑的探测脚本（/bin/sh -c）：读到一个就打一行标记，列目录看得到密钥、备份的名字也打，能连上 socket 也打。
  * 另外确认工作目录照常（cd 进去、pwd -P 解析真实路径）、hub 外壳能执行。
  */
 export function readProbeScript(): string {
@@ -107,8 +107,9 @@ export function readProbeScript(): string {
   ].join(" ");
   return [
     ...[...DENIED_PROBES, ...ALLOWED_PROBES].map(([rel, mark]) => `cat "$D/${rel}" >/dev/null 2>&1 && echo ${mark}`),
-    'ls "$D/state" >/dev/null 2>&1 && echo STATE_LISTED',
-    'ls "$D" >/dev/null 2>&1 && echo DATA_DIR_LISTED',
+    // macOS 上整个列不出来；Linux 上数据目录是 tmpfs，只列得出放行项挂回时留下的空壳：两种都不该看到密钥、备份的名字
+    'ls -a "$D/state" 2>/dev/null | grep -qx ui-token && echo STATE_LISTED',
+    'ls -a "$D" 2>/dev/null | grep -qx backups && echo DATA_DIR_LISTED',
     'cd "$O" && test "$(pwd -P)" = "$O" && echo CWD_OK',
     '"$D/run/bin/hub" 2>/dev/null',
     `"$N" -e '${connect}'`,
