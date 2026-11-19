@@ -64,14 +64,20 @@ function lastMessage(conversationId: ConversationId): Message {
   return ledger.getMessage(row.id)!;
 }
 
-const say = (sessionId: SessionId, text: string, uuid = "u1") => ledger.applyDriverEvent(sessionId, { type: "agent.text", uuid, text, at: 1 });
+/** 交给账本就返回，不等落库（存副本是异步的）。 */
+const send = (sessionId: SessionId, text: string, uuid = "u1") => ledger.applyDriverEvent(sessionId, { type: "agent.text", uuid, text, at: 1 });
+/** 交给账本并等它落库。 */
+const say = async (sessionId: SessionId, text: string, uuid = "u1") => {
+  send(sessionId, text, uuid);
+  await ledger.settleDriverEvents();
+};
 
 describe("agent 文字消息入库时存副本", () => {
-  it("项目经理回复里的 png：meta.files 记下、推 message.created 时就带着", () => {
+  it("项目经理回复里的 png：meta.files 记下、推 message.created 时就带着", async () => {
     const png = file(join(main, "shot.png"), "PNG");
     const changes: Change[] = [];
     ledger.onChange((c) => changes.push(c));
-    say(pm.sessionId, `看图：\n\n![截图](${png})`);
+    await say(pm.sessionId, `看图：\n\n![截图](${png})`);
     const message = lastMessage(pm.conversationId);
     expect(sentFilesOf(message)).toEqual([expect.objectContaining({ href: png, path: png, name: "shot.png", status: "saved", mime: "image/png", size: 3 })]);
     const created = changes.find((c) => c.type === "message.created");
@@ -89,8 +95,8 @@ describe("agent 文字消息入库时存副本", () => {
     let ticks = 0;
     const timer = setInterval(() => ticks++, 0);
     try {
-      say(pm.sessionId, `大文件：[b](${big})`, "u-big");
-      say(pm.sessionId, "后面一句", "u-next");
+      send(pm.sessionId, `大文件：[b](${big})`, "u-big");
+      send(pm.sessionId, "后面一句", "u-next");
       await vi.waitFor(() => expect(texts()).toHaveLength(2), { timeout: 20_000 });
     } finally {
       clearInterval(timer);
@@ -101,47 +107,48 @@ describe("agent 文字消息入库时存副本", () => {
     expect(sentFilesOf(ledger.getMessage(row.id)!)).toEqual([expect.objectContaining({ status: "saved", size: 40 * 1024 * 1024 })]);
   });
 
-  it("没有本机链接的回复：meta 还是 null（和老消息一样），不建 sent-files/", () => {
-    say(pm.sessionId, "好的，[文档](https://example.com) 看这里");
+  it("没有本机链接的回复：meta 还是 null（和老消息一样），不建 sent-files/", async () => {
+    await say(pm.sessionId, "好的，[文档](https://example.com) 看这里");
     expect(lastMessage(pm.conversationId).meta).toBeNull();
     expect(existsSync(sentFilesDir)).toBe(false);
   });
 
-  it("不在可分享的文件夹里：照样入库，状态写原因，不拷", () => {
-    say(pm.sessionId, `[hosts](/etc/hosts) 和 [没有](${join(main, "nope.md")}) 和 [登录](/login)`);
+  it("不在可分享的文件夹里：照样入库，状态写原因，不拷", async () => {
+    await say(pm.sessionId, `[hosts](/etc/hosts) 和 [没有](${join(main, "nope.md")}) 和 [登录](/login)`);
     expect(sentFilesOf(lastMessage(pm.conversationId)).map((f) => f.status)).toEqual(["not_allowed", "missing"]);
     expect(existsSync(sentFilesDir) ? readdirSync(sentFilesDir) : []).toEqual([]);
   });
 
-  it("重放同一条消息（重启后驱动层又交一次）：只有一条消息，不再碰文件、编号不变", () => {
+  it("重放同一条消息（重启后驱动层又交一次）：只有一条消息，不再碰文件、编号不变", async () => {
     const md = file(join(main, "a.md"), "v1");
-    say(pm.sessionId, `[a](${md})`);
+    await say(pm.sessionId, `[a](${md})`);
     const first = lastMessage(pm.conversationId);
     rmSync(md);
-    say(pm.sessionId, `[a](${md})`);
+    await say(pm.sessionId, `[a](${md})`);
     expect(db.get<{ n: number }>("SELECT count(*) AS n FROM messages WHERE conversation_id = ?", pm.conversationId)!.n).toBe(first.id);
     expect(lastMessage(pm.conversationId)).toEqual(first);
     expect(readdirSync(sentFilesDir)).toEqual([sentFilesOf(first)[0]!.id]);
   });
 
-  it("默认放行 /tmp 和系统临时目录", () => {
+  it("默认放行 /tmp 和系统临时目录", async () => {
     const other = createLedger(openTestDb(), options({ shareTmpDirs: undefined }));
     const created = other.createPm({ name: "阿周", mode: "manage_only", persona: "", folder: main });
     const tmp = file(join(root, "elsewhere", "t.png"));
     other.applyDriverEvent(created.sessionId, { type: "agent.text", uuid: "t", text: `![t](${tmp})`, at: 1 });
+    await other.settleDriverEvents();
     expect(sentFilesOf(other.getMessage(other.messagesBefore(created.conversation.id, 1e9).messages.at(-1)!.id)!)).toEqual([
       expect.objectContaining({ status: "saved", path: tmp }),
     ]);
   });
 
-  it("Worker 回复里的图：存在 Worker 的对话里；本项目 worktrees 目录里的文件能发（数据目录里的例外）", () => {
+  it("Worker 回复里的图：存在 Worker 的对话里；本项目 worktrees 目录里的文件能发（数据目录里的例外）", async () => {
     const started = ledger.hubCall(pm.sessionId, "worker.start", { title: "截图", task: "截个图", noWorktree: true });
     const worker = started.data.worker;
     const sessionId = db.get<{ id: number }>("SELECT id FROM agent_sessions WHERE worker_id = ?", worker.id)!.id;
     const shot = file(join(main, "w.png"));
     file(join(dataHome, "state", "ui-token"), "TOKEN");
     const inWorktree = file(join(workerWorktreePath(join(dataHome, "worktrees"), projectId, 99), "wt.png"));
-    say(sessionId, `![w](${shot}) ![wt](${inWorktree}) [token](${join(dataHome, "state", "ui-token")})`, "w1");
+    await say(sessionId, `![w](${shot}) ![wt](${inWorktree}) [token](${join(dataHome, "state", "ui-token")})`, "w1");
     const message = lastMessage(worker.workerConversationId);
     expect(message.sender).toBe("agent");
     expect(sentFilesOf(message).map((f) => f.status)).toEqual(["saved", "saved", "not_allowed"]);
@@ -149,7 +156,7 @@ describe("agent 文字消息入库时存副本", () => {
 });
 
 describe("sentFileAllows：打开原文件前再查一次", () => {
-  it("项目文件夹里的能分享；文件夹外、敏感路径、数据目录的 state/ 不能；会话不存在 false", () => {
+  it("项目文件夹里的能分享；文件夹外、敏感路径、数据目录的 state/ 不能；会话不存在 false", async () => {
     const inside = file(join(main, "a.txt"));
     const outside = file(join(root, "elsewhere", "b.txt"));
     const secret = file(join(dataHome, "state", "ui-token"));

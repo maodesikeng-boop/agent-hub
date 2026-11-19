@@ -501,6 +501,25 @@ describe("agent api over inject", () => {
     });
   });
 
+  describe("hub ask / router report 的 --file：调 hubCall 之前先在事务外存副本", () => {
+    it("带 --file 时先 shareHubFiles，结果作为 context.sharedFiles 交给 hubCall；不带的不存", async () => {
+      const files = [{ label: "方案", path: "/work/foo/plan.md" }, { label: null, path: "/work/foo/shot.png" }];
+      expect((await call("ask", { text: "看看", files })).statusCode).toBe(200);
+      expect((await call("router.report", { summary: "做完了", files: [files[0]] })).statusCode).toBe(200);
+      expect((await call("ask", { text: "不带文件" })).statusCode).toBe(200);
+      expect(ledger.sharedFileCalls.map((c) => c.paths)).toEqual([["/work/foo/plan.md", "/work/foo/shot.png"], ["/work/foo/plan.md"]]);
+      expect(ledger.contexts[0]?.sharedFiles?.map((f) => f.href)).toEqual(["/work/foo/plan.md", "/work/foo/shot.png"]);
+      expect(ledger.contexts[1]?.sharedFiles?.map((f) => f.href)).toEqual(["/work/foo/plan.md"]);
+      expect(ledger.contexts[2]).toEqual({});
+    });
+
+    it("Worker 调 ask 被拒：不先存副本", async () => {
+      ledger.defaultRole = "worker";
+      expect((await call("ask", { text: "看看", files: [{ label: null, path: "/work/foo/plan.md" }] })).statusCode).toBe(403);
+      expect(ledger.sharedFileCalls).toEqual([]);
+    });
+  });
+
   describe("hub models：调 hubCall 之前先异步取模型目录", () => {
     it("把 refresh 和可选的 vendor 传给 models.list，拿到的目录作为 context.modelCatalogs 交给 hubCall", async () => {
       const listCalls: unknown[] = [];

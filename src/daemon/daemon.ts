@@ -12,6 +12,7 @@ import { homedir, hostname } from "node:os";
 import { fileURLToPath } from "node:url";
 import {
   AGENT_API_CLOSE_MS,
+  LEDGER_SETTLE_ON_SHUTDOWN_MS,
   API_PATHS,
   DEFAULT_PM_MODE,
   DEFAULT_UI_PORT,
@@ -99,7 +100,7 @@ import { createLaunchPreparer, createPersonaNoter } from "./launch.ts";
 import { createProjectCatalogRunner, type ProjectCatalogRunner } from "./project-catalog/runner.ts";
 import { resolveRouterModel } from "./router/model-resolver.ts";
 import { createRouterTurnPurposes, createRouterTurnRunner } from "./router/single-turn.ts";
-import { createLedger } from "./ledger/index.ts";
+import { createLedger, type SqliteLedger } from "./ledger/index.ts";
 import { DEFAULT_PM_NAME } from "./prompt.ts";
 import { prepareSentFilesDir } from "./sent-files.ts";
 import { resolveUpload } from "./uploads.ts";
@@ -236,6 +237,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     mesh?: Mesh;
     admin?: RunningAdminSocket;
     agentApi?: RunningAgentApi;
+    ledger?: SqliteLedger;
     db?: Db;
     lock?: DirLock;
     uninstallProcessLedger?: () => void;
@@ -306,7 +308,15 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       });
     }
     parts.sandboxGuard?.clear();
-    // claude 都退出了、事件都交给账本了，再取消订阅、关库
+    // claude 都退出了、事件都交给账本了：等排着的（回复里的文件在存副本）落库，再取消订阅、关库
+    if (parts.ledger) {
+      const ledger = parts.ledger;
+      await step("账本事件", async () => {
+        if (!(await within(ledger.settleDriverEvents(), LEDGER_SETTLE_ON_SHUTDOWN_MS))) {
+          throw new Error(`${LEDGER_SETTLE_ON_SHUTDOWN_MS / 1000} 秒没落完，不再等`);
+        }
+      });
+    }
     for (const off of parts.unsubscribe.splice(0)) off();
     if (db) await step("数据库", () => db.close());
     parts.uninstallProcessLedger?.();
@@ -432,6 +442,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       onCatalogClaimable: () => parts.catalogRunner?.wake(),
       log,
     });
+    parts.ledger = ledger;
     parts.unsubscribe.push(() => ledger.close());
     const sessions = createSessionStore(db);
     // 有会话在干活时起 caffeinate 防闲置睡眠，全部闲下来过宽限期再结束（daemon/platform/sleep.ts）

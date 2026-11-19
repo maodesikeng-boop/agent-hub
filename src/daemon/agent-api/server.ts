@@ -53,6 +53,8 @@ import type { RouterSandboxGuard } from "../router/sandbox.ts";
 import type { WorkerPr, WorkerPrProbeResult } from "../../shared/hub.ts";
 import type { SelfReloadStatus } from "../../shared/api.ts";
 import type { HubCallContext, WorkspaceProbe } from "../../shared/ledger.ts";
+import type { HubFileArg } from "../../shared/deliverables.ts";
+import { HUB_FILE_ARGS_MAX } from "../../shared/limits.ts";
 import { isAgentVendor, type AgentVendor, type ModelCatalog } from "../../shared/vendors.ts";
 import { vendorTranscriptPath } from "../driver/transcript.ts";
 import type { TranscriptRef } from "../driver/transcript.ts";
@@ -70,6 +72,7 @@ export interface AgentApiOptions {
     | "graphPrTargets"
     | "graphAutoDispatchVendors"
     | "workerTranscriptTarget"
+    | "shareHubFiles"
   >;
   /**
    * hub worker start 之前异步探主文件夹的 git（m3-plan 第 2.6 节），结果作为 HubCallContext.workspace 交给 hubCall：
@@ -527,10 +530,18 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
   const probePrByUrl = opts.probePrByUrl ?? ((cwd: string, url: string) => defaultProbePrByUrl(cwd, url));
   const findTranscript = opts.findTranscript ?? ((ref: TranscriptRef) => vendorTranscriptPath(ref));
 
-  /** hubCall 之前要异步准备的东西：worker.start（没带 noWorktree、有项目）要探 git，worker.show 要查 PR，models 要查模型目录。 */
+  /**
+   * hubCall 之前要异步准备的东西：worker.start（没带 noWorktree、有项目）要探 git，worker.show 要查 PR，models 要查模型目录，
+   * ask、router.report 带 --file 要先存副本（大文件分块拷，不进账本的事务）。
+   */
   const prepare = async (sessionId: SessionId, command: HubCommand, body: Record<string, unknown>): Promise<HubCallContext> => {
     const role = ledger.sessionRole(sessionId);
     if (role === null || !hubCommandAllowed(role, command)) return {};
+    if (command === "ask" || command === "router.report") {
+      const files = body.files as HubFileArg[] | undefined;
+      if (files === undefined || files.length === 0 || files.length > HUB_FILE_ARGS_MAX) return {};
+      return { sharedFiles: await ledger.shareHubFiles(sessionId, files) };
+    }
     if (command === "status") {
       const selfReload = role === "pm" ? opts.selfReloadStatus?.() : undefined;
       return selfReload === undefined ? {} : { selfReload };

@@ -19,7 +19,14 @@ import {
   writeFileSync,
   type RmOptions,
 } from "node:fs";
-import { rename as asyncRename, rm as nodeAsyncRm } from "node:fs/promises";
+import {
+  lstat as asyncLstat,
+  open as asyncOpen,
+  realpath as asyncRealpath,
+  rename as asyncRename,
+  rm as nodeAsyncRm,
+  type FileHandle,
+} from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import writeFileAtomic from "write-file-atomic";
@@ -113,6 +120,65 @@ export function openRegularFileNoFollowSync(
     return fd;
   } catch (err) {
     closeSync(fd);
+    throw err;
+  }
+}
+
+/** {@link openRegularFileNoFollowSync} 的异步版（同样的拒绝规则与身份校验），返回 FileHandle：给要分块异步读大文件的地方用。 */
+export async function openRegularFileNoFollow(
+  targetPath: string,
+  options?: { nonBlock?: boolean; platform?: NodeJS.Platform },
+): Promise<FileHandle> {
+  const platform = options?.platform ?? process.platform;
+  if (platform === "win32" && isWindowsDevicePath(targetPath)) {
+    throw createEloopError(targetPath, "refusing to open Windows device path");
+  }
+
+  if (platform !== "win32") {
+    const flags =
+      fsConstants.O_RDONLY |
+      (fsConstants.O_NOFOLLOW ?? 0) |
+      (options?.nonBlock ? (fsConstants.O_NONBLOCK ?? 0) : 0);
+    const handle = await asyncOpen(targetPath, flags);
+    try {
+      if (!(await handle.stat()).isFile()) {
+        const err = new Error(`not a regular file: ${targetPath}`) as NodeJS.ErrnoException;
+        err.code = "EINVAL";
+        throw err;
+      }
+      return handle;
+    } catch (err) {
+      await handle.close();
+      throw err;
+    }
+  }
+
+  const before = await asyncLstat(targetPath, { bigint: true });
+  if (before.isSymbolicLink()) {
+    throw createEloopError(targetPath, "symlink or junction is not allowed");
+  }
+  if (!before.isFile()) {
+    const err = new Error(`not a regular file: ${targetPath}`) as NodeJS.ErrnoException;
+    err.code = "EINVAL";
+    throw err;
+  }
+  const expectedReal = await asyncRealpath(targetPath);
+  const handle = await asyncOpen(targetPath, fsConstants.O_RDONLY);
+  try {
+    const after = await handle.stat({ bigint: true });
+    if (!after.isFile()) {
+      throw createEloopError(targetPath, "opened handle is not a regular file");
+    }
+    if (after.dev !== before.dev || (before.ino !== 0n && after.ino !== before.ino)) {
+      throw createEloopError(targetPath, "file identity changed during open");
+    }
+    const afterReal = await asyncRealpath(targetPath);
+    if (normalizePathForComparison(afterReal) !== normalizePathForComparison(expectedReal)) {
+      throw createEloopError(targetPath, "file realpath changed during open");
+    }
+    return handle;
+  } catch (err) {
+    await handle.close();
     throw err;
   }
 }

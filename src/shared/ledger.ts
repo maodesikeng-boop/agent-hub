@@ -63,6 +63,8 @@ import type { AgentVendor, ModelCatalog } from "./vendors.ts";
 import type { UserBlockerId } from "./user-blockers.ts";
 import type { WorkerPick } from "./worker.ts";
 import type { TurnReplyView } from "./turn-reply.ts";
+import type { HubFileArg } from "./deliverables.ts";
+import type { SentFile } from "./sent-files.ts";
 
 /**
  * 账本拒绝一个请求的原因（M2 起的新方法都用它）：
@@ -364,6 +366,8 @@ export interface HubCallContext {
   graphPrs?: Readonly<Record<string, WorkerPr>>;
   /** status（项目经理）：热重启的登记状态；守护进程不支持热重启时没有这一项。 */
   selfReload?: SelfReloadStatus;
+  /** ask、router.report 带 --file：agent 接口在事务外存好的副本（shareHubFiles），和 args.files 一一对应。没带 --file 不用给。 */
+  sharedFiles?: readonly SentFile[];
 }
 
 /**
@@ -647,8 +651,13 @@ export interface Ledger extends LedgerHandoverWork {
    *   同一个事件重放（同一个 result 再来一遍）只有一行。
    * - Worker 会话的 message.delivered 里有用户直接对它说的话（Worker 对话里 sender user、带 workerId）→ 每条一行 user_message，
    *   原文交给项目经理；重启后重发再送达不会多一行。
+   *
+   * agent.text 里有本机文件链接时要先存副本（异步分块拷，daemon/sent-files.ts），拷完再进写事务；这期间同一会话后到的事件排在它后面，
+   * 按到达顺序落库。所以返回时这条事件不一定已经落库，要等落完用 settleDriverEvents。
    */
   applyDriverEvent(sessionId: SessionId, event: DriverEvent): void;
+  /** 等所有会话排着的驱动事件落库（关机关库之前、测试里用）。 */
+  settleDriverEvents(): Promise<void>;
   /**
    * 驱动层不经事件直接改了会话那一行（M2：end 把 status 写成 ended）之后，组装代码（session.end 处理函数）调：
    * 按那一行重算网页看到的会话状态（activity 当作空闲），和上次推的不一样就推一条 session.status。会话不存在什么也不做。
@@ -708,6 +717,11 @@ export interface Ledger extends LedgerHandoverWork {
    * 界面服务“用 Finder / 默认程序打开”发出去的原文件前用它再查一次（项目文件夹后来可能改了）。会话不存在 false。
    */
   sentFileAllows(sessionId: SessionId, realPath: string): boolean;
+  /**
+   * agent 接口在 ask、router.report 之前调：按这个会话能分享的文件夹给 --file 存副本（异步拷，不在事务里），结果作为 HubCallContext.sharedFiles 交给 hubCall。
+   * 后置：和 args 一一对应、顺序相同；会话不存在返回空数组。不抛错，单个文件出错记成 unreadable。
+   */
+  shareHubFiles(sessionId: SessionId, args: readonly HubFileArg[]): Promise<SentFile[]>;
   /**
    * 执行器：动作彻底失败（次数用完）或被放弃（坏行、没有处理函数，error 以“放弃：”开头）时调用。
    * session.send → 那条消息标 failed，failureReason = error；

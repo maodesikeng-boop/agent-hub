@@ -70,6 +70,7 @@ export {
   hashDirectoryContents,
   isTransientWindowsDeleteError,
   isWindowsDevicePath,
+  openRegularFileNoFollow,
   openRegularFileNoFollowSync,
   readManagedSkillCopyMeta,
   removeTreeWithRetry,

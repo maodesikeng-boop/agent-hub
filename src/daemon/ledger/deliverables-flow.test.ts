@@ -8,6 +8,7 @@ import { pendingDecisionsOf } from "../../shared/decisions.ts";
 import { deliverablesOf, type Deliverable } from "../../shared/deliverables.ts";
 import { CONFIRM_REJECT_OPTION, askOf, type ConversationId, type MessageId, type PmId, type SessionId, type TaskGraph, type WorkerId } from "../../shared/domain.ts";
 import { DELIVERABLES_PER_REPORT_MAX, HUB_FILE_ARGS_MAX } from "../../shared/limits.ts";
+import type { HubArgs } from "../../shared/hub.ts";
 import type { RouterItem } from "../../shared/router.ts";
 import { sentFilesOf } from "../../shared/sent-files.ts";
 import { REPORT_END, REPORT_START } from "../../shared/worker.ts";
@@ -84,8 +85,12 @@ describe("交付物", () => {
       workerId,
     )!;
 
-  /** Worker 跑完一轮，最后一段文字是 reply。 */
-  const runWorkerTurn = (workerId: WorkerId, reply: string) => {
+  /** 和 agent 接口一样：先在事务外给 --file 存副本（shareHubFiles），再调 hubCall。 */
+  const hubWithFiles = async <C extends "ask" | "router.report">(command: C, args: HubArgs<C>) =>
+    ledger.hubCall(lin.sessionId, command, args, { sharedFiles: await ledger.shareHubFiles(lin.sessionId, args.files ?? []) });
+
+  /** Worker 跑完一轮，最后一段文字是 reply；等账本把这几条事件落完（回复里的文件要先存副本）。 */
+  const runWorkerTurn = async (workerId: WorkerId, reply: string) => {
     const s = workerSessionOf(workerId);
     const input = db.get<{ id: number }>(
       "SELECT id FROM messages WHERE conversation_id = ? AND sender IN ('pm', 'user') ORDER BY id DESC LIMIT 1",
@@ -97,6 +102,7 @@ describe("交付物", () => {
     ledger.applyDriverEvent(s.id, { type: "message.processing", messageIds: [input.id], at: ++now });
     ledger.applyDriverEvent(s.id, { type: "agent.text", uuid: `u-${workerId}-${++now}`, text: reply, at: now });
     ledger.applyDriverEvent(s.id, { type: "turn.ended", ok: true, interrupted: false, messageIds: [input.id], durationMs: 20, at: ++now });
+    await ledger.settleDriverEvents();
     store.update(s.id, { status: "ended", pid: null });
   };
 
@@ -115,10 +121,10 @@ describe("交付物", () => {
     `\n- [方案](${path("docs/plan.md")})\n- [桌面截图](${path("desktop.png")})\n- [录屏](${path("rec.mp4")})`;
 
   describe("Worker 汇报的“文件”栏", () => {
-    it("汇报“文件”栏里的本机文件存成副本，记进该步 artifact.deliverables", () => {
+    it("汇报“文件”栏里的本机文件存成副本，记进该步 artifact.deliverables", async () => {
       const graph = createGraph([{ key: "plan", title: "方案" }, { key: "impl", title: "实现", deps: ["plan"] }]);
       const w = graph.nodes.find((n) => n.key === "plan")!.activeWorkerId!;
-      runWorkerTurn(w, reportText(planFiles()));
+      await runWorkerTurn(w, reportText(planFiles()));
       const node = graphShow(graph.id).nodes.find((n) => n.key === "plan")!;
       const list = node.artifact?.deliverables ?? [];
       expect(labels(list)).toEqual(["方案", "桌面截图", "录屏"]);
@@ -129,25 +135,25 @@ describe("交付物", () => {
       }
     });
 
-    it("再交一次汇报时，该步交付物换成新汇报的（文件栏为空时保留上一次的）", () => {
+    it("再交一次汇报时，该步交付物换成新汇报的（文件栏为空时保留上一次的）", async () => {
       const graph = createGraph([{ key: "plan", title: "方案", confirm: true }]);
       const w = graph.nodes[0]!.activeWorkerId!;
-      runWorkerTurn(w, reportText(planFiles()));
+      await runWorkerTurn(w, reportText(planFiles()));
       // 打回让它改，再交一次只带方案和验收结论
       const askId = graphShow(graph.id).nodes[0]!.gateAskMessageId!;
       expect(askId).not.toBeNull();
       ledger.decideTaskNode(graph.id, "plan", { clientId: "reject-1", choice: CONFIRM_REJECT_OPTION, note: "再改改" });
-      runWorkerTurn(w, reportText(`[方案](${path("docs/plan.md")}) [验收结论](${path("verdict.md")})`));
+      await runWorkerTurn(w, reportText(`[方案](${path("docs/plan.md")}) [验收结论](${path("verdict.md")})`));
       expect(labels(graphShow(graph.id).nodes[0]!.artifact?.deliverables)).toEqual(["方案", "验收结论"]);
       ledger.decideTaskNode(graph.id, "plan", { clientId: "reject-2", choice: CONFIRM_REJECT_OPTION, note: "还要改" });
-      runWorkerTurn(w, reportText("无"));
+      await runWorkerTurn(w, reportText("无"));
       expect(labels(graphShow(graph.id).nodes[0]!.artifact?.deliverables)).toEqual(["方案", "验收结论"]);
     });
 
-    it("confirm 步骤的检查点卡带上该步交付物（AskMeta.deliverables），不再拷一次副本", () => {
+    it("confirm 步骤的检查点卡带上该步交付物（AskMeta.deliverables），不再拷一次副本", async () => {
       const graph = createGraph([{ key: "plan", title: "方案", confirm: true }]);
       const w = graph.nodes[0]!.activeWorkerId!;
-      runWorkerTurn(w, reportText(planFiles()));
+      await runWorkerTurn(w, reportText(planFiles()));
       const copies = sentCopies();
       const node = graphShow(graph.id).nodes[0]!;
       const ask = askOf(messageById(node.gateAskMessageId!)!);
@@ -159,10 +165,10 @@ describe("交付物", () => {
       expect(labels(decision.deliverables)).toEqual(["方案", "桌面截图", "录屏"]);
     });
 
-    it("检查点卡正文的第一段是整段摘要，交棒、提交排在后面（卡片里摘要后面紧跟文件，其余收起）", () => {
+    it("检查点卡正文的第一段是整段摘要，交棒、提交排在后面（卡片里摘要后面紧跟文件，其余收起）", async () => {
       const graph = createGraph([{ key: "plan", title: "方案", confirm: true }]);
       const w = graph.nodes[0]!.activeWorkerId!;
-      runWorkerTurn(w, reportText(planFiles(), "方案好了。\n\n截图在文件里").replace("交棒: 无", "交棒: 改了卡片顺序"));
+      await runWorkerTurn(w, reportText(planFiles(), "方案好了。\n\n截图在文件里").replace("交棒: 无", "交棒: 改了卡片顺序"));
       const { lead, details } = splitLead(graphShow(graph.id).nodes[0]!.gateSummaryMd!);
       expect(lead).toBe("**摘要**：方案好了。\n截图在文件里");
       expect(details).toContain("改了卡片顺序");
@@ -171,8 +177,8 @@ describe("交付物", () => {
   });
 
   describe("hub ask --file", () => {
-    it("独立提问：副本写进 AskMeta.deliverables 和 meta.files，同一事务写进 router_items.deliverables_json", () => {
-      const r = ledger.hubCall(lin.sessionId, "ask", {
+    it("独立提问：副本写进 AskMeta.deliverables 和 meta.files，同一事务写进 router_items.deliverables_json", async () => {
+      const r = await hubWithFiles("ask", {
         text: "方案好了，请验收",
         options: ["通过", "打回"],
         files: [
@@ -194,11 +200,11 @@ describe("交付物", () => {
       expect(labels(decision.deliverables)).toEqual(["方案", "a b (1).md"]);
     });
 
-    it("带 --node：同时合进该步 artifact.deliverables", () => {
+    it("带 --node：同时合进该步 artifact.deliverables", async () => {
       const graph = createGraph([{ key: "plan", title: "方案" }, { key: "impl", title: "实现", deps: ["plan"] }]);
       const w = graph.nodes.find((n) => n.key === "plan")!.activeWorkerId!;
-      runWorkerTurn(w, reportText(`[方案](${path("docs/plan.md")})`).replace("状态: 做完了", "状态: 有问题"));
-      ledger.hubCall(lin.sessionId, "ask", {
+      await runWorkerTurn(w, reportText(`[方案](${path("docs/plan.md")})`).replace("状态: 做完了", "状态: 有问题"));
+      await hubWithFiles("ask", {
         text: "截图对吗？",
         node: "plan",
         options: ["对", "不对"],
@@ -209,22 +215,24 @@ describe("交付物", () => {
       expect(labels(askOf(messageById(node.gateAskMessageId!)!)?.deliverables)).toEqual(["桌面截图", "方案"]);
     });
 
-    it("不在可分享的文件夹里的路径：拒绝并说明原因，卡片不挂出来", () => {
+    it("不在可分享的文件夹里的路径：拒绝并说明原因，卡片不挂出来", async () => {
       const secret = join(outside, "secret.md");
-      expect(() =>
-        ledger.hubCall(lin.sessionId, "ask", { text: "看看", files: [{ label: "方案", path: path("docs/plan.md") }, { label: null, path: secret }] }),
-      ).toThrow(`--file ${secret}：不在可分享的文件夹里`);
-      expect(() => ledger.hubCall(lin.sessionId, "ask", { text: "看看", files: [{ label: null, path: path("nope.md") }] })).toThrow("没找到文件");
+      await expect(
+        hubWithFiles("ask", { text: "看看", files: [{ label: "方案", path: path("docs/plan.md") }, { label: null, path: secret }] }),
+      ).rejects.toThrow(`--file ${secret}：不在可分享的文件夹里`);
+      await expect(hubWithFiles("ask", { text: "看看", files: [{ label: null, path: path("nope.md") }] })).rejects.toThrow("没找到文件");
       expect(routerItems().filter((i) => i.kind === "decision")).toEqual([]);
       expect(db.get<{ n: number }>("SELECT count(*) AS n FROM messages WHERE json_extract(meta, '$.needsUser') = 1")!.n).toBe(0);
     });
 
-    it("带文件的卡：用户发普通消息、回答另一张卡都不关它，文件还在；了结后文件照旧挂在卡上", () => {
-      const withFiles = ledger.hubCall(lin.sessionId, "ask", {
-        text: "方案好了，请验收",
-        options: ["通过", "打回"],
-        files: [{ label: "方案", path: path("docs/plan.md") }],
-      }).data.messageId;
+    it("带文件的卡：用户发普通消息、回答另一张卡都不关它，文件还在；了结后文件照旧挂在卡上", async () => {
+      const withFiles = (
+        await hubWithFiles("ask", {
+          text: "方案好了，请验收",
+          options: ["通过", "打回"],
+          files: [{ label: "方案", path: path("docs/plan.md") }],
+        })
+      ).data.messageId;
       const plain = ledger.hubCall(lin.sessionId, "ask", { text: "用 A 还是 B？", options: ["A", "B"] }).data.messageId;
       const rowOf = (id: MessageId) =>
         db.get<{ status: string; deliverables_json: string | null }>(
@@ -246,8 +254,8 @@ describe("交付物", () => {
       expect(labels(deliverablesOf(JSON.parse(rowOf(withFiles).deliverables_json ?? "[]")))).toEqual(["方案"]);
     });
 
-    it("带文件的卡被 hub ask close 关掉：标成已关掉，文件还在卡上", () => {
-      const id = ledger.hubCall(lin.sessionId, "ask", { text: "截图对吗？", files: [{ label: "桌面截图", path: path("desktop.png") }] }).data.messageId;
+    it("带文件的卡被 hub ask close 关掉：标成已关掉，文件还在卡上", async () => {
+      const id = (await hubWithFiles("ask", { text: "截图对吗？", files: [{ label: "桌面截图", path: path("desktop.png") }] })).data.messageId;
       const item = routerItems().find((i) => i.kind === "decision" && i.askMessageId === id)!;
       ledger.hubCall(lin.sessionId, "ask.close", { itemId: item.id });
       expect(askOf(messageById(id)!)).toMatchObject({ answered: true, closed: true });
@@ -261,8 +269,8 @@ describe("交付物", () => {
   });
 
   describe("hub router report", () => {
-    it("--file 存成副本，进 deliverables，不再进 links", () => {
-      const r = ledger.hubCall(lin.sessionId, "router.report", {
+    it("--file 存成副本，进 deliverables，不再进 links", async () => {
+      const r = await hubWithFiles("router.report", {
         summary: "做完了",
         links: [{ label: "PR #1", target: "https://github.com/o/r/pull/1" }],
         files: [{ label: "验收结论", path: path("verdict.md") }, { label: "录屏", path: path("rec.mp4") }],
@@ -291,11 +299,11 @@ describe("交付物", () => {
   });
 
   describe("hub graph finish", () => {
-    it("投给总助的简报带整张图的交付物（graphDeliverables），最多 DELIVERABLES_PER_REPORT_MAX 个", () => {
+    it("投给总助的简报带整张图的交付物（graphDeliverables），最多 DELIVERABLES_PER_REPORT_MAX 个", async () => {
       const graph = createGraph([{ key: "plan", title: "方案" }, { key: "impl", title: "实现", deps: ["plan"] }]);
-      runWorkerTurn(graph.nodes.find((n) => n.key === "plan")!.activeWorkerId!, reportText(`[方案](${path("docs/plan.md")})`));
+      await runWorkerTurn(graph.nodes.find((n) => n.key === "plan")!.activeWorkerId!, reportText(`[方案](${path("docs/plan.md")})`));
       const impl = graphShow(graph.id).nodes.find((n) => n.key === "impl")!;
-      runWorkerTurn(impl.activeWorkerId!, reportText(`[验收结论](${path("verdict.md")}) [录屏](${path("rec.mp4")}) [方案](${path("docs/plan.md")})`));
+      await runWorkerTurn(impl.activeWorkerId!, reportText(`[验收结论](${path("verdict.md")}) [录屏](${path("rec.mp4")}) [方案](${path("docs/plan.md")})`));
       const r = ledger.hubCall(lin.sessionId, "graph.finish", { graphId: graph.id, summary: "交付物做完了", unmergedOk: true });
       expect(r.text).toBeTruthy();
       const report = routerItems().find((i) => i.kind === "report");
@@ -305,14 +313,14 @@ describe("交付物", () => {
   });
 
   describe("快照体积", () => {
-    it("全量快照里只有等用户拍板的步骤带 artifact.deliverables，单图详情都带", () => {
+    it("全量快照里只有等用户拍板的步骤带 artifact.deliverables，单图详情都带", async () => {
       const graph = createGraph([
         { key: "plan", title: "方案" },
         { key: "verify", title: "验收", confirm: true, deps: ["plan"] },
       ]);
-      runWorkerTurn(graph.nodes.find((n) => n.key === "plan")!.activeWorkerId!, reportText(`[方案](${path("docs/plan.md")})`));
+      await runWorkerTurn(graph.nodes.find((n) => n.key === "plan")!.activeWorkerId!, reportText(`[方案](${path("docs/plan.md")})`));
       const verify = graphShow(graph.id).nodes.find((n) => n.key === "verify")!;
-      runWorkerTurn(verify.activeWorkerId!, reportText(`[验收结论](${path("verdict.md")})`));
+      await runWorkerTurn(verify.activeWorkerId!, reportText(`[验收结论](${path("verdict.md")})`));
       const slim = snapshotGraph(graph.id);
       expect(slim.nodes.find((n) => n.key === "plan")!.artifact?.deliverables).toBeUndefined();
       expect(slim.nodes.find((n) => n.key === "plan")!.artifact?.summary).toBe("做好了");

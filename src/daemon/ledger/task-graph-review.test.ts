@@ -129,7 +129,8 @@ describe("审查步骤只查不修", () => {
   const sessionOf = (workerId: WorkerId) =>
     db.get<{ id: number; conversation_id: number }>("SELECT id, conversation_id FROM agent_sessions WHERE worker_id = ? ORDER BY generation DESC LIMIT 1", workerId)!;
 
-  const reportTurn = (workerId: WorkerId, text: string) => {
+  /** Worker 交一轮汇报；等账本把这几条事件落完（汇报里的文件要先存副本）。 */
+  const reportTurn = async (workerId: WorkerId, text: string) => {
     const s = sessionOf(workerId);
     const input = db.get<{ id: number }>("SELECT id FROM messages WHERE conversation_id = ? AND sender IN ('pm', 'user') ORDER BY id DESC LIMIT 1", s.conversation_id)!;
     createSessionStore(db).update(s.id, { status: "running", pid: 40_000 + workerId });
@@ -137,6 +138,7 @@ describe("审查步骤只查不修", () => {
     ledger.applyDriverEvent(s.id, { type: "message.processing", messageIds: [input.id], at: ++now });
     ledger.applyDriverEvent(s.id, { type: "agent.text", uuid: `u-${workerId}-${++now}`, text, at: now });
     ledger.applyDriverEvent(s.id, { type: "turn.ended", ok: true, interrupted: false, messageIds: [input.id], durationMs: 5, at: ++now });
+    await ledger.settleDriverEvents();
     createSessionStore(db).update(s.id, { status: "ended", pid: null });
   };
 
@@ -171,7 +173,7 @@ describe("审查步骤只查不修", () => {
     git(impl.worktree_path, "commit", "-am", "fix");
     git(impl.worktree_path, "push", "origin", impl.branch!);
     const sha = git(impl.worktree_path, "rev-parse", "HEAD");
-    reportTurn(wImpl, report({ summary: "修好了" }));
+    await reportTurn(wImpl, report({ summary: "修好了" }));
     const wReview = graphNow(graph.id).nodes[1]!.activeWorkerId!;
     await runWorktreeCreate(wReview);
     enqueued.length = 0;
@@ -196,7 +198,7 @@ describe("审查步骤只查不修", () => {
 
   it("判 FAIL：停在 waiting:pm，复现原样交给项目经理，审查 Worker 不收工、下游不开工", async () => {
     const { graph, wReview, sha } = await startReview();
-    reportTurn(wReview, report({ status: "有问题", summary: "游标越界", verdict: "FAIL", sha, questions: "复现：pnpm vitest run a.test.ts，第 2 页重复" }));
+    await reportTurn(wReview, report({ status: "有问题", summary: "游标越界", verdict: "FAIL", sha, questions: "复现：pnpm vitest run a.test.ts，第 2 页重复" }));
     const g = graphNow(graph.id);
     expect(g.nodes.map(stateOf)).toEqual(["done", "waiting:pm", "pending"]);
     expect(enqueued.some((a) => a.type === "review.verify")).toBe(false);
@@ -208,7 +210,7 @@ describe("审查步骤只查不修", () => {
 
   it("判 PASS：先登记收尾核对，步骤保持在干；被审分支没变才完成，下游接手实现的目录和分支", async () => {
     const { graph, wReview, impl, sha } = await startReview();
-    reportTurn(wReview, report({ summary: "可以合", verdict: "PASS", sha }));
+    await reportTurn(wReview, report({ summary: "可以合", verdict: "PASS", sha }));
     expect(graphNow(graph.id).nodes.map(stateOf)).toEqual(["done", "running", "pending"]);
     expect(workerRow(wReview).status).toBe("open");
     await runVerify();
@@ -226,7 +228,7 @@ describe("审查步骤只查不修", () => {
 
   it("判 PASS+NOTES：核对通过后完成，意见抄送项目经理", async () => {
     const { graph, wReview, sha } = await startReview();
-    reportTurn(wReview, report({ summary: "可以合", verdict: "pass + notes", sha: sha.slice(0, 8), questions: "a.ts 的命名可以再统一" }));
+    await reportTurn(wReview, report({ summary: "可以合", verdict: "pass + notes", sha: sha.slice(0, 8), questions: "a.ts 的命名可以再统一" }));
     await runVerify();
     expect(graphNow(graph.id).nodes.map(stateOf)).toEqual(["done", "done", "running"]);
     expect(pmTexts().some((t) => t.includes("a.ts 的命名可以再统一"))).toBe(true);
@@ -234,12 +236,12 @@ describe("审查步骤只查不修", () => {
 
   it("没写结论、验证提交对不上：停在 waiting:pm，不核对", async () => {
     const { graph, wReview, sha } = await startReview();
-    reportTurn(wReview, report({ summary: "看完了" }));
+    await reportTurn(wReview, report({ summary: "看完了" }));
     expect(graphNow(graph.id).nodes.map(stateOf)).toEqual(["done", "waiting:pm", "pending"]);
     expect(pmTexts()[0]).toContain("审查没写“结论”或写错了");
     enqueued.length = 0;
     ledger.hubCall(lin.sessionId, "worker.send", { workerId: wReview, text: "补上结论" });
-    reportTurn(wReview, report({ summary: "可以合", verdict: "PASS", sha: "deadbeef" }));
+    await reportTurn(wReview, report({ summary: "可以合", verdict: "PASS", sha: "deadbeef" }));
     expect(stateOf(graphNow(graph.id).nodes[1]!)).toBe("waiting:pm");
     expect(enqueued.some((a) => a.type === "review.verify")).toBe(false);
     expect(pmTexts().at(-1)).toContain(`“验证提交”写的是 deadbeef，被审的是分支`);
@@ -253,7 +255,7 @@ describe("审查步骤只查不修", () => {
     git(reviewDir, "commit", "-am", "reviewer fix");
     git(reviewDir, "push", "--no-verify", "origin", `HEAD:refs/heads/${impl.branch}`);
     const pushed = git(reviewDir, "rev-parse", "HEAD");
-    reportTurn(wReview, report({ summary: "可以合", verdict: "PASS", sha }));
+    await reportTurn(wReview, report({ summary: "可以合", verdict: "PASS", sha }));
     await runVerify();
     expect(graphNow(graph.id).nodes.map(stateOf)).toEqual(["done", "waiting:pm", "pending"]);
     expect(workerRow(wReview).status).toBe("open");
@@ -264,7 +266,7 @@ describe("审查步骤只查不修", () => {
 
   it("收尾核对重试用完还没跑成：当成核对失败，停在 waiting:pm", async () => {
     const { graph, wReview, sha } = await startReview();
-    reportTurn(wReview, report({ summary: "可以合", verdict: "PASS", sha }));
+    await reportTurn(wReview, report({ summary: "可以合", verdict: "PASS", sha }));
     const verify = enqueued.find((a) => a.type === "review.verify")!;
     enqueued.length = 0;
     ledger.onActionFailed(verify, "git ls-remote 失败：Could not resolve host");
@@ -311,20 +313,20 @@ describe("审查步骤只查不修", () => {
     expect(git(row.worktree_path, "rev-parse", "HEAD")).toBe(sha);
     enqueued.length = 0;
 
-    reportTurn(w, report({ summary: "可以合", verdict: "PASS" }));
+    await reportTurn(w, report({ summary: "可以合", verdict: "PASS" }));
     expect(stateOf(graphNow(graph.id).nodes[0]!)).toBe("waiting:pm");
     expect(enqueued.some((a) => a.type === "review.verify")).toBe(false);
     expect(pmTexts()[0]).toContain("“验证提交”写的是 （没写）");
   });
 
-  it("上一步在主文件夹里干活：审查步骤不开工，停在 waiting:pm 并写明找不到被审分支", () => {
+  it("上一步在主文件夹里干活：审查步骤不开工，停在 waiting:pm 并写明找不到被审分支", async () => {
     const graph = createGraph([
       { key: "impl", title: "实现" },
       { key: "review", title: "独立审查", brief: "重点看边界", review: true },
     ]);
     const wImpl = ledger.hubCall(lin.sessionId, "worker.start", { node: "impl", graphId: graph.id, task: "修好翻页", noWorktree: true }).data.worker.id;
     enqueued.length = 0;
-    reportTurn(wImpl, report({ summary: "修好了" }));
+    await reportTurn(wImpl, report({ summary: "修好了" }));
     const g = graphNow(graph.id);
     expect(g.nodes.map(stateOf)).toEqual(["done", "waiting:pm"]);
     expect(g.nodes[1]!.workerIds).toEqual([]);
@@ -333,14 +335,14 @@ describe("审查步骤只查不修", () => {
 
   it("审查步骤用 --no-worktree 派活直接拒绝", async () => {
     const { graph, wReview, sha } = await startReview();
-    reportTurn(wReview, report({ status: "有问题", summary: "游标越界", verdict: "FAIL", sha }));
+    await reportTurn(wReview, report({ status: "有问题", summary: "游标越界", verdict: "FAIL", sha }));
     expect(() => ledger.hubCall(lin.sessionId, "worker.start", { node: "review", graphId: graph.id, noWorktree: true })).toThrow(/审查/);
     expect(workerRow(wReview).status).toBe("open");
   });
 
   it("验证提交写成行内代码、带句号也认；步骤产物记下结论和验证的提交号", async () => {
     const { graph, wReview, sha } = await startReview();
-    reportTurn(wReview, report({ summary: "可以合", verdict: "PASS", sha: `\`${sha.slice(0, 8)}\`。` }));
+    await reportTurn(wReview, report({ summary: "可以合", verdict: "PASS", sha: `\`${sha.slice(0, 8)}\`。` }));
     await runVerify();
     const node = graphNow(graph.id).nodes[1]!;
     expect(stateOf(node)).toBe("done");
@@ -352,7 +354,7 @@ describe("审查步骤只查不修", () => {
     const { graph, wReview, sha } = await startReview({ confirm: true });
     const verdictPath = join(workerRow(wReview).worktree_path, "verdict.md");
     writeFileSync(verdictPath, "# 审查结论\nPASS\n");
-    reportTurn(wReview, report({ summary: "可以合", verdict: "PASS", sha, files: `\n- [审查结论](${verdictPath})` }));
+    await reportTurn(wReview, report({ summary: "可以合", verdict: "PASS", sha, files: `\n- [审查结论](${verdictPath})` }));
     expect(stateOf(graphNow(graph.id).nodes[1]!)).toBe("running");
     await runVerify();
     const node = graphNow(graph.id).nodes[1]!;
@@ -365,7 +367,7 @@ describe("审查步骤只查不修", () => {
 
   it("判 FAIL 后项目经理在审查后面加修复步骤：修复步骤接手实现的 worktree 和分支，不接审查目录", async () => {
     const { graph, wReview, impl, sha } = await startReview();
-    reportTurn(wReview, report({ status: "有问题", summary: "游标越界", verdict: "FAIL", sha, questions: "复现见上" }));
+    await reportTurn(wReview, report({ status: "有问题", summary: "游标越界", verdict: "FAIL", sha, questions: "复现见上" }));
     ledger.hubCall(lin.sessionId, "worker.end", { workerId: wReview });
     ledger.hubCall(lin.sessionId, "graph.done", { graphId: graph.id, nodeKey: "review" });
     const g = graphNow(graph.id);

@@ -13,6 +13,8 @@ import {
   type Ledger,
   type SessionId,
 } from "../../shared/index.ts";
+import type { HubFileArg } from "../../shared/deliverables.ts";
+import type { SentFile } from "../../shared/sent-files.ts";
 
 export interface FakeHubCall {
   sessionId: SessionId;
@@ -20,7 +22,9 @@ export interface FakeHubCall {
   args: unknown;
 }
 
-export class FakeHubLedger implements Pick<Ledger, "hubCall" | "sessionRole" | "reportHealth" | "workerStartFolder" | "workerPrTarget" | "graphPrTargets" | "workerTranscriptTarget"> {
+export class FakeHubLedger
+  implements Pick<Ledger, "hubCall" | "sessionRole" | "reportHealth" | "workerStartFolder" | "workerPrTarget" | "graphPrTargets" | "workerTranscriptTarget" | "shareHubFiles">
+{
   readonly calls: FakeHubCall[] = [];
   /** 每次 hubCall 收到的 context（和 calls 一一对应）。 */
   readonly contexts: HubCallContext[] = [];
@@ -74,6 +78,14 @@ export class FakeHubLedger implements Pick<Ledger, "hubCall" | "sessionRole" | "
 
   graphPrTargets(_sessionId: SessionId, _graphId?: number): GraphPrTarget[] {
     return this.graphTargets;
+  }
+
+  /** 每次 shareHubFiles 收到的路径；返回的副本一律算存好了。 */
+  readonly sharedFileCalls: { sessionId: SessionId; paths: string[] }[] = [];
+
+  async shareHubFiles(sessionId: SessionId, args: readonly HubFileArg[]): Promise<SentFile[]> {
+    this.sharedFileCalls.push({ sessionId, paths: args.map((a) => a.path) });
+    return args.map((a, i) => ({ href: a.path, path: a.path, name: `f${i}`, mime: "application/octet-stream", id: `${i}`.padStart(16, "0"), size: 0, status: "saved", mtime: 0 }));
   }
 
   reportHealth(module: HealthModule, error: string | null): void {

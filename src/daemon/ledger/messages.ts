@@ -13,13 +13,12 @@ import { ConversationNotFoundError } from "../../shared/ledger.ts";
 import type { ComposerTarget, PostUserMessageInput, PostUserMessageResult } from "../../shared/ledger.ts";
 import { DELIVERABLES_PER_CARD_MAX, MESSAGE_PAGE_SIZE, REWIND_SCAN_LIMIT } from "../../shared/limits.ts";
 import { findRewindableMessage } from "../../shared/rewind.ts";
-import type { SentFile } from "../../shared/sent-files.ts";
+import type { AgentTextMeta, SentFile } from "../../shared/sent-files.ts";
 import { deliverablesOfFileArgs } from "../deliverables.ts";
 import { fail } from "./context.ts";
 import type { LedgerContext, Pending } from "./context.ts";
 import { WEB_MESSAGE_COLUMNS, toMessage } from "./rows.ts";
 import type { MessageDbRow } from "./rows.ts";
-import type { LedgerSentFiles } from "./sent-files.ts";
 import { clearStreaming, idle, toolStarted, working } from "./sessions.ts";
 import { isPathInsideOrEqual } from "../platform/index.ts";
 import { getAgentSession } from "../store/index.ts";
@@ -70,7 +69,6 @@ export interface LedgerMessagesOptions {
 export function createLedgerMessages(
   ctx: LedgerContext,
   sessions: LedgerSessions,
-  sentFiles: LedgerSentFiles,
   options: LedgerMessagesOptions = {},
 ) {
   const assertUserCanPost = options.assertUserCanPost ?? (() => {});
@@ -296,7 +294,8 @@ export function createLedgerMessages(
     if (liveOf(sessionId).rateLimitReported !== true) sessions.dropRateLimitRejection(p, sessionId);
   };
 
-  const applyEvent = (p: Pending, session: AgentSessionRow, event: DriverEvent) => {
+  /** textMeta：agent.text 在开事务之前已经存好的副本（ledger.ts 的 applyDriverEvent 先 await 再进事务）；没有本机链接的是 null。 */
+  const applyEvent = (p: Pending, session: AgentSessionRow, event: DriverEvent, textMeta: AgentTextMeta | null = null) => {
     const sessionId = session.id;
     switch (event.type) {
       case "session.started":
@@ -363,9 +362,9 @@ export function createLedgerMessages(
         return;
       case "agent.text": {
         const dedupeKey = agentMessageDedupeKey(sessionId, event.uuid);
-        // 回复里指向本机文件的链接：发出时存副本，meta 记 files（AgentTextMeta）。重放的同一条消息已经入过库，不再碰文件
+        // 回复里指向本机文件的链接：副本在进事务之前存好，meta 记 files（AgentTextMeta）。重放的同一条消息已经入过库，不用它
         const replayed = db.get("SELECT 1 AS x FROM messages WHERE dedupe_key = ?", dedupeKey) !== undefined;
-        const meta = replayed || session.conversationId === null ? null : sentFiles.metaFor(session, event.text);
+        const meta = replayed || session.conversationId === null ? null : textMeta;
         insertAgentMessage(p, session, { kind: "text", text: event.text, meta, dedupeKey });
         updateLive(p, sessionId, (l) => {
           if (event.parentToolUseId === undefined) clearStreaming(l);

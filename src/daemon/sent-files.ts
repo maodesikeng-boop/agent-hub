@@ -3,6 +3,7 @@
 // 副本编号 = hash(文件名 + 内容)：同一个文件多次发（不同消息、不同会话、重启后重放）只存一份，元数据各记各的；内容变了另存一份。
 // 只分享允许的文件夹里的普通文件（isShareable），先 realpath 再比对；打开后 fstat 确认，再从同一个文件句柄拷贝，防检查后被换掉。
 // （Node 24 在 macOS 上的 COPYFILE_FICLONE 实际不克隆、FICLONE_FORCE 报 ENOSYS，而且按路径拷会重新打开文件，所以直接从句柄拷。）
+// 拷贝和 sha256 用 fs/promises 分块异步做（单个最多 MAX_SENT_FILE_BYTES），调用方在开 SQLite 写事务之前等它做完，事务里只写结果。
 //
 // 哪些链接算“发文件”（不算的不进 meta.files，网页照原样显示）：
 // - 路径存在、是普通文件：算。在可分享的文件夹里就存副本（太大的不存），不在就写“不在可分享的文件夹里”；
@@ -10,22 +11,8 @@
 // - 路径不存在：用绝对路径（/、file://、~/）写的、而且落在可分享的文件夹里，写“没找到文件”；别的（/login 这种站内链接、
 //   不存在的相对路径）不算。
 import { createHash, randomBytes } from "node:crypto";
-import {
-  closeSync,
-  fstatSync,
-  futimesSync,
-  lstatSync,
-  mkdirSync,
-  openSync,
-  readSync,
-  readdirSync,
-  realpathSync,
-  rmSync,
-  statSync,
-  utimesSync,
-  writeSync,
-  type Stats,
-} from "node:fs";
+import { mkdirSync, readdirSync, realpathSync, rmSync, type Stats } from "node:fs";
+import { lstat, mkdir, open, realpath, rm, stat as statAsync, utimes, type FileHandle } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
@@ -51,8 +38,8 @@ import { resolveUpload, sanitizeFileName } from "./uploads.ts";
 import {
   isPathInsideOrEqual,
   normalizePathForComparison,
-  openRegularFileNoFollowSync,
-  renameSyncWithWindowsRetry,
+  openRegularFileNoFollow,
+  renameWithWindowsRetry,
 } from "./platform/index.ts";
 
 /**
@@ -170,26 +157,26 @@ function absolutePathOf(local: LocalHref, scope: Pick<ShareScope, "cwd" | "userH
 const sameFile = (a: Stats, b: Stats) => a.dev === b.dev && a.ino === b.ino;
 
 /**
- * 从句柄拷最多 stat.size 个字节到新文件（不存在才建，0600），边拷边算 sha256，修改时间设成原文件的。
+ * 从句柄分块拷最多 stat.size 个字节到新文件（不存在才建，0600），边拷边算 sha256，修改时间设成原文件的。
  * 拷的时候源文件被截断，就拷到读不出为止：返回实际拷到的字节数。
  */
-export function copyFromFd(fd: number, stat: Stats, dest: string): { bytes: number; sha256: string } {
-  const out = openSync(dest, "wx", 0o600);
+export async function copyFromHandle(source: FileHandle, stat: Stats, dest: string): Promise<{ bytes: number; sha256: string }> {
+  const out = await open(dest, "wx", 0o600);
   const hash = createHash("sha256");
   let position = 0;
   try {
     const buffer = Buffer.allocUnsafe(Math.min(SENT_FILE_COPY_CHUNK_BYTES, Math.max(1, stat.size)));
     while (position < stat.size) {
-      const n = readSync(fd, buffer, 0, Math.min(buffer.length, stat.size - position), position);
-      if (n === 0) break;
-      hash.update(buffer.subarray(0, n));
+      const { bytesRead } = await source.read(buffer, 0, Math.min(buffer.length, stat.size - position), position);
+      if (bytesRead === 0) break;
+      hash.update(buffer.subarray(0, bytesRead));
       let written = 0;
-      while (written < n) written += writeSync(out, buffer, written, n - written);
-      position += n;
+      while (written < bytesRead) written += (await out.write(buffer, written, bytesRead - written)).bytesWritten;
+      position += bytesRead;
     }
-    futimesSync(out, stat.atime, stat.mtime);
+    await out.utimes(stat.atime, stat.mtime);
   } finally {
-    closeSync(out);
+    await out.close();
   }
   return { bytes: position, sha256: hash.digest("hex") };
 }
@@ -214,67 +201,83 @@ function existingPathOf(href: string, local: LocalHref, scope: Pick<ShareScope, 
   return path;
 }
 
+async function realOrNullAsync(path: string): Promise<string | null> {
+  try {
+    return await realpath(path);
+  } catch {
+    return null;
+  }
+}
+
 /** 处理一个链接：判断、开、拷。budget 是这条消息还能拷多少字节。 */
-function shareOne(path: string, local: LocalHref, name: string, budget: number, scope: ShareScope, sensitive: readonly string[]): Outcome {
-  const real = realOrNull(path);
+async function shareOne(path: string, local: LocalHref, name: string, budget: number, scope: ShareScope, sensitive: readonly string[]): Promise<Outcome> {
+  const real = await realOrNullAsync(path);
   if (real === null) return local.kind !== "relative" && isShareable(looseRealpath(path), scope, sensitive) ? reject("missing") : { status: "skip" };
   let before: Stats;
   try {
-    before = statSync(real);
+    before = await statAsync(real);
   } catch {
     return { status: "skip" };
   }
   if (!isShareable(real, scope, sensitive)) return before.isFile() ? reject("not_allowed") : { status: "skip" };
   if (!before.isFile()) return reject("not_file", before);
-  let fd: number;
+  let handle: FileHandle;
   try {
-    fd = openRegularFileNoFollowSync(real, { nonBlock: true });
+    handle = await openRegularFileNoFollow(real, { nonBlock: true });
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     return reject(code === "ENOENT" ? "missing" : code === "ELOOP" ? "not_allowed" : "unreadable");
   }
   try {
-    const stat = fstatSync(fd);
+    const stat = await handle.stat();
     if (!stat.isFile()) return reject("not_file", stat);
     // 打开的必须还是检查过的那个文件：检查和 open 之间路径被换掉的，当不在允许的文件夹里
-    const currentReal = realOrNull(real);
+    const currentReal = await realOrNullAsync(real);
     if (
       currentReal === null ||
       normalizePathForComparison(currentReal) !== normalizePathForComparison(real) ||
       !sameFile(before, stat) ||
-      !sameFile(lstatSync(real), stat)
+      !sameFile(await lstat(real), stat)
     ) {
       return reject("not_allowed");
     }
     if (stat.size > MAX_SENT_FILE_BYTES || stat.size > budget) return reject("too_large", stat);
     const partial = join(scope.sentFilesDir, `${PARTIAL_PREFIX}${randomBytes(8).toString("hex")}`);
     try {
-      mkdirSync(partial, { mode: 0o700 });
-      const copied = copyFromFd(fd, stat, join(partial, name));
+      await mkdir(partial, { mode: 0o700 });
+      const copied = await copyFromHandle(handle, stat, join(partial, name));
       const id = sentFileId(name, copied.sha256);
       // 同样的文件已经存过（别的消息发过、重放）：用那一份，这一份扔掉
       if (resolveUpload(scope.sentFilesDir, id) !== null) {
-        rmSync(partial, { recursive: true, force: true });
+        await rm(partial, { recursive: true, force: true });
         // 命中已有副本：刷新目录修改时间，刚发过的不会被定期清理（file-cleanup.ts）删掉
         const now = new Date();
-        utimesSync(join(scope.sentFilesDir, id), now, now);
-      } else renameSyncWithWindowsRetry(partial, join(scope.sentFilesDir, id));
+        await utimes(join(scope.sentFilesDir, id), now, now);
+      } else await renameWithWindowsRetry(partial, join(scope.sentFilesDir, id));
       return { status: "saved", id, size: copied.bytes, mtime: stat.mtimeMs };
     } catch (error) {
-      rmSync(partial, { recursive: true, force: true });
+      await rm(partial, { recursive: true, force: true });
       console.error(`${LOG_PREFIX} sent file copy failed: ${path}:`, error);
       return reject("unreadable", stat);
     }
   } finally {
-    closeSync(fd);
+    await handle.close();
   }
 }
 
+/** 回复里写成本机路径的链接（shared/sent-files.ts 的 localLinksOf：代码块里的不算、同一个地址只算一次）。只解析 Markdown，不碰文件。 */
+export function localLinksIn(text: string): LocalLink[] {
+  if (!text.includes("](") && !text.includes("<")) return [];
+  return localLinksOf(markdown.parse(text) as MdNode, text);
+}
+
+export type LocalLink = { href: string; local: LocalHref };
+
 /**
- * 按文件头的规则逐个判断、存副本，收满 MAX_SENT_FILES_PER_MESSAGE 个为止。
+ * 按文件头的规则逐个判断、存副本，收满 MAX_SENT_FILES_PER_MESSAGE 个为止。一个一个拷（预算按前面实际拷到的算）。
  * strict 是 false（回复里的链接）：不算发文件的不进结果、不占名额；strict 是 true（--file 指名要发的）：也记一项，写清为什么没存。
  */
-function shareLinks(links: readonly { href: string; local: LocalHref }[], scope: ShareScope, strict: boolean): SentFile[] {
+async function shareLinks(links: readonly LocalLink[], scope: ShareScope, strict: boolean): Promise<SentFile[]> {
   const files: SentFile[] = [];
   let used = 0;
   // 敏感清单这条消息里只 realpath 一次（不跨消息缓存：符号链接、主目录随时可能变）
@@ -285,8 +288,8 @@ function shareLinks(links: readonly { href: string; local: LocalHref }[], scope:
     const name = sanitizeFileName(basename(path));
     let outcome: Outcome;
     try {
-      mkdirSync(scope.sentFilesDir, { recursive: true, mode: 0o700 });
-      outcome = shareOne(path, local, name, MAX_SENT_FILES_TOTAL_BYTES - used, scope, sensitive);
+      await mkdir(scope.sentFilesDir, { recursive: true, mode: 0o700 });
+      outcome = await shareOne(path, local, name, MAX_SENT_FILES_TOTAL_BYTES - used, scope, sensitive);
     } catch (error) {
       console.error(`${LOG_PREFIX} sent file failed: ${path}:`, error);
       outcome = reject("unreadable");
@@ -307,13 +310,11 @@ function shareLinks(links: readonly { href: string; local: LocalHref }[], scope:
 }
 
 /**
- * 找出回复里写成本机路径的链接（shared/sent-files.ts 的 localLinksOf：代码块里的不算、同一个地址只算一次），
- * 按文件头的规则逐个判断、存副本。返回 meta.files；一个都不算返回空数组。不抛错：单个文件出错记成 unreadable。
+ * 回复里的本机文件链接（localLinksIn 解析出的）按文件头的规则逐个判断、存副本。返回 meta.files；一个都不算返回空数组。
+ * 不抛错：单个文件出错记成 unreadable。
  */
-export function shareLinkedFiles(text: string, scope: ShareScope): SentFile[] {
-  if (!text.includes("](") && !text.includes("<")) return [];
-  const links = localLinksOf(markdown.parse(text) as MdNode, text);
-  if (links.length === 0) return [];
+export function shareLinkedFiles(links: readonly LocalLink[], scope: ShareScope): Promise<SentFile[]> {
+  if (links.length === 0) return Promise.resolve([]);
   return shareLinks(links, scope, false);
 }
 
@@ -323,7 +324,7 @@ const WIN_ABSOLUTE = /^(?:[A-Za-z]:[\\/]|\\\\)/;
  * hub ask / router report 的 --file：路径原样（不当 Markdown、不做 %xx 解码）按同一套规则存副本。
  * 后置：结果和 paths 一一对应、顺序相同；没存下的写明原因（没找到、不在可分享的文件夹里……）。不抛错。
  */
-export function shareFilePaths(paths: readonly string[], scope: ShareScope): SentFile[] {
+export function shareFilePaths(paths: readonly string[], scope: ShareScope): Promise<SentFile[]> {
   const links = paths.map((path) => ({
     href: path,
     local: { kind: isAbsolute(path) || WIN_ABSOLUTE.test(path) ? "absolute" : "relative", path } as LocalHref,

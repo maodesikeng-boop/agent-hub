@@ -16,11 +16,16 @@
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { LedgerSnapshot } from "../../shared/api.ts";
+import { agentMessageDedupeKey } from "../../shared/domain.ts";
 import type { Pm, PmId, SessionId, WorkerId } from "../../shared/domain.ts";
+import type { DriverEvent } from "../../shared/driver.ts";
 import type { CreatePmInput, CreatePmResult, Ledger, ResolveFolder } from "../../shared/ledger.ts";
 import { deliveryParts } from "../../shared/worker.ts";
 import { waitingAsksNote } from "../../shared/waiting-asks.ts";
 import { WORKER_PURGE_BATCH_ROWS } from "../../shared/limits.ts";
+import { LOG_PREFIX } from "../../shared/names.ts";
+import type { AgentTextMeta } from "../../shared/sent-files.ts";
+import type { LocalLink } from "../sent-files.ts";
 import { getAgentSession } from "../store/index.ts";
 import type { Db } from "../store/index.ts";
 import { createLedgerContext } from "./context.ts";
@@ -184,7 +189,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   });
   // Worker 收工、还没开工时用户不能往它的对话里发（workers.ts）；已归档的项目经理也不收
   // 用户发了消息、项目经理正在本会话写交接：停掉那一轮（handover.ts；handover 在下面建，这里只在调用时用）
-  const messages = createLedgerMessages(ctx, sessions, sentFiles, {
+  const messages = createLedgerMessages(ctx, sessions, {
     assertUserCanPost: (id) => {
       persona.assertConversationNotArchived(id);
       assertWorkerOpenForUser(db, id);
@@ -250,7 +255,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     turnMaxTimeOf: workers.turnMaxTimeOf,
     isWorktreeCleaned: workers.isWorktreeCleaned,
   });
-  const hub = createLedgerHubCommands(ctx, persona, projects, workers, messages, schedules, workerView, router, taskGraphs, sentFiles, taskGraphManual);
+  const hub = createLedgerHubCommands(ctx, persona, projects, workers, messages, schedules, workerView, router, taskGraphs, taskGraphManual);
   const launch = createLedgerLaunchContext(db, persona, projects, workers);
   const pmCapabilities = createLedgerPmCapabilities(ctx);
 
@@ -271,6 +276,48 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       }
       return { ...created, project };
     });
+
+  /**
+   * 同一会话还没落库的驱动事件链：前面有一条 agent.text 在异步存副本时，后来的事件都排在它后面，按到达顺序进事务
+   * （回复、这一轮结束、汇报给项目经理的先后不变）。落完就从表里删掉，表里只有正在拷文件的会话。
+   */
+  const pendingDriverEvents = new Map<SessionId, Promise<void>>();
+
+  // Worker 的会话这一轮结束：同一个事务里给项目经理发那一行（workers.ts）；项目经理写完交接：同一个事务里换代（handover.ts）
+  const applyDriverEventNow = (sessionId: SessionId, event: DriverEvent, textMeta: AgentTextMeta | null) => {
+    if (event.type === "agent.text_delta") {
+      if (event.parentToolUseId !== undefined) return;
+      const session = getAgentSession(db, sessionId);
+      if (session !== null && session.role !== "assistant") sessions.applyStreamingDelta(session, event.delta, event.reset);
+      return;
+    }
+    if (event.type === "agent.tool_preview") {
+      if (event.parentToolUseId !== undefined) return;
+      const session = getAgentSession(db, sessionId);
+      if (session !== null) sessions.applyToolPreview(session, event);
+      return;
+    }
+    const session = getAgentSession(db, sessionId);
+    if (session === null || session.role === "assistant") return;
+    write((p) => {
+      messages.applyEvent(p, session, event, textMeta);
+      turnReplies.afterDriverEvent(p, session, event);
+      steps.afterDriverEvent(session, event);
+      loadedSkills.afterDriverEvent(session, event);
+      workers.afterDriverEvent(p, session, event);
+      handover.afterDriverEvent(p, session, event);
+      schedules.afterDriverEvent(p, event);
+      projectCatalog.afterDriverEvent(p, session, event);
+    });
+  };
+
+  /** 进事务之前给 agent.text 里的本机链接存副本；会话没了、不记对话、重放过的这条不碰文件。 */
+  const textMetaFor = async (sessionId: SessionId, event: Extract<DriverEvent, { type: "agent.text" }>, links: readonly LocalLink[]) => {
+    const session = getAgentSession(db, sessionId);
+    if (session === null || session.role === "assistant" || session.conversationId === null) return null;
+    if (db.get("SELECT 1 AS x FROM messages WHERE dedupe_key = ?", agentMessageDedupeKey(sessionId, event.uuid)) !== undefined) return null;
+    return sentFiles.metaFor(session, links);
+  };
 
   return {
     postUserMessage: messages.postUserMessage,
@@ -319,32 +366,31 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     onStopRequested: (listener) => subscribe(stopListeners, listener),
     onActionEnqueued: (listener) => subscribe(actionListeners, listener),
 
-    // Worker 的会话这一轮结束：同一个事务里给项目经理发那一行（workers.ts）；项目经理写完交接：同一个事务里换代（handover.ts）
     applyDriverEvent(sessionId, event) {
-      if (event.type === "agent.text_delta") {
-        if (event.parentToolUseId !== undefined) return;
-        const session = getAgentSession(db, sessionId);
-        if (session !== null && session.role !== "assistant") sessions.applyStreamingDelta(session, event.delta, event.reset);
+      const pending = pendingDriverEvents.get(sessionId);
+      const links = event.type === "agent.text" ? sentFiles.localLinks(event.text) : [];
+      if (pending === undefined && links.length === 0) {
+        applyDriverEventNow(sessionId, event, null);
         return;
       }
-      if (event.type === "agent.tool_preview") {
-        if (event.parentToolUseId !== undefined) return;
-        const session = getAgentSession(db, sessionId);
-        if (session !== null) sessions.applyToolPreview(session, event);
-        return;
-      }
-      const session = getAgentSession(db, sessionId);
-      if (session === null || session.role === "assistant") return;
-      write((p) => {
-        messages.applyEvent(p, session, event);
-        turnReplies.afterDriverEvent(p, session, event);
-        steps.afterDriverEvent(session, event);
-        loadedSkills.afterDriverEvent(session, event);
-        workers.afterDriverEvent(p, session, event);
-        handover.afterDriverEvent(p, session, event);
-        schedules.afterDriverEvent(p, event);
-        projectCatalog.afterDriverEvent(p, session, event);
+      // 这条回复要存副本（异步拷文件），或者同一会话前面还有没落库的：排在后面，拷完、前面的落完再进事务
+      const textMeta = async () => (event.type === "agent.text" && links.length > 0 ? textMetaFor(sessionId, event, links) : null);
+      const next = (pending ?? Promise.resolve())
+        .then(async () => applyDriverEventNow(sessionId, event, await textMeta()))
+        .catch((error: unknown) => {
+          console.error(`${LOG_PREFIX} driver event ${event.type} (session ${sessionId}):`, error);
+        });
+      pendingDriverEvents.set(sessionId, next);
+      void next.then(() => {
+        if (pendingDriverEvents.get(sessionId) === next) pendingDriverEvents.delete(sessionId);
       });
+    },
+    async settleDriverEvents() {
+      while (pendingDriverEvents.size > 0) await Promise.all([...pendingDriverEvents.values()]);
+    },
+    async shareHubFiles(sessionId, args) {
+      const session = getAgentSession(db, sessionId);
+      return session === null ? [] : sentFiles.filesForArgs(session, args);
     },
     refreshSessionState: sessions.refreshSessionState,
     // 消息的重发（sessions.ts），再把还没开工的 worktree Worker 重新登记建 worktree（workers.ts：准备命令被关机打断的从头再跑），
