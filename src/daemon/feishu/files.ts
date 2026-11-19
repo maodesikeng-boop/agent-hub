@@ -12,7 +12,7 @@
 import { randomUUID } from "node:crypto";
 import { rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { Readable } from "node:stream";
+import type { Readable } from "node:stream";
 import { extname, join } from "node:path";
 import type { MessageId } from "../../shared/domain.ts";
 import { isImageMime, type Attachment } from "../../shared/attachments.ts";
@@ -106,19 +106,25 @@ function imageNameOf(fileKey: string, data: Buffer): string {
   return `飞书图片-${fileKey.slice(-8)}.${ext}`;
 }
 
-/** 先读出第一块用来认图片格式，再把它接回流前面，整条流照样边收边写盘。 */
-async function peekFirstChunk(stream: Readable): Promise<{ head: Buffer; rest: Readable }> {
-  const iterator = stream[Symbol.asyncIterator]();
-  const first = await iterator.next();
-  if (first.done) return { head: Buffer.alloc(0), rest: Readable.from([]) };
-  const head = first.value as Buffer;
-  const rest = Readable.from(
-    (async function* () {
-      yield head;
-      yield* iterator;
-    })(),
-  );
-  return { head, rest };
+/** 先读出第一块用来认图片格式，再原样塞回流前面，整条流照样边收边写盘；流结束时没有数据回空 Buffer。 */
+function peekFirstChunk(stream: Readable): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const settle = (fn: () => void) => {
+      stream.off("readable", onReadable).off("end", onEnd).off("error", onError);
+      fn();
+    };
+    const onReadable = () => {
+      const head = stream.read() as Buffer | null;
+      if (head === null) return;
+      settle(() => {
+        stream.unshift(head);
+        resolve(head);
+      });
+    };
+    const onEnd = () => settle(() => resolve(Buffer.alloc(0)));
+    const onError = (error: Error) => settle(() => reject(error));
+    stream.on("readable", onReadable).on("end", onEnd).on("error", onError);
+  });
 }
 
 /** 一个附件传完的结果：图片编号（嵌进卡片）、文件编号和要配的消息类型，或太大没传。 */
@@ -176,15 +182,17 @@ export function createFeishuFileService(deps: FeishuFileServiceDeps): FeishuFile
       return id;
     },
     async receive(messageId, file) {
+      let stream: Readable | null = null;
       try {
-        const stream = await transport.downloadResource(messageId, file.fileKey, file.type);
-        if (file.fileName !== null) return await saveUpload(deps.uploadsDir, file.fileName, stream);
-        if (file.type === "file") return await saveUpload(deps.uploadsDir, `飞书文件-${file.fileKey.slice(-8)}`, stream);
-        const { head, rest } = await peekFirstChunk(stream);
-        return await saveUpload(deps.uploadsDir, imageNameOf(file.fileKey, head), rest);
+        stream = await transport.downloadResource(messageId, file.fileKey, file.type);
+        const name =
+          file.fileName ?? (file.type === "file" ? `飞书文件-${file.fileKey.slice(-8)}` : imageNameOf(file.fileKey, await peekFirstChunk(stream)));
+        return await saveUpload(deps.uploadsDir, name, stream);
       } catch (error) {
         deps.log(`下载 ${messageId} 里的${file.type === "image" ? "图片" : "文件"}没成：${error instanceof Error ? error.message : String(error)}`);
         return null;
+      } finally {
+        stream?.destroy();
       }
     },
   };
