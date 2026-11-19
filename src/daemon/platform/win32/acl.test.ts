@@ -121,6 +121,17 @@ describe.skipIf(process.platform === "win32")("acl.ts 运行期调 fusa-run.exe"
     expect(invocations().length).toBeLessThanOrEqual(WIN_ACL_REVERIFY_ATTEMPTS_MAX);
   });
 
+  it("allow-worker：找不到辅助程序（同步抛错）不留在途记录，装好后照常设", async () => {
+    const wt = join(root, "worktrees", "1", "7");
+    mkdirSync(wt, { recursive: true });
+    const empty = join(root, "no-helpers");
+    mkdirSync(empty);
+    await expect(allowWin32WorkerWorktreeAcl(stateDir, 7, wt, { env: { [ENV_WIN_HELPERS]: empty } })).rejects.toThrow();
+    fakeHelper({ delay: 0 });
+    await allowWin32WorkerWorktreeAcl(stateDir, 7, wt, { env });
+    expect(invocations()).toHaveLength(1);
+  });
+
   it("allow-worker：目录还不存在时不记缓存，建好后照常设", async () => {
     fakeHelper({ delay: 0 });
     const wt = join(root, "worktrees", "1", "7");
