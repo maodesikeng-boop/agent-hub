@@ -37,8 +37,8 @@ export interface FakeFeishu extends FeishuTransport {
   handlers: FeishuConnectionHandlers | null;
   /** 某个方法下一次调用回这个结果（用完即删）。 */
   failNext: Partial<Record<FeishuMethod, FeishuApiResult | Error>>;
-  /** 下载资源时回的内容；没有就抛错。 */
-  resources: Map<string, Buffer>;
+  /** 下载资源时回的内容（给流就原样回这条流）；没有就抛错。 */
+  resources: Map<string, Buffer | Readable>;
   /** 调用记录用的时钟。 */
   clock: () => number;
   /** 每次上传图片、文件前先等它（测试用来模拟慢网、上传失败）；抛错就当这次上传失败。 */
@@ -159,7 +159,7 @@ export function createFakeFeishu(options: { clock?: () => number; botOpenId?: st
       fake.calls.push({ method: "downloadResource", args: { messageId, fileKey, type }, at: fake.clock() });
       const data = fake.resources.get(fileKey);
       if (data === undefined) throw new Error("no such resource");
-      return Readable.from([data]);
+      return Buffer.isBuffer(data) ? Readable.from([data]) : data;
     },
     async start(handlers) {
       fake.handlers = handlers;
