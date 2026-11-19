@@ -1,4 +1,4 @@
--- 0041_feishu_offline_inbox：全账号一个飞书机器人（docs/account-mesh-design.md「飞书：一个机器人，按群转给归属电脑」）。
+-- 0042_feishu_offline_inbox：全账号一个飞书机器人（docs/account-mesh-design.md「飞书：一个机器人，按群转给归属电脑」）。
 -- 中心收到发给离线电脑的项目群消息时先存这里，那台上线后按 id 顺序转过去；过期删掉并在群里说一声。只在中心上有内容。
 -- chat_id 是别的设备建的群，不在本机 feishu_chats 里，所以不加外键。
 CREATE TABLE IF NOT EXISTS feishu_offline_inbox (

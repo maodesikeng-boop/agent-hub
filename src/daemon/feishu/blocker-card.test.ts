@@ -154,7 +154,7 @@ it("user_blocker 提醒卡同步推到飞书总助单聊；在总助单聊点“
   expect(routerCardData).toContain("已处理");
   expect(routerCardData).toContain("打开项目群");
 
-  expect(card.clickInRouter().toast?.type).toBe("info");
+  expect((await card.clickInRouter()).toast?.type).toBe("info");
   await settle();
   expect(card.status()).toBe("open");
   expect(fake.sent.some((s) => s.chatId === card.routerChatId && s.content.includes("还不能用"))).toBe(true);
@@ -162,7 +162,7 @@ it("user_blocker 提醒卡同步推到飞书总助单聊；在总助单聊点“
   expect(fake.callsOf("card.update").some((u) => u.card_id === inRouter!.cardId && u.card.data.includes("刚查过"))).toBe(true);
 
   claude = "available";
-  expect(card.clickInRouter().toast?.type).toBe("info");
+  expect((await card.clickInRouter()).toast?.type).toBe("info");
   await settle();
   expect(card.status()).not.toBe("open");
   expect(card.store.postOf({ kind: "message", messageId: card.row.message_id, part: 0 })?.state).toBe("card_settled");
@@ -174,7 +174,7 @@ it("user_blocker 提醒卡同步推到飞书总助单聊；在总助单聊点“
   expect(lastGroupUpdate.card.data).not.toContain("blocker_done");
   expect(lastRouterUpdate.card.data).not.toContain("blocker_done");
 
-  const again = card.click();
+  const again = await card.click();
   expect(again.toast).toEqual({ type: "info", content: "已经定过了" });
 });
 

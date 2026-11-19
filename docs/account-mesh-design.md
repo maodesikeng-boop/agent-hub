@@ -11,7 +11,7 @@
   - `src/daemon/mesh/`：守护进程这一侧。设备身份、GitHub 登录、信任表、连中继、拨号、中心租约。
   - `src/daemon/feishu/account-bot.ts`：中心把飞书消息按群转给项目所在的电脑。
   - `src/mesh/cli.ts`：服务器上用的终端命令（登录、核对、排中心顺序）。
-  - `migrations/0041_feishu_offline_inbox.sql`：电脑离线时暂存飞书消息的表。
+  - `migrations/0042_feishu_offline_inbox.sql`：电脑离线时暂存飞书消息的表。
   - `src/shared/limits.ts`：新加的上限和时间常量。
 
 ### 要你拍板的事
@@ -372,7 +372,7 @@ Mac 上删 `~/.agent-hub/state/tunnels.json` 和 `state/tunnel/`。
 - `src/daemon/mesh/index.ts`：对外导出，`Mesh` 是守护进程其余部分唯一要认的组网接口。
 - `src/mesh/cli.ts`：服务器上用的终端命令（`login`、`status`、`approve`、`priority`、`remove`、`logout`），实现时照 `src/feishu/main.ts` 加 `src/mesh/main.ts`。
 - `src/daemon/feishu/account-bot.ts`：群归属、入站分流 `routeAccountInbound`、转发事件的形状、离线提示、暂存箱、配额平分。
-- `migrations/0041_feishu_offline_inbox.sql`：暂存箱表（拍板 3 选 B 时实现步骤删掉这个迁移和暂存箱）。
+- `migrations/0042_feishu_offline_inbox.sql`：暂存箱表（拍板 3 选 B 时实现步骤删掉这个迁移和暂存箱）。
 - `src/shared/limits.ts`：上表的常量。
 - `src/shared/index.ts`：导出 `mesh.ts`。
 - `vitest.config.ts`：node 项目的 include 加 `src/relay/**`、`src/mesh/**`（不加这两行，这两个目录的测试不会跑）。`src/relay/cloudflare/worker.test.ts` 实现时挪到 Workers 运行时里跑（Cloudflare 官方的 vitest 集成，单独一个 vitest 项目）。

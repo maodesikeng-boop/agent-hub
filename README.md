@@ -166,11 +166,11 @@ pnpm start
 
 ## Multiple devices
 
-Each machine runs its own daemon, and you can view and operate all of them from one Fusa window (or from an approved phone session). Devices connect through a central Linux server over SSH tunnels (or optionally Tailscale); a phone can reach the central server over HTTPS (for example via Tailscale Funnel) and sign in via one-time QR code approval on an already signed-in device.
+Each machine runs its own daemon, and you can view and operate all of them from one Fusa window. Sign in to the same GitHub account on each machine and verify a 6-digit SAS code once: machines on the same LAN connect directly over mutual TLS 1.3, and machines across networks route end-to-end encrypted TLS traffic through a lightweight relay (no public IP, SSH tunnel, or Tailscale required). On mobile, all machines share a single Feishu bot with automatic center lease failover.
 
-Multi-device and public access are completely optional: by default the daemon listens only on `127.0.0.1`, and nothing is exposed externally unless you explicitly configure SSH tunnels, run `tailscale serve`, or enable the public entry in settings. For architecture and setup details, see:
+Multi-device networking is completely optional: when signed out, Fusa runs purely locally on `127.0.0.1`. For architecture and setup details, see:
+- [docs/account-mesh-design.md](docs/account-mesh-design.md)
 - [docs/multi-device-design.md](docs/multi-device-design.md)
-- [docs/hub-tunnel-design.md](docs/hub-tunnel-design.md)
 - [docs/linux.md](docs/linux.md)
 
 ## Configuration
@@ -188,10 +188,8 @@ All environment variables are optional.
 | `AGENT_HUB_DEEPSEEK` | `dsh` | Command name or path to the DeepSeek Harness CLI (`~/` is expanded; searched in `PATH` and standard fallback directories). |
 | `AGENT_HUB_CURSOR` | `cursor-agent` | Command name or path to the Cursor CLI (`~/` is expanded; searched in `PATH` and standard fallback directories). |
 | `AGENT_HUB_DEFAULT_MODEL` | unset | Model ID for the default project manager created on first start; when unset, uses the vendor CLI's own default. |
-| `AGENT_HUB_TAILSCALE` | `/Applications/Tailscale.app/Contents/MacOS/Tailscale` on macOS (if present), else `tailscale` | Path or command name for the `tailscale` CLI. |
-| `AGENT_HUB_TAILNET_NAME` | detected via `tailscale status --json` | Override the machine's tailnet DNS name (`<machine>.<tailnet>.ts.net`). |
-| `AGENT_HUB_TAILNET_OWNER` | detected via `tailscale status --json` | Override the device owner's Tailscale login name (required on tagged Tailscale devices, where `tailscale status` has no owner). |
-| `AGENT_HUB_SERVE_TARGET` | `unix` on Linux, `tcp` on macOS | How `tailscale serve` forwards to the daemon (`unix` for `run/ui.sock`, or `tcp` for `127.0.0.1:<port>`). |
+| `FUSA_RELAY_URL` | built-in default (`MESH_DEFAULT_RELAY_URL`) | Override the multi-device relay URL (for example a self-hosted Node or Cloudflare Workers relay). |
+| `FUSA_GITHUB_CLIENT_ID` | built-in default (`MESH_GITHUB_CLIENT_ID`) | Override the GitHub OAuth App Client ID used for multi-device Device Flow sign-in. |
 | `AGENT_HUB_REPO_DIR` | `AgentHubRepoDir` in `Info.plist` | macOS app only: override the repository directory path at runtime. |
 | `AGENT_HUB_NODE` | `AgentHubNodePath` in `Info.plist` | macOS app only: override the Node.js executable path at runtime. |
 | `AGENT_HUB_DAEMON_PORT` | unset | Development only (`pnpm dev`): daemon port that Vite proxies `/api`, `/auth`, and `/d` requests to. |
@@ -402,11 +400,11 @@ pnpm start
 
 ## 多设备联机
 
-每台设备各跑一个守护进程，在电脑端 Fusa 桌面窗口（或已批准登录的手机端）里即可同时查看并操作所有设备。各设备可通过中心 Linux 服务器建立 SSH 隧道连接（也可选用 Tailscale）；手机可通过公网 HTTPS（如 Tailscale Funnel）访问中心服务器，由已登录设备生成一次性二维码并在电脑端点击批准后完成登录。
+每台电脑各跑一个守护进程，在桌面端 Fusa 窗口里即可同时查看并操作所有设备。各电脑登录同一 GitHub 账号并核对一次 6 位数字码即完成信任绑定：同局域网走双向 TLS 1.3 直连，跨网经轻量中继转发端到端加密的 TLS 字节流（无需公网 IP、SSH 隧道或 Tailscale）；手机端统一接入全账号唯一的飞书机器人，由中心租约自动主备接管。
 
-多设备与公网入口均为可选功能：默认守护进程只监听本机 `127.0.0.1`，除非你主动配置隧道、执行 `tailscale serve` 或在设置中开启公网入口，否则不会对外暴露任何端口。详细设计见：
+多设备组网为可选功能：未登录账号时守护进程仅监听本机 `127.0.0.1`。详细设计见：
+- [docs/account-mesh-design.md](docs/account-mesh-design.md)
 - [docs/multi-device-design.md](docs/multi-device-design.md)
-- [docs/hub-tunnel-design.md](docs/hub-tunnel-design.md)
 - [docs/linux.md](docs/linux.md)
 
 ## 配置（环境变量）
@@ -424,10 +422,8 @@ pnpm start
 | `AGENT_HUB_DEEPSEEK` | `dsh` | DeepSeek Harness CLI 的命令名或可执行文件路径（支持 `~/` 展开；先找 `PATH` 再找常见安装路径）。 |
 | `AGENT_HUB_CURSOR` | `cursor-agent` | Cursor CLI 的命令名或可执行文件路径（支持 `~/` 展开；先找 `PATH` 再找常见安装路径）。 |
 | `AGENT_HUB_DEFAULT_MODEL` | 未设置 | 首次启动自动创建默认项目经理时使用的模型；未设置时使用厂商 CLI 自身的默认模型。 |
-| `AGENT_HUB_TAILSCALE` | macOS 优先用 `/Applications/Tailscale.app/Contents/MacOS/Tailscale`，其余用 `tailscale` | `tailscale` 命令路径。 |
-| `AGENT_HUB_TAILNET_NAME` | 由 `tailscale status --json` 自动探测 | 手动指定本机 tailnet 域名（`<机器>.<tailnet>.ts.net`）。 |
-| `AGENT_HUB_TAILNET_OWNER` | 由 `tailscale status --json` 自动探测 | 手动指定设备主人的 Tailscale 登录名（打了 tag 的设备查不到主人，必须设置此项，否则经 tailnet 访问会回 403）。 |
-| `AGENT_HUB_SERVE_TARGET` | Linux 为 `unix`，macOS 为 `tcp` | `tailscale serve` 的转发目标类型（`unix` 转发至 `run/ui.sock`，`tcp` 转发至 `127.0.0.1:<端口>`）。 |
+| `FUSA_RELAY_URL` | 内置默认值（`MESH_DEFAULT_RELAY_URL`） | 覆盖多设备组网的中继地址（如自建 Node 或 Cloudflare Workers 中继）。 |
+| `FUSA_GITHUB_CLIENT_ID` | 内置默认值（`MESH_GITHUB_CLIENT_ID`） | 覆盖多设备登录所用的 GitHub OAuth App Client ID。 |
 | `AGENT_HUB_REPO_DIR` | 编译进 `Info.plist` 的 `AgentHubRepoDir` | 仅 Mac 应用：运行时覆盖仓库目录路径。 |
 | `AGENT_HUB_NODE` | 编译进 `Info.plist` 的 `AgentHubNodePath` | 仅 Mac 应用：运行时覆盖 Node.js 可执行文件路径。 |
 | `AGENT_HUB_DAEMON_PORT` | 未设置 | 仅开发时（`pnpm dev`）使用：Vite 将 `/api`、`/auth`、`/d` 代理到该端口上的守护进程。 |

@@ -2,6 +2,8 @@
 // 每个子守护进程（mesh-daemon.ts）通过 FUSA_TEST_FEISHU 指过来，父进程能直接看当前哪几台连着 WSClient、往长连接推事件和点卡片。
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { Readable } from "node:stream";
+import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { WebSocket, WebSocketServer } from "ws";
 import { FEISHU_GROUP_MSG_SCOPE, FEISHU_REQUIRED_SCOPES } from "../../src/daemon/feishu/scopes.ts";
 import type { FeishuSdkOptions, registerFeishuApp } from "../../src/daemon/feishu/sdk.ts";
@@ -95,14 +97,9 @@ export async function startFakeFeishuHub(): Promise<FakeFeishuHub> {
       }
       if (req.method === "POST" && url.pathname === "/download") {
         const body = await readJson(req);
-        const buf = await fake.downloadResource(
-          String(body.messageId),
-          String(body.fileKey),
-          body.type as "image" | "file",
-          Number(body.maxBytes),
-        );
+        const stream = await fake.downloadResource(String(body.messageId), String(body.fileKey), body.type as "image" | "file");
         res.writeHead(200, { "content-type": "application/octet-stream" });
-        res.end(buf);
+        stream.pipe(res);
         return;
       }
       replyJson(res, 404, { error: "not_found" });
@@ -187,14 +184,14 @@ export function createRemoteFakeFeishuHooks(origin: string, deviceIdOf: () => st
         listMessages: (input) => post<FeishuListMessagesPage>("/list-messages", input),
         uploadImage: (input) => post<{ imageKey: string }>("/upload-image", input),
         uploadFile: (input) => post<{ fileKey: string }>("/upload-file", input),
-        async downloadResource(messageId, fileKey, type, maxBytes) {
+        async downloadResource(messageId, fileKey, type) {
           const res = await fetch(`${origin}/download`, {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ messageId, fileKey, type, maxBytes }),
+            body: JSON.stringify({ messageId, fileKey, type }),
           });
-          if (!res.ok) throw new Error(`fake feishu download HTTP ${res.status}`);
-          return Buffer.from(await res.arrayBuffer());
+          if (!res.ok || res.body === null) throw new Error(`fake feishu download HTTP ${res.status}`);
+          return Readable.fromWeb(res.body as NodeReadableStream);
         },
         async start(handlers) {
           socket?.close();

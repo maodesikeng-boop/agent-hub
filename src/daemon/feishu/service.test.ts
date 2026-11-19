@@ -2463,7 +2463,7 @@ describe("createFeishuService：检查点拍板卡（含交付物文件附件）
     expect(fileUploads).toHaveLength(1);
 
     const passAction = { fusa: 1, kind: "choose", card: { kind: "gate", askMessageId: askMsgId, graphId, nodeKey: "design" }, optionIndex: 0 };
-    expect(click(rChatId, routerPost!.messageId, passAction).toast?.type).toBe("success");
+    expect((await click(rChatId, routerPost!.messageId, passAction)).toast?.type).toBe("success");
     await settle();
     expect(postOfAsk(askMsgId).state).toBe("card_settled");
     expect(store().postOf({ kind: "router_ask", messageId: askMsgId })?.state).toBe("card_settled");
@@ -2476,7 +2476,7 @@ describe("createFeishuService：检查点拍板卡（含交付物文件附件）
     expect(implNode.activeWorkerId).not.toBeNull();
     const implWorkerId = implNode.activeWorkerId;
 
-    const dup = click(pmChatId, groupPost.messageId, passAction);
+    const dup = await click(pmChatId, groupPost.messageId, passAction);
     expect(dup.toast).toEqual({ type: "info", content: "已经定过了" });
     expect(ledger.hubCall(lin.sessionId, "graph.show", { graphId }).data.graph.nodes.find((n) => n.key === "impl")!.activeWorkerId).toBe(implWorkerId);
   });
@@ -2485,7 +2485,7 @@ describe("createFeishuService：检查点拍板卡（含交付物文件附件）
     await connect();
     const first = await raiseCheckpointWithDeliverables();
     const rejectAction = { fusa: 1, kind: "choose", card: { kind: "gate", askMessageId: first.askMsgId, graphId: first.graphId, nodeKey: "design" }, optionIndex: 1 };
-    expect(click(first.pmChatId, postOfAsk(first.askMsgId).messageId, rejectAction, OWNER, "补一段边界说明").toast?.type).toBe("success");
+    expect((await click(first.pmChatId, postOfAsk(first.askMsgId).messageId, rejectAction, OWNER, "补一段边界说明")).toast?.type).toBe("success");
     await settle();
     expect(postOfAsk(first.askMsgId).state).toBe("card_settled");
     expect(store().postOf({ kind: "router_ask", messageId: first.askMsgId })?.state).toBe("card_settled");

@@ -266,7 +266,7 @@ export interface FeishuOfflineInboxItem {
   receivedAt: number;
 }
 
-/** feishu_offline_inbox 表（migrations/0041）。只在中心上有内容。 */
+/** feishu_offline_inbox 表（migrations/0042）。只在中心上有内容。 */
 export interface FeishuOfflineInbox {
   /** 后置：同一条飞书消息只存一次（重复回 duplicate）；这台已满 FEISHU_OFFLINE_INBOX_MAX_PER_DEVICE 条回 full，不存。 */
   add(deviceId: DeviceId, chatId: FeishuChatId, event: Extract<FeishuRawEvent, { type: "im.message.receive_v1" }>, receivedAt: number): "queued" | "duplicate" | "full";

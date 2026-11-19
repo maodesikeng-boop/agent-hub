@@ -248,7 +248,7 @@
 - `src/daemon/feishu/secrets.ts`：凭证文件。
 - `src/daemon/feishu/setup.ts`：设置服务（状态、扫码、手动接入、绑定码、群策略、对齐、断开）。
 - `src/daemon/feishu/service.ts`：通道本身：接账本和传输层，`FeishuLedgerPort` 写明用到的账本接口（含要新加的 `messagesAfter`）。
-- `src/daemon/feishu/account-bot.ts` + `migrations/0041_feishu_offline_inbox.sql`：多设备共用一个飞书机器人时的群归属识别、入站分流、卡片点击转发、离线提示与暂存箱、卡片预算平分（`docs/account-mesh-design.md`）。
+- `src/daemon/feishu/account-bot.ts` + `migrations/0042_feishu_offline_inbox.sql`：多设备共用一个飞书机器人时的群归属识别、入站分流、卡片点击转发、离线提示与暂存箱、卡片预算平分（`docs/account-mesh-design.md`）。
 - `src/feishu/cli.ts`：终端命令。
 - 测试骨架：上面每个文件旁边的 `*.test.ts`，以及 `src/daemon/feishu/ledger-wiring.test.ts`（账本一侧的接线，实现步骤可以挪到 `src/daemon/ledger/`）。
 
