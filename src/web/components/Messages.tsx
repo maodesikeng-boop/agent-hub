@@ -1,25 +1,7 @@
 // 消息流里的每一种东西（docs/ui-standard.md 第 17 条）：一轮回复（一个头像、操作合成一行 Worked for、文字、复制和时间）、
 // 用户的气泡、Worker 的发言、很淡的系统行、到点的定时任务、消息状态、空对话。怎么分组见 selectors.ts 的 groupMessages。
 import { useMutation } from "@tanstack/react-query";
-import {
-  Archive,
-  CalendarClock,
-  Check,
-  ChevronRight,
-  CirclePlay,
-  CircleX,
-  Clock,
-  Copy,
-  FolderMinus,
-  FolderPlus,
-  Info,
-  Loader2,
-  MessageSquare,
-  PencilLine,
-  RefreshCw,
-  UserPen,
-  type LucideIcon,
-} from "lucide-react";
+import { Archive, CalendarClock, Check, ChevronRight, CirclePlay, CircleX, Clock, Copy, FolderMinus, FolderPlus, Info, Loader2, MessageSquare, PencilLine, RefreshCw, UserPen, type Icon } from "../ui/icons.ts";
 import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   askOf,
@@ -61,6 +43,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/colla
 import { Input } from "../ui/input.tsx";
 import { AttachmentList } from "./Attachments.tsx";
 import { Avatar } from "./Avatar.tsx";
+import type { SlimeLook } from "../../shared/slimes.ts";
 import { CardBody, DeliverableFiles } from "./Deliverables.tsx";
 import { WorkerPickTag } from "./WorkerPickTag.tsx";
 import { COPIED_RESET_MS } from "./CodeBlock.tsx";
@@ -70,8 +53,9 @@ import { UserBlockerCard } from "./UserBlockerCard.tsx";
 
 export interface AgentIdentity {
   name: string;
-  avatarKey: number;
-  /** Worker：所属项目经理水果切下的一瓣果肉头像。 */
+  /** 头像：项目经理的形象；Worker（Piece）用所属项目经理的形象，画成同色的便签小灵。 */
+  look: SlimeLook;
+  /** Worker：所属项目经理颜色的便签小灵头像。 */
   neutral?: boolean;
 }
 
@@ -96,23 +80,28 @@ export const SECONDARY = "text-minor text-muted-foreground";
 /** 文字按钮：没有底色和胶囊，悬停变前景色，键盘聚焦有中性的圈。 */
 export const TEXT_BUTTON = "touch-target cursor-pointer rounded-full transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50";
 
-/** 头像（26px）+ 名字。头像旁不放 agent 的状态；只有 Worker 汇报在头像右下角放一个状态色点。Router 时间流可换自定义头像、点击跳去会话或附带项目与设备信息。 */
+/**
+ * 头像（26px）+ 名字。头像旁不放 agent 的状态；只有 Worker 汇报在头像右下角放一个状态色点。Router 时间流可换自定义头像、点击跳去会话或附带项目与设备信息。
+ * working：这一轮正在进行，头像和对话顶栏同一拍蹦（docs/ui-standard.md 第 17 条）；历史轮不传。
+ */
 export function AgentHead({
   identity,
   dot,
   avatar,
   onClick,
   trailing,
+  working = false,
 }: {
   identity: AgentIdentity;
   dot?: Exclude<WorkerTone, "neutral">;
   avatar?: React.ReactNode;
   onClick?: () => void;
   trailing?: React.ReactNode;
+  working?: boolean;
 }) {
   const icon = (
     <span className="relative flex shrink-0">
-      {avatar ?? <Avatar colorKey={identity.avatarKey} size={26} neutral={identity.neutral} />}
+      {avatar ?? <Avatar look={identity.look} size={26} neutral={identity.neutral} working={working} />}
       {dot && <span data-dot={dot} aria-hidden="true" className={cn("absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full ring-2 ring-background", TONE_DOT[dot])} />}
     </span>
   );
@@ -255,7 +244,7 @@ function AskCard({
             // 底色比选中的选项浅一档：两行不会看成选了两个
             <div data-ask-answer className="flex min-h-11 w-full items-start gap-3 rounded-xl bg-sidebar px-3 py-2.5 leading-6">
               <span className="flex size-6 shrink-0 items-center justify-center rounded-xl border border-border bg-background text-muted-foreground">
-                <PencilLine className="size-3.5" aria-hidden="true" />
+                <PencilLine className="size-pixel-sm" aria-hidden="true" />
               </span>
               <span className="min-w-0 flex-1 text-body whitespace-pre-wrap [overflow-wrap:anywhere]">{answerNote}</span>
             </div>
@@ -293,7 +282,7 @@ function AskCard({
               disabled={disabled || note.trim() === ""}
               onClick={() => submit(null, note)}
             >
-              {decideMutation.isPending && <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />}
+              {decideMutation.isPending && <Loader2 className="size-pixel-sm" aria-hidden="true" />}
               Send
             </Button>
           </div>
@@ -405,7 +394,7 @@ function WorkLine({ label, work, onOpenWorker }: { label: React.ReactNode; work:
     <Collapsible open={open} onOpenChange={setOpen} data-work-line>
       <CollapsibleTrigger className={cn("group inline-flex items-center gap-1", TEXT_BUTTON, SECONDARY)}>
         {label}
-        <ChevronRight className="size-3.5 transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />
+        <ChevronRight className="size-pixel-sm transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />
       </CollapsibleTrigger>
       <CollapsibleContent>
         <ul className="mt-1.5 mb-1 space-y-1 border-l border-border pl-3 text-xs leading-relaxed text-muted-foreground">
@@ -434,7 +423,7 @@ export function CopyButton({ text }: { text: string }) {
   };
   return (
     <Button variant="ghost" size="icon-sm" className="-ml-2 size-7" aria-label={copied ? "Copied" : "Copy"} title={copied ? "Copied" : "Copy"} onClick={copy}>
-      {copied ? <Check className="size-3.5" aria-hidden="true" /> : <Copy className="size-3.5" aria-hidden="true" />}
+      {copied ? <Check className="size-pixel-sm" aria-hidden="true" /> : <Copy className="size-pixel-sm" aria-hidden="true" />}
     </Button>
   );
 }
@@ -451,7 +440,7 @@ function sameList<T>(a: readonly T[], b: readonly T[]): boolean {
 }
 
 function sameIdentity(a: AgentIdentity, b: AgentIdentity): boolean {
-  return a === b || (a.name === b.name && a.avatarKey === b.avatarKey && a.neutral === b.neutral);
+  return a === b || (a.name === b.name && a.look === b.look && a.neutral === b.neutral);
 }
 
 /** 上一次算出的撤销清单：内容一样就还给这一份，来一条新消息不会让每一轮的 TurnView、MessageBubble（比的是引用）都重画。 */
@@ -502,7 +491,7 @@ export const TurnView = memo(
     const reverted = revertedChanges ?? revertedChangeIds(turn.parts);
     return (
       <div className="mt-6 flex flex-col first:mt-2" data-turn data-side="left" data-running={running ? "true" : undefined}>
-        <AgentHead identity={identity} />
+        <AgentHead identity={identity} working={running} />
         <div className="flex flex-col gap-2.5">
           {!running && turn.work.length > 0 && <WorkLine label={workedFor(turn.endedAt - turn.startedAt)} work={turn.work} onOpenWorker={actions.onOpenWorker} />}
           {turn.parts.map((m) =>
@@ -589,9 +578,9 @@ function ScheduleRun({ text }: { text: string }) {
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="mt-6 flex flex-col items-start" data-side="left" data-event="schedule.run">
       <CollapsibleTrigger className={cn("group inline-flex items-center gap-1.5", TEXT_BUTTON, SECONDARY)} disabled={body === ""}>
-        <Clock className="size-3.5 shrink-0" aria-hidden="true" />
+        <Clock className="size-pixel-sm shrink-0" aria-hidden="true" />
         <span className="[overflow-wrap:anywhere]">{title}</span>
-        {body !== "" && <ChevronRight className="size-3.5 shrink-0 transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />}
+        {body !== "" && <ChevronRight className="size-pixel-sm shrink-0 transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />}
       </CollapsibleTrigger>
       <CollapsibleContent className="w-full">
         <p className={cn("mt-1.5 border-l border-border pl-3 leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]", SECONDARY)}>{body}</p>
@@ -600,7 +589,7 @@ function ScheduleRun({ text }: { text: string }) {
   );
 }
 
-const NOTICE_ICONS: Partial<Record<SystemMessageMeta["event"], LucideIcon>> = {
+const NOTICE_ICONS: Partial<Record<SystemMessageMeta["event"], Icon>> = {
   "project.created": FolderPlus,
   "folder.attached": FolderPlus,
   "folder.detached": FolderMinus,
@@ -609,7 +598,7 @@ const NOTICE_ICONS: Partial<Record<SystemMessageMeta["event"], LucideIcon>> = {
   "schedule.removed": CalendarClock,
 };
 
-const WORKER_NOTICE_ICONS: Partial<Record<WorkerMessageMeta["event"], LucideIcon>> = {
+const WORKER_NOTICE_ICONS: Partial<Record<WorkerMessageMeta["event"], Icon>> = {
   started: CirclePlay,
   ended: Archive,
   user_message: MessageSquare,
@@ -623,7 +612,7 @@ function NoticeLine({
   inTurn = false,
   children,
 }: {
-  icon: LucideIcon;
+  icon: Icon;
   danger?: boolean;
   title?: string;
   inTurn?: boolean;
@@ -631,7 +620,7 @@ function NoticeLine({
 }) {
   return (
     <div className={cn("flex items-start gap-1.5 text-xs leading-5 text-muted-foreground", !inTurn && "mt-4")} data-side="left" data-notice title={title}>
-      <Icon className={cn("mt-0.75 size-3.5 shrink-0", danger && "text-danger")} aria-hidden="true" />
+      <Icon className={cn("mt-1.5 size-pixel-sm shrink-0", danger && "text-danger")} aria-hidden="true" />
       <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 [overflow-wrap:anywhere]">{children}</div>
     </div>
   );
@@ -648,9 +637,9 @@ function SessionRenewed({ text, handover }: { text: string; handover: string }) 
     <Collapsible open={open} onOpenChange={setOpen} className="mt-4 flex flex-col" data-side="left" data-notice data-event="session.renewed">
       <div className="flex items-center gap-2.5">
         <CollapsibleTrigger className={cn("group inline-flex shrink-0 items-center gap-1.5 text-xs leading-5 text-muted-foreground", TEXT_BUTTON)} disabled={body === ""}>
-          <RefreshCw className="size-3.5 shrink-0" aria-hidden="true" />
+          <RefreshCw className="size-pixel-sm shrink-0" aria-hidden="true" />
           <span>{text}</span>
-          {body !== "" && <ChevronRight className="size-3.5 shrink-0 transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />}
+          {body !== "" && <ChevronRight className="size-pixel-sm shrink-0 transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />}
         </CollapsibleTrigger>
         <span className="h-px min-w-6 flex-1 bg-border" aria-hidden="true" />
       </div>
@@ -730,12 +719,12 @@ const TONE_DOT: Record<Exclude<WorkerTone, "neutral">, string> = { success: "bg-
  */
 function WorkerSpeech({
   line,
-  avatarKey,
+  look,
   onOpen,
   vendor,
 }: {
   line: WorkerMessageMeta;
-  avatarKey: number;
+  look: SlimeLook;
   onOpen: MessageActions["onOpenWorker"];
   vendor?: AgentVendor;
 }) {
@@ -746,7 +735,7 @@ function WorkerSpeech({
   const text = body ? body.text : summary;
   return (
     <article className="mt-4 flex flex-col items-start" data-side="left" data-worker-report data-tone={tone}>
-      <AgentHead identity={{ name: line.title, avatarKey, neutral: true }} dot={tone !== "neutral" ? tone : undefined} />
+      <AgentHead identity={{ name: line.title, look, neutral: true }} dot={tone !== "neutral" ? tone : undefined} />
       <button
         type="button"
         data-bubble
@@ -765,11 +754,11 @@ function WorkerSpeech({
 }
 
 /** 项目经理对话里 Worker 的那些行：汇报是 Worker 的发言，派出、收工、你对它说的是很淡的一行（点开 Worker）。 */
-function WorkerItem({ line, avatarKey, actions }: { line: WorkerMessageMeta; avatarKey: number; actions: MessageActions }) {
+function WorkerItem({ line, look, actions }: { line: WorkerMessageMeta; look: SlimeLook; actions: MessageActions }) {
   const onOpen = actions.onOpenWorker;
   if (line.event === "report" || line.event === "turn_failed" || line.event === "worktree_failed") {
     // Worker 的失败原因按 Worker 自己的厂商说（可能和项目经理不是同一家）
-    return <WorkerSpeech line={line} avatarKey={avatarKey} onOpen={onOpen} vendor={actions.vendorOf?.(line.workerConversationId)} />;
+    return <WorkerSpeech line={line} look={look} onOpen={onOpen} vendor={actions.vendorOf?.(line.workerConversationId)} />;
   }
   return (
     <NoticeLine icon={WORKER_NOTICE_ICONS[line.event] ?? Info}>
@@ -799,7 +788,7 @@ export const MessageBubble = memo(
     revertedChanges?: ReadonlySet<PersonaChangeId>;
   }) {
     const workerLine = workerEventOf(message);
-    if (workerLine) return <WorkerItem line={workerLine} avatarKey={identity.avatarKey} actions={actions} />;
+    if (workerLine) return <WorkerItem line={workerLine} look={identity.look} actions={actions} />;
     if (message.sender === "system") return <SystemNotice message={message} actions={actions} revertedChanges={revertedChanges} />;
     if (message.sender === "user") return <UserBubble message={message} actions={actions} />;
     // Worker 对话里项目经理的话（任务、打回）：头像 + 名字 + 正文，和项目经理对话里它自己说话一个样子
@@ -1013,11 +1002,11 @@ export function PendingBubble({ pending, onRetry }: { pending: PendingMessage; o
   );
 }
 
-/** 空对话：中间是 agent 的头像（120px，素材本身 256px，不糊）、名字和“还没有消息”。 */
+/** 空对话：中间是 agent 的头像（120px，内联的像素 SVG，放多大都不糊）、名字和“还没有消息”。 */
 export function EmptyConversation({ identity }: { identity?: AgentIdentity }) {
   return (
     <div className="m-auto flex flex-col items-center gap-3 py-10 text-center" data-empty>
-      {identity && <Avatar colorKey={identity.avatarKey} size={120} neutral={identity.neutral} />}
+      {identity && <Avatar look={identity.look} size={120} neutral={identity.neutral} />}
       <div className="flex flex-col items-center gap-0.5">
         {identity && <div className="text-title font-semibold">{identity.name}</div>}
         <div className={SECONDARY}>No messages yet</div>

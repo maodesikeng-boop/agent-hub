@@ -37,6 +37,7 @@ import {
   openFirstConversation,
 } from "./test-utils.ts";
 
+import { defaultLookOf } from "../shared/slimes.ts";
 const LOCAL_ID = "00000000-0000-4000-8000-000000000001";
 const TOKYO_ID = "3f2b8c1e-4d5a-4b6c-9e7f-0a1b2c3d4e5f";
 
@@ -214,7 +215,7 @@ async function bootApp(snapshot: StateSnapshot) {
 
 /** 拍板卡只在放大全览弹窗里画（右栏果皮轨里那一步只有一行）。 */
 const renderGateDialog = (graph: TaskGraph) =>
-  render(<TaskGraphDialog open graph={graph} workers={[]} colorKey={1} onOpenChange={() => {}} onOpenWorker={() => {}} />);
+  render(<TaskGraphDialog open graph={graph} workers={[]} color={defaultLookOf(1).color} onOpenChange={() => {}} onOpenWorker={() => {}} />);
 
 const LONG_DETAILS = "**交棒要点**：\n" + "改了卡片的顺序，".repeat(40) + "\n\n提交 `22f68fed` · PR https://github.com/o/r/pull/333";
 const CHECKPOINT_TEXT = `**摘要**：做完了\n\n${LONG_DETAILS}`;
@@ -423,7 +424,7 @@ describe("各处入口", () => {
     const ask = askMessage({ id: 52, text: `方案好了，请验收\n\n${CHECKPOINT_TEXT}`, meta: { needsUser: true, deliverables: [plan, rec] } });
     const onOpenAsk = vi.fn();
     render(
-      <RightRail asks={[ask]} workers={[]} activeGraphs={[]} openWorkerId={null} layout="side" avatarKey={1} onOpenAsk={onOpenAsk} onOpenWorker={() => {}} />,
+      <RightRail asks={[ask]} workers={[]} activeGraphs={[]} openWorkerId={null} layout="side" look={defaultLookOf(1)} onOpenAsk={onOpenAsk} onOpenWorker={() => {}} />,
     );
     await user.click(screen.getByRole("button", { name: /方案好了，请验收/ }));
     expect(onOpenAsk).toHaveBeenCalledWith(52);
@@ -433,7 +434,7 @@ describe("各处入口", () => {
 
   it("右栏果皮轨里等拍板的步骤只有一行：不列交付物、不出选项", () => {
     render(
-      <RightRail asks={[]} workers={[]} activeGraphs={[gateGraph()]} openWorkerId={null} layout="side" avatarKey={1} onOpenAsk={() => {}} onOpenWorker={() => {}} />,
+      <RightRail asks={[]} workers={[]} activeGraphs={[gateGraph()]} openWorkerId={null} layout="side" look={defaultLookOf(1)} onOpenAsk={() => {}} onOpenWorker={() => {}} />,
     );
     expect(screen.getByTestId("peel-gate-row")).toBeInTheDocument();
     expect(screen.queryByTestId("peel-gate-card")).toBeNull();

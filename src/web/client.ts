@@ -31,6 +31,8 @@ import {
   type ScheduleRecord,
   type SetScheduleEnabledRequest,
   type EditPersonaResponse,
+  type PmLookRequest,
+  type PmLookResponse,
   type FileAction,
   type FileActionResponse,
   type MessageId,
@@ -248,6 +250,8 @@ export function createClient(device: DeviceId | null) {
     postPickFolder: (body: PickFolderRequest) => postJson<PickFolderResponse>(at(API_PATHS.pickFolder), body, null),
     fetchPersona: (pmId: PmId) => request<PersonaResponse>(at(API_PATHS.persona(pmId))),
     putPersona: (pmId: PmId, body: EditPersonaRequest) => putJson<EditPersonaResponse>(at(API_PATHS.persona(pmId)), body),
+    /** 换造型、换颜色（null 是回到默认）；返回改完的项目经理，同时会推 pm.updated。 */
+    putPmLook: (pmId: PmId, body: PmLookRequest) => putJson<PmLookResponse>(at(API_PATHS.pmLook(pmId)), body),
     postRevertPersonaChange: (changeId: PersonaChangeId) => postJson<EditPersonaResponse>(at(API_PATHS.revertPersonaChange(changeId))),
     fetchPmMemoryFiles: (pmId: PmId) => request<PmMemoryFilesResponse>(at(API_PATHS.pmMemoryFiles(pmId))),
     fetchPmMemoryFile: (pmId: PmId, name: string) => request<PmMemoryFileResponse>(at(API_PATHS.pmMemoryFile(pmId, name))),

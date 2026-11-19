@@ -1,6 +1,6 @@
 // 卡片正文和下面的交付物（shared/deliverables.ts）：对话里的提问卡、右栏的提问和门禁卡、总助的拍板卡和简报都用这里的 CardBody，
 // 顺序都是摘要 → 文件 → 细节（默认收起），界面规则见 docs/ui-standard.md 第 22 条。
-import { FileText, Play } from "lucide-react";
+import { FileText, Play } from "../ui/icons.ts";
 import { memo, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { FILE_EXPIRED_TEXT, groupDeliverables, previewKindOf, sentFilesOfDeliverables, sentFileUrl, splitLead, type Deliverable, type SentFile } from "../../shared/index.ts";
 import { DELIVERABLE_MEDIA_HEIGHT_REM } from "../deliverable-size.ts";
@@ -31,7 +31,7 @@ function DocumentLink({ item }: { item: Deliverable }) {
   return (
     <>
       <button type="button" data-file-link className={INLINE_LINK_CLASS} onClick={() => setOpen(true)}>
-        <FileText className="size-3.5 shrink-0" aria-hidden="true" />
+        <FileText className="size-pixel-sm shrink-0" aria-hidden="true" />
         <span>{item.label}</span>
       </button>
       <FilePreview file={preview} open={open} onOpenChange={setOpen} />
@@ -65,7 +65,7 @@ function MediaThumb({ item }: { item: Deliverable }) {
         )}
         {video && (
           <span data-play-badge className="absolute inset-0 m-auto flex size-9 items-center justify-center rounded-full bg-black/55 text-white">
-            <Play className="size-4 translate-x-px fill-current" aria-hidden="true" />
+            <Play className="size-pixel translate-x-px fill-current" aria-hidden="true" />
           </span>
         )}
       </button>

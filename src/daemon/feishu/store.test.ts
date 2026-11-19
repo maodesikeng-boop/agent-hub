@@ -8,6 +8,10 @@ import { PM_ARCHIVE_RETENTION_MS } from "../../shared/limits.ts";
 import { createLedger } from "../ledger/index.ts";
 import type { Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
+import type { SlimeLook } from "../../shared/slimes.ts";
+
+const KIWI: SlimeLook = { fruit: "kiwi", color: "kiwi" };
+const LIME: SlimeLook = { fruit: "lime", color: "lime" };
 import { createFeishuStore, type FeishuStore } from "./store.ts";
 
 let db: Db;
@@ -43,7 +47,7 @@ const fill = () => {
   saveApp();
   store.upsertChat({ chatId: chat("a"), target: { kind: "pm", pmId: pmA }, name: "小林", label: "小林" }, 1);
   store.savePost({ ref: { kind: "message", messageId: 1, part: 0 }, chatId: chat("a"), messageId: om("1"), cardId: null, sequence: 0, state: "final" }, 1);
-  store.saveAvatarKey("kiwi", "img_kiwi" as FeishuImageKey, "h1", 1);
+  store.saveAvatarKey(KIWI, "img_kiwi" as FeishuImageKey, "h1", 1);
 };
 
 describe("createFeishuStore", () => {
@@ -142,22 +146,27 @@ describe("createFeishuStore", () => {
     expect(store.postOf({ kind: "message", messageId: 4, part: 0 })).not.toBeNull();
   });
 
-  it("avatarKey / saveAvatarKey 按水果和图片内容哈希存取：哈希对不上（图片换了）当没传过", () => {
-    expect(store.avatarKey("kiwi", "h1")).toBeNull();
-    store.saveAvatarKey("kiwi", "img_1" as FeishuImageKey, "h1", 1);
-    store.saveAvatarKey("lime", "img_2" as FeishuImageKey, "h2", 1);
-    expect([store.avatarKey("kiwi", "h1"), store.avatarKey("lime", "h2")]).toEqual(["img_1", "img_2"]);
-    expect(store.avatarKey("kiwi", "h9")).toBeNull();
-    store.saveAvatarKey("kiwi", "img_3" as FeishuImageKey, "h9", 2);
-    expect([store.avatarKey("kiwi", "h9"), store.avatarKey("kiwi", "h1")]).toEqual(["img_3", null]);
+  it("avatarKey / saveAvatarKey 按形象和图片内容哈希存取：哈希对不上（图片换了）当没传过；同一个造型换了颜色是另一个形象", () => {
+    expect(store.avatarKey(KIWI, "h1")).toBeNull();
+    store.saveAvatarKey(KIWI, "img_1" as FeishuImageKey, "h1", 1);
+    store.saveAvatarKey(LIME, "img_2" as FeishuImageKey, "h2", 1);
+    expect([store.avatarKey(KIWI, "h1"), store.avatarKey(LIME, "h2")]).toEqual(["img_1", "img_2"]);
+    expect(store.avatarKey({ fruit: "kiwi", color: "sky" }, "h1")).toBeNull();
+    expect(store.avatarKey(KIWI, "h9")).toBeNull();
+    store.saveAvatarKey(KIWI, "img_3" as FeishuImageKey, "h9", 2);
+    expect([store.avatarKey(KIWI, "h9"), store.avatarKey(KIWI, "h1")]).toEqual(["img_3", null]);
   });
 
-  it("clearChatAvatars 只把头像是这个水果的群改回没设过，别的水果的群不动", () => {
+  it("clearChatAvatars 只把头像是这个形象的群改回没设过，别的形象的群不动；记的是形象键", () => {
     store.upsertChat({ chatId: chat("a"), target: { kind: "pm", pmId: pmA }, name: "小林", label: "小林" }, 1);
     store.upsertChat({ chatId: chat("b"), target: { kind: "pm", pmId: pmB }, name: "阿周", label: "阿周" }, 1);
-    store.setChatAvatar(chat("a"), "kiwi", 2);
-    store.setChatAvatar(chat("b"), "lime", 2);
-    store.clearChatAvatars("kiwi", 3);
-    expect([store.chatById(chat("a"))?.avatarFruit, store.chatById(chat("b"))?.avatarFruit]).toEqual([null, "lime"]);
+    store.setChatAvatar(chat("a"), KIWI, 2);
+    store.setChatAvatar(chat("b"), LIME, 2);
+    store.clearChatAvatars(KIWI, 3);
+    expect([store.chatById(chat("a"))?.avatarLook, store.chatById(chat("b"))?.avatarLook]).toEqual([null, LIME]);
+    expect(db.get<{ avatar_fruit: string }>("SELECT avatar_fruit FROM feishu_chats WHERE chat_id = ?", chat("b"))?.avatar_fruit).toBe("lime:lime");
+    // 0039 之前记的是水果名：读出来当没设过，下一次对齐重设
+    db.run("UPDATE feishu_chats SET avatar_fruit = 'lime' WHERE chat_id = ?", chat("b"));
+    expect(store.chatById(chat("b"))?.avatarLook).toBeNull();
   });
 });

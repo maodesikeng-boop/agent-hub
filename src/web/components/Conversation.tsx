@@ -134,7 +134,7 @@ export function Conversation({
   );
 
   // agent 的消息都是这个项目经理说的（Worker 的汇报是单独的一行，点开才是 Worker 自己的对话）
-  const agent = useMemo(() => ({ name: entry.name, avatarKey: entry.avatarKey }), [entry.name, entry.avatarKey]);
+  const agent = useMemo(() => ({ name: entry.name, look: entry.look }), [entry.name, entry.look]);
   const agentOf = useCallback(() => agent, [agent]);
   const handleLoadOlder = useCallback(() => onLoadOlder(id), [onLoadOlder, id]);
   const handleSend = useCallback((text: string, files: File[]) => onSend(id, text, files), [onSend, id]);
@@ -150,10 +150,10 @@ export function Conversation({
             className="touch-target shrink-0 cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
             onClick={() => entry.pm && onOpenProfile(entry.pm.id)}
           >
-            <Avatar colorKey={entry.avatarKey} size={34} working={hasAgentStatus(session)} />
+            <Avatar look={entry.look} size={34} working={hasAgentStatus(session)} />
           </button>
         ) : (
-          <Avatar colorKey={entry.avatarKey} size={34} working={hasAgentStatus(session)} />
+          <Avatar look={entry.look} size={34} working={hasAgentStatus(session)} />
         )}
         <div className="min-w-0 flex-1">
           <h1 title={entry.name} className="w-fit max-w-full truncate text-title leading-snug font-semibold">

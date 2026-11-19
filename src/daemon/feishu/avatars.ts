@@ -1,61 +1,65 @@
-// 水果群头像（docs/feishu-design.md「自动建群」）：项目经理群的头像和网页上它的头像是同一只水果史莱姆小动物。
+// 项目经理群头像（docs/feishu-design.md「自动建群」、docs/slime-cohesion-design.md）：项目经理群的头像和网页上它的头像是同一只史莱姆（造型 × 颜色）。
 // 不变量：
-// - 项目经理 → 水果的对应只在 shared/fruits.ts（网页 palette.ts 也按它取），这里不另写一份；
-// - 图片在仓库根目录 assets/avatars/（scripts/render-avatars.ts 生成），打包时整个目录随守护进程带走（scripts/stage-runtime-common.ts）；
-// - 同一张图只上传一次（image_type avatar），image_key 和图片内容的 SHA-256 记在 feishu_avatars，各群共用；
-//   图片换了（哈希对不上）重传，已建的群原地换头像（service.ts 的 syncChats）。
+// - 项目经理 → 形象只在 shared/slimes.ts 的 resolvePmLook（网页也按它取），这里不另写一份；
+// - 图片不存文件：按形象现画 PNG（slimeBitmap + sharp，只在要用时动态加载），同一个形象画出来逐字节相同，画过的记在内存里（有上限）；
+// - 同一个形象只上传一次（image_type avatar），image_key 和 PNG 内容的 SHA-256 记在 feishu_avatars（键是 lookKey），各群共用；
+//   像素稿或颜色改了（哈希对不上）重传，已建的群原地换头像（service.ts 的 syncChats）。
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { LRUCache } from "lru-cache";
 import type { FeishuImageKey } from "../../shared/feishu.ts";
-import { pmFruitAvatarFile, type PmFruit } from "../../shared/fruits.ts";
-import type { SlimeLook } from "../../shared/slimes.ts";
+import { FEISHU_AVATAR_RENDER_CACHE_MAX } from "../../shared/limits.ts";
+import { lookKey, slimeBitmap, type SlimeLook } from "../../shared/slimes.ts";
 import type { FeishuStore } from "./store.ts";
 
-export { pmFruitOf, type PmFruit } from "../../shared/fruits.ts";
+/** 群头像的目标边长；实际边长是画布格数的整数倍，取最接近它的（约 1026）。 */
+const FEISHU_AVATAR_TARGET_PX = 1024;
+/** 群头像里离圆心最远的像素角到圆边留几格（飞书把方图裁成圆）。 */
+const FEISHU_AVATAR_PAD_CELLS = 0.75;
 
-/** 开发时是仓库里的 assets/avatars/，安装包里是 daemon/assets/avatars/（相对本文件的位置一样）。 */
-export const FEISHU_AVATARS_DIR = fileURLToPath(new URL("../../../assets/avatars/", import.meta.url));
-
-/** 后置：这个水果群头像的绝对路径（满铺底色的 PNG，约 1024×1024；飞书群头像只收位图）。 */
-export function pmFruitImagePath(assetsDir: string, fruit: PmFruit): string {
-  return join(assetsDir, pmFruitAvatarFile(fruit, "feishu"));
+export interface FeishuAvatarImage {
+  png: Buffer;
+  /** png 内容的 SHA-256（十六进制）。 */
+  sha256: string;
 }
 
-/** 后置：这个水果群头像文件内容的 SHA-256（十六进制）。每次现读文件，不缓存：图片换了下一次对齐就能发现。文件读不到抛错。 */
-export function feishuAvatarHash(assetsDir: string, fruit: PmFruit): string {
-  return createHash("sha256").update(readFileSync(pmFruitImagePath(assetsDir, fruit))).digest("hex");
-}
+const rendered = new LRUCache<string, FeishuAvatarImage>({ max: FEISHU_AVATAR_RENDER_CACHE_MAX });
 
 /**
- * 这个形象的群头像（docs/slime-cohesion-design.md）：shared/slimes.ts 的 slimeBitmap 用 sharp 编成 PNG（约 1026×1026，满铺这个颜色的浅底）。
+ * 这个形象的群头像：shared/slimes.ts 的 slimeBitmap 用 sharp 编成 PNG（约 1026×1026，满铺这个颜色的浅底）。
  * 后置：同一个形象每次得到逐字节相同的 png，sha256 是它的十六进制哈希；换了颜色或造型，哈希不同。
  */
-export async function renderFeishuAvatar(look: SlimeLook): Promise<{ png: Buffer; sha256: string }> {
-  throw new Error("未实现");
+export async function renderFeishuAvatar(look: SlimeLook): Promise<FeishuAvatarImage> {
+  const key = lookKey(look);
+  const hit = rendered.get(key);
+  if (hit !== undefined) return hit;
+  const { size, rgb } = slimeBitmap(look, FEISHU_AVATAR_TARGET_PX, FEISHU_AVATAR_PAD_CELLS);
+  const { default: sharp } = await import("sharp");
+  const png = await sharp(rgb, { raw: { width: size, height: size, channels: 3 } }).png({ palette: true, compressionLevel: 9, effort: 10 }).toBuffer();
+  const image = { png, sha256: createHash("sha256").update(png).digest("hex") };
+  rendered.set(key, image);
+  return image;
 }
 
 export interface FeishuAvatarCache {
   /**
-   * hash 是现在这张图的 feishuAvatarHash。
+   * hash 是这个形象现在那张图的 sha256（renderFeishuAvatar）。
    * 后置：这张图传过返回记下的 image_key；没传过、或记下的是另一张图，调 upload 传一次、记下再返回。
    * 同一张图并发调用只传一次。
    */
-  imageKeyOf(fruit: PmFruit, hash: string, upload: (fruit: PmFruit) => Promise<FeishuImageKey>): Promise<FeishuImageKey>;
+  imageKeyOf(look: SlimeLook, hash: string, upload: (look: SlimeLook) => Promise<FeishuImageKey>): Promise<FeishuImageKey>;
 }
 
 export function createFeishuAvatarCache(store: Pick<FeishuStore, "avatarKey" | "saveAvatarKey">, now: () => number): FeishuAvatarCache {
   const inflight = new Map<string, Promise<FeishuImageKey>>();
   return {
-    imageKeyOf(fruit, hash, upload) {
-      const saved = store.avatarKey(fruit, hash);
+    imageKeyOf(look, hash, upload) {
+      const saved = store.avatarKey(look, hash);
       if (saved !== null) return Promise.resolve(saved);
-      const slot = `${fruit}:${hash}`;
+      const slot = `${lookKey(look)}:${hash}`;
       const running = inflight.get(slot);
       if (running !== undefined) return running;
-      const task = upload(fruit).then((key) => {
-        store.saveAvatarKey(fruit, key, hash, now());
+      const task = upload(look).then((key) => {
+        store.saveAvatarKey(look, key, hash, now());
         return key;
       });
       inflight.set(slot, task);

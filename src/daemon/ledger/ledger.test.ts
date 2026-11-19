@@ -78,7 +78,7 @@ describe("createPm", () => {
     try {
       const l = createLedger(db2, { now: () => 42, pmHomeRoot: join(home, "pm-home") });
       const result = l.createPm({ name: "老王", mode: "manage_only", persona: "", defaultModel: "opus" });
-      expect(result.pm).toMatchObject({ name: "老王", mode: "manage_only", defaultModel: "opus", personaFile: null, avatarFile: null, createdAt: 42 });
+      expect(result.pm).toMatchObject({ name: "老王", mode: "manage_only", defaultModel: "opus", personaFile: null, createdAt: 42 });
       expect(result.conversation).toMatchObject({ kind: "pm", pmId: result.pm.id, projectId: null, title: "老王", createdAt: 42 });
       const session = createSessionStore(db2).get(result.sessionId);
       const cwd = join(home, "pm-home", String(result.pm.id));
@@ -1218,11 +1218,68 @@ describe("送达回执独立于执行结果", () => {
 });
 
 describe("项目经理的形象（docs/slime-cohesion-design.md）", () => {
-  it.todo("setPmLook：存下造型和颜色，返回改完的项目经理，发一条 pm.updated");
-  it.todo("setPmLook：传 null 回到默认，读出来的 avatarFruit、avatarColor 是 null");
-  it.todo("setPmLook：不写性格设定的修改记录");
-  it.todo("setPmLook：归档的项目经理也能改");
-  it.todo("setPmLook：项目经理不存在抛 not_found，造型或颜色不在名录里抛 invalid");
-  it.todo("新建项目经理：存下 pickNewPmLook 分的形象，和没归档的项目经理不撞造型");
-  it.todo("迁移前建的项目经理读出来 avatarFruit、avatarColor 是 null，头像和以前一样");
+  const pmId = () => ledger.snapshot().pms[0]!.id;
+  const pmOf = (id: number) => ledger.snapshot().pms.find((p) => p.id === id)!;
+
+  it("setPmLook：存下造型和颜色，返回改完的项目经理，发一条 pm.updated", () => {
+    const pm = ledger.setPmLook(pmId(), { fruit: "persimmon", color: "sky" });
+    expect(pm).toMatchObject({ id: pmId(), avatarFruit: "persimmon", avatarColor: "sky" });
+    expect(pmOf(pmId())).toMatchObject({ avatarFruit: "persimmon", avatarColor: "sky" });
+    expect(changes.map((c) => c.type)).toEqual(["pm.updated"]);
+    expect(changes[0]).toMatchObject({ data: { pm: { avatarFruit: "persimmon", avatarColor: "sky" } } });
+    expect(ledger.setPmLook(pmId(), { fruit: "persimmon", color: "teal" })).toMatchObject({ avatarFruit: "persimmon", avatarColor: "teal" });
+    expect(count("pm_looks")).toBe(1);
+  });
+
+  it("setPmLook：传 null 回到默认，读出来的 avatarFruit、avatarColor 是 null", () => {
+    ledger.setPmLook(pmId(), { fruit: "kiwi", color: null });
+    expect(pmOf(pmId())).toMatchObject({ avatarFruit: "kiwi", avatarColor: null });
+    ledger.setPmLook(pmId(), { fruit: null, color: null });
+    expect(pmOf(pmId())).toMatchObject({ avatarFruit: null, avatarColor: null });
+    expect(count("pm_looks")).toBe(0);
+  });
+
+  it("setPmLook：不写性格设定的修改记录", () => {
+    const before = count("persona_changes");
+    ledger.setPmLook(pmId(), { fruit: "lime", color: "sakura" });
+    expect(count("persona_changes")).toBe(before);
+    expect(changes.some((c) => c.type === "message.created")).toBe(false);
+  });
+
+  it("setPmLook：归档的项目经理也能改", () => {
+    ledger.archivePm(pmId());
+    expect(ledger.setPmLook(pmId(), { fruit: "melon", color: "graphite" })).toMatchObject({ avatarFruit: "melon", avatarColor: "graphite" });
+  });
+
+  it("setPmLook：项目经理不存在抛 not_found，造型或颜色不在名录里抛 invalid", () => {
+    expect(() => ledger.setPmLook(9_999, { fruit: "kiwi", color: null })).toThrow(expect.objectContaining({ code: "not_found" }));
+    expect(() => ledger.setPmLook(pmId(), { fruit: "durian" as never, color: null })).toThrow(expect.objectContaining({ code: "invalid" }));
+    expect(() => ledger.setPmLook(pmId(), { fruit: null, color: "neon" as never })).toThrow(expect.objectContaining({ code: "invalid" }));
+    expect(changes).toEqual([]);
+  });
+
+  it("新建项目经理：存下 pickNewPmLook 分的形象，和没归档的项目经理不撞造型", () => {
+    // beforeEach 建的第一个拿到名录里第一个造型
+    expect(pmOf(pmId())).toMatchObject({ avatarFruit: "grapefruit", avatarColor: "grapefruit" });
+    const second = ledger.createPm({ name: "老二", mode: "manage_only", persona: "" }).pm;
+    expect(second).toMatchObject({ avatarFruit: "orange", avatarColor: "orange" });
+    // 归档的让出造型；换过造型的按换过的算
+    ledger.setPmLook(second.id, { fruit: "kiwi", color: "sky" });
+    ledger.archivePm(pmId());
+    const third = ledger.createPm({ name: "老三", mode: "manage_only", persona: "" }).pm;
+    expect(third).toMatchObject({ avatarFruit: "grapefruit", avatarColor: "grapefruit" });
+    const fourth = ledger.createPm({ name: "老四", mode: "manage_only", persona: "", look: { fruit: "kiwi", color: "teal" } }).pm;
+    expect(fourth).toMatchObject({ avatarFruit: "kiwi", avatarColor: "teal" });
+    expect(() => ledger.createPm({ name: "老五", mode: "manage_only", persona: "", look: { fruit: "durian" as never, color: "teal" } })).toThrow(
+      expect.objectContaining({ code: "invalid" }),
+    );
+  });
+
+  it("迁移前建的项目经理读出来 avatarFruit、avatarColor 是 null，头像和以前一样", () => {
+    db.run("DELETE FROM pm_looks");
+    expect(pmOf(pmId())).toMatchObject({ avatarFruit: null, avatarColor: null });
+    // 别的版本写进来的、名录里没有的值当默认
+    db.run("INSERT INTO pm_looks (pm_id, fruit, color, updated_at) VALUES (?, 'durian', 'neon', 1)", pmId());
+    expect(pmOf(pmId())).toMatchObject({ avatarFruit: null, avatarColor: null });
+  });
 });

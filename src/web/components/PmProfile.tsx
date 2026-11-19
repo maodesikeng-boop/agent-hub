@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ArrowLeft, ChevronRight, Loader2 } from "lucide-react";
+import { ArrowLeft, ChevronRight, Loader2 } from "../ui/icons.ts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../lib/utils.ts";
 import {
@@ -37,6 +37,8 @@ import { Textarea } from "../ui/input.tsx";
 import { useModelCatalog } from "../models.tsx";
 import { AgentRows, draftOf, settingOf, type AgentDraft, type AgentRowKey } from "./AgentRows.tsx";
 import { Avatar } from "./Avatar.tsx";
+import { SlimePicker } from "./SlimePicker.tsx";
+import { resolvePmLook, type SlimeLook } from "../../shared/slimes.ts";
 import { ModeRows } from "./ModeRows.tsx";
 import { PmMemoryFilesGroup } from "./PmMemoryFilesGroup.tsx";
 import { ScheduleGroup } from "./ScheduleGroup.tsx";
@@ -119,7 +121,7 @@ function ChangeRow({ change, revertable, busy, onRevert }: { change: PersonaChan
       {textChanged && (
         <Collapsible open={open} onOpenChange={setOpen}>
           <CollapsibleTrigger className="group mt-1 flex cursor-pointer items-center gap-1 rounded-full text-minor text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
-            <ChevronRight className="size-3.5 transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />
+            <ChevronRight className="size-pixel-sm transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />
             View changes
           </CollapsibleTrigger>
           <CollapsibleContent className="mt-2 grid gap-2 sm:grid-cols-2">
@@ -353,7 +355,7 @@ function PmEditor({
                 Cancel
               </Button>
               <Button type="button" disabled={!canSaveAgent} onClick={() => void saveAgent()}>
-                {agentSaving && <Loader2 className="animate-spin" aria-hidden="true" />}
+                {agentSaving && <Loader2 aria-hidden="true" />}
                 Save
               </Button>
             </div>
@@ -389,7 +391,7 @@ function PmEditor({
         action={
           textDirty && (
             <Button size="sm" disabled={tooLong || busy !== null} onClick={saveText}>
-              {busy === "text" && <Loader2 className="animate-spin" aria-hidden="true" />}
+              {busy === "text" && <Loader2 aria-hidden="true" />}
               Save
             </Button>
           )
@@ -470,7 +472,7 @@ function ArchiveStatusGroup({ pmId, archivedAt }: { pmId: number; archivedAt: nu
       <SettingsRow label="Archived" detail={formatArchiveRemaining(archivedAt)} error={unarchiveError}>
         {() => (
           <Button disabled={unarchiving} onClick={() => void unarchive()}>
-            {unarchiving && <Loader2 className="animate-spin" aria-hidden="true" />}
+            {unarchiving && <Loader2 aria-hidden="true" />}
             {unarchiving ? "Restoring…" : "Restore"}
           </Button>
         )}
@@ -533,7 +535,7 @@ function RenewSessionGroup({
       <SettingsRow label="New session" detail="The project manager writes a handoff first. Chat history stays" error={error}>
         {() => (
           <Button variant="outline" disabled={busy || disabled} onClick={() => setConfirming(true)}>
-            {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
+            {busy && <Loader2 aria-hidden="true" />}
             {busy ? "Handing off…" : "Start…"}
           </Button>
         )}
@@ -541,7 +543,7 @@ function RenewSessionGroup({
       <SettingsRow label="Archive project manager" detail="Stops the session and schedules. Data is deleted after 7 days" error={archiveError}>
         {() => (
           <Button variant="outline" disabled={archiving} onClick={() => setConfirmingArchive(true)}>
-            {archiving && <Loader2 className="animate-spin" aria-hidden="true" />}
+            {archiving && <Loader2 aria-hidden="true" />}
             {archiving ? "Archiving…" : "Archive…"}
           </Button>
         )}
@@ -573,6 +575,44 @@ function RenewSessionGroup({
 }
 
 /** 项目经理资料页（设计第 3.6 节）：头像、名字、项目名居中，下面是模型、工作方式、文件夹、定时任务、性格设定、修改记录、会话几组设置。 */
+/**
+ * 资料页头部的头像：点开换形象的浮层（SlimePicker）。点了先显示新形象，保存失败退回原来的、浮层最下面写原因；
+ * 保存成功后等账本推来的 pm.updated 追上再用回项目经理身上的形象，中间不闪回旧的。
+ */
+function LookButton({ pm }: { pm: Pm }) {
+  const client = useClient();
+  const saved = resolvePmLook(pm);
+  const [shown, setShown] = useState<SlimeLook | null>(null);
+  const [error, setError] = useState<ErrorLike | null>(null);
+  const seq = useRef(0);
+  useEffect(() => {
+    if (shown?.fruit === saved.fruit && shown.color === saved.color) setShown(null);
+  }, [shown, saved]);
+  const look = shown ?? saved;
+  const change = (next: SlimeLook) => {
+    const n = ++seq.current;
+    setShown(next);
+    setError(null);
+    client.putPmLook(pm.id, { fruit: next.fruit, color: next.color }).catch((err: unknown) => {
+      if (seq.current !== n) return;
+      setShown(null);
+      setError(errorText(err));
+    });
+  };
+  return (
+    <SlimePicker look={look} onChange={change} error={error}>
+      <button
+        type="button"
+        aria-label="Change look"
+        title="Change look"
+        className="cursor-pointer rounded-2xl p-1 transition-colors outline-none hover:bg-jelly-hover focus-visible:ring-2 focus-visible:ring-ring/50 data-[state=open]:bg-jelly"
+      >
+        <Avatar look={look} size={64} />
+      </button>
+    </SlimePicker>
+  );
+}
+
 export function PmProfile({
   pm,
   project,
@@ -613,12 +653,12 @@ export function PmProfile({
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col" aria-label={label}>
       <header data-window-drag className="flex h-16 min-w-0 shrink-0 items-center gap-3 overflow-hidden px-6">
-        <Button variant="ghost" size="icon" className="shrink-0" aria-label="Back" onClick={onBack}>
+        <Button variant="slot" size="icon" className="shrink-0" aria-label="Back" onClick={onBack}>
           <ArrowLeft aria-hidden="true" />
         </Button>
         {nameHidden && (
           <div aria-hidden="true" className="flex min-w-0 items-center gap-3">
-            <Avatar colorKey={pm.id} size={34} />
+            <Avatar look={resolvePmLook(pm)} size={34} />
             <span className="min-w-0 truncate text-title leading-snug font-semibold">{pm.name}</span>
           </div>
         )}
@@ -627,7 +667,7 @@ export function PmProfile({
       <div ref={scrollerRef} className="page-fade min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-6 pt-4 pb-12">
         <div className="mx-auto grid max-w-160 grid-cols-1 gap-6">
           <header className="grid min-w-0 grid-cols-1 justify-items-center pb-2 text-center">
-            <Avatar colorKey={pm.id} size={64} />
+            <LookButton pm={pm} />
             <h1 ref={nameRef} className="mt-4 max-w-full wrap-break-word text-display leading-tight font-semibold tracking-tight">{pm.name}</h1>
             {project && (
               <p title={project.name} className="mt-1 w-full min-w-0 truncate text-minor text-muted-foreground">
@@ -638,7 +678,7 @@ export function PmProfile({
           {pm.archivedAt != null && <ArchiveStatusGroup key={pm.id} pmId={pm.id} archivedAt={pm.archivedAt} />}
           {load.phase === "loading" && (
             <div className="flex items-center justify-center gap-2 text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+              <Loader2 className="size-pixel" aria-hidden="true" />
               Loading…
             </div>
           )}

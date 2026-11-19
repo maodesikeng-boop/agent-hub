@@ -84,6 +84,12 @@ import {
   type CreatePmResponse,
   type EditPersonaRequest,
   type EditPersonaResponse,
+  isJellyColorId,
+  isPmFruit,
+  type JellyColorId,
+  type PmFruit,
+  type PmLookRequest,
+  type PmLookResponse,
   type FileAction,
   type FileActionResponse,
   type Ledger,
@@ -449,6 +455,16 @@ const pmCapabilitiesStartSchema = z.discriminatedUnion("from", [
   z.object({ from: z.literal("pm"), pmId: z.number().int().positive() }).strict(),
 ]);
 
+const pmFruitSchema = z.string().refine(isPmFruit, "unknown fruit").transform((s) => s as PmFruit);
+const jellyColorSchema = z.string().refine(isJellyColorId, "unknown color").transform((s) => s as JellyColorId);
+
+/** PUT /api/pms/:id/look：两项都要给，null 是回到默认。 */
+const pmLookBodySchema = z.object({ fruit: pmFruitSchema.nullable(), color: jellyColorSchema.nullable() }).strict();
+
+function parsePmLookBody(body: unknown): PmLookRequest {
+  return parseWithSchema(pmLookBodySchema, body);
+}
+
 const createPmBodySchema = z
   .object({
     name: nameSchema,
@@ -462,6 +478,7 @@ const createPmBodySchema = z
       .refine((s) => s.trim() !== "" && !s.includes("\u0000"), "folder must be a non-empty path")
       .optional(),
     capabilities: pmCapabilitiesStartSchema.optional(),
+    look: z.object({ fruit: pmFruitSchema, color: jellyColorSchema }).strict().optional(),
   })
   .strict();
 
@@ -476,6 +493,7 @@ function parseCreatePmBody(body: unknown): CreatePmRequest {
     ...(raw.effort !== undefined ? { effort: raw.effort } : {}),
     ...(raw.folder !== undefined ? { folder: raw.folder } : {}),
     ...(raw.capabilities !== undefined ? { capabilities: raw.capabilities } : {}),
+    ...(raw.look !== undefined ? { look: raw.look } : {}),
   };
 }
 
@@ -1677,6 +1695,11 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       const pmId = parseId((req.params as { id?: unknown }).id, "pm id");
       const result = ledger.editPersona(pmId, parseEditPersonaBody(req.body), { kind: "user" });
       return { changed: result.change !== null, persona: result.persona };
+    });
+
+    routes.put("/api/pms/:id/look", async (req): Promise<PmLookResponse> => {
+      const pmId = parseId((req.params as { id?: unknown }).id, "pm id");
+      return { pm: ledger.setPmLook(pmId, parsePmLookBody(req.body)) };
     });
 
     routes.get("/api/pms/:id/capabilities", async (req): Promise<PmCapabilitiesView> => {

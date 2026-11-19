@@ -1,7 +1,7 @@
 // 资料页的“记忆子文件”折叠组（docs/ui-standard.md 第 9 条）：
 // 默认收起且收起时不发请求、不常驻配额数字；展开后通过 react-query 按需拉取、查看、编辑、新建或删除 <topic>.md 子文件。
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Loader2, Plus, Trash2 } from "lucide-react";
+import { Loader2, Plus, Trash2 } from "../ui/icons.ts";
 import { useMemo, useState } from "react";
 import {
   PM_MEMORY_MAX_SUBFILES,
@@ -126,7 +126,7 @@ function EditMemoryFileRow({
         ) : (
           <div className="flex items-center justify-between gap-3 px-4 py-3 text-minor text-muted-foreground">
             <span className="flex items-center gap-2">
-              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+              <Loader2 className="size-pixel" aria-hidden="true" />
               Loading…
             </span>
             <Button variant="ghost" size="sm" onClick={onClose}>
@@ -161,7 +161,7 @@ function EditMemoryFileRow({
                   disabled={contentProblem !== null || saveMutation.isPending}
                   onClick={() => saveMutation.mutate(text)}
                 >
-                  {saveMutation.isPending && <Loader2 className="animate-spin" aria-hidden="true" />}
+                  {saveMutation.isPending && <Loader2 aria-hidden="true" />}
                   Save
                 </Button>
               )}
@@ -238,7 +238,7 @@ function MemoryFileItem({
               Cancel
             </Button>
             <Button size="sm" disabled={deleteMutation.isPending} onClick={() => deleteMutation.mutate()}>
-              {deleteMutation.isPending && <Loader2 className="animate-spin" aria-hidden="true" />}
+              {deleteMutation.isPending && <Loader2 aria-hidden="true" />}
               Delete
             </Button>
           </>
@@ -352,7 +352,7 @@ function NewMemoryFileForm({
             Cancel
           </Button>
           <Button disabled={!canSave} onClick={() => createMutation.mutate()}>
-            {createMutation.isPending && <Loader2 className="animate-spin" aria-hidden="true" />}
+            {createMutation.isPending && <Loader2 aria-hidden="true" />}
             Save
           </Button>
         </div>
@@ -390,7 +390,7 @@ function PmMemoryFilesBody({ pmId, archived }: { pmId: number; archived: boolean
     }
     return (
       <div className="flex items-center gap-2 px-4 py-3 text-minor text-muted-foreground">
-        <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+        <Loader2 className="size-pixel" aria-hidden="true" />
         <span>Loading…</span>
       </div>
     );
@@ -463,7 +463,7 @@ function PmMemoryFilesBody({ pmId, archived }: { pmId: number; archived: boolean
               setAdding(true);
             }}
           >
-            <Plus className="size-4 text-muted-foreground" aria-hidden="true" />
+            <Plus className="size-pixel text-muted-foreground" aria-hidden="true" />
             <span className={full ? "text-muted-foreground" : undefined}>New</span>
             {full && <span className="ml-auto text-xs text-muted-foreground tabular-nums">{`${PM_MEMORY_MAX_SUBFILES} max`}</span>}
           </button>

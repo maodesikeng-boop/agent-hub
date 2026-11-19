@@ -1,7 +1,7 @@
 // 资料页的“定时任务”组（M6）：一个任务一行（名字，下面频率、下次时间，失败了才写上次结果），右边开关（暂停/恢复）和删除（要二次确认）；
 // 最后一行“新建”，点了在组里展开表单。表单照 docs/ui-standard.md 第 9 条“表单校验”：空着“保存”是灰的，填得不对边输入边在那一行下面写原因；
 // 后台再查一遍（同 hub schedule add），后台拒绝的原因写在按钮上面。
-import { Loader2, Plus, Trash2 } from "lucide-react";
+import { Loader2, Plus, Trash2 } from "../ui/icons.ts";
 import { useState } from "react";
 import {
   MAX_SCHEDULES_PER_PM,
@@ -61,7 +61,7 @@ function ScheduleItem({ schedule }: { schedule: ScheduleRecord }) {
               Cancel
             </Button>
             <Button size="sm" disabled={busy} onClick={() => void run(() => client.deleteSchedule(schedule.id))}>
-              {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
+              {busy && <Loader2 aria-hidden="true" />}
               Delete
             </Button>
           </>
@@ -169,7 +169,7 @@ function NewScheduleForm({ pmId, onClose }: { pmId: number; onClose: () => void 
             Cancel
           </Button>
           <Button disabled={!canSave} onClick={() => void save()}>
-            {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
+            {busy && <Loader2 aria-hidden="true" />}
             Save
           </Button>
         </div>
@@ -196,7 +196,7 @@ export function ScheduleGroup({ pmId, schedules }: { pmId: number; schedules: Sc
           className="flex min-h-13 w-full cursor-pointer items-center gap-2 px-4 py-2 text-left text-body transition-colors outline-none hover:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 disabled:cursor-default disabled:hover:bg-transparent"
           onClick={() => setAdding(true)}
         >
-          <Plus className="size-4 text-muted-foreground" aria-hidden="true" />
+          <Plus className="size-pixel text-muted-foreground" aria-hidden="true" />
           <span className={full ? "text-muted-foreground" : undefined}>New</span>
           {full && <span className="ml-auto text-xs text-muted-foreground tabular-nums">{`${MAX_SCHEDULES_PER_PM} max`}</span>}
         </button>

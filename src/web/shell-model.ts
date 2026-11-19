@@ -38,7 +38,10 @@ import { useDraftStore, useStagingStore } from "./upload.ts";
 import { mobileBack, settingsParent } from "./mobile/back.ts";
 import { routeHash, useRoute, type SettingsSection } from "./route.ts";
 import { COMPACT_QUERY, NARROW_QUERY, useMediaQuery } from "./useMediaQuery.ts";
+import { defaultLookOf, resolvePmLook } from "../shared/slimes.ts";
 import { useRerenderAt } from "./useRerenderAt.ts";
+
+const NO_LOOK = defaultLookOf(0);
 
 const DRAG_INTERACTIVE_SELECTOR = 'button, a, input, textarea, select, [role="button"], [data-no-drag]';
 export const ROUTER_DRAFT_KEY = "router";
@@ -496,15 +499,17 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       ),
     [fleet.devices],
   );
+  const routerWorking = local.state.router.commands.some((c) => c.status === "planning");
   const sidebarRouter = useMemo<SidebarRouterEntry>(
     () => ({
       active: routerActive,
       pendingCount: routerView.summary.pendingCount,
       unreadReportCount: routerView.summary.unreadReportCount,
       subtitle: routerView.summary.subtitle,
+      working: routerWorking,
       onSelect: selectRouter,
     }),
-    [routerActive, routerView.summary.pendingCount, routerView.summary.unreadReportCount, routerView.summary.subtitle, selectRouter],
+    [routerActive, routerView.summary.pendingCount, routerView.summary.unreadReportCount, routerView.summary.subtitle, routerWorking, selectRouter],
   );
   const fleetHub = fleet.hub;
   const clientForDevice = useCallback((deviceKey: string) => fleetHub(deviceKey).client, [fleetHub]);
@@ -537,7 +542,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const view = active ? state.conversations[active.id] : undefined;
   const reconnecting = remote ? current.status === "reconnecting" : state.connection === "reconnecting";
   const workerPmEntry = active;
-  const avatarKey = active?.avatarKey ?? 0;
+  const look = active?.look ?? NO_LOOK;
   const nextGroups: SidebarGroup[] = fleet.devices.map((d) => ({
     key: d.key,
     name: d.info.name,
@@ -563,7 +568,14 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       ? prevGroups
       : nextGroups;
   groupsRef.current = groups;
-  const newPmDevices = fleet.devices.map((d) => ({ key: d.key, name: d.info.name, status: d.status, client: fleet.hub(d.key).client, server: d.state.server }));
+  const newPmDevices = fleet.devices.map((d) => ({
+    key: d.key,
+    name: d.info.name,
+    status: d.status,
+    client: fleet.hub(d.key).client,
+    server: d.state.server,
+    takenLooks: d.state.pms.filter((pm) => pm.archivedAt == null).map(resolvePmLook),
+  }));
   const defaultProviderDevice = desktopSettings.providerDevice ?? mobileProviderDevice ?? current.key;
   return {
     ...shared,
@@ -571,7 +583,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       active,
       activeId,
       actions,
-      avatarKey,
+      look,
       clearFocus,
       clientForDevice,
       storeForDevice,

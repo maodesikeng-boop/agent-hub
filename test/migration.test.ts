@@ -2376,6 +2376,66 @@ describe("0034_feishu", () => {
 });
 
 describe("0038_pm_looks（docs/slime-cohesion-design.md）", () => {
-  it.todo("从 37 升级：建一张空的 pm_looks 表，老数据一个字不变；回退 8 / 37 重跑不报错、不丢已存的形象");
-  it.todo("删项目经理时它在 pm_looks 的那一行跟着删");
+  it("从 37 升级：建一张空的 pm_looks 表，老数据一个字不变；回退 8 / 37 重跑不报错、不丢已存的形象", () => {
+    const db = m3Db();
+    migrate(db, migrationsUpTo(37));
+    const pms = db.all("SELECT * FROM pms ORDER BY id");
+    expect(migrate(db, migrationsUpTo(38))).toMatchObject({ from: 37, to: 38 });
+    expect(db.all("SELECT * FROM pms ORDER BY id")).toEqual(pms);
+    expect(db.all("SELECT * FROM pm_looks")).toEqual([]);
+
+    db.run("INSERT INTO pm_looks (pm_id, fruit, color, updated_at) VALUES (1, 'persimmon', 'sky', 100)");
+    db.run("INSERT INTO pm_looks (pm_id, fruit, color, updated_at) VALUES (2, NULL, 'teal', 100)");
+    expect(() => db.run("INSERT INTO pm_looks (pm_id, fruit, color, updated_at) VALUES (1, 'kiwi', NULL, 100)")).toThrow(/UNIQUE|PRIMARY/);
+    expect(() => db.run("INSERT INTO pm_looks (pm_id, fruit, color, updated_at) VALUES (999999, 'kiwi', NULL, 100)")).toThrow(/FOREIGN KEY/);
+    const looks = db.all("SELECT * FROM pm_looks ORDER BY pm_id");
+    for (const from of [8, 37]) {
+      db.exec(`PRAGMA user_version = ${from}`);
+      expect(() => migrate(db, migrationsDir)).not.toThrow();
+      expect(userVersion(db)).toBe(LATEST_VERSION);
+      expect(db.all("SELECT * FROM pm_looks ORDER BY pm_id")).toEqual(looks);
+    }
+    expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
+  it("删项目经理时它在 pm_looks 的那一行跟着删", () => {
+    const db = m3Db();
+    migrate(db, migrationsDir);
+    const pmId = db.run("INSERT INTO pms (name, mode, vendor, persona, created_at) VALUES ('临时', 'manage_only', 'claude', '', 1)").lastInsertRowid;
+    db.run("INSERT INTO pm_looks (pm_id, fruit, color, updated_at) VALUES (?, 'kiwi', 'sakura', 100)", pmId);
+    db.run("INSERT INTO pm_looks (pm_id, fruit, color, updated_at) VALUES (1, 'lime', NULL, 100)");
+    db.run("DELETE FROM pms WHERE id = ?", pmId);
+    expect(db.all("SELECT pm_id FROM pm_looks")).toEqual([{ pm_id: 1 }]);
+  });
+});
+
+describe("0039_feishu_avatar_look（docs/slime-cohesion-design.md）", () => {
+  it("feishu_avatars 改按形象键认、清空旧的水果缓存；群上记的旧水果名清空，已是形象键的不动；回退 37 / 38 重跑不报错", () => {
+    const db = m3Db();
+    migrate(db, migrationsUpTo(38));
+    db.run("INSERT INTO feishu_avatars (fruit, image_key, content_sha256, uploaded_at) VALUES ('kiwi', 'img_kiwi', 'h', 1)");
+    const insertChat = (id: string, pmId: number, avatar: string | null) =>
+      db.run(`INSERT INTO feishu_chats (chat_id, target, pm_id, name, label, avatar_fruit, created_at, updated_at) VALUES (?, 'pm', ?, '群', '群', ?, 0, 0)`, id, pmId, avatar);
+    insertChat("oc_old", 1, "kiwi");
+    insertChat("oc_new", 2, "kiwi:sky");
+    expect(migrate(db, migrationsUpTo(39))).toMatchObject({ from: 38, to: 39 });
+    expect(db.all("SELECT * FROM feishu_avatars")).toEqual([]);
+    db.run("INSERT INTO feishu_avatars (look, image_key, content_sha256, uploaded_at) VALUES ('kiwi:sky', 'img_1', 'h1', 2)");
+    expect(() => db.run("INSERT INTO feishu_avatars (look, image_key, content_sha256, uploaded_at) VALUES ('kiwi:sky', 'img_2', 'h2', 2)")).toThrow(/UNIQUE|PRIMARY/);
+    expect(db.all("SELECT chat_id, avatar_fruit FROM feishu_chats ORDER BY chat_id")).toEqual([
+      { chat_id: "oc_new", avatar_fruit: "kiwi:sky" },
+      { chat_id: "oc_old", avatar_fruit: null },
+    ]);
+    for (const from of [37, 38]) {
+      db.exec(`PRAGMA user_version = ${from}`);
+      expect(() => migrate(db, migrationsDir)).not.toThrow();
+      expect(userVersion(db)).toBe(LATEST_VERSION);
+      expect(db.all("SELECT chat_id, avatar_fruit FROM feishu_chats ORDER BY chat_id")).toEqual([
+        { chat_id: "oc_new", avatar_fruit: "kiwi:sky" },
+        { chat_id: "oc_old", avatar_fruit: null },
+      ]);
+    }
+    expect(db.all<{ name: string }>("PRAGMA table_info(feishu_avatars)").map((c) => c.name)).toEqual(["look", "image_key", "content_sha256", "uploaded_at"]);
+    expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
 });

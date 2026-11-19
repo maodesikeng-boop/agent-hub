@@ -1,5 +1,5 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
-import { ChevronRight, Loader2, MessageCircleQuestionMark } from "lucide-react";
+import { ChevronRight, Loader2, MessageCircleQuestionMark } from "../ui/icons.ts";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   askOf,
@@ -23,8 +23,9 @@ import { normalizeTaskGraphs } from "../task-graph-compat.ts";
 import type { WorkerTone } from "../worker-status.ts";
 import { Button } from "../ui/button.tsx";
 import { Avatar } from "./Avatar.tsx";
+import { defaultLookOf, type SlimeLook } from "../../shared/slimes.ts";
 import { PeelTrackList } from "./PeelTrack.tsx";
-import { SliceWheelIcon } from "./SliceWheelIcon.tsx";
+import { TaskProgressIcon } from "./TaskProgressIcon.tsx";
 import { TaskGraphDialog } from "./TaskGraphDialog.tsx";
 
 /**
@@ -35,6 +36,8 @@ const BUSY_ACTIVITIES: ReadonlySet<string> = new Set(["working", "preparing", "b
 const IDLE_ACTIVITIES: ReadonlySet<string> = new Set(["stopping", "idle"]);
 /** 每组默认只列几条，多了出一行 Show more（照 Claude desktop 的右栏）。 */
 export const RIGHT_RAIL_VISIBLE_ROWS = 3;
+/** 没给形象时（测试、还没有项目经理）用的默认形象。 */
+const NO_LOOK = defaultLookOf(0);
 
 const isBusy = (worker: WorkerEntry) => !worker.ended && (BUSY_ACTIVITIES.has(worker.activity) || !IDLE_ACTIVITIES.has(worker.activity));
 
@@ -124,7 +127,7 @@ function GroupTitle({
         <span className="min-w-0 truncate">{children}</span>
         <ChevronRight
           className={cn(
-            "size-3.5 shrink-0 text-muted-foreground transition-transform duration-200 ease-out motion-reduce:transition-none",
+            "size-pixel-sm shrink-0 text-muted-foreground transition-transform duration-200 ease-out motion-reduce:transition-none",
             !collapsed && "rotate-90",
           )}
           aria-hidden="true"
@@ -185,7 +188,7 @@ function AskRow({ ask, onOpen }: { ask: Message; onOpen: () => void }) {
       <button type="button" title={summary} className={cn(ROW, "items-center", ITEM_HOVER)} onClick={onOpen}>
         <MessageCircleQuestionMark className={ROW_ICON} strokeWidth={ICON_STROKE} aria-hidden="true" />
         <span className="min-w-0 flex-1 truncate text-body leading-5">{summary}</span>
-        <ChevronRight className={cn(ROW_ICON, "size-3.5")} aria-hidden="true" />
+        <ChevronRight className={cn(ROW_ICON, "size-pixel-sm")} aria-hidden="true" />
       </button>
     </li>
   );
@@ -258,24 +261,24 @@ function WorkerRow({ worker, active, onOpen }: { worker: WorkerEntry; active: bo
   );
 }
 
-/** 右栏开关：ghost 图标按钮，右栏展开时在右栏第一组标题的同一行右边，收起（或太窄）时在顶栏右边；右栏没内容时不显示。收着、又有没回答的提问时右上角一个主色小圆点。 */
+/** 右栏开关：工具格（slot）里一只便签小灵，右栏展开时在右栏第一组标题的同一行右边，收起（或太窄）时在顶栏右边；右栏没内容时不显示。收着、又有没回答的提问时右上角一个主色小圆点。 */
 export const RightRailToggle = memo(function RightRailToggle({
   visible,
   open,
   attention,
-  avatarKey = 0,
+  look = NO_LOOK,
   onToggle,
 }: {
   visible: boolean;
   open: boolean;
   attention: boolean;
-  avatarKey?: number;
+  look?: SlimeLook;
   onToggle: () => void;
 }) {
   if (!visible) return null;
   return (
     <Button
-      variant="ghost"
+      variant="slot"
       size="icon"
       aria-label={open ? "Hide side panel" : attention ? "Show side panel (needs you)" : "Show side panel"}
       aria-expanded={open}
@@ -283,7 +286,7 @@ export const RightRailToggle = memo(function RightRailToggle({
       className={cn("relative shrink-0", open && "text-foreground")}
       onClick={onToggle}
     >
-      <Avatar colorKey={avatarKey} size={26} neutral />
+      <Avatar look={look} size={26} neutral />
       {!open && attention && <span className="absolute top-2 right-2 size-1.5 rounded-full bg-primary" aria-hidden="true" />}
     </Button>
   );
@@ -320,7 +323,7 @@ function CompletedGroup({
   projectId,
   completedGraphCount,
   activeGraphIdsKey,
-  avatarKey = 0,
+  look = NO_LOOK,
   openWorkerId,
   onOpenWorker,
   onZoomGraph,
@@ -331,7 +334,7 @@ function CompletedGroup({
   projectId?: ProjectId | null;
   completedGraphCount?: number;
   activeGraphIdsKey: string;
-  avatarKey?: number;
+  look?: SlimeLook;
   openWorkerId: ConversationId | null;
   onOpenWorker: (id: ConversationId) => void;
   onZoomGraph: (graph: TaskGraph) => void;
@@ -405,7 +408,7 @@ function CompletedGroup({
         <GroupBody id="rail-completed-body" collapsed={false}>
           {historyQuery.isLoading && completedGraphs.length === 0 && shownWorkers.length === 0 && (
             <div className="flex items-center gap-2 py-2 text-minor text-muted-foreground">
-              <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+              <Loader2 className="size-pixel-sm" aria-hidden="true" />
               <span>Loading…</span>
             </div>
           )}
@@ -419,7 +422,7 @@ function CompletedGroup({
                   onClick={() => onZoomGraph(graph)}
                   className={cn(ROW, "items-center", ITEM_HOVER)}
                 >
-                  <SliceWheelIcon graph={graph} colorKey={avatarKey} size={18} />
+                  <TaskProgressIcon graph={graph} color={look.color} size={18} />
                   <span className="min-w-0 flex-1 truncate text-body leading-5 opacity-60">{graph.title}</span>
                 </button>
               </li>
@@ -458,7 +461,7 @@ export function RailGroups({
   activeGraphs,
   completedGraphCount,
   projectId,
-  avatarKey = 0,
+  look = NO_LOOK,
   openWorkerId,
   toggle,
   className,
@@ -472,7 +475,7 @@ export function RailGroups({
   activeGraphs?: readonly TaskGraph[];
   completedGraphCount?: number;
   projectId?: ProjectId | null;
-  avatarKey?: number;
+  look?: SlimeLook;
   /** 正开着的 Worker 的对话。 */
   openWorkerId: ConversationId | null;
   toggle?: React.ReactNode;
@@ -608,7 +611,7 @@ export function RailGroups({
                 graphs={activeGraphs}
                 workers={workers}
                 openWorkerId={openWorkerId}
-                colorKey={avatarKey}
+                color={look.color}
                 onOpenWorker={onOpenWorker}
                 onZoomGraph={zoomGraph}
                 onOpenStepAsk={openStepAsk}
@@ -645,7 +648,7 @@ export function RailGroups({
             projectId={projectId}
             completedGraphCount={completedGraphCount}
             activeGraphIdsKey={(activeGraphs ?? []).map((g) => g.id).join(",")}
-            avatarKey={avatarKey}
+            look={look}
             openWorkerId={openWorkerId}
             onOpenWorker={onOpenWorker}
             onZoomGraph={zoomGraph}
@@ -662,7 +665,7 @@ export function RailGroups({
             if (!open) setZoomedState(null);
           }}
           workers={workers}
-          colorKey={avatarKey}
+          color={look.color}
           onOpenWorker={onOpenWorker}
         />
       )}
@@ -683,7 +686,7 @@ export const RightRail = memo(function RightRail({
   openWorkerId,
   layout,
   toggle,
-  avatarKey = 0,
+  look = NO_LOOK,
   onOpenAsk,
   onOpenWorker,
   onLoadMoreWorkers,
@@ -701,8 +704,8 @@ export const RightRail = memo(function RightRail({
   layout: "side" | "top";
   /** side：放在右栏顶部的开关（RightRailToggle）。 */
   toggle?: React.ReactNode;
-  /** 所属项目经理的水果颜色编号，用于显示切面轮、果皮轨与开关果瓣。 */
-  avatarKey?: number;
+  /** 所属项目经理的形象：进度图标、果冻管道的颜色和开关里的便签小灵跟着它。 */
+  look?: SlimeLook;
   /** 点开一个提问：对话滚到那条消息。 */
   onOpenAsk: (messageId: MessageId) => void;
   onOpenWorker: (conversationId: ConversationId) => void;
@@ -720,7 +723,7 @@ export const RightRail = memo(function RightRail({
         activeGraphs={activeGraphs}
         completedGraphCount={completedGraphCount}
         projectId={projectId}
-        avatarKey={avatarKey}
+        look={look}
         openWorkerId={openWorkerId}
         toggle={side ? toggle : undefined}
         className={side ? "pb-4" : "py-1"}

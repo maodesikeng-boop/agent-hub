@@ -54,7 +54,7 @@ import type { DeviceRouterDigest, RouterSettings } from "./router.ts";
 import type { HandoverId, LedgerHandoverWork } from "./handover.ts";
 import type { HubArgs, HubCommand, HubResult, ProjectCard, WorkerPr, WorkerPrProbeResult } from "./hub.ts";
 import type { PmCapabilitiesPatch, PmCapabilitiesStart, PmCapabilityPolicy } from "./pm-capabilities.ts";
-import type { PmLookSetting } from "./slimes.ts";
+import type { PmLookSetting, SlimeLook } from "./slimes.ts";
 import type { ReviewSnapshot, ReviewVerifyResult } from "./review.ts";
 import type { SelfReloadStatus } from "./api.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
@@ -166,6 +166,8 @@ export interface CreatePmInput {
   folder?: string;
   /** 技能、MCP、云端连接器从哪开始；不给 = 全开。 */
   capabilities?: PmCapabilitiesStart;
+  /** 形象（新建弹窗里换过的）；不给 = pickNewPmLook 分一个不和没归档的项目经理撞造型的。 */
+  look?: SlimeLook;
 }
 
 /**

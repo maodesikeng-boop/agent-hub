@@ -12,6 +12,7 @@
 //   （唤醒方式、访客档位沿用，建群 uuid 换新的 generation）；总助单聊删记录，主人下次私聊时认回；
 // - 所有发送都在主聊天流里：不传 reply_in_thread，不回复某条消息；
 // - 飞书挂了、凭证失效都不影响网页和 agent：这里的错误只记日志和状态，不往账本抛。
+import { lookKey, type SlimeLook } from "../../shared/slimes.ts";
 import { randomInt, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { Change } from "../../shared/api.ts";
@@ -65,7 +66,7 @@ import type { RouterDispatcher } from "../router/dispatcher.ts";
 import type { ModelCatalogs } from "../driver/model-catalog.ts";
 import type { Db } from "../store/index.ts";
 import { resolveUpload } from "../uploads.ts";
-import { createFeishuAvatarCache, feishuAvatarHash, pmFruitImagePath, type PmFruit } from "./avatars.ts";
+import { createFeishuAvatarCache, renderFeishuAvatar, type FeishuAvatarImage } from "./avatars.ts";
 import {
   feishuAskOptions,
   feishuCardRefOf,
@@ -137,8 +138,6 @@ export interface FeishuServiceOptions {
   secretsFile: string;
   uploadsDir: string;
   sentFilesDir: string;
-  /** 水果头像图片所在目录（avatars.ts 的 pmFruitImagePath）。 */
-  avatarsDir: string;
   device: { id: string; name: string };
   log: (line: string) => void;
   /** 测试里换成假的传输层和假的扫码。 */
@@ -726,9 +725,10 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
 
   // ---- 建群、对齐 ----
 
-  const uploadAvatar = async (fruit: PmFruit): Promise<FeishuImageKey> => {
+  const uploadAvatar = async (look: SlimeLook): Promise<FeishuImageKey> => {
     if (transport === null) throw new Error("飞书没连上");
-    const { imageKey } = await transport.uploadImage({ imageType: "avatar", path: pmFruitImagePath(options.avatarsDir, fruit) });
+    const { png } = await renderFeishuAvatar(look);
+    const { imageKey } = await transport.uploadImage({ imageType: "avatar", data: png });
     return imageKey as FeishuImageKey;
   };
 
@@ -778,11 +778,12 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
   const lastGeneration = new LRUCache<PmId, number>({ max: FEISHU_CHAT_CACHE_MAX });
   const dissolvedAt = (pmId: PmId | null) => Math.max(now(), (pmId === null ? 0 : (lastGeneration.get(pmId) ?? 0)) + 1);
 
-  /** avatarHashOf：这一次对齐里各水果头像图片的内容哈希。返回 false：这一步没落地，稍后再对齐。 */
-  const applyChatOp = async (op: FeishuChatOp, appId: string, ownerId: FeishuOpenId, avatarHashOf: (fruit: PmFruit) => string): Promise<boolean> => {
+  /** avatarOf：这一次对齐里各形象的群头像（画好的 PNG 和它的哈希）。返回 false：这一步没落地，稍后再对齐。 */
+  const applyChatOp = async (op: FeishuChatOp, appId: string, ownerId: FeishuOpenId, avatarOf: (look: SlimeLook) => Promise<FeishuAvatarImage>): Promise<boolean> => {
+    const imageKeyOf = async (look: SlimeLook) => avatars.imageKeyOf(look, (await avatarOf(look)).sha256, uploadAvatar);
     switch (op.kind) {
       case "create": {
-        const avatar = await avatars.imageKeyOf(op.spec.fruit, avatarHashOf(op.spec.fruit), uploadAvatar);
+        const avatar = await imageKeyOf(op.spec.look);
         const data = await api("chat.create", {
           uuid: feishuChatCreateUuid(appId, options.device.id, op.spec.pmId, op.generation),
           name: op.spec.name,
@@ -799,18 +800,18 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
         if (chatId === null) throw new Error("飞书建群没回群编号");
         lastGeneration.set(op.spec.pmId, op.generation);
         store.upsertChat({ chatId, target: { kind: "pm", pmId: op.spec.pmId }, name: op.spec.name, label: op.spec.label }, now());
-        store.setChatAvatar(chatId, op.spec.fruit, now());
+        store.setChatAvatar(chatId, op.spec.look, now());
         // 新群只从现在往后投影，不把历史消息倒进来
         const conversationId = conversationOfPm(op.spec.pmId);
         store.advanceWatermark(chatId, { messageId: (conversationId === null ? null : latestMessageId(conversationId)) ?? 0 }, now());
         return true;
       }
       case "adopt": {
-        const avatar = await avatars.imageKeyOf(op.spec.fruit, avatarHashOf(op.spec.fruit), uploadAvatar);
+        const avatar = await imageKeyOf(op.spec.look);
         // 要认回的群刚没了：下一次对齐列群时就没有它了，改成新建
         if (!(await updateChat({ chat_id: op.chatId, name: op.spec.name, avatar }))) return false;
         store.upsertChat({ chatId: op.chatId, target: { kind: "pm", pmId: op.spec.pmId }, name: op.spec.name, label: op.spec.label }, now());
-        store.setChatAvatar(op.chatId, op.spec.fruit, now());
+        store.setChatAvatar(op.chatId, op.spec.look, now());
         const conversationId = conversationOfPm(op.spec.pmId);
         store.advanceWatermark(op.chatId, { messageId: (conversationId === null ? null : latestMessageId(conversationId)) ?? 0 }, now());
         return true;
@@ -821,7 +822,7 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
         else applyChatGone(op.chatId);
         return true;
       case "set_avatar":
-        if (await updateChat({ chat_id: op.chatId, avatar: await avatars.imageKeyOf(op.fruit, avatarHashOf(op.fruit), uploadAvatar) })) store.setChatAvatar(op.chatId, op.fruit, now());
+        if (await updateChat({ chat_id: op.chatId, avatar: await imageKeyOf(op.look) })) store.setChatAvatar(op.chatId, op.look, now());
         else applyChatGone(op.chatId);
         return true;
       case "dissolve": {
@@ -845,16 +846,11 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     if (transport === null || !linkUp || app === null || app.ownerOpenId === null) return true;
     const pms = ledger.snapshot().pms;
     const desired = desiredFeishuChats(pms, options.device);
-    // 每次对齐现读头像文件算哈希（同一个水果只读一次）。图片换了（feishu_avatars 里记的不是这张图）：把头像是这个水果的群
-    // 改回“没设过”，下面照常出 set_avatar 原地换；中途断了，没换完的群还是“没设过”，下一次对齐接着换
-    const hashes = new Map<PmFruit, string>();
-    const avatarHashOf = (fruit: PmFruit) => {
-      let hash = hashes.get(fruit);
-      if (hash === undefined) hashes.set(fruit, (hash = feishuAvatarHash(options.avatarsDir, fruit)));
-      return hash;
-    };
-    for (const fruit of new Set(desired.filter((d) => !d.archived).map((d) => d.fruit))) {
-      if (store.avatarKey(fruit, avatarHashOf(fruit)) === null) store.clearChatAvatars(fruit, now());
+    // 每次对齐按形象现画头像算哈希（avatars.ts 记着画过的，同一个形象只画一次）。画出来的图换了（feishu_avatars 里记的不是这张图）：
+    // 把头像是这个形象的群改回“没设过”，下面照常出 set_avatar 原地换；中途断了，没换完的群还是“没设过”，下一次对齐接着换
+    const looks = new Map(desired.filter((d) => !d.archived).map((d) => [lookKey(d.look), d.look] as const));
+    for (const look of looks.values()) {
+      if (store.avatarKey(look, (await renderFeishuAvatar(look)).sha256) === null) store.clearChatAvatars(look, now());
     }
     const bindings = store.chats().filter((c) => c.target.kind === "pm");
     const bound = new Set(bindings.flatMap((b) => (b.target.kind === "pm" && b.target.pmId !== null ? [b.target.pmId] : [])));
@@ -863,7 +859,7 @@ export function createFeishuService(options: FeishuServiceOptions): FeishuServic
     let settled = true;
     for (const op of planFeishuChatSync(desired, bindings, marked, options.device.id)) {
       try {
-        if (!(await applyChatOp(op, app.appId, app.ownerOpenId, avatarHashOf))) settled = false;
+        if (!(await applyChatOp(op, app.appId, app.ownerOpenId, renderFeishuAvatar))) settled = false;
       } catch (error) {
         if (error instanceof FeishuAuthError) throw error;
         handleError(error);

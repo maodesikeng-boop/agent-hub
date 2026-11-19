@@ -2,7 +2,7 @@
 // 一级主页 6～7 行摘要全从内存、localStorage 与 react-query 已有缓存同步读，打开时 0 次 HTTP 请求；进子页时一级主页用 <Activity hidden> 保活（滚动位置不丢）。
 // 桌面外壳不经过这里（Sidebar 打开 SettingsDialog）；两边的状态与接口都来自 settings-model.ts。
 import { Activity, memo, type ReactNode } from "react";
-import { ArrowLeftRight, Bell, Blocks, Globe, Monitor, QrCode, Smartphone, Type } from "lucide-react";
+import { ArrowLeftRight, Bell, Blocks, Globe, Loader2, Monitor, QrCode, Smartphone, Type } from "../../ui/icons.ts";
 import { SettingsGroup } from "../../components/SettingsList.tsx";
 import { LOCAL_DEVICE, type DeviceKey } from "../../devices.ts";
 import type { NotifySettings } from "../../notify.ts";
@@ -17,7 +17,6 @@ import {
   useVendorSyncSetting,
   type DeviceSettings,
 } from "../../settings-model.ts";
-import { Loader2 } from "lucide-react";
 import { BrowsersPage } from "./BrowsersPage.tsx";
 import { ComputersPage } from "./ComputersPage.tsx";
 import { NotificationsPage } from "./NotificationsPage.tsx";
@@ -62,7 +61,7 @@ interface SubpageSpec {
 const withDevices = (ctx: SubpageContext, render: (devices: DeviceSettings) => ReactNode) =>
   ctx.devices === null ? (
     <div className="flex min-h-24 items-center justify-center">
-      <Loader2 className="size-5 animate-spin text-muted-foreground" aria-label="Loading" />
+      <Loader2 className="size-pixel text-muted-foreground" aria-label="Loading" />
     </div>
   ) : (
     render(ctx.devices)

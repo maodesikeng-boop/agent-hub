@@ -1,6 +1,6 @@
 // /hub:worker 选的厂商、模型、思考程度显示成的小标签（docs/ui-standard.md 第 17、18 条）：
 // 输入框里那个能点、能去掉（Composer.tsx），用户气泡上方那个只读（Messages.tsx），里面的图标和几项是同一份。
-import { Bot } from "lucide-react";
+import { Bot, ComposerBot } from "../ui/icons.ts";
 import { useMemo } from "react";
 import type { WorkerPick } from "../../shared/index.ts";
 import { cn } from "../lib/utils.ts";
@@ -13,11 +13,15 @@ export function useWorkerPickLabels(pick: WorkerPick): string[] {
   return useMemo(() => workerPickLabels(pick, catalogs), [pick.vendor, pick.model, pick.effort, catalogs]);
 }
 
-/** Bot 图标 + 几项，gap-2 隔开，不用 “·”。 */
-export function WorkerPickParts({ labels }: { labels: readonly string[] }) {
+/** Bot 图标 + 几项，gap-2 隔开，不用 “·”。inComposer：在输入框里，用线条的机器人（输入框里不用像素图标）。 */
+export function WorkerPickParts({ labels, inComposer = false }: { labels: readonly string[]; inComposer?: boolean }) {
   return (
     <>
-      <Bot className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+      {inComposer ? (
+        <ComposerBot className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+      ) : (
+        <Bot className="size-pixel-sm shrink-0 text-muted-foreground" aria-hidden="true" />
+      )}
       {labels.map((label, i) => (
         <span key={i} className="min-w-0 truncate">
           {label}

@@ -141,7 +141,6 @@ export const PM_MODE_LABELS: Readonly<Record<PmMode, string>> = {
 export interface Pm {
   id: PmId;
   name: string;
-  avatarFile: string | null;
   /** 换过的造型（shared/slimes.ts，存在 pm_looks 表）；缺了或 null 是按编号默认的那只。老版本的设备不带这个字段。 */
   avatarFruit?: PmFruit | null;
   /** 换过的颜色；缺了或 null 是造型自己的原色。 */

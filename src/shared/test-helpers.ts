@@ -5,7 +5,7 @@ import type { ConversationSnapshot, StateSnapshot } from "./api.ts";
 import type { Conversation, Message, Pm, SessionState } from "./domain.ts";
 
 export function makePm(over: Partial<Pm> = {}): Pm {
-  return { id: 1, name: "项目经理", avatarFile: null, mode: "manage_only", vendor: "claude", defaultModel: null, effort: null, personaFile: null, createdAt: 1_000, ...over };
+  return { id: 1, name: "项目经理", mode: "manage_only", vendor: "claude", defaultModel: null, effort: null, personaFile: null, createdAt: 1_000, ...over };
 }
 
 function makeConversation(over: Partial<Conversation> = {}): Conversation {

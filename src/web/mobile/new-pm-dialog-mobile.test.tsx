@@ -28,6 +28,7 @@ function makeLocalDevice(folderPicker = true): NewPmDevice {
     status: "online",
     client: createClient(null),
     server: { ...serverInfoFor("darwin"), folderPicker },
+    takenLooks: [],
   };
 }
 

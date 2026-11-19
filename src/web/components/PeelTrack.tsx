@@ -1,5 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
-import { ChevronRight, Loader2, Maximize2 } from "lucide-react";
+import { ChevronRight, Loader2, Maximize2 } from "../ui/icons.ts";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   isTaskGraphReadyToFinish,
@@ -18,23 +18,29 @@ import { useHubQueryClient } from "../query-client.ts";
 import { sortActiveGraphs, taskGraphPriority, workersByWorkerId, type WorkerEntry } from "../selectors.ts";
 import { Button } from "../ui/button.tsx";
 import { Input } from "../ui/input.tsx";
-import { KnifeAvatar } from "./KnifeAvatar.tsx";
+import { PM_FRUITS } from "../../shared/fruits.ts";
+import { GATE_BELL_GRID, type JellyColorId } from "../../shared/slimes.ts";
+import { fruitTrackVars } from "../lib/palette.ts";
+import { stepBeadPaths, TUBE_WIDTH_CELLS, tubePaths, type PixelPoint, type StepBead, type TubePaths, type TubeState } from "../pixel-path.ts";
+import { computeGraphComponents } from "../task-graph-layout.ts";
 import { CardBody } from "./Deliverables.tsx";
-import { computeGraphComponents, fruitTrackVars, SliceWheelIcon } from "./SliceWheelIcon.tsx";
+import { GateMark } from "./GateMark.tsx";
+import { TaskProgressIcon } from "./TaskProgressIcon.tsx";
 
-type GutterKind = "station" | "parA" | "parB" | "coil" | "gate";
-type LineStyle = "solid" | "dash" | "none";
+type GutterKind = "station" | "parA" | "parB" | "coil" | "gate" | "next";
 type DotTone = "done" | "run" | "warn" | "blocked";
 
 const GUTTER_H = 32;
 /**
  * 轨道槽的长度：画布上的 1 个单位是 --peel-u（styles.css：平时 1/16rem，触屏 44/32 倍）。
- * 触屏下每行高 44px，轨道槽跟着等比放大到同样高，上下两行的线才接得上、不断成一截一截。
+ * 触屏下每行高 44px，轨道槽跟着等比放大到同样高，上下两行的管子才接得上、不断成一截一截。
  */
 const peelLen = (units: number) => `calc(${units} * var(--peel-u))`;
 const GUTTER_CY = GUTTER_H / 2;
-const GATE_TOP_Y = GUTTER_CY - 9;
-const GATE_BOT_Y = GUTTER_CY + 11;
+/** 果冻管道和珠子的一格是 2 个画布单位（docs/slime-cohesion-design.md）：管道 4 格宽、珠子 7×7 格、拍板小铃 6×6 格。 */
+const CELL = 2;
+/** 分叉的管子在这一行顶上往旁边的泳道拐。 */
+const FORK_Y = 6;
 const DEFAULT_GUTTER_W = 40;
 const MAX_GUTTER_W = 96;
 const LANE_MAIN_X = 11;
@@ -61,70 +67,62 @@ function computeGutterGeometry(maxLanes: number): { gutterWidth: number; laneX: 
   };
 }
 
-function buildCoilPathD(baseX: number): string {
-  const pts: string[] = [];
-  const turns = 1.6;
-  const r0 = 7.6;
-  const cyc = GUTTER_CY + 2;
-  for (let i = 0; i <= 48; i++) {
-    const t = i / 48;
-    const r = r0 - 5.8 * t;
-    const a = Math.PI + t * turns * 2 * Math.PI;
-    const x = round2(baseX + r0 + r * Math.cos(a));
-    const y = round2(cyc + r * Math.sin(a));
-    pts.push(`${x} ${y}`);
-  }
-  return `M${baseX} ${GUTTER_H}V${cyc}L${pts.join("L")}`;
+/** 轨道槽里的一段管子：走通的（filled）灌满项目经理的颜色，没走通的（empty）是空的浅灰管子。 */
+interface GutterSegment extends TubePaths {
+  readonly state: TubeState;
 }
 
-interface GutterSegment {
-  readonly d: string;
-  readonly style: "solid" | "dash";
+function segmentOf(state: TubeState, points: readonly PixelPoint[]): GutterSegment {
+  return { state, ...tubePaths(points, CELL) };
 }
 
-function TrackPath({ style, d }: { style: LineStyle; d: string }) {
-  if (style === "none") return null;
-  if (style === "solid") {
-    return <path d={d} fill="none" stroke="var(--peel)" strokeWidth="3.6" strokeLinecap="round" />;
-  }
+const TUBE_COLORS: Readonly<Record<TubeState, { line: string; core: string }>> = {
+  filled: { line: "var(--tube-line)", core: "var(--tube-core)" },
+  empty: { line: "var(--tube-empty-line)", core: "var(--tube-empty-core)" },
+};
+
+/**
+ * 一组同状态的果冻管道（右栏果皮轨、放大全览共用）：先画全部描边、再画全部芯（交叉、分叉处芯连成一片），走通的再加一道高光。
+ * 颜色来自外层的 fruitTrackVars 和 styles.css 的 --tube-empty-*；cell 是一格多少个画布单位。
+ */
+export function TubeLayer({ state, segments, cell = CELL }: { state: TubeState; segments: readonly TubePaths[]; cell?: number }) {
+  if (segments.length === 0) return null;
+  const { line, core } = TUBE_COLORS[state];
+  const stroke = (d: string, color: string, cells: number, key: string, centerLine = false) => (
+    <path key={key} d={d} fill="none" stroke={color} strokeWidth={cells * cell} strokeLinecap="square" strokeLinejoin="miter" data-tube-line={centerLine || undefined} />
+  );
   return (
-    <path
-      d={d}
-      fill="none"
-      stroke="var(--ghost-line)"
-      strokeWidth="1.6"
-      strokeDasharray="2 4"
-      strokeLinecap="round"
-    />
+    <g data-tube={state}>
+      {segments.map((seg, i) => stroke(seg.center, line, TUBE_WIDTH_CELLS.outline, `o${i}`, true))}
+      {segments.map((seg, i) => stroke(seg.center, core, TUBE_WIDTH_CELLS.core, `c${i}`))}
+      {state === "filled" && segments.map((seg, i) => stroke(seg.highlight, "var(--tube-glint)", TUBE_WIDTH_CELLS.highlight, `h${i}`))}
+    </g>
   );
 }
 
-function TrackDot({ x, tone }: { x: number; tone: DotTone }) {
-  if (tone === "done") {
-    return (
-      <>
-        <circle cx={x} cy={GUTTER_CY} r="6.2" fill="var(--cut)" />
-        <circle cx={x} cy={GUTTER_CY} r="4.4" fill="var(--peel)" />
-      </>
-    );
-  }
-  if (tone === "run") {
-    return (
-      <>
-        <circle cx={x} cy={GUTTER_CY} r="7.6" fill="var(--pulp-pale)" />
-        <circle cx={x} cy={GUTTER_CY} r="5.1" fill="var(--cut)" stroke="var(--peel)" strokeWidth="2.5" />
-      </>
-    );
-  }
-  if (tone === "warn") {
-    return (
-      <>
-        <circle cx={x} cy={GUTTER_CY} r="6.2" fill="var(--cut)" />
-        <circle cx={x} cy={GUTTER_CY} r="4.4" fill="var(--caution)" />
-      </>
-    );
-  }
-  return <circle cx={x} cy={GUTTER_CY} r="4.3" fill="var(--cut)" stroke="var(--ghost-line)" strokeWidth="1.5" />;
+/** 珠子各层的颜色：做完、在干、N done 用项目经理的颜色；等项目经理琥珀色；没轮到、跳过、N next 灰描边白芯。 */
+const BEAD_COLORS: Readonly<Record<StepBead, { outline: string; fill: string; highlight: string; shade: string }>> = {
+  done: { outline: "var(--tube-line)", fill: "var(--tube-core)", highlight: "var(--tube-glint)", shade: "var(--tube-shade)" },
+  running: { outline: "var(--tube-line)", fill: "var(--tube-core)", highlight: "var(--background)", shade: "var(--tube-glint)" },
+  waitingPm: { outline: "var(--bead-wait-line)", fill: "var(--bead-wait-core)", highlight: "var(--bead-wait-glint)", shade: "var(--bead-wait-core)" },
+  pending: { outline: "var(--bead-pending-line)", fill: "var(--background)", highlight: "none", shade: "none" },
+  doneCoil: { outline: "var(--tube-line)", fill: "var(--tube-core)", highlight: "none", shade: "none" },
+  nextCoil: { outline: "var(--bead-pending-line)", fill: "var(--background)", highlight: "none", shade: "none" },
+};
+
+const BEAD_OF_TONE: Readonly<Record<DotTone, StepBead>> = { done: "done", run: "running", warn: "waitingPm", blocked: "pending" };
+
+/** 一颗果冻珠子（pixel-path.ts 的 stepBeadPaths），中心在 center；右栏果皮轨、放大全览的卡片头共用。 */
+export function JellyBead({ bead, center, cell = CELL }: { bead: StepBead; center: PixelPoint; cell?: number }) {
+  const paths = stepBeadPaths(bead, center, cell);
+  const colors = BEAD_COLORS[bead];
+  return (
+    <g data-bead={bead}>
+      {(["outline", "fill", "highlight", "shade"] as const).map((layer) =>
+        paths[layer] === "" || colors[layer] === "none" ? null : <path key={layer} d={paths[layer]} fill={colors[layer]} />,
+      )}
+    </g>
+  );
 }
 
 function PeelGutter({
@@ -140,35 +138,23 @@ function PeelGutter({
   tone?: DotTone;
   segments: readonly GutterSegment[];
 }) {
-  const dashSegments = segments.filter((s) => s.style === "dash");
-  const solidSegments = segments.filter((s) => s.style === "solid");
-
   return (
     <svg
       data-peel-gutter={kind}
       data-dot-x={dotX}
       viewBox={`0 0 ${gutterWidth} ${GUTTER_H}`}
+      shapeRendering="crispEdges"
       style={{ width: peelLen(gutterWidth), height: peelLen(GUTTER_H) }}
       aria-hidden="true"
       className="block shrink-0 select-none"
     >
-      {dashSegments.map((seg, idx) => (
-        <TrackPath key={`d-${idx}`} style="dash" d={seg.d} />
-      ))}
-      {solidSegments.map((seg, idx) => (
-        <TrackPath key={`s-${idx}`} style="solid" d={seg.d} />
-      ))}
-      {kind === "coil" && (
-        <path
-          d={buildCoilPathD(dotX)}
-          fill="none"
-          stroke="var(--peel)"
-          strokeWidth="3.2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
+      <TubeLayer state="empty" segments={segments.filter((s) => s.state === "empty")} />
+      <TubeLayer state="filled" segments={segments.filter((s) => s.state === "filled")} />
+      {kind === "gate" ? (
+        <GateMark at={{ x: dotX, y: GUTTER_CY }} size={GATE_BELL_GRID * CELL} />
+      ) : (
+        <JellyBead bead={kind === "coil" ? "doneCoil" : kind === "next" ? "nextCoil" : BEAD_OF_TONE[tone]} center={{ x: dotX, y: GUTTER_CY }} />
       )}
-      {kind !== "coil" && kind !== "gate" && <TrackDot x={dotX} tone={tone} />}
     </svg>
   );
 }
@@ -178,7 +164,7 @@ function isNodeSettled(node: TaskNode): boolean {
   return node.status === "done";
 }
 
-/** 四个状态的圆点：完了实心果皮（跳过的留淡轮廓）、在干果肉浅晕、等项目经理琥珀色、没轮到淡轮廓（等用户的是水果刀，不画圆点）。 */
+/** 四个状态的珠子：完了实心（跳过的是灰的空珠子）、在干浅色珠子、等项目经理琥珀色、没轮到灰的空珠子（等你拍板的是小铃，不画珠子）。 */
 function dotToneOf(node: TaskNode): DotTone {
   if (node.status === "done") return node.skipped ? "blocked" : "done";
   if (node.status === "running") return "run";
@@ -328,7 +314,7 @@ export function GateDecisionCard({
             disabled={decideMutation.isPending || note.trim() === ""}
             onClick={() => submit(null, note)}
           >
-            {decideMutation.isPending && <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />}
+            {decideMutation.isPending && <Loader2 className="size-pixel-sm" aria-hidden="true" />}
             Send
           </Button>
         </div>
@@ -373,9 +359,7 @@ function PeelStageRow({
   onOpenStepAsk: (node: TaskNode) => void;
 }) {
   if (isTaskNodeWaitingUser(node)) {
-    // 水果刀 30px 宽，刀心对着泳道
-    const knifeLeftRem = `calc(${peelLen(dotX)} - ${15 / 16}rem)`;
-    // 只有一行：作答在对话里那张卡上，这里点了跳过去（docs/ui-standard.md 第 12.1 条）
+    // 只有一行：作答在对话里那张卡上，这里点了跳过去（docs/ui-standard.md 第 12.1 条）；小铃画在轨道槽里这一步的管道上
     return (
       <button
         type="button"
@@ -385,15 +369,10 @@ function PeelStageRow({
         onClick={() => onOpenStepAsk(node)}
         className="-mx-2.5 flex min-h-8 pointer-coarse:min-h-11 w-[calc(100%+1.25rem)] cursor-pointer items-center rounded-xl px-2.5 text-left transition-colors outline-none hover:bg-jelly-hover focus-visible:ring-2 focus-visible:ring-ring/50"
       >
-        <span style={{ width: peelLen(gutterWidth), height: peelLen(GUTTER_H) }} className="relative flex shrink-0 items-center">
-          <PeelGutter kind="gate" gutterWidth={gutterWidth} dotX={dotX} segments={segments} />
-          <span style={{ left: knifeLeftRem }} className="pointer-events-none absolute top-0 inline-flex">
-            <KnifeAvatar size={30} />
-          </span>
-        </span>
+        <PeelGutter kind="gate" gutterWidth={gutterWidth} dotX={dotX} segments={segments} />
         <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
           <span className="min-w-0 truncate text-body font-semibold text-primary">{cleanPieceTitle(node.title)}</span>
-          <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <ChevronRight className="size-pixel-sm shrink-0 text-muted-foreground" aria-hidden="true" />
         </span>
       </button>
     );
@@ -803,7 +782,13 @@ function layoutDisplayTrack(
   }
 
   const { gutterWidth, laneX } = computeGutterGeometry(maxLaneUsed + 1);
+  // 管子的方头线帽伸出端点半个管宽，到行边为止的管子在相邻两行之间自然接上（画布裁掉伸出去的）
+  const top = 0;
+  const bottom = GUTTER_H;
+  const tube = (style: "solid" | "dash") => (style === "solid" ? "filled" : "empty");
 
+  // 管子都是横竖的：从上一行接下来的竖着进本行的珠子；别的泳道汇进来的先竖着到珠子那一行再横着拐进来；
+  // 分叉在这一行顶上横着拐到新的泳道再往下（docs/ui-standard.md 第 12.1 条）
   const rows: RenderedTrackRow[] = logicalRows.map((row) => {
     const dotX = laneX(row.dotLane);
     const segments: GutterSegment[] = [];
@@ -811,33 +796,25 @@ function layoutDisplayTrack(
     for (const op of row.ops) {
       if (op.kind === "thru") {
         const x = laneX(op.lane);
-        segments.push({ style: op.style, d: `M${x} 0V${GUTTER_H}` });
+        segments.push(segmentOf(tube(op.style), [{ x, y: top }, { x, y: bottom }]));
       } else if (op.kind === "in") {
         const xFrom = laneX(op.fromLane);
         const xTo = laneX(op.toLane);
-        if (op.target === "gate") {
-          segments.push({
-            style: op.style,
-            d: xFrom === xTo ? `M${xTo} 0V${GATE_TOP_Y}` : `M${xFrom} 0C${xFrom} 4 ${xTo} 3 ${xTo} ${GATE_TOP_Y}`,
-          });
-        } else {
-          segments.push({
-            style: op.style,
-            d: xFrom === xTo ? `M${xTo} 0V${GUTTER_CY}` : `M${xFrom} 0C${xFrom} 10 ${xTo} 6 ${xTo} ${GUTTER_CY}`,
-          });
-        }
+        segments.push(
+          segmentOf(
+            tube(op.style),
+            xFrom === xTo
+              ? [{ x: xTo, y: top }, { x: xTo, y: GUTTER_CY }]
+              : [{ x: xFrom, y: top }, { x: xFrom, y: GUTTER_CY }, { x: xTo, y: GUTTER_CY }],
+          ),
+        );
       } else if (op.kind === "fork") {
         const xFrom = laneX(op.fromLane);
         const xTo = laneX(op.toLane);
-        segments.push({
-          style: op.style,
-          d: `M${xFrom} 0C${xFrom} 15 ${xTo} 13 ${xTo} ${GUTTER_H}`,
-        });
+        segments.push(segmentOf(tube(op.style), [{ x: xFrom, y: top }, { x: xFrom, y: FORK_Y }, { x: xTo, y: FORK_Y }, { x: xTo, y: bottom }]));
       } else if (op.kind === "out") {
-        if (op.source === "coil") continue;
         const x = laneX(op.lane);
-        const y0 = op.source === "gate" ? GATE_BOT_Y : GUTTER_CY;
-        segments.push({ style: op.style, d: `M${x} ${y0}V${GUTTER_H}` });
+        segments.push(segmentOf(tube(op.style), [{ x, y: GUTTER_CY }, { x, y: bottom }]));
       }
     }
 
@@ -846,7 +823,9 @@ function layoutDisplayTrack(
         ? "coil"
         : row.item.itemKind === "gate"
           ? "gate"
-          : row.dotLane > 0
+          : row.item.itemKind === "next"
+            ? "next"
+            : row.dotLane > 0
             ? "parB"
             : row.bottomLaneCount >= 2
               ? "parA"
@@ -1050,14 +1029,14 @@ function PeelComponentTrack({ component, ctx }: { component: TrackComponent; ctx
  */
 function PeelTrackBody({
   graph,
-  colorKey,
+  color,
   workerByKey,
   openWorkerId,
   onOpenWorker,
   onOpenStepAsk,
 }: {
   graph: TaskGraph;
-  colorKey: number;
+  color: JellyColorId;
   workerByKey: ReadonlyMap<WorkerId, WorkerEntry>;
   openWorkerId: ConversationId | null;
   onOpenWorker: (id: ConversationId) => void;
@@ -1067,7 +1046,7 @@ function PeelTrackBody({
   const ctx: PeelRowContext = { workerByKey, openWorkerId, onOpenWorker, onOpenStepAsk: (node) => onOpenStepAsk(graph, node) };
 
   return (
-    <div style={fruitTrackVars(colorKey)} className="space-y-1.5 pt-0.5 pb-1">
+    <div style={fruitTrackVars(color)} className="space-y-1.5 pt-0.5 pb-1">
       {components.map((component) => (
         <PeelComponentTrack key={component.key} component={component} ctx={ctx} />
       ))}
@@ -1078,15 +1057,15 @@ function PeelTrackBody({
 /**
  * 单个项目的活跃任务流图列表（PeelTrackList）：
  * - 有步骤等用户、等项目经理的任务排在最前并默认展开；
- * - 其余后台进行中任务在多任务并存时默认收成带 SliceWheelIcon 的单行标题，点击手风琴式展开/收起；
- * - 每个任务头右上角配 Zoom（Maximize2）按钮打开横向全览弹窗；
+ * - 其余后台进行中任务在多任务并存时默认收成带嫩芽进度图标（TaskProgressIcon）的单行标题，点击手风琴式展开/收起；
+ * - 每个任务头右上角一个工具格（slot）里的 Zoom（Maximize2）按钮打开横向全览弹窗；
  * - 等你拍板的步骤只有一行，点了交给 onOpenStepAsk（对话滚到那张卡）。
  */
 export const PeelTrackList = memo(function PeelTrackList({
   graphs,
   workers,
   openWorkerId,
-  colorKey = 0,
+  color = PM_FRUITS[0]!,
   onOpenWorker,
   onZoomGraph,
   onOpenStepAsk,
@@ -1094,7 +1073,8 @@ export const PeelTrackList = memo(function PeelTrackList({
   graphs: readonly TaskGraph[];
   workers: readonly WorkerEntry[];
   openWorkerId: ConversationId | null;
-  colorKey?: number;
+  /** 所属项目经理现在的颜色：管道、珠子和进度图标跟着它。 */
+  color?: JellyColorId;
   onOpenWorker: (id: ConversationId) => void;
   onZoomGraph: (graph: TaskGraph) => void;
   onOpenStepAsk: (graph: TaskGraph, node: TaskNode) => void;
@@ -1162,7 +1142,7 @@ export const PeelTrackList = memo(function PeelTrackList({
                 onClick={() => toggleGraph(graph.id)}
                 className="flex min-h-9 pointer-coarse:min-h-11 min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-xl py-1.5 pr-1 text-left transition-colors outline-none hover:bg-jelly-hover focus-visible:ring-2 focus-visible:ring-ring/50"
               >
-                <SliceWheelIcon graph={graph} colorKey={colorKey} size={20} />
+                <TaskProgressIcon graph={graph} color={color} size={20} />
                 <span title={graph.title} className={cn("min-w-0 flex-1 truncate text-body", open && "font-semibold")}>
                   {graph.title}
                 </span>
@@ -1171,27 +1151,20 @@ export const PeelTrackList = memo(function PeelTrackList({
                 )}
                 <ChevronRight
                   className={cn(
-                    "size-3.5 shrink-0 text-muted-foreground transition-transform duration-200 ease-out motion-reduce:transition-none",
+                    "size-pixel-sm shrink-0 text-muted-foreground transition-transform duration-200 ease-out motion-reduce:transition-none",
                     open && "rotate-90",
                   )}
                   aria-hidden="true"
                 />
               </button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Zoom"
-                onClick={() => onZoomGraph(graph)}
-                className="-mr-1.5 shrink-0 text-muted-foreground hover:text-foreground"
-              >
-                <Maximize2 className="size-3.5" aria-hidden="true" />
+              <Button type="button" variant="slot" size="icon-sm" aria-label="Zoom" onClick={() => onZoomGraph(graph)} className="shrink-0">
+                <Maximize2 className="size-pixel-sm" aria-hidden="true" />
               </Button>
             </div>
             {open && (
               <PeelTrackBody
                 graph={graph}
-                colorKey={colorKey}
+                color={color}
                 workerByKey={workerByKey}
                 openWorkerId={openWorkerId}
                 onOpenWorker={onOpenWorker}

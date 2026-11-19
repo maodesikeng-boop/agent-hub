@@ -1,6 +1,6 @@
 // Settings → Providers 一键安装、更新与界面内直接登录（docs/providers-install-login-design.md）。
 // 严格由服务端 ProviderStatusItem.authMethods 数据驱动渲染，零单家厂商字面量、零符号拼接（不用 · / | / /）、错误日志默认收起。
-import { Loader2 } from "lucide-react";
+import { Loader2 } from "../ui/icons.ts";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   isSelectable,
@@ -124,7 +124,7 @@ function GitEnvironmentGroup({ model }: { model: ProvidersSettingModel }) {
             )}
             {running ? (
               <Button type="button" variant="outline" size="sm" disabled>
-                <Loader2 className="animate-spin" aria-hidden="true" />
+                <Loader2 aria-hidden="true" />
                 Installing…
               </Button>
             ) : (
@@ -254,7 +254,7 @@ function ProviderItemRow({
               disabled={!item.canInstall || busyKey === `install:${item.vendor}`}
               onClick={onInstall}
             >
-              {busyKey === `install:${item.vendor}` && <Loader2 className="animate-spin" aria-hidden="true" />}
+              {busyKey === `install:${item.vendor}` && <Loader2 aria-hidden="true" />}
               {jobFailed ? "Retry" : "Install"}
             </Button>
           ) : ready ? (
@@ -358,7 +358,7 @@ export function ProviderSignInBody({
   const manualFormId = useId();
   const manualSubmit = (
     <Button type="submit" form={manualFormId} className={mobile ? DRAWER_BUTTON : undefined} disabled={!manualInput.trim() || submitting}>
-      {submitting && <Loader2 className="animate-spin" aria-hidden="true" />}
+      {submitting && <Loader2 aria-hidden="true" />}
       Submit
     </Button>
   );
@@ -596,7 +596,7 @@ export function ProviderSignInBody({
           {mobile ? (
             <div className="grid grid-cols-1 gap-2">
               <Button type="submit" className={DRAWER_BUTTON} disabled={!apiKey.trim() || submitting}>
-                {submitting && <Loader2 className="animate-spin" aria-hidden="true" />}
+                {submitting && <Loader2 aria-hidden="true" />}
                 Save
               </Button>
               <Button
@@ -615,7 +615,7 @@ export function ProviderSignInBody({
                 Cancel
               </Button>
               <Button type="submit" disabled={!apiKey.trim() || submitting}>
-                {submitting && <Loader2 className="animate-spin" aria-hidden="true" />}
+                {submitting && <Loader2 aria-hidden="true" />}
                 Save
               </Button>
             </DialogFooter>
@@ -643,7 +643,7 @@ export function ProviderSignInBody({
           ) : activeFlow !== null ? (
             <>
               <div className="flex items-center gap-2 text-minor text-muted-foreground">
-                <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden="true" />
+                <Loader2 className="size-pixel shrink-0" aria-hidden="true" />
                 <span className="status-shimmer">Waiting for browser…</span>
               </div>
               {activeFlow.authorizeUrl && (
@@ -710,7 +710,7 @@ export function ProviderSignInBody({
                     disabled={submitting}
                     onClick={() => void handleStartInteractive()}
                   >
-                    {submitting && <Loader2 className="animate-spin" aria-hidden="true" />}
+                    {submitting && <Loader2 aria-hidden="true" />}
                     {model.isRemoteTarget ? "Open sign-in page" : "Continue in browser"}
                   </Button>
                   <Button
@@ -729,7 +729,7 @@ export function ProviderSignInBody({
                     Cancel
                   </Button>
                   <Button type="button" disabled={submitting} onClick={() => void handleStartInteractive()}>
-                    {submitting && <Loader2 className="animate-spin" aria-hidden="true" />}
+                    {submitting && <Loader2 aria-hidden="true" />}
                     {model.isRemoteTarget ? "Open sign-in page" : "Continue in browser"}
                   </Button>
                 </DialogFooter>
@@ -777,7 +777,7 @@ export function ProviderSignInBody({
                 </div>
               ) : (
                 <div className="flex items-center gap-2 text-minor text-muted-foreground">
-                  <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden="true" />
+                  <Loader2 className="size-pixel shrink-0" aria-hidden="true" />
                   <span className="status-shimmer">Waiting for browser…</span>
                 </div>
               )}
@@ -819,7 +819,7 @@ export function ProviderSignInBody({
                     disabled={submitting}
                     onClick={() => void handleStartInteractive()}
                   >
-                    {submitting && <Loader2 className="animate-spin" aria-hidden="true" />}
+                    {submitting && <Loader2 aria-hidden="true" />}
                     Continue in browser
                   </Button>
                   <Button
@@ -838,7 +838,7 @@ export function ProviderSignInBody({
                     Cancel
                   </Button>
                   <Button type="button" disabled={submitting} onClick={() => void handleStartInteractive()}>
-                    {submitting && <Loader2 className="animate-spin" aria-hidden="true" />}
+                    {submitting && <Loader2 aria-hidden="true" />}
                     Continue in browser
                   </Button>
                 </DialogFooter>
@@ -937,7 +937,7 @@ export function ProviderAccountBody({
                   disabled={busyAction !== null}
                   onClick={() => void handleUpdate()}
                 >
-                  {busyAction === "update" && <Loader2 className="animate-spin" aria-hidden="true" />}
+                  {busyAction === "update" && <Loader2 aria-hidden="true" />}
                   Update
                 </Button>
               </div>
@@ -958,7 +958,7 @@ export function ProviderAccountBody({
                   disabled={busyAction !== null}
                   onClick={() => void handleRemoveTarget(t.id)}
                 >
-                  {busyAction === `remove:${t.id}` && <Loader2 className="animate-spin" aria-hidden="true" />}
+                  {busyAction === `remove:${t.id}` && <Loader2 aria-hidden="true" />}
                   Remove
                 </Button>
               )}
@@ -990,7 +990,7 @@ export function ProviderAccountBody({
               disabled={busyAction !== null}
               onClick={() => void handleSignOutAll()}
             >
-              {busyAction === "signout" && <Loader2 className="animate-spin" aria-hidden="true" />}
+              {busyAction === "signout" && <Loader2 aria-hidden="true" />}
               Sign out
             </Button>
           )}
@@ -1007,7 +1007,7 @@ export function ProviderAccountBody({
               disabled={busyAction !== null}
               onClick={() => void handleSignOutAll()}
             >
-              {busyAction === "signout" && <Loader2 className="animate-spin" aria-hidden="true" />}
+              {busyAction === "signout" && <Loader2 aria-hidden="true" />}
               Sign out
             </Button>
           ) : (
@@ -1085,7 +1085,7 @@ export function ProvidersListSection({
               disabled={model.loading || model.refreshing}
               onClick={() => void model.refresh()}
             >
-              {model.refreshing && <Loader2 className="animate-spin" aria-hidden="true" />}
+              {model.refreshing && <Loader2 aria-hidden="true" />}
               Refresh
             </Button>
           </span>
@@ -1093,7 +1093,7 @@ export function ProvidersListSection({
       >
         {model.loading && !model.status ? (
           <div className="flex min-h-14 items-center justify-center gap-2 px-4 py-3 text-minor text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+            <Loader2 className="size-pixel" aria-hidden="true" />
             Loading…
           </div>
         ) : model.loadError ? (

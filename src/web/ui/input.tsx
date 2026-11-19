@@ -1,6 +1,6 @@
 // 输入框、多行输入、下拉（docs/ui-standard.md 第 6、7 条）：高 36px（h-9）、rounded-xl、15px 字、白底细边框；
 // 聚焦时样子不变（边框不加深、不加光圈），靠光标表示；不合规（aria-invalid）是红边框。
-import { ChevronDown, ChevronsUpDown } from "lucide-react";
+import { ChevronDown, ChevronsUpDown } from "./icons.ts";
 import type * as React from "react";
 import { cn } from "../lib/utils.ts";
 

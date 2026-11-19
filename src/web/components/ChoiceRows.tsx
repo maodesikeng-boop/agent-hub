@@ -1,5 +1,5 @@
 import * as RadioGroupPrimitive from "@radix-ui/react-radio-group";
-import { Check } from "lucide-react";
+import { Check } from "../ui/icons.ts";
 import { useId, type ReactNode } from "react";
 import { cn } from "../lib/utils.ts";
 
@@ -19,7 +19,7 @@ export function RadioMark({ checked }: { checked: boolean }) {
         checked ? "bg-primary text-primary-foreground" : "border-[1.5px] border-muted-foreground/75 bg-background",
       )}
     >
-      {checked && <Check className="size-3" strokeWidth={3.5} />}
+      {checked && <Check className="size-pixel-sm" strokeWidth={3.5} />}
     </span>
   );
 }

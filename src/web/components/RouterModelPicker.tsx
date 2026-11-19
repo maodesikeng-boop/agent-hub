@@ -1,7 +1,7 @@
 // Router 工作台顶栏右侧模型选择入口（docs/ui-standard.md 第 21 条）：
 // 桌面端弹出轻量 Popover，手机端弹出底部 Drawer；一键选 Auto 或已就绪厂商快模型预设，细节默认收起可展开切换模型与思考程度。
 import * as RadioGroupPrimitive from "@radix-ui/react-radio-group";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight } from "../ui/icons.ts";
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import {
@@ -375,7 +375,7 @@ export const RouterModelPicker = memo(function RouterModelPicker({
                 {!detailsOpen && showEffort && selectedChoice.effort !== null && <span>{selectedChoice.effort}</span>}
                 <ChevronDown
                   className={cn(
-                    "size-4 shrink-0 transition-transform motion-reduce:transition-none",
+                    "size-pixel-sm shrink-0 transition-transform motion-reduce:transition-none",
                     detailsOpen && "rotate-180",
                   )}
                   aria-hidden="true"
@@ -446,7 +446,7 @@ export const RouterModelPicker = memo(function RouterModelPicker({
             )}
           >
             <span>Manage providers…</span>
-            <ChevronRight className="size-4 shrink-0" aria-hidden="true" />
+            <ChevronRight className="size-pixel-sm shrink-0" aria-hidden="true" />
           </button>
         </div>
       )}
@@ -456,7 +456,7 @@ export const RouterModelPicker = memo(function RouterModelPicker({
   const triggerButton = (
     <Button
       type="button"
-      variant="ghost"
+      variant="slot"
       aria-label={triggerDisplay.ariaLabel}
       title={triggerDisplay.title}
       {...(mobile ? { "aria-expanded": open, "aria-haspopup": "dialog" as const, onClick: () => handleOpenChange(!open) } : {})}
@@ -468,7 +468,7 @@ export const RouterModelPicker = memo(function RouterModelPicker({
         </span>
       )}
       <span className="min-w-0 truncate text-foreground">{triggerDisplay.primary}</span>
-      <ChevronDown className={cn("size-4 shrink-0", !open && "text-muted-foreground")} aria-hidden="true" />
+      <ChevronDown className={cn("size-pixel-sm shrink-0", !open && "text-muted-foreground")} aria-hidden="true" />
     </Button>
   );
 

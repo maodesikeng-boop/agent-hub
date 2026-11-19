@@ -11,6 +11,7 @@ import type { KeyboardEvent } from "react";
 import { detectComposerTrigger, insertSelection, rankCommands, removeLeadingCommand, splitPath } from "./composer-trigger.ts";
 import { useModelCatalogs } from "./models.tsx";
 import { useHubQueryClient } from "./query-client.ts";
+import type { SlimeLook } from "../shared/slimes.ts";
 import { type WorkerPickLevel, workerPickFromArgs, workerPickRows } from "./worker-pick.ts";
 
 /** 接着打字，等这么久没再打才去后台搜文件。 */
@@ -69,8 +70,8 @@ export interface MenuItem {
   insert: string;
   /** 列出来但不能选（没登录的厂商、离线设备的目标）。 */
   disabled?: boolean;
-  /** 目标行的水果切片头像色键。 */
-  avatarKey?: number;
+  /** 目标行的项目经理头像。 */
+  look?: SlimeLook;
   /** 目标行的唯一键（选中后由 Router 挂成目标胶囊，不插纯文本）。 */
   targetKey?: string;
 }

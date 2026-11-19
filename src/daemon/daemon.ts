@@ -107,7 +107,6 @@ import type { FolderPicker } from "./pick-folder.ts";
 import { defaultDeviceName, loadOrCreateDevice, saveDevice } from "./device.ts";
 import { createPeers, type Peers } from "./peers/index.ts";
 import { createPushService } from "./push/index.ts";
-import { FEISHU_AVATARS_DIR } from "./feishu/avatars.ts";
 import { createFeishuService, type FeishuService } from "./feishu/service.ts";
 import { createFeishuStore } from "./feishu/store.ts";
 import {
@@ -880,7 +879,6 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       secretsFile: paths.feishuSecretsFile,
       uploadsDir,
       sentFilesDir,
-      avatarsDir: FEISHU_AVATARS_DIR,
       device,
       log: (line) => log(`${LOG_PREFIX} ${line}`),
     });

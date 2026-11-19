@@ -49,16 +49,17 @@ afterEach(() => {
 });
 
 describe("Composer 布局", () => {
-  it("回形针和发送键同尺寸、同圆角；回形针是不带底色的 ghost 图标按钮（悬停才有浅底）", () => {
+  it("“+”和发送键同尺寸、同圆角（36px、圆角 10px 的方块）；“+”是不带底色的 ghost 图标按钮（悬停才有浅底）；框是 rounded-xl 的方框", () => {
     setup();
     const attach = screen.getByRole("button", { name: "Add files" });
     const send = screen.getByRole("button", { name: "Send" });
     expect(attach).toHaveClass("text-muted-foreground", "hover:bg-accent");
     expect(attach.className).not.toMatch(/(^|\s)bg-/);
-    for (const cls of ["size-9", "rounded-[var(--radius-btn)]"]) {
+    for (const cls of ["size-9", "rounded-[10px]"]) {
       expect(attach).toHaveClass(cls);
       expect(send).toHaveClass(cls);
     }
+    expect(attach.closest(".composer-frame")).toHaveClass("rounded-xl");
   });
 
   it("空输入框是单行：回形针、文字区、发送键在同一个网格行，从左到右排开", () => {
@@ -184,7 +185,7 @@ describe("Composer 布局", () => {
       );
       const btn = screen.queryByRole("button", { name: "Stop" });
       if (files.length === 0) {
-        expect(btn).toHaveClass("size-9", "rounded-[var(--radius-btn)]");
+        expect(btn).toHaveClass("size-9", "rounded-[10px]");
         expect(btn?.parentElement).toHaveClass("col-start-3", "row-start-1");
       } else {
         expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument(); // 有待发文件：不是停止
@@ -529,6 +530,7 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     expect(chip.textContent).toBe("Claude Code");
     expect(chip).toHaveClass("gap-2");
     expect(chip.querySelector("svg")).toHaveClass("size-4", "text-muted-foreground");
+    expect(chip.querySelector("svg")).toHaveAttribute("data-icon", "line");
     const li = chip.closest("li")!;
     expect(li).toHaveClass("rounded-full", "bg-muted", "py-1", "pr-1", "pl-3", "text-minor");
     expect(li.parentElement).toHaveAccessibleName("Files to send");

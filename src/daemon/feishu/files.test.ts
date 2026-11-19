@@ -65,6 +65,7 @@ describe("createFeishuFileService", () => {
     const original = readFileSync(path);
     let seen: { path: string; width: number } | null = null;
     fake.beforeUpload = async (input) => {
+      if (!("path" in input)) return;
       seen = { path: input.path, width: (await sharp(input.path).metadata()).width ?? 0 };
     };
     await svc.upload({ messageId: 1, part: 0, path, name: "wide.png", mime: "image/png", bytes: original.length });
@@ -82,7 +83,7 @@ describe("createFeishuFileService", () => {
     await sharp({ create: { width: 64, height: 64, channels: 3, background: "#336699" } }).avif().toFile(path);
     let format: string | undefined;
     fake.beforeUpload = async (input) => {
-      format = (await sharp(input.path).metadata()).format;
+      if ("path" in input) format = (await sharp(input.path).metadata()).format;
     };
     expect(await svc.upload({ messageId: 1, part: 0, path, name: "small.avif", mime: "image/avif", bytes: readFileSync(path).length })).toMatchObject({ kind: "image" });
     expect(format).toBe("jpeg");
@@ -108,7 +109,7 @@ describe("createFeishuFileService", () => {
     expect((await sharp(path).metadata()).pages).toBe(2);
     let pages: number | undefined;
     fake.beforeUpload = async (input) => {
-      pages = (await sharp(input.path).metadata()).pages ?? 1;
+      if ("path" in input) pages = (await sharp(input.path).metadata()).pages ?? 1;
     };
     expect(await svc.upload({ messageId: 1, part: 0, path, name: "anim.webp", mime: "image/webp", bytes: FEISHU_IMAGE_MAX_BYTES + 1 })).toMatchObject({ kind: "image" });
     expect(pages).toBe(1);

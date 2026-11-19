@@ -8,7 +8,7 @@ import {
   type InfiniteQueryObserverOptions,
   type QueryClient,
 } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, CircleAlert, ExternalLink } from "lucide-react";
+import { ChevronDown, ChevronRight, CircleAlert, ExternalLink } from "../ui/icons.ts";
 import {
   memo,
   useCallback,
@@ -17,7 +17,6 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
-  type CSSProperties,
 } from "react";
 import {
   ROUTER_STREAM_LIVE_MAX,
@@ -31,7 +30,8 @@ import {
 } from "../../shared/index.ts";
 import { ApiError, localClient, type HubClient } from "../client.ts";
 import { errorLine, errorText, errorTitle, formatTime, type ErrorLike } from "../format.ts";
-import { paletteOf } from "../lib/palette.ts";
+import { jellyStyleOf } from "../lib/palette.ts";
+import { defaultLookOf } from "../../shared/slimes.ts";
 import { cn } from "../lib/utils.ts";
 import { useHubQueryClient } from "../query-client.ts";
 import {
@@ -51,21 +51,18 @@ import { Button } from "../ui/button.tsx";
 import { useMessageEnter, type EnterItem } from "../useMessageEnter.ts";
 import { useStickToBottom } from "../useStickToBottom.ts";
 import type { DeviceStoreLookup } from "../forward-reply.ts";
-import { DeviceScopeOf } from "../device-scope.tsx";
+import { DeviceScopeOf, useFleetLookOf } from "../device-scope.tsx";
 import { AttachmentList } from "./Attachments.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { CardBody, INLINE_LINK_CLASS } from "./Deliverables.tsx";
-import { KnifeAvatar } from "./KnifeAvatar.tsx";
+import { RouterAvatar } from "./RouterAvatar.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { AgentHead, BUBBLE, CopyButton, SentBody, TEXT_BUTTON, UnsentMark } from "./Messages.tsx";
 import { ForwardReply } from "./ForwardReply.tsx";
 
-const ROUTER_IDENTITY = { name: "Router", avatarKey: 0 } as const;
+const ROUTER_IDENTITY = { name: "Router", look: defaultLookOf(0) } as const;
 
 
-function jellyStyle(avatarKey: number): CSSProperties {
-  return { "--jelly": paletteOf(avatarKey).accent } as CSSProperties;
-}
 
 type ParsedBriefingLink =
   | { kind: "external"; url: string }
@@ -112,7 +109,7 @@ function BriefingLinks({
           return (
             <a key={idx} href={parsed.url} target="_blank" rel="noreferrer" className={INLINE_LINK_CLASS}>
               <span>{label}</span>
-              <ExternalLink className="size-3.5 shrink-0" aria-hidden="true" />
+              <ExternalLink className="size-pixel-sm shrink-0" aria-hidden="true" />
             </a>
           );
         }
@@ -163,11 +160,12 @@ function DestinationRow({
 }) {
   const showProject = dest.projectName !== null && dest.projectName !== dest.name;
   const showDevice = (multiDevice || !dest.self) && dest.deviceName !== "";
+  const look = useFleetLookOf()(dest.deviceKey, dest.pmId);
   return (
     <button
       type="button"
       data-destination
-      style={jellyStyle(dest.avatarKey)}
+      style={jellyStyleOf(look.color)}
       className="flex w-full pointer-coarse:min-h-11 cursor-pointer items-center gap-3 rounded-xl px-2.5 py-2 text-left transition-colors outline-none hover:bg-jelly-hover focus-visible:ring-2 focus-visible:ring-ring/50"
       onClick={() =>
         dest.worker
@@ -175,7 +173,7 @@ function DestinationRow({
           : onOpenConversation(dest.deviceKey, dest.conversationId)
       }
     >
-      <Avatar colorKey={dest.avatarKey} size={20} neutral={dest.worker} />
+      <Avatar look={look} size={20} neutral={dest.worker} />
       <span className="min-w-0 truncate text-body font-medium text-foreground">{dest.name}</span>
       {showProject && <span className="max-w-32 shrink-0 truncate text-xs text-muted-foreground">{dest.projectName}</span>}
       {showDevice && <span className="shrink-0 text-xs text-muted-foreground">{dest.deviceName}</span>}
@@ -183,7 +181,7 @@ function DestinationRow({
         <span className="ml-auto shrink-0 text-xs text-muted-foreground">{dest.opLabel}</span>
       )}
       <ChevronRight
-        className={cn("size-4 shrink-0 text-muted-foreground", dest.opLabel === null && "ml-auto")}
+        className={cn("size-pixel-sm shrink-0 text-muted-foreground", dest.opLabel === null && "ml-auto")}
         aria-hidden="true"
       />
     </button>
@@ -268,7 +266,7 @@ const TurnRow = memo(function TurnRow({
 
         {!isSending && !isSendFailed && (
           <div className="mt-4 flex flex-col" data-side="left">
-            <AgentHead identity={ROUTER_IDENTITY} avatar={<KnifeAvatar size={26} />} />
+            <AgentHead identity={ROUTER_IDENTITY} avatar={<RouterAvatar size={26} working={isRunning} />} />
             <div className="flex flex-col gap-2.5">
               {entry.destinations.length > 0 && (
                 <div className="-mx-2.5 flex flex-col gap-0.5">
@@ -302,7 +300,7 @@ const TurnRow = memo(function TurnRow({
 
               {isFailed && (
                 <div className="flex items-start gap-2 text-minor leading-5">
-                  <CircleAlert className="mt-0.75 size-3.5 shrink-0 text-danger" aria-hidden="true" />
+                  <CircleAlert className="mt-0.75 size-pixel-sm shrink-0 text-danger" aria-hidden="true" />
                   <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 [overflow-wrap:anywhere]">
                     <span className="text-minor text-muted-foreground" title={failRaw}>
                       {failReason}
@@ -363,6 +361,7 @@ const BriefingRow = memo(function BriefingRow({
 }) {
   const showProject = entry.projectName !== null && entry.projectName !== entry.pmName;
   const showDevice = (multiDevice || !entry.self) && entry.deviceName !== "";
+  const look = useFleetLookOf()(entry.deviceKey, entry.pmId);
   return (
     <div data-stream-entry className="w-full">
       {showNewDivider && (
@@ -378,7 +377,7 @@ const BriefingRow = memo(function BriefingRow({
       >
         {head && (
           <AgentHead
-            identity={{ name: entry.pmName, avatarKey: entry.avatarKey }}
+            identity={{ name: entry.pmName, look }}
             onClick={() => onOpenConversation(entry.deviceKey, entry.report.conversationId)}
             trailing={
               (showProject || showDevice) && (
@@ -958,7 +957,7 @@ export const RouterStream = memo(function RouterStream({
 
           {empty && (
             <div className="m-auto flex flex-col items-center gap-3 py-10 text-center" data-empty>
-              <KnifeAvatar size={36} className="opacity-40" />
+              <RouterAvatar size={36} className="opacity-40" />
               <p className="text-minor text-muted-foreground">All clear</p>
             </div>
           )}

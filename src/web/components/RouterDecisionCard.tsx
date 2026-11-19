@@ -1,6 +1,6 @@
 // 水果刀 Router 工作台：内嵌单行补充框的三合一待决拍板卡（docs/ui-standard.md 第 21 条、docs/router-design.md 第 4.2 节）。
 // 严格禁止聊天气泡与 · / | / / 拼接分隔符，元信息一律以 flex gap-2 排布。
-import { ArrowUp } from "lucide-react";
+import { ArrowUp } from "../ui/icons.ts";
 import { memo } from "react";
 import type { ConversationId } from "../../shared/index.ts";
 import { cleanOptionLabel, recommendedIndexOf } from "../decision-actions.ts";
@@ -56,7 +56,7 @@ export const RouterDecisionCard = memo(function RouterDecisionCard({
           className="touch-target inline-flex cursor-pointer items-center gap-2 rounded-full text-left font-semibold text-foreground outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/50"
           onClick={() => onOpenConversation(entry.deviceKey, decision.conversationId)}
         >
-          <Avatar colorKey={entry.avatarKey} size={24} />
+          <Avatar look={entry.look} size={24} />
           <span className="truncate">{decision.pmName}</span>
         </button>
         {showProject && <span className="truncate text-muted-foreground">{decision.projectName}</span>}
@@ -119,7 +119,7 @@ export const RouterDecisionCard = memo(function RouterDecisionCard({
           disabled={!canSendCustom}
           onClick={() => onSubmit(entry, null, note)}
         >
-          <ArrowUp className="size-4" aria-hidden="true" />
+          <ArrowUp className="size-pixel" aria-hidden="true" />
         </Button>
       </div>
 

@@ -15,7 +15,7 @@ import {
   type PmCapabilityPolicy,
 } from "../../shared/pm-capabilities.ts";
 import { fail, type LedgerContext } from "./context.ts";
-import { toPm, type PmDbRow } from "./rows.ts";
+import { PM_SELECT, toPm, type PmDbRow } from "./rows.ts";
 
 export interface LedgerPmCapabilities {
   /** 后置：没存过返回 defaultPmCapabilityPolicy。项目经理不存在抛 not_found。 */
@@ -49,7 +49,7 @@ export function createLedgerPmCapabilities(ctx: LedgerContext): LedgerPmCapabili
   const requirePm = (pmId: PmId): PmDbRow => {
     const row =
       db.get<PmDbRow>(
-        "SELECT p.*, a.archived_at FROM pms p LEFT JOIN pm_archives a ON a.pm_id = p.id WHERE p.id = ?",
+        `${PM_SELECT} WHERE p.id = ?`,
         pmId,
       ) ?? null;
     if (row === null) throw fail("not_found", `没有编号 ${pmId} 的项目经理`);

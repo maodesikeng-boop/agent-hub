@@ -67,11 +67,8 @@ export interface FeishuApiResult {
 }
 
 /** 上传给发消息用的图片（≤ 10 MB）或设群头像（image_type avatar）。 */
-export interface FeishuImageUpload {
-  imageType: "message" | "avatar";
-  /** 本机文件的绝对路径。 */
-  path: string;
-}
+/** 本机文件（path，绝对路径），或内存里画好的图（data，群头像）。 */
+export type FeishuImageUpload = { imageType: "message" | "avatar"; path: string } | { imageType: "avatar"; data: Buffer };
 
 /** 上传文件（≤ 30 MB）。fileType 照飞书：pdf、doc、xls、ppt、mp4、opus，其余是 stream；发消息时 mp4 配 media、opus 配 audio、其余配 file。 */
 export interface FeishuFileUpload {

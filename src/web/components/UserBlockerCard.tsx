@@ -1,7 +1,7 @@
 // 系统挂的“要你动手”的提醒卡（docs/user-blockers-design.md）：写明在哪台设备做什么，点 Done 让那台守护进程重查，
 // 能用就把卡住的步骤和 Worker 接着派出去。任务图步骤上和对话里是同一张卡，样式同拍板卡（docs/ui-standard.md 第 12.1 条）。
 import { useMutation } from "@tanstack/react-query";
-import { Loader2 } from "lucide-react";
+import { Loader2 } from "../ui/icons.ts";
 import { useRef, useState } from "react";
 import type { UserBlockerId } from "../../shared/index.ts";
 import { useClient } from "../device-scope.tsx";
@@ -75,7 +75,7 @@ export function UserBlockerCard({
               recheck.mutate();
             }}
           >
-            {recheck.isPending && <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />}
+            {recheck.isPending && <Loader2 className="size-pixel-sm" aria-hidden="true" />}
             {recheck.isPending ? "Checking…" : "Done"}
           </Button>
         </div>

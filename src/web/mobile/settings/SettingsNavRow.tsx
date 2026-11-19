@@ -3,14 +3,14 @@
 //   不用 · | / 拼接）+ 16px ChevronRight；危险行（Sign out all browsers…）红字、不带箭头。
 // - SwitchRow：整行点哪都拨开关（名字的 label 用 ::after 盖住整行）。
 // - FieldBlock：小标题在上、全宽输入框在下的纵向表单块（手机上不把输入框和按钮挤一行，不写死 w-60）。
-import { ChevronRight } from "lucide-react";
+import { ChevronRight } from "../../ui/icons.ts";
 import { useId, type ReactNode } from "react";
 import type { ErrorLike } from "../../format.ts";
 import { cn } from "../../lib/utils.ts";
 import { RowError } from "../../components/SettingsList.tsx";
 import { Switch } from "../../ui/switch.tsx";
 
-const ROW_ICON = "flex shrink-0 text-muted-foreground [&_svg]:size-4 [&_svg]:stroke-[1.5]";
+const ROW_ICON = "flex shrink-0 text-muted-foreground [&_svg]:size-pixel";
 
 export function SettingsNavRow({
   icon,
@@ -53,7 +53,7 @@ export function SettingsNavRow({
       </span>
       {attention && <span data-testid={attentionTestId} aria-hidden="true" className="size-2 shrink-0 rounded-full bg-caution" />}
       {summary !== undefined && <span className="shrink-0 text-minor text-muted-foreground tabular-nums">{summary}</span>}
-      {!danger && <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
+      {!danger && <ChevronRight className="size-pixel-sm shrink-0 text-muted-foreground" aria-hidden="true" />}
     </button>
   );
 }

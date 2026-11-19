@@ -1,4 +1,4 @@
-import { FileText } from "lucide-react";
+import { FileText } from "../ui/icons.ts";
 import { useLayoutEffect, useRef } from "react";
 import type { MenuItem, MenuKind, MenuState } from "../composer-suggest.ts";
 import { cn } from "../lib/utils.ts";
@@ -63,8 +63,8 @@ export function ComposerMenu({
               onMouseMove={() => index !== menu.activeIndex && onHighlight(index)}
               onClick={() => onSelect(item)}
             >
-              {menu.kind === "file" && <FileText className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
-              {menu.kind === "target" && item.avatarKey !== undefined && <Avatar colorKey={item.avatarKey} size={20} />}
+              {menu.kind === "file" && <FileText className="size-pixel shrink-0 text-muted-foreground" aria-hidden="true" />}
+              {menu.kind === "target" && item.look !== undefined && <Avatar look={item.look} size={20} />}
               <span title={item.label} className={cn("min-w-0 truncate font-medium", menu.kind === "file" ? "shrink-0 max-w-[60%]" : "max-w-[45%] shrink-0", item.disabled && "text-muted-foreground")}>{item.label}</span>
               {item.detail !== "" && <span title={item.detail} className="min-w-0 flex-1 truncate text-minor text-muted-foreground">{item.detail}</span>}
             </li>

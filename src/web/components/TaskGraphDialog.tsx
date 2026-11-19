@@ -1,5 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
-import { Check, Loader2 } from "lucide-react";
+import { Loader2 } from "../ui/icons.ts";
 import { memo, useCallback, useMemo, useRef, useState } from "react";
 import {
   isTaskGraphReadyToFinish,
@@ -19,10 +19,15 @@ import { workersByWorkerId, type WorkerEntry } from "../selectors.ts";
 import { computeTaskGraphLayout, DEFAULT_ROOT_FONT_SIZE_PX } from "../task-graph-layout.ts";
 import { Button } from "../ui/button.tsx";
 import { Dialog, DialogBody, DialogClose, DialogContent, DialogFooter, ZOOM_DIALOG } from "../ui/dialog.tsx";
-import { KnifeAvatar } from "./KnifeAvatar.tsx";
+import { PM_FRUITS } from "../../shared/fruits.ts";
+import type { JellyColorId } from "../../shared/slimes.ts";
+import { fruitTrackVars } from "../lib/palette.ts";
+import type { StepBead } from "../pixel-path.ts";
+import { GRAPH_TUBE_CELL_PX } from "../task-graph-layout.ts";
+import { GateMark } from "./GateMark.tsx";
 import { UserBlockerCard } from "./UserBlockerCard.tsx";
-import { GateDecisionCard, resolveBoundWorker } from "./PeelTrack.tsx";
-import { fruitTrackVars, SliceWheelIcon } from "./SliceWheelIcon.tsx";
+import { GateDecisionCard, JellyBead, resolveBoundWorker, TubeLayer } from "./PeelTrack.tsx";
+import { TaskProgressIcon } from "./TaskProgressIcon.tsx";
 
 function readRootFontSizePx(): number {
   if (typeof document === "undefined" || typeof getComputedStyle !== "function") {
@@ -39,6 +44,35 @@ function readCoarsePointer(): boolean {
 /** 一张卡的测量键，也是它的 React key：图、步骤、形态（拍板卡还是普通卡）有一个变了就是另一张卡，重新挂载、重新量。 */
 function measureKeyOf(graphId: TaskGraphId, nodeKey: string, waitingGate: boolean): string {
   return `${graphId}:${nodeKey}:${waitingGate ? "gate" : "node"}`;
+}
+
+/** 卡片头的果冻珠子（和右栏果皮轨同一套）：做完、在干、等项目经理、没轮到（跳过的也是空珠子）。 */
+function beadOf(node: TaskNode): StepBead {
+  if (node.status === "done") return node.skipped ? "pending" : "done";
+  if (node.status === "running") return "running";
+  if (isTaskNodeWaitingPm(node)) return "waitingPm";
+  return "pending";
+}
+
+/** 卡片左上角的两位步骤号：底色看状态（docs/ui-standard.md 第 12.1 条）。 */
+const STEP_TAG: Readonly<Record<"done" | "running" | "gate" | "other", string>> = {
+  done: "bg-[var(--peel)] text-foreground",
+  running: "bg-background text-foreground shadow-[inset_0_0_0_1px_var(--peel)]",
+  gate: "bg-primary text-primary-foreground",
+  other: "bg-accent text-muted-foreground",
+};
+
+function StepTag({ n, tone }: { n: number; tone: keyof typeof STEP_TAG }) {
+  return <span className={cn("absolute top-0 left-0 px-1 text-xs leading-4 tabular-nums", STEP_TAG[tone])}>{String(n).padStart(2, "0")}</span>;
+}
+
+/** 卡片头的小珠子：14px 见方的像素小图，格子 2px。 */
+function BeadIcon({ bead }: { bead: StepBead }) {
+  return (
+    <svg viewBox="0 0 14 14" shapeRendering="crispEdges" aria-hidden="true" className="size-3.5 shrink-0">
+      <JellyBead bead={bead} center={{ x: 7, y: 7 }} cell={GRAPH_TUBE_CELL_PX} />
+    </svg>
+  );
 }
 
 /** 四个状态的英文状态词（docs/ui-standard.md 第 3 条的词表）：等人按等谁分开，完了按是不是跳过的分开。 */
@@ -64,14 +98,15 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
   open,
   onOpenChange,
   workers,
-  colorKey = 0,
+  color = PM_FRUITS[0]!,
   onOpenWorker,
 }: {
   graph: TaskGraph | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   workers: readonly WorkerEntry[];
-  colorKey?: number;
+  /** 所属项目经理现在的颜色：管道、珠子和进度图标跟着它。 */
+  color?: JellyColorId;
   onOpenWorker: (id: ConversationId) => void;
 }) {
   // 当前区域那台设备的接口（device-scope.tsx）：跨设备看远端项目经理时，跳过、取消、拍板都发给那台
@@ -161,6 +196,18 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
     });
   }, [graph, expandedNotes, measuredHeights, rootFontSizePx, coarsePointer]);
 
+  // 管子按走没走通分两组画（TubeLayer 先画一组的全部描边再画全部芯）
+  const { emptyTubes, filledTubes } = useMemo(() => {
+    const edges = layout?.edges ?? [];
+    const tubesOf = (solid: boolean) => edges.filter((e) => e.solid === solid).map((e) => ({ center: e.d, highlight: e.highlightD }));
+    return { emptyTubes: tubesOf(false), filledTubes: tubesOf(true) };
+  }, [layout]);
+  /** 步骤号：按 sortOrder 排的第几步（从 1 起）。 */
+  const stepNumberOf = useMemo(() => {
+    const order = new Map((graph?.nodes ?? []).toSorted((a, b) => a.sortOrder - b.sortOrder || a.key.localeCompare(b.key)).map((n, i) => [n.key, i + 1]));
+    return (key: string) => order.get(key) ?? 0;
+  }, [graph]);
+
   const skipMutation = useMutation(
     {
       mutationFn: async (nodeKey: string) => {
@@ -210,7 +257,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
       <DialogContent title={graph.title} className={ZOOM_DIALOG}>
         <div className="flex min-h-8 shrink-0 items-center justify-between gap-3">
           <div className="flex items-center gap-2.5 text-minor text-muted-foreground">
-            <SliceWheelIcon graph={graph} colorKey={colorKey} size={20} />
+            <TaskProgressIcon graph={graph} color={color} size={20} />
             {graphStateLabel !== null && <span>{graphStateLabel}</span>}
           </div>
           {graph.status === "active" && (
@@ -241,7 +288,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                   </Button>
                 </DialogClose>
                 <Button variant="destructive" disabled={cancelMutation.isPending} onClick={() => runExclusive(() => cancelMutation.mutate())}>
-                  {cancelMutation.isPending && <Loader2 className="animate-spin" aria-hidden="true" />}
+                  {cancelMutation.isPending && <Loader2 aria-hidden="true" />}
                   Cancel graph
                 </Button>
               </DialogFooter>
@@ -256,35 +303,23 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
         <DialogBody className="mx-0 block overflow-auto px-0">
           <div
             data-rankdir={layout.rankdir}
-            style={{ ...fruitTrackVars(colorKey), width: `${layout.width}px`, minHeight: `${layout.height}px` }}
-            className="relative"
+            style={{ ...fruitTrackVars(color), width: `${layout.width}px`, minHeight: `${layout.height}px` }}
+            className="graph-canvas relative"
           >
             <svg
               aria-hidden="true"
               width={layout.width}
               height={layout.height}
               viewBox={`0 0 ${layout.width} ${layout.height}`}
+              shapeRendering="crispEdges"
               className="pointer-events-none absolute inset-0"
             >
+              <TubeLayer state="empty" segments={emptyTubes} cell={GRAPH_TUBE_CELL_PX} />
+              <TubeLayer state="filled" segments={filledTubes} cell={GRAPH_TUBE_CELL_PX} />
               {layout.edges.map((edge) => (
-                <g key={edge.id}>
-                  <path
-                    d={edge.d}
-                    fill="none"
-                    stroke={edge.solid ? "var(--color-muted-foreground)" : "var(--color-line)"}
-                    strokeWidth="1.5"
-                    strokeDasharray={edge.solid ? undefined : "4 3"}
-                  />
-                  {edge.arrowD !== "" && (
-                    <path
-                      d={edge.arrowD}
-                      fill="none"
-                      stroke={edge.solid ? "var(--color-muted-foreground)" : "var(--color-line)"}
-                      strokeWidth="1.5"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  )}
+                <g key={edge.id} data-arrow={edge.solid ? "filled" : "empty"}>
+                  <path d={edge.arrowOutlineD} fill={edge.solid ? "var(--tube-line)" : "var(--tube-empty-line)"} />
+                  <path d={edge.arrowFillD} fill={edge.solid ? "var(--tube-core)" : "var(--tube-empty-core)"} />
                 </g>
               ))}
             </svg>
@@ -314,7 +349,8 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                   >
                     <div className="mb-1.5 flex items-center justify-between gap-2 px-1">
                       <span className="flex min-w-0 items-center gap-2 text-minor font-semibold text-primary">
-                        <KnifeAvatar size={20} />
+                        <span className="bg-primary px-1 text-xs leading-4 font-normal text-primary-foreground tabular-nums">{String(stepNumberOf(node.key)).padStart(2, "0")}</span>
+                        <GateMark size={16} />
                         <span className="truncate" title={node.title}>{node.title}</span>
                       </span>
                       <span className="shrink-0 text-xs font-medium text-primary">Waiting on you</span>
@@ -346,72 +382,64 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                   data-measure-key={measureKey}
                   // 高度只由内容定，下限是写死的一档：把量到的高度写回这里，卡变矮时（拍板、跳过之后）会被旧高度撑住
                   style={{ left: `${box.x}px`, top: `${box.y}px`, width: `${box.width}px` }}
-                  className={cn(
-                    "absolute flex min-h-17 flex-col justify-between gap-1.5 rounded-xl px-3 py-2.5",
-                    isPending
-                      ? "border border-dashed border-line bg-transparent opacity-65"
-                      : "border border-line bg-background",
-                  )}
+                  data-step={beadOf(node)}
+                  className={cn("pixel-card absolute flex", isPending && "opacity-65")}
                 >
-                  <div className="flex items-start justify-between gap-2">
-                    <span className="flex min-w-0 items-start gap-1.5 [&>svg]:mt-0.75 [&>span:first-child:not(:last-child)]:mt-1.5">
-                      {isDone && <Check className="size-3.5 shrink-0 text-success" aria-hidden="true" />}
-                      {isRunning && (
-                        <svg data-running-ring viewBox="0 0 16 16" className="size-3.5 shrink-0" aria-hidden="true">
-                          <circle cx="8" cy="8" r="7" fill="var(--pulp-pale)" />
-                          <circle cx="8" cy="8" r="4.6" fill="var(--background)" stroke="var(--peel)" strokeWidth="2.2" />
-                        </svg>
-                      )}
-                      {isWaitingPm && <span className="size-2 shrink-0 rounded-full bg-caution" aria-hidden="true" />}
-                      {/* 步骤名最多两行：并行的几步名字常常只有末尾不同，截成一行就分不出来 */}
-                      <span
-                        title={node.title}
-                        className={cn(
-                          "line-clamp-2 min-w-0 text-minor font-medium wrap-anywhere",
-                          isRunning && "status-shimmer",
-                          isSkipped && "text-muted-foreground opacity-60",
-                        )}
-                      >
-                        {node.title}
+                  <div className="pixel-card-body relative flex min-h-17 w-full flex-col justify-between gap-1.5 px-3 pt-5 pb-2.5">
+                    <StepTag n={stepNumberOf(node.key)} tone={isDone ? "done" : isRunning ? "running" : "other"} />
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="flex min-w-0 items-start gap-1.5 [&>svg]:mt-0.75">
+                        <BeadIcon bead={beadOf(node)} />
+                        {/* 步骤名最多两行：并行的几步名字常常只有末尾不同，截成一行就分不出来 */}
+                        <span
+                          title={node.title}
+                          className={cn(
+                            "line-clamp-2 min-w-0 text-minor font-medium wrap-anywhere",
+                            isRunning && "status-shimmer",
+                            isSkipped && "text-muted-foreground opacity-60",
+                          )}
+                        >
+                          {node.title}
+                        </span>
                       </span>
-                    </span>
-                    {workerId !== null ? (
-                      worker !== null ? (
+                      {workerId !== null ? (
+                        worker !== null ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onOpenChange(false);
+                              onOpenWorker(worker.conversationId);
+                            }}
+                            className="shrink-0 cursor-pointer rounded-xl px-1.5 py-0.5 text-xs font-medium text-primary transition-colors outline-none hover:bg-jelly-hover focus-visible:ring-2 focus-visible:ring-ring/50 tabular-nums"
+                          >
+                            #{workerId}
+                          </button>
+                        ) : (
+                          <span className="shrink-0 text-xs text-muted-foreground tabular-nums">#{workerId}</span>
+                        )
+                      ) : (
+                        <span className="shrink-0 text-xs text-muted-foreground">{statusLabelOf(node)}</span>
+                      )}
+                    </div>
+                    {decisionLabel !== null && (
+                      <p className="truncate text-xs font-medium text-foreground">{decisionLabel}</p>
+                    )}
+                    {summaryText !== null && (
+                      <p className="line-clamp-2 text-xs text-muted-foreground">{summaryText}</p>
+                    )}
+                    {canSkip && (
+                      <div className="flex justify-end">
                         <button
                           type="button"
-                          onClick={() => {
-                            onOpenChange(false);
-                            onOpenWorker(worker.conversationId);
-                          }}
-                          className="shrink-0 cursor-pointer rounded-xl px-1.5 py-0.5 text-xs font-medium text-primary transition-colors outline-none hover:bg-jelly-hover focus-visible:ring-2 focus-visible:ring-ring/50 tabular-nums"
+                          disabled={skipMutation.isPending || cancelMutation.isPending}
+                          onClick={() => runExclusive(() => skipMutation.mutate(node.key))}
+                          className="pointer-coarse:min-h-11 cursor-pointer rounded-xl px-1.5 py-0.5 text-xs text-muted-foreground transition-colors outline-none hover:bg-sidebar-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
                         >
-                          #{workerId}
+                          Skip step
                         </button>
-                      ) : (
-                        <span className="shrink-0 text-xs text-muted-foreground tabular-nums">#{workerId}</span>
-                      )
-                    ) : (
-                      <span className="shrink-0 text-xs text-muted-foreground">{statusLabelOf(node)}</span>
+                      </div>
                     )}
                   </div>
-                  {decisionLabel !== null && (
-                    <p className="truncate text-xs font-medium text-foreground">{decisionLabel}</p>
-                  )}
-                  {summaryText !== null && (
-                    <p className="line-clamp-2 text-xs text-muted-foreground">{summaryText}</p>
-                  )}
-                  {canSkip && (
-                    <div className="flex justify-end">
-                      <button
-                        type="button"
-                        disabled={skipMutation.isPending || cancelMutation.isPending}
-                        onClick={() => runExclusive(() => skipMutation.mutate(node.key))}
-                        className="pointer-coarse:min-h-11 cursor-pointer rounded-xl px-1.5 py-0.5 text-xs text-muted-foreground transition-colors outline-none hover:bg-sidebar-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
-                      >
-                        Skip step
-                      </button>
-                    </div>
-                  )}
                 </div>
               );
             })}

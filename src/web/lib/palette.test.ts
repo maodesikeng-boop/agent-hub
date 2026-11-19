@@ -1,18 +1,15 @@
 // 项目经理的颜色表（docs/ui-standard.md 第 4 条）：头像颜色和强调色共用一份，强调色按 WCAG 2.x AA 的文字对比度 4.5:1 配好。
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { PM_FRUITS, pmFruitOf } from "../../shared/fruits.ts";
-import { accentStyle, CHART_CATEGORY_COLORS, contrastRatio, PALETTE, paletteOf } from "./palette.ts";
+import { JELLY_COLOR_IDS, jellyColorOf } from "../../shared/slimes.ts";
+import { accentStyleOf, CHART_CATEGORY_COLORS, contrastRatio, fruitTrackVars, jellyStyleOf, tintStyleOf } from "./palette.ts";
 
 const WHITE = "#ffffff";
 
-describe("颜色表", () => {
-  it("顺序和 shared/fruits.ts 的 PM_FRUITS 一样；名字、fruit 标识、主形象与纸片分身素材、主色、强调色都不重复", () => {
-    const n = PM_FRUITS.length;
-    expect(PALETTE.map((c) => c.fruit)).toEqual([...PM_FRUITS]);
-    for (const key of ["name", "fruit", "main", "piece", "blob", "accent"] as const) expect(new Set(PALETTE.map((c) => c[key])).size).toBe(n);
-  });
+/** 全部颜色（20 种水果原色 + 新加的），每种带上名字。 */
+const PALETTE = JELLY_COLOR_IDS.map((id) => ({ name: id, ...jellyColorOf(id) }));
 
+describe("颜色表", () => {
   it.each(PALETTE.map((c) => [c.name, c] as const))("%s：强调色上的文字、白底上的链接和状态词，对比度都 ≥ 4.5:1（WCAG 1.4.3 AA）", (_name, c) => {
     expect(contrastRatio(c.accentForeground, c.accent)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(c.accent, WHITE)).toBeGreaterThanOrEqual(4.5);
@@ -22,23 +19,19 @@ describe("颜色表", () => {
     expect(contrastRatio(c.accentForeground, darken(c.accent, 0.9))).toBeGreaterThanOrEqual(4.5);
   });
 
-  it("按 key 轮着取，负数和超过水果个数的都能取到", () => {
-    const n = PALETTE.length;
-    expect(paletteOf(0)).toBe(PALETTE[0]);
-    expect(paletteOf(n)).toBe(PALETTE[0]);
-    expect(paletteOf(n + 1)).toBe(PALETTE[1]);
-    expect(paletteOf(-1)).toBe(PALETTE[1]);
-    // 飞书群头像按 pmFruitOf 取（daemon/feishu/avatars.ts），和网页头像是同一个水果
-    for (let key = 0; key <= n * 2; key++) expect(paletteOf(key).fruit).toBe(pmFruitOf(key));
+  it("accentStyleOf：换颜色，--primary 和 --primary-foreground 跟着换；同一种颜色两次返回同一个对象", () => {
+    const a = accentStyleOf("grapefruit") as Record<string, string>;
+    const b = accentStyleOf("sky") as Record<string, string>;
+    expect(a["--primary"]).toBe(jellyColorOf("grapefruit").accent);
+    expect(a["--primary-foreground"]).toBe(jellyColorOf("grapefruit").accentForeground);
+    expect(b["--primary"]).toBe(jellyColorOf("sky").accent);
+    for (const fn of [accentStyleOf, tintStyleOf, jellyStyleOf, fruitTrackVars]) expect(fn("teal")).toBe(fn("teal"));
   });
 
-  it("accentStyle：换 key，--primary 和 --primary-foreground 跟着换", () => {
-    const a = accentStyle(0) as Record<string, string>;
-    const b = accentStyle(1) as Record<string, string>;
-    expect(a["--primary"]).toBe(PALETTE[0]!.accent);
-    expect(a["--primary-foreground"]).toBe(PALETTE[0]!.accentForeground);
-    expect(b["--primary"]).toBe(PALETTE[1]!.accent);
-    expect(b["--primary"]).not.toBe(a["--primary"]);
+  it("fruitTrackVars：果冻管道的三层和珠子的暗面取这个颜色的描边、身体、浅色、暗面", () => {
+    const vars = fruitTrackVars("sakura") as Record<string, string>;
+    const { roles } = jellyColorOf("sakura");
+    expect([vars["--tube-line"], vars["--tube-core"], vars["--tube-glint"], vars["--tube-shade"]]).toEqual([roles.outline, roles.body, roles.light, roles.shade]);
   });
 
   it("图表分类色：颜色表 accent 里的 6 种，互不重复", () => {

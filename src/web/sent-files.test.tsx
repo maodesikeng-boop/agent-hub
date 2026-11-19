@@ -6,7 +6,8 @@ import { API_PATHS, SENT_FILE_REASONS, type SentFile } from "../shared/index.ts"
 import { MessageBubble, type MessageActions } from "./components/Messages.tsx";
 import { makeMessage } from "./test-utils.ts";
 
-const identity = { name: "小林", avatarKey: 1 };
+import { defaultLookOf } from "../shared/slimes.ts";
+const identity = { name: "小林", look: defaultLookOf(1) };
 const actions: MessageActions = { retry: {}, onOpenWorker: () => {}, onRetryMessage: () => {}, onRevertPersona: () => Promise.resolve() };
 
 function sent(over: Partial<SentFile> & Pick<SentFile, "href" | "name">): SentFile {

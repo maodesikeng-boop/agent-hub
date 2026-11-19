@@ -12,10 +12,10 @@ import {
 } from "../shared/index.ts";
 import * as RightRailMod from "./components/RightRail.tsx";
 import { RightRail } from "./components/RightRail.tsx";
-import { SliceWheelIcon } from "./components/SliceWheelIcon.tsx";
+import { TaskProgressIcon } from "./components/TaskProgressIcon.tsx";
 import { TaskGraphDialog } from "./components/TaskGraphDialog.tsx";
 import { PiecesDrawer } from "./mobile/PiecesDrawer.tsx";
-import { PALETTE } from "./lib/palette.ts";
+import { taskProgressPaths } from "./task-progress.ts";
 import { resetQueryClient } from "./query-client.ts";
 import { activeGraphsOf, pendingAsks, pendingDecisionsOf, unboundWorkersOf, workersOf, type WorkerEntry } from "./selectors.ts";
 import { applyChange, initialState, type HubState } from "./state.ts";
@@ -30,6 +30,7 @@ import {
   sessionChange,
 } from "./test-utils.ts";
 
+import { defaultLookOf, jellyColorOf } from "../shared/slimes.ts";
 function makeNode(over: Partial<TaskNode> & Pick<TaskNode, "key" | "title">): TaskNode {
   return {
     status: "pending",
@@ -99,8 +100,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("SliceWheelIcon：小水果切面进度轮", () => {
-  it("按总阶段数切瓣，跟随项目经理水果配色并用 rem 缩放；相邻同层并行瓣果心相连", () => {
+describe("TaskProgressIcon：嫩芽进度图标", () => {
+  it("一层一节、叶子按步骤状态上色，跟随项目经理颜色并用 rem 缩放；同层并行的两步长在同一节的左右两边", () => {
     const graph = makeGraph({
       id: 1,
       title: "多阶段改造",
@@ -120,24 +121,17 @@ describe("SliceWheelIcon：小水果切面进度轮", () => {
       ],
     });
 
-    const { container } = render(<SliceWheelIcon graph={graph} colorKey={1} size={20} />);
-    const root = container.querySelector("[data-slot='slice-wheel']") as HTMLElement;
+    const color = jellyColorOf("orange");
+    const { container } = render(<TaskProgressIcon graph={graph} color="orange" size={20} />);
+    const root = container.querySelector("[data-slot='task-progress']") as SVGSVGElement;
     expect(root).toBeInTheDocument();
     expect(root.style.width).toBe("1.25rem");
-    expect(root.style.height).toBe("1.25rem");
-    expect(root.style.getPropertyValue("--peel")).toBe(PALETTE[1]!.blob);
-
-    const petals = root.querySelectorAll("[data-petal-status]");
-    expect(petals).toHaveLength(5);
-    expect([...petals].map((el) => el.getAttribute("data-petal-status"))).toEqual([
-      "done",
-      "running",
-      "running",
-      "waiting-user",
-      "pending",
-    ]);
-    // 同层并行阶段 s2 与 s3 之间只切半刀（果心相连）
-    expect(root.querySelectorAll("[data-cut-joined='true']")).toHaveLength(1);
+    expect(root.getAttribute("aria-hidden")).toBe("true");
+    expect(root.getAttribute("shape-rendering")).toBe("crispEdges");
+    const fills = [...root.querySelectorAll("path")].map((p) => p.getAttribute("fill"));
+    expect(fills).toContain(color.blob);
+    expect(fills).toContain(color.accent);
+    expect(fills).toEqual(taskProgressPaths(graph, color).map((p) => p.fill));
   });
 });
 
@@ -179,7 +173,7 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
         activeGraphs={[graph]}
         openWorkerId={null}
         layout="side"
-        avatarKey={1}
+        look={defaultLookOf(1)}
         onOpenAsk={() => {}}
         onOpenWorker={onOpenWorker}
       />,
@@ -252,23 +246,20 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
       meta: { needsUser: true, options: ["全量同步并先备份", "仅同步无冲突项"], gateRef: { graphId, nodeKey: "gate-sync" } },
     });
 
-  it("等你拍板的步骤在右栏只有一行（水果刀 + 步骤名 + 箭头），没有选项按钮；点了让对话滚到那张卡；拍板后刀收起并显示所选简称", async () => {
+  it("等你拍板的步骤在右栏只有一行（小铃 + 步骤名 + 箭头），没有选项按钮；点了让对话滚到那张卡；拍板后小铃收起并显示所选简称", async () => {
     const user = userEvent.setup();
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     const onOpenAsk = vi.fn();
-    const railProps = { workers: [] as WorkerEntry[], openWorkerId: null, layout: "side" as const, avatarKey: 1, onOpenAsk, onOpenWorker: () => {} };
+    const railProps = { workers: [] as WorkerEntry[], openWorkerId: null, layout: "side" as const, look: defaultLookOf(1), onOpenAsk, onOpenWorker: () => {} };
 
-    // 同屏渲染两个 waiting_user 任务以验证微缩水果刀渐变 ID 唯一不冲突
+    // 同屏渲染两个 waiting_user 任务：每个等你拍板的步骤在轨道槽里一枚小铃，纯像素路径、没有渐变和 id
     const { rerender } = render(
       <RightRail {...railProps} asks={[gateAsk(5), gateAsk(6)]} activeGraphs={[buildGateGraph(5, 5_000), buildGateGraph(6, 4_000)]} />,
     );
 
-    const knives = document.querySelectorAll("[data-slot='knife-avatar']");
-    expect(knives.length).toBeGreaterThanOrEqual(2);
-    const gradIds = new Set(
-      [...knives].map((el) => el.querySelector("linearGradient")?.getAttribute("id")).filter(Boolean),
-    );
-    expect(gradIds.size).toBe(knives.length);
+    const bells = document.querySelectorAll("[data-slot='gate-mark']");
+    expect(bells.length).toBeGreaterThanOrEqual(2);
+    for (const bell of bells) expect(bell.outerHTML).not.toMatch(/Gradient|id=/);
 
     const rows = screen.getAllByTestId("peel-gate-row");
     expect(rows).toHaveLength(2);
@@ -288,10 +279,10 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).toBeNull();
 
-    // 拍板通过后：水果刀收起，门禁节点收合为紧凑单行并在右侧展示所选简称
+    // 拍板通过后：小铃收起，门禁节点收合为紧凑单行并在右侧展示所选简称
     rerender(<RightRail {...railProps} asks={[]} activeGraphs={[buildGateGraph(5, 6_000, "全量同步并先备份")]} />);
     expect(screen.queryByTestId("peel-gate-row")).toBeNull();
-    expect(document.querySelector("[data-slot='knife-avatar']")).toBeNull();
+    expect(document.querySelector("[data-slot='gate-mark']")).toBeNull();
     expect(screen.getByText("确认同步范围")).toBeInTheDocument();
     expect(screen.getByText("全量同步并先备份")).toBeInTheDocument();
   });
@@ -300,7 +291,7 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
     const user = userEvent.setup();
     const onOpenAsk = vi.fn();
     render(
-      <RightRail asks={[]} workers={[]} activeGraphs={[buildGateGraph(5, 5_000)]} openWorkerId={null} layout="side" avatarKey={1} onOpenAsk={onOpenAsk} onOpenWorker={() => {}} />,
+      <RightRail asks={[]} workers={[]} activeGraphs={[buildGateGraph(5, 5_000)]} openWorkerId={null} layout="side" look={defaultLookOf(1)} onOpenAsk={onOpenAsk} onOpenWorker={() => {}} />,
     );
     await user.click(screen.getByTestId("peel-gate-row"));
     expect(onOpenAsk).not.toHaveBeenCalled();
@@ -318,7 +309,7 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
       return jsonResponse({ graph: makeGraph({ id: 5, title: "ok" }), messageId: 100 });
     });
     const openDialog = (id: number) =>
-      render(<TaskGraphDialog open graph={buildGateGraph(id, 5_000)} workers={[]} colorKey={1} onOpenChange={() => {}} onOpenWorker={() => {}} />);
+      render(<TaskGraphDialog open graph={buildGateGraph(id, 5_000)} workers={[]} color={defaultLookOf(1).color} onOpenChange={() => {}} onOpenWorker={() => {}} />);
 
     // 1) 一键点选推荐项
     const first = openDialog(5);
@@ -385,7 +376,7 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
         activeGraphs={[bgGraph, urgentGraph]}
         openWorkerId={null}
         layout="side"
-        avatarKey={2}
+        look={defaultLookOf(2)}
         onOpenAsk={() => {}}
         onOpenWorker={() => {}}
       />,
@@ -444,7 +435,7 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
         activeGraphs={[activeGraph]}
         openWorkerId={null}
         layout="side"
-        avatarKey={0}
+        look={defaultLookOf(0)}
         onOpenAsk={() => {}}
         onOpenWorker={() => {}}
       />,
@@ -524,7 +515,7 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
         projectId={1}
         openWorkerId={null}
         layout="side"
-        avatarKey={3}
+        look={defaultLookOf(3)}
         onOpenAsk={() => {}}
         onOpenWorker={onOpenWorker}
       />,
@@ -620,7 +611,7 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
         workers={[makeWorker(35, { workerId: 15 })]}
         activeGraphs={[graph]}
         openWorkerId={null}
-        avatarKey={0}
+        look={defaultLookOf(0)}
         onOpenAsk={() => {}}
         onOpenWorker={onOpenWorker}
       />,
@@ -691,7 +682,7 @@ describe("右栏果皮轨（Peel Track）：折叠卷、并行分轨与水果刀
         projectId={1}
         openWorkerId={null}
         layout="side"
-        avatarKey={1}
+        look={defaultLookOf(1)}
         onOpenAsk={noop}
         onOpenWorker={noop}
       />
@@ -732,15 +723,14 @@ describe("审查回归（PR #274）：几何边界、编号不混用、防重入
   const VALID_D = /^[MLAZ0-9 .\-]+$/;
 
   it.each([
-    ["0 个阶段", 0, "chain", 0],
-    ["1 个阶段", 1, "chain", 0],
-    ["奇数 7 个阶段链路", 7, "chain", 0],
-    ["超大 32 个阶段链路", 32, "chain", 0],
-    ["互不相连 5 个独立阶段", 5, "isolated", 0],
-    ["互不相连 32 个独立阶段", 32, "isolated", 0],
-    ["一分为 4 股并行", 5, "fork", 3],
-    ["一分为 31 股并行", 32, "fork", 30],
-  ] as const)("SliceWheelIcon：%s 时所有 path d 合法、无 NaN/Infinity", (_name, count, shape, joinedCuts) => {
+    ["1 个阶段", 1, "chain"],
+    ["奇数 7 个阶段链路", 7, "chain"],
+    ["超大 32 个阶段链路", 32, "chain"],
+    ["互不相连 5 个独立阶段", 5, "isolated"],
+    ["互不相连 32 个独立阶段", 32, "isolated"],
+    ["一分为 4 股并行", 5, "fork"],
+    ["一分为 31 股并行", 32, "fork"],
+  ] as const)("TaskProgressIcon：%s 时所有 path d 只有横竖线段、无 NaN、都在 10×10 格内", (_name, count, shape) => {
     const nodes = Array.from({ length: count }, (_, i) =>
       makeNode({ key: `n${i}`, title: `阶段 ${i}`, status: i % 3 === 0 ? "done" : i % 3 === 1 ? "running" : "pending", sortOrder: i }),
     );
@@ -750,20 +740,22 @@ describe("审查回归（PR #274）：几何边界、编号不混用、防重入
         : shape === "fork"
           ? nodes.slice(1).map((n) => ({ fromKey: nodes[0]!.key, toKey: n.key }))
           : [];
-    const { container } = render(<SliceWheelIcon graph={{ nodes, edges }} size={20} />);
-    const root = container.querySelector("[data-slot='slice-wheel']") as HTMLElement;
+    const { container } = render(<TaskProgressIcon graph={{ nodes, edges }} color="kiwi" size={20} />);
+    const root = container.querySelector("[data-slot='task-progress']") as SVGSVGElement;
     expect(root.style.width).toBe("1.25rem");
-    expect(root.querySelectorAll("[data-petal-status]")).toHaveLength(count);
-    for (const el of root.querySelectorAll("path, circle")) {
-      const d = el.getAttribute("d");
-      if (d !== null) {
-        expect(d).not.toMatch(/NaN|Infinity/);
-        expect(d).toMatch(VALID_D);
+    for (const el of root.querySelectorAll("path")) {
+      const d = el.getAttribute("d")!;
+      expect(d).toMatch(/^[MHVZ0-9 .]+$/);
+      for (const n of d.match(/-?[\d.]+/g)!.map(Number)) {
+        expect(n).toBeGreaterThanOrEqual(0);
+        expect(n).toBeLessThanOrEqual(10);
       }
-      expect(el.outerHTML).not.toMatch(/NaN|Infinity/);
     }
-    // 只有同一连通子图同一并行层的相邻瓣才半刀相连；互不相连的独立阶段刀口切到底
-    expect(root.querySelectorAll("[data-cut-joined='true']")).toHaveLength(joinedCuts);
+  });
+
+  it("TaskProgressIcon：没有步骤时只画一个空画布（不调 taskProgressPaths）", () => {
+    const { container } = render(<TaskProgressIcon graph={{ nodes: [], edges: [] }} color="kiwi" />);
+    expect(container.querySelectorAll("[data-slot='task-progress'] path")).toHaveLength(0);
   });
 
   it("Worker 拿不到 workerId 时绝不拿 conversationId 顶替：撞号的零散 Worker 照旧留在 Pieces，图内节点也不会误链到它", () => {
@@ -781,7 +773,7 @@ describe("审查回归（PR #274）：几何边界、编号不混用、防重入
         activeGraphs={[graph]}
         openWorkerId={null}
         layout="side"
-        avatarKey={0}
+        look={defaultLookOf(0)}
         onOpenAsk={() => {}}
         onOpenWorker={() => {}}
       />,
@@ -992,7 +984,7 @@ describe("审查回归（PR #274）：几何边界、编号不混用、防重入
         projectId={1}
         openWorkerId={null}
         layout="side"
-        avatarKey={0}
+        look={defaultLookOf(0)}
         onOpenAsk={() => {}}
         onOpenWorker={() => {}}
       />,
@@ -1012,16 +1004,25 @@ describe("审查回归（PR #274）：几何边界、编号不混用、防重入
 describe("果皮轨按真实连通关系排布：独立子图不假连、多起点合流无断头线", () => {
   const GUTTER_H = 32;
   const GUTTER_CY = 16;
-  const GATE_TOP_Y = GUTTER_CY - 9;
-  const GATE_BOT_Y = GUTTER_CY + 11;
 
   /** 解析果皮轨槽里每段轨道两端的坐标（M…V… 直线或 M…C… 弧线）。 */
+  /** 果冻管道的中线（M x y 后面接 H / V）：起点和终点。 */
   function pathEnds(d: string): Array<[number, number]> {
-    const nums = (d.match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number);
-    const start: [number, number] = [nums[0]!, nums[1]!];
-    if (/^M[\d. -]+V[\d.]+$/.test(d)) return [start, [nums[0]!, nums[2]!]];
-    return [start, [nums.at(-2)!, nums.at(-1)!]];
+    let x = 0;
+    let y = 0;
+    let start: [number, number] = [0, 0];
+    for (const [, cmd, a, b] of d.matchAll(/([MHV])(-?[\d.]+)(?: (-?[\d.]+))?/g)) {
+      if (cmd === "M") {
+        x = Number(a);
+        y = Number(b);
+        start = [x, y];
+      } else if (cmd === "H") x = Number(a);
+      else y = Number(a);
+    }
+    return [start, [x, y]];
   }
+  /** 轨道槽里每段管子的中线（描边那一层，一段一条）。 */
+  const tubeLines = (el: Element) => el.querySelectorAll("path[data-tube-line]");
 
   /** 一行轨道槽的上口、下口（线段触到行顶 / 行底的 x）与悬空端点（既不在行边也不在圆点/刀口上）。 */
   function gutterPorts(svg: Element) {
@@ -1030,8 +1031,8 @@ describe("果皮轨按真实连通关系排布：独立子图不假连、多起�
     const dotX = dotAttr !== null ? Number(dotAttr) : null;
     if (kind === "coil") {
       const coilX = dotX ?? 11;
-      const bottom = [...svg.querySelectorAll("path")]
-        .flatMap((p) => (p.getAttribute("d") === null || p.getAttribute("stroke-linejoin") === "round" ? [] : pathEnds(p.getAttribute("d")!)))
+      const bottom = [...tubeLines(svg)]
+        .flatMap((p) => pathEnds(p.getAttribute("d")!))
         .filter(([, y]) => y === GUTTER_H)
         .map(([x]) => x);
       return {
@@ -1042,16 +1043,14 @@ describe("果皮轨按真实连通关系排布：独立子图不假连、多起�
         loose: [] as string[],
       };
     }
-    const dots = [...svg.querySelectorAll("circle")].map((c) => Number(c.getAttribute("cx")));
-    if (dotX !== null && !dots.includes(dotX)) dots.push(dotX);
+    const dots: number[] = dotX !== null ? [dotX] : [];
     const top = new Set<number>();
     const bottom = new Set<number>();
     const loose: string[] = [];
-    for (const p of svg.querySelectorAll("path")) {
+    for (const p of tubeLines(svg)) {
       for (const [x, y] of pathEnds(p.getAttribute("d")!)) {
         if (y === 0) top.add(x);
         else if (y === GUTTER_H) bottom.add(x);
-        else if (kind === "gate" && dotX !== null && x === dotX && (y === GATE_TOP_Y || y === GATE_BOT_Y)) continue;
         else if (!(y === GUTTER_CY && dots.includes(x))) loose.push(`${x},${y}`);
       }
     }
@@ -1102,14 +1101,12 @@ describe("果皮轨按真实连通关系排布：独立子图不假连、多起�
       const svg = rowEl.querySelector("svg[data-peel-gutter]")!;
       const kind = svg.getAttribute("data-peel-gutter")!;
       const dotAttr = svg.getAttribute("data-dot-x");
-      const circleCx = svg.querySelector("circle")?.getAttribute("cx");
-      const dotX = dotAttr !== null ? Number(dotAttr) : circleCx !== null && circleCx !== undefined ? Number(circleCx) : 11;
+      const dotX = dotAttr !== null ? Number(dotAttr) : 11;
       nodeAnchor.set(nodeKey, pt(rowIdx, dotX, GUTTER_CY));
 
       const bottom = new Set<number>();
-      for (const p of svg.querySelectorAll("path")) {
+      for (const p of tubeLines(svg)) {
         const d = p.getAttribute("d")!;
-        if (kind === "coil" && p.getAttribute("stroke-linejoin") === "round") continue;
         const [[x1, y1], [x2, y2]] = pathEnds(d) as [[number, number], [number, number]];
         const [sx, sy, ex, ey] = y1 <= y2 ? [x1, y1, x2, y2] : [x2, y2, x1, y1];
         addDir(pt(rowIdx, sx, sy), pt(rowIdx, ex, ey));
@@ -1117,10 +1114,9 @@ describe("果皮轨按真实连通关系排布：独立子图不假连、多起�
       }
 
       if (kind === "gate") {
-        addDir(pt(rowIdx, dotX, GATE_TOP_Y), pt(rowIdx, dotX, GUTTER_CY));
-        addDir(pt(rowIdx, dotX, GUTTER_CY), pt(rowIdx, dotX, GATE_BOT_Y));
-        // 等你拍板的那一行和别的行一样高，轨道槽画满整行，下面不用再接一段延长线
+        // 等你拍板的那一行和别的行一样高，轨道槽画满整行，下面不用再接一段延长线；小铃画在轨道槽里
         expect(rowEl.querySelector("svg[data-peel-gate-ext]")).toBeNull();
+        expect(svg.querySelector("[data-slot='gate-mark']")).not.toBeNull();
       }
       rowBottoms.push([...bottom].toSorted((a, b) => a - b));
     });
@@ -1190,7 +1186,7 @@ describe("果皮轨按真实连通关系排布：独立子图不假连、多起�
         activeGraphs={[graph]}
         openWorkerId={null}
         layout="side"
-        avatarKey={1}
+        look={defaultLookOf(1)}
         onOpenAsk={() => {}}
         onOpenWorker={() => {}}
       />,
@@ -1236,12 +1232,12 @@ describe("果皮轨按真实连通关系排布：独立子图不假连、多起�
       expectClosedTrack(c);
       expectExactSvgDependencies(c, graph);
     }
-    // 独立单步只有一颗圆点，上下都不连线
-    expect(components[0]!.querySelectorAll("path")).toHaveLength(0);
+    // 独立单步只有一颗珠子，上下都不连管子
+    expect(tubeLines(components[0]!)).toHaveLength(0);
+    expect(components[0]!.querySelectorAll("[data-bead]")).toHaveLength(1);
 
-    // 切面轮：只有双起点合流那一层的两瓣果心相连，其余刀口切到底
-    const wheel = graphGroup.querySelector("[data-slot='slice-wheel']")!;
-    expect(wheel.querySelectorAll("[data-cut-joined='true']")).toHaveLength(1);
+    // 任务标题前是嫩芽进度图标
+    expect(graphGroup.querySelector("[data-slot='task-progress']")).not.toBeNull();
   });
 
   it.each([2, 3])("首层 %i 个无上游并行起点合流到同一下游：分道并行、无断头悬空线、无假串联", (roots) => {
@@ -1330,7 +1326,7 @@ describe("果皮轨按真实连通关系排布：独立子图不假连、多起�
     expectClosedTrack(component);
     const gateRow = component.querySelector("[data-node-key='eval-approve']")!;
     const gateSvg = gateRow.querySelector("svg[data-peel-gutter='gate']")!;
-    expect([...gateSvg.querySelectorAll("path")].some((p) => p.getAttribute("stroke") === "var(--peel)")).toBe(true);
+    expect([...tubeLines(gateSvg)].some((p) => p.getAttribute("stroke") === "var(--tube-line)")).toBe(true);
 
     // 展开 2 next 查看全部 6 个阶段：链 A（s1 -> s1-review）与链 B（eval-plan -> eval-approve -> eval-build）各自挨着排，最后在 s2 汇合
     await user.click(within(graphGroup).getByRole("button", { name: /2 next/ }));

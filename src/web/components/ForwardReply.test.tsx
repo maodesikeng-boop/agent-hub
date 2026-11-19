@@ -22,7 +22,7 @@ const dest = (over: Partial<RouterTurnDestination> = {}): RouterTurnDestination 
   conversationId: 1,
   name: "小林",
   projectName: "agent-hub",
-  avatarKey: 1,
+  pmId: 1,
   opLabel: null,
   forwardMessageId: 10,
   ...over,
@@ -57,7 +57,9 @@ describe("ForwardReply", () => {
   });
 
   it("replied：用项目经理对话里同一个组件画回复正文和交付文件，结尾有复制键和回复的时间", () => {
-    const reply = makeMessage({ id: 11, text: "飞书接入的 PR 还在审查", createdAt: new Date(2026, 10, 18, 12, 31).getTime() });
+    // 今天 12:31 回的：时间只显示时:分（formatTime 对不是今天的显示月/日）
+    const today = new Date();
+    const reply = makeMessage({ id: 11, text: "飞书接入的 PR 还在审查", createdAt: new Date(today.getFullYear(), today.getMonth(), today.getDate(), 12, 31).getTime() });
     const { container } = renderReply(stores([makeUserMessage({ id: 10, meta: { replyId: 11 } }), reply]));
     expect(screen.getByText("飞书接入的 PR 还在审查")).toBeInTheDocument();
     // 和项目经理对话里一轮回复同一个 AgentText，带 data-message-id

@@ -1,62 +1,146 @@
-import { describe, it } from "vitest";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { userEvent } from "@testing-library/user-event";
+import type { ReactNode } from "react";
+import { describe, expect, it, vi } from "vitest";
+import { JELLY_COLOR_IDS, opticalLiftOf, routerBellPaths, slimePaths, type SlimeLook } from "../shared/slimes.ts";
+import { App } from "./App.tsx";
+import { Avatar } from "./components/Avatar.tsx";
+import { MessageList } from "./components/MessageList.tsx";
+import { RouterAvatar } from "./components/RouterAvatar.tsx";
+import { SlimePicker } from "./components/SlimePicker.tsx";
+import { Sidebar, type SidebarLayout } from "./components/Sidebar.tsx";
+import { FakeApi, FakeWebSocket, installFakeWebSocket, makeConvSnapshot, makeMessage, makePm, makeSnapshot, makeUserMessage, openFirstConversation } from "./test-utils.ts";
 
-describe("RouterAvatar", () => {
-  it.todo("画的是嫩芽铃；按 size 换成 rem，透明底，aria-hidden，不设 --fruit、--jelly");
-  it.todo("working 时带左右摇的动画标记，空闲时没有；减弱动态效果时样式表不播");
-  it.todo("左栏宽栏、窄栏、手机列表、Router 顶栏、时间流、空状态都用它，页面里不再出现 KnifeAvatar");
+const look: SlimeLook = { fruit: "orange", color: "sky" };
+const avatarArt = (root: ParentNode) => [...root.querySelectorAll("svg path")].map((path) => ({ d: path.getAttribute("d"), fill: path.getAttribute("fill") }));
+
+describe("史莱姆与总助", () => {
+  it("嫩芽铃用共享像素稿、透明头像与 rem 尺寸，只有工作时摇摆", () => {
+    const { container, rerender } = render(<RouterAvatar size={48} />);
+    const root = container.querySelector('[data-slot="router-avatar"]');
+    expect(root?.getAttribute("style")).toContain("width: 3rem");
+    expect(root).toHaveAttribute("aria-hidden", "true");
+    expect(avatarArt(container)).toEqual(routerBellPaths());
+    expect(container.querySelector("svg")).not.toHaveAttribute("data-working");
+    rerender(<RouterAvatar size={48} working />);
+    expect(container.querySelector("svg")).toHaveAttribute("data-working", "true");
+  });
+
+  it("史莱姆按身体上移，便签小灵跟随颜色且与水果造型无关", () => {
+    const { container, rerender } = render(<Avatar look={look} />);
+    const svg = container.querySelector("svg");
+    expect(svg).toHaveAttribute("viewBox", `0 ${opticalLiftOf(look.fruit, "main")} 12 12`);
+    expect(svg).toHaveClass("overflow-visible");
+    expect(avatarArt(container)).toEqual(slimePaths(look, "main"));
+    rerender(<Avatar look={look} neutral />);
+    const piece = avatarArt(container);
+    expect(piece).toEqual(slimePaths(look, "piece"));
+    expect(container.querySelector("svg")).toHaveAttribute("viewBox", "0 0 12 12");
+    rerender(<Avatar look={{ fruit: "kiwi", color: look.color }} neutral />);
+    expect(avatarArt(container)).toEqual(piece);
+    rerender(<Avatar look={{ fruit: "kiwi", color: "teal" }} neutral />);
+    expect(avatarArt(container)).not.toEqual(piece);
+  });
+
+  it.each<SidebarLayout>(["wide", "rail", "page"])("%s 左栏使用同尺寸的总助和项目经理头像框", (layout) => {
+    const entries = [
+      { id: 1, name: "Juniper", lastMessage: makeMessage({ id: 10, text: "One update" }), lastAt: 1 },
+      { id: 2, name: "Fern", lastMessage: null, lastAt: 0 },
+    ].map((entry) => ({ ...entry, look, pm: null, project: null, folders: [] }));
+    render(<Sidebar
+      layout={layout}
+      groups={[{ key: "", name: "This computer", platform: "darwin", status: "online", lastOnlineAt: null, entries }]}
+      active={null}
+      router={{ active: false, pendingCount: 2, unreadReportCount: 0, subtitle: "", working: false, onSelect: vi.fn() }}
+      waiting={new Set()}
+      asking={new Set()}
+      notify={{ permission: "granted", enabled: true, setEnabled: async () => {} }}
+      onSelect={vi.fn()}
+      onNewPm={vi.fn()}
+    />);
+    for (const name of ["Router", "Juniper", "Fern"]) {
+      const row = screen.getByRole("button", { name: new RegExp(name) });
+      expect(row).toHaveClass(layout === "rail" ? "size-13" : "h-18");
+      expect(row.querySelector('[data-slot$="avatar"]')?.getAttribute("style")).toContain(layout === "rail" ? "width: 2.5rem" : "width: 3rem");
+      if (layout !== "rail") expect(within(row).getByText(name)).toHaveClass("text-title", "font-semibold");
+    }
+    for (const name of ["Settings", "New project manager"]) expect(screen.getByRole("button", { name })).toHaveClass("tool-slot");
+  });
 });
 
-describe("GateMark", () => {
-  it.todo("等你拍板的那一步在果皮轨和放大全览里显示小铃 GateMark，aria-hidden");
-  it.todo("拍板通过后标记收起，这一步变回普通的果皮轨单行");
+describe("换水果和颜色", () => {
+  it("先选造型再选颜色，预览跟着更新，浮层保持打开", async () => {
+    const user = userEvent.setup();
+    const change = vi.fn();
+    const picker = (value: SlimeLook) => <SlimePicker look={value} onChange={change}><button>Change look</button></SlimePicker>;
+    const { rerender } = render(picker(look));
+    await user.click(screen.getByRole("button", { name: "Change look" }));
+    const fruit = screen.getByRole("radiogroup", { name: "Fruit" });
+    const color = screen.getByRole("radiogroup", { name: "Color" });
+    expect(within(fruit).getAllByRole("radio")).toHaveLength(20);
+    expect(within(color).getAllByRole("radio")).toHaveLength(JELLY_COLOR_IDS.length);
+    for (const avatar of fruit.querySelectorAll("[data-look]")) expect(avatar.getAttribute("data-look")).toMatch(/:sky$/);
+    const selected = within(fruit).getByRole("radio", { checked: true });
+    expect(selected).toHaveClass("bg-jelly");
+    expect(within(color).getByRole("radio", { checked: true })).toHaveClass("ring-2");
+    expect(selected).toHaveFocus();
+    await user.keyboard("{ArrowRight}{Enter}");
+    const next = change.mock.lastCall?.[0];
+    expect(next).toMatchObject({ color: "sky" });
+    expect(next.fruit).not.toBe(look.fruit);
+    rerender(picker(next));
+    await user.click(within(color).getByRole("radio", { name: /teal/i }));
+    expect(change).toHaveBeenLastCalledWith({ fruit: next.fruit, color: "teal" });
+    expect(screen.getByRole("radiogroup", { name: "Fruit" })).toBeVisible();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("radiogroup", { name: "Fruit" })).not.toBeInTheDocument();
+  });
+
+  it("资料页保存失败后恢复旧形象，新建弹窗也能打开选择器", async () => {
+    const user = userEvent.setup();
+    const snapshot = makeSnapshot({
+      pms: [makePm({ id: 1, name: "Fern", avatarFruit: "orange", avatarColor: "sky" })],
+      conversations: [makeConvSnapshot([], { conversation: { id: 1, pmId: 1, title: "Fern" } })],
+    });
+    openFirstConversation(snapshot);
+    const api = new FakeApi(snapshot);
+    api.putPmLook = () => ({ status: 500, body: { error: "save failed" } });
+    api.install();
+    installFakeWebSocket();
+    render(<App />);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    act(() => FakeWebSocket.last.open());
+    await user.click(await screen.findByRole("button", { name: "View Fern's profile" }));
+    const trigger = await screen.findByRole("button", { name: "Change look" });
+    await user.click(trigger);
+    await user.click(within(screen.getByRole("radiogroup", { name: "Color" })).getByRole("radio", { name: /teal/i }));
+    expect(await within(screen.getByRole("dialog", { name: "Change look" })).findByRole("alert")).toBeVisible();
+    expect(trigger.querySelector("[data-look]")).toHaveAttribute("data-look", "orange:sky");
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: "New project manager" }));
+    await user.click(await screen.findByRole("button", { name: "Change look" }));
+    expect(screen.getByRole("radiogroup", { name: "Fruit" })).toBeVisible();
+  });
 });
 
-describe("任务进度图标", () => {
-  it.todo("taskProgressPaths：做完、在干、等你拍板、等项目经理、没轮到各用对应的颜色，跳过和没轮到只留轮廓");
-  it.todo("taskProgressPaths：同一连通子图同层并行的步骤并排分一块，不同子图不相连");
-  it.todo("taskProgressPaths：1 步到 40 步都画在 10×10 格内，坐标没有 NaN");
-  it.todo("TaskProgressIcon 按 color 取色，size 换成 rem，aria-hidden；右栏、放大全览、Completed 都用它，不再出现 SliceWheelIcon");
-});
-
-describe("Avatar 按形象画", () => {
-  it.todo("look 换颜色后头像、Piece 分身、会话强调色、气泡底、果冻底一起换");
-  it.todo("主形象按 opticalLiftOf 上移，耳朵伸出框外不被裁；Piece 分身上下居中");
-  it.todo("Piece 分身（neutral）用的是 slimePaths(look, \"piece\")：换造型不变，换颜色才变");
-  it.todo("同一个 look 重渲染时 memo 的头像不重画");
-});
-
-describe("SlimePicker", () => {
-  it.todo("Fruit 一组 20 个造型都按当前颜色画，Color 一组列出全部颜色");
-  it.todo("点一个造型只换造型、点一个颜色只换颜色，马上调 onChange，浮层不关");
-  it.todo("选中的造型是果冻底，选中的颜色外面一圈中性细环，读屏用 aria-checked 读出选中");
-  it.todo("方向键在格子里走、Enter 选中，Esc 关浮层");
-  it.todo("保存失败时先显示的新形象退回原来的，浮层最下面一行写原因");
-  it.todo("资料页头部的头像和新建项目经理弹窗里的头像都能点开它");
-});
-
-describe("左栏项目经理行", () => {
-  it.todo("每行一样高：有没有预览、圆点、时间、设备名、归档天数都不改行高");
-  it.todo("名字 text-title、600，没有预览的行名字仍在第一行的位置");
-  it.todo("头像 48px，按 opticalLiftOf 上移；窄栏的果冻方块里同样上移");
-  it.todo("总助行和项目经理行同一套尺寸");
-});
-
-describe("聊天里的头像跟跳", () => {
-  it.todo("项目经理在干活时，消息流里正在进行的那一轮开头的头像带在干活的动画标记");
-  it.todo("已经结束的轮、更早的历史轮的头像都不动");
-  it.todo("Piece 的对话里正在进行的那一轮，Piece 分身头像同样跟跳；收工后不动");
-  it.todo("总助在执行时，时间流里执行中那一条的总助头像跟跳");
-});
-
-describe("任务图的果冻管道", () => {
-  it.todo("果皮轨的轨道、分叉汇合由 tubePaths 画，状态点由 stepBeadPaths 画；轨道槽 <svg> 是 crispEdges，没有 <circle> 和曲线");
-  it.todo("走通的管子用项目经理的描边、身体、浅色三层，没走通的是浅灰空管子");
-  it.todo("放大全览的连线是正交的果冻管道加像素箭头，上游做完是灌满的管子，其余是空管子");
-  it.todo("放大全览的节点卡左上角有步骤号角标：做完是项目经理的 blob、等你拍板是强调色、其余是灰");
-});
-
-describe("输入框", () => {
-  it.todo("外框是 rounded-xl 的方框，聚焦时照旧只多一团光晕");
-  it.todo("左边是 ComposerAdd，右边发送键是圆角方块里的 ComposerSend；输入框里没有像素图标");
-  it.todo("单行、多行两种布局切换时文字区是同一个节点，焦点和光标不丢");
+describe("消息流当前轮", () => {
+  const messages = [
+    makeUserMessage({ id: 1, text: "First" }), makeMessage({ id: 2, text: "Previous response" }),
+    makeUserMessage({ id: 3, text: "Second" }), makeMessage({ id: 4, text: "Current response" }),
+  ];
+  it.each([false, true])("只有当前轮头像跟跳，结束就停下（Piece=%s）", (neutral) => {
+    const identity = { name: "Fern", look, neutral };
+    const list = (status: ReactNode) => <MessageList
+      messages={messages} pending={[]} agentOf={() => identity} statusAgent={identity} hasMore={false} older={undefined}
+      onLoadOlder={() => {}} onRetry={() => {}} status={status}
+      actions={{ retry: {}, onOpenWorker: () => {}, onRetryMessage: () => {}, onRevertPersona: async () => {} }}
+    />;
+    const { container, rerender } = render(list(<span>Working…</span>));
+    const heads = [...container.querySelectorAll('[data-slot="agent-head"]')];
+    expect(heads).toHaveLength(2);
+    expect(heads[0]?.querySelector("svg")).not.toHaveAttribute("data-working");
+    expect(heads[1]?.querySelector("svg")).toHaveAttribute("data-working", "true");
+    rerender(list(null));
+    expect(container.querySelector("svg[data-working]")).toBeNull();
+  });
 });

@@ -4,30 +4,13 @@
 
 要验收的文件：
 
-- [第三版对比大图](/tmp/fusa-slime-cohesion-v3.png)，仓库里同一张在 `docs/screenshots/slime-cohesion/candidates.png`。最上面是已定的加推荐的放进整屏（默认“大”界面、真实字号），下面五块：一、整体换字体（三款对比）；二、任务图的线加粗；三、输入框换方框；四、已经定了的总助嫩芽铃、Piece 便签小灵、像素图标，画了全套；五、第一版还没定的三件。
+- [第三版对比大图](/tmp/fusa-slime-cohesion-v3.png)，仓库里同一张在 `docs/screenshots/slime-cohesion/candidates.png`。最上面是已定的加推荐的放进整屏（默认“大”界面、真实字号），下面五块：一、整体换字体（三款对比）；二、任务图的线加粗；三、输入框换方框；四、定案采用 C 嫩芽铃、P1 便签小灵、Geist、像素工具图标、果冻管道与方框输入框。项目经理可自由组合 20 个水果造型与 24 种颜色。左栏在标准档用 72px 行高、17px 名字和 48px 头像框。
 
-已经定了（你选的）：总助用 C 嫩芽铃（连着嫩芽生长的进度图标、小铃拍板标记、深绿底应用图标）；Piece 分身用 P1 便签小灵；工具按钮的图标换成像素图标，按钮形状不变；不用像素字；输入框里不用像素。
-
-要你拍板的事：
-
-1. 整体字体。字体只在一处定义，换了就是整屏一起换。
-   - Geist：英文和数字换成 Vercel 开源的 Geist，中文仍是苹方。
-   - Nunito：英文和数字换成开源圆体 Nunito，中文仍是苹方。
-   - 霞鹜文楷：中文英文一起换成开源楷体。
-   - 不换，照旧用系统字体。
-   - 推荐 Geist。字形利落、数字好看，比系统字紧凑有个性，和像素图标是同一路“现代工具”的气质，Windows 上英文也和 Mac 长一样。Nunito 最可爱但正文偏软；霞鹜文楷变化最大、最暖，但界面里的小字不如黑体清楚，字体包每种粗细约 4 MB。
-2. 任务图的线。
-   - 果冻管道：4 格宽的管子，深色描边、果冻色芯、一道高光；走通的管子灌满项目经理的颜色，没走通的是空的浅灰管子；点换成果冻珠子。
-   - 粗实线：线加粗到 2 格，点换成方块。
-   - 推荐果冻管道。它和史莱姆是一个画法，有体积，不再是“一根细线过去”；右栏和放大全览用同一套。
-3. 输入框。
-   - 方框单行：四角 12px 的方框，空着时一行，字多了按钮落到下一行（和现在的规则一样）。
-   - 方框两行：一直分两行，上面写字，下面一条工具栏。
-   - 图标：左边“+”加文件，右边方形发送键里是向上箭头（推荐）；也可以换纸飞机、回车，或者左边留回形针。都是线条图标，不是像素。
-   - 推荐方框单行加“+”和箭头：空着时占地方最少，有字时一眼看到能发送。
-4. 第一版还没定的三件，没意见就照推荐做：左栏名字 17px、没有预览的行名字固定在第一行、史莱姆按身体对齐；换形象从资料页头像和新建项目经理弹窗进；颜色用 20 种水果原色加天蓝、青碧、樱粉、石墨，共 24 种。
+用户追加的工具格按界面标准第 6 条实现。设置、新建、额度和开关用 36px 方格。模型选择用长槽，状态计数用静态小格。统一用暖白底、1px 描边、4px 圆角和底部 2px 托底；可点的格子按下轻沉 1px。额度槽放在对话和总助顶栏，没有对话顶栏时放在左栏。
 
 ## 用户目标
+
+> 设置图标，额度，这些图标做成方框里放着的，像星露谷那种？
 
 用户看完第二版对比图后的拍板和修改意见（2026-11-19，优先级最高）：
 
@@ -170,7 +153,7 @@ Piece 分身（用户已选 P1 便签小灵）：P2 果冻小水滴、P3 拼图�
 
 - 网页画头像：路径的形状只和造型、主形象或 Piece 有关，颜色只换 `fill`。`slimePaths` 按（造型，颜色，种类）记住结果，主形象最多 20 × 24 = 480 份，Piece 和造型无关、最多 24 份，每份不到 10 条路径、几百字节，合计不到 0.3 MB。数据是打包时定死的常量，不会过期。
 - `resolvePmLook` 对同样的造型和颜色返回同一个对象，最多 20 × 24 = 480 个。
-- 守护进程画飞书头像：一次对齐里每个用到的形象只画一次，用对齐函数里的局部 Map，对齐完就丢。`feishu_avatars` 每个形象一行，上限 480 行，实际不超过项目经理数。
+- 守护进程用 `lru-cache` 记住最近 64 张压缩后的飞书群头像。`feishu_avatars` 每个形象一行，上限 480 行，实际不超过项目经理数。
 - `pm_looks` 每个项目经理最多一行，项目经理删掉时跟着删。
 - 任务图：`pixel-path.ts` 是纯函数，结果跟着现有的 `useMemo`（`PeelTrack.tsx:951`）和放大全览布局的 `lru-cache`（容量 64，`task-graph-layout.ts`）一起缓存，不另加缓存。一张图最多 `MAX_GRAPH_NODES` = 32 步（`limits.ts:770`），每步一颗珠子、每条边一根管子。
 - 字体一个 29 KB 的 woff2（选 Geist 时）；像素图标逐个 import，只打包用到的。
@@ -182,7 +165,7 @@ Piece 分身（用户已选 P1 便签小灵）：P2 果冻小水滴、P3 拼图�
 
    | 准备加进 `src/shared/limits.ts` 的常量 | 值 | 怎么算的 |
    | --- | --- | --- |
-   | 无 | | 上限由名录长度决定（20 × 24），不是可调的数；`slimes.test.ts` 遍历全部组合，加颜色时一起覆盖 |
+   | `FEISHU_AVATAR_RENDER_CACHE_MAX` | 64 | 近期使用的压缩 PNG，按画过的形象淘汰 |
 
 3. 前端引用稳定：`resolvePmLook`、`slimePaths` 同样的输入返回同一个引用；`Avatar` 包 `memo`，props 只有形象对象和尺寸。图标是模块级常量组件。
 4. 验证：用 pstack 的 `benchmark-checklist` 量左栏 300 个项目经理首次渲染和切换会话的 React 提交耗时，改前（`<img>`）、改后（内联 SVG）各量 5 次取中位数写进 PR；右栏 32 步任务图展开的提交耗时，改前（圆滑细线）、改后（果冻管道）各量 5 次；`blast-radius` 列出改到的组件。
@@ -210,7 +193,7 @@ Piece 分身（用户已选 P1 便签小灵）：P2 果冻小水滴、P3 拼图�
 - `src/daemon/feishu/avatars.ts` 的 `FEISHU_AVATARS_DIR`、`pmFruitImagePath`、`feishuAvatarHash`，换成 `renderFeishuAvatar`；`chats.ts` 的 `fruit` 改成 `look`；`store.ts` 的 `avatarFruit` 改成按形象键记。
 - `Pm.avatarFile` 字段、`rows.ts` 里它的映射和测试里的 `null`。`pms.avatar_file` 这一列留着不读不写：删列要重建 `pms`（见做法比较），不值得。
 - `scripts/render-icons.ts` 里画橘瓣的 `WEDGE`、`sectorPath`、`roundedSector`、`wedge`。
-- 47 个文件里的 `from "lucide-react"`，改成 `from "../ui/icons.ts"`；`LucideIcon` 类型改成 `Icon`。`lucide-react` 依赖留着，只给 `icons.ts` 的两个输入框图标用。`Composer.tsx` 里的 `Paperclip`、`ArrowUp` 换成 `ComposerAdd`、`ComposerSend`，`icons.ts` 里没人用的导出一起删。`AGENTS.md`「我们用的组件」加上 pixelarticons 和选定的字体包，lucide 那一行改成“只用于输入框”。
+- 47 个文件里的 `from "lucide-react"`，改成 `from "../ui/icons.ts"`；`LucideIcon` 类型改成 `Icon`。删除 `lucide-react`。输入框的线条图标由 `icons.ts` 定义。`Composer.tsx` 里的 `Paperclip`、`ArrowUp` 换成 `ComposerAdd`、`ComposerSend`，`icons.ts` 里没人用的导出一起删。`AGENTS.md`「我们用的组件」加上 pixelarticons 和选定的字体包，删掉 lucide 那一行。
 - `Composer.tsx:51` 的 `rounded-[26px]` 和发送键的 `rounded-full`。
 - `PeelTrack.tsx` 的 `TrackPath`、`TrackDot`（`:85`～`:127`）和画弧线的那段，换成 `pixel-path.ts`；`task-graph-layout.ts` 的 `buildMultiPointLrSplineAndArrow` 和另外两个出贝塞尔的函数（`:435`～`:477`），换成 `orthogonalRoute` + `tubePaths` + `pixelArrowPaths`，`LayoutEdgePath.d` 的注释改成“正交折线中线”。
 - `docs/ui-standard.md`：第 4 条“水果三元视觉与 Router 水果刀中性色规则”，第 5 条（lucide），第 7 条输入框的形状，第 12 条的 `SliceWheelIcon`，第 12.1 条标题里的“小切面进度轮与门禁水果刀”和“水果刀拍板焦点”、果皮轨和放大全览的画法，第 13 条字体栈，第 16 条“左栏 Router 水果刀三档置顶规则”，第 21 条 `KnifeAvatar` 一节。换成嫩芽铃、便签小灵、像素图标（含第 0 条的尺寸例外）、新字体、果冻管道、方框输入框（第 2 条加圆角例外）的规则；第 3 条、第 16 条的左栏名字和行高照拍板改；第 17 条补上“正在进行的那一轮头像跟跳”。`docs/router-design.md`、`docs/router-workbench-v2-design.md`、`docs/orchestration-simplify-design.md` 提到小刀、切面轮、纸片分身的地方一起改。
@@ -237,7 +220,7 @@ Piece 分身（用户已选 P1 便签小灵）：P2 果冻小水滴、P3 拼图�
 
 没写进骨架、等拍板或只在 CSS 里的：字体包和 `--font-ui`（要先 `pnpm add` 拍板的那一款）、像素图标的尺寸 token（`size-pixel`、`size-pixel-sm`）、输入框和发送键的圆角、管道三层的颜色变量。便签小灵、嫩芽铃的像素稿已定，在附录，实现时写进 `slimes.ts` 和 `RouterAvatar`。
 
-实现步骤另加 `migrations/0039_feishu_avatar_look.sql`：照 0037 重建 `feishu_avatars`，主键改成形象键（`lookKey`）；照 0026 的重建法把 `feishu_chats.avatar_fruit` 换成 `avatar_look`，旧值不搬（每个群下次对齐重设一次头像）。这一份要和 `store.ts` 的改动一起上，骨架里先不加。合并前确认 0038、0039 没被别的 PR 占用。
+实现步骤另加 `migrations/0039_feishu_avatar_look.sql`：照 0037 重建 `feishu_avatars`，主键改成形象键（`lookKey`）；`feishu_chats.avatar_fruit` 保留列名，只清空旧水果名，此后记录形象键（每个群下次对齐重设一次头像）。这一份要和 `store.ts` 的改动一起上，骨架里先不加。合并前确认 0038、0039 没被别的 PR 占用。
 
 ## 验收方法
 
@@ -245,7 +228,7 @@ Piece 分身（用户已选 P1 便签小灵）：P2 果冻小水滴、P3 拼图�
 - 截图（放 `docs/screenshots/slime-cohesion/`）：真实网页的左栏宽栏、72px 窄栏、手机列表；Router 工作台顶栏、时间流和空状态；右栏的果冻管道、进度图标和小铃；放大全览的节点卡和管道；Piece 汇报行、Piece 对话顶栏、右栏开关；左下角的像素图标（悬停、按下各一张）；输入框空着、有字、多行各一张；资料页换形象浮层，换造型、换颜色各一张；同一个项目经理换色前后的对话页（强调色、气泡、果冻底、Piece 分身一起变）；换字体前后同一页各一张，Mac 和 Windows 各一张。
 - 录屏（mp4，H.264，50 MB 以内）：项目经理干活时消息流里正在进行的那一轮头像跟跳，Piece 汇报行的便签小灵跟跳，总助嫩芽铃左右摇，这一轮结束后停下，历史轮一直不动。
 - 飞书：用测试应用把一个项目经理换成天蓝狐狸，守护进程日志里出现一次上传和一次改群头像，`feishu_avatars` 多一行 `persimmon:sky`；再换回原色，不再上传（哈希命中）。
-- 应用图标：`node scripts/render-icons.ts` 的输出、`tauri icon` 生成的 Windows 图标、`pnpm app:mac` 打出的 `Fusa.app` 在 Dock 里的截图。
+- 应用图标：`node scripts/render-icons.ts /tmp/fusa-icon.png` 的输出、`tauri icon` 生成的 Windows 图标、`pnpm app:mac` 打出的 `Fusa.app` 在 Dock 里的截图。
 
 ## 附录：像素稿、管道和对照表
 

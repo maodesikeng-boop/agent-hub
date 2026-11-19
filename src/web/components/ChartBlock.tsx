@@ -1,7 +1,7 @@
 // 图表块（docs/charts-diagrams-design.md）：```mermaid / ```vega-lite 闭合后的外壳。
 // 和代码块同一个外壳（.md-code），正文换成图；工具条：语言名、源码/图切换、放大、复制。
 // 引擎按需加载（charts/registry.ts），进视口才排队渲染，结果进缓存；失败显示成普通代码块 + 上方一行错误。
-import { AlertCircle, ChartNetwork, Code, Loader2, Maximize2 } from "lucide-react";
+import { AlertCircle, ChartNetwork, Code, Loader2, Maximize2 } from "../ui/icons.ts";
 import { memo, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import { chartCache, chartCacheKey, type ChartCacheEntry } from "../charts/cache.ts";
 import {
@@ -68,7 +68,7 @@ function FailedChart({ language, source, message }: { language: string; source: 
   return (
     <div data-chart-failed className="md-chart-failed">
       <div data-chart-error title={message} className="mb-1.5 flex items-center gap-2 text-minor text-danger">
-        <AlertCircle className="size-3.5 shrink-0" />
+        <AlertCircle className="size-pixel-sm shrink-0" />
         <span className="truncate">{firstLine(message)}</span>
       </div>
       <CodeView code={source} language={language} />
@@ -171,7 +171,7 @@ export const ChartBlock = memo(function ChartBlock({ language, source }: { langu
           </BarButton>
           {ok && !showSource && (
             <BarButton aria-label="Zoom" onClick={() => setZoomed(true)}>
-              <Maximize2 className="size-3.5" />
+              <Maximize2 className="size-pixel-sm" />
             </BarButton>
           )}
           <CopyCodeButton code={source} />
@@ -192,7 +192,7 @@ export const ChartBlock = memo(function ChartBlock({ language, source }: { langu
           <div ref={host} data-chart-host />
           {loading && (
             <div data-chart-loading className="absolute inset-0 flex items-center justify-center text-muted-foreground">
-              <Loader2 className="size-5 animate-spin" aria-hidden="true" />
+              <Loader2 className="size-pixel" aria-hidden="true" />
             </div>
           )}
         </div>

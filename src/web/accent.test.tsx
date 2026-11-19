@@ -5,9 +5,10 @@ import { userEvent } from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { StateSnapshot } from "../shared/index.ts";
 import { App } from "./App.tsx";
-import { PALETTE } from "./lib/palette.ts";
+import { jellyColorOf } from "../shared/slimes.ts";
 import { FakeApi, FakeWebSocket, installFakeWebSocket, makeConvSnapshot, makeMessage, makePm, makeSession, makeSnapshot, openFirstConversation } from "./test-utils.ts";
 
+import { defaultLookOf } from "../shared/slimes.ts";
 async function boot(snapshot: StateSnapshot) {
   window.history.replaceState(null, "", "/");
   openFirstConversation(snapshot);
@@ -38,14 +39,14 @@ describe("强调色跟着项目经理", () => {
     const main = await screen.findByRole("main");
     const first = scopeOf(main)!;
     expect(first).not.toBeNull();
-    expect(first.style.getPropertyValue("--primary")).toBe(PALETTE[1]!.accent);
-    expect(first.style.getPropertyValue("--primary-foreground")).toBe(PALETTE[1]!.accentForeground);
+    expect(first.style.getPropertyValue("--primary")).toBe(jellyColorOf(defaultLookOf(1).color).accent);
+    expect(first.style.getPropertyValue("--primary-foreground")).toBe(jellyColorOf(defaultLookOf(1).color).accentForeground);
     expect(scopeOf(document.querySelector<HTMLElement>("aside")!)).toBeNull();
 
     await userEvent.click(within(nav()).getByRole("button", { name: /小林/ }));
-    await waitFor(() => expect(scopeOf(screen.getByRole("main"))!.style.getPropertyValue("--primary")).toBe(PALETTE[1]!.accent));
+    await waitFor(() => expect(scopeOf(screen.getByRole("main"))!.style.getPropertyValue("--primary")).toBe(jellyColorOf(defaultLookOf(1).color).accent));
     await userEvent.click(within(nav()).getByRole("button", { name: /老马/ }));
-    await waitFor(() => expect(scopeOf(screen.getByRole("main"))!.style.getPropertyValue("--primary")).toBe(PALETTE[2]!.accent));
+    await waitFor(() => expect(scopeOf(screen.getByRole("main"))!.style.getPropertyValue("--primary")).toBe(jellyColorOf(defaultLookOf(2).color).accent));
   });
 
   it(":root 的 --primary 是中性色（前景黑），不是粉色；用户气泡是强调色掺白的浅果冻底 + 前景色字（不是实心强调色）", () => {
@@ -64,11 +65,11 @@ describe("强调色跟着项目经理", () => {
     // 不写 * { transition }：只有带 tint-fade 的几个容器淡变
     expect(css).not.toMatch(/(^|[},])\s*\*\s*\{[^}]*transition/m);
     const { FruitTint } = await import("./lib/accent-scope.tsx");
-    const { container, rerender } = render(<FruitTint colorKey={1}><span /></FruitTint>);
+    const { container, rerender } = render(<FruitTint color={defaultLookOf(1).color}><span /></FruitTint>);
     const scope = container.firstElementChild as HTMLElement;
-    expect(scope.style.getPropertyValue("--fruit")).toBe(PALETTE[1]!.accent);
+    expect(scope.style.getPropertyValue("--fruit")).toBe(jellyColorOf(defaultLookOf(1).color).accent);
     expect(scope.style.getPropertyValue("--primary")).toBe("");
-    rerender(<FruitTint colorKey={null}><span /></FruitTint>);
+    rerender(<FruitTint color={null}><span /></FruitTint>);
     expect(scope.style.getPropertyValue("--fruit")).toBe("");
   });
 
@@ -83,13 +84,13 @@ describe("弹窗", () => {
     const { AccentScope } = await import("./lib/accent-scope.tsx");
     const { Dialog, DialogContent } = await import("./ui/dialog.tsx");
     render(
-      <AccentScope colorKey={2}>
+      <AccentScope color={defaultLookOf(2).color}>
         <Dialog open>
           <DialogContent title="在会话里">内容</DialogContent>
         </Dialog>
       </AccentScope>,
     );
     const inside = screen.getByRole("dialog", { name: "在会话里" });
-    expect(scopeOf(inside)?.style.getPropertyValue("--primary")).toBe(PALETTE[2]!.accent);
+    expect(scopeOf(inside)?.style.getPropertyValue("--primary")).toBe(jellyColorOf(defaultLookOf(2).color).accent);
   });
 });

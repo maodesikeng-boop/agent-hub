@@ -1,7 +1,7 @@
 // 设置 → 电脑（docs/multi-device-design.md 第 3.2、4.2 节，docs/hub-tunnel-design.md 第 8 节）：你的电脑（本机名字、系统、中心隧道）与已连上的电脑（名字、系统、连法、在线状态）、连到中心、邀请、添加、改名、移除；
 // 设置 → 登录与安全里的“公网入口”也在这里（没开时收起）。
 // 底层状态与入口本机接口调用统一由 settings-model.ts 提供，桌面弹窗与手机设置子页共用。
-import { Loader2, Pencil, Trash2 } from "lucide-react";
+import { Loader2, Pencil, Trash2 } from "../ui/icons.ts";
 import { useState } from "react";
 import { PEER_TRANSPORT_SPECS, type PublicEntryStatus, type TunnelStatus } from "../../shared/index.ts";
 import { platformLabel, type DeviceView } from "../devices.ts";
@@ -55,7 +55,7 @@ function RenameRow({ device, onDone }: { device: DeviceView; onDone: (changed: b
           Cancel
         </Button>
         <Button type="submit" size="sm" disabled={clean === null || busy}>
-          {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
+          {busy && <Loader2 aria-hidden="true" />}
           Save
         </Button>
       </div>
@@ -117,7 +117,7 @@ function DeviceRow({ device, onChanged }: { device: DeviceView; onChanged: () =>
                   })
                 }
               >
-                {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
+                {busy && <Loader2 aria-hidden="true" />}
                 Remove
               </Button>
             </>
@@ -155,7 +155,7 @@ function InvitePanel() {
             </>
           ) : (
             <Button id={id} size="sm" variant="outline" aria-label="Generate" disabled={busy} onClick={() => void generate()}>
-              {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
+              {busy && <Loader2 aria-hidden="true" />}
               Generate
             </Button>
           )
@@ -203,7 +203,7 @@ function AddPanel({ onAdded }: { onAdded: () => void }) {
         </SettingsRow>
         <div className="flex justify-end px-4 py-2.5">
           <Button type="submit" size="sm" disabled={!ready}>
-            {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
+            {busy && <Loader2 aria-hidden="true" />}
             Add
           </Button>
         </div>
@@ -226,7 +226,7 @@ function TunnelRow({ tunnel, onChanged }: { tunnel: TunnelStatus; onChanged: () 
         {() =>
           spec.canRetry ? (
             <Button variant="outline" size="sm" disabled={busy} onClick={() => void retry()}>
-              {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
+              {busy && <Loader2 aria-hidden="true" />}
               Retry
             </Button>
           ) : null
@@ -270,7 +270,7 @@ function TunnelPanel({ repoDir, onConnected }: { repoDir?: string; onConnected: 
                 onChange={(e) => setCode(e.target.value)}
               />
               <Button type="submit" disabled={!ready}>
-                {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
+                {busy && <Loader2 aria-hidden="true" />}
                 Connect
               </Button>
             </>
@@ -309,7 +309,7 @@ export function PublicEntrySection({ publicEntry, onChanged }: { publicEntry?: P
               disabled={busy}
               onClick={() => void toggle()}
             >
-              {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
+              {busy && <Loader2 aria-hidden="true" />}
               {entry.enabled ? "Turn off" : "Turn on"}
             </Button>
           </>

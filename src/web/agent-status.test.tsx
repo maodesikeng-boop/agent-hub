@@ -12,6 +12,7 @@ import type { PendingMessage } from "./state.ts";
 import type { StagedFiles } from "./upload.ts";
 import type { StopControl } from "./useStop.ts";
 
+import { defaultLookOf } from "../shared/slimes.ts";
 const working = (over: Partial<SessionState> = {}) => makeSession({ status: "running", activity: "working", ...over });
 
 describe("AgentStatus：消息流里的状态", () => {
@@ -69,7 +70,7 @@ describe("AgentStatus：消息流里的状态", () => {
 });
 
 const actions: MessageActions = { retry: {}, onOpenWorker: () => {}, onRetryMessage: () => {}, onRevertPersona: () => Promise.resolve() };
-const pm = { name: "项目经理", avatarKey: 1 };
+const pm = { name: "项目经理", look: defaultLookOf(1) };
 const status = <AgentStatus session={working({ step: { type: "text" } })} />;
 
 function list(messages: ReturnType<typeof makeMessage>[], over: { pending?: PendingMessage[]; status?: React.ReactNode } = {}) {
@@ -183,9 +184,9 @@ describe("Composer：发送键和停止键", () => {
     expect(screen.queryByRole("button", { name: "Send" })).not.toBeInTheDocument();
     const button = screen.getByRole("button", { name: "Stop" });
     expect(button).toBeEnabled();
-    expect(button).toHaveClass("size-9", "rounded-[var(--radius-btn)]");
+    expect(button).toHaveClass("size-9", "rounded-[10px]");
     expect(button.parentElement).toHaveClass("col-start-3", "justify-self-end");
-    expect(button.querySelector("svg")).toHaveClass("fill-current");
+    expect(button.querySelector("svg")).toHaveAttribute("fill", "currentColor");
     await userEvent.click(button);
     expect(stop.onStop).toHaveBeenCalledTimes(1);
   });

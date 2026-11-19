@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { askOf, type ConversationId, type Message, type PmId, type SessionId } from "../../shared/domain.ts";
 import type { DriverEvent } from "../../shared/driver.ts";
 import type { FeishuCardId, FeishuChatId, FeishuMessageId } from "../../shared/feishu.ts";
-import { pmFruitOf } from "../../shared/fruits.ts";
+import { lookKey, resolvePmLook, type SlimeLook } from "../../shared/slimes.ts";
 import {
   FEISHU_CARD_MAX_CHARS,
   FEISHU_CARDKIT_BUDGET_PER_SECOND,
@@ -29,7 +29,7 @@ import { migrate } from "../store/migrate.ts";
 import { decodeFeishuActionValue } from "./cards.ts";
 import { feishuChatMarker } from "./chats.ts";
 import { FEISHU_GROUP_MSG_SCOPE, FEISHU_REQUIRED_SCOPES } from "./scopes.ts";
-import { FEISHU_AVATARS_DIR, feishuAvatarHash } from "./avatars.ts";
+import { renderFeishuAvatar } from "./avatars.ts";
 import { createFeishuService, type FeishuService } from "./service.ts";
 import { FeishuSetupError } from "./setup.ts";
 import { createFeishuStore } from "./store.ts";
@@ -65,7 +65,6 @@ function makeService(overrides: Partial<Parameters<typeof createFeishuService>[0
     secretsFile: join(dataHome, "state", "feishu-secrets.json"),
     uploadsDir: join(dataHome, "uploads"),
     sentFilesDir: join(dataHome, "sent-files"),
-    avatarsDir: FEISHU_AVATARS_DIR,
     device: DEVICE,
     log: () => {},
     createTransport: () => fake,
@@ -107,6 +106,8 @@ afterEach(async () => {
 });
 
 const store = () => createFeishuStore(db);
+/** 项目经理现在的形象（账本建项目经理时分的，和网页头像同一只）。 */
+const lookOf = (pmId: number): SlimeLook => resolvePmLook(ledger.snapshot().pms.find((p) => p.id === pmId)!);
 const settle = async () => {
   for (let i = 0; i < 3; i++) {
     await svc.idle();
@@ -216,29 +217,30 @@ describe("createFeishuService：接入与建群", () => {
     expect(creates[0]!.description).toContain(feishuChatMarker(DEVICE.id, lin.pmId));
     const avatarUploads = fake.calls.filter((c) => c.method === "uploadImage");
     expect(avatarUploads).toHaveLength(1);
-    expect(String(avatarUploads[0]!.args.path)).toMatch(new RegExp(`${pmFruitOf(lin.pmId)}\\.png$`));
-    expect(creates[0]!.avatar).toBe(store().avatarKey(pmFruitOf(lin.pmId), feishuAvatarHash(FEISHU_AVATARS_DIR, pmFruitOf(lin.pmId))));
+    const linImage = await renderFeishuAvatar(lookOf(lin.pmId));
+    expect(avatarUploads[0]!.args).toMatchObject({ imageType: "avatar", data: linImage.png });
+    expect(creates[0]!.avatar).toBe(store().avatarKey(lookOf(lin.pmId), linImage.sha256));
     expect(store().chatOfTarget({ kind: "router" })).not.toBeNull();
   });
 
   it("已建的群：头像图片换了（记下的哈希和现在的图不同）重传一次、原地换群头像，不重建群、不动群名", async () => {
     await connect();
     const chatId = chatOf(lin.pmId);
-    const fruit = pmFruitOf(lin.pmId);
-    const hash = feishuAvatarHash(FEISHU_AVATARS_DIR, fruit);
-    expect(store().chatById(chatId)?.avatarFruit).toBe(fruit);
+    const look = lookOf(lin.pmId);
+    const hash = (await renderFeishuAvatar(look)).sha256;
+    expect(store().chatById(chatId)?.avatarLook).toEqual(look);
     // 模拟升级前：群上挂的是旧图（上传记录是另一张图的哈希），用户还在飞书里改过群名
     db.run("UPDATE feishu_chats SET name = '用户改的群名' WHERE chat_id = ?", chatId);
-    db.run("UPDATE feishu_avatars SET content_sha256 = 'old-image', image_key = 'img_old' WHERE fruit = ?", fruit);
+    db.run("UPDATE feishu_avatars SET content_sha256 = 'old-image', image_key = 'img_old' WHERE look = ?", lookKey(look));
     const before = { creates: fake.callsOf("chat.create").length, uploads: fake.calls.filter((c) => c.method === "uploadImage").length, updates: fake.callsOf("chat.update").length };
     await svc.setup.resync();
     await settle();
     const updates = fake.callsOf("chat.update").slice(before.updates);
-    expect(updates).toEqual([{ chat_id: chatId, avatar: store().avatarKey(fruit, hash) }]);
+    expect(updates).toEqual([{ chat_id: chatId, avatar: store().avatarKey(look, hash) }]);
     expect(updates[0]!.avatar).not.toBe("img_old");
     expect(fake.calls.filter((c) => c.method === "uploadImage")).toHaveLength(before.uploads + 1);
     expect(fake.callsOf("chat.create")).toHaveLength(before.creates);
-    expect(store().chatById(chatId)).toMatchObject({ avatarFruit: fruit, name: "用户改的群名" });
+    expect(store().chatById(chatId)).toMatchObject({ avatarLook: look, name: "用户改的群名" });
     await svc.setup.resync();
     await settle();
     expect(fake.callsOf("chat.update")).toHaveLength(before.updates + 1);
@@ -269,7 +271,7 @@ describe("createFeishuService：接入与建群", () => {
     const rebuilt = chatOf(lin.pmId);
     expect(rebuilt).not.toBe(linChat);
     expect(fake.chats.has(rebuilt)).toBe(true);
-    expect(store().chatById(zhouChat)?.avatarFruit).toBe(pmFruitOf(zhou.pmId));
+    expect(store().chatById(zhouChat)?.avatarLook).toEqual(lookOf(zhou.pmId));
     const sentBefore = cardsSentTo(zhouChat).length;
     ledger.postUserMessage({ conversationId: zhou.conversationId, clientId: "web-after-gone", text: "正常群还能收到消息吗" });
     await settle();
@@ -286,8 +288,8 @@ describe("createFeishuService：接入与建群", () => {
     });
     const updates = fake.callsOf("chat.update");
     expect(updates.map((c) => c.chat_id)).toEqual([linChat, zhouChat]);
-    expect(store().chatById(linChat)?.avatarFruit).toBe(pmFruitOf(lin.pmId));
-    expect(store().chatById(zhouChat)?.avatarFruit).toBe(pmFruitOf(zhou.pmId));
+    expect(store().chatById(linChat)?.avatarLook).toEqual(lookOf(lin.pmId));
+    expect(store().chatById(zhouChat)?.avatarLook).toEqual(lookOf(zhou.pmId));
     expect(svc.setup.status().lastError).toContain("232018");
     await svc.setup.resync();
     await settle();
@@ -302,12 +304,12 @@ describe("createFeishuService：接入与建群", () => {
       zhouChat = chatOf(zhou.pmId);
       fake.failNext["chat.update"] = new Error("socket hang up");
     });
-    expect(store().chatById(zhouChat)?.avatarFruit).toBe(pmFruitOf(zhou.pmId));
+    expect(store().chatById(zhouChat)?.avatarLook).toEqual(lookOf(zhou.pmId));
     const sentBefore = cardsSentTo(zhouChat).length;
     ledger.postUserMessage({ conversationId: zhou.conversationId, clientId: "web-after-flaky", text: "正常群还能收到消息吗" });
     await settle();
     expect(cardsSentTo(zhouChat).length).toBeGreaterThan(sentBefore);
-    await vi.waitFor(() => expect(store().chatById(linChat)?.avatarFruit).toBe(pmFruitOf(lin.pmId)), { timeout: FEISHU_CONTROL_RETRY_MS * 3 });
+    await vi.waitFor(() => expect(store().chatById(linChat)?.avatarLook).toEqual(lookOf(lin.pmId)), { timeout: FEISHU_CONTROL_RETRY_MS * 3 });
     expect(fake.callsOf("chat.update").filter((c) => c.chat_id === linChat)).toHaveLength(2);
   });
 
@@ -1528,7 +1530,7 @@ describe("createFeishuService：图文同发、超大图瘦身、重启补传与
     writeFileSync(join(home, "notes.md"), "# 笔记");
     const seen: { path: string; width: number; height: number }[] = [];
     fake.beforeUpload = async (input) => {
-      if (!("imageType" in input)) return;
+      if (!("imageType" in input) || !("path" in input)) return;
       const meta = await sharp(input.path).metadata();
       seen.push({ path: input.path, width: meta.width ?? 0, height: meta.height ?? 0 });
     };

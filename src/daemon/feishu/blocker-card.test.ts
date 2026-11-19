@@ -13,7 +13,6 @@ import { createLedger, type SqliteLedger } from "../ledger/index.ts";
 import { openDatabase } from "../store/db.ts";
 import type { Db } from "../store/index.ts";
 import { migrate } from "../store/migrate.ts";
-import { FEISHU_AVATARS_DIR } from "./avatars.ts";
 import { FEISHU_GROUP_MSG_SCOPE, FEISHU_REQUIRED_SCOPES } from "./scopes.ts";
 import { createFeishuService, type FeishuService } from "./service.ts";
 import { createFeishuStore } from "./store.ts";
@@ -68,7 +67,6 @@ beforeEach(async () => {
     secretsFile: join(dataHome, "state", "feishu-secrets.json"),
     uploadsDir: join(dataHome, "u"),
     sentFilesDir: join(dataHome, "s"),
-    avatarsDir: FEISHU_AVATARS_DIR,
     device: { id: "11111111-2222-3333-4444-555555555555", name: "测试机" },
     log: () => {},
     createTransport: () => fake,

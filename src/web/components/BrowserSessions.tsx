@@ -1,7 +1,7 @@
 // 设置 → 登录与安全（联机 P6，docs/multi-device-design.md 第 3.4 节）：
 // “在手机上登录”显示一次性登录链接的二维码（5 分钟、用一次）；
 // “已登录的浏览器”默认收起（有待批准的才展开），每个浏览器一行（左边电脑 / 手机图标），能单个退出；“全部退出”换主钥匙、清所有会话。
-import { Loader2, Monitor, Smartphone, Tablet } from "lucide-react";
+import { Loader2, Monitor, Smartphone, Tablet } from "../ui/icons.ts";
 import { describeUserAgent, formatAgo, formatCountdown, userAgentKind } from "../browser-sessions.ts";
 import { useBrowserSessions, useSignInLink } from "../settings-model.ts";
 import { Button } from "../ui/button.tsx";
@@ -46,7 +46,7 @@ export function BrowserSessionsSettings({ onSignedOut }: { onSignedOut?: () => v
               className="-mr-3"
               onClick={() => (signIn.link === null ? signIn.generate() : signIn.hide())}
             >
-              {signIn.busy && <Loader2 className="animate-spin" aria-hidden="true" />}
+              {signIn.busy && <Loader2 aria-hidden="true" />}
               {signIn.link === null ? "Show QR code" : "Hide"}
             </Button>
           )}
@@ -76,7 +76,7 @@ export function BrowserSessionsSettings({ onSignedOut }: { onSignedOut?: () => v
       >
         {sessions === null && loadError === null && (
           <div className="flex min-h-13 items-center justify-center">
-            <Loader2 className="size-4 animate-spin text-muted-foreground" aria-label="Loading" />
+            <Loader2 className="size-pixel text-muted-foreground" aria-label="Loading" />
           </div>
         )}
         {loadError !== null && (
@@ -104,10 +104,10 @@ export function BrowserSessionsSettings({ onSignedOut }: { onSignedOut?: () => v
                 pending ? (
                   <span className="-mr-3 flex items-center gap-1">
                     <Button variant="ghost" size="sm" aria-label="Deny" disabled={busy !== null} onClick={() => signOut(session)}>
-                      {busy === `exit:${session.id}` && <Loader2 className="animate-spin" aria-hidden="true" />}Deny
+                      {busy === `exit:${session.id}` && <Loader2 aria-hidden="true" />}Deny
                     </Button>
                     <Button id={id} variant="ghost" size="sm" aria-label="Allow" disabled={busy !== null} onClick={() => approve(session)}>
-                      {busy === `approve:${session.id}` && <Loader2 className="animate-spin" aria-hidden="true" />}Allow
+                      {busy === `approve:${session.id}` && <Loader2 aria-hidden="true" />}Allow
                     </Button>
                   </span>
                 ) : confirming ? (
@@ -124,7 +124,7 @@ export function BrowserSessionsSettings({ onSignedOut }: { onSignedOut?: () => v
                       className="text-danger hover:text-danger"
                       onClick={() => signOut(session)}
                     >
-                      {busy === `exit:${session.id}` && <Loader2 className="animate-spin" aria-hidden="true" />}Sign out
+                      {busy === `exit:${session.id}` && <Loader2 aria-hidden="true" />}Sign out
                     </Button>
                   </span>
                 ) : (
@@ -137,7 +137,7 @@ export function BrowserSessionsSettings({ onSignedOut }: { onSignedOut?: () => v
                     className="-mr-3"
                     onClick={() => (session.current ? setConfirmingSelf(true) : signOut(session))}
                   >
-                    {busy === `exit:${session.id}` && <Loader2 className="animate-spin" aria-hidden="true" />}Sign out
+                    {busy === `exit:${session.id}` && <Loader2 aria-hidden="true" />}Sign out
                   </Button>
                 )
               }
@@ -156,7 +156,7 @@ export function BrowserSessionsSettings({ onSignedOut }: { onSignedOut?: () => v
               onClick={() => (confirmingAll ? signOutAll() : setConfirmingAll(true))}
               onBlur={() => setConfirmingAll(false)}
             >
-              {busy === "all" && <Loader2 className="animate-spin" aria-hidden="true" />}
+              {busy === "all" && <Loader2 aria-hidden="true" />}
               {confirmingAll ? "Confirm sign out all" : "Sign out all"}
             </Button>
           )}

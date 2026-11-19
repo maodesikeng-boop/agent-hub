@@ -1,22 +1,29 @@
-import { ChevronRight, Plus, Search, Settings, X } from "lucide-react";
+import { ChevronRight, Plus, Search, Settings, X } from "../ui/icons.ts";
 import { Fragment, memo, useState, type ReactNode } from "react";
 import { conversationKey, isReadOnly, type DeviceKey, type DeviceStatus } from "../devices.ts";
 import { formatArchiveRemaining, formatTime, NEEDS_YOU, YOUR_TURN } from "../format.ts";
 import type { ConversationRef, NotifySettings } from "../notify.ts";
 import { previewText, type ConversationEntry, type QuotaVendor } from "../selectors.ts";
-import { paletteOf } from "../lib/palette.ts";
+import { jellyStyleOf } from "../lib/palette.ts";
 import { cn } from "../lib/utils.ts";
 import { Button } from "../ui/button.tsx";
 import { Input } from "../ui/input.tsx";
 import { NARROW_QUERY, useMediaQuery } from "../useMediaQuery.ts";
 import { Avatar } from "./Avatar.tsx";
 import { PlatformIcon, StatusDot, StatusText } from "./DeviceBadges.tsx";
-import { KnifeAvatar } from "./KnifeAvatar.tsx";
+import { RouterAvatar } from "./RouterAvatar.tsx";
 import { QuotaPopover } from "./QuotaPopover.tsx";
 import { SettingsDialog, type DeviceSettings, type SettingsDialogSection } from "./SettingsDialog.tsx";
 
-/** 行的果冻底（docs/ui-standard.md 第 4 条）：选中、悬停是这个项目经理水果色的极淡底，颜色经 --jelly 交给 styles.css 的 bg-jelly。 */
-const jellyOf = (avatarKey: number) => ({ "--jelly": paletteOf(avatarKey).accent }) as React.CSSProperties;
+/**
+ * 左栏的一行（docs/ui-standard.md 第 16 条）：每行一样高（标准档 72px），头像 48px 按身体光学居中，名字 17px 永远在第一行，
+ * 第二行是预览（没有预览也留着这一行的高度）。总助行和项目经理行同一套尺寸。
+ */
+const ROW = "flex h-18 w-full cursor-pointer items-center gap-3 rounded-2xl px-3 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50";
+const ROW_AVATAR = 48;
+const ROW_NAME = "truncate text-title leading-snug font-semibold";
+const ROW_PREVIEW = "mt-0.5 block truncate text-minor leading-snug text-muted-foreground";
+/** 行的果冻底（docs/ui-standard.md 第 4 条）：选中、悬停是这个项目经理颜色的极淡底，颜色经 --jelly 交给 styles.css 的 bg-jelly。 */
 const JELLY_ROW = (active: boolean) => (active ? "bg-jelly" : "hover:bg-jelly-hover");
 
 // 窄栏头像右下角的绿点：外面一圈描边和它压着的底同色，选中的行压在果冻底上（10% 水果色盖在左栏底上）
@@ -28,12 +35,14 @@ const GROUP_HEADER =
 
 export type SidebarLayout = "wide" | "rail" | "page";
 
-/** 左栏置顶的水果刀 Router 入口状态（docs/ui-standard.md 第 21 条）。 */
+/** 左栏置顶的总助（嫩芽铃）入口状态（docs/ui-standard.md 第 21 条）。 */
 export interface SidebarRouterEntry {
   active: boolean;
   pendingCount: number;
   unreadReportCount: number;
   subtitle: string;
+  /** 总助正在执行一条指令：嫩芽铃左右摇。 */
+  working: boolean;
   onSelect: () => void;
 }
 
@@ -51,7 +60,7 @@ export interface SidebarGroup {
 function RouterRowButton({ router, active }: { router: SidebarRouterEntry; active: boolean }) {
   const badge =
     router.pendingCount > 0 ? (
-      <span className="flex shrink-0 items-center gap-1.5">
+      <span className="tool-badge shrink-0 px-1.5">
         <span className="text-xs font-semibold text-foreground tabular-nums">{router.pendingCount}</span>
         <span
           role="img"
@@ -62,26 +71,23 @@ function RouterRowButton({ router, active }: { router: SidebarRouterEntry; activ
         />
       </span>
     ) : router.unreadReportCount > 0 ? (
-      <span className="text-xs text-muted-foreground tabular-nums">{router.unreadReportCount}</span>
+      <span className="tool-badge px-1.5 text-xs text-muted-foreground tabular-nums">{router.unreadReportCount}</span>
     ) : null;
 
   return (
     <button
       type="button"
       aria-current={active ? "page" : undefined}
-      className={cn(
-        "flex w-full cursor-pointer items-center gap-3 rounded-2xl px-3 py-2.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-        active ? "bg-sidebar-active" : "hover:bg-sidebar-hover",
-      )}
+      className={cn(ROW, active ? "bg-sidebar-active" : "hover:bg-sidebar-hover")}
       onClick={router.onSelect}
     >
-      <KnifeAvatar size={44} />
-      <span className="min-w-0 flex-1">
+      <RouterAvatar size={ROW_AVATAR} working={router.working} />
+      <span className="flex min-w-0 flex-1 flex-col">
         <span className="flex items-center justify-between gap-2">
-          <span className="truncate text-body font-semibold">Router</span>
+          <span className={ROW_NAME}>Router</span>
           {badge}
         </span>
-        <span title={router.subtitle || undefined} className="mt-0.5 block truncate text-minor text-muted-foreground">
+        <span title={router.subtitle || undefined} className={ROW_PREVIEW}>
           {router.subtitle || "All clear"}
         </span>
       </span>
@@ -102,7 +108,7 @@ function NarrowRouterButton({ router, active }: { router: SidebarRouterEntry; ac
       onClick={router.onSelect}
     >
       <span className="relative">
-        <KnifeAvatar size={40} />
+        <RouterAvatar size={40} working={router.working} />
         {router.pendingCount > 0 && (
           <span
             role="img"
@@ -152,19 +158,15 @@ function EntryButton({
     <button
       type="button"
       aria-current={active ? "true" : undefined}
-      className={cn(
-        "flex w-full cursor-pointer items-center gap-3 rounded-2xl px-3 py-2.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-        JELLY_ROW(active),
-      )}
-      style={jellyOf(entry.avatarKey)}
+      className={cn(ROW, JELLY_ROW(active))}
+      style={jellyStyleOf(entry.look.color)}
       onClick={onSelect}
     >
-      <Avatar colorKey={entry.avatarKey} size={44} />
-      {/* 两行字高 48px：没有消息的行只剩名字，和头像垂直居中，行高不变 */}
-      <span className="flex min-h-12 min-w-0 flex-1 flex-col justify-center">
+      <Avatar look={entry.look} size={ROW_AVATAR} />
+      <span className="flex min-w-0 flex-1 flex-col">
         <span className="flex items-center justify-between gap-2">
           <span className="flex min-w-0 flex-1 items-baseline gap-2 overflow-hidden">
-            <span title={entry.name} className={cn("truncate text-body font-semibold", device && "max-w-[70%] shrink-0")}>{entry.name}</span>
+            <span title={entry.name} className={cn(ROW_NAME, device && "max-w-[70%] shrink-0")}>{entry.name}</span>
             {device && (
               <span data-testid="entry-device" title={device} className="min-w-0 truncate text-xs text-muted-foreground">
                 {device}
@@ -173,11 +175,10 @@ function EntryButton({
           </span>
           {tag && <span className="flex shrink-0 items-center">{tag}</span>}
         </span>
-        {preview !== "" && (
-          <span title={preview} className="mt-0.5 block truncate text-minor text-muted-foreground">
-            {preview}
-          </span>
-        )}
+        {/* 没有预览也留着第二行：名字不挪到正中，和别的行的名字在一条线上 */}
+        <span title={preview || undefined} aria-hidden={preview === "" ? true : undefined} className={ROW_PREVIEW}>
+          {preview || "\u00a0"}
+        </span>
       </span>
     </button>
   );
@@ -205,11 +206,11 @@ function NarrowEntryButton({
         "relative flex size-13 shrink-0 items-center justify-center rounded-2xl transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
         JELLY_ROW(active),
       )}
-      style={jellyOf(entry.avatarKey)}
+      style={jellyStyleOf(entry.look.color)}
       onClick={onSelect}
     >
       <span className="relative">
-        <Avatar colorKey={entry.avatarKey} size={40} />
+        <Avatar look={entry.look} size={40} />
         {asking ? (
           <span
             role="img"
@@ -250,11 +251,11 @@ function DeviceGroup({ group, open, onToggle, children }: { group: SidebarGroup;
         onClick={onToggle}
       >
         <span className="truncate">{group.name}</span>
-        <ChevronRight className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")} aria-hidden="true" />
+        <ChevronRight className={cn("size-pixel-sm shrink-0 transition-transform", open && "rotate-90")} aria-hidden="true" />
         <span className="ml-auto flex shrink-0 items-center gap-2 text-xs font-normal">
           <StatusText status={group.status} lastOnlineAt={group.lastOnlineAt} />
           <StatusDot status={group.status} />
-          <PlatformIcon platform={group.platform} className="size-3.5" />
+          <PlatformIcon platform={group.platform} />
         </span>
       </button>
       {/* 离线、没连上过的组只把头像调淡：字照常，调淡了对比度就不够（组头的 Offline 和灰点已经说明状态） */}
@@ -282,12 +283,13 @@ function sameRouterProp(a: SidebarRouterEntry | null | undefined, b: SidebarRout
     a.pendingCount === b.pendingCount &&
     a.unreadReportCount === b.unreadReportCount &&
     a.subtitle === b.subtitle &&
+    a.working === b.working &&
     a.onSelect === b.onSelect
   );
 }
 
 /**
- * 左栏：顶部固定置顶水果刀 Router 入口（跨设备待决与未读汇报总览），下方按设备分组展示项目经理对话。
+ * 左栏：顶部固定置顶嫩芽铃 Router 入口（跨设备待决与未读汇报总览），下方按设备分组展示项目经理对话。
  * layout 三档：wide 是 300px 宽栏，rail 是 72px 垂直头像窄栏（窄屏 1100px 以下，docs/ui-standard.md 第 16 条），page 是手机的整屏列表页（宽栏的内容、铺满、不显示选中）。
  */
 export const Sidebar = memo(
@@ -320,7 +322,7 @@ export const Sidebar = memo(
     notify: NotifySettings;
     /** 设置里的“设备”一组；null（守护进程还没有联机）不显示。 */
     devices?: DeviceSettings | null;
-    quota: QuotaVendor[];
+    quota?: QuotaVendor[] | undefined;
     /** 有厂商的额度要按需查（QuotaPopover 的 fetchable）。 */
     quotaFetchable?: boolean;
     /** 外壳指定的布局。 */
@@ -402,7 +404,7 @@ export const Sidebar = memo(
                 }
               >
                 <span>Archived</span>
-                <ChevronRight className={cn("size-3.5 shrink-0 transition-transform", showArchived && "rotate-90")} aria-hidden="true" />
+                <ChevronRight className={cn("size-pixel-sm shrink-0 transition-transform", showArchived && "rotate-90")} aria-hidden="true" />
                 <span className="ml-auto text-xs font-normal tabular-nums">{archivedEntries.length}</span>
               </button>
               {showArchived && <div className="mt-1 space-y-1">{archivedEntries.map((entry) => row(group, entry))}</div>}
@@ -449,11 +451,11 @@ export const Sidebar = memo(
               })}
             </nav>
             <div className="flex shrink-0 flex-col items-center gap-2 py-3">
-              <Button variant="ghost" size="icon-sm" aria-label="New project manager" onClick={onNewPm}>
+              <Button variant="slot" size="icon" aria-label="New project manager" onClick={onNewPm}>
                 <Plus aria-hidden="true" />
               </Button>
-              <QuotaPopover quota={quota} fetchable={quotaFetchable} />
-              <Button variant="ghost" size="icon-sm" aria-label="Settings" onClick={handleOpenSettings}>
+              {quota && <QuotaPopover quota={quota} fetchable={quotaFetchable} />}
+              <Button variant="slot" size="icon" aria-label="Settings" onClick={handleOpenSettings}>
                 <Settings aria-hidden="true" />
               </Button>
             </div>
@@ -466,7 +468,7 @@ export const Sidebar = memo(
             >
               {/* 搜索框的外形在这一层：放大镜、输入、清除键并排，清除键不压在输入框上 */}
               <div className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-xl bg-sidebar-active pr-0.5 pl-3 pointer-coarse:h-11">
-                <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                <Search className="size-pixel-sm shrink-0 text-muted-foreground" aria-hidden="true" />
                 <Input
                   type="search"
                   aria-label="Search"
@@ -481,7 +483,7 @@ export const Sidebar = memo(
                   </Button>
                 )}
               </div>
-              <Button variant="ghost" size="icon" className="shrink-0" aria-label="New project manager" onClick={onNewPm}>
+              <Button variant="slot" size="icon" className="shrink-0" aria-label="New project manager" onClick={onNewPm}>
                 <Plus aria-hidden="true" />
               </Button>
             </div>
@@ -513,8 +515,8 @@ export const Sidebar = memo(
                 : groups.map((group) => <Fragment key={group.key}>{renderGroupEntries(group)}</Fragment>)}
             </nav>
             <div className="flex items-center gap-1 px-3 py-3">
-              <QuotaPopover quota={quota} fetchable={quotaFetchable} />
-              <Button variant="ghost" size="icon-sm" className="ml-auto" aria-label="Settings" onClick={handleOpenSettings}>
+              {quota && <QuotaPopover quota={quota} fetchable={quotaFetchable} />}
+              <Button variant="slot" size="icon" className="ml-auto" aria-label="Settings" onClick={handleOpenSettings}>
                 <Settings aria-hidden="true" />
               </Button>
             </div>

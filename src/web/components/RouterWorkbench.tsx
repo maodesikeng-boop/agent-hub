@@ -1,7 +1,7 @@
 // 水果刀 Router 行动与时间流工作台 v2（docs/ui-standard.md 第 21 条、docs/router-workbench-v2-design.md）：
 // 顶栏下按需挂可收起的待拍板托盘 Needs You，主体是指令回合与里程碑简报的无卡片时间流 RouterStream，底部复用重叠式 DraftComposer。
 import { useMutation, useMutationState, type Mutation, type QueryClient } from "@tanstack/react-query";
-import { ChevronRight, X } from "lucide-react";
+import { ChevronRight, ComposerRemove } from "../ui/icons.ts";
 import {
   memo,
   useCallback,
@@ -9,7 +9,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
   type ReactNode,
 } from "react";
 import {
@@ -21,12 +20,12 @@ import {
   type PostRouterCommandTarget,
 } from "../../shared/index.ts";
 import { localClient, type HubClient } from "../client.ts";
-import { FleetDeviceScopes, type DeviceScopeLookup } from "../device-scope.tsx";
+import { FleetDeviceScopes, FleetLooks, type DeviceScopeLookup } from "../device-scope.tsx";
 import type { ComposerSource, MenuItem } from "../composer-suggest.ts";
 import { submitDecision } from "../decision-actions.ts";
 import { LOCAL_DEVICE, isReadOnly, type DeviceView } from "../devices.ts";
 import { errorText, formatTime, newClientId, type ErrorLike } from "../format.ts";
-import { paletteOf } from "../lib/palette.ts";
+import { jellyStyleOf } from "../lib/palette.ts";
 import { cn } from "../lib/utils.ts";
 import { useHubQueryClient } from "../query-client.ts";
 import {
@@ -47,7 +46,7 @@ import { uploadFiles, type DraftSlot, type StagedFiles } from "../upload.ts";
 import { Avatar } from "./Avatar.tsx";
 import { DraftComposer } from "./Composer.tsx";
 import { FileDropZone } from "./FileDropZone.tsx";
-import { KnifeAvatar } from "./KnifeAvatar.tsx";
+import { RouterAvatar } from "./RouterAvatar.tsx";
 import { RIGHT_RAIL_VISIBLE_ROWS } from "./RightRail.tsx";
 import { RouterDecisionCard } from "./RouterDecisionCard.tsx";
 import { RouterModelPicker } from "./RouterModelPicker.tsx";
@@ -161,7 +160,7 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
           >
             <span className="inline-flex min-w-0 items-center gap-1.5">
               <ChevronRight
-                className={cn("size-3.5 shrink-0 transition-transform", !collapsed && "rotate-90")}
+                className={cn("size-pixel-sm shrink-0 transition-transform", !collapsed && "rotate-90")}
                 aria-hidden="true"
               />
               <span className="truncate">Needs You</span>
@@ -199,14 +198,14 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
                       key={entry.decision.key}
                       type="button"
                       aria-expanded={false}
-                      style={{ "--jelly": paletteOf(entry.avatarKey).accent } as CSSProperties}
+                      style={jellyStyleOf(entry.look.color)}
                       className={cn(
                         "flex w-full pointer-coarse:min-h-11 cursor-pointer items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors outline-none hover:bg-jelly-hover focus-visible:ring-2 focus-visible:ring-ring/50",
                         !entry.online && "[&_[data-slot=avatar]]:opacity-50",
                       )}
                       onClick={() => onSelectKey(entry.decision.key)}
                     >
-                      <Avatar colorKey={entry.avatarKey} size={20} />
+                      <Avatar look={entry.look} size={20} />
                       <span className="shrink-0 text-minor font-medium text-foreground">
                         {entry.decision.pmName}
                       </span>
@@ -227,7 +226,7 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
                       <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
                         {formatTime(entry.decision.createdAt)}
                       </span>
-                      <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                      <ChevronRight className="size-pixel-sm shrink-0 text-muted-foreground" aria-hidden="true" />
                     </button>
                   );
                 })}
@@ -257,6 +256,7 @@ function decisionInstanceToken(entry: FleetDecisionEntry): string {
 
 export function RouterWorkbench({
   leading,
+  toolbar,
   notices,
   view,
   devices,
@@ -270,6 +270,7 @@ export function RouterWorkbench({
   onManageProviders,
 }: {
   leading?: ReactNode;
+  toolbar?: ReactNode;
   notices?: ReactNode;
   view: FleetRouterView;
   devices: readonly DeviceView[];
@@ -548,7 +549,7 @@ export function RouterWorkbench({
               detail: detailParts.join(" "),
               insert: `@${t.label}`,
               disabled: !t.online,
-              avatarKey: t.avatarKey,
+              look: t.look,
               targetKey: t.key,
             };
           });
@@ -610,7 +611,7 @@ export function RouterWorkbench({
     const showDevice = view.multiDevice || !selectedTarget.self;
     return (
       <li className="flex max-w-full items-center gap-1.5 rounded-full bg-muted py-1 pr-1 pl-2.5 text-minor text-foreground">
-        <Avatar colorKey={selectedTarget.avatarKey} size={16} />
+        <Avatar look={selectedTarget.look} size={16} />
         <span className="truncate font-medium">{selectedTarget.label}</span>
         {showDevice && <span className="shrink-0 text-xs text-muted-foreground">{selectedTarget.deviceName}</span>}
         <button
@@ -619,7 +620,7 @@ export function RouterWorkbench({
           aria-label={`Remove target ${selectedTarget.label}`}
           onClick={() => setSelectedTargetKey(null)}
         >
-          <X className="size-3.5" aria-hidden="true" />
+          <ComposerRemove className="size-3.5" aria-hidden="true" />
         </button>
       </li>
     );
@@ -627,6 +628,7 @@ export function RouterWorkbench({
 
   return (
     <FleetDeviceScopes lookup={deviceScopeLookup}>
+      <FleetLooks lookOf={view.lookOf}>
       <FileDropZone className="flex min-h-0 flex-1 flex-col" onFiles={staging.add}>
         <header
           data-window-drag
@@ -634,14 +636,13 @@ export function RouterWorkbench({
         >
           <div className="flex min-w-0 shrink-0 items-center gap-2.5">
             {leading}
-            <KnifeAvatar size={28} />
+            <RouterAvatar size={28} working={stream.turns.some((entry) => entry.status === "planning")} />
             <h1 className="truncate text-title font-semibold text-foreground">Router</h1>
           </div>
-          <RouterModelPicker
-            settings={localSettings}
-            mobile={mobile}
-            onManageProviders={onManageProviders}
-          />
+          <div className="flex min-w-0 items-center gap-2">
+            {toolbar}
+            <RouterModelPicker settings={localSettings} mobile={mobile} onManageProviders={onManageProviders} />
+          </div>
         </header>
 
         {notices}
@@ -684,6 +685,7 @@ export function RouterWorkbench({
           />
         </div>
       </FileDropZone>
+      </FleetLooks>
     </FleetDeviceScopes>
   );
 }
