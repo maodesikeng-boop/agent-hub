@@ -149,7 +149,8 @@ if [[ "$DIST" -eq 0 ]]; then
     done
   fi
 
-  write_info_plist "1.0.0" "  <key>AgentHubRepoDir</key>
+  VERSION="$("$NODE_PATH" --input-type=module -e 'import { readDesktopAppVersion } from "./scripts/stage-runtime-common.ts"; process.stdout.write(readDesktopAppVersion());')"
+  write_info_plist "$VERSION" "  <key>AgentHubRepoDir</key>
   <string>${REPO_DIR}</string>
   <key>AgentHubNodePath</key>
   <string>${NODE_PATH}</string>"

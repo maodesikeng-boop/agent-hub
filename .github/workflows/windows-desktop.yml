@@ -136,7 +136,7 @@ jobs:
           if ($cargoToml -match 'version\s*=\s*"([^"]+)"') {
             $version = $Matches[1]
           } else {
-            $version = "0.1.0"
+            throw "App version not found in apps/windows/Cargo.toml"
           }
 
           $outDir = "apps/windows/target/release/unsigned-preview-artifacts"

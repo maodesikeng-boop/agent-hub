@@ -1,35 +1,27 @@
-## Bellwood 未签名预览版 / Unsigned preview
+## Bellwood v0.2.0
 
-这是**未签名的预览版**：安装包还没有做代码签名与公证，系统首次打开时会拦一下，按下面的步骤放行即可。
-This is an **unsigned preview**: the installers are not code-signed or notarized, so the OS will warn on first launch — follow the steps below.
+- Fusa 更名为 Bellwood。Apple 芯片 Mac 和 Windows x64 均可安装原生桌面应用。
+- 任务流图按依赖自动推进。项目经理可以把实现和审查分给使用不同模型的 Agent。
+- 飞书群可以接收任务进度、完成拍板和查看验收结果。机器人通过出站长连接工作，无需公网入站端口。
+- 同一账号下的可信设备使用端到端加密互联，支持局域网直连和中继。
 
-### 下载 / Download
+### English
 
-| 平台 / Platform | 文件 / File | 校验 / Checksum |
+- Fusa is now Bellwood. Native desktop apps are available for Apple silicon Macs and Windows x64.
+- Task graphs advance as dependencies finish. Project managers can assign implementation and review to agents that use different models.
+- Follow progress, make decisions, and view verification results in Feishu groups. The bot connects outbound and needs no public inbound port.
+- Trusted devices in the same account connect with end to end encryption over the LAN or through a relay.
+
+### 下载与校验 / Downloads and checksums
+
+| 平台 / Platform | 安装包 / Installer | 校验文件 / Checksum |
 | --- | --- | --- |
-| Mac（Apple 芯片 / Apple silicon, macOS 13+） | `Bellwood-macos-arm64.dmg` | `Bellwood-macos-arm64.dmg.sha256` |
+| Apple 芯片 Mac / Apple silicon Mac (macOS 13+) | `Bellwood-macos-arm64.dmg` | `Bellwood-macos-arm64.dmg.sha256` |
 | Windows x64 | `Bellwood-windows-x64-setup.exe` | `Bellwood-windows-x64-setup.exe.sha256` |
 
-### Mac 首次打开 / First launch on Mac
+安装包为未签名预览版。验证校验值后，macOS 如阻止启动，可在「系统设置 → 隐私与安全性」中选择「仍要打开」。Windows 如弹出 SmartScreen，可选「更多信息 → 仍要运行」。
 
-1. 打开 DMG，把 **Bellwood** 拖进「应用程序」。 Open the DMG and drag **Bellwood** into Applications.
-2. 双击打开，系统会提示无法验证开发者，点「完成」。 Double-click it; macOS says it cannot verify the developer — click Done.
-3. 打开「系统设置 → 隐私与安全性」，滚动到「安全性」，在 Bellwood 那一行点「仍要打开」，输入密码确认。 Open System Settings → Privacy & Security, scroll to Security, click **Open Anyway** next to Bellwood and confirm with your password.
-4. 之后可以正常双击打开。 After that it opens normally.
+These installers are unsigned previews. After checking the checksum, use **Open Anyway** in macOS **Privacy & Security** or **More info**, then **Run anyway** in Windows SmartScreen if the system blocks the app.
 
-### Windows 首次运行 / First launch on Windows
-
-SmartScreen 拦截时点「更多信息 → 仍要运行」。安装不需要管理员权限。
-If SmartScreen blocks it, click **More info → Run anyway**. No administrator rights are needed.
-
-### 校验 / Verify
-
-```sh
-shasum -a 256 -c Bellwood-macos-arm64.dmg.sha256          # macOS
-```
-```powershell
-(Get-FileHash Bellwood-windows-x64-setup.exe -Algorithm SHA256).Hash.ToLower()   # 与 .sha256 文件里的值比对
-```
-
----
-
+- macOS: `shasum -a 256 -c Bellwood-macos-arm64.dmg.sha256`
+- Windows: `Get-FileHash Bellwood-windows-x64-setup.exe -Algorithm SHA256`. Compare `Hash` with the value in the `.sha256` file.
