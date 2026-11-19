@@ -20,7 +20,7 @@ const iface = (address: string, family: "IPv4" | "IPv6", internal = false): Netw
   ({ address, family, internal, netmask: "", mac: "00:00:00:00:00:00", cidr: null, ...(family === "IPv6" ? { scopeid: 0 } : {}) }) as NetworkInterfaceInfo;
 
 describe("localCandidates", () => {
-  it("只收私有 IPv4、IPv6 ULA 和链路本地，跳过回环、内部网卡和公网地址", () => {
+  it("只收私有 IPv4 和 IPv6 ULA，跳过 fe80:: 链路本地、回环、内部网卡和公网地址", () => {
     const result = localCandidates(
       {
         lo0: [iface("127.0.0.1", "IPv4", true), iface("::1", "IPv6", true)],
@@ -33,7 +33,6 @@ describe("localCandidates", () => {
       { host: "192.168.1.5", port: 4320 },
       { host: "10.0.0.2", port: 4320 },
       { host: "172.16.5.5", port: 4320 },
-      { host: "fe80::1c2d:3e4f%en0", port: 4320 },
       { host: "fd12:3456::9", port: 4320 },
     ]);
   });
@@ -58,16 +57,33 @@ describe("localCandidates", () => {
       scopeid,
     });
     const withScope = localCandidates({ [name]: [iface("192.168.1.20", "IPv4"), ll6("fe80::1c2d:3e4f:5a6b:7c8d", 12)] }, 4320);
+    expect(withScope.some((c) => c.host.startsWith("fe80:"))).toBe(false);
     expect(parseRelayClientFrame(encodeRelayFrame({ type: "presence", candidates: withScope }))).not.toBeNull();
     const zeroScope = localCandidates({ [name]: [iface("192.168.1.20", "IPv4"), ll6("fe80::1c2d:3e4f:5a6b:7c8d", 0)] }, 4320);
+    expect(zeroScope.some((c) => c.host.startsWith("fe80:"))).toBe(false);
     expect(parseRelayClientFrame(encodeRelayFrame({ type: "presence", candidates: zeroScope }))).not.toBeNull();
   });
 
-  it("isAllowedDirectHost 只放行私网、回环、ULA 与合法链路本地地址", () => {
-    for (const ok of ["10.0.0.1", "172.16.0.1", "172.31.255.254", "192.168.1.20", "127.0.0.1", "::1", "fd00::1", "fe80::1%12", "fe80::1%en0"]) {
+  it("isAllowedDirectHost 生产默认禁连 127/8 与 ::1 回环，仅放行私网、ULA 与合法链路本地地址", () => {
+    for (const ok of ["10.0.0.1", "172.16.0.1", "172.31.255.254", "192.168.1.20", "fd00::1", "fe80::1%12", "fe80::1%en0"]) {
       expect(isAllowedDirectHost(ok), ok).toBe(true);
     }
-    for (const bad of ["8.8.8.8", "172.15.0.1", "172.32.0.1", "169.254.169.254", "0.0.0.0", "2001:db8::1", "::ffff:192.168.1.1", "fe80::1%以太网", "10.0.0.1%en0", "localhost"]) {
+    for (const bad of [
+      "127.0.0.1",
+      "127.0.0.2",
+      "::1",
+      "0:0:0:0:0:0:0:1",
+      "8.8.8.8",
+      "172.15.0.1",
+      "172.32.0.1",
+      "169.254.169.254",
+      "0.0.0.0",
+      "2001:db8::1",
+      "::ffff:192.168.1.1",
+      "fe80::1%以太网",
+      "10.0.0.1%en0",
+      "localhost",
+    ]) {
       expect(isAllowedDirectHost(bad), bad).toBe(false);
     }
   });
@@ -310,6 +326,27 @@ describe("createMeshDialer + startMeshListener", () => {
     expect(conn.link).toBe("relay");
     expect(bad.hits()).toBe(0);
     expect(openChannel).toHaveBeenCalledTimes(1);
+    conn.socket.destroy();
+  });
+
+  it("默认 createMeshDialer 禁连 127.0.0.0/8 与 ::1 候选（防恶意中继探测本机回环服务）", async () => {
+    const { nodes } = await mesh([DEVICE_A, DEVICE_B]);
+    const [a] = nodes as [Node, Node];
+    const loopbackProbe = await closedPortServer();
+    const prodDialer = createMeshDialer({
+      identity: a.identity,
+      trust: a.trust,
+      relay: a.relay,
+      candidatesOf: () => [
+        { host: "127.0.0.1", port: loopbackProbe.port },
+        { host: "::1", port: loopbackProbe.port },
+      ],
+      log: () => {},
+    });
+    cleanups.push(() => prodDialer.close());
+    const conn = await prodDialer.dial(DEVICE_B);
+    expect(conn.link).toBe("relay");
+    expect(loopbackProbe.hits()).toBe(0);
     conn.socket.destroy();
   });
 });

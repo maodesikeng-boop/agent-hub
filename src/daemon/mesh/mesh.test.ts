@@ -216,6 +216,25 @@ describe("createMesh", () => {
     await waitFor(() => a2.mesh.trust.get(DEVICE_B) === undefined, 5_000);
   });
 
+  it("logout 连不上中继且未送达在线设备时返回明确提示标记，告知用户需在其他设备移除本机", async () => {
+    const { relay, nodes } = await account(2);
+    const [a, b] = nodes as [TestMeshNode, TestMeshNode];
+    const normalLogout = (await b.mesh.logout()) as unknown as { remoteRevokePending?: boolean };
+    expect(normalLogout).toEqual({ remoteRevokePending: false });
+    expect(b.mesh.status()).toEqual({ state: "signed_out", lastError: null });
+    await waitFor(() => a.mesh.trust.get(DEVICE_B) === undefined);
+
+    await relay.close();
+    await waitFor(() => signedIn(a).relay === "unreachable");
+    const isolatedLogout = (await a.mesh.logout()) as unknown as { remoteRevokePending?: boolean };
+    expect(isolatedLogout).toEqual({ remoteRevokePending: true });
+    const after = a.mesh.status() as { state: string; lastError: string | null; remoteRevokePending?: boolean };
+    expect(after.state).toBe("signed_out");
+    expect(after.remoteRevokePending).toBe(true);
+    expect(after.lastError).toContain("其他设备");
+    expect(after.lastError).toContain("移除");
+  });
+
   it("B 离线时 A 移除 C，B 重启后信任表里没有 C", async () => {
     const { relay, nodes } = await account(3);
     const [a, b] = nodes as [TestMeshNode, TestMeshNode, TestMeshNode];

@@ -1,23 +1,36 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { MeshIdentity } from "../daemon/mesh/identity.ts";
 import { DEVICE_A, DEVICE_B, DEVICE_C, DEVICE_D, makeIdentity } from "../daemon/mesh/test-helpers.ts";
+import { signTrustStatement } from "../daemon/mesh/trust.ts";
 import type { DeviceId } from "../shared/api.ts";
 import {
+  MESH_CANDIDATES_MAX,
   MESH_LEASE_RENEW_MS,
   MESH_LEASE_TTL_MS,
   MESH_MAX_DEVICES_PER_ACCOUNT,
+  MESH_TRUST_TOMBSTONES_MAX,
   RELAY_ACCOUNT_DAILY_BYTES,
   RELAY_CHANNEL_ACCEPT_TIMEOUT_MS,
   RELAY_CHANNEL_IDLE_MS,
   RELAY_CONTROL_FRAMES_PER_SECOND,
   RELAY_MAX_CHANNELS_PER_DEVICE,
+  RELAY_MAX_CONTROL_FRAME_BYTES,
   RELAY_MAX_DATA_FRAME_BYTES,
+  RELAY_MAX_UNAUTH_CONTROLS_PER_ACCOUNT,
   RELAY_PENDING_DEVICE_TTL_MS,
 } from "../shared/limits.ts";
 import type { AccountId } from "../shared/mesh.ts";
 import { accountIdOf } from "./auth.ts";
 import { createRelayAccountRoom, type RelayAccountRoom } from "./core.ts";
-import { RELAY_PROTOCOL_VERSION, encodeRelayFrame, newRelayToken, relayControlMessage } from "./protocol.ts";
+import {
+  RELAY_PROTOCOL_VERSION,
+  encodeRelayFrame,
+  newRelayToken,
+  parseRelayClientFrame,
+  parseRelayServerFrame,
+  relayControlMessage,
+  type RelayRevocationEnvelope,
+} from "./protocol.ts";
 import { FakeSocket, LOGIN, RELAY_ORIGIN, connect, memoryStorage, registerRequest, type ConnectedDevice } from "./test-helpers.ts";
 
 let clock = 1_700_000_000_000;
@@ -152,6 +165,34 @@ describe("createRelayAccountRoom：登记与登入", () => {
     await room.sweep();
     expect(idle.last("error")).toEqual({ type: "error", code: "unauthorized" });
     expect(idle.closed).not.toBeNull();
+  });
+
+  it("单账号未认证控制连接满上限时拒收新连接，不挤掉正在握手的旧连接", async () => {
+    const { room } = newRoom();
+    await room.register(LOGIN, registerRequest(ids.a!));
+    const pending: Array<{ socket: FakeSocket; handle: ReturnType<RelayAccountRoom["openControl"]> }> = [];
+    for (let i = 0; i < RELAY_MAX_UNAUTH_CONTROLS_PER_ACCOUNT; i++) {
+      const socket = new FakeSocket();
+      pending.push({ socket, handle: room.openControl(socket) });
+      expect(socket.last("challenge")).toBeDefined();
+      expect(socket.closed).toBeNull();
+    }
+    const overflow = new FakeSocket();
+    room.openControl(overflow);
+    expect(overflow.last("challenge")).toBeUndefined();
+    expect(overflow.last("error")).toEqual({ type: "error", code: "rate_limited" });
+    expect(overflow.closed).not.toBeNull();
+    expect(pending[0]!.socket.closed).toBeNull();
+    const nonce = pending[0]!.socket.last("challenge")!.nonce;
+    await pending[0]!.handle.receive(
+      encodeRelayFrame({
+        type: "hello",
+        device: DEVICE_A,
+        version: RELAY_PROTOCOL_VERSION,
+        signature: ids.a!.sign(relayControlMessage({ relayOrigin: RELAY_ORIGIN, accountId, device: DEVICE_A, nonce })),
+      }),
+    );
+    expect(pending[0]!.socket.last("welcome")).toBeDefined();
   });
 
   it("presence 帧混入单条坏候选时只丢弃坏条，保留合规候选且不踢断控制连接", async () => {
@@ -553,4 +594,96 @@ describe("createRelayAccountRoom：中心租约", () => {
     expect(sockA.last("lease")?.grant).toMatchObject({ holder: DEVICE_A, epoch: 1 });
     expect(hB.attachment().lastClaimAt.feishu).toBe(clock);
   });
+});
+
+describe("createRelayAccountRoom：满额设备与撤销墓碑帧上限不变量", () => {
+  const idOf = (n: number) => `${String(n).padStart(8, "0")}-0000-4000-8000-000000000000` as DeviceId;
+
+  it("常驻 4 台活跃设备并累计移除 MESH_TRUST_TOMBSTONES_MAX 台不同密钥设备后，登记与登入全程正常", async () => {
+    const { room, storage } = newRoom();
+    const a = await makeIdentity(idOf(0));
+    await room.register(LOGIN, registerRequest(a));
+    let ca = await connect(room, a, accountId);
+    for (let i = 1; i < 4; i++) {
+      const x = await makeIdentity(idOf(i));
+      expect(await room.register(LOGIN, registerRequest(x))).not.toHaveProperty("error");
+      advance(200);
+      await ca.send({ type: "device.activate", id: x.deviceId });
+    }
+    for (let k = 0; k < MESH_TRUST_TOMBSTONES_MAX; k++) {
+      advance(1_000);
+      const x = await makeIdentity(idOf(1000 + k));
+      expect(await room.register(LOGIN, registerRequest(x))).not.toHaveProperty("error");
+      await ca.send({ type: "device.activate", id: x.deviceId });
+      const rev = signTrustStatement({ kind: "revoke", device: x.deviceId, fingerprint: x.fingerprint, by: a.deviceId, at: clock + k + 1 }, a);
+      await ca.send({ type: "device.remove", id: x.deviceId, revocation: rev as RelayRevocationEnvelope });
+      if ((k + 1) % 16 === 0) {
+        ca = await connect(room, a, accountId);
+        expect(ca.socket.last("welcome")).toBeDefined();
+      }
+    }
+    expect(storage.record!.revocations).toHaveLength(MESH_TRUST_TOMBSTONES_MAX);
+  }, 60_000);
+
+  it("满 MESH_MAX_DEVICES_PER_ACCOUNT 台活跃设备时 welcome 与广播帧不超限", async () => {
+    const { room } = newRoom();
+    const a = await makeIdentity(idOf(0));
+    await room.register(LOGIN, registerRequest(a, { name: "我的 MacBook Pro 工作机" }));
+    let ca = await connect(room, a, accountId);
+    for (let i = 1; i < MESH_MAX_DEVICES_PER_ACCOUNT; i++) {
+      advance(1_000);
+      const x = await makeIdentity(idOf(i));
+      expect(await room.register(LOGIN, registerRequest(x, { name: `设备 ${i} 家里的 Windows 台式机` }))).not.toHaveProperty("error");
+      await ca.send({ type: "device.activate", id: x.deviceId });
+      ca = await connect(room, a, accountId);
+      expect(ca.socket.last("welcome")?.devices).toHaveLength(i + 1);
+    }
+  }, 60_000);
+
+  it("满额 20 台最大字段设备 + 满额 64 条墓碑在 register、broadcastDevices、welcome 全程不超限，且客户端上行仍限 16 KB", async () => {
+    const { room } = newRoom();
+    const maxName = "汉".repeat(128);
+    const maxPlatform = "x".repeat(32);
+    const maxCandidates = Array.from({ length: MESH_CANDIDATES_MAX }, (_, idx) => ({
+      host: `fd00:1111:2222:3333:4444:5555:6666:${(1000 + idx).toString(16)}%eth_${String(idx).padStart(27, "0")}`,
+      port: 65535,
+    }));
+    const activeList: Array<{ identity: MeshIdentity; conn: ConnectedDevice }> = [];
+    const first = await makeIdentity(idOf(0));
+    await room.register(LOGIN, { ...registerRequest(first, { name: maxName }), device: { ...registerRequest(first, { name: maxName }).device, platform: maxPlatform } });
+    const firstConn = await connect(room, first, accountId);
+    await firstConn.send({ type: "presence", candidates: maxCandidates });
+    activeList.push({ identity: first, conn: firstConn });
+
+    for (let k = 0; k < MESH_TRUST_TOMBSTONES_MAX; k++) {
+      advance(1_000);
+      const temp = await makeIdentity(idOf(2000 + k));
+      expect(await room.register(LOGIN, registerRequest(temp))).not.toHaveProperty("error");
+      await firstConn.send({ type: "device.activate", id: temp.deviceId });
+      const rev = signTrustStatement({ kind: "revoke", device: temp.deviceId, fingerprint: temp.fingerprint, by: first.deviceId, at: Number.MAX_SAFE_INTEGER - k }, first);
+      await firstConn.send({ type: "device.remove", id: temp.deviceId, revocation: rev as RelayRevocationEnvelope });
+    }
+
+    for (let i = 1; i < MESH_MAX_DEVICES_PER_ACCOUNT; i++) {
+      advance(1_000);
+      const dev = await makeIdentity(idOf(i));
+      const baseReq = registerRequest(dev, { name: maxName });
+      expect(await room.register(LOGIN, { ...baseReq, device: { ...baseReq.device, platform: maxPlatform } })).not.toHaveProperty("error");
+      await firstConn.send({ type: "device.activate", id: dev.deviceId });
+      const conn = await connect(room, dev, accountId);
+      await conn.send({ type: "presence", candidates: maxCandidates });
+      activeList.push({ identity: dev, conn });
+    }
+
+    await firstConn.send({ type: "priority.set", priority: activeList.map((item) => item.identity.deviceId) });
+    const reconnected = await connect(room, first, accountId);
+    for (const raw of reconnected.socket.sent) {
+      expect(typeof raw).toBe("string");
+      expect(parseRelayServerFrame(raw as string)).not.toBeNull();
+    }
+    expect(reconnected.socket.last("welcome")?.devices).toHaveLength(MESH_MAX_DEVICES_PER_ACCOUNT);
+
+    const oversizedClient = `{"type":"lease.claim","name":"feishu"}${" ".repeat(RELAY_MAX_CONTROL_FRAME_BYTES)}`;
+    expect(parseRelayClientFrame(oversizedClient)).toBeNull();
+  }, 60_000);
 });

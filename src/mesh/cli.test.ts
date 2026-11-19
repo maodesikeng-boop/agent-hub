@@ -232,4 +232,18 @@ describe("runMeshCli", () => {
       body: { relayUrl: "https://relay.self.test", githubClientId: "Iv1.custom" },
     });
   });
+
+  it("logout 在未连上中继且未送达在线设备时额外打印手动移除提示", async () => {
+    const h = harness(["logout"], {
+      "POST /mesh/logout": () => ({
+        state: "signed_out",
+        lastError: "已在本机退出；因未连上中继且无在线设备，请在其他设备上手动移除本机",
+        remoteRevokePending: true,
+      }),
+    });
+    expect(await h.run()).toBe(0);
+    expect(h.out()).toContain("已退出账号");
+    expect(h.out()).toContain("其他设备");
+    expect(h.out()).toContain("移除");
+  });
 });
