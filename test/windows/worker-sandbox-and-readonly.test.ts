@@ -128,9 +128,20 @@ describe.runIf(process.platform === "win32")("Windows 真机集成：受限令�
     const scope = workerWriteScope({ role: "worker", dataDir, cwd: ownWt, launchDir })!;
     await prepareOsSandboxForLaunch({ dataDir, stateDir, writeScope: scope, readonly: undefined }, "win32");
     const adminPipe = `\\\\.\\pipe\\fusa-test-admin-${process.pid}`;
-    const adminServer = createNetServer((socket) => socket.end());
+    // 改管道 DACL 时 fusa-run 先以客户端身份连上：服务端不主动断开，免得句柄还没改完权限连接就没了
+    const adminSockets = new Set<import("node:net").Socket>();
+    const adminServer = createNetServer((socket) => {
+      adminSockets.add(socket);
+      socket.on("close", () => adminSockets.delete(socket));
+    });
     await new Promise<void>((resolve) => adminServer.listen(adminPipe, () => resolve()));
-    cleanups.push(() => new Promise<void>((resolve) => adminServer.close(() => resolve())));
+    cleanups.push(
+      () =>
+        new Promise<void>((resolve) => {
+          for (const socket of adminSockets) socket.destroy();
+          adminServer.close(() => resolve());
+        }),
+    );
     await denyWin32WorkerPipeAccess(stateDir, adminPipe);
     const probeScript = join(externalProj, "sandbox-check.mjs");
     const reportFile = join(externalProj, "report.json");
