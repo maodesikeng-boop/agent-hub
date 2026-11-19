@@ -14,7 +14,7 @@
 - 其余一律禁读：`state/`（`ui-token`、`*-secrets.json`、`mesh/`、`push-*.json`、`hub.sqlite*`、`peers*.json`、`pm-memory/`、`personas/`、`router-home/`、`logs/`、别的会话的启动目录……）、`backups/`、`pm-home/`、`sent-files/`，以及以后新加的、历史遗留的顶层项（默认禁读，新顶层项要放行得改 `DATA_DIR_READABLE_ENTRIES`）。
 - 各层怎么落实：
   - 包整个进程的 OS 沙箱按边界精确执行：macOS `seatbeltProfile` / `readonlySeatbeltProfile` 先 `(deny file-read* (subpath 数据目录))`、放行元数据（往上找配置的工具 stat 不会撞上 EPERM）、再放开放行项，`network-outbound` 只放行 `hub.sock`；Linux `bwrapArgs` / `readonlyBwrapArgs` 把数据目录换成 0700 空 tmpfs，放行项只读挂回、`hub.sock` 绑回，最后 `--remount-ro`；Windows 见下文。
-  - codex 只读不包外层（它自己的 `readOnly` 沙箱不能嵌套），权限档写同一套边界：整个数据目录 `none`，放行项和 `hub.sock` 再写 `read`（codex 按更具体的路径为准），启动后才建的文件也落在 `none` 的子树里；codex 进程自己读启动文件和 `~/.codex/auth.json` 不受影响。
+  - codex 只读不包外层（它自己的 `readOnly` 沙箱不能嵌套），权限档写同一套边界：整个数据目录 `none`，放行项和 `hub.sock` 再写 `read`（codex 按更具体的路径为准），启动后才建的文件也落在 `none` 的子树里；codex 进程自己读启动文件和 `~/.codex/auth.json` 不受影响。权限档由 config 的 `default_permissions` 选中，`thread/start`、`thread/resume` 不传 `sandbox`，`turn/start` 不传 `sandboxPolicy`：codex-cli 0.169.0 实测带了这两个参数就换成内置 read-only，`activePermissionProfile` 为 null，读边界失效。权限档继承 `:read-only` 后网络默认关，`network.enabled = true` 保留原来 `readOnly` 的联网（连 `hub.sock`）。
   - 表达不了“禁读区里再放行”的工具层用同一个边界展开的禁读清单（`dataDirDenyList`，`state/` 整个禁）：claude 只读的 Read 规则和自带沙箱 `denyRead`、agy 只读规则的 `read_file`；Windows MXC 的 `deniedPaths` 用精确展开（放行启动目录）。清单除了列目录看到的，还按 `paths.ts` 的布局补上启动时还没有的已知项（`provider-secrets.json`、`backups/`、`pm-home/`、`run/admin.sock`、`hub.sqlite-wal` 等），布局之外、启动后新冒出来的名字要等下次启动；MXC 只收已存在的路径。列目录出错（目录没了、是个文件除外）一律拒绝启动。
   - 分享（`daemon/sent-files.ts` 的 `isShareable`）在数据目录里也不超出这个边界。
 - Worker 自己的准备命令日志（`state/logs/setup/worker-<编号>.log`）也在禁读区里；准备命令失败时，任务说明里已经附了命令和输出末尾。
@@ -28,7 +28,7 @@ macOS 沙箱不能嵌套：已经在沙箱里的进程再起 `sandbox-exec` 报 
 | 厂商 | 自带的沙箱 | 怎么关 |
 |---|---|---|
 | claude | `sandbox.enabled`（用户、项目设置都能开） | Worker 的 `--settings` 写 `sandbox.enabled: false`（`policy.ts` 的 `buildSessionSettings`），`--settings` 压过用户和项目设置。实测：项目设置开着、不关时 Bash 全部 exit 71；关了照常（smoke S32claude） |
-| codex | `workspace-write`、`read-only`（每条命令起 `sandbox-exec`） | turn/start 的 `sandboxPolicy` 用 `externalSandbox`（codex 0.162 起有：codex 不再自己起沙箱，由外面那层管）。只读 Worker 例外：不包进程，照用 codex 自己的 `readOnly`。实测：apply_patch 改名到 `state/`、`ls …; touch state/…`、`cd ~ && cd .agent-hub/state && touch …` 都写不进去；worktree 里 `git commit`（写主仓库的 `.git`）、`pnpm install`（写 pnpm 的 store、上网）照常（smoke S31codex、S32codex） |
+| codex | `workspace-write`、`read-only`（每条命令起 `sandbox-exec`） | turn/start 的 `sandboxPolicy` 用 `externalSandbox`（codex 0.162 起有：codex 不再自己起沙箱，由外面那层管）。只读 Worker 例外：不包进程，用 codex 自己的沙箱执行 config 里的只读权限档（见上，不传 `sandboxPolicy`）。实测：apply_patch 改名到 `state/`、`ls …; touch state/…`、`cd ~ && cd .agent-hub/state && touch …` 都写不进去；worktree 里 `git commit`（写主仓库的 `.git`）、`pnpm install`（写 pnpm 的 store、上网）照常（smoke S31codex、S32codex） |
 | agy | 终端沙箱（`--sandbox`、用户设置里 `enableTerminalSandbox: true`） | 包了的进程加 `--settings {"enableTerminalSandbox":false}`（`write-scope.ts` 的 `AGY_SANDBOX_OFF_ARGS`）。实测：开着时在 sandbox-exec 里命令 exit 71 |
 
 审批（codex 的 `decideCommandApproval`、`decideFileChangeApproval`）照样按范围判断，在 macOS 上只是多一道，漏了也写不进数据目录。
