@@ -1,5 +1,5 @@
 // 飞书的绑定与投影（迁移 0034：feishu_app、feishu_chats、feishu_posts、feishu_avatars，0035 给 feishu_posts 加附件，0037 给 feishu_avatars 记图片内容哈希，
-// 0039 群头像改按形象认；docs/feishu-design.md）。
+// 0039 群头像改按形象认，0040 给 feishu_posts 加总助设置卡；docs/feishu-design.md）。
 // 不变量：
 // - App Secret 不在这里（secrets.ts）；
 // - feishu_posts 是“账本里的这样东西发到了飞书的哪条消息、哪张卡片实体”，同一个 ref 只有一行，重发、定稿、改定案、补发都先查它；
@@ -134,7 +134,7 @@ export interface FeishuStore {
   streamingPosts(chatId: FeishuChatId, limit: number): FeishuPostRecord[];
   /** 某个群里卡已发出、还没传完的附件（停机、重启后接着补传），按记下的先后最多 limit 个。 */
   uploadingPosts(chatId: FeishuChatId, limit: number): FeishuPostRecord[];
-  /** 后置：删掉 state 为 final / card_settled 且早于 before 的行，返回删了几行。等拍板的不删。 */
+  /** 后置：删掉 state 为 final / card_settled 且早于 before 的普通行并返回删了几行；等拍板的不删，chat_policy / router_settings 保留置顶消息编号并将过期 card_id 置空。 */
   prunePosts(before: number): number;
 
   /** 后置：这个形象记下的 image_key，只有记下的图片内容哈希和 hash 相同才返回；没传过、图片换了都是 null。 */
@@ -368,8 +368,17 @@ export function createFeishuStore(db: Db): FeishuStore {
       return db.all<PostRow>("SELECT * FROM feishu_posts WHERE chat_id = ? AND state = 'uploading' ORDER BY rowid LIMIT ?", chatId, limit).map(toPost);
     },
     prunePosts(before) {
-      db.run("DELETE FROM feishu_decisions WHERE decided_at < ?", before);
-      return db.run("DELETE FROM feishu_posts WHERE state IN ('final', 'card_settled') AND updated_at < ?", before).changes;
+      return db.transaction(() => {
+        db.run("DELETE FROM feishu_decisions WHERE decided_at < ?", before);
+        db.run(
+          "UPDATE feishu_posts SET card_id = NULL WHERE ref_kind IN ('chat_policy', 'router_settings') AND card_id IS NOT NULL AND updated_at < ?",
+          before,
+        );
+        return db.run(
+          "DELETE FROM feishu_posts WHERE state IN ('final', 'card_settled') AND ref_kind NOT IN ('chat_policy', 'router_settings') AND updated_at < ?",
+          before,
+        ).changes;
+      });
     },
 
     avatarKey(look, hash) {

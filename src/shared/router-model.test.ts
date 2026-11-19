@@ -1,7 +1,13 @@
 // 网页顶栏预览用的两个导出（resolveRouterModel 本身的用例在 src/daemon/router/model-resolver.test.ts）。
 import { describe, expect, it } from "vitest";
 import { VENDOR_LIST } from "../vendors/registry.ts";
-import { resolveRouterModel, resolveRouterModelPreview, resolveVendorRouterPreset } from "./router-model.ts";
+import {
+  resolveExplicitRouterChoice,
+  resolveRouterEffortForModel,
+  resolveRouterModel,
+  resolveRouterModelPreview,
+  resolveVendorRouterPreset,
+} from "./router-model.ts";
 import { bundledModelCatalog, vendorSpec, type AgentVendor, type ModelCatalog, type VendorAvailability } from "./vendors.ts";
 
 function catalogsWith(availability: (vendor: AgentVendor) => VendorAvailability, source: ModelCatalog["source"] = "vendor"): ModelCatalog[] {
@@ -65,5 +71,32 @@ describe("resolveRouterModelPreview（网页预览：服务端状态还没回来
   it("全部没装或没登录：预览也是不可用", () => {
     const catalogs = catalogsWith((vendor) => (vendor === first.id ? "signed_out" : "not_installed"));
     expect(resolveRouterModelPreview(null, catalogs)).toMatchObject({ ok: false, code: "needs_sign_in" });
+  });
+});
+
+describe("resolveExplicitRouterChoice 与 resolveRouterEffortForModel（网页与飞书共用的总助选型纯函数）", () => {
+  it("未指定模型时取该厂商快模型预设，已指定模型时拆分并校验档位", () => {
+    expect(resolveExplicitRouterChoice("codex", { vendor: "codex", model: null, effort: null })).toEqual({
+      model: "gpt-6-luna",
+      effort: "low",
+    });
+    expect(resolveExplicitRouterChoice("agy", { vendor: "agy", model: "gemini-4-argon-high", effort: null })).toEqual({
+      model: "gemini-4-argon",
+      effort: "high",
+    });
+  });
+
+  it("换模型时保留兼容档位、不兼容回退首档、切回预设模型恢复预设档位、无档位模型清空为 null", () => {
+    expect(resolveRouterEffortForModel("codex", "gpt-6.1-sol", "high")).toBe("high");
+    expect(resolveRouterEffortForModel("codex", "gpt-5.6-luna", "ultra")).toBe("low");
+    expect(resolveRouterEffortForModel("claude", vendorSpec("claude").models.routerDefault.model, null)).toBe(
+      vendorSpec("claude").models.routerDefault.effort,
+    );
+    const emptyEffortCatalog: ModelCatalog = {
+      ...bundledModelCatalog("cursor"),
+      efforts: [],
+      models: [{ id: "auto", label: "Auto", description: null, efforts: [] }],
+    };
+    expect(resolveRouterEffortForModel("cursor", "auto", "high", emptyEffortCatalog)).toBeNull();
   });
 });

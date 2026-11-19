@@ -1,7 +1,12 @@
 import type { UpdateRouterSettingsRequest } from "../../shared/api.ts";
 import { FEISHU_SELECT_OPTIONS_MAX } from "../../shared/limits.ts";
 import type { RouterSettings } from "../../shared/router.ts";
-import { resolveRouterModelPreview, resolveVendorRouterPreset } from "../../shared/router-model.ts";
+import {
+  resolveExplicitRouterChoice,
+  resolveRouterEffortForModel,
+  resolveRouterModelPreview,
+  resolveVendorRouterPreset,
+} from "../../shared/router-model.ts";
 import {
   bundledModelCatalog,
   checkEffort,
@@ -16,7 +21,6 @@ import {
   modelShortLabel,
   splitModelEffort,
   vendorLabel,
-  vendorSpec,
   type AgentSetting,
   type AgentVendor,
   type ModelCatalog,
@@ -87,27 +91,6 @@ function capOptions(options: FeishuSelectOption[], selectedValue: string): Feish
   return chosen === undefined ? head : [...head.slice(0, FEISHU_SELECT_OPTIONS_MAX - 1), chosen];
 }
 
-function resolveExplicitRouterChoice(
-  vendor: AgentVendor,
-  settings: RouterSettings,
-  catalog: ModelCatalog,
-): { model: string; effort: string | null } {
-  const rawModel = settings.model?.trim() || null;
-  const rawEffort = settings.effort?.trim() || null;
-  if (rawModel !== null) {
-    const split = splitModelEffort(vendor, rawModel, rawEffort, catalog);
-    const model = split.model ?? rawModel;
-    const supported = effortsFor(catalog, model);
-    const effort =
-      split.effort !== null && (supported.length === 0 || supported.includes(split.effort))
-        ? split.effort
-        : (supported[0] ?? null);
-    return { model, effort };
-  }
-  const preset = resolveVendorRouterPreset(vendor, catalog);
-  return { model: preset.model, effort: rawEffort ?? preset.effort };
-}
-
 export function buildPmModelSection(agent: FeishuPmModelView, catalogs: readonly ModelCatalog[]): FeishuModelSectionView {
   const catalog = catalogForVendor(catalogs, agent.vendor);
   const split = splitModelEffort(agent.vendor, agent.model, agent.effort, catalog);
@@ -165,18 +148,23 @@ export function buildPmModelSection(agent: FeishuPmModelView, catalogs: readonly
 }
 
 export function resolvePmModelEdit(
-  current: AgentSetting,
+  current: FeishuPmModelView,
   catalogs: readonly ModelCatalog[],
   field: FeishuModelField,
   option: string,
 ): FeishuPmModelEditResult {
   if (field === "vendor") {
+    if (current.switchingToVendor != null) {
+      return { ok: false, toast: `正在切到 ${vendorLabel(current.switchingToVendor)}，等当前这一轮结束再改` };
+    }
     if (!isAgentVendor(option)) return { ok: false, toast: "不认识这家厂商" };
     const target = catalogForVendor(catalogs, option);
     if (option !== current.vendor && !isSelectable(target.availability)) {
       return { ok: false, toast: unavailableVendorToast(target) };
     }
-    if (option === current.vendor) return { ok: true, next: current };
+    if (option === current.vendor) {
+      return { ok: true, next: { vendor: current.vendor, model: current.model, effort: current.effort } };
+    }
     return { ok: true, next: { vendor: option, model: null, effort: null } };
   }
   const catalog = catalogForVendor(catalogs, current.vendor);
@@ -279,17 +267,7 @@ export function resolveRouterModelEdit(
   if (field === "model") {
     const problem = checkModel(settings.vendor, option);
     if (problem !== null) return { ok: false, toast: problem };
-    const nextSupported = effortsFor(selectedCatalog, option);
-    const routerPreset = vendorSpec(settings.vendor).models.routerDefault;
-    let nextEffort: string | null = choice.effort;
-    if (nextSupported.length === 0) {
-      nextEffort = null;
-    } else if (nextEffort === null || !nextSupported.includes(nextEffort)) {
-      nextEffort =
-        option === routerPreset.model && nextSupported.includes(routerPreset.effort)
-          ? routerPreset.effort
-          : (nextSupported[0] ?? null);
-    }
+    const nextEffort = resolveRouterEffortForModel(settings.vendor, option, choice.effort, selectedCatalog);
     return { ok: true, next: { vendor: settings.vendor, model: option, effort: nextEffort } };
   }
   const problem = checkEffort(settings.vendor, option, selectedCatalog);
