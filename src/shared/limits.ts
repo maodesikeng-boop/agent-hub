@@ -408,6 +408,8 @@ export const MAX_CACHED_STATEMENTS = 1_000;
 export const STDERR_TAIL_CHARS = 2_000;
 /** agent 接口：一个请求从连上到收完的上限，半截请求挂着不放，到点就断。 */
 export const HUB_REQUEST_TIMEOUT_MS = 15_000;
+/** agent 接口：close() 取消在途准备（探 git、查 PR、存附件）后最多再等多久让它们落定；卡在 open 上取消不了的读取不会拖住关机。 */
+export const HUB_SHUTDOWN_PREPARE_GRACE_MS = 1_000;
 /** agent 接口：多久查一次有没有超时的请求（Node 的 connectionsCheckingInterval，默认 30 秒，太粗）。 */
 export const HUB_TIMEOUT_CHECK_MS = 1_000;
 /** agent 接口：启动时试连旧 socket 的上限，连得上说明有活实例。 */

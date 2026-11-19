@@ -75,13 +75,13 @@ type SentFileIoSlots = ReturnType<typeof createSentFileIoSlots>;
 
 /**
  * 原文件读取的在途槽位：从发起 open 到句柄关掉才算落定。signal 取消只是不再等，卡在 open 上的读取还占着槽位。
- * 拿不到槽位（总数到 MAX_SENT_FILE_IO_INFLIGHT，或这个会话还有取消了没落定的）时不发起新的 open：取消的旧读取没落定，同一会话不再累积新的。
+ * 拿不到槽位（已取消、总数到 MAX_SENT_FILE_IO_INFLIGHT，或这个会话还有取消了没落定的）时不发起新的 open：取消的旧读取没落定，同一会话不再累积新的。
  */
 export function createSentFileIoSlots(max = MAX_SENT_FILE_IO_INFLIGHT) {
   const inflight = new Set<{ owner: SessionId; signal: AbortSignal | undefined }>();
   return {
     acquire(owner: SessionId, signal: AbortSignal | undefined): (() => void) | null {
-      if (inflight.size >= max) return null;
+      if (signal?.aborted === true || inflight.size >= max) return null;
       for (const slot of inflight) if (slot.owner === owner && slot.signal?.aborted === true) return null;
       const slot = { owner, signal };
       inflight.add(slot);
@@ -254,6 +254,7 @@ async function shareOne(
   signal: AbortSignal | undefined,
 ): Promise<Outcome> {
   const real = await realOrNullAsync(path);
+  if (signal?.aborted) return reject("unreadable");
   if (real === null) return local.kind !== "relative" && isShareable(looseRealpath(path), scope, sensitive) ? reject("missing") : { status: "skip" };
   let before: Stats;
   try {
@@ -261,6 +262,7 @@ async function shareOne(
   } catch {
     return { status: "skip" };
   }
+  if (signal?.aborted) return reject("unreadable");
   if (!isShareable(real, scope, sensitive)) return before.isFile() ? reject("not_allowed") : { status: "skip" };
   if (!before.isFile()) return reject("not_file", before);
   const release = scope.io === undefined ? () => {} : scope.io.slots.acquire(scope.io.owner, signal);
@@ -282,6 +284,7 @@ async function copyOpened(
   scope: ShareScope,
   signal: AbortSignal | undefined,
 ): Promise<Outcome> {
+  if (signal?.aborted) return reject("unreadable", before);
   let handle: FileHandle;
   try {
     handle = await openRegularFileNoFollow(real, { nonBlock: true });

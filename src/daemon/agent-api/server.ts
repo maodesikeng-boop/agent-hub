@@ -55,7 +55,7 @@ import type { WorkerPr, WorkerPrProbeResult } from "../../shared/hub.ts";
 import type { SelfReloadStatus } from "../../shared/api.ts";
 import type { HubCallContext, WorkspaceProbe } from "../../shared/ledger.ts";
 import type { HubFileArg } from "../../shared/deliverables.ts";
-import { HUB_FILE_ARGS_MAX } from "../../shared/limits.ts";
+import { HUB_FILE_ARGS_MAX, HUB_SHUTDOWN_PREPARE_GRACE_MS } from "../../shared/limits.ts";
 import { isAgentVendor, type AgentVendor, type ModelCatalog } from "../../shared/vendors.ts";
 import { vendorTranscriptPath } from "../driver/transcript.ts";
 import type { TranscriptRef } from "../driver/transcript.ts";
@@ -534,6 +534,7 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
   /**
    * hubCall 之前要异步准备的东西：worker.start（没带 noWorktree、有项目）要探 git，worker.show 要查 PR，models 要查模型目录，
    * ask、router.report 带 --file 要先存副本（大文件分块拷，不进账本的事务）。
+   * 每次 await 恢复后、碰账本之前先看 signal：关闭了就不再调账本（守护进程这时已经关库），返回的空上下文调用方不会用。
    */
   const prepare = async (sessionId: SessionId, command: HubCommand, body: Record<string, unknown>, signal: AbortSignal): Promise<HubCallContext> => {
     const role = ledger.sessionRole(sessionId);
@@ -556,6 +557,7 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
     if (command === "worker.show") {
       const target = ledger.workerPrTarget(sessionId, body.workerId as number);
       const pr = target === null ? null : await probePr(target.cwd, target.branch);
+      if (signal.aborted) return {};
       const ref = ledger.workerTranscriptTarget(sessionId, body.workerId as number);
       const transcript = ref === null ? null : findTranscript(ref);
       return { ...(pr === null ? {} : { pr }), transcript };
@@ -586,6 +588,7 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
       const context: HubCallContext = {};
       const folder = ledger.workerStartFolder(sessionId);
       if (folder !== null) context.workspace = await probeWorkspace(folder);
+      if (signal.aborted) return context;
       if (opts.refreshVendor) {
         const refresh = opts.refreshVendor;
         await Promise.all((ledger.graphAutoDispatchVendors?.(sessionId, command, body) ?? []).map((v) => refresh(v)));
@@ -596,7 +599,7 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
     const context: HubCallContext = {};
     // 带 --vendor：这家在这台设备上能不能用（不带就是项目经理自己那家，正在用着，不查）
     if (opts.refreshVendor && isAgentVendor(body.vendor)) await opts.refreshVendor(body.vendor);
-    if (body.noWorktree === true) return context;
+    if (signal.aborted || body.noWorktree === true) return context;
     const folder = ledger.workerStartFolder(sessionId);
     if (folder !== null) context.workspace = await probeWorkspace(folder);
     return context;
@@ -624,13 +627,33 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
   // 守护进程在 close() 之后关库，所以处理函数在 await 之后、调账本之前都要看一眼 closing，关了就回 503。
   const closing = new AbortController();
   const handlers = new Set<Promise<unknown>>();
+  const preparing = new Set<Promise<unknown>>();
   app.addHook("preClose", (done) => {
     closing.abort();
     done();
   });
   app.addHook("onClose", async () => {
     while (handlers.size > 0) await Promise.all(handlers);
+    // 准备（探 git、查 PR、存附件）收到取消后自己收尾：等它们落定，但卡在 open 上取消不了的读取最多等 HUB_SHUTDOWN_PREPARE_GRACE_MS
+    if (preparing.size === 0) return;
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([
+      Promise.all(preparing),
+      new Promise<void>((resolve) => (timer = setTimeout(resolve, HUB_SHUTDOWN_PREPARE_GRACE_MS))),
+    ]);
+    clearTimeout(timer);
   });
+  /** 跑准备并记进 preparing：关闭时外层不等它（null），onClose 等它落定。 */
+  const runPrepare = (sessionId: SessionId, command: HubCommand, body: Record<string, unknown>): Promise<HubCallContext | null> => {
+    const work = prepare(sessionId, command, body, closing.signal);
+    const settled = work.then(
+      () => undefined,
+      () => undefined,
+    );
+    preparing.add(settled);
+    void settled.then(() => preparing.delete(settled));
+    return unlessAborted(work, closing.signal, () => null);
+  };
   const shuttingDown = (reply: FastifyReply) => fail(reply, "shutting_down", API_ERRORS.shutting_down.text);
   /** 路由处理函数套一层：关了的不进；记进 handlers 给 onClose 等；出错时接口已经关了的回 503（不走错误处理里的记健康状态）。 */
   const tracked =
@@ -712,8 +735,8 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
       const stillAuthorized = () => tokens.resolve(auth.token) === auth.sessionId;
       // 收请求体期间令牌可能已经作废（会话结束了）：先认一次再准备（存附件副本、探 git），作废的请求不在磁盘上留副本
       if (!stillAuthorized()) return fail(reply, "unauthorized", UNAUTHORIZED_MESSAGE);
-      // 关闭时不等准备做完（附件卡在 open 上也不等），null 表示放弃了
-      const context = await unlessAborted(prepare(auth.sessionId, command, body, closing.signal), closing.signal, () => null);
+      // 关闭时外层不等准备做完（附件卡在 open 上也不等），null 表示放弃了
+      const context = await runPrepare(auth.sessionId, command, body);
       if (context === null || closing.signal.aborted) return shuttingDown(reply);
       // 准备期间（拷大文件、探 git）也可能作废：调账本前再认一次。这时已存的副本按内容去重，没被引用的由定期清理（file-cleanup.ts）删
       if (!stillAuthorized()) return fail(reply, "unauthorized", UNAUTHORIZED_MESSAGE);
