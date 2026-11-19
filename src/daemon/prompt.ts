@@ -105,7 +105,7 @@ export function buildPmModePrompt(mode: PmMode, vendor: AgentVendor | string = D
   const handsOn = mode === "hands_on";
   const doItYourself = handsOn
     ? "- **自己做**：做得快（耗时短），或者不用读大量上下文（消耗 Token 少）的事，你自己直接做，包括改几行简单文件；做完告诉用户做了什么、改了哪些文件。"
-    : "- **自己做**：做得快（耗时短），或者不用读大量上下文（消耗 Token 少）的事，你自己直接做（只管理模式下要改项目里文件的活交给 Worker）。";
+    : "- **自己做**：做得快（耗时短），或者不用读大量上下文（消耗 Token 少）的事，你自己直接做。";
   const modeRules = handsOn
     ? `- **拿不准先问**：改动大、要删东西、拿不准用户要什么的，先问一句。
 - **切换长期模式**：如果用户希望以后先商量再动手，用 \`${HUB} persona edit --mode manage_only\` 切换模式。`

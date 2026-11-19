@@ -21,7 +21,7 @@ export function claudePluginDirOf(skillsDir: string): string {
 }
 
 /** 插件清单：只要名字（技能前缀）。 */
-const PLUGIN_MANIFEST = `${JSON.stringify({ name: PRODUCT_PLUGIN_NAME, description: "Fusa 给项目经理会话挂的产品技能（任务图手册）" }, null, 2)}\n`;
+const PLUGIN_MANIFEST = `${JSON.stringify({ name: PRODUCT_PLUGIN_NAME, description: "Bellwood 给项目经理会话挂的产品技能（任务图手册）" }, null, 2)}\n`;
 
 /**
  * 起进程前调：写好插件清单和指向技能目录的软链（都没变就不动），返回 --plugin-dir 的目录。

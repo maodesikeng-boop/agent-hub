@@ -6,8 +6,8 @@
 
 用户定的做法：
 
-- 技能被加载的那一刻由 Fusa 记下来。用户手打调用的、模型自己加载的都记。
-- 换代时 Fusa 把记下的技能正文直接放进新会话的开场说明，不靠模型自觉去重读，也不让模型判断哪些该重读。
+- 技能被加载的那一刻由 Bellwood 记下来。用户手打调用的、模型自己加载的都记。
+- 换代时 Bellwood 把记下的技能正文直接放进新会话的开场说明，不靠模型自觉去重读，也不让模型判断哪些该重读。
 - 照 Claude Code 2.1.325 的做法：用过就带，按最近加载排序，单个和合计都有上限，超了不带。
 
 不做：不改交接阈值 400K，不改切换厂商的回放上限，不做 Worker 换人接手的技能继承，不改写已有账本数据。
@@ -25,7 +25,7 @@
 
 ### 切换厂商带不带技能正文
 
-不带。`buildVendorSwitchPreamble` 回放本代的用户原话、项目经理文字、Worker 汇报和部分系统通知（`formatGenerationMessage`，`vendor-switch-context.ts:97-126`），取消息时排除了 `kind = 'tool'`（`handover.ts:471`）。模型用工具读进来的 `SKILL.md` 正文是工具结果，不在 `messages` 里。用户手打 `/poteto-mode` 时，正文由厂商命令行展开，Fusa 的 `messages` 里只有 `/poteto-mode 这个skill更新了` 这行原文（账本 `messages.id = 61781`）。所以切换厂商后，新厂商只看到“用户调用过 /poteto-mode”，看不到正文。（实测）
+不带。`buildVendorSwitchPreamble` 回放本代的用户原话、项目经理文字、Worker 汇报和部分系统通知（`formatGenerationMessage`，`vendor-switch-context.ts:97-126`），取消息时排除了 `kind = 'tool'`（`handover.ts:471`）。模型用工具读进来的 `SKILL.md` 正文是工具结果，不在 `messages` 里。用户手打 `/poteto-mode` 时，正文由厂商命令行展开，Bellwood 的 `messages` 里只有 `/poteto-mode 这个skill更新了` 这行原文（账本 `messages.id = 61781`）。所以切换厂商后，新厂商只看到“用户调用过 /poteto-mode”，看不到正文。（实测）
 
 结论：切换厂商和普通换代一样要带，走同一段代码。
 
@@ -34,17 +34,17 @@
 - 总助（`role = 'assistant'`）每条指令起一个临时会话，跑完一轮就结束（`src/daemon/router/prompt.ts:131` 的“跑完即焚”、`src/daemon/ledger/router.ts:1263-1280`）。自动换代只认 `role === "pm"`（`handover.ts:338`）。总助没有自动换代，不在范围内。（实测）
 - Worker 的会话不自动换代（`limits.ts:107` 的注释）。（实测）
 
-### 各家加载技能时 Fusa 收到什么
+### 各家加载技能时 Bellwood 收到什么
 
-Fusa 已经把六家的工具调用统一成 `agent.tool` 事件（`name` 是厂商原工具名，`input` 是完整参数），工具跑完是 `agent.tool_result`。各家工具名到通用动作（`read`、`command`、`skill`……）的翻译在各家 `spec.ts` 的 `tools.actions` 里，`src/shared/step-labels.ts` 合成一张表。
+Bellwood 已经把六家的工具调用统一成 `agent.tool` 事件（`name` 是厂商原工具名，`input` 是完整参数），工具跑完是 `agent.tool_result`。各家工具名到通用动作（`read`、`command`、`skill`……）的翻译在各家 `spec.ts` 的 `tools.actions` 里，`src/shared/step-labels.ts` 合成一张表。
 
-用户手打的命令都经过 Fusa：网页发来原文，驱动层把命令单独写进会话（`src/daemon/driver/base-driver.ts:303`、`:604`），codex 在发出前把 `/名字` 改成 `$名字`（`src/vendors/codex/composer.ts`）。
+用户手打的命令都经过 Bellwood：网页发来原文，驱动层把命令单独写进会话（`src/daemon/driver/base-driver.ts:303`、`:604`），codex 在发出前把 `/名字` 改成 `$名字`（`src/vendors/codex/composer.ts`）。
 
 | 厂商 | 用户手打调用 | 模型用原生技能工具 | 模型读文件工具 | 模型用 shell 读 |
 | --- | --- | --- | --- | --- |
 | claude | `/poteto-mode 这个skill更新了`（`messages.id = 61781`，实测） | `Skill`，`input: {"skill":"frontend-rules"}`，返回只有 `Launching skill: frontend-rules`（实测）；插件技能写成 `fusa:fusa-task-graph` | `Read` | `Bash` |
 | agy | `/名字`（推断，读 `src/vendors/agy/composer.ts`） | 没有 | `read_file`，路径在 `Path` | `run_command`，命令在 `CommandLine` |
-| codex | Fusa 里是 `/名字`，发出前改成 `$名字`（读代码，实测） | 没有 | 没有 | `commandExecution` |
+| codex | Bellwood 里是 `/名字`，发出前改成 `$名字`（读代码，实测） | 没有 | 没有 | `commandExecution` |
 | pi | `/skill:名字`（`src/vendors/pi/composer.ts:2`，推断） | 没有 | `read` | `bash` |
 | deepseek | `/名字`（推断） | `skill`，参数 `{"name": "<技能名>"}`（读 `@deepseek-ai/dsh-tool-skill` 源码） | `read` | `bash` |
 | cursor | `/名字`（推断） | 没有 | `Read`、`read_file` | `Shell`、`run_terminal_cmd` |

@@ -9,7 +9,7 @@
 
 ## 1. 从用户视角看完整体验
 
-核心变化只有一句话：**用户从此不需要为了装一家 Agent CLI 或登录账号去打开系统终端、复制粘贴命令了——点一下 `Install` 自动装好，再点一下 `Sign in…` 直接在 Fusa 里完成登录，装完登完马上能派活。**
+核心变化只有一句话：**用户从此不需要为了装一家 Agent CLI 或登录账号去打开系统终端、复制粘贴命令了——点一下 `Install` 自动装好，再点一下 `Sign in…` 直接在 Bellwood 里完成登录，装完登完马上能派活。**
 
 ### 1.1 入口在哪、`Vendor sync` 归到哪
 
@@ -65,10 +65,10 @@
 
 ---
 
-### 1.2 场景一：新电脑第一次打开 Fusa（0 家可用自动引导，告别静态复制页）
+### 1.2 场景一：新电脑第一次打开 Bellwood（0 家可用自动引导，告别静态复制页）
 
-1. **双击打开 Fusa（Mac 或 Windows 原生桌面版）**：
-   - 后台守护进程在 1～2 秒内拉起，**直接进入 Fusa 主界面**（去掉原来 Windows 首次启动挡在门外、只能看灰代码块点 `Open terminal` 的本地静态拦截页）。
+1. **双击打开 Bellwood（Mac 或 Windows 原生桌面版）**：
+   - 后台守护进程在 1～2 秒内拉起，**直接进入 Bellwood 主界面**（去掉原来 Windows 首次启动挡在门外、只能看灰代码块点 `Open terminal` 的本地静态拦截页）。
 2. **自动弹出 `Settings → Providers`**：
    - 主界面检测到本机目前 **0 家厂商就绪**，自动弹出 `Settings → Providers`。
    - 如果是一台刚装系统的全新 Windows 电脑连 `Git` 都没装，`Providers` 列表上方会多出一个临时的 `Environment` 框，一行 `Git` + 右侧 `[ Install ]` 按钮（一键调用系统 `winget` 免交互装 Git；装好后该框自动消失，平时对已装 Git 的用户完全隐形，也不阻断纯聊天使用）。
@@ -83,8 +83,8 @@
 
 1. **点一下 `Install`（装 Codex）**：
    - `Codex` 行右侧按钮变为转圈的 `Installing…`（左边附一个轻量 `Cancel` 文字按钮可随时取消）。
-   - **没有满屏黑底滚动日志**：行下只用一行简短动态文字柔和反馈阶段（`Installing package…`），Windows 下自动使用 Fusa 安装包内置的 Node 24 与随包 `npm` 免管理员装入用户目录（不弹 UAC 管理员黑框、不报缺少 Node）。
-   - 十几秒装完后，后台**自动刷新可执行文件路径与模型目录**（无需重启 Fusa），这一行当场变成琥珀点 `Not signed in`，右侧按钮变成 **`Sign in…`**。
+   - **没有满屏黑底滚动日志**：行下只用一行简短动态文字柔和反馈阶段（`Installing package…`），Windows 下自动使用 Bellwood 安装包内置的 Node 24 与随包 `npm` 免管理员装入用户目录（不弹 UAC 管理员黑框、不报缺少 Node）。
+   - 十几秒装完后，后台**自动刷新可执行文件路径与模型目录**（无需重启 Bellwood），这一行当场变成琥珀点 `Not signed in`，右侧按钮变成 **`Sign in…`**。
    - *万一网络断了安装失败*：行下显示一句红色人话原因（如 `Download failed: network timeout`），右侧按钮变回 `Retry` 并附一个 `Show log` 开关——只有点 `Show log` 才会展开一个浅灰底代码块（最多最近 80 行脱敏输出）供排查。
 2. **点一下 `Sign in…`（登 Codex 账号）**：
    - 叠出一个紧凑干净的窄弹窗 **`Sign in to Codex`**（`max-w-110`）：
@@ -92,7 +92,7 @@
      - 底部主按钮 **`Continue in browser`**。
    - 用户点 **`Continue in browser`**：
      - 系统默认浏览器自动弹开 ChatGPT 授权页，弹窗主按钮变为等待态 `Waiting for browser…`（同时给一个 `Copy link` 以备用户想换别的浏览器窗口打开）；
-     - 用户在浏览器里点“允许”，浏览器自动回调本机，**用户切回 Fusa 时连一个字都不用粘，窄弹窗已自动关闭，`Codex` 行已亮起绿点 `Signed in`！**
+     - 用户在浏览器里点“允许”，浏览器自动回调本机，**用户切回 Bellwood 时连一个字都不用粘，窄弹窗已自动关闭，`Codex` 行已亮起绿点 `Signed in`！**
 3. **点一下 `Sign in…`（填 DeepSeek API Key）**：
    - 点 `DeepSeek` 行的 `Sign in…` → 弹窗默认聚焦单行密码框（占位 `sk-...`）→ 粘贴 API Key 点 **`Save`** → 后台以 `0600` 权限写入 `~/.dsh/.credentials.yaml`，弹窗秒关，`DeepSeek` 行亮起绿点 `API key configured`，立即可用。
 
@@ -134,7 +134,7 @@
 
 ### 1.5 场景四：手机端（iPhone PWA）操作体验
 
-1. 打开手机主屏上的 Fusa → 点左下设置图标进入 `#/settings` → 点 `Providers` 分组下的 **`Providers`** 进入 `#/settings/providers`。
+1. 打开手机主屏上的 Bellwood → 点左下设置图标进入 `#/settings` → 点 `Providers` 分组下的 **`Providers`** 进入 `#/settings/providers`。
 2. 顶部（若多台电脑联机）可切换 `This computer` / `Tokyo`，下方是一列干净的厂商行（每行触屏高度 ≥ `48px`，按钮热区 ≥ `44×44px`）。
 3. 点某家的 **`Install`**：原地转圈安装；点 **`Sign in…`**：从屏幕底部滑出原生感十足的 **`SettingsDrawer` 抽屉**，按钮全宽 `h-11 w-full`，输入框强制 `16px`（iOS 不自动放大页面）并关闭自动首字母大写与拼写纠错，点开 Safari 授权或粘贴 API Key 一气呵成。
 
@@ -158,24 +158,24 @@
 
 | 厂商 (`id` / 命令 / 本机实测版本) | macOS / Linux 免 root 安装方式 | Windows（内置 Node 24）免管理员安装方式 | 更新方式 (`Update`) | 界面内直接登录方式（本机 & 远端无头） | 凭据落盘与受管存储位置 | 轻量就绪探测（零重进程阻塞） |
 | --- | --- | --- | --- | --- | --- | --- |
-| **Claude Code**<br>`claude` / `claude`<br>`2.1.323` | 官方原生脚本 `https://claude.ai/install.sh`（装入 `~/.local/bin/claude` → `~/.local/share/claude/versions/`，脚本自带防 `sudo` 保护） | 官方 PowerShell 脚本 `https://claude.ai/install.ps1`（自动识别 x64/arm64 + SHA-256 校验，装入 `%USERPROFILE%\.local\bin\claude.exe`） | 原生路径调 `claude update`；包管理器安装重跑官方脚本 | ① **Browser OAuth**（`claude auth login` `--claudeai` / `--console`，`BROWSER` 拦截 URL；本机自动回调或回车，远端粘贴授权码或回环 URL）<br>② **API Key / Token**（`ANTHROPIC_API_KEY` 或 `CLAUDE_CODE_OAUTH_TOKEN`） | OAuth：macOS Keychain / Linux & Win `~/.claude/.credentials.json` (`0600`) + `~/.claude.json`<br>API Key：Fusa 受管 `provider-secrets.json` (`0600`) | 复用 `ModelCatalogs` 缓存；单家刷新走 `initialize` 或 `claude auth status --json`（实测 `68ms`）；盯 `.claude.json`、`.credentials.json` 与受管密钥 stat 指纹 |
-| **Antigravity**<br>`agy` / `agy`<br>`1.5.8` | 官方原生脚本 `https://antigravity.google/cli/install.sh`（装入 `~/.local/bin/agy`） | 官方 PowerShell 脚本 `https://antigravity.google/cli/install.ps1`（装入 `%LOCALAPPDATA%\agy\bin\agy.exe`） | `agy update` | ① **Google / Enterprise OAuth**（起 `agy acp` 调 `authenticate` `oauth-personal` / `oauth-business`，`BROWSER` 拦截 URL；本机直连回调，远端粘贴 `http://127.0.0.1:<port>/...` 回环转发或粘 SSH 授权码）<br>② **Gemini API Key**（`GEMINI_API_KEY`） | OAuth：系统钥匙串 / `~/.gemini`<br>API Key：Fusa 受管 `provider-secrets.json` + 联动局部补丁 `~/.gemini/antigravity-cli/settings.json` `"modelProvider": "gemini"` | 复用 `ModelCatalogs` 缓存（`agy --output-format json models`）；盯 `.gemini/antigravity-cli`、`oauth_creds.json` 与受管密钥指纹 |
+| **Claude Code**<br>`claude` / `claude`<br>`2.1.323` | 官方原生脚本 `https://claude.ai/install.sh`（装入 `~/.local/bin/claude` → `~/.local/share/claude/versions/`，脚本自带防 `sudo` 保护） | 官方 PowerShell 脚本 `https://claude.ai/install.ps1`（自动识别 x64/arm64 + SHA-256 校验，装入 `%USERPROFILE%\.local\bin\claude.exe`） | 原生路径调 `claude update`；包管理器安装重跑官方脚本 | ① **Browser OAuth**（`claude auth login` `--claudeai` / `--console`，`BROWSER` 拦截 URL；本机自动回调或回车，远端粘贴授权码或回环 URL）<br>② **API Key / Token**（`ANTHROPIC_API_KEY` 或 `CLAUDE_CODE_OAUTH_TOKEN`） | OAuth：macOS Keychain / Linux & Win `~/.claude/.credentials.json` (`0600`) + `~/.claude.json`<br>API Key：Bellwood 受管 `provider-secrets.json` (`0600`) | 复用 `ModelCatalogs` 缓存；单家刷新走 `initialize` 或 `claude auth status --json`（实测 `68ms`）；盯 `.claude.json`、`.credentials.json` 与受管密钥 stat 指纹 |
+| **Antigravity**<br>`agy` / `agy`<br>`1.5.8` | 官方原生脚本 `https://antigravity.google/cli/install.sh`（装入 `~/.local/bin/agy`） | 官方 PowerShell 脚本 `https://antigravity.google/cli/install.ps1`（装入 `%LOCALAPPDATA%\agy\bin\agy.exe`） | `agy update` | ① **Google / Enterprise OAuth**（起 `agy acp` 调 `authenticate` `oauth-personal` / `oauth-business`，`BROWSER` 拦截 URL；本机直连回调，远端粘贴 `http://127.0.0.1:<port>/...` 回环转发或粘 SSH 授权码）<br>② **Gemini API Key**（`GEMINI_API_KEY`） | OAuth：系统钥匙串 / `~/.gemini`<br>API Key：Bellwood 受管 `provider-secrets.json` + 联动局部补丁 `~/.gemini/antigravity-cli/settings.json` `"modelProvider": "gemini"` | 复用 `ModelCatalogs` 缓存（`agy --output-format json models`）；盯 `.gemini/antigravity-cli`、`oauth_creds.json` 与受管密钥指纹 |
 | **Codex**<br>`codex` / `codex`<br>`0.167.1` | 官方独立脚本 `https://chatgpt.com/codex/install.sh`（设 `CODEX_NON_INTERACTIVE=1`，装入 `~/.local/bin/codex`，独立原生包不依赖系统 Node） | 随包 Node 24 + 随包 `npm` 安装至受管目录：`npm install -g --prefix <hubHome>/tools/npm @openai/codex`（生成 `codex.cmd`） | macOS/Linux 重跑 `install.sh`；Windows 重跑受管 `npm install` | 原生 **`codex app-server` JSON-RPC**：<br>① **Browser OAuth**（`account/login/start` `{type:"chatgpt"}` → 返 `authUrl`，本机直连或远端转发回调，收 `account/login/completed`）<br>② **Device Code**（`{type:"chatgptDeviceCode"}` → 返 `verificationUrl` + `userCode`，远端首选）<br>③ **API Key**（`{type:"apiKey", apiKey}`） | 原厂直接写入 `$CODEX_HOME/auth.json`（默认 `~/.codex/auth.json`，或 `config.toml` 配置的 keyring） | 复用 `ModelCatalogs` 缓存（`app-server` 单进程 `model/list` + `account/read`）+ 零子进程 `codexAuthFileAvailability` 读 `auth.json` |
 | **Pi**<br>`pi` / `pi`<br>`1.5.2` | 官方脚本 `https://pi.dev/install.sh`（前置注入守护进程 Node 24 + npm `PATH`、`TERM=dumb`、`stdin: ignore`，装入 `~/.local/bin/pi`；失败回退受管 `npm install -g --ignore-scripts`） | 官方脚本 `https://pi.dev/install.ps1`（前置注入随包 Node 24 + `npm.cmd` 到 `PATH`）；若受组策略限制自动回退随包 `npm install -g --ignore-scripts --prefix <hubHome>/tools/npm @earendil-works/pi-coding-agent` | `pi update pi`（失败回退重跑安装配方） | 先选子模型商（40+ 内置列表）：<br>① **API Key**（原子合并写入 `$PI_CODING_AGENT_DIR/auth.json` `{type:"api_key", key}`）<br>② **OAuth / Device Code**（对 `anthropic` / `openai-codex` / `github-copilot` / `openrouter` / `xai` 等跑 `pi auth login <id> [--no-browser]`） | 原厂 `$PI_CODING_AGENT_DIR/auth.json`（默认 `~/.pi/agent/auth.json`，`0600`，`proper-lockfile` 兼容原子写） | 复用 `ModelCatalogs` 缓存（`pi --offline --no-approve --list-models` 纯离线读本地凭据，无网络请求）+ 盯 `auth.json` 指纹 |
 | **DeepSeek**<br>`deepseek` / `dsh`<br>`0.2.2-rc.1` | 守护进程 Node 24 + `npm` 受管安装：`npm install -g --prefix <hubHome>/tools/npm @deepseek-ai/dsh@0.2.2-rc.1`（免 `sudo`，避免 `/usr/local` `EACCES`） | 随包 Node 24 + 随包 `npm` 受管安装：`npm install -g --prefix <hubHome>/tools/npm @deepseek-ai/dsh@0.2.2-rc.1` | 重跑受管 `npm install`（沿用经协议验证的版本） | ① **API Key（默认推荐）**：按 v1 schema 原子写入 `$DSH_HOME/.credentials.yaml`（`version: 1` + `refs.DEEPSEEK_API_KEY`，`0600`）<br>② **DeepSeek Account OAuth**：本地回环回调调 `dsh` PKCE 换取 grant 写入 `records["deepseek-account-platform/default"]`（远端支持粘贴回环 URL 转发） | 原厂 `$DSH_HOME/.credentials.yaml`（默认 `~/.dsh/.credentials.yaml`，强制 `0600`；优先级高于 `<cwd>/.env`） | **0 子进程**纯本地有界文件检查 `hasDeepSeekLocalCredentials`（`< 1ms`）+ 盯 `.credentials.yaml` / `.env` 指纹 |
-| **Cursor**<br>`cursor` / `cursor-agent`<br>`2026.11.10` | 官方脚本 `https://cursor.com/install`（装入 `~/.local/bin/cursor-agent` 与 `~/.local/share/cursor-agent/versions/`，自带独立 node） | 官方 PowerShell 脚本 `https://cursor.com/install?win32=true`（装入 `%LOCALAPPDATA%\cursor-agent\cursor-agent.cmd`） | `cursor-agent update` | ① **Browser OAuth（全环境免回调）**：`NO_OPEN_BROWSER=1 cursor-agent login` 打印 URL 并云端轮询，本机与远端东京服务器均只需在任意浏览器点确认即自动落盘（Linux 无 keyring 时设 `AGENT_CLI_CREDENTIAL_STORE=file`）<br>② **API Key**：`CURSOR_API_KEY` | OAuth：系统钥匙串 / Linux `~/.cursor/auth.json` (`0600`)<br>API Key：Fusa 受管 `provider-secrets.json` (`0600`) | 复用 `ModelCatalogs` 缓存（`cursor-agent status --format json`）；盯 `.cursor/auth.json`、`agent-cli-state.json` 与受管密钥指纹 |
+| **Cursor**<br>`cursor` / `cursor-agent`<br>`2026.11.10` | 官方脚本 `https://cursor.com/install`（装入 `~/.local/bin/cursor-agent` 与 `~/.local/share/cursor-agent/versions/`，自带独立 node） | 官方 PowerShell 脚本 `https://cursor.com/install?win32=true`（装入 `%LOCALAPPDATA%\cursor-agent\cursor-agent.cmd`） | `cursor-agent update` | ① **Browser OAuth（全环境免回调）**：`NO_OPEN_BROWSER=1 cursor-agent login` 打印 URL 并云端轮询，本机与远端东京服务器均只需在任意浏览器点确认即自动落盘（Linux 无 keyring 时设 `AGENT_CLI_CREDENTIAL_STORE=file`）<br>② **API Key**：`CURSOR_API_KEY` | OAuth：系统钥匙串 / Linux `~/.cursor/auth.json` (`0600`)<br>API Key：Bellwood 受管 `provider-secrets.json` (`0600`) | 复用 `ModelCatalogs` 缓存（`cursor-agent status --format json`）；盯 `.cursor/auth.json`、`agent-cli-state.json` 与受管密钥指纹 |
 
 ### 2.2 实测挖出的 5 个关键工程细节（避免实现踩坑）
 
 1. **`claude` 与 `codex` 在 macOS 上的 `fallbackPaths` 缺口**：
    - 核查现有 `src/vendors/claude/paths.ts` 与 `src/vendors/codex/paths.ts` 发现：`claude` 在 `darwin` 下 `fallbackPaths` 返回 `[]`，`codex` 在 `darwin` 下只查了 `ChatGPT.app` 和 `.codex/plugins`，**两者都漏了 `~/.local/bin`**。
-   - 从 Finder / Launchpad 启动 `Fusa.app` 时，macOS GUI 进程的默认 `PATH` 只有 `/usr/bin:/bin:/usr/sbin:/sbin`，不含 `~/.local/bin`。若不补齐，用户在 `Fusa.app` 里点一键安装把 `claude` / `codex` 装进 `~/.local/bin` 后依然会被判为 `Not installed`。实现步必须在两家的 `darwin` `fallbackPaths` 中补入 `~/.local/bin/<cmd>`、`/opt/homebrew/bin/<cmd>`、`/usr/local/bin/<cmd>` 以及受管 `<hubHome>/tools/npm/bin/<cmd>`。
+   - 从 Finder / Launchpad 启动 `Bellwood.app` 时，macOS GUI 进程的默认 `PATH` 只有 `/usr/bin:/bin:/usr/sbin:/sbin`，不含 `~/.local/bin`。若不补齐，用户在 `Bellwood.app` 里点一键安装把 `claude` / `codex` 装进 `~/.local/bin` 后依然会被判为 `Not installed`。实现步必须在两家的 `darwin` `fallbackPaths` 中补入 `~/.local/bin/<cmd>`、`/opt/homebrew/bin/<cmd>`、`/usr/local/bin/<cmd>` 以及受管 `<hubHome>/tools/npm/bin/<cmd>`。
 2. **Antigravity 使用 `GEMINI_API_KEY` 的双开关铁律**：
    - 核查官方 `antigravity.google/docs/install.md` 确认：单传环境变量 `GEMINI_API_KEY` 对 `agy` **完全无效**；必须同时在 `~/.gemini/antigravity-cli/settings.json` 写入 `"modelProvider": "gemini"`。反之，若留下了 `"modelProvider": "gemini"` 却移除了 `GEMINI_API_KEY`，`agy` 启动会直接报错退出。因此保存/移除 `agy` API Key 或是切回 Google OAuth 账号时，必须用 `jsonc-parser` 原子联动增删该字段。
 3. **DeepSeek `.credentials.yaml` 的 `0600` 与 `version: 1` 强校验**：
    - 核查 `@deepseek-ai/dsh-credentials-local` 源码确认：POSIX 下若 `.credentials.yaml` 含任何 group/other 权限位（`(mode & 0o077) !== 0`），`dsh` 直接拒绝启动并抛错；文档非空时根映射必须声明 `version: 1`，API Key 必须嵌套在 `refs: { DEEPSEEK_API_KEY: "sk-..." }` 下且值非空（空字符串同样抛错），同时写入这里比写 `~/.dsh/.env` 优先级更高，能防止被不可信项目目录里的 `<cwd>/.env` 覆盖。
 4. **`pi.dev/install.sh` 与 `install.ps1` 的非交互前置要求**：
-   - 核查官方安装脚本源码确认：`pi.dev/install.sh` 若在 `PATH` 里找不到 `node`（`>= 22.19.0`）和 `npm`，会进入 `install_node_npm_interactive` 交互等待；`install.ps1` 第 416 行硬性要求 `Get-Command npm.cmd, npm.exe` 命中（故意跳过 `npm.ps1` 以避开 PowerShell `Restricted` 策略）。因此运行 Pi 安装器时，必须把 Fusa 守护进程所在的 Node 24 目录（含 `node` 与 `npm.cmd`/`npm`）置于子进程 `PATH` 首位，并设 `TERM=dumb`、`NO_COLOR=1`、`stdin: "ignore"`。
+   - 核查官方安装脚本源码确认：`pi.dev/install.sh` 若在 `PATH` 里找不到 `node`（`>= 22.19.0`）和 `npm`，会进入 `install_node_npm_interactive` 交互等待；`install.ps1` 第 416 行硬性要求 `Get-Command npm.cmd, npm.exe` 命中（故意跳过 `npm.ps1` 以避开 PowerShell `Restricted` 策略）。因此运行 Pi 安装器时，必须把 Bellwood 守护进程所在的 Node 24 目录（含 `node` 与 `npm.cmd`/`npm`）置于子进程 `PATH` 首位，并设 `TERM=dumb`、`NO_COLOR=1`、`stdin: "ignore"`。
 5. **`codex/install.sh` 的非交互开关**：
    - 核查 `chatgpt.com/codex/install.sh` 第 6、100 行确认：当机器上已有通过 npm 或 Homebrew 安装的旧 `codex` 时，不带环境变量的脚本可能提示冲突，必须传入 `CODEX_NON_INTERACTIVE=1`。
 
@@ -506,7 +506,7 @@ stateDiagram-v2
 ### 7.1 退役 Windows 静态引导页，双桌面壳统一体验
 
 1. **Windows 外壳（`apps/windows/crates/fusa-desktop/`）减法清理**：
-   - 本地内嵌页 `ui/{index.html,app.js,styles.css}` 只保留守护进程启动中（`Starting Fusa…`）、重连退避（`Restarting…`）、停止与故障恢复（`Retry` / `Open logs`）视图；
+   - 本地内嵌页 `ui/{index.html,app.js,styles.css}` 只保留守护进程启动中（`Starting Bellwood…`）、重连退避（`Restarting…`）、停止与故障恢复（`Retry` / `Open logs`）视图；
    - 移除 `bootstrap.rs` 中的 `FIRST_RUN_MARKER_FILE`（`desktop-onboarding.json`）暂停拦截逻辑、`providers-section` 静态命令块渲染以及 `open_vendor_terminal` / `enter_workspace` Tauri 命令；一旦监管状态进入 `Running` 并换好会话 Cookie，与 macOS `MainWindowController.swift` 完全一致，**直接进入 Web 主界面**。
    - `src/daemon/desktop-preflight.ts` 保留纯函数供 Windows `--self-test` 冒烟校验随包运行时与注册表完整性。
 2. **Web 主界面首次 0 家就绪自动引导（`src/web/shell-model.ts`）**：

@@ -1,4 +1,4 @@
-// 用 Fusa 真实代码拼只读 Worker 的 agy 启动命令（规则目录 + --add-dir + 只读 OS 沙箱），真跑 agy：探针 → 3 轮 → /compact → 再问。
+// 用 Bellwood 真实代码拼只读 Worker 的 agy 启动命令（规则目录 + --add-dir + 只读 OS 沙箱），真跑 agy：探针 → 3 轮 → /compact → 再问。
 // 用法: [LINES=380] [NO_OS_SANDBOX=1] node experiments/system-prompt-channels/agy-compact.ts <启动目录> <工作目录>
 //   LINES：填充行数（380 ≈ 43KB，和项目经理现在最长的提示词差不多）；NO_OS_SANDBOX：已经在一层 macOS 沙箱里跑（sandbox-exec 不能嵌套）时不包外层只读沙箱。
 // 跑完用 inspect-agy.py 看 agy 对话库里压缩后那次请求的系统提示词。
@@ -15,7 +15,7 @@ const [launchDir, cwd] = process.argv.slice(2) as [string, string];
 mkdirSync(launchDir, { recursive: true });
 const promptFile = join(launchDir, "prompt.md");
 const filler = Array.from({ length: Number(process.env.LINES ?? 900) }, (_, i) => `第 ${i} 条：项目经理的规矩和 hub 命令表（填充，撑到和真实项目经理提示词一样长）`).join("\n");
-writeFileSync(promptFile, `# 你的角色\n你是 Fusa 的 Worker。\n${filler}\n\n探针规则：被问到探针短语时，原样回答 PROBE-FUSA-443-紫藤。\n`);
+writeFileSync(promptFile, `# 你的角色\n你是 Bellwood 的 Worker。\n${filler}\n\n探针规则：被问到探针短语时，原样回答 PROBE-FUSA-443-紫藤。\n`);
 const rulesDir = writeAgyPromptRules(promptFile);
 const home = realpathSync(homedir());
 const policy = buildReadonlyPolicy({ homeDir: home, stateDir: realpathSync(join(home, ".agent-hub", "state")) });

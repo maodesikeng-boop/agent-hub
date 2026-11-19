@@ -33,7 +33,7 @@ final class StatusBarController: NSObject {
         self.lastCrashItem.isEnabled = false
         self.lastCrashItem.isHidden = true
         self.restartItem = NSMenuItem(title: "重启后台服务", action: nil, keyEquivalent: "")
-        self.quitItem = NSMenuItem(title: "彻底退出 Fusa", action: nil, keyEquivalent: "q")
+        self.quitItem = NSMenuItem(title: "彻底退出 Bellwood", action: nil, keyEquivalent: "q")
         self.onOpenMainWindow = onOpenMainWindow
         self.onRestartDaemon = onRestartDaemon
         self.onQuitApp = onQuitApp
@@ -79,12 +79,12 @@ final class StatusBarController: NSObject {
 
     private func setupStatusItem() {
         if let button = statusItem.button {
-            if let image = NSImage(systemSymbolName: "bubble.left.and.bubble.right.fill", accessibilityDescription: "Fusa") {
+            if let image = NSImage(systemSymbolName: "bubble.left.and.bubble.right.fill", accessibilityDescription: "Bellwood") {
                 image.isTemplate = true
                 button.image = image
                 button.imagePosition = .imageLeading
             } else {
-                button.title = "Fusa"
+                button.title = "Bellwood"
             }
             button.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
         }
@@ -162,7 +162,7 @@ final class StatusBarController: NSObject {
             summaryItem.title = "后台端口冲突或协议不兼容"
             restartItem.title = "重新检测后台服务"
             restartItem.isEnabled = true
-            quitItem.title = "彻底退出 Fusa"
+            quitItem.title = "彻底退出 Bellwood"
             statusItem.button?.title = " !"
             NSApp.dockTile.badgeLabel = "!"
             return
@@ -171,11 +171,11 @@ final class StatusBarController: NSObject {
         if ownership.isExternal {
             restartItem.title = "重启后台服务（外部管理）"
             restartItem.isEnabled = false
-            quitItem.title = "退出 Fusa（保留外部后台）"
+            quitItem.title = "退出 Bellwood（保留外部后台）"
         } else {
             restartItem.title = "重启后台服务"
             restartItem.isEnabled = true
-            quitItem.title = "彻底退出 Fusa"
+            quitItem.title = "彻底退出 Bellwood"
         }
 
         switch daemonState {

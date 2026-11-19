@@ -1,7 +1,7 @@
 import Darwin
 import Foundation
 
-/// 分发包无窗口端到端自检（`Fusa.app/Contents/MacOS/AgentHub --self-test`，与 Windows `fusa-desktop.exe --self-test` 对齐）：
+/// 分发包无窗口端到端自检（`Bellwood.app/Contents/MacOS/AgentHub --self-test`，与 Windows `fusa-desktop.exe --self-test` 对齐）：
 /// 用临时数据目录和空闲端口，从包内运行环境拉起守护进程 → 核对运行环境都在包内 → 鉴权与健康检查 →
 /// 核对 PM/Worker 会话用的 `hub` 外壳指向包内 Node → 优雅关机。不读写真实的 ~/.agent-hub，不碰 4317 端口。
 enum FusaSelfTest {

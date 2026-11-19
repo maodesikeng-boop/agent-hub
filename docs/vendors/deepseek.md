@@ -32,7 +32,7 @@
 
 ### 2.2 `--patch` 真实配置文件格式、后缀与字段路径
 
-- **解析器与后缀**：`loadOverlayPatches`（`@deepseek-ai/dsh-app-boot/lib/index.js:4708-4752`）对文件内容调用 `yaml.load(content, { schema: userPatchesSchema })`，**不限制文件后缀名**；由于 JSON 是 YAML 1.2 的严格子集，Fusa `launch.ts` 生成的 `settings.json`（及会话目录内的 `.json` 补丁文件）可直接传给 `--patch`。
+- **解析器与后缀**：`loadOverlayPatches`（`@deepseek-ai/dsh-app-boot/lib/index.js:4708-4752`）对文件内容调用 `yaml.load(content, { schema: userPatchesSchema })`，**不限制文件后缀名**；由于 JSON 是 YAML 1.2 的严格子集，Bellwood `launch.ts` 生成的 `settings.json`（及会话目录内的 `.json` 补丁文件）可直接传给 `--patch`。
 - **顶层结构**：**必须是顶层数组**（Cordis loader entry patch 列表），若传顶层对象会抛 `overlay patch must be a top-level list of loader patch entries`。
 - **关闭自带沙箱与免交互权限的精确字段**（出处：`@deepseek-ai/dsh-sandbox-policy`、`@deepseek-ai/dsh-user-approval`、`@deepseek-ai/dsh-permission-presets`、`@deepseek-ai/dsh-bash-sandbox`、`@deepseek-ai/dsh-fs-sandbox`）：
   ```json
@@ -43,7 +43,7 @@
   ]
   ```
   - 当 `mode === "danger-full-access"` 时，`SandboxBashExecutor` 与 `SandboxedFileSystem` 直接旁路内置的 macOS `sandbox-exec` / Linux `bwrap` 包装器，在当前进程环境中直接运行工具命令。
-  - 这使得外层可以安全包裹 Fusa 的 `write-scope` OS 沙箱（普通 Worker 限制只写自身 worktree，只读 Worker 走 `readonly: "os_sandbox"` 全盘只读 + 敏感路径禁读），不会触发 macOS Seatbelt 嵌套 `sandbox_apply: Operation not permitted (exit 71)` 或 Linux userns 嵌套失败。
+  - 这使得外层可以安全包裹 Bellwood 的 `write-scope` OS 沙箱（普通 Worker 限制只写自身 worktree，只读 Worker 走 `readonly: "os_sandbox"` 全盘只读 + 敏感路径禁读），不会触发 macOS Seatbelt 嵌套 `sandbox_apply: Operation not permitted (exit 71)` 或 Linux userns 嵌套失败。
 
 ---
 
@@ -75,11 +75,11 @@
 ### 3.3 系统提示词与仓库指令文件
 
 - `@deepseek-ai/dsh-system-prompt`（`lib/index.js:160-184, 235-244`）会对 `personaPrefix` / `personaSuffix` 做严格的 `{{variable}}` 模板插值校验，遇到未知双花括号（例如代码片段或 Markdown 示例中的 `{{foo}}`）会直接抛致命错误终止启动。
-- 2026-11-11 起（docs/system-prompt-channels.md 第 3 节）：**通过 `--patch` 的 `system-prompt.config.personaSuffix` 注入 Fusa 提示词**（spec 的 `capabilities.systemPrompt: "resident"`）。
+- 2026-11-11 起（docs/system-prompt-channels.md 第 3 节）：**通过 `--patch` 的 `system-prompt.config.personaSuffix` 注入 Bellwood 提示词**（spec 的 `capabilities.systemPrompt: "resident"`）。
   它进 system 消息，dsh 压缩只换掉历史、不动它（拼进首条消息的旧做法压缩后会丢）；`{{` 在两个 `{` 之间插零宽空格避开模板插值；
   `--patch` 整行替换 config，默认的 `personaPrefix` 照抄（`DEEPSEEK_DEFAULT_PERSONA_PREFIX`）。性格设定改了仍按版本号在下一条消息前加说明。
 - `@deepseek-ai/dsh-agent-instructions` 原生自动发现工作区与全局的 `AGENTS.md`、`CLAUDE.md`、`AGENTS.local.md`、`CLAUDE.local.md` 及 `.agents/skills`；
-  它们是普通 user 消息（会被压缩），所以不拿来放 Fusa 提示词。
+  它们是普通 user 消息（会被压缩），所以不拿来放 Bellwood 提示词。
 
 ### 3.4 模型与思考程度（`configOptions`）
 
@@ -122,7 +122,7 @@
   - `paths.ts` `credentialEnv`: `names: ["DEEPSEEK_API_KEY"]`。dsh 只从这个变量取密钥（各处 `apiKeyEnv` 的默认值）；`DEEPSEEK_BASE_URL` 这类非密钥配置和 `GH_TOKEN`、`AWS_*`、`OPENAI_BASE_URL` 一样照常传给准备命令（`setup.test.ts` 的 A13）。
   - `paths.ts` `parentSessionEnv`: `["DSH_SHELL", "DSH_SESSION_ID", "DSH_PROFILE", "DSH_PROFILE_DIR"]`（来自 `@deepseek-ai/dsh-shell-env`，保留 `DSH_HOME` 不剥离）。
 - **会话持久化格式（`@deepseek-ai/dsh-session-persistence-jsonl`）**：
-  - 路径位于 `$DSH_HOME/sessions/<encoded-cwd>/<uuid>/session.v4.jsonl.zstd`，采用 Zstandard 二进制压缩帧存储，非跨厂商可直接读取的明文 JSONL；因此不设 `transcript.ts`，`spec.handover.transcriptPortable` 设为 `false`，跨厂商换会话自动走 Fusa 账本摘要降级。
+  - 路径位于 `$DSH_HOME/sessions/<encoded-cwd>/<uuid>/session.v4.jsonl.zstd`，采用 Zstandard 二进制压缩帧存储，非跨厂商可直接读取的明文 JSONL；因此不设 `transcript.ts`，`spec.handover.transcriptPortable` 设为 `false`，跨厂商换会话自动走 Bellwood 账本摘要降级。
 - **只读 Worker（`readonly: "os_sandbox"`）**：
   - `$DSH_HOME/profiles/acp/` 不能给只读 Worker 写：`cordis.patch.yml` 是这个 profile 的用户补丁层，允许 `!!js` 表达式，`node_modules` 是插件，项目经理和普通 Worker 下次起 dsh 都会加载执行。`$DSH_HOME/storages/` 也不能写：dsh 的定时任务（`dsh-schedule`）、工作区记录存在这里，别的 profile（桌面版、网页版）会读来执行。
   - 实测（真实 dsh + 临时 `DSH_HOME`）：profile 已初始化时，一次启动加一轮对话在共享 `$DSH_HOME` 下只写 `profiles/acp/cordis.yml`（每次启动先重写成空列表再加载）、`.anonymous-user-id`；会话记录、KV 存储、附件的位置都能用 `--patch` 改（`session-persistence-jsonl.root`、`storage-json.root`、`attachment-local.dshHome`）；`jobs`、`spill` 在 `TMPDIR` 下。

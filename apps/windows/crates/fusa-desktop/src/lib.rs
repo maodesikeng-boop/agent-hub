@@ -205,9 +205,9 @@ pub fn run() {
     refresh_current_process_path(&[]);
 
     let app_data_dir = platform::resolve_local_app_data_dir()
-        .expect("Fusa 无法解析本地应用数据目录（请确认 LOCALAPPDATA 指向本机磁盘而非网络共享路径）");
+        .expect("Bellwood 无法解析本地应用数据目录（请确认 LOCALAPPDATA 指向本机磁盘而非网络共享路径）");
     let hub_home_dir = platform::resolve_hub_home_dir()
-        .expect("Fusa 无法解析守护进程数据目录（请确认 USERPROFILE / AGENT_HUB_HOME 指向本机磁盘而非网络共享路径）");
+        .expect("Bellwood 无法解析守护进程数据目录（请确认 USERPROFILE / AGENT_HUB_HOME 指向本机磁盘而非网络共享路径）");
 
     let quit_started = Arc::new(AtomicBool::new(false));
     let quit_completed = Arc::new(AtomicBool::new(false));
@@ -259,7 +259,7 @@ pub fn run() {
                 MAIN_WINDOW_LABEL,
                 WebviewUrl::App("index.html".into()),
             )
-            .title("Fusa")
+            .title("Bellwood")
             .inner_size(1180.0, 780.0)
             .min_inner_size(800.0, 560.0)
             .center()
@@ -384,7 +384,7 @@ pub fn run() {
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("构建 Fusa 桌面外壳失败");
+        .expect("构建 Bellwood 桌面外壳失败");
 
     app.run(move |app_handle, event| {
         if let RunEvent::ExitRequested { api, .. } = event {
@@ -550,7 +550,7 @@ mod tests {
         let ext_menu = TrayMenuModel::from_snapshot(&ext_snap, &contract);
         assert!(!ext_menu.restart_enabled);
         assert_eq!(ext_menu.restart_title, "重启后台服务（外部管理）");
-        assert_eq!(ext_menu.quit_title, "退出 Fusa（保留外部后台）");
+        assert_eq!(ext_menu.quit_title, "退出 Bellwood（保留外部后台）");
         assert!(ext_menu.quit_enabled);
 
         let long_reason = "致命异常：数据库连接池初始化失败，详细调用栈位置在模块 alpha_beta_gamma_delta_epsilon_zeta_eta_theta_1234567890";

@@ -81,7 +81,7 @@ impl fmt::Debug for SessionCookie {
     }
 }
 
-/// 经 `/api/auth/status` 核验通过的 Fusa 守护进程身份。
+/// 经 `/api/auth/status` 核验通过的 Bellwood 守护进程身份。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DaemonIdentity {
@@ -130,16 +130,16 @@ impl ProbeFailureKind {
                 "端口 {port} 已被其他 HTTP 服务占用（返回状态码 {status_code}），请先关闭占用程序"
             ),
             Self::InvalidJson { .. } => format!(
-                "端口 {port} 已被非 Fusa 服务占用（响应不是有效的状态 JSON），请先关闭占用程序"
+                "端口 {port} 已被非 Bellwood 服务占用（响应不是有效的状态 JSON），请先关闭占用程序"
             ),
             Self::ProductMismatch { actual } => format!(
                 "端口 {port} 已被其他服务或旧版后台占用（product={actual:?}），请先关闭占用程序"
             ),
             Self::IncompatibleProtocol { actual, expected } => format!(
-                "端口 {port} 上的 Fusa 协议版本不兼容（实际: {actual:?}，需要: {expected}），请停止旧进程或更新应用"
+                "端口 {port} 上的 Bellwood 协议版本不兼容（实际: {actual:?}，需要: {expected}），请停止旧进程或更新应用"
             ),
             Self::InvalidInstanceId => {
-                format!("端口 {port} 上的服务缺少合法的 Fusa instanceId，拒绝连接")
+                format!("端口 {port} 上的服务缺少合法的 Bellwood instanceId，拒绝连接")
             }
         }
     }

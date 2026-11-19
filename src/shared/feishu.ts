@@ -305,7 +305,7 @@ export interface FeishuChatPolicyRequest {
   guestTier?: FeishuGuestTier;
 }
 
-/** 断开。dissolveChats 为 true 时把 Fusa 建的项目群一起解散（聊天记录随群消失），默认 false：群留着，只停机器人。 */
+/** 断开。dissolveChats 为 true 时把 Bellwood 建的项目群一起解散（聊天记录随群消失），默认 false：群留着，只停机器人。 */
 export interface FeishuDisconnectRequest {
   dissolveChats: boolean;
 }

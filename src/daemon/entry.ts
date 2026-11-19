@@ -3,7 +3,7 @@
 // 不认识的异常打一句话 + 日志路径，堆栈和原文写进 state/logs/daemon.log，不上终端。
 // 运行期 uncaughtException / unhandledRejection：把完整错误写进 state/logs/daemon.log 和标准错误，再试着正常关机（最多 FATAL_SHUTDOWN_MS，
 // 好让 Worker / 项目经理的子进程被停掉，不留孤儿），然后以退出码 1 退出，由外壳（Mac 应用、systemd Restart=on-failure）拉起，不吞错继续跑。
-// 空闲排空热重启（hub self-reload，daemon/self-reload.ts）：只有被外壳监管时才接受（Fusa.app / Windows 桌面端设 contract.json 的
+// 空闲排空热重启（hub self-reload，daemon/self-reload.ts）：只有被外壳监管时才接受（Bellwood.app / Windows 桌面端设 contract.json 的
 // supervisedEnv，systemd 服务有 INVOCATION_ID）；排空到点正常关机，以 contract.json 的 reloadExitCode 退出，外壳不当崩溃、立即拉起
 // （systemd 的 Restart=on-failure 对非 0 退出码照常拉起）。
 import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync } from "node:fs";
@@ -37,7 +37,7 @@ export const DESKTOP_CONTRACT: ReloadContract = JSON.parse(
 /** systemd 给每个服务进程设的环境变量（systemd.exec(5)）：有它就是 systemd 拉起的，Restart=on-failure 会把热重启退出码拉起来。 */
 const SYSTEMD_INVOCATION_ENV = "INVOCATION_ID";
 
-/** 退出后有没有外壳把守护进程拉起来：Fusa.app、Windows 桌面端（设 supervisedEnv）或 systemd 服务（INVOCATION_ID）。 */
+/** 退出后有没有外壳把守护进程拉起来：Bellwood.app、Windows 桌面端（设 supervisedEnv）或 systemd 服务（INVOCATION_ID）。 */
 export function isSupervised(env: Record<string, string | undefined>): boolean {
   return (env[DESKTOP_CONTRACT.supervisedEnv] ?? "") !== "" || (env[SYSTEMD_INVOCATION_ENV] ?? "") !== "";
 }

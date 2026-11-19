@@ -121,7 +121,7 @@ jobs:
             gh release upload "$TAG" release-assets/* --clobber
             exit 0
           fi
-          args=(--verify-tag --title "Fusa $TAG (unsigned preview)" --notes-file .github/release-notes.md --generate-notes)
+          args=(--verify-tag --title "Bellwood $TAG (unsigned preview)" --notes-file .github/release-notes.md --generate-notes)
           if [[ "$TAG" == *-* ]]; then
             args+=(--prerelease)
           else

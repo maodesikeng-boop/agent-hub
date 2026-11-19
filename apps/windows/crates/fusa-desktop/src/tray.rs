@@ -40,7 +40,7 @@ impl TrayMenuModel {
         let mut fault_reason_title = None;
 
         let (summary_title, restart_title, restart_enabled) = match &snapshot.state {
-            SupervisorState::Idle => ("正在准备 Fusa 环境…".to_string(), "重启后台服务".to_string(), false),
+            SupervisorState::Idle => ("正在准备 Bellwood 环境…".to_string(), "重启后台服务".to_string(), false),
             SupervisorState::Starting { .. } => (
                 "正在启动后台服务…".to_string(),
                 "重启后台服务".to_string(),
@@ -120,12 +120,12 @@ impl TrayMenuModel {
             .map(|c| format_crash_menu_line(c, max_chars));
 
         let quit_title = if is_external {
-            "退出 Fusa（保留外部后台）".to_string()
+            "退出 Bellwood（保留外部后台）".to_string()
         } else {
-            "彻底退出 Fusa".to_string()
+            "彻底退出 Bellwood".to_string()
         };
 
-        let tooltip = format!("Fusa — {summary_title}");
+        let tooltip = format!("Bellwood — {summary_title}");
 
         Self {
             summary_title,

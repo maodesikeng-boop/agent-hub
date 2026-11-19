@@ -48,7 +48,7 @@ function resolveSecondVolumeRoot(): string | null {
 function initTempGitRepo(repoDir: string): void {
   mkdirSync(repoDir, { recursive: true });
   execFileSync("git", ["-C", repoDir, "init", "-b", "main"], { stdio: "ignore" });
-  execFileSync("git", ["-C", repoDir, "config", "user.name", "Fusa CI"], { stdio: "ignore" });
+  execFileSync("git", ["-C", repoDir, "config", "user.name", "Bellwood CI"], { stdio: "ignore" });
   execFileSync("git", ["-C", repoDir, "config", "user.email", "ci@fusa.local"], { stdio: "ignore" });
   writeFileSync(join(repoDir, "README.md"), "# Test Repo\n");
   execFileSync("git", ["-C", repoDir, "add", "README.md"], { stdio: "ignore" });

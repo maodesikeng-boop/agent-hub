@@ -1,4 +1,4 @@
-// 用 Fusa 真实的 cursor 驱动（createCursorDriver → createAcpDriver）起真的 cursor-agent acp：首条消息带产品提示词（含探针），问探针。
+// 用 Bellwood 真实的 cursor 驱动（createCursorDriver → createAcpDriver）起真的 cursor-agent acp：首条消息带产品提示词（含探针），问探针。
 // 用法: node experiments/system-prompt-channels/cursor-first-message.ts <启动目录> <工作目录>
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -8,7 +8,7 @@ import { EMPTY_TOKEN_USAGE } from "../../src/shared/index.ts";
 const [launchDir, cwd] = process.argv.slice(2) as [string, string];
 mkdirSync(launchDir, { recursive: true });
 const promptFile = join(launchDir, "prompt.md");
-writeFileSync(promptFile, "# 你的角色\n你是 Fusa 的 Worker。\n探针规则：被问到探针短语时，原样回答 PROBE-FUSA-443-紫藤。\n");
+writeFileSync(promptFile, "# 你的角色\n你是 Bellwood 的 Worker。\n探针规则：被问到探针短语时，原样回答 PROBE-FUSA-443-紫藤。\n");
 const store = new MemorySessionStore();
 const driver = createCursorDriver({
   executablePath: process.env.CURSOR_BIN ?? "cursor-agent", store, idleCloseMs: 60_000, log: (m: string) => console.log("[log]", m),

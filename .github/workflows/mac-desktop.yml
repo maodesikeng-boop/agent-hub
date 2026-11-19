@@ -79,23 +79,23 @@ jobs:
           src/daemon/self-reload.test.ts
           --reporter=verbose --reporter=github-actions
 
-      - name: Build distribution Fusa.app and DMG (ad-hoc, unsigned-preview)
+      - name: Build distribution Bellwood.app and DMG (ad-hoc, unsigned-preview)
         run: bash scripts/build-mac-app.sh --dist
 
       - name: Self-test from mounted DMG (headless, temp data dir and port, no repo, no host Node)
         run: |
           set -euo pipefail
-          dmg="$(ls build/dist/Fusa_*_arm64*.dmg)"
+          dmg="$(ls build/dist/Bellwood_*_arm64*.dmg)"
           mnt="$RUNNER_TEMP/fusa-dmg"
           app_dir="$RUNNER_TEMP/fusa-app"
           mkdir -p "$mnt" "$app_dir"
           hdiutil attach "$dmg" -mountpoint "$mnt" -nobrowse -readonly
           test -L "$mnt/Applications"
-          ditto "$mnt/Fusa.app" "$app_dir/Fusa.app"
+          ditto "$mnt/Bellwood.app" "$app_dir/Bellwood.app"
           hdiutil detach "$mnt"
-          codesign --verify --deep --strict --verbose=2 "$app_dir/Fusa.app"
-          lipo -archs "$app_dir/Fusa.app/Contents/MacOS/AgentHub" | grep -qx arm64
-          if grep -q "AgentHubRepoDir\|AgentHubNodePath" "$app_dir/Fusa.app/Contents/Info.plist"; then
+          codesign --verify --deep --strict --verbose=2 "$app_dir/Bellwood.app"
+          lipo -archs "$app_dir/Bellwood.app/Contents/MacOS/AgentHub" | grep -qx arm64
+          if grep -q "AgentHubRepoDir\|AgentHubNodePath" "$app_dir/Bellwood.app/Contents/Info.plist"; then
             echo "分发包 Info.plist 不应写死仓库或 Node 路径" >&2
             exit 1
           fi
@@ -103,19 +103,19 @@ jobs:
           clean_home="$RUNNER_TEMP/fusa-home"
           mkdir -p "$clean_home"
           env -i HOME="$clean_home" PATH=/usr/bin:/bin TMPDIR="$RUNNER_TEMP/" \
-            "$app_dir/Fusa.app/Contents/MacOS/AgentHub" --self-test | tee "$RUNNER_TEMP/self-test.txt"
+            "$app_dir/Bellwood.app/Contents/MacOS/AgentHub" --self-test | tee "$RUNNER_TEMP/self-test.txt"
           grep -q "\[fusa-self-test\] PASS mode=bundled" "$RUNNER_TEMP/self-test.txt"
           grep -q "sandbox=verified" "$RUNNER_TEMP/self-test.txt"
 
       - name: Verify DMG size budget and checksum
         run: |
           set -euo pipefail
-          dmg="$(ls build/dist/Fusa_*_arm64*.dmg)"
+          dmg="$(ls build/dist/Bellwood_*_arm64*.dmg)"
           name="$(basename "$dmg")"
           (cd build/dist && shasum -a 256 -c "$name.sha256")
           bytes="$(stat -f %z "$dmg")"
           budget=$((DMG_BUDGET_MIB * 1024 * 1024))
-          echo "DMG: $name | bytes=$bytes | MiB=$((bytes / 1048576)) | budget=${DMG_BUDGET_MIB} MiB | app=$(du -sh build/dist/Fusa.app | cut -f1)"
+          echo "DMG: $name | bytes=$bytes | MiB=$((bytes / 1048576)) | budget=${DMG_BUDGET_MIB} MiB | app=$(du -sh build/dist/Bellwood.app | cut -f1)"
           if [ "$bytes" -gt "$budget" ]; then
             echo "DMG exceeded ${DMG_BUDGET_MIB} MiB budget: $bytes bytes" >&2
             exit 1
@@ -126,7 +126,7 @@ jobs:
         with:
           name: fusa-macos-arm64-dmg-unsigned-preview
           path: |
-            build/dist/Fusa_*_arm64*.dmg
-            build/dist/Fusa_*_arm64*.dmg.sha256
+            build/dist/Bellwood_*_arm64*.dmg
+            build/dist/Bellwood_*_arm64*.dmg.sha256
           if-no-files-found: error
           retention-days: 14

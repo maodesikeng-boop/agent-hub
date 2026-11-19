@@ -3,7 +3,7 @@ name = "fusa-supervisor"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Native Windows daemon lifecycle supervisor, loopback health probe, PATH refresher, and log rotator for Fusa"
+description = "Native Windows daemon lifecycle supervisor, loopback health probe, PATH refresher, and log rotator for Bellwood"
 
 [dependencies]
 fusa-win-helper = { path = "../fusa-win-helper" }

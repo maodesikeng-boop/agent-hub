@@ -1,4 +1,4 @@
-# 在 Linux（Ubuntu）上用 Fusa
+# 在 Linux（Ubuntu）上用 Bellwood
 
 适用 Ubuntu 22.04 / 24.04，普通用户（不是 root）跑。每一步后面附官方出处，命令以出处为准（版本号会变）。
 
@@ -85,7 +85,7 @@ journalctl --user -u agent-hub -f
 
 热重启（项目经理 `hub self-reload [--build]`、网页 `POST /api/self-reload`）：守护进程看到 systemd 设的 `INVOCATION_ID` 就知道退出后有人拉起；
 等全库空闲后正常关机（最多等 10 分钟，`src/shared/limits.ts` 的 `SELF_RELOAD_DRAIN_MAX_MS`；之后不再等 Worker 轮次和系统消息，它们重启后自动重发，只等项目经理、总助正在回用户的那一轮回完），以退出码 75（`apps/desktop/contract.json` 的 `reloadExitCode`）退出，`Restart=on-failure` 过 `RestartSec` 拉起新进程。
-`--build` 先把网页构建到 `dist/` 下的暂存目录，构建失败就取消，不动正在用的 `dist/web`。不是 systemd、也不是 Fusa 应用拉起的（终端里 `pnpm start`）不接受热重启。
+`--build` 先把网页构建到 `dist/` 下的暂存目录，构建失败就取消，不动正在用的 `dist/web`。不是 systemd、也不是 Bellwood 应用拉起的（终端里 `pnpm start`）不接受热重启。
 
 - `Environment=`、`Restart=`、`TimeoutStopSec=`：<https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html>、<https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html>。
 - `loginctl enable-linger`（让用户管理器开机就起、退出登录后不结束）：<https://www.freedesktop.org/software/systemd/man/latest/loginctl.html>。
@@ -117,7 +117,7 @@ ssh -N -L 4317:127.0.0.1:4317 <用户>@<服务器>
    ```
    （若首次使用 Funnel，按终端输出的链接开启 tailnet 的 Funnel 权限即可。出处：<https://tailscale.com/kb/1223/funnel>。）
 3. **iPhone 扫码与电脑批准**：在已登录电脑打开“设置 → 登录 → 在手机上登录”点“显示二维码”；用 iPhone 系统相机扫码（Safari 打开 `https://<tokyo>.<tailnet>.ts.net/auth#link=…`，显示“已扫码，请在已登录的电脑上点「允许」完成登录…”），在电脑“设置 → 已登录的浏览器”顶部点**“允许”**，手机即自动进入首页。
-4. **添加到主屏幕与开启推送**：在 iPhone Safari 底部点“分享”→**“添加到主屏幕”**→“添加”；从手机主屏幕打开 `Fusa` 全屏图标，点左下角“设置”打开**“通知”**开关并在系统弹窗点“允许”，即可收到端到端加密的 iOS 原生锁屏推送。
+4. **添加到主屏幕与开启推送**：在 iPhone Safari 底部点“分享”→**“添加到主屏幕”**→“添加”；从手机主屏幕打开 `Bellwood` 全屏图标，点左下角“设置”打开**“通知”**开关并在系统弹窗点“允许”，即可收到端到端加密的 iOS 原生锁屏推送。
 
 ## 6. Worker 沙箱：Linux 上由 `bubblewrap`（`bwrap`）强制隔离
 

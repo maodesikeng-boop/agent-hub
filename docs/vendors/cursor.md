@@ -5,7 +5,7 @@
 ## 1. 版本、安装与命令入口
 
 - **实测版本**：`2026.10.22-27dcf5f`（`cursor-agent --version`，冷跑约 0.7s）。
-- **可执行文件名**：官方安装脚本在 `~/.local/bin/` 下同时提供 `cursor-agent` 与 `agent`，Fusa 统一使用 `cursor-agent`（避免 `agent` 命中全仓守卫正则误报）；macOS `/Applications/Cursor.app/Contents/Resources/app/bin` 下仅有 `cursor`、`code`、`cursor-tunnel`，不含 `cursor-agent`。
+- **可执行文件名**：官方安装脚本在 `~/.local/bin/` 下同时提供 `cursor-agent` 与 `agent`，Bellwood 统一使用 `cursor-agent`（避免 `agent` 命中全仓守卫正则误报）；macOS `/Applications/Cursor.app/Contents/Resources/app/bin` 下仅有 `cursor`、`code`、`cursor-tunnel`，不含 `cursor-agent`。
 - **官方安装命令**：`curl https://cursor.com/install -fsS | bash`（macOS / Linux 通用，无需 root）。
 - **登录命令**：桌面端 `cursor-agent login`，无浏览器环境 `NO_OPEN_BROWSER=1 cursor-agent login`，或通过环境变量 `CURSOR_API_KEY` 鉴权。
 
@@ -53,7 +53,7 @@
 `session/new` 返回：
 - `currentModeId`: `"agent"`
 - `availableModes`:
-  - `"agent"`：完整工具与命令权限（Fusa 会话默认模式；只读 Worker 由外层 OS 只读沙箱 + `decideAcpPermission` 拦截写操作与非只读 MCP 工具）；
+  - `"agent"`：完整工具与命令权限（Bellwood 会话默认模式；只读 Worker 由外层 OS 只读沙箱 + `decideAcpPermission` 拦截写操作与非只读 MCP 工具）；
   - `"plan"`：只读规划模式（会触发 `cursor/ask_question` 与 `cursor/create_plan` 交互审批）；
   - `"ask"`：纯问答模式（无文件编辑与命令执行）。
 
@@ -86,7 +86,7 @@
 - **`session/load`**：没有对话轮次的空会话 `session/load` 一律回 `-32602 Session "…" not found`（不论带不带 `--model`）；有轮次的会话要发 `session/prompt` 才能造出来，零额度下没测，驱动续接后照样显式设模型，不依赖 load 回来的 `currentValue`。
 - **思考档位不可选**：每个家族在 ACP 里只有一个预设值，`claude-opus-5-5-high` 这种档位/Fast 变体通过 ACP 选不到。
 
-据此 Fusa 的做法：
+据此 Bellwood 的做法：
 
 - 启动参数不带 `--model`。
 - 模型名单（`catalog.ts`）把 `cursor-agent models` 的约 275 个 ID 按家族归并成一项一个（本机 42 个，`cursorModelFamily`：去 `cursor-` 前缀和档位/Fast 后缀，旧式 `claude-4.6-sonnet` 改成 ACP 的 `claude-sonnet-4-6`），ID 就是 ACP 的 `name`；名单默认模型固定 `auto`，`spec.ts` 不开 `explicitDefaultModel`。
@@ -136,4 +136,4 @@
   - `capabilities.readonly: "os_sandbox"`；
   - `readonlySandbox` 仅放行 `~/.cursor` 下运行时必需可写的会话/缓存子目录（`acp-sessions`、`chats`、`projects`、`ai-tracking`、`logs`）及 `~/.cursor/statsig-cache.json`，工作目录、`cli-config.json`、`mcp.json`、`hooks.json`、`auth.json` 保持严格只读；
   - 实测（隔离 `HOME`、`~/.cursor` 设成只读）：`cursor-agent acp` 一启动就要建 `~/.cursor/projects/<工作目录>`，`projects/` 不存在时进程在回 `initialize` 前就退出；`projects/` 先建好就能正常启动（`statsig-cache.json` 写不了不影响）。所以底座在起进程前把这些目录建好再放行（新登录的机器第一次就开只读 Worker 也不会挂）；
-  - 重启清残留进程只认 Fusa 自己起的命令行（`isFusaCursorAcpCommand`：有 `cursor-agent`、带 `--trust` 和 `--approve-mcps`、最后一个参数是 `acp`），用户自己在终端或 IDE 跑的 `cursor-agent acp` 复用旧 PID 时不误杀。
+  - 重启清残留进程只认 Bellwood 自己起的命令行（`isFusaCursorAcpCommand`：有 `cursor-agent`、带 `--trust` 和 `--approve-mcps`、最后一个参数是 `acp`），用户自己在终端或 IDE 跑的 `cursor-agent acp` 复用旧 PID 时不误杀。

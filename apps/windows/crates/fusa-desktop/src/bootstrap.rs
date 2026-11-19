@@ -66,7 +66,7 @@ impl Default for BootstrapViewModel {
     fn default() -> Self {
         Self {
             tone: "working".to_string(),
-            title: "Starting Fusa…".to_string(),
+            title: "Starting Bellwood…".to_string(),
             detail: String::new(),
             error: None,
             can_retry: false,
@@ -82,13 +82,13 @@ pub fn derive_view_from_supervisor(snap: &SupervisorSnapshot) -> BootstrapViewMo
         SupervisorState::Starting { phase, .. } => {
             let (title, detail) = match phase {
                 StartupPhase::CheckingPortAndEnvironment | StartupPhase::LaunchingDaemon => {
-                    ("Starting Fusa…".to_string(), format!("127.0.0.1:{}", snap.port))
+                    ("Starting Bellwood…".to_string(), format!("127.0.0.1:{}", snap.port))
                 }
                 StartupPhase::WaitingForReady {
                     elapsed_ms,
                     budget_ms,
                 } => (
-                    "Starting Fusa…".to_string(),
+                    "Starting Bellwood…".to_string(),
                     if *elapsed_ms >= 1_000 {
                         format!("{}s / {}s", elapsed_ms / 1000, budget_ms / 1000)
                     } else {

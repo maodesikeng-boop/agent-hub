@@ -318,7 +318,7 @@ describe("桌面壳共用监管契约与 /api/auth/status 轻量身份响应", (
   });
 
   it.skipIf(process.platform !== "darwin")(
-    "macOS Swift 监管逻辑契约测试：非 Fusa/协议不兼容冲突拦截且不发 token、外部 Fusa 复用不误杀、40s 预算下 5s 慢关闭优雅退出、崩溃退避与上限",
+    "macOS Swift 监管逻辑契约测试：非 Bellwood/协议不兼容冲突拦截且不发 token、外部 Bellwood 复用不误杀、40s 预算下 5s 慢关闭优雅退出、崩溃退避与上限",
     async () => {
       const binPath = join(root, "supervisor-contract-tests");
 
@@ -356,7 +356,7 @@ describe("桌面壳共用监管契约与 /api/auth/status 轻量身份响应", (
   );
 
   it.skipIf(process.platform !== "darwin")(
-    "macOS 主窗口导航：真 WKWebView 里点网页链接，主窗口留在 Fusa，网页交系统浏览器，预览 iframe 照常显示",
+    "macOS 主窗口导航：真 WKWebView 里点网页链接，主窗口留在 Bellwood，网页交系统浏览器，预览 iframe 照常显示",
     () => {
       const binPath = join(root, "shell-navigation-tests");
       compileSwift(

@@ -229,5 +229,5 @@
   2. `hub dispatch project-show --device self --project 7`（用总助会话的令牌，或测试里调 `handleAgentDispatch`）的输出贴进 PR，确认不超过 16 KB。
   3. 新建一个项目，记下从建好到 `project_catalogs` 有档案的秒数。
   4. 在一个项目里发消息到加权 2 万字以上（或测试里把切点调旧），项目经理一轮结束后档案刷新、切点前移。
-  5. 在总助台发“改一下 Fusa 的设置页”这类只用别名的话，截图回执显示投给了 agent-hub 的项目经理。截图放 `/tmp/router-catalog-alias.png`。
+  5. 在总助台发“改一下 Bellwood 的设置页”这类只用别名的话，截图回执显示投给了 agent-hub 的项目经理。截图放 `/tmp/router-catalog-alias.png`。
 - **数字**：名片字节数、启动耗时、总助单轮时间的改前改后，写进 PR 的 Verification。
