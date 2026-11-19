@@ -7,16 +7,20 @@ import type { Change } from "../../shared/api.ts";
 import { MAX_PENDING_DRIVER_EVENTS_PER_SESSION } from "../../shared/limits.ts";
 import type { ConversationId, Message, SessionId } from "../../shared/domain.ts";
 import { workerWorktreePath } from "../../shared/paths.ts";
-import { sentFilesOf } from "../../shared/sent-files.ts";
+import { sentFilesOf, type SentFile } from "../../shared/sent-files.ts";
 import type { Db } from "../store/index.ts";
 import { openTestDb } from "../store/test-helpers.ts";
 import { createResolveFolder } from "./files.ts";
 import { createLedger } from "./index.ts";
 import type { LedgerOptions, SqliteLedger } from "./index.ts";
 
-/** 拦住某个文件的 open，模拟读得很慢的附件（网络盘、被占用）：opened 表示已经开始读，放行后 closed 表示那个句柄已关。 */
+/**
+ * 拦住某个文件的 open，模拟读得很慢的附件（网络盘、被占用）：opened 表示已经开始读，放行后 closed 表示那个句柄已关。
+ * opens 数真正发起了几次 open，reopened 在第二次发起时放行。
+ */
 type Gate = { promise: Promise<void>; resolve: () => void };
-const slowOpen = vi.hoisted(() => ({ hold: null as null | { path: string; opened: Gate; release: Gate; closed: Gate } }));
+type Hold = { path: string; opens: number; opened: Gate; reopened: Gate; release: Gate; closed: Gate };
+const slowOpen = vi.hoisted(() => ({ hold: null as null | Hold }));
 
 vi.mock("../platform/index.ts", async (importOriginal) => {
   const original = await importOriginal<typeof import("../platform/index.ts")>();
@@ -25,6 +29,7 @@ vi.mock("../platform/index.ts", async (importOriginal) => {
     openRegularFileNoFollow: async (...args: Parameters<typeof original.openRegularFileNoFollow>) => {
       const hold = slowOpen.hold;
       if (hold === null || args[0] !== hold.path) return original.openRegularFileNoFollow(...args);
+      if (++hold.opens > 1) hold.reopened.resolve();
       hold.opened.resolve();
       await hold.release.promise;
       const handle = await original.openRegularFileNoFollow(...args);
@@ -45,7 +50,7 @@ function gate(): Gate {
 }
 
 function holdOpen(path: string) {
-  const hold = { path, opened: gate(), release: gate(), closed: gate() };
+  const hold: Hold = { path, opens: 0, opened: gate(), reopened: gate(), release: gate(), closed: gate() };
   slowOpen.hold = hold;
   return hold;
 }
@@ -256,6 +261,33 @@ describe("关机与排队上限：慢附件不丢已收到的回复", () => {
     await hold.closed.promise;
     await ledger.settleDriverEvents();
     expect(agentTexts()).toHaveLength(MAX_PENDING_DRIVER_EVENTS_PER_SESSION + 1);
+  });
+
+  it("排队满了取消的附件还卡在 open 上：同一会话后面的附件不再发起新的 open，记 unreadable，回复照常落库；卡住的关掉后恢复", async () => {
+    const slow = file(join(main, "slow.txt"));
+    const hold = holdOpen(slow);
+    send(pm.sessionId, `[附件](${slow})`, "head");
+    await hold.opened.promise;
+    for (let i = 1; i <= MAX_PENDING_DRIVER_EVENTS_PER_SESSION; i++) send(pm.sessionId, `第 ${i} 句`, `n${i}`);
+    for (const round of [1, 2]) {
+      send(pm.sessionId, `[又一个](${slow})`, `again-${round}`);
+      const outcome = await Promise.race([
+        ledger.settleDriverEvents().then(() => "settled" as const),
+        hold.reopened.promise.then(() => "opened again" as const),
+      ]);
+      expect(outcome).toBe("settled");
+      const last = agentTexts().at(-1)!;
+      expect(last.text).toBe(`[又一个](${slow})`);
+      expect((last.meta?.files as SentFile[]).map((f) => f.status)).toEqual(["unreadable"]);
+    }
+    expect(hold.opens).toBe(1);
+    hold.release.resolve();
+    await hold.closed.promise;
+    await new Promise((resolve) => setImmediate(resolve));
+    slowOpen.hold = null;
+    send(pm.sessionId, `[恢复后](${slow})`, "after");
+    await ledger.settleDriverEvents();
+    expect((agentTexts().at(-1)!.meta?.files as SentFile[]).map((f) => f.status)).toEqual(["saved"]);
   });
 });
 
