@@ -42,7 +42,7 @@ describe("createFeishuFileService", () => {
 
   it("图片传成图片编号，别的文件传成文件编号并配好消息类型，太大的不传；发文件消息带固定 uuid", async () => {
     const fake = createFakeFeishu();
-    const svc = createFeishuFileService({ transport: fake, uploadsDir: dir });
+    const svc = createFeishuFileService({ transport: fake, uploadsDir: dir, log: () => {} });
     const path = join(dir, "shot.png");
     writeFileSync(path, "x");
     const f: FeishuOutboundFile = { messageId: 7, part: 0, path, name: "shot.png", mime: "image/png", bytes: 1 };
@@ -59,7 +59,7 @@ describe("createFeishuFileService", () => {
   it("超过最长边的截图传缩过的临时副本，传完删掉临时副本，原图不动", async () => {
     const sharp = (await import("sharp")).default;
     const fake = createFakeFeishu();
-    const svc = createFeishuFileService({ transport: fake, uploadsDir: dir });
+    const svc = createFeishuFileService({ transport: fake, uploadsDir: dir, log: () => {} });
     const path = join(dir, "wide.png");
     await sharp({ create: { width: FEISHU_IMAGE_MAX_EDGE * 2, height: 100, channels: 3, background: "#336699" } }).png().toFile(path);
     const original = readFileSync(path);
@@ -77,7 +77,7 @@ describe("createFeishuFileService", () => {
   it("avif 再小也转成飞书收的格式再传（飞书图片接口不收 avif）", async () => {
     const sharp = (await import("sharp")).default;
     const fake = createFakeFeishu();
-    const svc = createFeishuFileService({ transport: fake, uploadsDir: dir });
+    const svc = createFeishuFileService({ transport: fake, uploadsDir: dir, log: () => {} });
     const path = join(dir, "small.avif");
     await sharp({ create: { width: 64, height: 64, channels: 3, background: "#336699" } }).avif().toFile(path);
     let format: string | undefined;
@@ -90,7 +90,7 @@ describe("createFeishuFileService", () => {
 
   it("超过 10 MB 的图缩不了（读不出来、加载不了 sharp）时不白传：按飞书拒收报错，不调上传图片", async () => {
     const fake = createFakeFeishu();
-    const svc = createFeishuFileService({ transport: fake, uploadsDir: dir });
+    const svc = createFeishuFileService({ transport: fake, uploadsDir: dir, log: () => {} });
     const path = join(dir, "broken.png");
     writeFileSync(path, "not really a png");
     const error = await svc.upload({ messageId: 1, part: 0, path, name: "broken.png", mime: "image/png", bytes: FEISHU_IMAGE_MAX_BYTES + 1 }).catch((e: unknown) => e);
@@ -101,7 +101,7 @@ describe("createFeishuFileService", () => {
   it("超过 10 MB 的动图取第一帧缩成静态图再传", async () => {
     const sharp = (await import("sharp")).default;
     const fake = createFakeFeishu();
-    const svc = createFeishuFileService({ transport: fake, uploadsDir: dir });
+    const svc = createFeishuFileService({ transport: fake, uploadsDir: dir, log: () => {} });
     const frame = (color: string) => sharp({ create: { width: 32, height: 32, channels: 3, background: color } }).png().toBuffer();
     const path = join(dir, "anim.webp");
     await sharp([await frame("#ff0000"), await frame("#00ff00")], { join: { animated: true } }).webp().toFile(path);
@@ -117,10 +117,20 @@ describe("createFeishuFileService", () => {
   it("下载超过 MAX_UPLOAD_BYTES 时返回 null，上传目录里不留文件", async () => {
     const fake = createFakeFeishu();
     fake.resources.set("file_big", Buffer.alloc(MAX_UPLOAD_BYTES + 1));
-    const svc = createFeishuFileService({ transport: fake, uploadsDir: dir });
+    const svc = createFeishuFileService({ transport: fake, uploadsDir: dir, log: () => {} });
     expect(await svc.receive("om_1" as FeishuMessageId, { type: "file", fileKey: "file_big", fileName: "big.bin" })).toBeNull();
     expect(await svc.receive("om_1" as FeishuMessageId, { type: "file", fileKey: "missing", fileName: "x" })).toBeNull();
     expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it("下载失败返回 null 并记一行日志，带上消息编号和出错原因（飞书权限不够、资源过期不再悄悄吞掉）", async () => {
+    const fake = createFakeFeishu();
+    const lines: string[] = [];
+    const svc = createFeishuFileService({ transport: fake, uploadsDir: dir, log: (line) => lines.push(line) });
+    expect(await svc.receive("om_9" as FeishuMessageId, { type: "image", fileKey: "img_gone", fileName: null })).toBeNull();
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("om_9");
+    expect(lines[0]).toContain("no such resource");
   });
 
   it("下载成功存成附件，和网页上传一样的目录和命名", async () => {
@@ -128,7 +138,7 @@ describe("createFeishuFileService", () => {
     const png = Buffer.from("89504e470d0a1a0a0000", "hex");
     fake.resources.set("img_k1", png);
     fake.resources.set("file_k2", Buffer.from("# 笔记"));
-    const svc = createFeishuFileService({ transport: fake, uploadsDir: dir });
+    const svc = createFeishuFileService({ transport: fake, uploadsDir: dir, log: () => {} });
     const image = (await svc.receive("om_1" as FeishuMessageId, { type: "image", fileKey: "img_k1", fileName: null }))!;
     expect(image.mime).toBe("image/png");
     expect(resolveUpload(dir, image.id)).toEqual(image);
