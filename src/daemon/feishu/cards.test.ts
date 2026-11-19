@@ -12,12 +12,14 @@ import {
   FEISHU_STREAM_ELEMENT_ID,
   renderAskCard,
   renderChatPolicyCard,
+  renderMeshApprovalCard,
   renderReplyCard,
   renderRouterItem,
   renderRouterSettingsCard,
   type FeishuActionValue,
   type FeishuCardJson,
 } from "./cards.ts";
+import type { DeviceFingerprint } from "../../shared/mesh.ts";
 import { FEISHU_AUTO_OPTION, FEISHU_DEFAULT_OPTION } from "./model-picker.ts";
 
 type El = Record<string, unknown>;
@@ -68,6 +70,11 @@ const ALL_VALUES: FeishuActionValue[] = [
   { kind: "stop", conversationId: 8 },
   { kind: "set_policy", pmId: 2, triggerMode: "mention_only" },
   { kind: "set_policy", pmId: 2, guestTier: "observer" },
+  { kind: "set_pm_model", pmId: 2, field: "vendor" },
+  { kind: "set_router_model", field: "model" },
+  { kind: "mesh_approval", step: "begin", requestId: "req-1" },
+  { kind: "mesh_approval", step: "match", requestId: "req-1" },
+  { kind: "mesh_approval", step: "mismatch", requestId: "req-1" },
 ];
 
 describe("按钮值编解码", () => {
@@ -403,6 +410,37 @@ describe("renderRouterSettingsCard（总助单聊模型设置卡）", () => {
       { kind: "set_router_model", field: "model" },
     ]);
     expect(allText(fixed)).toContain("不支持");
+  });
+});
+
+describe("renderMeshApprovalCard", () => {
+  const fp = "a".repeat(64) as DeviceFingerprint;
+  const baseApproval = {
+    requestId: "33333333-3333-4333-8333-333333333333",
+    device: { id: "33333333-3333-4333-8333-333333333333", name: "家用机", platform: "win32", fingerprint: fp },
+    requestedAt: 1000,
+    expiresAt: 601000,
+    sas: null,
+  };
+
+  it("还没核对时显示请求加入和核对按钮；出核对码后显示 3+3 位码与一致 / 不一致；完成后去掉按钮", () => {
+    const initial = renderMeshApprovalCard({ kind: "pending", approval: baseApproval });
+    expect(allText(initial)).toContain("家用机");
+    expect(allText(initial)).toContain("Windows");
+    expect(callbackButtons(initial).map(valueOf)).toEqual([
+      { kind: "mesh_approval", step: "begin", requestId: baseApproval.requestId },
+    ]);
+
+    const withSas = renderMeshApprovalCard({ kind: "pending", approval: { ...baseApproval, sas: "042917" } });
+    expect(allText(withSas)).toContain("042 917");
+    expect(callbackButtons(withSas).map(valueOf)).toEqual([
+      { kind: "mesh_approval", step: "match", requestId: baseApproval.requestId },
+      { kind: "mesh_approval", step: "mismatch", requestId: baseApproval.requestId },
+    ]);
+
+    const done = renderMeshApprovalCard({ kind: "approved", deviceName: "家用机" });
+    expect(buttons(done)).toEqual([]);
+    expect(allText(done)).toContain("已加入");
   });
 });
 

@@ -48,6 +48,9 @@ function chatLine(chat: FeishuChatView): string {
 function statusText(status: FeishuStatusView): string {
   const lines = [`状态：${status.state}`];
   if (status.appId !== null) lines.push(`应用：${status.appId}（${status.brand === "lark" ? "Lark" : "飞书"}）${status.botName ? `，机器人：${status.botName}` : ""}`);
+  if (status.appId !== null && status.hosting !== undefined) {
+    lines.push(`角色：${status.hosting ? "中心（挂长连接）" : "非中心（入站由中心转发，出站本机直发）"}`);
+  }
   if (status.ownerOpenId !== null) lines.push(`主人：${status.ownerName ?? status.ownerOpenId}`);
   if (status.missing.length > 0) lines.push(`缺权限：${status.missing.join("、")}（去飞书开发者后台开）`);
   if (status.lastError !== null) lines.push(`最近的错误：${status.lastError}`);

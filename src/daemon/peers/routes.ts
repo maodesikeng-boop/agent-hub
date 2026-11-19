@@ -5,16 +5,35 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
 import { z } from "zod";
 import { API_ERRORS } from "../../shared/errors.ts";
+import type { PmId } from "../../shared/domain.ts";
+import type { FeishuChatId } from "../../shared/feishu.ts";
 import { API_PATHS, isDeviceId, type ApiErrorBody, type DeviceId, type DevicesResponse } from "../../shared/index.ts";
 import type { AccountStatusView } from "../../shared/mesh.ts";
+import {
+  feishuForwardedEventSchema,
+  feishuPeerAppSyncSchema,
+  feishuPeerChatsSchema,
+  type FeishuForwardedEvent,
+  type FeishuPeerAppSync,
+} from "../feishu/account-bot.ts";
+import type { FeishuCardActionResponse } from "../feishu/transport.ts";
 import type { Mesh } from "../mesh/index.ts";
 import { proxyHttp, proxyWebSocket, splitProxyUrl, type ProxyContext, type ProxyTarget } from "./proxy.ts";
 import { PeerError, type Peers } from "./service.ts";
+
+export interface FeishuPeerRoutesPort {
+  acceptInbound(body: FeishuForwardedEvent): Promise<FeishuCardActionResponse | null>;
+  learnChats(from: DeviceId, chats: { chatId: FeishuChatId; pmId: PmId }[]): void;
+  exportApp(): FeishuPeerAppSync | null;
+  applyApp(sync: FeishuPeerAppSync): Promise<void>;
+}
 
 export interface PeerRoutesOptions {
   peers: Peers;
   /** 账号与设备（GET /api/account 等）。不给 = /api/account* 回 404。 */
   mesh?: Pick<Mesh, "status" | "startLogin" | "cancelLogin" | "logout" | "beginApproval" | "answerApproval" | "setCenterPriority" | "trustStatements" | "receiveTrustStatements">;
+  /** 全账号单飞书机器人的跨设备接口（/api/peer/feishu/*）。 */
+  feishuPeer?: FeishuPeerRoutesPort;
   /** 这次请求是组网入口来的哪台设备（server.ts 的认证钩子认出来的）；浏览器来的是 undefined。 */
   peerOf: (req: FastifyRequest) => DeviceId | undefined;
   /** 为入口转发请求生成不可逆的浏览器会话隔离标识。 */
@@ -135,6 +154,30 @@ export async function peerRoutes(app: FastifyInstance, opts: PeerRoutesOptions):
         throw new PeerError(400, error instanceof Error ? error.message : "statements 不对", "invalid");
       }
       opts.onChange?.();
+      return reply.code(204).send();
+    });
+  }
+  if (opts.feishuPeer !== undefined) {
+    const feishuPeer = opts.feishuPeer;
+    app.post(API_PATHS.peerFeishuInbound, async (req) => {
+      requirePeer(req);
+      const body = parseOr400(feishuForwardedEventSchema, req.body);
+      return (await feishuPeer.acceptInbound(body)) ?? {};
+    });
+    app.post(API_PATHS.peerFeishuChats, async (req, reply) => {
+      const from = requirePeer(req);
+      const { chats } = parseOr400(feishuPeerChatsSchema, req.body);
+      feishuPeer.learnChats(from, chats);
+      return reply.code(204).send();
+    });
+    app.get(API_PATHS.peerFeishuApp, async (req) => {
+      requirePeer(req);
+      return { app: feishuPeer.exportApp() };
+    });
+    app.put(API_PATHS.peerFeishuApp, async (req, reply) => {
+      requirePeer(req);
+      const sync = parseOr400(feishuPeerAppSyncSchema, req.body);
+      await feishuPeer.applyApp(sync);
       return reply.code(204).send();
     });
   }

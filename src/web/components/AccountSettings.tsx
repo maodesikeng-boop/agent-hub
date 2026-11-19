@@ -2,7 +2,7 @@
 // 桌面弹窗和手机设置子页共用；状态和接口都在 settings-model.ts 的 useAccount。
 import { ArrowDown, ArrowUp, ExternalLink, Loader2 } from "../ui/icons.ts";
 import { useState } from "react";
-import type { DeviceId, MeshApprovalView, RelayConnectionState } from "../../shared/index.ts";
+import type { DeviceId, MeshApprovalView, MeshDeviceView, RelayConnectionState } from "../../shared/index.ts";
 import { platformLabel } from "../devices.ts";
 import { movePriority, useAccount } from "../settings-model.ts";
 import { Button } from "../ui/button.tsx";
@@ -101,33 +101,48 @@ function SignInRow({ account, lastError }: { account: Account; lastError: string
   );
 }
 
-function PriorityGroup({ account, priority, names, holder }: { account: Account; priority: readonly DeviceId[]; names: ReadonlyMap<DeviceId, string>; holder: DeviceId | null }) {
+function PriorityGroup({
+  account,
+  priority,
+  devices,
+  holder,
+}: {
+  account: Account;
+  priority: readonly DeviceId[];
+  devices: ReadonlyMap<DeviceId, MeshDeviceView>;
+  holder: DeviceId | null;
+}) {
   const busy = account.busy === "priority";
   return (
     <SettingsGroup title="Hub order">
       {priority.length === 0 ? (
         <p className="px-4 py-3 text-body text-muted-foreground">No computer can host the Feishu bot</p>
       ) : (
-        priority.map((id, index) => (
-          <SettingsRow key={id} label={`${index + 1}. ${names.get(id) ?? id.slice(0, 8)}`} detail={id === holder ? "Hosting the Feishu bot now" : undefined}>
-            {() => (
-              <span className="-mr-2 flex items-center gap-1 pointer-coarse:gap-3.5">
-                <Button variant="ghost" size="icon-sm" aria-label={`Move ${names.get(id) ?? id} up`} disabled={busy || index === 0} onClick={() => void account.setPriority(movePriority(priority, id, -1))}>
-                  <ArrowUp aria-hidden="true" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label={`Move ${names.get(id) ?? id} down`}
-                  disabled={busy || index === priority.length - 1}
-                  onClick={() => void account.setPriority(movePriority(priority, id, 1))}
-                >
-                  <ArrowDown aria-hidden="true" />
-                </Button>
-              </span>
-            )}
-          </SettingsRow>
-        ))
+        priority.map((id, index) => {
+          const device = devices.get(id);
+          const name = device?.name ?? id.slice(0, 8);
+          const detail = id === holder ? "Hosting the Feishu bot now" : device?.online === false ? "Offline" : undefined;
+          return (
+            <SettingsRow key={id} label={`${index + 1}. ${name}`} detail={detail}>
+              {() => (
+                <span className="-mr-2 flex items-center gap-1 pointer-coarse:gap-3.5">
+                  <Button variant="ghost" size="icon-sm" aria-label={`Move ${name} up`} disabled={busy || index === 0} onClick={() => void account.setPriority(movePriority(priority, id, -1))}>
+                    <ArrowUp aria-hidden="true" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={`Move ${name} down`}
+                    disabled={busy || index === priority.length - 1}
+                    onClick={() => void account.setPriority(movePriority(priority, id, 1))}
+                  >
+                    <ArrowDown aria-hidden="true" />
+                  </Button>
+                </span>
+              )}
+            </SettingsRow>
+          );
+        })
       )}
     </SettingsGroup>
   );
@@ -198,7 +213,7 @@ export function AccountSettings() {
       </SettingsGroup>
     );
   }
-  const names = new Map(status.devices.map((d) => [d.id, d.name]));
+  const devicesById = new Map(status.devices.map((d) => [d.id, d]));
   return (
     <>
       <SettingsGroup title="Account">
@@ -218,7 +233,7 @@ export function AccountSettings() {
           ))}
         </SettingsGroup>
       )}
-      <PriorityGroup account={account} priority={status.centerPriority} names={names} holder={status.feishuHolder} />
+      <PriorityGroup account={account} priority={status.centerPriority} devices={devicesById} holder={status.feishuHolder} />
     </>
   );
 }

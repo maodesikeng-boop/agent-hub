@@ -179,6 +179,12 @@ export const API_PATHS = {
   peerRenamed: "/api/peer/renamed",
   /** GET → TrustStatementsBody：本机信任表的签名声明（批准和撤销），对齐用；POST（TrustStatementsBody）→ 204：收下对方转来的声明。 */
   peerTrust: "/api/peer/trust",
+  /** POST（FeishuForwardedEvent）→ FeishuCardActionResponse：中心把飞书群消息或卡片点击转给群归属电脑。 */
+  peerFeishuInbound: "/api/peer/feishu/inbound",
+  /** POST（{ chats }）→ 204：可信设备对齐完项目群后把群归属广播给账号里的其他设备。 */
+  peerFeishuChats: "/api/peer/feishu/chats",
+  /** GET → { app: FeishuPeerAppSync | null }；PUT（FeishuPeerAppSync）→ 204：可信设备之间同步飞书应用凭证或断开通知。 */
+  peerFeishuApp: "/api/peer/feishu/app",
 
   // ---- 账号组网（docs/account-mesh-design.md）：浏览器 → 本机，不转发 ----
 

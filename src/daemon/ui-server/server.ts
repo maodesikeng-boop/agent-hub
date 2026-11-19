@@ -237,6 +237,8 @@ export interface UiServerOptions {
   peers?: Peers;
   /** 账号组网（daemon/mesh/）：/api/account*、/api/peer/trust；组网入口来的设备按它的信任表再认一次。状态一变给浏览器推 account.updated。 */
   mesh?: NonNullable<PeerRoutesOptions["mesh"]> & Pick<Mesh, "onChange" | "trust">;
+  /** 全账号单飞书机器人的跨机同步与转发接口（/api/peer/feishu/*）。 */
+  feishuPeer?: PeerRoutesOptions["feishuPeer"];
   /** 入口转发的可调项（测试里换 fetch、调短心跳）。 */
   peerProxy?: PeerRoutesOptions["proxy"];
   /** /api/ws 给浏览器发心跳的间隔（ws-keepalive.ts），默认 WS_HEARTBEAT_MS；测试调短。 */
@@ -1201,6 +1203,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       routes.register(peerRoutes, {
         peers: opts.peers,
         ...(opts.mesh ? { mesh: opts.mesh } : {}),
+        ...(opts.feishuPeer ? { feishuPeer: opts.feishuPeer } : {}),
         peerOf,
         clientScopeOf: (req) => createHash("sha256").update(clientOwnerKeyOf(req)).digest("hex").slice(0, 24),
         trackSocket,

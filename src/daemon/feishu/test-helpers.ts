@@ -4,6 +4,7 @@ import {
   feishuDataOf,
   feishuStringField,
   type FeishuApiResult,
+  type FeishuCardActionResponse,
   type FeishuConnectionHandlers,
   type FeishuFileUpload,
   type FeishuImageUpload,
@@ -58,7 +59,7 @@ export interface FakeFeishu extends FeishuTransport {
   /** 模拟消息已落入飞书服务端会话历史，但未通过 WebSocket 推给客户端（断线窗口漏消息）。 */
   recordMessage(event: FeishuRawMessageEvent): void;
   event(event: FeishuRawEvent): void;
-  click(action: FeishuRawCardAction): ReturnType<FeishuConnectionHandlers["onCardAction"]>;
+  click(action: FeishuRawCardAction): Promise<FeishuCardActionResponse>;
 }
 
 export function createFakeFeishu(options: { clock?: () => number; botOpenId?: string } = {}): FakeFeishu {
@@ -266,8 +267,8 @@ export function createFakeFeishu(options: { clock?: () => number; botOpenId?: st
       if (event.type === "im.message.receive_v1") appendHistory(event);
       fake.handlers!.onEvent(event);
     },
-    click(action) {
-      return fake.handlers!.onCardAction(action);
+    async click(action) {
+      return await fake.handlers!.onCardAction(action);
     },
   };
   return fake;

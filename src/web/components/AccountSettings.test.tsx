@@ -116,4 +116,22 @@ describe("AccountSettings", () => {
     await waitFor(() => expect(within(order).getByText("1. Win")).toBeInTheDocument());
     expect(api.callsTo("PUT", /^\/api\/account\/priority$/)[0]?.body).toEqual({ priority: [WIN, MAC] });
   });
+
+  it("排第一的电脑离线、第二顺位电脑接管飞书时，中心顺序里同时标出 Offline 和当前持有者", async () => {
+    withAccount(
+      signedIn({
+        devices: [
+          { id: WIN, name: "Win", platform: "win32", fingerprint: FP, self: true, online: true, link: "local", lastSeenAt: null },
+          { id: MAC, name: "Tokyo", platform: "linux", fingerprint: FP, self: false, online: false, link: null, lastSeenAt: 1_700_000_000_000 },
+        ],
+        centerPriority: [MAC, WIN],
+        feishuHolder: WIN,
+      }),
+    );
+    const order = await screen.findByRole("region", { name: "Hub order" });
+    expect(within(order).getByText("1. Tokyo")).toBeInTheDocument();
+    expect(within(order).getByText("Offline")).toBeInTheDocument();
+    expect(within(order).getByText("2. Win")).toBeInTheDocument();
+    expect(within(order).getByText("Hosting the Feishu bot now")).toBeInTheDocument();
+  });
 });

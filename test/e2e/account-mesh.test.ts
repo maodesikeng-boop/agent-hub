@@ -7,14 +7,17 @@ import { startNodeRelay, type RunningNodeRelay } from "../../src/relay/node/serv
 import {
   API_PATHS,
   ENV_RELAY_URL,
+  MESH_LEASE_RENEW_MS,
   MESH_LEASE_TTL_MS,
   devicePath,
   type AccountStatusView,
   type DeviceInfo,
   type DevicesResponse,
+  type FeishuStatusView,
   type StateSnapshot,
   type WsServerMessage,
 } from "../../src/shared/index.ts";
+import { E2E_FEISHU_APP_ID, E2E_FEISHU_APP_SECRET, E2E_FEISHU_OWNER, startFakeFeishuHub, type FakeFeishuHub } from "./fake-feishu-hub.ts";
 import { startFakeGithub, type FakeGithub } from "./fake-github.ts";
 import { Client, MESH_MAIN, agentTexts, makeEnv, shortTmp, waitUntil, type E2eEnv, type RunningDaemon } from "./harness.ts";
 
@@ -256,10 +259,295 @@ describe("账号组网", () => {
 });
 
 describe("全账号一个飞书机器人（假飞书传输层）", () => {
-  it.todo("只有中心顺序排第一的在线设备连长连接");
-  it.todo("发到第二台项目群的消息进第二台的账本，只一次");
-  it.todo("停掉持有者，MESH_LEASE_TTL_MS + MESH_LEASE_RENEW_MS 内下一台持有并接着收");
-  it.todo("排前的设备回来后租约让回给它，期间不丢消息");
-  it.todo("第二台离线时群里立刻回离线提示并暂存，第二台上线后送达");
-  it.todo("飞书凭证在一台接入后出现在另外两台，中继的日志和存储里搜不到 App Secret");
+  let scratch = "";
+  let relayDb = "";
+  let github: FakeGithub;
+  let relay: RunningNodeRelay;
+  let relayUrl = "";
+  let feishuHub: FakeFeishuHub;
+  const relayFrames: Buffer[] = [];
+  const relayLogs: string[] = [];
+  const envs: E2eEnv[] = [];
+  let botA: NodeHandle;
+  let botB: NodeHandle;
+  let botC: NodeHandle;
+  let chatB = "";
+  let chatC = "";
+
+  const daemonEnv = (lan: boolean) => ({
+    [ENV_RELAY_URL]: relayUrl,
+    FUSA_TEST_GITHUB: github.origin,
+    FUSA_TEST_FEISHU: feishuHub.origin,
+    FUSA_TEST_LAN: lan ? "1" : "0",
+  });
+
+  async function bootBotNode(env: E2eEnv, lan: boolean): Promise<NodeHandle> {
+    const daemon = await env.start({ main: MESH_MAIN, env: daemonEnv(lan) });
+    const client = await Client.login(daemon);
+    const dev = JSON.parse(readFileSync(join(env.home, "state", "device.json"), "utf8")) as { id: string };
+    return { env, daemon, client, id: dev.id, lan };
+  }
+
+  async function accountOf(client: Client): Promise<AccountStatusView> {
+    const res = await client.get(API_PATHS.account);
+    expect(res.status).toBe(200);
+    return (await res.json()) as AccountStatusView;
+  }
+
+  async function feishuOf(client: Client): Promise<FeishuStatusView> {
+    const res = await client.get(API_PATHS.feishu);
+    expect(res.status).toBe(200);
+    return (await res.json()) as FeishuStatusView;
+  }
+
+  async function approveJoiner(approver: NodeHandle, joiner: NodeHandle): Promise<void> {
+    await waitUntil("joiner connected awaiting_approval", async () => {
+      const j = await accountOf(joiner.client);
+      return j.state === "awaiting_approval" && j.relay === "connected" ? true : undefined;
+    });
+    await waitUntil("approver sees pending", async () => {
+      const s = await accountOf(approver.client);
+      return s.state === "signed_in" && s.approvals.some((a) => a.requestId === joiner.id) ? true : undefined;
+    });
+    expect((await approver.client.postJson(API_PATHS.accountApprovalBegin(joiner.id), {})).status).toBe(200);
+    await waitUntil("SAS ready", async () => {
+      const [sa, sj] = await Promise.all([accountOf(approver.client), accountOf(joiner.client)]);
+      const ca = sa.state === "signed_in" ? sa.approvals.find((a) => a.requestId === joiner.id)?.sas : null;
+      const cj = sj.state === "awaiting_approval" ? sj.approval?.sas : null;
+      return ca && cj && ca === cj ? true : undefined;
+    });
+    await Promise.all([
+      joiner.client.postJson(API_PATHS.accountApprovalAnswer(approver.id), { match: true }),
+      approver.client.postJson(API_PATHS.accountApprovalAnswer(joiner.id), { match: true }),
+    ]);
+    await waitUntil("joiner signed_in", async () => ((await accountOf(joiner.client)).state === "signed_in" ? true : undefined));
+  }
+
+  const groupMsg = (chatId: string, messageId: string, content: string) => ({
+    type: "im.message.receive_v1" as const,
+    messageId,
+    chatId,
+    chatType: "group" as const,
+    senderOpenId: E2E_FEISHU_OWNER,
+    senderType: "user" as const,
+    content,
+    mentionedBot: true,
+    threadId: null,
+    resources: [],
+    createTime: Date.now(),
+  });
+
+  beforeAll(async () => {
+    scratch = mkdtempSync(join(shortTmp(), "ah-feishu-mesh-"));
+    relayDb = join(scratch, "relay.sqlite");
+    github = await startFakeGithub();
+    feishuHub = await startFakeFeishuHub();
+    relay = await startNodeRelay({
+      port: 0,
+      dbFile: relayDb,
+      githubApiOrigin: github.origin,
+      debugFrames: true,
+      log: (line) => relayLogs.push(line),
+      onDataFrame: (bytes) => relayFrames.push(Buffer.from(bytes)),
+    });
+    relayUrl = `http://127.0.0.1:${relay.port}`;
+
+    const envA = makeEnv();
+    const envB = makeEnv();
+    const envC = makeEnv();
+    envs.push(envA, envB, envC);
+    envA.setScript({ defaultTurn: { steps: [{ text: "第一台飞书回复-A" }] } });
+    envB.setScript({ defaultTurn: { steps: [{ text: "第二台飞书回复-B" }] } });
+    envC.setScript({ defaultTurn: { steps: [{ text: "第三台飞书回复-C" }] } });
+
+    [botA, botB, botC] = await Promise.all([bootBotNode(envA, false), bootBotNode(envB, false), bootBotNode(envC, false)]);
+
+    expect((await botA.client.postJson(API_PATHS.accountLogin, {})).status).toBe(200);
+    await waitUntil("botA signed_in", async () => ((await accountOf(botA.client)).state === "signed_in" ? true : undefined));
+    expect((await botB.client.postJson(API_PATHS.accountLogin, {})).status).toBe(200);
+    expect((await botC.client.postJson(API_PATHS.accountLogin, {})).status).toBe(200);
+    await approveJoiner(botA, botB);
+    await approveJoiner(botA, botC);
+
+    expect((await botA.client.putJson(API_PATHS.accountPriority, { priority: [botA.id, botB.id, botC.id] })).status).toBe(200);
+  }, 40_000);
+
+  afterAll(async () => {
+    await Promise.all(envs.map((e) => e.cleanup()));
+    await feishuHub?.close();
+    await relay?.close();
+    await github?.close();
+    if (scratch !== "") rmSync(scratch, { recursive: true, force: true });
+  });
+
+  it("只有中心顺序排第一的在线设备连长连接", async () => {
+    const regRes = await botB.client.postJson(API_PATHS.feishuRegistration, {});
+    expect(regRes.status).toBe(200);
+
+    for (const node of [botA, botB, botC]) {
+      await waitUntil(`${node.id} feishu connected with PM chat`, async () => {
+        const st = await feishuOf(node.client);
+        return st.state === "connected" && st.chats.some((c) => c.target.kind === "pm") ? true : undefined;
+      }, 15_000);
+    }
+    chatB = (await feishuOf(botB.client)).chats.find((c) => c.target.kind === "pm")!.chatId;
+    chatC = (await feishuOf(botC.client)).chats.find((c) => c.target.kind === "pm")!.chatId;
+
+    await waitUntil("only botA holds feishu WSClient", async () => {
+      const acct = await accountOf(botA.client);
+      const active = feishuHub.activeDevices();
+      return acct.state === "signed_in" && acct.feishuHolder === botA.id && active.length === 1 && active[0] === botA.id ? true : undefined;
+    }, 10_000);
+    expect(feishuHub.activeDevices()).toEqual([botA.id]);
+  });
+
+  it("发到第二台项目群的消息进第二台的账本，只一次", async () => {
+    const msg = groupMsg(chatB, "om_e2e_b_once", "修一下第二台按钮-E2E");
+    feishuHub.pushEvent(msg);
+    feishuHub.pushEvent(msg);
+
+    await waitUntil("botB receives forwarded message and replies", async () => {
+      const snap = (await (await botB.client.get(API_PATHS.state)).json()) as StateSnapshot;
+      const conv = snap.conversations[0]!;
+      return conv.messages.some((m) => m.sender === "agent" && m.text.includes("第二台飞书回复-B")) ? snap : undefined;
+    }, 15_000);
+
+    const snapB = (await (await botB.client.get(API_PATHS.state)).json()) as StateSnapshot;
+    const userMsgs = snapB.conversations[0]!.messages.filter((m) => m.sender === "user");
+    expect(userMsgs).toHaveLength(1);
+    expect(userMsgs[0]!.text).toBe("修一下第二台按钮-E2E");
+
+    const pmIdB = snapB.pms[0]!.id;
+    const sentCountBeforePolicy = feishuHub.fake.sent.length;
+    feishuHub.pushEvent(groupMsg(chatB, "om_e2e_b_policy", "/群设置"));
+    const policyCardMsg = await waitUntil("botB posts policy card to chatB", () => {
+      return feishuHub.fake.sent.slice(sentCountBeforePolicy).find((s) => {
+        if (s.chatId !== chatB) return false;
+        let cardId: string | undefined;
+        try {
+          cardId = (JSON.parse(s.content) as { data?: { card_id?: string } }).data?.card_id;
+        } catch {
+          return false;
+        }
+        return cardId !== undefined && (feishuHub.fake.cards.get(cardId)?.includes("群设置") ?? false);
+      });
+    }, 10_000);
+    const clickRes = await feishuHub.pushCardAction({
+      token: "tok_e2e_policy",
+      messageId: policyCardMsg.messageId,
+      chatId: chatB,
+      operatorOpenId: E2E_FEISHU_OWNER,
+      value: { fusa: 1, kind: "set_policy", pmId: pmIdB, guestTier: "collaborator" },
+      formValue: null,
+    });
+    expect(clickRes.toast?.type).toBe("success");
+    await waitUntil("botB updates guestTier to collaborator", async () => {
+      const st = await feishuOf(botB.client);
+      return st.chats.find((c) => c.chatId === chatB)?.guestTier === "collaborator" ? true : undefined;
+    }, 10_000);
+  });
+
+  it("停掉持有者，MESH_LEASE_TTL_MS + MESH_LEASE_RENEW_MS 内下一台持有并接着收", async () => {
+    const stoppedAt = Date.now();
+    await botA.daemon.terminate();
+
+    await waitUntil(
+      "botB takes over feishu lease",
+      async () => {
+        const acct = await accountOf(botB.client);
+        const active = feishuHub.activeDevices();
+        return acct.state === "signed_in" && acct.feishuHolder === botB.id && active.length === 1 && active[0] === botB.id ? true : undefined;
+      },
+      MESH_LEASE_TTL_MS + MESH_LEASE_RENEW_MS,
+    );
+    expect(Date.now() - stoppedAt).toBeLessThanOrEqual(MESH_LEASE_TTL_MS + MESH_LEASE_RENEW_MS);
+
+    feishuHub.pushEvent(groupMsg(chatC, "om_e2e_after_takeover", "新中心转给第三台-E2E"));
+    await waitUntil("botC receives message via new center botB", async () => {
+      const snap = (await (await botC.client.get(API_PATHS.state)).json()) as StateSnapshot;
+      return snap.conversations[0]!.messages.some((m) => m.sender === "user" && m.text === "新中心转给第三台-E2E") ? true : undefined;
+    }, 15_000);
+  }, 35_000);
+
+  it("排前的设备回来后租约让回给它，期间不丢消息", async () => {
+    botA = await bootBotNode(botA.env, false);
+    await waitUntil(
+      "botA reclaims feishu lease and botB disconnects WSClient",
+      async () => {
+        const acct = await accountOf(botA.client);
+        const active = feishuHub.activeDevices();
+        return acct.state === "signed_in" && acct.feishuHolder === botA.id && active.length === 1 && active[0] === botA.id ? true : undefined;
+      },
+      15_000,
+    );
+
+    feishuHub.pushEvent(groupMsg(chatB, "om_e2e_handback_1", "让回租约后的消息-E2E"));
+    await waitUntil("botB receives message after lease handback", async () => {
+      const snap = (await (await botB.client.get(API_PATHS.state)).json()) as StateSnapshot;
+      return snap.conversations[0]!.messages.some((m) => m.sender === "user" && m.text === "让回租约后的消息-E2E") ? true : undefined;
+    }, 15_000);
+  });
+
+  it("第二台离线时群里立刻回离线提示并暂存，第二台上线后送达", async () => {
+    await botB.daemon.terminate();
+    await waitUntil(
+      "botA sees botB offline",
+      async () => {
+        const acct = await accountOf(botA.client);
+        return acct.state === "signed_in" && acct.devices.find((d) => d.id === botB.id)?.online === false ? true : undefined;
+      },
+      MESH_LEASE_TTL_MS,
+    );
+
+    const sentBefore = feishuHub.fake.sent.filter((s) => s.chatId === chatB).length;
+    feishuHub.pushEvent(groupMsg(chatB, "om_e2e_offline_q1", "合盖期间吩咐第二台的事"));
+    await waitUntil("center sends immediate offline notice in chatB", () => {
+      const notices = feishuHub.fake.sent.filter((s) => s.chatId === chatB).slice(sentBefore);
+      return notices.some((n) => n.content.includes("先存着")) ? true : undefined;
+    }, 10_000);
+
+    const offlineClick = await feishuHub.pushCardAction({
+      token: "tok_e2e_offline",
+      messageId: "om_any_card",
+      chatId: chatB,
+      operatorOpenId: E2E_FEISHU_OWNER,
+      value: { fusa: 1, kind: "set_policy", pmId: 1, guestTier: "observer" },
+      formValue: null,
+    });
+    expect(offlineClick.toast?.type).toBe("warning");
+    expect(offlineClick.toast?.content).toContain("离线");
+    expect(offlineClick.toast?.content).toContain("上线后再点");
+
+    botB = await bootBotNode(botB.env, false);
+    await waitUntil("botB comes back online and receives queued message with timestamp prefix", async () => {
+      const snap = (await (await botB.client.get(API_PATHS.state)).json()) as StateSnapshot;
+      const found = snap.conversations[0]!.messages.find((m) => m.sender === "user" && m.text.includes("合盖期间吩咐第二台的事"));
+      return found !== undefined ? found : undefined;
+    }, 15_000).then((found) => {
+      expect(found.text).toMatch(/^（离线期间 \d{2}-\d{2} \d{2}:\d{2} 发的）\n合盖期间吩咐第二台的事$/);
+    });
+  });
+
+  it("飞书凭证在一台接入后出现在另外两台，中继的日志和存储里搜不到 App Secret", async () => {
+    for (const node of [botA, botB, botC]) {
+      const st = await feishuOf(node.client);
+      expect(st.appId).toBe(E2E_FEISHU_APP_ID);
+      const rawSecrets = JSON.parse(readFileSync(join(node.env.home, "state", "feishu-secrets.json"), "utf8")) as {
+        appId: string;
+        appSecret: string;
+      };
+      expect(rawSecrets.appId).toBe(E2E_FEISHU_APP_ID);
+      expect(rawSecrets.appSecret).toBe(E2E_FEISHU_APP_SECRET);
+    }
+
+    expect(relayFrames.length).toBeGreaterThan(0);
+    const wireText = Buffer.concat(relayFrames).toString("utf8");
+    const logText = relayLogs.join("\n");
+    const dbText = readFileSync(relayDb, "utf8");
+    for (const secret of [E2E_FEISHU_APP_SECRET, "修一下第二台按钮-E2E", "合盖期间吩咐第二台的事"]) {
+      expect(wireText).not.toContain(secret);
+      expect(logText).not.toContain(secret);
+      expect(dbText).not.toContain(secret);
+    }
+  });
 });

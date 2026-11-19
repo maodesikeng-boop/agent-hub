@@ -130,7 +130,7 @@ async function blockerCard() {
 it("在电脑上登录好后在飞书点“已处理”：先重问这家厂商再重查，解开并把提醒卡改成定案", async () => {
   const card = await blockerCard();
   claude = "available";
-  expect(card.click().toast?.type).toBe("info");
+  expect((await card.click()).toast?.type).toBe("info");
   await settle();
   expect(card.status()).not.toBe("open");
   expect(fake.callsOf("card.update").some((u) => u.card_id === card.post.cardId)).toBe(true);
@@ -138,7 +138,7 @@ it("在电脑上登录好后在飞书点“已处理”：先重问这家厂商�
 
 it("还没处理好时点“已处理”：卡留着，群里说一句还不能用", async () => {
   const card = await blockerCard();
-  card.click();
+  await card.click();
   await settle();
   expect(card.status()).toBe("open");
   expect(fake.sent.some((s) => s.chatId === card.chatId && s.content.includes("还不能用"))).toBe(true);

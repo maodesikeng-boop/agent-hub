@@ -1,7 +1,7 @@
 // 接入飞书（docs/feishu-design.md）：守护进程、界面服务、终端命令和以后的网页设置页共用的形状。
 // 不变量：
 // - 飞书的编号一律先过 parseFeishu* 变成品牌类型才进领域，领域代码不接受裸字符串；
-// - 每个守护进程只接一个飞书自建应用（长连接是集群模式，同一个应用连两台会随机分走事件）；
+// - 单机未登录账号时本机独立接飞书应用；多台登录同一账号时全账号共用一个飞书应用，同一时刻只有持有 feishu 租约的中心设备连长连接（docs/account-mesh-design.md）；
 // - “主人”只有一个：扫码建应用的那个人（或手动接入后私聊机器人发绑定码的人）。总助单聊、全局设置永远只认主人；
 // - App Secret 只在 state/feishu-secrets.json，不进数据库、不进任何接口响应。
 
@@ -276,6 +276,8 @@ export interface FeishuStatusView {
   missing: string[];
   /** 给人看的最近一次错误；没有是 null。 */
   lastError: string | null;
+  /** 接了中心租约时带：本机现在是不是挂着飞书长连接的中心。 */
+  hosting?: boolean;
   chats: FeishuChatView[];
 }
 

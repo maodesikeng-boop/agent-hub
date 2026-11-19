@@ -215,19 +215,16 @@ export interface FeishuCardkitBudget {
   tryTake(now: number): boolean;
 }
 
-export function createFeishuCardkitBudget(perSecond: number): FeishuCardkitBudget {
-  // 最近一秒内每次拿到预算的时间，环形存最多 perSecond 个：最早那个还在一秒内就说明用满了
+export function createFeishuCardkitBudget(perSecond: number | (() => number)): FeishuCardkitBudget {
   const taken: number[] = [];
-  let head = 0;
   return {
     tryTake(now) {
-      if (taken.length < perSecond) {
-        taken.push(now);
-        return true;
+      const limit = Math.max(1, Math.floor(typeof perSecond === "function" ? perSecond() : perSecond));
+      while (taken.length > 0 && now - taken[0]! >= 1000) {
+        taken.shift();
       }
-      if (now - taken[head]! < 1000) return false;
-      taken[head] = now;
-      head = (head + 1) % perSecond;
+      if (taken.length >= limit) return false;
+      taken.push(now);
       return true;
     },
   };

@@ -10,6 +10,7 @@ import type { AskMeta, ConversationId, Message, MessageId, PmId, RouterItemId, T
 import { FEISHU_GUEST_TIERS, FEISHU_TRIGGER_MODES } from "../../shared/feishu.ts";
 import type { FeishuChatId, FeishuGuestTier, FeishuTriggerMode } from "../../shared/feishu.ts";
 import { FEISHU_CARD_MAX_BYTES, FEISHU_CARD_MAX_CHARS, FEISHU_STREAM_PRINT_FREQUENCY_MS, FEISHU_STREAM_PRINT_STEP } from "../../shared/limits.ts";
+import type { MeshApprovalView } from "../../shared/mesh.ts";
 import type { RouterItem, RouterSettings } from "../../shared/router.ts";
 import type { UserBlockerId } from "../../shared/user-blockers.ts";
 import type { ModelCatalog } from "../../shared/vendors.ts";
@@ -54,7 +55,9 @@ export type FeishuActionValue =
   | { kind: "stop"; conversationId: ConversationId }
   | { kind: "set_policy"; pmId: PmId; triggerMode?: FeishuTriggerMode; guestTier?: FeishuGuestTier }
   | { kind: "set_pm_model"; pmId: PmId; field: FeishuModelField }
-  | { kind: "set_router_model"; field: FeishuModelField };
+  | { kind: "set_router_model"; field: FeishuModelField }
+  /** 总助单聊里的“新电脑请求加入”核对卡按钮。 */
+  | { kind: "mesh_approval"; step: "begin" | "match" | "mismatch"; requestId: string };
 
 /** 按钮值里的版本标记：以后改形状时换版本，老卡片的点击解不出来，回“这张卡已过期”。 */
 const ACTION_MARKER = "fusa";
@@ -76,6 +79,7 @@ const actionValueSchema = z.discriminatedUnion("kind", [
     .refine((v) => v.triggerMode !== undefined || v.guestTier !== undefined),
   z.object({ kind: z.literal("set_pm_model"), pmId: id, field: z.enum(FEISHU_MODEL_FIELDS) }),
   z.object({ kind: z.literal("set_router_model"), field: z.enum(FEISHU_MODEL_FIELDS) }),
+  z.object({ kind: z.literal("mesh_approval"), step: z.enum(["begin", "match", "mismatch"]), requestId: z.string().min(1).max(64) }),
 ]);
 
 /** 后置：返回放进按钮 behaviors.callback.value 的对象。decodeFeishuActionValue(encode(v)) 深等于 v。 */
@@ -499,4 +503,50 @@ export function unrenderableReplyText(code: number): string {
 /** 一张通知卡：总助指令的结果、网页上发的话的镜像（附件挂在正文下面）、断线补发的提示。 */
 export function renderTextCard(input: { title: string; text: string; template?: string; attachments?: readonly FeishuAttachmentView[] }): FeishuCardJson {
   return card({ title: input.title, template: input.template ?? "wathet", summary: input.text, elements: [markdown(input.text), ...attachmentElements(input.attachments ?? [])] });
+}
+
+const PLATFORM_LABELS: Readonly<Record<string, string>> = {
+  darwin: "macOS",
+  win32: "Windows",
+  linux: "Linux",
+};
+
+export type FeishuMeshApprovalCardState =
+  | { kind: "pending"; approval: MeshApprovalView }
+  | { kind: "approved"; deviceName: string }
+  | { kind: "closed"; deviceName: string };
+
+/** 中心发到总助单聊的“新电脑请求加入”卡：先点核对出 6 位核对码，再点一致或不一致；核对完或过期后去掉按钮。 */
+export function renderMeshApprovalCard(state: FeishuMeshApprovalCardState): FeishuCardJson {
+  if (state.kind === "approved") {
+    const text = `**已加入**：「${state.deviceName}」已加入账号。`;
+    return card({ title: "新电脑请求加入", template: "green", summary: text, elements: [markdown(text)] });
+  }
+  if (state.kind === "closed") {
+    const text = `**已结束**：「${state.deviceName}」的加入请求已取消或过期。`;
+    return card({ title: "新电脑请求加入", template: "grey", summary: text, elements: [markdown(text)] });
+  }
+  const { requestId, device, sas } = state.approval;
+  const platform = PLATFORM_LABELS[device.platform] ?? device.platform;
+  if (sas === null) {
+    const text = `「${device.name}」（${platform}）请求加入你的账号。`;
+    return card({
+      title: "新电脑请求加入",
+      template: "blue",
+      summary: text,
+      elements: [markdown(text), button({ text: "核对", type: "primary", value: { kind: "mesh_approval", step: "begin", requestId } })],
+    });
+  }
+  const formattedSas = `${sas.slice(0, 3)} ${sas.slice(3)}`;
+  const text = `「${device.name}」（${platform}）正在核对。\n\n**核对码**：\`${formattedSas}\`\n\n确认那台屏幕上的 6 位数一致后再点“一致”。`;
+  return card({
+    title: "新电脑请求加入",
+    template: "blue",
+    summary: `核对码 ${formattedSas}`,
+    elements: [
+      markdown(text),
+      button({ text: "一致", type: "primary", value: { kind: "mesh_approval", step: "match", requestId } }),
+      button({ text: "不一致", type: "danger", value: { kind: "mesh_approval", step: "mismatch", requestId } }),
+    ],
+  });
 }
