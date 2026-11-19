@@ -1169,6 +1169,9 @@ export const FEISHU_SEEN_MESSAGES_MAX = 2_000;
 export const FEISHU_CLI_POLL_MS = 2_000;
 
 // ───────────── 账号组网（docs/account-mesh-design.md「性能」节）─────────────
+/** state/mesh/ 目录和里面设备私钥的权限。 */
+export const MESH_STATE_DIR_MODE = 0o700;
+export const MESH_KEY_FILE_MODE = 0o600;
 /** 组网入口：局域网直连听的 TCP 端口（所有地址，只说双向认证的 TLS 1.3）。 */
 export const MESH_LISTEN_PORT = 4320;
 /** 一个账号最多几台设备（守护进程的信任表和中继的设备表共用）。 */
@@ -1218,6 +1221,12 @@ export const RELAY_CHANNEL_IDLE_MS = 5 * 60_000;
 export const RELAY_CHANNEL_ACCEPT_TIMEOUT_MS = 10_000;
 /** 每个 IP 每分钟最多注册几次。 */
 export const RELAY_REGISTER_PER_IP_PER_MINUTE = 10;
+/** 数据通道另一端还没接起时，中继最多替先到的一端攒多少字节（TLS 握手的头几条记录）。 */
+export const RELAY_CHANNEL_PENDING_BYTES = 4 * RELAY_MAX_DATA_FRAME_BYTES;
+/** 中继记住最近被移除的几台设备（它们再登入收到 removed）。 */
+export const RELAY_REMOVED_DEVICES_MAX = 64;
+/** 中继当天流量计数多久落一次盘（Cloudflare 按写入行数计费，不每帧都写）。 */
+export const RELAY_USAGE_SAVE_MS = 60_000;
 /** 等批准的设备这么久没被批准就从账号里删掉。 */
 export const RELAY_PENDING_DEVICE_TTL_MS = MESH_APPROVAL_TTL_MS;
 /** 中心把卡片点击转给归属电脑后，最多等多久拿它算出的 toast（要在 FEISHU_CARD_ACTION_DEADLINE_MS 之内）。 */
