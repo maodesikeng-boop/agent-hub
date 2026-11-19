@@ -67,7 +67,8 @@ describe("转发上传到慢链路上的设备", () => {
       const req = request(url, { method: "POST", headers: { cookie: device.cookie, origin: device.url, "content-type": "application/octet-stream", "content-length": String(64 * 1024 * 1024) } }, resolve);
       req.on("error", () => {});
       req.once("close", () => reject(new Error("没拿到响应")));
-      req.write(Buffer.alloc(1024 * 1024, 1));
+      // 只发一小块：一次写得完，不会在对方关连接后还往外写，触发 RST 冲掉还没读到的响应
+      req.write(Buffer.alloc(1024, 1));
     });
     expect(response.statusCode).toBe(413);
     expect(response.headers.connection).toBe("close");
