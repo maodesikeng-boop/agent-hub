@@ -10,7 +10,7 @@
 Keep every project in one continuous thread with persistent memory that survives tool switches,<br>
 manage every repository and machine through Router, and ship or verify work by `@`-mentioning your bot in Feishu.
 
-**[Download](#quick-start)** &nbsp;·&nbsp; **[How it fits together](#how-it-fits-together)** &nbsp;·&nbsp; **[One project, one conversation](#one-project-one-conversation)** &nbsp;·&nbsp; **[Router](#router-one-entry-point-across-projects-and-machines)** &nbsp;·&nbsp; **[Feishu](#feishu-chat-in-the-group-mention-the-bot-to-verify)** &nbsp;·&nbsp; **[Security](#security-and-vendor-terms)** &nbsp;·&nbsp; **English** · [简体中文](README.zh-CN.md)
+**[Download](#quick-start)** &nbsp;·&nbsp; **[How it fits together](#how-it-fits-together)** &nbsp;·&nbsp; **[One project, one conversation](#one-project-one-conversation)** &nbsp;·&nbsp; **[Router](#router-one-entry-point-across-projects-and-machines)** &nbsp;·&nbsp; **[Feishu](#feishu-step-away-from-your-desk-and-bring-the-team-in)** &nbsp;·&nbsp; **[Security](#security-and-vendor-terms)** &nbsp;·&nbsp; **English** · [简体中文](README.zh-CN.md)
 
 <br>
 
@@ -36,7 +36,7 @@ Runs natively on **macOS 13+** (`Bellwood.app`), **Windows x64** (native Tauri 2
 
 ## How it fits together
 
-A local daemon at `127.0.0.1:4317` stores conversations, task graphs, persistent memory, and deliverables in `node:sqlite` (`~/.agent-hub`), exposes a single `hub` CLI over a local Unix socket or Windows named pipe, and drives your installed agent CLIs inside OS-enforced write sandboxes.
+A local daemon manages your conversation ledger, task graphs, project memory, and deliverables in the background, runs your installed agent CLIs inside OS-level sandboxes, and keeps your desktop window and Feishu chats in sync.
 
 <div align="center">
 <picture>
@@ -60,63 +60,55 @@ Long-running agent threads bog down when context fills up, branches collide, or 
 </tr>
 </table>
 
-### 1. Vendor-independent persistent memory
+### 1. Dedicated project memory and synced tools across vendors
 
-Built-in agent memory is locked inside each vendor's private directory. When you change tools, that history stays behind.
+Built-in agent memory stays locked inside each CLI's own folder, and every tool uses its own config format for MCP servers and skills. Switching providers usually means losing every project convention you taught the previous tool and reconfiguring your setup from scratch.
 
-Bellwood stores each PM's memory in `~/.agent-hub/state/pm-memory/<pmId>/` (`MEMORY.md` index up to 200 lines or 25 KB in the system prompt, plus up to 50 `<topic>.md` files up to 1 MB total) alongside versioned persona history in SQLite. Every session mounts this directory automatically, and edits via `hub persona edit` or the profile editor take effect on the next turn with one-click undo. In **Settings → Providers**, **Vendor sync** also merges your MCP servers and `.agents/skills` across installed CLIs atomically. You can run Claude Code in the morning, switch to Codex in the afternoon, and keep the exact same project memory and tools.
+Bellwood keeps dedicated, vendor-independent memory for each project. As you work, the PM automatically records your preferences, architecture rules, and hard-won lessons, and you can inspect, edit, or roll back any change from the profile page. In **Settings → Providers**, one click syncs your configured MCP servers, tools, and skills across every installed CLI on your machine. Run Claude Code in the morning, switch to Codex in the afternoon, and move to Antigravity at night with the exact same project memory and toolset.
 
-### 2. Background compaction and zero-handover vendor switching
+### 2. Seamless background renewal and instant vendor switching
 
-Context renewal and vendor switching solve different problems, so Bellwood separates them cleanly:
+Long sessions get sluggish when context fills up, and mid-task provider switches risk losing momentum. Bellwood handles both underneath without interrupting your flow:
 
-- **Background handover at 400,000 tokens.** When a PM session reaches `400,000` context tokens, the daemon forks the session in the background to write a structured handover while you keep chatting without pause. Because the fork shares the parent's model, system prompt, and tools, it reuses roughly 97% of the prompt cache. Between turns, the PM switches to a fresh session preloaded with its persistent memory, the handover, up to `30,000` characters of recent verbatim dialogue before the cut point, all messages after it, and up to `80,000` characters of loaded skill bodies, while stripping bulky historical tool outputs.
-- **0-second vendor and model switch.** Changing a PM's provider on its profile page (for example `Claude Code → Codex`) does not run a handover summary or dig up stale messages from an earlier generation. Within the same SQLite transaction, Bellwood starts the new vendor with the current generation's base summary (if renewed earlier) plus every user message, attachment path, system event, and full Worker report from the current generation in chronological order (up to `240,000` characters), followed by live Task Graph state. Switching back and forth (`Claude → Codex → Antigravity → Claude`) rebuilds from the same generation anchor with zero nesting.
+- **Automatic background session renewal.** As a long thread approaches its context ceiling, the daemon quietly forks the session in the background to prepare a structured handover while you keep talking. Between turns, it steps into a fresh session with your key context and recent verbatim dialogue intact while dropping bulky historical tool outputs, so one thread stays responsive for weeks.
+- **Zero-wait provider and model switches.** When a quota runs out or you want a second opinion from another model, switch providers on the profile page and continue immediately without waiting for a summary pass. The new model receives your recent dialogue, attachments, Worker reports, and active Task Graph state right away, staying coherent even if you switch back and forth across several tools.
 
 ### 3. Isolated git worktrees and OS sandboxes
 
-Every code-writing Worker starts in its own git worktree (`~/.agent-hub/worktrees/<project>/<worker>`, branch `hub/<id>-<slug>`) so parallel tasks never step on your main checkout or on each other. Configure `hub project setup` once to run dependency setup or code generation before a Worker begins. On Windows, if a repository lives on another drive such as `D:\` or a Dev Drive, Bellwood places worktrees on that same volume under `<drive>:\.fusa-wt\` to preserve `pnpm` hardlinks and disk speed. Worktrees clean up automatically once merged into `main` or 3 days after completion.
-
-Every Worker runs inside an outer OS sandbox (`sandbox-exec` on macOS, `bubblewrap` on Linux, and a `KILL_ON_JOB_CLOSE` Job Object + write-restricted token + NTFS ACLs on Windows, plus native Windows 11 24H2+ MXC containers for read-only Workers) that blocks writes to Bellwood's database, credentials, and sibling worktrees.
+Every code-writing Worker runs in its own isolated `git worktree`, so parallel tasks never collide or dirty your main branch. Configure a setup script once to install dependencies automatically before each Worker starts, and let Bellwood clean up merged worktrees afterward. Every Worker runs inside a native OS sandbox that prevents out-of-bounds writes, and read-only review Workers have write access blocked at the OS level.
 
 ### 4. One `hub` command for sub-agents
 
-Project Managers and Workers coordinate through one local CLI named `hub`, authenticated by a per-session in-memory token over a Unix domain socket or a Windows named pipe:
+The Project Manager coordinates everything through the built-in `hub` CLI without custom glue scripts:
 
 ```sh
-hub status                                                     # role, project paths, setup command, active graphs
-hub graph create --stdin                                       # declare a sequential or parallel DAG of steps
-hub worker start --title "…" --vendor codex --stdin            # dispatch a Worker into an isolated worktree
-hub worker log 818 --stats                                     # inspect step counts and top files without raw logs
-hub ask --node probe --option "60s" --option "5m" --recommended "60s" --stdin
-hub persona edit --reason "…" --stdin                          # update persistent cross-vendor PM memory
+hub graph create --stdin        # declare a multi-step Task Graph with automatic handoff
+hub worker start --stdin        # dispatch a single Worker into an isolated worktree
+hub ask --option "..." --stdin  # post a decision card with a recommended choice
+hub persona edit --stdin        # update cross-vendor project memory
 ```
 
-In the chat input box, type `/hub:worker` to pick the exact vendor, model, and thinking effort for Workers dispatched from that message.
+Type `/hub:worker` in the chat box whenever you want to specify the exact vendor, model, and thinking effort for the Workers dispatched from that message.
 
-### 5. Automatic DAG progression
+### 5. Hands-off background progression
 
-Once the PM creates a Task Graph, the daemon drives execution forward on its own. Each Worker ends its turn with a structured 9-field report (`=== 汇报 ===`). When a step reports `done` with no scope deviation, the daemon automatically passes the graph goal, branch state, and the Worker's handoff notes to the next step's Worker and starts it immediately.
+Once a Task Graph is created, the daemon advances each step on its own. When a step finishes cleanly, the daemon passes the overall goal, branch state, and handoff notes straight to the next Worker and starts it immediately without waking the PM to copy instructions around. The system wakes the PM or posts a card only when a step hits an error, deviates from scope, reaches a user checkpoint, or finishes the entire graph for final sign-off.
 
-The daemon wakes the PM only when judgment is needed: a Worker reports an error or scope deviation, a turn passes its 30-minute reminder (which alerts the PM without killing the process), a node reaches a `confirm` checkpoint, or all steps finish and await final review (`hub graph finish`). On a clean multi-step run, the PM acts twice: once to plan the graph and once to verify the deliverables.
+### 6. Focus only on decisions and acceptance
 
-### 6. Acceptance-first deliverables
-
-Heavy file searches, test runs, and multi-file edits stay inside disposable Worker contexts (capped at `200,000` tokens before rotating to a fresh Worker). For high-impact changes, the PM adds a read-only review step on a second vendor rather than re-reading raw diffs itself.
-
-Workers attach plans, verification notes, screenshots, and H.264 screen recordings (up to `50 MB` each) directly to their reports. Bellwood renders Markdown, Mermaid diagrams, Vega-Lite charts, inline media previews, and structured decision cards with a recommended option right in the thread so you focus on final sign-off.
+Code searches, test runs, and noisy logs stay inside short-lived Workers, and critical changes run through an independent read-only review on a second model vendor so you never have to wade through thousand-line diffs in the main chat. What reaches you are clear decision cards with a recommended option alongside inline screenshots, screen recordings, diagrams, and verification summaries.
 
 ### 7. A calm three-pane view
 
 | Pane | What lives there |
 | :-- | :-- |
-| **Left sidebar** | Pinned **Router** plus one row per Project Manager (20 pixel fruit slimes × 24 jelly accents), grouped by machine when paired. Hundreds of finished Workers never clutter this list. |
-| **Center chat** | One continuous PM thread. Intermediate tool calls fold into `Worked for 39s ›`, and each Worker round surfaces as a status dot and a 120-character summary bubble. |
-| **Right rail** | Live **Task Graph** jelly track (zoomable to the full DAG dialog), active **Pieces**, **Needs You** decision bells, and collapsed **Completed** history (bottom drawer on mobile). Click any Piece to inspect its transcript or message it directly. The PM receives a copy automatically so context never forks. |
+| **Left sidebar** | Pinned **Router** at the top, followed by one pixel fruit slime per project, grouped by computer when linked. Hundreds of historical sub-tasks never clutter your conversation list. |
+| **Center chat** | One continuous PM conversation. Routine tool calls stay folded by default so the thread reads like a clean chat. |
+| **Right rail** | Live **Task Graph** pipeline, active **Pieces**, and items waiting for your call. Open any Piece to inspect its steps or message it directly, with automatic copies to the PM so context never splits. |
 
 ## Router: one entry point across projects and machines
 
-When you manage a dozen repositories across a MacBook, a Windows workstation, and a Linux build server, **Router** sits at the top of the sidebar as one entry point across all of them. Every pending decision card and completion brief across all projects and paired machines streams into one tray. Clicking an option resolves it on the owning machine immediately. You can also tell Router what to do in plain language, even with casual project nicknames, and it routes the task to the right PM or answers cross-project status questions.
+When your projects span a laptop, a desktop workstation, and a remote Linux server, **Router** sits at the top of the sidebar as your single control center. How does one entry point coordinate everything without bogging down?
 
 <div align="center">
 <img src="docs/screenshots/readme/router-en.png" width="900" alt="Router workbench: pending decision cards from Studio Mac and Tokyo Server alongside cross-project status answers">
@@ -124,17 +116,29 @@ When you manage a dozen repositories across a MacBook, a Windows workstation, an
 
 <br>
 
-Three mechanisms let Router cover every project and machine without overflowing its context window:
+### 1. Every pending decision and delivery in one tray
 
-| Mechanism | How it bounds context |
-| :-- | :-- |
-| **Stateless single-turn dispatch** | Router never keeps a long-lived chat session. Each command spawns a one-shot read-only session in an isolated empty directory, feeds it compact PM cards (capped at `24 KB`) and the last 5 cross-vendor command receipts (`600 B`), and exits right after dispatching. Switching Router's model takes 0 seconds. |
-| **Background two-tier project catalog** | Whenever a project accumulates `20,000` weighted dialogue characters (user characters × 4 + PM characters, at least 2 hours apart) or finishes a Task Graph, the daemon runs a lightweight background turn over the ledger and latest handover to refresh a structured catalog entry without touching the PM session. Router sees **Tier 1** (one-liner, casual aliases, current focus) on every turn and calls `hub dispatch project-show` for **Tier 2** (modules, decisions, open items, capped at `4,000` chars) only when needed, never raw transcripts. |
-| **Local ledgers, card-only peering** | Each machine owns its SQLite ledger and refreshes its own project cards locally. Devices on the same account connect directly over the local network when possible and fall back to an end-to-end encrypted relay. Router exchanges compact project digests, forwarded prompts, and decisions. Repositories and tool logs stay on their original machines. |
+Whenever any project on any computer finishes a task or pauses at a fork for your input, its decision card or completion summary lands directly in Router. Pick an option or inspect a screenshot in one place, and your choice syncs straight back to the owning PM.
 
-## Feishu: chat in the group, mention the bot to verify
+### 2. Natural-language dispatch across computers
 
-You can also run Bellwood from native **Feishu** or **Lark** on your phone and desktop, either on your own or with teammates in the same group.
+You never need to remember hostnames or full directory paths. Refer to a project by its everyday nickname (for example, "check if the payment gateway fix is live yet"), and Router matches the right computer and PM, forwards the request, and posts the PM's reply right underneath your original message.
+
+### 3. Two-tier project catalog without context bloat
+
+Router knows what every project is doing because the daemon quietly maintains a two-tier catalog in the background: a compact one-line card with current focus, and an on-demand detailed brief. Router scans compact cards on normal turns and opens a detailed brief only when a question needs deeper context, never loading megabytes of raw chat logs.
+
+### 4. Stateless single-turn dispatch that stays fast
+
+Router carries no growing chat history of its own. Every prompt runs in a clean, isolated one-shot environment that identifies the target, dispatches the work, and exits. Whether you manage five projects or twenty over months of daily use, response speed stays crisp, and switching Router's own provider or model takes effect immediately.
+
+### 5. Sign in once to link every computer
+
+Sign in with the same GitHub account on your Mac, Windows PC, and Linux server, verify a six-digit code once, and your computers form a private mesh. Devices talk directly on the same local network and fall back to an end-to-end encrypted relay across networks. Code and logs stay on each machine while compact project cards and decisions flow seamlessly, with no public IP, SSH tunnel, or port forwarding to maintain.
+
+## Feishu: step away from your desk and bring the team in
+
+With no public server, domain name, or reverse proxy required, open **Feishu** (or **Lark**) on your phone or desktop to run every computer on the go, or invite product, design, and engineering teammates into a project group to ship and verify changes right inside daily chat.
 
 <div align="center">
 <picture>
@@ -145,13 +149,29 @@ You can also run Bellwood from native **Feishu** or **Lark** on your phone and d
 
 <br>
 
-- **No public IP, QR-code app creation.** The daemon connects outward over Feishu's official WebSocket client (`@larksuiteoapi/node-sdk`), so you need no public server, domain, or reverse proxy. Run `node src/feishu/main.ts connect` and scan the terminal QR code with Feishu on your phone. Feishu creates your private bot app and binds you as the owner in one step. After sleep or network drops, an inbound catch-up cursor fetches missed messages from the last 15 minutes with idempotent deduplication.
-- **Direct chat for Router, auto-managed groups per PM.** Messaging the bot 1-on-1 talks to **Router**. For each Project Manager, Bellwood automatically creates a private Feishu chat group named after the PM and renders its pixel fruit slime as the group avatar (archiving a PM dissolves its group cleanly). Replies stream live into Feishu JSON 2.0 cards with a **Stop** button, inline screenshots (bitmaps over `2400px` or `2 MB` are downscaled in a temp copy for fast mobile delivery without touching originals), MP4 walkthroughs, and interactive decision cards that stay in sync with the desktop app.
-- **Team workflow: discuss freely, `@bot` to build and verify.** When you are alone in a project group, every message goes straight to the PM. The moment you invite teammates into the group, it **automatically switches to `@bot` trigger mode**:
-  1. Product, design, and engineering teammates discuss an issue or paste bug screenshots in the group as usual. Bellwood quietly buffers the last `30` non-mention messages (up to `4,000` characters) and up to `20` file references without interrupting.
-  2. Once the group agrees on a plan, anyone `@`-mentions the bot (for example, `@Bellwood implement the agreed TTL change and post desktop + mobile screenshots`).
-  3. The PM receives the buffered discussion alongside the `@`-mention, dispatches Workers into isolated git worktrees to write code, run tests, and capture Playwright verification screenshots, and posts the rendered images and decision cards right back into the group chat.
-- **Per-group guest tiers and in-chat model switching.** Send `/settings` (or `/群设置`) in any project group to pin an interactive settings card where the owner can switch the PM's vendor, model, and effort on the spot, or set guest permissions to **Observer** (messages buffered as context only), **Chat only** (default: guests can `@`-mention the bot to run tasks, while decisions, stop, and uploads require the owner), or **Collaborator** (guests can also resolve cards, stop turns, and send files). Regardless of tier, the ledger hard-blocks guest-triggered turns from creating projects, altering mounted folders, editing setup scripts, or modifying PM memory.
+### 1. Zero public IP setup, one shared bot per account
+
+The daemon connects outward over Feishu's official persistent WebSocket. Run one command, scan the QR code in Feishu on your phone, and your private bot is ready in a minute. All computers signed into your account share that single bot in your chosen priority order: if your primary laptop sleeps or a server restarts, the next online computer takes over automatically, and reconnect catch-up pulls in any messages sent during a brief network drop.
+
+### 2. Direct chat for Router, dedicated slime groups for projects
+
+Message the bot 1-on-1 to talk to **Router** and handle cross-machine dispatch or pending cards from your phone. Each project gets its own Feishu group with its pixel fruit slime as the group avatar. Replies stream live with a **Stop** button, and screenshots, screen recordings, plans, and decision cards appear directly in the main chat in real-time sync with your desktop app.
+
+### 3. Discuss naturally as a team, `@`-mention to build and verify
+
+When you are alone in a project group, every message goes straight to the PM. As soon as you invite teammates into the group, it **automatically switches to `@bot` trigger mode**:
+
+- Teammates discuss ideas, paste bug screenshots, or send raw phone videos as usual while the bot quietly keeps recent context in the background without interrupting.
+- Once the team settles on what to build, anyone `@`-mentions the bot in chat (for example, `@Bellwood ship the fix we just agreed on and post desktop and mobile screenshots here`).
+- The PM receives the full group discussion, dispatches Workers into isolated git worktrees to write code, run tests, and capture real browser screenshots, and posts the verification visuals and decision card right back to the group.
+
+### 4. Switch models and thinking effort from your phone
+
+Send `/settings` in direct chat or `/群设置` in a project group to open an interactive settings card. When a provider hits a rate limit or a tough problem calls for a stronger reasoning model while you are away from your desk, pick a new vendor, model, and effort level right from the Feishu dropdowns with zero downtime.
+
+### 5. Three-tier guest permissions built for team safety
+
+Inviting teammates into a project group never exposes system-level control of your machine. Each group lets you set guest access independently to **Observer** (messages serve as background context only), **Chat only** (default, where teammates can `@`-mention the bot to build and verify while card approvals and stop controls stay owner-only), or **Collaborator** (trusted partners can also approve cards). Creating projects or changing workspace folders remains locked to the owner at the ledger level.
 
 ## Supported agents
 
@@ -261,11 +281,11 @@ When `hub project setup` runs in a new worktree, the daemon also injects `AGENT_
 
 ### Sandbox boundaries
 
-Workers modify files and execute shell commands on your machine as your current OS user. Review the actual enforcement boundaries before running on sensitive systems:
+Workers edit code and run commands as your current OS user. Keep the actual boundaries in mind before running on sensitive machines:
 
-- **Worker write scope (`src/shared/write-scope.ts`, `src/daemon/driver/write-scope.ts`).** Inside protected roots (`~/.agent-hub` and cross-volume `<drive>:\.fusa-wt` roots on Windows), a normal Worker can write only to its own worktree. Both `state/` and other Workers' worktrees are blocked by an outer OS sandbox (`sandbox-exec` on macOS, `bubblewrap` on Linux, and `fusa-run.exe` Job Object + write-restricted token + deny-write NTFS ACLs on Windows, documented in [docs/write-scope.md](docs/write-scope.md)). If the OS sandbox is unavailable, Workers refuse to start. Outside protected roots, normal Workers have no write restrictions and can edit your project folders and other user-writable paths, run commands, and access the network.
-- **Read-only Workers (`src/shared/readonly-policy.ts`).** Block writes everywhere except a private temp directory, restrict MCP connectors to `readOnlyHint: true` tools, and block reads of `state/ui-token`, `state/feishu-secrets.json`, vendor credentials, `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh`, `.env*`, and private key files ([docs/readonly-worker-design.md](docs/readonly-worker-design.md)). On Windows, Codex uses its native read-only sandbox. Other vendors use the Windows 11 24H2+ MXC container (`@microsoft/mxc-sdk`) when available, and fall back with a session warning to a write-restricted token plus vendor tool-layer read-only rules on older Windows builds.
-- **Project Managers are not sandboxed**, and the web port listens on `127.0.0.1` only by default. To report a security issue privately, see [SECURITY.md](SECURITY.md).
+- **Normal Worker write isolation.** Inside its OS sandbox, each normal Worker can write only to its own isolated worktree and cannot tamper with Bellwood's ledger, credentials, memory, or sibling branches ([docs/write-scope.md](docs/write-scope.md)). Outside protected directories, it can read and write your project folder, run tests, and use the network as usual.
+- **Read-only review Workers.** Block writes everywhere except a private temp folder, allow read-only tools only, and block reads of local tokens, Feishu secrets, SSH/cloud credentials, and `.env` private keys ([docs/readonly-worker-design.md](docs/readonly-worker-design.md)).
+- **Project Manager and network scope.** Project Managers themselves are not sandboxed, and the local web UI listens on `127.0.0.1` only by default. See [SECURITY.md](SECURITY.md) to report security issues privately.
 
 ### Vendor terms of service
 
