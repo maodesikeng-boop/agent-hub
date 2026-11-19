@@ -71,7 +71,7 @@
 - 实测（读代码）：发给 agent 的正文由 `deliveryParts` 拼前缀。`src/shared/worker.ts:313`。飞书的署名和背景从这里加，账本不另拼字符串。
 - 实测（读代码）：hub 命令按角色放行只有一张表 `HUB_COMMAND_ROLES`，`hubCall` 在 `src/daemon/ledger/hub-commands.ts:352` 查它。访客轮次的拦截挂在同一处。
 - 实测（读代码）：只读 Worker 禁读的是 `READONLY_SECRET_STATE_FILES`。`src/shared/readonly-policy.ts:52`。所以 App Secret 放单独的 `state/feishu-secrets.json` 并加进这张表。
-- 实测（读代码）：用户上传走 `saveUpload`，单个最多 50 MB。`src/daemon/uploads.ts:71`、`src/shared/limits.ts:204`。飞书收进来的文件照用。
+- 实测（读代码）：用户上传走 `saveUpload`，单个最多 100 MB。`src/daemon/uploads.ts:76`、`src/shared/limits.ts:218`。飞书收进来的文件照用。
 - 实测（读代码）：项目经理的水果原来是 `paletteOf(pmId)` 按编号对颜色表长度取余，图片在 `src/web/assets/avatars/<水果>.webp`。安装包里的守护进程目录不带 `src/web`，网页构建产物的文件名带哈希，所以实现时把水果顺序提到 `src/shared/fruits.ts`（`PM_FRUITS`、`pmFruitOf`，取余只按 `PM_FRUITS.length`），头像图挪到仓库根目录的 `assets/avatars/`，网页和守护进程都读这一处，`scripts/stage-runtime-common.ts` 打包时整个目录带走。后来水果扩到 20 种、头像换成 `scripts/render-avatars.ts` 画的史莱姆小动物：网页用透明底的 `<水果>.svg`，飞书群头像接口只收位图，用同一份像素稿导出的 `<水果>.png`（衬满铺浅底色，每格放大整数倍到约 1024×1024，飞书裁圆后四周留边）。
 - 实测（读代码）：后端按单用户设计，没有多账号。`docs/multi-device-design.md:9`。“访客”只是飞书这一层的身份，不进 Fusa 的账号体系。
 - 实测（跑测试）：`pnpm exec vitest run src/shared/feishu.test.ts src/daemon/feishu src/feishu test/migration.test.ts`：94 过、171 条 todo；`migrate` 从 0 跑到 0034 通过。
