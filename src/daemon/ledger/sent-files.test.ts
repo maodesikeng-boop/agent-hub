@@ -222,6 +222,18 @@ describe("关机与排队上限：慢附件不丢已收到的回复", () => {
     expect(existsSync(sentFilesDir) ? readdirSync(sentFilesDir) : []).toEqual([]);
   });
 
+  it("关机时 --file 还在读：马上记 unreadable，放行后不留副本", async () => {
+    const slow = file(join(main, "slow.txt"));
+    const hold = holdOpen(slow);
+    const shared = ledger.shareHubFiles(pm.sessionId, [{ label: null, path: slow }]);
+    await hold.opened.promise;
+    ledger.close();
+    expect(await shared).toEqual([expect.objectContaining({ path: slow, name: "slow.txt", status: "unreadable", id: null })]);
+    hold.release.resolve();
+    await hold.closed.promise;
+    expect(existsSync(sentFilesDir) ? readdirSync(sentFilesDir) : []).toEqual([]);
+  });
+
   it("关机之后驱动层再交来的事件不落库", () => {
     ledger.close();
     send(pm.sessionId, "关机后才到");

@@ -68,11 +68,11 @@ export function createLedgerSentFiles(db: Db, opts: SentFilesOptions) {
   /** 回复里写成本机路径的链接（只解析，不碰文件）；空数组表示这条回复不用存副本，可以直接入库。 */
   const localLinks = (text: string): LocalLink[] => localLinksIn(text);
 
-  /** 给这些链接存副本、返回 { files }；一个都不算返回 null（meta 照旧是 null）。出了意外只记日志，消息照样入库。 */
-  const metaFor = async (session: AgentSessionRow, links: readonly LocalLink[]): Promise<AgentTextMeta | null> => {
+  /** 给这些链接存副本、返回 { files }；一个都不算、signal 取消了返回 null（meta 照旧是 null）。出了意外只记日志，消息照样入库。 */
+  const metaFor = async (session: AgentSessionRow, links: readonly LocalLink[], signal: AbortSignal): Promise<AgentTextMeta | null> => {
     if (links.length === 0) return null;
     try {
-      const files = await shareLinkedFiles(links, scopeFor(session));
+      const files = await shareLinkedFiles(links, scopeFor(session), signal);
       return files.length === 0 ? null : { files };
     } catch (error) {
       console.error(`${LOG_PREFIX} sent files:`, error);
@@ -85,13 +85,14 @@ export function createLedgerSentFiles(db: Db, opts: SentFilesOptions) {
 
   /**
    * hub ask / router report 的 --file：按这个会话能分享的文件夹存副本，规则和回复里的链接一样（daemon/sent-files.ts）。
-   * 后置：返回的 files 和 args 一一对应、顺序相同（没存下的 status 不是 "saved"）；args 为空返回空数组。不抛错，单个文件出错记成 unreadable。
+   * 后置：返回的 files 和 args 一一对应、顺序相同（没存下的 status 不是 "saved"）；args 为空返回空数组。不抛错，单个文件出错、signal 取消记成 unreadable。
    */
-  const filesForArgs = async (session: AgentSessionRow, args: readonly HubFileArg[]): Promise<SentFile[]> => {
+  const filesForArgs = async (session: AgentSessionRow, args: readonly HubFileArg[], signal: AbortSignal): Promise<SentFile[]> => {
     if (args.length === 0) return [];
     return shareFilePaths(
       args.map((a) => a.path),
       scopeFor(session),
+      signal,
     );
   };
 

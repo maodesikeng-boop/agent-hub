@@ -22,7 +22,7 @@ import type { DriverEvent } from "../../shared/driver.ts";
 import type { CreatePmInput, CreatePmResult, Ledger, ResolveFolder } from "../../shared/ledger.ts";
 import { deliveryParts } from "../../shared/worker.ts";
 import { waitingAsksNote } from "../../shared/waiting-asks.ts";
-import { WORKER_PURGE_BATCH_ROWS } from "../../shared/limits.ts";
+import { MAX_PENDING_DRIVER_EVENTS_PER_SESSION, WORKER_PURGE_BATCH_ROWS } from "../../shared/limits.ts";
 import { LOG_PREFIX } from "../../shared/names.ts";
 import type { AgentTextMeta } from "../../shared/sent-files.ts";
 import type { LocalLink } from "../sent-files.ts";
@@ -91,6 +91,10 @@ export interface SqliteLedger extends Ledger {
   projectCatalog: Omit<LedgerProjectCatalog, "afterDriverEvent" | "markForcedIn">;
   resolveRouterLocalWorker: LedgerRouter["resolveLocalWorker"];
   listRouterLocalWorkers: LedgerRouter["listLocalWorkers"];
+  /**
+   * 关库之前调（关机、测试）：取消在拷的附件，各会话排着的驱动事件按顺序不带附件同步落库，返回后不再写库；
+   * 之后交来的驱动事件丢弃，--file 在拷的记 unreadable。
+   */
   close(): void;
 }
 
@@ -278,10 +282,18 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     });
 
   /**
-   * 同一会话还没落库的驱动事件链：前面有一条 agent.text 在异步存副本时，后来的事件都排在它后面，按到达顺序进事务
+   * 同一会话还没落库的驱动事件：前面有一条 agent.text 在异步存副本时，后来的事件都排在它后面，按到达顺序进事务
    * （回复、这一轮结束、汇报给项目经理的先后不变）。落完就从表里删掉，表里只有正在拷文件的会话。
+   * 每条最多 MAX_PENDING_DRIVER_EVENTS_PER_SESSION 项；满了或关机（close）时 flush：取消在拷的附件，排着的不带附件同步落库。
    */
-  const pendingDriverEvents = new Map<SessionId, Promise<void>>();
+  interface DriverEventQueue {
+    items: Array<{ event: DriverEvent; links: LocalLink[] }>;
+    abort: AbortController;
+    drained: Promise<void>;
+  }
+  const driverEventQueues = new Map<SessionId, DriverEventQueue>();
+  /** close() 之后：驱动事件不再落库，--file 在拷的取消。 */
+  const closing = new AbortController();
 
   // Worker 的会话这一轮结束：同一个事务里给项目经理发那一行（workers.ts）；项目经理写完交接：同一个事务里换代（handover.ts）
   const applyDriverEventNow = (sessionId: SessionId, event: DriverEvent, textMeta: AgentTextMeta | null) => {
@@ -312,11 +324,45 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   };
 
   /** 进事务之前给 agent.text 里的本机链接存副本；会话没了、不记对话、重放过的这条不碰文件。 */
-  const textMetaFor = async (sessionId: SessionId, event: Extract<DriverEvent, { type: "agent.text" }>, links: readonly LocalLink[]) => {
+  const textMetaFor = async (sessionId: SessionId, event: DriverEvent, links: readonly LocalLink[], signal: AbortSignal) => {
+    if (event.type !== "agent.text" || links.length === 0) return null;
     const session = getAgentSession(db, sessionId);
     if (session === null || session.role === "assistant" || session.conversationId === null) return null;
     if (db.get("SELECT 1 AS x FROM messages WHERE dedupe_key = ?", agentMessageDedupeKey(sessionId, event.uuid)) !== undefined) return null;
-    return sentFiles.metaFor(session, links);
+    return sentFiles.metaFor(session, links, signal);
+  };
+
+  const applyLogged = (sessionId: SessionId, event: DriverEvent, textMeta: AgentTextMeta | null) => {
+    try {
+      applyDriverEventNow(sessionId, event, textMeta);
+    } catch (error) {
+      console.error(`${LOG_PREFIX} driver event ${event.type} (session ${sessionId}):`, error);
+    }
+  };
+
+  /** 按顺序处理队头：先存副本（不在事务里），再落库。flush 过（abort）就停，排着的已经由 flush 落完。 */
+  const drainDriverEvents = async (sessionId: SessionId, queue: DriverEventQueue) => {
+    const { signal } = queue.abort;
+    while (queue.items.length > 0) {
+      const { event, links } = queue.items[0]!;
+      let textMeta: AgentTextMeta | null = null;
+      try {
+        textMeta = await textMetaFor(sessionId, event, links, signal);
+      } catch (error) {
+        console.error(`${LOG_PREFIX} driver event ${event.type} (session ${sessionId}):`, error);
+      }
+      if (signal.aborted) return;
+      queue.items.shift();
+      applyLogged(sessionId, event, textMeta);
+    }
+    if (driverEventQueues.get(sessionId) === queue) driverEventQueues.delete(sessionId);
+  };
+
+  /** 不再等附件：取消队头在拷的，排着的按顺序不带附件同步落库（回复正文不丢，链接照原样显示）。 */
+  const flushDriverEvents = (sessionId: SessionId, queue: DriverEventQueue) => {
+    queue.abort.abort();
+    driverEventQueues.delete(sessionId);
+    for (const { event } of queue.items.splice(0)) applyLogged(sessionId, event, null);
   };
 
   return {
@@ -367,30 +413,35 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     onActionEnqueued: (listener) => subscribe(actionListeners, listener),
 
     applyDriverEvent(sessionId, event) {
-      const pending = pendingDriverEvents.get(sessionId);
+      if (closing.signal.aborted) {
+        console.error(`${LOG_PREFIX} driver event ${event.type} (session ${sessionId}) after ledger close: dropped`);
+        return;
+      }
+      let queue = driverEventQueues.get(sessionId);
+      if (queue !== undefined && queue.items.length >= MAX_PENDING_DRIVER_EVENTS_PER_SESSION) {
+        flushDriverEvents(sessionId, queue);
+        queue = undefined;
+      }
       const links = event.type === "agent.text" ? sentFiles.localLinks(event.text) : [];
-      if (pending === undefined && links.length === 0) {
+      if (queue === undefined && links.length === 0) {
         applyDriverEventNow(sessionId, event, null);
         return;
       }
       // 这条回复要存副本（异步拷文件），或者同一会话前面还有没落库的：排在后面，拷完、前面的落完再进事务
-      const textMeta = async () => (event.type === "agent.text" && links.length > 0 ? textMetaFor(sessionId, event, links) : null);
-      const next = (pending ?? Promise.resolve())
-        .then(async () => applyDriverEventNow(sessionId, event, await textMeta()))
-        .catch((error: unknown) => {
-          console.error(`${LOG_PREFIX} driver event ${event.type} (session ${sessionId}):`, error);
-        });
-      pendingDriverEvents.set(sessionId, next);
-      void next.then(() => {
-        if (pendingDriverEvents.get(sessionId) === next) pendingDriverEvents.delete(sessionId);
-      });
+      if (queue === undefined) {
+        const created: DriverEventQueue = { items: [{ event, links }], abort: new AbortController(), drained: Promise.resolve() };
+        driverEventQueues.set(sessionId, created);
+        created.drained = drainDriverEvents(sessionId, created);
+        return;
+      }
+      queue.items.push({ event, links });
     },
     async settleDriverEvents() {
-      while (pendingDriverEvents.size > 0) await Promise.all([...pendingDriverEvents.values()]);
+      while (driverEventQueues.size > 0) await Promise.all([...driverEventQueues.values()].map((q) => q.drained));
     },
     async shareHubFiles(sessionId, args) {
       const session = getAgentSession(db, sessionId);
-      return session === null ? [] : sentFiles.filesForArgs(session, args);
+      return session === null ? [] : sentFiles.filesForArgs(session, args, closing.signal);
     },
     refreshSessionState: sessions.refreshSessionState,
     // 消息的重发（sessions.ts），再把还没开工的 worktree Worker 重新登记建 worktree（workers.ts：准备命令被关机打断的从头再跑），
@@ -549,6 +600,8 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     skipTaskNode: taskGraphs.skipNode,
     cancelTaskGraph: taskGraphs.cancelGraph,
     close(): void {
+      closing.abort();
+      for (const [sessionId, queue] of [...driverEventQueues]) flushDriverEvents(sessionId, queue);
       workers.clearAllMaxTime();
       sessions.clearAllStreaming();
     },

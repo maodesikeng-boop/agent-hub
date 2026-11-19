@@ -309,7 +309,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       });
     }
     parts.sandboxGuard?.clear();
-    // claude 都退出了、事件都交给账本了：等排着的（回复里的文件在存副本）落库，再取消订阅、关库
+    // claude 都退出了、事件都交给账本了：等排着的（回复里的文件在存副本）落库，再取消订阅、关库。到点没落完的，取消订阅时 ledger.close() 取消拷贝、不带附件落库
     if (parts.ledger) {
       const ledger = parts.ledger;
       await step("账本事件", async () => {

@@ -165,13 +165,19 @@ const sameFile = (a: Stats, b: Stats) => a.dev === b.dev && a.ino === b.ino;
  * 从句柄分块拷最多 stat.size 个字节到新文件（不存在才建，0600），边拷边算 sha256，修改时间设成原文件的。
  * 拷的时候源文件被截断，就拷到读不出为止：返回实际拷到的字节数。
  */
-export async function copyFromHandle(source: FileHandle, stat: Stats, dest: string): Promise<{ bytes: number; sha256: string }> {
+export async function copyFromHandle(
+  source: FileHandle,
+  stat: Stats,
+  dest: string,
+  signal?: AbortSignal,
+): Promise<{ bytes: number; sha256: string }> {
   const out = await open(dest, "wx", 0o600);
   const hash = createHash("sha256");
   let position = 0;
   try {
     const buffer = Buffer.allocUnsafe(Math.min(SENT_FILE_COPY_CHUNK_BYTES, Math.max(1, stat.size)));
     while (position < stat.size) {
+      signal?.throwIfAborted();
       const { bytesRead } = await source.read(buffer, 0, Math.min(buffer.length, stat.size - position), position);
       if (bytesRead === 0) break;
       hash.update(buffer.subarray(0, bytesRead));
@@ -214,8 +220,16 @@ async function realOrNullAsync(path: string): Promise<string | null> {
   }
 }
 
-/** 处理一个链接：判断、开、拷。budget 是这条消息还能拷多少字节。 */
-async function shareOne(path: string, local: LocalHref, name: string, budget: number, scope: ShareScope, sensitive: readonly string[]): Promise<Outcome> {
+/** 处理一个链接：判断、开、拷。budget 是这条消息还能拷多少字节。signal 取消后不再发布副本，拷了一半的删掉。 */
+async function shareOne(
+  path: string,
+  local: LocalHref,
+  name: string,
+  budget: number,
+  scope: ShareScope,
+  sensitive: readonly string[],
+  signal: AbortSignal | undefined,
+): Promise<Outcome> {
   const real = await realOrNullAsync(path);
   if (real === null) return local.kind !== "relative" && isShareable(looseRealpath(path), scope, sensitive) ? reject("missing") : { status: "skip" };
   let before: Stats;
@@ -234,6 +248,7 @@ async function shareOne(path: string, local: LocalHref, name: string, budget: nu
     return reject(code === "ENOENT" ? "missing" : code === "ELOOP" ? "not_allowed" : "unreadable");
   }
   try {
+    if (signal?.aborted) return reject("unreadable");
     const stat = await handle.stat();
     if (!stat.isFile()) return reject("not_file", stat);
     // 打开的必须还是检查过的那个文件：检查和 open 之间路径被换掉的，当不在允许的文件夹里
@@ -250,7 +265,8 @@ async function shareOne(path: string, local: LocalHref, name: string, budget: nu
     const partial = join(scope.sentFilesDir, `${PARTIAL_PREFIX}${randomBytes(8).toString("hex")}`);
     try {
       await mkdir(partial, { mode: 0o700 });
-      const copied = await copyFromHandle(handle, stat, join(partial, name));
+      const copied = await copyFromHandle(handle, stat, join(partial, name), signal);
+      signal?.throwIfAborted();
       const id = sentFileId(name, copied.sha256);
       const target = join(scope.sentFilesDir, id);
       // 编号由文件名和内容算出：目录里正好是这个名字、这个大小的文件，就是同一份已发布的副本
@@ -274,7 +290,7 @@ async function shareOne(path: string, local: LocalHref, name: string, budget: nu
       return { status: "saved", id, size: copied.bytes, mtime: stat.mtimeMs };
     } catch (error) {
       await rm(partial, { recursive: true, force: true });
-      console.error(`${LOG_PREFIX} sent file copy failed: ${path}:`, error);
+      if (!signal?.aborted) console.error(`${LOG_PREFIX} sent file copy failed: ${path}:`, error);
       return reject("unreadable", stat);
     }
   } finally {
@@ -294,7 +310,7 @@ export type LocalLink = { href: string; local: LocalHref };
  * 按文件头的规则逐个判断、存副本，收满 MAX_SENT_FILES_PER_MESSAGE 个为止。一个一个拷（预算按前面实际拷到的算）。
  * strict 是 false（回复里的链接）：不算发文件的不进结果、不占名额；strict 是 true（--file 指名要发的）：也记一项，写清为什么没存。
  */
-async function shareLinks(links: readonly LocalLink[], scope: ShareScope, strict: boolean): Promise<SentFile[]> {
+async function shareLinks(links: readonly LocalLink[], scope: ShareScope, strict: boolean, signal: AbortSignal | undefined): Promise<SentFile[]> {
   const files: SentFile[] = [];
   let used = 0;
   // 敏感清单这条消息里只 realpath 一次（不跨消息缓存：符号链接、主目录随时可能变）
@@ -306,7 +322,7 @@ async function shareLinks(links: readonly LocalLink[], scope: ShareScope, strict
     let outcome: Outcome;
     try {
       await mkdir(scope.sentFilesDir, { recursive: true, mode: 0o700 });
-      outcome = await shareOne(path, local, name, MAX_SENT_FILES_TOTAL_BYTES - used, scope, sensitive);
+      outcome = signal?.aborted ? reject("unreadable") : await shareOne(path, local, name, MAX_SENT_FILES_TOTAL_BYTES - used, scope, sensitive, signal);
     } catch (error) {
       console.error(`${LOG_PREFIX} sent file failed: ${path}:`, error);
       outcome = reject("unreadable");
@@ -327,12 +343,25 @@ async function shareLinks(links: readonly LocalLink[], scope: ShareScope, strict
 }
 
 /**
- * 回复里的本机文件链接（localLinksIn 解析出的）按文件头的规则逐个判断、存副本。返回 meta.files；一个都不算返回空数组。
- * 不抛错：单个文件出错记成 unreadable。
+ * signal 取消时不等 work（卡在 open 上的读取取消不了）：马上返回 onAbort()。work 自己看到 signal 后收尾，不发布副本。
  */
-export function shareLinkedFiles(links: readonly LocalLink[], scope: ShareScope): Promise<SentFile[]> {
+function unlessAborted<T>(work: Promise<T>, signal: AbortSignal | undefined, onAbort: () => T): Promise<T> {
+  if (signal === undefined) return work;
+  if (signal.aborted) return Promise.resolve(onAbort());
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => resolve(onAbort());
+    signal.addEventListener("abort", abort, { once: true });
+    work.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
+}
+
+/**
+ * 回复里的本机文件链接（localLinksIn 解析出的）按文件头的规则逐个判断、存副本。返回 meta.files；一个都不算返回空数组。
+ * 不抛错：单个文件出错记成 unreadable。signal 取消（关机、排队满了）时马上返回空数组，这条回复不带附件。
+ */
+export function shareLinkedFiles(links: readonly LocalLink[], scope: ShareScope, signal?: AbortSignal): Promise<SentFile[]> {
   if (links.length === 0) return Promise.resolve([]);
-  return shareLinks(links, scope, false);
+  return unlessAborted(shareLinks(links, scope, false, signal), signal, () => []);
 }
 
 const WIN_ABSOLUTE = /^(?:[A-Za-z]:[\\/]|\\\\)/;
@@ -340,13 +369,20 @@ const WIN_ABSOLUTE = /^(?:[A-Za-z]:[\\/]|\\\\)/;
 /**
  * hub ask / router report 的 --file：路径原样（不当 Markdown、不做 %xx 解码）按同一套规则存副本。
  * 后置：结果和 paths 一一对应、顺序相同；没存下的写明原因（没找到、不在可分享的文件夹里……）。不抛错。
+ * signal 取消（关机）时马上返回，一律记 unreadable。
  */
-export function shareFilePaths(paths: readonly string[], scope: ShareScope): Promise<SentFile[]> {
+export function shareFilePaths(paths: readonly string[], scope: ShareScope, signal?: AbortSignal): Promise<SentFile[]> {
   const links = paths.map((path) => ({
     href: path,
     local: { kind: isAbsolute(path) || WIN_ABSOLUTE.test(path) ? "absolute" : "relative", path } as LocalHref,
   }));
-  return shareLinks(links, scope, true);
+  const unreadable = (): SentFile[] =>
+    links.slice(0, MAX_SENT_FILES_PER_MESSAGE).map(({ href, local }) => {
+      const path = absolutePathOf(local, scope);
+      const name = sanitizeFileName(basename(path));
+      return { href, path, name, mime: sentFileMime(name), id: null, size: null, status: "unreadable", mtime: null };
+    });
+  return unlessAborted(shareLinks(links, scope, true, signal), signal, unreadable);
 }
 
 /** 正文里的图片和链接，按文档顺序：地址和给人看的文字（链接的文字、图片的 alt）。代码块里的不算。 */

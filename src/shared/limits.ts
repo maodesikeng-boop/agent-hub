@@ -434,7 +434,7 @@ export const FATAL_SHUTDOWN_MS = 15_000;
 export const DAEMON_LOG_MAX_BYTES = 2 * 1024 * 1024;
 /** 关机：关 agent 接口最多等多久（它不等还连着的请求，正常一下就关掉；超了不再等，接着关库）。 */
 export const AGENT_API_CLOSE_MS = 3_000;
-/** 关机时等账本把排着的驱动事件（回复里的文件在存副本）落库最多多久；到点没落完的，重启后驱动层重放同一条消息时再存。 */
+/** 关机时等账本把排着的驱动事件（回复里的文件在存副本）落库最多多久；到点没落完的，ledger.close() 取消在拷的附件，排着的回复不带附件落库。 */
 export const LEDGER_SETTLE_ON_SHUTDOWN_MS = 5_000;
 /** 同一会话排着等落库的驱动事件（前面有回复在存副本）最多几条：到了就不再等附件，排着的按顺序直接落库。 */
 export const MAX_PENDING_DRIVER_EVENTS_PER_SESSION = 1_000;
