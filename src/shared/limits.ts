@@ -1172,6 +1172,10 @@ export const FEISHU_CLI_POLL_MS = 2_000;
 /** state/mesh/ 目录和里面设备私钥的权限。 */
 export const MESH_STATE_DIR_MODE = 0o700;
 export const MESH_KEY_FILE_MODE = 0o600;
+/** state/peers.json（设备信任表）的权限。 */
+export const MESH_TRUST_FILE_MODE = 0o600;
+/** 信任表最多记几条墓碑（被撤销的证书）。 */
+export const MESH_TRUST_TOMBSTONES_MAX = 64;
 /** 组网入口：局域网直连听的 TCP 端口（所有地址，只说双向认证的 TLS 1.3）。 */
 export const MESH_LISTEN_PORT = 4320;
 /** 一个账号最多几台设备（守护进程的信任表和中继的设备表共用）。 */
@@ -1223,6 +1227,12 @@ export const RELAY_CHANNEL_ACCEPT_TIMEOUT_MS = 10_000;
 export const RELAY_REGISTER_PER_IP_PER_MINUTE = 10;
 /** 数据通道另一端还没接起时，中继最多替先到的一端攒多少字节（TLS 握手的头几条记录）。 */
 export const RELAY_CHANNEL_PENDING_BYTES = 4 * RELAY_MAX_DATA_FRAME_BYTES;
+/** 自建中继：数据通道一端积压超过这么多字节就先停读另一端，写空再读。 */
+export const RELAY_CHANNEL_HIGH_WATER_BYTES = 1024 * 1024;
+/** 自建中继隔多久收拾一次各账号（租约过期、等批准过期、空闲通道）。 */
+export const RELAY_SWEEP_MS = 1_000;
+/** 自建中继按 IP 记登记次数，最多记几个 IP。 */
+export const RELAY_IP_LIMITER_MAX = 10_000;
 /** 中继记住最近被移除的几台设备（它们再登入收到 removed）。 */
 export const RELAY_REMOVED_DEVICES_MAX = 64;
 /** 中继当天流量计数多久落一次盘（Cloudflare 按写入行数计费，不每帧都写）。 */
