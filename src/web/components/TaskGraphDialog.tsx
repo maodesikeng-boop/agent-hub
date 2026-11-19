@@ -383,7 +383,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                   // 高度只由内容定，下限是写死的一档：把量到的高度写回这里，卡变矮时（拍板、跳过之后）会被旧高度撑住
                   style={{ left: `${box.x}px`, top: `${box.y}px`, width: `${box.width}px` }}
                   data-step={beadOf(node)}
-                  className={cn("pixel-card absolute flex", isPending && "opacity-65")}
+                  className="pixel-card absolute flex"
                 >
                   <div className="pixel-card-body relative flex min-h-17 w-full flex-col justify-between gap-1.5 px-3 pt-5 pb-2.5">
                     <StepTag n={stepNumberOf(node.key)} tone={isDone ? "done" : isRunning ? "running" : "other"} />
@@ -396,7 +396,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                           className={cn(
                             "line-clamp-2 min-w-0 text-minor font-medium wrap-anywhere",
                             isRunning && "status-shimmer",
-                            isSkipped && "text-muted-foreground opacity-60",
+                            (isPending || isSkipped) && "text-muted-foreground",
                           )}
                         >
                           {node.title}
