@@ -129,6 +129,52 @@ export function resolveVendorRouterPreset(
   };
 }
 
+/**
+ * 用户显式选中某家厂商时，界面与飞书设置卡展示的模型与思考程度：
+ * 已存模型时拆分兼容档位（不兼容则取该模型最低档位）；未存模型时取该厂商的总助快模型预设。
+ */
+export function resolveExplicitRouterChoice(
+  vendor: AgentVendor,
+  preference: RouterModelPreference | null | undefined,
+  inputCatalog?: ModelCatalog | null,
+): { model: string; effort: string | null } {
+  const catalog = inputCatalog ?? bundledModelCatalog(vendor);
+  const rawModel = nonEmpty(preference?.model);
+  const rawEffort = nonEmpty(preference?.effort);
+  if (rawModel !== null) {
+    const split = splitModelEffort(vendor, rawModel, rawEffort, catalog);
+    const model = split.model ?? rawModel;
+    const supported = effortsFor(catalog, model);
+    const effort =
+      split.effort !== null && (supported.length === 0 || supported.includes(split.effort))
+        ? split.effort
+        : (supported[0] ?? null);
+    return { model, effort };
+  }
+  const preset = resolveVendorRouterPreset(vendor, catalog);
+  return { model: preset.model, effort: rawEffort ?? preset.effort };
+}
+
+/**
+ * 总助在同一家厂商内切换模型时重算思考程度：
+ * 新模型无可选档位时清空为 null；原档位仍受支持则保留；否则优先回落到预设模型档位或首档。
+ */
+export function resolveRouterEffortForModel(
+  vendor: AgentVendor,
+  nextModel: string,
+  currentEffort: string | null,
+  inputCatalog?: ModelCatalog | null,
+): string | null {
+  const catalog = inputCatalog ?? bundledModelCatalog(vendor);
+  const nextSupported = effortsFor(catalog, nextModel);
+  if (nextSupported.length === 0) return null;
+  if (currentEffort !== null && nextSupported.includes(currentEffort)) return currentEffort;
+  const routerPreset = vendorSpec(vendor).models.routerDefault;
+  return nextModel === routerPreset.model && nextSupported.includes(routerPreset.effort)
+    ? routerPreset.effort
+    : (nextSupported[0] ?? null);
+}
+
 function buildUnavailableMessage(
   code: RouterUnavailableReasonCode,
   preferred: RouterModelUnavailable["preferredVendor"],

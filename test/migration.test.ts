@@ -2439,3 +2439,25 @@ describe("0039_feishu_avatar_look（docs/slime-cohesion-design.md）", () => {
     expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 });
+
+describe("0040_feishu_router_settings_post", () => {
+  it("从 0039 升级保留已有 feishu_posts，允许 router_settings 行，回退 39 重跑幂等", () => {
+    const db = m3Db();
+    migrate(db, migrationsUpTo(39));
+    db.run("INSERT INTO feishu_chats (chat_id, target, pm_id, name, label, created_at, updated_at) VALUES ('oc_router', 'router', NULL, '总助', '总助', 0, 0)");
+    db.run("INSERT INTO feishu_chats (chat_id, target, pm_id, name, label, created_at, updated_at) VALUES ('oc_pm', 'pm', 1, '小林', '小林', 0, 0)");
+    db.run("INSERT INTO feishu_posts VALUES ('chat_policy', 1, 0, 'oc_pm', 'om_p1', 'card_p1', 2, 'final', NULL, 10)");
+    const before = db.all("SELECT * FROM feishu_posts");
+
+    expect(migrate(db, migrationsUpTo(40))).toMatchObject({ from: 39, to: 40 });
+    expect(db.all("SELECT * FROM feishu_posts")).toEqual(before);
+    db.run("INSERT INTO feishu_posts VALUES ('router_settings', 1, 0, 'oc_router', 'om_rs1', 'card_rs1', 0, 'final', NULL, 20)");
+    expect(() => db.run("INSERT INTO feishu_posts VALUES ('bogus_kind', 1, 0, 'oc_router', 'om_x', NULL, 0, 'final', NULL, 20)")).toThrow(/CHECK/);
+
+    const after = db.all("SELECT * FROM feishu_posts ORDER BY ref_kind");
+    db.exec("PRAGMA user_version = 39");
+    expect(() => migrate(db, migrationsDir)).not.toThrow();
+    expect(db.all("SELECT * FROM feishu_posts ORDER BY ref_kind")).toEqual(after);
+    expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+});

@@ -38,7 +38,9 @@ export type FeishuOutboundIntent =
   /** 总助的卡片：新的简报或拍板项，或它的状态变了。 */
   | { kind: "router_item"; item: RouterItem }
   /** 总助指令有了结果：作为新卡片发在总助单聊里；网页发的指令连同原话一起镜像。 */
-  | { kind: "router_command"; command: RouterCommandRecord };
+  | { kind: "router_command"; command: RouterCommandRecord }
+  | { kind: "refresh_policy_card"; pmId: PmId }
+  | { kind: "refresh_router_settings_card" };
 
 export interface FeishuProjectionContext {
   /** 项目经理对话 → 它的群；不是项目经理对话（Worker 对话）或还没建群是 null。 */
@@ -66,9 +68,12 @@ export interface FeishuProjectionContext {
 export function projectFeishuChange(change: Change, ctx: FeishuProjectionContext): FeishuOutboundIntent[] {
   switch (change.type) {
     case "pm.created":
-    case "pm.updated":
     case "pm.removed":
       return [{ kind: "sync_chats" }];
+    case "pm.updated":
+      return [{ kind: "sync_chats" }, { kind: "refresh_policy_card", pmId: change.data.pm.id }];
+    case "router.settings.updated":
+      return ctx.routerChat() === null ? [] : [{ kind: "refresh_router_settings_card" }];
     case "session.status": {
       const { conversationId, pmId, streamingText, status, activity, step } = change.data.session;
       if (conversationId === null || pmId === null || ctx.chatOfConversation(conversationId) === null) return [];

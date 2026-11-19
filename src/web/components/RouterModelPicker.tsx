@@ -11,11 +11,11 @@ import {
   isListed,
   isSelectable,
   modelShortLabel,
+  resolveExplicitRouterChoice,
+  resolveRouterEffortForModel,
   resolveRouterModelPreview,
   resolveVendorRouterPreset,
-  splitModelEffort,
   vendorLabel,
-  vendorSpec,
   type AgentVendor,
   type ModelCatalog,
   type RouterSettings,
@@ -42,27 +42,6 @@ const ROW_INTERACTIVE_CLASS =
 interface OptimisticSettings {
   settings: RouterSettings;
   confirmed: boolean;
-}
-
-function resolveExplicitVendorChoice(
-  vendor: AgentVendor,
-  settings: RouterSettings,
-  catalog: ModelCatalog,
-): { model: string; effort: string | null } {
-  const rawModel = settings.model?.trim() || null;
-  const rawEffort = settings.effort?.trim() || null;
-  if (rawModel !== null) {
-    const split = splitModelEffort(vendor, rawModel, rawEffort, catalog);
-    const model = split.model ?? rawModel;
-    const supported = effortsFor(catalog, model);
-    const effort =
-      split.effort !== null && (supported.length === 0 || supported.includes(split.effort))
-        ? split.effort
-        : (supported[0] ?? null);
-    return { model, effort };
-  }
-  const preset = resolveVendorRouterPreset(vendor, catalog);
-  return { model: preset.model, effort: rawEffort ?? preset.effort };
 }
 
 export const RouterModelPicker = memo(function RouterModelPicker({
@@ -160,7 +139,7 @@ export const RouterModelPicker = memo(function RouterModelPicker({
     }
 
     const prefCat = catalogMap.get(prefVendor) ?? bundledModelCatalog(prefVendor);
-    const chosen = resolveExplicitVendorChoice(prefVendor, effectiveSettings, prefCat);
+    const chosen = resolveExplicitRouterChoice(prefVendor, effectiveSettings, prefCat);
     const shortModel = modelShortLabel(prefVendor, chosen.model, prefCat);
     const vLabel = vendorLabel(prefVendor);
     return {
@@ -230,7 +209,7 @@ export const RouterModelPicker = memo(function RouterModelPicker({
   const selectedChoice = useMemo(
     () =>
       selectedVendor !== null && selectedCatalog !== null
-        ? resolveExplicitVendorChoice(selectedVendor, effectiveSettings, selectedCatalog)
+        ? resolveExplicitRouterChoice(selectedVendor, effectiveSettings, selectedCatalog)
         : null,
     [selectedVendor, selectedCatalog, effectiveSettings],
   );
@@ -247,15 +226,7 @@ export const RouterModelPicker = memo(function RouterModelPicker({
     (nextModel: string) => {
       if (selectedVendor === null || selectedCatalog === null || selectedChoice === null) return;
       if (nextModel === selectedChoice.model) return;
-      const nextSupported = effortsFor(selectedCatalog, nextModel);
-      const routerPreset = vendorSpec(selectedVendor).models.routerDefault;
-      let nextEffort: string | null = selectedChoice.effort;
-      if (nextEffort === null || (nextSupported.length > 0 && !nextSupported.includes(nextEffort))) {
-        nextEffort =
-          nextModel === routerPreset.model && nextSupported.includes(routerPreset.effort)
-            ? routerPreset.effort
-            : (nextSupported[0] ?? null);
-      }
+      const nextEffort = resolveRouterEffortForModel(selectedVendor, nextModel, selectedChoice.effort, selectedCatalog);
       void applyUpdate({
         vendor: selectedVendor,
         model: nextModel,

@@ -128,4 +128,20 @@ describe("parseFeishuCardAction", () => {
     expect(parseFeishuCardAction({ messageId: "om_1", chatId: "oc_1", operatorOpenId: "ou_a", value: { ...value, fusa: 0 }, formValue: null })).toBeNull();
     expect(parseFeishuCardAction({ messageId: "bad", chatId: "oc_1", operatorOpenId: "ou_a", value, formValue: null })).toBeNull();
   });
+
+  it("select_static 下拉回传的 option 解析进动作；模型选择动作缺 option 或为空串时返回 null", () => {
+    const pmVendor = encodeFeishuActionValue({ kind: "set_pm_model", pmId: 2, field: "vendor" });
+    const routerEffort = encodeFeishuActionValue({ kind: "set_router_model", field: "effort" });
+    expect(parseFeishuCardAction({ messageId: "om_1", chatId: "oc_1", operatorOpenId: "ou_a", value: pmVendor, option: "codex", formValue: null })).toEqual({
+      messageId: "om_1",
+      chatId: "oc_1",
+      operatorOpenId: "ou_a",
+      value: { kind: "set_pm_model", pmId: 2, field: "vendor" },
+      option: "codex",
+      note: null,
+    });
+    expect(parseFeishuCardAction({ messageId: "om_1", chatId: "oc_1", operatorOpenId: "ou_a", value: routerEffort, option: "high", formValue: null })?.option).toBe("high");
+    expect(parseFeishuCardAction({ messageId: "om_1", chatId: "oc_1", operatorOpenId: "ou_a", value: pmVendor, formValue: null })).toBeNull();
+    expect(parseFeishuCardAction({ messageId: "om_1", chatId: "oc_1", operatorOpenId: "ou_a", value: pmVendor, option: "   ", formValue: null })).toBeNull();
+  });
 });

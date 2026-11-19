@@ -134,6 +134,11 @@ describe("createFeishuStore", () => {
     expect(store.postByMessageId(om("ri"))?.ref).toEqual({ kind: "router_item", itemId: 8 });
     expect(store.postByMessageId(om("none"))).toBeNull();
     expect([...store.pendingCards(pmA)].map((p) => p.ref)).toEqual([{ kind: "router_item", itemId: 8 }]);
+
+    store.upsertChat({ chatId: chat("r"), target: { kind: "router" }, name: "总助", label: "总助" }, 2);
+    store.savePost({ ref: { kind: "router_settings" }, chatId: chat("r"), messageId: om("rs1"), cardId: "c_rs" as FeishuCardId, sequence: 1, state: "final" }, 3);
+    expect(store.postOf({ kind: "router_settings" })?.messageId).toBe("om_rs1");
+    expect(store.postByMessageId(om("rs1"))?.ref).toEqual({ kind: "router_settings" });
   });
 
   it("prunePosts 只删早于 before 的 final / card_settled，等拍板的不删", () => {
@@ -141,9 +146,14 @@ describe("createFeishuStore", () => {
     store.savePost({ ref: { kind: "message", messageId: 2, part: 0 }, chatId: chat("a"), messageId: om("2"), cardId: null, sequence: 0, state: "card_pending" }, 1);
     store.savePost({ ref: { kind: "message", messageId: 3, part: 0 }, chatId: chat("a"), messageId: om("3"), cardId: null, sequence: 0, state: "card_settled" }, 1);
     store.savePost({ ref: { kind: "message", messageId: 4, part: 0 }, chatId: chat("a"), messageId: om("4"), cardId: null, sequence: 0, state: "final" }, 100);
+    store.savePost({ ref: { kind: "chat_policy", pmId: pmA }, chatId: chat("a"), messageId: om("p_old"), cardId: "c_p" as FeishuCardId, sequence: 2, state: "final" }, 1);
+    store.upsertChat({ chatId: chat("r"), target: { kind: "router" }, name: "总助", label: "总助" }, 1);
+    store.savePost({ ref: { kind: "router_settings" }, chatId: chat("r"), messageId: om("rs_old"), cardId: "c_rs" as FeishuCardId, sequence: 1, state: "final" }, 1);
     expect(store.prunePosts(50)).toBe(2);
     expect(store.postOf({ kind: "message", messageId: 2, part: 0 })?.state).toBe("card_pending");
     expect(store.postOf({ kind: "message", messageId: 4, part: 0 })).not.toBeNull();
+    expect(store.postOf({ kind: "chat_policy", pmId: pmA })).toMatchObject({ messageId: om("p_old"), cardId: null, sequence: 2 });
+    expect(store.postOf({ kind: "router_settings" })).toMatchObject({ messageId: om("rs_old"), cardId: null, sequence: 1 });
   });
 
   it("avatarKey / saveAvatarKey 按形象和图片内容哈希存取：哈希对不上（图片换了）当没传过；同一个造型换了颜色是另一个形象", () => {

@@ -41,11 +41,14 @@ export interface FeishuAppPreset {
  * - im:message.group_msg：收群里不 @机器人 的话（单人群直聊、记背景）。敏感权限，个人版企业里主人自己就是管理员；
  * - im:chat.members:read：订阅成员进出群、列群成员和显示名；
  * - im:chat:operate_as_owner：机器人改自己建的群（群主转给主人以后仍能改名、换头像）；
+ * - im:message.pins:write_only：置顶最新设置卡并替换旧置顶（没授予时静默降级）；
  * - 事件：成员进群、退群、群解散、群信息改了。
  */
 export const FEISHU_APP_ADDONS: FeishuAppAddons = {
   preset: true,
-  scopes: { tenant: ["im:message.group_msg", "im:chat.members:read", "im:chat:operate_as_owner"] },
+  scopes: {
+    tenant: ["im:message.group_msg", "im:chat.members:read", "im:chat:operate_as_owner", "im:message.pins:write_only"],
+  },
   events: {
     items: {
       tenant: ["im.chat.member.user.added_v1", "im.chat.member.user.deleted_v1", "im.chat.disbanded_v1", "im.chat.updated_v1"],
@@ -72,7 +75,11 @@ export const FEISHU_REQUIRED_SCOPES: readonly string[] = [
 ];
 
 /** 可选的权限：缺了只降级，不进 needs_permission。 */
-export const FEISHU_OPTIONAL_SCOPES: readonly string[] = ["im:message.group_msg", "im:chat:operate_as_owner"];
+export const FEISHU_OPTIONAL_SCOPES: readonly string[] = [
+  "im:message.group_msg",
+  "im:chat:operate_as_owner",
+  "im:message.pins:write_only",
+];
 
 /** 后置：扫码确认页上预填的应用名和说明，应用名带设备名（如“Fusa · 东京”），一台设备一个应用。 */
 export function feishuAppPreset(deviceName: string): FeishuAppPreset {

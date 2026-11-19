@@ -50,6 +50,7 @@ export interface FeishuInboundAction {
   chatId: FeishuChatId;
   operatorOpenId: FeishuOpenId;
   value: FeishuActionValue;
+  option?: string;
   /** 卡片表单里“补充说明”输入框的内容；没填是 null。 */
   note: string | null;
 }
@@ -131,7 +132,17 @@ export function parseFeishuCardAction(raw: FeishuRawCardAction): FeishuInboundAc
   const operatorOpenId = parseFeishuOpenId(raw.operatorOpenId);
   const value = decodeFeishuActionValue(raw.value);
   if (messageId === null || chatId === null || operatorOpenId === null || value === null) return null;
+  const option = typeof raw.option === "string" && raw.option.trim() !== "" ? raw.option.trim() : null;
+  if ((value.kind === "set_pm_model" || value.kind === "set_router_model") && option === null) return null;
   const rawNote = raw.formValue?.[FEISHU_NOTE_FIELD];
   const note = typeof rawNote === "string" && rawNote.trim() !== "" ? rawNote.trim() : null;
-  return { messageId, chatId, operatorOpenId, value, note, ...(raw.token ? { token: raw.token } : {}) };
+  return {
+    messageId,
+    chatId,
+    operatorOpenId,
+    value,
+    ...(option !== null ? { option } : {}),
+    note,
+    ...(raw.token ? { token: raw.token } : {}),
+  };
 }
