@@ -4,20 +4,24 @@
 // - 降级：中继连不上超过 MESH_LEASE_ORPHAN_MS，且本机是中心顺序里的第一台，就不经租约自己挂上，中继恢复后照租约来。
 // stepCenterLease 是纯函数（时间从事件里来），createCenterLease 把它接到 RelayClient 和定时器上。
 import type { DeviceId } from "../../shared/api.ts";
+import { MESH_LEASE_FENCE_MARGIN_MS, MESH_LEASE_ORPHAN_MS, MESH_LEASE_RENEW_MS, MESH_LEASE_TTL_MS } from "../../shared/limits.ts";
 import type { MeshLeaseGrant, MeshLeaseName, RelayConnectionState } from "../../shared/mesh.ts";
 import type { RelayClient } from "./relay-client.ts";
 
+/** 每个状态都带着中继从什么时候起连不上（连着是 null），降级判断用。 */
 export type CenterLeaseState =
   /** 不是候选（没有飞书凭证、不在中心顺序里、没登录）。 */
-  | { kind: "idle" }
+  | { kind: "idle"; relayDownSince: number | null }
   /** 候选，没持有。 */
   | { kind: "candidate"; relayDownSince: number | null }
   /** 持有。lastAckAt 是最后一次收到中继确认（授予或续约回执）的时刻。 */
-  | { kind: "holder"; epoch: number; lastAckAt: number }
+  | { kind: "holder"; epoch: number; lastAckAt: number; relayDownSince: number | null }
   /** 收到 lease.yield，正在断开长连接，断完回 release。 */
-  | { kind: "yielding"; epoch: number }
+  | { kind: "yielding"; epoch: number; relayDownSince: number | null }
   /** 降级持有：中继连不上，本机是中心顺序第一台。 */
-  | { kind: "orphan_holder"; since: number };
+  | { kind: "orphan_holder"; since: number; relayDownSince: number };
+
+export const INITIAL_CENTER_LEASE_STATE: CenterLeaseState = { kind: "idle", relayDownSince: null };
 
 export type CenterLeaseEvent =
   | { kind: "eligible"; eligible: boolean; at: number }
@@ -54,7 +58,65 @@ export interface CenterLeaseContext {
  * - eligible 变成 false 时无论在哪个状态都回到 idle（持有的先 disconnect、再 release）。
  */
 export function stepCenterLease(state: CenterLeaseState, event: CenterLeaseEvent, context: CenterLeaseContext): { state: CenterLeaseState; effects: CenterLeaseEffect[] } {
-  throw new Error("未实现");
+  const effects: CenterLeaseEffect[] = [];
+  // 持有者先看自己是不是该掐断了：任何事件都算一次检查
+  if (state.kind === "holder" && event.at - state.lastAckAt > context.ttlMs - context.fenceMarginMs) {
+    effects.push({ kind: "disconnect" });
+    state = { kind: "candidate", relayDownSince: state.relayDownSince };
+  }
+  const done = (next: CenterLeaseState, ...more: CenterLeaseEffect[]) => ({ state: next, effects: [...effects, ...more] });
+  const down = state.relayDownSince;
+
+  switch (event.kind) {
+    case "eligible": {
+      if (!event.eligible) {
+        if (state.kind === "holder") return done({ kind: "idle", relayDownSince: down }, { kind: "disconnect" }, { kind: "release", epoch: state.epoch });
+        if (state.kind === "yielding") return done({ kind: "idle", relayDownSince: down }, { kind: "release", epoch: state.epoch });
+        if (state.kind === "orphan_holder") return done({ kind: "idle", relayDownSince: down }, { kind: "disconnect" });
+        return done({ kind: "idle", relayDownSince: down });
+      }
+      if (state.kind === "idle") return done({ kind: "candidate", relayDownSince: down }, { kind: "claim" });
+      return done(state);
+    }
+    case "relay": {
+      const connected = event.state === "connected";
+      const nextDown = connected ? null : (down ?? event.at);
+      if (state.kind === "orphan_holder") {
+        return connected ? done({ kind: "candidate", relayDownSince: null }, { kind: "disconnect" }, { kind: "claim" }) : done(state);
+      }
+      if (state.kind === "candidate" && connected) return done({ kind: "candidate", relayDownSince: null }, { kind: "claim" });
+      return done({ ...state, relayDownSince: nextDown } as CenterLeaseState);
+    }
+    case "grant": {
+      const grant = event.grant;
+      const mine = grant !== null && grant.holder === context.selfId;
+      if (state.kind === "holder") {
+        if (!mine || grant.epoch < state.epoch) return done({ kind: "candidate", relayDownSince: down }, { kind: "disconnect" });
+        return done({ kind: "holder", epoch: grant.epoch, lastAckAt: event.at, relayDownSince: down });
+      }
+      if (state.kind === "candidate" && mine) return done({ kind: "holder", epoch: grant.epoch, lastAckAt: event.at, relayDownSince: down }, { kind: "connect" });
+      if (state.kind === "idle" && mine) return done(state, { kind: "release", epoch: grant.epoch });
+      return done(state);
+    }
+    case "yield": {
+      if (state.kind === "holder" && event.epoch === state.epoch) return done({ kind: "yielding", epoch: state.epoch, relayDownSince: down }, { kind: "disconnect" });
+      return done(state);
+    }
+    case "disconnected": {
+      if (state.kind === "yielding") return done({ kind: "candidate", relayDownSince: down }, { kind: "release", epoch: state.epoch });
+      return done(state);
+    }
+    case "tick": {
+      if (state.kind === "candidate") {
+        if (down !== null && event.at - down >= context.orphanMs && context.firstInPriority === context.selfId) {
+          return done({ kind: "orphan_holder", since: event.at, relayDownSince: down }, { kind: "connect" });
+        }
+        return done(state, { kind: "claim" });
+      }
+      if (state.kind === "holder") return done(state, { kind: "claim" });
+      return done(state);
+    }
+  }
 }
 
 export interface CenterLeaseOptions {
@@ -85,5 +147,97 @@ export interface CenterLease {
 
 /** 后置：候选时每 MESH_LEASE_RENEW_MS 发一次 claim；其余照 stepCenterLease。 */
 export function createCenterLease(options: CenterLeaseOptions): CenterLease {
-  throw new Error("未实现");
+  const now = options.now ?? Date.now;
+  const listeners = new Set<(holder: DeviceId | null) => void>();
+  let state: CenterLeaseState = INITIAL_CENTER_LEASE_STATE;
+  let relayHolder: DeviceId | null = null;
+  let reported: DeviceId | null = null;
+  let queue: Promise<void> = Promise.resolve();
+  let closed = false;
+
+  const holding = () => state.kind === "holder" || state.kind === "orphan_holder";
+  const effectiveHolder = () => (holding() ? options.selfId : relayHolder);
+  const notify = () => {
+    const holder = effectiveHolder();
+    if (holder === reported) return;
+    reported = holder;
+    for (const listener of listeners) listener(holder);
+  };
+  const context = (): CenterLeaseContext => ({
+    selfId: options.selfId,
+    firstInPriority: options.priority()[0] ?? null,
+    ttlMs: MESH_LEASE_TTL_MS,
+    fenceMarginMs: MESH_LEASE_FENCE_MARGIN_MS,
+    orphanMs: MESH_LEASE_ORPHAN_MS,
+  });
+  const run = async (effects: CenterLeaseEffect[]) => {
+    for (const effect of effects) {
+      switch (effect.kind) {
+        case "claim":
+          options.relay.send({ type: "lease.claim", name: options.name });
+          break;
+        case "release":
+          options.relay.send({ type: "lease.release", name: options.name, epoch: effect.epoch });
+          break;
+        case "connect":
+          options.log(`中心租约：本机挂上${options.name}长连接`);
+          options.connect();
+          break;
+        case "disconnect":
+          options.log(`中心租约：本机断开${options.name}长连接`);
+          await options.disconnect();
+          step({ kind: "disconnected", at: now() });
+          break;
+      }
+    }
+  };
+  /** 走一步并把效果排进队列，按顺序执行（断开长连接要等它断完再 release）。 */
+  function step(event: CenterLeaseEvent): void {
+    const result = stepCenterLease(state, event, context());
+    state = result.state;
+    notify();
+    if (result.effects.length === 0) return;
+    queue = queue.then(() => run(result.effects)).catch((error: unknown) => options.log(`中心租约：${error instanceof Error ? error.message : String(error)}`));
+  }
+
+  const unsubscribe = [
+    options.relay.on("lease", (name, grant) => {
+      if (name !== options.name || closed) return;
+      relayHolder = grant?.holder ?? null;
+      step({ kind: "grant", grant, at: now() });
+      notify();
+    }),
+    options.relay.on("leaseYield", (name, epoch) => {
+      if (name === options.name && !closed) step({ kind: "yield", epoch, at: now() });
+    }),
+    options.relay.on("state", (relayState) => {
+      if (closed) return;
+      if (relayState !== "connected") relayHolder = null;
+      step({ kind: "relay", state: relayState, at: now() });
+    }),
+  ];
+  const timer = setInterval(() => step({ kind: "tick", at: now() }), MESH_LEASE_RENEW_MS);
+  timer.unref?.();
+  step({ kind: "relay", state: options.relay.state(), at: now() });
+  step({ kind: "eligible", eligible: options.eligible(), at: now() });
+
+  return {
+    holding,
+    holder: effectiveHolder,
+    refresh() {
+      if (!closed) step({ kind: "eligible", eligible: options.eligible(), at: now() });
+    },
+    onChange(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    async close() {
+      if (closed) return queue;
+      step({ kind: "eligible", eligible: false, at: now() });
+      closed = true;
+      clearInterval(timer);
+      for (const off of unsubscribe) off();
+      await queue;
+    },
+  };
 }
