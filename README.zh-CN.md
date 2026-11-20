@@ -214,9 +214,9 @@ hub persona edit --stdin        # 更新跨厂商项目记忆
 - **Claude Code (`claude`)**：macOS/Linux `curl -fsSL https://claude.ai/install.sh | bash`，Windows PowerShell `irm https://claude.ai/install.ps1 | iex`；登录运行 `claude auth login`。
 - **Codex (`codex`)**：macOS/Linux `curl -fsSL https://chatgpt.com/codex/install.sh | sh` 或 `npm install -g @openai/codex`；登录运行 `codex login`（远端无浏览器终端用 `codex login --device-auth`）。
 - **Antigravity (`agy`)**：macOS/Linux `curl -fsSL https://antigravity.google/cli/install.sh | bash`，Windows PowerShell `irm https://antigravity.google/cli/install.ps1 | iex`；运行 `agy` 登录或配置 `GEMINI_API_KEY`。
-- **Pi (`pi`，见 [docs/vendors/pi.md](docs/vendors/pi.md))**：macOS/Linux `curl -fsSL https://pi.dev/install.sh | sh`，Windows PowerShell `irm https://pi.dev/install.ps1 | iex`（或 `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`）；运行 `pi` 后输入 `/login`。
-- **DeepSeek Harness (`dsh`，见 [docs/vendors/deepseek.md](docs/vendors/deepseek.md))**：运行 `npm install -g @deepseek-ai/dsh@0.2.2-rc.1`，执行 `dsh` 登录或向 `~/.dsh/.env` 写入 `DEEPSEEK_API_KEY=<key>`。
-- **Cursor (`cursor-agent`，见 [docs/vendors/cursor.md](docs/vendors/cursor.md))**：macOS/Linux `curl https://cursor.com/install -fsS | bash`，Windows PowerShell `irm 'https://cursor.com/install?win32=true' | iex`；运行 `cursor-agent login` 登录。
+- **Pi (`pi`，见 [docs/vendor-plugin-design.md](docs/vendor-plugin-design.md))**：macOS/Linux `curl -fsSL https://pi.dev/install.sh | sh`，Windows PowerShell `irm https://pi.dev/install.ps1 | iex`（或 `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`）；运行 `pi` 后输入 `/login`。
+- **DeepSeek Harness (`dsh`，见 [docs/vendor-plugin-design.md](docs/vendor-plugin-design.md))**：运行 `npm install -g @deepseek-ai/dsh@0.2.2-rc.1`，执行 `dsh` 登录或向 `~/.dsh/.env` 写入 `DEEPSEEK_API_KEY=<key>`。
+- **Cursor (`cursor-agent`，见 [docs/vendor-plugin-design.md](docs/vendor-plugin-design.md))**：macOS/Linux `curl https://cursor.com/install -fsS | bash`，Windows PowerShell `irm 'https://cursor.com/install?win32=true' | iex`；运行 `cursor-agent login` 登录。
 
 </details>
 
@@ -283,8 +283,8 @@ pnpm start                          # 构建 dist/web 并在 127.0.0.1:4317 启�
 
 Worker 以你当前系统用户的身份改代码、跑命令，使用前请留意实际边界：
 
-- **普通 Worker 写隔离**：每个普通 Worker 在系统沙箱内只能写自己的独立工作树，无法篡改 Bellwood 账本、凭据、记忆或其他 Worker 的分支（详见 [docs/write-scope.md](docs/write-scope.md)）；工作树与受保护目录之外允许正常读写你的项目目录、运行测试和联网。
-- **只读审查 Worker**：除私有临时目录外全盘禁写，仅放行只读工具，并禁止读取本机令牌、飞书密钥、SSH/云厂商凭据与 `.env` 私钥文件（详见 [docs/readonly-worker-design.md](docs/readonly-worker-design.md)）。
+- **普通 Worker 写隔离与数据目录读隔离**：在 macOS、Linux 与 Windows 原生系统沙箱内，每个普通 Worker 在受保护根目录下只能写自己的独立工作树，同时禁止读取 `state/` 与 `backups/`（账本数据库、界面与厂商令牌、飞书与组网私钥、项目经理记忆及其他会话启动目录），且只能连接 `run/hub.sock`、禁连 `run/admin.sock`（详见 [docs/write-scope.md](docs/write-scope.md)）；受保护目录之外允许正常读写你的项目目录、运行测试和联网。
+- **只读审查 Worker**：除私有临时目录外全盘禁写，仅放行只读工具，执行同样的数据目录读与连接边界，并禁止读取 SSH、云厂商、各家 CLI 凭据与 `.env` 私钥文件（详见 [docs/readonly-worker-design.md](docs/readonly-worker-design.md)）。
 - **项目经理与网络边界**：项目经理本身不受沙箱限制，本地网页服务默认仅监听本机回环地址 `127.0.0.1`。安全漏洞私密报告方式见 [SECURITY.md](SECURITY.md)。
 
 ### 厂商服务条款风险

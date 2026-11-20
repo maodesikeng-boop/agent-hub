@@ -214,9 +214,9 @@ Launch **Bellwood**. When **Settings → Providers** opens, click **Install** ne
 - **Claude Code (`claude`).** On macOS and Linux, run `curl -fsSL https://claude.ai/install.sh | bash`. On Windows PowerShell, run `irm https://claude.ai/install.ps1 | iex`. Sign in with `claude auth login`.
 - **Codex (`codex`).** On macOS and Linux, run `curl -fsSL https://chatgpt.com/codex/install.sh | sh`, or run `npm install -g @openai/codex` on any platform. Sign in with `codex login` (or `codex login --device-auth` on headless servers).
 - **Antigravity (`agy`).** On macOS and Linux, run `curl -fsSL https://antigravity.google/cli/install.sh | bash`. On Windows PowerShell, run `irm https://antigravity.google/cli/install.ps1 | iex`. Run `agy` to sign in, or set `GEMINI_API_KEY`.
-- **Pi (`pi`, [docs/vendors/pi.md](docs/vendors/pi.md)).** On macOS and Linux, run `curl -fsSL https://pi.dev/install.sh | sh`. On Windows PowerShell, run `irm https://pi.dev/install.ps1 | iex` (or `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`). Run `pi` and type `/login`.
-- **DeepSeek Harness (`dsh`, [docs/vendors/deepseek.md](docs/vendors/deepseek.md)).** Run `npm install -g @deepseek-ai/dsh@0.2.2-rc.1`, then run `dsh` or write `DEEPSEEK_API_KEY=<key>` to `~/.dsh/.env`.
-- **Cursor (`cursor-agent`, [docs/vendors/cursor.md](docs/vendors/cursor.md)).** On macOS and Linux, run `curl https://cursor.com/install -fsS | bash`. On Windows PowerShell, run `irm 'https://cursor.com/install?win32=true' | iex`. Sign in with `cursor-agent login`.
+- **Pi (`pi`, [docs/vendor-plugin-design.md](docs/vendor-plugin-design.md)).** On macOS and Linux, run `curl -fsSL https://pi.dev/install.sh | sh`. On Windows PowerShell, run `irm https://pi.dev/install.ps1 | iex` (or `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`). Run `pi` and type `/login`.
+- **DeepSeek Harness (`dsh`, [docs/vendor-plugin-design.md](docs/vendor-plugin-design.md)).** Run `npm install -g @deepseek-ai/dsh@0.2.2-rc.1`, then run `dsh` or write `DEEPSEEK_API_KEY=<key>` to `~/.dsh/.env`.
+- **Cursor (`cursor-agent`, [docs/vendor-plugin-design.md](docs/vendor-plugin-design.md)).** On macOS and Linux, run `curl https://cursor.com/install -fsS | bash`. On Windows PowerShell, run `irm 'https://cursor.com/install?win32=true' | iex`. Sign in with `cursor-agent login`.
 
 </details>
 
@@ -283,8 +283,8 @@ When `hub project setup` runs in a new worktree, the daemon also injects `AGENT_
 
 Workers edit code and run commands as your current OS user. Keep the actual boundaries in mind before running on sensitive machines:
 
-- **Normal Worker write isolation.** Inside its OS sandbox, each normal Worker can write only to its own isolated worktree and cannot tamper with Bellwood's ledger, credentials, memory, or sibling branches ([docs/write-scope.md](docs/write-scope.md)). Outside protected directories, it can read and write your project folder, run tests, and use the network as usual.
-- **Read-only review Workers.** Block writes everywhere except a private temp folder, allow read-only tools only, and block reads of local tokens, Feishu secrets, SSH/cloud credentials, and `.env` private keys ([docs/readonly-worker-design.md](docs/readonly-worker-design.md)).
+- **Normal Worker write and data-directory isolation.** Inside its OS sandbox on macOS, Linux, and Windows, each normal Worker can write only to its own isolated worktree within protected roots, cannot read Bellwood's `state/` or `backups/` directories (SQLite ledger, UI and provider tokens, Feishu and mesh keys, PM memory, or other sessions' launch files), and can connect only to `run/hub.sock` rather than `run/admin.sock` ([docs/write-scope.md](docs/write-scope.md)). Outside protected directories, it can read and write your project folder, run tests, and use the network as usual.
+- **Read-only review Workers.** Block writes everywhere except a private temp folder, allow read-only tools only, enforce the same Bellwood data-directory read and socket boundary, and block reads of SSH, cloud, vendor CLI, and `.env` private credentials ([docs/readonly-worker-design.md](docs/readonly-worker-design.md)).
 - **Project Manager and network scope.** Project Managers themselves are not sandboxed, and the local web UI listens on `127.0.0.1` only by default. See [SECURITY.md](SECURITY.md) to report security issues privately.
 
 ### Vendor terms of service
