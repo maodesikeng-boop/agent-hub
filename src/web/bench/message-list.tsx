@@ -143,6 +143,12 @@ async function timed(update: () => void): Promise<number> {
   return performance.now() - start;
 }
 
+const userMessage = (id: number): Message => ({ ...makeMessage(10), id, dedupeKey: `client:1:c${id}`, text: `Next step for ${id}` });
+
+// Id 10 is a user message in `makeMessage`, so ids 2 to 9 between two user messages form one agent turn.
+const TALL_TURN_FIRST = 2;
+const TALL_TURN_LAST = 9;
+
 const root = createRoot(document.getElementById("root")!);
 let nextId = 0;
 
@@ -159,9 +165,30 @@ const bench = {
       ),
     );
   },
+  /** Mounts one tall turn (an ask, long replies, another ask) followed by `tail` ordinary messages, and returns the two ask ids. */
+  async mountTallTurn(tail: number): Promise<[MessageId, MessageId]> {
+    const ask = (id: number) => ({ ...makeMessage(7), id, dedupeKey: `session:1:u${id}`, text: `Pick a rollout for ${id}` });
+    const long = (id: number) => ({ ...makeMessage(8), id, dedupeKey: `session:1:u${id}` });
+    const replies = Array.from({ length: TALL_TURN_LAST - TALL_TURN_FIRST - 1 }, (_, i) => long(TALL_TURN_FIRST + 1 + i));
+    const turn = [userMessage(TALL_TURN_FIRST - 1), ask(TALL_TURN_FIRST), ...replies, ask(TALL_TURN_LAST)];
+    nextId = TALL_TURN_LAST + tail;
+    const initial = { ...IDLE_STATE, messages: [...turn, ...range(TALL_TURN_LAST + 1, nextId)] };
+    await timed(() =>
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <Harness initial={initial} />
+        </QueryClientProvider>,
+      ),
+    );
+    return [TALL_TURN_FIRST, TALL_TURN_LAST];
+  },
+  /** Appends a user message and an agent reply in turn, so every append adds a new row. */
   append(): Promise<number> {
     nextId += 1;
-    const message = { ...makeMessage(nextId), sender: "agent" as const, sessionId: 1, kind: "text" as const, meta: null, collapsed: false, text: text(1) };
+    const message =
+      nextId % 2 === 0
+        ? userMessage(nextId)
+        : { ...makeMessage(nextId), sender: "agent" as const, sessionId: 1, kind: "text" as const, meta: null, collapsed: false, status: null, dedupeKey: `session:1:u${nextId}`, text: text(1) };
     return timed(() => setHarness?.((s) => ({ ...s, messages: [...s.messages, message], streamingText: null })));
   },
   stream(chunk: string): Promise<number> {
@@ -172,6 +199,10 @@ const bench = {
   },
   olderLoads: () => olderLoads,
   lastCommitMs: () => lastCommitMs,
+  gapFromBottom: () => {
+    const log = document.querySelector('[role="log"]')!;
+    return log.scrollHeight - log.scrollTop - log.clientHeight;
+  },
   imageCount: () => document.querySelectorAll('[role="log"] img').length,
   nodeCount: () => document.querySelectorAll("*").length,
   rowCount: () => document.querySelectorAll("[data-message-id], [data-turn], [data-side]").length,

@@ -45,12 +45,16 @@ interface RunResult {
   streamCommitMs: number;
   blankFrames: number;
   anchorDriftPx: number;
-  focusCentered: boolean;
+  lastPageDriftPx: number;
+  jumpsInView: number;
+  failures: string[];
   errors: string[];
 }
 
 interface BenchApi {
   mount(count: number, older?: number): Promise<number>;
+  mountTallTurn(tail: number): Promise<[number, number]>;
+  gapFromBottom(): number;
   focus(id: number): void;
   olderLoads(): number;
   append(): Promise<number>;
@@ -161,21 +165,34 @@ async function wheelScroll(page: Page): Promise<number> {
 }
 
 const OLDER_POOL = 1000;
+// One page in the harness, so the load flips hasMore off and unmounts the load-earlier button.
+const LAST_OLDER_PAGE = 50;
 const ANCHOR_START_PX = 1200;
 const LOAD_SETTLE_MS = 900;
 const FOCUS_TARGET_ID = 7;
 const FOCUS_SETTLE_MS = 1500;
+const TALL_TURN_TAIL = 160;
+const MAX_GAP_PX = 2;
 
-async function openHarness(page: Page, side: Side, count: number, older: number): Promise<void> {
+const gapFromBottom = (page: Page) => page.evaluate(() => (globalThis as unknown as PageGlobals).__bench.gapFromBottom());
+
+/** Records a failure when the list is not pinned to its real bottom. */
+async function checkPinned(page: Page, label: string, failures: string[]): Promise<void> {
+  const gap = await gapFromBottom(page);
+  if (gap > MAX_GAP_PX) failures.push(`${label}: ${gap.toFixed(0)}px from the bottom`);
+}
+
+async function openHarness(page: Page, side: Side, count: number, older: number, failures: string[]): Promise<void> {
   await page.goto(side.url!);
   await page.waitForFunction(() => "__bench" in globalThis);
   await page.evaluate(([n, o]) => (globalThis as unknown as PageGlobals).__bench.mount(n!, o), [count, older]);
   await sleep(SETTLE_MS);
+  await checkPinned(page, `mount(${count}, ${older})`, failures);
 }
 
 /** Scrolls to the top to load an older page and returns how far the first visible message moved. */
-async function anchorDrift(page: Page, side: Side, count: number): Promise<number> {
-  await openHarness(page, side, count, OLDER_POOL);
+async function anchorDrift(page: Page, side: Side, count: number, older: number, failures: string[]): Promise<number> {
+  await openHarness(page, side, count, older, failures);
   await page.getByRole("log").evaluate((el, top) => (el.scrollTop = top), ANCHOR_START_PX);
   await sleep(SETTLE_MS);
   const before = await page.evaluate(async () => {
@@ -198,20 +215,39 @@ async function anchorDrift(page: Page, side: Side, count: number): Promise<numbe
   return after.offset - before.offset;
 }
 
-/** Jumps to an early message (unmounted in a virtual list) and checks it lands centered and highlighted. */
-async function focusCentered(page: Page, side: Side, count: number): Promise<boolean> {
-  await openHarness(page, side, count, 0);
-  await page.evaluate((id) => (globalThis as unknown as PageGlobals).__bench.focus(id), FOCUS_TARGET_ID);
+/** Jumps to a message and records a failure unless it ends up highlighted and entirely inside the viewport. */
+async function jumpInView(page: Page, id: number, label: string, failures: string[]): Promise<boolean> {
+  await page.evaluate((target) => (globalThis as unknown as PageGlobals).__bench.focus(target), id);
   await sleep(FOCUS_SETTLE_MS);
-  return page.evaluate((id) => {
+  const box = await page.evaluate((target) => {
     const g = globalThis as unknown as PageGlobals;
     const scroller = g.document.querySelector('[role="log"]')!.getBoundingClientRect();
-    const el = g.document.querySelector(`[data-message-id="${id}"]`);
-    if (el === null || el.getAttribute("data-highlighted") !== "true") return false;
-    const box = el.getBoundingClientRect();
-    return box.top < scroller.bottom && box.bottom > scroller.top;
-  }, FOCUS_TARGET_ID);
+    const el = g.document.querySelector(`[data-message-id="${target}"]`);
+    if (el === null || el.getAttribute("data-highlighted") !== "true") return null;
+    const r = el.getBoundingClientRect();
+    return { top: r.top - scroller.top, bottom: r.bottom - scroller.top, height: scroller.bottom - scroller.top };
+  }, id);
+  const ok = box !== null && box.top >= 0 && box.bottom <= box.height;
+  if (!ok) failures.push(`${label}: ${box === null ? "not mounted or highlighted" : `landed at ${box.top.toFixed(0)} to ${box.bottom.toFixed(0)}px in a ${box.height.toFixed(0)}px viewport`}`);
+  return ok;
 }
+
+/** Jumps to an unmounted early message, then to the asks at the top and bottom of a turn taller than the viewport. */
+async function jumps(page: Page, side: Side, count: number, failures: string[]): Promise<number> {
+  await openHarness(page, side, count, 0, failures);
+  let landed = Number(await jumpInView(page, FOCUS_TARGET_ID, `jump to #${FOCUS_TARGET_ID}`, failures));
+  for (const which of [0, 1]) {
+    await page.goto(side.url!);
+    await page.waitForFunction(() => "__bench" in globalThis);
+    const ids = await page.evaluate((tail) => (globalThis as unknown as PageGlobals).__bench.mountTallTurn(tail), TALL_TURN_TAIL);
+    await sleep(SETTLE_MS);
+    await checkPinned(page, "mountTallTurn", failures);
+    landed += Number(await jumpInView(page, ids[which]!, `jump to the ${which === 0 ? "first" : "last"} ask of a tall turn`, failures));
+  }
+  return landed;
+}
+
+const JUMP_TARGETS = 3;
 
 async function sample(page: Page, times: number, kind: "append" | "stream"): Promise<{ total: number[]; commit: number[] }> {
   const total: number[] = [];
@@ -229,17 +265,17 @@ async function sample(page: Page, times: number, kind: "append" | "stream"): Pro
   return { total, commit };
 }
 
-async function shoot(page: Page, side: SideName, shots: string): Promise<void> {
+/** Jumps to the top, then back with the scroll-to-bottom button, which must land on the real bottom. */
+async function jumpEnds(page: Page, side: SideName, shots: string | null, failures: string[]): Promise<void> {
   const log = page.getByRole("log");
-  await page.screenshot({ path: join(shots, `${side}-middle.png`) });
+  if (shots !== null) await page.screenshot({ path: join(shots, `${side}-middle.png`) });
   await log.evaluate((el) => (el.scrollTop = 0));
-  await sleep(300);
-  await page.screenshot({ path: join(shots, `${side}-top.png`) });
-  await log.evaluate((el) => (el.scrollTop = el.scrollHeight));
-  await sleep(300);
-  await log.evaluate((el) => (el.scrollTop = el.scrollHeight));
-  await sleep(300);
-  await page.screenshot({ path: join(shots, `${side}-bottom.png`) });
+  await sleep(SETTLE_MS);
+  if (shots !== null) await page.screenshot({ path: join(shots, `${side}-top.png`) });
+  await page.getByRole("button", { name: "Scroll to bottom" }).click();
+  await sleep(SETTLE_MS);
+  await checkPinned(page, "scroll-to-bottom button", failures);
+  if (shots !== null) await page.screenshot({ path: join(shots, `${side}-bottom.png`) });
 }
 
 async function runOnce(browser: Browser, side: Side, round: number, count: number, shots: string | null): Promise<RunResult> {
@@ -250,18 +286,23 @@ async function runOnce(browser: Browser, side: Side, round: number, count: numbe
     if (msg.type() === "error") errors.push(msg.text());
   });
   page.on("pageerror", (error) => errors.push(error.message));
+  const failures: string[] = [];
   await page.goto(side.url!);
   await page.waitForFunction(() => "__bench" in globalThis);
   const mountMs = await page.evaluate((n) => (globalThis as unknown as PageGlobals).__bench.mount(n), count);
   await sleep(SETTLE_MS);
+  await checkPinned(page, `mount(${count})`, failures);
   const domNodes = await page.evaluate(() => (globalThis as unknown as PageGlobals).__bench.nodeCount());
   const rows = await page.evaluate(() => (globalThis as unknown as PageGlobals).__bench.rowCount());
   const appends = await sample(page, APPENDS, "append");
+  await checkPinned(page, "after appends", failures);
   const streams = await sample(page, STREAM_CHUNKS, "stream");
+  await checkPinned(page, "after streaming", failures);
   const blankFrames = await wheelScroll(page);
-  if (shots !== null) await shoot(page, side.name, shots);
-  const anchorDriftPx = await anchorDrift(page, side, count);
-  const focusOk = await focusCentered(page, side, count);
+  await jumpEnds(page, side.name, shots, failures);
+  const anchorDriftPx = await anchorDrift(page, side, count, OLDER_POOL, failures);
+  const lastPageDriftPx = await anchorDrift(page, side, count, LAST_OLDER_PAGE, failures);
+  const jumpsInView = await jumps(page, side, count, failures);
   await context.close();
   return {
     side: side.name,
@@ -275,7 +316,9 @@ async function runOnce(browser: Browser, side: Side, round: number, count: numbe
     streamCommitMs: median(streams.commit),
     blankFrames,
     anchorDriftPx,
-    focusCentered: focusOk,
+    lastPageDriftPx,
+    jumpsInView,
+    failures,
     errors,
   };
 }
@@ -285,9 +328,9 @@ function summaryRow(name: string, unit: string, before: number[], after: number[
 }
 
 function report(results: RunResult[], meta: { base: string; head: string; count: number; rounds: number; load: string }): string {
-  const of = (side: SideName, key: Exclude<keyof RunResult, "side" | "round" | "errors" | "focusCentered">) => results.filter((r) => r.side === side).map((r) => r[key]);
+  const of = (side: SideName, key: Exclude<keyof RunResult, "side" | "round" | "errors" | "failures">) => results.filter((r) => r.side === side).map((r) => r[key]);
   const line = (label: string, key: Parameters<typeof of>[1], unit: string) => summaryRow(label, unit, of("before", key), of("after", key));
-  const passes = (side: SideName) => results.filter((r) => r.side === side && r.focusCentered).length;
+  const failures = (side: SideName) => results.filter((r) => r.side === side).reduce((n, r) => n + r.failures.length, 0);
   const errors = (side: SideName) => results.filter((r) => r.side === side).reduce((n, r) => n + r.errors.length, 0);
   return [
     "# MessageList virtual scrolling benchmark",
@@ -307,16 +350,18 @@ function report(results: RunResult[], meta: { base: string; head: string; count:
     line("Streaming chunk: to painted frame", "streamMs", "ms"),
     line("Blank viewport samples during 30 fast wheel steps", "blankFrames", ""),
     line("Load-older anchor drift of the first visible message", "anchorDriftPx", "px"),
-    `| Jump to message #${FOCUS_TARGET_ID} lands in view and highlighted | ${passes("before")}/${meta.rounds} | ${passes("after")}/${meta.rounds} |`,
+    line("Same, loading the last older page (load-earlier button unmounts)", "lastPageDriftPx", "px"),
+    line(`Jumps landing highlighted and entirely in view (of ${JUMP_TARGETS})`, "jumpsInView", ""),
+    `| Pin and jump assertion failures (total) | ${failures("before")} | ${failures("after")} |`,
     `| Console errors and page errors (total) | ${errors("before")} | ${errors("after")} |`,
     "",
     "## Runs",
     "",
-    "| Round | Side | DOM nodes | Rows | First render ms | Append commit / frame ms | Stream commit / frame ms | Blank samples | Anchor drift px | Jump ok | Errors |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    "| Round | Side | DOM nodes | Rows | First render ms | Append commit / frame ms | Stream commit / frame ms | Blank samples | Anchor drift px (last page) | Jumps in view | Failures | Errors |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ...results.map(
       (r) =>
-        `| ${r.round} | ${r.side} | ${r.domNodes} | ${r.rows} | ${r.mountMs.toFixed(1)} | ${r.appendCommitMs.toFixed(1)} / ${r.appendMs.toFixed(1)} | ${r.streamCommitMs.toFixed(1)} / ${r.streamMs.toFixed(1)} | ${r.blankFrames} | ${r.anchorDriftPx.toFixed(1)} | ${r.focusCentered ? "yes" : "no"} | ${r.errors.length === 0 ? 0 : r.errors.join("; ")} |`,
+        `| ${r.round} | ${r.side} | ${r.domNodes} | ${r.rows} | ${r.mountMs.toFixed(1)} | ${r.appendCommitMs.toFixed(1)} / ${r.appendMs.toFixed(1)} | ${r.streamCommitMs.toFixed(1)} / ${r.streamMs.toFixed(1)} | ${r.blankFrames} | ${r.anchorDriftPx.toFixed(1)} (${r.lastPageDriftPx.toFixed(1)}) | ${r.jumpsInView}/${JUMP_TARGETS} | ${r.failures.length === 0 ? 0 : r.failures.join("; ")} | ${r.errors.length === 0 ? 0 : r.errors.join("; ")} |`,
     ),
     "",
   ].join("\n");
@@ -357,7 +402,7 @@ async function main(): Promise<void> {
       for (const side of order) {
         const result = await runOnce(browser, side, round, count, round === rounds ? shots : null);
         results.push(result);
-        console.log(`round ${round} ${side.name}: nodes=${result.domNodes} mount=${result.mountMs.toFixed(1)}ms append=${result.appendCommitMs.toFixed(1)}/${result.appendMs.toFixed(1)}ms stream=${result.streamCommitMs.toFixed(1)}/${result.streamMs.toFixed(1)}ms blank=${result.blankFrames} drift=${result.anchorDriftPx.toFixed(1)}px jump=${result.focusCentered} errors=${result.errors.length}`);
+        console.log(`round ${round} ${side.name}: nodes=${result.domNodes} mount=${result.mountMs.toFixed(1)}ms append=${result.appendCommitMs.toFixed(1)}/${result.appendMs.toFixed(1)}ms stream=${result.streamCommitMs.toFixed(1)}/${result.streamMs.toFixed(1)}ms blank=${result.blankFrames} drift=${result.anchorDriftPx.toFixed(1)}/${result.lastPageDriftPx.toFixed(1)}px jumps=${result.jumpsInView}/${JUMP_TARGETS} failures=${result.failures.join("; ") || 0} errors=${result.errors.length}`);
       }
     }
   } finally {
@@ -367,6 +412,7 @@ async function main(): Promise<void> {
   const head = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: REPO_ROOT, encoding: "utf8" }).trim();
   writeFileSync(values.report!, report(results, { base: values.base!, head: `${head}+worktree`, count, rounds, load }));
   console.log(`report: ${values.report}\nscreenshots: ${shots}`);
+  if (results.some((r) => r.failures.length > 0 || r.errors.length > 0)) process.exitCode = 1;
 }
 
 await main();
