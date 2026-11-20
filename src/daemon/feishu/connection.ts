@@ -185,7 +185,6 @@ async function stopWs(ctx: FeishuContext, transport: FeishuTransport) {
   link.scopesChecked = false;
   ctx.approvalCards.clear();
   stopInboundSession(ctx);
-  ackAllRouterEvents(ctx);
   await transport.stop().catch((error: unknown) => ctx.log(`飞书：断开时出错：${errorText(error)}`));
   pumpControl(ctx);
 }

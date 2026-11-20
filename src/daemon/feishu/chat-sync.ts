@@ -194,15 +194,20 @@ export async function syncChats(ctx: FeishuContext): Promise<boolean> {
   return settled;
 }
 
+export function adoptRouterChat(ctx: FeishuContext, chatId: FeishuChatId) {
+  bindRouterChat(ctx, chatId);
+  ackAllRouterEvents(ctx);
+}
+
+// Any device binds the shared chat it learned from a peer; only the center opens it with a greeting.
 export async function ensureRouterChat(ctx: FeishuContext) {
-  if (!isCenter(ctx)) return;
   const o = owner(ctx);
   if (o === null || ctx.store.chatOfTarget({ kind: "router" }) !== null) return;
   if (ctx.app.syncedRouterChatId !== null) {
-    bindRouterChat(ctx, ctx.app.syncedRouterChatId);
-    ackAllRouterEvents(ctx);
+    adoptRouterChat(ctx, ctx.app.syncedRouterChatId);
     return;
   }
+  if (!isCenter(ctx)) return;
   const hello = "已接上飞书。在这里和总助说话；每个项目经理有自己的项目群。";
   const sent = await sendMessage(ctx, { openId: o }, "text", { text: hello }, `fusa-hello-${ctx.store.app()!.appId}`);
   if (sent.chatId !== null) {

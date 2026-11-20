@@ -4,8 +4,7 @@ import type { FeishuChatId } from "../../shared/feishu.ts";
 import { FEISHU_CATCHUP_MAX_MESSAGES, FEISHU_CLOSE_DRAIN_MS, FEISHU_PAGE_SIZE } from "../../shared/limits.ts";
 import { handleError, sendText, unlessRejected } from "./api.ts";
 import { resumeUploads, startUploadsOf } from "./attachments.ts";
-import { ackAllRouterEvents } from "./connection.ts";
-import { errorText, isCenter, isReady, owner, type FeishuContext } from "./context.ts";
+import { errorText, isReady, owner, type FeishuContext } from "./context.ts";
 import {
   postAskCard,
   postRouterAskCard,
@@ -18,7 +17,16 @@ import {
 } from "./decision-cards.ts";
 import { admit, enqueue, requestControl, whenIdle } from "./lanes.ts";
 import { catchUpIntents, projectFeishuChange, type FeishuOutboundIntent } from "./outbound.ts";
-import { activeTarget, chatOfConversation, conversationOfPm, latestMessageId, liveChatOfPm, projectionOf, routerChat } from "./projection.ts";
+import {
+  activeTarget,
+  centerRouterChat,
+  chatOfConversation,
+  conversationOfPm,
+  latestMessageId,
+  liveChatOfPm,
+  projectionOf,
+  routerChat,
+} from "./projection.ts";
 import { refreshPolicyCard, refreshRouterSettingsCard, schedulePolicyCardRefresh, scheduleRouterSettingsCardRefresh } from "./settings-cards.ts";
 import type { FeishuChatBinding } from "./store.ts";
 import { feedStream, finalizeSegment, segmentDone } from "./stream-cards.ts";
@@ -90,7 +98,6 @@ function runIntent(ctx: FeishuContext, intent: FeishuOutboundIntent) {
       startUploadsOf(ctx, intent.message);
       const chat = routerChat(ctx);
       if (chat !== null) replayRouterLater(ctx, chat);
-      else if (!isCenter(ctx)) ackAllRouterEvents(ctx);
       return;
     }
     case "router_item": {
@@ -111,7 +118,7 @@ function runIntent(ctx: FeishuContext, intent: FeishuOutboundIntent) {
       return;
     }
     case "refresh_router_settings_card": {
-      const chat = routerChat(ctx);
+      const chat = centerRouterChat(ctx);
       if (chat !== null) scheduleRouterSettingsCardRefresh(ctx, chat.chatId);
       return;
     }
@@ -125,10 +132,6 @@ export function onLedgerChange(ctx: FeishuContext, change: Change) {
       if (status === "running" && activity !== "idle") ctx.activeTurns.add(conversationId);
       else ctx.activeTurns.delete(conversationId);
     }
-  }
-  if (!isCenter(ctx) && (change.type === "router.item.created" || change.type === "router.item.updated" || change.type === "router.command.updated")) {
-    ackAllRouterEvents(ctx);
-    return;
   }
   if (ctx.link.transport === null || !isReady(ctx) || owner(ctx) === null) return;
   try {

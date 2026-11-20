@@ -11,8 +11,8 @@ import {
 import { FEISHU_BIND_CODE_TTL_MS } from "../../shared/limits.ts";
 import type { FeishuPeerAppSync } from "./account-bot.ts";
 import { handleError } from "./api.ts";
-import { bindRouterChat, deleteChat, ensureRouterChat, syncChats } from "./chat-sync.ts";
-import { ackAllRouterEvents, broadcastPeerApp, checkScopes, connectWith, forgetPreviousApp, syncTransport } from "./connection.ts";
+import { adoptRouterChat, deleteChat, ensureRouterChat, syncChats } from "./chat-sync.ts";
+import { broadcastPeerApp, checkScopes, connectWith, forgetPreviousApp, syncTransport } from "./connection.ts";
 import { displayOwner, errorText, isCenter, isReady, owner, type FeishuContext } from "./context.ts";
 import { retrySyncLater, settleIdle } from "./lanes.ts";
 import { refreshPolicyCard } from "./settings-cards.ts";
@@ -223,8 +223,7 @@ export function createSetupService(ctx: FeishuContext): FeishuSetupService {
 function adoptSyncedRouterChat(ctx: FeishuContext, sync: ConfiguredSync) {
   if (sync.routerChatId === null || ctx.store.chatOfTarget({ kind: "router" }) !== null) return;
   ctx.app.syncedRouterChatId = sync.routerChatId;
-  bindRouterChat(ctx, sync.routerChatId);
-  ackAllRouterEvents(ctx);
+  adoptRouterChat(ctx, sync.routerChatId);
 }
 
 function sameApp(ctx: FeishuContext, sync: ConfiguredSync): boolean {

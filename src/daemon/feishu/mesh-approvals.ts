@@ -3,7 +3,7 @@ import { postCardEntity, unlessRejected, updateCard } from "./api.ts";
 import { renderMeshApprovalCard } from "./cards.ts";
 import { isCenter, isReady, owner, type FeishuContext } from "./context.ts";
 import { enqueue, requestControl } from "./lanes.ts";
-import { routerChat } from "./projection.ts";
+import { centerRouterChat } from "./projection.ts";
 import type { FeishuChatBinding } from "./store.ts";
 
 async function upsertPendingCard(ctx: FeishuContext, chat: FeishuChatBinding, approval: MeshApprovalView) {
@@ -26,7 +26,7 @@ async function upsertPendingCard(ctx: FeishuContext, chat: FeishuChatBinding, ap
 async function syncApprovalCards(ctx: FeishuContext) {
   const mesh = ctx.options.mesh;
   if (!isCenter(ctx) || !isReady(ctx) || mesh === undefined) return;
-  const chat = routerChat(ctx);
+  const chat = centerRouterChat(ctx);
   if (chat === null) return;
   const snap = mesh.approvals();
   if (snap === null) return;
@@ -47,7 +47,7 @@ async function syncApprovalCards(ctx: FeishuContext) {
 
 export function scheduleApprovalCardsSync(ctx: FeishuContext) {
   if (!isCenter(ctx) || !isReady(ctx) || ctx.options.mesh === undefined) return;
-  const chat = routerChat(ctx);
+  const chat = centerRouterChat(ctx);
   if (chat === null) {
     if (owner(ctx) !== null) requestControl(ctx, "sync");
     return;

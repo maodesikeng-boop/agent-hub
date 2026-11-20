@@ -6,7 +6,7 @@ import { attachmentViews, followUpAttachments, prepareAttachments } from "./atta
 import { renderTextCard } from "./cards.ts";
 import type { FeishuContext, HostCard } from "./context.ts";
 import { splitFeishuMarkdown } from "./outbound.ts";
-import { activeTarget } from "./projection.ts";
+import { activeTarget, routerPostUuid } from "./projection.ts";
 import type { FeishuPostRef } from "./store.ts";
 
 export const FEISHU_CLIENT_PREFIX = "feishu:";
@@ -41,7 +41,7 @@ export async function postRouterCommand(ctx: FeishuContext, command: RouterComma
   if (chat === null) return;
   const fromFeishu = command.clientId.startsWith(FEISHU_CLIENT_PREFIX);
   const text = fromFeishu ? routerReplyText(command) : `**网页上说**：${command.inputText}\n\n${routerReplyText(command)}`;
-  await postTextChunks(ctx, chat.chatId, "总助", text, `fusa-c-${command.id}`, (part) => ({ kind: "router_command", commandId: command.id, part }));
+  await postTextChunks(ctx, chat.chatId, "总助", text, routerPostUuid(ctx, "c", command.id), (part) => ({ kind: "router_command", commandId: command.id, part }));
 }
 
 export async function mirrorUser(ctx: FeishuContext, chatId: FeishuChatId, message: Message) {

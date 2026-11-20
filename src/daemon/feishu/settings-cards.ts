@@ -8,7 +8,7 @@ import { renderChatPolicyCard, renderRouterSettingsCard, type FeishuCardJson } f
 import { errorText, isReady, type FeishuContext, type HostCard } from "./context.ts";
 import { enqueue } from "./lanes.ts";
 import type { FeishuPmModelView } from "./model-picker.ts";
-import { activeTarget, liveChatOfPm, routerChat } from "./projection.ts";
+import { activeTarget, centerRouterChat, liveChatOfPm } from "./projection.ts";
 import type { FeishuChatBinding, FeishuPostRecord, FeishuPostRef } from "./store.ts";
 
 const bundledCatalogs = AGENT_VENDORS.map(bundledModelCatalog);
@@ -130,7 +130,7 @@ function refreshCardsAfterCatalogChange(ctx: FeishuContext, before: readonly Mod
     if (chat !== null) schedulePolicyCardRefresh(ctx, chat.chatId, pmId);
   }
   if (ctx.catalogRefresh.router) {
-    const chat = routerChat(ctx);
+    const chat = centerRouterChat(ctx);
     if (chat !== null) scheduleRouterSettingsCardRefresh(ctx, chat.chatId);
   }
 }
