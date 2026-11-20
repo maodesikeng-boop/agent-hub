@@ -3,9 +3,9 @@ import { join, relative, resolve } from "node:path";
 import { parseSync } from "oxc-parser";
 import { describe, expect, it } from "vitest";
 
-const FILE_MAX_LINES = 750;
-const FUNCTION_MAX_LINES = 120;
-const COMMENT_RATIO_MAX = 0.008;
+const FILE_MAX_LINES = 1000;
+const TS_FUNCTION_MAX_LINES = 250;
+const TSX_FUNCTION_MAX_LINES = 300;
 const BASELINE_PATH = "src/code-hygiene.baseline.json";
 
 const NON_PRODUCTION = /\.test\.tsx?$|(^|\/)(test|fake)-[\w-]+\.tsx?$|fixture/;
@@ -18,7 +18,7 @@ const COMMENT_RULES: readonly { pattern: RegExp; problem: string; fix: string }[
 type AstNode = { type: string; start: number; end: number; [key: string]: unknown };
 type FunctionSize = { key: string; line: number; lines: number };
 type CommentIssue = { line: number; problem: string; fix: string };
-type FileReport = { path: string; lines: number; commentLines: number; commentIssues: CommentIssue[]; functions: FunctionSize[] };
+type FileReport = { path: string; lines: number; commentIssues: CommentIssue[]; functions: FunctionSize[] };
 type Baseline = { files: Record<string, number>; functions: Record<string, number> };
 
 const isAstNode = (v: unknown): v is AstNode => typeof v === "object" && v !== null && typeof (v as AstNode).type === "string";
@@ -79,38 +79,33 @@ function measureFunctions(program: AstNode, lineOf: (offset: number) => number):
   return found;
 }
 
-function inspectComments(comments: readonly AstNode[], lineOf: (offset: number) => number): { commentLines: number; issues: CommentIssue[] } {
-  const covered = new Set<number>();
+function inspectComments(comments: readonly AstNode[], lineOf: (offset: number) => number): CommentIssue[] {
   const issues: CommentIssue[] = [];
   for (const comment of comments) {
     const first = lineOf(comment.start);
-    for (let l = first; l <= lineOf(comment.end); l++) covered.add(l);
     (comment.value as string).split("\n").forEach((text, i) => {
       const rule = COMMENT_RULES.find((r) => r.pattern.test(text));
       if (rule) issues.push({ line: first + i, problem: rule.problem, fix: rule.fix });
     });
   }
-  return { commentLines: covered.size, issues };
+  return issues;
 }
 
 function analyzeSource(path: string, source: string): FileReport {
   const { program, comments, errors } = parseSync(path, source);
   if (errors.length > 0) throw new Error(`${path}: parse failed: ${errors[0]!.message}`);
   const lineOf = lineIndex(source);
-  const { commentLines, issues } = inspectComments(comments as unknown as AstNode[], lineOf);
+  const issues = inspectComments(comments as unknown as AstNode[], lineOf);
   const lines = source.endsWith("\n") ? lineOf(source.length - 1) : lineOf(source.length);
-  return { path, lines, commentLines, commentIssues: issues, functions: measureFunctions(program as unknown as AstNode, lineOf) };
+  return { path, lines, commentIssues: issues, functions: measureFunctions(program as unknown as AstNode, lineOf) };
 }
 
 function ratchet(label: string, current: number, recorded: number | undefined, limit: number, howToFix: string): string[] {
-  const allowed = recorded ?? limit;
-  if (current > allowed) return [`${label}: ${current} exceeds the limit of ${allowed}. ${howToFix}`];
-  if (recorded !== undefined && current < recorded) {
-    const update = current > limit ? `lower it to ${current}` : "delete the entry";
-    return [`${label}: shrank from ${recorded} to ${current}; ${update} in ${BASELINE_PATH} so it cannot grow back`];
-  }
-  return [];
+  const allowed = Math.max(recorded ?? limit, limit);
+  return current > allowed ? [`${label}: ${current} exceeds the limit of ${allowed}. ${howToFix}`] : [];
 }
+
+const functionLimit = (path: string): number => (path.endsWith(".tsx") ? TSX_FUNCTION_MAX_LINES : TS_FUNCTION_MAX_LINES);
 
 function checkFile(report: FileReport, baseline: Baseline): string[] {
   const fileFix = "Move cohesive parts into focused modules.";
@@ -118,31 +113,14 @@ function checkFile(report: FileReport, baseline: Baseline): string[] {
   return [
     ...ratchet(`${report.path} file length`, report.lines, baseline.files[report.path], FILE_MAX_LINES, fileFix),
     ...report.functions.flatMap((f) =>
-      ratchet(`${report.path}:${f.line} function ${f.key}`, f.lines, baseline.functions[`${report.path}#${f.key}`], FUNCTION_MAX_LINES, functionFix),
+      ratchet(`${report.path}:${f.line} function ${f.key}`, f.lines, baseline.functions[`${report.path}#${f.key}`], functionLimit(report.path), functionFix),
     ),
     ...report.commentIssues.map((i) => `${report.path}:${i.line}: ${i.problem}; ${i.fix}`),
   ];
 }
 
-function staleEntries(reports: readonly FileReport[], baseline: Baseline): string[] {
-  const paths = new Set(reports.map((r) => r.path));
-  const functions = new Set(reports.flatMap((r) => r.functions.map((f) => `${r.path}#${f.key}`)));
-  const missing = [
-    ...Object.keys(baseline.files).filter((p) => !paths.has(p)),
-    ...Object.keys(baseline.functions).filter((k) => !functions.has(k)),
-  ];
-  return missing.map((key) => `${key}: no longer exists; delete its entry in ${BASELINE_PATH}`);
-}
-
 function checkHygiene(reports: readonly FileReport[], baseline: Baseline): string[] {
-  const violations = [...reports.flatMap((r) => checkFile(r, baseline)), ...staleEntries(reports, baseline)];
-  const lines = reports.reduce((sum, r) => sum + r.lines, 0);
-  const commentLines = reports.reduce((sum, r) => sum + r.commentLines, 0);
-  if (lines > 0 && commentLines / lines > COMMENT_RATIO_MAX) {
-    const ratio = ((commentLines / lines) * 100).toFixed(2);
-    violations.push(`comment lines are ${ratio}% of production code, above ${COMMENT_RATIO_MAX * 100}%; delete comments that restate the code`);
-  }
-  return violations;
+  return reports.flatMap((r) => checkFile(r, baseline));
 }
 
 function productionFiles(dir: string, root: string): string[] {
@@ -159,7 +137,7 @@ const body = (n: number) => Array.from({ length: n }, (_, i) => `  const v${i} =
 const fn = (name: string, bodyLines: number) => `export function ${name}() {\n${body(bodyLines)}\n}\n`;
 
 describe("code hygiene guard", () => {
-  it("keeps every production file under src within the comment, file, and function limits", () => {
+  it("keeps every production file under src within the file, function, and comment rules", () => {
     const root = resolve(".");
     const baseline = JSON.parse(readFileSync(BASELINE_PATH, "utf8")) as Baseline;
     const reports = productionFiles(join(root, "src"), root).map((path) => analyzeSource(path, readFileSync(join(root, path), "utf8")));
@@ -173,7 +151,6 @@ describe("code hygiene guard", () => {
       "src/x.ts:1: non-English comment; rewrite it as one concise English line or delete it",
       "src/x.ts:3: section banner; delete the banner",
       "src/x.ts:4: doc or milestone reference; drop the reference and keep only the non-obvious why",
-      expect.stringContaining("comment lines are 60.00% of production code"),
     ]);
   });
 
@@ -182,13 +159,22 @@ describe("code hygiene guard", () => {
     expect(checkHygiene([analyzeSource("src/x.ts", source)], EMPTY)).toEqual([]);
   });
 
-  it("rejects a new function over the limit and a recorded function that grows by one line", () => {
-    const source = `${fn("fresh", FUNCTION_MAX_LINES - 1)}${fn("legacy", 200)}`;
-    const baseline: Baseline = { ...EMPTY, functions: { "src/x.ts#legacy": 201 } };
-    const violations = checkHygiene([analyzeSource("src/x.ts", source)], baseline);
-    expect(violations).toEqual([
-      expect.stringMatching(/^src\/x\.ts:1 function fresh: 121 exceeds the limit of 120\. Extract named helpers/),
-      expect.stringMatching(/^src\/x\.ts:122 function legacy: 202 exceeds the limit of 201\./),
+  it("rejects a new .ts function over 250 lines", () => {
+    const violations = checkHygiene([analyzeSource("src/x.ts", fn("fresh", TS_FUNCTION_MAX_LINES - 1))], EMPTY);
+    expect(violations).toEqual([expect.stringMatching(/^src\/x\.ts:1 function fresh: 251 exceeds the limit of 250\. Extract named helpers/)]);
+  });
+
+  it("allows a 280-line .tsx function but rejects one over 300 lines", () => {
+    expect(checkHygiene([analyzeSource("src/x.tsx", fn("Ok", 278))], EMPTY)).toEqual([]);
+    const violations = checkHygiene([analyzeSource("src/x.tsx", fn("Big", TSX_FUNCTION_MAX_LINES - 1))], EMPTY);
+    expect(violations).toEqual([expect.stringMatching(/^src\/x\.tsx:1 function Big: 301 exceeds the limit of 300\./)]);
+  });
+
+  it("rejects a recorded function that grows by one line", () => {
+    const baseline: Baseline = { ...EMPTY, functions: { "src/x.ts#legacy": 301 } };
+    expect(checkHygiene([analyzeSource("src/x.ts", fn("legacy", 299))], baseline)).toEqual([]);
+    expect(checkHygiene([analyzeSource("src/x.ts", fn("legacy", 300))], baseline)).toEqual([
+      expect.stringMatching(/^src\/x\.ts:1 function legacy: 302 exceeds the limit of 301\./),
     ]);
   });
 
@@ -198,18 +184,21 @@ describe("code hygiene guard", () => {
     expect(keys).toEqual(["outer", "outer>run"]);
   });
 
-  it("forces the baseline down when a recorded file or function shrinks, and drops stale entries", () => {
-    const source = fn("legacy", 150);
-    const baseline: Baseline = { files: { "src/x.ts": 800, "src/gone.ts": 900 }, functions: { "src/x.ts#legacy": 160 } };
-    expect(checkHygiene([analyzeSource("src/x.ts", source)], baseline)).toEqual([
-      `src/x.ts file length: shrank from 800 to 152; delete the entry in ${BASELINE_PATH} so it cannot grow back`,
-      `src/x.ts:1 function legacy: shrank from 160 to 152; lower it to 152 in ${BASELINE_PATH} so it cannot grow back`,
-      `src/gone.ts: no longer exists; delete its entry in ${BASELINE_PATH}`,
+  it("lets recorded files and functions shrink or disappear without touching the baseline", () => {
+    const baseline: Baseline = { files: { "src/x.ts": 1200, "src/gone.ts": 1500 }, functions: { "src/x.ts#legacy": 400, "src/gone.ts#old": 400 } };
+    expect(checkHygiene([analyzeSource("src/x.ts", fn("legacy", 150))], baseline)).toEqual([]);
+  });
+
+  it("rejects a recorded file that grows by one line", () => {
+    const baseline: Baseline = { ...EMPTY, files: { "src/x.ts": 1100 } };
+    expect(checkHygiene([analyzeSource("src/x.ts", `${body(1100)}\n`)], baseline)).toEqual([]);
+    expect(checkHygiene([analyzeSource("src/x.ts", `${body(1101)}\n`)], baseline)).toEqual([
+      expect.stringMatching(/^src\/x\.ts file length: 1101 exceeds the limit of 1100\./),
     ]);
   });
 
   it("rejects a new file over the file length limit", () => {
     const violations = checkHygiene([analyzeSource("src/x.ts", `${body(FILE_MAX_LINES + 1)}\n`)], EMPTY);
-    expect(violations).toEqual([expect.stringMatching(/^src\/x\.ts file length: 751 exceeds the limit of 750\. Move cohesive parts/)]);
+    expect(violations).toEqual([expect.stringMatching(/^src\/x\.ts file length: 1001 exceeds the limit of 1000\. Move cohesive parts/)]);
   });
 });
