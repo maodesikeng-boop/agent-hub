@@ -57,8 +57,8 @@ Only direct dependencies in `package.json` and `apps/windows/Cargo.toml` are lis
 - `@fastify/websocket` and `ws`: WebSocket server and client (`ui-server/server.ts`, `peers/routes.ts`, `peers/proxy.ts`).
 - `@fastify/static`: Serves the built web assets (`ui-server/server.ts`).
 - `@fastify/compress`: Compresses large HTTP responses (`ui-server/server.ts`, `peers/proxy.ts`).
-- `zod`: Input validation (`ledger/hub-commands.ts`, `peers/service.ts`).
-- `lru-cache`: Bounded caches (`commands-catalog.ts`, `driver/model-catalog.ts`, `shared/paths.ts`, `platform/win32/`, `skill-files.ts`, `ledger/loaded-skills.ts`, `daemon/feishu/service.ts`, `src/relay/node/server.ts`).
+- `zod`: Input validation (`ledger/hub-commands.ts`, `peers/service.ts`, `update-checker.ts`).
+- `lru-cache`: Bounded caches (`commands-catalog.ts`, `driver/model-catalog.ts`, `shared/paths.ts`, `platform/win32/`, `skill-files.ts`, `ledger/loaded-skills.ts`, `daemon/feishu/service.ts`, `update-checker.ts`, `src/relay/node/server.ts`).
 - `web-push`: Web Push delivery (`push/sender.ts`, `push/vapid.ts`).
 - `@peculiar/x509` and `reflect-metadata`: Generates self-signed Ed25519 device certificates (`src/daemon/mesh/identity.ts`).
 - `@agentclientprotocol/sdk`: Agent Client Protocol (ACP) client and server transport (`src/vendors/_common/acp/`).

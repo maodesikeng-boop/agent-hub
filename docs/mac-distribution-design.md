@@ -37,3 +37,9 @@ Pushing a `v*` tag triggers `.github/workflows/release.yml` (`scripts/release-as
 1. **`verify`**: Confirms the git tag version matches `package.json`, `apps/windows/Cargo.toml`, and `apps/windows/crates/fusa-desktop/tauri.conf.json`.
 2. **`mac` and `windows`**: Reuses `mac-desktop.yml` and `windows-desktop.yml` via `workflow_call`, including isolated `--self-test` runs.
 3. **`assemble` and `publish`**: Renames artifacts to stable latest-release URLs (`Bellwood-macos-arm64.dmg` and `Bellwood-windows-x64-setup.exe` with `.sha256` files) so `releases/latest/download/<asset>` links in `README.md` never break across versions. Tags with suffixes such as `v0.2.0-rc.1` publish as GitHub prereleases without moving `releases/latest`.
+
+### In-app update check
+
+- **Daemon**: `src/daemon/update-checker.ts` reads the running version from `package.json`, asks `https://api.github.com/repos/maodesikeng-boop/agent-hub/releases/latest` at most once per `UPDATE_CHECK_TTL_MS` (failures and rate limits retry after `UPDATE_CHECK_RETRY_MS`), and serves the result at `GET /api/update`; `POST /api/update/check` forces a check. Only non-draft, non-prerelease `vX.Y.Z` releases count, and the installer links use the fixed asset names above (`RELEASE_INSTALLER_FILES` in `src/shared/update.ts`, which `scripts/release-assets.ts` also uses).
+- **Install kind**: A packaged runtime has no `.git` next to its `package.json`, so it is `bundled` and gets the sidebar `Update` reminder plus the download button in **Settings → General**. Source checkouts only see the status there.
+- **Offline tests**: `AGENT_HUB_UPDATE_RELEASE_URL` points the check at a plain-HTTP loopback mock (other URLs are ignored) and `AGENT_HUB_UPDATE_INSTALL_KIND` forces `bundled` or `source`.
