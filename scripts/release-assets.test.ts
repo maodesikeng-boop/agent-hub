@@ -15,13 +15,17 @@ function writeArtifact(dir: string, name: string, body: string, hashOverride?: s
 
 const TAURI_CONF = ["apps", "windows", "crates", "fusa-desktop", "tauri.conf.json"];
 
-function versionSourcesRepo(versions: { pkg: string; tauri: string }): string {
+function versionSourcesRepo(versions: { pkg: string; tauri: string; securitySeries?: readonly string[] }): string {
   const root = mkdtempSync(join(tmpdir(), "fusa-release-versions-"));
   writeFileSync(join(root, "package.json"), JSON.stringify({ name: "agent-hub", version: versions.pkg }));
   mkdirSync(join(root, ...TAURI_CONF.slice(0, -1)), { recursive: true });
   cpSync(join(REPO_ROOT, ...TAURI_CONF), join(root, ...TAURI_CONF));
   const conf = JSON.parse(readFileSync(join(root, ...TAURI_CONF), "utf8")) as Record<string, unknown>;
   writeFileSync(join(root, ...TAURI_CONF), JSON.stringify({ ...conf, version: versions.tauri }));
+  const defaultSeries = `${versions.pkg.split(".").slice(0, 2).join(".")}.x`;
+  const series = versions.securitySeries ?? [defaultSeries, defaultSeries];
+  const securityBody = series.map((item, idx) => `Section ${idx + 1}: \`${item}\``).join("\n\n");
+  writeFileSync(join(root, "SECURITY.md"), `${securityBody}\n`);
   return root;
 }
 
@@ -34,20 +38,35 @@ describe("scripts/release-assets.ts", () => {
     expect(() => checkTagVersion("v0.1", "0.1.0")).toThrow(/is not vX\.Y\.Z/);
   });
 
-  it("keeps package.json, Cargo.toml, and tauri.conf.json on one version in this repository", () => {
+  it("keeps package.json, Cargo.toml, tauri.conf.json, and SECURITY.md on one version in this repository", () => {
     expect(() => assertVersionSourcesMatch(REPO_ROOT, readDesktopAppVersion())).not.toThrow();
   });
 
-  it("rejects a package.json or tauri.conf.json version that drifts from Cargo.toml", () => {
+  it("rejects a package.json, tauri.conf.json, or SECURITY.md version that drifts from Cargo.toml", () => {
     const pkgDrift = versionSourcesRepo({ pkg: "0.2.1", tauri: "0.2.0" });
     const tauriDrift = versionSourcesRepo({ pkg: "0.2.0", tauri: "0.1.9" });
+    const patchMatch = versionSourcesRepo({ pkg: "0.3.2", tauri: "0.3.2", securitySeries: ["0.3.x", "0.3.x"] });
+    const securityStale = versionSourcesRepo({ pkg: "0.4.0", tauri: "0.4.0", securitySeries: ["0.3.x", "0.3.x"] });
+    const securityHalfUpdated = versionSourcesRepo({ pkg: "0.4.0", tauri: "0.4.0", securitySeries: ["0.4.x", "0.3.x"] });
+    const securitySingleSection = versionSourcesRepo({ pkg: "0.4.0", tauri: "0.4.0", securitySeries: ["0.4.x"] });
     try {
       expect(() => assertVersionSourcesMatch(pkgDrift, "0.2.0")).toThrow("package.json version 0.2.1 does not match apps/windows/Cargo.toml version 0.2.0");
       expect(() => assertVersionSourcesMatch(tauriDrift, "0.2.0")).toThrow("tauri.conf.json version 0.1.9 does not match apps/windows/Cargo.toml version 0.2.0");
       expect(() => assertVersionSourcesMatch(tauriDrift, "0.1.9")).toThrow(/^package\.json version 0\.2\.0/);
+      expect(() => assertVersionSourcesMatch(patchMatch, "0.3.2")).not.toThrow();
+      expect(() => assertVersionSourcesMatch(securityStale, "0.4.0")).toThrow(
+        "SECURITY.md supported version 0.3.x does not match package.json version 0.4.0 (expected 0.4.x)",
+      );
+      expect(() => assertVersionSourcesMatch(securityHalfUpdated, "0.4.0")).toThrow(
+        "SECURITY.md supported version 0.3.x does not match package.json version 0.4.0 (expected 0.4.x)",
+      );
+      expect(() => assertVersionSourcesMatch(securitySingleSection, "0.4.0")).toThrow(
+        "SECURITY.md must list supported version 0.4.x in both English and Chinese sections",
+      );
     } finally {
-      rmSync(pkgDrift, { recursive: true, force: true });
-      rmSync(tauriDrift, { recursive: true, force: true });
+      for (const dir of [pkgDrift, tauriDrift, patchMatch, securityStale, securityHalfUpdated, securitySingleSection]) {
+        rmSync(dir, { recursive: true, force: true });
+      }
     }
   });
 

@@ -49,7 +49,7 @@ export function checkTagVersion(tag: string, appVersion: string): TagCheckResult
   return { version: appVersion, prerelease: match[2] !== undefined };
 }
 
-/** package.json feeds the in-app version and tauri.conf.json the Windows installer metadata, so both must equal the Cargo workspace version. */
+/** package.json, tauri.conf.json, and the supported X.Y.x series in SECURITY.md must match the Cargo workspace version. */
 export function assertVersionSourcesMatch(repoRoot: string, appVersion: string): void {
   const sources = [
     { label: "package.json", path: join(repoRoot, "package.json") },
@@ -60,6 +60,20 @@ export function assertVersionSourcesMatch(repoRoot: string, appVersion: string):
     if (version !== appVersion) {
       throw new Error(`${label} version ${version} does not match apps/windows/Cargo.toml version ${appVersion}`);
     }
+  }
+  const majorMinor = /^(\d+\.\d+)\.\d+$/.exec(appVersion)?.[1];
+  if (!majorMinor) {
+    throw new Error(`Invalid app version "${appVersion}"; expected X.Y.Z`);
+  }
+  const expectedSeries = `${majorMinor}.x`;
+  const securityDoc = readFileSync(join(repoRoot, "SECURITY.md"), "utf8");
+  const declaredSeries = Array.from(securityDoc.matchAll(/`(\d+\.\d+\.x)`/g), (m) => m[1]!);
+  if (declaredSeries.length < 2) {
+    throw new Error(`SECURITY.md must list supported version ${expectedSeries} in both English and Chinese sections`);
+  }
+  const mismatched = declaredSeries.find((series) => series !== expectedSeries);
+  if (mismatched) {
+    throw new Error(`SECURITY.md supported version ${mismatched} does not match package.json version ${appVersion} (expected ${expectedSeries})`);
   }
 }
 
