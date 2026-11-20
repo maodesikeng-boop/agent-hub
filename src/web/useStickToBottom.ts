@@ -6,7 +6,8 @@ const LOAD_OLDER_DISTANCE_PX = 40;
 export interface UseStickToBottomOptions {
   lastKey: string | number;
   ownCount: number;
-  headKey: string | number;
+  /** Omit when the list keeps its own scroll anchor across prepends. */
+  headKey?: string | number;
   canLoadOlder: boolean;
   onLoadOlder: () => void;
 }
@@ -53,10 +54,11 @@ export function useStickToBottom({ lastKey, ownCount, headKey, canLoadOlder, onL
     }
   }, [headKey]);
 
+  const anchorsHead = headKey !== undefined;
   const loadOlder = useCallback(() => {
-    anchorHeight.current = ref.current?.scrollHeight ?? null;
+    if (anchorsHead) anchorHeight.current = ref.current?.scrollHeight ?? null;
     onLoadOlder();
-  }, [onLoadOlder]);
+  }, [anchorsHead, onLoadOlder]);
 
   const onScroll = useCallback(() => {
     const el = ref.current;

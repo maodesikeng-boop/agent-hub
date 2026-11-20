@@ -77,7 +77,7 @@
     "src/web/components/ChartBlock.tsx#ChartBlock": 122,
     "src/web/components/Composer.tsx#Composer": 315,
     "src/web/components/Conversation.tsx#Conversation": 139,
-    "src/web/components/MessageList.tsx#MessageList": 144,
+    "src/web/components/MessageList.tsx#MessageList": 133,
     "src/web/components/Messages.tsx#AskCard": 153,
     "src/web/components/NewPmDialog.tsx#NewPmForm": 187,
     "src/web/components/PeelTrack.tsx#GateDecisionCard": 142,
