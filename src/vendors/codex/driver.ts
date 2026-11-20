@@ -1,17 +1,12 @@
 import {
   DriverError,
-  EMPTY_TOKEN_USAGE,
-  MAX_STREAMING_TOOL_BLOCKS,
-  type AgentSessionPatch,
   type AgentSessionRow,
-  type DriverEvent,
   type DriverOptions,
   type DriverSendInput,
   type DriverSendResult,
   type LaunchFiles,
   type MessageId,
   type MessageSource,
-  type RateLimitInfo,
   type SessionExitReason,
   type SessionId,
   type WriteScope,
@@ -19,97 +14,40 @@ import {
 import type { VendorComposerBase } from "../../daemon/vendors/types.ts";
 import { codexComposerBase } from "./composer.ts";
 import {
-  BaseSessionDriver,
   NO_NOTES,
   createBaseSessionState,
   entryParts,
-  type BaseBatch,
-  type BaseProc,
-  type BaseSessionState,
-  type BatchNotes,
   type PendingEntry,
   type StartupOutcome,
 } from "../../daemon/driver/base-driver.ts";
 import {
-  ZERO_CODEX_USAGE_COUNTS,
   buildCodexArgs,
   buildInitializeRequest,
-  buildInitializedNotification,
-  buildSkillsExtraRootsRequest,
-  buildJsonRpcResponse,
-  buildThreadResumeRequest,
-  buildThreadStartRequest,
   buildTurnInterruptRequest,
   buildTurnStartRequest,
   buildTurnSteerRequest,
   checkCodexTurnText,
   codexOfSession,
-  codexUserMessageText,
   combineCodexTurnText,
-  decideCommandApproval,
-  decideFileChangeApproval,
-  decideMcpElicitation,
-  exhaustCodexRateLimitOnTurnError,
-  extractFileChangePaths,
-  isCodexToolItemType,
-  parseCodexRateLimits,
-  parseCodexTokenUsage,
-  parseCodexThreadTotal,
-  parseCodexToolStarted,
   readCodexLaunchConfig,
-  type CodexLaunchConfig,
-  type CodexUsageCounts,
 } from "./protocol.ts";
-import { CODEX_RESUME_REBAKES, personaSeenAtStart } from "../../daemon/driver/persona-note.ts";
-import { lineUuid } from "../../daemon/driver/protocol.ts";
 import { spawnInWriteScope, type ScopedSpawn, type SpawnCommand } from "../../daemon/driver/write-scope.ts";
-import { toolResultOutputs } from "../_common/tool-output.ts";
-
-interface Batch extends BaseBatch {
-  combinedText: string;
-  midTurn: boolean;
-  echoed: boolean;
-  turnDone: boolean;
-  stopped: boolean;
-}
-
-type SteerOutcome = "written" | "queued" | "cancelled";
-
-interface Steer {
-  batch: Batch;
-  entry: PendingEntry;
-  resolve: (outcome: SteerOutcome) => void;
-}
-
-type RpcPhase = "initialize" | "skills_extra_roots" | "thread_resume" | "thread_start" | "turn_start" | "turn_interrupt" | "turn_steer";
-
-interface Proc extends BaseProc<StartupOutcome> {
-  launchConfig: CodexLaunchConfig;
-  defaultModel: string | null;
-  readonly: boolean;
-  writeScope: WriteScope | null;
-  osSandboxed: boolean;
-  // item/fileChange/requestApproval carries only itemId, so keep the paths from item/started.
-  fileChangePaths: Map<string, string[]>;
-  fileChangePreviewPaths: Map<string, string>;
-  threadId: string | null;
-  pendingRpcs: Map<number | string, RpcPhase>;
-  steers: Map<number | string, Steer>;
-}
-
-interface SessionState extends BaseSessionState<Proc, Batch> {
-  activeTurnId: string | null;
-  turnSeq: number;
-  interruptRequestId: number | string | null;
-  usageThreadId: string | null;
-  lastThreadTotal: CodexUsageCounts | null;
-  turnUsageStepSeq: number;
-  lastTurnResultUsage: CodexUsageCounts | null;
-  lastTurnContext: number | null;
-  agentMessageBuffers: Map<string, string>;
-  emittedMessageIds: Set<string>;
-  emittedThinkingIds: Set<string>;
-}
+import { VendorSessionDriver } from "../_common/session-driver.ts";
+import {
+  asObject,
+  newBatch,
+  nonEmptyString,
+  startupError,
+  type Batch,
+  type CodexDriverHost,
+  type Proc,
+  type SessionState,
+  type Steer,
+  type SteerOutcome,
+} from "./driver-state.ts";
+import { isHandshakePhase, onHandshakeResponse } from "./handshake.ts";
+import { onNotification } from "./notifications.ts";
+import { answerServerRequest } from "./server-requests.ts";
 
 export interface CodexDriverOptions extends Omit<DriverOptions, "executablePath"> {
   executablePath?: string | (() => string);
@@ -120,11 +58,12 @@ export interface CodexDriverOptions extends Omit<DriverOptions, "executablePath"
   writeScopeSpawn?: (base: SpawnCommand, scope: WriteScope | null) => ScopedSpawn;
 }
 
-export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
+export class CodexDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
   readonly #codexPath: string | (() => string);
   readonly #platform: NodeJS.Platform;
   readonly #writeScopeSpawn?: (base: SpawnCommand, scope: WriteScope | null) => ScopedSpawn;
   readonly #defaultModel: () => Promise<string | null>;
+  readonly #host: CodexDriverHost;
 
   constructor({ executablePath, platform, writeScopeSpawn, defaultModel, composer, ...options }: CodexDriverOptions) {
     super("codex", { ...options, composer: composer ?? codexComposerBase });
@@ -132,6 +71,7 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     this.#codexPath = executablePath ?? "codex";
     this.#platform = platform ?? process.platform;
     this.#writeScopeSpawn = writeScopeSpawn;
+    this.#host = this.createHost();
   }
 
   #resolveCodexPath(): string {
@@ -459,23 +399,6 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     return proc;
   }
 
-  #openThread(st: SessionState, proc: Proc): void {
-    const row = this.row(st);
-    const sessionInfo = {
-      vendorSessionId: row?.vendorSessionId ?? proc.threadId ?? "",
-      cwd: row?.cwd ?? proc.launched.cwd,
-      model: row?.model ?? proc.launched.model ?? proc.defaultModel,
-    };
-    const nextId = ++this.requestSeq;
-    if (proc.resume) {
-      proc.pendingRpcs.set(nextId, "thread_resume");
-      proc.child.stdin.write(buildThreadResumeRequest(nextId, sessionInfo, proc.launchConfig) + "\n");
-    } else {
-      proc.pendingRpcs.set(nextId, "thread_start");
-      proc.child.stdin.write(buildThreadStartRequest(nextId, sessionInfo, proc.launchConfig) + "\n");
-    }
-  }
-
   protected onParsedLine(
     st: SessionState,
     proc: Proc,
@@ -487,7 +410,7 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     const hasMethod = typeof obj.method === "string" && obj.method !== "";
 
     if (hasId && hasMethod) {
-      this.#onServerRequest(st, proc, obj.id as number | string, obj.method as string, obj.params, at);
+      answerServerRequest(this.#host, st, proc, obj.id as number | string, obj.method as string, obj.params);
       return;
     }
 
@@ -497,7 +420,7 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     }
 
     if (hasMethod) {
-      this.#onNotification(st, proc, obj.method as string, obj.params, line, at);
+      onNotification(this.#host, st, proc, obj.method as string, obj.params, line, at);
     }
   }
 
@@ -512,99 +435,14 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     if (!phase) return;
     proc.pendingRpcs.delete(id);
 
-    const errorObj = typeof obj.error === "object" && obj.error !== null ? (obj.error as Record<string, unknown>) : null;
-    const resultObj =
-      typeof obj.result === "object" && obj.result !== null ? (obj.result as Record<string, unknown>) : null;
+    const errorObj = asObject(obj.error);
+    const resultObj = asObject(obj.result);
+    if (isHandshakePhase(phase)) {
+      onHandshakeResponse(this.#host, st, proc, phase, errorObj, resultObj, at);
+      return;
+    }
 
     switch (phase) {
-      case "initialize": {
-        if (errorObj) {
-          proc.resolveReady({
-            kind: "failed",
-            exitCode: null,
-            signal: null,
-            stderr: proc.stderr,
-            timedOut: false,
-            errorMessage: typeof errorObj.message === "string" ? errorObj.message : "initialize failed",
-          });
-          this.forceKillProc(st, proc);
-          return;
-        }
-        proc.child.stdin.write(buildInitializedNotification() + "\n");
-        if (proc.launchConfig.skillRoots.length > 0) {
-          const skillsId = ++this.requestSeq;
-          proc.pendingRpcs.set(skillsId, "skills_extra_roots");
-          proc.child.stdin.write(buildSkillsExtraRootsRequest(skillsId, proc.launchConfig.skillRoots) + "\n");
-          return;
-        }
-        this.#openThread(st, proc);
-        return;
-      }
-
-      case "skills_extra_roots": {
-        // Older codex lacks skills/extraRoots/set; start without it.
-        if (errorObj) {
-          const message = typeof errorObj.message === "string" ? errorObj.message : JSON.stringify(errorObj);
-          this.opts.log?.(`[codex] session ${st.id} skills/extraRoots/set 失败，任务图手册只能按路径读：${message}`);
-        }
-        this.#openThread(st, proc);
-        return;
-      }
-
-      case "thread_resume": {
-        if (errorObj) {
-          // thread/resume fails when the rollout is missing; fall back to thread/start.
-          proc.resume = false;
-          proc.threadId = null;
-          const row = this.row(st);
-          const sessionInfo = {
-            cwd: row?.cwd ?? proc.launched.cwd,
-            model: row?.model ?? proc.launched.model ?? proc.defaultModel,
-          };
-          const startId = ++this.requestSeq;
-          proc.pendingRpcs.set(startId, "thread_start");
-          proc.child.stdin.write(buildThreadStartRequest(startId, sessionInfo, proc.launchConfig) + "\n");
-          return;
-        }
-        const thread =
-          typeof resultObj?.thread === "object" && resultObj.thread !== null
-            ? (resultObj.thread as Record<string, unknown>)
-            : null;
-        const threadId = typeof thread?.id === "string" && thread.id !== "" ? thread.id : proc.threadId;
-        const model =
-          typeof thread?.model === "string" && thread.model !== ""
-            ? thread.model
-            : (this.row(st)?.model ?? proc.launched.model);
-        this.#completeThreadHandshake(st, proc, threadId, model, true, at);
-        return;
-      }
-
-      case "thread_start": {
-        if (errorObj) {
-          proc.resolveReady({
-            kind: "failed",
-            exitCode: null,
-            signal: null,
-            stderr: proc.stderr,
-            timedOut: false,
-            errorMessage: typeof errorObj.message === "string" ? errorObj.message : "thread/start failed",
-          });
-          this.forceKillProc(st, proc);
-          return;
-        }
-        const thread =
-          typeof resultObj?.thread === "object" && resultObj.thread !== null
-            ? (resultObj.thread as Record<string, unknown>)
-            : null;
-        const threadId = typeof thread?.id === "string" && thread.id !== "" ? thread.id : proc.threadId;
-        const model =
-          typeof thread?.model === "string" && thread.model !== ""
-            ? thread.model
-            : (this.row(st)?.model ?? proc.launched.model);
-        this.#completeThreadHandshake(st, proc, threadId, model, false, at);
-        return;
-      }
-
       case "turn_steer": {
         const steer = proc.steers.get(id);
         proc.steers.delete(id);
@@ -618,28 +456,10 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
 
       case "turn_start": {
         if (errorObj) {
-          const batches = st.inFlight.splice(0);
-          for (const batch of batches) this.markProcessing(st, batch, at);
-          this.forgetWritten(st, batches);
-          const errMsg = typeof errorObj.message === "string" ? errorObj.message : "turn/start failed";
-          this.emit(st.id, {
-            type: "turn.ended",
-            ok: false,
-            interrupted: false,
-            messageIds: batches.flatMap((b) => b.messageIds),
-            durationMs: null,
-            error: { subtype: "turn_start_error", message: errMsg },
-            at,
-          });
-          this.afterTurn(st, proc);
-          this.settled(st);
+          this.#failTurnStart(st, proc, errorObj, at);
           return;
         }
-        const turn =
-          typeof resultObj?.turn === "object" && resultObj.turn !== null
-            ? (resultObj.turn as Record<string, unknown>)
-            : null;
-        const turnId = typeof turn?.id === "string" && turn.id !== "" ? turn.id : null;
+        const turnId = nonEmptyString(asObject(resultObj?.turn)?.id);
         if (turnId) st.activeTurnId = turnId;
         const opening = st.inFlight.find((b) => !b.midTurn);
         if (opening) this.markProcessing(st, opening, at);
@@ -656,404 +476,22 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     }
   }
 
-  #completeThreadHandshake(
-    st: SessionState,
-    proc: Proc,
-    threadId: string | null,
-    model: string | null,
-    resumed: boolean,
-    at: number,
-  ): void {
-    if (threadId) proc.threadId = threadId;
-    if (proc.initSeen) return;
-    proc.initSeen = true;
-    proc.resume = resumed;
-    if (!resumed) {
-      st.usageThreadId = proc.threadId;
-      st.lastThreadTotal = { ...ZERO_CODEX_USAGE_COUNTS };
-    } else if (st.usageThreadId !== proc.threadId) {
-      st.usageThreadId = proc.threadId;
-      st.lastThreadTotal = null;
-    }
-    this.markHealthy(st.id);
-    this.setPersonaSeen(st, personaSeenAtStart(st, this.row(st), proc.personaLaunched, !resumed || CODEX_RESUME_REBAKES));
-    this.clearTimer(st, "startTimer");
-
-    const patch: AgentSessionPatch = {
-      status: "running",
-      lastEventAt: at,
-      ...(proc.threadId ? { vendorSessionId: proc.threadId } : {}),
-    };
-    const row = this.row(st);
-    if (row && row.hasCompletedTurn !== resumed) patch.hasCompletedTurn = resumed;
-    this.update(st, patch);
+  #failTurnStart(st: SessionState, proc: Proc, errorObj: Record<string, unknown>, at: number): void {
+    const batches = st.inFlight.splice(0);
+    for (const batch of batches) this.markProcessing(st, batch, at);
+    this.forgetWritten(st, batches);
+    const errMsg = typeof errorObj.message === "string" ? errorObj.message : "turn/start failed";
     this.emit(st.id, {
-      type: "session.started",
-      resumed,
-      model,
-      tools: [],
+      type: "turn.ended",
+      ok: false,
+      interrupted: false,
+      messageIds: batches.flatMap((b) => b.messageIds),
+      durationMs: null,
+      error: { subtype: "turn_start_error", message: errMsg },
       at,
     });
-    proc.resolveReady({ kind: "ok" });
-  }
-
-  #onNotification(
-    st: SessionState,
-    proc: Proc,
-    method: string,
-    rawParams: unknown,
-    rawLine: string,
-    at: number,
-  ): void {
-    const params =
-      typeof rawParams === "object" && rawParams !== null ? (rawParams as Record<string, unknown>) : {};
-
-    switch (method) {
-      case "thread/started": {
-        const thread =
-          typeof params.thread === "object" && params.thread !== null
-            ? (params.thread as Record<string, unknown>)
-            : null;
-        const threadId = typeof thread?.id === "string" && thread.id !== "" ? thread.id : null;
-        if (threadId) {
-          proc.threadId = threadId;
-          this.update(st, { vendorSessionId: threadId });
-        }
-        return;
-      }
-
-      case "turn/started": {
-        const turn =
-          typeof params.turn === "object" && params.turn !== null
-            ? (params.turn as Record<string, unknown>)
-            : null;
-        const turnId = typeof turn?.id === "string" && turn.id !== "" ? turn.id : null;
-        if (turnId) st.activeTurnId = turnId;
-        const opening = st.inFlight.find((b) => !b.midTurn);
-        if (opening) {
-          this.markProcessing(st, opening, at);
-        } else if (!st.selfTurn && st.proc === proc) {
-          st.selfTurn = true;
-          st.turnSeq += 1;
-          st.turnUsageStepSeq = 0;
-          st.lastTurnResultUsage = null;
-          st.lastTurnContext = null;
-          this.clearTimer(st, "idleTimer");
-          this.emit(st.id, { type: "turn.started", at });
-        }
-        return;
-      }
-
-      case "item/started": {
-        const item =
-          typeof params.item === "object" && params.item !== null
-            ? (params.item as Record<string, unknown>)
-            : null;
-        if (!item) return;
-        if (item.type === "userMessage") {
-          this.#onUserMessage(st, item, at);
-          return;
-        }
-        if (item.type === "reasoning") {
-          const itemId = typeof item.id === "string" && item.id !== "" ? item.id : lineUuid(item, rawLine);
-          this.#emitThinkingOnce(st, itemId, at);
-          return;
-        }
-        if (item.type === "agentMessage") {
-          const itemId = typeof item.id === "string" && item.id !== "" ? item.id : "agent-msg";
-          if (!st.agentMessageBuffers.has(itemId)) st.agentMessageBuffers.set(itemId, "");
-          return;
-        }
-        if (isCodexToolItemType(item.type)) {
-          const rawId = typeof item.id === "string" && item.id !== "" ? item.id : null;
-          if (item.type === "fileChange" && rawId) {
-            const paths = extractFileChangePaths(item);
-            proc.fileChangePaths.set(rawId, paths);
-            if (paths[0] !== undefined) rememberPreviewPath(proc, rawId, paths[0]);
-          }
-          const toolEv = rawId ? parseCodexToolStarted(item, at, this.#scopedUuid(st, rawId)) : null;
-          if (toolEv) this.emit(st.id, toolEv);
-        }
-        return;
-      }
-
-      case "item/reasoning/textDelta":
-      case "item/reasoning/summaryTextDelta": {
-        const itemId =
-          typeof params.itemId === "string" && params.itemId !== ""
-            ? params.itemId
-            : lineUuid(params, rawLine);
-        this.#emitThinkingOnce(st, itemId, at);
-        return;
-      }
-
-      case "item/agentMessage/delta": {
-        const itemId = typeof params.itemId === "string" && params.itemId !== "" ? params.itemId : "agent-msg";
-        const delta = typeof params.delta === "string" ? params.delta : "";
-        if (delta !== "") {
-          const prev = st.agentMessageBuffers.get(itemId) ?? "";
-          const isFirstChunk = prev === "";
-          st.agentMessageBuffers.set(itemId, prev + delta);
-          this.emit(st.id, {
-            type: "agent.text_delta",
-            delta,
-            ...(isFirstChunk ? { reset: true } : {}),
-            at,
-          });
-        }
-        return;
-      }
-
-      case "item/fileChange/patchUpdated": {
-        // Streamed patch paths are partial; approvals must use the complete list from item/started.
-        const itemId = typeof params.itemId === "string" && params.itemId !== "" ? params.itemId : null;
-        if (!itemId || !Array.isArray(params.changes)) return;
-        const firstPath = extractFileChangePaths({ changes: params.changes })[0];
-        if (firstPath === undefined || proc.fileChangePreviewPaths.get(itemId) === firstPath) return;
-        rememberPreviewPath(proc, itemId, firstPath);
-        this.emit(st.id, {
-          type: "agent.tool_preview",
-          toolUseId: itemId,
-          name: "fileChange",
-          input: { file_path: firstPath },
-          at,
-        });
-        return;
-      }
-
-      case "item/completed": {
-        const item =
-          typeof params.item === "object" && params.item !== null
-            ? (params.item as Record<string, unknown>)
-            : null;
-        if (!item) return;
-        if (item.type === "fileChange" && typeof item.id === "string") {
-          proc.fileChangePaths.delete(item.id);
-          proc.fileChangePreviewPaths.delete(item.id);
-        }
-        if (item.type === "agentMessage") {
-          const itemId = typeof item.id === "string" && item.id !== "" ? item.id : "agent-msg";
-          const buffered = st.agentMessageBuffers.get(itemId) ?? "";
-          st.agentMessageBuffers.delete(itemId);
-          const fullText = typeof item.text === "string" && item.text !== "" ? item.text : buffered;
-          if (fullText.trim() !== "" && !st.emittedMessageIds.has(itemId)) {
-            st.emittedMessageIds.add(itemId);
-            this.emit(st.id, { type: "agent.text", uuid: this.#scopedUuid(st, itemId), text: fullText, at });
-          }
-          return;
-        }
-        if (isCodexToolItemType(item.type)) {
-          const id = typeof item.id === "string" && item.id !== "" ? item.id : null;
-          if (id) this.emit(st.id, { type: "agent.tool_result", toolUseIds: [id], ...toolResultOutputs(this.vendor, [[id, item]]), at });
-        }
-        return;
-      }
-
-      case "thread/tokenUsage/updated": {
-        // After thread/resume, app-server replays the last token total under the previous turnId (codex-cli 0.167.1).
-        if (typeof params.threadId === "string" && params.threadId !== "" && proc.threadId !== null && params.threadId !== proc.threadId) return;
-        const notifTurnId = typeof params.turnId === "string" && params.turnId !== "" ? params.turnId : null;
-        if (notifTurnId !== null ? notifTurnId !== st.activeTurnId : st.activeTurnId === null) {
-          st.lastThreadTotal = parseCodexThreadTotal(params.tokenUsage) ?? st.lastThreadTotal;
-          return;
-        }
-        const parsed = parseCodexTokenUsage(params.tokenUsage, st.activeTurnId, {
-          lastThreadTotal: st.lastThreadTotal,
-          turnResultUsage: st.lastTurnResultUsage,
-          stepSeq: st.turnUsageStepSeq,
-        });
-        if (!parsed) return;
-        st.lastThreadTotal = parsed.nextState.lastThreadTotal;
-        st.lastTurnResultUsage = parsed.nextState.turnResultUsage;
-        st.turnUsageStepSeq = parsed.nextState.stepSeq;
-        if (parsed.duplicate) return;
-        st.lastTurnContext = parsed.context;
-        const row = this.row(st);
-        const live = row ? st.turnUsage.observe(parsed.observeObj, row.usage) : null;
-        if (live) this.pushUsage(st, { ...live, context: parsed.context });
-        return;
-      }
-
-      case "account/rateLimits/updated": {
-        const info = parseCodexRateLimits(params.rateLimits);
-        if (!info) return;
-        this.update(st, { rateLimit: info });
-        this.emit(st.id, { type: "rate_limit", info, at });
-        return;
-      }
-
-      case "turn/completed": {
-        this.#onTurnCompleted(st, proc, params, at);
-        return;
-      }
-    }
-  }
-
-  // userMessage items appear when codex consumes input, not when it is written.
-  #onUserMessage(st: SessionState, item: Record<string, unknown>, at: number): void {
-    const text = codexUserMessageText(item);
-    const waiting = st.inFlight.filter((b) => !b.echoed);
-    const batch = waiting.find((b) => b.combinedText === text) ?? waiting[0];
-    if (!batch) return;
-    batch.echoed = true;
-    if (batch.midTurn) this.markProcessing(st, batch, at);
-  }
-
-  // codex can reuse item ids across turns and restarts.
-  #scopedUuid(st: SessionState, itemId: string): string {
-    const turnPrefix = st.activeTurnId ? `${st.activeTurnId}:${st.turnSeq}` : `turn-${st.turnSeq}`;
-    return `${turnPrefix}:${itemId}`;
-  }
-
-  #emitThinkingOnce(st: SessionState, itemId: string, at: number): void {
-    if (st.emittedThinkingIds.has(itemId)) return;
-    st.emittedThinkingIds.add(itemId);
-    this.emit(st.id, { type: "agent.thinking", uuid: this.#scopedUuid(st, itemId), at });
-  }
-
-  #onTurnCompleted(st: SessionState, proc: Proc, params: Record<string, unknown>, at: number): void {
-    if (!proc.initSeen) return;
-
-    for (const [itemId, bufferedText] of st.agentMessageBuffers.entries()) {
-      if (bufferedText.trim() !== "" && !st.emittedMessageIds.has(itemId)) {
-        st.emittedMessageIds.add(itemId);
-        this.emit(st.id, { type: "agent.text", uuid: this.#scopedUuid(st, itemId), text: bufferedText, at });
-      }
-    }
-    st.agentMessageBuffers.clear();
-    st.emittedMessageIds.clear();
-    st.emittedThinkingIds.clear();
-    proc.fileChangePaths.clear();
-    proc.fileChangePreviewPaths.clear();
-
-    const settled = st.inFlight.filter((b) => !b.midTurn || b.echoed);
-    const missed = st.inFlight.filter((b) => b.midTurn && !b.echoed && b.delivered);
-    const unacked = st.inFlight.filter((b) => b.midTurn && !b.echoed && !b.delivered);
-    st.inFlight = unacked;
-    st.selfTurn = false;
-    st.activeTurnId = null;
-    for (const batch of settled) this.markProcessing(st, batch, at);
-
-    const turn =
-      typeof params.turn === "object" && params.turn !== null
-        ? (params.turn as Record<string, unknown>)
-        : {};
-    const status = typeof turn.status === "string" ? turn.status : "completed";
-    const ok = status === "completed";
-    const interrupted = status === "interrupted" || st.turnInterrupted || st.stopRequested;
-    for (const b of unacked) {
-      b.turnDone = true;
-      if (interrupted) b.stopped = true;
-    }
-
-    const event: DriverEvent = {
-      type: "turn.ended",
-      ok,
-      interrupted,
-      messageIds: settled.flatMap((b) => b.messageIds),
-      durationMs: null,
-      at,
-    };
-    if (proc.closing === "shutdown" && (!ok || interrupted)) event.shutdown = true;
-    const row = this.row(st);
-    let exhaustedRateLimit: RateLimitInfo | null = null;
-    if (!ok) {
-      const turnErr =
-        typeof turn.error === "object" && turn.error !== null
-          ? (turn.error as Record<string, unknown>)
-          : null;
-      const errMsg =
-        typeof turnErr?.message === "string" && turnErr.message !== ""
-          ? turnErr.message
-          : status;
-      event.error = { subtype: status, message: errMsg };
-      exhaustedRateLimit = exhaustCodexRateLimitOnTurnError(row?.rateLimit ?? null, turnErr ?? errMsg);
-      this.forgetWritten(st, settled);
-    } else {
-      this.markHealthy(st.id);
-    }
-
-    st.turnInterrupted = false;
-    st.stopRequested = false;
-
-    this.cancelUsagePush(st);
-    const patch: AgentSessionPatch = {};
-    if (st.lastTurnResultUsage) {
-      const finished = st.turnUsage.finish(row?.usage ?? EMPTY_TOKEN_USAGE, st.lastTurnResultUsage);
-      if (st.lastTurnContext !== null) finished.context = st.lastTurnContext;
-      patch.usage = finished;
-      st.lastTurnResultUsage = null;
-      st.lastTurnContext = null;
-      st.turnUsageStepSeq = 0;
-    } else {
-      st.turnUsage.reset();
-      st.lastTurnContext = null;
-      st.turnUsageStepSeq = 0;
-    }
-    if (row?.hasCompletedTurn === false) patch.hasCompletedTurn = true;
-    if (exhaustedRateLimit !== null) patch.rateLimit = exhaustedRateLimit;
-    if (Object.keys(patch).length > 0) this.update(st, patch);
-    if (exhaustedRateLimit !== null) {
-      this.emit(st.id, { type: "rate_limit", info: exhaustedRateLimit, at });
-    }
-
-    this.clearTimer(st, "interruptTimer");
-    this.emit(st.id, event);
-    this.releaseUntaken(st, missed, interrupted, at);
-    this.resolveInterrupt(st);
     this.afterTurn(st, proc);
     this.settled(st);
-  }
-
-  #onServerRequest(
-    st: SessionState,
-    proc: Proc,
-    id: number | string,
-    method: string,
-    rawParams: unknown,
-    _at: number,
-  ): void {
-    const params =
-      typeof rawParams === "object" && rawParams !== null ? (rawParams as Record<string, unknown>) : {};
-    const row = this.row(st);
-    const context = {
-      readonly: proc.readonly,
-      writeScope: proc.writeScope,
-      cwd: row?.cwd ?? proc.launched.cwd,
-    };
-
-    switch (method) {
-      case "item/commandExecution/requestApproval": {
-        const decision = decideCommandApproval(params, context);
-        proc.child.stdin.write(buildJsonRpcResponse(id, { decision }) + "\n");
-        return;
-      }
-      case "item/fileChange/requestApproval": {
-        const itemId = typeof params.itemId === "string" ? params.itemId : "";
-        const decision = decideFileChangeApproval(
-          { ...params, paths: [...extractFileChangePaths(params), ...(proc.fileChangePaths.get(itemId) ?? [])] },
-          context,
-        );
-        proc.child.stdin.write(buildJsonRpcResponse(id, { decision }) + "\n");
-        return;
-      }
-      case "mcpServer/elicitation/request": {
-        const answer = decideMcpElicitation(params, {
-          readonly: proc.readonly,
-          policy: proc.launchConfig.readonlyPolicy,
-        });
-        proc.child.stdin.write(buildJsonRpcResponse(id, answer) + "\n");
-        return;
-      }
-      case "item/tool/requestUserInput": {
-        proc.child.stdin.write(buildJsonRpcResponse(id, { answers: {} }) + "\n");
-        return;
-      }
-      default: {
-        proc.child.stdin.write(buildJsonRpcResponse(id, { decision: "decline" }) + "\n");
-        return;
-      }
-    }
   }
 
   protected onProcessClose(
@@ -1134,40 +572,4 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
 
 export function createCodexDriver(options: CodexDriverOptions): CodexDriver {
   return new CodexDriver(options);
-}
-
-function newBatch(
-  messageIds: MessageId[],
-  combinedText: string,
-  notes: BatchNotes,
-  source: MessageSource,
-): Batch {
-  return {
-    messageIds,
-    combinedText,
-    notes,
-    delivered: false,
-    processing: false,
-    midTurn: false,
-    echoed: false,
-    turnDone: false,
-    stopped: false,
-    source,
-  };
-}
-
-function startupError(outcome: Extract<StartupOutcome, { kind: "failed" }>, startTimeoutMs: number): DriverError {
-  if (outcome.timedOut) return new DriverError("start_timeout", `no codex thread ready within ${startTimeoutMs} ms`);
-  const how = outcome.signal ? `signal ${outcome.signal}` : `exit code ${outcome.exitCode}`;
-  const detail = outcome.errorMessage ?? outcome.stderr.trim();
-  return new DriverError("spawn_failed", `codex exited before thread ready (${how})${detail ? `: ${detail}` : ""}`);
-}
-
-function rememberPreviewPath(proc: Proc, itemId: string, path: string): void {
-  const paths = proc.fileChangePreviewPaths;
-  if (!paths.has(itemId) && paths.size >= MAX_STREAMING_TOOL_BLOCKS) {
-    const oldest = paths.keys().next().value;
-    if (oldest !== undefined) paths.delete(oldest);
-  }
-  paths.set(itemId, path);
 }

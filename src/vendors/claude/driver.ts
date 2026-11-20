@@ -5,7 +5,7 @@ import { join } from "node:path";
 import {
   DriverError,
   EMPTY_TOKEN_USAGE,
-   type AgentSessionPatch,
+  type AgentSessionPatch,
   type AgentSessionRow,
   type ComposerCommand,
   type DriverEvent,
@@ -25,18 +25,23 @@ import {
   NO_NOTES,
   createBaseSessionState,
   entryParts,
-  type BaseBatch,
-  type BaseProc,
-  type BaseSessionState,
-  type BatchNotes,
   type PendingEntry,
-  type StartupOutcome,
 } from "../../daemon/driver/base-driver.ts";
 import { ClaudeReadonlyGate } from "./readonly.ts";
+import {
+  midTurnCapable,
+  newBatch,
+  resultMessage,
+  startupError,
+  type Batch,
+  type ClaudeStartupOutcome,
+  type MidTurnWrite,
+  type Proc,
+  type SessionState,
+} from "./driver-state.ts";
 import { ensureClaudeSkillPlugin } from "./skills.ts";
 import { personaSeenAtStart } from "../../daemon/driver/persona-note.ts";
 import {
-  MID_TURN_CAPABILITIES,
   buildClaudeArgs,
   claudeOfSession,
   buildInitializeLine,
@@ -64,31 +69,6 @@ import {
   type ScopedSpawn,
   type SpawnCommand,
 } from "../../daemon/driver/write-scope.ts";
-
-interface Batch extends BaseBatch {
-  line: string;
-  // claude reports command_lifecycle (queued, started, done, cancelled) for this uuid.
-  uuid: string;
-  started: boolean;
-  midTurn: boolean;
-  stopped: boolean;
-  released: "cancelled" | "requeued" | null;
-}
-
-type MidTurnWrite = "written" | "cancelled" | "retry";
-
-type ClaudeStartupOutcome = StartupOutcome<ReturnType<typeof detectArgsConflict>>;
-
-interface Proc extends BaseProc<ClaudeStartupOutcome> {
-  readonlyGate: ClaudeReadonlyGate | null;
-  capabilities: Set<string>;
-  toolPreviews: StreamingToolPreviewTracker;
-}
-
-interface SessionState extends BaseSessionState<Proc, Batch> {
-  interruptRequestId: string | null;
-  commandQueries: Map<string, (commands: ComposerCommand[] | null) => void>;
-}
 
 export interface ClaudeDriverOptions extends DriverOptions {
   composer?: VendorComposerBase;
@@ -731,53 +711,4 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
 
 export function createClaudeDriver(options: ClaudeDriverOptions): ClaudeDriver {
   return new ClaudeDriver(options);
-}
-
-function resultMessage(obj: Record<string, unknown>, subtype: string): string {
-  if (typeof obj.result === "string" && obj.result !== "") return obj.result;
-  if (Array.isArray(obj.errors) && obj.errors.length > 0) return obj.errors.map(String).join("; ");
-  return subtype;
-}
-
-function startupError(
-  outcome: Extract<ClaudeStartupOutcome, { kind: "failed" }>,
-  startTimeoutMs: number,
-  retried: boolean,
-): DriverError {
-  if (outcome.timedOut) return new DriverError("start_timeout", `no system/init within ${startTimeoutMs} ms`);
-  const how = outcome.signal ? `signal ${outcome.signal}` : `exit code ${outcome.exitCode}`;
-  const stderr = outcome.stderr.trim();
-  if (outcome.conflict) {
-    return new DriverError(
-      "start_args_conflict",
-      `${retried ? "after switching --session-id/--resume: " : ""}${stderr || how}`,
-    );
-  }
-  return new DriverError("spawn_failed", `claude exited before system/init (${how})${stderr ? `: ${stderr}` : ""}`);
-}
-
-function newBatch(
-  messageIds: MessageId[],
-  line: string,
-  uuid: string,
-  notes: BatchNotes,
-  source: MessageSource,
-): Batch {
-  return {
-    messageIds,
-    line,
-    uuid,
-    notes,
-    delivered: false,
-    processing: false,
-    started: false,
-    midTurn: false,
-    source,
-    stopped: false,
-    released: null,
-  };
-}
-
-function midTurnCapable(proc: Proc): boolean {
-  return MID_TURN_CAPABILITIES.every((c) => proc.capabilities.has(c));
 }

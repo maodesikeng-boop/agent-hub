@@ -1,54 +1,56 @@
 // Lines split on \n only, so U+2028/U+2029 in JSONL never truncate a frame.
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { rmSync } from "node:fs";
 import {
   DriverError,
-  EMPTY_TOKEN_USAGE,
   type AgentSessionPatch,
   type AgentSessionRow,
   type ComposerCommand,
-  type DriverEvent,
   type DriverOptions,
   type DriverSendInput,
   type DriverSendResult,
   type LaunchFiles,
   type MessageId,
   type MessageSource,
-  type ReadonlyPolicy,
   type SessionExitReason,
   type SessionId,
-  type TokenUsage,
   type WriteScope,
 } from "../../shared/index.ts";
 import {
-  BaseSessionDriver,
   NO_NOTES,
   createBaseSessionState,
   entryParts,
-  type BaseBatch,
-  type BaseProc,
-  type BaseSessionState,
-  type BatchNotes,
   type PendingEntry,
-  type StartupOutcome,
 } from "../../daemon/driver/base-driver.ts";
 import { personaSeenAtStart } from "../../daemon/driver/persona-note.ts";
-import { StreamingToolPreviewTracker, lineUuid } from "../../daemon/driver/protocol.ts";
-import {
-  scanSecretGlobs,
-  spawnInWriteScope,
-  wrapInReadonlyOsSandbox,
-  type ReadonlySandboxInput,
-  type ScopedSpawn,
-  type SpawnCommand,
-} from "../../daemon/driver/write-scope.ts";
+import { StreamingToolPreviewTracker } from "../../daemon/driver/protocol.ts";
+import type { ReadonlySandboxInput, ScopedSpawn, SpawnCommand } from "../../daemon/driver/write-scope.ts";
 import type { VendorComposerBase } from "../../daemon/vendors/types.ts";
+import { VendorSessionDriver } from "../_common/session-driver.ts";
 import { piComposerBase } from "./composer.ts";
-import { PI_SESSION_STATS_TIMEOUT_MS } from "./limits.ts";
 import {
-  addPiTokenCounts,
+  ZERO_RAW_COUNTS,
+  clearTurnBuffers,
+  newBatch,
+  startupError,
+  type Batch,
+  type PiDriverHost,
+  type PiStartupOutcome,
+  type Proc,
+  type SessionState,
+  type Steer,
+  type SteerResult,
+} from "./driver-state.ts";
+import {
+  emitManualCompaction,
+  onCompactionEnd,
+  onMessageEnd,
+  onMessageStart,
+  onMessageUpdate,
+  onToolExecutionEnd,
+  onToolExecutionStart,
+} from "./events.ts";
+import {
   buildAbortLine,
   buildBlockingExtensionUiCancelLine,
   buildClearQueueLine,
@@ -56,85 +58,17 @@ import {
   buildGetCommandsLine,
   buildGetSessionStatsLine,
   buildGetStateLine,
-  buildPiArgs,
   buildPromptLine,
   checkPiTurnText,
   combinePiTurnText,
-  extractPiAssistantBlocks,
-  extractPiUserMessageText,
   formatPiActiveModel,
-  isValidPiSessionId,
   parsePiAutoRetry,
   parsePiCompactInput,
   parsePiSessionStats,
-  parsePiTokenCounts,
   piOfSession,
-  subtractPiTokenCounts,
-  toClaudeStyleUsage,
-  type PiRawTokenCounts,
 } from "./protocol.ts";
-import { READONLY_PI_NEEDS_SANDBOX_MESSAGE, piReadonlySandboxInput } from "./readonly.ts";
-import { piTranscriptPath } from "./transcript.ts";
-import { toolResultOutputs } from "../_common/tool-output.ts";
-
-interface Batch extends BaseBatch {
-  rawText: string;
-  combinedText: string;
-  echoed: boolean;
-  midTurn: boolean;
-  stopped: boolean;
-  turnDone: boolean;
-  isCompact: boolean;
-}
-
-type SteerResult = "written" | "queued" | "cancelled";
-
-interface Steer {
-  entry: PendingEntry;
-  batch: Batch;
-  resolve: (result: SteerResult) => void;
-}
-
-type PendingRpcKind =
-  | { kind: "init_state" }
-  | { kind: "init_stats" }
-  | { kind: "prompt_open" }
-  | { kind: "steer" }
-  | { kind: "compact" }
-  | { kind: "clear_queue" }
-  | { kind: "abort" }
-  | { kind: "turn_stats" }
-  | { kind: "commands"; done: (commands: ComposerCommand[] | null) => void };
-
-type PiStartupOutcome = StartupOutcome<null> & { errorMessage?: string };
-
-interface Proc extends BaseProc<PiStartupOutcome> {
-  sessionId: string;
-  tmpDir: string | null;
-  pendingRpcs: Map<string, PendingRpcKind>;
-  steers: Map<string, Steer>;
-  lastSessionTokens: PiRawTokenCounts;
-}
-
-interface SessionState extends BaseSessionState<Proc, Batch> {
-  interruptSent: boolean;
-  turnSeq: number;
-  assistantMsgSeq: number;
-  eventSeq: number;
-  textBuffers: Map<string, string>;
-  emittedTextKeys: Set<string>;
-  emittedThinkingKeys: Set<string>;
-  emittedToolIds: Set<string>;
-  toolPreviews: StreamingToolPreviewTracker;
-  completedToolIds: Set<string>;
-  compactedInTurn: boolean;
-  turnTokenTotals: PiRawTokenCounts;
-  hasMessageUsageInTurn: boolean;
-  turnErrorMessage: string | null;
-  runningCompact: boolean;
-  awaitingStats: boolean;
-  statsTimer: NodeJS.Timeout | null;
-}
+import { preparePiLaunch } from "./launch.ts";
+import { finalizeTurn, requestTurnStatsAndFinalize } from "./turn.ts";
 
 export interface PiDriverOptions extends Omit<DriverOptions, "executablePath"> {
   executablePath?: string | (() => string);
@@ -144,13 +78,12 @@ export interface PiDriverOptions extends Omit<DriverOptions, "executablePath"> {
   readonlySpawn?: (base: SpawnCommand, input: ReadonlySandboxInput) => ScopedSpawn;
 }
 
-const ZERO_RAW_COUNTS: PiRawTokenCounts = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
-
-export class PiDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
+export class PiDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
   readonly #piPath: string | (() => string);
   readonly #homeDir?: string;
   readonly #writeScopeSpawn?: (base: SpawnCommand, scope: WriteScope | null) => ScopedSpawn;
   readonly #readonlySpawn?: (base: SpawnCommand, input: ReadonlySandboxInput) => ScopedSpawn;
+  readonly #host: PiDriverHost;
 
   constructor(options: PiDriverOptions) {
     super("pi", { ...options, composer: options.composer ?? piComposerBase });
@@ -158,6 +91,7 @@ export class PiDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     this.#homeDir = options.homeDir;
     this.#writeScopeSpawn = options.writeScopeSpawn;
     this.#readonlySpawn = options.readonlySpawn;
+    this.#host = this.createHost();
   }
 
   #resolvePiPath(): string {
@@ -374,25 +308,6 @@ export class PiDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     return newBatch(messageIds, body.text, combined, notes, source, false);
   }
 
-  #clearTurnBuffers(st: SessionState): void {
-    if (st.statsTimer !== null) {
-      clearTimeout(st.statsTimer);
-      st.statsTimer = null;
-    }
-    st.awaitingStats = false;
-    st.assistantMsgSeq = 0;
-    st.textBuffers.clear();
-    st.emittedTextKeys.clear();
-    st.emittedThinkingKeys.clear();
-    st.emittedToolIds.clear();
-    st.toolPreviews.clear();
-    st.completedToolIds.clear();
-    st.compactedInTurn = false;
-    st.turnTokenTotals = { ...ZERO_RAW_COUNTS };
-    st.hasMessageUsageInTurn = false;
-    st.turnErrorMessage = null;
-  }
-
   protected async writeBatch(st: SessionState, proc: Proc, batch: Batch): Promise<void> {
     const problem = checkPiTurnText(batch.combinedText);
     if (problem) {
@@ -405,7 +320,7 @@ export class PiDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     st.turnSeq += 1;
     st.turnInterrupted = false;
     st.stopRequested = false;
-    this.#clearTurnBuffers(st);
+    clearTurnBuffers(st);
 
     const compact = batch.isCompact ? parsePiCompactInput(batch.rawText) : null;
     st.runningCompact = compact !== null;
@@ -489,82 +404,24 @@ export class PiDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
 
   async #spawn(st: SessionState, resume: boolean, prepared: LaunchFiles | null): Promise<Proc> {
     const { row, files } = await this.resolveLaunchFiles(st, prepared);
-    const existingId = row.vendorSessionId.trim();
-    const sessionId = isValidPiSessionId(existingId) ? existingId : randomUUID();
-
-    const readonlyPolicy: ReadonlyPolicy | undefined =
-      files.readonly === undefined
-        ? undefined
-        : {
-            ...files.readonly,
-            secretPaths: [
-              ...new Set([
-                ...files.readonly.secretPaths,
-                ...(await scanSecretGlobs([row.cwd, ...row.addDirs], files.readonly.secretGlobs)),
-              ]),
-            ],
-          };
-    const effectiveFiles: LaunchFiles =
-      readonlyPolicy === undefined ? files : { ...files, readonly: readonlyPolicy };
-
-    const resumedTranscript = resume
-      ? piTranscriptPath(
-          { vendor: "pi", cwd: row.cwd, vendorSessionId: sessionId },
-          { home: this.#homeDir, env: effectiveFiles.env },
-        )
-      : null;
-
-    const args = buildPiArgs({
-      row,
-      files: effectiveFiles,
-      sessionId,
-      sessionFile: resumedTranscript,
-    });
-
-    let tmpDir: string | null = null;
-    let launch: ScopedSpawn;
-    let childEnv: Record<string, string> = { ...effectiveFiles.env };
-
     const exePath = this.#resolvePiPath();
-    if (readonlyPolicy === undefined) {
-      const wrapWriteScope =
-        this.#writeScopeSpawn ??
-        ((base, scope) => spawnInWriteScope("pi", base, scope, this.opts.log, `session ${st.id}`));
-      launch = wrapWriteScope({ command: exePath, args }, effectiveFiles.writeScope ?? null);
-    } else {
-      const home = realpathSync(this.#homeDir ?? homedir());
-      const wrap = this.#readonlySpawn ?? ((base, input) => wrapInReadonlyOsSandbox(base, input));
-      const privateTmp = mkdtempSync(join(realpathSync(tmpdir()), "agent-hub-ro-"));
-      launch = wrap(
-        { command: exePath, args },
-        piReadonlySandboxInput({
-          homeDir: home,
-          tmpDir: privateTmp,
-          policy: readonlyPolicy,
-          env: effectiveFiles.env,
-        }),
-      );
-      if (!launch.osSandboxed) {
-        rmSync(privateTmp, { recursive: true, force: true });
-        throw new DriverError("spawn_failed", READONLY_PI_NEEDS_SANDBOX_MESSAGE);
-      }
-      if (launch.readonlyFallbackWarning) {
-        this.log(launch.readonlyFallbackWarning);
-        this.emit(st.id, {
-          type: "driver.warning",
-          uuid: randomUUID(),
-          message: launch.readonlyFallbackWarning,
-          at: Date.now(),
-        });
-      }
-      tmpDir = privateTmp;
-      childEnv = {
-        ...childEnv,
-        TMPDIR: privateTmp,
-        ...(process.platform === "win32" ? { TEMP: privateTmp, TMP: privateTmp } : {}),
-      };
+    const { sessionId, effectiveFiles, launch, tmpDir, childEnv } = await preparePiLaunch(row, files, resume, {
+      exePath,
+      homeDir: this.#homeDir,
+      writeScopeSpawn: this.#writeScopeSpawn,
+      readonlySpawn: this.#readonlySpawn,
+      log: this.opts.log,
+      sessionLabel: `session ${st.id}`,
+    });
+    if (launch.readonlyFallbackWarning) {
+      this.log(launch.readonlyFallbackWarning);
+      this.emit(st.id, {
+        type: "driver.warning",
+        uuid: randomUUID(),
+        message: launch.readonlyFallbackWarning,
+        at: Date.now(),
+      });
     }
-
     const removeTmp = () => {
       if (tmpDir !== null) rmSync(tmpDir, { recursive: true, force: true });
     };
@@ -625,19 +482,19 @@ export class PiDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         }
         return;
       case "message_start":
-        this.#onMessageStart(st, obj, at);
+        onMessageStart(this.#host, st, obj, at);
         return;
       case "message_update":
-        this.#onMessageUpdate(st, obj, at);
+        onMessageUpdate(this.#host, st, obj, at);
         return;
       case "message_end":
-        this.#onMessageEnd(st, obj, at);
+        onMessageEnd(this.#host, st, obj, at);
         return;
       case "tool_execution_start":
-        this.#onToolExecutionStart(st, obj, at);
+        onToolExecutionStart(this.#host, st, obj, at);
         return;
       case "tool_execution_end":
-        this.#onToolExecutionEnd(st, obj, at);
+        onToolExecutionEnd(this.#host, st, obj, at);
         return;
       case "auto_retry_start": {
         const info = parsePiAutoRetry(obj, at);
@@ -645,12 +502,58 @@ export class PiDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         return;
       }
       case "compaction_end":
-        this.#onCompactionEnd(st, obj, rawLine, at);
+        onCompactionEnd(this.#host, st, obj, rawLine, at);
         return;
       case "agent_settled":
-        this.#onAgentSettled(st, proc, obj, at);
+        if (!proc.initSeen) return;
+        if (obj.aborted === true) st.turnInterrupted = true;
+        requestTurnStatsAndFinalize(this.#host, st, proc, at);
         return;
     }
+  }
+
+  #onInitState(
+    st: SessionState,
+    proc: Proc,
+    ok: boolean,
+    errText: string,
+    data: Record<string, unknown> | null,
+    at: number,
+  ): void {
+    if (!ok) {
+      proc.resolveReady({
+        kind: "failed",
+        exitCode: null,
+        signal: null,
+        stderr: proc.stderr,
+        conflict: null,
+        timedOut: false,
+        errorMessage: errText,
+      });
+      this.forceKillProc(st, proc);
+      return;
+    }
+    if (proc.initSeen) return;
+    proc.initSeen = true;
+    this.markHealthy(st.id);
+    this.clearTimer(st, "startTimer");
+
+    const reportedId = typeof data?.sessionId === "string" && data.sessionId.trim() !== "" ? data.sessionId.trim() : proc.sessionId;
+    proc.sessionId = reportedId;
+    const row = this.row(st);
+    const model = formatPiActiveModel(data?.model) ?? row?.model ?? proc.launched.model;
+
+    this.setPersonaSeen(st, personaSeenAtStart(st, row, proc.personaLaunched, !proc.resume));
+    const patch: AgentSessionPatch = {
+      status: "running",
+      vendorSessionId: reportedId,
+      lastEventAt: at,
+    };
+    if (row && row.hasCompletedTurn !== proc.resume) patch.hasCompletedTurn = proc.resume;
+    st.resumeHint = null;
+    this.update(st, patch);
+    this.emit(st.id, { type: "session.started", resumed: proc.resume, model, tools: [], at });
+    proc.resolveReady({ kind: "ok" });
   }
 
   #onRpcResponse(st: SessionState, proc: Proc, obj: Record<string, unknown>, at: number): void {
@@ -665,43 +568,9 @@ export class PiDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     const data = typeof obj.data === "object" && obj.data !== null ? (obj.data as Record<string, unknown>) : null;
 
     switch (rpc.kind) {
-      case "init_state": {
-        if (!ok) {
-          proc.resolveReady({
-            kind: "failed",
-            exitCode: null,
-            signal: null,
-            stderr: proc.stderr,
-            conflict: null,
-            timedOut: false,
-            errorMessage: errText,
-          });
-          this.forceKillProc(st, proc);
-          return;
-        }
-        if (proc.initSeen) return;
-        proc.initSeen = true;
-        this.markHealthy(st.id);
-        this.clearTimer(st, "startTimer");
-
-        const reportedId = typeof data?.sessionId === "string" && data.sessionId.trim() !== "" ? data.sessionId.trim() : proc.sessionId;
-        proc.sessionId = reportedId;
-        const row = this.row(st);
-        const model = formatPiActiveModel(data?.model) ?? row?.model ?? proc.launched.model;
-
-        this.setPersonaSeen(st, personaSeenAtStart(st, row, proc.personaLaunched, !proc.resume));
-        const patch: AgentSessionPatch = {
-          status: "running",
-          vendorSessionId: reportedId,
-          lastEventAt: at,
-        };
-        if (row && row.hasCompletedTurn !== proc.resume) patch.hasCompletedTurn = proc.resume;
-        st.resumeHint = null;
-        this.update(st, patch);
-        this.emit(st.id, { type: "session.started", resumed: proc.resume, model, tools: [], at });
-        proc.resolveReady({ kind: "ok" });
+      case "init_state":
+        this.#onInitState(st, proc, ok, errText, data, at);
         return;
-      }
 
       case "init_stats": {
         if (ok) {
@@ -729,7 +598,7 @@ export class PiDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       case "prompt_open": {
         if (!ok) {
           st.turnErrorMessage = errText;
-          this.#finalizeTurn(st, proc, null, at);
+          finalizeTurn(this.#host, st, proc, null, at);
           return;
         }
         const opening = st.inFlight.find((b) => !b.midTurn);
@@ -737,7 +606,7 @@ export class PiDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         if (data?.disposition === "handled") {
           // Extension commands run synchronously and never emit agent_settled.
           if (opening) opening.echoed = true;
-          this.#finalizeTurn(st, proc, null, at);
+          finalizeTurn(this.#host, st, proc, null, at);
         }
         return;
       }
@@ -746,27 +615,19 @@ export class PiDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         st.runningCompact = false;
         if (!ok) {
           st.turnErrorMessage = errText;
-          this.#finalizeTurn(st, proc, null, at);
+          finalizeTurn(this.#host, st, proc, null, at);
           return;
         }
         if (!st.compactedInTurn && data) {
           st.compactedInTurn = true;
-          const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
-          this.emit(st.id, {
-            type: "context.compacted",
-            uuid: this.#scopedUuid(st, `compact-${++st.eventSeq}`),
-            trigger: "manual",
-            preTokens: num(data.tokensBefore),
-            postTokens: num(data.estimatedTokensAfter),
-            at,
-          });
+          emitManualCompaction(this.#host, st, data, at);
         }
-        this.#requestTurnStatsAndFinalize(st, proc, at);
+        requestTurnStatsAndFinalize(this.#host, st, proc, at);
         return;
       }
 
       case "turn_stats": {
-        this.#finalizeTurn(st, proc, ok ? data : null, at);
+        finalizeTurn(this.#host, st, proc, ok ? data : null, at);
         return;
       }
 
@@ -774,375 +635,6 @@ export class PiDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       case "abort":
         return;
     }
-  }
-
-  #onMessageStart(st: SessionState, obj: Record<string, unknown>, at: number): void {
-    const message =
-      typeof obj.message === "object" && obj.message !== null ? (obj.message as Record<string, unknown>) : null;
-    if (!message) return;
-    if (message.role === "user") {
-      const text = extractPiUserMessageText(message);
-      const waiting = st.inFlight.filter((b) => !b.echoed);
-      const batch = waiting.find((b) => b.combinedText === text) ?? waiting[0];
-      if (!batch) return;
-      batch.echoed = true;
-      this.markProcessing(st, batch, at);
-      return;
-    }
-    if (message.role === "assistant") {
-      st.assistantMsgSeq += 1;
-    }
-  }
-
-  #onMessageUpdate(st: SessionState, obj: Record<string, unknown>, at: number): void {
-    const opening = st.inFlight.find((b) => !b.midTurn);
-    if (opening) this.markProcessing(st, opening, at);
-
-    const message =
-      typeof obj.message === "object" && obj.message !== null ? (obj.message as Record<string, unknown>) : null;
-    const rawUsage = obj.usage ?? (message?.role === "assistant" ? message.usage : undefined);
-    const counts = parsePiTokenCounts(rawUsage);
-    if (counts) {
-      const row = this.row(st);
-      const msgId = `msg-${st.turnSeq}-${st.assistantMsgSeq || 1}`;
-      const live = row
-        ? st.turnUsage.observe({ message: { id: msgId, usage: toClaudeStyleUsage(counts) } }, row.usage)
-        : null;
-      if (live) this.pushUsage(st, live);
-    }
-
-    const ev =
-      typeof obj.assistantMessageEvent === "object" && obj.assistantMessageEvent !== null
-        ? (obj.assistantMessageEvent as Record<string, unknown>)
-        : null;
-    if (!ev) return;
-
-    const msgSeq = st.assistantMsgSeq || 1;
-    const contentIdx = typeof ev.contentIndex === "number" ? ev.contentIndex : 0;
-    const blockKey = `${msgSeq}:${contentIdx}`;
-
-    switch (ev.type) {
-      case "thinking_start":
-      case "thinking_delta": {
-        this.#emitThinkingOnce(st, blockKey, at);
-        return;
-      }
-      case "text_delta": {
-        const delta = typeof ev.delta === "string" ? ev.delta : "";
-        if (delta !== "") {
-          const isNewBlock = !st.textBuffers.has(blockKey);
-          st.textBuffers.set(blockKey, (st.textBuffers.get(blockKey) ?? "") + delta);
-          this.emit(st.id, {
-            type: "agent.text_delta",
-            delta,
-            ...(isNewBlock ? { reset: true } : {}),
-            at,
-          });
-        }
-        return;
-      }
-      case "text_end": {
-        const fullText =
-          typeof ev.content === "string" && ev.content !== "" ? ev.content : (st.textBuffers.get(blockKey) ?? "");
-        st.textBuffers.delete(blockKey);
-        this.#emitTextOnce(st, blockKey, fullText, at);
-        return;
-      }
-      case "toolcall_start": {
-        this.#flushBufferedTexts(st, at);
-        const block = extractPiPartialToolBlock(ev, contentIdx);
-        const toolUseId =
-          typeof ev.id === "string" && ev.id !== ""
-            ? ev.id
-            : typeof block?.id === "string" && block.id !== ""
-              ? block.id
-              : undefined;
-        const name =
-          typeof ev.toolName === "string" && ev.toolName !== ""
-            ? ev.toolName
-            : typeof ev.name === "string" && ev.name !== ""
-              ? ev.name
-              : typeof block?.name === "string" && block.name !== ""
-                ? block.name
-                : "";
-        const preview = st.toolPreviews.start(blockKey, {
-          toolUseId,
-          name,
-          initialInput: block?.arguments,
-          at,
-        });
-        if (preview) this.emit(st.id, preview);
-        return;
-      }
-      case "toolcall_delta": {
-        const block = extractPiPartialToolBlock(ev, contentIdx);
-        if (block) {
-          const objPreview = st.toolPreviews.updateObject(
-            blockKey,
-            {
-              toolUseId: typeof block.id === "string" && block.id !== "" ? block.id : undefined,
-              name: typeof block.name === "string" && block.name !== "" ? block.name : undefined,
-              input: block.arguments,
-            },
-            at,
-          );
-          if (objPreview) this.emit(st.id, objPreview);
-        }
-        if (typeof ev.delta === "string" && ev.delta !== "") {
-          const jsonPreview = st.toolPreviews.appendJsonDelta(blockKey, ev.delta, at);
-          if (jsonPreview) this.emit(st.id, jsonPreview);
-        }
-        return;
-      }
-      case "toolcall_end": {
-        st.toolPreviews.end(blockKey);
-        this.#flushBufferedTexts(st, at);
-        const tc =
-          typeof ev.toolCall === "object" && ev.toolCall !== null ? (ev.toolCall as Record<string, unknown>) : null;
-        const toolId = typeof tc?.id === "string" && tc.id !== "" ? tc.id : null;
-        if (toolId) {
-          this.#emitToolOnce(
-            st,
-            toolId,
-            typeof tc?.name === "string" ? tc.name : "",
-            tc?.arguments ?? {},
-            at,
-          );
-        }
-        return;
-      }
-    }
-  }
-
-  #onMessageEnd(st: SessionState, obj: Record<string, unknown>, at: number): void {
-    const message =
-      typeof obj.message === "object" && obj.message !== null ? (obj.message as Record<string, unknown>) : null;
-    if (!message || message.role !== "assistant") return;
-
-    st.toolPreviews.clear();
-
-    const msgSeq = st.assistantMsgSeq || 1;
-    const blocks = extractPiAssistantBlocks(message);
-    if (blocks.hasThinking) {
-      const hasAnyForMsg = [...st.emittedThinkingKeys].some((k) => k.startsWith(`${msgSeq}:`));
-      if (!hasAnyForMsg) this.#emitThinkingOnce(st, `${msgSeq}:0`, at);
-    }
-    for (const t of blocks.texts) {
-      const key = `${msgSeq}:${t.index}`;
-      st.textBuffers.delete(key);
-      this.#emitTextOnce(st, key, t.text, at);
-    }
-    for (const tc of blocks.toolCalls) {
-      this.#emitToolOnce(st, tc.id, tc.name, tc.arguments, at);
-    }
-
-    const counts = parsePiTokenCounts(message.usage);
-    if (counts) {
-      st.turnTokenTotals = addPiTokenCounts(st.turnTokenTotals, counts);
-      st.hasMessageUsageInTurn = true;
-      const row = this.row(st);
-      const msgId = `msg-${st.turnSeq}-${msgSeq}`;
-      const live = row
-        ? st.turnUsage.observe({ message: { id: msgId, usage: toClaudeStyleUsage(counts) } }, row.usage)
-        : null;
-      if (live) this.pushUsage(st, live);
-    }
-
-    if (message.stopReason === "aborted") {
-      st.turnInterrupted = true;
-    } else if (message.stopReason === "error") {
-      st.turnErrorMessage =
-        typeof message.errorMessage === "string" && message.errorMessage.trim() !== ""
-          ? message.errorMessage.trim()
-          : "assistant error";
-    }
-  }
-
-  #onToolExecutionStart(st: SessionState, obj: Record<string, unknown>, at: number): void {
-    this.#flushBufferedTexts(st, at);
-    const toolId = typeof obj.toolCallId === "string" && obj.toolCallId !== "" ? obj.toolCallId : null;
-    if (!toolId) return;
-    const name = typeof obj.toolName === "string" ? obj.toolName : "";
-    this.#emitToolOnce(st, toolId, name, obj.args ?? {}, at);
-  }
-
-  #onToolExecutionEnd(st: SessionState, obj: Record<string, unknown>, at: number): void {
-    const toolId = typeof obj.toolCallId === "string" && obj.toolCallId !== "" ? obj.toolCallId : null;
-    if (!toolId || st.completedToolIds.has(toolId)) return;
-    st.completedToolIds.add(toolId);
-    this.emit(st.id, { type: "agent.tool_result", toolUseIds: [toolId], ...toolResultOutputs(this.vendor, [[toolId, obj]]), at });
-  }
-
-  #onCompactionEnd(st: SessionState, obj: Record<string, unknown>, rawLine: string, at: number): void {
-    if (obj.aborted === true) return;
-    if (typeof obj.errorMessage === "string" && obj.errorMessage !== "") return;
-    const res =
-      typeof obj.result === "object" && obj.result !== null ? (obj.result as Record<string, unknown>) : null;
-    const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
-    const reason = typeof obj.reason === "string" ? obj.reason : null;
-    st.compactedInTurn = true;
-    this.emit(st.id, {
-      type: "context.compacted",
-      uuid: lineUuid(obj, rawLine),
-      trigger: reason === "manual" ? "manual" : reason !== null ? "auto" : null,
-      preTokens: num(res?.tokensBefore),
-      postTokens: num(res?.estimatedTokensAfter),
-      at,
-    });
-  }
-
-  #onAgentSettled(st: SessionState, proc: Proc, obj: Record<string, unknown>, at: number): void {
-    if (!proc.initSeen) return;
-    if (obj.aborted === true) st.turnInterrupted = true;
-    this.#requestTurnStatsAndFinalize(st, proc, at);
-  }
-
-  #requestTurnStatsAndFinalize(st: SessionState, proc: Proc, at: number): void {
-    if (st.awaitingStats) return;
-    if (proc.closing) {
-      this.#finalizeTurn(st, proc, null, at);
-      return;
-    }
-    st.awaitingStats = true;
-    const statsId = `rpc-${++this.requestSeq}`;
-    proc.pendingRpcs.set(statsId, { kind: "turn_stats" });
-    st.statsTimer = setTimeout(() => {
-      proc.pendingRpcs.delete(statsId);
-      this.#finalizeTurn(st, proc, null, Date.now());
-    }, PI_SESSION_STATS_TIMEOUT_MS);
-    proc.child.stdin.write(`${buildGetSessionStatsLine(statsId)}\n`, (err) => {
-      if (err && st.awaitingStats) {
-        proc.pendingRpcs.delete(statsId);
-        this.#finalizeTurn(st, proc, null, Date.now());
-      }
-    });
-  }
-
-  #finalizeTurn(st: SessionState, proc: Proc, statsData: Record<string, unknown> | null, at: number): void {
-    if (!proc.initSeen) return;
-    if (st.statsTimer !== null) {
-      clearTimeout(st.statsTimer);
-      st.statsTimer = null;
-    }
-    st.awaitingStats = false;
-    st.runningCompact = false;
-
-    this.#flushBufferedTexts(st, at);
-
-    const settled = st.inFlight.filter((b) => !b.midTurn || b.echoed);
-    const missed = st.inFlight.filter((b) => b.midTurn && !b.echoed && b.delivered);
-    const unacked = st.inFlight.filter((b) => b.midTurn && !b.echoed && !b.delivered);
-    st.inFlight = unacked;
-    st.selfTurn = false;
-    for (const batch of settled) this.markProcessing(st, batch, at);
-
-    const interrupted = st.turnInterrupted || st.stopRequested;
-    const ok = !interrupted && st.turnErrorMessage === null;
-    for (const b of unacked) {
-      b.turnDone = true;
-      if (interrupted) b.stopped = true;
-    }
-
-    const event: DriverEvent = {
-      type: "turn.ended",
-      ok,
-      interrupted,
-      messageIds: settled.flatMap((b) => b.messageIds),
-      durationMs: null,
-      at,
-    };
-    if (proc.closing === "shutdown" && (!ok || interrupted)) event.shutdown = true;
-    if (!ok) {
-      if (!interrupted) {
-        event.error = {
-          subtype: "error_during_execution",
-          message: st.turnErrorMessage ?? "turn_failed",
-        };
-      }
-      this.forgetWritten(st, settled);
-    } else {
-      this.markHealthy(st.id);
-    }
-
-    const parsedStats = parsePiSessionStats(statsData);
-    let deltaCounts: PiRawTokenCounts | null = null;
-    if (st.hasMessageUsageInTurn) {
-      deltaCounts = st.turnTokenTotals;
-      if (parsedStats.tokens) proc.lastSessionTokens = parsedStats.tokens;
-    } else if (parsedStats.tokens) {
-      deltaCounts = subtractPiTokenCounts(parsedStats.tokens, proc.lastSessionTokens);
-      proc.lastSessionTokens = parsedStats.tokens;
-    }
-
-    this.cancelUsagePush(st);
-    const row = this.row(st);
-    const patch: AgentSessionPatch = {};
-    if (deltaCounts !== null || parsedStats.contextTokens !== null) {
-      const finished: TokenUsage =
-        deltaCounts !== null
-          ? st.turnUsage.finish(row?.usage ?? EMPTY_TOKEN_USAGE, toClaudeStyleUsage(deltaCounts))
-          : (() => {
-              st.turnUsage.reset();
-              return { ...(row?.usage ?? EMPTY_TOKEN_USAGE) };
-            })();
-      if (parsedStats.contextTokens !== null) {
-        finished.context = parsedStats.contextTokens;
-      }
-      patch.usage = finished;
-    } else {
-      st.turnUsage.reset();
-    }
-    if (row?.hasCompletedTurn === false && ok) patch.hasCompletedTurn = true;
-    if (Object.keys(patch).length > 0) this.update(st, patch);
-
-    st.turnInterrupted = false;
-    st.stopRequested = false;
-    this.#clearTurnBuffers(st);
-
-    this.clearTimer(st, "interruptTimer");
-    this.emit(st.id, event);
-    this.releaseUntaken(st, missed, interrupted, at);
-    if (!this.busy(st)) {
-      this.resolveInterrupt(st);
-      this.afterTurn(st, proc);
-      this.settled(st);
-    }
-  }
-
-  #scopedUuid(st: SessionState, suffix: string): string {
-    return `pi:${procSessionPrefix(st)}:t${st.turnSeq}:${suffix}`;
-  }
-
-  #emitThinkingOnce(st: SessionState, key: string, at: number): void {
-    if (st.emittedThinkingKeys.has(key)) return;
-    st.emittedThinkingKeys.add(key);
-    this.emit(st.id, { type: "agent.thinking", uuid: this.#scopedUuid(st, `think-${key}`), at });
-  }
-
-  #emitTextOnce(st: SessionState, key: string, text: string, at: number): void {
-    if (text.trim() === "" || st.emittedTextKeys.has(key)) return;
-    st.emittedTextKeys.add(key);
-    this.emit(st.id, { type: "agent.text", uuid: this.#scopedUuid(st, `text-${key}`), text, at });
-  }
-
-  #flushBufferedTexts(st: SessionState, at: number): void {
-    for (const [key, buffered] of [...st.textBuffers.entries()]) {
-      st.textBuffers.delete(key);
-      this.#emitTextOnce(st, key, buffered, at);
-    }
-  }
-
-  #emitToolOnce(st: SessionState, toolId: string, name: string, input: unknown, at: number): void {
-    if (st.emittedToolIds.has(toolId)) return;
-    st.emittedToolIds.add(toolId);
-    this.emit(st.id, {
-      type: "agent.tool",
-      uuid: this.#scopedUuid(st, `tool-${toolId}`),
-      toolUseId: toolId,
-      name,
-      input,
-      at,
-    });
   }
 
   protected onProcessClose(
@@ -1154,7 +646,7 @@ export class PiDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
   ): void {
     try {
       const at = this.beginProcessClose(st, proc);
-      this.#clearTurnBuffers(st);
+      clearTurnBuffers(st);
       st.runningCompact = false;
 
       for (const rpc of proc.pendingRpcs.values()) {
@@ -1227,54 +719,4 @@ export class PiDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
 
 export function createPiDriver(options: PiDriverOptions): PiDriver {
   return new PiDriver(options);
-}
-
-function extractPiPartialToolBlock(
-  ev: Record<string, unknown>,
-  contentIdx: number,
-): Record<string, unknown> | null {
-  const partial =
-    typeof ev.partial === "object" && ev.partial !== null ? (ev.partial as Record<string, unknown>) : null;
-  const content = Array.isArray(partial?.content) ? partial.content : null;
-  const raw = content?.[contentIdx];
-  if (typeof raw === "object" && raw !== null && (raw as Record<string, unknown>).type === "toolCall") {
-    return raw as Record<string, unknown>;
-  }
-  return null;
-}
-
-function procSessionPrefix(st: SessionState): string {
-  return st.proc?.sessionId ?? String(st.id);
-}
-
-function startupError(outcome: Extract<PiStartupOutcome, { kind: "failed" }>, startTimeoutMs: number): DriverError {
-  if (outcome.timedOut) return new DriverError("start_timeout", `no get_state response within ${startTimeoutMs} ms`);
-  if (outcome.errorMessage) return new DriverError("spawn_failed", `pi get_state failed: ${outcome.errorMessage}`);
-  const how = outcome.signal ? `signal ${outcome.signal}` : `exit code ${outcome.exitCode}`;
-  const stderr = outcome.stderr.trim();
-  return new DriverError("spawn_failed", `pi exited before get_state (${how})${stderr ? `: ${stderr}` : ""}`);
-}
-
-function newBatch(
-  messageIds: MessageId[],
-  rawText: string,
-  combinedText: string,
-  notes: BatchNotes,
-  source: MessageSource,
-  isCompact: boolean,
-): Batch {
-  return {
-    messageIds,
-    rawText,
-    combinedText,
-    notes,
-    delivered: false,
-    processing: false,
-    echoed: false,
-    midTurn: false,
-    stopped: false,
-    turnDone: false,
-    isCompact,
-    source,
-  };
 }

@@ -3,12 +3,8 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   DriverError,
-  EMPTY_TOKEN_USAGE,
-  MAX_STREAMING_TOOL_BLOCKS,
-  STDERR_TAIL_CHARS,
   type AgentSessionPatch,
   type AgentSessionRow,
-  type DriverEvent,
   type DriverOptions,
   type DriverSendInput,
   type DriverSendResult,
@@ -17,10 +13,7 @@ import {
   type ReadonlyPolicy,
   type SessionExitReason,
   type SessionId,
-  type TokenUsage,
-  type WriteScope,
 } from "../../shared/index.ts";
-import { AGY_DENIED_CONTINUE_MAX } from "./limits.ts";
 import type { VendorComposerBase } from "../../daemon/vendors/types.ts";
 import { agyComposerBase } from "./composer.ts";
 import { createAgyConnectorResolver, createReadonlyProbeLauncher } from "./connectors.ts";
@@ -30,34 +23,22 @@ import {
   buildAgySessionStartedEvent,
   buildAgyUserLine,
   checkAgyUserLine,
-  checkWorkerToolViolation,
   detectAgyArgsConflict,
-  finishAgyUsage,
-  observeAgyUsage,
 } from "./protocol.ts";
 import { agyRuleBudgetWarning, writeAgyPromptRules } from "./rules.ts";
 import {
-  BaseSessionDriver,
   NO_NOTES,
   createBaseSessionState,
   entryParts,
   errorMessage,
-  type BaseBatch,
-  type BaseProc,
-  type BaseSessionState,
   type PendingEntry,
-  type StartupOutcome,
 } from "../../daemon/driver/base-driver.ts";
 import { personaSeenAtStart } from "../../daemon/driver/persona-note.ts";
-import { pickStepInput, toolStepSignature } from "../../daemon/driver/protocol.ts";
 import {
   EMPTY_AGY_CONNECTOR_CATALOG,
   READONLY_AGY_NEEDS_SANDBOX_MESSAGE,
   agyConnectorRules,
   agyReadonlySandboxInput,
-  checkAgyConnectorCall,
-  deniedActionsOf,
-  deniedContinueText,
   type AgyConnectorCatalog,
 } from "./readonly.ts";
 import {
@@ -68,48 +49,19 @@ import {
   type ScopedSpawn,
   type SpawnCommand,
 } from "../../daemon/driver/write-scope.ts";
-import { toolResultOutputs } from "../_common/tool-output.ts";
-
-interface Batch extends BaseBatch {
-  text: string;
-  prefixes: string[];
-  rawLine?: string;
-}
-
-type AgyStartupOutcome = StartupOutcome<ReturnType<typeof detectAgyArgsConflict>>;
-
-interface Proc extends BaseProc<AgyStartupOutcome> {
-  readonly: { policy: ReadonlyPolicy; catalog: AgyConnectorCatalog } | null;
-  tmpDir: string | null;
-  fallbackScope: WriteScope | null;
-}
-
-// agy reports both CANCELED and CANCELLED.
-const AGY_TERMINAL_TOOL_STATES = new Set(["DONE", "FAILED", "CANCELLED", "CANCELED", "ERROR"]);
-
-interface TrackedToolStep {
-  task_id: string;
-  description: string;
-  promoted: boolean;
-}
-
-interface SessionState extends BaseSessionState<Proc, Batch> {
-  policyViolation: string | null;
-  deniedContinues: number;
-  hasConversation: boolean;
-  vendorSessionId: string;
-  stepTexts: Map<string, string>;
-  seenToolSteps: Set<string>;
-  previewedToolSteps: Map<string, string>;
-  completedToolSteps: Set<string>;
-  reportedTasks: Map<string, { task_id: string; description: string }>;
-  activeToolSteps: Map<string, TrackedToolStep>;
-  seenThinkingSteps: Set<string>;
-  hasTextSinceLastTool: boolean;
-  resultSeq: number;
-  eventSeq: number;
-  lastLiveUsage: TokenUsage | null;
-}
+import { VendorSessionDriver } from "../_common/session-driver.ts";
+import {
+  clearStepTracking,
+  extractAgyBackgroundTasks,
+  startupError,
+  type AgyDriverHost,
+  type AgyStartupOutcome,
+  type Batch,
+  type Proc,
+  type SessionState,
+} from "./driver-state.ts";
+import { onResult } from "./result.ts";
+import { onReportedBackgroundTasks, onStepUpdate } from "./steps.ts";
 
 export interface AgyDriverOptions extends Omit<DriverOptions, "executablePath"> {
   executablePath?: string | (() => string);
@@ -119,13 +71,14 @@ export interface AgyDriverOptions extends Omit<DriverOptions, "executablePath"> 
   readonlySpawn?: (base: SpawnCommand, input: ReadonlySandboxInput) => ScopedSpawn;
 }
 
-export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
+export class AgyDriver extends VendorSessionDriver<Proc, Batch, SessionState> {
   readonly #agyPath: string | (() => string);
   readonly #homeDir?: string;
   readonly #customCatalog?: () => Promise<AgyConnectorCatalog>;
   readonly #readonlySpawn?: (base: SpawnCommand, input: ReadonlySandboxInput) => ScopedSpawn;
   #connectorCatalog: (() => Promise<AgyConnectorCatalog>) | null = null;
   #latestReadonlyPolicy: ReadonlyPolicy | null = null;
+  readonly #host: AgyDriverHost;
 
   constructor(options: AgyDriverOptions) {
     super("agy", { ...options, composer: options.composer ?? agyComposerBase });
@@ -133,6 +86,7 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     this.#homeDir = options.homeDir;
     this.#customCatalog = options.connectorCatalog;
     this.#readonlySpawn = options.readonlySpawn;
+    this.#host = this.createHost();
   }
 
   #resolveAgyPath(): string {
@@ -304,12 +258,7 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     st.stopRequested = false;
     st.policyViolation = null;
     st.deniedContinues = 0;
-    st.stepTexts.clear();
-    st.seenToolSteps.clear();
-    st.previewedToolSteps.clear();
-    st.completedToolSteps.clear();
-    st.seenThinkingSteps.clear();
-    st.hasTextSinceLastTool = false;
+    clearStepTracking(st);
     st.lastLiveUsage = null;
   }
 
@@ -493,70 +442,19 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         this.#onInit(st, proc, obj, at);
         return;
       case "step_update":
-        this.#onStepUpdate(st, proc, obj, at);
+        onStepUpdate(this.#host, st, proc, obj, at);
         return;
       case "background_tasks_changed":
-        this.#onReportedBackgroundTasks(st, proc, extractAgyBackgroundTasks(obj));
+        onReportedBackgroundTasks(this.#host, st, proc, extractAgyBackgroundTasks(obj));
         return;
       case "system":
         if (obj.subtype === "background_tasks_changed") {
-          this.#onReportedBackgroundTasks(st, proc, extractAgyBackgroundTasks(obj));
+          onReportedBackgroundTasks(this.#host, st, proc, extractAgyBackgroundTasks(obj));
         }
         return;
       case "result":
-        this.#onResult(st, proc, obj, at);
+        onResult(this.#host, st, proc, obj, at);
         return;
-    }
-  }
-
-  #onReportedBackgroundTasks(st: SessionState, proc: Proc, rawTasks: unknown): void {
-    if (!Array.isArray(rawTasks)) return;
-    const next = new Map<string, { task_id: string; description: string }>();
-    for (const t of rawTasks) {
-      if (typeof t !== "object" || t === null) continue;
-      const { task_id: id, ambient, description } = t as {
-        task_id?: unknown;
-        ambient?: unknown;
-        description?: unknown;
-      };
-      if (typeof id === "string" && id !== "" && ambient !== true) {
-        next.set(id, { task_id: id, description: typeof description === "string" ? description : "" });
-      }
-    }
-    st.reportedTasks = next;
-    this.#syncBackgroundTasks(st, proc);
-  }
-
-  #syncBackgroundTasks(st: SessionState, proc: Proc): void {
-    const merged = new Map<string, { task_id: string; description: string }>(st.reportedTasks);
-    for (const step of st.activeToolSteps.values()) {
-      if (step.promoted && !merged.has(step.task_id)) {
-        merged.set(step.task_id, { task_id: step.task_id, description: step.description });
-      }
-    }
-    this.onBackgroundTasksChanged(st, proc, [...merged.values()]);
-  }
-
-  #conversationIdOf(st: SessionState): string {
-    if (st.vendorSessionId !== "") return st.vendorSessionId;
-    return this.row(st)?.vendorSessionId ?? String(st.id);
-  }
-
-  #flushStepTexts(st: SessionState, at: number, exceptStepId?: string): void {
-    const convId = this.#conversationIdOf(st);
-    const turnNo = st.resultSeq + 1;
-    for (const [stepId, text] of [...st.stepTexts.entries()]) {
-      if (exceptStepId !== undefined && stepId === exceptStepId) continue;
-      st.stepTexts.delete(stepId);
-      if (text.trim() !== "") {
-        st.hasTextSinceLastTool = true;
-        this.emit(st.id, {
-          type: "agent.text",
-          uuid: `agy-step-${convId}-${turnNo}-${stepId}-${++st.eventSeq}`,
-          text,
-          at,
-        });
-      }
     }
   }
 
@@ -599,355 +497,6 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     const first = st.inFlight[0];
     if (first) this.markDelivered(st, first);
     proc.resolveReady({ kind: "ok" });
-  }
-
-  #onStepUpdate(st: SessionState, proc: Proc, obj: Record<string, unknown>, at: number): void {
-    const su =
-      typeof obj.step_update === "object" && obj.step_update !== null
-        ? (obj.step_update as Record<string, unknown>)
-        : obj;
-    const rawStepId = su.step_index ?? su.step_id ?? obj.step_index ?? obj.step_id;
-    const stepId = typeof rawStepId === "number" || typeof rawStepId === "string" ? String(rawStepId) : "0";
-    const stepType = su.step_type;
-    const turnNo = st.resultSeq + 1;
-    const inFlight = st.inFlight[0] ?? null;
-
-    if (
-      stepType === "background_tasks" ||
-      stepType === "background_tasks_changed" ||
-      "tasks" in su ||
-      "background_tasks" in su
-    ) {
-      this.#onReportedBackgroundTasks(st, proc, extractAgyBackgroundTasks(su));
-      if (stepType === "background_tasks" || stepType === "background_tasks_changed") return;
-    }
-
-    if (stepType === "user_input") {
-      if (su.state === "DONE" && inFlight) {
-        this.markProcessing(st, inFlight, at);
-      }
-      return;
-    }
-
-    if (stepType === "agent_response") {
-      if (inFlight) this.markProcessing(st, inFlight, at);
-      this.#flushStepTexts(st, at, stepId);
-
-      let appendedDelta = "";
-      let reset = false;
-      if (typeof su.text_delta === "string" && su.text_delta !== "") {
-        st.stepTexts.set(stepId, (st.stepTexts.get(stepId) ?? "") + su.text_delta);
-        appendedDelta = su.text_delta;
-      } else if (typeof su.text === "string" && su.text !== "" && !st.stepTexts.has(stepId)) {
-        st.stepTexts.set(stepId, su.text);
-        appendedDelta = su.text;
-        reset = true;
-      }
-
-      if (typeof su.usage === "object" && su.usage !== null) {
-        const row = this.row(st);
-        const live = row ? observeAgyUsage(st.turnUsage, stepId, su.usage, row.usage) : null;
-        if (live) {
-          st.lastLiveUsage = live;
-          this.pushUsage(st, live);
-        }
-      }
-
-      if (su.state === "DONE") {
-        this.#flushStepTexts(st, at);
-      } else if (appendedDelta !== "") {
-        this.emit(st.id, { type: "agent.text_delta", delta: appendedDelta, ...(reset ? { reset: true } : {}), at });
-      }
-      return;
-    }
-
-    if (stepType === "thinking") {
-      if (inFlight) this.markProcessing(st, inFlight, at);
-      if (!st.seenThinkingSteps.has(stepId)) {
-        st.seenThinkingSteps.add(stepId);
-        this.emit(st.id, {
-          type: "agent.thinking",
-          uuid: `agy-thinking-${this.#conversationIdOf(st)}-${turnNo}-${stepId}-${++st.eventSeq}`,
-          at,
-        });
-      }
-      return;
-    }
-
-    if (stepType === "tool") {
-      if (inFlight) this.markProcessing(st, inFlight, at);
-      this.#flushStepTexts(st, at);
-      st.hasTextSinceLastTool = false;
-
-      const toolInfo =
-        typeof su.tool_info === "object" && su.tool_info !== null
-          ? (su.tool_info as Record<string, unknown>)
-          : undefined;
-      const toolName =
-        typeof su.tool_name === "string"
-          ? su.tool_name
-          : typeof toolInfo?.tool_name === "string"
-            ? toolInfo.tool_name
-            : typeof toolInfo?.name === "string"
-              ? toolInfo.name
-              : "";
-      const parameters = toolInfo?.parameters ?? su.parameters ?? null;
-      const toolUseId = `tool-${turnNo}-${stepId}`;
-      const isTerminal = typeof su.state === "string" && AGY_TERMINAL_TOOL_STATES.has(su.state);
-      const isFormalState = su.state === "ACTIVE" || isTerminal || su.state === undefined;
-
-      const setBoundedPreviewSig = (sig: string) => {
-        if (!st.previewedToolSteps.has(stepId) && st.previewedToolSteps.size >= MAX_STREAMING_TOOL_BLOCKS) {
-          const oldest = st.previewedToolSteps.keys().next().value;
-          if (oldest !== undefined) st.previewedToolSteps.delete(oldest);
-        }
-        st.previewedToolSteps.set(stepId, sig);
-      };
-
-      if (!st.seenToolSteps.has(stepId) && isFormalState) {
-        st.seenToolSteps.add(stepId);
-        setBoundedPreviewSig(toolStepSignature(toolName, parameters));
-        const convId = this.#conversationIdOf(st);
-
-        this.emit(st.id, {
-          type: "agent.tool",
-          uuid: `agy-tool-${convId}-${turnNo}-${stepId}-${++st.eventSeq}`,
-          toolUseId,
-          name: toolName,
-          input: parameters,
-          at,
-        });
-      } else if (!isTerminal && toolName !== "") {
-        const sig = toolStepSignature(toolName, parameters);
-        if (st.previewedToolSteps.get(stepId) !== sig) {
-          setBoundedPreviewSig(sig);
-          this.emit(st.id, {
-            type: "agent.tool_preview",
-            toolUseId,
-            name: toolName,
-            input: pickStepInput(parameters),
-            at,
-          });
-        }
-      }
-
-      if (!isTerminal || !st.completedToolSteps.has(stepId)) {
-        const row = this.row(st);
-        if (row?.role === "worker") {
-          const violation =
-            checkWorkerToolViolation({ toolName, parameters, fallbackScope: proc.fallbackScope, cwd: row.cwd }) ??
-            (proc.readonly === null
-              ? null
-              : checkAgyConnectorCall(toolName, parameters, proc.readonly.policy, proc.readonly.catalog));
-          if (violation !== null) {
-            st.policyViolation = violation;
-            this.sigintForInterrupt(st, proc, "interruptTimer");
-            return;
-          }
-        }
-      }
-
-      if (su.state === "ACTIVE") {
-        const promoted = isExplicitBackgroundToolStep(su, toolName, parameters);
-        st.activeToolSteps.set(stepId, {
-          task_id: stepId,
-          description: extractToolDescription(toolName, parameters),
-          promoted,
-        });
-        if (promoted) {
-          this.#syncBackgroundTasks(st, proc);
-        }
-      }
-
-      if (isTerminal) {
-        st.previewedToolSteps.delete(stepId);
-        const removed = st.activeToolSteps.get(stepId);
-        st.activeToolSteps.delete(stepId);
-        if (removed?.promoted) {
-          this.#syncBackgroundTasks(st, proc);
-        }
-        if (!st.completedToolSteps.has(stepId)) {
-          st.completedToolSteps.add(stepId);
-          this.emit(st.id, {
-            type: "agent.tool_result",
-            toolUseIds: [toolUseId],
-            ...toolResultOutputs(this.vendor, [[toolUseId, toolInfo]]),
-            at,
-          });
-        }
-      }
-    }
-  }
-
-  #onResult(st: SessionState, proc: Proc, obj: Record<string, unknown>, at: number): void {
-    const res =
-      typeof obj.result === "object" && obj.result !== null
-        ? (obj.result as Record<string, unknown>)
-        : obj;
-    if (!proc.initSeen) {
-      const preInitErr =
-        typeof res.error === "string" ? res.error : typeof obj.error === "string" ? obj.error : "";
-      if (preInitErr !== "") proc.stderr = (proc.stderr + "\n" + preInitErr).slice(-STDERR_TAIL_CHARS);
-      return;
-    }
-
-    const rawConvId = res.conversation_id ?? obj.conversation_id;
-    const convId = typeof rawConvId === "string" && rawConvId.trim() !== "" ? rawConvId.trim() : "";
-    if (convId !== "" && convId !== st.vendorSessionId) {
-      st.vendorSessionId = convId;
-      st.hasConversation = true;
-    }
-
-    if ("tasks" in res || "background_tasks" in res) {
-      this.#onReportedBackgroundTasks(st, proc, extractAgyBackgroundTasks(res));
-    }
-
-    const finishedReason = typeof res.finished_reason === "string" ? res.finished_reason : null;
-    const rawInterrupted = finishedReason === "interrupted" || st.turnInterrupted || st.stopRequested;
-    if (!rawInterrupted && this.#continueAfterDenial(st, proc, res, obj, at)) return;
-    const written = st.inFlight[0] ?? null;
-    st.inFlight = [];
-    st.selfTurn = false;
-    const untaken = rawInterrupted && written !== null && !written.processing ? written : null;
-    const batch = untaken === null ? written : null;
-    if (batch) this.markProcessing(st, batch, at);
-
-    this.#flushStepTexts(st, at);
-    const hadFinalText = st.hasTextSinceLastTool || (typeof res.response === "string" && res.response.trim() !== "");
-
-    const turnNo = ++st.resultSeq;
-    if (
-      !st.hasTextSinceLastTool &&
-      st.policyViolation === null &&
-      typeof res.response === "string" &&
-      res.response.trim() !== ""
-    ) {
-      this.emit(st.id, {
-        type: "agent.text",
-        uuid: `agy-result-${this.#conversationIdOf(st)}-${turnNo}-${++st.eventSeq}`,
-        text: res.response,
-        at,
-      });
-    }
-
-    const violation = st.policyViolation;
-    st.policyViolation = null;
-
-    if (rawInterrupted && proc.closing === null) {
-      proc.closing = "interrupt";
-    }
-
-    const interrupted = violation !== null ? false : rawInterrupted;
-    const status = typeof res.status === "string" ? res.status : "SUCCESS";
-    const ok = violation === null && !interrupted && (status === "SUCCESS" || (finishedReason === null && hadFinalText));
-
-    // Tool steps still ACTIVE at turn end (e.g. run_command moved to the background) become background tasks.
-    if (ok && st.activeToolSteps.size > 0) {
-      let newlyPromoted = false;
-      for (const step of st.activeToolSteps.values()) {
-        if (!step.promoted) {
-          step.promoted = true;
-          newlyPromoted = true;
-        }
-      }
-      if (newlyPromoted) {
-        this.#syncBackgroundTasks(st, proc);
-      }
-    } else if (!ok && st.activeToolSteps.size > 0) {
-      let hadPromoted = false;
-      for (const step of st.activeToolSteps.values()) {
-        if (step.promoted) hadPromoted = true;
-      }
-      st.activeToolSteps.clear();
-      if (hadPromoted) {
-        this.#syncBackgroundTasks(st, proc);
-      }
-    }
-
-    const event: DriverEvent = {
-      type: "turn.ended",
-      ok,
-      interrupted,
-      messageIds: batch?.messageIds ?? [],
-      durationMs: typeof res.duration_ms === "number" ? res.duration_ms : null,
-      at,
-    };
-    if (proc.closing === "shutdown" && (!ok || interrupted)) event.shutdown = true;
-    if (!ok) {
-      if (violation !== null) {
-        event.error = { subtype: "policy_violation", message: violation };
-      } else {
-        const subtype = finishedReason ?? (status === "ERROR" ? "error_during_execution" : status.toLowerCase());
-        event.error = { subtype, message: resultErrorMessage(res, obj, subtype) };
-      }
-      this.forgetWritten(st, [batch]);
-    } else {
-      this.markHealthy(st.id);
-    }
-
-    st.turnInterrupted = false;
-    st.stopRequested = false;
-    st.stepTexts.clear();
-    st.seenToolSteps.clear();
-    st.previewedToolSteps.clear();
-    st.completedToolSteps.clear();
-    st.seenThinkingSteps.clear();
-    st.hasTextSinceLastTool = false;
-
-    this.#settleUsage(st, res, obj);
-
-    this.clearTimer(st, "interruptTimer");
-    this.emit(st.id, event);
-    if (untaken !== null) this.releaseOnStop(st, [untaken], at);
-    this.resolveInterrupt(st);
-    this.afterTurn(st, proc);
-    this.settled(st);
-  }
-
-  #settleUsage(st: SessionState, res: Record<string, unknown>, obj: Record<string, unknown>): void {
-    const row = this.row(st);
-    this.cancelUsagePush(st);
-    const finalUsage = finishAgyUsage(
-      st.turnUsage,
-      row?.usage ?? EMPTY_TOKEN_USAGE,
-      res.usage ?? obj.usage,
-      st.lastLiveUsage,
-    );
-    st.lastLiveUsage = null;
-    const patch: AgentSessionPatch = { usage: finalUsage };
-    if (row?.hasCompletedTurn === false) patch.hasCompletedTurn = true;
-    this.update(st, patch);
-  }
-
-  #continueAfterDenial(
-    st: SessionState,
-    proc: Proc,
-    res: Record<string, unknown>,
-    obj: Record<string, unknown>,
-    at: number,
-  ): boolean {
-    const denied = deniedActionsOf(res);
-    const status = typeof res.status === "string" ? res.status : "SUCCESS";
-    const blank = typeof res.response !== "string" || res.response.trim() === "";
-    if (denied.length === 0 || !blank || status !== "SUCCESS" || st.policyViolation !== null) return false;
-    if (st.inFlight.length === 0 || st.ended || proc.closing !== null || st.proc !== proc || this.shuttingDown) {
-      return false;
-    }
-    if (st.deniedContinues >= AGY_DENIED_CONTINUE_MAX) return false;
-    const line = buildAgyUserLine(deniedContinueText(denied), [], this.composer.buildUserContent);
-    if (checkAgyUserLine(line) !== null) return false;
-    st.deniedContinues++;
-    this.#flushStepTexts(st, at);
-    st.resultSeq++;
-    this.#settleUsage(st, res, obj);
-    st.stepTexts.clear();
-    st.seenToolSteps.clear();
-    st.previewedToolSteps.clear();
-    st.completedToolSteps.clear();
-    st.seenThinkingSteps.clear();
-    st.hasTextSinceLastTool = false;
-    proc.child.stdin.write(line + "\n");
-    return true;
   }
 
   protected onProcessClose(
@@ -1019,12 +568,7 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       st.inFlight = [];
       st.selfTurn = false;
       st.policyViolation = null;
-      st.stepTexts.clear();
-      st.seenToolSteps.clear();
-      st.previewedToolSteps.clear();
-      st.completedToolSteps.clear();
-      st.seenThinkingSteps.clear();
-      st.hasTextSinceLastTool = false;
+      clearStepTracking(st);
 
       const reason: SessionExitReason = proc.closing ?? "crash";
       if (batch && reason === "crash") {
@@ -1057,63 +601,4 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
 
 export function createAgyDriver(options: AgyDriverOptions): AgyDriver {
   return new AgyDriver(options);
-}
-
-function extractAgyBackgroundTasks(obj: Record<string, unknown>): unknown {
-  if ("tasks" in obj) return obj.tasks;
-  if ("background_tasks" in obj) {
-    const bg = obj.background_tasks;
-    if (typeof bg === "object" && bg !== null && !Array.isArray(bg) && "tasks" in bg) {
-      return (bg as Record<string, unknown>).tasks;
-    }
-    return bg;
-  }
-  return undefined;
-}
-
-function isExplicitBackgroundToolStep(
-  su: Record<string, unknown>,
-  toolName: string,
-  parameters: unknown,
-): boolean {
-  if (su.background === true) return true;
-  if (toolName === "run_command" && typeof parameters === "object" && parameters !== null) {
-    const p = parameters as Record<string, unknown>;
-    if (p.IsDaemon === true || p.run_in_background === true) return true;
-  }
-  return false;
-}
-
-function extractToolDescription(toolName: string, parameters: unknown): string {
-  if (typeof parameters === "object" && parameters !== null) {
-    const p = parameters as Record<string, unknown>;
-    for (const key of ["CommandLine", "command", "toolSummary", "description"]) {
-      if (typeof p[key] === "string" && p[key].trim() !== "") return p[key].trim();
-    }
-  }
-  return toolName;
-}
-
-function resultErrorMessage(res: Record<string, unknown>, obj: Record<string, unknown>, subtype: string): string {
-  if (typeof res.error === "string" && res.error !== "") return res.error;
-  if (typeof obj.error === "string" && obj.error !== "") return obj.error;
-  if (typeof res.response === "string" && res.response !== "") return res.response;
-  return subtype;
-}
-
-function startupError(
-  outcome: Extract<AgyStartupOutcome, { kind: "failed" }>,
-  startTimeoutMs: number,
-  retried: boolean,
-): DriverError {
-  if (outcome.timedOut) return new DriverError("start_timeout", `no init within ${startTimeoutMs} ms`);
-  const how = outcome.signal ? `signal ${outcome.signal}` : `exit code ${outcome.exitCode}`;
-  const stderr = outcome.stderr.trim();
-  if (outcome.conflict) {
-    return new DriverError(
-      "start_args_conflict",
-      `${retried ? "after retrying without --conversation: " : ""}${stderr || how}`,
-    );
-  }
-  return new DriverError("spawn_failed", `agy exited before init (${how})${stderr ? `: ${stderr}` : ""}`);
 }
