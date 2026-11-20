@@ -27,7 +27,8 @@
 4. **实测验证**：涉及性能或影响面的改动，按 `.agents/skills/benchmark-checklist/SKILL.md` 与 `blast-radius` 实测改前改后数据并写入 PR。
 
 ## 测试与合并策略
-- **本机按需验证**：开发与独立审查阶段只跑 `pnpm typecheck` 与本次改动涉及的测试文件（改动沙箱或写范围时必跑 `src/shared/write-scope.test.ts`），不在本机跑全量 `vitest`，也不阻塞等待桌面安装包编译。
+- **本机按需验证**：开发与独立审查阶段只跑 `pnpm typecheck`、本次改动涉及的测试文件（改动沙箱或写范围时必跑 `src/shared/write-scope.test.ts`）和 `pnpm verify` 端到端冒烟（`.agents/skills/verify/SKILL.md`），不在本机跑全量 `vitest`，也不阻塞等待桌面安装包编译或云端 CI 排队；不用 `gh run rerun` 掩盖抖动测试。
+- **两层审查**：独立审查先过 `src/shared/review.ts` 的通用清单，再按改动路径核对主干上根目录 `REVIEW.md` 里 `Trigger:` 命中的条目；发现分 `[Important]`、`[Nit]`、`[Pre-existing]` 三档，只有 `[Important]` 挡合并。
 - **云端分层检查**：PR 默认运行 4 路并行 Ubuntu 分片；改动平台层、驱动层、进程/管道/git/同步、`apps/windows/**` 或 `test/windows/**` 时自动触发 `.github/workflows/windows.yml`；仅改动 `apps/**`、打包脚本或锁文件时触发桌面安装包工作流。
 - **合并时机**：本机可实测的常规改动在单测与必要审查通过后直接合入 `main`，由 `main` 异步运行全量回归与桌面包自检；本机无法实测的 Linux `bwrap` 沙箱或 Windows 底层/打包改动，须等对应云端检查通过后再合并。
 
@@ -90,7 +91,7 @@
 
 **测试**
 - `vitest`（`vitest.config.ts`）、`jsdom`（`src/shared/test-helpers.ts`）、`@testing-library/react`、`@testing-library/user-event`、`@testing-library/jest-dom`（`src/web/test-setup.ts`）。
-- `playwright`：驱动无头 Chromium 渲染真实界面截图与交互验证（`test/ui-polish/capture.ts`、`test/ui-polish/patches.ts`），仅作为库调用，不用 Playwright Test 运行器（首次需 `pnpm exec playwright install chromium`）。
+- `playwright`：驱动无头 Chromium 渲染真实界面截图与交互验证（`test/ui-polish/capture.ts`、`test/ui-polish/patches.ts`、`scripts/verify-smoke.ts`），仅作为库调用，不用 Playwright Test 运行器（首次需 `pnpm exec playwright install chromium`）。
 - `@axe-core/playwright`：界面对比度与无障碍自动检测（`test/ui-polish/checks.ts`）。
 
 **工程工具**
@@ -101,5 +102,6 @@
 ## 项目内技能（pstack）
 
 - 原版 `backnotprop/pstack`（MIT，`@ f104aa8`）的 `skills/` 放在 `.agents/skills/`，许可证见 `.agents/skills/PSTACK-LICENSE`。
+- `.agents/skills/verify/` 是本仓自有技能（不属于 pstack），更新 pstack 时保留。
 - `<仓库>/.agents/skills/` 为唯一真实目录（`.claude/skills` 为指向 `../.agents/skills` 的软链接），各接入厂商统一从仓库内加载，不写用户主目录。
 - 更新方式：拉取新版 `skills/` 覆盖 `.agents/skills/`（保留 `PSTACK-LICENSE`），同步更新上方提交号并提 PR。

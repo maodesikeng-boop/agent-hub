@@ -6,7 +6,7 @@
 // - 基础提示词（daemon/prompt.ts）里只留三档判断、一句四类审查红线和指路的那句话。
 // 前后端都能引（不用 node:path）；cli.ts 也引它，所以只引 names.ts、hub.ts、limits.ts、skill-names.ts。
 import { ASK_CARD_WHERE, TASK_GRAPH_CREATE_JSON_HINT, TASK_GRAPH_PATCH_JSON_HINT } from "./hub.ts";
-import { TAKEOVER_PREDECESSORS_MAX } from "./limits.ts";
+import { REVIEW_MAX_ROUNDS, TAKEOVER_PREDECESSORS_MAX } from "./limits.ts";
 import { HUB_COMMAND as HUB } from "./names.ts";
 import { skillNameOf } from "./skill-names.ts";
 
@@ -48,7 +48,7 @@ export function taskGraphSkillBody(): string {
 
 ## 建图
 用 \`${HUB} graph create\` 一次写下整张图的 \`goal\`（总目标）和 \`steps\`（步骤数组），带 \`brief\` 的就绪步骤建好即自动开工。
-- **总目标（\`goal\`）要写全**：所有步骤共用同一份 \`goal\`，写清用户原话、背景、不做什么、怎么算做完（写成能核对的证据：测试命令、截图、实测输出、PR 检查全绿；要用户看的方案、验收结论、截图、录屏写进汇报的“文件”栏，会跟着步骤挂到检查点卡和总助上）；长材料存成文件给路径。
+- **总目标（\`goal\`）要写全**：所有步骤共用同一份 \`goal\`，写清用户原话、背景、不做什么、怎么算做完（写成能核对的证据：测试命令、截图、实测输出；本机能实测的改动以本机 \`pnpm typecheck\`、相关单测和 \`pnpm verify\` 冒烟为准，不等云端 CI，只有 Linux \`bwrap\` 沙箱、Windows 原生或打包改动才要 PR 云端检查全绿；要用户看的方案、验收结论、截图、录屏写进汇报的“文件”栏，会跟着步骤挂到检查点卡和总助上）；长材料存成文件给路径。
 - **一张图只装一件事**：互不相干的几件事各建一张图。
 - **按先后步骤拆，不按模块拆**：不要把一个需求切成前端、后端各一个 Worker。写测试、改代码、截图、提 PR 是同一步，一个 Worker 一口气做完。只在三种时候另起一步：用户明说要先看、要换一个模型独立审查、一步的上下文装不下。
 - **默认一条线，同线共用工作目录和分支**：\`steps\` 里不写 \`deps\` 默认按书写顺序串成一条线；单线上下游默认接手同一个 git worktree 和同一条分支（不用重跑准备命令，未提交改动也在，整条线共用一个 PR）。互不依赖的活才并行（写 \`deps: []\` 或前置步骤的 \`key\`）：分叉步骤默认基于上游分支新开 worktree（要从主干重开传 \`"base": "main"\`）；多路合流时后台自动拼接各路交棒（总上限 12,000 字均分、单路最多 4,000 字，超长完整汇报自动落盘到启动目录 \`upstream/<stepKey>.md\` 并附路径）。
@@ -57,7 +57,7 @@ export function taskGraphSkillBody(): string {
 - **碰到下面任意一条，就在实现后面加一个审查步骤**（设 \`"review": true\` 并指定另一家 \`vendor\`，后台自动前置内置独立审查清单；\`brief\` 里点名你最担心的地方）：
 ${PM_REVIEW_REDLINES.map((line) => `  - ${line}`).join("\n")}
 
-  审查只查不修，由代码保证：审查 Worker 在 detached 检出被审分支的独立目录里干活，推不上去，也不能 \`--no-worktree\`。被审分支默认是唯一上一步的分支；补建的单步审查图、多路合流后的审查、上一步在主文件夹里干的，给审查步骤写 \`"base": "<被审分支>"\`，不写建图、开工时直接报错。结论只有 PASS、PASS+NOTES、FAIL，并写明验证的提交号。判 PASS 后后台核对被审分支、远端和 PR 在审查期间没被动过，没动过才往下走。判 FAIL 步骤停在 \`waiting\` 等你：在审查后面加修复步骤（它接手实现的工作目录和分支），修完再加一个审查步骤。
+  审查只查不修，由代码保证：审查 Worker 在 detached 检出被审分支的独立目录里干活，推不上去，也不能 \`--no-worktree\`。被审分支默认是唯一上一步的分支；补建的单步审查图、多路合流后的审查、上一步在主文件夹里干的，给审查步骤写 \`"base": "<被审分支>"\`，不写建图、开工时直接报错。结论只有 PASS、PASS+NOTES、FAIL，并写明验证的提交号。判 PASS 后后台核对被审分支、远端和 PR 在审查期间没被动过，没动过才往下走。判 FAIL 步骤停在 \`waiting\` 等你：在审查后面加修复步骤（它接手实现的工作目录和分支），修完再加一个审查步骤。发现分 \`[Important]\`、\`[Nit]\`、\`[Pre-existing]\` 三档，只有 \`[Important]\` 判 FAIL。复审步骤的 \`brief\` 写上一轮的被审提交和未决的 \`[Important]\` 原文，复审只核验它们和之后的增量。第 ${REVIEW_MAX_ROUNDS} 轮审查还有 \`[Important]\` 就不再加轮次，用 \`${HUB} ask\` 交用户拍板。
   纯文案、纯展示、局部纯函数、薄胶水层不用审查，靠测试和截图兜底。
 
 ## 跟进
