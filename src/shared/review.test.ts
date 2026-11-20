@@ -96,13 +96,13 @@ describe("文案只查不修", () => {
     expect(taskGraphSkillBody()).toContain("审查只查不修");
   });
 
-  it("审查清单写明两层审查只读主干的 REVIEW.md、三档分级、增量复审与轮次上限、本机优先门禁", () => {
+  it("审查清单写明两层审查只读主干的 REVIEW.md、三档分级、增量复审与轮次上限、本机优先", () => {
     expect(REVIEW_CHECKLIST).toContain("git show origin/main:REVIEW.md");
     expect(REVIEW_CHECKLIST).toContain("被审分支自己改过的那份不算数");
     for (const tag of ["[Important]", "[Nit]", "[Pre-existing]"]) expect(REVIEW_CHECKLIST).toContain(tag);
     expect(REVIEW_CHECKLIST).toContain("git diff <上一轮被审提交>..HEAD");
     expect(REVIEW_CHECKLIST).toContain(`第 ${REVIEW_MAX_ROUNDS} 轮还有未决的`);
-    expect(REVIEW_CHECKLIST).toContain("pnpm verify");
+    expect(REVIEW_CHECKLIST).not.toMatch(/pnpm|bwrap/);
     expect(REVIEW_CHECKLIST).toContain("不许用 `gh run rerun`");
     expect(taskGraphSkillBody()).toContain(`第 ${REVIEW_MAX_ROUNDS} 轮审查还有`);
   });
@@ -111,6 +111,6 @@ describe("文案只查不修", () => {
     expect(REVIEW_CHECKLIST).toContain("防复发落点");
     for (const field of ["Trigger:", "Check:", "Seen in:"]) expect(REVIEW_CHECKLIST).toContain(field);
     expect(taskGraphSkillBody()).toContain("修复同一单落实审查给的防复发落点");
-    expect(taskGraphSkillBody()).toContain("origin/main:REVIEW.md");
+    expect(taskGraphSkillBody()).not.toMatch(/REVIEW\.md|pnpm|bwrap/);
   });
 });
