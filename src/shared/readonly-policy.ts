@@ -35,6 +35,7 @@ export interface ReadonlyPolicyInput {
   connectors?: Partial<ReadonlyPolicy["connectors"]>;
   dataDirScope?: DataDirReadScope;
   dataDirDenied?: readonly string[];
+  env?: Readonly<Record<string, string | undefined>>;
 }
 
 function joinPath(base: string, rel: string): string {
@@ -42,9 +43,24 @@ function joinPath(base: string, rel: string): string {
   return `${base.replace(/[\\/]+$/, "")}${sep}${rel.replace(/\//g, sep)}`;
 }
 
+// A vendor home override (CODEX_HOME, KIMI_CODE_HOME, ...) moves that vendor's secrets out of the default home.
+function overriddenHomeSecretPaths(env: Readonly<Record<string, string | undefined>>): string[] {
+  return VENDOR_LIST.flatMap(({ home }) => {
+    const base = home.configHome && env[home.configHome.env]?.trim();
+    if (!home.configHome || !base) return [];
+    const prefix = `${home.configHome.rel}/`;
+    return home.readonlySecrets.filter((rel) => rel.startsWith(prefix)).map((rel) => joinPath(base, rel.slice(prefix.length)));
+  });
+}
+
 export function buildReadonlyPolicy(input: ReadonlyPolicyInput): ReadonlyPolicy {
   return {
-    secretPaths: READONLY_SECRET_HOME_PATHS.map((p) => joinPath(input.homeDir, p)),
+    secretPaths: [
+      ...new Set([
+        ...READONLY_SECRET_HOME_PATHS.map((p) => joinPath(input.homeDir, p)),
+        ...overriddenHomeSecretPaths(input.env ?? process.env),
+      ]),
+    ],
     secretGlobs: [...READONLY_SECRET_GLOBS],
     stateDir: input.stateDir,
     connectors: {

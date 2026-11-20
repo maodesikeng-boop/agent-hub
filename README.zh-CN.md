@@ -27,7 +27,7 @@
 Bellwood 给每个项目配一位专属的**项目经理（PM）**，把繁琐的编排和状态收进一个本地应用里：
 
 - **一个项目只留一个主对话**。你只在一个连续会话里和项目经理对齐目标、点选拍板卡；拆步骤、派 **Worker**（界面里叫 **Pieces**）去各自的独立 git worktree 并行写代码、看测试结果、合 PR，都交给项目经理处理。
-- **自由混用各家工具，换了工具记忆还在**。项目经理和每个 Worker 都可以独立选 `claude`、`codex`、`agy`、`pi`、`dsh` 或 `cursor-agent`，用你自己的订阅或 API Key 跑。长期记忆存在 Bellwood 自己的本地账本与 Markdown 文件里，哪怕中途换了厂商，项目攒下的架构约束、踩坑记录和你的个人习惯照样都在。
+- **自由混用各家工具，换了工具记忆还在**。项目经理和每个 Worker 都可以独立选 `claude`、`codex`、`agy`、`pi`、`dsh`、`cursor-agent`、`opencode` 或 `kimi`，用你自己的订阅或 API Key 跑。长期记忆存在 Bellwood 自己的本地账本与 Markdown 文件里，哪怕中途换了厂商，项目攒下的架构约束、踩坑记录和你的个人习惯照样都在。
 - **跨项目、跨设备与团队群聊一个入口打通**。**总助（Router）**把你名下所有项目、多台电脑上的待拍板事项和进展汇成一处，还不会撑爆上下文；接上**飞书**后不用公网 IP，一个人手机随时遥控，团队拉群正常聊天、需要落实时 `@` 一下机器人就能自动改完代码并把验证截图发回群里。
 
 如果你同时推进不止一个需求或仓库、混用不止一家命令行 Agent，或者希望在手机和飞书群里随时拍板验收，它就适合你。如果你平时只在一个仓库里开一个终端跑单个 Agent 而且够用，那就不需要它。
@@ -180,7 +180,7 @@ hub persona edit --stdin        # 更新跨厂商项目记忆
 <table>
 <tr><td>
 
-**Claude Code** (`claude`) · **Codex** (`codex`) · **Antigravity** (`agy`) · **Pi** (`pi`) · **DeepSeek Harness** (`dsh`) · **Cursor** (`cursor-agent`)
+**Claude Code** (`claude`) · **Codex** (`codex`) · **Antigravity** (`agy`) · **Pi** (`pi`) · **DeepSeek Harness** (`dsh`) · **Cursor** (`cursor-agent`) · **OpenCode** (`opencode`) · **Kimi Code** (`kimi`)
 
 </td></tr>
 </table>
@@ -219,6 +219,8 @@ hub persona edit --stdin        # 更新跨厂商项目记忆
 - **Pi (`pi`，见 [docs/vendor-plugin-design.md](docs/vendor-plugin-design.md))**：macOS/Linux `curl -fsSL https://pi.dev/install.sh | sh`，Windows PowerShell `irm https://pi.dev/install.ps1 | iex`（或 `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`）；运行 `pi` 后输入 `/login`。
 - **DeepSeek Harness (`dsh`，见 [docs/vendor-plugin-design.md](docs/vendor-plugin-design.md))**：运行 `npm install -g @deepseek-ai/dsh@0.2.2-rc.1`，执行 `dsh` 登录或向 `~/.dsh/.env` 写入 `DEEPSEEK_API_KEY=<key>`。
 - **Cursor (`cursor-agent`，见 [docs/vendor-plugin-design.md](docs/vendor-plugin-design.md))**：macOS/Linux `curl https://cursor.com/install -fsS | bash`，Windows PowerShell `irm 'https://cursor.com/install?win32=true' | iex`；运行 `cursor-agent login` 登录。
+- **OpenCode (`opencode`，见 [docs/vendor-plugin-design.md](docs/vendor-plugin-design.md))**：macOS/Linux `curl -fsSL https://opencode.ai/v2/install | bash`，Windows `npm install -g @opencode/cli`；运行 `opencode auth login` 登录，或在 **Settings → Providers** 里填 OpenCode Zen 的 Key（`OPENCODE_API_KEY`）。
+- **Kimi Code (`kimi`，见 [docs/vendor-plugin-design.md](docs/vendor-plugin-design.md))**：macOS/Linux `curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash`，Windows PowerShell `irm https://code.kimi.com/kimi-code/install.ps1 | iex`（或在 Node.js 22.19+ 下 `npm install -g @moonshot-ai/kimi-code`）；运行 `kimi login` 登录，或在 **Settings → Providers** 里填 Kimi 开放平台 API Key。
 
 </details>
 
@@ -270,7 +272,7 @@ pnpm start                          # 构建 dist/web 并在 127.0.0.1:4317 启�
 | :-- | :-- | :-- |
 | `AGENT_HUB_HOME` | `~/.agent-hub` | 数据目录（SQLite 账本、令牌、worktrees、上传附件、日志、PM 持久记忆）。macOS/Linux 受 Unix Socket 长度限制请保持在 103 字节内；Windows 使用命名管道。 |
 | `AGENT_HUB_PORT` | `4317` | 本机网页服务端口，只监听 `127.0.0.1`。设为 `0` 由系统分配空闲端口。 |
-| `AGENT_HUB_CLAUDE` / `AGY` / `CODEX` / `PI` / `DEEPSEEK` / `CURSOR` | `claude` / `agy` / `codex` / `pi` / `dsh` / `cursor-agent` | 覆盖各家 CLI 的命令名或可执行文件路径（支持 `~/` 展开）。 |
+| `AGENT_HUB_CLAUDE` / `AGY` / `CODEX` / `PI` / `DEEPSEEK` / `CURSOR` / `OPENCODE` / `KIMI` | `claude` / `agy` / `codex` / `pi` / `dsh` / `cursor-agent` / `opencode` / `kimi` | 覆盖各家 CLI 的命令名或可执行文件路径（支持 `~/` 展开）。 |
 | `AGENT_HUB_DEFAULT_MODEL` | 未设置 | 首次启动自动创建默认项目经理时使用的模型。 |
 | `FUSA_RELAY_URL` | 官方公共中继 | 覆盖账号组网的中继地址。同一账号下的设备使用同一个中继。 |
 | `FUSA_GITHUB_CLIENT_ID` | 官方公开 Client ID | 覆盖为自建的、已启用 Device Flow 的 GitHub OAuth App Client ID。 |
@@ -296,7 +298,7 @@ Worker 以你当前系统用户的身份改代码、跑命令，使用前请留�
 Bellwood 在你的电脑上、用**你自己的账号或 API Key**，以无头、RPC 或 ACP 模式调用各家官方命令行 Agent，本身不中转或售卖任何模型 API。这种自动化调用方式是否符合你所用订阅套餐及服务商条款，请在使用前自行查阅判断，本项目不替任何厂商作“允许”承诺：
 
 - **Google Antigravity (`agy`)**：[Google Antigravity 附加条款](https://antigravity.google/terms/)第 6 条写明：*“Using third party software, tools, or services to access the Service (e.g. using OpenClaw with Antigravity OAuth) is a breach of this Agreement. Such actions may be grounds for suspension or termination of your Antigravity and/or Gemini CLI accounts.”* 官方未明确说明在本地调用官方 `agy` 无头模式是否属于此条，请将其视为**可能导致账号被暂停或终止的真实风险**自行决定。
-- **Claude Code (`claude`)**：[Anthropic 合规说明](https://code.claude.com/docs/en/legal-and-compliance) · **Codex (`codex`)**：[OpenAI 使用条款](https://openai.com/policies/row-terms-of-use/) · **Pi (`pi`，MIT 开源)**：[pi.dev](https://pi.dev)（请同时遵守所连模型商条款） · **DeepSeek Harness (`dsh`，MIT 预览版)**：[DeepSeek 开放平台条款](https://cdn.deepseek.com/policies/en-US/deepseek-open-platform-terms-of-service.html) · **Cursor (`cursor-agent`)**：[Cursor 服务条款](https://cursor.com/terms-of-service)。
+- **Claude Code (`claude`)**：[Anthropic 合规说明](https://code.claude.com/docs/en/legal-and-compliance) · **Codex (`codex`)**：[OpenAI 使用条款](https://openai.com/policies/row-terms-of-use/) · **Pi (`pi`，MIT 开源)**：[pi.dev](https://pi.dev)（请同时遵守所连模型商条款） · **DeepSeek Harness (`dsh`，MIT 预览版)**：[DeepSeek 开放平台条款](https://cdn.deepseek.com/policies/en-US/deepseek-open-platform-terms-of-service.html) · **Cursor (`cursor-agent`)**：[Cursor 服务条款](https://cursor.com/terms-of-service) · **OpenCode (`opencode`，MIT 开源)**：[opencode.ai](https://opencode.ai)（请同时遵守所连模型商条款） · **Kimi Code (`kimi`)**：[Kimi Code 文档](https://www.kimi.com/code/docs/)（用 API Key 时请同时遵守 Kimi 开放平台条款）。
 
 ## 致谢与许可证
 

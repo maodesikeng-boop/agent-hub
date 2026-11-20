@@ -72,7 +72,11 @@ export interface FakeAcpScript {
   resumeNotFound?: boolean;
   knownSessions?: string[];
   modes?: SessionModeState;
+  // OpenCode 2.3+ returns no modes field and exposes the mode only as a config option.
+  omitModes?: boolean;
   initialConfigOptions?: SessionConfigOption[];
+  // OpenCode answers an unlisted select value with -32602.
+  rejectUnlistedConfigValues?: boolean;
   dynamicEffortForModel?: string;
   commandsOnSessionStart?: Array<{ name: string; description: string; hint?: string }>;
   replayOnLoad?: {
@@ -168,6 +172,10 @@ const DEFAULT_PERMISSION_OPTIONS: PermissionOption[] = [
   { optionId: "allow-once", name: "Allow Once", kind: "allow_once" },
   { optionId: "reject-once", name: "Reject Once", kind: "reject_once" },
 ];
+
+function flattenSelectValues(option: Extract<SessionConfigOption, { type: "select" }>): string[] {
+  return option.options.flatMap((entry) => ("options" in entry ? entry.options.map((o) => o.value) : [entry.value]));
+}
 
 function defaultConfigOptions(): SessionConfigOption[] {
   if (script.initialConfigOptions) return structuredClone(script.initialConfigOptions);
@@ -495,7 +503,7 @@ const app = agent({ name: "fake-acp-agent" })
 
     return {
       sessionId,
-      modes: currentModes,
+      ...(script.omitModes ? {} : { modes: currentModes }),
       configOptions: currentConfigOptions,
     };
   })
@@ -559,7 +567,7 @@ const app = agent({ name: "fake-acp-agent" })
     }
 
     return {
-      modes: currentModes,
+      ...(script.omitModes ? {} : { modes: currentModes }),
       configOptions: currentConfigOptions,
     };
   })
@@ -571,7 +579,7 @@ const app = agent({ name: "fake-acp-agent" })
       throw new RequestError(-32002, `Resource not found: session ${sessionId}`);
     }
     return {
-      modes: currentModes,
+      ...(script.omitModes ? {} : { modes: currentModes }),
       configOptions: currentConfigOptions,
     };
   })
@@ -587,6 +595,10 @@ const app = agent({ name: "fake-acp-agent" })
   .onRequest(methods.agent.session.setConfigOption, async (ctx) => {
     const { configId, value } = ctx.params;
     writeLog({ event: "session/set_config_option", sessionId: ctx.params.sessionId, configId, value });
+    const target = currentConfigOptions.find((opt) => opt.id === configId);
+    if (script.rejectUnlistedConfigValues && target?.type === "select" && !flattenSelectValues(target).includes(String(value))) {
+      throw RequestError.invalidParams({ configId, value }, `model not found: ${String(value)}`);
+    }
     if (typeof value === "string") {
       currentConfigOptions = currentConfigOptions.map((opt) =>
         opt.id === configId && opt.type === "select" ? { ...opt, currentValue: value } : opt,

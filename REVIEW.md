@@ -54,6 +54,14 @@ Check: No per-call or RPC argument (for example codex `sandbox` or `sandboxPolic
 
 Seen in: `ab03a38d`/`af3b76c8`, `638516a7`
 
+### Read-only Workers never reach a write-capable MCP tool
+
+Trigger: `src/vendors/*/driver.ts`, `src/vendors/*/spec.ts`, `src/vendors/_common/acp/**`, `src/shared/readonly-policy.ts`
+
+Check: Every MCP tool call a read-only Worker makes either passes through `connectorToolAllowed` (directly or via the ACP permission gate) or cannot happen because the vendor never loads an MCP server. A vendor mode that auto-approves tools (Kimi `yolo`, an OpenCode allow-all agent) hides every MCP source it reads, including user, project, plugin, and overridden-home config, and its MCP OAuth tokens. A test or a real-CLI run shows a non-read-only MCP tool is not executed.
+
+Seen in: `bdb85632`, `c067de52`/`2a421897`
+
 ### Async work stops touching the ledger after shutdown starts
 
 Trigger: `src/daemon/agent-api/**`, `src/daemon/sent-files.ts`, `src/daemon/ledger/**`, `src/daemon/feishu/**`, `src/daemon/daemon.ts`

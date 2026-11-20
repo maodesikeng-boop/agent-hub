@@ -48,8 +48,13 @@ const TURN_TIMEOUT_MS = 600_000;
 const CURSOR = process.env.AGENT_HUB_CURSOR || join(homedir(), ".local", "bin", "cursor-agent");
 const CURSOR_MODEL = process.env.AGENT_HUB_CURSOR_MODEL || "composer-2.5";
 
-const MODELS: Record<AgentVendor, string> = { claude: MODEL, agy: AGY_MODEL, codex: CODEX_MODEL, pi: PI_MODEL, deepseek: DEEPSEEK_MODEL, cursor: CURSOR_MODEL };
-const EXECUTABLES: Record<Exclude<AgentVendor, "claude">, string> = { agy: AGY, codex: CODEX, pi: PI, deepseek: DEEPSEEK, cursor: CURSOR };
+const OPENCODE = process.env.AGENT_HUB_OPENCODE || resolveExecutable("opencode", process.env.PATH, VENDOR_FALLBACK_PATHS.opencode(homedir()));
+const OPENCODE_MODEL = process.env.AGENT_HUB_OPENCODE_MODEL || "opencode/gemini-3.8-flash";
+const KIMI = process.env.AGENT_HUB_KIMI || resolveExecutable("kimi", process.env.PATH, VENDOR_FALLBACK_PATHS.kimi(homedir()));
+const KIMI_MODEL = process.env.AGENT_HUB_KIMI_MODEL || "kimi-code/k3";
+
+const MODELS: Record<AgentVendor, string> = { claude: MODEL, agy: AGY_MODEL, codex: CODEX_MODEL, pi: PI_MODEL, deepseek: DEEPSEEK_MODEL, cursor: CURSOR_MODEL, opencode: OPENCODE_MODEL, kimi: KIMI_MODEL };
+const EXECUTABLES: Record<Exclude<AgentVendor, "claude">, string> = { agy: AGY, codex: CODEX, pi: PI, deepseek: DEEPSEEK, cursor: CURSOR, opencode: OPENCODE, kimi: KIMI };
 
 function task(dataDir: string, cwd: string, names: { edit: string; mkdir: string; echo: string }): string {
   return [

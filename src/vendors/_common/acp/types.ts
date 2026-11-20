@@ -10,6 +10,7 @@ import type {
   JsonRpcId,
   McpServer,
   PermissionOptionKind,
+  PromptResponse,
   RequestPermissionOutcome,
   RequestPermissionRequest,
   SessionConfigOption,
@@ -156,6 +157,8 @@ export interface AcpReadonlySandboxConfig {
   writableDirs?: (homeDir: string, cwd: string, launch: AcpLaunchContext) => readonly string[];
   writableFileGlobs?: (homeDir: string, cwd: string, launch: AcpLaunchContext) => readonly string[];
   readableFiles?: (homeDir: string) => readonly string[];
+  // Vendor config the read-only process must not load, such as project-level MCP server lists.
+  hiddenPaths?: (homeDir: string, cwd: string, launch: AcpLaunchContext) => readonly string[];
 }
 
 export interface AcpTimeoutsConfig {
@@ -171,6 +174,8 @@ export interface AcpErrorConfig {
   classifyTurnError?: (error: unknown) => { subtype: string; message: string };
   isSessionNotFoundError?: (error: unknown) => boolean;
 }
+
+export type AcpPromptOutcomeCheck = (response: PromptResponse) => Promise<{ subtype: string; message: string } | null>;
 
 export interface AcpStaleProcessConfig {
   matchesCommand?: (psArgs: string, row: AgentSessionRow, executablePath: string) => boolean;
@@ -199,6 +204,8 @@ export interface AcpDriverConfig {
   timeouts?: AcpTimeoutsConfig;
   errors?: AcpErrorConfig;
   staleProcess?: AcpStaleProcessConfig;
+  // Called before each prompt for agents that answer a failed turn with end_turn; the check reports the real failure.
+  watchPromptOutcome?: (context: { sessionId: string }) => AcpPromptOutcomeCheck | null;
   // turn: per-turn deltas (default); cumulative: running totals for the current process.
   usageMode?: "turn" | "cumulative";
   extractToolUse?: (

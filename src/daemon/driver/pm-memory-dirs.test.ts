@@ -42,7 +42,7 @@ function makeSessionRow(over: Partial<AgentSessionRow> = {}): AgentSessionRow {
   };
 }
 
-describe("6 家厂商统一挂载 PM 专属 pm-memory addDirs 与 Worker 隔离", () => {
+describe("8 家厂商统一挂载 PM 专属 pm-memory addDirs 与 Worker 隔离", () => {
   let root: string;
   let pmMemoryDir: string;
   let cwd: string;
@@ -83,8 +83,8 @@ describe("6 家厂商统一挂载 PM 专属 pm-memory addDirs 与 Worker 隔离"
     expect(withPmMemoryAddDir(assistantRow, pmMemoryDir).addDirs).toEqual([]);
   });
 
-  it("6 家厂商（claude / codex / agy / pi / cursor / deepseek）驱动底座统一注入 pm-memory/<pmId>", async () => {
-    expect(AGENT_VENDORS).toHaveLength(6);
+  it("8 家厂商（claude / codex / agy / pi / cursor / deepseek / opencode / kimi）驱动底座统一注入 pm-memory/<pmId>", async () => {
+    expect(AGENT_VENDORS).toHaveLength(8);
     const rows = new Map<number, AgentSessionRow>();
     const store: SessionStore = {
       get: (id) => rows.get(id) ?? null,

@@ -93,6 +93,23 @@ const SAMPLES: Record<AgentVendor, { user: string; model: { call: ToolCall; outp
       { call: { name: "Shell", input: { command: "cat .agents/skills/poteto-mode/SKILL.md" } }, output: POTETO },
     ],
   },
+  opencode: {
+    user: "/poteto-mode",
+    model: [
+      {
+        call: { name: "read", input: { filePath: `${ROOT}/poteto-mode/SKILL.md` } },
+        output: `<path>${ROOT}/poteto-mode/SKILL.md</path>\n<content>\n${POTETO.split("\n").map((l, i) => `${i + 1}: ${l}`).join("\n")}\n</content>`,
+      },
+      { call: { name: "shell", input: { command: "cat .agents/skills/poteto-mode/SKILL.md" } }, output: POTETO },
+    ],
+  },
+  kimi: {
+    user: "/poteto-mode",
+    model: [
+      { call: { name: "Read", input: { path: `${ROOT}/poteto-mode/SKILL.md` } }, output: claudeRead(POTETO) },
+      { call: { name: "Bash", input: { command: "cat .agents/skills/poteto-mode/SKILL.md" } }, output: POTETO },
+    ],
+  },
 };
 
 describe("每家：用户手打、模型加载都认得出", () => {

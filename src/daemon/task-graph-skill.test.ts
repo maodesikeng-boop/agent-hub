@@ -212,7 +212,7 @@ describe("六家怎么挂（spec 的 capabilities.skills）：挂上的都是同
     return { sessionDir, skillsDir, promptFile, files, real: taskGraphSkillFile(sessionDir) };
   };
 
-  it("五家有原生入口，cursor 只读文件（2026-11-12 本机实测，见 docs/orchestration-skill-design.md 附 B）", () => {
+  it("六家有原生入口，cursor 与 kimi 只读文件（cursor 2026-11-12 本机实测，见 docs/orchestration-skill-design.md 附 B；kimi 不读每会话技能目录）", () => {
     expect(Object.fromEntries(AGENT_VENDORS.map((v) => [v, vendorSpec(v).capabilities.skills]))).toEqual({
       claude: "native",
       agy: "native",
@@ -220,6 +220,8 @@ describe("六家怎么挂（spec 的 capabilities.skills）：挂上的都是同
       pi: "native",
       deepseek: "native",
       cursor: "read_file",
+      opencode: "native",
+      kimi: "read_file",
     });
     expect(vendorSpec("claude").prompt.skillNamePrefix).toBe("fusa:");
   });

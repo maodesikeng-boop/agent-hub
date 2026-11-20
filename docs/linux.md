@@ -38,6 +38,8 @@ You can install and authenticate any supported CLI from **Settings** under **Pro
 | Pi (`pi`) | `curl -fsSL https://pi.dev/install.sh \| sh` | Run `pi`, then `/login` |
 | DeepSeek Harness (`dsh`) | `npm install -g @deepseek-ai/dsh@0.2.2-rc.1` | Write `DEEPSEEK_API_KEY=<key>` to `~/.dsh/.env` |
 | Cursor (`cursor-agent`) | `curl https://cursor.com/install -fsS \| bash` | `cursor-agent login` |
+| OpenCode (`opencode`) | `curl -fsSL https://opencode.ai/v2/install \| bash` | `opencode auth login`, or set `OPENCODE_API_KEY` |
+| Kimi Code (`kimi`) | `curl -fsSL https://code.kimi.com/kimi-code/install.sh \| bash` | `kimi login` (device code) |
 
 When resolving CLI binaries on Linux (`src/shared/paths.ts` `linuxInstallDirs`), the daemon checks `AGENT_HUB_<VENDOR>`, then `PATH`, then `~/.local/bin`, `~/.npm-global/bin`, `/usr/local/bin`, and `/home/linuxbrew/.linuxbrew/bin`.
 

@@ -589,6 +589,34 @@ describe("ACP 驱动底座端到端协议与生命周期", () => {
     expect(h.logs().some((e) => e.event === "session/close")).toBe(true);
   });
 
+  it("watchPromptOutcome：end_turn 的轮次按厂商自己的记录判失败，检查返回 null 的照常成功", async () => {
+    const watched: string[] = [];
+    const outcomes = [{ subtype: "quota_exceeded", message: "upstream rate limit (provider.rate_limit)" }, null];
+    const h = track(
+      makeAcpHarness({
+        script: { turns: [{ textChunks: ["半截"] }, { textChunks: ["好了"] }] },
+        config: {
+          watchPromptOutcome: ({ sessionId }) => {
+            watched.push(sessionId);
+            const outcome = outcomes.shift() ?? null;
+            return async (response) => (response.stopReason === "end_turn" ? outcome : null);
+          },
+        },
+      }),
+    );
+    const row = h.addSession();
+    await h.driver.send(row.id, { messageIds: [20 as never], source: "user", text: "第一句" });
+    const failed = await h.waitFor("turn.ended", () => true, 1);
+    expect(failed.ok).toBe(false);
+    expect(failed.error).toEqual({ subtype: "quota_exceeded", message: "upstream rate limit (provider.rate_limit)" });
+
+    await h.driver.send(row.id, { messageIds: [21 as never], source: "user", text: "第二句" });
+    const ok = await h.waitFor("turn.ended", () => true, 2);
+    expect(ok.ok).toBe(true);
+    expect(watched).toHaveLength(2);
+    expect(watched[0]).toBe(h.store.get(row.id)?.vendorSessionId);
+  });
+
   it("additionalDirectories 只在 agent 声明 sessionCapabilities.additionalDirectories 时随 session/new 带上", async () => {
     for (const capable of [true, false]) {
       const h = track(makeAcpHarness({ script: { additionalDirectoriesCapability: capable, turns: [{ textChunks: ["ok"] }] } }));

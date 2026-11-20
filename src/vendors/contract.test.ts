@@ -35,7 +35,7 @@ describe("厂商名单", () => {
     for (const spec of VENDOR_LIST) {
       expect(existsSync(join(ROOT, specFileOf(spec.id))), spec.id).toBe(true);
       expect(registryImports).toContain(specFileOf(spec.id));
-      const mod = (await import(`./${spec.id}/spec.ts`)) as { default: unknown };
+      const mod = (await import(/* @vite-ignore */ `./${spec.id}/spec.ts`)) as { default: unknown };
       expect(mod.default, spec.id).toBe(spec);
     }
     const dirs = readdirSync(join(ROOT, "src/vendors"), { withFileTypes: true })
@@ -72,7 +72,7 @@ describe("厂商名单", () => {
   it("S1 每个 id 有 src/vendors/<id>/daemon.ts（默认导出带 createDriver）和 paths.ts，daemon-registry.ts 加载的就是它们", async () => {
     for (const { id } of VENDOR_LIST) {
       for (const file of ["daemon.ts", "paths.ts"]) expect(existsSync(join(ROOT, "src/vendors", id, file)), `${id}/${file}`).toBe(true);
-      const mod = (await import(`./${id}/daemon.ts`)) as { default: { createDriver?: unknown } };
+      const mod = (await import(/* @vite-ignore */ `./${id}/daemon.ts`)) as { default: { createDriver?: unknown } };
       expect(typeof mod.default.createDriver, id).toBe("function");
       expect(VENDOR_DAEMONS[id]).toBe(mod.default);
     }
