@@ -1,5 +1,3 @@
-// Worker 的汇报（m3-plan 第 2.5 节）：格式说明、解析、回到项目经理那一行的写法、分支名。
-// 格式说明（给 Worker 的提示词用）和解析函数放在一起，改格式只改这里。
 import { agentTextOf } from "./attachments.ts";
 import { truncateChars } from "./domain.ts";
 import { feishuDeliveryPrefixes, feishuOriginOf } from "./feishu.ts";
@@ -13,7 +11,6 @@ import type { AgentVendor } from "./vendors.ts";
 export const REPORT_START = "=== 汇报 ===";
 export const REPORT_END = "=== 汇报结束 ===";
 
-/** 汇报里“状态”的三种：做完了 / 有问题 / 放弃了。 */
 export const WORKER_REPORT_STATUSES = ["done", "problem", "gave_up"] as const;
 export type WorkerReportStatus = (typeof WORKER_REPORT_STATUSES)[number];
 
@@ -23,13 +20,8 @@ export const WORKER_REPORT_STATUS_LABELS: Readonly<Record<WorkerReportStatus, st
   gave_up: "放弃了",
 };
 
-/** 找不到格式、状态写错、没写摘要时那一行写的字。原文照样交给项目经理，由它看原文判断。 */
 export const UNFORMATTED_LABEL = "没按格式";
 
-/**
- * Worker 每一轮最后一条回复要以这段九栏格式结尾（docs/orchestration-simplify-design.md 第 9.2 节）。原样放进 Worker 的提示词。
- * 这段本身把状态换成三种之一就能被 parseWorkerReport 认出来。
- */
 export const WORKER_REPORT_FORMAT = `${REPORT_START}
 状态: 做完了 | 有问题 | 放弃了
 摘要: 一两句
@@ -45,54 +37,29 @@ ${REPORT_END}`;
 export interface WorkerReport {
   status: WorkerReportStatus;
   summary: string;
-  /** 写“无”是 null。 */
   commit: string | null;
-  /** PR 栏：写“无”或没写是 null。 */
   pr: string | null;
-  /** 没写是空串。 */
   tests: string;
-  /** 偏离栏：写“无”或没写是 null；有偏离内容时非 null（后台踩刹车停在 waiting:pm）。 */
   deviation: string | null;
-  /** 交棒栏：没写是空串。 */
   handoff: string;
-  /** 没写是空串。 */
   questions: string;
-  /**
-   * 文件栏原文：交给用户看的文件，每个写成 Markdown 链接 `[标签](路径)`。写“无”或没写是空串。
-   * 账本按这一栏的链接对上这条消息存好的副本（meta.files），记成该步的交付物。
-   */
   files: string;
-  /** 审查步骤的“结论”栏：没写或写错是 null（review.ts）。 */
   verdict: ReviewVerdict | null;
-  /** 审查步骤的“验证提交”栏，去掉首尾标点、转成小写：没写是 null。 */
   verifiedCommit: string | null;
 }
 
-/**
- * ok：认出了汇报，摘要等是完整的（不截断，原文另外整段交给项目经理）。
- * unformatted：没按格式，summary 是原文第一行不空的那行，压过空白、按 WORKER_LINE_SUMMARY_CHARS 截断（全是空白就是空串），
- * 账本放进那一行的 WorkerMessageMeta.summary。
- */
 export type ParsedWorkerReport = { kind: "ok"; report: WorkerReport } | { kind: "unformatted"; summary: string };
 
 type FieldKey = "状态" | "摘要" | "提交" | "PR" | "测试" | "偏离" | "交棒" | "文件" | "问题" | "结论" | "验证提交";
-/**
- * 一项的开头：行首可以有 Markdown 的列表符号、引用（- * > 和空白），名字可以加粗（**状态**: 或 **状态:**），冒号全角半角都行。
- */
 const FIELD_LINE = /^([-*>\s]*)(?:\*\*)?(状态|摘要|提交|PR|pr|测试|偏离|交棒|文件|问题|结论|验证提交)\s*(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*(.*)$/u;
 const CODE_FENCE_OPEN = /^\s*(`{3,}|~{3,})/u;
-/** 状态值首尾的标点、符号（“做完了。”“「做完了」”“**做完了**”）。 */
 const EDGE_PUNCTUATION = /^[\p{P}\p{S}\s]+|[\p{P}\p{S}\s]+$/gu;
-/** 提交写“无”，或者“无”后面跟着说明（“无（没提交）”“无，只读调查”）：都当没有提交。提交号不会以“无”开头。 */
 const NO_COMMIT = "无";
-/** PR 栏写“无”或“无（无需提 PR）”这类：PR 链接/编号不会以“无”开头。 */
 const NO_PR_PREFIX = /^无(?:$|[（(\s，,。；;：:—-])/u;
-/** 自然语言栏（偏离、问题）里的“无”：纯“无/没有/暂无/none”或带括号补充“无（…）”；不把“无法…”“无需…”误判成无。 */
 const NONE_WORDS = new Set(["无", "没有", "暂无", "none", "n/a"]);
 const NONE_WITH_PAREN = /^无\s*[（(][^）)\r\n]*[）)][。.\s]*$/u;
 const HTTP_URL_IN_TEXT = /https?:\/\/[^\s<>)"'）\]】]+/iu;
 
-/** 自然语言字段（偏离、问题）是否表示“无”。 */
 export function isReportFieldNone(raw: string): boolean {
   const trimmed = raw.trim();
   if (trimmed === "") return true;
@@ -101,12 +68,10 @@ export function isReportFieldNone(raw: string): boolean {
   return stripped === "" || NONE_WORDS.has(stripped);
 }
 
-/** 汇报“问题”栏是否有需要交给项目经理的内容（非空且非“无”）。 */
 export function hasReportQuestion(questions: string): boolean {
   return !isReportFieldNone(questions);
 }
 
-/** 从汇报“PR”栏提取有效的 HTTP(S) PR URL；没有写 URL（如“无”或仅文字）返回 null。 */
 export function extractReportPrUrl(pr: string | null | undefined): string | null {
   if (!pr) return null;
   const match = HTTP_URL_IN_TEXT.exec(pr.trim());
@@ -115,18 +80,15 @@ export function extractReportPrUrl(pr: string | null | undefined): string | null
   return /^https?:\/\/\S+$/iu.test(url) ? url : null;
 }
 
-/** 压空白：连续的空白（含换行）变成一个空格，去首尾。 */
 function collapseWhitespace(text: string): string {
   return text.replace(/\s+/gu, " ").trim();
 }
 
-/** 原文第一行不空的那行，压过空白、截断：没按格式时那一行的摘要。 */
 function firstLineSummary(text: string): string {
   const line = text.split("\n").find((l) => l.trim() !== "") ?? "";
   return truncateChars(collapseWhitespace(line), WORKER_LINE_SUMMARY_CHARS);
 }
 
-/** 最后一段完整的 REPORT_START … REPORT_END 中间的文字；没有返回 null。 */
 function lastBlock(text: string): string | null {
   let end = text.lastIndexOf(REPORT_END);
   while (end !== -1) {
@@ -137,12 +99,6 @@ function lastBlock(text: string): string | null {
   return null;
 }
 
-/**
- * 从 Worker 这一轮最后一段文字里找汇报。有好几段取最后一段完整的（有开头也有结尾）。
- * 每项一行 `名字: 值`（Markdown 的列表、引用、加粗写法也认，见 FIELD_LINE），首尾空白去掉；
- * 不以这些名字开头的行接在上一项后面（换行连着）。状态值去掉首尾的标点再比。
- * 状态不是三种之一、没写摘要 → unformatted。提交、测试、问题可以不写。
- */
 export function parseWorkerReport(text: string): ParsedWorkerReport {
   const normalized = text.replaceAll("\r\n", "\n");
   const block = lastBlock(normalized);
@@ -243,7 +199,6 @@ export function parseWorkerReport(text: string): ParsedWorkerReport {
   };
 }
 
-/** 交给项目经理的汇报的开头（设计第 7.3 节的来源标签）：“【Worker #3 · 修 X 的汇报】”。 */
 export function workerReportHeader(workerId: WorkerId, title: string): string {
   return `【Worker #${workerId} · ${title} 的汇报】`;
 }
@@ -251,7 +206,6 @@ export function workerReportHeader(workerId: WorkerId, title: string): string {
 const GRAPH_WAIT_ENVELOPE_HEAD = /^【任务图 #\d+[^\n]*等你处理】[^\n]*\n\n/u;
 const GRAPH_WAIT_ENVELOPE_TAIL = /\n\n(?:回答或打回|换人)：[^\n]+。$/u;
 
-/** 从项目经理对话里的汇报消息 text 剥掉信封头尾，还原 Worker 原始回复正文。 */
 export function unwrapWorkerReportText(worker: { id: WorkerId; title: string }, text: string): string {
   const head = `${workerReportHeader(worker.id, worker.title)}\n\n`;
   let body = text.startsWith(head) ? text.slice(head.length) : text;
@@ -261,40 +215,25 @@ export function unwrapWorkerReportText(worker: { id: WorkerId; title: string }, 
   return body;
 }
 
-/**
- * 用户在网页的 Worker 页面直接对它说的话，交给项目经理时的开头（来源标签）：
- * “【用户直接对 Worker #3 · 修 X 说的话（Worker 已收到）】”。
- */
 export function userToWorkerHeader(workerId: WorkerId, title: string): string {
   return `【用户直接对 Worker #${workerId} · ${title} 说的话（Worker 已收到）】`;
 }
 
-/** 用户直接对 Worker 说的话写给 Worker 时的开头；项目经理的话不带标签。 */
 export const USER_TO_WORKER_TAG = "【用户直接对你说】";
 
-/**
- * 用户在输入框用 /hub:worker 指定的“这条消息里派的 Worker 用什么”（PostMessageRequest.workerPick，存在消息的 meta.workerPick）。
- * model、effort 是 null 表示 Default（项目经理自己定）。
- */
 export interface WorkerPick {
   vendor: AgentVendor;
   model: string | null;
   effort: string | null;
 }
 
-/** 给用户指定的参数句子起头的字（prompt.ts 的提示词里也提到它）。 */
 export const WORKER_PICK_NOTE_START = "【用户指定：";
 
-/**
- * 交给项目经理的参数句子：写成 hub worker start 的参数，项目经理照抄；Default（null）的项不写。
- * “【用户指定：这条消息里派的 Worker 用 --vendor codex --model gpt-5.5 --effort high】”。
- */
 export function workerPickNote(pick: WorkerPick): string {
   const flags = [`--vendor ${pick.vendor}`, ...(pick.model === null ? [] : [`--model ${pick.model}`]), ...(pick.effort === null ? [] : [`--effort ${pick.effort}`])];
   return `${WORKER_PICK_NOTE_START}这条消息里派的 Worker 用 ${flags.join(" ")}】`;
 }
 
-/** 一条消息的 workerPick。没有这个字段的消息、meta 是 null、形状不对：当作没有（null），不抛错（和 attachmentsOf 一样宽松）。 */
 export function workerPickOf(message: { meta: Record<string, unknown> | null }): WorkerPick | null {
   const raw = message.meta?.workerPick;
   if (typeof raw !== "object" || raw === null) return null;
@@ -303,15 +242,6 @@ export function workerPickOf(message: { meta: Record<string, unknown> | null }):
   return { vendor, model, effort };
 }
 
-/**
- * 一条消息写给 agent 的内容（session.send 的处理函数用，交给 DriverSendInput 的 text、prefixes）：
- * - text：用户写的字 + 附件的完整路径（attachments.ts 的 agentTextOf），原文以 / 开头的照样以 / 开头；
- * - prefixes：驱动层把它们放在原文前面、各自单独一块（原文单独放最后一块，/ 命令才会被展开，见 docs/composer-commands.md 的 T4）：
- *   Worker 对话里用户说的（sender user、带 workerId）带 USER_TO_WORKER_TAG；
- *   用户消息带 workerPick（项目经理对话）再加 workerPickNote；从飞书来的（meta.origin）再加署名和群里之前的讨论（feishuDeliveryPrefixes）；
- *   别的没有标签。
- * 库里存的是原文，网页照原文显示。
- */
 export function deliveryParts(message: Pick<Message, "workerId" | "sender" | "text" | "meta">): { prefixes: string[]; text: string } {
   const text = agentTextOf(message);
   const prefixes: string[] = [];
@@ -333,10 +263,6 @@ const EVENT_LABELS: Readonly<Record<Exclude<WorkerEvent, "report">, string>> = {
   user_message: "你对它说",
 };
 
-/**
- * 项目经理对话里那一行给人看的字：“Worker「标题」状态：摘要”。参数就是 WorkerMessageMeta 里的这几项。
- * 网页直接显示它；只读的“已派出”后面带“（只读）”。摘要的空白（含换行）压成一个空格，超过 WORKER_LINE_SUMMARY_CHARS 个字符截断。
- */
 export function workerLineText(line: {
   title: string;
   event: WorkerEvent;
@@ -356,12 +282,6 @@ export function workerLineText(line: {
   return `Worker「${line.title}」${state}${suffix}${detail}`;
 }
 
-/**
- * Worker 的分支名 hub/<编号>-<短名>（设计 7.7）。短名取标题：先 NFC（é 不拆成 e + 附加符号），小写，
- * 字母、数字（含中文）、组合用的附加符号（\p{M}，梵文等要靠它）以外的连成一个 -，
- * 去掉首尾的 -，最多 WORKER_BRANCH_SLUG_CHARS 个字符；什么都不剩就只有 hub/<编号>。
- * 结果一定是合法的 git 分支名（不含空白、~^:?*[\ 、..、@{）。
- */
 export function workerBranchName(workerId: WorkerId, title: string): string {
   const slug = [...title.normalize("NFC").toLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "")]
     .slice(0, WORKER_BRANCH_SLUG_CHARS)

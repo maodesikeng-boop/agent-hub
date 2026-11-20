@@ -1,5 +1,3 @@
-// Router（总助）共用契约与数据形状（docs/router-design.md §3.3、§6.3）。
-
 import type {
   ConversationId,
   MessageId,
@@ -22,7 +20,6 @@ export interface RouterSettings {
   updatedAt: number;
 }
 
-/** conversation：旧版“用户在对话里发消息就算回答”写的，库里还有这样的老行；现在只写 router。 */
 export const ROUTER_RESOLUTION_ACTORS = ["router", "conversation"] as const;
 export type RouterResolutionActor = (typeof ROUTER_RESOLUTION_ACTORS)[number];
 
@@ -58,7 +55,6 @@ export interface RouterDecisionItem {
   options: string[];
   askMessageId: MessageId | null;
   resolution: RouterResolution | null;
-  /** 从 hub ask 的卡片带过来的文件（AskMeta.deliverables）。老版本设备没有这个字段。 */
   deliverables?: Deliverable[];
   createdAt: number;
   updatedAt: number;
@@ -72,9 +68,7 @@ export interface RouterReportItem {
   projectId: ProjectId | null;
   conversationId: ConversationId;
   summary: string;
-  /** 网址、Worker、对话这类链接；本机文件不放这里，放 deliverables。 */
   links: RouterReportLink[];
-  /** router report --file 存的副本，graph finish 时是整张图的交付物（graphDeliverables）。老版本设备没有这个字段。 */
   deliverables?: Deliverable[];
   createdAt: number;
   updatedAt: number;
@@ -97,14 +91,12 @@ export type RouterAction =
       markdown: string;
     };
 
-/** POST /api/router/commands 的显式目标：轨道 A 零模型直通（不走 @ 解析或轨道 B）。 */
 export interface PostRouterCommandTarget {
   deviceId?: string;
   pmId?: PmId;
   projectId?: ProjectId;
 }
 
-/** 指令附件的显示信息（创建指令时守护进程按上传编号从磁盘解析，不信客户端报的）。 */
 export interface RouterCommandAttachment {
   id: string;
   name: string;
@@ -112,25 +104,16 @@ export interface RouterCommandAttachment {
   size: number;
 }
 
-/**
- * 存在 router_commands.plan_json 里（docs/router-workbench-v2-design.md 第 3.2 节）。
- * attachments / target / replyTruncated / errorRaw 都是可选的，老数据不带也合法。
- */
 export interface RouterAgentPlan {
   intent: "dispatch" | "answer" | "ambiguous";
-  /** 总助回复全文（最多 ROUTER_REPLY_MAX_CHARS 字）；轨道 A 成功时为空串，去向看 dispatched。 */
   reply: string;
   actions: RouterAction[];
   track?: "A" | "B";
   attachmentIds?: string[];
   retryOps?: Array<{ deviceId: string; op: unknown }>;
-  /** 附件的显示信息，创建指令时由守护进程按上传编号解析。 */
   attachments?: RouterCommandAttachment[];
-  /** 请求里的显式目标，整条重跑时带回去（仍走轨道 A）。 */
   target?: PostRouterCommandTarget;
-  /** 回复超过 ROUTER_REPLY_MAX_CHARS 被截时为 true。 */
   replyTruncated?: true;
-  /** 非预期异常的原始错误文本（error 里是人话），只进悬停提示。 */
   errorRaw?: string;
 }
 
@@ -190,16 +173,9 @@ export interface RouterCommandRecord {
 
 export interface RouterSlice {
   settings: RouterSettings;
-  /**
-   * 待拍板项（pending，上限 ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX）加最近的简报（不分已读未读，
-   * 上限 ROUTER_STREAM_BRIEFINGS_SNAPSHOT_MAX 条、ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES 字节），合并后按 createdAt DESC, id DESC。
-   */
   items: RouterItem[];
-  /** 比 items 里最早一条简报更早的简报还有没有（条数或字节截断时为 true）。 */
   briefingsHasMore: boolean;
-  /** 本机最近 ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX 条（另守 ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES）；经 deviceToken 跨机访问时为空数组。 */
   commands: RouterCommandRecord[];
-  /** 本机比 commands 里最早一条更早的指令还有没有（条数或字节截断时为 true）；经 deviceToken 跨机访问时为 false。 */
   commandsHasMore: boolean;
 }
 
@@ -225,7 +201,6 @@ export interface PmDigestEntry {
     description: string | null;
     mainFolder: string;
     otherFolders: string[];
-    /** 第一层项目档案（docs/router-project-catalog-design.md）；还没建档或对方设备版本旧时没有。 */
     catalog?: ProjectCatalogCard | null;
   } | null;
   activeWorkers: PmDigestActiveWorker[];
@@ -238,7 +213,6 @@ export interface PmDigestEntry {
 export interface DeviceRouterDigest {
   generatedAt: number;
   pms: PmDigestEntry[];
-  /** 超了体积上限没列出的项目经理个数（daemon/ledger/router-digest-fit.ts）；都列出了或对方设备版本旧时没有。 */
   omittedPms?: number;
 }
 
@@ -256,7 +230,6 @@ export function emptyRouterSlice(): RouterSlice {
   };
 }
 
-/** 轨道 B 只读调度会话调用的专用 agent-api 路径（不在普通 PM/Worker 的 HUB_COMMANDS 中公开）。 */
 export const ROUTER_DISPATCH_AGENT_PATH = "/v1/router.dispatch";
 
 export type RouterAgentDispatchInput =
@@ -304,7 +277,6 @@ export type RouterAgentDispatchInput =
       projectId?: ProjectId;
     }
   | {
-      /** 只读：展开一个项目的完整档案（docs/router-project-catalog-design.md 第二层），不算分派目标数。 */
       op: "project-show";
       device: string;
       projectId: ProjectId;

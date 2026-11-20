@@ -1,4 +1,3 @@
-// 网页 ↔ 界面服务（设计第 3 章、m1-plan 第 3 节第 1 条）。
 import type {
   Conversation,
   ConversationId,
@@ -44,108 +43,45 @@ import type { DeviceFingerprint, MeshLinkKind } from "./mesh.ts";
 import type { WorkerPick } from "./worker.ts";
 
 export const API_PATHS = {
-  /**
-   * GET ?token=<界面用户令牌>：设 cookie，跳到 /。令牌存在 state/ui-token，守护进程重启后不变，旧 cookie 仍然有效。
-   * 联机 P6 起：令牌只当主钥匙，登录后发随机的会话 cookie（每个浏览器一条，见 browserSessions）；老 cookie 失效一次，重点一次登录链接。
-   */
   auth: "/auth",
   state: "/api/state",
   messages: (conversationId: ConversationId) => `/api/conversations/${conversationId}/messages`,
-  /**
-   * GET ?ids=<对话编号,…>&workerIds=<Worker 编号,…> → ConversationsLookup：不在初始快照里的对话（早收工的 Worker）点开时单拉，
-   * 和快照里同一个形状。各最多 CONVERSATION_LOOKUP_MAX_IDS 个，不存在的、老项目群不回。
-   */
   conversationsLookup: (q: { ids?: readonly ConversationId[]; workerIds?: readonly WorkerId[] }) =>
     `/api/conversations/lookup?ids=${(q.ids ?? []).join(",")}&workerIds=${(q.workerIds ?? []).join(",")}`,
   stop: (conversationId: ConversationId) => `/api/conversations/${conversationId}/stop`,
-  /** POST，没有请求体 → 200 RewindMessageResponse：把最后一条已停止/已取消或正在停止的用户消息标记回退。 */
   rewind: (conversationId: ConversationId) => `/api/conversations/${conversationId}/rewind`,
-  /** POST：新建项目经理（CreatePmRequest → 201 CreatePmResponse）。没有单独建项目的入口：建项目经理时选主文件夹，或者在会话里说。 */
   pms: "/api/pms",
-  /**
-   * GET ?before=<对话编号> → EndedWorkersPage：这个项目经理比 before 早的已收工 Worker 对话（按对话编号从新到旧，一页 ENDED_WORKERS_PAGE_SIZE 个）。
-   * 不带 before 从最新的开始。项目经理不存在 → 404。
-   */
   endedWorkers: (pmId: PmId, before: ConversationId | null) =>
     `/api/pms/${pmId}/ended-workers${before === null ? "" : `?before=${before}`}`,
-  /** GET → PersonaView；PUT（EditPersonaRequest）→ EditPersonaResponse。 */
   persona: (pmId: PmId) => `/api/pms/${pmId}/persona`,
-  /** PUT（PmLookRequest）→ PmLookResponse：换造型、换颜色（docs/slime-cohesion-design.md）。不进性格设定的修改记录。 */
   pmLook: (pmId: PmId) => `/api/pms/${pmId}/look`,
-  /** GET → PmCapabilitiesView；PATCH（PmCapabilitiesPatch → PmCapabilitiesView）：项目经理能用的技能、MCP、云端连接器。 */
   pmCapabilities: (pmId: PmId) => `/api/pms/${pmId}/capabilities`,
-  /** GET → PmMemoryFilesList：项目经理专属记忆目录 `<topic>.md` 子文件列表与合计字节数。 */
   pmMemoryFiles: (pmId: PmId) => `/api/pms/${pmId}/memory-files`,
-  /** GET → PmMemoryFileDetail；PUT（PutPmMemoryFileRequest）→ PutPmMemoryFileResponse；DELETE → 204。 */
   pmMemoryFile: (pmId: PmId, name: string) => `/api/pms/${pmId}/memory-files/${encodeURIComponent(name)}`,
-  /** POST，没有请求体 → EditPersonaResponse。 */
   revertPersonaChange: (changeId: PersonaChangeId) => `/api/persona-changes/${changeId}/revert`,
-  /** POST，没有请求体 → 202 RenewSessionResponse：开新会话（后台写交接，写好后换代，见 ledger/handover.ts）。 */
   renewSession: (pmId: PmId) => `/api/pms/${pmId}/renew-session`,
-  /** POST，没有请求体 → ArchivePmResponse：归档项目经理。 */
   archivePm: (id: PmId) => `/api/pms/${id}/archive`,
-  /** POST，没有请求体 → ArchivePmResponse：恢复已归档的项目经理。 */
   unarchivePm: (id: PmId) => `/api/pms/${id}/unarchive`,
-  /** POST，没有请求体 → 202 RetryMessageResponse。 */
   retryMessage: (messageId: MessageId) => `/api/messages/${messageId}/retry`,
-  /**
-   * GET → TurnReplyView（shared/turn-reply.ts）：项目经理对话里一条用户消息和它那一轮的正式回复。总助时间流里转交的问题不在近窗时按它补取，
-   * 配对设备经入口的 /d/<设备>/api/* 转发。消息不存在、不是项目经理对话里的用户消息 → 404。
-   */
   messageTurnReply: (messageId: MessageId) => `/api/messages/${messageId}/turn-reply`,
-  /** POST，没有请求体 → RecheckUserBlockerResponse：用户在“要你动手”的提醒卡上点了 Done，重查这家厂商，能用就接着派（docs/user-blockers-design.md）。 */
   recheckUserBlocker: (id: UserBlockerId) => `/api/user-blockers/${id}/recheck`,
-  /**
-   * POST ?name=<文件名>：请求体就是文件原样的字节（不是 JSON，不绑定接收方），最多 MAX_UPLOAD_BYTES，不动别的接口 1 MB 的上限。
-   * 200 → Attachment；空文件、太大（413）、文件名不合法 → 中文原因。之后发消息时在 PostMessageRequest.attachmentIds 里带上它的 id。
-   */
   uploads: "/api/uploads",
-  /** GET：按上传编号取文件。图片内联显示（缩略图），别的当下载。 */
   upload: (id: string, name: string) => `/api/uploads/${id}/${encodeURIComponent(name)}`,
-  /** GET：按副本编号取 agent 发出的文件（shared/sent-files.ts）。图片（含 svg）内联，别的当下载；支持 Range。 */
   sentFile: (id: string, name: string) => `/api/sent-files/${id}/${encodeURIComponent(name)}`,
-  /** GET → ModelsResponse；?refresh=1 先重新问一次厂商再回；?refresh=unusable 只重问这台设备上不能用的那几家。 */
   models: "/api/models",
-  /** GET → QuotaResponse：事件流里没有额度的厂商的额度，按家合并；服务端每家缓存 FETCHED_QUOTA_FRESH_MS，没装、查失败的没有那几块。 */
   quota: "/api/quota",
-  /**
-   * POST（PickFolderRequest → PickFolderResponse）：守护进程在这台 Mac 上弹原生的“选择文件夹”，等用户选完才回。
-   * 取消、超时回 path null（不是错误）；同时已经有一个对话框 409；起不来 osascript 回中文原因。
-   * 不是 macOS（StateSnapshot.server.folderPicker 为 false）回 501，网页不显示这个按钮。
-   */
   pickFolder: "/api/pick-folder",
-  /**
-   * POST，没有请求体 → FileActionResponse：用 macOS 的 open 在 Finder 中显示（reveal）/ 用默认程序打开（open）agent 发来的文件。
-   * 按消息编号 + meta.files 的下标找文件（不收路径）；原文件还在、还在这个会话允许的文件夹里用原文件，否则用副本。
-   * 带可执行权限的、扩展名不在白名单（OPEN_ALLOWED_EXTENSIONS，文档、图片、音视频、纯文本）里的 open 回 403，reveal 照常。
-   * 不是 macOS（StateSnapshot.server.fileActions 为 false）回 501，网页不显示这两个按钮。
-   */
   sentFileAction: (messageId: MessageId, index: number, action: FileAction) => `/api/messages/${messageId}/files/${index}/${action}`,
-  /** POST，同上，对象是聊天框上传的附件（按上传编号，只有数据目录里的那一份）。 */
   attachmentAction: (id: string, action: FileAction) => `/api/attachments/${id}/${action}`,
-  /** POST（AddScheduleRequest → 201 ScheduleRecord）：用户给这个项目经理建定时任务，校验同 hub schedule add，失败回中文原因。 */
   pmSchedules: (pmId: PmId) => `/api/pms/${pmId}/schedules`,
-  /** PUT（SetScheduleEnabledRequest → ScheduleRecord）暂停 / 恢复；DELETE → 204。 */
   schedule: (scheduleId: ScheduleId) => `/api/schedules/${scheduleId}`,
-  /**
-   * GET → CommandsResponse：输入框“/”列表。后台按对话找到它的会话和厂商去问，已经去掉隐藏的命令；问不到给空列表，不报错。
-   * 对话不存在 → 404。用户手打了隐藏的命令（/clear、/model……），发消息时 400（code invalid），error 是拦下的原因。
-   */
   commands: (conversationId: ConversationId) => `/api/conversations/${conversationId}/commands`,
-  /** GET ?q=<搜索词> → FilesResponse：输入框“@”列表，只在这个对话的工作文件夹里搜文件（不含文件夹）。对话不存在 → 404。 */
   files: (conversationId: ConversationId, q: string) => `/api/conversations/${conversationId}/files?q=${encodeURIComponent(q)}`,
-  /** WebSocket，?since=<seq>。服务端 → 网页是 WsServerMessage；网页 → 服务端是 WsClientMessage（联机 P4 起）。 */
   ws: "/api/ws",
-  /**
-   * POST（SelfReloadRequestBody → SelfReloadResponse）：登记空闲排空热重启（同 hub self-reload，立即返回）；GET → SelfReloadStatus。
-   * 只有入口本机的浏览器能调（别的设备的令牌碰不到，见 ENTRY_ONLY_API_PREFIXES）；守护进程没有外壳监管时 409。
-   */
   selfReload: "/api/self-reload",
 
-  // ---- Router（总助）与持久化任务图（Task DAG）----
   routerDigest: "/api/router/digest",
   routerItems: "/api/router/items",
-  /** 在对话里的提问卡上回答（点选项、填写）：按卡上那条 ask 消息找卡，只回答这一张。 */
   askAnswer: (messageId: MessageId) => `/api/asks/${messageId}/answer`,
   routerItemResolve: (id: RouterItemId) => `/api/router/items/${id}/resolve`,
   routerItemDecide: (id: RouterItemId) => `/api/router/items/${id}/decide`,
@@ -162,177 +98,88 @@ export const API_PATHS = {
     `/api/task-graphs/${graphId}/nodes/${encodeURIComponent(nodeKey)}/skip`,
   taskGraphCancel: (graphId: TaskGraphId) => `/api/task-graphs/${graphId}/cancel`,
 
-  // ---- 联机（docs/multi-device-design.md）：浏览器 → 入口 ----
-  // 别的设备的接口都是 devicePath(id, 上面的路径)，入口原样转发（HTTP 和 WebSocket）；对方连不上 → 502 code device_offline，
-  // 设备编号不认识 → 404 code not_found。下面这些是入口自己的，不转发。
-
-  /** GET → DevicesResponse（信任表里的设备，本机排第一）。加设备不在这里：新设备登录同一个账号，在“账号与设备”里核对批准。 */
   devices: "/api/devices",
-  /** PATCH（RenameDeviceRequest）→ DeviceInfo；DELETE → 204：把这台移出账号（签撤销声明发给其他设备，告诉中继删掉它）。不能删本机（400）。 */
   device: (id: DeviceId) => `/api/devices/${id}`,
 
-  // ---- 联机：设备 → 设备（docs/account-mesh-design.md）：只走组网入口，双向认证的 TLS 里认出是哪台，不带令牌 ----
-
-  /** PUT（RenameDeviceRequest）→ 204：入口上给这台改名，名字归这台自己管，改完它再告诉所有可信设备（peerRenamed）。 */
   peerName: "/api/peer/name",
-  /** PUT（RenameDeviceRequest）→ 204：发请求的那台（按 TLS 证书认）告诉本机它改名了。 */
   peerRenamed: "/api/peer/renamed",
-  /** GET → TrustStatementsBody：本机信任表的签名声明（批准和撤销），对齐用；POST（TrustStatementsBody）→ 204：收下对方转来的声明。 */
   peerTrust: "/api/peer/trust",
-  /** GET → { relayConnected, holders }：降级持有租约前经局域网探查对方是否正持有租约。 */
   peerLease: "/api/peer/lease",
-  /** POST（FeishuForwardedEvent）→ FeishuCardActionResponse：中心把飞书群消息或卡片点击转给群归属电脑。 */
   peerFeishuInbound: "/api/peer/feishu/inbound",
-  /** POST（{ chats }）→ 204：可信设备对齐完项目群后把群归属广播给账号里的其他设备。 */
   peerFeishuChats: "/api/peer/feishu/chats",
-  /** GET → { app: FeishuPeerAppSync | null }；PUT（FeishuPeerAppSync）→ 204：可信设备之间同步飞书应用凭证或断开通知。 */
   peerFeishuApp: "/api/peer/feishu/app",
 
-  // ---- 账号组网（docs/account-mesh-design.md）：浏览器 → 本机，不转发 ----
-
-  /** GET → AccountStatusView。 */
   account: "/api/account",
-  /** POST（StartLoginRequest，可空）→ AccountStatusView：开始 GitHub 设备码登录；DELETE → AccountStatusView：取消。 */
   accountLogin: "/api/account/login",
-  /** POST → AccountStatusView：退出账号（别的设备也删掉这台）。 */
   accountLogout: "/api/account/logout",
-  /** POST → AccountStatusView：对一台等批准的设备开始核对（本机当批准方）。requestId 是那台的设备编号。 */
   accountApprovalBegin: (requestId: string) => `/api/account/approvals/${encodeURIComponent(requestId)}/begin`,
-  /** POST（AnswerApprovalRequest）→ AccountStatusView：本机用户点“一致”或“不一致”。 */
   accountApprovalAnswer: (requestId: string) => `/api/account/approvals/${encodeURIComponent(requestId)}/answer`,
-  /** PUT（SetCenterPriorityRequest）→ AccountStatusView：中心顺序。 */
   accountPriority: "/api/account/priority",
 
-  // ---- 联机：推送（只在“提醒设备”上用，手机 PWA 装在哪个来源就是哪台） ----
-
-  /** GET → PushKeyResponse：VAPID 公钥，网页订阅时用。 */
   pushKey: "/api/push/key",
-  /** POST（PushSubscribeRequest，就是浏览器 PushSubscription.toJSON() 的样子）→ 204。同一个 endpoint 重复订阅是覆盖。 */
   pushSubscriptions: "/api/push/subscriptions",
-  /** POST（PushUnsubscribeRequest）→ 204。没有这条订阅也是 204。 */
   pushUnsubscribe: "/api/push/unsubscribe",
 
-  // ---- 飞书（docs/feishu-design.md；只在本机网页上配，经设备令牌访问回 forbidden_peer） ----
-
-  /** GET → FeishuStatusView（不含 App Secret）。 */
   feishu: "/api/feishu",
-  /** POST，没有请求体 → FeishuStatusView（registering，带二维码链接）：开始扫码建应用；DELETE → FeishuStatusView：取消扫码。 */
   feishuRegistration: "/api/feishu/registration",
-  /** PUT（FeishuCredentialsRequest）→ FeishuStatusView：手动填 App ID、App Secret；凭证不对 400。 */
   feishuCredentials: "/api/feishu/credentials",
-  /** POST，没有请求体 → FeishuBindCodeResponse：手动接入后认主人的绑定码。 */
   feishuBindCode: "/api/feishu/bind-code",
-  /** PUT（triggerMode、guestTier，至少一个）→ FeishuChatView：改一个项目群的唤醒方式和访客档位。 */
   feishuChatPolicy: (pmId: PmId) => `/api/feishu/chats/${pmId}/policy`,
-  /** POST，没有请求体 → FeishuStatusView：照账本重新对一遍项目群。 */
   feishuResync: "/api/feishu/resync",
-  /** POST（FeishuDisconnectRequest）→ FeishuStatusView：断开，删凭证和四张表。 */
   feishuDisconnect: "/api/feishu/disconnect",
 
-  // ---- 联机：浏览器登录（每个浏览器一条，能单独退出；只在入口上，浏览器从不拿别的设备的令牌） ----
-
-  /** GET → AuthStatusResponse：查询当前浏览器会话状态（active / unauthenticated）。 */
   authStatus: "/api/auth/status",
-  /** GET → DesktopHealthResponse：需有效登录会话 Cookie 的本机健康探活端点（供桌面外壳 `--self-test` 验证鉴权与服务状态）。 */
   health: "/api/health",
-  /** GET → BrowserSessionsResponse。 */
   browserSessions: "/api/sessions",
-  /** DELETE → 204：退出这一个浏览器（可以是自己）。 */
   browserSession: (id: string) => `/api/sessions/${encodeURIComponent(id)}`,
-  /** POST，没有请求体 → 204：全部退出 = 换主钥匙（state/ui-token）+ 清所有会话，包括自己。 */
   logoutAll: "/api/sessions/logout-all",
-  /** POST，没有请求体 → 201 LoginLinkResponse：给手机扫的一次性登录链接（5 分钟、用一次就失效）。 */
   loginLinks: "/api/login-links",
 
-  // ---- 全厂商连接器 / MCP / Skill 同步 ----
-  /** GET → VendorSyncPreviewResponse：只读扫描各厂商连接器、MCP 与 Skill，返回密钥脱敏后的预览。 */
   vendorSyncPreview: "/api/vendor-sync/preview",
-  /** POST（VendorSyncApplyRequest → VendorSyncApplyResponse）：先轮转备份再原子替换落盘与逐项软链。 */
   vendorSyncApply: "/api/vendor-sync/apply",
 
-  // ---- Settings → Providers 一键安装与界面内直接登录（支持 /d/<device>/api/providers/* 跨设备代理） ----
-  /** GET（可选 ?refresh=1）→ ProvidersStatusResponse：汇总全部已注册厂商安装、版本、就绪状态与在途任务。 */
   providers: "/api/providers",
-  /** POST（{} → ProviderStatusItem）：启动指定厂商白名单后台安装任务。 */
   providerInstall: (vendor: string) => `/api/providers/${encodeURIComponent(vendor)}/install`,
-  /** POST（{} → ProviderStatusItem）：启动指定厂商白名单后台更新任务。 */
   providerUpdate: (vendor: string) => `/api/providers/${encodeURIComponent(vendor)}/update`,
-  /** POST（ProviderCancelJobRequest → ProviderStatusItem）：取消并回收正在运行的安装/更新任务。 */
   providerJobCancel: (vendor: string) => `/api/providers/${encodeURIComponent(vendor)}/job/cancel`,
-  /** POST（{} → ProvidersStatusResponse）：Windows 免交互调用 winget 安装 Git.Git。 */
   providerGitInstall: "/api/providers/environment/git/install",
-  /** POST（ProviderStartAuthRequest → ProviderStatusItem）：启动界面内浏览器 OAuth 或 Device Code 登录流。 */
   providerAuthStart: (vendor: string) => `/api/providers/${encodeURIComponent(vendor)}/auth/start`,
-  /** POST（ProviderSubmitAuthRequest → ProviderStatusItem）：提交授权码或回环回调 URL。 */
   providerAuthSubmit: (vendor: string) => `/api/providers/${encodeURIComponent(vendor)}/auth/submit`,
-  /** POST（ProviderCancelAuthRequest → ProviderStatusItem）：取消当前活跃登录流。 */
   providerAuthCancel: (vendor: string) => `/api/providers/${encodeURIComponent(vendor)}/auth/cancel`,
-  /** POST（ProviderSaveApiKeyRequest → ProviderStatusItem）：原子保存 API Key 并刷新单家模型目录。 */
   providerAuthApiKey: (vendor: string) => `/api/providers/${encodeURIComponent(vendor)}/auth/api-key`,
-  /** POST（ProviderLogoutRequest → ProviderStatusItem）：退出登录并清理对应受管密钥。 */
   providerAuthLogout: (vendor: string) => `/api/providers/${encodeURIComponent(vendor)}/auth/logout`,
 } as const;
 
 export interface ConversationSnapshot {
   conversation: Conversation;
-  /**
-   * 按编号从小到大、连着的一段（见 shared/snapshot.ts）：项目经理对话、在跑的 Worker 对话是最近 SNAPSHOT_RECENT_MESSAGES 条，
-   * 往前带到要算的消息，最多 MESSAGE_PAGE_SIZE 条；已收工的 Worker 对话是空的，点开再拉。
-   */
   messages: Message[];
-  /** 比 messages 里最早一条更早的还有没有。 */
   hasMore: boolean;
-  /** Worker 对话：项目经理对话里指向它的那几行的摘要；还没有那一行、不是 Worker 对话不带。 */
   workerLine?: WorkerLineSummary;
 }
 
-/**
- * GET /api/state。seq 是拍照那一刻的事件序号，WebSocket 从它之后接着推。
- * 不含老的项目群和归档的项目（11-03 拿掉了项目群，见 CONVERSATION_KINDS）。
- * M3：conversations、sessions 里含 Worker 的（kind worker），左栏不显示；“N 个 Worker 在跑”按 Conversation.pmId 是这个项目经理、
- * kind worker 的对话里最新一代会话 activity 不是 idle 的数。项目经理对话里那一行汇报是 kind worker 的消息（WorkerMessageMeta）。
- */
 export interface StateSnapshot {
   seq: number;
   pms: Pm[];
-  /** 进行中的项目（每个项目经理最多一个，Project.conversationId 是它的对话），按编号从小到大。 */
   projects: Project[];
-  /** 这些项目没移除的文件夹，按编号从小到大。 */
   folders: ProjectFolder[];
   conversations: ConversationSnapshot[];
   sessions: SessionState[];
   health: HealthEntry[];
-  /** 所有项目经理的定时任务（M6），按编号从小到大；ScheduleRecord.pmId 认是谁的。 */
   schedules: ScheduleRecord[];
-  /** Router（总助）切片：配置、待拍板项与最近简报（含 briefingsHasMore）、PM 备忘与本机最近指令（含 commandsHasMore）。 */
   router: RouterSlice;
-  /** 所有进行中项目的活跃任务图（status = 'active'）。 */
   activeTaskGraphs: TaskGraph[];
-  /**
-   * 还有更早的已收工 Worker 没放进快照的项目经理（快照每个项目经理只带最近 SNAPSHOT_ENDED_WORKERS_PER_PM 个）：
-   * 值是翻页的起点（GET endedWorkers 的 before）。没有更早的不带；老服务端整个不带。
-   */
   olderEndedWorkers?: Record<PmId, ConversationId>;
-  /** 守护进程所在的机器能做什么（界面服务补上的，不是账本的数据）：网页按它显示“选择…”和“在 Finder 中显示”等控件。 */
   server: ServerInfo;
-  /**
-   * 这次启动的唯一标识（界面服务补上的，同 /api/auth/status 的 instanceId）：守护进程重启就变。
-   * 网页（只看入口本机这台）发现它变了，保存草稿后自动刷新拿新网页（web/auto-reload.ts）。老服务端没带是 undefined。
-   */
   bootId?: string;
 }
 
-/** 账本给出的快照：界面服务在 /api/state 里再补上 server、bootId。 */
 export type LedgerSnapshot = Omit<StateSnapshot, "server" | "bootId">;
 
-/** GET /api/conversations/:id/messages?before=<消息编号>：更早的 100 条，从小到大。 */
-/** 不在快照里的对话按需拉回来的一批（GET conversationsLookup）：对话和快照里同形状，sessions 是它们各自最新一代的会话。 */
 export interface ConversationsLookup {
   conversations: ConversationSnapshot[];
   sessions: SessionState[];
 }
 
-/** GET endedWorkers 的一页：nextBefore 是下一页的 before，没有更早的了是 null。 */
 export interface EndedWorkersPage extends ConversationsLookup {
   nextBefore: ConversationId | null;
 }
@@ -342,20 +189,10 @@ export interface MessagesPage {
   hasMore: boolean;
 }
 
-/**
- * POST /api/conversations/:id/messages。clientId 由网页生成，重发用同一个。
- * attachmentIds：先用 API_PATHS.uploads 上传拿到的上传编号；有附件时 text 可以是空的（只发文件）。服务端按编号找到磁盘上的文件，
- * 找不到（没传过、被清理了）→ 400；消息里存的附件信息和正文里的路径都是服务端从文件算出来的。
- */
 export interface PostMessageRequest {
   clientId: string;
   text: string;
   attachmentIds?: string[];
-  /**
-   * 只在项目经理对话里有意义（别的对话带了 → 400 invalid）：用户在输入框用 /hub:worker 指定，回应这一条消息时派的 Worker 用这家厂商、模型、思考程度
-   * （model、effort 是 null 表示 Default，项目经理自己定）。服务端校验形状（shared/worker-pick-schema.ts 的 workerPickSchema），
-   * 不查这台设备现在能不能用；存进消息的 meta.workerPick，交给项目经理时原文前面加一块参数句子（workerPickNote）。
-   */
   workerPick?: WorkerPick;
 }
 
@@ -363,27 +200,13 @@ export interface PostMessageResponse {
   messageId: MessageId;
 }
 
-/**
- * 4xx / 5xx 的响应体。对话不存在（账本抛 ConversationNotFoundError）→ 404。
- * 账本抛 LedgerRequestError 时按 LEDGER_ERROR_HTTP_STATUS 映射，error 是它的 message（原样显示给用户），code 是它的 code。
- * 请求体校验没过（界面服务自己查的）→ 400，code 是 "invalid"。
- */
 export interface ApiErrorBody {
   error: string;
   code?: ApiErrorCode;
 }
 
-/** 账本的错误码，加上联机的：device_offline = 入口转发时连不上那台设备（502），网页据此显示离线，不弹错；device_not_found = 没有这台设备（404）。 */
 export type ApiErrorCode = LedgerErrorCode | "device_offline" | "device_not_found";
 
-// ---- M2：项目经理、性格设定、重试 ----
-// 请求体由界面服务按 JSON Schema 校验（多余字段拒绝），长度上限见 limits.ts；业务校验在账本。
-
-/**
- * POST /api/pms。name 按 normalizeName；persona 不超过 MAX_PERSONA_BYTES；defaultModel 空串或不给 = 用 claude 自己的默认。
- * vendor、defaultModel、effort 的取值见厂商清单 vendors.ts，不对 → 400 带原因。
- * folder：主文件夹（用户填的路径，可以带 ~，服务端解析成真实路径），可选；给了就同时建好项目，不存在等不对 → 400 带原因。
- */
 export interface CreatePmRequest {
   name: string;
   mode: PmMode;
@@ -392,20 +215,16 @@ export interface CreatePmRequest {
   effort?: string | null;
   persona: string;
   folder?: string;
-  /** 技能、MCP、云端连接器从哪开始；不给 = 全开。 */
   capabilities?: PmCapabilitiesStart;
 }
 
 export interface CreatePmResponse {
   pmId: PmId;
-  /** 它的对话，网页建好后跳过去。 */
   conversationId: ConversationId;
 }
 
-/** GET /api/pms/:id/persona 的响应就是账本的 PersonaView。 */
 export type PersonaResponse = PersonaView;
 
-/** PUT /api/pms/:id/persona。至少给一个字段（reason 不算）；model、effort 给 null 是改回默认。 */
 export interface EditPersonaRequest {
   text?: string;
   mode?: PmMode;
@@ -415,38 +234,30 @@ export interface EditPersonaRequest {
   reason?: string;
 }
 
-/** PUT /api/pms/:id/look：两项都要给，null 是回到默认。 */
 export type PmLookRequest = PmLookSetting;
 
-/** PUT /api/pms/:id/look 的响应：改完的项目经理。 */
 export interface PmLookResponse {
   pm: Pm;
 }
 
-/** PUT persona、POST revert 的响应：改完之后的样子（没改动时 changed 为 false）。 */
 export interface EditPersonaResponse {
   changed: boolean;
   persona: PersonaView;
 }
 
-/** GET /api/pms/:id/memory-files 的响应。 */
 export type PmMemoryFilesResponse = PmMemoryFilesList;
 
-/** GET /api/pms/:id/memory-files/:name 的响应。 */
 export type PmMemoryFileResponse = PmMemoryFileDetail;
 
-/** PUT /api/pms/:id/memory-files/:name 的请求体。 */
 export interface PutPmMemoryFileRequest {
   content: string;
 }
 
-/** PUT /api/pms/:id/memory-files/:name 的响应。 */
 export interface PutPmMemoryFileResponse {
   file: PmMemoryFileDetail;
   totalBytes: number;
 }
 
-/** POST /api/pms/:id/schedules：daily（"HH:MM"）和 everyMinutes 二选一。 */
 export interface AddScheduleRequest {
   name: string;
   prompt: string;
@@ -454,28 +265,20 @@ export interface AddScheduleRequest {
   everyMinutes?: number;
 }
 
-/** PUT /api/schedules/:id。 */
 export interface SetScheduleEnabledRequest {
   enabled: boolean;
 }
 
-/** GET /api/models?refresh=unusable：只重问这台设备上现在不能用（没登录、没装）的厂商。 */
 export const REFRESH_UNUSABLE = "unusable";
 
-/** GET /api/models：每家厂商一份模型名单（按 AGENT_VENDORS 的顺序）。问不到厂商时是打包的名单，不报错。 */
 export interface ModelsResponse {
   catalogs: ModelCatalog[];
 }
 
-/**
- * GET /api/quota：要按需查额度的几家合在一个响应里，一组一块（按名单顺序）。vendor + id 对上 spec 的 quota.fetched.groups[].key，
- * 组名、厂商名网页从 spec 取，不随响应发。旧后台的 vendor 可缺省，网页按唯一组 id 识别。窗口的值同事件里的 RateLimitWindow（utilization 0 到 1，resetsAt Unix 秒）。
- */
 export interface QuotaResponse {
   groups: Array<{ vendor?: AgentVendor; id: string; windows: Partial<Record<QuotaWindowKey, RateLimitWindow>> }>;
 }
 
-/** 输入框“/”列表里的一项。name 不带开头的 /；argumentHint 没有就不给；builtin：厂商自带的命令（用户自己的命令、skill 不带这个字段）。 */
 export interface ComposerCommand {
   name: string;
   description: string;
@@ -483,74 +286,49 @@ export interface ComposerCommand {
   builtin?: true;
 }
 
-/**
- * agent-hub 自己的输入框命令（不是厂商的）：网页把它们加在“/”列表最前面，只在项目经理对话里出现，不进 daemon/commands-catalog。
- * 名字用 hub: 前缀（和厂商插件的 插件:名字 同一个约定），不带开头的 /。
- */
 export const HUB_COMPOSER_COMMANDS: readonly ComposerCommand[] = [
   { name: "hub:worker", description: "Pick provider, model and effort for Workers" },
 ];
 
-/** GET /api/conversations/:id/commands。 */
 export interface CommandsResponse {
   commands: ComposerCommand[];
 }
 
-/**
- * 输入框“@”列表里的一项：
- * - path：在 root 下的相对路径（显示用：文件名 + 父目录）；
- * - root：它在哪个工作文件夹（绝对路径）；
- * - insert：选中后插进输入框的文字（不含末尾空格），由厂商实现生成（claude 是 `@path`，带空格的 `@"a b.md"`），网页原样插入。
- *   主文件夹（agent 的工作目录）里的用相对路径，别的文件夹里的用绝对路径。
- */
 export interface FileEntry {
   path: string;
   root: string;
   insert: string;
 }
 
-/** GET /api/conversations/:id/files?q=。最多 MAX_FILE_RESULTS 条，按匹配程度排好；truncated：有文件夹文件太多，没列全。 */
 export interface FilesResponse {
   entries: FileEntry[];
   truncated: boolean;
 }
 
-/** POST /api/pms/:id/renew-session → 202：这次交接的编号（handovers 那一行，连点返回同一个）。换代后照常从 WebSocket 推分隔线。 */
 export interface RenewSessionResponse {
   handoverId: number;
 }
 
-/** POST /api/pms/:id/archive、POST /api/pms/:id/unarchive 的响应。 */
 export interface ArchivePmResponse {
   pm: Pm;
 }
 
-/** POST /api/messages/:id/retry → 202。之后状态变化照常从 WebSocket 推（message.updated）。 */
 export interface RetryMessageResponse {
   messageId: MessageId;
 }
 
-/** POST /api/conversations/:id/rewind → 200。返回本次标记回退的用户消息；没有可回退的（或已回退过）是 null。 */
 export interface RewindMessageResponse {
   message: Message | null;
 }
 
-/** POST /api/pick-folder 的请求体：对话框从哪个文件夹开始（输入框里已有的路径）；没给、不存在或不是文件夹就从家目录开始。 */
 export interface PickFolderRequest {
   startDir?: string;
 }
 
-/** POST /api/pick-folder 的响应：选中的文件夹的绝对路径；用户点了取消（或超时）是 null。 */
 export interface PickFolderResponse {
   path: string | null;
 }
 
-// ---- WebSocket：服务端 → 网页 ----
-
-/**
- * 同一个事务里推出的几条变化按这个顺序：pm.* → project.* → conversation.created → conversation.purged → session.created → folders.updated →
- * message.* → session.status → health.updated → schedule.*。所以网页收到某个对话的 message.created 时，那个对话一定已经有了。
- */
 export const CHANGE_TYPES = [
   "message.created",
   "message.updated",
@@ -581,23 +359,15 @@ export interface ChangeDataMap {
   "message.created": { message: Message };
   "message.updated": { message: Message };
   "session.status": { session: SessionState };
-  /** 某个模块的健康状态变了（比如“找不到 claude”），界面实时显示。 */
   "health.updated": { health: HealthEntry };
   "pm.created": { pm: Pm };
-  /** 模式、名字等变了（改性格设定只改了正文也推，资料页据此重新拉 persona）。 */
   "pm.updated": { pm: Pm };
-  /** 归档已满 7 天被到期清理删除。 */
   "pm.removed": { pmId: PmId };
   "project.created": { project: Project };
-  /** 某个项目没移除的文件夹整个换成这一份（挂、移除、建项目时）。 */
   "folders.updated": { projectId: ProjectId; folders: ProjectFolder[] };
-  /** 新对话（新项目经理的那个对话；M3 起还有派活时 Worker 的对话），消息是空的。 */
   "conversation.created": { conversation: Conversation };
-  /** 已收工的 Worker 满保留期，对话里的消息和步骤日志清掉了：网页把这个对话的消息清空、显示“已按保留期清理”。 */
   "conversation.purged": { conversationId: ConversationId; purgedAt: number };
-  /** 新会话（建项目经理时；M3 起还有派活时 Worker 的会话）。 */
   "session.created": { session: SessionState };
-  /** 定时任务建了、暂停、恢复、跑过一次（M6），整行换成这一份。 */
   "schedule.updated": { schedule: ScheduleRecord };
   "schedule.removed": { scheduleId: ScheduleId };
   "router.settings.updated": { settings: RouterSettings };
@@ -610,40 +380,26 @@ export interface ChangeDataMap {
   "task_graph.updated": { graph: TaskGraph };
 }
 
-/** 服务端推的一条变化：{ seq, type, data }。 */
 export type Change = {
   [T in ChangeType]: { seq: number; type: T; data: ChangeDataMap[T] };
 }[ChangeType];
 
-/** since 太旧补不齐（或比当前还大，比如守护进程重启过）时推它，网页重新拉 /api/state。 */
 interface ResyncMessage {
   type: "resync";
 }
 
-/** 账号组网的状态变了（登录、批准、设备上下线、中心换手）：网页重拉 GET /api/account。 */
 export interface AccountUpdatedMessage {
   type: "account.updated";
 }
 
 export type WsServerMessage = Change | ResyncMessage | AccountUpdatedMessage;
 
-/**
- * 服务端每 WS_HEARTBEAT_MS 推一条，证明这条连接还通（daemon/ws-keepalive.ts）。网页的 connection.ts 收到只记“最后收到”的时间，
- * 不交给界面，所以不在 WsServerMessage 里。入口转发时只发入口自己的，对方的那条丢掉（一跳一份）。
- */
 export interface HeartbeatMessage {
   type: "heartbeat";
 }
 
-/** 心跳在线上的样子：固定一串，收发两边按原文比，不用每条都解析。 */
 export const WS_HEARTBEAT_TEXT = JSON.stringify({ type: "heartbeat" } satisfies HeartbeatMessage);
 
-// ---- WebSocket：网页 → 服务端（联机 P4） ----
-
-/**
- * 网页每 30 秒（和切前台 / 后台时）报一次：在不在前台、正在看哪台设备的哪个对话。提醒设备据此跳过“正在看着”的推送。
- * 发给入口自己的那条 WebSocket（本机的），不发给转发的。deviceId 是 null = 入口本机。
- */
 export interface PresenceMessage {
   type: "presence";
   visible: boolean;
@@ -653,143 +409,97 @@ export interface PresenceMessage {
 
 export type WsClientMessage = PresenceMessage;
 
-// ---- 联机：设备（docs/multi-device-design.md 第 3.2、4.1 节） ----
-
-/**
- * 设备编号：每台第一次启动时生成的随机 UUID（小写，存 state/device.json），不会变。
- * 别的编号（对话、项目经理、seq）都是各台本机自增的，多设备时会撞号：网页里的键都要带设备编号。
- */
 export type DeviceId = string;
 
 const DEVICE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-/** 是不是合法的设备编号。入口转发前先查，挡住 /d/../ 之类的路径。 */
 export function isDeviceId(value: string): value is DeviceId {
   return DEVICE_ID_PATTERN.test(value);
 }
 
-/** 转发前缀：浏览器访问别的设备的接口用 /d/<设备编号>/api/...。 */
 export const DEVICE_PROXY_PREFIX = "/d";
 
-/** 某台设备上的接口路径。device 是 null（入口本机）就是原路径。path 是 API_PATHS 里的路径，以 / 开头。 */
 export function devicePath(device: DeviceId | null, path: string): string {
   return device === null ? path : `${DEVICE_PROXY_PREFIX}/${device}${path}`;
 }
 
-/** 入口转发 `/d/<设备>/api/*` 时注入的当前浏览器会话不可逆摘要头（隔离不同浏览器窗口的远端登录流，不带原始会话凭证）。 */
 export const PEER_CLIENT_SCOPE_HEADER = "x-agent-hub-client-scope";
 
-/**
- * 只给浏览器用、别的设备（组网入口来的请求）不能访问的接口：入口自己的设备管理、账号、浏览器登录、推送订阅。新加这类接口要加进来。
- * 组网入口来的请求也不能访问 /d/（不能借别的设备的转发去第三台）和 /auth。
- */
 export const ENTRY_ONLY_API_PREFIXES: readonly string[] = ["/api/devices", "/api/account", "/api/sessions", "/api/login-links", "/api/push/", "/api/auth/", "/api/health", "/api/self-reload"];
 
-/** 入口转发的 WebSocket 因为对方连不上（握手失败、心跳没回）被关时的状态码和原因。网页按断线重连处理。 */
 export const DEVICE_OFFLINE_WS_CLOSE_CODE = 4502;
 export const DEVICE_OFFLINE_REASON = "device_offline";
 
-/** GET /api/devices 里的一台（信任表里的设备）。 */
 export interface DeviceInfo {
   id: DeviceId;
-  /** 默认是主机名，能改。 */
   name: string;
-  /** 那台的 process.platform（darwin、linux……）。能做什么看那台 /api/state 的 server，不看这个。 */
   platform: string;
-  /** 是不是入口本机。 */
   self: boolean;
-  /** 中继说它在线（本机永远 true）。 */
   online: boolean;
-  /** 本机现在连它用的哪种：本机 / 同局域网直连 / 经中继；没连过或离线是 null。 */
   link: MeshLinkKind | null;
-  /** 设备证书指纹（核对、排查用）；没开组网（只有本机）时是 null。 */
   fingerprint: DeviceFingerprint | null;
 }
 
-/** GET /api/devices。 */
 export interface DevicesResponse {
   devices: DeviceInfo[];
 }
 
-/** PATCH /api/devices/:id。name 按 normalizeName。 */
 export interface RenameDeviceRequest {
   name: string;
 }
 
-/** POST /api/account/login 的请求体（可空）：换自建中继的网址或 GitHub OAuth Client ID。 */
 export interface StartLoginRequest {
   relayUrl?: string;
   githubClientId?: string;
 }
 
-/** POST /api/account/approvals/:id/answer。 */
 export interface AnswerApprovalRequest {
   match: boolean;
 }
 
-/** PUT /api/account/priority。 */
 export interface SetCenterPriorityRequest {
   priority: DeviceId[];
 }
 
-// ---- 联机：推送（第 6.2 节） ----
-
-/** GET /api/push/key。 */
 export interface PushKeyResponse {
   publicKey: string;
 }
 
-/** POST /api/push/subscriptions。 */
 export interface PushSubscribeRequest {
   endpoint: string;
   keys: { p256dh: string; auth: string };
 }
 
-/** POST /api/push/unsubscribe。 */
 export interface PushUnsubscribeRequest {
   endpoint: string;
 }
 
-/**
- * Service Worker 收到的推送内容。只带标题不带正文（用户拍板）：标题如“东京 · 项目 A：等你确定”。
- * url：点通知打开的网址（#/d/<设备>/c/<对话>）；tag：同一个对话只留最新一条。
- */
 export interface PushPayload {
   title: string;
   url: string;
   tag: string;
 }
 
-// ---- 联机：浏览器登录（第 3.4 节） ----
-
-/** GET /api/auth/status：当前浏览器的登录状态。 */
 export interface AuthStatusResponse {
   status: "active" | "unauthenticated";
 }
 
-/** 一个已登录的浏览器。时间是毫秒时间戳。 */
 export interface BrowserSessionInfo {
   id: string;
-  /** 登录时的 User-Agent，列表里显示成“iPhone Safari”之类。 */
   userAgent: string;
   createdAt: number;
   lastSeenAt: number;
-  /** 是不是发这个请求的浏览器自己。 */
   current: boolean;
 }
 
-/** GET /api/sessions，按最后活动从新到旧。 */
 export interface BrowserSessionsResponse {
   sessions: BrowserSessionInfo[];
 }
 
-/** POST /api/login-links → 201。url 是入口上的完整登录链接（二维码内容），expiresAt 是毫秒时间戳。 */
 export interface LoginLinkResponse {
   url: string;
   expiresAt: number;
 }
-
-// ---- Router（总助）与持久化任务图接口形状 ----
 
 export interface RouterItemsPage {
   items: RouterItem[];
@@ -803,10 +513,8 @@ export interface RouterCommandsPage {
   hasMore: boolean;
 }
 
-/** 定义在 router.ts（和 RouterAgentPlan.target 同一个形状），这里原样转出，老的导入路径不用改。 */
 export type { PostRouterCommandTarget } from "./router.ts";
 
-/** GET /api/router/items 的查询参数。不带 kind：已拍板、已归档的历史（旧口径）；kind=report：不分状态只回简报。 */
 export interface RouterItemsQuery {
   cursor?: string;
   limit?: number;
@@ -839,7 +547,6 @@ export interface ResolveRouterItemResponse {
 
 export interface RecheckUserBlockerResponse {
   blocker: UserBlocker;
-  /** true：重查能用，已经解开并接着派了（之前已解开的也是 true）；false：还不能用，卡留着。 */
   resolved: boolean;
 }
 
@@ -862,7 +569,6 @@ export interface PostRouterCommandRequest {
   clientId: string;
   text: string;
   attachmentIds?: string[];
-  /** 显式目标：轨道 A 零模型直通（不给走 @ 解析或轨道 B）。 */
   target?: PostRouterCommandTarget;
 }
 
@@ -904,26 +610,16 @@ export interface CancelTaskGraphResponse {
   messageId: MessageId | null;
 }
 
-// ---- 空闲排空热重启（daemon/self-reload.ts） ----
-
-/** idle：没登记；building：在后台构建网页；draining：等全库空闲 + 静默窗口（过了 deadlineAt 只等重启后不会重发的轮次）；restarting：正在关机重启。 */
 export type SelfReloadState = "idle" | "building" | "draining" | "restarting";
 
 export interface SelfReloadStatus {
   state: SelfReloadState;
-  /** 这次带不带构建。 */
   build: boolean;
-  /** 第一次登记的时间；没登记是 null。 */
   requestedAt: number | null;
-  /** requestedAt + SELF_RELOAD_DRAIN_MAX_MS：过了这个时间不再等重启后会重发的轮次；没登记是 null。 */
   deadlineAt: number | null;
-  /** 已过 deadlineAt、还没重启：只等 unresumable 里的轮次回完。 */
   overdue: boolean;
-  /** 现在还在忙的（给人看的原因），空的 = 全库空闲。 */
   busy: string[];
-  /** 其中重启后不会重发的（项目经理、总助正在回用户）：过了 deadlineAt 也要等它们回完。 */
   unresumable: string[];
-  /** 最近一次被取消（构建失败、换产物失败）的原因；之后再登记就清掉。 */
   lastFailure: string | null;
 }
 

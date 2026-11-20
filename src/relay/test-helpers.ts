@@ -1,4 +1,3 @@
-// 中继测试共用：内存存储、假 WebSocket、登记和登入的步骤。
 import type { DeviceId } from "../shared/api.ts";
 import type { AccountId, AccountLogin } from "../shared/mesh.ts";
 import type { MeshIdentity } from "../daemon/mesh/identity.ts";
@@ -70,7 +69,6 @@ export interface ConnectedDevice {
   send(frame: Parameters<typeof encodeRelayFrame>[0]): Promise<void>;
 }
 
-/** 开控制连接、回 challenge 的签名，等到 welcome。 */
 export async function connect(room: RelayAccountRoom, identity: MeshIdentity, accountId: AccountId, id: DeviceId = identity.deviceId): Promise<ConnectedDevice> {
   const socket = new FakeSocket();
   const handle = room.openControl(socket);

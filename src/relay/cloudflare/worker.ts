@@ -1,9 +1,4 @@
-// Cloudflare 版中继（docs/account-mesh-design.md「中继」）：Worker 收 /v1/register 并把每个账号的连接交给该账号的 Durable Object，
-// DO 里放一个 relay/core.ts 的 RelayAccountRoom。WebSocket 一律用休眠 API（acceptWebSocket），协议层 ping 用 setWebSocketAutoResponse 自动回。
-// 不变量：
-// - Durable Object 只用 SQLite 存储（免费档只开放这种），只存设备表和中心顺序；
-// - 不在 DO 里开定时器、不持有出站连接，空闲时能休眠；过期检查放在每条消息之后调 room.sweep()；
-// - 没有服务端密钥：wrangler.toml 里只有 GitHub API 地址这类公开配置。
+// No timers or outbound connections in the Durable Object so it can hibernate; expiry runs via room.sweep() after each message.
 import { isDeviceId } from "../../shared/api.ts";
 import {
   RELAY_CONCURRENT_SOCKETS_PER_IP,
@@ -35,7 +30,6 @@ import { isRelayToken, parseRelayRegisterRequest, type RelayErrorCode, type Rela
 
 export interface RelayWorkerEnv {
   ACCOUNTS: DurableObjectNamespace;
-  /** 对外的 origin（https://…），签名消息里要用。 */
   PUBLIC_ORIGIN: string;
   GITHUB_API_ORIGIN?: string;
 }
@@ -61,10 +55,6 @@ const registerLimiter = createIpRateLimiter({ ...limiterOptions, limit: RELAY_RE
 const upgradeLimiter = createIpRateLimiter({ ...limiterOptions, limit: RELAY_UPGRADES_PER_IP_PER_MINUTE });
 const verifiedTokens = createVerifiedTokenCache({ max: RELAY_TOKEN_CACHE_MAX, ttlMs: RELAY_TOKEN_CACHE_TTL_MS });
 
-/**
- * 客户端的真实 IP：只认 Cloudflare 边缘写入的 CF-Connecting-IP（客户端发来的同名头会被边缘覆盖）。
- * X-Forwarded-For 的首跳是客户端自己填的，不用；没有 CF-Connecting-IP（本地运行时）的请求共用一个键。
- */
 function clientIpOf(request: Request): string {
   return request.headers.get("cf-connecting-ip")?.trim() || "unknown";
 }
@@ -107,14 +97,12 @@ function wrapSocket(ws: WebSocket): RelaySocket {
       try {
         ws.send(typeof data === "string" ? data : toArrayBuffer(data));
       } catch {
-        // 对端已断，等 webSocketClose 收尾
       }
     },
     close(code, reason) {
       try {
         ws.close(code, reason);
       } catch {
-        // 已经关闭
       }
     },
   };
@@ -156,12 +144,6 @@ function parseAccountRoute(pathname: string): { accountId: AccountId; kind: "con
   return null;
 }
 
-/**
- * Worker 入口。
- * 后置：POST /v1/register 先过按客户端的限流，再验 GitHub token（验过的按摘要缓存 RELAY_TOKEN_CACHE_TTL_MS）、按账号编号交给对应 DO；
- * /v1/accounts/<账号>/… 的 WebSocket 升级交给该账号的 DO；别的路径 404；
- * 同一客户端每分钟登记超过 RELAY_REGISTER_PER_IP_PER_MINUTE 次、升级超过 RELAY_UPGRADES_PER_IP_PER_MINUTE 次回 429。
- */
 export async function handleRelayRequest(request: Request, env: RelayWorkerEnv): Promise<Response> {
   const url = new URL(request.url);
   if (request.method === "POST" && url.pathname === "/v1/register") {
@@ -228,7 +210,6 @@ export async function handleRelayRequest(request: Request, env: RelayWorkerEnv):
   return jsonResponse(404, { error: "not_found" });
 }
 
-/** 一个账号一个对象。 */
 export class RelayAccountObject {
   private readonly state: DurableObjectState;
   private readonly env: RelayWorkerEnv;
@@ -271,7 +252,7 @@ export class RelayAccountObject {
         const handle = room.openControl(wrapSocket(ws), raw.control);
         this.controls.set(ws, handle);
       } else if (raw.kind === "channel") {
-        // 数据通道只有内存配对状态，休眠醒来不保留未完成配对，通知客户端重拨
+        // Pairing state is memory-only and does not survive hibernation, so clients must redial.
         wrapSocket(ws).close(1001, "hibernated");
       }
     }
@@ -290,7 +271,6 @@ export class RelayAccountObject {
     }
   }
 
-  /** 后置：控制连接和数据通道用 acceptWebSocket 收下；登记请求交给 room.register。 */
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "POST" && request.url === INTERNAL_REGISTER_URL) {
@@ -361,7 +341,6 @@ export class RelayAccountObject {
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  /** 后置：控制连接的文本交给对应的 RelayControlHandle，数据通道的二进制交给 RelayChannelHandle；之后存 attachment、调 sweep。 */
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     const control = this.controls.get(ws);
     if (control !== undefined) {

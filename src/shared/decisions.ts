@@ -1,6 +1,3 @@
-// 同源待决拍板投影（PendingDecision）：统一汇聚活跃任务图中挂着拍板卡等用户的步骤（status waiting、waitingFor user）与 Router 独立待决项，
-// 不造割裂双轨；按底层数据切片引用做多级 WeakMap 缓存，保证 StateSnapshot 与 HubState（含流式更新）均能返回同一数组引用。
-
 import {
   askOf,
   isTaskNodeWaitingDecision,
@@ -43,7 +40,6 @@ export type PendingDecisionSource =
     };
 
 export interface PendingDecision {
-  /** 全局稳定键：`gate:${deviceId}:${graphId}:${nodeKey}` 或 `item:${deviceId}:${itemId}`。 */
   key: string;
   deviceId: string;
   pmId: PmId;
@@ -55,7 +51,6 @@ export interface PendingDecision {
   context: string;
   options: string[];
   askMessageId: MessageId | null;
-  /** 卡片下面列的文件：门禁步骤取该步 artifact.deliverables，独立待决项取 router_items 上的。没有时不带。 */
   deliverables?: Deliverable[];
   createdAt: number;
   updatedAt: number;
@@ -78,13 +73,11 @@ const EMPTY_ROUTER_ITEMS: readonly RouterItem[] = [];
 const EMPTY_TASK_GRAPHS: readonly TaskGraph[] = [];
 const EMPTY_PROJECTS: readonly Project[] = [];
 
-/** 卡片下面列的文件：有才带，超过一张卡的上限只留前面的（没超时原样带同一个数组引用）。 */
 function cardDeliverables(list: Deliverable[] | undefined): { deliverables?: Deliverable[] } {
   if (list === undefined || list.length === 0) return {};
   return { deliverables: list.length > DELIVERABLES_PER_CARD_MAX ? list.slice(0, DELIVERABLES_PER_CARD_MAX) : list };
 }
 
-/** 计算一个挂卡步骤当前阻塞的下游节点总数与直接下游节点标题预览（最多 3 个）。 */
 export function computeGateImpact(
   graph: Pick<TaskGraph, "nodes" | "edges">,
   nodeKey: TaskNodeKey,
@@ -133,7 +126,6 @@ function messagesOfConversation(
   if (Array.isArray(conversations)) {
     const found = conversations.find((c) => c.conversation?.id === conversationId);
     if (found) return found.messages;
-    // 兼容未传 conversation 字段的单测简化数组：退回扫一遍
     const fallback: Message[] = [];
     for (const c of conversations) {
       if (c.conversation === undefined) fallback.push(...c.messages);
@@ -149,28 +141,26 @@ type CacheByPms = WeakMap<readonly Pm[], CacheByProjects>;
 type CacheByGraphs = WeakMap<readonly TaskGraph[], CacheByPms>;
 const decisionsCache = new WeakMap<readonly RouterItem[], CacheByGraphs>();
 
-/**
- * 从单机快照纯投影出当前全部待用户拍板项（门禁节点 + 无 gateRef 的独立 Router 待决项）。
- * 归档 PM 的项自动跳过；同一份底层数据引用与 deviceId 重复调用时返回完全相同的数组引用（===），且不扫 3 万条 Worker 历史消息。
- */
-export function pendingDecisionsOf(snapshot: DecisionSnapshotInput, deviceId = "local"): PendingDecision[] {
-  const routerItems = snapshot.router?.items ?? EMPTY_ROUTER_ITEMS;
-  const graphs = normalizeTaskGraphs(snapshot.activeTaskGraphs ?? EMPTY_TASK_GRAPHS);
-  const pms = snapshot.pms;
-  const projects = snapshot.projects ?? EMPTY_PROJECTS;
-
-  // 只在存在带 askMessageId 的 pending router_item 时才针对目标 PM 对话检查是否有 gateRef，避免遍历全量对话
-  let askMessagesSig = "";
+function askMessagesSigOf(routerItems: readonly RouterItem[], conversations: DecisionConversationsInput): string {
+  let sig = "";
   for (const item of routerItems) {
     if (item.kind === "decision" && item.status === "pending" && item.askMessageId !== null) {
-      const msgs = messagesOfConversation(snapshot.conversations, item.conversationId);
+      const msgs = messagesOfConversation(conversations, item.conversationId);
       const targetMsg = msgs.find((m) => m.id === item.askMessageId);
       const targetAsk = targetMsg !== undefined ? askOf(targetMsg) : null;
       const hasGateRef = targetAsk?.gateRef !== undefined ? "1" : "0";
-      askMessagesSig += `${item.id}:${hasGateRef}:${targetAsk?.recommended ?? ""};`;
+      sig += `${item.id}:${hasGateRef}:${targetAsk?.recommended ?? ""};`;
     }
   }
+  return sig;
+}
 
+function decisionsCacheSlot(
+  routerItems: readonly RouterItem[],
+  graphs: readonly TaskGraph[],
+  pms: readonly Pm[],
+  projects: readonly Project[],
+): Map<string, { askMessagesSig: string; list: PendingDecision[] }> {
   let byGraphs = decisionsCache.get(routerItems);
   if (!byGraphs) {
     byGraphs = new WeakMap();
@@ -191,20 +181,18 @@ export function pendingDecisionsOf(snapshot: DecisionSnapshotInput, deviceId = "
     byDevice = new Map();
     byProjects.set(projects, byDevice);
   }
-  const cached = byDevice.get(deviceId);
-  if (cached !== undefined && cached.askMessagesSig === askMessagesSig) {
-    return cached.list;
-  }
+  return byDevice;
+}
 
-  const pmById = new Map<PmId, Pm>();
-  for (const pm of pms) pmById.set(pm.id, pm);
+interface DecisionLookups {
+  deviceId: string;
+  pmById: Map<PmId, Pm>;
+  projectNameById: Map<ProjectId, string>;
+}
 
-  const projectNameById = new Map<ProjectId, string>();
-  for (const proj of projects) projectNameById.set(proj.id, proj.name);
-
-  const gateMessageIds = new Set<MessageId>();
+function gateDecisionsOf(graphs: readonly TaskGraph[], lookups: DecisionLookups, gateMessageIds: Set<MessageId>): PendingDecision[] {
+  const { deviceId, pmById, projectNameById } = lookups;
   const result: PendingDecision[] = [];
-
   for (const graph of graphs) {
     if (graph.status !== "active") continue;
     const pm = pmById.get(graph.pmId);
@@ -242,7 +230,17 @@ export function pendingDecisionsOf(snapshot: DecisionSnapshotInput, deviceId = "
       });
     }
   }
+  return result;
+}
 
+function routerItemDecisionsOf(
+  routerItems: readonly RouterItem[],
+  conversations: DecisionConversationsInput,
+  lookups: DecisionLookups,
+  gateMessageIds: ReadonlySet<MessageId>,
+): PendingDecision[] {
+  const { deviceId, pmById, projectNameById } = lookups;
+  const result: PendingDecision[] = [];
   for (const item of routerItems) {
     if (item.kind !== "decision" || item.status !== "pending") continue;
     const pm = pmById.get(item.pmId);
@@ -250,7 +248,7 @@ export function pendingDecisionsOf(snapshot: DecisionSnapshotInput, deviceId = "
     let recommended: string | undefined;
     if (item.askMessageId !== null) {
       if (gateMessageIds.has(item.askMessageId)) continue;
-      const msgs = messagesOfConversation(snapshot.conversations, item.conversationId);
+      const msgs = messagesOfConversation(conversations, item.conversationId);
       const targetMsg = msgs.find((m) => m.id === item.askMessageId);
       const targetAsk = targetMsg !== undefined ? askOf(targetMsg) : null;
       if (targetAsk?.gateRef !== undefined) continue;
@@ -278,7 +276,33 @@ export function pendingDecisionsOf(snapshot: DecisionSnapshotInput, deviceId = "
       },
     });
   }
+  return result;
+}
 
+export function pendingDecisionsOf(snapshot: DecisionSnapshotInput, deviceId = "local"): PendingDecision[] {
+  const routerItems = snapshot.router?.items ?? EMPTY_ROUTER_ITEMS;
+  const graphs = normalizeTaskGraphs(snapshot.activeTaskGraphs ?? EMPTY_TASK_GRAPHS);
+  const pms = snapshot.pms;
+  const projects = snapshot.projects ?? EMPTY_PROJECTS;
+
+  const askMessagesSig = askMessagesSigOf(routerItems, snapshot.conversations);
+  const byDevice = decisionsCacheSlot(routerItems, graphs, pms, projects);
+  const cached = byDevice.get(deviceId);
+  if (cached !== undefined && cached.askMessagesSig === askMessagesSig) {
+    return cached.list;
+  }
+
+  const pmById = new Map<PmId, Pm>();
+  for (const pm of pms) pmById.set(pm.id, pm);
+  const projectNameById = new Map<ProjectId, string>();
+  for (const proj of projects) projectNameById.set(proj.id, proj.name);
+  const lookups: DecisionLookups = { deviceId, pmById, projectNameById };
+
+  const gateMessageIds = new Set<MessageId>();
+  const result = [
+    ...gateDecisionsOf(graphs, lookups, gateMessageIds),
+    ...routerItemDecisionsOf(routerItems, snapshot.conversations, lookups, gateMessageIds),
+  ];
   result.sort((a, b) => b.createdAt - a.createdAt || a.key.localeCompare(b.key));
   byDevice.set(deviceId, { askMessagesSig, list: result });
   return result;

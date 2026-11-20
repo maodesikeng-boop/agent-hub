@@ -1,64 +1,40 @@
-// 审查步骤只查不修（docs/review-verify-only-design.md）。结论、审查清单、审查目录的说明、禁推钩子、收尾核对的规则只在这里定义；
-// 账本（任务图、Worker）、启动准备（launch.ts）、建目录和核对的处理函数（handlers.ts）都从这里取。
 import type { WorkerPr, WorkerPrProbeResult } from "./hub.ts";
 import { REVIEW_MAX_ROUNDS } from "./limits.ts";
 
 export const REVIEW_VERDICTS = ["PASS", "PASS+NOTES", "FAIL"] as const;
 export type ReviewVerdict = (typeof REVIEW_VERDICTS)[number];
 
-/**
- * 每条审查发现的级别，写在“问题”栏那一行的开头（`[Important] …`）：
- * - Important：真实崩溃、安全或沙箱越界、数据丢失或损坏、契约破坏，唯一能判 FAIL 的级别；
- * - Nit：命名、风格、细枝末节，判 PASS+NOTES；
- * - Pre-existing：主干上本来就有、不是这次改动引入的，不挡这个 PR。
- */
 const REVIEW_SEVERITIES = ["Important", "Nit", "Pre-existing"] as const;
 export type ReviewSeverity = (typeof REVIEW_SEVERITIES)[number];
 
-/** 第二层审查规则所在的文件：仓库根目录，只认主干上的那份。 */
 const REVIEW_RULES_FILE = "REVIEW.md";
 
-/** 以级别标签开头的行（前面可以带列表符号、编号）。正文里顺带提到的 `[Important]` 不算。 */
 const FINDING_LINE = /^\s*(?:[-*+]|\d+[.)、])?\s*\[(Important|Nit|Pre-existing)\]/gimu;
 
-/** 从“问题”栏数出每条发现的级别（按出现顺序）。 */
 export function reviewFindingSeverities(text: string): ReviewSeverity[] {
   return [...text.matchAll(FINDING_LINE)].map((m) => REVIEW_SEVERITIES.find((s) => s.toLowerCase() === m[1]!.toLowerCase())!);
 }
 
-/** 审查步骤的汇报在九栏之外多出的两栏。 */
 export const REVIEW_VERDICT_FIELD = "结论";
 export const REVIEW_SHA_FIELD = "验证提交";
 
-/**
- * 被审分支在某一刻的样子。派审查、建好审查目录时记一份（workers.review_json），审查汇报 PASS 后再查一份，两份要一样。
- * - sha：本地分支 refs/heads/<branch> 的提交，也是审查目录 detached 检出的提交；
- * - remote：origin 上同名分支的提交（origin 上没有这个分支是 { sha: null }）；仓库没有 origin 是 null，不核对远端；
- * - pr：分支上的 PR；没有 PR、或建目录时 gh 查不了是 null，不核对 PR。
- */
 export interface ReviewSnapshot {
   sha: string;
   remote: { sha: string | null } | null;
   pr: WorkerPr | null;
 }
 
-/**
- * 审查 Worker 审的是哪条分支（被审目标）：审查步骤的 base 写明的分支，没写就是唯一上一步 Worker 的分支（task-graphs.ts 的 resolveReviewPlan）。
- * 找不到被审分支的审查步骤建图、改图时拒绝，派活时报错，不会退成普通 Worker。snapshot 在审查目录建好之前是 null。
- */
 export interface ReviewTarget {
   branch: string;
   snapshot: ReviewSnapshot | null;
 }
 
-/** 收尾核对时现查的被审分支：本地分支删了 sha 是 null。 */
 export interface ReviewObservation {
   sha: string | null;
   remote: { sha: string | null } | null;
   pr: WorkerPrProbeResult;
 }
 
-/** 收尾核对的结果：problems 为空才算被审分支没被动过。 */
 export interface ReviewVerifyResult {
   problems: string[];
 }
@@ -69,16 +45,13 @@ export function parseReviewTarget(json: string | null): ReviewTarget | null {
   return { branch: raw.branch, snapshot: raw.snapshot ?? null };
 }
 
-/** 栏值首尾的空白、标点、符号（行内代码的反引号、句号、引号、加粗）。 */
 const stripEdgeMarks = (raw: string): string => raw.trim().replace(/^[\p{P}\p{S}\s]+|[\p{P}\p{S}\s]+$/gu, "");
 
-/** “结论”栏的值：大小写、+ 两边的空格、首尾标点都不计较；不是三种之一返回 null。 */
 export function parseReviewVerdict(raw: string): ReviewVerdict | null {
   const normalized = stripEdgeMarks(raw).replace(/\s*\+\s*/gu, "+").toUpperCase();
   return REVIEW_VERDICTS.find((v) => v === normalized) ?? null;
 }
 
-/** “验证提交”栏的值：首尾标点不计较、转成小写；没写是 null。 */
 export function parseReviewCommit(raw: string): string | null {
   const normalized = stripEdgeMarks(raw).toLowerCase();
   return normalized === "" ? null : normalized;
@@ -86,16 +59,11 @@ export function parseReviewCommit(raw: string): string | null {
 
 const SHORT_SHA_MIN = 7;
 
-/** “验证提交”写的是不是被审的提交：完整提交号或至少 7 位前缀。 */
 function sameCommit(written: string | null, sha: string): boolean {
   if (written === null) return false;
   return /^[0-9a-f]+$/u.test(written) && written.length >= SHORT_SHA_MIN && sha.toLowerCase().startsWith(written);
 }
 
-/**
- * 审查汇报本身的毛病：没写结论、写错了，判了放行却还列着 [Important]，或“验证提交”不是开审时记下的被审提交。没毛病返回 null。
- * questions 是汇报的“问题”栏。
- */
 export function reviewReportProblem(
   report: { verdict: ReviewVerdict | null; verifiedCommit: string | null; questions: string },
   target: ReviewTarget,
@@ -113,7 +81,6 @@ export function reviewReportProblem(
 
 const short = (sha: string | null): string => (sha === null ? "（没有）" : sha.slice(0, 12));
 
-/** 比较开审时记下的和收尾时现查的被审分支，列出每一处不一样（顺序：本地、远端、PR）。 */
 export function diffReviewSnapshot(branch: string, before: ReviewSnapshot, now: ReviewObservation): string[] {
   const problems: string[] = [];
   if (now.sha !== before.sha) problems.push(`本地分支 ${branch} 从 ${short(before.sha)} 变成了 ${short(now.sha)}`);
@@ -138,11 +105,7 @@ export function reviewVerifyErrorProblem(error: string): string {
   return `收尾核对没跑成：${error}`;
 }
 
-/**
- * 审查 Worker 的禁推：git 的 core.hooksPath 指到守护进程写的钩子目录，里面只有一个拒绝推送的 pre-push。
- * 用 git 官方的 GIT_CONFIG_COUNT / GIT_CONFIG_KEY_n / GIT_CONFIG_VALUE_n（git 2.31 起）经启动环境变量注入，优先级高于仓库配置，6 家厂商同一个入口。
- * 守护进程自己的环境里已经有 GIT_CONFIG_COUNT 时接在后面，不盖掉原有的几项。
- */
+// GIT_CONFIG_COUNT (git 2.31+) outranks repo config; append after any entries already in the daemon's env.
 export const REVIEW_HOOKS_DIR = "review-hooks";
 export const REVIEW_PRE_PUSH_HOOK = `#!/bin/sh
 echo "审查步骤只查不修：不能推送。发现的问题写进汇报，修复由项目经理另派 Worker。" >&2
@@ -159,7 +122,6 @@ export function reviewPushGuardEnv(hooksDir: string, inherited: Readonly<Record<
   };
 }
 
-/** 审查 Worker 第一条消息“在哪干活”里的说明。 */
 export function reviewWorkspaceLines(worktreePath: string, branch: string): string[] {
   return [
     `- 工作目录：${worktreePath}，是审查专用的 git worktree，detached 在被审分支 ${branch} 的提交上，不挂分支。被审的提交号用 \`git rev-parse HEAD\` 看。`,
@@ -168,7 +130,6 @@ export function reviewWorkspaceLines(worktreePath: string, branch: string): stri
   ];
 }
 
-/** 步骤标了 review: true 时，前置在“你这一步”开头的内置审查清单。 */
 export const REVIEW_CHECKLIST = [
   "这一步是独立审查：只查不修，你不是作者。审查分两层，每条发现都标级别。",
   "- 第一层（每次必跑）：看被审提交相对主干的全部改动，对照上面的目标和“怎么算做完”逐条核对。上一步在交棒里点名的地方只是线索，不是审查范围。项目 `AGENTS.md` 里有审查清单的照做。另外重点过这四类：撤不回来的副作用和安全边界；异步、并发、生命周期（两件事交错、中途退出、重启恢复）；会随时间变多的数据（失效、上限）和多方共用的格式（两边是不是都改了）；本地草稿和远端状态互相覆盖。",

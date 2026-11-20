@@ -1,12 +1,7 @@
-// 中继入口的两道闸（Cloudflare 版和自建版共用，docs/account-mesh-design.md「中继」）：按客户端限流、验过的 GitHub token 短暂缓存。
-// 只用 lru-cache 和 WebCrypto，两种运行时都能跑；时间一律由调用方传 now，不开定时器（Durable Object 和 Worker 空闲时要能休眠）。
+// Callers pass `now` and nothing starts timers, so Workers and Durable Objects can hibernate.
 import { LRUCache } from "lru-cache";
 import type { AccountLogin } from "../shared/mesh.ts";
 
-/**
- * 限流用的客户端键：IPv4 原样；IPv6 取前 64 位（一台主机能在自己的 /64 里随便换地址，按单个地址记等于不限）；
- * IPv4 映射的 IPv6（::ffff:a.b.c.d）按 IPv4 记。认不出的原样用。
- */
 export function clientKeyOf(ip: string): string {
   const raw = ip.trim().toLowerCase();
   if (!raw.includes(":")) return raw;
@@ -27,29 +22,17 @@ export function clientKeyOf(ip: string): string {
 }
 
 export interface IpRateLimiter {
-  /** 这个客户端这次能不能放行；放行就计一次。 */
   allow(key: string, now: number): boolean;
 }
 
 export interface IpRateLimiterOptions {
-  /** 一个窗口里最多放行几次。 */
   limit: number;
   windowMs: number;
-  /** 新客表、累加表各最多记几个客户端。 */
   max: number;
-  /** 封禁表最多记几个客户端。 */
   blockedMax: number;
-  /** 累加表满了时，最多隔多久清一次窗口已过的（清一次要扫整张表）。 */
   pruneIntervalMs: number;
 }
 
-/**
- * 固定窗口计数，客户端按这个窗口来了几次分三张表：
- * - 新客表：只来过一次的，LRU。大量只来一次的新键只能挤掉彼此，被挤掉的最多少记一次。
- * - 累加表：同一窗口第二次来挪进来，不按 LRU 挤掉。满了先清窗口已过的，还满就拒绝这次，已经累加的计数只随窗口结束清掉。
- * - 封禁表：超过上限挪进来，封到它这个窗口结束。往里挤的每个键都得先打满一个窗口的上限。
- * 清理按 pruneIntervalMs 节流，持续挤满时也不会每个请求都扫一遍。
- */
 export function createIpRateLimiter(options: IpRateLimiterOptions): IpRateLimiter {
   const fresh = new LRUCache<string, number>({ max: options.max });
   const counting = new Map<string, { start: number; count: number }>();
@@ -97,7 +80,6 @@ export function createIpRateLimiter(options: IpRateLimiterOptions): IpRateLimite
   };
 }
 
-/** token 的 SHA-256（小写十六进制）：缓存只按它存，不留明文。 */
 export async function tokenDigest(token: string): Promise<string> {
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)));
   return Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("");
@@ -105,11 +87,9 @@ export async function tokenDigest(token: string): Promise<string> {
 
 export interface VerifiedTokenCache {
   get(digest: string, now: number): AccountLogin | undefined;
-  /** 只存验过的；验不过、GitHub 出错的不存。 */
   set(digest: string, login: AccountLogin, now: number): void;
 }
 
-/** 验过的 token（按摘要）→ 登录身份，ttlMs 内同一个 token 再登记不再问 GitHub；最多 max 个，满了淘汰最久没用的。 */
 export function createVerifiedTokenCache(options: { max: number; ttlMs: number }): VerifiedTokenCache {
   const cache = new LRUCache<string, { login: AccountLogin; expires: number }>({ max: options.max });
   return {
