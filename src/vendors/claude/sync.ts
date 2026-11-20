@@ -1,7 +1,3 @@
-// Claude Code 同步适配器：
-// - 全局 MCP：`~/.claude.json` 的 `mcpServers`（JSONC 局部补丁，完整保留注释、账号 oauthAccount 与私有云端连接器）；
-// - 云端/OAuth 连接器识别：`claudeAiMcp`、`claudeAiMcpServers`、`cachedClaudeAiMcpServers`、`claudeAiConnectors`、`mcpOAuth` 及带 `oauth` 的 `mcpServers`；
-// - Skill：全局 `~/.claude/skills/<name>`、项目 `<project>/.claude/skills/<name>` 逐项建软链（兼容整目录软链）。
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ScannedCloudConnector, VendorCapabilityScan, VendorSyncAdapter, VendorSyncContext } from "../daemon-types.ts";

@@ -1,4 +1,3 @@
-// 跨厂商可移植 MCP 规格归一化、旧版 `/sse` ↔ `npx -y mcp-remote <url>` 桥接识别与 OAuth 私有连接器过滤。
 import type { CanonicalMcpServer, ScannedCloudConnector } from "../../daemon-types.ts";
 import { deepEqualJson, isPlainObject } from "./jsonc.ts";
 
@@ -7,7 +6,6 @@ export const OAUTH_NON_SYNCABLE_REASON =
 export const CLOUD_CONNECTOR_NON_SYNCABLE_REASON =
   "Bound to provider cloud account; OAuth credentials cannot be synced across providers";
 
-/** 判断远程 URL 是否属于旧版 HTTP+SSE 端点（路径以 `/sse` 结尾）。 */
 export function isLegacySseEndpointUrl(rawUrl: string): boolean {
   try {
     const u = new URL(rawUrl.trim());
@@ -17,10 +15,6 @@ export function isLegacySseEndpointUrl(rawUrl: string): boolean {
   }
 }
 
-/**
- * 识别形如 `npx -y mcp-remote <url> [--header "K: V" ...]` 的桥接 stdio 命令，
- * 提取原始远程 URL 与 Header，防止二次扫描时把已桥接的 SSE 当成新冲突或再次套壳。
- */
 export function unwrapMcpRemoteBridge(
   command: string,
   args: readonly string[],
@@ -62,7 +56,6 @@ export function unwrapMcpRemoteBridge(
   return url ? { url, headers } : null;
 }
 
-/** 将旧版 `/sse` 远程 MCP 转为仅支持 HTTP/stdio 厂商可用的 `npx -y mcp-remote <url>`。 */
 export function wrapSseWithMcpRemote(
   url: string,
   headers: Readonly<Record<string, string>> = {},
@@ -80,7 +73,6 @@ export function wrapSseWithMcpRemote(
   };
 }
 
-/** 按目标厂商是否原生支持 `/sse` 计算该家实际应落盘的规格。 */
 export function materializeMcpForVendor(server: CanonicalMcpServer, supportsSseMcp: boolean): CanonicalMcpServer {
   if (server.transport === "sse" && !supportsSseMcp) {
     return wrapSseWithMcpRemote(server.url, server.headers);
@@ -112,7 +104,6 @@ function stripTransientFields(server: CanonicalMcpServer): Record<string, unknow
   };
 }
 
-/** 判断某厂商当前已配置的 `existing` 是否已经与期望的并集规格 `desired` 等价（含 `mcp-remote` 桥接等价）。 */
 export function isVendorMcpUpToDate(
   existing: CanonicalMcpServer | undefined,
   desired: CanonicalMcpServer,
@@ -148,10 +139,6 @@ function hasOAuthBinding(entry: Record<string, unknown>): boolean {
   return false;
 }
 
-/**
- * 从通用 JSON `mcpServers` 条目解析出可移植规格或不可同步的 OAuth 条目。
- * 兼容 `url` / `serverUrl` / `httpUrl`、`type` / `transport` 及 `mcp-remote` 桥接识别。
- */
 export function parseCommonJsonMcpEntry(
   name: string,
   rawEntry: unknown,
@@ -212,7 +199,6 @@ export function parseCommonJsonMcpEntry(
   return {};
 }
 
-/** 序列化为 JSON `mcpServers[name]` 对象（空 `args`/`env`/`headers` 按家惯例精简，保持文件干净）。 */
 export function serializeCommonJsonMcpEntry(
   server: CanonicalMcpServer,
   options: { supportsSseMcp: boolean; explicitType?: boolean },
@@ -233,7 +219,6 @@ export function serializeCommonJsonMcpEntry(
   };
 }
 
-/** 扫描当前 JSON `mcpServers` 中禁止覆盖（`oauth`）或禁止移除（`oauth` 及引擎判定的 `hostBound`）的键名集合。 */
 export function collectProtectedJsonMcpNames(
   existingMcp: Record<string, unknown>,
   isProtectedServer?: (server: CanonicalMcpServer) => boolean,

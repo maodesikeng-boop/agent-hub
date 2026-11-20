@@ -1,5 +1,3 @@
-// 厂商契约里只看 spec 的那一半（docs/vendor-plugin-design.md 5.3 节）：contract.test.ts 拿生产名单跑，
-// acme-contract.test.ts 拿加了假厂商 acme 的名单跑同一套。名单一律读 registry.ts 的 VENDOR_LIST（测试里 mock 它就能加厂商）。
 import { readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,20 +20,15 @@ import type { VendorSpec } from "./types.ts";
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 interface ImportRef {
-  /** 写在哪个文件里（相对仓库根目录）。 */
   from: string;
-  /** import 的原文。 */
   spec: string;
-  /** 相对路径解析到的文件（相对仓库根目录）；包名、node:* 是 null。 */
   path: string | null;
-  /** import type / export type：编译后就没了，不影响能不能在网页里跑。 */
   typeOnly: boolean;
 }
 
 type AstNode = { type: string; [key: string]: unknown };
 const isAstNode = (v: unknown): v is AstNode => typeof v === "object" && v !== null && typeof (v as AstNode).type === "string";
 
-/** file（相对仓库根目录）里写的静态 import / export … from 与动态 import(...)。用 oxc-parser 解析 AST，不受注释、字符串或跨行接口干扰。 */
 export function importsOf(file: string): ImportRef[] {
   const text = readFileSync(join(ROOT, file), "utf8");
   const { program, errors } = parseSync(file, text);
@@ -69,7 +62,6 @@ export function importsOf(file: string): ImportRef[] {
   return out;
 }
 
-/** file 和它运行时经相对路径引到的所有文件里的运行时 import（跳过 import type）。 */
 export function runtimeImportsDeep(file: string, seen = new Set<string>()): ImportRef[] {
   if (seen.has(file)) return [];
   seen.add(file);
@@ -77,12 +69,10 @@ export function runtimeImportsDeep(file: string, seen = new Set<string>()): Impo
   return [...own, ...own.flatMap((i) => (i.path === null ? [] : runtimeImportsDeep(i.path, seen)))];
 }
 
-/** 网页也引的文件不许在运行时碰 node:* 和守护进程的代码。 */
 export function browserUnsafeImports(file: string): ImportRef[] {
   return runtimeImportsDeep(file).filter((i) => i.spec.startsWith("node:") || i.path?.startsWith("src/daemon/"));
 }
 
-/** 别家厂商文件夹：src/vendors/<别家>/ 下的文件（含直接 import type 与运行时传递引到的）。 */
 export function otherVendorDirImports(file: string): ImportRef[] {
   const ownDir = dirname(file);
   const seen = new Set<string>();
@@ -95,10 +85,8 @@ export function otherVendorDirImports(file: string): ImportRef[] {
   });
 }
 
-/** 一家的样例报错：找不到程序、服务繁忙。 */
 const sampleErrors = (spec: VendorSpec) => [`${spec.id}_not_found: spawn ${spec.cli.command} ENOENT`, `${spec.cli.command}: 529 overloaded`];
 
-/** 名单（VENDOR_LIST）里每一家跑只看 spec 的契约。specFileOf：这家 spec.ts 的位置（相对仓库根目录）。 */
 export function describeSpecContract(specFileOf: (id: string) => string): void {
   const list: readonly VendorSpec[] = VENDOR_LIST;
 
@@ -192,7 +180,6 @@ export function describeSpecContract(specFileOf: (id: string) => string): void {
       const { serviceName } = VENDOR_FAILURE_SIGNS[vendor];
       const [notFound, busy] = sampleErrors(spec) as [string, string];
       expect(vendorFailureOf(notFound, vendor)).toEqual({ kind: "missing", serviceName });
-      // 不告诉是哪家：只凭原文（rawHint）认
       expect(vendorFailureOf(notFound)).toEqual({ kind: "missing", serviceName });
       for (const other of list.filter((o) => o.id !== id)) {
         expect(vendorFailureOf(`${other.id}_not_found: x`, vendor)?.kind, `${other.id} 的找不到程序`).toBe("missing");

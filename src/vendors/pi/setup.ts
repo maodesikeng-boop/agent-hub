@@ -1,7 +1,3 @@
-// Pi 一键安装、更新与界面内直接登录适配器（docs/providers-install-login-design.md 第 1.6、2.1、2.2.4 节）：
-// - 安装：官方脚本 `pi.dev/install.sh` / `install.ps1`（前置守护进程 Node 24 + npm，失败自动回退受管 `npm install --ignore-scripts`）；
-// - 多子模型商管理：原子合并读写 `$PI_CODING_AGENT_DIR/auth.json`（`0600`），保留其他已配模型商不丢失；
-// - OAuth / Device Code：对支持账号登录的子模型商运行 `pi auth login <id> [--no-browser]`（配合 TTY 垫片与 `BROWSER` 拦截）。
 import { existsSync } from "node:fs";
 import { posix, win32 } from "node:path";
 import {
@@ -29,7 +25,6 @@ interface PiSubProviderPreset {
   readonly supportsOauth: boolean;
 }
 
-/** 常用内置子模型商列表（按设计第 1.6 节高频优先排列）。 */
 export const PI_BUILTIN_SUB_PROVIDERS: readonly PiSubProviderPreset[] = [
   { id: "deepseek", label: "DeepSeek", supportsOauth: false },
   { id: "anthropic", label: "Anthropic", supportsOauth: true },

@@ -1,12 +1,7 @@
-// cursor（Cursor CLI / cursor-agent）的声明：纯数据 + 纯函数，网页、hub 命令行、守护进程都引。
-// 不许 import node:*、src/daemon、别家文件夹（契约测试 S2）。
 import { PRODUCT_NAME } from "../../shared/names.ts";
 import { blockedCommands, capitalize, defineVendor } from "../types.ts";
 
-/**
- * Cursor 的 ACP 会话只能选模型家族，思考程度和 Fast 由 Cursor 按家族预设（实测 set_config_option 拒收其余组合），
- * 仅保留单档以同时满足契约 S4（efforts 非空）与前端 efforts.length <= 1 自动隐藏思考程度选择器。
- */
+// Cursor ACP only selects model families; effort and Fast are family presets.
 const EFFORTS: readonly string[] = ["medium"];
 
 const SESSION_BLOCKED = `会话由 ${PRODUCT_NAME} 管，这里不能用这个命令；项目经理要开新会话，请点右上角“开新会话”按钮`;
@@ -43,8 +38,6 @@ export default defineVendor({
     envVar: "AGENT_HUB_CURSOR",
     loginCommand: "cursor-agent login",
   },
-  // macOS 上登录凭据存于系统钥匙串，Linux 无钥匙环环境会回退到 ~/.cursor/auth.json 或 ~/.config/cursor/auth.json；
-  // cli-config.json 与 agent-cli-state.json 记录本地默认模型与 CLI 状态。
   home: {
     dirs: [".cursor", ".config/cursor"],
     readonlySecrets: [".cursor/auth.json", ".config/cursor/auth.json"],
@@ -56,7 +49,6 @@ export default defineVendor({
     ],
   },
   models: {
-    // 各主流家族（ID 即 ACP 模型项的 name）；实时名单按家族归并后这几家排前面，探测不到时兜底。
     bundled: [
       { id: "composer-2.5", label: "Composer 2.5" },
       { id: "claude-opus-5-5", label: "Claude Opus 5.5" },
@@ -93,10 +85,8 @@ export default defineVendor({
   failure: {
     serviceName: "Cursor",
     rawHint: /^cursor_not_found\b|\bcursor-agent\b|\bcursor\b/i,
-    // Cursor 会调用 Claude、GPT、Gemini 等各家模型，报错常包含对应模型名，提高优先级先按 cursor 特征词归类。
     rawHintPriority: 2,
   },
-  // Cursor 会话记录格式不透明，跨厂商换代不直接读取原始记录文件。
   handover: { transcriptPortable: false },
   tools: {
     actions: {
@@ -141,19 +131,17 @@ export default defineVendor({
     },
   },
   skillSignals: {
-    // ACP tool_call_update 的 rawOutput：读文件是 {content}，shell 是 {exitCode, stdout, stderr}；content 只放改文件的 diff
-    // （cursor-agent 2026.11.10 的 extractToolCallOutput，本机没有会话）
+    // rawOutput: read is {content}, shell is {exitCode, stdout, stderr}.
     outputField: "rawOutput",
   },
   capabilities: {
     backgroundWake: false,
     readonly: "os_sandbox",
-    // 包进外层 OS 沙箱时必须关闭 cursor-agent 自带沙箱（--sandbox disabled），避免嵌套 sandbox_apply 报 exit 71。
+    // cursor-agent's own sandbox cannot nest inside the OS sandbox (exit 71).
     ownSandboxOffArgs: ["--sandbox", "disabled"],
-    // cursor-agent 的 ACP 没有 systemPrompt 能力，只读会话工作目录里的规则（--add-dir、--plugin-dir 在 ACP 下都不读，
-    // 2026-11-11 实测）；规则文件又不能写进用户的项目目录，所以只能拼进首条消息，收到压缩信号后重新拼
+    // cursor-agent ACP has no systemPrompt and ignores rules from --add-dir and --plugin-dir (verified 2026-11-11).
     systemPrompt: "first_message",
-    // 任务图手册：ACP 下 --plugin-dir、--add-dir 里的技能都读不到（2026-11-12 cursor-agent 2026.11.10 实测），项目和用户目录又不能写，只能按路径读文件
+    // Skills from --plugin-dir and --add-dir are not read under ACP.
     skills: "read_file",
     isolation: { skill: "shared", mcp: "shared", connector: "shared" },
   },

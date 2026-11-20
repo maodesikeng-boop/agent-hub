@@ -1,6 +1,3 @@
-// Cursor 模型名单与设备登录状态探测：
-// 并行运行 `cursor-agent models` 与 `cursor-agent status --format json`（不创建会话、不消耗额度），
-// 超时或中止时强制按进程组清理（killThenSettle + termGroupAfterExit），输出受 CURSOR_PROBE_MAX_STDOUT_BYTES 与 MAX_CATALOG_MODELS 保护。
 import type { ChildProcess } from "node:child_process";
 import {
   MAX_CATALOG_LABEL_CHARS,
@@ -28,7 +25,7 @@ import { trackChild } from "../../daemon/process-ledger.ts";
 import type { VendorCatalogProbe, VendorCatalogSourceOptions } from "../../daemon/vendors/types.ts";
 import { CURSOR_PROBE_MAX_STDOUT_BYTES } from "./limits.ts";
 
-// 剥离 ANSI 控制序列与零宽字符（实测 cursor-agent models 部分行尾带 \u200b）。
+// cursor-agent models pads some lines with \u200b.
 const ANSI_ESCAPE_RE = /\x1B\[[0-?]*[ -/]*[@-~]/gu;
 const ZERO_WIDTH_RE = /[\u200B-\u200D\uFEFF]/gu;
 const TRAILING_MARKER_RE = /\s*\((?:current|default)(?:,\s*(?:current|default))*\)\s*$/iu;
@@ -36,7 +33,6 @@ const VARIANT_SUFFIX_RE = /-(?:fast|thinking|extra-high|xhigh|high|medium|low|ma
 const LABEL_VARIANT_RE = /\s+(?:fast|thinking|extra high|xhigh|high|medium|low|max|minimal|none)$/iu;
 const LEGACY_CLAUDE_RE = /^claude-(\d+)(?:\.(\d+))?-(opus|sonnet|haiku|fable)$/u;
 
-/** Bellwood 未选模型时用的 Cursor 自动路由（ACP 里是 default[]）。 */
 export const CURSOR_AUTO_MODEL = "auto";
 
 export interface CursorCatalogRaw {
@@ -62,10 +58,6 @@ function stripTrailing(text: string, re: RegExp): string {
   return out;
 }
 
-/**
- * CLI 模型 ID 归到 ACP 模型项的家族名（ACP options[].name）：去 `cursor-` 前缀与档位/Fast 后缀，
- * 旧式 claude-4.6-sonnet 改成 ACP 的 claude-sonnet-4-6（claude-opus-5-5-high -> claude-opus-5-5）。
- */
 export function cursorModelFamily(modelId: string): string {
   const base = stripTrailing(modelId.trim().toLowerCase().replace(/^cursor-/u, ""), VARIANT_SUFFIX_RE);
   const legacy = LEGACY_CLAUDE_RE.exec(base);
@@ -74,11 +66,7 @@ export function cursorModelFamily(modelId: string): string {
   return minor ? `claude-${family}-${major}-${minor}` : `claude-${family}-${major}`;
 }
 
-/**
- * 解析 `cursor-agent models` 的纯文本输出；认不出或无合法模型时返回 null。
- * CLI 把档位和 Fast 展开成约 275 个 ID，但 ACP 只能选每个家族的一个预设（options[] 约 47 项，实测
- * session/set_config_option 拒收其余组合），所以按家族归并成一项一个，ID 用家族名；打包名单里的家族排前面。
- */
+// The CLI lists about 275 tier and Fast IDs, but ACP accepts one preset per family.
 export function parseCursorModelsText(text: string): ModelCatalog | null {
   const families = new Map<string, CatalogModel>();
   for (const rawLine of text.split(/\r?\n/u)) {

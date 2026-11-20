@@ -1,5 +1,3 @@
-// Antigravity (agy) 的模型名单和登录状态（docs/vendor-availability-design.md 第 3 节、docs/vendor-plugin-design.md 的 C5）：
-// 跑 `agy --output-format json models`；agy 没有状态命令，问到名单就是能用。会话没在跑时问 skills 也在这里（composer.ts 用）。
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import {
   ALL_EFFORTS,
@@ -31,9 +29,7 @@ import { buildChildEnv } from "../../daemon/driver/protocol.ts";
 import { trackChild } from "../../daemon/process-ledger.ts";
 import type { VendorCatalogProbe, VendorCatalogSourceOptions } from "../../daemon/vendors/types.ts";
 
-/** agy 查模型名单的固定参数。 */
 const AGY_MODELS_QUERY_ARGS: readonly string[] = ["--output-format", "json", "models"];
-/** agy 查可用 skills 的固定参数。 */
 const AGY_SKILLS_QUERY_ARGS: readonly string[] = ["-p", "/skills", "--output-format", "json"];
 
 function extractAgyModels(raw: unknown): unknown[] | null {
@@ -50,25 +46,16 @@ function extractAgyModels(raw: unknown): unknown[] | null {
   return null;
 }
 
-/** 名字末尾的“(Medium)”：拆成 { base: 不带档位的名字, tier: 小写的档位词 }。 */
 function splitLabelTier(label: string): { base: string; tier: string } | null {
   const m = /^(.*\S)\s*\(([^()]+)\)$/.exec(label);
   return m === null ? null : { base: m[1]!, tier: m[2]!.trim().toLowerCase() };
 }
 
-/**
- * `agy --output-format json models` 的输出 → 名单。支持完整外层对象 `{ command: { data: { models: [...] } } }` 或直接传数组。
- * agy 把思考程度写在模型 ID 里（gemini-4-argon-high / 名字 Gemini 4 Argon (High)），按 Antigravity 软件的做法拆成
- * “模型 + 思考程度”：ID 末尾是已知档位词（low、medium、high 及 ALL_EFFORTS 里的扩展档位），并且名字末尾括号里是同一个词，
- * 才拆（不看模型名，agy 出新模型或新档位照样拆）；同一个不带档位的模型下各档位合成一项，efforts 按清单里的顺序。
- * 拆不开的（不带档位、对不上）原样留着，efforts 是空的：界面不出思考程度下拉，启动时原样传 ID。
- * 若 `currently_selected === true` 则将其不带档位的名字记为 `defaultModel`，并将其支持的档位赋给 `defaultEfforts`。
- */
+// agy encodes effort in the model ID (gemini-4-argon-high); split it the way the Antigravity app does.
 export function parseAgyModels(raw: unknown): ModelCatalog | null {
   const list = extractAgyModels(raw);
   if (list === null) return null;
   const tiers = [...spec.models.efforts, ...ALL_EFFORTS.filter((e) => !spec.models.efforts.includes(e))];
-  // 不带档位的模型（按第一次出现的顺序）→ 名字、说明、报了哪些档位
   const found = new Map<string, { label: string; description: string | null; efforts: Set<string> }>();
   const seen = new Set<string>();
   let defaultModel: string | null = null;
@@ -181,7 +168,6 @@ function runAgyJsonCommand(options: AgyModelQueryOptions, args: readonly string[
           finish(null, parsed.value);
           return;
         }
-        // 没登录时 agy 退出码也是 0，打印的是一段话（不是 JSON）：原话带上，判断登录状态要看它
         const said = `${stdout.trim().slice(-STDERR_TAIL_CHARS)} ${stderr.trim()}`.trim();
         finish(new Error(`agy 没回有效 JSON（${label}）${said ? `：${said}` : ""}`));
         return;
@@ -191,20 +177,17 @@ function runAgyJsonCommand(options: AgyModelQueryOptions, args: readonly string[
   });
 }
 
-/** 起 `agy --output-format json models`，返回解析后的 JSON（原样交给 parseAgyModels）。 */
 export function queryAgyModels(options: AgyModelQueryOptions): Promise<unknown> {
   return runAgyJsonCommand(options, AGY_MODELS_QUERY_ARGS, "models");
 }
 
-/** 起 `agy -p "/skills" --output-format json`，返回解析后的 JSON（原样交给 parseAgyCommands）。 */
 export function queryAgySkills(options: AgyModelQueryOptions): Promise<unknown> {
   return runAgyJsonCommand(options, AGY_SKILLS_QUERY_ARGS, "skills");
 }
 
-/** 没登录时 agy 退出码是 0、打印一段话（东京实测：“Error: Please sign in to view available models. …”），不是 JSON。 */
+// Signed out, agy still exits 0 and prints prose instead of JSON.
 const AGY_SIGNED_OUT_PATTERN = /sign in/i;
 
-/** agy 没有状态命令：问到名单就是能用；没问到、原话里有 sign in 是没登录。 */
 export const agyCatalogProbe: VendorCatalogProbe = {
   parse: parseAgyModels,
   availabilityOf: () => "available",

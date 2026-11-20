@@ -1,4 +1,3 @@
-// agy 的守护进程侧（docs/vendor-plugin-design.md 3.3 节）：daemon-registry.ts 按名单加载这个文件的默认导出。
 import { defineVendorDaemon } from "../daemon-types.ts";
 import { agyCapabilityDenyRules } from "./capabilities.ts";
 import { agyCatalogProbe, createAgyCatalogSource } from "./catalog.ts";

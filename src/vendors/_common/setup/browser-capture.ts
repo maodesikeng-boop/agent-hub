@@ -1,7 +1,3 @@
-// 浏览器 OAuth URL 拦截器与 CLI 登录输出提取原语（照 t3code antigravityAuthSupport 扩展全平台支持）：
-// 1. 生成 0700 会话私有临时目录，注入 `BROWSER` 拦截脚本与 POSIX `open`/`xdg-open` 垫片，捕获 CLI 欲打开的授权 URL 而不真在无头服务端弹窗；
-// 2. 提供可选的 Node TTY 垫片（供要求 `process.stdin.isTTY === true` 的 Node CLI 子命令在受管管道内顺畅运行）；
-// 3. 提供从 ANSI 输出中提取授权链接与 Device Code 的纯函数。
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, posix, win32 } from "node:path";
@@ -14,7 +10,6 @@ export function stripAnsi(text: string): string {
   return text.replace(ANSI_RE, "");
 }
 
-/** 从 CLI 输出文本中提取第一个合法的 HTTP(S) 授权链接（排除纯本机 127.0.0.1/localhost 回调地址）。 */
 export function extractAuthorizeUrlFromOutput(raw: string): string | null {
   const cleaned = stripAnsi(raw);
   const matches = cleaned.match(/https?:\/\/[^\s"'<>)\]]+/giu);
@@ -36,7 +31,6 @@ export function extractAuthorizeUrlFromOutput(raw: string): string | null {
   return null;
 }
 
-/** 从 CLI 输出文本中提取 Device Code（如 `Open https://... and enter code: WXYZ-5678`）。 */
 export function extractDeviceCodeFromOutput(
   raw: string,
 ): { verificationUrl: string; userCode: string } | null {
@@ -57,68 +51,57 @@ export function extractDeviceCodeFromOutput(
 }
 
 export interface BrowserCaptureSession {
-  /** 为登录子进程合成带 BROWSER 与拦截垫片目录的环境变量。 */
   applyEnv(
     baseEnv: Record<string, string | undefined>,
     options?: { interceptSystemOpeners?: boolean; fakeNodeTty?: boolean },
   ): Record<string, string>;
-  /** 立即检查一次捕获文件是否已有新 URL。 */
   pollOnce(): void;
-  /** 停止监听并清理临时目录。 */
   dispose(): void;
 }
 
-export function createBrowserCaptureSession(options: {
-  onUrl: (url: string) => void;
-  platform?: string;
-  execPath?: string;
-}): BrowserCaptureSession {
-  const platform = options.platform ?? process.platform;
-  const execPath = options.execPath ?? process.execPath;
-  const rootDir = mkdtempSync(join(tmpdir(), "fusa-auth-cap-"));
-  if (platform !== "win32") {
-    try {
-      chmodSync(rootDir, 0o700);
-    } catch {
-      // ignore
-    }
-  }
+const CAPTURE_SCRIPT_SOURCE = [
+  'const { appendFileSync } = require("node:fs");',
+  "const maxLen = Number(process.env.FUSA_CAPTURE_MAX_CHARS || 8192);",
+  "const out = process.env.FUSA_CAPTURE_OUT;",
+  "if (out) {",
+  "  for (const arg of process.argv.slice(2)) {",
+  '    if (typeof arg !== "string") continue;',
+  "    const trimmed = arg.trim();",
+  '    if ((trimmed.startsWith("https://") || trimmed.startsWith("http://")) && trimmed.length <= maxLen) {',
+  '      try { new URL(trimmed); appendFileSync(out, JSON.stringify({ url: trimmed }) + "\\n", { mode: 0o600 }); break; } catch {}',
+  "    }",
+  "  }",
+  "}",
+  "process.exit(0);",
+].join("\n");
 
+// Some Node CLIs require process.stdin.isTTY; the shim sets it on piped stdin.
+const TTY_SHIM_SOURCE = [
+  "if (!process.stdin.isTTY) {",
+  "  process.stdin.isTTY = true;",
+  '  if (typeof process.stdin.setRawMode !== "function") {',
+  "    process.stdin.setRawMode = function setRawMode() { return process.stdin; };",
+  "  }",
+  "}",
+  "if (!process.stdout.isTTY) { process.stdout.isTTY = true; }",
+].join("\n");
+
+interface CaptureFiles {
+  openersDir: string;
+  capturedFile: string;
+  captureScriptFile: string;
+  ttyShimFile: string;
+  browserLauncherPath: string;
+}
+
+function writeCaptureFiles(rootDir: string, platform: string): CaptureFiles {
   const openersDir = join(rootDir, "openers");
   mkdirSync(openersDir, { recursive: true, mode: 0o700 });
   const capturedFile = join(rootDir, "captured-urls.jsonl");
   const captureScriptFile = join(rootDir, "capture.cjs");
   const ttyShimFile = join(rootDir, "tty-shim.cjs");
-
-  // Node 拦截脚本：找出参数中第一个合法 HTTP(S) URL，追加写入 captured-urls.jsonl
-  const captureScriptSource = [
-    'const { appendFileSync } = require("node:fs");',
-    "const maxLen = Number(process.env.FUSA_CAPTURE_MAX_CHARS || 8192);",
-    "const out = process.env.FUSA_CAPTURE_OUT;",
-    "if (out) {",
-    "  for (const arg of process.argv.slice(2)) {",
-    '    if (typeof arg !== "string") continue;',
-    "    const trimmed = arg.trim();",
-    '    if ((trimmed.startsWith("https://") || trimmed.startsWith("http://")) && trimmed.length <= maxLen) {',
-    '      try { new URL(trimmed); appendFileSync(out, JSON.stringify({ url: trimmed }) + "\\n", { mode: 0o600 }); break; } catch {}',
-    "    }",
-    "  }",
-    "}",
-    "process.exit(0);",
-  ].join("\n");
-  writeFileSync(captureScriptFile, captureScriptSource, { mode: 0o600 });
-
-  // 可选 Node TTY 垫片：仅在管道非 TTY 时标记 isTTY = true 并兜底空操作 setRawMode
-  const ttyShimSource = [
-    "if (!process.stdin.isTTY) {",
-    "  process.stdin.isTTY = true;",
-    '  if (typeof process.stdin.setRawMode !== "function") {',
-    "    process.stdin.setRawMode = function setRawMode() { return process.stdin; };",
-    "  }",
-    "}",
-    "if (!process.stdout.isTTY) { process.stdout.isTTY = true; }",
-  ].join("\n");
-  writeFileSync(ttyShimFile, ttyShimSource, { mode: 0o600 });
+  writeFileSync(captureScriptFile, CAPTURE_SCRIPT_SOURCE, { mode: 0o600 });
+  writeFileSync(ttyShimFile, TTY_SHIM_SOURCE, { mode: 0o600 });
 
   let browserLauncherPath: string;
   if (platform === "win32") {
@@ -139,6 +122,25 @@ export function createBrowserCaptureSession(options: {
       chmodSync(p, 0o700);
     }
   }
+  return { openersDir, capturedFile, captureScriptFile, ttyShimFile, browserLauncherPath };
+}
+
+export function createBrowserCaptureSession(options: {
+  onUrl: (url: string) => void;
+  platform?: string;
+  execPath?: string;
+}): BrowserCaptureSession {
+  const platform = options.platform ?? process.platform;
+  const execPath = options.execPath ?? process.execPath;
+  const rootDir = mkdtempSync(join(tmpdir(), "fusa-auth-cap-"));
+  if (platform !== "win32") {
+    try {
+      chmodSync(rootDir, 0o700);
+    } catch {
+    }
+  }
+
+  const { openersDir, capturedFile, captureScriptFile, ttyShimFile, browserLauncherPath } = writeCaptureFiles(rootDir, platform);
 
   let seenLines = 0;
   let disposed = false;
@@ -163,11 +165,9 @@ export function createBrowserCaptureSession(options: {
             options.onUrl(parsed.url);
           }
         } catch {
-          // ignore malformed line
         }
       }
     } catch {
-      // ignore transient read error
     }
   };
 
@@ -207,7 +207,6 @@ export function createBrowserCaptureSession(options: {
       try {
         rmSync(rootDir, { recursive: true, force: true });
       } catch {
-        // ignore cleanup failure
       }
     },
   };

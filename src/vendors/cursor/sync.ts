@@ -1,6 +1,3 @@
-// Cursor 同步适配器：
-// - 全局 MCP：`~/.cursor/mcp.json`（原生支持 stdio、streamable HTTP 与 `/sse` 远程 MCP，JSONC 局部补丁保留注释）；
-// - Skill：全局 `~/.agents/skills` 与项目 `.agents/skills` 原生读取零冗余。
 import { join } from "node:path";
 import type { ScannedCloudConnector, VendorSyncAdapter, VendorSyncContext } from "../daemon-types.ts";
 import { isPlainObject, patchJsoncMapEntries, readJsoncObjectFile } from "../_common/sync/jsonc.ts";

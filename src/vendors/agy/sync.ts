@@ -1,6 +1,3 @@
-// Antigravity (agy) 同步适配器：
-// - 全局 MCP：`~/.gemini/config/mcp_config.json`（仅支持 stdio 与 streamable HTTP；旧版 `/sse` 自动包 `npx -y mcp-remote <url>`）；
-// - Skill：项目 `.agents/skills` 原生发现零冗余；全局 `~/.gemini/config/skills/<name>` 逐项建软链。
 import { join } from "node:path";
 import type { ScannedCloudConnector, VendorSyncAdapter, VendorSyncContext } from "../daemon-types.ts";
 import { isPlainObject, patchJsoncMapEntries, readJsoncObjectFile } from "../_common/sync/jsonc.ts";

@@ -1,7 +1,3 @@
-// OpenAI Codex 一键安装、更新与界面内直接登录适配器（docs/providers-install-login-design.md 第 2.1、2.2.5 节）：
-// - macOS / Linux 官方脚本传 `CODEX_NON_INTERACTIVE=1`；Windows 走随包 Node 24 受管 npm 安装 `@openai/codex`；
-// - 登录统一通过原生 `codex app-server --listen stdio://` JSON-RPC `account/login/start`（Browser OAuth / Device Code / API Key）
-//   并监听 `account/login/completed`，取消时发 `account/login/cancel` 并整树回收。
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -66,7 +62,6 @@ function decodeJwtEmail(jwt: unknown): string | null {
       if (typeof email === "string" && email.trim() !== "") return email.trim();
     }
   } catch {
-    // ignore malformed JWT payload
   }
   return null;
 }
@@ -95,7 +90,7 @@ function inspectCodexAuthFile(ctx: VendorSetupContext): { summary: string | null
   return { summary: "Signed in", hasFileCreds: true };
 }
 
-async function runCodexAppServerLogin(options: {
+interface CodexLoginOptions {
   codexPath: string;
   cwd: string;
   baseEnv: Record<string, string | undefined>;
@@ -104,168 +99,174 @@ async function runCodexAppServerLogin(options: {
   waitForCompletionNotification: boolean;
   onStarted?: (res: Record<string, unknown>) => void;
   signal: AbortSignal;
-}): Promise<void> {
-  const {
-    codexPath,
-    cwd,
-    baseEnv,
-    platform,
-    loginParams,
-    waitForCompletionNotification,
-    onStarted,
-    signal,
-  } = options;
+}
 
-  if (signal.aborted) throw new Error("cancelled");
+function rpcErrorMessage(error: unknown, fallback: string): string {
+  const errObj = error as { message?: unknown };
+  return typeof errObj.message === "string" ? errObj.message : fallback;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return (typeof value === "object" && value !== null ? value : {}) as Record<string, unknown>;
+}
+
+function onCodexLoginMessage(
+  msg: Record<string, unknown>,
+  session: { activeLoginId: string | null },
+  options: CodexLoginOptions,
+  finish: (err: Error | null) => void,
+): void {
+  if (msg.id === 1 && msg.error !== undefined) {
+    finish(new Error(rpcErrorMessage(msg.error, "Codex app-server initialize failed")));
+    return;
+  }
+
+  if (msg.id === 2) {
+    if (msg.error !== undefined) {
+      finish(new Error(rpcErrorMessage(msg.error, "Codex login start failed")));
+      return;
+    }
+    const result = asRecord(msg.result);
+    if (typeof result.loginId === "string" && result.loginId.trim() !== "") {
+      session.activeLoginId = result.loginId;
+    }
+    options.onStarted?.(result);
+    if (!options.waitForCompletionNotification) {
+      finish(null);
+    }
+    return;
+  }
+
+  if (msg.method === "account/login/completed") {
+    const params = asRecord(msg.params);
+    if (session.activeLoginId && typeof params.loginId === "string" && params.loginId !== session.activeLoginId) {
+      return;
+    }
+    if (params.success === true) {
+      finish(null);
+    } else {
+      const reason =
+        typeof params.error === "string" && params.error.trim() !== ""
+          ? params.error.trim()
+          : "Codex sign-in did not complete";
+      finish(new Error(reason));
+    }
+  }
+}
+
+function writeCodexLoginRequests(child: ChildProcessWithoutNullStreams, loginParams: Record<string, unknown>): void {
+  child.stdin.write(
+    `${JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { clientInfo: { name: "fusa", version: "0.1.0" } },
+    })}\n`,
+  );
+  child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "initialized", params: {} })}\n`);
+  child.stdin.write(
+    `${JSON.stringify({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "account/login/start",
+      params: loginParams,
+    })}\n`,
+  );
+}
+
+function driveCodexLoginServer(options: CodexLoginOptions, childEnv: Record<string, string>): Promise<void> {
+  const { codexPath, cwd, signal } = options;
+  return new Promise<void>((resolve, reject) => {
+    let spawned: { child: ChildProcessWithoutNullStreams; detached: boolean };
+    try {
+      spawned = spawnOwnedProcess(codexPath, ["app-server", "--listen", "stdio://"], {
+        cwd,
+        env: childEnv,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } catch (err) {
+      reject(err instanceof Error ? err : new Error(String(err)));
+      return;
+    }
+
+    const { child, detached } = spawned;
+    trackChild(child, "provider:codex-login", { detached });
+    child.once("exit", () => termGroupAfterExit(child));
+    child.stdin.on("error", () => {});
+
+    const session = { activeLoginId: null as string | null };
+    let stderrTail = "";
+    let settled = false;
+
+    const finish = (err: Error | null) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      rl.close();
+      if (child.exitCode === null && child.signalCode === null) {
+        if (err && session.activeLoginId && !child.stdin.destroyed) {
+          try {
+            child.stdin.write(
+              `${JSON.stringify({
+                jsonrpc: "2.0",
+                id: 99,
+                method: "account/login/cancel",
+                params: { loginId: session.activeLoginId },
+              })}\n`,
+            );
+          } catch {
+          }
+        }
+        killThenSettle(child, () => (err ? reject(err) : resolve()));
+      } else if (err) {
+        reject(err);
+      } else {
+        resolve();
+      }
+    };
+
+    const onAbort = () => finish(new Error("cancelled"));
+    signal.addEventListener("abort", onAbort, { once: true });
+
+    child.once("error", (err) => finish(err instanceof Error ? err : new Error(String(err))));
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderrTail = (stderrTail + chunk).slice(-4096);
+    });
+
+    const rl = createInterface({ input: child.stdout, crlfDelay: Infinity });
+    rl.on("line", (line) => {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("{")) return;
+      let msg: Record<string, unknown>;
+      try {
+        msg = JSON.parse(trimmed) as Record<string, unknown>;
+      } catch {
+        return;
+      }
+      onCodexLoginMessage(msg, session, options, finish);
+    });
+
+    child.once("close", (code, sig) => {
+      if (settled) return;
+      finish(new Error(stderrTail.trim() || `Codex app-server exited unexpectedly (${sig ?? `code ${code}`})`));
+    });
+
+    writeCodexLoginRequests(child, options.loginParams);
+  });
+}
+
+async function runCodexAppServerLogin(options: CodexLoginOptions): Promise<void> {
+  if (options.signal.aborted) throw new Error("cancelled");
 
   const capture = createBrowserCaptureSession({
-    platform,
+    platform: options.platform,
     onUrl: () => {},
   });
 
   try {
-    const cleanBase = buildChildEnv(baseEnv, { NO_OPEN_BROWSER: "1" });
-    const childEnv = capture.applyEnv(cleanBase);
-
-    await new Promise<void>((resolve, reject) => {
-      let spawned: { child: ChildProcessWithoutNullStreams; detached: boolean };
-      try {
-        spawned = spawnOwnedProcess(codexPath, ["app-server", "--listen", "stdio://"], {
-          cwd,
-          env: childEnv,
-          stdio: ["pipe", "pipe", "pipe"],
-        });
-      } catch (err) {
-        reject(err instanceof Error ? err : new Error(String(err)));
-        return;
-      }
-
-      const { child, detached } = spawned;
-      trackChild(child, "provider:codex-login", { detached });
-      child.once("exit", () => termGroupAfterExit(child));
-      child.stdin.on("error", () => {});
-
-      let activeLoginId: string | null = null;
-      let stderrTail = "";
-      let settled = false;
-
-      const finish = (err: Error | null) => {
-        if (settled) return;
-        settled = true;
-        signal.removeEventListener("abort", onAbort);
-        rl.close();
-        if (child.exitCode === null && child.signalCode === null) {
-          if (err && activeLoginId && !child.stdin.destroyed) {
-            try {
-              child.stdin.write(
-                `${JSON.stringify({
-                  jsonrpc: "2.0",
-                  id: 99,
-                  method: "account/login/cancel",
-                  params: { loginId: activeLoginId },
-                })}\n`,
-              );
-            } catch {
-              // ignore write error during abort
-            }
-          }
-          killThenSettle(child, () => (err ? reject(err) : resolve()));
-        } else if (err) {
-          reject(err);
-        } else {
-          resolve();
-        }
-      };
-
-      const onAbort = () => finish(new Error("cancelled"));
-      signal.addEventListener("abort", onAbort, { once: true });
-
-      child.once("error", (err) => finish(err instanceof Error ? err : new Error(String(err))));
-      child.stderr.setEncoding("utf8");
-      child.stderr.on("data", (chunk: string) => {
-        stderrTail = (stderrTail + chunk).slice(-4096);
-      });
-
-      const rl = createInterface({ input: child.stdout, crlfDelay: Infinity });
-      rl.on("line", (line) => {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith("{")) return;
-        let msg: Record<string, unknown>;
-        try {
-          msg = JSON.parse(trimmed) as Record<string, unknown>;
-        } catch {
-          return;
-        }
-
-        if (msg.id === 1 && msg.error !== undefined) {
-          const errObj = msg.error as { message?: unknown };
-          finish(new Error(typeof errObj.message === "string" ? errObj.message : "Codex app-server initialize failed"));
-          return;
-        }
-
-        if (msg.id === 2) {
-          if (msg.error !== undefined) {
-            const errObj = msg.error as { message?: unknown };
-            finish(new Error(typeof errObj.message === "string" ? errObj.message : "Codex login start failed"));
-            return;
-          }
-          const result = (typeof msg.result === "object" && msg.result !== null ? msg.result : {}) as Record<
-            string,
-            unknown
-          >;
-          if (typeof result.loginId === "string" && result.loginId.trim() !== "") {
-            activeLoginId = result.loginId;
-          }
-          onStarted?.(result);
-          if (!waitForCompletionNotification) {
-            finish(null);
-          }
-          return;
-        }
-
-        if (msg.method === "account/login/completed") {
-          const params = (typeof msg.params === "object" && msg.params !== null ? msg.params : {}) as Record<
-            string,
-            unknown
-          >;
-          if (activeLoginId && typeof params.loginId === "string" && params.loginId !== activeLoginId) {
-            return;
-          }
-          if (params.success === true) {
-            finish(null);
-          } else {
-            const reason =
-              typeof params.error === "string" && params.error.trim() !== ""
-                ? params.error.trim()
-                : "Codex sign-in did not complete";
-            finish(new Error(reason));
-          }
-        }
-      });
-
-      child.once("close", (code, sig) => {
-        if (settled) return;
-        finish(new Error(stderrTail.trim() || `Codex app-server exited unexpectedly (${sig ?? `code ${code}`})`));
-      });
-
-      child.stdin.write(
-        `${JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "initialize",
-          params: { clientInfo: { name: "fusa", version: "0.1.0" } },
-        })}\n`,
-      );
-      child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "initialized", params: {} })}\n`);
-      child.stdin.write(
-        `${JSON.stringify({
-          jsonrpc: "2.0",
-          id: 2,
-          method: "account/login/start",
-          params: loginParams,
-        })}\n`,
-      );
-    });
+    const cleanBase = buildChildEnv(options.baseEnv, { NO_OPEN_BROWSER: "1" });
+    await driveCodexLoginServer(options, capture.applyEnv(cleanBase));
   } finally {
     capture.dispose();
   }
@@ -381,7 +382,7 @@ export const codexSetupAdapter: VendorSetupAdapter = {
       });
       ctx.secrets.remove("codex");
     } catch {
-      // 兼容老版 CLI 回退 stdin 管道登录
+      // Older CLIs log in through a stdin pipe.
       const res = await runShortSubcommand(ctx.executablePath(), ["login", "--with-api-key"], {
         cwd: ctx.userHome,
         env: ctx.env(),

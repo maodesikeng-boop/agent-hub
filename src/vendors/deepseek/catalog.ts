@@ -1,9 +1,4 @@
-// DeepSeek Harness（`dsh`）零子进程模型目录与本地凭据探测（docs/vendors/deepseek.md 第 4 节）：
-// 绝不拉起 `dsh` 子进程、绝不在后台新建持久空会话；仅做有界本地凭据就绪检查：
-// 1) 环境变量 `DEEPSEEK_API_KEY` 非空；
-// 2) `$DSH_HOME/.credentials.yaml` 存在非空凭据记录；
-// 3) `$DSH_HOME/.env` 存在非注释的非空 `DEEPSEEK_API_KEY=...`；
-// 安全边界：绝不读取不可信工作目录 `<cwd>/.env` 来判定全局厂商登录态。
+// Never spawn dsh here: it would create a persistent empty session.
 import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -30,7 +25,6 @@ function isDeepSeekProbeResult(raw: unknown): raw is DeepSeekCatalogProbeResult 
   );
 }
 
-/** 在 64 KiB 体积上限内安全读取本地普通文件，异常或超限一律返回 null，绝不抛崩或挂死。 */
 function readBoundedUtf8(filePath: string): string | null {
   let fd: number | undefined;
   try {
@@ -52,13 +46,11 @@ function readBoundedUtf8(filePath: string): string | null {
       try {
         closeSync(fd);
       } catch {
-        // 忽略关闭异常
       }
     }
   }
 }
 
-/** 剥除引号外的 YAML 行内 `#` 注释。 */
 function stripYamlInlineComment(raw: string): string {
   let inSingle = false;
   let inDouble = false;
@@ -126,12 +118,6 @@ function hasNonEmptyJsonEntries(val: unknown): boolean {
   return typeof val === "number" || typeof val === "boolean";
 }
 
-/**
- * 判断 `$DSH_HOME/.credentials.yaml` 是否含有效非空凭据：
- * - 非注释的 `DEEPSEEK_API_KEY` 非空条目；
- * - 或 YAML / JSON 子集的 `refs:` / `records:` 下存在非空键值条目；
- * - 空文件、纯注释、只有 `version: 1`、空 `{}` 或空值均返回 false。
- */
 function hasCredentialsInYaml(content: string): boolean {
   const trimmedAll = content.trim();
   if (trimmedAll === "" || trimmedAll === "{}" || trimmedAll === "[]") return false;
@@ -148,7 +134,6 @@ function hasCredentialsInYaml(content: string): boolean {
         );
       }
     } catch {
-      // 非纯 JSON，走下方 YAML 逐行扫描
     }
   }
 
@@ -229,7 +214,6 @@ function unquoteDotEnvValue(rawVal: string): string {
   return s.replace(/(?:^|\s+)#.*$/u, "").trim();
 }
 
-/** 判断 `$DSH_HOME/.env` 是否存在非注释的非空 `DEEPSEEK_API_KEY=...`（剥去成对引号后非空）。 */
 function hasApiKeyInDotEnv(content: string): boolean {
   let latestValue: string | null = null;
   for (const rawLine of content.split(/\r?\n/u)) {
@@ -243,11 +227,7 @@ function hasApiKeyInDotEnv(content: string): boolean {
   return latestValue !== null && latestValue !== "";
 }
 
-/**
- * 本地零子进程检查 DeepSeek 凭据是否就绪：
- * 只看进程环境变量 `DEEPSEEK_API_KEY` 与 `$DSH_HOME`（`resolveDeepSeekHome(homedir(), env)`）下的凭据文件，
- * 绝不读取不可信工作目录 `<cwd>/.env`。
- */
+// Never read <cwd>/.env from an untrusted workspace.
 export function hasDeepSeekLocalCredentials(
   env: Readonly<Record<string, string | undefined>> = process.env,
   explicitUserHome?: string,

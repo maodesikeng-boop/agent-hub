@@ -1,7 +1,3 @@
-// Cursor (cursor-agent) 一键安装、更新与界面内直接登录适配器（docs/providers-install-login-design.md 第 2.1 节）：
-// - 安装：官方脚本 `cursor.com/install` / `cursor.com/install?win32=true`；
-// - 登录：`NO_OPEN_BROWSER=1 cursor-agent login` 云端轮询（本机与远端东京服务器均零粘贴落盘；Linux 无 keyring 时设 `AGENT_CLI_CREDENTIAL_STORE=file`）；
-// - API Key：受管存储 `CURSOR_API_KEY`。
 import { existsSync } from "node:fs";
 import { posix, win32 } from "node:path";
 import {

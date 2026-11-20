@@ -1,7 +1,3 @@
-// DeepSeek (dsh) 一键安装、更新与界面内直接登录适配器（docs/providers-install-login-design.md 第 2.1、2.2.3 节）：
-// - 全平台通过守护进程/随包 Node 24 受管 npm 安装 `@deepseek-ai/dsh@0.2.2-rc.1`（免 sudo / 免管理员）；
-// - 严格遵守 `@deepseek-ai/dsh-credentials-local` v1 schema 与 POSIX `0600` 强校验读写 `$DSH_HOME/.credentials.yaml`；
-// - 同时支持 API Key（写入 `refs.DEEPSEEK_API_KEY`，高于 `<cwd>/.env` 优先级）与原厂 PKCE 账号网页登录（本机回调 & 远端粘贴回环 URL）。
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { arch, platform as osPlatform, release as osRelease } from "node:os";
@@ -69,7 +65,6 @@ function parseYamlScalarValue(raw: string): unknown {
   return unquoteYamlScalar(trimmed);
 }
 
-/** 解析已有 `$DSH_HOME/.credentials.yaml`（兼容 v1 标准缩进 YAML、JSON 子集与 pre-release 平铺格式）。 */
 export function parseDeepSeekCredentialsYaml(rawText: string | null): DeepSeekCredentialsDoc {
   const empty: DeepSeekCredentialsDoc = { refs: {}, records: {} };
   if (rawText === null || rawText.trim() === "") return empty;
@@ -94,7 +89,6 @@ export function parseDeepSeekCredentialsYaml(rawText: string | null): DeepSeekCr
       }
       return { refs, records };
     } catch {
-      // fall through to YAML line parser
     }
   }
 
@@ -126,7 +120,6 @@ export function parseDeepSeekCredentialsYaml(rawText: string | null): DeepSeekCr
       } else if (key === "records" && rest === "") {
         topSection = "records";
       } else if (rest !== "" && /^[A-Z_][A-Z0-9_]*$/u.test(key)) {
-        // 兼容 pre-release 平铺格式迁移进 v1 refs
         const val = unquoteYamlScalar(rest);
         if (val !== "") refs[key] = val;
         topSection = null;
@@ -195,7 +188,6 @@ function serializeYamlMapping(obj: Record<string, unknown>, indentSpaces: number
   return lines;
 }
 
-/** 序列化为 `@deepseek-ai/dsh-credentials-local` 严格要求的 `version: 1` YAML 文档（非空标量，零空字符串）。 */
 export function serializeDeepSeekCredentialsYaml(doc: DeepSeekCredentialsDoc): string {
   const validRefs: Record<string, string> = {};
   for (const [k, v] of Object.entries(doc.refs)) {
@@ -272,6 +264,116 @@ function cleanDotEnvApiKey(dotEnvPath: string, platform: string): void {
     .filter((line) => !/^\s*(?:export\s+)?DEEPSEEK_API_KEY\s*=/u.test(line));
   const next = kept.join("\n").trim();
   writePrivateFileAtomic(dotEnvPath, next === "" ? "" : `${next}\n`, platform);
+}
+
+function createOAuthCallbackServer(state: string, onCode: (code: string) => void): Server {
+  return createServer((req, res) => {
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(req.url ?? "/", "http://127.0.0.1");
+    } catch {
+      res.writeHead(400, { "cache-control": "no-store" }).end();
+      return;
+    }
+    const code = parsedUrl.searchParams.get("code") ?? "";
+    const givenState = parsedUrl.searchParams.get("state") ?? "";
+    const validState =
+      Buffer.byteLength(givenState) === Buffer.byteLength(state) &&
+      timingSafeEqual(Buffer.from(givenState), Buffer.from(state));
+    if (
+      req.method !== "GET" ||
+      parsedUrl.pathname !== "/oauth/callback" ||
+      !validState ||
+      !code ||
+      parsedUrl.searchParams.getAll("code").length !== 1 ||
+      parsedUrl.searchParams.getAll("state").length !== 1
+    ) {
+      res.writeHead(400, { "cache-control": "no-store" }).end();
+      return;
+    }
+    res
+      .writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" })
+      .end("<!doctype html><meta charset='utf-8'><title>Signed in</title><p>Sign-in completed. You may return to Bellwood.</p>");
+    onCode(code);
+  });
+}
+
+function listenOnLoopback(server: Server): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const addr = server.address();
+      if (addr && typeof addr === "object") resolve(addr.port);
+      else reject(new Error("Failed to bind local OAuth callback port"));
+    });
+  });
+}
+
+function trustedAuthorizeUrl(rawAuthorizeUrl: string, origin: string, redirectUri: string, state: string): string {
+  const parsedAuth = new URL(rawAuthorizeUrl);
+  if (parsedAuth.origin !== origin || parsedAuth.username !== "" || parsedAuth.password !== "") {
+    throw new Error("DeepSeek platform returned untrusted authorize_url");
+  }
+  // Add redirect_uri and state when the server keys only on authorize_id, so the loopback guard has a full contract.
+  if (!parsedAuth.searchParams.has("redirect_uri")) {
+    parsedAuth.searchParams.set("redirect_uri", redirectUri);
+  }
+  if (!parsedAuth.searchParams.has("state")) {
+    parsedAuth.searchParams.set("state", state);
+  }
+  return parsedAuth.href;
+}
+
+async function exchangeAndStoreDeepSeekToken(
+  ctx: VendorSetupContext,
+  exchange: { origin: string; authCode: string; verifier: string; redirectUri: string; signal: AbortSignal },
+): Promise<void> {
+  const { origin } = exchange;
+  const credPath = resolveDeepSeekCredentialsPath(ctx);
+  const currentDoc = parseDeepSeekCredentialsYaml(readBoundedTextFile(credPath));
+  const existingDevice = currentDoc.records[DEVICE_RECORD_KEY]?.payload as { id?: unknown } | undefined;
+  const deviceId =
+    typeof existingDevice?.id === "string" && existingDevice.id.trim() !== ""
+      ? existingDevice.id
+      : randomUUID();
+
+  const exchangeData = await postDeepSeekPlatformJson(
+    origin,
+    "auth_exchange",
+    {
+      code: exchange.authCode,
+      code_verifier: exchange.verifier,
+      redirect_uri: exchange.redirectUri,
+      device_id: deviceId,
+      device_model: `${osPlatform()}-${arch()}`,
+      os_version: `${osPlatform()} ${osRelease()}`,
+    },
+    exchange.signal,
+  );
+  const token = typeof exchangeData.token === "string" ? exchangeData.token.trim() : "";
+  if (!token) {
+    throw new Error("DeepSeek auth_exchange returned empty token");
+  }
+
+  const nextDoc: DeepSeekCredentialsDoc = {
+    refs: { ...currentDoc.refs },
+    records: {
+      ...currentDoc.records,
+      [DEVICE_RECORD_KEY]: {
+        kind: "grant",
+        payload: { id: deviceId },
+      },
+      [ACCOUNT_RECORD_KEY]: {
+        kind: "grant",
+        payload: {
+          version: 1,
+          token,
+          issuer: origin,
+        },
+      },
+    },
+  };
+  writePrivateFileAtomic(credPath, serializeDeepSeekCredentialsYaml(nextDoc), ctx.platform);
 }
 
 export const deepseekSetupAdapter: VendorSetupAdapter = {
@@ -351,44 +453,8 @@ export const deepseekSetupAdapter: VendorSetupAdapter = {
     signal.addEventListener("abort", onAbort, { once: true });
 
     try {
-      server = createServer((req, res) => {
-        let parsedUrl: URL;
-        try {
-          parsedUrl = new URL(req.url ?? "/", "http://127.0.0.1");
-        } catch {
-          res.writeHead(400, { "cache-control": "no-store" }).end();
-          return;
-        }
-        const code = parsedUrl.searchParams.get("code") ?? "";
-        const givenState = parsedUrl.searchParams.get("state") ?? "";
-        const validState =
-          Buffer.byteLength(givenState) === Buffer.byteLength(state) &&
-          timingSafeEqual(Buffer.from(givenState), Buffer.from(state));
-        if (
-          req.method !== "GET" ||
-          parsedUrl.pathname !== "/oauth/callback" ||
-          !validState ||
-          !code ||
-          parsedUrl.searchParams.getAll("code").length !== 1 ||
-          parsedUrl.searchParams.getAll("state").length !== 1
-        ) {
-          res.writeHead(400, { "cache-control": "no-store" }).end();
-          return;
-        }
-        res
-          .writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" })
-          .end("<!doctype html><meta charset='utf-8'><title>Signed in</title><p>Sign-in completed. You may return to Bellwood.</p>");
-        receivedCodeResolve?.(code);
-      });
-
-      const port = await new Promise<number>((resolve, reject) => {
-        server!.once("error", reject);
-        server!.listen(0, "127.0.0.1", () => {
-          const addr = server!.address();
-          if (addr && typeof addr === "object") resolve(addr.port);
-          else reject(new Error("Failed to bind local OAuth callback port"));
-        });
-      });
+      server = createOAuthCallbackServer(state, (code) => receivedCodeResolve?.(code));
+      const port = await listenOnLoopback(server);
 
       const redirectUri = `http://127.0.0.1:${port}/oauth/callback`;
       const initData = await postDeepSeekPlatformJson(
@@ -406,67 +472,12 @@ export const deepseekSetupAdapter: VendorSetupAdapter = {
       );
       const rawAuthorizeUrl = typeof initData.authorize_url === "string" ? initData.authorize_url : "";
       authorizeId = typeof initData.authorize_id === "string" ? initData.authorize_id : null;
-      const parsedAuth = new URL(rawAuthorizeUrl);
-      if (parsedAuth.origin !== origin || parsedAuth.username !== "" || parsedAuth.password !== "") {
-        throw new Error("DeepSeek platform returned untrusted authorize_url");
-      }
-      // 确保 authorizeUrl 带上 redirect_uri 与 state 查询参数（若服务端仅按 authorize_id 关联），以便远端无头 6 重防 SSRF 校验契约完整可用
-      if (!parsedAuth.searchParams.has("redirect_uri")) {
-        parsedAuth.searchParams.set("redirect_uri", redirectUri);
-      }
-      if (!parsedAuth.searchParams.has("state")) {
-        parsedAuth.searchParams.set("state", state);
-      }
-      hooks.onAuthorizeUrl(parsedAuth.href);
+      hooks.onAuthorizeUrl(trustedAuthorizeUrl(rawAuthorizeUrl, origin, redirectUri, state));
 
       const authCode = await codePromise;
       signal.throwIfAborted();
 
-      const credPath = resolveDeepSeekCredentialsPath(ctx);
-      const currentDoc = parseDeepSeekCredentialsYaml(readBoundedTextFile(credPath));
-      const existingDevice = currentDoc.records[DEVICE_RECORD_KEY]?.payload as { id?: unknown } | undefined;
-      const deviceId =
-        typeof existingDevice?.id === "string" && existingDevice.id.trim() !== ""
-          ? existingDevice.id
-          : randomUUID();
-
-      const exchangeData = await postDeepSeekPlatformJson(
-        origin,
-        "auth_exchange",
-        {
-          code: authCode,
-          code_verifier: verifier,
-          redirect_uri: redirectUri,
-          device_id: deviceId,
-          device_model: `${osPlatform()}-${arch()}`,
-          os_version: `${osPlatform()} ${osRelease()}`,
-        },
-        signal,
-      );
-      const token = typeof exchangeData.token === "string" ? exchangeData.token.trim() : "";
-      if (!token) {
-        throw new Error("DeepSeek auth_exchange returned empty token");
-      }
-
-      const nextDoc: DeepSeekCredentialsDoc = {
-        refs: { ...currentDoc.refs },
-        records: {
-          ...currentDoc.records,
-          [DEVICE_RECORD_KEY]: {
-            kind: "grant",
-            payload: { id: deviceId },
-          },
-          [ACCOUNT_RECORD_KEY]: {
-            kind: "grant",
-            payload: {
-              version: 1,
-              token,
-              issuer: origin,
-            },
-          },
-        },
-      };
-      writePrivateFileAtomic(credPath, serializeDeepSeekCredentialsYaml(nextDoc), ctx.platform);
+      await exchangeAndStoreDeepSeekToken(ctx, { origin, authCode, verifier, redirectUri, signal });
     } catch (err) {
       if (signal.aborted && authorizeId) {
         void postDeepSeekPlatformJson(

@@ -1,4 +1,3 @@
-// cursor 守护进程侧装配入口（按名单由 daemon-registry.ts 加载）。
 import { homedir } from "node:os";
 import { posix, win32 } from "node:path";
 import { safeId, type TranscriptRef, type TranscriptRoots } from "../../daemon/driver/transcript-files.ts";

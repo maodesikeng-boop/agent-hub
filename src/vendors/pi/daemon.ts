@@ -1,4 +1,3 @@
-// Pi 的守护进程侧入口（docs/vendor-plugin-design.md 3.3 节）：daemon-registry.ts 按名单加载默认导出。
 import { defineVendorDaemon } from "../daemon-types.ts";
 import { piCapabilityArgs } from "./capabilities.ts";
 import { createPiCatalogSource, piCatalogProbe } from "./catalog.ts";

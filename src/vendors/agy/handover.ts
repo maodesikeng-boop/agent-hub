@@ -1,8 +1,4 @@
-// agy 复制会话去后台写交接的办法（docs/background-handover-design.md 第 2.3、2.6 节）：自己造的“拷库”（kind copy），靠 agy 没公开的存储格式——
-// 一个会话一个 sqlite 库 conversations/<编号>.db，库里 trajectory_meta 一行记着会话编号（cascade_id）和轨迹编号（trajectory_id）。
-// fork：sqlite 备份接口拷一份（原进程开着、有 WAL 也行）→ 库里所有格里的这两个编号逐字节换成同长新 UUID（protobuf 里有长度前缀，长度不能变）
-//       → brain/<编号>/ 一起拷。write：agy --conversation <新编号> 续跑一轮（只读模式、不带 HUB_*）。remove：照 #108 的 cleanup.py 删干净。
-// 格式对不上（没有库、没有 trajectory_meta、编号对不上或不是 UUID、agy 说找不到这个对话）一律抛 ForkUnsupportedError，账本退回“本会话写交接”。
+// agy has no fork API: copy its undocumented per-conversation sqlite db and rewrite the cascade and trajectory ids.
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { chmodSync, cpSync, existsSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -26,21 +22,15 @@ import { ForkUnsupportedError } from "../../daemon/handover/forker.ts";
 import { existingAgyPromptRules } from "./rules.ts";
 import type { ForkHandle, ForkSource, ForkWriteResult, SessionForker } from "../../daemon/handover/forker.ts";
 
-/** agy 的数据目录（对话库、brain、摘要库都在里面）；和 driver/transcript.ts 找对话库用的是同一个位置。 */
 const AGY_DATA_DIR = agyCliDataDir();
-/** 会话编号、轨迹编号的样子：36 个字符的 UUID。换编号要同长，所以不是这个样子就当格式不认识。 */
+// IDs are 36-char UUIDs; byte replacement needs equal length.
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-/** 除了 conversations/ 和 brain/，agy 还会在这几个目录下按编号放东西（目录、<编号>.xxx 文件）。remove 一并删。 */
 const ID_SUBDIRS = ["brain", "annotations", "implicit", "presence"] as const;
-/** 摘要库里按会话编号存行的表（照 #108 的 cleanup.py）。 */
 const SUMMARY_TABLES = ["conversation_summaries", "conversations_fts"] as const;
-/** write 出错时带进错误消息的标准错误结尾长度。 */
 const STDERR_TAIL_CHARS = 2_000;
-/** sqlite 的 SQLITE_NOTADB：打开的不是 sqlite 文件。 */
 const SQLITE_NOTADB = 26;
 
 export interface AgyCopyOptions {
-  /** agy 的数据目录，默认 AGY_DATA_DIR；测试用。存进 handle.extra，remove 用同一个。 */
   root?: string;
 }
 
@@ -51,12 +41,10 @@ function isNotADatabase(error: unknown): boolean {
   return e?.errcode === SQLITE_NOTADB || (typeof e?.message === "string" && /not a database/i.test(e.message));
 }
 
-/** 删掉 <库>.db 和它的 -wal、-shm、-journal。 */
 function removeDbFiles(file: string): void {
   for (const suffix of ["", "-wal", "-shm", "-journal"]) rmSync(file + suffix, { force: true });
 }
 
-/** 复制出来的库里 trajectory_meta 要正好一行：cascade_id 是原会话编号，trajectory_id 是 UUID；返回轨迹编号。 */
 function readTrajectoryId(db: DatabaseSync, srcId: string): string {
   const columns = (db.prepare("pragma table_info(trajectory_meta)").all() as Array<{ name: string }>).map((c) => c.name);
   if (columns.length === 0) throw new ForkUnsupportedError("agy 库里没有 trajectory_meta");
@@ -71,7 +59,7 @@ function readTrajectoryId(db: DatabaseSync, srcId: string): string {
   return trajectoryId;
 }
 
-/** 把库里所有表所有格（文本、二进制）里的 from 逐字节换成 to。编号都是 ASCII 且同长，用 latin1 过一遍二进制就是逐字节。 */
+// IDs are equal-length ASCII, so a latin1 pass replaces bytes in text and blob cells alike.
 function replaceInAllCells(db: DatabaseSync, replacements: ReadonlyArray<readonly [from: string, to: string]>): void {
   const swap = (s: string): string => replacements.reduce((acc, [from, to]) => acc.replaceAll(from, to), s);
   const tables = db.prepare("select name from sqlite_master where type = 'table' and name not like 'sqlite_%'").all() as Array<{ name: string }>;
@@ -108,7 +96,6 @@ function replaceInAllCells(db: DatabaseSync, replacements: ReadonlyArray<readonl
   }
 }
 
-/** 摘要库里删这个编号的行；没有这个库、没有这两张表（格式变了）都算没有。 */
 function removeSummaryRows(root: string, id: string): void {
   const file = agyDataPaths(root).summaryDb;
   if (!existsSync(file)) return;
@@ -126,7 +113,6 @@ function removeSummaryRows(root: string, id: string): void {
   }
 }
 
-/** 一轮的结果事件里取文字和用量：result 里的 response / usage；result 没带 usage 就用最后一个 step_update 的。 */
 function readOutput(stdout: string): { result: Record<string, unknown> | null; lastStepUsage: unknown } {
   let result: Record<string, unknown> | null = null;
   let lastStepUsage: unknown = null;
@@ -153,10 +139,7 @@ function usageOf(raw: unknown): TokenUsage {
   return { ...u, context: u.input + u.cacheRead + u.cacheWrite };
 }
 
-/**
- * 复制那份的启动参数：续跑新编号；只读模式（不开写文件、跑命令的权限）；模型、思考程度、附加目录照原会话。
- * 产品提示词的规则目录也照原会话 --add-dir（rules.ts，用原会话起进程时写好的那份）：提示词在 agy 的系统提示词里，不在复制过来的对话记录里。
- */
+// Reuse the main session's rules dir: the product prompt lives there, not in the copied history.
 function buildForkArgs(src: ForkSource, forkId: string): string[] {
   const args = [...AGY_STREAM_ARGS, "--conversation", forkId, ...AGY_PLAN_PERMISSION_ARGS, ...agentLaunchArgs({ vendor: "agy", model: src.model, effort: src.effort })];
   for (const dir of src.addDirs) args.push("--add-dir", dir);
@@ -224,7 +207,7 @@ export function createAgyCopyForker(options: AgyCopyOptions = {}): SessionForker
       let stderr = "";
       child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
       child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr = (stderr + chunk).slice(-STDERR_TAIL_CHARS)));
-      child.stdin.on("error", () => {}); // 进程提前退了，写不进去：看退出码和输出
+      child.stdin.on("error", () => {});
       const onAbort = () => {
         killFreshGroup(child);
         void forceKill(child);

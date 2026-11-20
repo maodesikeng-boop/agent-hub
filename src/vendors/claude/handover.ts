@@ -1,8 +1,3 @@
-// claude 复制会话去后台写交接的办法（docs/background-handover-design.md 第 2.3、2.6 节）：
-// write 时直接 `claude -p --resume <原编号> --fork-session --no-session-persistence --session-id <复制那份的编号>`，
-// 模型、思考程度、--append-system-prompt-file、--add-dir 照项目经理的来（前缀不变才吃得到缓存）；
-// --settings 是项目经理的设置叠上禁写三层（settings.ts 的 buildForkSettings：拦所有工具的钩子、dontAsk、Edit(//**) 拒绝），整段 JSON 传，
-// 只动权限和钩子、不动工具清单，实测缓存不掉。不落盘所以没有要删的文件，remove 只是保险。fork 本身什么都不跑，只定编号。
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFile, rm } from "node:fs/promises";
@@ -19,41 +14,33 @@ import { ForkUnsupportedError } from "../../daemon/handover/forker.ts";
 import { ensureClaudeSkillPlugin } from "./skills.ts";
 import type { ForkHandle, ForkSource, ForkWriteResult, SessionForker } from "../../daemon/handover/forker.ts";
 
-/** 这个办法在 fork_ref 里的名字，发布后不改。 */
 const CLAUDE_FORKER_ID = "claude-native";
 
-/** 固定的启动参数：-p 一次性、stream-json 才拿得到每个请求的上下文大小（--verbose 是它的前提）。提示词走标准输入，不进参数。 */
+// stream-json reports per-request context size and requires --verbose.
 const CLAUDE_FORK_FIXED_ARGS: readonly string[] = ["-p", "--output-format", "stream-json", "--verbose"];
-/** 复制那份不落盘（用户的 claude --resume 列表里不会多出一条）。 */
 const NO_PERSISTENCE_ARG = "--no-session-persistence";
-/** 标准错误只留最后这么多字符进报错。 */
 const STDERR_TAIL_CHARS = 2000;
 
 export interface ClaudeForkerOptions {
-  /** true 时不加 --no-session-persistence（排查用，之后靠 remove 删）。 */
   persist?: boolean;
-  /** claude 的配置目录（remove 找 projects/ 用），默认 CLAUDE_CONFIG_DIR 或 ~/.claude。 */
   configDir?: string;
 }
 
-/** claude 把工作目录映射成 projects/ 下的目录名：路径里非字母数字都换成 -。 */
+// claude maps cwd to a projects/ dir by replacing non-alphanumerics with -.
 export function claudeProjectDirName(cwd: string): string {
   return cwd.replace(/[^A-Za-z0-9]/g, "-");
 }
 
-/** 复制那份的命令行参数。launch.env 里已经没有 HUB_*（forkSourceOf 去掉了）。settings 是 forkSettingsJson 的结果。 */
 function buildClaudeForkArgs(src: ForkSource, forkId: string, persist: boolean, settings: string): string[] {
   const args = [...CLAUDE_FORK_FIXED_ARGS, "--resume", src.vendorSessionId, "--fork-session", "--session-id", forkId];
   if (!persist) args.push(NO_PERSISTENCE_ARG);
   args.push(...agentLaunchArgs({ vendor: src.vendor, model: src.model, effort: src.effort }));
   args.push("--append-system-prompt-file", src.launch.promptFile, "--settings", settings);
-  // 产品技能跟主会话一样挂上：技能清单一样，前缀缓存吃得上（插件目录一般是主会话起进程时写好的，没有就补上，内容一样不重写）
   if (src.launch.skillsDir) args.push("--plugin-dir", ensureClaudeSkillPlugin(src.launch.skillsDir));
   for (const dir of src.addDirs) args.push("--add-dir", dir);
   return args;
 }
 
-/** 读项目经理的设置文件（没有就当空），叠上禁写三层，转成 --settings 的 JSON。读不了、不是 JSON 对象就抛：不能不带禁写就跑。 */
 async function forkSettingsJson(settingsFile: string | undefined): Promise<string> {
   if (!settingsFile) return JSON.stringify(buildForkSettings({}));
   let base: unknown;
@@ -66,7 +53,6 @@ async function forkSettingsJson(settingsFile: string | undefined): Promise<strin
   return JSON.stringify(buildForkSettings(base));
 }
 
-/** 解析 stream-json：result 的文字和用量；context 取最后一个主线 assistant 请求（复制那份读到的上文大小）。 */
 function parseOutput(stdout: string): ForkWriteResult {
   let context = 0;
   let result: Record<string, unknown> | null = null;

@@ -1,9 +1,6 @@
-// codex 的声明：纯数据 + 纯函数，网页、hub 命令行、守护进程都引。不许 import node:*、src/daemon、别家文件夹（契约测试 S2）。
-// 只给守护进程用的路径（PATH 里找不到时去哪找）在同目录的 paths.ts。
 import { PRODUCT_NAME } from "../../shared/names.ts";
 import { blockedCommands, capitalize, defineVendor } from "../types.ts";
 
-/** 思考程度：通用六档（luna 系到 max，其余支持到 ultra）。 */
 const EFFORTS: readonly string[] = ["low", "medium", "high", "xhigh", "max", "ultra"];
 const MAX_EFFORTS: readonly string[] = ["low", "medium", "high", "xhigh", "max"];
 
@@ -20,16 +17,13 @@ export default defineVendor({
     envVar: "AGENT_HUB_CODEX",
     loginCommand: "codex login",
   },
-  // auth.json 是 codex 的令牌，.credentials.json 是 MCP OAuth 令牌的备用文件（keyring 不可用时，见 codex-rs/rmcp-client/src/oauth.rs）
   home: {
     dirs: [".codex"],
     readonlySecrets: [".codex/auth.json", ".codex/.credentials.json"],
     catalogWatchPaths: [".codex/models_cache.json", ".codex/auth.json", ".codex/.credentials.json", ".codex/config.toml", ".codex/version.json"],
-    // 认证判断、模型目录指纹都跟着 CODEX_HOME 走
     configHome: { rel: ".codex", env: "CODEX_HOME" },
   },
   models: {
-    // 2026-11-09 `codex app-server` model/list 的实际可见列表及各自支持的思考程度；拿不到名单时兜底
     bundled: [
       { id: "gpt-6.1-sol", label: "GPT-6.1-Sol", efforts: EFFORTS },
       { id: "gpt-6-astra", label: "GPT-6-Astra", efforts: EFFORTS },
@@ -53,7 +47,7 @@ export default defineVendor({
         : `GPT-${gpt[1]} ${gpt[2].split("-").map((w) => capitalize(w.toLowerCase())).join(" ")}`;
     },
   },
-  // account/rateLimits/updated 只带窗口长度、不带名字：长度见 QUOTA_WINDOWS（protocol.ts 的 parseCodexRateLimits 按它归类），codex 自己不报“快用完”
+  // account/rateLimits/updated has window lengths but no names, and codex never reports a warning status.
   quota: { name: "Codex", windows: ["five_hour", "seven_day", "thirty_day"] },
   composer: {
     commandPrefix: "/",
@@ -66,7 +60,6 @@ export default defineVendor({
     },
   },
   prompt: {
-    // 保留迁移前公共提示词的触发条件：CLAUDE.md 与 AGENTS.md 并存时提醒。
     instructionFile: "CLAUDE.md",
     subagentTools: ["spawn_agent"],
     backgroundCommandTool: "后台命令参数",
@@ -89,25 +82,22 @@ export default defineVendor({
       list_mcp_resources: "connector_resource",
       list_mcp_resource_templates: "connector_resource",
       read_mcp_resource: "connector_resource",
-      // 多 agent 协作（spawn / send / wait 子 agent）：app-server 的 item.type，老版本叫 collabToolCall
+      // Older versions call it collabToolCall.
       collabAgentToolCall: "subagent",
       collabToolCall: "subagent",
     },
   },
   skillSignals: {
-    // app-server 的 item/completed：commandExecution 的输出原文在 item.aggregatedOutput（codex app-server generate-ts 的 v2/ThreadItem.ts）
+    // commandExecution output is in item.aggregatedOutput.
     outputField: "aggregatedOutput",
-    // 输入框里的 /名字 发出前改成 $名字（composer.ts）；用户也能直接打 $名字
     userTriggers: ["/", "$"],
   },
   capabilities: {
-    // 后台命令跑完不会自己开新轮叫醒 agent（docs/mid-turn-messages.md 第 10.3 节）
+    // Finished background commands do not start a new turn to wake the agent.
     backgroundWake: false,
     readonly: "driver",
     explicitDefaultModel: true,
-    // app-server 协议的 developerInstructions（protocol.ts）：开发者指令，压缩不裁
     systemPrompt: "resident",
-    // 任务图手册：app-server 握手后发 skills/extraRoots/set（每个会话一个 app-server 进程，只影响这个会话；2026-11-12 codex-cli 0.167.1 实测）
     skills: "native",
     isolation: { skill: "session", mcp: "session", connector: "session" },
   },

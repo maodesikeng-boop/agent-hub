@@ -1,10 +1,7 @@
-// Pi（@earendil-works/pi-coding-agent）的声明：纯数据 + 纯函数，网页、hub 命令行、守护进程都引。
-// 不许 import node:*、src/daemon、别家文件夹（契约测试 S2）。
-// 只给守护进程用的路径与凭据变量在同目录的 paths.ts。
 import { PRODUCT_NAME } from "../../shared/names.ts";
 import { blockedCommands, capitalize, defineVendor } from "../types.ts";
 
-/** Pi 支持的完整思考档位（--thinking <level>，Pi 会自动按模型的 thinkingLevelMap 钳位到最接近的支持档位）。 */
+// pi clamps --thinking to the closest level the model supports.
 const EFFORTS: readonly string[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const DEEPSEEK_PRO_EFFORTS: readonly string[] = ["off", "high", "max"];
 const DEEPSEEK_FLASH_EFFORTS: readonly string[] = ["off", "low", "high", "max"];
@@ -17,7 +14,6 @@ const ACCOUNT_BLOCKED = "账号相关的命令这里不能用，请在终端里�
 const SETTINGS_BLOCKED = `设置和权限由 ${PRODUCT_NAME} 管，这里不能用这个命令`;
 const TERMINAL_BLOCKED = "这是终端专用的命令，网页里不能用";
 
-/** 把 <provider>/<model> 缩成可读短名；认不出家族时去掉 provider 前缀原样回退。 */
 function formatPiShortModel(model: string): string | null {
   const slash = model.indexOf("/");
   const bare = slash >= 0 ? model.slice(slash + 1) : model;
@@ -61,8 +57,6 @@ export default defineVendor({
     envVar: "AGENT_HUB_PI",
     loginCommand: "pi",
   },
-  // auth.json 存 /login 的 OAuth 与 API key，models.json 可含内联 apiKey，只读 Worker 跨家禁读；
-  // settings.json 与 models-store.json 不含密钥，仅参与模型目录指纹监视。
   home: {
     dirs: [".pi/agent"],
     readonlySecrets: [".pi/agent/auth.json", ".pi/agent/models.json"],
@@ -75,7 +69,6 @@ export default defineVendor({
     configHome: { rel: ".pi/agent", env: "PI_CODING_AGENT_DIR" },
   },
   models: {
-    // 2026-11-11 本机 pi 1.5.0 内置代表性模型（含 DeepSeek 旗舰与轻量模型）；未配凭据或探测失败时兜底
     bundled: [
       { id: "deepseek/deepseek-v4-pro", label: "DeepSeek V4 Pro", efforts: DEEPSEEK_PRO_EFFORTS },
       { id: "deepseek/deepseek-flash", label: "DeepSeek V4.1 Flash", efforts: DEEPSEEK_FLASH_EFFORTS },
@@ -109,10 +102,8 @@ export default defineVendor({
   failure: {
     serviceName: "Pi",
     rawHint: /^pi_not_found\b|\bpi-coding-agent\b|\bspawn pi\b|\bpi:/i,
-    // Pi 转接 30+ 模型商（报错原文里常带 anthropic/openai/gemini/deepseek 模型名），显式命中 Pi 特征时优先认 Pi
     rawHintPriority: 2,
   },
-  // 会话记录是 ~/.pi/agent/sessions/--<cwd>--/<timestamp>_<id>.jsonl 纯文本，跨厂商交接可读
   handover: { transcriptPortable: true },
   tools: {
     actions: {
@@ -129,15 +120,13 @@ export default defineVendor({
     },
   },
   skillSignals: {
-    // rpc 的 tool_execution_end.result（{content:[{type:"text", text}]}），read 不带行号（2026-11-16 pi --mode rpc 实跑）
+    // read output has no line numbers.
     outputField: "result",
   },
   capabilities: {
     backgroundWake: false,
     readonly: "os_sandbox",
-    // --append-system-prompt <prompt.md>（protocol.ts）：进 pi 的系统提示词，压缩不裁
     systemPrompt: "resident",
-    // 任务图手册：--skill <启动目录>/skills（scope: temporary；2026-11-12 pi 1.5.2 实测）
     skills: "native",
     isolation: { skill: "session", mcp: "tool_deny", connector: "shared" },
   },

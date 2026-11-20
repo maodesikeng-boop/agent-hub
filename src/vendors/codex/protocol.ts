@@ -1,5 +1,3 @@
-// OpenAI Codex App-Server (JSON-RPC 2.0 over stdio NDJSON) 协议纯函数：
-// 负责启动参数、握手与线程/轮次请求构造、流式通知解析、token/rateLimit 转换与 Worker 可写范围 / 只读模式的审批判定。
 import { existsSync, readFileSync } from "node:fs";
 import {
   connectorToolAllowed,
@@ -23,10 +21,6 @@ import { runPs } from "../../daemon/driver/process.ts";
 import { codexCapabilityArgs } from "./capabilities.ts";
 
 
-/**
- * 用 ps 检查 pid 对应的进程命令行是否为残留的 `codex app-server`。
- * 是则返回其进程组号 pgid，否则（或进程已不存在）返回 null。
- */
 export async function codexOfSession(pid: number): Promise<number | null> {
   const stdout = await runPs(["-o", "pgid=,command=", "-p", String(pid)]);
   if (stdout === null) return null;
@@ -36,17 +30,14 @@ export async function codexOfSession(pid: number): Promise<number | null> {
   return /codex/i.test(command) && /app-server/i.test(command) ? Number(match[1]) : null;
 }
 
-/** Codex App-Server 固定启动参数（M0 实测验证）。 */
 const CODEX_APP_SERVER_ARGS = ["app-server", "--listen", "stdio://"] as const;
 
-/** 客户端信息（initialize 握手用）。 */
 export const CODEX_CLIENT_INFO = {
   name: "agent-hub",
   title: "Agent Hub",
   version: "0.1.0",
 } as const;
 
-/** 工具类 item.type 枚举。 */
 const CODEX_TOOL_ITEM_TYPES = [
   "commandExecution",
   "fileChange",
@@ -61,14 +52,11 @@ export type CodexToolItemType = (typeof CODEX_TOOL_ITEM_TYPES)[number];
 export interface CodexLaunchConfig {
   developerInstructions: string;
   readonly: boolean;
-  /** 只读策略（files.readonly）；elicitation 兜底用。不是只读 null。 */
   readonlyPolicy: ReadonlyPolicy | null;
   config: Record<string, unknown>;
-  /** 产品技能的根目录（files.skillsDir，只有项目经理会话有）：握手后用 skills/extraRoots/set 挂上。没有是空数组。 */
   skillRoots: string[];
 }
 
-/** 只读 Worker 的 codex 权限 profile 名（config 里 default_permissions 指向它）。 */
 const CODEX_READONLY_PROFILE = "hub_readonly";
 
 export type CodexSandboxPolicy =
@@ -77,17 +65,14 @@ export type CodexSandboxPolicy =
 
 export type CodexApprovalDecision = "accept" | "decline";
 
-/** 生成 codex 子进程命令行参数。 */
 export function buildCodexArgs(capabilities?: SessionCapabilities): string[] {
   return capabilities ? [...CODEX_APP_SERVER_ARGS, ...codexCapabilityArgs(capabilities)] : [...CODEX_APP_SERVER_ARGS];
 }
 
-/** JSON.stringify 并转义 U+2028 / U+2029，保证单行 NDJSON 安全写入 stdin。 */
 export function serializeJsonRpcLine(payload: Record<string, unknown>): string {
   return JSON.stringify(payload).replaceAll("\u2028", "\\u2028").replaceAll("\u2029", "\\u2029");
 }
 
-/** 第 1 步握手：发送 initialize 请求。 */
 export function buildInitializeRequest(id: number | string): string {
   return serializeJsonRpcLine({
     jsonrpc: "2.0",
@@ -100,17 +85,11 @@ export function buildInitializeRequest(id: number | string): string {
   });
 }
 
-/**
- * 握手后、建线程前：把产品技能目录加进这个 app-server 的技能根（docs/orchestration-skill-design.md 第 6.2 节）。
- * codex app-server generate-ts 生成的协议里有 skills/extraRoots/set（参数 extraRoots: AbsolutePathBuf[]），官方文档没写、app-server 标着
- * experimental；2026-11-12 codex-cli 0.167.1 实测发过之后 skills/list 多出这个技能（scope: "user"、enabled: true）。
- * 每个会话一个 app-server 进程（buildCodexArgs），只影响这一个会话；不写 ~/.agents/skills、~/.codex 和仓库。
- */
+// skills/extraRoots/set is undocumented and experimental in app-server (verified on codex-cli 0.167.1).
 export function buildSkillsExtraRootsRequest(id: number, extraRoots: readonly string[]): string {
   return serializeJsonRpcLine({ jsonrpc: "2.0", id, method: "skills/extraRoots/set", params: { extraRoots: [...extraRoots] } });
 }
 
-/** 第 2 步握手：收到 initialize 响应后发送 initialized 通知。 */
 export function buildInitializedNotification(): string {
   return serializeJsonRpcLine({
     jsonrpc: "2.0",
@@ -118,12 +97,6 @@ export function buildInitializedNotification(): string {
   });
 }
 
-/**
- * 从 prepareLaunch 产出的 LaunchFiles 读取提示词、只读模式与注入给 Codex shell 工具的环境变量配置。
- * - 读取 files.promptFile 作为 developerInstructions
- * - files.readonly 有值就是只读（不再反读设置文件里的权限档，改设置文件的模式名影响不到这里）
- * - 构造 config：shell_environment_policy.inherit = "all" + shell_environment_policy.set = files.env
- */
 export function readCodexLaunchConfig(files: LaunchFiles): CodexLaunchConfig {
   const developerInstructions = existsSync(files.promptFile) ? readFileSync(files.promptFile, "utf8") : "";
   const readonly = files.readonly !== undefined;
@@ -137,24 +110,11 @@ export function readCodexLaunchConfig(files: LaunchFiles): CodexLaunchConfig {
   return { developerInstructions, readonly, readonlyPolicy: files.readonly ?? null, config, skillRoots: files.skillsDir ? [files.skillsDir] : [] };
 }
 
-/** config 里的键段：只有字母数字下划线横杠的原样，其余（点、空格……）加引号。 */
 function configKeySegment(name: string): string {
   return /^[A-Za-z0-9_-]+$/.test(name) ? name : JSON.stringify(name);
 }
 
-/**
- * 只读 Worker 追加的 codex 配置（设计 2.3）。只读靠这里的权限档，thread/start、thread/resume 不传 sandbox，turn/start 不传 sandboxPolicy：
- * codex-cli 0.169.0 实测带了这两个参数就换成内置 read-only（activePermissionProfile 为 null），下面的读边界整个失效
- * （源码 config/src/permission_config.rs 的 resolve_permission_config、core/src/session/session.rs 换 sandbox_policy 时只留 none 项）。
- * 权限档继承 :read-only 后网络默认关，network.enabled 照原来 readOnly 的 networkAccess 打开（hub 命令要连 hub.sock）。
- * - 禁读：2026-11-07 S5 实测，只有“default_permissions + profile 继承 :read-only + filesystem 路径 none”生效，
- *   permissions.filesystem.deny_read 和 profile 里的 deny_read 都无效。通配（secretGlobs）这种写法表达不了，不写。
- *   数据目录和外层 OS 沙箱用同一套读边界（dataDirScope）：整个数据目录 none，放行项（worktrees、uploads、tools、run/bin、
- *   这次会话的启动目录）和 hub.sock 再写 read（codex 按更具体的路径为准），启动后才建的文件也落在 none 的子树里。
- *   codex 只把工具命令放进沙箱，它自己读启动文件、~/.codex/auth.json 不受影响；
- * - 连接器：codex 原生放行 readOnlyHint 的，补充 → approval_mode="approve"，排除 → disabled_tools（整个服务器 → enabled=false）。
- *   codex 配置要确切的服务器名和工具名，通配的写不进去；补充的通配项靠 elicitation 兜底（decideMcpElicitation）。
- */
+// Passing sandbox or sandboxPolicy makes codex-cli 0.169.0 switch to built-in read-only and drop this profile's read limits.
 export function codexReadonlyConfig(policy: ReadonlyPolicy): Record<string, unknown> {
   const filesystem: Record<string, "none" | "read"> = Object.fromEntries(policy.secretPaths.map((p) => [p, "none"]));
   const scope = policy.dataDirScope;
@@ -198,12 +158,7 @@ export interface McpElicitationContext {
   policy: ReadonlyPolicy | null;
 }
 
-/**
- * mcpServer/elicitation/request（codex 为非只读声明的连接器工具问批准，_meta.codex_approval_kind 是 "mcp_tool_call"）的回答，格式 {action}。
- * 只读会话：按 connectorToolAllowed 判断（补充的放行、排除的拒、带只读声明的放行）；认不出服务器或工具名的拒。
- * 非只读：拒（跟以前一样，codex 非只读 Worker 用没标只读的连接器工具另开一题）。
- * 服务器名在 serverName；工具名和声明的位置真 codex 没抓全，所以几个可能的位置都看。
- */
+// codex asks approval for connector tools not declared read-only (_meta.codex_approval_kind mcp_tool_call).
 export function decideMcpElicitation(params: Record<string, unknown>, context: McpElicitationContext): { action: "accept" | "decline" } {
   const decline = { action: "decline" } as const;
   if (!context.readonly || context.policy === null) return decline;
@@ -217,7 +172,6 @@ export function decideMcpElicitation(params: Record<string, unknown>, context: M
   return connectorToolAllowed(context.policy, server, tool, annotations) ? { action: "accept" } : decline;
 }
 
-/** 第 3 步（新会话）：发送 thread/start 请求。 */
 export function buildThreadStartRequest(
   id: number | string,
   session: Pick<AgentSessionRow, "cwd" | "model">,
@@ -238,7 +192,6 @@ export function buildThreadStartRequest(
   });
 }
 
-/** 第 3 步（恢复会话）：发送 thread/resume 请求。 */
 export function buildThreadResumeRequest(
   id: number | string,
   session: Pick<AgentSessionRow, "vendorSessionId" | "cwd" | "model">,
@@ -260,14 +213,7 @@ export function buildThreadResumeRequest(
   });
 }
 
-/**
- * 构造 turn/start 的 sandboxPolicy。Worker 的可写范围（writeScope）：
- * - 进程包进了 OS 沙箱（osSandboxed，macOS，driver/write-scope.ts）：externalSandbox——codex 不再自己起 sandbox-exec（macOS 沙箱不能嵌套），
- *   命令和改文件都在外面那层里，数据目录写不了；
- * - 没有 OS 沙箱（兜底）：codex 自己的 workspace-write，writableRoots 去掉数据目录里不能写的（codex 的沙箱只能写 writableRoots 和临时目录）；
- *   越出沙箱的审批按范围判断（decideCommandApproval、decideFileChangeApproval）。
- * 只读：null，不传（沿用线程启动时 config 里的权限档 codexReadonlyConfig；codex 自己的沙箱，进程不包）。
- */
+// externalSandbox stops codex from nesting its own sandbox-exec inside the OS sandbox.
 export function buildSandboxPolicy(
   session: Pick<AgentSessionRow, "cwd" | "addDirs">,
   readonly: boolean,
@@ -284,7 +230,6 @@ export function buildSandboxPolicy(
   };
 }
 
-/** 将前缀说明（恢复说明、连发合并等）与用户正文拼成单个文本。 */
 export function combineCodexTurnText(text: string, prefixes: readonly string[] = []): string {
   const cleanPrefixes = prefixes.filter((p) => p.trim() !== "");
   if (cleanPrefixes.length === 0) return text;
@@ -292,13 +237,11 @@ export function combineCodexTurnText(text: string, prefixes: readonly string[] =
   return [...cleanPrefixes, text].join("\n\n");
 }
 
-/** 校验待发送的文本是否合法（非空白），合法返回 null，否则返回原因。 */
 export function checkCodexTurnText(combinedText: string): string | null {
   if (combinedText.trim() === "") return "文字是空的";
   return null;
 }
 
-/** 构造 turn/start 请求。 */
 export function buildTurnStartRequest(
   id: number | string,
   params: {
@@ -307,7 +250,6 @@ export function buildTurnStartRequest(
     session: Pick<AgentSessionRow, "cwd" | "addDirs" | "model" | "effort">;
     readonly: boolean;
     writeScope?: WriteBounds | null;
-    /** 进程包进了 OS 沙箱（driver/write-scope.ts 的 ScopedSpawn.osSandboxed）。 */
     osSandboxed?: boolean;
   },
 ): string {
@@ -327,12 +269,7 @@ export function buildTurnStartRequest(
   });
 }
 
-/** 构造 turn/interrupt 请求。 */
-/**
- * 往正在跑的这一轮加一条用户消息（turn/steer）。expectedTurnId 要是当前这一轮（turn/start 的回执或 turn/started 里的 id），
- * 不对、或者没有正在跑的轮，codex 回 -32600（“no active turn to steer”“expected active turn id … but found …”）。
- * 不带 model、cwd、sandboxPolicy：steer 不收这些，沿用这一轮的。
- */
+// turn/steer needs the current turn id or fails with -32600, and ignores model, cwd, and sandboxPolicy.
 export function buildTurnSteerRequest(id: number | string, threadId: string, expectedTurnId: string, combinedText: string): string {
   return serializeJsonRpcLine({
     jsonrpc: "2.0",
@@ -342,7 +279,6 @@ export function buildTurnSteerRequest(id: number | string, threadId: string, exp
   });
 }
 
-/** userMessage item 里的文字（content 里的 text 块，空一行连起来）；不是 userMessage 返回 null。 */
 export function codexUserMessageText(item: Record<string, unknown>): string | null {
   if (item.type !== "userMessage") return null;
   const content = Array.isArray(item.content) ? (item.content as Array<Record<string, unknown>>) : [];
@@ -358,7 +294,6 @@ export function buildTurnInterruptRequest(id: number | string, threadId: string,
   });
 }
 
-/** 构造对服务端反向 RPC 请求的 JSON-RPC 2.0 响应。 */
 export function buildJsonRpcResponse(id: number | string, result: Record<string, unknown>): string {
   return serializeJsonRpcLine({
     jsonrpc: "2.0",
@@ -367,12 +302,10 @@ export function buildJsonRpcResponse(id: number | string, result: Record<string,
   });
 }
 
-/** 判断 item.type 是否属于工具执行类型。 */
 export function isCodexToolItemType(type: unknown): type is CodexToolItemType {
   return typeof type === "string" && (CODEX_TOOL_ITEM_TYPES as readonly string[]).includes(type);
 }
 
-/** 从 fileChange item 或审批参数中提取所有涉及的文件路径（含改名的目标）。 */
 export function extractFileChangePaths(source: Record<string, unknown>): string[] {
   const paths: string[] = [];
   if (Array.isArray(source.changes)) {
@@ -383,7 +316,7 @@ export function extractFileChangePaths(source: Record<string, unknown>): string[
         const c = change as Record<string, unknown>;
         if (typeof c.path === "string" && c.path.trim() !== "") paths.push(c.path);
         else if (typeof c.filePath === "string" && c.filePath.trim() !== "") paths.push(c.filePath);
-        // 改名（apply_patch 的 *** Move to:）：目标在 kind.move_path（FileUpdateChange 的 PatchChangeKind），也要判断
+        // Renames (apply_patch Move to) put the target in kind.move_path.
         const kind = typeof c.kind === "object" && c.kind !== null ? (c.kind as Record<string, unknown>) : null;
         for (const moved of [kind?.move_path, kind?.movePath, c.move_path, c.movePath]) {
           if (typeof moved === "string" && moved.trim() !== "") paths.push(moved);
@@ -405,7 +338,6 @@ export function extractFileChangePaths(source: Record<string, unknown>): string[
   return paths;
 }
 
-/** 根据 item/started 的 item 构造 agent.tool 事件的 input。 */
 function buildCodexToolInput(item: Record<string, unknown>): Record<string, unknown> {
   switch (item.type) {
     case "commandExecution":
@@ -425,7 +357,6 @@ function buildCodexToolInput(item: Record<string, unknown>): Record<string, unkn
         query: typeof item.query === "string" ? item.query : "",
       };
     case "mcpToolCall": {
-      // ChatGPT 应用连接器（appContext）带人读的应用名、动作名，状态行用它（“Calling Linear: list issues”），没有再用 MCP 的 server / tool
       const app = typeof item.appContext === "object" && item.appContext !== null ? (item.appContext as Record<string, unknown>) : null;
       const nonEmpty = (v: unknown): string | null => (typeof v === "string" && v.trim() !== "" ? v : null);
       const server = nonEmpty(app?.appName) ?? nonEmpty(item.server);
@@ -447,7 +378,6 @@ function buildCodexToolInput(item: Record<string, unknown>): Record<string, unkn
   }
 }
 
-/** 将工具类 item/started 转换为 AgentToolEvent。 */
 export function parseCodexToolStarted(
   item: Record<string, unknown>,
   at: number,
@@ -545,19 +475,13 @@ function regressedCodexUsageCounts(cur: CodexUsageCounts, prev: CodexUsageCounts
   );
 }
 
-/** thread/tokenUsage/updated 里的线程累计 total（Claude 口径）；没有 total 返回 null。 */
 export function parseCodexThreadTotal(tokenUsage: unknown): CodexUsageCounts | null {
   if (typeof tokenUsage !== "object" || tokenUsage === null) return null;
   const total = (tokenUsage as { total?: unknown }).total;
   return typeof total === "object" && total !== null ? toCodexUsageCounts(total as Record<string, unknown>) : null;
 }
 
-/**
- * 解析 thread/tokenUsage/updated 的 tokenUsage：
- * - Codex 的 inputTokens 已含 cachedInputTokens，转换成 Claude 口径时先扣掉 cachedInputTokens，避免 context 翻倍；
- * - tokenUsage.total 是整条 Codex 线程生命周期累计值，按上一条已知线程累计做差求本次单步增量，并去重相同 total 的重复推送；
- * - 冷启动 thread/resume 首条通知尚无已知 lastThreadTotal 时，用 total - last 反推恢复前的线程累计基线。
- */
+// codex inputTokens include cachedInputTokens, and total is cumulative per thread.
 export function parseCodexTokenUsage(
   tokenUsage: unknown,
   turnId: string | null,
@@ -643,7 +567,6 @@ const CODEX_QUOTA_ERROR_CODES = new Set([
   "rate_limit_exceeded",
 ]);
 
-/** 一个窗口 → [额度窗口的键, 窗口]；缺用量或重置时间、窗口长度不认识的返回 null（见 QUOTA_WINDOWS，不按位置猜）。兼容 camelCase 与 rollout 的 snake_case。 */
 function parseCodexWindow(raw: unknown): [QuotaWindowKey, RateLimitWindow] | null {
   if (typeof raw !== "object" || raw === null) return null;
   const w = raw as Record<string, unknown>;
@@ -658,12 +581,7 @@ function parseCodexWindow(raw: unknown): [QuotaWindowKey, RateLimitWindow] | nul
   return [key, { utilization, resetsAt, status: utilization >= 1 ? "rejected" : "allowed" }];
 }
 
-/**
- * 解析 account/rateLimits/updated（或 account/rateLimits/read、rollout 的 token_count.rate_limits）为 RateLimitInfo：
- * - 只认主配额桶 limitId === "codex"（或未带 limitId 的单桶），忽略 "premium" 等专项附加桶，防止覆盖主额度；
- * - 每个窗口按 windowDurationMins / window_minutes 归到 QUOTA_WINDOWS 的键上（不按 primary / secondary 的位置）；
- * - 若带 rateLimitReachedType / spendControlReached / ordinaryUsageAllowed === false，将耗尽窗口规整为 100% rejected。
- */
+// Only the main bucket (limitId "codex") counts; premium buckets would overwrite it.
 export function parseCodexRateLimits(rateLimits: unknown): RateLimitInfo | null {
   if (typeof rateLimits !== "object" || rateLimits === null) return null;
   const rawObj = rateLimits as Record<string, unknown>;
@@ -716,10 +634,6 @@ function isCodexQuotaError(turnError: unknown): boolean {
   return typeof err.message === "string" && VENDOR_FAILURE_SIGNS.codex.quota.test(err.message);
 }
 
-/**
- * 当 Codex 一轮因额度耗尽（usageLimitExceeded / rateLimitExceeded 或消息匹配 quota 特征）失败结束时，
- * 将会话当前的 RateLimitInfo 标记为 rejected（耗尽窗口置为 100%）；非额度错误返回 null。
- */
 export function exhaustCodexRateLimitOnTurnError(current: RateLimitInfo | null, turnError: unknown): RateLimitInfo | null {
   if (!isCodexQuotaError(turnError)) return null;
   return exhaustRateLimitInfo(current);
@@ -727,20 +641,11 @@ export function exhaustCodexRateLimitOnTurnError(current: RateLimitInfo | null, 
 
 export interface CodexApprovalContext {
   readonly: boolean;
-  /** Worker 的可写范围；项目经理是 null（不拦）。 */
   writeScope: WriteBounds | null;
   cwd: string;
 }
 
-/**
- * 判定 item/commandExecution/requestApproval 的审批结果。在 workspace-write、on-request 下，codex 只为要越出沙箱跑的命令
- * （模型申请提权）来问；同意了这条命令就不在沙箱里跑，所以 Worker 的可写范围要在这里拦：
- * - readonly 会话一律 decline；
- * - 有可写范围（Worker）：命令的工作目录、或命令行里的路径落在范围外（数据目录里、自己的工作目录外），且不是只读命令 → decline；
- *   要改的文件在范围外 → decline。只能看字面：按 ; && || | 拆段、跟着 cd，脚本里拼出来、不写在命令行上的路径看不出来
- *   （见 commandMayWriteOutsideScope）。macOS 上进程包在 OS 沙箱里，这里只是多一道，漏了也写不进数据目录；
- * - 其余 accept（数据目录以外照旧；2026-11-06 用户去掉了记忆文件的保护：AGENTS.md、CLAUDE.md、.claude 等不拦）。
- */
+// codex only asks for commands escalating out of its sandbox, and approved ones run unsandboxed, so enforce the write scope here.
 export function decideCommandApproval(params: Record<string, unknown>, context: CodexApprovalContext): CodexApprovalDecision {
   if (context.readonly) return "decline";
   const scope = context.writeScope;
@@ -753,21 +658,13 @@ export function decideCommandApproval(params: Record<string, unknown>, context: 
   return "accept";
 }
 
-/**
- * 判定 item/fileChange/requestApproval 的审批结果（codex 改沙箱外的文件时来问）。真 codex 的审批参数只带 itemId，
- * 路径要调用方从这一条的 item/started 里补进 params.paths（driver.ts 的 fileChangePaths）：
- * - readonly 会话一律 decline；
- * - 有可写范围（Worker）：要改的文件（含改名的目标）在范围外，或者不知道改哪些文件，或者 grantRoot 在范围外 → decline
- *   （实测不补路径时一律同意，Worker 写进了数据目录）；
- * - 其余 accept。
- */
+// Real codex approval params carry only itemId; callers fill params.paths.
 export function decideFileChangeApproval(params: Record<string, unknown>, context: CodexApprovalContext): CodexApprovalDecision {
   if (context.readonly) return "decline";
   const scope = context.writeScope;
   if (scope !== null) {
     const paths = extractFileChangePaths(params);
     if (paths.length === 0 || paths.some((p) => !scopeAllowsWrite(scope, p, context.cwd))) return "decline";
-    // 顺带申请这一会话都能写某个目录（grantRoot）：落在范围外就拒
     if (typeof params.grantRoot === "string" && params.grantRoot.trim() !== "" && !scopeAllowsWrite(scope, params.grantRoot, context.cwd)) return "decline";
   }
   return "accept";

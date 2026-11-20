@@ -1,6 +1,4 @@
 #!/usr/bin/env node
-// 确定性假 ACP（Agent Client Protocol）服务端：基于官方 @agentclientprotocol/sdk/unstable 的 agent() 与 ndJsonStream 实现。
-// 通过环境变量传入测试剧本与日志路径，供 src/vendors/_common/acp/driver.test.ts 覆盖完整协议分支。
 import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -11,10 +9,12 @@ import {
   agent,
   methods,
   ndJsonStream,
+  type AgentContext,
   type AvailableCommand,
   type PermissionOption,
   type SessionConfigOption,
   type SessionModeState,
+  type SessionNotification,
   type StopReason,
   type ToolKind,
   type Usage,
@@ -34,9 +34,7 @@ export interface FakeAcpToolStep {
     meta?: Record<string, unknown>;
     options?: PermissionOption[];
   };
-  /** 测试外层只读 OS 沙箱：尝试写入该路径并把成功/报错记入日志。 */
   probeWritePath?: string;
-  /** 跑完那条 tool_call_update 带的 content、rawOutput（工具的返回原文）。 */
   resultContent?: unknown;
   rawOutput?: unknown;
 }
@@ -51,12 +49,9 @@ export interface FakeAcpTurnScript {
   customUpdates?: Array<{ sessionUpdate: string; payload?: Record<string, unknown> }>;
   commandsUpdate?: Array<{ name: string; description: string; hint?: string }>;
   usageUpdate?: { used: number; size: number };
-  /** 等待收到 session/cancel 通知后以 stopReason="cancelled" 结束本轮。 */
   waitForCancel?: boolean;
-  /** 即使收到 session/cancel 也不响应（测试驱动超时升级 SIGINT/SIGKILL）。 */
   ignoreCancel?: boolean;
   sleepMs?: number;
-  /** 在同进程组内派生一个长睡眠后台子进程并把其 PID 写入该文件，随后异常退出，测进程组清理。 */
   spawnChildPidFile?: string;
   crashExitCode?: number;
   throwRpcError?: { code: number; message: string };
@@ -78,7 +73,6 @@ export interface FakeAcpScript {
   knownSessions?: string[];
   modes?: SessionModeState;
   initialConfigOptions?: SessionConfigOption[];
-  /** 当模型切到该值时，动态在 configOptions 中暴露 reasoning_effort 配置项。 */
   dynamicEffortForModel?: string;
   commandsOnSessionStart?: Array<{ name: string; description: string; hint?: string }>;
   replayOnLoad?: {
@@ -88,7 +82,6 @@ export interface FakeAcpScript {
     toolTitle?: string;
     commands?: Array<{ name: string; description: string; hint?: string }>;
   };
-  /** 启动后立即挂起不响应 initialize（测 start_timeout）。 */
   hangOnInitialize?: boolean;
   hangOnAuthenticate?: boolean;
   hangOnNew?: boolean;
@@ -118,7 +111,6 @@ function writeLog(entry: Omit<FakeAcpLogEntry, "pid">): void {
   try {
     appendFileSync(logPath, `${JSON.stringify({ pid: process.pid, ...entry })}\n`, "utf8");
   } catch {
-    // 只读沙箱未放行日志路径时静默忽略
   }
 }
 
@@ -144,7 +136,6 @@ function saveSession(sessionId: string, data: Record<string, unknown>): void {
   try {
     writeFileSync(f, JSON.stringify(data), "utf8");
   } catch {
-    // 只读沙箱下忽略状态持久化
   }
 }
 
@@ -244,6 +235,205 @@ process.stdin.on("end", () => {
   writeLog({ event: "stdin_eof" });
   setTimeout(() => process.exit(0), 10).unref();
 });
+
+function notifyUpdate(client: AgentContext, sessionId: string, update: SessionNotification["update"]): Promise<void> {
+  return client.notify(methods.client.session.update, { sessionId, update });
+}
+
+async function playPrelude(client: AgentContext, sessionId: string, turnScript: FakeAcpTurnScript): Promise<void> {
+  if (turnScript.commandsUpdate) {
+    await notifyUpdate(client, sessionId, {
+      sessionUpdate: "available_commands_update",
+      availableCommands: toAvailableCommands(turnScript.commandsUpdate),
+    });
+  }
+
+  for (const custom of turnScript.customUpdates ?? []) {
+    const rawNotification = {
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId,
+        update: {
+          sessionUpdate: custom.sessionUpdate,
+          ...(custom.payload ?? {}),
+        },
+      },
+    };
+    process.stdout.write(`${JSON.stringify(rawNotification)}\n`);
+  }
+
+  for (const thought of turnScript.thoughtChunks ?? []) {
+    await notifyUpdate(client, sessionId, {
+      sessionUpdate: "agent_thought_chunk",
+      content: { type: "text", text: thought },
+    });
+  }
+
+  for (const ext of turnScript.extensionRequests ?? []) {
+    try {
+      const res = await client.request(ext.method, ext.params);
+      writeLog({ event: "extension_response", method: ext.method, result: res });
+    } catch (err) {
+      writeLog({
+        event: "extension_error",
+        method: ext.method,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  if (turnScript.elicitation) {
+    const elicitationRes = await client.request(methods.client.elicitation.create, {
+      sessionId,
+      mode: "form",
+      message: "Please fill out interactive form",
+      requestedSchema: {
+        type: "object",
+        properties: {
+          answer: { type: "string" },
+        },
+      },
+    });
+    writeLog({ event: "elicitation_response", result: elicitationRes });
+  }
+}
+
+async function askToolPermission(client: AgentContext, sessionId: string, tool: FakeAcpToolStep): Promise<boolean> {
+  const perm = tool.requestPermission;
+  if (!perm) return true;
+  const permRes = await client.request(methods.client.session.requestPermission, {
+    sessionId,
+    toolCall: {
+      toolCallId: tool.toolCallId,
+      title: perm.title ?? tool.title,
+      ...(perm.name !== undefined
+        ? { name: perm.name }
+        : tool.name !== undefined
+          ? { name: tool.name }
+          : {}),
+      ...(perm.kind !== undefined
+        ? { kind: perm.kind }
+        : tool.kind !== undefined
+          ? { kind: tool.kind }
+          : {}),
+      ...(tool.rawInput !== undefined ? { rawInput: tool.rawInput } : {}),
+      ...(perm.meta ? { _meta: perm.meta } : {}),
+    },
+    options: perm.options ?? DEFAULT_PERMISSION_OPTIONS,
+  });
+  writeLog({
+    event: "permission_outcome",
+    toolCallId: tool.toolCallId,
+    outcome: permRes.outcome,
+  });
+  return (
+    permRes.outcome.outcome === "selected" &&
+    (permRes.outcome.optionId === "allow-always" || permRes.outcome.optionId === "allow-once")
+  );
+}
+
+function probeWrite(path: string): void {
+  try {
+    writeFileSync(path, "probe", "utf8");
+    writeLog({ event: "probe_write", path, ok: true });
+  } catch (err) {
+    writeLog({
+      event: "probe_write",
+      path,
+      ok: false,
+      code: (err as NodeJS.ErrnoException).code ?? "ERR",
+    });
+  }
+}
+
+async function playToolCall(client: AgentContext, sessionId: string, tool: FakeAcpToolStep): Promise<void> {
+  const allowed = await askToolPermission(client, sessionId, tool);
+
+  await notifyUpdate(client, sessionId, {
+    sessionUpdate: "tool_call",
+    toolCallId: tool.toolCallId,
+    title: tool.title,
+    ...(tool.name !== undefined ? { name: tool.name } : {}),
+    ...(tool.kind !== undefined ? { kind: tool.kind } : {}),
+    status: "in_progress",
+    ...(tool.rawInput !== undefined ? { rawInput: tool.rawInput } : {}),
+    ...(tool.locations !== undefined ? { locations: tool.locations } : {}),
+  });
+
+  if (allowed && tool.probeWritePath) probeWrite(tool.probeWritePath);
+
+  await notifyUpdate(client, sessionId, {
+    sessionUpdate: "tool_call_update",
+    toolCallId: tool.toolCallId,
+    status: allowed ? "completed" : "failed",
+    ...(tool.resultContent !== undefined ? { content: tool.resultContent } : {}),
+    ...(tool.rawOutput !== undefined ? { rawOutput: tool.rawOutput } : {}),
+  } as SessionNotification["update"]);
+}
+
+async function playReply(client: AgentContext, sessionId: string, turnScript: FakeAcpTurnScript): Promise<void> {
+  for (const chunk of turnScript.textChunks ?? []) {
+    const text = typeof chunk === "string" ? chunk : chunk.text;
+    const messageId = typeof chunk === "string" ? undefined : chunk.messageId;
+    await notifyUpdate(client, sessionId, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text },
+      ...(messageId !== undefined ? { messageId } : {}),
+    });
+  }
+
+  if (turnScript.usageUpdate) {
+    await notifyUpdate(client, sessionId, {
+      sessionUpdate: "usage_update",
+      used: turnScript.usageUpdate.used,
+      size: turnScript.usageUpdate.size,
+    });
+  }
+
+  if (turnScript.spawnChildPidFile) {
+    const sleeper = spawn(process.execPath, ["-e", "setInterval(() => {}, 10000)"], {
+      stdio: "ignore",
+    });
+    if (sleeper.pid) {
+      writeFileSync(turnScript.spawnChildPidFile, String(sleeper.pid), "utf8");
+    }
+  }
+}
+
+async function endScriptedTurn(
+  turnScript: FakeAcpTurnScript,
+  cancelCtrl: AbortController,
+): Promise<{ stopReason: StopReason; usage?: Usage }> {
+  if (turnScript.crashExitCode !== undefined) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    process.exit(turnScript.crashExitCode);
+  }
+
+  if (turnScript.waitForCancel) {
+    if (turnScript.ignoreCancel) {
+      await new Promise(() => {});
+    }
+    await sleepWithAbort(turnScript.sleepMs ?? 30_000, cancelCtrl.signal);
+    return { stopReason: "cancelled" };
+  }
+
+  if (turnScript.sleepMs) {
+    const res = await sleepWithAbort(turnScript.sleepMs, cancelCtrl.signal);
+    if (res === "aborted") {
+      return { stopReason: "cancelled" };
+    }
+  }
+
+  if (turnScript.throwRpcError) {
+    throw new RequestError(turnScript.throwRpcError.code, turnScript.throwRpcError.message);
+  }
+
+  return {
+    stopReason: turnScript.stopReason ?? "end_turn",
+    ...(turnScript.usage ? { usage: turnScript.usage } : {}),
+  };
+}
 
 const stream = ndJsonStream(
   Writable.toWeb(process.stdout) as unknown as WritableStream<Uint8Array>,
@@ -450,204 +640,12 @@ const app = agent({ name: "fake-acp-agent" })
         process.stdout.write("x".repeat(turnScript.unterminatedOutputBytes));
         await new Promise(() => {});
       }
-      if (turnScript.commandsUpdate) {
-        await ctx.client.notify(methods.client.session.update, {
-          sessionId,
-          update: {
-            sessionUpdate: "available_commands_update",
-            availableCommands: toAvailableCommands(turnScript.commandsUpdate),
-          },
-        });
-      }
-
-      for (const custom of turnScript.customUpdates ?? []) {
-        const rawNotification = {
-          jsonrpc: "2.0",
-          method: "session/update",
-          params: {
-            sessionId,
-            update: {
-              sessionUpdate: custom.sessionUpdate,
-              ...(custom.payload ?? {}),
-            },
-          },
-        };
-        process.stdout.write(`${JSON.stringify(rawNotification)}\n`);
-      }
-
-      for (const thought of turnScript.thoughtChunks ?? []) {
-        await ctx.client.notify(methods.client.session.update, {
-          sessionId,
-          update: {
-            sessionUpdate: "agent_thought_chunk",
-            content: { type: "text", text: thought },
-          },
-        });
-      }
-
-      for (const ext of turnScript.extensionRequests ?? []) {
-        try {
-          const res = await ctx.client.request(ext.method, ext.params);
-          writeLog({ event: "extension_response", method: ext.method, result: res });
-        } catch (err) {
-          writeLog({
-            event: "extension_error",
-            method: ext.method,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-
-      if (turnScript.elicitation) {
-        const elicitationRes = await ctx.client.request(methods.client.elicitation.create, {
-          sessionId,
-          mode: "form",
-          message: "Please fill out interactive form",
-          requestedSchema: {
-            type: "object",
-            properties: {
-              answer: { type: "string" },
-            },
-          },
-        });
-        writeLog({ event: "elicitation_response", result: elicitationRes });
-      }
-
+      await playPrelude(ctx.client, sessionId, turnScript);
       for (const tool of turnScript.toolCalls ?? []) {
-        let allowed = true;
-        if (tool.requestPermission) {
-          const permRes = await ctx.client.request(methods.client.session.requestPermission, {
-            sessionId,
-            toolCall: {
-              toolCallId: tool.toolCallId,
-              title: tool.requestPermission.title ?? tool.title,
-              ...(tool.requestPermission.name !== undefined
-                ? { name: tool.requestPermission.name }
-                : tool.name !== undefined
-                  ? { name: tool.name }
-                  : {}),
-              ...(tool.requestPermission.kind !== undefined
-                ? { kind: tool.requestPermission.kind }
-                : tool.kind !== undefined
-                  ? { kind: tool.kind }
-                  : {}),
-              ...(tool.rawInput !== undefined ? { rawInput: tool.rawInput } : {}),
-              ...(tool.requestPermission.meta ? { _meta: tool.requestPermission.meta } : {}),
-            },
-            options: tool.requestPermission.options ?? DEFAULT_PERMISSION_OPTIONS,
-          });
-          writeLog({
-            event: "permission_outcome",
-            toolCallId: tool.toolCallId,
-            outcome: permRes.outcome,
-          });
-          allowed =
-            permRes.outcome.outcome === "selected" &&
-            (permRes.outcome.optionId === "allow-always" || permRes.outcome.optionId === "allow-once");
-        }
-
-        await ctx.client.notify(methods.client.session.update, {
-          sessionId,
-          update: {
-            sessionUpdate: "tool_call",
-            toolCallId: tool.toolCallId,
-            title: tool.title,
-            ...(tool.name !== undefined ? { name: tool.name } : {}),
-            ...(tool.kind !== undefined ? { kind: tool.kind } : {}),
-            status: "in_progress",
-            ...(tool.rawInput !== undefined ? { rawInput: tool.rawInput } : {}),
-            ...(tool.locations !== undefined ? { locations: tool.locations } : {}),
-          },
-        });
-
-        if (allowed && tool.probeWritePath) {
-          try {
-            writeFileSync(tool.probeWritePath, "probe", "utf8");
-            writeLog({ event: "probe_write", path: tool.probeWritePath, ok: true });
-          } catch (err) {
-            writeLog({
-              event: "probe_write",
-              path: tool.probeWritePath,
-              ok: false,
-              code: (err as NodeJS.ErrnoException).code ?? "ERR",
-            });
-          }
-        }
-
-        await ctx.client.notify(methods.client.session.update, {
-          sessionId,
-          update: {
-            sessionUpdate: "tool_call_update",
-            toolCallId: tool.toolCallId,
-            status: allowed ? "completed" : "failed",
-            ...(tool.resultContent !== undefined ? { content: tool.resultContent } : {}),
-            ...(tool.rawOutput !== undefined ? { rawOutput: tool.rawOutput } : {}),
-          },
-        });
+        await playToolCall(ctx.client, sessionId, tool);
       }
-
-      for (const chunk of turnScript.textChunks ?? []) {
-        const text = typeof chunk === "string" ? chunk : chunk.text;
-        const messageId = typeof chunk === "string" ? undefined : chunk.messageId;
-        await ctx.client.notify(methods.client.session.update, {
-          sessionId,
-          update: {
-            sessionUpdate: "agent_message_chunk",
-            content: { type: "text", text },
-            ...(messageId !== undefined ? { messageId } : {}),
-          },
-        });
-      }
-
-      if (turnScript.usageUpdate) {
-        await ctx.client.notify(methods.client.session.update, {
-          sessionId,
-          update: {
-            sessionUpdate: "usage_update",
-            used: turnScript.usageUpdate.used,
-            size: turnScript.usageUpdate.size,
-          },
-        });
-      }
-
-      if (turnScript.spawnChildPidFile) {
-        const sleeper = spawn(process.execPath, ["-e", "setInterval(() => {}, 10000)"], {
-          stdio: "ignore",
-        });
-        if (sleeper.pid) {
-          writeFileSync(turnScript.spawnChildPidFile, String(sleeper.pid), "utf8");
-        }
-      }
-
-      if (turnScript.crashExitCode !== undefined) {
-        // 给 stdout 一点冲刷时间再异常退出
-        await new Promise((resolve) => setTimeout(resolve, 25));
-        process.exit(turnScript.crashExitCode);
-      }
-
-      if (turnScript.waitForCancel) {
-        if (turnScript.ignoreCancel) {
-          await new Promise(() => {});
-        }
-        await sleepWithAbort(turnScript.sleepMs ?? 30_000, cancelCtrl.signal);
-        return { stopReason: "cancelled" };
-      }
-
-      if (turnScript.sleepMs) {
-        const res = await sleepWithAbort(turnScript.sleepMs, cancelCtrl.signal);
-        if (res === "aborted") {
-          return { stopReason: "cancelled" };
-        }
-      }
-
-      if (turnScript.throwRpcError) {
-        throw new RequestError(turnScript.throwRpcError.code, turnScript.throwRpcError.message);
-      }
-
-      return {
-        stopReason: turnScript.stopReason ?? "end_turn",
-        ...(turnScript.usage ? { usage: turnScript.usage } : {}),
-      };
+      await playReply(ctx.client, sessionId, turnScript);
+      return await endScriptedTurn(turnScript, cancelCtrl);
     } finally {
       activeTurnAbort.delete(sessionId);
     }

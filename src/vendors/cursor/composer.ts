@@ -1,7 +1,4 @@
-// Cursor 输入框 "/" 命令与 "@" 引用实现：
-// - 会话运行中：对接 ACP `available_commands_update` 实时命令列表，并始终兜底内置 `/compact`；
-// - 会话未运行：轻量扫描项目与用户目录的 `.cursor/commands/*.md`、`.cursor/skills/*/SKILL.md`、`.agents/skills/*/SKILL.md` 并合并 `/compact`，
-//   避免为空闲补全拉起耗时约 8s 的重型 ACP 进程。
+// Scan files while idle instead of starting the ~8s ACP process.
 import { closeSync, constants, existsSync, fstatSync, openSync, readdirSync, readSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, extname, join } from "node:path";
@@ -25,7 +22,6 @@ function compactFallbackCommand(): ComposerCommand {
   };
 }
 
-/** 确保命令列表中包含内置压缩命令 `/compact`，并遵守 MAX_COMMANDS 上限。 */
 export function ensureCursorCompactCommand(commands: readonly ComposerCommand[]): ComposerCommand[] {
   const compact = compactFallbackCommand();
   const hasCompact = commands.some((c) => c.name.toLowerCase() === compact.name.toLowerCase());
@@ -40,10 +36,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-/**
- * 解析 Cursor 命令列表：兼容通用 ComposerCommand 数组与 ACP AvailableCommand 数组（带 input.hint），
- * 非数组（且不含 availableCommands 数组）时返回 null。
- */
 export function parseCursorCommands(raw: unknown): ComposerCommand[] | null {
   const list = Array.isArray(raw)
     ? raw
@@ -75,13 +67,12 @@ export function parseCursorCommands(raw: unknown): ComposerCommand[] | null {
   return ensureCursorCompactCommand(parsed);
 }
 
-/** 只读文件开头这么多字节找说明（大文件不整个读进内存）。 */
 const MARKDOWN_HEAD_BYTES = 4096;
 
 function readHead(filePath: string): string {
   let fd: number | null = null;
   try {
-    // SKILL.md 可能是 FIFO 之类的特殊文件：非阻塞打开，不是普通文件就不读，免得卡住守护进程
+    // Open non-blocking: SKILL.md could be a FIFO.
     fd = openSync(filePath, constants.O_RDONLY | constants.O_NONBLOCK);
     if (!fstatSync(fd).isFile()) return "";
     const buf = Buffer.alloc(MARKDOWN_HEAD_BYTES);
@@ -93,7 +84,6 @@ function readHead(filePath: string): string {
   }
 }
 
-/** Markdown / SKILL.md 的简短说明：frontmatter 的 description，没有就取正文第一行。 */
 function readMarkdownDescription(filePath: string): string {
   const content = readHead(filePath);
   let body = content;

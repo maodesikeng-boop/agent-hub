@@ -1,8 +1,3 @@
-// Antigravity (agy) 的输入框实现：
-// - 命令列表：`agy -p "/skills" --output-format json` 返回的 skills（{ command: { name: "skills", data: { skills: [...] } } }），
-//   再加上内置可用斜杠命令（如 /compact）；
-// - `@path` 原生支持，带空格或引号的路径用 `@"a b.md"`；
-// - 隐藏名单与拦截原因在 spec.ts 的 composer；模型名单和登录状态在 catalog.ts。
 import {
   COMMANDS_QUERY_TIMEOUT_MS,
   MAX_COMMANDS,
@@ -15,7 +10,6 @@ import type { CommandsTarget, VendorComposer, VendorComposerBase } from "../../d
 import { createSpecComposerBase } from "../_common/composer.ts";
 import { queryAgySkills, type AgyModelQueryOptions } from "./catalog.ts";
 
-/** agy 常用内置可用斜杠命令（非隐藏命令）。 */
 const AGY_BUILTIN_COMMANDS: readonly ComposerCommand[] = [
   { name: "compact", description: "压缩当前对话上下文", builtin: true },
 ];
@@ -38,10 +32,6 @@ function extractAgySkills(raw: unknown): unknown[] | null {
   return null;
 }
 
-/**
- * `agy -p "/skills" --output-format json` 的输出 → 通用 ComposerCommand[]。
- * 兼容外层 `{ command: { data: { skills: [...] } } }` 或直接传数组；合并内置可用斜杠命令并去重。
- */
 export function parseAgyCommands(raw: unknown): ComposerCommand[] | null {
   const list = extractAgySkills(raw);
   if (list === null) return null;
@@ -72,7 +62,6 @@ export function parseAgyCommands(raw: unknown): ComposerCommand[] | null {
 
 const specBase = createSpecComposerBase("agy");
 
-/** 不用起进程的基础部分。 */
 export const agyComposerBase: VendorComposerBase = {
   ...specBase,
   parseCommands: parseAgyCommands,
