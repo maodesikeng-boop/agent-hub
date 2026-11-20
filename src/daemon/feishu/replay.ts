@@ -4,7 +4,7 @@ import type { FeishuChatId } from "../../shared/feishu.ts";
 import { FEISHU_CATCHUP_MAX_MESSAGES, FEISHU_CLOSE_DRAIN_MS, FEISHU_PAGE_SIZE } from "../../shared/limits.ts";
 import { handleError, sendText, unlessRejected } from "./api.ts";
 import { resumeUploads, startUploadsOf } from "./attachments.ts";
-import { errorText, isReady, owner, type FeishuContext } from "./context.ts";
+import { errorText, isCenter, isReady, owner, type FeishuContext } from "./context.ts";
 import {
   postAskCard,
   postRouterAskCard,
@@ -153,7 +153,7 @@ async function replayChat(ctx: FeishuContext, chat: FeishuChatBinding, recent: b
   await settleRouterCards(ctx, chat);
   await replayRouterEvents(ctx, chat, recent);
   await resumeUploads(ctx, chat);
-  if (ctx.store.postOf({ kind: "router_settings" })?.cardId != null) {
+  if (isCenter(ctx) && ctx.store.postOf({ kind: "router_settings" })?.cardId != null) {
     await unlessRejected(ctx, () => refreshRouterSettingsCard(ctx));
   }
 }

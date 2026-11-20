@@ -49,7 +49,8 @@ export const centerRouterChat = (ctx: FeishuContext): FeishuChatBinding | null =
 export const selfDeviceId = (ctx: FeishuContext): DeviceId | undefined => (isDeviceId(ctx.options.device.id) ? ctx.options.device.id : undefined);
 
 // Feishu dedupes sends by uuid across the app, and every device numbers its ledger rows from 1.
-export const routerPostUuid = (ctx: FeishuContext, kind: string, id: number) => `fusa-${kind}-${ctx.options.device.id.replaceAll("-", "").slice(0, 12)}-${id}`;
+export const devicePostUuid = (ctx: FeishuContext, kind: string, key: number | string) =>
+  `fusa-${kind}-${ctx.options.device.id.replaceAll("-", "").slice(0, 12)}-${key}`;
 
 function awaitingUser(ctx: FeishuContext, conversationId: ConversationId): boolean {
   // `sender != 'agent'` lets SQLite use the messages_conversation_non_agent partial index.

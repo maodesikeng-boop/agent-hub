@@ -73,8 +73,8 @@ describe("createFeishuFileService", () => {
     expect(await svc.upload({ ...f, part: 2, name: "huge.zip", mime: "application/octet-stream", bytes: FEISHU_FILE_MAX_BYTES + 1 })).toEqual({ kind: "too_large" });
     expect(fake.calls.filter((c) => c.method === "uploadFile")).toHaveLength(1);
     if (mp4.kind !== "file") throw new Error("unreachable");
-    await svc.sendFile("oc_1" as FeishuChatId, { ...f, part: 1, name: "demo.mp4" }, mp4);
-    expect(fake.callsOf("message.create")[0]).toMatchObject({ msg_type: "media", receive_id: "oc_1", uuid: "fusa-file-7-1" });
+    await svc.sendFile("oc_1" as FeishuChatId, mp4, "fusa-f-dev-7-1");
+    expect(fake.callsOf("message.create")[0]).toMatchObject({ msg_type: "media", receive_id: "oc_1", uuid: "fusa-f-dev-7-1" });
   });
 
   it("超过最长边的截图传缩过的临时副本，传完删掉临时副本，原图不动", async () => {

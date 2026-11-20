@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DeviceId } from "../../shared/api.ts";
 import { askOf, type MessageId, type PmId, type SessionId, type WorkerId } from "../../shared/domain.ts";
 import type { FeishuChatId } from "../../shared/feishu.ts";
+import { FEISHU_CHAT_UUID_MAX_CHARS } from "../../shared/limits.ts";
 import type { DeviceFingerprint, MeshApprovalView } from "../../shared/mesh.ts";
 import { AGENT_VENDORS } from "../../shared/vendors.ts";
 import { REPORT_END, REPORT_START } from "../../shared/worker.ts";
@@ -44,7 +45,11 @@ afterEach(async () => {
   while (cleanups.length > 0) await cleanups.pop()!();
 });
 
-const lease = (holding: boolean): CenterLease => ({ holding: () => holding, holder: () => TOKYO, refresh: () => {}, onChange: () => () => {}, close: async () => {} });
+interface LeaseFlag {
+  holding: boolean;
+}
+
+const lease = (flag: LeaseFlag): CenterLease => ({ holding: () => flag.holding, holder: () => TOKYO, refresh: () => {}, onChange: () => () => {}, close: async () => {} });
 
 const meshListeners = new Set<() => void>();
 
@@ -70,7 +75,7 @@ function approvalHooks(): FeishuServiceMeshHooks {
   };
 }
 
-function makeNode(deviceId: DeviceId, fake: FakeFeishu, holding: boolean, models?: ModelCatalogs): Node {
+function makeNode(deviceId: DeviceId, fake: FakeFeishu, flag: LeaseFlag, models?: ModelCatalogs): Node {
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), "router-mesh-")));
   const dataHome = join(root, ".agent-hub");
   mkdirSync(join(dataHome, "state"), { recursive: true });
@@ -94,7 +99,7 @@ function makeNode(deviceId: DeviceId, fake: FakeFeishu, holding: boolean, models
     uploadsDir: join(dataHome, "uploads"),
     sentFilesDir: join(dataHome, "sent-files"),
     device: { id: deviceId, name: NAMES[deviceId]! },
-    lease: lease(holding),
+    lease: lease(flag),
     mesh: approvalHooks(),
     log: () => {},
     createTransport: () => fake,
@@ -149,8 +154,9 @@ async function twoDevices() {
   });
   models.report("claude", "signed_out");
   cleanups.push(() => models.close());
-  const tokyo = makeNode(TOKYO, fake, true);
-  const mac = makeNode(MAC, fake, false, models);
+  const leases = { tokyo: { holding: true }, mac: { holding: false } };
+  const tokyo = makeNode(TOKYO, fake, leases.tokyo);
+  const mac = makeNode(MAC, fake, leases.mac, models);
   const online = { mac: true };
   const forwarded: DeviceId[] = [];
   const bots = new Map<DeviceId, FeishuAccountBot>();
@@ -189,7 +195,7 @@ async function twoDevices() {
   for (const fn of meshListeners) fn();
   await settle();
   const routerChatId = createFeishuStore(tokyo.db).chatOfTarget({ kind: "router" })!.chatId;
-  return { fake, tokyo, mac, models, online, forwarded, settle, routerChatId };
+  return { fake, tokyo, mac, models, leases, online, forwarded, settle, routerChatId };
 }
 
 type Devices = Awaited<ReturnType<typeof twoDevices>>;
@@ -215,10 +221,22 @@ function buttonValues(card: FeishuCardJson): unknown[] {
 
 const routerItemOfAsk = (node: Node, askId: MessageId) => node.db.get<{ id: number }>("SELECT id FROM router_items WHERE ask_message_id = ?", askId)!.id;
 
-function macProject(devices: Devices, name: string): { pmId: PmId; sessionId: SessionId } {
-  const created = devices.mac.ledger.createPm({ name, mode: "manage_only", persona: "", folder: makeRepo(devices.mac, name) });
+function projectOn(node: Node, name: string): { pmId: PmId; sessionId: SessionId } {
+  const created = node.ledger.createPm({ name, mode: "manage_only", persona: "", folder: makeRepo(node, name) });
   return { pmId: created.pm.id, sessionId: created.sessionId };
 }
+
+const macProject = (devices: Devices, name: string) => projectOn(devices.mac, name);
+
+async function askWithFile(node: Node, pm: { sessionId: SessionId }, text: string, fileName: string): Promise<MessageId> {
+  const path = join(node.root, fileName);
+  writeFileSync(path, `# ${text}\n`);
+  const files = [{ label: "方案", path }];
+  const sharedFiles = await node.ledger.shareHubFiles(pm.sessionId, files);
+  return node.ledger.hubCall(pm.sessionId, "ask", { text, options: ["通过", "打回"], files }, { sharedFiles }).data.messageId;
+}
+
+const routerUuidCount = (fake: FakeFeishu, uuid: string) => fake.callsOf("message.create").filter((c) => c.uuid === uuid).length;
 
 async function raiseMacGate(devices: Devices, pm: { sessionId: SessionId }) {
   const graph = devices.mac.ledger.hubCall(pm.sessionId, "graph.create", {
@@ -315,5 +333,79 @@ describe("双机组网下的总助单聊", () => {
     expect(devices.forwarded).toEqual([MAC, MAC]);
     expect(askOf(mac.ledger.getMessage(laterAsk)!)?.answered).not.toBe(true);
     expect(routerChatId).toBe("oc_p2p" as FeishuChatId);
+  });
+
+  it("Mac 短暂接过中心租约、长连接没连上的窗口里出的拍板卡，退回非中心后自动补发；之前发过的卡不重发", async () => {
+    const devices = await twoDevices();
+    const { fake, mac, leases, routerChatId } = devices;
+    const hub = macProject(devices, "agent-hub");
+    await devices.settle();
+    const earlierAsk = mac.ledger.hubCall(hub.sessionId, "ask", { text: "切换前的拍板", options: ["发", "不发"] }).data.messageId;
+    await devices.settle();
+    const earlierItem = routerItemOfAsk(mac, earlierAsk);
+    expect(postOf(mac, { kind: "router_item", itemId: earlierItem })?.chatId).toBe(routerChatId);
+    const earlierUuid = `fusa-r-22222222bbbb-${earlierItem}`;
+    expect(routerUuidCount(fake, earlierUuid)).toBe(1);
+
+    leases.mac.holding = true;
+    await mac.service.syncLeaseConnection();
+    fake.handlers!.onDisconnected("wifi flap");
+    const flapAsk = mac.ledger.hubCall(hub.sessionId, "ask", { text: "断线窗口拍板卡", options: ["发", "不发"] }).data.messageId;
+    await devices.settle();
+    expect(postOf(mac, { kind: "router_item", itemId: routerItemOfAsk(mac, flapAsk) })).toBeNull();
+    leases.mac.holding = false;
+    await mac.service.syncLeaseConnection();
+    await devices.settle();
+    expect(postOf(mac, { kind: "router_item", itemId: routerItemOfAsk(mac, flapAsk) })?.chatId).toBe(routerChatId);
+
+    const start = fake.start;
+    fake.start = async () => {
+      throw new Error("ws handshake failed");
+    };
+    leases.mac.holding = true;
+    await mac.service.syncLeaseConnection();
+    const failedAsk = mac.ledger.hubCall(hub.sessionId, "ask", { text: "握手失败窗口拍板卡", options: ["发", "不发"] }).data.messageId;
+    await devices.settle();
+    expect(postOf(mac, { kind: "router_item", itemId: routerItemOfAsk(mac, failedAsk) })).toBeNull();
+    fake.start = start;
+    leases.mac.holding = false;
+    await mac.service.syncLeaseConnection();
+    await devices.settle();
+    expect(postOf(mac, { kind: "router_item", itemId: routerItemOfAsk(mac, failedAsk) })?.chatId).toBe(routerChatId);
+    expect(mac.service.setup.status().state).toBe("connected");
+    expect(routerUuidCount(fake, earlierUuid)).toBe(1);
+  });
+
+  it("两台电脑账本同序号的 .md 交付物都送进共享总助单聊，同一份交付物发项目群和总助单聊也不被飞书按 uuid 吞掉", async () => {
+    const devices = await twoDevices();
+    const { fake, tokyo, mac, routerChatId } = devices;
+    const tokyoPm = projectOn(tokyo, "agent-hub");
+    const macPm = macProject(devices, "agent-hub");
+    await devices.settle();
+    const tokyoAsk = await askWithFile(tokyo, tokyoPm, "Tokyo 方案", "plan.md");
+    const macAsk = await askWithFile(mac, macPm, "Mac 方案", "plan.md");
+    expect(macAsk).toBe(tokyoAsk);
+    await vi.waitFor(async () => {
+      await devices.settle();
+      for (const node of [tokyo, mac]) {
+        expect(postOf(node, { kind: "router_file", messageId: macAsk, part: 0 })?.state).toBe("final");
+        expect(postOf(node, { kind: "file", messageId: macAsk, part: 0 })?.state).toBe("final");
+      }
+    });
+
+    const fileSends = fake.callsOf("message.create").filter((c) => c.msg_type === "file");
+    expect(new Set(fileSends.map((c) => c.uuid)).size).toBe(4);
+    expect(fileSends.every((c) => typeof c.uuid === "string" && c.uuid.length <= FEISHU_CHAT_UUID_MAX_CHARS)).toBe(true);
+    const delivered = (node: Node, kind: "file" | "router_file") => postOf(node, { kind, messageId: macAsk, part: 0 })!;
+    const routerFiles = [delivered(tokyo, "router_file"), delivered(mac, "router_file")];
+    expect(routerFiles.map((p) => p.chatId)).toEqual([routerChatId, routerChatId]);
+    expect(new Set(routerFiles.map((p) => p.messageId)).size).toBe(2);
+    for (const node of [tokyo, mac]) {
+      const group = delivered(node, "file");
+      expect(group.chatId).not.toBe(routerChatId);
+      expect(fake.sent.some((s) => s.messageId === group.messageId && s.chatId === group.chatId)).toBe(true);
+      expect(group.messageId).not.toBe(delivered(node, "router_file").messageId);
+    }
+    for (const post of routerFiles) expect(fake.sent.some((s) => s.messageId === post.messageId && s.chatId === routerChatId)).toBe(true);
   });
 });

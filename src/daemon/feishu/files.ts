@@ -109,7 +109,7 @@ export type FeishuUploaded =
 
 export interface FeishuFileService {
   upload(file: FeishuOutboundFile): Promise<FeishuUploaded>;
-  sendFile(chatId: FeishuChatId, file: FeishuOutboundFile, uploaded: Extract<FeishuUploaded, { kind: "file" }>): Promise<FeishuMessageId>;
+  sendFile(chatId: FeishuChatId, uploaded: Extract<FeishuUploaded, { kind: "file" }>, uuid: string): Promise<FeishuMessageId>;
   receive(messageId: FeishuMessageId, file: FeishuInboundFile): Promise<Attachment | null>;
 }
 
@@ -140,13 +140,13 @@ export function createFeishuFileService(deps: FeishuFileServiceDeps): FeishuFile
         if (shrunk !== null) await rm(shrunk, { force: true });
       }
     },
-    async sendFile(chatId, file, uploaded) {
+    async sendFile(chatId, uploaded, uuid) {
       const result = await transport.call("message.create", {
         receive_id_type: "chat_id",
         receive_id: chatId,
         msg_type: uploaded.msgType,
         content: JSON.stringify({ file_key: uploaded.fileKey }),
-        uuid: `fusa-file-${file.messageId}-${file.part}`,
+        uuid,
       });
       const id = parseFeishuMessageId(feishuStringField(feishuDataOf("message.create", result), "message_id"));
       if (id === null) throw new Error("飞书发文件消息没回消息编号");

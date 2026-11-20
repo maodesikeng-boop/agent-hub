@@ -89,6 +89,7 @@ interface LinkState {
   secrets: FeishuSecrets | null;
   wsStarted: boolean;
   wsUp: boolean;
+  httpServing: boolean;
   downSince: number | null;
   authFailed: boolean;
   lastError: string | null;
@@ -216,6 +217,7 @@ export function createFeishuContext(options: FeishuServiceOptions): FeishuContex
       secrets: null,
       wsStarted: false,
       wsUp: false,
+      httpServing: false,
       downSince: null,
       authFailed: false,
       lastError: null,

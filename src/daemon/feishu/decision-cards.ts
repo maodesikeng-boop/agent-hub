@@ -18,7 +18,7 @@ import {
 } from "./cards.ts";
 import { displayOwner, type AttachmentScope, type AttachmentSlot, type FeishuContext, type HostCard } from "./context.ts";
 import { splitFeishuMarkdown } from "./outbound.ts";
-import { chatOfConversation, isActivePm, liveChatOfPm, pmNameOf, pmOfConversation, routerChat, routerPostUuid, selfDeviceId } from "./projection.ts";
+import { chatOfConversation, isActivePm, liveChatOfPm, pmNameOf, pmOfConversation, routerChat, devicePostUuid, selfDeviceId } from "./projection.ts";
 import type { FeishuChatBinding, FeishuPostRecord, FeishuPostRef } from "./store.ts";
 import { MIRROR_TITLE, mirrorText } from "./text-cards.ts";
 
@@ -152,7 +152,7 @@ export async function postRouterAskCard(ctx: FeishuContext, message: Message) {
     if (askStateOf(ctx, message).kind !== "pending") return;
     const slots = await prepareAttachments(ctx, message, "router");
     const card = renderRouterAskCard(message, ask, askStateOf(ctx, message), pmChatId, attachmentViews(slots), originOf(ctx, pmId));
-    const posted = await postCardEntity(ctx, chat.chatId, card, routerPostUuid(ctx, "ra", message.id));
+    const posted = await postCardEntity(ctx, chat.chatId, card, devicePostUuid(ctx, "ra", message.id));
     if (routerChat(ctx)?.chatId !== chat.chatId) return;
     ctx.store.savePost({ ref, chatId: chat.chatId, messageId: posted.messageId, cardId: posted.cardId, sequence: 0, state: "card_pending" }, ctx.now());
     await followUpAttachments(ctx, chat.chatId, slots, posted, "router");
@@ -213,7 +213,7 @@ export async function postRouterItem(ctx: FeishuContext, item: RouterItem) {
   const { askMessage, card, settled } = routerItemCard(ctx, item, slots);
   if (post === null) {
     if (item.kind === "decision" && settled) return;
-    const posted = await postCardEntity(ctx, chat.chatId, card, routerPostUuid(ctx, "r", item.id));
+    const posted = await postCardEntity(ctx, chat.chatId, card, devicePostUuid(ctx, "r", item.id));
     if (ctx.store.chatById(chat.chatId) === null) return;
     const state = item.kind === "report" ? "final" : "card_pending";
     ctx.store.savePost({ ref, chatId: chat.chatId, messageId: posted.messageId, cardId: posted.cardId, sequence: 0, state }, ctx.now());
