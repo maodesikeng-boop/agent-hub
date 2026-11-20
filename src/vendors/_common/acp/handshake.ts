@@ -15,6 +15,7 @@ import type { AcpDriverHost, AcpProc, AcpSessionState, AcpSystemPromptInjection 
 import {
   activeModelFromConfigOptions,
   defaultIsAcpSessionNotFoundError,
+  flattenConfigSelectOptions,
   readAcpSystemPrompt,
   resolveEffortConfigUpdate,
   resolveModelConfigUpdate,
@@ -285,16 +286,21 @@ async function applyDefaultMode(
           configOptions: proc.configOptions,
         })
       : (modeCfg ?? null);
+  if (!targetModeId) return;
+  if (modes && modes.availableModes.some((m) => m.id === targetModeId)) {
+    if (modes.currentModeId !== targetModeId) {
+      await proc.acpConn.agent.request(methods.agent.session.setMode, { sessionId, modeId: targetModeId });
+    }
+    return;
+  }
+  // Agents that dropped the legacy modes field expose the mode as a config option instead.
+  const modeOption = proc.configOptions.find((o) => o.type === "select" && (o.category === "mode" || o.id === "mode"));
   if (
-    targetModeId &&
-    modes &&
-    modes.currentModeId !== targetModeId &&
-    modes.availableModes.some((m) => m.id === targetModeId)
+    modeOption?.type === "select" &&
+    modeOption.currentValue !== targetModeId &&
+    flattenConfigSelectOptions(modeOption).some((c) => c.value === targetModeId)
   ) {
-    await proc.acpConn.agent.request(methods.agent.session.setMode, {
-      sessionId,
-      modeId: targetModeId,
-    });
+    await setConfigOption(proc, sessionId, modeOption.id, targetModeId);
   }
 }
 

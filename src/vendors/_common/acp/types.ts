@@ -157,6 +157,8 @@ export interface AcpReadonlySandboxConfig {
   writableDirs?: (homeDir: string, cwd: string, launch: AcpLaunchContext) => readonly string[];
   writableFileGlobs?: (homeDir: string, cwd: string, launch: AcpLaunchContext) => readonly string[];
   readableFiles?: (homeDir: string) => readonly string[];
+  // Vendor config the read-only process must not load, such as project-level MCP server lists.
+  hiddenPaths?: (homeDir: string, cwd: string, launch: AcpLaunchContext) => readonly string[];
 }
 
 export interface AcpTimeoutsConfig {

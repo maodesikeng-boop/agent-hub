@@ -53,16 +53,17 @@ export async function buildAcpReadonlySandboxInput(
     ...(sandboxCfg?.writableFileGlobs?.(homeDir, realCwd, launch) ?? []),
   ];
   const readableFiles = [...new Set((sandboxCfg?.readableFiles?.(homeDir) ?? []).map(realpathOrSelf))];
+  const policySecretPaths = [...policy.secretPaths, ...(sandboxCfg?.hiddenPaths?.(homeDir, realCwd, launch) ?? [])].map(realpathOrSelf);
 
   const allSecretPaths =
     process.platform === "linux" || process.platform === "win32"
       ? [
           ...new Set([
-            ...policy.secretPaths.map(realpathOrSelf),
+            ...policySecretPaths,
             ...(await scanSecretGlobs([realCwd, ...row.addDirs.map(realpathOrSelf)], policy.secretGlobs)),
           ]),
         ]
-      : policy.secretPaths.map(realpathOrSelf);
+      : [...new Set(policySecretPaths)];
   const secretPaths = allSecretPaths.filter((p) => !readableFiles.includes(p));
   const roProtectedRoots = launch.files.writeScope?.protectedRoots ?? policy.protectedRoots;
 
