@@ -1,6 +1,3 @@
-// 同源待决拍板投影（PendingDecision）：统一汇聚活跃任务图中挂着拍板卡等用户的步骤（status waiting、waitingFor user）与 Router 独立待决项，
-// 不造割裂双轨；按底层数据切片引用做多级 WeakMap 缓存，保证 StateSnapshot 与 HubState（含流式更新）均能返回同一数组引用。
-
 import {
   askOf,
   isTaskNodeWaitingDecision,
@@ -43,7 +40,6 @@ export type PendingDecisionSource =
     };
 
 export interface PendingDecision {
-  /** 全局稳定键：`gate:${deviceId}:${graphId}:${nodeKey}` 或 `item:${deviceId}:${itemId}`。 */
   key: string;
   deviceId: string;
   pmId: PmId;
@@ -55,7 +51,6 @@ export interface PendingDecision {
   context: string;
   options: string[];
   askMessageId: MessageId | null;
-  /** 卡片下面列的文件：门禁步骤取该步 artifact.deliverables，独立待决项取 router_items 上的。没有时不带。 */
   deliverables?: Deliverable[];
   createdAt: number;
   updatedAt: number;
@@ -78,13 +73,11 @@ const EMPTY_ROUTER_ITEMS: readonly RouterItem[] = [];
 const EMPTY_TASK_GRAPHS: readonly TaskGraph[] = [];
 const EMPTY_PROJECTS: readonly Project[] = [];
 
-/** 卡片下面列的文件：有才带，超过一张卡的上限只留前面的（没超时原样带同一个数组引用）。 */
 function cardDeliverables(list: Deliverable[] | undefined): { deliverables?: Deliverable[] } {
   if (list === undefined || list.length === 0) return {};
   return { deliverables: list.length > DELIVERABLES_PER_CARD_MAX ? list.slice(0, DELIVERABLES_PER_CARD_MAX) : list };
 }
 
-/** 计算一个挂卡步骤当前阻塞的下游节点总数与直接下游节点标题预览（最多 3 个）。 */
 export function computeGateImpact(
   graph: Pick<TaskGraph, "nodes" | "edges">,
   nodeKey: TaskNodeKey,
@@ -133,7 +126,6 @@ function messagesOfConversation(
   if (Array.isArray(conversations)) {
     const found = conversations.find((c) => c.conversation?.id === conversationId);
     if (found) return found.messages;
-    // 兼容未传 conversation 字段的单测简化数组：退回扫一遍
     const fallback: Message[] = [];
     for (const c of conversations) {
       if (c.conversation === undefined) fallback.push(...c.messages);
@@ -149,17 +141,12 @@ type CacheByPms = WeakMap<readonly Pm[], CacheByProjects>;
 type CacheByGraphs = WeakMap<readonly TaskGraph[], CacheByPms>;
 const decisionsCache = new WeakMap<readonly RouterItem[], CacheByGraphs>();
 
-/**
- * 从单机快照纯投影出当前全部待用户拍板项（门禁节点 + 无 gateRef 的独立 Router 待决项）。
- * 归档 PM 的项自动跳过；同一份底层数据引用与 deviceId 重复调用时返回完全相同的数组引用（===），且不扫 3 万条 Worker 历史消息。
- */
 export function pendingDecisionsOf(snapshot: DecisionSnapshotInput, deviceId = "local"): PendingDecision[] {
   const routerItems = snapshot.router?.items ?? EMPTY_ROUTER_ITEMS;
   const graphs = normalizeTaskGraphs(snapshot.activeTaskGraphs ?? EMPTY_TASK_GRAPHS);
   const pms = snapshot.pms;
   const projects = snapshot.projects ?? EMPTY_PROJECTS;
 
-  // 只在存在带 askMessageId 的 pending router_item 时才针对目标 PM 对话检查是否有 gateRef，避免遍历全量对话
   let askMessagesSig = "";
   for (const item of routerItems) {
     if (item.kind === "decision" && item.status === "pending" && item.askMessageId !== null) {

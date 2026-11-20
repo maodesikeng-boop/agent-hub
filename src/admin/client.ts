@@ -1,22 +1,17 @@
-// 本机管理 socket run/admin.sock 的客户端（daemon/admin/socket.ts 的另一头）：飞书命令和账号组网命令共用。
-// 令牌读 state/ui-token，所以要用跑守护进程的那个用户跑。
 import { readFileSync } from "node:fs";
 import { request } from "node:http";
 import { ADMIN_SOCKET_TIMEOUT_MS } from "../shared/limits.ts";
 import type { HubPaths } from "../shared/paths.ts";
 
-/** 连不上本机守护进程（没启动，或者不是跑守护进程的那个用户）。 */
 export class AdminUnavailableError extends Error {
   constructor(socketPath: string) {
     super(`连不上本机守护进程（${socketPath}）：先启动 agent-hub 守护进程`);
   }
 }
-/** 管理 socket 回了错误。 */
 export class AdminError extends Error {}
 
 export type AdminMethod = "GET" | "POST" | "PUT" | "DELETE";
 
-/** 后置：200 回 JSON；连不上抛 AdminUnavailableError，回错误抛 AdminError（message 是守护进程给的原因）。 */
 export function createAdminClient(paths: Pick<HubPaths, "uiTokenFile" | "adminSock">) {
   return function admin(method: AdminMethod, path: string, body?: unknown): Promise<unknown> {
     let token: string;
@@ -43,7 +38,6 @@ export function createAdminClient(paths: Pick<HubPaths, "uiTokenFile" | "adminSo
             try {
               value = JSON.parse(text);
             } catch {
-              // 下面按状态码报
             }
             if (res.statusCode === 200) return resolve(value);
             const message = (value as { error?: unknown } | null)?.error;

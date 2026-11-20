@@ -1,25 +1,11 @@
-// agent 发给用户的文件（第 1 步：图片内联、文件卡片）：agent 在回复里用 Markdown 写本机路径，
-// `![说明](/绝对/路径.png)` 或 `[文件名](/绝对/路径)`（路径有空格用尖括号 `[x](</a b.pdf>)`）。
-// 守护进程在这条消息入库时给每个指向本机文件的链接存一份副本（daemon/sent-files.ts），消息 meta 记 files（SentFileMeta）；
-// 网页按 href 把 Markdown 里的图片、链接对上 files，换成内联图片和文件卡片（web/components/Markdown.tsx）。
-// 前后端都用这个文件认链接、认 meta；接口地址在 api.ts 的 API_PATHS.sentFile。
 import { API_PATHS } from "./api.ts";
 import { FALLBACK_MIME, isImageMime, mimeOfFileName } from "./attachments.ts";
 
-/**
- * 一个链接的处理结果：
- * - saved：存好了副本，网页按 id 取；
- * - missing：没找到文件；not_allowed：不在可分享的文件夹里（含数据目录、.git/）；not_file：不是普通文件（文件夹之类）；
- * - too_large：单个超过 MAX_SENT_FILE_BYTES，或这条消息的合计超过 MAX_SENT_FILES_TOTAL_BYTES；unreadable：读不了（没权限、拷贝出错）。
- * 没存副本的不拷任何东西，网页的卡片显示原因（SENT_FILE_REASONS）。
- */
 const SENT_FILE_STATUSES = ["saved", "missing", "not_allowed", "not_file", "too_large", "unreadable"] as const;
 export type SentFileStatus = (typeof SENT_FILE_STATUSES)[number];
 
-/** 文件被定期清理删掉后（取文件接口 404），卡片和图片显示这个。 */
 export const FILE_EXPIRED_TEXT = "文件已过期";
 
-/** 没存副本时卡片上显示的原因。 */
 export const SENT_FILE_REASONS: Readonly<Record<Exclude<SentFileStatus, "saved">, string>> = {
   missing: "没找到文件",
   not_allowed: "不在可分享的文件夹里",
@@ -28,25 +14,17 @@ export const SENT_FILE_REASONS: Readonly<Record<Exclude<SentFileStatus, "saved">
   unreadable: "读不了这个文件",
 };
 
-/** 消息 meta.files 里的一项。 */
 export interface SentFile {
-  /** Markdown 里写的原链接地址（mdast 的 url，转义已处理、%xx 没解码），网页靠它把链接对上这一项。 */
   href: string;
-  /** 解析出的原文件绝对路径（%xx 已解码、~ 已展开、相对路径已按会话的工作目录拼好；没 realpath）。 */
   path: string;
-  /** 副本编号（sent-files/<编号>/ 的目录名，16 位十六进制）；没存副本是 null。 */
   id: string | null;
-  /** 文件名（副本的文件名，清理过；没存副本时是原路径的最后一段）。 */
   name: string;
-  /** 字节数；没找到文件、不在可分享的文件夹里是 null。 */
   size: number | null;
   mime: string;
   status: SentFileStatus;
-  /** 原文件发出时的修改时间（毫秒）；没读到是 null。 */
   mtime: number | null;
 }
 
-/** agent 文字消息的 meta：回复里有指向本机文件的链接时是 { files }；没有的 meta 还是 null（老消息就是这样）。 */
 export type AgentTextMeta = { files: SentFile[] };
 
 const SENT_FILE_MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
@@ -72,10 +50,6 @@ const SENT_FILE_MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
   flac: "audio/flac",
 };
 
-/**
- * 发出去的文件按扩展名定类型：位图同上传（mimeOfFileName），再加上 svg（当图片显示，只用 <img> 加载，带 CSP sandbox，脚本不执行）
- * 、常见文档和音视频；别的 application/octet-stream。直接取文件时只有 image/* 内联，别的当下载（预览窗带 ?inline=1 取 pdf、html，见 daemon/ui-server/server.ts）。
- */
 export function sentFileMime(name: string): string {
   const image = mimeOfFileName(name);
   if (image !== FALLBACK_MIME) return image;
@@ -83,7 +57,6 @@ export function sentFileMime(name: string): string {
   return SENT_FILE_MIME_BY_EXTENSION[dot === -1 ? "" : name.slice(dot + 1).toLowerCase()] ?? FALLBACK_MIME;
 }
 
-/** 网页取副本的地址。 */
 export function sentFileUrl(file: Pick<SentFile, "id" | "name"> & { id: string }): string {
   return API_PATHS.sentFile(file.id, file.name);
 }
@@ -107,27 +80,21 @@ function isSentFile(value: unknown): value is SentFile {
   );
 }
 
-/** 一条消息的 files。老消息（meta 是 null）、没有 files、形状不对的元素：当作没有，不抛错。 */
 export function sentFilesOf(message: { meta: Record<string, unknown> | null }): SentFile[] {
   const list = message.meta?.files;
   return Array.isArray(list) ? list.filter(isSentFile) : [];
 }
 
-// ---- 认链接（守护进程和网页共用：都在 remark 解析出的 mdast 上找）----
-
-/** mdast 节点里用得到的部分（不引 @types/mdast）。 */
 export interface MdNode {
   type: string;
   url?: string;
   alt?: string | null;
-  /** 引用式链接（linkReference、imageReference）和定义（definition）对上用的标识。 */
   identifier?: string;
   value?: string;
   children?: MdNode[];
   data?: Record<string, unknown>;
 }
 
-/** 按文档顺序找出所有图片、链接节点（代码块、行内代码里的不是节点，自然不算）。 */
 export function linkNodesOf(tree: MdNode): MdNode[] {
   const out: MdNode[] = [];
   const walk = (node: MdNode) => {
@@ -138,7 +105,6 @@ export function linkNodesOf(tree: MdNode): MdNode[] {
   return out;
 }
 
-/** 本机路径的写法：绝对路径、file://、~/、相对路径。 */
 export type LocalHref = { kind: "absolute"; path: string } | { kind: "home"; path: string } | { kind: "relative"; path: string };
 
 const URL_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
@@ -153,11 +119,6 @@ function decodePercent(text: string): string {
   }
 }
 
-/**
- * 链接地址是不是指向本机文件，是的话 %xx 解码后给出路径。认：`/绝对路径`、`file:///绝对路径`（或 file://localhost/）、`~/`、
- * 相对路径（按会话的工作目录解析）；不认：http: 之类带协议的、`//主机/`、只有 `#锚点` 或 `?参数` 的、空的。
- * # 和 ? 不当锚点、参数切掉：文件名里本来就可能有，agent 写的是路径不是网址。
- */
 export function parseLocalHref(href: string): LocalHref | null {
   const raw = href.trim();
   if (raw === "" || raw.startsWith("#") || raw.startsWith("?")) return null;
@@ -189,13 +150,8 @@ export function parseLocalHref(href: string): LocalHref | null {
   return { kind: "relative", path };
 }
 
-/** 路径末尾的行号写法：#L10、#L10-L20、#L10-20、#L10C5（GitHub），:10、:10:5、:10-20、:10:5-12:3（编辑器）。 */
 const LOCATION_SUFFIX = /(?:#L?\d+(?:C\d+)?(?:-L?\d+(?:C\d+)?)?|:\d+(?::\d+)?(?:-\d+(?::\d+)?)?)$/;
 
-/**
- * 原样找不到文件时，再试的路径（按顺序）：去掉末尾行号写法；file:// 链接再去掉任何 # 片段（片段本来就不是路径）。
- * 原样的路径由调用方先试：文件名里真带 # 或 : 的照旧能找到。
- */
 export function locationFallbackPaths(href: string, path: string): string[] {
   const out: string[] = [];
   const add = (candidate: string) => {
@@ -203,7 +159,6 @@ export function locationFallbackPaths(href: string, path: string): string[] {
   };
   add(path.replace(LOCATION_SUFFIX, ""));
   if (/^file:/i.test(href.trim())) {
-    // 片段在百分号解码前就切掉：%23 是文件名里真有的 #，已经解码进 path 了，所以这里按原链接的写法再算一遍
     const hash = href.trim().indexOf("#");
     if (hash >= 0) {
       const local = parseLocalHref(href.trim().slice(0, hash));
@@ -241,10 +196,6 @@ function extractRawWindowsLinkTarget(node: MdNode, rawMarkdown: string | undefin
   return null;
 }
 
-/**
- * 回复里写成本机路径的链接（候选）：按出现顺序去重（同一个地址写两次只算一个）。图片和链接一视同仁。
- * 不一定都是文件（站内链接 /login、不存在的相对路径），守护进程逐个判断（daemon/sent-files.ts），最多收 MAX_SENT_FILES_PER_MESSAGE 个。
- */
 export function localLinksOf(tree: MdNode, rawMarkdown?: string): { href: string; local: LocalHref }[] {
   const seen = new Set<string>();
   const out: { href: string; local: LocalHref }[] = [];

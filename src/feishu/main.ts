@@ -1,5 +1,3 @@
-// 飞书终端命令的入口：node <代码目录>/src/feishu/main.ts <子命令>（用法见 cli.ts 的 FEISHU_USAGE）。
-// 守护进程的数据目录和 hub 一样按 AGENT_HUB_HOME（默认 ~/.agent-hub）找；令牌读 state/ui-token，所以要用跑守护进程的那个用户跑。
 import { homedir } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 import qrcode from "qrcode-generator";

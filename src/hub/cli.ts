@@ -1,6 +1,3 @@
-// hub 命令（设计第 8.1 节；规格见 shared/hub.ts 的注释）：agent 在自己的 shell 里敲，令牌和 socket 路径从环境变量读，
-// 经 Unix socket 请求守护进程的 agent 接口，把结果打印出来，按 HUB_EXIT 退出。
-// 只引 shared 里不依赖 node:path 以外东西的几个文件，启动快。
 import { request, type ClientRequest } from "node:http";
 import { posix, resolve } from "node:path";
 import type { Readable } from "node:stream";
@@ -46,33 +43,26 @@ export interface HubIo {
   argv: string[];
   env: Record<string, string | undefined>;
   cwd: string;
-  /** 只有写了 --stdin 才会调；没写就绝不碰标准输入。 */
   stdin: () => Readable;
   stdout: { write(text: string): unknown };
   stderr: { write(text: string): unknown };
-  /** 连上之后多久没动静算没回应，默认 HUB_CLI_TIMEOUT_MS。 */
   timeoutMs?: number;
-  /** --stdin 多久没收到数据就放弃，默认 HUB_CLI_STDIN_IDLE_MS。 */
   stdinIdleMs?: number;
 }
 
-/** 和守护进程认的令牌字符一样；别的字符放进请求头 Node 会直接抛错。 */
+// Must match the daemon's token charset: Node throws on other characters in request headers.
 const TOKEN_CHARS = /^[A-Za-z0-9_-]+$/;
 
-/** 命令名（names.ts 的 HUB_COMMAND），下面的用法和报错里用。 */
 const hub = HUB_COMMAND;
 
 export interface HubCommandSpec {
   command: HubCommand;
   group: string;
   action?: string;
-  /** 命令行写法，如 "project create"、"status"、"worker log"。 */
   cli: string;
-  /** HUB_USAGE 里该命令对应的用法行（含缩进）。 */
   usage: string;
 }
 
-/** 结构化命令规格表：生成 HUB_USAGE、按命令打印简短用法、以及单测防漂移守卫共用。 */
 export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
   {
     command: "status",
@@ -334,15 +324,11 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
   },
 ];
 
-/** 守护进程级命令（不进账本的 hubCall，单独一条路由）。 */
 const SELF_RELOAD_USAGE = `  ${hub} self-reload [--build]                              ${PRODUCT_ID} 自身代码合进来后热重启守护进程：立即返回，等所有会话这一轮收尾、
                                                           全库空闲后自动重启；最多等 ${SELF_RELOAD_DRAIN_MAX_MS / 60_000} 分钟，之后不再等 Worker 轮次和系统消息（重启后自动重发），
                                                           只等你、总助正在回用户的那一轮回完就重启（回执和 hub status 写明最晚几点）；--build 先在后台构建网页，失败就取消、不重启`;
 
-/**
- * hub 用法（hub help、未知顶层命令或环境变量缺失时打印），人和 agent 都看。给项目经理的提示词里另有一份精简的：daemon/prompt.ts 的 HUB_USAGE_PROMPT，
- * 那里项目、性格设定、定时任务、总助、热重启各只留一行，参数让它用 hub help 查；所以这几组的参数和注意事项要在这里写全。改一份，记得看另一份。
- */
+// A condensed copy lives in daemon/prompt.ts HUB_USAGE_PROMPT; keep the two in sync.
 export const HUB_USAGE = `用法：
 ${HUB_COMMAND_SPECS.map((s) => s.usage).join("\n")}
 ${SELF_RELOAD_USAGE}
@@ -370,7 +356,6 @@ const DISPATCH_USAGE = `  ${hub} dispatch pm --device <self|deviceId> --pm <pmId
   ${hub} dispatch project-show --device <self|deviceId> --project <projectId>
   ${hub} dispatch project-create --device <self|deviceId> --folder <路径> [--name <项目名>] [--pm-name <PM名>] [--vendor <${AGENT_VENDORS.join("|")}>] [--mode ${PM_MODES.join("|")}]`;
 
-/** 当第一个词已认出命令组（或进一步认出子命令）时，只输出对应那几行用法 + help 提示；否则输出完整 HUB_USAGE。 */
 export function commandUsageFor(argv: readonly string[]): string {
   const group = argv[0];
   if (group === undefined) return HUB_USAGE;
@@ -384,18 +369,14 @@ export function commandUsageFor(argv: readonly string[]): string {
   return `用法：\n${matched.map((s) => s.usage).join("\n")}\n（完整用法运行 ${hub} help）\n`;
 }
 
-/** 守护进程没开：只说 network 那句话和怎么办，不带 ENOENT、ECONNREFUSED 这类系统码。 */
 const UNREACHABLE_MESSAGE = `${LOCAL_ERRORS.network.text}。${LOCAL_ERRORS.network.hint}`;
-/** hub 自己出了意外的错（退出码 internal）：不打堆栈和异常原文。 */
 const INTERNAL_MESSAGE = "出了意外的错，这条命令没有跑完。重试一次；还不行，把现象告诉用户";
-/** post 里超时的原因；别的原因是系统码（ECONNRESET 之类），不打给人看。 */
 const TIMEOUT_REASON = "超时";
 const NO_ANSWER_MESSAGE = `请求已经发给 ${PRODUCT_ID}，但没等到回应`;
 const MAYBE_EXECUTED_HINT = `请求可能已经执行，请先用 \`${hub} status\` 确认，别直接重试`;
 
 class UsageError extends Error {}
 
-/** node 的 parseArgs 报错（英文）→ 中文，按 err.code 分；认不出的给一句通用的话，原文不外送。 */
 function describeParseError(err: unknown): string {
   const code = (err as { code?: unknown }).code;
   const message = err instanceof Error ? err.message : "";
@@ -460,17 +441,12 @@ type Options = {
   help?: boolean;
 };
 
-/** 解析好的一条命令：body 里的 text 字段留到读完标准输入再填。 */
 interface Parsed {
   command: HubCommand | "router.dispatch" | "self.reload";
   body: Record<string, unknown>;
-  /** 正文从哪来：--stdin、--text 或没有。 */
   textSource: { kind: "stdin" } | { kind: "inline"; value: string } | null;
-  /** 正文放进 body 的哪个字段。 */
   textField?: "text" | "task" | "command" | "prompt" | "context" | "summary" | "note" | "specJson" | "summaryMd" | "question";
-  /** 正文可以不给、给空的也行（换人接手时的 hub worker start --node）：读到空的就不带这个字段，由守护进程按情况判断。 */
   textOptional?: boolean;
-  /** 若同时给了行内首句与 --stdin，拼在 stdin 前面。 */
   textPrefix?: string;
 }
 
@@ -490,7 +466,6 @@ function expandPath(raw: string, env: HubIo["env"], cwd: string): string {
   return resolveFn(cwd, raw);
 }
 
-/** --file [标签=]路径（可多个）：相对路径、~ 按 hub 的当前目录和 HOME 变成绝对路径，守护进程按它存副本。 */
 function fileArgsOf(raw: string[] | undefined, env: HubIo["env"], cwd: string): HubFileArg[] | undefined {
   if (raw === undefined || raw.length === 0) return undefined;
   if (raw.length > HUB_FILE_ARGS_MAX) throw new UsageError(`--file 最多 ${HUB_FILE_ARGS_MAX} 个`);
@@ -516,7 +491,6 @@ function expectPositionals(positionals: string[], count: number, what: string): 
   if (positionals.length !== count) throw new UsageError(`${hub} ${what} 的参数个数不对`);
 }
 
-/** Worker、定时任务的编号：正整数。 */
 function idOf(raw: string | undefined, what: string, label: string): number {
   if (raw === undefined || !/^[1-9][0-9]*$/.test(raw) || !Number.isSafeInteger(Number(raw))) {
     throw new UsageError(`${hub} ${what} 要一个${label}编号（正整数）`);
@@ -531,7 +505,6 @@ function maxTimeMsOf(raw: string): number {
   return parsed.maxTimeMs;
 }
 
-/** hub worker start、send，schedule add 的正文只从标准输入读。 */
 function requireStdin(values: Options, what: string): Parsed["textSource"] {
   if (values.stdin !== true) throw new UsageError(`${hub} ${what} 要 --stdin，正文从标准输入读`);
   return { kind: "stdin" };
@@ -640,7 +613,6 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
   }
   const values = parsed.values as Options;
   const [group, action, ...rest] = parsed.positionals;
-  // hub help graph：打印任务图手册（和项目经理会话启动目录里的 fusa-task-graph 技能同一份正文，读不到文件时用）
   if (group === "help" && action === "graph") return "help-graph";
   if (values.help === true || group === "help") return "help";
   if (group === undefined) throw new UsageError("缺子命令");
@@ -715,7 +687,6 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
       "worker start",
     );
     expectPositionals(rest, 0, "worker start");
-    // 带 --node 时可能是换人接手：标题、正文可以不给（第一次给节点派人时守护进程会要求补上）
     const takeover = values.node !== undefined;
     if (values.title === undefined && !takeover) throw new UsageError(`${hub} worker start 要 --title <标题>`);
     if (values.vendor !== undefined && !isAgentVendor(values.vendor)) {
@@ -823,7 +794,6 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
   if (group === "worker" && action === "show") {
     allowOnly(values, ["task", "report"], "worker show");
     if (values.task === true && values.report === true) throw new UsageError("--task 和 --report 只能用一个");
-    // --report 后面可以跟一个 N（第几轮汇报，从旧到新），写在编号后面
     expectPositionals(rest, values.report === true && rest.length === 2 ? 2 : 1, "worker show");
     const body: Record<string, unknown> = { workerId: workerIdOf(rest[0], "worker show") };
     if (values.task === true) body.task = true;
@@ -895,7 +865,6 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     return { command: `schedule.${action}`, body: { scheduleId: idOf(rest[0], `schedule ${action}`, "定时任务") }, textSource: null };
   }
   if (group === "router" && action === "ask") {
-    // 底层 CLI 兼容别名（已并入 hub ask，不在 help 与提示词暴露）：旧会话若敲了 router ask，平滑转发至统一 ask
     allowOnly(values, ["question", "option", "recommended", "replace", "context", "stdin"], "router ask");
     expectPositionals(rest, 0, "router ask");
     if (values.question === undefined || values.question.trim() === "") {
@@ -1020,7 +989,6 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
     return { command: "graph.list", body, textSource: null };
   }
   if (group === "graph" && action === "ask") {
-    // 底层 CLI 兼容别名（已并入 hub ask --node，不在 help 与提示词暴露）：旧会话若敲了 graph ask，平滑转发至统一 ask
     allowOnly(values, ["graph", "question", "option", "recommended", "stdin"], "graph ask");
     expectPositionals(rest, 1, "graph ask");
     const nodeKey = (rest[0] ?? "").trim();
@@ -1277,10 +1245,6 @@ function parseCommand(argv: string[], env: HubIo["env"], cwd: string): Parsed | 
   throw new UsageError(`不认识的子命令：${[group, action].filter((s) => s !== undefined).join(" ")}`);
 }
 
-/**
- * 读到结束，去掉末尾一个换行（\n 或 \r\n）。超过请求体上限、idleMs 没收到数据、不是合法 UTF-8，都报用法错；
- * 前两种不再读，把流关掉。
- */
 function readAllStdin(stream: Readable, idleMs: number): Promise<string> {
   return new Promise((done, fail) => {
     const chunks: Buffer[] = [];
@@ -1329,11 +1293,8 @@ function readAllStdin(stream: Readable, idleMs: number): Promise<string> {
 
 type Outcome =
   | { kind: "response"; status: number; body: string }
-  /** 请求没发完就失败了：守护进程没收到。 */
   | { kind: "unreachable"; reason: string }
-  /** 请求发完了，但没等到完整的回应：可能已经执行。 */
   | { kind: "no-answer"; reason: string }
-  /** 本地就没发出去（request() 自己抛错）。 */
   | { kind: "not-sent"; reason: string };
 
 export function parseLoopbackTcpEndpoint(endpoint: string): { host: "127.0.0.1"; port: number } | null {
@@ -1347,12 +1308,7 @@ export type HubEndpointTarget =
   | { kind: "tcp"; host: "127.0.0.1"; port: number }
   | { kind: "socket"; socketPath: string };
 
-/**
- * 严格校验 `HUB_SOCK` 目标端点（防凭证外泄）：
- * - 任何 URL scheme 形式只允许 `tcp://127.0.0.1:<1..65535>`（硬拒绝 `0.0.0.0`、`localhost`、IPv6、任意域名或外部 IP）；
- * - 任何 `\\` 或 `//` 开头的 UNC/命名管道路径只允许本机命名管道 `\\.\pipe\<不含斜杠的非空名称>`（硬拒绝远程 SMB 管道防 NTLM 与 Bearer 令牌泄漏）；
- * - 其余仅允许不含 NUL 的本机 Unix socket 路径。
- */
+// Only loopback TCP, local named pipes and local Unix sockets: a remote host or SMB pipe would leak the bearer token (and NTLM credentials).
 export function parseHubEndpoint(raw: string): HubEndpointTarget | null {
   const trimmed = raw.trim();
   if (trimmed === "" || trimmed.includes("\0")) return null;
@@ -1399,11 +1355,10 @@ function post(target: HubEndpointTarget, path: string, token: string, payload: s
         res.on("error", (err) => finish({ kind: "no-answer", reason: err.message }));
       });
     } catch (err) {
-      // 例如请求头里有非法字符：Node 同步抛错。错误信息不带请求头的值，不会漏令牌。
       finish({ kind: "not-sent", reason: (err as Error).message });
       return;
     }
-    // 请求整个交给了内核才算“已发出”：之后再出错，守护进程可能已经收到并执行了。
+    // Once the request is fully flushed the daemon may already have executed it.
     req.on("finish", () => (sent = true));
     req.on("timeout", () => {
       finish(lost(TIMEOUT_REASON));
@@ -1464,7 +1419,6 @@ export async function runHub(io: HubIo): Promise<number> {
     if (text.trim() === "" && parsed.textOptional !== true) {
       return usage(parsed.textSource.kind === "stdin" ? "标准输入读到的正文是空的" : `--${parsed.textField} 的正文是空的`);
     }
-    // 可以不给正文的（换人接手）读到空的就不带这个字段
     if (text.trim() !== "") body[parsed.textField] = parsed.textPrefix !== undefined ? `${parsed.textPrefix}\n${text}` : text;
   }
 
@@ -1504,7 +1458,6 @@ export async function runHub(io: HubIo): Promise<number> {
   return HUB_EXIT.rejected;
 }
 
-/** 入口用：runHub 之外的意外异常也只打一句话、退出码 internal（4），不打堆栈和异常原文。 */
 export async function runHubSafely(io: HubIo): Promise<number> {
   try {
     return await runHub(io);

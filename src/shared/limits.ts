@@ -1,1266 +1,606 @@
-// 各块共用的数字和名字，定在这里免得各写各的。只有一家厂商用的可调数在那家文件夹的 limits.ts（src/vendors/<厂商>/limits.ts）。
-
-/** 一次返回多少条消息（/api/state 里每个对话、/messages?before= 每页）。 */
 export const MESSAGE_PAGE_SIZE = 100;
-/**
- * 初始快照（/api/state）里项目经理对话、在跑的 Worker 对话带最近几条；更早的往上翻再拉（/messages?before=）。
- * 往前带到最近一条要算的消息为止（没回答的提问、没处理完的、最近一条非安静的，见 shared/snapshot.ts），最多 MESSAGE_PAGE_SIZE 条。
- */
 export const SNAPSHOT_RECENT_MESSAGES = 20;
-/**
- * 初始快照里每个项目经理带最近几个已收工的 Worker 对话（按对话编号从新到旧；绑在活跃任务图上的另外照带）。
- * 更早的不进快照：右栏 Completed 点 Load more 按 ENDED_WORKERS_PAGE_SIZE 一页页拉，直接点开的按编号单拉（ledger/snapshot.ts）。
- */
 export const SNAPSHOT_ENDED_WORKERS_PER_PM = 20;
-/** GET /api/pms/:id/ended-workers 一页几个已收工的 Worker 对话。 */
 export const ENDED_WORKERS_PAGE_SIZE = 30;
-/** GET /api/conversations/lookup 一次最多查几个对话编号、几个 Worker 编号（各算各的）。 */
 export const CONVERSATION_LOOKUP_MAX_IDS = 50;
-/** 网页记“按需单拉过、没有这个对话”最多几个（web/state.ts 的 lookups），满了清掉。 */
 export const MAX_CONVERSATION_LOOKUP_STATES = 200;
-/** 初始快照按“跑了一个月”（300 个已收工的 Worker、3 万条消息）算的上限（未压缩，守卫见 daemon/ledger/snapshot-size.test.ts）。 */
 export const SNAPSHOT_MONTH_MAX_BYTES = 384 * 1024;
-/**
- * 一个月的量再加总助写满、交付物数量和长度都到上限（待拍板卡、等确认的步骤带满，文件名 255 字节、原链接 MAX_PATH_BYTES）时初始快照的上限。
- * 运行时不按总字节裁剪，整份发（压缩后传）；实测约 2.0 MB，压缩后约 0.85 MB（守卫见 daemon/ledger/snapshot-size.test.ts）。
- */
 export const SNAPSHOT_DELIVERABLES_WORST_MAX_BYTES = 2 * 1024 * 1024;
 
-/** git 没跑成时，回给项目经理的原因行最多几个字（ledger/workers.ts 的 gitReasonLine）。 */
 export const GIT_REASON_MAX_CHARS = 200;
-/** 一次 git 调用最多等多久（毫秒）；超了就 SIGKILL 掉 git。调用时可以用 timeoutMs 改。 */
 export const GIT_TIMEOUT_MS = 30_000;
-/** git 输出最多收多少字节（status 遇到大量没跟踪的文件会很长）。 */
 export const GIT_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
-/** gh 输出最多收多少字节（hub worker show 查 PR 用）。 */
 export const GH_MAX_BUFFER_BYTES = 1024 * 1024;
 
-// ---- hub worker show / log（ledger/steps.ts、ledger/worker-view.ts）----
-/** 每个会话在 session_steps 里最多留多少条（一轮结束时把更老的删掉）。 */
 export const SESSION_STEPS_KEEP = 1_000;
-/** hub worker log 默认看最近几步、最多几步。 */
 export const WORKER_LOG_DEFAULT_STEPS = 20;
 export const WORKER_LOG_MAX_STEPS = 200;
-/** hub worker log --stats 里“读得最多的文件”“重复最多的命令”各列几个。 */
 export const WORKER_STATS_TOP = 3;
-/** hub worker search：默认列几条、最多几条；命中处的上下文（含关键词）最多几个字；关键词最多几个、每个最多几个字符。 */
 export const WORKER_SEARCH_DEFAULT_LIMIT = 20;
 export const WORKER_SEARCH_MAX_LIMIT = 100;
 export const WORKER_SEARCH_CONTEXT_CHARS = 80;
 export const WORKER_SEARCH_MAX_KEYWORDS = 10;
 export const WORKER_SEARCH_MAX_KEYWORD_CHARS = 100;
-/** hub worker list：进行中的全列，已收工的只列最近收工的这么多个（几百个全列会把几十 KB 塞进项目经理的上下文），更早的用 hub worker search / show 查。 */
 export const WORKER_LIST_RECENT_ENDED = 20;
-/** hub worker show / log 里一条命令、一段回复最多显示几个字符（超了截断加省略号）。 */
 export const WORKER_VIEW_TEXT_MAX_CHARS = 100;
-/** Worker 在干活、没有工具在跑、这么久没动静，hub worker show 提醒“可能卡住了”。 */
 export const WORKER_STALL_HINT_MS = 5 * 60_000;
-/** hub worker show 查 PR（gh pr list）最多等多久；超了当没有。 */
 export const WORKER_PR_PROBE_TIMEOUT_MS = 5_000;
-/** 一条用户消息最多 100 KB（按 UTF-8 字节算）。 */
 export const MAX_MESSAGE_BYTES = 100 * 1024;
-/** 流式增量文字推给网页的节流间隔（毫秒）：首块立即推，后续在窗口内合并成一次 session.status，不写 SQLite。 */
 export const STREAMING_TEXT_THROTTLE_MS = 70;
-/** 单段内存流式预览最多保留多少个 Unicode 字符（超长输出只截内存预览前缀，段结束 agent.text 落库仍是完整正文；防撑大内存与弱网帧）。 */
 export const MAX_STREAMING_TEXT_CHARS = 16_000;
-/**
- * 本地快工具（如 Read / Grep / Glob，SSD 上 2～5ms 即返回结果）在内存态 LiveSession.step 的最短可读驻留毫秒数：
- * openTools 清空准备回退到 Thinking 时，若距最近一次工具步骤显示尚不足该时长，先保留工具文案并设单会话唯一 setTimeout 到点回退；
- * 期间一旦来新工具、流式/完整文字、回合结束/停止或会话退出/关库立即打断清零。
- */
 export const MIN_TOOL_STEP_VISIBLE_MS = 450;
-/** 流式工具调用参数增量 JSON（如 Claude input_json_delta、Pi toolcall_delta）单块内存缓冲上限（UTF-16 码元）。 */
 export const MAX_STREAMING_TOOL_JSON_CHARS = 8_192;
-/** 单会话同时缓存的流式工具调用增量块上限（防异常流未发结束帧时无界增长）。 */
 export const MAX_STREAMING_TOOL_BLOCKS = 32;
-/** 推给网页的“在做什么”状态参数（文件路径、skill 名、连接器名等，见 step-labels.ts 的 STEP_INPUT_KEYS）每个最多这么多个 Unicode 字符。 */
 export const MAX_STEP_ARG_CHARS = 300;
-/** 账本在内存里留多少条变化，供 changesSince 补齐；更早的补不齐，要 resync。 */
 export const CHANGE_BUFFER_SIZE = 1000;
 
-// ---- M2：请求体的长度上限（界面服务、agent 接口校验请求体用，账本再查一遍）----
-
-/** 项目名、项目经理名最多几个字符（按 Unicode 字符算，见 normalizeName）。 */
 export const MAX_NAME_CHARS = 40;
-/** 项目的一句话说明最多几个字符。 */
 export const MAX_DESCRIPTION_CHARS = 200;
-/** 性格设定正文最多 32 KB（UTF-8 字节）。 */
 export const MAX_PERSONA_BYTES = 32 * 1024;
-/** 改性格设定的理由最多几个字符。 */
 export const MAX_REASON_CHARS = 500;
-/** 文件夹路径最多 4096 字节（macOS 的 PATH_MAX 是 1024，留余量）。 */
 export const MAX_PATH_BYTES = 4096;
-/** 模型名最多几个字符。 */
 export const MAX_MODEL_CHARS = 100;
-/** 输入框指定派 Worker 的思考程度（PostMessageRequest.workerPick.effort）最多几个字符；档位名都是短词（xhigh、max……）。 */
 export const MAX_WORKER_PICK_EFFORT_CHARS = 40;
-/** hub ask 选项数量下限、上限及单个选项的最大字符数（按 Unicode 字符算）。 */
 export const ASK_MIN_OPTIONS = 2;
 export const ASK_MAX_OPTIONS = 10;
 export const ASK_MAX_OPTION_CHARS = 200;
-/**
- * agent 接口一个请求体最多多大（Fastify 的 bodyLimit）；比最长的字段大，字段超长由校验报 invalid。
- * 整个请求体超过它（Fastify 抛 FST_ERR_CTP_BODY_TOO_LARGE）也映射成 invalid、HTTP 400，不另开 413（见 hub.ts）。
- */
 export const HUB_MAX_BODY_BYTES = 256 * 1024;
-/** hub_calls 里 args 的每个字符串字段、result 最多存多少字节，超了截断（见 domain.ts 的 HubCall）。 */
 export const HUB_CALL_FIELD_MAX_BYTES = 2 * 1024;
 
-// ---- 后台写交接（docs/background-handover-design.md）----
-
-/** 新会话开场说明里带切点之前多少字用户和项目经理的原话（String.length，中文一个字算 1），从新往旧取、可以跨好几代。切点之后的全带，不算在里面。 */
 export const HANDOVER_RECENT_CHARS = 30_000;
-/** 切点之后的原话超过这么多字：交接太旧了，作废（abandoned）重新复制。 */
 export const HANDOVER_POST_CUT_MAX_CHARS = 60_000;
-/** 交接写好（ready）后最多等旧会话这么久（比如后台任务一直不完），过了作废、过退避重新复制，不算失败次数。 */
 export const HANDOVER_READY_MAX_MS = 30 * 60_000;
-/** 跑腿的同时最多复制、写几份（每个复制进程几百 MB 内存），多的在 queued 等。 */
 export const HANDOVER_CONCURRENCY = 2;
-/** 关机时等跑腿的这么久：abort 在写的复制进程、报 shutdown、清理复制那份；到点还没完就不等了（没清掉的下次启动补清）。 */
 export const HANDOVER_STOP_GRACE_MS = 3_000;
-/**
- * 项目经理的对话长到多少 token（会话的 usage.context：最近一次请求的上下文大小，各家驱动都写）就自动换新会话：这一轮结束时进队列（ledger/handover.ts）。
- * 只对项目经理；Worker 的会话不自动换。
- */
 export const HANDOVER_TOKEN_THRESHOLD = 400_000;
 export const AUTO_RENEW_CONTEXT_TOKENS = HANDOVER_TOKEN_THRESHOLD;
-/** 本会话写交接（兜底，厂商复制不了时）：自动的要空闲这么久才发交接请求；期间来了新消息（用户的、Worker 汇报）就等下一次空闲。后台写交接不用等。 */
 export const AUTO_RENEW_IDLE_MS = 20_000;
-/** 守护进程多久看一次换新会话的队列（只看队列里的对话，队列空什么都不查；启动时先看一次）；跑腿的也按这个间隔自己领一次活兜底。 */
 export const AUTO_RENEW_TICK_MS = 5_000;
-/**
- * 写交接最多等这么久：超时就放弃这次换代，旧会话照常用（自动换的下次空闲再试）。本会话写交接从交接请求登记起算，
- * 后台写交接从跑腿的领到（forking）起算，到了跑腿的 abort（杀进程组）。
- */
 export const HANDOVER_TIMEOUT_MS = 5 * 60_000;
-/** 自动换新会话：每一代会话最多自动试几次（写交接出错、超时、写出来是空的都算一次）；用完这一代不再自动换，资料页的“开新会话”照常能点。 */
 export const AUTO_RENEW_MAX_ATTEMPTS = 3;
-/** 自动换新会话没成：至少过这么久才再试，之后每没成一次翻倍（10、20 分钟）；还要照常等又一轮回完、再空闲。 */
 export const AUTO_RENEW_RETRY_BACKOFF_MS = 10 * 60_000;
-/**
- * 换代时带进新会话的技能正文（docs/skill-carryover-design.md，daemon/ledger/loaded-skills.ts），都按 String.length 算。
- * 单个：超了从前往后截，末尾写全文路径。poteto-mode 约 2.5 万字（英文约 6～7K token），留了余量。
- */
 export const SKILL_CARRYOVER_SKILL_MAX_CHARS = 30_000;
-/** 合计：英文为主时约 2 万 token，和 Claude Code 压缩后补回技能的 25000 token 相当。放不下的那个和之后的只列名字，不为塞进去再截短。 */
 export const SKILL_CARRYOVER_TOTAL_MAX_CHARS = 80_000;
-/** 每个对话最多记这么多个技能（loaded_skills 的行数），超了删最久没加载的。 */
 export const SKILL_CARRYOVER_RECORDS_MAX = 200;
-/** “没带正文”名单最多列几个名字。 */
 export const SKILL_CARRYOVER_SKIPPED_LIST_MAX = 20;
-/**
- * 认技能加载时一次工具返回最多看这么多字（String.length）：驱动摊平返回原文时截在这里，后面出现的技能开头不认。
- * 重放本机全部历史，技能开头在返回里最远出现在第 48,353 字（一条命令接连 cat 好几个技能），留了约三分之一余量。
- */
 export const SKILL_LOAD_SCAN_MAX_CHARS = 64_000;
-/** 已知技能名单（daemon/skill-files.ts 枚举技能目录建的）按会话缓存多久；换代时不用缓存。 */
 export const SKILL_CATALOG_TTL_MS = 30_000;
-/** 最多缓存几个会话的已知技能名单（只有项目经理的会话会建）。 */
 export const SKILL_CATALOG_CACHE_MAX = 32;
-/** 一份已知技能名单最多收多少个技能（本机所有技能目录合起来 91 个）。 */
 export const SKILL_CATALOG_MAX_SKILLS = 1_000;
-/** 建名单时每个 SKILL.md 只读开头这么多字节来算“开头”（本机最长的 frontmatter 1,101 字节）。 */
 export const SKILL_HEAD_READ_BYTES = 16_384;
-/** 调用发出、返回还没到的读文件和命令，账本内存里最多记几个（返回到了就取走）。 */
 export const SKILL_LOAD_PENDING_TOOLS_MAX = 256;
-/** PersonaView 里最多带几条修改记录。 */
 export const PERSONA_CHANGES_LIMIT = 50;
-/** 跨厂商切换时，本代消息与 Worker 汇报回放区的最大字符预算（String.length，24 万字保底防爆窗）。 */
 export const VENDOR_SWITCH_CONTEXT_MAX_CHARS = 240_000;
-/** 单次重建本代上下文最多倒序扫描的非工具 messages 行数上限。 */
 export const VENDOR_SWITCH_MESSAGE_SCAN_LIMIT = 4_000;
-/** 跨厂商切换提示中最多附带的本代前序旧会话原始记录条数。 */
 export const VENDOR_SWITCH_TRANSCRIPTS_MAX = 5;
 
-// ---- M3：Worker ----
-
-/** Worker 的标题（hub worker start --title）最多几个字符（按 Unicode 字符算）：超了不报错，normalizeWorkerTitle 截断。 */
 export const MAX_WORKER_TITLE_CHARS = 80;
-/** 任务说明（hub worker start --stdin）、hub worker send 的正文最多多大：它们就是发给 Worker 的消息，和用户消息一样。 */
 export const MAX_TASK_BYTES = MAX_MESSAGE_BYTES;
-/** 项目经理对话里那一行 Worker 汇报的摘要最多显示几个字符，超了截断（见 worker.ts 的 workerLineText）。完整原文照样交给项目经理。 */
 export const WORKER_LINE_SUMMARY_CHARS = 120;
-/** Worker 分支名 hub/<编号>-<短名> 里短名最多几个字符（见 worker.ts 的 workerBranchName）。 */
 export const WORKER_BRANCH_SLUG_CHARS = 30;
-/** Worker 对话长到多少 token 就别再打回，让它收工、新派一个（见 prompt.ts 的 buildPmWorkerPrompt）。 */
 export const WORKER_SEND_MAX_TOKENS = 200_000;
-/**
- * Worker 单轮最大容忍时间（`--max-time <时长>`）：
- * - 默认兜底 30 分钟（30m）；
- * - 最短 10 秒（10s，方便测试与短任务）；
- * - 最长 24 小时（24h）。
- * 超过该时间当前轮次仍未结束时，系统自动给所属项目经理发一条静默触发消息，唤醒项目经理检查，不直接打断或杀死 Worker。
- */
 export const DEFAULT_WORKER_MAX_TIME_MS = 30 * 60 * 1000;
 export const MIN_WORKER_MAX_TIME_MS = 10_000;
 export const MAX_WORKER_MAX_TIME_MS = 24 * 60 * 60 * 1000;
 
-// ---- M6：定时任务（见 src/shared/schedule.ts、daemon/ledger/schedules.ts）----
-
-/** 守护进程里的调度器多久查一次有没有到点的定时任务（启动时先查一次）。 */
 export const SCHEDULER_TICK_MS = 30_000;
-/** 到点后过了这么久才跑算“补跑”（睡眠、守护进程没开）；正常的延迟最多一个 tick。 */
 export const SCHEDULE_LATE_MS = 2 * SCHEDULER_TICK_MS;
-/** “每隔 N 分钟/小时”最短 15 分钟，最长 7 天。 */
 export const MIN_SCHEDULE_EVERY_MINUTES = 15;
 export const MAX_SCHEDULE_EVERY_MINUTES = 7 * 24 * 60;
-/** 一个项目经理最多建几个定时任务（含暂停的）。 */
 export const MAX_SCHEDULES_PER_PM = 20;
-/** 定时任务的名字最多几个字符（同项目经理的名字）。任务说明最多 MAX_TASK_BYTES，它就是发给项目经理的消息。 */
 export const MAX_SCHEDULE_NAME_CHARS = MAX_NAME_CHARS;
 
-// ---- 聊天框上传文件 ----
-
-/**
- * 单个上传文件最多 100 MB（Mac 录屏、手机视频常有几十到上百 MB；也是飞书开放平台 messageResource.get 的单文件硬上限，网页和飞书收文件用同一个数）。
- * 上传走单独的接口（POST /api/uploads，请求体就是文件原样的字节，边收边写盘），不动普通消息接口 1 MB 的请求体上限；飞书收文件同样走流写盘。
- */
 export const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
-/** 一条消息最多带几个文件。 */
 export const MAX_ATTACHMENTS_PER_MESSAGE = 10;
-/** 拖进来的文件夹最多看多少项（文件和子文件夹都算）：误拖一个大项目文件夹时不把整棵树都翻一遍。 */
 export const MAX_DROPPED_FOLDER_ENTRIES = 1_000;
-/** 服务端同时在收的上传最多几个（超出的回 429，不收）：上传边收边写盘，限的是同时开着的连接和写盘的文件数。 */
 export const MAX_CONCURRENT_UPLOADS = 4;
-/** 网页一条消息的文件同时最多传几个（要小于 MAX_CONCURRENT_UPLOADS，留出别的页面的余地）。 */
 export const UPLOAD_CLIENT_CONCURRENCY = 3;
-/** 文件名太长要截断时，扩展名（含点）最多留多少字节；再长的“扩展名”不当扩展名，一起截。 */
 export const MAX_UPLOAD_EXTENSION_BYTES = 16;
-/** 存到磁盘上的文件名最多多少字节（UTF-8；APFS、ext4 的单个文件名上限是 255）；超了截断，扩展名尽量留着。 */
 export const MAX_UPLOAD_NAME_BYTES = 120;
 
-// ---- 推送提醒（联机 P4，docs/multi-device-design.md 第 6.2 节；规则在 shared/reminders.ts）----
-
-/** 网页多久在 WebSocket 上报一次“前台 / 后台、正在看哪个对话”（切前台、后台、换对话时马上报）。 */
 export const PRESENCE_REPORT_MS = 30_000;
-/** 守护进程认一条上报多久：过了就当那个网页不在前台了（网页被冻住、断网时不会再报）。 */
 export const PRESENCE_STALE_MS = 75_000;
-/** 推送服务替离线的手机留多久（秒）：超过就丢，提醒过时了。 */
 export const PUSH_TTL_SECONDS = 24 * 60 * 60;
-/** 一次推送请求最多等多久。 */
 export const PUSH_SEND_TIMEOUT_MS = 10_000;
-/** 推送服务临时失败（网络错误、5xx、429）后隔多久重试，只重试一次。 */
 export const PUSH_RETRY_DELAY_MS = 30_000;
-/** 账本来了和提醒有关的变化后，等多久再判断要不要推：流式输出时一串变化合成一次，不用每条都把所有对话扫一遍。 */
 export const REMINDER_EVALUATE_DELAY_MS = 300;
-/** 一台最多存多少条订阅，超了丢最早的（每个浏览器一条，正常用不到）。 */
 export const MAX_PUSH_SUBSCRIPTIONS = 20;
-/** 订阅里 endpoint 最长多少字符（推送服务的网址，实际 200 左右）。 */
 export const MAX_PUSH_ENDPOINT_CHARS = 2_048;
 
-// ---- agent 发给用户的文件（回复里的 Markdown 链接指向本机文件，发出时存副本，见 daemon/sent-files.ts）----
-
-/** 上传的文件和发出文件的副本留多少天：目录修改时间超过这么久的，守护进程启动时和之后每天清一次。 */
 export const FILE_RETENTION_DAYS = 30;
-/** 多久清一次。 */
 export const FILE_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
-/** 单个文件最多 50 MB，超了不存副本，卡片写“太大”。 */
 export const MAX_SENT_FILE_BYTES = 50 * 1024 * 1024;
-/** 一条消息的副本合计最多 200 MB，超出的那几个不存。 */
 export const MAX_SENT_FILES_TOTAL_BYTES = 200 * 1024 * 1024;
-/** 一条消息最多处理几个文件链接（按出现顺序，多出来的照普通链接显示）。 */
 export const MAX_SENT_FILES_PER_MESSAGE = 10;
-/** 存发出文件副本时一次从文件句柄读多少字节（daemon/sent-files.ts）。 */
 export const SENT_FILE_COPY_CHUNK_BYTES = 1024 * 1024;
-/**
- * 存副本时同时在读的原文件最多几个（从发起 open 到句柄关掉，含已经取消、底层还没落定的）：满了不再发起新的 open，这个附件记“读不了”，回复照常落库。
- * 按守护进程算，不按会话；同一会话还有取消了没落定的读取时，这个会话也不再发起新的（daemon/sent-files.ts 的 createSentFileIoSlots）。
- */
 export const MAX_SENT_FILE_IO_INFLIGHT = 32;
 
-// ---- 交付物（方案、验收结论、截图、录屏，shared/deliverables.ts，docs/deliverables-design.md）----
-
-/** 一张卡（hub ask、检查点卡、拍板卡）最多带几个交付物：方案 + 验收结论 + 桌面截图 + 手机截图 + 录屏，再留 1 个。 */
 export const DELIVERABLES_PER_CARD_MAX = 6;
-/** 一个任务图步骤最多记几个交付物（汇报“文件”栏按出现顺序取，和一条消息最多存几个副本一样）。 */
 export const DELIVERABLES_PER_STEP_MAX = MAX_SENT_FILES_PER_MESSAGE;
-/** 一条总助简报最多带几个交付物：graph finish 汇总 3 步各 4 个。多出来的不带，去任务图里看。 */
 export const DELIVERABLES_PER_REPORT_MAX = 12;
-/** 交付物标签（链接文字、--file 的“标签=路径”）最多几个字。 */
 export const DELIVERABLE_LABEL_MAX_CHARS = 40;
-/** hub ask / router report 一次最多几个 --file。 */
 export const HUB_FILE_ARGS_MAX = DELIVERABLES_PER_CARD_MAX;
 
-// ---- 预览窗（web/components/FilePreview.tsx）----
-
-/** 文本、代码、Markdown、CSV 预览最多读多少字节：大文件只取前面这么多（Range 请求）。 */
 export const MAX_PREVIEW_TEXT_BYTES = 1024 * 1024;
-/** CSV 预览最多显示多少行数据（不含表头）。 */
 export const MAX_PREVIEW_CSV_ROWS = 1000;
 
-// ---- worktree 准备命令（hub project setup，见 src/daemon/setup/setup.ts）----
-
-/** 准备命令（hub project setup --stdin 的正文）最多多大（UTF-8 字节）。 */
 export const MAX_SETUP_COMMAND_BYTES = 16 * 1024;
-/** 准备命令最多跑多久，到点连同所有后代一起强制结束；Worker 照常开工，任务说明前附上“超时”。 */
 export const SETUP_TIMEOUT_MS = 10 * 60_000;
-/** 准备命令没跑成功时，附在任务说明前的输出最多几行（取最后这么多）…… */
 export const SETUP_OUTPUT_TAIL_LINES = 40;
-/** ……最多多少字节。 */
 export const SETUP_OUTPUT_TAIL_BYTES = 4 * 1024;
-/** 准备命令的日志（state/logs/setup/worker-<编号>.log）每跑一次最多写多少字节，超了写一行“后面省略”，输出照样读完。 */
 export const SETUP_LOG_MAX_BYTES = 5 * 1024 * 1024;
 
-/** 打断：控制消息 5 秒没回应就发 SIGINT。 */
 export const INTERRUPT_GRACE_MS = 5_000;
-/** 启动后 60 秒没有 system/init，结束进程。 */
 export const START_TIMEOUT_MS = 60_000;
-/** 一轮结束后空闲 10 分钟，关掉标准输入。 */
 export const IDLE_CLOSE_MS = 10 * 60_000;
-/**
- * 会话里还有后台任务（Bash 的 run_in_background、Monitor、后台子代理）时，这一轮结束后最多不关多久；到点照常关。
- * 后台任务在跑就不算闲着（否则等 CI、跑冒烟的命令超过 IDLE_CLOSE_MS 会连进程一起被杀），但卡死的任务不能让 claude 进程一直占着。
- * 定 4 小时：等 CI、冒烟、构建这类事一般几十分钟，偶尔一两个小时；4 小时还没结束基本是卡死了，关掉后下次发消息 --resume 就行。
- */
 export const BACKGROUND_TASKS_HOLD_MAX_MS = 4 * 60 * 60_000;
-/**
- * Worker 的会话有后台命令时最多等多久（LaunchFiles.backgroundHoldMaxMs，比上面的短）：Worker 有后台命令时一轮结束不汇报，
- * 等命令跑完它被叫醒、真做完再汇报（ledger/workers.ts），项目经理一直在等。到点驱动层关进程（后台命令一起停），账本照常汇报并说明。
- * 定 150 分钟：claude 自己给后台命令的上限最长 2 小时（2.1.314 实测，到点它会停掉命令并叫醒 agent），正常走不到这里，这是它没停时的兜底。
- */
 export const WORKER_BACKGROUND_HOLD_MAX_MS = 150 * 60_000;
-/** 关机时最多等 10 秒，剩下的强制结束。 */
 export const SHUTDOWN_GRACE_MS = 10_000;
 
-// ---- 其他超时和间隔（可调的数都放这里；动作的重试次数和退避在 actions.ts 的 ACTION_RETRY，按动作类型和类型定义放一起）----
-
-/** 驱动层：lastEventAt 最多每秒写一次库。 */
 export const LAST_EVENT_WRITE_MS = 1_000;
-/** 驱动层：一个会话的 token 累计最多每秒更新（写库、推给网页）一次；一轮里请求很密时合并，轮结束时马上更新。 */
 export const USAGE_PUSH_MS = 1_000;
-/** 驱动层：进程退出后最多等多久把标准输出、标准错误读完；孙进程占着管道时到点强制关掉。 */
 export const STDIO_DRAIN_MS = 300;
-/** 驱动层：发了 SIGKILL 之后最多再等多久。 */
 export const KILL_WAIT_MS = 2_000;
-/** 驱动层：强制结束时跑一次 ps（找 claude 的后代、认残留的 claude）最多等多久，超时当 ps 跑不了。 */
 export const PS_TIMEOUT_MS = 2_000;
-/** 模型名单：问一次 claude（发 initialize 控制请求）最多等多久，超时用打包的名单。 */
 export const MODEL_CATALOG_TIMEOUT_MS = 15_000;
-/** 只读 DeepSeek Worker 起之前在沙箱外初始化 dsh 的 acp profile（`dsh --profile acp --dump-config`，实测 0.3 秒）最多等多久。 */
 export const DEEPSEEK_PROFILE_INIT_TIMEOUT_MS = 30_000;
-/** 模型名单最多列几个模型（厂商报得再多也只取前面这些）；名字、说明最多几个字（超了截断）。 */
 export const MAX_CATALOG_MODELS = 50;
 export const MAX_CATALOG_LABEL_CHARS = 80;
 export const MAX_CATALOG_DESCRIPTION_CHARS = 200;
-/** 模型名单：问到之后多久算旧了，下次有人要时在后台再问一次（先给旧的）。 */
 export const MODEL_CATALOG_FRESH_MS = 6 * 60 * 60_000;
-/** 模型名单：没问到（claude 没装、超时、报错）时，隔多久才再问。 */
 export const MODEL_CATALOG_RETRY_MS = 5 * 60_000;
-/**
- * 模型名单：同一家厂商的 stat 指纹（可执行文件 + 本地凭据/模型缓存文件）多久内不重算。list()/ensureUsable() 高频调用、
- * 命中缓存时直接用上次的结果，不碰磁盘；代价是本地文件变了最多晚这么久才发现。
- */
 export const MODEL_CATALOG_FINGERPRINT_COOLDOWN_MS = 3_000;
-// ---- 输入框的“/”命令和“@”文件（daemon/commands-catalog.ts、daemon/workspace-files.ts）----
 
-/** 命令列表：问正在跑的会话（再发一次 initialize，实测约 10 毫秒）最多等多久，超时当问不到。 */
 export const RUNNING_COMMANDS_TIMEOUT_MS = 3_000;
-/** 命令列表：会话没在跑时另起一个 claude 问（约 0.9 秒）最多等多久。 */
 export const COMMANDS_QUERY_TIMEOUT_MS = 15_000;
-/** 命令列表：按（厂商、目录）缓存，多久算旧了，下次有人要时先给旧的、在后台再问。 */
 export const COMMANDS_FRESH_MS = 10 * 60_000;
-/** 命令列表：没问到时，隔多久才再问（这期间给空列表）。 */
 export const COMMANDS_RETRY_MS = 60_000;
-/** 命令列表：同一时间另起的 agent 进程最多几个（每个都在项目目录里起一个完整的 claude，别一次起一堆），多的排队。 */
 export const MAX_CONCURRENT_COMMAND_QUERIES = 2;
-/** 命令列表：缓存最多存几份（按厂商、目录），多了淘汰最旧的。 */
 export const MAX_COMMAND_CACHE_ENTRIES = 50;
-/** 命令列表最多几项；说明、参数提示最多几个字（插件命令的说明有几百字）。 */
 export const MAX_COMMANDS = 500;
 export const MAX_COMMAND_DESCRIPTION_CHARS = 200;
 export const MAX_COMMAND_HINT_CHARS = 80;
-/** “@”文件：每个文件夹最多列多少个文件，多了不再列（truncated）。 */
 export const MAX_WORKSPACE_FILES = 25_000;
-/** “@”文件：一个文件夹的文件清单缓存多久。 */
 export const WORKSPACE_FILES_FRESH_MS = 30_000;
-/** “@”文件：清单缓存最多存几个文件夹，多了淘汰最旧的。 */
 export const MAX_WORKSPACE_FILE_CACHES = 20;
-/** “@”文件：一次最多回几条。 */
 export const MAX_FILE_RESULTS = 50;
-/** “@”文件：搜索词最多几个字（多的截掉）。 */
 export const MAX_FILE_QUERY_CHARS = 200;
-/** “@”文件：列一个文件夹（git ls-files 或自己遍历）最多等多久。 */
 export const WORKSPACE_LIST_TIMEOUT_MS = 10_000;
 
-/** 驱动层：清理残留进程时多久看一次它还在不在。 */
 export const STALE_POLL_MS = 50;
-/** 处理函数：会话正忙、消息在驱动层排队时，隔多久再问一次。 */
 export const QUEUED_RECHECK_MS = 1_000;
-/** 处理函数：Worker 还没开工（在建 worktree、跑准备命令）或任务说明还没写进去时，发给它的别的消息隔多久再看一次。 */
 export const WORKER_FIRST_TURN_RECHECK_MS = 2_000;
-/** 处理函数：额度用完时最多推迟多久再看一次。 */
 export const RATE_LIMIT_RECHECK_MAX_MS = 5 * 60_000;
-/** 处理函数：额度用完、知道恢复时间时，在恢复时间之后多等一会儿再发，免得卡在边界上。 */
 export const RATE_LIMIT_RECHECK_PAD_MS = 1_000;
-/** 执行器：没有到点的动作时最多隔多久再查一次（兜底，平时靠 wake 和下一个到点时间）。 */
 export const ACTION_POLL_INTERVAL_MS = 30_000;
-/** 执行器：同时最多跑几个动作（同一个会话一次只跑一个）。 */
 export const ACTION_CONCURRENCY = 4;
-/** 数据库：别的连接占着写锁时，最多忙等多久再报错（SQLite 的 busy timeout）。 */
 export const DB_BUSY_TIMEOUT_MS = 5_000;
-/**
- * 数据库：按 SQL 原文缓存的预编译语句最多留几条，多了淘汰最久没用的。代码里写死的 SQL 约 400 条，全放得下；
- * 把编号拼进 SQL 的（删项目经理时的 IN (...)）每次都是新原文，不设上限会一直攒着。
- */
 export const MAX_CACHED_STATEMENTS = 1_000;
-/** 驱动层：错误信息里最多带多少个字符的标准错误（取最后这么多）。 */
 export const STDERR_TAIL_CHARS = 2_000;
-/** agent 接口：一个请求从连上到收完的上限，半截请求挂着不放，到点就断。 */
 export const HUB_REQUEST_TIMEOUT_MS = 15_000;
-/** agent 接口：close() 取消在途准备（探 git、查 PR、存附件）后最多再等多久让它们落定；卡在 open 上取消不了的读取不会拖住关机。 */
 export const HUB_SHUTDOWN_PREPARE_GRACE_MS = 1_000;
-/** agent 接口：多久查一次有没有超时的请求（Node 的 connectionsCheckingInterval，默认 30 秒，太粗）。 */
 export const HUB_TIMEOUT_CHECK_MS = 1_000;
-/** agent 接口：启动时试连旧 socket 的上限，连得上说明有活实例。 */
 export const HUB_SOCKET_PROBE_MS = 1_000;
-/**
- * agent 接口：hub worker start 之前探主文件夹的 git（是不是有提交的仓库、有没有没提交的改动），每次 git 调用最多等多久。
- * 要比 HUB_CLI_TIMEOUT_MS 短得多：git 卡住时这一次派活报错，不能拖到 hub 那边报“可能已执行”。
- */
 export const GIT_PROBE_TIMEOUT_MS = 5_000;
-/**
- * agent 接口：hub worker start --vendor 选的这家现在不能用时，当场重问一次（ModelCatalogs.ensureUsable）最多等多久；
- * 没问完就按现在的状态回答（重问在后台接着跑，下一次调用看得到新结果）。
- * 整个请求受 HUB_REQUEST_TIMEOUT_MS 限制，后面还要探 git（最多两次 git，各 GIT_PROBE_TIMEOUT_MS），所以取
- * HUB_REQUEST_TIMEOUT_MS − 2 × GIT_PROBE_TIMEOUT_MS − 1 秒余量 = 4 秒：重问再慢，git 也卡住，也在请求上限之内回到项目经理。
- * 问一次名单要 MODEL_CATALOG_TIMEOUT_MS（15 秒），所以这个预算比一次完整的重问短，卡住时会走“按现在的状态回答”。
- */
 export const VENDOR_RECHECK_BUDGET_MS = HUB_REQUEST_TIMEOUT_MS - 2 * GIT_PROBE_TIMEOUT_MS - 1_000;
-/** hub 命令：连上之后多久没动静算守护进程没回应。 */
 export const HUB_CLI_TIMEOUT_MS = 30_000;
-/** hub 命令：--stdin 多久没收到数据就放弃。 */
 export const HUB_CLI_STDIN_IDLE_MS = 60_000;
-/** 关机：最多等执行器手上的动作多久；还没做完（比如在等 claude 启动）就先关驱动层，让它们结束。 */
 export const EXECUTOR_STOP_GRACE_MS = 3_000;
-/** 关机：整个关机过程（执行器、claude、界面服务、agent 接口、关库）的总上限；超了记一条日志，以非 0 退出码退出。 */
 export const SHUTDOWN_TOTAL_MS = 30_000;
-/** 运行中未捕获异常：先试着正常关机（停 Worker / 项目经理的子进程、关库）最多等多久，到点直接退出码 1 退出。比 SHUTDOWN_TOTAL_MS 短，状态已经不可信，别拖。 */
 export const FATAL_SHUTDOWN_MS = 15_000;
-/** state/logs/daemon.log 超过这个大小就改名成 daemon.log.1（覆盖旧的）再新写，磁盘上最多两份。崩溃循环（systemd 每 5 秒拉起一次）也撑不大。 */
 export const DAEMON_LOG_MAX_BYTES = 2 * 1024 * 1024;
-/** 关机：关 agent 接口最多等多久（它不等还连着的请求，正常一下就关掉；超了不再等，接着关库）。 */
 export const AGENT_API_CLOSE_MS = 3_000;
-/** 关机时等账本把排着的驱动事件（回复里的文件在存副本）落库最多多久；到点没落完的，ledger.close() 取消在拷的附件，排着的回复不带附件落库。 */
 export const LEDGER_SETTLE_ON_SHUTDOWN_MS = 5_000;
-/** 同一会话排着等落库的驱动事件（前面有回复在存副本）最多几条：到了就不再等附件，排着的按顺序直接落库。 */
 export const MAX_PENDING_DRIVER_EVENTS_PER_SESSION = 1_000;
 
-/**
- * 界面登录后设的 cookie 名的前缀（HttpOnly、SameSite=Strict）。值是随机的会话令牌（每个浏览器一条，库里只存它的 sha256，
- * 见 daemon/ui-server/sessions.ts），不是界面用户令牌。界面用户令牌（state/ui-token）只当“主钥匙”：用来登录、生成登录链接，
- * 全部退出时换掉。守护进程重启后会话还在（存在库里）。
- * cookie 按主机名存、不分端口：同一个浏览器里 127.0.0.1:4317（本机）和 127.0.0.1:4318（ssh -L 转来的东京）会互相顶掉，
- * 所以名字带上网址里的端口（uiCookieName），各用各的。
- */
 export const UI_COOKIE_NAME = "agent_hub_ui";
 
-/** 这次请求的 cookie 名：Host 头里有端口就是 `agent_hub_ui_<端口>`，没有（默认端口，如 https 的 443）就是 UI_COOKIE_NAME。 */
 export function uiCookieName(hostHeader: string | undefined): string {
   const port = /:(\d{1,5})$/.exec(hostHeader ?? "")?.[1];
   return port === undefined ? UI_COOKIE_NAME : `${UI_COOKIE_NAME}_${port}`;
 }
 
-/** 登录 cookie 的有效期：一年（距最后一次活动）。过了这么久没用的会话删掉。 */
 export const SESSION_MAX_AGE_MS = 365 * 24 * 60 * 60 * 1000;
-/** 会话的“最后活动”最多隔这么久写一次库（每个请求都写会白白吵库）。 */
 export const SESSION_TOUCH_INTERVAL_MS = 60 * 1000;
-/** 最多同时留多少个浏览器登录；满了新登录会挤掉最久没用的。 */
 export const MAX_BROWSER_SESSIONS = 100;
-/** 记下的 User-Agent 最多多少个字符。 */
 export const MAX_USER_AGENT_CHARS = 300;
-/** 二维码登录链接几分钟有效，用一次就失效。 */
 export const LOGIN_LINK_TTL_MS = 5 * 60 * 1000;
-/** 同时有效的登录链接最多几个（每个都在内存里；多了新的会挤掉最早的）。 */
 export const MAX_PENDING_LOGIN_LINKS = 20;
-/** state/ui-token 的权限：只有自己能读写。启动时发现权限更宽要改回来。 */
 export const UI_TOKEN_FILE_MODE = 0o600;
-/** 环境变量（各家可执行文件的 AGENT_HUB_<大写编号> 在各自 spec 的 cli.envVar）。 */
 export const ENV_HOME = "AGENT_HUB_HOME";
-/** 界面服务的端口，默认 DEFAULT_UI_PORT；0 表示由系统分配（测试用）。 */
 export const ENV_PORT = "AGENT_HUB_PORT";
-/** 第一次启动自动建项目经理时用的默认模型（如 claude-haiku-5-5，冒烟测试用）；不设就用 claude 自己的默认。 */
 export const ENV_DEFAULT_MODEL = "AGENT_HUB_DEFAULT_MODEL";
-/** 准备命令里能用的：项目主文件夹（比如 cp "$AGENT_HUB_ROOT_PATH/.env" .）、这个 worktree 的目录。 */
 export const ENV_SETUP_ROOT_PATH = "AGENT_HUB_ROOT_PATH";
 export const ENV_SETUP_WORKTREE_PATH = "AGENT_HUB_WORKTREE_PATH";
-/** 只给开发用：`pnpm dev` 时 vite 把 /api、/auth 和 WebSocket 代理到这个端口上的守护进程。 */
 export const ENV_DEV_DAEMON_PORT = "AGENT_HUB_DAEMON_PORT";
-/** 账号组网：换中继网址（自建中继）、换 GitHub OAuth App 的 Client ID。 */
 export const ENV_RELAY_URL = "FUSA_RELAY_URL";
 export const ENV_GITHUB_CLIENT_ID = "FUSA_GITHUB_CLIENT_ID";
 
-/** 界面服务默认端口。固定端口：重启后浏览器刷新同一个地址就能接着用。 */
 export const DEFAULT_UI_PORT = 4317;
-/** system/api_retry 里的 error 字符串最多留多少个字符（Claude 给的是类别，正常很短；防着异常长的）。 */
 export const MAX_API_RETRY_ERROR_CHARS = 200;
 
-/** 升级数据库前自动备份的 hub.sqlite.bak-* 最多留几份：新备份写好后删掉更早的。 */
 export const MAX_DB_BACKUPS = 2;
 
-/** 同一个模块连续失败几次就算“坏了”（界面标红）。 */
 export const HEALTH_FAILURE_THRESHOLD = 3;
 
-// ---- 测试 ----
-
-/**
- * 测试：单条用例和 beforeAll/afterEach 等钩子的超时（vitest 默认 5 秒）。很多用例起真进程（假 claude、真守护进程），
- * 好几个工作树同时跑测试、机器忙的时候，起一个进程就要好几秒；超时只用来拦真正卡死的用例，所以放宽。
- * 个别用例要更久的（重启、重试）在用例上单独写。
- */
 export const TEST_TIMEOUT_MS = 20_000;
-/**
- * 测试收尾时（每个测试文件的 afterAll，test/spawn-guard.ts）等本文件起的子进程退出最多多久；超了算残留，测试失败。
- * 正常没有残留时第一次检查就过，不会慢；只有收尾时刚发出 SIGKILL 的进程要等它真的没了。
- */
 export const TEST_CHILD_EXIT_WAIT_MS = 5_000;
-/**
- * 端到端收尾（test/e2e/harness.ts 的 cleanup）等守护进程正常关机最多多久，超了再 SIGKILL。
- * 先关机再删临时目录：直接 SIGKILL 会丢下还在写目录的 Worker 进程树和 git 子进程，删目录时报 ENOTEMPTY。
- * 加上 TEST_CHILD_EXIT_WAIT_MS 要小于钩子超时 TEST_TIMEOUT_MS。
- */
 export const TEST_DAEMON_STOP_WAIT_MS = 10_000;
-/** 本机端到端冒烟（scripts/verify-smoke.ts）单次的耗时目标（构建网页、起守护进程、浏览器渲染、关机清理全算上）：超了只警告，不判失败。 */
 export const VERIFY_SMOKE_BUDGET_MS = 20_000;
-/** 冒烟里每一步（等登录网址、等页面渲染、等守护进程正常关机）最多等多久，超了判失败。 */
 export const VERIFY_SMOKE_STEP_TIMEOUT_MS = 15_000;
 
-// ---- 守护进程起的子进程记账（daemon/process-ledger.ts）----
-/** state/child-processes.json 里最多记多少个还活着的子进程；超了丢最老的（它们早已不在了才会堆到这个数）。 */
 export const PROCESS_LEDGER_MAX_ENTRIES = 200;
-/** 记录里的用途（purpose）最多留多少字符。 */
 export const PROCESS_LEDGER_PURPOSE_MAX_CHARS = 64;
 
-// ---- 新建项目经理时选主文件夹（守护进程替网页弹 macOS 原生的“选择文件夹”，见 daemon/pick-folder.ts）----
-
-/** 选文件夹的对话框最多开多久；超了结束 osascript、当用户取消处理（用户走开了不能一直占着“同时只有一个”）。 */
 export const PICK_FOLDER_TIMEOUT_MS = 5 * 60 * 1000;
 
-// ---- 额度（只能另起进程问的厂商，agy；daemon/quota/fetched-quota.ts）----
-/** 问到的额度缓存多久；用户打开额度面板时才问，期内再开直接用缓存。 */
 export const FETCHED_QUOTA_FRESH_MS = 5 * 60_000;
-/** 没问到（起不来、超时、报错）或问到了但一组都认不出时，只记这么久：偶发失败不会让面板空着 5 分钟，又不会每开一次面板就起一个进程。 */
 export const FETCHED_QUOTA_RETRY_MS = 30_000;
-/** 问一次最多等多久；超了当没有。 */
 export const FETCHED_QUOTA_TIMEOUT_MS = 30_000;
 
-// ---- 联机：设备列表、转发（daemon/peers/，docs/account-mesh-design.md） ----
-/** 转发：等对方回响应头最多多久（含连接）；超了回 502 device_offline。上传时请求体每流过一块重新计时（按“多久没进展”算），响应体（下载）不限时。 */
 export const PEER_PROXY_HEADERS_TIMEOUT_MS = 30_000;
-/** 转发 WebSocket：连对方最多等多久。 */
 export const PEER_WS_CONNECT_TIMEOUT_MS = 10_000;
-/** 转发 WebSocket：每隔这么久 ping 一次对方，下一次 ping 时还没收到 pong 就当对方离线（断网后 10 秒内发现）。 */
 export const PEER_WS_PING_MS = 5_000;
 
-// ---- 网页实时连接保活、请求超时（daemon/ws-keepalive.ts、web/connection.ts、web/client.ts）----
-// 手机 VPN、运营商 NAT 会把闲着的连接静默丢掉（不发 FIN/RST）：浏览器以为还连着，变化推不过来，请求挂在死连接上一直转圈。
-/**
- * 服务端（本机 /api/ws 和入口转发的 /d/<设备>/api/ws）每隔这么久给浏览器那条发一条应用层心跳（api.ts 的 WS_HEARTBEAT_TEXT，
- * 连帧头约 22 字节；浏览器的 JS 收不到协议层 ping），同时 ping 一次，上一次 ping 没回 pong 就断掉（死连接不再占着监听、前台状态）。
- * 15 秒：短于常见 NAT、运营商、手机 VPN 的空闲回收（30 秒起），连接不会因“闲着”被丢；每条连接每 15 秒几十字节，和数据量无关。
- */
 export const WS_HEARTBEAT_MS = 15_000;
-/** 心跳允许迟到多久（网络抖动、手机切后台时定时器被节流）。 */
 export const WS_HEARTBEAT_GRACE_MS = 5_000;
-/** 网页这么久（35 秒）没收到任何消息（含心跳）就当连接死了，主动关掉重连：错过两次心跳再加余量，偶尔丢一次不误判。 */
 export const WS_STALE_MS = 2 * WS_HEARTBEAT_MS + WS_HEARTBEAT_GRACE_MS;
-/** 切回前台、请求超时时查一次：超过一次心跳加余量（20 秒）没消息就不等判死，马上重连（重连带 since，只补漏掉的）。 */
 export const WS_CHECK_SILENCE_MS = WS_HEARTBEAT_MS + WS_HEARTBEAT_GRACE_MS;
-/** 网页普通接口请求最多等多久（含读完响应体）：正常几百毫秒到 1 秒多，15 秒是十倍以上的余量；超了报“请求超时”，界面给 Retry。上传、下载文件、选文件夹不限。 */
 export const API_REQUEST_TIMEOUT_MS = 15_000;
-/** 服务端自己要等外部进程的接口（额度、重问模型名单、斜杠命令）和快照（手机上可能大）：比服务端最长的等待（额度 30 秒、转发等响应头 30 秒）再多 5 秒，不抢在服务端前面放弃。 */
 export const SLOW_API_REQUEST_TIMEOUT_MS = Math.max(FETCHED_QUOTA_TIMEOUT_MS, PEER_PROXY_HEADERS_TIMEOUT_MS) + 5_000;
 
-// ---- 防闲置睡眠（daemon/platform/sleep.ts） ----
-/** 有会话在跑时起防闲置睡眠进程（macOS 的 caffeinate）；全部回到空闲后等这么久（2 分钟）再结束，免得两轮之间来回起停。 */
 export const SLEEP_INHIBIT_GRACE_MS = 120_000;
 
-// ───────────── 本机管理 socket（daemon/admin/socket.ts）：终端命令找守护进程 ─────────────
-/** 终端命令等守护进程的管理 socket 回话最多多久。 */
 export const ADMIN_SOCKET_TIMEOUT_MS = 30_000;
-/** 管理 socket 收的请求体上限。 */
 export const ADMIN_SOCKET_MAX_BODY_BYTES = 16 * 1024;
 
-// ---- 项目经理归档（migrations/0016_pm_archives.sql、daemon/ledger/persona.ts）----
-/** 项目经理归档后保留多少天，到期由守护进程清理该 PM 的全部账本与内部磁盘数据。 */
 export const PM_ARCHIVE_RETENTION_DAYS = 7;
 export const PM_ARCHIVE_RETENTION_MS = PM_ARCHIVE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
-/** 每小时巡检一次到期归档 PM。 */
 export const PM_ARCHIVE_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 
-// ---- 已收工 Worker 的对话保留期（migrations/0020_conversation_purges.sql、daemon/ledger/worker-retention.ts、daemon/db-retention.ts）----
-/** Worker 收工（workers.updated_at：收工时写，之后不再改）满这么多天，清掉它自己对话里的消息和步骤日志等；基本记录和项目经理对话里的汇报留着。 */
 export const WORKER_RETENTION_DAYS = 30;
 export const WORKER_RETENTION_MS = WORKER_RETENTION_DAYS * 24 * 60 * 60 * 1000;
-/** 守护进程多久巡检一次（启动时先巡一次）。 */
 export const WORKER_RETENTION_INTERVAL_MS = 60 * 60 * 1000;
-/** 一批（一个事务、一次写锁）最多删多少行（消息、步骤日志等各表加起来）：删得少，锁库的时间就短。 */
 export const WORKER_PURGE_BATCH_ROWS = 500;
-/** 一批最多看几个候选 Worker（预算花完就停，多取没用；取少了下一批还会取）。 */
 export const WORKER_PURGE_CANDIDATES_PER_BATCH = 20;
-/** 一轮巡检最多删多少行：超了留给下一轮（批与批之间让出事件循环，别的请求照常进来）。按一个月 3 万条消息、5 万步日志算，一小时 5000 行一天能清 12 万行。 */
 export const WORKER_PURGE_ROUND_MAX_ROWS = 5_000;
-/** 增量回收数据库空间（PRAGMA incremental_vacuum）：每次最多回收多少页（4 KB 一页，1000 页约 4 MB）、一轮最多回收多少页。 */
 export const DB_INCREMENTAL_VACUUM_PAGES = 1_000;
 export const DB_INCREMENTAL_VACUUM_ROUND_MAX_PAGES = 25_000;
 
-// ---- Worker worktree 自动清理（daemon/worktree-cleanup.ts、daemon/ledger/workers.ts）----
-/** 已收工且无未提交改动的 Worker worktree 保留多少天（PR 已合并的不等，直接清；分支保留）。 */
 export const WORKTREE_RETENTION_DAYS = 3;
 export const WORKTREE_RETENTION_MS = WORKTREE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
-/** 后台多久跑一次 worktree 自动清理（每小时一次）。 */
 export const WORKTREE_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
-/** 每轮最多对多少个已收工的候选 worktree 跑 git status（避免一次跑太多重的 git 子进程卡住后台；只读引用就能排除的候选不占名额）。 */
 export const WORKTREE_CLEANUP_BATCH_LIMIT = 10;
 
-// ---- 输入框 /hub:worker 选择列表与二次 Esc 回退 ----
-/** 同一份模型名单下按（级别、已选、筛选词）缓存的列表最多留几份；超了整份清掉重算（名单一换，旧的整份随 WeakMap 回收）。 */
 export const WORKER_PICK_CACHE_MAX = 64;
-/** 账本二次 Esc 回退按索引倒序最多查看最近多少条非 agent 消息（O(1) 截断，哪怕对话有几万条历史也不全表扫）。 */
 export const REWIND_SCAN_LIMIT = 20;
-/** 网页乐观回退发送路上的待发消息时，记住其去重键以防随后到达的 message.created 闪出气泡；最多留几条，满了丢最早的。 */
 export const MAX_REWOUND_PENDING_KEYS = 32;
 
-// ---- Router（总助）上限（docs/router-design.md §3.2 + 审定宽松水位）----
-/** 单个 PM 同时挂起的独立待决项安全水位（只防内存溢出，不拦正常并行工作）。 */
 export const ROUTER_PENDING_DECISIONS_PER_PM_MAX = 30;
-/** 送给项目经理的“账本里还在等的提问卡”里，每张卡的问题最多留几个字（完整问题在卡上）。 */
 export const WAITING_ASK_QUESTION_CHARS = 80;
-/** 同上，一次最多列几张（其余写个数）：每条用户消息都带这一块，不能随卡数涨。 */
 export const WAITING_ASKS_LISTED_MAX = 10;
-/** 拍板卡问题字数上限。 */
 export const ROUTER_QUESTION_MAX_CHARS = 160;
 export const MAX_ROUTER_QUESTION_BYTES = 4 * ROUTER_QUESTION_MAX_CHARS;
-/** 拍板卡背景说明与里程碑汇报摘要字数上限。 */
 export const ROUTER_CONTEXT_MAX_CHARS = 400;
 export const MAX_ROUTER_CONTEXT_BYTES = 4 * ROUTER_CONTEXT_MAX_CHARS;
-/** 拍板卡选项数量下限与上限。 */
 export const ROUTER_OPTION_MIN_COUNT = 2;
 export const ROUTER_OPTION_MAX_COUNT = 4;
-/** 汇报附带链接上限及单条标签/目标长度上限。 */
 export const ROUTER_REPORT_LINKS_MAX = 4;
 export const ROUTER_REPORT_LINK_LABEL_MAX_CHARS = 80;
 export const ROUTER_REPORT_LINK_TARGET_MAX_CHARS = 500;
 export const MAX_ROUTER_REPORT_LINK_BYTES = 4 * (ROUTER_REPORT_LINK_LABEL_MAX_CHARS + ROUTER_REPORT_LINK_TARGET_MAX_CHARS + 4);
-/** PM 卡片最新动态摘要字数上限。 */
 export const ROUTER_PM_BRIEF_MAX_CHARS = 120;
-/** StateSnapshot 里活跃 Router 项（pending + unread）上限。 */
 export const ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX = 50;
-/** StateSnapshot 里最近 Router 指令上限。 */
 export const ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX = 10;
-/** Router 时间流：网页内存里每台设备的近窗最多留多少条指令、多少条简报；超了保留最新的，历史的起点跟着前移。 */
 export const ROUTER_STREAM_LIVE_MAX = 200;
-/** Router 时间流历史每页条数，和每个来源最多往回翻几页（到了就不再出 Load earlier）。 */
 export const ROUTER_STREAM_PAGE_SIZE = 30;
 export const ROUTER_STREAM_MAX_PAGES = 10;
-/** 总助时间流里转交回复补取失败（404、设备离线、请求出错）后，多久内不再重取；成功定下来的结果不过期。 */
 export const ROUTER_FORWARD_REPLY_MISS_RETRY_MS = 60_000;
-/** Digest 中单个 PM 附带的在跑 Worker 上限（超出只计总数）。 */
 export const ROUTER_PM_ACTIVE_WORKERS_MAX = 6;
-/** 单份 Fleet Digest JSON 字节上限（24 KB）。 */
 export const ROUTER_FLEET_DIGEST_MAX_BYTES = 24_576;
-/**
- * 总助单轮规划的兜底上限（毫秒）：只防卡死的厂商进程永久占着并发槽，不是给正常慢思考设的时限。
- * 和别的后台长任务的安全回收同一量级（10 分钟）；平时规划多慢都不打断，也不出超时提醒。
- */
 export const ROUTER_AGENT_TIMEOUT_MS = 10 * 60_000;
-/** 用户单条 Router 指令字数上限。 */
 export const ROUTER_COMMAND_MAX_CHARS = 4_000;
-/** 单条指令最多同时派发的目标 PM 数。 */
 export const ROUTER_MAX_DISPATCH_TARGETS = 8;
-/** 远端设备 Digest 成功缓存 TTL（毫秒）。 */
 export const ROUTER_PEER_DIGEST_TTL_MS = 10_000;
-/** 并发采集远端设备 Digest 单台超时（毫秒），确保单台卡顿不拖慢分派。 */
 export const ROUTER_PEER_DIGEST_TIMEOUT_MS = 1_500;
-/** 远端设备离线/失败短暂退避时长（毫秒，遵守缓存军规：失败不当正常结果长缓存）。 */
 export const ROUTER_PEER_OFFLINE_BACKOFF_MS = 5_000;
-/** 远端设备跨机投递消息或操作超时（毫秒）。 */
 export const ROUTER_PEER_DISPATCH_TIMEOUT_MS = 15_000;
-/** 轨道 B 同时运行的只读规划会话数上限（防止瞬间连点拉起过多进程）。 */
 export const ROUTER_MAX_CONCURRENT_TRACK_B = 2;
-/** 轨道 B 并发槽满时最多排队等待的指令数（超了直接拒，提示改用 @设备名/项目名 直通）。 */
 export const ROUTER_TRACK_B_QUEUE_MAX = 16;
-/** 轨道 B 单轮结束后回收临时会话（interrupt + end）最多等多久；厂商进程卡住也按时释放并发槽，不让调度队列永久卡死。 */
 export const ROUTER_SESSION_CLEANUP_GRACE_MS = 5_000;
-/** 守护进程关闭时最多等在途轨道 B 规划收尾多久。 */
 export const ROUTER_CLOSE_GRACE_MS = 8_000;
-/** 本机目标端口按 clientId + 操作指纹的幂等记忆条数上限（project.create / worker.start / worker.send）。 */
 export const ROUTER_OP_DEDUPE_MAX = 256;
-/** 本机目标端口幂等记忆保留时长（毫秒）：覆盖跨设备超时后重试的窗口。 */
 export const ROUTER_OP_DEDUPE_TTL_MS = 10 * 60_000;
-/** hub dispatch worker-list 单次最多返回的 Piece 条数（给 agent 的命令输出上限）。 */
 export const ROUTER_WORKER_LIST_MAX = 30;
-/** 跨设备 target-ops 的操作 clientId 最长字符数（界面 clientId 200 字 + 轨道后缀 :a0 / :bN）。 */
 export const ROUTER_OP_CLIENT_ID_MAX_CHARS = 256;
-/** 跨设备 target-ops 的标题、项目名、PM 名最长字符数（下游账本还会按自己的规则再校验）。 */
 export const ROUTER_OP_NAME_MAX_CHARS = 200;
-/** 跨设备 target-ops 单个附件编号最长字符数。 */
 export const ROUTER_ATTACHMENT_ID_MAX_CHARS = 100;
-/** 已决拍板与已读汇报保留天数。 */
 export const ROUTER_ITEM_RETENTION_DAYS = 30;
 export const ROUTER_ITEM_RETENTION_MS = ROUTER_ITEM_RETENTION_DAYS * 24 * 60 * 60 * 1000;
-/** router_commands 保留的最近条数上限。 */
 export const ROUTER_COMMANDS_RETENTION_MAX = 500;
-/** router_audit_log 环形表保留行数上限。 */
 export const ROUTER_AUDIT_LOG_MAX_ROWS = 500;
-/** 总助单条回复入库字数上限（docs/router-workbench-v2-design.md 第 5.2 节）：超了才截并标 plan.replyTruncated。 */
 export const ROUTER_REPLY_MAX_CHARS = 6_000;
 export const MAX_ROUTER_REPLY_BYTES = 4 * ROUTER_REPLY_MAX_CHARS;
-/**
- * StateSnapshot 里最近指令、简报的字节上限：各自从新到旧累加，超了就停，至少带 1 条。
- * 设计稿估的是 64 KB / 48 KB；实测一个月数据集里总助以外的部分已有约 303 KB（snapshot-size.test.ts），
- * 两者合计只能留 56 KB 才守得住 SNAPSHOT_MONTH_MAX_BYTES，近窗之外的走历史分页。
- */
 export const ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES = 32 * 1024;
-/** StateSnapshot 里最近简报条数（不分已读未读）。 */
 export const ROUTER_STREAM_BRIEFINGS_SNAPSHOT_MAX = 30;
 export const ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES = 24 * 1024;
-/** 指令、简报历史单页响应字节上限：超了提前截页，游标指向最后一条已给出的。 */
 export const ROUTER_STREAM_PAGE_MAX_BYTES = 256 * 1024;
 
-// ---- 持久化任务图（Task DAG）上限（docs/task-graph-design.md §2.3 + 审定宽松水位）----
-/** 单项目同时处于 active 的任务图安全水位。 */
 export const MAX_ACTIVE_GRAPHS_PER_PROJECT = 20;
-/** 单张任务图节点数上限。 */
 export const MAX_GRAPH_NODES = 32;
-/** 单张任务图有向边数上限。 */
 export const MAX_GRAPH_EDGES = 64;
-/** 任务图标题字数上限。 */
 export const MAX_GRAPH_TITLE_CHARS = 120;
 export const MAX_GRAPH_TITLE_BYTES = 4 * MAX_GRAPH_TITLE_CHARS;
-/** 任务图目标（goal）字数上限（docs/orchestration-simplify-design.md 第 11.2 节）。 */
 export const MAX_GRAPH_GOAL_CHARS = 6_000;
-/** 节点标题字数上限。 */
 export const MAX_NODE_TITLE_CHARS = 80;
-/** 步骤职责（brief）字数上限（docs/orchestration-simplify-design.md 第 11.2 节）。 */
 export const MAX_STEP_BRIEF_CHARS = 1_500;
-/** 审查步骤 base（被审分支名）的字数上限。 */
 export const MAX_STEP_BASE_CHARS = 200;
-/** 同一处改动最多审几轮（shared/review.ts）：第这么多轮还有未决的 [Important]，审查和项目经理都不再加轮次，交用户拍板。 */
 export const REVIEW_MAX_ROUNDS = 3;
-/** 单个上游步骤的交棒原文上限（字，按 Unicode 码点；超长截断并把完整汇报落盘到启动目录 upstream/）。 */
 export const HANDOFF_NOTE_MAX_CHARS = 4_000;
-/** 多线合流时各上游交棒合计上限（字，按 Unicode 码点；均分给各上游且单上游不超过 HANDOFF_NOTE_MAX_CHARS）。 */
 export const HANDOFF_TOTAL_MAX_CHARS = 12_000;
-/** 单个上游步骤落盘到启动目录 upstream/<stepKey>.md 的完整汇报上限（字，按 Unicode 码点）。 */
 export const HANDOFF_REPORT_FILE_MAX_CHARS = 60_000;
-/** 多线合流时单会话启动目录 upstream/ 下全部落盘汇报合计上限（字，按 Unicode 码点；按需落盘上游均分且单文件不超过 HANDOFF_REPORT_FILE_MAX_CHARS）。 */
 export const HANDOFF_REPORT_TOTAL_MAX_CHARS = 240_000;
-/** 节点 key 长度上限与合法字符格式。 */
 export const MAX_NODE_KEY_CHARS = 48;
 export const MAX_NODE_KEY_BYTES = 4 * MAX_NODE_KEY_CHARS;
-/** 门禁问题字数上限。 */
 export const MAX_GATE_QUESTION_CHARS = 300;
 export const MAX_GATE_QUESTION_BYTES = 4 * MAX_GATE_QUESTION_CHARS;
-/** 门禁选项个数上限。 */
 export const MAX_GATE_OPTIONS = 6;
-/** 门禁调研/背景 Markdown 摘要字数上限。 */
 export const MAX_GATE_SUMMARY_CHARS = 2_000;
 export const MAX_GATE_SUMMARY_BYTES = 4 * MAX_GATE_SUMMARY_CHARS;
-/** 门禁/拍板定案选项字数上限。 */
 export const MAX_DECISION_CHOICE_CHARS = 200;
 export const MAX_DECISION_CHOICE_BYTES = 4 * MAX_DECISION_CHOICE_CHARS;
-/** 门禁/拍板自由补充说明字数上限。 */
 export const MAX_DECISION_NOTE_CHARS = 2_000;
 export const MAX_DECISION_NOTE_BYTES = 4 * MAX_DECISION_NOTE_CHARS;
-/**
- * 任务图技能 fusa-task-graph（shared/task-graph-skill.ts）的 SKILL.md 全文最多多少字节：约 4,000 个 token，在 claude 压缩对话后
- * 每个技能重新挂上的前 5,000 个 token 以内（docs/orchestration-skill-design.md 第 9.4 节；守卫测试在 daemon/task-graph-skill.test.ts）。
- */
 export const TASK_GRAPH_SKILL_MAX_BYTES = 12_000;
-/** 任务图技能说明（description）最多多少字：各家技能清单按它决定要不要加载，技能多时清单预算会裁说明。 */
 export const TASK_GRAPH_SKILL_DESCRIPTION_MAX_CHARS = 200;
-/** hub graph create / patch 输入 JSON 最大字节数（64 KB 充裕容纳 32 节点 + 摘要）。 */
 export const MAX_GRAPH_SPEC_BYTES = 64 * 1024;
-/** 节点完成产物摘要字数上限。 */
 export const MAX_NODE_ARTIFACT_SUMMARY_CHARS = 500;
 export const MAX_NODE_ARTIFACT_BYTES = 4 * MAX_NODE_ARTIFACT_SUMMARY_CHARS;
-/** 审查步骤产物里“验证提交”最多存多少字（SHA-256 提交号是 64 位）。 */
 export const MAX_NODE_ARTIFACT_COMMIT_CHARS = 64;
-/** hub graph show、换新会话的交接摘要里，每个节点的产物摘要、定案说明各最多显示多少字（完整内容在库里；一张图最多 MAX_GRAPH_NODES 个节点，每个不把上下文塞满）。 */
 export const GRAPH_TEXT_NODE_NOTE_CHARS = 160;
-/** 同上，每个节点最多列几个经手过的 Worker（换过很多次人的只列最近几个）。 */
 export const GRAPH_TEXT_NODE_WORKERS_MAX = 3;
-/**
- * 换新会话的交接摘要里“未完结的任务图”一节的字数上限（最多 MAX_ACTIVE_GRAPHS_PER_PROJECT 张图 × MAX_GRAPH_NODES 个节点）：
- * 按最近动过的先给全文（带节点结果），放不下的只列各节点状态，还放不下的每张只留一行进度，详情用 hub graph show 看。
- * 一行进度和图间分隔符也计入预算；先为全部图预留最简进度，再按最近更新时间展开。
- */
 export const HANDOVER_GRAPHS_MAX_CHARS = 8_000;
-/** 任务图全部节点完成后发给项目经理的交付单上限（字，按 Unicode 码点）。 */
 export const DELIVERY_NOTE_MAX_CHARS = 6_000;
-/** 交付单里列出的相对主干改动文件条数上限（超过显示“另有 N 个文件省略”）。 */
 export const DELIVERY_FILES_MAX = 60;
-/** 换人接手同一步（hub worker start --node 给已有前任的节点派人）时最多带最近几个前任的记录（docs/orchestration-simplify-design.md 第 5.2、11.2 节）。 */
 export const TAKEOVER_PREDECESSORS_MAX = 3;
-/** 换人接手时带的前任汇报原文，从新到旧、各前任合计的字数上限（按 Unicode 码点）。 */
 export const TAKEOVER_REPORTS_MAX_CHARS = 8_000;
-/** 换人接手时带的前任还没来得及汇报的最后几段文字，各前任合计的字数上限。 */
 export const TAKEOVER_TAIL_TEXT_MAX_CHARS = 6_000;
-/** 换人接手时每个前任最多带最后几步操作（hub worker log 的格式，每步一行，单行仍按 WORKER_VIEW_TEXT_MAX_CHARS 截）。 */
 export const TAKEOVER_STEPS_MAX = 40;
-/** 历史任务图分页大小与 CLI 列表默认条数。 */
 export const GRAPH_HISTORY_PAGE_SIZE = 20;
 export const HUB_GRAPH_LIST_LIMIT = 20;
-/** 右栏 Completed 历史任务图最多翻的页数（× GRAPH_HISTORY_PAGE_SIZE = 前端内存最多 300 张）；到顶不再显示 Load more。 */
 export const MAX_COMPLETED_GRAPH_PAGES = 15;
-/** 网页任务图选择器跨快照复用引用的兜底 Map 上限（按项目 / 按设备+对话 FIFO 淘汰）。 */
 export const TASK_GRAPH_SELECTOR_CACHE_MAX = 64;
-/** 已完结/已取消任务图保留天数。 */
 export const COMPLETED_GRAPH_RETENTION_DAYS = 90;
 export const COMPLETED_GRAPH_RETENTION_MS = COMPLETED_GRAPH_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 
-// ---- 项目经理专属记忆目录（state/pm-memory/<pmId>/，见 src/daemon/pm-memory.ts）----
-/** 顶层主索引文件名（自动拼入项目经理系统提示词，与数据库 pms.persona 双向同步）。 */
 export const PM_MEMORY_INDEX_FILE = "MEMORY.md";
-/** 拼入系统提示词时 MEMORY.md 最多保留多少行；超出部分安全截断并附一行拆分提示（磁盘与资料页完整保留）。 */
 export const PM_MEMORY_MAX_LINES = 200;
-/** 拼入系统提示词时 MEMORY.md 最多占多少 UTF-8 字节（25 KB，含超限时附上的拆分提示）。 */
 export const PM_MEMORY_MAX_BYTES = 25 * 1024;
-/** 单个项目经理最多建多少个扁平 `<topic>.md` 按需参考子文件。 */
 export const PM_MEMORY_MAX_SUBFILES = 50;
-/** 单个 `<topic>.md` 子文件最多多少 UTF-8 字节（64 KB）。 */
 export const PM_MEMORY_MAX_SUBFILE_BYTES = 64 * 1024;
-/** 单个项目经理全部 `<topic>.md` 子文件合计最多多少 UTF-8 字节（1 MB）。 */
 export const PM_MEMORY_MAX_TOTAL_BYTES = 1024 * 1024;
-/** 资料页柔和提示水位比例（达到上限 80% 起才柔和提示，平时不挂配额数字）。 */
 export const PM_MEMORY_SOFT_WARN_RATIO = 0.8;
-/** `<topic>.md` 子文件名（含 `.md`）最多几个 Unicode 字符。 */
 export const MAX_PM_MEMORY_FILE_NAME_CHARS = 80;
-/** 扫描单个 PM 记忆目录时最多检查多少个目录项（防外部塞入海量无关文件卡住主线程）。 */
 export const PM_MEMORY_MAX_DIR_SCAN = 256;
-/** 账本内存里记住已同步过的 MEMORY.md 内容哈希的 LRU 上限（按跑了一个月数百个 PM 留足余量）。 */
 export const PM_MEMORY_HASH_CACHE_MAX = 512;
 
-// ---- 全厂商同步（daemon/vendor-sync/、web/components/VendorSyncSettings.tsx）----
-/** `<dataDir>/backups/sync/` 轮转保留的备份快照目录上限，超了自动删最老的防无限堆积。 */
 export const MAX_VENDOR_SYNC_BACKUPS = 20;
-/** 单次扫描与预览返回的 MCP 服务条目上限。 */
 export const MAX_VENDOR_SYNC_MCP_ITEMS = 200;
-/** 单次扫描与预览返回的 Skill 条目上限。 */
 export const MAX_VENDOR_SYNC_SKILL_ITEMS = 500;
-/** 单次扫描返回的不可跨厂同步云端连接器说明上限。 */
 export const MAX_VENDOR_SYNC_CLOUD_ITEMS = 200;
-/** 扫描项目级 `.agents/skills` 时最多取多少个活跃项目文件夹。 */
 export const MAX_VENDOR_SYNC_PROJECT_FOLDERS = 50;
-/** 同步请求里单个 MCP / Skill 键名的最大字符数。 */
 export const MAX_VENDOR_SYNC_KEY_CHARS = 512;
-/** 预览里脱敏命令或 URL 展示字符串的最大字符数。 */
 export const MAX_VENDOR_SYNC_PREVIEW_CHARS = 240;
-/** 单个厂商 MCP 配置文件或 `SKILL.md` 读取字节上限（防异常超大文件撑爆内存）。 */
 export const MAX_VENDOR_SYNC_CONFIG_BYTES = 2 * 1024 * 1024;
 
-// ---- 空闲排空热重启（daemon/self-reload.ts、web/auto-reload.ts）----
-/** 全库空闲（没有会话在跑 / 停止中 / 准备中 / 等后台命令，总助分派引擎没有规划中或在途分派）后再静默这么久才重启；期间又有新轮次就顺延，重新等空闲（最多等到 SELF_RELOAD_DRAIN_MAX_MS）。 */
 export const SELF_RELOAD_QUIET_MS = 1_500;
-/**
- * 登记后最多等全库空闲这么久（10 分钟）。Worker 全天连续在跑时全库空闲可能一直不出现，不设上限重启会被饿死。过了上限不再等重启后会重发的轮次
- * （Worker 轮次、系统交给项目经理的消息，由 ledger 的 recoverAfterRestart 重发），只等重启后不会重发的（项目经理、总助正在回用户）回完就重启。
- */
 export const SELF_RELOAD_DRAIN_MAX_MS = 10 * 60_000;
-/** 等空闲期间兜底重查的间隔：有些忙碌状态（总助在途管线收尾、后台写交接）结束时账本不一定推变化。只在登记了热重启时才跑。 */
 export const SELF_RELOAD_RECHECK_MS = 5_000;
-/** `hub self-reload --build` 的 pnpm build 最多跑多久（10 分钟），超时整组进程结束、取消本次重启。 */
 export const SELF_RELOAD_BUILD_TIMEOUT_MS = 10 * 60_000;
-/** 回给 hub / 接口的构建失败摘要最多多少字。 */
 export const SELF_RELOAD_FAILURE_MAX_CHARS = 2_000;
-/** 网页：发现本机守护进程换了一次启动（bootId 变了）但现在不方便刷新（有弹窗、在流式输出、在上传、在输入法组词）时，隔多久再看一次。 */
 export const AUTO_RELOAD_RECHECK_MS = 1_000;
-/** 网页：刷新前存进 sessionStorage 的未发送草稿最多几条（按最近改动的留）。 */
 export const AUTO_RELOAD_MAX_DRAFTS = 50;
-/** 网页：存进 sessionStorage 的草稿合计最多多少 UTF-8 字节（单条最长 MAX_MESSAGE_BYTES，远低于 sessionStorage 的 5 MB）。 */
 export const AUTO_RELOAD_MAX_DRAFT_BYTES = 1024 * 1024;
-/** 网页：存进 sessionStorage 的草稿多久没被认领就当过期丢掉（1 天）。 */
 export const AUTO_RELOAD_DRAFT_TTL_MS = 24 * 60 * 60_000;
 
-// ---- Windows 原生运行时、缓存上限与重试预算（docs/windows-native-design.md 第 6.3 节）----
-/** Windows 辅助程序（fusa-run.exe、hub.exe）所在目录覆盖环境变量。 */
 export const ENV_WIN_HELPERS = "AGENT_HUB_WIN_HELPERS";
-/** 可执行文件路径解析缓存上限（PATH + PATHEXT 命中结果，满了清空重算，照 orca）。 */
 export const WIN_EXEC_RESOLVE_CACHE_MAX = 256;
-/** `.cmd` 垫片解析缓存上限（按路径 + mtime + size 校验失效，满了清空）。 */
 export const WIN_CMD_SHIM_CACHE_MAX = 256;
-/** 单个 `.cmd` 垫片文件最多读取字节数（64 KiB），防误读巨大非垫片文件。 */
 export const WIN_CMD_SHIM_MAX_BYTES = 64 * 1024;
-/** 数据目录读边界展开成禁读清单（driver/write-scope.ts 的 dataDirDenyList）最多几项：超了拒绝启动，不截断。 */
 export const DATA_DIR_DENY_LIST_MAX = 4_096;
-/** 已完成受保护根 ACL 校验的目录缓存上限（按进程生命周期去重避免每次派活重查 DACL）。 */
 export const WIN_PROTECTED_ROOTS_CACHE_MAX = 64;
-/**
- * 已给过 `ALLOW FusaWorker-<编号>` 的 (Worker, worktree 目录) 缓存上限：建 worktree 时给过，起进程时不再调一次 fusa-run.exe。
- * 命中还要目录身份和 SID 表里的 SID 都没变（platform/win32/acl.ts），轮换掉的 SID 不会误跳过；上限不超过 WIN_WORKER_SIDS_MAX。
- */
 export const WIN_WORKER_ACL_CACHE_MAX = 512;
-/** 设 ACL 期间目录被换掉（调用前后目录身份对不上）时最多调几次辅助程序：还对不上就报错，不当成设好了（platform/win32/acl.ts）。 */
 export const WIN_ACL_REVERIFY_ATTEMPTS_MAX = 3;
-/** `state/win-sandbox-sids.json` 持久化的 SID 条目上限（Worker 写 SID 和会话读 SID 共用，同 fusa-win-helper sids.rs 的 MAX_PERSISTED_WORKER_SIDS）。 */
 export const WIN_WORKER_SIDS_MAX = 1024;
-/** `state/worktree-roots.json` 登记的历史与当前跨卷 worktree 根目录上限。 */
 export const MAX_WORKTREE_ROOTS = 32;
-/** Windows 沙箱探针（`fusa-run.exe probe`）与辅助命令单次执行超时（毫秒）。 */
 export const WIN_HELPER_PROBE_TIMEOUT_MS = 8_000;
-/** Windows 删目录遇短暂文件锁（EBUSY/ENOTEMPTY/EPERM）整遍重删退避间隔（毫秒，共 4 遍 < 4 秒）。 */
 export const WIN_REMOVE_PASS_DELAYS_MS: readonly number[] = [250, 500, 1_000, 2_000];
-/** Windows 原子写 rename 遇短暂占用（EPERM/EACCES/EBUSY）重试间隔（毫秒，共 5 次 < 1 秒）。 */
 export const WIN_RENAME_RETRY_DELAYS_MS: readonly number[] = [50, 100, 150, 200, 250];
-/** Windows MXC ProcessContainer 不可用时的负缓存短暂 TTL（30 秒，不用永久 null 缓存，启用特性后自动恢复）。 */
 export const WIN_MXC_NEGATIVE_CACHE_TTL_MS = 30_000;
-/** Windows MXC ProcessContainer 可用探测结果正缓存 TTL（5 分钟）。 */
 export const WIN_MXC_POSITIVE_CACHE_TTL_MS = 5 * 60_000;
-/** Windows MXC 启动配置走命令行 `--config-base64` 的最大字符数，超出则写入会话私有临时目录文件。 */
 export const WIN_MXC_INLINE_CONFIG_MAX_CHARS = 16 * 1024;
-/** Windows MXC 启动请求文件最大字节上限（512 KiB，防止异常配置撑爆内存）。 */
 export const WIN_MXC_REQUEST_FILE_MAX_BYTES = 512 * 1024;
-/** Windows MXC 回环 `hub` 桥接单次连接最大入站请求字节数（`HUB_MAX_BODY_BYTES` + 64 KiB HTTP 请求头余量）。 */
 export const WIN_MXC_BRIDGE_MAX_REQUEST_BYTES = HUB_MAX_BODY_BYTES + 64 * 1024;
-/** Windows MXC 回环 `hub` 桥接同时允许的最大活跃连接数。 */
 export const WIN_MXC_BRIDGE_MAX_CONCURRENT_CONNS = 32;
 
-// ---- Settings → Providers 一键安装与界面内直接登录（docs/providers-install-login-design.md 第 8.3 节）----
-/** 单次 CLI 安装或更新任务硬超时（15 分钟，兼顾慢网下载原生二进制）。 */
 export const PROVIDER_INSTALL_TIMEOUT_MS = 15 * 60_000;
-/** 单次浏览器 OAuth 或 Device Code 登录流有效期上限（5 分钟）。 */
 export const PROVIDER_AUTH_FLOW_TIMEOUT_MS = 5 * 60_000;
-/** `POST /auth/start` 首包最多等待捕获 `authorizeUrl`/`userCode` 的毫秒数（超时先回 `starting` 由轮询接力）。 */
 export const PROVIDER_AUTH_START_WAIT_MS = 800;
-/** 远端粘贴回环回调 URL 后向本机 `127.0.0.1:<port>` 转发的超时（10 秒）。 */
 export const PROVIDER_CALLBACK_FORWARD_TIMEOUT_MS = 10_000;
-/** 后台按需读取已装 CLI `--version` 的超时上限（5 秒）。 */
 export const PROVIDER_VERSION_PROBE_TIMEOUT_MS = 5_000;
-/** 执行原厂 `logout` 子命令的超时上限（10 秒）。 */
 export const PROVIDER_LOGOUT_TIMEOUT_MS = 10_000;
-/** 单个安装/更新任务保留的脱敏输出最大 UTF-8 字节数（16 KiB）。 */
 export const PROVIDER_JOB_LOG_MAX_BYTES = 16 * 1024;
-/** 单个安装/更新任务保留的最大行数（80 行）。 */
 export const PROVIDER_JOB_LOG_MAX_LINES = 80;
-/** 无换行进度条（`\r`）单行缓冲字符上限。 */
 export const PROVIDER_JOB_PARTIAL_LINE_MAX_CHARS = 4_096;
-/** 行下实时展示的单行进度短语最大字符数。 */
 export const PROVIDER_PROGRESS_LINE_MAX_CHARS = 120;
-/** 捕获的授权或验证 URL 最大字符长度。 */
 export const PROVIDER_AUTH_URL_MAX_CHARS = 8_192;
-/** 用户粘贴的授权码或回调 URL 最大字符长度。 */
 export const PROVIDER_AUTH_INPUT_MAX_CHARS = 8_192;
-/** 用户输入的 API Key / Token 最大字符长度。 */
 export const PROVIDER_API_KEY_MAX_CHARS = 2_048;
-/** `<stateDir>/provider-secrets.json` 读取体积硬上限（64 KiB）。 */
 export const PROVIDER_SECRETS_FILE_MAX_BYTES = 64 * 1024;
-/** 前端存在进行中安装或登录流时的状态轮询间隔（1 秒）。 */
 export const PROVIDER_ACTIVE_POLL_MS = 1_000;
-/** 要用户动手的阻塞（docs/user-blockers-design.md）：已解开的留最近多少条，更早的删掉（在等的不删）。 */
 export const USER_BLOCKERS_RESOLVED_KEEP = 50;
 
-// 总助的项目目录（docs/router-project-catalog-design.md 第 4 节）。
-/** 档案“一句话：做什么”最多几个字。 */
 export const PROJECT_CATALOG_ONE_LINER_MAX_CHARS = 80;
-/** 档案里的别名（代号、产品名、用户的叫法）最多几个、每个最多几个字。 */
 export const PROJECT_CATALOG_ALIASES_MAX = 8;
 export const PROJECT_CATALOG_ALIAS_MAX_CHARS = 24;
-/** 档案“最近主线”最多几个字。 */
 export const PROJECT_CATALOG_FOCUS_MAX_CHARS = 160;
-/** 档案里核心模块、已定的事、悬着的事各最多几条，每条最多几个字。 */
 export const PROJECT_CATALOG_MODULES_MAX = 8;
 export const PROJECT_CATALOG_DECISIONS_MAX = 8;
 export const PROJECT_CATALOG_OPEN_ITEMS_MAX = 5;
 export const PROJECT_CATALOG_ITEM_MAX_CHARS = 160;
-/** 第二层（hub dispatch project-show）渲染出的档案全文最多几个字。 */
 export const PROJECT_CATALOG_DETAIL_MAX_CHARS = 4_000;
-/** 名片压成单行时，“做什么”留几个字。 */
 export const PROJECT_CATALOG_COMPACT_ONE_LINER_CHARS = 40;
-/** project_catalogs.catalog_json 单行字节上限（超了按写档失败记）。 */
 export const PROJECT_CATALOG_ROW_MAX_BYTES = 16_384;
-/** 写档输入：切点之后用户和项目经理的原话从新往旧最多带几个字。 */
 export const PROJECT_CATALOG_DIALOG_MAX_CHARS = 30_000;
-/** 写档输入：最新一份交接最多带几个字（本机实测最长 10,871 字）。 */
 export const PROJECT_CATALOG_HANDOVER_MAX_CHARS = 12_000;
-/** 写档输入：首次建档读项目说明文件，每个文件最多几个字。 */
 export const PROJECT_CATALOG_FILE_MAX_CHARS = 4_000;
-/** 写档输入：切点之后结束的任务图、Worker 汇报摘要各最多几条，每条最多几个字。 */
 export const PROJECT_CATALOG_GRAPHS_MAX = 10;
 export const PROJECT_CATALOG_WORKER_REPORTS_MAX = 20;
 export const PROJECT_CATALOG_INPUT_ITEM_MAX_CHARS = 200;
-/** 写档输入总字数上限（实测 3.9 万字单轮约 11 秒）。 */
 export const PROJECT_CATALOG_INPUT_MAX_CHARS = 60_000;
-/** “变化大”：切点之后加权字数（用户的字乘权重，项目经理的字算 1）到这个数才刷新。 */
 export const PROJECT_CATALOG_REFRESH_DELTA = 20_000;
 export const PROJECT_CATALOG_USER_CHAR_WEIGHT = 4;
-/** 同一个项目两次刷新的最短间隔（新项目首次建档不受限）。 */
 export const PROJECT_CATALOG_MIN_INTERVAL_MS = 2 * 60 * 60_000;
-/** 同时最多写几份档案。 */
 export const PROJECT_CATALOG_CONCURRENCY = 1;
-/** 单份写档从开始到结束最多多久，到了打断记失败。 */
 export const PROJECT_CATALOG_TIMEOUT_MS = 2 * 60_000;
-/** 写档失败退避：首次 10 分钟，之后翻倍；同一切点连续失败到次数上限后，隔一天再试。 */
 export const PROJECT_CATALOG_RETRY_BACKOFF_MS = 10 * 60_000;
 export const PROJECT_CATALOG_MAX_ATTEMPTS = 3;
 export const PROJECT_CATALOG_GIVE_UP_MS = 24 * 60 * 60_000;
-/** 跑腿的没人叫醒时多久自己看一次队列（队列空不查库）。 */
 export const PROJECT_CATALOG_TICK_MS = 60_000;
-/** hub dispatch project-show 单次输出字节上限，和单轮里最多查几个项目。 */
 export const ROUTER_PROJECT_SHOW_MAX_BYTES = 16_384;
 export const ROUTER_PROJECT_SHOW_PER_TURN_MAX = 4;
-/** 总助名片里单张完整 PM 名片的字节上限（带第一层项目档案，docs/router-project-catalog-design.md 第 4 节）。 */
 export const ROUTER_PM_CARD_MAX_BYTES = 2_048;
 
-// ---- 按项目经理管理技能、MCP、云端连接器（docs/pm-capabilities-design.md 的性能一节） ----
-/** 库存最多收多少项（三类合计）。本机实测 claude 166 个技能 + 71 个 MCP，codex 62 个技能 + 12 个 MCP + 10 个连接器，留十倍余量。 */
 export const PM_CAPABILITY_INVENTORY_MAX_ITEMS = 2_000;
-/** 一个项目经理最多存多少项单独设置（超过拒绝 PATCH）。和库存上限相同：每项最多一条。 */
 export const PM_CAPABILITY_OVERRIDES_MAX = 2_000;
-/** 库存缓存多久：配置文件和技能目录的 mtime 变了提前失效。 */
 export const PM_CAPABILITY_INVENTORY_TTL_MS = 60_000;
-/** 有厂商没扫到（读不了、探测超时）时库存只记多久。 */
 export const PM_CAPABILITY_INVENTORY_RETRY_MS = 5_000;
-/** 技能说明在库存里最多多少字。 */
 export const PM_CAPABILITY_DESCRIPTION_MAX_CHARS = 200;
-/** 一次 PATCH 最多改多少项（组开关一次改一整组，最大的插件组本机 37 个技能）。 */
 export const PM_CAPABILITY_PATCH_MAX_KEYS = 500;
-/** Codex 云端连接器工具缓存 JSON（含完整工具 Schema，本机实测 2.8 MB）只读扫描字节上限。 */
 export const PM_CAPABILITY_APPS_CACHE_MAX_BYTES = 16 * 1024 * 1024;
 
-// ---- 接入飞书（docs/feishu-design.md 的性能一节） ----
-/** 一张卡片正文最多多少字：卡片 ≤ 30 KB，中文 UTF-8 每字 3 字节约 10,000 字，留出按钮和 JSON 的余量。超过的续到新卡。 */
 export const FEISHU_CARD_MAX_CHARS = 8_000;
-/** 飞书一张卡片序列化后的体积上限（字节），发送前按它核一遍。 */
 export const FEISHU_CARD_MAX_BYTES = 30_000;
-/** 一张卡里正文转成 JSON 字符串后最多多少字节：余下的留给标题、摘要、按钮和流式配置。 */
 export const FEISHU_CARD_MARKDOWN_JSON_BYTES = FEISHU_CARD_MAX_BYTES - 1_000;
-/** 分块时补的代码围栏：记号最长几个字符、语言名最长几个字符，超出的不照抄，免得补的围栏把正文挤没。 */
 export const FEISHU_FENCE_MARKER_MAX_CHARS = 16;
 export const FEISHU_FENCE_INFO_MAX_CHARS = 32;
-/** 流式卡片两次推全文的最小间隔：每张卡每秒约 3 次，低于飞书每张卡 10 次/秒。 */
 export const FEISHU_STREAM_FLUSH_MS = 300;
-/** 流式卡片打字机的速度（飞书默认值，写死免得各端默认不同）：每隔多少毫秒出几个字。 */
 export const FEISHU_STREAM_PRINT_FREQUENCY_MS = 70;
 export const FEISHU_STREAM_PRINT_STEP = 1;
-/** 整个应用每秒最多调几次流式更新文本：接口 50 次/秒，留余量；300 ms 一推时够 12 个对话同时流式。 */
 export const FEISHU_CARDKIT_BUDGET_PER_SECOND = 40;
-/** 流式模式开着超过这么久续开一次：飞书 10 分钟自动关。 */
 export const FEISHU_STREAM_RENEW_MS = 9 * 60_000;
-/** 停机时最多等多久把排着的出站发完、还在流式的卡收尾（关流式、去停止按钮）：要在 SHUTDOWN_TOTAL_MS 里留出别的步骤。 */
 export const FEISHU_CLOSE_DRAIN_MS = 5_000;
-/** 同一个群每秒最多发几条：飞书同一个群里机器人共享 5 QPS。 */
 export const FEISHU_CHAT_SENDS_PER_SECOND = 4;
-/** 卡片回调多久内必须回：飞书要求 3 秒。 */
 export const FEISHU_CARD_ACTION_DEADLINE_MS = 2_500;
-/** 成员缓存最多几个群：群数 = 项目经理数 + 1，留十倍。 */
 export const FEISHU_CHAT_CACHE_MAX = 200;
-/**
- * 画好的飞书群头像（daemon/feishu/avatars.ts）在内存里最多记几张：一张约 4.5 KB、画一次约 40ms；在用的形象不超过项目经理数，
- * 64 张约 0.3 MB。形象一共 20 × 24 = 480 种，超过的按最久没用的丢，下次用到再画。
- */
 export const FEISHU_AVATAR_RENDER_CACHE_MAX = 64;
-/** 每个群最多缓存几个成员：私人项目群不会超过几十人。 */
 export const FEISHU_CHAT_MEMBERS_MAX = 1_000;
-/** 成员缓存多久对一次账（事件实时改为主）；查失败多久内不再查。 */
 export const FEISHU_MEMBERS_TTL_MS = 10 * 60_000;
 export const FEISHU_MEMBERS_RETRY_MS = 30_000;
-/** 署名里的显示名最多几个字。 */
 export const FEISHU_DISPLAY_NAME_MAX_CHARS = 40;
-/** 群里没 @机器人 的话，每个群最多记几行、几个字、多久（太久以前的讨论当背景反而误导）。 */
 export const FEISHU_CONTEXT_MAX_LINES = 30;
 export const FEISHU_CONTEXT_MAX_CHARS = 4_000;
 export const FEISHU_CONTEXT_TTL_MS = 2 * 60 * 60_000;
-/**
- * 没 @机器人 的气泡里带的文件（只记编号，唤醒时才下载），每个群最多记几个，超过丢最早的。
- * 飞书手机上多选的图片逐张发成单独的图片消息，一次最多 9 张，留一倍余量。
- */
 export const FEISHU_CONTEXT_MAX_FILES = 20;
-/** 访客因档位被拦（发文件、点拍板或停止）时，同一个群隔多久才再自动附一张群设置卡；主人发 /群设置 不受它限。 */
 export const FEISHU_POLICY_CARD_COOLDOWN_MS = 5 * 60_000;
-/** 飞书卡片 select_static 单个下拉最多放多少个选项（防聚合厂商几百个模型撑爆 30 KB 卡片上限；当前选中的模型总保留）。 */
 export const FEISHU_SELECT_OPTIONS_MAX = 100;
-/** feishu_posts 里已定稿的行留几天：飞书卡片实体 14 天后不能再操作。 */
 export const FEISHU_POST_RETENTION_DAYS = 14;
 export const FEISHU_POST_RETENTION_MS = FEISHU_POST_RETENTION_DAYS * 24 * 60 * 60 * 1000;
-/** 断线重连后每个群最多补发几条，更早的发一行“还有 N 条，去网页看”。 */
 export const FEISHU_CATCHUP_MAX_MESSAGES = 20;
-/** 手动接入的绑定码多久失效。 */
 export const FEISHU_BIND_CODE_TTL_MS = 10 * 60_000;
-/** 飞书上传图片、上传文件的上限。 */
 export const FEISHU_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 export const FEISHU_FILE_MAX_BYTES = 30 * 1024 * 1024;
-/** 进、出队列各最多排几件：进的满了先丢成员和改名事件（重连对账会补回），出的满了先合并流式推送。 */
 export const FEISHU_INBOUND_QUEUE_MAX = 500;
 export const FEISHU_OUTBOUND_QUEUE_MAX = 500;
-/** 建群对齐、断线补发失败后隔多久再试（满载时也靠它从账本补回）。 */
 export const FEISHU_CONTROL_RETRY_MS = 1_000;
-/**
- * 附件（图片、视频、文档）在出站队列外面并发预传，最多同时传 FEISHU_UPLOAD_CONCURRENCY 个、在途最多 FEISHU_MEDIA_QUEUE_MAX 个；
- * 上传暂时失败（网络、超时、飞书 5xx）退避重试几次（第 n 次隔 FEISHU_CONTROL_RETRY_MS × 2^n），还不行在卡上标“没发出去”。
- */
 export const FEISHU_MEDIA_QUEUE_MAX = 200;
 export const FEISHU_MEDIA_RETRY_MAX = 3;
 export const FEISHU_UPLOAD_CONCURRENCY = 3;
-/** 发卡前最多等附件传多久（从开始传算）：传完的图嵌进卡、文件紧跟卡发；没传完的卡上先写 Uploading，传完再补。 */
 export const FEISHU_ATTACH_WAIT_MS = 2_500;
-/** 截图超过这个边长或体积时先缩到最长边 FEISHU_IMAGE_MAX_EDGE 再传（原文件不动）：手机上看足够清楚，传得快。 */
 export const FEISHU_IMAGE_MAX_EDGE = 2_400;
 export const FEISHU_IMAGE_SHRINK_BYTES = 2 * 1024 * 1024;
-/** 调飞书开放接口每次 HTTP 请求的超时；上传图片、文件和下载资源（最大 30 MB）另按 FEISHU_TRANSFER_TIMEOUT_MS。 */
 export const FEISHU_HTTP_TIMEOUT_MS = 30_000;
 export const FEISHU_TRANSFER_TIMEOUT_MS = 180_000;
-/**
- * 飞书长连接（官方 WSClient）的心跳看门狗：发出 ping 后这么多秒没收到任何帧就断开重连。
- * 不设时半开的假活连接（网络切换、梯子、NAT 回收）要等 TCP 自己报错才发现，期间入站事件送不到，要等飞书几分钟后重推。
- */
 export const FEISHU_WS_PING_TIMEOUT_S = 10;
-/** 长连接握手超时：代理、NAT 卡住时放弃这次握手进重试，不让连接一直挂着。 */
 export const FEISHU_WS_HANDSHAKE_TIMEOUT_MS = 15_000;
-/** state/feishu-secrets.json 的权限，和 state/ui-token 一样。 */
 export const FEISHU_SECRETS_FILE_MODE = 0o600;
-/** 群名最多几个字（飞书建议 ≤ 60）。 */
 export const FEISHU_CHAT_NAME_MAX_CHARS = 60;
-/** 建群 uuid 最多几个字（飞书要求 ≤ 50）。 */
 export const FEISHU_CHAT_UUID_MAX_CHARS = 50;
-/** 列群、列群成员每页几条（飞书上限 100）。 */
 export const FEISHU_PAGE_SIZE = 100;
-/** 飞书拉会话历史消息 GET /open-apis/im/v1/messages 单页上限（飞书校验范围 1～50）。 */
 export const FEISHU_MESSAGE_LIST_PAGE_SIZE = 50;
-/** 启动连接与断线重连入站主动补拉的最大回溯时间窗口（超过 15 分钟的陈旧历史不翻）。 */
 export const FEISHU_INBOUND_CATCHUP_WINDOW_MS = 15 * 60_000;
-/** 进程内闪断重连时在最近入站锚点前多回看 30 秒，覆盖半开连接探测盲区与秒级时间戳取整边界（靠已见消息与账本唯一键去重）。 */
 export const FEISHU_INBOUND_CATCHUP_OVERLAP_MS = 30_000;
-/** 单会话单次重连入站补拉最多翻几页、最多取最新几条消息，防极端刷屏打满队列或配额。 */
 export const FEISHU_INBOUND_CATCHUP_MAX_PAGES = 4;
 export const FEISHU_INBOUND_CATCHUP_MAX_MESSAGES = FEISHU_MESSAGE_LIST_PAGE_SIZE * FEISHU_INBOUND_CATCHUP_MAX_PAGES;
-/** 启动与断线重连入站主动补拉的会话并发路数上限，兼顾百群低延迟与飞书频控。 */
 export const FEISHU_INBOUND_CATCHUP_CONCURRENCY = 6;
-/** 内存里记住最近已处理的飞书入站消息编号上限，拦截补拉重叠窗口与 WebSocket 迟到重推。 */
 export const FEISHU_SEEN_MESSAGES_MAX = 2_000;
-/** 等扫码确认时 status 被问的间隔（终端命令轮询状态用）。 */
 export const FEISHU_CLI_POLL_MS = 2_000;
-/** mesh 终端命令等授权、等核对时轮询本机管理 socket 的间隔与最大次数（覆盖 15 分钟 GitHub 设备码有效期）。 */
 export const MESH_CLI_POLL_MS = 1_500;
 export const MESH_CLI_MAX_POLLS = 600;
 
-// ───────────── 账号组网（docs/account-mesh-design.md「性能」节）─────────────
-/**
- * 公共中继和 GitHub OAuth App 的 Client ID：都是公开值，开源仓库里只放这两样，不放任何密钥（GitHub 设备码登录不需要 client secret）。
- * 空串 = 这个版本还没配，登录时提示用户自建中继（ENV_RELAY_URL）或设 ENV_GITHUB_CLIENT_ID。
- */
 export const MESH_DEFAULT_RELAY_URL = "";
 export const MESH_GITHUB_CLIENT_ID = "";
-/** GitHub 设备码登录的网页和接口地址（测试换成假的）。 */
 export const GITHUB_WEB_ORIGIN = "https://github.com";
-/** GitHub 轮询授权结果的默认间隔（GitHub 没给 interval 时）。 */
 export const GITHUB_DEVICE_POLL_DEFAULT_MS = 5_000;
-/** state/account.json 的权限。 */
 export const MESH_ACCOUNT_FILE_MODE = 0o600;
-/** state/mesh/ 目录和里面设备私钥的权限。 */
 export const MESH_STATE_DIR_MODE = 0o700;
 export const MESH_KEY_FILE_MODE = 0o600;
-/** state/peers.json（设备信任表）的权限。 */
 export const MESH_TRUST_FILE_MODE = 0o600;
-/** 信任表最多记几条墓碑（被撤销的证书）。 */
 export const MESH_TRUST_TOMBSTONES_MAX = 64;
-/** 组网入口：局域网直连听的 TCP 端口（所有地址，只说双向认证的 TLS 1.3）。 */
 export const MESH_LISTEN_PORT = 4320;
-/** 一个账号最多几台设备（守护进程的信任表和中继的设备表共用）。 */
 export const MESH_MAX_DEVICES_PER_ACCOUNT = 20;
-/** 每台报给中继的局域网候选地址最多几个。 */
 export const MESH_CANDIDATES_MAX = 8;
-/** 隔多久比一次本机网卡地址，变了才重报给中继。 */
 export const MESH_CANDIDATES_REFRESH_MS = 30_000;
-/** 拨号时直连先跑这么久，还没握手成功就同时经中继拨。 */
 export const MESH_DIRECT_HEAD_START_MS = 250;
-/** 对一台设备直连失败后，这么久内不再试直连（网络变了立刻清）。 */
 export const MESH_DIRECT_RETRY_MS = 60_000;
-/** 组网 TLS 握手最多等多久（直连和经中继都是）。 */
 export const MESH_HANDSHAKE_TIMEOUT_MS = 5_000;
-/** 一次拨号（直连和中继一起）最多等多久。 */
 export const MESH_DIAL_TIMEOUT_MS = 10_000;
-/** 到中继的控制连接断了以后第一次等多久再连；每失败一次翻倍，封顶 MESH_RELAY_BACKOFF_MAX_MS。 */
 export const MESH_RELAY_BACKOFF_MIN_MS = 1_000;
 export const MESH_RELAY_BACKOFF_MAX_MS = 60_000;
-/** 到中继的控制连接隔多久发一次协议层 ping；下一次该发时还没收到 pong 就断开重连。 */
 export const MESH_RELAY_PING_MS = 20_000;
-/** 控制连接要连上多久才算稳定、把退避清零。 */
 export const MESH_RELAY_STABLE_MS = 10_000;
-/** 中心租约多久没续约就作废。 */
 export const MESH_LEASE_TTL_MS = 15_000;
-/** 候选设备隔多久发一次 lease.claim（持有者的 claim 就是续约）。 */
 export const MESH_LEASE_RENEW_MS = 5_000;
-/** 持有者在 TTL 到之前提前这么久自己掐断长连接：TTL - 这个数之内没收到续约回执就断。 */
 export const MESH_LEASE_FENCE_MARGIN_MS = 5_000;
-/** 中继连不上超过这么久，中心顺序排第一的设备不经租约自己挂长连接（降级）。 */
 export const MESH_LEASE_ORPHAN_MS = 60_000;
-/** 信任表和中继的设备表对不上时，隔多久再去别的设备拉一次声明；最多拉几次（中继推来新设备表时重新数）。 */
 export const MESH_TRUST_SYNC_RETRY_MS = 2_000;
 export const MESH_TRUST_SYNC_ATTEMPTS = 5;
-/** 设备之间的组网控制请求（同步信任声明、改名）最多等多久。 */
 export const MESH_REQUEST_TIMEOUT_MS = 10_000;
-/** 退出账号时等待自签撤销声明送达在线可信设备的最长耗时。 */
 export const MESH_LOGOUT_REVOKE_TIMEOUT_MS = 3_000;
-/** 中继失联准备降级持有租约前，经局域网探测其他可信设备租约状态的超时。 */
 export const MESH_LAN_PROBE_TIMEOUT_MS = 2_000;
-/** 新设备批准（核对码）从发起到两边都点“一致”的时限。 */
 export const MESH_APPROVAL_TTL_MS = 10 * 60_000;
-/** 核对码几位十进制数字。 */
 export const MESH_SAS_DIGITS = 6;
-/** 批准仪式里每方随机数的字节数。 */
 export const MESH_SAS_NONCE_BYTES = 32;
-/** 设备发往中继的单条控制消息最大字节数（JSON 文本帧，严控上行防刷）。 */
 export const RELAY_MAX_CONTROL_FRAME_BYTES = 16 * 1024;
-/** 中继发往设备的单条控制消息最大字节数（容纳满额 20 台最大长度设备名与候选地址的数学上界）。 */
 export const RELAY_MAX_SERVER_FRAME_BYTES = 48 * 1024;
-/** 中继独立下发撤销墓碑时每帧最多携带的条数（单帧上界 < 8 KB，64 条墓碑分批下发）。 */
 export const RELAY_REVOCATIONS_PAGE_SIZE = 16;
-/** signal（设备之间经中继转的小消息，比如批准仪式）的 payload 最大字节数。 */
 export const RELAY_MAX_SIGNAL_BYTES = 4 * 1024;
-/** 数据通道单帧最大字节数（二进制帧）。 */
 export const RELAY_MAX_DATA_FRAME_BYTES = 64 * 1024;
-/** 每台设备每秒最多发几条控制消息，超了中继断开它。 */
 export const RELAY_CONTROL_FRAMES_PER_SECOND = 20;
-/** 每台设备同时最多几条数据通道。 */
 export const RELAY_MAX_CHANNELS_PER_DEVICE = 32;
-/** 每个账号每天经中继的数据通道总字节数，超了当天拒绝新通道。 */
 export const RELAY_ACCOUNT_DAILY_BYTES = 4 * 1024 * 1024 * 1024;
-/** 数据通道这么久没有数据就关。 */
 export const RELAY_CHANNEL_IDLE_MS = 5 * 60_000;
-/** 拨号后等对方接起数据通道最多多久。 */
 export const RELAY_CHANNEL_ACCEPT_TIMEOUT_MS = 10_000;
-/** 控制连接建立后多久内必须完成 hello 认证，超时断开。 */
 export const RELAY_HELLO_TIMEOUT_MS = 10_000;
-/** 单个账号同时最多挂几条尚未完成 hello 的控制连接。 */
 export const RELAY_MAX_UNAUTH_CONTROLS_PER_ACCOUNT = MESH_MAX_DEVICES_PER_ACCOUNT;
-/** 每个 IP 每分钟最多注册几次。 */
 export const RELAY_REGISTER_PER_IP_PER_MINUTE = 10;
-/** 每个 IP 每分钟最多升级几次 WebSocket（控制连接 + 数据通道）。 */
 export const RELAY_UPGRADES_PER_IP_PER_MINUTE = 120;
-/** 每个 IP 同时最多保持几条活跃 WebSocket 连接。 */
 export const RELAY_CONCURRENT_SOCKETS_PER_IP = 64;
-/** 数据通道另一端还没接起时，中继最多替先到的一端攒多少字节（TLS 握手的头几条记录）。 */
 export const RELAY_CHANNEL_PENDING_BYTES = 4 * RELAY_MAX_DATA_FRAME_BYTES;
-/** 自建中继：数据通道一端积压超过这么多字节就先停读另一端，写空再读。 */
 export const RELAY_CHANNEL_HIGH_WATER_BYTES = 1024 * 1024;
-/** 自建中继隔多久收拾一次各账号（租约过期、等批准过期、空闲通道）。 */
 export const RELAY_SWEEP_MS = 1_000;
-/** 中继按客户端（IPv4 地址或 IPv6 /64，relay/guards.ts 的 clientKeyOf）记登记、升级次数：新客表、累加表各最多记几个客户端。 */
 export const RELAY_IP_LIMITER_MAX = 10_000;
-/** 中继限流的固定窗口长度（RELAY_REGISTER_PER_IP_PER_MINUTE、RELAY_UPGRADES_PER_IP_PER_MINUTE 按它算）。 */
 export const RELAY_RATE_WINDOW_MS = 60_000;
-/** 超限客户端单独记在封禁表里直到窗口结束，最多记几个（新客户端挤满计数表也挤不掉它们）。 */
 export const RELAY_IP_BLOCKED_MAX = 10_000;
-/** 累加表满了时最多隔多久清一次窗口已过的计数（清一次要扫整张表）。 */
 export const RELAY_IP_LIMITER_PRUNE_MS = 1_000;
-/** /v1/register 验过的 GitHub token 按 SHA-256 摘要缓存几个（不存明文）。 */
 export const RELAY_TOKEN_CACHE_MAX = 1_024;
-/** 验过的 token 缓存多久：这段时间内同一个 token 再登记不再问 GitHub；被吊销的 token 最多晚这么久失效。 */
 export const RELAY_TOKEN_CACHE_TTL_MS = 60_000;
-/** 中继记住最近被移除的几台设备（它们再登入收到 removed）。 */
 export const RELAY_REMOVED_DEVICES_MAX = 64;
-/** 中继当天流量计数多久落一次盘（Cloudflare 按写入行数计费，不每帧都写）。 */
 export const RELAY_USAGE_SAVE_MS = 60_000;
-/** 等批准的设备这么久没被批准就从账号里删掉。 */
 export const RELAY_PENDING_DEVICE_TTL_MS = MESH_APPROVAL_TTL_MS;
-/** 中心把卡片点击转给归属电脑后，最多等多久拿它算出的 toast（要在 FEISHU_CARD_ACTION_DEADLINE_MS 之内）。 */
 export const FEISHU_FORWARD_CARD_TIMEOUT_MS = 1_500;
-/** 中心把普通事件转给归属电脑最多等多久，超时按离线处理。 */
 export const FEISHU_FORWARD_TIMEOUT_MS = 10_000;
-/** 归属电脑离线时，中心替每台最多暂存几条飞书消息。 */
 export const FEISHU_OFFLINE_INBOX_MAX_PER_DEVICE = 50;
-/** 暂存的飞书消息存多久，过期在群里说一声后删掉。 */
 export const FEISHU_OFFLINE_INBOX_TTL_MS = 24 * 60 * 60_000;
-/** 卡片接口每秒预算按接着飞书的设备数平分后，每台至少这么多。 */
 export const FEISHU_CARDKIT_MIN_SHARE_PER_SECOND = 5;

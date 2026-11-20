@@ -1,10 +1,4 @@
-// 一个账号的中继逻辑（docs/account-mesh-design.md「中继」「中心顺序与租约」）。Cloudflare 版每个账号一个 Durable Object 里放一个，
-// Node 版每个账号一个；外壳只负责收发 WebSocket、存取 RelayAccountStorage、按时调 sweep。只用 Web 标准 API。
-// 不变量：
-// - 只有同账号、状态 active 的设备之间能 dial 和 signal；pending 设备只能和 active 设备互发 signal，不能被拨号；
-// - 同一时刻一个租约名最多授给一台；改授前旧租约要么已过 MESH_LEASE_TTL_MS 没续约，要么旧持有者已 release 或控制连接已关；
-// - 数据通道只配对 dial 里登记过的 (拨号方, 接听方, channel)，两端到齐后原样转发二进制帧，不解析、不落盘；
-// - 落盘的只有设备表、中心顺序、租约 epoch 和当天流量；在线、候选地址、租约持有者、通道都在内存（Cloudflare 版靠 attachment 熬过休眠）。
+// Web-standard APIs only. Data channels forward binary frames verbatim and are never parsed or persisted.
 import type { DeviceId } from "../shared/api.ts";
 import {
   MESH_LEASE_TTL_MS,
@@ -53,48 +47,38 @@ import {
   type RelayServerFrame,
 } from "./protocol.ts";
 
-/** 落盘的设备记录。 */
 export interface RelayDeviceRecord {
   id: DeviceId;
   name: string;
   platform: string;
   certPem: string;
   fingerprint: DeviceFingerprint;
-  /** Ed25519 公钥（SPKI DER 的 base64url）。 */
   publicKey: string;
   state: MeshDeviceState;
   addedAt: number;
 }
 
-/** 一个账号落盘的全部内容。 */
 export interface RelayAccountRecord {
   accountId: AccountId;
   login: AccountLogin;
   devices: RelayDeviceRecord[];
   priority: DeviceId[];
-  /** 最近被移除的设备（最多 RELAY_REMOVED_DEVICES_MAX 台）：它们再登入收到 removed，重新登记才清掉。 */
   removed: DeviceId[];
-  /** 最近由可信设备提交的签名撤销墓碑（最多 MESH_TRUST_TOMBSTONES_MAX 条）：离线设备上线时随 welcome/devices 取回验签。 */
   revocations?: RelayRevocationEnvelope[];
-  /** 每个租约名最近一次授予的 epoch：中继重启后接着加，不回到 1。 */
   leaseEpochs: Partial<Record<MeshLeaseName, number>>;
-  /** 当天（UTC）经数据通道的字节数，按 RELAY_USAGE_SAVE_MS 落盘。 */
   usage: { day: string; bytes: number };
 }
 
-/** 外壳提供的存储：Cloudflare 版是 DO 的 SQLite，Node 版是 node:sqlite。 */
 export interface RelayAccountStorage {
   load(): Promise<RelayAccountRecord | null>;
   save(record: RelayAccountRecord): Promise<void>;
 }
 
-/** 外壳交进来的一条 WebSocket（控制连接收发文本，数据通道收发二进制）。 */
 export interface RelaySocket {
   send(data: string | Uint8Array): void;
   close(code: number, reason: string): void;
 }
 
-/** 控制连接熬过休眠要带的东西（Cloudflare 版存进 WebSocket 的 attachment，醒来交回 openControl）。 */
 export interface RelayControlAttachment {
   device: DeviceId | null;
   session: string | null;
@@ -102,21 +86,15 @@ export interface RelayControlAttachment {
   openedAt?: number;
   candidates: MeshCandidate[];
   lastClaimAt: Partial<Record<MeshLeaseName, number>>;
-  /** 这台持有的租约：醒来后按它恢复持有者和 epoch。 */
   held: { name: MeshLeaseName; epoch: number; renewedAt: number }[];
 }
 
-/** 一条控制连接在中继里的句柄。 */
 export interface RelayControlHandle {
-  /** 收到一条文本帧。 */
   receive(text: string): Promise<void>;
-  /** 连接关了（正常或异常）。 */
   closed(): Promise<void>;
-  /** 现在该存进 attachment 的东西。 */
   attachment(): RelayControlAttachment;
 }
 
-/** 一条数据通道的一端在中继里的句柄。 */
 export interface RelayChannelHandle {
   receive(data: Uint8Array): void;
   closed(): void;
@@ -124,7 +102,6 @@ export interface RelayChannelHandle {
 
 export interface RelayAccountRoomOptions {
   accountId: AccountId;
-  /** 中继自己的 origin（https://…），签名消息里要用。 */
   relayOrigin: string;
   storage: RelayAccountStorage;
   now?: () => number;
@@ -132,28 +109,12 @@ export interface RelayAccountRoomOptions {
 }
 
 export interface RelayAccountRoom {
-  /**
-   * POST /v1/register 验过 GitHub 之后调（login 是验 token 得到的）。
-   * 后置：签名对不上回 unauthorized；设备已满回 too_many_devices；账号里还没有设备时这台直接 active，否则 pending；
-   * 同一设备编号再登记（换了证书）按新证书覆盖，状态回到 pending（第一台除外）。成功后推 devices 给账号里在线的设备。
-   */
   register(login: AccountLogin, request: RelayRegisterRequest): Promise<RelayRegisterResponse | { error: RelayErrorCode }>;
-  /**
-   * 收下一条新的控制连接（或休眠醒来交回 attachment）。
-   * 后置：新连接先收到 challenge；hello 签名对得上才回 welcome 并算作在线；签名不对、设备不在账号里时发 error 后关闭。
-   */
   openControl(socket: RelaySocket, restored?: RelayControlAttachment): RelayControlHandle;
-  /**
-   * 收下一条数据通道的一端。
-   * 后置：channel 没在 dial 里登记、设备或会话令牌对不上、超出 RELAY_MAX_CHANNELS_PER_DEVICE 或当天流量时回 error，外壳关掉连接；
-   * 两端到齐后给拨号方的控制连接发 dial.connected，一端收到的帧原样发给另一端；一端关了另一端也关；超过 RELAY_CHANNEL_IDLE_MS 没有数据两端都关。
-   */
   openChannel(query: { channel: string; device: DeviceId; session: string }, socket: RelaySocket): RelayChannelHandle | { error: RelayErrorCode };
-  /** 按时间收拾：租约过期改授、等批准的设备过期删除、空闲通道关闭。外壳在每条消息后和定时器里调，可以重复调。 */
   sweep(): Promise<void>;
 }
 
-/** 后置：返回一个账号的中继逻辑；存储里没有这个账号时，第一次 register 时建。 */
 export function createRelayAccountRoom(options: RelayAccountRoomOptions): RelayAccountRoom {
   const now = options.now ?? Date.now;
   const randomToken = options.randomToken ?? newRelayToken;
@@ -164,7 +125,6 @@ export function createRelayAccountRoom(options: RelayAccountRoomOptions): RelayA
   let lastUsageSave = 0;
   let usageDirty = false;
 
-  /** 已登入的控制连接，一台设备一条。 */
   const controls = new Map<DeviceId, ControlConn>();
   const unauthenticated = new Set<ControlConn>();
   const lastSeenAt = new Map<DeviceId, number>();
@@ -227,7 +187,6 @@ export function createRelayAccountRoom(options: RelayAccountRoomOptions): RelayA
     for (const [id, conn] of controls) if (isActive(id)) send(conn, frame);
   };
 
-  // ---- 租约 ----
   const arbitrate = async (name: MeshLeaseName): Promise<void> => {
     const t = now();
     const lease = leases.get(name) ?? { holder: null, epoch: record?.leaseEpochs[name] ?? 0, renewedAt: 0, yielding: false };
@@ -266,7 +225,6 @@ export function createRelayAccountRoom(options: RelayAccountRoomOptions): RelayA
     for (const name of MESH_LEASE_NAMES) await arbitrate(name);
   };
 
-  // ---- 数据通道 ----
   const channelsOf = (id: DeviceId) => {
     let count = 0;
     for (const dial of dials.values()) {
@@ -302,7 +260,6 @@ export function createRelayAccountRoom(options: RelayAccountRoomOptions): RelayA
     for (const [channel, dial] of dials) if (dial.from === id || dial.to === id) closeDial(channel);
   };
 
-  // ---- 控制连接 ----
   const detach = (conn: ControlConn) => {
     unauthenticated.delete(conn);
     if (conn.device === null || controls.get(conn.device) !== conn) return false;
@@ -693,10 +650,8 @@ interface ControlConn {
   openedAt: number;
   candidates: MeshCandidate[];
   lastClaimAt: Partial<Record<MeshLeaseName, number>>;
-  /** 最近一秒内收到的帧的时刻（限流）。 */
   frameTimes: number[];
   closed: boolean;
-  /** 同一条连接上的帧按到达顺序一条条处理。 */
   queue: Promise<void>;
 }
 
@@ -704,7 +659,6 @@ interface LeaseState {
   holder: DeviceId | null;
   epoch: number;
   renewedAt: number;
-  /** 已经叫持有者让出：之后它的 claim 不再续约，release 或过期后改授。 */
   yielding: boolean;
 }
 
@@ -720,14 +674,11 @@ interface DialRecord {
   lastDataAt: number;
   dialer?: ChannelEnd;
   acceptor?: ChannelEnd;
-  /** 另一端还没接起时先到的帧。 */
   pending: Uint8Array[];
   pendingBytes: number;
 }
 
-/** 被拒（签名不对、帧不合规、超限）时关控制连接用的码。 */
 const WS_CLOSE_POLICY = 1008;
-/** 同一台设备开了新的控制连接，旧的用这个码关。 */
 const WS_CLOSE_REPLACED = 4000;
 
 function normalizeRecord(stored: RelayAccountRecord): RelayAccountRecord {

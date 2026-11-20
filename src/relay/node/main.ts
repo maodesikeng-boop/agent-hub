@@ -1,4 +1,3 @@
-// 自建中继的命令：node <代码目录>/src/relay/node/main.ts --port <端口> --origin https://<对外地址> [--db <文件>] [--host <地址>] [--trust-proxy]。
 import { parseArgs } from "node:util";
 import { pathToFileURL } from "node:url";
 import { startNodeRelay } from "./server.ts";
@@ -6,7 +5,6 @@ import { startNodeRelay } from "./server.ts";
 const USAGE =
   "用法：node src/relay/node/main.ts --port <端口> --origin https://<对外地址> [--db <文件，默认 relay.sqlite>] [--host <地址，默认 0.0.0.0>] [--trust-proxy] [--debug-frames]\n";
 
-/** 后置：解析参数并起 startNodeRelay，收到 SIGINT / SIGTERM 时关掉再退出；参数不对打印用法，返回 2。 */
 export async function runRelayCli(
   argv: string[],
   io: { stdout: { write(text: string): unknown }; stderr: { write(text: string): unknown } },

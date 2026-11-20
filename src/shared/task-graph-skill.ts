@@ -1,34 +1,17 @@
-// 产品自带的任务图技能 fusa-task-graph（docs/orchestration-skill-design.md 第 5、6 节）：建图手册和全部 hub graph 命令，
-// 只在项目经理要建图时按需加载，不常驻提示词。正文只有这一处：
-// - 守护进程每次起项目经理会话时写成 launch/<会话>/skills/fusa-task-graph/SKILL.md（daemon/task-graph-skill.ts），六家的原生入口
-//   和“按路径读文件”兜底都指向这一个文件；
-// - hub help graph 打印同一份正文（hub/cli.ts），读不到文件时还有这条路；
-// - 基础提示词（daemon/prompt.ts）里只留三档判断、一句四类审查红线和指路的那句话。
-// 前后端都能引（不用 node:path）；cli.ts 也引它，所以只引 names.ts、hub.ts、limits.ts、skill-names.ts。
 import { ASK_CARD_WHERE, TASK_GRAPH_CREATE_JSON_HINT, TASK_GRAPH_PATCH_JSON_HINT } from "./hub.ts";
 import { REVIEW_MAX_ROUNDS, TAKEOVER_PREDECESSORS_MAX } from "./limits.ts";
 import { HUB_COMMAND as HUB } from "./names.ts";
 import { skillNameOf } from "./skill-names.ts";
 
-/** 技能名（目录名、frontmatter 的 name 都是它）。带 fusa 和 task-graph：本机已有别家的 orchestration 技能，撞名会加载错手册。 */
 export const TASK_GRAPH_SKILL_NAME = "fusa-task-graph";
 
-/**
- * 是不是任务图技能的命令（`fusa-task-graph`、claude 插件的 `fusa:fusa-task-graph`、pi 的 `skill:fusa-task-graph`，前面可带 `/`、`$`）：
- * 网页的 `/` 命令列表里藏起来，只给项目经理模型按需加载，不影响各家原生的技能清单。
- */
 export function isInternalSkillCommand(name: string): boolean {
   return skillNameOf(name.trim().replace(/^[/$]+/u, ""))?.toLowerCase() === TASK_GRAPH_SKILL_NAME;
 }
 
-/** 技能的说明：各家靠它决定要不要加载，先写什么时候加载，再写什么时候不用（上限 TASK_GRAPH_SKILL_DESCRIPTION_MAX_CHARS）。 */
 export const TASK_GRAPH_SKILL_DESCRIPTION =
   `Bellwood 任务图手册。要用 ${HUB} graph 建图或改图、排自动交棒步骤、加独立审查步骤、处理偏离或换人接手、挂拍板卡之前，先加载。一段就能做完的活不建图，不用加载。`;
 
-/**
- * 四类审查红线：碰到任意一条就在实现后面加审查节点。完整的在技能正文里；基础提示词第 2 步只用 PM_REVIEW_REDLINES_BRIEF 那一句压缩版
- * （定档时要看得到：碰了红线就是两段，走建图）。
- */
 export const PM_REVIEW_REDLINES: readonly string[] = [
   "撤不回来的副作用或安全边界：数据迁移、覆写用户配置、杀进程、沙箱、鉴权；",
   "异步、并发、生命周期；",
@@ -36,11 +19,9 @@ export const PM_REVIEW_REDLINES: readonly string[] = [
   "本地草稿和远端状态互相覆盖的交互。",
 ];
 
-/** 基础提示词里压缩成一句的四类红线。 */
 export const PM_REVIEW_REDLINES_BRIEF =
   "撤不回来的副作用或安全边界；异步、并发、生命周期；会随时间变多的缓存、快照、分页，或多方共用的数据格式；本地草稿和远端状态互相覆盖";
 
-/** 技能正文（不带 frontmatter）：规矩在前，命令在后（claude 压缩后只重新挂每个技能的前 5,000 个 token）。hub help graph 打印的就是它。 */
 export function taskGraphSkillBody(): string {
   return `# 任务图手册
 
@@ -86,7 +67,6 @@ ${PM_REVIEW_REDLINES.map((line) => `  - ${line}`).join("\n")}
 `;
 }
 
-/** SKILL.md 全文（Agent Skills 规范：frontmatter 的 name 和目录名一致）。六家用的是同一个文件、同一份内容。 */
 export function taskGraphSkillMarkdown(): string {
   return `---
 name: ${TASK_GRAPH_SKILL_NAME}
@@ -96,7 +76,6 @@ description: ${TASK_GRAPH_SKILL_DESCRIPTION}
 ${taskGraphSkillBody()}`;
 }
 
-/** 启动指纹里算的那一段：名字和说明（厂商在会话开头读进技能清单，改了要重启才生效；正文是加载时现读的，改了不用重启）。 */
 export function taskGraphSkillCatalogEntry(): string {
   return `${TASK_GRAPH_SKILL_NAME}\n${TASK_GRAPH_SKILL_DESCRIPTION}`;
 }

@@ -1,5 +1,3 @@
-// Router 轨道 B 零厂商分支模型选型纯函数（docs/router-design.md 第 6.1 节）：
-// 一律按 VENDOR_LIST 与各家 VendorSpec.models.routerDefault / ModelCatalog 动态决策，零单家厂商 if/else。
 import { VENDOR_LIST } from "../vendors/registry.ts";
 import {
   bundledModelCatalog,
@@ -12,14 +10,12 @@ import {
   type VendorAvailability,
 } from "./vendors.ts";
 
-/** 用户或 router_settings 表传入的最小模型偏好结构（与第 2 波 RouterSettings 直接兼容）。 */
 export interface RouterModelPreference {
   readonly vendor?: string | null;
   readonly model?: string | null;
   readonly effort?: string | null;
 }
 
-/** 支持直接传 ModelCatalog[]（ModelCatalogs.list() 返回值）、按厂商键索引的对象或 Map。 */
 export type RouterCatalogInput =
   | readonly ModelCatalog[]
   | Readonly<Partial<Record<AgentVendor, ModelCatalog>>>
@@ -36,7 +32,6 @@ export interface ResolvedRouterModel {
   readonly model: string;
   readonly effort: string;
   readonly source: RouterModelSelectionSource;
-  /** 若用户显式指定了偏好厂商，但该厂商当前不可用而自动回退到其他可用厂商时附带。 */
   readonly fallbackFromPreferred?: {
     readonly vendor: AgentVendor;
     readonly availability: VendorAvailability;
@@ -94,7 +89,6 @@ function toCatalogMap(input: RouterCatalogInput): Map<AgentVendor, ModelCatalog>
   return map;
 }
 
-/** 取指定模型在该目录中支持的最低思考档位（所有厂商 efforts 均按从低到高排列，第 0 项即最低档位）。 */
 function lowestEffortFor(vendor: AgentVendor, catalog: ModelCatalog, model: string): string {
   const supported = effortsFor(catalog, model);
   if (supported.length > 0) return supported[0]!;
@@ -102,7 +96,6 @@ function lowestEffortFor(vendor: AgentVendor, catalog: ModelCatalog, model: stri
   return vendorSpec(vendor).models.efforts[0]!;
 }
 
-/** 在某家厂商目录内计算默认 Router 快模型预设：优先命中 spec.models.routerDefault，若实时目录无该预设则降级到 defaultModelId ?? models[0].id。 */
 export function resolveVendorRouterPreset(
   vendor: AgentVendor,
   inputCatalog?: ModelCatalog | null,
@@ -129,10 +122,6 @@ export function resolveVendorRouterPreset(
   };
 }
 
-/**
- * 用户显式选中某家厂商时，界面与飞书设置卡展示的模型与思考程度：
- * 已存模型时拆分兼容档位（不兼容则取该模型最低档位）；未存模型时取该厂商的总助快模型预设。
- */
 export function resolveExplicitRouterChoice(
   vendor: AgentVendor,
   preference: RouterModelPreference | null | undefined,
@@ -155,10 +144,6 @@ export function resolveExplicitRouterChoice(
   return { model: preset.model, effort: rawEffort ?? preset.effort };
 }
 
-/**
- * 总助在同一家厂商内切换模型时重算思考程度：
- * 新模型无可选档位时清空为 null；原档位仍受支持则保留；否则优先回落到预设模型档位或首档。
- */
 export function resolveRouterEffortForModel(
   vendor: AgentVendor,
   nextModel: string,
@@ -200,14 +185,6 @@ function buildUnavailableMessage(
   return "当前没有处于可用状态（available）的 Agent 厂商，请检查 CLI 安装与登录状态";
 }
 
-/**
- * 零厂商分支的 Router 极快模型选型器：
- * 1. 显式指定 (vendor, model, effort) 且该厂商可用（availability === "available"）时优先使用；未传 effort 取 efforts[0]。
- * 2. 未指定（或首选厂商当前不可用）时，按 VENDOR_LIST 顺序挑第一家 availability === "available" 的厂商：
- *    - 优先命中 spec.models.routerDefault；
- *    - 若实时 ModelCatalog 中无该预设模型，优雅降级到 catalog.defaultModelId ?? catalog.models[0].id + efforts[0]。
- * 3. 全部厂商不可用时返回清晰的结构化不可用原因。
- */
 export function resolveRouterModel(
   preference: RouterModelPreference | null | undefined,
   catalogs: RouterCatalogInput,
@@ -290,10 +267,6 @@ export function resolveRouterModel(
   };
 }
 
-/**
- * 前端预览解析：服务端真实可用性尚未拉回（全为 bundled + unknown）时按打包名单计算预览；
- * 只要已有服务端状态（含 available / signed_out / not_installed 或 unknown 混合），严格按 resolveRouterModel 判定。
- */
 export function resolveRouterModelPreview(
   preference: RouterModelPreference | null | undefined,
   catalogs: readonly ModelCatalog[],

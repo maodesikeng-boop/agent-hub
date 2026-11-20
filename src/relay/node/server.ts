@@ -1,6 +1,3 @@
-// 自建中继（docs/account-mesh-design.md「中继」）：Node 外壳，逻辑全在 relay/core.ts。
-// HTTP 和 WebSocket 用已有的 fastify + @fastify/websocket（ws），账号数据存 node:sqlite。可以直接听公网端口，也可以放在 Caddy / nginx 后面。
-// 不变量：每个账号一个 RelayAccountRoom，按需建、所有连接断开且空闲后丢掉（设备表在库里）；数据通道的内容不写日志、不落盘。
 import fastifyWebsocket from "@fastify/websocket";
 import Fastify, { type FastifyRequest } from "fastify";
 import { LRUCache } from "lru-cache";
@@ -27,20 +24,13 @@ import { clientKeyOf, createIpRateLimiter } from "../guards.ts";
 import { isRelayToken, parseRelayRegisterRequest, type RelayErrorCode } from "../protocol.ts";
 
 export interface NodeRelayOptions {
-  /** 0 表示随便挑一个空端口（测试用）。 */
   port: number;
   host?: string;
-  /** 账号数据库文件（node:sqlite）。 */
   dbFile: string;
-  /** 对外的 origin（https://…），签名消息里要用；放在反代后面时填反代的地址。不给按实际听的地址（测试用）。 */
   publicOrigin?: string;
-  /** 放在反代后面时打开，按 X-Forwarded-For 算登记限流的 IP。 */
   trustProxy?: boolean;
-  /** 调试开关：每条数据帧只打印长度和前 8 个字节的十六进制（验证 TLS 记录头，不打印正文）。 */
   debugFrames?: boolean;
-  /** 测试观察中继收到的原始密文帧。 */
   onDataFrame?: (bytes: Uint8Array) => void;
-  /** 测试换成假的 GitHub。 */
   fetch?: typeof fetch;
   githubApiOrigin?: string;
   now?: () => number;
@@ -63,7 +53,6 @@ const REGISTER_ERROR_STATUS: Record<RelayErrorCode, number> = {
   offline: 409,
   removed: 410,
 };
-/** 关数据通道、拒绝握手时用的 WebSocket 关闭码。 */
 const WS_CLOSE_POLICY = 1008;
 
 function sqliteStorage(db: DatabaseSync, accountId: AccountId, isOpen: () => boolean): RelayAccountStorage {
@@ -101,7 +90,6 @@ function wrapControlSocket(socket: WebSocket): RelaySocket {
   };
 }
 
-/** 后置：开始监听；POST /v1/register、控制连接、数据通道都按 relay/protocol.ts 的 RELAY_PATHS；close 后所有连接关掉、端口释放。 */
 export async function startNodeRelay(options: NodeRelayOptions): Promise<RunningNodeRelay> {
   const log = options.log ?? (() => {});
   const now = options.now ?? Date.now;
@@ -208,7 +196,6 @@ export async function startNodeRelay(options: NodeRelayOptions): Promise<Running
     },
   );
 
-  /** 数据通道两端：一端发得快、另一端收得慢时先停读快的那端，等慢的那端写空再接着读。 */
   const channelEnds = new Map<string, Set<WebSocket>>();
   app.get(
     "/v1/accounts/:account/channels/:channel",
