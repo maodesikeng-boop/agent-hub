@@ -223,7 +223,7 @@ Launch **Bellwood**. When **Settings → Providers** opens, click **Install** ne
 ### 3. Connect Feishu and other computers (optional)
 
 - **Feishu bot and project groups.** With the daemon running, execute `node src/feishu/main.ts connect` and scan the QR code in Feishu. Run `node src/feishu/main.ts status` to inspect active bindings. Devices in the same account share one bot. If the active device goes offline, another takes over automatically.
-- **Multiple computers.** Set a relay URL and a GitHub OAuth App client ID. In **Settings → Computers**, sign in to the same GitHub account on each computer. Compare the six-digit code when you approve a new device. Use Feishu to reach these devices from your phone.
+- **Multiple computers.** Bellwood ships with an official public blind relay and a public GitHub Device Flow client ID, so no setup is needed. In **Settings → Computers**, sign in to the same GitHub account on each computer. Compare the six-digit code when you approve a new device. To use a self-hosted relay, set `FUSA_RELAY_URL` and `FUSA_GITHUB_CLIENT_ID`. Use Feishu to reach these devices from your phone.
 - **Always-on Linux daemon.** Deploy as a `systemd` user service on Ubuntu and run `sudo scripts/linux-sandbox-setup.sh` once to set up `bubblewrap`. See the [Linux setup guide](docs/linux.md) and [account mesh design](docs/account-mesh-design.md).
 
 <details>
@@ -270,8 +270,8 @@ pnpm start                          # builds dist/web and starts daemon on 127.0
 | `AGENT_HUB_PORT` | `4317` | Loopback web UI port (`127.0.0.1` only). Set `0` for an OS-assigned port. |
 | `AGENT_HUB_CLAUDE` / `AGY` / `CODEX` / `PI` / `DEEPSEEK` / `CURSOR` | `claude` / `agy` / `codex` / `pi` / `dsh` / `cursor-agent` | Override executable name or path for each supported agent CLI (`~/` supported). |
 | `AGENT_HUB_DEFAULT_MODEL` | unset | Default model for the initial PM created on first launch. |
-| `FUSA_RELAY_URL` | unset | Relay URL for account networking. Use the same relay on all devices in the account. |
-| `FUSA_GITHUB_CLIENT_ID` | unset | Client ID of the GitHub OAuth App with Device Flow enabled. |
+| `FUSA_RELAY_URL` | official public relay | Override the relay URL for account networking. Use the same relay on all devices in the account. |
+| `FUSA_GITHUB_CLIENT_ID` | official public client ID | Override with the Client ID of your own GitHub OAuth App with Device Flow enabled. |
 | `AGENT_HUB_REPO_DIR` / `AGENT_HUB_NODE` | `Info.plist` values | Override repository or Node executable path at runtime for source-built `Bellwood.app`. |
 
 When `hub project setup` runs in a new worktree, the daemon also injects `AGENT_HUB_ROOT_PATH` and `AGENT_HUB_WORKTREE_PATH`.

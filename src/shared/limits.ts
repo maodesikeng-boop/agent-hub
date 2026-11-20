@@ -539,8 +539,8 @@ export const FEISHU_CLI_POLL_MS = 2_000;
 export const MESH_CLI_POLL_MS = 1_500;
 export const MESH_CLI_MAX_POLLS = 600;
 
-export const MESH_DEFAULT_RELAY_URL = "";
-export const MESH_GITHUB_CLIENT_ID = "";
+export const MESH_DEFAULT_RELAY_URL = "https://bellwood-relay.bellwood-mesh.workers.dev";
+export const MESH_GITHUB_CLIENT_ID = "Ov23li3f4RFVc7sOKJHM";
 export const GITHUB_WEB_ORIGIN = "https://github.com";
 export const GITHUB_DEVICE_POLL_DEFAULT_MS = 5_000;
 export const MESH_ACCOUNT_FILE_MODE = 0o600;
