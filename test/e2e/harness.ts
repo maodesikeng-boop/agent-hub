@@ -19,6 +19,8 @@ import {
   ENV_HUB_TOKEN,
   ENV_PORT,
   HUB_COMMAND,
+  TEST_CHILD_EXIT_WAIT_MS,
+  TEST_DAEMON_STOP_WAIT_MS,
   VENDOR_LIST,
   WS_HEARTBEAT_TEXT,
   type Change,
@@ -156,7 +158,9 @@ export function makeEnv(options: { root?: string; prefix?: string; detached?: bo
   const scriptFile = join(fakeDir, "script.json");
   writeFileSync(scriptFile, "{}");
   const defaultFakeClaude = wrapScriptAsPlatformCli(FAKE_CLAUDE, fakeDir, "fake-claude");
-  const running = new Set<ChildProcess>();
+  type Exit = { code: number | null; signal: NodeJS.Signals | null };
+  /** 还没退出的守护进程，和怎么让它正常关机（start 起的走 terminate，runToExit 起的没有，收尾直接 SIGKILL）。 */
+  const running = new Map<ChildProcess, { exited: Promise<Exit>; stop?: () => Promise<Exit> }>();
 
   // 在 agent 的会话里（比如 Worker）跑测试时，那家的父会话变量（含 Worker 才有的）会传下去，假 claude 就把项目经理也当成 Worker：去掉
   const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !PARENT_SESSION_ENV.includes(key) && !(key in WORKER_ENV)));
@@ -177,17 +181,17 @@ export function makeEnv(options: { root?: string; prefix?: string; detached?: bo
 
   const spawnDaemon = (vendorPath: string, extra?: Record<string, string>, main = MAIN) => {
     const child = spawn(process.execPath, [main], { detached: options.detached ?? false, env: baseEnv(vendorPath, extra), stdio: ["ignore", "pipe", "pipe"] });
-    running.add(child);
     let out = "";
     let err = "";
     child.stdout!.setEncoding("utf8").on("data", (c: string) => (out += c));
     child.stderr!.setEncoding("utf8").on("data", (c: string) => (err += c));
-    const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+    const exited = new Promise<Exit>((resolve) => {
       child.once("exit", (code, signal) => {
         running.delete(child);
         resolve({ code, signal });
       });
     });
+    running.set(child, { exited });
     return { child, exited, out: () => out, err: () => err };
   };
 
@@ -244,6 +248,7 @@ export function makeEnv(options: { root?: string; prefix?: string; detached?: bo
         d.child.kill("SIGTERM");
         return d.exited;
       };
+      if (running.has(d.child)) running.set(d.child, { exited: d.exited, stop: terminate });
       return { child: d.child, port: Number(match[1]), token: uiToken, stdout: d.out, stderr: d.err, terminate, exited: d.exited };
     },
     async runToExit() {
@@ -288,18 +293,31 @@ export function makeEnv(options: { root?: string; prefix?: string; detached?: bo
       return new Promise((resolve) => child.once("close", (code) => resolve({ code, stdout, stderr })));
     },
     async cleanup(cleanupOptions = {}) {
-      for (const child of running) child.kill("SIGKILL");
-      await sleep(50);
-      // 万一有假 claude 留下（测试失败时），也结束掉
-      for (const { pid } of this.argvs()) {
-        const realPid = pid >= 1_000_000 ? hostPidOfFake(fakeDir, pid) : isAlive(pid) ? pid : null;
-        if (realPid !== null) {
-          try {
-            process.kill(realPid, "SIGKILL");
-          } catch {
-            // 已经退出
+      // 守护进程正常关机会停掉 Worker 进程树、等账本落库、关库、放目录锁；到点没关完才 SIGKILL，并等它真的退出
+      await Promise.all(
+        [...running].map(async ([child, { exited, stop }]) => {
+          if (stop === undefined) child.kill("SIGKILL");
+          else void stop();
+          const timer = new Promise<"timeout">((resolve) => setTimeout(resolve, TEST_DAEMON_STOP_WAIT_MS, "timeout").unref());
+          if ((await Promise.race([exited, timer])) === "timeout") {
+            child.kill("SIGKILL");
+            await exited;
           }
+        }),
+      );
+      // 万一有假 claude 留下（测试失败、守护进程被 SIGKILL 时），也结束掉，等它们真的没了再删目录
+      const leftovers = this.argvs().flatMap(({ pid }) => {
+        const realPid = pid >= 1_000_000 ? hostPidOfFake(fakeDir, pid) : isAlive(pid) ? pid : null;
+        if (realPid === null) return [];
+        try {
+          process.kill(realPid, "SIGKILL");
+        } catch {
+          // 已经退出
         }
+        return [realPid];
+      });
+      if (leftovers.length > 0) {
+        await waitUntil("残留的假 claude 退出", () => (leftovers.every((pid) => !isAlive(pid)) ? true : undefined), TEST_CHILD_EXIT_WAIT_MS);
       }
       if (!cleanupOptions.keepDir) rmSync(dir, { recursive: true, force: true });
     },

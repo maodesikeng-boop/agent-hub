@@ -514,6 +514,12 @@ export const TEST_TIMEOUT_MS = 20_000;
  * 正常没有残留时第一次检查就过，不会慢；只有收尾时刚发出 SIGKILL 的进程要等它真的没了。
  */
 export const TEST_CHILD_EXIT_WAIT_MS = 5_000;
+/**
+ * 端到端收尾（test/e2e/harness.ts 的 cleanup）等守护进程正常关机最多多久，超了再 SIGKILL。
+ * 先关机再删临时目录：直接 SIGKILL 会丢下还在写目录的 Worker 进程树和 git 子进程，删目录时报 ENOTEMPTY。
+ * 加上 TEST_CHILD_EXIT_WAIT_MS 要小于钩子超时 TEST_TIMEOUT_MS。
+ */
+export const TEST_DAEMON_STOP_WAIT_MS = 10_000;
 
 // ---- 守护进程起的子进程记账（daemon/process-ledger.ts）----
 /** state/child-processes.json 里最多记多少个还活着的子进程；超了丢最老的（它们早已不在了才会堆到这个数）。 */
