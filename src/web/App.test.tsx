@@ -60,6 +60,11 @@ function log() {
   return screen.getByRole("log", { name: "Messages" });
 }
 
+// jsdom emits no scroll event for programmatic scrolls, so replay the one a browser fires after the list pins itself.
+function syncScrollPosition() {
+  fireEvent.scroll(log());
+}
+
 function bubbles() {
   return within(log()).getAllByRole("article");
 }
@@ -1107,10 +1112,11 @@ describe("往上滚加载更早的消息", () => {
     expect(api.callsTo("GET", /messages$/)).toHaveLength(0);
   });
 
-  it("加载更早的消息后保持原来的滚动位置", async () => {
+  it("加载更早的消息后不把读者拽回底部（锚点由虚拟列表在真实布局下保持，见 scripts/bench-message-list.ts）", async () => {
     const heights = { value: 500 };
     vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(() => heights.value);
     await boot(pagedSnapshot());
+    syncScrollPosition();
     api.older = () => {
       heights.value = 900;
       return older([99, 100], false);
@@ -1118,7 +1124,7 @@ describe("往上滚加载更早的消息", () => {
     log().scrollTop = 0;
     fireEvent.scroll(log());
     await screen.findByText("第 99 条");
-    expect(log().scrollTop).toBe(400);
+    expect(log().scrollTop).toBe(0);
   });
 });
 
@@ -1148,6 +1154,7 @@ describe("自动滚到底", () => {
     const user = userEvent.setup();
     mockLayout(1000, 400);
     const ws = await boot();
+    syncScrollPosition();
     log().scrollTop = 100;
     fireEvent.scroll(log());
     mockLayout(1200, 400);
