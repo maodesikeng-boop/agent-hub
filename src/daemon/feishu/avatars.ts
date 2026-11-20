@@ -3,7 +3,7 @@
 // - 项目经理 → 形象只在 shared/slimes.ts 的 resolvePmLook（网页也按它取），这里不另写一份；
 // - 图片不存文件：按形象现画 PNG（slimeBitmap + sharp，只在要用时动态加载），同一个形象画出来逐字节相同，画过的记在内存里（有上限）；
 // - 同一个形象只上传一次（image_type avatar），image_key 和 PNG 内容的 SHA-256 记在 feishu_avatars（键是 lookKey），各群共用；
-//   像素稿或颜色改了（哈希对不上）重传，已建的群原地换头像（service.ts 的 syncChats）。
+//   像素稿或颜色改了（哈希对不上）重传，已建的群原地换头像（chat-sync.ts 的 syncChats）。
 import { createHash } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import type { FeishuImageKey } from "../../shared/feishu.ts";
