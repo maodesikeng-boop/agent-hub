@@ -1,8 +1,9 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { RELEASE_ASSETS, assertTauriVersionMatches, checkTagVersion, prepareReleaseAssets } from "./release-assets.ts";
+import { RELEASE_INSTALLER_FILES } from "../src/shared/update.ts";
+import { RELEASE_ASSETS, assertVersionSourcesMatch, checkTagVersion, prepareReleaseAssets } from "./release-assets.ts";
 import { REPO_ROOT, readDesktopAppVersion, sha256FileHex } from "./stage-runtime-common.ts";
 
 function writeArtifact(dir: string, name: string, body: string, hashOverride?: string): void {
@@ -12,26 +13,52 @@ function writeArtifact(dir: string, name: string, body: string, hashOverride?: s
   writeFileSync(join(dir, `${name}.sha256`), `${hash}  ${name}\n`);
 }
 
-describe("scripts/release-assets.ts 发版辅助", () => {
-  it("标签版本必须等于 app 版本号；带后缀的是预发布，正式标签不是", () => {
+const TAURI_CONF = ["apps", "windows", "crates", "fusa-desktop", "tauri.conf.json"];
+
+function versionSourcesRepo(versions: { pkg: string; tauri: string }): string {
+  const root = mkdtempSync(join(tmpdir(), "fusa-release-versions-"));
+  writeFileSync(join(root, "package.json"), JSON.stringify({ name: "agent-hub", version: versions.pkg }));
+  mkdirSync(join(root, ...TAURI_CONF.slice(0, -1)), { recursive: true });
+  cpSync(join(REPO_ROOT, ...TAURI_CONF), join(root, ...TAURI_CONF));
+  const conf = JSON.parse(readFileSync(join(root, ...TAURI_CONF), "utf8")) as Record<string, unknown>;
+  writeFileSync(join(root, ...TAURI_CONF), JSON.stringify({ ...conf, version: versions.tauri }));
+  return root;
+}
+
+describe("scripts/release-assets.ts", () => {
+  it("requires the tag version to equal the app version and treats suffixed tags as prereleases", () => {
     expect(checkTagVersion("v0.1.0", "0.1.0")).toEqual({ version: "0.1.0", prerelease: false });
     expect(checkTagVersion("v0.1.0-rc.1", "0.1.0")).toEqual({ version: "0.1.0", prerelease: true });
-    expect(() => checkTagVersion("v0.2.0", "0.1.0")).toThrow(/不一致/);
-    expect(() => checkTagVersion("0.1.0", "0.1.0")).toThrow(/不是/);
-    expect(() => checkTagVersion("v0.1", "0.1.0")).toThrow(/不是/);
+    expect(() => checkTagVersion("v0.2.0", "0.1.0")).toThrow(/does not match app version 0\.1\.0/);
+    expect(() => checkTagVersion("0.1.0", "0.1.0")).toThrow(/is not vX\.Y\.Z/);
+    expect(() => checkTagVersion("v0.1", "0.1.0")).toThrow(/is not vX\.Y\.Z/);
   });
 
-  it("仓库里 Cargo 与 Tauri 版本号一致", () => {
-    expect(() => assertTauriVersionMatches(REPO_ROOT, readDesktopAppVersion())).not.toThrow();
+  it("keeps package.json, Cargo.toml, and tauri.conf.json on one version in this repository", () => {
+    expect(() => assertVersionSourcesMatch(REPO_ROOT, readDesktopAppVersion())).not.toThrow();
   });
 
-  it("固定文件名不含版本号，也不含 unsigned-preview（第二期签名后链接不变）", () => {
+  it("rejects a package.json or tauri.conf.json version that drifts from Cargo.toml", () => {
+    const pkgDrift = versionSourcesRepo({ pkg: "0.2.1", tauri: "0.2.0" });
+    const tauriDrift = versionSourcesRepo({ pkg: "0.2.0", tauri: "0.1.9" });
+    try {
+      expect(() => assertVersionSourcesMatch(pkgDrift, "0.2.0")).toThrow("package.json version 0.2.1 does not match apps/windows/Cargo.toml version 0.2.0");
+      expect(() => assertVersionSourcesMatch(tauriDrift, "0.2.0")).toThrow("tauri.conf.json version 0.1.9 does not match apps/windows/Cargo.toml version 0.2.0");
+      expect(() => assertVersionSourcesMatch(tauriDrift, "0.1.9")).toThrow(/^package\.json version 0\.2\.0/);
+    } finally {
+      rmSync(pkgDrift, { recursive: true, force: true });
+      rmSync(tauriDrift, { recursive: true, force: true });
+    }
+  });
+
+  it("uses fixed names without a version or unsigned-preview suffix, shared with the in-app update check", () => {
+    expect(RELEASE_ASSETS.map((spec) => spec.fixedName).sort()).toEqual(Object.values(RELEASE_INSTALLER_FILES).sort());
     for (const spec of RELEASE_ASSETS) {
       expect(spec.fixedName).not.toMatch(/\d+\.\d+|unsigned|preview/);
     }
   });
 
-  it("prepare 复制为固定文件名并按新文件名重写 .sha256", () => {
+  it("prepare copies artifacts to fixed names and rewrites .sha256 for the new name", () => {
     const root = mkdtempSync(join(tmpdir(), "fusa-release-assets-"));
     try {
       const win = join(root, "win");
@@ -54,7 +81,7 @@ describe("scripts/release-assets.ts 发版辅助", () => {
     }
   });
 
-  it("prepare 拒绝：版本不符、校验和对不上、缺文件", () => {
+  it("prepare rejects a version mismatch, a checksum mismatch, and a missing directory", () => {
     const root = mkdtempSync(join(tmpdir(), "fusa-release-assets-bad-"));
     try {
       const win = join(root, "win");
@@ -62,13 +89,13 @@ describe("scripts/release-assets.ts 发版辅助", () => {
       writeArtifact(win, "Bellwood_0.1.0_x64-setup-unsigned-preview.exe", "w");
       writeArtifact(mac, "Bellwood_0.1.0_arm64-unsigned-preview.dmg", "m");
       const dirs = { windows: win, macos: mac };
-      expect(() => prepareReleaseAssets({ dirs, outDir: join(root, "o1"), appVersion: "0.2.0" })).toThrow(/不一致/);
+      expect(() => prepareReleaseAssets({ dirs, outDir: join(root, "o1"), appVersion: "0.2.0" })).toThrow(/does not match app version 0\.2\.0/);
 
       const badMac = join(root, "badmac");
       writeArtifact(badMac, "Bellwood_0.1.0_arm64-unsigned-preview.dmg", "m", "0".repeat(64));
       expect(() => prepareReleaseAssets({ dirs: { windows: win, macos: badMac }, outDir: join(root, "o2"), appVersion: "0.1.0" })).toThrow(/SHA-256/);
 
-      expect(() => prepareReleaseAssets({ dirs: { windows: win, macos: join(root, "nope") }, outDir: join(root, "o3"), appVersion: "0.1.0" })).toThrow(/不存在/);
+      expect(() => prepareReleaseAssets({ dirs: { windows: win, macos: join(root, "nope") }, outDir: join(root, "o3"), appVersion: "0.1.0" })).toThrow(/does not exist/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

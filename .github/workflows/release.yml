@@ -16,6 +16,8 @@ on:
       - "scripts/release-assets.ts"
       - "scripts/release-assets.test.ts"
       - "scripts/stage-runtime-common.ts"
+      - "src/shared/update.ts"
+      - "package.json"
       - "apps/windows/Cargo.toml"
       - "apps/windows/crates/fusa-desktop/tauri.conf.json"
 
