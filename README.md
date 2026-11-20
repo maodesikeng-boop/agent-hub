@@ -167,7 +167,7 @@ When you are alone in a project group, every message goes straight to the PM. As
 
 ### 4. Switch models and thinking effort from your phone
 
-Send `/settings` in direct chat or `/群设置` in a project group to open an interactive settings card. When a provider hits a rate limit or a tough problem calls for a stronger reasoning model while you are away from your desk, pick a new vendor, model, and effort level right from the Feishu dropdowns with zero downtime.
+Send `/settings` (or `/policy`) in direct chat or a project group to open an interactive settings card. When a provider hits a rate limit or a tough problem calls for a stronger reasoning model while you are away from your desk, pick a new vendor, model, and effort level right from the Feishu dropdowns with zero downtime.
 
 ### 5. Three-tier guest permissions built for team safety
 
@@ -200,7 +200,7 @@ Download the latest prebuilt installer from **[GitHub Releases](https://github.c
 | **macOS 13+** (Apple silicon, bundles Node 24 LTS & daemon) | [`Bellwood-macos-arm64.dmg`](https://github.com/maodesikeng-boop/agent-hub/releases/latest/download/Bellwood-macos-arm64.dmg) | [`.sha256`](https://github.com/maodesikeng-boop/agent-hub/releases/latest/download/Bellwood-macos-arm64.dmg.sha256) |
 | **Windows x64** (Windows 11 recommended, no admin rights, no WSL 2, bundles Node 24 LTS) | [`Bellwood-windows-x64-setup.exe`](https://github.com/maodesikeng-boop/agent-hub/releases/latest/download/Bellwood-windows-x64-setup.exe) | [`.sha256`](https://github.com/maodesikeng-boop/agent-hub/releases/latest/download/Bellwood-windows-x64-setup.exe.sha256) |
 
-<sub>Both builds are unsigned previews, so the OS asks for confirmation on first launch. **On Mac.** Drag **Bellwood** to **Applications**, double-click it, click **Done** when macOS warns about an unverified developer, then open **System Settings → Privacy & Security** and click **Open Anyway** next to Bellwood. Verify with `shasum -a 256 -c Bellwood-macos-arm64.dmg.sha256`. **On Windows.** Click **More info → Run anyway** on the SmartScreen prompt. Closing the window hides Bellwood to the system tray. Right-click the tray icon and choose **彻底退出 Bellwood** to stop the background daemon and its child process tree. For Git worktrees on Windows, install Git for Windows from **Settings → Providers** or run `winget install --id Git.Git -e --source winget`.</sub>
+<sub>Both builds are unsigned previews, so the OS asks for confirmation on first launch. **On Mac.** Drag **Bellwood** to **Applications**, double-click it, click **Done** when macOS warns about an unverified developer, then open **System Settings → Privacy & Security** and click **Open Anyway** next to Bellwood. Verify with `shasum -a 256 -c Bellwood-macos-arm64.dmg.sha256`. **On Windows.** Click **More info → Run anyway** on the SmartScreen prompt. Closing the window hides Bellwood to the system tray. Right-click the tray icon and choose `Quit Bellwood` to stop the background daemon and its child process tree. For Git worktrees on Windows, install Git for Windows from **Settings → Providers** or run `winget install --id Git.Git -e --source winget`.</sub>
 
 ### 2. Connect an agent CLI
 
@@ -232,6 +232,7 @@ Launch **Bellwood**. When **Settings → Providers** opens, click **Install** ne
 <br>
 
 Requires **Node.js >= 24.12** (native `.ts` execution and built-in `node:sqlite`), **pnpm 10**, and **git**.
+Internal package names, `~/.agent-hub`, and `fusa-*` crates keep their historical names so existing setups upgrade without migrating data; see [docs/README.md](docs/README.md#naming-lineage) for the naming map and architecture index.
 
 ```sh
 git clone https://github.com/maodesikeng-boop/agent-hub.git
@@ -274,6 +275,7 @@ pnpm start                          # builds dist/web and starts daemon on 127.0
 | `AGENT_HUB_REPO_DIR` / `AGENT_HUB_NODE` | `Info.plist` values | Override repository or Node executable path at runtime for source-built `Bellwood.app`. |
 
 When `hub project setup` runs in a new worktree, the daemon also injects `AGENT_HUB_ROOT_PATH` and `AGENT_HUB_WORKTREE_PATH`.
+See [docs/README.md](docs/README.md#naming-lineage) for how `Bellwood`, `~/.agent-hub`, and `fusa-*` map across the codebase.
 
 </details>
 

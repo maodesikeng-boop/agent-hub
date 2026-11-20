@@ -10,7 +10,7 @@ Bellwood connects to Feishu (and Lark) over an outbound persistent WebSocket (`W
 
 ## Direct Router chat and slime project groups
 
-- **1-on-1 chat routes to Router**: Direct messages to the bot route to **Router**, mirroring pending `Needs You` cards, milestone reports, SAS device-approval cards, and `/settings` (or `/设置`) model-picker cards.
+- **1-on-1 chat routes to Router**: Direct messages to the bot route to **Router**, mirroring pending `Needs You` cards, milestone reports, SAS device-approval cards, and `/settings` (or `/policy` and `/model`) model-picker cards.
 - **Project groups (`src/daemon/feishu/chats.ts` and `avatars.ts`)**: Each non-archived PM automatically gets a private Feishu group named after the PM, with its pixel fruit slime (`look = fruit x color`, cached by content SHA-256 in `feishu_avatars`) rendered as the group avatar and a `fusa:<deviceId>:pm:<pmId>` marker in the group description so multi-computer accounts never confuse group ownership.
 
 ## Wake rules and three-tier guest permissions (`src/shared/feishu.ts`)
@@ -18,7 +18,7 @@ Bellwood connects to Feishu (and Lark) over an outbound persistent WebSocket (`W
 `feishuWakes` and `feishuGuestMay` centralize group routing and access control:
 
 - **Solo vs team wake mode**: When only the owner is in a project group, every message wakes the PM directly. As soon as teammates join, the group automatically switches to `@bot` mention mode: unmentioned messages and media accumulate quietly in a bounded recent context buffer (`FEISHU_CONTEXT_MAX_LINES`, `FEISHU_CONTEXT_MAX_CHARS`, `FEISHU_CONTEXT_MAX_FILES`, `2h` TTL) and prepend with speaker attribution when someone `@`-mentions the bot.
-- **Guest tiers (set per group via `/群设置` or `/api/feishu/chats/:pmId/policy`)**:
+- **Guest tiers (set per group via `/settings`, `/policy`, or `/api/feishu/chats/:pmId/policy`)**:
 
 | Tier | Capabilities |
 | --- | --- |

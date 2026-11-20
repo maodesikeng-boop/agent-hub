@@ -167,7 +167,7 @@ hub persona edit --stdin        # 更新跨厂商项目记忆
 
 ### 4. 手机上随时切模型、调思考档位
 
-在单聊发 `/设置` 或在项目群发 `/群设置`，就能随时呼出交互设置卡。出门在外遇到某家模型限额，或者碰到硬骨头想临时换个顶配推理模型，不用回电脑开网页，在飞书卡片下拉框里直接就能零等待切好厂商、模型与思考程度。
+在单聊或项目群发 `/settings`（或 `/设置`、`/群设置`），就能随时呼出交互设置卡。出门在外遇到某家模型限额，或者碰到硬骨头想临时换个顶配推理模型，不用回电脑开网页，在飞书卡片下拉框里直接就能零等待切好厂商、模型与思考程度。
 
 ### 5. 为团队协作兜底的三档访客权限
 
@@ -200,7 +200,7 @@ hub persona edit --stdin        # 更新跨厂商项目记忆
 | **macOS 13+**（Apple 芯片，内置官方 Node 24 LTS 与后台） | [`Bellwood-macos-arm64.dmg`](https://github.com/maodesikeng-boop/agent-hub/releases/latest/download/Bellwood-macos-arm64.dmg) | [`.sha256`](https://github.com/maodesikeng-boop/agent-hub/releases/latest/download/Bellwood-macos-arm64.dmg.sha256) |
 | **Windows x64**（推荐 Windows 11；免管理员、免 WSL 2，内置官方 Node 24 LTS） | [`Bellwood-windows-x64-setup.exe`](https://github.com/maodesikeng-boop/agent-hub/releases/latest/download/Bellwood-windows-x64-setup.exe) | [`.sha256`](https://github.com/maodesikeng-boop/agent-hub/releases/latest/download/Bellwood-windows-x64-setup.exe.sha256) |
 
-<sub>两个安装包目前均为未签名预览版，首次打开需系统放行一次。**Mac 首次打开：** 打开 DMG 把 **Bellwood** 拖进「应用程序」，双击遇到“无法验证开发者”时点「完成」，随后到「系统设置 → 隐私与安全性」底部点 Bellwood 旁边的「仍要打开」（可用 `shasum -a 256 -c Bellwood-macos-arm64.dmg.sha256` 校验）。**Windows 首次运行：** SmartScreen 提示时点「更多信息 → 仍要运行」；关闭窗口会隐藏到系统托盘，右键托盘图标选**彻底退出 Bellwood** 可优雅关停守护进程及其全部子进程树；如需派发并行 Git worktree，可在 **Settings → Providers** 一键安装 Git for Windows 或执行 `winget install --id Git.Git -e --source winget`。</sub>
+<sub>两个安装包目前均为未签名预览版，首次打开需系统放行一次。**Mac 首次打开：** 打开 DMG 把 **Bellwood** 拖进「应用程序」，双击遇到“无法验证开发者”时点「完成」，随后到「系统设置 → 隐私与安全性」底部点 Bellwood 旁边的「仍要打开」（可用 `shasum -a 256 -c Bellwood-macos-arm64.dmg.sha256` 校验）。**Windows 首次运行：** SmartScreen 提示时点「更多信息 → 仍要运行」；关闭窗口会隐藏到系统托盘，右键托盘图标选 `Quit Bellwood` 可优雅关停守护进程及其全部子进程树；如需派发并行 Git worktree，可在 **Settings → Providers** 一键安装 Git for Windows 或执行 `winget install --id Git.Git -e --source winget`。</sub>
 
 ### 2. 安装并登录至少一家 Agent CLI
 
@@ -232,6 +232,7 @@ hub persona edit --stdin        # 更新跨厂商项目记忆
 <br>
 
 需要 **Node.js >= 24.12**（原生执行 `.ts` 并使用内置 `node:sqlite`）、**pnpm 10** 与 **git**。
+仓库包名、默认数据目录 `~/.agent-hub` 与 Windows 原生 crate `fusa-*` 保留历史兼容命名，以便老用户升级免迁移；完整命名映射与架构文档索引见 [docs/README.md](docs/README.md#naming-lineage)。
 
 ```sh
 git clone https://github.com/maodesikeng-boop/agent-hub.git
@@ -274,6 +275,7 @@ pnpm start                          # 构建 dist/web 并在 127.0.0.1:4317 启�
 | `AGENT_HUB_REPO_DIR` / `AGENT_HUB_NODE` | `Info.plist` 内置值 | 仅源码编译的 `Bellwood.app`：运行时覆盖仓库目录或 Node 可执行文件路径。 |
 
 当项目配置了 `hub project setup` 准备脚本时，守护进程在新建 worktree 执行脚本时会自动注入 `AGENT_HUB_ROOT_PATH` 与 `AGENT_HUB_WORKTREE_PATH`。
+`Bellwood`、`~/.agent-hub` 与 `fusa-*` 的兼容命名映射见 [docs/README.md](docs/README.md#naming-lineage)。
 
 </details>
 
