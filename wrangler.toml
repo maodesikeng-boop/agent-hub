@@ -1,9 +1,10 @@
-name = "fusa-relay"
+name = "bellwood-relay"
+workers_dev = true
 main = "src/relay/cloudflare/worker.ts"
 compatibility_date = "2025-09-01"
 
 [vars]
-PUBLIC_ORIGIN = "https://relay.fusa.ai"
+PUBLIC_ORIGIN = "https://bellwood-relay.bellwood-mesh.workers.dev"
 GITHUB_API_ORIGIN = "https://api.github.com"
 
 [[durable_objects.bindings]]

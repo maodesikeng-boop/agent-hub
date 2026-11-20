@@ -30,7 +30,7 @@ Bellwood links a user's macOS, Windows, and Linux computers into a private peer-
 One runtime-agnostic core (`src/relay/core.ts`, `auth.ts`, `guards.ts`, and `protocol.ts`, built solely on standard Web APIs) powers two deployment shells:
 
 1. **Cloudflare Workers + SQLite Durable Objects (`src/relay/cloudflare/worker.ts`, `wrangler.toml`)**: Routes each account to its own single-threaded Durable Object using the WebSocket Hibernation API so idle connections incur zero duration billing.
-2. **Self-hosted Node relay (`src/relay/node/server.ts`)**: Runs the identical `core.ts` state machine behind `ws` for private deployments (`FUSA_RELAY_URL`).
+2. **Self-hosted Node relay (`src/relay/node/server.ts`)**: Runs the identical `core.ts` state machine behind `ws` for private deployments. Bellwood defaults to the official public blind relay (`MESH_DEFAULT_RELAY_URL`) and public GitHub Device Flow client ID (`MESH_GITHUB_CLIENT_ID`) in `src/shared/limits.ts`; `FUSA_RELAY_URL` and `FUSA_GITHUB_CLIENT_ID` override both.
 
 Ingress rate limiting in `src/relay/guards.ts` trusts only `CF-Connecting-IP` on Cloudflare (never spoofable `X-Forwarded-For`), caps state size in `src/shared/limits.ts`, and separates one-shot probation keys from active multi-hit counters so a flood of random source IPs cannot evict counters for ongoing brute-force clients.
 

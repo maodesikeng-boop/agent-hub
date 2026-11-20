@@ -223,7 +223,7 @@ hub persona edit --stdin        # 更新跨厂商项目记忆
 ### 3. 接入飞书与其他电脑（可选）
 
 - **接入飞书机器人与项目群**：守护进程运行期间，在终端执行 `node src/feishu/main.ts connect` 并用手机飞书扫码即可。运行 `node src/feishu/main.ts status` 查看绑定状态。同一账号的设备共用一个机器人，当前设备离线后由另一台自动接管。
-- **多台电脑组网**：配置中继地址和 GitHub OAuth App Client ID，在每台电脑的 **Settings → Computers** 登录同一个 GitHub 账号。批准新设备时核对两台电脑显示的六位数字码。手机通过飞书操作这些设备。
+- **多台电脑组网**：内置官方公共盲中继和公开的 GitHub Device Flow Client ID，无需额外配置；在每台电脑的 **Settings → Computers** 登录同一个 GitHub 账号。批准新设备时核对两台电脑显示的六位数字码。如需自建中继，设置 `FUSA_RELAY_URL` 和 `FUSA_GITHUB_CLIENT_ID` 覆盖。手机通过飞书操作这些设备。
 - **Linux 常驻后台**：在 Ubuntu 上部署 `systemd` 用户服务，运行一次 `sudo scripts/linux-sandbox-setup.sh` 配置 `bubblewrap` 沙箱。详见 [Linux 部署指南](docs/linux.md)与[账号组网设计](docs/account-mesh-design.md)。
 
 <details>
@@ -270,8 +270,8 @@ pnpm start                          # 构建 dist/web 并在 127.0.0.1:4317 启�
 | `AGENT_HUB_PORT` | `4317` | 本机网页服务端口，只监听 `127.0.0.1`。设为 `0` 由系统分配空闲端口。 |
 | `AGENT_HUB_CLAUDE` / `AGY` / `CODEX` / `PI` / `DEEPSEEK` / `CURSOR` | `claude` / `agy` / `codex` / `pi` / `dsh` / `cursor-agent` | 覆盖各家 CLI 的命令名或可执行文件路径（支持 `~/` 展开）。 |
 | `AGENT_HUB_DEFAULT_MODEL` | 未设置 | 首次启动自动创建默认项目经理时使用的模型。 |
-| `FUSA_RELAY_URL` | 未设置 | 账号组网的中继地址。同一账号下的设备使用同一个中继。 |
-| `FUSA_GITHUB_CLIENT_ID` | 未设置 | 已启用 Device Flow 的 GitHub OAuth App Client ID。 |
+| `FUSA_RELAY_URL` | 官方公共中继 | 覆盖账号组网的中继地址。同一账号下的设备使用同一个中继。 |
+| `FUSA_GITHUB_CLIENT_ID` | 官方公开 Client ID | 覆盖为自建的、已启用 Device Flow 的 GitHub OAuth App Client ID。 |
 | `AGENT_HUB_REPO_DIR` / `AGENT_HUB_NODE` | `Info.plist` 内置值 | 仅源码编译的 `Bellwood.app`：运行时覆盖仓库目录或 Node 可执行文件路径。 |
 
 当项目配置了 `hub project setup` 准备脚本时，守护进程在新建 worktree 执行脚本时会自动注入 `AGENT_HUB_ROOT_PATH` 与 `AGENT_HUB_WORKTREE_PATH`。
