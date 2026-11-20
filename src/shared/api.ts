@@ -81,6 +81,8 @@ export const API_PATHS = {
   files: (conversationId: ConversationId, q: string) => `/api/conversations/${conversationId}/files?q=${encodeURIComponent(q)}`,
   ws: "/api/ws",
   selfReload: "/api/self-reload",
+  update: "/api/update",
+  updateCheck: "/api/update/check",
 
   routerDigest: "/api/router/digest",
   routerItems: "/api/router/items",
@@ -437,7 +439,7 @@ export function devicePath(device: DeviceId | null, path: string): string {
 
 export const PEER_CLIENT_SCOPE_HEADER = "x-agent-hub-client-scope";
 
-export const ENTRY_ONLY_API_PREFIXES: readonly string[] = ["/api/devices", "/api/account", "/api/sessions", "/api/login-links", "/api/push/", "/api/auth/", "/api/health", "/api/self-reload"];
+export const ENTRY_ONLY_API_PREFIXES: readonly string[] = ["/api/devices", "/api/account", "/api/sessions", "/api/login-links", "/api/push/", "/api/auth/", "/api/health", "/api/self-reload", "/api/update"];
 
 export const DEVICE_OFFLINE_WS_CLOSE_CODE = 4502;
 export const DEVICE_OFFLINE_REASON = "device_offline";
