@@ -40,7 +40,7 @@ function list(messages: Message[], extra: { pending?: PendingMessage[]; hasMore?
     />
   );
 }
-const items = () => [...screen.getByRole("log").firstElementChild!.children];
+const items = () => [...screen.getByRole("log").querySelectorAll("[data-index] > *")];
 const entering = () => items().filter((el) => el.classList.contains("message-enter"));
 
 const history = Array.from({ length: 40 }, (_, i) => (i % 2 === 0 ? makeUserMessage({ id: i + 1, text: `问 ${i + 1}` }) : makeMessage({ id: i + 1, text: `答 ${i + 1}` })));

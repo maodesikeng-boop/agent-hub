@@ -46,7 +46,7 @@ import {
   type RouterTurnEntry,
 } from "../router-stream.ts";
 import { Button } from "../ui/button.tsx";
-import { useMessageEnter, type EnterItem } from "../useMessageEnter.ts";
+import { childRows, useMessageEnter, type EnterItem } from "../useMessageEnter.ts";
 import { useStickToBottom } from "../useStickToBottom.ts";
 import type { DeviceStoreLookup } from "../forward-reply.ts";
 import { DeviceScopeOf, useFleetLookOf } from "../device-scope.tsx";
@@ -909,7 +909,7 @@ export const RouterStream = memo(function RouterStream({
 
   const empty = !hasDecisions && entries.length === 0 && !hasMore;
   const enterItemAt = (index: number): EnterItem => ({ key: entries[index]!.key, turn: false });
-  useMessageEnter(contentRef, Number(hasMore) + Number(empty), entries.length, enterItemAt, false, empty);
+  useMessageEnter(() => childRows(contentRef.current, Number(hasMore) + Number(empty), entries.length, false), entries.length, enterItemAt, false, empty);
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
