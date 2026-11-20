@@ -23,7 +23,14 @@ export default defineVendor({
   },
   home: {
     dirs: [KIMI_HOME_REL],
-    readonlySecrets: [`${KIMI_HOME_REL}/credentials`, `${KIMI_HOME_REL}/config.toml`, `${KIMI_HOME_REL}/mcp.json`],
+    // yolo auto-approves every tool, so read-only Workers hide every MCP source; plugins/installed.json lists plugin MCP servers.
+    readonlySecrets: [
+      `${KIMI_HOME_REL}/credentials`,
+      `${KIMI_HOME_REL}/credentials/mcp`,
+      `${KIMI_HOME_REL}/config.toml`,
+      `${KIMI_HOME_REL}/mcp.json`,
+      `${KIMI_HOME_REL}/plugins/installed.json`,
+    ],
     catalogWatchPaths: [`${KIMI_HOME_REL}/config.toml`, `${KIMI_HOME_REL}/credentials`],
     configHome: { rel: KIMI_HOME_REL, env: KIMI_HOME_ENV },
   },

@@ -1,5 +1,5 @@
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, realpathSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { SessionConfigOption } from "@agentclientprotocol/sdk/unstable";
 import { vendorFailureOf, type Driver } from "../../shared/index.ts";
@@ -30,7 +30,7 @@ const SESSION_MODE_ID = "yolo";
 
 const READONLY_RUNTIME_SUBDIRS = ["sessions", "logs", "locks", "credentials"] as const;
 const READONLY_RUNTIME_FILES = ["session_index.jsonl"] as const;
-// mcp.json stays hidden so a read-only Worker does not start user MCP servers.
+// credentials/mcp (MCP OAuth tokens) is its own secret path, so it stays hidden inside the readable credentials directory.
 const OWN_READABLE = ["credentials", "config.toml"] as const;
 
 const NATIVE_SESSION_ID = /^[\w-]+$/u;
@@ -42,6 +42,19 @@ interface KimiTurnEnded {
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+// Kimi also loads <cwd>/.kimi-code/mcp.json and <git root>/.mcp.json (or <cwd>/.mcp.json outside git) in trusted workspaces.
+export function kimiProjectMcpFiles(cwd: string): string[] {
+  const files = [join(cwd, ".kimi-code", "mcp.json"), join(cwd, ".mcp.json")];
+  for (let dir = cwd; ; dir = dirname(dir)) {
+    if (existsSync(join(dir, ".git"))) {
+      files.push(join(dir, ".mcp.json"));
+      break;
+    }
+    if (dirname(dir) === dir) break;
+  }
+  return [...new Set(files)];
 }
 
 function findKimiWire(sessionsDir: string, sessionId: string): string | null {
@@ -180,6 +193,7 @@ export function createKimiDriver(options: AcpDriverOptions): Driver {
       },
       writableFileGlobs: (homeDir) => READONLY_RUNTIME_FILES.map((file) => join(realKimiHome(homeDir, env), file)),
       readableFiles: (homeDir) => OWN_READABLE.map((file) => join(realKimiHome(homeDir, env), file)),
+      hiddenPaths: (_homeDir, cwd) => kimiProjectMcpFiles(cwd),
     },
     timeouts: {
       startTimeoutMs: KIMI_START_TIMEOUT_MS,

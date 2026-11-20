@@ -7,7 +7,7 @@ import {
   type ReadonlyPolicy,
 } from "./readonly-policy.ts";
 
-const policy = (connectors: Partial<ReadonlyPolicy["connectors"]> = {}) => buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: "/Users/u/.agent-hub/state", connectors });
+const policy = (connectors: Partial<ReadonlyPolicy["connectors"]> = {}) => buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: "/Users/u/.agent-hub/state", connectors, env: {} });
 
 describe("connectorToolAllowed：连接器按 readOnlyHint 自动放行，补充/排除手动调", () => {
   it("readOnlyHint 放行；没标记（没有 annotations、空对象、readOnlyHint 为 false）一律拒", () => {
@@ -68,6 +68,16 @@ describe("buildReadonlyPolicy：密钥清单", () => {
     ];
     const p = policy();
     for (const rel of secrets) expect(p.secretPaths, rel).toContain(`/Users/u/${rel}`);
+  });
+
+  it("厂商主目录被环境变量改走（KIMI_CODE_HOME、CODEX_HOME）时，生效目录下的密钥也禁读，默认目录照旧", () => {
+    const p = buildReadonlyPolicy({ homeDir: "/Users/u", stateDir: "/s", env: { KIMI_CODE_HOME: "/data/kimi", CODEX_HOME: "/data/codex " } });
+    for (const rel of ["mcp.json", "credentials", "credentials/mcp", "config.toml", "plugins/installed.json"]) {
+      expect(p.secretPaths, rel).toContain(`/data/kimi/${rel}`);
+      expect(p.secretPaths, rel).toContain(`/Users/u/.kimi-code/${rel}`);
+    }
+    expect(p.secretPaths).toContain("/data/codex/auth.json");
+    expect(new Set(p.secretPaths).size).toBe(p.secretPaths.length);
   });
 
   it("hub.sqlite 和日志不在禁读里（排查要读：库里没有现行令牌，查证见 readonly-policy.ts）；通配含 .env 和私钥", () => {

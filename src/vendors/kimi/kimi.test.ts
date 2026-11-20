@@ -5,9 +5,11 @@ import { fileURLToPath } from "node:url";
 import type { RequestPermissionRequest, SessionConfigOption } from "@agentclientprotocol/sdk/unstable";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MemorySessionStore } from "../../daemon/driver/test-helpers.ts";
-import { EMPTY_TOKEN_USAGE, type AgentSessionRow, type Driver, type DriverEvent } from "../../shared/index.ts";
+import type { ReadonlySandboxInput } from "../../daemon/driver/write-scope.ts";
+import { EMPTY_TOKEN_USAGE, buildReadonlyPolicy, type AgentSessionRow, type Driver, type DriverEvent, type ReadonlyPolicy } from "../../shared/index.ts";
 import { writeExecutableNodeScript } from "../../../test/fake-cli-shim.ts";
 import type { FakeAcpLogEntry, FakeAcpScript } from "../_common/acp/fixtures/fake-acp-agent.ts";
+import type { AcpDriverOptions } from "../_common/acp/index.ts";
 import { kimiCatalogProbe, parseKimiCatalog, readKimiCatalogRaw } from "./catalog.ts";
 import { KIMI_BUILTIN_COMMANDS, createKimiComposer } from "./composer.ts";
 import kimiDaemon from "./daemon.ts";
@@ -16,6 +18,7 @@ import {
   createKimiDriver,
   createKimiPromptOutcomeWatch,
   decideKimiPermission,
+  kimiProjectMcpFiles,
   readKimiTurnEnded,
   resolveKimiModelValue,
 } from "./driver.ts";
@@ -72,6 +75,18 @@ describe("kimi spec and paths", () => {
     expect(kimiPaths.fallbackPaths!({ userHome: "/u", platform: "linux", linuxInstallDirs: [], join })[0]).toBe("/u/.kimi-code/bin/kimi");
     expect(kimiSpec.models.shortName?.("kimi-code/k3")).toBe("Kimi K3");
     expect(kimiSpec.models.shortName?.("kimi-k3.1-pro")).toBe("Kimi K3.1 Pro");
+  });
+});
+
+describe("kimi project MCP files", () => {
+  it("covers the cwd override file plus the git root .mcp.json Kimi loads in trusted workspaces", () => {
+    const cwd = join(dir, "repo", "pkg");
+    mkdirSync(join(dir, "repo", ".git"), { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    expect(kimiProjectMcpFiles(cwd)).toEqual([join(cwd, ".kimi-code", "mcp.json"), join(cwd, ".mcp.json"), join(dir, "repo", ".mcp.json")]);
+    const outside = join(dir, "plain");
+    mkdirSync(outside);
+    expect(kimiProjectMcpFiles(outside)).toEqual(expect.arrayContaining([join(outside, ".kimi-code", "mcp.json"), join(outside, ".mcp.json")]));
   });
 });
 
@@ -187,7 +202,7 @@ describe("kimi driver over the fake ACP agent", () => {
     for (const d of drivers.splice(0)) await d.shutdown();
   });
 
-  function harness(script: FakeAcpScript, kimiHome: string) {
+  function harness(script: FakeAcpScript, kimiHome: string, ro?: { policy: ReadonlyPolicy; spawn: AcpDriverOptions["readonlySpawn"] }) {
     const cwd = join(dir, "workspace");
     mkdirSync(cwd, { recursive: true });
     const promptFile = join(dir, "prompt.md");
@@ -218,7 +233,9 @@ child.on("exit", (code) => process.exit(code ?? 0));
         promptFile,
         fingerprint: "fp",
         env: { ...process.env, FAKE_ACP_SCRIPT: scriptFile, FAKE_ACP_LOG: logFile, FAKE_ACP_STATE: join(dir, "state") } as Record<string, string>,
+        ...(ro ? { readonly: ro.policy } : {}),
       }),
+      ...(ro ? { readonlySpawn: ro.spawn } : {}),
     });
     drivers.push(driver);
     const events: DriverEvent[] = [];
@@ -260,5 +277,31 @@ child.on("exit", (code) => process.exit(code ?? 0));
     expect(ended.error).toEqual({ subtype: "quota_exceeded", message: "upstream limited (provider.rate_limit)" });
     expect(h.logs().find((e) => e.event === "spawn")?.argv).toEqual(["acp"]);
     expect(h.logs().filter((e) => e.event === "session/set_mode").map((e) => e.modeId)).toEqual(["yolo"]);
+  });
+  it("read-only Workers cannot load any MCP server list or MCP OAuth token from the active KIMI_CODE_HOME or the project", async () => {
+    const kimiHome = join(dir, "kimi-home");
+    mkdirSync(join(dir, ".git"), { recursive: true });
+    let captured: ReadonlySandboxInput | null = null;
+    const policy = buildReadonlyPolicy({ homeDir: join(dir, "home"), stateDir: join(dir, "state"), env: { KIMI_CODE_HOME: kimiHome } });
+    const h = harness({ turns: [{ textChunks: ["ok"] }] }, kimiHome, {
+      policy,
+      spawn: (base, input) => {
+        captured = input;
+        return { ...base, osSandboxed: true };
+      },
+    });
+    await h.driver.send(1, { messageIds: [1], source: "user", text: "look" });
+    expect((await h.turnEnded()).ok).toBe(true);
+    const hidden = [
+      join(kimiHome, "mcp.json"),
+      join(kimiHome, "plugins", "installed.json"),
+      join(kimiHome, "credentials", "mcp"),
+      join(dir, "workspace", ".mcp.json"),
+      join(dir, "workspace", ".kimi-code", "mcp.json"),
+      join(dir, ".mcp.json"),
+    ];
+    expect(captured!.secretPaths).toEqual(expect.arrayContaining(hidden));
+    expect(captured!.secretPaths).not.toContain(join(kimiHome, "credentials"));
+    expect(captured!.readableFiles).toEqual(expect.arrayContaining([join(kimiHome, "credentials"), join(kimiHome, "config.toml")]));
   });
 });
