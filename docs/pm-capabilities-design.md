@@ -2,7 +2,7 @@
 
 Every agent session keeps its built-in hands: file reads and writes, the terminal, and the `hub` CLI. `--readonly` and the OS sandbox govern those, and nothing in this document widens them. The capability model covers only the external extras that cost context on every turn: skills, MCP servers, and vendor account connectors.
 
-One model serves three scopes. The Router and each PM own a stored policy. A Worker owns no policy of its own; it picks one of three modes that narrow its PM's policy.
+One model serves every scope. Project defaults and the Router own a stored policy. Each project (PM) inherits Project defaults and stores only its own choices on top. A Worker owns no policy of its own; it picks one of three modes that narrow its project's effective policy.
 
 ## Inventory, keys, and policy
 
@@ -14,30 +14,47 @@ One model serves three scopes. The Router and each PM own a stored policy. A Wor
 
 A `CapabilityPolicy` (`src/shared/pm-capabilities.ts`) has a per-kind `base` (`all` or `none`) and per-key `overrides`. `capabilityEnabled` reads an override first and falls back to the base of the key's kind. `applyCapabilitiesPatch` drops overrides that equal the base, so a stored policy never carries redundant rows.
 
-`resolveSessionCapabilities(policy, inventory, vendor)` turns a policy into the `SessionCapabilities` deny and allow lists for one vendor. It returns `null` only when everything is on, so an all-open PM launches with exactly the arguments it had before capabilities existed.
+`resolveSessionCapabilities(policy, inventory, vendor)` turns a policy into the `SessionCapabilities` deny and allow lists for one vendor. It returns `null` only when everything is on, so an all-open project launches with exactly the arguments it had before capabilities existed.
 
 ## Scopes and defaults
 
 | Scope | Default | Storage |
 | --- | --- | --- |
+| Project defaults | every kind `all` | `default_capability_policies`, `default_capability_overrides` |
 | Router | every kind `none` | `router_capability_policies`, `router_capability_overrides` |
-| PM (project) | every kind `all` | `pm_capability_policies`, `pm_capability_overrides` |
+| PM (project) | inherit Project defaults | `pm_capability_policies`, `pm_capability_overrides` (the project's own choices) |
 | Worker | `inherit` | `worker_capabilities` (row only when not `inherit`) |
 | Task Graph step | `inherit` | `task_graph_step_capabilities` (row only when not `inherit`) |
 
-`defaultCapabilityPolicy(scope)` holds the defaults. Policy tables store only what differs from the scope default, so a fresh install has no rows and needs no backfill. The Router starts with nothing because a dispatch turn reads the fleet digest and calls `hub dispatch`; extra tools only slow it down and spend tokens. The user can open specific items in **Settings → Capabilities**.
+`defaultCapabilityPolicy(scope)` holds the built-in policies. Project defaults and Router tables store only what differs from them, so a fresh install has no rows and needs no backfill. The Router keeps its own policy and starts with nothing because a dispatch turn reads the fleet digest and calls `hub dispatch`; extra tools only slow it down and spend tokens.
 
-The Router reads the global inventory (`projectDir: null`). A PM and its Workers read the inventory of the project's main folder.
+Project defaults and the Router read the global inventory (`projectDir: null`). A project and its Workers read the inventory of the project's main folder, which adds the skills in its `.agents/skills`.
+
+## Two-layer inheritance
+
+A project's own choices are a `CapabilityLayer`: pinned per-kind bases and pinned per-key values. `layerCapabilityPolicy(defaults, layer)` builds the effective policy:
+
+- A pinned key wins over everything.
+- A pinned kind base replaces the defaults for that kind, including the defaults' per-key values of that kind.
+- Anything else follows Project defaults, so a change there reaches every project that has not pinned the item.
+
+`applyCapabilityLayerPatch` pins a key only when the new value differs from what the project would inherit, and drops the pin when the user flips it back, so the item follows Project defaults again. A pin survives later changes to Project defaults. **Reset** (`DELETE /api/pms/:id/capabilities`) clears the whole layer.
+
+The PM tables keep their old shape. A missing PM base row now means "inherit" instead of "all", and Project defaults start with every kind `all`, so every project keeps the exact policy it had before Project defaults existed. Legacy base rows load as pinned kinds.
+
+New projects start with an empty layer. `CreatePmRequest.capabilities` accepts `{ from: "default" }` (inherit, no rows) or `{ from: "pm", pmId }`, which copies that project's own choices.
+
+`getPmCapabilityPolicy(pmId)` returns the effective policy. PM launches, Worker `inherit`, and the `custom` intersection in `hub worker start` all read it, so the sandboxed session gets exactly what the project page shows.
 
 ## Worker modes
 
 `WorkerCapabilities` is one of:
 
-- `{ mode: "inherit" }`: use the PM's policy unchanged.
+- `{ mode: "inherit" }`: use the project's effective policy unchanged.
 - `{ mode: "none" }`: no skills, no MCP servers, no connectors.
-- `{ mode: "custom", allow: [keys] }`: only the named keys, and only those the PM's policy also enables.
+- `{ mode: "custom", allow: [keys] }`: only the named keys, and only those the project's effective policy also enables.
 
-`workerCapabilityPolicy(project, worker)` builds the effective policy at launch. `custom` never crosses the project boundary: a key the PM turned off stays off, and `hub worker start` names the blocked keys in its receipt so the PM can ask the user to enable them. The intersection runs at every launch, so a later change to the PM's policy narrows running Workers on their next restart.
+`workerCapabilityPolicy(project, worker)` builds the effective policy at launch. `custom` never crosses the project boundary: a key the project turned off (itself or through Project defaults) stays off, and `hub worker start` names the blocked keys in its receipt so the PM can ask the user to enable them on the project's `Capabilities` page. The intersection runs at every launch, so a later change to the project's choices or to Project defaults narrows running Workers on their next restart.
 
 `parseWorkerCapabilitiesJson` reads a stored row. A row it cannot parse loads as `none`, never as `inherit`, so corruption cannot widen a Worker's reach.
 
@@ -66,7 +83,7 @@ In a Task Graph spec, a step takes `caps` and `allow`:
 
 ## Vendor granularity
 
-Each vendor declares `capabilities.isolation` in its `spec.ts`. **Settings → Capabilities** shows it in the `Enforcement by provider` table so the user knows what a toggle really controls.
+Each vendor declares `capabilities.isolation` in its `spec.ts` to record what a toggle really controls for its sessions.
 
 | Value | Meaning |
 | --- | --- |
@@ -84,13 +101,27 @@ Each vendor declares `capabilities.isolation` in its `spec.ts`. **Settings → C
 
 | Method and path | Body | Returns |
 | --- | --- | --- |
+| `GET /api/defaults/capabilities[?refresh=1]` | none | `CapabilitiesView` with `scope: { kind: "default" }` |
+| `PATCH /api/defaults/capabilities` | `CapabilitiesPatch` | `CapabilitiesView` |
 | `GET /api/router/capabilities[?refresh=1]` | none | `CapabilitiesView` with `scope: { kind: "router" }` |
 | `PATCH /api/router/capabilities` | `CapabilitiesPatch` | `CapabilitiesView` |
 | `GET /api/pms/:id/capabilities[?refresh=1]` | none | `CapabilitiesView` with `scope: { kind: "pm", pmId }` |
 | `PATCH /api/pms/:id/capabilities` | `CapabilitiesPatch` | `CapabilitiesView` |
+| `DELETE /api/pms/:id/capabilities` | none | `CapabilitiesView` after Reset |
+| `GET /api/capabilities/customized` | none | `{ pmIds }`: projects with their own choices |
 | `PUT /api/projects/:id/setup-command` | `{ command: string \| null }` | `{ project }` |
 
-`?refresh=1` invalidates the inventory cache before the scan. `CapabilitiesView` carries the inventory, the policy, and both isolation maps.
+`CapabilitiesPatch` is `{ set: { [key]: boolean | null } }` with at most `PM_CAPABILITY_PATCH_MAX_KEYS` keys; `null` drops the key's own value. `?refresh=1` invalidates the inventory cache before the scan. `CapabilitiesView` carries the inventory, the effective `policy`, and `inheritance`: `{ defaults, layer }` for a project and `null` for Project defaults and the Router.
+
+## Where the user manages it
+
+The project is the unit of management. A project's profile opens its own page at `#/pm/<id>/capabilities`; **Settings → Capabilities** switches between Project defaults, the Router, and any one project. Both group items by who can load them rather than by protocol:
+
+- `This project`: skills from the project's main folder.
+- `Shared`: items that two or more providers load, such as `~/.agents/skills` and synced global MCP servers.
+- One section per provider for items only it loads: its plugins (MCP servers and skills of one plugin share one row), built-in skills, and account connectors (`Apps`).
+
+The [UI standard](ui-standard.md#23-capabilities-and-worktree-setup) specifies the layout.
 
 ## Project setup command
 
