@@ -1045,7 +1045,7 @@ dependencies = [
 
 [[package]]
 name = "fusa-desktop"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "fusa-supervisor",
  "fusa-win-helper",
@@ -1064,7 +1064,7 @@ dependencies = [
 
 [[package]]
 name = "fusa-supervisor"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "fusa-win-helper",
  "serde",
@@ -1079,7 +1079,7 @@ dependencies = [
 
 [[package]]
 name = "fusa-win-helper"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
