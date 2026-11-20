@@ -232,7 +232,7 @@ describe("一级设置主页", () => {
 });
 
 describe("子页", () => {
-  it("Capabilities：一级主页不请求；进子页默认总助，拉总助的能力清单，开关和桌面同一套", async () => {
+  it("Capabilities：一级主页不请求；进子页默认 Project defaults，拉它的能力清单，开关和桌面同一套", async () => {
     const api = new FakeApi(makeSnapshot({}));
     api.install();
     renderSettings("#/settings");
@@ -240,10 +240,13 @@ describe("子页", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Capabilities/ }));
     expect(location.hash).toBe("#/settings/capabilities");
     expect(await screen.findByRole("heading", { level: 1, name: "Capabilities" })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: "Router" })).toBeChecked();
-    const mcp = await screen.findByRole("region", { name: "MCP servers" });
-    expect(mcp).toHaveTextContent("0 of 3");
-    expect(api.callsTo("GET", /^\/api\/router\/capabilities$/)).toHaveLength(1);
+    expect(screen.getByRole("radio", { name: "Project defaults" })).toBeChecked();
+    expect(screen.queryByRole("radio", { name: "Project" })).not.toBeInTheDocument();
+    const shared = await screen.findByRole("region", { name: "Shared" });
+    expect(shared).toHaveTextContent("5 of 5");
+    expect(api.callsTo("GET", /^\/api\/defaults\/capabilities$/)).toHaveLength(1);
+    fireEvent.click(screen.getByRole("radio", { name: "Router" }));
+    await waitFor(() => expect(screen.getByRole("region", { name: "Shared" })).toHaveTextContent("0 of 5"));
   });
 
   it("界面大小：四档整行勾选，点了马上生效，一级摘要跟着变", async () => {

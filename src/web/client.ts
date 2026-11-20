@@ -12,6 +12,7 @@ import {
   type CapabilitiesPatch,
   type CapabilitiesView,
   type CapabilityScope,
+  type CustomizedCapabilitiesResponse,
   type DecideTaskNodeRequest,
   type DecideTaskNodeResponse,
   type DeviceRouterDigest,
@@ -190,7 +191,8 @@ function sendJson<T>(method: "PUT" | "PATCH", path: string, body: unknown): Prom
 const putJson = <T>(path: string, body: unknown): Promise<T> => sendJson<T>("PUT", path, body);
 
 function capabilitiesPath(scope: CapabilityScope): string {
-  return scope.kind === "router" ? API_PATHS.routerCapabilities : API_PATHS.pmCapabilities(scope.pmId);
+  if (scope.kind === "pm") return API_PATHS.pmCapabilities(scope.pmId);
+  return scope.kind === "router" ? API_PATHS.routerCapabilities : API_PATHS.defaultCapabilities;
 }
 
 function capabilityRoutes(at: (path: string) => string) {
@@ -198,6 +200,8 @@ function capabilityRoutes(at: (path: string) => string) {
     fetchCapabilities: (scope: CapabilityScope, options: { refresh?: boolean } = {}) =>
       request<CapabilitiesView>(at(`${capabilitiesPath(scope)}${options.refresh ? "?refresh=1" : ""}`), undefined, SLOW_API_REQUEST_TIMEOUT_MS),
     patchCapabilities: (scope: CapabilityScope, body: CapabilitiesPatch) => sendJson<CapabilitiesView>("PATCH", at(capabilitiesPath(scope)), body),
+    resetPmCapabilities: (pmId: PmId) => request<CapabilitiesView>(at(API_PATHS.pmCapabilities(pmId)), { method: "DELETE" }, SLOW_API_REQUEST_TIMEOUT_MS),
+    fetchCustomizedCapabilities: () => request<CustomizedCapabilitiesResponse>(at(API_PATHS.customizedCapabilities)),
     putProjectSetupCommand: (projectId: ProjectId, command: string | null) =>
       putJson<PutProjectSetupCommandResponse>(at(API_PATHS.projectSetupCommand(projectId)), { command } satisfies PutProjectSetupCommandRequest),
   };

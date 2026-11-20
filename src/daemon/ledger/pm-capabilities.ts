@@ -2,26 +2,32 @@ import type { PmId } from "../../shared/domain.ts";
 import { PM_CAPABILITY_OVERRIDES_MAX, PM_CAPABILITY_PATCH_MAX_KEYS } from "../../shared/limits.ts";
 import {
   CAPABILITY_KINDS,
+  EMPTY_CAPABILITY_LAYER,
   applyCapabilitiesPatch,
+  applyCapabilityLayerPatch,
   defaultCapabilityPolicy,
   isValidCapabilityKey,
+  layerCapabilityPolicy,
   type CapabilitiesPatch,
   type CapabilityBase,
+  type CapabilityInheritance,
   type CapabilityKind,
+  type CapabilityLayer,
   type CapabilityPolicy,
   type PmCapabilitiesStart,
+  type ScopeCapabilities,
 } from "../../shared/pm-capabilities.ts";
+import type { Ledger } from "../../shared/ledger.ts";
 import { fail, type LedgerContext } from "./context.ts";
 import { PM_SELECT, toPm, type PmDbRow } from "./rows.ts";
 
-export interface LedgerPmCapabilities {
-  get(pmId: PmId): CapabilityPolicy;
-  patch(pmId: PmId, patch: CapabilitiesPatch): CapabilityPolicy;
+export interface LedgerPmCapabilities
+  extends Pick<Ledger, "getCapabilities" | "patchCapabilities" | "resetPmCapabilities" | "customizedCapabilityPms" | "getPmCapabilityPolicy" | "getRouterCapabilityPolicy"> {
   assertStart(start: PmCapabilitiesStart): void;
   init(pmId: PmId, start: PmCapabilitiesStart): void;
-  getRouter(): CapabilityPolicy;
-  patchRouter(patch: CapabilitiesPatch): CapabilityPolicy;
 }
+
+type Db = LedgerContext["db"];
 
 interface PolicyDbRow {
   kind: CapabilityKind;
@@ -39,7 +45,6 @@ interface PolicyTables {
   where: string;
   owner: readonly number[];
   ownerColumn: readonly string[];
-  defaults: CapabilityPolicy;
 }
 
 const pmTables = (pmId: PmId): PolicyTables => ({
@@ -48,8 +53,15 @@ const pmTables = (pmId: PmId): PolicyTables => ({
   where: "pm_id = ?",
   owner: [pmId],
   ownerColumn: ["pm_id"],
-  defaults: defaultCapabilityPolicy("pm"),
 });
+
+const DEFAULT_TABLES: PolicyTables = {
+  policies: "default_capability_policies",
+  overrides: "default_capability_overrides",
+  where: "1 = 1",
+  owner: [],
+  ownerColumn: [],
+};
 
 const ROUTER_TABLES: PolicyTables = {
   policies: "router_capability_policies",
@@ -57,30 +69,28 @@ const ROUTER_TABLES: PolicyTables = {
   where: "1 = 1",
   owner: [],
   ownerColumn: [],
-  defaults: defaultCapabilityPolicy("router"),
 };
+
+const SCOPE_TABLES = { default: DEFAULT_TABLES, router: ROUTER_TABLES } as const;
 
 function isCapabilityKind(value: string): value is CapabilityKind {
   return value === "skill" || value === "mcp" || value === "connector";
 }
 
 function validatePatch(patch: CapabilitiesPatch): void {
-  if (patch.set !== undefined) {
-    const keys = Object.keys(patch.set);
-    if (keys.length > PM_CAPABILITY_PATCH_MAX_KEYS) throw fail("invalid", `一次最多修改 ${PM_CAPABILITY_PATCH_MAX_KEYS} 项`);
-    for (const k of keys) {
-      if (!isValidCapabilityKey(k)) throw fail("invalid", `不合法的能力键：${k}`);
-    }
-  }
-  if (patch.base !== undefined) {
-    for (const [k, v] of Object.entries(patch.base)) {
-      if (!isCapabilityKind(k) || (v !== "all" && v !== "none")) throw fail("invalid", `不合法的默认开关：${k}`);
-    }
+  const keys = Object.keys(patch.set);
+  if (keys.length > PM_CAPABILITY_PATCH_MAX_KEYS) throw fail("invalid", `一次最多修改 ${PM_CAPABILITY_PATCH_MAX_KEYS} 项`);
+  for (const k of keys) {
+    if (!isValidCapabilityKey(k)) throw fail("invalid", `不合法的能力键：${k}`);
   }
 }
 
-function readPolicy(db: LedgerContext["db"], t: PolicyTables): CapabilityPolicy {
-  const base: Record<CapabilityKind, CapabilityBase> = { ...t.defaults.base };
+function assertOverridesFit(overrides: Readonly<Record<string, boolean>>): void {
+  if (Object.keys(overrides).length > PM_CAPABILITY_OVERRIDES_MAX) throw fail("invalid", `单独设置最多 ${PM_CAPABILITY_OVERRIDES_MAX} 项`);
+}
+
+function readLayer(db: Db, t: PolicyTables): CapabilityLayer {
+  const base: Partial<Record<CapabilityKind, CapabilityBase>> = {};
   for (const r of db.all<PolicyDbRow>(`SELECT kind, base FROM ${t.policies} WHERE ${t.where}`, ...t.owner)) {
     if (isCapabilityKind(r.kind)) base[r.kind] = r.base;
   }
@@ -91,46 +101,45 @@ function readPolicy(db: LedgerContext["db"], t: PolicyTables): CapabilityPolicy 
   return { base, overrides };
 }
 
-function persistPolicy(db: LedgerContext["db"], t: PolicyTables, policy: CapabilityPolicy, updatedAt: number): void {
+function persistLayer(db: Db, t: PolicyTables, layer: CapabilityLayer, updatedAt: number): void {
   const cols = [...t.ownerColumn, ""].join(", ");
   const marks = t.owner.map(() => "?, ").join("");
-  const conflict = [...t.ownerColumn, "kind"].join(", ");
+  db.run(`DELETE FROM ${t.policies} WHERE ${t.where}`, ...t.owner);
   for (const kind of CAPABILITY_KINDS) {
-    if (policy.base[kind] === t.defaults.base[kind]) {
-      db.run(`DELETE FROM ${t.policies} WHERE ${t.where} AND kind = ?`, ...t.owner, kind);
-    } else {
-      db.run(
-        `INSERT INTO ${t.policies} (${cols}kind, base, updated_at) VALUES (${marks}?, ?, ?)
-         ON CONFLICT (${conflict}) DO UPDATE SET base = excluded.base, updated_at = excluded.updated_at`,
-        ...t.owner,
-        kind,
-        policy.base[kind],
-        updatedAt,
-      );
-    }
+    const base = layer.base[kind];
+    if (base !== undefined) db.run(`INSERT INTO ${t.policies} (${cols}kind, base, updated_at) VALUES (${marks}?, ?, ?)`, ...t.owner, kind, base, updatedAt);
   }
   db.run(`DELETE FROM ${t.overrides} WHERE ${t.where}`, ...t.owner);
-  for (const [key, enabled] of Object.entries(policy.overrides)) {
-    db.run(
-      `INSERT INTO ${t.overrides} (${cols}item_key, enabled, updated_at) VALUES (${marks}?, ?, ?)`,
-      ...t.owner,
-      key,
-      enabled ? 1 : 0,
-      updatedAt,
-    );
+  for (const [key, enabled] of Object.entries(layer.overrides)) {
+    db.run(`INSERT INTO ${t.overrides} (${cols}item_key, enabled, updated_at) VALUES (${marks}?, ?, ?)`, ...t.owner, key, enabled ? 1 : 0, updatedAt);
   }
 }
 
-function nextPolicy(db: LedgerContext["db"], t: PolicyTables, patch: CapabilitiesPatch): CapabilityPolicy {
-  const next = applyCapabilitiesPatch(readPolicy(db, t), patch);
-  if (Object.keys(next.overrides).length > PM_CAPABILITY_OVERRIDES_MAX) {
-    throw fail("invalid", `单独设置最多 ${PM_CAPABILITY_OVERRIDES_MAX} 项`);
-  }
-  return next;
+// Default and Router rows store only what differs from the scope's built-in policy.
+function readScopePolicy(db: Db, scope: "default" | "router"): CapabilityPolicy {
+  const fallback = defaultCapabilityPolicy(scope);
+  const stored = readLayer(db, SCOPE_TABLES[scope]);
+  return { base: { ...fallback.base, ...stored.base }, overrides: stored.overrides };
 }
 
-export function readPmCapabilityPolicy(db: LedgerContext["db"], pmId: PmId): CapabilityPolicy {
-  return readPolicy(db, pmTables(pmId));
+function persistScopePolicy(db: Db, scope: "default" | "router", policy: CapabilityPolicy, updatedAt: number): void {
+  const fallback = defaultCapabilityPolicy(scope).base;
+  const base = Object.fromEntries(CAPABILITY_KINDS.filter((kind) => policy.base[kind] !== fallback[kind]).map((kind) => [kind, policy.base[kind]]));
+  persistLayer(db, SCOPE_TABLES[scope], { base, overrides: policy.overrides }, updatedAt);
+}
+
+function readPmInheritance(db: Db, pmId: PmId): CapabilityInheritance {
+  return { defaults: readScopePolicy(db, "default"), layer: readLayer(db, pmTables(pmId)) };
+}
+
+export function readPmCapabilityPolicy(db: Db, pmId: PmId): CapabilityPolicy {
+  const { defaults, layer } = readPmInheritance(db, pmId);
+  return layerCapabilityPolicy(defaults, layer);
+}
+
+function pmCapabilities(db: Db, pmId: PmId): ScopeCapabilities {
+  const inheritance = readPmInheritance(db, pmId);
+  return { policy: layerCapabilityPolicy(inheritance.defaults, inheritance.layer), inheritance };
 }
 
 export function createLedgerPmCapabilities(ctx: LedgerContext): LedgerPmCapabilities {
@@ -142,51 +151,67 @@ export function createLedgerPmCapabilities(ctx: LedgerContext): LedgerPmCapabili
     return row;
   };
 
+  const writePmLayer = (pmId: PmId, next: (inheritance: CapabilityInheritance) => CapabilityLayer): ScopeCapabilities =>
+    write((p) => {
+      const pm = requirePm(pmId);
+      const layer = next(readPmInheritance(db, pmId));
+      assertOverridesFit(layer.overrides);
+      persistLayer(db, pmTables(pmId), layer, now());
+      p.changes.push({ type: "pm.updated", data: { pm: toPm(pm) } });
+      return pmCapabilities(db, pmId);
+    });
+
   return {
-    get(pmId) {
-      requirePm(pmId);
-      return readPolicy(db, pmTables(pmId));
+    getCapabilities(scope) {
+      if (scope.kind !== "pm") return { policy: readScopePolicy(db, scope.kind), inheritance: null };
+      requirePm(scope.pmId);
+      return pmCapabilities(db, scope.pmId);
     },
 
-    patch(pmId, patch) {
+    patchCapabilities(scope, patch) {
       validatePatch(patch);
-      return write((p) => {
-        const pm = requirePm(pmId);
-        const tables = pmTables(pmId);
-        const next = nextPolicy(db, tables, patch);
-        persistPolicy(db, tables, next, now());
-        p.changes.push({ type: "pm.updated", data: { pm: toPm(pm) } });
-        return next;
+      if (scope.kind === "pm") return writePmLayer(scope.pmId, ({ defaults, layer }) => applyCapabilityLayerPatch(defaults, layer, patch));
+      return db.transaction(() => {
+        const policy = applyCapabilitiesPatch(readScopePolicy(db, scope.kind), patch);
+        assertOverridesFit(policy.overrides);
+        persistScopePolicy(db, scope.kind, policy, now());
+        return { policy, inheritance: null };
       });
+    },
+
+    resetPmCapabilities(pmId) {
+      return writePmLayer(pmId, () => EMPTY_CAPABILITY_LAYER);
+    },
+
+    customizedCapabilityPms() {
+      return db
+        .all<{ pm_id: number }>("SELECT pm_id FROM pm_capability_policies UNION SELECT pm_id FROM pm_capability_overrides ORDER BY pm_id ASC")
+        .map((r) => r.pm_id);
+    },
+
+    getPmCapabilityPolicy(pmId) {
+      requirePm(pmId);
+      return readPmCapabilityPolicy(db, pmId);
+    },
+
+    getRouterCapabilityPolicy() {
+      return readScopePolicy(db, "router");
     },
 
     assertStart(start) {
       if (start.from === "pm") requirePm(start.pmId);
-      else if (start.from !== "all") throw fail("invalid", "不合法的能力初始来源");
+      else if (start.from !== "default") throw fail("invalid", "不合法的能力初始来源");
     },
 
     init(pmId, start) {
       db.transaction(() => {
         requirePm(pmId);
-        if (start.from === "all") {
-          persistPolicy(db, pmTables(pmId), defaultCapabilityPolicy("pm"), now());
+        if (start.from === "default") {
+          persistLayer(db, pmTables(pmId), EMPTY_CAPABILITY_LAYER, now());
           return;
         }
         requirePm(start.pmId);
-        persistPolicy(db, pmTables(pmId), readPolicy(db, pmTables(start.pmId)), now());
-      });
-    },
-
-    getRouter() {
-      return readPolicy(db, ROUTER_TABLES);
-    },
-
-    patchRouter(patch) {
-      validatePatch(patch);
-      return db.transaction(() => {
-        const next = nextPolicy(db, ROUTER_TABLES, patch);
-        persistPolicy(db, ROUTER_TABLES, next, now());
-        return next;
+        persistLayer(db, pmTables(pmId), readLayer(db, pmTables(start.pmId)), now());
       });
     },
   };

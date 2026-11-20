@@ -1,10 +1,12 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import { AGENT_VENDORS, vendorLabel, vendorSpec, type StateSnapshot } from "../shared/index.ts";
+import { AGENT_VENDORS, DEFAULT_AGENT_VENDOR, vendorLabel, type StateSnapshot } from "../shared/index.ts";
 import { App } from "./App.tsx";
-import { ISOLATION_LABELS } from "./capabilities-model.ts";
 import { FakeApi, FakeWebSocket, installFakeWebSocket, makeConvSnapshot, makeFolder, makePm, makeProject, makeSnapshot } from "./test-utils.ts";
+
+const lead = vendorLabel(DEFAULT_AGENT_VENDOR);
+const other = vendorLabel(AGENT_VENDORS.find((v) => v !== DEFAULT_AGENT_VENDOR)!);
 
 function snapshot(): StateSnapshot {
   return makeSnapshot({
@@ -26,92 +28,122 @@ async function boot(hash = "#/router") {
   return { api, user: userEvent.setup() };
 }
 
-async function openCapabilities(user: ReturnType<typeof userEvent.setup>) {
+type User = ReturnType<typeof userEvent.setup>;
+
+async function openCapabilities(user: User) {
   await user.click(await screen.findByRole("button", { name: "Settings" }));
   const dialog = await screen.findByRole("dialog", { name: "Settings" });
   await user.click(within(dialog).getByRole("tab", { name: "Capabilities" }));
   const panel = within(dialog).getByRole("tabpanel", { name: "Capabilities" });
-  await within(panel).findByRole("region", { name: "MCP servers" });
+  await within(panel).findByRole("region", { name: "Shared" });
   return panel;
 }
 
-const region = (panel: HTMLElement, name: string) => within(panel).getByRole("region", { name });
+const region = (scope: HTMLElement, name: string) => within(scope).getByRole("region", { name });
+const patches = (api: FakeApi, path: RegExp) => api.callsTo("PATCH", path).map((c) => c.body);
 
-async function expand(user: ReturnType<typeof userEvent.setup>, scope: HTMLElement, group: RegExp) {
-  await user.click(within(scope).getByRole("button", { name: group }));
-}
-
-describe("设置 → Capabilities：总助和各项目经理统一管外接能力", () => {
-  it("默认选中总助，范围条只列总助和没归档的项目经理；总助一个不带；切到这一页才请求", async () => {
+describe("设置 → Capabilities：Project defaults、总助、单个项目三档", () => {
+  it("默认落在 Project defaults，切到这一页才请求；按共用和各家专属分区，没有隔离粒度表", async () => {
     const { api, user } = await boot();
     await screen.findByRole("button", { name: "Settings" });
-    expect(api.callsTo("GET", /capabilities$/)).toHaveLength(0);
+    expect(api.callsTo("GET", /capabilities/)).toHaveLength(0);
     const panel = await openCapabilities(user);
-    const strip = within(panel).getByRole("radiogroup", { name: "Agent" });
-    expect(within(strip).getAllByRole("radio").map((r) => r.textContent)).toEqual(["Router", "小林", "阿周"]);
-    expect(within(strip).getByRole("radio", { name: "Router" })).toBeChecked();
-    expect(api.callsTo("GET", /^\/api\/router\/capabilities$/)).toHaveLength(1);
-    expect(region(panel, "MCP servers")).toHaveTextContent("0 of 3");
-    expect(region(panel, "Skills")).toHaveTextContent("0 of 3");
-    expect(region(panel, "Connectors")).toHaveTextContent("0 of 1");
-    for (const name of ["MCP servers", "Skills", "Connectors"]) {
-      expect(within(region(panel, name)).getByRole("button", { name: "Turn all on" })).toBeInTheDocument();
-      for (const toggle of within(region(panel, name)).getAllByRole("switch")) expect(toggle).toHaveAttribute("aria-checked", "false");
-    }
+    const scope = within(panel).getByRole("radiogroup", { name: "Scope" });
+    expect(within(scope).getAllByRole("radio").map((r) => r.textContent)).toEqual(["Project defaults", "Router", "Project"]);
+    expect(within(scope).getByRole("radio", { name: "Project defaults" })).toBeChecked();
+    expect(api.callsTo("GET", /^\/api\/defaults\/capabilities$/)).toHaveLength(1);
+    expect(within(panel).getAllByRole("region").map((r) => r.getAttribute("aria-label"))).toEqual(["Shared", lead, other]);
+    expect(region(panel, "Shared")).toHaveTextContent("5 of 5");
+    expect(within(panel).queryByText(/Enforcement/)).not.toBeInTheDocument();
+    expect(within(panel).queryByRole("region", { name: "MCP servers" })).not.toBeInTheDocument();
   });
 
-  it("拨单项开关：界面先翻过来，PATCH 只带这一项，回来后计数跟着变", async () => {
+  it("插件包默认收起，一行总开关管它旗下的 MCP 和技能；展开后每项带种类小标和自己的开关", async () => {
     const { api, user } = await boot();
     const panel = await openCapabilities(user);
-    const mcp = region(panel, "MCP servers");
-    await expand(user, mcp, /^Global/);
-    await user.click(within(mcp).getByRole("switch", { name: "playwright" }));
-    expect(within(mcp).getByRole("switch", { name: "playwright" })).toHaveAttribute("aria-checked", "true");
-    await waitFor(() => expect(api.callsTo("PATCH", /^\/api\/router\/capabilities$/).map((c) => c.body)).toEqual([{ set: { "mcp:playwright": true } }]));
-    await waitFor(() => expect(mcp).toHaveTextContent("1 of 3"));
-    expect(within(mcp).getByRole("button", { name: "Turn all off" })).toBeInTheDocument();
+    const vendorSection = region(panel, lead);
+    const design = within(vendorSection).getByRole("button", { name: /^design/ });
+    expect(design).toHaveAttribute("aria-expanded", "false");
+    expect(design).toHaveTextContent("2 of 2");
+    await user.click(design);
+    expect(within(vendorSection).getByText("figma").parentElement).toHaveTextContent("figmaMCP");
+    expect(within(vendorSection).getByText("critique").parentElement).toHaveTextContent("critiqueSkill");
+    await user.click(within(vendorSection).getByRole("switch", { name: "design" }));
+    await waitFor(() => expect(design).toHaveTextContent("0 of 2"));
+    expect(patches(api, /^\/api\/defaults\/capabilities$/)).toEqual([{ set: { "mcp:plugin:design:figma": false, "skill:design:critique": false } }]);
+    await user.click(within(vendorSection).getByRole("switch", { name: "critique" }));
+    await waitFor(() => expect(design).toHaveTextContent("1 of 2"));
   });
 
-  it("整类全开改 base；整组开关只发要变的几项；插件 MCP 只显示服务名", async () => {
+  it("独立的 MCP 直接露出成一行；只有部分厂商能用的标出是哪几家", async () => {
     const { api, user } = await boot();
     const panel = await openCapabilities(user);
-    await user.click(within(region(panel, "MCP servers")).getByRole("button", { name: "Turn all on" }));
-    await waitFor(() => expect(region(panel, "MCP servers")).toHaveTextContent("3 of 3"));
-    const skills = region(panel, "Skills");
-    await user.click(within(skills).getByRole("switch", { name: "Global" }));
-    await waitFor(() => expect(skills).toHaveTextContent("2 of 3"));
-    expect(api.callsTo("PATCH", /^\/api\/router\/capabilities$/).map((c) => c.body)).toEqual([
-      { base: { mcp: "all" } },
-      { set: { "skill:verify": true, "skill:unslop": true } },
-    ]);
-    await expand(user, region(panel, "MCP servers"), /^design/);
-    expect(within(region(panel, "MCP servers")).getByRole("switch", { name: "figma" })).toHaveAttribute("aria-checked", "true");
+    const shared = region(panel, "Shared");
+    await user.click(within(shared).getByRole("switch", { name: "playwright" }));
+    expect(within(shared).getByRole("switch", { name: "playwright" })).toHaveAttribute("aria-checked", "false");
+    await waitFor(() => expect(patches(api, /^\/api\/defaults\/capabilities$/)).toEqual([{ set: { "mcp:playwright": false } }]));
+    await waitFor(() => expect(shared).toHaveTextContent("4 of 5"));
+    expect(within(shared).getByText(`${lead}, ${other}`)).toBeInTheDocument();
   });
 
-  it("切到项目经理：拉这个项目经理的清单，默认全开；Turn all off 发到这个项目经理", async () => {
+  it("切到总助：请求总助的选择，出厂全关；改动只发到总助", async () => {
     const { api, user } = await boot();
     const panel = await openCapabilities(user);
-    await user.click(within(panel).getByRole("radio", { name: "小林" }));
-    await waitFor(() => expect(region(panel, "Skills")).toHaveTextContent("3 of 3"));
-    expect(api.callsTo("GET", /^\/api\/pms\/1\/capabilities$/)).toHaveLength(1);
-    await user.click(within(region(panel, "Skills")).getByRole("button", { name: "Turn all off" }));
-    await waitFor(() => expect(region(panel, "Skills")).toHaveTextContent("0 of 3"));
-    expect(api.callsTo("PATCH", /^\/api\/pms\/1\/capabilities$/).map((c) => c.body)).toEqual([{ base: { skill: "none" } }]);
-    expect(api.callsTo("PATCH", /^\/api\/router\/capabilities$/)).toHaveLength(0);
+    await user.click(within(panel).getByRole("radio", { name: "Router" }));
+    await waitFor(() => expect(region(panel, "Shared")).toHaveTextContent("0 of 5"));
+    await user.click(within(region(panel, "Shared")).getByRole("switch", { name: "linear" }));
+    await waitFor(() => expect(patches(api, /^\/api\/router\/capabilities$/)).toEqual([{ set: { "mcp:linear": true } }]));
+    expect(patches(api, /^\/api\/defaults\/capabilities$/)).toEqual([]);
   });
 
-  it("搜索：只留命中的条目、命中的组自动展开、整类按钮藏起来；都没命中写 No matches", async () => {
+  it("切到单个项目：紧凑选择器默认第一个项目；拨过的项标 Custom，一键 Reset 回到继承；选择器标出有特例的项目", async () => {
+    const { api, user } = await boot();
+    const panel = await openCapabilities(user);
+    await user.click(within(panel).getByRole("radio", { name: "Project" }));
+    const picker = await within(panel).findByRole("button", { name: "Project: 小林" });
+    const shared = await within(panel).findByRole("region", { name: "Shared" });
+    expect(within(panel).getByRole("region", { name: "This project" })).toHaveTextContent("1 of 1");
+    expect(within(panel).getByRole("button", { name: /^Project defaults/ })).toHaveTextContent("Inherited");
+    await user.click(within(shared).getByRole("switch", { name: "linear" }));
+    await waitFor(() => expect(patches(api, /^\/api\/pms\/1\/capabilities$/)).toEqual([{ set: { "mcp:linear": false } }]));
+    expect(within(shared).getByText("linear").parentElement).toHaveTextContent("Custom");
+    expect(within(panel).getByRole("button", { name: /^Project defaults/ })).toHaveTextContent("1 custom");
+
+    await user.click(picker);
+    const list = await screen.findByRole("radiogroup", { name: "Project" });
+    await waitFor(() => expect(within(list).getByRole("radio", { name: /小林/ })).toHaveTextContent("Custom"));
+    expect(within(list).getByRole("radio", { name: /阿周/ })).not.toHaveTextContent("Custom");
+    await user.keyboard("{Escape}");
+
+    await user.click(within(panel).getByRole("button", { name: "Reset to Project defaults" }));
+    await waitFor(() => expect(api.callsTo("DELETE", /^\/api\/pms\/1\/capabilities$/)).toHaveLength(1));
+    await waitFor(() => expect(within(panel).getByRole("button", { name: /^Project defaults/ })).toHaveTextContent("Inherited"));
+    expect(within(panel).queryByRole("button", { name: "Reset to Project defaults" })).not.toBeInTheDocument();
+    expect(within(shared).getByRole("switch", { name: "linear" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("改了 Project defaults 后，再看项目拿到的是跟着变过的选择", async () => {
+    const { api, user } = await boot();
+    const panel = await openCapabilities(user);
+    await user.click(within(region(panel, "Shared")).getByRole("switch", { name: "linear" }));
+    await waitFor(() => expect(patches(api, /^\/api\/defaults\/capabilities$/)).toHaveLength(1));
+    await user.click(within(panel).getByRole("radio", { name: "Project" }));
+    const shared = await within(panel).findByRole("region", { name: "Shared" });
+    await waitFor(() => expect(within(shared).getByRole("switch", { name: "linear" })).toHaveAttribute("aria-checked", "false"));
+    expect(within(shared).getByText("linear").parentElement).not.toHaveTextContent("Custom");
+  });
+
+  it("搜索：插件和子项一起筛，命中的行自动展开；都没命中写 No matches", async () => {
     const { user } = await boot();
     const panel = await openCapabilities(user);
-    await user.type(within(panel).getByRole("searchbox", { name: "Search capabilities" }), "lin");
-    const mcp = region(panel, "MCP servers");
-    expect(within(mcp).getAllByRole("switch").map((s) => s.getAttribute("aria-label") ?? s.id)).toHaveLength(2);
-    expect(within(mcp).getByRole("switch", { name: "linear" })).toBeInTheDocument();
-    expect(within(mcp).queryByRole("switch", { name: "playwright" })).not.toBeInTheDocument();
-    expect(within(panel).queryByRole("region", { name: "Skills" })).not.toBeInTheDocument();
-    expect(within(panel).queryByRole("button", { name: /Turn all/ })).not.toBeInTheDocument();
-    await user.clear(within(panel).getByRole("searchbox", { name: "Search capabilities" }));
-    await user.type(within(panel).getByRole("searchbox", { name: "Search capabilities" }), "zzz");
+    const search = within(panel).getByRole("searchbox", { name: "Search capabilities" });
+    await user.type(search, "crit");
+    expect(within(panel).getAllByRole("region").map((r) => r.getAttribute("aria-label"))).toEqual([lead]);
+    expect(within(panel).getByRole("button", { name: /^design/ })).toHaveAttribute("aria-expanded", "true");
+    expect(within(panel).getByRole("switch", { name: "critique" })).toBeInTheDocument();
+    expect(within(panel).queryByRole("switch", { name: "figma" })).not.toBeInTheDocument();
+    await user.clear(search);
+    await user.type(search, "zzz");
     expect(within(panel).getByText("No matches")).toBeInTheDocument();
   });
 
@@ -119,58 +151,68 @@ describe("设置 → Capabilities：总助和各项目经理统一管外接能�
     const { api, user } = await boot();
     api.patchCapabilities = () => ({ status: 500, body: {} });
     const panel = await openCapabilities(user);
-    const mcp = region(panel, "MCP servers");
-    await expand(user, mcp, /^Global/);
-    await user.click(within(mcp).getByRole("switch", { name: "linear" }));
+    const shared = region(panel, "Shared");
+    await user.click(within(shared).getByRole("switch", { name: "linear" }));
     expect(await within(panel).findByRole("alert")).toHaveTextContent("500");
-    await waitFor(() => expect(within(mcp).getByRole("switch", { name: "linear" })).toHaveAttribute("aria-checked", "false"));
-    expect(api.callsTo("GET", /^\/api\/router\/capabilities$/).length).toBeGreaterThanOrEqual(2);
+    await waitFor(() => expect(within(shared).getByRole("switch", { name: "linear" })).toHaveAttribute("aria-checked", "true"));
+    expect(api.callsTo("GET", /^\/api\/defaults\/capabilities$/).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("重扫还没回来时拨了开关：晚到的重扫结果不盖掉刚拨的开关", async () => {
+    const { api, user } = await boot();
+    const panel = await openCapabilities(user);
+    const original = api.getCapabilities;
+    let release = () => {};
+    api.getCapabilities = (scope, refresh) => {
+      const reply = original(scope, refresh);
+      return refresh ? new Promise((resolve) => (release = () => resolve(reply))) : reply;
+    };
+    await user.click(within(panel).getByRole("button", { name: "Refresh" }));
+    const shared = region(panel, "Shared");
+    await user.click(within(shared).getByRole("switch", { name: "linear" }));
+    await waitFor(() => expect(patches(api, /^\/api\/defaults\/capabilities$/)).toHaveLength(1));
+    act(() => release());
+    await waitFor(() => expect(within(panel).getByRole("button", { name: "Refresh" })).toBeEnabled());
+    await waitFor(() => expect(api.callsTo("GET", /^\/api\/defaults\/capabilities$/).filter((c) => c.query.get("refresh") !== "1")).toHaveLength(2));
+    expect(within(shared).getByRole("switch", { name: "linear" })).toHaveAttribute("aria-checked", "false");
   });
 
   it("Refresh 带 ?refresh=1 重扫清单", async () => {
     const { api, user } = await boot();
     const panel = await openCapabilities(user);
     await user.click(within(panel).getByRole("button", { name: "Refresh" }));
-    await waitFor(() => expect(api.callsTo("GET", /^\/api\/router\/capabilities$/).some((c) => c.query.get("refresh") === "1")).toBe(true));
-  });
-
-  it("各家隔离粒度：默认收起；展开后每家一行，照 vendorSpec 写 Per session / Tools denied / Shared", async () => {
-    const { user } = await boot();
-    const panel = await openCapabilities(user);
-    const toggle = within(panel).getByRole("button", { name: /^Enforcement by provider/ });
-    expect(toggle).toHaveAttribute("aria-expanded", "false");
-    await user.click(toggle);
-    const table = within(panel).getByRole("table", { name: "Enforcement by provider" });
-    expect(table.parentElement).toHaveClass("overflow-x-auto");
-    expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Provider", "MCP", "Skills", "Connectors"]);
-    const rows = within(table).getAllByRole("row").slice(1);
-    expect(rows).toHaveLength(AGENT_VENDORS.length);
-    AGENT_VENDORS.forEach((vendor, i) => {
-      const { isolation } = vendorSpec(vendor).capabilities;
-      expect(within(rows[i]!).getByRole("rowheader")).toHaveTextContent(vendorLabel(vendor));
-      const cells = within(rows[i]!).getAllByRole("cell");
-      expect(cells[0]).toHaveTextContent(ISOLATION_LABELS[isolation.mcp]);
-      expect(cells[1]).toHaveTextContent(ISOLATION_LABELS[isolation.skill]);
-      expect(cells[2]).toHaveTextContent(ISOLATION_LABELS[isolation.connector]);
-      for (const cell of cells) expect(cell).toHaveClass("whitespace-nowrap");
-    });
+    await waitFor(() => expect(api.callsTo("GET", /^\/api\/defaults\/capabilities$/).some((c) => c.query.get("refresh") === "1")).toBe(true));
   });
 });
 
-describe("资料页的能力入口", () => {
-  it("显示开了几项；点一下打开设置的能力页并选中这个项目经理，关掉后还在资料页", async () => {
-    const { user } = await boot("#/pm/1");
+describe("资料页的能力入口：直接进当前项目的能力页", () => {
+  it("显示开了几项；点一下进项目自己的能力页，顶栏是这个项目，Back 回资料页", async () => {
+    const { api, user } = await boot("#/pm/1");
     const page = await screen.findByRole("region", { name: "小林's profile" });
-    const entry = await within(within(page).getByRole("region", { name: "Capabilities" })).findByRole("button", { name: /MCP servers, skills, and connectors/ });
-    await waitFor(() => expect(entry).toHaveTextContent("7 of 7"));
+    const entry = await within(within(page).getByRole("region", { name: "Capabilities" })).findByRole("button", { name: /Plugins, skills, and MCP servers/ });
+    await waitFor(() => expect(entry).toHaveTextContent("10 of 10"));
     await user.click(entry);
+    const caps = await screen.findByRole("region", { name: "小林's capabilities" });
+    expect(window.location.hash).toBe("#/pm/1/capabilities");
+    expect(screen.queryByRole("dialog", { name: "Settings" })).not.toBeInTheDocument();
+    expect(within(caps).getByRole("heading", { level: 1, name: "Capabilities" })).toBeInTheDocument();
+    expect(within(caps).queryByRole("radiogroup", { name: "Scope" })).not.toBeInTheDocument();
+    await within(caps).findByRole("region", { name: "This project" });
+    expect(within(caps).getAllByRole("region").map((r) => r.getAttribute("aria-label"))).toEqual(["Inheritance", "This project", "Shared", lead, other]);
+    expect(within(region(caps, other)).getByRole("button", { name: new RegExp(`^${other}`) })).toHaveAttribute("aria-expanded", "false");
+    expect(api.callsTo("GET", /^\/api\/pms\/1\/capabilities$/).length).toBeGreaterThanOrEqual(1);
+    await user.click(within(caps).getByRole("button", { name: "Back" }));
+    await screen.findByRole("region", { name: "小林's profile" });
+    expect(window.location.hash).toBe("#/pm/1");
+  });
+
+  it("能力页里点 Project defaults 打开设置，落在 Project defaults 上", async () => {
+    const { user } = await boot("#/pm/1/capabilities");
+    const caps = await screen.findByRole("region", { name: "小林's capabilities" });
+    await user.click(await within(caps).findByRole("button", { name: /^Project defaults/ }));
     const dialog = await screen.findByRole("dialog", { name: "Settings" });
     expect(within(dialog).getByRole("tab", { name: "Capabilities" })).toHaveAttribute("aria-selected", "true");
-    expect(within(dialog).getByRole("radio", { name: "小林" })).toBeChecked();
-    await user.keyboard("{Escape}");
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Settings" })).not.toBeInTheDocument());
-    expect(window.location.hash).toBe("#/pm/1");
-    expect(screen.getByRole("region", { name: "小林's profile" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("radio", { name: "Project defaults" })).toBeChecked();
   });
 
   it("归档的项目经理没有能力入口", async () => {

@@ -259,7 +259,7 @@ function capabilitiesReceiptNote(caps: WorkerCapabilities, project: CapabilityPo
   const blocked = blockedWorkerCapabilities(project, caps);
   const mounted = caps.allow.filter((key) => !blocked.includes(key));
   const head = mounted.length === 0 ? "。点名的外接能力一项都挂不上，等于不带" : `。外接能力只挂 ${mounted.join("、")}`;
-  const blockedNote = blocked.length === 0 ? "" : `；${blocked.join("、")} 在项目能力设置里是关的，挂不上，要用先请用户在 Settings → Capabilities 打开`;
+  const blockedNote = blocked.length === 0 ? "" : `；${blocked.join("、")} 在这个项目的能力设置里是关的，挂不上，要用先请用户在项目资料页的 Capabilities 里打开`;
   return `${head}${blockedNote}`;
 }
 

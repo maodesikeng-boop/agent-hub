@@ -205,14 +205,14 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   });
   const hub = createLedgerHubCommands(ctx, persona, projects, workers, messages, schedules, workerView, router, taskGraphs, taskGraphManual);
   const launch = createLedgerLaunchContext(db, persona, projects, workers);
-  const pmCapabilities = createLedgerPmCapabilities(ctx);
+  const { assertStart, init, ...capabilities } = createLedgerPmCapabilities(ctx);
 
   const createPm = (input: CreatePmInput): CreatePmResult =>
     write((p) => {
-      if (input.capabilities !== undefined) pmCapabilities.assertStart(input.capabilities);
+      if (input.capabilities !== undefined) assertStart(input.capabilities);
       const created = persona.createPmIn(p, input);
       const project = input.folder === undefined ? null : projects.createProjectIn(p, { pmId: created.pm.id, folder: input.folder }).project;
-      if (input.capabilities !== undefined) pmCapabilities.init(created.pm.id, input.capabilities);
+      if (input.capabilities !== undefined) init(created.pm.id, input.capabilities);
       return { ...created, project };
     });
 
@@ -423,10 +423,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     getPmMemoryFile: persona.getPmMemoryFile,
     putPmMemoryFile: persona.putPmMemoryFile,
     deletePmMemoryFile: persona.deletePmMemoryFile,
-    getPmCapabilityPolicy: pmCapabilities.get,
-    patchPmCapabilities: pmCapabilities.patch,
-    getRouterCapabilityPolicy: pmCapabilities.getRouter,
-    patchRouterCapabilities: pmCapabilities.patchRouter,
+    ...capabilities,
     setProjectSetupCommand: (projectId, command) => write((p) => projects.setSetupCommandIn(p, projectId, command)),
     setPmLook: persona.setPmLook,
     pmProjectMainFolder(pmId) {

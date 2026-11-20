@@ -57,6 +57,8 @@ export const API_PATHS = {
   pmLook: (pmId: PmId) => `/api/pms/${pmId}/look`,
   pmCapabilities: (pmId: PmId) => `/api/pms/${pmId}/capabilities`,
   routerCapabilities: "/api/router/capabilities",
+  defaultCapabilities: "/api/defaults/capabilities",
+  customizedCapabilities: "/api/capabilities/customized",
   projectSetupCommand: (projectId: ProjectId) => `/api/projects/${projectId}/setup-command`,
   pmMemoryFiles: (pmId: PmId) => `/api/pms/${pmId}/memory-files`,
   pmMemoryFile: (pmId: PmId, name: string) => `/api/pms/${pmId}/memory-files/${encodeURIComponent(name)}`,
