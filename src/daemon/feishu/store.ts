@@ -1,9 +1,3 @@
-// 飞书的绑定与投影（迁移 0034：feishu_app、feishu_chats、feishu_posts、feishu_avatars，0035 给 feishu_posts 加附件，0037 给 feishu_avatars 记图片内容哈希，
-// 0039 群头像改按形象认，0040 给 feishu_posts 加总助设置卡；docs/feishu-design.md）。
-// 不变量：
-// - App Secret 不在这里（secrets.ts）；
-// - feishu_posts 是“账本里的这样东西发到了飞书的哪条消息、哪张卡片实体”，同一个 ref 只有一行，重发、定稿、改定案、补发都先查它；
-// - 换应用时四张表在一个事务里清空。
 import type { MessageId, PmId, RouterCommandId, RouterItemId } from "../../shared/domain.ts";
 import type {
   FeishuAppId,
@@ -37,22 +31,17 @@ export interface FeishuAppRecord {
 
 export interface FeishuChatBinding {
   chatId: FeishuChatId;
-  /** 项目经理删掉后 target 仍是 pm、pmId 为 null，等下一次对齐 retire。 */
   target: FeishuChatTarget | { kind: "pm"; pmId: null };
   name: string;
   label: string;
-  /** 群头像现在是哪个形象；没设过、或这个形象画出来的图换了还没给这个群换上（clearChatAvatars）是 null。 */
   avatarLook: SlimeLook | null;
   triggerMode: FeishuTriggerMode;
   guestTier: FeishuGuestTier;
-  /** 项目经理归档、群已解散的时间；取消归档重建群时作为建群 uuid 的 generation。 */
   archivedAt: number | null;
-  /** 已投影到这个会话的最大编号（项目群看消息，总助单聊看卡片和指令）；没有是 null。 */
   lastMessageId: MessageId | null;
   lastRouterEventId: number | null;
 }
 
-/** 账本里的哪样东西：一条消息的第几张卡、第几个文件，总助的一张卡片、一条指令的回复，一个项目群的访客权限卡。 */
 export type FeishuPostRef =
   | { kind: "message"; messageId: MessageId; part: number }
   | { kind: "file"; messageId: MessageId; part: number }
@@ -71,10 +60,8 @@ export interface FeishuPostRecord {
   chatId: FeishuChatId;
   messageId: FeishuMessageId;
   cardId: FeishuCardId | null;
-  /** 这张卡片实体上一次操作的 sequence。 */
   sequence: number;
   state: FeishuPostState;
-  /** file 行：嵌进卡片的图片编号或发出去的文件编号；没传上是 null（uploading 行带编号表示传完、文件也发了，只差改卡）。别的行是 null。 */
   mediaKey: string | null;
   updatedAt: number;
 }
@@ -87,45 +74,27 @@ export interface FeishuInboundCursor {
 
 export interface FeishuStore {
   app(): FeishuAppRecord | null;
-  /**
-   * 后置：存下应用和机器人。appId 和已存的不同（换了应用）时先在同一个事务里清空四张表，ownerOpenId 取入参（可能为 null）。
-   * appId 相同只更新机器人信息；入参 ownerOpenId 不为 null 且库里还没有主人时记下。
-   */
   saveApp(
     input: { appId: FeishuAppId; brand: FeishuBrandName; botOpenId: FeishuOpenId; botName: string; ownerOpenId: FeishuOpenId | null },
     now: number,
   ): FeishuAppRecord;
-  /** 前置：已有应用。后置：认下主人；已有主人时原样返回（换主人要先断开）。 */
   bindOwner(openId: FeishuOpenId, now: number): FeishuAppRecord;
   setEnabled(enabled: boolean, now: number): void;
-  /** 后置：四张表清空。 */
   clear(): void;
 
   chats(): FeishuChatBinding[];
   chatById(chatId: FeishuChatId): FeishuChatBinding | null;
   chatOfTarget(target: FeishuChatTarget): FeishuChatBinding | null;
-  /**
-   * 后置：同一个 target 只有一行（数据库唯一索引）；已有时换成新的会话编号和名字（取消归档重建的群），
-   * 旧群的 feishu_posts 和补发水位一并清掉，archivedAt 回到 null，唤醒方式和访客档位不动。
-   */
   upsertChat(input: { chatId: FeishuChatId; target: FeishuChatTarget; name: string; label: string }, now: number): FeishuChatBinding;
-  /** label 不给时只记飞书里的新名字（用户在飞书里改的）。 */
   renameChat(chatId: FeishuChatId, name: string, label: string | null, now: number): void;
   setChatAvatar(chatId: FeishuChatId, look: SlimeLook, now: number): void;
-  /** 后置：头像是这个形象的群全部改回“没设过”（这个形象画出来的图换了，下一次对齐给它们原地换上）。 */
   clearChatAvatars(look: SlimeLook, now: number): void;
-  /** 后置：只改给了的字段；返回改完的记录。没有这个项目经理的群抛错。 */
   setChatPolicy(pmId: PmId, policy: { triggerMode?: FeishuTriggerMode; guestTier?: FeishuGuestTier }, now: number): FeishuChatBinding;
-  /** 后置：群已解散，记下归档时间；这个群的 feishu_posts 删掉（消息随群没了）。 */
   setChatArchived(chatId: FeishuChatId, archivedAt: number, now: number): void;
-  /** 后置：删掉这一行和它的 feishu_posts（retire 之后；或群被别人解散、机器人被移出，下一次对齐重建）。 */
   removeChat(chatId: FeishuChatId): void;
-  /** 后置：水位只往大了改，传更小的值不变。 */
   advanceWatermark(chatId: FeishuChatId, mark: { messageId?: MessageId; routerEventId?: number }, now: number): void;
 
-  /** 后置：水位推到 id，删掉编号不大于它的事件。 */
   ackRouterEvent(chatId: FeishuChatId, id: number, now: number): void;
-  /** after 之后的事件超过 keep 条时，返回要跳过的条数和其中最后一条的编号；没超过是 null。 */
   routerEventBacklog(after: number, keep: number): { skipped: number; lastSkippedId: number } | null;
   routerEventsAfter(
     after: number,
@@ -137,25 +106,17 @@ export interface FeishuStore {
   saveDecision(ref: FeishuCardRef, clientId: string, name: string, now: number): void;
 
   postOf(ref: FeishuPostRef): FeishuPostRecord | null;
-  /** 后置：按飞书消息编号找回是哪张卡（按钮点击时用）；file 行（附件挂在卡上时记着卡的消息编号）不算。 */
   postByMessageId(messageId: FeishuMessageId): FeishuPostRecord | null;
-  /** 后置：同一个 ref 已有时覆盖消息编号、卡片编号、sequence、state、mediaKey（流式定稿、卡片定案、附件传完）。sequence 不能比已存的小。mediaKey 不给是 null。 */
   savePost(record: Omit<FeishuPostRecord, "updatedAt" | "mediaKey"> & { mediaKey?: string | null }, now: number): void;
-  /** 某个项目群里还在等拍板的卡（重连后对一遍账本现状）。 */
   pendingCards(pmId: PmId | null): Iterable<FeishuPostRecord>;
-  /** 某个群里还停在 streaming 的卡（定稿没做完就停机、重启），按记下的先后最多 limit 张。 */
   streamingPosts(chatId: FeishuChatId, limit: number): FeishuPostRecord[];
-  /** 某个群里卡已发出、还没传完的附件（停机、重启后接着补传），按记下的先后最多 limit 个。 */
   uploadingPosts(chatId: FeishuChatId, limit: number): FeishuPostRecord[];
-  /** 后置：删掉 state 为 final / card_settled 且早于 before 的普通行并返回删了几行；等拍板的不删，chat_policy / router_settings 保留置顶消息编号并将过期 card_id 置空。 */
   prunePosts(before: number): number;
 
-  /** 后置：这个形象记下的 image_key，只有记下的图片内容哈希和 hash 相同才返回；没传过、图片换了都是 null。 */
   avatarKey(look: SlimeLook, hash: string): FeishuImageKey | null;
   saveAvatarKey(look: SlimeLook, imageKey: FeishuImageKey, hash: string, now: number): void;
 }
 
-/** 前置：迁移 0035 已跑。 */
 export function createFeishuStore(db: Db): FeishuStore {
   const app = (): FeishuAppRecord | null => {
     const row = db.get<AppRow>("SELECT * FROM feishu_app WHERE id = 1");
@@ -267,7 +228,6 @@ export function createFeishuStore(db: Db): FeishuStore {
     renameChat(chatId, name, label, now) {
       db.run("UPDATE feishu_chats SET name = ?, label = COALESCE(?, label), updated_at = ? WHERE chat_id = ?", name, label, now, chatId);
     },
-    // avatar_fruit 这一列从 0039 起记形象键（lookKey），列名沿用
     setChatAvatar(chatId, look, now) {
       db.run("UPDATE feishu_chats SET avatar_fruit = ?, updated_at = ? WHERE chat_id = ?", lookKey(look), now, chatId);
     },
@@ -462,6 +422,7 @@ interface ChatRow {
   pm_id: number | null;
   name: string;
   label: string;
+  // Holds the look key since migration 0039; the column name is kept.
   avatar_fruit: string | null;
   trigger_mode: string;
   guest_tier: string;
@@ -496,7 +457,6 @@ function toApp(row: AppRow): FeishuAppRecord {
   };
 }
 
-/** 水位 0 表示“从头开始投影、还没发过东西”，和 null（还没开始记）不同。 */
 const watermark = (value: number | null) => (value === null || value < 0 ? null : value);
 
 function toChat(row: ChatRow): FeishuChatBinding {

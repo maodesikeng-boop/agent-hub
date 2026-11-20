@@ -1,9 +1,3 @@
-// 出站投影（docs/feishu-design.md）：账本的一条变化要不要在飞书里体现、体现成什么。只决定“要什么”，不发请求。
-// 不变量：
-// - 账本是唯一的真相：飞书里机器人发的每条消息都对应账本里的一样东西（feishu_posts 的 ref），反过来不要求；
-// - 所有消息都发在主聊天流里，不发话题回复，不引用回复；
-// - 遵守静默规矩：工具调用、Worker 汇报行、Worker 对话、后台写交接、只给人看的系统消息都不发；
-// - 网页上发的用户消息照样镜像到群里（标明“网页”），两边看到的对话一致；从飞书来的用户消息不再镜像回去。
 import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
 import { unified } from "unified";
@@ -19,56 +13,28 @@ import { describeStep, STEP_TEXT } from "../../shared/step-labels.ts";
 import type { FeishuChatBinding } from "./store.ts";
 
 export type FeishuOutboundIntent =
-  /** 账本里的项目经理要对齐一遍（建了、改名、归档、取消归档、删了）。 */
   | { kind: "sync_chats" }
-  /** 项目经理正在写的这一段（内存里的流式预览）。text 是到目前为止的全文。 */
   | { kind: "stream"; conversationId: ConversationId; text: string }
-  /** 用户发话触发的这一轮在干活（调工具、思考、正在停），还没在出正文：status 是一行状态。 */
   | { kind: "working"; conversationId: ConversationId; status: string }
-  /** 一段文字落库了：流式那张卡定稿，没流式过的直接发。 */
   | { kind: "agent_text"; conversationId: ConversationId; message: Message; files: SentFile[] }
-  /** 这一轮结束（会话回到空闲）：收掉还开着的流式卡片。 */
   | { kind: "turn_end"; conversationId: ConversationId }
-  /** 网页上发的用户消息。 */
   | { kind: "mirror_user"; conversationId: ConversationId; message: Message }
-  /** 新的提问卡。 */
   | { kind: "ask_card"; conversationId: ConversationId; message: Message; deliverables: Deliverable[] }
-  /** 提问卡正文还在等用户期间改了（比如 user_blocker 重查未过补了提示）：项目群和总助单聊的待处理卡同步刷新。 */
   | { kind: "ask_updated"; conversationId: ConversationId; message: Message }
-  /** 提问卡的状态变了（回答了、关掉了、替换了）：项目群里那张卡、总助单聊里引用它的那条一起改成定案的样子。 */
   | { kind: "ask_settled"; conversationId: ConversationId; message: Message }
-  /** 不走 router_items 的待用户拍板或待动手卡（任务图检查点与门禁卡、user_blocker 提醒卡）同步推到总助单聊。 */
   | { kind: "router_ask"; message: Message }
-  /** 总助的卡片：新的简报或拍板项，或它的状态变了。 */
   | { kind: "router_item"; item: RouterItem }
-  /** 总助指令有了结果：作为新卡片发在总助单聊里；网页发的指令连同原话一起镜像。 */
   | { kind: "router_command"; command: RouterCommandRecord }
   | { kind: "refresh_policy_card"; pmId: PmId }
   | { kind: "refresh_router_settings_card" };
 
 export interface FeishuProjectionContext {
-  /** 项目经理对话 → 它的群；不是项目经理对话（Worker 对话）或还没建群是 null。 */
   chatOfConversation(conversationId: ConversationId): FeishuChatBinding | null;
-  /** 总助单聊；还没认主人时是 null（认主人后服务按主人 open_id 发第一条，从回包里拿到单聊编号记下）。 */
   routerChat(): FeishuChatBinding | null;
   pmOfConversation(conversationId: ConversationId): PmId | null;
-  /** 这个对话最近一条用户消息是用户打的字（网页或飞书）、还没回完：这一轮是用户在等的那一轮。Worker 汇报、系统唤醒的后台轮次是 false。 */
   awaitingUser(conversationId: ConversationId): boolean;
 }
 
-/**
- * 后置：按不变量把一条变化变成零个或多个意图：
- * - pm.created / pm.updated / pm.removed → sync_chats；
- * - session.status 只认项目经理的会话（pmId 不为空，Worker、总助的不出）且对话有群：带 streamingText → stream；
- *   没在出正文、activity 是 working / stopping 且 awaitingUser → working（状态行同网页的 describeStep，加省略号）；
- *   后台轮次不出 working：等真有正文或挂卡时才建卡，整轮没正文也就没有要撤回的状态卡；
- *   这一轮结束（activity 回到 idle，或 status 是 ended / broken）→ turn_end；
- * - message.created：项目经理的文字消息 → agent_text（带 meta 里的 SentFile）；askOf 不为 null → ask_card；
- *   没有 origin 的用户消息 → mirror_user；其余 → 无；
- * - message.updated：askOf 不为 null 且已回答或关掉 → ask_settled；
- * - router.item.created / updated → router_item；router.command.updated 且状态是 answered / dispatched / failed → router_command。
- * 没有对应会话的变化一律不出意图。
- */
 export function projectFeishuChange(change: Change, ctx: FeishuProjectionContext): FeishuOutboundIntent[] {
   switch (change.type) {
     case "pm.created":
@@ -82,7 +48,7 @@ export function projectFeishuChange(change: Change, ctx: FeishuProjectionContext
       const { conversationId, pmId, streamingText, status, activity, step } = change.data.session;
       if (conversationId === null || pmId === null || ctx.chatOfConversation(conversationId) === null) return [];
       if (typeof streamingText === "string" && streamingText !== "") return [{ kind: "stream", conversationId, text: streamingText }];
-      // 一轮结束看 activity 回到 idle（进程还在，status 仍是 running），或会话结束、坏了
+      // A turn ends when activity returns to idle while the process keeps running, or when the session ends.
       if (status !== "running" || activity === "idle") return [{ kind: "turn_end", conversationId }];
       if ((activity !== "working" && activity !== "stopping") || !ctx.awaitingUser(conversationId)) return [];
       return [{ kind: "working", conversationId, status: `${activity === "stopping" ? STEP_TEXT.stopping : describeStep(step)}…` }];
@@ -124,7 +90,6 @@ function createdMessageIntents(message: Message, ctx: FeishuProjectionContext): 
   return syncToRouter ? [...pmIntents, { kind: "router_ask", message }] : pmIntents;
 }
 
-/** 有群的项目经理对话里的一条消息要在群里体现成什么（补发也走它）。 */
 function messageIntents(message: Message): FeishuOutboundIntent[] {
   const { conversationId } = message;
   if (message.workerId !== null || message.kind !== "text") return [];
@@ -135,17 +100,12 @@ function messageIntents(message: Message): FeishuOutboundIntent[] {
     if (message.text.trim() === "" && sentFilesOf(message).length === 0) return [];
     return [{ kind: "agent_text", conversationId, message, files: sentFilesOf(message) }];
   }
-  // 只镜像用户在网页上打的字；拍板唤醒这类账本代发的用户消息不镜像
   if (message.sender === "user" && !isLedgerWakeup(message) && feishuOriginOf(message) === null) {
     return [{ kind: "mirror_user", conversationId, message }];
   }
   return [];
 }
 
-/**
- * 重连或重启后补发：项目经理群里 lastMessageId 之后、属于这个对话的消息（调用方按编号从小到大给）。
- * 后置：最多 FEISHU_CATCHUP_MAX_MESSAGES 条意图（取最新的）；更早还有的，omitted 写条数，调用方发一行“还有 N 条，去网页看”。
- */
 export function catchUpIntents(
   conversationId: ConversationId,
   messages: readonly Message[],
@@ -157,7 +117,6 @@ export function catchUpIntents(
   return { intents: kept, omitted: all.length - kept.length, lastMessageId };
 }
 
-/** 从 start 起最多取 chars 个字、转成 JSON 字符串后最多 bytes 字节，返回结束下标（不含）。 */
 function markdownWindow(text: string, start: number, chars: number, bytes: number): number {
   let end = start;
   while (end < text.length && chars > 0) {
@@ -173,12 +132,10 @@ function markdownWindow(text: string, start: number, chars: number, bytes: numbe
   return end;
 }
 
-/** 后置：text 的前缀，最多 chars 个字、转成 JSON 字符串后最多 bytes 字节（不含两边引号）。 */
 export function feishuMarkdownFit(text: string, chars: number, bytes: number): string {
   return text.slice(0, markdownWindow(text, 0, chars, bytes));
 }
 
-/** 流式卡片上推的正文：前 FEISHU_CARD_MAX_CHARS 字按 feishuCardMarkdown 换过图片和本机链接。 */
 export function feishuMarkdownPrefix(text: string): string {
   const fit = (t: string) => feishuMarkdownFit(t, FEISHU_CARD_MAX_CHARS, FEISHU_CARD_MARKDOWN_JSON_BYTES);
   return fit(feishuCardMarkdown(fit(text)));
@@ -193,21 +150,13 @@ interface MdastNode {
 }
 
 const markdownParser = unified().use(remarkParse).use(remarkGfm);
-/** 飞书卡片 Markdown 里图片地址只认上传后拿到的图片编号（img_ 开头），别的一律回 200570。 */
+// Card Markdown only accepts uploaded image keys; any other image URL fails the whole card with 200570.
 const FEISHU_IMAGE_KEY = /^img_[\w-]+$/;
 const WEB_URL = /^https?:\/\//i;
 const MAY_CONTAIN_LINK = /\]\(|\]\[|<[a-z][a-z0-9+.-]*:/i;
 
 const fileNameOf = (path: string) => path.split(/[\\/]/).filter((part) => part !== "").at(-1) ?? "";
 
-/**
- * 账本正文 → 飞书卡片能收的 Markdown（docs/feishu-design.md「交付与附件」）。
- * 后置：
- * - 图片地址不是飞书图片编号时不留图片语法：网页图片变成同地址的链接，本机、别的地址和套在链接里的网页图片写成“图片「名字」”；
- * - 指向本机的链接（绝对路径、file://、~/、相对路径，同 parseLocalHref）只留链接文字：手机上点不开，文件本身由 files.ts 单独发；
- * - 网页链接、飞书图片编号、代码块和行内代码里的原样；
- * - 只在这一层改，账本正文不动。
- */
 export function feishuCardMarkdown(text: string): string {
   if (!MAY_CONTAIN_LINK.test(text)) return text;
   const edits: { start: number; end: number; text: string }[] = [];
@@ -262,11 +211,6 @@ function fenceAtLine(text: string, start: number, open: Fence | null): Fence | n
   return { marker, opener: `${marker}${suffix}\n` };
 }
 
-/**
- * 后置：先按 feishuCardMarkdown 换掉图片和本机链接，再把 Markdown 正文拆成几段，每段字数不超过 FEISHU_CARD_MAX_CHARS、转成 JSON 后不超过 FEISHU_CARD_MARKDOWN_JSON_BYTES；
- * 优先在空行、换行处断。断在代码块里时在断点补闭合围栏、下一段补重新打开的围栏（只照抄有上限的记号和语言名），
- * 所以每段都至少前进一个字。空正文返回空数组。
- */
 export function splitFeishuMarkdown(markdown: string): string[] {
   const text = feishuCardMarkdown(markdown);
   const chunks: string[] = [];

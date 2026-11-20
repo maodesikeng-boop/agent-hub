@@ -21,7 +21,7 @@ Cross-platform multi-agent workbench for macOS, Windows, and Linux. **Router** a
 - **Follow the UI standard.** Match `docs/ui-standard.md` for spacing, border radius, type scale, palette, control height, focus states, and alignment. Update `docs/ui-standard.md` first when a screen needs a pattern the standard does not yet cover.
 - **Language policy.** Source code comments, Web UI copy, `AGENTS.md`, `REVIEW.md`, `docs/`, commit messages, and PR descriptions use English. `README.zh-CN.md`, Feishu user cards, and agent-user chat or internal agent prompts remain Chinese.
 - **Minimal comments.** Do not write comments that restate code, echo type signatures, add section banners (`// ----`), or cite doc section numbers. Write a concise one-line English comment only for a non-obvious *why*, such as a security invariant, a concurrency subtlety, or an OS or vendor quirk that types and names cannot express.
-- **Small modules and functions.** Do not build multi-thousand-line factory closures or giant functions. Keep modules focused and functions short with explicit typed parameters instead of large shared mutable closures.
+- **Small modules and functions.** Do not build multi-thousand-line factory closures or giant functions. Keep modules focused and functions short with explicit typed parameters instead of large shared mutable closures. `src/code-hygiene.test.ts` enforces these rules and the comment rules: new files stay at or under 750 lines, new functions at or under 120 lines, and comments are English with no banners or doc references, with no exceptions. Legacy oversized files and functions are pinned in `src/code-hygiene.baseline.json` and may only shrink.
 
 ## Caches and state bounds
 

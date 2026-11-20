@@ -13,10 +13,12 @@ export default defineConfig({
           environment: "node",
           setupFiles: ["test/clean-env.ts", "test/spawn-guard.ts"],
           include: [
+            "src/*.test.ts",
             "src/shared/**/*.test.ts",
             "src/vendors/**/*.test.ts",
             "src/daemon/**/*.test.ts",
             "src/hub/**/*.test.ts",
+            "src/feishu/**/*.test.ts",
             "src/relay/**/*.test.ts",
             "src/mesh/**/*.test.ts",
             "scripts/**/*.test.ts",

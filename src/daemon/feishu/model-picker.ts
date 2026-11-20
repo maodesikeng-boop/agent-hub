@@ -26,7 +26,7 @@ import {
   type ModelCatalog,
 } from "../../shared/vendors.ts";
 
-/** 飞书 select_static 以空串 initial_option 表示未选中；模型名禁止以 - 开头，用 -default / -auto 作哨兵值不会冲突。 */
+// Feishu select_static treats an empty initial_option as unselected, and model names never start with "-", so these sentinels cannot collide.
 export const FEISHU_DEFAULT_OPTION = "-default";
 export const FEISHU_AUTO_OPTION = "-auto";
 

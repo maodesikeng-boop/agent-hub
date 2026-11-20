@@ -1,9 +1,3 @@
-// 卡片（docs/feishu-design.md「拍板卡」「群设置卡」）：账本里等用户拍板的东西画成飞书卡片 JSON 2.0，按钮回传的值在这里编解码。
-// 不变量：
-// - 卡片的真相在账本（AskMeta、router_items、user_blockers、任务图门禁），飞书卡片只是投影；回答一律走账本原有的接口，
-//   账本推 message.updated / router.item.updated 后再把卡片改成“已定案”，网页和飞书点哪边都一样；
-// - 按钮值只带编号，不带选项原文；处理时照账本现状重新校验；
-// - 所有卡片 schema 为 "2.0"、update_multi 为 true（流式更新文本不支持独享卡片）。
 import { z } from "zod";
 import { CONFIRM_CHECKPOINT_OPTIONS } from "../../shared/domain.ts";
 import type { AskMeta, ConversationId, Message, MessageId, PmId, RouterItemId, TaskGraphId, TaskNodeKey } from "../../shared/domain.ts";
@@ -25,7 +19,6 @@ import {
 } from "./model-picker.ts";
 import { feishuCardMarkdown, feishuMarkdownFit } from "./outbound.ts";
 
-/** 卡片 JSON 2.0（只在这一层拼，序列化后交给传输层）。 */
 export interface FeishuCardJson {
   schema: "2.0";
   config: Record<string, unknown>;
@@ -33,33 +26,25 @@ export interface FeishuCardJson {
   body: { elements: Record<string, unknown>[] };
 }
 
-/** 流式卡片里正文那个 markdown 组件的 element_id，流式更新文本按它找。 */
 export const FEISHU_STREAM_ELEMENT_ID = "reply";
-/** 流式卡片里停止按钮的 element_id，定稿时删掉。 */
 export const FEISHU_STOP_ELEMENT_ID = "stop";
 
-/** 一张卡对应账本里的哪样东西，决定点了按钮调哪个账本接口。 */
 export type FeishuCardRef =
   | { kind: "ask"; askMessageId: MessageId }
   | { kind: "gate"; askMessageId: MessageId; graphId: TaskGraphId; nodeKey: TaskNodeKey }
   | { kind: "blocker"; askMessageId: MessageId; blockerId: UserBlockerId }
   | { kind: "router_item"; itemId: RouterItemId };
 
-/** 按钮回传的动作。 */
 export type FeishuActionValue =
-  /** 选一个选项（检查点卡的“通过 / 打回”也是选项）；表单里的补充说明一起回传。 */
   | { kind: "choose"; card: FeishuCardRef; optionIndex: number }
-  /** 没有选项的提问：只交补充说明。 */
   | { kind: "submit_note"; card: FeishuCardRef }
   | { kind: "blocker_done"; card: Extract<FeishuCardRef, { kind: "blocker" }> }
   | { kind: "stop"; conversationId: ConversationId }
   | { kind: "set_policy"; pmId: PmId; triggerMode?: FeishuTriggerMode; guestTier?: FeishuGuestTier }
   | { kind: "set_pm_model"; pmId: PmId; field: FeishuModelField }
   | { kind: "set_router_model"; field: FeishuModelField }
-  /** 总助单聊里的“新电脑请求加入”核对卡按钮。 */
   | { kind: "mesh_approval"; step: "begin" | "match" | "mismatch"; requestId: string };
 
-/** 按钮值里的版本标记：以后改形状时换版本，老卡片的点击解不出来，回“这张卡已过期”。 */
 const ACTION_MARKER = "fusa";
 const ACTION_VERSION = 1;
 
@@ -82,22 +67,16 @@ const actionValueSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("mesh_approval"), step: z.enum(["begin", "match", "mismatch"]), requestId: z.string().min(1).max(64) }),
 ]);
 
-/** 后置：返回放进按钮 behaviors.callback.value 的对象。decodeFeishuActionValue(encode(v)) 深等于 v。 */
 export function encodeFeishuActionValue(value: FeishuActionValue): Record<string, unknown> {
   return { [ACTION_MARKER]: ACTION_VERSION, ...value };
 }
 
-/** 后置：形状对返回动作，不对（被改过、老版本的卡）返回 null。 */
 export function decodeFeishuActionValue(raw: unknown): FeishuActionValue | null {
   if (typeof raw !== "object" || raw === null || (raw as Record<string, unknown>)[ACTION_MARKER] !== ACTION_VERSION) return null;
   const parsed = actionValueSchema.safeParse(raw);
   return parsed.success ? (parsed.data as FeishuActionValue) : null;
 }
 
-/**
- * 卡片底下挂的一个附件（docs/feishu-design.md「交付与附件」）：传好的图片嵌成 img 元素；还在传的写 Uploading；
- * 传完补发的文件写已送达；没传上、太大的写一行去网页看。紧跟卡片发出去的文件不进卡片。
- */
 export type FeishuAttachmentView =
   | { kind: "image"; name: string; imageKey: string }
   | { kind: "uploading"; name: string }
@@ -120,7 +99,6 @@ function attachmentLine(view: Exclude<FeishuAttachmentView, { kind: "image" }>):
   }
 }
 
-/** 附件画成的卡片元素：图片按顺序一张一个 img（点开能看大图），其余合成一段灰字。 */
 function attachmentElements(views: readonly FeishuAttachmentView[]): Record<string, unknown>[] {
   const images = views.flatMap((v) =>
     v.kind === "image" ? [{ tag: "img", img_key: v.imageKey, alt: plain(v.name), scale_type: "fit_horizontal", preview: true }] : [],
@@ -129,13 +107,11 @@ function attachmentElements(views: readonly FeishuAttachmentView[]): Record<stri
   return lines.length === 0 ? images : [...images, { tag: "markdown", content: lines.join("\n"), text_size: "notation" }];
 }
 
-/** 卡片在飞书里的样子：等拍板、已定案（谁、选了什么、补充说明）、被项目经理关掉或替换。 */
 export type FeishuCardState =
   | { kind: "pending" }
   | { kind: "answered"; chosenOption: string | null; note: string | null; byName: string }
   | { kind: "closed" };
 
-/** 补充说明输入框在表单里的 name，点按钮时连同表单回传（FeishuRawCardAction.formValue）。 */
 export const FEISHU_NOTE_FIELD = "note";
 const FORM_NAME = "answer";
 
@@ -171,7 +147,6 @@ function linkButton(text: string, url: string): Record<string, unknown> {
   return { tag: "button", text: plain(text), type: "default", behaviors: [{ type: "open_url", default_url: url }] };
 }
 
-/** 手机飞书里点开直接进群（docs/feishu-design.md「需要真机核对」第三条）。 */
 export function feishuChatAppLink(chatId: FeishuChatId): string {
   return `https://applink.feishu.cn/client/chat/open?openChatId=${encodeURIComponent(chatId)}`;
 }
@@ -188,10 +163,6 @@ function card(input: { title: string; template: string; summary: string; element
 const TRUNCATED_NOTE = "\n\n……后面太长，完整内容去网页看";
 const cardBytes = (c: FeishuCardJson) => Buffer.byteLength(JSON.stringify(c));
 
-/**
- * 正文按 feishuCardMarkdown 换掉图片和本机链接后放进一张卡：放得下原样放；字数超过 FEISHU_CARD_MAX_CHARS，或连同按钮、定案说明超过 FEISHU_CARD_MAX_BYTES 时，
- * 截到放得下并在末尾写明去网页看。build 用给它的正文拼整张卡，正文以外的部分（按钮、说明、摘要）不随正文变。
- */
 function fitBody(markdown: string, build: (body: string) => FeishuCardJson): FeishuCardJson {
   const text = feishuCardMarkdown(markdown);
   const whole = build(text);
@@ -200,26 +171,22 @@ function fitBody(markdown: string, build: (body: string) => FeishuCardJson): Fei
   return build(feishuMarkdownFit(text, FEISHU_CARD_MAX_CHARS - TRUNCATED_NOTE.length, room) + TRUNCATED_NOTE);
 }
 
-/** 卡片摘要（会话列表里看到的那一行）：正文第一行非空的字（图片和本机链接照 feishuCardMarkdown 换过），最多 60 字。 */
 function summaryLine(text: string): string {
   const line = feishuCardMarkdown(text.split("\n").find((l) => l.trim() !== "")?.trim() ?? "");
   return [...line].length > 60 ? `${[...line].slice(0, 59).join("")}…` : line;
 }
 
-/** 这张提问卡对应账本里的哪样东西。 */
 export function feishuCardRefOf(message: Message, ask: AskMeta): FeishuCardRef {
   if (ask.blockerRef !== undefined) return { kind: "blocker", askMessageId: message.id, blockerId: ask.blockerRef.blockerId };
   if (ask.gateRef !== undefined) return { kind: "gate", askMessageId: message.id, graphId: ask.gateRef.graphId, nodeKey: ask.gateRef.nodeKey };
   return { kind: "ask", askMessageId: message.id };
 }
 
-/** 提问卡的选项（检查点卡没带选项时是“通过 / 打回”）。 */
 export function feishuAskOptions(ask: AskMeta): readonly string[] {
   if (ask.options !== undefined) return ask.options;
   return ask.gateRef?.checkpoint === true ? CONFIRM_CHECKPOINT_OPTIONS : [];
 }
 
-/** 卡片在飞书里该画成什么样（账本现状 → FeishuCardState）。byName 是定案人的显示名（飞书里点的是点的人，网页上点的是主人）。 */
 export function feishuCardStateOf(ask: AskMeta, byName: string): FeishuCardState {
   if (ask.closed === true) return { kind: "closed" };
   if (ask.answered === true) return { kind: "answered", chosenOption: ask.chosenOption ?? null, note: ask.answerNote ?? null, byName };
@@ -239,7 +206,6 @@ function settledElements(state: Exclude<FeishuCardState, { kind: "pending" }>): 
   return [markdown(lines.join("\n"))];
 }
 
-/** 等拍板时的按钮：选项按钮（推荐项排第一、标推荐）和补充说明输入框放在一个表单里；提醒卡只有“已处理”。 */
 function pendingElements(ref: FeishuCardRef, ask: AskMeta | null, options: readonly string[], recommended: string | undefined): Record<string, unknown>[] {
   if (ref.kind === "blocker") return [button({ text: "已处理", type: "primary", value: { kind: "blocker_done", card: ref } })];
   const rec = recommended === undefined ? -1 : options.indexOf(recommended);
@@ -266,17 +232,10 @@ function pendingElements(ref: FeishuCardRef, ask: AskMeta | null, options: reado
   ];
 }
 
-/**
- * 前置：message 是 askOf(message) 不为 null 的项目经理消息，ask 是它的 meta。
- * 后置：pending 时卡片里有一个表单：“补充说明”输入框和选项按钮（推荐项排第一、标“推荐”），点哪个选项都连同输入框一起回传；
- * 检查点卡是“通过 / 打回”，提醒卡是“已处理”；answered / closed 时没有按钮，写明结论。
- * 交付物按 attachments 挂在正文下面、按钮上面（图片嵌在卡里，别的文件紧跟卡片发）。
- */
 export function renderAskCard(message: Message, ask: AskMeta, state: FeishuCardState, attachments: readonly FeishuAttachmentView[] = []): FeishuCardJson {
   return askCard(message, ask, state, attachments, []);
 }
 
-/** 提问卡，正文下面挂附件，再是按钮和说明，最后接 extra（总助单聊里的“打开项目群”）；正文按 fitBody 放。 */
 function askCard(
   message: Message,
   ask: AskMeta,
@@ -297,7 +256,6 @@ function askCard(
   return fitBody(message.text, (body) => card({ title, template, summary: message.text, elements: [markdown(body), ...rest] }));
 }
 
-/** 总助单聊里同步投影的任务图检查点与门禁拍板卡及 user_blocker 提醒卡（含步骤交付物附件与“打开项目群”入口）。 */
 export function renderRouterAskCard(
   message: Message,
   ask: AskMeta,
@@ -310,13 +268,6 @@ export function renderRouterAskCard(
   return askCard(message, ask, state, attachments, openChat, pmName);
 }
 
-/**
- * 总助单聊里的一条。
- * 前置：ask 是 item 引用的那张提问卡（item 带 askMessageId 时调用方从账本取来），没有引用是 null。
- * 后置：简报是摘要和“打开项目群”按钮；带 ask 的拍板项和项目群里那张卡用同一个 FeishuCardRef（kind ask / gate / blocker），
- * 选项、补充说明和定案样子都照 renderAskCard，另加“打开项目群”按钮；没有 ask 的拍板项用 kind router_item 的选项按钮。
- * 两处卡片点哪一处都走同一个账本接口，定案后两处一起改。
- */
 export function renderRouterItem(
   item: RouterItem,
   ask: { message: Message; meta: AskMeta } | null,
@@ -335,11 +286,6 @@ export function renderRouterItem(
   return fitBody(text, (body) => card({ title: "等你确定", template: "blue", summary: item.question, elements: [markdown(body), ...rest] }));
 }
 
-/**
- * 流式回复卡片：一个 element_id 为 FEISHU_STREAM_ELEMENT_ID 的 markdown 组件，下面挂附件，withStop 时最下面一个停止按钮。
- * 后置：streaming 为 true 时 config.streaming_mode 为 true，streaming_config 照 FEISHU_STREAM_PRINT_* 设，摘要是正文开头一行；
- * 只有附件、没有正文时不放正文组件。
- */
 export function renderReplyCard(input: {
   conversationId: ConversationId;
   text: string;
@@ -355,6 +301,7 @@ export function renderReplyCard(input: {
   return {
     schema: "2.0",
     config: {
+      // Streaming text updates reject exclusive cards, so every card is shared.
       update_multi: true,
       summary: { content: summaryLine(input.text) },
       ...(input.streaming
@@ -447,11 +394,6 @@ function modelSectionElements(
   ];
 }
 
-/**
- * 群设置卡：拆为模型与思考程度、唤醒方式、群成员权限三大独立模块（hr 分割线隔开）；
- * 模型用原生 select_static 下拉，唤醒与权限用按钮组（当前项 primary 带 ✓）。
- * 后置：mentionOnlyForced 为 true（应用没开 im:message.group_msg）时按 mention_only 画，不给切回 auto。
- */
 export function renderChatPolicyCard(input: {
   pmId: PmId;
   agent: FeishuPmModelView;
@@ -495,12 +437,10 @@ export function renderRouterSettingsCard(input: { settings: RouterSettings; cata
   return card({ title: "总助设置", template: "grey", summary: "总助设置", elements: [...models, HR, footer] });
 }
 
-/** 回复正文被飞书拒收（内容不合规、超限）时卡片上换成的话：卡片照样能关流式、去停止按钮。 */
 export function unrenderableReplyText(code: number): string {
   return `这段回复飞书显示不了（错误码 ${code}），完整内容去网页看。`;
 }
 
-/** 一张通知卡：总助指令的结果、网页上发的话的镜像（附件挂在正文下面）、断线补发的提示。 */
 export function renderTextCard(input: { title: string; text: string; template?: string; attachments?: readonly FeishuAttachmentView[] }): FeishuCardJson {
   return card({ title: input.title, template: input.template ?? "wathet", summary: input.text, elements: [markdown(input.text), ...attachmentElements(input.attachments ?? [])] });
 }
@@ -516,7 +456,6 @@ export type FeishuMeshApprovalCardState =
   | { kind: "approved"; deviceName: string }
   | { kind: "closed"; deviceName: string };
 
-/** 中心发到总助单聊的“新电脑请求加入”卡：先点核对出 6 位核对码，再点一致或不一致；核对完或过期后去掉按钮。 */
 export function renderMeshApprovalCard(state: FeishuMeshApprovalCardState): FeishuCardJson {
   if (state.kind === "approved") {
     const text = `**已加入**：「${state.deviceName}」已加入账号。`;

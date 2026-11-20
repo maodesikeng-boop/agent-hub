@@ -1,8 +1,3 @@
-// 入站分流（docs/feishu-design.md「唤醒规则」「访客权限」）：一条飞书消息或一次按钮点击，交给总助、交给项目经理、
-// 记成背景、拒绝，还是不理。
-// 主客权限的硬边界在这里和账本两处：总助单聊、设置只认主人；访客能不能拍板、停止、发附件看本群档位（feishuGuestMay）；
-// 访客的话触发的轮次里越界的 hub 命令由账本按 meta.origin 再拦一次（shared/feishu.ts 的 feishuGuestTurnBlockReason）。
-// 不变量：这里不做 I/O、不读别的状态；成员、显示名、绑定、群策略都由调用方查好放进上下文。
 import { createHash } from "node:crypto";
 import type { PmId } from "../../shared/domain.ts";
 import { feishuGuestMay } from "../../shared/feishu.ts";
@@ -33,31 +28,20 @@ export const OWNER_ONLY_STOP = "只有主人能停止";
 export const OWNER_ONLY_SETTINGS = "只有主人能改设置";
 const NOTE_REQUIRED = "先在输入框里写点什么再提交";
 
-/**
- * 叫出设置卡的斜杠命令：去掉 @机器人 后整句（去首尾空白）等于其中一个才算，区分大小写，带文件不算。
- * 不带斜杠的“设置”“模型”“权限”是自然语言，照常交给项目经理或总助。
- */
 export const FEISHU_SETTINGS_COMMANDS: readonly string[] = ["/群设置", "/设置", "/policy", "/model", "/settings"];
 
 const isSettingsCommand = (message: InboundMessage) => message.files.length === 0 && FEISHU_SETTINGS_COMMANDS.includes(message.text.trim());
 
 export interface FeishuRoutingContext {
-  /** 还没认主人时是 null：只认单聊里的绑定码，别的都不理。 */
   ownerOpenId: FeishuOpenId | null;
-  /** 这个会话绑的是谁；单聊里主人发的是 router；不是 Fusa 的群是 null。 */
   binding: { target: FeishuChatTarget; archived: boolean } | null;
   mode: FeishuChatMode;
   triggerMode: FeishuTriggerMode;
   guestTier: FeishuGuestTier;
-  /** 应用没开 im:message.group_msg：不管 triggerMode，一律按 mention_only。 */
   mentionOnlyForced: boolean;
-  /** 发言人的显示名（调用方已查好、截好长度）。 */
   speakerName: string;
-  /** 这个群上次唤醒以来记下的背景（调用方从 FeishuContextWindows 取，送达时才清）。 */
   pendingContext: readonly FeishuContextLine[];
-  /** 上次唤醒以来没唤醒的气泡里带的文件（同上，送达时才清）。 */
   pendingFiles: readonly FeishuPendingFile[];
-  /** 单聊里的文字是不是当前有效的绑定码。 */
   isBindCode: (text: string) => boolean;
 }
 
@@ -68,33 +52,14 @@ export type FeishuMessageRoute =
       target: FeishuChatTarget;
       text: string;
       origin: FeishuMessageOrigin;
-      /** 要下载、放进附件的文件，按发的先后：前面没唤醒的气泡里的在前，这条带的在后。 */
       files: FeishuInboundFileRef[];
-      /** 发话的访客本档不能发附件时，他这条和前面气泡里的文件都不收，记个数。 */
       droppedFiles: number;
     }
-  /** 不唤醒，记成背景，下次唤醒时捎上。 */
   | { kind: "context"; line: FeishuContextLine }
-  /** 主人发了 FEISHU_SETTINGS_COMMANDS 里的命令：在会话底部发一张新的设置卡，不进账本。 */
   | { kind: "settings_card" }
-  /** 拒绝：在原会话回一句只说给这个人的提示（单聊直接回；群里 @他）。guestDenied：访客因本档权限被拦，调用方按冷却附一张群设置卡。 */
   | { kind: "reject"; openId: FeishuOpenId; reason: string; guestDenied?: true }
   | { kind: "ignore" };
 
-/**
- * 前置：message 已过 parseFeishuEvent。
- * 后置（按顺序，命中即返回）：
- * - 单聊：没认主人且文字是有效绑定码 → bind_owner；主人 → deliver 给总助；别人 → reject（“这是 X 的私人助手”）；
- * - 不是 Fusa 的群，或还没认主人 → ignore；记录已归档（群已解散，迟到的事件）→ ignore；话题里的话 → ignore；
- * - 项目群里整句是设置命令（isSettingsCommand）：主人 → settings_card，访客 → reject，@ 不 @、哪一档都一样；
- * - 项目群里主人或访客发的话，是否唤醒按 wakes(ctx, mentionedBot) 定：
- *   - 唤醒：deliver，origin 带 mode、guestTier 和 ctx.pendingContext；
- *   - 不唤醒：context；
- * - 访客：observer 档一律不唤醒，说的话照样记成背景，主人下次唤醒时捎上；以“/”开头的文字 → reject（厂商斜杠命令只给主人）；
- *   本档不能 send_files 时文件不收，droppedFiles 记个数；只发了文件、没写字的 → reject（GUEST_NO_FILES，guestDenied），不投空消息。
- * - 文件气泡带不了 @：没唤醒的消息带的文件由调用方记进近窗，唤醒时 ctx.pendingFiles 里主人和本档能发附件的访客发的随这次 deliver 交出；
- *   只 @机器人 没写字的气泡，前面有文件就照样 deliver，没有就 ignore。
- */
 export function routeFeishuMessage(message: InboundMessage, ctx: FeishuRoutingContext): FeishuMessageRoute {
   const { ownerOpenId } = ctx;
   const speaker = message.senderOpenId;
@@ -134,10 +99,6 @@ export function routeFeishuMessage(message: InboundMessage, ctx: FeishuRoutingCo
   };
 }
 
-/**
- * 后置：auto 档下 solo 返回 true，shared 只有 mentionedBot 为 true 才返回 true；mention_only 或 mentionOnlyForced 时只看 mentionedBot。
- * 这是“单人群直聊，拉人进群后自动切 @机器人 才触发”的唯一实现。
- */
 export function feishuWakes(ctx: Pick<FeishuRoutingContext, "mode" | "triggerMode" | "mentionOnlyForced">, mentionedBot: boolean): boolean {
   if (!mentionedBot && ctx.triggerMode === "auto" && !ctx.mentionOnlyForced) return ctx.mode === "solo";
   return mentionedBot;
@@ -151,15 +112,9 @@ export type FeishuActionRoute =
   | { kind: "set_pm_model"; pmId: PmId; field: FeishuModelField; option: string }
   | { kind: "set_router_model"; field: FeishuModelField; option: string }
   | { kind: "mesh_approval"; step: "begin" | "match" | "mismatch"; requestId: string }
-  /** 拒绝：toast 给点的人看。guestDenied：访客因本档权限点不了拍板、停止，调用方按冷却附一张群设置卡。 */
   | { kind: "reject"; toast: string; guestDenied?: true }
   | { kind: "ignore" };
 
-/**
- * 后置：还没认主人 → ignore；set_policy 只认主人；访客点 choose / submit_note / blocker_done 看 feishuGuestMay(tier, "answer_card")，
- * 点 stop 看 feishuGuestMay(tier, "stop")，不允许时 reject（“只有主人能拍板 / 停止”，带 guestDenied）。
- * answer 的 clientId 由这张卡的消息编号、点的人和动作派生：同一次点击重投得到同一个 clientId，账本按它幂等。
- */
 export function routeFeishuAction(action: FeishuInboundAction, ctx: Pick<FeishuRoutingContext, "ownerOpenId" | "binding" | "guestTier">): FeishuActionRoute {
   const { ownerOpenId, binding } = ctx;
   if (ownerOpenId === null || binding === null || binding.archived) return { kind: "ignore" };
@@ -209,7 +164,6 @@ export function routeFeishuAction(action: FeishuInboundAction, ctx: Pick<FeishuR
   }
 }
 
-/** 后置：openId 是主人返回 owner，否则 guest。ownerOpenId 为 null 时一律 guest。 */
 export function feishuSpeakerRole(openId: FeishuOpenId, ownerOpenId: FeishuOpenId | null): FeishuSpeakerRole {
   return ownerOpenId !== null && openId === ownerOpenId ? "owner" : "guest";
 }
