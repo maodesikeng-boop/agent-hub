@@ -520,6 +520,10 @@ export const TEST_CHILD_EXIT_WAIT_MS = 5_000;
  * 加上 TEST_CHILD_EXIT_WAIT_MS 要小于钩子超时 TEST_TIMEOUT_MS。
  */
 export const TEST_DAEMON_STOP_WAIT_MS = 10_000;
+/** 本机端到端冒烟（scripts/verify-smoke.ts）单次的耗时目标（构建网页、起守护进程、浏览器渲染、关机清理全算上）：超了只警告，不判失败。 */
+export const VERIFY_SMOKE_BUDGET_MS = 20_000;
+/** 冒烟里每一步（等登录网址、等页面渲染、等守护进程正常关机）最多等多久，超了判失败。 */
+export const VERIFY_SMOKE_STEP_TIMEOUT_MS = 15_000;
 
 // ---- 守护进程起的子进程记账（daemon/process-ledger.ts）----
 /** state/child-processes.json 里最多记多少个还活着的子进程；超了丢最老的（它们早已不在了才会堆到这个数）。 */
