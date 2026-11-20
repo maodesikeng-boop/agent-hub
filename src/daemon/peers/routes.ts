@@ -1,6 +1,3 @@
-// 联机的接口（shared/api.ts 的 API_PATHS）：浏览器管设备和账号（/api/devices*、/api/account*）、设备之间（/api/peer/*）、入口转发（/d/<设备>/api/*）。
-// 谁能访问由 ui-server/server.ts 的钩子先管：/api/devices*、/api/account* 和 /d/ 只认浏览器 cookie；/api/peer/* 只认组网入口来的设备（TLS 证书认出是哪台）。
-// 这里注册在 server.ts 的路由插件里（@fastify/websocket 之后）。
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
 import { z } from "zod";
@@ -30,22 +27,15 @@ export interface FeishuPeerRoutesPort {
 
 export interface PeerRoutesOptions {
   peers: Peers;
-  /** 账号与设备（GET /api/account 等）。不给 = /api/account* 回 404。 */
   mesh?: Pick<
     Mesh,
     "status" | "startLogin" | "cancelLogin" | "logout" | "beginApproval" | "answerApproval" | "setCenterPriority" | "trustStatements" | "receiveTrustStatements" | "leaseSnapshot"
   >;
-  /** 全账号单飞书机器人的跨设备接口（/api/peer/feishu/*）。 */
   feishuPeer?: FeishuPeerRoutesPort;
-  /** 这次请求是组网入口来的哪台设备（server.ts 的认证钩子认出来的）；浏览器来的是 undefined。 */
   peerOf: (req: FastifyRequest) => DeviceId | undefined;
-  /** 为入口转发请求生成不可逆的浏览器会话隔离标识。 */
   clientScopeOf?: (req: FastifyRequest) => string | undefined;
-  /** 浏览器经入口连别的设备的 WebSocket：记到它的会话下，退出登录时一起关。 */
   trackSocket: (req: FastifyRequest, socket: WebSocket) => void;
-  /** 转发的可调项：WebSocket 心跳间隔（测试里换）。 */
   proxy?: Pick<ProxyContext, "pingMs" | "heartbeatMs">;
-  /** 设备列表或名字变化后通知（如给已连的 WebSocket 推 resync）。 */
   onChange?: () => void;
 }
 
@@ -64,7 +54,6 @@ const accountSchemas = {
   priority: z.strictObject({ priority: z.array(z.string().refine((v) => isDeviceId(v), "设备编号不对")).max(64) }),
 };
 
-/** 账号组网的操作抛的错（没有这条请求、没连上中继……）都是给人看的原因：400。 */
 function parseOr400<T>(schema: z.ZodType<T>, body: unknown): T {
   const parsed = schema.safeParse(body ?? {});
   if (!parsed.success) {
@@ -89,7 +78,6 @@ export async function peerRoutes(app: FastifyInstance, opts: PeerRoutesOptions):
     throw err;
   });
 
-  /** /api/peer/*：钩子已经拦过，这里再确认一次并取出是哪台。 */
   const requirePeer = (req: FastifyRequest): DeviceId => {
     const peer = opts.peerOf(req);
     if (peer === undefined) throw new PeerError(401, "peer_unauthorized");
@@ -97,7 +85,6 @@ export async function peerRoutes(app: FastifyInstance, opts: PeerRoutesOptions):
   };
   const idParam = (req: FastifyRequest) => String((req.params as { id?: unknown }).id ?? "");
 
-  // ---- 浏览器 → 入口：管设备 ----
   app.get(API_PATHS.devices, async (): Promise<DevicesResponse> => ({ devices: peers.list() }));
   app.patch("/api/devices/:id", async (req) => {
     const renamed = await peers.rename(idParam(req), req.body);
@@ -110,7 +97,6 @@ export async function peerRoutes(app: FastifyInstance, opts: PeerRoutesOptions):
     return reply.code(204).send();
   });
 
-  // ---- 浏览器 → 入口：账号与设备 ----
   if (mesh !== undefined) {
     app.get(API_PATHS.account, async (): Promise<AccountStatusView> => mesh.status());
     app.post(API_PATHS.accountLogin, async (req) => asPeerError(() => mesh.startLogin(parseOr400(accountSchemas.login, req.body))));
@@ -135,7 +121,6 @@ export async function peerRoutes(app: FastifyInstance, opts: PeerRoutesOptions):
     });
   }
 
-  // ---- 设备 → 设备 ----
   app.put(API_PATHS.peerName, async (req, reply) => {
     requirePeer(req);
     peers.renameSelf(req.body);
@@ -194,20 +179,18 @@ export async function peerRoutes(app: FastifyInstance, opts: PeerRoutesOptions):
     });
   }
 
-  // ---- 入口转发：/d/<设备>/api/* ----
-  // 单独一个插件：请求体不解析，原样流给对方（上传最大 MAX_UPLOAD_BYTES，不在入口落地）
+  // A separate plugin so request bodies stream through unparsed.
   app.register(async (proxy) => {
     proxy.removeAllContentTypeParsers();
     proxy.addContentTypeParser("*", (_req, _payload, done) => done(null));
 
-    /** 地址合规、设备认识 → 转发目标；不然回 404（未知设备、../ 之类都一样，不多说）。 */
     const resolve = (req: FastifyRequest): { target: ProxyTarget; rest: string } | null => {
       const split = splitProxyUrl(req.url);
       const target = split === null ? null : peers.target(split.device);
       return split === null || target === null ? null : { target, rest: split.rest };
     };
 
-    // WebSocket（/d/<设备>/api/ws?since=）：握手前先查设备，不认识就 404，不升级
+    // Check the device before upgrading; unknown devices get 404 without a WebSocket.
     proxy.get(
       `/d/:id${API_PATHS.ws}`,
       {

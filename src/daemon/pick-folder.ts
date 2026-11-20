@@ -1,7 +1,3 @@
-// 替网页弹桌面系统原生的“选择文件夹”（浏览器自带的选文件夹拿不到绝对路径）：
-// - macOS：经 osascript 弹 Finder 选择对话框；
-// - Windows（受桌面外壳监管时）：经本机窄回环桥接调 Tauri `tauri-plugin-dialog` 弹原生目录选择器；
-// - 纯浏览器或 Linux 服务器：回 501，网页不显示“选择…”，用户手填路径（shared/server-info.ts）。
 import { execFile } from "node:child_process";
 import { statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -9,17 +5,12 @@ import { dirname, resolve } from "node:path";
 import { PICK_FOLDER_TIMEOUT_MS, serverInfoFor } from "../shared/index.ts";
 import { isCrossPlatformAbsolutePath } from "./platform/index.ts";
 
-/** Windows 桌面外壳注入的原生目录选择桥接环境变量（entry.ts 启动时读取后立即从 process.env 剥离）。 */
 export const DESKTOP_DIALOG_URL_ENV = "AGENT_HUB_DESKTOP_DIALOG_URL";
 export const DESKTOP_DIALOG_TOKEN_ENV = "AGENT_HUB_DESKTOP_DIALOG_TOKEN";
 
-/** 对话框上的提示语。 */
 const PICK_FOLDER_PROMPT = "选择主文件夹";
 
-/**
- * AppleScript：argv 第一项是对话框开始的文件夹（调用方保证它存在）。路径走 argv，不拼进脚本，免得特殊字符破坏脚本。
- * activate 让对话框跳到最前面（守护进程是后台进程，不 activate 的话对话框可能压在浏览器后面）。
- */
+/** The start folder goes through argv, not the script text, so special characters cannot break the AppleScript. */
 const PICK_FOLDER_SCRIPT = [
   "on run argv",
   "tell me to activate",
@@ -27,10 +18,8 @@ const PICK_FOLDER_SCRIPT = [
   "end run",
 ];
 
-/** osascript 取消对话框时 stderr 里的错误号（“User canceled. (-128)”），退出码是 1。 */
 const USER_CANCELED = "-128";
 
-/** 执行 osascript：成功给 stdout；失败（含超时被杀）抛出带 code / killed / stderr 的错误，和 execFile 一样。 */
 export type RunOsascript = (args: string[], options: { timeoutMs: number }) => Promise<{ stdout: string }>;
 
 const runOsascript: RunOsascript = (args, { timeoutMs }) =>
@@ -55,21 +44,16 @@ export const PICK_FOLDER_UNAVAILABLE_MESSAGE = "这台服务器不能弹出选�
 
 export interface FolderPickerOptions {
   run?: RunOsascript;
-  /** 桌面外壳窄桥接（Windows Tauri `tauri-plugin-dialog`）：传入起始目录与超时，返回选中的目录或 null。 */
   pickViaDesktopBridge?: (startDir: string, options: { timeoutMs: number }) => Promise<string | null>;
   timeoutMs?: number;
-  /** 没给起始文件夹或它不可用时的起点。 */
   homeDir?: string;
-  /** 这台机器能不能弹原生对话框（默认只有 macOS）。false 且没传 run：pick 直接 501。传了 run（测试）不看它。 */
   available?: boolean;
 }
 
 export interface FolderPicker {
-  /** 弹对话框，返回选中的绝对路径；取消或超时是 null；已经有一个开着 → PickFolderError 409；起不来 → PickFolderError 500 / 501。 */
   pick(startDir?: string): Promise<string | null>;
 }
 
-/** 起始文件夹：~ 展开；是文件就用它所在的文件夹；不存在、不是绝对路径就用家目录。 */
 function startFolder(input: string | undefined, homeDir: string): string {
   const raw = input?.trim();
   if (!raw) return homeDir;
@@ -109,7 +93,6 @@ export function isAllowedLoopbackBridgeUrl(rawUrl: string): boolean {
   }
 }
 
-/** 构造通过本机回环窄桥接请求桌面外壳 `tauri-plugin-dialog` 的 `FolderPicker`。 */
 export function createDesktopBridgeFolderPicker(input: {
   bridgeUrl: string;
   bridgeToken: string;
@@ -179,17 +162,16 @@ export function createFolderPicker(options: FolderPickerOptions = {}): FolderPic
           return await bridge(resolvedStart, { timeoutMs });
         }
         const args = PICK_FOLDER_SCRIPT.flatMap((line) => ["-e", line]);
-        // 额外参数交给 AppleScript 的 argv：osascript -e ... -e ... -- <起始文件夹>
         args.push("--", resolvedStart);
         const { stdout } = await run(args, { timeoutMs });
         return trimPickedFolderPath(stdout);
       } catch (err) {
         if (err instanceof PickFolderError) throw err;
-        if (errorField(err, "killed") === true) return null; // 超时被杀：当作取消
+        if (errorField(err, "killed") === true) return null;
         const stderr = String(errorField(err, "stderr") ?? "");
         if (stderr.includes(USER_CANCELED)) return null;
         if (errorField(err, "code") === "ENOENT") throw new PickFolderError(501, PICK_FOLDER_UNAVAILABLE_MESSAGE);
-        // stderr 空（被信号结束之类）时别把 err.message 里整条命令抖出来
+        // Avoid echoing the whole command from err.message when stderr is empty.
         const signal = errorField(err, "signal");
         const reason = stderr.trim() || (typeof signal === "string" ? `osascript 被 ${signal} 结束了` : "osascript 异常退出");
         throw new PickFolderError(500, `弹不出选择文件夹的窗口：${reason}`);

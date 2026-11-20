@@ -1,5 +1,3 @@
-// git 操作（M3 W1）：判断主文件夹是不是有提交的仓库、有没有没提交的改动、给 Worker 建 worktree。
-// 用 execFile 直接调 git，不经过 shell；每次调用都有超时；拿不到的错误转成 GitError（中文信息 + kind）。
 import { execFile } from "node:child_process";
 import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -10,47 +8,33 @@ import { GIT_MAX_BUFFER_BYTES, GIT_PROBE_TIMEOUT_MS, GIT_TIMEOUT_MS } from "../.
 import { findExecutable } from "../../shared/paths.ts";
 import { firstEnvKey, normalizePathForComparison, resolveSpawn } from "../platform/index.ts";
 
-/**
- * 只读地列仓库里的东西（`git ls-files` 这类，对象是别人给的、不一定可信的仓库）时加在子命令前面的参数和环境变量：
- * 仓库配置里的 `core.fsmonitor` 指到脚本的话，git 读索引时会执行它（审查实测），所以每次都用 `-c core.fsmonitor=false` 盖掉；
- * GIT_OPTIONAL_LOCKS=0 不去抢可选的锁（不刷新索引、不挡用户自己的 git 操作）。
- */
+/** A repo's core.fsmonitor can point at a script that git runs while reading the index, so untrusted repos are listed with it disabled and without optional locks. */
 export const GIT_READONLY_ARGS: readonly string[] = ["-c", "core.fsmonitor=false", "-c", "gc.auto=0"];
 export const GIT_READONLY_ENV: Readonly<Record<string, string>> = { GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" };
 
 export interface GitOptions {
-  /** 一次 git 调用的超时（毫秒），默认 GIT_TIMEOUT_MS。 */
   timeoutMs?: number;
 }
 
 export interface AddWorktreeOptions extends GitOptions {
-  /** 主文件夹（git 仓库）。 */
   repoFolder: string;
-  /** worktree 放哪。上一级目录不存在时 git 会自己建。 */
   worktreePath: string;
-  /** 新分支名，比如 `hub/7-fix-x`；null 是不建分支，`--detach` 检出 base 的提交（审查 Worker）。 */
   branch: string | null;
-  /** 从哪个提交起，默认 `HEAD`（主文件夹当前分支的最新提交）。 */
   base?: string;
-  /**
-   * 在 `git worktree add` 检出工作区文件前预先建好空目录并设置 ACL（Windows 4.4.2：子文件自动继承 `ALLOW FusaWorker-<id>`，零传播开销）。
-   */
   prepareDir?: (worktreePath: string) => Promise<void> | void;
 }
 
 export interface AddWorktreeResult {
-  /** 这次新建了 worktree；false 表示它本来就在（重复执行）。 */
   created: boolean;
-  /** worktree 起点的完整提交号。重复执行时是分支和基准的共同祖先，一般就是第一次的起点。 */
   baseCommit: string;
 }
 
 export type GitErrorKind =
-  | "git_missing" // 找不到 git 程序
-  | "timeout" // 超时
-  | "git_failed" // git 退出码非 0
-  | "branch_taken" // 分支名已经有了，而且不是我们要的那个 worktree
-  | "path_taken"; // 目录已经是别的分支的 worktree
+  | "git_missing"
+  | "timeout"
+  | "git_failed"
+  | "branch_taken"
+  | "path_taken";
 
 export class GitError extends Error {
   readonly kind: GitErrorKind;
@@ -98,10 +82,7 @@ function resolveGitInvocation(
   };
 }
 
-/**
- * 跑一次 git。退出码非 0 不抛，交给调用方判断；找不到 git、超时才抛 GitError。
- * 一律 `git -C <folder>`：文件夹不存在也只是退出码 128，不会和“找不到 git”混在一起。
- */
+/** Non-zero exits are returned for the caller to judge; only a missing git binary or a timeout throws. */
 function runGit(
   folder: string,
   args: string[],
@@ -144,18 +125,11 @@ function runGit(
   });
 }
 
-/** git 退出码非 0 当成错误；`what` 是给人看的命令名，比如 "git worktree add"。 */
 function failed(what: string, run: GitRun): GitError {
   const detail = run.stderr.trim() || run.stdout.trim() || `退出码 ${run.code}`;
   return new GitError("git_failed", `${what} 失败：${detail}`);
 }
 
-/**
- * 是 git 仓库，而且至少有一次提交（`git rev-parse --verify --quiet HEAD` 成功）。
- * 只有 git 正常跑完、明确答了“否”才返回 false：不是仓库（退出码 128，“not a git repository”）、还没有提交（退出码 1、不出声）。
- * 别的情况一律抛 GitError，不当成“不是仓库”：超时、找不到 git、文件夹不存在、别的非零退出（比如 Xcode 许可证没同意）。
- * 认“not a git repository”要英文的提示，所以这一次用 LC_ALL=C 跑。
- */
 export async function isRepoWithCommit(folder: string, options: GitOptions = {}): Promise<boolean> {
   const run = await runGit(folder, ["rev-parse", "--verify", "--quiet", "HEAD"], options.timeoutMs ?? GIT_TIMEOUT_MS, { LC_ALL: "C" });
   if (run.code === 0) return true;
@@ -164,18 +138,12 @@ export async function isRepoWithCommit(folder: string, options: GitOptions = {})
   throw failed("git rev-parse", run);
 }
 
-/** 有没提交的改动：已跟踪的文件改了、已暂存、有没跟踪的文件，任何一种都算。不是仓库会抛 GitError。 */
 export async function hasUncommittedChanges(folder: string, options: GitOptions = {}): Promise<boolean> {
   const run = await runGit(folder, ["--no-optional-locks", "status", "--porcelain"], options.timeoutMs ?? GIT_TIMEOUT_MS);
   if (run.code !== 0) throw failed("git status", run);
   return run.stdout.trim().length > 0;
 }
 
-/**
- * hub worker start 之前探主文件夹（agent 接口调，结果交给账本的 hubCall，m3-plan 第 2.6 节）：是不是有提交的仓库，
- * 是的话再看有没有没提交的改动。每次 git 调用最多 timeoutMs（默认 GIT_PROBE_TIMEOUT_MS）。
- * 不抛错：git 没跑成（见 isRepoWithCommit）返回 failed，原因写在 error 里。
- */
 export async function probeWorkspace(folder: string, options: GitOptions = {}): Promise<WorkspaceProbe> {
   const timeoutMs = options.timeoutMs ?? GIT_PROBE_TIMEOUT_MS;
   try {
@@ -187,18 +155,9 @@ export async function probeWorkspace(folder: string, options: GitOptions = {}): 
   }
 }
 
-/**
- * `git worktree add` 建的过程中给 worktree 加的锁的理由（git 源码 builtin/worktree.c）。git 正常跑完会解锁；
- * 还锁着这个理由，说明上次 add 被强杀了，留下的是半成品（文件不全）。add 用 LC_ALL=C 跑，这个理由不会被翻译。
- */
+/** git locks a worktree with this reason during add (builtin/worktree.c); if it is still locked, a previous add was killed and left a partial checkout. add runs with LC_ALL=C so the text is not translated. */
 const INITIALIZING_LOCK = "initializing";
 
-/**
- * 建 worktree：`git worktree add -b <branch> <worktreePath> <base>`；branch 是 null 时 `git worktree add --detach <worktreePath> <base>`。
- * 重复执行算成功：worktree 已经在这个目录、分支也对得上（detached 的那边也是 detached），就直接返回 `created: false`，不动里面的东西。
- * 上次 add 被强杀留下的半成品（还锁着 initializing）不算建好：`git worktree remove -f -f` 加 `git branch -D` 清掉，再重建。
- * 分支名已经有了（比如别的 Worker 占着）、目录已经是别的分支的 worktree，报清楚的错（kind 是 branch_taken、path_taken）。
- */
 export async function addWorktree(options: AddWorktreeOptions): Promise<AddWorktreeResult> {
   const { repoFolder, worktreePath, branch, base = "HEAD" } = options;
   const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
@@ -212,7 +171,7 @@ export async function addWorktree(options: AddWorktreeOptions): Promise<AddWorkt
   if (listRun.code !== 0) throw failed("git worktree list", listRun);
   let existing = findWorktree(parseWorktreeList(listRun.stdout), worktreePath);
   if (existing?.locked === INITIALIZING_LOCK) {
-    // 两个 -f：锁着的 worktree 要这样才删得掉。分支是那次 add 建的，还没有 Worker 在上面干过活
+    // A locked worktree needs two -f flags to be removed.
     const removeRun = await git(["worktree", "remove", "-f", "-f", existing.path]);
     if (removeRun.code !== 0) throw failed("git worktree remove（清掉没建完的 worktree）", removeRun);
     if (branch !== null && existing.branch === `refs/heads/${branch}`) {
@@ -250,13 +209,10 @@ export async function addWorktree(options: AddWorktreeOptions): Promise<AddWorkt
 
 interface WorktreeEntry {
   path: string;
-  /** `refs/heads/...`；游离 HEAD 或 bare 时没有。 */
   branch: string | null;
-  /** 锁着时的理由（没写理由是空串）；没锁是 null。 */
   locked: string | null;
 }
 
-/** 解析 `git worktree list --porcelain`：每个 worktree 一段，段之间空一行。 */
 function parseWorktreeList(output: string): WorktreeEntry[] {
   const entries: WorktreeEntry[] = [];
   for (const block of output.replace(/\r\n/g, "\n").split(/\n\s*\n/)) {
@@ -273,13 +229,13 @@ function parseWorktreeList(output: string): WorktreeEntry[] {
   return entries;
 }
 
-/** git 登记的是 realpath（macOS 的 /var 其实是 /private/var），所以两边都转成 realpath 再比。 */
+/** git records real paths (macOS /var is /private/var), so both sides are compared after realpath. */
 function findWorktree(entries: WorktreeEntry[], worktreePath: string): WorktreeEntry | undefined {
   const target = normalizePathForComparison(realpathLoose(worktreePath));
   return entries.find((entry) => normalizePathForComparison(realpathLoose(entry.path)) === target);
 }
 
-/** realpath，路径还不存在时：找到最近的存在的上级，转成 realpath 后接上剩下的部分。 */
+/** realpath of a path that does not exist yet resolves its nearest existing parent. */
 export function realpathLoose(path: string): string {
   const absolute = resolve(path);
   try {
@@ -290,7 +246,6 @@ export function realpathLoose(path: string): string {
   }
 }
 
-/** 本地判断分支是否已合并时依次检查的目标主分支引用（兼顾远端 origin/main 与本地 main/master）。 */
 const MAIN_TARGET_REFS = [
   "refs/remotes/origin/main",
   "refs/heads/main",
@@ -298,14 +253,6 @@ const MAIN_TARGET_REFS = [
   "refs/heads/master",
 ] as const;
 
-/**
- * 本地判断 Worker 的分支 `refs/heads/<branch>` 是否已合并进主分支（`origin/main`、`main`，或 master）：
- * - 账本 `workers` 表不持久化 PR 状态，且定期清理不能每轮调 GitHub API，因此用本地 git plumbing 判断；
- *   squash / rebase 合并判不出来（返回 false），交给“收工满 N 天”兜底。宁可判“没合并”，不能把没合并的判成合并。
- * - 用一次 `for-each-ref` 取出分支与各候选主分支的 SHA，再用 `merge-base --is-ancestor` 的退出码（0 是、1 否）判断；
- * - 没有 baseCommit（worktree 没登记起点）、分支没有新提交（`branchCommit === baseCommit`）一律 false：
- *   刚开出来的分支天然是 main 的祖先，不能当成“PR 已合并”。
- */
 export async function isBranchMergedToMain(
   repoFolder: string,
   branch: string,
@@ -349,20 +296,16 @@ export type WorktreeRemovalProbe =
   | {
       kind: "ok";
       isRepoWithCommit: boolean;
-      /** 有只在这个目录里才有的东西：改过或暂存的已跟踪文件、未跟踪文件、子模块改动。只缺已跟踪文件不算。 */
       hasContent: boolean;
       onBranch: boolean;
-      /** HEAD 当前指向的完整提交号；还没有提交或不是仓库时是 null。 */
       head: string | null;
-      /** rebase / merge / cherry-pick / revert / bisect 进行到一半（这些中间状态下的 HEAD 和工作区不能当成“干净”）。 */
+      /** Mid-operation states leave HEAD and the work tree inconsistent, so the directory is never deleted. */
       inProgress: boolean;
     }
   | { kind: "failed"; error: string };
 
-/** porcelain v2 里“普通文件、索引没动、工作区里没了”的那一行的开头。 */
 const MISSING_TRACKED_FILE = "1 .D N... ";
 
-/** 这些 git 内部文件或目录存在，说明有一个多步操作停在中途（rebase、merge、cherry-pick、revert、bisect）。 */
 const IN_PROGRESS_GIT_PATHS = [
   "rebase-merge",
   "rebase-apply",
@@ -373,18 +316,6 @@ const IN_PROGRESS_GIT_PATHS = [
   "BISECT_LOG",
 ] as const;
 
-/**
- * 自动清理删 worktree 之前探一次（一个 `git status --porcelain=v2 --branch` 子进程，外加一次 `git rev-parse --git-path` 查中间状态）：
- * - hasContent：除了“工作区里缺了已跟踪文件、索引没动”（`1 .D N...`）以外的任何一行都算。缺的文件内容还在提交里，删目录丢不了东西；
- *   上一轮删到一半中断留下的正是这个样子，所以下一轮能接着删。显式 `--untracked-files=normal`：
- *   仓库配了 `status.showUntrackedFiles=no` 时默认的 status 看不到未跟踪文件。
- * - onBranch：HEAD 指在某个分支上；head：HEAD 的提交号。detached HEAD 上的新提交不在任何分支里，
- *   删了 worktree 连同它的 HEAD reflog 一起没了（实测），所以调用方要先确认 head 已合入主分支，
- *   或者先给它建一个分支引用（见 pinDetachedHead），才能删。
- * - inProgress：rebase、merge、cherry-pick、bisect 进行到一半，任何时候都不删。
- * - 不是 git 仓库（目录还在但 .git 没了）返回 isRepoWithCommit: false，不算失败。
- * 被 .gitignore 忽略的文件（node_modules、.env、截图）不算内容，随目录一起删。
- */
 export async function probeWorktreeForRemoval(worktreePath: string, options: GitOptions = {}): Promise<WorktreeRemovalProbe> {
   const timeoutMs = options.timeoutMs ?? GIT_PROBE_TIMEOUT_MS;
   try {
@@ -427,7 +358,6 @@ async function hasOperationInProgress(worktreePath: string, timeoutMs: number): 
     .some((path) => path !== "" && existsSync(path));
 }
 
-/** 解析一个引用到完整提交号；引用不存在（或文件夹不是仓库）返回 null，其他 git 故障抛 GitError。 */
 export async function resolveCommit(folder: string, ref: string, options: GitOptions = {}): Promise<string | null> {
   if (ref.trim() === "" || ref.startsWith("-")) return null;
   const run = await runGit(
@@ -445,10 +375,6 @@ export async function resolveCommit(folder: string, ref: string, options: GitOpt
   throw failed("git rev-parse", run);
 }
 
-/**
- * origin 上分支 branch 现在指向哪个提交（`git ls-remote origin refs/heads/<branch>`，审查开审和收尾核对用）：
- * 仓库没有 origin 返回 undefined；origin 上没有这个分支返回 null；连不上、鉴权失败等抛 GitError（调用方重试）。
- */
 export async function remoteBranchHead(repoFolder: string, branch: string, options: GitOptions = {}): Promise<string | null | undefined> {
   const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
   const remoteRun = await runGit(repoFolder, ["remote"], timeoutMs);
@@ -460,11 +386,6 @@ export async function remoteBranchHead(repoFolder: string, branch: string, optio
   return line === undefined ? null : line.split("\t")[0]!;
 }
 
-/**
- * 提交已经在主分支（`origin/main`、`main`、master）的历史里（含恰好就是主分支的提交）。
- * 和 isBranchMergedToMain 不同，这里不排除“还停在起点”：调用方（自动清理）只对已收工且工作区干净的 Worker 问，
- * 起点就在 main 上、一个提交都没新增的目录没有任何东西会丢。
- */
 export async function isCommitMergedToMain(repoFolder: string, commit: string, options: GitOptions = {}): Promise<boolean> {
   const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
   const refsRun = await runGit(repoFolder, ["for-each-ref", "--format=%(objectname)", ...MAIN_TARGET_REFS], timeoutMs);
@@ -478,10 +399,7 @@ export async function isCommitMergedToMain(repoFolder: string, commit: string, o
   return false;
 }
 
-/**
- * 保证 detached HEAD 上的提交不会随 worktree 一起丢：已经被本地分支或主分支（含 origin/main）包含就什么都不做，
- * 否则建分支 `hub/detached-<标签>-<提交号前 8 位>`（名字带提交号，不会覆盖别的分支）。返回保底分支名，不需要时返回 null。
- */
+/** Commits on a detached HEAD would vanish with the worktree, so unreachable ones get a branch first. */
 export async function pinDetachedHead(repoFolder: string, head: string, label: string, options: GitOptions = {}): Promise<string | null> {
   const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
   const containing = await runGit(
@@ -494,7 +412,7 @@ export async function pinDetachedHead(repoFolder: string, head: string, label: s
   const name = `hub/detached-${label}-${head.slice(0, 8)}`;
   const created = await runGit(repoFolder, ["branch", "--", name, head], timeoutMs, { LC_ALL: "C" });
   if (created.code !== 0) {
-    // 上一轮建好了、后面一步失败：分支已经指在这个提交上就算成功
+    // A previous run created the branch and then failed later; the branch already on this commit counts as success.
     if ((await resolveCommit(repoFolder, `refs/heads/${name}`, options)) !== head) throw failed("git branch", created);
   }
   return name;
@@ -502,11 +420,7 @@ export async function pinDetachedHead(repoFolder: string, head: string, label: s
 
 export type WorktreeLink = "linked" | "orphan";
 
-/**
- * 目录和主仓的 worktree 登记还连着吗（只看文件系统，不跑 git：`.git` 没了时 git 会往上找父目录的仓库，不能拿来判断）：
- * - orphan：`.git` 不存在，或是 `gitdir: <主仓>/.git/worktrees/<名字>` 指向的目录已经不在（外部 git worktree remove / prune 之后残留的壳）；
- * - linked：其他情况（含 `.git` 是目录的独立克隆、读不出来的，交给原来的流程处理）。
- */
+/** Checks only the filesystem because git refuses to run once .git is gone. */
 export function inspectWorktreeLink(worktreePath: string): WorktreeLink {
   const dotGit = join(worktreePath, ".git");
   let stat;
@@ -531,7 +445,7 @@ export function inspectWorktreeLink(worktreePath: string): WorktreeLink {
 export type OrphanContentProbe = { kind: "ok"; hasContent: boolean } | { kind: "failed"; error: string };
 
 export interface ProbeOrphanOptions extends GitOptions {
-  /** Worker 登记的起点提交；当分支已删且主分支在合并后继续演进时，孤儿目录里未改动的旧文件仍停在起点，并入基准避免误判。 */
+  /** After the branch is deleted and main moves on, untouched files in an orphan dir still match the base commit, so it is included to avoid false positives. */
   baseCommit?: string | null;
 }
 
@@ -547,7 +461,6 @@ function lstatExists(path: string): boolean {
   }
 }
 
-/** 目录里还有没有这些提交的顶层条目（文件或目录，按文件系统自己的大小写规则找）。 */
 async function hasCheckoutRemnant(repoFolder: string, dir: string, commits: readonly string[], timeoutMs: number): Promise<boolean> {
   for (const commit of commits) {
     const run = await runGit(repoFolder, [...GIT_READONLY_ARGS, "ls-tree", "-z", "--name-only", commit], timeoutMs, {
@@ -560,7 +473,6 @@ async function hasCheckoutRemnant(repoFolder: string, dir: string, commits: read
   return false;
 }
 
-/** 从 porcelain=v2 的普通变更行（`1 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <path>`）取出末尾路径。 */
 function parsePorcelainV2OrdinaryPath(record: string): string | null {
   let pos = 0;
   for (let i = 0; i < 8; i++) {
@@ -571,15 +483,6 @@ function parsePorcelainV2OrdinaryPath(record: string): string | null {
   return pos < record.length ? record.slice(pos) : null;
 }
 
-/**
- * 孤儿目录（已经不是有效 worktree、没有 .git 可用）里有没有“值得留”的东西：
- * - 用主仓对象库与临时索引跑 `git status --porcelain=v2 -z --no-renames --untracked-files=normal`（命中忽略目录时在目录层级直接跳过，不遍历 node_modules 里的上万文件）；
- * - 若磁盘上的 `.gitignore`（含子目录）已被中断的 `git worktree remove` 删掉，把缺失项标为 `--skip-worktree` 让 git 原生从临时索引按各自子目录作用域读取，同时保留主仓 `info/exclude` 与用户全局 `core.excludesFile`；
- * - 依次用 `ref`（分支）、主分支（`origin/main` / `main` / `HEAD`，兜住 PR 已合并且分支被 `git branch -D` 删掉的场景）、`baseCommit`（及 `baseCommit..main` 中触碰过剩余路径的已合入提交）渐进消解已入库文件；
- * - 任何基准都解释不了的未忽略文件或被改写文件才算“有内容”（缺失的已跟踪文件 `.D` 不算）；
- * - 这些基准的顶层条目在目录里一个都不剩时，检出已经删光，剩下的是删完之后别的进程写回来的（比如 Vite 找不到 package.json 时
- *   把缓存写到根目录的 `.vite/`），不算内容。
- */
 export async function probeOrphanContent(
   repoFolder: string,
   orphanPath: string,
@@ -704,8 +607,7 @@ export async function probeOrphanContent(
             }
             continue;
           }
-          // 已跟踪文件只看“工作区 vs 索引”这一侧（XY 的第二个字符）：没变（.）、缺失（D，目录被清空过）都不是用户内容；
-          // 第一个字符是“索引 vs 主仓 HEAD”，主仓 HEAD 不是基准，不看。
+          // Tracked files only compare the work tree against the index (second XY character).
           if (record.startsWith("1 ")) {
             if (record[3] === "." || record[3] === "D") continue;
             const p = parsePorcelainV2OrdinaryPath(record);
@@ -778,16 +680,11 @@ export async function probeOrphanContent(
   }
 }
 
-/**
- * 把 worktree 挪进已存在的目录 intoDir，挪完在 `<intoDir>/<原目录名>`（`git worktree move`，一次 rename，不跨卷）。
- * 锁着（`git worktree lock`）或带子模块的 git 会拒绝报错，什么都不动。
- */
 export async function moveWorktree(repoFolder: string, worktreePath: string, intoDir: string, options: GitOptions = {}): Promise<void> {
   const run = await runGit(repoFolder, ["worktree", "move", worktreePath, intoDir], options.timeoutMs ?? GIT_TIMEOUT_MS, { LC_ALL: "C" });
   if (run.code !== 0) throw failed("git worktree move", run);
 }
 
-/** 清理仓库里已经不存在的 worktree 登记（`git worktree prune`）。 */
 export async function pruneWorktrees(repoFolder: string, options: GitOptions = {}): Promise<void> {
   const run = await runGit(repoFolder, ["worktree", "prune"], options.timeoutMs ?? GIT_TIMEOUT_MS, { LC_ALL: "C" });
   if (run.code !== 0) throw failed("git worktree prune", run);
@@ -795,12 +692,11 @@ export async function pruneWorktrees(repoFolder: string, options: GitOptions = {
 
 export interface DiffFileStat {
   file: string;
-  /** 二进制文件 git 输出 "-"，记为 null。 */
+  /** git prints "-" for binary files. */
   added: number | null;
   deleted: number | null;
 }
 
-/** 解析 `git diff --numstat --no-renames -z` 的输出。 */
 export function parseDiffNumstatZ(stdout: string): DiffFileStat[] {
   const out: DiffFileStat[] = [];
   for (const record of stdout.split("\0")) {
@@ -824,10 +720,6 @@ export function parseDiffNumstatZ(stdout: string): DiffFileStat[] {
   return out;
 }
 
-/**
- * 探测分支相对主干（`HEAD...<branch>`，若失败且有 baseCommit 则退回 `<baseCommit>...<branch>`）的改动文件与增删行数。
- * 只读运行、带超时；失败、非仓库或找不到分支时返回 null（交付单降级省略改动文件块，不抛错阻塞消息投递）。
- */
 export async function probeDiffNumstat(
   repoFolder: string,
   branch: string,

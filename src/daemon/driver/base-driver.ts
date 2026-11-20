@@ -1,10 +1,4 @@
-// 多厂商会话驱动公共底座：抽取各家驱动（src/vendors/<厂商>/driver.ts）共用的会话状态机与辅助机制：
-// - 待发消息队列项（PendingEntry）与排队用户消息合并、命令拆分、停止时取消/收回结算；
-// - 实时 token 用量节流上报器（USAGE_THROTTLE_MS 节流定时器、挂起刷新与取消）；
-// - 启动超时（startTimer）、空闲关闭（idleTimer，支持后台任务兜底延长）、打断超时（interruptTimer）、强杀升级（killTimer）统一生命周期管理；
-// - 会话首次轮次前缀组装与回退状态（personaSeen、preambleTaken、recoveryNote、crashNote、relaunchNote、killedNote）；
-// - 后台任务状态跟踪与 background.changed 事件发射；
-// - 驱动级健康状态报错（reportError / markHealthy）与通用日志包装、进程组收尾与残留清理。
+// Shared session state machine for vendor drivers in src/vendors/<vendor>/driver.ts.
 import { type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import {
@@ -66,20 +60,16 @@ import { takeSessionPreamble, type PreambleTaken } from "./session-preamble.ts";
 import { dropUserEntries, untakenOnStopEvents } from "./stop-untaken.ts";
 import { TurnUsage } from "./usage.ts";
 
-/** 实时 token 用量推送节流间隔（毫秒）。 */
 export const USAGE_THROTTLE_MS = USAGE_PUSH_MS;
 
 export interface PendingEntry {
   messageIds: MessageId[];
   source: MessageSource;
-  /** 用户原文（DriverSendInput.text）。 */
   text: string;
-  /** 调用方加的标签（DriverSendInput.prefixes）。 */
   prefixes: string[];
   resend: boolean;
 }
 
-/** 写进这一轮前附带的一次性系统说明，写失败或被停止未取走时按需回退。 */
 export interface BatchNotes {
   recovery: boolean;
   crash: boolean;
@@ -89,7 +79,6 @@ export interface BatchNotes {
   preamble: PreambleTaken | null;
 }
 
-/** 命令那一行不带恢复、崩溃、重启等说明（见 takePendingBatch）。 */
 export const NO_NOTES: BatchNotes = {
   recovery: false,
   crash: false,
@@ -103,7 +92,6 @@ export type ClosingReason = "idle" | "interrupt" | "shutdown";
 
 export type StartupOutcome<TConflict = string | null> =
   | { kind: "ok" }
-  /** 没等到 init/thread 就自己退出了（或启动超时被强制结束）。 */
   | {
       kind: "failed";
       exitCode: number | null;
@@ -113,17 +101,13 @@ export type StartupOutcome<TConflict = string | null> =
       timedOut: boolean;
       errorMessage?: string;
     }
-  /** 没等到 init/thread，是我们主动让它退的。 */
   | { kind: "closed"; reason: ClosingReason };
 
-/** 进程启动时的设置快照：两轮之间和当前会话行对比，变了就自动重启。 */
 export interface LaunchSnapshot {
   fingerprint: string;
   cwd: string;
   addDirs: string[];
-  /** 启动时会话那一行的 model（配置的模型，账本和界面写，驱动层只读）。 */
   model: string | null;
-  /** 同上，思考程度。 */
   effort: string | null;
 }
 
@@ -142,56 +126,41 @@ export interface BaseProc<TOutcome = StartupOutcome> {
   child: ChildProcessWithoutNullStreams;
   resume: boolean;
   launched: LaunchSnapshot;
-  /** 这次拼进提示词的性格设定是哪一版（LaunchFiles.personaRevision）：第一个 init 时定 agent 看到的版本。 */
   personaLaunched: number | null;
-  /** 有后台任务时最多不关多久：LaunchFiles.backgroundHoldMaxMs，没给用 DriverOptions.backgroundHoldMaxMs。 */
   backgroundHoldMaxMs: number;
   initSeen: boolean;
   stderr: string;
-  /** 我们自己让它退出的原因；null 表示没让它退。 */
   closing: ClosingReason | null;
   startTimedOut: boolean;
-  /** 空闲关闭或打断的升级定时器：关了标准输入还不退，先 SIGINT，再 SIGKILL。 */
+  /** Escalation when the CLI ignores a closed stdin: SIGINT first, then SIGKILL. */
   killTimer: NodeJS.Timeout | null;
-  /** 收到第一个 init/thread，或者没等到就退出了。 */
   ready: Promise<TOutcome>;
   resolveReady: (o: TOutcome) => void;
-  /** 进程退出、输出读完（或到点强制关掉）、收尾做完。一定会 resolve。 */
   exited: Promise<void>;
 }
 
 export interface BaseSessionState<TProc extends BaseProc<any>, TBatch extends BaseBatch> {
   id: SessionId;
   proc: TProc | null;
-  /** 已经写给子进程（或正要写）、还没收尾的批次，按写入先后排列。 */
   inFlight: TBatch[];
-  /** 子进程自己开的一轮在跑（后台任务完成等，没有我们写的消息）：和 inFlight 一样算忙。 */
   selfTurn: boolean;
-  /** 会话里还在跑的后台任务：有就不算闲着，进程启动或退出时清空。 */
   background: BackgroundTasks;
   turnInterrupted: boolean;
-  /** 这一轮用户点过停止（interrupt 调过、这一轮还没收尾）：关机碰上它，仍按停止收尾。 */
+  /** A user stop in progress still finishes as a stop even if shutdown arrives. */
   stopRequested: boolean;
   pending: PendingEntry[];
-  /** 已经写进去（已送达）、还没失败的消息；这一轮出错或进程崩溃时删掉，好让重发真的再写一次。 */
+  /** Removed when a turn errors or the process crashes so the message can be resent. */
   written: Set<MessageId>;
-  /** agent 已经看到的性格设定、模式是哪一版（写进会话那一行的 personaRevision）；null 不比。 */
   personaSeen: number | null;
-  /** 换代后的开场说明这个进程里带过了（还没等到账本记读到）。 */
   preambleTaken: boolean;
   recoveryNote: boolean;
   crashNote: boolean;
-  /** 两轮之间因为设置变了重启过：下一条写进去的前面加 RELAUNCH_NOTE。 */
   relaunchNote: boolean;
-  /** 关进程时还有后台任务跟着被结束：存给 agent 的说明（backgroundTasksKilledNote），下一条写进去前加一次。 */
   killedNote: string | null;
-  /** end 调过了（同步标上）：之后的 start、send 抛 session_ended。 */
   ended: boolean;
-  /** end 的那个 promise，再调 end 返回同一个。 */
   ending: Promise<void> | null;
-  /** 等“这一轮结束或进程退出”的回调队列（end 用）。 */
   settleWaiters: Array<() => void>;
-  /** 起进程参数选错后，下次该用恢复（true）还是新建（false）；启动成功后才写库。 */
+  /** Persist resume versus fresh only after a successful start, in case the chosen launch args were wrong. */
   resumeHint: boolean | null;
   starting: Promise<void> | null;
   startTimer: NodeJS.Timeout | null;
@@ -199,7 +168,6 @@ export interface BaseSessionState<TProc extends BaseProc<any>, TBatch extends Ba
   interruptTimer: NodeJS.Timeout | null;
   interruptWaiters: Array<() => void>;
   lastEventWrite: number;
-  /** 这一轮的实时 token 累计；推给库和网页的节流（最多每 USAGE_THROTTLE_MS 一次）。 */
   turnUsage: TurnUsage;
   usageLatest: TokenUsage | null;
   usagePushedAt: number;
@@ -207,7 +175,6 @@ export interface BaseSessionState<TProc extends BaseProc<any>, TBatch extends Ba
 }
 
 export type BaseDriverOptions = Omit<DriverOptions, "executablePath"> & {
-  /** 这家的输入框实现（命令的认法、写给 agent 的 content 怎么拼）：各家驱动传自己的，基类不认识任何一家（docs/vendor-plugin-design.md 的 A11）。 */
   composer: VendorComposerBase;
 };
 
@@ -237,7 +204,6 @@ export interface DriverHealthSnapshot {
   lastError: Extract<DriverEvent, { type: "driver.error" }> | null;
 }
 
-/** 创建公共会话状态初值，供各厂商驱动在 createSessionState 中展开补充厂商私有字段。 */
 export function createBaseSessionState<TProc extends BaseProc<any>, TBatch extends BaseBatch>(
   id: SessionId,
 ): BaseSessionState<TProc, TBatch> {
@@ -274,22 +240,16 @@ export function createBaseSessionState<TProc extends BaseProc<any>, TBatch exten
   };
 }
 
-/** 单独写一行时：重发说明、调用方的标签各占一块，原文放最后。 */
 export function entryParts(entry: PendingEntry): { prefixes: string[]; text: string } {
   return { prefixes: entry.resend ? [RESEND_NOTE, ...entry.prefixes] : entry.prefixes, text: entry.text };
 }
 
-/** 和别的用户消息拼成一条时的那一条（拼进“【用户连发了 N 条】”的一项）：标签和原文换行连着，重发说明空一行。 */
 export function flatEntryText(entry: PendingEntry): string {
   const text = [...entry.prefixes, entry.text].join("\n");
   return entry.resend ? `${RESEND_NOTE}\n\n${text}` : text;
 }
 
-/**
- * 从待发队列取出下一批：
- * - 队列里有用户消息就拼成一条（以命令开头的不拼：排在最前面的是命令就只写它，否则拼到下一条命令之前，顺序不乱）；
- * - 否则取最早的一条系统消息。
- */
+/** Queued user messages merge into one batch, but never across a command so ordering is preserved. */
 export function takePendingBatch(
   pending: PendingEntry[],
   isCommand: (text: string) => boolean,
@@ -333,7 +293,6 @@ export function clearKillTimer(proc: { killTimer: NodeJS.Timeout | null }): void
   proc.killTimer = null;
 }
 
-/** 等 promise，最多 ms 毫秒。 */
 export async function within(promise: Promise<unknown>, ms: number): Promise<"done" | "timeout"> {
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<"timeout">((resolve) => {
@@ -346,7 +305,6 @@ export async function within(promise: Promise<unknown>, ms: number): Promise<"do
   }
 }
 
-/** 会话那一行（cwd、addDirs、model、effort）或 fingerprint 和进程启动时不一样。env 不算。 */
 export function launchChanged(launched: LaunchSnapshot, row: AgentSessionRow, fingerprint: string): boolean {
   return (
     launched.fingerprint !== fingerprint ||
@@ -358,9 +316,6 @@ export function launchChanged(launched: LaunchSnapshot, row: AgentSessionRow, fi
   );
 }
 
-/**
- * 多厂商公共会话驱动底座：管理会话状态表、待发队列、生命周期定时器、用量节流上报、健康状态报错与子进程收尾。
- */
 export abstract class BaseSessionDriver<
   TProc extends BaseProc<any>,
   TBatch extends BaseBatch,
@@ -375,7 +330,7 @@ export abstract class BaseSessionDriver<
   readonly #health = new Map<SessionId, DriverHealthSnapshot>();
   protected shuttingDown = false;
   protected requestSeq = 0;
-  /** 正在报监听者的错：这时监听者再抛错只打到标准错误，免得递归死循环。 */
+  /** Listener errors raised while reporting a listener error go to stderr only, to avoid infinite recursion. */
   #reportingListenerError = false;
 
   protected constructor(vendor: AgentVendor, { composer, ...options }: BaseDriverOptions) {
@@ -393,28 +348,19 @@ export abstract class BaseSessionDriver<
     };
   }
 
-  /** 子类实现：创建指定会话的初始状态。 */
   protected abstract createSessionState(id: SessionId): TState;
-  /** 子类实现：从待发队列取下一批并构造厂商批次。 */
   protected abstract takeBatch(st: TState): TBatch | null;
-  /** 子类实现：启动子进程（或使用已起进程）并写入首个批次。 */
   protected abstract startup(
     st: TState,
     batch: TBatch,
     existing: TProc | null,
     files: LaunchFiles | null,
   ): Promise<void>;
-  /** 子类实现：向已就绪进程写入一个批次。 */
   protected abstract writeBatch(st: TState, proc: TProc, batch: TBatch): Promise<void>;
-  /** 子类实现：start() 在队列为空时仅拉起空闲进程。 */
   protected abstract spawnIdleProcess(st: TState, resume: boolean): Promise<TProc>;
-  /** 子类实现：判断下次起进程是否用恢复模式。 */
   protected abstract resumeFor(st: TState): boolean;
-  /** 子类实现：识别指定 PID 是否为本驱动对应会话的残留进程，返回其进程组号 pgid 或 null。 */
   protected abstract identifyStaleProcess(pid: number, row: AgentSessionRow): Promise<number | null>;
-  /** 子类可选覆写：cleanupStale 时只筛本厂商的会话行。 */
   protected filterStaleRow?(row: AgentSessionRow): boolean;
-  /** 子类实现：处理子进程标准输出的一行 JSON 对象。 */
   protected abstract onParsedLine(
     st: TState,
     proc: TProc,
@@ -422,7 +368,6 @@ export abstract class BaseSessionDriver<
     rawLine: string,
     at: number,
   ): void;
-  /** 子类实现：处理子进程退出与流排空后的收尾。 */
   protected abstract onProcessClose(
     st: TState,
     proc: TProc,
@@ -480,7 +425,6 @@ export abstract class BaseSessionDriver<
   end(sessionId: SessionId): Promise<void> {
     const st = this.state(sessionId);
     if (st.ending) return st.ending;
-    // 同步标上：从这一刻起 start、send 抛 session_ended；待发队列里没写的丢掉
     st.ended = true;
     st.pending = [];
     st.recoveryNote = false;
@@ -492,7 +436,6 @@ export abstract class BaseSessionDriver<
     return st.ending;
   }
 
-  /** 正在跑一轮就等它回完（不打断），然后关标准输入、等进程退出，最后写 ended。 */
   async #finishEnd(st: TState): Promise<void> {
     for (;;) {
       if (st.starting) {
@@ -530,7 +473,7 @@ export abstract class BaseSessionDriver<
       procs.push(proc);
       clearKillTimer(proc);
       if (proc.closing === "shutdown" || proc.closing === "interrupt") continue;
-      // 用户的停止还没收尾：照停止处理，消息标已停止，不当关机打断留着重发
+      // A pending user stop wins over shutdown, so the message is marked stopped instead of kept for replay.
       if (st.stopRequested && this.busy(st)) {
         proc.closing = "interrupt";
         signalChild(proc.child, "SIGINT");
@@ -564,7 +507,6 @@ export abstract class BaseSessionDriver<
   async #cleanupStaleRow(row: AgentSessionRow): Promise<void> {
     const pid = row.pid;
     if (pid === null) return;
-    // 这一次自己起的进程不算残留
     if (this.sessions.get(row.id)?.proc?.child.pid === pid) return;
     const pgid = await this.identifyStaleProcess(pid, row);
     if (pgid !== null) {
@@ -573,15 +515,13 @@ export abstract class BaseSessionDriver<
       if (await waitForExit(pid, this.opts.interruptGraceMs)) {
         if (pgid === pid) termGroupAfterExit({ pid });
       } else {
-        // 只有它自己是进程组长（我们 detached 起的）才按组杀；不是的话按组杀会连累同组的别的进程
+        // Kill by group only when the child leads its own group (we spawned it detached); otherwise unrelated group members would die.
         await forceKillTree(pid, pgid === pid);
         await waitForExit(pid, KILL_WAIT_MS);
       }
     }
     this.update(this.state(row.id), { pid: null, status: row.status === "ended" ? "ended" : "idle" });
   }
-
-  // --- 会话状态与队列调度 ---
 
   protected state(id: SessionId): TState {
     let st = this.sessions.get(id);
@@ -592,14 +532,12 @@ export abstract class BaseSessionDriver<
     return st;
   }
 
-  /** 已经在待发队列里，或者就是正在途中的那一批。 */
   protected isPending(st: TState, ids: MessageId[]): boolean {
     const covers = (batchIds: MessageId[]) => ids.every((id) => batchIds.includes(id));
     if (st.inFlight.some((b) => covers(b.messageIds))) return true;
     return st.pending.some((e) => covers(e.messageIds));
   }
 
-  /** 从 st.pending 取出下一批用户或系统消息并更新 st.pending。 */
   protected takePendingEntryBatch(st: TState): PendingBatchParts | null {
     const res = takePendingBatch(st.pending, (text) => this.composer.isCommand(text));
     if (!res) return null;
@@ -607,10 +545,6 @@ export abstract class BaseSessionDriver<
     return res.taken;
   }
 
-  /**
-   * 组装非命令行的系统说明前缀（换代开场说明、重启恢复、崩溃恢复、设置变更重启、后台任务被结束、性格设定修改），
-   * 并清空一次性状态标记。
-   */
   protected takeNotesPrefixes(
     st: TState,
     options?: { takePersona?: boolean; fromRowOnFirstPersonaCheck?: boolean },
@@ -643,7 +577,7 @@ export abstract class BaseSessionDriver<
     return { notes, prefixes };
   }
 
-  /** 停止时：待发队列里用户的那几条丢掉、标已取消（系统消息留着，停止后照常发）。 */
+  /** On stop, queued user messages are cancelled but system messages stay queued. */
   protected dropPendingUsers(st: TState): void {
     const { kept, dropped } = dropUserEntries(st.pending);
     st.pending = kept;
@@ -652,7 +586,6 @@ export abstract class BaseSessionDriver<
     }
   }
 
-  /** 没写成的一批：恢复说明留给下一批；消息本身不放回队列，由调用方重试 send 时再排。 */
   protected dropBatch(st: TState, batch: TBatch): void {
     st.inFlight = st.inFlight.filter((b) => b !== batch);
     if (batch.notes.recovery) st.recoveryNote = true;
@@ -710,10 +643,6 @@ export abstract class BaseSessionDriver<
     }
   }
 
-  /**
-   * 往一个已经在跑、空闲的进程写下一批（“两轮之间自动重启”）：先调一次 prepareLaunch，设置和这个进程启动时一样就直接写；
-   * 不一样就关标准输入、等它退出，用这次的结果恢复起一个新的，前面加 RELAUNCH_NOTE 再写。
-   */
   protected deliverNext(st: TState, proc: TProc): Promise<void> {
     const run = async () => {
       this.clearTimer(st, "idleTimer");
@@ -787,7 +716,6 @@ export abstract class BaseSessionDriver<
     });
   }
 
-  /** 这几批要重写（出错、崩溃、收回）：不再算写过；带着的性格设定和换代说明也退回去。 */
   protected forgetWritten(st: TState, batches: Iterable<TBatch | null | undefined>): void {
     for (const batch of batches) {
       if (!batch) continue;
@@ -797,7 +725,6 @@ export abstract class BaseSessionDriver<
     }
   }
 
-  /** 停止时 agent 还没取走的批次：用户的标已取消，不重发；系统的收回重发（stop-untaken.ts）。 */
   protected releaseOnStop(st: TState, batches: TBatch[], at: number): void {
     if (batches.length === 0) return;
     for (const b of batches) {
@@ -812,11 +739,7 @@ export abstract class BaseSessionDriver<
     for (const event of untakenOnStopEvents(batches, at)) this.emit(st.id, event);
   }
 
-  /**
-   * 已写入但本轮未取走（或进程退出未处理）的批次：
-   * - 若因用户停止（stopped === true）：用户的标已取消、系统的收回；
-   * - 否则（崩溃、关机、正常轮结束漏读）：全部收回让账本重新登记发送。
-   */
+  /** Untaken batches after a user stop are cancelled; otherwise (crash, shutdown, normal end) user messages are re-queued. */
   protected releaseUntaken(st: TState, batches: TBatch[], stopped: boolean, at: number): void {
     const messageIds = batches.flatMap((b) => b.messageIds);
     if (messageIds.length === 0) return;
@@ -843,10 +766,6 @@ export abstract class BaseSessionDriver<
     for (const w of st.settleWaiters.splice(0)) w();
   }
 
-  /**
-   * 后台任务名单更新：记录最新名单，若有变化则发射 background.changed；
-   * 若“是否有任务”发生变化且当前正在空闲倒计时，则按新状态重新计时。
-   */
   protected onBackgroundTasksChanged(st: TState, proc: TProc, rawTasks: unknown): void {
     if (st.proc !== proc) return;
     const wasActive = st.background.active;
@@ -856,10 +775,7 @@ export abstract class BaseSessionDriver<
     if (!proc.closing && !this.busy(st) && !st.ended) this.armIdle(st, proc);
   }
 
-  /**
-   * 空闲但只剩后台任务时调 interrupt()：直接关闭进程把后台任务一并停掉，并在下一条消息前附上说明。
-   * 返回进程退出 Promise；若当前不适用则返回 null。
-   */
+  /** Interrupting while only background tasks remain closes the process and stops them too. */
   protected stopIdleBackgroundTasks(st: TState, proc: TProc): Promise<void> | null {
     if (this.busy(st) || !st.background.active) return null;
     this.logSession(st.id, `停止时只剩 ${st.background.count} 个后台任务，关掉进程把它们一起停掉`);
@@ -869,10 +785,6 @@ export abstract class BaseSessionDriver<
     return proc.exited;
   }
 
-  /**
-   * 开始算空闲。有后台任务时计时放宽到这个进程的 backgroundHoldMaxMs（兜底，到点照常关）；
-   * 任务清零时 onBackgroundTasksChanged 重新调这里，从头算 idleCloseMs。
-   */
   protected armIdle(st: TState, proc: TProc): void {
     this.clearTimer(st, "idleTimer");
     st.idleTimer = setTimeout(() => {
@@ -889,7 +801,6 @@ export abstract class BaseSessionDriver<
     }, idleDelayMs(st.background, this.opts.idleCloseMs, proc.backgroundHoldMaxMs));
   }
 
-  /** 关标准输入让它正常退出；还不退：先给子进程本身 SIGINT，再强制结束（连同所有后代的进程组）。 */
   protected closeStdin(st: TState, proc: TProc, reason: ClosingReason): void {
     proc.closing = reason;
     proc.child.stdin.end();
@@ -904,9 +815,6 @@ export abstract class BaseSessionDriver<
     }, grace);
   }
 
-  /**
-   * 打断升级为向子进程发 SIGINT，并可按需设置超时强杀定时器。
-   */
   protected sigintForInterrupt(
     st: TState,
     proc: TProc,
@@ -946,8 +854,6 @@ export abstract class BaseSessionDriver<
       this.forceKillProc(st, proc);
     }, this.opts.startTimeoutMs);
   }
-
-  // --- 子进程启动与输出绑定辅助 ---
 
   protected async resolveLaunchFiles(
     st: TState,
@@ -1063,7 +969,7 @@ export abstract class BaseSessionDriver<
     child.stderr.on("data", (chunk: string) => {
       proc.stderr = (proc.stderr + chunk).slice(-STDERR_TAIL_CHARS);
     });
-    // 自己按 \n 切行：node:readline 还会在 U+2028 / U+2029 处断开，而 JSON 字符串里可以有这两个字符
+    // Split on \n manually because node:readline also breaks on U+2028 and U+2029, which may appear inside JSON strings.
     let buffered = "";
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
@@ -1074,13 +980,11 @@ export abstract class BaseSessionDriver<
         this.handleOutputLine(st, proc, line);
       }
     });
-    // 用 exit 不用 close：agent 起的孙进程可能还占着标准输出，close 会一直等它
+    // Use exit, not close; grandchildren may hold stdout open and close would wait forever.
     const drained = Promise.all([streamClosed(child.stdout), streamClosed(child.stderr)]);
     child.once("exit", (code, signal) => {
       onExitCleanup?.();
-      // 不管怎么退的（空闲关闭、end、重启、关机、停止，包括一轮中途被停止、自己崩溃）：确认退出这一刻给原来的进程组补信号，清掉它留下的子进程。
-      // 进程组是 detached 起它时新开的，只有它和它的后代；下一个进程 --resume 也接管不了旧进程的子进程，留着只会接着改文件。
-      // Linux bwrap 下外层先退，namespace 的 PID 1 会被后台子进程拖住，不补就一直留着，下次启动 cleanupStale 也认不出来
+      // Whatever the exit reason, signal the original process group once more to reap orphaned children.
       termGroupAfterExit(child);
       const timer = setTimeout(() => {
         child.stdout.destroy();
@@ -1118,7 +1022,6 @@ export abstract class BaseSessionDriver<
     }
   }
 
-  /** 子进程退出时的公共前置清理：清理当前 proc、后台任务、定时器、冲刷用量并更新会话行状态为 idle。 */
   protected beginProcessClose(st: TState, proc: TProc): number {
     if (st.proc === proc) {
       st.proc = null;
@@ -1135,9 +1038,6 @@ export abstract class BaseSessionDriver<
     return at;
   }
 
-  // --- 健康状态、报错、日志与用量节流 ---
-
-  /** 记录并上报驱动错误事件（driver.error），同时将该会话健康状态标为异常。 */
   protected reportError(
     sessionId: SessionId,
     code: DriverErrorCode,
@@ -1155,23 +1055,19 @@ export abstract class BaseSessionDriver<
     this.emit(sessionId, event);
   }
 
-  /** 标记该会话驱动状态健康（如收到 init 或成功完成一轮）。 */
   protected markHealthy(sessionId: SessionId): void {
     const prev = this.#health.get(sessionId);
     this.#health.set(sessionId, { healthy: true, lastError: prev?.lastError ?? null });
   }
 
-  /** 查询会话当前的健康状态快照。 */
   getHealth(sessionId: SessionId): DriverHealthSnapshot {
     return this.#health.get(sessionId) ?? { healthy: true, lastError: null };
   }
 
-  /** 通用日志输出。 */
   protected log(line: string): void {
     this.opts.log(line);
   }
 
-  /** 带会话前缀的通用日志包装。 */
   protected logSession(sessionId: SessionId, detail: string): void {
     this.opts.log(`[driver] session ${sessionId}: ${detail}`);
   }
@@ -1184,7 +1080,6 @@ export abstract class BaseSessionDriver<
     this.reportError(st.id, "invalid_input", `invalid_input: ${problem}`, messageIds);
   }
 
-  /** 不等结果的强制结束：出错不往上冒，记一条 internal_error。 */
   protected forceKillProc(st: TState, proc: TProc): void {
     forceKill(proc.child).catch((error: unknown) =>
       this.internalError(st.id, `force kill failed: ${errorMessage(error)}`),
@@ -1195,7 +1090,6 @@ export abstract class BaseSessionDriver<
     this.reportError(sessionId, "internal_error", `internal_error: ${detail}`);
   }
 
-  /** start、send、起进程时用：找不到那一行抛不可重试的错。 */
   protected store(st: TState): AgentSessionRow {
     let row: AgentSessionRow | null;
     try {
@@ -1207,7 +1101,6 @@ export abstract class BaseSessionDriver<
     return withPmMemoryAddDir(row, this.opts.pmMemoryDir);
   }
 
-  /** 处理输出时用：出错不往上冒，记一条 internal_error，返回 null。 */
   protected row(st: TState): AgentSessionRow | null {
     try {
       return this.store(st);
@@ -1226,7 +1119,7 @@ export abstract class BaseSessionDriver<
     }
   }
 
-  /** 实时的 token 累计：距上次推送够 USAGE_THROTTLE_MS 就马上推，不够就等到点推最新的。 */
+  /** Throttle live usage pushes to USAGE_THROTTLE_MS but always deliver the latest value. */
   protected pushUsage(st: TState, usage: TokenUsage): void {
     st.usageLatest = usage;
     const wait = USAGE_THROTTLE_MS - (Date.now() - st.usagePushedAt);
@@ -1271,7 +1164,7 @@ export abstract class BaseSessionDriver<
     }
   }
 
-  /** 监听者出错不影响驱动层，但要留下记录：发一条 internal_error；报这条时再出错就只打到标准错误。 */
+  /** Listener errors must not break the driver, but they are logged as internal_error. */
   #listenerFailed(sessionId: SessionId, event: DriverEvent, error: unknown): void {
     const detail = `listener threw on ${event.type}: ${errorMessage(error)}`;
     if (this.#reportingListenerError) {
@@ -1290,7 +1183,6 @@ export abstract class BaseSessionDriver<
     if (this.shuttingDown) throw new DriverError("spawn_failed", "driver is shutting down");
   }
 
-  /** end 调过了，或者库里已经是 ended（上次守护进程结束的）：抛 session_ended，不起进程、不调 prepareLaunch。 */
   protected assertNotEnded(st: TState): void {
     if (st.ended || this.store(st).status === "ended") {
       throw new DriverError("session_ended", `session ${st.id} has been ended`);

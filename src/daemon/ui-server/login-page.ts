@@ -1,8 +1,5 @@
-// 二维码登录链接的落地页（联机 P6）：链接是 `/auth#link=<码>`。码放在 # 片段里，浏览器不会把它发给服务器，
-// 所以代理、访问日志、Referer 都看不到；这个页面自己读出片段，先把地址栏清掉，再 POST /auth 兑换，成功就回首页。
 import { PRODUCT_NAME } from "../../shared/names.ts";
 
-/** 登录链接里 # 片段的键：`#link=<码>`。 */
 export const LOGIN_LINK_FRAGMENT_KEY = "link";
 
 export const LOGIN_LINK_PAGE = `<!doctype html>

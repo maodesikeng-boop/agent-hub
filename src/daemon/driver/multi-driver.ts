@@ -1,4 +1,3 @@
-// 多厂商驱动分发器：按会话行（store.get(sessionId)?.vendor）将调用转发给对应厂商的 Driver。
 import {
   DriverError,
   DriverSessionError,

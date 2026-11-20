@@ -6,7 +6,6 @@
 
 import { win32 } from "node:path";
 
-/** Strips `\\?\` or `\\?\UNC\` extended-length prefixes while preserving drive or UNC semantics. */
 export function stripExtendedLengthPrefix(rawValue: string): string {
   if (/^\\\\\?\\UNC\\/i.test(rawValue)) {
     return `\\\\${rawValue.slice(8)}`;
@@ -26,7 +25,6 @@ export function isCrossPlatformAbsolutePath(value: string): boolean {
   return value.startsWith("/") || isWindowsAbsolutePathLike(value);
 }
 
-/** True when path points to a UNC share (`\\server\share` or `//server/share` or `\\?\UNC\...`), excluding `\\.\pipe\...` and `\\?\C:\...`. */
 export function isUncNetworkPath(value: string): boolean {
   if (/^\\\\\.\\/.test(value) || /^\/\/\.\//.test(value)) return false;
   if (/^\\\\\?\\UNC\\/i.test(value)) return true;
@@ -52,13 +50,7 @@ function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
 }
 
-/**
- * Comparison keys ONLY — never pass the returned string to filesystem APIs.
- * - Normalizes Unicode to NFC;
- * - Strips `\\?\` / `\\?\UNC\` extended prefixes;
- * - Folds separators and lowercases ONLY Windows drive/UNC paths;
- * - Preserves case and backslashes on POSIX paths.
- */
+/** Comparison keys only; never pass the result to filesystem APIs. */
 export function normalizePathForComparison(rawValue: string): string {
   const stripped = stripExtendedLengthPrefix(rawValue.normalize("NFC"));
   const isWin = isWindowsAbsolutePathLike(stripped);
@@ -88,7 +80,6 @@ export function isPathStrictlyInside(rootPath: string, candidatePath: string): b
   return candidate.startsWith(boundary);
 }
 
-/** Converts a Windows path to `\\?\` extended-length form for deep-tree removal (`rm`). */
 export function toWin32NamespacedPath(targetPath: string, platform: NodeJS.Platform = process.platform): string {
   return platform === "win32" ? win32.toNamespacedPath(targetPath) : targetPath;
 }

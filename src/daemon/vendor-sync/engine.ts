@@ -1,5 +1,3 @@
-// 全厂商连接器 / MCP / Skill 并集同步核心引擎：
-// 纯插件化调度（遍历 `AGENT_VENDORS` 与 `DAEMON_VENDORS[vendor].sync`），零硬编码单家厂商判断。
 import { basename, dirname, join, relative } from "node:path";
 import {
   AGENT_VENDORS,
@@ -49,7 +47,6 @@ export interface VendorSyncServiceOptions {
   backupsDir: string;
   listProjectFolders?: () => readonly SyncProjectFolderRef[];
   now?: () => number;
-  /** 仅供异常回滚单元测试注入的原子写钩子。 */
   writeFileAtomicHook?: WriteFileAtomicFn;
 }
 
@@ -88,11 +85,6 @@ function getActiveSyncVendors(): ActiveVendorEntry[] {
   return out;
 }
 
-/**
- * 合并各家同名 MCP 的可移植规格：
- * 若某家持有原生 `sse` URL，而另一家持有同一 URL 的 `npx -y mcp-remote <url>` 桥接，优先采用原生 `sse` 作为基准规格，
- * 使支持原生 SSE 的厂商保持原生配置，不支持的厂商自动走 `mcp-remote`。
- */
 function pickCanonicalUnionMcp(candidates: readonly CanonicalMcpServer[]): CanonicalMcpServer {
   const nativeSse = candidates.find((c): c is Extract<CanonicalMcpServer, { transport: "sse" }> => c.transport === "sse");
   if (nativeSse) {
@@ -202,7 +194,6 @@ export function createVendorSyncService(options: VendorSyncServiceOptions): Vend
       }
     }
 
-    // 别家应用自带的 MCP：每家扫描结果用同一条规则判断；任何一家持有的那份命中就算（来源 = 命中的那几家）
     const hostBound = new Map<string, { detection: HostBoundDetection; sources: VendorSyncHostBound["sources"] }>();
     for (const { vendor, label } of vendors) {
       for (const [name, server] of Object.entries(scans.get(vendor)?.servers ?? {})) {
@@ -265,7 +256,6 @@ export function createVendorSyncService(options: VendorSyncServiceOptions): Vend
           const needsBridge = canonical.transport === "sse" && !adapter.supportsSseMcp;
           if (needsBridge) usesMcpRemoteBridge = true;
 
-          // 并集只增补：这家已有同名配置（内容不同、或是本家私有 OAuth 项）一律保留原样，不覆盖
           let status: VendorSyncItemVendorStatus;
           if (existing) {
             status = isVendorMcpUpToDate(existing, canonical, adapter.supportsSseMcp)
@@ -348,15 +338,12 @@ export function createVendorSyncService(options: VendorSyncServiceOptions): Vend
       const selectedMcpSet = new Set(request.selectedMcpKeys);
       const confirmedHostBoundSet =
         request.confirmedHostBoundMcpKeys !== undefined ? new Set(request.confirmedHostBoundMcpKeys) : null;
-      // 只认这次扫描里真有的键：请求里伪造的名字不能借“移除”删掉各家别的配置；
-      // 别家应用自带的 MCP 不勾选只表示“不往别家补”，同步永远不从源头删它
       const removeMcpSet = new Set(
         request.removeMcpKeys.filter((k) => !selectedMcpSet.has(k) && unionMcpMap.has(k) && !hostBound.has(k)),
       );
 
       const upsertMcp: Record<string, CanonicalMcpServer> = {};
       for (const key of selectedMcpSet) {
-        // 预览时还是普通项、apply 重扫时已变成 hostBound 的条目，未在 confirmedHostBoundMcpKeys 确认则跳过不补
         if (confirmedHostBoundSet !== null && hostBound.has(key) && !confirmedHostBoundSet.has(key)) {
           continue;
         }
@@ -423,7 +410,6 @@ export function createVendorSyncService(options: VendorSyncServiceOptions): Vend
       }
 
       for (const key of removeSkillSet) {
-        // 只认这次扫描里真有的技能键：请求里伪造的 `project:<任意目录>:<名字>` 不能借“移除”去动别处的软链
         const loc = skillByKey.get(key);
         if (!loc) continue;
         for (const { adapter } of vendors) {

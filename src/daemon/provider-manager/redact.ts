@@ -1,6 +1,3 @@
-// 安装/更新任务输出脱敏与有界环形日志缓冲（docs/providers-install-login-design.md 第 8.1.2、8.2、8.3 节）：
-// - 擦除 sk-* / key_* / AIza* / Bearer Token / OAuth code / access_token / state 等一切凭据痕迹；
-// - 处理 `\r` 进度条原地覆盖，严格限制内存缓冲不超过 16 KiB / 80 行 / 单行未换行 4096 字符。
 import {
   PROVIDER_JOB_LOG_MAX_BYTES,
   PROVIDER_JOB_LOG_MAX_LINES,
@@ -12,20 +9,16 @@ const ANSI_ESCAPE_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07\x1B]*(?:\x
 
 export function redactProviderLog(raw: string): string {
   let text = raw.replace(ANSI_ESCAPE_RE, "");
-  // Bearer / Basic Authorization 头
   text = text.replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{6,}/giu, "$1 [REDACTED]");
-  // URL 查询参数中的敏感字段（code / token / state / key / secret）
   text = text.replace(
     /([?&](?:code|token|access_token|refresh_token|id_token|client_secret|api_key|apikey|key|state)=)[^&\s#"']+/giu,
     "$1[REDACTED]",
   );
-  // 常见厂商密钥前缀（sk-..., key_..., AIza..., ghp_..., gho_..., github_pat_...）
   text = text.replace(/\bsk-[A-Za-z0-9_-]{8,}\b/gu, "sk-[REDACTED]");
   text = text.replace(/\bkey_[A-Za-z0-9_-]{8,}\b/gu, "key_[REDACTED]");
   text = text.replace(/\bAIza[A-Za-z0-9_-]{16,}\b/gu, "AIza[REDACTED]");
   text = text.replace(/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{16,}\b/gu, "[REDACTED]");
   text = text.replace(/\bgithub_pat_[A-Za-z0-9_]{16,}\b/gu, "[REDACTED]");
-  // 环境变量形式 KEY=xxx 或 KEY: xxx
   text = text.replace(
     /(\b[A-Z0-9_]*(?:API_KEY|AUTH_TOKEN|ACCESS_TOKEN|OAUTH_TOKEN|REFRESH_TOKEN|CLIENT_SECRET|SECRET_KEY)[A-Z0-9_]*\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gu,
     "$1[REDACTED]",
@@ -36,7 +29,6 @@ export function redactProviderLog(raw: string): string {
 function extractCleanProgressCandidate(redactedLine: string): string | null {
   const trimmed = redactedLine.trim();
   if (trimmed === "") return null;
-  // 跳过纯符号进度条或纯分隔线
   if (/^[#=\-*_.%0-9\s[\]()|/\\]+$/u.test(trimmed)) return null;
   const collapsed = trimmed.replace(/\s+/gu, " ");
   if (collapsed.length <= PROVIDER_PROGRESS_LINE_MAX_CHARS) {
@@ -80,7 +72,6 @@ export class BoundedJobLogBuffer {
           i += 1;
           this.#commitPartialLine();
         } else {
-          // 纯 `\r` 进度刷新：提取可读进度短语后重置当前行缓冲，不刷入多行日志
           const candidate = extractCleanProgressCandidate(redactProviderLog(this.#partial));
           if (candidate) this.#progressLine = candidate;
           this.#partial = "";

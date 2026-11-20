@@ -1,6 +1,3 @@
-// hub worker log --stats：不列每一步，把账本里留着的全部步骤汇成几行（步数花在哪）。
-// 纯函数：输入各会话（换代的每一代）的 StepRow，输出文字；动作类别按 shared/step-labels.ts 的 toolCategory，跟厂商无关，
-// 认不出的工具名按原名单独计数。读的文件、跑的命令取 steps.ts 的 toolLine 写进 summary 的那一段。
 import { formatCount } from "../../shared/count-format.ts";
 import { WORKER_STATS_TOP } from "../../shared/limits.ts";
 import { formatDuration, toolCategory } from "../../shared/step-labels.ts";
@@ -18,13 +15,10 @@ const CATEGORY_LABELS: Readonly<Record<ToolCategory, string>> = {
 
 const READ_PREFIX = "Reading ";
 const COMMAND_PREFIX = "Running command: ";
-/** 统计里写不出文件名时 toolLine 给的 “Reading file”。 */
 const NO_FILE_NAME = "file";
 
-/** “Reading a.ts”“Reading a.ts: /x/a.ts”（path 参数没算进标签的厂商）→ a.ts。 */
 const fileOf = (summary: string) => summary.slice(READ_PREFIX.length).split(": ")[0]!;
 
-/** 次数从多到少（一样多按先出现的），取前几个。 */
 function top(counts: Map<string, number>, minCount: number): string[] {
   return [...counts.entries()]
     .filter(([, n]) => n >= minCount)
@@ -34,7 +28,6 @@ function top(counts: Map<string, number>, minCount: number): string[] {
 }
 const bump = (counts: Map<string, number>, key: string) => counts.set(key, (counts.get(key) ?? 0) + 1);
 
-/** 汇总：sessions 是这个 Worker 每一代会话的步骤（各自从旧到新）。 */
 export function workerStatsLines(sessions: StepRow[][]): string[] {
   let steps = 0;
   const outcomes = { ok: 0, interrupted: 0, failed: 0 };
@@ -73,7 +66,6 @@ export function workerStatsLines(sessions: StepRow[][]): string[] {
           if (row.outcome !== null) outcomes[row.outcome]++;
           break;
         case "thinking": {
-          // 连着的几次思考算一次，到下一步出现为止（最后一次还没等到下一步的不算）
           let j = i;
           while (j + 1 < rows.length && rows[j + 1]!.kind === "thinking") j++;
           const next = rows[j + 1];

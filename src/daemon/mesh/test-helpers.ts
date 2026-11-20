@@ -1,4 +1,3 @@
-// 组网测试共用：临时目录里的设备身份。
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,7 +13,6 @@ export const DEVICE_D: DeviceId = "44444444-4444-4444-8444-444444444444";
 
 const dirs: string[] = [];
 
-/** 一个测试结束后自动删掉的临时目录。 */
 export function tempDir(prefix = "mesh-"): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   dirs.push(dir);
@@ -25,18 +23,13 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-/** 在临时目录里生成一台设备的身份。 */
 export function makeIdentity(deviceId: DeviceId): Promise<MeshIdentity> {
   return loadOrCreateMeshIdentity(join(tempDir(), "mesh"), deviceId);
 }
 
-// ---- 本机起一个真的自建中继（假 GitHub） ----
-
 export const FAKE_GITHUB = "http://github.test";
-/** 假 GitHub 认的 token → 用户。 */
 export const GITHUB_USERS: Record<string, { id: number; login: string }> = { tok_alice: { id: 1, login: "alice" }, tok_bob: { id: 2, login: "bob" } };
 
-/** 假 GitHub 的 GET /user；别的地址交给真 fetch（连本机中继）。 */
 export const fakeGithubFetch = (async (input: string | URL | Request, init?: RequestInit) => {
   const url = String(input instanceof Request ? input.url : input);
   if (!url.startsWith(FAKE_GITHUB)) return fetch(input, init);
@@ -48,7 +41,6 @@ export const fakeGithubFetch = (async (input: string | URL | Request, init?: Req
 export interface TestRelay {
   url: string;
   close(): Promise<void>;
-  /** 把一台设备登记进 token 对应的账号，回账号编号和状态。 */
   register(identity: MeshIdentity, token?: string): Promise<{ accountId: AccountId; state: string }>;
 }
 
@@ -83,7 +75,6 @@ export async function startTestRelay(options: { log?: (line: string) => void; no
   return relay;
 }
 
-/** 等条件成立（每 5 毫秒看一次），超时抛错。 */
 export async function waitFor<T>(check: () => T | null | undefined | false, timeoutMs = 5_000): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -94,9 +85,6 @@ export async function waitFor<T>(check: () => T | null | undefined | false, time
   }
 }
 
-// ---- 一台完整的组网设备（createMesh），带一个最小的组网入口 HTTP 服务 ----
-
-/** 假 GitHub 的设备码登录：立刻授权，token 由 tokenOf 给。 */
 export function fakeGithubDeviceFlow(token: string): typeof fetch {
   return (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
@@ -111,10 +99,8 @@ export function fakeGithubDeviceFlow(token: string): typeof fetch {
 export interface TestMeshNode {
   mesh: import("./index.ts").Mesh;
   id: DeviceId;
-  /** 组网入口后面的 HTTP 服务（测试可以挂 WebSocket 的 upgrade）。 */
   http: import("node:http").Server;
   dir: string;
-  /** 本机组网入口收到的请求路径（对方编号 + 路径）。 */
   requests: Array<{ from: DeviceId; path: string }>;
   close(): Promise<void>;
 }
@@ -203,7 +189,6 @@ export async function startTestMeshNode(
   return node;
 }
 
-/** 登录并等到 signed_in（账号第一台）或 awaiting_approval。 */
 export async function loginNode(node: Pick<TestMeshNode, "mesh">): Promise<void> {
   await node.mesh.startLogin();
   await waitFor(() => {
@@ -212,7 +197,6 @@ export async function loginNode(node: Pick<TestMeshNode, "mesh">): Promise<void>
   });
 }
 
-/** approver 批准 joiner：两边核对码一致、都点“一致”，等 joiner 变成 signed_in 且两边信任表都有对方。 */
 export async function approveNode(approver: Pick<TestMeshNode, "mesh">, joiner: Pick<TestMeshNode, "mesh">): Promise<string> {
   const joinerId = joiner.mesh.selfId;
   await waitFor(() => approver.mesh.status().state === "signed_in" && (approver.mesh.status() as { approvals: Array<{ requestId: string }> }).approvals.some((a) => a.requestId === joinerId));

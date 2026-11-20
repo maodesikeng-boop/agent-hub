@@ -1,5 +1,3 @@
-// 总助（Router）系统提示词与跨设备名片格式化模块（docs/router-design.md 第 5.2、5.3、7 节）：
-// 集中管理四条硬规矩的系统提示词与 24 KB 严格上限的跨设备 PM 名片序列化，零单家厂商硬编码。
 import {
   AGENT_VENDORS,
   ALL_EFFORTS,
@@ -23,12 +21,8 @@ import {
 } from "../../shared/index.ts";
 import { catalogAgeText, type ProjectCatalogCard } from "../../shared/project-catalog.ts";
 
-// 跨设备总名片 24 KB、单张名片 2 KB、名片里活跃 Piece 条数这几个上限在 src/shared/limits.ts，这里不另存一份。
-/** 注入上下文的最近指令回执条数上限。 */
 export const ROUTER_RECENT_RECEIPTS_CONTEXT = 5;
-/** 最近指令回执分节最大字节预算。 */
 export const ROUTER_RECEIPTS_SECTION_MAX_BYTES = 600;
-/** 状态问答建议的回答篇幅（docs/router-workbench-v2-design.md 第 9.2 节选项 A）；入库上限另见 ROUTER_REPLY_MAX_CHARS。 */
 const ROUTER_ANSWER_SUGGESTED_MAX_CHARS = "1,500";
 
 export interface RouterSystemPromptOptions {
@@ -52,12 +46,9 @@ export interface PromptPmDigestCard {
     readonly id: number;
     readonly name: string;
     readonly mainFolder?: string;
-    /** 用户写的项目说明（projects.description）。 */
     readonly description?: string | null;
-    /** 第一层项目档案（docs/router-project-catalog-design.md）；还没建档是 null，对方设备版本旧时没有。 */
     readonly catalog?: ProjectCatalogCard | null;
   } | null;
-  /** 最近一条里程碑汇报或项目经理最后一句回复。 */
   readonly recentBrief?: string | null;
   readonly activeWorkers: readonly PromptActiveWorker[];
   readonly activeWorkerTotal: number;
@@ -72,7 +63,6 @@ export interface PromptDeviceDigest {
   readonly stale?: boolean;
   readonly generatedAt?: number;
   readonly pms: readonly PromptPmDigestCard[];
-  /** 这台设备的摘要超了体积上限没列出的项目经理个数（DeviceRouterDigest.omittedPms）。 */
   readonly omittedPms?: number;
 }
 
@@ -136,10 +126,6 @@ function formatSubagentBanNote(): string {
   return `严禁调用任何内置子代理工具（如 ${tools.map((t) => `\`${t}\``).join("、")}）。`;
 }
 
-/**
- * 构建总助（Router）的系统提示词：每次单轮独立运行，只做两件事——对照名片把话传给对的人（hub dispatch），或看着名片回答全局状态。
- * 厂商、思考程度、模式的可选值从 shared 的常量拼，不手写。
- */
 export function buildRouterSystemPrompt(options: RouterSystemPromptOptions = {}): string {
   const vendors = selectableVendorsOf(options.vendorAvailability);
   const vendorChoices = vendors.join("|");
@@ -204,14 +190,12 @@ ${PRODUCT_NAME} 采用三层分工：**总助（你） → 项目经理（PM） 
 `;
 }
 
-/** 清洗控制字符与换行，保证外部名字/摘要不会破坏单行结构，并截断至最大字符数。 */
 function cleanInline(raw: string | null | undefined, maxChars: number): string {
   if (!raw) return "";
   const singleLine = raw.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/\s+/g, " ").trim();
   return truncateChars(singleLine, maxChars);
 }
 
-/** 按 UTF-8 字节上限安全截断字符串（按 Unicode 码点累加，绝不切碎多字节字符）。 */
 export function sliceUtf8Safe(text: string, maxBytes: number): string {
   if (maxBytes <= 0) return "";
   if (utf8Bytes(text) <= maxBytes) return text;
@@ -230,7 +214,6 @@ export function sliceUtf8Safe(text: string, maxBytes: number): string {
   return `${out}${suffix}`;
 }
 
-/** 名片里第一层项目档案的几行（docs/router-project-catalog-design.md 示例文件第 1 节）；没有项目时什么都不出。 */
 function catalogLines(deviceId: string, pm: PromptPmDigestCard, nowMs: number, keep: { focus: boolean; aliases: boolean }): string[] {
   const project = pm.project;
   if (project === null) return [];
@@ -280,7 +263,6 @@ function formatFullPmCard(deviceId: string, pm: PromptPmDigestCard, nowMs: numbe
       `- activePieces (${totalWorkers}): ${workersLine}`,
     ].join("\n");
 
-  // 超了先砍主线，再砍别名，最后按字节硬截
   for (const keep of [
     { focus: true, aliases: true },
     { focus: false, aliases: true },
@@ -355,13 +337,6 @@ interface IndexedPmSlot {
   mode: PmRenderMode;
 }
 
-/**
- * 计算 PM 保留完整名片的优先级（值越大越优先保留完整名片）：
- * - 3：在线设备且（有活跃 Worker 或有未决项）——最高优，优先完整保留
- * - 2：离线设备但（有活跃 Worker 或有未决项），或在线且正在 working
- * - 1：在线设备的普通空闲 PM
- * - 0：离线设备的普通空闲 PM
- */
 function pmPriorityOf(deviceOnline: boolean, pm: PromptPmDigestCard): number {
   const hasActiveOrPending =
     pm.activeWorkerTotal > 0 || pm.activeWorkers.length > 0 || pm.pendingDecisionCount > 0;
@@ -370,12 +345,6 @@ function pmPriorityOf(deviceOnline: boolean, pm: PromptPmDigestCard): number {
   return deviceOnline ? 1 : 0;
 }
 
-/**
- * 将跨设备名片与近期指令回执格式化为总助的上下文文本，严格遵守 24_576 字节（24 KB）总上限：
- * - 预算充足时，全部 PM 展示完整名片；
- * - 超出 24 KB 预算时，按优先级从低到高将空闲无未决项的 PM 自动降级为单行摘要，优先完整保留有活跃 Worker 或未决项的 PM；
- * - 极端超大规模（如数百个 PM）连单行摘要都超限时，用二分裁剪尾部低优空闲项并做 UTF-8 安全兜底，O(N) 极速且绝不超限。
- */
 export function formatFleetDigestForPrompt(
   devices: readonly PromptDeviceDigest[],
   recentReceipts: readonly PromptRecentReceipt[] = [],
@@ -457,14 +426,12 @@ export function formatFleetDigestForPrompt(
   let currentBytes = utf8Bytes(output);
   if (currentBytes <= maxBytes) return output;
 
-  // 按优先级从低到高排序（同优先级下排在后面的先降级，保留排在前面的完整名片）
   const downgradeOrder = [...slots].sort((a, b) => {
     if (a.priority !== b.priority) return a.priority - b.priority;
     if (a.deviceIndex !== b.deviceIndex) return b.deviceIndex - a.deviceIndex;
     return b.pmIndex - a.pmIndex;
   });
 
-  // 第一阶段：O(N) 增量核算字节差值，把低优先级 PM 逐个从 full 降级为单行 compact 摘要
   for (const slot of downgradeOrder) {
     slot.mode = "compact";
     currentBytes -= slot.fullBytes - slot.compactBytes;
@@ -474,7 +441,6 @@ export function formatFleetDigestForPrompt(
   output = renderAll();
   if (utf8Bytes(output) <= maxBytes) return output;
 
-  // 第二阶段（极端百级 PM 兜底）：若全部单行摘要仍超 24 KB，先省掉近期回执，再用二分查找定位最少省略数
   if (receiptsText !== "") {
     receiptsText = "";
     output = renderAll();

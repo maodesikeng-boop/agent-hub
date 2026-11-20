@@ -1,5 +1,3 @@
-// 账本里的会话：内存里的会话状态（推给网页的 session.status）、建会话、重启恢复。
-// 进程怎么起、停、重启在驱动层（driver/claude-driver.ts）；三类动作的处理函数在 handlers.ts。
 import { randomUUID } from "node:crypto";
 import type {
   AgentSessionRow,
@@ -26,32 +24,18 @@ import type { LedgerContext, Pending } from "./context.ts";
 import { stepOfTool } from "./tool-summary.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
 
-/** 只在内存里的会话状态（守护进程重启后从头开始）。status 不在这里，只从 agent_sessions 那一行读。 */
 export interface LiveSession {
   activity: SessionActivity;
   currentTool: string | null;
   rateLimit?: RateLimitInfo | null;
-  /**
-   * 上一轮结束（或进程退出）以后厂商报过额度（rate_limit 事件）。没报过的话，记着的 rateLimit 是之前的轮次留下的（库里的、换代抄来的），
-   * 新一轮开始时撤掉其中的“用完”（dropRateLimitRejection）；报过的是这一轮（或马上开始的这一轮）的，不撤。
-   */
   rateLimitReported?: boolean;
-  /** claude 正在重试（断网、过载）；下一个正常事件（working、idle）清掉。 */
   apiRetry?: ApiRetryInfo | null;
-  /** 在做什么（见 AgentStep）；空闲时没有。 */
   step?: AgentStep | null;
-  /** 调了、结果还没回来的工具（按调用顺序）：几个工具同时在跑时，结果一个个回来，还没回来的最后一个就是当前这一步。 */
   openTools?: Array<{ toolUseId: string; step: AgentStep }>;
-  /**
-   * 会话里还在跑的后台任务个数（驱动层的 background.changed，只有 claude 有这个信号）；没有信号就是 undefined。
-   * 进程起来、退出时清掉。hub worker show 用，不推给网页。
-   */
   backgroundTasks?: number;
-  /** 当前正在流式生成的单段回复文字（上限 MAX_STREAMING_TEXT_CHARS 个码点）；段完成入库或换步/结束时清掉。 */
   streamingText?: string;
-  /** streamingText 当前的 Unicode 码点数，避免每次 delta 重复展开整段字符串计数。 */
+  /** Cached code point count so each delta does not re-count the whole string. */
   streamingChars?: number;
-  /** 最近一次当前工具 step 开始显示的时刻（毫秒），用于快工具不足 MIN_TOOL_STEP_VISIBLE_MS 时防闪没驻留；不推给网页。 */
   toolStepAt?: number;
 }
 
@@ -65,10 +49,7 @@ function sameToolStep(a: AgentStep | null | undefined, b: AgentStep | null | und
   return ak.every((k) => a.input[k as keyof typeof a.input] === b.input[k as keyof typeof b.input]);
 }
 
-/**
- * 正在停、准备中（Worker 在跑准备命令，还没开工）不被盖掉。step 不传就保持原样（还没有就是“在思考”：一轮刚开始，
- * claude 在想）；子任务里的事件不传，不改主 agent 的状态。
- */
+/** Stopping and preparing states are never overwritten. */
 export const working = (currentTool: string | null, step?: AgentStep) => (l: LiveSession) => {
   if (l.activity !== "stopping" && l.activity !== "preparing") l.activity = "working";
   l.currentTool = currentTool;
@@ -76,13 +57,11 @@ export const working = (currentTool: string | null, step?: AgentStep) => (l: Liv
   l.step = step ?? l.step ?? THINKING;
 };
 
-/** 主 agent 调了一个工具：记下它没回结果，当前这一步就是它。 */
 export const toolStarted = (currentTool: string, toolUseId: string, step: AgentStep) => (l: LiveSession) => {
   working(currentTool, step)(l);
   l.openTools = [...(l.openTools ?? []).filter((t) => t.toolUseId !== toolUseId), { toolUseId, step }];
 };
 
-/** 工具结果回来了：还有没回来的，当前这一步是其中最后一个；都回来了，claude 在接着想。 */
 export const toolFinished = (toolUseIds: string[]) => (l: LiveSession) => {
   l.openTools = (l.openTools ?? []).filter((t) => !toolUseIds.includes(t.toolUseId));
   working(l.currentTool, l.openTools.at(-1)?.step ?? THINKING)(l);
@@ -157,7 +136,6 @@ export function createLedgerSessions(ctx: LedgerContext) {
     }
   };
 
-  /** 对话当前这一代的会话。 */
   const currentSession = (conversationId: ConversationId): AgentSessionRow | null => {
     const row = db.get<AgentSessionDbRow>(
       "SELECT * FROM agent_sessions WHERE conversation_id = ? ORDER BY generation DESC LIMIT 1",
@@ -168,7 +146,6 @@ export function createLedgerSessions(ctx: LedgerContext) {
 
   const liveOf = (id: SessionId): LiveSession => live.get(id) ?? { activity: "idle", currentTool: null };
 
-  /** 内存里不是空闲的会话（在跑、停止中、准备中、等后台命令）。 */
   const workingSessionIds = (): SessionId[] => [...live].filter(([, l]) => l.activity !== "idle").map(([id]) => id);
 
   const sessionState = (row: AgentSessionRow): SessionState => {
@@ -193,10 +170,6 @@ export function createLedgerSessions(ctx: LedgerContext) {
     };
   };
 
-  /**
-   * 改内存里的会话状态，再按 agent_sessions 那一行算出网页看到的状态，和上次推出去的比，变了就推一条 session.status。
-   * 和上次推的比、不和“改之前按行算的”比：驱动层先写库再发事件也不会漏推。lastEventAt 不参与比较。
-   */
   const updateLive = (p: Pending, sessionId: SessionId, mutate: (l: LiveSession) => void) => {
     const row = getAgentSession(db, sessionId);
     if (row === null) return;
@@ -222,7 +195,6 @@ export function createLedgerSessions(ctx: LedgerContext) {
     p.changes.push({ type: "session.status", data: { session: after } });
   };
 
-  /** 撤掉会话记着的“额度用完”（clearRateLimitRejection）：库和内存一起改，推 session.status。没用完的不动。 */
   const dropRateLimitRejection = (p: Pending, sessionId: SessionId) => {
     const row = getAgentSession(db, sessionId);
     if (row === null) return;
@@ -258,10 +230,7 @@ export function createLedgerSessions(ctx: LedgerContext) {
     emitChange({ type: "session.status", data: { session: after } });
   };
 
-  /**
-   * 收到厂商流式工具早捕获预览（agent.tool_preview）：只改内存态 LiveSession.step 并立即推 session.status，
-   * 零 SQLite 写入、绝不插 messages 或 session_steps；若对应已打开的 openTools 条目（如 ACP tool_call_update 补齐路径），同步升级其 step。
-   */
+  /** Tool previews only update in-memory state and never write to SQLite. */
   const applyToolPreview = (
     session: AgentSessionRow,
     preview: { toolUseId?: string; name: string; input?: unknown },
@@ -269,8 +238,7 @@ export function createLedgerSessions(ctx: LedgerContext) {
     if (preview.name === "" || isHiddenStreamingSession(session)) return;
     const sessionId = session.id;
     const prev = liveOf(sessionId);
-    // 只升级正在跑的这一轮：停止中、准备中不盖；空闲（轮已结束、进程已退）时迟到的预览不能把会话“救活”成在干活（它不入库，
-    // 后面也不会再有 turn.ended 把它收回去）。正式的 agent.tool 之前一定先有 message.processing / turn.started 把状态置成 working
+    // Only upgrade a running turn; stopping, preparing and idle stay as they are.
     if (prev.activity !== "working") return;
 
     cancelStreamTimer(sessionId);
@@ -295,12 +263,6 @@ export function createLedgerSessions(ctx: LedgerContext) {
     flushSessionStatusNow(sessionId, session);
   };
 
-  /**
-   * 工具结果返回（agent.tool_result）：
-   * - 仍有未闭合并行工具时切到剩余最后一个；
-   * - openTools 清空准备回退到 Thinking 时，若距最近一次工具 step 显示尚不足 MIN_TOOL_STEP_VISIBLE_MS，
-   *   保留当前工具文案并设单会话唯一 setTimeout 到点回退 Thinking。
-   */
   const finishTools = (p: Pending, sessionId: SessionId, toolUseIds: string[]) => {
     const prev = liveOf(sessionId);
     const remaining = (prev.openTools ?? []).filter((t) => !toolUseIds.includes(t.toolUseId));
@@ -342,7 +304,7 @@ export function createLedgerSessions(ctx: LedgerContext) {
           }
           const row = safeGetSession(sessionId);
           if (row === null) return;
-          // 只是驻留到点，不是新事件：apiRetry 等别的状态原样留着（驻留期间来的 api_retry 不被冲掉）
+          // A dwell timer is not a new event, so other states such as apiRetry stay untouched.
           live.set(sessionId, { ...cur, step: THINKING, toolStepAt: undefined });
           flushSessionStatusNow(sessionId, row);
         }, delay),
@@ -357,12 +319,7 @@ export function createLedgerSessions(ctx: LedgerContext) {
     });
   };
 
-  /**
-   * 收到厂商流式文字增量（agent.text_delta）：只改内存态 LiveSession 并做节流广播，绝不写 SQLite。
-   * - 首块（或距上次广播已满 STREAMING_TEXT_THROTTLE_MS）0ms 延迟立即推出去；
-   * - 节流窗口内的后续增量合并在内存里，窗口到点补发一次；
-   * - 单段内存预览最多保留前 MAX_STREAMING_TEXT_CHARS 个码点，超出部分只等最终 agent.text 一次性入库。
-   */
+  /** Streaming text deltas are throttled broadcasts of in-memory state and never write to SQLite. */
   const applyStreamingDelta = (session: AgentSessionRow, delta: string, reset?: boolean) => {
     if (delta === "" && !reset) return;
     const sessionId = session.id;
@@ -439,7 +396,6 @@ export function createLedgerSessions(ctx: LedgerContext) {
     }
   };
 
-  /** 项目经理的会话：pmId 是它；Worker 的会话（M3）：role worker、workerId 是它的记录，pmId 是 null。 */
   const insertSession = (
     p: Pending,
     fields: {
@@ -485,7 +441,6 @@ export function createLedgerSessions(ctx: LedgerContext) {
 
   const recoverAfterRestart = () => {
     return write((p) => {
-      // Worker 的会话（M3）：已收工的不再发；worktree 还没建好的等 onWorktreeCreated 再登记（目录还不在，不能先起会话）
       const rows = db.all<{ id: number; session_id: number; sender: string; status: string }>(
         `SELECT m.id, m.session_id, m.sender, m.status FROM messages m
          JOIN agent_sessions s ON s.id = m.session_id
@@ -505,12 +460,11 @@ export function createLedgerSessions(ctx: LedgerContext) {
       );
       const resentMessageIds: MessageId[] = [];
       const requeuedMessageIds: MessageId[] = [];
-      // 按最早一条被打断的消息排，旧的先恢复
+      // Resume the oldest interrupted message first.
       const recoveredSessionIds: SessionId[] = [];
       for (const row of rows) {
         const resend = row.status !== "queued";
         (resend ? resentMessageIds : requeuedMessageIds).push(row.id);
-        // 每个被打断的会话，第一条重发的消息带上恢复说明（和它写在同一行，不单独登记 session.start 去写）
         const recovery = resend && !recoveredSessionIds.includes(row.session_id);
         if (recovery) recoveredSessionIds.push(row.session_id);
         const source = row.sender === "system" ? "system" : "user";

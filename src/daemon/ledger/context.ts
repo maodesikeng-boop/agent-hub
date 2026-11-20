@@ -1,5 +1,4 @@
-// 账本各部分共用的东西：数据库、事务（write：提交后才推变化、通知动作和停止请求）、动作登记、健康状态。
-// 账本拆成几个文件（messages.ts、sessions.ts……），都拿同一个 LedgerContext；只有 createLedger 建它。
+// The ledger is the only writer of business tables; changes, actions and stop requests are emitted only after commit.
 import { hostname } from "node:os";
 import type { AnyActionRow, NewAction } from "../../shared/actions.ts";
 import type { Change, ChangeType, ComposerCommand } from "../../shared/api.ts";
@@ -21,18 +20,15 @@ import { osSandboxAvailable } from "../driver/write-scope.ts";
 
 export type StopEvent = { conversationId: ConversationId; sessionId: SessionId };
 
-/** 一个事务里攒下的、提交后才发出去的东西；回滚就整个丢掉。 */
+/** Side effects collected inside a transaction; dropped entirely on rollback. */
 export interface Pending {
   changes: ChangeInput[];
   actions: AnyActionRow[];
   stops: StopEvent[];
-  /** 这个事务里推出去的会话状态（比较用的键），提交后才记进 pushed。 */
   pushed: Map<SessionId, string>;
-  /** 提交之后要做的事（写性格设定文件），在推变化之前做；出错只记日志。 */
   after: (() => void)[];
 }
 
-/** 一个事务里几条变化的推送顺序（见 api.ts 的 CHANGE_TYPES）。 */
 const CHANGE_RANK: Readonly<Record<ChangeType, number>> = {
   "pm.created": 0,
   "pm.updated": 0,
@@ -67,47 +63,30 @@ export interface LedgerContext {
   changeListeners: Set<(change: Change) => void>;
   actionListeners: Set<(action: AnyActionRow) => void>;
   stopListeners: Set<(event: StopEvent) => void>;
-  /** 上次推给网页的会话状态（不含 lastEventAt）；没推过的会话第一次一定推。 */
   pushed: Map<SessionId, string>;
   subscribe<T>(listeners: Set<T>, listener: T): () => void;
-  /** 在一个事务里做 fn，提交后按顺序发变化、动作登记、停止请求。 */
   write<T>(fn: (p: Pending) => T): T;
-  /** 纯内存变化（如流式增量文字节流广播）：不进数据库事务，直接分配 seq 并通知监听器。 */
+  /** In-memory changes such as streaming text deltas bypass the transaction and are broadcast immediately. */
   emitChange(input: ChangeInput): void;
   enqueue(p: Pending, action: NewAction): void;
   reportHealthIn(p: Pending, module: HealthModule, error: string | null): void;
-  /** 现在缓存着的模型名单（ModelCatalogs.current），还没问到是 null。 */
   modelCatalog(vendor: AgentVendor): ModelCatalog | null;
-  /** 这家厂商在这台设备上现在能不能用（ModelCatalogs.availability）：账本判断要不要用户动手只读这里。不给是 unknown。 */
   vendorAvailability(vendor: AgentVendor): VendorAvailability;
-  /** 系统消息、hub 输出里的模型名：用缓存着的模型名单里的名字（“Opus 4.6”），没有名单用打包的，都没有原样。 */
   modelLabel(vendor: AgentVendor, model: string | null): string;
-  /** 和网页右栏的 Worker 行同一个写法（vendors.ts 的 modelShortLabel）：Opus 5.5、Sonnet 5.5；默认写厂商说的实际模型。hub worker show 用。 */
   modelShortLabel(vendor: AgentVendor, model: string | null): string;
-  /**
-   * 用户（或项目经理）发给这个会话的话要不要拦下：是厂商隐藏的命令（/clear、/model……）就返回给人看的原因，否则 null。
-   * 缓存着这个会话的命令列表（LedgerOptions.knownCommands）时，用户自己的命令、skill 重名的放行（厂商实现的 blockReason）。
-   */
   commandBlockReason(session: Pick<AgentSessionRow, "vendor" | "cwd" | "addDirs">, text: string): string | null;
-  /** 这台机器有没有 OS 沙箱（driver/write-scope.ts 的 osSandboxAvailable）：没有的机器上派只读 agy 直接报错（hub worker start --readonly）。 */
   osSandboxed(): boolean;
-  /** 这台设备的名字（联机的设备身份）：要用户在这台设备上动手时写在卡上。 */
   deviceName(): string;
-  /** 单调递增的账本写事务代数（供 DeviceRouterDigest 等只读衍生快照精确失效缓存）。 */
+  /** Monotonic write-transaction generation used to invalidate derived snapshots such as DeviceRouterDigest. */
   writeGeneration(): number;
 }
 
-/** 账本用到的目录和文件操作（LedgerOptions 补上默认值之后），persona.ts、projects.ts、workers.ts 用。 */
 export interface LedgerFiles {
   pmHomeRoot: string;
   personasDir: string | undefined;
-  /** state/pm-memory/：每个项目经理独占的记忆目录根（未配置时仅在子文件接口使用回退目录）。 */
   pmMemoryDir?: string;
-  /** 子文件接口在旧测试未传 dataHome / pmMemoryDir 时的回退目录。 */
   pmMemoryFallbackDir: string;
-  /** worktrees/ 的根目录（LedgerOptions.worktreesDir 补上默认值）。 */
   worktreesDir: string;
-  /** 额外的已登记跨卷 worktree 根目录（如 `D:\.fusa-wt\<指纹>`）。 */
   extraWorktreeRoots?: () => readonly string[];
   launchDir?: string;
   setupLogsDir?: string;
@@ -118,15 +97,11 @@ export interface LedgerFiles {
 
 export interface LedgerContextOptions {
   now?: () => number;
-  /** 这台设备上各家的模型名单和状态（daemon/driver/model-catalog.ts 的 ModelCatalogs，守护进程原样传进来）。不给：名单用打包的，状态 unknown。 */
   models?: Pick<ModelCatalogs, "current" | "availability">;
-  /** 缓存着的这个会话的完整命令列表（daemon/commands-catalog.ts 的 cached），没缓存是 null；不给等于都没缓存。 */
   knownCommands?: (session: Pick<AgentSessionRow, "vendor" | "cwd" | "addDirs">) => ComposerCommand[] | null;
   initialSeq?: number;
   changeBufferSize?: number;
-  /** 这台机器有没有 OS 沙箱，默认按本机（osSandboxAvailable）；测试可以指定。 */
   osSandboxed?: () => boolean;
-  /** 这台设备的名字，默认本机的主机名。 */
   deviceName?: () => string;
 }
 
@@ -157,7 +132,7 @@ export function createLedgerContext(db: Db, options: LedgerContextOptions): Ledg
   };
 
   const write = <T>(fn: (p: Pending) => T): T => {
-    // 并进外层事务的话，下面的通知会在外层提交前发出去，外层回滚就推了不存在的变化
+    // Notifying inside an outer transaction would publish changes that the outer rollback could undo.
     if (db.inTransaction) throw new Error("ledger write inside an outer transaction");
     const pending: Pending = { changes: [], actions: [], stops: [], pushed: new Map(), after: [] };
     const result = db.transaction(() => fn(pending));

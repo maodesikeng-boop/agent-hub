@@ -1,4 +1,3 @@
-// 提示词、启动文件测试共用的启动上下文（prompt.test.ts、launch.test.ts）：项目经理两种，Worker 一种（M3）。
 import type { LaunchContext, ProjectCard, WorkerRecord } from "../shared/index.ts";
 
 export const card = (id: number, name: string, mainFolder: string, otherFolders: string[] = [], description: string | null = null): ProjectCard => ({
@@ -9,7 +8,6 @@ export const card = (id: number, name: string, mainFolder: string, otherFolders:
   otherFolders,
 });
 
-/** 有项目的项目经理：manage_only，项目 foo（主文件夹 /work/foo，附加 /work/foo-docs）。 */
 export function projectContext(over: Partial<LaunchContext> = {}): LaunchContext {
   return {
     sessionId: 7,
@@ -22,7 +20,6 @@ export function projectContext(over: Partial<LaunchContext> = {}): LaunchContext
   };
 }
 
-/** 还没有项目的项目经理：hands_on，新建时没有性格设定（空串）。 */
 export function noProjectContext(over: Partial<LaunchContext> = {}): LaunchContext {
   return {
     sessionId: 8,
@@ -35,7 +32,6 @@ export function noProjectContext(over: Partial<LaunchContext> = {}): LaunchConte
   };
 }
 
-/** Worker（M3）的记录：项目 foo 的 Worker #5，在 worktree 里干活。 */
 function workerRecord(over: Partial<WorkerRecord> = {}): WorkerRecord {
   return {
     id: 5,
@@ -59,7 +55,6 @@ function workerRecord(over: Partial<WorkerRecord> = {}): WorkerRecord {
   };
 }
 
-/** Worker 的会话：派它的是 projectContext 里的项目经理小林，项目 foo。 */
 export function workerContext(over: Partial<WorkerRecord> = {}): LaunchContext {
   return {
     sessionId: 9,

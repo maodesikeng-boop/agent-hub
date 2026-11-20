@@ -31,7 +31,6 @@ export function worktreeRootsFile(stateDir: string): string {
   return join(stateDir, WORKTREE_ROOTS_REGISTRY_FILE);
 }
 
-/** Computes the 8-hex-char dataDir fingerprint for `<volumeRoot>\.fusa-wt\<fingerprint8>`. */
 export function dataDirWorktreeFingerprint(dataDir: string): string {
   return createHash("sha256")
     .update(normalizePathForComparison(dataDir))
@@ -59,7 +58,6 @@ export function loadManagedWorktreeRoots(stateDir: string, defaultWorktreesDir: 
       }
     }
   } catch {
-    // Missing or malformed registry -> only defaultWorktreesDir
   }
   return out.slice(0, MAX_WORKTREE_ROOTS);
 }
@@ -107,16 +105,7 @@ export interface SelectedWorktreeRoot {
   fallbackReason?: string;
 }
 
-/**
- * Resolves the worktree root for `projectFolder` (Design 6.2 & User Gate Decision #2):
- * - Rejects UNC / mapped network share project folders;
- * - Resolves `realpathSync.native` on both `dataDir` and `projectFolder` (unwrapping `subst` drives & junctions);
- * - Same volume (`stat.dev` equal) -> uses `defaultWorktreesDir` (`<dataDir>/worktrees`);
- * - Different volume -> prefers `<volumeRoot>/.fusa-wt/<fingerprint8>` on the project's volume (preserving `pnpm` hardlinks and Dev Drive speed),
- *   applies protected-root ACL (`DENY FusaWorker` write + `OWNER RIGHTS: READ_CONTROL`), registers in `state/worktree-roots.json`;
- * - If creating or ACL-protecting `<volumeRoot>/.fusa-wt/<fingerprint8>` fails (no permission on volume root, FAT/exFAT without ACLs),
- *   logs a clear warning and safely falls back to `defaultWorktreesDir`!
- */
+/** UNC and mapped network shares are rejected; cross-volume projects get worktrees under <volume>\.fusa-wt so git worktree stays on one volume. */
 export async function selectWorktreeRootForProject(input: {
   projectFolder: string;
   dataDir: string;
@@ -124,7 +113,6 @@ export async function selectWorktreeRootForProject(input: {
   stateDir: string;
   platform?: NodeJS.Platform;
   log?: (line: string) => void;
-  /** Test seam to simulate volume IDs or candidate root path on single-volume hosts. */
   volumeDevOf?: (realPath: string) => number | bigint;
   candidateVolumeRootOf?: (realProjectFolder: string) => string;
   protectRoot?: (stateDir: string, candidateRoot: string) => Promise<void> | void;
@@ -198,11 +186,7 @@ export async function selectWorktreeRootForProject(input: {
   }
 }
 
-/**
- * Ensures `<defaultWorktreesDir>/<projectId>` bridges to `<crossVolumeRoot>/<projectId>` via junction/symlink
- * when `<defaultWorktreesDir>/<projectId>` has no local worker directories yet, so PM `addDirs` and `sent-files`
- * seamlessly see cross-volume worktrees without touching `ledger/*`.
- */
+/** The junction keeps PM addDirs and sent-files under the default worktrees dir while Workers use the cross-volume directory directly. */
 export function ensureProjectWorktreeBridge(
   defaultProjectWtDir: string,
   actualProjectWtDir: string,
@@ -222,7 +206,6 @@ export function ensureProjectWorktreeBridge(
       }
       unlinkDirectoryLinkSync(defaultProjectWtDir);
     } else if (st.isDirectory()) {
-      // Only replace if empty directory (e.g. pre-created by launch.ts before first worker)
       try {
         rmSync(defaultProjectWtDir, { recursive: false });
       } catch {
@@ -238,6 +221,5 @@ export function ensureProjectWorktreeBridge(
   try {
     symlinkSync(actualProjectWtDir, defaultProjectWtDir, platform === "win32" ? "junction" : "dir");
   } catch {
-    // Best effort bridge; Worker itself uses actualProjectWtDir directly as cwd.
   }
 }

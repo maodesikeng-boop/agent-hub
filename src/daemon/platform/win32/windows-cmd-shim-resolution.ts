@@ -80,7 +80,6 @@ function canonicalize(contents: string): string {
     .join("\n");
 }
 
-/** Returns paths as spelled in the shim, relative to its directory. */
 export function parseWindowsCmdShim(contents: string): ParsedWindowsCmdShim | null {
   const canonical = canonicalize(contents);
 
@@ -122,7 +121,6 @@ type ParseCacheEntry = {
 const parseCache = new LRUCache<string, ParseCacheEntry>({ max: WIN_CMD_SHIM_CACHE_MAX });
 const nodeCache = new LRUCache<string, string>({ max: WIN_EXEC_RESOLVE_CACHE_MAX });
 
-/** Clears `.cmd` shim and node interpreter caches (for unit tests). */
 export function resetWindowsCmdShimCacheForTest(): void {
   parseCache.clear();
   nodeCache.clear();
@@ -234,7 +232,6 @@ export type WindowsCmdShimResolution = {
   env?: NodeJS.ProcessEnv;
 };
 
-/** Pass the actual child environment for PATH lookup and NODE_PATH prepending; null keeps cmd.exe. */
 export function resolveWindowsCmdShim(
   program: string,
   env: NodeJS.ProcessEnv,

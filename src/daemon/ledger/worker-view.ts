@@ -1,9 +1,3 @@
-// hub worker show / log（给项目经理看 Worker 在干什么、是不是卡住了）：从账本取，不去解析各家厂商的原始日志。
-// - 状态、进程、最后一次有动静：agent_sessions 那一行和内存里的会话状态（sessions.ts 的 LiveSession）；
-// - 一步一步干了什么、一轮的开始和结局：session_steps（steps.ts，三家驱动的事件到账本都是通用的）；
-// - 后台任务个数：驱动层的 background.changed（只有 claude 有这个信号，别家不显示这一项）；
-// - 动作文案、数字和用时的写法：和网页同一套（shared/step-labels.ts、shared/count-format.ts）。
-// 只写给项目经理看的话；Worker 的命令行、回复里的密钥、令牌入库前已经遮掉（steps.ts、redact.ts）。
 import type { AgentSessionRow, ConversationId, SessionId, WorkerRecord } from "../../shared/domain.ts";
 import { formatCount } from "../../shared/count-format.ts";
 import type { HubArgs, HubResult, WorkerLogStep, WorkerPr, WorkerPrProbeResult } from "../../shared/hub.ts";
@@ -24,30 +18,25 @@ import { createLedgerWorkerSearch } from "./worker-search.ts";
 import type { LiveSession } from "./sessions.ts";
 import type { LedgerSteps, StepRow } from "./steps.ts";
 
-/** 没有数据时占位（docs/ui-standard.md 第 13 条）。 */
 const NO_DATA = "—";
 
 const pad = (n: number) => String(n).padStart(2, "0");
-/** 本机时间“时:分:秒”：log 每一行的开头。 */
 export function formatClock(ms: number): string {
   const d = new Date(ms);
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-/** 超长的截断加省略号。 */
 export function clipText(text: string, max = WORKER_VIEW_TEXT_MAX_CHARS): string {
   const chars = [...text];
   return chars.length > max ? `${chars.slice(0, max - 1).join("")}…` : text;
 }
 
-/** 一轮：从 turn_started 到 turn_ended；还没结束 end 是 null。 */
 interface Turn {
   startedAt: number | null;
   rows: StepRow[];
   end: StepRow | null;
 }
 
-/** 按 turn_started、turn_ended 切成一轮一轮。 */
 function turnsOf(rows: StepRow[]): Turn[] {
   const turns: Turn[] = [];
   let current: Turn | null = null;
@@ -56,7 +45,6 @@ function turnsOf(rows: StepRow[]): Turn[] {
       if (current !== null) turns.push(current);
       current = { startedAt: row.at, rows: [], end: null };
     } else if (row.kind === "turn_ended") {
-      // 一轮的开头被清掉了（只留最近的若干条）或没记到：没有开始时间
       const turn: Turn = current ?? { startedAt: null, rows: [], end: null };
       turn.end = row;
       turns.push(turn);
@@ -71,7 +59,6 @@ function turnsOf(rows: StepRow[]): Turn[] {
 }
 
 const toolCount = (turn: Turn) => turn.rows.filter((r) => r.kind === "tool").length;
-/** 调了、结果还没回来的工具，按调用顺序。 */
 const openToolsOf = (turn: Turn): StepRow[] => {
   const done = new Set(turn.rows.filter((r) => r.kind === "tool_result").map((r) => r.tool_use_id));
   return turn.rows.filter((r) => r.kind === "tool" && !done.has(r.tool_use_id));
@@ -79,18 +66,12 @@ const openToolsOf = (turn: Turn): StepRow[] => {
 const turnSeconds = (turn: Turn): number | null =>
   turn.end === null ? null : (turn.end.duration_ms ?? (turn.startedAt === null ? null : turn.end.at - turn.startedAt));
 
-/** 一轮是怎么结束的：成功 / 被打断 / 出错：原因。 */
 function outcomeText(end: StepRow): string {
   if (end.outcome === "ok") return "成功";
   if (end.outcome === "interrupted") return end.summary === null ? "被打断" : `被打断（${clipText(end.summary)}）`;
   return end.summary === null ? "出错" : `出错：${clipText(end.summary)}`;
 }
 
-/**
- * Worker 实际用的模型和思考程度，hub worker list、show 共用，和网页右栏、资料页同一个写法：模型写显示名，
- * agy 的模型和思考程度分开写（老数据里写在模型 ID 末尾的也拆开）；思考程度“默认”时厂商没告诉我们实际是哪一档
- * （ModelCatalog 里没有），只能写默认。
- */
 export function agentSettingOf(ctx: Pick<LedgerContext, "modelShortLabel">, session: Pick<AgentSessionRow, "vendor" | "model" | "effort">): { model: string; effort: string } {
   const vendor = session.vendor as AgentVendor;
   return { model: ctx.modelShortLabel(vendor, session.model), effort: effortLabel(agentEffortOf(vendor, session.model, session.effort)) };
@@ -99,11 +80,9 @@ export function agentSettingOf(ctx: Pick<LedgerContext, "modelShortLabel">, sess
 export interface WorkerViewDeps {
   ownWorker: (pmId: number, workerId: number) => WorkerDbRow;
   workerSession: (worker: number | WorkerDbRow) => AgentSessionRow;
-  /** 在 worktree 里干活、还没开工（workers.ts 的 notStarted）。 */
   notStarted: (worker: WorkerDbRow) => boolean;
   liveOf: (id: SessionId) => LiveSession;
   turnMaxTimeOf?: (workerConversationId: ConversationId) => { maxTimeMs: number; startedAt: number } | null;
-  /** worktree 是否已被自动清理（workers.ts 的 isWorktreeCleaned）。 */
   isWorktreeCleaned?: (worker: WorkerDbRow) => boolean;
 }
 
@@ -112,7 +91,6 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
   const { ownWorker, workerSession, notStarted, liveOf, turnMaxTimeOf, isWorktreeCleaned } = deps;
   const workerSearch = createLedgerWorkerSearch(ctx);
 
-  /** 状态：已收工、准备中、在等后台命令、在干活、空闲等验收。 */
   const stateOf = (worker: WorkerDbRow, live: LiveSession, lastEnded: Turn | null): string => {
     if (worker.status === "ended") return "已收工";
     if (live.activity === "preparing" || notStarted(worker)) return "准备中";
@@ -123,7 +101,6 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
     return end.outcome === "ok" ? "空闲，等验收" : end.outcome === "interrupted" ? "空闲，上一轮被打断了" : "空闲，上一轮出错了";
   };
 
-  /** 现在在干什么（一句话）；已收工的没有。 */
   const doingOf = (worker: WorkerDbRow, live: LiveSession, current: Turn | null, lastEnded: Turn | null): string | null => {
     if (worker.status === "ended") return null;
     if (live.activity === "preparing") return "在跑项目的准备命令，跑完才开工";
@@ -148,7 +125,6 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
     }
     const last = current.rows.at(-1);
     if (last?.kind === "thinking") {
-      // 连着的几次思考算一次，从第一次起算
       let since = last.at;
       for (let i = current.rows.length - 1; i >= 0 && current.rows[i]!.kind === "thinking"; i--) since = current.rows[i]!.at;
       return `在思考，已 ${formatDuration(t - since)}`;
@@ -157,7 +133,6 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
     return "在想下一步";
   };
 
-  /** 对话被保留期清掉的 Worker 的一句话说明（没清过是 null）：消息和步骤日志没了，任务说明、汇报、分支还在。 */
   const purgedNote = (worker: WorkerDbRow): string | null => {
     const purgedAt = db.get<{ purged_at: number | null }>("SELECT purged_at FROM conversation_purges WHERE conversation_id = ?", worker.worker_conversation_id)?.purged_at ?? null;
     if (purgedAt === null) return null;
@@ -172,7 +147,6 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
   const show = (caller: { pmId: number }, args: HubArgs<"worker.show">, context: HubCallContext): HubResult<"worker.show"> => {
     const worker = ownWorker(caller.pmId, args.workerId);
     if (args.task === true && args.report !== undefined) throw fail("invalid", "--task 和 --report 只能用一个");
-    // 原文：只出正文，不加别的
     if (args.task === true) return { text: worker.task, data: { worker: toWorkerRecord(worker) as WorkerRecord } };
     if (args.report !== undefined) return { text: workerSearch.reportText(worker, args.report), data: { worker: toWorkerRecord(worker) as WorkerRecord } };
     const session = workerSession(worker);
@@ -226,7 +200,6 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
     }
 
     const parts: string[] = [];
-    // 后台任务：只有给这个信号的厂商（claude）才有数；进程不在了就没有
     if (alive && live.backgroundTasks !== undefined) parts.push(`后台任务 ${live.backgroundTasks} 个`);
     parts.push(`对话 ${session.usage.context > 0 ? `${formatCount(session.usage.context)} context` : NO_DATA}`);
     lines.push(parts.join("，"));
@@ -246,7 +219,6 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
 
   const logSteps = (rows: StepRow[], open: boolean): WorkerLogStep[] => formatLogSteps(rows, open, now());
 
-  /** --stats：所有换过代的会话里账本留着的全部步骤，汇成几行。 */
   const stats = (worker: WorkerDbRow, args: HubArgs<"worker.log">): HubResult<"worker.log"> => {
     if (args.last !== undefined) throw fail("invalid", "--stats 汇总全部步骤，不能和 --last 一起用");
     const name = `Worker #${worker.id}“${worker.title}”`;
@@ -285,10 +257,6 @@ export function createLedgerWorkerView(ctx: LedgerContext, steps: LedgerSteps, d
   return { show, log, search: workerSearch.search };
 }
 
-/**
- * hub worker log 的一行一行：时间 + 动作（open：这一轮还在跑，没回来的工具写“还在跑”）。t 是现在。
- * 换人接手时带前任最后几步操作（takeover.ts）也用它，和 hub worker log 看到的一样。
- */
 export function formatLogSteps(rows: StepRow[], open: boolean, t: number): WorkerLogStep[] {
   const resultsByUseId = new Map<string | null, Array<{ row: StepRow; index: number }>>();
   let lastTurnEndedIndex = -1;
@@ -325,7 +293,6 @@ export function formatLogSteps(rows: StepRow[], open: boolean, t: number): Worke
         break;
       }
       case "thinking": {
-        // 连着的几次思考合成一行：到下一步出现为止
         let j = i;
         while (j + 1 < rows.length && rows[j + 1]!.kind === "thinking") j++;
         const next = rows[j + 1];

@@ -1,4 +1,3 @@
-// 变化序号和内存里的变化缓冲区（changesSince 用），规则见 src/shared/ledger.ts 的 ChangesSince。
 import type { Change, ChangeDataMap, ChangeType } from "../../shared/api.ts";
 import type { ChangesSince } from "../../shared/ledger.ts";
 

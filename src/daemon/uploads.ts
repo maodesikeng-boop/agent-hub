@@ -1,7 +1,3 @@
-// 聊天框上传的文件怎么存（设计：用户在聊天框发文件给 agent）。
-// 一个文件一个目录：<uploadsDir>/<上传编号>/<清理过的原文件名>。编号随机，所以同名文件不会互相覆盖，
-// agent 拿到的路径末尾还是用户的原文件名；文件名只留最后一段、去掉控制字符，所以怎么写都出不了这个目录。
-// 上传接口不绑定接收方：谁来用（项目经理、以后的 Worker 输入框）都是先上传拿到 Attachment，再在发消息时带上编号。
 import { randomBytes } from "node:crypto";
 import { createWriteStream, lstatSync, readdirSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
@@ -19,7 +15,6 @@ import {
   type Attachment,
 } from "../shared/index.ts";
 
-/** 上传失败，message 是给用户看的中文原因（界面服务原样返回）。 */
 export class UploadError extends Error {
   readonly statusCode: 400 | 413;
   constructor(statusCode: 400 | 413, message: string) {
@@ -29,17 +24,12 @@ export class UploadError extends Error {
   }
 }
 
-/** 文件名清理后什么都不剩时用的名字。 */
 const DEFAULT_FILE_NAME = "文件";
-/**
- * 要去掉的字符：控制字符 Cc（换行、NUL…）、不可见的格式字符 Cf（方向控制符能把 .txt 伪装成别的扩展名，零宽字符、BOM 能藏字）、
- * 行分隔符 Zl、段分隔符 Zp（U+2028/2029，能让文件名在清单里换行）。代价：emoji 组合用的零宽连接符也被去掉，组合 emoji 会拆开，无妨。
- */
+/** Strip Cc and Cf characters because bidi controls can disguise an extension and zero-width characters can spoof names. */
 const UNSAFE_CHARS = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
-/** 上传编号：16 位小写十六进制。找文件时只认这个形状，别的一律当没有（不会拼出 uploads/ 之外的路径）。 */
 export const UPLOAD_ID = /^[0-9a-f]{16}$/;
 
-/** 按 UTF-8 字节截断，不切坏一个字（码点）。 */
+/** Truncate by UTF-8 bytes without splitting a code point. */
 function truncateBytes(text: string, maxBytes: number): string {
   let out = "";
   let used = 0;
@@ -52,7 +42,6 @@ function truncateBytes(text: string, maxBytes: number): string {
   return out;
 }
 
-/** 只留最后一段、去控制字符、统一成 NFC、限长（扩展名尽量留着）；什么都不剩用默认名。 */
 export function sanitizeFileName(raw: string): string {
   const last = raw.split(/[\\/]/).at(-1) ?? "";
   let name = last.replace(UNSAFE_CHARS, "").normalize("NFC").trim();
@@ -69,14 +58,10 @@ function toAttachment(uploadsDir: string, id: string, name: string, size: number
   return { id, name, path: join(uploadsDir, id, name), size, mime: mimeOfFileName(name) };
 }
 
-/**
- * 存一个文件，返回它的附件信息。data 是流时边收边写盘（视频几十 MB，不整个读进内存）。
- * 空文件、超过 MAX_UPLOAD_BYTES 抛 UploadError；出错（含流中途断开、建不了目录）时销毁 data 流、磁盘上不留东西。
- */
 export async function saveUpload(uploadsDir: string, rawName: string, data: Buffer | Readable): Promise<Attachment> {
   if (Buffer.isBuffer(data) && data.length > MAX_UPLOAD_BYTES) throw new UploadError(413, UPLOAD_TOO_LARGE_MESSAGE);
   const source = Buffer.isBuffer(data) ? Readable.from([data]) : data;
-  // 建目录的时候连接就断了：错误先接住不让进程崩，下面的 pipeline 照样拿到它
+  // The connection may drop while mkdir runs; catch it here so the process does not crash and pipeline still sees the error.
   const ignore = () => {};
   source.once("error", ignore);
   const name = sanitizeFileName(rawName);
@@ -103,10 +88,7 @@ export async function saveUpload(uploadsDir: string, rawName: string, data: Buff
   return toAttachment(uploadsDir, id, name, size);
 }
 
-/**
- * 按上传编号找文件：从磁盘重新算名字、路径、大小、类型，不信任何客户端报的。编号不合法、目录或文件没了：null。
- * 用 lstat：uploads/<编号> 和里面的文件都必须是真目录、真文件，符号链接一律当没有（免得被指到 uploads/ 外面）。
- */
+/** Rebuild metadata from disk and use lstat; nothing reported by the client is trusted. */
 export function resolveUpload(uploadsDir: string, id: string): Attachment | null {
   if (!UPLOAD_ID.test(id)) return null;
   try {

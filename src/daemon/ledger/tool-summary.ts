@@ -1,9 +1,7 @@
 import type { AgentStep } from "../../shared/domain.ts";
 import { pickStepInput } from "../../shared/step-labels.ts";
 
-// tool 消息的一行摘要（Message.text）：工具名 + 最要紧的参数，不超过 200 字符、不含换行。
 const MAX_SUMMARY_CHARS = 200;
-/** 按顺序找第一个是非空字符串的参数。 */
 const KEY_ARGS = [
   "command",
   "CommandLine",
@@ -41,7 +39,6 @@ export function summarizeToolCall(name: string, input: unknown): string {
   return chars.length > MAX_SUMMARY_CHARS ? `${chars.slice(0, MAX_SUMMARY_CHARS - 1).join("")}…` : summary;
 }
 
-/** 当前这一步是这个工具调用：名字照抄，input 只留 STEP_INPUT_KEYS 里的非空字符串（pickStepInput）。 */
 export function stepOfTool(name: string, input: unknown): AgentStep {
   return { type: "tool_use", name, input: pickStepInput(input) };
 }

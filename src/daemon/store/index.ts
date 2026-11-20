@@ -1,4 +1,3 @@
-// 存储：打开数据库、迁移、目录锁、SessionStore。
 export { openDatabase } from "./db.ts";
 export type { Db, SqlValue } from "./db.ts";
 export { DEFAULT_MIGRATIONS_DIR, migrate, userVersion } from "./migrate.ts";

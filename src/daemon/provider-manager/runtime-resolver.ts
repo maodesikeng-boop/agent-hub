@@ -1,7 +1,3 @@
-// 厂商可执行文件路径与子进程环境的动态解析器 `VendorRuntimeResolver`（docs/providers-install-login-design.md 第 3.2、4.2 节）：
-// - 根治启动期静态 `executables[vendor].path` 固化导致的装完/登完免重启 `ENOENT`；
-// - 动态纳入 `<hubHome>/tools/npm`、随包/宿主 Node 24 目录与 Windows 安装后刷新的注册表 `Path`；
-// - 动态合成厂商受管密钥环境与包含密钥修订摘要的 `catalogFingerprint`。
 import { spawnSync } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import { dirname, posix, win32 } from "node:path";
@@ -68,7 +64,6 @@ function defaultReadWindowsRegistryPaths(baseEnv: Record<string, string | undefi
         if (rawVal) out.push(expandWindowsEnvVars(rawVal, lookup));
       }
     } catch {
-      // ignore reg.exe errors
     }
   }
   return out;
@@ -142,25 +137,16 @@ export interface VendorRuntimeResolver {
   readonly userHome: string;
   readonly paths: HubPaths;
   readonly secrets: ManagedProviderSecrets;
-  /** 合成包含最新注册表 Path（Windows）、受管 toolsNpmBinDir 与守护进程 Node 目录的有效 PATH。 */
   effectivePath(): string;
-  /** 返回某厂商已安装可执行文件的磁盘绝对路径；未安装返回 null（0 子进程）。 */
   locateBinary(vendor: AgentVendor): string | null;
-  /** 返回某厂商是否已安装（0 子进程）。 */
   installed(vendor: AgentVendor): boolean;
-  /** 返回起进程用的可执行文件路径（已安装返回真实路径，未安装回退配置的命令名）。 */
   resolveExecutablePath(vendor: AgentVendor): string;
-  /** 合成某厂商子进程完整环境变量（含最新有效 PATH 与受管密钥）。 */
   resolveVendorEnv(vendor: AgentVendor): Record<string, string | undefined>;
-  /** 仅返回需注入驱动层该厂商自身子进程的受管环境变量键值。 */
   resolveManagedDriverEnv(vendor: AgentVendor): Record<string, string>;
-  /** 计算包含二进制、本地凭据文件与受管密钥修订摘要的模型目录指纹。 */
   catalogFingerprint(vendor: AgentVendor): string;
-  /** 检查本机 Git 是否已安装（0 子进程）。 */
   gitInstalled(): boolean;
-  /** 安装/更新后清空路径解析缓存（不传 vendor 清全部）。 */
   invalidate(vendor?: AgentVendor): void;
-  /** Windows 下重读系统与用户注册表 `Environment\Path` 并合并进内存。 */
+  /** Windows does not refresh PATH for running processes, so the registry Path is reread after installs. */
   refreshSystemPath(): void;
 }
 

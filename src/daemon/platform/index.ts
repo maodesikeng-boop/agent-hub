@@ -1,4 +1,4 @@
-// 守护进程里和系统有关的事（docs/multi-device-design.md 第 5 节）。新加的系统差异放这里，别的代码不自己判断 process.platform。
+// OS differences belong here; other modules should not branch on process.platform.
 export {
   MACOS_CAFFEINATE_BIN,
   WIN32_KEEP_AWAKE_BIN,

@@ -1,5 +1,3 @@
-// 账号登录（docs/account-mesh-design.md「账号与登录」）：GitHub 设备码登录、把本机登记进中继、state/account.json、退出。
-// 不变量：GitHub access token 只在登录那几秒的内存里，登记完就丢，不写盘、不进日志；state/account.json 是 0600，里面没有任何令牌。
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import writeFileAtomic from "write-file-atomic";
 import { z } from "zod";
@@ -10,10 +8,8 @@ import { GITHUB_API_ORIGIN, verifyGithubToken } from "../../relay/auth.ts";
 import type { MeshIdentity } from "./identity.ts";
 import { registerWithRelay } from "./relay-client.ts";
 
-/** GitHub 设备码登录的第一步结果。 */
 export interface GithubDeviceCode {
   deviceCode: string;
-  /** 给人输入的 8 位码，比如 WDJB-MJHT。 */
   userCode: string;
   verificationUri: string;
   expiresAt: number;
@@ -23,7 +19,6 @@ export interface GithubDeviceCode {
 export interface GithubOptions {
   fetch?: typeof fetch;
   now?: () => number;
-  /** github.com（网页和 OAuth 接口）；测试换成假的。 */
   webOrigin?: string;
 }
 
@@ -57,7 +52,6 @@ async function postGithub(path: string, fields: Record<string, string>, options?
   return body as Record<string, unknown>;
 }
 
-/** 后置：POST github.com/login/device/code（只带 client_id，scope 为空）；GitHub 回错误时抛错，message 是给人看的。 */
 export async function requestGithubDeviceCode(clientId: string, options?: GithubOptions): Promise<GithubDeviceCode> {
   const body = await postGithub("/login/device/code", { client_id: clientId, scope: "" }, options);
   if (typeof body.error === "string") throw githubError(body.error);
@@ -81,7 +75,6 @@ export type GithubPollResult =
   | { kind: "denied" }
   | { kind: "expired" };
 
-/** 后置：按 GitHub 的 error 字段分类（authorization_pending、slow_down、access_denied、expired_token）；拿到 token 回 token；网络错误抛错。 */
 export async function pollGithubDeviceToken(clientId: string, deviceCode: string, options?: GithubOptions): Promise<GithubPollResult> {
   const body = await postGithub(
     "/login/oauth/access_token",
@@ -103,7 +96,6 @@ export async function pollGithubDeviceToken(clientId: string, deviceCode: string
   }
 }
 
-/** state/account.json。 */
 export interface AccountFile {
   version: 1;
   relayUrl: string;
@@ -120,7 +112,6 @@ const accountFileSchema = z.strictObject({
   state: z.enum(["pending", "active"]),
 });
 
-/** 后置：没有文件回 null；内容不对抛错，错误里写文件路径和怎么办（删掉重新登录）。 */
 export function readAccountFile(file: string): AccountFile | null {
   if (!existsSync(file)) return null;
   let raw: unknown;
@@ -134,12 +125,10 @@ export function readAccountFile(file: string): AccountFile | null {
   return parsed.data as AccountFile;
 }
 
-/** 后置：原子写入，权限 0600。 */
 export function writeAccountFile(file: string, data: AccountFile): void {
   writeFileAtomic.sync(file, `${JSON.stringify(accountFileSchema.parse(data), null, 2)}\n`, { mode: MESH_ACCOUNT_FILE_MODE });
 }
 
-/** 登录进行到哪一步（AccountStatusView 的前半段由它给）。 */
 export type AccountLoginState =
   | { kind: "signed_out" }
   | { kind: "signing_in"; userCode: string; verificationUri: string; expiresAt: number }
@@ -149,34 +138,22 @@ export interface AccountServiceOptions {
   file: string;
   identity: MeshIdentity;
   device: { id: DeviceId; name: string; platform: string };
-  /** 默认中继网址；startLogin 可以换。 */
   relayUrl: string;
   githubClientId: string;
   fetch?: typeof fetch;
   now?: () => number;
-  /** 测试换：GitHub 网页和接口的地址。 */
   githubWebOrigin?: string;
   githubApiOrigin?: string;
-  /** 两次轮询之间等多久（测试换成立刻返回）。被 signal 叫停时 reject。 */
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   log: (line: string) => void;
 }
 
 export interface AccountService {
   state(): AccountLoginState;
-  /**
-   * 开始 GitHub 设备码登录。
-   * 后置：立刻返回 signing_in（带 8 位码）；之后后台轮询，用户授权后把本机登记进中继、写 account.json、变成 signed_in 并通知 onChange；
-   * 用户拒绝、码过期、中继拒绝时回到 signed_out 并通知，原因进 lastError。已经 signed_in 时抛错。
-   */
   startLogin(input?: { relayUrl?: string; githubClientId?: string }): Promise<AccountLoginState>;
-  /** 后置：停止轮询，回到 signed_out；不在登录中时什么也不做。 */
   cancelLogin(): void;
-  /** 后置：本机登记状态变了（中继把本机从 pending 改成 active）时写回 account.json。 */
   markState(state: MeshDeviceState): void;
-  /** 后置：删 account.json、回到 signed_out、通知 onChange。设备密钥留着，下次登录沿用。 */
   logout(): Promise<void>;
-  /** 最近一次登录失败的原因（给人看的，不带网络原文）。 */
   lastError(): string | null;
   onChange(listener: (state: AccountLoginState) => void): () => void;
   close(): void;

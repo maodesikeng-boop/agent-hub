@@ -68,7 +68,6 @@ const INCLUDED_SYSTEM_EVENTS: ReadonlySet<SystemMessageMeta["event"]> = new Set(
   "schedule.failed",
 ]);
 
-/** 截取字符串末尾最多 maxUnits 个 UTF-16 码元；若切点落在低位代理项（0xDC00..0xDFFF）上则后移 1 位以保持合法码点。 */
 export function sliceTailUtf16Safe(text: string, maxUnits: number): string {
   if (maxUnits <= 0) return "";
   if (text.length <= maxUnits) return text;
@@ -93,7 +92,6 @@ function formatPmAgentText(message: Message): string {
   return `${message.text}\n[状态：${statusLabel}]`;
 }
 
-/** 按真值表将单条本代消息格式化为继承上下文段落；不纳入的消息返回 null。 */
 export function formatGenerationMessage(message: Message, targetSessionId: SessionId): string | null {
   if (message.status === "queued" || message.status === "cancelled") return null;
   if (message.sessionId === targetSessionId && message.status !== null && TARGET_IN_FLIGHT.has(message.status)) {
@@ -122,7 +120,6 @@ export function formatGenerationMessage(message: Message, targetSessionId: Sessi
   return null;
 }
 
-/** 倒序流式收集本代消息，按窗口保底字符预算与扫描行数护栏截断并还原为时间正序。 */
 export function collectGenerationContext(
   messagesNewestFirst: Iterable<Message>,
   options: {
@@ -172,7 +169,6 @@ export function collectGenerationContext(
   return { body: blocks.join("\n\n"), truncated, scannedRows };
 }
 
-/** 提取当前记忆代前序会话（输入为从新到旧）的原始记录说明：可读格式列路径，专有/压缩格式标明不可跨厂直读。 */
 export function describeGenerationTranscripts(
   priorSessionsNewestFirst: readonly PriorSessionTranscriptRef[],
   findTranscript: TranscriptLookup,
@@ -207,13 +203,11 @@ export function describeGenerationTranscripts(
   return "本代前序会话的原始记录：未找到本机记录文件，请直接依据下方本代完整记录与账本命令处理";
 }
 
-/** 拼装跨厂商切换首轮本代上下文继承说明（不走“交接”概念）。 */
 export function buildVendorSwitchPreamble(input: {
   fromVendor: string;
   toVendor: string;
   anchor: GenerationAnchor;
   context: CollectedGenerationContext;
-  /** 换代时拼好的“上一个会话加载过的技能”一节（loaded-skills.ts）；没有是 null。 */
   skills: string | null;
   transcriptSummary: string;
 }): string {

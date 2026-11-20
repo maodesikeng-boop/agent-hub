@@ -1,9 +1,4 @@
-// Windows 11 24H2+ 微软官方 `@microsoft/mxc-sdk`（V1 ProcessContainer）只读 Worker 沙箱封装。
-// 铁律：
-// 1. 按需惰性加载 `@microsoft/mxc-sdk/v1`，非 Windows 平台构建/运行零副作用；
-// 2. 低于 Win11 24H2、Windows Server、Node < 24.21 或仅剩需改动宿主 DACL 的 `appcontainer-dacl` 档位时，
-//    `available()` 返回 false 并记录清晰诊断状态，调用方自动平滑回退到第 1 大步的「受限令牌 + 受保护根拒写 ACL + 工具层禁写规则」，绝不硬拒报错；
-// 3. 负缓存遵守短暂 TTL（`WIN_MXC_NEGATIVE_CACHE_TTL_MS`），不用永久 `null` 缓存。
+// The MXC SDK is loaded lazily so non-Windows hosts never touch it; unsupported hosts fall back to restricted tokens instead of refusing.
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -106,7 +101,7 @@ let sdkLoader: () => MxcV1ProbeSurface = defaultLoadMxcSdk;
 let cachedSupport: { status: Win32MxcSupportStatus; expiresAt: number } | null = null;
 let lastObservedSupportStatus: Win32MxcSupportStatus | null = null;
 
-/** 校验当前 Node 版本是否满足 `@microsoft/mxc-sdk` Windows 原生句柄流要求（`>=24.21.0 <25 || >=26.8.0`）。 */
+/** The MXC SDK needs native handle streams from Node >=24.21.0 <25 or >=26.8.0. */
 export function supportsWin32MxcNodeVersion(rawVersion: string = process.versions.node): boolean {
   const clean = rawVersion.trim().replace(/^v/i, "").split("-")[0] ?? "";
   const parts = clean.split(".").map((n) => Number.parseInt(n, 10));
@@ -134,7 +129,7 @@ function discoverWindowsFixedDriveRoots(exists: (p: string) => boolean = existsS
     try {
       if (exists(root)) roots.push(root);
     } catch {
-      // 忽略未就绪光驱或盘符
+      // Skip drives that are not ready, such as empty optical drives.
     }
   }
   return roots.length > 0 ? roots : ["C:\\"];
@@ -155,7 +150,6 @@ function deduplicateWinPaths(paths: readonly string[], real: (p: string) => stri
   return out;
 }
 
-/** 将可执行文件与参数（含 `.cmd` 垫片解析）构造为传给 MXC `ContainerRequest.command` 的精确 Windows 命令行。 */
 export function buildWin32MxcCommandLine(
   program: string,
   args: readonly string[],
@@ -184,10 +178,7 @@ export function buildWin32MxcCommandLine(
   };
 }
 
-/**
- * 探测当前机器是否具备不修改宿主 DACL、且支持 `deniedPaths` 的 Win11 24H2+ MXC ProcessContainer 后端。
- * 失败结果按 `WIN_MXC_NEGATIVE_CACHE_TTL_MS`（30s）短暂缓存，绝不用永久 `null` 锁死。
- */
+/** Failed probes are cached only for WIN_MXC_NEGATIVE_CACHE_TTL_MS, never permanently. */
 export function probeWin32MxcSupport(options?: {
   platform?: NodeJS.Platform;
   nodeVersion?: string;
@@ -347,25 +338,16 @@ export function probeWin32MxcSupport(options?: {
   });
 }
 
-/** 返回最近一次 MXC 探测的结构化状态快照（供日志诊断与测试断言）。 */
 export function getLastWin32MxcSupportStatus(): Win32MxcSupportStatus | null {
   return lastObservedSupportStatus;
 }
 
-/** 仅供单测重置 MXC 探测缓存或替换 SDK 加载桩。 */
 export function resetWin32MxcCacheForTest(customLoader?: (() => MxcV1ProbeSurface) | null): void {
   cachedSupport = null;
   lastObservedSupportStatus = null;
   sdkLoader = customLoader ?? defaultLoadMxcSdk;
 }
 
-/**
- * 按只读沙箱输入构造 MXC 文件系统、网络与 UI 隔离策略：
- * - 全部本机盘根、工作树与 `protectedRoots` 均置于 `readonlyPaths`（严格只读）；
- * - 仅放行会话私有 `tmpDir`（各家驱动已将 `TEMP`/`TMP`/`TMPDIR` 指向它）与厂商运行时可写目录/文件，绝不放行共享宿主 `%TEMP%`；
- * - 任何落在 `protectedRoots` 或 `deniedPaths` 内的路径一律从 `readwritePaths` 剔除；
- * - `secretPaths`（扣除厂商自身启动必读的 `readableFiles`）全部置入 `deniedPaths`。
- */
 export function buildWin32MxcFilesystemPolicy(
   input: Win32MxcReadonlyInputLike,
   options?: Win32MxcWrapBuildOptions,
@@ -420,7 +402,6 @@ export function buildWin32MxcFilesystemPolicy(
         ];
       }
     } catch {
-      // 探测辅助失败不影响主盘根只读策略
     }
   }
 
@@ -443,7 +424,7 @@ export function buildWin32MxcFilesystemPolicy(
     real,
   );
 
-  // 安全铁律：任何位于受保护根（含数据目录、state、全部 worktrees）或禁读路径下的目录，或反过来包含受保护根的父目录，绝不允许进入 readwritePaths
+  // Paths under a protected root or denied path, and parents of protected roots, must never become read-write.
   const readwritePaths = writableCandidates.filter((candidate) => {
     if (protectedRoots.some((root) => isPathInsideOrEqual(root, candidate) || isPathInsideOrEqual(candidate, root))) {
       return false;

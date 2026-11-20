@@ -1,13 +1,9 @@
-// 事件流里没有额度的厂商的额度：用户打开额度面板时另起一次性进程问一次（如 agy -p "/usage"，不耗额度），结果缓存 FETCHED_QUOTA_FRESH_MS。
-// 不在后台定时问；没装、问失败、输出认不出来都回空（网页不显示那几块），空结果只记 FETCHED_QUOTA_RETRY_MS。哪几家、怎么问、分几组由各家 spec 的 quota.fetched 定；
-// 每家各问各的、各自缓存，GET /api/quota 一次把几家合在一起回（mergeFetchedQuotas）。
 import { execFile } from "node:child_process";
 import { LRUCache } from "lru-cache";
 import { FETCHED_QUOTA_FRESH_MS, FETCHED_QUOTA_RETRY_MS, FETCHED_QUOTA_TIMEOUT_MS, type AgentVendor, type FetchedQuotaSpec, type QuotaResponse } from "../../shared/index.ts";
 
 const EMPTY: QuotaResponse = { groups: [] };
 
-/** 输出每行：组名 TAB 窗口名 TAB 剩余百分比（如 75%） TAB 重置时间（ISO）。认不出来的行跳过，一个窗口都没有的组不返回。 */
 export function parseFetchedQuota(text: string, spec: FetchedQuotaSpec, vendor: AgentVendor): QuotaResponse {
   const groups: QuotaResponse["groups"] = spec.groups.map((g) => ({ vendor, id: g.key, windows: {} }));
   for (const line of text.split(/\r?\n/)) {
@@ -35,7 +31,6 @@ export interface QueryFetchedQuotaOptions {
   timeoutMs?: number;
 }
 
-/** 起一次进程问额度，返回解析后的结果；起不来、超时、退出码非 0 报错。 */
 export function queryFetchedQuota(options: QueryFetchedQuotaOptions): Promise<QuotaResponse> {
   const { vendor, path, spec, cwd, env, timeoutMs = FETCHED_QUOTA_TIMEOUT_MS } = options;
   return new Promise((resolve, reject) => {
@@ -53,10 +48,6 @@ export function queryFetchedQuota(options: QueryFetchedQuotaOptions): Promise<Qu
 }
 
 export interface FetchedQuota {
-  /**
-   * 缓存新就直接回，旧了问一次；同时来的几次只问一次；不会失败（失败回空）。
-   * 问到了有数据的记 FETCHED_QUOTA_FRESH_MS；失败、一组都没认出来的只记 FETCHED_QUOTA_RETRY_MS（不把偶发失败当结果长期缓存）。
-   */
   get(): Promise<QuotaResponse>;
 }
 
@@ -82,7 +73,6 @@ export function createFetchedQuota(options: { query: (() => Promise<QuotaRespons
   };
 }
 
-/** 几家合成一个：同时问（各家各自缓存、各自失败），按给的顺序（名单顺序）把各组拼起来；一家都没有回空。 */
 export function mergeFetchedQuotas(quotas: readonly FetchedQuota[]): FetchedQuota {
   return {
     async get() {

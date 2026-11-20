@@ -1,19 +1,15 @@
-// 经一个 http.Agent 发 HTTP 请求、回标准 Response：组网的 Agent（dialer.agentFor）上跑的是 TLS 里面的 HTTP/1.1，fetch（undici）用不了 http.Agent。
+// Mesh connections run HTTP/1.1 inside TLS on an http.Agent, which fetch (undici) cannot use.
 import { request as httpRequest, type Agent } from "node:http";
 import { Readable } from "node:stream";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 
-/** 组网请求里的 Host：对方按 TLS 证书认人，不看 Host。 */
+/** Peers authenticate by TLS certificate and ignore Host. */
 export const MESH_HTTP_HOST = "mesh.fusa";
 
 function headerRecord(headers: RequestInit["headers"]): Record<string, string> {
   return Object.fromEntries(new Headers(headers ?? {}).entries());
 }
 
-/**
- * 后置：path 以 / 开头；回的 Response 体是流（大文件不落内存）；连不上、被 signal 叫停时 reject。
- * 101、204、205、304 和 HEAD 的响应体是 null。
- */
 export function agentFetch(agent: Agent, path: string, init: Omit<RequestInit, "body"> & { body?: RequestInit["body"] | Readable } = {}): Promise<Response> {
   const method = init.method ?? "GET";
   return new Promise<Response>((resolve, reject) => {

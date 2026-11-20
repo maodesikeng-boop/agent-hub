@@ -1,7 +1,3 @@
-// 界面服务（设计第 4.2、4.3 节；m1-plan 第 3 节接口约定第 1、2 条）：HTTP + WebSocket，只监听 127.0.0.1。
-// 组网入口（docs/account-mesh-design.md「连法」）：别的设备经双向认证的 TLS 连进来（daemon/mesh/），握手认出是哪台后交给这里
-// （startUiServer 返回的 acceptMeshConnection），只认 TLS 证书，不看任何头。
-// 两种入口各认什么、查什么，见 Entry 和 createUiServer 里的 entryRules。
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server } from "node:http";
@@ -181,148 +177,89 @@ import {
 
 export interface UiServerOptions {
   ledger: Ledger;
-  /** 界面用户令牌（“主钥匙”），见 loadOrCreateUiToken：用来登录、生成登录链接；浏览器 cookie 里放的是各自的随机会话令牌，不是它。 */
   token: string;
-  /** 浏览器会话存哪（migrations/0015 的 browser_sessions）。不给就用只在内存里的库（测试用，重启即丢）。 */
   db?: Db;
-  /** “全部退出”换主钥匙：守护进程在这里写 state/ui-token、打印新的登录链接，返回新令牌。不给就只在内存里换一个随机的。 */
   rotateToken?: () => string;
-  /** 当前时间（毫秒），测试用：登录链接的有效期、会话的最后活动。 */
   now?: () => number;
-  /** 聊天框上传的文件放哪（paths.ts 的 uploadsDir；守护进程传 realpath 过的，agent 拿到的路径和它一致）。 */
   uploadsDir: string;
-  /** agent 发给用户的文件的副本放哪（paths.ts 的 sentFilesDir）。 */
   sentFilesDir: string;
-  /** 网页打包产物（vite build 的 dist/）。不存在就只提供 API，请求页面返回 404。 */
   staticDir: string;
-  /**
-   * 防 DNS 重绑定要比对 Host 头里的端口：已经在监听时用实际端口，
-   * 还没监听（测试里用 inject）时用这个。
-   */
+  /** DNS rebinding protection compares the Host port; before listen (inject in tests) this value is used. */
   port?: number;
   logger?: boolean;
-  /** 模型名单（daemon/driver/model-catalog.ts 的 createModelCatalogs）。不给就回打包的名单。 */
   models?: { list(options?: { refresh?: boolean | "unusable"; vendor?: AgentVendor }): Promise<ModelCatalog[]> };
-  /** 事件流里没有额度的厂商的额度（daemon/quota/fetched-quota.ts 的 createFetchedQuota）。不给就回空。 */
   quota?: { get(): Promise<QuotaResponse> };
-  /**
-   * 输入框的“/”命令和“@”文件（daemon/composer.ts 的 createComposerService）。不给就回空列表（不查对话在不在）。
-   */
   composer?: ComposerService;
-  /** 全厂商连接器 / MCP / Skill 并集同步服务（daemon/vendor-sync/）。不给则 preview 回空列表、apply 回 501。 */
   vendorSync?: VendorSyncService;
-  /** 本机各厂商能力库存服务（daemon/pm-capabilities/inventory.ts）。不给则 GET/PATCH 里的 inventory 为空列表。 */
   capabilityInventory?: CapabilityInventoryService;
-  /** Settings → Providers 一键安装与界面内直接登录管理服务（daemon/provider-manager/）。不给则 GET 回空、写接口回 501。 */
   providers?: ProviderManager;
-  /** 弹“选择文件夹”的（daemon/pick-folder.ts）。不给就用真的 osascript（不是 macOS 回 501）；测试里传假的。 */
   folderPicker?: FolderPicker;
-  /** 跑 macOS 的 open（在 Finder 中显示、用默认程序打开）。默认 execFile("open")（不是 macOS 回 501）；测试里换成假的，不真的打开。 */
   runOpen?: RunOpen;
-  /** 这台机器能做什么，原样放进 /api/state 的 server，网页按它显示控件。默认按 process.platform（shared/server-info.ts）。 */
   serverInfo?: ServerInfo;
-  /** 推送（联机 P4，daemon/push/）：订阅接口和 WebSocket 上的前台上报。不给 = 推送接口 404，上报忽略。 */
   push?: {
     publicKey: string;
     subscribe(subscription: PushSubscriptionRecord): void;
     unsubscribe(endpoint: string): void;
     presence: PresenceBoard;
   };
-  /** 飞书（docs/feishu-design.md，daemon/feishu/）：设置接口 /api/feishu/*，和终端命令共用一份。不给 = 这些接口回 unavailable。 */
   feishu?: FeishuSetupService;
-  /**
-   * 联机（daemon/peers/）：设备列表、入口转发。不给 = 没有 /api/devices、/api/peer/*、/d/，组网入口来的请求一律 401。
-   * 组网入口来的设备能访问的：/api/ 下除了 ENTRY_ONLY_API_PREFIXES 的；不能用 /d/、/auth。
-   */
   peers?: Peers;
-  /** 账号组网（daemon/mesh/）：/api/account*、/api/peer/trust；组网入口来的设备按它的信任表再认一次。状态一变给浏览器推 account.updated。 */
   mesh?: NonNullable<PeerRoutesOptions["mesh"]> & Pick<Mesh, "onChange" | "trust">;
-  /** 全账号单飞书机器人的跨机同步与转发接口（/api/peer/feishu/*）。 */
   feishuPeer?: PeerRoutesOptions["feishuPeer"];
-  /** 入口转发的可调项（测试里换 fetch、调短心跳）。 */
   peerProxy?: PeerRoutesOptions["proxy"];
-  /** /api/ws 给浏览器发心跳的间隔（ws-keepalive.ts），默认 WS_HEARTBEAT_MS；测试调短。 */
   wsHeartbeatMs?: number;
-  /** Router 跨设备分派引擎（处理本机 /api/router/commands 发令与重试）。 */
   routerDispatcher?: RouterDispatcher;
-  /** 本机 Router 目标端口（供远端对等设备经 /api/router/target-ops 执行操作）。 */
   routerLocalPort?: RouterTargetPort;
-  /** 空闲排空热重启（daemon/self-reload.ts）：POST/GET /api/self-reload。不给 = 守护进程没有外壳监管，POST 回 409。 */
   selfReload?: {
     request(input: { build: boolean; by: string }): SelfReloadResponse;
     status(): SelfReloadStatus;
   };
 }
 
-/** 仓库根目录（打包产物、自热重启找代码用）。 */
 export const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
-/** 登录 cookie 的有效期：一年（和库里会话的有效期一样，shared/limits.ts 的 SESSION_MAX_AGE_MS）。 */
 const COOKIE_MAX_AGE_SECONDS = SESSION_MAX_AGE_MS / 1000;
-/** 退出 / 全部退出时 WebSocket 被关的状态码（1008 policy violation）和原因。 */
 const WS_CLOSE_UNAUTHORIZED = 1008;
-/** clientId 是网页生成的 UUID 一类的串，限长免得拿它撑大去重键。 */
+/** Cap length so clientId cannot inflate dedupe keys. */
 const MAX_CLIENT_ID_LENGTH = 200;
 const POSITIVE_INT = /^[1-9]\d*$/;
 const NON_NEGATIVE_INT = /^(0|[1-9]\d*)$/;
 const HOST_HEADER = /^(?:127\.0\.0\.1|localhost):(\d+)$/i;
-/** 浏览器发的 Origin 是 scheme://host:port，没有路径和末尾斜杠；主机名那三种跟 Host 检查一致。 */
 const ORIGIN_HEADER = /^http:\/\/(?:127\.0\.0\.1|localhost):(\d+)$/i;
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
-/**
- * 请求从哪来：界面端口（127.0.0.1 TCP），或组网入口（startUiServer 的 acceptMeshConnection 交进来的 TLS 连接）。
- * 组网入口的请求记进 listenerOf 再交给同一个 Fastify；没记的是界面端口。
- */
 type Listener = "uiPort" | "mesh";
 const listenerOf = new WeakMap<IncomingMessage, Listener>();
-/** 组网入口的连接是哪台设备的（TLS 握手时按证书认出来的）。 */
 const meshPeerOf = new WeakMap<object, DeviceId>();
 
-/** 请求从哪个入口进来：每个请求在第一个钩子里按“在哪听到的 + Host”定一次（resolveEntry），之后各处都按它和 EntryRule 办。 */
 type Entry =
-  /** 本机浏览器：界面端口，Host 是 127.0.0.1 / localhost:<界面端口>。 */
   | { kind: "loopback" }
-  /** 组网入口：账号里的别的设备（TLS 证书认出来的）。 */
   | { kind: "mesh" };
 type EntryKind = Entry["kind"];
 
-/** 请求带的身份。 */
 type Identity =
-  /** 已登录浏览器的会话 cookie（只在 /api/、/d/ 上查）。 */
   | { kind: "cookie"; sessionId: string }
-  /** 组网入口来的设备：别的设备，或别的设备转发来的浏览器请求。 */
   | { kind: "meshDevice"; peer: DeviceId }
   | { kind: "none" };
 type IdentityKind = Exclude<Identity["kind"], "none">;
 
-/** 定入口时被拒的原因（403）。 */
 type EntryRejection = "forbidden_host" | "forbidden_identity";
 
-/** 每种入口的规则（createUiServer 里的 entryRules）。加一种入口 = 在 Entry 里加一种、表里加一行。 */
 interface EntryRule {
-  /** 在哪几个地方听到的请求可能是这种入口。同一个地方有几种时按表里的顺序认 Host。 */
   listeners: readonly Listener[];
-  /** 查 Host：是这种入口回 Entry，不是回 null（试下一种），是但不放行回原因。null = 不查 Host，听到就是。 */
   host: ((req: FastifyRequest) => Entry | EntryRejection | null) | null;
-  /** cookie 身份的改状态请求和 WebSocket 握手：Origin 要对上的。null = 不查（这个入口不认 cookie）。 */
   origin: ((origin: string, entry: Entry) => boolean) | null;
-  /** 认哪些身份。 */
   identities: readonly IdentityKind[];
-  /** 浏览器算不算在这台机器上（serverInfoForClient：出不出“在 Finder 中显示”）。 */
   sameMachine: boolean;
-  /** 能不能碰浏览器才用的：/auth、静态文件、/d/ 转发、ENTRY_ONLY_API_PREFIXES。能的入口上也只有 cookie 身份能碰。 */
   browserPaths: boolean;
 }
 
-/** 认出入口和身份之后记下的（按原始请求对象记，WebSocket 握手和 HTTP 一样）。 */
 interface RequestContext {
   entry: Entry;
   rule: EntryRule;
   identity: Identity;
 }
 
-/** 桌面外壳监管契约标识（与 apps/desktop/contract.json 锁死一致，由 auth-status.test.ts 校验）。 */
 export const DESKTOP_PRODUCT = "fusa" as const;
 export const DESKTOP_PROTOCOL_VERSION = 1 as const;
 
@@ -340,7 +277,6 @@ export interface DesktopHealthResponse {
 }
 
 const pathOf = (req: FastifyRequest) => req.url.split("?", 1)[0] ?? "";
-/** 组网入口来的设备能碰的：/api/ 下除了入口专用的（不能借本机的转发 /d/ 去别的设备，也不能碰 /auth、静态文件）。 */
 const inDeviceScope = (path: string) => path.startsWith("/api/") && !ENTRY_ONLY_API_PREFIXES.some((prefix) => path.startsWith(prefix));
 
 const STATUS_TO_CODE: Readonly<Record<number, ApiErrorCode>> = {
@@ -368,7 +304,7 @@ function digest(value: string): Buffer {
   return createHash("sha256").update(value).digest();
 }
 
-/** 定时长比较：先各取 sha256 再比，不泄露令牌长度和前缀。 */
+/** Compare sha256 digests so timing leaks neither token length nor prefix. */
 function tokenEquals(expected: Buffer, given: unknown): boolean {
   return typeof given === "string" && timingSafeEqual(expected, digest(given));
 }
@@ -423,7 +359,6 @@ const pmCapabilitiesStartSchema = z.discriminatedUnion("from", [
 const pmFruitSchema = z.string().refine(isPmFruit, "unknown fruit").transform((s) => s as PmFruit);
 const jellyColorSchema = z.string().refine(isJellyColorId, "unknown color").transform((s) => s as JellyColorId);
 
-/** PUT /api/pms/:id/look：两项都要给，null 是回到默认。 */
 const pmLookBodySchema = z.object({ fruit: pmFruitSchema.nullable(), color: jellyColorSchema.nullable() }).strict();
 
 function parsePmLookBody(body: unknown): PmLookRequest {
@@ -438,7 +373,6 @@ const createPmBodySchema = z
     vendor: vendorSchema.optional(),
     defaultModel: optionalSettingSchema("defaultModel").optional(),
     effort: optionalSettingSchema("effort").optional(),
-    // 主文件夹可选；给了就必须是个非空路径（存不存在、是不是目录由账本查）
     folder: boundedBytesSchema(MAX_PATH_BYTES, "folder")
       .refine((s) => s.trim() !== "" && !s.includes("\u0000"), "folder must be a non-empty path")
       .optional(),
@@ -560,7 +494,6 @@ function parsePostBody(body: unknown): { clientId: string; text: string; attachm
   const { clientId, text, attachmentIds: rawIds, workerPick } = parseWithSchema(postMessageBodySchema, body);
   const ids = [...new Set(rawIds ?? [])];
   if (ids.length > MAX_ATTACHMENTS_PER_MESSAGE) throw new LedgerRequestError("invalid", ATTACHMENTS_TOO_MANY_MESSAGE);
-  // 只发文件的时候文字可以是空的
   if (text.trim().length === 0 && ids.length === 0) throw new HttpError(400, "text must not be empty");
   if (Buffer.byteLength(text, "utf8") > MAX_MESSAGE_BYTES) {
     throw new HttpError(400, `text must be at most ${MAX_MESSAGE_BYTES} bytes`);
@@ -718,7 +651,6 @@ function parseVendorParam(raw: unknown): AgentVendor {
   return raw;
 }
 
-/** 逗号分隔的编号列表（空串、不带都是空列表），最多 CONVERSATION_LOOKUP_MAX_IDS 个。 */
 function parseIdList(raw: unknown, what: string): number[] {
   if (raw === undefined || raw === "") return [];
   if (typeof raw !== "string") throw new HttpError(400, `${what} must be a comma-separated list of positive integers`);
@@ -739,7 +671,6 @@ function parseNodeKeyParam(raw: unknown): string {
   return raw;
 }
 
-/** Range 头（只认单段 bytes=a-b、bytes=a-、bytes=-n）：返回要发的闭区间；没带、认不出、无效是 null（发整个文件），超出文件是 "unsatisfiable"。 */
 function parseRange(header: string | undefined, size: number): { start: number; end: number } | null | "unsatisfiable" {
   const match = header === undefined ? null : /^bytes=(\d*)-(\d*)$/.exec(header.trim());
   if (match === null || (match[1] === "" && match[2] === "")) return null;
@@ -749,36 +680,27 @@ function parseRange(header: string | undefined, size: number): { start: number; 
     return { start: Math.max(0, size - suffix), end: size - 1 };
   }
   const start = Number(match[1]);
-  // 末位比首位小（bytes=5-2）：RFC 9110 说这个 Range 无效、整个忽略，发整个文件
+  // RFC 9110 says an inverted range is invalid and must be ignored.
   if (match[2] !== "" && Number(match[2]) < start) return null;
   if (start >= size) return "unsatisfiable";
   return { start, end: match[2] === "" ? size - 1 : Math.min(Number(match[2]), size - 1) };
 }
 
-/** 存着的文件的 CSP：沙箱、什么都不许加载，直接打开也不会当网页执行。 */
+/** Stored files are untrusted; the sandbox CSP prevents them from executing as pages even when opened directly. */
 const STORED_FILE_CSP = "sandbox; default-src 'none'";
 const SVG_MIME = "image/svg+xml";
-/**
- * svg 直接打开（点开看大图）时，它自带的 <style>、style="" 被 default-src 'none' 拦掉，画出来是黑的（真浏览器验证过），
- * 所以只给 svg 放开内联样式；脚本仍被 sandbox（没有 allow-scripts）和 default-src 'none' 拦着。
- */
+/** SVG needs inline styles or it renders black under default-src 'none'; scripts stay blocked by sandbox and default-src. */
 const SVG_CSP = `${STORED_FILE_CSP}; style-src 'unsafe-inline'`;
 
-/** 预览窗取文件时带 ?inline=1：pdf、html 才内联（放进 iframe 看），别的照旧当下载。 */
 const wantsPreview = (req: FastifyRequest) => (req.query as { inline?: unknown }).inline === "1";
-/** html 预览：脚本能跑，但 sandbox 没有 allow-same-origin，页面是“不透明来源”：拿不到 cookie、请求界面接口没有登录也过不了 Origin 检查。 */
+/** HTML previews run scripts in an opaque origin (no allow-same-origin), so they get no cookies and fail the Origin check. */
 const HTML_PREVIEW_CSP = "sandbox allow-scripts";
 
-/**
- * 发一个存在数据目录里的文件（上传的、agent 发出的副本）。文件不可信：只有图片内联显示，别的一律当下载；
- * 禁止嗅探、CSP 沙箱化，直接打开地址也不会当网页执行（svg 里的脚本也不跑）。支持单段 Range（视频、大 PDF 拖动用）。
- * 例外：预览窗带 ?inline=1 取的 pdf 内联（CSP 不变，实测浏览器自带查看器在这样的响应里能渲染），html 内联并换成 HTML_PREVIEW_CSP。
- */
 function sendStoredFile(req: FastifyRequest, reply: FastifyReply, file: Pick<Attachment, "name" | "path" | "size" | "mime">) {
   req.headers["x-no-compression"] = "1";
   const preview = wantsPreview(req);
   const inline = isImageMime(file.mime) || (preview && (file.mime === "application/pdf" || file.mime === "text/html"));
-  // 预览 html 是页面：没写 charset 的中文页面会按 Latin-1 显示成乱码，所以明说 UTF-8
+  // Without an explicit charset, Chinese pages render as Latin-1 mojibake.
   const contentType = preview && file.mime === "text/html" ? `${file.mime}; charset=utf-8` : file.mime;
   const csp = file.mime === SVG_MIME ? SVG_CSP : preview && file.mime === "text/html" ? HTML_PREVIEW_CSP : STORED_FILE_CSP;
   reply
@@ -805,7 +727,6 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       ...serverInfoFor(process.platform, { supervised: opts.selfReload !== undefined }),
       repoDir: ROOT_DIR,
     };
-  // 默认的 open 只有 macOS 上有；不是 macOS 又没注入假的：回 501，不去起一个不存在的 open
   const runOpen: RunOpen =
     opts.runOpen ??
     (serverInfo.fileActions
@@ -814,9 +735,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
           throw new FileActionsUnavailable();
         });
   if (!UI_TOKEN_PATTERN.test(opts.token)) throw new Error("ui token must be at least 16 characters of [A-Za-z0-9_-]");
-  // 进程内唯一实例标识：供桌面外壳探活核验所有权与实例退出，纯内存常量，零查询零 I/O。
   const instanceId = randomUUID();
-  // 主钥匙：登录用；“全部退出”会换掉它
   let expectedToken = digest(opts.token);
   let ownedDb: Db | undefined;
   if (opts.db === undefined) {
@@ -829,7 +748,6 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
   const broadcastResync = () => {
     for (const send of wsSenders) send({ type: "resync" });
   };
-  // 每个已登录浏览器连着的 WebSocket：退出时当场关掉，不等它自己断线
   const socketsBySession = new Map<string, Set<{ close(code?: number, reason?: string): void }>>();
   const closeSockets = (sessionId?: string) => {
     for (const [id, sockets] of socketsBySession) {
@@ -838,20 +756,16 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       socketsBySession.delete(id);
     }
   };
-  /** 每个请求认出来的入口和身份（认证钩子里定一次）。 */
   const contexts = new WeakMap<IncomingMessage, RequestContext>();
   const contextOf = (req: FastifyRequest) => contexts.get(req.raw);
-  /** 这次请求是哪个会话（cookie 身份）。 */
   const sessionOf = (req: FastifyRequest) => {
     const identity = contextOf(req)?.identity;
     return identity?.kind === "cookie" ? identity.sessionId : undefined;
   };
-  /** 组网入口来的请求 → 是哪台设备。 */
   const peerOf = (req: FastifyRequest) => {
     const identity = contextOf(req)?.identity;
     return identity?.kind === "meshDevice" ? identity.peer : undefined;
   };
-  /** 登录流与状态快照的发起方会话隔离标识（本机浏览器按 sessionId，跨机 Peer 代理按配对设备 ID + 入口会话摘要）。 */
   const clientOwnerKeyOf = (req: FastifyRequest): string => {
     const identity = contextOf(req)?.identity;
     if (identity?.kind === "cookie") return `session:${identity.sessionId}`;
@@ -862,7 +776,6 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     }
     return "anonymous";
   };
-  /** 记下这条 WebSocket 属于哪个会话：那个会话被退出时当场关掉。组网入口来的没有会话，不记。 */
   const trackSocket = (req: FastifyRequest, socket: { close(code?: number, reason?: string): void; once(event: "close", fn: () => void): unknown }) => {
     const sessionId = sessionOf(req);
     if (sessionId === undefined) return;
@@ -882,14 +795,12 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     return addr !== null && typeof addr === "object" ? addr.port : opts.port;
   };
 
-  /** cookie 名带着网址里的端口（uiCookieName）：同一浏览器里不同端口的界面各用各的。 */
   const sessionToken = (req: FastifyRequest) => readCookie(req.headers.cookie, uiCookieName(req.headers.host));
 
-  /** 设（或清：value 空、maxAge 0）这个浏览器的会话 cookie。本机 http://127.0.0.1 不能加 Secure（浏览器会丢掉这个 cookie）。 */
+  /** Secure cannot be set on http://127.0.0.1 or browsers drop the cookie. */
   const sessionCookie = (req: FastifyRequest, value: string, maxAgeSeconds: number) =>
     `${uiCookieName(req.headers.host)}=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAgeSeconds}`;
 
-  /** 登录成功：开一个新会话、设 cookie。这个浏览器已经有会话就换掉（不让同一个浏览器的记录越堆越多）；满了被挤掉的和被换掉的一样，走撤销的路（关 WebSocket）。 */
   const startSession = (req: FastifyRequest, reply: FastifyReply) => {
     const previous = sessions.authenticate(sessionToken(req));
     if (previous !== null) {
@@ -906,16 +817,14 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     reply.code(API_ERRORS[code].status).send(errorBody(code, reason));
 
 
-  /** 本机 Origin：http://127.0.0.1|localhost:<实际端口>，端口要逐字相同（不接受 04000 这种写法）。 */
   const isLoopbackOrigin = (origin: string) => {
     const match = ORIGIN_HEADER.exec(origin);
     const port = listeningPort();
     return match !== null && port !== undefined && match[1] === String(port);
   };
 
-  // 每种入口的规则（数据结构见 EntryRule）。顺序 = 同一个地方听到时认 Host 的顺序。
   const entryRules: Record<EntryKind, EntryRule> = {
-    // 防 DNS 重绑定：Host 必须是 127.0.0.1:<端口> 或 localhost:<端口>。所有路径都查，包括静态文件和 /auth。
+    // DNS rebinding protection applies to every path, including static files and /auth.
     loopback: {
       listeners: ["uiPort"],
       host: (req) => {
@@ -929,7 +838,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       sameMachine: true,
       browserPaths: true,
     },
-    // 组网入口：TLS 握手已经按证书认出是哪台，Host、Origin 是对方随便写的，不查；cookie 完全不看。
+    // Mesh peers are identified by their TLS certificate; Host and Origin are attacker-controlled and cookies are ignored.
     mesh: {
       listeners: ["mesh"],
       host: null,
@@ -941,7 +850,6 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
   };
   const entryKinds = Object.keys(entryRules) as EntryKind[];
 
-  /** 定入口：在哪听到的 → 可能的几种，按顺序认 Host。一种都对不上是 forbidden_host。 */
   const resolveEntry = (req: FastifyRequest): Entry | EntryRejection => {
     const listener = listenerOf.get(req.raw) ?? "uiPort";
     for (const kind of entryKinds) {
@@ -953,22 +861,18 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     return "forbidden_host";
   };
 
-  /** 是不是 WebSocket 握手（本机的 /api/ws，和转发的 /d/<设备>/api/ws）。 */
   const isUpgrade = (req: FastifyRequest) => (req.headers.upgrade ?? "").toLowerCase() === "websocket";
 
-  // 每个请求（含 WebSocket 握手）进来先定入口，再按入口的规则认身份、查 Origin、限路径。
   app.addHook("onRequest", async (req, reply) => {
     const entry = resolveEntry(req);
     if (typeof entry === "string") return fail(reply, entry);
     const rule = entryRules[entry.kind];
     const path = pathOf(req);
-    // 过了入口检查后的所有回应（含认不出设备令牌的 401）都不许缓存。
     reply.header("cache-control", "no-store");
 
-    // 浏览器入口上没有设备之间的接口：/api/peer/* 一律 403 forbidden_peer
     if (!rule.identities.includes("meshDevice") && path.startsWith("/api/peer/")) return fail(reply, "forbidden_peer");
 
-    // 组网入口：TLS 证书认出来的设备，还要仍在本机信任表里（握手之后被移除的，这里拒）。认不出一律 401 peer_unauthorized。
+    // A device removed from the trust table after its handshake is rejected here.
     let identity: Identity = { kind: "none" };
     if (rule.identities.includes("meshDevice")) {
       const peer = meshPeerOf.get(req.raw.socket);
@@ -978,12 +882,10 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     }
 
     if (identity.kind === "none") {
-      // 防别的本机端口上的网页借 cookie 动手：浏览器认为 localhost 不同端口是同一个站点，SameSite=Strict 拦不住。
-      // 会改状态的请求和 WebSocket 握手必须带同源的 Origin，没带也拒绝；GET 不查。
+      // Browsers treat other localhost ports as same-site, so SameSite=Strict does not stop them; state-changing requests and WebSocket handshakes require a matching Origin.
       const unsafe = !SAFE_METHODS.has(req.method) || path === API_PATHS.ws || isUpgrade(req);
       if (unsafe && rule.origin !== null && !rule.origin(req.headers.origin ?? "", entry)) return fail(reply, "forbidden_origin");
 
-      // /api/ 下（含 WebSocket 握手）和转发 /d/ 一律要 cookie。静态文件不要：网页要先加载出来，才能在 401 时提示用户怎么登录。
       if (path.startsWith("/api/") || path.startsWith(`${DEVICE_PROXY_PREFIX}/`)) {
         const session = sessions.authenticate(sessionToken(req));
         if (session === null) {
@@ -998,10 +900,8 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     contexts.set(req.raw, { entry, rule, identity });
   });
 
-  /** 判断“浏览器在不在这台机器上”用的地址（serverInfoForClient）。不算本机的入口当成没有地址。 */
   const clientAddress = (req: FastifyRequest) => (contextOf(req)?.rule.sameMachine ? req.ip : undefined);
 
-  // 对可压缩的 JSON 与文本响应标记 Vary: Accept-Encoding（具体压缩由 @fastify/compress 处理，支持 Range 的存储文件下载除外）。
   app.addHook("onSend", async (req, reply, payload) => {
     if (
       payload !== null &&
@@ -1022,8 +922,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     return payload;
   });
 
-  // 握手被这里的钩子拒了（401、403、404）：@fastify/websocket 自己的钩子排在后面没跑到，不会替它关连接；
-  // 回完响应把连接断掉，不然这条连接一直挂着（关机时还要等它）。
+  // @fastify/websocket's hook never runs after this hook rejects, so close the socket here or it hangs until shutdown.
   app.addHook("onResponse", async (req) => {
     if (isUpgrade(req)) req.raw.socket.destroy();
   });
@@ -1048,9 +947,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     }
     if (err instanceof FeishuSetupError) return fail(reply, "invalid", reason);
     const status = (err as FastifyError).statusCode;
-    // 请求体超过 1 MB：Fastify 在收完之前就拒了，原因是英文；换成默认中文（上传超限是 UploadError，上面已经处理）
     if (status === 413) return fail(reply, "too_large");
-    // 请求体校验没过（含 JSON 解析失败、HttpError）英文原文只记日志，对外统一回默认中文。
     if (status !== undefined && status >= 400 && status < 500) {
       req.log.warn({ err }, "ui-server bad request");
       return fail(reply, codeOfStatus(status));
@@ -1071,15 +968,10 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     if (ownedDb !== undefined) ownedDb.close();
   });
 
-  // 上传文件（不绑定接收方，谁来用都是先上传、再在发消息时带编号）：请求体是文件原样的字节，上限 MAX_UPLOAD_BYTES，只对这个接口放大。
-  // 放进单独的插件里：内容类型解析器只在这个插件里生效（别的接口照旧只收 JSON、上限 1 MB）；
-  // 先去掉 Fastify 自带的 JSON、文本解析器，免得 .json、.txt 文件被当成文本解析坏掉。
-  // 解析器不读请求体，把流原样交给 saveUpload 边收边写盘（几十 MB 的视频不进内存），上限由 saveUpload 数着字节管。
   app.register(async (uploads) => {
     uploads.removeAllContentTypeParsers();
     uploads.addContentTypeParser("*", (_req, payload, done) => done(null, payload));
 
-    // 同时在收的上传有上限。名额占到响应结束（正常结束、连接中途断掉都会释放）
     let activeUploads = 0;
     uploads.addHook("onRequest", async (req, reply) => {
       if (req.method !== "POST") return;
@@ -1091,7 +983,6 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     });
 
     uploads.post(API_PATHS.uploads, async (req, reply) => {
-      // 声明的长度已经超了：不收请求体，回完关掉连接
       if (Number(req.headers["content-length"]) > MAX_UPLOAD_BYTES) {
         reply.header("connection", "close");
         throw new UploadError(413, UPLOAD_TOO_LARGE_MESSAGE);
@@ -1100,17 +991,15 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       return saveUpload(uploadsDir, typeof name === "string" ? name : "", req.body instanceof Readable ? req.body : Buffer.alloc(0));
     });
 
-    // 地址里的文件名只是给浏览器看的（取文件只认编号），用通配：命名参数 Fastify 默认最多 100 个字符，长文件名会 404
+    // Wildcard because Fastify caps named params at 100 characters and long file names would 404.
     uploads.get("/api/uploads/:id/*", async (req, reply) => {
       const attachment = resolveUpload(uploadsDir, String((req.params as { id?: unknown }).id ?? ""));
       if (attachment === null) return fail(reply, "not_found");
-      // 预览窗（?inline=1）按扩展名认类型：上传时只认图片，pdf、html 之类也要能放进 iframe
       const mime = wantsPreview(req) ? sentFileMime(attachment.name) : attachment.mime;
       return sendStoredFile(req, reply, { ...attachment, mime });
     });
   });
 
-  // agent 发给用户的文件的副本（daemon/sent-files.ts）：和上传的文件同一个布局，同一套查找和响应头；类型按 sentFileMime（svg 算图片）
   app.get("/api/sent-files/:id/*", async (req, reply) => {
     const copy = resolveUpload(sentFilesDir, String((req.params as { id?: unknown }).id ?? ""));
     if (copy === null) return fail(reply, "not_found");
@@ -1123,12 +1012,8 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     app.log.warn(`static dir ${staticDir} does not exist, serving API only`);
   }
 
-  // 路由放进插件里：@fastify/websocket 的 onRoute 钩子只管它注册完之后才定义的路由，直接写在根上会比它先定义。
+  // @fastify/websocket's onRoute hook only sees routes registered after it, so routes live inside a plugin.
   app.register(async (routes) => {
-    // 登录有两条路：
-    // - GET /auth?token=<主钥匙>：启动时打印的链接。
-    // - 二维码的一次性链接 `/auth#link=<码>`：码在 # 片段里不会发给服务器（不进代理、访问日志，也不进 Referer）。
-    //   GET /auth（不带参数）是读片段的落地页，页面再 POST /auth {link} 兑换。老的 /auth?link=<码> 不再认（码会进日志）。
     routes.get(API_PATHS.auth, async (req, reply) => {
       const { token, link } = req.query as { token?: unknown; link?: unknown };
       if (token === undefined && link === undefined) return reply.type("text/html; charset=utf-8").header("referrer-policy", "no-referrer").send(LOGIN_LINK_PAGE);
@@ -1176,12 +1061,10 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       const id = String((req.params as { id?: unknown }).id ?? "");
       if (!sessions.revoke(id)) return fail(reply, "not_found");
       closeSockets(id);
-      // 退的是自己：顺手把浏览器里的 cookie 清掉
       if (id === sessionOf(req)) reply.header("set-cookie", sessionCookie(req, "", 0));
       return reply.code(204).send();
     });
 
-    // 全部退出 = 换主钥匙 + 清所有会话（包括自己）+ 作废没用掉的登录链接
     routes.post(API_PATHS.logoutAll, async (req, reply) => {
       const next = opts.rotateToken?.() ?? newUiToken();
       if (!UI_TOKEN_PATTERN.test(next)) throw new Error("rotated ui token must be at least 16 characters of [A-Za-z0-9_-]");
@@ -1198,7 +1081,6 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       return reply.code(201).send({ url: `${origin}/auth#${LOGIN_LINK_FRAGMENT_KEY}=${code}`, expiresAt } satisfies LoginLinkResponse);
     });
 
-    // 联机：设备管理、设备之间、入口转发（daemon/peers/routes.ts）
     if (opts.peers !== undefined) {
       routes.register(peerRoutes, {
         peers: opts.peers,
@@ -1225,7 +1107,6 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
 
     routes.get(API_PATHS.state, async (req): Promise<StateSnapshot> => {
       const snap = ledger.snapshot();
-      // 对等设备看不到本机指令：连同“还有更早指令”的标记一起抹掉
       const router = peerOf(req) !== undefined ? { ...snap.router, commands: [], commandsHasMore: false } : snap.router;
       return {
         ...snap,
@@ -1236,7 +1117,6 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     });
 
     routes.get(API_PATHS.models, async (req): Promise<ModelsResponse> => {
-      // ?refresh=1 全部重问；?refresh=unusable 只重问这台设备上没登录（没装）的那几家（网页打开厂商下拉时在后台发）
       const query = (req.query as { refresh?: unknown }).refresh;
       const refresh = query === "1" ? true : query === REFRESH_UNUSABLE ? REFRESH_UNUSABLE : false;
       return { catalogs: opts.models ? await opts.models.list({ refresh }) : AGENT_VENDORS.map((v) => bundledModelCatalog(v)) };
@@ -1348,7 +1228,6 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       return opts.providers.logout(vendor, body, clientOwnerKeyOf(req));
     });
 
-    // 输入框的“/”列表、“@”列表：后台按对话找目录和厂商，网页不传路径；问不到给空列表
     routes.get("/api/conversations/:id/commands", async (req): Promise<CommandsResponse> => {
       const conversationId = parseId((req.params as { id?: unknown }).id, "conversation id");
       return opts.composer ? opts.composer.commands(conversationId) : { commands: [] };
@@ -1380,7 +1259,6 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     routes.post("/api/conversations/:id/messages", async (req): Promise<PostMessageResponse> => {
       const conversationId = parseId((req.params as { id?: unknown }).id, "conversation id");
       const { clientId, text, attachmentIds, workerPick } = parsePostBody(req.body);
-      // 附件按编号从磁盘重新算（路径、名字、大小），不信请求里的任何别的东西
       const attachments = attachmentIds.map((id) => resolveUpload(uploadsDir, id) ?? undefined);
       if (attachments.some((a) => a === undefined)) throw new LedgerRequestError("invalid", ATTACHMENTS_MISSING_MESSAGE);
       return ledger.postUserMessage({
@@ -1388,12 +1266,10 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
         clientId,
         text,
         ...(attachments.length > 0 ? { attachments: attachments as NonNullable<(typeof attachments)[number]>[] } : {}),
-        // 只校验形状；是不是项目经理的对话由账本查（invalid），这台设备能不能用那家厂商不查（hub worker start 会报）
         ...(workerPick !== undefined ? { workerPick } : {}),
       });
     });
 
-    // 在 Finder 中显示 / 用默认程序打开（open-file.ts）。只收“哪条消息的第几个文件”或上传编号，不收路径。
     const doFileAction = async (reply: FastifyReply, run: () => Promise<FileActionResponse>) => {
       try {
         return await run();
@@ -1405,7 +1281,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
         return fail(reply, "internal", "没能打开这个文件");
       }
     };
-    // 浏览器不在这台机器上（手机、别的电脑）：open 会开在守护进程这台机器的屏幕上，不是用户眼前的那台
+    // A remote browser would open the file on the daemon machine's screen, not the user's.
     const requireLocal = (req: FastifyRequest): void => {
       if (!isLoopbackAddress(clientAddress(req))) throw new FileActionsUnavailable();
     };
@@ -1504,7 +1380,6 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       return { changed: result.change !== null, persona: result.persona };
     });
 
-    // 项目经理记忆目录子文件（<topic>.md）：文件名用通配，让含编码斜杠的非法路径走账本 400 校验而不是落成 404
     routes.get("/api/pms/:id/memory-files", async (req): Promise<PmMemoryFilesResponse> => {
       return ledger.listPmMemoryFiles(parseId((req.params as { id?: unknown }).id, "pm id"));
     });
@@ -1526,7 +1401,6 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       return reply.code(204).send();
     });
 
-    // 定时任务卡片：校验和写库都在账本里（同 hub schedule），这里只认请求体的形状
     routes.post("/api/pms/:id/schedules", async (req, reply) => {
       const pmId = parseId((req.params as { id?: unknown }).id, "pm id");
       const raw = parseWithSchema(addScheduleBodySchema, req.body);
@@ -1579,7 +1453,6 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       return reply.code(202).send({ messageId: result.messageId } satisfies RetryMessageResponse);
     });
 
-    // ---- Router（总助）与持久化任务图轨道 A 接口 ----
     routes.get(API_PATHS.routerDigest, async (): Promise<DeviceRouterDigest> => {
       return ledger.getRouterDigest();
     });
@@ -1593,7 +1466,6 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
             ? query.before
             : undefined;
       const limit = parseOptionalPositiveInt(query.limit, "limit");
-      // kind=report：不分状态只回简报（v2 时间流翻历史）；不带 kind 照旧
       if (query.kind === undefined) return ledger.listRouterItems(cursor, limit);
       if (query.kind !== "report") throw new LedgerRequestError("invalid", "kind 只能是 report");
       return ledger.listRouterItems(cursor, limit, query.kind);
@@ -1625,7 +1497,6 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       });
     });
 
-    // 用户在“要你动手”的提醒卡上点了 Done：先让 ModelCatalogs 重问这家厂商（事务外的 I/O），账本再按它的现状留卡或接着派（docs/user-blockers-design.md）
     routes.post("/api/user-blockers/:id/recheck", async (req): Promise<RecheckUserBlockerResponse> => {
       const blockerId = parseId((req.params as { id?: unknown }).id, "user blocker id");
       const vendor = ledger.userBlockerVendor(blockerId);
@@ -1669,7 +1540,6 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       if (peerOf(req) !== undefined) return fail(reply, "forbidden_peer") as never;
       if (!opts.routerDispatcher) return fail(reply, "unavailable", "当前服务未启用总助分派引擎") as never;
       const raw = parseWithSchema(postRouterCommandBodySchema, req.body);
-      // 规划可能很慢：登记完立即回 planning 记录，终态由 router.command.updated 推给网页
       const command = await opts.routerDispatcher.submitCommand(raw, { background: true });
       return { command };
     });
@@ -1744,7 +1614,6 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       });
     });
 
-    // 推送订阅（联机 P4）：只在开了推送的服务上有
     const push = opts.push;
     if (push !== undefined) {
       routes.get(API_PATHS.pushKey, async (): Promise<PushKeyResponse> => ({ publicKey: push.publicKey }));
@@ -1762,7 +1631,6 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       });
     }
 
-    // 飞书设置（docs/feishu-design.md）：只在本机网页上配，别的设备经组网转过来的一律 forbidden_peer
     const feishuOf = (req: FastifyRequest, reply: FastifyReply): FeishuSetupService | null => {
       if (peerOf(req) !== undefined) {
         fail(reply, "forbidden_peer");
@@ -1821,7 +1689,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     });
 
     routes.get(API_PATHS.ws, { websocket: true }, (socket, req) => {
-      // 自己从 URL 取参数：injectWS 造的请求没有 req.query；重复的 since 当作不合法。
+      // injectWS requests have no req.query, so parse the URL directly.
       const sinceValues = new URL(req.url, "http://localhost").searchParams.getAll("since");
       const since = sinceValues.length === 1 ? sinceValues[0] : sinceValues.length === 0 ? undefined : null;
       const isPeerSocket = peerOf(req) !== undefined;
@@ -1833,18 +1701,15 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       const removeSender = () => wsSenders.delete(send);
       socket.once("close", removeSender);
       socket.once("error", removeSender);
-      // 先订阅再补齐：账本是同步的，两步之间不会有变化插进来，所以每条只推一次、seq 递增。
+      // The ledger is synchronous, so nothing can land between subscribe and backfill; each change is sent once in seq order.
       const unsubscribe = ledger.onChange(send);
       socket.once("close", unsubscribe);
       socket.once("error", unsubscribe);
-      // 账号组网的状态不在账本的变化流里：变了让本机浏览器重拉 GET /api/account（别的设备来的不推，它们看不到本机的账号接口）
       if (opts.mesh && !isPeerSocket) {
         const offAccount = opts.mesh.onChange(() => send({ type: "account.updated" }));
         socket.once("close", offAccount);
         socket.once("error", offAccount);
       }
-      // 网页 → 服务端只有前台上报（WsClientMessage）；别的、坏的忽略。组网入口来的（别的设备直连或转发来的浏览器）不收：
-      // 前台状态只属于入口本机已登录的浏览器（跟 /api/push/* 一样）
       if (push !== undefined && sessionOf(req) !== undefined) {
         socket.on("message", (data: Buffer, isBinary: boolean) => {
           const message = isBinary ? null : parsePresence(data.toString("utf8"));
@@ -1857,14 +1722,13 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
       trackSocket(req, socket);
       keepAlive(socket, opts.wsHeartbeatMs);
 
-      if (since === undefined) return; // 不带 since：只推之后的新变化
+      if (since === undefined) return;
       if (typeof since !== "string" || !NON_NEGATIVE_INT.test(since)) return send({ type: "resync" });
       try {
         const result = ledger.changesSince(Number(since));
         if (result.kind === "resync") return send({ type: "resync" });
         for (const change of result.changes) send(change);
       } catch (err) {
-        // 账本出错：连接不能留着半截，取消订阅、关掉，让网页按断线重连处理。
         req.log.error({ err }, "ui-server websocket catch-up failed");
         unsubscribe();
         socket.close(1011, "internal_error");
@@ -1878,13 +1742,10 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
 export interface RunningUiServer {
   app: FastifyInstance;
   port: number;
-  /** 组网入口：把验过身份的 TLS 连接（daemon/mesh/ 的 onConnection）交给界面服务，按这台设备的身份认。 */
   acceptMeshConnection(connection: MeshConnection): void;
-  /** 优雅关闭：断开 WebSocket、停止监听、断开组网连接。 */
   close(): Promise<void>;
 }
 
-/** 只监听 127.0.0.1，不提供改地址的选项。port 为 0 时由系统分配，实际端口看返回值。组网入口不另听端口：连接由 daemon/mesh/ 交进来。 */
 export async function startUiServer(opts: UiServerOptions & { port: number }): Promise<RunningUiServer> {
   const app = createUiServer(opts);
   await app.listen({ host: "127.0.0.1", port: opts.port });
@@ -1899,7 +1760,7 @@ export async function startUiServer(opts: UiServerOptions & { port: number }): P
     app.server.emit("upgrade", req, socket, head);
   });
   const close = async () => {
-    // 先关 Fastify（断开 WebSocket），再断组网入口上剩下的连接
+    // Close Fastify first to drop WebSockets, then the remaining mesh connections.
     await app.close();
     meshServer.closeAllConnections();
   };

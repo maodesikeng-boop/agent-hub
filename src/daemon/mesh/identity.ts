@@ -1,6 +1,4 @@
-// 设备密钥和证书（docs/account-mesh-design.md「设备身份与信任」）：首次登录时生成 Ed25519 私钥和自签证书，证书 CN 是设备编号。
-// Node 能用证书不能生成证书，生成用 @peculiar/x509（实现时 pnpm add，整个仓库只有这个文件引它）。
-// 不变量：私钥只在 state/mesh/key.pem（0600；Worker 按数据目录读边界整个 state/ 禁读）；设备指纹 = 证书 DER 的 SHA-256，和 relay/auth.ts 的 fingerprintOfPem 一致。
+// Node can use but not generate certificates, so @peculiar/x509 creates the self-signed Ed25519 device certificate.
 import "reflect-metadata";
 import { X509CertificateGenerator, cryptoProvider } from "@peculiar/x509";
 import { X509Certificate, createHash, createPrivateKey, createPublicKey, sign as cryptoSign, verify as cryptoVerify, webcrypto, type KeyObject } from "node:crypto";
@@ -17,7 +15,7 @@ cryptoProvider.set(webcrypto as unknown as Parameters<typeof cryptoProvider.set>
 
 const KEY_FILE = "key.pem";
 const CERT_FILE = "cert.pem";
-/** 证书有效期：设备证书只用来钉指纹，不靠有效期，给足年头免得过期后握手失败。 */
+/** Device certificates are pinned by fingerprint, so a long validity avoids handshake failures on expiry. */
 const CERT_VALID_YEARS = 100;
 
 export interface MeshIdentity {
@@ -25,16 +23,10 @@ export interface MeshIdentity {
   fingerprint: DeviceFingerprint;
   certPem: string;
   keyPem: string;
-  /** Ed25519 公钥（SPKI DER 的 base64url），登记到中继用。 */
   publicKey: string;
-  /** 用设备私钥签名，返回 base64url。 */
   sign(message: Uint8Array): string;
 }
 
-/**
- * 读 <dir>/key.pem 和 <dir>/cert.pem；没有就生成一份写进去（目录 0700，私钥 0600）。
- * 后置：同一个目录多次调用得到同一个指纹；证书 CN 等于 deviceId；文件坏了、两份对不上、CN 不是 deviceId 时抛错，错误里写是哪个文件。
- */
 export async function loadOrCreateMeshIdentity(dir: string, deviceId: DeviceId): Promise<MeshIdentity> {
   const keyFile = join(dir, KEY_FILE);
   const certFile = join(dir, CERT_FILE);
@@ -98,12 +90,10 @@ async function generateIdentity(deviceId: DeviceId): Promise<{ keyPem: string; c
   return { keyPem, certPem: cert.toString("pem") + "\n" };
 }
 
-/** 后置：PEM 证书 DER 的 SHA-256（小写十六进制）；不是一张 PEM 证书时抛错。 */
 export function fingerprintOfCertPem(certPem: string): DeviceFingerprint {
   return createHash("sha256").update(new X509Certificate(certPem).raw).digest("hex") as DeviceFingerprint;
 }
 
-/** 后置：证书 CN 是合法设备编号时返回它，否则 null。 */
 export function deviceIdOfCertPem(certPem: string): DeviceId | null {
   let subject: string;
   try {
@@ -115,7 +105,6 @@ export function deviceIdOfCertPem(certPem: string): DeviceId | null {
   return match !== null && isDeviceId(match[1]!) ? match[1]! : null;
 }
 
-/** 后置：用证书里的公钥验 base64url 签名，对得上回 true；证书或签名格式不对回 false，不抛错。 */
 export function verifyWithCert(certPem: string, message: Uint8Array, signature: string): boolean {
   const sig = base64UrlDecode(signature);
   if (sig === null) return false;

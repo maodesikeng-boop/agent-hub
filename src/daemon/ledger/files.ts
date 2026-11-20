@@ -1,4 +1,3 @@
-// 账本碰磁盘的小工具：文件夹路径解析（ResolveFolder 的默认实现）、原子写文件、内容哈希、hub_calls 的截断。
 import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -9,7 +8,6 @@ import type { ResolveFolder } from "../../shared/ledger.ts";
 import { HUB_CALL_FIELD_MAX_BYTES, MAX_PATH_BYTES } from "../../shared/limits.ts";
 import { PRODUCT_ID } from "../../shared/names.ts";
 
-/** 开头的 `~` 或 `~/` 换成 userHome；`~别人` 不展开。 */
 function expandHome(path: string, userHome: string): string {
   if (path === "~") return userHome;
   if (path.startsWith("~/")) return join(userHome, path.slice(2));
@@ -20,7 +18,6 @@ function errorCode(error: unknown): string | undefined {
   return typeof error === "object" && error !== null && "code" in error ? String(error.code) : undefined;
 }
 
-/** realpath 失败（目录不在了）就退回 path.resolve 之后的字面路径：detach 已经删掉的文件夹用。 */
 export function realpathOrLiteral(path: string, userHome: string): string {
   const literal = resolve(expandHome(path.trim(), userHome));
   try {
@@ -31,16 +28,10 @@ export function realpathOrLiteral(path: string, userHome: string): string {
 }
 
 export interface ResolveFolderOptions {
-  /** 数据目录（~/.agent-hub），里面的文件夹不能挂到项目上。 */
   dataHome: string;
-  /** 展开 `~` 用，默认 os.homedir()。 */
   userHome?: string;
 }
 
-/**
- * ResolveFolder 的默认实现（见 src/shared/ledger.ts）：展开开头的 ~、必须是绝对路径、realpathSync.native、必须是目录、
- * 不能在数据目录里面（数据目录同样 realpath 之后再比）。不对就抛 LedgerRequestError("invalid", 原因)。
- */
 export function createResolveFolder(options: ResolveFolderOptions): ResolveFolder {
   const userHome = options.userHome ?? homedir();
   return (raw) => {
@@ -67,7 +58,7 @@ export function createResolveFolder(options: ResolveFolderOptions): ResolveFolde
   };
 }
 
-/** 原子写一个文件：同目录下的临时文件 + 改名。目录不在就建（0700），文件 0600。 */
+/** Atomic write through a temp file in the same directory plus rename. */
 export function writeFileAtomic(file: string, content: string): void {
   const dir = dirname(file);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -81,12 +72,10 @@ export function writeFileAtomic(file: string, content: string): void {
   }
 }
 
-/** sha256 十六进制（pms.persona_file_hash 用）。 */
 export function contentHash(content: string): string {
   return createHash("sha256").update(content, "utf8").digest("hex");
 }
 
-/** 按 UTF-8 字节截在字符边界上，末尾加“…（截断，原长 N 字节）”（见 domain.ts 的 HubCall）。没超就原样返回。 */
 export function truncateField(text: string, maxBytes = HUB_CALL_FIELD_MAX_BYTES): string {
   const total = utf8Bytes(text);
   if (total <= maxBytes) return text;
@@ -101,7 +90,6 @@ export function truncateField(text: string, maxBytes = HUB_CALL_FIELD_MAX_BYTES)
   return `${out}…（截断，原长 ${total} 字节）`;
 }
 
-/** hub_calls.args：每个字符串字段按 truncateField 截断。 */
 export function summarizeArgs(args: object): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(args)) out[key] = typeof value === "string" ? truncateField(value) : value;

@@ -1,7 +1,3 @@
-// 初始快照（/api/state）和不在快照里的对话的按需拉取（docs 见 shared/snapshot.ts 开头）。
-// 快照只带界面现在要的：项目经理对话、没收工的 Worker、每个项目经理最近 SNAPSHOT_ENDED_WORKERS_PER_PM 个已收工的 Worker、
-// 绑在活跃任务图上的 Worker；会话只带这些对话各自最新一代的、没结束的，和每家厂商最新的一个（额度、按需查额度的按钮看它）。
-// 更早的已收工 Worker 点开时按编号单拉（lookupConversations），右栏 Completed 一页页拉（endedWorkersPage）。
 import type { ConversationSnapshot, ConversationsLookup, EndedWorkersPage } from "../../shared/api.ts";
 import type { AgentSessionRow, ConversationId, MessageKind, PmId, SessionState, TaskGraph, WorkerId } from "../../shared/domain.ts";
 import { CONVERSATION_LOOKUP_MAX_IDS, ENDED_WORKERS_PAGE_SIZE, MESSAGE_PAGE_SIZE, SNAPSHOT_ENDED_WORKERS_PER_PM } from "../../shared/limits.ts";
@@ -12,18 +8,14 @@ import { fail } from "./context.ts";
 import { MESSAGE_SHAPE_COLUMNS, WEB_MESSAGE_COLUMNS, parseMessageMeta, toConversation, toMessage } from "./rows.ts";
 import type { ConversationDbRow, MessageDbRow } from "./rows.ts";
 
-/** SQL 里的编号列表：一个 JSON 数组参数，配 `IN (SELECT value FROM json_each(?))`，不拼 SQL。 */
 const idList = (ids: Iterable<number>) => JSON.stringify([...ids]);
 const IN_IDS = "IN (SELECT value FROM json_each(?))";
 
-/** 已收工的 Worker 对话：Worker 记录收工了，或者它有结束了的会话（和网页 workerPhaseOf 的 ended 同一个口径的库里那一半）。 */
 const ENDED_WORKER = `(EXISTS (SELECT 1 FROM workers w WHERE w.worker_conversation_id = c.id AND w.status = 'ended')
   OR EXISTS (SELECT 1 FROM agent_sessions s WHERE s.conversation_id = c.id AND s.status = 'ended'))`;
 
-/** 不是老项目群里的会话（11-03 拿掉了项目群，快照不给它们，数据还在库里）。 */
 const NOT_GROUP_SESSION = `(s.conversation_id IS NULL OR s.conversation_id NOT IN (SELECT id FROM conversations WHERE kind = 'project_group'))`;
 
-/** 活跃任务图上挂过的 Worker（在干的、干过的）：图的详情要按 Worker 编号找到它们的对话。 */
 function boundWorkerIds(graphs: readonly TaskGraph[]): Set<WorkerId> {
   const ids = new Set<WorkerId>();
   for (const graph of graphs) {
@@ -36,11 +28,6 @@ function boundWorkerIds(graphs: readonly TaskGraph[]): Set<WorkerId> {
 }
 
 export function createLedgerSnapshotQueries(db: Db, deps: { sessionState: (row: AgentSessionRow) => SessionState }) {
-  /**
-   * 一批对话（编号从小到大）在快照里的样子：已收工的 Worker 不带消息（hasMore 说有没有，点开再拉）；
-   * 别的带最近一段（shared/snapshot.ts 的 snapshotWindowStart）。先只读不带正文的列算窗口从哪开始，再按窗口读正文，
-   * 不用把最近一整页的正文都读出来再切掉。
-   */
   const entriesOf = (rows: readonly ConversationDbRow[]): ConversationSnapshot[] => {
     if (rows.length === 0) return [];
     const workerConvIds = rows.filter((r) => r.kind === "worker").map((r) => r.id);
@@ -102,7 +89,6 @@ export function createLedgerSnapshotQueries(db: Db, deps: { sessionState: (row: 
       idList(ids),
     );
 
-  /** 这些对话各自最新一代的会话，加上它们没结束的会话（换代时上一代可能还在收尾）。 */
   const sessionsOf = (conversationIds: Iterable<ConversationId>): SessionState[] =>
     db
       .all<AgentSessionDbRow>(
@@ -114,10 +100,6 @@ export function createLedgerSnapshotQueries(db: Db, deps: { sessionState: (row: 
       )
       .map((r) => deps.sessionState(toAgentSessionRow(r)));
 
-  /**
-   * 快照的 conversations、sessions 和翻页起点。activeGraphs 是快照里的活跃任务图（绑在上面的 Worker 照带）。
-   * 会话另带：没挂对话的没结束的会话，和每家厂商最新的一个、最新的一个带额度的（额度显示、“按需查额度”的按钮看它们）。
-   */
   const snapshotConversations = (activeGraphs: readonly TaskGraph[]) => {
     const workers = db.all<{ id: number; pm_id: number | null; worker_id: number | null; ended: number }>(
       `SELECT c.id, c.pm_id, (SELECT w.id FROM workers w WHERE w.worker_conversation_id = c.id) AS worker_id, ${ENDED_WORKER} AS ended

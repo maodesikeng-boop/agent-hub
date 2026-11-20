@@ -1,8 +1,3 @@
-// Settings → Providers 统一管理状态机（docs/providers-install-login-design.md 第 6、8 章）：
-// - 固定 AGENT_VENDORS.length（6 个槽位）恒定 O(6) 内存，零无限增长列表；
-// - `GET /api/providers` 不带 `refresh=1` 时严格 0 子进程拉起；
-// - 安装/更新异步秒回、支持取消整树强杀、装完即时刷新 `VendorRuntimeResolver` 与单家 `ModelCatalogs`；
-// - 界面内登录流支持 `800ms` 首包等待、跨客户端 `ownerKey` 脱敏隔离、以及 6 重防 SSRF 远端回环回调转发。
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import {
@@ -208,7 +203,6 @@ export function createProviderManager(options: ProviderManagerOptions): Provider
   let closed = false;
   let gitJob: ActiveJobSlot | null = null;
 
-  // 固定 AGENT_VENDORS.length 槽位，跑一个月内存恒定 O(6)
   const slots = new Map<AgentVendor, VendorSlot>(
     AGENT_VENDORS.map((vendor) => [vendor, { job: null, authFlow: null }]),
   );
@@ -312,7 +306,6 @@ export function createProviderManager(options: ProviderManagerOptions): Provider
       throw new ProviderRequestError(400, `Setup is not supported for ${vendorSpec(vendor).label}`);
     }
     const slot = slots.get(vendor)!;
-    // 幂等：正在跑同厂商安装/更新时直接返回当前快照
     if (slot.job?.phase === "running") {
       return buildVendorItem(vendor, ownerKey);
     }

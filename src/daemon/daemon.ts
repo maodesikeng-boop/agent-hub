@@ -1,10 +1,4 @@
-// 组装（m1-plan 第 3 节 W5，m2-plan 第 3 节接口约定第 6 条）：启动和关闭顺序、各块之间的接线。main.ts 只管命令行、信号和退出码。
-// 启动和关机的顺序只在这个文件里定，别的文件不要自己起、关别的块：
-// - 启动：目录锁 → 开库迁移、账本 → agent 接口和 hub 外壳 → 驱动层 → 清上次残留的 claude → 重启恢复、同步性格设定文件
-//   → 第一次启动建项目经理 → 处理函数、执行器 → 调度器（定时任务，先查一次，睡眠或没开时错过的补跑一次）→ 后台写交接的跑腿的（补清上次没清掉的复制会话）
-//   → 界面令牌、设备身份和配对、ssh 隧道和管理 socket、界面服务。
-// - 关机（启动到哪一步就关到哪一步）：调度器 → 后台写交接的跑腿的（取消在写的、清理复制会话）→ 准备命令 → 执行器 → claude（含问模型名单、命令列表的那个）→ 隧道管理 socket、ssh 隧道 → 界面服务 → agent 接口 → 取消订阅、关库 → 放锁。
-// 用到的超时都在 src/shared/limits.ts。
+// Startup and shutdown order lives only in this file; shutdown unwinds exactly as far as startup got.
 import { createHash, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -147,11 +141,8 @@ import {
   type SleepInhibitor,
 } from "./platform/index.ts";
 
-/** 网页打包产物（pnpm build 的输出）。 */
 export const DEFAULT_STATIC_DIR = fileURLToPath(new URL("../../dist/web", import.meta.url));
-/** 仓库根目录（hub self-reload --build 在这里跑 pnpm build）。 */
 const REPO_DIR = fileURLToPath(new URL("../..", import.meta.url));
-/** 热重启构建网页的日志（state/logs/ 下）。 */
 const SELF_RELOAD_BUILD_LOG = "self-reload-build.log";
 
 export interface DaemonOptions {
@@ -159,24 +150,12 @@ export interface DaemonOptions {
   userHome: string;
   staticDir?: string;
   log?: (line: string) => void;
-  /** 自动换新会话的门槛、空闲多久、写交接最多多久（默认见 limits.ts）；只给冒烟测试改小。 */
   autoRenew?: LedgerOptions["autoRenew"];
-  /** 账号组网的测试钩子：假中继、假 GitHub、只听回环、回环当局域网候选。正式入口不传（中继网址和 Client ID 按环境变量和 limits.ts）。 */
   mesh?: Partial<Pick<MeshOptions, "relayUrl" | "githubClientId" | "listenPort" | "listenHost" | "candidates" | "allowLoopback" | "github" | "fetch">>;
-  /** 飞书的测试钩子：多机端到端测试换成连父进程假飞书的传输层和扫码。正式入口不传。 */
   feishu?: Pick<FeishuServiceOptions, "createTransport" | "register">;
-  /**
-   * 空闲排空热重启（hub self-reload、POST /api/self-reload）排空到点后调它：entry.ts 正常关机，以 apps/desktop/contract.json 的
-   * reloadExitCode 退出，由外壳（Bellwood.app、Windows 桌面端、systemd）立即拉起。不给 = 没有外壳监管，不接受热重启（409）。
-   */
   onSelfReload?: () => void;
-  /** 热重启登记后最多等全库空闲多久（默认 SELF_RELOAD_DRAIN_MAX_MS）；只给测试改小。 */
   selfReloadDrainMaxMs?: number;
-  /**
-   * 外部经管理管道 `POST /admin/shutdown`（带界面令牌）请求优雅关机时调它（Windows 下替代外部无法送达的 SIGTERM）。
-   */
   onExternalShutdown?: () => void;
-  /** 桌面外壳提供的原生目录选择器桥接（Windows 下由 Tauri `tauri-plugin-dialog` 提供）。 */
   folderPicker?: FolderPicker;
 }
 
@@ -184,7 +163,6 @@ export interface RunningDaemon {
   paths: HubPaths;
   port: number;
   url: string;
-  /** 关机：停后台写交接 → 停准备命令 → 停执行器 → 停 claude（含问模型名单的）→ 关界面服务 → 关 agent 接口 → 关库 → 放锁。只做一次，多调返回同一个 Promise。 */
   stop(): Promise<void>;
 }
 
@@ -205,16 +183,13 @@ async function within(promise: Promise<unknown>, ms: number): Promise<boolean> {
   }
 }
 
-/** 启动守护进程。拿不到目录锁抛 DaemonAlreadyRunningError（这时什么都没动）。 */
 export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon> {
   const env = options.env ?? process.env;
   const log = options.log ?? ((line) => console.error(line));
   const paths = resolveHubPaths(env, options.userHome);
   const port = parsePort(env[ENV_PORT]);
 
-  // 启动到哪一步，关机就关到哪一步；顺序固定：准备命令 → 执行器 → 驱动层 → 界面服务 → agent 接口 → 库 → 锁
-  // （准备命令最先：它不回调账本，重启后重跑；不先停的话执行器、关机要等它跑完）
-  // （agent 接口在 claude 都退出之后才关：最后一轮里 agent 还可能敲 hub；它要用账本，所以在库之前）
+  // Setup commands stop first because they never call back into the ledger; the agent API closes after all agents exit because a last turn may still call hub.
   const parts: {
     scheduler?: NodeJS.Timeout;
     autoRenew?: NodeJS.Timeout;
@@ -257,20 +232,19 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
   };
   const shutdown = async () => {
     const { scheduler, autoRenew, archiveCleanup, worktreeCleanup, handoverRunner, setup, executor, driver, models, commands, ui, peers, mesh, admin, agentApi, db, lock } = parts;
-    // 热重启的定时器、构建先停（关机由它触发时它已在 restarting，只清订阅）
     parts.selfReload?.close();
     if (scheduler) clearInterval(scheduler);
     if (autoRenew) clearInterval(autoRenew);
     if (archiveCleanup) clearInterval(archiveCleanup);
     if (worktreeCleanup) await step("worktree 自动清理", () => worktreeCleanup.stop());
     parts.sleepInhibitor?.stop();
-    // 跑腿的在写的 abort、复制那份清掉，都要回报账本，所以在执行器、库之前；到点没清完的下次启动补清
+    // Handover runners report aborts to the ledger, so they stop before the executor and the database.
     if (handoverRunner) {
       await step("后台写交接", async () => {
         if (!(await within(handoverRunner.stop(), HANDOVER_STOP_GRACE_MS))) throw new Error(`${HANDOVER_STOP_GRACE_MS / 1000} 秒没收完，不再等`);
       });
     }
-    // 后台写档：在写的打断、报 shutdown（不算失败次数），要回报账本、结束总助会话，所以在驱动层、库之前
+    // Background handover writers report back to the ledger and end router sessions, so they stop before the driver and the database.
     if (parts.catalogRunner) {
       const catalogRunner = parts.catalogRunner;
       await step("后台写项目档案", async () => {
@@ -286,7 +260,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     if (executor) {
       await step("执行器", async () => {
         const stopped = executor.stop();
-        // 手上的动作可能在等 claude 启动：等一会儿还没完就先关驱动层，它们会跟着结束
+        // Actions may be waiting for claude to start; after a short wait the driver closes and they end with it.
         if (!(await within(stopped, EXECUTOR_STOP_GRACE_MS)) && driver) {
           await driver.shutdown();
           await stopped;
@@ -298,7 +272,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     if (models) await step("模型名单", () => models.close());
     if (commands) await step("命令列表", () => commands.close());
     if (admin) await step("管理 socket", () => admin.close());
-    // 先停设备之间在途的请求、断开组网（中继、局域网入口），再关界面服务（经入口转发的 WebSocket 跟着浏览器那条一起关）
+    // Stop peer requests and mesh links before the UI server, because the entry proxies through it.
     parts.routerTargetRegistry?.close();
     peers?.close();
     if (mesh) await step("账号组网", () => mesh.close());
@@ -309,7 +283,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       });
     }
     parts.sandboxGuard?.clear();
-    // claude 都退出了、事件都交给账本了：等排着的（回复里的文件在存副本）落库，再取消订阅、关库。到点没落完的，取消订阅时 ledger.close() 取消拷贝、不带附件落库
+    // All agents have exited; flush queued events whose reply attachments are still copying before closing the database.
     if (parts.ledger) {
       const ledger = parts.ledger;
       await step("账本事件", async () => {
@@ -325,9 +299,8 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
   };
 
   try {
-    // 1. 目录锁
     parts.lock = acquireLock(paths.lockFile);
-    // 1b. 子进程记账：先回收上次崩溃留下的子进程（只杀记过、且进程号上还是同一个进程的），再开始记这次的
+    // Reclaim children left by a crash, killing only recorded pids whose start time still matches.
     const processLedger = createProcessLedger({ file: paths.childProcessesFile, log });
     try {
       await processLedger.reapStale();
@@ -335,7 +308,6 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       log(`${LOG_PREFIX} 回收上次残留的子进程出错：${error instanceof Error ? error.message : String(error)}`);
     }
     parts.uninstallProcessLedger = installProcessLedger(processLedger);
-    // 2. 开库并迁移
     const { db, migration, autoVacuum } = openStore(paths);
     parts.db = db;
     const backupFile = autoVacuum.backupFile ?? migration.backupFile;
@@ -344,20 +316,14 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     } else if (autoVacuum.error !== undefined) {
       log(`${LOG_PREFIX} 账本数据库改成增量回收模式没成，本次跳过（不影响运行，下次启动再试）：${autoVacuum.error}`);
     }
-    // realpath 过的两个目录，账本和启动准备用同一份：
-    // - dataDir：Worker 的可写范围（write-scope.ts）按真实路径匹配，沙箱认的是真实路径；
-    // - stateDir：Worker 设置文件里 state/ 的兜底拒绝规则（policy.ts 的 stateDirDenyRule）按真实路径匹配；
-    // - worktreesDir：Worker 的 cwd、项目经理的 --add-dir 都由它拼出来，和主文件夹、附加文件夹一样是真实路径
-    //   （macOS 上 /var 是 /private/var；git worktree list 列的也是真实路径）。
+    // Sandbox rules and git worktree list both use real paths (macOS /var is /private/var), so these directories are realpath'd once and shared.
     mkdirSync(paths.worktreesDir, { recursive: true });
     mkdirSync(paths.pmMemoryDir, { recursive: true, mode: 0o700 });
-    // uploadsDir 也是：用户在聊天框上传的文件，agent 拿到的是这个真实路径下的绝对路径（权限规则按真实路径匹配）
+    // Agents receive upload paths under this real path, so it is realpath'd too.
     mkdirSync(paths.uploadsDir, { recursive: true, mode: 0o700 });
     const uploadsDir = realpathSync.native(paths.uploadsDir);
-    // sentFilesDir：agent 在回复里发给用户的文件的副本（sent-files.ts），顺手清掉上次没拷完的
     prepareSentFilesDir(paths.sentFilesDir);
     const sentFilesDir = realpathSync.native(paths.sentFilesDir);
-    // 过期的上传文件和副本：启动时清一次，之后每天一次（出错只记日志）
     parts.stopFileCleanup = startFileCleanup([uploadsDir, sentFilesDir], log);
     const dataDir = realpathSync.native(paths.home);
     const stateDir = realpathSync.native(paths.stateDir);
@@ -366,7 +332,6 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     if (process.platform === "win32") {
       mkdirSync(paths.runDir, { recursive: true, mode: 0o700 });
       mkdirSync(paths.syncBackupsDir, { recursive: true, mode: 0o700 });
-      // Windows 0600/0700 等价保护 + 数据目录受保护根拒写 ACL（幂等检查，已满足则跳过）
       try {
         await ensureWin32ProtectedRootAcl(stateDir, dataDir, { env });
         hardenWin32PrivateDirAcl(stateDir, stateDir, { env });
@@ -388,9 +353,6 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const dynamicExecutablePaths = Object.fromEntries(
       AGENT_VENDORS.map((vendor) => [vendor, () => vendorRuntime.resolveExecutablePath(vendor)]),
     ) as Record<AgentVendor, () => string>;
-    // 模型名单和这台设备上各家的状态（没装 / 没登录，docs/vendor-availability-design.md）：第一次有人要（网页打开资料页、
-    // 新建弹窗）时按厂商分别问本机 CLI，在用户主目录下起，不带任何项目的设置；装没装每次只查文件。
-    // 账本写系统消息时用它缓存着的显示名
     const models = createModelCatalogs({
       sources: createVendorCatalogSources(
         Object.fromEntries(
@@ -415,12 +377,10 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       log: (line) => log(`${LOG_PREFIX} ${line}`),
     });
     parts.providerManager = providerManager;
-    // 联机：设备身份（要用户在这台设备上动手时，卡上和 hub worker start 的报错里写设备名）
     const device = loadOrCreateDevice(paths.deviceFile, defaultDeviceName(hostname()));
     const ledger = createLedger(db, {
       models,
       deviceName: () => device.name,
-      // 手打命令时看缓存着的命令列表（commands 在下面才建，所以现用现取）
       knownCommands: (session) => parts.commands?.cached(session) ?? null,
       pmHomeRoot: paths.pmHomeDir,
       personasDir: paths.personasDir,
@@ -432,24 +392,18 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       setupLogsDir: paths.setupLogsDir,
       uploadsDir,
       sentFilesDir,
-      // 交接提示词里写上会话原始记录的路径
       findTranscript: (ref) => vendorTranscriptPath(ref),
-      // 换代带上加载过的技能：按各家的技能目录找 SKILL.md（claude 的 CLAUDE_CONFIG_DIR 这类要读环境变量）
       skillFiles: createSkillFiles({ launchDir: paths.launchDir, userHome: options.userHome, env }),
       ...(options.autoRenew ? { autoRenew: options.autoRenew } : {}),
-      // 账本有交接可以领了：叫醒跑腿的（它在下面才建，所以现用现取）
       onHandoverClaimable: () => parts.handoverRunner?.wake(),
-      // 有项目档案要写了：叫醒写档的跑腿的（同上，现用现取）
       onCatalogClaimable: () => parts.catalogRunner?.wake(),
       log,
     });
     parts.ledger = ledger;
     parts.unsubscribe.push(() => ledger.close());
     const sessions = createSessionStore(db);
-    // 有会话在干活时起 caffeinate 防闲置睡眠，全部闲下来过宽限期再结束（daemon/platform/sleep.ts）
     const sleepInhibitor = createSleepInhibitor();
     parts.sleepInhibitor = sleepInhibitor;
-    // 热重启等全库空闲：正在干活的会话按同一串 session.status 记（daemon/self-reload.ts）
     const busySessions = createBusySessions();
     parts.unsubscribe.push(
       ledger.onChange((change) => {
@@ -457,12 +411,9 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
         if (change.type === "session.status" || change.type === "session.created") busySessions.onSessionStatus(change.data.session);
       }),
     );
-    // 3. agent 接口（run/ 0700、删残留 socket、hub.sock 0600）和 hub 外壳，在执行器之前起。
-    //    令牌只有这一份：agent 接口认人、prepareLaunch 发、session.end 处理函数作废，用的都是它
     const tokens = createSessionTokens();
     const sandboxGuard = createRouterSandboxGuard();
     parts.sandboxGuard = sandboxGuard;
-    // 总助单轮会话（分派、后台写档）各是什么用途：启动文件按它选提示词、发不发令牌（router/single-turn.ts）
     const routerTurnPurposes = createRouterTurnPurposes();
     const agentApi = await startAgentApi({
       ledger,
@@ -501,19 +452,16 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       protectedRoots: () => loadManagedWorktreeRoots(stateDir, worktreesDir),
       getLaunchContext: (sessionId) => ledger.getLaunchContext(sessionId),
       tokens: endedOnRevokedTokens(tokens),
-      // realpath 过的：写进 HUB_SOCK 和设置文件的 allowUnixSockets
+      // Real path written into HUB_SOCK and the settings allowUnixSockets.
       hubSock: agentApi.socketPath,
       hubBinDir: paths.hubBinDir,
       basePath: () => vendorRuntime.effectivePath(),
-      // 项目经理提示词里“能用的厂商”只列这台设备上能用的（只看缓存，不等查询）
       vendorAvailability: () => Object.fromEntries(AGENT_VENDORS.map((vendor) => [vendor, models.availability(vendor)])),
       routerPurposeOf: routerTurnPurposes.of,
       getPmCapabilityPolicy: (pmId) => ledger.getPmCapabilityPolicy(pmId),
       capabilityInventory,
     });
-    // 性格设定、模式改了不重启，下一条消息前加说明（driver.ts 的“两轮之间自动重启”）
     const personaNote = createPersonaNoter((sessionId, since) => ledger.personaUpdate(sessionId, since), paths.launchDir);
-    // 换代后的新会话：开场说明 + 交接 + 最近原话拼在第一条写给它的消息前面（ledger/handover.ts）
     const launch = { store: sessions, log, prepareLaunch, personaNote, pmMemoryDir, sessionPreamble: (sessionId: number) => ledger.sessionPreamble(sessionId) };
     const driver = createMultiVendorDriver({
       store: sessions,
@@ -527,7 +475,6 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
               ...launch,
               ...(vendorSpec(vendor).capabilities.explicitDefaultModel
                 ? {
-                    // 没选模型时用名单里厂商报的默认（名单有缓存，不是每次起会话都问；只问这一家，docs/vendor-plugin-design.md 1.7 第 1 条）
                     defaultModel: async () => (await models.list({ vendor })).find((c) => c.vendor === vendor)?.defaultModelId ?? null,
                   }
                 : {}),
@@ -538,7 +485,6 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     });
     parts.driver = driver;
     parts.unsubscribe.push(driver.onEvent((sessionId, event) => ledger.applyDriverEvent(sessionId, event)));
-    // 输入框的“/”命令列表：正在跑的会话直接问它，没在跑的另起一个对应厂商 CLI 在会话的目录里问；会话中途推来的新名单直接更新缓存
     const commands = createCommandCatalogs({
       vendors: Object.fromEntries(
         AGENT_VENDORS.map((vendor) => [
@@ -560,7 +506,6 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
         if (session) commands.update(session, event.commands);
       }),
     );
-    // 真跑的结果反过来更新这台设备上厂商的状态（不用等名单缓存过期）：会话起来了就是能用，一轮因为没登录失败就是没登录
     parts.unsubscribe.push(
       driver.onEvent((sessionId, event) => {
         const vendor = sessions.get(sessionId)?.vendor;
@@ -572,19 +517,15 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       }),
     );
 
-    // 4. 清掉上次留下的 claude
     await driver.cleanupStale();
-    // 5. 重启恢复（账本那部分；执行器启动时再把“执行中”改回“待执行”），然后按数据库同步性格设定文件
     const recovered = ledger.recoverAfterRestart();
     if (recovered.resentMessageIds.length + recovered.requeuedMessageIds.length > 0) {
       log(`${LOG_PREFIX} 重启恢复：重发 ${recovered.resentMessageIds.length} 条，补发排队中的 ${recovered.requeuedMessageIds.length} 条`);
     }
     const synced = ledger.syncPersonaFiles();
     if (synced.recordedPmIds.length > 0) log(`${LOG_PREFIX} 发现 ${synced.recordedPmIds.length} 个手改过的性格设定文件，已记下修改`);
-    // 6. 第一次启动建一个项目经理（createPm 自己写性格设定文件；只查 pms 表有没有行，不拉全量 snapshot）
     if (db.get("SELECT 1 AS x FROM pms LIMIT 1") === undefined) {
       let defaultModel = env[ENV_DEFAULT_MODEL]?.trim() || undefined;
-      // 不合规的模型名不让第一次启动失败：忽略，按默认
       const badModel = defaultModel === undefined ? null : checkModel(DEFAULT_AGENT_VENDOR, defaultModel);
       if (badModel !== null) {
         log(`${LOG_PREFIX} ${ENV_DEFAULT_MODEL}=${JSON.stringify(defaultModel)} 不能用（${badModel}），项目经理按默认模型建`);
@@ -594,17 +535,13 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       log(`${LOG_PREFIX} 第一次启动，建了项目经理“${pm.name}”`);
     }
 
-    // 7. 处理函数、接线、启动执行器
     const executor = createActionExecutor(db, ledger);
-    // worktree 准备命令（hub project setup）：在后台跑，不占执行器；网页上点停止、收工、关机时结束它
     const setup = createSetupRunner({ log });
     parts.setup = setup;
     const deps = { driver, ledger, sessions, tokens, setup, probeDiffNumstat, probePr };
     executor.register("session.start", createSessionStartHandler(deps));
     executor.register("session.send", createSessionSendHandler(deps));
-    // Worker 收工（hub worker end）登记 session.end：这一轮回完再关，然后作废它的令牌
     executor.register("session.end", createSessionEndHandler(deps));
-    // 审查步骤开审时记下被审分支、汇报 PASS 后核对它没被动过（docs/review-verify-only-design.md）
     const observeReview = createReviewObserver({
       resolveCommit: (folder, ref) => resolveCommit(folder, ref),
       remoteBranchHead: (repo, branch) => remoteBranchHead(repo, branch),
@@ -661,14 +598,13 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     parts.unsubscribe.push(
       ledger.onActionEnqueued(() => executor.wake()),
       ledger.onStopRequested(({ sessionId }) => {
-        // Worker 还在准备中：只停准备命令，Worker 照常开工（没有在跑的就什么也不做）
         setup.cancel(sessionId);
         driver.interrupt(sessionId).catch((error: unknown) => log(`${LOG_PREFIX} 停止失败：${String(error)}`));
       }),
     );
     parts.executor = executor;
     executor.start();
-    // 定时任务：启动时先查一次（守护进程停着、电脑睡着时错过的只补跑一次），之后每 SCHEDULER_TICK_MS 查一次
+    // Missed schedules (daemon stopped or machine asleep) run once at startup, not once per missed slot.
     const runSchedules = () => {
       try {
         ledger.runDueSchedules(Date.now());
@@ -678,7 +614,6 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     };
     runSchedules();
     parts.scheduler = setInterval(runSchedules, SCHEDULER_TICK_MS);
-    // 到期归档项目经理：启动时先清一次，之后每 PM_ARCHIVE_CLEANUP_INTERVAL_MS 清一次
     const purgeArchivedPms = () => {
       try {
         const purged = ledger.purgeExpiredArchivedPms(Date.now());
@@ -690,7 +625,6 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     purgeArchivedPms();
     parts.archiveCleanup = setInterval(purgeArchivedPms, PM_ARCHIVE_CLEANUP_INTERVAL_MS);
     const feishuOfflineInbox = createFeishuOfflineInbox(db);
-    // 已收工 Worker 满保留期：清它们的对话（消息、步骤日志等），再把空出来的页还给文件系统（db-retention.ts）；启动时先来一轮
     parts.stopWorkerRetention = startWorkerRetention({
       ledger,
       db,
@@ -698,14 +632,12 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       feishuOfflineInbox,
       log,
     });
-    // 已收工 Worker 的 worktree：启动时先清一轮，之后每 WORKTREE_CLEANUP_INTERVAL_MS 清一轮（分支保留）
     parts.worktreeCleanup = startWorktreeCleanup({
       ledger,
       worktreesDir,
       extraWorktreeRoots: () => loadManagedWorktreeRoots(stateDir, worktreesDir),
       log,
     });
-    // 项目经理的对话太长：空闲一会儿后自动写交接、换新会话；写交接超时的放弃（ledger/handover.ts）
     const runAutoRenew = () => {
       try {
         ledger.runAutoRenew();
@@ -715,8 +647,6 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     };
     runAutoRenew();
     parts.autoRenew = setInterval(runAutoRenew, AUTO_RENEW_TICK_MS);
-    // 后台写交接：跑腿的从账本领活、复制项目经理的会话去写交接（daemon/handover/runner.ts）。放在重启恢复之后：
-    // 账本先把上次没做完的记成失败，跑腿的再补清它们复制出来的会话。账本接口见 shared/handover.ts 的 LedgerHandoverWork
     const handoverRunner = createHandoverRunner({
       ledger,
       prepareLaunch,
@@ -726,9 +656,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     });
     parts.handoverRunner = handoverRunner;
     handoverRunner.start();
-    // 总助单轮会话：分派（轨道 B）和后台写项目档案共用（router/single-turn.ts）
     const runRouterTurn = createRouterTurnRunner({ ledger, driver, tokens, purposes: routerTurnPurposes, stateDir, launchDir: paths.launchDir, log });
-    // 后台写项目档案（docs/router-project-catalog-design.md）：启动扫一遍，变化大的和还没档案的进队列，跑腿的一个一个写
     const catalogRunner = createProjectCatalogRunner({
       ledger: ledger.projectCatalog,
       runTurn: runRouterTurn,
@@ -741,7 +669,6 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     const queuedCatalogs = ledger.projectCatalog.scanAtStartup(Date.now());
     log(`${LOG_PREFIX} 项目档案：启动扫描 ${(performance.now() - scanStartedAt).toFixed(1)} 毫秒，${queuedCatalogs} 个项目要写档`);
 
-    // 8. 界面令牌；9. 界面服务，只监听 127.0.0.1
     const token = loadOrCreateUiToken(paths.uiTokenFile);
     const staticDir = options.staticDir ?? DEFAULT_STATIC_DIR;
     if (!existsSync(staticDir)) log(`${LOG_PREFIX} 没找到网页文件 ${staticDir}，先跑 pnpm build`);
@@ -761,7 +688,6 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
           )
           .map((row) => ({ path: row.path, projectName: row.project_name })),
     });
-    // 额度：事件流里没有额度的厂商只能另起进程问，网页打开额度面板时才问（每家各自缓存 5 分钟），几家合在一个响应里
     const quota = mergeFetchedQuotas(
       VENDOR_LIST.flatMap(({ id, quota: spec }) => {
         const fetched = spec?.fetched;
@@ -780,13 +706,11 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
         ];
       }),
     );
-    // 全部退出：换主钥匙写回 state/ui-token，新的登录链接打在日志里（旧的启动链接作废了）
     const rotateToken = () => {
       const next = rotateUiToken(paths.uiTokenFile);
       log(`${LOG_PREFIX} 已全部退出，新的登录链接：${loginUrl(parts.ui?.port ?? port, next)}`);
       return next;
     };
-    // 推送提醒（联机 P4）：VAPID 密钥、订阅在 state/；按账本的变化判断要不要推。关的时候随账本订阅一起取消
     const push = createPushService({
       vapidFile: paths.pushVapidFile,
       subscriptionsFile: paths.pushSubscriptionsFile,
@@ -795,7 +719,6 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       log: (line) => log(`${LOG_PREFIX} ${line}`),
     });
     parts.unsubscribe.push(() => push.close());
-    // 账号组网（docs/account-mesh-design.md）：没登录也建，单机照常用；登录了就连中继、开局域网入口。别的设备连进来交给界面服务的组网入口
     const meshOptions = options.mesh ?? {};
     const mesh = await createMesh({
       identityDir: paths.meshDir,
@@ -843,13 +766,12 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
         feishu: () => parts.feishu?.setup,
         mesh: () => parts.mesh,
         ...(options.onExternalShutdown ? { onShutdown: options.onExternalShutdown } : {}),
-        // Windows 的管理管道不在数据目录里，读边界管不到：设好 DENY FusaWorker 才服务，沙箱里的 Worker 连不上（POSIX 由 OS 沙箱禁连 run/admin.sock）
+        // The Windows admin pipe lives outside the data dir, so it must get DENY FusaWorker before serving; on POSIX the OS sandbox blocks run/admin.sock.
         ...(process.platform === "win32" ? { secure: (pipe: string) => denyWin32WorkerPipeAccess(stateDir, pipe, { env }) } : {}),
         log: (line) => log(`${LOG_PREFIX} ${line}`),
       });
     } catch (adminErr) {
       if (adminErr instanceof AdminSocketInsecureError) {
-        // 管理管道已经关掉：守护进程照常跑，终端的飞书、账号组网命令和桌面外壳的优雅关机暂时用不了（外壳超时后结束进程）
         log(`${LOG_PREFIX} ${adminErr.message}`);
       } else if (
         (adminErr as NodeJS.ErrnoException | null)?.code === "EADDRINUSE" ||
@@ -879,15 +801,12 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       sandboxGuard,
       targetRegistry: routerTargetRegistry,
       models,
-      // 指令的附件显示信息按上传编号从磁盘解析（和发消息时同一个口径），写进 plan.attachments
       resolveAttachment: (id) => {
         const att = resolveUpload(uploadsDir, id);
         return att === null ? null : { id: att.id, name: att.name, mime: att.mime, size: att.size };
       },
     });
     parts.routerDispatcher = routerDispatcher;
-    // 飞书（docs/feishu-design.md）：和推送提醒一样订阅账本往外投影；凭证在 state/feishu-secrets.json，没配过就只订阅不连。
-    // 连不上、凭证失效只记日志和状态，不影响网页和 agent
     const inAccountMode = () => {
       const st = mesh.status().state;
       return st === "signed_in" || st === "awaiting_approval";
@@ -1052,7 +971,6 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     parts.feishu = feishu;
     await feishu.start();
     checkPeerTransitions();
-    // 空闲排空热重启：有外壳监管（entry.ts 给了 onSelfReload）才建；带 --build 时网页构建到暂存目录，重启前才换上线
     if (options.onSelfReload) {
       const onSelfReload = options.onSelfReload;
       const webBuild = createStagedWebBuild({ repoDir: REPO_DIR, staticDir, logPath: join(paths.logsDir, SELF_RELOAD_BUILD_LOG) });
@@ -1069,7 +987,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
           }
           return reasons;
         },
-        // 重启后不会重发的：会话里按 resumesAfterShutdown 判（ledger/messages.ts）；总助分派引擎的指令重启后标失败、要用户点重试（ledger/router.ts 的 recoverAfterRestart）
+        // Router dispatch commands are not replayed after a restart; recoverAfterRestart marks them failed for the user to retry.
         unresumableReasons: () => {
           const reasons = ledger.turnsLostOnShutdown().map(({ sessionId, role }) => `${role === "pm" ? "项目经理" : "总助"}会话 ${sessionId} 正在回用户的消息`);
           if (routerDispatcher.busy()) reasons.push("总助在处理用户的指令");
@@ -1122,7 +1040,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
     };
   } catch (error) {
     await shutdown();
-    // 界面端口被占（再开一个守护进程、别的程序占着）：换成带 port_in_use 的错，终端上只打一句话；原文留在 cause 里写日志
+    // A busy UI port becomes port_in_use so the shell prints a short hint instead of a stack.
     if ((error as NodeJS.ErrnoException).code === "EADDRINUSE" && typeof (error as { port?: unknown }).port === "number") {
       throw new StartupError("port_in_use", String((error as { port: number }).port), { cause: error });
     }

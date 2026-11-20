@@ -1,5 +1,3 @@
-// 看一台设备的变化，按提醒规则（shared/reminders.ts，和网页同一份）决定推什么（联机 P4，第 6.2 节）。
-// 本机：账本的快照 + onChange；别的设备（等 P2）：/api/state + 用设备令牌开的 /api/ws?since= 变化流，断了重连、补不齐就 reset。
 import {
   ReminderTracker,
   allPendingAsks,
@@ -19,7 +17,6 @@ import {
 import type { PresenceBoard } from "./presence.ts";
 
 export interface ReminderWatcher {
-  /** 从快照重新起（第一次、变化流补不齐时）。已经推过的不会再推。 */
   reset(snapshot: Pick<LedgerSnapshot, "seq" | "pms" | "conversations" | "sessions">): void;
   apply(change: Change): void;
   close(): void;
@@ -28,7 +25,6 @@ export interface ReminderWatcher {
 export function createReminderWatcher(opts: { device: ReminderDevice; presence: PresenceBoard; notify: (payload: PushPayload) => void }): ReminderWatcher {
   const { device, presence } = opts;
   const tracker = new ReminderTracker<ConversationId>();
-  /** 前台网页正看着的对话算看过（和网页的 lastSeen 同一个意思，只记在内存里）。 */
   const lastSeen: LastSeen = {};
   let state: ReminderState | null = null;
   let pending: ReturnType<typeof setTimeout> | undefined;
@@ -44,14 +40,12 @@ export function createReminderWatcher(opts: { device: ReminderDevice; presence: 
     const { fire, nextCheckAt } = tracker.update(now, waitingConversations(state, lastSeen), asks);
     if (settleTimer !== undefined) clearTimeout(settleTimer);
     settleTimer = nextCheckAt === null ? undefined : setTimeout(evaluate, nextCheckAt - now);
-    // 有网页在前台：这些提醒照样算“提醒过了”，只是不推
     if (fire.length === 0 || presence.foreground()) return;
     for (const reminder of fire) {
       const payload = reminderPayload(state, reminder, device);
       if (payload !== null) opts.notify(payload);
     }
   };
-  // 一串变化（流式输出时一秒几十条）合成一次：第一条来了等 REMINDER_EVALUATE_DELAY_MS，这段时间里的都算进去
   const schedule = () => {
     if (pending === undefined && !closed) pending = setTimeout(evaluate, REMINDER_EVALUATE_DELAY_MS);
   };
@@ -59,7 +53,6 @@ export function createReminderWatcher(opts: { device: ReminderDevice; presence: 
   return {
     reset(snapshot) {
       state = reminderStateFrom(snapshot);
-      // 马上算：第一次是“启动时本来就有的”的基线，之后来的变化才算新的
       clearTimeout(pending);
       evaluate();
     },
@@ -67,7 +60,6 @@ export function createReminderWatcher(opts: { device: ReminderDevice; presence: 
       if (state === null) return;
       const next = applyReminderChange(state, change);
       if (next === state) return;
-      // 和提醒无关的变化类型（applyReminderChange 只更新 seq）：seq 照记，不触发判断
       const relevant = next.pms !== state.pms || next.conversations !== state.conversations || next.sessions !== state.sessions;
       state = next;
       if (relevant) schedule();

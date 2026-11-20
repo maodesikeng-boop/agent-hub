@@ -1,5 +1,3 @@
-// agent 接口（设计第 4.2、8.1、8.2 节；m2-plan 第 3 节接口约定第 4 条）：第二个 Fastify 实例，只监听 Unix socket run/hub.sock。
-// 按会话令牌认人，按 JSON Schema 查请求体的形状和长度，再交给账本的 hubCall。规格见 shared/hub.ts 的注释。
 import { dirname, resolve } from "node:path";
 import { Readable } from "node:stream";
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
@@ -62,7 +60,6 @@ import type { TranscriptRef } from "../driver/transcript.ts";
 import { probePr as defaultProbePr, probePrByUrl as defaultProbePrByUrl, probeWorkspace as defaultProbeWorkspace } from "../git/index.ts";
 
 export interface AgentApiOptions {
-  /** reportHealth：500 记一次 "agent-api" 失败，成功一次清零；400–409 不算。 */
   ledger: Pick<
     Ledger,
     | "hubCall"
@@ -75,73 +72,39 @@ export interface AgentApiOptions {
     | "workerTranscriptTarget"
     | "shareHubFiles"
   >;
-  /**
-   * hub worker start 之前异步探主文件夹的 git（m3-plan 第 2.6 节），结果作为 HubCallContext.workspace 交给 hubCall：
-   * 账本的事务里不做 I/O，git 卡住也不会停住整个守护进程。默认 daemon/git 的 probeWorkspace（每次 git 最多 GIT_PROBE_TIMEOUT_MS）。
-   */
+  /** Probe git outside the ledger transaction so a hung git call cannot stall the daemon. */
   probeWorkspace?: (folder: string) => Promise<WorkspaceProbe>;
-  /**
-   * hub worker show 之前异步查 Worker 分支上的 PR（同上，事务里不做 I/O），结果作为 HubCallContext.pr。
-   * 没有 PR 返回 null（show 不写 PR 行）；gh 查不了返回 { unavailable: 原因 }（show 显示“PR 查不了（原因）”）。默认 gh pr list（最多 WORKER_PR_PROBE_TIMEOUT_MS）。
-   */
   probePr?: (cwd: string, branch: string) => Promise<WorkerPrProbeResult>;
-  /** hub graph finish 前按网址查手工补记（hub graph done --pr）的 PR。默认 daemon/git 的 probePrByUrl（gh pr view）。 */
   probePrByUrl?: (cwd: string, url: string) => Promise<WorkerPrProbeResult>;
-  /**
-   * hub worker show 之前找这个 Worker 会话在厂商那边的原始记录文件，结果作为 HubCallContext.transcript。
-   * 找不到返回 null。默认驱动层的 vendorTranscriptPath（只读文件系统）。
-   */
   findTranscript?: (ref: TranscriptRef) => string | null;
-  /**
-   * 派 Worker（hub worker start --vendor、建图或推进图时自动开工）前，让这家在这台设备上的状态是新的：还没问过、现在不能用的先问一次
-   * （守护进程接 ModelCatalogs.ensureUsable）。账本之后从同一个 ModelCatalogs 读状态。不给就不问。
-   */
   refreshVendor?: (vendor: AgentVendor) => Promise<unknown>;
-  /**
-   * hub models 查询各厂商模型目录（守护进程接 ModelCatalogs）。不给就不预查，由账本用缓存或打包目录兜底。
-   */
   models?: { list(options?: { refresh?: boolean | "unusable"; vendor?: AgentVendor }): Promise<ModelCatalog[]> };
-  /** Router 轨道 B 沙箱与活跃指令绑定守卫。 */
   sandboxGuard?: RouterSandboxGuard;
-  /** Router 轨道 B 调用 `hub dispatch` 时的异步分派回调。 */
   onRouterDispatch?: (
     sessionId: SessionId,
     commandId: RouterCommandId,
     payload: RouterAgentDispatchInput,
   ) => Promise<{ text: string; data: unknown }>;
-  /**
-   * `hub self-reload [--build]`：登记空闲排空热重启（daemon/self-reload.ts），立即返回。只放行项目经理的会话。
-   * 不给 = 这台守护进程不支持（没有外壳监管，退出后没人拉起），回 conflict。
-   */
   selfReload?: (input: { sessionId: SessionId; build: boolean }) => { text: string; data: unknown };
-  /** 热重启现在等到哪了：项目经理的 hub status 里写从几点开始等、几点起只等正在回用户的轮次。和 selfReload 一起给；还没启动完是 undefined。 */
   selfReloadStatus?: () => SelfReloadStatus | undefined;
   tokens: SessionTokens;
   logger?: boolean;
-  /** 守护进程的日志（组装代码给）：500 和 reportHealth 出错各写一行。不给就只走 Fastify 的 logger。 */
   log?: (line: string) => void;
-  /** 一个请求从连上到收完的上限，默认 HUB_REQUEST_TIMEOUT_MS；测试里调小，几秒就能看到半截请求被断开。 */
   requestTimeoutMs?: number;
-  /** 多久查一次有没有超时的请求，默认 HUB_TIMEOUT_CHECK_MS。 */
   timeoutCheckMs?: number;
-  /** 供 Windows `hub.exe` 原生直连 `/hub/cli` 转发时注入当前监听的管道名。 */
   boundSocketPath?: () => string;
 }
 
 const BEARER = /^Bearer ([A-Za-z0-9_-]+)$/;
 
-// ---- 请求体的规格 ----
-
 const nameField = { type: "string", minLength: 1, maxLength: MAX_NAME_CHARS };
-/** 字节上限另查（ajv 的 maxLength 按字符算）；这里的 maxLength 只是先挡一下，字符数不会比字节数多。 */
+/** ajv maxLength counts characters, so byte limits are checked separately. */
 const pathField = { type: "string", minLength: 1, maxLength: MAX_PATH_BYTES };
 const noArgs = { type: "object", additionalProperties: false, properties: {} };
 
 const folderOnly = { type: "object", additionalProperties: false, required: ["folder"], properties: { folder: pathField } };
-// hub worker …（M3）：编号是正整数；任务说明、打回的话按字节另查（BYTE_LIMITS）
 const workerIdField = { type: "integer", minimum: 1 };
 const taskField = { type: "string", minLength: 1, maxLength: MAX_TASK_BYTES };
-/** hub ask / router report 的 --file：个数超了由账本报中文原因（HUB_FILE_ARGS_MAX），这里只挡不像样的输入。 */
 const fileArgsField = {
   type: "array",
   items: {
@@ -167,7 +130,6 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
   },
   "project.attach": folderOnly,
   "project.detach": folderOnly,
-  // null 是清除（hub project setup --clear）；字节数另查（BYTE_LIMITS），空的、带 NUL 由账本拒
   "project.setup": {
     type: "object",
     additionalProperties: false,
@@ -188,17 +150,13 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
   "worker.start": {
     type: "object",
     additionalProperties: false,
-    // 换人接手（带 node、节点上已有前任）时标题、正文都可以不给，由账本按节点判断；不带 node 的两样都要
     anyOf: [{ required: ["title", "task"] }, { required: ["node"] }],
     properties: {
-      // 太长不拒，账本用 normalizeWorkerTitle 截断到 MAX_WORKER_TITLE_CHARS
       title: { type: "string", minLength: 1 },
       task: taskField,
       vendor: { type: "string", minLength: 1, maxLength: MAX_MODEL_CHARS },
       model: { type: "string", minLength: 1, maxLength: MAX_MODEL_CHARS },
-      // 取值由账本按项目经理那家的清单查（vendors.ts），这里只管形状
       effort: { type: "string", minLength: 1, maxLength: MAX_MODEL_CHARS },
-      // maxTimeMs 的范围（MIN_WORKER_MAX_TIME_MS 到 MAX_WORKER_MAX_TIME_MS）由账本查，报中文原因
       maxTimeMs: { type: "integer" },
       readonly: { type: "boolean" },
       noWorktree: { type: "boolean" },
@@ -231,14 +189,12 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
     required: ["workerId"],
     properties: { workerId: workerIdField, task: { type: "boolean" }, report: { oneOf: [{ type: "integer" }, { const: "latest" }] } },
   },
-  // 关键词个数、长度、limit 的范围由账本查，报中文原因
   "worker.search": {
     type: "object",
     additionalProperties: false,
     required: ["keywords"],
     properties: { keywords: { type: "array", items: { type: "string" } }, limit: { type: "integer" } },
   },
-  // last 的范围（1 到 WORKER_LOG_MAX_STEPS）由账本查，报中文原因
   "worker.log": {
     type: "object",
     additionalProperties: false,
@@ -268,7 +224,6 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
     },
   },
   "ask.close": { type: "object", additionalProperties: false, required: ["itemId"], properties: { itemId: workerIdField } },
-  // hub schedule …（M6）：daily 的 HH:MM、间隔的范围、两个频率二选一由账本查（报中文原因）；任务说明按字节另查
   "schedule.add": {
     type: "object",
     additionalProperties: false,
@@ -391,7 +346,6 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
   },
 };
 
-/** 要查字符的字段：path 必须是绝对路径、不含 NUL；name 不含 NUL 和控制字符。 */
 const FIELD_KINDS: Partial<Record<HubCommand, Record<string, "path" | "name">>> = {
   "project.create": { name: "name", folder: "path" },
   "project.attach": { folder: "path" },
@@ -399,10 +353,8 @@ const FIELD_KINDS: Partial<Record<HubCommand, Record<string, "path" | "name">>> 
   "worker.start": { title: "name" },
   "schedule.add": { name: "name" },
 };
-/** C0、DEL、C1 控制字符（含 NUL、换行、制表符）。 */
 const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/u;
 
-/** 按 UTF-8 字节算上限的字段。 */
 const BYTE_LIMITS: Partial<Record<HubCommand, Record<string, number>>> = {
   "project.create": { folder: MAX_PATH_BYTES },
   "project.attach": { folder: MAX_PATH_BYTES },
@@ -450,9 +402,6 @@ function send(reply: FastifyReply, response: HubResponse): FastifyReply {
   return reply.code(response.ok ? 200 : HUB_ERROR_HTTP_STATUS[response.code]).send(response);
 }
 
-// ---- 请求体校验没过：按 schema 的错拼中文，写出字段名（英文原文只进日志）----
-
-/** ajv 报错里用到的几项（Fastify 的 err.validation）。 */
 interface SchemaIssue {
   keyword: string;
   instancePath: string;
@@ -463,14 +412,13 @@ const TYPE_NAMES: Record<string, string> = { string: "文字", integer: "整数"
 
 const fieldOf = (issue: SchemaIssue): string => issue.instancePath.replace(/^\//, "").replaceAll("/", ".");
 
-/** 一条 schema 错 → 一句中文（不含“参数不对：”前缀）。 */
 function describeIssue(issue: SchemaIssue, all: readonly SchemaIssue[]): string {
   const field = fieldOf(issue);
   const target = field === "" ? "请求体" : field;
   const params = issue.params;
   switch (issue.keyword) {
     case "required": {
-      // anyOf（几个里至少给一个）会连报每个分支的 required：合成一句“缺 a 或 b”
+      // anyOf reports required for every branch; merge them into one "missing a or b" message.
       const missing = all.filter((i) => i.keyword === "required" && fieldOf(i) === field).map((i) => String(i.params.missingProperty));
       return `缺 ${[...new Set(missing)].join(" 或 ")}`;
     }
@@ -494,12 +442,10 @@ function describeIssue(issue: SchemaIssue, all: readonly SchemaIssue[]): string 
 }
 
 function describeValidation(issues: readonly SchemaIssue[]): string {
-  // anyOf / oneOf 自己那一条没有字段信息，看它前面具体的几条
   const first = issues.find((i) => i.keyword !== "anyOf" && i.keyword !== "oneOf") ?? issues[0];
   return first === undefined ? "请求内容不对" : describeIssue(first, issues);
 }
 
-/** Fastify 自己的 4xx（JSON 坏了、内容类型不对、网址解不开……）→ 一句中文。 */
 function describeFramework(err: FastifyError): string {
   switch (err.code) {
     case "FST_ERR_CTP_INVALID_MEDIA_TYPE":
@@ -515,7 +461,6 @@ function describeFramework(err: FastifyError): string {
   }
 }
 
-/** HubError、LedgerRequestError 的 message 是写给人的中文业务原因，原样回给 agent（和异常原文不是一回事）。 */
 const reasonOf = (err: HubError | LedgerRequestError): string => err.message;
 
 function fail(reply: FastifyReply, code: HubErrorCode, message: string): FastifyReply {
@@ -531,11 +476,6 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
   const probePrByUrl = opts.probePrByUrl ?? ((cwd: string, url: string) => defaultProbePrByUrl(cwd, url));
   const findTranscript = opts.findTranscript ?? ((ref: TranscriptRef) => vendorTranscriptPath(ref));
 
-  /**
-   * hubCall 之前要异步准备的东西：worker.start（没带 noWorktree、有项目）要探 git，worker.show 要查 PR，models 要查模型目录，
-   * ask、router.report 带 --file 要先存副本（大文件分块拷，不进账本的事务）。
-   * 每次 await 恢复后、碰账本之前先看 signal：关闭了就不再调账本（守护进程这时已经关库），返回的空上下文调用方不会用。
-   */
   const prepare = async (sessionId: SessionId, command: HubCommand, body: Record<string, unknown>, signal: AbortSignal): Promise<HubCallContext> => {
     const role = ledger.sessionRole(sessionId);
     if (role === null || !hubCommandAllowed(role, command)) return {};
@@ -597,7 +537,6 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
     }
     if (command !== "worker.start") return {};
     const context: HubCallContext = {};
-    // 带 --vendor：这家在这台设备上能不能用（不带就是项目经理自己那家，正在用着，不查）
     if (opts.refreshVendor && isAgentVendor(body.vendor)) await opts.refreshVendor(body.vendor);
     if (signal.aborted || body.noWorktree === true) return context;
     const folder = ledger.workerStartFolder(sessionId);
@@ -609,22 +548,19 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
     logger: opts.logger ?? false,
     bodyLimit: HUB_MAX_BODY_BYTES,
     requestTimeout: requestTimeoutMs,
-    // Node 在 headersTimeout（默认 60 秒）大于 requestTimeout 时把两个对调，请求头收完后的上限就成了 60 秒；
-    // 检查间隔默认 30 秒。两个都压下来，半截请求才是 15 秒左右断开。
+    // Node swaps headersTimeout and requestTimeout when headersTimeout is larger, so both are lowered to cut half-sent requests after about 15 seconds.
     http: { headersTimeout: requestTimeoutMs, connectionsCheckingInterval: opts.timeoutCheckMs ?? HUB_TIMEOUT_CHECK_MS },
-    // close() 不等还连着的请求，直接断开，保证关得掉。
+    // close() drops open connections instead of waiting, so shutdown always finishes.
     forceCloseConnections: true,
-    // 多余参数要报错，不能悄悄删掉；类型不对也不替它转换。
+    // Reject unknown fields and wrong types instead of silently stripping or coercing them.
     ajv: { customOptions: { removeAdditional: false, coerceTypes: false, useDefaults: false } },
-    // 路由之前的错（URL 解不开……）：onRequest 还没跑，也按 HubResponse 回 invalid。
     frameworkErrors: (err, _req, reply) => {
       void fail(reply, "invalid", `参数不对：${describeFramework(err)}`);
     },
   });
   const authOf = new WeakMap<FastifyRequest, { sessionId: SessionId; token: string }>();
 
-  // 关闭时：先标记关闭、取消在途的准备（preClose），断开连接后等在途的处理函数都退出（onClose），close() 才返回。
-  // 守护进程在 close() 之后关库，所以处理函数在 await 之后、调账本之前都要看一眼 closing，关了就回 503。
+  // On close, cancel pending prepares first, then wait for in-flight handlers after connections drop.
   const closing = new AbortController();
   const handlers = new Set<Promise<unknown>>();
   const preparing = new Set<Promise<unknown>>();
@@ -634,7 +570,7 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
   });
   app.addHook("onClose", async () => {
     while (handlers.size > 0) await Promise.all(handlers);
-    // 准备（探 git、查 PR、存附件）收到取消后自己收尾：等它们落定，但卡在 open 上取消不了的读取最多等 HUB_SHUTDOWN_PREPARE_GRACE_MS
+    // Pending prepares settle on abort, but reads stuck in open() cannot be cancelled, so wait at most HUB_SHUTDOWN_PREPARE_GRACE_MS.
     if (preparing.size === 0) return;
     let timer: NodeJS.Timeout | undefined;
     await Promise.race([
@@ -643,7 +579,6 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
     ]);
     clearTimeout(timer);
   });
-  /** 跑准备并记进 preparing：关闭时外层不等它（null），onClose 等它落定。 */
   const runPrepare = (sessionId: SessionId, command: HubCommand, body: Record<string, unknown>): Promise<HubCallContext | null> => {
     const work = prepare(sessionId, command, body, closing.signal);
     const settled = work.then(
@@ -655,7 +590,6 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
     return unlessAborted(work, closing.signal, () => null);
   };
   const shuttingDown = (reply: FastifyReply) => fail(reply, "shutting_down", API_ERRORS.shutting_down.text);
-  /** 路由处理函数套一层：关了的不进；记进 handlers 给 onClose 等；出错时接口已经关了的回 503（不走错误处理里的记健康状态）。 */
   const tracked =
     (handler: (req: FastifyRequest, reply: FastifyReply) => Promise<FastifyReply>) =>
     async (req: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
@@ -675,7 +609,6 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
       }
     };
 
-  /** 报健康状态失败不能影响回答。 */
   const reportHealth = (error: string | null) => {
     try {
       ledger.reportHealth("agent-api", error);
@@ -685,7 +618,7 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
     }
   };
 
-  // 先认人：令牌不对的请求不看路由、不读请求体、不调账本。
+  // Authenticate before routing, reading the body, or touching the ledger.
   app.addHook("onRequest", async (req, reply) => {
     const match = BEARER.exec(req.headers.authorization ?? "");
     const token = match?.[1] ?? "";
@@ -706,12 +639,10 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
       return fail(reply, "invalid", `参数不对：${describeValidation(validation as unknown as SchemaIssue[])}`);
     }
     const status = (err as FastifyError).statusCode;
-    // Fastify 自己的 4xx（JSON 坏了、内容类型不对……）：hub 只认 HUB_ERROR_HTTP_STATUS 里的状态，一律算 invalid。英文原文只进日志。
     if (status !== undefined && status >= 400 && status < 500) {
       req.log.info({ err }, "agent-api request rejected by fastify");
       return fail(reply, "invalid", `参数不对：${describeFramework(err as FastifyError)}`);
     }
-    // 意外的错：原文、堆栈只进日志和接口健康状态；agent 只看到 internal 那句话
     req.log.error({ err }, "agent-api request failed");
     opts.log?.(`${LOG_PREFIX} hub 请求出错（${req.method} ${req.url.split("?", 1)[0]}）：${err.message}`);
     reportHealth(err.message);
@@ -733,14 +664,12 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
       const body = req.body as Record<string, unknown>;
       checkFields(command, body);
       const stillAuthorized = () => tokens.resolve(auth.token) === auth.sessionId;
-      // 收请求体期间令牌可能已经作废（会话结束了）：先认一次再准备（存附件副本、探 git），作废的请求不在磁盘上留副本
+      // The token may be revoked while the body uploads, so check before preparing.
       if (!stillAuthorized()) return fail(reply, "unauthorized", UNAUTHORIZED_MESSAGE);
-      // 关闭时外层不等准备做完（附件卡在 open 上也不等），null 表示放弃了
       const context = await runPrepare(auth.sessionId, command, body);
       if (context === null || closing.signal.aborted) return shuttingDown(reply);
-      // 准备期间（拷大文件、探 git）也可能作废：调账本前再认一次。这时已存的副本按内容去重，没被引用的由定期清理（file-cleanup.ts）删
+      // Prepares (large copies, git probes) take time, so check the token again before calling the ledger.
       if (!stillAuthorized()) return fail(reply, "unauthorized", UNAUTHORIZED_MESSAGE);
-      // 请求体的形状已经按 BODY_SCHEMAS 查过，就是这个命令的 HubArgs。
       const result = ledger.hubCall(auth.sessionId, command, body as never, context);
       reportHealth(null);
       return send(reply, { ok: true, text: result.text, data: result.data });
@@ -751,7 +680,7 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
   app.post(SELF_RELOAD_AGENT_PATH, { schema: { body: selfReloadSchema } }, tracked(async (req, reply) => {
     const auth = authOf.get(req);
     if (auth === undefined) throw new Error("agent-api: request reached self.reload without a session");
-    // 只有项目经理能让整个守护进程重启：Worker（含只读）、总助一律 forbidden
+    // Only PMs may restart the daemon.
     if (ledger.sessionRole(auth.sessionId) !== "pm") throw new LedgerRequestError("forbidden", "只有项目经理可以调用 hub self-reload");
     if (!opts.selfReload) throw new LedgerRequestError("conflict", SELF_RELOAD_UNSUPPORTED_MESSAGE);
     const result = opts.selfReload({ sessionId: auth.sessionId, build: (req.body as { build?: boolean }).build === true });
@@ -826,7 +755,7 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
       commandId,
       body as unknown as RouterAgentDispatchInput,
     );
-    // 调度本身要改账本，不在中途放弃（onClose 等它做完）；做完时接口已经关了就不再记健康状态
+    // Scheduling mutates the ledger, so it is never abandoned midway; onClose waits for it.
     if (closing.signal.aborted) return shuttingDown(reply);
     reportHealth(null);
     return reply.code(200).send({ ok: true, text: result.text, data: result.data });
@@ -888,24 +817,16 @@ export function createAgentApi(opts: AgentApiOptions): FastifyInstance {
 }
 
 export interface AgentApiListenOptions extends AgentApiOptions {
-  /** run/：没有就建，权限改成 0700。 */
   runDir: string;
-  /** run/hub.sock：必须直接在 runDir 下。 */
   hubSock: string;
 }
 
 export interface RunningAgentApi {
   app: FastifyInstance;
-  /** realpath 过的 socket 路径：写进 HUB_SOCK 和设置文件的就是它。 */
   socketPath: string;
-  /** 停止监听；socket 文件随之删掉。 */
   close(): Promise<void>;
 }
 
-/**
- * 在 hubSock 上听（准备和失败收尾见 ../run-socket.ts 的 listenOnRunSocket）：run/ 建好并改成 0700，hub.sock 听上后改成 0600。
- * socket 文件在、但试连连不上，才当残留删掉；连得上说明有活实例，拒绝启动。
- */
 export async function startAgentApi(opts: AgentApiListenOptions): Promise<RunningAgentApi> {
   if (!isWindowsNamedPipe(opts.hubSock) && resolve(dirname(opts.hubSock)) !== resolve(opts.runDir)) {
     throw new Error(`hubSock must be directly inside runDir: ${opts.hubSock}`);

@@ -1,8 +1,4 @@
-// Router 轨道 B 只读隔离沙箱与令牌权限守卫（docs/router-design.md §5.2、§7）：
-// - 强制工作在 <stateDir>/router-home 隔离空目录（0700），禁挂任何业务目录（addDirs = []）；
-// - 对全部厂商统一走 buildReadonlyPolicy + VENDOR_DAEMONS[vendor].launchFiles（零单家硬编码），禁写文件、禁读敏感目录；
-// - 按单轮用途（single-turn.ts 的 RouterTurnPurpose）选提示词和凭证：分派拿总助提示词和 hub 令牌，后台写档拿写档提示词、没有令牌；
-// - 维护活跃 assistant 会话 → commandId 绑定表，严防 assistant 调普通 hub 命令，也严防 pm/worker 越权调 hub dispatch。
+// Router track B runs in an isolated empty router-home with no business directories and no hub token.
 import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -41,14 +37,12 @@ function realpathOr(path: string): string {
   }
 }
 
-/** 确保 <stateDir>/router-home 隔离空目录存在（0700）并返回真实路径。 */
 export function ensureRouterHomeDir(stateDir: string): string {
   const dir = join(realpathOr(stateDir), ROUTER_HOME_DIR_NAME);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   return realpathOr(dir);
 }
 
-/** 校验准备启动的会话严格符合轨道 B 隔离沙箱约束。 */
 export function assertRouterSessionSandbox(session: AgentSessionRow, routerHomeDir: string): void {
   if (session.role !== "assistant") {
     throw new Error(`Router sandbox requires role === "assistant", got "${session.role}"`);
@@ -76,11 +70,9 @@ export interface RouterSandboxLaunchOptions {
   hubBinDir: string;
   basePath?: string;
   vendorAvailability?: VendorAvailabilityMap;
-  /** 这一轮做什么，默认 dispatch。catalog 不发 hub 令牌、不给 hub 命令的路径，环境里没有 HUB_TOKEN / HUB_SOCK，厂商设置里也不放行 hub。 */
   purpose?: RouterTurnPurpose;
 }
 
-/** 生成总助单轮会话（分派、写档）的 LaunchFiles（统一适配全部厂商）。 */
 export function prepareRouterSandboxLaunch(
   session: AgentSessionRow,
   options: RouterSandboxLaunchOptions,
@@ -102,7 +94,6 @@ export function prepareRouterSandboxLaunch(
   const dir = sessionLaunchDir(options.launchDir, session.id);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const launchDir = realpathOr(dir);
-  // 读边界：总助只读调度，数据目录里只放行自己的启动目录和 state/router-home（cwd）
   const dataDirScope = dataDirReadScope({ dataDir, launchDir, extraReadable: [routerHomeDir] });
   const readonlyPolicy = buildReadonlyPolicy({
     homeDir,
@@ -166,7 +157,6 @@ export function prepareRouterSandboxLaunch(
   };
 }
 
-/** 清理轨道 B 会话生成的临时启动目录。 */
 export function cleanupRouterLaunchDir(launchDir: string, sessionId: SessionId): void {
   removeSessionLaunchDir(launchDir, sessionId);
 }
@@ -180,7 +170,7 @@ export interface RouterSandboxGuard {
   clear(): void;
 }
 
-/** 活跃轨道 B 会话与指令绑定守卫（finally 立即解绑，杜绝悬空残留）。 */
+/** Unbind in finally so no stale binding survives the turn. */
 export function createRouterSandboxGuard(): RouterSandboxGuard {
   const active = new Map<SessionId, RouterCommandId>();
 

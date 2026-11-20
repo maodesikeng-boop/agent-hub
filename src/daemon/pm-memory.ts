@@ -38,7 +38,6 @@ import {
   renameSyncWithWindowsRetry,
 } from "./platform/index.ts";
 
-/** 顶层 MEMORY.md 超出 200 行或 25 KB 时附在系统提示词截断末尾的单行提示（不含换行）。 */
 export const PM_MEMORY_TRUNCATION_HINT =
   "[提示：MEMORY.md 已超出 200 行或 25 KB 自动加载上限，此处已截断；请把具体专题拆到记忆目录同级的 <topic>.md 子文件按需查阅。]";
 
@@ -49,11 +48,6 @@ function codePointUtf8Bytes(cp: number): number {
   return 4;
 }
 
-/**
- * 拼入项目经理系统提示词（或中途性格设定更新说明）前安全截断 MEMORY.md：
- * - 同时满足 <= 200 行且 <= 25 KB（UTF-8）时原样无损返回；
- * - 任一超限时截到前 200 行以内并按完整 Unicode 码点控制在 25 KB 预算内（含末尾单行拆分提示），绝不截出半个多字节字符或孤立代理项。
- */
 export function truncatePmMemoryForPrompt(raw: string): { text: string; truncated: boolean } {
   if (raw === "" || raw === PM_MEMORY_TRUNCATION_HINT) return { text: raw, truncated: false };
   const lines = raw.split("\n");
@@ -101,10 +95,6 @@ function isMissingError(err: unknown): boolean {
   return (err as NodeJS.ErrnoException)?.code === "ENOENT";
 }
 
-/**
- * 解析并校验 `<pmMemoryDir>/<pmId>` 的真实路径，严防目录本身或上层根被替换成符号链接逃逸。
- * `create: false` 时若目录尚未创建则返回 null。
- */
 function resolveSafePmDir(pmMemoryDir: string, pmId: PmId, opts: { create: boolean }): string | null {
   try {
     const rootStat = lstatSync(pmMemoryDir);
@@ -139,7 +129,6 @@ function resolveSafePmDir(pmMemoryDir: string, pmId: PmId, opts: { create: boole
   return realDir;
 }
 
-/** 确保 `<pmMemoryDir>/<pmId>` 存在且非软链，返回 `realpathSync.native` 后的绝对路径（供驱动层挂载 `addDirs`）。 */
 export function ensurePmMemoryDir(pmMemoryDir: string, pmId: PmId): string {
   return resolveSafePmDir(pmMemoryDir, pmId, { create: true })!;
 }
@@ -151,10 +140,6 @@ function assertValidSubfileName(name: string): void {
   }
 }
 
-/**
- * 以 O_NOFOLLOW 打开并按 fd 读取普通文件：lstat 之后到读之间就算被换成软链也不会跟过去（ELOOP），
- * 大小按 fstat 判断，超过 maxBytes 不读内容、返回 oversize。
- */
 function readRegularFileNoFollow(target: string, maxBytes: number): { text: string; mtimeMs: number } | { oversize: true } {
   const fd = openRegularFileNoFollowSync(target);
   try {
@@ -187,7 +172,7 @@ function atomicWriteRegularFile(realDir: string, fileName: string, content: stri
   const tmp = join(realDir, `.pm-mem-${process.pid}-${randomBytes(6).toString("hex")}.tmp`);
   try {
     writeFileSync(tmp, content, { encoding: "utf8", mode: 0o600, flag: "wx" });
-    // 改名前再查一次目标未在并发窗口内被换成软链
+    // Re-check before rename in case the target became a symlink in the meantime.
     try {
       const stAfter = lstatSync(target);
       if (stAfter.isSymbolicLink() || !stAfter.isFile()) {
@@ -204,10 +189,8 @@ function atomicWriteRegularFile(realDir: string, fileName: string, content: stri
   }
 }
 
-/** readPmMemoryIndex 的结果：正文，或超过 MAX_PERSONA_BYTES（没读内容，交给 quarantinePmMemoryIndex 挪走保全）。 */
 export type PmMemoryIndexRead = { text: string } | { oversize: true };
 
-/** 读取顶层 `MEMORY.md`；不存在或为软链时返回 null（软链不跟读）。超过 MAX_PERSONA_BYTES 不读内容，返回 oversize。 */
 export function readPmMemoryIndex(pmMemoryDir: string, pmId: PmId): PmMemoryIndexRead | null {
   let realDir: string | null;
   try {
@@ -228,10 +211,6 @@ export function readPmMemoryIndex(pmMemoryDir: string, pmId: PmId): PmMemoryInde
   }
 }
 
-/**
- * 把超过 MAX_PERSONA_BYTES、进不了数据库的 `MEMORY.md` 原样改名成同目录的 `MEMORY-overflow-<at>.md` 子文件保全
- * （资料页 Memory files 里能看到、能删），之后调用方再按数据库重写 `MEMORY.md`。返回新文件名；挪不动返回 null（调用方不得覆盖原文件）。
- */
 export function quarantinePmMemoryIndex(pmMemoryDir: string, pmId: PmId, at: number): string | null {
   try {
     const realDir = resolveSafePmDir(pmMemoryDir, pmId, { create: false });
@@ -244,7 +223,7 @@ export function quarantinePmMemoryIndex(pmMemoryDir: string, pmId: PmId, at: num
       const target = join(realDir, name);
       try {
         lstatSync(target);
-        continue; // 同名已存在，换一个，绝不覆盖
+        continue;
       } catch (err) {
         if (!isMissingError(err)) throw err;
       }
@@ -257,7 +236,6 @@ export function quarantinePmMemoryIndex(pmMemoryDir: string, pmId: PmId, at: num
   }
 }
 
-/** 原子写入顶层 `MEMORY.md`（写失败返回 false，不阻断上层数据库事务）。 */
 export function writePmMemoryIndex(pmMemoryDir: string, pmId: PmId, content: string): boolean {
   try {
     const realDir = resolveSafePmDir(pmMemoryDir, pmId, { create: true })!;
@@ -270,7 +248,6 @@ export function writePmMemoryIndex(pmMemoryDir: string, pmId: PmId, content: str
 
 function scanSubfilesInRealDir(realDir: string): PmMemoryFilesList {
   const files: PmMemoryFileSummary[] = [];
-  // opendir 逐项读，最多看 PM_MEMORY_MAX_DIR_SCAN 项就停：readdirSync 会先把整个目录读进内存，起不到上限的作用
   const dir = opendirSync(realDir);
   try {
     for (let scanned = 0; scanned < PM_MEMORY_MAX_DIR_SCAN; scanned++) {
@@ -295,18 +272,15 @@ function collectSubfile(realDir: string, name: string, files: PmMemoryFileSummar
     if (normalizePathForComparison(realpathSync.native(full)) !== normalizePathForComparison(full)) return;
     files.push({ name, bytes: st.size, updatedAt: Math.trunc(st.mtimeMs) });
   } catch {
-    // 并发删除或无权限读的项跳过
   }
 }
 
-/** 列出指定项目经理的扁平 `<topic>.md` 子文件（不含 `MEMORY.md`、隐藏文件与软链）。 */
 export function listPmMemoryFiles(pmMemoryDir: string, pmId: PmId): PmMemoryFilesList {
   const realDir = resolveSafePmDir(pmMemoryDir, pmId, { create: false });
   if (realDir === null) return { files: [], totalBytes: 0 };
   return scanSubfilesInRealDir(realDir);
 }
 
-/** 读取单个 `<topic>.md` 子文件内容与元数据。 */
 export function readPmMemoryFile(pmMemoryDir: string, pmId: PmId, name: string): PmMemoryFileDetail {
   assertValidSubfileName(name);
   const realDir = resolveSafePmDir(pmMemoryDir, pmId, { create: false });
@@ -346,7 +320,6 @@ export function readPmMemoryFile(pmMemoryDir: string, pmId: PmId, name: string):
   };
 }
 
-/** 新建或更新单个 `<topic>.md` 子文件（单文件 <= 64 KB、总数 <= 50、合计 <= 1 MB）。 */
 export function writePmMemoryFile(
   pmMemoryDir: string,
   pmId: PmId,
@@ -383,7 +356,6 @@ export function writePmMemoryFile(
   };
 }
 
-/** 删除单个 `<topic>.md` 子文件（拦截软链与路径穿越）。 */
 export function deletePmMemoryFile(pmMemoryDir: string, pmId: PmId, name: string): void {
   assertValidSubfileName(name);
   const realDir = resolveSafePmDir(pmMemoryDir, pmId, { create: false });

@@ -1,18 +1,3 @@
-// 账本（设计第 6.2 节）：业务表的唯一写者。每个命令一个事务，提交之后才推变化、通知新登记的动作。
-// 这里只把各部分拼成 Ledger：
-// - context.ts：事务（write）、动作登记、健康状态等共用的东西；
-// - sessions.ts：会话状态（推给网页的 session.status）、建会话、重启恢复；
-// - messages.ts：消息、驱动层事件、系统消息；
-// - persona.ts：项目经理、性格设定和性格设定文件；
-// - projects.ts：项目（每个项目经理最多一个，挂在它唯一的对话上）、文件夹；
-// - hub-commands.ts：hub 命令；
-// - handover.ts：换新会话（后台写交接的状态机、换代；跑腿的在 daemon/handover/runner.ts）；
-// - workers.ts：Worker（M3）：派活、打回、收工、汇报回到项目经理、建 worktree 的回调；
-// - steps.ts、worker-view.ts：会话一步一步干了什么（session_steps）、hub worker show / log 怎么讲给项目经理；
-// - loaded-skills.ts：项目经理加载过的技能，换代时带进新会话；
-// - schedules.ts：定时任务（M6）：hub schedule 命令、到点往项目经理的对话发消息、这一轮没跑成的记录；
-// - launch-context.ts：启动 claude 前给提示词用的上下文。
-// 11-03 拿掉了项目群：快照不给老的项目群和归档的项目（数据还在库里，见迁移 0003）。
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { LedgerSnapshot } from "../../shared/api.ts";
@@ -68,9 +53,7 @@ export interface SqliteLedger extends Ledger {
   archivePm(pmId: PmId): Pm;
   unarchivePm(pmId: PmId): Pm;
   purgeExpiredArchivedPms(nowMs?: number): PmId[];
-  /** 已收工满保留期的 Worker：清一批它们对话里的大块数据（worker-retention.ts）。一个事务、最多 maxRows 行。 */
   purgeExpiredWorkerConversations(nowMs?: number, maxRows?: number): WorkerPurgeBatch;
-  /** 过期已决/已归档 Router 事项、指令、审计环与已完成任务图的分批清理。 */
   purgeExpiredRouterAndGraphRecords(nowMs?: number, maxRows?: number): { rows: number; more: boolean };
   listEndedWorktreeWorkers(): EndedWorktreeCandidate[];
   isWorkerCleanable(workerId: WorkerId): boolean;
@@ -87,76 +70,41 @@ export interface SqliteLedger extends Ledger {
   endRouterAssistantSession: LedgerRouter["endAssistantSession"];
   recordRouterWorkerOrigin: LedgerRouter["recordWorkerOrigin"];
   resolveRouterLocalPmOrProject: LedgerRouter["resolveLocalPmOrProject"];
-  /** 总助的项目目录（ledger/project-catalog.ts）：后台写档的跑腿的、守护进程启动扫描、hub dispatch project-show 用。 */
   projectCatalog: Omit<LedgerProjectCatalog, "afterDriverEvent" | "markForcedIn">;
   resolveRouterLocalWorker: LedgerRouter["resolveLocalWorker"];
   listRouterLocalWorkers: LedgerRouter["listLocalWorkers"];
-  /**
-   * 关库之前调（关机、测试）：取消在拷的附件，各会话排着的驱动事件按顺序不带附件同步落库，返回后不再写库；
-   * 之后交来的驱动事件丢弃，--file 在拷的记 unreadable。
-   */
+  /** Call before closing the database. Pending driver events are flushed in order without attachments, and later events are dropped. */
   close(): void;
 }
 
 export interface LedgerOptions {
   now?: () => number;
-  /** 这台设备的名字（要用户在这台设备上动手时写在卡上），默认本机的主机名。 */
   deviceName?: () => string;
-  /** 这台设备上各家的模型名单和状态：系统消息、hub 输出里的模型名用名单的显示名，派 Worker 前看厂商能不能用。不给用打包的、状态 unknown。 */
   models?: LedgerContextOptions["models"];
-  /** 缓存着的这个会话的完整命令列表（CommandCatalogs.cached）：手打命令时，列表里这个名字是用户自己的就不拦。没缓存、不给都按名字拦。 */
   knownCommands?: LedgerContextOptions["knownCommands"];
-  /** 本次启动的初始 seq，默认启动时刻的毫秒时间戳（比上次运行用过的都大）。 */
+  /** Starting seq is the startup timestamp in ms so it is always above any seq used by a previous run. */
   initialSeq?: number;
   changeBufferSize?: number;
-  /** 这台机器有没有 OS 沙箱，默认按本机（driver/write-scope.ts 的 osSandboxAvailable）；没有的机器上派只读 agy 报错。测试可以指定。 */
   osSandboxed?: LedgerContextOptions["osSandboxed"];
-  /** pm-home/ 的根目录；还没有项目的项目经理，会话的工作目录是 <pmHomeRoot>/<项目经理编号>/，createPm 负责建。必填。 */
   pmHomeRoot: string;
-  /**
-   * state/personas/（HubPaths.personasDir）。不给就不写、不同步性格设定文件（只给不碰性格设定的旧测试用），
-   * 正文照样以数据库为准。守护进程一定要给。
-   */
   personasDir?: string;
-  /** state/pm-memory/（HubPaths.pmMemoryDir）：项目经理专属记忆目录根（MEMORY.md + 扁平 `<topic>.md` 子文件）。 */
   pmMemoryDir?: string;
-  /** 数据目录（HubPaths.home），默认 resolveFolder 用它拒绝数据目录里的文件夹。默认 pmHomeRoot 的上一级（同 HubPaths 的布局）。 */
   dataHome?: string;
-  /**
-   * worktrees/ 的根目录（HubPaths.worktreesDir，M3）：Worker 的 worktree 是 <worktreesDir>/<项目编号>/<Worker 编号>/，
-   * 有项目的项目经理的会话 addDirs 带上 <worktreesDir>/<项目编号>/（见 shared/ledger.ts 的 LaunchContext）。
-   * 默认 <dataHome>/worktrees（同 HubPaths 的布局），守护进程（W5）显式传。
-   */
   worktreesDir?: string;
-  /** 额外的已登记跨卷 worktree 根目录（如 `D:\.fusa-wt\<指纹>`）：归档清理、分享白名单、PM addDirs 与输入过滤一并纳入。 */
   extraWorktreeRoots?: () => readonly string[];
-  /** state/launch/（HubPaths.launchDir）：清理到期归档 PM、到期 Worker 与退役旧会话时删除启动目录。 */
   launchDir?: string;
-  /** state/logs/setup/（HubPaths.setupLogsDir）：清理到期归档 PM 时删除 worker-<workerId>.log。 */
   setupLogsDir?: string;
-  /** agent 发给用户的文件存副本的地方（HubPaths.sentFilesDir），默认 <dataHome>/sent-files。 */
   sentFilesDir?: string;
-  /** 聊天框上传的文件（HubPaths.uploadsDir），默认 <dataHome>/uploads：agent 也能把它们发回给用户。 */
   uploadsDir?: string;
-  /** agent 能发给用户的临时目录，默认 /tmp 和 os.tmpdir()。测试的临时目录都在 os.tmpdir() 下，测“不在允许的文件夹里”时传空。 */
   shareTmpDirs?: string[];
-  /** 展开 `~` 用（默认 resolveFolder、detach 退回字面路径时），默认 os.homedir()。 */
   userHome?: string;
-  /** 文件夹校验，默认 createResolveFolder({ dataHome, userHome })。 */
   resolveFolder?: ResolveFolder;
-  /** 写性格设定文件（临时文件 + 改名）。测试换成会失败的。 */
   writeFileAtomic?: (file: string, content: string) => void;
-  /** 找会话的原始记录（交接提示词里写路径），守护进程传 driver/transcript.ts 的 vendorTranscriptPath；不给都当找不到。 */
   findTranscript?: HandoverOptions["findTranscript"];
-  /** 自动换新会话的门槛、空闲多久、写交接最多多久（默认见 limits.ts）；冒烟测试改小。 */
   autoRenew?: HandoverOptions["autoRenew"];
-  /** 写守护进程日志（目前只有自动换新会话试满了次数时写一条）；不给不写。 */
   log?: (line: string) => void;
-  /** 技能文件在磁盘上的那一半（换代带上加载过的技能，daemon/skill-files.ts）；不给按 launchDir、userHome 建，不读环境变量。 */
   skillFiles?: SkillFiles;
-  /** 有交接可以领了（后台写交接）：守护进程接到 daemon/handover/runner.ts 的 wake；不给什么都不做。 */
   onHandoverClaimable?: HandoverOptions["onHandoverClaimable"];
-  /** 有项目档案要写了：守护进程接到 daemon/project-catalog/runner.ts 的 wake；不给什么都不做。 */
   onCatalogClaimable?: ProjectCatalogLedgerOptions["onCatalogClaimable"];
 }
 
@@ -191,8 +139,6 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     userHome,
     tmpDirs: options.shareTmpDirs ?? ["/tmp", tmpdir()],
   });
-  // Worker 收工、还没开工时用户不能往它的对话里发（workers.ts）；已归档的项目经理也不收
-  // 用户发了消息、项目经理正在本会话写交接：停掉那一轮（handover.ts；handover 在下面建，这里只在调用时用）
   const messages = createLedgerMessages(ctx, sessions, {
     assertUserCanPost: (id) => {
       persona.assertConversationNotArchived(id);
@@ -215,7 +161,6 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   const projectCatalog = createLedgerProjectCatalog(ctx, projects, { onCatalogClaimable: options.onCatalogClaimable });
   const router = createLedgerRouter(ctx, sessions, messages, persona, projects, projectCatalog.cardOf);
   const effectiveLaunchDir = files.launchDir ?? join(dataHome, "state", "launch");
-  // 要用户本人动手的阻塞：挂卡在这里，解开时步骤交给任务图重算、Worker 交给 workers 重发（docs/user-blockers-design.md）
   const userBlockers = createLedgerUserBlockers(ctx, sessions, messages, () => ({
     releaseStepsIn: taskGraphs.releaseUserBlockedStepsIn,
     notifyStepsIn: taskGraphs.notifyUserBlockedStepsIn,
@@ -233,7 +178,6 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     ...(files.extraWorktreeRoots ? { extraWorktreeRoots: files.extraWorktreeRoots } : {}),
     taskGraphs,
     userBlockers,
-    // 换人接手时新 Worker 的第一条消息：前任的汇报、最后的文字、最后几步操作、原始记录路径，从账本现取（takeover.ts）
     takeover: createLedgerTakeover(ctx, steps, { findTranscript: options.findTranscript }),
   });
   const loadedSkills = createLedgerLoadedSkills(ctx, options.skillFiles ?? createSkillFiles({ launchDir: files.launchDir, userHome }));
@@ -263,7 +207,6 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
   const launch = createLedgerLaunchContext(db, persona, projects, workers);
   const pmCapabilities = createLedgerPmCapabilities(ctx);
 
-  /** 建项目经理；给了主文件夹就在同一个事务里给它建项目（同 hub project create）。 */
   const createPm = (input: CreatePmInput): CreatePmResult =>
     write((p) => {
       if (input.capabilities !== undefined) {
@@ -281,21 +224,16 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       return { ...created, project };
     });
 
-  /**
-   * 同一会话还没落库的驱动事件：前面有一条 agent.text 在异步存副本时，后来的事件都排在它后面，按到达顺序进事务
-   * （回复、这一轮结束、汇报给项目经理的先后不变）。落完就从表里删掉，表里只有正在拷文件的会话。
-   * 每条最多 MAX_PENDING_DRIVER_EVENTS_PER_SESSION 项；满了或关机（close）时 flush：取消在拷的附件，排着的不带附件同步落库。
-   */
+  /** Driver events of one session queue behind an agent.text that is still copying attachments, so they enter transactions in arrival order. */
   interface DriverEventQueue {
     items: Array<{ event: DriverEvent; links: LocalLink[] }>;
     abort: AbortController;
     drained: Promise<void>;
   }
   const driverEventQueues = new Map<SessionId, DriverEventQueue>();
-  /** close() 之后：驱动事件不再落库，--file 在拷的取消。 */
+  /** After close(), driver events are dropped and pending --file copies are cancelled. */
   const closing = new AbortController();
 
-  // Worker 的会话这一轮结束：同一个事务里给项目经理发那一行（workers.ts）；项目经理写完交接：同一个事务里换代（handover.ts）
   const applyDriverEventNow = (sessionId: SessionId, event: DriverEvent, textMeta: AgentTextMeta | null) => {
     if (event.type === "agent.text_delta") {
       if (event.parentToolUseId !== undefined) return;
@@ -323,7 +261,6 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     });
   };
 
-  /** 进事务之前给 agent.text 里的本机链接存副本；会话没了、不记对话、重放过的这条不碰文件。 */
   const textMetaFor = async (sessionId: SessionId, event: DriverEvent, links: readonly LocalLink[], signal: AbortSignal) => {
     if (event.type !== "agent.text" || links.length === 0) return null;
     const session = getAgentSession(db, sessionId);
@@ -340,7 +277,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     }
   };
 
-  /** 按顺序处理队头：先存副本（不在事务里），再落库。flush 过（abort）就停，排着的已经由 flush 落完。 */
+  /** Copy attachments outside the transaction, then commit; stop once flush has drained the queue. */
   const drainDriverEvents = async (sessionId: SessionId, queue: DriverEventQueue) => {
     const { signal } = queue.abort;
     while (queue.items.length > 0) {
@@ -358,7 +295,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     if (driverEventQueues.get(sessionId) === queue) driverEventQueues.delete(sessionId);
   };
 
-  /** 不再等附件：取消队头在拷的，排着的按顺序不带附件同步落库（回复正文不丢，链接照原样显示）。 */
+  /** Stop waiting for attachments; the reply text is kept and links render as plain links. */
   const flushDriverEvents = (sessionId: SessionId, queue: DriverEventQueue) => {
     queue.abort.abort();
     driverEventQueues.delete(sessionId);
@@ -427,7 +364,7 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
         applyDriverEventNow(sessionId, event, null);
         return;
       }
-      // 这条回复要存副本（异步拷文件），或者同一会话前面还有没落库的：排在后面，拷完、前面的落完再进事务
+      // Replies with attachments, or with earlier events still pending, wait in the per-session queue.
       if (queue === undefined) {
         const created: DriverEventQueue = { items: [{ event, links }], abort: new AbortController(), drained: Promise.resolve() };
         driverEventQueues.set(sessionId, created);
@@ -444,13 +381,10 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       return session === null ? [] : sentFiles.filesForArgs(session, args, signal === undefined ? closing.signal : AbortSignal.any([closing.signal, signal]));
     },
     refreshSessionState: sessions.refreshSessionState,
-    // 消息的重发（sessions.ts），再把还没开工的 worktree Worker 重新登记建 worktree（workers.ts：准备命令被关机打断的从头再跑），
-    // 上次还在复制、写的交接记失败重新排队（handover.ts），在等后台命令时守护进程被杀的 Worker 补发汇报（workers.ts）
     recoverAfterRestart() {
       const recovered = sessions.recoverAfterRestart();
       workers.recoverWorktrees();
       workers.recoverBackgroundWaits();
-      // Worker 这一轮的超时计时按库里的截止时刻重新挂（迁移 0024；已过期的马上提醒一次，提醒过的不再提醒）
       workers.recoverTurnTimeouts();
       handover.recoverAfterRestart();
       router.recoverAfterRestart();
@@ -477,7 +411,6 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
       const session = getAgentSession(db, sessionId);
       return session !== null && sentFiles.allows(session, realPath);
     },
-    // 消息标 failed（messages.ts），Worker 的再给项目经理发一行（workers.ts），同一个事务
     onActionFailed(action, error) {
       write((p) => {
         messages.actionFailedIn(p, action, error);
@@ -569,7 +502,6 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     userBlockerVendor: userBlockers.vendorOf,
     deliveryOf: (message) => {
       const parts = deliveryParts(message);
-      // 项目经理对话里用户说的话：原文前面带账本里此刻还在等的提问卡（送出那一刻现查，排队期间有卡被回答了也不会写旧的）
       const waiting = message.sender === "user" && message.workerId === null ? waitingAsksNote(router.waitingAsksOf(message.conversationId)) : null;
       return waiting === null ? parts : { ...parts, prefixes: [...parts.prefixes, waiting] };
     },
