@@ -346,7 +346,7 @@ guard waitUntil(timeout: 15.0, condition: { startedOk }), let pid1 = supervisor.
     fputs("FAIL: initial start failed\\n", stderr)
     exit(1)
 }
-assert(statusBar.currentSummaryTitle == "后台服务运行中")
+assert(statusBar.currentSummaryTitle == "Daemon running")
 assert(!statusBar.isLastCrashVisible)
 
 // 1. 手动 kill -9 自己起的后台 -> 自动拉起
@@ -505,9 +505,9 @@ print(String(data: jsonData, encoding: .utf8)!)
       expect(res.crashedPids.length).toBe(6);
 
       // 1. kill -9 后自动重启，且菜单栏保留上次崩溃时间与原因
-      expect(res.restartingSummaryAfterKill9).toContain("后台意外退出");
-      expect(res.crashTitleAfterKill9).toContain("信号 9 (SIGKILL)");
-      expect(res.runningSummaryAfterAutoRestart).toBe("后台服务运行中");
+      expect(res.restartingSummaryAfterKill9).toContain("Daemon exited unexpectedly");
+      expect(res.crashTitleAfterKill9).toContain("signal 9 (SIGKILL)");
+      expect(res.runningSummaryAfterAutoRestart).toBe("Daemon running");
       expect(res.crashVisibleAfterAutoRestart).toBe(true);
 
       // 2. 用户点重启不计入崩溃（crashCount 清零，上次崩溃记录不被 SIGTERM 覆盖）
@@ -516,16 +516,16 @@ print(String(data: jsonData, encoding: .utf8)!)
 
       // 3. 连续崩溃 5 次后停止重试，菜单栏显示失败状态及包含 stderr 的原因
       expect(res.pidAfterFailed ?? null).toBeNull();
-      expect(res.failedSummaryTitle).toBe("后台服务异常停止（连续崩溃 5 次，已停止重试）");
+      expect(res.failedSummaryTitle).toBe("Daemon stopped after 5 crashes");
       expect(res.failedButtonTitle).toBe(" !");
-      expect(res.failedLastCrashTitle).toContain("退出码 1（Fatal: simulated database corruption）");
+      expect(res.failedLastCrashTitle).toContain("exit code 1 (Fatal: simulated database corruption)");
 
       // 4. desktop-daemon.log 包含信号、退出码、stderr 最后几行和停止重试说明
       const desktopLog = readFileSync(join(supHome, "state", "logs", "desktop-daemon.log"), "utf8");
-      expect(desktopLog).toContain(`守护进程（PID ${res.pid1}）意外退出：信号 9 (SIGKILL)`);
-      expect(desktopLog).not.toContain(`守护进程（PID ${res.pid2}）意外退出`);
+      expect(desktopLog).toContain(`Daemon (PID ${res.pid1}) exited unexpectedly: signal 9 (SIGKILL)`);
+      expect(desktopLog).not.toContain(`Daemon (PID ${res.pid2}) exited unexpectedly`);
       expect(desktopLog).toContain("Fatal: simulated database corruption");
-      expect(desktopLog).toContain("60 秒内连续崩溃 5 次，已停止自动重启");
+      expect(desktopLog).toContain("5 crashes within 60s; automatic restarts stopped");
 
       // 5. 确认测试拉起的所有后台进程均已退出
       for (const pid of new Set([res.pid1, res.pid2, res.pid3, ...res.crashedPids])) {
