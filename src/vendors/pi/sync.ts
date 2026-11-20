@@ -1,7 +1,3 @@
-// Pi 同步适配器：
-// - 全局 MCP：`$PI_CODING_AGENT_DIR/mcp.json`（默认 `~/.pi/agent/mcp.json`，支持 stdio 与 streamable HTTP，旧版 `/sse` 转 `mcp-remote`）；
-// - OAuth 凭证文件 `mcp-auth.json` 绝不读取或复制，带 `oauth` 的条目识别为不可跨厂同步；
-// - Skill：全局 `~/.pi/agent/skills/<name>` 逐项建软链，项目级 `.agents/skills` 原生及 `--skill` 直读。
 import { join } from "node:path";
 import type { ScannedCloudConnector, VendorCapabilityScan, VendorSyncAdapter, VendorSyncContext } from "../daemon-types.ts";
 import { isPlainObject, patchJsoncMapEntries, readJsoncObjectFile } from "../_common/sync/jsonc.ts";

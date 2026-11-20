@@ -1,23 +1,15 @@
-// agy 的产品提示词常驻通道（spec 的 capabilities.systemPrompt 是 "resident"，docs/system-prompt-channels.md 第 2 节）：
-// agy 没有系统提示词参数，但会把每个工作区（cwd 和每个 --add-dir）下 .agents/rules/*.md 里 trigger: always_on 的规则
-// 放进系统提示词的 <user_rules> 区，agy 内部压缩对话（/compact、自动压缩）只换掉历史、这一区每个请求都重新带上（2026-11-11 实测）。
-// 所以每次起进程前把 prompt.md 切块写进启动目录（守护进程自己的 ~/.agent-hub/state/launch/<会话>/）下的规则目录，再 --add-dir 它：
-// 不写用户的项目目录和 worktree，git status 不多东西；只读 Worker 的沙箱哪里都能读（密钥除外），也读得到。
+// agy has no system prompt flag but injects always_on .agents/rules/*.md from each --add-dir into <user_rules>, which survives compaction.
 import { copyFileSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, rmSync, realpathSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { writeFileAtomicSyncWithRetry } from "../../daemon/platform/index.ts";
 import { AGY_RULE_FILE_MAX_BYTES, AGY_RULE_FILES_MAX, AGY_RULE_TOTAL_BUDGET_BYTES, AGY_RULE_SINGLE_BUDGET_BYTES } from "./limits.ts";
 
-/** 启动目录下放规则的工作区目录名（--add-dir 它）。 */
 export const AGY_RULES_WORKSPACE_DIR = "agy-rules";
-/** 工作区里规则文件的相对目录（agy 的工作区自定义根是 .agents，规则在它的 rules/ 下）。 */
 const RULES_SUBDIR = join(".agents", "rules");
-/** 工作区里技能的相对目录（agy 每轮把工作区 .agents/skills/ 下的技能名字和说明列给模型，相关时读正文）。 */
 const SKILLS_SUBDIR = join(".agents", "skills");
-/** 规则文件名：fusa-01.md、fusa-02.md……agy 按文件名顺序拼，两位数保证 01..08 的顺序。 */
+// agy concatenates rule files in file name order.
 const RULE_FILE_RE = /^fusa-\d{2}\.md$/;
 const ruleFileName = (index: number) => `fusa-${String(index + 1).padStart(2, "0")}.md`;
-/** 常驻规则的 frontmatter（agy 的 trigger：always_on 每个请求都带）。 */
 const RULE_FRONTMATTER = "---\ntrigger: always_on\n---\n";
 
 function utf8Cut(buf: Buffer, maxBytes: number): number {
@@ -26,10 +18,6 @@ function utf8Cut(buf: Buffer, maxBytes: number): number {
   return end;
 }
 
-/**
- * 把提示词按字节切块：每块不超过 maxBytes，尽量在换行处断（断在块内最后一个换行之后），一行本身超长才按 UTF-8 字符边界硬切。
- * 最多 maxChunks 块，超出的部分截掉、在最后一块末尾写明截掉了多少字节。空白提示词返回 []。
- */
 export function splitPromptForRules(prompt: string, maxBytes = AGY_RULE_FILE_MAX_BYTES, maxChunks = AGY_RULE_FILES_MAX): string[] {
   const text = prompt.trim();
   if (text === "") return [];
@@ -51,11 +39,6 @@ export function splitPromptForRules(prompt: string, maxBytes = AGY_RULE_FILE_MAX
   return chunks;
 }
 
-/**
- * 按 prompt.md 重写这个会话的规则目录，返回要 --add-dir 的工作区目录；提示词空白返回 null（不加 --add-dir）。
- * 每次起进程都调：内容跟着 prompt.md（性格设定改了下次起进程就是新的）；块数变少时删掉多出来的旧块，目录里的文件数不会越变越多。
- * skillsDir（LaunchFiles.skillsDir，只有项目经理会话有）：产品技能也放进这个工作区的 .agents/skills/（linkAgySkills），不多加参数。
- */
 export function writeAgyPromptRules(promptFile: string, skillsDir?: string): string | null {
   let prompt = "";
   try {
@@ -76,19 +59,14 @@ export function writeAgyPromptRules(promptFile: string, skillsDir?: string): str
     if (RULE_FILE_RE.test(name) && !keep.has(name)) rmSync(join(rulesDir, name), { force: true });
   }
   chunks.forEach((chunk, i) => {
-    // 原子替换：上一个进程（或后台写交接复制的那份）可能正在读规则，不能让它读到写了一半的文件
+    // Atomic replace: a running process or a handover copy may be reading the rules.
     writeFileAtomicSyncWithRetry(join(rulesDir, ruleFileName(i)), `${RULE_FRONTMATTER}${chunk}`, { mode: 0o600 });
   });
   linkAgySkills(workspace, skillsDir);
   return workspace;
 }
 
-/**
- * 把 skillsDir 里每个技能的 SKILL.md 硬链接进工作区的 .agents/skills/<名字>/：agy 不跟软链（2026-11-12 agy 1.5.6 实测，
- * 软链的目录和文件都不进技能清单，硬链接和普通文件都进），硬链接和守护进程写的是同一个文件，不多一份内容。
- * 已经指向同一个文件的不动；源文件被原子替换过（守护进程升级换了正文）就重新链；跨文件系统链不上时复制。
- * skillsDir 里没有的（或没给 skillsDir）删掉，目录里不会越积越多。
- */
+// agy 1.5.6 skips symlinked skills, so hard link SKILL.md (copy across filesystems).
 function linkAgySkills(workspace: string, skillsDir: string | undefined): void {
   const target = join(workspace, SKILLS_SUBDIR);
   const wanted = new Set<string>();
@@ -112,10 +90,6 @@ function linkAgySkills(workspace: string, skillsDir: string | undefined): void {
   for (const name of readdirSync(target)) if (!wanted.has(name)) rmSync(join(target, name), { recursive: true, force: true });
 }
 
-/**
- * 主会话起进程时写好的规则目录（后台写交接复制的那份用）：不重写，跟主会话这次进程的系统提示词逐字一样（前缀缓存吃得上）。
- * 没写过（提示词空白、或者还没起过进程）返回 null。
- */
 export function existingAgyPromptRules(promptFile: string): string | null {
   const workspace = join(dirname(promptFile), AGY_RULES_WORKSPACE_DIR);
   const rulesDir = join(workspace, RULES_SUBDIR);
@@ -123,7 +97,6 @@ export function existingAgyPromptRules(promptFile: string): string | null {
   return readdirSync(rulesDir).some((name) => RULE_FILE_RE.test(name)) ? workspace : null;
 }
 
-/** 每次启动重新扫描，不缓存；真实路径去重，避免全局规则软链重复计数。 */
 export function agyRuleBudgetWarning(home: string, workspaces: readonly string[]): string | null {
   const seen = new Set<string>();
   let total = 0;

@@ -1,7 +1,3 @@
-// Pi 的输入框命令实现（docs/vendors/pi.md 第 3.1、4 节）：
-// - 运行中的会话直接通过 RPC `get_commands` 获取扩展命令、提示词模板与技能命令（如 `skill:<name>`）；
-// - 空闲会话由本模块短暂起 `pi --mode rpc --no-session --offline --no-mcp --no-approve`（显式带 `--skill <dir>/.agents/skills`）查询 `get_commands`；
-// - 额外补入内置压缩命令 `/compact`（驱动层将其映射为 RPC `compact` 命令）。
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -23,19 +19,13 @@ import type { CommandsTarget, VendorComposer, VendorComposerBase } from "../../d
 import { createSpecComposerBase } from "../_common/composer.ts";
 import { MAX_PI_PROBE_STDOUT_CHARS } from "./limits.ts";
 
-/** Pi 网页端暴露的内置斜杠命令（其余 TUI 专属命令已在 spec.ts 的 blockedCommands 拦截）。 */
 const PI_BUILTIN_COMMANDS: readonly ComposerCommand[] = [
   { name: "compact", description: "压缩当前对话上下文", builtin: true },
 ];
 
-/**
- * 每次起 pi 都带（常驻会话、命令列表、模型目录、写交接）：本次一律不信任项目里的 `.pi/`（扩展、设置、MCP、提示词）和项目 `.agents/skills`。
- * 光不传 `--approve` 不够：用户在 ~/.pi/agent/settings.json 设了 `defaultProjectTrust: "always"`、或给上级目录存过信任（trust.json 就近生效）时，
- * 仓库里的 `.pi/extensions/*.ts` 照样在 pi 进程里执行，`--list-models` 也会（2026-11-11 本机 pi 1.5.0 实测）。技能靠 buildPiSkillArgs 的 `--skill` 显式给，`--no-approve` 下照常加载。
- */
+// Omitting --approve is not enough: defaultProjectTrust or stored trust would still run project .pi/extensions.
 export const PI_NO_PROJECT_TRUST_ARGS: readonly string[] = ["--no-approve"];
 
-/** 收集工作目录及附加目录下已存在的 `.agents/skills` 目录，生成 `--skill <path>` 参数列表（不传 `--approve`）。 */
 export function buildPiSkillArgs(cwd: string, addDirs: readonly string[] = []): string[] {
   const args: string[] = [];
   const seen = new Set<string>();
@@ -63,7 +53,6 @@ function extractPiCommandsList(raw: unknown): unknown[] | null {
   return null;
 }
 
-/** 将 RPC `get_commands` 的回应解析为通用 ComposerCommand[]，并补入内置 `compact`。 */
 export function parsePiCommands(raw: unknown): ComposerCommand[] | null {
   const list = extractPiCommandsList(raw);
   if (list === null) return null;
@@ -103,7 +92,6 @@ interface PiCommandsQueryOptions {
   signal?: AbortSignal;
 }
 
-/** 短暂启动 `pi --mode rpc --no-session --offline --no-mcp --no-approve` 发送 `get_commands`，严格按 `\n` 切分 JSONL。 */
 function queryPiRpcCommands(options: PiCommandsQueryOptions): Promise<unknown> {
   const { piPath, cwd, addDirs = [], timeoutMs = COMMANDS_QUERY_TIMEOUT_MS, signal } = options;
   return new Promise((resolve, reject) => {

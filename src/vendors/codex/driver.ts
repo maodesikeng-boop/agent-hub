@@ -1,7 +1,3 @@
-// OpenAI Codex App-Server 驱动层：公共会话状态机（待发队列、用量节流、启动/空闲/打断定时器、前缀说明注入与回退等）继承自 BaseSessionDriver；
-// 本文件负责 `codex app-server --listen stdio://` JSON-RPC 2.0 握手（initialize → initialized → thread/start 或 thread/resume 失败自动回退）、
-// 轮次发送（turn/start）、流式事件映射（agent.thinking / agent.tool / agent.tool_result / agent.text 聚合）、
-// 用量与限额更新、反向 RPC 审批拦截（Worker 记忆保护与只读模式）、一轮中途 turn/steer 与优雅打断（turn/interrupt）。
 import {
   DriverError,
   EMPTY_TOKEN_USAGE,
@@ -71,17 +67,12 @@ import { toolResultOutputs } from "../_common/tool-output.ts";
 
 interface Batch extends BaseBatch {
   combinedText: string;
-  /** 会话正忙时用 turn/steer 在一轮中途交给 codex 的（不是 turn/start 开一轮的那条）。 */
   midTurn: boolean;
-  /** 出过它的 userMessage item：codex 取走了（模型看到了）。 */
   echoed: boolean;
-  /** steer 的回执还没到时这一轮就结束了：回执来了也不算送达，退回待发队列。 */
   turnDone: boolean;
-  /** steer 的回执还没到时用户点了停止：回执来了按停止处理（用户的标已取消，系统的退回待发队列、停止后照常发）。 */
   stopped: boolean;
 }
 
-/** 一次 turn/steer 的结果：written 收下了（已送达）；queued 没收下，已经放回待发队列最前面；cancelled 停止时被取消了。 */
 type SteerOutcome = "written" | "queued" | "cancelled";
 
 interface Steer {
@@ -94,29 +85,20 @@ type RpcPhase = "initialize" | "skills_extra_roots" | "thread_resume" | "thread_
 
 interface Proc extends BaseProc<StartupOutcome> {
   launchConfig: CodexLaunchConfig;
-  /** 会话没选模型时 thread/start、thread/resume 显式带的（CodexDriverOptions.defaultModel），null 不带。 */
   defaultModel: string | null;
   readonly: boolean;
-  /** Worker 的可写范围（LaunchFiles.writeScope）：沙箱的 writableRoots 和审批按它；项目经理是 null。 */
   writeScope: WriteScope | null;
-  /** 进程包进了 OS 沙箱（spawnInWriteScope）：turn 用 externalSandbox。 */
   osSandboxed: boolean;
-  /**
-   * fileChange 条目要改的文件（item/started 里的 changes），按条目编号记：codex 的 item/fileChange/requestApproval 只带 itemId、
-   * 不带路径（app-server generate-ts 的 FileChangeRequestApprovalParams），审批时按它判断；item/completed 时删掉。
-   */
+  // item/fileChange/requestApproval carries only itemId, so keep the paths from item/started.
   fileChangePaths: Map<string, string[]>;
-  /** fileChange 条目状态行上已显示的文件路径（item/started 或 item/fileChange/patchUpdated 给的第一个），去重用；条目结束、轮末清掉，最多 MAX_STREAMING_TOOL_BLOCKS 条。 */
   fileChangePreviewPaths: Map<string, string>;
   threadId: string | null;
   pendingRpcs: Map<number | string, RpcPhase>;
-  /** 在等回执的 turn/steer：请求编号 → 那一行、原来的待发项和交回结果（#settleSteer）。进程退出时都按没收下处理。 */
   steers: Map<number | string, Steer>;
 }
 
 interface SessionState extends BaseSessionState<Proc, Batch> {
   activeTurnId: string | null;
-  /** 单调递增的轮次计数，保证跨轮或重启后即使 codex 复用 item.id，发出的事件 uuid 依然绝对唯一。 */
   turnSeq: number;
   interruptRequestId: number | string | null;
   usageThreadId: string | null;
@@ -124,28 +106,17 @@ interface SessionState extends BaseSessionState<Proc, Batch> {
   turnUsageStepSeq: number;
   lastTurnResultUsage: CodexUsageCounts | null;
   lastTurnContext: number | null;
-  /** 按 itemId 缓存当前轮的 agentMessage 增量文本，在 item/completed 或 turn/completed 时一次性发出完整 agent.text。 */
   agentMessageBuffers: Map<string, string>;
-  /** 当前轮已经发过 agent.text 的 itemId 集合，避免重复发送。 */
   emittedMessageIds: Set<string>;
-  /** 当前轮已经发过 agent.thinking 的 itemId 集合，避免每个 delta 刷屏。 */
   emittedThinkingIds: Set<string>;
 }
 
 export interface CodexDriverOptions extends Omit<DriverOptions, "executablePath"> {
-  /** codex 可执行文件路径，默认 "codex"。 */
   executablePath?: string | (() => string);
-  /**
-   * 会话没选模型（null = 默认）时 thread/start、thread/resume 显式带的模型：守护进程接模型名单里 codex 报的默认（有缓存）。
-   * 不带的话 codex 用 ~/.codex/config.toml 里钉死的，那个模型可能这个账号用不了（实测 gpt-6-astra 报 model_not_found）。
-   * 没传或回 null 就不带，交给 codex。不写进库：界面仍显示“默认”。
-   */
+  // Without an explicit model codex uses config.toml's, which this account may lack (model_not_found).
   defaultModel?: () => Promise<string | null>;
-  /** 厂商命令与输入拼装器，默认 composer.ts 的 codexComposerBase。 */
   composer?: VendorComposerBase;
-  /** 按哪个系统落实 Worker 的可写范围（write-scope.ts 的 spawnInWriteScope），默认本机；测试用。 */
   platform?: NodeJS.Platform;
-  /** Worker 的可写范围包装（默认 spawnInWriteScope）；测试可注入。 */
   writeScopeSpawn?: (base: SpawnCommand, scope: WriteScope | null) => ScopedSpawn;
 }
 
@@ -209,7 +180,6 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     }
     if (!this.isPending(st, ids)) {
       if (input.recovery) st.recoveryNote = true;
-      // 忙着：用 turn/steer 交给正在跑的这一轮；codex 不收（这一轮正好结束等）就退回待发队列
       const proc = st.proc;
       if (proc && this.#canSteer(st, proc, entry)) {
         const batch = this.#batchOf(st, entryParts(entry), ids, false, entry.source);
@@ -217,7 +187,6 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         const outcome = await this.#steer(st, proc, batch, entry);
         if (outcome === "written") return { kind: "written", midTurn: true };
         if (outcome === "cancelled") return { kind: "cancelled" };
-        // queued：#settleSteer 已经放回待发队列了
       } else {
         st.pending.push(entry);
       }
@@ -226,10 +195,6 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     return ids.every((id) => st.written.has(id)) ? { kind: "written" } : { kind: "queued" };
   }
 
-  /**
-   * 能不能 steer：线程起好了、有正在跑的轮（知道它的 id）、不在关闭、没在两轮之间重启、这一轮没点过停止、
-   * 待发队列是空的（不插队）、不是命令。
-   */
   #canSteer(st: SessionState, proc: Proc, entry: PendingEntry): boolean {
     return (
       proc.initSeen &&
@@ -245,7 +210,6 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     );
   }
 
-  /** 发 turn/steer，等回执（结果见 #settleSteer）。 */
   #steer(st: SessionState, proc: Proc, batch: Batch, entry: PendingEntry): Promise<SteerOutcome> {
     const reqId = ++this.requestSeq;
     st.inFlight.push(batch);
@@ -266,11 +230,6 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     });
   }
 
-  /**
-   * steer 有结果了（回执、写失败、进程没了）。收下了、这一轮还没结束：已送达（停止时也一样，这一轮的 turn/completed interrupted
-   * 会把没读到的标已取消）。没收下，或者回执到之前这一轮已经结束了（codex 不会再处理它）：等回执期间点过停止的，用户的标已取消；
-   * 别的（包括停止时的系统消息）放回待发队列最前面，下一轮用 turn/start 发。
-   */
   #settleSteer(st: SessionState, steer: Steer, accepted: boolean): void {
     const { batch } = steer;
     if (accepted && !batch.turnDone) {
@@ -291,13 +250,11 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
   async interrupt(sessionId: SessionId): Promise<void> {
     const st = this.sessions.get(sessionId);
     if (!st) return;
-    // 停止 = agent 还没看到的用户消息都取消：先丢掉自己队列里的（系统消息留着，停止后照常发）
     this.dropPendingUsers(st);
     const proc = st.proc;
     if (!proc || !this.busy(st) || proc.closing) return;
     st.stopRequested = true;
     st.turnInterrupted = true;
-    // steer 了、回执还没到的：回执到了也按停止处理，不退回队列再发（#settleSteer）
     for (const batch of st.inFlight) if (batch.midTurn && !batch.delivered) batch.stopped = true;
     const done = new Promise<void>((resolve) => st.interruptWaiters.push(resolve));
     if (st.interruptRequestId === null) {
@@ -356,7 +313,6 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       return;
     }
     this.clearTimer(st, "idleTimer");
-    // 启动时已经放进去了（startup），空闲时写的是新的
     if (!st.inFlight.includes(batch)) st.inFlight.push(batch);
     st.turnSeq += 1;
     st.turnInterrupted = false;
@@ -393,7 +349,6 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     });
   }
 
-  /** 这一轮结束后还在等 steer 的回执，现在等到了、不忙了：补上 turn/completed 时因为还忙没做的收尾。 */
   #idleAfterSteer(st: SessionState, proc: Proc): void {
     this.clearTimer(st, "interruptTimer");
     st.stopRequested = false;
@@ -469,8 +424,7 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     const defaultModel = row.model === null ? await this.#defaultModel().catch(() => null) : null;
     this.assertRunning();
     this.assertNotEnded(st);
-    // Worker 的可写范围：包一层 OS 沙箱，turn 的 sandboxPolicy 换成 externalSandbox（write-scope.ts）；没有 OS 沙箱时直接报错拒绝启动。
-    // 只读 Worker 不在这里包：codex 自己的 readOnly 沙箱已经什么都写不了，macOS 沙箱又不能嵌套
+    // macOS sandboxes cannot nest; read-only codex relies on its own readOnly sandbox instead.
     const wrapScope = launchConfig.readonly ? null : (files.writeScope ?? null);
     const exePath = this.#resolveCodexPath();
     const baseSpawn: SpawnCommand = { command: exePath, args: buildCodexArgs(files.capabilities) };
@@ -499,14 +453,12 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       steers: new Map(),
     };
     this.attachChildProcess(st, proc, resolveExited);
-    // 发送握手第 1 步：initialize
     const initId = ++this.requestSeq;
     proc.pendingRpcs.set(initId, "initialize");
     child.stdin.write(buildInitializeRequest(initId) + "\n");
     return proc;
   }
 
-  /** 握手第 3 步：建立或恢复线程。 */
   #openThread(st: SessionState, proc: Proc): void {
     const row = this.row(st);
     const sessionInfo = {
@@ -524,8 +476,6 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     }
   }
 
-  // --- JSON-RPC 2.0 输出处理 ---
-
   protected onParsedLine(
     st: SessionState,
     proc: Proc,
@@ -536,19 +486,16 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     const hasId = obj.id !== undefined && obj.id !== null;
     const hasMethod = typeof obj.method === "string" && obj.method !== "";
 
-    // 1. 反向 RPC 请求（Server -> Client Request：带 id 与 method）
     if (hasId && hasMethod) {
       this.#onServerRequest(st, proc, obj.id as number | string, obj.method as string, obj.params, at);
       return;
     }
 
-    // 2. 客户端请求的响应（Server -> Client Response：带 id，无 method）
     if (hasId && !hasMethod) {
       this.#onRpcResponse(st, proc, obj.id as number | string, obj, at);
       return;
     }
 
-    // 3. 服务端通知（Server -> Client Notification：带 method，无 id）
     if (hasMethod) {
       this.#onNotification(st, proc, obj.method as string, obj.params, line, at);
     }
@@ -583,9 +530,7 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
           this.forceKillProc(st, proc);
           return;
         }
-        // 第 2 步：发 initialized 通知
         proc.child.stdin.write(buildInitializedNotification() + "\n");
-        // 项目经理会话：先挂产品技能目录，回了再建线程（线程开头就看得到技能清单）
         if (proc.launchConfig.skillRoots.length > 0) {
           const skillsId = ++this.requestSeq;
           proc.pendingRpcs.set(skillsId, "skills_extra_roots");
@@ -597,7 +542,7 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       }
 
       case "skills_extra_roots": {
-        // 挂不上（老版本 codex 没有这个实验接口）不拦启动：提示词里有技能文件的路径，agent 照样能读
+        // Older codex lacks skills/extraRoots/set; start without it.
         if (errorObj) {
           const message = typeof errorObj.message === "string" ? errorObj.message : JSON.stringify(errorObj);
           this.opts.log?.(`[codex] session ${st.id} skills/extraRoots/set 失败，任务图手册只能按路径读：${message}`);
@@ -608,7 +553,7 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
 
       case "thread_resume": {
         if (errorObj) {
-          // thread/resume 报错（如 not found / no rollout found）：自动回退发 thread/start 开启新线程
+          // thread/resume fails when the rollout is missing; fall back to thread/start.
           proc.resume = false;
           proc.threadId = null;
           const row = this.row(st);
@@ -664,10 +609,9 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         const steer = proc.steers.get(id);
         proc.steers.delete(id);
         if (!steer) return;
-        // 没收下：no active turn to steer、turn id 对不上
+        // Rejected with 'no active turn to steer' or a turn id mismatch.
         if (errorObj) this.logSession(st.id, `turn/steer 没收下：${String(errorObj.message ?? "")}`);
         this.#settleSteer(st, steer, !errorObj);
-        // 这一轮已经结束、只在等这个回执：现在才算闲下来（end 在等、待发队列要接着发、停止要收尾）
         if (!this.busy(st)) this.#idleAfterSteer(st, proc);
         return;
       }
@@ -732,7 +676,6 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       st.lastThreadTotal = null;
     }
     this.markHealthy(st.id);
-    // 线程好了才定 agent 看到的性格设定：thread/start（包括 resume 失败退回的）是这次拼的；thread/resume 见 persona-note.ts
     this.setPersonaSeen(st, personaSeenAtStart(st, this.row(st), proc.personaLaunched, !resumed || CODEX_RESUME_REBAKES));
     this.clearTimer(st, "startTimer");
 
@@ -862,8 +805,7 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       }
 
       case "item/fileChange/patchUpdated": {
-        // 模型还在生成补丁时 app-server 推结构化的 changes（FileChangePatchUpdatedNotification）：只拿第一个路径刷新状态行，
-        // 不写进 fileChangePaths（那份是审批时判断写范围用的，必须是条目确定的全部路径，不能拿流式中途的一部分放行）
+        // Streamed patch paths are partial; approvals must use the complete list from item/started.
         const itemId = typeof params.itemId === "string" && params.itemId !== "" ? params.itemId : null;
         if (!itemId || !Array.isArray(params.changes)) return;
         const firstPath = extractFileChangePaths({ changes: params.changes })[0];
@@ -908,10 +850,7 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       }
 
       case "thread/tokenUsage/updated": {
-        // thread/resume 后 app-server 会带着恢复前那一轮的 turnId 原样重放 rollout 里最后一条 total/last（codex-cli 0.167.1 实测；
-        // 进程崩在最后一步落盘前时，重放的还会比已记录的基线旧）。不属于正在跑的这一轮的通知只把线程累计基线校准到它的 total，
-        // 不计入任何一轮（本地 rollout 里 token_count 从不出现在一轮结束和下一轮开始之间）。
-        // total 是单条线程的累计：同一连接上别的线程（如子 agent）的通知既不计入本会话，也不能拿来当本线程的基线
+        // After thread/resume, app-server replays the last token total under the previous turnId (codex-cli 0.167.1).
         if (typeof params.threadId === "string" && params.threadId !== "" && proc.threadId !== null && params.threadId !== proc.threadId) return;
         const notifTurnId = typeof params.turnId === "string" && params.turnId !== "" ? params.turnId : null;
         if (notifTurnId !== null ? notifTurnId !== st.activeTurnId : st.activeTurnId === null) {
@@ -950,10 +889,7 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     }
   }
 
-  /**
-   * userMessage item：codex 取走了一条用户输入（开这一轮的那条，或 steer 进来的，被取走时才出，不是写入时）。按文字对上是哪一条
-   * （开这一轮的那条已经算处理中了），对不上就按先后取最早一条没出过的。steer 的那条从这一刻起算处理中。
-   */
+  // userMessage items appear when codex consumes input, not when it is written.
   #onUserMessage(st: SessionState, item: Record<string, unknown>, at: number): void {
     const text = codexUserMessageText(item);
     const waiting = st.inFlight.filter((b) => !b.echoed);
@@ -963,7 +899,7 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     if (batch.midTurn) this.markProcessing(st, batch, at);
   }
 
-  /** 将当前轮序号与 turnId 拼进 itemId，保证跨轮或重启后即使 codex 复用 itemId，发出的 uuid 也永不冲突。 */
+  // codex can reuse item ids across turns and restarts.
   #scopedUuid(st: SessionState, itemId: string): string {
     const turnPrefix = st.activeTurnId ? `${st.activeTurnId}:${st.turnSeq}` : `turn-${st.turnSeq}`;
     return `${turnPrefix}:${itemId}`;
@@ -978,7 +914,6 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
   #onTurnCompleted(st: SessionState, proc: Proc, params: Record<string, unknown>, at: number): void {
     if (!proc.initSeen) return;
 
-    // 若当前轮有未发 item/completed 的累积 agentMessage 增量，先兜底补发完整 agent.text
     for (const [itemId, bufferedText] of st.agentMessageBuffers.entries()) {
       if (bufferedText.trim() !== "" && !st.emittedMessageIds.has(itemId)) {
         st.emittedMessageIds.add(itemId);
@@ -991,8 +926,6 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     proc.fileChangePaths.clear();
     proc.fileChangePreviewPaths.clear();
 
-    // 这一轮结算：开这一轮的那条 + steer 进来、读到了的。steer 了没读到的：codex 不会再处理，停止的标已取消、否则收回重发；
-    // steer 回执还没到的留着，回执到了退回待发队列（见 turn_steer）
     const settled = st.inFlight.filter((b) => !b.midTurn || b.echoed);
     const missed = st.inFlight.filter((b) => b.midTurn && !b.echoed && b.delivered);
     const unacked = st.inFlight.filter((b) => b.midTurn && !b.echoed && !b.delivered);
@@ -1172,14 +1105,12 @@ export class CodexDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       st.selfTurn = false;
       st.activeTurnId = null;
       const reason: SessionExitReason = proc.closing ?? "crash";
-      // steer 进去、codex 还没读到的（模型没看到过）和这一轮的分开
       const missed = batches.filter((b) => b.midTurn && !b.echoed);
       const taken = batches.filter((b) => !missed.includes(b));
       if (taken.length > 0 && reason === "crash") {
         st.crashNote = true;
         this.forgetWritten(st, taken);
       }
-      // 点了停止、turn/interrupt 还没结果时进程没了（崩溃也算）：没读到的照停止处理，用户的不收回重发
       const stopped = reason === "interrupt" || st.stopRequested;
       st.interruptRequestId = null;
       st.stopRequested = false;
@@ -1232,7 +1163,6 @@ function startupError(outcome: Extract<StartupOutcome, { kind: "failed" }>, star
   return new DriverError("spawn_failed", `codex exited before thread ready (${how})${detail ? `: ${detail}` : ""}`);
 }
 
-/** 记下 fileChange 条目状态行上显示的路径：有界（MAX_STREAMING_TOOL_BLOCKS），满了挤掉最早的。 */
 function rememberPreviewPath(proc: Proc, itemId: string, path: string): void {
   const paths = proc.fileChangePreviewPaths;
   if (!paths.has(itemId) && paths.size >= MAX_STREAMING_TOOL_BLOCKS) {

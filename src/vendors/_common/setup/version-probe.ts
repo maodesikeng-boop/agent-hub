@@ -1,6 +1,3 @@
-// 按可执行文件 stat 指纹（mtimeMs + size）缓存 CLI 版本号（LRUCache 上限严格等于 AGENT_VENDORS.length）：
-// - `peekCachedVersion` 零子进程读取（供 GET /api/providers 常规路径使用）；
-// - `probeVendorVersion` 仅在安装/更新完成或显式 `?refresh=1` 时拉起 `--version`，文件未变绝不重复起进程。
 import { statSync } from "node:fs";
 import { LRUCache } from "lru-cache";
 import {
@@ -46,9 +43,7 @@ export function parseCliVersionOutput(raw: string): string | null {
 }
 
 export interface VendorVersionCache {
-  /** 0 子进程：若二进制 stat 未变且已缓存则返回版本号，否则返回 null。 */
   peek(vendor: AgentVendor, binaryPath: string | null): string | null;
-  /** 按需拉起 `<binary> --version` 探测并更新缓存（若 stat 命中缓存则直接返回，不起进程）。 */
   probe(
     vendor: AgentVendor,
     binaryPath: string | null,

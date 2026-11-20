@@ -1,5 +1,3 @@
-// 通用受管 CLI 登录子进程运行器：
-// 封装 spawnOwnedProcess + trackChild + killThenSettle + BROWSER 拦截 + stdout/stderr 链接与设备码实时提取 + stdin 授权码投递。
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { killThenSettle } from "../../../daemon/driver/model-catalog.ts";
 import { termGroupAfterExit } from "../../../daemon/driver/process.ts";
@@ -26,11 +24,8 @@ export interface SpawnCliAuthFlowOptions {
   purpose: string;
   hooks: AuthFlowHooks;
   signal: AbortSignal;
-  /** 是否注入 Node TTY 垫片（供要求 isTTY === true 的 Node CLI 使用）。 */
   fakeNodeTty?: boolean;
-  /** 是否优先按 Device Code 提取。 */
   expectDeviceCode?: boolean;
-  /** 是否拦截系统 open / xdg-open 命令。默认 true。 */
   interceptSystemOpeners?: boolean;
 }
 

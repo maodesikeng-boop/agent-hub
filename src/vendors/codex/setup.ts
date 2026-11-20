@@ -1,7 +1,3 @@
-// OpenAI Codex 一键安装、更新与界面内直接登录适配器（docs/providers-install-login-design.md 第 2.1、2.2.5 节）：
-// - macOS / Linux 官方脚本传 `CODEX_NON_INTERACTIVE=1`；Windows 走随包 Node 24 受管 npm 安装 `@openai/codex`；
-// - 登录统一通过原生 `codex app-server --listen stdio://` JSON-RPC `account/login/start`（Browser OAuth / Device Code / API Key）
-//   并监听 `account/login/completed`，取消时发 `account/login/cancel` 并整树回收。
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -66,7 +62,6 @@ function decodeJwtEmail(jwt: unknown): string | null {
       if (typeof email === "string" && email.trim() !== "") return email.trim();
     }
   } catch {
-    // ignore malformed JWT payload
   }
   return null;
 }
@@ -166,7 +161,6 @@ async function runCodexAppServerLogin(options: {
                 })}\n`,
               );
             } catch {
-              // ignore write error during abort
             }
           }
           killThenSettle(child, () => (err ? reject(err) : resolve()));
@@ -381,7 +375,7 @@ export const codexSetupAdapter: VendorSetupAdapter = {
       });
       ctx.secrets.remove("codex");
     } catch {
-      // 兼容老版 CLI 回退 stdin 管道登录
+      // Older CLIs log in through a stdin pipe.
       const res = await runShortSubcommand(ctx.executablePath(), ["login", "--with-api-key"], {
         cwd: ctx.userHome,
         env: ctx.env(),

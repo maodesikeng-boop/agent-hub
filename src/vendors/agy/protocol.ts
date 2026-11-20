@@ -1,4 +1,3 @@
-// Antigravity (agy) 的 stream-json 协议纯函数：命令行启动参数、stdin NDJSON 构造与校验、stdout 事件与用量解析、Worker 的拦截（没有 OS 沙箱时的可写范围兜底；只读的写靠规则和外层沙箱，连接器在 readonly.ts）、残留进程识别。
 import {
   agentLaunchArgs,
   commandMayWriteOutsideScope,
@@ -17,31 +16,23 @@ import { runPs } from "../../daemon/driver/process.ts";
 
 export { buildChildEnv, mergeUserTexts };
 
-/** agy 多轮流式模式的固定协议参数。 */
 export const AGY_STREAM_ARGS: readonly string[] = ["--input-format", "stream-json", "--output-format", "stream-json"];
-/** 默认后台非交互权限参数。 */
 const AGY_AUTO_PERMISSION_ARGS: readonly string[] = ["--mode", "auto", "--dangerously-skip-permissions"];
-/** 只读 Worker 的权限参数（--settings 的规则另加，见 readonly.ts）。 */
 export const AGY_PLAN_PERMISSION_ARGS: readonly string[] = ["--mode", "plan"];
-/**
- * 关键：--print "" 必须带空字符串参数且放在最后（Go flag parser 若写 -p --input-format 会把 --input-format 吞成 prompt 参数）。
- */
+// --print "" must come last with an empty value; Go's flag parser would swallow the next flag as the prompt.
 export const AGY_PRINT_ARGS: readonly string[] = ["--print", ""];
 
-/** 没有 OS 沙箱时（不是 macOS）兜底检查可写范围的路径字段名（只对写类工具检查，读不拦）。 */
 const AGY_PATH_PARAM_KEYS = ["Path", "TargetFile", "AbsolutePath", "DirectoryPath", "SearchPath", "file_path", "path"] as const;
 
-/** 工具调用参数里表示命令行字符串的字段名（没有 OS 沙箱时兜底检查）。 */
 const AGY_COMMAND_PARAM_KEYS = ["CommandLine", "command"] as const;
 
-/** 写文件的工具集合：没有 OS 沙箱时，写类工具写到可写范围外要拦。（只读 Worker 的写不在这里拦：deny 规则加外层只读沙箱。） */
 const AGY_WRITE_TOOLS: ReadonlySet<string> = new Set([
   "write_to_file",
   "edit_file",
   "sed_file",
   "replace_file_content",
   "multi_replace_file_content",
-  "notebook_edit", // agy init.tools 里会改 .ipynb 文件的工具
+  "notebook_edit",
   "delete_file",
   "write_file",
   "create_file",
@@ -53,15 +44,6 @@ const AGY_WRITE_TOOLS: ReadonlySet<string> = new Set([
 export const WRITE_SCOPE_VIOLATION_MESSAGE = "Worker 在数据目录里只能写自己的工作目录";
 
 
-/**
- * 构造 agy 启动参数：
- * - --input-format stream-json --output-format stream-json
- * - 恢复已有会话时传 --conversation <session.vendorSessionId>，首次启动不传
- * - 权限模式：只读传 --mode plan 加 --settings（permissions 规则，连接器的规则 connectors 由驱动先问清单生成），默认传 --mode auto --dangerously-skip-permissions
- * - 模型与思考程度：agentLaunchArgs({ vendor: "agy", model, effort })
- * - 附加目录：每个 addDirs 传 --add-dir <dir>；产品提示词的规则目录（rules.ts 的 writeAgyPromptRules）也传 --add-dir，放最后
- * - 末尾固定传 --print ""
- */
 export function buildAgyArgs(
   session: AgentSessionRow,
   files: LaunchFiles,
@@ -83,7 +65,7 @@ export function buildAgyArgs(
   } else {
     args.push(...AGY_AUTO_PERMISSION_ARGS);
     if (capDeny.length > 0) {
-      // agy 多个 --settings 只认最后一个：包进 OS 沙箱的 Worker（有 writeScope）前面那条关终端沙箱的设置要并进这一条
+      // agy honors only the last --settings, so the sandbox-off setting is merged into it.
       const sandboxOff = files.writeScope ? { enableTerminalSandbox: false } : {};
       args.push("--settings", JSON.stringify({ ...sandboxOff, permissions: { deny: capDeny } }));
     }
@@ -99,10 +81,6 @@ function escapeLineSeparators(json: string): string {
   return json.replaceAll("\u2028", "\\u2028").replaceAll("\u2029", "\\u2029");
 }
 
-/**
- * 构造写入 agy 标准输入的一行 NDJSON：
- * `{"event":"user","message":{"content":[{"type":"text","text":"..."}]}}`
- */
 export function buildAgyUserLine(
   text: string,
   prefixes: readonly string[] = [],
@@ -111,7 +89,6 @@ export function buildAgyUserLine(
   return escapeLineSeparators(JSON.stringify({ event: "user", message: { content: buildContent(prefixes, text) } }));
 }
 
-/** 写入前校验 agy 的用户消息行；合格返回 null，否则返回原因。 */
 export function checkAgyUserLine(line: string): string | null {
   if (line.includes("\n") || line.includes("\r")) return "这一行带换行";
   if (line.includes("\u2028") || line.includes("\u2029")) return "这一行带没转义的 U+2028 / U+2029";
@@ -137,7 +114,6 @@ export function checkAgyUserLine(line: string): string | null {
   return null;
 }
 
-/** 识别 --conversation <id> 找不到对话的报错（回退为不带 --conversation 重启一次）。 */
 export function detectAgyArgsConflict(stderr: string): "no_conversation" | null {
   if (/not found|no conversation/i.test(stderr)) return "no_conversation";
   return null;
@@ -145,10 +121,7 @@ export function detectAgyArgsConflict(stderr: string): "no_conversation" | null 
 
 const tokenCount = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
 
-/**
- * 解析 agy 的 usage 对象（input_tokens, output_tokens, thinking_tokens, cache_read_tokens）。
- * 真实 agy 的 output_tokens 已包含 thinking_tokens（input_tokens + output_tokens === total_tokens），不重复累加；cache_read_tokens 计入 cacheRead。
- */
+// agy output_tokens already include thinking_tokens.
 export function parseAgyUsage(usage: unknown): Omit<TokenUsage, "context"> {
   const u = typeof usage === "object" && usage !== null ? (usage as Record<string, unknown>) : {};
   return {
@@ -159,7 +132,6 @@ export function parseAgyUsage(usage: unknown): Omit<TokenUsage, "context"> {
   };
 }
 
-/** 将 agy 的 usage 转为 TurnUsage 识别的字段格式。 */
 function toClaudeUsageShape(usage: unknown): Record<string, number> | null {
   if (typeof usage !== "object" || usage === null || Array.isArray(usage)) return null;
   const parsed = parseAgyUsage(usage);
@@ -171,14 +143,12 @@ function toClaudeUsageShape(usage: unknown): Record<string, number> | null {
   };
 }
 
-/** 在 step_update 收到 usage 时更新 TurnUsage。 */
 export function observeAgyUsage(turnUsage: TurnUsage, stepId: string, rawUsage: unknown, current: TokenUsage): TokenUsage | null {
   const mapped = toClaudeUsageShape(rawUsage);
   if (!mapped) return null;
   return turnUsage.observe({ message: { id: `step-${stepId}`, usage: mapped } }, current);
 }
 
-/** 在 result 收到 usage 时结算 TurnUsage。 */
 export function finishAgyUsage(
   turnUsage: TurnUsage,
   current: TokenUsage,
@@ -205,7 +175,6 @@ export function finishAgyUsage(
   return turnUsage.finish(current, {});
 }
 
-/** 解析 init 事件并生成 session.started 事件对象（附带 vendorSessionId）。 */
 export function buildAgySessionStartedEvent(
   obj: Record<string, unknown>,
   session: AgentSessionRow | null,
@@ -236,20 +205,10 @@ export function buildAgySessionStartedEvent(
 export interface WorkerToolCheckInput {
   toolName: string;
   parameters: unknown;
-  /** 没有 OS 沙箱时要兜底检查的可写范围（driver.ts 起进程时 osSandboxed 是 false 才有）；包进了沙箱是 null，不查。 */
   fallbackScope: WriteBounds | null;
   cwd: string;
 }
 
-/**
- * 检查 Worker 的工具调用是否违规：
- * 1. 有 fallbackScope（没有 OS 沙箱）时：写类工具（AGY_WRITE_TOOLS）的路径参数落在可写范围外，或 CommandLine / command 会写到范围外
- *    → "Worker 在数据目录里只能写自己的工作目录"。只能看字面（shared/write-scope.ts 的 commandMayWriteOutsideScope）；
- *    macOS 上数据目录不能写由 OS 沙箱管（write-scope.ts），这里不查；
- * 2. 合规返回 null。
- * 只读 Worker 的写不在这里拦（不再事后 SIGINT）：write_file 由 --settings 的 deny 规则拒，命令行和别的写由外层只读沙箱挡（readonly.ts）。
- * 2026-11-06 用户去掉了“Worker 不能改记忆文件”的检查（AGENTS.md、CLAUDE.md、.claude/ 等不拦）。
- */
 export function checkWorkerToolViolation(input: WorkerToolCheckInput): string | null {
   const { toolName, parameters, fallbackScope, cwd } = input;
   if (fallbackScope !== null && typeof parameters === "object" && parameters !== null && !Array.isArray(parameters)) {
@@ -266,10 +225,6 @@ export function checkWorkerToolViolation(input: WorkerToolCheckInput): string | 
   return null;
 }
 
-/**
- * 用 ps 检查 pid 是否为残留的 agy 进程（命令行含 agy 且含 `--input-format stream-json` 或 `vendorSessionId`）。
- * 是的话返回其进程组号 pgid，否则返回 null。
- */
 export async function agyOfSession(pid: number, vendorSessionId: string): Promise<number | null> {
   const stdout = await runPs(["-o", "pgid=,command=", "-p", String(pid)]);
   if (stdout === null) return null;

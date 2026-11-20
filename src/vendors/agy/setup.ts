@@ -1,6 +1,3 @@
-// Antigravity (agy) 一键安装、更新与界面内直接登录适配器（docs/providers-install-login-design.md 第 2.1、2.2.2 节）：
-// - Google / Enterprise OAuth：启动 `agy acp` 执行 `initialize` → `authenticate`（`oauth-personal` / `oauth-business`），通过 `BROWSER` 拦截 URL；
-// - Gemini API Key：受管存储 `GEMINI_API_KEY` + 原子局部补丁 `~/.gemini/antigravity-cli/settings.json` 的 `"modelProvider": "gemini"`（双开关联动）。
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -59,11 +56,7 @@ function joinByStyle(base: string, ...parts: string[]): string {
     : posix.join(base, ...parts);
 }
 
-/**
- * 原子联动增删 `~/.gemini/antigravity-cli/settings.json` 中的 `"modelProvider": "gemini"`：
- * - 保存 `GEMINI_API_KEY` 时写入 `"modelProvider": "gemini"`；
- * - 移除 `GEMINI_API_KEY`、登出或切回 Google OAuth 时，若当前值为 `"gemini"` 则移除该字段，防止缺少环境变量导致 `agy` 启动报错。
- */
+// agy fails to start with modelProvider "gemini" when GEMINI_API_KEY is missing.
 export function patchAgySettingsModelProvider(
   userHome: string,
   mode: "gemini" | "clear",
@@ -310,7 +303,6 @@ export const agySetupAdapter: VendorSetupAdapter = {
       hooks,
       signal,
     });
-    // 切回 Google / Enterprise 账号后清除受管 GEMINI_API_KEY 与 modelProvider: "gemini"
     ctx.secrets.remove("agy", ["GEMINI_API_KEY"]);
     patchAgySettingsModelProvider(ctx.userHome, "clear", ctx.platform);
   },
@@ -328,7 +320,6 @@ export const agySetupAdapter: VendorSetupAdapter = {
       try {
         rmSync(oauthFile, { force: true });
       } catch {
-        // ignore
       }
     }
     if (!ctx.installed()) return;

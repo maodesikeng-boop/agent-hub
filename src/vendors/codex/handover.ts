@@ -1,7 +1,4 @@
-// codex 复制会话去后台写交接的办法（docs/background-handover-design.md 第 2.3、2.6 节）。
-// 单独起一个不带 HUB_* 的 `codex app-server`，`thread/fork` 复制项目经理的 thread（带 `ephemeral: true`：不落盘、不进用户的 codex 历史，
-// #121 实测上文照样带得过去、能答出原会话里的暗号），在同一个进程里 `turn/start` 写交接。ephemeral 的 thread 只活在这个进程里，
-// 所以 fork 起的进程按 forkId 留在 SERVERS 里给 write / remove 用，remove 杀掉进程就等于删了（thread/delete 对它会报“not persisted”，当保险调、忽略报错）。
+// thread/fork with ephemeral: true keeps the copy out of codex history; it lives only in this app-server process.
 import type { ChildProcess } from "node:child_process";
 import type { TokenUsage } from "../../shared/domain.ts";
 import type { ForkHandle } from "../../shared/handover.ts";
@@ -18,16 +15,12 @@ import { trackChild } from "../../daemon/process-ledger.ts";
 import { ForkUnsupportedError, withoutHubEnv } from "../../daemon/handover/forker.ts";
 import type { ForkSource, ForkWriteResult, SessionForker } from "../../daemon/handover/forker.ts";
 
-/** 复制那份的权限：只读、从不问（只写交接，用不着工具；codex 本来就不走缓存，收紧不影响）。 */
 const CODEX_FORK_SANDBOX = "read-only";
 const CODEX_FORK_APPROVAL_POLICY = "never";
 const CODEX_FORK_SANDBOX_POLICY = { type: "readOnly", networkAccess: true } as const;
-/** fork_ref 里 forker 的 id（发布后不改）。 */
 export const CODEX_NATIVE_FORKER_ID = "codex-native";
-/** 正在干活的 app-server 进程多久没退出就强杀。 */
 const CLOSE_GRACE_MS = 2_000;
 
-/** codex 报“这个 thread 不在 / 没落盘”的几种话：remove 当成已经删了。 */
 const GONE_PATTERN = /not persisted|not loaded|not found|no such thread|unknown thread/i;
 
 type Json = Record<string, unknown>;
@@ -37,7 +30,6 @@ interface Pending {
   reject: (error: Error) => void;
 }
 
-/** 一个 app-server 进程上的 JSON-RPC：请求等回执、通知交给 onNotification、服务端反向请求（审批）一律拒绝。 */
 class CodexRpc {
   readonly #child: ChildProcess;
   readonly #pending = new Map<number, Pending>();
@@ -47,7 +39,6 @@ class CodexRpc {
   #exited: Error | null = null;
   #processExited = false;
   #closing: Promise<void> | null = null;
-  /** 进程退出时 reject（write 等一轮的时候一起等它，进程中途没了就别干等）。 */
   readonly exitedError: Promise<never>;
   #rejectExited!: (error: Error) => void;
 
@@ -59,7 +50,6 @@ class CodexRpc {
     child.stdout?.on("data", (chunk: string) => this.#onData(chunk));
     child.once("exit", (code, signal) => {
       this.#processExited = true;
-      // 不管是 close() 关的还是它自己先退的：确认退出这一刻给它原来的进程组（detached 起的，只有它和后代）补信号
       termGroupAfterExit(child);
       this.#onExit(new Error(`codex app-server 退出了（code ${code}, signal ${signal}）`));
     });
@@ -96,7 +86,6 @@ class CodexRpc {
     return () => this.#listeners.delete(fn);
   }
 
-  /** 杀进程（先 SIGTERM，宽限后 SIGKILL）；幂等。 */
   async close(): Promise<void> {
     if (this.#processExited) return;
     this.#closing ??= (async () => {
@@ -138,7 +127,6 @@ class CodexRpc {
     const { id, method } = message;
     if (typeof method === "string") {
       if (id !== undefined) {
-        // 服务端反向请求（审批等）：复制那份不该碰任何东西，一律拒绝
         this.#write({ jsonrpc: "2.0", id, result: { decision: "decline" } });
         return;
       }
@@ -163,14 +151,13 @@ class CodexRpc {
 }
 
 export interface CodexForkerOptions {
-  /** 起进程，测试用假的。 */
   spawnProcess?: (command: string, args: string[], options: { cwd: string; env: Record<string, string> }) => ChildProcess;
 }
 
 const textOf = (value: unknown): string => (typeof value === "string" ? value : "");
 const numberOf = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0);
 
-/** 一轮里每次请求的 usage 累加：codex 的 inputTokens 含缓存，转成 claude 口径（input 不含缓存）；context 取最后一次请求的输入量。 */
+// codex inputTokens include cached tokens.
 function addUsage(total: TokenUsage, last: Json): TokenUsage {
   const input = numberOf(last.inputTokens);
   const cached = numberOf(last.cachedInputTokens);
@@ -192,7 +179,6 @@ export function createCodexForker(options: CodexForkerOptions = {}): SessionFork
       trackChild(child, "handover:codex", { detached });
       return child;
     });
-  /** forkId → 复制那份所在的 app-server 进程（ephemeral 的 thread 只活在里面）。 */
   const servers = new Map<string, CodexRpc>();
 
   async function startServer(src: ForkSource, signal: AbortSignal): Promise<CodexRpc> {
@@ -206,7 +192,6 @@ export function createCodexForker(options: CodexForkerOptions = {}): SessionFork
       await new Promise<void>((resolve, reject) => {
         child.once("spawn", resolve);
         child.once("error", reject);
-        // 假进程 / 已经起来了的没有 spawn 事件
         if (child.pid !== undefined) resolve();
       });
       await rpc.request("initialize", { clientInfo: { ...CODEX_CLIENT_INFO }, capabilities: { experimentalApi: true } });
@@ -233,7 +218,6 @@ export function createCodexForker(options: CodexForkerOptions = {}): SessionFork
       try {
         if (signal.aborted) throw new Error("复制被取消");
         const launch = readCodexLaunchConfig(withoutHubEnv(src.launch));
-        // 产品技能跟主会话一样挂上（技能清单一样）；挂不上不影响写交接
         if (launch.skillRoots.length > 0) await rpc.request("skills/extraRoots/set", { extraRoots: launch.skillRoots }).catch(() => undefined);
         const result = await rpc.request("thread/fork", {
           threadId: src.vendorSessionId,
@@ -323,17 +307,16 @@ export function createCodexForker(options: CodexForkerOptions = {}): SessionFork
     async remove(fork): Promise<void> {
       const rpc = servers.get(fork.forkId);
       servers.delete(fork.forkId);
-      if (!rpc) return; // ephemeral 的 thread 随进程没了（重启后也是）
+      if (!rpc) return;
       if (rpc.exited || rpc.closing) {
         await rpc.close();
         return;
       }
       try {
-        // 保险：万一这版 codex 没把它当 ephemeral 落了盘，就按“先删复制那份”的顺序删掉；ephemeral 的会报 not persisted，忽略
+        // In case this codex persisted the fork anyway, delete it; ephemeral threads report not persisted.
         await rpc.request("thread/delete", { threadId: fork.forkId });
       } catch (error) {
         if (!rpc.exited && !rpc.closing && (!(error instanceof Error) || !GONE_PATTERN.test(error.message))) {
-          // 删不掉也要关进程；报给跑腿的记日志，下次启动再试
           await rpc.close();
           throw error;
         }

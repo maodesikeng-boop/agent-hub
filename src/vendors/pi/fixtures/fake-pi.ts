@@ -1,5 +1,3 @@
-// 假 Pi 可执行程序夹具：同时模拟 `pi --offline --list-models`、`pi --mode rpc` 与 `pi --mode rpc --fork <src>`，
-// 严格按 `\n` 切分 JSONL（不将 U+2028/U+2029 当换行），供驱动、目录、命令、交接单测与基准测试共用。
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { writeExecutableNodeScript } from "../../../../test/fake-cli-shim.ts";
@@ -8,82 +6,48 @@ interface FakePiToolCall {
   id: string;
   name: string;
   arguments?: Record<string, unknown>;
-  /** 可选：模拟 toolcall_delta 流式增量 JSON 分片。 */
   argDeltas?: string[];
-  /** 可选：模拟真实 pi-ai 在 toolcall_start / toolcall_delta 里通过 partial.content[contentIndex] 暴露工具名与半解析参数。 */
   partialShape?: boolean;
   output?: string;
   isError?: boolean;
 }
 
 interface FakePiTurnScript {
-  /** 若设为 "handled"，prompt 回执直接标 handled 且不跑模型轮次。 */
   disposition?: "started" | "handled";
-  /** 若为 true，prompt 直接回 success: false。 */
   failPromptError?: string;
-  /** 思考增量列表。 */
   thinkingDeltas?: string[];
-  /** 工具调用列表。 */
   tools?: FakePiToolCall[];
-  /** 若设置，发完工具开始后等此文件出现才继续（用于零竞态测中途 steer 与打断）。 */
   holdFile?: string;
-  /** 若为 true，一直挂起直到收到 abort（用于测 turn_interrupt）。 */
   waitForAbort?: boolean;
-  /** 若为 true，收到 abort 也不结束（测超时升级 SIGINT 进程组清理）。 */
   ignoreAbort?: boolean;
-  /** 若设置，在本轮中途发一条阻塞式 extension_ui_request 并等客户端回 cancelled: true 后才继续。 */
   blockingUiMethod?: "select" | "confirm" | "input" | "editor";
-  /** 若设置，发一条 auto_retry_start 事件。 */
   autoRetry?: { attempt: number; maxAttempts: number; delayMs: number; errorMessage: string };
-  /** 助手文本分段增量。 */
   textDeltas?: string[];
-  /** message_end 里的完整文本（默认拼接 textDeltas）。 */
   finalText?: string;
-  /** 本轮 assistant usage。 */
   usage?: { input: number; output: number; cacheRead?: number; cacheWrite?: number };
-  /** 本轮结束后 get_session_stats 回报的 contextUsage.tokens。 */
   contextTokens?: number | null;
-  /** 若设置，本轮 assistant 以 stopReason: "error" 报错结束。 */
   errorMessage?: string;
-  /** 若为 true，中途 steer 收下（disposition: "queued"）但不消费（模拟轮末恰好结束未取走）。 */
   dropSteers?: boolean;
-  /** 若为 true，中途 steer 直接回 success: false。 */
   rejectSteer?: boolean;
 }
 
 export interface FakePiScript {
-  /** `--offline --list-models` 的标准输出文本。 */
   listModelsStdout?: string;
-  /** `--offline --list-models` 的标准错误文本。 */
   listModelsStderr?: string;
-  /** `--offline --list-models` 的退出码（默认 0）。 */
   listModelsExitCode?: number;
-  /** `--offline --list-models` 延迟毫秒数（测超时/取消）。 */
   listModelsDelayMs?: number;
-  /** `--fork` 时模拟找不到原会话，打 stderr 并以退出码 1 退出。 */
   failForkNotFound?: boolean;
-  /** 启动后不回 get_state（测 start_timeout）。 */
   hangOnStart?: boolean;
-  /** 启动后立即非零退出（测 spawn_failed）。 */
   exitBeforeReadyCode?: number;
   exitBeforeReadyStderr?: string;
-  /** get_state 回 success: false。 */
   failGetStateError?: string;
-  /** get_state 回报的模型对象或字符串。 */
   activeModel?: { provider: string; id: string } | string;
-  /** get_commands 返回的命令列表。 */
   commands?: Array<{ name: string; description?: string; source?: string; argumentHint?: string }>;
-  /** get_commands 是否挂起超时。 */
   hangGetCommands?: boolean;
-  /** 初始累计 token（测恢复会话时的基线）。 */
   initialTokens?: { input: number; output: number; cacheRead?: number; cacheWrite?: number };
-  /** 初始 contextUsage.tokens。 */
   initialContextTokens?: number | null;
-  /** 是否在会话目录创建对应的 .jsonl 空记录文件（默认 true）。 */
   writeSessionFile?: boolean;
-  /** 按轮次依次执行的剧本（超出长度取最后一项）。 */
   turns?: FakePiTurnScript[];
-  /** 标准输入关了也不退（模拟还在跑一轮、不理 EOF 的 pi，测调用方补杀进程组）。 */
   ignoreStdinEnd?: boolean;
 }
 
@@ -602,7 +566,6 @@ export interface FakePiFiles {
   readLogs(): FakePiLogEntry[];
 }
 
-/** 在给定目录下创建可执行的假 `pi` 脚本及配套剧本/日志路径。 */
 export function writeFakePiBinary(dir: string, initialScript: FakePiScript = {}): FakePiFiles {
   mkdirSync(dir, { recursive: true });
   const scriptPath = join(dir, "fake-pi-script.json");

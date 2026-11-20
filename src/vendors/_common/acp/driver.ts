@@ -1,8 +1,3 @@
-// 通用 ACP（Agent Client Protocol）常驻会话驱动底座（继承 BaseSessionDriver）：
-// - 基于官方 @agentclientprotocol/sdk/unstable 建立双向 JSON-RPC 连接，复用 BaseSessionDriver 的行缓冲、排空与进程组清理；
-// - 完整握手流：initialize -> 可选 authenticate -> session/load（支持吞历史重放）或 session/resume（缺失自动回退 session/new）-> session/set_mode -> session/set_config_option（模型与思考档位两段式联动）；
-// - 完整对话生命周期：首轮系统提示词块注入、多轮复用、排队合并、session/cancel 正规打断（超时升级 SIGINT -> SIGKILL）、流式文本聚合、思考状态、工具调用生命周期、available_commands_update 命令同步、上下文与 token 用量更新、空闲关闭与残留清理；
-// - 内存与上限安全：流式拼接按 MAX_MESSAGE_BYTES 分段冲刷，单轮工具表按 SESSION_STEPS_KEEP 封顶并在轮末与退出时清空，命令缓存按 MAX_COMMANDS 封顶，进程退出关闭连接释放全部挂起请求，零后台轮询定时器。
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -137,10 +132,6 @@ interface AcpProc extends BaseProc<StartupOutcome> {
   configOptions: SessionConfigOption[];
   swallowingReplay: boolean;
   pendingSystemPromptBlock: string | null;
-  /**
-   * 这个进程的产品提示词是拼进消息的（不是原生 systemPrompt 字段、也不是 "never"）时的 prompt.md 路径：收到压缩信号后照它重新拼
-   * （#reinjectAfterCompaction）。走常驻通道的是 null。
-   */
   reinjectPromptFile: string | null;
   baseUsage: TokenUsage;
   latestContextUsed: number | null;
@@ -159,10 +150,6 @@ interface AcpSessionState extends BaseSessionState<AcpProc, AcpBatch> {
   hasConversation: boolean;
   cancelSent: boolean;
   cachedCommands: ComposerCommand[] | null;
-  /**
-   * 收到压缩信号、下一条消息前要重新拼产品提示词（发的时候才读 prompt.md，拿最新的性格设定）。记在会话上不记在进程上：
-   * 压缩完进程闲置关了，下一条消息起新进程恢复会话（恢复不拼首轮提示词）也照样补上。
-   */
   reinjectPending: boolean;
 }
 
@@ -192,37 +179,25 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
     return typeof this.#executablePath === "function" ? this.#executablePath() : this.#executablePath;
   }
 
-  /**
-   * 产品提示词怎么交（docs/system-prompt-channels.md）：config 写了照 config；没写按厂商声明（spec 的 capabilities.systemPrompt）：
-   * "resident" 的厂商驱动层自己放进常驻通道（启动参数、补丁文件），这里不拼；"first_message" 的拼进新会话第一条消息。
-   */
   #systemPromptInjection(): NonNullable<NonNullable<AcpDriverConfig["session"]>["systemPromptInjection"]> {
     const configured = this.#config.session?.systemPromptInjection;
     if (configured !== undefined) return configured;
     return vendorSpec(this.vendor).capabilities.systemPrompt === "resident" ? "never" : "first_turn_new_session";
   }
 
-  /**
-   * initialize 的 clientCapabilities：config 给的，产品提示词拼在消息里的再声明 session.compaction（ACP 规定 agent 只在客户端声明了
-   * 才发 compaction_update；不声明就收不到压缩信号，没法重新拼）。
-   */
+  // ACP agents send compaction_update only when the client declares session.compaction.
   #clientCapabilities(): ClientCapabilities {
     const base = this.#config.clientCapabilities ?? {};
     if (this.#systemPromptInjection() === "never") return base;
     return { ...base, session: { ...base.session, compaction: base.session?.compaction ?? {} } };
   }
 
-  /**
-   * 厂商压缩了上下文（ACP 的 compaction_update completed）：拼在第一条消息里的产品提示词跟着被裁掉了，记下来，
-   * 下一条消息最前面重新拼一次完整的（#takeReinjectBlock）。走常驻通道的进程（reinjectPromptFile 是 null）不用；同一轮压缩几次也只拼一次。
-   */
   #reinjectAfterCompaction(st: AcpSessionState, proc: AcpProc): void {
     if (proc.reinjectPromptFile === null || st.reinjectPending) return;
     st.reinjectPending = true;
     this.logSession(st.id, "厂商压缩了上下文，下一条消息前重新拼产品提示词");
   }
 
-  /** 要重新拼时读 prompt.md 现在的内容（性格设定改过的话是新的）；读不到记日志、这次不拼。 */
   #takeReinjectBlock(st: AcpSessionState, proc: AcpProc): string | null {
     if (!st.reinjectPending || proc.reinjectPromptFile === null) return null;
     try {
@@ -569,7 +544,6 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
       try {
         rmSync(tmpDir, { recursive: true, force: true });
       } catch {
-        // 清理临时目录失败忽略
       }
     };
 
@@ -808,8 +782,7 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
     };
 
     this.attachChildProcess(st, proc, resolveExited, cleanupReadonlyTmp);
-    // 在公共行缓冲前检查协议帧，JSON 转义最多膨胀六倍，另留信封余量。
-    // 复用共享消息上限，避免无换行输出让公共 buffered 永久增长。
+    // JSON escaping can inflate text up to 6x; reserve extra room for the envelope.
     let partialLineBytes = 0;
     let overflowed = false;
     child.stdout.prependListener("data", (chunk: string) => {
@@ -869,7 +842,7 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
           : mcpServersCfg
             ? [...mcpServersCfg]
             : [];
-      // 只有 agent 声明支持才带（ACP sessionCapabilities.additionalDirectories），不支持的会回 -32602
+      // Only sent when the agent advertises sessionCapabilities.additionalDirectories; others reply -32602.
       const additionalDirectories =
         row.addDirs.length > 0 && init.agentCapabilities?.sessionCapabilities?.additionalDirectories
           ? [...row.addDirs]
@@ -911,7 +884,7 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
               ...(additionalDirectories ? { additionalDirectories } : {}),
               ...(nativeSystemPrompt ? { systemPrompt: nativeSystemPrompt } : {}),
             });
-            // 确保同一 stdout 分片内排队的重放通知微任务在关闭 swallowingReplay 前执行完毕
+            // Let replay notifications queued from the same stdout chunk run before replay swallowing ends.
             await Promise.resolve();
             await Promise.resolve();
             if (!swallowReplay) {
@@ -995,7 +968,6 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
         );
       }
 
-      // 可选切换默认会话模式
       const modeCfg = this.#config.session?.defaultModeId;
       const targetModeId =
         typeof modeCfg === "function"
@@ -1021,7 +993,7 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
         });
       }
 
-      // 设置模型与思考程度（两段式：切换模型后服务端可能返回新的思考档位列表）
+      // Switching the model can return a new list of effort options.
       await this.#applyConfigOptions(proc, sessionId, row.model, row.effort);
 
       if (proc.streamEnded || st.proc !== proc) return;
@@ -1147,7 +1119,7 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
         sessionId: acpSessionId,
         prompt: promptBlocks,
       });
-      // 确保同一分片内的流式 session/update 通知先于轮末收尾落地
+      // Let streamed session/update notifications from the same chunk land before the turn ends.
       await Promise.resolve();
       await Promise.resolve();
       if (proc.streamEnded || st.proc !== proc) return;
@@ -1332,7 +1304,6 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
     let offset = 0;
     while (offset < bytes.length) {
       let end = Math.min(bytes.length, offset + MAX_MESSAGE_BYTES - proc.textBufferBytes);
-      // UTF-8 续字节不能作为下一个分片的开头。
       while (end < bytes.length && end > offset && (bytes[end]! & 0xc0) === 0x80) end--;
       if (end === offset) {
         this.#flushTextBuffer(st, proc, at);
@@ -1561,7 +1532,6 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
         }
         proc.acpReadableController.enqueue(obj as unknown as AnyMessage);
       } catch {
-        // 连接已关闭时忽略尾随消息
       }
     }
   }
@@ -1575,13 +1545,11 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
       try {
         ctrl.close();
       } catch {
-        // 已关闭则忽略
       }
     }
     try {
       proc.acpConn.close(new Error("ACP process closed"));
     } catch {
-      // 已关闭则忽略
     }
   }
 
@@ -1661,12 +1629,10 @@ export class AcpSessionDriver extends BaseSessionDriver<AcpProc, AcpBatch, AcpSe
   }
 }
 
-/** 用厂商给定的 AcpDriverConfig 创建 ACP 会话驱动实例。 */
 export function createAcpDriver(config: AcpDriverConfig, options: AcpDriverOptions): AcpSessionDriver {
   return new AcpSessionDriver(config, options);
 }
 
-/** 生成直接满足 VendorDaemon["createDriver"] 签名的工厂函数。 */
 export function createAcpDriverFactory(config: AcpDriverConfig): (options: DriverOptions) => Driver {
   return (options) => createAcpDriver(config, options);
 }

@@ -1,14 +1,11 @@
-// agy（Antigravity）的声明：纯数据 + 纯函数，网页、hub 命令行、守护进程都引。不许 import node:*、src/daemon、别家文件夹（契约测试 S2）。
-// 要拼绝对路径的（数据目录下的会话库、MCP 配置文件）和只给守护进程用的路径（PATH 里找不到时去哪找）在同目录的 paths.ts。
 import { PRODUCT_NAME } from "../../shared/names.ts";
 import { blockedCommands, capitalize, defineVendor } from "../types.ts";
 
-/** agy 的数据目录、旧版数据目录、MCP 配置文件（相对用户主目录）。 */
 export const AGY_CLI_HOME_REL = ".gemini/antigravity-cli";
 export const AGY_LEGACY_HOME_REL = ".gemini/antigravity";
 export const AGY_MCP_CONFIG_REL = ".gemini/config/mcp_config.json";
 
-/** 思考程度：和 Antigravity 软件一样三档（实测 xhigh、max 被 agy 拒绝）。 */
+// agy rejects xhigh and max.
 const EFFORTS: readonly string[] = ["low", "medium", "high"];
 
 const SESSION_BLOCKED = `会话由 ${PRODUCT_NAME} 管，这里不能用这个命令；项目经理要开新会话，请点右上角“开新会话”按钮`;
@@ -24,15 +21,12 @@ export default defineVendor({
     envVar: "AGENT_HUB_AGY",
     loginCommand: "agy",
   },
-  // 数据在 ~/.gemini（antigravity、antigravity-cli；macOS 上登录令牌在钥匙串 Library/Keychains，Linux 在钥匙环），
-  // oauth_creds.json 是 gemini 系的令牌文件，mcp-oauth-tokens.json 是 MCP OAuth 令牌（gemini-cli docs/tools/mcp-server.md）
   home: {
     dirs: [".gemini"],
     readonlySecrets: [".gemini/oauth_creds.json", ".gemini/mcp-oauth-tokens.json"],
     catalogWatchPaths: [AGY_CLI_HOME_REL, AGY_LEGACY_HOME_REL, AGY_MCP_CONFIG_REL, ".gemini/oauth_creds.json", ".gemini/mcp-oauth-tokens.json"],
   },
   models: {
-    // 2026-11-06 `agy models` 的实际内容去掉档位后的样子（docs/model-catalog.md）；拿不到名单时兜底
     bundled: [
       { id: "gemini-4-argon", label: "Gemini 4 Argon", efforts: EFFORTS },
       { id: "gemini-3.8-flash", label: "Gemini 3.8 Flash", efforts: EFFORTS },
@@ -46,7 +40,6 @@ export default defineVendor({
     routerDefault: { model: "gemini-3.8-flash", effort: "low" },
     effortInModelId: true,
     flags: { model: "--model", effort: "--effort" },
-    // 不带档位的模型名（档位另外显示）：gemini-4-argon、gemini-3.8-flash、claude-opus-5-5、gpt-oss-120b → Gemini 4 Argon、Gemini 3.8 Flash、Claude Opus 5.5、GPT-OSS 120B
     shortName: (model) => {
       const gemini = /^gemini-(\d+(?:\.\d+)?)-([a-z0-9]+(?:-[a-z0-9]+)*)$/i.exec(model);
       if (gemini) return `Gemini ${gemini[1]} ${gemini[2]!.split("-").map((w) => capitalize(w.toLowerCase())).join(" ")}`;
@@ -61,8 +54,7 @@ export default defineVendor({
       return null;
     },
   },
-  // 事件流（stream-json）里没有额度，只有另起进程跑 `agy -p "/usage"` 才拿得到（分“Gemini”“Claude and GPT”两组）：
-  // 只在用户打开额度面板时问一次、结果缓存（FETCHED_QUOTA_FRESH_MS），不在后台轮询
+  // Quota is only available from a separate `agy -p "/usage"` run.
   quota: {
     name: "Antigravity",
     windows: ["five_hour", "seven_day"],
@@ -86,7 +78,6 @@ export default defineVendor({
     },
   },
   prompt: {
-    // 保留迁移前公共提示词的触发条件：CLAUDE.md 与 AGENTS.md 并存时提醒。
     instructionFile: "CLAUDE.md",
     subagentTools: ["invoke_subagent"],
     backgroundCommandTool: "`run_command` 的 `WaitMsBeforeAsync`",
@@ -95,10 +86,9 @@ export default defineVendor({
   failure: {
     serviceName: "Antigravity",
     rawHint: /^agy_not_found\b|\bagy\b|antigravity/i,
-    // agy 跑 claude、gpt 的模型，报错里常带别家的模型名：先认 agy
+    // agy runs Claude and GPT models, so its errors often name other vendors' models.
     rawHintPriority: 2,
   },
-  // 会话记录是 sqlite 库（conversations/<id>.db），别家读不了
   handover: { transcriptPortable: false },
   tools: {
     actions: {
@@ -118,30 +108,25 @@ export default defineVendor({
       search_web: "web_search",
       read_url_content: "web_fetch",
       invoke_subagent: "subagent",
-      // 连接器（MCP）：参数带 ServerName / ToolName（docs/readonly-worker-design.md），状态写“Calling Linear: list issues”
       call_mcp_tool: "connector",
       list_resources: "connector_resource",
       read_resource: "connector_resource",
     },
   },
   skillSignals: {
-    // stream-json 的 step_update.tool_info.output：run_command 是完整输出（前面几行 Created At、Command output: 元信息，正文行尾 \r\n）
     outputField: "output",
-    // read_file 的 output 只有“14 lines, 310 bytes”，没有正文，按路径参数 Path 认；带 StartLine、ByteOffset 从中间读的不算
-    // （agy 1.5.9 实跑，夹具 fixtures/skill-read-stream.jsonl）
+    // read_file output has no body ('14 lines, 310 bytes'), so match on the Path argument.
     readByPath: { read_file: { ok: /^\d+ lines?, \d+ bytes?$/u, fromStart: { StartLine: 1, ByteOffset: 0 } } },
   },
   capabilities: {
-    // 后台命令跑完不会叫醒 agent，闲置关进程后结果还会丢（docs/mid-turn-messages.md 第 10.2 节）
+    // Finished background commands do not wake the agent, and results are lost once the idle process exits.
     backgroundWake: false,
     readonly: "os_sandbox",
-    // agy 没有系统提示词参数，但会把 --add-dir 目录里 .agents/rules/*.md（trigger: always_on）放进系统提示词的 <user_rules> 区，
-    // 压缩后还在（2026-11-11 agy 1.5.5 实测）：驱动层把 prompt.md 切块写进启动目录的规则目录再 --add-dir（rules.ts）
     systemPrompt: "resident",
-    // 任务图手册：放进已经 --add-dir 的规则目录 agy-rules/.agents/skills/（硬链接，agy 不跟软链；2026-11-12 agy 1.5.6 实测）
+    // Hard links, because agy does not follow symlinked skills.
     skills: "native",
     isolation: { skill: "shared", mcp: "tool_deny", connector: "shared" },
-    // 包进 OS 沙箱时关掉自带的终端沙箱（不能嵌套）
+    // agy's terminal sandbox cannot nest inside the OS sandbox.
     ownSandboxOffArgs: ["--settings", JSON.stringify({ enableTerminalSandbox: false })],
   },
 });

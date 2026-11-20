@@ -1,4 +1,3 @@
-// Claude Code 一键安装、更新与界面内直接登录适配器（docs/providers-install-login-design.md 第 2.1、5.2 节）。
 import { existsSync } from "node:fs";
 import { posix, win32 } from "node:path";
 import {
@@ -129,7 +128,7 @@ export const claudeSetupAdapter: VendorSetupAdapter = {
       hooks,
       signal,
     });
-    // OAuth 登录成功后清理受管 API Key，避免环境变量抢占订阅账号身份
+    // An API key env var would override the OAuth subscription identity.
     ctx.secrets.remove("claude", ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]);
   },
 

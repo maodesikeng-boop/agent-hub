@@ -1,12 +1,4 @@
-// Pi 常驻 RPC 驱动层（docs/vendors/pi.md 第 4、5 节）：每个会话一个 `pi --mode rpc --session-id <id>` 进程，
-// 公共会话状态机继承自 BaseSessionDriver（底层按 `\n` 切分 JSONL，不使用 node:readline，天然避开 U+2028/U+2029 截断问题）；
-// 本文件负责 Pi 专有协议：
-// - 启动后 `get_state` 握手、会话 ID 持久化与恢复；
-// - `--append-system-prompt`、`--no-approve` 与显式 `--skill <dir>/.agents/skills`（不传 `--approve`）；
-// - 只读 Worker 附加 `--exclude-tools edit,write --no-mcp` 并包入外层只读 OS 沙箱；普通 Worker 包入 `spawnInWriteScope`；
-// - 多轮对话、忙时中途插话（`prompt` 带 `streamingBehavior: "steer"`）、手动 `/compact` 走 RPC `compact`；
-// - 优雅打断（先 `clear_queue` 再 `abort`，超时升级 SIGINT → SIGKILL 进程组）；
-// - 流式思考、文本、工具事件去重，轮末通过 `get_session_stats` 对接累计用量与上下文换代阈值。
+// Lines split on \n only, so U+2028/U+2029 in JSONL never truncate a frame.
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -88,15 +80,10 @@ import { toolResultOutputs } from "../_common/tool-output.ts";
 interface Batch extends BaseBatch {
   rawText: string;
   combinedText: string;
-  /** 是否收到 Pi `message_start`（role === "user"）回显确认已被模型消费。 */
   echoed: boolean;
-  /** 是否为在忙时中途通过 `streamingBehavior: "steer"` 写入的插话。 */
   midTurn: boolean;
-  /** 插话回执尚未到达前用户点了停止。 */
   stopped: boolean;
-  /** 插话回执尚未到达前当前轮已结束。 */
   turnDone: boolean;
-  /** 本批次是否为手动 `/compact` RPC。 */
   isCompact: boolean;
 }
 
@@ -126,7 +113,6 @@ interface Proc extends BaseProc<PiStartupOutcome> {
   tmpDir: string | null;
   pendingRpcs: Map<string, PendingRpcKind>;
   steers: Map<string, Steer>;
-  /** 上次 `get_session_stats` 汇报的会话累计 token（用于在无单条 message usage 时算差值兜底）。 */
   lastSessionTokens: PiRawTokenCounts;
 }
 
@@ -135,28 +121,17 @@ interface SessionState extends BaseSessionState<Proc, Batch> {
   turnSeq: number;
   assistantMsgSeq: number;
   eventSeq: number;
-  /** 当前轮按 `${assistantMsgSeq}:${contentIndex}` 缓存尚未结束的文本增量。 */
   textBuffers: Map<string, string>;
-  /** 当前轮已发出过 `agent.text` 的键，防止流式与 `message_end` 重复发射。 */
   emittedTextKeys: Set<string>;
-  /** 当前轮已发出过 `agent.thinking` 的键。 */
   emittedThinkingKeys: Set<string>;
-  /** 当前轮已发出过 `agent.tool` 的 toolCallId。 */
   emittedToolIds: Set<string>;
-  /** 当前轮流式 `toolcall_start` / `toolcall_delta` 参数跟踪器（有界，闭合与轮末清空）。 */
   toolPreviews: StreamingToolPreviewTracker;
-  /** 当前轮已发出过 `agent.tool_result` 的 toolCallId。 */
   completedToolIds: Set<string>;
-  /** 当前轮内是否已发出过 `context.compacted`（防止手动 `/compact` 在事件与回执重复记）。 */
   compactedInTurn: boolean;
-  /** 当前轮通过 `message_end` 累计的 token 数（有值时优先作为本轮增量）。 */
   turnTokenTotals: PiRawTokenCounts;
   hasMessageUsageInTurn: boolean;
-  /** 当前轮 assistant `stopReason === "error"` 报出的错误文本。 */
   turnErrorMessage: string | null;
-  /** 正在跑手动 `/compact` RPC 时不接受中途 steer。 */
   runningCompact: boolean;
-  /** 已收到 `agent_settled`，正等待 `get_session_stats` 回应做最终结算。 */
   awaitingStats: boolean;
   statsTimer: NodeJS.Timeout | null;
 }
@@ -335,7 +310,6 @@ export class PiDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
       const abortId = `rpc-${++this.requestSeq}`;
       proc.pendingRpcs.set(clearId, { kind: "clear_queue" });
       proc.pendingRpcs.set(abortId, { kind: "abort" });
-      // 先清排队中的 steer / follow-up，再打断当前正在跑的轮次
       proc.child.stdin.write(`${buildClearQueueLine(clearId)}\n`);
       proc.child.stdin.write(`${buildAbortLine(abortId)}\n`);
       st.interruptTimer = setTimeout(() => {
@@ -626,8 +600,6 @@ export class PiDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     return proc;
   }
 
-  // ---- RPC 行解析 ----
-
   protected onParsedLine(
     st: SessionState,
     proc: Proc,
@@ -763,7 +735,7 @@ export class PiDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         const opening = st.inFlight.find((b) => !b.midTurn);
         if (opening) this.markProcessing(st, opening, at);
         if (data?.disposition === "handled") {
-          // 扩展命令同步消费，不会触发 agent_settled，直接收尾本轮
+          // Extension commands run synchronously and never emit agent_settled.
           if (opening) opening.echoed = true;
           this.#finalizeTurn(st, proc, null, at);
         }

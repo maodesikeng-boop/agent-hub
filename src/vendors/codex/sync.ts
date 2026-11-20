@@ -1,9 +1,3 @@
-// OpenAI Codex 同步适配器：
-// - 全局 MCP：`$CODEX_HOME/config.toml`（默认 `~/.codex/config.toml`）的 `[mcp_servers.<name>]`，
-//   用 `@decimalturn/toml-patch` 局部更新保留注释、`model`、`[features]`、`[projects]`；
-// - 旧版 `/sse` 远程 MCP 自动转 `npx -y mcp-remote <url>`；
-// - 原厂云端连接器：`[apps.<name>]` 与 `[features].codex_apps` 识别为不可跨厂同步说明项；
-// - Skill：全局 `~/.agents/skills` 与项目 `.agents/skills` 均原生读取零冗余。
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type {
@@ -180,7 +174,7 @@ function scanCodexPlugins(codexHome: string, configData: Record<string, unknown>
     for (const sName of listCanonicalSkillNames(skillsRoot).names) {
       const dir = join(skillsRoot, sName);
       out.skills.push({
-        // codex 认 frontmatter 的 name（spreadsheets 插件的目录是 spreadsheets，名字是 Spreadsheets），skills.config 按这个名字关
+        // codex matches the frontmatter name, not the directory name.
         name: `${pluginName}:${readSkillName(dir) ?? sName}`,
         dir,
         description: readSkillDescription(dir),

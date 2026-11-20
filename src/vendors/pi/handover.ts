@@ -1,11 +1,3 @@
-// Pi 复制会话后台写交接（docs/vendors/pi.md 第 5 节）：
-// - `fork(src)` 生成全局唯一 UUID 作为复制会话编号（不常驻额外进程，零内存驻留）；
-// - `write(src, fork, prompt, signal)` 在剥离 HUB_* 环境变量后启动一次性 `pi --mode rpc --fork <原会话文件或ID> --session-id <forkId>`，
-//   附加 `--append-system-prompt <promptFile> --exclude-tools edit,write,bash,powershell --no-mcp --no-approve` 及项目技能与模型参数，
-//   发送交接提示词，等待 `agent_settled` 后查询 `get_session_stats` 拿到精确上下文大小并关闭标准输入，等进程退出（超时强制结束）再交回；
-//   取消、出错时连同进程组强制结束；
-//   若原会话未落盘（报 `No session found`），抛出 ForkUnsupportedError 由上层自动退回本会话内写交接；
-// - `remove(fork)` 清理复制出的会话 JSONL 文件（含进程崩溃或守护进程重启后的残留文件）。
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
@@ -34,20 +26,17 @@ import {
 } from "./protocol.ts";
 import { piSessionFiles, piTranscriptPath } from "./transcript.ts";
 
-/** fork_ref 里的唯一标识（契约测试 S9 跨厂商唯一）。 */
 export const PI_NATIVE_FORKER_ID = "pi-native";
 
 const STDERR_TAIL_CHARS = 2_000;
 const NO_SESSION_RE = /no session found|session file not found|cannot find session/i;
 
 export interface PiForkerOptions {
-  /** 测试可注入自定义起进程函数。 */
   spawnProcess?: (
     command: string,
     args: string[],
     options: { cwd: string; env: Record<string, string> },
   ) => ChildProcess;
-  /** 测试可指定用户主目录与环境变量以定位/清理会话文件。 */
   homeDir?: string;
   env?: Record<string, string | undefined>;
 }
@@ -60,7 +49,6 @@ function buildPiForkArgs(src: ForkSource, forkId: string, forkTarget: string): s
   args.push(...PI_NO_PROJECT_TRUST_ARGS, ...buildPiSkillArgs(src.cwd, src.addDirs));
   if (src.launch.skillsDir) args.push("--skill", src.launch.skillsDir);
   args.push(...agentLaunchArgs({ vendor: src.vendor, model: src.model, effort: src.effort }));
-  // 写交接禁止一切文件修改、命令执行与外部 MCP 调用
   args.push("--exclude-tools", "edit,write,bash,powershell", "--no-mcp");
   return args;
 }
@@ -107,7 +95,7 @@ export function createPiForker(options: PiForkerOptions = {}): SessionForker {
         { vendor: "pi", cwd: src.cwd, vendorSessionId: src.vendorSessionId },
         { home: options.homeDir, env: childEnv },
       );
-      // 找不到会话文件时按编号复制：编号要是 pi 认的样子（字母或数字开头），免得被当成命令行参数
+      // Fork IDs must start alphanumeric so pi does not parse them as flags.
       if (transcript === null && !isValidPiSessionId(src.vendorSessionId)) {
         throw new ForkUnsupportedError(`pi 会话编号不合法：${src.vendorSessionId}`);
       }
@@ -128,7 +116,6 @@ export function createPiForker(options: PiForkerOptions = {}): SessionForker {
         let waitingStats = false;
 
         const exited = () => child.exitCode !== null || child.signalCode !== null;
-        /** 连同进程组和换了组的后代一起强制结束（取消、出错时；pi 可能还在跑这一轮、调模型）。 */
         const stopChild = () => {
           if (exited()) return;
           if (child.pid === undefined) {
@@ -151,7 +138,7 @@ export function createPiForker(options: PiForkerOptions = {}): SessionForker {
             reject(err);
             return;
           }
-          // 关标准输入让它自己收尾退出；等它真退了再交回，免得接手的新会话起来时它还在写复制出的会话文件。KILL_WAIT_MS 内没退就强制结束
+          // Wait for exit so the next session does not start while pi still writes the copy.
           if (exited()) {
             resolve(result!);
             return;

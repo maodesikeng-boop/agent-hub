@@ -1,6 +1,3 @@
-// Claude Code 的模型名单和登录状态（docs/vendor-availability-design.md 第 3 节、docs/vendor-plugin-design.md 的 C5）：
-// 起 claude 发 stream-json 的 initialize 控制请求（不跑钩子、不连 MCP，protocol.ts 的 INITIALIZE_QUERY_ARGS），看不出登录时另跑
-// `claude auth status --json`。单独一个文件：composer.ts 给账本用，不能引入起进程的代码（composer.test.ts 查）。
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
@@ -34,18 +31,12 @@ import { trackChild } from "../../daemon/process-ledger.ts";
 import type { VendorCatalogProbe, VendorCatalogSourceOptions } from "../../daemon/vendors/types.ts";
 import { INITIALIZE_QUERY_ARGS, buildInitializeLine } from "./protocol.ts";
 
-/** claude 回应里“默认”那一项的 value：不进名单，它支持的思考程度给“默认”用。 */
 const DEFAULT_VALUE = "default";
 
-/**
- * initialize 回应里的 models → 名单。value 要是合规的模型名（vendors.ts 的 checkModel），不合规、重复的跳过；
- * 一个能用的都没有（或者根本不是数组）返回 null，调用方用打包的名单。
- */
 export function parseInitializeModels(raw: unknown): ModelCatalog | null {
   if (!Array.isArray(raw)) return null;
   const models: CatalogModel[] = [];
   let defaultEfforts: string[] | null = null;
-  // “默认”实际用哪个模型：default 那项的 resolvedModel，对上名单里哪项（同一个 resolvedModel）就用它的名字
   let defaultResolved: string | null = null;
   const labelOfResolved = new Map<string, string>();
   const effortsOfResolved = new Map<string, string[]>();
@@ -85,28 +76,17 @@ export function parseInitializeModels(raw: unknown): ModelCatalog | null {
 
 export interface ClaudeModelQueryOptions {
   claudePath: string;
-  /** 在哪个目录起 claude（守护进程用用户主目录：不带任何项目的设置）。 */
   cwd: string;
-  /** 附加文件夹（--add-dir）：问命令列表时和会话一样带上。 */
   addDirs?: readonly string[];
   timeoutMs?: number;
-  /** 起 claude 的环境变量，默认守护进程自己的（去掉父会话那几个，见 buildChildEnv）。 */
   env?: Record<string, string | undefined>;
-  /** 关机时取消：结束 claude，Promise 失败。 */
   signal?: AbortSignal;
 }
 
-/** 起一个 claude，发 initialize 控制请求，返回回应里的 models（原样，交给 parseInitializeModels）。失败同 queryClaudeInitialize。 */
 export async function queryClaudeModels(options: ClaudeModelQueryOptions): Promise<unknown> {
   return (await queryClaudeInitialize(options)).models;
 }
 
-/**
- * 起一个 claude，发 initialize 控制请求，返回回应（response.response：models、commands……，原样）。
- * 模型名单和会话没在跑时的命令列表（composer.ts）都用它。
- * 拿到回应就关标准输入让它自己退出，KILL_WAIT_MS 内没退出连同后代强制结束；超时、出错、取消都强制结束。
- * claude 不存在、没回就退出、回了错误、超时都是 Promise 失败（带原因）。
- */
 export function queryClaudeInitialize(options: ClaudeModelQueryOptions): Promise<Record<string, unknown>> {
   const { claudePath, cwd, timeoutMs = MODEL_CATALOG_TIMEOUT_MS, signal } = options;
   const args = [...INITIALIZE_QUERY_ARGS];
@@ -152,14 +132,14 @@ export function queryClaudeInitialize(options: ClaudeModelQueryOptions): Promise
     const timer = setTimeout(() => finish(new Error(`claude 超时（${timeoutMs} ms 没回 initialize）`)), timeoutMs);
 
     child.once("error", (error) => finish(new Error(`${claudePath}: ${error.message}`)));
-    child.stdin.on("error", () => {}); // 进程先退出时写入会 EPIPE，以 exit 为准
+    child.stdin.on("error", () => {}); // Writing after the process exits throws EPIPE; the exit event decides.
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
       stderr = (stderr + chunk).slice(-STDERR_TAIL_CHARS);
     });
     child.once("exit", (code, sig) => {
       termGroupAfterExit(child);
-      // 留一点时间把标准输出最后几行读完再判“没回就退出”
+      // Let stdout drain before treating an exit as no reply.
       setTimeout(() => finish(new Error(`claude 没回 initialize 就退出了（${sig ?? `退出码 ${code}`}）${stderr.trim() ? `：${stderr.trim()}` : ""}`)), 50);
     });
     createInterface({ input: child.stdout }).on("line", (line) => {
@@ -179,13 +159,8 @@ export function queryClaudeInitialize(options: ClaudeModelQueryOptions): Promise
   });
 }
 
-/** `claude auth status --json` 的固定参数。 */
 const CLAUDE_AUTH_STATUS_ARGS: readonly string[] = ["auth", "status", "--json"];
 
-/**
- * claude 的补充判断（initialize 回应里看不出登录时才用）：跑 `claude auth status --json`，看 loggedIn。
- * 不会失败：找不到程序是 not_installed，超时、认不出是 unknown。
- */
 export function queryClaudeAuthStatus(options: ClaudeModelQueryOptions): Promise<VendorAvailability> {
   const { claudePath, cwd, timeoutMs = MODEL_CATALOG_TIMEOUT_MS, signal } = options;
   return new Promise((resolve) => {
@@ -232,18 +207,16 @@ export function queryClaudeAuthStatus(options: ClaudeModelQueryOptions): Promise
   });
 }
 
-/** initialize 回应里的 account 有身份信息（实测有 email、organization）就是登录了；没有说不清，交给 claude auth status。 */
 export const claudeCatalogProbe: VendorCatalogProbe = {
   parse: (raw) => parseInitializeModels((raw as { models?: unknown } | null)?.models),
   availabilityOf(raw) {
     const account = (raw as { account?: { email?: unknown; organization?: unknown } } | null)?.account;
-    // 只认身份字段：没登录时 account 里可能也有 apiProvider 这类和登录无关的
+    // Signed-out accounts may still carry apiProvider, so check identity fields only.
     const identity = [account?.email, account?.organization].some((v) => typeof v === "string" && v.trim() !== "");
     return identity ? "available" : "unknown";
   },
 };
 
-/** 名单那次查询：发 initialize 拿整个回应（models 和 account 一起），看不出登录时才另跑 `claude auth status`。 */
 export function createClaudeCatalogSource(options: VendorCatalogSourceOptions): VendorCatalogSource {
   const resolveOpts = () => {
     const claudePath = typeof options.path === "function" ? options.path() : options.path;

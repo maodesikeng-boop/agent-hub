@@ -1,7 +1,3 @@
-// Antigravity (agy) 驱动层：每个会话一个 agy 进程（--input-format stream-json --output-format stream-json --print ""），
-// 公共会话状态机（待发队列合并与取消、用量节流、启动/空闲/打断定时器、前缀说明注入与回退、后台任务跟踪与空闲保活等）继承自 BaseSessionDriver；
-// 本文件负责 agy 专有协议：系统提示词写成规则目录并用 --add-dir 挂上（rules.ts，不拼进首条消息）、init 会话 ID 持久化与 --conversation 恢复、step_update 流式事件与后台任务状态映射、
-// 只读 Worker 连接器拦截与沙箱包装、被拒后自动补一轮。
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -83,65 +79,43 @@ interface Batch extends BaseBatch {
 type AgyStartupOutcome = StartupOutcome<ReturnType<typeof detectAgyArgsConflict>>;
 
 interface Proc extends BaseProc<AgyStartupOutcome> {
-  /** 只读 Worker 的统一定义和这次启动时问到的连接器清单（兜底检查 checkAgyConnectorCall 用）；不是只读 null。 */
   readonly: { policy: ReadonlyPolicy; catalog: AgyConnectorCatalog } | null;
-  /** 只读 Worker 的会话私有临时目录（进程退出时删）；不是只读 null。 */
   tmpDir: string | null;
-  /** 没有 OS 沙箱时要兜底检查的可写范围（checkWorkerToolViolation）；包进了沙箱、或项目经理是 null。 */
   fallbackScope: WriteScope | null;
 }
 
-/** agy 工具 step_update 的终态（含 CortexStepStatus CANCELED 单 L 与 CANCELLED 双 L 拼写）。 */
+// agy reports both CANCELED and CANCELLED.
 const AGY_TERMINAL_TOOL_STATES = new Set(["DONE", "FAILED", "CANCELLED", "CANCELED", "ERROR"]);
 
 interface TrackedToolStep {
   task_id: string;
   description: string;
-  /** 是否已作为后台任务上报（显式后台命令或轮结束时仍未 DONE 的工具步骤）。 */
   promoted: boolean;
 }
 
 interface SessionState extends BaseSessionState<Proc, Batch> {
-  /** Worker 触发可写范围兜底或只读连接器违规时的错误原因。 */
   policyViolation: string | null;
-  /** 这一轮因为“被拒”没回复，已经自动补了几轮（AGY_DENIED_CONTINUE_MAX；用户发新消息重新数）。 */
   deniedContinues: number;
-  /** 内存里记录是否已经从 agy 收到过可恢复的 conversation_id。 */
   hasConversation: boolean;
   vendorSessionId: string;
-  /** 当前轮按 step_id 累积的流式文本切片。 */
   stepTexts: Map<string, string>;
-  /** 当前轮已经发出过 ACTIVE 事件的工具 step_id。 */
   seenToolSteps: Set<string>;
-  /** 当前轮尚未闭合的工具 step_id → 最近一次 step 签名（用于早期 GENERATING/PENDING 预览与 ACTIVE 参数补齐去重，终态与轮末清理）。 */
   previewedToolSteps: Map<string, string>;
-  /** 当前轮已经发出过 agent.tool_result 的工具 step_id（防止重复终态事件二次发射）。 */
   completedToolSteps: Set<string>;
-  /** agy 通过 background_tasks_changed 等事件显式上报的后台任务（task_id → 任务项）。 */
   reportedTasks: Map<string, { task_id: string; description: string }>;
-  /** 正在运行、尚未收到终态的工具步骤（用于跟踪跨轮/后台命令并与 reportedTasks 取并集同步到 background）。 */
   activeToolSteps: Map<string, TrackedToolStep>;
-  /** 当前轮已经发出过 thinking 事件的 step_id。 */
   seenThinkingSteps: Set<string>;
-  /** 自上一次工具调用（或轮开始）以来是否已经发出过 agent.text。 */
   hasTextSinceLastTool: boolean;
-  /** 已完成的轮次计数（当前轮次为 resultSeq + 1），防止跨轮/重启后 step_index 复位的 UUID 冲突。 */
   resultSeq: number;
-  /** 会话内单调递增的事件序号。 */
   eventSeq: number;
   lastLiveUsage: TokenUsage | null;
 }
 
 export interface AgyDriverOptions extends Omit<DriverOptions, "executablePath"> {
-  /** agy 可执行文件路径，默认 "agy"。 */
   executablePath?: string | (() => string);
-  /** 这个驱动对应的厂商实现，默认 composer.ts 的 agyComposerBase。 */
   composer?: VendorComposerBase;
-  /** 用户主目录（找 agy 的运行时目录和 MCP 配置），默认 os.homedir()。 */
   homeDir?: string;
-  /** 只读 Worker：现在有哪些连接器、哪些工具标了只读（connectors.ts）。默认读 agy 的 MCP 配置、向每个服务器问 tools/list；测试可以替换。 */
   connectorCatalog?: () => Promise<AgyConnectorCatalog>;
-  /** 只读 Worker：把进程包进外层只读沙箱（默认 write-scope.ts 的 wrapInReadonlyOsSandbox，支持 macOS seatbelt 与 Linux bubblewrap）；测试可以替换。 */
   readonlySpawn?: (base: SpawnCommand, input: ReadonlySandboxInput) => ScopedSpawn;
 }
 
@@ -217,9 +191,7 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     return ids.every((id) => st.written.has(id)) ? { kind: "written" } : { kind: "queued" };
   }
 
-  /**
-   * @internal 只给测试用：跳过拼装，把一行原样交给写入函数（照样先校验）。会话要已经起来、空闲。
-   */
+  // @internal Test-only: write a raw line after validation; the session must be up and idle.
   async writeUserLine(sessionId: SessionId, line: string, messageIds: MessageId[]): Promise<DriverSendResult> {
     const st = this.state(sessionId);
     const problem = checkAgyUserLine(line);
@@ -287,7 +259,6 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         source: "user",
       };
     }
-    // 性格设定改了的说明只和现在这个进程比（没有进程、正在关的不比：新起的进程按最新的拼系统指令）
     const proc = st.proc && !st.proc.closing ? st.proc : null;
     const { notes, prefixes } = this.takeNotesPrefixes(st, {
       takePersona: proc !== null,
@@ -304,7 +275,6 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     };
   }
 
-  /** 为指定进程构造要写入 stdin 的 NDJSON 行。产品提示词不拼进消息：起进程时写成规则目录走 agy 的系统提示词（rules.ts）。 */
   #buildLineForProc(batch: Batch): string {
     if (batch.rawLine !== undefined) return batch.rawLine;
     return buildAgyUserLine(batch.text, batch.prefixes, this.composer.buildUserContent);
@@ -421,7 +391,7 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
 
   async #spawn(st: SessionState, resume: boolean, prepared: LaunchFiles | null): Promise<Proc> {
     const { row, files } = await this.resolveLaunchFiles(st, prepared);
-    // 产品提示词写成规则目录、--add-dir 进 agy 的系统提示词（<user_rules>），压缩后还在；每次起进程按最新的 prompt.md 重写
+    // Rules under an --add-dir land in agy's <user_rules> system prompt section and survive compaction.
     const promptRulesDir = writeAgyPromptRules(files.promptFile, files.skillsDir);
     let warning: string | null;
     try {
@@ -510,8 +480,6 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     return proc;
   }
 
-  // --- 输出解析 ---
-
   protected onParsedLine(
     st: SessionState,
     proc: Proc,
@@ -574,7 +542,6 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     return this.row(st)?.vendorSessionId ?? String(st.id);
   }
 
-  /** 将某个（或全部）step_id 累积的文本作为单条 agent.text 发出。 */
   #flushStepTexts(st: SessionState, at: number, exceptStepId?: string): void {
     const convId = this.#conversationIdOf(st);
     const turnNo = st.resultSeq + 1;
@@ -874,7 +841,7 @@ export class AgyDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     const status = typeof res.status === "string" ? res.status : "SUCCESS";
     const ok = violation === null && !interrupted && (status === "SUCCESS" || (finishedReason === null && hadFinalText));
 
-    // 轮结束时仍有 ACTIVE 且未 DONE 的工具步骤（如 run_command 转后台运行）：同步为后台任务
+    // Tool steps still ACTIVE at turn end (e.g. run_command moved to the background) become background tasks.
     if (ok && st.activeToolSteps.size > 0) {
       let newlyPromoted = false;
       for (const step of st.activeToolSteps.values()) {

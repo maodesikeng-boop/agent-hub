@@ -1,4 +1,3 @@
-// 基准 `.agents/skills` 目录扫描与目标厂商技能目录逐项软链对账（绝不整目录替换，绝不覆盖用户私有技能）。
 import { execFileSync } from "node:child_process";
 import { closeSync, existsSync, lstatSync, openSync, readFileSync, readSync, readdirSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
@@ -10,7 +9,6 @@ import {
 } from "../../../daemon/platform/index.ts";
 import { MAX_VENDOR_SYNC_SKILL_ITEMS, PM_CAPABILITY_DESCRIPTION_MAX_CHARS, truncateChars } from "../../../shared/index.ts";
 
-/** 安全的 `realpath`：目标存在时返回真实路径，悬空软链或不存在时回退 `resolve`。 */
 export function safeRealpath(targetPath: string): string {
   try {
     return realpathSync.native(targetPath);
@@ -19,11 +17,6 @@ export function safeRealpath(targetPath: string): string {
   }
 }
 
-/**
- * 扫描基准 `.agents/skills` 目录下的有效技能包：
- * - 跳过以 `.` 开头的隐藏项；
- * - 必须是包含 `SKILL.md` 的目录（跳过如 `PSTACK-LICENSE` 这类普通文件）。
- */
 export function listCanonicalSkillNames(canonicalSkillsDir: string): { names: string[]; truncated: boolean } {
   if (!existsSync(canonicalSkillsDir)) return { names: [], truncated: false };
   let entries: string[];
@@ -53,15 +46,10 @@ export function listCanonicalSkillNames(canonicalSkillsDir: string): { names: st
 }
 
 export type SkillTargetEntryState =
-  /** 目标技能目录本身就是指向基准 `.agents/skills` 目录的整目录软链（如仓库 `.claude/skills -> ../.agents/skills`）。 */
   | "whole_dir_symlink"
-  /** 目标下 `<name>` 已是指向该基准技能的逐项软链。 */
   | "linked"
-  /** 目标下 `<name>` 是 UNC / 网络盘回退生成的受控副本（带 `.fusa-managed` 且内容哈希一致）。 */
   | "managed_copy"
-  /** 目标下 `<name>` 不存在，或是指向 `.agents/skills` 下旧路径的软链（可安全建/更软链）。 */
   | "missing_or_stale_managed"
-  /** 目标下 `<name>` 是用户自己的真实目录/文件或外部私有软链（必须原样保留，绝不覆盖）。 */
   | "user_private_conflict";
 
 function isGitTrackedSymlinkBlob(filePath: string): boolean {
@@ -77,7 +65,6 @@ function isGitTrackedSymlinkBlob(filePath: string): boolean {
   }
 }
 
-/** 检查目标技能目录是否为指向基准 `.agents/skills` 的整目录软链。 */
 export function isWholeDirLinkedToCanonical(targetSkillsDir: string, canonicalSkillsDir: string): boolean {
   try {
     const st = lstatSync(targetSkillsDir);
@@ -87,7 +74,7 @@ export function isWholeDirLinkedToCanonical(targetSkillsDir: string, canonicalSk
       const resolvedLink = resolve(dirname(targetSkillsDir), rawTarget);
       return normalizePathForComparison(safeRealpath(resolvedLink)) === canonicalRealKey;
     }
-    // Git for Windows 默认 core.symlinks=false 时会把仓库内 120000 软链检出成单行路径文本文件
+    // Git for Windows with core.symlinks=false checks out symlinks as one-line text files holding the target path.
     if (st.isFile() && st.size > 0 && st.size <= 1024) {
       const rawText = readFileSync(targetSkillsDir, "utf8").trim();
       if (rawText !== "" && !rawText.includes("\n") && !rawText.includes("\r")) {
@@ -106,11 +93,6 @@ export function isWholeDirLinkedToCanonical(targetSkillsDir: string, canonicalSk
   }
 }
 
-/**
- * 判断软链是否是指向 **这一个** 基准 `canonicalSkillsDir` 里某项的受管软链（只有它允许更新或移除）。
- * 按路径包含关系判断（字面解析、真实路径各比一次，悬空软链也认得），不按字符串里有没有 `.agents/skills/`：
- * 用户自己指向别的项目 `.agents/skills/x` 的私有软链不能被当成受管的覆盖或删掉。
- */
 export function isManagedAgentsSkillSymlink(linkPath: string, canonicalSkillsDir: string): boolean {
   try {
     const st = lstatSync(linkPath);
@@ -129,7 +111,6 @@ export function isManagedAgentsSkillSymlink(linkPath: string, canonicalSkillsDir
   }
 }
 
-/** 诊断单个技能 `<skillName>` 在某厂商 `targetSkillsDir` 中的现状。 */
 export function inspectSkillTargetEntry(
   targetSkillsDir: string,
   canonicalSkillsDir: string,
@@ -175,7 +156,7 @@ export function inspectSkillTargetEntry(
     }
   }
 
-  // 真实目录或真实文件 = 用户私有技能，绝不删除或覆盖
+  // Real directories and files are user-owned skills; never delete or overwrite them.
   return "user_private_conflict";
 }
 
@@ -223,7 +204,6 @@ function readSkillFrontmatterLines(skillDir: string): string[] | null {
   return lines.slice(1, closeIdx);
 }
 
-/** 只读提取 `<skillDir>/SKILL.md` 的 frontmatter name（单行值）；没有或读不了返回 null。 */
 export function readSkillName(skillDir: string): string | null {
   const fmLines = readSkillFrontmatterLines(skillDir);
   if (fmLines === null) return null;
@@ -236,7 +216,6 @@ export function readSkillName(skillDir: string): string | null {
   return null;
 }
 
-/** 只读提取 `<skillDir>/SKILL.md` 的 frontmatter description，截断到 PM_CAPABILITY_DESCRIPTION_MAX_CHARS。 */
 export function readSkillDescription(skillDir: string): string | null {
   const fmLines = readSkillFrontmatterLines(skillDir);
   if (fmLines === null) return null;

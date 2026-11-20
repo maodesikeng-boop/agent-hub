@@ -1,8 +1,3 @@
-// OpenAI Codex 的输入框实现：
-// - 命令列表：`codex app-server` 的 `skills/list` RPC 返回的 skills（过滤 enabled === false），加上内置 /compact；
-// - Codex 的 skill 触发语法是 `$<skill>`：用户在输入框输 `/<skill>`（除 `/compact` 外）时，buildUserContent 把开头的 `/<skill>` 改写为 `$<skill>`；
-// - 隐藏名单与拦截原因在 spec.ts 的 composer；
-// - 模型名单和登录状态：同一个 app-server 里问 model/list 和 account/read（catalog.ts）。
 import {
   COMMANDS_QUERY_TIMEOUT_MS,
   MAX_COMMANDS,
@@ -18,7 +13,6 @@ import { commandNameOf } from "../types.ts";
 import codexSpec from "./spec.ts";
 import { queryCodexSkills, type CodexModelQueryOptions } from "./catalog.ts";
 
-/** codex 常用内置可用斜杠命令（非隐藏命令）。 */
 const CODEX_BUILTIN_COMMANDS: readonly ComposerCommand[] = [
   { name: "compact", description: "压缩当前对话上下文", builtin: true },
 ];
@@ -57,10 +51,6 @@ function extractCodexSkills(raw: unknown): unknown[] | null {
   return unwrap(raw);
 }
 
-/**
- * `codex app-server` 的 `skills/list` 回应 → 通用 ComposerCommand[]。
- * 兼容 `{ data: [{ cwd, skills: [...] }] }` 或直接传 skills 数组；过滤 `enabled === false`，加上内置 `/compact`。
- */
 export function parseCodexCommands(raw: unknown): ComposerCommand[] | null {
   const list = extractCodexSkills(raw);
   if (list === null) return null;
@@ -94,10 +84,7 @@ export function parseCodexCommands(raw: unknown): ComposerCommand[] | null {
   return out;
 }
 
-/**
- * 如果 `text` 以 `/<skill>` 开头且 `<skill>` 不是内置 `compact`（也不是含 `/` 的文件路径），
- * 把开头的 `/<skill>` 改写为 Codex 的 `$<skill>` 触发语法。
- */
+// Codex triggers skills with $<skill>, so a leading /<skill> is rewritten.
 export function rewriteCodexSkillCommand(text: string): string {
   const spec = codexSpec.composer;
   const name = commandNameOf(text, spec.commandPrefix);
@@ -107,7 +94,6 @@ export function rewriteCodexSkillCommand(text: string): string {
 
 const specBase = createSpecComposerBase("codex");
 
-/** 不用起进程的基础部分。 */
 export const codexComposerBase: VendorComposerBase = {
   ...specBase,
   parseCommands: parseCodexCommands,

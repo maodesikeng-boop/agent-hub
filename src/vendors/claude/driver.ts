@@ -1,7 +1,3 @@
-// Claude 驱动层（设计第 7.2～7.4 节，按 M0 改过的做法）：每个会话一个官方 claude 进程，
-// 公共会话状态机（待发队列、用量节流、空闲/启动/打断定时器、前缀说明注入与回退、后台任务跟踪等）继承自 BaseSessionDriver；
-// 本文件负责 Claude 专有协议：stream-json 行组装与解析、一轮中途写入（MID_TURN_CAPABILITIES + command_lifecycle 对账）、
-// control_request / control_response（只读 Worker 审批、优雅打断与 queryCommands）。
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -69,47 +65,34 @@ import {
   type SpawnCommand,
 } from "../../daemon/driver/write-scope.ts";
 
-/** 写进去（或正要写）的一行，等它的 result。 */
 interface Batch extends BaseBatch {
   line: string;
-  /** 写在这一行里的 uuid：claude 的 command_lifecycle 用它（command_uuid）告诉我们这一行排着、被取走、做完、被取消。 */
+  // claude reports command_lifecycle (queued, started, done, cancelled) for this uuid.
   uuid: string;
-  /** 收到这一行的 command_lifecycle started：claude 取走了（模型看到了）。 */
   started: boolean;
-  /** 会话正忙时在一轮中途写进去的（不是开一轮的那条）。 */
   midTurn: boolean;
-  /** 中途写的这一行写回调还没回来时用户点了停止：写失败（进程正好没了）的话按停止处理，用户的标已取消、不退回队列。 */
   stopped: boolean;
-  /** 没取走就被收掉了（停止、进程没了）：cancelled = 已出 message.cancelled；requeued = 收回了，要重新写。写回调晚到时照这个办。 */
   released: "cancelled" | "requeued" | null;
 }
 
-/** 一轮中途写一行的结果：written 写成了；cancelled 停止时被取消了；retry 没写成，退回待发队列。 */
 type MidTurnWrite = "written" | "cancelled" | "retry";
 
 type ClaudeStartupOutcome = StartupOutcome<ReturnType<typeof detectArgsConflict>>;
 
 interface Proc extends BaseProc<ClaudeStartupOutcome> {
-  /** 只读 Worker（LaunchFiles.readonly）才有：回 claude 的 can_use_tool 批准请求（readonly.ts）。进程退出时 dispose。 */
   readonlyGate: ClaudeReadonlyGate | null;
-  /** 第一个 system/init 里的 capabilities（MID_TURN_CAPABILITIES 等）；init 之前是空的。 */
   capabilities: Set<string>;
-  /** 主 agent 当前流式消息中尚未闭合的 tool_use JSON 参数跟踪器（有界，content_block_stop / message_stop / result / 退出时清空）。 */
   toolPreviews: StreamingToolPreviewTracker;
 }
 
 interface SessionState extends BaseSessionState<Proc, Batch> {
   interruptRequestId: string | null;
-  /** 在等回应的命令列表请求（queryCommands）：request_id → 交回结果（null = 没问到）。进程退出时都交回 null。 */
   commandQueries: Map<string, (commands: ComposerCommand[] | null) => void>;
 }
 
 export interface ClaudeDriverOptions extends DriverOptions {
-  /** 这个驱动对应的厂商实现（命令的认法、写给 agent 的 content 怎么拼、命令列表怎么解析），默认 composer.ts 的 claudeComposerBase。 */
   composer?: VendorComposerBase;
-  /** 只读外层包装覆盖（供 Windows 无 MXC 回退 / MXC 单测注入）。 */
   readonlySpawn?: (base: SpawnCommand, input: ReadonlySandboxInput) => ScopedSpawn;
-  /** 平台覆盖（单测用，默认 process.platform）。 */
   platform?: NodeJS.Platform;
 }
 
@@ -162,7 +145,6 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     }
     if (!this.isPending(st, ids)) {
       if (input.recovery) st.recoveryNote = true;
-      // 忙着、但这个 claude 能在一轮中途收：直接写进去，不进待发队列
       const proc = st.proc;
       if (proc && this.#canWriteMidTurn(st, proc, entry)) {
         const batch = this.#batchOf(st, entryParts(entry), ids, false, entry.source);
@@ -170,7 +152,6 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         const outcome = await this.#writeMidTurn(st, proc, batch);
         if (outcome === "written") return { kind: "written", midTurn: true };
         if (outcome === "cancelled") return { kind: "cancelled" };
-        // 没写成（进程正好没了）：退回待发队列，照旧等
         this.dropBatch(st, batch);
       }
       st.pending.push(entry);
@@ -179,11 +160,7 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     return ids.every((id) => st.written.has(id)) ? { kind: "written" } : { kind: "queued" };
   }
 
-  /**
-   * 能不能在这一轮中途直接写（docs/mid-turn-messages.md 第 5.1 节）：进程 init 过、支持（MID_TURN_CAPABILITIES）、不在关闭、
-   * 正忙（空闲时走 pump，写之前要比设置）、没在两轮之间重启（starting）、这一轮没点过停止（写进去会被一起取消）、
-   * 待发队列是空的（前面还排着的话不插队）、不是命令（本地命令在轮中间的行为没测，也会丢前缀块，见 #76）。
-   */
+  // Commands are excluded: local commands mid-turn are untested and drop prefix blocks (#76).
   #canWriteMidTurn(st: SessionState, proc: Proc, entry: PendingEntry): boolean {
     return (
       proc.initSeen &&
@@ -198,7 +175,6 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     );
   }
 
-  /** 一轮中途写一行：不重启、不调 prepareLaunch、不动这一轮的打断标记。 */
   async #writeMidTurn(st: SessionState, proc: Proc, batch: Batch): Promise<MidTurnWrite> {
     st.inFlight.push(batch);
     this.clearTimer(st, "idleTimer");
@@ -219,9 +195,7 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     });
   }
 
-  /**
-   * @internal 只给测试用：跳过拼装，把一行原样交给写入函数（照样先校验）。会话要已经起来、空闲。
-   */
+  // @internal Test-only: write a raw line after validation; the session must be up and idle.
   async writeUserLine(sessionId: SessionId, line: string, messageIds: MessageId[]): Promise<DriverSendResult> {
     const st = this.state(sessionId);
     const problem = checkUserLine(line);
@@ -476,8 +450,6 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
     return proc;
   }
 
-  // --- 读输出 ---
-
   protected onParsedLine(
     st: SessionState,
     proc: Proc,
@@ -518,8 +490,7 @@ export class ClaudeDriver extends BaseSessionDriver<Proc, Batch, SessionState> {
         return;
       }
       case "assistant": {
-        // 不在这里清 toolPreviews：claude 每个内容块完成就出一条 assistant，可能夹在下一个工具块的流式参数中间（并行工具），
-        // 也可能是子任务的；跟踪器靠 content_block_stop / message_stop / result / 进程退出收尾，另有块数上限
+        // claude emits one assistant event per content block, possibly between streamed tool args or from subagents; do not clear toolPreviews here.
         const row = this.row(st);
         const live = row ? st.turnUsage.observe(obj, row.usage) : null;
         if (live) this.pushUsage(st, live);

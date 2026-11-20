@@ -1,13 +1,9 @@
-// 保留注释、表顺序与无关配置（如 model、[features]、[apps]）的 TOML 读写与局部补丁工具。
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { parse, patch } from "@decimalturn/toml-patch";
 import { MAX_VENDOR_SYNC_CONFIG_BYTES } from "../../../shared/index.ts";
 import { isPlainObject } from "./jsonc.ts";
 
-/**
- * 解析 TOML；出错时只保留行列号重新抛出。库的原始报错会把出错那一行原文（常是 `token = "..."`）拼进消息，
- * 而 ui-server 会把未知错误原样写进守护进程日志，所以绝不能把原消息往外传。
- */
+// The library's error message embeds the offending line (often a token), so rethrow with only line and column.
 function parseTomlSafely(raw: string, filePath: string): unknown {
   try {
     return parse(raw, { integersAsBigInt: false });
@@ -42,11 +38,6 @@ export function readTomlObjectFile(filePath: string): TomlDocumentSnapshot {
   return { exists: true, raw, data: parsed };
 }
 
-/**
- * 使用 `@decimalturn/toml-patch` 局部更新 `[mcp_servers.<name>]`：
- * - `upsert` 只增补缺失的条目，已有同名条目原样保留；不重排已有表或丢失 `#` 注释；
- * - 若文件不存在且本次无新增项，或补丁后无变化，返回 `null`。
- */
 export function patchTomlMapEntries(input: {
   doc: TomlDocumentSnapshot;
   tableKey?: string;
@@ -73,7 +64,7 @@ export function patchTomlMapEntries(input: {
   }
 
   for (const name of upsertNames) {
-    // 并集只增补：同名表已存在（含 `enabled = false`、带 `startup_timeout_sec` 等本家字段）一律原样保留，绝不覆盖
+    // Union upsert: an existing table is never overwritten.
     if (Object.prototype.hasOwnProperty.call(existingTable, name)) continue;
     existingTable[name] = upsert[name]!;
     mutated = true;

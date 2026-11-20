@@ -1,8 +1,4 @@
-// DeepSeek (`dsh`) 同步适配器：
-// - MCP：`dsh` 无独立全局 MCP 配置文件，同步结果持久化于 `$DSH_HOME/mcp.json`（默认 `~/.dsh/mcp.json`，权限 `0600`），
-//   由 `driver.ts` 在新建或恢复会话时通过 ACP 启动参数 `session.mcpServers` 动态注入（不打断运行中会话）；
-// - `dsh-acp` 声明 `mcpCapabilities: { http: true }`（不支持 `sse`），因此旧版 `/sse` 自动转为 `npx -y mcp-remote <url>` stdio；
-// - Skill：`@deepseek-ai/dsh-agent-instructions` 原生自动发现全局 `~/.agents/skills` 与工作区 `.agents/skills`。
+// dsh has no global MCP config; mcp.json is injected through ACP session.mcpServers, and dsh-acp supports http but not sse.
 import { join } from "node:path";
 import type { McpServer } from "@agentclientprotocol/sdk/unstable";
 import type { CanonicalMcpServer, ScannedCloudConnector, VendorSyncAdapter, VendorSyncContext } from "../daemon-types.ts";
@@ -37,7 +33,6 @@ export function canonicalToAcpMcpServer(name: string, server: CanonicalMcpServer
   };
 }
 
-/** 读取 `$DSH_HOME/mcp.json` 并转换为 ACP `session/new` / `session/resume` 的 `mcpServers` 参数。 */
 export function loadDeepSeekAcpMcpServers(dshHome: string): McpServer[] {
   const configPath = join(dshHome, "mcp.json");
   let doc: ReturnType<typeof readJsoncObjectFile>;

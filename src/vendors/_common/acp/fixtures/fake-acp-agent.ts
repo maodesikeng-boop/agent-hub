@@ -1,6 +1,4 @@
 #!/usr/bin/env node
-// 确定性假 ACP（Agent Client Protocol）服务端：基于官方 @agentclientprotocol/sdk/unstable 的 agent() 与 ndJsonStream 实现。
-// 通过环境变量传入测试剧本与日志路径，供 src/vendors/_common/acp/driver.test.ts 覆盖完整协议分支。
 import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -34,9 +32,7 @@ export interface FakeAcpToolStep {
     meta?: Record<string, unknown>;
     options?: PermissionOption[];
   };
-  /** 测试外层只读 OS 沙箱：尝试写入该路径并把成功/报错记入日志。 */
   probeWritePath?: string;
-  /** 跑完那条 tool_call_update 带的 content、rawOutput（工具的返回原文）。 */
   resultContent?: unknown;
   rawOutput?: unknown;
 }
@@ -51,12 +47,9 @@ export interface FakeAcpTurnScript {
   customUpdates?: Array<{ sessionUpdate: string; payload?: Record<string, unknown> }>;
   commandsUpdate?: Array<{ name: string; description: string; hint?: string }>;
   usageUpdate?: { used: number; size: number };
-  /** 等待收到 session/cancel 通知后以 stopReason="cancelled" 结束本轮。 */
   waitForCancel?: boolean;
-  /** 即使收到 session/cancel 也不响应（测试驱动超时升级 SIGINT/SIGKILL）。 */
   ignoreCancel?: boolean;
   sleepMs?: number;
-  /** 在同进程组内派生一个长睡眠后台子进程并把其 PID 写入该文件，随后异常退出，测进程组清理。 */
   spawnChildPidFile?: string;
   crashExitCode?: number;
   throwRpcError?: { code: number; message: string };
@@ -78,7 +71,6 @@ export interface FakeAcpScript {
   knownSessions?: string[];
   modes?: SessionModeState;
   initialConfigOptions?: SessionConfigOption[];
-  /** 当模型切到该值时，动态在 configOptions 中暴露 reasoning_effort 配置项。 */
   dynamicEffortForModel?: string;
   commandsOnSessionStart?: Array<{ name: string; description: string; hint?: string }>;
   replayOnLoad?: {
@@ -88,7 +80,6 @@ export interface FakeAcpScript {
     toolTitle?: string;
     commands?: Array<{ name: string; description: string; hint?: string }>;
   };
-  /** 启动后立即挂起不响应 initialize（测 start_timeout）。 */
   hangOnInitialize?: boolean;
   hangOnAuthenticate?: boolean;
   hangOnNew?: boolean;
@@ -118,7 +109,6 @@ function writeLog(entry: Omit<FakeAcpLogEntry, "pid">): void {
   try {
     appendFileSync(logPath, `${JSON.stringify({ pid: process.pid, ...entry })}\n`, "utf8");
   } catch {
-    // 只读沙箱未放行日志路径时静默忽略
   }
 }
 
@@ -144,7 +134,6 @@ function saveSession(sessionId: string, data: Record<string, unknown>): void {
   try {
     writeFileSync(f, JSON.stringify(data), "utf8");
   } catch {
-    // 只读沙箱下忽略状态持久化
   }
 }
 
@@ -620,7 +609,6 @@ const app = agent({ name: "fake-acp-agent" })
       }
 
       if (turnScript.crashExitCode !== undefined) {
-        // 给 stdout 一点冲刷时间再异常退出
         await new Promise((resolve) => setTimeout(resolve, 25));
         process.exit(turnScript.crashExitCode);
       }

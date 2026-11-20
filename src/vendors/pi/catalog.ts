@@ -1,7 +1,3 @@
-// Pi 的模型目录与登录状态探测（docs/vendors/pi.md 第 2 节）：
-// 运行 `pi --offline --list-models`（纯本地离线读凭据与内置/缓存模型库，不发网络请求、不建会话）：
-// - 输出 "No models available..." 或列表为空 → signed_out，parse 返回 null（使用打包兜底模型）；
-// - 输出非空表格 → available；超过 MAX_CATALOG_MODELS（50）时先按 provider 分组、每组按新旧优先排，再跨模型商轮询截取前 50 项。
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import {
   KILL_WAIT_MS,
@@ -32,7 +28,7 @@ import { PI_NO_PROJECT_TRUST_ARGS } from "./composer.ts";
 import { MAX_PI_PROBE_STDOUT_CHARS } from "./limits.ts";
 import spec from "./spec.ts";
 
-// --no-approve：探测的工作目录也可能是不信任的仓库，不带时项目 `.pi/extensions` 会在 --list-models 里执行（见 composer.ts 的 PI_NO_PROJECT_TRUST_ARGS）
+// --no-approve: otherwise project .pi/extensions run even during --list-models.
 const PI_LIST_MODELS_ARGS: readonly string[] = ["--offline", ...PI_NO_PROJECT_TRUST_ARGS, "--list-models"];
 const NO_MODELS_RE = /^no models available\b/i;
 const HEADER_RE = /^provider\s+model\s+context\s+max-out\s+thinking\s+images$/i;
@@ -45,10 +41,6 @@ interface ParsedProviderModel {
   catalogModel: CatalogModel;
 }
 
-/**
- * 提取模型名里的主/次版本号用于同模型商内部比新旧（忽略 20250514 这类 8 位日期和 70b/120b 参数量）：
- * 如 claude-opus-5-5 → [5, 5]，deepseek-v4-pro → [4, 0]，gpt-5.4 → [5, 4]，grok-4.7 → [4, 7]。
- */
 function extractModelVersionTuple(bareModel: string): readonly number[] {
   const withoutDate = bareModel.replace(DATE_SUFFIX_RE, "");
   const dotOrDash = /(?:^|[-_])v?(\d{1,2})(?:[.-](\d{1,2}))?(?=$|[-_])/i.exec(withoutDate);
@@ -58,7 +50,6 @@ function extractModelVersionTuple(bareModel: string): readonly number[] {
   return [major, minor];
 }
 
-/** 同一个 provider 内部排序：主次版本号高的优先；同版本优先不带日期后缀的正式别名；其余倒置原字典序（Pi 原输出升序，新版本在后）。 */
 function compareWithinProvider(a: ParsedProviderModel, b: ParsedProviderModel): number {
   const va = extractModelVersionTuple(a.bareModel);
   const vb = extractModelVersionTuple(b.bareModel);
@@ -83,7 +74,6 @@ function buildModelLabel(provider: string, bareModel: string, fullId: string): s
   return truncateChars(withProvider, MAX_CATALOG_LABEL_CHARS);
 }
 
-/** 按 provider 分组、每组按新旧排好后，若总数超过 MAX_CATALOG_MODELS，跨 provider 轮询挑最新模型再按 provider 顺序收拢。 */
 function selectTopProviderModels(items: readonly ParsedProviderModel[], limit: number): CatalogModel[] {
   const groups = new Map<string, ParsedProviderModel[]>();
   for (const item of items) {
@@ -250,7 +240,6 @@ function extractParsedModels(raw: unknown): { kind: "unrecognized" } | { kind: "
   return { kind: "unrecognized" };
 }
 
-/** 解析 `pi --offline --list-models` 输出（或模型数组）为 ModelCatalog；为空或不可识别时返回 null。 */
 export function parsePiModels(raw: unknown): ModelCatalog | null {
   const extracted = extractParsedModels(raw);
   if (extracted.kind === "unrecognized" || extracted.items.length === 0) return null;
@@ -276,7 +265,6 @@ interface PiCatalogQueryOptions {
   signal?: AbortSignal;
 }
 
-/** 运行 `pi --offline --list-models` 并返回标准输出文本。 */
 function queryPiListModels(options: PiCatalogQueryOptions): Promise<{ stdout: string }> {
   const { piPath, cwd, timeoutMs = MODEL_CATALOG_TIMEOUT_MS, signal } = options;
   return new Promise((resolve, reject) => {
@@ -338,7 +326,7 @@ function queryPiListModels(options: PiCatalogQueryOptions): Promise<{ stdout: st
     child.stderr.on("data", (chunk: string) => {
       stderr = (stderr + chunk).slice(-STDERR_TAIL_CHARS);
     });
-    // 等 close（标准输出读完）再判：exit 时管道里可能还有没读到的几行，名单会被截掉
+    // Wait for close, not exit, or trailing stdout lines are lost.
     child.once("close", (code, sig) => {
       if (code === 0) {
         finish(null);

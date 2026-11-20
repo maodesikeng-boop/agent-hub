@@ -1,7 +1,3 @@
-// DeepSeek (dsh) 一键安装、更新与界面内直接登录适配器（docs/providers-install-login-design.md 第 2.1、2.2.3 节）：
-// - 全平台通过守护进程/随包 Node 24 受管 npm 安装 `@deepseek-ai/dsh@0.2.2-rc.1`（免 sudo / 免管理员）；
-// - 严格遵守 `@deepseek-ai/dsh-credentials-local` v1 schema 与 POSIX `0600` 强校验读写 `$DSH_HOME/.credentials.yaml`；
-// - 同时支持 API Key（写入 `refs.DEEPSEEK_API_KEY`，高于 `<cwd>/.env` 优先级）与原厂 PKCE 账号网页登录（本机回调 & 远端粘贴回环 URL）。
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { arch, platform as osPlatform, release as osRelease } from "node:os";
@@ -69,7 +65,6 @@ function parseYamlScalarValue(raw: string): unknown {
   return unquoteYamlScalar(trimmed);
 }
 
-/** 解析已有 `$DSH_HOME/.credentials.yaml`（兼容 v1 标准缩进 YAML、JSON 子集与 pre-release 平铺格式）。 */
 export function parseDeepSeekCredentialsYaml(rawText: string | null): DeepSeekCredentialsDoc {
   const empty: DeepSeekCredentialsDoc = { refs: {}, records: {} };
   if (rawText === null || rawText.trim() === "") return empty;
@@ -94,7 +89,6 @@ export function parseDeepSeekCredentialsYaml(rawText: string | null): DeepSeekCr
       }
       return { refs, records };
     } catch {
-      // fall through to YAML line parser
     }
   }
 
@@ -126,7 +120,6 @@ export function parseDeepSeekCredentialsYaml(rawText: string | null): DeepSeekCr
       } else if (key === "records" && rest === "") {
         topSection = "records";
       } else if (rest !== "" && /^[A-Z_][A-Z0-9_]*$/u.test(key)) {
-        // 兼容 pre-release 平铺格式迁移进 v1 refs
         const val = unquoteYamlScalar(rest);
         if (val !== "") refs[key] = val;
         topSection = null;
@@ -195,7 +188,6 @@ function serializeYamlMapping(obj: Record<string, unknown>, indentSpaces: number
   return lines;
 }
 
-/** 序列化为 `@deepseek-ai/dsh-credentials-local` 严格要求的 `version: 1` YAML 文档（非空标量，零空字符串）。 */
 export function serializeDeepSeekCredentialsYaml(doc: DeepSeekCredentialsDoc): string {
   const validRefs: Record<string, string> = {};
   for (const [k, v] of Object.entries(doc.refs)) {
@@ -410,7 +402,7 @@ export const deepseekSetupAdapter: VendorSetupAdapter = {
       if (parsedAuth.origin !== origin || parsedAuth.username !== "" || parsedAuth.password !== "") {
         throw new Error("DeepSeek platform returned untrusted authorize_url");
       }
-      // 确保 authorizeUrl 带上 redirect_uri 与 state 查询参数（若服务端仅按 authorize_id 关联），以便远端无头 6 重防 SSRF 校验契约完整可用
+      // Add redirect_uri and state when the server keys only on authorize_id, so the loopback guard has a full contract.
       if (!parsedAuth.searchParams.has("redirect_uri")) {
         parsedAuth.searchParams.set("redirect_uri", redirectUri);
       }
