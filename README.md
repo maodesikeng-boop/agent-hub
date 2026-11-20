@@ -169,9 +169,11 @@ When you are alone in a project group, every message goes straight to the PM. As
 
 Send `/settings` (or `/policy`) in direct chat or a project group to open an interactive settings card. When a provider hits a rate limit or a tough problem calls for a stronger reasoning model while you are away from your desk, pick a new vendor, model, and effort level right from the Feishu dropdowns with zero downtime.
 
-### 5. Three-tier guest permissions built for team safety
+### 5. Three-tier guest permissions per project group
 
-Inviting teammates into a project group never exposes system-level control of your machine. Each group lets you set guest access independently to **Observer** (messages serve as background context only), **Chat only** (default, where teammates can `@`-mention the bot to build and verify while card approvals and stop controls stay owner-only), or **Collaborator** (trusted partners can also approve cards). Creating projects or changing workspace folders remains locked to the owner at the ledger level.
+You set guest access for each project group to **Observer**, **Chat only**, or **Collaborator**. **Observer** is read-only, so guest messages never wake the PM and serve only as background context when you start a turn. **Chat only** is the default tier. Guests can `@`-mention the bot to talk to the PM, while decision cards, **Stop**, and attachments stay with the owner. **Collaborator** also lets guests answer decision cards, stop work, and send attachments. On guest-triggered turns, the ledger blocks owner-only commands that create projects, attach or detach workspace folders, or edit setup scripts and personas.
+
+Because the PM runs as your current OS user without an outer sandbox, every member in a Feishu project group whose tier is not **Observer** must be someone you trust. Both the default **Chat only** tier and **Collaborator** let members message the unsandboxed PM, and ledger checks do not restrict shell commands that the PM runs.
 
 ## Supported agents
 
@@ -287,7 +289,7 @@ Workers edit code and run commands as your current OS user. Keep the actual boun
 
 - **Normal Worker write and data-directory isolation.** Inside its OS sandbox on macOS, Linux, and Windows, each normal Worker can write only to its own isolated worktree within protected roots, cannot read Bellwood's `state/` or `backups/` directories (SQLite ledger, UI and provider tokens, Feishu and mesh keys, PM memory, or other sessions' launch files), and can connect only to `run/hub.sock` rather than `run/admin.sock` ([docs/write-scope.md](docs/write-scope.md)). Outside protected directories, it can read and write your project folder, run tests, and use the network as usual.
 - **Read-only review Workers.** Block writes everywhere except a private temp folder, allow read-only tools only, enforce the same Bellwood data-directory read and socket boundary, and block reads of SSH, cloud, vendor CLI, and `.env` private credentials ([docs/readonly-worker-design.md](docs/readonly-worker-design.md)).
-- **Project Manager and network scope.** Project Managers themselves are not sandboxed, and the local web UI listens on `127.0.0.1` only by default. See [SECURITY.md](SECURITY.md) to report security issues privately.
+- **Project Manager and network scope.** Project Managers run as your current OS user without an outer sandbox, and the local web UI listens on `127.0.0.1` only by default. In Feishu project groups, any member in **Chat only** or **Collaborator** can message the unsandboxed PM. Grant those tiers only to people you trust, and keep everyone else in read-only **Observer**. See [SECURITY.md](SECURITY.md) for details and private vulnerability reporting.
 
 ### Vendor terms of service
 
