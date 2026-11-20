@@ -77,16 +77,16 @@ describe("MessageList virtual rows", () => {
     expect(screen.queryByText("question 1")).not.toBeInTheDocument();
   });
 
-  it("jumping to an unmounted message scrolls it into the window, then centers and highlights it", () => {
+  it("jumping to an unmounted message scrolls its row into the window, then centers the message itself and highlights it", () => {
     const messages = conversation(300);
     const view = render(list(messages));
-    expect(document.querySelector('[data-message-id="2"]')).toBeNull();
-    view.rerender(list(messages, { id: 2, n: 1 }));
-    const target = document.querySelector('[data-message-id="2"]');
+    expect(document.querySelector('[data-message-id="150"]')).toBeNull();
+    view.rerender(list(messages, { id: 150, n: 1 }));
+    const target = document.querySelector('[data-message-id="150"]');
     expect(target).not.toBeNull();
     expect(target).toHaveAttribute("data-highlighted", "true");
-    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
-    expect(screen.getByRole("log").scrollTop).toBeLessThan(ROW_PX * 10);
+    const rowTop = Number.parseFloat(/translateY\((.+)px\)/.exec(target!.closest<HTMLElement>("[data-index]")!.style.transform)![1]!);
+    expect(rowTop - screen.getByRole("log").scrollTop).toBe(viewportPx / 2);
   });
 
   it("a viewport without layout renders a bounded tail instead of a single row", () => {

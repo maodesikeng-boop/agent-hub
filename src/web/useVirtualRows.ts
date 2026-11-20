@@ -1,5 +1,5 @@
 import { defaultRangeExtractor, observeElementRect, useVirtualizer, type Range, type Virtualizer } from "@tanstack/react-virtual";
-import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useState, type FocusEvent, type RefObject } from "react";
+import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type RefObject } from "react";
 import type { MessageId } from "../shared/index.ts";
 
 const ROW_ESTIMATE_PX = 160;
@@ -30,6 +30,8 @@ const tailRange = (count: number) => {
 };
 
 const withPinned = (indexes: number[], pinned: number) => (pinned < 0 || indexes.includes(pinned) ? indexes : [...indexes, pinned].sort((a, b) => a - b));
+
+const isAtBottom = (el: HTMLElement) => el.scrollHeight - el.scrollTop - el.clientHeight < 1;
 
 const rowOf = (target: EventTarget | null) => (target instanceof Element ? target.closest<HTMLElement>("[data-index]") : null);
 
@@ -72,9 +74,15 @@ export function useVirtualRows({ scrollRef, listRef, count, getItemKey, headLayo
     rangeExtractor,
   });
 
+  const marginRef = useRef<number | null>(null);
   useLayoutEffect(() => {
-    setScrollMargin(listRef.current?.offsetTop ?? 0);
-  }, [listRef, headLayoutKey]);
+    const margin = listRef.current?.offsetTop ?? 0;
+    const el = scrollRef.current;
+    // The virtualizer anchors prepended rows but not a change of the content above the list (the load-earlier button unmounting with the last page).
+    if (el && marginRef.current !== null && margin !== marginRef.current && !isAtBottom(el)) el.scrollTop += margin - marginRef.current;
+    marginRef.current = margin;
+    setScrollMargin(margin);
+  }, [scrollRef, listRef, headLayoutKey]);
 
   const onFocus = useCallback(
     (event: FocusEvent<HTMLElement>) => {
@@ -125,10 +133,13 @@ export function useFocusMessage({ scrollRef, virtualizer, focus, onFocusDone, in
   }, [focus]);
 
   useEffect(() => {
-    if (seeking === null) return;
-    const el = find(seeking);
-    if (!el) return;
-    el.scrollIntoView({ block: "center" });
+    const el = seeking === null ? null : find(seeking);
+    const row = rowOf(el);
+    const start = row === null ? undefined : virtualizer.getVirtualItems().find((item) => item.index === Number(row.dataset.index))?.start;
+    if (!el || !row || start === undefined) return;
+    // Rows mounted this commit are measured but not yet repositioned, so the row start comes from the virtualizer; the offset command also stops scrollToIndex from re-centering a whole tall turn.
+    const box = el.getBoundingClientRect();
+    virtualizer.scrollToOffset(start + box.top - row.getBoundingClientRect().top + box.height / 2, { align: "center" });
     setSeeking(null);
   });
 

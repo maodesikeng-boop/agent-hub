@@ -75,6 +75,17 @@ describe("贴底", () => {
     expect(log.scrollTop).toBe(1100);
   });
 
+  it("a scroll event that reports content grown under a pinned position (rows measured taller after mount) re-pins instead of leaving the bottom", () => {
+    const { log, box } = setup();
+    box.scrollHeight = 5000;
+    fireEvent.scroll(log);
+    expect(log.scrollTop).toBe(4600);
+    expect(screen.queryByRole("button", { name: "Scroll to bottom" })).not.toBeInTheDocument();
+    box.scrollHeight = 5200;
+    resize();
+    expect(log.scrollTop).toBe(4800);
+  });
+
   it("滚动区本身变矮（输入框长高）：也贴底", () => {
     const { log, box } = setup();
     box.clientHeight = 300;
