@@ -14,7 +14,6 @@ import { SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
 export type { DeviceSettings };
 
-/** 界面大小：点了马上整页跟着变（字号、头像、间距），记在这台浏览器上。 */
 function UiScaleRow() {
   const { scale, options, setScale } = useUiScaleSetting();
   return (
@@ -26,7 +25,6 @@ function UiScaleRow() {
 
 export type SettingsDialogSection = "general" | "providers" | "computers" | "security";
 
-/** 左栏的分类（照 Grok Bot 设置页）：顺序就是左栏从上到下；“电脑”只在守护进程支持联机时有。 */
 const SECTIONS: readonly { id: SettingsDialogSection; label: string; icon: Icon }[] = [
   { id: "general", label: "General", icon: Settings },
   { id: "providers", label: "Providers", icon: Blocks },
@@ -34,10 +32,6 @@ const SECTIONS: readonly { id: SettingsDialogSection; label: string; icon: Icon 
   { id: "security", label: "Security & Access", icon: Shield },
 ];
 
-/**
- * 全局设置（docs/ui-standard.md 第 10 条，照 Grok Bot / Claude desktop 的双栏设置页）：
- * 左栏分类（窄屏变成顶上一排），右栏是当前分类的标题和若干白底细框分组。以后加设置就往对应分类里加一行 SettingsRow。
- */
 export function SettingsDialog({
   open,
   onOpenChange,
@@ -49,11 +43,8 @@ export function SettingsDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   notify: NotifySettings;
-  /** 守护进程支持联机时才有“电脑”分类和“公网入口”。 */
   devices?: DeviceSettings | null;
-  /** 外部显式指定的初始分类（如首次启动 0 家引导、Manage providers… 或从手机设置拉宽切回桌面）。 */
   defaultSection?: SettingsDialogSection;
-  /** 打开 Providers 分类时的默认目标电脑（如当前正在查看或新建 PM 选中的设备）。 */
   defaultProviderDevice?: DeviceKey;
 }) {
   const sections = SECTIONS.filter((s) => s.id !== "computers" || devices !== null);
@@ -85,7 +76,6 @@ export function SettingsDialog({
     general: (
         <SettingsGroup label="General">
           <UiScaleRow />
-          {/* 打不开的时候开关是灰的，下面一句说清为什么、怎么办（同表单校验：不让用户点了才知道） */}
           <SettingsRow label="Notifications" detail={NOTIFY_BLOCKED[notify.permission]}>
             {(id) => (
               <Switch
@@ -119,7 +109,6 @@ export function SettingsDialog({
           orientation="vertical"
           className="flex min-h-0 flex-1 flex-col min-[720px]:flex-row"
         >
-          {/* 窗口窄于 720px（和右栏挪到顶栏下面是同一个断点，固定像素、不跟界面大小变）：一排横着的分类（只有字），右边让出关闭按钮的位置 */}
           <TabsList
             aria-label="Settings categories"
             className="flex shrink-0 gap-1 overflow-x-auto border-b border-border bg-sidebar py-3 pr-14 pl-3 min-[720px]:w-48 min-[720px]:flex-col min-[720px]:overflow-x-visible min-[720px]:border-r min-[720px]:border-b-0 min-[720px]:px-3 min-[720px]:py-4"
@@ -136,8 +125,6 @@ export function SettingsDialog({
             ))}
           </TabsList>
           {sections.map(({ id, label }) => (
-            // 分类名固定在上面（右边让出关闭按钮），只有下面的分组滚；上下左右多留 4px 再收回，聚焦的圈不被裁掉。
-            // 宽度：右栏 min-w-0（横排时 flex 子项默认不会比内容窄，内容有长域名就把整栏撑出弹窗），分组那一列 grid-cols-1（= minmax(0,1fr)，列宽不跟内容走）
             <TabsContent key={id} value={id} className="flex min-h-0 min-w-0 flex-1 flex-col outline-none">
               <h2 className="shrink-0 px-6 pt-6 pr-14 pb-5 text-title font-semibold">{label}</h2>
               <div className="dialog-body-fade grid min-h-0 flex-1 grid-cols-1 content-start gap-6 overflow-x-hidden overflow-y-auto overscroll-y-contain px-6 pt-1 pb-6">{content[id]}</div>

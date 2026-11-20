@@ -24,10 +24,6 @@ import { Button } from "./ui/button.tsx";
 import { ModelCatalogProvider } from "./models.tsx";
 import { ROUTER_DRAFT_KEY, useShellModel } from "./shell-model.ts";
 
-/**
- * 整页状态（加载中、没登录、连不上、设备没连上）：居中一列，最宽 22rem、左右留 24px；
- * 标题 17px 600，下面的说明 13.5px 灰，一屏最多一个主按钮。
- */
 function FullPage({ title, lines = [], titleTip, busy = false, action, testId }: { title: string; lines?: readonly string[]; titleTip?: string; busy?: boolean; action?: React.ReactNode; testId?: string }) {
   return (
     <div className="flex h-full flex-col items-center justify-center px-6 text-center" data-testid={testId}>
@@ -86,7 +82,6 @@ export function App() {
     () => openManageProvidersRef?.(LOCAL_DEVICE),
     [openManageProvidersRef],
   );
-  // 整页的加载中、没登录、连不上只看入口本机；别的设备连不上在主区里说
   if (local.state.phase === "loading" || (route?.device !== undefined && routedDevice === undefined && !fleet.listed)) {
     return <FullPage busy title="Loading…" />;
   }
@@ -97,7 +92,7 @@ export function App() {
     const error = local.state.loadError;
     return (
       <FullPage
-        title={error?.text ?? "连不上守护进程"}
+        title={error?.text ?? "Can't reach the daemon"}
         titleTip={error ? errorTitle(error) : undefined}
         lines={error?.hint ? [error.hint] : []}
         action={<Button onClick={() => void fleet.hub(LOCAL_DEVICE).reload()}>Retry</Button>}
@@ -166,7 +161,6 @@ export function App() {
     railLoadMoreWorkers,
     ensureWorkers,
   } = content;
-  // 开关跟着右栏走：并排的右栏展开时在右栏顶部，其余（收起、太窄时右栏在顶栏下面）在顶栏右边，也就是窗口右上角
   const mobileToggle = <RightRailToggle visible={railHasContent} open={drawerOpen} attention={railAttention} look={look} onToggle={() => setDrawerOpen(!drawerOpen)} />;
   const quota = quotaUsage(state);
   const quotaInHeader = routerActive || (state.phase === "ready" && !profile && (openWorker !== null || (active && view)));
@@ -193,7 +187,6 @@ export function App() {
   ) : null;
   const top = !mobile && compact ? rail : null;
 
-  // 别的设备还没加载好：加载中，或者一次都没连上（联机第 4.3 节）
   const deviceWaiting =
     routerActive || state.phase === "ready" ? null : current.status === "connecting" ? (
       <FullPage busy title="Loading…" />
@@ -359,7 +352,6 @@ export function App() {
       <DeviceScope client={hub.client} server={state.server}>
         <ModelCatalogProvider>
           <div className="relative flex h-full">
-            {/* 外壳底色掺当前项目经理的水果色（左栏、对话区、右栏、分割线）；Router 下传 null 保持纯白与碳黑中性调 */}
             <FruitTint color={tintColor}>
               <MobileShell mobile={mobile} list={route === null} sidebar={sidebar}>{chat}</MobileShell>
               <NewPmDialog

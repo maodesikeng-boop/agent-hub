@@ -1,5 +1,3 @@
-// #/settings/browsers：进页拉一次已登录浏览器（staleTime 0），整行可点，本机置顶；
-// 任何退出（单个、本机、全部）一律拉起底部确认抽屉，红色 destructive 确认才提交（第 6 节决策 6）。
 import { Loader2, Monitor, Smartphone, Tablet } from "../../ui/icons.ts";
 import { useMemo, useState } from "react";
 import type { BrowserSessionInfo } from "../../../shared/index.ts";
@@ -16,7 +14,6 @@ function KindIcon({ userAgent }: { userAgent: string }) {
   return <Icon aria-hidden="true" />;
 }
 
-/** 本机置顶，其余按最近活跃排。 */
 const byRecency = (a: BrowserSessionInfo, b: BrowserSessionInfo) => Number(b.current) - Number(a.current) || b.lastSeenAt - a.lastSeenAt;
 
 export function BrowsersPage({ onSignedOut }: { onSignedOut?: () => void }) {

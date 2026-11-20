@@ -205,13 +205,13 @@ describe("Worker 的发言", () => {
     const rows = Array.from(container.querySelectorAll("[data-worker-report]")) as HTMLElement[];
     expect(rows.map((r) => r.getAttribute("data-tone"))).toEqual(["success", "warn", "danger", "danger", "danger"]);
     const buttons = rows.map((r) => within(r).getByRole("button"));
-    expect(buttons.map((b) => b.getAttribute("title"))).toEqual(["做完了", "有问题", "放弃了", "出错", "出错"]);
+    expect(buttons.map((b) => b.getAttribute("title"))).toEqual(["做完了", "有问题", "放弃了", "Error", "Error"]);
     expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual([
-      "修 X，做完了：按钮统一成 36px，开了 PR #128",
-      "修 X，有问题：缺一个 key",
-      "修 X，放弃了：做不了",
-      "修 X，出错：Claude 服务繁忙，稍后重试",
-      "修 X，出错：被停止了",
+      "修 X, 做完了: 按钮统一成 36px，开了 PR #128",
+      "修 X, 有问题: 缺一个 key",
+      "修 X, 放弃了: 做不了",
+      "修 X, Error: Claude 服务繁忙，稍后重试",
+      "修 X, Error: 被停止了",
     ]);
     // 界面上不再有状态的字
     for (const word of ["做完了", "有问题", "放弃了"]) expect(container).not.toHaveTextContent(word);
@@ -338,11 +338,11 @@ describe("系统行", () => {
         event: { event: "handover.failed", handoverId: 5, attempt: 1, rawReason: 'API Error: 529 {"type":"overloaded_error"}' },
       }),
     ]);
-    expect(screen.getByText(/定时任务「日报」没跑成：找不到 Claude/).closest("[data-notice]")).toHaveAttribute(
+    expect(screen.getByText("定时任务没跑成：日报：claude_not_found: spawn claude ENOENT").closest("[data-notice]")).toHaveAttribute(
       "title",
       "定时任务没跑成：日报：claude_not_found: spawn claude ENOENT",
     );
-    expect(screen.getByText(/定时任务「巡检」没跑成：Claude 服务繁忙，稍后重试/).closest("[data-notice]")).toHaveAttribute(
+    expect(screen.getByText('Scheduled task "巡检" failed: Claude 服务繁忙，稍后重试').closest("[data-notice]")).toHaveAttribute(
       "title",
       'API Error: 529 {"type":"overloaded_error"}',
     );
@@ -361,7 +361,7 @@ describe("系统行", () => {
 });
 
 describe("消息状态（照微信）：不写字，只有没发出去左边一个红色感叹号", () => {
-  const UNSENT = "没发出去，点击重发";
+  const UNSENT = "Not sent. Click to resend";
   const rightArticles = (container: HTMLElement) => Array.from(container.querySelectorAll("article[data-side='right']")) as HTMLElement[];
 
   it("排队中、已送达、处理中、已回复、已停止、已取消：气泡下面和旁边都不写字", () => {
@@ -390,7 +390,7 @@ describe("消息状态（照微信）：不写字，只有没发出去左边一�
     );
     const [article] = rightArticles(container);
     const mark = within(article!).getByRole("button", { name: UNSENT });
-    expect(mark).toHaveAttribute("title", `没发出去：Claude 服务繁忙，稍后重试，点击重发\n${raw}`);
+    expect(mark).toHaveAttribute("title", `Not sent: Claude 服务繁忙，稍后重试. Click to resend\n${raw}`);
     expect(article).toHaveTextContent(/^!查一下$/);
     const row = mark.parentElement as HTMLElement;
     expect(row).toHaveClass("flex", "items-center", "justify-end");
@@ -400,7 +400,7 @@ describe("消息状态（照微信）：不写字，只有没发出去左边一�
     expect(onRetryMessage).toHaveBeenCalledWith(1);
   });
 
-  it("失败没有原因（老数据）：只有感叹号，title 是“没发出去，点击重发”", () => {
+  it("失败没有原因（老数据）：只有感叹号，title 是“Not sent. Click to resend”", () => {
     const { container } = list([makeUserMessage({ id: 1, status: "failed", failureReason: null })]);
     expect(within(rightArticles(container)[0]!).getByRole("button", { name: UNSENT })).toHaveAttribute("title", UNSENT);
   });
@@ -471,7 +471,7 @@ describe("送达与执行失败分开显示", () => {
     const onRetryMessage = vi.fn();
     const { container } = list([makeUserMessage({ id: 1, status: "failed", meta: { deliveryConfirmed: true }, failureReason: "error: http2: server sent GOAWAY" })], { actions: actions({ onRetryMessage }) });
     expect(container.querySelector("[data-unsent]")).toBeNull();
-    const retry = screen.getByRole("button", { name: "处理失败，重试" });
+    const retry = screen.getByRole("button", { name: "Failed. Retry" });
     expect(retry.title).toContain("GOAWAY");
     await userEvent.click(retry);
     expect(onRetryMessage).toHaveBeenCalledWith(1);
@@ -479,6 +479,6 @@ describe("送达与执行失败分开显示", () => {
   it("服务端未送达而失败，仍显示红色发送失败标记", () => {
     const { container } = list([makeUserMessage({ id: 1, status: "failed", failureReason: "spawn_failed: rejected" })]);
     expect(container.querySelector("[data-unsent]")).not.toBeNull();
-    expect(screen.getByRole("button", { name: "没发出去，点击重发" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Not sent. Click to resend" })).toBeInTheDocument();
   });
 });

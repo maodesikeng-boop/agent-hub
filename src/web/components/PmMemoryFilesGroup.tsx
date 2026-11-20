@@ -1,5 +1,3 @@
-// 资料页的“记忆子文件”折叠组（docs/ui-standard.md 第 9 条）：
-// 默认收起且收起时不发请求、不常驻配额数字；展开后通过 react-query 按需拉取、查看、编辑、新建或删除 <topic>.md 子文件。
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Loader2, Plus, Trash2 } from "../ui/icons.ts";
 import { useMemo, useState } from "react";

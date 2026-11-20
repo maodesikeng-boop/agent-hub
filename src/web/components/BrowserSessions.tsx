@@ -1,6 +1,3 @@
-// 设置 → 登录与安全（联机 P6，docs/multi-device-design.md 第 3.4 节）：
-// “在手机上登录”显示一次性登录链接的二维码（5 分钟、用一次）；
-// “已登录的浏览器”默认收起（有待批准的才展开），每个浏览器一行（左边电脑 / 手机图标），能单个退出；“全部退出”换主钥匙、清所有会话。
 import { Loader2, Monitor, Smartphone, Tablet } from "../ui/icons.ts";
 import { describeUserAgent, formatAgo, formatCountdown, userAgentKind } from "../browser-sessions.ts";
 import { useBrowserSessions, useSignInLink } from "../settings-model.ts";
@@ -8,7 +5,6 @@ import { Button } from "../ui/button.tsx";
 import { QrCode } from "./QrCode.tsx";
 import { CollapsibleGroup, RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
-/** 行左边的图标：电脑、手机、平板。 */
 const KIND_ICONS = { computer: Monitor, phone: Smartphone, tablet: Tablet } as const;
 
 export function BrowserSessionsSettings({ onSignedOut }: { onSignedOut?: () => void }) {

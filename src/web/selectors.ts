@@ -1,4 +1,3 @@
-// 从 HubState 算出界面要用的东西。提醒规则（等你、等你确定）在 shared/reminders.ts，和守护进程的推送共用，这里转出去。
 export {
   askingConversations,
   pendingAsks,
@@ -72,23 +71,17 @@ import { stripMarkdown } from "./plainText.ts";
 import { workerStatusOf, type WorkerTone } from "./worker-status.ts";
 import type { HubState, PendingMessage } from "./state.ts";
 
-/** 左栏的一行：一个项目经理和它唯一的那个对话（11-03 起不再有项目群）。 */
 export interface ConversationEntry {
   id: ConversationId;
-  /** 项目经理的名字；找不到项目经理（还没同步）用对话标题。 */
   name: string;
-  /** 头像：项目经理现在的形象（造型 × 颜色）；找不到项目经理时按对话编号取默认的那只。同样的形象是同一个对象。 */
   look: SlimeLook;
   lastMessage: Message | null;
   lastAt: number;
   pm: Pm | null;
-  /** 它的项目；还没有是 null。 */
   project: Project | null;
-  /** 项目没移除的文件夹，主文件夹在前。没有项目是空的。 */
   folders: ProjectFolder[];
 }
 
-/** 预览用最后一条文字消息；一条文字都没有就用最后一条。换新会话的那几条不算。 */
 function previewMessage(messages: Message[]): Message | null {
   let fallback: Message | null = null;
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -100,16 +93,11 @@ function previewMessage(messages: Message[]): Message | null {
   return fallback;
 }
 
-/** listConversations 的结果按 conversations 这个对象记着；pms、projects、folders 也是同一份才算命中。 */
 const conversationListCache = new WeakMap<
   HubState["conversations"],
   { pms: HubState["pms"]; projects: HubState["projects"]; folders: HubState["folders"]; entries: ConversationEntry[] }
 >();
 
-/**
- * 左栏的对话，按最后一条消息的时间从新到旧；没有消息的按创建时间。Worker 的对话不在左栏，点项目经理会话里那一行打开。
- * 用到的几份数据都没变时返回上次那个数组（App 每次渲染都给别的设备调一次，通知也调）。
- */
 export function listConversations(state: HubState): ConversationEntry[] {
   const hit = conversationListCache.get(state.conversations);
   if (hit !== undefined && hit.pms === state.pms && hit.projects === state.projects && hit.folders === state.folders) return hit.entries;
@@ -144,65 +132,49 @@ function computeConversationList(state: HubState): ConversationEntry[] {
 
 const previewTextCache = new WeakMap<Message, string>();
 
-/** agent 的消息是 Markdown，预览去掉符号；用户和系统消息本来就是纯文本。左栏的预览和通知的正文都用它。 */
 export function previewText(entry: ConversationEntry): string {
   const last = entry.lastMessage;
   if (!last) return "";
   const cached = previewTextCache.get(last);
   if (cached !== undefined) return cached;
-  // 只发了文件没写字（或文字已回退）的用户消息：写文件名
   const files = attachmentsOf(last);
   let result: string;
   if ((last.text.trim() === "" || isRewoundMessage(last)) && files.length > 0) result = `[File] ${files.map((f) => f.name).join(", ")}`;
-  // 系统消息和对话里显示的一样（开新会话那两条的原文是发给 agent 的全文）
   else if (last.sender === "system") result = systemNoticeText(last);
   else result = last.sender === "agent" ? stripMarkdown(last.text) : last.text;
   previewTextCache.set(last, result);
   return result;
 }
 
-/** 额度用完了（只有 rejected；allowed_warning 只是快到了，照常干活）；已经过了 resetsAt 的不算，Claude 要等下一条事件才会更新它。 */
 export function isWaitingForQuota(session: SessionState | null, now: number = Date.now()): boolean {
   return isQuotaExhausted(session?.rateLimit, now);
 }
 
-/** 额度已用到这个百分比（含）就算快用完；Claude 自己报 allowed_warning 也算。 */
 const QUOTA_WARNING_PERCENT = 80;
 
-/** 有额度数据的厂商（各家 spec 的 quota）；加厂商只在那里写。 */
 const QUOTA_VENDORS = VENDOR_LIST.flatMap(({ id, quota }) => (quota === undefined ? [] : [{ id, ...quota }]));
 
 export interface QuotaWindowUsage {
   key: string;
-  /** 窗口名（5h、7d），左下角按钮和浮层共用。 */
   short: string;
-  /** 已用的百分比，四舍五入的整数，夹在 0 到 100 之间。 */
   percent: number;
-  /** 重置时间，Unix 秒；没有是 null。 */
   resetsAt: number | null;
-  /** 快用完了。 */
   warning: boolean;
 }
 
 export interface QuotaVendor {
   id: string;
   name: string;
-  /** 厂商下的模型族（按需查的 agy 分 Gemini、Claude and GPT 两组）；整家厂商一块的不写。 */
   group?: string;
-  /** 有数据的窗口，按厂商 quota.windows 里的顺序。 */
   windows: QuotaWindowUsage[];
-  /** 额度用完了（isQuotaExhausted，取最近一次事件的那个会话）。 */
   exhausted: boolean;
 }
 
-/** a 的事件比 b 新（lastEventAt 大；一样大取会话编号大的）。 */
 const newerSession = (a: SessionState, b: SessionState | null): boolean =>
   b === null || (a.lastEventAt ?? -1) > (b.lastEventAt ?? -1) || ((a.lastEventAt ?? -1) === (b.lastEventAt ?? -1) && a.sessionId > b.sessionId);
 
-/** resetsAt（Unix 秒）已经到了或过了；不是正的有限数（脏数据）当没到。 */
 const isReset = (resetsAt: number, now: number): boolean => Number.isFinite(resetsAt) && resetsAt > 0 && resetsAt * 1000 <= now;
 
-/** 一个窗口的显示数据。过了 resetsAt 的窗口已经重置：0%、没有重置时间、不标快用完。 */
 function windowUsage(key: QuotaWindowKey, window: RateLimitWindow, now: number, warningStatus: string | undefined): QuotaWindowUsage {
   const { short } = QUOTA_WINDOWS[key];
   if (isReset(window.resetsAt, now)) return { key, short, percent: 0, resetsAt: null, warning: false };
@@ -216,17 +188,9 @@ function windowUsage(key: QuotaWindowKey, window: RateLimitWindow, now: number, 
   };
 }
 
-/** Unix 秒时间戳的下界（2001-09-09），用来区分真实时间戳和单测里的 1、7、100 等小序号。 */
 const REAL_EPOCH_SEC = 1_000_000_000;
-/** 窗口重置时间距事件时间 / 当前时间的最大容差（1 小时，防时钟微偏）。 */
 const WINDOW_DURATION_TOLERANCE_SEC = 3600;
 
-/**
- * 校验窗口数据是否合法：
- * - utilization 必须是有限数；
- * - 当 resetsAt 与参考时间（lastEventAt 或 now）都是真实 Unix 时间戳时，resetsAt 距参考时间的跨度不能超过该窗口自身的时长
- *   （例如 PR #170 之前把 30 天窗口的 resetsAt 1796193546 误写进 five_hour，跨度达 592 小时，远超 5 小时上限）。
- */
 function isValidQuotaWindow(key: QuotaWindowKey, w: RateLimitWindow | undefined, lastEventAt: number | null, nowMs: number): w is RateLimitWindow {
   if (w === undefined || !Number.isFinite(w.utilization)) return false;
   if (Number.isFinite(w.resetsAt) && w.resetsAt >= REAL_EPOCH_SEC) {
@@ -241,14 +205,8 @@ function isValidQuotaWindow(key: QuotaWindowKey, w: RateLimitWindow | undefined,
   return true;
 }
 
-/** 写给 agent 的消息到了这些状态，说明 agent 开始处理过它（排队中、已取消的没有）。 */
 const TURN_STARTED_STATUSES: ReadonlySet<MessageStatus> = new Set(["delivered", "processing", "replied", "failed", "stopped"]);
 
-/**
- * 该会话最近一轮因额度耗尽（匹配厂商 quota 特征）失败的毫秒时间戳；最近一轮不是额度失败的返回 null：
- * - 会话所在对话里，属于该会话、agent 开始处理过的最后一条消息失败且匹配 quota，取其 updatedAt；那之后又开始处理了别的（新一轮）就不算；
- * - 对话里没有这样的消息（Worker 对话没加载）：其所属项目经理对话里该 Worker 的最新一行是 turn_failed 且匹配 quota，取该行的 createdAt。
- */
 function sessionQuotaFailureAt(state: HubState, session: SessionState, vendor: AgentVendor): number | null {
   if (session.conversationId === null) return null;
   const quotaPattern = VENDOR_FAILURE_SIGNS[vendor].quota;
@@ -268,7 +226,6 @@ function sessionQuotaFailureAt(state: HubState, session: SessionState, vendor: A
   return null;
 }
 
-/** 过滤掉跨度超出窗口自身时长的脏窗口（仅看 rateLimit 自身，O(1)）。 */
 function sanitizeSessionWindows(
   session: SessionState,
   allowedKeys: readonly QuotaWindowKey[],
@@ -288,7 +245,6 @@ function sanitizeSessionWindows(
   };
 }
 
-/** 若该会话在当前窗口周期内因额度耗尽失败（且尚未标 rejected），用 exhaustRateLimitInfo 将耗尽窗口规整为 100% rejected。 */
 function applySessionQuotaFailure(state: HubState, session: SessionState, vendor: AgentVendor): SessionState {
   const rateLimit = session.rateLimit;
   if (rateLimit === null || rateLimit.status === "rejected" || Object.keys(rateLimit.windows).length === 0) return session;
@@ -308,10 +264,7 @@ function applySessionQuotaFailure(state: HubState, session: SessionState, vendor
   return session;
 }
 
-/**
- * 同一个窗口里 a 的值比 b 新。不能看会话的 lastEventAt：网页里它只在会话状态变了才跟着推过来，旧会话收尾也会把它刷新，
- * 会让重置前的旧值盖住重置后的新值。所以：重置时间晚的是新窗口；同一个窗口里用量只增不减，高的是新的；都一样才看 lastEventAt。
- */
+// Do not compare lastEventAt: closing sessions refresh it and would let a pre-reset value override a post-reset one.
 const newerWindow = (a: SessionState, b: SessionState | null, key: string): boolean => {
   if (b === null) return true;
   const wa = a.rateLimit!.windows[key]!;
@@ -325,18 +278,9 @@ const quotaUsageCache = new WeakMap<
   HubState["conversations"],
   WeakMap<HubState["sessions"], { json: string; value: QuotaVendor[] }>
 >();
-/** 上一次算出的额度数组（仅保留最新 1 份）：sessions 因流式文字等无关字段换引用时，额度结果相同直接复用同一引用。 */
+// Keep the last result so unrelated session updates return the same array reference.
 let lastQuotaUsage: { json: string; value: QuotaVendor[] } | null = null;
 
-/**
- * m3-plan 2.7：每个会话每一轮都有额度事件（Claude 的 rate_limit_event、codex 的 account/rateLimits/updated）。
- * 每家厂商只看自己的会话（各家的窗口长度、重置时间不通用，混着挑会把别家的时间显示到这家头上）；
- * 窗口集合以该厂商最新一个有合法窗口的会话为准（例如从 free 套餐的 30 天切到 plus 套餐的 5 小时 + 7 天后，不再把旧套餐残留的 30 天拼进来）；
- * 每个当前有效窗口取最新的那个值（newerWindow）；没有数据的窗口、厂商不返回。
- * 值不是有限的数就当没有；超出 0 到 1 的夹到边上。
- * 过了 resetsAt 的窗口已经重置：显示 0%、没有重置时间、不标快用完（新窗口的数据要等下一条事件才来）；不是已用完。
- * now 是毫秒；网页用 useRerenderAt 在每个重置时间点重新渲染，所以页面不动也会变。
- */
 export function quotaUsage(state: HubState, now: number = Date.now()): QuotaVendor[] {
   const vendors: QuotaVendor[] = [];
   for (const spec of QUOTA_VENDORS) {
@@ -390,16 +334,11 @@ export function quotaUsage(state: HubState, now: number = Date.now()): QuotaVend
   return value;
 }
 
-/** 旧后台的组不带 vendor：按组 id 找声明了它的那家，只认唯一归属的（以后两家同名组时不串额度）。 */
 function legacyFetchedQuota(id: string): (typeof QUOTA_VENDORS)[number] | undefined {
   const owners = QUOTA_VENDORS.filter((v) => v.fetched?.groups.some((g) => g.key === id));
   return owners.length === 1 ? owners[0] : undefined;
 }
 
-/**
- * 服务端按需查来的额度（GET /api/quota，事件流里没有额度的厂商，各家 spec 的 quota.fetched；几家合在一个响应里，每组带 vendor）→ 浮层里的块：
- * 每一组一块（name 是厂商名，group 是组名，都按 vendor + 组的 id 从 spec 取），窗口按 QUOTA_WINDOWS 的顺序；认不出的厂商、组跳过。
- */
 export function fetchedQuotaUsage(res: QuotaResponse, now: number = Date.now()): QuotaVendor[] {
   const blocks: QuotaVendor[] = [];
   for (const group of res.groups) {
@@ -415,7 +354,6 @@ export function fetchedQuotaUsage(res: QuotaResponse, now: number = Date.now()):
   return blocks;
 }
 
-/** 有会话用着“额度要按需查”的厂商：左下角的额度按钮要在，用户才打得开面板。 */
 export function hasFetchedQuotaSession(state: HubState): boolean {
   return state.sessions.some((s) => {
     const vendor = s.vendor ?? DEFAULT_AGENT_VENDOR;
@@ -427,10 +365,6 @@ const quotaResetTimesCache = new WeakMap<HubState["sessions"], number[]>();
 const NO_RESET_TIMES: number[] = [];
 let lastQuotaResetTimes: number[] = NO_RESET_TIMES;
 
-/**
- * 所有会话额度里的重置时间点（毫秒，去重、从早到晚）：窗口的 resetsAt 和整体的 resetsAt。
- * 页面到了这些时间点要重新渲染一次，已重置的窗口才会变成 0%。输入结果相同时复用同一数组引用。
- */
 export function quotaResetTimes(state: HubState): number[] {
   const hit = quotaResetTimesCache.get(state.sessions);
   if (hit !== undefined) return hit;
@@ -450,33 +384,21 @@ export function quotaResetTimes(state: HubState): number[] {
   return value;
 }
 
-/**
- * Worker 现在能不能接用户的话（右边栏和 Worker 页面共用，和账本 workers.ts 的 assertWorkerOpenForUser 同一个意思）：
- * - ended：收工了：项目经理的会话里有 ended / worktree_failed 那一行（项目经理 worker end 后会话要等这一轮跑完才 ended），
- *   或者它的会话结束了；
- * - preparing：还在准备：会话在跑准备命令（activity preparing），或者任务说明还在排队、没发给它（worktree 还没建好）。比账本严一点：建好之后、
- *   任务说明送达之前的一小会儿也算；
- * - open：能接话。
- */
 export type WorkerPhase = "preparing" | "open" | "ended";
 
 interface WorkerLine {
-  /** 那一行的消息编号（比新旧用）、时间、内容。 */
   id: MessageId;
   at: number;
   line: WorkerMessageMeta;
 }
 
 interface WorkerLineIndex {
-  /** 每个 Worker 对话最近一行。 */
   latest: ReadonlyMap<ConversationId, WorkerLine>;
-  /** 有“已收工”“建 worktree 失败”那一行的 Worker 对话，值是那一行的时间（有几行取最晚的）。 */
   endedAt: ReadonlyMap<ConversationId, number>;
 }
 
 const pmWorkerIndexCache = new WeakMap<readonly Message[], WorkerLineIndex>();
 
-/** 一段项目经理对话里的 Worker 行（按消息数组缓存）。 */
 function pmWorkerIndexOf(messages: readonly Message[]): WorkerLineIndex {
   let cached = pmWorkerIndexCache.get(messages);
   if (cached !== undefined) return cached;
@@ -495,11 +417,6 @@ function pmWorkerIndexOf(messages: readonly Message[]): WorkerLineIndex {
 
 const workerLinesCache = new WeakMap<HubState["conversations"], Map<PmId, WorkerLineIndex>>();
 
-/**
- * 这个项目经理派的 Worker 各自最近一行、收工时间：初始快照只带项目经理对话最近几条，早的行在每个 Worker 对话的摘要里
- * （ConversationView.workerLine，账本按 shared/snapshot.ts 算的）；项目经理对话里带着的、实时来的行编号更大就盖掉摘要。
- * conversations 没变时返回上次那一份。
- */
 function workerLinesOf(state: HubState, pmId: PmId): WorkerLineIndex {
   let byPm = workerLinesCache.get(state.conversations);
   if (byPm === undefined) {
@@ -531,7 +448,6 @@ function workerLinesOf(state: HubState, pmId: PmId): WorkerLineIndex {
 
 const NO_ENDED: ReadonlyMap<ConversationId, number> = new Map();
 
-/** 最近一行汇报的状态色（和项目经理对话里的汇报气泡同一个 workerStatusOf）；没有汇报是 neutral。 */
 const toneOf = (latest: WorkerLine | undefined): WorkerTone => (latest === undefined ? "neutral" : workerStatusOf(latest.line).tone);
 
 function phaseOf(
@@ -542,9 +458,7 @@ function phaseOf(
 ): WorkerPhase {
   const view = state.conversations[workerConversationId];
   if (endedLines.has(workerConversationId) || session?.status === "ended" || view?.conversation.purgedAt !== undefined) return "ended";
-  // 正在跑项目的准备命令（PR #47，会话 activity 是 preparing）
   if (session?.activity === "preparing") return "preparing";
-  // 第一条是任务说明（翻页翻掉了说明早就发过了）
   const task = view?.hasMore === false ? view.messages[0] : undefined;
   return task?.sender === "pm" && task.status === "queued" ? "preparing" : "open";
 }
@@ -556,26 +470,18 @@ export function workerPhaseOf(state: HubState, workerConversationId: Conversatio
 
 export interface WorkerEntry {
   conversationId: ConversationId;
-  /** Worker 记录编号（来自项目经理对话 Worker 汇报行）；测试直接构造简版对象时可省。 */
   workerId?: WorkerId;
   title: string;
-  /** 会话的 activity；没有会话当 idle。不一定是 SessionActivity 里的值（以后会加），显示的地方要有兜底。 */
   activity: string;
-  /** 收工了（workerPhaseOf 是 ended）。 */
   ended: boolean;
-  /** 会话的厂商、模型、思考程度（null = 默认）；没有会话、老服务端没带就是 undefined。 */
   vendor?: string;
   model?: string | null;
   effort?: string | null;
-  /** 累计用量和当前对话长度（context，老服务端没带当 0）。 */
   usage: TokenUsage;
-  /** 项目经理会话里这个 Worker 最近一行汇报的状态色（worker-status.ts）；没有汇报是 neutral。 */
   tone: WorkerTone;
 }
 
-/** workersOf 的结果：conversations → sessions → 项目经理编号。两份都没变才命中，换了的那份连同结果一起被回收。 */
 const workersCache = new WeakMap<HubState["conversations"], WeakMap<HubState["sessions"], Map<PmId, WorkerEntry[]>>>();
-/** 按项目经理缓存上一次的 Worker 列表（上限 MAX_CACHED_PM_WORKERS 个 PM），sessions 因流式文字更新而换引用时若 Worker 数据没变直接复用同一数组引用。 */
 const MAX_CACHED_PM_WORKERS = 64;
 const lastWorkersByPm = new Map<PmId, WorkerEntry[]>();
 
@@ -598,10 +504,6 @@ function sameWorkerEntry(a: WorkerEntry, b: WorkerEntry): boolean {
   );
 }
 
-/**
- * 这个项目经理派的 Worker：进行中的在前，收工的在后；进行中的按派出的顺序（对话编号），收工的最近收工的在前（没有收工那一行的按对话编号倒序，排在有的后面）。
- * conversations、sessions 都没变，或 Worker 字段完全没变（如仅流式文字变化）时返回上次那个数组引用。
- */
 export function workersOf(state: HubState, pmId: PmId): WorkerEntry[] {
   let bySessions = workersCache.get(state.conversations);
   if (bySessions === undefined) {
@@ -664,7 +566,6 @@ function computeWorkers(state: HubState, pmId: PmId): WorkerEntry[] {
     });
 }
 
-/** 项目经理会话里指向这个 Worker 对话的那几行里最新的一行的内容（标题、只读）；还没有那一行是 null。 */
 export function workerLineOf(state: HubState, workerConversationId: ConversationId): WorkerMessageMeta | null {
   const pmId = state.conversations[workerConversationId]?.conversation.pmId;
   if (pmId == null) return null;
@@ -689,52 +590,30 @@ export function pendingOf(state: HubState, conversationId: ConversationId): Pend
   return cached;
 }
 
-/**
- * 这个对话在换新会话（资料页的“开新会话”按钮不能点）：交接请求还没结果（排队、已送达、处理中）。
- * 和账本的 waitsForHandover 同一个口径（ledger/handover.ts）。
- */
 export function isRenewing(state: HubState, conversationId: ConversationId): boolean {
   return renewingIn(state.conversations[conversationId]?.messages ?? []);
 }
 
-/**
- * 网页显示用的消息：过滤掉静默唤醒项目经理的内部触发消息（worker.max_time_exceeded，只隐藏触发消息本身，保留项目经理随后的回复）；
- * 写交接期间压着的用户消息不显示“排队中”（马上就交给新会话），和平时一轮中途交给 agent 的一样。
- */
 export function visibleMessages(messages: Message[]): Message[] {
   const filtered = messages.some(isSilentTriggerMessage) ? messages.filter((m) => !isSilentTriggerMessage(m)) : messages;
   if (!renewingIn(filtered)) return filtered;
   return filtered.map((m) => (m.sender === "user" && m.status === "queued" ? { ...m, status: "delivered" } : m));
 }
 
-/** 有错误的健康项（成功一次后 lastError 会被清成 null）。 */
 export function failingHealth(state: HubState): HealthEntry[] {
   return state.health.filter((h) => h.lastError !== null);
 }
 
-/**
- * 消息流里的一项（docs/ui-standard.md 第 17 条）：
- * - message：单独显示的一条：用户的话、Worker 对话里项目经理的话、Worker 的汇报、到点的定时任务、很淡的系统行；
- * - turn：agent 的一轮回复，只出一个头像。work 是这一轮的操作（工具调用、派出 / 收工 Worker、建删定时任务），合成一行
- *   “Worked for …”；parts 是按顺序要显示的文字和夹在中间的系统行。startedAt / endedAt 算用时，都是已有的时间戳。
- */
 export type RenderItem =
   | { kind: "message"; message: Message }
   | { kind: "turn"; key: string; work: Message[]; parts: Message[]; startedAt: number; endedAt: number };
 
-/** 一条消息在消息流里算什么。 */
 type FlowRole =
-  /** 交给 agent 的一句（一轮的开头）：用户、项目经理（Worker 对话里）、Worker 的汇报和用户对它说的话、到点的定时任务。 */
   | "input"
-  /** 静默交给 agent 的内部触发消息（如 worker.max_time_exceeded）：切开前后两轮，但自身不在网页渲染成气泡。 */
   | "silent_input"
-  /** 换新会话的分隔线：前后的回合各归各的，单独一行；不算交给 agent 的话。 */
   | "divider"
-  /** agent 自己说的、调的工具：在一轮里。 */
   | "agent"
-  /** agent 这一轮的操作结果（派出 / 收工 Worker、建删定时任务）：在一轮里就收进 Worked for，不在就单独显示。 */
   | "work"
-  /** 别的系统行：在一轮中间就留在原位置，不另起头像。 */
   | "notice";
 
 const INPUT_WORKER_EVENTS: ReadonlySet<WorkerMessageMeta["event"]> = new Set(["report", "turn_failed", "worktree_failed", "user_message"]);
@@ -754,16 +633,10 @@ function flowRole(message: Message): FlowRole {
   return "notice";
 }
 
-/**
- * 换新会话：写交接的来往不显示；分隔线挪到写交接开始的地方（turnStartId 之后第一条的前面），换代期间来的话排在它下面。
- * 交接请求还在排队时就来了、压着等到换代才交给新会话的（Worker 汇报、用户的话），编号比 turnStartId 小，也挪到分隔线下面，
- * 和实际处理它的会话对上。
- */
 function placeHandovers(all: Message[]): Message[] {
   const shown = all.filter((m) => !isHandoverTraffic(m));
   const dividers = shown.filter((m) => systemEventOf(m)?.event === "session.renewed");
   if (dividers.length === 0) return shown;
-  // 用 Set 判断“是不是分隔线”“是不是被压着的”：长对话（翻过页、几千条）里换代多次时，includes 每条都扫一遍会变成 O(N×H)
   const isDivider = new Set(dividers);
   let rest = shown.filter((m) => !isDivider.has(m));
   for (const divider of dividers) {
@@ -777,16 +650,13 @@ function placeHandovers(all: Message[]): Message[] {
   return rest;
 }
 
-/** 把消息分成一轮一轮：一轮从 agent 的第一条说的或调的工具开始，到下一句交给它的话为止。 */
 export function groupMessages(all: Message[]): RenderItem[] {
   const messages = placeHandovers(all);
   const items: RenderItem[] = [];
   let turn: Extract<RenderItem, { kind: "turn" }> | null = null;
-  /** 上一句交给 agent 的话、上一条 agent 的东西的时间：新一轮从两者里晚的那个算起。 */
   let lastInputAt: number | null = null;
   let lastAgentAt: number | null = null;
 
-  /** 一轮结束：末尾的系统行不算这一轮的，挪到它后面单独显示。 */
   const close = () => {
     if (turn === null) return;
     const trailing: Message[] = [];
@@ -835,15 +705,12 @@ export function groupMessages(all: Message[]): RenderItem[] {
   return items;
 }
 
-// ---- Router（总助）跨设备同源聚合视图（WeakMap 引用缓存） ----
-
 export interface DeviceRouterView {
   decisions: PendingDecision[];
 }
 
 const deviceRouterViewCache = new WeakMap<readonly PendingDecision[], DeviceRouterView>();
 
-/** 单台设备的 Router 活跃视图（待拍板项），输入切片未变时返回同一对象引用（===）。简报和指令走 router-stream.ts 的时间流。 */
 export function deviceRouterView(state: HubState, deviceId = "local"): DeviceRouterView {
   const decisions = devicePendingDecisionsOf(state, deviceId);
   let cached = deviceRouterViewCache.get(decisions);
@@ -856,7 +723,6 @@ export function deviceRouterView(state: HubState, deviceId = "local"): DeviceRou
 
 export interface FleetRouterDeviceInput {
   id: string;
-  /** devices.ts 的 DeviceKey：本机传 ""（缺省按 self ? "" : id）。 */
   key?: string;
   name: string;
   self: boolean;
@@ -895,11 +761,9 @@ export interface FleetRouterView {
   targets: RouterTargetCandidate[];
   summary: RouterReminderSummary;
   multiDevice: boolean;
-  /** 某台设备上某个项目经理现在的形象（时间流里的去向行、简报用）：含已归档的；找不到按编号取默认的那只。 */
   lookOf: (deviceKey: string, pmId: PmId) => SlimeLook;
 }
 
-/** 还没就绪的设备共用同一份空视图：每次给新的 [] 会让下面的指纹比较永远不等，整个舰队视图次次重算。 */
 const EMPTY_DEVICE_ROUTER_VIEW: DeviceRouterView = { decisions: [] };
 const pmConversationSigCache = new WeakMap<HubState["conversations"], string>();
 
@@ -925,7 +789,6 @@ interface FleetDeviceFingerprint {
   online: boolean;
   phase: HubState["phase"];
   decisions: readonly PendingDecision[];
-  /** 左栏摘要要数未读简报，router.items 变了才重算。 */
   items: HubState["router"]["items"];
   pms: readonly Pm[];
   projects: readonly Project[];
@@ -934,10 +797,6 @@ interface FleetDeviceFingerprint {
 
 let lastFleetMemo: { deps: FleetDeviceFingerprint[]; value: FleetRouterView } | null = null;
 
-/**
- * 汇总全舰队（本机 + 全部已配对远端设备）的待决拍板、未读汇报、本机最近发令回执与 `@` 目标候选。
- * 流式文字推送与 Worker 历史消息滚动均不会击穿缓存，输入等价时返回完全相同的 `FleetRouterView` 引用（===）。
- */
 export function fleetRouterView(devices: readonly FleetRouterDeviceInput[]): FleetRouterView {
   const deps: FleetDeviceFingerprint[] = devices.map((d) => {
     const logicalId = d.self ? "local" : d.id;
@@ -1050,8 +909,6 @@ export function fleetRouterView(devices: readonly FleetRouterDeviceInput[]): Fle
 
 const lookOfPm = (pm: Pm | undefined, pmId: PmId): SlimeLook => (pm === undefined ? defaultLookOf(pmId) : resolvePmLook(pm));
 
-// ---- 任务流图（Task Graph）与同源拍板（PendingDecision）选择器 ----
-
 const NO_TASK_GRAPHS: TaskGraph[] = [];
 const NO_WORKERS: WorkerEntry[] = [];
 const NO_DECISIONS: PendingDecision[] = [];
@@ -1065,7 +922,6 @@ function setBoundedMap<K, V>(map: Map<K, V>, key: K, value: V, maxSize: number):
   map.set(key, value);
 }
 
-/** 任务图紧急度排序权重：有步骤等用户拍板（0）> 有步骤等项目经理（1）> 其余后台进行中（2）。 */
 export function taskGraphPriority(graph: TaskGraph): number {
   let hasWaitingPm = false;
   for (const node of graph.nodes) {
@@ -1075,7 +931,6 @@ export function taskGraphPriority(graph: TaskGraph): number {
   return hasWaitingPm ? 1 : 2;
 }
 
-/** 按紧急度（等用户、等项目经理的置顶）与最近更新时间排好活跃任务图。 */
 export function sortActiveGraphs(graphs: readonly TaskGraph[]): TaskGraph[] {
   if (graphs.length === 0) return NO_TASK_GRAPHS;
   return graphs.toSorted((a, b) => {
@@ -1089,10 +944,6 @@ export function sortActiveGraphs(graphs: readonly TaskGraph[]): TaskGraph[] {
 const activeGraphsCache = new WeakMap<HubState["activeTaskGraphs"], Map<ProjectId, TaskGraph[]>>();
 const lastActiveGraphsByProject = new Map<ProjectId, TaskGraph[]>();
 
-/**
- * 指定项目的活跃任务图（status === 'active'）：有步骤等用户、等项目经理的排在最前。
- * 按 activeTaskGraphs WeakMap 缓存，并在跨项目图变更时复用未变项目的数组引用（===）。
- */
 export function activeGraphsOf(state: HubState, projectId: ProjectId | null): TaskGraph[] {
   if (projectId === null) return NO_TASK_GRAPHS;
   let byProject = activeGraphsCache.get(state.activeTaskGraphs);
@@ -1119,15 +970,10 @@ export function activeGraphsOf(state: HubState, projectId: ProjectId | null): Ta
 
 const boundWorkerIdsCache = new WeakMap<readonly TaskGraph[], ReadonlySet<WorkerId>>();
 
-/**
- * Worker 是否绑在给定的 Worker 编号集合里。只认 WorkerEntry.workerId（Worker 记录编号）：
- * 拿不到编号的不算绑定，绝不拿 conversationId 顶替（两套编号各自自增，会撞号误吞零散 Worker）。
- */
 export function isWorkerBound(worker: WorkerEntry, boundIds: ReadonlySet<WorkerId>): boolean {
   return worker.workerId !== undefined && boundIds.has(worker.workerId);
 }
 
-/** 按 Worker 记录编号索引 Worker（任务图节点按 workerId 找对应对话）；没有编号的不进索引。 */
 export function workersByWorkerId(workers: readonly WorkerEntry[]): ReadonlyMap<WorkerId, WorkerEntry> {
   const map = new Map<WorkerId, WorkerEntry>();
   for (const w of workers) {
@@ -1136,7 +982,6 @@ export function workersByWorkerId(workers: readonly WorkerEntry[]): ReadonlyMap<
   return map;
 }
 
-/** 汇总一组任务图全部节点已绑定的 Worker 编号集合（含 activeWorkerId 与历史 workerIds）。 */
 export function boundWorkerIdsOf(graphs: readonly TaskGraph[]): ReadonlySet<WorkerId> {
   const hit = boundWorkerIdsCache.get(graphs);
   if (hit !== undefined) return hit;
@@ -1154,10 +999,6 @@ export function boundWorkerIdsOf(graphs: readonly TaskGraph[]): ReadonlySet<Work
 const unboundWorkersCache = new WeakMap<readonly WorkerEntry[], WeakMap<readonly TaskGraph[], WorkerEntry[]>>();
 const lastUnboundByProject = new Map<ProjectId, WorkerEntry[]>();
 
-/**
- * 未绑定到当前项目任何活跃任务图节点的独立 Worker 列表：
- * 复用 workersOf 与 activeGraphsOf 的稳定引用做二级 WeakMap 缓存，流式文字更新期间零重算且严格 ===。
- */
 export function unboundWorkersOf(state: HubState, projectId: ProjectId | null): WorkerEntry[] {
   if (projectId === null) return NO_WORKERS;
   const project = state.projects.find((p) => p.id === projectId);
@@ -1260,10 +1101,6 @@ const convDecisionsCache = new WeakMap<
 >();
 const lastDecisionsByScope = new Map<string, PendingDecision[]>();
 
-/**
- * 指定对话（PM 对话）当前待拍板事项（任务图里挂卡等用户的步骤 + 去重后的 Router 待决项）：
- * 只扫描该对话自身的消息与归属它的任务图/待决项（绝不扫 300 个 Worker 对话），WeakMap 多级缓存保证 < 2 ms 与 === 引用稳定。
- */
 export function pendingDecisionsOf(
   state: HubState,
   conversationId: ConversationId,

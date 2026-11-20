@@ -69,7 +69,7 @@ describe("render（registry 的 ChartEngine）", () => {
   it("源码超过上限：不渲染，直接报错（mermaid 自己超限只会画一张“超限”的图）", async () => {
     const { render } = await freshModule();
     const el = document.createElement("div");
-    await expect(render("a".repeat(50_001), THEME, el)).rejects.toThrow("太长");
+    await expect(render("a".repeat(50_001), THEME, el)).rejects.toThrow("too long");
     expect(lib.render).not.toHaveBeenCalled();
     expect(el.innerHTML).toBe("");
   });

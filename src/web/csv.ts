@@ -1,9 +1,3 @@
-// 预览窗里的 CSV / TSV：只解析，不依赖库。引号里的分隔符、换行、"" 转义都认。
-
-/**
- * 返回表头加前 maxRows 行数据（rows），和数据总行数 total（不含表头）。
- * 超过 maxRows 的行只数个数、不存，大文件不会占很多内存。空行（整行没有内容）跳过。
- */
 export function parseCsv(text: string, delimiter: string, maxRows: number): { rows: string[][]; total: number } {
   const rows: string[][] = [];
   let count = 0;

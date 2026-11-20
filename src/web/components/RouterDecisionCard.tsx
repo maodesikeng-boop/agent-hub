@@ -1,5 +1,3 @@
-// 水果刀 Router 工作台：内嵌单行补充框的三合一待决拍板卡（docs/ui-standard.md 第 21 条、docs/router-design.md 第 4.2 节）。
-// 严格禁止聊天气泡与 · / | / / 拼接分隔符，元信息一律以 flex gap-2 排布。
 import { ArrowUp } from "../ui/icons.ts";
 import { memo } from "react";
 import type { ConversationId } from "../../shared/index.ts";
@@ -47,7 +45,6 @@ export const RouterDecisionCard = memo(function RouterDecisionCard({
   return (
     <article
       aria-label={decision.question}
-      // 离线：只把来源头像调淡、标 Offline、选项和发送不能点；整卡调淡的话字的对比度就不够了
       className={cn("rounded-2xl border border-border bg-background p-4", !online && "[&_[data-slot=avatar]]:opacity-50")}
     >
       <div className="flex flex-wrap items-center gap-2 text-minor">

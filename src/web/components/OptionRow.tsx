@@ -1,11 +1,6 @@
 import type * as React from "react";
 import { cn } from "../lib/utils.ts";
 
-/**
- * 提问卡里的一个预设选项（docs/ui-standard.md 第 17、21 条）：对话里的提问卡和 Router 的待拍板卡共用这一行。
- * 平时就有细边框（触屏没有悬停，不带框看着像一行普通文字）；左边字母徽标，`Recommended` 紧跟在选项文字后面（隔 12px），不甩到卡片最右端。
- * 选中（已回答的卡）是 bg-sidebar-active、不带边框。
- */
 export function OptionRow({
   index,
   recommended = false,
@@ -14,7 +9,6 @@ export function OptionRow({
   children,
   ...props
 }: Omit<React.ComponentProps<"button">, "type"> & {
-  /** 第几个选项（0 起），徽标显示 A、B、C…… */
   index: number;
   recommended?: boolean;
   chosen?: boolean;

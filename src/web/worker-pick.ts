@@ -1,7 +1,3 @@
-// /hub:worker 的多级参数列表（厂商 → 模型 → 思考程度），全是纯函数：输入模型名单（GET /api/models，models.tsx）、
-// 已选的几级和正在打的词，算出列表的行。不读 VENDOR_SPECS、不写任何厂商名或模型名：名单里有什么就列什么。
-// 规则：没装的厂商不列，没登录的列出来但不能选（和资料页一样）；模型只列名单里的，第一行 Default；
-// 思考程度只列这个模型支持的（effortsFor），第一行 Default，只有一档或没有档位就没有这一级。
 import {
   AVAILABILITY_LABELS,
   effortsFor,
@@ -18,7 +14,6 @@ import type { MenuItem } from "./composer-suggest.ts";
 import { rankMatches, WORKER_ARG_LEVELS } from "./composer-trigger.ts";
 import { DEFAULT_CHOICE, defaultModelText } from "./format.ts";
 
-/** 模型、思考程度选 Default 时插进文字里的词（不传这个参数，项目经理自己定）。 */
 export const WORKER_PICK_DEFAULT = "default";
 
 export type WorkerPickLevel = "vendor" | "model" | "effort";
@@ -84,10 +79,6 @@ function compute(catalogs: readonly ModelCatalog[], args: readonly string[], que
 
 const cache = new WeakMap<readonly ModelCatalog[], Map<string, WorkerPickRows | null>>();
 
-/**
- * 正在选第 args.length 级（0 厂商、1 模型、2 思考程度）时列表的行；这一级不存在（厂商不认识或不能用、模型不在名单里、
- * 思考程度只有一档、三级都选完了）返回 null。按 catalogs 数组缓存：同一份名单、同样的参数和查询词返回同一个对象。
- */
 export function workerPickRows(catalogs: readonly ModelCatalog[], args: readonly string[], query: string): WorkerPickRows | null {
   let byInput = cache.get(catalogs);
   if (!byInput) {
@@ -102,7 +93,6 @@ export function workerPickRows(catalogs: readonly ModelCatalog[], args: readonly
   return rows;
 }
 
-/** 选好的几级参数（文字里的 id，Default 是 "default"）换成发消息用的 WorkerPick；第一级不是认识的厂商返回 null。 */
 export function workerPickFromArgs(args: readonly string[]): WorkerPick | null {
   const [vendor, model, effort] = args;
   if (!isAgentVendor(vendor)) return null;
@@ -110,10 +100,6 @@ export function workerPickFromArgs(args: readonly string[]): WorkerPick | null {
   return { vendor, model: pick(model), effort: pick(effort) };
 }
 
-/**
- * 标签上显示的几项：厂商名、模型名（名单里的显示名，不在名单里的原样）、思考程度（原样，和列表一样）；Default（null）的项不显示。
- * 名字取 catalogs（和列表同一份名单），这家不在名单里用打包的名字。
- */
 export function workerPickLabels(pick: WorkerPick, catalogs: readonly ModelCatalog[]): string[] {
   const catalog = catalogs.find((c) => c.vendor === pick.vendor);
   return [

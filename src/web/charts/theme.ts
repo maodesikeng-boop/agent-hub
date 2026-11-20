@@ -1,9 +1,6 @@
-// 图表主题（docs/ui-standard.md 第 15 条“图表”）：颜色从 styles.css 的 CSS 变量读，分类色取 palette.ts，不另起一套。
-// 页面只有浅色；将来加暗色：变量变了、version 变了，缓存自然失效，重画即可，不用改渲染器。
 import { CHART_CATEGORY_COLORS } from "../lib/palette.ts";
 import type { ChartTheme } from "./registry.ts";
 
-/** 图里的字、坐标轴标签 px（ui-standard 第 15 条）。 */
 const CHART_FONT_SIZE = 13.5;
 const CHART_AXIS_FONT_SIZE = 12;
 

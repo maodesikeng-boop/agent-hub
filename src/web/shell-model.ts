@@ -60,7 +60,6 @@ declare global {
   }
 }
 
-/** 用户手动收起右栏后记住（docs/ui-standard.md 第 12 条）：存 "closed"；再手动展开就删掉。 */
 const RIGHT_RAIL_KEY = "agent-hub.rightRail";
 export const PROVIDERS_GUIDED_KEY = "agent-hub.providersGuided";
 
@@ -82,7 +81,6 @@ const saveProvidersGuided = () => {
     try {
       sessionStorage.setItem(PROVIDERS_GUIDED_KEY, "1");
     } catch {
-      // 隐私模式受限时仅在本次内存态生效
     }
   }
 };
@@ -99,7 +97,6 @@ const saveRailClosed = (closed: boolean) => {
     if (closed) localStorage.setItem(RIGHT_RAIL_KEY, "closed");
     else localStorage.removeItem(RIGHT_RAIL_KEY);
   } catch {
-    // 存不了（隐私模式）：这次照常，刷新后忘掉
   }
 };
 
@@ -115,19 +112,15 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const qc = useHubQueryClient();
   const fleet = useDevices();
   const { route, navigate, replace } = useRoute();
-  // HTTP 创建成功已确认编号有效（WebSocket 的变化可能晚到）；等所属对话同步完成或离开该路由后释放，仅保留一个槽。
   const [pendingCreated, setPendingCreated] = useState<ConversationRef | null>(null);
-  // 网址里的设备（没写是入口本机）；清单里没有（还没拉到、编号不对）先看入口本机
   const local = fleet.devices[0]!;
   const routedDevice = fleet.devices.find((d) => d.key === deviceKeyOf(route?.device, fleet.selfId));
   const current = routedDevice ?? local;
   const hub = fleet.hub(current.key);
   const { state } = current;
   const remote = current.key !== LOCAL_DEVICE;
-  // 额度到了重置时间自己变（左下角的百分比、状态行的“等额度”），不用刷新页面
   const resetTimes = useMemo(() => quotaResetTimes(state), [state.sessions]);
   useRerenderAt(resetTimes);
-  /** 草稿、待发的文件按对话存，键带设备（devices.ts 的 conversationKey，各台的对话编号会撞）。 */
   const drafts = useDraftStore<string>();
   const staging = useStagingStore<string>();
   const [creating, setCreating] = useState(false);
@@ -139,15 +132,11 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const [mobileProviderDevice, setMobileProviderDevice] = useState<DeviceKey | undefined>(undefined);
   const onSettingsOpenChange = useCallback((open: boolean) => setDesktopSettings({ open }), []);
   const [providersGuided, setProvidersGuided] = useState(loadProvidersGuided);
-  /** 用户手动收起了右栏（记住）。 */
   const [railClosed, setRailClosed] = useState(loadRailClosed);
-  /** 太窄时右栏默认收着，点开关才出来（不记住）。 */
   const [compactRailOpen, setCompactRailOpen] = useState(false);
-  /** 手动打开右栏看已收工的 Worker 时，是哪个项目经理（没有要关心的事时右栏默认不出来）。 */
   const [railPeek, setRailPeek] = useState<PmId | null>(null);
   const narrow = useMediaQuery(NARROW_QUERY);
   const compact = useMediaQuery(COMPACT_QUERY);
-  /** 右栏点开一个提问：对话滚到那条消息。n 每点一次加一，点同一条也再跳一次。 */
   const [focus, setFocus] = useState<{ id: MessageId; n: number } | null>(null);
 
   const clearFocus = useCallback(() => setFocus(null), []);
@@ -155,12 +144,10 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const entries = useMemo(() => listConversations(state), [state.conversations, state.pms, state.projects, state.folders]);
   const profilePm = route?.view === "profile" ? route.pmId : null;
   const profile = profilePm === null ? null : (state.pms.find((p) => p.id === profilePm) ?? null);
-  // 网址写的 Worker 对话其实不是 Worker 的（手改的网址）：当没写
   const routedWorker = route?.view === "worker" && state.conversations[route.id]?.conversation.kind !== "pm" ? route.id : null;
   const openWorker = routedWorker;
   const workerView = openWorker === null ? undefined : state.conversations[openWorker];
   const routerActive = route?.view === "router" || (autoSelect && (route === null || route.view === "settings"));
-  // 网址指的项目经理对话：直接是对话；Worker 的对话归派它的项目经理；资料页是那个项目经理的对话；Router 与设置视图不选中单个对话
   const routedEntry =
     route === null || route.view === "router" || route.view === "settings"
       ? undefined
@@ -180,7 +167,6 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const selectRouter = useCallback(() => {
     navigate({ view: "router" }, !autoSelect && route !== null);
   }, [navigate, autoSelect, route]);
-  // 用户正开着的对话：资料页不算；打开着 Worker 的对话算它的项目经理的会话
   const activeId = profile ? null : (active?.id ?? null);
   const reminderDevices = useMemo(() => fleet.devices.map((d) => ({ key: d.key, name: d.info.name, state: d.state })), [fleet.devices]);
   const reminders = useDeviceReminders(reminderDevices, activeId === null ? null : { device: current.key, id: activeId }, select);
@@ -209,7 +195,6 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const shellReady = local.state.phase === "ready" &&
     !(route?.device !== undefined && routedDevice === undefined && !fleet.listed);
 
-  // 电脑外壳首次打开且 0 个已有 PM 时，探测本机真实模型可用性：若 0 家厂商就绪且尚未引导过，自动打开 Settings → Providers
   const localClientRef = fleet.hub(LOCAL_DEVICE).client;
   const shouldCheckFirstRunProviders =
     autoSelect && shellReady && local.state.pms.length === 0 && !providersGuided;
@@ -228,7 +213,6 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
     }
   }, [shouldCheckFirstRunProviders, localServerCatalogs]);
 
-  // 电脑外壳空 hash 默认落地水果刀工作台 #/router（replaceState 不留多余历史）；从手机 #/settings* 切回桌面外壳时自动承接打开桌面双栏 SettingsDialog
   useEffect(() => {
     if (!autoSelect || !shellReady) return;
     if (route === null) {
@@ -241,7 +225,6 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       replace({ view: "router" });
     }
   }, [autoSelect, shellReady, route, fleet.managed, replace]);
-  // 手机设置：不认识的子页归一为 #/settings；确定未开联机（fleet.listed && !fleet.managed）时直达电脑/公网入口退回一级设置（拉清单期间等待）
   useEffect(() => {
     if (autoSelect || route?.view !== "settings") return;
     const unmanagedSection = fleet.listed && !fleet.managed && route.section === "computers";
@@ -249,7 +232,6 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       replace({ view: "settings" });
     }
   }, [autoSelect, fleet.listed, fleet.managed, route, replace]);
-  // 网址写的设备清单里没有（编号不对、已经移除了）：回到入口本机
   const unknownDevice = fleet.listed && route?.device !== undefined && routedDevice === undefined;
   const localEntries = useMemo(
     () => (local.state.phase === "ready" ? (local.key === current.key ? entries : listConversations(local.state)) : []),
@@ -336,10 +318,6 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
     (id: ConversationId, text: string, files: File[]) => {
       const key = keyOf(id);
       const slot = drafts.of(key);
-      // 只有文字：马上发、马上清。带文件：传完、发出之后才清，而且只清提交的这一份（文字没变才清文字、只去掉发出的那几个文件）；
-      // 传失败了什么都不清（文字和文件都留着）
-      // 以 / 开头的：手打的命令可能被拦（发消息 400，原因显示在输入框上方、原文留着），所以等接口回应了才清
-      // /hub:worker 选的标签：发出去才清（中途换过的不动），被拦、上传失败时和文字一起留着
       const pick = slot.getPick();
       if (files.length === 0 && text.startsWith("/")) {
         return hub.sendChecked(id, text, pick).then(() => {
@@ -375,11 +353,9 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   );
   const ensureWorkers = useCallback((ids: WorkerId[]) => hub.ensureWorkers(ids), [hub]);
   const railAsks = useMemo(() => (active ? pendingAsks(state, active.id) : EMPTY_ASKS), [state.conversations, state.pms, state.pending, active?.id]);
-  // 右栏的果皮轨：当前项目经理那个项目的活跃任务图（activeGraphsOf 按 state.activeTaskGraphs 的 WeakMap 缓存，流式帧里引用不变）
   const railProjectId = active?.project?.id ?? null;
   const railGraphs = useMemo(() => activeGraphsOf(state, railProjectId), [state.activeTaskGraphs, railProjectId]);
   const railGraphNeedsYou = useMemo(() => railGraphs.some((g) => g.nodes.some(isTaskNodeWaitingUser)), [railGraphs]);
-  // 别的设备连不上（联机第 4.3 节）：离线时提示显示的是多久以前的内容、只读；重连中照常显示，发送等连上。入口本机照旧
   const { offline, link: rawLink } = deviceNotices(current);
   const link = useMemo(
     () => (rawLink === null ? null : { readOnly: rawLink.readOnly, waiting: rawLink.waiting }),
@@ -444,11 +420,8 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
     [select],
   );
   const profileEntry = profile ? entries.find((e) => e.pm?.id === profile.id) : undefined;
-  // 右栏列的是当前打开的项目经理（Worker 的对话也算它）的“等你确定”和 Worker
   const railHasContent = !profile && (railWorkers.length > 0 || railAsks.length > 0 || railGraphs.length > 0);
-  // 有要关心的事才自动出来：有活跃任务图、有没收工的 Worker（在干活、等验收）或有没回答的提问；只有收工的 Worker 时整栏不出来，点开关才手动看
   const railNeedsYou = !profile && (railAsks.length > 0 || railGraphs.length > 0 || railWorkers.some((w) => !w.ended));
-  // 开关上的小圆点：有没回答的提问或待拍板的门禁（docs/ui-standard.md 第 12 条）
   const railAttention = !profile && (railAsks.length > 0 || railGraphNeedsYou);
   const railPeeking = railPeek !== null && railPeek === railPm;
   const railOpen = railHasContent && (compact ? compactRailOpen : !railClosed && (railNeedsYou || railPeeking));
@@ -460,7 +433,6 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
     const closed = railOpen;
     setRailClosed(closed);
     saveRailClosed(closed);
-    // 手动打开、而又没有要关心的事：记下来，右栏才不会马上又收回去（只在这个项目经理、这次打开期间）
     setRailPeek(closed || railNeedsYou ? null : railPm);
   }, [compact, railOpen, railNeedsYou, railPm]);
   const openAsk = useCallback(
@@ -507,7 +479,6 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   );
   const fleetHub = fleet.hub;
   const clientForDevice = useCallback((deviceKey: string) => fleetHub(deviceKey).client, [fleetHub]);
-  // hub(key) 找不到设备时退回本机：转交回复只认键对得上的那台，设备刚被删就是 null，不拿本机的同号消息顶替
   const storeForDevice = useCallback<DeviceStoreLookup>(
     (deviceKey) => {
       const hub = fleetHub(deviceKey);
@@ -529,7 +500,6 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   );
   const groupsRef = useRef<SidebarGroup[]>([]);
 
-  // 保留 App 原来的提前返回边界：入口尚未就绪时不遍历列表。
   const shared = { replace, qc, fleet, route, local, routedDevice, current, hub, state };
   if (!shellReady) return { ...shared, content: null };
 

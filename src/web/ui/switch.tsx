@@ -1,7 +1,6 @@
 import type * as React from "react";
 import { cn } from "../lib/utils.ts";
 
-/** 开关：按钮加 role="switch"，精致尺寸 h-5 w-9（滑块 size-4），触屏热区撑到 44px（touch-target）。 */
 export function Switch({
   checked,
   onCheckedChange,

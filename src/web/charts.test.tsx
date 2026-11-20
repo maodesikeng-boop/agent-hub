@@ -172,7 +172,7 @@ describe("图表块：失败", () => {
       expect(el).not.toBeNull();
       return el!;
     });
-    expect(error).toHaveTextContent("图表组件加载失败");
+    expect(error).toHaveTextContent("Failed to load the chart renderer");
     expect(error).toHaveClass("text-danger");
     expect(first.container.querySelector("[data-md-code]")).not.toBeNull();
     first.unmount();

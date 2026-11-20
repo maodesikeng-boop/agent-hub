@@ -1,6 +1,3 @@
-// 手机设置的整屏骨架（docs/mobile-settings-design.md 第 2.1、2.3 节，docs/ui-standard.md 第 20 条）：
-// 画布 bg-surface-sidebar，顶上垫刘海安全区；h-16 顶栏（一级：ghost ArrowLeft + 左对齐标题；二级：ghost “‹ Settings” + 居中标题）；
-// 内容区 px-4、组间距 gap-6，自己纵向滚动，底部垫横条与软键盘（--bottom-inset）；可选一条固定在底部的主操作栏。
 import { ArrowLeft, ChevronLeft } from "../../ui/icons.ts";
 import type { ReactNode } from "react";
 import { cn } from "../../lib/utils.ts";
@@ -14,10 +11,8 @@ export function SettingsPage({
   children,
 }: {
   title: string;
-  /** 一级主页：左上纯箭头回列表；子页：左上 “‹ Settings” 回一级主页。 */
   home?: boolean;
   onBack: () => void;
-  /** 固定在底部的主操作（跨厂商同步的 Sync），不随内容滚走。 */
   footer?: ReactNode;
   children: ReactNode;
 }) {
@@ -38,7 +33,6 @@ export function SettingsPage({
           </>
         ) : (
           <>
-            {/* 三列网格 1fr / auto / 1fr：短标题在整屏正中，特大字号下长标题（Signed-in browsers）自动向右侧空白延展不提前截断 */}
             <div className="justify-self-start">
               <BackToSettings onClick={onBack} />
             </div>

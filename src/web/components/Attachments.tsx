@@ -8,10 +8,7 @@ import { FilePreview, inlineUrl, type PreviewFile } from "./FilePreview.tsx";
 
 const CARD = "flex items-center gap-2.5 rounded-2xl bg-muted py-1.5 pr-3.5 pl-1.5";
 
-/**
- * 取文件接口返回 404 = 文件被定期清理删掉了（守护进程 file-cleanup.ts）：返回 [是否已过期, 标记过期]。
- * probe 为真时（非图片的卡片，浏览器不会自己取）发一个 HEAD 问一下；图片由 <img> 的 onError 标记。
- */
+// A 404 means the daemon's file cleanup removed it; non-image cards need a HEAD probe because the browser never fetches them.
 export function useFileExpired(url: string | undefined, probe: boolean): [boolean, () => void] {
   const [expired, setExpired] = useState(false);
   useEffect(() => {
@@ -27,11 +24,6 @@ export function useFileExpired(url: string | undefined, probe: boolean): [boolea
   return [expired, () => setExpired(true)];
 }
 
-/**
- * 一个文件的卡片：图片是小缩略图，视频是第一帧盖播放键，别的是文件图标；文件名一行，下面一行写大小（或没存下来的原因）。
- * 有 preview 是个按钮，点了打开预览窗（FilePreview）；没有 preview（文件没存下来）只是个卡片，点不了。
- * 聊天框附件（AttachmentList）和 agent 发来的文件（Markdown 里的文件链接）共用。
- */
 export function FileCard({
   name,
   mime,
@@ -49,7 +41,6 @@ export function FileCard({
   const [expired, markExpired] = useFileExpired(preview?.url, preview !== undefined && !isImageMime(mime));
   if (expired) preview = undefined;
   const imageUrl = preview !== undefined && isImageMime(mime) ? preview.url : undefined;
-  // 取 ?inline=1 的地址：上传的视频服务端才按扩展名回 video/*。#t=0.1 让只预载元数据时也画出第一帧
   const videoUrl = preview !== undefined && previewKindOf(name, mime) === "video" ? `${inlineUrl(preview.url)}#t=0.1` : undefined;
   const body = (
     <>
@@ -95,7 +86,6 @@ export function FileCard({
   );
 }
 
-/** 消息里的附件：图片是小缩略图，视频是第一帧，别的是文件图标；都带文件名和大小，点开看预览（上传的文件和 agent 发来的文件同一个预览窗）。没有附件什么也不画。 */
 export function AttachmentList({ attachments }: { attachments: Attachment[] }) {
   const client = useClient();
   if (attachments.length === 0) return null;

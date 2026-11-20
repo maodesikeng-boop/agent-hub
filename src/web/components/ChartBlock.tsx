@@ -1,6 +1,3 @@
-// 图表块（docs/charts-diagrams-design.md）：```mermaid / ```vega-lite 闭合后的外壳。
-// 和代码块同一个外壳（.md-code），正文换成图；工具条：语言名、源码/图切换、放大、复制。
-// 引擎按需加载（charts/registry.ts），进视口才排队渲染，结果进缓存；失败显示成普通代码块 + 上方一行错误。
 import { AlertCircle, ChartNetwork, Code, Loader2, Maximize2 } from "../ui/icons.ts";
 import { memo, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import { chartCache, chartCacheKey, type ChartCacheEntry } from "../charts/cache.ts";
@@ -21,7 +18,6 @@ import { BarButton, CodeBody, CodeView, CopyCodeButton } from "./CodeBlock.tsx";
 
 const TOO_LONG_TEXT = `Chart source is too long (over ${CHART_MAX_SOURCE_CHARS.toLocaleString("en-US")} characters), not rendered`;
 
-/** 离视口 CHART_VIEWPORT_MARGIN 以内才返回 true，之后一直是 true。没有 IntersectionObserver 的环境当作一直在视口里。 */
 function useNearViewport(ref: { current: Element | null }, enabled: boolean): boolean {
   const [near, setNear] = useState(typeof IntersectionObserver === "undefined");
   useEffect(() => {
@@ -34,13 +30,8 @@ function useNearViewport(ref: { current: Element | null }, enabled: boolean): bo
   return near;
 }
 
-/** 放大窗里最多放大到原尺寸的几倍：再大字就大得离谱了。 */
 const ZOOM_MAX_SCALE = 2.5;
 
-/**
- * 放大窗里的图：按弹窗的宽度等比放大（最多 ZOOM_MAX_SCALE 倍），比弹窗高就在里面上下滚。
- * 宽高比取 viewBox。
- */
 function ZoomedSvg({ svg }: { svg: string }) {
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -63,7 +54,6 @@ function ZoomedSvg({ svg }: { svg: string }) {
 
 const firstLine = (message: string) => message.split("\n", 1)[0]!.trim();
 
-/** 失败：代码块（源码、上色、复制都在）+ 上方一行错误，完整错误放 title。 */
 function FailedChart({ language, source, message }: { language: string; source: string; message: string }) {
   return (
     <div data-chart-failed className="md-chart-failed">
@@ -76,10 +66,6 @@ function FailedChart({ language, source, message }: { language: string; source: 
   );
 }
 
-/**
- * 模块级 + memo（按 language、source 比较）：外面 Markdown 重新解析、同一条消息后面继续追加文字，不改源码就不动。
- * 渲染结果进缓存（语言 + 源码 + 主题版本），卸载再挂上同步出图。
- */
 export const ChartBlock = memo(function ChartBlock({ language, source }: { language: string; source: string }) {
   const renderer = chartRendererOf(language);
   const tooLong = source.length > CHART_MAX_SOURCE_CHARS;
@@ -93,14 +79,12 @@ export const ChartBlock = memo(function ChartBlock({ language, source }: { langu
   const entry: ChartCacheEntry | undefined = tooLong ? { ok: false, message: TOO_LONG_TEXT } : chartCache.get(key);
   const shell = useRef<HTMLDivElement>(null);
   const host = useRef<HTMLDivElement>(null);
-  /** host 里现在画的是哪个 key（缓存命中时由我们把 SVG 插进去；现场渲染的由引擎画好）。 */
   const painted = useRef<string | null>(null);
   const disposeLive = useRef<ChartRendered["dispose"]>(undefined);
 
   const near = useNearViewport(shell, entry === undefined && !loadFailed);
   const loading = near && entry === undefined && !loadFailed;
 
-  // 缓存命中：同步把 SVG 插进去（不出现转圈）
   useLayoutEffect(() => {
     if (entry?.ok !== true) {
       painted.current = null;
@@ -128,7 +112,6 @@ export const ChartBlock = memo(function ChartBlock({ language, source }: { langu
         refresh();
       },
       (error: unknown) => {
-        // 引擎没加载下来不进缓存（下次打开可重试）；源码本身的错进缓存，同样的源码不反复重试
         if (error instanceof ChartLoadError) {
           if (!cancelled) setLoadFailed(true);
           return;
@@ -140,11 +123,8 @@ export const ChartBlock = memo(function ChartBlock({ language, source }: { langu
     return () => {
       cancelled = true;
     };
-    // entry 由 key 决定；进视口（near）或源码、语言变了才重新排队
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [near, key]);
 
-  // 窄列（手机）里横排的流程图跟着列宽缩小，字会小到看不清：给图一个最小宽度，放不下的在图区里横向滚（.md-chart-body）
   useLayoutEffect(() => {
     const svg = host.current?.querySelector("svg");
     const width = svg?.viewBox?.baseVal?.width ?? 0;
@@ -181,7 +161,6 @@ export const ChartBlock = memo(function ChartBlock({ language, source }: { langu
             <CodeBody code={source} language={renderer.sourceLanguage} />
           </div>
         )}
-        {/* 图区一直挂着（切到源码只是藏起来）：切回来不用重画，Vega 的交互状态也在 */}
         <div
           data-chart-body
           hidden={showSource}

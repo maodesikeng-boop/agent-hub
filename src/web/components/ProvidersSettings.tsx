@@ -1,5 +1,3 @@
-// Settings → Providers 一键安装、更新与界面内直接登录（docs/providers-install-login-design.md）。
-// 严格由服务端 ProviderStatusItem.authMethods 数据驱动渲染，零单家厂商字面量、零符号拼接（不用 · / | / /）、错误日志默认收起。
 import { Loader2 } from "../ui/icons.ts";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
@@ -38,7 +36,6 @@ function openExternalBrowserPage(url: string): void {
   try {
     window.open(url, "_blank", "noopener,noreferrer");
   } catch {
-    // 测试或受限环境忽略
   }
 }
 
@@ -170,12 +167,10 @@ function ProviderItemRow({
   const job = item.job;
   const jobRunning = job?.phase === "running";
   const jobFailed = job?.phase === "failed";
-  // 装的过程中也能看日志：卡住时看得出停在哪一步
   const hasLog = (jobFailed || jobRunning) && Boolean(job?.logTail.trim());
   const tone = resolveItemTone(item);
   const authenticated = isProviderAuthenticated(item);
   const ready = authenticated || (item.installed && item.canSignOut);
-  // 装、更新失败：行下只写一句人话，进程的原始报错（退出码、EACCES…）放悬停提示，全文在 Show log 里（docs/ui-standard.md 第 17 条）
   const combinedError: ErrorLike | null =
     rowError ?? (jobFailed && job?.error ? { text: job.kind === "update" ? "Update failed" : "Install failed", raw: job.error } : null);
 
@@ -300,7 +295,6 @@ function ProviderItemRow({
   );
 }
 
-/** 桌面窄弹窗与手机底部 SettingsDrawer 共用的登录表单内芯。 */
 export function ProviderSignInBody({
   item,
   model,
@@ -354,7 +348,6 @@ export function ProviderSignInBody({
   const [manualInput, setManualInput] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [localError, setLocalError] = useState<ErrorLike | null>(null);
-  // 粘贴授权码的表单只有输入框；提交键在弹窗底部最右（第 10 条），用 form 属性连回表单，手机抽屉里紧跟在输入框下面
   const manualFormId = useId();
   const manualSubmit = (
     <Button type="submit" form={manualFormId} className={mobile ? DRAWER_BUTTON : undefined} disabled={!manualInput.trim() || submitting}>
@@ -371,7 +364,6 @@ export function ProviderSignInBody({
   const linkCopy = useCopyFeedback();
   const codeCopy = useCopyFeedback();
 
-  // 监听本窗口发起的登录流自动落盘成功并收起弹窗/抽屉
   useEffect(() => {
     const flow = item.authFlow;
     if (!flow) return;
@@ -379,7 +371,6 @@ export function ProviderSignInBody({
       onDone();
       return;
     }
-    // 本机模式下首次捕获到 authorizeUrl 时自动拉起默认浏览器（若已被点击直接打开过则跳过重复打开）
     if (
       !model.isRemoteTarget &&
       watchedFlowIdRef.current === flow.flowId &&
@@ -851,7 +842,6 @@ export function ProviderSignInBody({
   );
 }
 
-/** 已就绪厂商的 Account… 管理弹窗/抽屉内芯（支持一键 Update、切换账号、移除单个子模型商与 Sign out）。 */
 export function ProviderAccountBody({
   item,
   model,
@@ -1029,7 +1019,6 @@ export function ProviderAccountBody({
   );
 }
 
-/** 桌面与手机共用的 Providers 主体列表（Computer 选择 + Windows Git 环境 + 厂商列表）。 */
 export function ProvidersListSection({
   model,
   onOpenSignIn,
@@ -1073,7 +1062,6 @@ export function ProvidersListSection({
 
       <GitEnvironmentGroup model={model} />
 
-      {/* 上面没有别的组时分类名已经是 Providers：组标题写已就绪的个数，Refresh 和它同一行 */}
       <SettingsGroup
         {...(hasExtraTopGroup ? { title: "Providers" } : readyCount === null ? { label: "Providers" } : { title: `${readyCount} ready`, label: "Providers" })}
         action={
@@ -1125,7 +1113,6 @@ type ModalState =
   | { mode: "account"; vendor: AgentVendor }
   | null;
 
-/** 桌面端 Settings → Providers 完整面板（含登录/账号窄弹窗与下方归拢的 Vendor sync）。 */
 export function ProvidersSettings({
   active = true,
   devices = null,

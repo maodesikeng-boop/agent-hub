@@ -96,7 +96,7 @@ describe("手打被拦的命令", () => {
     await boot();
     api.postMessage = () => ({ status: 500, body: { error: "boom" } });
     await user.type(box(), "/compact{Enter}");
-    expect(await screen.findByRole("button", { name: "没发出去，点击重发" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Not sent. Click to resend" })).toBeInTheDocument();
     expect(box().value).toBe("");
     expect(screen.queryByRole("alert")).toBeNull();
   });
@@ -171,9 +171,9 @@ describe("发消息被后台拒绝（400 invalid）", () => {
     await boot();
     api.postMessage = () => ({ status: 400, body: { error: REASON, code: "invalid" } });
     await user.type(box(), "你好{Enter}");
-    expect(await screen.findByRole("img", { name: `没发出去：${REASON}` })).toHaveAttribute("title", expect.stringContaining(REASON));
+    expect(await screen.findByRole("img", { name: `Not sent: ${REASON}` })).toHaveAttribute("title", expect.stringContaining(REASON));
     expect(screen.getByText("你好")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "没发出去，点击重发" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Not sent. Click to resend" })).toBeNull();
     expect(screen.queryByText("发送失败")).toBeNull();
     expect(api.callsTo("POST", /\/messages$/)).toHaveLength(1);
   });
@@ -183,8 +183,8 @@ describe("发消息被后台拒绝（400 invalid）", () => {
     await boot();
     api.postMessage = () => ({ status: 500, body: { error: "boom" } });
     await user.type(box(), "你好{Enter}");
-    expect(await screen.findByRole("button", { name: "没发出去，点击重发" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "没发出去，点击重发" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Not sent. Click to resend" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Not sent. Click to resend" })).toBeInTheDocument();
   });
 });
 

@@ -46,7 +46,6 @@ import { CollapsibleGroup, RowError, SettingsGroup, SettingsRow } from "./Settin
 
 type Load = { phase: "loading" } | { phase: "error"; info: ErrorInfo } | { phase: "ready"; persona: PersonaView };
 
-/** 性格设定：进页面拉一次；rev 变了（pm.updated，别处改了）重新拉。 */
 function usePersona(pmId: number, rev: number) {
   const client = useClient();
   const qc = useHubQueryClient();
@@ -90,7 +89,6 @@ function describeChange(change: PersonaChange, catalog: ModelCatalog): string {
   if (change.textBefore !== change.textAfter) parts.push("edited the persona");
   if (change.modeBefore !== change.modeAfter) parts.push(`set mode to ${MODE_LABELS[change.modeAfter]}`);
   if (change.vendorBefore !== change.vendorAfter) parts.push(`set provider to ${vendorLabel(change.vendorAfter)}`);
-  // 老数据里 agy 的模型是带档位的完整 ID：拆成 模型 + 思考程度，各写各的
   const before = splitModelEffort(change.vendorBefore, change.modelBefore, change.effortBefore);
   const after = splitModelEffort(change.vendorAfter, change.modelAfter, change.effortAfter);
   if (before.model !== after.model) parts.push(`set model to ${after.model === null ? DEFAULT_CHOICE : modelLabel(change.vendorAfter, after.model, catalog)}`);
@@ -140,7 +138,6 @@ function ChangeRow({ change, revertable, busy, onRevert }: { change: PersonaChan
   );
 }
 
-/** 路径最后一段（文件夹名）。 */
 function folderName(path: string): string {
   return path.replace(/\/+$/, "").split("/").pop() || path;
 }
@@ -149,10 +146,6 @@ function sameSetting(a: AgentSetting, b: AgentSetting): boolean {
   return a.vendor === b.vendor && a.model === b.model && a.effort === b.effort;
 }
 
-/**
- * 一项“改了马上存”的设置（如 Mode）：先显示改后的值（乐观），存成功换成服务端回的；失败退回服务端的值并提示错误。
- * 连着改几次时，只有最后一次的结果决定显示什么（前面的回来了也照样更新服务端的值）。
- */
 function useInstantSave<T>(pmId: number, onUpdate: (p: PersonaView) => void, aliveRef: { current: boolean }) {
   const client = useClient();
   const [draft, setDraft] = useState<T | null>(null);
@@ -187,7 +180,6 @@ function useInstantSave<T>(pmId: number, onUpdate: (p: PersonaView) => void, ali
   return { draft, error, save, reset };
 }
 
-/** 模型选完点保存统一提交；工作方式改了马上存；性格设定改了才出现“保存”；修改记录在最后（默认收起）。项目名只在头部，这里不再列。 */
 function PmEditor({
   pm,
   folders,
@@ -211,7 +203,6 @@ function PmEditor({
       aliveRef.current = false;
     };
   }, []);
-  // 老数据里 agy 的模型可能是带档位的完整 ID：按 模型 + 思考程度 拆开再比，没改的不重复存
   const saved: AgentSetting = { vendor: persona.vendor, ...splitModelEffort(persona.vendor, persona.model, persona.effort) };
   const [trackedPmId, setTrackedPmId] = useState(persona.pmId);
   const [editedAgent, setEditedAgent] = useState<AgentDraft | null>(null);
@@ -287,7 +278,6 @@ function PmEditor({
   const modeSave = useInstantSave<PmMode>(pm.id, onUpdate, aliveRef);
   const mode = modeSave.draft ?? persona.mode;
 
-  // 性格设定：null = 没动过，显示服务端的最新；动过就保留自己的输入，别处改了也不覆盖
   const qc = useHubQueryClient();
   const text = draftText ?? persona.text;
   const tooLong = utf8Bytes(text) > MAX_PERSONA_BYTES;
@@ -309,7 +299,6 @@ function PmEditor({
       mutationFn: async (changeId: number) => (await client.postRevertPersonaChange(changeId)).persona,
       onSuccess: (next) => {
         if (!aliveRef.current) return;
-        // 撤销的结果回来后，本地没提交的输入已经没意义了
         resetAgent();
         modeSave.reset();
         setDraftText(null);
@@ -337,7 +326,6 @@ function PmEditor({
 
   return (
     <>
-      {/* 头部下面第一组，头部就是它的标题，不另写组名 */}
       <SettingsGroup label="Model">
         <AgentRows
           value={draft}
@@ -422,7 +410,6 @@ function PmEditor({
         )}
       </SettingsGroup>
       <PmMemoryFilesGroup key={pm.id} pmId={pm.id} archived={pm.archivedAt != null} />
-      {/* 修改记录会越攒越多：默认收起，标题行带条数，点开才列出来 */}
       <CollapsibleGroup title="History" summary={String(persona.changes.length)}>
         {revertError && (
           <div className="px-4 py-2.5">
@@ -449,9 +436,6 @@ function PmEditor({
   );
 }
 
-/**
- * 已归档项目经理顶部的“归档状态”一组：显示剩余删除天数与“恢复”按钮。
- */
 function ArchiveStatusGroup({ pmId, archivedAt }: { pmId: number; archivedAt: number }) {
   const client = useClient();
   const [unarchiving, setUnarchiving] = useState(false);
@@ -481,10 +465,6 @@ function ArchiveStatusGroup({ pmId, archivedAt }: { pmId: number; archivedAt: nu
   );
 }
 
-/**
- * “会话”一组：开新会话、归档项目经理。点了先确认；确认后项目经理先写交接，写完换一个新会话（ledger/handover.ts）。
- * renewing：在换（交接请求还没结果），按钮不能点。对话太长时系统也会自动换（同一套，聊天里只多一条分隔线）。
- */
 function RenewSessionGroup({
   pmId,
   renewing,
@@ -531,7 +511,6 @@ function RenewSessionGroup({
   const busy = renewing || sending;
   return (
     <SettingsGroup title="Session">
-      {/* 行名说是什么，按钮说做什么（不重复）；“…”表示点了还要确认。在换的时候是状态，用英文 */}
       <SettingsRow label="New session" detail="The project manager writes a handoff first. Chat history stays" error={error}>
         {() => (
           <Button variant="outline" disabled={busy || disabled} onClick={() => setConfirming(true)}>
@@ -634,20 +613,15 @@ export function PmProfile({
 }: {
   pm: Pm;
   project: Project | null;
-  /** 项目没移除的文件夹，主文件夹在前。 */
   folders: ProjectFolder[];
-  /** 这个项目经理的定时任务。 */
   schedules: ScheduleRecord[];
-  /** pm.updated 的次数，变了就重新拉。 */
   rev: number;
-  /** 在换新会话（selectors.ts 的 isRenewing）。 */
   renewing: boolean;
   onBack: () => void;
   onManageProviders?: () => void;
 }) {
   const { load, retry, set } = usePersona(pm.id, rev);
   const label = `${pm.name}'s profile`;
-  // 往下滚、头部的大名字滚出去之后，顶栏里补上头像和名字（照 iOS 大标题收进导航栏）：滚到哪都看得出在改谁
   const scrollerRef = useRef<HTMLDivElement>(null);
   const nameRef = useRef<HTMLHeadingElement>(null);
   const [nameHidden, setNameHidden] = useState(false);
@@ -672,7 +646,6 @@ export function PmProfile({
           </div>
         )}
       </header>
-      {/* 上边 1rem 渐隐（.page-fade，内容上内边距 pt-4 一样高）：滚上去的分组框不贴着顶栏被硬切 */}
       <div ref={scrollerRef} className="page-fade min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-6 pt-4 pb-12">
         <div className="mx-auto grid max-w-160 grid-cols-1 gap-6">
           <header className="grid min-w-0 grid-cols-1 justify-items-center pb-2 text-center">

@@ -1,5 +1,3 @@
-// 手机设置的底部抽屉（docs/ui-standard.md 第 10 条“抽屉”）：承载短表单向导（改名、连到中心、邀请、添加）与危险操作二次确认。
-// 底层是 ui/drawer.tsx（vaul），调用方不直接 import vaul；按钮全宽 44px（h-11），危险确认是红色 destructive + outline Cancel。
 import { Loader2 } from "../../ui/icons.ts";
 import { useCallback, useState, type ReactNode } from "react";
 import type { ErrorLike } from "../../format.ts";
@@ -7,7 +5,6 @@ import { RowError } from "../../components/SettingsList.tsx";
 import { Button } from "../../ui/button.tsx";
 import { Drawer, DrawerContent, DrawerTitle } from "../../ui/drawer.tsx";
 
-/** 抽屉里的按钮：全宽、44px 高。 */
 export const DRAWER_BUTTON = "h-11 w-full";
 
 export function SettingsDrawer({
@@ -31,7 +28,6 @@ export function SettingsDrawer({
   );
 }
 
-/** 危险操作的确认（标题 + 一句后果 + 红色确认 + Cancel）。 */
 export function ConfirmBody({
   description,
   confirmLabel,
@@ -64,7 +60,6 @@ export function ConfirmBody({
   );
 }
 
-/** 抽屉的目标：关的时候留着上一个目标，收起动画里内容不变空。 */
 export function useDrawerTarget<T>() {
   const [state, setState] = useState<{ target: T | null; open: boolean }>({ target: null, open: false });
   const show = useCallback((target: T) => setState({ target, open: true }), []);

@@ -9,7 +9,7 @@ function writeKeyboardInset(px: number): void {
   style.setProperty(KEYBOARD_INSET_VAR, next);
 }
 
-/** iOS Safari 不支持 interactive-widget=resizes-content 时只缩放 visualViewport；按它算出被软键盘遮住的底部高度写入 --kb-inset。 */
+// iOS Safari ignores interactive-widget=resizes-content and only shrinks visualViewport, so derive the keyboard inset from it.
 export function useKeyboardInset(enabled = true): void {
   useEffect(() => {
     if (!enabled) {

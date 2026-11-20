@@ -69,7 +69,7 @@ describe("tubePaths", () => {
         ],
         2,
       ),
-    ).toThrow(/不横平也不竖直/);
+    ).toThrow(/neither horizontal nor vertical/);
   });
 });
 

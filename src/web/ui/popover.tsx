@@ -2,8 +2,6 @@ import * as PopoverPrimitive from "@radix-ui/react-popover";
 import type * as React from "react";
 import { cn } from "../lib/utils.ts";
 
-// 浮层（docs/ui-standard.md 第 11 条）：rounded-2xl、p-4，宽度跟内容走，最窄 280px、最宽 360px（也不超过 Radix 量好的可用宽度），离窗口边至少 12px；
-// 最高不超过 Radix 量好的可用高度（--radix-popover-content-available-height，已扣掉 collisionPadding），超出在里面滚，不会顶出窗口外。
 export const Popover = PopoverPrimitive.Root;
 export const PopoverTrigger = PopoverPrimitive.Trigger;
 

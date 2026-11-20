@@ -1,10 +1,8 @@
-// 设备的状态点、状态词、系统图标（左栏组头、设置里的设备列表共用，docs/multi-device-design.md 第 4.3 节）。
 import { Laptop, Monitor, Server } from "../ui/icons.ts";
 import type { DeviceStatus } from "../devices.ts";
 import { formatAgo } from "../format.ts";
 import { cn } from "../lib/utils.ts";
 
-/** 状态点：在线成功色，重连中黄，别的灰（ui-standard 第 4 条的状态色）。 */
 export function StatusDot({ status }: { status: DeviceStatus }) {
   return (
     <span
@@ -14,7 +12,6 @@ export function StatusDot({ status }: { status: DeviceStatus }) {
   );
 }
 
-/** 状态词和时间：在线、连接中不写；重连中；离线（断开过的再写多久以前）。 */
 export function StatusText({ status, lastOnlineAt, online = false }: { status: DeviceStatus; lastOnlineAt: number | null; online?: boolean }) {
   if (status === "online") return online ? <span>Online</span> : null;
   if (status === "connecting") return null;
@@ -27,7 +24,6 @@ export function StatusText({ status, lastOnlineAt, online = false }: { status: D
   );
 }
 
-/** 系统图标：Mac 笔记本、Linux 服务器，别的显示器。 */
 export function PlatformIcon({ platform, className }: { platform: string; className?: string }) {
   const Icon = platform === "darwin" ? Laptop : platform === "linux" ? Server : Monitor;
   return <Icon className={cn("size-pixel-sm shrink-0", className)} aria-hidden="true" />;

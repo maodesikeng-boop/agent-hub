@@ -27,7 +27,7 @@ describe("加文件时检查", () => {
   it("空文件、超过 100 MB 的不加，提示带文件名；刚好 100 MB 加", () => {
     const { files, notice } = stageFiles([], [new File([], "空.txt"), sized("大.mov", MAX_UPLOAD_BYTES + 1), sized("刚好.bin", MAX_UPLOAD_BYTES), file("好.txt")]);
     expect(files.map((f) => f.file.name)).toEqual(["刚好.bin", "好.txt"]);
-    expect(notice).toBe("「空.txt」是空文件，没有加入；「大.mov」超过 100 MB，没有加入");
+    expect(notice).toBe("\"空.txt\" is empty, skipped; \"大.mov\" is over 100 MB, skipped");
   });
 
   it("Mac 录屏、手机视频（几十 MB 的 .mov、.mp4、.m4v、.webm，MIME 可能是空的）照常加进去", () => {
@@ -46,11 +46,11 @@ describe("加文件时检查", () => {
   it("超出一条消息的个数上限：多的不加", () => {
     const { files, notice } = stageFiles([], Array.from({ length: MAX_ATTACHMENTS_PER_MESSAGE + 3 }, (_, i) => file(`${i}.txt`)));
     expect(files).toHaveLength(MAX_ATTACHMENTS_PER_MESSAGE);
-    expect(notice).toBe(`${ATTACHMENTS_TOO_MANY_MESSAGE}，多出来的没有加入`);
+    expect(notice).toBe(`${ATTACHMENTS_TOO_MANY_MESSAGE}; extra files skipped`);
   });
   it("readDropped 给的原因排在被拒文件的前面", () => {
-    const { notice } = stageFiles([], [new File([], "空.txt")], ["「素材」文件夹里没有文件，没有加入"]);
-    expect(notice).toBe("「素材」文件夹里没有文件，没有加入；「空.txt」是空文件，没有加入");
+    const { notice } = stageFiles([], [new File([], "空.txt")], ["Folder \"素材\" is empty, skipped"]);
+    expect(notice).toBe("Folder \"素材\" is empty, skipped; \"空.txt\" is empty, skipped");
   });
 });
 
@@ -91,20 +91,20 @@ describe("读拖进来、粘进来的文件和文件夹", () => {
   it("空文件夹（只有隐藏文件也算）：说是空文件夹，不说是空文件", async () => {
     const { names, skipped } = await read(fakeDropData([fakeFolderEntry("素材", [fakeFileEntry(file(".DS_Store"))])]));
     expect(names).toEqual([]);
-    expect(skipped).toEqual(["「素材」文件夹里没有文件，没有加入"]);
+    expect(skipped).toEqual(["Folder \"素材\" is empty, skipped"]);
   });
 
   it("读不出来的文件夹：说读不出来，别的照常加", async () => {
     const { names, skipped } = await read(fakeDropData([fakeFolderEntry("锁着的", [], { broken: true }), file("a.txt")]));
     expect(names).toEqual(["a.txt"]);
-    expect(skipped).toEqual(["「锁着的」文件夹读不出来，没有加入"]);
+    expect(skipped).toEqual(["Couldn't read folder \"锁着的\", skipped"]);
   });
 
   it(`文件很多的文件夹：读到比上限（${MAX_ATTACHMENTS_PER_MESSAGE} 个）多一个就停，好让 stageFiles 报“最多带几个”`, async () => {
     const many = Array.from({ length: 50 }, (_, i) => fakeFileEntry(file(`${i}.txt`)));
     const { names } = await read(fakeDropData([fakeFolderEntry("大文件夹", many)]));
     expect(names).toHaveLength(MAX_ATTACHMENTS_PER_MESSAGE + 1);
-    expect(stageFiles([], names.map((n) => file(n))).notice).toBe(`${ATTACHMENTS_TOO_MANY_MESSAGE}，多出来的没有加入`);
+    expect(stageFiles([], names.map((n) => file(n))).notice).toBe(`${ATTACHMENTS_TOO_MANY_MESSAGE}; extra files skipped`);
   });
 });
 
@@ -131,7 +131,7 @@ describe("发送时上传", () => {
     );
     const ok = await uploadFiles([file("甲.txt"), file("乙.txt")]);
     expect(ok.map((a) => a.name)).toEqual(["甲.txt", "乙.txt"]);
-    await expect(uploadFiles([file("甲.txt"), file("坏.txt")])).rejects.toThrow("「坏.txt」上传失败：守护进程出了意外的错，已记进日志，重试一次；还不行看日志");
+    await expect(uploadFiles([file("甲.txt"), file("坏.txt")])).rejects.toThrow("\"坏.txt\" failed to upload: 守护进程出了意外的错，已记进日志，重试一次；还不行看日志");
   });
 });
 

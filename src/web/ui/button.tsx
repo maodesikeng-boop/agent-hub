@@ -8,7 +8,6 @@ export const buttonVariants = cva(
   {
     variants: {
       variant: {
-        // 主按钮：一屏最多一个；不能点时换成中性灰，不显示半透明的主色；悬停变深一点（brightness，对比度只升不降）
         default: "bg-primary text-primary-foreground hover:brightness-90 disabled:bg-sidebar-active disabled:text-muted-foreground disabled:opacity-100",
         destructive: "bg-danger text-primary-foreground hover:brightness-90 disabled:bg-sidebar-active disabled:text-muted-foreground disabled:opacity-100",
         outline: "border border-border bg-background hover:bg-accent",
@@ -23,11 +22,8 @@ export const buttonVariants = cva(
         "icon-sm": "size-8 rounded-[var(--radius-btn)]",
       },
     },
-    // 带字的 ghost 按钮（行里、组标题右边的 Manage…、Refresh、Invite）字是前景色：和旁边灰色的只读值分得开，看得出能点；
-    // 纯图标的 ghost 按钮照旧是次要色
     compoundVariants: [
       { variant: "ghost", size: ["default", "sm"], class: "text-foreground" },
-      // 工具格比旁边 36px 的搜索框、顶栏控件小一圈，靠父级 items-center 居中：常驻的 30px，贴着单行标题的 24px
       { variant: "slot", class: "rounded-[4px] [&_svg:not([class*='size-'])]:size-pixel-md" },
       { variant: "slot", size: "default", class: "h-7.5 px-3" },
       { variant: "slot", size: "icon", class: "size-7.5" },

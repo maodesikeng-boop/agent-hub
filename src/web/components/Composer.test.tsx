@@ -648,12 +648,12 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     expect(posts(api)[0]!.body).toMatchObject({ workerPick: { vendor: "claude", model: null, effort: null } });
   });
 
-  it("没发出去：点感叹号重发，带同一个 workerPick 和 clientId", async () => {
+  it("Not sent: 点感叹号重发，带同一个 workerPick 和 clientId", async () => {
     const { api, box, user } = await boot();
     api.postMessage = () => ({ status: 500, body: { error: "boom" } });
     await pickHigh(user, box);
     await user.type(box, "修一下登录{Enter}");
-    const retry = await screen.findByRole("button", { name: "没发出去，点击重发" });
+    const retry = await screen.findByRole("button", { name: "Not sent. Click to resend" });
     expect(screen.getByRole("group", { name: "Worker model" })).toHaveTextContent("Claude CodeOpushigh");
     api.postMessage = () => ({ status: 200, body: { messageId: 9 } });
     await user.click(retry);
@@ -675,7 +675,7 @@ describe("/hub:worker 选择列表（接在 App 里，项目经理对话）", ()
     });
     await pickHigh(user, box);
     await user.type(box, "超时测试{Enter}");
-    const retry = await screen.findByRole("button", { name: "没发出去，点击重发" });
+    const retry = await screen.findByRole("button", { name: "Not sent. Click to resend" });
     expect(screen.getByRole("group", { name: "Worker model" })).toHaveTextContent("Claude CodeOpushigh");
     failTimeout = false;
     await user.click(retry);

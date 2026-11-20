@@ -6,11 +6,11 @@ import { queryClient } from "./query-client.ts";
 import { applyUiScale, readUiScale } from "./ui-scale.ts";
 import "./styles.css";
 
-// 先定界面大小再渲染，不闪一下
+// Apply the UI scale before the first render to avoid a flash.
 applyUiScale(readUiScale());
 
 const root = document.getElementById("root");
-if (!root) throw new Error("找不到 #root");
+if (!root) throw new Error("#root not found");
 createRoot(root).render(
   <QueryClientProvider client={queryClient}>
     <App />

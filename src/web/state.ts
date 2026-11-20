@@ -1,5 +1,3 @@
-// 网页的数据：/api/state 的快照 + WebSocket 推来的变化，合成一份界面要用的状态。
-// 全是纯函数，方便测试；网络和定时器在 device-hub.ts。
 import {
   MAX_CONVERSATION_LOOKUP_STATES,
   MAX_REWOUND_PENDING_KEYS,
@@ -41,43 +39,27 @@ import type { ErrorInfo } from "./format.ts";
 import { normalizeTaskGraph, normalizeTaskGraphs } from "./task-graph-compat.ts";
 import type { ConnectionStatus } from "./connection.ts";
 
-/** 网页自己先显示出来、服务端还没回真消息的用户消息。 */
 export interface PendingMessage {
   clientId: string;
   conversationId: ConversationId;
   text: string;
-  /** 已经传上去的文件（上传接口的响应）；没有文件是空数组。 */
   attachments: Attachment[];
-  /** 输入框 /hub:worker 选的（项目经理对话）；没选不写。重发带同一个。 */
   workerPick?: WorkerPick;
-  /** sending：POST 在路上或已成功等服务端推回；failed：POST 失败，可以重试。 */
   phase: "sending" | "failed";
-  /**
-   * phase 是 failed 时的原因，都是重试也没用的：attachments_missing 带的文件已经不在服务端（要重新添加）；
-   * rejected 服务端拒绝了这条消息（400），原因在 reason，同一条重发还是会被拦。其他失败（断网、5xx）不写，可以重试。
-   */
   failure?: "attachments_missing" | "rejected";
-  /** failure 是 rejected 时服务端给的原因（中文）；hint 接在后面，raw 放 title。 */
   reason?: ErrorInfo;
   createdAt: number;
 }
 
 export type OlderState = "loading" | "error";
 
-/** 服务端标了失败的用户消息点“重试”之后：请求在路上 / 请求失败。 */
 export type RetryPhase = "retrying" | "error";
 
 export interface ConversationView {
   conversation: ConversationSnapshot["conversation"];
-  /** 按编号从小到大。 */
   messages: Message[];
   hasMore: boolean;
-  /** Worker 对话：快照时刻项目经理对话里指向它的最近一行（selectors.ts 再拿项目经理对话里实时来的新行比）。 */
   workerLine?: ConversationSnapshot["workerLine"];
-  /**
-   * 比 messages 里最早一条还早的消息来了更新、被近窗丢掉的次数（只增不减）。近窗外的消息状态变了，网页只能拿它知道“有变化”，
-   * 想看新状态的（总助里转交的回复）据此重取；重拉快照后从 0 起算（那时由 HubState.snapshotRev 通知）。
-   */
   outsideRev?: number;
 }
 
@@ -85,48 +67,30 @@ type Phase = "loading" | "ready" | "error" | "unauthorized";
 
 export interface HubState {
   phase: Phase;
-  /** phase 是 error 时拉快照为什么失败（显示“连不上守护进程”和怎么办）；别的时候没有。 */
   loadError?: ErrorInfo;
   connection: ConnectionStatus;
-  /** 已经处理到的最后一个 seq。 */
   seq: number;
   pms: Pm[];
   projects: Project[];
-  /** 所有项目没移除的文件夹。 */
   folders: ProjectFolder[];
-  /** 项目经理收到 pm.updated 的次数；资料页据此重新拉性格设定。 */
   personaRev: Record<PmId, number | undefined>;
-  /** 重拉快照（loaded）的次数：快照之前近窗外错过的变化不会补发，靠它让只在近窗外才有的数据（总助里转交的回复）重取。 */
   snapshotRev: number;
   conversations: Record<ConversationId, ConversationView>;
   sessions: SessionState[];
   health: HealthEntry[];
-  /** 所有项目经理的定时任务（ScheduleRecord.pmId 认是谁的）；资料页的定时任务卡片用。 */
   schedules: ScheduleRecord[];
-  /** Router（总助）切片：活跃待决卡、未读汇报、PM 备忘、配置与本机最近指令。 */
   router: RouterSlice;
-  /** 所有进行中项目的活跃任务图（status = 'active'）。 */
   activeTaskGraphs: TaskGraph[];
-  /**
-   * 还有更早的已收工 Worker 没拉下来的项目经理：值是下一页的 before（快照的 olderEndedWorkers，右栏 Completed 每拉一页换成 nextBefore，
-   * 拉完了删掉）。
-   */
   olderEndedWorkers: Record<PmId, ConversationId | undefined>;
-  /** 按需单拉的对话（不在快照里的早收工 Worker）：loading 在拉，missing 拉过、没有或没拉成。拉到了删掉，重拉快照清空（再拉一次）。 */
   lookups: Record<ConversationId, "loading" | "missing" | undefined>;
-  /** 服务端所在机器能做什么（界面按它显示控件，见 server-info.tsx）；还没加载时是 macOS 的占位，加载完才会显示界面。 */
   server: ServerInfo;
   pending: PendingMessage[];
   older: Record<ConversationId, OlderState | undefined>;
-  /** 用户主动翻过页（olderStart / olderDone）的对话：不再按 MAX_LIVE_MESSAGES 自动截断顶部旧消息；重拉快照时重置。 */
   olderLoaded?: Record<ConversationId, boolean | undefined>;
-  /** 点过“重试”的失败消息；消息不再是失败就清掉。 */
   retry: Record<MessageId, RetryPhase | undefined>;
-  /** 乐观待发阶段已被二次 Esc 回退的去重键（最多保留最近 MAX_REWOUND_PENDING_KEYS 个）：服务端随后推回 message.created 时直接补上 rewound。 */
   rewoundKeys?: readonly string[];
 }
 
-/** 未主动翻页的对话在内存中保留的最近消息上限（与 shared/reminders.ts 的 MIRROR_MESSAGES_PER_CONVERSATION 对齐），超出后标记 hasMore 供向上翻页，防止长时间运行无限膨胀。 */
 export const MAX_LIVE_MESSAGES = 200;
 
 export const initialState: HubState = {
@@ -177,7 +141,6 @@ function withRewoundMeta(message: Message): Message {
   return { ...message, meta: { ...(message.meta ?? {}), rewound: true } };
 }
 
-/** 按编号插入或替换一条消息，保持从小到大；已标记 rewound 的消息不会被乱序晚到的旧状态抹掉 rewound。 */
 export function upsertMessage(messages: Message[], message: Message): Message[] {
   const last = messages.at(-1);
   if (last === undefined || message.id > last.id) return [...messages, message];
@@ -217,7 +180,6 @@ function dropSessionQuotaRejection(
   );
 }
 
-/** 分开按类型裁剪近窗：待拍板最多留 ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX 条，简报最多留 ROUTER_STREAM_LIVE_MAX 条，简报再多也不挤掉待拍板。 */
 function capRouterItems(items: RouterItem[]): { items: RouterItem[]; reportsTrimmed: boolean } {
   let decisions = 0;
   let reports = 0;
@@ -241,14 +203,12 @@ function capRouterItems(items: RouterItem[]): { items: RouterItem[]; reportsTrim
   };
 }
 
-/** 消息不再是失败了（重试成功排进队了），就不用再记它的重试状态。 */
 function dropRetryIfSettled(retry: HubState["retry"], message: Message): HubState["retry"] {
   if (message.status === "failed" || retry[message.id] === undefined) return retry;
   const { [message.id]: _settled, ...rest } = retry;
   return rest;
 }
 
-/** 实时来的项目经理 Worker 行同步更新对应 Worker 对话的 workerLine 摘要，防止项目经理对话超出 MAX_LIVE_MESSAGES 截断后退回旧摘要。 */
 function advanceWorkerLine(
   conversations: Record<ConversationId, ConversationView>,
   message: Message,
@@ -305,8 +265,7 @@ export function applyChange(state: HubState, change: Change): HubState {
           ? dropSessionQuotaRejection(afterStreaming, message.conversationId, message.sessionId)
           : afterStreaming;
       const view = state.conversations[message.conversationId];
-      if (!view) return { ...nextBase, sessions }; // 不认识的对话，device-hub.ts 会重新拉快照
-      // 初始快照未加载消息的 Worker 对话（messages 为空且 hasMore 为 true）：没点开加载前不往空列表里塞单条实时消息，等点开时一次拉齐最新一页
+      if (!view) return { ...nextBase, sessions };
       if (
         view.conversation.kind === "worker" &&
         view.messages.length === 0 &&
@@ -320,7 +279,6 @@ export function applyChange(state: HubState, change: Change): HubState {
           retry: dropRetryIfSettled(state.retry, message),
         };
       }
-      // 比已带的最早一条还早（快照、实时只带最近一段）：插进来会和往上翻页拉的那一段接不上，留给翻页时拉
       if (view.hasMore && view.messages.length > 0 && message.id < view.messages[0]!.id) {
         const advanced = advanceWorkerLine(state.conversations, message);
         const conversations = { ...advanced, [message.conversationId]: { ...view, outsideRev: (view.outsideRev ?? 0) + 1 } };
@@ -435,7 +393,6 @@ export function applyChange(state: HubState, change: Change): HubState {
             : state.router.items.with(existingIndex, item);
         return { ...next, router: { ...state.router, items } };
       }
-      // 简报（unread / archived）都在时间流近窗里：created 插到最前并按上限裁剪（挤出旧简报时标上 briefingsHasMore）；updated 只改近窗里已有的记录，不把老记录塞回近窗挖出空洞。
       if (change.type === "router.item.updated") {
         if (existingIndex === -1) return next;
         return { ...next, router: { ...state.router, items: state.router.items.with(existingIndex, item) } };
@@ -491,7 +448,6 @@ export function applyChange(state: HubState, change: Change): HubState {
     }
     case "task_graph.created":
     case "task_graph.updated": {
-      // 老版本守护进程推来的旧状态在这里换成新的四个（task-graph-compat.ts）
       const graph = normalizeTaskGraph(change.data.graph);
       const existingIndex = state.activeTaskGraphs.findIndex((g) => g.id === graph.id);
       if (graph.status !== "active") {
@@ -510,18 +466,10 @@ export function applyChange(state: HubState, change: Change): HubState {
   }
 }
 
-/**
- * 这条变化是网页还不认识的对话里的新消息吗（漏了 conversation.created，要重拉快照）？
- * 不在快照里的早收工 Worker 对话的消息改动（message.updated）不算：网页没带它，点开时拉的就是最新的。
- */
 export function referencesUnknownConversation(state: HubState, change: Change): boolean {
   return change.type === "message.created" && !state.conversations[change.data.message.conversationId];
 }
 
-/**
- * 按需拉回来的对话并进状态：已经有的不动（快照之后实时来的变化比拉的时候新），会话只补没有的。
- * 引用不变：一个都没新加时原样返回 conversations、sessions。
- */
 function mergeLoaded(state: HubState, lookup: ConversationsLookup): Pick<HubState, "conversations" | "sessions"> {
   let conversations = state.conversations;
   for (const c of lookup.conversations) {
@@ -539,7 +487,6 @@ function mergeLoaded(state: HubState, lookup: ConversationsLookup): Pick<HubStat
   return { conversations, sessions: added.length === 0 ? state.sessions : [...state.sessions, ...added] };
 }
 
-/** lookups 里记的“拉过、没有”最多留这么多个（手改网址、删掉的 Worker 才会有），满了清掉，不随时间涨。 */
 function withLookups(
   lookups: HubState["lookups"],
   ids: readonly ConversationId[],
@@ -566,19 +513,12 @@ function withoutLoadError(state: HubState): HubState {
   return rest;
 }
 
-/**
- * 旧状态里这个对话已经收工了吗（至少有一个会话，且全部 ended）？
- * 已收工的 Worker 不会再出新消息，网页手里的消息就是全的；还在跑的，断线期间可能又出了消息（比如最终回复）。
- */
 function endedBefore(state: HubState, conversationId: ConversationId): boolean {
   const sessions = state.sessions.filter((s) => s.conversationId === conversationId);
   return sessions.length > 0 && sessions.every((s) => s.status === "ended");
 }
 
-/**
- * 兼容还没升级的旧版远端守护进程（快照里没有 commandsHasMore / briefingsHasMore）：已有字段时零分配原样返回。
- * 缺字段时近窗里有就当还有更早的：最多多点一次 Load earlier（翻回空页就收），换时间序不被插队。
- */
+// Older remote daemons omit commandsHasMore/briefingsHasMore; assume more pages when the window is non-empty.
 function normalizeRouterSlice(router: RouterSlice): RouterSlice {
   const raw = router as Partial<Pick<RouterSlice, "commandsHasMore" | "briefingsHasMore">> & RouterSlice;
   if (typeof raw.commandsHasMore === "boolean" && typeof raw.briefingsHasMore === "boolean") {
@@ -595,8 +535,6 @@ function fromSnapshot(state: HubState, snapshot: StateSnapshot): HubState {
   const conversations: Record<ConversationId, ConversationView> = {};
   for (const c of snapshot.conversations) {
     const prev = state.conversations[c.conversation.id];
-    // 快照省略了消息（已收工的 Worker 只带 hasMore）：只有旧状态里就已收工、按需加载过的消息才保留；
-    // 断线前还在跑、断线期间收工的，旧消息可能缺最终回复，换成快照的空列表 + hasMore，让 MessageList 重新拉最新一页。
     const keepLoaded =
       c.messages.length === 0 && c.hasMore && prev !== undefined && prev.messages.length > 0 && endedBefore(state, c.conversation.id);
     const workerLine = c.workerLine !== undefined ? { workerLine: c.workerLine } : {};
@@ -683,7 +621,7 @@ export function reducer(state: HubState, action: HubAction): HubState {
       return { ...state, ...merged, lookups: withLookups(withLookups(state.lookups, found, undefined), missing, "missing") };
     }
     case "endedWorkersLoaded": {
-      // 请求在途时 resync 把翻页起点重置过：迟到的旧页不合并、不改起点，免得跳过中间页
+      // A resync reset the cursor while this request was in flight; drop the stale page.
       if (state.olderEndedWorkers[action.pmId] !== action.before) return state;
       const merged = mergeLoaded(state, action.page);
       const { [action.pmId]: _done, ...rest } = state.olderEndedWorkers;

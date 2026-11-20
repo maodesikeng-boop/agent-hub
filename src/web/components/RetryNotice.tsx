@@ -4,7 +4,6 @@ import { retryCountdownText, retryText } from "../step-labels.ts";
 
 const RETRY_TICK_MS = 1000;
 
-/** 状态行里“Retrying 3/10”，带下次重试的倒计时“in 5s”；鼠标放上去是原始错误。 */
 export function RetryNotice({ info }: { info: ApiRetryInfo }) {
   const [, tick] = useState(0);
   const { retryAt } = info;

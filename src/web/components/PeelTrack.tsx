@@ -31,15 +31,9 @@ type GutterKind = "station" | "parA" | "parB" | "coil" | "gate" | "next";
 type DotTone = "done" | "run" | "warn" | "blocked";
 
 const GUTTER_H = 32;
-/**
- * 轨道槽的长度：画布上的 1 个单位是 --peel-u（styles.css：平时 1/16rem，触屏 44/32 倍）。
- * 触屏下每行高 44px，轨道槽跟着等比放大到同样高，上下两行的管子才接得上、不断成一截一截。
- */
 const peelLen = (units: number) => `calc(${units} * var(--peel-u))`;
 const GUTTER_CY = GUTTER_H / 2;
-/** 果冻管道和珠子的一格是 2 个画布单位（docs/slime-cohesion-design.md）：管道 4 格宽、珠子 7×7 格、拍板小铃 6×6 格。 */
 const CELL = 2;
-/** 分叉的管子在这一行顶上往旁边的泳道拐。 */
 const FORK_Y = 6;
 const DEFAULT_GUTTER_W = 40;
 const MAX_GUTTER_W = 96;
@@ -67,7 +61,6 @@ function computeGutterGeometry(maxLanes: number): { gutterWidth: number; laneX: 
   };
 }
 
-/** 轨道槽里的一段管子：走通的（filled）灌满项目经理的颜色，没走通的（empty）是空的浅灰管子。 */
 interface GutterSegment extends TubePaths {
   readonly state: TubeState;
 }
@@ -81,10 +74,6 @@ const TUBE_COLORS: Readonly<Record<TubeState, { line: string; core: string }>> =
   empty: { line: "var(--tube-empty-line)", core: "var(--tube-empty-core)" },
 };
 
-/**
- * 一组同状态的果冻管道（右栏果皮轨、放大全览共用）：先画全部描边、再画全部芯（交叉、分叉处芯连成一片），走通的再加一道高光。
- * 颜色来自外层的 fruitTrackVars 和 styles.css 的 --tube-empty-*；cell 是一格多少个画布单位。
- */
 export function TubeLayer({ state, segments, cell = CELL }: { state: TubeState; segments: readonly TubePaths[]; cell?: number }) {
   if (segments.length === 0) return null;
   const { line, core } = TUBE_COLORS[state];
@@ -100,7 +89,6 @@ export function TubeLayer({ state, segments, cell = CELL }: { state: TubeState; 
   );
 }
 
-/** 珠子各层的颜色：做完、在干、N done 用项目经理的颜色；等项目经理琥珀色；没轮到、跳过、N next 灰描边白芯。 */
 const BEAD_COLORS: Readonly<Record<StepBead, { outline: string; fill: string; highlight: string; shade: string }>> = {
   done: { outline: "var(--tube-line)", fill: "var(--tube-core)", highlight: "var(--tube-glint)", shade: "var(--tube-shade)" },
   running: { outline: "var(--tube-line)", fill: "var(--tube-core)", highlight: "var(--background)", shade: "var(--tube-glint)" },
@@ -112,7 +100,6 @@ const BEAD_COLORS: Readonly<Record<StepBead, { outline: string; fill: string; hi
 
 const BEAD_OF_TONE: Readonly<Record<DotTone, StepBead>> = { done: "done", run: "running", warn: "waitingPm", blocked: "pending" };
 
-/** 一颗果冻珠子（pixel-path.ts 的 stepBeadPaths），中心在 center；右栏果皮轨、放大全览的卡片头共用。 */
 export function JellyBead({ bead, center, cell = CELL }: { bead: StepBead; center: PixelPoint; cell?: number }) {
   const paths = stepBeadPaths(bead, center, cell);
   const colors = BEAD_COLORS[bead];
@@ -159,12 +146,10 @@ function PeelGutter({
   );
 }
 
-/** 完了（跳过也算完了）。 */
 function isNodeSettled(node: TaskNode): boolean {
   return node.status === "done";
 }
 
-/** 四个状态的珠子：完了实心（跳过的是灰的空珠子）、在干浅色珠子、等项目经理琥珀色、没轮到灰的空珠子（等你拍板的是小铃，不画珠子）。 */
 function dotToneOf(node: TaskNode): DotTone {
   if (node.status === "done") return node.skipped ? "blocked" : "done";
   if (node.status === "running") return "run";
@@ -179,10 +164,6 @@ function makeClientId(): string {
   return `gate-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-/**
- * 等用户拍板的步骤（status waiting、waitingFor user）的浅果冻拍板卡，画在放大全览弹窗里（右栏果皮轨里这一步只有一行，点了跳到对话里的卡）：
- * 支持一键点选推荐/普通项、点选选项+附言、或直接输入自定义备注提交（POST /api/task-graphs/:graphId/nodes/:nodeKey/decide）。
- */
 export function GateDecisionCard({
   graphId,
   node,
@@ -199,9 +180,7 @@ export function GateDecisionCard({
   const [noteOpen, setNoteOpen] = useState(!hasOptions || Boolean(node.gateCheckpoint));
   const [note, setNote] = useState("");
   const [err, setErr] = useState<ErrorLike | null>(null);
-  // 同一次拍板（含失败后重试）沿用同一个 clientId，服务端按它严格幂等；成功后才换新的
   const clientIdRef = useRef<string | null>(null);
-  // 同步防重入：useMutation 的 isPending 要等下一次渲染才变，连点两下会在它变之前各发一次请求
   const inFlightRef = useRef(false);
 
   useEffect(() => {
@@ -359,7 +338,6 @@ function PeelStageRow({
   onOpenStepAsk: (node: TaskNode) => void;
 }) {
   if (isTaskNodeWaitingUser(node)) {
-    // 只有一行：作答在对话里那张卡上，这里点了跳过去（docs/ui-standard.md 第 12.1 条）；小铃画在轨道槽里这一步的管道上
     return (
       <button
         type="button"
@@ -393,7 +371,6 @@ function PeelStageRow({
     ) : isSkipped ? (
       <span className="shrink-0 text-xs text-muted-foreground">Skipped</span>
     ) : isTaskNodeWaitingPm(node) ? (
-      // 并行泳道多、右边窄的时候让出位置给步骤名（琥珀色圆点已经表示在等项目经理，悬停提示里也写着）
       <span className="shrink-0 text-xs text-warn-foreground @max-[13rem]:hidden">Waiting on PM</span>
     ) : null;
 
@@ -454,10 +431,6 @@ interface DirectedEdge {
   readonly toKey: string;
 }
 
-/**
- * 传递约简（Hasse 图）：若已存在 u ->+ ... ->+ v 的更长有向路径且不存在反向环路，
- * 则去掉跨层冗余弦边 (u, v)，避免紧凑轨道额外分出无意义的旁路，同时 100% 保持全部真实依赖可达性。
- */
 function reduceTransitiveEdges(keys: readonly string[], edges: readonly DirectedEdge[]): DirectedEdge[] {
   const keySet = new Set(keys);
   const adj = new Map<string, Set<string>>();
@@ -500,11 +473,6 @@ function reduceTransitiveEdges(keys: readonly string[], edges: readonly Directed
   return uniqueEdges.filter((e) => adj.get(e.fromKey)!.has(e.toKey));
 }
 
-/**
- * 链优先拓扑序（照 git log --graph --topo-order）：
- * 汇合之前尽量沿着刚解锁的子节点一路往下排，把同一条多步分支链紧凑排在一起；
- * 遇到多上游汇合屏障时再切去排另一条待汇合的分支链，避免跨链交错穿插。
- */
 function orderComponentNodes(nodes: readonly TaskNode[], reducedEdges: readonly DirectedEdge[]): TaskNode[] {
   const indexByKey = new Map<string, number>();
   const nodeByKey = new Map<string, TaskNode>();
@@ -566,7 +534,6 @@ function orderComponentNodes(nodes: readonly TaskNode[], reducedEdges: readonly 
     if (picked === undefined) {
       const ready = unique.filter((n) => !visited.has(n.key) && (remInDeg.get(n.key) ?? 0) === 0).sort(compareDecl);
       if (ready.length > 0) {
-        // 若已有前序分支停在汇合屏障前等待，优先挑能通向该汇合节点的就绪分支，尽早闭合占用的泳道
         const waitingMerges = new Set<string>();
         for (const doneNode of ordered) {
           for (const ch of children.get(doneNode.key) ?? []) {
@@ -656,11 +623,6 @@ function lowestFreeLane(lanes: readonly (string | null)[]): number {
   return idx >= 0 ? idx : lanes.length;
 }
 
-/**
- * 源点独占多泳道布线：
- * 任意行边界处，每个尚未走完下游的已渲染节点独占一条平行泳道；
- * 仅当存在真实有向依赖 u -> w 时才从 u 的泳道连入 w 的圆点/刀口，确保画出的每条线段都 1:1 对应真实依赖。
- */
 function layoutDisplayTrack(
   items: readonly DisplayItem[],
   rawDisplayEdges: readonly DirectedEdge[],
@@ -782,13 +744,10 @@ function layoutDisplayTrack(
   }
 
   const { gutterWidth, laneX } = computeGutterGeometry(maxLaneUsed + 1);
-  // 管子的方头线帽伸出端点半个管宽，到行边为止的管子在相邻两行之间自然接上（画布裁掉伸出去的）
   const top = 0;
   const bottom = GUTTER_H;
   const tube = (style: "solid" | "dash") => (style === "solid" ? "filled" : "empty");
 
-  // 管子都是横竖的：从上一行接下来的竖着进本行的珠子；别的泳道汇进来的先竖着到珠子那一行再横着拐进来；
-  // 分叉在这一行顶上横着拐到新的泳道再往下（docs/ui-standard.md 第 12.1 条）
   const rows: RenderedTrackRow[] = logicalRows.map((row) => {
     const dotX = laneX(row.dotLane);
     const segments: GutterSegment[] = [];
@@ -842,7 +801,6 @@ function layoutDisplayTrack(
   return { gutterWidth, rows };
 }
 
-/** 判断已完成前缀 P = orderedNodes[0..k-1] 能否安全卷成一个 N done 而不把独立旁链混为一谈。 */
 function canFoldDonePrefix(
   orderedNodes: readonly TaskNode[],
   k: number,
@@ -876,14 +834,12 @@ interface PeelRowContext {
   onOpenStepAsk: (node: TaskNode) => void;
 }
 
-/** 一个连通子图的果皮轨：已完成卷与 N next 折叠只在本子图内生效，首尾不与别的子图相连。 */
 function PeelComponentTrack({ component, ctx }: { component: TrackComponent; ctx: PeelRowContext }) {
   const { orderedNodes, reducedEdges, childrenByKey, walkedByKey } = component;
   const { openWorkerId, workerByKey } = ctx;
   const [doneExpanded, setDoneExpanded] = useState(false);
   const [nextExpanded, setNextExpanded] = useState(false);
 
-  // 计算连续已完成的上游前缀（至少保留最后一项不折叠，刚拍板通过的步骤留在前沿上方展示简称，且不把尚未汇合的独立旁链混进同一个卷）
   let rawPrefixEnd = 0;
   while (rawPrefixEnd < orderedNodes.length - 1 && isNodeSettled(orderedNodes[rawPrefixEnd]!)) {
     rawPrefixEnd++;
@@ -911,7 +867,6 @@ function PeelComponentTrack({ component, ctx }: { component: TrackComponent; ctx
   const foldDone = prefixEnd >= 2 && !doneExpanded;
   const visibleStart = foldDone ? prefixEnd : 0;
 
-  // 计算尾部连续未解锁（pending）且内部拓扑深度 >= 2 的下游链路（折叠为 N next）
   let suffixStart = orderedNodes.length;
   while (
     suffixStart - 1 > visibleStart &&
@@ -1023,10 +978,6 @@ function PeelComponentTrack({ component, ctx }: { component: TrackComponent; ctx
   );
 }
 
-/**
- * 一张任务图的果皮轨主体：先按弱连通分量拆成互不相连的子图（与放大全览弹窗的真实依赖一致），
- * 每个子图内部再按拓扑层排布；子图之间留一点呼吸间距，绝不画跨子图的竖向连线。
- */
 function PeelTrackBody({
   graph,
   color,
@@ -1054,13 +1005,6 @@ function PeelTrackBody({
   );
 }
 
-/**
- * 单个项目的活跃任务流图列表（PeelTrackList）：
- * - 有步骤等用户、等项目经理的任务排在最前并默认展开；
- * - 其余后台进行中任务在多任务并存时默认收成带嫩芽进度图标（TaskProgressIcon）的单行标题，点击手风琴式展开/收起；
- * - 每个任务头右上角一个工具格（slot）里的 Zoom（Maximize2）按钮打开横向全览弹窗；
- * - 等你拍板的步骤只有一行，点了交给 onOpenStepAsk（对话滚到那张卡）。
- */
 export const PeelTrackList = memo(function PeelTrackList({
   graphs,
   workers,
@@ -1073,7 +1017,6 @@ export const PeelTrackList = memo(function PeelTrackList({
   graphs: readonly TaskGraph[];
   workers: readonly WorkerEntry[];
   openWorkerId: ConversationId | null;
-  /** 所属项目经理现在的颜色：管道、珠子和进度图标跟着它。 */
   color?: JellyColorId;
   onOpenWorker: (id: ConversationId) => void;
   onZoomGraph: (graph: TaskGraph) => void;
@@ -1123,7 +1066,6 @@ export const PeelTrackList = memo(function PeelTrackList({
         next.delete(id);
         return next;
       }
-      // 手风琴切换：展开所选任务图并收起其他后台任务
       return new Set([id]);
     });
   };

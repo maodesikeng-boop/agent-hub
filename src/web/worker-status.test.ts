@@ -21,8 +21,8 @@ describe("workerStatusOf", () => {
   });
 
   it("这一轮出错、建 worktree 失败偏红，不看 status", () => {
-    expect(workerStatusOf(line({ event: "turn_failed" }))).toEqual({ tone: "danger", label: "出错" });
-    expect(workerStatusOf(line({ event: "worktree_failed", status: "done" }))).toEqual({ tone: "danger", label: "出错" });
+    expect(workerStatusOf(line({ event: "turn_failed" }))).toEqual({ tone: "danger", label: "Error" });
+    expect(workerStatusOf(line({ event: "worktree_failed", status: "done" }))).toEqual({ tone: "danger", label: "Error" });
   });
 
   it("没按格式、没有状态（老数据）是中性灰，没有说法", () => {

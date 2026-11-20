@@ -5,10 +5,6 @@ import { cn } from "../lib/utils.ts";
 import { TASK_PROGRESS_GRID, taskProgressPaths } from "../task-progress.ts";
 import { PixelPaths } from "./Avatar.tsx";
 
-/**
- * 右栏任务标题、放大全览左上的任务进度图标（docs/slime-cohesion-design.md）：按 taskProgressPaths 画的嫩芽生长像素小图。
- * color 是所属项目经理现在的颜色；size 是标准档像素数，写成 rem。读屏不念（aria-hidden）。
- */
 export const TaskProgressIcon = memo(function TaskProgressIcon({
   graph,
   color,

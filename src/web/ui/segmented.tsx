@@ -1,5 +1,3 @@
-// 分段选择（docs/ui-standard.md 第 9 条）：几个短选项排成一行的多选一，用 Radix RadioGroup（方向键切换、读屏是单选组）。
-// 白底细框的胶囊，选中的那段浅灰底 + 前景色字，不用强调色。
 import * as RadioGroup from "@radix-ui/react-radio-group";
 import { cn } from "../lib/utils.ts";
 
@@ -12,7 +10,6 @@ export function Segmented<T extends string>({
   className,
 }: {
   id?: string;
-  /** 读屏名字。 */
   label: string;
   value: T;
   options: readonly { value: T; label: string }[];

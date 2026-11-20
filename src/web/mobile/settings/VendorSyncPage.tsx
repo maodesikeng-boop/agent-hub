@@ -1,6 +1,3 @@
-// #/settings/vendor-sync：跨厂商 MCP 与技能并集同步（对齐桌面 VendorSyncSettings，状态与请求全来自 settings-model.ts 的 useVendorSyncSetting）。
-// 手机上不再套一层桌面 Dialog：Scan… 之后直接在页里分组预览（MCP servers / Skills / Cloud connectors），整行开关勾选，底部固定全宽 Sync 一键应用。
-// 完全由接口数据驱动，不写死厂商名，不用 · | / 拼接。
 import { Loader2 } from "../../ui/icons.ts";
 import type { VendorSyncVendorBadge } from "../../../shared/index.ts";
 import { HostBoundNote } from "../../components/HostBoundNote.tsx";
@@ -133,7 +130,6 @@ export function VendorSyncPage({ vendor }: { vendor: VendorSync }) {
   );
 }
 
-/** 预览出来后固定在底部的主操作：全宽 Sync（没有可同步的项时灰）。 */
 export function VendorSyncFooter({ vendor }: { vendor: VendorSync }) {
   if (vendor.preview === null) return null;
   return (

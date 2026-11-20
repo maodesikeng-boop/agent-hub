@@ -89,12 +89,12 @@ describe("请求体超过 1 MB：Fastify 回 413，响应里没有表里的 code
     stubFetch(new Response(JSON.stringify({ error: "Request body is too large" }), { status: 413, headers: { "content-type": "application/json" } }));
     const err = await caught(postMessage(1, { clientId: "c", text: "x" }));
     expect(err.status).toBe(413);
-    expect(errorText(err)).toEqual({ text: "内容太大，发不出去（最多 1 MB）", raw: "Request body is too large" });
+    expect(errorText(err)).toEqual({ text: "Too large to send (max 1 MB)", raw: "Request body is too large" });
   });
 
   it("响应体是空的：照样是“内容太大”，不显示空白或 undefined", async () => {
     stubFetch(new Response(null, { status: 413 }));
-    expect(errorText(await caught(fetchState())).text).toBe("内容太大，发不出去（最多 1 MB）");
+    expect(errorText(await caught(fetchState())).text).toBe("Too large to send (max 1 MB)");
   });
 });
 

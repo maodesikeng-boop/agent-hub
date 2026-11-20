@@ -1,4 +1,3 @@
-// Vendor sync 预览里「别家应用自带的 MCP」的来源与原因：来源厂商、所属应用各一个标签，下面一行原因。桌面弹窗与手机页共用。
 import type { VendorSyncHostBound } from "../../shared/index.ts";
 
 export function HostBoundNote({ hostBound }: { hostBound: VendorSyncHostBound }) {

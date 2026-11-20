@@ -24,7 +24,6 @@ import { Dialog, DialogContent, ZOOM_DIALOG } from "../ui/dialog.tsx";
 import { COPIED_RESET_MS } from "./CodeBlock.tsx";
 import { Markdown } from "./Markdown.tsx";
 
-/** 预览窗要的一个文件。url 是取文件的接口地址（文件卡片、下载用同一个）；target 是“在 Finder 中显示 / 默认程序打开”的对象，没有就不显示这两个按钮。 */
 export interface PreviewFile {
   name: string;
   mime: string;
@@ -33,7 +32,6 @@ export interface PreviewFile {
   target: FileActionTarget | null;
 }
 
-/** 放进 iframe、播放器、<img> 的地址：?inline=1 让服务端按扩展名回类型、把 pdf、html 内联发（daemon/ui-server/server.ts）。 */
 export const inlineUrl = (url: string) => `${url}?inline=1`;
 
 const OPEN_BLOCKED_TITLE = "This file type may run when opened, so it can only be shown in Finder";
@@ -42,7 +40,6 @@ const MB = 1024 * 1024;
 
 type TextState = { status: "loading" } | { status: "error" } | { status: "ready"; text: string; truncated: boolean };
 
-/** 读文件内容当文本：maxBytes 不是 null 就只取前这么多字节。 */
 function useFileText(url: string, enabled: boolean, maxBytes: number | null, size: number | null): TextState {
   const [state, setState] = useState<TextState>({ status: "loading" });
   useEffect(() => {
@@ -63,14 +60,12 @@ function useFileText(url: string, enabled: boolean, maxBytes: number | null, siz
   return state;
 }
 
-/** 代码：先显示纯文本（行号靠 CSS 计数），Shiki 加载好再换成上色的；纯文本和 Shiki 不认识的语言一直是纯文本。 */
 function CodeView({ text, language }: { text: string; language: string }) {
   const [html, setHtml] = useState<string | null>(null);
   useEffect(() => {
     setHtml(null);
     if (language === "text") return;
     let alive = true;
-    // 末尾的换行不算一行：Shiki 会给它多出一个空行
     highlightHtml(text.endsWith("\n") ? text.slice(0, -1) : text, language).then(
       (result) => alive && setHtml(result),
       () => {},
@@ -98,7 +93,6 @@ function CodeView({ text, language }: { text: string; language: string }) {
   );
 }
 
-/** 表格：跟着外面的内容框滚动（横竖都能），表头 sticky 固定在顶上。 */
 function CsvView({ rows }: { rows: string[][] }) {
   const [head = [], ...body] = rows;
   return (
@@ -113,7 +107,6 @@ function CsvView({ rows }: { rows: string[][] }) {
             ))}
           </tr>
         </thead>
-        {/* 最后一行不画底线：表格跟着内容框收到一样高之后，它和框的边贴在一起成了双线 */}
         <tbody className="[&>tr:last-child>td]:border-b-0">
           {body.map((row, r) => (
             <tr key={r}>
@@ -136,7 +129,6 @@ function Centered({ children }: { children: React.ReactNode }) {
 
 const rowsLabel = (total: number, shown: number) => (total > shown ? `${total} rows, showing the first ${shown}` : `${total} ${total === 1 ? "row" : "rows"}`);
 
-/** 内容区和工具栏上跟类型有关的部分（源码切换、复制、截断说明）。 */
 function usePreviewBody(file: PreviewFile, kind: PreviewKind) {
   const isText = kind === "markdown" || kind === "code";
   const isCsv = kind === "csv";
@@ -213,14 +205,8 @@ function OtherInfo({ file }: { file: PreviewFile }) {
   );
 }
 
-/** 自己没有大小、给多大占多大的内容（内嵌的 PDF 和网页、视频、看大图的图片）：预览窗开到接近全屏。 */
 const FILLS_WINDOW: ReadonlySet<PreviewKind> = new Set(["pdf", "html", "video", "image"]);
 
-/**
- * 文件预览窗：按类型显示，上面是三个按钮——下载、在 Finder 中显示、用默认程序打开。
- * 大小（docs/ui-standard.md 第 10 条）：表格、文字、代码、音频、认不出的文件跟内容走（同放大窗），两行的表不撑出一个近全屏的空框；
- * FILLS_WINDOW 里的开到接近全屏。内容在窗打开之后才去取（Radix 关着的时候不挂载内容）；Shiki 要上色时才加载。
- */
 export function FilePreview({ file, open, onOpenChange }: { file: PreviewFile; open: boolean; onOpenChange: (open: boolean) => void }) {
   const kind = previewKindOf(file.name, file.mime === FALLBACK_MIME ? sentFileMime(file.name) : file.mime);
   return (
@@ -238,7 +224,6 @@ function PreviewContent({ file, kind }: { file: PreviewFile; kind: PreviewKind }
   const [busy, setBusy] = useState<FileAction | null>(null);
   const [result, setResult] = useState<{ text: ErrorLike; error: boolean } | null>(null);
   const openAllowed = canOpenWithDefault(file.name);
-  // 服务端不是 macOS、或浏览器不在服务端这台机器上（服务端按请求来源定 fileActions）：不显示“在 Finder 中显示”“用默认程序打开”，只留“下载”
   const fileActions = useServerInfo().fileActions;
 
   const run = async (action: FileAction) => {
@@ -271,10 +256,9 @@ function PreviewContent({ file, kind }: { file: PreviewFile; kind: PreviewKind }
       </Centered>
     );
   } else if (kind === "pdf") {
-    // 不加 sandbox 属性：Chrome 在带 sandbox 的 iframe 里不渲染 PDF 查看器（响应头上的 CSP 沙箱不受影响，实测能渲染）
+    // No sandbox attribute: Chrome will not render its PDF viewer in a sandboxed iframe; the CSP sandbox header still applies.
     content = <iframe title={file.name} src={src} className="size-full border-0" />;
   } else if (kind === "html") {
-    // 只给 allow-scripts，不给 allow-same-origin：页面拿不到界面的 cookie，也发不了带登录的请求
     content = <iframe title={file.name} src={src} sandbox="allow-scripts" className="size-full border-0 bg-white" />;
   } else if (kind === "video") {
     content = <video src={src} aria-label={file.name} controls preload="metadata" playsInline className="size-full bg-black object-contain" />;

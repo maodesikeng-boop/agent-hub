@@ -1,5 +1,3 @@
-// Router 工作台顶栏右侧模型选择入口（docs/ui-standard.md 第 21 条）：
-// 桌面端弹出轻量 Popover，手机端弹出底部 Drawer；一键选 Auto 或已就绪厂商快模型预设，细节默认收起可展开切换模型与思考程度。
 import * as RadioGroupPrimitive from "@radix-ui/react-radio-group";
 import { ChevronDown, ChevronRight } from "../ui/icons.ts";
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
@@ -38,7 +36,6 @@ const AUTO_VALUE = "auto";
 const ROW_INTERACTIVE_CLASS =
   "-mx-2.5 flex min-h-9 w-[calc(100%+1.25rem)] cursor-pointer items-center gap-3 rounded-xl px-2.5 py-1.5 text-left outline-none transition-colors hover:bg-sidebar-hover active:bg-sidebar-hover focus-visible:ring-2 focus-visible:ring-ring/50 pointer-coarse:min-h-11";
 
-/** 乐观显示的设置：请求在途（confirmed 为 false）时一直用它；服务端确认后等权威快照的 updatedAt 追上再放手。 */
 interface OptimisticSettings {
   settings: RouterSettings;
   confirmed: boolean;
@@ -71,8 +68,7 @@ export const RouterModelPicker = memo(function RouterModelPicker({
     };
   }, []);
 
-  // 在途的请求一直显示用户最后选的（连着改两次时，前一次的回声不会把界面闪回去）；
-  // 服务端确认后，权威快照（WebSocket）的 updatedAt 追上这次写入就放手，之后别处的改动照常跟进
+  // Keep the last local choice until the snapshot's updatedAt catches up, so a stale echo cannot flip the picker back.
   const optimisticFresh =
     optimistic !== null && !(optimistic.confirmed && settings.updatedAt >= optimistic.settings.updatedAt);
   if (optimistic !== null && !optimisticFresh) {

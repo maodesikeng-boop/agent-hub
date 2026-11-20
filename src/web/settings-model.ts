@@ -1,5 +1,3 @@
-// 桌面弹窗（SettingsDialog）与手机二级钻取设置页（mobile/settings/*）100% 共用的无 UI 设置模型层。
-// 集中管理：界面大小、通知受阻原因与摘要、电脑与账号操作/摘要、登录链接与浏览器会话缓存、跨厂商连接器同步及复制反馈。
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
@@ -71,13 +69,10 @@ import {
 
 export { COPIED_RESET_MS };
 
-/** 设置模块所需的设备状态：所有设备（入口本机第一），变更后回调刷新清单。 */
 export interface DeviceSettings {
   devices: readonly DeviceView[];
   onChanged: () => void;
 }
-
-// ---- 1. 界面大小 ----
 
 export const UI_SCALE_OPTIONS: readonly { value: UiScale; label: string }[] = UI_SCALES.map((value) => ({
   value,
@@ -100,9 +95,6 @@ export function useUiScaleSetting() {
   );
 }
 
-// ---- 2. 推送通知 ----
-
-/** 开关打不开时的具体解除引导；可正常开启的权限态为 undefined。 */
 export const NOTIFY_BLOCKED: Partial<Record<NotifySettings["permission"], string>> = {
   denied: "Blocked by the browser. Allow notifications in site settings",
   unsupported: "This browser doesn't support notifications",
@@ -116,8 +108,6 @@ export function isNotifyBlocked(notify: Pick<NotifySettings, "permission">): boo
 export function describeNotifySummary(notify: Pick<NotifySettings, "enabled" | "permission">): "On" | "Off" {
   return notify.enabled && !isNotifyBlocked(notify) ? "On" : "Off";
 }
-
-// ---- 3. 电脑摘要 ----
 
 export type ComputersSummaryInput = { devices: readonly Pick<DeviceView, "info" | "status">[] } | readonly Pick<DeviceView, "info" | "status">[];
 
@@ -140,7 +130,6 @@ function computeComputersSummary(list: readonly Pick<DeviceView, "info" | "statu
   return "This computer";
 }
 
-/** 计算电脑分组的一级单一摘要（严禁用 · / | / / 拼接），并按输入引用缓存。 */
 export function describeComputersSummary(input: ComputersSummaryInput): string {
   const list = "devices" in input ? input.devices : input;
   const cached = computersSummaryCache.get(input);
@@ -149,8 +138,6 @@ export function describeComputersSummary(input: ComputersSummaryInput): string {
   computersSummaryCache.set(input, { devices: list, summary });
   return summary;
 }
-
-// ---- 4. 复制反馈 ----
 
 export function useCopyFeedback(resetMs: number = COPIED_RESET_MS): {
   copied: boolean;
@@ -181,8 +168,6 @@ export function useCopyFeedback(resetMs: number = COPIED_RESET_MS): {
   );
   return useMemo(() => ({ copied, copy }), [copied, copy]);
 }
-
-// ---- 5. 设备改名、移除，账号与设备（登录、批准、中心顺序） ----
 
 export function useDeviceRename(device: Pick<DeviceView, "info">, onChanged?: () => void) {
   const [name, setName] = useState(device.info.name);
@@ -243,7 +228,6 @@ export function useDeviceRemove(device: Pick<DeviceView, "info">, onChanged?: ()
   return { busy, error, remove, clearError };
 }
 
-/** GET /api/account：中继推变化时网页收到 account.updated 就让它失效（device-hub.ts），不轮询。 */
 export function useAccount() {
   const qc = useHubQueryClient();
   const query = useQuery({ queryKey: ACCOUNT_QUERY_KEY, queryFn: fetchAccount, staleTime: Infinity }, qc);
@@ -288,7 +272,6 @@ export function useAccount() {
   };
 }
 
-/** 中心顺序里把 id 往前（delta -1）或往后（+1）挪一格；挪不动原样返回。 */
 export function movePriority(priority: readonly DeviceId[], id: DeviceId, delta: -1 | 1): DeviceId[] {
   const from = priority.indexOf(id);
   const to = from + delta;
@@ -298,13 +281,8 @@ export function movePriority(priority: readonly DeviceId[], id: DeviceId, delta:
   return next;
 }
 
-// ---- 6. 一次性登录链接与已登录浏览器会话 ----
-
-/** 二维码显示期间，每隔多久刷新一次列表（另一台设备扫码登录上了，二维码就收起来）。 */
 export const SESSIONS_POLL_MS = 3000;
-/** “确认退出”等多久没再点就自动退回。 */
 export const CONFIRM_TIMEOUT_MS = 5000;
-/** 倒计时每秒走一次。 */
 export const COUNTDOWN_TICK_MS = 1000;
 
 export const BROWSER_SESSIONS_QUERY_KEY = ["browser-sessions"] as const;
@@ -509,9 +487,7 @@ export function useBrowserSessions({
 }
 
 export interface BrowserSessionsSummary {
-  /** 已缓存的会话数；尚未拉取过时为 null。 */
   count: number | null;
-  /** 一级导航行右侧直接展示的单一摘要文案（未拉取为 undefined，否则为数量字符串）。 */
   summary: string | undefined;
 }
 
@@ -520,7 +496,6 @@ const EMPTY_BROWSER_SESSIONS_SUMMARY: BrowserSessionsSummary = {
   summary: undefined,
 };
 
-/** 只读 queryClient 中已有的 ["browser-sessions"] 缓存（enabled: false，0 网络请求）。 */
 export function useCachedBrowserSessionsSummary(): BrowserSessionsSummary {
   const qc = useHubQueryClient();
   const { data } = useQuery(
@@ -536,8 +511,6 @@ export function useCachedBrowserSessionsSummary(): BrowserSessionsSummary {
     return { count: data.length, summary: String(data.length) };
   }, [data]);
 }
-
-// ---- 7. 跨厂商 MCP 与技能并集同步 ----
 
 export const VENDOR_STATUS_LABELS: Readonly<Record<VendorSyncItemVendorStatus, string>> = {
   present: "Synced",
@@ -566,12 +539,6 @@ export function formatVendorSyncSummary(result: VendorSyncApplyResponse): string
 const EMPTY_STRING_SET: ReadonlySet<string> = new Set();
 const uncheckedHostBoundBadgesCache = new WeakMap<readonly VendorSyncVendorBadge[], readonly VendorSyncVendorBadge[]>();
 
-/**
- * 计算预览行下方展示的厂商状态标签：
- * 普通 MCP 与已勾选的 `hostBound` MCP 展示全部厂商状态；
- * 未勾选的 `hostBound` MCP 只展示当前已持有它的厂商（`present` / `kept`），不展示不会发生的 `Add` / `mcp-remote`。
- * 按输入数组引用 `WeakMap` 缓存，保持引用稳定。
- */
 export function visibleMcpVendorBadges(
   item: VendorSyncMcpPreviewItem,
   checked: boolean,
@@ -591,10 +558,6 @@ function toggledSet(prev: ReadonlySet<string>, key: string, nextChecked: boolean
   return next;
 }
 
-/**
- * 一次同步预览会话：属于哪台设备、是哪一次扫描的结果，以及用户在这份结果上的勾选。
- * 只有扫描 observer 当前那一次调用的结果能成为会话；同步成功或切换设备即结束。
- */
 interface VendorSyncSession {
   readonly device: DeviceKey;
   readonly preview: VendorSyncPreviewResponse;
@@ -602,13 +565,11 @@ interface VendorSyncSession {
   readonly checkedSkills: ReadonlySet<string>;
 }
 
-/** 某台设备上最近一次同步的结果摘要。 */
 interface VendorSyncSummary {
   readonly device: DeviceKey;
   readonly text: string;
 }
 
-/** 扫描与同步按设备区分 mutationKey：切换设备时 TanStack 自动 reset，在途请求与本 observer 解绑。 */
 const VENDOR_SYNC_MUTATION_KEY = (step: "scan" | "apply", device: DeviceKey) => ["vendor-sync", step, device] as const;
 
 function buildApplyRequest(session: VendorSyncSession): VendorSyncApplyRequest {
@@ -621,7 +582,6 @@ function buildApplyRequest(session: VendorSyncSession): VendorSyncApplyRequest {
       selectedMcpKeys.push(item.key);
       if (item.hostBound) confirmedHostBoundMcpKeys.push(item.key);
     } else if (!item.hostBound) {
-      // 别家应用自带的 MCP：不勾选只是“不往别家补”，不进移除清单，源头配置原样保留
       removeMcpKeys.push(item.key);
     }
   }
@@ -650,7 +610,6 @@ export function useVendorSyncSetting(explicitClient?: HubClient) {
   const targetDevice = client.device ?? LOCAL_DEVICE;
   const [session, setSession] = useState<VendorSyncSession | null>(null);
   const [summary, setSummary] = useState<VendorSyncSummary | null>(null);
-  // 切换设备即结束上一台设备的会话与摘要（渲染期按 prop 调整 state，不等 effect，切回来也不会复活旧预览）
   if (session !== null && session.device !== targetDevice) setSession(null);
   if (summary !== null && summary.device !== targetDevice) setSummary(null);
   const current = session?.device === targetDevice ? session : null;
@@ -659,8 +618,6 @@ export function useVendorSyncSetting(explicitClient?: HubClient) {
   const checkedSkills = current?.checkedSkills ?? EMPTY_STRING_SET;
   const lastSummary = summary?.device === targetDevice ? summary.text : null;
 
-  // 结果只经 mutate() 的调用级回调落到 state：TanStack 只对 observer 当前那次调用触发，
-  // 被新一次调用顶掉、或因切换设备 reset 解绑的在途请求，回来后不会再写任何 state。
   const applyMutation = useMutation(
     {
       mutationKey: VENDOR_SYNC_MUTATION_KEY("apply", targetDevice),
@@ -702,7 +659,6 @@ export function useVendorSyncSetting(explicitClient?: HubClient) {
       onSuccess: (result, scanned) => {
         if (!scanned) return;
         setSummary({ device: scanned.device, text: formatVendorSyncSummary(result) });
-        // 只结束提交时那一次扫描的会话
         setSession((prev) => (prev?.preview === scanned.preview ? null : prev));
       },
     });
@@ -749,14 +705,10 @@ export function useVendorSyncSetting(explicitClient?: HubClient) {
   };
 }
 
-// ---- 8. Providers 一键安装、更新与界面内直接登录 ----
-
 export const PROVIDERS_QUERY_KEY = (deviceKey: string) => ["providers", deviceKey] as const;
 
 export interface ProvidersSummary {
-  /** 一级导航行右侧直接展示的单一摘要文案（未拉取为 undefined，0 家可用为 "Attention"，否则为 "N ready"）。 */
   readonly summary: string | undefined;
-  /** 是否需要亮起琥珀色关注点（0 家就绪时为 true）。 */
   readonly attention: boolean;
 }
 
@@ -780,7 +732,6 @@ function isProviderSummaryItemReady(item: ProvidersSummarySourceItem): boolean {
   return isSelectable(item.availability);
 }
 
-/** 计算手机一级设置页 Providers 导航行摘要（严禁用 · / | / / 拼接），按输入数组引用 WeakMap 缓存。 */
 export function describeProvidersSummary(
   items: readonly ProvidersSummarySourceItem[] | null | undefined,
 ): ProvidersSummary {
@@ -796,7 +747,6 @@ export function describeProvidersSummary(
   return computed;
 }
 
-/** 只读 queryClient 中已有的本机 providers / models 缓存（enabled: false，严格 0 次网络请求）。 */
 export function useCachedProvidersSummary(): ProvidersSummary {
   const qc = useHubQueryClient();
   const { data: cachedProviders } = useQuery(
@@ -853,7 +803,6 @@ export function hasActiveProviderWork(status: ProvidersStatusResponse | null | u
   );
 }
 
-/** 提取多子模型商聚合目标列表；单厂商返回 null。 */
 export function extractProviderAuthTargets(
   methods: readonly ProviderAuthMethodDescriptor[],
 ): readonly ProviderAuthTarget[] | null {
@@ -865,7 +814,6 @@ export function extractProviderAuthTargets(
   return null;
 }
 
-/** 按当前选中的子模型商 targetId 过滤可用登录方法。 */
 export function visibleAuthMethodsForTarget(
   methods: readonly ProviderAuthMethodDescriptor[],
   targetId: string | undefined,
@@ -878,7 +826,6 @@ export function visibleAuthMethodsForTarget(
   );
 }
 
-/** 根据当前目标是否为远端无头访问，选出默认推荐的登录方法 ID。 */
 export function defaultProviderAuthMethodId(
   methods: readonly ProviderAuthMethodDescriptor[],
   isRemoteTarget: boolean,
@@ -892,7 +839,6 @@ export function defaultProviderAuthMethodId(
   return first.id;
 }
 
-/** 当存在 >= 2 台在线设备时返回可选的电脑列表；否则返回空数组（单机模式隐藏 Computer 选择行）。 */
 export function resolveSelectableProviderComputers(
   devices: readonly DeviceView[] | null | undefined,
 ): readonly DeviceView[] {
@@ -986,7 +932,6 @@ export function useProvidersSetting({
     qc,
   );
 
-  // 追踪后台异步任务与登录流从“进行中”跨入“成功”的瞬间，自动联动刷新对应设备的 ["models", deviceKey] 缓存
   const trackedActiveRef = useRef<{ jobs: Set<string>; flows: Set<string> }>({
     jobs: new Set(),
     flows: new Set(),
@@ -1047,7 +992,6 @@ export function useProvidersSetting({
       qc.setQueryData<ProvidersStatusResponse>(queryKey, next);
       refreshDeviceModels(qc, targetClient);
     } catch {
-      // 刷新失败保留已有缓存或交由 queryError 展示
     } finally {
       setBusyKey((cur) => (cur === "refresh" ? null : cur));
     }

@@ -1,10 +1,3 @@
-// 本机守护进程热重启后（hub self-reload，daemon/self-reload.ts）网页无感刷新，草稿不丢：
-// - 入口本机的 DeviceHub 每次拿到快照、或 WebSocket 断开重连上后，把这次启动的 bootId（/api/state 的 bootId、/api/auth/status 的
-//   instanceId）交给 observeBoot；和页面第一次看到的不一样，说明守护进程重启过（网页可能也换了新构建）→ 刷新整页。
-//   别的设备（联机）重启只是那台的连接重连，绝不刷新本机页面：只有入口本机的 hub 接这里（device-hub.ts）。
-// - 刷新前先看现在方不方便：有打开的弹窗、有会话在流式输出、有文件在上传、在输入法组词，就隔 AUTO_RELOAD_RECHECK_MS 再看。
-// - 草稿：输入框的草稿只在内存里（upload.ts 的 useDraftStore），刷新前写进 sessionStorage（条数、字节有上限），加载后各输入框
-//   建草稿槽时认领回来；过期的丢掉。页面被关掉、手动刷新（pagehide）也存一次。
 import {
   AUTO_RELOAD_DRAFT_TTL_MS,
   AUTO_RELOAD_MAX_DRAFT_BYTES,
@@ -15,10 +8,8 @@ import {
 } from "../shared/index.ts";
 import { byteLength } from "./format.ts";
 
-/** sessionStorage 里存草稿的键（版本号变了旧的直接不认）。 */
 export const DRAFTS_STORAGE_KEY = "agent-hub:drafts:v1";
 
-/** 打开着的弹窗（Radix Dialog / AlertDialog / 抽屉都带 role）。 */
 const OPEN_DIALOG_SELECTOR = '[role="dialog"]:not([data-state="closed"]), [role="alertdialog"]:not([data-state="closed"])';
 
 export interface DraftValue {
@@ -31,15 +22,11 @@ interface StoredDraft extends DraftValue {
   savedAt: number;
 }
 
-/** 一个草稿来源（useDraftStore）：列出现在所有的草稿槽（空的也列，用来盖掉同键的旧存档）。 */
 export type DraftSource = () => Iterable<readonly [string, DraftValue]>;
-
-// ---- 进行中的上传、输入法组词：页面级的单例，刷新前看 ----
 
 let pendingUploads = 0;
 let composing = false;
 
-/** 发送里带文件（上传 + 发出去）的那段 Promise：没结束前不刷新。 */
 export function trackUpload(result: Promise<unknown>): void {
   pendingUploads += 1;
   void result.then(
@@ -48,10 +35,7 @@ export function trackUpload(result: Promise<unknown>): void {
   );
 }
 
-// ---- 草稿：存、取 ----
-
 const sources = new Set<DraftSource>();
-/** 上次刷新前存下、还没被输入框认领的草稿；第一次用到时从 sessionStorage 读。 */
 let restored: Map<string, StoredDraft> | null = null;
 
 function storage(): Storage | null {
@@ -72,7 +56,6 @@ function validPick(raw: unknown): WorkerPick | null | undefined {
   return { vendor, model, effort };
 }
 
-/** 读出来、丢掉过期和坏的，再把干净的写回去（加载后清理过期项）。 */
 function loadRestored(now: number): Map<string, StoredDraft> {
   const map = new Map<string, StoredDraft>();
   const store = storage();
@@ -96,7 +79,6 @@ function loadRestored(now: number): Map<string, StoredDraft> {
     }
     writeDrafts(store, [...map.values()]);
   } catch {
-    // 坏了的存档直接扔掉
     store.removeItem(DRAFTS_STORAGE_KEY);
     map.clear();
   }
@@ -113,7 +95,6 @@ function writeDrafts(store: Storage, drafts: StoredDraft[]): void {
   else store.setItem(DRAFTS_STORAGE_KEY, JSON.stringify({ drafts }));
 }
 
-/** 输入框建草稿槽时认领上次存下的草稿（拿走就从存档里删，之后以输入框里的为准）。 */
 export function takeRestoredDraft(key: string): DraftValue | null {
   const map = restoredMap();
   const found = map.get(key);
@@ -123,16 +104,11 @@ export function takeRestoredDraft(key: string): DraftValue | null {
   return { text: found.text, pick: found.pick };
 }
 
-/** useDraftStore 登记自己；返回注销。 */
 export function registerDraftSource(source: DraftSource): () => void {
   sources.add(source);
   return () => sources.delete(source);
 }
 
-/**
- * 把现在所有没发出去的草稿（加上还没认领的旧存档）写进 sessionStorage：最近的优先，最多 AUTO_RELOAD_MAX_DRAFTS 条、
- * 合计 AUTO_RELOAD_MAX_DRAFT_BYTES 字节，超了的丢掉；写不进去（配额满、隐私模式）不报错。
- */
 export function saveDrafts(now = Date.now()): void {
   const store = storage();
   if (store === null) return;
@@ -158,32 +134,21 @@ export function saveDrafts(now = Date.now()): void {
   try {
     writeDrafts(store, kept);
   } catch {
-    // 写不进去就算了：刷新照常
   }
 }
 
-// ---- 刷新时机 ----
-
 export interface AutoReloadEnv {
-  /** 现在有会话在流式输出（入口本机的 hub 状态）。 */
   isStreaming: () => boolean;
-  /** 页面上有打开的弹窗；默认查 DOM 里的 [role="dialog"]。 */
   hasOpenDialog?: () => boolean;
-  /** 默认按 trackUpload 记的数。 */
   isUploading?: () => boolean;
-  /** 默认按 document 上的 compositionstart / compositionend。 */
   isComposing?: () => boolean;
-  /** 默认 saveDrafts()。 */
   saveDrafts?: () => void;
-  /** 默认 location.reload()。 */
   reload?: () => void;
   recheckMs?: number;
 }
 
 export interface AutoReloader {
-  /** 入口本机这次连上的 bootId（老服务端没有就是 undefined，不管）。 */
   observeBoot(bootId: string | undefined): void;
-  /** 停掉在等的重查（页面卸载时）；之后 observeBoot 照常能用（React 严格模式会先卸再装）。 */
   dispose(): void;
 }
 
@@ -233,7 +198,6 @@ export function createAutoReloader(env: AutoReloadEnv): AutoReloader {
 
 let installed = false;
 
-/** 页面级的监听（输入法组词、关页面前存草稿），只装一次。 */
 export function installAutoReloadListeners(): void {
   if (installed || typeof window === "undefined") return;
   installed = true;
@@ -242,7 +206,6 @@ export function installAutoReloadListeners(): void {
   window.addEventListener("pagehide", () => saveDrafts());
 }
 
-/** 只给测试：清掉页面级的单例状态。 */
 export function resetAutoReloadForTests(): void {
   pendingUploads = 0;
   composing = false;

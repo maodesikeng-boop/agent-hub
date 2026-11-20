@@ -1,5 +1,3 @@
-// 水果刀 Router 行动与时间流工作台 v2（docs/ui-standard.md 第 21 条、docs/router-workbench-v2-design.md）：
-// 顶栏下按需挂可收起的待拍板托盘 Needs You，主体是指令回合与里程碑简报的无卡片时间流 RouterStream，底部复用重叠式 DraftComposer。
 import { useMutation, useMutationState, type Mutation, type QueryClient } from "@tanstack/react-query";
 import { ChevronRight, ComposerRemove } from "../ui/icons.ts";
 import {
@@ -132,7 +130,6 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
     }
   }, [decisions.length]);
 
-  // 换一张卡展开（点了收起的行、点了 Show more 之后再点）：托盘滚回最上面，展开卡的来源头像和问题从头看得到
   const trayRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const tray = trayRef.current;
@@ -152,7 +149,6 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
   return (
     <Collapsible asChild open={!collapsed} onOpenChange={(open) => setCollapsed(!open)}>
       <section aria-label="Needs You" className="chat-column w-full shrink-0 pb-3">
-        {/* 下边线只和对话列一样宽（不横贯整个主区），线下留 12px 空白再接时间流；时间流往上滚的字在视口上边 2rem 内渐隐（.router-timeline） */}
         <div className="border-b border-border pt-2.5">
           <CollapsibleTrigger
             type="button"
@@ -165,7 +161,6 @@ const RouterNeedsYouTray = memo(function RouterNeedsYouTray({
               />
               <span className="truncate">Needs You</span>
             </span>
-            {/* 个数紧跟在标题后面：甩到一整行的最右端就看不出是谁的数 */}
             <span className="shrink-0 font-normal text-muted-foreground tabular-nums">{decisions.length}</span>
           </CollapsibleTrigger>
 
@@ -291,7 +286,6 @@ export function RouterWorkbench({
     return localDevice?.state.router.settings ?? DEFAULT_ROUTER_SETTINGS;
   }, [devices]);
 
-  // 拍板卡、简报里的文件按条目所在设备取（DeviceScopeOf）。查找函数引用不变：设备状态每次推送都换新数组，不让卡片跟着重画
   const devicesRef = useRef(devices);
   devicesRef.current = devices;
   const deviceScopeLookup = useCallback<DeviceScopeLookup>(
@@ -302,13 +296,11 @@ export function RouterWorkbench({
     [clientForDevice],
   );
 
-  // 待拍板乐观隐藏、备注草稿、错误回滚与当前选中展开项（随活跃集合裁剪，严格有界）
   const [hiddenDecisionTokens, setHiddenDecisionTokens] = useState<Readonly<Record<string, string>>>({});
   const [decisionNotes, setDecisionNotes] = useState<Readonly<Record<string, string>>>({});
   const [decisionErrors, setDecisionErrors] = useState<Readonly<Record<string, ErrorLike>>>({});
   const [selectedDecisionKey, setSelectedDecisionKey] = useState<string | null>(null);
 
-  // 底部输入框选中的跨设备 `@` 目标
   const [selectedTargetKey, setSelectedTargetKey] = useState<string | null>(null);
 
   useEffect(() => {
@@ -381,7 +373,6 @@ export function RouterWorkbench({
     [clientForDevice],
   );
 
-  // 时间流切片（WeakMap 四级缓存：流式打字期间严格 ===）
   const stream = useMemo<FleetRouterStream>(() => {
     const inputs: RouterStreamDeviceInput[] = devices.map((d) => ({
       key: d.key,
@@ -393,7 +384,7 @@ export function RouterWorkbench({
     return fleetRouterStream(inputs, resolvedSelfId);
   }, [devices, resolvedSelfId]);
 
-  // 统一走 postRouterCommand 的发送 mutation（缓存在 QueryClient，切走再回来仍在；只结构出稳定的 mutate 以免击穿 RouterStream 的 memo）
+  // Destructure only the stable mutate so RouterStream's memo holds.
   const { mutate: mutateSend } = useMutation<PostRouterCommandResponse, unknown, RouterCommandVariables>(
     {
       mutationKey: ROUTER_COMMAND_MUTATION_KEY,

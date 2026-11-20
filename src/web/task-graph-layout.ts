@@ -4,22 +4,17 @@ import type { Deliverable, TaskGraph, TaskNode } from "../shared/index.ts";
 import { deliverablesHeightRem } from "./deliverable-size.ts";
 import { orthogonalRoute, pixelArrowPaths, TUBE_WIDTH_CELLS, tubePaths } from "./pixel-path.ts";
 
-/** Dagre 拓扑布局结果 LRU 缓存上限（对齐 docs/task-graph-design.md 第 5.2、5.3 节）。 */
 export const GRAPH_LAYOUT_CACHE_MAX = 64;
 
-/** 右栏 w-80（320px）扣除左右 px-5（40px）后的最大内容净宽（px），严禁出现横向滚动条。 */
 export const RAIL_MAX_CONTENT_WIDTH_PX = 280;
 
-/** 右栏紧凑态单层最多直接展开 2 张并行节点卡；k >= 3 时折叠为“2 张卡 + +N parallel 汇总节点”。 */
 export const RAIL_PARALLEL_VISIBLE_LIMIT = 2;
 
-/** 标准档（100%）根字号像素值。 */
 export const DEFAULT_ROOT_FONT_SIZE_PX = 16;
 
 const MIN_ROOT_FONT_SIZE_PX = 10;
 const MAX_ROOT_FONT_SIZE_PX = 28;
 
-// ─── 卡片 rem 尺寸常量（集中一处，随 rootFontSizePx 等比换算） ───────────────
 const RAIL_SINGLE_NODE_HEIGHT_REM = 3.25;
 const RAIL_COMPACT_NODE_HEIGHT_REM = 3.75;
 const RAIL_GATE_IDLE_HEIGHT_REM = 3.5;
@@ -30,22 +25,20 @@ const RAIL_GATE_NOTE_COLLAPSED_REM = 1.5;
 const RAIL_GATE_NOTE_EXPANDED_REM = 2.75;
 
 const DIALOG_PIECE_WIDTH_REM = 13.5;
-const DIALOG_PIECE_HEIGHT_REM = 4.25; // 普通卡最矮这么高：TaskGraphDialog 里卡片的 min-h-17 是同一个数
+const DIALOG_PIECE_HEIGHT_REM = 4.25;
 const DIALOG_SUMMARY_EXTRA_REM = 1;
 const DIALOG_GATE_IDLE_WIDTH_REM = 14;
 const DIALOG_GATE_IDLE_HEIGHT_REM = 4.5;
 const DIALOG_GATE_ACTIVE_WIDTH_REM = 17.5;
-// 放大弹窗里等拍板的卡（PeelTrack 的 GateDecisionCard）按实际渲染量出来的各块高度，17.5px 根字号下逐块量过。
-const DIALOG_GATE_ACTIVE_BASE_REM = 3.34; // 标题行（连下边距）1.725 + 卡片上下内边距和边框 1.61
-const DIALOG_GATE_QUESTION_REM = 1.6; // 问题一行 1.35 + mb-1 0.25
-const DIALOG_GATE_SUMMARY_REM = 1.9; // 摘要一行 1.39 + 和下面的 mb-2 0.5
-const DIALOG_GATE_OPTION_ROW_REM = 2.25; // 一个选项按钮（min-h-9）
-const DIALOG_GATE_OPTION_GAP_REM = 0.5; // 选项之间（gap-2）
-const DIALOG_GATE_NOTE_COLLAPSED_REM = 2.25; // “Add note” 按钮 1.75 + mt-2 0.5
-// 触屏（pointer: coarse）下选项和 “Add note” 按钮都是 min-h-11（2.75rem），第 19 条
+const DIALOG_GATE_ACTIVE_BASE_REM = 3.34;
+const DIALOG_GATE_QUESTION_REM = 1.6;
+const DIALOG_GATE_SUMMARY_REM = 1.9;
+const DIALOG_GATE_OPTION_ROW_REM = 2.25;
+const DIALOG_GATE_OPTION_GAP_REM = 0.5;
+const DIALOG_GATE_NOTE_COLLAPSED_REM = 2.25;
 const DIALOG_GATE_OPTION_ROW_COARSE_REM = 2.75;
 const DIALOG_GATE_NOTE_COLLAPSED_COARSE_REM = 3.25;
-const DIALOG_GATE_NOTE_EXPANDED_REM = 2.875; // 输入行 2.25 + mt-2.5 0.625
+const DIALOG_GATE_NOTE_EXPANDED_REM = 2.875;
 const DIALOG_MARGIN_REM = 0.75;
 const DIALOG_RANK_SEP_REM = 3;
 const DIALOG_NODE_SEP_REM = 1.125;
@@ -57,7 +50,6 @@ const RAIL_OVERFLOW_MAX_PX = 76;
 const RAIL_COL_GAP_MAX_PX = 8;
 const RAIL_COL_GAP_MIN_PX = 6;
 
-/** 步骤的四个状态（shared/domain.ts 的 TASK_NODE_STATUSES）。 */
 export type LayoutNodeStatus = "pending" | "running" | "waiting" | "done";
 
 export type LayoutViewportMode = "rail" | "dialog";
@@ -65,26 +57,14 @@ export type LayoutViewportMode = "rail" | "dialog";
 export interface LayoutInputNode {
   readonly key: string;
   readonly status: LayoutNodeStatus;
-  /** 等谁：只在 status 是 waiting 时有；等用户（user）的步骤展开成拍板卡。 */
   readonly waitingFor?: "user" | "pm" | null;
-  /** 挂着拍板卡（写了问题，或已经有定案）：卡片比普通步骤高一档。 */
   readonly hasCard?: boolean;
-  /** 同层兄弟节点的稳定声明序（默认按数组输入顺序）。 */
   readonly position?: number;
-  /** 拍板卡的预设选项数（等用户时用于估算按钮行数与卡片高度）。 */
   readonly optionCount?: number;
-  /** 是否带有摘要说明文本。 */
   readonly hasSummary?: boolean;
-  /** 拍板卡是否画了问题那一行（问题和步骤标题不同才画）。 */
   readonly hasQuestion?: boolean;
-  /** 门禁卡片是否展开了补充备注输入框。 */
   readonly noteExpanded?: boolean;
-  /** 拍板卡下面的交付物（文档链接行、缩略图行）：只有放大弹窗里等拍板的卡会画出来，估算高度时加上。 */
   readonly deliverables?: readonly Deliverable[];
-  /**
-   * 这张卡画出来之后量到的高度（px，取整）。给了就用它排版，不用估算：拍板卡里是 Markdown 摘要，几行、有没有 Show more 估不准，
-   * 估矮了同一列的下一张卡会压上来。第一帧没有量到的值时仍按估算排，量到后重排一次。
-   */
   readonly measuredHeightPx?: number;
 }
 
@@ -99,9 +79,7 @@ export interface TaskGraphLayoutInput {
   readonly nodes: readonly LayoutInputNode[];
   readonly edges: readonly LayoutInputEdge[];
   readonly viewportMode: LayoutViewportMode;
-  /** 当前 html 根字号像素值（支持 12~19 等各档界面大小缩放；默认 16）。 */
   readonly rootFontSizePx?: number;
-  /** 主指针是触屏（matchMedia("(pointer: coarse)")）：拍板卡里的按钮更高，估算跟着加高。 */
   readonly coarsePointer?: boolean;
 }
 
@@ -139,22 +117,16 @@ export interface LayoutEdgePath {
   readonly id: string;
   readonly from: string;
   readonly to: string;
-  /** 果冻管道的正交折线中线（pixel-path.ts 的 tubePaths）：只有横竖线段，管道停在箭头的底边。 */
   readonly d: string;
-  /** 管道的高光线（中线往左上挪半格）。 */
   readonly highlightD: string;
-  /** 终点像素箭头的描边和芯（pixelArrowPaths），尖端落在 end。 */
   readonly arrowOutlineD: string;
   readonly arrowFillD: string;
   readonly start: LayoutPoint;
   readonly end: LayoutPoint;
-  /** 上游已完成（done）时为 true：管道灌满果冻；其余是空管子。 */
   readonly solid: boolean;
 }
 
-/** 放大全览、右栏里果冻管道的一格（px）：管道 4 格宽、箭头 9×5 格。 */
 export const GRAPH_TUBE_CELL_PX = 2;
-/** 箭头朝前的长度（5 格）：管道停在箭头底边。 */
 const ARROW_LEN_PX = 5 * GRAPH_TUBE_CELL_PX;
 
 export interface TaskGraphLayoutResult {
@@ -198,11 +170,6 @@ function normalizedOptionRows(node: LayoutInputNode): number {
   return Math.max(2, Math.min(10, Math.trunc(raw) || 2));
 }
 
-/**
- * 估算单个节点卡片的 rem 宽高（纯函数，不访问 DOM）：
- * 只依赖影响几何高度档位的字段（hasCard、是否等用户拍板、optionCount、hasSummary、noteExpanded），
- * 普通步骤在没轮到、在干、等项目经理之间流转时尺寸档位保持恒定，避免无意义重排。
- */
 export function estimateNodeSizeRem(
   node: LayoutInputNode,
   viewportMode: LayoutViewportMode,
@@ -240,7 +207,6 @@ export function estimateNodeSizeRem(
     };
   }
 
-  // viewportMode === "rail"
   const widthRem = round2(
     layerCount <= 1
       ? RAIL_MAX_CONTENT_WIDTH_PX / DEFAULT_ROOT_FONT_SIZE_PX
@@ -269,7 +235,6 @@ export function estimateNodeSizeRem(
   };
 }
 
-/** 生成拓扑与尺寸档位指纹：忽略不影响布局与实虚线的非几何状态跳变。 */
 function buildLayoutCacheKey(input: TaskGraphLayoutInput, fontPx: number): string {
   const parts: string[] = [
     input.graphId !== undefined ? String(input.graphId) : "_",
@@ -300,7 +265,6 @@ function buildLayoutCacheKey(input: TaskGraphLayoutInput, fontPx: number): strin
   return parts.join("|");
 }
 
-/** 计算正向最长拓扑层（Kahn 拓扑序，带环路安全回退）。 */
 function computeForwardRanks(
   nodes: readonly LayoutInputNode[],
   edges: readonly LayoutInputEdge[],
@@ -387,7 +351,6 @@ function computeRailWidthsForRow(rowNodes: readonly VirtualNode[], fontPx: numbe
     return [colW, RAIL_MAX_CONTENT_WIDTH_PX - gap - colW];
   }
 
-  // count === 3（2 张可见节点卡 + 1 个 +N parallel，或 3 个紧凑节点）
   const hasOverflow = rowNodes.some((n) => n.boxKind === "parallel_overflow");
   if (hasOverflow) {
     const overflowW = railOverflowWidthPx(fontPx);
@@ -409,7 +372,6 @@ function computeRailWidthsForRow(rowNodes: readonly VirtualNode[], fontPx: numbe
   return [colW, colW, RAIL_MAX_CONTENT_WIDTH_PX - 2 * gap - 2 * colW];
 }
 
-/** 一列（同一层）卡片的左右边界：dagre 横排时同一层的卡片中心 x 相同。 */
 interface LayoutColumn {
   readonly center: number;
   readonly left: number;
@@ -431,18 +393,12 @@ function columnsOf(boxes: readonly LayoutNodeBox[]): LayoutColumn[] {
   return columns;
 }
 
-/** 横着跑的一段（y 上下各留半根管子加 4px）会不会穿过这些卡片。 */
 function runHitsBoxes(y: number, x0: number, x1: number, boxes: readonly LayoutNodeBox[]): LayoutNodeBox[] {
   const pad = (TUBE_WIDTH_CELLS.outline * GRAPH_TUBE_CELL_PX) / 2 + 4;
   const [lo, hi] = x0 < x1 ? [x0, x1] : [x1, x0];
   return boxes.filter((b) => b.x < hi && b.x + b.width > lo && y > b.y - pad && y < b.y + b.height + pad);
 }
 
-/**
- * 横排（LR）一条边的正交走线：从上游卡片右边中点出发，在它右边那道空隙的正中竖着拐到要去的高度，跨过中间几列时沿一条
- * 不穿卡片的横线走（先试出发的高度、再试到达的高度，都挡着就从挡着的卡片上面或下面绕），到目标左边那道空隙正中再竖着拐回来，
- * 横着进目标卡片左边中点前的箭头。同一列出发、到同一列的边共用拐弯的竖线，分叉、汇合看着是一根管子分开、并上。
- */
 function routeLr(start: LayoutPoint, end: LayoutPoint, from: LayoutNodeBox, to: LayoutNodeBox, columns: readonly LayoutColumn[], boxes: readonly LayoutNodeBox[]) {
   const colOf = (box: LayoutNodeBox) => columns.findIndex((c) => Math.abs(c.center - (box.x + box.width / 2)) <= 2);
   const a = colOf(from);
@@ -472,16 +428,12 @@ function routeLr(start: LayoutPoint, end: LayoutPoint, from: LayoutNodeBox, to: 
   return [start, { x: bendOut, y: start.y }, { x: bendOut, y: runY }, { x: bendIn, y: runY }, { x: bendIn, y: end.y }, { x: tubeEnd, y: end.y }];
 }
 
-/** 竖排（TB，右栏紧凑态）：从上游卡片底边中点往下，在两层中间横着拐到目标的 x，再往下进箭头。 */
 function routeTb(start: LayoutPoint, end: LayoutPoint) {
   const tubeEnd = end.y - ARROW_LEN_PX;
   const mid = (start.y + tubeEnd) / 2;
   return [start, { x: start.x, y: mid }, { x: end.x, y: mid }, { x: end.x, y: tubeEnd }];
 }
 
-/**
- * 纯函数直接计算任务图拓扑布局（跳过缓存读取与写入，供基准测试与缓存未命中路径调用）。
- */
 export function computeTaskGraphLayoutUncached(input: TaskGraphLayoutInput): TaskGraphLayoutResult {
   const fontPx = clampFontSize(input.rootFontSizePx);
   const rankdir = input.viewportMode === "rail" ? "TB" : "LR";
@@ -498,7 +450,6 @@ export function computeTaskGraphLayoutUncached(input: TaskGraphLayoutInput): Tas
     });
   }
 
-  // 去重合法节点与合法有向边（过滤自环与悬空引用）
   const nodeByKey = new Map<string, { node: LayoutInputNode; inputIndex: number }>();
   input.nodes.forEach((node, idx) => {
     if (!nodeByKey.has(node.key)) {
@@ -518,7 +469,6 @@ export function computeTaskGraphLayoutUncached(input: TaskGraphLayoutInput): Tas
 
   const forwardRanks = computeForwardRanks(uniqueNodes, validEdges);
 
-  // 按层聚合，用于在 rail 模式下执行 k >= 3 同层并行折叠
   const layers = new Map<number, Array<{ node: LayoutInputNode; order: number }>>();
   for (const { node, inputIndex } of nodeByKey.values()) {
     const r = forwardRanks.get(node.key) ?? 0;
@@ -530,7 +480,6 @@ export function computeTaskGraphLayoutUncached(input: TaskGraphLayoutInput): Tas
   const sortedLayerIndices = [...layers.keys()].sort((a, b) => a - b);
   const virtualNodes: VirtualNode[] = [];
   const virtualById = new Map<string, VirtualNode>();
-  /** 原节点 key -> 映射到的虚拟节点 id */
   const mappedNodeId = new Map<string, string>();
 
   for (const layerRank of sortedLayerIndices) {
@@ -538,7 +487,6 @@ export function computeTaskGraphLayoutUncached(input: TaskGraphLayoutInput): Tas
     entries.sort((a, b) => a.order - b.order);
 
     if (input.viewportMode === "rail" && entries.length > RAIL_PARALLEL_VISIBLE_LIMIT) {
-      // 优先保留等用户拍板的步骤在可见的前 2 张卡中，其余保持稳定声明序
       const prioritized = [...entries].sort((a, b) => {
         const wa = isWaitingGate(a.node) ? 0 : 1;
         const wb = isWaitingGate(b.node) ? 0 : 1;
@@ -630,7 +578,6 @@ export function computeTaskGraphLayoutUncached(input: TaskGraphLayoutInput): Tas
     }
   }
 
-  // 归并有向边并计算实线/虚线标记（当归并多条上游边时，所有关联上游原节点全部 done 才为实线）
   const edgeAgg = new Map<string, { from: string; to: string; allSourcesDone: boolean }>();
   for (const e of validEdges) {
     const vFrom = mappedNodeId.get(e.from)!;
@@ -652,7 +599,6 @@ export function computeTaskGraphLayoutUncached(input: TaskGraphLayoutInput): Tas
     solid: item.allSourcesDone,
   }));
 
-  // ─── 调用 @dagrejs/dagre 执行 Sugiyama 分层与交叉最小化排布 ────────────────
   const g = new Graph<GraphLabel, NodeLabel, EdgeLabel>({ multigraph: false });
   const gapPx = input.viewportMode === "rail" ? railColumnGapPx(fontPx) : Math.round(DIALOG_NODE_SEP_REM * fontPx);
   const rankSepPx =
@@ -678,13 +624,11 @@ export function computeTaskGraphLayoutUncached(input: TaskGraphLayoutInput): Tas
 
   dagreLayout(g);
 
-  // ─── 生成最终节点定位框（rail 下对齐 280px 栅格并保证零碰撞；dialog 下保留舒展流水线） ─
   const positionedBoxes = new Map<string, LayoutNodeBox>();
   let canvasWidth = 0;
   let canvasHeight = 0;
 
   if (input.viewportMode === "rail") {
-    // 按 Dagre 实际计算出的中心 y 坐标聚类同排节点（容差 1px），若某排因松弛滑移超过 3 项则自动切分子排
     const withDagre = virtualNodes.map((vn) => {
       const dn = g.node(vn.id);
       return {
@@ -709,7 +653,6 @@ export function computeTaskGraphLayoutUncached(input: TaskGraphLayoutInput): Tas
     let effectiveRank = 0;
 
     for (const row of rawRows) {
-      // 同排内保持 Dagre 交叉最小化顺序，但将 parallel_overflow 固定在行最右端
       row.sort((a, b) => {
         const oa = a.vn.boxKind === "parallel_overflow" ? 1 : 0;
         const ob = b.vn.boxKind === "parallel_overflow" ? 1 : 0;
@@ -720,7 +663,6 @@ export function computeTaskGraphLayoutUncached(input: TaskGraphLayoutInput): Tas
 
       const rowVNodes = row.map((r) => r.vn);
       const rowWidths = computeRailWidthsForRow(rowVNodes, fontPx);
-      // 若松弛边滑移改变了该排实际列数，按实际列数重校紧凑高度
       rowVNodes.forEach((vn, idx) => {
         vn.widthPx = rowWidths[idx]!;
         vn.widthRem = round2(vn.widthPx / fontPx);
@@ -738,7 +680,6 @@ export function computeTaskGraphLayoutUncached(input: TaskGraphLayoutInput): Tas
 
       let cursorX = 0;
       for (const vn of rowVNodes) {
-        // 同排异高卡片顶部对齐（门禁展开向下自然延伸，上方入边整齐水平）
         const boxX = cursorX;
         const boxY = rowTop;
         cursorX += vn.widthPx + gapPx;
@@ -784,7 +725,6 @@ export function computeTaskGraphLayoutUncached(input: TaskGraphLayoutInput): Tas
       effectiveRank++;
     }
   } else {
-    // viewportMode === "dialog"（横向 LR 流水线，完整保留 Dagre 二维坐标并平移到正象限）
     let minX = Number.POSITIVE_INFINITY;
     let minY = Number.POSITIVE_INFINITY;
     const rawCoords = virtualNodes.map((vn) => {
@@ -824,7 +764,6 @@ export function computeTaskGraphLayoutUncached(input: TaskGraphLayoutInput): Tas
     canvasHeight = round2(canvasHeight + marginPx);
   }
 
-  // ─── 生成果冻管道的正交连线 ─────────────────────────────────────────────
   const allBoxes = [...positionedBoxes.values()];
   const columns = rankdir === "LR" ? columnsOf(allBoxes) : [];
   const edgePaths: LayoutEdgePath[] = [];
@@ -886,10 +825,6 @@ export function computeTaskGraphLayoutUncached(input: TaskGraphLayoutInput): Tas
   });
 }
 
-/**
- * 计算带 LRU(64) 缓存的任务图自动分层布局：
- * 当图的拓扑关系、节点高度档位、上游 done 标记、视口模式与根字号未变时，100% O(1) 命中并返回同一对象引用。
- */
 export function computeTaskGraphLayout(input: TaskGraphLayoutInput): TaskGraphLayoutResult {
   const fontPx = clampFontSize(input.rootFontSizePx);
   const cacheKey = buildLayoutCacheKey(input, fontPx);
@@ -901,13 +836,10 @@ export function computeTaskGraphLayout(input: TaskGraphLayoutInput): TaskGraphLa
   return computed;
 }
 
-// ─── 按连通子图、拓扑层拆任务图（果皮轨、任务进度图标共用） ───────────────────────
-
 export type GraphShape = Pick<TaskGraph, "nodes" | "edges">;
 
 const compareNodeOrder = (a: TaskNode, b: TaskNode) => a.sortOrder - b.sortOrder || a.key.localeCompare(b.key);
 
-/** 按正向最长拓扑路径将任务图节点划分为有序层级，同层按 sortOrder 与 key 稳定排序。 */
 export function computeGraphLayers(graph: GraphShape): TaskNode[][] {
   if (graph.nodes.length === 0) return [];
   const inDegree = new Map<string, number>();
@@ -955,11 +887,6 @@ export function computeGraphLayers(graph: GraphShape): TaskNode[][] {
     .map(([, list]) => list.toSorted(compareNodeOrder));
 }
 
-/**
- * 按无向连通性（弱连通分量，@dagrejs/dagre 自带的 graphlib.alg.components，O(V + E)）把任务图拆成互不相连的子图，
- * 子图按各自最靠前节点的 sortOrder（再按 key）稳定排序；每个子图只带自己内部的边。
- * 互不依赖的独立事项不能被拍扁到同一组拓扑层里假装首尾相连。
- */
 export function computeGraphComponents(graph: GraphShape): GraphShape[] {
   if (graph.nodes.length === 0) return [];
   const g = new graphlib.Graph();
@@ -968,7 +895,7 @@ export function computeGraphComponents(graph: GraphShape): GraphShape[] {
     if (edge.fromKey !== edge.toKey && g.hasNode(edge.fromKey) && g.hasNode(edge.toKey)) g.setEdge(edge.fromKey, edge.toKey);
   }
   const componentOf = new Map<string, number>();
-  // dagre 自带类型里 graph-lib 是无扩展名相对导入，nodenext 下解析成 any，这里在边界处钉住返回类型
+  // dagre's types import graphlib without an extension, which resolves to any under nodenext; pin the return type here.
   const keyGroups: string[][] = graphlib.alg.components(g);
   keyGroups.forEach((keys, idx) => {
     for (const key of keys) componentOf.set(key, idx);
