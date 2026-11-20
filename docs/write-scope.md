@@ -36,7 +36,7 @@ Normal Workers, read-only Workers, and single-turn Router sessions all enforce l
 
 ## macOS: `sandbox-exec` (`seatbelt`)
 
-Normal Workers across all six vendors and outer-sandboxed read-only Workers run inside `/usr/bin/sandbox-exec`. Because macOS forbids nested `sandbox-exec` calls (`sandbox_apply: Operation not permitted`, exit code 71), wrapped processes disable each vendor CLI's built-in sandbox:
+Normal Workers across all eight vendors and outer-sandboxed read-only Workers run inside `/usr/bin/sandbox-exec`. Because macOS forbids nested `sandbox-exec` calls (`sandbox_apply: Operation not permitted`, exit code 71), wrapped processes disable each vendor CLI's built-in sandbox:
 
 | Vendor | Built-in sandbox | How Bellwood disables nesting |
 | --- | --- | --- |
@@ -44,7 +44,7 @@ Normal Workers across all six vendors and outer-sandboxed read-only Workers run 
 | `codex` | Per-command `sandbox-exec` (`workspace-write` or `read-only`) | Normal Workers pass `sandboxPolicy: { type: "externalSandbox" }` on `turn/start`. Read-only Workers omit the outer wrapper and enforce boundaries through Codex's own permission profile. |
 | `agy` | Terminal sandbox (`--sandbox` or `enableTerminalSandbox: true`) | Passes `--settings {"enableTerminalSandbox":false}` (`AGY_SANDBOX_OFF_ARGS`). |
 | `deepseek` (`dsh`) | Local sandbox in built-in presets | Runs under `danger-full-access` inside Bellwood's outer OS sandbox. |
-| `pi` and `cursor` | No nested `sandbox-exec` by default in headless RPC or ACP | Wrapped directly by Bellwood's outer OS sandbox. |
+| `pi`, `cursor`, `opencode`, and `kimi` | No nested `sandbox-exec` by default in headless RPC or ACP | Wrapped directly by Bellwood's outer OS sandbox. |
 
 Driver-level approval callbacks (`decideCommandApproval`, `decideFileChangeApproval`, and `commandMayWriteOutsideScope`) remain active as defense in depth.
 
@@ -53,7 +53,7 @@ Driver-level approval callbacks (`decideCommandApproval`, `decideFileChangeAppro
 Linux enforces the same boundaries with `bubblewrap` (see [Linux sandbox design](linux-sandbox-design.md)):
 
 - **Normal Workers (`bwrapArgs`)**: Unshares user and PID namespaces (`--unshare-user --disable-userns --unshare-pid --proc /proc`), binds `/` and `--dev-bind /dev /dev`, masks `/run/user/<uid>` with an empty `0700` `--tmpfs` to block host `systemd --user` and D-Bus socket escapes, mounts a `0700` `--tmpfs` over `<dataDir>` with read-only binds for allowed entries, binds `run/hub.sock` and `writableDirs`, and remounts `<dataDir>` read-only.
-- **Read-only Workers**: `claude` (`bubblewrap` + `socat`) and `codex` (`bwrap` + Landlock + seccomp) use their native Linux sandboxes; `agy`, `pi`, `deepseek`, and `cursor` run inside `readonlyBwrapArgs` (`--ro-bind / /`, writable private `tmpDir` and vendor runtime paths, `--tmpfs` over secret directories, and `--ro-bind /dev/null` over secret files including `.env` matches found by `scanSecretGlobs`).
+- **Read-only Workers**: `claude` (`bubblewrap` + `socat`) and `codex` (`bwrap` + Landlock + seccomp) use their native Linux sandboxes; `agy`, `pi`, `deepseek`, `cursor`, `opencode`, and `kimi` run inside `readonlyBwrapArgs` (`--ro-bind / /`, writable private `tmpDir` and vendor runtime paths, `--tmpfs` over secret directories, and `--ro-bind /dev/null` over secret files including `.env` matches found by `scanSecretGlobs`).
 - **Ubuntu 24.04+ setup**: Run `sudo scripts/linux-sandbox-setup.sh` once to install `bubblewrap` and `socat` and load `/etc/apparmor.d/bwrap`.
 
 ## Windows: `fusa-win-helper` (`fusa-run.exe`)

@@ -27,7 +27,7 @@ When you run several coding agents in parallel, the bottleneck shifts from writi
 Bellwood puts one **Project Manager (PM)** agent in front of each project and handles the plumbing underneath:
 
 - **Stay in one thread per project.** You discuss goals and approve decisions with the PM. The PM breaks work into steps, dispatches short-lived **Worker** agents (shown as **Pieces** in the UI) into isolated git worktrees, checks their test evidence, and merges their PRs.
-- **Mix vendors and keep your memory.** Every PM and every Worker independently runs `claude`, `codex`, `agy`, `pi`, `dsh`, or `cursor-agent` under your own subscription or API key. Long-term memory lives in Bellwood's local ledger and Markdown files, so switching a project from Claude Code to Codex keeps every convention and past lesson intact.
+- **Mix vendors and keep your memory.** Every PM and every Worker independently runs `claude`, `codex`, `agy`, `pi`, `dsh`, `cursor-agent`, `opencode`, or `kimi` under your own subscription or API key. Long-term memory lives in Bellwood's local ledger and Markdown files, so switching a project from Claude Code to Codex keeps every convention and past lesson intact.
 - **Coordinate across machines and team chats.** **Router** aggregates pending decisions and dispatches work across your Mac, Windows desktop, and Linux server without blowing up its context window. Connect **Feishu** over an outbound WebSocket so you or your teammates can discuss a change in a group chat and `@`-mention the bot to implement and verify it.
 
 Bellwood is for you if you juggle multiple tasks or repositories, combine more than one agent CLI or subscription, or want to review and trigger work from your phone or Feishu group. If you run one agent in one terminal on one repository and that already covers your day, you do not need it.
@@ -180,7 +180,7 @@ Because the PM runs as your current OS user without an outer sandbox, every memb
 <table>
 <tr><td>
 
-**Claude Code** (`claude`) · **Codex** (`codex`) · **Antigravity** (`agy`) · **Pi** (`pi`) · **DeepSeek Harness** (`dsh`) · **Cursor** (`cursor-agent`)
+**Claude Code** (`claude`) · **Codex** (`codex`) · **Antigravity** (`agy`) · **Pi** (`pi`) · **DeepSeek Harness** (`dsh`) · **Cursor** (`cursor-agent`) · **OpenCode** (`opencode`) · **Kimi Code** (`kimi`)
 
 </td></tr>
 </table>
@@ -219,6 +219,8 @@ Launch **Bellwood**. When **Settings → Providers** opens, click **Install** ne
 - **Pi (`pi`, [docs/vendor-plugin-design.md](docs/vendor-plugin-design.md)).** On macOS and Linux, run `curl -fsSL https://pi.dev/install.sh | sh`. On Windows PowerShell, run `irm https://pi.dev/install.ps1 | iex` (or `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`). Run `pi` and type `/login`.
 - **DeepSeek Harness (`dsh`, [docs/vendor-plugin-design.md](docs/vendor-plugin-design.md)).** Run `npm install -g @deepseek-ai/dsh@0.2.2-rc.1`, then run `dsh` or write `DEEPSEEK_API_KEY=<key>` to `~/.dsh/.env`.
 - **Cursor (`cursor-agent`, [docs/vendor-plugin-design.md](docs/vendor-plugin-design.md)).** On macOS and Linux, run `curl https://cursor.com/install -fsS | bash`. On Windows PowerShell, run `irm 'https://cursor.com/install?win32=true' | iex`. Sign in with `cursor-agent login`.
+- **OpenCode (`opencode`, [docs/vendor-plugin-design.md](docs/vendor-plugin-design.md)).** On macOS and Linux, run `curl -fsSL https://opencode.ai/v2/install | bash`. On Windows, run `npm install -g @opencode/cli`. Sign in with `opencode auth login`, or paste an OpenCode Zen key (`OPENCODE_API_KEY`) in **Settings → Providers**.
+- **Kimi Code (`kimi`, [docs/vendor-plugin-design.md](docs/vendor-plugin-design.md)).** On macOS and Linux, run `curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash`. On Windows PowerShell, run `irm https://code.kimi.com/kimi-code/install.ps1 | iex` (or `npm install -g @moonshot-ai/kimi-code` with Node.js 22.19+). Sign in with `kimi login`, or paste a Kimi Platform API key in **Settings → Providers**.
 
 </details>
 
@@ -270,7 +272,7 @@ pnpm start                          # builds dist/web and starts daemon on 127.0
 | :-- | :-- | :-- |
 | `AGENT_HUB_HOME` | `~/.agent-hub` | Data directory (SQLite ledger, tokens, worktrees, uploads, logs, PM memory). Keep under 103 bytes on macOS and Linux for Unix socket limits. Windows uses named pipes. |
 | `AGENT_HUB_PORT` | `4317` | Loopback web UI port (`127.0.0.1` only). Set `0` for an OS-assigned port. |
-| `AGENT_HUB_CLAUDE` / `AGY` / `CODEX` / `PI` / `DEEPSEEK` / `CURSOR` | `claude` / `agy` / `codex` / `pi` / `dsh` / `cursor-agent` | Override executable name or path for each supported agent CLI (`~/` supported). |
+| `AGENT_HUB_CLAUDE` / `AGY` / `CODEX` / `PI` / `DEEPSEEK` / `CURSOR` / `OPENCODE` / `KIMI` | `claude` / `agy` / `codex` / `pi` / `dsh` / `cursor-agent` / `opencode` / `kimi` | Override executable name or path for each supported agent CLI (`~/` supported). |
 | `AGENT_HUB_DEFAULT_MODEL` | unset | Default model for the initial PM created on first launch. |
 | `FUSA_RELAY_URL` | official public relay | Override the relay URL for account networking. Use the same relay on all devices in the account. |
 | `FUSA_GITHUB_CLIENT_ID` | official public client ID | Override with the Client ID of your own GitHub OAuth App with Device Flow enabled. |
@@ -296,7 +298,7 @@ Workers edit code and run commands as your current OS user. Keep the actual boun
 Bellwood does not proxy or resell model APIs. It invokes official agent CLIs on your computer under **your own account or API key** in headless, RPC, or ACP mode. Review each provider's terms before use. This project cannot grant permission on a vendor's behalf or guarantee account standing:
 
 - **Google Antigravity (`agy`).** Section 6 of the [Google Antigravity Additional Terms](https://antigravity.google/terms/) states: *"Using third party software, tools, or services to access the Service (e.g. using OpenClaw with Antigravity OAuth) is a breach of this Agreement. Such actions may be grounds for suspension or termination of your Antigravity and/or Gemini CLI accounts."* Google has not clarified whether driving the official `agy` CLI locally in headless mode falls under this clause. Treat it as a real risk of account suspension or termination and decide for yourself.
-- **Claude Code (`claude`):** [Anthropic Legal and Compliance](https://code.claude.com/docs/en/legal-and-compliance) · **Codex (`codex`):** [OpenAI Terms of Use](https://openai.com/policies/row-terms-of-use/) · **Pi (`pi`, MIT):** [pi.dev](https://pi.dev) (also review your connected model provider's terms) · **DeepSeek Harness (`dsh`, MIT preview):** [DeepSeek Open Platform Terms](https://cdn.deepseek.com/policies/en-US/deepseek-open-platform-terms-of-service.html) · **Cursor (`cursor-agent`):** [Cursor Terms of Service](https://cursor.com/terms-of-service).
+- **Claude Code (`claude`):** [Anthropic Legal and Compliance](https://code.claude.com/docs/en/legal-and-compliance) · **Codex (`codex`):** [OpenAI Terms of Use](https://openai.com/policies/row-terms-of-use/) · **Pi (`pi`, MIT):** [pi.dev](https://pi.dev) (also review your connected model provider's terms) · **DeepSeek Harness (`dsh`, MIT preview):** [DeepSeek Open Platform Terms](https://cdn.deepseek.com/policies/en-US/deepseek-open-platform-terms-of-service.html) · **Cursor (`cursor-agent`):** [Cursor Terms of Service](https://cursor.com/terms-of-service) · **OpenCode (`opencode`, MIT):** [opencode.ai](https://opencode.ai) (also review your connected model provider's terms) · **Kimi Code (`kimi`):** [Kimi Code docs](https://www.kimi.com/code/docs/en/) (also review the Kimi Platform terms for API keys).
 
 ## Credits and license
 

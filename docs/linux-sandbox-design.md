@@ -48,7 +48,7 @@ All paths pass through `realpath` first, and `bwrapArgs` emits bind flags only f
 
 ### Read-only Workers (`readonlyBwrapArgs`)
 
-`claude` and `codex` use their own native Linux read-only sandboxes (`claude` uses `bubblewrap` + `socat`; `codex` uses `bwrap` + Landlock + seccomp). Vendors with `writeGuard: "outer"` (`agy`, `pi`, `deepseek`, and `cursor`) run inside `readonlyBwrapArgs`:
+`claude` and `codex` use their own native Linux read-only sandboxes (`claude` uses `bubblewrap` + `socat`; `codex` uses `bwrap` + Landlock + seccomp). Vendors with `writeGuard: "outer"` (`agy`, `pi`, `deepseek`, `cursor`, `opencode`, and `kimi`) run inside `readonlyBwrapArgs`:
 
 ```sh
 bwrap --unshare-user --disable-userns --unshare-pid --proc /proc \

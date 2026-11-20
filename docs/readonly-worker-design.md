@@ -38,6 +38,8 @@ Each vendor declares its read-only strategy in `src/vendors/<vendor>/` (`capabil
 | `pi` | Outer OS sandbox | Passes `--exclude-tools edit,write` and `--no-mcp` in read-only mode. | Wrapped in Bellwood's outer read-only OS sandbox on macOS, Linux, and Windows. |
 | `deepseek` (`dsh`) | Outer OS sandbox | Rejects mutating and non-read-only MCP `session/request_permission` requests in the ACP driver (`src/vendors/_common/acp/`). | Wrapped in Bellwood's outer read-only OS sandbox on macOS, Linux, and Windows. |
 | `cursor` (`cursor-agent`) | Outer OS sandbox | Rejects mutating and non-read-only MCP `session/request_permission` requests in the ACP driver rather than using Cursor's `ask` mode, which disables shell execution needed for tests. | Wrapped in Bellwood's outer read-only OS sandbox on macOS, Linux, and Windows. |
+| `opencode` | Outer OS sandbox | Switches the session to OpenCode's `plan` agent and appends `edit` `deny` (plus `question` `deny`) through `OPENCODE_CONFIG_CONTENT`; the ACP permission gate rejects any write request that still arrives. | Wrapped in Bellwood's outer read-only OS sandbox; `~/.local/share/opencode` and `~/.local/state/opencode` stay writable because OpenCode keeps sessions in `opencode.db`, which is a secret for every other vendor. |
+| `kimi` (Kimi Code) | Outer OS sandbox | Runs in Kimi's `yolo` mode because its permission requests carry no ACP tool kind, so the ACP gate would also reject `Bash`; `AskUserQuestion` prompts are cancelled. | Wrapped in Bellwood's outer read-only OS sandbox; only `sessions/`, `logs/`, `locks/`, `credentials/`, and `session_index.jsonl` under `KIMI_CODE_HOME` stay writable, and `mcp.json` stays hidden so user MCP servers do not start. |
 
 ## Outer read-only OS sandboxes
 
