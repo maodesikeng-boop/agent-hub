@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UPDATE_CHECK_RETRY_MS, UPDATE_CHECK_TTL_MS, type UpdateStatus } from "../shared/index.ts";
@@ -7,7 +7,7 @@ import { SidebarTools } from "./components/SidebarTools.tsx";
 import { UpdateSettings } from "./components/UpdateSettings.tsx";
 import { queryClient } from "./query-client.ts";
 import { FakeApi, FakeWebSocket, installFakeWebSocket, makeConvSnapshot, makePm, makeSnapshot } from "./test-utils.ts";
-import { UPDATE_DISMISSED_KEY } from "./update-model.ts";
+import { UPDATE_DISMISSED_KEY, UPDATE_QUERY_KEY, useCheckForUpdates } from "./update-model.ts";
 
 const RELEASES = "https://github.com/maodesikeng-boop/agent-hub/releases";
 const DOWNLOAD = `${RELEASES}/download/v0.3.0`;
@@ -155,6 +155,31 @@ describe("Updates settings group", () => {
     await act(async () => releaseOld());
     expect(within(group()).getByRole("link", { name: "Download for macOS" })).toBeInTheDocument();
     expect(within(group()).queryByText("Up to date")).toBeNull();
+  });
+
+  it("keeps a manual check result whose daemon stamp went backward after a clock rollback or restart", async () => {
+    serve({ ...upToDate, checkedAt: 5_000 }, bundledUpdate({ checkedAt: 1_000 }));
+    render(<UpdateSettings />);
+    expect(await within(group()).findByText("Up to date")).toBeInTheDocument();
+    await userEvent.click(within(group()).getByRole("button", { name: "Check for updates" }));
+    expect(await within(group()).findByRole("link", { name: "Download for macOS" })).toBeInTheDocument();
+    expect(within(group()).queryByText("Up to date")).toBeNull();
+  });
+
+  it("applies only the latest of overlapping manual checks", async () => {
+    const api = serve(upToDate);
+    const replies: Array<(status: UpdateStatus) => void> = [];
+    api.updateCheck = () => new Promise((resolve) => { replies.push((body) => resolve({ status: 200, body })); });
+    const first = renderHook(() => useCheckForUpdates());
+    const second = renderHook(() => useCheckForUpdates());
+    act(() => first.result.current.mutate());
+    act(() => second.result.current.mutate());
+    await waitFor(() => expect(replies).toHaveLength(2));
+    await act(async () => replies[1]!({ ...upToDate, checkedAt: 2_000 }));
+    await waitFor(() => expect(second.result.current.isSuccess).toBe(true));
+    await act(async () => replies[0]!(bundledUpdate({ checkedAt: 3_000 })));
+    await waitFor(() => expect(first.result.current.isSuccess).toBe(true));
+    expect(queryClient.getQueryData<UpdateStatus>(UPDATE_QUERY_KEY)).toMatchObject({ status: "up_to_date", checkedAt: 2_000 });
   });
 
   it("falls back to the product name when the daemon does not answer", async () => {

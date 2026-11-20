@@ -15,15 +15,29 @@ function updateRefreshMs(query: Query<UpdateStatus, Error, UpdateStatus, typeof 
   return status === "error" || data?.status === "unavailable" ? UPDATE_CHECK_RETRY_MS : UPDATE_CHECK_TTL_MS;
 }
 
-// Responses can land out of request order; the daemon stamps each check, so the newest stamp wins.
-export function newerUpdate(current: UpdateStatus | undefined, incoming: UpdateStatus): UpdateStatus {
-  return current !== undefined && current.checkedAt >= incoming.checkedAt ? current : incoming;
+interface CheckGeneration {
+  gen: number;
+  latestCheck: number;
+}
+
+const generations = new WeakMap<QueryClient, CheckGeneration>();
+
+// Ordering uses a local counter rather than the daemon's checkedAt, which goes backward when its clock or process resets.
+function generationOf(qc: QueryClient): CheckGeneration {
+  let state = generations.get(qc);
+  if (state === undefined) {
+    state = { gen: 0, latestCheck: 0 };
+    generations.set(qc, state);
+  }
+  return state;
 }
 
 function updateQueryFn(qc: QueryClient) {
   return async () => {
+    const state = generationOf(qc);
+    const genAtStart = state.gen;
     const fetched = await fetchUpdate();
-    return newerUpdate(qc.getQueryData<UpdateStatus>(UPDATE_QUERY_KEY), fetched);
+    return genAtStart === state.gen ? fetched : (qc.getQueryData<UpdateStatus>(UPDATE_QUERY_KEY) ?? fetched);
   };
 }
 
@@ -45,7 +59,18 @@ export function useCheckForUpdates() {
   return useMutation(
     {
       mutationFn: postUpdateCheck,
-      onSuccess: (status) => qc.setQueryData<UpdateStatus>(UPDATE_QUERY_KEY, (current) => newerUpdate(current, status)),
+      onMutate: () => {
+        const state = generationOf(qc);
+        state.gen += 1;
+        state.latestCheck = state.gen;
+        return state.latestCheck;
+      },
+      onSuccess: (status, _vars, checkId) => {
+        const state = generationOf(qc);
+        if (checkId !== state.latestCheck) return;
+        state.gen += 1;
+        qc.setQueryData<UpdateStatus>(UPDATE_QUERY_KEY, status);
+      },
     },
     qc,
   );
