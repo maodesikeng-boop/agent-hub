@@ -58,13 +58,7 @@ function createEloopError(targetPath: string, detail: string): NodeJS.ErrnoExcep
   return err;
 }
 
-/**
- * Cross-platform `O_NOFOLLOW` + `O_NONBLOCK` regular file opener:
- * - Rejects Windows device namespace paths (`\\.\pipe\...`, `\\?\GLOBALROOT...`, `CON`, `NUL`, etc.);
- * - On POSIX: opens with `O_RDONLY | O_NOFOLLOW | O_NONBLOCK` and verifies `fstatSync(fd).isFile()`;
- * - On Windows (where `O_NOFOLLOW` is undefined / 0): checks `lstatSync(path, { bigint: true })` is a non-symlink regular file,
- *   opens `O_RDONLY`, then verifies `fstatSync(fd, { bigint: true })` has identical `(dev, ino)` and `realpathSync.native` matches!
- */
+/** Opens regular files without following links and rejects Windows device namespace paths (\\.\pipe, GLOBALROOT, CON, NUL). */
 export function openRegularFileNoFollowSync(
   targetPath: string,
   options?: { nonBlock?: boolean; platform?: NodeJS.Platform },
@@ -124,7 +118,6 @@ export function openRegularFileNoFollowSync(
   }
 }
 
-/** {@link openRegularFileNoFollowSync} 的异步版（同样的拒绝规则与身份校验），返回 FileHandle：给要分块异步读大文件的地方用。 */
 export async function openRegularFileNoFollow(
   targetPath: string,
   options?: { nonBlock?: boolean; platform?: NodeJS.Platform },
@@ -193,7 +186,7 @@ function sleepSyncMs(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-/** Synchronous `rename` with bounded Windows retry (`50/100/150/200/250 ms` on `EPERM/EACCES/EBUSY`). */
+/** Windows renames fail transiently with EPERM, EACCES or EBUSY while scanners hold the file, so they retry with bounded backoff. */
 export function renameSyncWithWindowsRetry(
   source: string,
   target: string,
@@ -219,7 +212,6 @@ export function renameSyncWithWindowsRetry(
   }
 }
 
-/** Async `rename` with bounded Windows retry (`50/100/150/200/250 ms` on `EPERM/EACCES/EBUSY`). */
 export async function renameWithWindowsRetry(
   source: string,
   target: string,
@@ -245,7 +237,6 @@ export async function renameWithWindowsRetry(
   }
 }
 
-/** Wraps `write-file-atomic` `.sync()` with bounded Windows lock retries on `EPERM/EACCES/EBUSY`. */
 export function writeFileAtomicSyncWithRetry(
   targetPath: string,
   content: string,
@@ -295,11 +286,7 @@ export function isTransientWindowsDeleteError(error: unknown, platform: NodeJS.P
 
 type AsyncRmFn = (path: string, options: RmOptions) => Promise<void>;
 
-/**
- * Whole-pass recursive directory delete with bounded Windows lock retries (`250/500/1000/2000 ms`).
- * Never passes `maxRetries` to async `fs.rm` (which multiplies retries at every directory level).
- * On final Windows failure, queries Restart Manager (`who-locks`) and appends locking process details.
- */
+/** Never pass maxRetries to async fs.rm because it multiplies retries at every directory level. */
 export async function removeTreeWithRetry(
   targetPath: string,
   options?: {
@@ -344,7 +331,6 @@ export interface ManagedSkillCopyMeta {
   contentHash: string;
 }
 
-/** Computes a deterministic content digest of all files inside a skill directory (excluding `.fusa-managed`). */
 export function hashDirectoryContents(dirPath: string): string {
   const hash = createHash("sha256");
   const walk = (cur: string, relPrefix: string) => {
@@ -386,7 +372,7 @@ export function readManagedSkillCopyMeta(entryPath: string): ManagedSkillCopyMet
   }
 }
 
-/** Removes an existing symlink or Windows junction reparse point WITHOUT deleting target directory contents. */
+/** Remove the link or junction without deleting the target's contents. */
 export function unlinkDirectoryLinkSync(linkPath: string): void {
   try {
     unlinkSync(linkPath);
@@ -401,12 +387,7 @@ export function unlinkDirectoryLinkSync(linkPath: string): void {
   }
 }
 
-/**
- * Creates a directory link:
- * - POSIX: `symlinkSync(targetValue, linkPath, "dir")` (preserving relative `targetValue` when given);
- * - Windows: resolves `targetValue` to an absolute path and creates an NTFS `"junction"` (requires neither admin nor Developer Mode);
- * - Windows UNC / network share target (where NTFS junctions are unsupported): falls back to a managed copy with `.fusa-managed`.
- */
+/** Windows uses NTFS junctions, which need no symlink privilege but require absolute targets. */
 export function createDirectoryLinkOrManagedCopySync(
   targetValue: string,
   linkPath: string,

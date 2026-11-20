@@ -1,11 +1,4 @@
-// 迁移：migrations/ 下 `<编号>_<名字>.sql`，按编号执行比 PRAGMA user_version 大的，
-// 每个文件一个事务，成功后把 user_version 设成它的编号。
-// 跑每个文件时关着外键检查（事务里改不了这个开关，只能在事务外关），提交前用 PRAGMA foreign_key_check 查一遍，
-// 有悬空引用就回滚，报错里列出是哪些行。这样迁移可以按 SQLite 的标准做法重建被别的表引用的表（0002 重建 pms）。
-// 所以不能在外层事务里调（那样关不了外键检查），调了直接报错。
-// 已有数据的库升级前先备份一份：<库文件>.bak-<升级前的版本>-<UTC 时间>（VACUUM INTO，是个完整的库文件）。
-// 新备份写好后，只留最近 MAX_DB_BACKUPS 份，更早的删掉。
-// 增量回收模式下迁移删表、删索引留下的空闲页，在全部迁移事务提交后顺手回收（最多一批 DB_INCREMENTAL_VACUUM_PAGES 页，不动升级前原有的空闲页）。
+// Foreign keys can only be toggled outside a transaction, so each migration runs with them off and foreign_key_check runs before commit. That lets migrations rebuild referenced tables, and it is why this cannot run inside an outer transaction.
 import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,14 +10,11 @@ export const DEFAULT_MIGRATIONS_DIR = fileURLToPath(new URL("../../../migrations
 export interface MigrationResult {
   from: number;
   to: number;
-  /** 这次执行了哪些编号。 */
   applied: number[];
-  /** 升级前备份到了哪个文件；没备份（空库、没有要跑的、内存库）是 undefined。 */
   backupFile?: string;
 }
 
 export interface MigrateOptions {
-  /** 备份文件名里的时间，测试用。 */
   now?: () => number;
 }
 
@@ -33,9 +23,7 @@ interface MigrationFile {
   file: string;
 }
 
-/** 外键检查报错里最多列几行。 */
 const MAX_REPORTED_FK_ROWS = 10;
-/** SQLite PRAGMA auto_vacuum = INCREMENTAL 的取值。 */
 const AUTO_VACUUM_INCREMENTAL = 2;
 
 function listMigrations(dir: string): MigrationFile[] {
@@ -62,18 +50,15 @@ function freelistCount(db: Db): number {
   return db.get<{ freelist_count: number }>("PRAGMA freelist_count")?.freelist_count ?? 0;
 }
 
-/** 2026-11-03T09:08:07.123Z → 20261103T090807Z */
 function backupStamp(ms: number): string {
   return new Date(ms).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
 }
 
-/** 库文件的路径；内存库、临时库是 null。 */
 export function mainDbFile(db: Db): string | null {
   const file = db.all<{ name: string; file: string }>("PRAGMA database_list").find((d) => d.name === "main")?.file;
   return file ? file : null;
 }
 
-/** 备份成 <库文件>.bak-<版本>-<UTC 时间>（VACUUM INTO，完整的库文件），只留最近 MAX_DB_BACKUPS 份；内存库、临时库没有文件，不备份。 */
 export function backupDatabase(db: Db, from: number, now: () => number): string | undefined {
   const file = mainDbFile(db);
   if (file === null) return undefined;
@@ -85,7 +70,6 @@ export function backupDatabase(db: Db, from: number, now: () => number): string 
     try {
       rmSync(target, { force: true });
     } catch {
-      // 清理半截备份失败不影响报错
     }
     throw error;
   }
@@ -93,14 +77,12 @@ export function backupDatabase(db: Db, from: number, now: () => number): string 
   return target;
 }
 
-/** 备份文件名 <库文件>.bak-<版本>-<时间>[-<序号>] → 排序用的键（时间、序号）；不是这个格式的文件不动。 */
 function backupSortKey(dbName: string, name: string): [string, number] | null {
   if (!name.startsWith(`${dbName}.bak-`)) return null;
   const match = /^\d+-(\d{8}T\d{6}Z)(?:-(\d+))?$/.exec(name.slice(dbName.length + 5));
   return match === null ? null : [match[1]!, match[2] === undefined ? 1 : Number(match[2])];
 }
 
-/** 只留最近 MAX_DB_BACKUPS 份备份（刚写好的 keep 一定留），更早的删掉。删不掉就算了，不能让升级失败。 */
 function pruneBackups(dbFile: string, keep: string): void {
   const dbName = basename(dbFile);
   const dir = dirname(dbFile);
@@ -114,7 +96,6 @@ function pruneBackups(dbFile: string, keep: string): void {
     try {
       rmSync(join(dir, name), { force: true });
     } catch {
-      // 旧备份删不掉不影响升级
     }
   }
 }

@@ -1,13 +1,3 @@
-// 启动文件（设计第 7.2 节）：每次启动 agent 前生成 launch/<会话>/ 下的 prompt.md，要设置文件的厂商再加 settings.json，
-// 再给这一次启动的环境变量（HUB_TOKEN、HUB_SOCK、PATH，加上厂商多设的）和 fingerprint。
-// 项目经理和 Worker（M3）走同一个函数，只有提示词、设置文件、多设的环境变量按角色不同（m3-plan 第 2.1 节）。
-// 分工：每次启动要变的东西（这几份文件和 env）只在这里定；固定的协议参数（--resume 还是新会话、--model、--add-dir）在各家驱动的
-// protocol.ts，子进程的环境变量在 driver/protocol.ts 的 buildChildEnv。
-// 工作目录（项目经理是主文件夹，Worker 是它的 worktree 或主文件夹）由账本写在会话那一行的 cwd 上，驱动层照用。
-// prompt.md 的内容由 prompt.ts 的 buildLaunchPrompt 拼；厂商专属的设置文件和环境变量由那家 daemon.ts 的 launchFiles 给
-// （claude：src/vendors/claude/settings.ts，默认档、放行 hub 和 hub.sock），没写的厂商不生成（docs/vendor-plugin-design.md 的 A15）。
-// Worker 的可写范围（数据目录里只有自己的工作目录能写）是 write-scope.ts 的 workerWriteScope，放在 LaunchFiles.writeScope 交给驱动层落实。
-// 审查 Worker 的禁推（review.ts）：启动目录里写一个拒绝推送的 pre-push 钩子，经 env 的 GIT_CONFIG_* 让 git 用它，6 家同一个入口。
 import { chmodSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -53,37 +43,21 @@ import type { RouterTurnPurpose } from "./router/single-turn.ts";
 
 export interface LaunchPreparerOptions {
   launchDir: string;
-  /** 数据目录的真实路径（paths.ts 的 home，realpath 过）：Worker 的可写范围用。 */
   dataDir: string;
-  /** 数据目录 state/ 的真实路径（paths.ts 的 stateDir，realpath 过）：厂商设置文件里的兜底拒绝规则用（claude）。 */
   stateDir: string;
-  /** 用户主目录（只读策略的密钥清单用），默认本机的 homedir；测试可以指定。会 realpath。 */
   homeDir?: string;
-  /** Worker 会不会包进 OS 沙箱，默认按本机每次启动时查询（driver/write-scope.ts 的 osSandboxAvailable）；测试可以指定布尔或回调。 */
   osSandboxed?: boolean | (() => boolean);
-  /** Worker worktree 的根目录（paths.ts 的 worktreesDir，和账本的 LedgerOptions.worktreesDir 同一个）。 */
   worktreesDir: string;
-  /** 额外的受保护根目录（跨卷同盘 `.fusa-wt` 等，三平台统一进 WriteScope.protectedRoots）。 */
   protectedRoots?: () => readonly string[];
-  /** 账本的 getLaunchContext。 */
   getLaunchContext: (sessionId: SessionId) => LaunchContext;
-  /** 同一个会话每次给同一个令牌（SessionTokens.issue 的约定）。 */
   tokens: Pick<SessionTokens, "issue">;
-  /** hub.sock 的真实路径（realpath 过：写进 HUB_SOCK 和厂商设置文件的放行规则）。 */
   hubSock: string;
-  /** hub 外壳所在目录（paths.ts 的 hubBinDir），放在 PATH 最前面。 */
   hubBinDir: string;
-  /** 接在 hubBinDir 后面的 PATH，默认守护进程自己的 process.env.PATH。 */
   basePath?: string | (() => string);
-  /** 这台设备上各家厂商的状态（缓存里的，不等查询）：项目经理提示词只列能选的。不给就全列。 */
   vendorAvailability?: () => VendorAvailabilityMap;
-  /** 总助单轮会话的用途（router/single-turn.ts 的 RouterTurnPurposes.of）；不给都按 dispatch。 */
   routerPurposeOf?: (sessionId: SessionId) => RouterTurnPurpose;
-  /** 项目经理的能力选择（ledger.getPmCapabilityPolicy）；与 capabilityInventory 一起给时按所属项目经理收窄会话能力。 */
   getPmCapabilityPolicy?: (pmId: PmId) => PmCapabilityPolicy;
-  /** 本机能力库存服务（daemon/pm-capabilities/inventory.ts）；只读缓存。 */
   capabilityInventory?: Pick<CapabilityInventoryService, "get">;
-  /** 起进程前备好 OS 沙箱（Windows 设 ACL），默认 driver/write-scope.ts 的 prepareOsSandboxForLaunch；测试可以换。 */
   prepareOsSandbox?: (input: OsSandboxLaunchPrep) => Promise<void>;
 }
 
@@ -100,14 +74,7 @@ function sessionRole(ctx: LaunchContext): SessionRole {
   throw new Error(`session ${ctx.sessionId} has role ${ctx.role}; only pm and worker sessions can be launched`);
 }
 
-/**
- * 给驱动层的 prepareLaunch（组装代码接到 DriverOptions.prepareLaunch）。每次都重写这几份文件，内容没变 fingerprint 就不变；
- * 令牌只放 env，不进文件。可以反复调（驱动层两轮之间判断要不要重启时也调）。
- * 每次启动 agent 要变的东西（提示词、厂商的设置文件、HUB_TOKEN、HUB_SOCK、PATH、厂商多设的环境变量）只在这里定；
- * 驱动层只把它们原样变成参数（各家 protocol.ts：--resume 还是新会话、会话那一行的 --model 和 --add-dir），
- * 环境变量是守护进程自己的去掉父会话那几个（buildChildEnv）再盖上这里的 env。
- * 有项目的会话启动前先 mkdir -p <worktreesDir>/<项目编号>/：项目经理的 --add-dir 里有它，agent 要求目录在（LaunchContext 的注释）。
- */
+/** Launch files are rewritten on every start so they always match the current settings. */
 export function createLaunchPreparer(options: LaunchPreparerOptions): (session: AgentSessionRow) => Promise<LaunchFiles> {
   const { launchDir, dataDir, stateDir, worktreesDir, getLaunchContext, tokens, hubSock, hubBinDir } = options;
   const resolveBasePath = () =>
@@ -145,15 +112,12 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
     const role = sessionRole(ctx);
     if (ctx.project !== null) mkdirSync(projectWorktreesDir(worktreesDir, ctx.project.id), { recursive: true });
     const dir = sessionLaunchDir(launchDir, session.id);
-    // 任务图手册只给项目经理（docs/orchestration-skill-design.md 第 6.4 节）：提示词里写它在这次会话启动目录里的路径
     const promptOptions = role === "pm" ? { taskGraphSkillFile: taskGraphSkillFile(dir) } : {};
     const prompt = buildLaunchPrompt(ctx, session.cwd, promptOptions);
     const readonly = role === "worker" && ctx.worker !== null && ctx.worker.readonly;
     const extraRoots = options.protectedRoots?.();
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    // 数据目录读边界（Worker 才包沙箱）：放行这次会话自己的启动目录和落在数据目录里的 cwd、addDirs；路径按真实路径比
     const sessionReadable = { launchDir: realpathOr(dir), extraReadable: [session.cwd, ...session.addDirs].map(realpathOr) };
-    // 只读不再让 agy、codex 去反读 claude 设置文件里的权限档：统一定义放 LaunchFiles.readonly（shared/readonly-policy.ts）
     const dataDirScope = readonly ? dataDirReadScope({ dataDir, ...sessionReadable }) : undefined;
     const readonlyPolicy =
       dataDirScope === undefined
@@ -165,8 +129,7 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
             dataDirScope,
             dataDirDenied: dataDirDenyList(toolLayerReadScope(dataDirScope, sessionReadable.launchDir)),
           });
-    // 用设置文件落实只读的厂商（spec 的 capabilities.readonly 是 "settings"，如 claude 的自带沙箱，设计第 2.3 节）：设置文件换成只读翻译，
-    // 进程不再包外层沙箱（macOS 沙箱不能嵌套）。别家的只读翻译在各自驱动层。
+    // Vendors that enforce readonly through settings (claude's own sandbox) are not wrapped in the outer sandbox, because sandboxes cannot nest.
     const vendor = isAgentVendor(session.vendor) ? session.vendor : null;
     let capabilities: SessionCapabilities | undefined;
     if (vendor !== null && options.getPmCapabilityPolicy && options.capabilityInventory) {
@@ -187,7 +150,6 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
         })
       : undefined;
     const settings = vendorFiles?.settings;
-    // 只算翻出来的结果：改了这家看不到、用不上的项（比如 claude 用不到的 allow 清单）不重启
     const capabilityLaunch = capabilities !== undefined && vendor !== null ? VENDOR_DAEMONS[vendor].capabilityLaunch?.(capabilities) : undefined;
     const promptFile = join(dir, "prompt.md");
     writeFileSync(promptFile, prompt, { mode: 0o600 });
@@ -199,7 +161,7 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
     let skillsDir: string | undefined;
     if (role === "pm") skillsDir = writeProductSkills(dir);
     else removeProductSkills(dir);
-    // 钩子放在启动目录：Worker 读得到（git 要执行它），写不了（数据目录只有自己的工作目录能写）
+    // Hooks live in the launch dir so Workers can execute them (git needs to) but cannot modify them.
     let reviewEnv: Record<string, string> = {};
     if (role === "worker" && ctx.worker?.review !== undefined) {
       const hooksDir = join(dir, REVIEW_HOOKS_DIR);
@@ -231,7 +193,7 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
         ...vendorFiles?.env,
         ...reviewEnv,
       },
-      // 性格设定、模式不进指纹：变了不重启，驱动层按 personaRevision 在下一条消息前加说明（createPersonaNoter）
+      // Persona and mode are excluded from the fingerprint so edits do not restart the process; the driver adds a note before the next message instead.
       fingerprint: launchFingerprint({
         prompt: buildFingerprintPrompt(ctx, session.cwd, promptOptions),
         settings: settings ?? "",
@@ -243,16 +205,12 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
       ...(writeScope === null ? {} : { writeScope }),
       ...(readonlyPolicy === undefined ? {} : { readonly: readonlyPolicy }),
       ...(capabilities === undefined ? {} : { capabilities }),
-      // Worker 有后台命令时这一轮不汇报、项目经理在等，兜底比项目经理的短（limits.ts）
+      // The Worker background hold is shorter than the PM's wait so the PM is not left waiting.
       ...(role === "worker" ? { backgroundHoldMaxMs: WORKER_BACKGROUND_HOLD_MAX_MS } : {}),
     };
   };
 }
 
-/**
- * 给驱动层的 personaNote（DriverOptions.personaNote）：问账本 sinceRevision 之后性格设定、模式改了什么，拼成说明（prompt.ts 的 personaUpdateNote）。
- * 不是项目经理的会话、版本号没变返回 null。launchDir 给了，模式那一节里的任务图手册路径写成这个会话启动目录里的（同 createLaunchPreparer）。
- */
 export function createPersonaNoter(
   personaUpdate: (sessionId: SessionId, sinceRevision: number) => PersonaUpdate | null,
   launchDir?: string,

@@ -1,7 +1,3 @@
-// hub worker search、worker show --task / --report：项目经理的“档案记忆”，从账本里按需搜、按需读，不占上下文。
-// - 范围：workers.pm_id 是自己的所有 Worker（含已收工的，和 hub worker list 一样）；搜 workers.title、workers.task、
-//   项目经理对话里这个 Worker 的汇报（messages 里 kind worker、meta.event 是 report，text 去掉“【Worker … 的汇报】”那行开头就是汇报原文）；
-// - 匹配：简单子串，关键词都要出现在同一处（标题、任务说明或某一轮汇报）；英文不分大小写，中文原样；数据量小，不建索引。
 import type { HubArgs, HubResult, WorkerSearchHit } from "../../shared/hub.ts";
 import {
   WORKER_SEARCH_CONTEXT_CHARS,
@@ -21,16 +17,13 @@ interface ReportRow {
   created_at: number;
 }
 
-/** 汇报原文：去掉交给项目经理时加的开头。 */
 function reportBody(worker: Pick<WorkerDbRow, "id" | "title">, text: string): string {
   return unwrapWorkerReportText(worker, text);
 }
 
-/** 命中处前后各取一些字，连同关键词一共不超过 WORKER_SEARCH_CONTEXT_CHARS 个字；换行并成空格，被截掉的那头加省略号。 */
 export function snippetOf(text: string, keywords: string[]): string {
   const chars = [...text.replace(/\s+/g, " ")];
   const lower = chars.map((c) => c.toLowerCase()).join("");
-  // 以最靠前的那个关键词命中处为中心（lower 和 chars 逐字对应，除非个别字小写后变长，这时位置只会略偏）
   const first = keywords.map((k) => lower.indexOf(k)).filter((i) => i >= 0);
   const at = first.length === 0 ? 0 : Math.min(...first);
   const matchLen = Math.min([...keywords.find((k) => lower.indexOf(k) === at) ?? ""].length, WORKER_SEARCH_CONTEXT_CHARS);
@@ -51,7 +44,6 @@ export function createLedgerWorkerSearch(ctx: LedgerContext) {
       workerId,
     );
 
-  /** hub worker show --report [N]：第 N 轮汇报原文（和 search 里的“汇报 #N”一致，从 1 起、从旧到新）；"latest" 是最新一轮。 */
   const reportText = (worker: WorkerDbRow, n: number | "latest"): string => {
     if (n !== "latest" && (!Number.isSafeInteger(n) || n < 1)) throw fail("invalid", "--report 的 N 要写正整数（第几轮汇报，和 search 里的“汇报 #N”一致）");
     const reports = reportsOf(worker.id);
@@ -108,7 +100,6 @@ export function createLedgerWorkerSearch(ctx: LedgerContext) {
         if (matches(body)) found.push({ at: r.created_at, order: 2 + i, hit: { ...base, where: "report", report: i + 1, snippet: snippetOf(body, words) } });
       });
     }
-    // 最新的在前：时间倒序，同一时刻的后出现的在前
     found.sort((a, b) => b.at - a.at || b.hit.workerId - a.hit.workerId || b.order - a.order);
     const hits = found.slice(0, limit).map((f) => f.hit);
     const label = keywords.map((k) => `“${k}”`).join(" ");

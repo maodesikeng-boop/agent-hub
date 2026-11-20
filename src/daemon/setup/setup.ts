@@ -1,7 +1,3 @@
-// worktree 准备命令（hub project setup）：建好 Worker 的 worktree 后，在里面用 shell 跑一次项目配的命令，跑完 Worker 再开工。
-// 跑命令的逻辑都在这里：shell、环境变量、日志、超时、强制结束（复用 driver/process.ts 的 forceKillTree）、
-// 同时跑着的那些（停止、收工、关机时结束它们）。什么时候跑、结果怎么交给 Worker 在 handlers.ts 和 ledger/workers.ts。
-// 用到的数在 src/shared/limits.ts，日志路径在 src/shared/paths.ts。
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, statSync, writeSync } from "node:fs";
 import { basename, dirname, win32 } from "node:path";
@@ -24,9 +20,7 @@ import { firstEnvKey, spawnOwnedProcess } from "../platform/index.ts";
 import { trackChild } from "../process-ledger.ts";
 import { VENDOR_PATHS } from "../../vendors/paths-registry.ts";
 
-// ---- 不传给准备命令的环境变量 ----
-// 只去模型和 hub 的凭据：hub 的令牌和 socket（HUB_*）、守护进程的配置（AGENT_HUB_*），加上各家厂商的凭据（各家 paths.ts 的 credentialEnv
-// 的并集，准备命令跑的是仓库里的脚本，哪家的 API 密钥都不给）。GH、AWS、NPM 这类别的令牌照常传（装私有依赖可能要用）。名字按大写比较。
+// Setup commands must not inherit hub or model credentials from the parent session.
 const CREDENTIAL_ENV = Object.values(VENDOR_PATHS).flatMap((paths) => paths.credentialEnv ?? []);
 const SETUP_ENV_DENY_PREFIXES = ["HUB_", "AGENT_HUB_", ...CREDENTIAL_ENV.flatMap((c) => c.prefixes ?? [])];
 const SETUP_ENV_DENY_NAMES = CREDENTIAL_ENV.flatMap((c) => c.names ?? []);
@@ -64,11 +58,7 @@ function buildShellArgsForBinary(shellBin: string, command: string): ResolvedSet
   return { program: shellBin, args: ["-c", command], label: shellBin };
 }
 
-/**
- * 选择准备命令的运行 shell（设计第 4.6 节）：
- * - POSIX：显式指定 -> `$SHELL` -> `/bin/sh`（`-c`）；
- * - Windows：显式指定 -> Git Bash（排除 `%SystemRoot%\System32\bash.exe` 的 WSL 入口）-> `pwsh` -> `cmd.exe`。
- */
+/** Windows prefers Git Bash and skips the WSL bash under %SystemRoot% because it runs in a different filesystem. */
 export function resolveSetupShell(
   command: string,
   env: Record<string, string | undefined>,
@@ -136,7 +126,6 @@ export function resolveSetupShell(
   return { program: comSpec, args: ["/d", "/s", "/c", command], label: `cmd (${comSpec})` };
 }
 
-/** 准备命令的环境变量：守护进程自己的，去掉父会话那几个（buildChildEnv）和模型、hub 的凭据（deniedSetupEnv），加上主文件夹、worktree 两个路径。 */
 export function buildSetupEnv(
   base: Record<string, string | undefined>,
   paths: { rootPath: string; worktreePath: string },
@@ -148,15 +137,10 @@ export function buildSetupEnv(
   return { ...env, [ENV_SETUP_ROOT_PATH]: paths.rootPath, [ENV_SETUP_WORKTREE_PATH]: paths.worktreePath };
 }
 
-/** ESC 开头的终端控制序列：CSI（颜色、清行）、OSC（窗口标题，BEL 或 ESC \\ 结尾）、两个字符的。 */
 const ESCAPE_SEQUENCE = /\u001b\[[0-?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?|\u001b[@-Z\\-_]/gu;
-/** 换行和制表符以外的 C0、DEL、C1 控制字符。 */
 const CONTROL_CHARS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/gu;
 
-/**
- * 命令的输出、命令原文交给 agent 看之前洗一遍（不让它们在附注里伪造格式）：CRLF 当换行；去掉终端控制序列；
- * 每行只留最后一个 \r 之后的（进度条反复刷新同一行）；再去掉剩下的控制字符。日志文件里留原样。
- */
+/** Sanitize output and command text before agents see them so they cannot forge report formatting. */
 export function cleanTerminalText(text: string): string {
   return text
     .replaceAll("\r\n", "\n")
@@ -167,10 +151,9 @@ export function cleanTerminalText(text: string): string {
     .replace(CONTROL_CHARS, "");
 }
 
-/** 输出的最后 maxLines 行、最多 maxBytes 字节（从后往前截，截在半个字上的那个字丢掉），洗过（cleanTerminalText）。末尾的空行去掉。 */
 export function outputTail(output: Buffer, maxLines: number, maxBytes: number): string {
   let bytes = output.length > maxBytes ? output.subarray(output.length - maxBytes) : output;
-  // 截在多字节字符中间：跳过开头的续字节（10xxxxxx）
+  // Skip leading UTF-8 continuation bytes when the cut lands inside a character.
   if (bytes !== output) {
     let i = 0;
     while (i < bytes.length && (bytes[i]! & 0xc0) === 0x80) i++;
@@ -182,29 +165,20 @@ export function outputTail(output: Buffer, maxLines: number, maxBytes: number): 
 
 export interface RunSetupOptions {
   command: string;
-  /** worktree 目录：命令在这里跑。 */
   cwd: string;
-  /** 项目主文件夹（AGENT_HUB_ROOT_PATH）。 */
   rootPath: string;
-  /** 日志文件（paths.ts 的 workerSetupLogPath），追加写。 */
   logPath: string;
-  /** 默认 SETUP_TIMEOUT_MS。 */
   timeoutMs?: number;
-  /** 默认 setupShell(process.env)。 */
   shell?: string;
-  /** 默认 process.env。 */
   baseEnv?: Record<string, string | undefined>;
-  /** abort：强制结束，结果是 stopped。 */
   signal?: AbortSignal;
-  /** 默认 SETUP_LOG_MAX_BYTES（测试改小）。 */
   logMaxBytes?: number;
   now?: () => number;
 }
 
-/** 开日志文件（追加）；写不了返回原因，命令照样跑。 */
 function openLog(logPath: string): { fd: number | null; error: string | null } {
   try {
-    // 和 launch.ts 的启动文件目录一样只给自己：日志里有命令原文和输出
+    // Logs contain the command and its output, so they are owner-only like launch files.
     mkdirSync(dirname(logPath), { recursive: true, mode: 0o700 });
     return { fd: openSync(logPath, "a", 0o600), error: null };
   } catch (error) {
@@ -224,14 +198,6 @@ function isDirectory(path: string): boolean {
   }
 }
 
-/**
- * 在 cwd 里用 `<shell> -c <command>` 跑一次准备命令。不抛错：worktree 目录不在、起不来、中途意外出错都是 failed（原因在 error）。
- * - detached（自己一个进程组）；标准输入是 /dev/null，不会卡在等输入上；
- * - 标准输出和标准错误合在一起，边收边追加进日志（每次一段，段头写时间和命令，超过 logMaxBytes 写“后面省略”但照样读完），
- *   内存里只留最后一截给 tail；
- * - 超时、abort：forceKillTree 连同所有后代一起杀；正常退出后给它的进程组补一个 SIGTERM，清掉留在后台的；
- *   退出后管道最多再读 STDIO_DRAIN_MS（后台进程占着管道时不一直等）。
- */
 export async function runSetupCommand(options: RunSetupOptions): Promise<SetupOutcome> {
   const now = options.now ?? Date.now;
   const timeoutMs = options.timeoutMs ?? SETUP_TIMEOUT_MS;
@@ -254,7 +220,6 @@ export async function runSetupCommand(options: RunSetupOptions): Promise<SetupOu
   const shellHeader = process.platform === "win32" ? `[shell: ${resolvedShell.label}]\n` : "";
   writeLog(`\n=== ${new Date(started).toISOString()} 在 ${options.cwd} 跑准备命令 ===\n${shellHeader}${options.command}\n---\n`);
 
-  // 只留最后一截：够 tail 用就行
   const keepBytes = SETUP_OUTPUT_TAIL_BYTES * 2;
   let kept = Buffer.alloc(0);
   const onData = (chunk: Buffer) => {
@@ -281,7 +246,6 @@ export async function runSetupCommand(options: RunSetupOptions): Promise<SetupOu
       try {
         closeSync(log.fd);
       } catch {
-        // 关不上也没什么可做的
       }
       log.fd = null;
     }
@@ -297,12 +261,11 @@ export async function runSetupCommand(options: RunSetupOptions): Promise<SetupOu
   };
 
   if (options.signal?.aborted) return finish({ kind: "stopped", exitCode: null, signal: null, error: null });
-  // 先查目录：不在的话 spawn 只会报一句看不懂的“spawn /bin/zsh ENOENT”
+  // Check the directory first; otherwise spawn only reports an unclear "spawn /bin/zsh ENOENT".
   if (!isDirectory(options.cwd)) return finish({ kind: "failed", exitCode: null, signal: null, error: `worktree 目录不在：${options.cwd}` });
   try {
     return await runChild();
   } catch (error) {
-    // 意外出错（spawn 同步抛错之类）：照样写日志结尾、关掉日志文件，给 failed
     return finish({ kind: "failed", exitCode: null, signal: null, error: `准备命令出错：${errorMessage(error)}` });
   }
 
@@ -355,11 +318,6 @@ export async function runSetupCommand(options: RunSetupOptions): Promise<SetupOu
   }
 }
 
-/**
- * 交给 runner 跑的一次准备命令。onDone 在跑完（成功、失败、超时、被停止）时调；关机打断的不调。
- * onDone 抛错、或者跑命令本身意外抛错时，runner 再调一次 onDone，结果是 failed、原因“准备命令出错：…”，
- * 免得 Worker 一直停在准备中。
- */
 export interface SetupJob {
   workerId: WorkerId;
   sessionId: SessionId;
@@ -371,11 +329,9 @@ export interface SetupJob {
 }
 
 export interface SetupRunner {
-  /** 开始跑。这个 Worker 已经在跑、或者已经 shutdown 了：什么也不做，返回 false。 */
   start(job: SetupJob): boolean;
-  /** 停掉这个会话正在跑的准备命令（网页上点停止、hub worker end）：结果是 stopped，照常调 onDone。没在跑什么也不做。 */
   cancel(sessionId: SessionId): void;
-  /** 关机：全部强制结束，不调 onDone（重启后重跑）。最多等 KILL_WAIT_MS。之后 start 一律不跑。 */
+  /** Shutdown kills setups without calling onDone so they rerun after restart. */
   shutdown(): Promise<void>;
 }
 
@@ -386,14 +342,12 @@ export interface SetupRunnerOptions {
   log?: (line: string) => void;
 }
 
-/** 管同时跑着的准备命令：按 Worker 去重，按会话停，关机时一起结束。 */
 export function createSetupRunner(options: SetupRunnerOptions = {}): SetupRunner {
   const log = options.log ?? ((line) => console.error(line));
   const timeoutMs = options.timeoutMs ?? SETUP_TIMEOUT_MS;
   const running = new Map<WorkerId, { sessionId: SessionId; controller: AbortController; done: Promise<void> }>();
   let closed = false;
 
-  /** 交给 onDone；它抛错记一行日志，返回抛的错（没出错是 undefined）。 */
   const deliver = (job: SetupJob, outcome: SetupOutcome): { error: unknown } | undefined => {
     try {
       job.onDone(outcome);
@@ -403,7 +357,6 @@ export function createSetupRunner(options: SetupRunnerOptions = {}): SetupRunner
       return { error };
     }
   };
-  /** 兜底的结果：Worker 照常开工，附注写“准备命令出错：原因”。 */
   const errorOutcome = (job: SetupJob, error: unknown): SetupOutcome => ({
     kind: "failed",
     command: job.command,
@@ -434,7 +387,7 @@ export function createSetupRunner(options: SetupRunnerOptions = {}): SetupRunner
         .then((outcome) => {
           running.delete(job.workerId);
           if (closed) return;
-          // 第一次交不进去（比如写库出错）：换成“准备命令出错”再交一次
+          // If the first delivery fails (for example a database error), retry once as a setup error.
           const failed = deliver(job, outcome);
           if (failed !== undefined) deliver(job, errorOutcome(job, failed.error));
         })

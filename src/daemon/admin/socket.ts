@@ -1,15 +1,4 @@
-// 本机管理 socket run/admin.sock：终端命令（src/feishu/、src/mesh/）经它找守护进程，给没有浏览器的服务器用。
-// 只有本机这个用户能连（run/ 0700、socket 0600），另外要带界面令牌 state/ui-token（agent 读不到 state/）：
-// agent 和守护进程是同一个系统用户，光靠文件权限挡不住它。
-// 接口（JSON 进、JSON 出；输入不对 400 { error }）：
-// 飞书（守护进程那一半是 daemon/feishu/setup.ts，和网页接口同一份）：
-//   GET  /feishu/status | POST /feishu/registration | DELETE /feishu/registration | PUT /feishu/credentials
-//   POST /feishu/bind-code | PUT /feishu/policy { pmId, triggerMode?, guestTier? } | POST /feishu/resync | POST /feishu/disconnect
-// 账号组网（daemon/mesh/，和网页“账号与设备”同一组操作）：
-//   GET  /mesh/status | POST /mesh/login { relayUrl? } | DELETE /mesh/login | POST /mesh/logout
-//   POST /mesh/approvals/begin { requestId } | POST /mesh/approvals/answer { requestId, match } | PUT /mesh/priority { priority }
-//   POST /mesh/devices/remove { id }
-// 桌面外壳：POST /admin/shutdown。
+// Local admin socket for terminal tools; it also requires the UI token because agents run as the same OS user and file modes alone cannot stop them.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
 import { z } from "zod";
@@ -22,18 +11,12 @@ import { listenOnRunSocket } from "../run-socket.ts";
 export interface AdminSocketOptions {
   runDir: string;
   socketPath: string;
-  /** 认令牌：Authorization: Bearer <令牌>。 */
   authorize(token: string): boolean;
-  /** 飞书设置（守护进程起好飞书通道后才有，所以是函数）；没开飞书时 /feishu/* 回 400。 */
   feishu?: () => FeishuSetupService | undefined;
-  /** 账号组网；没给时 /mesh/* 回 400。 */
   mesh?: () => Mesh | undefined;
-  /** 桌面外壳经本机管理端点优雅关机（Windows 下替代外部无法送达的 SIGTERM）。 */
+  /** Desktop shells request graceful shutdown here because Windows cannot deliver SIGTERM to the daemon. */
   onShutdown?: () => void;
-  /**
-   * 起好监听之后、服务第一个请求之前的加固（Windows：给管理管道设 DENY FusaWorker）。做完之前请求一律 503，做完断开这期间连上的连接；
-   * 做失败就关掉 socket、startAdminSocket 抛 AdminSocketInsecureError：没加固好的管道不服务。
-   */
+  /** Requests get 503 until hardening (Windows pipe DENY FusaWorker) finishes; on failure the socket closes instead of serving unprotected. */
   secure?: (socketPath: string) => Promise<void>;
   log?: (line: string) => void;
 }
@@ -119,7 +102,6 @@ const meshSchemas = {
   remove: z.strictObject({ id: deviceIdSchema }),
 };
 
-/** 组网的操作抛的错（没有这条请求、不能删本机……）都是给人看的原因，回 400。 */
 class MeshInputError extends Error {}
 
 function meshRoutes(get: () => Mesh | undefined): Record<string, Route> {

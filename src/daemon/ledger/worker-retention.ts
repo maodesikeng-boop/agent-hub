@@ -1,15 +1,3 @@
-// 已收工 Worker 的对话保留期：Worker 收工（workers.updated_at：收工时写，之后不再改）满 WORKER_RETENTION_DAYS 天，
-// 清掉它自己对话里只属于它的大块数据——对话消息（messages）、步骤日志（session_steps）、hub 调用记录（hub_calls）、
-// 它对话上的交接（handovers）、跑完了的动作（actions）、后台等待和性格已读标记，以及磁盘上的 launch 目录和准备命令日志。
-// 留着的“基本记录”（hub worker search / show / list、网页已收工列表、项目经理收到的汇报都靠它们）：
-// - workers 行：编号、标题、任务说明、分支、worktree、状态、收工时间；
-// - conversations 行（conversation_purges 里记着清的时间）和 agent_sessions 行：模型、思考程度、用量；
-// - 项目经理对话里的消息：Worker 每一轮的汇报（kind worker、meta.event 是 report）、已收工那一行——那是项目经理的对话，不删。
-// 不碰：项目经理的对话（归档到期的清理见 persona.ts 的 purgeExpiredArchivedPms，不变）、还没收工的 Worker、经手过还 active 的任务图的 Worker（换人接手要用它的记录）、会话还在跑或还有没做完的动作的 Worker、
-// worktree 目录和分支（可能有没合的活，用户自己 git worktree remove）、uploads/ 和 sent-files/（文件按编号存、不按 Worker 分，
-// 由 daemon/file-cleanup.ts 按目录修改时间满 FILE_RETENTION_DAYS 天清；它和本保留期同样是 30 天，Worker 对话里的文件到本清理时早已过期）。
-// 分批：每批一个事务（BEGIN IMMEDIATE），最多删 maxRows 行，没删完的下一批（下一轮）接着删，所以锁库的时间有上限；
-// 一个 Worker 的数据删完的那一批才记进 conversation_purges、推 conversation.purged，中途失败回滚后下次接着来。
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { ConversationId, SessionId, WorkerId } from "../../shared/domain.ts";
@@ -18,11 +6,8 @@ import { removeSessionLaunchDir, workerSetupLogPath } from "../../shared/paths.t
 import type { LedgerContext, LedgerFiles, Pending } from "./context.ts";
 
 export interface WorkerPurgeBatch {
-  /** 这一批删了多少行（各表加起来，包括打标记前顺手清掉的小表）。 */
   rows: number;
-  /** 这一批里数据删完、打上 purged_at 的 Worker。 */
   purged: WorkerId[];
-  /** 还有没清完的、到期的 Worker：true 就该再来一批。 */
   more: boolean;
 }
 
@@ -31,11 +16,6 @@ interface Candidate {
   conv: ConversationId;
 }
 
-/**
- * 经手过还 active 的任务图节点的 Worker（节点的 worker_ids_json 里有它）不参与清理：图没结束随时可能换人接手，
- * 接手时要从账本取它的汇报、最后的文字、最后几步操作（takeover.ts，docs/orchestration-simplify-design.md 第 11.1 节）。
- * 活跃的图最多 MAX_ACTIVE_GRAPHS_PER_PROJECT 张 × MAX_GRAPH_NODES 个节点，展开很便宜。
- */
 const IN_ACTIVE_GRAPH = `SELECT 1 FROM task_graphs g JOIN task_graph_steps n ON n.graph_id = g.id, json_each(n.worker_ids_json) j
              WHERE g.status = 'active' AND j.value = w.id`;
 
@@ -47,7 +27,6 @@ export function createLedgerWorkerRetention(ctx: LedgerContext, files: Pick<Ledg
   const sessionIdsOf = (c: Candidate): SessionId[] =>
     db.all<{ id: number }>("SELECT id FROM agent_sessions WHERE role = 'worker' AND (worker_id = ? OR conversation_id = ?)", c.id, c.conv).map((r) => r.id);
 
-  /** 还有没做完的动作（排着的、在跑的：给它的消息、结束会话、建 worktree……）的 Worker：等做完再清。动作队列里没做完的很少，一次读完。 */
   const busyWorkers = (): number[] => {
     const ids = new Set<number>();
     const workerOfSession = (id: unknown) =>
@@ -73,7 +52,7 @@ export function createLedgerWorkerRetention(ctx: LedgerContext, files: Pick<Ledg
     return [...ids];
   };
 
-  /** 快速判断现在有没有到期且还没清过的 Worker（一条只读查询，没有就不进写事务、也不扫 actions）。 */
+  /** Cheap read-only check so the common case never opens a write transaction or scans actions. */
   const hasExpiredCandidate = (cutoff: number): boolean =>
     db.get(
       `SELECT 1 AS x FROM workers w
@@ -86,7 +65,6 @@ export function createLedgerWorkerRetention(ctx: LedgerContext, files: Pick<Ledg
       cutoff,
     ) !== undefined;
 
-  /** 到期、没清过、会话没在跑、没有没做完的动作的 Worker，先收工的在前。 */
   const eligible = (cutoff: number, limit: number): Candidate[] => {
     const busy = busyWorkers();
     return db.all<{ id: number; conv: number }>(
@@ -107,14 +85,11 @@ export function createLedgerWorkerRetention(ctx: LedgerContext, files: Pick<Ledg
     );
   };
 
-  /** 删 table 里满足 where 的至多 limit 行（rowid 子查询限量，一条 DELETE 不会一次删几万行）；返回删了几行。 */
   const deleteChunk = (table: string, where: string, params: number[], limit: number): number =>
     db.run(`DELETE FROM ${table} WHERE rowid IN (SELECT rowid FROM ${table} WHERE ${where} LIMIT ?)`, ...params, limit).changes;
 
-  /** 清一个 Worker，至多删 budget 行；全删完（并打上 purged_at）finished 是 true，预算花完还有剩的是 false。 */
   const purgeOne = (p: Pending, c: Candidate, budget: number, purgedAt: number): { rows: number; finished: boolean } => {
     const sessionIds = sessionIdsOf(c);
-    // 先删跑完了的动作：它们里的 messageId 要靠 messages 还在才查得到，所以排在 messages 前面（actions 没删完绝不会开始删 messages）
     const heavy: Array<{ table: string; where: string; params: number[] }> = [
       {
         table: "actions",
@@ -143,7 +118,6 @@ export function createLedgerWorkerRetention(ctx: LedgerContext, files: Pick<Ledg
       if (left <= 0) return { rows, finished: false };
       const deleted = deleteChunk(table, where, params, left);
       rows += deleted;
-      // 刚好把预算用光：这张表可能还有，留给下一批（下一批删不到东西才往下走）
       if (deleted >= left) return { rows, finished: false };
       left -= deleted;
     }
@@ -156,14 +130,6 @@ export function createLedgerWorkerRetention(ctx: LedgerContext, files: Pick<Ledg
     return { rows, finished: true };
   };
 
-  /**
-   * 清理已退役或历史遗留的启动目录（`state/launch/<编号>` 与旧版 `state/launch/session-<编号>`）：
-   * - 活跃 PM 换会话（`handover`）淘汰下来的已结束旧 PM 会话（`role = 'pm' AND status = 'ended'`，且进程已退、无进行中交接、无待处理动作）；
-   * - 已结束的总助轨道 B 会话（`role = 'assistant' AND status = 'ended'`）或行已删的孤儿会话；
-   * - 已走完保留期清理（`conversation_purges`）的 Worker 会话；
-   * - 历史遗留的 `session-<编号>` 旧命名目录。
-   * 绝不碰：还在跑或有进程/待处理动作的会话、当前未结束的 PM 会话（含已归档未满 7 天的）、未满 30 天保留期的已收工 Worker 会话。
-   */
   const sweepRetiredLaunchDirs = (): void => {
     const launchDir = files.launchDir;
     if (launchDir === undefined || !existsSync(launchDir)) return;
@@ -207,10 +173,7 @@ export function createLedgerWorkerRetention(ctx: LedgerContext, files: Pick<Ledg
     }
   };
 
-  /**
-   * 清一批：一个事务，最多删 maxRows 行。nowMs 是现在（测试和模拟用），到期的是 workers.updated_at <= nowMs - WORKER_RETENTION_MS 的。
-   * 返回这一批删了多少行、哪些 Worker 清完了、是否还有到期没清完的。
-   */
+  /** One transaction deletes at most maxRows rows to bound lock time. */
   const purgeBatch = (nowMs: number = now(), maxRows: number = WORKER_PURGE_BATCH_ROWS): WorkerPurgeBatch => {
     const cutoff = nowMs - WORKER_RETENTION_MS;
     if (!hasExpiredCandidate(cutoff)) {

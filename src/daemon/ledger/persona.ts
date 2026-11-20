@@ -1,5 +1,3 @@
-// 账本里的项目经理和性格设定：建项目经理（不含项目，见 ledger.ts 的 createPm）、看和改性格设定、撤销、
-// 启动时同步性格设定文件（以数据库为准，见 syncPersonaFiles）。也放按编号找项目经理、项目经理的会话这些别处要用的读法。
 import { lstatSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { LRUCache } from "lru-cache";
@@ -69,19 +67,16 @@ import { PM_SELECT, toConversation, toPersonaChange, toPm } from "./rows.ts";
 import type { ConversationDbRow, PersonaChangeDbRow, PmDbRow } from "./rows.ts";
 import type { LedgerSessions } from "./sessions.ts";
 
-/** 性格设定的这次修改是谁做的（账本内部用）。 */
 type PersonaEditor = { actor: "user" } | { actor: "file" } | { actor: "pm"; session: AgentSessionRow };
 
 const BAD_NAME = `不能是空的、超过 ${MAX_NAME_CHARS} 个字，或带换行等控制字符`;
 
-/** 项目经理现在的厂商、模型、思考程度。 */
 const agentOf = (pm: PmDbRow): AgentSetting => ({ vendor: pm.vendor as AgentVendor, model: pm.default_model, effort: pm.effort });
 
 const sameAgent = (a: AgentSetting, b: AgentSetting) => a.vendor === b.vendor && a.model === b.model && a.effort === b.effort;
 
-/** 修改记录、系统消息里的“模型：默认 → Haiku”这几段（没变的不写）。 */
 function agentNotes(rawBefore: AgentSetting, rawAfter: AgentSetting, label: LedgerContext["modelLabel"]): string[] {
-  // 老数据里 agy 的模型是带档位的完整 ID：先拆成 模型 + 思考程度，各写各的
+  // Old agy rows store effort inside the model id, so split them before comparing.
   const before = { vendor: rawBefore.vendor, ...splitModelEffort(rawBefore.vendor, rawBefore.model, rawBefore.effort) };
   const after = { vendor: rawAfter.vendor, ...splitModelEffort(rawAfter.vendor, rawAfter.model, rawAfter.effort) };
   const notes: string[] = [];
@@ -91,14 +86,12 @@ function agentNotes(rawBefore: AgentSetting, rawAfter: AgentSetting, label: Ledg
   return notes;
 }
 
-/** 模型、思考程度的输入：去掉首尾空白，空串、null、不给都当默认（null）。 */
 function optionalSetting(value: unknown, what: string): string | null {
   if (value === null || value === undefined) return null;
   if (typeof value !== "string") throw fail("invalid", `${what}要是字符串`);
   return value.trim() || null;
 }
 
-/** 建项目经理：厂商、模型、思考程度全查。不对抛 invalid，原因来自厂商清单。 */
 function validAgent(raw: { vendor: unknown; model: unknown; effort: unknown }, catalogOf?: (vendor: AgentVendor) => ReturnType<LedgerContext["modelCatalog"]>): AgentSetting {
   const setting = { vendor: raw.vendor, model: optionalSetting(raw.model, "模型"), effort: optionalSetting(raw.effort, "思考程度") };
   const catalog = isAgentVendor(setting.vendor) ? (catalogOf?.(setting.vendor) ?? null) : null;
@@ -108,15 +101,11 @@ function validAgent(raw: { vendor: unknown; model: unknown; effort: unknown }, c
   return { vendor, ...splitModelEffort(vendor, model, effort, catalog) };
 }
 
-/**
- * 资料页改：只查这次给了的那几项，没给的沿用现在的值、不查。老库里可能有不合规的模型名（0006 之前只限长度），
- * 不能因为它改不了性格设定、工作方式、思考程度。
- */
 function nextAgent(current: AgentSetting, input: EditPersonaInput, catalogOf?: (vendor: AgentVendor) => ReturnType<LedgerContext["modelCatalog"]>): AgentSetting {
   if (input.vendor !== undefined && !isAgentVendor(input.vendor)) throw fail("invalid", `厂商只能是 ${AGENT_VENDORS.join("、")}`);
   const vendor = input.vendor ?? current.vendor;
   const catalog = catalogOf?.(vendor) ?? null;
-  // 换了厂商时模型和思考程度默认取 null（不能沿用旧厂商的）；没换厂商且是 agy 老数据（完整 ID）时先拆成 模型 + 思考程度再改
+  // A vendor switch resets model and effort, because the old vendor's values do not apply.
   const touched = input.model !== undefined || input.effort !== undefined;
   const from =
     vendor !== current.vendor
@@ -129,7 +118,6 @@ function nextAgent(current: AgentSetting, input: EditPersonaInput, catalogOf?: (
   const problem =
     (input.model !== undefined ? checkModel(vendor, model) : null) ??
     (input.effort !== undefined ? checkEffort(vendor, effort, catalog) : null) ??
-    // 这次明确给了完整 ID 又明确给了对不上的思考程度才报错；只改其中一项时沿用的那项让位给改的
     (input.model !== undefined && input.effort !== undefined ? checkModelEffort(vendor, model, effort, catalog) : null);
   if (problem !== null) throw fail("invalid", problem);
   return input.model !== undefined && input.effort === undefined
@@ -188,20 +176,15 @@ export function createLedgerPersona(
     return row;
   };
 
-  /** 项目经理的会话；不是（不存在、不是 pm、没有 pm_id）返回 null。 */
   const pmSession = (id: SessionId): (AgentSessionRow & { pmId: PmId }) | null => {
     const row = getAgentSession(db, id);
     return row !== null && row.role === "pm" && row.pmId !== null ? (row as AgentSessionRow & { pmId: PmId }) : null;
   };
 
-  /** 项目经理唯一的那个对话（kind pm）。 */
   const privateConversation = (pmId: PmId): ConversationDbRow | null =>
     db.get<ConversationDbRow>("SELECT * FROM conversations WHERE kind = 'pm' AND pm_id = ? ORDER BY id LIMIT 1", pmId) ?? null;
 
-  /**
-   * 写性格设定文件（临时文件 + 改名），写成功才更新 persona_file_hash。没配 personasDir 什么也不做。
-   * 写失败只记日志：数据库已经提交，下次启动 syncPersonaFiles 按数据库重写。
-   */
+  /** Write via temp file plus rename and update persona_file_hash only on success, so a failed write is retried at startup. */
   const persistPersonaFile = (pmId: PmId, text: string): boolean => {
     if (personasDir === undefined) return false;
     const file = personaFilePath(personasDir, pmId);
@@ -252,7 +235,6 @@ export function createLedgerPersona(
     };
   };
 
-  /** 正在换厂商的那一行交接（未完成且 to_vendor 非空）。 */
   const switchingHandover = (pmId: PmId): { to_vendor: string; to_model: string | null; to_effort: string | null } | null => {
     const conv = privateConversation(pmId);
     if (conv === null) return null;
@@ -264,17 +246,14 @@ export function createLedgerPersona(
     );
   };
 
-  /** 当前生效的厂商、模型、思考程度：正在换厂商时取活跃交接行的目标值，否则取 pms 表。 */
   const effectiveAgent = (pm: PmDbRow): AgentSetting => {
     const active = switchingHandover(pm.id);
     return active !== null ? { vendor: active.to_vendor as AgentVendor, model: active.to_model, effort: active.to_effort } : agentOf(pm);
   };
 
-  /** 这个项目经理最新一条修改记录的编号（拼提示词时记下，见 LaunchContext 的 personaRevision），没改过是 0。 */
   const personaRevision = (pmId: PmId): number =>
     db.get<{ id: number | null }>("SELECT MAX(id) AS id FROM persona_changes WHERE pm_id = ?", pmId)?.id ?? 0;
 
-  /** 见 shared/ledger.ts 的 personaUpdate：按内容比 agent 看到的那一版（sinceRevision 改完的样子）和现在的。 */
   const personaUpdate = (sessionId: SessionId, sinceRevision: number): PersonaUpdate | null => {
     const session = pmSession(sessionId);
     if (session === null) return null;
@@ -283,7 +262,6 @@ export function createLedgerPersona(
     const vendor = pm.vendor as AgentVendor;
     const after = db.all<PersonaChangeDbRow>("SELECT * FROM persona_changes WHERE pm_id = ? AND id > ? ORDER BY id", pm.id, sinceRevision);
     if (after.length === 0) return { revision: sinceRevision, vendor, persona: null, mode: null };
-    // 从没改过（0）时 agent 看到的是第一条改之前的
     const base = db.get<PersonaChangeDbRow>("SELECT * FROM persona_changes WHERE id = ? AND pm_id = ?", sinceRevision, pm.id);
     const seenText = base?.text_after ?? after[0]!.text_before;
     const seenMode = base?.mode_after ?? after[0]!.mode_before;
@@ -299,12 +277,6 @@ export function createLedgerPersona(
     };
   };
 
-  /**
-   * 改性格设定（editPersona、撤销、启动时发现手改都走这里），参数已经校验过。没变化（且不是撤销）返回 null。
-   * 撤销哪怕内容一样也记一条（revertOf）。提交后写文件。
-   * 正文、模式变了不重启，驱动层在下一条消息前加说明（personaUpdate）。
-   * 厂商、模型、思考程度变了：这个项目经理的会话那一行跟着改，驱动层下一条消息前比出不一样，--resume 重启（同挂文件夹）。
-   */
   const editPersonaIn = (
     p: Pending,
     pm: PmDbRow,
@@ -341,7 +313,7 @@ export function createLedgerPersona(
           pm.id,
         );
         for (const { id } of changed) {
-          // 旧模型报的额度用完不算新模型的，不撤的话 rateLimitWaitMs 按旧的恢复时间一直压着新消息
+          // A quota hit on the old model does not apply to the new one, so clear it.
           if (next.agent.model !== agentBefore.model) dropRateLimitRejection(p, id);
           updateLive(p, id, () => {});
         }
@@ -377,7 +349,6 @@ export function createLedgerPersona(
     if (next.mode !== modeBefore) notes.unshift(`模式：${PM_MODE_LABELS[modeBefore]} → ${PM_MODE_LABELS[next.mode]}`);
     const modeNote = notes.length === 0 ? "" : `（${notes.join("，")}）`;
     const reasonNote = next.reason === null ? "" : `。理由：${next.reason}`;
-    // 只改了 Agent 一栏不叫“性格设定”
     const what = agentChanged && next.text === textBefore && next.mode === modeBefore ? "设置" : "性格设定";
     let text: string;
     if (revertOf !== null) text = `已撤销${pm.name}的上一次${what}修改${modeNote}`;
@@ -395,11 +366,6 @@ export function createLedgerPersona(
     return change;
   };
 
-  /**
-   * 平滑兼容迁移与双向同步 `<pmMemoryDir>/<pmId>/MEMORY.md`：
-   * - `MEMORY.md` 不存在且库里现有性格设定非空时自动无损写入 `MEMORY.md`；
-   * - `MEMORY.md` 在磁盘上被 PM（经 `addDirs` 工具）或用户手改过时，记入 `actor: "file"` 历史并同步更新库与 `personas/pm-<id>.md`，支持资料页 Undo。
-   */
   function reconcilePmMemoryIndex(pmId: PmId, activePending?: Pending): "recorded" | "rewritten" | null {
     if (pmMemoryDir === undefined) return null;
     const pm = pmRow(pmId);
@@ -414,8 +380,7 @@ export function createLedgerPersona(
       return null;
     }
     if ("oversize" in disk) {
-      // 进不了数据库（MAX_PERSONA_BYTES）。自己写的不会超，一定是 PM 或用户手改的：先原样挪成子文件保全，再按数据库重写；
-      // 挪不动就保持原状（提示词照用数据库里的），绝不直接覆盖掉别人写的内容
+      // Oversized files must have been hand-edited, because our own writes never exceed MAX_PERSONA_BYTES.
       if (isPmArchived(pmId)) return null;
       const kept = quarantinePmMemoryIndex(pmMemoryDir, pmId, now());
       if (kept === null) {
@@ -455,7 +420,6 @@ export function createLedgerPersona(
     return null;
   }
 
-  /** 校验并改性格设定（editPersona、hub persona.edit），在调用方的事务里。 */
   const editPersonaChecked = (p: Pending, pmId: PmId, input: EditPersonaInput, editor: PersonaEditor): PersonaChange | null => {
     requirePm(pmId);
     assertPmNotArchived(pmId);
@@ -486,7 +450,6 @@ export function createLedgerPersona(
     return { change, persona: getPersona(pmId) };
   };
 
-  /** syncPersonaFiles 的一个项目经理。返回它进了哪张单子。 */
   const syncPersonaFile = (pm: PmDbRow): "recorded" | "rewritten" | null => {
     const file = personaFilePath(personasDir!, pm.id);
     let content: string | null;
@@ -495,7 +458,6 @@ export function createLedgerPersona(
     } catch {
       content = null;
     }
-    // 1. M1 升上来的：文件在就按文件填，没有就当空串；不记修改
     if (pm.persona === null) {
       if (content !== null) {
         db.run("UPDATE pms SET persona = ?, persona_file = ?, persona_file_hash = ? WHERE id = ?", content, file, contentHash(content), pm.id);
@@ -507,19 +469,16 @@ export function createLedgerPersona(
       persistPmMemoryIndex(pm.id, "");
       return "rewritten";
     }
-    // 2. 文件不在或读不了
     if (content === null) {
       persistPersonaFile(pm.id, pm.persona);
       return "rewritten";
     }
     const hash = contentHash(content);
-    // 3. 没人动过文件：内容不一样说明上次没写成
     if (hash === pm.persona_file_hash) {
       if (content === pm.persona) return null;
       persistPersonaFile(pm.id, pm.persona);
       return "rewritten";
     }
-    // 4. 文件变过
     if (content === pm.persona) {
       db.run("UPDATE pms SET persona_file = ?, persona_file_hash = ? WHERE id = ?", file, hash, pm.id);
       return null;
@@ -538,7 +497,6 @@ export function createLedgerPersona(
     return "recorded";
   };
 
-  /** 没归档的项目经理（除了 except）现在的形象：新建时分形象不和它们撞造型。 */
   const activePmLooks = (except: PmId): SlimeLook[] =>
     db.all<PmDbRow>(`${PM_SELECT} WHERE a.archived_at IS NULL AND p.id <> ? ORDER BY p.id`, except).map((row) => resolvePmLook(toPm(row)));
 
@@ -548,7 +506,6 @@ export function createLedgerPersona(
     return look;
   };
 
-  /** 换造型、换颜色（null 是回到默认）：纯外观，不进性格设定的修改记录，归档的也能改。 */
   const setPmLook = (pmId: PmId, look: PmLookSetting): Pm => {
     const { fruit, color } = validLook(look);
     return write((p) => {
@@ -571,7 +528,6 @@ export function createLedgerPersona(
     });
   };
 
-  /** 建项目经理、它唯一的对话和会话（cwd 是 pm-home/<编号>/），在调用方的事务里。项目另建（见 ledger.ts 的 createPm）。 */
   const createPmIn = (p: Pending, input: CreatePmInput): Omit<CreatePmResult, "project"> => {
     const name = validName(input.name, "项目经理");
     if (input.look !== undefined) validLook(input.look);
@@ -864,7 +820,6 @@ export function createLedgerPersona(
                   continue;
                 }
               } catch {
-                // ENOENT or inaccessible -> handled by rmSync(force: true) below
               }
               rmSync(projWtDir, { recursive: true, force: true });
             }

@@ -1,24 +1,3 @@
-// 提示词（设计第 7.2 节）：buildLaunchPrompt 按会话的角色拼 prompt.md。
-// - 项目经理：角色与环境、项目、怎么干活（按“拿到输入 → 分析 → 派活 → 跟进反馈 → 交付与汇报”五步排，每条规矩只出现一次，
-//   见 docs/orchestration-simplify-design.md 第 9 节与 docs/orchestration-skill-design.md 第 3、4 节）、怎么记事情、hub 用法（软件定的，agent 改不了）
-//   + 它的项目和文件夹（11-03 起一个项目经理只管一个项目）+ 性格设定（最后）+（按情况）“先读 AGENTS.md”；
-// - Worker（M3）：buildWorkerSystemPrompt（别名 buildWorkerPrompt）只放同一项目下所有 Worker 字节级一致的静态通则与项目背景，
-//   以最大化命中六家厂商的前缀缓存（Prefix Prompt Cache）；每个 Worker 各自的编号、标题、分配目录/分支、只读限制、任务说明/步骤职责、
-//   审查清单、准备命令结果、上游交棒与前任接手记录统一收敛进第一条开工消息（buildWorkerFirstMessage / task-graph-handoff / takeover）。
-// 写成文件、配上设置文件和环境变量交给驱动层的是 launch.ts 的 createLaunchPreparer。命令名、产品名用 shared/names.ts 的。
-//
-// 给 agent 看的话不止这里，改口径时一起看：
-// - shared/driver.ts 的 *_NOTE：驱动层在消息前面拼的【系统】说明（重启恢复、重发、设置更新后重启、进程意外退出）；
-//   性格设定、模式改了（不重启）的说明在这个文件的 personaUpdateNote，驱动层经 launch.ts 的 createPersonaNoter 拿；
-// - shared/worker.ts 的 WORKER_REPORT_FORMAT：Worker 的汇报格式（和解析函数放在一起），这里原样放进 Worker 的提示词；
-//   USER_TO_WORKER_TAG、userToWorkerHeader：用户直接对 Worker 说的话写给 Worker、交给项目经理时的标签；
-//   workerPickNote（WORKER_PICK_NOTE_START）：用户在输入框指定这条消息里派的 Worker 用什么，交给项目经理时加在原文前面的参数句子（提示词里“选模型”那条说怎么对待它）；
-// - router/prompt.ts 的 buildRouterSystemPrompt：总助（Router）的系统提示词；
-// - ledger/hub-commands.ts：hub 命令回给 agent 的话；
-// - ledger/messages.ts 的 insertSystemMessage：系统消息（只给人看），具体文字在调用它的 persona.ts、projects.ts 里；
-// - ledger/projects.ts 的 ONE_PROJECT_PER_PM：已经有项目又要建时的回答；
-// - ledger/handover.ts：换新会话（用户点的、对话太长自动换的）时让项目经理写交接的那条、新会话第一条消息前面拼的开场说明（交接 + 最近几条原话）。
-// worktree 准备命令（hub project setup）给 Worker、项目经理看的话也在这里：文件末尾的 setupNote、SETUP_RECEIPT_NOTE。
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -50,11 +29,6 @@ export const DEFAULT_PM_NAME = "项目经理";
 
 export const AGENTS_NOTE = "开始前先读工作目录里的 `AGENTS.md`。";
 
-/**
- * 要不要加“先读 AGENTS.md”（设计第 7.2 节，M0 实测）：厂商优先读的说明文件（spec 的 prompt.instructionFile，如 claude 的 CLAUDE.md）
- * 和 AGENTS.md 都在时，它只读自己的那个；所以只在两个都有、而且那个文件里没写 @AGENTS.md 时才加，免得读两遍。
- * 没有 instructionFile 的厂商自己读 AGENTS.md，不加。
- */
 export function needsAgentsNote(cwd: string, instructionFile: string | undefined): boolean {
   if (instructionFile === undefined) return false;
   const file = join(cwd, instructionFile);
@@ -62,26 +36,14 @@ export function needsAgentsNote(cwd: string, instructionFile: string | undefined
   return !readFileSync(file, "utf8").includes("@AGENTS.md");
 }
 
-/** 这家的声明；不认识的编号（老数据、测试）按默认厂商。 */
 function specOf(vendor: string): VendorSpec {
   return vendorSpec(isAgentVendor(vendor) ? vendor : DEFAULT_AGENT_VENDOR);
 }
 
-// ---- 项目经理 ----
-// 结构：角色与环境 → 你的项目 → 怎么干活（五步 + 通用规矩）→ 怎么记事情 → 系统命令 → 性格设定。
-// 里面的数、名字、可选值都从 shared 的常量拼，不手写；事实以代码为准。别往里堆细节：细节在命令回的话里（ledger/hub-commands.ts）和 hub help 里。
-// 加规矩先想它属于五步里的哪一步，放进那一步；同一条规矩不要在两个地方各写一遍。
-
-/** 这家原生技能入口里任务图手册叫什么（claude 带插件前缀 fusa:）。 */
 export function taskGraphSkillDisplayName(vendor: AgentVendor | string = DEFAULT_AGENT_VENDOR): string {
   return `${specOf(vendor).prompt.skillNamePrefix ?? ""}${TASK_GRAPH_SKILL_NAME}`;
 }
 
-/**
- * 第 2 步“建图”那一条里指路的话（docs/orchestration-skill-design.md 第 4.1、7 节，防漏读的主要手段）：按这家 spec 的
- * capabilities.skills 写。有原生入口的“先加载 <名字> 技能，清单里没有就读 <路径>”，没有的“先读 <路径>”。
- * skillFile 是这次会话启动目录里的 SKILL.md（launch.ts 写的）；没给（测试、没有启动目录时）就指到 hub help graph，它打印同一份正文。
- */
 export function taskGraphSkillPointer(vendor: AgentVendor | string = DEFAULT_AGENT_VENDOR, skillFile?: string): string {
   const fallback = skillFile === undefined ? `运行 \`${HUB} help graph\`` : `直接读 \`${skillFile}\``;
   if (specOf(vendor).capabilities.skills === "native") {
@@ -91,16 +53,6 @@ export function taskGraphSkillPointer(vendor: AgentVendor | string = DEFAULT_AGE
   return `**建图前先${read}**，建图、改图、换人、审查的做法都在里面。`;
 }
 
-/**
- * “# 怎么干活”一节（docs/orchestration-simplify-design.md 第 9.1 节、docs/orchestration-skill-design.md 第 3、4 节）：
- * 一个输入按“拿到输入 → 分析 → 派活 → 跟进反馈 → 交付与汇报”五步走，
- * 每条规矩只在它所属的那一步出现一次；最后是“通用规矩”里跟模式有关、跟厂商无关的几条。
- * 这一节不带厂商名单：模式改了不重启，驱动层把它整节发给项目经理（personaUpdateNote）；跟厂商有关的两条通用规矩是 PM_COMMON_RULES，
- * buildLaunchPrompt 接在这一节后面。
- * 建图的规矩、图里怎么跟进、全部 hub graph 命令在任务图技能 fusa-task-graph 里（shared/task-graph-skill.ts，按需加载）；
- * 这里只留“自己做 / 派一个 Worker / 建图”的判断、一句压缩的四类审查红线和指路的那句话（taskGraphSkillPointer，skillFile 是这次会话启动目录里的 SKILL.md）。
- * 两种模式只差三处：标题里的模式名、第 2 步的“自己做”、通用规矩里的“拿不准先问 / 切换长期模式”。
- */
 export function buildPmModePrompt(mode: PmMode, vendor: AgentVendor | string = DEFAULT_AGENT_VENDOR, skillFile?: string): string {
   const handsOn = mode === "hands_on";
   const doItYourself = handsOn
@@ -158,15 +110,11 @@ ${doItYourself}
 ${modeRules}`;
 }
 
-/**
- * 两种模式的“怎么干活”（设计第 2.2 节）。只是提示词，程序不硬拦。
- */
 export const PM_MODE_PROMPTS: Readonly<Record<PmMode, string>> = {
   manage_only: buildPmModePrompt("manage_only"),
   hands_on: buildPmModePrompt("hands_on"),
 };
 
-/** 怎么记事情：照 Claude Code 的记忆提示词翻成中文，改成存在性格设定里（一条一项，用 hub persona edit 写回完整内容）。 */
 export const PM_MEMORY_PROMPT = `# 怎么记事情
 
 你有一份跨厂商的持久记忆，存在**性格设定**里，每次会话加载在提示词最后面（空的时候还没有这一节；对话里后来有【系统】说明更新了性格设定或模式的，以最新的为准）。**要记的事一律写进性格设定，不要只写进你自带的记忆**（自带的记忆用户在网页上看不到，换了厂商也没了）。一条一项，带上类型：
@@ -182,7 +130,6 @@ export const PM_MEMORY_PROMPT = `# 怎么记事情
 
 改的时候先跑 \`${HUB} persona show\` 看最新原文，在上面增删（已有同类条目就更新，不重复建；记错的删掉），再用 \`${HUB} persona edit --reason "<为什么改>" --stdin\` 写回**完整**内容，马上生效，聊过的不会丢。Worker 也要遵守的项目规矩写进仓库的 \`AGENTS.md\`。不记代码库和 git 历史里已有的东西，也不记只跟当次对话有关的事；旧记忆提到的文件、函数或开关，用之前先确认还在。`;
 
-/** 汇总去重各家厂商内置子代理工具名（用于项目经理和 Worker 提示词）。 */
 function formatSubagentTools(specs: readonly VendorSpec[] = VENDOR_LIST): string {
   const tools = [...new Set(specs.flatMap((spec) => spec.prompt.subagentTools))];
   return tools.map((tool) => `\`${tool}\``).join("、");
@@ -196,24 +143,11 @@ function formatVendorCliCommands(vendors: readonly AgentVendor[] = AGENT_VENDORS
   return [...new Set(vendors.map((v) => vendorSpec(v).cli.command))].map((cmd) => `\`${cmd}\``).join("、");
 }
 
-/**
- * “通用规矩”里跟厂商有关的两条，接在 buildPmModePrompt 那一节的最后：不用厂商自带的子代理、选模型。
- * 技能里“派 subagent”“主控亲自审子代理的 diff”在这里翻译成派 Worker、加审查步骤（技能文件是原样引入的第三方内容，不改它）。
- * 选模型不列厂商和模型名：名单会变，让它跑 hub models 看当下的。
- */
 export const PM_COMMON_RULES = `- **不用厂商自带的子代理**：不要调用 ${formatSubagentLabels()} 自带的子 Agent 工具（如 ${formatSubagentTools()}），也不要自己在命令行里跑 ${formatVendorCliCommands()}。技能或提示词要求“派 subagent”的，换成派 Worker 或建图；要求“主控亲自审子代理 diff”的，换成在图里加审查步骤。
 - **选模型**：用 \`${HUB} models\` 查看当前可用的厂商、模型和思考程度（加 \`--vendor <厂商>\` 看单家，加 \`--refresh\` 刷新）。派 Worker 或建图时用 \`--vendor\`、\`--model\`、\`--effort\` 指定，不写默认和你同一家。用户消息前面带 \`${WORKER_PICK_NOTE_START}…】\` 时，回应这一条消息建的图、派的 Worker 都按它传，它没写的项你自己定；用户在话里另有说法以话为准；只管这一条消息，不往后延续。`;
 
-/** hub graph 的子命令（命令表里任务图那一行按 shared/hub.ts 的 HUB_COMMANDS 拼，加命令不用改这里）。 */
 const TASK_GRAPH_ACTIONS = HUB_COMMANDS.filter((c) => c.startsWith("graph.")).map((c) => c.slice("graph.".length));
 
-/**
- * hub 用法（设计第 7.2、8.1 节；docs/orchestration-simplify-design.md 第 9.1 节），给项目经理看。命令以 shared/hub.ts 的命令表为准。
- * 向用户提问、Worker 两组写全参数；任务图缩成一行，用法在任务图手册（技能 fusa-task-graph、hub help graph）里，
- * Worker 的 --node 也只写在手册里（hub help 照旧查得到）；项目、性格设定、定时任务、总助、热重启不常用，各缩成一行，
- * 参数在 hub help 里（hub/cli.ts 的 HUB_USAGE，写错命令时也会打印那一组的用法）。缩掉的参数要在 HUB_USAGE 里查得到（prompt.test.ts 守着）。
- * 厂商、思考程度的可选值不写进来（名单会变）：hub models 查得到，hub worker start 传错时也会报。Worker 的见 WORKER_HUB_USAGE_PROMPT。
- */
 export const HUB_USAGE_PROMPT = `# 系统命令 ${HUB}
 
 直接在 shell 里运行 \`${HUB} ...\`。**不要**在命令里写任何环境变量，也**不要**在后面接 \`echo $?\`。传正文一律用 \`--stdin <<'EOF'\`（引号不能省）。
@@ -237,11 +171,9 @@ export const HUB_USAGE_PROMPT = `# 系统命令 ${HUB}
   - \`${HUB} router report\`：给总助发汇报卡（带本机文件用 \`--file\`）
   - \`${HUB} self-reload [--build]\`：${PRODUCT_NAME} 自身代码合入后让守护进程热重启`;
 
-/** 发文件给用户（Worker 用；项目经理的在“交付与汇报”里写全）：只说能力。守护进程发出时存副本，网页显示图片和文件卡片（daemon/sent-files.ts）。 */
 export const SHARE_FILES_NOTE =
   "- 想让用户在网页上直接看图片或文件，在回复正文里用绝对路径写 Markdown：`![说明](/绝对/路径.png)` 或 `[文件名](/绝对/路径)`（路径含空格用 `<...>` 包裹）。";
 
-/** 你的角色与环境：名字、产品、三层角色、hub 是干什么的。消息怎么分辨在“通用规矩”里。 */
 function roleSection(ctx: LaunchContext): string {
   return `# 你的角色与环境
 
@@ -258,7 +190,6 @@ ${PRODUCT_NAME} 里有三层角色：**总助（Router） → 你（项目经理
 const ONE_PM_ONE_PROJECT_NOTE =
   "（一个项目经理只管一个项目；用户要管新项目时，请用户在网页上新建一个项目经理。别的项目经理或 Worker 可能也在改主文件夹里的文件，动手前先看最新内容。）";
 
-/** 你的项目：名字、说明、全部文件夹（文件夹变了提示词跟着变，下一条消息前自动重启）。 */
 function projectSection(project: ProjectCard | null): string {
   if (project === null) {
     return `# 你的项目
@@ -276,17 +207,12 @@ function otherFoldersText(project: ProjectCard): string {
   return project.otherFolders.length > 0 ? project.otherFolders.map((f) => `\n  - ${f}`).join("") : "没有";
 }
 
-/** 性格设定：用户存的那份原样放（有自己的标题就不再加）；清空了就不出这一节。 */
 function personaSection(persona: string): string | null {
   const text = persona.trim();
   if (text === "") return null;
   return text.startsWith("#") ? text : `# 性格设定\n\n${text}`;
 }
 
-/**
- * 性格设定、模式改了之后不重启（driver.ts 的“两轮之间自动重启”），驱动层加在下一条消息前的【系统】说明。都没变是 null。
- * 用户（资料页、撤销、手改文件）改的给完整的新内容；项目经理自己 hub persona edit 改的它知道内容，只说一句已生效。
- */
 export function personaUpdateNote(update: PersonaUpdate, skillFile?: string): string | null {
   const { persona, mode } = update;
   const self: string[] = [];
@@ -307,41 +233,30 @@ export function personaUpdateNote(update: PersonaUpdate, skillFile?: string): st
   return parts.length === 0 ? null : `【系统】${parts.join("")}`;
 }
 
-// ---- Worker（M3）----
-
-/** Worker 的 hub 用法：只有 hub status（shared/hub.ts 的 HUB_COMMAND_ROLES）。 */
 export const WORKER_HUB_USAGE_PROMPT = `# 系统命令 ${HUB}
 
 - \`${HUB} status\`：看我是哪个 Worker、任务说明（或整张图的目标、本步职责与上游交棒背景）、在哪干活；忘了目标或上游背景时随时跑 \`${HUB} status\` 查看。直接在 shell 里敲，**不要在命令里写任何环境变量**：${HUB} 会自己读，命令里出现变量会被权限检查拒绝。
 - 别的 \`${HUB}\` 命令只给项目经理用，你调会被拒绝。`;
 
-/** Worker 的规矩（m3-plan 第 2.1 节）：问不了用户，有问题写进汇报的“问题”；不用厂商自带的子代理；等别人时直接结束这一轮。 */
 const WORKER_RULES_COMMON = `# 你的规矩
 
 - **拿不准写进“问题”交给项目经理**：你不能直接挂卡问用户。碰到产品取舍、撤不回来的操作或范围疑问，状态写“有问题”，在“问题”栏写清选项和推荐交给项目经理；自己跑一下就能验证的技术事实，自己试。
 - **不用厂商自带的子代理**：不要调用 ${formatSubagentTools()} 这类内置子代理工具，自己一个会话做完；确需并行拆步的，在“问题”栏建议项目经理加 Worker 或加步骤。
 - **等别人时直接结束本轮**：等别的 PR 合并、等项目经理或用户答复时，直接结束本轮并汇报，不要设定时器，也不要 \`sleep\` 轮询；轮到你时项目经理会叫醒你。`;
 
-/**
- * Worker 的长命令（spec 的 capabilities.backgroundWake 为 true 时，加在“你的规矩”里）：放后台、这一轮先结束。
- * 驱动层认得出后台命令：这一轮结束时还有后台命令就不当汇报，命令跑完叫醒它、它真做完了再汇报（ledger/workers.ts）。
- */
 function buildWorkerBackgroundCommandNote(tool: string = specOf(DEFAULT_AGENT_VENDOR).prompt.backgroundCommandTool): string {
   return `- **长命令放后台**：要等一分钟以上的命令（如等 CI、跑全量测试）用后台运行（如 ${tool}），这一轮先结束；命令跑完会叫醒你，接着做完再汇报（后台命令没跑完时，这一轮的回复不会交给项目经理、也不算汇报）。不要 \`sleep\` 后反复查状态；几秒钟的命令照常在前台跑。`;
 }
 export const WORKER_BACKGROUND_COMMAND_NOTE = buildWorkerBackgroundCommandNote();
 
-/** 不能把命令放后台叫醒自己的厂商（capabilities.backgroundWake 为 false）：一条命令等到底，别轮询，也别放后台（跑完没人叫醒它，汇报会早发）。 */
 export const WORKER_BLOCKING_WAIT_NOTE =
   "- **长命令一条等到底**：等 CI 或长测试时，在前台用一条一直等到结束的命令（如 `gh pr checks <PR 号> --watch`），不要 `sleep` 后反复查状态，也不要把命令放后台（跑完不会叫醒你）。";
 
-/** “你的规矩”：通用的几条，加上按厂商能不能放后台叫醒写的长命令那一条。 */
 function workerRulesSection(vendor: string = DEFAULT_AGENT_VENDOR): string {
   const spec = specOf(vendor);
   return `${WORKER_RULES_COMMON}\n${spec.capabilities.backgroundWake ? buildWorkerBackgroundCommandNote(spec.prompt.backgroundCommandTool) : WORKER_BLOCKING_WAIT_NOTE}`;
 }
 
-/** 派活时 --readonly（WorkerRecord.readonly）的 Worker 多一句。 */
 export const WORKER_READONLY_NOTE = "- 这次只读：只看、只查，不改文件，也不跑会改东西的命令；要批准的操作会被系统直接拒绝。结论写进汇报。";
 
 function workerRoleSection(ctx: LaunchContext): string {
@@ -358,7 +273,6 @@ ${SHARE_FILES_NOTE}
 - 回复用中文，简洁直接。`;
 }
 
-/** 静态项目背景（放在 Worker 系统提示词通用规矩之后，同一项目下所有 Worker 字节级一致）。 */
 function workerProjectSection(project: ProjectCard): string {
   const lines = [`# 所在项目`, ``, `- 项目：${project.name}`];
   if (project.description) lines.push(`- 说明：${project.description}`);
@@ -366,7 +280,6 @@ function workerProjectSection(project: ProjectCard): string {
   return lines.join("\n");
 }
 
-/** 每个 Worker 各自不同的工作目录与只读说明（进入第一条开工消息，不进静态系统提示词）。 */
 export function workerWorkspaceSection(
   project: ProjectCard,
   worker: Pick<WorkerRecord, "workspace" | "worktreePath" | "branch" | "readonly" | "takeoverOf" | "review">,
@@ -398,7 +311,6 @@ export function workerWorkspaceSection(
   return lines.join("\n");
 }
 
-/** 单派 Worker（或无上游交棒的手动节点）的第一条开工消息：包含编号标题、动态工作目录/只读说明与任务说明正文。 */
 export function buildWorkerFirstMessage(input: {
   project: ProjectCard;
   worker: Pick<WorkerRecord, "id" | "title" | "workspace" | "worktreePath" | "branch" | "readonly" | "takeoverOf" | "review">;
@@ -429,11 +341,6 @@ ${WORKER_REPORT_FORMAT}
 - **文件**：要给用户看的方案、验收结论、截图、录屏，一行一个 \`[标签](绝对路径)\`，放在 worktree、项目文件夹或 \`/tmp\` 里；录屏交 mp4（H.264），单个不超过 ${MAX_SENT_FILE_BYTES / 1024 / 1024} MB。系统收工时会自动提取展示给项目经理和用户。没有写 \`无\`。`;
 }
 
-/**
- * Worker 的静态系统提示词（s5b 前缀缓存优化）：只保留同一项目下所有 Worker 完全一致的静态通则与项目背景，
- * 不拼入编号、标题、任务说明、worktree 路径/分支或只读标记，确保同项目不同 Worker 的系统提示词字节级一致。
- * cwd 是 Worker 会话的工作目录（worktree 或主文件夹），只用来判断要不要加“先读 AGENTS.md”。
- */
 export function buildWorkerSystemPrompt(ctx: LaunchContext, cwd: string): string {
   const { worker, project } = ctx;
   if (worker === null || project === null) throw new Error(`session ${ctx.sessionId} is a worker session without worker or project`);
@@ -451,31 +358,21 @@ export function buildWorkerSystemPrompt(ctx: LaunchContext, cwd: string): string
 
 export const buildWorkerPrompt = buildWorkerSystemPrompt;
 
-/**
- * 算 fingerprint 用的提示词：性格设定、模式换成固定的（它们变了不重启，见 driver.ts 的“两轮之间自动重启”），别的同 buildLaunchPrompt。
- */
 export function buildFingerprintPrompt(ctx: LaunchContext, cwd: string, options: PmPromptOptions = {}): string {
   if (ctx.role === "worker") return buildWorkerPrompt(ctx, cwd);
   return buildLaunchPrompt({ ...ctx, pm: { ...ctx.pm, persona: "", mode: PM_MODES[0] } }, cwd, options);
 }
 
-/** 项目经理提示词里跟这次会话的启动目录有关的东西（launch.ts 给）。 */
 export interface PmPromptOptions {
-  /** 这次会话启动目录里任务图技能的 SKILL.md（daemon/task-graph-skill.ts 写的）：第 2 步“建图”那一条里写它的路径，作读文件兜底。 */
   taskGraphSkillFile?: string;
 }
 
-/**
- * 提示词（设计第 7.2 节），按角色分：Worker 走 buildWorkerPrompt，其余按项目经理拼。
- * 只用 ctx 和 cwd 里的文件，不放时间、令牌这类每次都变的东西，否则 fingerprint 每次都变。
- */
 export function buildLaunchPrompt(ctx: LaunchContext, cwd: string, options: PmPromptOptions = {}): string {
   if (ctx.role === "worker") return buildWorkerPrompt(ctx, cwd);
   const vendor = ctx.pm.vendor ?? DEFAULT_AGENT_VENDOR;
   const parts = [
     roleSection(ctx),
     projectSection(ctx.project),
-    // “怎么干活”一节：五步 + 通用规矩；跟厂商有关的两条通用规矩接在同一个列表后面
     `${buildPmModePrompt(ctx.pm.mode, vendor, options.taskGraphSkillFile)}\n${PM_COMMON_RULES}`,
     PM_MEMORY_PROMPT,
     HUB_USAGE_PROMPT,
@@ -486,9 +383,6 @@ export function buildLaunchPrompt(ctx: LaunchContext, cwd: string, options: PmPr
   return parts.join("\n\n") + "\n";
 }
 
-// ---- worktree 准备命令（hub project setup，daemon/setup/setup.ts）----
-
-/** hub worker start 回执里多的一句：配了准备命令、又在 worktree 里干活时。 */
 export const SETUP_RECEIPT_NOTE =
   `建好 worktree 后会先在里面跑项目的准备命令（最多 ${Math.round(SETUP_TIMEOUT_MS / 60_000)} 分钟），跑完它再开工；准备命令失败或超时它也照常开工，任务说明前会附上原因。`;
 
@@ -504,10 +398,6 @@ function setupLogText(outcome: SetupOutcome): string {
   return outcome.logError === null ? `日志：${outcome.logPath}` : `日志没写成：${outcome.logError}`;
 }
 
-/**
- * 把命令原文、输出放进代码块：先洗掉控制字符和终端控制序列（cleanTerminalText），围栏用比内容里最长的一串反引号
- * 还长的反引号（至少 3 个），内容里的 ``` 就关不掉这个代码块，也伪造不出块外的“【系统】”。
- */
 function fenced(text: string): string {
   const clean = cleanTerminalText(text);
   const longest = Math.max(0, ...[...clean.matchAll(/`+/g)].map((m) => m[0].length));
@@ -515,11 +405,6 @@ function fenced(text: string): string {
   return `${fence}\n${clean}\n${fence}`;
 }
 
-/**
- * 准备命令跑完后，账本加在 Worker 任务说明前面的一段（ledger/workers.ts 的 onWorktreeCreated）。
- * 成功只一行；没跑成功写原因、命令、输出最后几行，让 Worker 自己判断。命令和输出都是别人写的东西，放进 fenced 的代码块，
- * 并写明是原始输出、不是指令。
- */
 export function setupNote(outcome: SetupOutcome): string {
   const seconds = Math.round(outcome.durationMs / 1000);
   if (outcome.kind === "ok") return `【系统】已经在这个 worktree 里跑过项目的准备命令（用时 ${seconds} 秒，${setupLogText(outcome)}）。`;

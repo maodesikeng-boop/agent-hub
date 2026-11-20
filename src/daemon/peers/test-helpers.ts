@@ -1,4 +1,3 @@
-// 测试用：在本进程里起几台“设备”（真的界面服务 + 假账本 + 真的账号组网），登进同一个账号、互相批准，经本机的自建中继或回环直连互通。
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,14 +23,10 @@ export interface TestDevice {
   peers: Peers;
   mesh: Mesh;
   ledger: FakeLedger;
-  /** 这台的库（浏览器会话在这里）。 */
   db: Db;
   server: RunningUiServer;
-  /** 浏览器的 cookie 头（已登录）。 */
   cookie: string;
-  /** 像浏览器一样访问这台：带 cookie 和同源 Origin。 */
   browser(path: string, init?: { method?: string; body?: unknown; headers?: Record<string, string> }): Promise<Response>;
-  /** 停掉界面服务和组网（模拟离线），之后可以 restart 在同一个端口上再起来。 */
   stop(): Promise<void>;
   restart(): Promise<void>;
   close(): Promise<void>;
@@ -40,7 +35,6 @@ export interface TestDevice {
 export interface TestDeviceOptions {
   relay: TestRelay;
   name?: string;
-  /** 回环地址当局域网候选（默认 true）；false = 只能经中继。 */
   lan?: boolean;
   serverOptions?: Partial<UiServerOptions>;
 }
@@ -143,7 +137,6 @@ export async function startTestDevice(opts: TestDeviceOptions): Promise<TestDevi
   return device;
 }
 
-/** 起一个中继和 count 台设备，登进同一个账号，第一台批准其余的，等到每台的信任表都齐。 */
 export async function startTestAccount(count: number, options: Omit<TestDeviceOptions, "relay"> = {}): Promise<{ relay: TestRelay; devices: TestDevice[] }> {
   const relay = await startTestRelay();
   const list: TestDevice[] = [];

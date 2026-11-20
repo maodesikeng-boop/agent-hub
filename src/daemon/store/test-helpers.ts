@@ -1,4 +1,3 @@
-// 测试用：内存库 + 迁移，和直接插一行会话。
 import { randomUUID } from "node:crypto";
 import { openDatabase } from "./db.ts";
 import type { Db } from "./db.ts";

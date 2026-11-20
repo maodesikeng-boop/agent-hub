@@ -1,4 +1,3 @@
-// 跨厂商同步的轮转备份（`<dataDir>/backups/sync/`，受 `MAX_VENDOR_SYNC_BACKUPS` 上限保护）与事务级原子替换/回滚。
 import { randomBytes } from "node:crypto";
 import {
   chmodSync,
@@ -57,11 +56,7 @@ function formatBackupTimestamp(nowMs: number): string {
   );
 }
 
-/**
- * 原子写文件：用 npm 官方的 `write-file-atomic`（同目录临时文件 → fsync → rename）。
- * 目标是软链时（如 `~/.claude.json` 链到 dotfiles 仓库）它先 realpath，替换真实文件而不是把软链换成普通文件；
- * 已有文件沿用原权限与属主，新文件用 `mode`（默认 0600，配置里有密钥）。
- */
+/** write-file-atomic follows symlinks (such as ~/.claude.json into a dotfiles repo) and replaces the real file with its original mode and owner. */
 export function writeFileAtomicDefault(targetPath: string, content: string, mode?: number): void {
   mkdirSync(dirname(targetPath), { recursive: true });
   const exists = existsSync(targetPath);
@@ -71,14 +66,13 @@ export function writeFileAtomicDefault(targetPath: string, content: string, mode
   });
 }
 
-/** 淘汰超出 `MAX_VENDOR_SYNC_BACKUPS` 的最老快照目录，防磁盘无限堆积。 */
 export function pruneOldSyncBackups(backupsDir: string, maxBackups: number = MAX_VENDOR_SYNC_BACKUPS, keepId?: string): void {
   if (!existsSync(backupsDir)) return;
   const dirs = readdirSync(backupsDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && entry.name !== keepId)
     .map((entry) => entry.name)
     .sort();
-  // 本次快照（keepId）不参与淘汰：时钟回拨时它的名字可能排在最前，删了它失败回滚就没有原文可恢复
+  // Never evict the current snapshot; after a clock rollback it may sort first, and rollback would lose the original.
   const budget = keepId === undefined ? maxBackups : maxBackups - 1;
   while (dirs.length > Math.max(0, budget)) {
     const oldest = dirs.shift()!;
@@ -141,10 +135,7 @@ function createBackupSnapshot(
   return { backupId, entries };
 }
 
-/**
- * 先写入 `<dataDir>/backups/sync/` 轮转备份，再依次执行原子文件替换与逐项软链更新；
- * 任一步骤抛错时立即将所有已改动的配置文件与软链恢复至同步前原状。
- */
+/** Back up first, then apply; any failure restores every touched file and symlink. */
 export function executeAtomicSyncTransaction(input: {
   backupsDir: string;
   fileWrites: readonly PlannedFileWrite[];
@@ -194,7 +185,6 @@ export function executeAtomicSyncTransaction(input: {
           }
         }
       } catch {
-        // 原路径不存在
       }
 
       if (op.kind === "link") {
@@ -224,7 +214,6 @@ export function executeAtomicSyncTransaction(input: {
 
     return { backupId, updatedFiles: fileWrites.length };
   } catch (err) {
-    // 1. 逆序回滚已执行的软链变更
     for (let i = reversedSymlinks.length - 1; i >= 0; i--) {
       const action = reversedSymlinks[i]!;
       try {
@@ -235,18 +224,15 @@ export function executeAtomicSyncTransaction(input: {
             unlinkDirectoryLinkSync(action.linkPath);
           }
         } catch {
-          // 忽略不存在
         }
         if (action.previousTarget !== null) {
           mkdirSync(dirname(action.linkPath), { recursive: true });
           createDirectoryLinkOrManagedCopySync(action.previousTarget, action.linkPath);
         }
       } catch {
-        // 尽力恢复所有项
       }
     }
 
-    // 2. 用备份快照把已碰过的配置文件逐个原子恢复原状
     for (const entry of backedUpFiles) {
       if (!touchedFiles.has(entry.targetPath)) continue;
       try {
@@ -257,7 +243,6 @@ export function executeAtomicSyncTransaction(input: {
           rmSync(entry.targetPath, { force: true });
         }
       } catch {
-        // 尽力恢复其余文件
       }
     }
 

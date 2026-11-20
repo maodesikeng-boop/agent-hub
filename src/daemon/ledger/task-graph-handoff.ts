@@ -1,4 +1,3 @@
-// 任务图自动开工渲染、交棒包拼装与 upstream/ 落盘（docs/orchestration-simplify-design.md 第 3.3、4.2、4.5、9.3、9.4 节）。
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { truncateChars } from "../../shared/domain.ts";
@@ -19,10 +18,6 @@ import { workerWorkspaceSection } from "../prompt.ts";
 const charLen = (s: string): number => [...s].length;
 const SAFE_UPSTREAM_STEP_KEY_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 
-/**
- * 渲染图内步骤的常驻任务说明（写入 workers.task，进系统提示词“# 你的任务”）：
- * 包含整张图 goal（若有）+ 本步 title（第 index/total 步）+（若 review 为真前置 review.ts 的审查清单）+ brief。
- */
 export function renderGraphStepTask(input: {
   goal: string | null;
   stepTitle: string;
@@ -58,7 +53,6 @@ export interface UpstreamSourceInfo {
   branch: string | null;
   handoff: string;
   pmNote: string | null;
-  /** Worker 汇报原文（或放行记录），超长截断时完整落盘到 launch/<sessionId>/upstream/<key>.md。 */
   fullReportMarkdown: string;
   decision: TaskDecision | null;
   gateQuestion: string | null;
@@ -76,7 +70,6 @@ export type DirectUpstreamEntry =
       skipReason: string | null;
       decision: TaskDecision | null;
       gateQuestion: string | null;
-      /** 向上追溯到的最近未跳过上游（可能 0..N 个）。 */
       tracedSources: UpstreamSourceInfo[];
     };
 
@@ -283,7 +276,6 @@ function formatUpstreamSections(input: {
   return { handoffSections, decisionsSection: formatDecisionsSection(decisionCarriers) };
 }
 
-/** 换人接手（hub worker start --node）时附带的上游步骤交棒与拍板定案（若无上游且无定案则返回 null）。 */
 export function formatStepUpstreamForTakeover(input: {
   step: {
     key: TaskNodeKey;
@@ -302,13 +294,6 @@ export function formatStepUpstreamForTakeover(input: {
   return parts.length > 0 ? parts.join("\n\n") : null;
 }
 
-/**
- * 拼装图内步骤第一条开工通知 / 交棒包（第 4.2、4.5、3.3 节）：
- * - 包含本 Worker 编号与标题、分配的工作目录/分支/只读说明、整张图 goal + 本步职责 +（若有）审查清单；
- * - 单上游：4,000 字上限；多上游合流：总上限 12,000 字均分且单上游 <= 4,000 字，超长截断并落盘 launch/<sessionId>/upstream/<stepKey>.md；
- * - 直接上游被跳过时写明跳过原因并追溯最近未跳过上游的交棒；
- * - 附本步或上游已有的用户拍板定案。
- */
 export function buildStepFirstMessage(input: {
   graph: { id: TaskGraphId; title: string };
   step: {
@@ -373,16 +358,12 @@ export function buildStepFirstMessage(input: {
   return sections.join("\n\n");
 }
 
-/**
- * 第 9.4 节：图内步骤等 PM 处理时发给 PM 的消息正文。
- */
 export function formatStepWaitingPmMessage(input: {
   graph: { id: TaskGraphId; title: string };
   step: { key: TaskNodeKey; title: string; index: number; total: number };
   workerId: WorkerId | null;
   reasonLabel: string;
   detailBody: string;
-  /** 用户亲手停掉的一轮，不提示擅自 worker send 叫醒它。 */
   stoppedByUser?: boolean;
 }): string {
   const { graph, step, workerId, reasonLabel, detailBody } = input;
@@ -398,7 +379,6 @@ export function formatStepWaitingPmMessage(input: {
   return `${header}\n\n${detailBody.trim()}\n\n${actions.join("；")}。`;
 }
 
-/** 步骤等用户本人动手时告诉项目经理的一段（docs/user-blockers-design.md）：系统已挂卡，处理完自动接着派，它不用做什么。 */
 export function formatStepUserBlockedMessage(input: {
   graph: { id: TaskGraphId; title: string };
   step: { key: TaskNodeKey; title: string; index: number; total: number };
@@ -408,10 +388,6 @@ export function formatStepUserBlockedMessage(input: {
   return `【任务图 #${graph.id}「${graph.title}」第 ${step.index}/${step.total} 步「${step.title}」等用户动手】${note}。要换别家：${HUB_COMMAND} worker start --node ${step.key} --graph ${graph.id} --vendor <别家>。`;
 }
 
-/**
- * 纯本地 fs 检查目录是否为已有至少一次提交的 git 仓库（零子进程阻塞，微秒级）：
- * 供后台自动交棒开工且调用方未预探 context.workspace 时的兜底判断。
- */
 export function hasGitCommitSync(folder: string): boolean {
   try {
     const dotGit = join(folder, ".git");

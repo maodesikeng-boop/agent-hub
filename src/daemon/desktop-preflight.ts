@@ -1,5 +1,3 @@
-// 供桌面外壳（如 Windows `fusa-desktop`）在启动引导期无副作用检查本机 Git 与已注册厂商 CLI 安装状态。
-// 严格从统一厂商注册表（src/vendors/registry.ts + paths-registry.ts）读取，零硬编码厂商名。
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { win32 } from "node:path";

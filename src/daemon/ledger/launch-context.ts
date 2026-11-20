@@ -1,4 +1,3 @@
-// 启动 claude 前给提示词用的上下文（getLaunchContext）：这个会话是哪个项目经理的、它的项目和文件夹；Worker 的会话见 workers.ts。
 import type { PmMode, SessionId } from "../../shared/domain.ts";
 import type { LaunchContext } from "../../shared/ledger.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";

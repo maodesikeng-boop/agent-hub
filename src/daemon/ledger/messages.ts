@@ -1,5 +1,3 @@
-// 账本里的消息：用户发消息、停止、重试，驱动层事件变成 agent 的消息和消息状态，系统消息。
-// 消息状态只按 MESSAGE_STATUS_TRANSITIONS 改（transition）。
 import { randomUUID } from "node:crypto";
 import type { AnyActionRow } from "../../shared/actions.ts";
 import type { MessagesPage } from "../../shared/api.ts";
@@ -25,13 +23,11 @@ import { getAgentSession } from "../store/index.ts";
 import type { LedgerSessions } from "./sessions.ts";
 import { stepOfTool, summarizeToolCall } from "./tool-summary.ts";
 
-/** 一张提问卡怎么了结的：用户回答（选中的选项、原话，都可能没有），或被项目经理关掉、替换、收回。 */
 export type AskSettlement = { by: "answer"; chosenOption?: string; note?: string } | { by: "close" };
 
 const ACTIVE_MESSAGE_STATUSES = "('delivered', 'processing')";
 const WORKER_PICK_ONLY_PM_MESSAGE = "指定 Worker 用的厂商、模型只能用在项目经理的对话里";
 
-/** agent 压缩了上下文之后对话里那一行（domain.ts 的 context.compacted）。 */
 export const CONTEXT_COMPACTED_TEXT = "已压缩上下文";
 
 export function exitFailureReason(event: SessionExitedEvent): string {
@@ -40,14 +36,7 @@ export function exitFailureReason(event: SessionExitedEvent): string {
   return event.reason;
 }
 
-/**
- * 守护进程关机打断的一轮（M3，m3-plan 第 3 节接口约定、验收第 11 条）：哪些消息不标已停止，还是已送达、处理中，
- * 重启恢复（sessions.ts 的 recoverAfterRestart）把它重发给同一个会话，接着做完：
- * - Worker 会话里的消息（任务说明、打回）：Worker 接着做完再汇报；也不发“这一轮没做完”（workers.ts）；
- * - 系统交给 agent 的消息（sender system：Worker 的汇报、turn_failed 那几行，见 workers.ts 的 insertLine）：
- *   项目经理重启后照样收到，不用等用户提醒。
- * 用户自己发的照 M2 标已停止，用户自己再发。
- */
+/** Turns interrupted by shutdown stay delivered or processing so recoverAfterRestart can resend them. */
 function resumesAfterShutdown(session: AgentSessionRow, message: Pick<MessageDbRow, "sender">): boolean {
   return session.role === "worker" || message.sender === "system";
 }
@@ -55,14 +44,8 @@ function resumesAfterShutdown(session: AgentSessionRow, message: Pick<MessageDbR
 export type LedgerMessages = ReturnType<typeof createLedgerMessages>;
 
 export interface LedgerMessagesOptions {
-  /**
-   * 用户往这个对话发消息、重试之前的检查，不让发就抛 LedgerRequestError（在事务里调）。
-   * 现在只有 Worker 收工后不收（workers.ts 的 assertWorkerOpenForUser，ledger.ts 接上）。
-   */
   assertUserCanPost?: (conversationId: ConversationId) => void;
-  /** 用户发出一条消息之后（同一个事务里）：项目经理正在本会话写交接的，要停掉那一轮（ledger/handover.ts 的 userPostedIn，ledger.ts 接上）。 */
   afterUserPost?: (p: Pending, conversationId: ConversationId) => void;
-  /** 旧 hub ask 产生一条无 gateRef 的独立提问时，在同事务里桥接生成 router_items 待决卡。 */
   onIndependentAskCreated?: (p: Pending, session: AgentSessionRow, message: Message, options?: string[]) => void;
 }
 
@@ -77,7 +60,6 @@ export function createLedgerMessages(
   const { db, now, write, enqueue, reportHealthIn } = ctx;
   const { currentSession, dropRateLimitRejection, liveOf, updateLive, workingSessionIds } = sessions;
 
-  /** 老的项目群（11-03 拿掉了）当作不存在。 */
   const conversationExists = (id: ConversationId) =>
     db.get("SELECT 1 AS x FROM conversations WHERE id = ? AND kind != 'project_group'", id) !== undefined;
   const isPmConversation = (id: ConversationId) => db.get("SELECT 1 AS x FROM conversations WHERE id = ? AND kind = 'pm'", id) !== undefined;
@@ -92,7 +74,7 @@ export function createLedgerMessages(
     return { messages: rows.slice(0, MESSAGE_PAGE_SIZE).reverse().map(toMessage), hasMore };
   };
 
-  /** 按 MESSAGE_STATUS_TRANSITIONS 改状态；不合法（包括同状态）、找不到、没有状态的消息忽略。 */
+  /** Invalid transitions, including same-state ones, are ignored. */
   const transition = (p: Pending, id: MessageId, to: MessageStatus, reason: string | null = null) => {
     const message = getMessage(id);
     if (message === null || message.status === null || !canTransitionMessage(message.status, to)) return;
@@ -110,10 +92,6 @@ export function createLedgerMessages(
     p.changes.push({ type: "message.updated", data: { message: getMessage(id)! } });
   };
 
-  /**
-   * 用户消息这一轮出错了，但 agent 在这条消息之后最后说的是一段话（不是停在工具调用上）：用户已经看到回复，当作已回复，
-   * 不再给用户消息挂失败标记（项目经理对话里这一轮没有别的出错提示，挂了只会让人以为没答完）。
-   */
   const endedWithReply = (sessionId: SessionId, id: MessageId) =>
     getMessage(id)?.sender === "user" &&
     db.get<{ kind: string }>("SELECT kind FROM messages WHERE session_id = ? AND sender = 'agent' AND id > ? ORDER BY id DESC LIMIT 1", sessionId, id)?.kind === "text";
@@ -125,8 +103,6 @@ export function createLedgerMessages(
   ) => {
     if (session.conversationId === null) return;
     const t = now();
-    // 项目经理在写交接（这个会话的交接请求开始处理后的那一轮，meta.writing，ledger/handover.ts）：这一轮的文字、工具调用记 handover，
-    // 网页不显示。按请求自己记的标记认，不看它现在的状态：超时被标了已停止、驱动层那一轮还在写的，照样不显示
     const handoverTurn =
       session.role === "pm" &&
       db.get(
@@ -153,7 +129,6 @@ export function createLedgerMessages(
     if (row !== undefined) p.changes.push({ type: "message.created", data: { message: toMessage(row) } });
   };
 
-  /** hub ask（含独立提问、`--node` 步骤拍板卡与 `confirm` 检查点卡）：项目经理对话里一条带 needsUser 标记的消息（AskMeta）。不发给 agent，每次都是新的一条。 */
   const insertAskMessage = (
     p: Pending,
     session: AgentSessionRow,
@@ -164,10 +139,6 @@ export function createLedgerMessages(
       blockerRef?: BlockerRef;
       recommended?: string;
       skipRouterBridge?: boolean;
-      /**
-       * 列在卡片下面的文件，写进 AskMeta.deliverables（最多 DELIVERABLES_PER_CARD_MAX 个）：先是 fileArgs 存好的副本（它们也进这条消息的
-       * meta.files，来源记成这条消息），再接 deliverables（检查点卡带的步骤交付物，来源是原汇报消息，不再拷）。
-       */
       fileArgs?: { args: readonly HubFileArg[]; files: readonly SentFile[] };
       deliverables?: readonly Deliverable[];
     },
@@ -192,7 +163,7 @@ export function createLedgerMessages(
       t,
       t,
     )!;
-    // --file 的副本记在这条消息上，来源要用它的编号：先插再补 deliverables
+    // The --file copies hang off this message id, so insert first and attach deliverables after.
     const fileDeliverables = extra?.fileArgs !== undefined ? deliverablesOfFileArgs(extra.fileArgs.args, extra.fileArgs.files, row.id) : [];
     const deliverables = mergeDeliverables([fileDeliverables, extra?.deliverables ?? []], DELIVERABLES_PER_CARD_MAX);
     if (deliverables.length > 0) {
@@ -207,10 +178,6 @@ export function createLedgerMessages(
     return message;
   };
 
-  /**
-   * 在同一个事务里了结一张提问卡，推送 message.updated：用户回答的记下选中的选项和原话（answerNote），
-   * 项目经理关掉、替换、收回的标 closed。已经了结的卡不会再被标成关掉。
-   */
   const settleAskIn = (p: Pending, messageId: MessageId, settlement: AskSettlement): void => {
     const message = getMessage(messageId);
     if (message === null || message.meta === null || typeof message.meta !== "object") return;
@@ -231,10 +198,6 @@ export function createLedgerMessages(
     p.changes.push({ type: "message.updated", data: { message: getMessage(messageId)! } });
   };
 
-  /**
-   * 在同一个事务里向 PM 对话插入一条结构化拍板唤醒消息（sender = 'user'，排队送给当前会话），
-   * 按 dedupeKey 严格幂等。meta 标 wakeup（UserMessageMeta），和人打的字分开（isLedgerWakeup）。
-   */
   const enqueueWakeupUserMessageIn = (
     p: Pending,
     input: { conversationId: ConversationId; dedupeKey: string; text: string },
@@ -265,7 +228,6 @@ export function createLedgerMessages(
     return message;
   };
 
-  /** 写一条只给人看的系统消息（规则见 domain.ts 的 SystemMessageMeta）：没有会话、没有状态。 */
   const insertSystemMessage = (p: Pending, conversationId: ConversationId, meta: SystemMessageMeta, text: string): Message => {
     const t = now();
     const row = db.get<MessageDbRow>(
@@ -283,36 +245,33 @@ export function createLedgerMessages(
     return message;
   };
 
-  /** 关机打断时这条消息留着重启后重发（resumesAfterShutdown）。 */
   const keptAfterShutdown = (session: AgentSessionRow, id: MessageId) => {
     const row = db.get<Pick<MessageDbRow, "sender">>("SELECT sender FROM messages WHERE id = ?", id);
     return row !== undefined && resumesAfterShutdown(session, row);
   };
 
-  /** 开始干活（写进去、开始处理、自己开一轮）：上一轮结束后厂商没再报过额度的话，记着的“用完”是之前的轮次留下的，撤掉；这一轮再撞上厂商会重新报。 */
   const dropCarriedRateLimit = (p: Pending, sessionId: SessionId) => {
     if (liveOf(sessionId).rateLimitReported !== true) sessions.dropRateLimitRejection(p, sessionId);
   };
 
-  /** textMeta：agent.text 在开事务之前已经存好的副本（ledger.ts 的 applyDriverEvent 先 await 再进事务）；没有本机链接的是 null。 */
+  /** Attachment copies were made before the transaction opened, because the transaction cannot await I/O. */
   const applyEvent = (p: Pending, session: AgentSessionRow, event: DriverEvent, textMeta: AgentTextMeta | null = null) => {
     const sessionId = session.id;
     switch (event.type) {
       case "session.started":
-        // 状态（running）由驱动层写进那一行；这里只清掉上一次没等到退出的“正在停”
         updateLive(p, sessionId, (l) => {
           if (l.activity === "stopping") idle(l);
-          // 后台任务和残留流式预览跟着进程走，新进程不带着旧的
+          // Background tasks and stale streaming previews belong to the old process.
           l.backgroundTasks = undefined;
           clearStreaming(l);
         });
         return;
       case "message.cancelled":
-        // 写给 agent 了、它还没取走就停了（或会话结束了）：agent 没看到过，不重发（驱动层不会再写）
+        // Written but never taken by the agent before the stop, so it is not resent.
         for (const id of event.messageIds) transition(p, id, "cancelled");
         return;
       case "message.requeued":
-        // 写给 agent 了、它还没取走就收回了（进程没了、这一轮没读它就结束了）：放回排队中，重新登记发送，agent 没看到过、不加重发说明
+        // Written but reclaimed before the agent read it, so it goes back to the queue.
         for (const id of event.messageIds) {
           const message = getMessage(id);
           if (message?.status !== "delivered" || message.sessionId === null) continue;
@@ -330,14 +289,13 @@ export function createLedgerMessages(
       }
       case "turn.started":
         dropCarriedRateLimit(p, sessionId);
-        // claude 自己开了一轮（后台任务完成等）：和写进去的消息开始处理一样显示在处理
         updateLive(p, sessionId, (l) => {
           clearStreaming(l);
           working(null)(l);
         });
         return;
       case "agent.thinking":
-        // 子任务里的事件不改主 agent 的状态；快工具防闪没驻留窗口内（< MIN_TOOL_STEP_VISIBLE_MS）不提前把工具文案刷回 Thinking
+        // Subtask events do not change the main agent state; fast tools stay hidden below MIN_TOOL_STEP_VISIBLE_MS to avoid flicker.
         if (event.parentToolUseId === undefined) {
           if (sessions.hasToolHold(sessionId)) {
             updateLive(p, sessionId, (l) => {
@@ -353,7 +311,6 @@ export function createLedgerMessages(
         return;
       case "agent.text_delta":
       case "agent.tool_preview":
-        // 实际走 ledger.applyDriverEvent 的纯内存快路径；这里保 switch 穷尽
         return;
       case "agent.tool_result":
         if (event.parentToolUseId === undefined) {
@@ -362,7 +319,6 @@ export function createLedgerMessages(
         return;
       case "agent.text": {
         const dedupeKey = agentMessageDedupeKey(sessionId, event.uuid);
-        // 回复里指向本机文件的链接：副本在进事务之前存好，meta 记 files（AgentTextMeta）。重放的同一条消息已经入过库，不用它
         const replayed = db.get("SELECT 1 AS x FROM messages WHERE dedupe_key = ?", dedupeKey) !== undefined;
         const meta = replayed || session.conversationId === null ? null : textMeta;
         insertAgentMessage(p, session, { kind: "text", text: event.text, meta, dedupeKey });
@@ -442,7 +398,6 @@ export function createLedgerMessages(
         }
         return;
       case "context.compacted":
-        // 用户发的 /compact（或自动压缩）：对话里记一行，只给人看；这一轮照常由 turn.ended 收尾
         if (session.conversationId !== null) {
           const meta: SystemMessageMeta = { event: "context.compacted", sessionId, uuid: event.uuid, trigger: event.trigger };
           if (db.get("SELECT 1 AS x FROM messages WHERE dedupe_key = ?", systemMessageDedupeKey(session.conversationId, meta)) === undefined) {
@@ -456,7 +411,6 @@ export function createLedgerMessages(
         }
         return;
       case "commands.changed":
-        // 只给命令列表的缓存用（daemon/commands-catalog.ts），账本不管
         return;
     }
   };
@@ -467,16 +421,14 @@ export function createLedgerMessages(
       const dedupeKey = userMessageDedupeKey(input.conversationId, input.clientId);
       const existing = db.get<{ id: number }>("SELECT id FROM messages WHERE dedupe_key = ?", dedupeKey);
       if (existing !== undefined) return { messageId: existing.id };
-      // workerPick 是“这条消息里派的 Worker 用什么”，只有项目经理会派 Worker：别的对话带了不存
       if (input.workerPick !== undefined && !isPmConversation(input.conversationId)) throw fail("invalid", WORKER_PICK_ONLY_PM_MESSAGE);
       assertUserCanPost(input.conversationId);
       const session = currentSession(input.conversationId);
       if (session === null) throw new Error(`conversation ${input.conversationId} has no agent session`);
-      // 隐藏的命令（/clear、/model……）不发给 agent：不存这条，回原因让网页显示（原因由厂商实现给，daemon/vendors/）
+      // Hidden vendor commands such as /clear and /model are not sent to the agent.
       const blocked = ctx.commandBlockReason(session, input.text);
       if (blocked !== null) throw fail("invalid", blocked);
       const t = now();
-      // 有附件、有 workerPick、从飞书来的才写 meta（UserMessageMeta）；都没有的用户消息 meta 还是 null，和老消息一样
       const meta: UserMessageMeta | null =
         input.attachments?.length || input.workerPick !== undefined || input.origin !== undefined
           ? {
@@ -485,7 +437,6 @@ export function createLedgerMessages(
               ...(input.origin !== undefined ? { origin: input.origin } : {}),
             }
           : null;
-      // Worker 对话里用户的话带上 Worker 编号（写给 Worker 时据此加标签，见 shared/worker.ts 的 deliveryText）
       const row = db.get<MessageDbRow>(
         `INSERT INTO messages (conversation_id, session_id, worker_id, sender, kind, text, meta, dedupe_key, status, created_at, updated_at)
          VALUES (?, ?, ?, 'user', 'text', ?, ?, ?, 'queued', ?, ?) RETURNING *`,
@@ -506,10 +457,6 @@ export function createLedgerMessages(
     });
   };
 
-  /**
-   * 输入框“/”“@”用（shared/ledger.ts 的 composerTarget）：这个对话最新一代的会话和它的目录。
-   * “@”能搜的文件夹：工作目录 + 附加文件夹，去掉项目经理带着的 worktrees 目录（那是 Worker 的，不是“这个对话的工作文件夹”）。
-   */
   const composerTarget = (
     conversationId: ConversationId,
     worktreesDir: string,
@@ -529,10 +476,7 @@ export function createLedgerMessages(
     };
   };
 
-  /**
-   * 正在跑、关机打断后不会重发的轮次（有 resumesAfterShutdown 为假的已送达、处理中消息：项目经理、总助正在回用户），每个会话一条。
-   * 热重启过了等待上限后只等这些（daemon/self-reload.ts）。
-   */
+  /** Turns that will not be replayed after a restart (PM or router answering the user); self-reload waits for these. */
   const turnsLostOnShutdown = (): Array<{ sessionId: SessionId; role: AgentRole }> =>
     workingSessionIds().flatMap((sessionId) => {
       const session = getAgentSession(db, sessionId);
@@ -544,22 +488,14 @@ export function createLedgerMessages(
       return inFlight.some((message) => !resumesAfterShutdown(session, message)) ? [{ sessionId, role: session.role }] : [];
     });
 
-  /**
-   * 停止这个会话正在跑的一轮（在事务里调；网页“停止”和 hub worker end 共用）：排队的用户消息标已取消、标“正在停”、通知驱动层打断。
-   * 没有要停的（空闲、没有排队、没有残留的处理中消息）什么也不做，返回 false。
-   */
   const stopIn = (p: Pending, session: AgentSessionRow & { conversationId: ConversationId }): boolean => {
     const working = liveOf(session.id).activity !== "idle";
-    // 重启后内存里是空闲、库里还有处理中的消息：进程不在，只记下停止请求，不标“正在停”（不会有事件把它清掉）
     const leftover =
       !working &&
       db.get(
         `SELECT 1 AS x FROM messages WHERE session_id = ? AND status IN ${ACTIVE_MESSAGE_STATUSES} LIMIT 1`,
         session.id,
       ) !== undefined;
-    // 停止 = agent 还没看到的用户消息都取消（docs/mid-turn-messages.md 第 11 节）：还在排队的（没交给驱动层，或在驱动层自己的队列里）
-    // 这里就标已取消，之后执行器再调 session.send 看到已取消就不发；驱动层队列里的那份由 driver.interrupt 丢掉。
-    // 系统消息（Worker 汇报、定时任务、交接）不取消，停止后照常发。
     const queued = db.all<{ id: number }>(`SELECT id FROM messages WHERE session_id = ? AND sender = 'user' AND status = 'queued'`, session.id);
     if (!working && !leftover && queued.length === 0) return false;
     for (const { id } of queued) transition(p, id, "cancelled");
@@ -584,11 +520,6 @@ export function createLedgerMessages(
     });
   };
 
-  /**
-   * 二次 Esc 回退当前对话最后一轮被中断、已取消或正在停止中的用户消息：
-   * 按非 agent 消息的 (conversation_id, id) 部分索引倒序取最近 REWIND_SCAN_LIMIT 条，跳过整轮工具日志，
-   * 写入 meta.rewound = true 并推送 message.updated；已经回退过或没有符合条件的返回 null（幂等）。
-   */
   const rewindLastUserMessage = (conversationId: ConversationId): Message | null => {
     return write((p) => {
       if (!conversationExists(conversationId)) throw new ConversationNotFoundError(conversationId);
@@ -631,13 +562,10 @@ export function createLedgerMessages(
     );
   };
 
-  /** 动作彻底失败（在 ledger.onActionFailed 的事务里）：session.send 的那条消息标 failed。Worker 的另见 workers.ts。 */
   const actionFailedIn = (p: Pending, action: AnyActionRow, error: string) => {
-    // session.start 失败时执行器每次都已经记过 health，这里不再记
     if (action.type === "session.send") transition(p, action.params.messageId, "failed", error);
   };
 
-  /** 只停写进去了的（已送达、处理中）；排队中的不归它管（queued → stopped 只给 Worker 收工用，见 workers.ts）。 */
   const stopMessage = (messageId: MessageId) => {
     write((p) => {
       const status = getMessage(messageId)?.status;
@@ -648,7 +576,6 @@ export function createLedgerMessages(
   const retryMessage = (messageId: MessageId): { messageId: MessageId } => {
     return write((p) => {
       const message = getMessage(messageId);
-      // 老项目群里的消息也当作没有（群对外不存在）
       if (message === null || !conversationExists(message.conversationId)) throw fail("not_found", `没有编号 ${messageId} 的消息`);
       if (message.sender !== "user") throw fail("conflict", "只能重试自己发的消息");
       if (message.status !== "failed") throw fail("conflict", "只有发送失败的消息能重试");

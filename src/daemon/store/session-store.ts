@@ -1,4 +1,3 @@
-// SessionStore：驱动层读写 agent_sessions 的一行。
 import type { AgentSessionPatch, SessionStore } from "../../shared/store.ts";
 import { EMPTY_TOKEN_USAGE } from "../../shared/domain.ts";
 import type { AgentRole, AgentSessionRow, RateLimitInfo, SessionId, SessionStatus, TokenUsage } from "../../shared/domain.ts";
@@ -23,7 +22,6 @@ export interface AgentSessionDbRow {
   last_event_at: number | null;
   rate_limit: string | null;
   token_usage: string | null;
-  /** session_persona_seen 里的（getAgentSession 连着查）；别的地方 SELECT * 查出来的没有这一项。 */
   persona_revision?: number | null;
   created_at: number;
   updated_at: number;
@@ -55,7 +53,6 @@ export function toAgentSessionRow(row: AgentSessionDbRow): AgentSessionRow {
   };
 }
 
-/** 连着 session_persona_seen 查（personaRevision 只有驱动层用，见 0012）。 */
 const SELECT_SESSION = `SELECT s.*, p.revision AS persona_revision FROM agent_sessions s LEFT JOIN session_persona_seen p ON p.session_id = s.id`;
 
 export function getAgentSession(db: Db, id: SessionId): AgentSessionRow | null {

@@ -45,7 +45,6 @@ function quoteWindows(value: string, escapePercent: boolean): string {
   return `${quoted}${"\\".repeat(backslashes * 2)}"`;
 }
 
-/** Uses CommandLineToArgvW quoting. */
 export function quoteWindowsArgument(value: string): string {
   return quoteWindows(value, false);
 }
@@ -55,7 +54,6 @@ export function quoteWindowsCmdArgument(value: string): string {
   return quoteWindows(value, true);
 }
 
-/** Parses CommandLineToArgvW rules, including doubled quotes inside quoted runs. */
 export function parseWindowsCommandLine(line: string): string[] {
   const argv: string[] = [];
   let current = "";
@@ -112,7 +110,6 @@ export function parseWindowsCommandLine(line: string): string[] {
   return argv;
 }
 
-/** Distinguishes cmd.exe line-break limits from agent failures. */
 export class WindowsCmdLineBreakError extends Error {
   constructor() {
     super("cmd.exe cannot receive an argument containing a line break");

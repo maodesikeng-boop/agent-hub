@@ -1,7 +1,3 @@
-// Router 跨设备统一目标端口（docs/router-design.md §6.3）：
-// - LocalTargetPort：直通本机 SqliteLedger，O(1) 索引解析目标，零拷贝转发原话与已上传附件引用；
-// - PeerTargetPort：经组网（局域网直连或中继，daemon/mesh/）跨设备拉取 Digest、上传附件并转发操作；
-// - RouterTargetRegistry：按设备管理端口，使用 lru-cache（上限 MESH_MAX_DEVICES_PER_ACCOUNT）做 10s Digest 缓存、5s 离线短暂退避，设备移除/地址变化即刻失效。
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
@@ -72,7 +68,6 @@ export class RouterTargetError extends Error {
   }
 }
 
-// 跨设备 /api/router/target-ops 的载荷来自配对设备，按严格模式逐字段限长（未知字段直接拒），不靠下游再兜。
 const opClientIdSchema = z.string().min(1).max(ROUTER_OP_CLIENT_ID_MAX_CHARS);
 const opIdSchema = z.number().int().positive();
 const opBytesSchema = (maxBytes: number, what: string) =>
@@ -210,7 +205,6 @@ export type RouterTargetOpResult =
       conversationId: ConversationId;
     }
   | {
-      /** 只读：这个项目的完整档案（docs/router-project-catalog-design.md 第二层）；还没建档、项目不存在或已归档是 null。 */
       kind: "project.show";
       projectId: ProjectId;
       detail: ProjectCatalogDetail | null;
@@ -265,7 +259,6 @@ export interface LocalTargetPortOptions {
   ledger: SqliteLedger;
   uploadsDir?: string;
   probeWorkspace?: (folder: string) => Promise<WorkspaceProbe>;
-  /** 同 agent 接口的 refreshVendor：派 Worker 前让账本读到的厂商状态是新的。 */
   refreshVendor?: (vendor: AgentVendor) => Promise<unknown>;
 }
 
@@ -274,8 +267,7 @@ export function createLocalTargetPort(options: LocalTargetPortOptions): RouterTa
   const resolveDeviceName =
     typeof options.deviceName === "function" ? options.deviceName : () => options.deviceName as string;
   const probeWorkspace = options.probeWorkspace ?? defaultProbeWorkspace;
-  // 本机 project.create / worker.start / worker.send 的幂等记忆：键 = clientId + 操作指纹（不含每次重传都会变的附件编号），
-  // 同一 clientId 换了目标不会误命中旧结果；成功结果按 TTL 记，在途请求共用同一个 Promise（跨设备超时重试、模型并发重复调用都只执行一次）。
+  // Idempotency key excludes attachment ids because they change on every retry.
   const opDedupe = new LRUCache<string, RouterTargetOpResult>({ max: ROUTER_OP_DEDUPE_MAX, ttl: ROUTER_OP_DEDUPE_TTL_MS });
   const opInflight = new Map<string, Promise<RouterTargetOpResult>>();
   const dedupeOnce = (key: string, run: () => Promise<RouterTargetOpResult>): Promise<RouterTargetOpResult> => {
@@ -283,7 +275,7 @@ export function createLocalTargetPort(options: LocalTargetPortOptions): RouterTa
     if (cached !== undefined) return Promise.resolve(cached);
     const pending = opInflight.get(key);
     if (pending !== undefined) return pending;
-    // 失败不记（下次重试照常执行），成功才进 TTL 记忆；在途表只在请求进行中有条目，跟并发请求数同量级
+    // Only successes are remembered, so a failed request retries normally.
     const p = run()
       .then((res) => {
         opDedupe.set(key, res);
@@ -487,7 +479,6 @@ export function createLocalTargetPort(options: LocalTargetPortOptions): RouterTa
               try {
                 ledger.archivePm(created.pm.id);
               } catch {
-                // ignore archive cleanup error
               }
               throw err;
             }
@@ -547,7 +538,6 @@ export interface RouterTargetRegistry {
   close(): void;
 }
 
-/** 缓存按“能不能连”分开记：设备进出信任表时作废。 */
 function endpointFingerprint(target: ProxyTarget | null): string {
   return target === null ? "none" : "mesh";
 }
@@ -569,7 +559,6 @@ export function createRouterTargetRegistry(options: RouterTargetRegistryOptions)
   const dispatchTimeoutMs = options.peerDispatchTimeoutMs ?? ROUTER_PEER_DISPATCH_TIMEOUT_MS;
 
   const closing = new AbortController();
-  // 严守缓存军规：带硬上限 MESH_MAX_DEVICES_PER_ACCOUNT，按时间窗校验正/负缓存，设备移除立即失效
   const digestCache = new LRUCache<DeviceId, CachedPeerDigestEntry>({ max: MESH_MAX_DEVICES_PER_ACCOUNT });
 
   const pruneUnpairedFromCache = (devices: readonly DeviceInfo[]) => {
@@ -687,7 +676,6 @@ export function createRouterTargetRegistry(options: RouterTargetRegistryOptions)
         );
       }
 
-      // 如带本机已上传附件，先原样把字节上传到远端 /api/uploads 换取远端 attachmentIds
       let forwardedOp: RouterTargetOp = op;
       if (
         (op.kind === "pm.forward" || op.kind === "worker.start" || op.kind === "worker.send") &&
@@ -711,7 +699,6 @@ export function createRouterTargetRegistry(options: RouterTargetRegistryOptions)
               const parsedErr = JSON.parse(upRes.text) as { error?: string };
               if (parsedErr.error) reason = parsedErr.error;
             } catch {
-              // ignore
             }
             throw new RouterTargetError("invalid", reason);
           }
@@ -721,7 +708,6 @@ export function createRouterTargetRegistry(options: RouterTargetRegistryOptions)
           }
           remoteIds.push(parsedUp.attachment.id);
         }
-        // 远端不共享本机 router_commands 自增主键，跨机派发剥离本机 sourceCommandId
         if (op.kind === "worker.start") {
           const { sourceCommandId: _omit, ...rest } = op;
           forwardedOp = { ...rest, attachmentIds: remoteIds };
@@ -740,7 +726,6 @@ export function createRouterTargetRegistry(options: RouterTargetRegistryOptions)
         timeoutMs: dispatchTimeoutMs,
       });
 
-      // 旧版设备不认识 project.show：按严格结构拒成 400
       if (op.kind === "project.show" && res.status === 400) {
         throw new RouterTargetError("invalid", `设备「${info.name}」的 ${PRODUCT_NAME} 版本旧，不支持查看项目档案，请升级那台设备，或把问题转给它的项目经理`);
       }
@@ -761,12 +746,10 @@ export function createRouterTargetRegistry(options: RouterTargetRegistryOptions)
             code = body.code;
           }
         } catch {
-          // ignore non-json
         }
         throw new RouterTargetError(code, message);
       }
 
-      // 投递写操作成功后主动使该设备 Digest 缓存失效，保证紧接着下一次查询拿到最新状态（只读的查询不失效）
       if (op.kind !== "worker.list" && op.kind !== "project.show") {
         digestCache.delete(info.id);
       }

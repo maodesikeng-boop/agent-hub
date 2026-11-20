@@ -1,4 +1,3 @@
-// 动作表的读写（设计第 12.2 节）。登记由账本在自己的事务里调；状态由执行器改。
 import { ACTION_STATUSES, ACTION_TYPES, actionDedupeKey } from "../../shared/actions.ts";
 import type { ActionStatus, AnyActionRow, NewAction } from "../../shared/actions.ts";
 import { isOneOf } from "../../shared/domain.ts";
@@ -18,7 +17,6 @@ export interface ActionDbRow {
   updated_at: number;
 }
 
-/** 类型不认识、参数不是 JSON 时抛错。 */
 export function toActionRow(row: ActionDbRow): AnyActionRow {
   if (!isOneOf(ACTION_TYPES, row.type)) throw new Error(`unknown action type ${row.type}`);
   if (!isOneOf(ACTION_STATUSES, row.status)) throw new Error(`unknown action status ${row.status}`);
@@ -38,7 +36,6 @@ export function toActionRow(row: ActionDbRow): AnyActionRow {
 
 const ENDED: readonly ActionStatus[] = ["done", "failed", "abandoned"];
 
-// 写法照 migrations/0001_init.sql 里 actions 表的注释；SET 里的 status 读的是改之前的值。
 const UPSERT = `
 INSERT INTO actions (type, dedupe_key, params, next_attempt_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)
 ON CONFLICT (type, dedupe_key) DO UPDATE SET
@@ -52,11 +49,9 @@ RETURNING *`;
 
 interface EnqueueResult {
   row: AnyActionRow;
-  /** 新的一行，或者已结束的一行被重置成 pending；只更新了参数时是 false。 */
   enqueued: boolean;
 }
 
-/** 登记一个动作。调用方负责事务（账本把它和业务写入放在同一个事务里）。 */
 export function enqueueAction(db: Db, action: NewAction, now: number): EnqueueResult {
   const dedupeKey = actionDedupeKey(action);
   const before = db.get<{ status: string }>("SELECT status FROM actions WHERE type = ? AND dedupe_key = ?", action.type, dedupeKey);

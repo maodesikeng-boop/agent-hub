@@ -1,5 +1,3 @@
-// 账本里的项目（11-03 起一个项目经理就是一个会话）：每个项目经理最多一个进行中的项目，挂在它唯一的那个对话上。
-// 建项目、挂和移除文件夹；那个对话的会话的 cwd、addDirs 跟着项目的文件夹走（foldersChanged），下一条消息前驱动层按新值重启。
 import { existsSync } from "node:fs";
 import { basename } from "node:path";
 import { normalizeName, utf8Bytes } from "../../shared/domain.ts";
@@ -20,25 +18,17 @@ import { normalizePathForComparison } from "../platform/index.ts";
 
 export type LedgerProjects = ReturnType<typeof createLedgerProjects>;
 
-/** 建项目（hub project create、建项目经理时选了主文件夹）。folder 是用户或 agent 给的路径，可以带 ~。 */
 export interface CreateProjectInput {
   pmId: PmId;
   folder: string;
-  /** 不给就用主文件夹的名字。 */
   name?: string;
   description?: string;
 }
 
-/** 已经有项目时的回答（用户 11-03 定的说法）。 */
 const ONE_PROJECT_PER_PM = "一个项目经理只管一个项目，请新建一个项目经理";
 
-/** 没给项目名、主文件夹的名字又用不了（主文件夹是 /、带换行等控制字符）时的项目名。 */
 export const DEFAULT_PROJECT_NAME = "未命名项目";
 
-/**
- * 没给项目名时的默认名：主文件夹的名字，超过 MAX_NAME_CHARS 个字截掉后面的；用不了就用 DEFAULT_PROJECT_NAME。
- * 用户没填过名字，所以这里不报“项目名字不对”。
- */
 function defaultProjectName(path: string): string {
   return normalizeName([...basename(path).trim()].slice(0, MAX_NAME_CHARS).join("")) ?? DEFAULT_PROJECT_NAME;
 }
@@ -49,7 +39,6 @@ export function createLedgerProjects(
   messages: LedgerMessages,
   persona: LedgerPersona,
   files: LedgerFiles,
-  /** 建项目的同一个事务里调：总助的项目档案马上建档（ledger/project-catalog.ts 的 markForcedIn）。 */
   afterProjectCreatedIn: (p: Pending, projectId: ProjectId) => void = () => {},
 ) {
   const { db, now } = ctx;
@@ -58,7 +47,6 @@ export function createLedgerProjects(
   const { requirePm, assertPmNotArchived, privateConversation, validName } = persona;
   const { userHome, resolveFolder, worktreesDir } = files;
 
-  /** 这个项目经理进行中的项目（最多一个，数据库有部分唯一索引）。 */
   const activeProjectOf = (pmId: PmId): ProjectDbRow | null =>
     db.get<ProjectDbRow>("SELECT * FROM projects WHERE pm_id = ? AND status = 'active'", pmId) ?? null;
 
@@ -68,7 +56,7 @@ export function createLedgerProjects(
     return row;
   };
 
-  /** 没移除的文件夹，按编号排（顺序固定，免得提示词无端变了触发重启）。 */
+  /** Stable order so the prompt does not change and trigger a needless restart. */
   const foldersOf = (projectId: ProjectId): ProjectFolder[] =>
     db
       .all<ProjectFolderDbRow>("SELECT * FROM project_folders WHERE project_id = ? AND removed_at IS NULL ORDER BY id", projectId)
@@ -85,14 +73,6 @@ export function createLedgerProjects(
     };
   };
 
-  /**
-   * 按项目现在的文件夹改会话的 cwd、addDirs。正在跑的这一轮不打断，下一条消息前驱动层发现 cwd、addDirs 和启动时不一样，
-   * 就 --resume 重启（m2-plan 第 6 节第 3 条）。
-   * - 项目经理的会话：cwd 是主文件夹，addDirs 是其他没移除的文件夹；派过在 worktree 里干活的 Worker（M3）的，再带上
-   *   <worktreesDir>/<项目编号>/，验收时能看 Worker 的改动。没派过的不带：没用上 Worker 的项目经理不因此重启，
-   *   这一层目录也是第一个 worktree 建出来之后才有；
-   * - 在主文件夹里干活、还没收工的 Worker 的会话（M3）：addDirs 和项目经理的附加文件夹一样（不带 worktrees 目录）。
-   */
   const syncSessionFolders = (project: ProjectDbRow): ProjectFolder[] => {
     const folders = foldersOf(project.id);
     const main = folders.find((f) => f.isMain);
@@ -133,7 +113,6 @@ export function createLedgerProjects(
     return folders;
   };
 
-  /** 项目的文件夹变了：改会话（syncSessionFolders），推 folders.updated。 */
   const foldersChanged = (p: Pending, project: ProjectDbRow): ProjectFolder[] => {
     const folders = syncSessionFolders(project);
     p.changes.push({ type: "folders.updated", data: { projectId: project.id, folders } });
@@ -154,8 +133,6 @@ export function createLedgerProjects(
       throw fail("invalid", `项目说明最多 ${MAX_DESCRIPTION_CHARS} 个字`);
     }
     const path = resolveFolder(input.folder);
-    // 只有自己给的名字不对才报错；默认名一定能用
-    // 同一个文件夹可以有多个项目经理（各管各的项目）：别的项目的主文件夹也能用，项目名也可以重名，靠项目经理的名字分
     const name = input.name === undefined ? defaultProjectName(path) : validName(input.name, "项目");
     const t = now();
     const row = db.get<ProjectDbRow>(
@@ -232,10 +209,6 @@ export function createLedgerProjects(
     return { text: `已把 ${path} 从项目“${project.name}”上移除。`, data: { project: toProject(project), folder } };
   };
 
-  /**
-   * hub project setup：设置（command 是字符串）或清除（null）项目的 worktree 准备命令。只改 projects.setup_command：
-   * 不推变化、不发系统消息、不改会话（提示词里不显示它，项目经理的会话不重启）；下一个建 worktree 的 Worker 起生效。
-   */
   const setupIn = (caller: AgentSessionRow & { pmId: PmId }, args: HubArgs<"project.setup">): HubResult<"project.setup"> => {
     assertPmNotArchived(caller.pmId);
     const project = requireProject(caller.pmId);

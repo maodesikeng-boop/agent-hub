@@ -1,5 +1,4 @@
-// 整个项目里只有这个文件碰 node:sqlite（m1-plan 第 6 节第 4 条）。它还是“候选发布”，
-// 接口真变了，换成 better-sqlite3 只改这里。其他代码只用下面的 Db。
+// Only this file imports node:sqlite, which is still a release candidate; swapping drivers touches only this file.
 import { DatabaseSync } from "node:sqlite";
 import type { StatementSync } from "node:sqlite";
 import { LRUCache } from "lru-cache";
@@ -13,32 +12,24 @@ interface RunResult {
 }
 
 export interface Db {
-  /** 执行一段或几段不带参数的 SQL（迁移、PRAGMA）。 */
   exec(sql: string): void;
   run(sql: string, ...params: SqlValue[]): RunResult;
   get<T = Record<string, unknown>>(sql: string, ...params: SqlValue[]): T | undefined;
   all<T = Record<string, unknown>>(sql: string, ...params: SqlValue[]): T[];
-  /**
-   * BEGIN IMMEDIATE / COMMIT，fn 抛错就 ROLLBACK 再抛出去。
-   * 已经在事务里时开 SAVEPOINT：fn 抛错只回滚到这个 savepoint 并释放它，外层接住后照常提交；fn 正常返回就释放，随外层一起提交或回滚。
-   * fn 必须是同步的：返回 Promise（在事务里 await）按出错处理，回滚后抛错。
-   */
+  /** Nested calls use a SAVEPOINT so an inner failure rolls back only itself. fn must be synchronous; awaiting inside a transaction is treated as an error. */
   transaction<T>(fn: () => T): T;
   readonly inTransaction: boolean;
   close(): void;
 }
 
-/** 打开数据库：WAL、增量回收（新库）、外键检查、忙等 DB_BUSY_TIMEOUT_MS。file 可以是 ":memory:"（测试用）。maxStatements 测试可以改小。 */
 export function openDatabase(file: string, options: { maxStatements?: number } = {}): Db {
   const maxStatements = options.maxStatements ?? MAX_CACHED_STATEMENTS;
   const raw = new DatabaseSync(file, { enableForeignKeyConstraints: true, timeout: DB_BUSY_TIMEOUT_MS });
-  // 新库一开始就是增量回收模式（删掉的页进空闲列表，由 maintenance.ts 的 reclaimFreePages 分批还给文件系统）。
-  // 已经有表的老库这句不起作用，要靠 maintenance.ts 的 ensureIncrementalVacuum 重建一次；必须在建任何表（含改成 WAL）之前设。
+  // auto_vacuum only takes effect before the first table (and before WAL); older databases are rebuilt by ensureIncrementalVacuum.
   raw.exec("PRAGMA auto_vacuum = INCREMENTAL");
   raw.exec("PRAGMA journal_mode = WAL");
-  // WAL 下 NORMAL 不会把库写坏，但断电（不是进程崩溃）可能丢掉最后几次提交
+  // With WAL, synchronous=NORMAL cannot corrupt the database but power loss may drop the last commits.
   raw.exec("PRAGMA synchronous = NORMAL");
-  /** 预编译语句 LRU 缓存：命中自动刷新顺序，超过 MAX_CACHED_STATEMENTS 自动淘汰最久没用的。 */
   const stmtCache = new LRUCache<string, StatementSync>({ max: Math.max(1, maxStatements) });
   let depth = 0;
 
@@ -54,7 +45,7 @@ export function openDatabase(file: string, options: { maxStatements?: number } =
   const runSync = <T>(fn: () => T): T => {
     const result = fn();
     if (typeof (result as { then?: unknown } | null)?.then === "function") {
-      // 这次调用已经按出错回滚；那个 Promise 之后再失败也不该变成未处理的拒绝
+      // This call already rolled back, so a later rejection must not surface as unhandled.
       Promise.resolve(result).catch(() => undefined);
       throw new Error("db.transaction 的回调必须是同步的：异步 I/O 放在开事务之前做完，事务里不能 await");
     }
@@ -70,7 +61,7 @@ export function openDatabase(file: string, options: { maxStatements?: number } =
       raw.exec(`RELEASE SAVEPOINT ${savepoint}`);
       return result;
     } catch (error) {
-      // SQLite 自己整体回滚过（磁盘满、I/O 错）时 savepoint 已经不在了，交给外层的 ROLLBACK
+      // After SQLite rolls back the whole transaction itself (disk full, I/O error) the savepoint is gone, so leave it to the outer ROLLBACK.
       if (raw.isTransaction) {
         raw.exec(`ROLLBACK TO SAVEPOINT ${savepoint}`);
         raw.exec(`RELEASE SAVEPOINT ${savepoint}`);

@@ -1,5 +1,3 @@
-// 设备列表、改名、移除（docs/account-mesh-design.md）。谁在账号里、能不能连由组网（daemon/mesh/）管，这里只把它变成网页和转发要的样子。
-// 名字归设备自己管：改别的设备的名字是请它自己改（peerName），它改完告诉所有可信设备（peerRenamed）。
 import { z } from "zod";
 import { API_PATHS, isDeviceId, type ApiErrorCode, type DeviceId, type DeviceInfo } from "../../shared/index.ts";
 import { API_ERRORS } from "../../shared/errors.ts";
@@ -31,9 +29,7 @@ const nameBodySchema = z.strictObject({
 });
 
 export interface PeersOptions {
-  /** 本机身份（state/device.json）。 */
   device: { id: DeviceId; name: string };
-  /** 本机改名：写 state/device.json。 */
   saveName: (name: string) => void;
   mesh: Pick<Mesh, "selfId" | "trust" | "dialer" | "isOnline" | "request" | "removeDevice">;
   log?: (line: string) => void;
@@ -41,17 +37,11 @@ export interface PeersOptions {
 
 export interface Peers {
   readonly selfId: DeviceId;
-  /** GET /api/devices：信任表里的设备，本机排第一。 */
   list(): DeviceInfo[];
-  /** 转发目标：信任表里的别的设备才有。 */
   target(id: string): ProxyTarget | null;
-  /** PUT /api/peer/name（别的设备替用户给本机改名），也是本机自己改名。 */
   renameSelf(body: unknown): DeviceInfo;
-  /** PUT /api/peer/renamed：from 告诉本机它改名了。 */
   receiveRenamed(from: DeviceId, body: unknown): void;
-  /** PATCH /api/devices/:id。 */
   rename(id: string, body: unknown): Promise<DeviceInfo>;
-  /** DELETE /api/devices/:id：把这台移出账号。 */
   remove(id: string): Promise<void>;
   close(): void;
 }

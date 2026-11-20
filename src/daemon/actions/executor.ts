@@ -1,10 +1,3 @@
-// 执行器（设计第 12.2 节）：取到点的“待执行”动作，调注册的处理函数，按结果改状态。
-// - 同一个会话一次只跑一个动作（params.sessionId 相同的排队），不同会话并行，总数不超过 concurrency；
-// - 到点的动作里“启动会话”一律排在“发消息”前面（不看谁先到点）；
-// - 处理函数抛错按 ACTION_RETRY 退避，每次都 reportHealth（DriverError → "driver"，其他 → "actions"），
-//   次数用完标 failed 并调 onActionFailed；任何一个动作成功，都把 "driver" 和 "actions" 清零（不看内存里报过什么）；
-// - 改动作状态写库失败记 "store"；没跑完却停在 running 的行（结果没写进去），下一轮改回 pending 重做；
-// - 放弃的动作（坏行、没有处理函数）能认出是 session.send 的，也调 onActionFailed，原因前加“放弃：”。
 import { ACTION_RETRY, retryDelayMs } from "../../shared/actions.ts";
 import { ACTION_CONCURRENCY, ACTION_POLL_INTERVAL_MS } from "../../shared/limits.ts";
 import type {
@@ -27,9 +20,7 @@ export type ActionExecutorDeps = Pick<Ledger, "reportHealth" | "onActionFailed">
 
 interface ActionExecutorOptions {
   now?: () => number;
-  /** 没有到点的动作时最多隔多久再查一次（兜底，平时靠 wake 和下一个到点时间）。默认 ACTION_POLL_INTERVAL_MS。 */
   pollIntervalMs?: number;
-  /** 同时最多跑几个动作。默认 ACTION_CONCURRENCY。 */
   concurrency?: number;
   retry?: Record<ActionType, RetryPolicy>;
 }
@@ -43,7 +34,6 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** 从一行（可能是坏行）里认出 session.send；认不出返回 null。 */
 function parseSend(raw: ActionDbRow): AnyActionRow | null {
   if (raw.type !== "session.send") return null;
   let params: unknown;
@@ -85,7 +75,6 @@ export function createActionExecutor(db: Db, deps: ActionExecutorDeps, options: 
   let started = false;
   let stopping = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  /** timer 到点的时刻（Date.now 的时间，和 setTimeout 一致）。 */
   let timerAt = 0;
 
   const report = (module: HealthModule, error: string | null) => {
@@ -96,7 +85,6 @@ export function createActionExecutor(db: Db, deps: ActionExecutorDeps, options: 
     }
   };
 
-  /** 写库（改动作状态、调账本）出错时用：不往外抛，记 "store"。 */
   const safely = (fn: () => void) => {
     try {
       fn();
@@ -106,7 +94,7 @@ export function createActionExecutor(db: Db, deps: ActionExecutorDeps, options: 
     }
   };
 
-  /** 只把下次唤醒往前挪，不往后推（免得 wake() 被这一轮末尾的 schedule 盖掉）。 */
+  /** Only move the wakeup earlier, so the schedule at the end of a tick cannot override wake(). */
   const schedule = (delayMs: number) => {
     if (!started || stopping) return;
     const at = Date.now() + Math.max(0, delayMs);
@@ -127,7 +115,6 @@ export function createActionExecutor(db: Db, deps: ActionExecutorDeps, options: 
     }
   };
 
-  /** later 的 delayMs：不是有限数按轮询间隔（不忙等也不卡住），小数向上取整，负数按 0。 */
   const laterDelay = (delayMs: number) => (Number.isFinite(delayMs) ? Math.max(0, Math.ceil(delayMs)) : pollIntervalMs);
 
   const finish = (row: AnyActionRow, result: ActionResult) => {
@@ -175,7 +162,7 @@ export function createActionExecutor(db: Db, deps: ActionExecutorDeps, options: 
     if (!started || stopping) return;
     const t = now();
     try {
-      // 结果没写进去（写库失败）而停在 running 的行：改回 pending，下面照常再取（平时没有孤立 running 行时不发 UPDATE，也不动态拼 SQL）
+      // Rows left running after a failed write are reset to pending and picked up again.
       for (const { id } of db.all<{ id: number }>("SELECT id FROM actions WHERE status = 'running'")) {
         if (!inFlight.has(id)) {
           db.run("UPDATE actions SET status = 'pending', updated_at = ? WHERE id = ?", t, id);

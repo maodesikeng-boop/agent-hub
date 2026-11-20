@@ -15,9 +15,7 @@ import { createWin32ControlPipeName } from "./ipc-endpoint.ts";
 import { resolveSpawn, type ProcessSpawnSpec } from "./spawn-resolution.ts";
 import { firstEnvKey } from "./windows-cmd-shim-resolution.ts";
 
-/** Maps a spawned `fusa-run.exe` ChildProcess to its private control pipe (`interrupt` / `kill`). */
 const childControlPipes = new WeakMap< object, string >();
-/** Tracks active `fusa-run.exe` ChildProcess instances by PID so `forceKillTree(pid)` can close the Job handle directly. */
 const liveFusaRunByPid = new Map<number, ChildProcess>();
 
 function isFusaRunBinary(program: string): boolean {
@@ -38,26 +36,16 @@ export interface SpawnOwnedOptions {
   env?: NodeJS.ProcessEnv;
   stdio?: SpawnOptions["stdio"];
   platform?: NodeJS.Platform;
-  /** Allow fallback when helper binary is absent in synthetic unit tests. */
   allowMissingHelperFallback?: boolean;
 }
 
 export interface SpawnedOwnedChild<T extends ChildProcess = ChildProcess> {
   child: T;
-  /** True on POSIX (own process group); false on Windows (`fusa-run` stays in libuv's Job so daemon crash kills it). */
+  /** On Windows fusa-run stays in libuv's Job so a daemon crash kills it. */
   detached: boolean;
   ctrlPipe?: string;
 }
 
-/**
- * Unified session / probe / setup process spawner:
- * - POSIX: `spawn(program, args, { detached: true, shell: false })` (existing behavior, zero change);
- * - Windows: resolves `.cmd` shims (`resolveSpawn`), wraps in `fusa-run.exe --ctrl-pipe <pipe> -- <resolved>`,
- *   spawns with `detached: false, windowsHide: true, shell: false` so `fusa-run` stays in Node's libuv Job Object
- *   and puts the target tree in a `KILL_ON_JOB_CLOSE` Job Object!
- *   When `program` is already `fusa-run.exe` (wrapped by `spawnInWriteScope`), resolves the inner target after `--`
- *   and injects `--ctrl-pipe <pipe>` before `--` so there is still only ONE `fusa-run.exe` per session.
- */
 export function spawnOwnedProcess(
   program: string,
   args: readonly string[],
@@ -195,7 +183,6 @@ function registerWin32OwnedChild(child: ChildProcess, ctrlPipe: string): void {
   }
 }
 
-/** Sends `"interrupt\n"` (`CTRL_C_EVENT`) to a `fusa-run.exe` child via its control pipe; returns true if Pipe exists. */
 export function sendWin32Interrupt(child: Pick<ChildProcess, "pid" | "kill">): boolean {
   const pipeName = childControlPipes.get(child);
   if (!pipeName) return false;
@@ -231,7 +218,7 @@ export function runWin32TaskkillTree(pid: number): Promise<void> {
   });
 }
 
-/** Terminates a Windows process tree: closes `fusa-run` (killing its Job Object) and falls back to `taskkill /t /f`. */
+/** Closing fusa-run kills its Job Object; taskkill /t /f is the fallback. */
 export async function killWin32ProcessTree(pid: number): Promise<void> {
   if (!Number.isInteger(pid) || pid <= 1) return;
   const owned = liveFusaRunByPid.get(pid);
@@ -239,19 +226,16 @@ export async function killWin32ProcessTree(pid: number): Promise<void> {
     try {
       owned.kill("SIGKILL");
     } catch {
-      // Already exited
     }
     return;
   }
   try {
     process.kill(pid, "SIGKILL");
   } catch {
-    // Ignore ESRCH
   }
   await runWin32TaskkillTree(pid);
 }
 
-/** Queries process creation timestamp synchronously (`ps -o lstart=` on POSIX, `fusa-run inspect` on Windows). */
 export function queryProcessStartTimeSync(
   pid: number,
   options?: { platform?: NodeJS.Platform; env?: Record<string, string | undefined> },
@@ -290,7 +274,6 @@ export function queryProcessStartTimeSync(
   }
 }
 
-/** Queries process creation timestamp asynchronously (`ps -o lstart=` on POSIX, `fusa-run inspect` on Windows). */
 export function queryProcessStartTime(
   pid: number,
   options?: { platform?: NodeJS.Platform; env?: Record<string, string | undefined> },

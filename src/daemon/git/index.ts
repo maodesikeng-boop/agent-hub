@@ -1,4 +1,3 @@
-// git 操作：判断仓库、没提交的改动、派活前探主文件夹、建与清理 worktree（实现见 git.ts）。
 export {
   addWorktree,
   GIT_READONLY_ARGS,

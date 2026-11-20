@@ -1,4 +1,3 @@
-// Router（总助）账本模块：独立待决拍板卡、里程碑汇报、配置、审计环与 Fleet Digest 缓存（项目档案的第一层由 project-catalog.ts 给）。
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type {
@@ -92,7 +91,6 @@ interface RouterItemDbRow {
   context: string | null;
   options_json: string | null;
   summary: string | null;
-  /** ITEM_SELECT 的 LEFT JOIN 带出来的 Deliverable[] JSON；没有行是 null，当空列表。INSERT … RETURNING * 不带这一列。 */
   deliverables_json?: string | null;
   links_json: string | null;
   resolution_json: string | null;
@@ -131,15 +129,11 @@ const sliceChars = (s: string, max: number): string => {
   return chars.length <= max ? s : `${chars.slice(0, Math.max(0, max - 1)).join("")}…`;
 };
 
-/** 分页响应外壳（{"items":[…],"nextCursor":"<createdAt>:<id>","hasMore":true}）预留的字节，单页字节上限里扣掉。 */
 const PAGE_ENVELOPE_BYTES = 128;
 
-/**
- * 从新到旧累加每条的 JSON 字节，加上下一条会超过 maxBytes 就停；至少留 1 条（单条本身有各自字段的上限）。
- * 快照近窗和历史分页共用（docs/router-workbench-v2-design.md 第 5.2 节）。
- */
+/** Always keep at least one row; each row's fields have their own caps. */
 function takeWithinBytes<T>(items: readonly T[], maxBytes: number): T[] {
-  let used = 2; // "[]"
+  let used = 2;
   for (let i = 0; i < items.length; i++) {
     const bytes = Buffer.byteLength(JSON.stringify(items[i])) + (i > 0 ? 1 : 0);
     if (i > 0 && used + bytes > maxBytes) return items.slice(0, i);
@@ -148,10 +142,6 @@ function takeWithinBytes<T>(items: readonly T[], maxBytes: number): T[] {
   return items.slice();
 }
 
-/**
- * 窗口切片：rows 是按 created_at DESC, id DESC 多取 1 条的结果（最多 take + 1 条），map 只转换前 take 条。
- * 条数和 maxBytes 哪个先到按哪个截；无论超了条数还是超了字节，hasMore 都为 true。
- */
 function sliceWindow<R, T>(
   rows: readonly R[],
   take: number,
@@ -163,10 +153,6 @@ function sliceWindow<R, T>(
   return { kept, hasMore: rows.length > take || kept.length < page.length };
 }
 
-/**
- * 一页历史：rows 是按 created_at DESC, id DESC 多取 1 条的结果。条数和 ROUTER_STREAM_PAGE_MAX_BYTES 哪个先到按哪个截，
- * 提前截了也算还有更多，游标指向最后一条已给出的记录。
- */
 function pageOf<R, T extends { createdAt: number; id: number }>(
   rows: readonly R[],
   take: number,
@@ -189,11 +175,9 @@ const routerReportSchema = z.object({
     .optional(),
 });
 
-/** 条目连同它挂的交付物（旁表 router_item_deliverables，migrations/0030_deliverables.sql）；没挂的 deliverables_json 是 null。 */
 const ITEM_SELECT = `SELECT router_items.*, router_item_deliverables.deliverables_json FROM router_items
   LEFT JOIN router_item_deliverables ON router_item_deliverables.item_id = router_items.id`;
 
-/** 有交付物才带这个字段：老条目、没挂文件的条目和以前一样。 */
 function deliverablesField(row: RouterItemDbRow): { deliverables?: Deliverable[] } {
   const list = deliverablesOf(parseJsonOr<unknown>(row.deliverables_json ?? null, null));
   return list.length > 0 ? { deliverables: list } : {};
@@ -306,7 +290,6 @@ export function createLedgerRouter(
   const getItemRow = (id: RouterItemId): RouterItemDbRow | undefined =>
     db.get<RouterItemDbRow>(`${ITEM_SELECT} WHERE router_items.id = ?`, id);
 
-  /** 条目挂上交付物（空列表不写），返回连同交付物重读的条目。 */
   const withDeliverablesIn = (itemId: RouterItemId, list: readonly Deliverable[]): RouterItem => {
     if (list.length > 0) {
       db.run(
@@ -327,9 +310,6 @@ export function createLedgerRouter(
   const resolveWakeupDedupeKey = (conversationId: ConversationId, itemId: RouterItemId, clientId: string): string =>
     userMessageDedupeKey(conversationId, `router-resolve:${itemId}:${clientId}`);
 
-  /**
-   * 独立 `hub ask` 入库前预处理：支持 `--replace <旧卡编号>` 平滑替换旧待决卡，并校验单 PM 未决卡上限。
-   */
   const prepareIndependentAskIn = (
     p: Pending,
     pmId: PmId,
@@ -362,7 +342,6 @@ export function createLedgerRouter(
     }
   };
 
-  /** 独立 `hub ask`（不带 `--node`）同事务桥接进 `router_items`，保持对话、右栏 Needs You 与总助待拍板流三处互通。 */
   const bridgeAskIn = (
     p: Pending,
     session: AgentSessionRow,
@@ -418,7 +397,6 @@ export function createLedgerRouter(
     return item;
   };
 
-  /** 账本里这个对话（项目经理）现在还在等用户的独立提问卡，编号从小到大；换新会话的开场说明、每条送给项目经理的用户消息都用它。 */
   const waitingAsksOf = (conversationId: ConversationId): WaitingAsk[] =>
     db
       .all<{ id: number; question: string | null }>(
@@ -428,7 +406,6 @@ export function createLedgerRouter(
       )
       .map((row) => ({ id: row.id, question: row.question ?? "" }));
 
-  /** 用户在对话里的提问卡上点选项、填写：按卡上那条 ask 消息找到卡，只回答这一张（同 resolveItem，别的卡不动）。 */
   const answerAsk = (askMessageId: MessageId, input: ResolveRouterItemRequest, onDecisionWritten?: () => void): ResolveRouterItemResponse => {
     const row = db.get<{ id: number }>(
       "SELECT id FROM router_items WHERE ask_message_id = ? AND kind = 'decision' ORDER BY id DESC LIMIT 1",
@@ -438,7 +415,6 @@ export function createLedgerRouter(
     return resolveItem(row.id, input, onDecisionWritten);
   };
 
-  /** hub ask close：项目经理关掉自己名下一张还在等的卡（用户在对话里打字答了、没点卡，或问题过时了）。 */
   const closeAskIn = (p: Pending, caller: AgentSessionRow & { pmId: PmId }, args: HubArgs<"ask.close">): HubResult<"ask.close"> => {
     const row = getItemRow(args.itemId);
     if (row === undefined || row.kind !== "decision") throw fail("not_found", `没有编号 ${args.itemId} 的卡`);
@@ -452,10 +428,6 @@ export function createLedgerRouter(
     return { text: `已关掉卡 #${row.id}。`, data: { item } };
   };
 
-  /**
-   * hub router report：向 Router 投递里程碑汇报。本机文件不进 links（网页点不开），走 deliverables：
-   * hub router report 的 --file 由 hub-commands.ts 存好副本传进来，graph finish 传整张图的交付物。
-   */
   const reportIn = (
     p: Pending,
     caller: AgentSessionRow & { pmId: PmId },
@@ -521,7 +493,6 @@ export function createLedgerRouter(
     };
   };
 
-  /** POST /api/router/items/:id/resolve：拍板决策卡或归档单条汇报。 */
   const resolveItem = (itemId: RouterItemId, input: ResolveRouterItemRequest, onDecisionWritten?: () => void): ResolveRouterItemResponse =>
     write((p) => {
       const row = getItemRow(itemId);
@@ -623,7 +594,6 @@ export function createLedgerRouter(
       return { item: updated, messageId: wakeMsg.id };
     });
 
-  /** POST /api/router/reports/archive-all：一键将全部未读里程碑汇报归档。 */
   const archiveAllReports = (): ArchiveAllReportsResponse =>
     write((p) => {
       const ids = db
@@ -638,7 +608,6 @@ export function createLedgerRouter(
       return { archivedIds: ids, updatedAt: t };
     });
 
-  /** PUT /api/router/settings：更新总助选用的厂商、模型、思考程度。 */
   const updateSettings = (input: UpdateRouterSettingsRequest): RouterSettings =>
     write((p) => {
       let vendor: AgentVendor | null = null;
@@ -675,14 +644,9 @@ export function createLedgerRouter(
       return settings;
     });
 
-  /**
-   * GET /api/router/items：按 <createdAt>:<id>（或兼容纯 <id>）游标倒序分页。
-   * 不带 kind：已拍板、已归档的历史（旧口径）；kind=report：不分状态只回简报（v2 时间流翻简报历史）。
-   * 单页另守 ROUTER_STREAM_PAGE_MAX_BYTES。
-   */
   const listItems = (beforeCursor?: string, limit?: number, kind?: RouterItemsKind): RouterItemsPage => {
     if (kind !== undefined && kind !== "report") throw fail("invalid", "kind 只能是 report");
-    // 固定的两段 SQL 条件，不拼任何外部输入
+    // Fixed SQL fragments only; no external input is concatenated.
     const scope = kind === "report" ? "kind = 'report'" : "status IN ('resolved', 'superseded', 'archived')";
     const take = Math.max(1, Math.min(limit ?? ROUTER_STREAM_PAGE_SIZE, 100));
     let rows: RouterItemDbRow[];
@@ -754,13 +718,6 @@ export function createLedgerRouter(
     };
   };
 
-  /**
-   * 供 ledger.snapshot() 内嵌的首屏轻量切片（docs/router-workbench-v2-design.md 第 3.2 节第 6 项），每类各有条数和字节上限：
-   * - 待拍板项：全部 pending，上限 ROUTER_ACTIVE_ITEMS_SNAPSHOT_MAX；条件原样写出部分索引 router_items_active 的 WHERE，SQLite 才肯用它；
-   * - 简报：不分已读未读取最近 ROUTER_STREAM_BRIEFINGS_SNAPSHOT_MAX 条（多取 1 条探底），再按 ROUTER_BRIEFINGS_SNAPSHOT_MAX_BYTES 从新到旧截，标出 briefingsHasMore；
-   * - 指令：最近 ROUTER_RECENT_COMMANDS_SNAPSHOT_MAX 条（多取 1 条探底），再按 ROUTER_COMMANDS_SNAPSHOT_MAX_BYTES 从新到旧截，标出 commandsHasMore。
-   * 简报再多也挤不掉待拍板项；读过的简报留在近窗里。
-   */
   const snapshotSlice = (): RouterSlice => {
     const settings = getSettings();
     const pendingRows = db.all<RouterItemDbRow>(
@@ -807,7 +764,100 @@ export function createLedgerRouter(
     };
   };
 
-  /** GET /api/router/digest：带写代数内存缓存与 24 KB 体积守卫的本机 PM 团队结构化摘要。 */
+  const digestActiveWorkers = (
+    conversationId: number | null,
+    openWorkers: ReadonlyArray<{ id: number; title: string; readonly: number; worker_conversation_id: number }>,
+  ): PmDigestActiveWorker[] =>
+    openWorkers.slice(0, ROUTER_PM_ACTIVE_WORKERS_MAX).map((w) => {
+      const ws = sessions.currentSession(w.worker_conversation_id);
+      const wAct = ws === null ? "idle" : sessions.liveOf(ws.id).activity;
+      const lastLine =
+        conversationId === null
+          ? undefined
+          : db.get<{ summary: string | null }>(
+              `SELECT CASE WHEN json_valid(meta) THEN json_extract(meta, '$.summary') END AS summary
+                 FROM messages
+                WHERE conversation_id = ? AND kind = 'worker' AND worker_id = ?
+                ORDER BY id DESC LIMIT 1`,
+              conversationId,
+              w.id,
+            );
+      return {
+        id: w.id,
+        title: w.title,
+        activity: wAct,
+        readonly: w.readonly === 1,
+        lastSummary: lastLine?.summary ? sliceChars(lastLine.summary, ROUTER_PM_BRIEF_MAX_CHARS) : null,
+      };
+    });
+
+  const digestEntryOf = (pm: PmDbRow, pendingDecisionCount: number): PmDigestEntry => {
+    const projRow = activeProjectOf(pm.id);
+    const card = projRow === null ? null : projectCard(projRow);
+    const conv = privateConversation(pm.id);
+    const pmSess = conv === null ? null : sessions.currentSession(conv.id);
+    const activity = pmSess === null ? "idle" : sessions.liveOf(pmSess.id).activity;
+
+    const openWorkers = db.all<{
+      id: number;
+      title: string;
+      readonly: number;
+      worker_conversation_id: number;
+    }>("SELECT id, title, readonly, worker_conversation_id FROM workers WHERE pm_id = ? AND status = 'open' ORDER BY id DESC", pm.id);
+    const activeWorkers = digestActiveWorkers(conv === null ? null : conv.id, openWorkers);
+
+    const latestReport = db.get<{ summary: string; created_at: number }>(
+      `SELECT summary, created_at FROM router_items
+        WHERE pm_id = ? AND kind = 'report'
+        ORDER BY created_at DESC, id DESC LIMIT 1`,
+      pm.id,
+    );
+    const latestMsg =
+      conv === null
+        ? undefined
+        : db.get<{ text: string; created_at: number }>(
+            `SELECT text, created_at FROM messages
+              WHERE conversation_id = ? AND sender = 'agent' AND kind = 'text'
+              ORDER BY id DESC LIMIT 1`,
+            conv.id,
+          );
+
+    const briefSource = latestReport?.summary ?? latestMsg?.text ?? null;
+    const recentBrief =
+      briefSource !== null && briefSource.trim() !== "" ? sliceChars(briefSource.replace(/\s+/g, " ").trim(), ROUTER_PM_BRIEF_MAX_CHARS) : null;
+
+    const timestamps = [pmSess?.lastEventAt ?? 0, latestMsg?.created_at ?? 0, latestReport?.created_at ?? 0].filter((x) => x > 0);
+    const lastActiveAt = timestamps.length > 0 ? Math.max(...timestamps) : null;
+
+    return {
+      pmId: pm.id,
+      name: pm.name,
+      mode: pm.mode as PmMode,
+      vendor: pm.vendor as AgentVendor,
+      model: pm.default_model,
+      ...(conv !== null ? { conversationId: conv.id } : {}),
+      activity,
+      project:
+        projRow === null || card === null
+          ? null
+          : {
+              id: projRow.id,
+              name: card.name,
+              description: projRow.description,
+              mainFolder: card.mainFolder,
+              otherFolders: card.otherFolders,
+              catalog: catalogCardOf(projRow.id),
+            },
+      activeWorkers,
+      activeWorkerTotal: openWorkers.length,
+      pendingDecisionCount,
+      recentBrief,
+      lastActiveAt,
+    };
+  };
+
+  const countByPm = (sql: string): Map<number, number> => new Map(db.all<{ pm_id: number; n: number }>(sql).map((r) => [r.pm_id, r.n]));
+
   const getDigest = (): DeviceRouterDigest => {
     const gen = ctx.writeGeneration();
     if (digestCache !== null && digestCache.generation === gen) {
@@ -820,122 +870,21 @@ export function createLedgerRouter(
         WHERE a.pm_id IS NULL
         ORDER BY p.id`,
     );
-    const pendingItemsByPm = new Map<number, number>(
-      db
-        .all<{ pm_id: number; n: number }>(
-          "SELECT pm_id, count(*) AS n FROM router_items WHERE kind = 'decision' AND status = 'pending' GROUP BY pm_id",
-        )
-        .map((r) => [r.pm_id, r.n]),
-    );
-    const waitingGatesByPm = new Map<number, number>(
-      db
-        .all<{ pm_id: number; n: number }>(
-          `SELECT g.pm_id AS pm_id, count(*) AS n
-             FROM task_graph_steps n
-             JOIN task_graphs g ON g.id = n.graph_id
-            WHERE g.status = 'active' AND n.status = 'waiting' AND n.waiting_for = 'user' AND NOT EXISTS (SELECT 1 FROM user_blocker_steps s WHERE s.step_id = n.id)
-            GROUP BY g.pm_id`,
-        )
-        .map((r) => [r.pm_id, r.n]),
+    const pendingItemsByPm = countByPm("SELECT pm_id, count(*) AS n FROM router_items WHERE kind = 'decision' AND status = 'pending' GROUP BY pm_id");
+    const waitingGatesByPm = countByPm(
+      `SELECT g.pm_id AS pm_id, count(*) AS n
+         FROM task_graph_steps n
+         JOIN task_graphs g ON g.id = n.graph_id
+        WHERE g.status = 'active' AND n.status = 'waiting' AND n.waiting_for = 'user' AND NOT EXISTS (SELECT 1 FROM user_blocker_steps s WHERE s.step_id = n.id)
+        GROUP BY g.pm_id`,
     );
 
-    const entries: PmDigestEntry[] = activePms.map((pm) => {
-      const projRow = activeProjectOf(pm.id);
-      const card = projRow === null ? null : projectCard(projRow);
-      const conv = privateConversation(pm.id);
-      const pmSess = conv === null ? null : sessions.currentSession(conv.id);
-      const activity = pmSess === null ? "idle" : sessions.liveOf(pmSess.id).activity;
-
-      const openWorkers = db.all<{
-        id: number;
-        title: string;
-        readonly: number;
-        worker_conversation_id: number;
-      }>("SELECT id, title, readonly, worker_conversation_id FROM workers WHERE pm_id = ? AND status = 'open' ORDER BY id DESC", pm.id);
-
-      const activeWorkers: PmDigestActiveWorker[] = openWorkers
-        .slice(0, ROUTER_PM_ACTIVE_WORKERS_MAX)
-        .map((w) => {
-          const ws = sessions.currentSession(w.worker_conversation_id);
-          const wAct = ws === null ? "idle" : sessions.liveOf(ws.id).activity;
-          const lastLine =
-            conv === null
-              ? undefined
-              : db.get<{ summary: string | null }>(
-                  `SELECT CASE WHEN json_valid(meta) THEN json_extract(meta, '$.summary') END AS summary
-                     FROM messages
-                    WHERE conversation_id = ? AND kind = 'worker' AND worker_id = ?
-                    ORDER BY id DESC LIMIT 1`,
-                  conv.id,
-                  w.id,
-                );
-          return {
-            id: w.id,
-            title: w.title,
-            activity: wAct,
-            readonly: w.readonly === 1,
-            lastSummary: lastLine?.summary ? sliceChars(lastLine.summary, ROUTER_PM_BRIEF_MAX_CHARS) : null,
-          };
-        });
-
-      const latestReport = db.get<{ summary: string; created_at: number }>(
-        `SELECT summary, created_at FROM router_items
-          WHERE pm_id = ? AND kind = 'report'
-          ORDER BY created_at DESC, id DESC LIMIT 1`,
-        pm.id,
-      );
-      const latestMsg =
-        conv === null
-          ? undefined
-          : db.get<{ text: string; created_at: number }>(
-              `SELECT text, created_at FROM messages
-                WHERE conversation_id = ? AND sender = 'agent' AND kind = 'text'
-                ORDER BY id DESC LIMIT 1`,
-              conv.id,
-            );
-
-      const briefSource = latestReport?.summary ?? latestMsg?.text ?? null;
-      const recentBrief =
-        briefSource !== null && briefSource.trim() !== ""
-          ? sliceChars(briefSource.replace(/\s+/g, " ").trim(), ROUTER_PM_BRIEF_MAX_CHARS)
-          : null;
-
-      const timestamps = [pmSess?.lastEventAt ?? 0, latestMsg?.created_at ?? 0, latestReport?.created_at ?? 0].filter((x) => x > 0);
-      const lastActiveAt = timestamps.length > 0 ? Math.max(...timestamps) : null;
-
-      return {
-        pmId: pm.id,
-        name: pm.name,
-        mode: pm.mode as PmMode,
-        vendor: pm.vendor as AgentVendor,
-        model: pm.default_model,
-        ...(conv !== null ? { conversationId: conv.id } : {}),
-        activity,
-        project:
-          projRow === null || card === null
-            ? null
-            : {
-                id: projRow.id,
-                name: card.name,
-                description: projRow.description,
-                mainFolder: card.mainFolder,
-                otherFolders: card.otherFolders,
-                catalog: catalogCardOf(projRow.id),
-              },
-        activeWorkers,
-        activeWorkerTotal: openWorkers.length,
-        pendingDecisionCount: (pendingItemsByPm.get(pm.id) ?? 0) + (waitingGatesByPm.get(pm.id) ?? 0),
-        recentBrief,
-        lastActiveAt,
-      };
-    });
-
+    const entries = activePms.map((pm) => digestEntryOf(pm, (pendingItemsByPm.get(pm.id) ?? 0) + (waitingGatesByPm.get(pm.id) ?? 0)));
     const digest = fitRouterDigest({ generatedAt: now(), pms: entries });
     digestCache = { generation: gen, digest };
     return digest;
   };
 
-  /** 定期清理：在单事务预算内清理过期已归档 router_items、超限/过期 router_commands 与超出环形上限的 router_audit_log。 */
   const purgeExpiredBatch = (nowMs: number, maxRows: number): number => {
     if (maxRows <= 0) return 0;
     return write(() => {
@@ -998,7 +947,6 @@ export function createLedgerRouter(
     });
   };
 
-  /** 创建一条 router_commands（clientId 重复时幂等返回已有记录）。 */
   const createCommand = (input: {
     clientId: string;
     inputText: string;
@@ -1048,7 +996,6 @@ export function createLedgerRouter(
       return { command, deduplicated: false };
     });
 
-  /** 更新已有 router_commands 并推送 router.command.updated。 */
   const updateCommand = (
     id: RouterCommandId,
     patch: {
@@ -1109,7 +1056,6 @@ export function createLedgerRouter(
     return row === undefined ? null : toRouterCommand(row);
   };
 
-  /** GET /api/router/commands：按 <createdAt>:<id>（或纯 <id>）游标倒序分页读取历史指令，单页另守 ROUTER_STREAM_PAGE_MAX_BYTES。 */
   const listCommands = (beforeCursor?: string, limit?: number): RouterCommandsPage => {
     const take = Math.max(1, Math.min(limit ?? ROUTER_STREAM_PAGE_SIZE, 100));
     let rows: RouterCommandDbRow[];
@@ -1167,7 +1113,6 @@ export function createLedgerRouter(
     return { commands: kept, nextCursor, hasMore };
   };
 
-  /** 为轨道 B 单轮只读规划创建隔离的临时 assistant 会话（不向网页推 session.created）。 */
   const createAssistantSession = (input: {
     vendor: AgentVendor;
     model: string | null;
@@ -1192,13 +1137,7 @@ export function createLedgerRouter(
       return getAgentSession(db, id)!;
     });
 
-  /**
-   * 修剪已结束的临时 assistant 会话行，但永远不删全表 id 最大的那一行。
-   * agent_sessions.id 是不带 AUTOINCREMENT 的 INTEGER PRIMARY KEY：删掉最大行，下一次 INSERT（下一条总助指令、
-   * 新建的项目经理或 Worker）就复用这个号，撞上驱动层与令牌表里这个号“已结束 / 已撤销”的内存标记，start 直接抛 session_ended。
-   * 留着最大行保证 id 只增不退；已结束的 assistant 行任何时刻最多 1 行，跑多久都不膨胀。
-   * session_persona_seen 以外键引用会话行，一起删（router_items 是 ON DELETE SET NULL）。
-   */
+  /** agent_sessions.id has no AUTOINCREMENT, so deleting the max row would let the next insert reuse an id that the driver and token table still mark as ended. */
   const pruneEndedAssistantSessions = (): void => {
     const prunable =
       "SELECT id FROM agent_sessions WHERE role = 'assistant' AND status = 'ended' AND id < (SELECT MAX(id) FROM agent_sessions)";
@@ -1206,7 +1145,6 @@ export function createLedgerRouter(
     db.run(`DELETE FROM agent_sessions WHERE id IN (${prunable})`);
   };
 
-  /** 轨道 B 单轮结束（finally）：把临时 assistant 会话标为已结束、清掉它的内存态，再修剪更早的已结束 assistant 行（不删最大行，见上）。 */
   const endAssistantSession = (sessionId: SessionId): void => {
     write(() => {
       db.run(
@@ -1219,7 +1157,6 @@ export function createLedgerRouter(
     sessions.forgetSession(sessionId);
   };
 
-  /** 记录由 Router 直接触发或派发的 Worker 因果链（router_worker_origins）。 */
   const recordWorkerOrigin = (input: {
     workerId: WorkerId;
     sourceKind: "router_command" | "router_resolve";
@@ -1245,7 +1182,6 @@ export function createLedgerRouter(
       return msgId;
     });
 
-  /** O(1) 索引查询本机 PM / 项目 / Worker 目标（不拉全量 snapshot）。 */
   const resolveLocalPmOrProject = (query: { pmId?: PmId; projectId?: ProjectId }): {
     pmId: PmId;
     pmName: string;
@@ -1378,7 +1314,7 @@ export function createLedgerRouter(
     });
   };
 
-  /** 重启恢复：上次崩溃残留的临时 assistant 会话全部标为已结束再修剪（不删最大行，id 不回退），并将卡在 planning 的指令标为 failed。 */
+  /** Same pruning rule as above: never delete the max row so ids never go backwards. */
   const recoverAfterRestart = (): void => {
     write((p) => {
       db.run(

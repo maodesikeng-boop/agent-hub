@@ -1,7 +1,4 @@
-// 白名单安装/更新配方受管执行器（docs/providers-install-login-design.md 第 3.2、5.1、8.1.1 节）：
-// - 严禁接收任何前端传入的 shell 命令字符串，仅执行 `src/vendors/<id>/setup.ts` 声明的结构化白名单配方；
-// - npm 安装直接用 `node` + `npm-cli.js`（`shell: false`）装入 `<hubHome>/tools/npm` 免管理员受管目录；
-// - 官方安装脚本强制校验 `https://`，子进程挂进程组 / Windows Job Object 支持随时取消与超时整树回收。
+// Runs allowlisted install recipes only and never accepts shell strings from the browser.
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -34,7 +31,6 @@ export function assertSafeHttpsScriptUrl(scriptUrl: string): URL {
   return parsed;
 }
 
-/** 定位当前 Node 运行时附带（或 PATH 中存在）的 `npm-cli.js` 入口脚本路径。 */
 export function resolveNpmCliJsPath(options?: {
   execPath?: string;
   envPath?: string;
@@ -62,7 +58,6 @@ export function resolveNpmCliJsPath(options?: {
       const sibling = pathMod.join(pathMod.dirname(real), "node_modules", "npm", "bin", "npm-cli.js");
       if (existsSync(sibling)) return sibling;
     } catch {
-      // ignore symlink resolution errors
     }
   }
   return null;
@@ -304,7 +299,6 @@ export async function executeInstallRecipe(
     }
   }
 
-  // powershell_script
   ctx.logBuffer.setStageProgress("Running installer…");
   const psBin = resolveWindowsPowerShellBinary(ctx.env);
   const psArgs = [...buildWindowsPowerShellArgs(recipe.scriptUrl), ...(recipe.args ?? [])];

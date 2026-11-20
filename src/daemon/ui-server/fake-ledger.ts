@@ -1,4 +1,3 @@
-// 测试用的内存假账本：只实现界面服务用到的那几个方法，记下每次调用；其余方法调了就抛错。
 import {
   applyCapabilitiesPatch,
   CHANGE_BUFFER_SIZE,
@@ -142,7 +141,6 @@ function makePersonaView(pmId: PmId, changes: PersonaChange[] = []): PersonaView
 }
 
 export class FakeLedger {
-  /** 存在的对话编号；别的编号抛 ConversationNotFoundError。 */
   conversations = new Set<ConversationId>([1]);
   messages: Message[] = [];
   readonly posted: PostUserMessageInput[] = [];
@@ -157,7 +155,6 @@ export class FakeLedger {
   readonly personaEdits: Array<{ pmId: PmId; input: EditPersonaInput; actor: LedgerActor }> = [];
   readonly reverted: PersonaChangeId[] = [];
   readonly retried: MessageId[] = [];
-  /** 定时任务三个方法的调用（addSchedule / setScheduleEnabled / removeSchedule）。 */
   readonly scheduleCalls: Array<{ call: "add" | "enable" | "remove"; args: unknown[] }> = [];
   readonly routerCalls: Array<{ call: string; args: unknown[] }> = [];
   readonly taskGraphCalls: Array<{ call: string; args: unknown[] }> = [];
@@ -169,7 +166,6 @@ export class FakeLedger {
   readonly capabilityPatches: Array<{ pmId: PmId; patch: PmCapabilitiesPatch }> = [];
   readonly pmPolicies = new Map<PmId, PmCapabilityPolicy>();
   readonly pmMainFolders = new Map<PmId, string | null>();
-  /** editPersona、revertPersonaChange 返回的修改记录；null 表示“没改动”。 */
   personaChange: PersonaChange | null = makePersonaChange();
   snapshotValue: LedgerSnapshot = {
     seq: 0,
@@ -186,16 +182,11 @@ export class FakeLedger {
   routerDigestValue: DeviceRouterDigest = { generatedAt: 1, pms: [] };
   routerItemsPageValue: RouterItemsPage = { items: [], nextCursor: null, hasMore: false };
   taskGraphsPageValue: TaskGraphsPage = { graphs: [], hasMore: false };
-  /** getMessage 能取到的消息（测试自己放）。 */
   readonly storedMessages = new Map<MessageId, Message>();
-  /** turnReplyOf 能取到的转交回复（测试自己放，按原消息编号）。 */
   readonly turnReplies = new Map<MessageId, TurnReplyView>();
-  /** sentFileAllows 的判断，默认都允许。 */
   sentFileAllows: (sessionId: SessionId, realPath: string) => boolean = () => true;
-  /** 抛出它来模拟账本出错（普通 Error 是内部出错，LedgerRequestError 是被拒绝）；所有方法都抛。 */
   failWith: Error | null = null;
 
-  // 变化缓冲区：按 ChangesSince 的注释规则补齐。
   readonly initialSeq: number;
   private seq: number;
   private buffer: Change[] = [];
@@ -216,7 +207,6 @@ export class FakeLedger {
     return this.listeners.size;
   }
 
-  /** 产生一条变化：seq 加一，进缓冲区，通知监听者。 */
   emitHealthChange(lastError: string | null = null): Change {
     const seq = this.seq + 1;
     return this.emitChange("health.updated", {
@@ -363,7 +353,6 @@ export class FakeLedger {
     };
   }
 
-  /** 换形象：快照里有这个项目经理才改（照账本：不存在抛 not_found），改完推 pm.updated。 */
   setPmLook(pmId: PmId, look: PmLookSetting): Pm {
     this.check();
     this.lookCalls.push({ pmId, look });
@@ -451,7 +440,6 @@ export class FakeLedger {
     return this.resolveRouterItem(askMessageId, input);
   }
 
-  /** 要用户动手的阻塞：编号 → 等的哪家厂商。重查一律当已经能用。 */
   userBlockerVendors = new Map<UserBlockerId, AgentVendor>();
 
   recheckUserBlocker(id: UserBlockerId): RecheckUserBlockerResponse {
@@ -571,7 +559,6 @@ export class FakeLedger {
     return { graph: this.makeTaskGraph(graphId, "cancelled"), messageId: 103 };
   }
 
-  /** 转成完整的 Ledger 类型传给 createUiServer；界面服务不该碰的方法调了就抛错。 */
   asLedger(): Ledger {
     const unused = (name: string) => () => {
       throw new Error(`FakeLedger.${name} is not used by ui-server`);
@@ -580,7 +567,6 @@ export class FakeLedger {
       postUserMessage: (i) => this.postUserMessage(i),
       requestStop: (c) => this.requestStop(c),
       rewindLastUserMessage: (c) => this.rewindLastUserMessage(c),
-      // 输入框的 commands、files 接口走 UiServerOptions.composer（daemon/composer.ts），界面服务自己不调
       composerTarget: unused("composerTarget"),
       snapshot: () => this.snapshot(),
       messagesBefore: (c, b) => this.messagesBefore(c, b),

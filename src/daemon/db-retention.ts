@@ -1,8 +1,3 @@
-// 账本的定期清理：已收工 Worker 满 WORKER_RETENTION_DAYS 天后清它的对话（ledger/worker-retention.ts），再把空出来的页还给文件系统
-// （store/maintenance.ts 的 incremental_vacuum）。启动时先来一轮，之后每 WORKER_RETENTION_INTERVAL_MS 一轮。
-// 一轮里分批：每批一个事务（最多 WORKER_PURGE_BATCH_ROWS 行）、批与批之间让出事件循环，一轮最多 WORKER_PURGE_ROUND_MAX_ROWS 行，
-// 没清完的下一轮接着清；回收空闲页同样一次一小块（DB_INCREMENTAL_VACUUM_PAGES），一轮最多 DB_INCREMENTAL_VACUUM_ROUND_MAX_PAGES。
-// 任何出错都只记日志（下一轮重来，每批是一个事务，回滚不留半截数据）。
 import { FEISHU_POST_RETENTION_MS, LOG_PREFIX, WORKER_PURGE_BATCH_ROWS, WORKER_PURGE_ROUND_MAX_ROWS, WORKER_RETENTION_INTERVAL_MS } from "../shared/index.ts";
 import type { FeishuOfflineInbox } from "./feishu/account-bot.ts";
 import type { FeishuStore } from "./feishu/store.ts";
@@ -14,15 +9,12 @@ export interface RetentionDeps {
   ledger: Pick<SqliteLedger, "purgeExpiredWorkerConversations"> &
     Partial<Pick<SqliteLedger, "purgeExpiredRouterAndGraphRecords">>;
   db: Db;
-  /** 飞书投影记录（daemon/feishu/store.ts）：已定稿、已定案的满 FEISHU_POST_RETENTION_DAYS 天删掉。没接飞书的测试不传。 */
   feishuPosts?: Pick<FeishuStore, "prunePosts">;
-  /** 飞书离线暂存箱（daemon/feishu/account-bot.ts）：超过 FEISHU_OFFLINE_INBOX_TTL_MS 的行兜底清掉。 */
   feishuOfflineInbox?: Pick<FeishuOfflineInbox, "expire">;
   log: (line: string) => void;
   now?: () => number;
-  /** 批与批之间做什么，默认让出一次事件循环（别的请求、WebSocket 照常处理）；测试可以换。 */
   yieldToLoop?: () => Promise<void>;
-  /** 关机了：不再开始新的一批（库马上要关）。 */
+  /** The database is about to close, so do not start another batch. */
   isStopped?: () => boolean;
 }
 
@@ -30,16 +22,13 @@ export interface RetentionRound {
   workers: number;
   rows: number;
   batches: number;
-  /** 每批各用了多少毫秒。 */
   batchMs: number[];
-  /** 本轮还给文件系统的页数。 */
   pages: number;
 }
 
 const defaultYield = () => new Promise<void>((resolve) => setImmediate(resolve));
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
-/** 跑一轮：清到期的 Worker 对话，再回收空闲页。出错记日志、返回已经做完的部分。 */
 export async function runRetentionRound(deps: RetentionDeps): Promise<RetentionRound> {
   const { ledger, db, log } = deps;
   const now = deps.now ?? Date.now;
@@ -73,7 +62,6 @@ export async function runRetentionRound(deps: RetentionDeps): Promise<RetentionR
         await yieldToLoop();
       }
     }
-    // 飞书：已定稿、已定案的投影记录满 FEISHU_POST_RETENTION_DAYS 天（飞书卡片实体 14 天后不能再改）删掉，等拍板的留着
     if (deps.feishuPosts !== undefined && !stopped()) {
       const posts = deps.feishuPosts.prunePosts(now() - FEISHU_POST_RETENTION_MS);
       if (posts > 0) log(`${LOG_PREFIX} 飞书：清了 ${posts} 条已定稿的投影记录`);
@@ -93,7 +81,6 @@ export async function runRetentionRound(deps: RetentionDeps): Promise<RetentionR
   return round;
 }
 
-/** 马上来一轮，之后每 WORKER_RETENTION_INTERVAL_MS 一轮（上一轮没完不叠）。返回停止函数（关机时调）。 */
 export function startWorkerRetention(deps: Omit<RetentionDeps, "isStopped">): () => void {
   let stopped = false;
   let running = false;

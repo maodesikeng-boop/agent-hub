@@ -1,11 +1,4 @@
-// 空闲排空热重启（hub self-reload、POST /api/self-reload）。
-// 只登记、立即返回：等全库空闲（没有会话在跑 / 停止中 / 准备中 / 等后台命令，总助分派引擎没有规划中或在途分派，后台没在写交接，
-// 执行器手上没有动作）再静默 SELF_RELOAD_QUIET_MS，期间又忙起来就顺延，重新等空闲。等待有上限：登记后过了 SELF_RELOAD_DRAIN_MAX_MS
-// 还没等到，就不再等重启后会重发的轮次（Worker 轮次、系统消息，靠重启恢复重发），只等重启后不会重发的（项目经理、总助正在回用户）
-// 回完，回完立即重启。最后交给 restart()（entry.ts：正常关机，
-// 以 apps/desktop/contract.json 的 reloadExitCode 退出，Bellwood.app / Windows 外壳 / systemd Restart=on-failure 立即拉起新进程）。
-// 带 build：登记时就在后台把网页构建到暂存目录（不碰正在用的 dist/web），构建失败取消本次重启；重启前一刻才把暂存产物原子换上线。
-// 多次登记合并成同一次；关机（close）清掉定时器、取消构建。
+// Waits for the whole daemon to go idle, then restarts via the supervisor's reload exit code. After SELF_RELOAD_DRAIN_MAX_MS it only waits for turns that would not be replayed after restart.
 import { existsSync, lstatSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import {
@@ -27,37 +20,27 @@ import { runSetupCommand } from "./setup/setup.ts";
 export type BuildOutcome = { ok: true } | { ok: false; reason: string };
 
 export interface SelfReloadOptions {
-  /** 现在还在忙的（给人看的原因）；空数组 = 全库空闲。 */
   busyReasons(): string[];
-  /** 正在跑、重启后不会重发的轮次（项目经理、总助正在回用户），给人看的原因。过了等待上限后只等这些。 */
   unresumableReasons(): string[];
-  /** 订阅“可能闲下来了”的信号（账本的变化）；返回取消订阅。 */
   subscribe(listener: () => void): () => void;
-  /** 把网页构建到暂存目录（不碰正在用的那份）。不给 = 不支持 --build。 */
   build?: (signal: AbortSignal) => Promise<BuildOutcome>;
-  /** 构建通过、空闲到点后，重启前把暂存产物换上线；抛错就取消本次重启。 */
   applyBuild?: () => void;
-  /** 真正重启：正常关机并以热重启退出码退出。只调一次。 */
   restart(): void;
   log?: (line: string) => void;
   quietMs?: number;
   recheckMs?: number;
-  /** 登记后最多等全库空闲多久，默认 SELF_RELOAD_DRAIN_MAX_MS。 */
   drainMaxMs?: number;
   now?: () => number;
 }
 
 export interface SelfReloadRequest {
   build: boolean;
-  /** 谁登记的（日志里写）。 */
   by: string;
 }
 
 export interface SelfReloadController {
-  /** 登记（或合并进已登记的那一次），立即返回给人看的说明。正在重启、已关闭 → conflict。 */
   request(input: SelfReloadRequest): { text: string; status: SelfReloadStatus };
   status(): SelfReloadStatus;
-  /** 关机：清定时器、取消订阅、取消在跑的构建。多调无害。 */
   close(): void;
 }
 
@@ -124,7 +107,6 @@ export function createSelfReload(options: SelfReloadOptions): SelfReloadControll
     };
   };
 
-  /** busy 是过了上限时还在跑、重启后会重发的轮次；全库空闲到点时是空的。 */
   const fire = (busy: string[]) => {
     state = "restarting";
     stopWatching();
@@ -144,10 +126,6 @@ export function createSelfReload(options: SelfReloadOptions): SelfReloadControll
     options.restart();
   };
 
-  /**
-   * 有变化或到点重查：还在构建就等（构建过了上限，构建通过时立即判断）；过了等待上限：没有重启后不会重发的轮次就直接重启，有就等它回完；
-   * 上限内忙就取消静默窗口（顺延）；闲了就开静默窗口，到点再确认一次。
-   */
   const evaluate = () => {
     if (state !== "draining") return;
     const busy = options.busyReasons();
@@ -238,7 +216,6 @@ function formatMinutes(ms: number): string {
   return ms % 60_000 === 0 ? `${ms / 60_000} 分钟` : `${Math.round(ms / 1000)} 秒`;
 }
 
-/** 热重启现在等到哪了（hub self-reload 回执、项目经理的 hub status 里那一段）；没登记是空字符串。 */
 export function describeSelfReload(status: SelfReloadStatus): string {
   if (status.state === "idle" || status.requestedAt === null || status.deadlineAt === null) return "";
   if (status.state === "restarting") return "热重启：正在关机重启。";
@@ -256,7 +233,6 @@ export function describeSelfReload(status: SelfReloadStatus): string {
   );
 }
 
-/** 正在干活的会话（项目经理、Worker、总助）：按账本推的 session.status 记，闲↔忙翻转时 O(1) 增删，不轮询。 */
 export interface BusySessions {
   onSessionStatus(session: Pick<SessionState, "sessionId" | "activity" | "status">): void;
   count(): number;
@@ -277,21 +253,16 @@ export function createBusySessions(): BusySessions {
 const shellQuote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
 
 export interface StagedWebBuildOptions {
-  /** 仓库根目录（有 package.json）。 */
   repoDir: string;
-  /** 正在用的网页目录（dist/web）。 */
   staticDir: string;
-  /** 构建日志（追加写）。 */
   logPath: string;
   timeoutMs?: number;
-  /** 构建命令（outDir 参数之前那段），默认 pnpm build；测试换假的。 */
   command?: string;
   baseEnv?: Record<string, string | undefined>;
 }
 
 export interface StagedWebBuild {
   build(signal: AbortSignal): Promise<BuildOutcome>;
-  /** 暂存目录换成正在用的那份（原来的先挪开，换失败挪回来）。 */
   apply(): void;
 }
 
@@ -304,10 +275,6 @@ function hasPackageBuildScript(pkgPath: string): boolean {
   }
 }
 
-/**
- * pnpm build 构建到 staticDir 旁边的暂存目录（vite build 的 --outDir 覆盖配置里的），构建期间正在用的网页不受影响；
- * 重启前 apply 两次 rename 换上线。仓库根目录没有 package.json，或默认命令下没有 scripts.build（如分发包运行环境）时返回 null（不支持 --build）。
- */
 export function createStagedWebBuild(options: StagedWebBuildOptions): StagedWebBuild | null {
   const pkgPath = join(options.repoDir, "package.json");
   if (!existsSync(pkgPath)) return null;

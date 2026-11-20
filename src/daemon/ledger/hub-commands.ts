@@ -1,6 +1,3 @@
-// 账本里的 hub 命令（m2-plan 第 3 节第 4 条，11-03 改过）：按会话认人、按角色放行、分派到各命令、回给 agent 的话、记 hub_calls。
-// 整条链：shared/hub.ts（命令表、按角色放行的表）→ hub/cli.ts（命令行）→ agent-api/server.ts（校验）→ 这里。
-// worker.* 和 Worker 调的 status 在 workers.ts（worker.show、worker.log 在 worker-view.ts）；schedule.* 在 schedules.ts。
 import { z } from "zod";
 import { PM_MODE_LABELS, validateAskOptions } from "../../shared/domain.ts";
 import type { AgentSessionRow, PmId, PmMode, SessionId } from "../../shared/domain.ts";
@@ -54,14 +51,12 @@ const fileArgsSchema = z.array(z.object({ label: z.string().nullable(), path: z.
 
 const recordArgsSchema = z.record(z.string(), z.unknown());
 
-/** status 里的一句“项目和文件夹”。 */
 function describeProject(card: ProjectCard | null): string {
   if (card === null) return `还没有项目。用户让你建项目时，用 ${HUB_COMMAND} project create --folder <主文件夹> 建。`;
   const others = card.otherFolders.length === 0 ? "没有附加文件夹" : `附加文件夹 ${card.otherFolders.join("、")}`;
   return `管着项目“${card.name}”：主文件夹 ${card.mainFolder}，${others}。`;
 }
 
-/** status 里的一句“准备命令”（hub project setup）；没有项目不说。 */
 function describeSetup(card: ProjectCard | null, setupCommand: string | null): string {
   if (card === null) return "";
   return setupCommand === null
@@ -69,7 +64,6 @@ function describeSetup(card: ProjectCard | null, setupCommand: string | null): s
     : `\n准备命令（建好 worktree 后先跑它，跑完 Worker 再开工）：\n${setupCommand}`;
 }
 
-/** 给 agent 看的命令写法：persona.edit → hub persona edit。 */
 const commandLine = (command: HubCommand) => `${HUB_COMMAND} ${command.replace(".", " ")}`;
 
 const VENDOR_AVAILABILITY_TEXT: Readonly<Record<VendorAvailability, string>> = {
@@ -128,11 +122,9 @@ export function createLedgerHubCommands(
   workerView: ReturnType<typeof createLedgerWorkerView>,
   router: LedgerRouter,
   taskGraphs: LedgerTaskGraphs,
-  /** 任务图手册那一行（task-graph-skill.ts 的 taskGraphManualNote，按调用的会话填路径）。 */
   taskGraphManual: (sessionId: SessionId) => string = () => "",
 ) {
   const { db, now, write } = ctx;
-  /** hub graph create、patch：回执带手册路径，出错的报错也带（第 7 节第 2 条）。 */
   const withManual = <T extends { text: string }>(sessionId: SessionId, run: () => T): T => {
     const note = taskGraphManual(sessionId);
     try {
@@ -143,10 +135,7 @@ export function createLedgerHubCommands(
       throw error;
     }
   };
-  /**
-   * hub ask / router report 的 --file：先查个数，再取 agent 接口在事务外存好的副本（context.sharedFiles，Ledger.shareHubFiles）；
-   * 有一个没存下就整条拒绝（卡片不挂出来），说清是哪个文件、为什么。
-   */
+  /** Attachments are copied by the agent API outside the transaction; if any copy is missing the whole command is rejected. */
   const sharedFileArgs = (raw: unknown, context: HubCallContext): { args: HubFileArg[]; files: SentFile[] } | undefined => {
     const parsed = fileArgsSchema.safeParse(raw);
     if (!parsed.success) throw fail("invalid", "--file 要写成 [标签=]路径");
@@ -178,7 +167,6 @@ export function createLedgerHubCommands(
         const project = row === null ? null : projectCard(row);
         const setupCommand = row?.setup_command ?? null;
         const { summaries, textBlock } = taskGraphs.pmStatusGraphs(pm.id);
-        // 手里有图时带上手册路径：换了会话、厂商压缩丢了前文之后靠这一行找回来（第 7 节第 3 条）
         const manual = summaries.length > 0 ? taskGraphManual(caller.id) : "";
         const selfReload = context.selfReload !== undefined && context.selfReload.state !== "idle" ? context.selfReload : undefined;
         const reloadNote = selfReload === undefined ? "" : `\n${describeSelfReload(selfReload)}`;
@@ -351,13 +339,8 @@ export function createLedgerHubCommands(
     }
   };
 
-  /**
-   * 飞书群里访客的话触发的这一轮（docs/feishu-design.md「访客权限」）：项目经理手上正在处理（已送达、处理中）的用户消息里
-   * 有访客说的，就按那条的档位查 FEISHU_GUEST_BLOCKED_HUB_COMMANDS；中途插进来的访客消息也算（宁可多拦一次）。
-   */
   const guestTurnBlockReason = (session: AgentSessionRow, command: HubCommand): string | null => {
     const rows = db.all<{ meta: string | null }>(
-      // 部分索引 messages_in_flight（迁移 0034）只收在途的几行；没有统计信息时查询规划会挑 messages_session 扫全会话，所以点名用它
       "SELECT meta FROM messages INDEXED BY messages_in_flight WHERE session_id = ? AND status IN ('delivered', 'processing') AND sender = 'user' AND meta IS NOT NULL",
       session.id,
     );
@@ -368,10 +351,6 @@ export function createLedgerHubCommands(
     return null;
   };
 
-  /**
-   * 认人、按角色放行（HUB_COMMAND_ROLES），再分派。项目经理的会话要有 pm_id；Worker 的会话要有 worker_id，
-   * 而且只能用 status（m3-plan 第 2.1 节）。别的会话（总助、数据不一致的）一律 forbidden。
-   */
   const dispatch = (
     p: Pending,
     session: AgentSessionRow | null,

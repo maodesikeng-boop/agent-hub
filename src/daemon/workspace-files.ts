@@ -1,11 +1,3 @@
-// 输入框“@”的文件搜索（跟厂商无关；插进输入框的写法由厂商实现的 mention 生成，见 daemon/composer.ts）：
-// - 列文件：git 仓库用 `git ls-files --cached --others --exclude-standard`（跳过 .gitignore 里的）；不是 git 仓库的自己遍历，
-//   跳过 node_modules 和 .git，不跟符号链接进目录。只列文件，不列文件夹。每个文件夹最多 MAX_WORKSPACE_FILES 个，多了 truncated。
-//   git 一律带 GIT_READONLY_ARGS/ENV（不执行仓库配置里的 core.fsmonitor 脚本）；列出来的再 lstat 一遍，符号链接、已经不存在的、
-//   dir/ 结尾的（嵌套仓库）、子模块（是目录）都去掉，只留真的文件；
-// - 每个文件夹的清单缓存 WORKSPACE_FILES_FRESH_MS，最多存 MAX_WORKSPACE_FILE_CACHES 个文件夹，多了淘汰最旧的；
-// - 模糊打分：文件名命中排在路径命中前面，每次最多 MAX_FILE_RESULTS 条。
-// 只在给的文件夹里列，搜索词只拿来比，不当路径用，所以 `../../etc` 这类搜不出文件夹外面的东西。
 import { spawn } from "node:child_process";
 import { lstat, readdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -20,19 +12,15 @@ import {
 } from "../shared/index.ts";
 import { GIT_READONLY_ARGS, GIT_READONLY_ENV } from "./git/index.ts";
 
-/** 遍历时跳过的目录。 */
 const SKIPPED_DIRS = new Set(["node_modules", ".git"]);
 
-/** 一个文件夹的文件清单：path 是相对它的路径，用 / 分隔。 */
 export interface FileList {
   files: string[];
   truncated: boolean;
 }
 
-/** 搜到的一个文件。 */
 interface FileMatch {
   root: string;
-  /** 相对 root 的路径。 */
   path: string;
 }
 
@@ -40,17 +28,14 @@ export interface WorkspaceFilesOptions {
   now?: () => number;
   maxFiles?: number;
   freshMs?: number;
-  /** 清单最多缓存几个文件夹，默认 MAX_WORKSPACE_FILE_CACHES。 */
   maxCaches?: number;
   timeoutMs?: number;
 }
 
 export interface WorkspaceFiles {
-  /** 在这些文件夹里搜，按匹配程度排好，最多 MAX_FILE_RESULTS 条。文件夹不存在、读不了的当空的。 */
   search(roots: readonly string[], query: string): Promise<{ matches: FileMatch[]; truncated: boolean }>;
 }
 
-/** git ls-files 列；不是 git 仓库（或者没装 git）返回 null。 */
 function gitListFiles(root: string, maxFiles: number, timeoutMs: number): Promise<FileList | null> {
   return new Promise((resolve) => {
     const child = spawn("git", [...GIT_READONLY_ARGS, "-c", "core.quotepath=off", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
@@ -89,7 +74,6 @@ function gitListFiles(root: string, maxFiles: number, timeoutMs: number): Promis
   });
 }
 
-/** 自己遍历（不是 git 仓库时）：广度优先，跳过 SKIPPED_DIRS，不跟符号链接。 */
 async function walkFiles(root: string, maxFiles: number, deadline: number): Promise<FileList> {
   const files: string[] = [];
   const queue = [""];
@@ -116,10 +100,8 @@ async function walkFiles(root: string, maxFiles: number, deadline: number): Prom
   return { files, truncated: false };
 }
 
-/** lstat 一次同时查多少个（git 列出来的文件逐个查）。 */
 const LSTAT_BATCH = 256;
 
-/** 只留 root 下真的、现在还在的普通文件：不跟符号链接，git 列出来但磁盘上没有的（已删）、dir/（嵌套仓库）、子模块（目录）去掉。 */
 async function onlyRegularFiles(root: string, files: string[]): Promise<string[]> {
   const kept: string[] = [];
   const candidates = files.filter((f) => !f.endsWith("/"));
@@ -133,7 +115,6 @@ async function onlyRegularFiles(root: string, files: string[]): Promise<string[]
   return kept;
 }
 
-/** 列一个文件夹里的文件。 */
 export async function listWorkspaceFiles(root: string, options: { maxFiles?: number; timeoutMs?: number } = {}): Promise<FileList> {
   const maxFiles = options.maxFiles ?? MAX_WORKSPACE_FILES;
   const timeoutMs = options.timeoutMs ?? WORKSPACE_LIST_TIMEOUT_MS;
@@ -152,10 +133,6 @@ function isSubsequence(needle: string, hay: string): boolean {
   return needle.length === 0;
 }
 
-/**
- * 一个文件和搜索词（已经小写、去空白）的匹配分，越小越前，不匹配是 null：
- * 文件名完全一样 0、开头 1、包含 2、按顺序含这些字 3；路径包含 4、按顺序含 5。搜索词是空的都算 0。
- */
 export function fileScore(path: string, query: string): number | null {
   if (query === "") return 0;
   const lower = path.toLowerCase();
@@ -169,7 +146,6 @@ export function fileScore(path: string, query: string): number | null {
   return null;
 }
 
-/** 搜索词：截到 MAX_FILE_QUERY_CHARS、去首尾空白、小写。 */
 function normalizeFileQuery(query: string): string {
   return [...query].slice(0, MAX_FILE_QUERY_CHARS).join("").trim().toLowerCase();
 }
@@ -178,7 +154,6 @@ export function createWorkspaceFiles(options: WorkspaceFilesOptions = {}): Works
   const now = options.now ?? Date.now;
   const freshMs = options.freshMs ?? WORKSPACE_FILES_FRESH_MS;
   const maxCaches = options.maxCaches ?? MAX_WORKSPACE_FILE_CACHES;
-  /** LRU 缓存：存的时候更新顺序，满了自动淘汰最旧的。 */
   const cache = new LRUCache<string, { list: FileList; at: number }>({ max: Math.max(1, maxCaches) });
   const inflight = new Map<string, Promise<FileList>>();
 

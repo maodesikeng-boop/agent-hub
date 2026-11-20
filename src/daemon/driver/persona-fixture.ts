@@ -1,5 +1,3 @@
-// 三家驱动测“性格设定、模式改了不重启”共用：一个真账本（内存库）里的项目经理，加上守护进程里同样接法的 personaNote
-// （launch.ts 的 createPersonaNoter）。驱动层测试的会话编号和账本里的不一样，这里只认这一个项目经理的会话。
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,17 +7,11 @@ import { createPersonaNoter } from "../launch.ts";
 import { openTestDb } from "../store/test-helpers.ts";
 
 export interface PersonaFixture {
-  /** 接到驱动层的 DriverOptions.personaNote。 */
   personaNote: NonNullable<DriverOptions["personaNote"]>;
-  /** 现在拼提示词会记下的版本号（LaunchFiles.personaRevision）。 */
   revision(): number;
-  /** 用户在资料页改。 */
   userEdit(input: { text?: string; mode?: PmMode }): void;
-  /** 项目经理自己 hub persona edit。 */
   selfEdit(text: string): void;
-  /** 资料页撤销最近一次。 */
   revert(): void;
-  /** 资料页改模型（会重启）。 */
   userModel(model: string): void;
   cleanup(): void;
 }

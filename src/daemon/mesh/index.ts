@@ -1,5 +1,3 @@
-// 账号组网对守护进程其余部分的出口（docs/account-mesh-design.md）。daemon.ts 建一个 Mesh，界面服务、peers/、总助跨设备派活、飞书都只认这里。
-// 不变量：没登录时 Mesh 照样能建，dial 一律失败、没有租约，单机功能不受影响；登录、退出、被移除都不用重启守护进程。
 import { networkInterfaces } from "node:os";
 import type { TLSSocket } from "node:tls";
 import { API_PATHS, type DeviceId } from "../../shared/api.ts";
@@ -46,44 +44,32 @@ export { createRelayClient, registerWithRelay, RelayDialError, type RelayClient 
 export { acceptTrustStatement, openMeshTrust, signTrustStatement, startApproval, type MeshTrust, type TrustedDevice } from "./trust.ts";
 
 export interface MeshOptions {
-  /** state/mesh/（设备密钥）。 */
   identityDir: string;
-  /** state/account.json。 */
   accountFile: string;
-  /** state/peers.json（v2 信任表）。 */
   trustFile: string;
   device: { id: DeviceId; name: string };
   platform: string;
-  /** 默认中继网址（设置里可以换）。 */
   relayUrl: string;
   githubClientId: string;
-  /** 组网入口端口（MESH_LISTEN_PORT；测试给 0）。 */
   listenPort: number;
-  /** 测试只听回环。 */
   listenHost?: string;
-  /** 验过身份的组网连接交给界面服务的组网入口（ui-server 的 acceptMeshConnection）。 */
   onConnection: (connection: MeshConnection) => void;
-  /** 本机报给中继的局域网候选地址（测试换成回环）。不给按本机网卡（localCandidates）。 */
   candidates?: (port: number) => MeshCandidate[];
-  /** 仅本机单测与 e2e 打开：允许向 127.0.0.0/8 与 ::1 发起直连。生产默认关闭。 */
+  /** Loopback dialing is allowed only in tests; production keeps it off. */
   allowLoopback?: boolean;
-  /** 测试换：假 GitHub 的地址、轮询之间等多久。 */
   github?: { webOrigin?: string; apiOrigin?: string; sleep?: (ms: number, signal: AbortSignal) => Promise<void> };
   fetch?: typeof fetch;
   now?: () => number;
   log: (line: string) => void;
 }
 
-/** 一种聊天软件的长连接怎么挂、能不能挂（飞书服务给）。 */
 export interface CenterLeaseHooks {
-  /** 有这个聊天软件的凭证。 */
   eligible: () => boolean;
   connect: () => void;
   disconnect: () => Promise<void>;
 }
 
 export interface MeshLogoutResult {
-  /** 连不上中继且未送达任何在线设备时为 true，需在其他设备上手动移除本机。 */
   remoteRevokePending: boolean;
 }
 
@@ -91,32 +77,20 @@ export interface Mesh {
   readonly selfId: DeviceId;
   readonly trust: MeshTrust;
   readonly dialer: MeshDialer;
-  /** GET /api/account。 */
   status(): AccountStatusView;
   startLogin(input?: { relayUrl?: string; githubClientId?: string }): Promise<AccountStatusView>;
   cancelLogin(): void;
   logout(): Promise<MeshLogoutResult>;
-  /** 本机用户在“等批准”那一条上点“核对”：开始批准仪式（本机当批准方）。requestId 是那台的设备编号。 */
   beginApproval(requestId: string): Promise<AccountStatusView>;
-  /** 本机用户点“一致”或“不一致”。requestId 是对方的设备编号（批准方和新设备都一样）。 */
   answerApproval(requestId: string, match: boolean): Promise<AccountStatusView>;
-  /** 后置：只收已在账号里的设备，去重；发给中继，中继推回后 status() 才变。没连上中继抛错。 */
   setCenterPriority(priority: DeviceId[]): Promise<void>;
-  /** 后置：本机删掉、签撤销声明发给其他可信设备、告诉中继删掉它；不能删本机（本机用 logout）。 */
   removeDevice(id: DeviceId): Promise<void>;
-  /** 中继说它在线（离线、不知道都是 false）。 */
   isOnline(id: DeviceId): boolean;
-  /** 经组网对一台可信设备发 HTTP 请求（走 dialer.agentFor）。对方离线、不在信任表里抛错。 */
   request(id: DeviceId, path: string, init?: { method?: string; headers?: Record<string, string>; body?: string; timeoutMs?: number }): Promise<Response>;
-  /** 一种聊天软件一个租约，第一次调时建（同名再调回同一个）。能挂长连接 = 已登录且可用、在中心顺序里、hooks.eligible()。 */
   lease(name: MeshLeaseName, hooks: CenterLeaseHooks): CenterLease;
-  /** GET /api/peer/trust：本机签的声明（信任表里每台的批准、每条墓碑的撤销）。 */
   trustStatements(): SignedTrustStatement[];
-  /** POST /api/peer/trust：收下 from 转来的声明。后置：body 不对抛错；撤销本机的声明生效时本机退出账号。 */
   receiveTrustStatements(from: DeviceId, body: unknown): void;
-  /** GET /api/peer/lease：本机所知的中心租约持有情况（局域网降级前防双活探测用）。 */
   leaseSnapshot(): { relayConnected: boolean; holders: Partial<Record<MeshLeaseName, DeviceId | null>> };
-  /** 账号状态、设备表、在线、租约任一变化时调（界面服务据此推 account.updated）。 */
   onChange(listener: () => void): () => void;
   close(): Promise<void>;
 }
@@ -125,7 +99,7 @@ const RELAY_EVENTS: Array<keyof RelayClientEvents> = ["devices", "revocations", 
 const PLATFORM_PATTERN = /^[a-z0-9]{1,32}$/;
 const LOGOUT_REMOTE_REMOVE_HINT = "已在本机退出；因未连上中继且无在线设备，请在其他设备上手动移除本机";
 
-/** 登录、退出时换底下的中继客户端；拨号、组网入口、租约一直认这一个。 */
+/** Login and logout swap the relay client underneath; dialer, entry and lease always use this one. */
 function createSwitchableRelay(): RelayClient & { attach(client: RelayClient): void; detach(): Promise<void> } {
   let current: RelayClient | null = null;
   let offs: Array<() => void> = [];
@@ -171,7 +145,6 @@ function createSwitchableRelay(): RelayClient & { attach(client: RelayClient): v
   };
 }
 
-/** 后置：读设备密钥（没有就生成）、信任表、account.json；已登录就连中继、开组网入口。 */
 export async function createMesh(options: MeshOptions): Promise<Mesh> {
   const now = options.now ?? Date.now;
   const log = (line: string) => options.log(`组网：${line}`);
@@ -205,7 +178,6 @@ export async function createMesh(options: MeshOptions): Promise<Mesh> {
   const leaseHolders = new Map<MeshLeaseName, DeviceId | null>();
   const leases = new Map<MeshLeaseName, CenterLease>();
   const ceremonies = new Map<DeviceId, ApprovalCeremony>();
-  /** 别的设备连进来的连接：对方被移出信任表、证书变了时当场断开。 */
   const inbound = new Map<TLSSocket, { id: DeviceId; fingerprint: string }>();
   let removedReason: string | null = null;
   let remoteRevokePending = false;
@@ -235,7 +207,6 @@ export async function createMesh(options: MeshOptions): Promise<Mesh> {
     for (const lease of leases.values()) lease.refresh();
   };
 
-  // ---- 设备之间的请求 ----
   const request: Mesh["request"] = async (id, path, init = {}) => {
     if (id === selfId || trust.get(id) === undefined) throw new Error("不是这个账号里的可信设备");
     const headers: Record<string, string> = { ...init.headers };
@@ -284,7 +255,6 @@ export async function createMesh(options: MeshOptions): Promise<Mesh> {
     return results.filter((r) => r.status === "fulfilled").length;
   };
 
-  // ---- 信任表对齐 ----
   let syncTimer: NodeJS.Timeout | null = null;
   let syncAttempts = 0;
   const trustMatchesRelay = () => {
@@ -358,7 +328,6 @@ export async function createMesh(options: MeshOptions): Promise<Mesh> {
     else syncAttempts = 0;
   };
 
-  // ---- 批准仪式 ----
   const sendSignals = (to: DeviceId, signals: ApprovalSignal[]) => {
     for (const signal of signals) relay.send({ type: "signal", to, payload: JSON.stringify(signal) });
   };
@@ -409,7 +378,6 @@ export async function createMesh(options: MeshOptions): Promise<Mesh> {
   }, 1_000);
   expiryTimer.unref?.();
 
-  // ---- 中继推来的 ----
   relay.on("devices", (devices, nextPriority) => {
     relayDevices = devices;
     priority = nextPriority;
@@ -482,7 +450,6 @@ export async function createMesh(options: MeshOptions): Promise<Mesh> {
     changed();
   });
 
-  // ---- 登录状态 ----
   let candidatesTimer: NodeJS.Timeout | null = null;
   let lastCandidates = "";
   const startSession = async (current: AccountFile) => {
@@ -567,7 +534,6 @@ export async function createMesh(options: MeshOptions): Promise<Mesh> {
   };
   await applyAccountState();
 
-  // ---- 状态视图 ----
   const deviceViews = (): MeshDeviceView[] =>
     trust.list().map((d) => {
       const self = d.id === selfId;

@@ -1,10 +1,3 @@
-// 总助的项目目录在账本里的一半（docs/router-project-catalog-design.md 第 3.5、3.6 节）：存档案（project_catalogs）、算“变化大”、排队、拼写档输入。
-// 跑腿的在 daemon/project-catalog/runner.ts，只干活不做判断。
-// 不变量：
-// - 队列是内存里的项目编号集合，只是缓存，真相在库里：启动时 scanAtStartup 重建，丢了也只是晚一点刷新。
-//   队列里放“想刷新”的项目（还没档案、有 forced、增量到门槛），在等最短间隔或退避的也留着，领活时再按 catalogDue 判时机。
-// - 判断“变化大”只用 messages_conversation (conversation_id, id) 索引从切点往后走，不扫全表；队列空时一条 SQL 都不跑。
-// - 切点只在写成时前移；失败、超时、重启都不动切点，下次从同一处接着算。
 import type { DriverEvent } from "../../shared/driver.ts";
 import { truncateChars, type AgentSessionRow, type MessageId, type ProjectId, type TokenUsage } from "../../shared/domain.ts";
 import {
@@ -37,35 +30,19 @@ import type { LedgerContext, Pending } from "./context.ts";
 import type { LedgerProjects } from "./projects.ts";
 import type { ProjectDbRow } from "./rows.ts";
 
-/** 什么事件要求尽快刷新（不看增量字数，只受最短间隔约束）。 */
 type CatalogForceReason = "project_created" | "graph_finished" | "handover_switched";
 
 export interface LedgerProjectCatalog extends LedgerProjectCatalogWork {
-  /**
-   * 守护进程启动时调一次：给每个活跃项目算一次想不想刷新，想的进队列（在等最短间隔、退避的也进，到时候再领）。
-   * 后置：还没有档案的活跃项目（存量老项目、新项目）全部进队列；返回其中现在就到期的个数。
-   */
   scanAtStartup(nowMs: number): number;
-  /**
-   * 在 applyDriverEvent 的事务里调。只看项目经理会话的 turn.ended：算这个项目切点之后的加权字数，到期就进队列。
-   * 别的角色、别的事件什么都不做。
-   */
   afterDriverEvent(p: Pending, session: AgentSessionRow, event: DriverEvent): void;
-  /**
-   * 在触发事件的同一个事务里调（建项目、hub graph finish、项目经理换代）：记 forced，提交后进队列（没过最短间隔的等到间隔再领）。
-   * 前置：projectId 是活跃项目；不是的静默忽略。
-   */
   markForcedIn(p: Pending, projectId: ProjectId, reason: CatalogForceReason): void;
-  /** 第一层：这个项目最近一次写成的档案摘要；还没写成过是 null。 */
   cardOf(projectId: ProjectId): ProjectCatalogCard | null;
-  /** 第二层：完整档案；还没写成过、项目不存在或已归档是 null。 */
   detailOf(projectId: ProjectId): ProjectCatalogDetail | null;
-  /** 队列里有没有项目（跑腿的决定要不要领活；热重启判空闲也看它）。 */
   hasQueued(): boolean;
 }
 
 export interface ProjectCatalogLedgerOptions {
-  /** 有项目进队列了：守护进程接到跑腿的 wake；不给什么都不做。在事务提交之后调。 */
+  /** Called after commit to wake the background runner. */
   onCatalogClaimable?: () => void;
 }
 
@@ -79,7 +56,6 @@ interface CatalogDbRow {
   next_attempt_at: number | null;
 }
 
-/** 活跃项目（项目 active、项目经理没归档）才建档；归档了的名片不列，档案留着。 */
 const ACTIVE_PROJECT = `SELECT p.* FROM projects p LEFT JOIN pm_archives a ON a.pm_id = p.pm_id WHERE p.status = 'active' AND a.pm_id IS NULL`;
 
 function parseCatalog(raw: string | null): ProjectCatalog | null {
@@ -99,15 +75,12 @@ export function createLedgerProjectCatalog(
 ): LedgerProjectCatalog {
   const { db, now, write } = ctx;
   const onClaimable = options.onCatalogClaimable ?? (() => {});
-  /** 想刷新的项目：到期的马上领，等最短间隔或退避的留着，下次领活再看。 */
   const queue = new Set<ProjectId>();
-  /** 正在写的项目：不再领第二次。 */
   const running = new Set<ProjectId>();
 
   const activeProject = (projectId: ProjectId): ProjectDbRow | undefined => db.get<ProjectDbRow>(`${ACTIVE_PROJECT} AND p.id = ?`, projectId);
   const rowOf = (projectId: ProjectId): CatalogDbRow | undefined => db.get<CatalogDbRow>("SELECT * FROM project_catalogs WHERE project_id = ?", projectId);
 
-  /** 切点之后用户和项目经理说的字数：走 messages_conversation 索引从切点往后。 */
   const scoreOf = (conversationId: number, cut: MessageId): number => {
     const rows = db.all<{ sender: string; n: number }>(
       `SELECT sender, sum(length(text)) AS n FROM messages
@@ -120,7 +93,6 @@ export function createLedgerProjectCatalog(
     return changeScore({ userChars: count("user"), agentChars: count("agent") });
   };
 
-  /** 还没写成过、有 forced 的不用算字数；只有过了退避和最短间隔才真去数。 */
   const stateOf = (project: ProjectDbRow, row: CatalogDbRow | undefined, needScore: boolean): CatalogDueState => {
     const neverWritten = row?.refreshed_at == null;
     const forced = row?.forced === 1;
@@ -133,7 +105,6 @@ export function createLedgerProjectCatalog(
     };
   };
 
-  /** 想不想刷新（不看时机）：还没档案、有 forced、增量到门槛。不想刷新的移出队列。 */
   const wanted = (state: CatalogDueState) => state.neverWritten || state.forced || state.score >= PROJECT_CATALOG_REFRESH_DELTA;
 
   const enqueueAfterCommit = (p: Pending, projectId: ProjectId) => {
@@ -173,7 +144,6 @@ export function createLedgerProjectCatalog(
     enqueueAfterCommit(p, projectId);
   };
 
-  /** 切点之后、领活时刻之前的原话，从新往旧取到上限；跨过上限的那一条只留后半截。 */
   const dialogOf = (conversationId: number, cut: MessageId, upTo: MessageId): { dialog: string; truncated: boolean } => {
     const picked: string[] = [];
     let used = 0;
@@ -274,7 +244,6 @@ export function createLedgerProjectCatalog(
     return null;
   };
 
-  /** 写成或失败之后：还想刷新的留在队列里等下次（退避、最短间隔），不想的移出。 */
   const settle = (projectId: ProjectId) => {
     running.delete(projectId);
     const project = activeProject(projectId);

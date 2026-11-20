@@ -1,7 +1,3 @@
-// Router 跨设备极速分派引擎（docs/router-design.md §5、§6）：
-// - 轨道 A（零模型直通）：解析显式 target、@设备名/项目名、@唯一项目名，0 token 原样投递文本与已上传附件；
-// - 轨道 B（单轮只读规划）：并发汇总 24 KB 以内 Fleet Digest，用 resolveRouterModel 选出极快模型跑单轮只读规划，
-//   --verbatim 字节级零拷贝搬运原话与附件（最多 ROUTER_MAX_DISPATCH_TARGETS 个目标），超时硬熔断，finally 彻底回收会话。
 import {
   DEFAULT_AGENT_VENDOR,
   LedgerRequestError,
@@ -37,7 +33,7 @@ import { describeFailure } from "../../shared/errors.ts";
 import { renderCatalogDetail } from "../../shared/project-catalog.ts";
 import { within } from "../driver/base-driver.ts";
 import type { SqliteLedger } from "../ledger/index.ts";
-import { resolveRouterModel } from "./model-resolver.ts";
+import { resolveRouterModel, type ResolvedRouterModel } from "./model-resolver.ts";
 import {
   ROUTER_RECENT_RECEIPTS_CONTEXT,
   formatFleetDigestForPrompt,
@@ -59,27 +55,22 @@ import {
 
 interface ActiveTrackBState {
   readonly commandId: RouterCommandId;
-  /** 这一轮的总助会话；会话建好前、收尾后是 null。 */
   sessionId: SessionId | null;
   readonly clientId: string;
   readonly rawText: string;
   readonly attachmentIds: string[];
   readonly dispatched: RouterCommandDispatchedTarget[];
   readonly failedOps: Array<{ deviceId: string; op: RouterTargetOp; error: string }>;
-  /** 进行中的 hub dispatch 调用（收尾时限时等它们落定，晚到的成功/失败不丢）。 */
   readonly inflight: Set<Promise<unknown>>;
-  /** 进行中的写操作数：与已成功的合计不超过 ROUTER_MAX_DISPATCH_TARGETS（模型并发调用也卡得住）。 */
+  /** In-flight writes plus successes stay within ROUTER_MAX_DISPATCH_TARGETS, which also bounds concurrent model calls. */
   pendingMutations: number;
-  /** 这一轮已经调了几次 project-show（上限 ROUTER_PROJECT_SHOW_PER_TURN_MAX）。 */
   projectShows: number;
   seq: number;
-  /** 立即结束本轮（守护进程关闭时用）。 */
   abort(reason: string): void;
 }
 
 export interface RouterDispatcherOptions {
   ledger: SqliteLedger;
-  /** 总助单轮会话（single-turn.ts，和后台写档共用一份）。 */
   runTurn: RouterTurnRunner;
   sandboxGuard: RouterSandboxGuard;
   targetRegistry: Pick<
@@ -87,13 +78,11 @@ export interface RouterDispatcherOptions {
     "selfDeviceId" | "getPort" | "listPorts" | "listAllDigests"
   >;
   models: { list(options?: { vendor?: AgentVendor }): Promise<ModelCatalog[]> };
-  /** 按上传编号取附件的显示信息（守护进程从磁盘解析，见 uploads.ts 的 resolveUpload）；编号无效返回 null。 */
   resolveAttachment: (id: string) => RouterCommandAttachment | null;
   agentTimeoutMs?: number;
   maxConcurrentTrackB?: number;
 }
 
-/** background: true 时登记完就返回 planning 记录，管线在后台继续，终态靠账本变更推送；默认等到终态再返回。 */
 export interface RouterCommandRunOptions {
   background?: boolean;
 }
@@ -106,7 +95,6 @@ export interface RouterDispatcher {
     commandId: RouterCommandId,
     payload: RouterAgentDispatchInput,
   ): Promise<{ text: string; data: unknown }>;
-  /** 有没有规划中、排队等槽位或在途分派的指令（热重启等全库空闲时看，daemon/self-reload.ts）。 */
   busy(): boolean;
   close(): Promise<void>;
 }
@@ -131,7 +119,6 @@ function parseAtPrefix(text: string): { part1: string; part2: string | null; res
   if (!match) return null;
   const part1 = match[1]!.trim();
   const part2 = match[2]?.trim() || null;
-  // 保留首行空格之后的正文内容（不破坏内部多行缩进与末尾格式）
   const rest = match[3]!;
   if (part1 === "" || rest.trim() === "") return null;
   return { part1, part2, rest };
@@ -171,7 +158,6 @@ function resolveAtMention(
   const part1Lower = part1.toLowerCase();
 
   if (part2 !== null) {
-    // @设备名/项目名 <正文>
     const deviceEntry = fleet.find(
       (entry) =>
         (entry.port.isLocal && (part1Lower === "self" || part1 === "本机")) ||
@@ -216,7 +202,7 @@ function resolveAtMention(
       };
     }
 
-    // part1 不是已知设备名（例如 @tanstack/react-query）：仅当完整 "part1/part2" 恰好是某个在线项目名时才走轨道 A，否则落入轨道 B
+    // Non-device prefixes such as @tanstack/react-query use track A only when the full "part1/part2" is an online project name.
     const wholeToken = `${part1}/${part2}`;
     const wholeMatches: Array<{ port: RouterTargetPort; pm: PmDigestEntry }> = [];
     for (const entry of fleet) {
@@ -236,7 +222,6 @@ function resolveAtMention(
     return { kind: "fallthrough" };
   }
 
-  // @项目名 <正文>（无斜杠）
   const matches: Array<{ port: RouterTargetPort; pm: PmDigestEntry }> = [];
   for (const entry of fleet) {
     if (!entry.result.online || !entry.result.digest) continue;
@@ -262,7 +247,6 @@ function resolveAtMention(
     };
   }
 
-  // 检查是否单写了离线设备名（如 @LinuxBox 帮我看看）
   const offlineDev = fleet.find(
     (entry) =>
       !entry.result.online &&
@@ -470,10 +454,7 @@ function buildRecentReceipts(records: readonly RouterCommandRecord[]): PromptRec
   return out;
 }
 
-/**
- * 多段主 agent 文字用空行拼成一段 Markdown（单个换行会被 Markdown 并成一段）。
- * 超过 ROUTER_REPLY_MAX_CHARS 才截，截了标 replyTruncated，不悄悄拼省略号。
- */
+/** Join agent text with blank lines because Markdown merges single newlines; truncation is flagged with replyTruncated instead of a silent ellipsis. */
 function cleanReply(chunks: readonly string[]): Pick<RouterAgentPlan, "reply" | "replyTruncated"> {
   const joined = chunks
     .map((c) => c.trim())
@@ -484,7 +465,6 @@ function cleanReply(chunks: readonly string[]): Pick<RouterAgentPlan, "reply" | 
   return { reply: chars.slice(0, ROUTER_REPLY_MAX_CHARS).join(""), replyTruncated: true };
 }
 
-/** 一条指令在每次写 plan 时都要带着的字段：附件编号与显示信息、显式目标（plan 是整列替换的）。 */
 type PlanBase = Pick<RouterAgentPlan, "attachmentIds" | "attachments" | "target">;
 
 function planBaseOf(plan: RouterAgentPlan | null): PlanBase {
@@ -495,25 +475,21 @@ function planBaseOf(plan: RouterAgentPlan | null): PlanBase {
   };
 }
 
-/** 兜底回收（ROUTER_AGENT_TIMEOUT_MS）触发、且一条都没投出去时给用户看的话。 */
 function agentTimeoutMessage(timeoutMs: number): string {
   const minutes = timeoutMs / 60_000;
   const span = minutes >= 1 ? `${Math.round(minutes)} 分钟` : `${Math.max(1, Math.round(timeoutMs / 1000))} 秒`;
   return `总助规划超时（超过 ${span} 仍没结束，已自动停止），请重试或用 @设备名/项目名 直通发令`;
 }
 
-/** 写进指令的错误：error 永远是人话；非预期异常的原文另放 errorRaw（只进悬停提示）。 */
 interface CommandFailure {
   error: string;
   errorRaw?: string;
 }
 
-/** 原始错误文本 → 人话（各家厂商的错误特征在 src/shared/vendors.ts），原文留在 errorRaw。 */
 function describeRaw(raw: string, vendor?: AgentVendor): CommandFailure {
   return { error: describeFailure(raw, vendor !== undefined ? { vendor } : {}).text, errorRaw: raw };
 }
 
-/** 账本和目标端口的错误本来就是人话，照旧；其余非预期异常经 describeFailure 转人话。 */
 function failureOf(err: unknown, vendor?: AgentVendor): CommandFailure {
   if (err instanceof LedgerRequestError || err instanceof RouterTargetError) return { error: err.message };
   return describeRaw(err instanceof Error ? err.message : String(err), vendor);
@@ -523,13 +499,181 @@ function errorRawOf(failure: CommandFailure): Pick<RouterAgentPlan, "errorRaw"> 
   return failure.errorRaw !== undefined ? { errorRaw: failure.errorRaw } : {};
 }
 
+type TrackBParams = {
+  commandId: RouterCommandId;
+  clientId: string;
+  rawText: string;
+  attachmentIds: string[];
+  planBase: PlanBase;
+  preloadedFleet?: ReadonlyArray<{ port: RouterTargetPort; result: DigestFetchResult }>;
+  startedAt: number;
+};
+
+function promptDevicesOf(fleet: ReadonlyArray<{ port: RouterTargetPort; result: DigestFetchResult }>): PromptDeviceDigest[] {
+  return fleet.map(({ port, result }) => ({
+    deviceId: port.isLocal ? "self" : port.deviceId,
+    deviceName: port.deviceName,
+    online: result.online,
+    ...(result.stale ? { stale: true } : {}),
+    ...(result.digest ? { generatedAt: result.digest.generatedAt } : {}),
+    ...(result.digest?.omittedPms ? { omittedPms: result.digest.omittedPms } : {}),
+    pms: (result.digest?.pms ?? []).map((pm) => ({
+      pmId: pm.pmId,
+      pmName: pm.name,
+      mode: pm.mode,
+      ...(pm.conversationId !== undefined ? { conversationId: pm.conversationId } : {}),
+      activity: pm.activity,
+      project: pm.project
+        ? {
+            id: pm.project.id,
+            name: pm.project.name,
+            mainFolder: pm.project.mainFolder,
+            description: pm.project.description,
+            catalog: pm.project.catalog ?? null,
+          }
+        : null,
+      recentBrief: pm.recentBrief,
+      activeWorkers: pm.activeWorkers.map((w) => ({
+        id: w.id,
+        title: w.title,
+        activity: w.activity,
+        readonly: w.readonly ?? false,
+      })),
+      activeWorkerTotal: pm.activeWorkerTotal,
+      pendingDecisionCount: pm.pendingDecisionCount,
+    })),
+  }));
+}
+
+function trackBTurnText(
+  ledger: SqliteLedger,
+  params: TrackBParams,
+  fleet: ReadonlyArray<{ port: RouterTargetPort; result: DigestFetchResult }>,
+): string {
+  const recentRecords = ledger
+    .listRouterCommands(undefined, ROUTER_RECENT_RECEIPTS_CONTEXT + 1)
+    .commands.filter((c) => c.id !== params.commandId)
+    .slice(0, ROUTER_RECENT_RECEIPTS_CONTEXT);
+  const digestPrompt = formatFleetDigestForPrompt(promptDevicesOf(fleet), buildRecentReceipts(recentRecords), ROUTER_FLEET_DIGEST_MAX_BYTES);
+  const attachmentNote =
+    params.attachmentIds.length > 0
+      ? `\n\n# 用户随附文件（共 ${params.attachmentIds.length} 个）\n已上传附件编号：${params.attachmentIds.join("、")}（调用 \`hub dispatch ... --verbatim\` 时守护进程会自动将附件随原文一并投递，无需手动处理路径）。`
+      : "";
+  return `${digestPrompt}${attachmentNote}\n\n# 当前用户指令\n<user_command>\n${params.rawText}\n</user_command>`;
+}
+
+type TrackBTurn = { result: RouterTurnResult; state: ActiveTrackBState; abortReason: string };
+
+function recordTrackBOutcome(
+  ledger: SqliteLedger,
+  params: TrackBParams,
+  resolved: ResolvedRouterModel,
+  turn: TrackBTurn,
+  agentTimeoutMs: number,
+): RouterCommandRecord {
+  const { result, state, abortReason } = turn;
+  const timedOut = !result.ok && result.reason === "timeout";
+  const turnOutcome: { ok: boolean } & Partial<CommandFailure> = result.ok
+    ? { ok: true }
+    : result.reason === "aborted"
+      ? { ok: false, error: abortReason || "总助规划被打断，可点击重试" }
+      : { ok: false, error: result.error, ...(result.errorRaw === undefined ? {} : { errorRaw: result.errorRaw }) };
+  const durationMs = Math.max(0, Date.now() - params.startedAt);
+  const replyPart = cleanReply([result.ok ? result.text : result.partialText]);
+
+  if (state.failedOps.length > 0) {
+    const errText = state.failedOps.map((f) => f.error).join("；");
+    return ledger.updateRouterCommand(params.commandId, {
+      status: "failed",
+      dispatched: state.dispatched.length > 0 ? state.dispatched : null,
+      error: errText,
+      durationMs,
+      plan: {
+        intent: "dispatch",
+        ...replyPart,
+        actions: [],
+        track: "B",
+        ...params.planBase,
+        retryOps: state.failedOps.map((f) => ({ deviceId: f.deviceId, op: f.op })),
+      },
+      auditAction: "router.command.partial_failed",
+      auditActor: "router_agent",
+      auditDetail: {
+        dispatchedCount: state.dispatched.length,
+        failedCount: state.failedOps.length,
+      },
+    });
+  }
+
+  if (state.dispatched.length > 0) {
+    return ledger.updateRouterCommand(params.commandId, {
+      status: "dispatched",
+      dispatched: state.dispatched,
+      error: null,
+      durationMs,
+      plan: {
+        intent: "dispatch",
+        ...replyPart,
+        actions: [],
+        track: "B",
+        ...params.planBase,
+      },
+      auditAction: "router.command.dispatched",
+      auditActor: "router_agent",
+      auditDetail: {
+        vendor: resolved.vendor,
+        model: resolved.model,
+        dispatchedCount: state.dispatched.length,
+        durationMs,
+      },
+    });
+  }
+
+  if (!turnOutcome.ok) {
+    const errMsg = timedOut ? agentTimeoutMessage(agentTimeoutMs) : (turnOutcome.error ?? "总助单轮规划失败");
+    return ledger.updateRouterCommand(params.commandId, {
+      status: "failed",
+      error: errMsg,
+      durationMs,
+      plan: {
+        intent: "answer",
+        ...replyPart,
+        actions: [],
+        track: "B",
+        ...params.planBase,
+        ...(turnOutcome.errorRaw !== undefined ? { errorRaw: turnOutcome.errorRaw } : {}),
+      },
+      auditAction: timedOut ? "router.command.timeout" : "router.command.failed",
+      auditActor: "router_agent",
+      auditDetail: timedOut ? { durationMs } : { error: turnOutcome.errorRaw ?? errMsg },
+    });
+  }
+
+  const finalAnswer = replyPart.reply || "当前指令未触发分派操作，请补充目标项目或设备信息。";
+  return ledger.updateRouterCommand(params.commandId, {
+    status: "answered",
+    error: null,
+    durationMs,
+    plan: {
+      intent: "answer",
+      reply: finalAnswer,
+      ...(replyPart.replyTruncated ? { replyTruncated: true } : {}),
+      actions: [{ type: "answer", markdown: finalAnswer }],
+      track: "B",
+      ...params.planBase,
+    },
+    auditAction: "router.command.answered",
+    auditActor: "router_agent",
+    auditDetail: { durationMs },
+  });
+}
+
 export function createRouterDispatcher(options: RouterDispatcherOptions): RouterDispatcher {
   const { ledger, runTurn, sandboxGuard, targetRegistry, models, resolveAttachment } = options;
   const agentTimeoutMs = options.agentTimeoutMs ?? ROUTER_AGENT_TIMEOUT_MS;
   const maxConcurrentTrackB = options.maxConcurrentTrackB ?? ROUTER_MAX_CONCURRENT_TRACK_B;
 
   const activeStates = new Map<RouterCommandId, ActiveTrackBState>();
-  /** 在途的指令管线（close 时限时等它们收尾，不留悬空 Promise）。 */
   const runningPipelines = new Set<Promise<unknown>>();
   let runningTrackB = 0;
   const trackBWaiters: Array<{ resolve: () => void; reject: (err: Error) => void }> = [];
@@ -622,7 +766,6 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
         dispatched: [dispatchedItem],
         error: null,
         durationMs: Math.max(0, Date.now() - params.startedAt),
-        // 轨道 A 成功不拼回执文案：去向全在 dispatched 的结构化字段里
         plan: {
           intent: "dispatch",
           reply: "",
@@ -662,20 +805,67 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
     }
   };
 
-  const executeTrackB = async (params: {
-    commandId: RouterCommandId;
-    clientId: string;
-    rawText: string;
-    attachmentIds: string[];
-    planBase: PlanBase;
-    preloadedFleet?: ReadonlyArray<{ port: RouterTargetPort; result: DigestFetchResult }>;
-    startedAt: number;
-  }): Promise<RouterCommandRecord> => {
+  const runTrackBTurn = async (
+    params: TrackBParams,
+    resolved: ResolvedRouterModel,
+    turnText: string,
+  ): Promise<TrackBTurn> => {
+    const controller = new AbortController();
+    let abortReason = "";
+    const state: ActiveTrackBState = {
+      commandId: params.commandId,
+      sessionId: null,
+      clientId: params.clientId,
+      rawText: params.rawText,
+      attachmentIds: params.attachmentIds,
+      dispatched: [],
+      failedOps: [],
+      inflight: new Set(),
+      pendingMutations: 0,
+      projectShows: 0,
+      seq: 0,
+      abort: (reason) => {
+        abortReason = reason;
+        controller.abort();
+      },
+    };
+    activeStates.set(params.commandId, state);
+
+    let result: RouterTurnResult;
+    try {
+      result = await runTurn({
+        purpose: "dispatch",
+        vendor: resolved.vendor,
+        model: resolved.model,
+        effort: resolved.effort,
+        text: turnText,
+        timeoutMs: agentTimeoutMs,
+        signal: controller.signal,
+        onSession: (sessionId) => {
+          state.sessionId = sessionId;
+          sandboxGuard.bind(sessionId, params.commandId);
+          return () => {
+            sandboxGuard.unbind(sessionId);
+            state.sessionId = null;
+          };
+        },
+      });
+    } finally {
+      activeStates.delete(params.commandId);
+      // Late successes and failures are still recorded in the receipt.
+      if (state.inflight.size > 0) {
+        await within(Promise.allSettled([...state.inflight]), ROUTER_PEER_DISPATCH_TIMEOUT_MS);
+      }
+    }
+    return { result, state, abortReason };
+  };
+
+  const executeTrackB = async (params: TrackBParams): Promise<RouterCommandRecord> => {
     let releaseSlot: () => void;
     try {
       releaseSlot = await acquireTrackBSlot();
     } catch (err) {
-      // 排队满或正在关闭：指令行已经建了，标失败（可重试），不能一直挂在 planning
+      // The command row already exists, so mark it failed (retryable) instead of leaving it in planning.
       const failure = failureOf(err);
       return ledger.updateRouterCommand(params.commandId, {
         status: "failed",
@@ -727,206 +917,13 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
         status: "planning",
       });
 
-      const promptDevices: PromptDeviceDigest[] = fleet.map(({ port, result }) => ({
-        deviceId: port.isLocal ? "self" : port.deviceId,
-        deviceName: port.deviceName,
-        online: result.online,
-        ...(result.stale ? { stale: true } : {}),
-        ...(result.digest ? { generatedAt: result.digest.generatedAt } : {}),
-        ...(result.digest?.omittedPms ? { omittedPms: result.digest.omittedPms } : {}),
-        pms: (result.digest?.pms ?? []).map((pm) => ({
-          pmId: pm.pmId,
-          pmName: pm.name,
-          mode: pm.mode,
-          ...(pm.conversationId !== undefined ? { conversationId: pm.conversationId } : {}),
-          activity: pm.activity,
-          project: pm.project
-            ? {
-                id: pm.project.id,
-                name: pm.project.name,
-                mainFolder: pm.project.mainFolder,
-                description: pm.project.description,
-                catalog: pm.project.catalog ?? null,
-              }
-            : null,
-          recentBrief: pm.recentBrief,
-          activeWorkers: pm.activeWorkers.map((w) => ({
-            id: w.id,
-            title: w.title,
-            activity: w.activity,
-            readonly: w.readonly ?? false,
-          })),
-          activeWorkerTotal: pm.activeWorkerTotal,
-          pendingDecisionCount: pm.pendingDecisionCount,
-        })),
-      }));
-
-      const recentRecords = ledger
-        .listRouterCommands(undefined, ROUTER_RECENT_RECEIPTS_CONTEXT + 1)
-        .commands.filter((c) => c.id !== params.commandId)
-        .slice(0, ROUTER_RECENT_RECEIPTS_CONTEXT);
-      const digestPrompt = formatFleetDigestForPrompt(
-        promptDevices,
-        buildRecentReceipts(recentRecords),
-        ROUTER_FLEET_DIGEST_MAX_BYTES,
-      );
-
-      const attachmentNote =
-        params.attachmentIds.length > 0
-          ? `\n\n# 用户随附文件（共 ${params.attachmentIds.length} 个）\n已上传附件编号：${params.attachmentIds.join("、")}（调用 \`hub dispatch ... --verbatim\` 时守护进程会自动将附件随原文一并投递，无需手动处理路径）。`
-          : "";
-
-      const turnText = `${digestPrompt}${attachmentNote}\n\n# 当前用户指令\n<user_command>\n${params.rawText}\n</user_command>`;
-
-      const controller = new AbortController();
-      let abortReason = "";
-      const state: ActiveTrackBState = {
-        commandId: params.commandId,
-        sessionId: null,
-        clientId: params.clientId,
-        rawText: params.rawText,
-        attachmentIds: params.attachmentIds,
-        dispatched: [],
-        failedOps: [],
-        inflight: new Set(),
-        pendingMutations: 0,
-        projectShows: 0,
-        seq: 0,
-        abort: (reason) => {
-          abortReason = reason;
-          controller.abort();
-        },
-      };
-      activeStates.set(params.commandId, state);
-
-      let result: RouterTurnResult;
-      try {
-        result = await runTurn({
-          purpose: "dispatch",
-          vendor: resolved.vendor,
-          model: resolved.model,
-          effort: resolved.effort,
-          text: turnText,
-          timeoutMs: agentTimeoutMs,
-          signal: controller.signal,
-          onSession: (sessionId) => {
-            state.sessionId = sessionId;
-            sandboxGuard.bind(sessionId, params.commandId);
-            return () => {
-              sandboxGuard.unbind(sessionId);
-              state.sessionId = null;
-            };
-          },
-        });
-      } finally {
-        activeStates.delete(params.commandId);
-        // 已发出的 hub dispatch 限时等落定（各自也有跨设备超时），晚到的成功/失败照样记进回执与重试列表
-        if (state.inflight.size > 0) {
-          await within(Promise.allSettled([...state.inflight]), ROUTER_PEER_DISPATCH_TIMEOUT_MS);
-        }
-      }
-
-      const timedOut = !result.ok && result.reason === "timeout";
-      const turnOutcome: { ok: boolean } & Partial<CommandFailure> = result.ok
-        ? { ok: true }
-        : result.reason === "aborted"
-          ? { ok: false, error: abortReason || "总助规划被打断，可点击重试" }
-          : { ok: false, error: result.error, ...(result.errorRaw === undefined ? {} : { errorRaw: result.errorRaw }) };
-      const durationMs = Math.max(0, Date.now() - params.startedAt);
-      const replyPart = cleanReply([result.ok ? result.text : result.partialText]);
-
-      if (state.failedOps.length > 0) {
-        const errText = state.failedOps.map((f) => f.error).join("；");
-        return ledger.updateRouterCommand(params.commandId, {
-          status: "failed",
-          dispatched: state.dispatched.length > 0 ? state.dispatched : null,
-          error: errText,
-          durationMs,
-          plan: {
-            intent: "dispatch",
-            ...replyPart,
-            actions: [],
-            track: "B",
-            ...params.planBase,
-            retryOps: state.failedOps.map((f) => ({ deviceId: f.deviceId, op: f.op })),
-          },
-          auditAction: "router.command.partial_failed",
-          auditActor: "router_agent",
-          auditDetail: {
-            dispatchedCount: state.dispatched.length,
-            failedCount: state.failedOps.length,
-          },
-        });
-      }
-
-      if (state.dispatched.length > 0) {
-        return ledger.updateRouterCommand(params.commandId, {
-          status: "dispatched",
-          dispatched: state.dispatched,
-          error: null,
-          durationMs,
-          plan: {
-            intent: "dispatch",
-            ...replyPart,
-            actions: [],
-            track: "B",
-            ...params.planBase,
-          },
-          auditAction: "router.command.dispatched",
-          auditActor: "router_agent",
-          auditDetail: {
-            vendor: resolved.vendor,
-            model: resolved.model,
-            dispatchedCount: state.dispatched.length,
-            durationMs,
-          },
-        });
-      }
-
-      // 走到这里说明一条都没投出去（投出去的上面已按 dispatched / partial_failed 落定，兜底回收或收尾出错都不改写）
-      if (!turnOutcome.ok) {
-        const errMsg = timedOut ? agentTimeoutMessage(agentTimeoutMs) : (turnOutcome.error ?? "总助单轮规划失败");
-        return ledger.updateRouterCommand(params.commandId, {
-          status: "failed",
-          error: errMsg,
-          durationMs,
-          plan: {
-            intent: "answer",
-            ...replyPart,
-            actions: [],
-            track: "B",
-            ...params.planBase,
-            ...(turnOutcome.errorRaw !== undefined ? { errorRaw: turnOutcome.errorRaw } : {}),
-          },
-          auditAction: timedOut ? "router.command.timeout" : "router.command.failed",
-          auditActor: "router_agent",
-          auditDetail: timedOut ? { durationMs } : { error: turnOutcome.errorRaw ?? errMsg },
-        });
-      }
-
-      const finalAnswer = replyPart.reply || "当前指令未触发分派操作，请补充目标项目或设备信息。";
-      return ledger.updateRouterCommand(params.commandId, {
-        status: "answered",
-        error: null,
-        durationMs,
-        plan: {
-          intent: "answer",
-          reply: finalAnswer,
-          ...(replyPart.replyTruncated ? { replyTruncated: true } : {}),
-          actions: [{ type: "answer", markdown: finalAnswer }],
-          track: "B",
-          ...params.planBase,
-        },
-        auditAction: "router.command.answered",
-        auditActor: "router_agent",
-        auditDetail: { durationMs },
-      });
+      const turn = await runTrackBTurn(params, resolved, trackBTurnText(ledger, params, fleet));
+      return recordTrackBOutcome(ledger, params, resolved, turn, agentTimeoutMs);
     } finally {
       releaseSlot();
     }
   };
 
-  /** 跟踪在途管线：close 时限时等它们收尾。 */
   const track = <T>(p: Promise<T>): Promise<T> => {
     runningPipelines.add(p);
     const done = () => runningPipelines.delete(p);
@@ -939,13 +936,11 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
     clientId: string;
     text: string;
     attachmentIds: string[];
-    /** 显式目标在 planBase.target 里（首发和整条重跑同一个来源）。 */
     planBase: PlanBase;
   }): Promise<RouterCommandRecord> => {
     const startedAt = Date.now();
     const explicitTarget = params.planBase.target;
 
-    // 1. 显式 target：轨道 A 零模型直通
     if (explicitTarget !== undefined) {
       let port: RouterTargetPort;
       try {
@@ -981,7 +976,6 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
       });
     }
 
-    // 2. @设备名/项目名 或 @唯一项目名：轨道 A 零模型直通（非设备前缀如 @tanstack/... 平滑落入轨道 B）
     let preloadedFleet: ReadonlyArray<{ port: RouterTargetPort; result: DigestFetchResult }> | undefined;
     if (/^\s*@/.test(params.text)) {
       preloadedFleet = await targetRegistry.listAllDigests();
@@ -1019,7 +1013,6 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
       }
     }
 
-    // 3. 轨道 B：单轮只读规划
     return executeTrackB({
       commandId: params.commandId,
       clientId: params.clientId,
@@ -1031,17 +1024,13 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
     });
   };
 
-  /**
-   * 后台模式：不等管线落定，先把当前（planning）记录交回去，终态靠账本变更推送。
-   * 管线本身会把每种失败写成 failed；这里兜只有它自己抛错时才会漏的那一类，别让指令永远挂在 planning、也别留未处理的拒绝。
-   */
   const detach = (command: RouterCommandRecord, settled: Promise<RouterCommandRecord>): RouterCommandRecord => {
     settled.catch((err: unknown) => {
       try {
         if (ledger.getRouterCommand(command.id)?.status !== "planning") return;
         ledger.updateRouterCommand(command.id, { status: "failed", error: failureOf(err).error });
       } catch {
-        // 关机时库可能已经关了
+        // The database may already be closed during shutdown.
       }
     });
     return command;
@@ -1120,7 +1109,7 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
       const planBase = planBaseOf(existing.plan);
       const retryOps = existing.plan?.retryOps ?? [];
 
-      // 若上次已有明确失败的目标操作列表（含部分成功场景），仅补跑失败项，绝不重复投递已成功项
+      // Retry only the failed target ops so successful deliveries are never repeated.
       if (retryOps.length > 0) {
         const startedAt = Date.now();
         const planning = ledger.updateRouterCommand(commandId, { status: "planning", error: null });
@@ -1186,7 +1175,6 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
         return options?.background === true ? detach(planning, settled) : settled;
       }
 
-      // 已有目标投递成功、又没有明确的失败操作（如规划超时、重启中断时已投出一部分）：整条重跑会让模型再投一遍，拒绝
       if ((existing.dispatched ?? []).some((d) => d.ok)) {
         throw new LedgerRequestError(
           "conflict",
@@ -1194,9 +1182,8 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
         );
       }
 
-      // 否则（例如设备之前离线尚未拿到名片、模型曾未登录或规划曾超时）重新执行完整管线
       const planning = ledger.updateRouterCommand(commandId, { status: "planning", error: null });
-      // 带回显式目标：直转失败的重试仍走轨道 A，不改走模型
+      // Keep the explicit target so a direct retry stays on track A instead of going through the model.
       const settled = track(runCommandPipeline({
         commandId,
         clientId: existing.clientId,
@@ -1334,7 +1321,7 @@ export function createRouterDispatcher(options: RouterDispatcherOptions): Router
         waiter.reject(new LedgerRequestError("conflict", "总助分派引擎已关闭"));
       }
       for (const st of activeStates.values()) st.abort("守护进程正在关闭，总助规划中断，可点击重试");
-      // 在途管线各自会打断并结束临时会话、写好指令状态；限时等，不留悬空 Promise 和计时器
+      // Each pipeline interrupts its own session and writes its status; wait with a limit so no promise or timer dangles.
       if (runningPipelines.size > 0) {
         await within(Promise.allSettled([...runningPipelines]), ROUTER_CLOSE_GRACE_MS);
       }

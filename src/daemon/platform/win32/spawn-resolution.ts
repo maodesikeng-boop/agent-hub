@@ -30,7 +30,6 @@ export interface ResolvedSpawn {
   file: string;
   args: string[];
   options: NodeSpawnOptions;
-  /** Set when falling back to cmd.exe with a pre-escaped command tail (`fusa-run --raw-tail`). */
   rawCmdTail?: string;
 }
 
@@ -47,14 +46,7 @@ function resolveComSpec(env: NodeJS.ProcessEnv): string {
   return win32.join(sysRoot, "System32", "cmd.exe");
 }
 
-/**
- * Host-independent spawn resolution:
- * - Always sets `shell: false` (never spawns through implicit shell);
- * - Always sets `windowsHide: true`;
- * - Rejects `.ps1` scripts explicitly;
- * - Resolves known npm/pnpm `.cmd` shims directly to `node.exe + script` or native `.exe`;
- * - Falls back to `%ComSpec% /d /v:off /s /c "..."` with `windowsVerbatimArguments: true` and CR/LF rejection.
- */
+/** Never spawn through an implicit shell; .ps1 is rejected and known npm or pnpm .cmd shims resolve to their real targets. */
 export function resolveSpawn(
   spec: ProcessSpawnSpec,
   platform: NodeJS.Platform = process.platform,
@@ -106,10 +98,7 @@ export function resolveSpawn(
   };
 }
 
-/**
- * Prepends `prependDir` (e.g. `run/bin` for `hub`) onto `PATH` using the target platform's delimiter,
- * deduplicating case-variant `Path`/`PATH` keys on Windows so child processes never see two PATH entries.
- */
+/** Windows env keys are case-insensitive, so Path and PATH are merged to keep a single entry. */
 export function mergePathPrependedEnv(
   env: Record<string, string | undefined>,
   prependDir: string,

@@ -1,7 +1,3 @@
-// 受管厂商密钥存储 `<stateDir>/provider-secrets.json`（docs/providers-install-login-design.md 第 4.2、8.1.2 节）：
-// - 强制 0600 原子替换，有界 64 KiB 读取；
-// - 在 state/ 里：Worker（普通、只读）按数据目录读边界禁读，sent-files 也不分享数据目录里的这类文件；
-// - 按文件 stat 实时感知外部修改/删除，提供不含明文的哈希修订指纹触发模型目录即时重算。
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname } from "node:path";
@@ -134,7 +130,6 @@ export function createManagedProviderSecrets(
       try {
         chmodSync(filePath, 0o600);
       } catch {
-        // ignore chmod errors on special filesystems
       }
     }
     refreshDigests();

@@ -1,7 +1,4 @@
-// Windows MXC ProcessContainer 进程流式桥接启动器：
-// 由 `wrapReadonlyWithWin32Mxc` 通过 `node.exe mxc-runner.ts --config-base64 <...>`（或 `--config-file`）拉起；
-// 自身运行在 `fusa-run.exe` 的 kill-on-close Job 内，按需动态引入 `@microsoft/mxc-sdk/v1` 的 `spawn()`，
-// 转发标准输入输出与中断信号，并在 `HUB_SOCK` 为命名管道时建立单会话 127.0.0.1 回环桥接供容器内 `hub.exe` 通信。
+// Runs inside fusa-run's kill-on-close Job and bridges the MXC container's stdio to the parent.
 import { readFileSync, realpathSync, statSync, unlinkSync } from "node:fs";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { fileURLToPath } from "node:url";
@@ -39,7 +36,6 @@ export function parseMxcRunnerCliArgs(argv: readonly string[]): MxcRunnerConfig 
       try {
         unlinkSync(val);
       } catch {
-        // 已清理或不存在时忽略
       }
     }
   } else {
@@ -215,7 +211,6 @@ async function runMain(argv: readonly string[]): Promise<number> {
       try {
         proc?.kill();
       } catch {
-        // 容器已退出时忽略
       }
     };
     process.on("SIGINT", onStopSignal);
@@ -235,7 +230,6 @@ async function runMain(argv: readonly string[]): Promise<number> {
     try {
       proc?.dispose();
     } catch {
-      // 释放异常忽略
     }
     if (hubBridge) {
       await hubBridge.close();

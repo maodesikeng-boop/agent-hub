@@ -1,4 +1,3 @@
-// 数据库行 ↔ src/shared 的形状（驼峰 ↔ 下划线、JSON、布尔）。
 import { isJellyColorId, isPmFruit } from "../../shared/slimes.ts";
 import type {
   Conversation,
@@ -24,10 +23,6 @@ import { parseReviewTarget } from "../../shared/review.ts";
 import type { ScheduleKind, ScheduleRecord, ScheduleStatus } from "../../shared/schedule.ts";
 import type { AgentVendor } from "../../shared/vendors.ts";
 
-/**
- * 读项目经理一律用它（再接 WHERE、ORDER BY）：带上归档时间和换过的形象（pm_looks，没换过是 NULL）。
- * pms.avatar_file 从 0001 就有，一直没人写，不读。
- */
 export const PM_SELECT =
   "SELECT p.*, a.archived_at, l.fruit AS look_fruit, l.color AS look_color FROM pms p LEFT JOIN pm_archives a ON a.pm_id = p.id LEFT JOIN pm_looks l ON l.pm_id = p.id";
 
@@ -39,13 +34,10 @@ export interface PmDbRow {
   persona_file: string | null;
   vendor: string;
   effort: string | null;
-  /** 性格设定正文，以它为准；M1 升上来的是 NULL。 */
   persona: string | null;
-  /** 上次成功写入性格设定文件的内容哈希。只有账本用，不进 Pm。 */
   persona_file_hash: string | null;
   created_at: number;
   archived_at?: number | null;
-  /** pm_looks 的造型、颜色（PM_SELECT 带出来）；没换过、或不是用 PM_SELECT 读的是 NULL / 没有。 */
   look_fruit?: string | null;
   look_color?: string | null;
 }
@@ -57,7 +49,6 @@ export interface ProjectDbRow {
   status: string;
   pm_id: number;
   conversation_id: number;
-  /** worktree 准备命令（0005）；NULL = 没配。 */
   setup_command: string | null;
   created_at: number;
   updated_at: number;
@@ -99,7 +90,6 @@ export interface ConversationDbRow {
   project_id: number | null;
   title: string;
   created_at: number;
-  /** 只有快照的查询 LEFT JOIN conversation_purges 带上这一列（没清过是 null）。 */
   purged_at?: number | null;
 }
 
@@ -170,7 +160,6 @@ export function toPm(row: PmDbRow): Pm {
   return {
     id: row.id,
     name: row.name,
-    // 别的版本写进来的、名录里没有的值当默认（shared/slimes.ts 的 resolvePmLook 也会兜底）
     avatarFruit: isPmFruit(row.look_fruit) ? row.look_fruit : null,
     avatarColor: isJellyColorId(row.look_color) ? row.look_color : null,
     mode: row.mode as PmMode,
@@ -191,15 +180,11 @@ export function toConversation(row: ConversationDbRow): Conversation {
     projectId: row.project_id,
     title: row.title,
     createdAt: row.created_at,
-    // 只有被保留期清理过的 Worker 对话才带这一项（没清过不带，省得改老数据和测试里的对话对象）
     ...(row.purged_at != null ? { purgedAt: row.purged_at } : {}),
   };
 }
 
-/**
- * 给网页的消息列（快照、往上翻页）：工具调用的 meta.input 在 SQLite 里就去掉，不把可能几百 KB 的文件内容读进 JS 再解析、丢掉。
- * parseMessageMeta 照样兜底去 input。text 换成 '' 时只给算窗口用（ledger/snapshot.ts），不能发出去。
- */
+/** Strip tool-call meta.input inside SQLite so large file contents are never read into JS. */
 const messageColumns = (text: "text" | "''") =>
   `id, conversation_id, session_id, worker_id, sender, kind, ${text} AS text,
    CASE WHEN kind = 'tool' THEN json_remove(meta, '$.input') ELSE meta END AS meta,
@@ -210,7 +195,6 @@ export const MESSAGE_SHAPE_COLUMNS = messageColumns("''");
 export function parseMessageMeta(kind: string, raw: string | null): Record<string, unknown> | null {
   if (raw === null) return null;
   const parsed = JSON.parse(raw) as Record<string, unknown>;
-  // 工具调用的摘要已在 text 里（summarizeToolCall），网页端不读 meta.input（Write/Edit 等可能带整份文件内容），对外消息去掉 input 免得撑爆快照。
   if (kind === "tool" && "input" in parsed) {
     const { input: _input, ...rest } = parsed;
     return rest;
