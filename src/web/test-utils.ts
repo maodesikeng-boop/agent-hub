@@ -4,15 +4,23 @@ import {
   AGENT_VENDORS,
   API_PATHS,
   DEFAULT_AGENT_VENDOR,
+  applyCapabilitiesPatch,
+  defaultCapabilityPolicy,
   emptyRouterSlice,
   isQuietMessage,
   serverInfoFor,
   vendorLabel,
+  vendorSpec,
 } from "../shared/index.ts";
 import type {
   AddScheduleRequest,
   AgentVendor,
   Attachment,
+  CapabilitiesPatch,
+  CapabilitiesView,
+  CapabilityInventory,
+  CapabilityPolicy,
+  CapabilityScope,
   ScheduleRecord,
   Change,
   Conversation,
@@ -46,6 +54,7 @@ import type {
   ProviderSubmitAuthRequest,
   ProvidersStatusResponse,
   PutPmMemoryFileRequest,
+  PutProjectSetupCommandRequest,
   RecheckUserBlockerResponse,
   ResolveRouterItemRequest,
   RouterItemsPage,
@@ -292,6 +301,44 @@ export function makeSnapshot(over: Partial<StateSnapshot> = {}): StateSnapshot {
   };
 }
 
+/** 小而全的能力清单：MCP（全局 + 插件）、技能（项目 + 全局）、连接器（账号）各有一组。 */
+export function makeCapabilityInventory(over: Partial<CapabilityInventory> = {}): CapabilityInventory {
+  const vendor = DEFAULT_AGENT_VENDOR;
+  const gmail = `connector:${vendor}:gmail`;
+  return {
+    scannedAt: 1_000,
+    truncated: false,
+    items: [
+      { key: "mcp:playwright", kind: "mcp", name: "playwright", description: null, groupId: "mcp:global", vendors: [vendor] },
+      { key: "mcp:linear", kind: "mcp", name: "linear", description: null, groupId: "mcp:global", vendors: [vendor] },
+      { key: "mcp:plugin:design:figma", kind: "mcp", name: "plugin:design:figma", description: null, groupId: `mcp:plugin:${vendor}:design`, vendors: [vendor] },
+      { key: "skill:frontend-rules", kind: "skill", name: "frontend-rules", description: "Rules for UI work", groupId: "skill:project:demo", vendors: [vendor] },
+      { key: "skill:verify", kind: "skill", name: "verify", description: "Run the local smoke check", groupId: "skill:global", vendors: [vendor] },
+      { key: "skill:unslop", kind: "skill", name: "unslop", description: "Remove AI filler", groupId: "skill:global", vendors: [vendor] },
+      { key: gmail, kind: "connector", name: "Gmail", description: null, groupId: `connector:account:${vendor}`, vendors: [vendor] },
+    ],
+    groups: [
+      { id: "mcp:global", kind: "mcp", label: "Global", source: { kind: "global" }, itemKeys: ["mcp:playwright", "mcp:linear"] },
+      { id: `mcp:plugin:${vendor}:design`, kind: "mcp", label: "design", source: { kind: "plugin", vendor, plugin: "design@synced" }, itemKeys: ["mcp:plugin:design:figma"] },
+      { id: "skill:global", kind: "skill", label: "Global", source: { kind: "global" }, itemKeys: ["skill:verify", "skill:unslop"] },
+      { id: "skill:project:demo", kind: "skill", label: "demo", source: { kind: "project", projectLabel: "demo" }, itemKeys: ["skill:frontend-rules"] },
+      { id: `connector:account:${vendor}`, kind: "connector", label: vendorLabel(vendor), source: { kind: "account", vendor }, itemKeys: [gmail] },
+    ],
+    ...over,
+  };
+}
+
+/** 跟真接口一样带上各家的隔离粒度（vendorSpec 里声明的）。 */
+export function makeCapabilitiesView(scope: CapabilityScope, policy: CapabilityPolicy = defaultCapabilityPolicy(scope.kind), inventory: CapabilityInventory = makeCapabilityInventory()): CapabilitiesView {
+  return {
+    scope,
+    inventory,
+    policy,
+    isolation: Object.fromEntries(AGENT_VENDORS.map((v) => [v, vendorSpec(v).capabilities.isolation])),
+    pluginIsolation: Object.fromEntries(AGENT_VENDORS.flatMap((v) => (vendorSpec(v).capabilities.pluginIsolation === undefined ? [] : [[v, vendorSpec(v).capabilities.pluginIsolation]]))),
+  };
+}
+
 // ---- 假 fetch ----
 
 export interface RecordedCall {
@@ -395,6 +442,28 @@ export class FakeApi {
   unarchivePm: (pmId: number) => Reply | Promise<Reply> = (pmId) => ({
     status: 200,
     body: { pm: makePm({ id: pmId, archivedAt: null }) },
+  });
+  /** 能力开关按范围（router / pm:<编号>）记在这里，PATCH 之后再 GET 拿到的是改过的。 */
+  capabilityPolicies = new Map<string, CapabilityPolicy>();
+  capabilityInventory: CapabilityInventory = makeCapabilityInventory();
+  private policyOf(scope: CapabilityScope): CapabilityPolicy {
+    return this.capabilityPolicies.get(scope.kind === "router" ? "router" : `pm:${scope.pmId}`) ?? defaultCapabilityPolicy(scope.kind);
+  }
+  /** GET /api/router/capabilities、/api/pms/:id/capabilities（refresh 为 ?refresh=1）。 */
+  getCapabilities: (scope: CapabilityScope, refresh: boolean) => Reply | Promise<Reply> = (scope) => ({
+    status: 200,
+    body: makeCapabilitiesView(scope, this.policyOf(scope), this.capabilityInventory),
+  });
+  /** PATCH 同上两个路径。默认：照共享的 applyCapabilitiesPatch 改好记下。 */
+  patchCapabilities: (scope: CapabilityScope, body: CapabilitiesPatch) => Reply | Promise<Reply> = (scope, body) => {
+    const next = applyCapabilitiesPatch(this.policyOf(scope), body);
+    this.capabilityPolicies.set(scope.kind === "router" ? "router" : `pm:${scope.pmId}`, next);
+    return { status: 200, body: makeCapabilitiesView(scope, next, this.capabilityInventory) };
+  };
+  /** PUT /api/projects/:id/setup-command。默认：照收到的命令改好返回。 */
+  putSetupCommand: (projectId: number, body: PutProjectSetupCommandRequest) => Reply | Promise<Reply> = (projectId, body) => ({
+    status: 200,
+    body: { project: makeProject({ id: projectId, setupCommand: body.command, updatedAt: 2_000 }) },
   });
   /** GET /api/auth/status。 */
   authStatus: () => Reply | Promise<Reply> = () => ({ status: 200, body: { status: "active" } });
@@ -982,6 +1051,14 @@ export class FakeApi {
     }
     if (method === "POST" && url.pathname === "/api/pick-folder") return jsonResponse(await this.pickFolder(body));
     if (method === "POST" && url.pathname === "/api/pms") return jsonResponse(await this.createPm(body));
+    const capabilities = /^\/api\/(?:router|pms\/(\d+))\/capabilities$/.exec(url.pathname);
+    if (capabilities) {
+      const scope: CapabilityScope = capabilities[1] === undefined ? { kind: "router" } : { kind: "pm", pmId: Number(capabilities[1]) };
+      if (method === "GET") return jsonResponse(await this.getCapabilities(scope, url.searchParams.get("refresh") === "1"));
+      if (method === "PATCH") return jsonResponse(await this.patchCapabilities(scope, body));
+    }
+    const setupCommand = /^\/api\/projects\/(\d+)\/setup-command$/.exec(url.pathname);
+    if (setupCommand && method === "PUT") return jsonResponse(await this.putSetupCommand(Number(setupCommand[1]), body));
     const persona = /^\/api\/pms\/(\d+)\/persona$/.exec(url.pathname);
     if (persona && method === "GET") return jsonResponse(await this.getPersona(Number(persona[1])));
     if (persona && method === "PUT") return jsonResponse(await this.putPersona(Number(persona[1]), body));

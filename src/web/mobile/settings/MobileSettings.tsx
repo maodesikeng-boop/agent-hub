@@ -1,5 +1,6 @@
 import { Activity, memo, type ReactNode } from "react";
-import { ArrowLeftRight, Bell, Blocks, Loader2, Monitor, QrCode, Smartphone, Type } from "../../ui/icons.ts";
+import { ArrowLeftRight, Bell, Blocks, Cable, Loader2, Monitor, QrCode, Smartphone, Type } from "../../ui/icons.ts";
+import { CapabilitiesSettings } from "../../components/CapabilitiesSettings.tsx";
 import { SettingsGroup } from "../../components/SettingsList.tsx";
 import { LOCAL_DEVICE, type DeviceKey } from "../../devices.ts";
 import type { NotifySettings } from "../../notify.ts";
@@ -68,6 +69,7 @@ const SUBPAGES: Record<SettingsSection, SubpageSpec> = {
     render: (ctx) => <VendorSyncPage vendor={ctx.vendor} />,
     footer: (ctx) => (ctx.vendor.preview === null ? null : <VendorSyncFooter vendor={ctx.vendor} />),
   },
+  capabilities: { title: "Capabilities", render: () => <CapabilitiesSettings /> },
   computers: { title: "Computers", render: (ctx) => withDevices(ctx, (devices) => <ComputersPage devices={devices} />) },
   "sign-in": { title: "Sign in on another device", render: () => <SignInPage /> },
   browsers: { title: "Signed-in browsers", render: (ctx) => <BrowsersPage {...(ctx.onSignedOut !== undefined ? { onSignedOut: ctx.onSignedOut } : {})} /> },
@@ -110,6 +112,9 @@ function SettingsHome({
           {...(vendorSynced ? { summary: "Synced" } : {})}
           onClick={() => onOpen("vendor-sync")}
         />
+      </SettingsGroup>
+      <SettingsGroup title="Capabilities">
+        <SettingsNavRow icon={<Cable aria-hidden="true" />} label="Capabilities" onClick={() => onOpen("capabilities")} />
       </SettingsGroup>
       {devices !== null && (
         <SettingsGroup title="Computers">

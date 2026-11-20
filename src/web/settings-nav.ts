@@ -13,12 +13,14 @@ export interface DesktopSettingsTarget {
 export function desktopSectionOf(section: SettingsSection, managed: boolean): SettingsDialogSection {
   if (section === "scale" || section === "notifications") return "general";
   if (section === "providers" || section === "vendor-sync") return "providers";
+  if (section === "capabilities") return "capabilities";
   if (section === "computers") return managed ? "computers" : "general";
   return "security";
 }
 
 interface SettingsNavOptions {
   autoSelect: boolean;
+  managed: boolean;
   currentKey: DeviceKey;
   route: Route | null;
   navigate: (next: Route, sibling?: boolean) => void;
@@ -26,7 +28,7 @@ interface SettingsNavOptions {
   setCreating: (creating: boolean) => void;
 }
 
-export function useSettingsNav({ autoSelect, currentKey, route, navigate, replace, setCreating }: SettingsNavOptions) {
+export function useSettingsNav({ autoSelect, managed, currentKey, route, navigate, replace, setCreating }: SettingsNavOptions) {
   const [desktop, setDesktop] = useState<DesktopSettingsTarget>({ open: false });
   const [mobileProviderDevice, setMobileProviderDevice] = useState<DeviceKey | undefined>(undefined);
   const onSettingsOpenChange = useCallback((open: boolean) => setDesktop({ open }), []);
@@ -34,7 +36,10 @@ export function useSettingsNav({ autoSelect, currentKey, route, navigate, replac
     setMobileProviderDevice(currentKey);
     navigate({ view: "settings" });
   }, [currentKey, navigate]);
-  const openSettingsSection = useCallback((section: SettingsSection) => navigate({ view: "settings", section }), [navigate]);
+  const openSettingsSection = useCallback(
+    (section: SettingsSection) => (autoSelect ? setDesktop({ open: true, section: desktopSectionOf(section, managed) }) : navigate({ view: "settings", section })),
+    [autoSelect, managed, navigate],
+  );
   const openManageProviders = useCallback(
     (targetDevice: DeviceKey = currentKey) => {
       setCreating(false);

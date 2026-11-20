@@ -28,7 +28,7 @@ import {
 } from "../../shared/index.ts";
 import { ApiError } from "../client.ts";
 import { useClient } from "../device-scope.tsx";
-import { ACTOR_LABELS, DEFAULT_CHOICE, MODE_LABELS, errorLine, errorText, errorTitle, formatArchiveRemaining, formatTime, shortPath, type ErrorInfo, type ErrorLike } from "../format.ts";
+import { ACTOR_LABELS, DEFAULT_CHOICE, MODE_LABELS, errorLine, errorText, errorTitle, formatArchiveRemaining, formatTime, type ErrorInfo, type ErrorLike } from "../format.ts";
 import { useHubQueryClient } from "../query-client.ts";
 import { Button } from "../ui/button.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
@@ -37,6 +37,8 @@ import { Textarea } from "../ui/input.tsx";
 import { useModelCatalog } from "../models.tsx";
 import { AgentRows, draftOf, settingOf, type AgentDraft, type AgentRowKey } from "./AgentRows.tsx";
 import { Avatar } from "./Avatar.tsx";
+import { CapabilitiesEntry } from "./CapabilitiesSettings.tsx";
+import { FoldersGroup, WorktreeSetupGroup } from "./ProjectGroups.tsx";
 import { SlimePicker } from "./SlimePicker.tsx";
 import { resolvePmLook, type SlimeLook } from "../../shared/slimes.ts";
 import { ModeRows } from "./ModeRows.tsx";
@@ -136,10 +138,6 @@ function ChangeRow({ change, revertable, busy, onRevert }: { change: PersonaChan
       )}
     </li>
   );
-}
-
-function folderName(path: string): string {
-  return path.replace(/\/+$/, "").split("/").pop() || path;
 }
 
 function sameSetting(a: AgentSetting, b: AgentSetting): boolean {
@@ -382,24 +380,6 @@ function AgentGroup({
   );
 }
 
-function FoldersGroup({ folders }: { folders: ProjectFolder[] }) {
-  return (
-    <SettingsGroup title="Folders">
-      <ul aria-label="Folders" className="divide-y divide-border">
-        {folders.map((f) => (
-          <li key={f.id} title={f.path} className="flex min-h-14 items-center gap-4 px-4 py-3">
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-body">{folderName(f.path)}</div>
-              <div className="truncate text-minor leading-snug text-muted-foreground">{shortPath(f.path)}</div>
-            </div>
-            {f.isMain && <span className="shrink-0 text-xs text-muted-foreground">Main folder</span>}
-          </li>
-        ))}
-      </ul>
-    </SettingsGroup>
-  );
-}
-
 function PersonaGroup({ persona }: { persona: ReturnType<typeof usePersonaText> }) {
   const { text, tooLong, textError, busy } = persona;
   const hint = personaLoadHint(text);
@@ -475,18 +455,22 @@ function HistoryGroup({
 
 function PmEditor({
   pm,
+  project,
   folders,
   schedules,
   persona,
   onUpdate,
   onManageProviders,
+  onOpenCapabilities,
 }: {
   pm: Pm;
+  project: Project | null;
   folders: ProjectFolder[];
   schedules: ScheduleRecord[];
   persona: PersonaView;
   onUpdate: (p: PersonaView) => void;
   onManageProviders?: () => void;
+  onOpenCapabilities?: () => void;
 }) {
   const aliveRef = useAliveRef();
   const agent = useAgentEditor(pm.id, persona, onUpdate, aliveRef);
@@ -514,7 +498,9 @@ function PmEditor({
           </div>
         )}
       </SettingsGroup>
+      {onOpenCapabilities !== undefined && pm.archivedAt == null && <CapabilitiesEntry pmId={pm.id} onOpen={onOpenCapabilities} />}
       {folders.length > 0 && <FoldersGroup folders={folders} />}
+      {project !== null && <WorktreeSetupGroup project={project} readOnly={pm.archivedAt != null} />}
       <ScheduleGroup pmId={pm.id} schedules={schedules} />
       <PersonaGroup persona={text} />
       <PmMemoryFilesGroup key={pm.id} pmId={pm.id} archived={pm.archivedAt != null} />
@@ -697,6 +683,7 @@ export function PmProfile({
   renewing,
   onBack,
   onManageProviders,
+  onOpenCapabilities,
 }: {
   pm: Pm;
   project: Project | null;
@@ -706,6 +693,7 @@ export function PmProfile({
   renewing: boolean;
   onBack: () => void;
   onManageProviders?: () => void;
+  onOpenCapabilities?: () => void;
 }) {
   const { load, retry, set } = usePersona(pm.id, rev);
   const label = `${pm.name}'s profile`;
@@ -765,11 +753,13 @@ export function PmProfile({
             <PmEditor
               key={pm.id}
               pm={pm}
+              project={project}
               folders={folders}
               schedules={schedules}
               persona={load.persona}
               onUpdate={set}
               {...(onManageProviders !== undefined ? { onManageProviders } : {})}
+              {...(onOpenCapabilities !== undefined ? { onOpenCapabilities } : {})}
             />
           )}
           {load.phase === "ready" && pm.archivedAt == null && (

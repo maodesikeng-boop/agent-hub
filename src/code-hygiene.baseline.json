@@ -15,7 +15,7 @@
     "src/shared/slimes.ts": 785,
     "src/web/components/Messages.tsx": 935,
     "src/web/components/PeelTrack.tsx": 1102,
-    "src/web/components/PmProfile.tsx": 782,
+    "src/web/components/PmProfile.tsx": 772,
     "src/web/components/ProvidersSettings.tsx": 1176,
     "src/web/components/RouterStream.tsx": 1005,
     "src/web/selectors.ts": 1237,

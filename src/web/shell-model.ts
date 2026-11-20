@@ -116,7 +116,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const drafts = useDraftStore<string>();
   const staging = useStagingStore<string>();
   const [creating, setCreating] = useState(false);
-  const nav = useSettingsNav({ autoSelect, currentKey: current.key, route, navigate, replace, setCreating });
+  const nav = useSettingsNav({ autoSelect, managed: fleet.managed, currentKey: current.key, route, navigate, replace, setCreating });
   const [providersGuided, setProvidersGuided] = useState(loadProvidersGuided);
   const [railClosed, setRailClosed] = useState(loadRailClosed);
   const [compactRailOpen, setCompactRailOpen] = useState(false);
