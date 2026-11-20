@@ -764,6 +764,100 @@ export function createLedgerRouter(
     };
   };
 
+  const digestActiveWorkers = (
+    conversationId: number | null,
+    openWorkers: ReadonlyArray<{ id: number; title: string; readonly: number; worker_conversation_id: number }>,
+  ): PmDigestActiveWorker[] =>
+    openWorkers.slice(0, ROUTER_PM_ACTIVE_WORKERS_MAX).map((w) => {
+      const ws = sessions.currentSession(w.worker_conversation_id);
+      const wAct = ws === null ? "idle" : sessions.liveOf(ws.id).activity;
+      const lastLine =
+        conversationId === null
+          ? undefined
+          : db.get<{ summary: string | null }>(
+              `SELECT CASE WHEN json_valid(meta) THEN json_extract(meta, '$.summary') END AS summary
+                 FROM messages
+                WHERE conversation_id = ? AND kind = 'worker' AND worker_id = ?
+                ORDER BY id DESC LIMIT 1`,
+              conversationId,
+              w.id,
+            );
+      return {
+        id: w.id,
+        title: w.title,
+        activity: wAct,
+        readonly: w.readonly === 1,
+        lastSummary: lastLine?.summary ? sliceChars(lastLine.summary, ROUTER_PM_BRIEF_MAX_CHARS) : null,
+      };
+    });
+
+  const digestEntryOf = (pm: PmDbRow, pendingDecisionCount: number): PmDigestEntry => {
+    const projRow = activeProjectOf(pm.id);
+    const card = projRow === null ? null : projectCard(projRow);
+    const conv = privateConversation(pm.id);
+    const pmSess = conv === null ? null : sessions.currentSession(conv.id);
+    const activity = pmSess === null ? "idle" : sessions.liveOf(pmSess.id).activity;
+
+    const openWorkers = db.all<{
+      id: number;
+      title: string;
+      readonly: number;
+      worker_conversation_id: number;
+    }>("SELECT id, title, readonly, worker_conversation_id FROM workers WHERE pm_id = ? AND status = 'open' ORDER BY id DESC", pm.id);
+    const activeWorkers = digestActiveWorkers(conv === null ? null : conv.id, openWorkers);
+
+    const latestReport = db.get<{ summary: string; created_at: number }>(
+      `SELECT summary, created_at FROM router_items
+        WHERE pm_id = ? AND kind = 'report'
+        ORDER BY created_at DESC, id DESC LIMIT 1`,
+      pm.id,
+    );
+    const latestMsg =
+      conv === null
+        ? undefined
+        : db.get<{ text: string; created_at: number }>(
+            `SELECT text, created_at FROM messages
+              WHERE conversation_id = ? AND sender = 'agent' AND kind = 'text'
+              ORDER BY id DESC LIMIT 1`,
+            conv.id,
+          );
+
+    const briefSource = latestReport?.summary ?? latestMsg?.text ?? null;
+    const recentBrief =
+      briefSource !== null && briefSource.trim() !== "" ? sliceChars(briefSource.replace(/\s+/g, " ").trim(), ROUTER_PM_BRIEF_MAX_CHARS) : null;
+
+    const timestamps = [pmSess?.lastEventAt ?? 0, latestMsg?.created_at ?? 0, latestReport?.created_at ?? 0].filter((x) => x > 0);
+    const lastActiveAt = timestamps.length > 0 ? Math.max(...timestamps) : null;
+
+    return {
+      pmId: pm.id,
+      name: pm.name,
+      mode: pm.mode as PmMode,
+      vendor: pm.vendor as AgentVendor,
+      model: pm.default_model,
+      ...(conv !== null ? { conversationId: conv.id } : {}),
+      activity,
+      project:
+        projRow === null || card === null
+          ? null
+          : {
+              id: projRow.id,
+              name: card.name,
+              description: projRow.description,
+              mainFolder: card.mainFolder,
+              otherFolders: card.otherFolders,
+              catalog: catalogCardOf(projRow.id),
+            },
+      activeWorkers,
+      activeWorkerTotal: openWorkers.length,
+      pendingDecisionCount,
+      recentBrief,
+      lastActiveAt,
+    };
+  };
+
+  const countByPm = (sql: string): Map<number, number> => new Map(db.all<{ pm_id: number; n: number }>(sql).map((r) => [r.pm_id, r.n]));
+
   const getDigest = (): DeviceRouterDigest => {
     const gen = ctx.writeGeneration();
     if (digestCache !== null && digestCache.generation === gen) {
@@ -776,116 +870,16 @@ export function createLedgerRouter(
         WHERE a.pm_id IS NULL
         ORDER BY p.id`,
     );
-    const pendingItemsByPm = new Map<number, number>(
-      db
-        .all<{ pm_id: number; n: number }>(
-          "SELECT pm_id, count(*) AS n FROM router_items WHERE kind = 'decision' AND status = 'pending' GROUP BY pm_id",
-        )
-        .map((r) => [r.pm_id, r.n]),
-    );
-    const waitingGatesByPm = new Map<number, number>(
-      db
-        .all<{ pm_id: number; n: number }>(
-          `SELECT g.pm_id AS pm_id, count(*) AS n
-             FROM task_graph_steps n
-             JOIN task_graphs g ON g.id = n.graph_id
-            WHERE g.status = 'active' AND n.status = 'waiting' AND n.waiting_for = 'user' AND NOT EXISTS (SELECT 1 FROM user_blocker_steps s WHERE s.step_id = n.id)
-            GROUP BY g.pm_id`,
-        )
-        .map((r) => [r.pm_id, r.n]),
+    const pendingItemsByPm = countByPm("SELECT pm_id, count(*) AS n FROM router_items WHERE kind = 'decision' AND status = 'pending' GROUP BY pm_id");
+    const waitingGatesByPm = countByPm(
+      `SELECT g.pm_id AS pm_id, count(*) AS n
+         FROM task_graph_steps n
+         JOIN task_graphs g ON g.id = n.graph_id
+        WHERE g.status = 'active' AND n.status = 'waiting' AND n.waiting_for = 'user' AND NOT EXISTS (SELECT 1 FROM user_blocker_steps s WHERE s.step_id = n.id)
+        GROUP BY g.pm_id`,
     );
 
-    const entries: PmDigestEntry[] = activePms.map((pm) => {
-      const projRow = activeProjectOf(pm.id);
-      const card = projRow === null ? null : projectCard(projRow);
-      const conv = privateConversation(pm.id);
-      const pmSess = conv === null ? null : sessions.currentSession(conv.id);
-      const activity = pmSess === null ? "idle" : sessions.liveOf(pmSess.id).activity;
-
-      const openWorkers = db.all<{
-        id: number;
-        title: string;
-        readonly: number;
-        worker_conversation_id: number;
-      }>("SELECT id, title, readonly, worker_conversation_id FROM workers WHERE pm_id = ? AND status = 'open' ORDER BY id DESC", pm.id);
-
-      const activeWorkers: PmDigestActiveWorker[] = openWorkers
-        .slice(0, ROUTER_PM_ACTIVE_WORKERS_MAX)
-        .map((w) => {
-          const ws = sessions.currentSession(w.worker_conversation_id);
-          const wAct = ws === null ? "idle" : sessions.liveOf(ws.id).activity;
-          const lastLine =
-            conv === null
-              ? undefined
-              : db.get<{ summary: string | null }>(
-                  `SELECT CASE WHEN json_valid(meta) THEN json_extract(meta, '$.summary') END AS summary
-                     FROM messages
-                    WHERE conversation_id = ? AND kind = 'worker' AND worker_id = ?
-                    ORDER BY id DESC LIMIT 1`,
-                  conv.id,
-                  w.id,
-                );
-          return {
-            id: w.id,
-            title: w.title,
-            activity: wAct,
-            readonly: w.readonly === 1,
-            lastSummary: lastLine?.summary ? sliceChars(lastLine.summary, ROUTER_PM_BRIEF_MAX_CHARS) : null,
-          };
-        });
-
-      const latestReport = db.get<{ summary: string; created_at: number }>(
-        `SELECT summary, created_at FROM router_items
-          WHERE pm_id = ? AND kind = 'report'
-          ORDER BY created_at DESC, id DESC LIMIT 1`,
-        pm.id,
-      );
-      const latestMsg =
-        conv === null
-          ? undefined
-          : db.get<{ text: string; created_at: number }>(
-              `SELECT text, created_at FROM messages
-                WHERE conversation_id = ? AND sender = 'agent' AND kind = 'text'
-                ORDER BY id DESC LIMIT 1`,
-              conv.id,
-            );
-
-      const briefSource = latestReport?.summary ?? latestMsg?.text ?? null;
-      const recentBrief =
-        briefSource !== null && briefSource.trim() !== ""
-          ? sliceChars(briefSource.replace(/\s+/g, " ").trim(), ROUTER_PM_BRIEF_MAX_CHARS)
-          : null;
-
-      const timestamps = [pmSess?.lastEventAt ?? 0, latestMsg?.created_at ?? 0, latestReport?.created_at ?? 0].filter((x) => x > 0);
-      const lastActiveAt = timestamps.length > 0 ? Math.max(...timestamps) : null;
-
-      return {
-        pmId: pm.id,
-        name: pm.name,
-        mode: pm.mode as PmMode,
-        vendor: pm.vendor as AgentVendor,
-        model: pm.default_model,
-        ...(conv !== null ? { conversationId: conv.id } : {}),
-        activity,
-        project:
-          projRow === null || card === null
-            ? null
-            : {
-                id: projRow.id,
-                name: card.name,
-                description: projRow.description,
-                mainFolder: card.mainFolder,
-                otherFolders: card.otherFolders,
-                catalog: catalogCardOf(projRow.id),
-              },
-        activeWorkers,
-        activeWorkerTotal: openWorkers.length,
-        pendingDecisionCount: (pendingItemsByPm.get(pm.id) ?? 0) + (waitingGatesByPm.get(pm.id) ?? 0),
-        recentBrief,
-        lastActiveAt,
-      };
-    });
-
+    const entries = activePms.map((pm) => digestEntryOf(pm, (pendingItemsByPm.get(pm.id) ?? 0) + (waitingGatesByPm.get(pm.id) ?? 0)));
     const digest = fitRouterDigest({ generatedAt: now(), pms: entries });
     digestCache = { generation: gen, digest };
     return digest;
