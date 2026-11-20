@@ -98,8 +98,10 @@ export const HUB_COMMAND_SPECS: readonly HubCommandSpec[] = [
     group: "worker",
     action: "start",
     cli: "worker start",
-    usage: `  ${hub} worker start --title <标题> [--vendor ${AGENT_VENDORS.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--max-time <时长>] [--readonly] [--no-worktree] [--node <节点> [--graph <图编号>]] --stdin
+    usage: `  ${hub} worker start --title <标题> [--vendor ${AGENT_VENDORS.join("|")}] [--model <模型>] [--effort ${ALL_EFFORTS.join("|")}] [--max-time <时长>] [--readonly] [--caps inherit|none|custom [--allow <能力>...]] [--no-worktree] [--node <节点> [--graph <图编号>]] --stdin
                                                           派一个 Worker，任务说明从标准输入读（--max-time 本轮最大容忍时间，默认 30m，超了叫醒项目经理、不打断 Worker；
+                                                          --caps 外接能力：inherit 照项目能力设置挂（默认），none 一个不带，custom 只挂 --allow 点名的
+                                                          skill:<名>、mcp:<名>、connector:<厂商>:<编号>（项目里关掉的点名了也挂不上）；读写文件、终端和 hub 永远都在；
                                                           --node 绑到任务图里的节点上，不带就是不绑图的临时 Worker）
   ${hub} worker start --node <节点> [--graph <图编号>] [--vendor …] [--model …] [--stdin]
                                                           换人接手：节点上已经有经手过的 Worker 时，--title 和正文都可以不给（正文给了是补充说明）；

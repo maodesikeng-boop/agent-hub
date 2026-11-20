@@ -458,7 +458,7 @@ export async function startDaemon(options: DaemonOptions): Promise<RunningDaemon
       basePath: () => vendorRuntime.effectivePath(),
       vendorAvailability: () => Object.fromEntries(AGENT_VENDORS.map((vendor) => [vendor, models.availability(vendor)])),
       routerPurposeOf: routerTurnPurposes.of,
-      getPmCapabilityPolicy: (pmId) => ledger.getPmCapabilityPolicy(pmId),
+      capabilityPolicies: ledger,
       capabilityInventory,
     });
     const personaNote = createPersonaNoter((sessionId, since) => ledger.personaUpdate(sessionId, since), paths.launchDir);

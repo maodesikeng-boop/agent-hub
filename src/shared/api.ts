@@ -56,6 +56,8 @@ export const API_PATHS = {
   persona: (pmId: PmId) => `/api/pms/${pmId}/persona`,
   pmLook: (pmId: PmId) => `/api/pms/${pmId}/look`,
   pmCapabilities: (pmId: PmId) => `/api/pms/${pmId}/capabilities`,
+  routerCapabilities: "/api/router/capabilities",
+  projectSetupCommand: (projectId: ProjectId) => `/api/projects/${projectId}/setup-command`,
   pmMemoryFiles: (pmId: PmId) => `/api/pms/${pmId}/memory-files`,
   pmMemoryFile: (pmId: PmId, name: string) => `/api/pms/${pmId}/memory-files/${encodeURIComponent(name)}`,
   revertPersonaChange: (changeId: PersonaChangeId) => `/api/persona-changes/${changeId}/revert`,
@@ -325,6 +327,14 @@ export interface PickFolderRequest {
   startDir?: string;
 }
 
+export interface PutProjectSetupCommandRequest {
+  command: string | null;
+}
+
+export interface PutProjectSetupCommandResponse {
+  project: Project;
+}
+
 export interface PickFolderResponse {
   path: string | null;
 }
@@ -338,6 +348,7 @@ export const CHANGE_TYPES = [
   "pm.updated",
   "pm.removed",
   "project.created",
+  "project.updated",
   "folders.updated",
   "conversation.created",
   "conversation.purged",
@@ -364,6 +375,7 @@ export interface ChangeDataMap {
   "pm.updated": { pm: Pm };
   "pm.removed": { pmId: PmId };
   "project.created": { project: Project };
+  "project.updated": { project: Project };
   "folders.updated": { projectId: ProjectId; folders: ProjectFolder[] };
   "conversation.created": { conversation: Conversation };
   "conversation.purged": { conversationId: ConversationId; purgedAt: number };

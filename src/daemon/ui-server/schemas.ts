@@ -23,15 +23,13 @@ import {
   isPmFruit,
   isValidCapabilityKey,
   normalizeName,
-  vendorSpec,
   type AgentVendor,
   type CapabilityBase,
-  type CapabilityIsolationMap,
   type CapabilityKind,
   type CreatePmRequest,
   type EditPersonaRequest,
   type JellyColorId,
-  type PmCapabilitiesPatch,
+  type CapabilitiesPatch,
   type PmFruit,
   type PmLookRequest,
   type WorkerPick,
@@ -91,7 +89,7 @@ export function parseCreatePmBody(body: unknown): CreatePmRequest {
 
 const capabilityBaseSchema = z.enum(["all", "none"]);
 
-const patchPmCapabilitiesBodySchema = z
+const capabilitiesPatchBodySchema = z
   .object({
     base: z
       .object({
@@ -120,8 +118,8 @@ const patchPmCapabilitiesBodySchema = z
     "at least one of base or set must be non-empty",
   );
 
-export function parsePatchPmCapabilitiesBody(body: unknown): PmCapabilitiesPatch {
-  const raw = parseWithSchema(patchPmCapabilitiesBodySchema, body);
+export function parseCapabilitiesPatchBody(body: unknown): CapabilitiesPatch {
+  const raw = parseWithSchema(capabilitiesPatchBodySchema, body);
   let base: Partial<Record<CapabilityKind, CapabilityBase>> | undefined;
   if (raw.base !== undefined) {
     base = {
@@ -136,18 +134,7 @@ export function parsePatchPmCapabilitiesBody(body: unknown): PmCapabilitiesPatch
   };
 }
 
-export function vendorIsolationMap(): Readonly<Partial<Record<AgentVendor, CapabilityIsolationMap>>> {
-  return Object.fromEntries(AGENT_VENDORS.map((v) => [v, vendorSpec(v).capabilities.isolation]));
-}
-
-export function vendorPluginIsolationMap(): Readonly<Partial<Record<AgentVendor, Partial<CapabilityIsolationMap>>>> {
-  return Object.fromEntries(
-    AGENT_VENDORS.flatMap((v) => {
-      const plugin = vendorSpec(v).capabilities.pluginIsolation;
-      return plugin === undefined ? [] : [[v, plugin]];
-    }),
-  );
-}
+export const putProjectSetupCommandBodySchema = z.object({ command: z.string().nullable() }).strict();
 
 const editPersonaBodySchema = z
   .object({

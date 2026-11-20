@@ -44,7 +44,6 @@ describe("createLedgerPmCapabilities", () => {
   it("没存过的项目经理三类都是 all，没有单独设置", () => {
     const pmId = insertPm("小林");
     expect(caps.get(pmId)).toEqual({
-      pmId,
       base: { skill: "all", mcp: "all", connector: "all" },
       overrides: {},
     });
@@ -58,7 +57,6 @@ describe("createLedgerPmCapabilities", () => {
       set: { "skill:aws-auth": false, "mcp:codegraph": true },
     });
     expect(patched).toEqual({
-      pmId,
       base: { skill: "all", mcp: "none", connector: "all" },
       overrides: { "skill:aws-auth": false, "mcp:codegraph": true },
     });
@@ -132,7 +130,6 @@ describe("createLedgerPmCapabilities", () => {
     const dstCopy = insertPm("复制PM");
     caps.init(dstCopy, { from: "pm", pmId: srcId });
     expect(caps.get(dstCopy)).toEqual({
-      pmId: dstCopy,
       base: { skill: "all", mcp: "all", connector: "none" },
       overrides: { "skill:aws-auth": false, "connector:claude:claude.ai Gmail": true },
     });
@@ -190,7 +187,6 @@ describe("createLedger 集成：createPm 复制、getPmCapabilityPolicy、patchP
       const src = ledger.createPm({ name: "源经理", mode: "manage_only", persona: "", folder: projDir });
       expect(ledger.pmProjectMainFolder(src.pm.id)).toBe(realProjDir);
       expect(ledger.getPmCapabilityPolicy(src.pm.id)).toEqual({
-        pmId: src.pm.id,
         base: { skill: "all", mcp: "all", connector: "all" },
         overrides: {},
       });
@@ -208,7 +204,6 @@ describe("createLedger 集成：createPm 复制、getPmCapabilityPolicy、patchP
       });
       expect(ledger.pmProjectMainFolder(copied.pm.id)).toBeNull();
       expect(ledger.getPmCapabilityPolicy(copied.pm.id)).toEqual({
-        pmId: copied.pm.id,
         base: { skill: "all", mcp: "none", connector: "all" },
         overrides: { "skill:aws-auth": false, "mcp:codegraph": true },
       });

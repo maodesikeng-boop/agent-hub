@@ -12,13 +12,13 @@ import {
   WORKER_BACKGROUND_HOLD_MAX_MS,
   applyCapabilitiesPatch,
   buildReadonlyPolicy,
-  defaultPmCapabilityPolicy,
+  defaultCapabilityPolicy,
   taskGraphSkillCatalogEntry,
   taskGraphSkillMarkdown,
   type AgentSessionRow,
   type CapabilityInventory,
   type LaunchContext,
-  type PmCapabilityPolicy,
+  type CapabilityPolicy,
 } from "../shared/index.ts";
 import { WORKER_ENV, buildSessionSettings, stateDirDenyRule } from "../vendors/claude/settings.ts";
 import { launchFingerprint } from "../shared/launch.ts";
@@ -445,6 +445,10 @@ describe("prepareLaunch（M2、M3）", () => {
   });
 
   describe("按项目经理收窄 Skill、MCP 与 Connector（LaunchFiles.capabilities）", () => {
+    const policies = (pm: () => CapabilityPolicy, router: () => CapabilityPolicy = () => defaultCapabilityPolicy("router")) => ({
+      getPmCapabilityPolicy: pm,
+      getRouterCapabilityPolicy: router,
+    });
     const sampleInventory: CapabilityInventory = {
       scannedAt: 1_000,
       items: [
@@ -478,7 +482,7 @@ describe("prepareLaunch（M2、M3）", () => {
       truncated: false,
     };
 
-    it("全开（defaultPmCapabilityPolicy）时 capabilities 为 undefined，设置文件和 fingerprint 与未接入时逐字一致", async () => {
+    it("全开（defaultCapabilityPolicy）时 capabilities 为 undefined，设置文件和 fingerprint 与未接入时逐字一致", async () => {
       const baseline = await make()(row(7));
       const withAllOpen = createLaunchPreparer({
         launchDir,
@@ -491,7 +495,7 @@ describe("prepareLaunch（M2、M3）", () => {
         hubSock,
         hubBinDir: "/agent-hub/run/bin",
         basePath: "/usr/bin:/bin",
-        getPmCapabilityPolicy: (pmId) => defaultPmCapabilityPolicy(pmId),
+        capabilityPolicies: policies(() => defaultCapabilityPolicy("pm")),
         capabilityInventory: { get: async () => sampleInventory },
       });
       const files = await withAllOpen(row(7));
@@ -500,8 +504,8 @@ describe("prepareLaunch（M2、M3）", () => {
       expect(files.fingerprint).toBe(baseline.fingerprint);
     });
 
-    it("PM 与名下普通、只读、审查 Worker 均继承该 PM 选择并计入 fingerprint；总助会话保持不受限", async () => {
-      let currentPolicy: PmCapabilityPolicy = applyCapabilitiesPatch(defaultPmCapabilityPolicy(1), {
+    it("PM 与名下普通、只读、审查 Worker 均继承该 PM 选择并计入 fingerprint；总助不跟项目走，默认一个不带", async () => {
+      let currentPolicy: CapabilityPolicy = applyCapabilitiesPatch(defaultCapabilityPolicy("pm"), {
         set: {
           "skill:aws-auth": false,
           "mcp:codegraph": false,
@@ -521,7 +525,7 @@ describe("prepareLaunch（M2、M3）", () => {
         hubSock,
         hubBinDir: "/agent-hub/run/bin",
         basePath: "/usr/bin:/bin",
-        getPmCapabilityPolicy: () => currentPolicy,
+        capabilityPolicies: policies(() => currentPolicy),
         capabilityInventory: {
           get: async ({ projectDir }) => {
             seenProjectDirs.push(projectDir);
@@ -571,20 +575,98 @@ describe("prepareLaunch（M2、M3）", () => {
         vendor: "claude",
       };
       const assistantFiles = await prepare(assistantRow);
-      expect(assistantFiles.capabilities).toBeUndefined();
+      expect(assistantFiles.capabilities?.deny).toEqual({
+        skills: ["aws-auth"],
+        mcp: ["codegraph"],
+        connectors: ["claude.ai Gmail"],
+        plugins: [],
+        pluginOf: { skills: {}, mcp: {} },
+      });
+      expect(assistantFiles.capabilities?.allow).toEqual({ skills: [], mcp: [] });
       const assistantSettings = JSON.parse(readFileSync(assistantFiles.settingsFile!, "utf8"));
-      expect(assistantSettings.skillOverrides).toBeUndefined();
-      expect(assistantSettings.deniedMcpServers).toBeUndefined();
+      expect(assistantSettings.skillOverrides).toEqual({ "aws-auth": "off" });
+      expect(assistantSettings.deniedMcpServers).toEqual([{ serverName: "claude.ai Gmail" }, { serverName: "codegraph" }]);
 
-      currentPolicy = defaultPmCapabilityPolicy(1);
+      currentPolicy = defaultCapabilityPolicy("pm");
       const workerAllOpen = await prepare({ ...row(9, dir, "worker"), vendor: "codex" });
       expect(workerAllOpen.capabilities).toBeUndefined();
       expect(workerAllOpen.fingerprint).not.toBe(workerRestricted.fingerprint);
-      expect(seenProjectDirs.every((p) => p === projectContext().project!.mainFolder)).toBe(true);
+      expect(new Set(seenProjectDirs)).toEqual(new Set([projectContext().project!.mainFolder, null]));
+    });
+
+    const preparerWith = (pm: () => CapabilityPolicy, router?: () => CapabilityPolicy, seen?: Array<string | null>) =>
+      createLaunchPreparer({
+        launchDir,
+        dataDir: dir,
+        stateDir: join(dir, "state"),
+        homeDir: "/Users/u",
+        osSandboxed: true,
+        worktreesDir,
+        getLaunchContext: (id) => contexts.get(id)!,
+        tokens,
+        hubSock,
+        hubBinDir: "/agent-hub/run/bin",
+        basePath: "/usr/bin:/bin",
+        capabilityPolicies: policies(pm, router),
+        capabilityInventory: {
+          get: async ({ projectDir }) => {
+            seen?.push(projectDir);
+            return sampleInventory;
+          },
+        },
+      });
+    const routerRow = (): AgentSessionRow => {
+      const routerHome = join(dir, "state", "router-home");
+      mkdirSync(routerHome, { recursive: true });
+      return { ...row(20, routerHome, "pm"), role: "assistant", conversationId: null, pmId: null, workerId: null, vendor: "codex" };
+    };
+
+    it("总助只挂用户在能力设置里打开的那几项，只看全局清单，改了设置 fingerprint 跟着变", async () => {
+      let routerPolicy = defaultCapabilityPolicy("router");
+      const seen: Array<string | null> = [];
+      const prepare = preparerWith(() => defaultCapabilityPolicy("pm"), () => routerPolicy, seen);
+      const zero = await prepare(routerRow());
+      expect(zero.capabilities?.allow).toEqual({ skills: [], mcp: [] });
+      expect(zero.capabilities?.deny.mcp).toEqual(["codegraph"]);
+      routerPolicy = applyCapabilitiesPatch(routerPolicy, { set: { "mcp:codegraph": true } });
+      const opened = await prepare(routerRow());
+      expect(opened.capabilities?.allow.mcp).toEqual(["codegraph"]);
+      expect(opened.capabilities?.deny).toMatchObject({ skills: ["aws-auth"], mcp: [] });
+      expect(opened.fingerprint).not.toBe(zero.fingerprint);
+      expect(seen).toEqual([null, null]);
+    });
+
+    it("Worker 三档：inherit 跟项目，none 一个不带，custom 只挂点名且项目里开着的", async () => {
+      const project = applyCapabilitiesPatch(defaultCapabilityPolicy("pm"), { set: { "skill:aws-auth": false } });
+      const prepare = preparerWith(() => project);
+      contexts.set(9, workerContext());
+      const inherit = await prepare({ ...row(9, dir, "worker"), vendor: "codex" });
+      expect(inherit.capabilities?.allow.mcp).toEqual(["codegraph"]);
+      contexts.set(9, { ...workerContext(), workerCapabilities: { mode: "none" } });
+      const none = await prepare({ ...row(9, dir, "worker"), vendor: "codex" });
+      expect(none.capabilities?.allow).toEqual({ skills: [], mcp: [] });
+      expect(none.capabilities?.deny.mcp).toEqual(["codegraph"]);
+      expect(none.fingerprint).not.toBe(inherit.fingerprint);
+      contexts.set(9, { ...workerContext(), workerCapabilities: { mode: "custom", allow: ["mcp:codegraph", "skill:aws-auth"] } });
+      const custom = await prepare({ ...row(9, dir, "worker"), vendor: "codex" });
+      expect(custom.capabilities?.allow).toEqual({ skills: [], mcp: ["codegraph"] });
+      expect(custom.capabilities?.deny.skills).toEqual(["aws-auth"]);
+    });
+
+    it("只读 Worker 点名挂了 MCP 也照样受只读策略和沙箱约束，不放宽", async () => {
+      const prepare = preparerWith(() => defaultCapabilityPolicy("pm"));
+      contexts.set(11, workerContext({ readonly: true }));
+      const plain = await prepare({ ...row(11, dir, "worker"), vendor: "codex" });
+      contexts.set(11, { ...workerContext({ readonly: true }), workerCapabilities: { mode: "custom", allow: ["mcp:codegraph"] } });
+      const custom = await prepare({ ...row(11, dir, "worker"), vendor: "codex" });
+      expect(custom.capabilities?.allow.mcp).toEqual(["codegraph"]);
+      expect(custom.readonly).toEqual(plain.readonly);
+      expect(custom.readonly).toBeDefined();
+      expect(custom.writeScope).toEqual(plain.writeScope);
     });
 
     it("fingerprint 只算各家翻出来的结果：多了一个开着的全局技能，claude、codex 不重启，靠允许清单的 pi 重启", async () => {
-      const policy = applyCapabilitiesPatch(defaultPmCapabilityPolicy(1), {
+      const policy = applyCapabilitiesPatch(defaultCapabilityPolicy("pm"), {
         set: { "skill:aws-auth": false, "mcp:codegraph": false },
       });
       let inventory = sampleInventory;
@@ -600,7 +682,7 @@ describe("prepareLaunch（M2、M3）", () => {
         hubSock,
         hubBinDir: "/agent-hub/run/bin",
         basePath: "/usr/bin:/bin",
-        getPmCapabilityPolicy: () => policy,
+        capabilityPolicies: policies(() => policy),
         capabilityInventory: { get: async () => inventory },
       });
       contexts.set(9, workerContext());

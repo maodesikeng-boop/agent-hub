@@ -1,4 +1,5 @@
-import type { PmId } from "./domain.ts";
+import { isOneOf, type PmId } from "./domain.ts";
+import { WORKER_CAPABILITY_ALLOW_MAX } from "./limits.ts";
 import type { AgentVendor } from "../vendors/registry.ts";
 
 export const CAPABILITY_KINDS = ["skill", "mcp", "connector"] as const;
@@ -42,11 +43,25 @@ export interface CapabilityInventory {
   truncated: boolean;
 }
 
-export interface PmCapabilityPolicy {
-  pmId: PmId;
-  base: Readonly<Record<CapabilityKind, CapabilityBase>>;
+type CapabilityBaseMap = Readonly<Record<CapabilityKind, CapabilityBase>>;
+
+const ALL_CAPABILITIES_BASE: CapabilityBaseMap = { skill: "all", mcp: "all", connector: "all" };
+const NO_CAPABILITIES_BASE: CapabilityBaseMap = { skill: "none", mcp: "none", connector: "none" };
+
+export interface CapabilityPolicy {
+  base: CapabilityBaseMap;
   overrides: Readonly<Record<CapabilityKey, boolean>>;
 }
+
+export type CapabilityScope = { kind: "router" } | { kind: "pm"; pmId: PmId };
+
+export const WORKER_CAPABILITY_MODES = ["inherit", "none", "custom"] as const;
+export type WorkerCapabilityMode = (typeof WORKER_CAPABILITY_MODES)[number];
+
+export type WorkerCapabilities =
+  | { mode: "inherit" }
+  | { mode: "none" }
+  | { mode: "custom"; allow: readonly CapabilityKey[] };
 
 export interface SkillRef {
   name: string;
@@ -70,15 +85,15 @@ export type CapabilityIsolationMap = Readonly<Record<CapabilityKind, CapabilityI
 
 export type PmCapabilitiesStart = { from: "all" } | { from: "pm"; pmId: PmId };
 
-export interface PmCapabilitiesView {
-  pmId: PmId;
+export interface CapabilitiesView {
+  scope: CapabilityScope;
   inventory: CapabilityInventory;
-  policy: PmCapabilityPolicy;
+  policy: CapabilityPolicy;
   isolation: Readonly<Partial<Record<AgentVendor, CapabilityIsolationMap>>>;
   pluginIsolation: Readonly<Partial<Record<AgentVendor, Partial<CapabilityIsolationMap>>>>;
 }
 
-export interface PmCapabilitiesPatch {
+export interface CapabilitiesPatch {
   base?: Partial<Record<CapabilityKind, CapabilityBase>>;
   set?: Readonly<Record<CapabilityKey, boolean | null>>;
 }
@@ -112,15 +127,12 @@ export function isValidCapabilityKey(key: string): boolean {
   }
 }
 
-export function defaultPmCapabilityPolicy(pmId: PmId): PmCapabilityPolicy {
-  return {
-    pmId,
-    base: { skill: "all", mcp: "all", connector: "all" },
-    overrides: {},
-  };
+// The Router starts with no external capabilities so single dispatch turns stay fast and cheap.
+export function defaultCapabilityPolicy(scope: CapabilityScope["kind"]): CapabilityPolicy {
+  return { base: scope === "router" ? NO_CAPABILITIES_BASE : ALL_CAPABILITIES_BASE, overrides: {} };
 }
 
-export function capabilityEnabled(policy: PmCapabilityPolicy, key: CapabilityKey): boolean {
+export function capabilityEnabled(policy: CapabilityPolicy, key: CapabilityKey): boolean {
   if (Object.hasOwn(policy.overrides, key)) {
     return policy.overrides[key]!;
   }
@@ -136,7 +148,7 @@ export function capabilityKey(kind: CapabilityKind, name: string, vendor?: Agent
   return `${kind}:${name}`;
 }
 
-export function applyCapabilitiesPatch(policy: PmCapabilityPolicy, patch: PmCapabilitiesPatch): PmCapabilityPolicy {
+export function applyCapabilitiesPatch(policy: CapabilityPolicy, patch: CapabilitiesPatch): CapabilityPolicy {
   const nextBase: Record<CapabilityKind, CapabilityBase> = {
     skill: patch.base?.skill ?? policy.base.skill,
     mcp: patch.base?.mcp ?? policy.base.mcp,
@@ -159,15 +171,11 @@ export function applyCapabilitiesPatch(policy: PmCapabilityPolicy, patch: PmCapa
       nextOverrides[key] = val;
     }
   }
-  return {
-    pmId: policy.pmId,
-    base: nextBase,
-    overrides: nextOverrides,
-  };
+  return { base: nextBase, overrides: nextOverrides };
 }
 
 export function resolveSessionCapabilities(
-  policy: PmCapabilityPolicy,
+  policy: CapabilityPolicy,
   inventory: CapabilityInventory,
   vendor: AgentVendor,
 ): SessionCapabilities | null {
@@ -234,4 +242,53 @@ export function resolveSessionCapabilities(
       mcp: [...allowMcp].sort(cmpStr),
     },
   };
+}
+
+export const INHERIT_WORKER_CAPABILITIES: WorkerCapabilities = { mode: "inherit" };
+
+const CAPABILITY_KEY_HINT = "写成 skill:<名>、mcp:<名> 或 connector:<厂商>:<编号>";
+
+export function workerCapabilitiesOf(mode: unknown, allow: unknown): WorkerCapabilities | { error: string } {
+  const allowGiven = allow !== undefined && allow !== null;
+  if (mode === undefined || mode === null) {
+    return allowGiven ? { error: "allow 要配合 caps custom 一起用" } : INHERIT_WORKER_CAPABILITIES;
+  }
+  if (!isOneOf(WORKER_CAPABILITY_MODES, mode)) return { error: `caps 只能是 ${WORKER_CAPABILITY_MODES.join("、")}` };
+  if (mode !== "custom") return allowGiven ? { error: "只有 caps custom 才能用 allow 点名能力" } : { mode };
+  if (!Array.isArray(allow) || allow.length === 0) {
+    return { error: `caps custom 至少点名一项（${CAPABILITY_KEY_HINT}）；什么都不带用 caps none` };
+  }
+  const keys = [...new Set(allow)];
+  if (keys.length > WORKER_CAPABILITY_ALLOW_MAX) return { error: `allow 最多点名 ${WORKER_CAPABILITY_ALLOW_MAX} 项` };
+  for (const key of keys) {
+    if (typeof key !== "string" || !isValidCapabilityKey(key)) return { error: `不认识的能力 ${String(key)}：${CAPABILITY_KEY_HINT}` };
+  }
+  return { mode: "custom", allow: (keys as string[]).sort(cmpStr) };
+}
+
+export function workerCapabilitiesJson(caps: WorkerCapabilities): string | null {
+  return caps.mode === "inherit" ? null : JSON.stringify(caps);
+}
+
+export function parseWorkerCapabilitiesJson(raw: string | null): WorkerCapabilities {
+  if (raw === null) return INHERIT_WORKER_CAPABILITIES;
+  let obj: { mode?: unknown; allow?: unknown } | null;
+  try {
+    obj = JSON.parse(raw) as { mode?: unknown; allow?: unknown } | null;
+  } catch {
+    obj = null;
+  }
+  const caps = workerCapabilitiesOf(obj?.mode ?? "none", obj?.allow);
+  // An unreadable row must never widen a Worker's reach, so it loads nothing external.
+  return "error" in caps ? { mode: "none" } : caps;
+}
+
+export function workerCapabilityPolicy(project: CapabilityPolicy, worker: WorkerCapabilities): CapabilityPolicy {
+  if (worker.mode === "inherit") return project;
+  const allow = worker.mode === "custom" ? worker.allow.filter((key) => capabilityEnabled(project, key)) : [];
+  return { base: NO_CAPABILITIES_BASE, overrides: Object.fromEntries(allow.map((key) => [key, true])) };
+}
+
+export function blockedWorkerCapabilities(project: CapabilityPolicy, worker: WorkerCapabilities): CapabilityKey[] {
+  return worker.mode === "custom" ? worker.allow.filter((key) => !capabilityEnabled(project, key)) : [];
 }

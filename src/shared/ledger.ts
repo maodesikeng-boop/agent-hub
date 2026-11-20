@@ -50,7 +50,7 @@ import type {
 import type { DeviceRouterDigest, RouterSettings } from "./router.ts";
 import type { HandoverId, LedgerHandoverWork } from "./handover.ts";
 import type { HubArgs, HubCommand, HubResult, ProjectCard, WorkerPr, WorkerPrProbeResult } from "./hub.ts";
-import type { PmCapabilitiesPatch, PmCapabilitiesStart, PmCapabilityPolicy } from "./pm-capabilities.ts";
+import type { CapabilitiesPatch, CapabilityPolicy, PmCapabilitiesStart, WorkerCapabilities } from "./pm-capabilities.ts";
 import type { PmLookSetting, SlimeLook } from "./slimes.ts";
 import type { ReviewSnapshot, ReviewVerifyResult } from "./review.ts";
 import type { SelfReloadStatus } from "./api.ts";
@@ -177,6 +177,7 @@ export interface LaunchContext {
   pm: { id: PmId; name: string; mode: PmMode; vendor?: AgentVendor; persona: string; personaRevision?: number };
   project: ProjectCard | null;
   worker: WorkerRecord | null;
+  workerCapabilities?: WorkerCapabilities;
   vendor?: AgentVendor;
 }
 
@@ -245,8 +246,11 @@ export interface Ledger extends LedgerHandoverWork {
   getPmMemoryFile(pmId: PmId, name: string): PmMemoryFileDetail;
   putPmMemoryFile(pmId: PmId, name: string, content: string): { file: PmMemoryFileDetail; totalBytes: number };
   deletePmMemoryFile(pmId: PmId, name: string): void;
-  getPmCapabilityPolicy(pmId: PmId): PmCapabilityPolicy;
-  patchPmCapabilities(pmId: PmId, patch: PmCapabilitiesPatch): PmCapabilityPolicy;
+  getPmCapabilityPolicy(pmId: PmId): CapabilityPolicy;
+  patchPmCapabilities(pmId: PmId, patch: CapabilitiesPatch): CapabilityPolicy;
+  getRouterCapabilityPolicy(): CapabilityPolicy;
+  patchRouterCapabilities(patch: CapabilitiesPatch): CapabilityPolicy;
+  setProjectSetupCommand(projectId: ProjectId, command: string | null): Project;
   setPmLook(pmId: PmId, look: PmLookSetting): Pm;
   pmProjectMainFolder(pmId: PmId): string | null;
   editPersona(pmId: PmId, input: EditPersonaInput, actor: LedgerActor): EditPersonaResult;

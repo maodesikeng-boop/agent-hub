@@ -56,6 +56,7 @@ export function dispatchStepWorkerIn(w: WorkersCtx, p: Pending, input: DispatchS
     model,
     effort,
     readonly: input.readonly,
+    capabilities: input.capabilities,
     workspace,
     inherit: inheritedPlan,
     review: plan.kind === "review",

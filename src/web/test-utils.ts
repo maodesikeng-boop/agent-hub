@@ -137,6 +137,7 @@ export function makeProject(over: Partial<Project> = {}): Project {
     status: "active",
     pmId: 1,
     conversationId: 2,
+    setupCommand: null,
     createdAt: 1_000,
     updatedAt: 1_000,
     ...over,

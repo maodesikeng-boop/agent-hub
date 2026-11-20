@@ -16,6 +16,7 @@ import {
   MAX_STEP_BASE_CHARS,
   MAX_STEP_BRIEF_CHARS,
 } from "../../../shared/limits.ts";
+import { workerCapabilitiesOf, type WorkerCapabilities } from "../../../shared/pm-capabilities.ts";
 import { checkWorkerMaxTimeMs, parseWorkerMaxTime } from "../../../shared/schedule.ts";
 import {
   AGENT_VENDORS,
@@ -267,6 +268,12 @@ export function validateStepAgentSetting(
   return { vendor: resolvedVendor, model, effort };
 }
 
+export function validateStepCapabilities(caps: unknown, allow: unknown): WorkerCapabilities {
+  const result = workerCapabilitiesOf(caps, allow);
+  if ("error" in result) throw fail("invalid", `步骤的外接能力配置不对：${result.error}`);
+  return result;
+}
+
 export interface NewStep {
   key: TaskNodeKey;
   title: string;
@@ -275,6 +282,7 @@ export interface NewStep {
   model: string | null;
   effort: string | null;
   readonly: number;
+  capabilities: WorkerCapabilities;
   maxTimeMs: number | null;
   confirm: number;
   review: number;
@@ -307,6 +315,7 @@ export function normalizeNewStep(
     model: agent.model,
     effort: agent.effort,
     readonly: n.readonly === true ? 1 : 0,
+    capabilities: validateStepCapabilities(n.caps, n.allow),
     maxTimeMs,
     confirm: n.confirm === true ? 1 : 0,
     review: n.review === true ? 1 : 0,
@@ -360,6 +369,8 @@ const createStepItemSchema = z.object({
   effort: z.string().optional(),
   maxTime: z.union([z.string(), z.number()]).optional(),
   readonly: z.boolean().optional(),
+  caps: z.string().optional(),
+  allow: z.array(z.string()).optional(),
   confirm: z.boolean().optional(),
   review: z.boolean().optional(),
   base: z.string().optional(),
@@ -391,6 +402,8 @@ const patchUpdateItemSchema = z.object({
   effort: z.string().nullable().optional(),
   maxTime: z.union([z.string(), z.number()]).nullable().optional(),
   readonly: z.boolean().optional(),
+  caps: z.string().nullable().optional(),
+  allow: z.array(z.string()).optional(),
   confirm: z.boolean().optional(),
   review: z.boolean().optional(),
   base: z.string().nullable().optional(),

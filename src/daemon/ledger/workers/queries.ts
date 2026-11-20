@@ -4,6 +4,7 @@ import type { LaunchContext } from "../../../shared/ledger.ts";
 import { WORKER_LIST_RECENT_ENDED } from "../../../shared/limits.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
 import { isAgentVendor } from "../../../shared/vendors.ts";
+import { readWorkerCapabilities } from "../capability-rows.ts";
 import { toWorkerRecord } from "../rows.ts";
 import type { WorkerDbRow } from "../rows.ts";
 import { agentSettingOf } from "../worker-view.ts";
@@ -110,6 +111,11 @@ function withTakeoverOf(w: WorkersCtx, worker: WorkerDbRow): WorkerRecord {
   return owner === worker.id ? record : { ...record, takeoverOf: owner };
 }
 
+function workerCapabilitiesOfRow(w: WorkersCtx, workerId: WorkerId): Pick<LaunchContext, "workerCapabilities"> {
+  const caps = readWorkerCapabilities(w.db, { table: "worker_capabilities", workerId });
+  return caps.mode === "inherit" ? {} : { workerCapabilities: caps };
+}
+
 export function launchContextFor(w: WorkersCtx, session: AgentSessionRow): LaunchContext | null {
   if (session.role !== "worker" || session.workerId === null) return null;
   const worker = workerRow(w, session.workerId);
@@ -122,6 +128,7 @@ export function launchContextFor(w: WorkersCtx, session: AgentSessionRow): Launc
     pm: { id: pm.id, name: pm.name, mode: pm.mode as PmMode, persona: pm.persona ?? "" },
     project: w.projects.projectCard(projectRow(w, worker.project_id)),
     worker: withTakeoverOf(w, worker),
+    ...workerCapabilitiesOfRow(w, worker.id),
     ...(isAgentVendor(session.vendor) ? { vendor: session.vendor } : {}),
   };
 }

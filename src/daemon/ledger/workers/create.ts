@@ -1,11 +1,13 @@
 import { existsSync } from "node:fs";
 import type { AgentSessionRow, PmId } from "../../../shared/domain.ts";
+import type { WorkerCapabilities } from "../../../shared/pm-capabilities.ts";
 import type { ProjectCard } from "../../../shared/hub.ts";
 import type { HubCallContext } from "../../../shared/ledger.ts";
 import { workerWorktreePath } from "../../../shared/paths.ts";
 import { UserBlockedError, userBlockerKindOf } from "../../../shared/user-blockers.ts";
 import { AGENT_VENDORS, checkEffort, checkModel, checkModelEffort, isAgentVendor, splitModelEffort, type AgentVendor } from "../../../shared/vendors.ts";
 import { workerBranchName } from "../../../shared/worker.ts";
+import { writeWorkerCapabilities } from "../capability-rows.ts";
 import { fail } from "../context.ts";
 import type { Pending } from "../context.ts";
 import { toConversation } from "../rows.ts";
@@ -78,6 +80,7 @@ export type NewWorkerRows = {
   model: string | null;
   effort: string | null;
   readonly: boolean;
+  capabilities: WorkerCapabilities;
   workspace: "worktree" | "main";
   inherit: InheritedWorkspace | null;
   review: boolean;
@@ -118,6 +121,7 @@ export function insertWorkerRowsIn(w: WorkersCtx, p: Pending, n: NewWorkerRows):
     t,
     t,
   ).lastInsertRowid;
+  writeWorkerCapabilities(w.db, { table: "worker_capabilities", workerId: id }, n.capabilities);
   if (n.workspace === "worktree" && n.inherit === null) {
     w.db.run(
       "UPDATE workers SET branch = ?, worktree_path = ? WHERE id = ?",

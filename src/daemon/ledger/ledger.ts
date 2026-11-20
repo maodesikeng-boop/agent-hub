@@ -209,18 +209,10 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
 
   const createPm = (input: CreatePmInput): CreatePmResult =>
     write((p) => {
-      if (input.capabilities !== undefined) {
-        if (input.capabilities.from === "pm") {
-          persona.requirePm(input.capabilities.pmId);
-        } else if (input.capabilities.from !== "all") {
-          throw fail("invalid", "不合法的能力初始来源");
-        }
-      }
+      if (input.capabilities !== undefined) pmCapabilities.assertStart(input.capabilities);
       const created = persona.createPmIn(p, input);
       const project = input.folder === undefined ? null : projects.createProjectIn(p, { pmId: created.pm.id, folder: input.folder }).project;
-      if (input.capabilities !== undefined) {
-        pmCapabilities.init(created.pm.id, input.capabilities);
-      }
+      if (input.capabilities !== undefined) pmCapabilities.init(created.pm.id, input.capabilities);
       return { ...created, project };
     });
 
@@ -433,6 +425,9 @@ export function createLedger(db: Db, options: LedgerOptions): SqliteLedger {
     deletePmMemoryFile: persona.deletePmMemoryFile,
     getPmCapabilityPolicy: pmCapabilities.get,
     patchPmCapabilities: pmCapabilities.patch,
+    getRouterCapabilityPolicy: pmCapabilities.getRouter,
+    patchRouterCapabilities: pmCapabilities.patchRouter,
+    setProjectSetupCommand: (projectId, command) => write((p) => projects.setSetupCommandIn(p, projectId, command)),
     setPmLook: persona.setPmLook,
     pmProjectMainFolder(pmId) {
       persona.requirePm(pmId);

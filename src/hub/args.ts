@@ -39,6 +39,8 @@ export type Options = {
   effort?: string;
   "max-time"?: string;
   readonly?: boolean;
+  caps?: string;
+  allow?: string[];
   "no-worktree"?: boolean;
   node?: string;
   graph?: string;
@@ -100,6 +102,8 @@ export const HUB_ARG_OPTIONS = {
   effort: { type: "string" },
   "max-time": { type: "string" },
   readonly: { type: "boolean" },
+  caps: { type: "string" },
+  allow: { type: "string", multiple: true },
   "no-worktree": { type: "boolean" },
   node: { type: "string" },
   graph: { type: "string" },

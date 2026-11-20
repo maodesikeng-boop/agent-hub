@@ -113,6 +113,7 @@ export interface Project {
   status: ProjectStatus;
   pmId: PmId;
   conversationId: ConversationId;
+  setupCommand: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -504,8 +505,7 @@ export function workerMessageDedupeKey(workerId: WorkerId, event: WorkerEvent, t
 
 export function normalizeName(raw: string, maxChars: number = MAX_NAME_CHARS): string | null {
   const name = raw.trim();
-  if (name === "" || [...name].length > maxChars) return null;
-  if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(name)) return null;
+  if (name === "" || [...name].length > maxChars || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(name)) return null;
   return name;
 }
 

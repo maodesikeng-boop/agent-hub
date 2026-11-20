@@ -202,7 +202,7 @@ export function createLedgerHubCommands(
       case "project.detach":
         return detachIn(p, caller, args as HubArgs<"project.detach">);
       case "project.setup":
-        return setupIn(caller, args as HubArgs<"project.setup">);
+        return setupIn(p, caller, args as HubArgs<"project.setup">);
       case "persona.show": {
         const view = getPersona(caller.pmId, p);
         const body = view.text.trim() === "" ? "（还没有性格设定）" : view.text;

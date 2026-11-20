@@ -6,7 +6,6 @@ import {
   type EditPersonaResponse,
   type PersonaResponse,
   type PickFolderResponse,
-  type PmCapabilitiesView,
   type PmId,
   type PmLookResponse,
   type PmMemoryFileResponse,
@@ -22,26 +21,17 @@ import {
   addScheduleBodySchema,
   parseCreatePmBody,
   parseEditPersonaBody,
-  parsePatchPmCapabilitiesBody,
   parsePmLookBody,
   pickFolderBodySchema,
   putPmMemoryFileBodySchema,
   setScheduleEnabledBodySchema,
-  vendorIsolationMap,
-  vendorPluginIsolationMap,
 } from "./schemas.ts";
 
 type MemoryFileParams = { id?: unknown; "*"?: unknown };
 const memoryFileName = (params: MemoryFileParams) => (typeof params["*"] === "string" ? params["*"] : "");
 
 function registerPersonaRoutes(routes: FastifyInstance, c: UiCtx): void {
-  const { opts, ledger } = c;
-  const capabilitiesView = async (pmId: PmId, policy: PmCapabilitiesView["policy"], projectDir: string | null): Promise<PmCapabilitiesView> => {
-    const inventory = opts.capabilityInventory
-      ? await opts.capabilityInventory.get({ projectDir })
-      : { scannedAt: (opts.now ?? Date.now)(), items: [], groups: [], truncated: false };
-    return { pmId, inventory, policy, isolation: vendorIsolationMap(), pluginIsolation: vendorPluginIsolationMap() };
-  };
+  const { ledger } = c;
 
   routes.post(API_PATHS.pms, async (req, reply) => {
     const result = ledger.createPm(parseCreatePmBody(req.body));
@@ -61,23 +51,6 @@ function registerPersonaRoutes(routes: FastifyInstance, c: UiCtx): void {
   routes.put("/api/pms/:id/look", async (req): Promise<PmLookResponse> => {
     const pmId = idParam(req.params, "pm id");
     return { pm: ledger.setPmLook(pmId, parsePmLookBody(req.body)) };
-  });
-
-  routes.get("/api/pms/:id/capabilities", async (req): Promise<PmCapabilitiesView> => {
-    const pmId = idParam(req.params, "pm id");
-    const policy = ledger.getPmCapabilityPolicy(pmId);
-    const projectDir = ledger.pmProjectMainFolder(pmId);
-    if ((req.query as { refresh?: unknown }).refresh === "1") {
-      opts.capabilityInventory?.invalidate();
-    }
-    return capabilitiesView(pmId, policy, projectDir);
-  });
-
-  routes.patch("/api/pms/:id/capabilities", async (req): Promise<PmCapabilitiesView> => {
-    const pmId = idParam(req.params, "pm id");
-    const patch = parsePatchPmCapabilitiesBody(req.body);
-    const policy = ledger.patchPmCapabilities(pmId, patch);
-    return capabilitiesView(pmId, policy, ledger.pmProjectMainFolder(pmId));
   });
 
   routes.post("/api/persona-changes/:id/revert", async (req): Promise<EditPersonaResponse> => {

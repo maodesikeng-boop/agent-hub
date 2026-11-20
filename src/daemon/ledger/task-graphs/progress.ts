@@ -4,6 +4,7 @@ import type { AgentSessionRow, MessageId, TaskNodeKey } from "../../../shared/do
 import type { HubCallContext } from "../../../shared/ledger.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
 import { UserBlockedError } from "../../../shared/user-blockers.ts";
+import { readWorkerCapabilities } from "../capability-rows.ts";
 import type { Pending } from "../context.ts";
 import type { LedgerPersona } from "../persona.ts";
 import {
@@ -107,6 +108,7 @@ function dispatchWorkerIn(
     model: node.model,
     effort: node.effort,
     readonly: node.readonly === 1,
+    capabilities: readWorkerCapabilities(g.db, { table: "task_graph_step_capabilities", stepId: node.id }),
     maxTimeMs: node.max_time_ms,
     workspacePlan,
     buildFirstMessage: (sessionId, inheritedFromWorkerId, workerRecord, projectCard) =>

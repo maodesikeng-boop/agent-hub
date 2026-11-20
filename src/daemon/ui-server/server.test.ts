@@ -35,7 +35,7 @@ import {
   type CapabilityInventory,
   type Change,
   type LedgerErrorCode,
-  type PmCapabilitiesView,
+  type CapabilitiesView,
   type QuotaResponse,
   vendorSpec,
   type WsServerMessage,
@@ -1146,11 +1146,10 @@ describe("GET、PATCH /api/pms/:id/capabilities 项目经理能力库存与选�
 
     const res = await call("GET", "/api/pms/3/capabilities");
     expect(res.statusCode).toBe(200);
-    const view = res.json() as PmCapabilitiesView;
-    expect(view.pmId).toBe(3);
+    const view = res.json() as CapabilitiesView;
+    expect(view.scope).toEqual({ kind: "pm", pmId: 3 });
     expect(view.inventory).toEqual(fakeInv);
     expect(view.policy).toEqual({
-      pmId: 3,
       base: { skill: "all", mcp: "all", connector: "all" },
       overrides: {},
     });
@@ -1166,7 +1165,7 @@ describe("GET、PATCH /api/pms/:id/capabilities 项目经理能力库存与选�
     expect(invalidated).toBe(1);
   });
 
-  it("PATCH 更新 base 与 set 并返回新 PmCapabilitiesView；非法参数回 400，不存在回 404", async () => {
+  it("PATCH 更新 base 与 set 并返回新 CapabilitiesView；非法参数回 400，不存在回 404", async () => {
     const patchRes = await call("PATCH", "/api/pms/3/capabilities", {
       body: {
         base: { mcp: "none" },
@@ -1183,8 +1182,7 @@ describe("GET、PATCH /api/pms/:id/capabilities 项目经理能力库存与选�
         },
       },
     ]);
-    expect((patchRes.json() as PmCapabilitiesView).policy).toEqual({
-      pmId: 3,
+    expect((patchRes.json() as CapabilitiesView).policy).toEqual({
       base: { skill: "all", mcp: "none", connector: "all" },
       overrides: { "skill:aws-auth": false, "mcp:codegraph": true },
     });
@@ -1211,6 +1209,56 @@ describe("GET、PATCH /api/pms/:id/capabilities 项目经理能力库存与选�
     ledger.failWith = new LedgerRequestError("not_found", "没有编号 99 的项目经理");
     expect((await call("GET", "/api/pms/99/capabilities")).statusCode).toBe(404);
     expect((await call("PATCH", "/api/pms/99/capabilities", { body: { set: { "skill:a": false } } })).statusCode).toBe(404);
+  });
+
+  it("GET、PATCH /api/router/capabilities：总助默认三类全关，看全局清单，改完返回新选择", async () => {
+    const seenScopes: Array<string | null> = [];
+    let invalidated = 0;
+    await app.close();
+    app = createUiServer({
+      ledger: ledger.asLedger(),
+      token: TOKEN,
+      staticDir,
+      uploadsDir,
+      sentFilesDir,
+      port: PORT,
+      db,
+      capabilityInventory: {
+        get: async ({ projectDir }) => {
+          seenScopes.push(projectDir);
+          return { scannedAt: 1, items: [], groups: [], truncated: false };
+        },
+        invalidate: () => {
+          invalidated++;
+        },
+      },
+    });
+    await app.ready();
+    const view = (await call("GET", "/api/router/capabilities?refresh=1")).json() as CapabilitiesView;
+    expect(view.scope).toEqual({ kind: "router" });
+    expect(view.policy).toEqual({ base: { skill: "none", mcp: "none", connector: "none" }, overrides: {} });
+    expect(invalidated).toBe(1);
+    const patched = await call("PATCH", "/api/router/capabilities", { body: { set: { "mcp:codegraph": true } } });
+    expect(patched.statusCode).toBe(200);
+    expect((patched.json() as CapabilitiesView).policy.overrides).toEqual({ "mcp:codegraph": true });
+    expect(seenScopes).toEqual([null, null]);
+    expect((await call("PATCH", "/api/router/capabilities", { body: {} })).statusCode).toBe(400);
+  });
+
+  it("PUT /api/projects/:id/setup-command：设多行命令、传 null 清空；格式不对回 400", async () => {
+    const multi = "pnpm install\npnpm build";
+    const res = await call("PUT", "/api/projects/8/setup-command", { body: { command: multi } });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { project: { setupCommand: string | null } }).project.setupCommand).toBe(multi);
+    expect((await call("PUT", "/api/projects/8/setup-command", { body: { command: null } })).statusCode).toBe(200);
+    expect(ledger.setupCommandEdits).toEqual([
+      { projectId: 8, command: multi },
+      { projectId: 8, command: null },
+    ]);
+    for (const bad of [{}, { command: 1 }, { command: "x", extra: true }]) {
+      expect((await call("PUT", "/api/projects/8/setup-command", { body: bad })).statusCode).toBe(400);
+    }
+    expect((await call("PUT", "/api/projects/abc/setup-command", { body: { command: null } })).statusCode).toBe(400);
   });
 
   it("POST /api/vendor-sync/apply 成功后触发 capabilityInventory.invalidate", async () => {

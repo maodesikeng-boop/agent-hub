@@ -18,6 +18,7 @@ import type {
   WorkerId,
 } from "./domain.ts";
 import type { HubFileArg } from "./deliverables.ts";
+import type { WorkerCapabilityMode } from "./pm-capabilities.ts";
 import type { RouterItem, RouterReportLink } from "./router.ts";
 import type { SelfReloadStatus } from "./api.ts";
 import type { ScheduleId, ScheduleRecord } from "./schedule.ts";
@@ -130,6 +131,8 @@ export interface HubArgsMap {
     effort?: string;
     maxTimeMs?: number;
     readonly?: boolean;
+    caps?: WorkerCapabilityMode;
+    allow?: string[];
     noWorktree?: boolean;
     node?: TaskNodeKey;
     graphId?: TaskGraphId;
@@ -217,6 +220,8 @@ export interface CreateTaskGraphNodeInput {
   effort?: string;
   maxTime?: string | number;
   readonly?: boolean;
+  caps?: WorkerCapabilityMode;
+  allow?: string[];
   confirm?: boolean;
   review?: boolean;
   base?: string;
@@ -252,6 +257,8 @@ export interface PatchTaskGraphNodeInput {
   effort?: string | null;
   maxTime?: string | number | null;
   readonly?: boolean;
+  caps?: WorkerCapabilityMode | null;
+  allow?: string[];
   confirm?: boolean;
   review?: boolean;
   base?: string | null;

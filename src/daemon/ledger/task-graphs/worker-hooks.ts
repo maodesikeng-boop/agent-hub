@@ -3,6 +3,7 @@ import type { PmId, SessionId, TaskGraphId, TaskNodeKey, WorkerId } from "../../
 import type { WorkerHubStatus } from "../../../shared/hub.ts";
 import type { UserBlocker, UserBlockerId } from "../../../shared/user-blockers.ts";
 import { HUB_COMMAND } from "../../../shared/names.ts";
+import { readWorkerCapabilities } from "../capability-rows.ts";
 import { fail, type Pending } from "../context.ts";
 import {
   buildStepFirstMessage,
@@ -83,6 +84,7 @@ export function prepareWorkerBind(g: TaskGraphCtx, pmId: PmId, rawNodeKey: TaskN
     model: node.model,
     effort: node.effort,
     readonly: node.readonly === 1,
+    capabilities: readWorkerCapabilities(g.db, { table: "task_graph_step_capabilities", stepId: node.id }),
     maxTimeMs: node.max_time_ms,
     review: node.review === 1,
     base: node.base,
