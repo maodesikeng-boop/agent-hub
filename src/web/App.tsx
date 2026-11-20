@@ -7,6 +7,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Loader2 } from "./ui/icons.ts";
 import { AccentScope, FruitTint } from "./lib/accent-scope.tsx";
+import { CapabilityScopes } from "./components/CapabilitiesSettings.tsx";
 import { Conversation } from "./components/Conversation.tsx";
 import { NewPmDialog } from "./components/NewPmDialog.tsx";
 import { Notices } from "./components/Notices.tsx";
@@ -165,6 +166,7 @@ function ChatPane(props: PaneProps & { quotaSlot: React.ReactNode; onManageLocal
         renewing={profileEntry !== undefined && isRenewing(state, profileEntry.id)}
         onBack={mobile ? back : () => profileEntry && c.select({ device: current.key, id: profileEntry.id })}
         onManageProviders={() => c.openManageProviders(current.key)}
+        {...(current.key === LOCAL_DEVICE ? { onOpenCapabilities: () => c.openSettingsSection("capabilities") } : {})}
       />
     );
   }
@@ -333,19 +335,21 @@ export function App() {
     <QueryClientProvider client={qc}>
       <DeviceScope client={hub.client} server={state.server}>
         <ModelCatalogProvider>
-          <div className="relative flex h-full">
-            <FruitTint color={tintColor}>
-              <MobileShell mobile={mobile} list={route === null} sidebar={<ShellSidebar content={content} mobile={mobile} quota={quota} quotaInHeader={Boolean(quotaInHeader)} />}>{chat}</MobileShell>
-              <NewPmDialog
-                open={content.creating}
-                devices={content.newPmDevices}
-                defaultDevice={current.key}
-                onOpenChange={content.setCreating}
-                onCreated={content.created}
-                onManageProviders={content.openManageProviders}
-              />
-            </FruitTint>
-          </div>
+          <CapabilityScopes pms={model.local.state.pms}>
+            <div className="relative flex h-full">
+              <FruitTint color={tintColor}>
+                <MobileShell mobile={mobile} list={route === null} sidebar={<ShellSidebar content={content} mobile={mobile} quota={quota} quotaInHeader={Boolean(quotaInHeader)} />}>{chat}</MobileShell>
+                <NewPmDialog
+                  open={content.creating}
+                  devices={content.newPmDevices}
+                  defaultDevice={current.key}
+                  onOpenChange={content.setCreating}
+                  onCreated={content.created}
+                  onManageProviders={content.openManageProviders}
+                />
+              </FruitTint>
+            </div>
+          </CapabilityScopes>
         </ModelCatalogProvider>
       </DeviceScope>
     </QueryClientProvider>

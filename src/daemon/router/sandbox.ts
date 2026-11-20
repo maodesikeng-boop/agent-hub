@@ -15,6 +15,7 @@ import {
   type AgentSessionRow,
   type LaunchFiles,
   type RouterCommandId,
+  type SessionCapabilities,
   type SessionId,
   type SessionTokens,
   type VendorAvailabilityMap,
@@ -71,6 +72,7 @@ export interface RouterSandboxLaunchOptions {
   basePath?: string;
   vendorAvailability?: VendorAvailabilityMap;
   purpose?: RouterTurnPurpose;
+  capabilities?: SessionCapabilities;
 }
 
 export function prepareRouterSandboxLaunch(
@@ -106,6 +108,7 @@ export function prepareRouterSandboxLaunch(
   });
   const vendor = isAgentVendor(session.vendor) ? session.vendor : null;
   const nativeReadonly = vendor !== null && vendorSpec(vendor).capabilities.readonly === "settings";
+  const { capabilities } = options;
 
   const vendorFiles =
     vendor !== null
@@ -115,8 +118,10 @@ export function prepareRouterSandboxLaunch(
           ...(dispatch ? { hubSock: options.hubSock } : {}),
           stateDir,
           osSandboxed,
+          ...(capabilities === undefined ? {} : { capabilities }),
         })
       : undefined;
+  const capabilityLaunch = capabilities !== undefined && vendor !== null ? VENDOR_DAEMONS[vendor].capabilityLaunch?.(capabilities) : undefined;
 
   const settings = vendorFiles?.settings;
   const promptFile = join(dir, "prompt.md");
@@ -151,9 +156,15 @@ export function prepareRouterSandboxLaunch(
         : { PATH: basePath }),
       ...vendorFiles?.env,
     },
-    fingerprint: launchFingerprint({ prompt, settings: settings ?? "", readonly: readonlyPolicy }),
+    fingerprint: launchFingerprint({
+      prompt,
+      settings: settings ?? "",
+      readonly: readonlyPolicy,
+      ...(capabilityLaunch === undefined ? {} : { capabilityLaunch }),
+    }),
     ...(writeScope === null ? {} : { writeScope }),
     readonly: readonlyPolicy,
+    ...(capabilities === undefined ? {} : { capabilities }),
   };
 }
 

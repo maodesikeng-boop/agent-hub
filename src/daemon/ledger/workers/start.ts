@@ -7,8 +7,16 @@ import { HUB_COMMAND } from "../../../shared/names.ts";
 import { splitModelEffort, type AgentVendor } from "../../../shared/vendors.ts";
 import { SETUP_RECEIPT_NOTE, WORKER_READONLY_NOTE, buildWorkerFirstMessage } from "../../prompt.ts";
 import { WORKER_NEEDS_OS_SANDBOX_MESSAGE } from "../../driver/write-scope.ts";
+import {
+  INHERIT_WORKER_CAPABILITIES,
+  blockedWorkerCapabilities,
+  workerCapabilitiesOf,
+  type CapabilityPolicy,
+  type WorkerCapabilities,
+} from "../../../shared/pm-capabilities.ts";
 import { fail } from "../context.ts";
 import type { Pending } from "../context.ts";
+import { readPmCapabilityPolicy } from "../pm-capabilities.ts";
 import { toWorkerRecord } from "../rows.ts";
 import type { ProjectDbRow, WorkerDbRow } from "../rows.ts";
 import { renderGraphStepTask } from "../task-graph-handoff.ts";
@@ -38,7 +46,7 @@ type Takeover = ReturnType<typeof planTakeover>;
 type ReviewPlan = Extract<StepWorkspacePlan, { kind: "review" }>;
 type UpstreamInherit = Extract<StepWorkspacePlan, { kind: "inherit" }>;
 type StartTask = { title: string; task: string; pmNote: string | null; stepHasBrief: boolean };
-type StartAgent = { vendor: AgentVendor; model: string | null; effort: string | null; readonly: boolean };
+type StartAgent = { vendor: AgentVendor; model: string | null; effort: string | null; readonly: boolean; capabilities: WorkerCapabilities };
 type StartWorkspace = {
   reviewPlan: ReviewPlan | null;
   inherit: WorkerDbRow | null;
@@ -121,7 +129,14 @@ function resolveStartAgent(w: WorkersCtx, caller: PmCaller, args: StartArgs, bin
   const givenEffort = typeof args.effort === "string" ? args.effort.trim() || null : reuseStepModel ? bindTarget.effort : null;
   const { model, effort } = checkedModelEffort(w, vendor, givenModel, givenEffort);
   const readonly = args.readonly !== undefined ? args.readonly === true : (bindTarget?.readonly ?? false);
-  return { vendor, model, effort, readonly };
+  return { vendor, model, effort, readonly, capabilities: resolveStartCapabilities(args, bindTarget) };
+}
+
+function resolveStartCapabilities(args: StartArgs, bindTarget: WorkerBindTarget | undefined): WorkerCapabilities {
+  if (args.caps === undefined && args.allow === undefined) return bindTarget?.capabilities ?? INHERIT_WORKER_CAPABILITIES;
+  const caps = workerCapabilitiesOf(args.caps, args.allow);
+  if ("error" in caps) throw fail("invalid", caps.error);
+  return caps;
 }
 
 function resolveStartWorkspace(
@@ -238,7 +253,18 @@ function takeoverMessage(
   );
 }
 
+function capabilitiesReceiptNote(caps: WorkerCapabilities, project: CapabilityPolicy): string {
+  if (caps.mode === "inherit") return "";
+  if (caps.mode === "none") return "。它不带外接能力（不挂 MCP、Skill、连接器；读写文件、终端和 hub 照常）";
+  const blocked = blockedWorkerCapabilities(project, caps);
+  const mounted = caps.allow.filter((key) => !blocked.includes(key));
+  const head = mounted.length === 0 ? "。点名的外接能力一项都挂不上，等于不带" : `。外接能力只挂 ${mounted.join("、")}`;
+  const blockedNote = blocked.length === 0 ? "" : `；${blocked.join("、")} 在项目能力设置里是关的，挂不上，要用先请用户在 Settings → Capabilities 打开`;
+  return `${head}${blockedNote}`;
+}
+
 function startReceipt(
+  w: WorkersCtx,
   worker: WorkerDbRow,
   project: ProjectDbRow,
   card: ProjectCard,
@@ -265,6 +291,7 @@ function startReceipt(
   }
   if (space.workspace === "main" && args.noWorktree !== true) notes.push("（主文件夹不是有提交的 git 仓库，所以没建 worktree）");
   if (agent.readonly) notes.push("。它是只读的，只看不改");
+  notes.push(capabilitiesReceiptNote(agent.capabilities, readPmCapabilityPolicy(w.db, worker.pm_id)));
   notes.push(`。它每做完一轮，汇报会自动发给你；打回用 ${HUB_COMMAND} worker send ${id} --stdin，收工用 ${HUB_COMMAND} worker end ${id}。`);
   const freshWorktree = space.workspace === "worktree" && space.effectiveInherit === null;
   if (freshWorktree && project.setup_command !== null) notes.push(SETUP_RECEIPT_NOTE);
@@ -323,6 +350,7 @@ export function startIn(w: WorkersCtx, p: Pending, caller: PmCaller, args: Start
     model: agent.model,
     effort: agent.effort,
     readonly: agent.readonly,
+    capabilities: agent.capabilities,
     workspace: space.workspace,
     inherit: space.effectiveInherit,
     review: space.reviewPlan !== null,
@@ -344,5 +372,5 @@ export function startIn(w: WorkersCtx, p: Pending, caller: PmCaller, args: Start
         ? undefined
         : () => w.options.taskGraphs?.bindWorkerStartedIn(p, bindTarget, worker.id, { vendor: agent.vendor, model: session.model, effort: session.effort }),
   });
-  return { text: startReceipt(worker, project, card, args, { agent, brief, space }, { bindTarget, takeover, endedOld }), data: { worker: toWorkerRecord(worker) } };
+  return { text: startReceipt(w, worker, project, card, args, { agent, brief, space }, { bindTarget, takeover, endedOld }), data: { worker: toWorkerRecord(worker) } };
 }

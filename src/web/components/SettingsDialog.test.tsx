@@ -77,14 +77,20 @@ describe("设置弹窗：右栏宽度跟着弹窗走，按钮不被挤出去", (
     }
   });
 
-  it("切到别的分类（General、Computers）右栏同一套约束", async () => {
+  it("切到别的分类（General、Capabilities、Computers）右栏同一套约束", async () => {
     const user = userEvent.setup();
     render(<SettingsDialog open onOpenChange={() => {}} notify={notify} devices={devices} />);
-    for (const name of ["General", "Computers"]) {
+    for (const name of ["General", "Capabilities", "Computers"]) {
       await user.click(screen.getByRole("tab", { name }));
       const panel = screen.getByRole("tabpanel", { name });
       expect(classOf(panel)).toContain("min-w-0");
       await waitFor(() => expect(classOf(panel.lastElementChild!)).toContain("grid-cols-1"));
     }
+  });
+
+  it("从别处点进能力页：defaultSection 直接落在 Capabilities", async () => {
+    render(<SettingsDialog open onOpenChange={() => {}} notify={notify} devices={devices} defaultSection="capabilities" />);
+    expect(screen.getByRole("tab", { name: "Capabilities" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByRole("region", { name: "MCP servers" })).toBeInTheDocument();
   });
 });

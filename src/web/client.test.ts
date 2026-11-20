@@ -182,3 +182,36 @@ describe("请求超时（连接静默断了，请求挂在死连接上）", () =
     for (const [, init] of api.fetch.mock.calls.slice(-2)) expect(init?.signal).toBeUndefined();
   });
 });
+
+describe("能力开关与准备命令接口", () => {
+  it("总助和项目经理各走自己的路径；清单扫描用长超时，Refresh 带 ?refresh=1；PATCH 发 JSON", async () => {
+    const timeouts = stubRequestTimeouts();
+    const api = new FakeApi(makeSnapshot());
+    api.install();
+    const client = createClient(null);
+    expect((await client.fetchCapabilities({ kind: "router" })).scope).toEqual({ kind: "router" });
+    await client.fetchCapabilities({ kind: "pm", pmId: 4 }, { refresh: true });
+    expect(timeouts.delays).toEqual([SLOW_API_REQUEST_TIMEOUT_MS, SLOW_API_REQUEST_TIMEOUT_MS]);
+    expect(api.calls.map((c) => [c.method, c.path, c.query.get("refresh")])).toEqual([
+      ["GET", "/api/router/capabilities", null],
+      ["GET", "/api/pms/4/capabilities", "1"],
+    ]);
+    const view = await client.patchCapabilities({ kind: "pm", pmId: 4 }, { set: { "mcp:playwright": false } });
+    expect(view.policy.overrides).toEqual({ "mcp:playwright": false });
+    const patch = api.fetch.mock.calls.at(-1)!;
+    expect(patch[1]).toMatchObject({ method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ set: { "mcp:playwright": false } }) });
+  });
+
+  it("准备命令：PUT 带 { command }，null 表示清空；远程电脑的请求挂设备前缀", async () => {
+    const api = new FakeApi(makeSnapshot());
+    api.install();
+    const res = await createClient(null).putProjectSetupCommand(9, "pnpm i\npnpm build");
+    expect(res.project).toMatchObject({ id: 9, setupCommand: "pnpm i\npnpm build" });
+    await createClient(null).putProjectSetupCommand(9, null);
+    expect(api.callsTo("PUT", /^\/api\/projects\/9\/setup-command$/).map((c) => c.body)).toEqual([{ command: "pnpm i\npnpm build" }, { command: null }]);
+    const remote = vi.fn(async () => Response.json({ project: { id: 9 } }));
+    vi.stubGlobal("fetch", remote);
+    await createClient("3f2b8c1e-4d5a-4b6c-9e7f-0a1b2c3d4e5f").putProjectSetupCommand(9, "make");
+    expect(String((remote.mock.calls[0] as unknown[])[0])).toBe("/d/3f2b8c1e-4d5a-4b6c-9e7f-0a1b2c3d4e5f/api/projects/9/setup-command");
+  });
+});

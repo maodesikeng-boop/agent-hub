@@ -1,4 +1,4 @@
-import { Blocks, Monitor, Settings, Shield, type Icon } from "../ui/icons.ts";
+import { Blocks, Cable, Monitor, Settings, Shield, type Icon } from "../ui/icons.ts";
 import { useRef, useState, type ReactNode } from "react";
 import { LOCAL_DEVICE, type DeviceKey } from "../devices.ts";
 import type { NotifySettings } from "../notify.ts";
@@ -8,6 +8,7 @@ import { Segmented } from "../ui/segmented.tsx";
 import { Switch } from "../ui/switch.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs.tsx";
 import { BrowserSessionsSettings } from "./BrowserSessions.tsx";
+import { CapabilitiesSettings } from "./CapabilitiesSettings.tsx";
 import { ComputersSection } from "./DeviceSettings.tsx";
 import { ProvidersSettings } from "./ProvidersSettings.tsx";
 import { SettingsGroup, SettingsRow } from "./SettingsList.tsx";
@@ -23,11 +24,12 @@ function UiScaleRow() {
   );
 }
 
-export type SettingsDialogSection = "general" | "providers" | "computers" | "security";
+export type SettingsDialogSection = "general" | "providers" | "capabilities" | "computers" | "security";
 
 const SECTIONS: readonly { id: SettingsDialogSection; label: string; icon: Icon }[] = [
   { id: "general", label: "General", icon: Settings },
   { id: "providers", label: "Providers", icon: Blocks },
+  { id: "capabilities", label: "Capabilities", icon: Cable },
   { id: "computers", label: "Computers", icon: Monitor },
   { id: "security", label: "Security & Access", icon: Shield },
 ];
@@ -96,6 +98,7 @@ export function SettingsDialog({
         defaultDeviceKey={defaultProviderDevice}
       />
     ),
+    capabilities: <CapabilitiesSettings />,
     computers: devices && <ComputersSection {...devices} />,
     security: <BrowserSessionsSettings />,
   };

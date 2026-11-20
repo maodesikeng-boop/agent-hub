@@ -8,6 +8,7 @@ import type { MeshConnection } from "../mesh/index.ts";
 import { isCompressibleType } from "../peers/index.ts";
 import { createUiCtx } from "./context.ts";
 import { installEntryHooks, listenerOf, meshPeerOf } from "./entry.ts";
+import { registerCapabilityRoutes } from "./routes-capabilities.ts";
 import { registerCatalogRoutes } from "./routes-catalog.ts";
 import { registerConversationRoutes } from "./routes-conversations.ts";
 import { registerIntegrationRoutes } from "./routes-integrations.ts";
@@ -52,6 +53,7 @@ export function createUiServer(opts: UiServerOptions): FastifyInstance {
     registerCatalogRoutes(routes, c);
     registerConversationRoutes(routes, c);
     registerPmRoutes(routes, c);
+    registerCapabilityRoutes(routes, c);
     registerRouterRoutes(routes, c);
     registerIntegrationRoutes(routes, c);
     registerWsRoute(routes, c);

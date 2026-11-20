@@ -56,7 +56,7 @@ it("push 标记 hub，replace 清除标记并支持列表", () => {
 });
 
 describe("设置网址（docs/mobile-settings-design.md 第 2.2 节）", () => {
-  it("#/settings 与 7 个子页 #/settings/<section> 来回一致，不挂设备前缀", () => {
+  it("#/settings 与 8 个子页 #/settings/<section> 来回一致，不挂设备前缀", () => {
     expect(routeHash({ view: "settings" })).toBe("#/settings");
     expect(parseRoute("#/settings")).toEqual({ view: "settings" });
     expect(parseRoute("#/settings")).not.toHaveProperty("section");
@@ -70,6 +70,7 @@ describe("设置网址（docs/mobile-settings-design.md 第 2.2 节）", () => {
       "notifications",
       "providers",
       "vendor-sync",
+      "capabilities",
       "computers",
       "sign-in",
       "browsers",

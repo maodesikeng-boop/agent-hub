@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { basename } from "node:path";
 import { normalizeName, utf8Bytes } from "../../shared/domain.ts";
-import type { AgentSessionRow, PmId, ProjectFolder, ProjectId } from "../../shared/domain.ts";
+import type { AgentSessionRow, PmId, Project, ProjectFolder, ProjectId } from "../../shared/domain.ts";
 import type { HubArgs, HubResult, ProjectCard } from "../../shared/hub.ts";
 import { MAX_DESCRIPTION_CHARS, MAX_NAME_CHARS, MAX_SETUP_COMMAND_BYTES } from "../../shared/limits.ts";
 import { projectWorktreesDir } from "../../shared/paths.ts";
@@ -31,6 +31,23 @@ export const DEFAULT_PROJECT_NAME = "未命名项目";
 
 function defaultProjectName(path: string): string {
   return normalizeName([...basename(path).trim()].slice(0, MAX_NAME_CHARS).join("")) ?? DEFAULT_PROJECT_NAME;
+}
+
+function validSetupCommand(command: unknown): string | null {
+  if (command === null) return null;
+  if (typeof command !== "string" || command.trim() === "") {
+    throw fail("invalid", `准备命令不能是空的；要清除用 ${HUB_COMMAND} project setup --clear`);
+  }
+  if (command.includes("\0")) throw fail("invalid", "准备命令里不能有 NUL 字符");
+  if (utf8Bytes(command) > MAX_SETUP_COMMAND_BYTES) throw fail("invalid", `准备命令不能超过 ${MAX_SETUP_COMMAND_BYTES} 字节`);
+  return command;
+}
+
+function writeSetupCommandIn(ctx: LedgerContext, p: Pending, projectId: ProjectId, command: string | null): ProjectDbRow {
+  ctx.db.run("UPDATE projects SET setup_command = ?, updated_at = ? WHERE id = ?", command, ctx.now(), projectId);
+  const row = ctx.db.get<ProjectDbRow>("SELECT * FROM projects WHERE id = ?", projectId)!;
+  p.changes.push({ type: "project.updated", data: { project: toProject(row) } });
+  return row;
 }
 
 export function createLedgerProjects(
@@ -209,20 +226,11 @@ export function createLedgerProjects(
     return { text: `已把 ${path} 从项目“${project.name}”上移除。`, data: { project: toProject(project), folder } };
   };
 
-  const setupIn = (caller: AgentSessionRow & { pmId: PmId }, args: HubArgs<"project.setup">): HubResult<"project.setup"> => {
+  const setupIn = (p: Pending, caller: AgentSessionRow & { pmId: PmId }, args: HubArgs<"project.setup">): HubResult<"project.setup"> => {
     assertPmNotArchived(caller.pmId);
     const project = requireProject(caller.pmId);
-    let command: string | null = null;
-    if (args.command !== null) {
-      if (typeof args.command !== "string" || args.command.trim() === "") {
-        throw fail("invalid", `准备命令不能是空的；要清除用 ${HUB_COMMAND} project setup --clear`);
-      }
-      if (args.command.includes("\0")) throw fail("invalid", "准备命令里不能有 NUL 字符");
-      if (utf8Bytes(args.command) > MAX_SETUP_COMMAND_BYTES) throw fail("invalid", `准备命令不能超过 ${MAX_SETUP_COMMAND_BYTES} 字节`);
-      command = args.command;
-    }
-    db.run("UPDATE projects SET setup_command = ?, updated_at = ? WHERE id = ?", command, now(), project.id);
-    const row = db.get<ProjectDbRow>("SELECT * FROM projects WHERE id = ?", project.id)!;
+    const command = validSetupCommand(args.command);
+    const row = writeSetupCommandIn(ctx, p, project.id, command);
     const text =
       command === null
         ? `已清除项目“${project.name}”的准备命令：以后建 worktree 后不跑东西，Worker 直接开工。`
@@ -230,5 +238,12 @@ export function createLedgerProjects(
     return { text, data: { project: toProject(row), setupCommand: command } };
   };
 
-  return { activeProjectOf, projectCard, syncSessionFolders, createProjectIn, attachIn, detachIn, setupIn };
+  const setSetupCommandIn = (p: Pending, projectId: ProjectId, command: string | null): Project => {
+    const project = db.get<ProjectDbRow>("SELECT * FROM projects WHERE id = ? AND status = 'active'", projectId);
+    if (project === undefined) throw fail("not_found", `没有编号 ${projectId} 的在用项目`);
+    assertPmNotArchived(project.pm_id);
+    return toProject(writeSetupCommandIn(ctx, p, project.id, validSetupCommand(command)));
+  };
+
+  return { activeProjectOf, projectCard, syncSessionFolders, createProjectIn, attachIn, detachIn, setupIn, setSetupCommandIn };
 }

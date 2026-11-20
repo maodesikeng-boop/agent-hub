@@ -4,6 +4,7 @@ import { delimiter, join } from "node:path";
 import {
   ENV_HUB_SOCK,
   ENV_HUB_TOKEN,
+  INHERIT_WORKER_CAPABILITIES,
   REVIEW_HOOKS_DIR,
   REVIEW_PRE_PUSH_HOOK,
   WORKER_BACKGROUND_HOLD_MAX_MS,
@@ -14,16 +15,17 @@ import {
   reviewPushGuardEnv,
   taskGraphSkillCatalogEntry,
   vendorSpec,
+  workerCapabilityPolicy,
   workerWriteScope,
 } from "../shared/index.ts";
 import type {
   AgentSessionRow,
+  CapabilityPolicy,
   LaunchContext,
   LaunchFiles,
+  Ledger,
   PersonaNote,
   PersonaUpdate,
-  PmCapabilityPolicy,
-  PmId,
   SessionCapabilities,
   SessionId,
   SessionRole,
@@ -56,7 +58,7 @@ export interface LaunchPreparerOptions {
   basePath?: string | (() => string);
   vendorAvailability?: () => VendorAvailabilityMap;
   routerPurposeOf?: (sessionId: SessionId) => RouterTurnPurpose;
-  getPmCapabilityPolicy?: (pmId: PmId) => PmCapabilityPolicy;
+  capabilityPolicies?: Pick<Ledger, "getPmCapabilityPolicy" | "getRouterCapabilityPolicy">;
   capabilityInventory?: Pick<CapabilityInventoryService, "get">;
   prepareOsSandbox?: (input: OsSandboxLaunchPrep) => Promise<void>;
 }
@@ -74,6 +76,49 @@ function sessionRole(ctx: LaunchContext): SessionRole {
   throw new Error(`session ${ctx.sessionId} has role ${ctx.role}; only pm and worker sessions can be launched`);
 }
 
+async function sessionCapabilities(
+  inventory: LaunchPreparerOptions["capabilityInventory"],
+  vendor: string,
+  policy: CapabilityPolicy | undefined,
+  projectDir: string | null,
+): Promise<SessionCapabilities | undefined> {
+  if (inventory === undefined || policy === undefined || !isAgentVendor(vendor)) return undefined;
+  return resolveSessionCapabilities(policy, await inventory.get({ projectDir }), vendor) ?? undefined;
+}
+
+// Workers narrow their project's policy; readonly enforcement stays independent of whatever gets mounted.
+function agentCapabilityPolicy(options: LaunchPreparerOptions, ctx: LaunchContext): CapabilityPolicy | undefined {
+  const project = options.capabilityPolicies?.getPmCapabilityPolicy(ctx.pm.id);
+  if (project === undefined || ctx.role !== "worker") return project;
+  return workerCapabilityPolicy(project, ctx.workerCapabilities ?? INHERIT_WORKER_CAPABILITIES);
+}
+
+async function prepareRouterLaunch(
+  options: LaunchPreparerOptions,
+  session: AgentSessionRow,
+  env: { basePath: string; homeDir: string; prepareOsSandbox: (input: OsSandboxLaunchPrep) => Promise<void> },
+): Promise<LaunchFiles> {
+  const { launchDir, dataDir, stateDir } = options;
+  const capabilities = await sessionCapabilities(options.capabilityInventory, session.vendor, options.capabilityPolicies?.getRouterCapabilityPolicy(), null);
+  const files = prepareRouterSandboxLaunch(session, {
+    launchDir,
+    dataDir,
+    stateDir,
+    protectedRoots: options.protectedRoots?.(),
+    homeDir: env.homeDir,
+    osSandboxed: options.osSandboxed,
+    tokens: options.tokens,
+    hubSock: options.hubSock,
+    hubBinDir: options.hubBinDir,
+    basePath: env.basePath,
+    vendorAvailability: options.vendorAvailability?.(),
+    purpose: options.routerPurposeOf?.(session.id) ?? "dispatch",
+    ...(capabilities === undefined ? {} : { capabilities }),
+  });
+  await env.prepareOsSandbox({ dataDir, stateDir, writeScope: files.writeScope ?? null, readonly: files.readonly });
+  return files;
+}
+
 /** Launch files are rewritten on every start so they always match the current settings. */
 export function createLaunchPreparer(options: LaunchPreparerOptions): (session: AgentSessionRow) => Promise<LaunchFiles> {
   const { launchDir, dataDir, stateDir, worktreesDir, getLaunchContext, tokens, hubSock, hubBinDir } = options;
@@ -85,24 +130,7 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
   const prepareOsSandbox = options.prepareOsSandbox ?? ((input: OsSandboxLaunchPrep) => prepareOsSandboxForLaunch(input));
   return async (session) => {
     const basePath = resolveBasePath();
-    if (session.role === "assistant") {
-      const files = prepareRouterSandboxLaunch(session, {
-        launchDir,
-        dataDir,
-        stateDir,
-        protectedRoots: options.protectedRoots?.(),
-        homeDir,
-        osSandboxed: options.osSandboxed,
-        tokens,
-        hubSock,
-        hubBinDir,
-        basePath,
-        vendorAvailability: options.vendorAvailability?.(),
-        purpose: options.routerPurposeOf?.(session.id) ?? "dispatch",
-      });
-      await prepareOsSandbox({ dataDir, stateDir, writeScope: files.writeScope ?? null, readonly: files.readonly });
-      return files;
-    }
+    if (session.role === "assistant") return prepareRouterLaunch(options, session, { basePath, homeDir, prepareOsSandbox });
     const osSandboxed = typeof options.osSandboxed === "function" ? options.osSandboxed() : (options.osSandboxed ?? osSandboxAvailable());
     const rawCtx = getLaunchContext(session.id);
     const ctx: LaunchContext = {
@@ -131,13 +159,7 @@ export function createLaunchPreparer(options: LaunchPreparerOptions): (session: 
           });
     // Vendors that enforce readonly through settings (claude's own sandbox) are not wrapped in the outer sandbox, because sandboxes cannot nest.
     const vendor = isAgentVendor(session.vendor) ? session.vendor : null;
-    let capabilities: SessionCapabilities | undefined;
-    if (vendor !== null && options.getPmCapabilityPolicy && options.capabilityInventory) {
-      const policy = options.getPmCapabilityPolicy(ctx.pm.id);
-      const mainFolder = ctx.project?.mainFolder.trim() ?? "";
-      const inv = await options.capabilityInventory.get({ projectDir: mainFolder === "" ? null : mainFolder });
-      capabilities = resolveSessionCapabilities(policy, inv, vendor) ?? undefined;
-    }
+    const capabilities = await sessionCapabilities(options.capabilityInventory, session.vendor, agentCapabilityPolicy(options, ctx), ctx.project?.mainFolder.trim() || null);
     const nativeReadonly = readonlyPolicy !== undefined && vendor !== null && vendorSpec(vendor).capabilities.readonly === "settings";
     const vendorFiles = vendor !== null
       ? VENDOR_DAEMONS[vendor].launchFiles?.({

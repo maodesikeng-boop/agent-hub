@@ -615,12 +615,12 @@ describe("资料页", () => {
     expect(api.callsTo("GET", /^\/api\/pms\/1\/persona$/)).toHaveLength(1);
   });
 
-  it("分组：模型（头部下面第一组，不写标题）、工作方式、文件夹、定时任务、性格设定、修改记录、会话；没有大的“保存”按钮；没有英文组名", async () => {
+  it("分组：模型（头部下面第一组，不写标题）、工作方式、能力、文件夹、准备命令、定时任务、性格设定、修改记录、会话；没有大的“保存”按钮；没有英文组名", async () => {
     const user = userEvent.setup();
     await boot();
     const page = await pmChat(user);
     await within(page).findByRole("textbox", { name: "Persona" });
-    const groups = ["Model", "Mode", "Folders", "Schedules", "Persona", "Memory files", "History", "Session"];
+    const groups = ["Model", "Mode", "Capabilities", "Folders", "Worktree setup", "Schedules", "Persona", "Memory files", "History", "Session"];
     expect(within(page).getAllByRole("region").map((r) => r.getAttribute("aria-label"))).toEqual(groups);
     expect(within(groupIn(page, "Model")).queryByRole("heading")).not.toBeInTheDocument();
     for (const title of groups.slice(1)) expect(within(groupIn(page, title)).getByRole("heading", { name: new RegExp(`^${title}`) })).toBeInTheDocument();

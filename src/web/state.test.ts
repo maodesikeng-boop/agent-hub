@@ -367,6 +367,12 @@ describe("M2 新的变化类型", () => {
     expect(s2.projects).toHaveLength(1);
   });
 
+  it("project.updated：原地换掉同编号的项目（准备命令改了界面跟着变）", () => {
+    const s1 = applyChange(loaded(), changeOf(11, "project.created", { project: makeProject({ id: 1 }) }));
+    const s2 = applyChange(s1, changeOf(12, "project.updated", { project: makeProject({ id: 1, setupCommand: "pnpm i" }) }));
+    expect(s2.projects).toEqual([makeProject({ id: 1, setupCommand: "pnpm i" })]);
+  });
+
   it("folders.updated：只换这个项目的文件夹，别的项目的不动；空列表表示全移除", () => {
     const s0 = loaded({
       folders: [makeFolder({ id: 1, projectId: 1, path: "/a" }), makeFolder({ id: 2, projectId: 2, path: "/b" })],

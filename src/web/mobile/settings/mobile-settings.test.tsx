@@ -210,6 +210,7 @@ describe("一级设置主页", () => {
     renderSettings("#/settings", { notify: notifyOf({ enabled: true }), devices });
     expect(screen.getByRole("region", { name: "General" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Providers" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Capabilities" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Computers" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Security & Access" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Notifications/ })).toHaveTextContent(/On$/);
@@ -228,6 +229,20 @@ describe("一级设置主页", () => {
 });
 
 describe("子页", () => {
+  it("Capabilities：一级主页不请求；进子页默认总助，拉总助的能力清单，开关和桌面同一套", async () => {
+    const api = new FakeApi(makeSnapshot({}));
+    api.install();
+    renderSettings("#/settings");
+    expect(api.calls).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: /^Capabilities/ }));
+    expect(location.hash).toBe("#/settings/capabilities");
+    expect(await screen.findByRole("heading", { level: 1, name: "Capabilities" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Router" })).toBeChecked();
+    const mcp = await screen.findByRole("region", { name: "MCP servers" });
+    expect(mcp).toHaveTextContent("0 of 3");
+    expect(api.callsTo("GET", /^\/api\/router\/capabilities$/)).toHaveLength(1);
+  });
+
   it("界面大小：四档整行勾选，点了马上生效，一级摘要跟着变", async () => {
     new FakeApi(makeSnapshot({})).install();
     renderSettings("#/settings");

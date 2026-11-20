@@ -473,6 +473,7 @@ describe("M2：界面接口", () => {
       "pm.updated",
       "pm.removed",
       "project.created",
+      "project.updated",
       "folders.updated",
       "conversation.created",
       "conversation.purged",
@@ -1009,7 +1010,7 @@ describe("Router 与任务图同源待决模型（decisions.ts & limits.ts）", 
   it("pendingDecisionsOf：汇聚 waiting_user 门禁与无 gateRef 的独立待决项，自动去重，且 WeakMap 保持引用稳定", () => {
     const snap: Parameters<typeof pendingDecisionsOf>[0] = {
       pms: [{ id: 1, name: "小林", mode: "manage_only", vendor: "claude", defaultModel: null, effort: null, personaFile: null, createdAt: 1 }],
-      projects: [{ id: 2, name: "导出模块", description: null, status: "active", pmId: 1, conversationId: 1, createdAt: 1, updatedAt: 1 }],
+      projects: [{ id: 2, name: "导出模块", description: null, status: "active", pmId: 1, conversationId: 1, setupCommand: null, createdAt: 1, updatedAt: 1 }],
       conversations: [
         {
           conversation: { id: 1, kind: "pm", pmId: 1, projectId: null, title: "小林", createdAt: 1 },

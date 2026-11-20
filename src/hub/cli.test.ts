@@ -166,6 +166,25 @@ describe("hub cli", () => {
       ]);
     });
 
+    it("worker start --caps sends the mode; custom carries deduplicated --allow keys", async () => {
+      expect((await hub(["worker", "start", "--title", "x", "--caps", "none", "--stdin"], { stdin: stdinOf("t") })).code).toBe(0);
+      const custom = ["worker", "start", "--title", "x", "--caps", "custom", "--allow", "skill:b", "--allow", "mcp:a", "--allow", "mcp:a", "--stdin"];
+      expect((await hub(custom, { stdin: stdinOf("t") })).code).toBe(0);
+      expect(ledger.calls.map((c) => c.args)).toEqual([
+        { title: "x", caps: "none", task: "t" },
+        { title: "x", caps: "custom", allow: ["mcp:a", "skill:b"], task: "t" },
+      ]);
+    });
+
+    it("worker start rejects --allow without --caps custom and custom without --allow", async () => {
+      for (const extra of [["--caps", "custom"], ["--allow", "mcp:a"], ["--caps", "none", "--allow", "mcp:a"], ["--caps", "full"], ["--caps", "custom", "--allow", "bad"]]) {
+        const r = await hub(["worker", "start", "--title", "x", ...extra, "--stdin"], { stdin: stdinOf("t") });
+        expect(r.code).toBe(HUB_EXIT.usage);
+        expect(r.stderr).toMatch(/--caps|--allow|skill:/);
+      }
+      expect(ledger.calls).toEqual([]);
+    });
+
     it("worker start --effort sends the level; any level from the vendor list is accepted", async () => {
       for (const level of ALL_EFFORTS) {
         expect((await hub(["worker", "start", "--title", "修 X", "--effort", level, "--stdin"], { stdin: stdinOf("任务") })).code).toBe(0);
@@ -371,7 +390,7 @@ describe("hub cli", () => {
       const r = await hub(["--help"]);
       const vendorUnion = AGENT_VENDORS.join("|");
       const effortUnion = ALL_EFFORTS.join("|");
-      for (const usage of [`${cmd} models [--vendor ${vendorUnion}] [--refresh]`, `${cmd} worker start --title`, `--vendor ${vendorUnion}`, `--effort ${effortUnion}`, "--max-time <时长>", "--readonly", "--no-worktree", `${cmd} worker send <编号> [--max-time <时长>] --stdin`, `${cmd} worker max-time <编号> <时长>`, `${cmd} worker end <编号>`, `${cmd} worker list`, `${cmd} worker show <编号>`, `${cmd} worker log <编号> [--last N | --stats]`, `${cmd} ask [--node <步骤>] [--graph <图编号>] [--option <选项>...] [--recommended <选项>] [--replace <编号>] [--file [标签=]路径...] --stdin`]) {
+      for (const usage of [`${cmd} models [--vendor ${vendorUnion}] [--refresh]`, `${cmd} worker start --title`, `--vendor ${vendorUnion}`, `--effort ${effortUnion}`, "--max-time <时长>", "--readonly", "--caps inherit|none|custom [--allow <能力>...]", "--no-worktree", `${cmd} worker send <编号> [--max-time <时长>] --stdin`, `${cmd} worker max-time <编号> <时长>`, `${cmd} worker end <编号>`, `${cmd} worker list`, `${cmd} worker show <编号>`, `${cmd} worker log <编号> [--last N | --stats]`, `${cmd} ask [--node <步骤>] [--graph <图编号>] [--option <选项>...] [--recommended <选项>] [--replace <编号>] [--file [标签=]路径...] --stdin`]) {
         expect(r.stdout).toContain(usage);
       }
       expect(r.stdout).not.toContain(`${cmd} router ask`);

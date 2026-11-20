@@ -9,6 +9,9 @@ import {
   type ArchivePmResponse,
   type Attachment,
   type BrowserSessionsResponse,
+  type CapabilitiesPatch,
+  type CapabilitiesView,
+  type CapabilityScope,
   type DecideTaskNodeRequest,
   type DecideTaskNodeResponse,
   type DeviceRouterDigest,
@@ -65,6 +68,8 @@ import {
   type ProvidersStatusResponse,
   type PutPmMemoryFileRequest,
   type PutPmMemoryFileResponse,
+  type PutProjectSetupCommandRequest,
+  type PutProjectSetupCommandResponse,
   type QuotaResponse,
   type RenewSessionResponse,
   type ResolveRouterItemRequest,
@@ -173,12 +178,57 @@ function postJson<T>(path: string, body?: unknown, timeoutMs: number | null = AP
   );
 }
 
-function putJson<T>(path: string, body: unknown): Promise<T> {
+function sendJson<T>(method: "PUT" | "PATCH", path: string, body: unknown): Promise<T> {
   return request<T>(path, {
-    method: "PUT",
+    method,
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
+}
+
+const putJson = <T>(path: string, body: unknown): Promise<T> => sendJson<T>("PUT", path, body);
+
+function capabilitiesPath(scope: CapabilityScope): string {
+  return scope.kind === "router" ? API_PATHS.routerCapabilities : API_PATHS.pmCapabilities(scope.pmId);
+}
+
+function capabilityRoutes(at: (path: string) => string) {
+  return {
+    fetchCapabilities: (scope: CapabilityScope, options: { refresh?: boolean } = {}) =>
+      request<CapabilitiesView>(at(`${capabilitiesPath(scope)}${options.refresh ? "?refresh=1" : ""}`), undefined, SLOW_API_REQUEST_TIMEOUT_MS),
+    patchCapabilities: (scope: CapabilityScope, body: CapabilitiesPatch) => sendJson<CapabilitiesView>("PATCH", at(capabilitiesPath(scope)), body),
+    putProjectSetupCommand: (projectId: ProjectId, command: string | null) =>
+      putJson<PutProjectSetupCommandResponse>(at(API_PATHS.projectSetupCommand(projectId)), { command } satisfies PutProjectSetupCommandRequest),
+  };
+}
+
+function providerRoutes(at: (path: string) => string) {
+  return {
+    fetchProviders: (options: { refresh?: boolean } = {}) =>
+      request<ProvidersStatusResponse>(
+        at(options.refresh ? `${API_PATHS.providers}?refresh=1` : API_PATHS.providers),
+        undefined,
+        options.refresh ? SLOW_API_REQUEST_TIMEOUT_MS : API_REQUEST_TIMEOUT_MS,
+      ),
+    postProviderInstall: (vendor: AgentVendor) =>
+      postJson<ProviderStatusItem>(at(API_PATHS.providerInstall(vendor)), {}),
+    postProviderUpdate: (vendor: AgentVendor) =>
+      postJson<ProviderStatusItem>(at(API_PATHS.providerUpdate(vendor)), {}),
+    postProviderJobCancel: (vendor: AgentVendor, body: ProviderCancelJobRequest) =>
+      postJson<ProviderStatusItem>(at(API_PATHS.providerJobCancel(vendor)), body),
+    postProviderGitInstall: () =>
+      postJson<ProvidersStatusResponse>(at(API_PATHS.providerGitInstall), {}),
+    postProviderAuthStart: (vendor: AgentVendor, body: ProviderStartAuthRequest) =>
+      postJson<ProviderStatusItem>(at(API_PATHS.providerAuthStart(vendor)), body),
+    postProviderAuthSubmit: (vendor: AgentVendor, body: ProviderSubmitAuthRequest) =>
+      postJson<ProviderStatusItem>(at(API_PATHS.providerAuthSubmit(vendor)), body),
+    postProviderAuthCancel: (vendor: AgentVendor, body: ProviderCancelAuthRequest) =>
+      postJson<ProviderStatusItem>(at(API_PATHS.providerAuthCancel(vendor)), body),
+    postProviderAuthApiKey: (vendor: AgentVendor, body: ProviderSaveApiKeyRequest) =>
+      postJson<ProviderStatusItem>(at(API_PATHS.providerAuthApiKey(vendor)), body, SLOW_API_REQUEST_TIMEOUT_MS),
+    postProviderAuthLogout: (vendor: AgentVendor, body: ProviderLogoutRequest = {}) =>
+      postJson<ProviderStatusItem>(at(API_PATHS.providerAuthLogout(vendor)), body, SLOW_API_REQUEST_TIMEOUT_MS),
+  };
 }
 
 export function createClient(device: DeviceId | null) {
@@ -234,30 +284,8 @@ export function createClient(device: DeviceId | null) {
     fetchQuota: () => request<QuotaResponse>(at(API_PATHS.quota), undefined, SLOW_API_REQUEST_TIMEOUT_MS),
     fetchVendorSyncPreview: () => request<VendorSyncPreviewResponse>(at(API_PATHS.vendorSyncPreview), undefined, SLOW_API_REQUEST_TIMEOUT_MS),
     postVendorSyncApply: (body: VendorSyncApplyRequest) => postJson<VendorSyncApplyResponse>(at(API_PATHS.vendorSyncApply), body, SLOW_API_REQUEST_TIMEOUT_MS),
-    fetchProviders: (options: { refresh?: boolean } = {}) =>
-      request<ProvidersStatusResponse>(
-        at(options.refresh ? `${API_PATHS.providers}?refresh=1` : API_PATHS.providers),
-        undefined,
-        options.refresh ? SLOW_API_REQUEST_TIMEOUT_MS : API_REQUEST_TIMEOUT_MS,
-      ),
-    postProviderInstall: (vendor: AgentVendor) =>
-      postJson<ProviderStatusItem>(at(API_PATHS.providerInstall(vendor)), {}),
-    postProviderUpdate: (vendor: AgentVendor) =>
-      postJson<ProviderStatusItem>(at(API_PATHS.providerUpdate(vendor)), {}),
-    postProviderJobCancel: (vendor: AgentVendor, body: ProviderCancelJobRequest) =>
-      postJson<ProviderStatusItem>(at(API_PATHS.providerJobCancel(vendor)), body),
-    postProviderGitInstall: () =>
-      postJson<ProvidersStatusResponse>(at(API_PATHS.providerGitInstall), {}),
-    postProviderAuthStart: (vendor: AgentVendor, body: ProviderStartAuthRequest) =>
-      postJson<ProviderStatusItem>(at(API_PATHS.providerAuthStart(vendor)), body),
-    postProviderAuthSubmit: (vendor: AgentVendor, body: ProviderSubmitAuthRequest) =>
-      postJson<ProviderStatusItem>(at(API_PATHS.providerAuthSubmit(vendor)), body),
-    postProviderAuthCancel: (vendor: AgentVendor, body: ProviderCancelAuthRequest) =>
-      postJson<ProviderStatusItem>(at(API_PATHS.providerAuthCancel(vendor)), body),
-    postProviderAuthApiKey: (vendor: AgentVendor, body: ProviderSaveApiKeyRequest) =>
-      postJson<ProviderStatusItem>(at(API_PATHS.providerAuthApiKey(vendor)), body, SLOW_API_REQUEST_TIMEOUT_MS),
-    postProviderAuthLogout: (vendor: AgentVendor, body: ProviderLogoutRequest = {}) =>
-      postJson<ProviderStatusItem>(at(API_PATHS.providerAuthLogout(vendor)), body, SLOW_API_REQUEST_TIMEOUT_MS),
+    ...providerRoutes(at),
+    ...capabilityRoutes(at),
     postRenewSession: (pmId: PmId) => postJson<RenewSessionResponse>(at(API_PATHS.renewSession(pmId))),
     postArchivePm: (pmId: PmId) => postJson<ArchivePmResponse>(at(API_PATHS.archivePm(pmId))),
     postUnarchivePm: (pmId: PmId) => postJson<ArchivePmResponse>(at(API_PATHS.unarchivePm(pmId))),
@@ -321,8 +349,7 @@ export const localClient: HubClient = createClient(null);
 export const { fetchState, postMessage, postUpload, fetchVendorSyncPreview, postVendorSyncApply } = localClient;
 
 export const fetchDevices = () => request<DevicesResponse>(API_PATHS.devices);
-export const patchDevice = (id: DeviceId, body: RenameDeviceRequest) =>
-  request<DeviceInfo>(API_PATHS.device(id), { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+export const patchDevice = (id: DeviceId, body: RenameDeviceRequest) => sendJson<DeviceInfo>("PATCH", API_PATHS.device(id), body);
 export const deleteDevice = (id: DeviceId) => request<void>(API_PATHS.device(id), { method: "DELETE" });
 
 export const fetchAccount = () => request<AccountStatusView>(API_PATHS.account);

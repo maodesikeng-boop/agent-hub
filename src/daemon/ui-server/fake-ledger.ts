@@ -2,7 +2,7 @@ import {
   applyCapabilitiesPatch,
   CHANGE_BUFFER_SIZE,
   ConversationNotFoundError,
-  defaultPmCapabilityPolicy,
+  defaultCapabilityPolicy,
   defaultRouterSettings,
   deliveryParts,
   emptyRouterSlice,
@@ -38,11 +38,12 @@ import {
   type PersonaView,
   type Pm,
   type PmLookSetting,
-  type PmCapabilitiesPatch,
-  type PmCapabilityPolicy,
+  type CapabilitiesPatch,
+  type CapabilityPolicy,
   type PmId,
   type PostUserMessageInput,
   type PostUserMessageResult,
+  type Project,
   type ProjectId,
   type RecheckUserBlockerResponse,
   type ResolveRouterItemRequest,
@@ -163,8 +164,10 @@ export class FakeLedger {
   readonly unarchived: PmId[] = [];
   readonly lookCalls: Array<{ pmId: PmId; look: PmLookSetting }> = [];
   readonly capabilityReads: PmId[] = [];
-  readonly capabilityPatches: Array<{ pmId: PmId; patch: PmCapabilitiesPatch }> = [];
-  readonly pmPolicies = new Map<PmId, PmCapabilityPolicy>();
+  readonly capabilityPatches: Array<{ pmId: PmId; patch: CapabilitiesPatch }> = [];
+  readonly pmPolicies = new Map<PmId, CapabilityPolicy>();
+  routerPolicy: CapabilityPolicy = defaultCapabilityPolicy("router");
+  readonly setupCommandEdits: Array<{ projectId: ProjectId; command: string | null }> = [];
   readonly pmMainFolders = new Map<PmId, string | null>();
   personaChange: PersonaChange | null = makePersonaChange();
   snapshotValue: LedgerSnapshot = {
@@ -282,7 +285,7 @@ export class FakeLedger {
       project:
         input.folder === undefined
           ? null
-          : { id: 8, name: "foo", description: null, status: "active", pmId: 7, conversationId: 70, createdAt: 1, updatedAt: 1 },
+          : { id: 8, name: "foo", description: null, status: "active", pmId: 7, conversationId: 70, setupCommand: null, createdAt: 1, updatedAt: 1 },
     };
   }
 
@@ -298,19 +301,35 @@ export class FakeLedger {
     return { change: this.personaChange, persona: makePersonaView(pmId, this.personaChange === null ? [] : [this.personaChange]) };
   }
 
-  getPmCapabilityPolicy(pmId: PmId): PmCapabilityPolicy {
+  getPmCapabilityPolicy(pmId: PmId): CapabilityPolicy {
     this.check();
     this.capabilityReads.push(pmId);
-    return this.pmPolicies.get(pmId) ?? defaultPmCapabilityPolicy(pmId);
+    return this.pmPolicies.get(pmId) ?? defaultCapabilityPolicy("pm");
   }
 
-  patchPmCapabilities(pmId: PmId, patch: PmCapabilitiesPatch): PmCapabilityPolicy {
+  patchPmCapabilities(pmId: PmId, patch: CapabilitiesPatch): CapabilityPolicy {
     this.check();
     this.capabilityPatches.push({ pmId, patch });
-    const cur = this.pmPolicies.get(pmId) ?? defaultPmCapabilityPolicy(pmId);
-    const next = applyCapabilitiesPatch(cur, patch);
+    const next = applyCapabilitiesPatch(this.pmPolicies.get(pmId) ?? defaultCapabilityPolicy("pm"), patch);
     this.pmPolicies.set(pmId, next);
     return next;
+  }
+
+  getRouterCapabilityPolicy(): CapabilityPolicy {
+    this.check();
+    return this.routerPolicy;
+  }
+
+  patchRouterCapabilities(patch: CapabilitiesPatch): CapabilityPolicy {
+    this.check();
+    this.routerPolicy = applyCapabilitiesPatch(this.routerPolicy, patch);
+    return this.routerPolicy;
+  }
+
+  setProjectSetupCommand(projectId: ProjectId, command: string | null): Project {
+    this.check();
+    this.setupCommandEdits.push({ projectId, command });
+    return { id: projectId, name: "foo", description: null, status: "active", pmId: 7, conversationId: 70, setupCommand: command, createdAt: 1, updatedAt: 2 };
   }
 
   pmProjectMainFolder(pmId: PmId): string | null {
@@ -602,6 +621,9 @@ export class FakeLedger {
       deletePmMemoryFile: unused("deletePmMemoryFile"),
       getPmCapabilityPolicy: (p) => this.getPmCapabilityPolicy(p),
       patchPmCapabilities: (p, patch) => this.patchPmCapabilities(p, patch),
+      getRouterCapabilityPolicy: () => this.getRouterCapabilityPolicy(),
+      patchRouterCapabilities: (patch) => this.patchRouterCapabilities(patch),
+      setProjectSetupCommand: (id, command) => this.setProjectSetupCommand(id, command),
       setPmLook: (p, look) => this.setPmLook(p, look),
       pmProjectMainFolder: (p) => this.pmProjectMainFolder(p),
       retryMessage: (m) => this.retryMessage(m),

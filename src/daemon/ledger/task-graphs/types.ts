@@ -13,6 +13,7 @@ import type {
 } from "../../../shared/domain.ts";
 import type { ProjectCard } from "../../../shared/hub.ts";
 import type { HubCallContext } from "../../../shared/ledger.ts";
+import type { WorkerCapabilities } from "../../../shared/pm-capabilities.ts";
 import type { AgentVendor } from "../../../shared/vendors.ts";
 import type { LedgerContext, Pending } from "../context.ts";
 import type { LedgerMessages } from "../messages.ts";
@@ -118,6 +119,7 @@ export interface WorkerBindTarget {
   model: string | null;
   effort: string | null;
   readonly: boolean;
+  capabilities: WorkerCapabilities;
   maxTimeMs: number | null;
   review: boolean;
   base: string | null;
@@ -153,6 +155,7 @@ export interface TaskGraphWorkersBridge {
       model: string | null;
       effort: string | null;
       readonly: boolean;
+      capabilities: WorkerCapabilities;
       maxTimeMs: number | null;
       workspacePlan: StepWorkspacePlan;
       buildFirstMessage: (

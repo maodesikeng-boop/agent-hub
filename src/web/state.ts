@@ -244,9 +244,7 @@ export function applyChange(state: HubState, change: Change): HubState {
       const raw = change.data.message;
       const wasRewoundPending = state.rewoundKeys?.includes(raw.dedupeKey) === true;
       const message = wasRewoundPending ? withRewoundMeta(raw) : raw;
-      const nextBase = wasRewoundPending
-        ? { ...next, rewoundKeys: state.rewoundKeys!.filter((k) => k !== raw.dedupeKey) }
-        : next;
+      const nextBase = wasRewoundPending ? { ...next, rewoundKeys: state.rewoundKeys!.filter((k) => k !== raw.dedupeKey) } : next;
       const afterStreaming =
         change.type === "message.created" &&
         message.sender === "agent" &&
@@ -344,6 +342,7 @@ export function applyChange(state: HubState, change: Change): HubState {
       };
     }
     case "project.created":
+    case "project.updated":
       return { ...next, projects: upsertBy(state.projects, change.data.project, (a, b) => a.id === b.id) };
     case "folders.updated": {
       const { projectId, folders } = change.data;

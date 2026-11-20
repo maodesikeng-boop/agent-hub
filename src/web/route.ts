@@ -12,6 +12,7 @@ export const SETTINGS_SECTIONS = [
   "notifications",
   "providers",
   "vendor-sync",
+  "capabilities",
   "computers",
   "sign-in",
   "browsers",

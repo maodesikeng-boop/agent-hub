@@ -1442,7 +1442,7 @@ describe("worktree 准备命令（hub project setup）", () => {
   const activityOf = (workerId: WorkerId) =>
     ledger.snapshot().sessions.find((s) => s.sessionId === workerSessionId(workerId))!.activity;
 
-  it("24 设置、清除：写进 projects.setup_command，hub_calls 都记；不推变化、不改会话", () => {
+  it("24 设置、清除：写进 projects.setup_command，hub_calls 都记；只推 project.updated、不改会话", () => {
     changes = [];
     const set = setup("pnpm install --frozen-lockfile --ignore-scripts");
     expect(set.data.setupCommand).toBe("pnpm install --frozen-lockfile --ignore-scripts");
@@ -1453,7 +1453,10 @@ describe("worktree 准备命令（hub project setup）", () => {
     expect(cleared.text).toContain("已清除");
     expect(db.get("SELECT setup_command FROM projects WHERE id = ?", projectId)).toEqual({ setup_command: null });
     expect(count("hub_calls", "command = 'project.setup' AND ok = 1")).toBe(2);
-    expect(changes).toEqual([]);
+    expect(changes.map((c) => [c.type, (c.data as { project: { setupCommand: string | null } }).project.setupCommand])).toEqual([
+      ["project.updated", "pnpm install --frozen-lockfile --ignore-scripts"],
+      ["project.updated", null],
+    ]);
   });
 
   it("24b 空的、带 NUL、超长 → invalid；没有项目 → not_found；Worker 调 → forbidden；失败的也记 hub_calls", () => {

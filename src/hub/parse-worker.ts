@@ -1,6 +1,7 @@
 import { validateAskOptions } from "../shared/domain.ts";
 import { MAX_GATE_OPTIONS, WORKER_LOG_MAX_STEPS, WORKER_SEARCH_MAX_LIMIT } from "../shared/limits.ts";
 import { HUB_COMMAND } from "../shared/names.ts";
+import { workerCapabilitiesOf } from "../shared/pm-capabilities.ts";
 import { AGENT_VENDORS, ALL_EFFORTS, isAgentVendor } from "../shared/vendors.ts";
 import {
   UsageError,
@@ -21,7 +22,7 @@ export function parseWorkerCommand({ group, action, rest, values }: GroupArgs): 
   if (group === "worker" && action === "start") {
     allowOnly(
       values,
-      ["title", "vendor", "model", "effort", "max-time", "readonly", "no-worktree", "node", "graph", "stdin"],
+      ["title", "vendor", "model", "effort", "max-time", "readonly", "caps", "allow", "no-worktree", "node", "graph", "stdin"],
       "worker start",
     );
     expectPositionals(rest, 0, "worker start");
@@ -42,6 +43,12 @@ export function parseWorkerCommand({ group, action, rest, values }: GroupArgs): 
     if (values.effort !== undefined) body.effort = values.effort;
     if (values["max-time"] !== undefined) body.maxTimeMs = maxTimeMsOf(values["max-time"]);
     if (values.readonly === true) body.readonly = true;
+    if (values.caps !== undefined || values.allow !== undefined) {
+      const caps = workerCapabilitiesOf(values.caps, values.allow);
+      if ("error" in caps) throw new UsageError(caps.error.replace(/\bcaps\b/g, "--caps").replace(/\ballow\b/g, "--allow"));
+      body.caps = caps.mode;
+      if (caps.mode === "custom") body.allow = caps.allow;
+    }
     if (values["no-worktree"] === true) body.noWorktree = true;
     if (values.node !== undefined) {
       if (values.node.trim() === "") throw new UsageError("--node 不能是空的");

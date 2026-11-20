@@ -238,6 +238,7 @@ export function toProject(row: ProjectDbRow): Project {
     status: row.status as ProjectStatus,
     pmId: row.pm_id,
     conversationId: row.conversation_id,
+    setupCommand: row.setup_command,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

@@ -3,12 +3,17 @@ import {
   applyCapabilitiesPatch,
   capabilityEnabled,
   capabilityKey,
-  defaultPmCapabilityPolicy,
+  blockedWorkerCapabilities,
+  defaultCapabilityPolicy,
+  parseWorkerCapabilitiesJson,
   resolveSessionCapabilities,
+  workerCapabilitiesJson,
+  workerCapabilitiesOf,
+  workerCapabilityPolicy,
   type CapabilityGroup,
   type CapabilityInventory,
   type CapabilityItem,
-  type PmCapabilityPolicy,
+  type CapabilityPolicy,
 } from "./pm-capabilities.ts";
 
 function makeInventory(
@@ -25,8 +30,7 @@ function makeInventory(
 
 describe("capabilityEnabled", () => {
   it("有单独设置时用单独设置", () => {
-    const policy: PmCapabilityPolicy = {
-      pmId: 1,
+    const policy: CapabilityPolicy = {
       base: { skill: "all", mcp: "none", connector: "all" },
       overrides: {
         "skill:aws-auth": false,
@@ -38,8 +42,7 @@ describe("capabilityEnabled", () => {
   });
 
   it("没有单独设置时按这一类的 base", () => {
-    const policy: PmCapabilityPolicy = {
-      pmId: 1,
+    const policy: CapabilityPolicy = {
       base: { skill: "all", mcp: "none", connector: "none" },
       overrides: {},
     };
@@ -53,24 +56,22 @@ describe("applyCapabilitiesPatch", () => {
   it("不改入参，返回新 policy", () => {
     const baseObj = Object.freeze({ skill: "all" as const, mcp: "all" as const, connector: "all" as const });
     const overridesObj = Object.freeze({ "skill:a": false });
-    const input: PmCapabilityPolicy = Object.freeze({ pmId: 2, base: baseObj, overrides: overridesObj });
+    const input: CapabilityPolicy = Object.freeze({ base: baseObj, overrides: overridesObj });
 
     const next = applyCapabilitiesPatch(input, { base: { mcp: "none" }, set: { "skill:b": false } });
     expect(next).not.toBe(input);
     expect(input).toEqual({
-      pmId: 2,
       base: { skill: "all", mcp: "all", connector: "all" },
       overrides: { "skill:a": false },
     });
     expect(next).toEqual({
-      pmId: 2,
       base: { skill: "all", mcp: "none", connector: "all" },
       overrides: { "skill:a": false, "skill:b": false },
     });
   });
 
   it("值和 base 相同的项从 overrides 去掉", () => {
-    const first = applyCapabilitiesPatch(defaultPmCapabilityPolicy(1), {
+    const first = applyCapabilitiesPatch(defaultCapabilityPolicy("pm"), {
       set: { "skill:aws-auth": false, "mcp:codegraph": false },
     });
     expect(first.overrides).toEqual({ "skill:aws-auth": false, "mcp:codegraph": false });
@@ -83,8 +84,7 @@ describe("applyCapabilitiesPatch", () => {
   });
 
   it("set 给 null 去掉这一项的单独设置", () => {
-    const policy: PmCapabilityPolicy = {
-      pmId: 1,
+    const policy: CapabilityPolicy = {
       base: { skill: "none", mcp: "all", connector: "all" },
       overrides: { "skill:aws-auth": true, "mcp:codegraph": false },
     };
@@ -94,8 +94,7 @@ describe("applyCapabilitiesPatch", () => {
   });
 
   it("改 base 时去掉和新 base 相同的已有单独设置", () => {
-    const policy: PmCapabilityPolicy = {
-      pmId: 1,
+    const policy: CapabilityPolicy = {
       base: { skill: "all", mcp: "all", connector: "all" },
       overrides: { "skill:a": false, "skill:b": false, "mcp:codegraph": false },
     };
@@ -115,7 +114,7 @@ describe("resolveSessionCapabilities", () => {
       { key: "mcp:codegraph", kind: "mcp", name: "codegraph", description: null, groupId: "m", vendors: ["claude", "codex"] },
       { key: "connector:claude:claude.ai Gmail", kind: "connector", name: "Gmail", description: null, groupId: "c", vendors: ["claude"] },
     ]);
-    expect(resolveSessionCapabilities(defaultPmCapabilityPolicy(1), inv, "claude")).toBeNull();
+    expect(resolveSessionCapabilities(defaultCapabilityPolicy("pm"), inv, "claude")).toBeNull();
   });
 
   it("只算这家能看到的项", () => {
@@ -123,7 +122,7 @@ describe("resolveSessionCapabilities", () => {
       { key: "skill:claude-only", kind: "skill", name: "claude-only", description: null, groupId: "g", vendors: ["claude"], dir: "/s/claude-only" },
       { key: "skill:shared", kind: "skill", name: "shared", description: null, groupId: "g", vendors: ["claude", "codex"], dir: "/s/shared" },
     ]);
-    const policy = applyCapabilitiesPatch(defaultPmCapabilityPolicy(1), { set: { "skill:claude-only": false } });
+    const policy = applyCapabilitiesPatch(defaultCapabilityPolicy("pm"), { set: { "skill:claude-only": false } });
     expect(resolveSessionCapabilities(policy, inv, "codex")).toBeNull();
     const claudeCaps = resolveSessionCapabilities(policy, inv, "claude");
     expect(claudeCaps?.deny.skills).toEqual(["claude-only"]);
@@ -134,7 +133,7 @@ describe("resolveSessionCapabilities", () => {
       { key: "connector:claude:claude.ai Gmail", kind: "connector", name: "Gmail", description: null, groupId: "cc", vendors: ["claude"] },
       { key: "connector:codex:connector_gmail", kind: "connector", name: "Gmail", description: null, groupId: "cx", vendors: ["codex"] },
     ]);
-    const policy = applyCapabilitiesPatch(defaultPmCapabilityPolicy(1), {
+    const policy = applyCapabilitiesPatch(defaultCapabilityPolicy("pm"), {
       set: {
         "connector:claude:claude.ai Gmail": false,
         "connector:codex:connector_gmail": false,
@@ -152,7 +151,7 @@ describe("resolveSessionCapabilities", () => {
     ];
     const inv = makeInventory(items);
 
-    const allPluginOff = applyCapabilitiesPatch(defaultPmCapabilityPolicy(1), {
+    const allPluginOff = applyCapabilitiesPatch(defaultCapabilityPolicy("pm"), {
       set: {
         "skill:sales:call-prep": false,
         "mcp:plugin:sales:crm": false,
@@ -167,7 +166,7 @@ describe("resolveSessionCapabilities", () => {
       mcp: { "plugin:sales:crm": "sales@synced" },
     });
 
-    const partialOff = applyCapabilitiesPatch(defaultPmCapabilityPolicy(1), {
+    const partialOff = applyCapabilitiesPatch(defaultCapabilityPolicy("pm"), {
       set: { "skill:sales:call-prep": false },
     });
     const resolvedPartial = resolveSessionCapabilities(partialOff, inv, "claude");
@@ -182,7 +181,7 @@ describe("resolveSessionCapabilities", () => {
       { key: "mcp:slack", kind: "mcp", name: "slack", description: null, groupId: "mcp:plugin:codex:slack@claude-plugins-official", vendors: ["codex"], plugins: { codex: "slack@claude-plugins-official" } },
       { key: "mcp:codegraph", kind: "mcp", name: "codegraph", description: null, groupId: "mcp:global", vendors: ["claude", "codex"] },
     ];
-    const policy = applyCapabilitiesPatch(defaultPmCapabilityPolicy(1), { set: { "mcp:slack": false } });
+    const policy = applyCapabilitiesPatch(defaultCapabilityPolicy("pm"), { set: { "mcp:slack": false } });
     const codex = resolveSessionCapabilities(policy, makeInventory(items), "codex");
     expect(codex?.deny.plugins).toEqual([]);
     expect(codex?.deny.mcp).toEqual(["slack"]);
@@ -196,7 +195,7 @@ describe("resolveSessionCapabilities", () => {
       { key: "skill:a", kind: "skill", name: "a", description: null, groupId: "g", vendors: ["pi"], dir: "/skills/a" },
       { key: "skill:off", kind: "skill", name: "off", description: null, groupId: "g", vendors: ["pi"], dir: "/skills/off" },
     ]);
-    const policy = applyCapabilitiesPatch(defaultPmCapabilityPolicy(1), { set: { "skill:off": false } });
+    const policy = applyCapabilitiesPatch(defaultCapabilityPolicy("pm"), { set: { "skill:off": false } });
     const caps = resolveSessionCapabilities(policy, inv, "pi");
     expect(caps?.allow.skills).toEqual([
       { name: "a", dir: "/skills/a" },
@@ -216,7 +215,7 @@ describe("resolveSessionCapabilities", () => {
       { key: "connector:claude:z-conn", kind: "connector", name: "Z", description: null, groupId: "c", vendors: ["claude"] },
       { key: "connector:claude:a-conn", kind: "connector", name: "A", description: null, groupId: "c", vendors: ["claude"] },
     ];
-    const policy = applyCapabilitiesPatch(defaultPmCapabilityPolicy(1), {
+    const policy = applyCapabilitiesPatch(defaultCapabilityPolicy("pm"), {
       set: {
         "skill:z-off": false,
         "skill:a-off": false,
@@ -256,5 +255,56 @@ describe("capabilityKey", () => {
       "connector:codex:connector_openai_chatgpt_pets",
     );
     expect(() => capabilityKey("connector", "x")).toThrow();
+  });
+});
+
+describe("总助与 Worker 三档", () => {
+  it("总助默认三类全关，项目经理默认全开", () => {
+    expect(defaultCapabilityPolicy("router")).toEqual({ base: { skill: "none", mcp: "none", connector: "none" }, overrides: {} });
+    expect(defaultCapabilityPolicy("pm")).toEqual({ base: { skill: "all", mcp: "all", connector: "all" }, overrides: {} });
+  });
+
+  it("workerCapabilitiesOf：校验档位与点名，custom 去重排序", () => {
+    expect(workerCapabilitiesOf(undefined, undefined)).toEqual({ mode: "inherit" });
+    expect(workerCapabilitiesOf("none", undefined)).toEqual({ mode: "none" });
+    expect(workerCapabilitiesOf("custom", ["mcp:b", "skill:a", "mcp:b"])).toEqual({ mode: "custom", allow: ["mcp:b", "skill:a"] });
+    expect(workerCapabilitiesOf("custom", ["connector:claude:gmail"])).toEqual({ mode: "custom", allow: ["connector:claude:gmail"] });
+    for (const [mode, allow] of [
+      ["custom", undefined],
+      ["custom", []],
+      ["custom", ["nope"]],
+      ["custom", [42]],
+      ["none", ["mcp:x"]],
+      [undefined, ["mcp:x"]],
+      ["full", undefined],
+      ["custom", Array.from({ length: 65 }, (_, i) => `mcp:m${i}`)],
+    ] as const) {
+      expect(workerCapabilitiesOf(mode, allow)).toHaveProperty("error");
+    }
+  });
+
+  it("存取 JSON：继承不落行；读到坏行收窄成 none，绝不放宽", () => {
+    expect(workerCapabilitiesJson({ mode: "inherit" })).toBeNull();
+    const custom = { mode: "custom", allow: ["mcp:x"] } as const;
+    expect(parseWorkerCapabilitiesJson(workerCapabilitiesJson(custom))).toEqual(custom);
+    expect(parseWorkerCapabilitiesJson(null)).toEqual({ mode: "inherit" });
+    for (const bad of ["{", "null", "{\"mode\":\"custom\"}", "{\"allow\":[\"mcp:x\"]}"]) {
+      expect(parseWorkerCapabilitiesJson(bad).mode).not.toBe("inherit");
+    }
+  });
+
+  it("workerCapabilityPolicy：inherit 原样返回项目策略，none 全关，custom 只开点名且项目里开着的", () => {
+    const project = applyCapabilitiesPatch(defaultCapabilityPolicy("pm"), { set: { "mcp:off": false } });
+    expect(workerCapabilityPolicy(project, { mode: "inherit" })).toBe(project);
+    const none = workerCapabilityPolicy(project, { mode: "none" });
+    expect(capabilityEnabled(none, "mcp:on")).toBe(false);
+    expect(capabilityEnabled(none, "skill:any")).toBe(false);
+    const custom = workerCapabilityPolicy(project, { mode: "custom", allow: ["mcp:off", "mcp:on"] });
+    expect(capabilityEnabled(custom, "mcp:on")).toBe(true);
+    expect(capabilityEnabled(custom, "mcp:off")).toBe(false);
+    expect(capabilityEnabled(custom, "mcp:other")).toBe(false);
+    expect(blockedWorkerCapabilities(project, { mode: "custom", allow: ["mcp:off", "mcp:on"] })).toEqual(["mcp:off"]);
+    const routerLike = workerCapabilityPolicy(defaultCapabilityPolicy("router"), { mode: "custom", allow: ["mcp:on"] });
+    expect(capabilityEnabled(routerLike, "mcp:on")).toBe(false);
   });
 });

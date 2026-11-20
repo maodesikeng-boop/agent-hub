@@ -10,6 +10,8 @@ import type {
 import type { HubCallContext } from "../../../shared/ledger.ts";
 import { MAX_GRAPH_SPEC_BYTES } from "../../../shared/limits.ts";
 import type { AgentVendor } from "../../../shared/vendors.ts";
+import type { WorkerCapabilities } from "../../../shared/pm-capabilities.ts";
+import { writeWorkerCapabilities } from "../capability-rows.ts";
 import { fail, type Pending } from "../context.ts";
 import { syncDeliveryNoteAfterProgressIn } from "./delivery.ts";
 import { recomputeGraphProgressIn } from "./progress.ts";
@@ -30,6 +32,7 @@ import {
   validateStepAgentSetting,
   validateStepBase,
   validateStepBrief,
+  validateStepCapabilities,
   validateStepMaxTime,
   type GateFields,
   type NewStep,
@@ -55,6 +58,7 @@ interface PreparedUpdate {
   nextMaxTimeMs: number | null;
   nextBase: string | null;
   nextReadonly: number;
+  nextCapabilities: WorkerCapabilities | null;
   nextConfirm: number;
   nextReview: number;
   gate: GateFields | null;
@@ -166,6 +170,7 @@ function prepareUpdate(g: TaskGraphCtx, u: PatchTaskGraphNodeInput, cur: TaskNod
   );
   const nextMaxTimeMs = u.maxTime !== undefined ? validateStepMaxTime(u.maxTime) : cur.max_time_ms;
   const nextReadonly = u.readonly !== undefined ? (u.readonly ? 1 : 0) : cur.readonly;
+  const nextCapabilities = u.caps !== undefined || u.allow !== undefined ? validateStepCapabilities(u.caps, u.allow) : null;
   const nextConfirm = u.confirm !== undefined ? (u.confirm ? 1 : 0) : cur.confirm;
   const nextReview = u.review !== undefined ? (u.review ? 1 : 0) : cur.review;
   const nextBase = validateStepBase(u.base !== undefined ? u.base : cur.base, nextReview === 1);
@@ -178,7 +183,7 @@ function prepareUpdate(g: TaskGraphCtx, u: PatchTaskGraphNodeInput, cur: TaskNod
         recommended: u.recommended ?? cur.gate_recommended ?? undefined,
       })
     : null;
-  return { cur, nextTitle, nextBrief, agent, nextMaxTimeMs, nextBase, nextReadonly, nextConfirm, nextReview, gate };
+  return { cur, nextTitle, nextBrief, agent, nextMaxTimeMs, nextBase, nextReadonly, nextCapabilities, nextConfirm, nextReview, gate };
 }
 
 function writeUpdateIn(g: TaskGraphCtx, p: Pending, u: PreparedUpdate, t: number): void {
@@ -217,6 +222,7 @@ function writeUpdateIn(g: TaskGraphCtx, p: Pending, u: PreparedUpdate, t: number
     t,
     cur.id,
   );
+  if (u.nextCapabilities !== null) writeWorkerCapabilities(g.db, { table: "task_graph_step_capabilities", stepId: cur.id }, u.nextCapabilities);
 }
 
 function applySkipsIn(g: TaskGraphCtx, p: Pending, rawSkip: readonly TaskNodeKey[], nodesByKey: ReadonlyMap<TaskNodeKey, TaskNodeDbRow>, t: number): void {

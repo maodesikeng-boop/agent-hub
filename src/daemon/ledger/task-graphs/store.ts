@@ -2,6 +2,7 @@ import type { PmId, ProjectId, TaskEdge, TaskGraph, TaskGraphId, TaskGraphStatus
 import { HUB_COMMAND } from "../../../shared/names.ts";
 import type { UserBlocker } from "../../../shared/user-blockers.ts";
 import type { Db } from "../../store/index.ts";
+import { writeWorkerCapabilities } from "../capability-rows.ts";
 import { fail, type Pending } from "../context.ts";
 import { isStoredCheckpoint, toTaskNode } from "./rows.ts";
 import { gateOptionsJsonOf, type NewStep } from "./spec.ts";
@@ -157,7 +158,7 @@ export function pushSlimGraphIn(g: TaskGraphCtx, p: Pending, graphId: TaskGraphI
 }
 
 export function insertStepRow(db: Db, graphId: TaskGraphId, n: NewStep, sortOrder: number, t: number): void {
-  db.run(
+  const stepId = db.run(
     `INSERT INTO task_graph_steps (
        graph_id, node_key, title,
        brief, vendor, model, effort, readonly, max_time_ms, confirm, review, base, pm_note,
@@ -185,7 +186,8 @@ export function insertStepRow(db: Db, graphId: TaskGraphId, n: NewStep, sortOrde
     n.gate.recommended,
     t,
     t,
-  );
+  ).lastInsertRowid;
+  writeWorkerCapabilities(db, { table: "task_graph_step_capabilities", stepId }, n.capabilities);
 }
 
 export const insertEdgeRow = (db: Db, graphId: TaskGraphId, e: TaskEdge): void => {

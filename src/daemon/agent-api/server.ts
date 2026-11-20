@@ -31,6 +31,7 @@ import {
   SELF_RELOAD_AGENT_PATH,
   SELF_RELOAD_UNSUPPORTED_MESSAGE,
   TASK_GRAPH_STATUSES,
+  WORKER_CAPABILITY_MODES,
   hubCommandAllowed,
   hubPath,
   type HubCommand,
@@ -159,6 +160,8 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
       effort: { type: "string", minLength: 1, maxLength: MAX_MODEL_CHARS },
       maxTimeMs: { type: "integer" },
       readonly: { type: "boolean" },
+      caps: { type: "string", enum: [...WORKER_CAPABILITY_MODES] },
+      allow: { type: "array", items: { type: "string", minLength: 1, maxLength: 512 } },
       noWorktree: { type: "boolean" },
       node: { type: "string", minLength: 1, maxLength: MAX_NODE_KEY_CHARS * 2 },
       graphId: workerIdField,
@@ -204,10 +207,7 @@ const BODY_SCHEMAS: Record<HubCommand, object> = {
   models: {
     type: "object",
     additionalProperties: false,
-    properties: {
-      vendor: { type: "string", minLength: 1, maxLength: MAX_MODEL_CHARS },
-      refresh: { type: "boolean" },
-    },
+    properties: { vendor: { type: "string", minLength: 1, maxLength: MAX_MODEL_CHARS }, refresh: { type: "boolean" } },
   },
   ask: {
     type: "object",
