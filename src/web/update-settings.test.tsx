@@ -1,10 +1,11 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { UpdateStatus } from "../shared/index.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { UPDATE_CHECK_RETRY_MS, UPDATE_CHECK_TTL_MS, type UpdateStatus } from "../shared/index.ts";
 import { App } from "./App.tsx";
 import { SidebarTools } from "./components/SidebarTools.tsx";
 import { UpdateSettings } from "./components/UpdateSettings.tsx";
+import { queryClient } from "./query-client.ts";
 import { FakeApi, FakeWebSocket, installFakeWebSocket, makeConvSnapshot, makePm, makeSnapshot } from "./test-utils.ts";
 import { UPDATE_DISMISSED_KEY } from "./update-model.ts";
 
@@ -45,6 +46,7 @@ function renderTools(onOpenUpdates = vi.fn(), narrow = false) {
 }
 
 beforeEach(() => localStorage.removeItem(UPDATE_DISMISSED_KEY));
+afterEach(() => vi.useRealTimers());
 
 describe("Updates settings group", () => {
   it("offers the installer, its checksum, and release notes for a bundled install; skipping keeps the offer but hides the reminder", async () => {
@@ -101,6 +103,41 @@ describe("Updates settings group", () => {
     render(<UpdateSettings />);
     expect(await within(group()).findByText("Couldn't check for updates")).toBeInTheDocument();
     expect(within(group()).getByRole("link", { name: "Release notes" })).toHaveAttribute("href", RELEASES);
+  });
+
+  it.each([
+    ["an unavailable result", { status: 200, body: { ...upToDate, status: "unavailable" } }],
+    ["a failed request", { status: 503, body: { error: "down" } }],
+  ])("retries %s on the short schedule instead of the hourly one", async (_name, failure) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+    const api = serve(null);
+    api.update = () => failure;
+    render(<UpdateSettings />);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(within(group()).getByText("Couldn't check for updates")).toBeInTheDocument();
+    api.update = () => ({ status: 200, body: bundledUpdate() });
+    await act(() => vi.advanceTimersByTimeAsync(UPDATE_CHECK_RETRY_MS));
+    expect(within(group()).getByText("v0.3.0 available")).toBeInTheDocument();
+    expect(api.callsTo("GET", /^\/api\/update$/)).toHaveLength(2);
+    await act(() => vi.advanceTimersByTimeAsync(UPDATE_CHECK_RETRY_MS));
+    expect(api.callsTo("GET", /^\/api\/update$/)).toHaveLength(2);
+    await act(() => vi.advanceTimersByTimeAsync(UPDATE_CHECK_TTL_MS));
+    expect(api.callsTo("GET", /^\/api\/update$/)).toHaveLength(3);
+  });
+
+  it("keeps the manual check result when an older GET lands after it", async () => {
+    const api = serve(upToDate, bundledUpdate());
+    render(<UpdateSettings />);
+    expect(await within(group()).findByText("Up to date")).toBeInTheDocument();
+    let releaseOld!: () => void;
+    api.update = () => new Promise((resolve) => { releaseOld = () => resolve({ status: 200, body: upToDate }); });
+    void queryClient.refetchQueries({ queryKey: ["update"] });
+    await waitFor(() => expect(api.callsTo("GET", /^\/api\/update$/)).toHaveLength(2));
+    await userEvent.click(within(group()).getByRole("button", { name: "Check for updates" }));
+    expect(await within(group()).findByRole("link", { name: "Download for macOS" })).toBeInTheDocument();
+    await act(async () => releaseOld());
+    expect(within(group()).getByRole("link", { name: "Download for macOS" })).toBeInTheDocument();
+    expect(within(group()).queryByText("Up to date")).toBeNull();
   });
 
   it("falls back to the product name when the daemon does not answer", async () => {

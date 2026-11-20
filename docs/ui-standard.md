@@ -270,7 +270,7 @@ The profile page links and edits project-level settings next to `Folders`:
 
 ## 24. Updates
 
-`UpdateSettings` (`src/web/components/UpdateSettings.tsx`) renders the `Updates` group under `General` on desktop and the mobile `#/settings/updates` page, reading `GET /api/update` through `src/web/update-model.ts` (one fetch per page load, then hourly through React Query):
+`UpdateSettings` (`src/web/components/UpdateSettings.tsx`) renders the `Updates` group under `General` on desktop and the mobile `#/settings/updates` page, reading `GET /api/update` through `src/web/update-model.ts` (one fetch per page load, then hourly through React Query, or every `UPDATE_CHECK_RETRY_MS` while the check fails):
 
 - **Heading**: `Updates` on desktop; mobile shows only the page title.
 - **Version row**: `Bellwood vX.Y.Z`, a `Source` `.tool-badge` for source checkouts, and a ghost `Check for updates` row action (`-mr-3`, `Loader2` while checking) that posts `POST /api/update/check`. The detail line holds the status (`Up to date`, `vX.Y.Z available`, or `Couldn't check for updates`) and a `Release notes` link with a `12px` `ExternalLink` icon.

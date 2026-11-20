@@ -1,6 +1,6 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, type Query } from "@tanstack/react-query";
 import { useSyncExternalStore } from "react";
-import { UPDATE_CHECK_TTL_MS, type InstallerTarget, type UpdateAvailable, type UpdateStatus } from "../shared/index.ts";
+import { UPDATE_CHECK_RETRY_MS, UPDATE_CHECK_TTL_MS, type InstallerTarget, type UpdateAvailable, type UpdateStatus } from "../shared/index.ts";
 import { fetchUpdate, postUpdateCheck } from "./client.ts";
 import { useHubQueryClient } from "./query-client.ts";
 
@@ -9,10 +9,16 @@ export const UPDATE_DISMISSED_KEY = "agent-hub.update.dismissed";
 
 export const INSTALLER_PLATFORM_LABELS: Readonly<Record<InstallerTarget, string>> = { "macos-arm64": "macOS", "windows-x64": "Windows" };
 
+// The daemon answers "unavailable" as data, so failures must opt into the same short retry it uses for its own cache.
+function updateRefreshMs(query: Query<UpdateStatus, Error, UpdateStatus, typeof UPDATE_QUERY_KEY>): number {
+  const { status, data } = query.state;
+  return status === "error" || data?.status === "unavailable" ? UPDATE_CHECK_RETRY_MS : UPDATE_CHECK_TTL_MS;
+}
+
 export function useUpdateStatus() {
   const qc = useHubQueryClient();
   return useQuery(
-    { queryKey: UPDATE_QUERY_KEY, queryFn: fetchUpdate, staleTime: UPDATE_CHECK_TTL_MS, refetchInterval: UPDATE_CHECK_TTL_MS, refetchOnMount: false, retryOnMount: false },
+    { queryKey: UPDATE_QUERY_KEY, queryFn: fetchUpdate, staleTime: updateRefreshMs, refetchInterval: updateRefreshMs, refetchOnMount: false, retryOnMount: false },
     qc,
   );
 }
@@ -24,7 +30,15 @@ export function useCachedUpdateStatus(): UpdateStatus | undefined {
 
 export function useCheckForUpdates() {
   const qc = useHubQueryClient();
-  return useMutation({ mutationFn: postUpdateCheck, onSuccess: (status) => qc.setQueryData(UPDATE_QUERY_KEY, status) }, qc);
+  return useMutation(
+    {
+      // An older GET still in flight would otherwise land after the manual result and overwrite it.
+      onMutate: () => qc.cancelQueries({ queryKey: UPDATE_QUERY_KEY }),
+      mutationFn: postUpdateCheck,
+      onSuccess: (status) => qc.setQueryData(UPDATE_QUERY_KEY, status),
+    },
+    qc,
+  );
 }
 
 const dismissListeners = new Set<() => void>();
