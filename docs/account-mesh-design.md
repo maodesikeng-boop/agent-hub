@@ -38,6 +38,6 @@ Ingress rate limiting in `src/relay/guards.ts` trusts only `CF-Connecting-IP` on
 
 Users order their computers under **Hub order** in **Settings** (`Computers` tab). The account's Durable Object grants the single `feishu` lease to the highest-priority online computer:
 
-- Only the lease holder opens Feishu's outbound `WSClient` persistent connection and hosts Router 1-on-1 chat.
-- Every computer sends its own project groups' streaming cards and media directly to Feishu over HTTPS (splitting the `FEISHU_CARDKIT_BUDGET_PER_SECOND` rate budget across online computers).
+- Only the lease holder opens Feishu's outbound `WSClient` persistent connection, greets the owner in Router 1-on-1 chat, and handles its inbound text.
+- Every computer sends its own project groups' streaming cards and media, plus its own Router briefings and decision cards in the shared 1-on-1 chat, directly to Feishu over HTTPS (splitting the `FEISHU_CARDKIT_BUDGET_PER_SECOND` rate budget across online computers).
 - Inbound events for a project group owned by another online computer (`fusa:<deviceId>:pm:<pmId>`) forward over mutual TLS to `/api/peer/feishu/inbound`. If the owning computer is asleep, the hub replies immediately in the group and queues the message in `feishu_offline_inbox` (`24h` TTL) for ordered replay when that computer reconnects; if the hub itself goes offline, the next computer in **Hub order** automatically acquires the lease and takes over `WSClient`.
