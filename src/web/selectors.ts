@@ -1101,14 +1101,7 @@ const convDecisionsCache = new WeakMap<
 >();
 const lastDecisionsByScope = new Map<string, PendingDecision[]>();
 
-export function pendingDecisionsOf(
-  state: HubState,
-  conversationId: ConversationId,
-  deviceId = "local",
-): PendingDecision[] {
-  const scopeKey = `${deviceId}:${conversationId}`;
-  const convMessages = state.conversations[conversationId]?.messages ?? NO_CONV_MESSAGES;
-
+function decisionScopeCache(state: HubState): Map<string, DecisionCacheValue> {
   let byRouterItems = convDecisionsCache.get(state.activeTaskGraphs);
   if (byRouterItems === undefined) {
     byRouterItems = new WeakMap();
@@ -1119,37 +1112,33 @@ export function pendingDecisionsOf(
     byScope = new Map();
     byRouterItems.set(state.router.items, byScope);
   }
-  const hit = byScope.get(scopeKey);
-  if (
-    hit !== undefined &&
-    hit.messages === convMessages &&
-    hit.pms === state.pms &&
-    hit.projects === state.projects
-  ) {
-    return hit.list;
-  }
+  return byScope;
+}
 
-  const msgGateIds = gateMessageIdsIn(convMessages);
+function decisionNames(state: HubState) {
+  return {
+    pm: (pmId: PmId) => state.pms.find((p) => p.id === pmId)?.name ?? `#${pmId}`,
+    project: (projectId: ProjectId | null) =>
+      projectId === null ? null : (state.projects.find((p) => p.id === projectId)?.name ?? null),
+  };
+}
+
+function gateDecisionsOf(state: HubState, conversationId: ConversationId, deviceId: string, names: ReturnType<typeof decisionNames>) {
   const graphGateIds = new Set<MessageId>();
-  const result: PendingDecision[] = [];
-
-  const pmNameOf = (pmId: PmId) => state.pms.find((p) => p.id === pmId)?.name ?? `#${pmId}`;
-  const projectNameOf = (projectId: ProjectId | null) =>
-    projectId === null ? null : (state.projects.find((p) => p.id === projectId)?.name ?? null);
-
+  const decisions: PendingDecision[] = [];
   for (const graph of state.activeTaskGraphs) {
     if (graph.status !== "active" || graph.conversationId !== conversationId) continue;
     for (const node of graph.nodes) {
       if (node.gateAskMessageId !== null) graphGateIds.add(node.gateAskMessageId);
       if (!isTaskNodeWaitingDecision(node)) continue;
       const { blockedNodeCount, nextNodeTitles } = computeGateImpact(graph, node.key);
-      result.push({
+      decisions.push({
         key: `gate:${deviceId}:${graph.id}:${node.key}`,
         deviceId,
         pmId: graph.pmId,
-        pmName: pmNameOf(graph.pmId),
+        pmName: names.pm(graph.pmId),
         projectId: graph.projectId,
-        projectName: projectNameOf(graph.projectId),
+        projectName: names.project(graph.projectId),
         conversationId: graph.conversationId,
         question: node.gateQuestion ?? node.title,
         context: node.gateSummaryMd ?? "",
@@ -1171,21 +1160,30 @@ export function pendingDecisionsOf(
       });
     }
   }
+  return { decisions, graphGateIds };
+}
 
+function routerItemDecisionsOf(
+  state: HubState,
+  conversationId: ConversationId,
+  deviceId: string,
+  convMessages: readonly Message[],
+  coveredAskIds: (id: MessageId) => boolean,
+  names: ReturnType<typeof decisionNames>,
+): PendingDecision[] {
+  const decisions: PendingDecision[] = [];
   for (const item of state.router.items) {
     if (item.conversationId !== conversationId || item.kind !== "decision" || item.status !== "pending") continue;
-    if (item.askMessageId !== null && (msgGateIds.has(item.askMessageId) || graphGateIds.has(item.askMessageId))) {
-      continue;
-    }
+    if (item.askMessageId !== null && coveredAskIds(item.askMessageId)) continue;
     const targetMsg = item.askMessageId !== null ? convMessages.find((m) => m.id === item.askMessageId) : undefined;
     const recommended = targetMsg !== undefined ? askOf(targetMsg)?.recommended : undefined;
-    result.push({
+    decisions.push({
       key: `item:${deviceId}:${item.id}`,
       deviceId,
       pmId: item.pmId,
-      pmName: pmNameOf(item.pmId),
+      pmName: names.pm(item.pmId),
       projectId: item.projectId,
-      projectName: projectNameOf(item.projectId),
+      projectName: names.project(item.projectId),
       conversationId: item.conversationId,
       question: item.question,
       context: item.context,
@@ -1200,12 +1198,11 @@ export function pendingDecisionsOf(
       },
     });
   }
+  return decisions;
+}
 
-  if (result.length === 0) {
-    byScope.set(scopeKey, { messages: convMessages, pms: state.pms, projects: state.projects, list: NO_DECISIONS });
-    return NO_DECISIONS;
-  }
-
+function stableDecisionList(scopeKey: string, result: PendingDecision[]): PendingDecision[] {
+  if (result.length === 0) return NO_DECISIONS;
   result.sort((a, b) => b.createdAt - a.createdAt || a.key.localeCompare(b.key));
   const prev = lastDecisionsByScope.get(scopeKey);
   const resolved =
@@ -1213,6 +1210,28 @@ export function pendingDecisionsOf(
       ? prev
       : result;
   if (resolved !== prev) setBoundedMap(lastDecisionsByScope, scopeKey, resolved, TASK_GRAPH_SELECTOR_CACHE_MAX);
-  byScope.set(scopeKey, { messages: convMessages, pms: state.pms, projects: state.projects, list: resolved });
   return resolved;
+}
+
+export function pendingDecisionsOf(
+  state: HubState,
+  conversationId: ConversationId,
+  deviceId = "local",
+): PendingDecision[] {
+  const scopeKey = `${deviceId}:${conversationId}`;
+  const convMessages = state.conversations[conversationId]?.messages ?? NO_CONV_MESSAGES;
+  const byScope = decisionScopeCache(state);
+  const hit = byScope.get(scopeKey);
+  if (hit !== undefined && hit.messages === convMessages && hit.pms === state.pms && hit.projects === state.projects) {
+    return hit.list;
+  }
+
+  const names = decisionNames(state);
+  const msgGateIds = gateMessageIdsIn(convMessages);
+  const gates = gateDecisionsOf(state, conversationId, deviceId, names);
+  const covered = (id: MessageId) => msgGateIds.has(id) || gates.graphGateIds.has(id);
+  const items = routerItemDecisionsOf(state, conversationId, deviceId, convMessages, covered, names);
+  const list = stableDecisionList(scopeKey, [...gates.decisions, ...items]);
+  byScope.set(scopeKey, { messages: convMessages, pms: state.pms, projects: state.projects, list });
+  return list;
 }

@@ -180,22 +180,9 @@ function useInstantSave<T>(pmId: number, onUpdate: (p: PersonaView) => void, ali
   return { draft, error, save, reset };
 }
 
-function PmEditor({
-  pm,
-  folders,
-  schedules,
-  persona,
-  onUpdate,
-  onManageProviders,
-}: {
-  pm: Pm;
-  folders: ProjectFolder[];
-  schedules: ScheduleRecord[];
-  persona: PersonaView;
-  onUpdate: (p: PersonaView) => void;
-  onManageProviders?: () => void;
-}) {
-  const client = useClient();
+type AliveRef = React.RefObject<boolean>;
+
+function useAliveRef(): AliveRef {
   const aliveRef = useRef(true);
   useEffect(() => {
     aliveRef.current = true;
@@ -203,6 +190,11 @@ function PmEditor({
       aliveRef.current = false;
     };
   }, []);
+  return aliveRef;
+}
+
+function useAgentEditor(pmId: number, persona: PersonaView, onUpdate: (p: PersonaView) => void, aliveRef: AliveRef) {
+  const client = useClient();
   const saved: AgentSetting = { vendor: persona.vendor, ...splitModelEffort(persona.vendor, persona.model, persona.effort) };
   const [trackedPmId, setTrackedPmId] = useState(persona.pmId);
   const [editedAgent, setEditedAgent] = useState<AgentDraft | null>(null);
@@ -210,14 +202,12 @@ function PmEditor({
   const [agentSaving, setAgentSaving] = useState(false);
   const agentSavingRef = useRef(false);
   const agentSeq = useRef(0);
-  const [draftText, setDraftText] = useState<string | null>(null);
 
   if (trackedPmId !== persona.pmId) {
     setTrackedPmId(persona.pmId);
     setEditedAgent(null);
     setAgentError(null);
     setAgentSaving(false);
-    setDraftText(null);
   }
 
   const draft: AgentDraft = editedAgent ?? draftOf(saved);
@@ -227,23 +217,21 @@ function PmEditor({
     setEditedAgent(null);
     setAgentError(null);
   }
-  const canSaveAgent = agentChanged && agentResult.ok && !agentSaving;
+  const canSave = agentChanged && agentResult.ok && !agentSaving;
 
-  const changeAgent = (next: AgentDraft, row: AgentRowKey) => {
+  const change = (next: AgentDraft, row: AgentRowKey) => {
     const updated = row === "vendor" ? draftOf({ vendor: next.vendor, model: null, effort: null }) : next;
     const result = settingOf(updated);
     setAgentError(null);
-    setEditedAgent(
-      updated.modelChoice !== CUSTOM_MODEL && result.ok && sameSetting(result.setting, saved) ? null : updated,
-    );
+    setEditedAgent(updated.modelChoice !== CUSTOM_MODEL && result.ok && sameSetting(result.setting, saved) ? null : updated);
   };
 
-  const cancelAgent = () => {
+  const cancel = () => {
     setEditedAgent(null);
     setAgentError(null);
   };
 
-  const resetAgent = () => {
+  const reset = () => {
     agentSeq.current++;
     agentSavingRef.current = false;
     setAgentSaving(false);
@@ -251,15 +239,15 @@ function PmEditor({
     setAgentError(null);
   };
 
-  const saveAgent = async () => {
-    if (agentSavingRef.current || !canSaveAgent || !agentResult.ok) return;
+  const save = async () => {
+    if (agentSavingRef.current || !canSave || !agentResult.ok) return;
     agentSavingRef.current = true;
     setAgentSaving(true);
     setAgentError(null);
     const mine = ++agentSeq.current;
     const { vendor, model, effort } = agentResult.setting;
     try {
-      const res = await client.putPersona(pm.id, { vendor, model, effort });
+      const res = await client.putPersona(pmId, { vendor, model, effort });
       if (!aliveRef.current || mine !== agentSeq.current) return;
       onUpdate(res.persona);
       setEditedAgent(null);
@@ -275,17 +263,35 @@ function PmEditor({
     }
   };
 
-  const modeSave = useInstantSave<PmMode>(pm.id, onUpdate, aliveRef);
-  const mode = modeSave.draft ?? persona.mode;
+  return { draft, edited: editedAgent !== null, error: agentError, saving: agentSaving, canSave, change, cancel, reset, save };
+}
 
+function usePersonaText({
+  pmId,
+  persona,
+  onUpdate,
+  onReverted,
+  aliveRef,
+}: {
+  pmId: number;
+  persona: PersonaView;
+  onUpdate: (p: PersonaView) => void;
+  onReverted: () => void;
+  aliveRef: AliveRef;
+}) {
+  const client = useClient();
   const qc = useHubQueryClient();
+  const [trackedPmId, setTrackedPmId] = useState(persona.pmId);
+  const [draftText, setDraftText] = useState<string | null>(null);
+  if (trackedPmId !== persona.pmId) {
+    setTrackedPmId(persona.pmId);
+    setDraftText(null);
+  }
   const text = draftText ?? persona.text;
-  const tooLong = utf8Bytes(text) > MAX_PERSONA_BYTES;
-  const textDirty = text !== persona.text;
 
   const textMutation = useMutation(
     {
-      mutationFn: async () => (await client.putPersona(pm.id, { text })).persona,
+      mutationFn: async () => (await client.putPersona(pmId, { text })).persona,
       onSuccess: (next) => {
         if (!aliveRef.current) return;
         setDraftText(null);
@@ -299,8 +305,7 @@ function PmEditor({
       mutationFn: async (changeId: number) => (await client.postRevertPersonaChange(changeId)).persona,
       onSuccess: (next) => {
         if (!aliveRef.current) return;
-        resetAgent();
-        modeSave.reset();
+        onReverted();
         setDraftText(null);
         onUpdate(next);
       },
@@ -314,42 +319,193 @@ function PmEditor({
       ? "Only the latest change can be undone"
       : errorText(revertMutation.error)
     : undefined;
-  const saveText = () => textMutation.mutate();
-  const revert = (changeId: number) => revertMutation.mutate(changeId);
-  const personaLines = pmMemoryLineCount(text);
-  const personaBytes = utf8Bytes(text);
-  const personaOverAutoLoad = personaLines > PM_MEMORY_MAX_LINES || personaBytes > PM_MEMORY_MAX_BYTES;
-  const personaNearAutoLoad =
-    !personaOverAutoLoad &&
-    (personaLines >= Math.ceil(PM_MEMORY_MAX_LINES * PM_MEMORY_SOFT_WARN_RATIO) ||
-      personaBytes >= Math.ceil(PM_MEMORY_MAX_BYTES * PM_MEMORY_SOFT_WARN_RATIO));
+  return {
+    text,
+    setText: setDraftText,
+    dirty: text !== persona.text,
+    tooLong: utf8Bytes(text) > MAX_PERSONA_BYTES,
+    busy,
+    textError,
+    revertError,
+    save: () => textMutation.mutate(),
+    revert: (changeId: number) => revertMutation.mutate(changeId),
+  };
+}
+
+function personaLoadHint(text: string): string | null {
+  const lines = pmMemoryLineCount(text);
+  const bytes = utf8Bytes(text);
+  const limit = `${PM_MEMORY_MAX_LINES} lines (${PM_MEMORY_MAX_BYTES / 1024} KB)`;
+  if (lines > PM_MEMORY_MAX_LINES || bytes > PM_MEMORY_MAX_BYTES) {
+    return `Only the first ${limit} load automatically. Move detailed notes into Memory files below`;
+  }
+  const near =
+    lines >= Math.ceil(PM_MEMORY_MAX_LINES * PM_MEMORY_SOFT_WARN_RATIO) ||
+    bytes >= Math.ceil(PM_MEMORY_MAX_BYTES * PM_MEMORY_SOFT_WARN_RATIO);
+  return near ? `Approaching the ${limit} auto-load limit. Move detailed notes into Memory files below` : null;
+}
+
+function AgentGroup({
+  agent,
+  switchingToVendor,
+  onManageProviders,
+}: {
+  agent: ReturnType<typeof useAgentEditor>;
+  switchingToVendor: PersonaView["switchingToVendor"];
+  onManageProviders: (() => void) | undefined;
+}) {
+  return (
+    <SettingsGroup label="Model">
+      <AgentRows
+        value={agent.draft}
+        onChange={agent.change}
+        disabled={agent.saving}
+        switchingToVendor={switchingToVendor}
+        onCustomSubmit={() => void agent.save()}
+        {...(onManageProviders !== undefined ? { onManageProviders } : {})}
+      />
+      {agent.edited && (
+        <div className="px-4 py-3">
+          {agent.error && <RowError error={agent.error} />}
+          <div className={agent.error ? "mt-2 flex items-center justify-end gap-2" : "flex items-center justify-end gap-2"}>
+            <Button type="button" variant="ghost" disabled={agent.saving} onClick={agent.cancel}>
+              Cancel
+            </Button>
+            <Button type="button" disabled={!agent.canSave} onClick={() => void agent.save()}>
+              {agent.saving && <Loader2 aria-hidden="true" />}
+              Save
+            </Button>
+          </div>
+        </div>
+      )}
+    </SettingsGroup>
+  );
+}
+
+function FoldersGroup({ folders }: { folders: ProjectFolder[] }) {
+  return (
+    <SettingsGroup title="Folders">
+      <ul aria-label="Folders" className="divide-y divide-border">
+        {folders.map((f) => (
+          <li key={f.id} title={f.path} className="flex min-h-14 items-center gap-4 px-4 py-3">
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-body">{folderName(f.path)}</div>
+              <div className="truncate text-minor leading-snug text-muted-foreground">{shortPath(f.path)}</div>
+            </div>
+            {f.isMain && <span className="shrink-0 text-xs text-muted-foreground">Main folder</span>}
+          </li>
+        ))}
+      </ul>
+    </SettingsGroup>
+  );
+}
+
+function PersonaGroup({ persona }: { persona: ReturnType<typeof usePersonaText> }) {
+  const { text, tooLong, textError, busy } = persona;
+  const hint = personaLoadHint(text);
+  return (
+    <SettingsGroup
+      title="Persona"
+      action={
+        persona.dirty && (
+          <Button size="sm" disabled={tooLong || busy !== null} onClick={persona.save}>
+            {busy === "text" && <Loader2 aria-hidden="true" />}
+            Save
+          </Button>
+        )
+      }
+    >
+      <Textarea
+        aria-label="Persona"
+        placeholder="No persona yet"
+        rows={1}
+        className={cn(
+          "block max-h-[60vh] min-h-0 resize-none rounded-none border-0 bg-transparent px-4 py-3 placeholder:font-sans placeholder:text-body field-sizing-content focus-visible:ring-0",
+          text === "" ? "text-body" : "font-mono text-minor",
+        )}
+        value={text}
+        onChange={(e) => persona.setText(e.target.value)}
+      />
+      {hint !== null && !tooLong && <p className="px-4 py-2.5 text-xs text-muted-foreground tabular-nums">{hint}</p>}
+      {(tooLong || textError) && (
+        <div className="px-4 py-2.5">
+          {tooLong ? <RowError>Persona is too long</RowError> : textError !== undefined && <RowError error={textError} />}
+        </div>
+      )}
+    </SettingsGroup>
+  );
+}
+
+function HistoryGroup({
+  persona,
+  revertError,
+  busy,
+  onRevert,
+}: {
+  persona: PersonaView;
+  revertError: ErrorLike | undefined;
+  busy: boolean;
+  onRevert: (changeId: number) => void;
+}) {
+  return (
+    <CollapsibleGroup title="History" summary={String(persona.changes.length)}>
+      {revertError && (
+        <div className="px-4 py-2.5">
+          <RowError error={revertError} />
+        </div>
+      )}
+      {persona.changes.length === 0 ? (
+        <p className="px-4 py-3 text-body text-muted-foreground">No changes yet</p>
+      ) : (
+        <ul aria-label="History" className="divide-y divide-border">
+          {persona.changes.map((change) => (
+            <ChangeRow
+              key={change.id}
+              change={change}
+              revertable={change.id === persona.revertableChangeId}
+              busy={busy}
+              onRevert={() => onRevert(change.id)}
+            />
+          ))}
+        </ul>
+      )}
+    </CollapsibleGroup>
+  );
+}
+
+function PmEditor({
+  pm,
+  folders,
+  schedules,
+  persona,
+  onUpdate,
+  onManageProviders,
+}: {
+  pm: Pm;
+  folders: ProjectFolder[];
+  schedules: ScheduleRecord[];
+  persona: PersonaView;
+  onUpdate: (p: PersonaView) => void;
+  onManageProviders?: () => void;
+}) {
+  const aliveRef = useAliveRef();
+  const agent = useAgentEditor(pm.id, persona, onUpdate, aliveRef);
+  const modeSave = useInstantSave<PmMode>(pm.id, onUpdate, aliveRef);
+  const mode = modeSave.draft ?? persona.mode;
+  const text = usePersonaText({
+    pmId: pm.id,
+    persona,
+    onUpdate,
+    aliveRef,
+    onReverted: () => {
+      agent.reset();
+      modeSave.reset();
+    },
+  });
 
   return (
     <>
-      <SettingsGroup label="Model">
-        <AgentRows
-          value={draft}
-          onChange={changeAgent}
-          disabled={agentSaving}
-          switchingToVendor={persona.switchingToVendor}
-          onCustomSubmit={() => void saveAgent()}
-          {...(onManageProviders !== undefined ? { onManageProviders } : {})}
-        />
-        {editedAgent !== null && (
-          <div className="px-4 py-3">
-            {agentError && <RowError error={agentError} />}
-            <div className={agentError ? "mt-2 flex items-center justify-end gap-2" : "flex items-center justify-end gap-2"}>
-              <Button type="button" variant="ghost" disabled={agentSaving} onClick={cancelAgent}>
-                Cancel
-              </Button>
-              <Button type="button" disabled={!canSaveAgent} onClick={() => void saveAgent()}>
-                {agentSaving && <Loader2 aria-hidden="true" />}
-                Save
-              </Button>
-            </div>
-          </div>
-        )}
-      </SettingsGroup>
+      <AgentGroup agent={agent} switchingToVendor={persona.switchingToVendor} onManageProviders={onManageProviders} />
       <SettingsGroup title="Mode">
         <ModeRows label="Mode" value={mode} onChange={(m) => modeSave.save(m, m === persona.mode ? {} : { mode: m })} />
         {modeSave.error && (
@@ -358,80 +514,11 @@ function PmEditor({
           </div>
         )}
       </SettingsGroup>
-      {folders.length > 0 && (
-        <SettingsGroup title="Folders">
-          <ul aria-label="Folders" className="divide-y divide-border">
-            {folders.map((f) => (
-              <li key={f.id} title={f.path} className="flex min-h-14 items-center gap-4 px-4 py-3">
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-body">{folderName(f.path)}</div>
-                  <div className="truncate text-minor leading-snug text-muted-foreground">{shortPath(f.path)}</div>
-                </div>
-                {f.isMain && <span className="shrink-0 text-xs text-muted-foreground">Main folder</span>}
-              </li>
-            ))}
-          </ul>
-        </SettingsGroup>
-      )}
+      {folders.length > 0 && <FoldersGroup folders={folders} />}
       <ScheduleGroup pmId={pm.id} schedules={schedules} />
-      <SettingsGroup
-        title="Persona"
-        action={
-          textDirty && (
-            <Button size="sm" disabled={tooLong || busy !== null} onClick={saveText}>
-              {busy === "text" && <Loader2 aria-hidden="true" />}
-              Save
-            </Button>
-          )
-        }
-      >
-        <Textarea
-          aria-label="Persona"
-          placeholder="No persona yet"
-          rows={1}
-          className={cn(
-            "block max-h-[60vh] min-h-0 resize-none rounded-none border-0 bg-transparent px-4 py-3 placeholder:font-sans placeholder:text-body field-sizing-content focus-visible:ring-0",
-            text === "" ? "text-body" : "font-mono text-minor",
-          )}
-          value={text}
-          onChange={(e) => setDraftText(e.target.value)}
-        />
-        {(personaOverAutoLoad || personaNearAutoLoad) && !tooLong && (
-          <p className="px-4 py-2.5 text-xs text-muted-foreground tabular-nums">
-            {personaOverAutoLoad
-              ? `Only the first ${PM_MEMORY_MAX_LINES} lines (${PM_MEMORY_MAX_BYTES / 1024} KB) load automatically. Move detailed notes into Memory files below`
-              : `Approaching the ${PM_MEMORY_MAX_LINES} lines (${PM_MEMORY_MAX_BYTES / 1024} KB) auto-load limit. Move detailed notes into Memory files below`}
-          </p>
-        )}
-        {(tooLong || textError) && (
-          <div className="px-4 py-2.5">
-            {tooLong ? <RowError>Persona is too long</RowError> : textError !== undefined && <RowError error={textError} />}
-          </div>
-        )}
-      </SettingsGroup>
+      <PersonaGroup persona={text} />
       <PmMemoryFilesGroup key={pm.id} pmId={pm.id} archived={pm.archivedAt != null} />
-      <CollapsibleGroup title="History" summary={String(persona.changes.length)}>
-        {revertError && (
-          <div className="px-4 py-2.5">
-            <RowError error={revertError} />
-          </div>
-        )}
-        {persona.changes.length === 0 ? (
-          <p className="px-4 py-3 text-body text-muted-foreground">No changes yet</p>
-        ) : (
-          <ul aria-label="History" className="divide-y divide-border">
-            {persona.changes.map((change) => (
-              <ChangeRow
-                key={change.id}
-                change={change}
-                revertable={change.id === persona.revertableChangeId}
-                busy={busy !== null || agentSaving}
-                onRevert={() => revert(change.id)}
-              />
-            ))}
-          </ul>
-        )}
-      </CollapsibleGroup>
+      <HistoryGroup persona={persona} revertError={text.revertError} busy={text.busy !== null || agent.saving} onRevert={text.revert} />
     </>
   );
 }

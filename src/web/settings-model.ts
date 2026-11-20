@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, type QueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   PROVIDER_ACTIVE_POLL_MS,
@@ -863,20 +863,13 @@ export interface UseProvidersSettingOptions {
   defaultDeviceKey?: DeviceKey;
 }
 
-export function useProvidersSetting({
-  enabled = true,
-  devices = null,
-  defaultDeviceKey = LOCAL_DEVICE,
-}: UseProvidersSettingOptions = {}) {
-  const qc = useHubQueryClient();
+function useProviderTarget(devices: readonly DeviceView[] | null, defaultDeviceKey: DeviceKey) {
   const contextClient = useClient();
   const selectableComputers = useMemo(() => resolveSelectableProviderComputers(devices), [devices]);
 
   const pickValidDeviceKey = useCallback(
     (candidate: DeviceKey): DeviceKey => {
-      if (selectableComputers.length === 0) {
-        return contextClient.device ?? LOCAL_DEVICE;
-      }
+      if (selectableComputers.length === 0) return contextClient.device ?? LOCAL_DEVICE;
       return selectableComputers.some((d) => d.key === candidate) ? candidate : LOCAL_DEVICE;
     },
     [contextClient.device, selectableComputers],
@@ -887,9 +880,7 @@ export function useProvidersSetting({
   if (prevDefaultRef.current !== defaultDeviceKey) {
     prevDefaultRef.current = defaultDeviceKey;
     const nextKey = pickValidDeviceKey(defaultDeviceKey);
-    if (nextKey !== selectedDeviceKey) {
-      setSelectedDeviceKey(nextKey);
-    }
+    if (nextKey !== selectedDeviceKey) setSelectedDeviceKey(nextKey);
   }
 
   const effectiveDeviceKey: DeviceKey =
@@ -905,15 +896,161 @@ export function useProvidersSetting({
   }, [contextClient, effectiveDeviceKey, selectableComputers.length]);
 
   const isRemoteTarget =
-    effectiveDeviceKey !== LOCAL_DEVICE ||
-    (typeof window !== "undefined" && !isLoopbackHostname(window.location.hostname));
+    effectiveDeviceKey !== LOCAL_DEVICE || (typeof window !== "undefined" && !isLoopbackHostname(window.location.hostname));
 
-  const pageVisible = useSyncExternalStore(subscribePageVisibility, getPageVisibilitySnapshot, () => true);
+  return { selectableComputers, effectiveDeviceKey, setSelectedDeviceKey, targetClient, isRemoteTarget };
+}
 
+interface ActiveProviderWork {
+  jobs: Set<string>;
+  flows: Set<string>;
+}
+
+function scanProviderWork(status: ProvidersStatusResponse, previous: ActiveProviderWork) {
+  let justSucceeded = false;
+  const next: ActiveProviderWork = { jobs: new Set(), flows: new Set() };
+  for (const item of status.providers) {
+    if (item.job?.phase === "running") next.jobs.add(item.job.jobId);
+    else if (item.job?.phase === "succeeded" && previous.jobs.has(item.job.jobId)) justSucceeded = true;
+    if (item.authFlow && isProviderAuthFlowActive(item.authFlow.phase)) next.flows.add(item.authFlow.flowId);
+    else if (item.authFlow?.phase === "succeeded" && previous.flows.has(item.authFlow.flowId)) justSucceeded = true;
+  }
+  return { next, justSucceeded };
+}
+
+function useRefreshModelsWhenWorkFinishes(qc: QueryClient, status: ProvidersStatusResponse | undefined, targetClient: HubClient) {
+  const trackedActiveRef = useRef<ActiveProviderWork>({ jobs: new Set(), flows: new Set() });
+  useEffect(() => {
+    if (!status) return;
+    const { next, justSucceeded } = scanProviderWork(status, trackedActiveRef.current);
+    trackedActiveRef.current = next;
+    if (justSucceeded) refreshDeviceModels(qc, targetClient);
+  }, [qc, status, targetClient]);
+}
+
+type SetBusyKey = React.Dispatch<React.SetStateAction<string | null>>;
+type VendorActionOptions = { syncModelsImmediately?: boolean; rethrow?: boolean };
+type RunVendorAction = (
+  vendor: AgentVendor,
+  actionName: string,
+  fn: () => Promise<ProviderStatusItem>,
+  options?: VendorActionOptions,
+) => Promise<ProviderStatusItem | null>;
+
+function useVendorActionRunner(qc: QueryClient, queryKey: readonly unknown[], targetClient: HubClient, setBusyKey: SetBusyKey) {
   const [rowErrors, setRowErrors] = useState<Partial<Record<AgentVendor, ErrorLike>>>({});
-  const [gitError, setGitError] = useState<ErrorLike | null>(null);
-  const [busyKey, setBusyKey] = useState<string | null>(null);
 
+  const clearVendorError = useCallback((vendor: AgentVendor) => {
+    setRowErrors((prev) => {
+      if (prev[vendor] === undefined) return prev;
+      const { [vendor]: _removed, ...rest } = prev;
+      return rest;
+    });
+  }, []);
+
+  const upsertItem = useCallback(
+    (item: ProviderStatusItem) => {
+      qc.setQueryData<ProvidersStatusResponse>(queryKey, (prev) =>
+        prev === undefined
+          ? undefined
+          : { ...prev, providers: prev.providers.map((existing) => (existing.vendor === item.vendor ? item : existing)) },
+      );
+    },
+    [qc, queryKey],
+  );
+
+  const run = useCallback<RunVendorAction>(
+    async (vendor, actionName, fn, options = {}) => {
+      const token = `${actionName}:${vendor}`;
+      setBusyKey(token);
+      clearVendorError(vendor);
+      try {
+        const item = await fn();
+        upsertItem(item);
+        if (options.syncModelsImmediately) refreshDeviceModels(qc, targetClient);
+        return item;
+      } catch (err) {
+        if (options.rethrow) throw err;
+        setRowErrors((prev) => ({ ...prev, [vendor]: errorText(err) }));
+        return null;
+      } finally {
+        setBusyKey((cur) => (cur === token ? null : cur));
+      }
+    },
+    [clearVendorError, qc, setBusyKey, targetClient, upsertItem],
+  );
+
+  return { rowErrors, setRowErrors, run };
+}
+
+function useVendorActions(run: RunVendorAction, client: HubClient) {
+  return useMemo(() => {
+    const synced: VendorActionOptions = { syncModelsImmediately: true, rethrow: true };
+    return {
+      install: (vendor: AgentVendor) => run(vendor, "install", () => client.postProviderInstall(vendor)),
+      update: (vendor: AgentVendor) => run(vendor, "update", () => client.postProviderUpdate(vendor)),
+      cancelJob: (vendor: AgentVendor, body: ProviderCancelJobRequest) =>
+        run(vendor, "cancel-job", () => client.postProviderJobCancel(vendor, body)),
+      startAuth: (vendor: AgentVendor, body: ProviderStartAuthRequest) =>
+        run(vendor, "auth-start", () => client.postProviderAuthStart(vendor, body), { rethrow: true }),
+      submitAuth: (vendor: AgentVendor, body: ProviderSubmitAuthRequest) =>
+        run(vendor, "auth-submit", () => client.postProviderAuthSubmit(vendor, body), synced),
+      cancelAuth: (vendor: AgentVendor, body: ProviderCancelAuthRequest) =>
+        run(vendor, "auth-cancel", () => client.postProviderAuthCancel(vendor, body)),
+      saveApiKey: (vendor: AgentVendor, body: ProviderSaveApiKeyRequest) =>
+        run(vendor, "auth-api-key", () => client.postProviderAuthApiKey(vendor, body), synced),
+      logout: (vendor: AgentVendor, body: ProviderLogoutRequest = {}) =>
+        run(vendor, "auth-logout", () => client.postProviderAuthLogout(vendor, body), synced),
+    };
+  }, [run, client]);
+}
+
+function useStatusActions(qc: QueryClient, queryKey: readonly unknown[], targetClient: HubClient, setBusyKey: SetBusyKey) {
+  const [gitError, setGitError] = useState<ErrorLike | null>(null);
+
+  const refresh = useCallback(async (): Promise<void> => {
+    setBusyKey("refresh");
+    try {
+      const next = await targetClient.fetchProviders({ refresh: true });
+      qc.setQueryData<ProvidersStatusResponse>(queryKey, next);
+      refreshDeviceModels(qc, targetClient);
+    } catch {
+      // A failed manual refresh keeps the last status.
+    } finally {
+      setBusyKey((cur) => (cur === "refresh" ? null : cur));
+    }
+  }, [qc, queryKey, setBusyKey, targetClient]);
+
+  const installGit = useCallback(async (): Promise<ProvidersStatusResponse | null> => {
+    setBusyKey("git");
+    setGitError(null);
+    try {
+      const next = await targetClient.postProviderGitInstall();
+      qc.setQueryData<ProvidersStatusResponse>(queryKey, next);
+      return next;
+    } catch (err) {
+      setGitError(errorText(err));
+      return null;
+    } finally {
+      setBusyKey((cur) => (cur === "git" ? null : cur));
+    }
+  }, [qc, queryKey, setBusyKey, targetClient]);
+
+  return { gitError, setGitError, refresh, installGit };
+}
+
+export function useProvidersSetting({
+  enabled = true,
+  devices = null,
+  defaultDeviceKey = LOCAL_DEVICE,
+}: UseProvidersSettingOptions = {}) {
+  const qc = useHubQueryClient();
+  const { selectableComputers, effectiveDeviceKey, setSelectedDeviceKey, targetClient, isRemoteTarget } = useProviderTarget(
+    devices,
+    defaultDeviceKey,
+  );
+  const pageVisible = useSyncExternalStore(subscribePageVisibility, getPageVisibilitySnapshot, () => true);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
   const queryKey = useMemo(() => PROVIDERS_QUERY_KEY(effectiveDeviceKey), [effectiveDeviceKey]);
 
   const {
@@ -931,181 +1068,20 @@ export function useProvidersSetting({
     },
     qc,
   );
+  useRefreshModelsWhenWorkFinishes(qc, status, targetClient);
 
-  const trackedActiveRef = useRef<{ jobs: Set<string>; flows: Set<string> }>({
-    jobs: new Set(),
-    flows: new Set(),
-  });
-  useEffect(() => {
-    if (!status) return;
-    let anyJustSucceeded = false;
-    const nextJobs = new Set<string>();
-    const nextFlows = new Set<string>();
-    for (const item of status.providers) {
-      if (item.job) {
-        if (item.job.phase === "running") {
-          nextJobs.add(item.job.jobId);
-        } else if (item.job.phase === "succeeded" && trackedActiveRef.current.jobs.has(item.job.jobId)) {
-          anyJustSucceeded = true;
-        }
-      }
-      if (item.authFlow) {
-        if (isProviderAuthFlowActive(item.authFlow.phase)) {
-          nextFlows.add(item.authFlow.flowId);
-        } else if (item.authFlow.phase === "succeeded" && trackedActiveRef.current.flows.has(item.authFlow.flowId)) {
-          anyJustSucceeded = true;
-        }
-      }
-    }
-    trackedActiveRef.current = { jobs: nextJobs, flows: nextFlows };
-    if (anyJustSucceeded) {
-      refreshDeviceModels(qc, targetClient);
-    }
-  }, [qc, status, targetClient]);
+  const { rowErrors, setRowErrors, run } = useVendorActionRunner(qc, queryKey, targetClient, setBusyKey);
+  const vendorActions = useVendorActions(run, targetClient);
+  const { gitError, setGitError, refresh, installGit } = useStatusActions(qc, queryKey, targetClient, setBusyKey);
 
-  const clearVendorError = useCallback((vendor: AgentVendor) => {
-    setRowErrors((prev) => {
-      if (prev[vendor] === undefined) return prev;
-      const { [vendor]: _removed, ...rest } = prev;
-      return rest;
-    });
-  }, []);
-
-  const upsertItem = useCallback(
-    (item: ProviderStatusItem) => {
-      qc.setQueryData<ProvidersStatusResponse>(queryKey, (prev) =>
-        prev === undefined
-          ? undefined
-          : {
-              ...prev,
-              providers: prev.providers.map((existing) => (existing.vendor === item.vendor ? item : existing)),
-            },
-      );
+  const selectDevice = useCallback(
+    (nextKey: DeviceKey) => {
+      setRowErrors({});
+      setGitError(null);
+      setSelectedDeviceKey(nextKey);
     },
-    [qc, queryKey],
+    [setGitError, setRowErrors, setSelectedDeviceKey],
   );
-
-  const refresh = useCallback(async (): Promise<void> => {
-    setBusyKey("refresh");
-    try {
-      const next = await targetClient.fetchProviders({ refresh: true });
-      qc.setQueryData<ProvidersStatusResponse>(queryKey, next);
-      refreshDeviceModels(qc, targetClient);
-    } catch {
-    } finally {
-      setBusyKey((cur) => (cur === "refresh" ? null : cur));
-    }
-  }, [qc, queryKey, targetClient]);
-
-  const runVendorAction = useCallback(
-    async (
-      vendor: AgentVendor,
-      actionName: string,
-      fn: () => Promise<ProviderStatusItem>,
-      options: { syncModelsImmediately?: boolean; rethrow?: boolean } = {},
-    ): Promise<ProviderStatusItem | null> => {
-      const token = `${actionName}:${vendor}`;
-      setBusyKey(token);
-      clearVendorError(vendor);
-      try {
-        const item = await fn();
-        upsertItem(item);
-        if (options.syncModelsImmediately) {
-          refreshDeviceModels(qc, targetClient);
-        }
-        return item;
-      } catch (err) {
-        if (options.rethrow) throw err;
-        setRowErrors((prev) => ({ ...prev, [vendor]: errorText(err) }));
-        return null;
-      } finally {
-        setBusyKey((cur) => (cur === token ? null : cur));
-      }
-    },
-    [clearVendorError, qc, targetClient, upsertItem],
-  );
-
-  const install = useCallback(
-    (vendor: AgentVendor) => runVendorAction(vendor, "install", () => targetClient.postProviderInstall(vendor)),
-    [runVendorAction, targetClient],
-  );
-
-  const update = useCallback(
-    (vendor: AgentVendor) => runVendorAction(vendor, "update", () => targetClient.postProviderUpdate(vendor)),
-    [runVendorAction, targetClient],
-  );
-
-  const cancelJob = useCallback(
-    (vendor: AgentVendor, body: ProviderCancelJobRequest) =>
-      runVendorAction(vendor, "cancel-job", () => targetClient.postProviderJobCancel(vendor, body)),
-    [runVendorAction, targetClient],
-  );
-
-  const installGit = useCallback(async (): Promise<ProvidersStatusResponse | null> => {
-    setBusyKey("git");
-    setGitError(null);
-    try {
-      const next = await targetClient.postProviderGitInstall();
-      qc.setQueryData<ProvidersStatusResponse>(queryKey, next);
-      return next;
-    } catch (err) {
-      setGitError(errorText(err));
-      return null;
-    } finally {
-      setBusyKey((cur) => (cur === "git" ? null : cur));
-    }
-  }, [qc, queryKey, targetClient]);
-
-  const startAuth = useCallback(
-    (vendor: AgentVendor, body: ProviderStartAuthRequest) =>
-      runVendorAction(vendor, "auth-start", () => targetClient.postProviderAuthStart(vendor, body), { rethrow: true }),
-    [runVendorAction, targetClient],
-  );
-
-  const submitAuth = useCallback(
-    (vendor: AgentVendor, body: ProviderSubmitAuthRequest) =>
-      runVendorAction(
-        vendor,
-        "auth-submit",
-        () => targetClient.postProviderAuthSubmit(vendor, body),
-        { syncModelsImmediately: true, rethrow: true },
-      ),
-    [runVendorAction, targetClient],
-  );
-
-  const cancelAuth = useCallback(
-    (vendor: AgentVendor, body: ProviderCancelAuthRequest) =>
-      runVendorAction(vendor, "auth-cancel", () => targetClient.postProviderAuthCancel(vendor, body)),
-    [runVendorAction, targetClient],
-  );
-
-  const saveApiKey = useCallback(
-    (vendor: AgentVendor, body: ProviderSaveApiKeyRequest) =>
-      runVendorAction(
-        vendor,
-        "auth-api-key",
-        () => targetClient.postProviderAuthApiKey(vendor, body),
-        { syncModelsImmediately: true, rethrow: true },
-      ),
-    [runVendorAction, targetClient],
-  );
-
-  const logout = useCallback(
-    (vendor: AgentVendor, body: ProviderLogoutRequest = {}) =>
-      runVendorAction(
-        vendor,
-        "auth-logout",
-        () => targetClient.postProviderAuthLogout(vendor, body),
-        { syncModelsImmediately: true, rethrow: true },
-      ),
-    [runVendorAction, targetClient],
-  );
-
-  const selectDevice = useCallback((nextKey: DeviceKey) => {
-    setRowErrors({});
-    setGitError(null);
-    setSelectedDeviceKey(nextKey);
-  }, []);
 
   const loadError: ErrorLike | null = enabled && queryError && !status ? errorText(queryError) : null;
 
@@ -1124,39 +1100,25 @@ export function useProvidersSetting({
       targetClient,
       isRemoteTarget,
       refresh,
-      install,
-      update,
-      cancelJob,
       installGit,
-      startAuth,
-      submitAuth,
-      cancelAuth,
-      saveApiKey,
-      logout,
+      ...vendorActions,
     }),
     [
       busyKey,
-      cancelAuth,
-      cancelJob,
       effectiveDeviceKey,
       enabled,
       gitError,
-      install,
       installGit,
       isFetching,
       isRemoteTarget,
       loadError,
-      logout,
       refresh,
       rowErrors,
-      saveApiKey,
       selectDevice,
       selectableComputers,
-      startAuth,
       status,
-      submitAuth,
       targetClient,
-      update,
+      vendorActions,
     ],
   );
 }

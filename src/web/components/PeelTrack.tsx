@@ -623,181 +623,162 @@ function lowestFreeLane(lanes: readonly (string | null)[]): number {
   return idx >= 0 ? idx : lanes.length;
 }
 
+type LaneStyle = "solid" | "dash";
+
+type LogicalOp =
+  | { kind: "thru"; lane: number; style: LaneStyle }
+  | { kind: "in"; fromLane: number; toLane: number; target: "dot" | "gate"; style: LaneStyle }
+  | { kind: "fork"; fromLane: number; toLane: number; style: LaneStyle }
+  | { kind: "out"; lane: number; source: "dot" | "gate" | "coil"; style: LaneStyle };
+
+interface LogicalRow {
+  item: DisplayItem;
+  dotLane: number;
+  ops: LogicalOp[];
+  bottomLaneCount: number;
+}
+
+interface LaneState {
+  parentsMap: Map<string, string[]>;
+  remOutDeg: Map<string, number>;
+  styleByKey: Map<string, LaneStyle>;
+  activeLanes: Array<string | null>;
+  maxLaneUsed: number;
+}
+
+function initLaneState(items: readonly DisplayItem[], edges: readonly DirectedEdge[]): LaneState {
+  const state: LaneState = { parentsMap: new Map(), remOutDeg: new Map(), styleByKey: new Map(), activeLanes: [], maxLaneUsed: 0 };
+  for (const it of items) {
+    state.parentsMap.set(it.key, []);
+    state.remOutDeg.set(it.key, 0);
+    state.styleByKey.set(it.key, it.walked ? "solid" : "dash");
+  }
+  for (const e of edges) {
+    state.parentsMap.get(e.toKey)!.push(e.fromKey);
+    state.remOutDeg.set(e.fromKey, (state.remOutDeg.get(e.fromKey) ?? 0) + 1);
+  }
+  return state;
+}
+
+function setLane(state: LaneState, lane: number, key: string | null): void {
+  while (state.activeLanes.length <= lane) state.activeLanes.push(null);
+  state.activeLanes[lane] = key;
+}
+
+function placeDot(state: LaneState, parents: readonly string[], beforeLaneOf: Map<string, number>) {
+  const byLane = (a: string, b: string) => (beforeLaneOf.get(a) ?? 0) - (beforeLaneOf.get(b) ?? 0);
+  const termParents = parents.filter((p) => (state.remOutDeg.get(p) ?? 0) === 0).sort(byLane);
+  const contParents = parents.filter((p) => (state.remOutDeg.get(p) ?? 0) > 0).sort(byLane);
+  if (termParents.length > 0) {
+    for (const p of termParents) {
+      const l = beforeLaneOf.get(p);
+      if (l !== undefined) setLane(state, l, null);
+    }
+    return { dotLane: beforeLaneOf.get(termParents[0]!) ?? 0, forkLane: null };
+  }
+  if (contParents.length === 1) {
+    const p = contParents[0]!;
+    const dotLane = beforeLaneOf.get(p) ?? 0;
+    const forkLane = lowestFreeLane(state.activeLanes);
+    setLane(state, dotLane, null);
+    setLane(state, forkLane, p);
+    return { dotLane, forkLane };
+  }
+  return { dotLane: lowestFreeLane(state.activeLanes), forkLane: null };
+}
+
+function layoutLogicalRow(state: LaneState, item: DisplayItem): LogicalRow {
+  const parents = state.parentsMap.get(item.key) ?? [];
+  const parentSet = new Set(parents);
+  const beforeLaneOf = new Map<string, number>();
+  state.activeLanes.forEach((k, l) => {
+    if (k !== null) beforeLaneOf.set(k, l);
+  });
+  for (const p of parents) state.remOutDeg.set(p, (state.remOutDeg.get(p) ?? 1) - 1);
+
+  const { dotLane, forkLane } = placeDot(state, parents, beforeLaneOf);
+  const styleOf = (key: string) => state.styleByKey.get(key) ?? "dash";
+  const ops: LogicalOp[] = [];
+  for (const [k, l] of beforeLaneOf) {
+    if (!parentSet.has(k)) ops.push({ kind: "thru", lane: l, style: styleOf(k) });
+  }
+  const target = item.itemKind === "gate" ? "gate" : "dot";
+  for (const p of parents) {
+    const fromLane = beforeLaneOf.get(p) ?? 0;
+    const style = styleOf(p);
+    ops.push({ kind: "in", fromLane, toLane: dotLane, target, style });
+    if ((state.remOutDeg.get(p) ?? 0) <= 0) continue;
+    if (forkLane !== null && fromLane === dotLane) ops.push({ kind: "fork", fromLane: dotLane, toLane: forkLane, style });
+    else ops.push({ kind: "thru", lane: fromLane, style });
+  }
+  if ((state.remOutDeg.get(item.key) ?? 0) > 0) {
+    setLane(state, dotLane, item.key);
+    const source = item.itemKind === "coil" ? "coil" : item.itemKind === "gate" ? "gate" : "dot";
+    ops.push({ kind: "out", lane: dotLane, source, style: styleOf(item.key) });
+  }
+
+  let bottomLaneCount = 0;
+  state.activeLanes.forEach((k, l) => {
+    if (k === null) return;
+    bottomLaneCount++;
+    if (l > state.maxLaneUsed) state.maxLaneUsed = l;
+  });
+  if (dotLane > state.maxLaneUsed) state.maxLaneUsed = dotLane;
+  return { item, dotLane, ops, bottomLaneCount };
+}
+
+function segmentOfOp(op: LogicalOp, laneX: (lane: number) => number): GutterSegment {
+  const tube = op.style === "solid" ? "filled" : "empty";
+  const top = 0;
+  const bottom = GUTTER_H;
+  switch (op.kind) {
+    case "thru": {
+      const x = laneX(op.lane);
+      return segmentOf(tube, [{ x, y: top }, { x, y: bottom }]);
+    }
+    case "in": {
+      const xFrom = laneX(op.fromLane);
+      const xTo = laneX(op.toLane);
+      return segmentOf(
+        tube,
+        xFrom === xTo
+          ? [{ x: xTo, y: top }, { x: xTo, y: GUTTER_CY }]
+          : [{ x: xFrom, y: top }, { x: xFrom, y: GUTTER_CY }, { x: xTo, y: GUTTER_CY }],
+      );
+    }
+    case "fork": {
+      const xFrom = laneX(op.fromLane);
+      const xTo = laneX(op.toLane);
+      return segmentOf(tube, [{ x: xFrom, y: top }, { x: xFrom, y: FORK_Y }, { x: xTo, y: FORK_Y }, { x: xTo, y: bottom }]);
+    }
+    case "out": {
+      const x = laneX(op.lane);
+      return segmentOf(tube, [{ x, y: GUTTER_CY }, { x, y: bottom }]);
+    }
+  }
+}
+
+function gutterKindOf(row: LogicalRow): GutterKind {
+  const kind = row.item.itemKind;
+  if (kind === "coil" || kind === "gate" || kind === "next") return kind;
+  if (row.dotLane > 0) return "parB";
+  return row.bottomLaneCount >= 2 ? "parA" : "station";
+}
+
 function layoutDisplayTrack(
   items: readonly DisplayItem[],
   rawDisplayEdges: readonly DirectedEdge[],
 ): { gutterWidth: number; rows: RenderedTrackRow[] } {
-  const itemKeys = items.map((it) => it.key);
-  const edges = reduceTransitiveEdges(itemKeys, rawDisplayEdges);
-
-  const parentsMap = new Map<string, string[]>();
-  const remOutDeg = new Map<string, number>();
-  const styleByKey = new Map<string, "solid" | "dash">();
-  for (const it of items) {
-    parentsMap.set(it.key, []);
-    remOutDeg.set(it.key, 0);
-    styleByKey.set(it.key, it.walked ? "solid" : "dash");
-  }
-  for (const e of edges) {
-    parentsMap.get(e.toKey)!.push(e.fromKey);
-    remOutDeg.set(e.fromKey, (remOutDeg.get(e.fromKey) ?? 0) + 1);
-  }
-
-  type LogicalOp =
-    | { kind: "thru"; lane: number; style: "solid" | "dash" }
-    | { kind: "in"; fromLane: number; toLane: number; target: "dot" | "gate"; style: "solid" | "dash" }
-    | { kind: "fork"; fromLane: number; toLane: number; style: "solid" | "dash" }
-    | { kind: "out"; lane: number; source: "dot" | "gate" | "coil"; style: "solid" | "dash" };
-
-  interface LogicalRow {
-    item: DisplayItem;
-    dotLane: number;
-    ops: LogicalOp[];
-    bottomLaneCount: number;
-  }
-
-  const activeLanes: Array<string | null> = [];
-  const setLane = (lane: number, key: string | null) => {
-    while (activeLanes.length <= lane) activeLanes.push(null);
-    activeLanes[lane] = key;
-  };
-
-  let maxLaneUsed = 0;
-  const logicalRows: LogicalRow[] = [];
-
-  for (const item of items) {
-    const parents = parentsMap.get(item.key) ?? [];
-    const parentSet = new Set(parents);
-    const beforeLaneOf = new Map<string, number>();
-    activeLanes.forEach((k, l) => {
-      if (k !== null) beforeLaneOf.set(k, l);
-    });
-
-    for (const p of parents) {
-      remOutDeg.set(p, (remOutDeg.get(p) ?? 1) - 1);
-    }
-
-    const termParents = parents
-      .filter((p) => (remOutDeg.get(p) ?? 0) === 0)
-      .sort((a, b) => (beforeLaneOf.get(a) ?? 0) - (beforeLaneOf.get(b) ?? 0));
-    const contParents = parents
-      .filter((p) => (remOutDeg.get(p) ?? 0) > 0)
-      .sort((a, b) => (beforeLaneOf.get(a) ?? 0) - (beforeLaneOf.get(b) ?? 0));
-
-    let dotLane: number;
-    let singleContForkLane: number | null = null;
-
-    if (termParents.length > 0) {
-      dotLane = beforeLaneOf.get(termParents[0]!) ?? 0;
-      for (const p of termParents) {
-        const l = beforeLaneOf.get(p);
-        if (l !== undefined) setLane(l, null);
-      }
-    } else if (contParents.length === 1) {
-      const p = contParents[0]!;
-      dotLane = beforeLaneOf.get(p) ?? 0;
-      singleContForkLane = lowestFreeLane(activeLanes);
-      setLane(dotLane, null);
-      setLane(singleContForkLane, p);
-    } else {
-      dotLane = lowestFreeLane(activeLanes);
-    }
-
-    const ops: LogicalOp[] = [];
-
-    for (const [k, l] of beforeLaneOf) {
-      if (!parentSet.has(k)) {
-        ops.push({ kind: "thru", lane: l, style: styleByKey.get(k) ?? "dash" });
-      }
-    }
-
-    const targetKind = item.itemKind === "gate" ? "gate" : "dot";
-    for (const p of parents) {
-      const fromLane = beforeLaneOf.get(p) ?? 0;
-      const pStyle = styleByKey.get(p) ?? "dash";
-      ops.push({ kind: "in", fromLane, toLane: dotLane, target: targetKind, style: pStyle });
-      if ((remOutDeg.get(p) ?? 0) > 0) {
-        if (singleContForkLane !== null && fromLane === dotLane) {
-          ops.push({ kind: "fork", fromLane: dotLane, toLane: singleContForkLane, style: pStyle });
-        } else {
-          ops.push({ kind: "thru", lane: fromLane, style: pStyle });
-        }
-      }
-    }
-
-    if ((remOutDeg.get(item.key) ?? 0) > 0) {
-      setLane(dotLane, item.key);
-      const outSource = item.itemKind === "coil" ? "coil" : item.itemKind === "gate" ? "gate" : "dot";
-      ops.push({ kind: "out", lane: dotLane, source: outSource, style: styleByKey.get(item.key) ?? "dash" });
-    }
-
-    let bottomLaneCount = 0;
-    activeLanes.forEach((k, l) => {
-      if (k !== null) {
-        bottomLaneCount++;
-        if (l > maxLaneUsed) maxLaneUsed = l;
-      }
-    });
-    if (dotLane > maxLaneUsed) maxLaneUsed = dotLane;
-
-    logicalRows.push({ item, dotLane, ops, bottomLaneCount });
-  }
-
-  const { gutterWidth, laneX } = computeGutterGeometry(maxLaneUsed + 1);
-  const top = 0;
-  const bottom = GUTTER_H;
-  const tube = (style: "solid" | "dash") => (style === "solid" ? "filled" : "empty");
-
-  const rows: RenderedTrackRow[] = logicalRows.map((row) => {
-    const dotX = laneX(row.dotLane);
-    const segments: GutterSegment[] = [];
-
-    for (const op of row.ops) {
-      if (op.kind === "thru") {
-        const x = laneX(op.lane);
-        segments.push(segmentOf(tube(op.style), [{ x, y: top }, { x, y: bottom }]));
-      } else if (op.kind === "in") {
-        const xFrom = laneX(op.fromLane);
-        const xTo = laneX(op.toLane);
-        segments.push(
-          segmentOf(
-            tube(op.style),
-            xFrom === xTo
-              ? [{ x: xTo, y: top }, { x: xTo, y: GUTTER_CY }]
-              : [{ x: xFrom, y: top }, { x: xFrom, y: GUTTER_CY }, { x: xTo, y: GUTTER_CY }],
-          ),
-        );
-      } else if (op.kind === "fork") {
-        const xFrom = laneX(op.fromLane);
-        const xTo = laneX(op.toLane);
-        segments.push(segmentOf(tube(op.style), [{ x: xFrom, y: top }, { x: xFrom, y: FORK_Y }, { x: xTo, y: FORK_Y }, { x: xTo, y: bottom }]));
-      } else if (op.kind === "out") {
-        const x = laneX(op.lane);
-        segments.push(segmentOf(tube(op.style), [{ x, y: GUTTER_CY }, { x, y: bottom }]));
-      }
-    }
-
-    const gutterKind: GutterKind =
-      row.item.itemKind === "coil"
-        ? "coil"
-        : row.item.itemKind === "gate"
-          ? "gate"
-          : row.item.itemKind === "next"
-            ? "next"
-            : row.dotLane > 0
-            ? "parB"
-            : row.bottomLaneCount >= 2
-              ? "parA"
-              : "station";
-
-    return {
-      item: row.item,
-      gutterKind,
-      dotX,
-      segments,
-    };
-  });
-
+  const edges = reduceTransitiveEdges(items.map((it) => it.key), rawDisplayEdges);
+  const state = initLaneState(items, edges);
+  const logicalRows = items.map((item) => layoutLogicalRow(state, item));
+  const { gutterWidth, laneX } = computeGutterGeometry(state.maxLaneUsed + 1);
+  const rows: RenderedTrackRow[] = logicalRows.map((row) => ({
+    item: row.item,
+    gutterKind: gutterKindOf(row),
+    dotX: laneX(row.dotLane),
+    segments: row.ops.map((op) => segmentOfOp(op, laneX)),
+  }));
   return { gutterWidth, rows };
 }
 
