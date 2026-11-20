@@ -28,6 +28,7 @@
 
 ## 测试与合并策略
 - **本机按需验证**：开发与独立审查阶段只跑 `pnpm typecheck`、本次改动涉及的测试文件（改动沙箱或写范围时必跑 `src/shared/write-scope.test.ts`）和 `pnpm verify` 端到端冒烟（`.agents/skills/verify/SKILL.md`），不在本机跑全量 `vitest`，也不阻塞等待桌面安装包编译或云端 CI 排队；不用 `gh run rerun` 掩盖抖动测试。
+- **两层审查**：独立审查先过 `src/shared/review.ts` 的通用清单，再按改动路径核对主干上根目录 `REVIEW.md` 里 `Trigger:` 命中的条目；发现分 `[Important]`、`[Nit]`、`[Pre-existing]` 三档，只有 `[Important]` 挡合并。
 - **云端分层检查**：PR 默认运行 4 路并行 Ubuntu 分片；改动平台层、驱动层、进程/管道/git/同步、`apps/windows/**` 或 `test/windows/**` 时自动触发 `.github/workflows/windows.yml`；仅改动 `apps/**`、打包脚本或锁文件时触发桌面安装包工作流。
 - **合并时机**：本机可实测的常规改动在单测与必要审查通过后直接合入 `main`，由 `main` 异步运行全量回归与桌面包自检；本机无法实测的 Linux `bwrap` 沙箱或 Windows 底层/打包改动，须等对应云端检查通过后再合并。
 

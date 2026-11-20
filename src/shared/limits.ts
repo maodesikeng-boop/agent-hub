@@ -736,6 +736,8 @@ export const MAX_NODE_TITLE_CHARS = 80;
 export const MAX_STEP_BRIEF_CHARS = 1_500;
 /** 审查步骤 base（被审分支名）的字数上限。 */
 export const MAX_STEP_BASE_CHARS = 200;
+/** 同一处改动最多审几轮（shared/review.ts）：第这么多轮还有未决的 [Important]，审查和项目经理都不再加轮次，交用户拍板。 */
+export const REVIEW_MAX_ROUNDS = 3;
 /** 单个上游步骤的交棒原文上限（字，按 Unicode 码点；超长截断并把完整汇报落盘到启动目录 upstream/）。 */
 export const HANDOFF_NOTE_MAX_CHARS = 4_000;
 /** 多线合流时各上游交棒合计上限（字，按 Unicode 码点；均分给各上游且单上游不超过 HANDOFF_NOTE_MAX_CHARS）。 */
