@@ -1,4 +1,4 @@
-import { useMutation, useQuery, type Query } from "@tanstack/react-query";
+import { useMutation, useQuery, type Query, type QueryClient } from "@tanstack/react-query";
 import { useSyncExternalStore } from "react";
 import { UPDATE_CHECK_RETRY_MS, UPDATE_CHECK_TTL_MS, type InstallerTarget, type UpdateAvailable, type UpdateStatus } from "../shared/index.ts";
 import { fetchUpdate, postUpdateCheck } from "./client.ts";
@@ -15,27 +15,37 @@ function updateRefreshMs(query: Query<UpdateStatus, Error, UpdateStatus, typeof 
   return status === "error" || data?.status === "unavailable" ? UPDATE_CHECK_RETRY_MS : UPDATE_CHECK_TTL_MS;
 }
 
+// Responses can land out of request order; the daemon stamps each check, so the newest stamp wins.
+export function newerUpdate(current: UpdateStatus | undefined, incoming: UpdateStatus): UpdateStatus {
+  return current !== undefined && current.checkedAt >= incoming.checkedAt ? current : incoming;
+}
+
+function updateQueryFn(qc: QueryClient) {
+  return async () => {
+    const fetched = await fetchUpdate();
+    return newerUpdate(qc.getQueryData<UpdateStatus>(UPDATE_QUERY_KEY), fetched);
+  };
+}
+
 export function useUpdateStatus() {
   const qc = useHubQueryClient();
   return useQuery(
-    { queryKey: UPDATE_QUERY_KEY, queryFn: fetchUpdate, staleTime: updateRefreshMs, refetchInterval: updateRefreshMs, refetchOnMount: false, retryOnMount: false },
+    { queryKey: UPDATE_QUERY_KEY, queryFn: updateQueryFn(qc), staleTime: updateRefreshMs, refetchInterval: updateRefreshMs, refetchOnMount: false, retryOnMount: false },
     qc,
   );
 }
 
 export function useCachedUpdateStatus(): UpdateStatus | undefined {
   const qc = useHubQueryClient();
-  return useQuery({ queryKey: UPDATE_QUERY_KEY, queryFn: fetchUpdate, enabled: false }, qc).data;
+  return useQuery({ queryKey: UPDATE_QUERY_KEY, queryFn: updateQueryFn(qc), enabled: false }, qc).data;
 }
 
 export function useCheckForUpdates() {
   const qc = useHubQueryClient();
   return useMutation(
     {
-      // An older GET still in flight would otherwise land after the manual result and overwrite it.
-      onMutate: () => qc.cancelQueries({ queryKey: UPDATE_QUERY_KEY }),
       mutationFn: postUpdateCheck,
-      onSuccess: (status) => qc.setQueryData(UPDATE_QUERY_KEY, status),
+      onSuccess: (status) => qc.setQueryData<UpdateStatus>(UPDATE_QUERY_KEY, (current) => newerUpdate(current, status)),
     },
     qc,
   );

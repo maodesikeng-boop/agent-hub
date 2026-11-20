@@ -90,7 +90,7 @@ describe("Updates settings group", () => {
   });
 
   it("Check for updates posts a fresh check and shows its result", async () => {
-    const api = serve(upToDate, bundledUpdate());
+    const api = serve(upToDate, bundledUpdate({ checkedAt: 2_000 }));
     render(<UpdateSettings />);
     expect(await within(group()).findByText("Up to date")).toBeInTheDocument();
     await userEvent.click(within(group()).getByRole("button", { name: "Check for updates" }));
@@ -115,7 +115,7 @@ describe("Updates settings group", () => {
     render(<UpdateSettings />);
     await act(() => vi.advanceTimersByTimeAsync(0));
     expect(within(group()).getByText("Couldn't check for updates")).toBeInTheDocument();
-    api.update = () => ({ status: 200, body: bundledUpdate() });
+    api.update = () => ({ status: 200, body: bundledUpdate({ checkedAt: 2_000 }) });
     await act(() => vi.advanceTimersByTimeAsync(UPDATE_CHECK_RETRY_MS));
     expect(within(group()).getByText("v0.3.0 available")).toBeInTheDocument();
     expect(api.callsTo("GET", /^\/api\/update$/)).toHaveLength(2);
@@ -125,15 +125,32 @@ describe("Updates settings group", () => {
     expect(api.callsTo("GET", /^\/api\/update$/)).toHaveLength(3);
   });
 
-  it("keeps the manual check result when an older GET lands after it", async () => {
-    const api = serve(upToDate, bundledUpdate());
+  it.each([
+    ["started before the manual POST", false],
+    ["started while the manual POST was in flight and read the old cache", true],
+  ])("keeps the manual check result when a GET %s lands after it", async (_name, startDuringPost) => {
+    const api = serve(upToDate, bundledUpdate({ checkedAt: 2_000 }));
     render(<UpdateSettings />);
     expect(await within(group()).findByText("Up to date")).toBeInTheDocument();
     let releaseOld!: () => void;
-    api.update = () => new Promise((resolve) => { releaseOld = () => resolve({ status: 200, body: upToDate }); });
-    void queryClient.refetchQueries({ queryKey: ["update"] });
-    await waitFor(() => expect(api.callsTo("GET", /^\/api\/update$/)).toHaveLength(2));
+    const holdGet = () => { api.update = () => new Promise((resolve) => { releaseOld = () => resolve({ status: 200, body: upToDate }); }); };
+    let releasePost!: () => void;
+    const posted = new Promise<void>((resolve) => { releasePost = resolve; });
+    if (!startDuringPost) {
+      holdGet();
+      void queryClient.refetchQueries({ queryKey: ["update"] });
+      await waitFor(() => expect(api.callsTo("GET", /^\/api\/update$/)).toHaveLength(2));
+    } else {
+      api.updateCheck = () => posted.then(() => ({ status: 200, body: bundledUpdate({ checkedAt: 2_000 }) }));
+    }
     await userEvent.click(within(group()).getByRole("button", { name: "Check for updates" }));
+    if (startDuringPost) {
+      await waitFor(() => expect(api.callsTo("POST", /^\/api\/update\/check$/)).toHaveLength(1));
+      holdGet();
+      void queryClient.refetchQueries({ queryKey: ["update"] });
+      await waitFor(() => expect(api.callsTo("GET", /^\/api\/update$/)).toHaveLength(2));
+      releasePost();
+    }
     expect(await within(group()).findByRole("link", { name: "Download for macOS" })).toBeInTheDocument();
     await act(async () => releaseOld());
     expect(within(group()).getByRole("link", { name: "Download for macOS" })).toBeInTheDocument();
