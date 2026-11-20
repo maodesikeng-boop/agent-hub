@@ -28,8 +28,8 @@
     "src/daemon/daemon.ts#startDaemon": 864,
     "src/daemon/driver/model-catalog.ts#createModelCatalogs": 155,
     "src/daemon/feishu/account-bot.ts#createFeishuAccountBot": 252,
-    "src/daemon/feishu/sdk.ts#createFeishuSdkTransport": 222,
-    "src/daemon/feishu/store.ts#createFeishuStore": 288,
+    "src/daemon/feishu/sdk.ts#createFeishuSdkTransport": 221,
+    "src/daemon/feishu/store.ts#createFeishuStore": 287,
     "src/daemon/git/git.ts#probeOrphanContent": 196,
     "src/daemon/handover/runner.ts#createHandoverRunner": 179,
     "src/daemon/launch.ts#createLaunchPreparer": 135,
@@ -107,24 +107,5 @@
     "src/web/shell-model.ts#useShellModel": 505,
     "src/web/state.ts#applyChange": 230,
     "src/web/task-graph-layout.ts#computeTaskGraphLayoutUncached": 390
-  },
-  "commentDebt": {
-    "src/daemon/feishu/account-bot.ts": 38,
-    "src/daemon/feishu/avatars.ts": 14,
-    "src/daemon/feishu/cards.ts": 50,
-    "src/daemon/feishu/chats.ts": 35,
-    "src/daemon/feishu/directory.ts": 31,
-    "src/daemon/feishu/files.ts": 27,
-    "src/daemon/feishu/inbound.ts": 17,
-    "src/daemon/feishu/model-picker.ts": 1,
-    "src/daemon/feishu/outbound.ts": 50,
-    "src/daemon/feishu/routing.ts": 38,
-    "src/daemon/feishu/scopes.ts": 21,
-    "src/daemon/feishu/sdk.ts": 24,
-    "src/daemon/feishu/secrets.ts": 8,
-    "src/daemon/feishu/setup.ts": 18,
-    "src/daemon/feishu/store.ts": 37,
-    "src/daemon/feishu/stream.ts": 42,
-    "src/daemon/feishu/transport.ts": 59
   }
 }

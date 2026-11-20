@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 const FILE_MAX_LINES = 750;
 const FUNCTION_MAX_LINES = 120;
-const COMMENT_RATIO_MAX = 0.015;
+const COMMENT_RATIO_MAX = 0.008;
 const BASELINE_PATH = "src/code-hygiene.baseline.json";
 
 const NON_PRODUCTION = /\.test\.tsx?$|(^|\/)(test|fake)-[\w-]+\.tsx?$|fixture/;
@@ -19,7 +19,7 @@ type AstNode = { type: string; start: number; end: number; [key: string]: unknow
 type FunctionSize = { key: string; line: number; lines: number };
 type CommentIssue = { line: number; problem: string; fix: string };
 type FileReport = { path: string; lines: number; commentLines: number; commentIssues: CommentIssue[]; functions: FunctionSize[] };
-type Baseline = { files: Record<string, number>; functions: Record<string, number>; commentDebt: Record<string, number> };
+type Baseline = { files: Record<string, number>; functions: Record<string, number> };
 
 const isAstNode = (v: unknown): v is AstNode => typeof v === "object" && v !== null && typeof (v as AstNode).type === "string";
 const FUNCTION_TYPES = new Set(["FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression"]);
@@ -112,13 +112,6 @@ function ratchet(label: string, current: number, recorded: number | undefined, l
   return [];
 }
 
-function checkCommentIssues(report: FileReport, baseline: Baseline): string[] {
-  const debt = baseline.commentDebt[report.path];
-  const count = report.commentIssues.length;
-  if (count > (debt ?? 0)) return report.commentIssues.map((i) => `${report.path}:${i.line}: ${i.problem}; ${i.fix}`);
-  return ratchet(`${report.path} comment debt`, count, debt, 0, "");
-}
-
 function checkFile(report: FileReport, baseline: Baseline): string[] {
   const fileFix = "Move cohesive parts into focused modules.";
   const functionFix = "Extract named helpers with explicit typed parameters, or split the factory closure into small modules.";
@@ -127,7 +120,7 @@ function checkFile(report: FileReport, baseline: Baseline): string[] {
     ...report.functions.flatMap((f) =>
       ratchet(`${report.path}:${f.line} function ${f.key}`, f.lines, baseline.functions[`${report.path}#${f.key}`], FUNCTION_MAX_LINES, functionFix),
     ),
-    ...checkCommentIssues(report, baseline),
+    ...report.commentIssues.map((i) => `${report.path}:${i.line}: ${i.problem}; ${i.fix}`),
   ];
 }
 
@@ -136,7 +129,6 @@ function staleEntries(reports: readonly FileReport[], baseline: Baseline): strin
   const functions = new Set(reports.flatMap((r) => r.functions.map((f) => `${r.path}#${f.key}`)));
   const missing = [
     ...Object.keys(baseline.files).filter((p) => !paths.has(p)),
-    ...Object.keys(baseline.commentDebt).filter((p) => !paths.has(p)),
     ...Object.keys(baseline.functions).filter((k) => !functions.has(k)),
   ];
   return missing.map((key) => `${key}: no longer exists; delete its entry in ${BASELINE_PATH}`);
@@ -162,7 +154,7 @@ function productionFiles(dir: string, root: string): string[] {
   });
 }
 
-const EMPTY: Baseline = { files: {}, functions: {}, commentDebt: {} };
+const EMPTY: Baseline = { files: {}, functions: {} };
 const body = (n: number) => Array.from({ length: n }, (_, i) => `  const v${i} = ${i};`).join("\n");
 const fn = (name: string, bodyLines: number) => `export function ${name}() {\n${body(bodyLines)}\n}\n`;
 
@@ -208,7 +200,7 @@ describe("code hygiene guard", () => {
 
   it("forces the baseline down when a recorded file or function shrinks, and drops stale entries", () => {
     const source = fn("legacy", 150);
-    const baseline: Baseline = { files: { "src/x.ts": 800, "src/gone.ts": 900 }, functions: { "src/x.ts#legacy": 160 }, commentDebt: {} };
+    const baseline: Baseline = { files: { "src/x.ts": 800, "src/gone.ts": 900 }, functions: { "src/x.ts#legacy": 160 } };
     expect(checkHygiene([analyzeSource("src/x.ts", source)], baseline)).toEqual([
       `src/x.ts file length: shrank from 800 to 152; delete the entry in ${BASELINE_PATH} so it cannot grow back`,
       `src/x.ts:1 function legacy: shrank from 160 to 152; lower it to 152 in ${BASELINE_PATH} so it cannot grow back`,
