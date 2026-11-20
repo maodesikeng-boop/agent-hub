@@ -141,6 +141,7 @@ describe("设置 → Capabilities：总助和各项目经理统一管外接能�
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     await user.click(toggle);
     const table = within(panel).getByRole("table", { name: "Enforcement by provider" });
+    expect(table.parentElement).toHaveClass("overflow-x-auto");
     expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Provider", "MCP", "Skills", "Connectors"]);
     const rows = within(table).getAllByRole("row").slice(1);
     expect(rows).toHaveLength(AGENT_VENDORS.length);
@@ -151,6 +152,7 @@ describe("设置 → Capabilities：总助和各项目经理统一管外接能�
       expect(cells[0]).toHaveTextContent(ISOLATION_LABELS[isolation.mcp]);
       expect(cells[1]).toHaveTextContent(ISOLATION_LABELS[isolation.skill]);
       expect(cells[2]).toHaveTextContent(ISOLATION_LABELS[isolation.connector]);
+      for (const cell of cells) expect(cell).toHaveClass("whitespace-nowrap");
     });
   });
 });
