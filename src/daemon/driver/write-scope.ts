@@ -1,4 +1,4 @@
-// Maps the generic write scope to each OS sandbox. A process already inside the OS sandbox cannot start the vendor's own sandbox, so each vendor disables it (see docs/write-scope.md).
+// Maps the generic write scope to each OS sandbox. A process already inside the OS sandbox cannot start the vendor's own sandbox, so each vendor disables it.
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync, type Dirent } from "node:fs";
 import { opendir, realpath, stat } from "node:fs/promises";

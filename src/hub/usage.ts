@@ -297,7 +297,6 @@ const SELF_RELOAD_USAGE = `  ${hub} self-reload [--build]                       
                                                           全库空闲后自动重启；最多等 ${SELF_RELOAD_DRAIN_MAX_MS / 60_000} 分钟，之后不再等 Worker 轮次和系统消息（重启后自动重发），
                                                           只等你、总助正在回用户的那一轮回完就重启（回执和 hub status 写明最晚几点）；--build 先在后台构建网页，失败就取消、不重启`;
 
-// A condensed copy lives in daemon/prompt.ts HUB_USAGE_PROMPT; keep the two in sync.
 export const HUB_USAGE = `用法：
 ${HUB_COMMAND_SPECS.map((s) => s.usage).join("\n")}
 ${SELF_RELOAD_USAGE}

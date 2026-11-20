@@ -17,6 +17,7 @@ export default defineConfig({
             "src/vendors/**/*.test.ts",
             "src/daemon/**/*.test.ts",
             "src/hub/**/*.test.ts",
+            "src/feishu/**/*.test.ts",
             "src/relay/**/*.test.ts",
             "src/mesh/**/*.test.ts",
             "scripts/**/*.test.ts",
