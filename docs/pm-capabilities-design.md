@@ -66,7 +66,7 @@ In a Task Graph spec, a step takes `caps` and `allow`:
 
 ## Vendor granularity
 
-Each vendor declares `capabilities.isolation` in its `spec.ts`. The UI shows it next to each kind so the user knows what a toggle really controls.
+Each vendor declares `capabilities.isolation` in its `spec.ts`. **Settings → Capabilities** shows it in the `Enforcement by provider` table so the user knows what a toggle really controls.
 
 | Value | Meaning |
 | --- | --- |
@@ -94,4 +94,4 @@ Each vendor declares `capabilities.isolation` in its `spec.ts`. The UI shows it 
 
 ## Project setup command
 
-`Project.setupCommand` is the shell command that runs in each new Worker worktree before the Worker starts. The PM sets it with `hub project setup`, and the user sets it through `PUT /api/projects/:id/setup-command`. Both paths share one validator: the command must be non-blank, contain no NUL byte, and fit in `MAX_SETUP_COMMAND_BYTES`. `null` clears it. Every change emits a `project.updated` change, so open workbench tabs refresh. Workers that already have a worktree are not affected.
+`Project.setupCommand` is the shell command that runs in each new Worker worktree before the Worker starts. The PM sets it with `hub project setup`, and the user edits it in the profile page's `Worktree setup` group, which calls `PUT /api/projects/:id/setup-command`. Both paths share one validator: the command must be non-blank, contain no NUL byte, and fit in `MAX_SETUP_COMMAND_BYTES`. `null` clears it. Every change emits a `project.updated` change, so open workbench tabs refresh. Workers that already have a worktree are not affected.

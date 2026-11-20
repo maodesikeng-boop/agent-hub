@@ -124,7 +124,7 @@ Controls use two heights: **`36px` default** (`h-9`) and **`32px` small** (`h-8`
 - **Left baseline**: Group boxes, external group headings, collapsible toggles, and row errors align on `px-4` (`16px`).
 - **Rows**: Label left, control right, vertically centered; subtext aligns with the label. Folder rows place the folder name (`15px`) above the truncated path (`13.5px` muted, `~` shortened, full path in `title`).
 - **Conversation header**: Left side shows only the `34px` avatar (clicking opens PM profile) and `17px` `600` name; Piece headers add `PieceMeta` (`12px` muted model, effort, and context length, hidden below `720px`) before the right-rail toggle.
-- **Profile page**: Centered `64px` avatar, `22px` name, and `13.5px` muted project name (`max-w-[640px]`).
+- **Profile page**: Centered `64px` avatar, `22px` name, and `13.5px` muted project name (`max-w-[640px]`). Groups run `Model`, `Mode`, `Capabilities`, `Folders`, `Worktree setup`, `Schedules`, `Persona`, `Memory files`, `History`, and `Session` (section 23).
 - **Container-responsive chat column (`.chat-main`, `.chat-column`, and `.messages`)**:
   - `.chat-main` declares `container: chat / inline-size` and scales `--chat-max` by main-pane width: `46rem` default, `52rem` at `>= 64rem`, `58rem` at `>= 80rem`, and `64rem` at `>= 112rem`.
   - `.chat-column` and `.messages` center via `padding-inline: max(var(--chat-gutter), calc((100% - var(--chat-max)) / 2))` (`0.75rem` below `40rem`, `3rem` at or above `40rem`). Conversation headers stay full-width (`--header-gutter-start: 20px`, `--header-gutter-end: 12px`).
@@ -136,7 +136,8 @@ Use `SettingsGroup`, `SettingsRow`, `CollapsibleGroup`, `ChoiceRows`, and `ModeR
 - **Group box (`GROUP_BOX`)**: `rounded-2xl border border-border bg-background` with `1px` `divide-border` between rows, no gray fill, and no shadow. External headings use `13.5px` `500` `text-muted-foreground` `px-4` `min-h-8 items-center`, `8px` above the box.
 - **Icon rows** (computers and browser sessions): `size-pixel text-muted-foreground` + `gap-3` + title, with an `8px` status dot (`bg-success`, `bg-caution`, or `bg-muted-foreground/40`) before spaced metadata (`gap-3`, never middle dots).
 - **`CollapsibleGroup`**: Collapses low-frequency lists (signed-in browsers, edit history, `Memory files`) into one `52px` button row inside `h2` (`aria-expanded`, summary count + `16px` `ChevronDown` rotating `180deg`). Auto-expands on load only when action is required.
-- **Controls inside rows**: Auto-saving dropdowns use borderless `Select variant="plain"` (`ChevronsUpDown`); short inline choices use `Segmented` (`h-9 rounded-full p-0.5`, neutral `bg-sidebar-active`); multi-row single-choice lists use `ChoiceRows` (`20px` `RadioMark`); mobile drill-down entries use `SettingsNavRow` (`min-h-12 px-4 py-3` with status summary and `ChevronRight`).
+- **Controls inside rows**: Auto-saving dropdowns use borderless `Select variant="plain"` (`ChevronsUpDown`); short inline choices use `Segmented` (`h-9 rounded-full p-0.5`, neutral `bg-sidebar-active`); multi-row single-choice lists use `ChoiceRows` (`20px` `RadioMark`); drill-down entries (mobile settings and the profile `Capabilities` row) use `SettingsNavRow` (`min-h-12 px-4 py-3` with status summary and `ChevronRight`).
+- **Search fields (`SearchField`, `src/web/components/SearchField.tsx`)**: The sidebar and `Capabilities` share one `h-9 rounded-xl bg-sidebar-active` field with a `12px` `Search` icon, `Search` placeholder, and an `icon-sm` `Clear search` button once the query is non-blank.
 - **Provider, model, and effort rows (`AgentRows`)**: Driven entirely from `useModelCatalogs` and `src/shared/vendors.ts`. Uninstalled providers are omitted (unless currently selected, which disables `Create`); signed-out providers appear as disabled `<option>` entries (`Codex (Not signed in)`). Single-tier effort rows hide automatically.
 
 ### Form validation
@@ -149,7 +150,7 @@ Use `SettingsGroup`, `SettingsRow`, `CollapsibleGroup`, `ChoiceRows`, and `ModeR
 ## 10. Dialogs and bottom drawers
 
 - **`DialogContent` (`src/web/ui/dialog.tsx`)**: `rounded-2xl border border-border bg-background p-6` over `bg-black/30`. Width tiers: `520px` default (`NewPmDialog`, with `w-72` right-aligned field column), `max-w-110` for confirmations, and `780px` (`max-w-195`, fixed height `h-[min(35rem,calc(100%-3rem))]`, `p-0`) for desktop `SettingsDialog`.
-- **Desktop `SettingsDialog`**: Left vertical Radix `Tabs` (`w-48 bg-sidebar border-r border-border`, collapsing into a horizontal top tab bar below `720px`) for `General`, `Providers` (including `Vendor sync` and its `Sync preview` dialog), `Computers`, and `Security & Access`; right pane scrolls independently with `min-w-0` and `grid-cols-1` so long paths or URLs never clip right-hand buttons.
+- **Desktop `SettingsDialog`**: Left vertical Radix `Tabs` (`w-48 bg-sidebar border-r border-border`, collapsing into a horizontal top tab bar below `720px`) for `General`, `Providers` (including `Vendor sync` and its `Sync preview` dialog), `Capabilities` (section 23), `Computers`, and `Security & Access`; right pane scrolls independently with `min-w-0` and `grid-cols-1` so long paths or URLs never clip right-hand buttons.
 - **Fixed header and footer**: Only `DialogBody` scrolls, fading over its bottom `16px` (`.dialog-body-fade`).
 - **Zoom and preview dialogs (`ZOOM_DIALOG` and `FilePreview`)**: Size to content up to `min(96vw, 1400px)` by `90vh` for diagrams, Task Graphs, tables, Markdown, code, and audio; expand to `90vw` by `90vh` for PDFs, HTML pages, videos, and full-size images.
 - **Bottom `Drawer` (`src/web/ui/drawer.tsx`, wrapping `vaul`)**: Used on mobile for Pieces, destructive confirmations, and short form wizards (`rounded-t-2xl border-t border-line bg-surface-chat`, `max-h-[85dvh]`, `36x4` drag handle, bottom inset `max(var(--safe-bottom), var(--kb-inset))`).
@@ -232,7 +233,7 @@ Use `SettingsGroup`, `SettingsRow`, `CollapsibleGroup`, `ChoiceRows`, and `ModeR
 ## 20. Mobile shell
 
 - Activated solely by `MOBILE_SHELL_QUERY` (`(pointer: coarse)` and short viewport edge `< 600px`).
-- Full-screen navigation stack (`#/` list kept warm with React 19 `<Activity mode="hidden">`, pushing `#/c/<id>` chat, then `#/w/<id>` Piece or `#/pm/<id>` profile) with deterministic `mobileBack` history handling, bottom Pieces `Drawer`, and full-screen two-level drill-down settings (`#/settings` to `#/settings/<section>`: `scale`, `notifications`, `providers`, `vendor-sync`, `computers`, `sign-in`, `browsers`) sharing `src/web/settings-model.ts` with zero extra network requests on `#/settings`.
+- Full-screen navigation stack (`#/` list kept warm with React 19 `<Activity mode="hidden">`, pushing `#/c/<id>` chat, then `#/w/<id>` Piece or `#/pm/<id>` profile) with deterministic `mobileBack` history handling, bottom Pieces `Drawer`, and full-screen two-level drill-down settings (`#/settings` to `#/settings/<section>`: `scale`, `notifications`, `providers`, `vendor-sync`, `capabilities`, `computers`, `sign-in`, `browsers`) sharing `src/web/settings-model.ts` with zero extra network requests on `#/settings`.
 
 ## 21. Router workbench: decision tray and timeline
 
@@ -250,3 +251,18 @@ Use `SettingsGroup`, `SettingsRow`, `CollapsibleGroup`, `ChoiceRows`, and `ModeR
 - **Two file rows (`groupDeliverables`)**:
   - **Documents** (`.md`, `.pdf`, `.html`, `.csv`, source files): Wrapping inline `[data-file-link]` links with `FileText` pixel icon (`gap-x-3 gap-y-1`, no pills or file sizes).
   - **Media** (images and videos): Horizontal scrolling strip of `96px`-tall (`--deliverable-media-height`, `max-w-40 rounded-xl border border-border bg-muted object-cover`) thumbnails; videos render `preload="metadata"` first frames with a centered `36px` `Play` overlay. Clicking any item opens `FilePreview`; expired copies degrade cleanly to the expired-file card.
+
+## 23. Capabilities and worktree setup
+
+`CapabilitiesSettings` (`src/web/components/CapabilitiesSettings.tsx`) renders the desktop `Capabilities` tab and the mobile `#/settings/capabilities` page from one component ([External capabilities](pm-capabilities-design.md)):
+
+- **Scope strip**: A wrapping Radix `RadioGroup` (`aria-label="Agent"`, `gap-2`) of `h-9 rounded-full` chips (`20px` `RouterAvatar` or PM slime + `13.5px` `500` name, `border border-border` at rest, `bg-sidebar-active` with no border when checked). `Router` always comes first, followed by unarchived PMs on this computer; the Router starts with every kind off, and the counts and switches show that without extra copy.
+- **`Enforcement by provider`**: A default-collapsed `CollapsibleGroup` directly under the strip. It expands into a table with one row per provider and `MCP`, `Skills`, and `Connectors` columns; each cell pairs an `8px` dot with `Per session` (`bg-success`), `Tools denied` (`bg-caution`), or `Shared` (`bg-muted-foreground/40`), plus a `12px` muted `Plugins: ...` line only when plugin items differ.
+- **Search and `Refresh`**: `SearchField` (`Search capabilities`) filters by name, key, description, or group label; matching groups expand and kind bulk buttons hide while a query is active, and an empty result shows `No matches`. The ghost `Refresh` button rescans the inventory.
+- **Kind groups**: `MCP servers`, `Skills`, and `Connectors` in that order, each a `SettingsGroup` whose header carries `N of M` (`13.5px` muted, `tabular-nums`) and a ghost `Turn all on` or `Turn all off` button that changes the kind default. Empty kinds show `No MCP servers found` and similar.
+- **Source groups and items**: Each source (`Project`, `Global`, a provider plugin, bundled, or account) is a collapsed `min-h-13` row with a rotating `12px` `ChevronRight`, label, muted source line, `N of M`, and a group `Switch` that sets every row it lists. Item rows indent to the label (`pl-10`, `min-h-12`) with the name, a one-line truncated muted description, and their own `Switch`. Toggles apply optimistically, queue in order, and fall back to the server state with a `px-4` row error when a save fails.
+
+The profile page links and edits project-level settings next to `Folders`:
+
+- **`Capabilities` row**: Shown for unarchived PMs on this computer; one `SettingsNavRow` (`MCP servers, skills, and connectors`, `N of M` summary) that opens `Capabilities` with that PM selected and returns to the profile when closed.
+- **`Worktree setup`**: A borderless auto-sizing `Textarea` (`font-mono text-minor` once non-empty, `No setup command` placeholder). The group header shows a ghost `Clear` when a command is saved and `Cancel` plus a small primary `Save` while edited; `Clear` only empties the draft, and saving blank text clears the command. Drafts survive incoming `project.updated` changes, over-limit or NUL input renders one `RowError` reason and disables `Save`, and archived PMs see the field read-only.
