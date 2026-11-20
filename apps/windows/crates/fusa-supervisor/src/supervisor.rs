@@ -24,13 +24,11 @@ use crate::probe::{
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-/// 可注入时钟抽象（生产环境使用系统真实墙钟，单测可注入虚拟时钟毫秒级推演 40s 停机预算与 60s 崩溃窗口）。
 pub trait Clock: Send + Sync + 'static {
     fn now_epoch_ms(&self) -> u64;
     fn sleep(&self, duration: Duration);
 }
 
-/// 真实系统时钟。
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SystemClock;
 
@@ -47,7 +45,6 @@ impl Clock for SystemClock {
     }
 }
 
-/// 发往自有守护进程的受控停机动作：优雅 `Term`（经 admin 命名管道 `POST /admin/shutdown`）与超时后的 `Kill`（Job + 进程终止）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum OwnedSignal {
@@ -55,7 +52,6 @@ pub enum OwnedSignal {
     Kill,
 }
 
-/// 自有原生守护进程存活状态快照。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OwnedProcessStatus {
     pub found: bool,
@@ -77,7 +73,6 @@ impl OwnedProcessStatus {
     }
 }
 
-/// 自有守护进程子进程与关联 Job Object 生命周期句柄抽象。
 pub trait OwnedProcessHandle: Send {
     fn try_reap(&mut self) -> Option<i32>;
     fn cleanup_owned_resources(&mut self);
@@ -169,7 +164,6 @@ fn process_exit_waiter(child: &Child) -> std::io::Result<impl FnOnce() + Send> {
     })
 }
 
-/// 原生守护进程运行时抽象。
 pub trait DaemonRuntime: Send + Sync + 'static {
     fn verify_runtime_integrity(&self) -> Result<(), SupervisorError>;
     fn matches_local_hub_home(&self, identity: &DaemonIdentity) -> bool;
@@ -192,7 +186,6 @@ pub trait DaemonRuntime: Send + Sync + 'static {
     fn read_ui_token(&self) -> Result<SecretUiToken, SupervisorError>;
 }
 
-/// Windows 原生守护进程运行时配置。
 #[derive(Debug, Clone)]
 pub struct NativeRuntimeConfig {
     pub app_data_dir: PathBuf,
@@ -233,7 +226,6 @@ struct CachedFileDigest {
     sha256: String,
 }
 
-/// 直接监管本机随包 `node.exe` 的 Windows 原生运行时实现。
 pub struct NativeDaemonRuntime {
     config: NativeRuntimeConfig,
     slots: Arc<Mutex<HashMap<String, NativeOwnedSlot>>>,
@@ -265,7 +257,7 @@ impl NativeDaemonRuntime {
         })?;
         if !meta.is_file() {
             return Err(SupervisorError::RuntimeIntegrityFailed(format!(
-                "{label} 不是普通文件：{}",
+                "{label} is not a regular file: {}",
                 path.display()
             )));
         }
@@ -277,7 +269,7 @@ impl NativeDaemonRuntime {
                     return Ok(());
                 }
                 return Err(SupervisorError::RuntimeIntegrityFailed(format!(
-                    "{label} SHA-256 校验不匹配（期望 {expected_hex}，实际 {}）",
+                    "{label} SHA-256 mismatch (expected {expected_hex}, got {})",
                     cached.sha256
                 )));
             }
@@ -294,7 +286,7 @@ impl NativeDaemonRuntime {
         );
         if !actual.eq_ignore_ascii_case(expected_hex) {
             return Err(SupervisorError::RuntimeIntegrityFailed(format!(
-                "{label} SHA-256 校验不匹配（期望 {expected_hex}，实际 {actual}）"
+                "{label} SHA-256 mismatch (expected {expected_hex}, got {actual})"
             )));
         }
         Ok(())
@@ -391,14 +383,14 @@ impl DaemonRuntime for NativeDaemonRuntime {
         let hub_bin = self.config.hub_bin_path();
 
         for (label, p) in [
-            ("随包 node.exe", self.config.node_exe_path.as_path()),
-            ("守护进程入口 src/daemon/main.ts", entry_path.as_path()),
-            ("辅助程序 fusa-run", fusa_run.as_path()),
-            ("辅助程序 hub", hub_bin.as_path()),
+            ("bundled node.exe", self.config.node_exe_path.as_path()),
+            ("daemon entry src/daemon/main.ts", entry_path.as_path()),
+            ("helper fusa-run", fusa_run.as_path()),
+            ("helper hub", hub_bin.as_path()),
         ] {
             if !p.is_file() {
                 return Err(SupervisorError::RuntimeIntegrityFailed(format!(
-                    "缺少必需文件 {label}：{}",
+                    "Missing required file {label}: {}",
                     p.display()
                 )));
             }
@@ -696,7 +688,7 @@ impl DaemonRuntime for NativeDaemonRuntime {
         let token_path = self.config.hub_home_dir.join("state").join("ui-token");
         let raw = fs::read_to_string(&token_path).map_err(|source| {
             SupervisorError::AuthExchangeFailed(format!(
-                "读取本机 ui-token 失败（{}）：{source}",
+                "Failed to read the local ui-token ({}): {source}",
                 token_path.display()
             ))
         })?;
@@ -772,7 +764,7 @@ impl SupervisorFault {
                 window_ms,
                 last_crash,
             } => format!(
-                "后台守护进程在 {} 秒内连续异常退出 {} 次，已暂停自动重启：{}",
+                "The daemon crashed within {} seconds {} times; automatic restarts paused: {}",
                 window_ms / 1000,
                 crashes_in_window,
                 last_crash.menu_reason
@@ -1130,7 +1122,7 @@ where
 
     fn stop_owned_entry(&self, mut entry: OwnedDaemonEntry) {
         self.log_supervisor_event(&format!(
-            "开始优雅停止自有守护进程 gen={} run_id={} pid={:?} instance={:?} 预算={}ms",
+            "Stopping owned daemon gen={} run_id={} pid={:?} instance={:?} budget={}ms",
             entry.generation,
             entry.run_id,
             entry.pid,
@@ -1184,7 +1176,7 @@ where
 
         if !cleanly_stopped {
             self.log_supervisor_event(&format!(
-                "优雅停止未在预算内完成，对本次自有进程树执行 Job + Kill 兜底回收 run_id={}",
+                "Graceful stop exceeded the budget; killing the owned process tree via Job run_id={}",
                 entry.run_id
             ));
             let _ = self.runtime.signal_owned_daemon(
@@ -1202,7 +1194,7 @@ where
             }
         } else {
             self.log_supervisor_event(&format!(
-                "自有守护进程已在预算内优雅退出 run_id={}",
+                "Owned daemon exited gracefully within budget run_id={}",
                 entry.run_id
             ));
         }
@@ -1452,7 +1444,7 @@ where
                         };
                     });
                     self.log_supervisor_event(&format!(
-                        "自有原生守护进程已就绪并完成 Cookie 兑换 instance={} pid={:?}",
+                        "Owned daemon is ready and the cookie exchange succeeded instance={} pid={:?}",
                         identity.instance_id, latest_status.pid
                     ));
                     return Ok(snap);
@@ -1503,7 +1495,7 @@ where
                     .lock()
                     .map(|t| t.summary_lines())
                     .unwrap_or_default();
-                let detail = format!("等待后台守护进程就绪超时（{} 秒）", budget_ms / 1000);
+                let detail = format!("Timed out after {} s waiting for the daemon", budget_ms / 1000);
                 self.update_state_and_notify(|g| {
                     g.ownership = DaemonOwnership::None;
                     g.state = SupervisorState::Faulted {
@@ -1594,7 +1586,7 @@ where
             g.restart_generation = g.restart_generation.wrapping_add(1);
             g.restart_generation
         };
-        self.log_supervisor_event("自有守护进程空闲排空后请求热重启（退出码 75），立即拉起新进程");
+        self.log_supervisor_event("Owned daemon requested a hot restart after draining (exit code 75); respawning now");
         let sup = Arc::clone(self);
         thread::spawn(move || {
             if !sup.is_generation_active(next_gen) {
@@ -1615,8 +1607,8 @@ where
     ) -> String {
         let now_ms = self.clock.now_epoch_ms();
         let fallback_desc = match exit_code {
-            Some(c) => format!("进程异常退出（退出码 {c}）"),
-            None => "进程异常终止".to_string(),
+            Some(c) => format!("Process exited with code {c}"),
+            None => "Process terminated abnormally".to_string(),
         };
         let (tail_lines, menu_reason) = {
             let t = self.stderr_tail.lock().unwrap();
@@ -1679,7 +1671,7 @@ where
             }
         };
 
-        self.log_supervisor_event(&format!("检测到自有守护进程崩溃：{menu_reason}"));
+        self.log_supervisor_event(&format!("Owned daemon crashed: {menu_reason}"));
         let snap = self.snapshot();
         let observer = self.inner.lock().unwrap().observer.clone();
         if let Some(obs) = observer {

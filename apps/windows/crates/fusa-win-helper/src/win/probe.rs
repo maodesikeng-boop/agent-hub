@@ -92,7 +92,6 @@ pub fn run_sandbox_probe(custom_state_dir: Option<&Path>) -> io::Result<()> {
     let protected_dir = base_tmp.join("protected");
     let allowed_dir = protected_dir.join("worktrees").join("probe");
     let outside_dir = base_tmp.join("outside");
-    // Like a cross-volume `.fusa-wt` root: write-protected, but no read boundary, so other Workers' files stay readable.
     let peer_dir = base_tmp.join("peer-root").join("other-worker");
     fs::create_dir_all(&protected_dir)?;
     fs::create_dir_all(&outside_dir)?;

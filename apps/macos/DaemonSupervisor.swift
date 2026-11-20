@@ -2,7 +2,6 @@ import CoreFoundation
 import Darwin
 import Foundation
 
-/// Mac 与 Windows 桌面外壳共用的后台监管契约（单一来源：apps/desktop/contract.json，打包时拷入 Contents/Resources/contract.json）。
 struct DesktopContract: Codable, Equatable {
     let product: String
     let protocolVersion: Int
@@ -19,9 +18,9 @@ struct DesktopContract: Codable, Equatable {
     let crashBackoffMs: [Int]
     let crashWindowMs: Int
     let maxCrashesInWindow: Int
-    /// 守护进程空闲排空后请求热重启时用的退出码（`hub self-reload`）：立即拉起新进程，不算崩溃、不进退避和熔断计数。
+    // Exit code for an idle-drained hot restart: respawn at once without counting a crash.
     let reloadExitCode: Int
-    /// 外壳拉起守护进程时设的环境变量名：守护进程据此知道退出后有人拉起，才接受热重启请求。
+    // The daemon only accepts hot restarts when this variable is set.
     let supervisedEnv: String
     let logRelativePath: String
     let logMaxBytes: Int
@@ -82,11 +81,10 @@ struct DesktopContract: Codable, Equatable {
                 return decoded
             }
         }
-        fatalError("无法加载桌面壳监管契约 contract.json（已检查：\(candidates.map(\.path).joined(separator: ", "))）")
+        fatalError("Can't load the desktop contract contract.json (checked: \(candidates.map(\.path).joined(separator: ", ")))")
     }
 }
 
-/// 守护进程监管器的契约常量访问入口（全部取自 DesktopContract.shared，消除魔法数字双写）。
 enum SupervisorConfig {
     static var contract: DesktopContract { DesktopContract.shared }
     static var product: String { contract.product }
@@ -105,21 +103,18 @@ enum SupervisorConfig {
     static var logMaxBytes: Int { contract.logMaxBytes }
 }
 
-/// `/api/auth/status` 返回的守护进程轻量身份标识。
 struct DaemonIdentity: Codable, Equatable {
     let product: String
     let protocolVersion: Int
     let instanceId: String
 }
 
-/// 单次探活结果：已核验的兼容 Bellwood 后台、端口被非 Bellwood / 不兼容服务占用的冲突、或尚未连通。
 enum DaemonProbeResult: Equatable {
     case verified(DaemonIdentity)
     case conflict(String)
     case unreachable
 }
 
-/// 当前端口上后台服务的所有权归属：只有 `.owned` 才允许执行自动崩溃拉起与停止/强杀管理。
 enum DaemonOwnership: Equatable {
     case none
     case owned(pid: Int32, instanceId: String)
@@ -151,7 +146,7 @@ struct DaemonCrashRecord: Equatable {
     }
 
     var menuTitle: String {
-        "上次崩溃 \(formattedTime)，\(menuSummaryReason)"
+        "Last crash \(formattedTime): \(menuSummaryReason)"
     }
 }
 
@@ -161,7 +156,6 @@ enum DaemonSupervisorState: Equatable {
     case failed(crashCount: Int, windowSeconds: TimeInterval, lastCrash: DaemonCrashRecord)
 }
 
-/// 收集子进程 stderr 输出：实时追加写入日志文件，同时在内存中保留最近一段用于崩溃摘要。
 private final class ProcessStderrCollector {
     private let lock = NSLock()
     private var buffer = Data()
@@ -209,10 +203,6 @@ private final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate {
     }
 }
 
-/// 守护进程运行环境的来源（docs/mac-distribution-design.md）：
-/// - source：源码开发模式，`scripts/build-mac-app.sh` 把本机仓库与本机 Node 的路径写进 Info.plist（`hub self-reload` 靠它）；
-/// - bundled：分发模式（`build-mac-app.sh --dist`），Info.plist 的 `AgentHubRuntimeMode` 为 `bundled`，
-///   守护进程代码与官方 Node 都在 `Contents/Resources/runtime/` 里，不依赖本机仓库和本机 Node。
 enum DaemonRuntimeMode: String, Equatable {
     case source
     case bundled
@@ -220,7 +210,6 @@ enum DaemonRuntimeMode: String, Equatable {
 
 struct DaemonRuntimeLocation: Equatable {
     let mode: DaemonRuntimeMode
-    /// 守护进程的工作目录（含 src/daemon/main.ts）。
     let daemonRoot: String
     let nodePath: String
 }
@@ -230,11 +219,8 @@ struct DaemonRuntimeLocateError: Error, Equatable {
     let message: String
 }
 
-/// 找守护进程运行环境的唯一入口（纯函数：环境变量、Info.plist、UserDefaults、文件系统都可注入，SupervisorTests 直接测）。
-/// 两种模式下 `AGENT_HUB_REPO_DIR` / `AGENT_HUB_NODE` 环境变量都优先（排查用）；分发模式绝不回退到本机仓库或本机 Node。
 enum DaemonRuntimeLocator {
     static let runtimeModeInfoKey = "AgentHubRuntimeMode"
-    /// 分发包内运行环境相对 `Contents/Resources` 的目录（布局见 scripts/stage-mac-runtime.ts）。
     static let bundledRuntimeDirName = "runtime"
     static let bundledDaemonRelativePath = "daemon"
     static let bundledNodeRelativePath = "node/bin/node"
@@ -279,16 +265,16 @@ enum DaemonRuntimeLocator {
             return .failure(DaemonRuntimeLocateError(
                 code: 1,
                 message: runtimeMode == .bundled
-                    ? "安装包里的 Bellwood 运行环境不完整，请重新下载安装 Bellwood"
-                    : "找不到 Bellwood 仓库目录（请检查 AGENT_HUB_REPO_DIR 或重新运行 pnpm app:mac）"
+                    ? "The Bellwood runtime in this package is incomplete. Download and reinstall Bellwood"
+                    : "Can't find the Bellwood repo (check AGENT_HUB_REPO_DIR or rerun pnpm app:mac)"
             ))
         }
         guard let nodePath = resolveNodePath(inputs, mode: runtimeMode) else {
             return .failure(DaemonRuntimeLocateError(
                 code: 2,
                 message: runtimeMode == .bundled
-                    ? "安装包里的 Node.js 缺失，请重新下载安装 Bellwood"
-                    : "找不到 Node.js 可执行文件（需要 Node 24+，请检查 AGENT_HUB_NODE）"
+                    ? "Node.js is missing from this package. Download and reinstall Bellwood"
+                    : "Can't find Node.js (Node 24+ required, check AGENT_HUB_NODE)"
             ))
         }
         return .success(DaemonRuntimeLocation(mode: runtimeMode, daemonRoot: daemonRoot, nodePath: nodePath))
@@ -373,7 +359,7 @@ final class DaemonSupervisor {
     private var state: DaemonSupervisorState = .running
     private var pendingRestartWorkItem: DispatchWorkItem?
     private var restartGeneration = UUID()
-    /// 用户点“重启后台服务”后到旧进程退出这段时间：别的路径（退避重启、启动轮询）不许拉起新进程，免得和旧进程抢端口
+    // Blocks backoff and startup paths from spawning until the old process exits, so they never race for the port.
     private var isRestarting = false
     private var stoppingProcess: Process?
     private var stopCompletions: [() -> Void] = []
@@ -494,7 +480,6 @@ final class DaemonSupervisor {
         return token.isEmpty ? nil : token
     }
 
-    /// 探活并严格核验 `/api/auth/status` 的 JSON 身份（product == "fusa"、protocolVersion 兼容、非空 instanceId）。
     func probeIdentity(completion: @escaping (DaemonProbeResult) -> Void) {
         var request = URLRequest(url: probeURL)
         request.httpMethod = "GET"
@@ -511,7 +496,6 @@ final class DaemonSupervisor {
         task.resume()
     }
 
-    /// 布尔探活封装：仅当端口响应通过 Bellwood 身份与协议版本校验时才返回 true。
     func probe(completion: @escaping (Bool) -> Void) {
         probeIdentity { result in
             if case .verified = result {
@@ -522,8 +506,6 @@ final class DaemonSupervisor {
         }
     }
 
-    /// 先通过 `/api/auth/status` 核验兼容 Bellwood 身份，核验通过后才允许读取 `state/ui-token` 通过 `POST /auth` 兑换会话 Cookie。
-    /// 若端口被其他程序或协议不兼容版本占用，立即返回冲突错误，绝不读取或发送本机令牌。
     func exchangeUiTokenForCookies(completion: @escaping (Result<[HTTPCookie], Error>) -> Void) {
         probeIdentity { [weak self] probeResult in
             guard let self = self else { return }
@@ -534,7 +516,7 @@ final class DaemonSupervisor {
                 DispatchQueue.main.async { completion(.failure(err)) }
 
             case .unreachable:
-                let err = Self.makeError(code: 6, message: "后台服务尚未就绪（端口 \(self.port) 无响应）")
+                let err = Self.makeError(code: 6, message: "The daemon isn't ready (no response on port \(self.port))")
                 DispatchQueue.main.async { completion(.failure(err)) }
 
             case .verified:
@@ -577,10 +559,6 @@ final class DaemonSupervisor {
         }
     }
 
-    /// 确保守护进程在运行：
-    /// - 若已有兼容的外部 Bellwood 后台：只复用并标记为外部管理（不接管）；
-    /// - 若端口被非 Bellwood 服务或协议不兼容进程占用：进入冲突报错状态，绝不误认、不发令牌、不误杀；
-    /// - 若端口空闲：后台拉起 node src/daemon/main.ts 并轮询核验身份直至就绪。
     func ensureRunning(completion: @escaping (Result<Void, Error>) -> Void) {
         probeIdentity { [weak self] result in
             guard let self = self else { return }
@@ -590,7 +568,7 @@ final class DaemonSupervisor {
                 self.lock.lock()
                 if self.isShuttingDown || self.isRestarting {
                     self.lock.unlock()
-                    DispatchQueue.main.async { completion(.failure(Self.makeError(code: 7, message: "后台服务正在停止。"))) }
+                    DispatchQueue.main.async { completion(.failure(Self.makeError(code: 7, message: "The daemon is stopping."))) }
                     return
                 }
                 if let proc = self.spawnedProcess, proc.isRunning,
@@ -624,14 +602,11 @@ final class DaemonSupervisor {
         }
     }
 
-    /// 用户主动点菜单“重启后台服务”：
-    /// - 仅停止本次由 DaemonSupervisor 自己拉起的进程（禁用自动重启 -> SIGTERM -> 最多等 40s -> 确认旧实例退出后再拉起新实例）；
-    /// - 若当前是外部兼容 Bellwood 后台或未拥有任何子进程，绝不发送信号或阻塞等待外部进程退出。
     func restartDaemon(completion: @escaping (Result<Void, Error>) -> Void) {
         lock.lock()
         if isRestarting || isShuttingDown || stoppingProcess != nil {
             lock.unlock()
-            DispatchQueue.main.async { completion(.failure(Self.makeError(code: 7, message: "后台服务正在停止，请稍后重试。"))) }
+            DispatchQueue.main.async { completion(.failure(Self.makeError(code: 7, message: "The daemon is stopping. Try again shortly."))) }
             return
         }
         restartGeneration = UUID()
@@ -671,15 +646,13 @@ final class DaemonSupervisor {
             self.lock.unlock()
             waiters.forEach { $0() }
             if quitting {
-                completion(.failure(Self.makeError(code: 7, message: "应用正在退出。")))
+                completion(.failure(Self.makeError(code: 7, message: "The app is quitting.")))
             } else {
                 self.ensureRunning(completion: completion)
             }
         }
     }
 
-    /// 异步优雅停止由本应用拉起的守护进程（遵循契约 40s 优雅停止预算，超时仅对自己拉起的该子进程发 SIGKILL）；
-    /// 外部后台（spawnedProcess == nil）完全不受影响并立即回调。
     func stopOwned(completion: @escaping () -> Void) {
         lock.lock()
         isShuttingDown = true
@@ -723,7 +696,6 @@ final class DaemonSupervisor {
         }
     }
 
-    /// 同步停止入口（兼容测试及 applicationWillTerminate 兜底）：仅对本应用自己拉起的守护进程发 SIGTERM，绝不触碰外部进程。
     func stopIfOwned() {
         lock.lock()
         isShuttingDown = true
@@ -744,8 +716,7 @@ final class DaemonSupervisor {
         }
     }
 
-    // The kernel checks the audit token's PID generation atomically with delivery.
-    // Never fall back to kill(pid): Foundation can reap the child between a check and kill.
+    // The kernel checks the audit token's PID generation atomically with delivery; never fall back to kill(pid), Foundation may reap the child in between.
     private func signalOwned(_ process: Process, _ signal: Int32) {
         lock.lock()
         defer { lock.unlock() }
@@ -802,7 +773,6 @@ final class DaemonSupervisor {
     ) {
         if process.isRunning {
             if Date() >= deadline {
-                // 超出 40 秒优雅停止预算仍未退出：仅对本次自己拉起的该子进程发 SIGKILL
                 if process.isRunning {
                     signalOwned(process, SIGKILL)
                 }
@@ -823,7 +793,6 @@ final class DaemonSupervisor {
             return
         }
 
-        // 子进程已退出；若曾记录过它的 instanceId，再探一次确认端口上旧实例已彻底释放（不触碰任何新出现的外部进程）
         guard let expectedId = expectedInstanceId else {
             DispatchQueue.main.async { completion() }
             return
@@ -874,7 +843,7 @@ final class DaemonSupervisor {
         }
         guard http.statusCode == 200 else {
             return .conflict(
-                "端口 \(port) 已被其他 HTTP 服务占用（状态码 \(http.statusCode)，非 Bellwood 后台），请关闭占用该端口的程序或更换 AGENT_HUB_PORT。"
+                "Port \(port) is used by another HTTP service (status \(http.statusCode), not Bellwood). Close that program or set a different AGENT_HUB_PORT."
             )
         }
         guard let data = data,
@@ -882,39 +851,38 @@ final class DaemonSupervisor {
               let raw = try? JSONSerialization.jsonObject(with: data, options: []),
               let dict = raw as? [String: Any] else {
             return .conflict(
-                "端口 \(port) 已被其他服务占用（响应不是有效的 Bellwood 身份 JSON），请关闭占用该端口的程序或更换 AGENT_HUB_PORT。"
+                "Port \(port) is used by another service (no valid Bellwood identity JSON). Close that program or set a different AGENT_HUB_PORT."
             )
         }
         guard let product = dict["product"] as? String, product == contract.product else {
             return .conflict(
-                "端口 \(port) 已被其他服务或旧版 Bellwood 后台占用，请先关闭旧后台或占用程序，再重试；也可更换 AGENT_HUB_PORT。"
+                "Port \(port) is used by another service or an older Bellwood daemon. Close it and try again, or set a different AGENT_HUB_PORT."
             )
         }
         guard let versionNumber = dict["protocolVersion"] as? NSNumber,
               CFGetTypeID(versionNumber) != CFBooleanGetTypeID(),
               versionNumber.doubleValue == Double(versionNumber.intValue) else {
             return .conflict(
-                "端口 \(port) 上的 Bellwood 后台缺少有效的协议版本号，请停止旧进程或更新应用。"
+                "The Bellwood daemon on port \(port) has no valid protocol version. Stop the old process or update the app."
             )
         }
         let version = versionNumber.intValue
         guard version == contract.protocolVersion else {
             return .conflict(
-                "端口 \(port) 上的 Bellwood 后台协议版本不兼容（后台版本 \(version)，当前外壳需要版本 \(contract.protocolVersion)），请停止旧进程或更新应用。"
+                "The Bellwood daemon on port \(port) speaks an incompatible protocol (daemon \(version), app needs \(contract.protocolVersion)). Stop the old process or update the app."
             )
         }
         guard let rawInstanceId = dict["instanceId"] as? String else {
-            return .conflict("端口 \(port) 上的服务缺少 Bellwood 实例标识（instanceId），拒绝连接。")
+            return .conflict("The service on port \(port) has no Bellwood instanceId. Connection refused.")
         }
         let instanceId = rawInstanceId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !instanceId.isEmpty, instanceId.utf8.count <= 128,
               instanceId.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 95 }) else {
-            return .conflict("端口 \(port) 上的服务返回无效实例标识（instanceId），拒绝连接。")
+            return .conflict("The service on port \(port) returned an invalid instanceId. Connection refused.")
         }
         return .verified(DaemonIdentity(product: product, protocolVersion: version, instanceId: instanceId))
     }
 
-    /// 本次拉起守护进程要用的运行环境（源码开发模式或分发包内置），找不到返回带说明的错误。
     func resolveRuntime() -> Result<DaemonRuntimeLocation, Error> {
         DaemonRuntimeLocator.resolve().mapError { Self.makeError(code: $0.code, message: $0.message) }
     }
@@ -959,11 +927,11 @@ final class DaemonSupervisor {
     }
 
     private func startDaemon(completion: @escaping (Result<Void, Error>) -> Void) {
-        // 检查和拉起在同一把锁里做完：退避重启、启动轮询、手动重启几条路同时进来，也只会拉起一个后台
+        // Check and spawn under one lock so concurrent restart paths start a single daemon.
         lock.lock()
         if isShuttingDown || isRestarting {
             lock.unlock()
-            DispatchQueue.main.async { completion(.failure(Self.makeError(code: 7, message: "后台服务正在停止。"))) }
+            DispatchQueue.main.async { completion(.failure(Self.makeError(code: 7, message: "The daemon is stopping."))) }
             return
         }
         let deadline = Date().addingTimeInterval(contract.startupBudgetSeconds)
@@ -983,8 +951,7 @@ final class DaemonSupervisor {
         }
     }
 
-    /// 调用时必须已持有 lock：拉起子进程并登记到 spawnedProcess。登记要和 run() 在同一把锁里，
-    /// 这样 terminationHandler（在后台线程）最快也要等登记完才能处理退出，不会漏掉或错判。
+    // Caller holds lock: registering under the same lock as run() keeps terminationHandler from missing the exit.
     private func spawnProcessLocked() -> Result<Process, Error> {
         let runtime: DaemonRuntimeLocation
         switch resolveRuntime() {
@@ -1121,7 +1088,7 @@ final class DaemonSupervisor {
             let cancelled = self.isShuttingDown || self.isRestarting
             self.lock.unlock()
             if cancelled {
-                DispatchQueue.main.async { completion(.failure(Self.makeError(code: 7, message: "后台服务正在停止。"))) }
+                DispatchQueue.main.async { completion(.failure(Self.makeError(code: 7, message: "The daemon is stopping."))) }
                 return
             }
             switch probeResult {
@@ -1168,7 +1135,7 @@ final class DaemonSupervisor {
                 if !process.isRunning {
                     let err = Self.makeError(
                         code: 3,
-                        message: "守护进程启动后提前退出（\(Self.describeExit(of: process))），请查看日志：\(self.logFilePath)"
+                        message: "The daemon exited during startup (\(Self.describeExit(of: process))). See the log: \(self.logFilePath)"
                     )
                     DispatchQueue.main.async { completion(.failure(err)) }
                     return
@@ -1188,7 +1155,7 @@ final class DaemonSupervisor {
                     let budgetInt = Int(self.contract.startupBudgetSeconds.rounded())
                     let err = Self.makeError(
                         code: 4,
-                        message: "等待守护进程就绪超时（\(budgetInt) 秒），请查看日志：\(self.logFilePath)"
+                        message: "Timed out after \(budgetInt)s waiting for the daemon. See the log: \(self.logFilePath)"
                     )
                     DispatchQueue.main.async { completion(.failure(err)) }
                     return
@@ -1219,7 +1186,7 @@ final class DaemonSupervisor {
             return
         }
 
-        // 正常热重启立即拉起；窗口内反复请求则走已有退避与熔断，避免退出码 75 绕过保护。
+        // Repeated reload requests go through backoff so exit code 75 cannot bypass the breaker.
         recentReloadTimestamps = recentReloadTimestamps.filter {
             now.timeIntervalSince($0) <= contract.crashWindowSeconds
         }
@@ -1234,7 +1201,7 @@ final class DaemonSupervisor {
             let currentOwn = ownership
             lock.unlock()
             let isoTime = ISO8601DateFormatter().string(from: now)
-            appendToLogFile("\(isoTime) [agent-hub] 后台服务（pid \(pid)）空闲排空后请求热重启，立即拉起新进程。\n")
+            appendToLogFile("\(isoTime) [agent-hub] Daemon (pid \(pid)) requested a hot restart after draining; respawning now.\n")
             notifyOwnershipChange(currentOwn)
             DispatchQueue.global().async { [weak self] in
                 guard let self = self else { return }
@@ -1352,20 +1319,20 @@ final class DaemonSupervisor {
         let maxCount = contract.maxCrashesInWindow
 
         var lines: [String] = []
-        lines.append("\(isoTime) [agent-hub] 守护进程（PID \(pid)）意外退出：\(exitDescription)")
+        lines.append("\(isoTime) [agent-hub] Daemon (PID \(pid)) exited unexpectedly: \(exitDescription)")
         if stderrTailLines.isEmpty {
-            lines.append("\(isoTime) [agent-hub] 最后 stderr 输出：（无）")
+            lines.append("\(isoTime) [agent-hub] Last stderr output: (none)")
         } else {
-            lines.append("\(isoTime) [agent-hub] 最后 \(stderrTailLines.count) 行 stderr：")
+            lines.append("\(isoTime) [agent-hub] Last \(stderrTailLines.count) stderr lines:")
             for line in stderrTailLines {
                 lines.append("  \(line)")
             }
         }
         if shouldStopRetrying {
-            lines.append("\(isoTime) [agent-hub] \(windowInt) 秒内连续崩溃 \(crashCount) 次，已停止自动重启。请排查日志后在菜单栏点击“重启后台服务”。")
+            lines.append("\(isoTime) [agent-hub] \(crashCount) crashes within \(windowInt)s; automatic restarts stopped. Check the log, then click Restart Daemon in the menu bar.")
         } else {
             let delayText = String(format: "%.1f", delaySeconds)
-            lines.append("\(isoTime) [agent-hub] 将在 \(delayText) 秒后自动重启（\(windowInt) 秒内第 \(crashCount)/\(maxCount) 次崩溃）…")
+            lines.append("\(isoTime) [agent-hub] Restarting in \(delayText)s (crash \(crashCount)/\(maxCount) within \(windowInt)s)…")
         }
         appendToLogFile(lines.joined(separator: "\n") + "\n")
     }
@@ -1447,13 +1414,13 @@ final class DaemonSupervisor {
         switch process.terminationReason {
         case .uncaughtSignal:
             if let name = signalName(for: status) {
-                return "信号 \(status) (\(name))"
+                return "signal \(status) (\(name))"
             }
-            return "信号 \(status)"
+            return "signal \(status)"
         case .exit:
-            return "退出码 \(status)"
+            return "exit code \(status)"
         @unknown default:
-            return "退出码 \(status)"
+            return "exit code \(status)"
         }
     }
 
@@ -1499,6 +1466,6 @@ final class DaemonSupervisor {
             let idx = cleaned.index(cleaned.startIndex, offsetBy: maxChars)
             cleaned = String(cleaned[..<idx]) + "…"
         }
-        return "\(exitDescription)（\(cleaned)）"
+        return "\(exitDescription) (\(cleaned))"
     }
 }

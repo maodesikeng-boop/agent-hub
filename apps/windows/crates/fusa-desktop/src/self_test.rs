@@ -64,7 +64,6 @@ fn remove_dir_with_bounded_retry(dir: &Path) -> Result<(), String> {
     Err(last_err.unwrap_or_else(|| "清理自检临时目录失败".to_string()))
 }
 
-/// 无窗口端到端自检（`fusa-desktop.exe --self-test`）。
 pub fn run_headless_self_test() -> Result<String, String> {
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -138,7 +137,6 @@ fn run_self_test_inner(app_data_dir: &Path, hub_home_dir: &Path) -> Result<Strin
         return Err("desktop-preflight.ts 返回了空的厂商清单".to_string());
     }
 
-    // 验证打包裁剪后的 node_modules（含 koffi 与 @microsoft/mxc-sdk）可被随包 node 正常加载，绝不出现 sdk_load_failed
     {
         let mxc_check_out = Command::new(&runtime_cfg.node_exe_path)
             .current_dir(&runtime_cfg.daemon_root_dir)

@@ -8,7 +8,6 @@ pub const MENU_ACTION_RESTART_DAEMON: &str = "restart_daemon";
 pub const MENU_ACTION_OPEN_LOGS: &str = "open_logs";
 pub const MENU_ACTION_QUIT_APP: &str = "quit_app";
 
-/// 可跨平台 100% 单测的系统托盘菜单纯数据视图（对齐 `apps/desktop/contract.json` 与 Mac `StatusBarController.swift`）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrayMenuModel {
     pub summary_title: String,
@@ -40,23 +39,23 @@ impl TrayMenuModel {
         let mut fault_reason_title = None;
 
         let (summary_title, restart_title, restart_enabled) = match &snapshot.state {
-            SupervisorState::Idle => ("正在准备 Bellwood 环境…".to_string(), "重启后台服务".to_string(), false),
+            SupervisorState::Idle => ("Preparing Bellwood…".to_string(), "Restart Daemon".to_string(), false),
             SupervisorState::Starting { .. } => (
-                "正在启动后台服务…".to_string(),
-                "重启后台服务".to_string(),
+                "Starting daemon…".to_string(),
+                "Restart Daemon".to_string(),
                 false,
             ),
             SupervisorState::Running { ownership, .. } => {
                 if *ownership == DaemonOwnership::ExternalManaged {
                     (
-                        "后台服务运行中（外部管理）".to_string(),
-                        "重启后台服务（外部管理）".to_string(),
+                        "Daemon running (External)".to_string(),
+                        "Restart Daemon (External)".to_string(),
                         false,
                     )
                 } else {
                     (
-                        "后台服务运行中".to_string(),
-                        "重启后台服务".to_string(),
+                        "Daemon running".to_string(),
+                        "Restart Daemon".to_string(),
                         true,
                     )
                 }
@@ -69,45 +68,45 @@ impl TrayMenuModel {
             } => {
                 let delay_sec = (*delay_ms).div_ceil(1000).max(1);
                 (
-                    format!("后台意外退出，{delay_sec} 秒后自动重启（{attempt}/{max_attempts}）…"),
-                    "重启后台服务".to_string(),
+                    format!("Daemon exited unexpectedly. Restarting in {delay_sec}s ({attempt}/{max_attempts})…"),
+                    "Restart Daemon".to_string(),
                     true,
                 )
             }
             SupervisorState::Stopping { reason, .. } => {
                 let summary = match reason {
-                    StopReason::ManualRestart => "正在优雅重启后台服务…",
-                    StopReason::AppQuit => "正在优雅停止后台服务（最多 40 秒）…",
+                    StopReason::ManualRestart => "Restarting daemon…",
+                    StopReason::AppQuit => "Stopping daemon (up to 40s)…",
                 };
-                (summary.to_string(), "重启后台服务".to_string(), false)
+                (summary.to_string(), "Restart Daemon".to_string(), false)
             }
             SupervisorState::Stopped => (
-                "后台服务已停止".to_string(),
-                "启动后台服务".to_string(),
+                "Daemon stopped".to_string(),
+                "Start Daemon".to_string(),
                 !is_quitting,
             ),
             SupervisorState::Faulted { fault, .. } => match fault {
                 SupervisorFault::PortConflict { detail, .. } => {
                     fault_reason_title = Some(truncate_chars_clean(detail, max_chars));
                     (
-                        "后台端口冲突或协议不兼容".to_string(),
-                        "重新检测后台服务".to_string(),
+                        "Daemon port conflict or incompatible protocol".to_string(),
+                        "Check Daemon Again".to_string(),
                         true,
                     )
                 }
                 SupervisorFault::CrashLimitExceeded {
                     crashes_in_window, ..
                 } => (
-                    format!("后台服务异常停止（连续崩溃 {crashes_in_window} 次，已停止重试）"),
-                    "重启后台服务".to_string(),
+                    format!("Daemon stopped after {crashes_in_window} crashes"),
+                    "Restart Daemon".to_string(),
                     true,
                 ),
                 other => {
                     fault_reason_title =
                         Some(truncate_chars_clean(&other.user_message(), max_chars));
                     (
-                        "后台服务未就绪".to_string(),
-                        "重试启动后台服务".to_string(),
+                        "Daemon not ready".to_string(),
+                        "Retry Starting Daemon".to_string(),
                         true,
                     )
                 }
@@ -120,9 +119,9 @@ impl TrayMenuModel {
             .map(|c| format_crash_menu_line(c, max_chars));
 
         let quit_title = if is_external {
-            "退出 Bellwood（保留外部后台）".to_string()
+            "Quit Bellwood (Keep External Daemon)".to_string()
         } else {
-            "彻底退出 Bellwood".to_string()
+            "Quit Bellwood".to_string()
         };
 
         let tooltip = format!("Bellwood — {summary_title}");
@@ -131,10 +130,10 @@ impl TrayMenuModel {
             summary_title,
             fault_reason_title,
             last_crash_title,
-            open_window_title: "打开主窗口".to_string(),
+            open_window_title: "Open Main Window".to_string(),
             restart_title,
             restart_enabled: restart_enabled && !is_stopping,
-            open_logs_title: "打开日志".to_string(),
+            open_logs_title: "Open Log".to_string(),
             open_logs_enabled: true,
             quit_title,
             quit_enabled: !is_quitting,
@@ -143,18 +142,16 @@ impl TrayMenuModel {
     }
 }
 
-/// 格式化上次崩溃时间（UTC `HH:MM:SS`）与原因摘要，整行严格不超过 `max_chars`（60 字）。
 pub fn format_crash_menu_line(crash: &CrashRecord, max_chars: usize) -> String {
     let total_secs = crash.occurred_at_epoch_ms / 1000;
     let day_secs = total_secs % 86_400;
     let hh = day_secs / 3600;
     let mm = (day_secs % 3600) / 60;
     let ss = day_secs % 60;
-    let line = format!("上次崩溃 {hh:02}:{mm:02}:{ss:02}：{}", crash.menu_reason);
+    let line = format!("Last crash {hh:02}:{mm:02}:{ss:02}: {}", crash.menu_reason);
     truncate_chars_clean(&line, max_chars)
 }
 
-/// 根据 `TrayMenuModel` 构建 Tauri 原生托盘菜单。
 pub fn build_tauri_tray_menu<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     model: &TrayMenuModel,

@@ -14,9 +14,7 @@ use windows_sys::Win32::System::Threading::{
     CreateEventW, ResetEvent, WaitForSingleObject,
 };
 
-/// Duplex Windows Named Pipe client stream with a hard overall deadline (`HUB_CLI_TIMEOUT_MS`).
-/// Uses `FILE_FLAG_OVERLAPPED` + `CancelIoEx` + blocking `GetOverlappedResult` drain on timeout
-/// so a hung peer can never wedge `hub.exe` indefinitely and stack `OVERLAPPED` pointers never dangle.
+// Overlapped I/O with CancelIoEx and a blocking drain on timeout, so a hung peer cannot wedge hub.exe and OVERLAPPED pointers never dangle.
 pub struct TimedPipeStream {
     pipe: OwnedHandle,
     event: OwnedHandle,
@@ -165,8 +163,6 @@ impl Write for TimedPipeStream {
     }
 }
 
-/// Connects to a Windows Named Pipe (`\\.\pipe\...`), waiting on `ERROR_PIPE_BUSY` up to `connect_timeout`
-/// and bounding subsequent HTTP request/response I/O to `io_timeout`.
 pub fn connect_named_pipe(
     pipe_path: &str,
     connect_timeout: Duration,

@@ -41,9 +41,9 @@ const DESKTOP_DIALOG_TOKEN_ENV: &str = "AGENT_HUB_DESKTOP_DIALOG_TOKEN";
 fn ensure_bootstrap_caller<R: tauri::Runtime>(webview: &Webview<R>) -> Result<(), String> {
     let caller_url = webview
         .url()
-        .map_err(|e| format!("无法校验调用方页面来源：{e}"))?;
+        .map_err(|e| format!("Can't verify the caller's page origin: {e}"))?;
     if !is_embedded_bootstrap_origin(&caller_url) {
-        return Err("拒绝非内嵌引导页调用本地桌面命令".to_string());
+        return Err("Only the embedded bootstrap page may call desktop commands".to_string());
     }
     Ok(())
 }
@@ -128,7 +128,7 @@ fn sync_session_cookie_to_webview<R: tauri::Runtime>(
         }
         window
             .set_cookie(builder.build())
-            .map_err(|e| format!("写入本地会话 Cookie 失败：{e}"))?;
+            .map_err(|e| format!("Failed to write the local session cookie: {e}"))?;
     }
     Ok(())
 }
@@ -142,7 +142,7 @@ fn inject_cookie_and_navigate_to_daemon<R: tauri::Runtime>(
         .map_err(|e| e.to_string())?;
     window
         .navigate(target_url)
-        .map_err(|e| format!("导航至本地工作台失败：{e}"))?;
+        .map_err(|e| format!("Failed to open the local workbench: {e}"))?;
     Ok(())
 }
 
@@ -205,9 +205,9 @@ pub fn run() {
     refresh_current_process_path(&[]);
 
     let app_data_dir = platform::resolve_local_app_data_dir()
-        .expect("Bellwood 无法解析本地应用数据目录（请确认 LOCALAPPDATA 指向本机磁盘而非网络共享路径）");
+        .expect("Bellwood can't resolve its app data directory (LOCALAPPDATA must point to a local disk, not a network share)");
     let hub_home_dir = platform::resolve_hub_home_dir()
-        .expect("Bellwood 无法解析守护进程数据目录（请确认 USERPROFILE / AGENT_HUB_HOME 指向本机磁盘而非网络共享路径）");
+        .expect("Bellwood can't resolve the daemon data directory (USERPROFILE / AGENT_HUB_HOME must point to a local disk, not a network share)");
 
     let quit_started = Arc::new(AtomicBool::new(false));
     let quit_completed = Arc::new(AtomicBool::new(false));
@@ -384,7 +384,7 @@ pub fn run() {
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("构建 Bellwood 桌面外壳失败");
+        .expect("Failed to build the Bellwood desktop shell");
 
     app.run(move |app_handle, event| {
         if let RunEvent::ExitRequested { api, .. } = event {
@@ -549,8 +549,8 @@ mod tests {
         };
         let ext_menu = TrayMenuModel::from_snapshot(&ext_snap, &contract);
         assert!(!ext_menu.restart_enabled);
-        assert_eq!(ext_menu.restart_title, "重启后台服务（外部管理）");
-        assert_eq!(ext_menu.quit_title, "退出 Bellwood（保留外部后台）");
+        assert_eq!(ext_menu.restart_title, "Restart Daemon (External)");
+        assert_eq!(ext_menu.quit_title, "Quit Bellwood (Keep External Daemon)");
         assert!(ext_menu.quit_enabled);
 
         let long_reason = "致命异常：数据库连接池初始化失败，详细调用栈位置在模块 alpha_beta_gamma_delta_epsilon_zeta_eta_theta_1234567890";
@@ -575,7 +575,7 @@ mod tests {
         };
         let fault_menu = TrayMenuModel::from_snapshot(&fault_snap, &contract);
         let crash_line = fault_menu.last_crash_title.unwrap();
-        assert!(crash_line.starts_with("上次崩溃 14:25:09："));
+        assert!(crash_line.starts_with("Last crash 14:25:09: "));
         assert!(crash_line.chars().count() <= 60);
         let conflict_line = fault_menu.fault_reason_title.unwrap();
         assert!(conflict_line.chars().count() <= 60);
@@ -765,12 +765,10 @@ mod tests {
             out
         };
 
-        // 1. OPTIONS / GET 请求一律 404（且不返回任何 CORS 放行头，阻断浏览器 CSRF 预检）
         let opt_resp = send_raw(b"OPTIONS /pick-folder HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
         assert!(opt_resp.starts_with("HTTP/1.1 404"));
         assert!(!opt_resp.to_ascii_lowercase().contains("access-control-allow-origin"));
 
-        // 2. 缺失或错误的 Bearer token（含大小写篡改）一律 401
         let unauth = send_raw(b"POST /pick-folder HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 2\r\n\r\n{}");
         assert!(unauth.starts_with("HTTP/1.1 401"));
         let upper_tok = bridge.token.to_ascii_uppercase();
@@ -779,7 +777,6 @@ mod tests {
         );
         assert!(send_raw(case_tampered.as_bytes()).starts_with("HTTP/1.1 401"));
 
-        // 3. 请求体超过 8 KiB 上限严格返回 413 Payload Too Large
         let big_body = format!(r#"{{"startDir":"{}"}}"#, "a".repeat(9000));
         let big_req = format!(
             "POST /pick-folder HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {}\r\nContent-Length: {}\r\n\r\n{}",
@@ -789,7 +786,6 @@ mod tests {
         );
         assert!(send_raw(big_req.as_bytes()).starts_with("HTTP/1.1 413"));
 
-        // 4. 合法请求返回 200 与选中目录
         let ok_body = r#"{"startDir":"D:\\Repo"}"#;
         let ok_req = format!(
             "POST /pick-folder HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: bearer {}\r\nContent-Length: {}\r\n\r\n{}",
@@ -802,7 +798,6 @@ mod tests {
         assert!(ok_resp.contains(r#"{"path":"D:\\Repo"}"#));
         bridge.stop();
 
-        // 5. 并发弹窗返回 409 Conflict
         let entered = Arc::new(Barrier::new(2));
         let release = Arc::new(Barrier::new(2));
         let entered_w = Arc::clone(&entered);

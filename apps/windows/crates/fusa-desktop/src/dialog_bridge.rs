@@ -17,7 +17,6 @@ const MAX_DIALOG_WIRE_BYTES: usize = MAX_DIALOG_HEADER_BYTES + MAX_DIALOG_BODY_B
 const MAX_LINGER_DRAIN_BYTES: usize = 64 * 1024;
 const LINGER_DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
 
-/// 守护进程 `POST /api/pick-folder` 与桌面外壳 `tauri-plugin-dialog` 之间的本机回环窄桥接句柄。
 pub struct DesktopDialogBridge {
     pub url: String,
     pub token: String,
@@ -94,7 +93,7 @@ fn write_json_response(
     }
 }
 
-// 接收缓冲留有未读数据或关连接后仍有请求体分片到达时，TCP 会发 RST 而非 FIN（Windows 报 10054），丢弃响应。
+// Unread data at close makes TCP send RST instead of FIN (Windows error 10054), which drops the response.
 fn drain_request_remainder(stream: &mut TcpStream) {
     let deadline = Instant::now() + LINGER_DRAIN_TIMEOUT;
     let mut drained = 0usize;
@@ -122,7 +121,7 @@ impl DesktopDialogBridge {
         let focus_fn = Arc::new(on_focus_window);
         Self::start_with_handler(move |start_dir| {
             focus_fn(&app_handle);
-            let mut builder = app_handle.dialog().file().set_title("选择主文件夹");
+            let mut builder = app_handle.dialog().file().set_title("Choose Main Folder");
             if let Some(dir_str) = start_dir {
                 let p = PathBuf::from(dir_str.trim());
                 if p.is_dir() {

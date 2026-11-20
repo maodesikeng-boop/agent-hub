@@ -5,10 +5,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 pub const SANDBOX_SIDS_FILE: &str = "win-sandbox-sids.json";
-/// Lock file next to the SID store: every `fusa-run` process takes it before a read-modify-write.
 pub const SANDBOX_SIDS_LOCK_FILE: &str = "win-sandbox-sids.lock";
 pub const MAX_PERSISTED_WORKER_SIDS: usize = 1024;
-/// Store-key prefix of per-session reader SIDs (`FusaRead-<key>`), kept apart from worker write SIDs.
 const READER_KEY_PREFIX: &str = "read-";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -111,8 +109,7 @@ fn read_store(state_dir: &Path) -> Option<SandboxSidStore> {
     is_valid_cap_sid_syntax(&parsed.worker_group_sid).then_some(parsed)
 }
 
-/// Exclusive lock held until the returned file is dropped. The store is replaced by rename, so
-/// readers never see a torn file; writers take this lock so a concurrent update is not lost.
+// The store is replaced by rename so readers never see a torn file; writers take this lock so concurrent updates are not lost.
 fn lock_store(state_dir: &Path) -> io::Result<fs::File> {
     fs::create_dir_all(state_dir)?;
     let lock = fs::OpenOptions::new()
@@ -125,7 +122,7 @@ fn lock_store(state_dir: &Path) -> io::Result<fs::File> {
     Ok(lock)
 }
 
-/// Caller holds `lock_store`.
+// Caller holds `lock_store`.
 fn load_or_create_locked(state_dir: &Path) -> io::Result<SandboxSidStore> {
     if let Some(store) = read_store(state_dir) {
         return Ok(store);
@@ -204,8 +201,7 @@ pub fn ensure_worker_sid(
     Ok((store.worker_group_sid, worker_sid))
 }
 
-/// Per-session reader SID (`FusaRead-<key>`): only ever granted read on that session's own files
-/// (`acl allow-read --reader <key>`), never write, so readonly Workers can carry it too.
+// Reader SIDs are only ever granted read, never write, so readonly Workers can carry them too.
 pub fn ensure_reader_sid(state_dir: &Path, key: &str) -> io::Result<String> {
     let (_, sid) = ensure_worker_sid(state_dir, &format!("{READER_KEY_PREFIX}{}", key.trim()))?;
     Ok(sid)
@@ -234,7 +230,6 @@ mod tests {
         assert_eq!(loaded.worker_sids.len(), MAX_PERSISTED_WORKER_SIDS);
     }
 
-    /// Each thread opens the store on its own, the same way separate `fusa-run` processes do.
     #[test]
     fn concurrent_writers_keep_every_sid_and_one_group() {
         let tmp = tempfile::tempdir().expect("tempdir");

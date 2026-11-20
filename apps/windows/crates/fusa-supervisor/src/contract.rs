@@ -4,11 +4,9 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use crate::error::SupervisorError;
 
-/// 编译期内嵌的桌面端统一监管契约（单一事实来源：`apps/desktop/contract.json`）。
 pub const EMBEDDED_DESKTOP_CONTRACT_JSON: &str =
     include_str!("../../../../../apps/desktop/contract.json");
 
-/// 桌面外壳与后台守护进程监管契约（所有预算、退避、日志与探活参数均由 `apps/desktop/contract.json` 反序列化，零魔法数字双写）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DesktopContract {
@@ -27,9 +25,7 @@ pub struct DesktopContract {
     pub crash_backoff_ms: Vec<u64>,
     pub crash_window_ms: u64,
     pub max_crashes_in_window: usize,
-    /// 守护进程空闲排空后请求热重启（`hub self-reload`）用的退出码：立即拉起新进程，不算崩溃、不进退避与熔断计数。
     pub reload_exit_code: i32,
-    /// 外壳拉起守护进程时设的环境变量名（Windows 原生壳由 `NativeDaemonRuntime` 注入）：守护进程据此才接受热重启请求。
     pub supervised_env: String,
     pub log_relative_path: String,
     pub log_max_bytes: u64,
@@ -41,14 +37,12 @@ pub struct DesktopContract {
 }
 
 impl DesktopContract {
-    /// 解析编译期内嵌的 `apps/desktop/contract.json`。
     pub fn embedded() -> Result<Self, SupervisorError> {
         let contract: Self = serde_json::from_str(EMBEDDED_DESKTOP_CONTRACT_JSON)?;
         contract.validate()?;
         Ok(contract)
     }
 
-    /// 从磁盘指定路径运行时加载并校验契约文件。
     pub fn load_from_path(path: &Path) -> Result<Self, SupervisorError> {
         let raw = fs::read_to_string(path).map_err(|source| SupervisorError::Io {
             path: path.to_path_buf(),
@@ -83,7 +77,7 @@ impl DesktopContract {
             || self.menu_reason_max_chars == 0
         {
             return Err(SupervisorError::InvalidContract(
-                "contract.json 存在空字段或 0 值预算".to_string(),
+                "contract.json has an empty field or a zero budget".to_string(),
             ));
         }
         Ok(())
@@ -109,7 +103,6 @@ impl DesktopContract {
         Duration::from_millis(self.crash_window_ms)
     }
 
-    /// 根据当前窗口内第 N 次崩溃（从 1 开始计数）返回对应退避时长。
     pub fn backoff_delay_ms_for_crash_count(&self, crash_count_one_based: usize) -> u64 {
         let idx = crash_count_one_based
             .saturating_sub(1)

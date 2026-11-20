@@ -1,9 +1,6 @@
 import Darwin
 import Foundation
 
-/// 分发包无窗口端到端自检（`Bellwood.app/Contents/MacOS/AgentHub --self-test`，与 Windows `fusa-desktop.exe --self-test` 对齐）：
-/// 用临时数据目录和空闲端口，从包内运行环境拉起守护进程 → 核对运行环境都在包内 → 鉴权与健康检查 →
-/// 核对 PM/Worker 会话用的 `hub` 外壳指向包内 Node → 优雅关机。不读写真实的 ~/.agent-hub，不碰 4317 端口。
 enum FusaSelfTest {
     static let flag = "--self-test"
 
@@ -49,7 +46,6 @@ enum FusaSelfTest {
         let contract = DesktopContract.shared
         let bundlePath = Bundle.main.bundlePath
 
-        // 1. 运行环境必须是分发模式，且守护进程代码与 Node 都在包内（不依赖本机仓库和本机 Node）
         let runtime: DaemonRuntimeLocation
         switch DaemonRuntimeLocator.resolve() {
         case .success(let located): runtime = located
@@ -62,7 +58,6 @@ enum FusaSelfTest {
             throw Failure(message: "运行环境不在包内：\(path)（包：\(bundlePath)）")
         }
 
-        // 2. 包内 Node 版本与清单一致，随包 npm 可用（Providers 一键安装要用）
         guard let runtimeDir = DaemonRuntimeLocator.bundledRuntimeDir(.live) else {
             throw Failure(message: "找不到包内 Resources 目录")
         }
@@ -80,7 +75,6 @@ enum FusaSelfTest {
             .appendingPathComponent("../lib/node_modules/npm/bin/npm-cli.js") as NSString).standardizingPath
         let npmVersion = try runTool(runtime.nodePath, [npmCli, "--version"]).trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // 3. 临时端口拉起守护进程（与 GUI 同一个 DaemonSupervisor）
         let port = try findFreePort()
         let supervisor = DaemonSupervisor(homeDir: homeDir, port: port)
         let startedAt = Date()
@@ -103,7 +97,6 @@ enum FusaSelfTest {
 
         var sandboxStatus = "nested-skipped"
         let verify: () throws -> Void = {
-            // 4. 未鉴权 401；兑换 Cookie 后 200 且身份一致；分发包拒绝 --build 热重启（不碰签名目录）
             let healthPath = (try? JSONDecoder().decode(
                 HealthPathContract.self,
                 from: Data(contentsOf: Bundle.main.url(forResource: "contract", withExtension: "json")!)
@@ -137,7 +130,6 @@ enum FusaSelfTest {
                 throw Failure(message: "分发包 POST /api/self-reload {\"build\":true} 应返回 400，实际 \(reloadBuildStatus)")
             }
 
-            // 5. PM/Worker 会话 PATH 最前面的 hub 外壳必须指向包内 Node 与包内 hub 入口，且在 sandbox-exec 写入范围沙箱下可用
             let hubShim = (homeDir as NSString).appendingPathComponent("run/bin/hub")
             guard let shim = try? String(contentsOfFile: hubShim, encoding: .utf8) else {
                 throw Failure(message: "守护进程没写出 hub 外壳：\(hubShim)")
@@ -172,7 +164,6 @@ enum FusaSelfTest {
         let verifyError: Error?
         do { try verify(); verifyError = nil } catch { verifyError = error }
 
-        // 6. 优雅关机：进程退出、端口不再响应
         let stopStarted = Date()
         var stopped = false
         supervisor.stopOwned { stopped = true }

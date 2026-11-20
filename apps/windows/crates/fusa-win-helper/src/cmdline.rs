@@ -1,4 +1,3 @@
-/// Quotes a single Windows command-line argument according to `CommandLineToArgvW` rules.
 pub fn quote_windows_arg(value: &str) -> String {
     if !value.is_empty() && !value.chars().any(|c| matches!(c, ' ' | '\t' | '\n' | '\x0b' | '"')) {
         return value.to_string();
@@ -32,9 +31,6 @@ pub fn quote_windows_arg(value: &str) -> String {
     out
 }
 
-/// Builds the full `lpCommandLine` string for `CreateProcessW` / `CreateProcessAsUserW`.
-/// When `raw_tail` is provided (e.g. `cmd.exe` verbatim `/d /v:off /s /c "..."`), it is appended
-/// verbatim after the quoted program path.
 pub fn build_windows_command_line(
     program: &str,
     args: &[String],

@@ -125,7 +125,7 @@ enum SupervisorTestsMain {
             // 分发模式包内缺 Node：报错，绝不回退到本机 Node
             let missingNode = DaemonRuntimeLocator.resolve(inputs(mode: "bundled", existing: allExisting, executables: [devNode, "/opt/homebrew/bin/node"]))
             if case .failure(let err) = missingNode {
-                check(err.code == 2 && err.message.contains("安装包"), "bundled missing node error should mention 安装包, got \(err)")
+                check(err.code == 2 && err.message.contains("package"), "bundled missing node error should mention the package, got \(err)")
             } else {
                 check(false, "bundled mode must not fall back to host node, got \(missingNode)")
             }
@@ -318,7 +318,7 @@ enum SupervisorTestsMain {
             check(sup.currentConflictReason != nil, "currentConflictReason must be set for mode=\(mode)")
             check(sup.currentOwnership == .none, "ownership must be .none for mode=\(mode)")
             check(sup.currentPid == nil, "must not spawn daemon on port conflict (mode=\(mode))")
-            check(bar.currentSummaryTitle == "后台端口冲突或协议不兼容", "status bar summary must show conflict for mode=\(mode)")
+            check(bar.currentSummaryTitle == "Daemon port conflict or incompatible protocol", "status bar summary must show conflict for mode=\(mode)")
             check(bar.isConflictVisible, "status bar conflict detail must be visible for mode=\(mode)")
             check(bar.currentButtonTitle == " !", "status bar button must show ' !' for mode=\(mode)")
 
@@ -369,9 +369,9 @@ enum SupervisorTestsMain {
         check(extSup.currentOwnership == .external(instanceId: "ext-fusa-001"), "ownership must be .external(ext-fusa-001)")
         check(extSup.isExternallyManaged, "isExternallyManaged must be true")
         check(extSup.currentConflictReason == nil, "conflictReason must be nil for compatible external Bellwood")
-        check(extBar.currentSummaryTitle == "后台服务运行中（外部管理）", "status bar should show 外部管理, got: \(extBar.currentSummaryTitle)")
+        check(extBar.currentSummaryTitle == "Daemon running (External)", "status bar should show External, got: \(extBar.currentSummaryTitle)")
         check(!extBar.isRestartEnabled, "restart menu item must be disabled for external daemon")
-        check(extBar.currentQuitTitle == "退出 Bellwood（保留外部后台）", "quit menu item should clarify external daemon is preserved")
+        check(extBar.currentQuitTitle == "Quit Bellwood (Keep External Daemon)", "quit menu item should clarify external daemon is preserved")
 
         var exchangedCookies: [HTTPCookie]?
         extSup.exchangeUiTokenForCookies { res in

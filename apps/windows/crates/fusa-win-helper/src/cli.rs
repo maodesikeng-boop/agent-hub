@@ -6,8 +6,7 @@ pub enum SandboxMode {
     Worker {
         state_dir: PathBuf,
         worker_id: Option<String>,
-        /// Per-session reader key: the token also carries `FusaRead-<key>`, which is only ever granted read
-        /// (the session's own `state\launch\<id>`), never write.
+        // Per-session reader key: the token also carries `FusaRead-<key>`, which is only ever granted read, never write.
         reader: Option<String>,
         readonly_fallback: bool,
     },

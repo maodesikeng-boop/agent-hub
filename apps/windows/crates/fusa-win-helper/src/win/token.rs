@@ -148,17 +148,7 @@ fn contains_sid(list: &[Vec<u8>], candidate: *mut c_void) -> bool {
         .any(|existing| unsafe { EqualSid(existing.as_ptr() as *mut c_void, candidate) != 0 })
 }
 
-/// Creates a restricted token whose restricting SIDs copy:
-/// - Current token's `TokenUser` SID
-/// - All enabled `TokenGroups` SIDs (so `Authenticated Users`, `Users`, logon SID, etc. keep the same access outside the data dir, e.g. `D:\`)
-/// - `Everyone` (`S-1-1-0`)
-/// - Persistent `FusaWorker` SID (denied write on protected roots, denied read on the data dir except the allowed entries)
-/// - Optional `FusaWorker-<workerId>` SID (allowed write on this worker's own worktree; omitted in `--readonly-fallback` mode)
-/// - Optional `FusaRead-<reader>` SID (allowed read on this session's own launch dir; never granted write)
-///
-/// Not `WRITE_RESTRICTED`: with it the restricting SIDs only take part in write checks, so a `DENY FusaWorker` read ACE
-/// would never apply. Every SID the normal pass can use is also a restricting SID, so outside the `FusaWorker` deny ACEs
-/// both passes grant the same access.
+// Not WRITE_RESTRICTED: with it restricting SIDs only join write checks, so the FusaWorker read deny would never apply.
 pub fn create_worker_restricted_token(
     state_dir: &Path,
     worker_id: Option<&str>,
