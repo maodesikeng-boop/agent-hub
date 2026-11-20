@@ -11,11 +11,10 @@ import {
   type WorkerId,
 } from "../shared/index.ts";
 import type { SidebarGroup, SidebarRouterEntry } from "./components/Sidebar.tsx";
-import type { SettingsDialogSection } from "./components/SettingsDialog.tsx";
 import type { DeviceSettings } from "./settings-model.ts";
 import { useDevices } from "./device-hub.ts";
 import type { DeviceStoreLookup } from "./forward-reply.ts";
-import { LOCAL_DEVICE, conversationKey, deviceKeyOf, deviceNotices, isReadOnly, routeDeviceOf, type DeviceKey } from "./devices.ts";
+import { LOCAL_DEVICE, conversationKey, deviceKeyOf, deviceNotices, isReadOnly, routeDeviceOf } from "./devices.ts";
 import { useServerModelCatalogs } from "./models.tsx";
 import { useHubQueryClient } from "./query-client.ts";
 import {
@@ -35,8 +34,9 @@ import {
 import { totalRunningWorkers } from "../shared/reminders.ts";
 import { useDeviceReminders, type ConversationRef } from "./notify.ts";
 import { useDraftStore, useStagingStore } from "./upload.ts";
-import { mobileBack, settingsParent } from "./mobile/back.ts";
-import { routeHash, useRoute, type SettingsSection } from "./route.ts";
+import { mobileBack } from "./mobile/back.ts";
+import { routeHash, useRoute } from "./route.ts";
+import { desktopSectionOf, useSettingsNav } from "./settings-nav.ts";
 import { COMPACT_QUERY, NARROW_QUERY, useMediaQuery } from "./useMediaQuery.ts";
 import { defaultLookOf, resolvePmLook } from "../shared/slimes.ts";
 import { useRerenderAt } from "./useRerenderAt.ts";
@@ -100,14 +100,6 @@ const saveRailClosed = (closed: boolean) => {
   }
 };
 
-function desktopSectionOf(section: SettingsSection | undefined, managed: boolean): SettingsDialogSection | undefined {
-  if (section === undefined) return undefined;
-  if (section === "scale" || section === "notifications") return "general";
-  if (section === "providers" || section === "vendor-sync") return "providers";
-  if (section === "computers") return managed ? "computers" : "general";
-  return "security";
-}
-
 export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const qc = useHubQueryClient();
   const fleet = useDevices();
@@ -124,13 +116,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   const drafts = useDraftStore<string>();
   const staging = useStagingStore<string>();
   const [creating, setCreating] = useState(false);
-  const [desktopSettings, setDesktopSettings] = useState<{
-    open: boolean;
-    section?: SettingsDialogSection;
-    providerDevice?: DeviceKey;
-  }>({ open: false });
-  const [mobileProviderDevice, setMobileProviderDevice] = useState<DeviceKey | undefined>(undefined);
-  const onSettingsOpenChange = useCallback((open: boolean) => setDesktopSettings({ open }), []);
+  const nav = useSettingsNav({ autoSelect, currentKey: current.key, route, navigate, replace, setCreating });
   const [providersGuided, setProvidersGuided] = useState(loadProvidersGuided);
   const [railClosed, setRailClosed] = useState(loadRailClosed);
   const [compactRailOpen, setCompactRailOpen] = useState(false);
@@ -209,9 +195,9 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
     setProvidersGuided(true);
     saveProvidersGuided();
     if (localServerCatalogs.every((c) => !isSelectable(c.availability))) {
-      setDesktopSettings({ open: true, section: "providers", providerDevice: LOCAL_DEVICE });
+      nav.setDesktop({ open: true, section: "providers", providerDevice: LOCAL_DEVICE });
     }
-  }, [shouldCheckFirstRunProviders, localServerCatalogs]);
+  }, [shouldCheckFirstRunProviders, localServerCatalogs, nav.setDesktop]);
 
   useEffect(() => {
     if (!autoSelect || !shellReady) return;
@@ -220,11 +206,10 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       return;
     }
     if (route.view === "settings") {
-      const section = desktopSectionOf(route.section, fleet.managed);
-      setDesktopSettings(section === undefined ? { open: true } : { open: true, section });
+      nav.setDesktop(route.section === undefined ? { open: true } : { open: true, section: desktopSectionOf(route.section, fleet.managed) });
       replace({ view: "router" });
     }
-  }, [autoSelect, shellReady, route, fleet.managed, replace]);
+  }, [autoSelect, shellReady, route, fleet.managed, replace, nav.setDesktop]);
   useEffect(() => {
     if (autoSelect || route?.view !== "settings") return;
     const unmanagedSection = fleet.listed && !fleet.managed && route.section === "computers";
@@ -362,29 +347,6 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
     [rawLink?.readOnly, rawLink?.waiting],
   );
   const openNewPm = useCallback(() => setCreating(true), []);
-  const openSettings = useCallback(() => {
-    setMobileProviderDevice(current.key);
-    navigate({ view: "settings" });
-  }, [current.key, navigate]);
-  const openSettingsSection = useCallback((section: SettingsSection) => navigate({ view: "settings", section }), [navigate]);
-  const openManageProviders = useCallback(
-    (targetDevice: DeviceKey = current.key) => {
-      setCreating(false);
-      if (autoSelect) {
-        setDesktopSettings({ open: true, section: "providers", providerDevice: targetDevice });
-      } else {
-        setMobileProviderDevice(targetDevice);
-        navigate({ view: "settings", section: "providers" });
-      }
-    },
-    [autoSelect, current.key, navigate],
-  );
-  const routeRef = useRef(route);
-  routeRef.current = route;
-  const settingsBack = useCallback(() => {
-    const currentRoute = routeRef.current;
-    if (currentRoute?.view === "settings") mobileBack(settingsParent(currentRoute), replace);
-  }, [replace]);
   const refreshFleet = useCallback(() => void fleet.refresh(), [fleet.refresh]);
   const deviceSettingsRef = useRef<DeviceSettings | null>(null);
   const deviceSettings = useMemo<DeviceSettings | null>(() => {
@@ -540,7 +502,6 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
     server: d.state.server,
     takenLooks: d.state.pms.filter((pm) => pm.archivedAt == null).map(resolvePmLook),
   }));
-  const defaultProviderDevice = desktopSettings.providerDevice ?? mobileProviderDevice ?? current.key;
   return {
     ...shared,
     content: {
@@ -554,9 +515,9 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       compact,
       created,
       creating,
-      defaultProviderDevice,
-      desktopSettingsOpen: desktopSettings.open,
-      desktopSettingsSection: desktopSettings.section,
+      defaultProviderDevice: nav.defaultProviderDevice,
+      desktopSettingsOpen: nav.desktop.open,
+      desktopSettingsSection: nav.desktop.section,
       deviceSettings,
       drafts,
       focus,
@@ -568,15 +529,15 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       narrow,
       newPmDevices,
       offline,
-      onSettingsOpenChange,
+      onSettingsOpenChange: nav.onSettingsOpenChange,
       openAsk,
       openDeviceConversation,
       openDeviceWorker,
-      openManageProviders,
+      openManageProviders: nav.openManageProviders,
       openNewPm,
       openProfile,
-      openSettings,
-      openSettingsSection,
+      openSettings: nav.openSettings,
+      openSettingsSection: nav.openSettingsSection,
       openWorker,
       openWorkerConversation,
       profile,
@@ -598,7 +559,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
       select,
       send,
       setCreating,
-      settingsBack,
+      settingsBack: nav.settingsBack,
       sidebarActive,
       sidebarActiveRef,
       sidebarRouter,

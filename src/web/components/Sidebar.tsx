@@ -1,4 +1,4 @@
-import { ChevronRight, Plus, Search, Settings, X } from "../ui/icons.ts";
+import { ChevronRight, Plus, Settings } from "../ui/icons.ts";
 import { Fragment, memo, useState, type ReactNode } from "react";
 import { conversationKey, isReadOnly, type DeviceKey, type DeviceStatus } from "../devices.ts";
 import { formatArchiveRemaining, formatTime, NEEDS_YOU, YOUR_TURN } from "../format.ts";
@@ -7,12 +7,12 @@ import { previewText, type ConversationEntry, type QuotaVendor } from "../select
 import { jellyStyleOf } from "../lib/palette.ts";
 import { cn } from "../lib/utils.ts";
 import { Button } from "../ui/button.tsx";
-import { Input } from "../ui/input.tsx";
 import { NARROW_QUERY, useMediaQuery } from "../useMediaQuery.ts";
 import { Avatar } from "./Avatar.tsx";
 import { PlatformIcon, StatusDot, StatusText } from "./DeviceBadges.tsx";
 import { RouterAvatar } from "./RouterAvatar.tsx";
 import { QuotaPopover } from "./QuotaPopover.tsx";
+import { SearchField } from "./SearchField.tsx";
 import { SettingsDialog, type DeviceSettings, type SettingsDialogSection } from "./SettingsDialog.tsx";
 
 const ROW = "flex h-18 w-full cursor-pointer items-center gap-3 rounded-2xl px-3 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50";
@@ -434,22 +434,7 @@ export const Sidebar = memo(
               data-window-drag
               className="relative flex h-16 shrink-0 items-center gap-2 px-3 before:absolute before:inset-x-0 before:bottom-full before:h-[calc(var(--safe-top)+var(--macos-traffic-lights-height))] before:content-['']"
             >
-              <div className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-xl bg-sidebar-active pr-0.5 pl-3 pointer-coarse:h-11">
-                <Search className="size-pixel-sm shrink-0 text-muted-foreground" aria-hidden="true" />
-                <Input
-                  type="search"
-                  aria-label="Search"
-                  placeholder="Search"
-                  className="h-full min-w-0 flex-1 rounded-none border-0 bg-transparent px-0 pointer-coarse:h-full"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                />
-                {searching && (
-                  <Button variant="ghost" size="icon-sm" className="shrink-0" aria-label="Clear search" onClick={() => setQuery("")}>
-                    <X aria-hidden="true" />
-                  </Button>
-                )}
-              </div>
+              <SearchField label="Search" value={query} onChange={setQuery} />
               <Button variant="slot" size="icon" className="shrink-0" aria-label="New project manager" onClick={onNewPm}>
                 <Plus aria-hidden="true" />
               </Button>
