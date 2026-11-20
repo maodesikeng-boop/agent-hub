@@ -85,8 +85,20 @@ describe("opencode config override", () => {
     expect(effectOf("edit")).toBe("deny");
     expect(effectOf("question")).toBe("deny");
     for (const action of ["read", "grep", "shell", "webfetch"]) expect(effectOf(action), action).toBe("allow");
+    expect(effectOf("subagent")).toBe("deny");
     expect(override.policies).toEqual([{ action: "mcp.use", resource: "*", effect: "deny" }]);
     expect(buildOpenCodeConfigOverride(base).policies).toBeUndefined();
+  });
+
+  it("pins the read-only rules onto the plan agent so project agents.plan.permissions cannot widen them", () => {
+    const override = buildOpenCodeConfigOverride({ ...base, readonly: { secretPaths: [], secretGlobs: [], connectors: { extraAllow: [], deny: [] } } });
+    expect(override.default_agent).toBe("plan");
+    expect(override.agents).toEqual({ plan: { disabled: false, mode: "primary", permissions: override.permissions } });
+    const permissions = override.permissions as { action: string; effect: string }[];
+    expect(permissions.filter((r) => r.action === "subagent")).toEqual([{ action: "subagent", resource: "*", effect: "deny" }]);
+    const writable = buildOpenCodeConfigOverride(base);
+    expect(writable.agents).toBeUndefined();
+    expect(writable.default_agent).toBeUndefined();
   });
 
   it("denies edits for read-only Workers, plus per-PM denied MCP servers and skills", () => {
@@ -100,8 +112,9 @@ describe("opencode config override", () => {
       },
     });
     const permissions = override.permissions as unknown[];
-    expect(permissions.slice(-4)).toEqual([
+    expect(permissions.slice(-5)).toEqual([
       { action: "edit", resource: "*", effect: "deny" },
+      { action: "subagent", resource: "*", effect: "deny" },
       { action: "question", resource: "*", effect: "deny" },
       { action: "my_server_v2_*", resource: "*", effect: "deny" },
       { action: "skill", resource: "deploy", effect: "deny" },
@@ -337,7 +350,7 @@ child.on("exit", (code) => process.exit(code ?? 0));
       expect(h.logs().filter((e) => e.event === "session/set_mode")).toEqual([]);
       expect(h.logs().filter((e) => e.event === "session/set_config_option")).toEqual([expect.objectContaining({ configId: "mode", value: "plan" })]);
       const config = JSON.parse(h.launch().config) as { permissions: Array<{ action: string; effect: string }>; policies: unknown };
-      expect(config.permissions.slice(-2)).toEqual([{ action: "edit", resource: "*", effect: "deny" }, { action: "question", resource: "*", effect: "deny" }]);
+      expect(config.permissions.slice(-3)).toEqual([{ action: "edit", resource: "*", effect: "deny" }, { action: "subagent", resource: "*", effect: "deny" }, { action: "question", resource: "*", effect: "deny" }]);
       expect(config.policies).toEqual([{ action: "mcp.use", resource: "*", effect: "deny" }]);
       const home = realpathSync(join(dir, "ro-home"));
       expect(captured!.writableDirs).toEqual(expect.arrayContaining([join(home, ".local", "share", "opencode"), join(home, ".local", "state", "opencode")]));

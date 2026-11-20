@@ -33,7 +33,6 @@ const READONLY_ALLOWED_ACTIONS = [
   "websearch",
   "todowrite",
   "skill",
-  "subagent",
 ] as const;
 
 interface OpenCodePermissionRule {
@@ -51,16 +50,24 @@ export function openCodeMcpAction(server: string): string {
 
 // OPENCODE_CONFIG_CONTENT permission rules come last and the last match wins; policies resolve earliest-first, so a user's
 // mcp.use allow can still connect servers, and the read-only "*" ask rule sends those MCP calls to the ACP permission gate.
+// Project agents.plan.permissions and .opencode/modes/plan.md rank after the top-level rules, so the read-only list is also
+// pinned onto the plan agent, and subagents (which resolve their own agent permissions) are denied outright.
 export function buildOpenCodeConfigOverride(files: LaunchFiles): Record<string, unknown> {
   const permissions: OpenCodePermissionRule[] = files.readonly
-    ? [rule("*", "ask"), ...READONLY_ALLOWED_ACTIONS.map((action) => rule(action, "allow")), rule("edit", "deny")]
+    ? [rule("*", "ask"), ...READONLY_ALLOWED_ACTIONS.map((action) => rule(action, "allow")), rule("edit", "deny"), rule("subagent", "deny")]
     : [];
   permissions.push(rule("question", "deny"));
   for (const server of files.capabilities?.deny.mcp ?? []) permissions.push(rule(openCodeMcpAction(server), "deny"));
   for (const skill of files.capabilities?.deny.skills ?? []) permissions.push(rule("skill", "deny", skill));
   return {
     permissions,
-    ...(files.readonly ? { policies: [{ action: "mcp.use", resource: "*", effect: "deny" }] } : {}),
+    ...(files.readonly
+      ? {
+          policies: [{ action: "mcp.use", resource: "*", effect: "deny" }],
+          default_agent: READONLY_MODE_ID,
+          agents: { [READONLY_MODE_ID]: { disabled: false, mode: "primary", permissions } },
+        }
+      : {}),
     ...(files.skillsDir ? { skills: [files.skillsDir] } : {}),
   };
 }
