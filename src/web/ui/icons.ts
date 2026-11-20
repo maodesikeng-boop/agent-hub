@@ -52,17 +52,8 @@ import { User as PxUser } from "pixelarticons/react/User.js";
 import { WarningDiamond as PxWarningDiamond } from "pixelarticons/react/WarningDiamond.js";
 import { createElement, type ComponentType, type CSSProperties, type ReactElement, type SVGProps } from "react";
 
-// 全站的图标出口（docs/ui-standard.md 第 5 条）。
-// 不变量：
-// - 输入框专用的 Composer* 是线条图标（输入框里不用像素）；其余都是像素图标（pixelarticons）：
-//   24 格画布、2 格一笔，渲染成 shape-rendering="crispEdges"、fill="currentColor" 的 <svg>，没有描边、渐变和位图。
-// - 颜色跟文字走；像素图标的尺寸只由调用方的 class 给：size-pixel（默认“大”档正好 24px）、size-pixel-sm（正好 12px）、
-//   size-pixel-lg（正好 48px），四档界面大小下都是整像素格；strokeWidth 这类线条图标的参数传进来不起作用。
-// - 没有 aria-label 时 aria-hidden；换一套图标只改这个文件，别的文件不直接 import 图标库。
-
 export type IconProps = SVGProps<SVGSVGElement> & { strokeWidth?: number | string };
 
-/** 取代 lucide 的 LucideIcon：“名字 → 图标”的表（设置分类、系统消息）用它当类型。 */
 export type Icon = ComponentType<IconProps>;
 
 type RawPixelIcon = (props: SVGProps<SVGSVGElement>) => ReactElement;
@@ -72,7 +63,6 @@ function a11y(props: IconProps): SVGProps<SVGSVGElement> {
   return { "aria-hidden": rest["aria-label"] === undefined ? true : undefined, ...rest };
 }
 
-/** data-icon 标出是哪一路图标（守卫测试、样式表认它）：pixel 是像素图标，line 是输入框的线条图标。 */
 const PIXEL_MARK = { "data-icon": "pixel" } as SVGProps<SVGSVGElement>;
 const LINE_MARK = { "data-icon": "line" } as SVGProps<SVGSVGElement>;
 
@@ -100,7 +90,6 @@ export const ComposerVideo = line("ComposerVideo", "M3 6h12v12H3zM15 10l6-3v10l-
 export const ComposerRemove = line("ComposerRemove", "m6 6 12 12M18 6 6 18", 2);
 export const ComposerBot = line("ComposerBot", "M12 3v4M5 7h14v12H5zM2 12v3m20-3v3M9 12v1m6-1v1");
 
-// 在忙的转圈：pixelarticons 的 loader 拆成 8 根，按顺序一根根亮（styles.css 的 .pixel-loader），不转动画布，格子一直对齐。
 const LOADER_ARMS = [
   "M11 2h2v6h-2z",
   "M15 7h2v2h-2zM17 5h2v2h-2z",
@@ -112,7 +101,6 @@ const LOADER_ARMS = [
   "M7 7h2v2H7zM5 5h2v2H5z",
 ] as const;
 
-/** 在忙的转圈（自己会动，调用方不用再加 animate-spin）。 */
 export const Loader2: Icon = Object.assign(
   (props: IconProps) => {
     const { className, ...rest } = a11y(props);

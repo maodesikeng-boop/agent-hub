@@ -1,6 +1,3 @@
-// Router 时间流选择器与多源水位线合并（docs/router-workbench-v2-design.md 第 5 节）：
-// 按 state.router.items -> state.router.commands -> state.pms -> state.projects 四级 WeakMap 缓存，
-// 流式会话更新零重算、单条指令或简报变更时其余条目对象引用保持严格 ===。
 import {
   type Attachment,
   type ConversationId,
@@ -28,10 +25,8 @@ export interface RouterTurnDestination {
   conversationId: ConversationId;
   name: string;
   projectName: string | null;
-  /** 去向的项目经理在 deviceKey 那台设备上的编号：头像按 FleetRouterView.lookOf 取。 */
   pmId: PmId;
   opLabel: string | null;
-  /** 转给项目经理的那条消息在目标设备上的编号（pm.forward）；起 Worker、追发、新建项目等别的去向是 null。 */
   forwardMessageId: MessageId | null;
 }
 
@@ -46,7 +41,6 @@ export interface RouterTurnEntry {
   unsentError?: unknown;
   command: RouterCommandRecord | null;
   destinations: readonly RouterTurnDestination[];
-  /** 近窗里的条目（true）失败时允许原地 Retry；翻历史翻出来的旧条目（false）只读展示原因。 */
   live: boolean;
 }
 
@@ -60,7 +54,6 @@ export interface RouterBriefingEntry {
   self: boolean;
   pmName: string;
   projectName: string | null;
-  /** 简报的项目经理在 deviceKey 那台设备上的编号：头像按 FleetRouterView.lookOf 取。 */
   pmId: PmId;
   live: boolean;
 }
@@ -110,10 +103,6 @@ export interface FleetRouterStream {
   multiDevice: boolean;
 }
 
-/**
- * 时间流全序里的一个位置：createdAt → 类别（同一毫秒指令在前）→ 设备 → 记录 id。
- * 同一来源内与服务端分页游标（created_at DESC, id DESC）同序，所以同一毫秒的记录也能按水位线严格切开。
- */
 export interface RouterStreamPos {
   readonly createdAt: number;
   readonly kind: RouterStreamEntry["kind"];
@@ -123,7 +112,6 @@ export interface RouterStreamPos {
 
 export interface RouterStreamSource {
   readonly entries: readonly RouterStreamEntry[];
-  /** 还有更早记录时，这个来源已加载到的最早一条原始记录（含被滤掉的已取消指令等）的位置；翻到头时是 null。 */
   readonly loadedDownTo: RouterStreamPos | null;
   readonly hasMore: boolean;
 }
@@ -148,7 +136,6 @@ function opLabelOf(op: RouterDispatchOp | undefined): string | null {
   }
 }
 
-/** plan.attachments 是守护进程建指令时按上传编号解析的显示信息（没有磁盘路径，网页只拿来画附件行）。 */
 function attachmentsFromPlan(plan: RouterCommandRecord["plan"]): Attachment[] {
   const list = plan?.attachments;
   if (!list || list.length === 0) return NO_ATTACHMENTS;
@@ -165,7 +152,6 @@ function buildDestinations(command: RouterCommandRecord, selfId: string | undefi
     const worker = d.workerConversationId !== undefined;
     const conversationId = d.workerConversationId ?? d.conversationId;
     if (conversationId === undefined) continue;
-    // 守护进程记的是真实设备编号（本机也是），和入口本机的编号一样就是本机的键 ""
     const deviceKey = deviceKeyOf(d.deviceId, selfId ?? null);
     const self = deviceKey === "";
     const name = worker
@@ -188,7 +174,6 @@ function buildDestinations(command: RouterCommandRecord, selfId: string | undefi
   return out.length === 0 ? NO_DESTINATIONS : out;
 }
 
-/** 失败回合能不能在原地出 Retry：有明确 retryOps，或者一条都没投出去时才允许重试。 */
 export function canRetryCommand(command: RouterCommandRecord): boolean {
   const hasRetryOps = Array.isArray(command.plan?.retryOps) && command.plan.retryOps.length > 0;
   const anySucceeded = (command.dispatched ?? []).some((d) => d.ok);
@@ -198,7 +183,6 @@ export function canRetryCommand(command: RouterCommandRecord): boolean {
 const turnEntryLiveCache = new WeakMap<RouterCommandRecord, Map<string, RouterTurnEntry>>();
 const turnEntryHistoryCache = new WeakMap<RouterCommandRecord, Map<string, RouterTurnEntry>>();
 
-/** 把单条 RouterCommandRecord 转成时间流回合条目；按记录对象与 selfId 做 WeakMap 缓存，单条更新不波及其他回合。 */
 export function turnEntryOfCommand(command: RouterCommandRecord, selfId: string | undefined, live: boolean): RouterTurnEntry {
   const cache = live ? turnEntryLiveCache : turnEntryHistoryCache;
   const selfKey = selfId ?? "";
@@ -229,7 +213,6 @@ export function turnEntryOfCommand(command: RouterCommandRecord, selfId: string 
 
 const briefingEntryCache = new WeakMap<RouterReportItem, RouterBriefingEntry>();
 
-/** 把单条 RouterReportItem 转成时间流简报条目；按记录对象缓存，并在 PM / 项目 / 设备改名时即时失效重建。 */
 export function briefingEntryOfReport(
   report: RouterReportItem,
   ctx: {
@@ -384,7 +367,6 @@ function reportsSliceOf(state: HubState): ReportsSlice {
   return slice;
 }
 
-/** 单台设备的近窗时间流切片（按旧→新排好指令与简报，记住各自最旧一条的分页游标与更早记录标记）。 */
 export function routerStreamOf(state: HubState): DeviceRouterStreamSlice {
   const cSlice = commandsSliceOf(state.router);
   const rSlice = reportsSliceOf(state);
@@ -483,10 +465,6 @@ let lastFleetStreamMemo: {
   value: FleetRouterStream;
 } | null = null;
 
-/**
- * 汇总全舰队近窗时间流（入口本机指令回合 + 各就绪设备简报）。
- * 未就绪设备不会击穿缓存；单条指令变化时不重建任何设备的简报数组或设备对象。
- */
 export function fleetRouterStream(
   devices: readonly RouterStreamDeviceInput[],
   selfId?: string,
@@ -579,7 +557,7 @@ export function fleetRouterStream(
     deviceStreams.push(resolved);
   }
 
-  // 只变了指令（或别的设备没变的切片）时，设备数组沿用上一份：下游按它做依赖的“标已读”和简报分页不该跟着重跑
+  // Reuse the previous device array when only commands changed so mark-read and briefing paging do not rerun.
   const prevValue = lastFleetStreamMemo?.value;
   const devicesOut =
     prevValue !== undefined &&
@@ -611,10 +589,8 @@ export function fleetRouterStream(
   return value;
 }
 
-/** 还没落库的乐观回合没有记录 id，同一毫秒里排在已落库记录之后。 */
 const UNSAVED_ID = Number.MAX_SAFE_INTEGER;
 
-/** 条目在时间流全序里的位置（见 RouterStreamPos）。 */
 export function routerStreamPosOf(entry: RouterStreamEntry): RouterStreamPos {
   return entry.kind === "turn"
     ? { createdAt: entry.createdAt, kind: "turn", deviceKey: "", id: entry.command?.id ?? UNSAVED_ID }
@@ -628,11 +604,6 @@ function comparePos(a: RouterStreamPos, b: RouterStreamPos): number {
   return a.id - b.id;
 }
 
-/**
- * 按各来源已加载到的最早位置取水位线（watermark = max(loadedDownTo)）合并时间流：
- * 只放出不早于水位线的条目，尚未翻完的来源以后翻出来的记录一定排在水位线之前，
- * 所以往回翻页时更老的内容永远只接在列表顶部，不往已看过的记录中间插队（同一毫秒也一样）。
- */
 export function mergeRouterStream(sources: readonly RouterStreamSource[]): {
   entries: RouterStreamEntry[];
   hasMore: boolean;

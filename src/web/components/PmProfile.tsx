@@ -46,7 +46,6 @@ import { CollapsibleGroup, RowError, SettingsGroup, SettingsRow } from "./Settin
 
 type Load = { phase: "loading" } | { phase: "error"; info: ErrorInfo } | { phase: "ready"; persona: PersonaView };
 
-/** 性格设定：进页面拉一次；rev 变了（pm.updated，别处改了）重新拉。 */
 function usePersona(pmId: number, rev: number) {
   const client = useClient();
   const qc = useHubQueryClient();
@@ -90,7 +89,6 @@ function describeChange(change: PersonaChange, catalog: ModelCatalog): string {
   if (change.textBefore !== change.textAfter) parts.push("edited the persona");
   if (change.modeBefore !== change.modeAfter) parts.push(`set mode to ${MODE_LABELS[change.modeAfter]}`);
   if (change.vendorBefore !== change.vendorAfter) parts.push(`set provider to ${vendorLabel(change.vendorAfter)}`);
-  // 老数据里 agy 的模型是带档位的完整 ID：拆成 模型 + 思考程度，各写各的
   const before = splitModelEffort(change.vendorBefore, change.modelBefore, change.effortBefore);
   const after = splitModelEffort(change.vendorAfter, change.modelAfter, change.effortAfter);
   if (before.model !== after.model) parts.push(`set model to ${after.model === null ? DEFAULT_CHOICE : modelLabel(change.vendorAfter, after.model, catalog)}`);
@@ -140,7 +138,6 @@ function ChangeRow({ change, revertable, busy, onRevert }: { change: PersonaChan
   );
 }
 
-/** 路径最后一段（文件夹名）。 */
 function folderName(path: string): string {
   return path.replace(/\/+$/, "").split("/").pop() || path;
 }
@@ -149,10 +146,6 @@ function sameSetting(a: AgentSetting, b: AgentSetting): boolean {
   return a.vendor === b.vendor && a.model === b.model && a.effort === b.effort;
 }
 
-/**
- * 一项“改了马上存”的设置（如 Mode）：先显示改后的值（乐观），存成功换成服务端回的；失败退回服务端的值并提示错误。
- * 连着改几次时，只有最后一次的结果决定显示什么（前面的回来了也照样更新服务端的值）。
- */
 function useInstantSave<T>(pmId: number, onUpdate: (p: PersonaView) => void, aliveRef: { current: boolean }) {
   const client = useClient();
   const [draft, setDraft] = useState<T | null>(null);
@@ -187,23 +180,9 @@ function useInstantSave<T>(pmId: number, onUpdate: (p: PersonaView) => void, ali
   return { draft, error, save, reset };
 }
 
-/** 模型选完点保存统一提交；工作方式改了马上存；性格设定改了才出现“保存”；修改记录在最后（默认收起）。项目名只在头部，这里不再列。 */
-function PmEditor({
-  pm,
-  folders,
-  schedules,
-  persona,
-  onUpdate,
-  onManageProviders,
-}: {
-  pm: Pm;
-  folders: ProjectFolder[];
-  schedules: ScheduleRecord[];
-  persona: PersonaView;
-  onUpdate: (p: PersonaView) => void;
-  onManageProviders?: () => void;
-}) {
-  const client = useClient();
+type AliveRef = React.RefObject<boolean>;
+
+function useAliveRef(): AliveRef {
   const aliveRef = useRef(true);
   useEffect(() => {
     aliveRef.current = true;
@@ -211,7 +190,11 @@ function PmEditor({
       aliveRef.current = false;
     };
   }, []);
-  // 老数据里 agy 的模型可能是带档位的完整 ID：按 模型 + 思考程度 拆开再比，没改的不重复存
+  return aliveRef;
+}
+
+function useAgentEditor(pmId: number, persona: PersonaView, onUpdate: (p: PersonaView) => void, aliveRef: AliveRef) {
+  const client = useClient();
   const saved: AgentSetting = { vendor: persona.vendor, ...splitModelEffort(persona.vendor, persona.model, persona.effort) };
   const [trackedPmId, setTrackedPmId] = useState(persona.pmId);
   const [editedAgent, setEditedAgent] = useState<AgentDraft | null>(null);
@@ -219,14 +202,12 @@ function PmEditor({
   const [agentSaving, setAgentSaving] = useState(false);
   const agentSavingRef = useRef(false);
   const agentSeq = useRef(0);
-  const [draftText, setDraftText] = useState<string | null>(null);
 
   if (trackedPmId !== persona.pmId) {
     setTrackedPmId(persona.pmId);
     setEditedAgent(null);
     setAgentError(null);
     setAgentSaving(false);
-    setDraftText(null);
   }
 
   const draft: AgentDraft = editedAgent ?? draftOf(saved);
@@ -236,23 +217,21 @@ function PmEditor({
     setEditedAgent(null);
     setAgentError(null);
   }
-  const canSaveAgent = agentChanged && agentResult.ok && !agentSaving;
+  const canSave = agentChanged && agentResult.ok && !agentSaving;
 
-  const changeAgent = (next: AgentDraft, row: AgentRowKey) => {
+  const change = (next: AgentDraft, row: AgentRowKey) => {
     const updated = row === "vendor" ? draftOf({ vendor: next.vendor, model: null, effort: null }) : next;
     const result = settingOf(updated);
     setAgentError(null);
-    setEditedAgent(
-      updated.modelChoice !== CUSTOM_MODEL && result.ok && sameSetting(result.setting, saved) ? null : updated,
-    );
+    setEditedAgent(updated.modelChoice !== CUSTOM_MODEL && result.ok && sameSetting(result.setting, saved) ? null : updated);
   };
 
-  const cancelAgent = () => {
+  const cancel = () => {
     setEditedAgent(null);
     setAgentError(null);
   };
 
-  const resetAgent = () => {
+  const reset = () => {
     agentSeq.current++;
     agentSavingRef.current = false;
     setAgentSaving(false);
@@ -260,15 +239,15 @@ function PmEditor({
     setAgentError(null);
   };
 
-  const saveAgent = async () => {
-    if (agentSavingRef.current || !canSaveAgent || !agentResult.ok) return;
+  const save = async () => {
+    if (agentSavingRef.current || !canSave || !agentResult.ok) return;
     agentSavingRef.current = true;
     setAgentSaving(true);
     setAgentError(null);
     const mine = ++agentSeq.current;
     const { vendor, model, effort } = agentResult.setting;
     try {
-      const res = await client.putPersona(pm.id, { vendor, model, effort });
+      const res = await client.putPersona(pmId, { vendor, model, effort });
       if (!aliveRef.current || mine !== agentSeq.current) return;
       onUpdate(res.persona);
       setEditedAgent(null);
@@ -284,18 +263,35 @@ function PmEditor({
     }
   };
 
-  const modeSave = useInstantSave<PmMode>(pm.id, onUpdate, aliveRef);
-  const mode = modeSave.draft ?? persona.mode;
+  return { draft, edited: editedAgent !== null, error: agentError, saving: agentSaving, canSave, change, cancel, reset, save };
+}
 
-  // 性格设定：null = 没动过，显示服务端的最新；动过就保留自己的输入，别处改了也不覆盖
+function usePersonaText({
+  pmId,
+  persona,
+  onUpdate,
+  onReverted,
+  aliveRef,
+}: {
+  pmId: number;
+  persona: PersonaView;
+  onUpdate: (p: PersonaView) => void;
+  onReverted: () => void;
+  aliveRef: AliveRef;
+}) {
+  const client = useClient();
   const qc = useHubQueryClient();
+  const [trackedPmId, setTrackedPmId] = useState(persona.pmId);
+  const [draftText, setDraftText] = useState<string | null>(null);
+  if (trackedPmId !== persona.pmId) {
+    setTrackedPmId(persona.pmId);
+    setDraftText(null);
+  }
   const text = draftText ?? persona.text;
-  const tooLong = utf8Bytes(text) > MAX_PERSONA_BYTES;
-  const textDirty = text !== persona.text;
 
   const textMutation = useMutation(
     {
-      mutationFn: async () => (await client.putPersona(pm.id, { text })).persona,
+      mutationFn: async () => (await client.putPersona(pmId, { text })).persona,
       onSuccess: (next) => {
         if (!aliveRef.current) return;
         setDraftText(null);
@@ -309,9 +305,7 @@ function PmEditor({
       mutationFn: async (changeId: number) => (await client.postRevertPersonaChange(changeId)).persona,
       onSuccess: (next) => {
         if (!aliveRef.current) return;
-        // 撤销的结果回来后，本地没提交的输入已经没意义了
-        resetAgent();
-        modeSave.reset();
+        onReverted();
         setDraftText(null);
         onUpdate(next);
       },
@@ -325,43 +319,193 @@ function PmEditor({
       ? "Only the latest change can be undone"
       : errorText(revertMutation.error)
     : undefined;
-  const saveText = () => textMutation.mutate();
-  const revert = (changeId: number) => revertMutation.mutate(changeId);
-  const personaLines = pmMemoryLineCount(text);
-  const personaBytes = utf8Bytes(text);
-  const personaOverAutoLoad = personaLines > PM_MEMORY_MAX_LINES || personaBytes > PM_MEMORY_MAX_BYTES;
-  const personaNearAutoLoad =
-    !personaOverAutoLoad &&
-    (personaLines >= Math.ceil(PM_MEMORY_MAX_LINES * PM_MEMORY_SOFT_WARN_RATIO) ||
-      personaBytes >= Math.ceil(PM_MEMORY_MAX_BYTES * PM_MEMORY_SOFT_WARN_RATIO));
+  return {
+    text,
+    setText: setDraftText,
+    dirty: text !== persona.text,
+    tooLong: utf8Bytes(text) > MAX_PERSONA_BYTES,
+    busy,
+    textError,
+    revertError,
+    save: () => textMutation.mutate(),
+    revert: (changeId: number) => revertMutation.mutate(changeId),
+  };
+}
+
+function personaLoadHint(text: string): string | null {
+  const lines = pmMemoryLineCount(text);
+  const bytes = utf8Bytes(text);
+  const limit = `${PM_MEMORY_MAX_LINES} lines (${PM_MEMORY_MAX_BYTES / 1024} KB)`;
+  if (lines > PM_MEMORY_MAX_LINES || bytes > PM_MEMORY_MAX_BYTES) {
+    return `Only the first ${limit} load automatically. Move detailed notes into Memory files below`;
+  }
+  const near =
+    lines >= Math.ceil(PM_MEMORY_MAX_LINES * PM_MEMORY_SOFT_WARN_RATIO) ||
+    bytes >= Math.ceil(PM_MEMORY_MAX_BYTES * PM_MEMORY_SOFT_WARN_RATIO);
+  return near ? `Approaching the ${limit} auto-load limit. Move detailed notes into Memory files below` : null;
+}
+
+function AgentGroup({
+  agent,
+  switchingToVendor,
+  onManageProviders,
+}: {
+  agent: ReturnType<typeof useAgentEditor>;
+  switchingToVendor: PersonaView["switchingToVendor"];
+  onManageProviders: (() => void) | undefined;
+}) {
+  return (
+    <SettingsGroup label="Model">
+      <AgentRows
+        value={agent.draft}
+        onChange={agent.change}
+        disabled={agent.saving}
+        switchingToVendor={switchingToVendor}
+        onCustomSubmit={() => void agent.save()}
+        {...(onManageProviders !== undefined ? { onManageProviders } : {})}
+      />
+      {agent.edited && (
+        <div className="px-4 py-3">
+          {agent.error && <RowError error={agent.error} />}
+          <div className={agent.error ? "mt-2 flex items-center justify-end gap-2" : "flex items-center justify-end gap-2"}>
+            <Button type="button" variant="ghost" disabled={agent.saving} onClick={agent.cancel}>
+              Cancel
+            </Button>
+            <Button type="button" disabled={!agent.canSave} onClick={() => void agent.save()}>
+              {agent.saving && <Loader2 aria-hidden="true" />}
+              Save
+            </Button>
+          </div>
+        </div>
+      )}
+    </SettingsGroup>
+  );
+}
+
+function FoldersGroup({ folders }: { folders: ProjectFolder[] }) {
+  return (
+    <SettingsGroup title="Folders">
+      <ul aria-label="Folders" className="divide-y divide-border">
+        {folders.map((f) => (
+          <li key={f.id} title={f.path} className="flex min-h-14 items-center gap-4 px-4 py-3">
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-body">{folderName(f.path)}</div>
+              <div className="truncate text-minor leading-snug text-muted-foreground">{shortPath(f.path)}</div>
+            </div>
+            {f.isMain && <span className="shrink-0 text-xs text-muted-foreground">Main folder</span>}
+          </li>
+        ))}
+      </ul>
+    </SettingsGroup>
+  );
+}
+
+function PersonaGroup({ persona }: { persona: ReturnType<typeof usePersonaText> }) {
+  const { text, tooLong, textError, busy } = persona;
+  const hint = personaLoadHint(text);
+  return (
+    <SettingsGroup
+      title="Persona"
+      action={
+        persona.dirty && (
+          <Button size="sm" disabled={tooLong || busy !== null} onClick={persona.save}>
+            {busy === "text" && <Loader2 aria-hidden="true" />}
+            Save
+          </Button>
+        )
+      }
+    >
+      <Textarea
+        aria-label="Persona"
+        placeholder="No persona yet"
+        rows={1}
+        className={cn(
+          "block max-h-[60vh] min-h-0 resize-none rounded-none border-0 bg-transparent px-4 py-3 placeholder:font-sans placeholder:text-body field-sizing-content focus-visible:ring-0",
+          text === "" ? "text-body" : "font-mono text-minor",
+        )}
+        value={text}
+        onChange={(e) => persona.setText(e.target.value)}
+      />
+      {hint !== null && !tooLong && <p className="px-4 py-2.5 text-xs text-muted-foreground tabular-nums">{hint}</p>}
+      {(tooLong || textError) && (
+        <div className="px-4 py-2.5">
+          {tooLong ? <RowError>Persona is too long</RowError> : textError !== undefined && <RowError error={textError} />}
+        </div>
+      )}
+    </SettingsGroup>
+  );
+}
+
+function HistoryGroup({
+  persona,
+  revertError,
+  busy,
+  onRevert,
+}: {
+  persona: PersonaView;
+  revertError: ErrorLike | undefined;
+  busy: boolean;
+  onRevert: (changeId: number) => void;
+}) {
+  return (
+    <CollapsibleGroup title="History" summary={String(persona.changes.length)}>
+      {revertError && (
+        <div className="px-4 py-2.5">
+          <RowError error={revertError} />
+        </div>
+      )}
+      {persona.changes.length === 0 ? (
+        <p className="px-4 py-3 text-body text-muted-foreground">No changes yet</p>
+      ) : (
+        <ul aria-label="History" className="divide-y divide-border">
+          {persona.changes.map((change) => (
+            <ChangeRow
+              key={change.id}
+              change={change}
+              revertable={change.id === persona.revertableChangeId}
+              busy={busy}
+              onRevert={() => onRevert(change.id)}
+            />
+          ))}
+        </ul>
+      )}
+    </CollapsibleGroup>
+  );
+}
+
+function PmEditor({
+  pm,
+  folders,
+  schedules,
+  persona,
+  onUpdate,
+  onManageProviders,
+}: {
+  pm: Pm;
+  folders: ProjectFolder[];
+  schedules: ScheduleRecord[];
+  persona: PersonaView;
+  onUpdate: (p: PersonaView) => void;
+  onManageProviders?: () => void;
+}) {
+  const aliveRef = useAliveRef();
+  const agent = useAgentEditor(pm.id, persona, onUpdate, aliveRef);
+  const modeSave = useInstantSave<PmMode>(pm.id, onUpdate, aliveRef);
+  const mode = modeSave.draft ?? persona.mode;
+  const text = usePersonaText({
+    pmId: pm.id,
+    persona,
+    onUpdate,
+    aliveRef,
+    onReverted: () => {
+      agent.reset();
+      modeSave.reset();
+    },
+  });
 
   return (
     <>
-      {/* 头部下面第一组，头部就是它的标题，不另写组名 */}
-      <SettingsGroup label="Model">
-        <AgentRows
-          value={draft}
-          onChange={changeAgent}
-          disabled={agentSaving}
-          switchingToVendor={persona.switchingToVendor}
-          onCustomSubmit={() => void saveAgent()}
-          {...(onManageProviders !== undefined ? { onManageProviders } : {})}
-        />
-        {editedAgent !== null && (
-          <div className="px-4 py-3">
-            {agentError && <RowError error={agentError} />}
-            <div className={agentError ? "mt-2 flex items-center justify-end gap-2" : "flex items-center justify-end gap-2"}>
-              <Button type="button" variant="ghost" disabled={agentSaving} onClick={cancelAgent}>
-                Cancel
-              </Button>
-              <Button type="button" disabled={!canSaveAgent} onClick={() => void saveAgent()}>
-                {agentSaving && <Loader2 aria-hidden="true" />}
-                Save
-              </Button>
-            </div>
-          </div>
-        )}
-      </SettingsGroup>
+      <AgentGroup agent={agent} switchingToVendor={persona.switchingToVendor} onManageProviders={onManageProviders} />
       <SettingsGroup title="Mode">
         <ModeRows label="Mode" value={mode} onChange={(m) => modeSave.save(m, m === persona.mode ? {} : { mode: m })} />
         {modeSave.error && (
@@ -370,88 +514,15 @@ function PmEditor({
           </div>
         )}
       </SettingsGroup>
-      {folders.length > 0 && (
-        <SettingsGroup title="Folders">
-          <ul aria-label="Folders" className="divide-y divide-border">
-            {folders.map((f) => (
-              <li key={f.id} title={f.path} className="flex min-h-14 items-center gap-4 px-4 py-3">
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-body">{folderName(f.path)}</div>
-                  <div className="truncate text-minor leading-snug text-muted-foreground">{shortPath(f.path)}</div>
-                </div>
-                {f.isMain && <span className="shrink-0 text-xs text-muted-foreground">Main folder</span>}
-              </li>
-            ))}
-          </ul>
-        </SettingsGroup>
-      )}
+      {folders.length > 0 && <FoldersGroup folders={folders} />}
       <ScheduleGroup pmId={pm.id} schedules={schedules} />
-      <SettingsGroup
-        title="Persona"
-        action={
-          textDirty && (
-            <Button size="sm" disabled={tooLong || busy !== null} onClick={saveText}>
-              {busy === "text" && <Loader2 aria-hidden="true" />}
-              Save
-            </Button>
-          )
-        }
-      >
-        <Textarea
-          aria-label="Persona"
-          placeholder="No persona yet"
-          rows={1}
-          className={cn(
-            "block max-h-[60vh] min-h-0 resize-none rounded-none border-0 bg-transparent px-4 py-3 placeholder:font-sans placeholder:text-body field-sizing-content focus-visible:ring-0",
-            text === "" ? "text-body" : "font-mono text-minor",
-          )}
-          value={text}
-          onChange={(e) => setDraftText(e.target.value)}
-        />
-        {(personaOverAutoLoad || personaNearAutoLoad) && !tooLong && (
-          <p className="px-4 py-2.5 text-xs text-muted-foreground tabular-nums">
-            {personaOverAutoLoad
-              ? `Only the first ${PM_MEMORY_MAX_LINES} lines (${PM_MEMORY_MAX_BYTES / 1024} KB) load automatically. Move detailed notes into Memory files below`
-              : `Approaching the ${PM_MEMORY_MAX_LINES} lines (${PM_MEMORY_MAX_BYTES / 1024} KB) auto-load limit. Move detailed notes into Memory files below`}
-          </p>
-        )}
-        {(tooLong || textError) && (
-          <div className="px-4 py-2.5">
-            {tooLong ? <RowError>Persona is too long</RowError> : textError !== undefined && <RowError error={textError} />}
-          </div>
-        )}
-      </SettingsGroup>
+      <PersonaGroup persona={text} />
       <PmMemoryFilesGroup key={pm.id} pmId={pm.id} archived={pm.archivedAt != null} />
-      {/* 修改记录会越攒越多：默认收起，标题行带条数，点开才列出来 */}
-      <CollapsibleGroup title="History" summary={String(persona.changes.length)}>
-        {revertError && (
-          <div className="px-4 py-2.5">
-            <RowError error={revertError} />
-          </div>
-        )}
-        {persona.changes.length === 0 ? (
-          <p className="px-4 py-3 text-body text-muted-foreground">No changes yet</p>
-        ) : (
-          <ul aria-label="History" className="divide-y divide-border">
-            {persona.changes.map((change) => (
-              <ChangeRow
-                key={change.id}
-                change={change}
-                revertable={change.id === persona.revertableChangeId}
-                busy={busy !== null || agentSaving}
-                onRevert={() => revert(change.id)}
-              />
-            ))}
-          </ul>
-        )}
-      </CollapsibleGroup>
+      <HistoryGroup persona={persona} revertError={text.revertError} busy={text.busy !== null || agent.saving} onRevert={text.revert} />
     </>
   );
 }
 
-/**
- * 已归档项目经理顶部的“归档状态”一组：显示剩余删除天数与“恢复”按钮。
- */
 function ArchiveStatusGroup({ pmId, archivedAt }: { pmId: number; archivedAt: number }) {
   const client = useClient();
   const [unarchiving, setUnarchiving] = useState(false);
@@ -481,10 +552,6 @@ function ArchiveStatusGroup({ pmId, archivedAt }: { pmId: number; archivedAt: nu
   );
 }
 
-/**
- * “会话”一组：开新会话、归档项目经理。点了先确认；确认后项目经理先写交接，写完换一个新会话（ledger/handover.ts）。
- * renewing：在换（交接请求还没结果），按钮不能点。对话太长时系统也会自动换（同一套，聊天里只多一条分隔线）。
- */
 function RenewSessionGroup({
   pmId,
   renewing,
@@ -531,7 +598,6 @@ function RenewSessionGroup({
   const busy = renewing || sending;
   return (
     <SettingsGroup title="Session">
-      {/* 行名说是什么，按钮说做什么（不重复）；“…”表示点了还要确认。在换的时候是状态，用英文 */}
       <SettingsRow label="New session" detail="The project manager writes a handoff first. Chat history stays" error={error}>
         {() => (
           <Button variant="outline" disabled={busy || disabled} onClick={() => setConfirming(true)}>
@@ -634,20 +700,15 @@ export function PmProfile({
 }: {
   pm: Pm;
   project: Project | null;
-  /** 项目没移除的文件夹，主文件夹在前。 */
   folders: ProjectFolder[];
-  /** 这个项目经理的定时任务。 */
   schedules: ScheduleRecord[];
-  /** pm.updated 的次数，变了就重新拉。 */
   rev: number;
-  /** 在换新会话（selectors.ts 的 isRenewing）。 */
   renewing: boolean;
   onBack: () => void;
   onManageProviders?: () => void;
 }) {
   const { load, retry, set } = usePersona(pm.id, rev);
   const label = `${pm.name}'s profile`;
-  // 往下滚、头部的大名字滚出去之后，顶栏里补上头像和名字（照 iOS 大标题收进导航栏）：滚到哪都看得出在改谁
   const scrollerRef = useRef<HTMLDivElement>(null);
   const nameRef = useRef<HTMLHeadingElement>(null);
   const [nameHidden, setNameHidden] = useState(false);
@@ -672,7 +733,6 @@ export function PmProfile({
           </div>
         )}
       </header>
-      {/* 上边 1rem 渐隐（.page-fade，内容上内边距 pt-4 一样高）：滚上去的分组框不贴着顶栏被硬切 */}
       <div ref={scrollerRef} className="page-fade min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-6 pt-4 pb-12">
         <div className="mx-auto grid max-w-160 grid-cols-1 gap-6">
           <header className="grid min-w-0 grid-cols-1 justify-items-center pb-2 text-center">

@@ -234,7 +234,7 @@ impl AttrList {
             }
         }
 
-        // Best-effort on Win10+; older builds that don't recognize DESKTOP_APP_POLICY ignore failure.
+        // Best effort: Windows builds without DESKTOP_APP_POLICY ignore the failure.
         unsafe {
             let _ = UpdateProcThreadAttribute(
                 me.as_mut_ptr(),
@@ -272,7 +272,7 @@ pub struct RunSessionSpec<'a> {
 }
 
 pub fn run_session(spec: RunSessionSpec<'_>) -> io::Result<i32> {
-    // Save inherited stdio handles BEFORE switching to our private hidden console!
+    // Save the inherited stdio handles before switching to the private hidden console.
     let stdin_h = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
     let stdout_h = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
     let stderr_h = unsafe { GetStdHandle(STD_ERROR_HANDLE) };

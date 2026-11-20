@@ -1,5 +1,3 @@
-// 设置 → 电脑（docs/account-mesh-design.md「网页」）：账号（登录、批准新电脑、中心顺序）、本机、账号里的别的电脑（名字、系统、连法、在线状态）、改名、移除。
-// 加电脑不在这里：新电脑登录同一个 GitHub 账号，在这里核对批准。底层状态与接口调用由 settings-model.ts 提供，桌面弹窗与手机设置子页共用。
 import { Loader2, Pencil, Trash2 } from "../ui/icons.ts";
 import { useState } from "react";
 import { LINK_LABELS, platformLabel, type DeviceView } from "../devices.ts";
@@ -126,7 +124,6 @@ function DeviceRow({ device, onChanged }: { device: DeviceView; onChanged: () =>
   );
 }
 
-/** 设置 → 电脑：账号（登录、批准、中心顺序）、本机、账号里的别的电脑。 */
 export function ComputersSection({ devices, onChanged }: DeviceSettings) {
   const mine = devices.filter((d) => d.info.self);
   const others = devices.filter((d) => !d.info.self);

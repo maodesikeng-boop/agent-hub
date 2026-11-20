@@ -2,11 +2,8 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-/// 严格遵循 `contract.json`（`logMaxBytes: 2 MiB` + `logRotatedFiles: 1`）的流式轮转日志写入器。
 const ROTATE_LOCK_RETRY_STEP_BYTES: u64 = 64 * 1024;
 
-/// 严格遵循 `contract.json`（`logMaxBytes: 2 MiB` + `logRotatedFiles: 1`）的流式轮转日志写入器。
-/// 单次超大块写入也会按剩余字节精确切分并轮转，确保主日志与 `.1` 备份任何时刻均不超过 `max_bytes`，且绝不生成 `.2`。
 pub struct RotatingLogWriter {
     log_path: PathBuf,
     max_bytes: u64,
@@ -130,8 +127,7 @@ impl RotatingLogWriter {
             return Ok(());
         }
 
-        // Windows 文件共享锁降级容错：外部查看器（如 Notepad）打开日志文件阻断 rename / truncate 时，
-        // 回退为 append 继续写并在步进 ROTATE_LOCK_RETRY_STEP_BYTES 后再尝试轮转，绝不断开守护进程 stdout/stderr 管道。
+        // External viewers such as Notepad can lock the file; keep appending and retry rotation later instead of breaking the stdout pipe.
         let append_fallback = OpenOptions::new()
             .create(true)
             .append(true)
@@ -148,8 +144,6 @@ impl RotatingLogWriter {
     }
 }
 
-/// 严格受 `stderrTailMaxBytes`（4 KiB）与 `stderrSummaryMaxLines`（8 行）上限约束的 stderr 尾缓冲收集器。
-/// 长期运行一个月也恒定最多占用 4 KiB 内存。
 #[derive(Debug, Clone)]
 pub struct StderrTailCollector {
     max_bytes: usize,
@@ -202,11 +196,9 @@ impl StderrTailCollector {
         self.buf.extend_from_slice(chunk);
     }
 
-    /// 解码当前尾缓冲文本（跳过前端因按字节截断产生的半截 UTF-8 续字节）。
     pub fn tail_text(&self) -> String {
         let mut slice = self.buf.as_slice();
         while let Some(&first) = slice.first() {
-            // UTF-8 续字节形如 10xxxxxx
             if (first & 0b1100_0000) == 0b1000_0000 {
                 slice = &slice[1..];
             } else {
@@ -216,7 +208,6 @@ impl StderrTailCollector {
         String::from_utf8_lossy(slice).into_owned()
     }
 
-    /// 提取最后最多 `summary_max_lines`（8）条非空 stderr 摘要行。
     pub fn summary_lines(&self) -> Vec<String> {
         let text = self.tail_text();
         let non_empty: Vec<String> = text
@@ -229,7 +220,6 @@ impl StderrTailCollector {
         non_empty.into_iter().skip(skip).collect()
     }
 
-    /// 构造托盘菜单展示的单行崩溃原因摘要，字符数严格 `<= menu_reason_max_chars`（60 字）。
     pub fn format_menu_crash_reason(&self, fallback_exit_desc: &str) -> String {
         let lines = self.summary_lines();
         let raw = lines
@@ -241,7 +231,6 @@ impl StderrTailCollector {
     }
 }
 
-/// 将任意多行或多余空白折叠为单行，并按 Unicode 字符数上限截断（含省略号 `…` 总长不超过 `max_chars`）。
 pub fn truncate_chars_clean(input: &str, max_chars: usize) -> String {
     if max_chars == 0 {
         return String::new();

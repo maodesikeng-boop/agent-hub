@@ -7,11 +7,9 @@ import { cn } from "../lib/utils.ts";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
 import { Avatar } from "./Avatar.tsx";
 
-/** 造型一行 5 个、颜色一行 8 个。 */
 const FRUIT_COLUMNS = 5;
 const COLOR_COLUMNS = 8;
 
-/** 格子里的键盘：方向键在格子里走（上下按行），Home、End 到头尾；Enter、空格由按钮自己点。 */
 function moveFocus(e: KeyboardEvent<HTMLDivElement>, columns: number) {
   const items = [...e.currentTarget.querySelectorAll<HTMLButtonElement>("[role=radio]")];
   const index = items.indexOf(document.activeElement as HTMLButtonElement);
@@ -26,13 +24,6 @@ function moveFocus(e: KeyboardEvent<HTMLDivElement>, columns: number) {
   items[next]!.focus();
 }
 
-/**
- * 换形象的浮层（docs/slime-cohesion-design.md；样子照 docs/ui-standard.md 第 11 条 Popover）：
- * 上面一组 Fruit：20 个造型，都按当前颜色画；下面一组 Color：全部颜色的色板。
- * - 点一个造型或颜色马上调 onChange（只换被点的那一项），浮层不关；选中的造型是果冻底，选中的颜色外面一圈中性细环。
- * - error 不为空时在浮层最下面一行写原因（RowError）；键盘能用方向键在格子里走、Enter 选中，Esc 和点外面关浮层。
- * - children 是触发它的头像按钮（资料页头部、新建项目经理弹窗）。
- */
 export function SlimePicker({
   look,
   onChange,

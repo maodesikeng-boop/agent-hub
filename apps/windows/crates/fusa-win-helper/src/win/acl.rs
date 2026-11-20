@@ -33,9 +33,7 @@ use windows_sys::Win32::System::SystemServices::{
 
 const INHERIT_CI_OI: u32 = CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE;
 
-/// Write side of every `DENY FusaWorker` ACE, specific write rights only: `FILE_GENERIC_WRITE` / `GENERIC_WRITE` also
-/// carry `READ_CONTROL | SYNCHRONIZE`, and with a restricted (not `WRITE_RESTRICTED`) token those would stop Workers
-/// from even opening files for reading anywhere under a protected root, e.g. their own cross-volume `.fusa-wt` worktree.
+// Specific write rights only: FILE_GENERIC_WRITE also carries READ_CONTROL | SYNCHRONIZE, which would block reads under a restricted token.
 pub const WORKER_DENY_WRITE_MASK: u32 = FILE_WRITE_DATA
     | FILE_APPEND_DATA
     | FILE_WRITE_EA
@@ -51,14 +49,11 @@ pub const WORKER_ALLOW_MODIFY_MASK: u32 = FILE_GENERIC_READ
     | DELETE
     | FILE_DELETE_CHILD;
 
-/// Read side of the data-dir boundary: content, extended attributes and execute/traverse. Attributes stay readable
-/// (tools walking up for config files stat these paths); traversal itself is bypassed by `SeChangeNotifyPrivilege`.
+// Attributes stay readable because tools stat parent paths for config files; traversal is bypassed by SeChangeNotifyPrivilege.
 pub const WORKER_DENY_READ_MASK: u32 = FILE_READ_DATA | FILE_READ_EA | FILE_EXECUTE;
 
-/// Re-allowed entries (`worktrees\`, `uploads\`, `tools\`, `run\bin\`, a session's own launch dir): read and execute.
 pub const WORKER_ALLOW_READ_MASK: u32 = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
 
-/// Everything an explicit `DENY FusaWorker` ACE may carry; anything else was left by an older build.
 const WORKER_DENY_ANY_MASK: u32 = WORKER_DENY_WRITE_MASK | WORKER_DENY_READ_MASK;
 
 const CHECK_DENY_BITS: u32 =
@@ -115,9 +110,7 @@ unsafe fn dacl_has_ace(
     false
 }
 
-/// Deletes in place the explicit `DENY <sid>` ACEs carrying bits outside `WORKER_DENY_ANY_MASK` (older builds denied
-/// `FILE_GENERIC_WRITE | GENERIC_WRITE`, see `WORKER_DENY_WRITE_MASK`) and returns their legitimate bits for the caller
-/// to deny again; `None` when there was nothing to narrow.
+// Older builds denied FILE_GENERIC_WRITE | GENERIC_WRITE; narrow those ACEs in place and return the bits to deny again.
 unsafe fn take_overbroad_denies(dacl: *mut ACL, sid: *mut c_void) -> Option<u32> {
     if dacl.is_null() || sid.is_null() {
         return None;
@@ -194,9 +187,6 @@ fn read_named_dacl(path: &Path) -> io::Result<(*mut ACL, PSECURITY_DESCRIPTOR)> 
     Ok((dacl, sd))
 }
 
-/// Applies inheritable `DENY FusaWorker` write ACE + `OWNER RIGHTS (S-1-3-4): READ_CONTROL` ACE
-/// to a protected root (`dataDir` or cross-volume `X:\.fusa-wt\<hash>`).
-/// Idempotently skips rewriting when the DACL already has both ACEs and no overbroad deny from an older build.
 pub fn protect_root(state_dir: &Path, root_path: &Path) -> io::Result<bool> {
     fs::create_dir_all(root_path)?;
     let store = load_or_create_sid_store(state_dir)?;
@@ -294,7 +284,6 @@ pub fn protect_root(state_dir: &Path, root_path: &Path) -> io::Result<bool> {
     res
 }
 
-/// Grants inheritable `ALLOW FusaWorker-<workerId>` Modify ACE on an empty (or existing) worktree directory.
 pub fn allow_worker_worktree(
     state_dir: &Path,
     worker_id: &str,
@@ -370,10 +359,6 @@ pub fn allow_worker_worktree(
     res
 }
 
-/// Windows 0700 equivalent for `state\`, `run\`, `backups\`:
-/// Sets a protected DACL (`SE_DACL_PROTECTED`) granting FULL_CONTROL only to current user + SYSTEM,
-/// while explicitly retaining `DENY FusaWorker` write + read ACE + `OWNER RIGHTS: READ_CONTROL` so
-/// blocking parent inheritance never lets sandboxed Workers write into or read `state\`!
 pub fn harden_private_dir(state_dir: &Path, dir_path: &Path) -> io::Result<bool> {
     fs::create_dir_all(dir_path)?;
     let store = load_or_create_sid_store(state_dir)?;
@@ -500,7 +485,6 @@ pub fn harden_private_dir(state_dir: &Path, dir_path: &Path) -> io::Result<bool>
     res
 }
 
-/// Adds an inheritable explicit ACE for `sid` on `path` unless one with `check_bits` already exists.
 fn ensure_inheritable_ace(
     path: &Path,
     sid: *mut c_void,
@@ -561,8 +545,7 @@ fn ensure_inheritable_ace(
     res
 }
 
-/// Data-dir read boundary: inheritable `DENY FusaWorker` read ACE on the data dir, so sandboxed Workers can neither
-/// list nor read anything under it except what `allow_read` re-opens (explicit ACEs sort before inherited ones).
+// Explicit ACEs sort before inherited ones, so allow_read can re-open entries under this inherited read deny.
 pub fn deny_read(state_dir: &Path, path: &Path) -> io::Result<bool> {
     let store = load_or_create_sid_store(state_dir)?;
     let worker_group = LocalSid::from_string(&store.worker_group_sid)?;
@@ -577,9 +560,6 @@ pub fn deny_read(state_dir: &Path, path: &Path) -> io::Result<bool> {
     )
 }
 
-/// Re-opens read inside the data dir: for every Worker (`FusaWorker`) when `reader` is `None`
-/// (`worktrees\`, `uploads\`, `tools\`, `run\bin\`), or only for one session's `FusaRead-<reader>`
-/// (its own `state\launch\<id>`).
 pub fn allow_read(state_dir: &Path, reader: Option<&str>, path: &Path) -> io::Result<bool> {
     let sid_str = match reader {
         Some(key) => ensure_reader_sid(state_dir, key)?,
@@ -686,8 +666,7 @@ fn add_pipe_ace(pipe_path: &str, explicit: &EXPLICIT_ACCESS_W, what: &str) -> io
     res
 }
 
-/// Denies every sandboxed Worker (`FusaWorker`) on a named pipe (the admin pipe): restricted tokens carry
-/// `FusaWorker`, so opening it fails even though the same user owns the pipe.
+// Restricted tokens carry FusaWorker, so this deny holds even though the same user owns the pipe.
 pub fn deny_worker_on_named_pipe(state_dir: &Path, pipe_path: &str) -> io::Result<()> {
     let store = load_or_create_sid_store(state_dir)?;
     let worker_group = LocalSid::from_string(&store.worker_group_sid)?;
@@ -700,7 +679,7 @@ pub fn deny_worker_on_named_pipe(state_dir: &Path, pipe_path: &str) -> io::Resul
     add_pipe_ace(pipe_path, &explicit, "deny_pipe")
 }
 
-/// Ensures `\\.\NUL` allows read/write/exec for the given capability SID so `> NUL` works inside restricted tokens.
+// Lets `> NUL` work inside restricted tokens.
 pub fn allow_null_device(psid: *mut c_void) {
     let wide = to_wide(r"\\.\NUL");
     let raw = unsafe {
@@ -764,12 +743,7 @@ pub fn allow_null_device(psid: *mut c_void) {
     }
 }
 
-/// Grants `FILE_GENERIC_READ | FILE_GENERIC_WRITE | SYNCHRONIZE` to the current user's personal SID
-/// on a bound Windows Named Pipe (`\\.\pipe\...`).
-/// When the daemon runs under an elevated Administrator token (e.g. CI runners or UAC-off setups),
-/// libuv's default pipe DACL grants write access to `BUILTIN\Administrators` rather than the personal user SID,
-/// which `LUA_TOKEN` disables in sandboxed Workers (`EPERM`). Adding `current_user_sid` allows same-user
-/// sandboxed Workers through both the normal and the restricted access check while keeping other OS users out.
+// Under an elevated token libuv grants pipe write to BUILTIN\Administrators, which LUA_TOKEN disables in sandboxed Workers; grant the user SID instead.
 pub fn allow_current_user_on_named_pipe(pipe_path: &str) -> io::Result<()> {
     let user_sid = current_user_sid_bytes()?;
     let explicit = make_explicit_access(
@@ -835,7 +809,6 @@ mod tests {
         fs::create_dir_all(&root).expect("root");
         let store = load_or_create_sid_store(&state).expect("sid store");
         let group = LocalSid::from_string(&store.worker_group_sid).expect("group sid");
-        // What older builds left: the generic write rights (with READ_CONTROL | SYNCHRONIZE), here merged with a read deny.
         let legacy =
             FILE_GENERIC_WRITE | GENERIC_WRITE | WORKER_DENY_WRITE_MASK | WORKER_DENY_READ_MASK;
         ensure_inheritable_ace(

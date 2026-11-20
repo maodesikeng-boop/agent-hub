@@ -8,7 +8,6 @@ const MODE_OPTIONS: readonly ChoiceOption<PmMode>[] = PM_MODES.map((mode) => ({
   detail: MODE_OPTION_DETAILS[mode],
 }));
 
-/** 项目经理的模式：分组框里一种模式一行（名字、一句说明，右边一个圆，选中的打勾），新建和资料页共用。放在 SettingsGroup 里。 */
 export function ModeRows({
   value,
   onChange,

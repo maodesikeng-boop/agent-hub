@@ -1,8 +1,3 @@
-// 手机设置的行（docs/ui-standard.md 第 9 条“钻取导航行”）：都放在 SettingsGroup 的白底细框里，整行就是热区，不在行右边堆小按钮。
-// - SettingsNavRow：整行 <button>，min-h-12 px-4 py-3；左边 16px 线条图标 + 15px 名字（可带一行小字），右边单一结论摘要（tabular-nums，
-//   不用 · | / 拼接）+ 16px ChevronRight；危险行（Sign out all browsers…）红字、不带箭头。
-// - SwitchRow：整行点哪都拨开关（名字的 label 用 ::after 盖住整行）。
-// - FieldBlock：小标题在上、全宽输入框在下的纵向表单块（手机上不把输入框和按钮挤一行，不写死 w-60）。
 import { ChevronRight } from "../../ui/icons.ts";
 import { useId, type ReactNode } from "react";
 import type { ErrorLike } from "../../format.ts";
@@ -25,11 +20,8 @@ export function SettingsNavRow({
 }: {
   icon?: ReactNode;
   label: ReactNode;
-  /** 名字下面一行 13.5px 小字（设备的系统与在线状态、浏览器的活跃时间），多项用间距分开。 */
   detail?: ReactNode;
-  /** 右边的单一状态结论（Large、On、2 online、3、Pending）。 */
   summary?: ReactNode;
-  /** 有要处理的（待批准的浏览器）：摘要前一个 8px 琥珀点。 */
   attention?: boolean;
   attentionTestId?: string;
   danger?: boolean;
@@ -85,7 +77,6 @@ export function SwitchRow({
   );
 }
 
-/** bare：放在抽屉里（抽屉自己有 px-4），不再套行的内边距。 */
 export function FieldBlock({ label, error, bare = false, children }: { label: string; error?: ErrorLike | null; bare?: boolean; children: (id: string) => ReactNode }) {
   const id = useId();
   return (
@@ -99,11 +90,10 @@ export function FieldBlock({ label, error, bare = false, children }: { label: st
   );
 }
 
-/** 等宽代码块（隧道 join 命令、Funnel 命令）：完整折行显示，能整段选中。 */
 export function CodeLine({ children }: { children: string }) {
   return <code className="block rounded-xl bg-sidebar px-3 py-2.5 font-mono text-minor break-all select-all">{children}</code>;
 }
 
-/** 手机输入框共用的属性：44px 高、全宽；URL、域名、邀请码、连接码这类非自然语言输入关掉 iOS 自动大写、纠错和拼写检查（第 6 条）。 */
+// Disable iOS autocapitalize, autocorrect and spellcheck for URLs, domains and codes.
 export const TOUCH_INPUT = "h-11 w-full";
 export const NO_AUTOCORRECT = { autoCapitalize: "none", autoCorrect: "off", spellCheck: false, autoComplete: "off" } as const;

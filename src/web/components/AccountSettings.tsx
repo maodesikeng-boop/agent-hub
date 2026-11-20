@@ -1,5 +1,3 @@
-// 设置 → 电脑里的“账号”（docs/account-mesh-design.md「网页」）：用 GitHub 登录、等批准时的核对码、别的电脑的加入请求、中心顺序、退出。
-// 桌面弹窗和手机设置子页共用；状态和接口都在 settings-model.ts 的 useAccount。
 import { ArrowDown, ArrowUp, ExternalLink, Loader2 } from "../ui/icons.ts";
 import { useState } from "react";
 import type { DeviceId, MeshApprovalView, MeshDeviceView, RelayConnectionState } from "../../shared/index.ts";
@@ -18,7 +16,6 @@ const RELAY_TEXT: Readonly<Record<RelayConnectionState, string>> = {
 
 type Account = ReturnType<typeof useAccount>;
 
-/** 核对码：两块屏幕上的 6 位数，3 位一组显示，等宽字体。 */
 function SasCode({ code }: { code: string }) {
   return (
     <span data-testid="sas-code" className="font-mono text-title tabular-nums tracking-widest">
@@ -27,7 +24,6 @@ function SasCode({ code }: { code: string }) {
   );
 }
 
-/** 一条核对：还没开始是“Verify”，核对码出来后是码和“Match / Doesn't match”。 */
 function ApprovalRow({ account, approval, joining }: { account: Account; approval: MeshApprovalView; joining: boolean }) {
   const { device, requestId, sas } = approval;
   const busy = account.busy?.endsWith(`:${requestId}`) ?? false;
@@ -148,7 +144,6 @@ function PriorityGroup({
   );
 }
 
-/** 设置 → 电脑最上面的账号组（加上等批准和中心顺序）。 */
 export function AccountSettings() {
   const account = useAccount();
   const { status } = account;

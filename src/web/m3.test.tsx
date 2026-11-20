@@ -269,7 +269,7 @@ describe("点开 Worker", () => {
     expect(within(section).getByText("再改一下").closest("[data-head]")).toHaveAttribute("data-head", "true");
     expect(within(section).queryByText("已回复")).not.toBeInTheDocument();
     expect(within(section).queryByText("发送失败")).not.toBeInTheDocument();
-    expect(within(section).queryByRole("button", { name: "没发出去，点击重发" })).not.toBeInTheDocument();
+    expect(within(section).queryByRole("button", { name: "Not sent. Click to resend" })).not.toBeInTheDocument();
     expect(within(section).queryByText(/^(已送达|处理中|排队中|失败)/)).not.toBeInTheDocument();
   });
 
@@ -1709,13 +1709,13 @@ describe("在 Worker 页面直接对它说话", () => {
     const { user, section, box } = await openWorker();
     api.postMessage = () => ({ status: 409, body: { error: "Worker #3 已经收工了，不能再给它发消息", code: "conflict" } });
     await user.type(box(), "还在吗{Enter}");
-    expect(await within(section).findByRole("button", { name: "没发出去，点击重发" })).toBeInTheDocument();
+    expect(await within(section).findByRole("button", { name: "Not sent. Click to resend" })).toBeInTheDocument();
     api.postMessage = () => {
       throw new TypeError("Failed to fetch");
     };
-    await user.click(within(section).getByRole("button", { name: "没发出去，点击重发" }));
+    await user.click(within(section).getByRole("button", { name: "Not sent. Click to resend" }));
     await waitFor(() => expect(api.callsTo("POST", /messages$/)).toHaveLength(2));
-    expect(await within(section).findByRole("button", { name: "没发出去，点击重发" })).toBeInTheDocument();
+    expect(await within(section).findByRole("button", { name: "Not sent. Click to resend" })).toBeInTheDocument();
   });
 
   it("已收工的历史 Worker 对话（初始快照 messages 为空、hasMore 为 true）：点开详情时自动按需拉取历史消息并展示", async () => {

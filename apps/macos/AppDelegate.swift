@@ -53,7 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 break
             case .failed(let crashCount, let windowSeconds, let crash):
                 self.windowController.showStartupError(
-                    "后台服务在 \(Int(windowSeconds)) 秒内连续崩溃 \(crashCount) 次，已停止自动重启。\n\(crash.menuTitle)"
+                    "The daemon crashed \(crashCount) times within \(Int(windowSeconds)) seconds. Automatic restarts are stopped.\n\(crash.menuTitle)"
                 )
             }
         }
@@ -84,8 +84,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         supervisor.stopIfOwned()
     }
 
-    // MARK: - UNUserNotificationCenterDelegate
-
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
@@ -103,8 +101,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         windowController.handleNotificationClicked(id: id)
         completionHandler()
     }
-
-    // MARK: - Helpers
 
     private func startAndLoad() {
         supervisor.ensureRunning { [weak self] result in
@@ -145,57 +141,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private func setupMainMenu() {
         let mainMenu = NSMenu()
 
-        // 应用菜单
         let appMenuItem = NSMenuItem()
         mainMenu.addItem(appMenuItem)
         let appMenu = NSMenu()
         appMenuItem.submenu = appMenu
-        appMenu.addItem(withTitle: "隐藏 Bellwood", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
-        let hideOthers = appMenu.addItem(withTitle: "隐藏其他", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
+        appMenu.addItem(withTitle: "Hide Bellwood", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        let hideOthers = appMenu.addItem(withTitle: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
         hideOthers.keyEquivalentModifierMask = [.command, .option]
-        appMenu.addItem(withTitle: "全部显示", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
+        appMenu.addItem(withTitle: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
         appMenu.addItem(NSMenuItem.separator())
-        appMenu.addItem(withTitle: "彻底退出 Bellwood", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenu.addItem(withTitle: "Quit Bellwood", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
-        // 文件菜单
         let fileMenuItem = NSMenuItem()
         mainMenu.addItem(fileMenuItem)
-        let fileMenu = NSMenu(title: "文件")
+        let fileMenu = NSMenu(title: "File")
         fileMenuItem.submenu = fileMenu
-        let openItem = NSMenuItem(title: "打开主窗口", action: #selector(handleOpenMainWindowMenu), keyEquivalent: "o")
+        let openItem = NSMenuItem(title: "Open Main Window", action: #selector(handleOpenMainWindowMenu), keyEquivalent: "o")
         openItem.target = self
         fileMenu.addItem(openItem)
-        fileMenu.addItem(withTitle: "关闭窗口", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        fileMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
 
-        // 编辑菜单（保证 WKWebView 内 Cmd+C / Cmd+V / Cmd+A / Cmd+Z 正常工作）
+        // The Edit menu is what routes Cmd+C/V/A/Z into WKWebView.
         let editMenuItem = NSMenuItem()
         mainMenu.addItem(editMenuItem)
-        let editMenu = NSMenu(title: "编辑")
+        let editMenu = NSMenu(title: "Edit")
         editMenuItem.submenu = editMenu
-        editMenu.addItem(withTitle: "撤销", action: Selector(("undo:")), keyEquivalent: "z")
-        editMenu.addItem(withTitle: "重做", action: Selector(("redo:")), keyEquivalent: "Z")
+        editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
         editMenu.addItem(NSMenuItem.separator())
-        editMenu.addItem(withTitle: "剪切", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
-        editMenu.addItem(withTitle: "复制", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
-        editMenu.addItem(withTitle: "粘贴", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
-        editMenu.addItem(withTitle: "全选", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
 
-        // 视图菜单
         let viewMenuItem = NSMenuItem()
         mainMenu.addItem(viewMenuItem)
-        let viewMenu = NSMenu(title: "视图")
+        let viewMenu = NSMenu(title: "View")
         viewMenuItem.submenu = viewMenu
-        let reloadItem = NSMenuItem(title: "刷新页面", action: #selector(handleReloadMenu), keyEquivalent: "r")
+        let reloadItem = NSMenuItem(title: "Reload Page", action: #selector(handleReloadMenu), keyEquivalent: "r")
         reloadItem.target = self
         viewMenu.addItem(reloadItem)
 
-        // 窗口菜单
         let windowMenuItem = NSMenuItem()
         mainMenu.addItem(windowMenuItem)
-        let windowMenu = NSMenu(title: "窗口")
+        let windowMenu = NSMenu(title: "Window")
         windowMenuItem.submenu = windowMenu
-        windowMenu.addItem(withTitle: "最小化", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
-        windowMenu.addItem(withTitle: "缩放", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        windowMenu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
 
         NSApp.mainMenu = mainMenu
         NSApp.windowsMenu = windowMenu

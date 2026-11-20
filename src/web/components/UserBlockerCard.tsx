@@ -1,5 +1,3 @@
-// 系统挂的“要你动手”的提醒卡（docs/user-blockers-design.md）：写明在哪台设备做什么，点 Done 让那台守护进程重查，
-// 能用就把卡住的步骤和 Worker 接着派出去。任务图步骤上和对话里是同一张卡，样式同拍板卡（docs/ui-standard.md 第 12.1 条）。
 import { useMutation } from "@tanstack/react-query";
 import { Loader2 } from "../ui/icons.ts";
 import { useRef, useState } from "react";
@@ -21,14 +19,12 @@ export function UserBlockerCard({
   blockerId: UserBlockerId;
   text: string;
   answered?: boolean;
-  /** 外面已经写了状态词（放大弹窗的步骤标题行）就不再写一遍。 */
   showStatus?: boolean;
   className?: string;
 }) {
   const client = useClient();
   const qc = useHubQueryClient();
   const [err, setErr] = useState<ErrorLike | null>(null);
-  // 同步防重入：isPending 要等下一次渲染才变
   const inFlightRef = useRef(false);
   const recheck = useMutation(
     {
@@ -54,7 +50,6 @@ export function UserBlockerCard({
       {showStatus && (
         <div className="mb-1.5 flex items-center gap-2">
           <span aria-hidden="true" className={cn("size-2 shrink-0 rounded-full", answered ? "bg-muted-foreground" : "bg-status-active")} />
-          {/* 压在果冻底上的小字用前景色：强调色的字在同色系的浅底上不到 4.5:1，状态靠前面的绿点 */}
           <span className={cn("text-xs font-medium", answered ? "text-muted-foreground" : "text-foreground")}>
             {answered ? "Done" : "Waiting on you"}
           </span>

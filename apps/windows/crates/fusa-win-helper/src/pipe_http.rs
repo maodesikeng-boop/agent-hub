@@ -244,7 +244,6 @@ mod tests {
         assert!(!valid_token_chars("bad token"));
 
         let raw = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 40\r\n\r\n{\"exitCode\":0,\"stdout\":\"ok\\n\",\"stderr\":\"\"}";
-        // Count exact length of body: 41 bytes
         let body_bytes = br#"{"exitCode":0,"stdout":"ok\n","stderr":""}"#;
         let msg = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",

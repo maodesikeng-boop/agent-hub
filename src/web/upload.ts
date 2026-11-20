@@ -1,7 +1,3 @@
-// 聊天框的上传逻辑（和输入框组件分开，哪个输入框都能用：项目经理的聊天框、以后别的对话的输入框）：
-// 加文件时的检查（stageFiles）、读拖进来和粘进来的文件夹（readDropped）、发送时上传（uploadFiles）、
-// 待发文件 + 提示 + 发送中状态按对话存的 hook（useStagingStore），被拒提示过几秒自己消失（useNoticeAutoHide）。
-// 上传接口本身不绑定接收方（见 shared/api.ts 的 API_PATHS.uploads），发消息时再带上上传编号。
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { createStore, type StoreApi } from "zustand";
 import {
@@ -17,7 +13,6 @@ import { registerDraftSource, takeRestoredDraft, trackUpload } from "./auto-relo
 import { localClient, type HubClient } from "./client.ts";
 import { ErrorNotice, errorText, newClientId, type ErrorLike } from "./format.ts";
 
-/** 待发的文件。key 只用来区分列表项（同名文件可以有好几个）。 */
 export interface StagedFile {
   key: string;
   file: File;
@@ -25,7 +20,6 @@ export interface StagedFile {
 
 const MB = 1024 * 1024;
 
-/** 加文件被拒的提示显示多久后自己消失。 */
 export const NOTICE_AUTO_HIDE_MS = 4_000;
 
 export function formatBytes(bytes: number): string {
@@ -34,17 +28,12 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / MB).toFixed(bytes < 10 * MB ? 1 : 0)} MB`;
 }
 
-/** 这个文件不能加的话，返回中文原因（不含文件名）；能加返回 null。 */
 function rejectionOf(file: File): string | null {
-  if (file.size === 0) return "是空文件，没有加入";
-  if (file.size > MAX_UPLOAD_BYTES) return `超过 ${MAX_UPLOAD_BYTES / MB} MB，没有加入`;
+  if (file.size === 0) return "is empty, skipped";
+  if (file.size > MAX_UPLOAD_BYTES) return `is over ${MAX_UPLOAD_BYTES / MB} MB, skipped`;
   return null;
 }
 
-/**
- * 把新来的文件加进待发列表：空文件、超过 MAX_UPLOAD_BYTES 的、超出一条消息 MAX_ATTACHMENTS_PER_MESSAGE 个的不加，
- * notice 是给用户看的中文原因（都能加就是 null），skipped（readDropped 给的，比如空文件夹）排在最前面。不改传进来的列表。
- */
 export function stageFiles(
   current: StagedFile[],
   incoming: File[],
@@ -56,29 +45,22 @@ export function stageFiles(
   for (const file of incoming) {
     const reason = rejectionOf(file);
     if (reason !== null) {
-      problems.push(`「${file.name}」${reason}`);
+      problems.push(`"${file.name}" ${reason}`);
     } else if (files.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
       dropped = true;
     } else {
       files.push({ key: newClientId(), file });
     }
   }
-  if (dropped) problems.push(`${ATTACHMENTS_TOO_MANY_MESSAGE}，多出来的没有加入`);
-  return { files, notice: problems.length === 0 ? null : problems.join("；") };
+  if (dropped) problems.push(`${ATTACHMENTS_TOO_MANY_MESSAGE}; extra files skipped`);
+  return { files, notice: problems.length === 0 ? null : problems.join("; ") };
 }
 
-/** 拖进来、粘进来的一项：直接是文件，或者是文件夹（要再往里读）。 */
 type DroppedItem = { file: File } | { folder: FileSystemDirectoryEntry };
 
-/** 拖放、粘贴给的数据：测试和老浏览器里可能没有 items，只有 files。 */
+// Tests and older browsers may expose files without items.
 export type DroppedData = Pick<DataTransfer, "files"> & { items?: DataTransferItemList };
 
-/**
- * 读拖进来、粘进来的文件，交给 deliver（一般就是 StagedFiles.add）。文件夹往里读（含子文件夹，跳过 . 开头的隐藏文件），
- * 读出来的文件照样过 stageFiles 的检查；空文件夹、读不出来的文件夹在 skipped 里给一句原因。
- * 浏览器把文件夹也放进 files，样子是一个 0 字节的文件，不这样读就会被当成“空文件”。
- * 必须在事件处理里同步调用（事件结束后 items 就读不到了）；没有文件夹时同步交给 deliver，有文件夹时读完再交。
- */
 export function readDropped(data: DroppedData, deliver: (files: File[], skipped: string[]) => void): void {
   const items = droppedItems(data);
   if (items.every((item): item is { file: File } => "file" in item)) {
@@ -103,7 +85,6 @@ function droppedItems(data: DroppedData): DroppedItem[] {
 }
 
 async function readItems(items: DroppedItem[]): Promise<{ files: File[]; skipped: string[] }> {
-  // 比上限多读一个就够让 stageFiles 报“最多带几个”，再往下读没用
   const left = { files: MAX_ATTACHMENTS_PER_MESSAGE + 1, entries: MAX_DROPPED_FOLDER_ENTRIES };
   const files: File[] = [];
   const skipped: string[] = [];
@@ -116,22 +97,21 @@ async function readItems(items: DroppedItem[]): Promise<{ files: File[]; skipped
     }
     try {
       const found = await readFolder(item.folder, left);
-      if (found.length === 0) skipped.push(`「${item.folder.name}」文件夹里没有文件，没有加入`);
+      if (found.length === 0) skipped.push(`Folder "${item.folder.name}" is empty, skipped`);
       files.push(...found);
     } catch {
-      skipped.push(`「${item.folder.name}」文件夹读不出来，没有加入`);
+      skipped.push(`Couldn't read folder "${item.folder.name}", skipped`);
     }
   }
   return { files, skipped };
 }
 
-/** 一层一层往下读（先读完上层的文件），读到 left 用完为止；left 在几个文件夹之间共用。 */
 async function readFolder(root: FileSystemDirectoryEntry, left: { files: number; entries: number }): Promise<File[]> {
   const files: File[] = [];
   const folders = [root];
   for (let dir = folders.shift(); dir !== undefined; dir = folders.shift()) {
     const reader = dir.createReader();
-    // readEntries 一次只给一批（Chrome 每批最多 100 项），给空数组才算读完
+    // readEntries returns batches (Chrome caps each at 100) until an empty array.
     for (let batch = await readBatch(reader); batch.length > 0; batch = await readBatch(reader)) {
       for (const entry of batch) {
         if (entry.name.startsWith(".")) continue;
@@ -153,16 +133,11 @@ const readBatch = (reader: FileSystemDirectoryReader) =>
   new Promise<FileSystemEntry[]>((resolve, reject) => reader.readEntries(resolve, reject));
 const fileOf = (entry: FileSystemFileEntry) => new Promise<File>((resolve, reject) => entry.file(resolve, reject));
 
-/** 一个文件传失败了，给用户看的话：带文件名，原因和怎么办都来自 errorText（不露英文代码）。 */
 function uploadFailure(name: string, err: unknown): ErrorNotice {
   const reason = errorText(err);
-  return new ErrorNotice({ ...reason, text: `「${name}」上传失败：${reason.text}` });
+  return new ErrorNotice({ ...reason, text: `"${name}" failed to upload: ${reason.text}` });
 }
 
-/**
- * 把文件都传上去（同时最多 UPLOAD_CLIENT_CONCURRENCY 个），按原来的顺序返回上传结果。任何一个失败整个抛错（message 是中文），
- * 抛错后不再开始新的上传，已经传上去的留在磁盘上不管。发送时才传：去掉的文件、没发出去的文件不会占磁盘。
- */
 export async function uploadFiles(files: File[], client: HubClient = localClient): Promise<Attachment[]> {
   const results: Attachment[] = new Array(files.length);
   let next = 0;
@@ -183,34 +158,19 @@ export async function uploadFiles(files: File[], client: HubClient = localClient
   return results;
 }
 
-/** 输入框上方的一条提示。 */
 export interface ComposerNotice {
   message: ErrorLike;
-  /**
-   * skipped：加文件被拒，NOTICE_AUTO_HIDE_MS 后自己消失（useNoticeAutoHide）；
-   * failed：发送失败，文字和文件都留着，提示也留到用户再动手（打字、再发、点 ×）。
-   */
   kind: "skipped" | "failed";
 }
 
-/** 一个输入框的待发状态。 */
 export interface StagedFiles {
   files: StagedFile[];
-  /** 正在上传、发送：发送键、文字框、加减文件都锁住。 */
   busy: boolean;
-  /** 给用户看的提示（加文件被拒、上传失败）：打字、发送、去掉文件、再加文件、点 × 都会清掉。 */
   notice: ComposerNotice | null;
-  /** skipped 是 readDropped 读文件夹时给的原因，和被拒的文件一起显示。 */
   add: (incoming: File[], skipped?: string[]) => void;
   remove: (key: string) => void;
-  /** 发出去之后只去掉这几个文件（提交时那一份），传的时候新加的不动。 */
   removeSent: (sent: File[]) => void;
-  /** 清掉提示；没有提示时什么也不做（不引起重渲染），所以每次打字都能调。 */
   dismissNotice: () => void;
-  /**
-   * 交给它发送的结果：没返回 Promise（只有文字，立刻发出）什么也不做；返回 Promise 就在等的时候标“发送中”，
-   * 失败把原因放进提示（文字和文件都留着）。
-   */
   track: (result: void | Promise<void>) => void;
 }
 
@@ -221,10 +181,6 @@ interface Slot {
 }
 const EMPTY_SLOT: Slot = { files: [], busy: false, notice: null };
 
-/**
- * 待发文件、提示、发送中，按 key（对话编号等）存在调用者那一层（App）：切到别的对话再切回来，待发文件还在、
- * 发送中的还是发送中（不会重复发），传完的清理也落在对的对话上。输入框组件只拿 of(key) 这一份，不认识 key 是什么。
- */
 export function useStagingStore<K extends string | number>() {
   const [slots, setSlots] = useState<Partial<Record<K, Slot>>>({});
   const slotsRef = useRef(slots);
@@ -265,12 +221,11 @@ export function useStagingStore<K extends string | number>() {
         track: (result) => {
           update(key, (s) => (s.notice === null ? s : { ...s, notice: null }));
           if (result === undefined) return;
-          // 上传、发送没结束前不自动刷新（auto-reload.ts）
           trackUpload(result);
           update(key, (s) => ({ ...s, busy: true }));
           result
             .catch((err: unknown) => {
-              const message = err instanceof ErrorNotice ? err.info : err instanceof Error ? err.message : "上传失败";
+              const message = err instanceof ErrorNotice ? err.info : err instanceof Error ? err.message : "Upload failed";
               update(key, (s) => ({ ...s, notice: { message, kind: "failed" } }));
             })
             .finally(() => update(key, (s) => ({ ...s, busy: false })));
@@ -285,10 +240,6 @@ export function useStagingStore<K extends string | number>() {
   return useMemo(() => ({ of }), [of]);
 }
 
-/**
- * 加文件被拒的提示（kind 是 skipped）过 NOTICE_AUTO_HIDE_MS 自己消失；期间来了新提示重新计时，输入框不在了就停。
- * 发送失败的提示不自己消失。
- */
 export function useNoticeAutoHide({ notice, dismissNotice }: Pick<StagedFiles, "notice" | "dismissNotice">): void {
   const dismiss = useEffectEvent(dismissNotice);
   useEffect(() => {
@@ -298,25 +249,17 @@ export function useNoticeAutoHide({ notice, dismissNotice }: Pick<StagedFiles, "
   }, [notice]);
 }
 
-/**
- * 一个对话的草稿槽：只通知订阅了这个对话的输入框重渲染，打字不会引起 App / 消息列表重渲染。
- * 文字和 /hub:worker 选的标签（pick，一条消息最多一个，没有是 null）各是一个 store：打字不通知标签，换标签不通知文字的订阅者。
- */
 export interface DraftSlot {
   store: StoreApi<string>;
   get: () => string;
   set: (value: string) => void;
-  /** 发送成功后清理：如果草稿 trim 后仍等于刚发出的文字才清空，用户在中途改过的不动。 */
   clearIfMatch: (trimmed: string) => void;
   subscribe: (listener: () => void) => () => void;
   pick: StoreApi<WorkerPick | null>;
   getPick: () => WorkerPick | null;
   setPick: (pick: WorkerPick | null) => void;
-  /** 发送成功后清理：标签还是发出去的那一个才清掉，中途换过的不动。 */
   clearPickIfMatch: (sent: WorkerPick | null) => void;
-  /** 每次二次 Esc 回退递增一次，通知输入框聚焦并把光标挪到末尾。 */
   focusRev: StoreApi<number>;
-  /** 二次 Esc 回退：恢复文字与 workerPick（已有新草稿时换行拼接不静默覆盖），并聚焦光标到末尾。 */
   restore: (text: string, workerPick: WorkerPick | null) => void;
 }
 
@@ -329,7 +272,6 @@ export function useDraftStore<K extends string | number>() {
     for (const [k, prev] of slotsRef.current) {
       if (k !== key) prev.gc();
     }
-    // 守护进程热重启后自动刷新前存下的草稿（auto-reload.ts）：建槽时认领回来
     const restored = takeRestoredDraft(String(key));
     const store = createStore<string>(() => restored?.text ?? "");
     const pick = createStore<WorkerPick | null>(() => restored?.pick ?? null);
@@ -393,7 +335,6 @@ export function useDraftStore<K extends string | number>() {
     return slot;
   }, []);
 
-  // 自动刷新、关页面前把所有草稿槽交给 auto-reload.ts 存进 sessionStorage
   useEffect(
     () =>
       registerDraftSource(() =>
@@ -402,7 +343,6 @@ export function useDraftStore<K extends string | number>() {
     [],
   );
 
-  /** 对话删除后清掉它的草稿和标签。 */
   const retain = useCallback((keep: (key: K) => boolean) => {
     for (const key of slotsRef.current.keys()) {
       if (!keep(key)) slotsRef.current.delete(key);

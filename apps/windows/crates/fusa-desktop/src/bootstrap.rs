@@ -12,7 +12,6 @@ use serde::{Deserialize, Serialize};
 
 const DEFAULT_GIT_WINDOWS_INSTALL_CMD: &str = "winget install --id Git.Git -e --source winget";
 
-/// 来自统一厂商注册表（`src/daemon/desktop-preflight.ts`）的单家 CLI 探测元数据（供 `--self-test` 冒烟校验使用）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VendorGuideEntry {
@@ -26,7 +25,6 @@ pub struct VendorGuideEntry {
     pub binary_path: Option<String>,
 }
 
-/// 原生前置环境快照（`git` + 动态厂商清单）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopPreflightSummary {
@@ -48,12 +46,9 @@ impl Default for DesktopPreflightSummary {
     }
 }
 
-/// 发往内嵌本地引导页（`ui/app.js`）的无敏感信息视图状态。
-/// 仅承载守护进程启动中、退避重连、停止与故障恢复；厂商一键安装与界面内直接登录统一由 Web 主界面 `Settings → Providers` 承载。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BootstrapViewModel {
-    /// `"working"` | `"ready"` | `"error"` | `"muted"`
     pub tone: String,
     pub title: String,
     pub detail: String,
@@ -75,7 +70,6 @@ impl Default for BootstrapViewModel {
     }
 }
 
-/// 根据监管快照生成本地启动视图状态（所有状态词与计时单位使用简洁英文，遵守 `docs/ui-standard.md`）。
 pub fn derive_view_from_supervisor(snap: &SupervisorSnapshot) -> BootstrapViewModel {
     match &snap.state {
         SupervisorState::Idle => BootstrapViewModel::default(),
@@ -161,13 +155,12 @@ pub fn derive_view_from_supervisor(snap: &SupervisorSnapshot) -> BootstrapViewMo
     }
 }
 
-/// 通过随包 `node.exe` 执行 `src/daemon/desktop-preflight.ts`，按最新注册表 `PATH` 动态读取 `git` 与厂商 CLI 状态。
 pub fn run_desktop_preflight_probe(runtime_cfg: &NativeRuntimeConfig) -> Result<DesktopPreflightSummary, String> {
     let script = runtime_cfg
         .daemon_root_dir
         .join("src/daemon/desktop-preflight.ts");
     if !script.is_file() {
-        return Err(format!("缺少前置检查脚本：{}", script.display()));
+        return Err(format!("Missing preflight script: {}", script.display()));
     }
     let mut prepend = vec![runtime_cfg.win_helpers_dir.clone()];
     if let Some(node_dir) = runtime_cfg.node_exe_path.parent() {
@@ -193,20 +186,19 @@ pub fn run_desktop_preflight_probe(runtime_cfg: &NativeRuntimeConfig) -> Result<
 
     let out = cmd
         .output()
-        .map_err(|e| format!("执行 desktop-preflight.ts 失败：{e}"))?;
+        .map_err(|e| format!("Failed to run desktop-preflight.ts: {e}"))?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         return Err(format!(
-            "desktop-preflight.ts 非零退出（{:?}）：{}",
+            "desktop-preflight.ts exited with {:?}: {}",
             out.status.code(),
             stderr.trim()
         ));
     }
     serde_json::from_slice::<DesktopPreflightSummary>(&out.stdout)
-        .map_err(|e| format!("解析 desktop-preflight.ts JSON 失败：{e}"))
+        .map_err(|e| format!("Failed to parse desktop-preflight.ts JSON: {e}"))
 }
 
-/// 桌面端应用全局协调器（连接 `DaemonSupervisor`、本地启动页与托盘；就绪后直接进入 Web 主界面）。
 pub struct DesktopController {
     pub app_data_dir: PathBuf,
     pub contract: DesktopContract,

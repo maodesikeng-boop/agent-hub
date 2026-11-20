@@ -1,5 +1,3 @@
-// 消息流里的每一种东西（docs/ui-standard.md 第 17 条）：一轮回复（一个头像、操作合成一行 Worked for、文字、复制和时间）、
-// 用户的气泡、Worker 的发言、很淡的系统行、到点的定时任务、消息状态、空对话。怎么分组见 selectors.ts 的 groupMessages。
 import { useMutation } from "@tanstack/react-query";
 import { Archive, CalendarClock, Check, ChevronRight, CirclePlay, CircleX, Clock, Copy, FolderMinus, FolderPlus, Info, Loader2, MessageSquare, PencilLine, RefreshCw, UserPen, type Icon } from "../ui/icons.ts";
 import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -53,37 +51,23 @@ import { UserBlockerCard } from "./UserBlockerCard.tsx";
 
 export interface AgentIdentity {
   name: string;
-  /** 头像：项目经理的形象；Worker（Piece）用所属项目经理的形象，画成同色的便签小灵。 */
   look: SlimeLook;
-  /** Worker：所属项目经理颜色的便签小灵头像。 */
   neutral?: boolean;
 }
 
-/** 消息上能点的操作：重试服务端标了失败的用户消息、撤销项目经理对自己性格设定的修改、点开 Worker。 */
 export interface MessageActions {
-  /** 点项目经理会话里 Worker 的发言、派出 / 收工那一行：打开这个 Worker 自己的对话。 */
   onOpenWorker: (workerConversationId: ConversationId) => void;
-  /** 点过“重试”的消息的状态。 */
   retry: Record<MessageId, RetryPhase | undefined>;
   onRetryMessage: (messageId: MessageId) => void;
-  /** 撤销失败就 reject（ApiError，409 是“不是最近一次”）。 */
   onRevertPersona: (changeId: PersonaChangeId) => Promise<void>;
-  /** 这个对话现在用的厂商（出错时的那句话按它说哪家，不从原文猜）；不知道是 undefined。 */
   vendorOf?: (conversationId: ConversationId) => AgentVendor | undefined;
-  /** 在 `hub ask` 提问卡上点选项或填写：只回答这一张卡（POST /api/asks/:id/answer）；失败 reject，卡上显示原因。没有这个就不能答（已归档）。 */
   onAnswerAsk?: (messageId: MessageId, body: { clientId: string; choice: string | null; note?: string }) => Promise<void>;
 }
 
 export const BUBBLE = "w-fit max-w-full rounded-[22px] px-4 py-2.5 text-body leading-relaxed";
-/** 名字、Worked for、可点开的系统行：13.5px 灰。 */
 export const SECONDARY = "text-minor text-muted-foreground";
-/** 文字按钮：没有底色和胶囊，悬停变前景色，键盘聚焦有中性的圈。 */
 export const TEXT_BUTTON = "touch-target cursor-pointer rounded-full transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50";
 
-/**
- * 头像（26px）+ 名字。头像旁不放 agent 的状态；只有 Worker 汇报在头像右下角放一个状态色点。Router 时间流可换自定义头像、点击跳去会话或附带项目与设备信息。
- * working：这一轮正在进行，头像和对话顶栏同一拍蹦（docs/ui-standard.md 第 17 条）；历史轮不传。
- */
 export function AgentHead({
   identity,
   dot,
@@ -124,10 +108,6 @@ export function AgentHead({
   );
 }
 
-/**
- * Worker 回复末尾给项目经理的汇报块（=== 汇报 === … === 汇报结束 ===）：去掉两行标记，每一项一行（Markdown 会把相邻的行并成一段）。
- * 只改显示，复制拿的还是原文。
- */
 export function displayText(text: string): string {
   const end = text.lastIndexOf(REPORT_END);
   const start = end === -1 ? -1 : text.lastIndexOf(REPORT_START, end);
@@ -141,7 +121,6 @@ export function displayText(text: string): string {
   return `${text.slice(0, start).trimEnd()}\n\n---\n\n${items.join("\n")}\n\n${text.slice(end + REPORT_END.length).trim()}`.trim();
 }
 
-/** `hub ask` 在对话里的那张卡：有选项时是可点的 A/B/C/D 行，没有时直接展开补充框（docs/ui-standard.md 第 17 条）。 */
 function AskCard({
   card,
   files,
@@ -241,7 +220,6 @@ function AskCard({
             );
           })}
           {answerNote !== undefined && (
-            // 底色比选中的选项浅一档：两行不会看成选了两个
             <div data-ask-answer className="flex min-h-11 w-full items-start gap-3 rounded-xl bg-sidebar px-3 py-2.5 leading-6">
               <span className="flex size-6 shrink-0 items-center justify-center rounded-xl border border-border bg-background text-muted-foreground">
                 <PencilLine className="size-pixel-sm" aria-hidden="true" />
@@ -299,7 +277,6 @@ function AskCard({
 
 const NO_DELIVERABLES: readonly Deliverable[] = [];
 
-/** agent 说的一段文字（Markdown）。hub ask 问你的不另挂“等你确定”标签：右栏已经列着，点过去会高亮这一条。 */
 export const AgentText = memo(function AgentText({
   message,
   highlighted,
@@ -309,9 +286,7 @@ export const AgentText = memo(function AgentText({
   highlighted: boolean;
   onAnswerAsk?: MessageActions["onAnswerAsk"];
 }) {
-  // 提问卡下面列的文件（hub ask --file、检查点卡带的步骤交付物）
   const deliverables = useMemo(() => askOf(message)?.deliverables ?? NO_DELIVERABLES, [message.sender, message.meta]);
-  // agent 发来的文件：meta 没变就是同一个数组，Markdown 不用重建插件。正文里写了交付物的同一个链接，也换成能点开的文件
   const files = useMemo(() => {
     const own = sentFilesOf(message);
     if (deliverables.length === 0) return own;
@@ -347,7 +322,6 @@ export const AgentText = memo(function AgentText({
   );
 });
 
-/** Piece 的一行（派出、收工、你对它说的）：标题、英文状态词、摘要用间距隔开，整行点开它的对话。 */
 function PieceLineButton({ line, onOpen }: { line: WorkerMessageMeta; onOpen: MessageActions["onOpenWorker"] }) {
   const { title, state, detail } = pieceLineParts(line);
   return (
@@ -364,7 +338,6 @@ function PieceLineButton({ line, onOpen }: { line: WorkerMessageMeta; onOpen: Me
   );
 }
 
-/** Worked for 里的一步：工具原样（等宽）、派出 / 收工的 Worker（点开它的对话）、建删的定时任务。 */
 function WorkStep({ message, onOpenWorker }: { message: Message; onOpenWorker: MessageActions["onOpenWorker"] }) {
   const line = workerEventOf(message);
   if (line) {
@@ -378,9 +351,6 @@ function WorkStep({ message, onOpenWorker }: { message: Message; onOpenWorker: M
   return <li className="font-mono [overflow-wrap:anywhere]">{message.text}</li>;
 }
 
-/**
- * 一轮的操作合成的那一行：跑完是“Worked for 23s ›”，正在跑是状态（AgentStatus）。有操作才能点开看每一步。
- */
 function WorkLine({ label, work, onOpenWorker }: { label: React.ReactNode; work: Message[]; onOpenWorker: MessageActions["onOpenWorker"] }) {
   const [open, setOpen] = useState(false);
   if (work.length === 0) {
@@ -407,7 +377,6 @@ function WorkLine({ label, work, onOpenWorker }: { label: React.ReactNode; work:
   );
 }
 
-/** 复制按钮：点了换成勾，过一会儿变回来。 */
 export function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
@@ -443,10 +412,8 @@ function sameIdentity(a: AgentIdentity, b: AgentIdentity): boolean {
   return a === b || (a.name === b.name && a.look === b.look && a.neutral === b.neutral);
 }
 
-/** 上一次算出的撤销清单：内容一样就还给这一份，来一条新消息不会让每一轮的 TurnView、MessageBubble（比的是引用）都重画。 */
 let lastReverted: ReadonlySet<PersonaChangeId> = EMPTY_REVERTED;
 
-/** 对话里已经被后续修改（revertOf 指向它）撤销过的性格设定修改编号。内容和上次一样时返回上次那个 Set。 */
 export function revertedChangeIds(messages: readonly Message[]): ReadonlySet<PersonaChangeId> {
   let ids: Set<PersonaChangeId> | null = null;
   for (const m of messages) {
@@ -462,10 +429,6 @@ export function revertedChangeIds(messages: readonly Message[]): ReadonlySet<Per
   return ids;
 }
 
-/**
- * agent 的一轮回复：开头一次头像 + 名字；操作合成一行；文字和夹在中间的系统行按顺序排；跑完最下面是复制和时间。
- * status：这一轮还在跑时的状态（AgentStatus），那一行挪到最下面；没在跑是 undefined。
- */
 export const TurnView = memo(
   function TurnView({
     turn,
@@ -534,7 +497,6 @@ export const TurnView = memo(
 
 type RevertPhase = "idle" | "busy" | "done" | "conflict" | "error";
 
-/** 撤销按钮：只有项目经理改了性格设定的系统消息有。只有最近一次能撤销，别的服务端回 409。 */
 function RevertButton({
   changeId,
   reverted = false,
@@ -569,11 +531,10 @@ function RevertButton({
   );
 }
 
-/** 到点的定时任务：一行系统样子的标题（时钟 + “定时任务：名字（原定 09:00）”），点开看任务说明。 */
 function ScheduleRun({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
   const match = /^【([^】]*)】\s*([\s\S]*)$/.exec(text);
-  const title = match?.[1] ?? "定时任务";
+  const title = match?.[1] ?? "Scheduled task";
   const body = (match?.[2] ?? text).trim();
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="mt-6 flex flex-col items-start" data-side="left" data-event="schedule.run">
@@ -604,7 +565,6 @@ const WORKER_NOTICE_ICONS: Partial<Record<WorkerMessageMeta["event"], Icon>> = {
   user_message: MessageSquare,
 };
 
-/** 很淡的一行：靠左、12px 灰、前面一个小图标，没有底色、不居中。出错的图标是红的。 */
 function NoticeLine({
   icon: Icon,
   danger = false,
@@ -626,10 +586,6 @@ function NoticeLine({
   );
 }
 
-/**
- * 换新会话（用户点的或自动换的，ledger/handover.ts）：很淡的一行分隔线，“图标 + Handed off to a new session ›”后面一条细线，
- * 点开看交接全文（Markdown，左边一条竖线，和定时任务的说明一样）。写交接的来往本身不显示。
- */
 function SessionRenewed({ text, handover }: { text: string; handover: string }) {
   const [open, setOpen] = useState(false);
   const body = handover.trim();
@@ -652,7 +608,6 @@ function SessionRenewed({ text, handover }: { text: string; handover: string }) 
   );
 }
 
-/** 系统消息：到点的定时任务、换新会话是可点开的一行，别的都是很淡的一行（去掉发给 agent 时加的【系统】，不显示投递状态）。 */
 function SystemNotice({
   message,
   actions,
@@ -672,14 +627,11 @@ function SystemNotice({
     case "session.renewed":
       return <SessionRenewed text={text} handover={message.text} />;
     case "schedule.failed": {
-      // “定时任务没跑成：名字：原因”：原因写成人话，原文放 title
-      const prefix = `定时任务没跑成：${event.name}：`;
-      const reason = text.startsWith(prefix)
-        ? describeFailure(text.slice(prefix.length), { unknown: "raw", vendor: actions.vendorOf?.(message.conversationId) }).text
-        : null;
+      const reason =
+        event.rawReason === undefined ? null : describeFailure(event.rawReason, { unknown: "raw", vendor: actions.vendorOf?.(message.conversationId) }).text;
       return (
         <NoticeLine icon={CircleX} danger title={event.rawReason ?? text} inTurn={inTurn}>
-          <span>{reason === null ? text : `定时任务「${event.name}」没跑成：${reason}`}</span>
+          <span>{reason === null ? text : `Scheduled task "${event.name}" failed: ${reason}`}</span>
         </NoticeLine>
       );
     }
@@ -709,14 +661,8 @@ function SystemNotice({
   }
 }
 
-/** 状态色点（styles.css 的变量），在头像右下角；中性的没有点。 */
 const TONE_DOT: Record<Exclude<WorkerTone, "neutral">, string> = { success: "bg-success", warn: "bg-caution", danger: "bg-danger" };
 
-/**
- * Worker 的发言（项目经理对话里的汇报、这一轮没做完、建 worktree 失败）：头像 + 标题在上面，摘要在靠左的中性浅灰气泡里。
- * 状态是头像右下角的一个小色点（workerStatusOf），字放在 title 和 aria-label。整个气泡可点，打开 Worker 的完整对话；
- * 给项目经理的汇报原文不显示。
- */
 function WorkerSpeech({
   line,
   look,
@@ -740,7 +686,7 @@ function WorkerSpeech({
         type="button"
         data-bubble
         title={label ?? undefined}
-        aria-label={label ? `${line.title}，${label}：${text}` : undefined}
+        aria-label={label ? `${line.title}, ${label}: ${text}` : undefined}
         className={cn(
           BUBBLE,
           "cursor-pointer bg-bubble-agent text-left transition-colors outline-none hover:bg-[color-mix(in_srgb,var(--bubble-agent),var(--foreground)_5%)] focus-visible:ring-2 focus-visible:ring-ring/50 [overflow-wrap:anywhere]",
@@ -753,11 +699,9 @@ function WorkerSpeech({
   );
 }
 
-/** 项目经理对话里 Worker 的那些行：汇报是 Worker 的发言，派出、收工、你对它说的是很淡的一行（点开 Worker）。 */
 function WorkerItem({ line, look, actions }: { line: WorkerMessageMeta; look: SlimeLook; actions: MessageActions }) {
   const onOpen = actions.onOpenWorker;
   if (line.event === "report" || line.event === "turn_failed" || line.event === "worktree_failed") {
-    // Worker 的失败原因按 Worker 自己的厂商说（可能和项目经理不是同一家）
     return <WorkerSpeech line={line} look={look} onOpen={onOpen} vendor={actions.vendorOf?.(line.workerConversationId)} />;
   }
   return (
@@ -767,10 +711,6 @@ function WorkerItem({ line, look, actions }: { line: WorkerMessageMeta; look: Sl
   );
 }
 
-/**
- * 单独显示的一条（不在一轮回复里的）：用户的气泡、Worker 对话里项目经理的话、Worker 的发言、系统行。
- * head：项目经理的话要不要带头像（上一条也是它说的就不带）。
- */
 export const MessageBubble = memo(
   function MessageBubble({
     message,
@@ -791,7 +731,6 @@ export const MessageBubble = memo(
     if (workerLine) return <WorkerItem line={workerLine} look={identity.look} actions={actions} />;
     if (message.sender === "system") return <SystemNotice message={message} actions={actions} revertedChanges={revertedChanges} />;
     if (message.sender === "user") return <UserBubble message={message} actions={actions} />;
-    // Worker 对话里项目经理的话（任务、打回）：头像 + 名字 + 正文，和项目经理对话里它自己说话一个样子
     return (
       <div className={cn("flex flex-col", head ? "mt-6 first:mt-2" : "mt-2.5")} data-side="left" data-head={head}>
         {head && <AgentHead identity={identity} />}
@@ -810,15 +749,9 @@ export const MessageBubble = memo(
     prev.revertedChanges === next.revertedChanges,
 );
 
-/** 任务说明比收起的高度多出这么多行才收：只多一两行时 Show more 自己就占一行，收了没省地方。 */
 const BRIEF_SLACK_LINES = 2;
-/** 读不到 styles.css 的 --brief-lines 时（jsdom）按 8 行收。 */
 const BRIEF_FALLBACK_LINES = 8;
 
-/**
- * 项目经理交给 Worker 的话（开工通知、接手记录、打回意见）常常几十行，还带着标题：默认只露开头几行、底部渐隐，
- * `Show more` 看全文，Worker 干出来的结果不会被挤到屏幕外。行数在 styles.css 的 `--brief-lines`；标题在里面和正文一样大（`[data-brief]`）。
- */
 function LongBrief({ children }: { children: React.ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   const [expanded, setExpanded] = useState(false);
@@ -872,14 +805,12 @@ function UserBubble({ message, actions }: { message: Message; actions: MessageAc
         }
       >
         {workerPick !== null && !rewound && <WorkerPickTag pick={workerPick} className={PICK_TAG} />}
-        {/* 只发文件没写字、或文字已按二次 Esc 回退的消息没有文字气泡 */}
         {!rewound && (message.text !== "" || attachments.length === 0) && (
           <div
             data-bubble
             className={cn(
               BUBBLE,
               "max-w-[80%] bg-bubble-me whitespace-pre-wrap text-bubble-me-foreground [overflow-wrap:anywhere]",
-              // 已取消：agent 没看到过，气泡变淡一眼看得出；字照样能选中复制，用户想再发自己复制
               message.status === "cancelled" && "opacity-60",
             )}
           >
@@ -902,38 +833,28 @@ function UserBubble({ message, actions }: { message: Message; actions: MessageAc
           disabled={phase === "retrying"}
           onClick={() => actions.onRetryMessage(message.id)}
         >
-          {phase === "retrying" ? "重试中" : phase === "error" ? "重试失败，再试" : "处理失败，重试"}
+          {phase === "retrying" ? "Retrying…" : phase === "error" ? "Retry failed. Try again" : "Failed. Retry"}
         </button>
       )}
     </article>
   );
 }
 
-/** 用户气泡上方 /hub:worker 的只读标签：和气泡隔 6px（同附件和气泡的间距），靠右。 */
 const PICK_TAG = "mb-1.5 w-fit";
 
-/**
- * 用户消息的气泡 + 附件；没发出去时左边一个红色感叹号（照微信），垂直居中。
- * 排队、已停止、已取消这些都不写字（docs/ui-standard.md 第 17 条），只有“没发出去”这一种标记。
- */
 export function SentBody({ unsent, children }: { unsent: React.ReactNode; children: React.ReactNode }) {
   if (!unsent) return children;
   return (
     <div className="flex w-full items-center justify-end gap-2">
       {unsent}
-      {/* 感叹号紧挨着气泡：这一列宽度跟内容走，最宽是原来气泡的 80%，里面的气泡不再另算 80% */}
       <div className="flex max-w-[80%] min-w-0 flex-col items-end [&>[data-bubble]]:max-w-full">{children}</div>
     </div>
   );
 }
 
 const UNSENT_DOT = "flex size-5 shrink-0 items-center justify-center rounded-full bg-danger text-xs leading-none font-semibold text-white";
-const UNSENT_LABEL = "没发出去";
+const UNSENT_LABEL = "Not sent";
 
-/**
- * 没发出去的红色感叹号（照微信）：能重发的是按钮，点了重发；重发也没用的（被拦、文件没了）只是标记。
- * 原因（“网络断了，稍后重试”“文件已不在，请重新添加”）不另起一行，放在 title 和读屏名字里；原始错误放 title 第二行。
- */
 export function UnsentMark({
   reason,
   raw,
@@ -947,7 +868,7 @@ export function UnsentMark({
   retrying?: boolean;
   retryFailed?: boolean;
 }) {
-  const detail = [retryFailed ? "重发失败" : null, reason].filter(Boolean).join("，");
+  const detail = [retryFailed ? "Resend failed" : null, reason].filter(Boolean).join("; ");
   const rawLine = raw && raw !== reason ? `\n${raw}` : "";
   const mark = (
     <span className={UNSENT_DOT} aria-hidden="true">
@@ -955,19 +876,19 @@ export function UnsentMark({
     </span>
   );
   if (!onRetry) {
-    const label = detail ? `${UNSENT_LABEL}：${detail}` : UNSENT_LABEL;
+    const label = detail ? `${UNSENT_LABEL}: ${detail}` : UNSENT_LABEL;
     return (
       <span role="img" aria-label={label} title={label + rawLine} data-unsent className="flex shrink-0">
         {mark}
       </span>
     );
   }
-  const label = `${UNSENT_LABEL}，点击重发`;
+  const label = `${UNSENT_LABEL}. Click to resend`;
   return (
     <button
       type="button"
       aria-label={label}
-      title={(detail ? `${UNSENT_LABEL}：${detail}，点击重发` : label) + rawLine}
+      title={(detail ? `${UNSENT_LABEL}: ${detail}. Click to resend` : label) + rawLine}
       aria-busy={retrying || undefined}
       disabled={retrying}
       data-unsent
@@ -979,13 +900,12 @@ export function UnsentMark({
   );
 }
 
-/** 网页先显示出来、服务端还没确认的用户消息：发送中不写字；没发出去左边红色感叹号。 */
 export function PendingBubble({ pending, onRetry }: { pending: PendingMessage; onRetry: (clientId: string) => void }) {
   const failed = pending.phase === "failed";
   const filesGone = failed && pending.failure === "attachments_missing";
   const reason = failed && pending.failure === "rejected" ? pending.reason : undefined;
   const noRetry = filesGone || reason !== undefined;
-  const reasonText = filesGone ? "文件已不在，请重新添加" : reason !== undefined ? errorLine(reason) : undefined;
+  const reasonText = filesGone ? "Files are gone. Add them again" : reason !== undefined ? errorLine(reason) : undefined;
   const reasonRaw = reason !== undefined ? errorTitle(reason) : undefined;
   return (
     <article className="mt-6 flex flex-col items-end first:mt-2" data-side="right" data-status={failed ? "send_failed" : "queued"}>
@@ -1002,7 +922,6 @@ export function PendingBubble({ pending, onRetry }: { pending: PendingMessage; o
   );
 }
 
-/** 空对话：中间是 agent 的头像（120px，内联的像素 SVG，放多大都不糊）、名字和“还没有消息”。 */
 export function EmptyConversation({ identity }: { identity?: AgentIdentity }) {
   return (
     <div className="m-auto flex flex-col items-center gap-3 py-10 text-center" data-empty>

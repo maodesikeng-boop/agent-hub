@@ -17,10 +17,6 @@ import { useStop } from "../useStop.ts";
 import { hasAgentStatus, useAgentStatusNode } from "./AgentStatus.tsx";
 import { PieceMeta } from "./RightRail.tsx";
 
-/**
- * 点开项目经理会话里的 Worker 那一行看到的：这个 Worker 自己的对话。用户可以直接对它说话，输入框、草稿、乐观显示、
- * 重试和项目经理页面（Conversation）是同一套。收工了（selectors.ts 的 workerPhaseOf）不显示输入框，还在准备时输入框不可用。
- */
 export function WorkerConversation({
   title,
   readonly,
@@ -51,26 +47,18 @@ export function WorkerConversation({
   title: string;
   readonly: boolean;
   phase: WorkerPhase;
-  /** 派它的项目经理：返回按钮上的名字，也是 Worker 对话里项目经理那些话（任务、打回）的署名。 */
   pm: { name: string; look: SlimeLook };
-  /** 右栏里这个 Piece 的那一项：顶栏右边显示它的模型、思考程度、对话长度；找不到不显示。 */
   meta?: WorkerEntry;
-  /** 找不到（还没同步过来）是 undefined。 */
   view: ConversationView | undefined;
-  /** view 还没有、正在按需拉（不在快照里的早收工 Worker）：显示加载中，不说找不到。 */
   loading?: boolean;
   pending: PendingMessage[];
   session: SessionState | null;
   older: OlderState | undefined;
   draft: DraftSlot;
-  /** 还没发的文件（和项目经理页面同一套，见 upload.ts 的 useStagingStore）。 */
   staging: StagedFiles;
-  /** 标题栏最左边：窄屏时拉出左栏的按钮。 */
   leading?: React.ReactNode;
   mobile?: boolean;
-  /** 标题栏右边：右栏开关。 */
   toolbar: React.ReactNode;
-  /** 太窄时放在顶栏下面的右栏。 */
   top: React.ReactNode;
   notices: React.ReactNode;
   onBack: () => void;
@@ -80,7 +68,6 @@ export function WorkerConversation({
   onRewind?: (conversationId: ConversationId, stopping: boolean, draftText: string) => { text: string; workerPick: WorkerPick | null } | null;
   onLoadOlder: (conversationId: ConversationId) => void;
   actions: MessageActions;
-  /** 对话所在的设备连不上时输入框怎么办（见 Composer 的 link）。 */
   link?: ComposerLink | null;
 }) {
   const id = view?.conversation.id;
@@ -102,7 +89,6 @@ export function WorkerConversation({
   const client = useClient();
   const source = useMemo(() => (id === undefined ? undefined : conversationSource(id, client.url)), [id, client]);
 
-  // Worker 头像用所属项目经理对应水果切下的一瓣（docs/ui-standard.md 第 17 条）
   const identity = useMemo(() => ({ name: title, look: pm.look, neutral: true }), [title, pm.look]);
   const pmIdentity = useMemo(() => ({ name: pm.name, look: pm.look }), [pm.name, pm.look]);
   const agentOf = useCallback((message: Message) => (message.sender === "pm" ? pmIdentity : identity), [pmIdentity, identity]);
@@ -160,7 +146,6 @@ export function WorkerConversation({
             </div>
           )}
           <div className="chat-column pointer-events-none relative z-10 -mt-6.5 w-full shrink-0 composer-dock *:pointer-events-auto empty:hidden">
-            {/* 收工了不能再发：输入框的位置是一条状态（同已归档对话的状态条） */}
             {phase === "ended" && view.conversation.purgedAt === undefined && (
               <div role="status" className="rounded-2xl bg-sidebar px-4 py-3 text-body">
                 Completed

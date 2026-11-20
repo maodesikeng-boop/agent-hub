@@ -8,15 +8,10 @@ import { useMessageEnter, type EnterItem } from "../useMessageEnter.ts";
 import { useStickToBottom } from "../useStickToBottom.ts";
 import { EmptyConversation, MessageBubble, PendingBubble, TurnView, revertedChangeIds, type AgentIdentity, type MessageActions } from "./Messages.tsx";
 
-/** 跳到某条消息后，高亮这么久。 */
 const HIGHLIGHT_MS = 2_000;
 
 const EMPTY_TURN = { work: [], parts: [], startedAt: 0, endedAt: 0 };
 
-/**
- * 消息流（docs/ui-standard.md 第 17 条）：agent 的一轮回复一个头像，操作合成一行；打开、刷新、图片加载完、内容变高时，
- * 原本在底部的继续贴底（ResizeObserver），往上翻了就不拉回去。
- */
 export const MessageList = memo(function MessageList({
   messages,
   pending,
@@ -34,25 +29,16 @@ export const MessageList = memo(function MessageList({
 }: {
   messages: Message[];
   pending: PendingMessage[];
-  /** 一条消息署谁的名字（一轮回复按它的第一条）。 */
   agentOf: (message: Message) => AgentIdentity;
   hasMore: boolean;
   older: OlderState | undefined;
   onLoadOlder: () => void;
   onRetry: (clientId: string) => void;
   actions: MessageActions;
-  /** 要跳到并高亮的消息；n 变了就再跳一次。 */
   focus?: { id: MessageId; n: number } | null;
-  /** 这次跳转用完了，请清掉 focus。 */
   onFocusDone?: () => void;
-  /**
-   * agent 在忙时它在做什么（AgentStatus），没在忙是 null。最后一项是 agent 的一轮回复时显示在这一轮最下面；
-   * 不是（这一轮还没出东西）时在列表底部单独出一轮“头像 名字 + 状态”，署名用 statusAgent。
-   */
   status?: React.ReactNode;
-  /** agent 是谁：状态那一轮、空对话用。 */
   statusAgent?: AgentIdentity;
-  /** 当前正在流式生成的单段回复文字；段完成入库时置空。 */
   streamingText?: string | null;
 }) {
   const [highlightId, setHighlightId] = useState<MessageId | null>(null);
@@ -60,7 +46,6 @@ export const MessageList = memo(function MessageList({
   const items = useMemo(() => groupMessages(messages), [messages]);
   const revertedChanges = useMemo(() => revertedChangeIds(messages), [messages]);
   const busy = status != null || Boolean(streamingText);
-  // 只看显示出来的：写交接的来往、静默唤醒触发消息、已无附件回退的用户消息（不显示）进来不算新消息
   const lastKey = `${messages.findLast((m) => !isHandoverTraffic(m) && !isSilentTriggerMessage(m) && !(isRewoundMessage(m) && attachmentsOf(m).length === 0))?.id ?? 0}:${pending.length}:${busy}`;
   const firstId = messages[0]?.id ?? 0;
 
@@ -72,7 +57,6 @@ export const MessageList = memo(function MessageList({
     onLoadOlder,
   });
 
-  // 点了右栏里的某个提问、果皮轨里等你拍板的步骤：平滑滚到那条消息（减弱动效时直接跳），高亮一会儿。跳一次就用掉（通知 App 清掉），重新挂载时不会再跳
   useEffect(() => {
     if (!focus) return;
     const reduced = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -86,20 +70,17 @@ export const MessageList = memo(function MessageList({
     return () => clearTimeout(timer);
   }, [highlightId]);
 
-  // 初始快照只带 hasMore、没带消息的历史对话（如已收工的 Worker）：点开时自动拉取最新一页。
   useEffect(() => {
     if (messages.length === 0 && hasMore && older === undefined) {
       onLoadOlder();
     }
   }, [messages.length, hasMore, older, onLoadOlder]);
 
-  /** 状态挂在最后一轮回复上；最后一项不是 agent 的回复（用户消息、Worker 的汇报、系统行、待发的）就在底部单独出一轮。 */
   const lastItem = items.at(-1);
   const rideOnTurn = busy && pending.length === 0 && lastItem?.kind === "turn";
   const typing = busy && !rideOnTurn && statusAgent !== undefined;
   const empty = items.length === 0 && pending.length === 0 && !busy && !hasMore;
 
-  // 对话打开之后新来的消息淡入一次（docs/ui-standard.md 第 14 条）：只看末尾几项，和历史有多长无关
   const enterItemAt = (index: number): EnterItem => {
     if (index >= items.length) {
       const p = pending[index - items.length]!;
@@ -113,7 +94,6 @@ export const MessageList = memo(function MessageList({
   return (
     <div className="relative flex h-full flex-col">
       <div className="messages messages-fade min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain" ref={ref} role="log" aria-label="Messages" onScroll={onScroll}>
-        {/* 上内边距和 .messages-fade 的渐隐带一样高（2rem）：没往上翻时第一条不淡 */}
         <div className="flex min-h-full flex-col pt-8 pb-12" ref={contentRef}>
           {hasMore && (
             <button
@@ -146,7 +126,6 @@ export const MessageList = memo(function MessageList({
               );
             }
             const { message } = item;
-            // Worker 对话里项目经理连说几句：只有第一句带头像
             const previous = items[index - 1];
             const head = !(previous?.kind === "message" && previous.message.sender === message.sender);
             return (
@@ -167,7 +146,6 @@ export const MessageList = memo(function MessageList({
           {typing && statusAgent && <TurnView turn={EMPTY_TURN} identity={statusAgent} status={status} streamingText={streamingText} actions={actions} />}
         </div>
       </div>
-      {/* 往上翻了：“回到底部”浮在输入框上方一点、消息列水平正中（照 t3code 的 Scroll to end）；消息区高度不变，文字照常滚动。回到底部就收起，贴底接着贴 */}
       {away && (
         <div className="messages pointer-events-none absolute inset-x-0 bottom-9 flex justify-center" data-back-to-bottom>
           <Button variant="secondary" size="icon-sm" className="pointer-events-auto" aria-label="Scroll to bottom" title="Scroll to bottom" onClick={scrollToBottom}>

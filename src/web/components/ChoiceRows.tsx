@@ -9,7 +9,6 @@ export interface ChoiceOption<T extends string> {
   detail?: ReactNode;
 }
 
-/** 多选一的标记（docs/ui-standard.md 第 9 条）：20px 的圆，没选中是灰边空心，选中是主色实心里一个白色粗勾。 */
 export function RadioMark({ checked }: { checked: boolean }) {
   return (
     <span
@@ -24,12 +23,6 @@ export function RadioMark({ checked }: { checked: boolean }) {
   );
 }
 
-/**
- * 分组框内的通用单选勾选列表（泛化自 ModeRows）：
- * - 带 detail 说明行用 py-3（项目经理模式等）；
- * - 无 detail 纯单行用 min-h-12 px-4 py-2.5（手机界面大小档位等）；
- * 右侧统一 20px RadioMark，整行可点、点了即存。
- */
 export function ChoiceRows<T extends string>({
   value,
   options,

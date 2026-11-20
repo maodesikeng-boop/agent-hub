@@ -1,6 +1,3 @@
-// 手机外壳的全局设置（docs/mobile-settings-design.md 第 2 节）：整屏二级路由钻取，#/settings 一级主页（Inset Grouped 状态总览）→ #/settings/<section> 聚焦子页。
-// 一级主页 6～7 行摘要全从内存、localStorage 与 react-query 已有缓存同步读，打开时 0 次 HTTP 请求；进子页时一级主页用 <Activity hidden> 保活（滚动位置不丢）。
-// 桌面外壳不经过这里（Sidebar 打开 SettingsDialog）；两边的状态与接口都来自 settings-model.ts。
 import { Activity, memo, type ReactNode } from "react";
 import { ArrowLeftRight, Bell, Blocks, Loader2, Monitor, QrCode, Smartphone, Type } from "../../ui/icons.ts";
 import { SettingsGroup } from "../../components/SettingsList.tsx";
@@ -27,17 +24,12 @@ import { SignInPage } from "./SignInPage.tsx";
 import { VendorSyncFooter, VendorSyncPage, type VendorSync } from "./VendorSyncPage.tsx";
 
 export interface MobileSettingsProps {
-  /** 当前子页；undefined 是一级主页。 */
   section: SettingsSection | undefined;
   notify: NotifySettings;
-  /** 守护进程支持联机时才有：电脑组与公网入口。 */
   devices: DeviceSettings | null;
-  /** 打开 Providers 子页时的默认目标电脑。 */
   defaultProviderDevice?: DeviceKey;
   onOpen: (section: SettingsSection) => void;
-  /** 顶栏返回（一级回列表、子页回一级），App 里走 mobileBack。 */
   onBack: () => void;
-  /** 本机会话被退出后怎么办（默认刷新页面回到登录态）；测试注入。 */
   onSignedOut?: () => void;
 }
 
@@ -55,7 +47,6 @@ interface SubpageSpec {
   footer?: (ctx: SubpageContext) => ReactNode;
 }
 
-/** 需要联机的子页：设备清单还没到时转圈（没开联机的直达网址由 shell-model 退回一级）。 */
 const withDevices = (ctx: SubpageContext, render: (devices: DeviceSettings) => ReactNode) =>
   ctx.devices === null ? (
     <div className="flex min-h-24 items-center justify-center">
@@ -65,7 +56,6 @@ const withDevices = (ctx: SubpageContext, render: (devices: DeviceSettings) => R
     render(ctx.devices)
   );
 
-/** 每个子页的标题与内容；Record 穷尽 SettingsSection，漏配一个 typecheck 就报错（第 3.3 节）。 */
 const SUBPAGES: Record<SettingsSection, SubpageSpec> = {
   scale: { title: "Interface scale", render: () => <ScalePage /> },
   notifications: { title: "Notifications", render: (ctx) => <NotificationsPage notify={ctx.notify} /> },
@@ -139,7 +129,7 @@ function SettingsHome({
   );
 }
 
-// memo：App 每个流式帧都会重画，这里的 props（通知设置、设备设置、两个回调）都是稳定引用，设置页开着时不跟着重画
+// App rerenders on every streaming frame; all props here are stable.
 export const MobileSettings = memo(function MobileSettings({
   section,
   notify,
@@ -149,7 +139,6 @@ export const MobileSettings = memo(function MobileSettings({
   onBack,
   onSignedOut,
 }: MobileSettingsProps) {
-  // 同步预览与结果放在这一层：从子页回到一级主页还看得到 Synced，再进子页预览还在（全是按需的 mutation，没有初始请求）
   const vendor = useVendorSyncSetting();
   const spec = section === undefined ? null : SUBPAGES[section];
   const ctx: SubpageContext = {

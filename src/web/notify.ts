@@ -1,5 +1,3 @@
-// “等你”提醒（m4-plan）：对话停稳了就在左栏、标签页标题和浏览器通知里提醒用户。判断在网页里算，守护进程不管。
-// “等你确定”（M5）：项目经理用 hub ask 问的事不用等停稳，一来就提醒；一直提醒到用户处理（selectors.ts 的 pendingAsks）。
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PRODUCT_ID, PRODUCT_NAME } from "../shared/names.ts";
 import { WAITING_SETTLE_MS, notificationTag, pendingDecisionsOf, type ConversationId } from "../shared/index.ts";
@@ -10,24 +8,17 @@ import { hasPushSubscription, pushSupport, subscribePush, unsubscribePush } from
 import { askingConversations, listConversations, pendingAsks, previewText, waitingConversations, type LastSeen } from "./selectors.ts";
 import type { HubState } from "./state.ts";
 
-// 规则（等你、等你确定、停稳 3 秒、tag）在 shared/reminders.ts，和守护进程的推送共用
 export { WAITING_SETTLE_MS };
 
-/** 用户上次看每个对话的时间存在这个 localStorage 键里。 */
 export const LAST_SEEN_KEY = `${PRODUCT_ID}:lastSeen`;
 
-/** 用户有没有开通知，存在这个 localStorage 键里（"1" 开，"0" 关）；没有值或值不认识就看浏览器的授权。 */
 export const NOTIFY_ENABLED_KEY = `${PRODUCT_ID}:notifyEnabled`;
 
-/** install：iPhone / iPad 的 Safari 里，要先“添加到主屏幕”、从主屏打开才能开通知（联机 P4）。 */
 export type NotifyPermission = NotificationPermission | "unsupported" | "install";
 
-/** 左栏设置面板里“通知”开关要的东西。 */
 export interface NotifySettings {
   permission: NotifyPermission;
-  /** 开关现在是开还是关：浏览器已授权，并且用户没关。 */
   enabled: boolean;
-  /** 用户拨开关。打开时浏览器还没授权就申请，被拒就仍然是关。 */
   setEnabled: (on: boolean) => Promise<void>;
 }
 
@@ -44,11 +35,9 @@ function saveNotifyPref(on: boolean): void {
   try {
     localStorage.setItem(NOTIFY_ENABLED_KEY, on ? "1" : "0");
   } catch {
-    // 存不了：这次打开期间还是有效，重开以后按浏览器的授权来
   }
 }
 
-/** 每台设备的“上次看过”分开存：入口本机用 LAST_SEEN_KEY（和没有联机时一样），别的设备在后面加设备编号。 */
 function lastSeenKey(device: DeviceKey): string {
   return device === LOCAL_DEVICE ? LAST_SEEN_KEY : `${LAST_SEEN_KEY}:${device}`;
 }
@@ -66,11 +55,9 @@ function saveLastSeen(device: DeviceKey, lastSeen: LastSeen): void {
   try {
     localStorage.setItem(lastSeenKey(device), JSON.stringify(lastSeen));
   } catch {
-    // 存不了（隐私模式、被禁用）：这次打开期间还是有效，重开以后当作都没看过
   }
 }
 
-/** 网页在前台：标签页看得见，并且窗口有焦点。 */
 function isForeground(): boolean {
   return document.visibilityState === "visible" && document.hasFocus();
 }
@@ -97,26 +84,17 @@ function currentPermission(): NotifyPermission {
   return typeof Notification === "undefined" ? "unsupported" : Notification.permission;
 }
 
-/** 提醒要看的一台设备。name 只在两台以上时用（通知标题前面加设备名）。 */
 export interface ReminderDevice {
   key: DeviceKey;
   name: string;
   state: HubState;
 }
 
-/** 哪台设备的哪个对话。 */
 export interface ConversationRef {
   device: DeviceKey;
   id: ConversationId;
 }
 
-/**
- * 判断所有设备的每个对话在不在“等你”、有没有“等你确定”的提问，并提醒用户：返回在“等你”的对话、有提问的对话
- * （都是 devices.ts 的 conversationKey，左栏显示）、通知权限和申请权限的函数；同时把标签页标题改成“(N) 产品名”
- * （N 是所有设备两种提醒的对话数合计，同一个对话只算一次），从“不算”变成“等你”时弹一次浏览器通知，来了新的提问马上弹一次。
- * 每台设备第一次加载好时本来就在等的、本来就有的提问直接算，不弹。
- * viewing 是用户正开着的对话（没有就是 null）；onOpen 在用户点通知时调，打开那个对话。
- */
 export function useDeviceReminders(devices: readonly ReminderDevice[], viewing: ConversationRef | null, onOpen: (ref: ConversationRef) => void) {
   const foreground = useForeground();
   const lastSeenRef = useRef<Partial<Record<DeviceKey, LastSeen>>>({});
@@ -132,7 +110,6 @@ export function useDeviceReminders(devices: readonly ReminderDevice[], viewing: 
   const [notifyPref, setNotifyPref] = useState(loadNotifyPref);
   const [waiting, setWaiting] = useState<ReadonlySet<string>>(new Set());
 
-  // 网页在前台、正开着这个对话的时候，它的每条新消息都算看过
   const viewingDevice = viewing === null ? null : viewing.device;
   const viewingId = viewing === null ? null : viewing.id;
   const viewingState = devices.find((d) => d.key === viewingDevice)?.state;
@@ -145,7 +122,7 @@ export function useDeviceReminders(devices: readonly ReminderDevice[], viewing: 
   }, [viewingDevice, viewingId, foreground, viewingLastId]);
 
   const ready = devices.filter((d) => d.state.phase === "ready");
-  // 入口本机的键是 ""，不能用 join 拼：用 JSON
+  // The local device key is "", so join() would collide; use JSON.
   const readyKey = JSON.stringify(ready.map((d) => d.key));
   const candidates = useMemo(
     () =>
@@ -158,21 +135,17 @@ export function useDeviceReminders(devices: readonly ReminderDevice[], viewing: 
   );
   const candidatesKey = candidates.map((c) => c.key).join(",");
 
-  // 没存过偏好的老用户：授权过就是开
   const notifyEnabled = permission === "granted" && notifyPref !== false;
   const latest = useRef({ devices, viewing, foreground, onOpen, notifyEnabled });
   latest.current = { devices, viewing, foreground, onOpen, notifyEnabled };
-  /** 已经算“等你”的（停稳了的，和刚打开网页时本来就在等的）。 */
   const settled = useRef(new Set<string>());
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
-  /** 已经加载好过的设备：第一次加载好时本来就在等的不弹。 */
   const opened = useRef(new Set<DeviceKey>());
 
-  /** 弹一条通知。ask 是提问的正文（有就是“等你确定”，没有就是“等你”，正文取对话的最后一条）。 */
   const announce = useCallback((ref: ConversationRef, ask?: string) => {
     const { devices, viewing, foreground, onOpen, notifyEnabled } = latest.current;
     if (foreground && viewing !== null && viewing.device === ref.device && viewing.id === ref.id) return;
-    // 这个浏览器订阅了推送：退到后台时由守护进程推（联机 P4），这里不再弹，免得同一条两遍
+    // Push already covers background tabs; avoid a duplicate notification.
     if (!foreground && hasPushSubscription()) return;
     if (!notifyEnabled || currentPermission() !== "granted") return;
     const device = devices.find((d) => d.key === ref.device);
@@ -191,7 +164,6 @@ export function useDeviceReminders(devices: readonly ReminderDevice[], viewing: 
         notification.close();
       };
     } catch {
-      // 有的环境不让页面直接弹通知：左栏和标题照常，不弹
     }
   }, []);
 
@@ -206,7 +178,6 @@ export function useDeviceReminders(devices: readonly ReminderDevice[], viewing: 
     for (const key of settled.current) if (!now.has(key)) settled.current.delete(key);
     for (const device of JSON.parse(readyKey) as DeviceKey[]) {
       if (opened.current.has(device)) continue;
-      // 这台刚加载好：本来就在等的直接算，不弹
       opened.current.add(device);
       for (const c of candidates) if (c.device === device) settled.current.add(c.key);
     }
@@ -223,10 +194,9 @@ export function useDeviceReminders(devices: readonly ReminderDevice[], viewing: 
       );
     }
     setWaiting((prev) => (prev.size === settled.current.size && [...prev].every((key) => settled.current.has(key)) ? prev : new Set(settled.current)));
-    // candidates 的内容变了才重新算；它的引用每次状态变化都是新的（useMemo 跟着 devices 变）
+    // candidates is a new array on every state change; depend on its content key instead.
   }, [readyKey, candidatesKey, announce]);
 
-  // 有提问或同源待决拍板（PendingDecision）的对话：一直算到处理；同一对话同时带 hub ask 与绑定待决项时按对话去重、通知不双弹
   const asks = useMemo(
     () =>
       ready.flatMap((d) => {
@@ -289,12 +259,11 @@ export function useDeviceReminders(devices: readonly ReminderDevice[], viewing: 
     document.title = reminded > 0 ? `(${reminded}) ${PRODUCT_NAME}` : PRODUCT_NAME;
   }, [reminded]);
 
-  // 开着通知的：把这个浏览器的推送订阅再交给守护进程一次（守护进程的数据目录换过、订阅被删过也能回来）。已经订阅过的不会弹授权
   useEffect(() => {
     if (notifyEnabled) void subscribePush();
   }, [notifyEnabled]);
 
-  /** 拨通知开关；浏览器要求申请权限由用户的操作触发，所以只在拨的时候申请。打开时顺带订阅推送（网页关了也能收到），关掉时退订。 */
+  // Browsers only grant notification permission from a user gesture, so request it here.
   const setEnabled = useCallback(async (on: boolean) => {
     if (!on) {
       saveNotifyPref(false);
@@ -306,7 +275,6 @@ export function useDeviceReminders(devices: readonly ReminderDevice[], viewing: 
       try {
         await Notification.requestPermission();
       } catch {
-        // 被浏览器拒了：按当前的权限状态走
       }
       setPermission(currentPermission());
     }
@@ -323,7 +291,6 @@ export function useDeviceReminders(devices: readonly ReminderDevice[], viewing: 
   return { waiting, asking, notify };
 }
 
-/** 只看入口本机一台（没有联机时的样子）：在“等你”、有提问的对话编号。 */
 export function useWaitingReminders(state: HubState, viewing: ConversationId | null, onOpen: (conversationId: ConversationId) => void) {
   const devices = useMemo(() => [{ key: LOCAL_DEVICE, name: "", state }], [state]);
   const reminders = useDeviceReminders(devices, viewing === null ? null : { device: LOCAL_DEVICE, id: viewing }, (ref) => onOpen(ref.id));

@@ -1,5 +1,3 @@
-// Router 无卡片时间流（docs/ui-standard.md 第 21 条、docs/router-workbench-v2-design.md 第 4、5 节）：
-// 指令回合（右气泡 + 左水果刀结果与去向跳转行）与跨设备 PM 里程碑简报按时间合流，看到即标已读，共享 useStickToBottom。
 import {
   InfiniteQueryObserver,
   notifyManager,
@@ -61,8 +59,6 @@ import { AgentHead, BUBBLE, CopyButton, SentBody, TEXT_BUTTON, UnsentMark } from
 import { ForwardReply } from "./ForwardReply.tsx";
 
 const ROUTER_IDENTITY = { name: "Router", look: defaultLookOf(0) } as const;
-
-
 
 type ParsedBriefingLink =
   | { kind: "external"; url: string }
@@ -217,7 +213,6 @@ const TurnRow = memo(function TurnRow({
   const command = entry.command;
   const plan = command?.plan ?? null;
   const rawReply = plan?.reply ?? "";
-  // 轨道 A 成功投递后去向行已经把目标和状态交代清楚，不再重复画那句模板回执
   const showReply = rawReply.trim() !== "" && !(plan?.track === "A" && effectiveStatus === "dispatched");
   const isRunning = effectiveStatus === "planning";
   const isFailed = effectiveStatus === "failed";
@@ -240,7 +235,7 @@ const TurnRow = memo(function TurnRow({
   }
 
   const failReason =
-    retryError !== undefined ? errorLine(retryError) : (command?.error ?? "总助这次没能完成，请重试");
+    retryError !== undefined ? errorLine(retryError) : (command?.error ?? "Router couldn't finish this. Try again");
   const failRaw =
     retryError !== undefined ? errorTitle(retryError) : (plan?.errorRaw !== undefined && plan.errorRaw !== failReason ? plan.errorRaw : undefined);
 
@@ -462,7 +457,6 @@ function makeBriefingOptions(
   };
 }
 
-/** 动态台数设备的简报历史分页（复用 @tanstack/react-query 的 InfiniteQueryObserver，设备移除时同步清理缓存）。 */
 function useDeviceBriefingPagers(
   devices: readonly RouterDeviceBriefings[],
   clientForDevice: (deviceKey: string) => HubClient,
@@ -516,7 +510,6 @@ function useDeviceBriefingPagers(
         for (const u of unsubs) u();
       };
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [deviceKeysSig],
   );
 
@@ -549,7 +542,6 @@ function useDeviceBriefingPagers(
     }
     snapshotRef.current = next;
     return next;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deviceKeysSig]);
 
   const snapshots = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
@@ -608,7 +600,6 @@ export const RouterStream = memo(function RouterStream({
 }) {
   const qc = useHubQueryClient();
 
-  // 指令历史分页（入口本机）
   const commandsQuery = useInfiniteQuery(
     {
       queryKey: ["router-stream", "commands", stream.oldestCommandCursor] as const,
@@ -625,14 +616,12 @@ export const RouterStream = memo(function RouterStream({
     qc,
   );
 
-  // 各就绪设备的简报历史分页
   const { snapshots: briefingSnapshots, fetchDevicePage } = useDeviceBriefingPagers(
     stream.devices,
     clientForDevice,
     qc,
   );
 
-  // 失败指令原地 Retry 状态（同步防连点重入 + 200 返回至 WS 推送前无缝保持 Working…）
   const retryingLockRef = useRef(new Set<RouterCommandId>());
   const [retryingMap, setRetryingMap] = useState<Readonly<Record<RouterCommandId, number>>>({});
   const [retryErrors, setRetryErrors] = useState<Readonly<Record<RouterCommandId, ErrorLike>>>({});
@@ -681,7 +670,6 @@ export const RouterStream = memo(function RouterStream({
     }
   }, []);
 
-  // 打开 #/router 时刻定格的 New 分隔线：只在设备第一次进入视野且尚未定格时记下最早一条未读简报的 key，之后标已读或新简报进来都不挪动
   const ackedBriefings = getAckedBriefings(qc);
   const newDividerCaptureRef = useRef<{ key: string | null; seenDevices: Set<string> }>({
     key: null,
@@ -711,8 +699,6 @@ export const RouterStream = memo(function RouterStream({
   }
   const newDividerKey = newDividerCaptureRef.current.key;
 
-  // 看到即标已读：页面可见时，每台有未读简报的在线设备按未读编号集合去重各调一次 archive-all。
-  // 失败了集合照样记着（不改界面），只在页面重新可见或未读集合变了（来了新简报）时再试，别的流更新不重发。
   const sentUnreadSigRef = useRef(new Map<string, string>());
   const failedReadRef = useRef(new Set<string>());
   useEffect(() => {
@@ -728,7 +714,6 @@ export const RouterStream = memo(function RouterStream({
       }
       for (const dev of stream.devices) {
         if (!dev.online) {
-          // 掉线期间失败过的，重新连上就再试一次
           if (failedReadRef.current.delete(dev.key)) sentUnreadSigRef.current.delete(dev.key);
           continue;
         }
@@ -774,9 +759,7 @@ export const RouterStream = memo(function RouterStream({
     return () => document.removeEventListener("visibilitychange", onVisibility);
   }, [stream.devices, clientForDevice, qc]);
 
-  // 组装各来源（指令来源 + 各设备简报来源）并做水位线合并
   const { entries, hasMore, anyError, anyFetching, loadTargets } = useMemo(() => {
-    // 1. 指令来源
     const liveCmdIds = new Set<number>();
     const liveClientIds = new Set<string>();
     for (const t of stream.turns) {
@@ -785,7 +768,6 @@ export const RouterStream = memo(function RouterStream({
     }
     const olderTurns: RouterTurnEntry[] = [];
     const cmdPages = commandsQuery.data?.pages ?? [];
-    // 翻出来的页都比近窗更早；最早一条原始记录（含已取消的）就是这个来源的分页位置
     let oldestCmd: { createdAt: number; id: number } | null = stream.oldestCommand;
     for (const page of cmdPages) {
       for (const cmd of page.commands) {
@@ -803,9 +785,6 @@ export const RouterStream = memo(function RouterStream({
     const persistedTurns = olderTurns.length > 0 ? [...olderTurns, ...stream.turns] : stream.turns;
     const allTurns = activePending.length > 0 ? [...persistedTurns, ...activePending] : persistedTurns;
 
-    // 快照按条数和字节双上限截断后分别给出 commandsHasMore / briefingsHasMore：
-    // 没翻过之前直接以快照标记决定要不要翻、要不要拦水位线（即使长内容截到只剩一两条也能拦住另一类的更早记录不提前露出）；
-    // 翻过之后以分页接口返回的 hasMore（及 ROUTER_STREAM_MAX_PAGES 上限）为准。
     const cmdNeverFetched = commandsQuery.data === undefined && !commandsQuery.isError;
     const cmdHasMore = cmdNeverFetched
       ? stream.commandsHasMore
@@ -827,7 +806,6 @@ export const RouterStream = memo(function RouterStream({
     let errored = commandsQuery.isError && cmdHasMore;
     let fetching = commandsQuery.isFetching;
 
-    // 2. 各就绪设备的简报来源
     for (let i = 0; i < stream.devices.length; i++) {
       const dev = stream.devices[i]!;
       const snap = briefingSnapshots[i];
@@ -842,7 +820,6 @@ export const RouterStream = memo(function RouterStream({
           if (oldestRep === null || item.createdAt < oldestRep.createdAt || (item.createdAt === oldestRep.createdAt && item.id < oldestRep.id)) {
             oldestRep = item;
           }
-          // 旧版守护进程不认识 kind=report，网页再按 kind === "report" 滤一次
           if (item.kind !== "report" || liveRepIds.has(item.id)) continue;
           liveRepIds.add(item.id);
           const entry = briefingEntryOfReport(item as RouterReportItem, {

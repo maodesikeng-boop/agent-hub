@@ -1,6 +1,3 @@
-// 资料页的“定时任务”组（M6）：一个任务一行（名字，下面频率、下次时间，失败了才写上次结果），右边开关（暂停/恢复）和删除（要二次确认）；
-// 最后一行“新建”，点了在组里展开表单。表单照 docs/ui-standard.md 第 9 条“表单校验”：空着“保存”是灰的，填得不对边输入边在那一行下面写原因；
-// 后台再查一遍（同 hub schedule add），后台拒绝的原因写在按钮上面。
 import { Loader2, Plus, Trash2 } from "../ui/icons.ts";
 import { useState } from "react";
 import {
@@ -42,7 +39,6 @@ function ScheduleItem({ schedule }: { schedule: ScheduleRecord }) {
       label={schedule.name}
       error={error}
       detail={
-        // 各项各自一段、用间距隔开（不用逗号拼）；上次成功、跳过、还没跑过都不用管，只有失败才写
         <span className="flex flex-wrap gap-x-3 tabular-nums">
           <span>{formatSchedule(schedule)}</span>
           <span>{schedule.enabled ? `Next ${scheduledTimeText(schedule.nextRunAt, now)}` : "Paused"}</span>
@@ -91,7 +87,6 @@ function NewScheduleForm({ pmId, onClose }: { pmId: number; onClose: () => void 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ErrorLike | null>(null);
 
-  // 每一行自己的错：空着不算错（只是不能保存），填了不对才写
   const nameProblem = nameError(name, MAX_SCHEDULE_NAME_CHARS) ?? (/[【】]/.test(name) ? "Name can't contain 【 or 】" : null);
   const minutes = /^[0-9]+$/.test(every.trim()) ? Number(every.trim()) * (unit === "hours" ? 60 : 1) : NaN;
   const freqEmpty = kind === "daily" ? time.trim() === "" : every.trim() === "";
@@ -145,7 +140,6 @@ function NewScheduleForm({ pmId, onClose }: { pmId: number; onClose: () => void 
           </>
         )}
       </SettingsRow>
-      {/* 框里的多行输入是一整行：没有边框和拖拽角，跟着内容长高；名字放占位符 */}
       <div data-slot="settings-row">
         <Textarea
           aria-label="Task"
@@ -189,7 +183,6 @@ export function ScheduleGroup({ pmId, schedules }: { pmId: number; schedules: Sc
       {adding ? (
         <NewScheduleForm pmId={pmId} onClose={() => setAdding(false)} />
       ) : (
-        // 满了不让填完才知道：“新建”直接不能点，右边写状态
         <button
           type="button"
           disabled={full}

@@ -1,4 +1,3 @@
-// #/settings/providers：手机端一键安装/更新与底部抽屉直接登录（100% 复用 settings-model.ts 与 ProvidersSettings 共用表单内芯）。
 import { useCallback, useMemo, useState } from "react";
 import type { AgentVendor } from "../../../shared/index.ts";
 import {

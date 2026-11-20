@@ -1,5 +1,3 @@
-// #/settings/sign-in：进页不请求；点 Create sign-in link 才生成 5 分钟一次性链接，居中 192px 二维码 + 倒计时 + 全宽 Copy link / 系统 Share… / Hide。
-// 只有二维码显示期间才每 3s 拉一次已登录浏览器（另一台扫码登录上了就收起）；离开子页卸载后倒计时与轮询一起停。
 import { Loader2, QrCode as QrCodeIcon } from "../../ui/icons.ts";
 import { formatCountdown } from "../../browser-sessions.ts";
 import { QrCode } from "../../components/QrCode.tsx";
@@ -16,7 +14,6 @@ export function SignInPage() {
   const { link } = signIn;
   const share = () => {
     if (link === null) return;
-    // 用户关掉分享面板会 reject（AbortError），不算错
     navigator.share({ url: link.url }).catch(() => {});
   };
   return (

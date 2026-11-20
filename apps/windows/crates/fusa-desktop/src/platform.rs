@@ -5,24 +5,23 @@ use std::process::{Command, Stdio};
 use fusa_supervisor::NativeRuntimeConfig;
 use url::Url;
 
-/// 校验本地目录不为空且不位于 UNC 网络共享上（ACL、命名管道与 SQLite 锁要求本机卷）。
+// ACLs, named pipes and SQLite locks need a local volume, so UNC shares are rejected.
 pub fn validate_local_dir(path: &Path) -> Result<(), String> {
     let s = path.to_string_lossy();
     let trimmed = s.trim();
     if trimmed.is_empty() {
-        return Err("目录路径不能为空".to_string());
+        return Err("Directory path is empty".to_string());
     }
     if trimmed.starts_with(r"\\?\UNC\")
         || (trimmed.starts_with(r"\\") && !trimmed.starts_with(r"\\?\") && !trimmed.starts_with(r"\\.\"))
     {
         return Err(format!(
-            "不支持将网络共享路径作为本地数据目录：{trimmed}"
+            "A network share can't be the local data directory: {trimmed}"
         ));
     }
     Ok(())
 }
 
-/// 解析桌面外壳本地应用数据目录（Windows 下为 `%LOCALAPPDATA%\Fusa`）。
 pub fn resolve_local_app_data_dir() -> Result<PathBuf, String> {
     if let Ok(override_dir) = std::env::var("FUSA_APP_DATA_DIR") {
         let p = PathBuf::from(override_dir.trim());
@@ -35,7 +34,7 @@ pub fn resolve_local_app_data_dir() -> Result<PathBuf, String> {
     #[cfg(target_os = "windows")]
     {
         let local_app_data = std::env::var_os("LOCALAPPDATA")
-            .ok_or_else(|| "无法读取环境变量 LOCALAPPDATA".to_string())?;
+            .ok_or_else(|| "Can't read the LOCALAPPDATA environment variable".to_string())?;
         let dir = PathBuf::from(local_app_data).join("Fusa");
         validate_local_dir(&dir)?;
         return Ok(dir);
@@ -44,14 +43,13 @@ pub fn resolve_local_app_data_dir() -> Result<PathBuf, String> {
     #[cfg(not(target_os = "windows"))]
     {
         let home = std::env::var_os("HOME")
-            .ok_or_else(|| "无法读取环境变量 HOME".to_string())?;
+            .ok_or_else(|| "Can't read the HOME environment variable".to_string())?;
         let dir = PathBuf::from(home).join(".local/share/fusa-desktop");
         validate_local_dir(&dir)?;
         Ok(dir)
     }
 }
 
-/// 将用户配置的 `AGENT_HUB_HOME` 按与 Node `src/shared/paths.ts` 一致的规则展开 `~` 并规范化末尾斜杠与相对路径。
 pub fn normalize_hub_home_override(
     raw: &str,
     user_home: Option<&Path>,
@@ -109,7 +107,6 @@ pub fn normalize_hub_home_override(
     resolved
 }
 
-/// 解析守护进程数据目录（优先 `AGENT_HUB_HOME`，默认 `%USERPROFILE%\.agent-hub` / `~/.agent-hub`）。
 pub fn resolve_hub_home_dir() -> Result<PathBuf, String> {
     #[cfg(target_os = "windows")]
     let base_home = std::env::var_os("USERPROFILE")
@@ -130,7 +127,7 @@ pub fn resolve_hub_home_dir() -> Result<PathBuf, String> {
     #[cfg(target_os = "windows")]
     {
         let profile = base_home
-            .ok_or_else(|| "无法读取环境变量 USERPROFILE".to_string())?;
+            .ok_or_else(|| "Can't read the USERPROFILE environment variable".to_string())?;
         let dir = PathBuf::from(profile).join(".agent-hub");
         validate_local_dir(&dir)?;
         return Ok(dir);
@@ -139,7 +136,7 @@ pub fn resolve_hub_home_dir() -> Result<PathBuf, String> {
     #[cfg(not(target_os = "windows"))]
     {
         let home = base_home
-            .ok_or_else(|| "无法读取环境变量 HOME".to_string())?;
+            .ok_or_else(|| "Can't read the HOME environment variable".to_string())?;
         let dir = PathBuf::from(home).join(".agent-hub");
         validate_local_dir(&dir)?;
         Ok(dir)
@@ -202,7 +199,6 @@ fn find_system_node_binary() -> Option<PathBuf> {
     None
 }
 
-/// 解析随包内置运行时目录（支持便携包、`FUSA_RUNTIME_DIR`、Tauri NSIS 安装目录以及源码开发回退）。
 pub fn resolve_native_runtime_config(
     app_data_dir: PathBuf,
     hub_home_dir: PathBuf,
@@ -236,7 +232,6 @@ pub fn resolve_native_runtime_config(
         }
     }
 
-    // 源码开发态回退（例如在仓库下直接执行 `cargo run -p fusa-desktop`）
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     if let Some(repo_root) = manifest_dir
         .parent()
@@ -269,7 +264,7 @@ pub fn resolve_native_runtime_config(
     }
 
     Err(format!(
-        "未找到随包 Windows 原生运行时（node/node.exe、bin/fusa-run.exe、bin/hub.exe、daemon/src/daemon/main.ts），已检查：{}",
+        "Can't find the bundled Windows runtime (node/node.exe, bin/fusa-run.exe, bin/hub.exe, daemon/src/daemon/main.ts); checked: {}",
         candidate_roots
             .iter()
             .map(|p| p.display().to_string())
@@ -322,15 +317,14 @@ mod win32_shell {
         if rc > 32 {
             Ok(())
         } else {
-            Err(format!("ShellExecuteW({operation}) 执行失败（返回码 {rc}）"))
+            Err(format!("ShellExecuteW({operation}) failed (code {rc})"))
         }
     }
 }
 
-/// 使用系统默认浏览器打开经过协议白名单校验的外部链接（严禁拼接 shell）。
 pub fn open_external_url(url: &Url) -> Result<(), String> {
     if !matches!(url.scheme(), "http" | "https" | "mailto") {
-        return Err(format!("拒绝打开非安全协议链接：{}", url.scheme()));
+        return Err(format!("Refusing to open a link with an unsafe scheme: {}", url.scheme()));
     }
 
     #[cfg(target_os = "windows")]
@@ -363,7 +357,6 @@ pub fn open_external_url(url: &Url) -> Result<(), String> {
     }
 }
 
-/// 打开宿主日志文件（若日志文件尚不存在则打开其所在目录）。
 pub fn open_log_file_or_dir(log_path: &Path) -> Result<(), String> {
     if let Some(parent) = log_path.parent() {
         let _ = std::fs::create_dir_all(parent);

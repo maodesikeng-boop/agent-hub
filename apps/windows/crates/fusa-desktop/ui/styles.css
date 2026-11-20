@@ -1,9 +1,3 @@
-/* 严格对齐 docs/ui-standard.md 与 src/web/styles.css：
- * - 中性白/浅灰配色，无渐变、无毛玻璃、无装饰阴影、不用 · 拼接；
- * - 界面字号严格 4 档（--text-xs / --text-minor / --text-body / --text-title），字重仅 400 / 500 / 600；
- * - 禁用药丸胶囊按钮（999px），按钮统一采用标准圆角 8px，容器圆角 12px，命令行块圆角 6px；
- * - 控件高度两档（默认 2.25rem=36px，小号 2rem=32px），键盘聚焦中性环。
- */
 :root {
   --background: #ffffff;
   --foreground: #18181b;

@@ -5,15 +5,8 @@ import { useAccentContainer } from "../lib/accent-scope.tsx";
 import { cn } from "../lib/utils.ts";
 import { Button } from "./button.tsx";
 
-// 弹窗（docs/ui-standard.md 第 10 条）：rounded-2xl、p-6、内容之间 gap-6；标题 17px 半粗在左上，关闭按钮右上；
-// 底部按钮放 DialogFooter（靠右，主按钮在最右）。宽度三档：简单设置 max-w-110，表单默认 520px，双栏的全局设置 780px（SettingsDialog）。
-// 弹窗自己不滚：内容可能超过一屏的放进 DialogBody（只有它滚），标题和 DialogFooter 一直在视野里。
 export const Dialog = DialogPrimitive.Root;
 
-/**
- * 放大窗（图表、任务流图全览，docs/ui-standard.md 第 15 条）：大小跟内容走，内容小弹窗就小，不留大片空白；
- * 最大到窗口的 96% 宽（封顶 1400px）、90% 高，再大在里面滚。
- */
 export const ZOOM_DIALOG = "h-auto max-h-[90dvh] w-fit max-w-[min(96vw,1400px)] min-w-[min(96vw,26rem)]";
 export const DialogClose = DialogPrimitive.Close;
 
@@ -26,7 +19,6 @@ export function DialogContent({
   ...props
 }: Omit<React.ComponentProps<typeof DialogPrimitive.Content>, "title"> & {
   title: string;
-  /** 标题另放（设置弹窗的标题是右栏里当前分类的名字）时传 "sr-only"：读屏仍用它当弹窗名字。 */
   titleClassName?: string;
   fullScreen?: boolean;
 }) {
@@ -74,24 +66,21 @@ export function DialogContent({
   );
 }
 
-/** 弹窗中间能滚的部分：各块之间 gap-6。左右、上下多留出一点再收回来，聚焦的圈不会被裁掉。 */
 export function DialogBody({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="dialog-body"
-      // 往下多伸 16px 再用内边距收回来（落在和底部按钮之间的 24px 空隙里）：滚动的内容在这 16px 里渐隐（.dialog-body-fade），不贴着底部按钮被硬切
+      // Extend 16px into the footer gap so scrolled content fades out instead of being cut off.
       className={cn("dialog-body-fade -mx-6 -mt-1 -mb-4 grid min-h-0 flex-1 content-start gap-6 overflow-x-hidden overflow-y-auto overscroll-y-contain px-6 pt-1 pb-4", className)}
       {...props}
     />
   );
 }
 
-/** 表单弹窗的 form：里面放 DialogBody（滚）、错误、DialogFooter（不滚）。 */
 export function DialogForm({ className, ...props }: React.ComponentProps<"form">) {
   return <form className={cn("flex min-h-0 flex-1 flex-col gap-6", className)} {...props} />;
 }
 
-/** 弹窗底部的按钮：靠右，按钮之间 gap-2，主按钮放最后。 */
 export function DialogFooter({ className, ...props }: React.ComponentProps<"div">) {
   return <div data-slot="dialog-footer" className={cn("flex shrink-0 items-center justify-end gap-2", className)} {...props} />;
 }

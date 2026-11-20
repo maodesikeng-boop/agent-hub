@@ -41,12 +41,10 @@ function readCoarsePointer(): boolean {
   return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches;
 }
 
-/** 一张卡的测量键，也是它的 React key：图、步骤、形态（拍板卡还是普通卡）有一个变了就是另一张卡，重新挂载、重新量。 */
 function measureKeyOf(graphId: TaskGraphId, nodeKey: string, waitingGate: boolean): string {
   return `${graphId}:${nodeKey}:${waitingGate ? "gate" : "node"}`;
 }
 
-/** 卡片头的果冻珠子（和右栏果皮轨同一套）：做完、在干、等项目经理、没轮到（跳过的也是空珠子）。 */
 function beadOf(node: TaskNode): StepBead {
   if (node.status === "done") return node.skipped ? "pending" : "done";
   if (node.status === "running") return "running";
@@ -54,7 +52,6 @@ function beadOf(node: TaskNode): StepBead {
   return "pending";
 }
 
-/** 卡片左上角的两位步骤号：底色看状态（docs/ui-standard.md 第 12.1 条）。 */
 const STEP_TAG: Readonly<Record<"done" | "running" | "gate" | "other", string>> = {
   done: "bg-[var(--step-done-bg)] text-foreground",
   running: "bg-background text-foreground shadow-[inset_0_0_0_1px_var(--peel)]",
@@ -66,7 +63,6 @@ function StepTag({ n, tone }: { n: number; tone: keyof typeof STEP_TAG }) {
   return <span className={cn("absolute top-0 left-0 px-1 text-xs leading-4 tabular-nums", STEP_TAG[tone])}>{String(n).padStart(2, "0")}</span>;
 }
 
-/** 卡片头的小珠子：14px 见方的像素小图，格子 2px。 */
 function BeadIcon({ bead }: { bead: StepBead }) {
   return (
     <svg viewBox="0 0 14 14" shapeRendering="crispEdges" aria-hidden="true" className="size-3.5 shrink-0">
@@ -75,7 +71,6 @@ function BeadIcon({ bead }: { bead: StepBead }) {
   );
 }
 
-/** 四个状态的英文状态词（docs/ui-standard.md 第 3 条的词表）：等人按等谁分开，完了按是不是跳过的分开。 */
 function statusLabelOf(node: TaskNode): string {
   switch (node.status) {
     case "done":
@@ -89,10 +84,6 @@ function statusLabelOf(node: TaskNode): string {
   }
 }
 
-/**
- * 任务流图放大全览弹窗（TaskGraphDialog，docs/ui-standard.md 第 12.1 条）：
- * 复用 computeTaskGraphLayout(..., viewportMode: "dialog") 横向 LR 自动分层，完整展示并行分支、Piece 跳转与拍板记录。
- */
 export const TaskGraphDialog = memo(function TaskGraphDialog({
   graph,
   open,
@@ -105,16 +96,12 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   workers: readonly WorkerEntry[];
-  /** 所属项目经理现在的颜色：管道、珠子和进度图标跟着它。 */
   color?: JellyColorId;
   onOpenWorker: (id: ConversationId) => void;
 }) {
-  // 当前区域那台设备的接口（device-scope.tsx）：跨设备看远端项目经理时，跳过、取消、拍板都发给那台
   const client = useClient();
   const qc = useHubQueryClient();
   const [expandedNotes, setExpandedNotes] = useState<Record<string, boolean>>({});
-  // 每张卡画出来的实际高度（px）：量到了交给排版，同一列的下一张卡才不会压上来（拍板卡的摘要、折成两行的步骤名都估不准）。
-  // 键是 measureKeyOf：换了图、同一步从拍板卡变成普通卡都是另一张卡，不沿用旧高度；卡卸载时把它那一项删掉，表里只有画着的卡
   const [measuredHeights, setMeasuredHeights] = useState<Readonly<Record<string, number>>>({});
   const observerRef = useRef<ResizeObserver | null>(null);
   const measureCard = useCallback((el: HTMLDivElement | null) => {
@@ -143,11 +130,9 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
     };
   }, []);
   const [actionError, setActionError] = useState<ErrorLike | null>(null);
-  /** Cancel graph 的二次确认弹窗（docs/ui-standard.md 第 12.1 条）：点了先确认，确认了才发请求。 */
   const [confirmingCancel, setConfirmingCancel] = useState(false);
 
   const workerByKey = useMemo(() => workersByWorkerId(workers), [workers]);
-  // 同步防重入（Skip step / Cancel graph）：isPending 要等下一次渲染才变，连点会各发一次请求
   const inFlightRef = useRef(false);
   const releaseLock = () => {
     inFlightRef.current = false;
@@ -196,13 +181,11 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
     });
   }, [graph, expandedNotes, measuredHeights, rootFontSizePx, coarsePointer]);
 
-  // 管子按走没走通分两组画（TubeLayer 先画一组的全部描边再画全部芯）
   const { emptyTubes, filledTubes } = useMemo(() => {
     const edges = layout?.edges ?? [];
     const tubesOf = (solid: boolean) => edges.filter((e) => e.solid === solid).map((e) => ({ center: e.d, highlight: e.highlightD }));
     return { emptyTubes: tubesOf(false), filledTubes: tubesOf(true) };
   }, [layout]);
-  /** 步骤号：按 sortOrder 排的第几步（从 1 起）。 */
   const stepNumberOf = useMemo(() => {
     const order = new Map((graph?.nodes ?? []).toSorted((a, b) => a.sortOrder - b.sortOrder || a.key.localeCompare(b.key)).map((n, i) => [n.key, i + 1]));
     return (key: string) => order.get(key) ?? 0;
@@ -275,7 +258,6 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
           <Dialog
             open={confirmingCancel}
             onOpenChange={(next) => {
-              // 请求中不让 Esc、点遮罩把确认弹窗关掉（结果回来再关）
               if (!cancelMutation.isPending) setConfirmingCancel(next);
             }}
           >
@@ -334,7 +316,6 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
               const isDone = node.status === "done" && !node.skipped;
               const isRunning = node.status === "running";
               const isWaitingPm = isTaskNodeWaitingPm(node);
-              // 没轮到、等项目经理（没有 Worker 挂着）的步骤能跳过；在干、等用户、完了的不行
               const canSkip = graph.status === "active" && (isPending || (isWaitingPm && node.activeWorkerId === null));
               const measureKey = measureKeyOf(graph.id, node.key, isWaitingGate);
 
@@ -380,7 +361,7 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                   key={measureKey}
                   ref={measureCard}
                   data-measure-key={measureKey}
-                  // 高度只由内容定，下限是写死的一档：把量到的高度写回这里，卡变矮时（拍板、跳过之后）会被旧高度撑住
+                  // Height comes from content only; writing the measured height back would pin the card when it shrinks.
                   style={{ left: `${box.x}px`, top: `${box.y}px`, width: `${box.width}px` }}
                   data-step={beadOf(node)}
                   className="pixel-card absolute flex"
@@ -390,7 +371,6 @@ export const TaskGraphDialog = memo(function TaskGraphDialog({
                     <div className="flex items-start justify-between gap-2">
                       <span className="flex min-w-0 items-start gap-1.5 [&>svg]:mt-0.75">
                         <BeadIcon bead={beadOf(node)} />
-                        {/* 步骤名最多两行：并行的几步名字常常只有末尾不同，截成一行就分不出来 */}
                         <span
                           title={node.title}
                           className={cn(

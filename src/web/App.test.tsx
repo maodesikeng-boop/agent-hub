@@ -302,7 +302,7 @@ describe("Send", () => {
     push(ws, messageChange(11, "message.created", makeUserMessage({ id: 3, text: "已接收的消息", status: "queued", dedupeKey: `client:1:${clientId}` })));
     gate.resolve({ status: 500, body: { error: "response lost" } });
     await act(async () => {});
-    expect(screen.queryByRole("button", { name: "没发出去，点击重发" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Not sent. Click to resend" })).not.toBeInTheDocument();
     expect(api.callsTo("POST", /messages$/)).toHaveLength(1);
     expect(bubbles()).toHaveLength(3);
   });
@@ -312,14 +312,14 @@ describe("Send", () => {
     await boot();
     api.postMessage = () => ({ status: 500, body: { error: "boom" } });
     await user.type(box(), "你好呀{Enter}");
-    expect(await screen.findByRole("button", { name: "没发出去，点击重发" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Not sent. Click to resend" })).toBeInTheDocument();
     api.postMessage = () => ({ status: 200, body: { messageId: 3 } });
-    await user.click(screen.getByRole("button", { name: "没发出去，点击重发" }));
+    await user.click(screen.getByRole("button", { name: "Not sent. Click to resend" }));
     await waitFor(() => expect(api.callsTo("POST", /messages$/)).toHaveLength(2));
     const [first, second] = api.callsTo("POST", /messages$/);
     expect((second?.body as { clientId: string }).clientId).toBe((first?.body as { clientId: string }).clientId);
-    await waitFor(() => expect(screen.queryByRole("button", { name: "没发出去，点击重发" })).not.toBeInTheDocument());
-    expect(screen.queryByRole("button", { name: "没发出去，点击重发" })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Not sent. Click to resend" })).not.toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "Not sent. Click to resend" })).not.toBeInTheDocument();
     expect(bubbles()).toHaveLength(3);
     expect(within(bubbles()[2] as HTMLElement).queryByText("Queued")).toBeNull();
   });
@@ -331,8 +331,8 @@ describe("Send", () => {
       throw new TypeError("Failed to fetch");
     };
     await user.type(box(), "你好呀{Enter}");
-    expect(await screen.findByRole("button", { name: "没发出去，点击重发" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "没发出去，点击重发" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Not sent. Click to resend" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Not sent. Click to resend" })).toBeInTheDocument();
   });
 
   it("重试再失败：仍然停在“发送失败”", async () => {
@@ -340,9 +340,9 @@ describe("Send", () => {
     await boot();
     api.postMessage = () => ({ status: 500, body: { error: "boom" } });
     await user.type(box(), "你好呀{Enter}");
-    await user.click(await screen.findByRole("button", { name: "没发出去，点击重发" }));
+    await user.click(await screen.findByRole("button", { name: "Not sent. Click to resend" }));
     await waitFor(() => expect(api.callsTo("POST", /messages$/)).toHaveLength(2));
-    expect(await screen.findByRole("button", { name: "没发出去，点击重发" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Not sent. Click to resend" })).toBeInTheDocument();
     expect(bubbles()).toHaveLength(3);
   });
 
@@ -351,7 +351,7 @@ describe("Send", () => {
     await boot();
     api.postMessage = () => ({ status: 404, body: { error: "conversation not found" } });
     await user.type(box(), "你好呀{Enter}");
-    expect(await screen.findByRole("button", { name: "没发出去，点击重发" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Not sent. Click to resend" })).toBeInTheDocument();
   });
 
   it("每个对话各自保留没发出去的草稿", async () => {
@@ -419,9 +419,9 @@ describe("消息状态", () => {
       }),
     );
     const [a, b] = bubbles() as [HTMLElement, HTMLElement];
-    const mark = (el: HTMLElement) => within(el).getByRole("button", { name: "没发出去，点击重发" });
-    expect(mark(a).getAttribute("title")).toBe("没发出去：找不到 Claude，点击重发\nclaude_not_found: spawn claude ENOENT");
-    expect(mark(b).getAttribute("title")).toBe("没发出去：出错了，点击重发\n某个没见过的原因");
+    const mark = (el: HTMLElement) => within(el).getByRole("button", { name: "Not sent. Click to resend" });
+    expect(mark(a).getAttribute("title")).toBe("Not sent: 找不到 Claude. Click to resend\nclaude_not_found: spawn claude ENOENT");
+    expect(mark(b).getAttribute("title")).toBe("Not sent: 出错了. Click to resend\n某个没见过的原因");
     expect(within(a).queryByText("找不到 Claude")).toBeNull();
   });
 
@@ -465,7 +465,7 @@ describe("消息状态", () => {
         }),
       ),
     );
-    expect(within(log()).getByText("定时任务「日报」没跑成：Claude 服务繁忙，稍后重试").closest("[data-notice]")).toHaveAttribute(
+    expect(within(log()).getByText('Scheduled task "日报" failed: Claude 服务繁忙，稍后重试').closest("[data-notice]")).toHaveAttribute(
       "title",
       'API Error: 529 {"type":"overloaded_error"}',
     );
@@ -717,9 +717,9 @@ describe("网络出错重试", () => {
     push(ws, sessionChange(14, makeSession({ status: "running", activity: "idle", apiRetry: null })));
     const article = within(log()).getByText("查一下").closest("article")!;
     expect(article).toHaveAttribute("data-status", "failed");
-    expect(within(article).getByRole("button", { name: "没发出去，点击重发" })).toHaveAttribute(
+    expect(within(article).getByRole("button", { name: "Not sent. Click to resend" })).toHaveAttribute(
       "title",
-      "没发出去：网络断了，稍后重试，点击重发\nAPI Error: Unable to connect to API (ConnectionRefused)",
+      "Not sent: 网络断了，稍后重试. Click to resend\nAPI Error: Unable to connect to API (ConnectionRefused)",
     );
     expect(screen.queryByRole("status", { name: "Status" })).not.toBeInTheDocument();
   });

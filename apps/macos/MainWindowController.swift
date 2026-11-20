@@ -137,8 +137,6 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
         loadHub()
     }
 
-    /// 免手输登录：先经 `/api/auth/status` 严格核验 Bellwood 身份与协议版本，通过后才检查或用本机 `state/ui-token` 经 `POST /auth` 兑换 Cookie。
-    /// 若端口被非 Bellwood 服务或协议不兼容进程占用，直接展示冲突错误页，绝不加载未知服务或发送本机令牌。
     func loadHub() {
         isShowingErrorPage = false
         supervisor.probeIdentity { [weak self] probeResult in
@@ -150,7 +148,7 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
                 }
             case .unreachable:
                 DispatchQueue.main.async {
-                    self.showStartupError("后台服务尚未就绪（端口 \(self.supervisor.port) 无响应）")
+                    self.showStartupError("The daemon isn't ready (no response on port \(self.supervisor.port))")
                 }
             case .verified:
                 DispatchQueue.main.async { [self] in
@@ -224,7 +222,7 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
         </head>
         <body>
           <p>\(escaped)</p>
-          <p class="muted">日志文件：\(supervisor.logFilePath)</p>
+          <p class="muted">Log file: \(supervisor.logFilePath)</p>
         </body>
         </html>
         """
@@ -237,14 +235,10 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
         webView.evaluateJavaScript("window.__agentHubNotificationClicked && window.__agentHubNotificationClicked(\"\(safeId)\");", completionHandler: nil)
     }
 
-    // MARK: - NSWindowDelegate
-
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         sender.orderOut(nil)
         return false
     }
-
-    // MARK: - WKScriptMessageHandler
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         switch message.name {
@@ -298,8 +292,6 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
             center.add(request, withCompletionHandler: nil)
         }
     }
-
-    // MARK: - WKNavigationDelegate
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         webView.evaluateJavaScript("Boolean(document.querySelector('[data-testid=\"unauthenticated\"]'))") { [weak self] result, _ in
@@ -367,8 +359,6 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
         download.delegate = self
     }
 
-    // MARK: - WKUIDelegate
-
     func webView(
         _ webView: WKWebView,
         createWebViewWith configuration: WKWebViewConfiguration,
@@ -393,8 +383,6 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
             completionHandler(response == .OK ? panel.urls : nil)
         }
     }
-
-    // MARK: - WKDownloadDelegate
 
     func download(
         _ download: WKDownload,

@@ -82,27 +82,19 @@ export function Conversation({
   session: SessionState | null;
   older: OlderState | undefined;
   draft: DraftSlot;
-  /** 还没发的文件、提示、发送中（和 draft 一样由 App 按对话存，见 upload.ts 的 useStagingStore）。 */
   staging: StagedFiles;
-  /** 标题栏最左边：手机返回按钮。 */
   leading?: React.ReactNode;
   mobile?: boolean;
-  /** 标题栏右边：右栏开关。 */
   toolbar: React.ReactNode;
-  /** 太窄时放在顶栏下面的右栏。 */
   top: React.ReactNode;
-  /** 顶部提醒，放在标题栏下面。 */
   notices: React.ReactNode;
-  /** 只有文字：同步发出（返回 undefined）；带文件：返回 Promise，传完、发出才 resolve，失败 reject（Error.message 给用户看）。 */
   onSend: (conversationId: ConversationId, text: string, files: File[]) => void | Promise<void>;
   onRetry: (clientId: string) => void;
   onStop: (conversationId: ConversationId) => Promise<void>;
   onRewind?: (conversationId: ConversationId, stopping: boolean, draftText: string) => { text: string; workerPick: WorkerPick | null } | null;
   onLoadOlder: (conversationId: ConversationId) => void;
   actions: MessageActions;
-  /** 对话所在的设备连不上时输入框怎么办（见 Composer 的 link）。 */
   link?: ComposerLink | null;
-  /** 要滚到并高亮的消息（右栏点开一个提问）：n 每点一次加一，点同一条也再跳一次。 */
   focus: { id: MessageId; n: number } | null;
   onFocusDone: () => void;
   onOpenProfile: (pmId: PmId) => void;
@@ -123,7 +115,6 @@ export function Conversation({
     [onRewind, id, draft],
   );
   const client = useClient();
-  // agent-hub 自己的命令（/hub:worker）只在项目经理对话里有
   const isPm = view.conversation.kind === "pm";
   const source = useMemo(() => conversationSource(id, client.url, isPm ? HUB_COMPOSER_COMMANDS : undefined), [id, client, isPm]);
   const messages = useMemo(() => visibleMessages(view.messages), [view.messages]);
@@ -133,7 +124,6 @@ export function Conversation({
     [actions, archived, client],
   );
 
-  // agent 的消息都是这个项目经理说的（Worker 的汇报是单独的一行，点开才是 Worker 自己的对话）
   const agent = useMemo(() => ({ name: entry.name, look: entry.look }), [entry.name, entry.look]);
   const agentOf = useCallback(() => agent, [agent]);
   const handleLoadOlder = useCallback(() => onLoadOlder(id), [onLoadOlder, id]);

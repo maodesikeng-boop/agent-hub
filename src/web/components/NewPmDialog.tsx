@@ -31,21 +31,17 @@ import { ModeRows } from "./ModeRows.tsx";
 import { SlimePicker } from "./SlimePicker.tsx";
 import { RowError, SettingsGroup, SettingsRow } from "./SettingsList.tsx";
 
-/** 名字、主文件夹两行右边控件的宽度（288px）：两行左右边线对齐；主文件夹的输入框和 Choose… 一起占这么宽，一行放得下、不折行。 */
 const FIELD_WIDTH = "w-72";
 
-/** 新建项目经理时能选的一台设备。 */
 export interface NewPmDevice {
   key: DeviceKey;
   name: string;
   status: DeviceStatus;
   client: HubClient;
   server: ServerInfo;
-  /** 这台设备上没归档的项目经理现在的形象：新建时默认分一个不撞造型的（和账本的 pickNewPmLook 同一个算法）。 */
   takenLooks: readonly SlimeLook[];
 }
 
-/** deviceRow：两台以上设备时最上面一行“设备”；表单的接口、模型名单、能不能“选择…”都按外面 DeviceScope 的那台。 */
 function NewPmForm({
   mobile,
   deviceRow,
@@ -60,7 +56,6 @@ function NewPmForm({
   onManageProviders?: () => void;
 }) {
   const client = useClient();
-  // 没动过就不带 look，账本按同一个算法分；换过才带上
   const [pickedLook, setPickedLook] = useState<SlimeLook | null>(null);
   const look = pickedLook ?? pickNewPmLook(takenLooks, 0);
   const allCatalogs = useModelCatalogs();
@@ -74,15 +69,12 @@ function NewPmForm({
   const [error, setError] = useState<ErrorLike | null>(null);
   const [picking, setPicking] = useState(false);
   const [pickError, setPickError] = useState<ErrorLike | null>(null);
-  // 服务端不是 macOS（弹不出原生对话框）：不显示“选择…”，只留手填路径的输入框
   const canPick = useServerInfo().folderPicker;
 
-  // 表单校验（docs/ui-standard.md 第 9 条）：空着“创建”是灰的不报错；填得不对在那一行下面写原因
   const cleanName = normalizeName(name);
   const nameProblem = nameError(name);
   const personaTooLong = utf8Bytes(persona) > MAX_PERSONA_BYTES;
   const agentResult = settingOf(agent);
-  // 选着的厂商这台设备用不了（没装、没登录）：不悄悄换掉（换了设备也保留原来的选择），下拉里标状态词，“创建”是灰的
   const vendorUsable = isSelectable(useModelCatalog(agent.vendor).availability);
   const canSubmit = cleanName !== null && !personaTooLong && agentResult.ok && vendorUsable && !busy;
   const zeroProvidersReady = allCatalogs.length > 0 && allCatalogs.every((c) => !isSelectable(c.availability));
@@ -91,7 +83,6 @@ function NewPmForm({
     if (zeroProvidersReady) setMoreOpen(true);
   }, [zeroProvidersReady]);
 
-  // 守护进程弹原生的“选择文件夹”：选中填进输入框；取消（path 为 null）输入框不变；出错在这一行下面写原因
   const pickFolder = async () => {
     setPicking(true);
     setPickError(null);
@@ -131,7 +122,6 @@ function NewPmForm({
     }
   };
 
-  // 标题和“创建”固定，只有中间（DialogBody）滚：展开“更多设置”后“创建”还在视野里
   return (
     <DialogForm className={mobile ? "gap-0" : undefined} onSubmit={(e) => void submit(e)}>
       <DialogBody className={mobile ? "mx-0 my-0 px-4 py-4" : undefined}>
@@ -240,7 +230,6 @@ function NewPmForm({
   );
 }
 
-/** devices：能选的设备（入口本机第一）；只有一台时没有“设备”这一行。defaultDevice：打开时选中的（当前看的那台）。 */
 export function NewPmDialog({
   open,
   devices,

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::contract::DesktopContract;
 use crate::error::SupervisorError;
 
-/// 仅驻留于 Rust 内存的 UI 认证令牌封装（严禁打印日志、序列化、拼入 URL 或暴露给前端全局变量）。
+// Never log, serialize, put in a URL or expose to the frontend.
 #[derive(Clone, PartialEq, Eq)]
 pub struct SecretUiToken {
     value: String,
@@ -16,7 +16,7 @@ impl SecretUiToken {
         let trimmed = raw.into().trim().to_string();
         if trimmed.is_empty() || trimmed.chars().any(|c| c.is_control() || c == '\0') {
             return Err(SupervisorError::AuthExchangeFailed(
-                "读取到的 ui-token 为空或包含非法控制字符".to_string(),
+                "ui-token is empty or contains control characters".to_string(),
             ));
         }
         Ok(Self { value: trimmed })
@@ -33,7 +33,6 @@ impl fmt::Debug for SecretUiToken {
     }
 }
 
-/// 由 `POST /auth` 兑换得到的回环会话 Cookie（仅写入当前 WebView 实例 CookieJar）。
 #[derive(Clone, PartialEq, Eq)]
 pub struct SessionCookie {
     pub name: String,
@@ -81,7 +80,6 @@ impl fmt::Debug for SessionCookie {
     }
 }
 
-/// 经 `/api/auth/status` 核验通过的 Bellwood 守护进程身份。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DaemonIdentity {
@@ -92,7 +90,6 @@ pub struct DaemonIdentity {
     pub status: Option<String>,
 }
 
-/// 经 `GET /api/health`（携带已兑换会话 Cookie）核验通过的健康状态响应。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DaemonHealthReport {
@@ -102,7 +99,6 @@ pub struct DaemonHealthReport {
     pub instance_id: String,
 }
 
-/// 单侧探活失败原因（结构化建模，区分“尚未就绪/不可达”与“端口冲突/非法重定向”）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ProbeFailureKind {
@@ -122,30 +118,29 @@ impl ProbeFailureKind {
 
     pub fn describe_for_port(&self, port: u16) -> String {
         match self {
-            Self::Unreachable { reason } => format!("127.0.0.1:{port} 尚未可达（{reason}）"),
+            Self::Unreachable { reason } => format!("127.0.0.1:{port} is not reachable yet ({reason})"),
             Self::RedirectBlocked { status_code } => format!(
-                "端口 {port} 返回了 HTTP {status_code} 重定向，已按安全策略拦截，请关闭占用该端口的其他程序"
+                "Port {port} returned an HTTP {status_code} redirect, which is blocked. Close the program using this port"
             ),
             Self::UnexpectedHttpStatus { status_code } => format!(
-                "端口 {port} 已被其他 HTTP 服务占用（返回状态码 {status_code}），请先关闭占用程序"
+                "Port {port} is used by another HTTP service (status {status_code}). Close that program first"
             ),
             Self::InvalidJson { .. } => format!(
-                "端口 {port} 已被非 Bellwood 服务占用（响应不是有效的状态 JSON），请先关闭占用程序"
+                "Port {port} is used by a non-Bellwood service (no valid status JSON). Close that program first"
             ),
             Self::ProductMismatch { actual } => format!(
-                "端口 {port} 已被其他服务或旧版后台占用（product={actual:?}），请先关闭占用程序"
+                "Port {port} is used by another service or an older daemon (product={actual:?}). Close that program first"
             ),
             Self::IncompatibleProtocol { actual, expected } => format!(
-                "端口 {port} 上的 Bellwood 协议版本不兼容（实际: {actual:?}，需要: {expected}），请停止旧进程或更新应用"
+                "The Bellwood daemon on port {port} speaks an incompatible protocol (got {actual:?}, need {expected}). Stop the old process or update the app"
             ),
             Self::InvalidInstanceId => {
-                format!("端口 {port} 上的服务缺少合法的 Bellwood instanceId，拒绝连接")
+                format!("The service on port {port} has no valid Bellwood instanceId. Connection refused")
             }
         }
     }
 }
 
-/// 本机回环 HTTP 探活结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProbeOutcome {
     Verified(DaemonIdentity),
@@ -166,7 +161,6 @@ fn is_valid_instance_id(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
-/// 按 `contract.json` 严格校验 `/api/auth/status` 的 HTTP 状态码与响应 JSON。
 pub fn parse_status_http_response(
     status_code: u16,
     body: &[u8],
@@ -238,17 +232,16 @@ pub fn parse_status_http_response(
     })
 }
 
-/// 解析 `POST /auth` 返回的 `Set-Cookie` 响应头。
 pub fn parse_set_cookie_header(header_val: &str, expected_port: u16) -> Result<SessionCookie, SupervisorError> {
     let mut segments = header_val.split(';').map(str::trim);
     let Some(first) = segments.next() else {
         return Err(SupervisorError::AuthExchangeFailed(
-            "Set-Cookie 响应头为空".to_string(),
+            "Set-Cookie header is empty".to_string(),
         ));
     };
     let Some((name, value)) = first.split_once('=') else {
         return Err(SupervisorError::AuthExchangeFailed(
-            "Set-Cookie 缺少键值分隔符".to_string(),
+            "Set-Cookie has no name=value separator".to_string(),
         ));
     };
     let name = name.trim();
@@ -256,7 +249,7 @@ pub fn parse_set_cookie_header(header_val: &str, expected_port: u16) -> Result<S
     let expected_prefix = format!("agent_hub_ui_{expected_port}");
     if name.is_empty() || value.is_empty() || name != expected_prefix {
         return Err(SupervisorError::AuthExchangeFailed(format!(
-            "Set-Cookie 名称与当前端口不符（收到: {name:?}，期望: {expected_prefix:?}）"
+            "Set-Cookie name does not match this port (got {name:?}, expected {expected_prefix:?})"
         )));
     }
 
@@ -291,7 +284,6 @@ pub fn parse_set_cookie_header(header_val: &str, expected_port: u16) -> Result<S
     ))
 }
 
-/// 宿主侧回环 HTTP 客户端抽象（支持注入单测桩，真实实现强制关闭 3xx 重定向与系统代理）。
 pub trait HostHttpClient: Send + Sync {
     fn probe_status(&self, port: u16, contract: &DesktopContract) -> ProbeOutcome;
 
@@ -303,7 +295,7 @@ pub trait HostHttpClient: Send + Sync {
     ) -> Result<SessionCookie, SupervisorError>;
 }
 
-/// 基于 `ureq` 的真实宿主 HTTP 客户端：强制 `max_redirects(0)` 与 `proxy(None)`，绝不自动跟随任何 3xx 重定向。
+// Redirects and system proxies stay disabled so a 3xx is never followed.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct UreqHostHttpClient;
 
@@ -319,7 +311,6 @@ impl UreqHostHttpClient {
         cfg.into()
     }
 
-    /// 请求需要鉴权的 `GET /api/health`（可选携带 `SessionCookie`，用于 `--self-test` 同时验证无 Cookie 401 与有 Cookie 200）。
     pub fn request_health(
         &self,
         port: u16,
@@ -417,7 +408,7 @@ impl HostHttpClient for UreqHostHttpClient {
             }
             Err(err) => {
                 return Err(SupervisorError::AuthExchangeFailed(format!(
-                    "请求 POST /auth 失败：{err}"
+                    "POST /auth failed: {err}"
                 )))
             }
         };
@@ -428,7 +419,7 @@ impl HostHttpClient for UreqHostHttpClient {
         }
         if status_code != 204 && status_code != 200 {
             return Err(SupervisorError::AuthExchangeFailed(format!(
-                "POST /auth 返回非预期状态码 {status_code}"
+                "POST /auth returned unexpected status {status_code}"
             )));
         }
 
@@ -441,7 +432,7 @@ impl HostHttpClient for UreqHostHttpClient {
         }
 
         Err(SupervisorError::AuthExchangeFailed(
-            "POST /auth 未返回有效的会话 Set-Cookie 响应头".to_string(),
+            "POST /auth returned no valid session Set-Cookie header".to_string(),
         ))
     }
 }

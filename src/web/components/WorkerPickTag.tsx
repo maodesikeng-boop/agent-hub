@@ -1,5 +1,3 @@
-// /hub:worker 选的厂商、模型、思考程度显示成的小标签（docs/ui-standard.md 第 17、18 条）：
-// 输入框里那个能点、能去掉（Composer.tsx），用户气泡上方那个只读（Messages.tsx），里面的图标和几项是同一份。
 import { Bot, ComposerBot } from "../ui/icons.ts";
 import { useMemo } from "react";
 import type { WorkerPick } from "../../shared/index.ts";
@@ -7,13 +5,11 @@ import { cn } from "../lib/utils.ts";
 import { useModelCatalogs } from "../models.tsx";
 import { workerPickLabels } from "../worker-pick.ts";
 
-/** 标签上的几项（厂商名、模型名、思考程度）。名单只读缓存（和输入框列表同一份），不为它发请求，没拉到用打包的。 */
 export function useWorkerPickLabels(pick: WorkerPick): string[] {
   const catalogs = useModelCatalogs(false);
   return useMemo(() => workerPickLabels(pick, catalogs), [pick.vendor, pick.model, pick.effort, catalogs]);
 }
 
-/** Bot 图标 + 几项，gap-2 隔开，不用 “·”。inComposer：在输入框里，用线条的机器人（输入框里不用像素图标）。 */
 export function WorkerPickParts({ labels, inComposer = false }: { labels: readonly string[]; inComposer?: boolean }) {
   return (
     <>
@@ -31,7 +27,6 @@ export function WorkerPickParts({ labels, inComposer = false }: { labels: readon
   );
 }
 
-/** 用户气泡上方的只读标签：没有 ×、不能点。 */
 export function WorkerPickTag({ pick, className }: { pick: WorkerPick; className?: string }) {
   const labels = useWorkerPickLabels(pick);
   return (

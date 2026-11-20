@@ -1,5 +1,3 @@
-// Settings → Providers 一键安装、更新与界面内直接登录（docs/providers-install-login-design.md）。
-// 严格由服务端 ProviderStatusItem.authMethods 数据驱动渲染，零单家厂商字面量、零符号拼接（不用 · / | / /）、错误日志默认收起。
 import { Loader2 } from "../ui/icons.ts";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
@@ -38,7 +36,6 @@ function openExternalBrowserPage(url: string): void {
   try {
     window.open(url, "_blank", "noopener,noreferrer");
   } catch {
-    // 测试或受限环境忽略
   }
 }
 
@@ -170,12 +167,10 @@ function ProviderItemRow({
   const job = item.job;
   const jobRunning = job?.phase === "running";
   const jobFailed = job?.phase === "failed";
-  // 装的过程中也能看日志：卡住时看得出停在哪一步
   const hasLog = (jobFailed || jobRunning) && Boolean(job?.logTail.trim());
   const tone = resolveItemTone(item);
   const authenticated = isProviderAuthenticated(item);
   const ready = authenticated || (item.installed && item.canSignOut);
-  // 装、更新失败：行下只写一句人话，进程的原始报错（退出码、EACCES…）放悬停提示，全文在 Show log 里（docs/ui-standard.md 第 17 条）
   const combinedError: ErrorLike | null =
     rowError ?? (jobFailed && job?.error ? { text: job.kind === "update" ? "Update failed" : "Install failed", raw: job.error } : null);
 
@@ -300,7 +295,71 @@ function ProviderItemRow({
   );
 }
 
-/** 桌面窄弹窗与手机底部 SettingsDrawer 共用的登录表单内芯。 */
+type CopyFeedback = ReturnType<typeof useCopyFeedback>;
+
+function useAuthMethodSelection(item: ProviderStatusItem, isRemoteTarget: boolean) {
+  const targets = useMemo(() => extractProviderAuthTargets(item.authMethods), [item.authMethods]);
+  const [targetId, setTargetId] = useState<string | undefined>(() => targets?.[0]?.id);
+  const visibleMethods = useMemo(
+    () => visibleAuthMethodsForTarget(item.authMethods, targetId),
+    [item.authMethods, targetId],
+  );
+  const [methodId, setMethodId] = useState<string | null>(() => {
+    const flow = item.authFlow;
+    if (flow && isProviderAuthFlowActive(flow.phase) && visibleMethods.some((m) => m.id === flow.methodId)) {
+      return flow.methodId;
+    }
+    return defaultProviderAuthMethodId(visibleMethods, isRemoteTarget);
+  });
+  const selectedMethod = useMemo(
+    () => visibleMethods.find((m) => m.id === methodId) ?? visibleMethods[0] ?? null,
+    [methodId, visibleMethods],
+  );
+  const [variantId, setVariantId] = useState<string | undefined>(() =>
+    selectedMethod?.kind === "browser_oauth" ? selectedMethod.variants?.[0]?.id : undefined,
+  );
+  useEffect(() => {
+    if (selectedMethod?.kind !== "browser_oauth") return;
+    const variants = selectedMethod.variants;
+    if (variants && variants.length > 0 && !variants.some((v) => v.id === variantId)) {
+      setVariantId(variants[0]!.id);
+    }
+  }, [selectedMethod, variantId]);
+  return { targets, targetId, setTargetId, visibleMethods, methodId, setMethodId, selectedMethod, variantId, setVariantId };
+}
+
+function useAuthFlowWatcher(item: ProviderStatusItem, isRemoteTarget: boolean, onDone: () => void) {
+  const watchedFlowIdRef = useRef<string | null>(
+    item.authFlow && isProviderAuthFlowActive(item.authFlow.phase) && !item.authFlow.ownedByOtherClient
+      ? item.authFlow.flowId
+      : null,
+  );
+  const autoOpenedFlowRef = useRef<string | null>(null);
+  useEffect(() => {
+    const flow = item.authFlow;
+    if (!flow || watchedFlowIdRef.current !== flow.flowId) return;
+    if (flow.phase === "succeeded") {
+      onDone();
+      return;
+    }
+    if (!isRemoteTarget && flow.phase === "waiting_browser" && flow.authorizeUrl && autoOpenedFlowRef.current !== flow.flowId) {
+      autoOpenedFlowRef.current = flow.flowId;
+      openExternalBrowserPage(flow.authorizeUrl);
+    }
+  }, [item.authFlow, isRemoteTarget, onDone]);
+  return { watchedFlowIdRef, autoOpenedFlowRef };
+}
+
+type SignInMethod = NonNullable<ReturnType<typeof useAuthMethodSelection>["selectedMethod"]>;
+type SignInFlow = NonNullable<ProviderStatusItem["authFlow"]>;
+
+function flowStateFor(item: ProviderStatusItem, method: SignInMethod | null) {
+  const flow = method !== null && item.authFlow?.methodId === method.id ? item.authFlow : null;
+  const activeFlow = flow !== null && isProviderAuthFlowActive(flow.phase) ? flow : null;
+  const terminalFlowError = flow !== null && (flow.phase === "failed" || flow.phase === "expired") && flow.error ? flow.error : null;
+  return { activeFlow, terminalFlowError };
+}
+
 export function ProviderSignInBody({
   item,
   model,
@@ -314,100 +373,18 @@ export function ProviderSignInBody({
   onDone: () => void;
   onCancel: () => void;
 }) {
-  const targets = useMemo(() => extractProviderAuthTargets(item.authMethods), [item.authMethods]);
-  const [targetId, setTargetId] = useState<string | undefined>(() => targets?.[0]?.id);
-
-  const visibleMethods = useMemo(
-    () => visibleAuthMethodsForTarget(item.authMethods, targetId),
-    [item.authMethods, targetId],
-  );
-
-  const [methodId, setMethodId] = useState<string | null>(() => {
-    if (
-      item.authFlow &&
-      isProviderAuthFlowActive(item.authFlow.phase) &&
-      visibleMethods.some((m) => m.id === item.authFlow?.methodId)
-    ) {
-      return item.authFlow.methodId;
-    }
-    return defaultProviderAuthMethodId(visibleMethods, model.isRemoteTarget);
-  });
-
-  const selectedMethod = useMemo(
-    () => visibleMethods.find((m) => m.id === methodId) ?? visibleMethods[0] ?? null,
-    [methodId, visibleMethods],
-  );
-
-  const [variantId, setVariantId] = useState<string | undefined>(() =>
-    selectedMethod?.kind === "browser_oauth" ? selectedMethod.variants?.[0]?.id : undefined,
-  );
-  useEffect(() => {
-    if (selectedMethod?.kind === "browser_oauth") {
-      const variants = selectedMethod.variants;
-      if (variants && variants.length > 0 && !variants.some((v) => v.id === variantId)) {
-        setVariantId(variants[0]!.id);
-      }
-    }
-  }, [selectedMethod, variantId]);
-
+  const selection = useAuthMethodSelection(item, model.isRemoteTarget);
+  const { targets, targetId, selectedMethod, variantId } = selection;
+  const { watchedFlowIdRef, autoOpenedFlowRef } = useAuthFlowWatcher(item, model.isRemoteTarget, onDone);
   const [apiKey, setApiKey] = useState("");
   const [manualInput, setManualInput] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [localError, setLocalError] = useState<ErrorLike | null>(null);
-  // 粘贴授权码的表单只有输入框；提交键在弹窗底部最右（第 10 条），用 form 属性连回表单，手机抽屉里紧跟在输入框下面
   const manualFormId = useId();
-  const manualSubmit = (
-    <Button type="submit" form={manualFormId} className={mobile ? DRAWER_BUTTON : undefined} disabled={!manualInput.trim() || submitting}>
-      {submitting && <Loader2 aria-hidden="true" />}
-      Submit
-    </Button>
-  );
-  const watchedFlowIdRef = useRef<string | null>(
-    item.authFlow && isProviderAuthFlowActive(item.authFlow.phase) && !item.authFlow.ownedByOtherClient
-      ? item.authFlow.flowId
-      : null,
-  );
-  const autoOpenedFlowRef = useRef<string | null>(null);
   const linkCopy = useCopyFeedback();
   const codeCopy = useCopyFeedback();
-
-  // 监听本窗口发起的登录流自动落盘成功并收起弹窗/抽屉
-  useEffect(() => {
-    const flow = item.authFlow;
-    if (!flow) return;
-    if (watchedFlowIdRef.current === flow.flowId && flow.phase === "succeeded") {
-      onDone();
-      return;
-    }
-    // 本机模式下首次捕获到 authorizeUrl 时自动拉起默认浏览器（若已被点击直接打开过则跳过重复打开）
-    if (
-      !model.isRemoteTarget &&
-      watchedFlowIdRef.current === flow.flowId &&
-      flow.phase === "waiting_browser" &&
-      flow.authorizeUrl &&
-      autoOpenedFlowRef.current !== flow.flowId
-    ) {
-      autoOpenedFlowRef.current = flow.flowId;
-      openExternalBrowserPage(flow.authorizeUrl);
-    }
-  }, [item.authFlow, model.isRemoteTarget, onDone]);
-
-  const activeFlow =
-    selectedMethod &&
-    item.authFlow &&
-    item.authFlow.methodId === selectedMethod.id &&
-    isProviderAuthFlowActive(item.authFlow.phase)
-      ? item.authFlow
-      : null;
-
-  const terminalFlowError =
-    selectedMethod &&
-    item.authFlow &&
-    item.authFlow.methodId === selectedMethod.id &&
-    (item.authFlow.phase === "failed" || item.authFlow.phase === "expired") &&
-    item.authFlow.error
-      ? item.authFlow.error
-      : null;
+  const { activeFlow, terminalFlowError } = flowStateFor(item, selectedMethod);
+  const displayedError = localError ?? terminalFlowError;
 
   const cancelCurrentFlowIfOwned = useCallback(async () => {
     const flow = item.authFlow;
@@ -422,12 +399,12 @@ export function ProviderSignInBody({
   };
 
   const handleTargetChange = (nextTargetId: string) => {
-    setTargetId(nextTargetId);
+    selection.setTargetId(nextTargetId);
     setLocalError(null);
     setApiKey("");
     const nextVisible = visibleAuthMethodsForTarget(item.authMethods, nextTargetId);
-    if (!nextVisible.some((m) => m.id === methodId)) {
-      setMethodId(defaultProviderAuthMethodId(nextVisible, model.isRemoteTarget));
+    if (!nextVisible.some((m) => m.id === selection.methodId)) {
+      selection.setMethodId(defaultProviderAuthMethodId(nextVisible, model.isRemoteTarget));
     }
   };
 
@@ -435,15 +412,25 @@ export function ProviderSignInBody({
     if (nextMethodId === selectedMethod?.id) return;
     setLocalError(null);
     setManualInput("");
-    setMethodId(nextMethodId);
+    selection.setMethodId(nextMethodId);
     void cancelCurrentFlowIfOwned();
+  };
+
+  const runSubmit = async (task: () => Promise<void>) => {
+    setSubmitting(true);
+    setLocalError(null);
+    try {
+      await task();
+    } catch (err) {
+      setLocalError(errorText(err));
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const handleStartInteractive = async () => {
     if (!selectedMethod || selectedMethod.kind === "api_key" || submitting) return;
-    setSubmitting(true);
-    setLocalError(null);
-    try {
+    await runSubmit(async () => {
       const updated = await model.startAuth(item.vendor, {
         methodId: selectedMethod.id,
         ...(selectedMethod.kind === "browser_oauth" && variantId !== undefined ? { variantId } : {}),
@@ -451,114 +438,65 @@ export function ProviderSignInBody({
         remoteHint: model.isRemoteTarget,
       });
       const nextFlow = updated?.authFlow ?? null;
-      if (nextFlow) {
-        watchedFlowIdRef.current = nextFlow.flowId;
-        if (nextFlow.phase === "succeeded") {
-          onDone();
-          return;
-        }
-        if (!model.isRemoteTarget && nextFlow.authorizeUrl) {
-          autoOpenedFlowRef.current = nextFlow.flowId;
-          openExternalBrowserPage(nextFlow.authorizeUrl);
-        }
+      if (!nextFlow) return;
+      watchedFlowIdRef.current = nextFlow.flowId;
+      if (nextFlow.phase === "succeeded") {
+        onDone();
+        return;
       }
-    } catch (err) {
-      setLocalError(errorText(err));
-    } finally {
-      setSubmitting(false);
-    }
+      if (!model.isRemoteTarget && nextFlow.authorizeUrl) {
+        autoOpenedFlowRef.current = nextFlow.flowId;
+        openExternalBrowserPage(nextFlow.authorizeUrl);
+      }
+    });
   };
 
   const handleSubmitManual = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeFlow || !manualInput.trim() || submitting) return;
-    setSubmitting(true);
-    setLocalError(null);
-    try {
-      const updated = await model.submitAuth(item.vendor, {
-        flowId: activeFlow.flowId,
-        input: manualInput.trim(),
-      });
+    await runSubmit(async () => {
+      const updated = await model.submitAuth(item.vendor, { flowId: activeFlow.flowId, input: manualInput.trim() });
       setManualInput("");
-      if (updated?.authFlow?.phase === "succeeded" || (updated && isSelectable(updated.availability))) {
-        onDone();
-      }
-    } catch (err) {
-      setLocalError(errorText(err));
-    } finally {
-      setSubmitting(false);
-    }
+      if (updated?.authFlow?.phase === "succeeded" || (updated && isSelectable(updated.availability))) onDone();
+    });
   };
 
   const handleSaveApiKey = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!apiKey.trim() || submitting) return;
-    setSubmitting(true);
-    setLocalError(null);
-    try {
-      await model.saveApiKey(item.vendor, {
-        ...(targetId !== undefined ? { targetId } : {}),
-        apiKey: apiKey.trim(),
-      });
+    await runSubmit(async () => {
+      await model.saveApiKey(item.vendor, { ...(targetId !== undefined ? { targetId } : {}), apiKey: apiKey.trim() });
       onDone();
-    } catch (err) {
-      setLocalError(errorText(err));
-    } finally {
-      setSubmitting(false);
-    }
+    });
   };
 
-  const displayedError = localError ?? terminalFlowError;
+  const panel: SignInPanelProps = {
+    mobile,
+    submitting,
+    error: displayedError,
+    activeFlow,
+    onCancel,
+    onCancelFlow: () => void handleCancelClick(),
+    onStart: () => void handleStartInteractive(),
+  };
 
   return (
     <div className="grid grid-cols-1 gap-4">
       {targets !== null && (
-        mobile ? (
-          <FieldBlock label="Model provider" bare>
-            {(id) => (
-              <Select
-                id={id}
-                className={TOUCH_INPUT}
-                value={targetId}
-                disabled={activeFlow !== null || submitting}
-                onChange={(e) => handleTargetChange(e.target.value)}
-              >
-                {targets.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.configured ? `${t.label} (Configured)` : t.label}
-                  </option>
-                ))}
-              </Select>
-            )}
-          </FieldBlock>
-        ) : (
-          <SettingsGroup label="Model provider">
-            <SettingsRow label="Model provider">
-              {(id) => (
-                <Select
-                  id={id}
-                  variant="plain"
-                  value={targetId}
-                  disabled={activeFlow !== null || submitting}
-                  onChange={(e) => handleTargetChange(e.target.value)}
-                >
-                  {targets.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.configured ? `${t.label} (Configured)` : t.label}
-                    </option>
-                  ))}
-                </Select>
-              )}
-            </SettingsRow>
-          </SettingsGroup>
-        )
+        <AuthTargetPicker
+          targets={targets}
+          value={targetId}
+          mobile={mobile}
+          disabled={activeFlow !== null || submitting}
+          onChange={handleTargetChange}
+        />
       )}
 
-      {visibleMethods.length > 1 && selectedMethod && (
+      {selection.visibleMethods.length > 1 && selectedMethod && (
         <Segmented
           label="Sign-in method"
           value={selectedMethod.id}
-          options={visibleMethods.map((m) => ({ value: m.id, label: m.label }))}
+          options={selection.visibleMethods.map((m) => ({ value: m.id, label: m.label }))}
           onChange={handleMethodChange}
           className="flex w-full [&>*]:flex-auto [&>*]:justify-center [&>*]:truncate"
         />
@@ -573,285 +511,322 @@ export function ProviderSignInBody({
             value={variantId}
             options={selectedMethod.variants.map((v) => ({ value: v.id, label: v.label }))}
             onChange={(next) => {
-              if (activeFlow === null) setVariantId(next);
+              if (activeFlow === null) selection.setVariantId(next);
             }}
             className="flex w-full [&>*]:flex-auto [&>*]:justify-center [&>*]:truncate"
           />
         )}
 
       {selectedMethod?.kind === "api_key" && (
-        <form className="grid grid-cols-1 gap-4" onSubmit={(e) => void handleSaveApiKey(e)}>
-          <Input
-            type="password"
-            aria-label={selectedMethod.label}
-            placeholder={selectedMethod.placeholder}
-            value={apiKey}
-            autoFocus={!mobile}
-            disabled={submitting}
-            {...NO_AUTOCORRECT}
-            className={mobile ? TOUCH_INPUT : "w-full"}
-            onChange={(e) => setApiKey(e.target.value)}
-          />
-          {displayedError !== null && <RowError error={displayedError} />}
-          {mobile ? (
-            <div className="grid grid-cols-1 gap-2">
-              <Button type="submit" className={DRAWER_BUTTON} disabled={!apiKey.trim() || submitting}>
-                {submitting && <Loader2 aria-hidden="true" />}
-                Save
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                className={DRAWER_BUTTON}
-                disabled={submitting}
-                onClick={() => void handleCancelClick()}
-              >
-                Cancel
-              </Button>
-            </div>
-          ) : (
-            <DialogFooter>
-              <Button type="button" variant="outline" disabled={submitting} onClick={() => void handleCancelClick()}>
-                Cancel
-              </Button>
-              <Button type="submit" disabled={!apiKey.trim() || submitting}>
-                {submitting && <Loader2 aria-hidden="true" />}
-                Save
-              </Button>
-            </DialogFooter>
-          )}
-        </form>
+        <ApiKeyForm
+          {...panel}
+          label={selectedMethod.label}
+          placeholder={selectedMethod.placeholder}
+          value={apiKey}
+          onChange={setApiKey}
+          onSubmit={(e) => void handleSaveApiKey(e)}
+        />
       )}
 
       {selectedMethod?.kind === "browser_oauth" && (
-        <div className="grid grid-cols-1 gap-4">
-          {activeFlow?.ownedByOtherClient ? (
-            <>
-              <p className="text-minor text-muted-foreground">Sign-in in progress in another window</p>
-              {mobile ? (
-                <Button type="button" variant="outline" className={DRAWER_BUTTON} onClick={onCancel}>
-                  Cancel
-                </Button>
-              ) : (
-                <DialogFooter>
-                  <Button type="button" variant="outline" onClick={onCancel}>
-                    Cancel
-                  </Button>
-                </DialogFooter>
-              )}
-            </>
-          ) : activeFlow !== null ? (
-            <>
-              <div className="flex items-center gap-2 text-minor text-muted-foreground">
-                <Loader2 className="size-pixel shrink-0" aria-hidden="true" />
-                <span className="status-shimmer">Waiting for browser…</span>
-              </div>
-              {activeFlow.authorizeUrl && (
-                <div className={cn("gap-2", mobile ? "grid grid-cols-1" : "flex flex-wrap items-center")}>
-                  <Button
-                    type="button"
-                    variant={model.isRemoteTarget ? "default" : "outline"}
-                    className={mobile ? DRAWER_BUTTON : undefined}
-                    onClick={() => openExternalBrowserPage(activeFlow.authorizeUrl!)}
-                  >
-                    Open sign-in page
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className={mobile ? DRAWER_BUTTON : undefined}
-                    onClick={() => linkCopy.copy(activeFlow.authorizeUrl!)}
-                  >
-                    {linkCopy.copied ? "Copied" : "Copy link"}
-                  </Button>
-                </div>
-              )}
-              {activeFlow.manualInput !== "none" && (
-                <form id={manualFormId} className="grid grid-cols-1 gap-2" onSubmit={(e) => void handleSubmitManual(e)}>
-                  <Input
-                    aria-label="Paste code or redirect URL"
-                    placeholder="Paste code or redirect URL…"
-                    value={manualInput}
-                    disabled={submitting}
-                    {...NO_AUTOCORRECT}
-                    className={mobile ? TOUCH_INPUT : undefined}
-                    onChange={(e) => setManualInput(e.target.value)}
-                  />
-                  {mobile && manualSubmit}
-                </form>
-              )}
-              {displayedError !== null && <RowError error={displayedError} />}
-              {mobile ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  className={DRAWER_BUTTON}
-                  onClick={() => void handleCancelClick()}
-                >
-                  Cancel
-                </Button>
-              ) : (
-                <DialogFooter>
-                  <Button type="button" variant="outline" onClick={() => void handleCancelClick()}>
-                    Cancel
-                  </Button>
-                  {activeFlow.manualInput !== "none" && manualSubmit}
-                </DialogFooter>
-              )}
-            </>
-          ) : (
-            <>
-              {displayedError !== null && <RowError error={displayedError} />}
-              {mobile ? (
-                <div className="grid grid-cols-1 gap-2">
-                  <Button
-                    type="button"
-                    className={DRAWER_BUTTON}
-                    disabled={submitting}
-                    onClick={() => void handleStartInteractive()}
-                  >
-                    {submitting && <Loader2 aria-hidden="true" />}
-                    {model.isRemoteTarget ? "Open sign-in page" : "Continue in browser"}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className={DRAWER_BUTTON}
-                    disabled={submitting}
-                    onClick={() => void handleCancelClick()}
-                  >
-                    Cancel
-                  </Button>
-                </div>
-              ) : (
-                <DialogFooter>
-                  <Button type="button" variant="outline" disabled={submitting} onClick={() => void handleCancelClick()}>
-                    Cancel
-                  </Button>
-                  <Button type="button" disabled={submitting} onClick={() => void handleStartInteractive()}>
-                    {submitting && <Loader2 aria-hidden="true" />}
-                    {model.isRemoteTarget ? "Open sign-in page" : "Continue in browser"}
-                  </Button>
-                </DialogFooter>
-              )}
-            </>
-          )}
-        </div>
+        <BrowserOAuthPanel
+          {...panel}
+          remote={model.isRemoteTarget}
+          linkCopy={linkCopy}
+          manualFormId={manualFormId}
+          manualInput={manualInput}
+          onManualInputChange={setManualInput}
+          onSubmitManual={(e) => void handleSubmitManual(e)}
+        />
       )}
 
-      {selectedMethod?.kind === "device_code" && (
-        <div className="grid grid-cols-1 gap-4">
-          {activeFlow?.ownedByOtherClient ? (
-            <>
-              <p className="text-minor text-muted-foreground">Sign-in in progress in another window</p>
-              {mobile ? (
-                <Button type="button" variant="outline" className={DRAWER_BUTTON} onClick={onCancel}>
-                  Cancel
-                </Button>
-              ) : (
-                <DialogFooter>
-                  <Button type="button" variant="outline" onClick={onCancel}>
-                    Cancel
-                  </Button>
-                </DialogFooter>
-              )}
-            </>
-          ) : activeFlow !== null ? (
-            <>
-              {activeFlow.userCode ? (
-                <div className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-sidebar px-4 py-3">
-                  <code
-                    data-testid="device-user-code"
-                    className="font-mono text-title font-semibold tracking-wider select-all"
-                  >
-                    {activeFlow.userCode}
-                  </code>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => codeCopy.copy(activeFlow.userCode!)}
-                  >
-                    {codeCopy.copied ? "Copied" : "Copy code"}
-                  </Button>
-                </div>
-              ) : (
-                <div className="flex items-center gap-2 text-minor text-muted-foreground">
-                  <Loader2 className="size-pixel shrink-0" aria-hidden="true" />
-                  <span className="status-shimmer">Waiting for browser…</span>
-                </div>
-              )}
-              {activeFlow.verificationUrl && (
-                <Button
-                  type="button"
-                  className={mobile ? DRAWER_BUTTON : undefined}
-                  onClick={() => openExternalBrowserPage(activeFlow.verificationUrl!)}
-                >
-                  Open verification page
-                </Button>
-              )}
-              {displayedError !== null && <RowError error={displayedError} />}
-              {mobile ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  className={DRAWER_BUTTON}
-                  onClick={() => void handleCancelClick()}
-                >
-                  Cancel
-                </Button>
-              ) : (
-                <DialogFooter>
-                  <Button type="button" variant="outline" onClick={() => void handleCancelClick()}>
-                    Cancel
-                  </Button>
-                </DialogFooter>
-              )}
-            </>
-          ) : (
-            <>
-              {displayedError !== null && <RowError error={displayedError} />}
-              {mobile ? (
-                <div className="grid grid-cols-1 gap-2">
-                  <Button
-                    type="button"
-                    className={DRAWER_BUTTON}
-                    disabled={submitting}
-                    onClick={() => void handleStartInteractive()}
-                  >
-                    {submitting && <Loader2 aria-hidden="true" />}
-                    Continue in browser
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className={DRAWER_BUTTON}
-                    disabled={submitting}
-                    onClick={() => void handleCancelClick()}
-                  >
-                    Cancel
-                  </Button>
-                </div>
-              ) : (
-                <DialogFooter>
-                  <Button type="button" variant="outline" disabled={submitting} onClick={() => void handleCancelClick()}>
-                    Cancel
-                  </Button>
-                  <Button type="button" disabled={submitting} onClick={() => void handleStartInteractive()}>
-                    {submitting && <Loader2 aria-hidden="true" />}
-                    Continue in browser
-                  </Button>
-                </DialogFooter>
-              )}
-            </>
-          )}
-        </div>
-      )}
+      {selectedMethod?.kind === "device_code" && <DeviceCodePanel {...panel} codeCopy={codeCopy} />}
     </div>
   );
 }
 
-/** 已就绪厂商的 Account… 管理弹窗/抽屉内芯（支持一键 Update、切换账号、移除单个子模型商与 Sign out）。 */
+interface SignInPanelProps {
+  mobile: boolean;
+  submitting: boolean;
+  error: ErrorLike | null;
+  activeFlow: SignInFlow | null;
+  onCancel: () => void;
+  onCancelFlow: () => void;
+  onStart: () => void;
+}
+
+function AuthTargetPicker({
+  targets,
+  value,
+  mobile,
+  disabled,
+  onChange,
+}: {
+  targets: NonNullable<ReturnType<typeof extractProviderAuthTargets>>;
+  value: string | undefined;
+  mobile: boolean;
+  disabled: boolean;
+  onChange: (targetId: string) => void;
+}) {
+  const select = (id: string) => (
+    <Select
+      id={id}
+      {...(mobile ? { className: TOUCH_INPUT } : { variant: "plain" as const })}
+      value={value}
+      disabled={disabled}
+      onChange={(e) => onChange(e.target.value)}
+    >
+      {targets.map((t) => (
+        <option key={t.id} value={t.id}>
+          {t.configured ? `${t.label} (Configured)` : t.label}
+        </option>
+      ))}
+    </Select>
+  );
+  if (mobile) {
+    return (
+      <FieldBlock label="Model provider" bare>
+        {select}
+      </FieldBlock>
+    );
+  }
+  return (
+    <SettingsGroup label="Model provider">
+      <SettingsRow label="Model provider">{select}</SettingsRow>
+    </SettingsGroup>
+  );
+}
+
+function SubmitLabel({ submitting, children }: { submitting: boolean; children: React.ReactNode }) {
+  return (
+    <>
+      {submitting && <Loader2 aria-hidden="true" />}
+      {children}
+    </>
+  );
+}
+
+function CancelButton({ mobile, disabled, onClick }: { mobile: boolean; disabled?: boolean; onClick: () => void }) {
+  return (
+    <Button type="button" variant="outline" className={mobile ? DRAWER_BUTTON : undefined} disabled={disabled} onClick={onClick}>
+      Cancel
+    </Button>
+  );
+}
+
+function SignInActions({ mobile, primary, cancel }: { mobile: boolean; primary?: React.ReactNode; cancel: React.ReactNode }) {
+  if (!mobile) {
+    return (
+      <DialogFooter>
+        {cancel}
+        {primary}
+      </DialogFooter>
+    );
+  }
+  if (!primary) return cancel;
+  return (
+    <div className="grid grid-cols-1 gap-2">
+      {primary}
+      {cancel}
+    </div>
+  );
+}
+
+function StartActions({ mobile, submitting, onStart, onCancelFlow, label }: SignInPanelProps & { label: string }) {
+  return (
+    <SignInActions
+      mobile={mobile}
+      primary={
+        <Button type="button" className={mobile ? DRAWER_BUTTON : undefined} disabled={submitting} onClick={onStart}>
+          <SubmitLabel submitting={submitting}>{label}</SubmitLabel>
+        </Button>
+      }
+      cancel={<CancelButton mobile={mobile} disabled={submitting} onClick={onCancelFlow} />}
+    />
+  );
+}
+
+function OtherWindowNotice({ mobile, onCancel }: { mobile: boolean; onCancel: () => void }) {
+  return (
+    <>
+      <p className="text-minor text-muted-foreground">Sign-in in progress in another window</p>
+      <SignInActions mobile={mobile} cancel={<CancelButton mobile={mobile} onClick={onCancel} />} />
+    </>
+  );
+}
+
+function WaitingForBrowser() {
+  return (
+    <div className="flex items-center gap-2 text-minor text-muted-foreground">
+      <Loader2 className="size-pixel shrink-0" aria-hidden="true" />
+      <span className="status-shimmer">Waiting for browser…</span>
+    </div>
+  );
+}
+
+function ApiKeyForm({
+  mobile,
+  submitting,
+  error,
+  onCancelFlow,
+  label,
+  placeholder,
+  value,
+  onChange,
+  onSubmit,
+}: SignInPanelProps & {
+  label: string;
+  placeholder: string | undefined;
+  value: string;
+  onChange: (value: string) => void;
+  onSubmit: (e: React.FormEvent) => void;
+}) {
+  return (
+    <form className="grid grid-cols-1 gap-4" onSubmit={onSubmit}>
+      <Input
+        type="password"
+        aria-label={label}
+        placeholder={placeholder}
+        value={value}
+        autoFocus={!mobile}
+        disabled={submitting}
+        {...NO_AUTOCORRECT}
+        className={mobile ? TOUCH_INPUT : "w-full"}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      {error !== null && <RowError error={error} />}
+      <SignInActions
+        mobile={mobile}
+        primary={
+          <Button type="submit" className={mobile ? DRAWER_BUTTON : undefined} disabled={!value.trim() || submitting}>
+            <SubmitLabel submitting={submitting}>Save</SubmitLabel>
+          </Button>
+        }
+        cancel={<CancelButton mobile={mobile} disabled={submitting} onClick={onCancelFlow} />}
+      />
+    </form>
+  );
+}
+
+function BrowserOAuthPanel(
+  props: SignInPanelProps & {
+    remote: boolean;
+    linkCopy: CopyFeedback;
+    manualFormId: string;
+    manualInput: string;
+    onManualInputChange: (value: string) => void;
+    onSubmitManual: (e: React.FormEvent) => void;
+  },
+) {
+  const { mobile, submitting, error, activeFlow, remote, linkCopy, manualFormId, manualInput } = props;
+  const startLabel = remote ? "Open sign-in page" : "Continue in browser";
+  if (activeFlow?.ownedByOtherClient) {
+    return (
+      <div className="grid grid-cols-1 gap-4">
+        <OtherWindowNotice mobile={mobile} onCancel={props.onCancel} />
+      </div>
+    );
+  }
+  if (activeFlow === null) {
+    return (
+      <div className="grid grid-cols-1 gap-4">
+        {error !== null && <RowError error={error} />}
+        <StartActions {...props} label={startLabel} />
+      </div>
+    );
+  }
+  const authorizeUrl = activeFlow.authorizeUrl;
+  const hasManualInput = activeFlow.manualInput !== "none";
+  const manualSubmit = (
+    <Button type="submit" form={manualFormId} className={mobile ? DRAWER_BUTTON : undefined} disabled={!manualInput.trim() || submitting}>
+      <SubmitLabel submitting={submitting}>Submit</SubmitLabel>
+    </Button>
+  );
+  return (
+    <div className="grid grid-cols-1 gap-4">
+      <WaitingForBrowser />
+      {authorizeUrl && (
+        <div className={cn("gap-2", mobile ? "grid grid-cols-1" : "flex flex-wrap items-center")}>
+          <Button
+            type="button"
+            variant={remote ? "default" : "outline"}
+            className={mobile ? DRAWER_BUTTON : undefined}
+            onClick={() => openExternalBrowserPage(authorizeUrl)}
+          >
+            Open sign-in page
+          </Button>
+          <Button type="button" variant="outline" className={mobile ? DRAWER_BUTTON : undefined} onClick={() => linkCopy.copy(authorizeUrl)}>
+            {linkCopy.copied ? "Copied" : "Copy link"}
+          </Button>
+        </div>
+      )}
+      {hasManualInput && (
+        <form id={manualFormId} className="grid grid-cols-1 gap-2" onSubmit={props.onSubmitManual}>
+          <Input
+            aria-label="Paste code or redirect URL"
+            placeholder="Paste code or redirect URL…"
+            value={manualInput}
+            disabled={submitting}
+            {...NO_AUTOCORRECT}
+            className={mobile ? TOUCH_INPUT : undefined}
+            onChange={(e) => props.onManualInputChange(e.target.value)}
+          />
+          {mobile && manualSubmit}
+        </form>
+      )}
+      {error !== null && <RowError error={error} />}
+      <SignInActions
+        mobile={mobile}
+        primary={!mobile && hasManualInput ? manualSubmit : undefined}
+        cancel={<CancelButton mobile={mobile} onClick={props.onCancelFlow} />}
+      />
+    </div>
+  );
+}
+
+function DeviceCodePanel(props: SignInPanelProps & { codeCopy: CopyFeedback }) {
+  const { mobile, error, activeFlow, codeCopy } = props;
+  if (activeFlow?.ownedByOtherClient) {
+    return (
+      <div className="grid grid-cols-1 gap-4">
+        <OtherWindowNotice mobile={mobile} onCancel={props.onCancel} />
+      </div>
+    );
+  }
+  if (activeFlow === null) {
+    return (
+      <div className="grid grid-cols-1 gap-4">
+        {error !== null && <RowError error={error} />}
+        <StartActions {...props} label="Continue in browser" />
+      </div>
+    );
+  }
+  const { userCode, verificationUrl } = activeFlow;
+  return (
+    <div className="grid grid-cols-1 gap-4">
+      {userCode ? (
+        <div className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-sidebar px-4 py-3">
+          <code data-testid="device-user-code" className="font-mono text-title font-semibold tracking-wider select-all">
+            {userCode}
+          </code>
+          <Button type="button" variant="outline" size="sm" onClick={() => codeCopy.copy(userCode)}>
+            {codeCopy.copied ? "Copied" : "Copy code"}
+          </Button>
+        </div>
+      ) : (
+        <WaitingForBrowser />
+      )}
+      {verificationUrl && (
+        <Button type="button" className={mobile ? DRAWER_BUTTON : undefined} onClick={() => openExternalBrowserPage(verificationUrl)}>
+          Open verification page
+        </Button>
+      )}
+      {error !== null && <RowError error={error} />}
+      <SignInActions mobile={mobile} cancel={<CancelButton mobile={mobile} onClick={props.onCancelFlow} />} />
+    </div>
+  );
+}
+
 export function ProviderAccountBody({
   item,
   model,
@@ -1029,7 +1004,6 @@ export function ProviderAccountBody({
   );
 }
 
-/** 桌面与手机共用的 Providers 主体列表（Computer 选择 + Windows Git 环境 + 厂商列表）。 */
 export function ProvidersListSection({
   model,
   onOpenSignIn,
@@ -1073,7 +1047,6 @@ export function ProvidersListSection({
 
       <GitEnvironmentGroup model={model} />
 
-      {/* 上面没有别的组时分类名已经是 Providers：组标题写已就绪的个数，Refresh 和它同一行 */}
       <SettingsGroup
         {...(hasExtraTopGroup ? { title: "Providers" } : readyCount === null ? { label: "Providers" } : { title: `${readyCount} ready`, label: "Providers" })}
         action={
@@ -1125,7 +1098,6 @@ type ModalState =
   | { mode: "account"; vendor: AgentVendor }
   | null;
 
-/** 桌面端 Settings → Providers 完整面板（含登录/账号窄弹窗与下方归拢的 Vendor sync）。 */
 export function ProvidersSettings({
   active = true,
   devices = null,

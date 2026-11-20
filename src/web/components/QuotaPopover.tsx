@@ -11,7 +11,6 @@ import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
 
 const QUOTA_REFETCH_INTERVAL_MS = 60_000;
 
-/** 用量条的颜色（docs/ui-standard.md 第 11 条）：正常中性灰、偏高（快用完）琥珀色、用满前景色实心；用满不用红色，不像报错。 */
 const USAGE_BAR_COLORS = { normal: "bg-foreground/40", high: "bg-caution", full: "bg-foreground" } as const;
 
 function WindowRow({ window, exhausted }: { window: QuotaWindowUsage; exhausted: boolean }) {
@@ -37,7 +36,6 @@ function WindowRow({ window, exhausted }: { window: QuotaWindowUsage; exhausted:
   );
 }
 
-/** 同一家厂商的相邻块并成一组：厂商名做组标题，按需查的那几块（Gemini、Claude and GPT）各带一行小标题。 */
 function groupByVendor(blocks: QuotaVendor[]): { name: string; blocks: QuotaVendor[] }[] {
   const sections: { name: string; blocks: QuotaVendor[] }[] = [];
   for (const block of blocks) {
@@ -103,7 +101,6 @@ export function QuotaPopover({ quota, fetchable = false, placement = "sidebar" }
                   <div key={vendor.id} role={vendor.group ? "group" : undefined} aria-label={vendor.group} className="grid gap-3">
                     {vendor.group && <h4 className="text-xs font-medium text-muted-foreground">{vendor.group}</h4>}
                     {vendor.windows.map((w) => (
-                      // 用满的是哪个窗口就只把那一条画成实心；厂商只说“用完了”、看不出是哪个窗口时才整组都算
                       <WindowRow key={w.key} window={w} exhausted={w.percent >= 100 || (vendor.exhausted && !vendor.windows.some((x) => x.percent >= 100))} />
                     ))}
                   </div>

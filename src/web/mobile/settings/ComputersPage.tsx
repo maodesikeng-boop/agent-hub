@@ -1,6 +1,3 @@
-// #/settings/computers：清爽行列表 + 底部抽屉（docs/mobile-settings-design.md 第 2.3 节子页 3，docs/account-mesh-design.md「网页」）。
-// 行上不放小图标按钮（根治相邻 32px 改名 / 移除按钮热区重叠误删）：本机行点了改名，远程电脑行点了拉起管理抽屉（改名…、移除电脑…二次确认）；
-// 账号（登录、批准新电脑、中心顺序）和桌面共用 AccountSettings。状态与接口全来自 settings-model.ts。
 import { Loader2 } from "../../ui/icons.ts";
 import { useState } from "react";
 import { AccountSettings } from "../../components/AccountSettings.tsx";
@@ -13,7 +10,6 @@ import { Input } from "../../ui/input.tsx";
 import { ConfirmBody, DRAWER_BUTTON, SettingsDrawer, useDrawerTarget } from "./SettingsDrawer.tsx";
 import { SettingsNavRow, TOUCH_INPUT } from "./SettingsNavRow.tsx";
 
-/** 设备行的小字：状态点 + 系统、连法、在线状态（本机写 This computer），用间距分开，不用 · 拼接。 */
 function DeviceDetail({ device }: { device: DeviceView }) {
   const { info } = device;
   return (
@@ -40,7 +36,6 @@ function DeviceNavRow({ device, onClick }: { device: DeviceView; onClick: () => 
   );
 }
 
-/** 改名表单（本机改名抽屉、远程电脑管理抽屉共用）：全宽输入框，边输边校验，Save + Cancel 全宽。 */
 function RenameForm({ device, onChanged, onDone, onCancel }: { device: DeviceView; onChanged: () => void; onDone: () => void; onCancel: () => void }) {
   const { name, setName, clean, problem, busy, error, save } = useDeviceRename(device, onChanged);
   return (
@@ -77,7 +72,6 @@ function RenameForm({ device, onChanged, onDone, onCancel }: { device: DeviceVie
   );
 }
 
-/** 远程电脑的管理抽屉：先给两个操作，改名、移除各自切到自己的视图（移除要二次确认，红色 Remove）。 */
 function ManageView({ device, onChanged, close }: { device: DeviceView; onChanged: () => void; close: () => void }) {
   const [view, setView] = useState<"menu" | "rename" | "remove">("menu");
   const { busy, error, remove } = useDeviceRemove(device, onChanged);

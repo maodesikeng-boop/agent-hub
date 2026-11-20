@@ -292,9 +292,9 @@ describe("发出之后", () => {
     api.postMessage = () => ({ status: 500, body: { error: "出错了" } });
     await user.upload(picker(), file("a.txt"));
     await user.type(box(), "带文件{Enter}");
-    await waitFor(() => expect(within(log()).getByRole("button", { name: "没发出去，点击重发" })).toBeInTheDocument());
+    await waitFor(() => expect(within(log()).getByRole("button", { name: "Not sent. Click to resend" })).toBeInTheDocument());
     api.postMessage = () => ({ status: 200, body: { messageId: 9 } });
-    await user.click(screen.getByRole("button", { name: "没发出去，点击重发" }));
+    await user.click(screen.getByRole("button", { name: "Not sent. Click to resend" }));
     await waitFor(() => expect(posts()).toHaveLength(2));
     expect(sentBody(1)).toEqual(sentBody(0));
     expect(api.uploads).toHaveLength(1);
@@ -308,7 +308,7 @@ describe("检查文件", () => {
     await user.upload(picker(), [hugeFile("录屏.mov", MAX_UPLOAD_BYTES + 1), file("小的.txt")]);
     const alert = screen.getByRole("alert");
     expect(alert).toHaveTextContent("录屏.mov");
-    expect(alert).toHaveTextContent("超过 100 MB");
+    expect(alert).toHaveTextContent("over 100 MB");
     const list = within(pendingList() as HTMLElement);
     expect(list.queryByText("录屏.mov")).toBeNull();
     expect(list.getByText("小的.txt")).toBeInTheDocument(); // 别的文件不受影响
@@ -370,7 +370,7 @@ describe("上传失败：消息不发出，提示可见，输入的文字和待�
   }
 
   it("服务端出错（500）", async () => {
-    await failWith(() => ({ status: 500, body: { error: "internal_error" } }), "上传失败");
+    await failWith(() => ({ status: 500, body: { error: "internal_error" } }), "failed to upload");
   });
 
   it("服务端说文件太大（413）：中文提示 100 MB，不是“1 MB”", async () => {
@@ -399,7 +399,7 @@ describe("上传失败：消息不发出，提示可见，输入的文字和待�
   });
 
   it("失败后再点发送：重新上传、发出，成功后清空", async () => {
-    const { user, restore } = await failWith(() => ({ status: 500, body: { error: "x" } }), "上传失败");
+    const { user, restore } = await failWith(() => ({ status: 500, body: { error: "x" } }), "failed to upload");
     restore();
     await user.click(sendButton());
     await waitFor(() => expect(posts()).toHaveLength(1));
@@ -565,7 +565,7 @@ describe("上传没完时切走对话再切回来", () => {
     await user.click(screen.getByRole("button", { name: /老马/ }));
     await user.click(screen.getByRole("button", { name: /小林/ }));
     fail();
-    expect(await screen.findByRole("alert")).toHaveTextContent("上传失败");
+    expect(await screen.findByRole("alert")).toHaveTextContent("failed to upload");
     expect(box()).toHaveValue("别丢");
     expect(sendButton()).toBeEnabled();
     expect(within(pendingList() as HTMLElement).getByText("a.txt")).toBeInTheDocument();
@@ -599,10 +599,10 @@ describe("发消息时文件已经不在", () => {
     await user.type(box(), "带文件{Enter}");
     const mine = await waitFor(() => {
       const last = within(log()).getAllByRole("article").at(-1) as HTMLElement;
-      expect(within(last).getByRole("img", { name: "没发出去：文件已不在，请重新添加" })).toBeInTheDocument();
+      expect(within(last).getByRole("img", { name: "Not sent: Files are gone. Add them again" })).toBeInTheDocument();
       return last;
     });
-    expect(within(mine).queryByRole("button", { name: "没发出去，点击重发" })).toBeNull();
+    expect(within(mine).queryByRole("button", { name: "Not sent. Click to resend" })).toBeNull();
     expect(mine).toHaveTextContent("带文件");
   });
 
@@ -612,6 +612,6 @@ describe("发消息时文件已经不在", () => {
     api.postMessage = () => ({ status: 500, body: { error: "x" } });
     await user.upload(picker(), file("a.txt"));
     await user.type(box(), "带文件{Enter}");
-    expect(await screen.findByRole("button", { name: "没发出去，点击重发" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Not sent. Click to resend" })).toBeInTheDocument();
   });
 });

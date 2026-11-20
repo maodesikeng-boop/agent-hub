@@ -196,7 +196,7 @@ describe("渲染", () => {
 
   it("不是 JSON、不是对象、不是 Vega-Lite（完整 Vega 规格）：抛错，容器里不留东西", async () => {
     await expect(render("{ not json", theme, el)).rejects.toThrow(/JSON/);
-    await expect(render("[1,2]", theme, el)).rejects.toThrow(/JSON 对象/);
+    await expect(render("[1,2]", theme, el)).rejects.toThrow(/JSON object/);
     await expect(draw({ $schema: "https://vega.github.io/schema/vega/v6.json", width: 100, height: 100, marks: [{ type: "rect" }] })).rejects.toThrow();
     expect(el.childElementCount).toBe(0);
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -211,8 +211,8 @@ describe("安全：不发请求、没有链接、没有外部图片", () => {
     ["图层里的 data.url", { layer: [{ data: { url: "http://127.0.0.1:9/x.json" }, mark: "bar" }] }, /url/],
     ["href 通道", { data: { values: [{ a: 1 }] }, mark: "bar", encoding: { href: { value: "http://evil.example/" } } }, /href/],
     ["mark 上的 href", { data: { values: [{ a: 1 }] }, mark: { type: "bar", href: "javascript:alert(1)" } }, /href/],
-    ["图片 mark（字符串）", { data: { values: [{ a: 1 }] }, mark: "image", encoding: { url: { value: "http://127.0.0.1:9/i.png" } } }, /图片/],
-    ["图片 mark（对象、在图层里）", { layer: [{ data: { values: [{ a: 1 }] }, mark: { type: "image", url: "http://127.0.0.1:9/i.png" } }] }, /图片|url/],
+    ["图片 mark（字符串）", { data: { values: [{ a: 1 }] }, mark: "image", encoding: { url: { value: "http://127.0.0.1:9/i.png" } } }, /Image/],
+    ["图片 mark（对象、在图层里）", { layer: [{ data: { values: [{ a: 1 }] }, mark: { type: "image", url: "http://127.0.0.1:9/i.png" } }] }, /Image|url/],
     ["参数绑定到页面元素", { data: { values: [{ a: 1 }] }, params: [{ name: "p", value: 1, bind: { input: "range", element: "body" } }], mark: "bar" }, /element/],
   ])("%s：直接拒绝，没有发出任何请求", async (_name, spec, message) => {
     await expect(draw(spec)).rejects.toThrow(message);

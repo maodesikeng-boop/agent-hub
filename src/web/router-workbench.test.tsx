@@ -1132,11 +1132,11 @@ describe("时间流：指令回合", () => {
     await user.type(input(), "发不出去的指令{Enter}");
     await waitFor(() => expect(commandCalls()).toHaveLength(2));
     const failedClientId = (commandCalls()[1]!.body as { clientId: string }).clientId;
-    expect(await within(turnOf("发不出去的指令")).findByRole("button", { name: "没发出去，点击重发" })).toBeInTheDocument();
+    expect(await within(turnOf("发不出去的指令")).findByRole("button", { name: "Not sent. Click to resend" })).toBeInTheDocument();
     // 文字不退回输入框（发送被拦才留在输入框里）
     expect(input()).toHaveValue("");
     await leaveAndComeBack();
-    const unsent = within(turnOf("发不出去的指令")).getByRole("button", { name: "没发出去，点击重发" });
+    const unsent = within(turnOf("发不出去的指令")).getByRole("button", { name: "Not sent. Click to resend" });
 
     // 重发：同一个 clientId（router_commands.client_id 唯一，服务端命中就返回已有记录）
     localApi.postRouterCommand = (body) => ({ status: 200, body: { command: planning(body.clientId, body.text, 802) } });

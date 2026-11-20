@@ -24,7 +24,7 @@ final class StatusBarController: NSObject {
         onQuitApp: @escaping () -> Void
     ) {
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        self.summaryItem = NSMenuItem(title: "后台服务运行中", action: nil, keyEquivalent: "")
+        self.summaryItem = NSMenuItem(title: "Daemon running", action: nil, keyEquivalent: "")
         self.summaryItem.isEnabled = false
         self.conflictItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         self.conflictItem.isEnabled = false
@@ -32,8 +32,8 @@ final class StatusBarController: NSObject {
         self.lastCrashItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         self.lastCrashItem.isEnabled = false
         self.lastCrashItem.isHidden = true
-        self.restartItem = NSMenuItem(title: "重启后台服务", action: nil, keyEquivalent: "")
-        self.quitItem = NSMenuItem(title: "彻底退出 Bellwood", action: nil, keyEquivalent: "q")
+        self.restartItem = NSMenuItem(title: "Restart Daemon", action: nil, keyEquivalent: "")
+        self.quitItem = NSMenuItem(title: "Quit Bellwood", action: nil, keyEquivalent: "q")
         self.onOpenMainWindow = onOpenMainWindow
         self.onRestartDaemon = onRestartDaemon
         self.onQuitApp = onQuitApp
@@ -96,7 +96,7 @@ final class StatusBarController: NSObject {
         menu.addItem(lastCrashItem)
         menu.addItem(NSMenuItem.separator())
 
-        let openItem = NSMenuItem(title: "打开主窗口", action: #selector(handleOpenMainWindow), keyEquivalent: "o")
+        let openItem = NSMenuItem(title: "Open Main Window", action: #selector(handleOpenMainWindow), keyEquivalent: "o")
         openItem.target = self
         menu.addItem(openItem)
 
@@ -159,39 +159,39 @@ final class StatusBarController: NSObject {
 
     private func refreshDisplay() {
         if conflictReason != nil {
-            summaryItem.title = "后台端口冲突或协议不兼容"
-            restartItem.title = "重新检测后台服务"
+            summaryItem.title = "Daemon port conflict or incompatible protocol"
+            restartItem.title = "Check Daemon Again"
             restartItem.isEnabled = true
-            quitItem.title = "彻底退出 Bellwood"
+            quitItem.title = "Quit Bellwood"
             statusItem.button?.title = " !"
             NSApp.dockTile.badgeLabel = "!"
             return
         }
 
         if ownership.isExternal {
-            restartItem.title = "重启后台服务（外部管理）"
+            restartItem.title = "Restart Daemon (External)"
             restartItem.isEnabled = false
-            quitItem.title = "退出 Bellwood（保留外部后台）"
+            quitItem.title = "Quit Bellwood (Keep External Daemon)"
         } else {
-            restartItem.title = "重启后台服务"
+            restartItem.title = "Restart Daemon"
             restartItem.isEnabled = true
-            quitItem.title = "彻底退出 Bellwood"
+            quitItem.title = "Quit Bellwood"
         }
 
         switch daemonState {
         case .running:
             var parts: [String] = []
             if lastRunningWorkers > 0 {
-                parts.append("\(lastRunningWorkers) 个 Worker 在跑")
+                parts.append("\(lastRunningWorkers) running")
             }
             if lastAskingCount > 0 {
-                parts.append("\(lastAskingCount) 项等你确定")
+                parts.append("\(lastAskingCount) to decide")
             }
             if lastWaitingCount > 0 {
-                parts.append("\(lastWaitingCount) 项等你")
+                parts.append("\(lastWaitingCount) waiting")
             }
-            let baseTitle = parts.isEmpty ? "后台服务运行中" : parts.joined(separator: "，")
-            summaryItem.title = ownership.isExternal ? "\(baseTitle)（外部管理）" : baseTitle
+            let baseTitle = parts.isEmpty ? "Daemon running" : parts.joined(separator: ", ")
+            summaryItem.title = ownership.isExternal ? "\(baseTitle) (External)" : baseTitle
 
             if let button = statusItem.button {
                 if lastAskingCount > 0 {
@@ -207,11 +207,11 @@ final class StatusBarController: NSObject {
 
         case .restarting(let attempt, let maxAttempts, let delaySeconds, _):
             let delayInt = max(1, Int(delaySeconds.rounded()))
-            summaryItem.title = "后台意外退出，\(delayInt) 秒后自动重启（\(attempt)/\(maxAttempts)）…"
+            summaryItem.title = "Daemon exited unexpectedly. Restarting in \(delayInt)s (\(attempt)/\(maxAttempts))…"
             statusItem.button?.title = " …"
 
         case .failed(let crashCount, _, _):
-            summaryItem.title = "后台服务异常停止（连续崩溃 \(crashCount) 次，已停止重试）"
+            summaryItem.title = "Daemon stopped after \(crashCount) crashes"
             statusItem.button?.title = " !"
             NSApp.dockTile.badgeLabel = "!"
         }

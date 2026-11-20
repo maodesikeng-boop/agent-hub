@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-/// 展开 Windows 注册表 `REG_EXPAND_SZ` 中的 `%VAR%` 占位符（大小写无关匹配，未知变量保持原样）。
 pub fn expand_windows_env_vars(raw: &str, lookup: impl Fn(&str) -> Option<String>) -> String {
     let mut out = String::with_capacity(raw.len());
     let chars: Vec<char> = raw.chars().collect();
@@ -11,7 +10,6 @@ pub fn expand_windows_env_vars(raw: &str, lookup: impl Fn(&str) -> Option<String
             if let Some(rel_end) = chars[i + 1..].iter().position(|&c| c == '%') {
                 let end = i + 1 + rel_end;
                 if end == i + 1 {
-                    // `%%` 保留字面 `%%`
                     out.push('%');
                     out.push('%');
                     i = end + 1;
@@ -35,7 +33,6 @@ pub fn expand_windows_env_vars(raw: &str, lookup: impl Fn(&str) -> Option<String
     out
 }
 
-/// 合并前置目录、系统/用户注册表最新 `Path` 与当前进程继承的 `PATH`（Windows 按不区分大小写去重保序）。
 pub fn merge_path_entries(
     prepend_dirs: &[PathBuf],
     registry_path_lists: &[String],
@@ -106,7 +103,7 @@ fn read_registry_env_map() -> (Vec<(String, String)>, Vec<String>) {
         }
     };
 
-    // 先系统级再用户级，与 Windows Explorer 广播 WM_SETTINGCHANGE 后合并顺序一致
+    // System before user, matching Explorer's merge order after WM_SETTINGCHANGE.
     read_hive(
         HKEY_LOCAL_MACHINE,
         r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
@@ -117,7 +114,6 @@ fn read_registry_env_map() -> (Vec<(String, String)>, Vec<String>) {
     (vars, raw_paths)
 }
 
-/// 读取最新注册表（Windows 下 `HKLM` + `HKCU` `Environment\Path` 并展开 `%VAR%`）与当前进程 `PATH` 合成的最新 `PATH`。
 pub fn build_refreshed_path_env(prepend_dirs: &[PathBuf]) -> String {
     let current_proc_path = std::env::var("PATH")
         .or_else(|_| std::env::var("Path"))
@@ -147,7 +143,6 @@ pub fn build_refreshed_path_env(prepend_dirs: &[PathBuf]) -> String {
     }
 }
 
-/// 启动桌面壳时同步刷新当前进程自身的 `PATH`（使壳后续前置检查与子进程继承最新注册表 `PATH`）。
 pub fn refresh_current_process_path(prepend_dirs: &[PathBuf]) -> String {
     let merged = build_refreshed_path_env(prepend_dirs);
     if !merged.is_empty() {

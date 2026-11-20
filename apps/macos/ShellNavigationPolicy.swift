@@ -12,7 +12,7 @@ enum ShellNavigationDecision: Equatable {
     case cancel
 }
 
-/// 主窗口没有地址栏和后退键：主框架只停在守护进程的壳页面，网页链接交系统浏览器，预览窗 iframe 照常加载守护进程的文件。
+// The window has no address bar or back button, so the main frame stays on shell pages and links open in the system browser.
 struct ShellNavigationPolicy {
     static let shellPaths: Set<String> = ["/", "/auth"]
     static let externalSchemes: Set<String> = ["http", "https", "mailto"]

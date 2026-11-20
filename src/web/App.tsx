@@ -24,10 +24,6 @@ import { Button } from "./ui/button.tsx";
 import { ModelCatalogProvider } from "./models.tsx";
 import { ROUTER_DRAFT_KEY, useShellModel } from "./shell-model.ts";
 
-/**
- * 整页状态（加载中、没登录、连不上、设备没连上）：居中一列，最宽 22rem、左右留 24px；
- * 标题 17px 600，下面的说明 13.5px 灰，一屏最多一个主按钮。
- */
 function FullPage({ title, lines = [], titleTip, busy = false, action, testId }: { title: string; lines?: readonly string[]; titleTip?: string; busy?: boolean; action?: React.ReactNode; testId?: string }) {
   return (
     <div className="flex h-full flex-col items-center justify-center px-6 text-center" data-testid={testId}>
@@ -52,10 +48,208 @@ function FullPage({ title, lines = [], titleTip, busy = false, action, testId }:
 const SIGN_IN_ON_COMPUTER = "On a computer, open the sign-in link printed in the terminal at startup";
 const SIGN_IN_ON_PHONE = "On a phone, scan the code under Settings → Security & Access → Sign in on another device on a signed-in computer";
 
+type ShellModel = ReturnType<typeof useShellModel>;
+type ShellContent = NonNullable<ShellModel["content"]>;
+
+function gatePage({ local, route, routedDevice, fleet }: ShellModel, mobile: boolean): React.ReactNode {
+  if (local.state.phase === "loading" || (route?.device !== undefined && routedDevice === undefined && !fleet.listed)) {
+    return <FullPage busy title="Loading…" />;
+  }
+  if (local.state.phase === "unauthorized") {
+    return <FullPage testId="unauthenticated" title="Not signed in" lines={mobile ? [SIGN_IN_ON_PHONE, SIGN_IN_ON_COMPUTER] : [SIGN_IN_ON_COMPUTER, SIGN_IN_ON_PHONE]} />;
+  }
+  if (local.state.phase === "error") {
+    const error = local.state.loadError;
+    return (
+      <FullPage
+        title={error?.text ?? "Can't reach the daemon"}
+        titleTip={error ? errorTitle(error) : undefined}
+        lines={error?.hint ? [error.hint] : []}
+        action={<Button onClick={() => void fleet.hub(LOCAL_DEVICE).reload()}>Retry</Button>}
+      />
+    );
+  }
+  return null;
+}
+
+function DeviceWaiting({ connecting, name }: { connecting: boolean; name: string }) {
+  return (
+    <>
+      <header data-window-drag className="flex h-16 shrink-0 items-center px-3" />
+      {connecting ? (
+        <FullPage busy title="Loading…" />
+      ) : (
+        <FullPage title="Not connected to this computer yet" lines={[`Check that the daemon is running on ${name}`]} />
+      )}
+    </>
+  );
+}
+
+interface PaneProps {
+  model: ShellModel;
+  content: ShellContent;
+  mobile: boolean;
+  leading: React.ReactNode;
+  toolbar: React.ReactNode;
+  top: React.ReactNode;
+  notices: React.ReactNode;
+  back: () => void;
+}
+
+function WorkerPane({ model: { state, hub, current }, content: c, mobile, leading, toolbar, top, notices, workerId }: PaneProps & { workerId: number }) {
+  return (
+    <WorkerConversation
+      mobile={mobile}
+      leading={leading}
+      key={c.keyOf(workerId)}
+      title={c.workerLine?.title ?? c.workerView?.conversation.title ?? "Piece"}
+      readonly={c.workerLine?.readonly ?? false}
+      phase={workerPhaseOf(state, workerId)}
+      pm={{ name: c.workerPmEntry?.name ?? "Project manager", look: c.workerPmEntry?.look ?? c.look }}
+      meta={c.railWorkers.find((w) => w.conversationId === workerId)}
+      view={c.workerView}
+      loading={c.workerLoading}
+      pending={pendingOf(state, workerId)}
+      session={sessionOf(state, workerId)}
+      older={state.older[workerId]}
+      draft={c.drafts.of(c.keyOf(workerId))}
+      staging={c.staging.of(c.keyOf(workerId))}
+      toolbar={toolbar}
+      top={top}
+      notices={notices}
+      onBack={() => c.workerPmEntry && c.select({ device: current.key, id: c.workerPmEntry.id })}
+      onSend={c.send}
+      onRetry={hub.retrySend}
+      onStop={hub.stop}
+      onRewind={hub.rewind}
+      onLoadOlder={c.handleLoadOlder}
+      actions={c.actions}
+      link={c.link}
+    />
+  );
+}
+
+function ChatPane(props: PaneProps & { quotaSlot: React.ReactNode; onManageLocalProviders: () => void }) {
+  const { model, content: c, mobile, leading, toolbar, top, notices, back } = props;
+  const { fleet, state, hub, current } = model;
+  if (c.routerActive) {
+    return (
+      <RouterWorkbench
+        leading={leading}
+        toolbar={props.quotaSlot}
+        notices={notices}
+        view={c.routerView}
+        devices={fleet.devices}
+        selfId={fleet.selfId}
+        draft={c.drafts.of(ROUTER_DRAFT_KEY)}
+        staging={c.staging.of(ROUTER_DRAFT_KEY)}
+        clientForDevice={c.clientForDevice}
+        storeForDevice={c.storeForDevice}
+        onOpenConversation={c.openDeviceConversation}
+        onOpenWorker={c.openDeviceWorker}
+        onManageProviders={props.onManageLocalProviders}
+      />
+    );
+  }
+  if (state.phase !== "ready") return <DeviceWaiting connecting={current.status === "connecting"} name={current.info.name} />;
+  const { profile, profileEntry, active, view } = c;
+  if (profile) {
+    return (
+      <PmProfile
+        key={c.keyOf(profile.id)}
+        pm={profile}
+        project={profileEntry?.project ?? null}
+        folders={profileEntry?.folders ?? []}
+        schedules={state.schedules.filter((x) => x.pmId === profile.id)}
+        rev={state.personaRev[profile.id] ?? 0}
+        renewing={profileEntry !== undefined && isRenewing(state, profileEntry.id)}
+        onBack={mobile ? back : () => profileEntry && c.select({ device: current.key, id: profileEntry.id })}
+        onManageProviders={() => c.openManageProviders(current.key)}
+      />
+    );
+  }
+  if (c.openWorker !== null) return <WorkerPane {...props} workerId={c.openWorker} />;
+  if (active && view) {
+    return (
+      <Conversation
+        mobile={mobile}
+        leading={leading}
+        key={c.keyOf(active.id)}
+        entry={active}
+        view={view}
+        pending={pendingOf(state, active.id)}
+        session={visibleSessionOf(state, active.id)}
+        older={state.older[active.id]}
+        draft={c.drafts.of(c.keyOf(active.id))}
+        staging={c.staging.of(c.keyOf(active.id))}
+        toolbar={toolbar}
+        top={top}
+        notices={notices}
+        onSend={c.send}
+        onRetry={hub.retrySend}
+        onStop={hub.stop}
+        onRewind={hub.rewind}
+        onLoadOlder={c.handleLoadOlder}
+        actions={c.actions}
+        focus={c.focus}
+        onFocusDone={c.clearFocus}
+        onOpenProfile={c.openProfile}
+        link={c.link}
+      />
+    );
+  }
+  return (
+    <>
+      {notices}
+      <div className="flex flex-1 items-center justify-center text-minor text-muted-foreground">No conversations yet</div>
+    </>
+  );
+}
+
+function ShellSidebar({ content: c, mobile, quota, quotaInHeader }: { content: ShellContent; mobile: boolean; quota: ReturnType<typeof quotaUsage>; quotaInHeader: boolean }) {
+  return (
+    <Sidebar
+      groups={c.groups}
+      active={c.sidebarActiveRef}
+      router={c.sidebarRouter}
+      waiting={c.reminders.waiting}
+      asking={c.reminders.asking}
+      notify={c.reminders.notify}
+      devices={c.deviceSettings}
+      quota={quotaInHeader && !mobile ? undefined : quota}
+      quotaFetchable={!quotaInHeader || mobile ? c.quotaFetchable : false}
+      layout={mobile ? "page" : c.narrow ? "rail" : "wide"}
+      settingsOpen={c.desktopSettingsOpen}
+      {...(c.desktopSettingsSection !== undefined ? { defaultSettingsSection: c.desktopSettingsSection } : {})}
+      defaultProviderDevice={c.defaultProviderDevice}
+      onSettingsOpenChange={c.onSettingsOpenChange}
+      onOpenSettings={c.openSettings}
+      onSelect={c.select}
+      onNewPm={c.openNewPm}
+    />
+  );
+}
+
+function railProps(c: ShellContent) {
+  return {
+    asks: c.railAsks,
+    workers: c.railWorkers,
+    activeGraphs: c.railGraphs,
+    projectId: c.railProjectId,
+    openWorkerId: c.openWorker,
+    look: c.look,
+    onOpenAsk: c.openAsk,
+    onOpenWorker: c.openWorkerConversation,
+    onLoadMoreWorkers: c.railLoadMoreWorkers,
+    onNeedWorkers: c.ensureWorkers,
+  };
+}
+
 export function App() {
   const mobile = useMediaQuery(MOBILE_SHELL_QUERY);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const { replace, qc, fleet, route, local, routedDevice, current, hub, state, content } = useShellModel({ autoSelect: !mobile });
+  const model = useShellModel({ autoSelect: !mobile });
+  const { replace, qc, fleet, route, current, hub, state, content } = model;
   useEffect(() => {
     setDrawerOpen(false);
   }, [route, current.key, content?.railHasContent, mobile]);
@@ -86,142 +280,20 @@ export function App() {
     () => openManageProvidersRef?.(LOCAL_DEVICE),
     [openManageProvidersRef],
   );
-  // 整页的加载中、没登录、连不上只看入口本机；别的设备连不上在主区里说
-  if (local.state.phase === "loading" || (route?.device !== undefined && routedDevice === undefined && !fleet.listed)) {
-    return <FullPage busy title="Loading…" />;
-  }
-  if (local.state.phase === "unauthorized") {
-    return <FullPage testId="unauthenticated" title="Not signed in" lines={mobile ? [SIGN_IN_ON_PHONE, SIGN_IN_ON_COMPUTER] : [SIGN_IN_ON_COMPUTER, SIGN_IN_ON_PHONE]} />;
-  }
-  if (local.state.phase === "error") {
-    const error = local.state.loadError;
-    return (
-      <FullPage
-        title={error?.text ?? "连不上守护进程"}
-        titleTip={error ? errorTitle(error) : undefined}
-        lines={error?.hint ? [error.hint] : []}
-        action={<Button onClick={() => void fleet.hub(LOCAL_DEVICE).reload()}>Retry</Button>}
-      />
-    );
-  }
-
+  const gate = gatePage(model, mobile);
+  if (gate !== null) return gate;
   if (content === null) return null;
-  const {
-    active,
-    actions,
-    look,
-    clearFocus,
-    clientForDevice,
-    storeForDevice,
-    compact,
-    created,
-    creating,
-    defaultProviderDevice,
-    desktopSettingsOpen,
-    desktopSettingsSection,
-    deviceSettings,
-    drafts,
-    focus,
-    groups,
-    handleLoadOlder,
-    keyOf,
-    link,
-    narrow,
-    newPmDevices,
-    onSettingsOpenChange,
-    openAsk,
-    openDeviceConversation,
-    openDeviceWorker,
-    openManageProviders,
-    openNewPm,
-    openProfile,
-    openSettings,
-    openSettingsSection,
-    openWorker,
-    openWorkerConversation,
-    profile,
-    profileEntry,
-    quotaFetchable,
-    railAsks,
-    railGraphs,
-    railHasContent,
-    railOpen,
-    railProjectId,
-    railWorkers,
-    reminders,
-    routerActive,
-    routerView,
-    select,
-    send,
-    setCreating,
-    settingsBack,
-    sidebarActiveRef,
-    sidebarRouter,
-    staging,
-    view,
-    workerLine,
-    workerLoading,
-    workerPmEntry,
-    workerView,
-    railLoadMoreWorkers,
-    ensureWorkers,
-  } = content;
-  // 开关跟着右栏走：并排的右栏展开时在右栏顶部，其余（收起、太窄时右栏在顶栏下面）在顶栏右边，也就是窗口右上角
-  const mobileToggle = <RightRailToggle visible={railHasContent} open={drawerOpen} attention={railAttention} look={look} onToggle={() => setDrawerOpen(!drawerOpen)} />;
+
+  const { active, look, compact, profile, openWorker, railOpen, routerActive, view } = content;
+  const mobileToggle = <RightRailToggle visible={content.railHasContent} open={drawerOpen} attention={railAttention} look={look} onToggle={() => setDrawerOpen(!drawerOpen)} />;
   const quota = quotaUsage(state);
   const quotaInHeader = routerActive || (state.phase === "ready" && !profile && (openWorker !== null || (active && view)));
-  const quotaSlot = quotaInHeader ? <QuotaPopover quota={quota} fetchable={quotaFetchable} placement="header" /> : null;
+  const quotaSlot = quotaInHeader ? <QuotaPopover quota={quota} fetchable={content.quotaFetchable} placement="header" /> : null;
   const railControl = mobile ? mobileToggle : railOpen && !compact ? null : railToggle;
   const toolbar = <>{quotaSlot}{railControl}</>;
   const back = () => mobileBack(route?.view !== "conversation" && active ? { view: "conversation", id: active.id, ...routeDeviceOf(current.key) } : null, replace);
   const leading = mobile ? <Button variant="slot" size="icon" className="shrink-0" aria-label="Back" onClick={back}><ArrowLeft aria-hidden="true" /></Button> : undefined;
-  const rail = !routerActive && railOpen ? (
-    <RightRail
-      asks={railAsks}
-      workers={railWorkers}
-      activeGraphs={railGraphs}
-      projectId={railProjectId}
-      openWorkerId={openWorker}
-      layout={compact ? "top" : "side"}
-      toggle={railToggle}
-      look={look}
-      onOpenAsk={openAsk}
-      onOpenWorker={openWorkerConversation}
-      onLoadMoreWorkers={railLoadMoreWorkers}
-      onNeedWorkers={ensureWorkers}
-    />
-  ) : null;
-  const top = !mobile && compact ? rail : null;
-
-  // 别的设备还没加载好：加载中，或者一次都没连上（联机第 4.3 节）
-  const deviceWaiting =
-    routerActive || state.phase === "ready" ? null : current.status === "connecting" ? (
-      <FullPage busy title="Loading…" />
-    ) : (
-      <FullPage title="Not connected to this computer yet" lines={[`Check that the daemon is running on ${current.info.name}`]} />
-    );
-
-  const sidebar = (
-    <Sidebar
-      groups={groups}
-      active={sidebarActiveRef}
-      router={sidebarRouter}
-      waiting={reminders.waiting}
-      asking={reminders.asking}
-      notify={reminders.notify}
-      devices={deviceSettings}
-      quota={quotaInHeader && !mobile ? undefined : quota}
-      quotaFetchable={!quotaInHeader || mobile ? quotaFetchable : false}
-      layout={mobile ? "page" : narrow ? "rail" : "wide"}
-      settingsOpen={desktopSettingsOpen}
-      {...(desktopSettingsSection !== undefined ? { defaultSettingsSection: desktopSettingsSection } : {})}
-      defaultProviderDevice={defaultProviderDevice}
-      onSettingsOpenChange={onSettingsOpenChange}
-      onOpenSettings={openSettings}
-      onSelect={select}
-      onNewPm={openNewPm}
-    />
-  );
+  const rail = !routerActive && railOpen ? <RightRail {...railProps(content)} layout={compact ? "top" : "side"} toggle={railToggle} /> : null;
   const settingsRoute = mobile && route?.view === "settings" ? route : null;
   const tintColor = routerActive || settingsRoute !== null ? null : (active?.look.color ?? null);
   const chat = (
@@ -229,127 +301,30 @@ export function App() {
       {settingsRoute !== null ? (
         <MobileSettings
           section={settingsRoute.section}
-          notify={reminders.notify}
-          devices={deviceSettings}
-          defaultProviderDevice={defaultProviderDevice}
-          onOpen={openSettingsSection}
-          onBack={settingsBack}
+          notify={content.reminders.notify}
+          devices={content.deviceSettings}
+          defaultProviderDevice={content.defaultProviderDevice}
+          onOpen={content.openSettingsSection}
+          onBack={content.settingsBack}
         />
       ) : (
         <>
           <main className="chat-main tint-fade flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-surface-chat">
-            {routerActive ? (
-              <RouterWorkbench
-                leading={leading}
-                toolbar={quotaSlot}
-                notices={notices}
-                view={routerView}
-                devices={fleet.devices}
-                selfId={fleet.selfId}
-                draft={drafts.of(ROUTER_DRAFT_KEY)}
-                staging={staging.of(ROUTER_DRAFT_KEY)}
-                clientForDevice={clientForDevice}
-                storeForDevice={storeForDevice}
-                onOpenConversation={openDeviceConversation}
-                onOpenWorker={openDeviceWorker}
-                onManageProviders={openLocalProviders}
-              />
-            ) : deviceWaiting ? (
-              <>
-                <header data-window-drag className="flex h-16 shrink-0 items-center px-3" />
-                {deviceWaiting}
-              </>
-            ) : profile ? (
-              <PmProfile
-                key={keyOf(profile.id)}
-                pm={profile}
-                project={profileEntry?.project ?? null}
-                folders={profileEntry?.folders ?? []}
-                schedules={state.schedules.filter((x) => x.pmId === profile.id)}
-                rev={state.personaRev[profile.id] ?? 0}
-                renewing={profileEntry !== undefined && isRenewing(state, profileEntry.id)}
-                onBack={mobile ? back : () => profileEntry && select({ device: current.key, id: profileEntry.id })}
-                onManageProviders={() => openManageProviders(current.key)}
-              />
-            ) : openWorker !== null ? (
-              <WorkerConversation
-                mobile={mobile}
-                leading={leading}
-                key={keyOf(openWorker)}
-                title={workerLine?.title ?? workerView?.conversation.title ?? "Piece"}
-                readonly={workerLine?.readonly ?? false}
-                phase={workerPhaseOf(state, openWorker)}
-                pm={{ name: workerPmEntry?.name ?? "Project manager", look: workerPmEntry?.look ?? look }}
-                meta={railWorkers.find((w) => w.conversationId === openWorker)}
-                view={workerView}
-                loading={workerLoading}
-                pending={pendingOf(state, openWorker)}
-                session={sessionOf(state, openWorker)}
-                older={state.older[openWorker]}
-                draft={drafts.of(keyOf(openWorker))}
-                staging={staging.of(keyOf(openWorker))}
-                toolbar={toolbar}
-                top={top}
-                notices={notices}
-                onBack={() => workerPmEntry && select({ device: current.key, id: workerPmEntry.id })}
-                onSend={send}
-                onRetry={hub.retrySend}
-                onStop={hub.stop}
-                onRewind={hub.rewind}
-                onLoadOlder={handleLoadOlder}
-                actions={actions}
-                link={link}
-              />
-            ) : active && view ? (
-              <Conversation
-                mobile={mobile}
-                leading={leading}
-                key={keyOf(active.id)}
-                entry={active}
-                view={view}
-                pending={pendingOf(state, active.id)}
-                session={visibleSessionOf(state, active.id)}
-                older={state.older[active.id]}
-                draft={drafts.of(keyOf(active.id))}
-                staging={staging.of(keyOf(active.id))}
-                toolbar={toolbar}
-                top={top}
-                notices={notices}
-                onSend={send}
-                onRetry={hub.retrySend}
-                onStop={hub.stop}
-                onRewind={hub.rewind}
-                onLoadOlder={handleLoadOlder}
-                actions={actions}
-                focus={focus}
-                onFocusDone={clearFocus}
-                onOpenProfile={openProfile}
-                link={link}
-              />
-            ) : (
-              <>
-                {notices}
-                <div className="flex flex-1 items-center justify-center text-minor text-muted-foreground">No conversations yet</div>
-              </>
-            )}
+            <ChatPane
+              model={model}
+              content={content}
+              mobile={mobile}
+              leading={leading}
+              toolbar={toolbar}
+              top={!mobile && compact ? rail : null}
+              notices={notices}
+              back={back}
+              quotaSlot={quotaSlot}
+              onManageLocalProviders={openLocalProviders}
+            />
           </main>
           {!mobile && !compact && rail}
-          {!routerActive && mobile && (
-            <PiecesDrawer
-              open={drawerOpen}
-              onOpenChange={setDrawerOpen}
-              asks={railAsks}
-              workers={railWorkers}
-              activeGraphs={railGraphs}
-              projectId={railProjectId}
-              look={look}
-              openWorkerId={openWorker}
-              onOpenAsk={openAsk}
-              onOpenWorker={openWorkerConversation}
-              onLoadMoreWorkers={railLoadMoreWorkers}
-              onNeedWorkers={ensureWorkers}
-            />
-          )}
+          {!routerActive && mobile && <PiecesDrawer open={drawerOpen} onOpenChange={setDrawerOpen} {...railProps(content)} />}
         </>
       )}
     </AccentScope>
@@ -359,16 +334,15 @@ export function App() {
       <DeviceScope client={hub.client} server={state.server}>
         <ModelCatalogProvider>
           <div className="relative flex h-full">
-            {/* 外壳底色掺当前项目经理的水果色（左栏、对话区、右栏、分割线）；Router 下传 null 保持纯白与碳黑中性调 */}
             <FruitTint color={tintColor}>
-              <MobileShell mobile={mobile} list={route === null} sidebar={sidebar}>{chat}</MobileShell>
+              <MobileShell mobile={mobile} list={route === null} sidebar={<ShellSidebar content={content} mobile={mobile} quota={quota} quotaInHeader={Boolean(quotaInHeader)} />}>{chat}</MobileShell>
               <NewPmDialog
-                open={creating}
-                devices={newPmDevices}
+                open={content.creating}
+                devices={content.newPmDevices}
                 defaultDevice={current.key}
-                onOpenChange={setCreating}
-                onCreated={created}
-                onManageProviders={openManageProviders}
+                onOpenChange={content.setCreating}
+                onCreated={content.created}
+                onManageProviders={content.openManageProviders}
               />
             </FruitTint>
           </div>

@@ -1,4 +1,3 @@
-// 测试用的固定主题（和 styles.css 的浅色一致），各个渲染器的测试共用。
 import type { ChartTheme } from "./registry.ts";
 
 export const TEST_THEME: ChartTheme = {

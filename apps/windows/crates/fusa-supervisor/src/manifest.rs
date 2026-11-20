@@ -7,7 +7,6 @@ use sha2::{Digest, Sha256};
 
 use crate::error::SupervisorError;
 
-/// 随包内置运行时完整性校验清单（`runtime-manifest.json`）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeManifest {
@@ -32,7 +31,7 @@ impl RuntimeManifest {
             || !is_valid_sha256_hex(&parsed.hub_sha256)
         {
             return Err(SupervisorError::RuntimeIntegrityFailed(format!(
-                "runtime-manifest.json 字段格式非法（{}）",
+                "runtime-manifest.json has an invalid field ({})",
                 path.display()
             )));
         }
@@ -44,7 +43,6 @@ pub fn is_valid_sha256_hex(hex_str: &str) -> bool {
     hex_str.len() == 64 && hex_str.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// 流式计算文件 SHA-256（固定 64 KiB 栈缓冲，校验 80 MiB `node.exe` 时峰值内存零增长）。
 pub fn compute_file_sha256_hex(path: &Path) -> Result<String, SupervisorError> {
     let mut file = File::open(path).map_err(|source| SupervisorError::Io {
         path: path.to_path_buf(),
@@ -112,8 +110,7 @@ fn normalize_nfc(input: &str) -> String {
     input.to_string()
 }
 
-/// 与 TypeScript `src/shared/paths.ts` 的 `dataDirPipeHash(home)` 逐字符对齐：
-/// `NFC -> '\\' 转 '/' -> 去除末尾 '/' -> 小写 -> SHA-256 前 12 位十六进制`。
+// Must match dataDirPipeHash in src/shared/paths.ts: NFC, backslash to slash, trim trailing slash, lowercase, first 12 hex chars of SHA-256.
 pub fn data_dir_pipe_hash(home: &str) -> String {
     let nfc = normalize_nfc(home);
     let normalized = nfc
@@ -131,7 +128,6 @@ pub fn data_dir_pipe_hash(home: &str) -> String {
     hex
 }
 
-/// 计算指定守护进程数据目录对应的 Windows 管理命名管道路径（`\\.\pipe\fusa-<hash12>-admin`）。
 pub fn admin_named_pipe_path(hub_home_dir: &Path) -> String {
     let hash = data_dir_pipe_hash(&hub_home_dir.to_string_lossy());
     format!(r"\\.\pipe\fusa-{hash}-admin")

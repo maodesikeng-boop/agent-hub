@@ -15,10 +15,6 @@ import { useWorkerPickLabels, WorkerPickParts } from "./WorkerPickTag.tsx";
 
 const MAX_HEIGHT_PX = 180;
 
-/**
- * 主指针是什么（docs/ui-standard.md 第 16 条、docs/mobile-ui-design.md 第 4 节）：fine 是鼠标、触控板，coarse 是手指（手机、iPad）。
- * 只在要用时读一次（聚焦、按键），不订阅、不进渲染；没有 matchMedia 的环境（测试）当电脑。
- */
 const POINTER_FINE = "(pointer: fine)";
 const POINTER_COARSE = "(pointer: coarse)";
 const pointerMatches = (query: string, fallback: boolean) => (typeof window.matchMedia === "function" ? window.matchMedia(query).matches : fallback);
@@ -47,15 +43,9 @@ function isOtherEditable(target: EventTarget | null, ownTextarea: HTMLTextAreaEl
   return false;
 }
 
-/**
- * 聊天输入框外框（docs/ui-standard.md 第 7 条）：四角 12px 的方框（rounded-xl），1px 中性灰边框；平时的轻阴影和聚焦态
- * （只多一团强调色的模糊光晕，边框不变，不套圈）都在 styles.css 的 .composer-frame。框里只用线条图标，不用像素。
- */
 const FRAME_CLASS = "composer-frame rounded-xl border border-border bg-background";
-/** 框里的“+”和发送、停止键：36px 的圆角方块，圆角 10px（第 2 条的例外）。 */
 const SQUARE_BUTTON = "rounded-[10px]";
 
-/** “+”、文字区、按钮组在同一个网格里：单行时三者同一行；多行时文字区占满上一行，“+”和按钮组落到下一行（同一个文字区节点，不重建，光标不丢） */
 const ROW_CLASS = "grid grid-cols-[auto_minmax(0,1fr)_auto] items-center px-2 py-1.25";
 const ROW_MULTI_CLASS = "pb-2";
 const TEXTAREA_CLASS =
@@ -64,7 +54,6 @@ const ATTACH_CLASS = ["col-start-1 row-start-1", "col-start-1 row-start-2"] as c
 const TEXT_CLASS = ["col-start-2 row-start-1", "col-span-3 col-start-1 row-start-1"] as const;
 const ACTIONS_CLASS = ["col-start-3 row-start-1", "col-start-3 row-start-2"] as const;
 
-/** “停止”键：和发送键同一个按钮（同位置、同大小），图标是方块；正在停止时不可点。 */
 function StopButton({ stop }: { stop: StopControl }) {
   return (
     <Button size="icon" aria-label="Stop" disabled={stop.stopping} onClick={stop.onStop} className={SQUARE_BUTTON}>
@@ -73,17 +62,11 @@ function StopButton({ stop }: { stop: StopControl }) {
   );
 }
 
-/** 待发文件、提示条右边的小 ×。 */
 const CHIP_CLOSE_CLASS =
   "touch-target flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full text-muted-foreground transition-colors outline-none hover:bg-sidebar-active hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default disabled:opacity-50";
 
-/** 点了不抢输入框的焦点（手机上软键盘不收起），和弹出列表的行一样；点击照常靠 onClick。 */
 const keepFocus = (e: { preventDefault: () => void }) => e.preventDefault();
 
-/**
- * /hub:worker 选完的标签（docs/ui-standard.md 第 18 条）：排在待发文件那一排最前面，样子照文件标签；
- * 点标签本身重新选（onEdit），× 去掉（onRemove）。
- */
 function WorkerPickChip({ pick, disabled, onEdit, onRemove }: { pick: WorkerPick; disabled: boolean; onEdit: () => void; onRemove: () => void }) {
   const labels = useWorkerPickLabels(pick);
   return (
@@ -106,10 +89,6 @@ function WorkerPickChip({ pick, disabled, onEdit, onRemove }: { pick: WorkerPick
   );
 }
 
-/**
- * 输入框上方的一行提示（docs/ui-standard.md 第 18 条“发送被拦”）：在框外面，没有底色和描边，左边一个小图标，右边 ×。
- * 发送失败、被拦是 text-danger；加文件被拒是灰字。图标从 20px 开始，和框里待发文件、输入的文字对齐。
- */
 function NoticeBar({ notice, onDismiss }: { notice: ComposerNotice; onDismiss: () => void }) {
   const failed = notice.kind === "failed";
   const Icon = failed ? CircleAlert : Info;
@@ -128,15 +107,6 @@ function NoticeBar({ notice, onDismiss }: { notice: ComposerNotice; onDismiss: (
   );
 }
 
-/**
- * 输入框：打字、回形针选文件（可多选）、粘贴截图/文件，待发文件列在输入框上方。不绑定哪个对话：
- * 文字和待发文件（staging，见 upload.ts 的 useStagingStore）都由调用者保存；
- * onSend 收到文字和待发的文件，只有文字时同步处理（返回 undefined），带文件时返回 Promise（上传、发出去），
- * 它 reject 的 Error.message 会显示在输入框上方，文字和文件都留着。
- * stop：agent 在忙、而且输入框里没有文字也没有待发文件时，发送键变成“停止”（同一个位置、同样大小，图标是方块）；
- * 一有内容就变回发送（照常排队）；正在停止时不可点。
- */
-/** 设备连接对输入框的影响：readOnly 是只读的原因（离线），waiting 是能打字但发送要等连上（重连中）。 */
 export interface ComposerLink {
   readOnly: string | null;
   waiting: boolean;
@@ -163,31 +133,20 @@ export function Composer({
   value: string;
   placeholder: string;
   staging: StagedFiles;
-  /** /hub:worker 选好的（标签显示它）；和文字一样由调用者按对话存（upload.ts 的 DraftSlot.pick）。 */
   workerPick?: WorkerPick | null;
-  /** 选完、重选、点 × 时调；不给就不变标签，完整命令留在文字里。 */
   onWorkerPick?: (pick: WorkerPick | null) => void;
-  /** 输入框上方待发列表最前面的自定义目标胶囊（如 Router 选中的跨设备项目/PM）。 */
   leadingChip?: React.ReactNode;
-  /** Router 工作台选中 `@` 目标时的回调：收到 targetKey 与剥除 `@...` 后的剩余文字与光标位置。 */
   onSelectTarget?: (targetKey: string, text: string) => void;
-  /** 现在不能发（比如 Worker 还在准备）：输入框、加文件和发送按钮都不可用；“停止”不受它管。 */
   disabled?: boolean;
   stop?: StopControl;
-  /** 二次 Esc 回退：把刚暂停或取消的最后一条用户消息恢复到草稿槽，成功返回 true。 */
   onRewind?: (stopping: boolean) => boolean;
-  /** 递增一次表示刚回退恢复了草稿，需要聚焦输入框并把光标放到末尾。 */
   focusRev?: number;
-  /** 对话所在的设备连不上（联机，devices.ts）：离线时整个输入框不可用、占位写原因；重连中能打字，发送等连上。 */
   link?: ComposerLink | null;
-  /** 输入 “/” 命令、“@” 文件时弹出的列表从哪来（见 composer-suggest.ts）；不给就不弹。 */
   source?: ComposerSource;
   onChange: (value: string) => void;
   onSend: (text: string, files: File[]) => void | Promise<void>;
-  /** 出现时把焦点放进来（打开、切换对话时，docs/ui-standard.md 第 16 条）；不可用时不放，触屏（不是鼠标）也不放，免得一进对话就弹键盘。 */
   autoFocus?: boolean;
 }) {
-  // 设备离线：和“不能发”一样整个不可用，占位写原因，也不能停
   const readOnly = link?.readOnly ?? null;
   const disabled = disabledProp || readOnly !== null;
   const placeholder = readOnly ?? placeholderProp;
@@ -201,7 +160,6 @@ export function Composer({
   const canSend = !disabled && !link?.waiting && hasContent && !tooLong && !busy;
   const showStop = stop !== undefined && stop.busy && !hasContent;
 
-  // 发送键从空变有内容时轻微放大回弹 150ms（只在这一下；清空后重置，prefers-reduced-motion 下 CSS 不播）
   const [bounce, setBounce] = useState(false);
   const hadContent = useRef(hasContent);
   useEffect(() => {
@@ -210,7 +168,6 @@ export function Composer({
     hadContent.current = hasContent;
   }, [hasContent]);
 
-  // 单行 / 多行布局：文字超过一行（换行符或自动换行）、或有待发文件时是多行；由下面调高度的 useLayoutEffect 量出来，只在布尔值变化时才多渲染一次
   const [wrapped, setWrapped] = useState(false);
   const hasLeadingChip = leadingChip !== null && leadingChip !== undefined && leadingChip !== false;
   const multiline = wrapped || files.length > 0 || workerPick !== null || hasLeadingChip;
@@ -219,10 +176,8 @@ export function Composer({
   const attachRef = useRef<HTMLButtonElement>(null);
   const actionsRef = useRef<HTMLDivElement>(null);
 
-  // “/”“@” 弹出列表：光标位置要自己记（打字、点、方向键都会动它）；选中后文字换掉，光标放到空格后
   const [cursor, setCursor] = useState(0);
   const pendingCursor = useRef<number | null>(null);
-  /** 点标签重选前光标在哪（原有文字里的位置）：选完回到这里。 */
   const repickCaret = useRef<number | null>(null);
   const menuId = useId();
   const suggest = useComposerSuggest({
@@ -235,7 +190,6 @@ export function Composer({
       setCursor(at);
       onChange(text);
     },
-    // 最后一级选完：整段命令从文字里拿掉，换成标签（替换旧的）；光标回到原位（点标签重选前的位置，打字选的是命令原来的开头）
     onPick:
       onWorkerPick &&
       ((pick, rest) => {
@@ -256,7 +210,6 @@ export function Composer({
       }),
   });
 
-  /** 点标签：在开头插入 /hub:worker 重新走一遍（原有文字另起一行接在后面，不被当成正在选的那一级），列表从厂商开始。 */
   const repick = () => {
     const el = ref.current;
     const head = `/${WORKER_COMMAND} `;
@@ -277,10 +230,8 @@ export function Composer({
 
   useEffect(() => {
     if (autoFocus && !disabled && pointerMatches(POINTER_FINE, true)) ref.current?.focus({ preventScroll: true });
-    // 只在出现时放一次；对话切换时整个页面换了一个（key），会重新放
   }, []);
 
-  // 对话级 Esc 快捷键（docs/ui-standard.md 第 18 条）：按第一次 Esc 暂停，再按一次 Esc 把刚中断或取消的用户消息回退到输入框。
   const handleGlobalKeyDown = useEffectEvent((e: KeyboardEvent) => {
     if (disabled) return;
     if (e.key !== "Escape" || e.defaultPrevented || e.repeat) return;
@@ -308,7 +259,6 @@ export function Composer({
     return () => window.removeEventListener("keydown", handleGlobalKeyDown);
   }, []);
 
-  // 输入框跟着内容长高，到上限后出滚动条；顺便判断单行 / 多行布局
   const prevValue = useRef<string | null>(null);
   const prevFocusRev = useRef(focusRev);
   useLayoutEffect(() => {
@@ -318,8 +268,7 @@ export function Composer({
     prevValue.current = value;
     const layoutChanged = layoutWas.current !== multiline;
     layoutWas.current = multiline;
-    // 在末尾追加文字时内容只会持平或变高，直接读 scrollHeight 即可，不先把 height 塌缩为 auto（避免多行时每次按键触发整页同步回流）；
-    // 首次挂载、删改文字、清空、或布局切换（文字区宽度变了）时才先设 auto 以便重新量。
+    // Appending only grows the content, so read scrollHeight directly and skip the height:auto reset that forces a sync reflow per keystroke.
     if (prev === null || value === "" || !value.startsWith(prev) || layoutChanged) {
       el.style.height = "auto";
     }
@@ -340,9 +289,6 @@ export function Composer({
       el.setSelectionRange(pendingCursor.current, pendingCursor.current);
       pendingCursor.current = null;
     }
-    // 单行 / 多行：空 → 单行；现在这个布局里放不下一行 → 多行；
-    // 已是多行布局、内容只有一行时，只有“没有换行符、放得进回形针和发送键中间”才退回单行（canvas 量宽，不触发排版）。
-    // 刚切到单行就又换行了（量得不准）说明退回错了：这段文字不再尝试退回，避免来回切。
     let nextWrapped: boolean;
     if (value === "") {
       nextWrapped = false;
@@ -368,11 +314,9 @@ export function Composer({
   };
 
   const menu = notice === null ? suggest.menu : null;
-  // 列表里有行可选时 Enter 是“选这一行”不是发送，发送键跟着不能点：半截的 /命令、@文件 不会被误发出去
   const picking = menu !== null && menu.items.length > 0;
   return (
     <>
-      {/* 发送被拦时原文还在框里，会匹配出“没有匹配的命令”：有提示时不出列表 */}
       {menu && <ComposerMenu id={menuId} menu={menu} onSelect={suggest.select} onHighlight={suggest.highlight} />}
       {notice !== null && <NoticeBar notice={notice} onDismiss={staging.dismissNotice} />}
       <div data-multiline={multiline} className={FRAME_CLASS}>
@@ -414,7 +358,7 @@ export function Composer({
             aria-label="Choose files"
             onChange={(e) => {
               staging.add(Array.from(e.target.files ?? []));
-              e.target.value = ""; // 清掉，同一个文件还能再选
+              e.target.value = "";
             }}
           />
           <Button
@@ -447,24 +391,21 @@ export function Composer({
               if (!e.target.value.startsWith(`/${WORKER_COMMAND}`)) repickCaret.current = null;
               setCursor(e.target.selectionStart);
               onChange(e.target.value);
-              if (notice !== null) staging.dismissNotice(); // 开始打字就不再挂着旧提示
+              if (notice !== null) staging.dismissNotice();
             }}
             onSelect={(e) => setCursor(e.currentTarget.selectionStart)}
             onPaste={(e) => {
-              // 粘贴截图或复制来的文件（文件夹会往里读）：加进待发列表；纯文字照常粘进去
               if (e.clipboardData.files.length === 0) return;
               e.preventDefault();
               readDropped(e.clipboardData, staging.add);
             }}
             onKeyDown={(e) => {
-              // 弹出列表开着：↑↓ 选、Enter / Tab 确定（Enter 不发送）、Esc 关；没有匹配时 Enter 照常发送
               if (suggest.handleKey(e)) {
                 e.preventDefault();
                 return;
               }
-              // 输入法选字时的 Enter 是确认，不是发送（keyCode 229 是部分浏览器在选字时的值）
+              // Enter during IME composition confirms a candidate; some browsers report keyCode 229 there.
               if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing || e.keyCode === 229) return;
-              // 触屏键盘没有 Shift：Enter 就是换行，只用发送键发
               if (pointerMatches(POINTER_COARSE, false)) return;
               e.preventDefault();
               submit();
@@ -487,7 +428,6 @@ export function Composer({
   );
 }
 
-/** 独立订阅单个对话草稿的输入框：打字只重渲染它自己，不牵连 App、左栏、右栏和消息流。 */
 export const DraftComposer = memo(function DraftComposer({
   draft,
   ...rest
