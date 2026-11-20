@@ -141,23 +141,26 @@ type CacheByPms = WeakMap<readonly Pm[], CacheByProjects>;
 type CacheByGraphs = WeakMap<readonly TaskGraph[], CacheByPms>;
 const decisionsCache = new WeakMap<readonly RouterItem[], CacheByGraphs>();
 
-export function pendingDecisionsOf(snapshot: DecisionSnapshotInput, deviceId = "local"): PendingDecision[] {
-  const routerItems = snapshot.router?.items ?? EMPTY_ROUTER_ITEMS;
-  const graphs = normalizeTaskGraphs(snapshot.activeTaskGraphs ?? EMPTY_TASK_GRAPHS);
-  const pms = snapshot.pms;
-  const projects = snapshot.projects ?? EMPTY_PROJECTS;
-
-  let askMessagesSig = "";
+function askMessagesSigOf(routerItems: readonly RouterItem[], conversations: DecisionConversationsInput): string {
+  let sig = "";
   for (const item of routerItems) {
     if (item.kind === "decision" && item.status === "pending" && item.askMessageId !== null) {
-      const msgs = messagesOfConversation(snapshot.conversations, item.conversationId);
+      const msgs = messagesOfConversation(conversations, item.conversationId);
       const targetMsg = msgs.find((m) => m.id === item.askMessageId);
       const targetAsk = targetMsg !== undefined ? askOf(targetMsg) : null;
       const hasGateRef = targetAsk?.gateRef !== undefined ? "1" : "0";
-      askMessagesSig += `${item.id}:${hasGateRef}:${targetAsk?.recommended ?? ""};`;
+      sig += `${item.id}:${hasGateRef}:${targetAsk?.recommended ?? ""};`;
     }
   }
+  return sig;
+}
 
+function decisionsCacheSlot(
+  routerItems: readonly RouterItem[],
+  graphs: readonly TaskGraph[],
+  pms: readonly Pm[],
+  projects: readonly Project[],
+): Map<string, { askMessagesSig: string; list: PendingDecision[] }> {
   let byGraphs = decisionsCache.get(routerItems);
   if (!byGraphs) {
     byGraphs = new WeakMap();
@@ -178,20 +181,18 @@ export function pendingDecisionsOf(snapshot: DecisionSnapshotInput, deviceId = "
     byDevice = new Map();
     byProjects.set(projects, byDevice);
   }
-  const cached = byDevice.get(deviceId);
-  if (cached !== undefined && cached.askMessagesSig === askMessagesSig) {
-    return cached.list;
-  }
+  return byDevice;
+}
 
-  const pmById = new Map<PmId, Pm>();
-  for (const pm of pms) pmById.set(pm.id, pm);
+interface DecisionLookups {
+  deviceId: string;
+  pmById: Map<PmId, Pm>;
+  projectNameById: Map<ProjectId, string>;
+}
 
-  const projectNameById = new Map<ProjectId, string>();
-  for (const proj of projects) projectNameById.set(proj.id, proj.name);
-
-  const gateMessageIds = new Set<MessageId>();
+function gateDecisionsOf(graphs: readonly TaskGraph[], lookups: DecisionLookups, gateMessageIds: Set<MessageId>): PendingDecision[] {
+  const { deviceId, pmById, projectNameById } = lookups;
   const result: PendingDecision[] = [];
-
   for (const graph of graphs) {
     if (graph.status !== "active") continue;
     const pm = pmById.get(graph.pmId);
@@ -229,7 +230,17 @@ export function pendingDecisionsOf(snapshot: DecisionSnapshotInput, deviceId = "
       });
     }
   }
+  return result;
+}
 
+function routerItemDecisionsOf(
+  routerItems: readonly RouterItem[],
+  conversations: DecisionConversationsInput,
+  lookups: DecisionLookups,
+  gateMessageIds: ReadonlySet<MessageId>,
+): PendingDecision[] {
+  const { deviceId, pmById, projectNameById } = lookups;
+  const result: PendingDecision[] = [];
   for (const item of routerItems) {
     if (item.kind !== "decision" || item.status !== "pending") continue;
     const pm = pmById.get(item.pmId);
@@ -237,7 +248,7 @@ export function pendingDecisionsOf(snapshot: DecisionSnapshotInput, deviceId = "
     let recommended: string | undefined;
     if (item.askMessageId !== null) {
       if (gateMessageIds.has(item.askMessageId)) continue;
-      const msgs = messagesOfConversation(snapshot.conversations, item.conversationId);
+      const msgs = messagesOfConversation(conversations, item.conversationId);
       const targetMsg = msgs.find((m) => m.id === item.askMessageId);
       const targetAsk = targetMsg !== undefined ? askOf(targetMsg) : null;
       if (targetAsk?.gateRef !== undefined) continue;
@@ -265,7 +276,33 @@ export function pendingDecisionsOf(snapshot: DecisionSnapshotInput, deviceId = "
       },
     });
   }
+  return result;
+}
 
+export function pendingDecisionsOf(snapshot: DecisionSnapshotInput, deviceId = "local"): PendingDecision[] {
+  const routerItems = snapshot.router?.items ?? EMPTY_ROUTER_ITEMS;
+  const graphs = normalizeTaskGraphs(snapshot.activeTaskGraphs ?? EMPTY_TASK_GRAPHS);
+  const pms = snapshot.pms;
+  const projects = snapshot.projects ?? EMPTY_PROJECTS;
+
+  const askMessagesSig = askMessagesSigOf(routerItems, snapshot.conversations);
+  const byDevice = decisionsCacheSlot(routerItems, graphs, pms, projects);
+  const cached = byDevice.get(deviceId);
+  if (cached !== undefined && cached.askMessagesSig === askMessagesSig) {
+    return cached.list;
+  }
+
+  const pmById = new Map<PmId, Pm>();
+  for (const pm of pms) pmById.set(pm.id, pm);
+  const projectNameById = new Map<ProjectId, string>();
+  for (const proj of projects) projectNameById.set(proj.id, proj.name);
+  const lookups: DecisionLookups = { deviceId, pmById, projectNameById };
+
+  const gateMessageIds = new Set<MessageId>();
+  const result = [
+    ...gateDecisionsOf(graphs, lookups, gateMessageIds),
+    ...routerItemDecisionsOf(routerItems, snapshot.conversations, lookups, gateMessageIds),
+  ];
   result.sort((a, b) => b.createdAt - a.createdAt || a.key.localeCompare(b.key));
   byDevice.set(deviceId, { askMessagesSig, list: result });
   return result;

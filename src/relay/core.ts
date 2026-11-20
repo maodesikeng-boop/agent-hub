@@ -116,159 +116,365 @@ export interface RelayAccountRoom {
 }
 
 export function createRelayAccountRoom(options: RelayAccountRoomOptions): RelayAccountRoom {
-  const now = options.now ?? Date.now;
-  const randomToken = options.randomToken ?? newRelayToken;
-  const { accountId, relayOrigin, storage } = options;
-  let record: RelayAccountRecord | null = null;
-  let loaded: Promise<void> | null = null;
-  const ensureLoaded = () => (loaded ??= storage.load().then((stored) => void (record = stored === null ? null : normalizeRecord(stored))));
-  let lastUsageSave = 0;
-  let usageDirty = false;
+  return new AccountRoom(options);
+}
 
-  const controls = new Map<DeviceId, ControlConn>();
-  const unauthenticated = new Set<ControlConn>();
-  const lastSeenAt = new Map<DeviceId, number>();
-  const leases = new Map<MeshLeaseName, LeaseState>();
-  const dials = new Map<string, DialRecord>();
+class AccountRoom implements RelayAccountRoom {
+  private readonly now: () => number;
+  private readonly randomToken: () => string;
+  private readonly accountId: AccountId;
+  private readonly relayOrigin: string;
+  private readonly storage: RelayAccountStorage;
+  private record: RelayAccountRecord | null = null;
+  private loaded: Promise<void> | null = null;
+  private lastUsageSave = 0;
+  private usageDirty = false;
+  private readonly controls = new Map<DeviceId, ControlConn>();
+  private readonly unauthenticated = new Set<ControlConn>();
+  private readonly lastSeenAt = new Map<DeviceId, number>();
+  private readonly leases = new Map<MeshLeaseName, LeaseState>();
+  private readonly dials = new Map<string, DialRecord>();
 
-  const save = async () => {
-    if (record === null) return;
-    usageDirty = false;
-    lastUsageSave = now();
-    await storage.save(record);
-  };
-  const deviceOf = (id: DeviceId) => record?.devices.find((d) => d.id === id);
-  const isActive = (id: DeviceId) => deviceOf(id)?.state === "active";
-  const send = (conn: ControlConn, frame: RelayServerFrame) => {
+  constructor(options: RelayAccountRoomOptions) {
+    this.now = options.now ?? Date.now;
+    this.randomToken = options.randomToken ?? newRelayToken;
+    this.accountId = options.accountId;
+    this.relayOrigin = options.relayOrigin;
+    this.storage = options.storage;
+  }
+
+  async register(login: AccountLogin, request: RelayRegisterRequest): Promise<RelayRegisterResponse | { error: RelayErrorCode }> {
+    await this.ensureLoaded();
+    let fingerprint: DeviceFingerprint;
+    try {
+      fingerprint = await fingerprintOfPem(request.device.certPem);
+    } catch {
+      return { error: "unauthorized" };
+    }
+    if (!(await verifyCertPublicKey(request.device.certPem, request.device.publicKey))) return { error: "unauthorized" };
+    const message = relayRegisterMessage({ relayOrigin: this.relayOrigin, provider: request.provider, device: request.device.id, fingerprint });
+    if (!(await verifyDeviceSignature(request.device.publicKey, message, request.signature))) return { error: "unauthorized" };
+    const current: RelayAccountRecord = this.record ?? { accountId: this.accountId, login, devices: [], priority: [], removed: [], revocations: [], leaseEpochs: {}, usage: { day: "", bytes: 0 } };
+    const existing = current.devices.find((d) => d.id === request.device.id);
+    if (existing === undefined && current.devices.length >= MESH_MAX_DEVICES_PER_ACCOUNT) return { error: "too_many_devices" };
+    const nobodyActive = !current.devices.some((d) => d.state === "active" && d.id !== request.device.id);
+    const sameCert = existing !== undefined && existing.fingerprint === fingerprint;
+    const state: MeshDeviceState = nobodyActive ? "active" : sameCert ? existing.state : "pending";
+    const device: RelayDeviceRecord = {
+      id: request.device.id,
+      name: request.device.name,
+      platform: request.device.platform,
+      certPem: request.device.certPem,
+      fingerprint,
+      publicKey: request.device.publicKey,
+      state,
+      addedAt: existing !== undefined && sameCert ? existing.addedAt : this.now(),
+    };
+    current.login = login;
+    current.devices = existing === undefined ? [...current.devices, device] : current.devices.map((d) => (d.id === device.id ? device : d));
+    current.removed = current.removed.filter((id) => id !== device.id);
+    if (state === "active" && current.revocations !== undefined) {
+      current.revocations = current.revocations.filter((r) => r.statement.fingerprint !== fingerprint);
+    }
+    if (state === "active" && !current.priority.includes(device.id)) current.priority.push(device.id);
+    if (state === "pending") current.priority = current.priority.filter((id) => id !== device.id);
+    this.record = current;
+    await this.save();
+    const conn = this.controls.get(device.id);
+    if (conn !== undefined && !sameCert) {
+      this.closeConn(conn, WS_CLOSE_REPLACED, "replaced");
+      this.detach(conn);
+    }
+    this.broadcastDevices();
+    this.broadcastPresence();
+    return { accountId: this.accountId, login: login.login, state };
+  }
+
+  openControl(socket: RelaySocket, restored?: RelayControlAttachment): RelayControlHandle {
+    const conn: ControlConn = {
+      socket,
+      device: null,
+      session: null,
+      nonce: restored?.nonce ?? this.randomToken(),
+      openedAt: restored?.openedAt ?? this.now(),
+      candidates: restored?.candidates ?? [],
+      lastClaimAt: { ...(restored?.lastClaimAt ?? {}) },
+      frameTimes: [],
+      closed: false,
+      queue: Promise.resolve(),
+    };
+    if (restored?.device != null && restored.session !== null) {
+      conn.device = restored.device;
+      conn.session = restored.session;
+      this.controls.set(restored.device, conn);
+      for (const held of restored.held) {
+        const lease = this.leases.get(held.name);
+        if (lease === undefined || lease.epoch <= held.epoch) {
+          this.leases.set(held.name, { holder: restored.device, epoch: held.epoch, renewedAt: held.renewedAt, yielding: false });
+        }
+      }
+    } else if (this.unauthenticated.size >= RELAY_MAX_UNAUTH_CONTROLS_PER_ACCOUNT) {
+      this.fail(conn, "rate_limited");
+    } else {
+      this.unauthenticated.add(conn);
+      if (restored === undefined) this.send(conn, { type: "challenge", nonce: conn.nonce });
+    }
+    return {
+      receive: (text) => this.enqueue(conn, () => this.receiveControl(conn, text)),
+      closed: () => {
+        conn.closed = true;
+        this.unauthenticated.delete(conn);
+        return this.enqueue(conn, () => this.controlClosed(conn));
+      },
+      attachment: () => this.attachmentOf(conn),
+    };
+  }
+
+  openChannel(query: { channel: string; device: DeviceId; session: string }, socket: RelaySocket): RelayChannelHandle | { error: RelayErrorCode } {
+    const dial = this.dials.get(query.channel);
+    const conn = this.controls.get(query.device);
+    if (dial === undefined || conn === undefined || conn.session !== query.session) return { error: "unauthorized" };
+    const side = query.device === dial.from ? "dialer" : query.device === dial.to ? "acceptor" : null;
+    if (side === null || dial[side] !== undefined) return { error: "unauthorized" };
+    if (this.overQuota()) return { error: "quota_exceeded" };
+    const end: ChannelEnd = { socket, closed: false };
+    dial[side] = end;
+    const otherOf = () => (side === "dialer" ? dial.acceptor : dial.dialer);
+    if (dial.dialer !== undefined && dial.acceptor !== undefined) {
+      dial.lastDataAt = this.now();
+      for (const chunk of dial.pending.splice(0)) socket.send(chunk);
+      dial.pendingBytes = 0;
+      this.sendTo(dial.from, { type: "dial.connected", to: dial.to, channel: query.channel });
+    }
+    return {
+      receive: (data) => {
+        if (end.closed || this.dials.get(query.channel) !== dial) return;
+        if (data.length > RELAY_MAX_DATA_FRAME_BYTES) return this.closeDial(query.channel);
+        this.rollUsage();
+        if (this.record !== null) {
+          this.record.usage.bytes += data.length;
+          this.usageDirty = true;
+        }
+        dial.lastDataAt = this.now();
+        const other = otherOf();
+        if (other !== undefined && !other.closed) {
+          other.socket.send(data);
+          return;
+        }
+        dial.pendingBytes += data.length;
+        if (dial.pendingBytes > RELAY_CHANNEL_PENDING_BYTES) return this.closeDial(query.channel);
+        dial.pending.push(data);
+      },
+      closed: () => {
+        end.closed = true;
+        if (this.dials.get(query.channel) === dial) this.closeDial(query.channel);
+        if (this.usageDirty) void this.save();
+      },
+    };
+  }
+
+  async sweep(): Promise<void> {
+    await this.ensureLoaded();
+    const t = this.now();
+    for (const conn of [...this.unauthenticated]) {
+      if (t - conn.openedAt > RELAY_HELLO_TIMEOUT_MS) this.fail(conn, "unauthorized");
+    }
+    for (const [channel, dial] of this.dials) {
+      const paired = dial.dialer !== undefined && dial.acceptor !== undefined;
+      if (!paired && t - dial.createdAt > RELAY_CHANNEL_ACCEPT_TIMEOUT_MS) {
+        this.sendTo(dial.from, { type: "dial.failed", to: dial.to, channel, code: "offline" });
+        this.closeDial(channel);
+      } else if (paired && t - dial.lastDataAt > RELAY_CHANNEL_IDLE_MS) {
+        this.closeDial(channel);
+      }
+    }
+    if (this.record !== null) {
+      for (const device of this.record.devices) {
+        if (device.state === "pending" && t - device.addedAt > RELAY_PENDING_DEVICE_TTL_MS) await this.removeDevice(device.id);
+      }
+    }
+    await this.arbitrateAll();
+    if (this.usageDirty && t - this.lastUsageSave >= RELAY_USAGE_SAVE_MS) await this.save();
+  }
+
+  private ensureLoaded(): Promise<void> {
+    return (this.loaded ??= this.storage.load().then((stored) => void (this.record = stored === null ? null : normalizeRecord(stored))));
+  }
+
+  private async save(): Promise<void> {
+    if (this.record === null) return;
+    this.usageDirty = false;
+    this.lastUsageSave = this.now();
+    await this.storage.save(this.record);
+  }
+
+  private deviceOf(id: DeviceId): RelayDeviceRecord | undefined {
+    return this.record?.devices.find((d) => d.id === id);
+  }
+
+  private isActive(id: DeviceId): boolean {
+    return this.deviceOf(id)?.state === "active";
+  }
+
+  private send(conn: ControlConn, frame: RelayServerFrame): void {
     if (!conn.closed) conn.socket.send(encodeRelayFrame(frame));
-  };
-  const sendTo = (id: DeviceId, frame: RelayServerFrame) => {
-    const conn = controls.get(id);
-    if (conn !== undefined) send(conn, frame);
-  };
-  const closeConn = (conn: ControlConn, code: number, reason: string) => {
-    unauthenticated.delete(conn);
+  }
+
+  private sendTo(id: DeviceId, frame: RelayServerFrame): void {
+    const conn = this.controls.get(id);
+    if (conn !== undefined) this.send(conn, frame);
+  }
+
+  private closeConn(conn: ControlConn, code: number, reason: string): void {
+    this.unauthenticated.delete(conn);
     if (conn.closed) return;
     conn.closed = true;
     conn.socket.close(code, reason);
-  };
-  const fail = (conn: ControlConn, code: RelayErrorCode) => {
-    send(conn, { type: "error", code });
-    closeConn(conn, WS_CLOSE_POLICY, code);
-    detach(conn);
-  };
+  }
 
-  const deviceViews = (): RelayDeviceView[] =>
-    (record?.devices ?? []).map((d) => ({ id: d.id, name: d.name, platform: d.platform, fingerprint: d.fingerprint, state: d.state, addedAt: d.addedAt }));
-  const sendRevocations = (conn: ControlConn, list: readonly RelayRevocationEnvelope[]) => {
+  private fail(conn: ControlConn, code: RelayErrorCode): void {
+    this.send(conn, { type: "error", code });
+    this.closeConn(conn, WS_CLOSE_POLICY, code);
+    this.detach(conn);
+  }
+
+  private deviceViews(): RelayDeviceView[] {
+    return (this.record?.devices ?? []).map((d) => ({ id: d.id, name: d.name, platform: d.platform, fingerprint: d.fingerprint, state: d.state, addedAt: d.addedAt }));
+  }
+
+  private sendRevocations(conn: ControlConn, list: readonly RelayRevocationEnvelope[]): void {
     for (let i = 0; i < list.length; i += RELAY_REVOCATIONS_PAGE_SIZE) {
-      send(conn, { type: "revocations", revocations: list.slice(i, i + RELAY_REVOCATIONS_PAGE_SIZE) });
+      this.send(conn, { type: "revocations", revocations: list.slice(i, i + RELAY_REVOCATIONS_PAGE_SIZE) });
     }
-  };
-  const presenceFor = (viewer: DeviceId): RelayPresenceView[] =>
-    (record?.devices ?? []).map((d) => {
-      const conn = controls.get(d.id);
-      const shareCandidates = d.state === "active" && isActive(viewer) && conn !== undefined;
-      return { id: d.id, online: conn !== undefined, candidates: shareCandidates ? conn.candidates : [], lastSeenAt: lastSeenAt.get(d.id) ?? null };
-    });
-  const broadcastDevices = () => {
-    const devices = deviceViews();
-    for (const conn of controls.values()) send(conn, { type: "devices", devices, priority: record?.priority ?? [] });
-  };
-  const broadcastPresence = () => {
-    for (const [id, conn] of controls) send(conn, { type: "presence", presence: presenceFor(id) });
-  };
-  const leaseFrame = (name: MeshLeaseName): RelayServerFrame => {
-    const lease = leases.get(name);
-    return { type: "lease", name, grant: lease?.holder ? { name, holder: lease.holder, epoch: lease.epoch, ttlMs: MESH_LEASE_TTL_MS } : null };
-  };
-  const broadcastLease = (name: MeshLeaseName) => {
-    const frame = leaseFrame(name);
-    for (const [id, conn] of controls) if (isActive(id)) send(conn, frame);
-  };
+  }
 
-  const arbitrate = async (name: MeshLeaseName): Promise<void> => {
-    const t = now();
-    const lease = leases.get(name) ?? { holder: null, epoch: record?.leaseEpochs[name] ?? 0, renewedAt: 0, yielding: false };
-    leases.set(name, lease);
+  private presenceFor(viewer: DeviceId): RelayPresenceView[] {
+    return (this.record?.devices ?? []).map((d) => {
+      const conn = this.controls.get(d.id);
+      const shareCandidates = d.state === "active" && this.isActive(viewer) && conn !== undefined;
+      return { id: d.id, online: conn !== undefined, candidates: shareCandidates ? conn.candidates : [], lastSeenAt: this.lastSeenAt.get(d.id) ?? null };
+    });
+  }
+
+  private broadcastDevices(): void {
+    const devices = this.deviceViews();
+    for (const conn of this.controls.values()) this.send(conn, { type: "devices", devices, priority: this.record?.priority ?? [] });
+  }
+
+  private broadcastPresence(): void {
+    for (const [id, conn] of this.controls) this.send(conn, { type: "presence", presence: this.presenceFor(id) });
+  }
+
+  private leaseFrame(name: MeshLeaseName): RelayServerFrame {
+    const lease = this.leases.get(name);
+    return { type: "lease", name, grant: lease?.holder ? { name, holder: lease.holder, epoch: lease.epoch, ttlMs: MESH_LEASE_TTL_MS } : null };
+  }
+
+  private broadcastLease(name: MeshLeaseName): void {
+    const frame = this.leaseFrame(name);
+    for (const [id, conn] of this.controls) if (this.isActive(id)) this.send(conn, frame);
+  }
+
+  private releaseLeasesOf(id: DeviceId): void {
+    for (const name of MESH_LEASE_NAMES) {
+      const lease = this.leases.get(name);
+      if (lease?.holder === id) {
+        lease.holder = null;
+        lease.yielding = false;
+        this.broadcastLease(name);
+      }
+    }
+  }
+
+  private async arbitrate(name: MeshLeaseName): Promise<void> {
+    const t = this.now();
+    const record = this.record;
+    const lease = this.leases.get(name) ?? { holder: null, epoch: record?.leaseEpochs[name] ?? 0, renewedAt: 0, yielding: false };
+    this.leases.set(name, lease);
     const priority = record?.priority ?? [];
-    if (lease.holder !== null && (t - lease.renewedAt > MESH_LEASE_TTL_MS || !isActive(lease.holder) || !controls.has(lease.holder))) {
+    if (lease.holder !== null && (t - lease.renewedAt > MESH_LEASE_TTL_MS || !this.isActive(lease.holder) || !this.controls.has(lease.holder))) {
       lease.holder = null;
       lease.yielding = false;
-      broadcastLease(name);
+      this.broadcastLease(name);
     }
     const candidates = new Set<DeviceId>();
-    for (const [id, conn] of controls) {
+    for (const [id, conn] of this.controls) {
       const claimed = conn.lastClaimAt[name];
-      if (isActive(id) && claimed !== undefined && t - claimed <= MESH_LEASE_TTL_MS) candidates.add(id);
+      if (this.isActive(id) && claimed !== undefined && t - claimed <= MESH_LEASE_TTL_MS) candidates.add(id);
     }
     const best = pickCenter(priority, candidates);
     if (lease.holder === null) {
-      if (best === null || record === null) return;
-      lease.epoch = Math.max(lease.epoch, record.leaseEpochs[name] ?? 0) + 1;
+      if (best === null || this.record === null) return;
+      lease.epoch = Math.max(lease.epoch, this.record.leaseEpochs[name] ?? 0) + 1;
       lease.holder = best;
       lease.renewedAt = t;
       lease.yielding = false;
-      record.leaseEpochs[name] = lease.epoch;
-      await save();
-      broadcastLease(name);
+      this.record.leaseEpochs[name] = lease.epoch;
+      await this.save();
+      this.broadcastLease(name);
       return;
     }
     const holderRank = priority.indexOf(lease.holder);
     const outranked = best !== null && best !== lease.holder && (holderRank === -1 || priority.indexOf(best) < holderRank);
     if ((outranked || holderRank === -1) && !lease.yielding) {
       lease.yielding = true;
-      sendTo(lease.holder, { type: "lease.yield", name, epoch: lease.epoch });
+      this.sendTo(lease.holder, { type: "lease.yield", name, epoch: lease.epoch });
     }
-  };
-  const arbitrateAll = async () => {
-    for (const name of MESH_LEASE_NAMES) await arbitrate(name);
-  };
+  }
 
-  const channelsOf = (id: DeviceId) => {
+  private async arbitrateAll(): Promise<void> {
+    for (const name of MESH_LEASE_NAMES) await this.arbitrate(name);
+  }
+
+  private channelsOf(id: DeviceId): number {
     let count = 0;
-    for (const dial of dials.values()) {
+    for (const dial of this.dials.values()) {
       if (dial.from === id) count++;
       if (dial.to === id) count++;
     }
     return count;
-  };
-  const rollUsage = () => {
-    if (record === null) return;
-    const day = new Date(now()).toISOString().slice(0, 10);
-    if (record.usage.day !== day) {
-      record.usage = { day, bytes: 0 };
-      usageDirty = true;
+  }
+
+  private rollUsage(): void {
+    if (this.record === null) return;
+    const day = new Date(this.now()).toISOString().slice(0, 10);
+    if (this.record.usage.day !== day) {
+      this.record.usage = { day, bytes: 0 };
+      this.usageDirty = true;
     }
-  };
-  const overQuota = () => {
-    rollUsage();
-    return (record?.usage.bytes ?? 0) >= RELAY_ACCOUNT_DAILY_BYTES;
-  };
-  const closeDial = (channel: string) => {
-    const dial = dials.get(channel);
+  }
+
+  private overQuota(): boolean {
+    this.rollUsage();
+    return (this.record?.usage.bytes ?? 0) >= RELAY_ACCOUNT_DAILY_BYTES;
+  }
+
+  private closeDial(channel: string): void {
+    const dial = this.dials.get(channel);
     if (dial === undefined) return;
-    dials.delete(channel);
+    this.dials.delete(channel);
     for (const end of [dial.dialer, dial.acceptor]) {
       if (end !== undefined && !end.closed) {
         end.closed = true;
         end.socket.close(1000, "closed");
       }
     }
-  };
-  const closeDialsOf = (id: DeviceId) => {
-    for (const [channel, dial] of dials) if (dial.from === id || dial.to === id) closeDial(channel);
-  };
+  }
 
-  const detach = (conn: ControlConn) => {
-    unauthenticated.delete(conn);
-    if (conn.device === null || controls.get(conn.device) !== conn) return false;
-    controls.delete(conn.device);
-    lastSeenAt.set(conn.device, now());
+  private closeDialsOf(id: DeviceId): void {
+    for (const [channel, dial] of this.dials) if (dial.from === id || dial.to === id) this.closeDial(channel);
+  }
+
+  private detach(conn: ControlConn): boolean {
+    this.unauthenticated.delete(conn);
+    if (conn.device === null || this.controls.get(conn.device) !== conn) return false;
+    this.controls.delete(conn.device);
+    this.lastSeenAt.set(conn.device, this.now());
     return true;
-  };
+  }
 
-  const removeDevice = async (id: DeviceId, revocation?: RelayRevocationEnvelope) => {
+  private async removeDevice(id: DeviceId, revocation?: RelayRevocationEnvelope): Promise<void> {
+    const record = this.record;
     if (record === null) return;
     record.devices = record.devices.filter((d) => d.id !== id);
     record.priority = record.priority.filter((p) => p !== id);
@@ -277,369 +483,214 @@ export function createRelayAccountRoom(options: RelayAccountRoomOptions): RelayA
       const prev = record.revocations ?? [];
       record.revocations = [...prev.filter((r) => r.statement.fingerprint !== revocation.statement.fingerprint), revocation].slice(-MESH_TRUST_TOMBSTONES_MAX);
     }
-    lastSeenAt.delete(id);
-    await save();
-    const conn = controls.get(id);
+    this.lastSeenAt.delete(id);
+    await this.save();
+    const conn = this.controls.get(id);
     if (conn !== undefined) {
-      send(conn, { type: "removed" });
-      closeConn(conn, 1000, "removed");
-      detach(conn);
+      this.send(conn, { type: "removed" });
+      this.closeConn(conn, 1000, "removed");
+      this.detach(conn);
     }
-    closeDialsOf(id);
-    for (const name of MESH_LEASE_NAMES) {
-      const lease = leases.get(name);
-      if (lease?.holder === id) {
-        lease.holder = null;
-        lease.yielding = false;
-        broadcastLease(name);
-      }
-    }
-    broadcastDevices();
+    this.closeDialsOf(id);
+    this.releaseLeasesOf(id);
+    this.broadcastDevices();
     if (revocation !== undefined) {
-      for (const conn of controls.values()) sendRevocations(conn, [revocation]);
+      for (const other of this.controls.values()) this.sendRevocations(other, [revocation]);
     }
-    broadcastPresence();
-    await arbitrateAll();
-  };
+    this.broadcastPresence();
+    await this.arbitrateAll();
+  }
 
-  const welcome = (conn: ControlConn, device: RelayDeviceRecord) => {
-    unauthenticated.delete(conn);
-    const previous = controls.get(device.id);
+  private welcome(conn: ControlConn, device: RelayDeviceRecord): void {
+    this.unauthenticated.delete(conn);
+    const previous = this.controls.get(device.id);
     if (previous !== undefined && previous !== conn) {
-      closeConn(previous, WS_CLOSE_REPLACED, "replaced");
-      controls.delete(device.id);
+      this.closeConn(previous, WS_CLOSE_REPLACED, "replaced");
+      this.controls.delete(device.id);
     }
     conn.device = device.id;
-    conn.session = randomToken();
-    controls.set(device.id, conn);
-    send(conn, {
+    conn.session = this.randomToken();
+    this.controls.set(device.id, conn);
+    this.send(conn, {
       type: "welcome",
-      accountId,
+      accountId: this.accountId,
       self: device.state,
       session: conn.session,
-      devices: deviceViews(),
-      priority: record?.priority ?? [],
-      presence: presenceFor(device.id),
+      devices: this.deviceViews(),
+      priority: this.record?.priority ?? [],
+      presence: this.presenceFor(device.id),
     });
-    if (record?.revocations !== undefined && record.revocations.length > 0) sendRevocations(conn, record.revocations);
-    if (device.state === "active") for (const name of MESH_LEASE_NAMES) send(conn, leaseFrame(name));
-    broadcastPresence();
-  };
+    if (this.record?.revocations !== undefined && this.record.revocations.length > 0) this.sendRevocations(conn, this.record.revocations);
+    if (device.state === "active") for (const name of MESH_LEASE_NAMES) this.send(conn, this.leaseFrame(name));
+    this.broadcastPresence();
+  }
 
-  const handleHello = async (conn: ControlConn, frame: Extract<RelayClientFrame, { type: "hello" }>) => {
-    await ensureLoaded();
-    if (frame.version !== RELAY_PROTOCOL_VERSION) return fail(conn, "bad_frame");
-    if (record?.removed.includes(frame.device)) {
-      send(conn, { type: "removed" });
-      return closeConn(conn, 1000, "removed");
-    }
-    const device = deviceOf(frame.device);
-    if (device === undefined) return fail(conn, "unknown_device");
-    const message = relayControlMessage({ relayOrigin, accountId, device: device.id, nonce: conn.nonce });
-    if (!(await verifyDeviceSignature(device.publicKey, message, frame.signature))) return fail(conn, "unauthorized");
-    if (conn.closed) return;
-    welcome(conn, device);
-  };
+  private enqueue(conn: ControlConn, run: () => Promise<void>): Promise<void> {
+    conn.queue = conn.queue.then(run, run);
+    return conn.queue;
+  }
 
-  const handleFrame = async (conn: ControlConn, self: DeviceId, frame: RelayClientFrame) => {
-    const selfRecord = deviceOf(self);
-    if (selfRecord === undefined) return fail(conn, "removed");
-    const selfActive = selfRecord.state === "active";
-    switch (frame.type) {
-      case "hello":
-        return fail(conn, "bad_frame");
-      case "presence": {
-        conn.candidates = frame.candidates;
-        if (selfActive) broadcastPresence();
-        return;
-      }
-      case "lease.claim": {
-        if (!selfActive) return;
-        conn.lastClaimAt[frame.name] = now();
-        const lease = leases.get(frame.name);
-        if (lease?.holder === self && !lease.yielding && now() - lease.renewedAt <= MESH_LEASE_TTL_MS) {
-          lease.renewedAt = now();
-          send(conn, leaseFrame(frame.name));
-          return;
-        }
-        return arbitrate(frame.name);
-      }
-      case "lease.release": {
-        const lease = leases.get(frame.name);
-        if (lease?.holder !== self || lease.epoch !== frame.epoch) return;
-        lease.holder = null;
-        lease.yielding = false;
-        delete conn.lastClaimAt[frame.name];
-        broadcastLease(frame.name);
-        return arbitrate(frame.name);
-      }
-      case "dial": {
-        const failDial = (code: RelayErrorCode) => send(conn, { type: "dial.failed", to: frame.to, channel: frame.channel, code });
-        if (!selfActive) return failDial("not_active");
-        const target = deviceOf(frame.to);
-        if (target === undefined || frame.to === self) return failDial("unknown_device");
-        if (target.state !== "active") return failDial("not_active");
-        const targetConn = controls.get(frame.to);
-        if (targetConn === undefined) return failDial("offline");
-        if (dials.has(frame.channel)) return failDial("bad_frame");
-        if (channelsOf(self) >= RELAY_MAX_CHANNELS_PER_DEVICE || channelsOf(frame.to) >= RELAY_MAX_CHANNELS_PER_DEVICE) return failDial("rate_limited");
-        if (overQuota()) return failDial("quota_exceeded");
-        dials.set(frame.channel, { from: self, to: frame.to, createdAt: now(), lastDataAt: now(), pending: [], pendingBytes: 0 });
-        send(targetConn, { type: "incoming", from: self, channel: frame.channel });
-        return;
-      }
-      case "signal": {
-        const target = deviceOf(frame.to);
-        if (target === undefined || frame.to === self) return;
-        if (!selfActive && target.state !== "active") return;
-        sendTo(frame.to, { type: "signal", from: self, payload: frame.payload });
-        return;
-      }
-      case "device.activate": {
-        if (!selfActive) return fail(conn, "not_active");
-        const target = deviceOf(frame.id);
-        if (target === undefined || target.state === "active") return;
-        target.state = "active";
-        if (record !== null && !record.priority.includes(target.id) && record.priority.length < MESH_MAX_DEVICES_PER_ACCOUNT) record.priority.push(target.id);
-        if (record?.revocations !== undefined) {
-          record.revocations = record.revocations.filter((r) => r.statement.fingerprint !== target.fingerprint);
-        }
-        await save();
-        broadcastDevices();
-        broadcastPresence();
-        const targetConn = controls.get(target.id);
-        if (targetConn !== undefined) for (const name of MESH_LEASE_NAMES) send(targetConn, leaseFrame(name));
-        return;
-      }
-      case "device.remove": {
-        if (!selfActive) return fail(conn, "not_active");
-        const target = deviceOf(frame.id);
-        if (target === undefined) return;
-        const validRevocation =
-          frame.revocation !== undefined &&
-          frame.revocation.statement.device === target.id &&
-          frame.revocation.statement.fingerprint === target.fingerprint &&
-          frame.revocation.statement.by === self
-            ? frame.revocation
-            : undefined;
-        return removeDevice(frame.id, validRevocation);
-      }
-      case "priority.set": {
-        if (!selfActive) return fail(conn, "not_active");
-        if (record === null) return;
-        record.priority = frame.priority.filter((id) => isActive(id));
-        await save();
-        broadcastDevices();
-        return arbitrateAll();
-      }
-    }
-  };
-
-  const allowFrame = (conn: ControlConn): boolean => {
-    const t = now();
+  private allowFrame(conn: ControlConn): boolean {
+    const t = this.now();
     conn.frameTimes = conn.frameTimes.filter((at) => t - at < 1_000);
     conn.frameTimes.push(t);
     return conn.frameTimes.length <= RELAY_CONTROL_FRAMES_PER_SECOND;
-  };
+  }
 
-  return {
-    async register(login, request) {
-      await ensureLoaded();
-      let fingerprint: DeviceFingerprint;
-      try {
-        fingerprint = await fingerprintOfPem(request.device.certPem);
-      } catch {
-        return { error: "unauthorized" };
-      }
-      if (!(await verifyCertPublicKey(request.device.certPem, request.device.publicKey))) return { error: "unauthorized" };
-      const message = relayRegisterMessage({ relayOrigin, provider: request.provider, device: request.device.id, fingerprint });
-      if (!(await verifyDeviceSignature(request.device.publicKey, message, request.signature))) return { error: "unauthorized" };
-      const current: RelayAccountRecord = record ?? { accountId, login, devices: [], priority: [], removed: [], revocations: [], leaseEpochs: {}, usage: { day: "", bytes: 0 } };
-      const existing = current.devices.find((d) => d.id === request.device.id);
-      if (existing === undefined && current.devices.length >= MESH_MAX_DEVICES_PER_ACCOUNT) return { error: "too_many_devices" };
-      const nobodyActive = !current.devices.some((d) => d.state === "active" && d.id !== request.device.id);
-      const sameCert = existing !== undefined && existing.fingerprint === fingerprint;
-      const state: MeshDeviceState = nobodyActive ? "active" : sameCert ? existing.state : "pending";
-      const device: RelayDeviceRecord = {
-        id: request.device.id,
-        name: request.device.name,
-        platform: request.device.platform,
-        certPem: request.device.certPem,
-        fingerprint,
-        publicKey: request.device.publicKey,
-        state,
-        addedAt: existing !== undefined && sameCert ? existing.addedAt : now(),
-      };
-      current.login = login;
-      current.devices = existing === undefined ? [...current.devices, device] : current.devices.map((d) => (d.id === device.id ? device : d));
-      current.removed = current.removed.filter((id) => id !== device.id);
-      if (state === "active" && current.revocations !== undefined) {
-        current.revocations = current.revocations.filter((r) => r.statement.fingerprint !== fingerprint);
-      }
-      if (state === "active" && !current.priority.includes(device.id)) current.priority.push(device.id);
-      if (state === "pending") current.priority = current.priority.filter((id) => id !== device.id);
-      record = current;
-      await save();
-      const conn = controls.get(device.id);
-      if (conn !== undefined && !sameCert) {
-        closeConn(conn, WS_CLOSE_REPLACED, "replaced");
-        detach(conn);
-      }
-      broadcastDevices();
-      broadcastPresence();
-      return { accountId, login: login.login, state };
-    },
+  private async receiveControl(conn: ControlConn, text: string): Promise<void> {
+    if (conn.closed) return;
+    if (!this.allowFrame(conn)) return this.fail(conn, "rate_limited");
+    if (conn.device === null && this.now() - conn.openedAt > RELAY_HELLO_TIMEOUT_MS) return this.fail(conn, "unauthorized");
+    let frame = parseRelayClientFrame(text);
+    if (frame === null && conn.device !== null) frame = parseLenientPresenceFrame(text);
+    if (frame === null) return this.fail(conn, "bad_frame");
+    await this.ensureLoaded();
+    if (conn.device === null) {
+      if (frame.type !== "hello") return this.fail(conn, "unauthorized");
+      return this.handleHello(conn, frame);
+    }
+    if (this.controls.get(conn.device) !== conn) return this.fail(conn, "unauthorized");
+    return this.handleFrame(conn, conn.device, frame);
+  }
 
-    openControl(socket, restored) {
-      const conn: ControlConn = {
-        socket,
-        device: null,
-        session: null,
-        nonce: restored?.nonce ?? randomToken(),
-        openedAt: restored?.openedAt ?? now(),
-        candidates: restored?.candidates ?? [],
-        lastClaimAt: { ...(restored?.lastClaimAt ?? {}) },
-        frameTimes: [],
-        closed: false,
-        queue: Promise.resolve(),
-      };
-      if (restored?.device != null && restored.session !== null) {
-        conn.device = restored.device;
-        conn.session = restored.session;
-        controls.set(restored.device, conn);
-        for (const held of restored.held) {
-          const lease = leases.get(held.name);
-          if (lease === undefined || lease.epoch <= held.epoch) {
-            leases.set(held.name, { holder: restored.device, epoch: held.epoch, renewedAt: held.renewedAt, yielding: false });
-          }
-        }
-      } else {
-        if (unauthenticated.size >= RELAY_MAX_UNAUTH_CONTROLS_PER_ACCOUNT) {
-          fail(conn, "rate_limited");
-        } else {
-          unauthenticated.add(conn);
-          if (restored === undefined) send(conn, { type: "challenge", nonce: conn.nonce });
-        }
-      }
-      const handle: RelayControlHandle = {
-        receive(text) {
-          const run = async () => {
-            if (conn.closed) return;
-            if (!allowFrame(conn)) return fail(conn, "rate_limited");
-            if (conn.device === null && now() - conn.openedAt > RELAY_HELLO_TIMEOUT_MS) return fail(conn, "unauthorized");
-            let frame = parseRelayClientFrame(text);
-            if (frame === null && conn.device !== null) frame = parseLenientPresenceFrame(text);
-            if (frame === null) return fail(conn, "bad_frame");
-            await ensureLoaded();
-            if (conn.device === null) {
-              if (frame.type !== "hello") return fail(conn, "unauthorized");
-              return handleHello(conn, frame);
-            }
-            if (controls.get(conn.device) !== conn) return fail(conn, "unauthorized");
-            return handleFrame(conn, conn.device, frame);
-          };
-          conn.queue = conn.queue.then(run, run);
-          return conn.queue;
-        },
-        closed() {
-          conn.closed = true;
-          unauthenticated.delete(conn);
-          const run = async () => {
-            await ensureLoaded();
-            const was = conn.device;
-            if (!detach(conn) || was === null) return;
-            broadcastPresence();
-            for (const name of MESH_LEASE_NAMES) {
-              const lease = leases.get(name);
-              if (lease?.holder === was) {
-                lease.holder = null;
-                lease.yielding = false;
-                broadcastLease(name);
-              }
-            }
-            await arbitrateAll();
-          };
-          conn.queue = conn.queue.then(run, run);
-          return conn.queue;
-        },
-        attachment() {
-          const held: RelayControlAttachment["held"] = [];
-          for (const [name, lease] of leases) {
-            if (conn.device !== null && lease.holder === conn.device) held.push({ name, epoch: lease.epoch, renewedAt: lease.renewedAt });
-          }
-          return { device: conn.device, session: conn.session, nonce: conn.nonce, openedAt: conn.openedAt, candidates: conn.candidates, lastClaimAt: { ...conn.lastClaimAt }, held };
-        },
-      };
-      return handle;
-    },
+  private async controlClosed(conn: ControlConn): Promise<void> {
+    await this.ensureLoaded();
+    const was = conn.device;
+    if (!this.detach(conn) || was === null) return;
+    this.broadcastPresence();
+    this.releaseLeasesOf(was);
+    await this.arbitrateAll();
+  }
 
-    openChannel(query, socket) {
-      const dial = dials.get(query.channel);
-      const conn = controls.get(query.device);
-      if (dial === undefined || conn === undefined || conn.session !== query.session) return { error: "unauthorized" };
-      const side = query.device === dial.from ? "dialer" : query.device === dial.to ? "acceptor" : null;
-      if (side === null || dial[side] !== undefined) return { error: "unauthorized" };
-      if (overQuota()) return { error: "quota_exceeded" };
-      const end: ChannelEnd = { socket, closed: false };
-      dial[side] = end;
-      const otherOf = () => (side === "dialer" ? dial.acceptor : dial.dialer);
-      if (dial.dialer !== undefined && dial.acceptor !== undefined) {
-        dial.lastDataAt = now();
-        for (const chunk of dial.pending.splice(0)) socket.send(chunk);
-        dial.pendingBytes = 0;
-        sendTo(dial.from, { type: "dial.connected", to: dial.to, channel: query.channel });
-      }
-      return {
-        receive(data) {
-          if (end.closed || dials.get(query.channel) !== dial) return;
-          if (data.length > RELAY_MAX_DATA_FRAME_BYTES) return closeDial(query.channel);
-          rollUsage();
-          if (record !== null) {
-            record.usage.bytes += data.length;
-            usageDirty = true;
-          }
-          dial.lastDataAt = now();
-          const other = otherOf();
-          if (other !== undefined && !other.closed) {
-            other.socket.send(data);
-            return;
-          }
-          dial.pendingBytes += data.length;
-          if (dial.pendingBytes > RELAY_CHANNEL_PENDING_BYTES) return closeDial(query.channel);
-          dial.pending.push(data);
-        },
-        closed() {
-          end.closed = true;
-          if (dials.get(query.channel) === dial) closeDial(query.channel);
-          if (usageDirty) void save();
-        },
-      };
-    },
+  private attachmentOf(conn: ControlConn): RelayControlAttachment {
+    const held: RelayControlAttachment["held"] = [];
+    for (const [name, lease] of this.leases) {
+      if (conn.device !== null && lease.holder === conn.device) held.push({ name, epoch: lease.epoch, renewedAt: lease.renewedAt });
+    }
+    return { device: conn.device, session: conn.session, nonce: conn.nonce, openedAt: conn.openedAt, candidates: conn.candidates, lastClaimAt: { ...conn.lastClaimAt }, held };
+  }
 
-    async sweep() {
-      await ensureLoaded();
-      const t = now();
-      for (const conn of [...unauthenticated]) {
-        if (t - conn.openedAt > RELAY_HELLO_TIMEOUT_MS) fail(conn, "unauthorized");
+  private async handleHello(conn: ControlConn, frame: Extract<RelayClientFrame, { type: "hello" }>): Promise<void> {
+    await this.ensureLoaded();
+    if (frame.version !== RELAY_PROTOCOL_VERSION) return this.fail(conn, "bad_frame");
+    if (this.record?.removed.includes(frame.device)) {
+      this.send(conn, { type: "removed" });
+      return this.closeConn(conn, 1000, "removed");
+    }
+    const device = this.deviceOf(frame.device);
+    if (device === undefined) return this.fail(conn, "unknown_device");
+    const message = relayControlMessage({ relayOrigin: this.relayOrigin, accountId: this.accountId, device: device.id, nonce: conn.nonce });
+    if (!(await verifyDeviceSignature(device.publicKey, message, frame.signature))) return this.fail(conn, "unauthorized");
+    if (conn.closed) return;
+    this.welcome(conn, device);
+  }
+
+  private async handleFrame(conn: ControlConn, self: DeviceId, frame: RelayClientFrame): Promise<void> {
+    const selfRecord = this.deviceOf(self);
+    if (selfRecord === undefined) return this.fail(conn, "removed");
+    const selfActive = selfRecord.state === "active";
+    switch (frame.type) {
+      case "hello":
+        return this.fail(conn, "bad_frame");
+      case "presence": {
+        conn.candidates = frame.candidates;
+        if (selfActive) this.broadcastPresence();
+        return;
       }
-      for (const [channel, dial] of dials) {
-        const paired = dial.dialer !== undefined && dial.acceptor !== undefined;
-        if (!paired && t - dial.createdAt > RELAY_CHANNEL_ACCEPT_TIMEOUT_MS) {
-          sendTo(dial.from, { type: "dial.failed", to: dial.to, channel, code: "offline" });
-          closeDial(channel);
-        } else if (paired && t - dial.lastDataAt > RELAY_CHANNEL_IDLE_MS) {
-          closeDial(channel);
-        }
+      case "lease.claim":
+      case "lease.release":
+        return this.handleLeaseFrame(conn, self, selfActive, frame);
+      case "dial":
+        return this.handleDial(conn, self, selfActive, frame);
+      case "signal": {
+        const target = this.deviceOf(frame.to);
+        if (target === undefined || frame.to === self) return;
+        if (!selfActive && target.state !== "active") return;
+        this.sendTo(frame.to, { type: "signal", from: self, payload: frame.payload });
+        return;
       }
-      if (record !== null) {
-        for (const device of record.devices) {
-          if (device.state === "pending" && t - device.addedAt > RELAY_PENDING_DEVICE_TTL_MS) await removeDevice(device.id);
-        }
+      case "device.activate":
+      case "device.remove":
+      case "priority.set":
+        if (!selfActive) return this.fail(conn, "not_active");
+        return this.handleDeviceFrame(self, frame);
+    }
+  }
+
+  private async handleLeaseFrame(
+    conn: ControlConn,
+    self: DeviceId,
+    selfActive: boolean,
+    frame: Extract<RelayClientFrame, { type: "lease.claim" | "lease.release" }>,
+  ): Promise<void> {
+    if (frame.type === "lease.claim") {
+      if (!selfActive) return;
+      conn.lastClaimAt[frame.name] = this.now();
+      const lease = this.leases.get(frame.name);
+      if (lease?.holder === self && !lease.yielding && this.now() - lease.renewedAt <= MESH_LEASE_TTL_MS) {
+        lease.renewedAt = this.now();
+        this.send(conn, this.leaseFrame(frame.name));
+        return;
       }
-      await arbitrateAll();
-      if (usageDirty && t - lastUsageSave >= RELAY_USAGE_SAVE_MS) await save();
-    },
-  };
+      return this.arbitrate(frame.name);
+    }
+    const lease = this.leases.get(frame.name);
+    if (lease?.holder !== self || lease.epoch !== frame.epoch) return;
+    lease.holder = null;
+    lease.yielding = false;
+    delete conn.lastClaimAt[frame.name];
+    this.broadcastLease(frame.name);
+    return this.arbitrate(frame.name);
+  }
+
+  private handleDial(conn: ControlConn, self: DeviceId, selfActive: boolean, frame: Extract<RelayClientFrame, { type: "dial" }>): void {
+    const failDial = (code: RelayErrorCode) => this.send(conn, { type: "dial.failed", to: frame.to, channel: frame.channel, code });
+    if (!selfActive) return failDial("not_active");
+    const target = this.deviceOf(frame.to);
+    if (target === undefined || frame.to === self) return failDial("unknown_device");
+    if (target.state !== "active") return failDial("not_active");
+    const targetConn = this.controls.get(frame.to);
+    if (targetConn === undefined) return failDial("offline");
+    if (this.dials.has(frame.channel)) return failDial("bad_frame");
+    if (this.channelsOf(self) >= RELAY_MAX_CHANNELS_PER_DEVICE || this.channelsOf(frame.to) >= RELAY_MAX_CHANNELS_PER_DEVICE) return failDial("rate_limited");
+    if (this.overQuota()) return failDial("quota_exceeded");
+    this.dials.set(frame.channel, { from: self, to: frame.to, createdAt: this.now(), lastDataAt: this.now(), pending: [], pendingBytes: 0 });
+    this.send(targetConn, { type: "incoming", from: self, channel: frame.channel });
+  }
+
+  private async handleDeviceFrame(self: DeviceId, frame: Extract<RelayClientFrame, { type: "device.activate" | "device.remove" | "priority.set" }>): Promise<void> {
+    const record = this.record;
+    if (frame.type === "priority.set") {
+      if (record === null) return;
+      record.priority = frame.priority.filter((id) => this.isActive(id));
+      await this.save();
+      this.broadcastDevices();
+      return this.arbitrateAll();
+    }
+    const target = this.deviceOf(frame.id);
+    if (frame.type === "device.remove") {
+      if (target === undefined) return;
+      const validRevocation =
+        frame.revocation !== undefined &&
+        frame.revocation.statement.device === target.id &&
+        frame.revocation.statement.fingerprint === target.fingerprint &&
+        frame.revocation.statement.by === self
+          ? frame.revocation
+          : undefined;
+      return this.removeDevice(frame.id, validRevocation);
+    }
+    if (target === undefined || target.state === "active") return;
+    target.state = "active";
+    if (record !== null && !record.priority.includes(target.id) && record.priority.length < MESH_MAX_DEVICES_PER_ACCOUNT) record.priority.push(target.id);
+    if (record?.revocations !== undefined) {
+      record.revocations = record.revocations.filter((r) => r.statement.fingerprint !== target.fingerprint);
+    }
+    await this.save();
+    this.broadcastDevices();
+    this.broadcastPresence();
+    const targetConn = this.controls.get(target.id);
+    if (targetConn !== undefined) for (const name of MESH_LEASE_NAMES) this.send(targetConn, this.leaseFrame(name));
+  }
 }
 
 interface ControlConn {
