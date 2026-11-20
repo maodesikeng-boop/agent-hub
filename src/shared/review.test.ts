@@ -106,4 +106,11 @@ describe("文案只查不修", () => {
     expect(REVIEW_CHECKLIST).toContain("不许用 `gh run rerun`");
     expect(taskGraphSkillBody()).toContain(`第 ${REVIEW_MAX_ROUNDS} 轮审查还有`);
   });
+
+  it("判 FAIL 的每条 [Important] 附防复发落点，修复步骤同单落实", () => {
+    expect(REVIEW_CHECKLIST).toContain("防复发落点");
+    for (const field of ["Trigger:", "Check:", "Seen in:"]) expect(REVIEW_CHECKLIST).toContain(field);
+    expect(taskGraphSkillBody()).toContain("修复同一单落实审查给的防复发落点");
+    expect(taskGraphSkillBody()).toContain("origin/main:REVIEW.md");
+  });
 });

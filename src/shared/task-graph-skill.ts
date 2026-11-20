@@ -38,7 +38,7 @@ export function taskGraphSkillBody(): string {
 - **碰到下面任意一条，就在实现后面加一个审查步骤**（设 \`"review": true\` 并指定另一家 \`vendor\`，后台自动前置内置独立审查清单；\`brief\` 里点名你最担心的地方）：
 ${PM_REVIEW_REDLINES.map((line) => `  - ${line}`).join("\n")}
 
-  审查只查不修，由代码保证：审查 Worker 在 detached 检出被审分支的独立目录里干活，推不上去，也不能 \`--no-worktree\`。被审分支默认是唯一上一步的分支；补建的单步审查图、多路合流后的审查、上一步在主文件夹里干的，给审查步骤写 \`"base": "<被审分支>"\`，不写建图、开工时直接报错。结论只有 PASS、PASS+NOTES、FAIL，并写明验证的提交号。判 PASS 后后台核对被审分支、远端和 PR 在审查期间没被动过，没动过才往下走。判 FAIL 步骤停在 \`waiting\` 等你：在审查后面加修复步骤（它接手实现的工作目录和分支），修完再加一个审查步骤。发现分 \`[Important]\`、\`[Nit]\`、\`[Pre-existing]\` 三档，只有 \`[Important]\` 判 FAIL。复审步骤的 \`brief\` 写上一轮的被审提交和未决的 \`[Important]\` 原文，复审只核验它们和之后的增量。第 ${REVIEW_MAX_ROUNDS} 轮审查还有 \`[Important]\` 就不再加轮次，用 \`${HUB} ask\` 交用户拍板。
+  审查只查不修，由代码保证：审查 Worker 在 detached 检出被审分支的独立目录里干活，推不上去，也不能 \`--no-worktree\`。被审分支默认是唯一上一步的分支；补建的单步审查图、多路合流后的审查、上一步在主文件夹里干的，给审查步骤写 \`"base": "<被审分支>"\`，不写建图、开工时直接报错。结论只有 PASS、PASS+NOTES、FAIL，并写明验证的提交号。判 PASS 后后台核对被审分支、远端和 PR 在审查期间没被动过，没动过才往下走。判 FAIL 步骤停在 \`waiting\` 等你：在审查后面加修复步骤（它接手实现的工作目录和分支），修复同一单落实审查给的防复发落点（防复发单测或 \`REVIEW.md\` 条目；审查只读 \`origin/main:REVIEW.md\`，分支上改它不影响本轮审查），修完再加一个审查步骤。发现分 \`[Important]\`、\`[Nit]\`、\`[Pre-existing]\` 三档，只有 \`[Important]\` 判 FAIL。复审步骤的 \`brief\` 写上一轮的被审提交和未决的 \`[Important]\` 原文，复审只核验它们和之后的增量。第 ${REVIEW_MAX_ROUNDS} 轮审查还有 \`[Important]\` 就不再加轮次，用 \`${HUB} ask\` 交用户拍板。
   纯文案、纯展示、局部纯函数、薄胶水层不用审查，靠测试和截图兜底。
 
 ## 跟进

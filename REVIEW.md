@@ -80,7 +80,7 @@ Seen in: `43d70fad`, `18e2fa2b`/`7df95c32`, `8023745a`/`edcac7bb`
 
 ### Growing data has a cap in limits.ts
 
-Trigger: `src/daemon/ledger/**`, `src/daemon/feishu/**`, `src/daemon/ui-server/**`, `src/shared/snapshot.ts`, `src/shared/limits.ts`
+Trigger: `src/daemon/ledger/**`, `src/daemon/feishu/**`, `src/daemon/ui-server/**`, `src/daemon/*checker*.ts`, `src/shared/snapshot.ts`, `src/shared/limits.ts`
 
 Check: Queues, in-memory collections, API responses, and command output that grow over time have a cap from `src/shared/limits.ts`. Size the cap for one month of use (300 finished Workers, 30,000 messages, 50,000 step logs). Large responses use compression.
 
@@ -93,6 +93,14 @@ Trigger: `src/web/selectors.ts`, `src/web/shell-model.ts`, `src/web/device-hub.t
 Check: A selector or hook returns the same reference while its input is unchanged, for example through a `WeakMap` keyed on the input object, so it does not break `memo` in child components. A new selector has a case in `src/web/selectors-cache.test.ts`.
 
 Seen in: `43d70fad`, `473db164`, `0fc0e181`
+
+### Stale in-flight queries never overwrite fresh mutations
+
+Trigger: `src/web/**`
+
+Check: When a manual refresh or save writes its result into the React Query cache, a monotonic generation counter or an entity version guards the write, so an automatic GET that was in flight, or that read the old server cache, cannot land later and replace the newer result. The guard never compares wall-clock timestamps, because the daemon clock can move backward and a restart resets it.
+
+Seen in: `2c3ff071`, `c58bac01`/`73e911b0`
 
 ### Interface changes come with a real-browser render
 

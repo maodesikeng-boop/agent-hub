@@ -138,6 +138,7 @@ export const REVIEW_CHECKLIST = [
   `- 复审（第 2 轮起，项目经理会在点名里写上一轮的被审提交和未决的 \`[Important]\`）：只核验这几条修好没有，再看 \`git diff <上一轮被审提交>..HEAD\` 的增量；增量没碰过的文件不从头重审，新看到的旧问题标 \`[Pre-existing]\`。第 ${REVIEW_MAX_ROUNDS} 轮还有未决的 \`[Important]\`，判 FAIL，状态写“有问题”，在“问题”栏写明已到 ${REVIEW_MAX_ROUNDS} 轮上限、交人工决断。`,
   "- 测试照跑，以本机为准：本机能实测的改动看本机的 `pnpm typecheck`、改动涉及的单测和 `pnpm verify` 冒烟，不等云端 GitHub Actions 排队；只有本机测不了的 Linux `bwrap` 沙箱、Windows 原生或打包改动，才核对 PR 上对应的云端检查。不许用 `gh run rerun` 盖住抖动的测试，抖动照样写成发现。要证明测试在修复前会失败，就在审查目录里临时改回去或 checkout 旧提交再跑。",
   "- 发现问题不修，写清复现：命令、输入、实际和期望的结果、文件和行号。要留在 PR 上的意见用 `gh pr comment` 发评论。修复由项目经理另派 Worker。",
+  `- 判 FAIL 时每条 \`[Important]\` 后面附一行“防复发落点”：优先给能根除这类错的共享纯函数、类型或门禁单测；只能靠审 diff 认出来、且翻历史已在 2 个以上 PR 出现过的，写出拟补进 \`${REVIEW_RULES_FILE}\` 的 \`Trigger:\`、\`Check:\`、\`Seen in:\`。`,
   `- 汇报在“摘要”下面多写两栏：\`${REVIEW_VERDICT_FIELD}: ${REVIEW_VERDICTS.join(" | ")}\` 和 \`${REVIEW_SHA_FIELD}: <你验证的完整提交号>\`。PASS 是没有发现、可以合；PASS+NOTES 是可以合，\`[Nit]\`、\`[Pre-existing]\` 写进“问题”；FAIL 是有未决的 \`[Important]\`、不能合，复现写进“问题”，步骤停下等项目经理处理。判 PASS 或 PASS+NOTES 时“问题”栏里不能有 \`[Important]\` 开头的行，否则后台判汇报有误。`,
   `- “交棒”列出你查了什么，每条给出文件和行号；第二层命中了 \`${REVIEW_RULES_FILE}\` 哪几条也写上。`,
   "- 结论和复现写成一份 Markdown 文件，连同截图、录屏写进“文件”栏，用户在检查点卡和总助上点开就能看。",
