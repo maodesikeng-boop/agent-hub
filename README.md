@@ -32,7 +32,7 @@ Bellwood puts one **Project Manager (PM)** agent in front of each project and ha
 
 Bellwood is for you if you juggle multiple tasks or repositories, combine more than one agent CLI or subscription, or want to review and trigger work from your phone or Feishu group. If you run one agent in one terminal on one repository and that already covers your day, you do not need it.
 
-Runs natively on **macOS 13+** (`Bellwood.app`), **Windows x64** (native Tauri 2 desktop app with bundled Node 24 LTS, no WSL 2, and no admin rights), **Linux** (`systemd` daemon), and **Feishu** on mobile and desktop.
+Runs natively on **macOS 13+ on Apple silicon** (`Bellwood.app`), **Windows x64** (native Tauri 2 desktop app with bundled Node 24 LTS, no WSL 2, and no admin rights), **Linux** (`systemd` daemon), and **Feishu** on mobile and desktop.
 
 ## How it fits together
 
@@ -244,6 +244,8 @@ cd agent-hub
 pnpm install --frozen-lockfile
 pnpm start                          # builds dist/web and starts daemon on 127.0.0.1:4317
 ```
+
+`pnpm start` prints a local login URL such as `http://127.0.0.1:4317/auth?token=...` in the terminal. Open that URL in your browser to sign in.
 
 - **Build `/Applications/Bellwood.app` on macOS** (requires Xcode Command Line Tools `swiftc`):
   ```sh

@@ -32,7 +32,7 @@ Bellwood 给每个项目配一位专属的**项目经理（PM）**，把繁琐�
 
 如果你同时推进不止一个需求或仓库、混用不止一家命令行 Agent，或者希望在手机和飞书群里随时拍板验收，它就适合你。如果你平时只在一个仓库里开一个终端跑单个 Agent 而且够用，那就不需要它。
 
-支持 **macOS 13+**（`Bellwood.app` 原生窗口）、**Windows x64**（Tauri 2 原生桌面应用，随包自带官方 Node 24 LTS，无需管理员权限、无需 WSL 2）、**Linux**（`systemd` 常驻守护进程），以及手机和电脑上的**飞书**。
+支持 **Apple 芯片 Mac**（macOS 13+，`Bellwood.app` 原生窗口）、**Windows x64**（Tauri 2 原生桌面应用，随包自带官方 Node 24 LTS，无需管理员权限、无需 WSL 2）、**Linux**（`systemd` 常驻守护进程），以及手机和电脑上的**飞书**。
 
 ## 整体结构
 
@@ -244,6 +244,8 @@ cd agent-hub
 pnpm install --frozen-lockfile
 pnpm start                          # 构建 dist/web 并在 127.0.0.1:4317 启动守护进程
 ```
+
+`pnpm start` 启动后会在终端打印带登录令牌的本地网址 `http://127.0.0.1:4317/auth?token=...`，在浏览器中打开即可进入界面。
 
 - **在 macOS 上编译安装 `/Applications/Bellwood.app`**（需 Xcode 命令行工具 `swiftc`）：
   ```sh
