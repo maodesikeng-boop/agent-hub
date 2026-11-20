@@ -7,7 +7,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Loader2 } from "./ui/icons.ts";
 import { AccentScope, FruitTint } from "./lib/accent-scope.tsx";
-import { CapabilityScopes } from "./components/CapabilitiesSettings.tsx";
+import { CapabilityProjects } from "./components/CapabilitiesSettings.tsx";
 import { Conversation } from "./components/Conversation.tsx";
 import { NewPmDialog } from "./components/NewPmDialog.tsx";
 import { Notices } from "./components/Notices.tsx";
@@ -16,6 +16,7 @@ import { QuotaPopover } from "./components/QuotaPopover.tsx";
 import { RouterWorkbench } from "./components/RouterWorkbench.tsx";
 import { WorkerConversation } from "./components/WorkerConversation.tsx";
 import { PmProfile } from "./components/PmProfile.tsx";
+import { ProjectCapabilitiesPage } from "./components/ProjectCapabilitiesPage.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
 import { DeviceScope } from "./device-scope.tsx";
 import { errorTitle } from "./format.ts";
@@ -24,6 +25,7 @@ import { isRenewing, pendingOf, quotaUsage, sessionOf, visibleSessionOf, workerP
 import { Button } from "./ui/button.tsx";
 import { ModelCatalogProvider } from "./models.tsx";
 import { ROUTER_DRAFT_KEY, useShellModel } from "./shell-model.ts";
+import type { Pm } from "../shared/index.ts";
 
 function FullPage({ title, lines = [], titleTip, busy = false, action, testId }: { title: string; lines?: readonly string[]; titleTip?: string; busy?: boolean; action?: React.ReactNode; testId?: string }) {
   return (
@@ -130,6 +132,37 @@ function WorkerPane({ model: { state, hub, current }, content: c, mobile, leadin
   );
 }
 
+function ProfilePane({ model, content: c, mobile, back, profile }: PaneProps & { profile: Pm }) {
+  const { state, current, route, navigate, replace } = model;
+  const entry = c.profileEntry;
+  const here = routeDeviceOf(current.key);
+  const local = current.key === LOCAL_DEVICE;
+  if (local && route?.view === "profile" && route.page === "capabilities" && profile.archivedAt == null) {
+    return (
+      <ProjectCapabilitiesPage
+        key={c.keyOf(profile.id)}
+        pm={profile}
+        onBack={() => mobileBack({ view: "profile", pmId: profile.id, ...here }, replace)}
+        onEditDefaults={() => c.openSettingsSection("capabilities")}
+      />
+    );
+  }
+  return (
+    <PmProfile
+      key={c.keyOf(profile.id)}
+      pm={profile}
+      project={entry?.project ?? null}
+      folders={entry?.folders ?? []}
+      schedules={state.schedules.filter((x) => x.pmId === profile.id)}
+      rev={state.personaRev[profile.id] ?? 0}
+      renewing={entry !== undefined && isRenewing(state, entry.id)}
+      onBack={mobile ? back : () => entry && c.select({ device: current.key, id: entry.id })}
+      onManageProviders={() => c.openManageProviders(current.key)}
+      {...(local ? { onOpenCapabilities: () => navigate({ view: "profile", pmId: profile.id, page: "capabilities", ...here }) } : {})}
+    />
+  );
+}
+
 function ChatPane(props: PaneProps & { quotaSlot: React.ReactNode; onManageLocalProviders: () => void }) {
   const { model, content: c, mobile, leading, toolbar, top, notices, back } = props;
   const { fleet, state, hub, current } = model;
@@ -153,23 +186,8 @@ function ChatPane(props: PaneProps & { quotaSlot: React.ReactNode; onManageLocal
     );
   }
   if (state.phase !== "ready") return <DeviceWaiting connecting={current.status === "connecting"} name={current.info.name} />;
-  const { profile, profileEntry, active, view } = c;
-  if (profile) {
-    return (
-      <PmProfile
-        key={c.keyOf(profile.id)}
-        pm={profile}
-        project={profileEntry?.project ?? null}
-        folders={profileEntry?.folders ?? []}
-        schedules={state.schedules.filter((x) => x.pmId === profile.id)}
-        rev={state.personaRev[profile.id] ?? 0}
-        renewing={profileEntry !== undefined && isRenewing(state, profileEntry.id)}
-        onBack={mobile ? back : () => profileEntry && c.select({ device: current.key, id: profileEntry.id })}
-        onManageProviders={() => c.openManageProviders(current.key)}
-        {...(current.key === LOCAL_DEVICE ? { onOpenCapabilities: () => c.openSettingsSection("capabilities") } : {})}
-      />
-    );
-  }
+  const { profile, active, view } = c;
+  if (profile) return <ProfilePane {...props} profile={profile} />;
   if (c.openWorker !== null) return <WorkerPane {...props} workerId={c.openWorker} />;
   if (active && view) {
     return (
@@ -336,7 +354,7 @@ export function App() {
     <QueryClientProvider client={qc}>
       <DeviceScope client={hub.client} server={state.server}>
         <ModelCatalogProvider>
-          <CapabilityScopes pms={model.local.state.pms}>
+          <CapabilityProjects pms={model.local.state.pms}>
             <div className="relative flex h-full">
               <FruitTint color={tintColor}>
                 <MobileShell mobile={mobile} list={route === null} sidebar={<ShellSidebar content={content} mobile={mobile} quota={quota} quotaInHeader={Boolean(quotaInHeader)} />}>{chat}</MobileShell>
@@ -350,7 +368,7 @@ export function App() {
                 />
               </FruitTint>
             </div>
-          </CapabilityScopes>
+          </CapabilityProjects>
         </ModelCatalogProvider>
       </DeviceScope>
     </QueryClientProvider>

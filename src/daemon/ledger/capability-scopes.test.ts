@@ -70,16 +70,20 @@ describe("统一能力底座：总助能力、Worker 三档、项目准备命令
     return ledger.getLaunchContext(session.id).workerCapabilities ?? { mode: "inherit" };
   };
 
-  it("总助默认一个不带；只存和默认不同的部分，改回默认就清空", () => {
+  it("总助默认一个不带，和 Project defaults 互不影响；只存和默认不同的部分，改回默认就清空", () => {
+    const router = { kind: "router" } as const;
     expect(ledger.getRouterCapabilityPolicy()).toEqual({ base: { skill: "none", mcp: "none", connector: "none" }, overrides: {} });
-    const next = ledger.patchRouterCapabilities({ base: { skill: "all" }, set: { "mcp:codegraph": true, "skill:aws-auth": false } });
-    expect(next).toEqual({ base: { skill: "all", mcp: "none", connector: "none" }, overrides: { "mcp:codegraph": true, "skill:aws-auth": false } });
-    expect(ledger.getRouterCapabilityPolicy()).toEqual(next);
+    const next = ledger.patchCapabilities(router, { set: { "mcp:codegraph": true, "skill:aws-auth": false } });
+    expect(next).toEqual({ policy: { base: { skill: "none", mcp: "none", connector: "none" }, overrides: { "mcp:codegraph": true } }, inheritance: null });
+    expect(ledger.getCapabilities(router)).toEqual(next);
+    expect(ledger.getCapabilities({ kind: "default" }).policy).toEqual({ base: { skill: "all", mcp: "all", connector: "all" }, overrides: {} });
+    db.run("INSERT INTO router_capability_policies (kind, base, updated_at) VALUES ('skill', 'all', 1)");
+    expect(ledger.patchCapabilities(router, { set: { "skill:aws-auth": false } }).policy.base.skill).toBe("all");
     expect(db.all("SELECT kind, base FROM router_capability_policies")).toEqual([{ kind: "skill", base: "all" }]);
-    ledger.patchRouterCapabilities({ base: { skill: "none" }, set: { "mcp:codegraph": null, "skill:aws-auth": null } });
-    expect(db.get<{ c: number }>("SELECT count(*) AS c FROM router_capability_policies")!.c).toBe(0);
+    ledger.patchCapabilities(router, { set: { "mcp:codegraph": null, "skill:aws-auth": true } });
+    db.run("DELETE FROM router_capability_policies");
     expect(db.get<{ c: number }>("SELECT count(*) AS c FROM router_capability_overrides")!.c).toBe(0);
-    expect(() => ledger.patchRouterCapabilities({ set: { "no-colon": true } })).toThrowError(LedgerRequestError);
+    expect(() => ledger.patchCapabilities(router, { set: { "no-colon": true } })).toThrowError(LedgerRequestError);
     expect(ledger.getPmCapabilityPolicy(lin.pmId).base).toEqual({ skill: "all", mcp: "all", connector: "all" });
   });
 
@@ -100,7 +104,7 @@ describe("统一能力底座：总助能力、Worker 三档、项目准备命令
   });
 
   it("hub worker start 三档：默认继承不落行，none 落行，custom 去重排序且回执点出项目里关掉的项", () => {
-    ledger.patchPmCapabilities(lin.pmId, { set: { "mcp:slack": false } });
+    ledger.patchCapabilities({ kind: "pm", pmId: lin.pmId }, { set: { "mcp:slack": false } });
     const inherit = start({ title: "默认", task: "t" });
     expect(workerCapsOf(inherit.data.worker.id)).toEqual({ mode: "inherit" });
     expect(db.get<{ c: number }>("SELECT count(*) AS c FROM worker_capabilities")!.c).toBe(0);
@@ -118,7 +122,13 @@ describe("统一能力底座：总助能力、Worker 三档、项目准备命令
     });
     expect(workerCapsOf(custom.data.worker.id)).toEqual({ mode: "custom", allow: ["mcp:codegraph", "mcp:slack"] });
     expect(custom.text).toContain("外接能力只挂 mcp:codegraph");
-    expect(custom.text).toContain("mcp:slack 在项目能力设置里是关的");
+    expect(custom.text).toContain("mcp:slack 在这个项目的能力设置里是关的");
+
+    ledger.patchCapabilities({ kind: "default" }, { set: { "mcp:codegraph": false } });
+    expect(ledger.getPmCapabilityPolicy(lin.pmId).overrides).toEqual({ "mcp:codegraph": false, "mcp:slack": false });
+    const inheritedOff = start({ title: "默认关掉的", task: "t", caps: "custom", allow: ["mcp:codegraph"] });
+    expect(inheritedOff.text).toContain("点名的外接能力一项都挂不上");
+    expect(inheritedOff.text).toContain("mcp:codegraph 在这个项目的能力设置里是关的");
 
     for (const args of [{ caps: "custom" }, { caps: "none", allow: ["mcp:x"] }, { allow: ["mcp:x"] }, { caps: "all" }, { caps: "custom", allow: ["bogus"] }]) {
       expect(() => start({ title: "坏", task: "t", ...(args as object) })).toThrowError(LedgerRequestError);

@@ -24,8 +24,6 @@ import {
   isValidCapabilityKey,
   normalizeName,
   type AgentVendor,
-  type CapabilityBase,
-  type CapabilityKind,
   type CreatePmRequest,
   type EditPersonaRequest,
   type JellyColorId,
@@ -43,7 +41,7 @@ const vendorSchema = z.enum(AGENT_VENDORS);
 const optionalSettingSchema = (what: string) => boundedCharsSchema(MAX_MODEL_CHARS, what).nullable();
 
 const pmCapabilitiesStartSchema = z.discriminatedUnion("from", [
-  z.object({ from: z.literal("all") }).strict(),
+  z.object({ from: z.literal("default") }).strict(),
   z.object({ from: z.literal("pm"), pmId: z.number().int().positive() }).strict(),
 ]);
 
@@ -87,51 +85,23 @@ export function parseCreatePmBody(body: unknown): CreatePmRequest {
   };
 }
 
-const capabilityBaseSchema = z.enum(["all", "none"]);
-
 const capabilitiesPatchBodySchema = z
   .object({
-    base: z
-      .object({
-        skill: capabilityBaseSchema.optional(),
-        mcp: capabilityBaseSchema.optional(),
-        connector: capabilityBaseSchema.optional(),
-      })
-      .strict()
-      .optional(),
     set: z
       .record(
         z.string().refine((k) => isValidCapabilityKey(k), "invalid capability key"),
         z.boolean().nullable(),
       )
+      .refine((rec) => Object.keys(rec).length > 0, "set must not be empty")
       .refine(
         (rec) => Object.keys(rec).length <= PM_CAPABILITY_PATCH_MAX_KEYS,
         `at most ${PM_CAPABILITY_PATCH_MAX_KEYS} capability keys`,
-      )
-      .optional(),
+      ),
   })
-  .strict()
-  .refine(
-    (obj) =>
-      (obj.base !== undefined && Object.keys(obj.base).length > 0) ||
-      (obj.set !== undefined && Object.keys(obj.set).length > 0),
-    "at least one of base or set must be non-empty",
-  );
+  .strict();
 
 export function parseCapabilitiesPatchBody(body: unknown): CapabilitiesPatch {
-  const raw = parseWithSchema(capabilitiesPatchBodySchema, body);
-  let base: Partial<Record<CapabilityKind, CapabilityBase>> | undefined;
-  if (raw.base !== undefined) {
-    base = {
-      ...(raw.base.skill !== undefined ? { skill: raw.base.skill } : {}),
-      ...(raw.base.mcp !== undefined ? { mcp: raw.base.mcp } : {}),
-      ...(raw.base.connector !== undefined ? { connector: raw.base.connector } : {}),
-    };
-  }
-  return {
-    ...(base !== undefined && Object.keys(base).length > 0 ? { base } : {}),
-    ...(raw.set !== undefined ? { set: raw.set } : {}),
-  };
+  return parseWithSchema(capabilitiesPatchBodySchema, body);
 }
 
 export const putProjectSetupCommandBodySchema = z.object({ command: z.string().nullable() }).strict();

@@ -4,7 +4,7 @@ import { isDeviceId, type ConversationId, type DeviceId, type PmId } from "../sh
 export type ScopedRoute = (
   | { view: "conversation"; id: ConversationId }
   | { view: "worker"; id: ConversationId }
-  | { view: "profile"; pmId: PmId }
+  | { view: "profile"; pmId: PmId; page?: "capabilities" }
 ) & { device?: DeviceId };
 
 export const SETTINGS_SECTIONS = [
@@ -31,7 +31,8 @@ export function routeHash(route: Route): string {
   if (route.view === "router") return "#/router";
   if (route.view === "settings") return route.section === undefined ? "#/settings" : `#/settings/${route.section}`;
   const device = route.device === undefined ? "" : `/d/${route.device}`;
-  return `#${device}/${PREFIX[route.view]}/${route.view === "profile" ? route.pmId : route.id}`;
+  const id = route.view === "profile" ? `${route.pmId}${route.page === undefined ? "" : `/${route.page}`}` : route.id;
+  return `#${device}/${PREFIX[route.view]}/${id}`;
 }
 
 export function parseRoute(hash: string): Route | null {
@@ -41,16 +42,17 @@ export function parseRoute(hash: string): Route | null {
     const section = settings[1];
     return section !== undefined && isSettingsSection(section) ? { view: "settings", section } : { view: "settings" };
   }
-  const match = /^#(?:\/d\/([^/]+))?\/(c|w|pm)\/([1-9]\d*)$/.exec(hash);
+  const match = /^#(?:\/d\/([^/]+))?\/(c|w|pm)\/([1-9]\d*)(\/capabilities)?$/.exec(hash);
   if (!match) return null;
   const device = match[1];
   if (device !== undefined && !isDeviceId(device)) return null;
   const n = Number(match[3]);
   if (!Number.isSafeInteger(n)) return null;
   const on = device === undefined ? {} : { device };
-  if (match[2] === "c") return { view: "conversation", id: n, ...on };
-  if (match[2] === "w") return { view: "worker", id: n, ...on };
-  return { view: "profile", pmId: n, ...on };
+  const page = match[4] === undefined ? {} : ({ page: "capabilities" } as const);
+  if (match[2] === "pm") return { view: "profile", pmId: n, ...page, ...on };
+  if (match[4] !== undefined) return null;
+  return match[2] === "c" ? { view: "conversation", id: n, ...on } : { view: "worker", id: n, ...on };
 }
 
 const sameRoute = (a: Route | null, b: Route | null) => (a === null || b === null ? a === b : routeHash(a) === routeHash(b));

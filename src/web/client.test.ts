@@ -202,6 +202,24 @@ describe("能力开关与准备命令接口", () => {
     expect(patch[1]).toMatchObject({ method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ set: { "mcp:playwright": false } }) });
   });
 
+  it("Project defaults 走自己的路径；项目 Reset 发 DELETE；有特例的项目单独一个接口", async () => {
+    const api = new FakeApi(makeSnapshot());
+    api.install();
+    const client = createClient(null);
+    expect((await client.fetchCapabilities({ kind: "default" })).scope).toEqual({ kind: "default" });
+    await client.patchCapabilities({ kind: "pm", pmId: 4 }, { set: { "mcp:playwright": false } });
+    expect(await client.fetchCustomizedCapabilities()).toEqual({ pmIds: [4] });
+    expect((await client.resetPmCapabilities(4)).inheritance?.layer).toEqual({ base: {}, overrides: {} });
+    expect(await client.fetchCustomizedCapabilities()).toEqual({ pmIds: [] });
+    expect(api.calls.map((c) => [c.method, c.path])).toEqual([
+      ["GET", "/api/defaults/capabilities"],
+      ["PATCH", "/api/pms/4/capabilities"],
+      ["GET", "/api/capabilities/customized"],
+      ["DELETE", "/api/pms/4/capabilities"],
+      ["GET", "/api/capabilities/customized"],
+    ]);
+  });
+
   it("准备命令：PUT 带 { command }，null 表示清空；远程电脑的请求挂设备前缀", async () => {
     const api = new FakeApi(makeSnapshot());
     api.install();

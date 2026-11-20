@@ -2,11 +2,10 @@
 // 相关数据变了要跟着变。规矩见 AGENTS.md“缓存和状态快照”那一条。
 import { describe, expect, it } from "vitest";
 import {
+  AGENT_VENDORS,
   DEFAULT_AGENT_VENDOR,
   MAX_REWOUND_PENDING_KEYS,
   PM_CAPABILITY_INVENTORY_MAX_ITEMS,
-  applyCapabilitiesPatch,
-  defaultCapabilityPolicy,
   workerEventOf,
   workerLineSummaries,
   MAX_CONVERSATION_LOOKUP_STATES,
@@ -23,7 +22,7 @@ import {
   type UpdateStatus,
 } from "../shared/index.ts";
 import { runningWorkerCount, totalRunningWorkers, waitingConversations } from "../shared/reminders.ts";
-import { capabilityScopeOptions, capabilitySections, capabilityTotals, enforcementRows, filterCapabilitySections } from "./capabilities-model.ts";
+import { capabilityProjectOptions, capabilitySections, capabilityTotals, filterCapabilitySections, patchedView } from "./capabilities-model.ts";
 import { revertedChangeIds } from "./components/Messages.tsx";
 import { fleetRouterStream, mergeRouterStream, routerStreamOf, type RouterStreamDeviceInput } from "./router-stream.ts";
 import {
@@ -764,66 +763,59 @@ describe("selector 缓存：300 个 Worker、3 万条消息", () => {
   });
 });
 
-/** 清单上限 2000 项：40 组 × 50 项，技能、MCP、连接器都有。 */
+/** 清单上限 2000 项：40 个插件包各 25 个 MCP 加 25 个技能，两家厂商各一半，前 4 个包两家共用。 */
 function maxInventory(): CapabilityInventory {
-  const kinds = ["skill", "mcp", "connector"] as const;
   const items: CapabilityItem[] = [];
   const groups: CapabilityGroup[] = [];
+  const perKind = PM_CAPABILITY_INVENTORY_MAX_ITEMS / 40 / 2;
   for (let g = 0; g < 40; g++) {
-    const kind = kinds[g % kinds.length]!;
-    const keys: string[] = [];
-    for (let i = 0; i < PM_CAPABILITY_INVENTORY_MAX_ITEMS / 40; i++) {
-      const key = kind === "connector" ? `connector:v${g}:c${i}` : `${kind}:g${g}-i${i}`;
-      keys.push(key);
-      items.push({ key, kind, name: `g${g}-i${i}`, description: `item ${i} of group ${g}`, groupId: `${kind}:plugin:${g}`, vendors: [] });
+    const vendor = AGENT_VENDORS[g % 2]!;
+    const source = { kind: "plugin", vendor, plugin: `p${g}@market` } as const;
+    for (const kind of ["mcp", "skill"] as const) {
+      const id = `${kind}:plugin:${vendor}:p${g}`;
+      const keys = Array.from({ length: perKind }, (_, i) => `${kind}:g${g}-${kind}${i}`);
+      keys.forEach((key, i) => items.push({ key, kind, name: `g${g}-${kind}${i}`, description: `item ${i} of plugin ${g}`, groupId: id, vendors: g < 4 ? AGENT_VENDORS : [vendor] }));
+      groups.push({ id, kind, label: `plugin ${g}`, source, itemKeys: keys });
     }
-    groups.push({ id: `${kind}:plugin:${g}`, kind, label: `group ${g}`, source: { kind: "global" }, itemKeys: keys });
   }
   return { scannedAt: 1, items, groups, truncated: false };
 }
 
 describe("能力页缓存：清单 2000 项", () => {
-  it("每拨一个开关都要重算分组：中位数在几毫秒以内；同一份清单和策略返回同一个数组，搜索框清空时原样返回", () => {
-    const inventory = maxInventory();
-    let policy = defaultCapabilityPolicy("pm");
+  it("每拨一个开关都要重算分区：中位数在几毫秒以内；同一份视图返回同一个数组，搜索框清空时原样返回", () => {
+    let view = makeCapabilitiesView({ kind: "pm", pmId: 1 }, { inventory: maxInventory() });
     let n = 0;
     const toggle = () => {
-      policy = applyCapabilitiesPatch(policy, { set: { [`skill:g0-i${n++ % 50}`]: n % 2 === 0 } });
-      return policy;
+      view = patchedView(view, { set: { [`skill:g0-skill${n++ % 25}`]: n % 2 === 0 } });
+      return view;
     };
-    expect(medianMs(21, () => void capabilitySections(inventory, toggle()))).toBeLessThan(10);
-    const sections = capabilitySections(inventory, policy);
+    expect(medianMs(21, () => void capabilitySections(toggle(), AGENT_VENDORS[0]!))).toBeLessThan(10);
+    const sections = capabilitySections(view, AGENT_VENDORS[0]!);
     expect(capabilityTotals(sections).total).toBe(PM_CAPABILITY_INVENTORY_MAX_ITEMS);
-    expect(capabilitySections(inventory, policy)).toBe(sections);
+    expect(capabilitySections(view, AGENT_VENDORS[0]!)).toBe(sections);
     expect(filterCapabilitySections(sections, "")).toBe(sections);
-    expect(medianMs(21, () => void filterCapabilitySections(sections, "i4"))).toBeLessThan(10);
+    expect(medianMs(21, () => void filterCapabilitySections(sections, "skill4"))).toBeLessThan(10);
   });
 
-  it("策略变了马上失效：关掉一项，总数里少一项，其余组对象内容不变", () => {
-    const inventory = maxInventory();
-    const policy = defaultCapabilityPolicy("pm");
-    const before = capabilitySections(inventory, policy);
-    const after = capabilitySections(inventory, applyCapabilitiesPatch(policy, { set: { "mcp:g1-i0": false } }));
+  it("选择变了马上失效：关掉一项，总数里少一项；清单没变时分区布局复用", () => {
+    const view = makeCapabilitiesView({ kind: "default" }, { inventory: maxInventory() });
+    const before = capabilitySections(view);
+    const after = capabilitySections(patchedView(view, { set: { "mcp:g1-mcp0": false } }));
     expect(after).not.toBe(before);
     expect(capabilityTotals(after).enabled).toBe(capabilityTotals(before).enabled - 1);
+    expect(after.map((s) => s.units.map((u) => u.id))).toEqual(before.map((s) => s.units.map((u) => u.id)));
   });
 
-  it("范围条跟着 state.pms 走：流式打字不换引用，改名、归档立刻换", () => {
+  it("项目选择器跟着 state.pms 走：流式打字不换引用，改名、归档立刻换", () => {
     let state: HubState = { ...initialState, phase: "ready", seq: 1, pms: [makePm({ id: 1, name: "项目经理" })], sessions: [makeSession({ sessionId: 10, conversationId: 1 })] };
-    const options = capabilityScopeOptions(state.pms);
+    const options = capabilityProjectOptions(state.pms);
     state = applyChange(state, sessionChange(2, makeSession({ sessionId: 10, conversationId: 1, streamingText: "写到一半" })));
-    expect(capabilityScopeOptions(state.pms)).toBe(options);
+    expect(capabilityProjectOptions(state.pms)).toBe(options);
     state = applyChange(state, changeOf(3, "pm.updated", { pm: makePm({ id: 1, name: "改了名" }) }));
-    expect(capabilityScopeOptions(state.pms)).not.toBe(options);
-    expect(capabilityScopeOptions(state.pms)[1]!.label).toBe("改了名");
+    expect(capabilityProjectOptions(state.pms)).not.toBe(options);
+    expect(capabilityProjectOptions(state.pms)[0]!.label).toBe("改了名");
     state = applyChange(state, changeOf(4, "pm.updated", { pm: makePm({ id: 1, name: "改了名", archivedAt: 5 }) }));
-    expect(capabilityScopeOptions(state.pms).map((o) => o.key)).toEqual(["router"]);
-  });
-
-  it("隔离粒度表按接口返回的 isolation 对象缓存：同一份应答同一个数组，新应答重算", () => {
-    const view = makeCapabilitiesView({ kind: "pm", pmId: 1 });
-    expect(enforcementRows(view)).toBe(enforcementRows(view));
-    expect(enforcementRows(makeCapabilitiesView({ kind: "pm", pmId: 1 }))).not.toBe(enforcementRows(view));
+    expect(capabilityProjectOptions(state.pms)).toEqual([]);
   });
 });
 

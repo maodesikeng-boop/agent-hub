@@ -1,9 +1,13 @@
 import {
   applyCapabilitiesPatch,
+  applyCapabilityLayerPatch,
+  capabilityLayerEmpty,
   CHANGE_BUFFER_SIZE,
   ConversationNotFoundError,
   defaultCapabilityPolicy,
   defaultRouterSettings,
+  EMPTY_CAPABILITY_LAYER,
+  layerCapabilityPolicy,
   deliveryParts,
   emptyRouterSlice,
   findRewindableMessage,
@@ -39,7 +43,10 @@ import {
   type Pm,
   type PmLookSetting,
   type CapabilitiesPatch,
+  type CapabilityLayer,
   type CapabilityPolicy,
+  type CapabilityScope,
+  type ScopeCapabilities,
   type PmId,
   type PostUserMessageInput,
   type PostUserMessageResult,
@@ -163,9 +170,11 @@ export class FakeLedger {
   readonly archived: PmId[] = [];
   readonly unarchived: PmId[] = [];
   readonly lookCalls: Array<{ pmId: PmId; look: PmLookSetting }> = [];
-  readonly capabilityReads: PmId[] = [];
-  readonly capabilityPatches: Array<{ pmId: PmId; patch: CapabilitiesPatch }> = [];
-  readonly pmPolicies = new Map<PmId, CapabilityPolicy>();
+  readonly capabilityReads: CapabilityScope[] = [];
+  readonly capabilityPatches: Array<{ scope: CapabilityScope; patch: CapabilitiesPatch }> = [];
+  readonly capabilityResets: PmId[] = [];
+  readonly pmLayers = new Map<PmId, CapabilityLayer>();
+  defaultPolicy: CapabilityPolicy = defaultCapabilityPolicy("default");
   routerPolicy: CapabilityPolicy = defaultCapabilityPolicy("router");
   readonly setupCommandEdits: Array<{ projectId: ProjectId; command: string | null }> = [];
   readonly pmMainFolders = new Map<PmId, string | null>();
@@ -301,18 +310,14 @@ export class FakeLedger {
     return { change: this.personaChange, persona: makePersonaView(pmId, this.personaChange === null ? [] : [this.personaChange]) };
   }
 
-  getPmCapabilityPolicy(pmId: PmId): CapabilityPolicy {
-    this.check();
-    this.capabilityReads.push(pmId);
-    return this.pmPolicies.get(pmId) ?? defaultCapabilityPolicy("pm");
+  private pmCapabilities(pmId: PmId): ScopeCapabilities {
+    const inheritance = { defaults: this.defaultPolicy, layer: this.pmLayers.get(pmId) ?? EMPTY_CAPABILITY_LAYER };
+    return { policy: layerCapabilityPolicy(inheritance.defaults, inheritance.layer), inheritance };
   }
 
-  patchPmCapabilities(pmId: PmId, patch: CapabilitiesPatch): CapabilityPolicy {
+  getPmCapabilityPolicy(pmId: PmId): CapabilityPolicy {
     this.check();
-    this.capabilityPatches.push({ pmId, patch });
-    const next = applyCapabilitiesPatch(this.pmPolicies.get(pmId) ?? defaultCapabilityPolicy("pm"), patch);
-    this.pmPolicies.set(pmId, next);
-    return next;
+    return this.pmCapabilities(pmId).policy;
   }
 
   getRouterCapabilityPolicy(): CapabilityPolicy {
@@ -320,10 +325,35 @@ export class FakeLedger {
     return this.routerPolicy;
   }
 
-  patchRouterCapabilities(patch: CapabilitiesPatch): CapabilityPolicy {
+  getCapabilities(scope: CapabilityScope): ScopeCapabilities {
     this.check();
-    this.routerPolicy = applyCapabilitiesPatch(this.routerPolicy, patch);
-    return this.routerPolicy;
+    this.capabilityReads.push(scope);
+    if (scope.kind === "pm") return this.pmCapabilities(scope.pmId);
+    return { policy: scope.kind === "router" ? this.routerPolicy : this.defaultPolicy, inheritance: null };
+  }
+
+  patchCapabilities(scope: CapabilityScope, patch: CapabilitiesPatch): ScopeCapabilities {
+    this.check();
+    this.capabilityPatches.push({ scope, patch });
+    if (scope.kind === "pm") {
+      this.pmLayers.set(scope.pmId, applyCapabilityLayerPatch(this.defaultPolicy, this.pmLayers.get(scope.pmId) ?? EMPTY_CAPABILITY_LAYER, patch));
+      return this.pmCapabilities(scope.pmId);
+    }
+    if (scope.kind === "router") this.routerPolicy = applyCapabilitiesPatch(this.routerPolicy, patch);
+    else this.defaultPolicy = applyCapabilitiesPatch(this.defaultPolicy, patch);
+    return { policy: scope.kind === "router" ? this.routerPolicy : this.defaultPolicy, inheritance: null };
+  }
+
+  resetPmCapabilities(pmId: PmId): ScopeCapabilities {
+    this.check();
+    this.capabilityResets.push(pmId);
+    this.pmLayers.delete(pmId);
+    return this.pmCapabilities(pmId);
+  }
+
+  customizedCapabilityPms(): PmId[] {
+    this.check();
+    return [...this.pmLayers].filter(([, layer]) => !capabilityLayerEmpty(layer)).map(([pmId]) => pmId).sort((a, b) => a - b);
   }
 
   setProjectSetupCommand(projectId: ProjectId, command: string | null): Project {
@@ -620,9 +650,11 @@ export class FakeLedger {
       putPmMemoryFile: unused("putPmMemoryFile"),
       deletePmMemoryFile: unused("deletePmMemoryFile"),
       getPmCapabilityPolicy: (p) => this.getPmCapabilityPolicy(p),
-      patchPmCapabilities: (p, patch) => this.patchPmCapabilities(p, patch),
       getRouterCapabilityPolicy: () => this.getRouterCapabilityPolicy(),
-      patchRouterCapabilities: (patch) => this.patchRouterCapabilities(patch),
+      getCapabilities: (scope) => this.getCapabilities(scope),
+      patchCapabilities: (scope, patch) => this.patchCapabilities(scope, patch),
+      resetPmCapabilities: (p) => this.resetPmCapabilities(p),
+      customizedCapabilityPms: () => this.customizedCapabilityPms(),
       setProjectSetupCommand: (id, command) => this.setProjectSetupCommand(id, command),
       setPmLook: (p, look) => this.setPmLook(p, look),
       pmProjectMainFolder: (p) => this.pmProjectMainFolder(p),

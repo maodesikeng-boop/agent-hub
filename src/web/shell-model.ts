@@ -462,7 +462,7 @@ export function useShellModel({ autoSelect }: { autoSelect: boolean }) {
   );
   const groupsRef = useRef<SidebarGroup[]>([]);
 
-  const shared = { replace, qc, fleet, route, local, routedDevice, current, hub, state };
+  const shared = { navigate, replace, qc, fleet, route, local, routedDevice, current, hub, state };
   if (!shellReady) return { ...shared, content: null };
 
   const view = active ? state.conversations[active.id] : undefined;

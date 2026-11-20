@@ -91,7 +91,7 @@ Only direct dependencies in `package.json` and `apps/windows/Cargo.toml` are lis
 ### UI primitives (`src/web/ui/`)
 
 - Built on Radix (`@radix-ui/react-*`) with `shadcn/ui` styling conventions. The repository has **no `components.json` and no `@/` path alias**, so `shadcn add` cannot run directly.
-- Installed primitives: `button` (`slot` + `cva`), `input`, `dialog`, `drawer` (`vaul`, wrapped only in `src/web/ui/drawer.tsx`), `popover`, `tabs`, `collapsible`, `avatar`, `switch`, and `segmented` (Radix `RadioGroup`). `ModeRows.tsx` and the `CapabilitiesSettings.tsx` scope strip use `@radix-ui/react-radio-group` directly.
+- Installed primitives: `button` (`slot` + `cva`), `input`, `dialog`, `drawer` (`vaul`, wrapped only in `src/web/ui/drawer.tsx`), `popover`, `tabs`, `collapsible`, `avatar`, `switch`, and `segmented` (Radix `RadioGroup`). `ModeRows.tsx` and the `CapabilityScopeSwitch.tsx` project picker use `@radix-ui/react-radio-group` directly.
 - Not installed: `Sheet`, `Select`, `Textarea`, `Tooltip`, `DropdownMenu`, `ScrollArea`, and `Sonner`.
 - To add a primitive: inspect upstream source with `pnpm dlx shadcn@latest view <name>`, copy it into `src/web/ui/<name>.tsx` with relative imports (`../lib/utils.ts`), install any runtime package with `pnpm add`, and align styles with `docs/ui-standard.md`.
 

@@ -15,6 +15,7 @@ export function SettingsNavRow({
   attention = false,
   attentionTestId,
   danger = false,
+  chevron = !danger,
   className,
   onClick,
 }: {
@@ -25,6 +26,7 @@ export function SettingsNavRow({
   attention?: boolean;
   attentionTestId?: string;
   danger?: boolean;
+  chevron?: boolean;
   className?: string;
   onClick: () => void;
 }) {
@@ -45,7 +47,7 @@ export function SettingsNavRow({
       </span>
       {attention && <span data-testid={attentionTestId} aria-hidden="true" className="size-2 shrink-0 rounded-full bg-caution" />}
       {summary !== undefined && <span className="shrink-0 text-minor text-muted-foreground tabular-nums">{summary}</span>}
-      {!danger && <ChevronRight className="size-pixel-sm shrink-0 text-muted-foreground" aria-hidden="true" />}
+      {chevron && <ChevronRight className="size-pixel-sm shrink-0 text-muted-foreground" aria-hidden="true" />}
     </button>
   );
 }

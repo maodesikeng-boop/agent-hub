@@ -53,7 +53,25 @@ export interface CapabilityPolicy {
   overrides: Readonly<Record<CapabilityKey, boolean>>;
 }
 
-export type CapabilityScope = { kind: "router" } | { kind: "pm"; pmId: PmId };
+export type CapabilityScope = { kind: "default" } | { kind: "router" } | { kind: "pm"; pmId: PmId };
+
+// A project's own choices on top of Project defaults: a pinned kind base replaces the defaults for that kind.
+export interface CapabilityLayer {
+  base: Readonly<Partial<Record<CapabilityKind, CapabilityBase>>>;
+  overrides: Readonly<Record<CapabilityKey, boolean>>;
+}
+
+export const EMPTY_CAPABILITY_LAYER: CapabilityLayer = { base: {}, overrides: {} };
+
+export interface CapabilityInheritance {
+  defaults: CapabilityPolicy;
+  layer: CapabilityLayer;
+}
+
+export interface ScopeCapabilities {
+  policy: CapabilityPolicy;
+  inheritance: CapabilityInheritance | null;
+}
 
 export const WORKER_CAPABILITY_MODES = ["inherit", "none", "custom"] as const;
 export type WorkerCapabilityMode = (typeof WORKER_CAPABILITY_MODES)[number];
@@ -79,23 +97,23 @@ export interface SessionCapabilities {
   allow: { skills: readonly SkillRef[]; mcp: readonly string[] };
 }
 
-export type CapabilityIsolation = "session" | "tool_deny" | "shared";
+type CapabilityIsolation = "session" | "tool_deny" | "shared";
 
 export type CapabilityIsolationMap = Readonly<Record<CapabilityKind, CapabilityIsolation>>;
 
-export type PmCapabilitiesStart = { from: "all" } | { from: "pm"; pmId: PmId };
+export type PmCapabilitiesStart = { from: "default" } | { from: "pm"; pmId: PmId };
 
-export interface CapabilitiesView {
+export interface CapabilitiesView extends ScopeCapabilities {
   scope: CapabilityScope;
   inventory: CapabilityInventory;
-  policy: CapabilityPolicy;
-  isolation: Readonly<Partial<Record<AgentVendor, CapabilityIsolationMap>>>;
-  pluginIsolation: Readonly<Partial<Record<AgentVendor, Partial<CapabilityIsolationMap>>>>;
 }
 
 export interface CapabilitiesPatch {
-  base?: Partial<Record<CapabilityKind, CapabilityBase>>;
-  set?: Readonly<Record<CapabilityKey, boolean | null>>;
+  set: Readonly<Record<CapabilityKey, boolean | null>>;
+}
+
+export interface CustomizedCapabilitiesResponse {
+  pmIds: PmId[];
 }
 
 function cmpStr(a: string, b: string): number {
@@ -148,30 +166,59 @@ export function capabilityKey(kind: CapabilityKind, name: string, vendor?: Agent
   return `${kind}:${name}`;
 }
 
+function withoutRedundant(base: CapabilityBaseMap, overrides: ReadonlyMap<CapabilityKey, boolean>): CapabilityPolicy {
+  const kept: Record<CapabilityKey, boolean> = {};
+  for (const key of [...overrides.keys()].sort(cmpStr)) {
+    const on = overrides.get(key)!;
+    if (on !== (base[kindOfCapabilityKey(key)] === "all")) kept[key] = on;
+  }
+  return { base, overrides: kept };
+}
+
 export function applyCapabilitiesPatch(policy: CapabilityPolicy, patch: CapabilitiesPatch): CapabilityPolicy {
-  const nextBase: Record<CapabilityKind, CapabilityBase> = {
-    skill: patch.base?.skill ?? policy.base.skill,
-    mcp: patch.base?.mcp ?? policy.base.mcp,
-    connector: patch.base?.connector ?? policy.base.connector,
+  const overrides = new Map<CapabilityKey, boolean>(Object.entries(policy.overrides));
+  for (const [key, value] of Object.entries(patch.set)) {
+    if (value === null) overrides.delete(key);
+    else overrides.set(key, value);
+  }
+  return withoutRedundant(policy.base, overrides);
+}
+
+export function capabilityLayerEmpty(layer: CapabilityLayer): boolean {
+  return Object.keys(layer.base).length === 0 && Object.keys(layer.overrides).length === 0;
+}
+
+export function capabilityPinned(layer: CapabilityLayer, key: CapabilityKey): boolean {
+  return Object.hasOwn(layer.overrides, key) || layer.base[kindOfCapabilityKey(key)] !== undefined;
+}
+
+function inheritedEnabled(defaults: CapabilityPolicy, layer: CapabilityLayer, key: CapabilityKey): boolean {
+  const pinned = layer.base[kindOfCapabilityKey(key)];
+  return pinned === undefined ? capabilityEnabled(defaults, key) : pinned === "all";
+}
+
+export function layerCapabilityPolicy(defaults: CapabilityPolicy, layer: CapabilityLayer): CapabilityPolicy {
+  const base: CapabilityBaseMap = {
+    skill: layer.base.skill ?? defaults.base.skill,
+    mcp: layer.base.mcp ?? defaults.base.mcp,
+    connector: layer.base.connector ?? defaults.base.connector,
   };
-  const rawOverrides = new Map<CapabilityKey, boolean>(Object.entries(policy.overrides));
-  if (patch.set !== undefined) {
-    for (const [key, value] of Object.entries(patch.set)) {
-      if (value === null) rawOverrides.delete(key);
-      else if (typeof value === "boolean") rawOverrides.set(key, value);
-    }
+  const overrides = new Map<CapabilityKey, boolean>();
+  for (const [key, on] of Object.entries(defaults.overrides)) {
+    if (layer.base[kindOfCapabilityKey(key)] === undefined) overrides.set(key, on);
   }
-  const sortedKeys = [...rawOverrides.keys()].sort(cmpStr);
-  const nextOverrides: Record<CapabilityKey, boolean> = {};
-  for (const key of sortedKeys) {
-    const val = rawOverrides.get(key)!;
-    const kind = kindOfCapabilityKey(key);
-    const defaultEnabled = nextBase[kind] === "all";
-    if (val !== defaultEnabled) {
-      nextOverrides[key] = val;
-    }
+  for (const [key, on] of Object.entries(layer.overrides)) overrides.set(key, on);
+  return withoutRedundant(base, overrides);
+}
+
+// A choice that matches what the project would inherit drops its pin, so the item follows Project defaults again.
+export function applyCapabilityLayerPatch(defaults: CapabilityPolicy, layer: CapabilityLayer, patch: CapabilitiesPatch): CapabilityLayer {
+  const overrides = new Map<CapabilityKey, boolean>(Object.entries(layer.overrides));
+  for (const [key, value] of Object.entries(patch.set)) {
+    if (value === null || value === inheritedEnabled(defaults, layer, key)) overrides.delete(key);
+    else overrides.set(key, value);
   }
-  return { base: nextBase, overrides: nextOverrides };
+  return { base: layer.base, overrides: Object.fromEntries([...overrides].sort(([a], [b]) => cmpStr(a, b))) };
 }
 
 export function resolveSessionCapabilities(

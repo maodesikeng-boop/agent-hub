@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  EMPTY_CAPABILITY_LAYER,
   applyCapabilitiesPatch,
+  applyCapabilityLayerPatch,
   capabilityEnabled,
   capabilityKey,
+  capabilityLayerEmpty,
+  capabilityPinned,
   blockedWorkerCapabilities,
   defaultCapabilityPolicy,
+  layerCapabilityPolicy,
   parseWorkerCapabilitiesJson,
   resolveSessionCapabilities,
   workerCapabilitiesJson,
@@ -13,6 +18,7 @@ import {
   type CapabilityGroup,
   type CapabilityInventory,
   type CapabilityItem,
+  type CapabilityLayer,
   type CapabilityPolicy,
 } from "./pm-capabilities.ts";
 
@@ -54,19 +60,19 @@ describe("capabilityEnabled", () => {
 
 describe("applyCapabilitiesPatch", () => {
   it("不改入参，返回新 policy", () => {
-    const baseObj = Object.freeze({ skill: "all" as const, mcp: "all" as const, connector: "all" as const });
+    const baseObj = Object.freeze({ skill: "all" as const, mcp: "none" as const, connector: "all" as const });
     const overridesObj = Object.freeze({ "skill:a": false });
     const input: CapabilityPolicy = Object.freeze({ base: baseObj, overrides: overridesObj });
 
-    const next = applyCapabilitiesPatch(input, { base: { mcp: "none" }, set: { "skill:b": false } });
+    const next = applyCapabilitiesPatch(input, { set: { "skill:b": false, "mcp:codegraph": true } });
     expect(next).not.toBe(input);
     expect(input).toEqual({
-      base: { skill: "all", mcp: "all", connector: "all" },
+      base: { skill: "all", mcp: "none", connector: "all" },
       overrides: { "skill:a": false },
     });
     expect(next).toEqual({
       base: { skill: "all", mcp: "none", connector: "all" },
-      overrides: { "skill:a": false, "skill:b": false },
+      overrides: { "mcp:codegraph": true, "skill:a": false, "skill:b": false },
     });
   });
 
@@ -93,17 +99,50 @@ describe("applyCapabilitiesPatch", () => {
     expect(capabilityEnabled(next, "skill:aws-auth")).toBe(false);
   });
 
-  it("改 base 时去掉和新 base 相同的已有单独设置", () => {
-    const policy: CapabilityPolicy = {
-      base: { skill: "all", mcp: "all", connector: "all" },
-      overrides: { "skill:a": false, "skill:b": false, "mcp:codegraph": false },
-    };
-    const next = applyCapabilitiesPatch(policy, {
-      base: { skill: "none" },
-      set: { "skill:keep-on": true },
-    });
-    expect(next.base.skill).toBe("none");
-    expect(next.overrides).toEqual({ "skill:keep-on": true, "mcp:codegraph": false });
+});
+
+describe("两层继承：Project defaults 加项目自己的特例", () => {
+  const defaults: CapabilityPolicy = {
+    base: { skill: "all", mcp: "all", connector: "all" },
+    overrides: { "mcp:codegraph": false, "skill:aws-auth": false },
+  };
+
+  it("空特例层原样继承 Project defaults", () => {
+    expect(capabilityLayerEmpty(EMPTY_CAPABILITY_LAYER)).toBe(true);
+    expect(layerCapabilityPolicy(defaults, EMPTY_CAPABILITY_LAYER)).toEqual(defaults);
+  });
+
+  it("项目钉住的单项盖过默认；钉住整类时这一类不再跟默认的单项走", () => {
+    const layer: CapabilityLayer = { base: { skill: "none" }, overrides: { "mcp:codegraph": true, "skill:verify": true } };
+    const policy = layerCapabilityPolicy(defaults, layer);
+    expect(policy).toEqual({ base: { skill: "none", mcp: "all", connector: "all" }, overrides: { "skill:verify": true } });
+    expect(capabilityEnabled(policy, "skill:aws-auth")).toBe(false);
+    expect(capabilityEnabled(policy, "skill:other")).toBe(false);
+    expect(capabilityEnabled(policy, "mcp:codegraph")).toBe(true);
+    expect(capabilityPinned(layer, "skill:anything")).toBe(true);
+    expect(capabilityPinned(layer, "mcp:codegraph")).toBe(true);
+    expect(capabilityPinned(layer, "mcp:linear")).toBe(false);
+  });
+
+  it("拨成和继承一样的值就去掉特例，拨成不一样才钉住；null 直接去掉", () => {
+    const pinned = applyCapabilityLayerPatch(defaults, EMPTY_CAPABILITY_LAYER, { set: { "mcp:codegraph": true, "mcp:linear": false, "skill:aws-auth": false } });
+    expect(pinned).toEqual({ base: {}, overrides: { "mcp:codegraph": true, "mcp:linear": false } });
+    const back = applyCapabilityLayerPatch(defaults, pinned, { set: { "mcp:codegraph": false, "mcp:linear": null } });
+    expect(capabilityLayerEmpty(back)).toBe(true);
+  });
+
+  it("老数据里钉住整类的项目：单项按这一类的值判断是不是特例", () => {
+    const legacy: CapabilityLayer = { base: { mcp: "none" }, overrides: {} };
+    expect(applyCapabilityLayerPatch(defaults, legacy, { set: { "mcp:linear": false } }).overrides).toEqual({});
+    expect(applyCapabilityLayerPatch(defaults, legacy, { set: { "mcp:linear": true } }).overrides).toEqual({ "mcp:linear": true });
+  });
+
+  it("默认后来改了，项目钉住的特例照旧生效", () => {
+    const layer = applyCapabilityLayerPatch(defaults, EMPTY_CAPABILITY_LAYER, { set: { "mcp:codegraph": true } });
+    const nextDefaults = applyCapabilitiesPatch(defaults, { set: { "mcp:codegraph": true } });
+    expect(capabilityEnabled(layerCapabilityPolicy(nextDefaults, layer), "mcp:codegraph")).toBe(true);
+    const offAgain = applyCapabilitiesPatch(nextDefaults, { set: { "mcp:codegraph": false } });
+    expect(capabilityEnabled(layerCapabilityPolicy(offAgain, layer), "mcp:codegraph")).toBe(true);
   });
 });
 

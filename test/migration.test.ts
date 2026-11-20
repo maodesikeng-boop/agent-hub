@@ -2530,3 +2530,32 @@ describe("0041_feishu_router_asks_and_inbound_cursor", () => {
     expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 });
+
+describe("0045_project_capability_defaults", () => {
+  it("从 0044 升级：建 Project defaults 两张表，已有项目的能力行原样保留，回退 44 重跑幂等", () => {
+    const db = m3Db();
+    migrate(db, migrationsUpTo(44));
+    db.run("INSERT INTO pm_capability_policies (pm_id, kind, base, updated_at) VALUES (1, 'mcp', 'none', 100)");
+    db.run("INSERT INTO pm_capability_overrides (pm_id, item_key, enabled, updated_at) VALUES (1, 'skill:aws-auth', 0, 100)");
+    const policies = db.all("SELECT * FROM pm_capability_policies");
+    const overrides = db.all("SELECT * FROM pm_capability_overrides");
+
+    expect(migrate(db, migrationsUpTo(45))).toMatchObject({ from: 44, to: 45 });
+    expect(tableNames(db)).toEqual(expect.arrayContaining(["default_capability_policies", "default_capability_overrides"]));
+    expect(db.all("SELECT * FROM default_capability_policies")).toEqual([]);
+    expect(db.all("SELECT * FROM pm_capability_policies")).toEqual(policies);
+    expect(db.all("SELECT * FROM pm_capability_overrides")).toEqual(overrides);
+
+    db.run("INSERT INTO default_capability_policies (kind, base, updated_at) VALUES ('skill', 'none', 1)");
+    db.run("INSERT INTO default_capability_overrides (item_key, enabled, updated_at) VALUES ('mcp:codegraph', 0, 1)");
+    expect(() => db.run("INSERT INTO default_capability_policies (kind, base, updated_at) VALUES ('bogus', 'all', 1)")).toThrow(/CHECK/);
+    expect(() => db.run("INSERT INTO default_capability_overrides (item_key, enabled, updated_at) VALUES ('mcp:x', 2, 1)")).toThrow(/CHECK/);
+
+    const defaults = db.all("SELECT * FROM default_capability_overrides");
+    db.exec("PRAGMA user_version = 44");
+    expect(() => migrate(db, migrationsDir)).not.toThrow();
+    expect(userVersion(db)).toBe(LATEST_VERSION);
+    expect(db.all("SELECT * FROM default_capability_overrides")).toEqual(defaults);
+    expect(db.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+});

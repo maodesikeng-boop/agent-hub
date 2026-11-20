@@ -4,13 +4,16 @@ import {
   AGENT_VENDORS,
   API_PATHS,
   DEFAULT_AGENT_VENDOR,
+  EMPTY_CAPABILITY_LAYER,
   applyCapabilitiesPatch,
+  applyCapabilityLayerPatch,
+  capabilityLayerEmpty,
   defaultCapabilityPolicy,
+  layerCapabilityPolicy,
   emptyRouterSlice,
   isQuietMessage,
   serverInfoFor,
   vendorLabel,
-  vendorSpec,
 } from "../shared/index.ts";
 import type {
   AddScheduleRequest,
@@ -19,6 +22,7 @@ import type {
   CapabilitiesPatch,
   CapabilitiesView,
   CapabilityInventory,
+  CapabilityLayer,
   CapabilityPolicy,
   CapabilityScope,
   ScheduleRecord,
@@ -301,25 +305,31 @@ export function makeSnapshot(over: Partial<StateSnapshot> = {}): StateSnapshot {
   };
 }
 
-/** 小而全的能力清单：MCP（全局 + 插件）、技能（项目 + 全局）、连接器（账号）各有一组。 */
+/** 小而全的能力清单：共用的 MCP 和技能、部分厂商共用的 MCP、项目技能、默认厂商的插件包（MCP 加技能）和连接器、另一家厂商的插件包。 */
 export function makeCapabilityInventory(over: Partial<CapabilityInventory> = {}): CapabilityInventory {
   const vendor = DEFAULT_AGENT_VENDOR;
+  const other = AGENT_VENDORS.find((v) => v !== vendor)!;
   const gmail = `connector:${vendor}:gmail`;
   return {
     scannedAt: 1_000,
     truncated: false,
     items: [
-      { key: "mcp:playwright", kind: "mcp", name: "playwright", description: null, groupId: "mcp:global", vendors: [vendor] },
-      { key: "mcp:linear", kind: "mcp", name: "linear", description: null, groupId: "mcp:global", vendors: [vendor] },
+      { key: "mcp:playwright", kind: "mcp", name: "playwright", description: null, groupId: "mcp:global", vendors: AGENT_VENDORS },
+      { key: "mcp:linear", kind: "mcp", name: "linear", description: null, groupId: "mcp:global", vendors: AGENT_VENDORS },
+      { key: "mcp:node_repl", kind: "mcp", name: "node_repl", description: null, groupId: "mcp:global", vendors: [vendor, other] },
       { key: "mcp:plugin:design:figma", kind: "mcp", name: "plugin:design:figma", description: null, groupId: `mcp:plugin:${vendor}:design`, vendors: [vendor] },
-      { key: "skill:frontend-rules", kind: "skill", name: "frontend-rules", description: "Rules for UI work", groupId: "skill:project:demo", vendors: [vendor] },
-      { key: "skill:verify", kind: "skill", name: "verify", description: "Run the local smoke check", groupId: "skill:global", vendors: [vendor] },
-      { key: "skill:unslop", kind: "skill", name: "unslop", description: "Remove AI filler", groupId: "skill:global", vendors: [vendor] },
+      { key: "skill:design:critique", kind: "skill", name: "design:critique", description: "Critique a design", groupId: `skill:plugin:${vendor}:design`, vendors: [vendor] },
+      { key: "skill:sheets:build", kind: "skill", name: "sheets:build", description: "Build a spreadsheet", groupId: `skill:plugin:${other}:sheets`, vendors: [other] },
+      { key: "skill:frontend-rules", kind: "skill", name: "frontend-rules", description: "Rules for UI work", groupId: "skill:project:demo", vendors: AGENT_VENDORS },
+      { key: "skill:verify", kind: "skill", name: "verify", description: "Run the local smoke check", groupId: "skill:global", vendors: AGENT_VENDORS },
+      { key: "skill:unslop", kind: "skill", name: "unslop", description: "Remove AI filler", groupId: "skill:global", vendors: AGENT_VENDORS },
       { key: gmail, kind: "connector", name: "Gmail", description: null, groupId: `connector:account:${vendor}`, vendors: [vendor] },
     ],
     groups: [
-      { id: "mcp:global", kind: "mcp", label: "Global", source: { kind: "global" }, itemKeys: ["mcp:playwright", "mcp:linear"] },
+      { id: "mcp:global", kind: "mcp", label: "Global", source: { kind: "global" }, itemKeys: ["mcp:playwright", "mcp:linear", "mcp:node_repl"] },
       { id: `mcp:plugin:${vendor}:design`, kind: "mcp", label: "design", source: { kind: "plugin", vendor, plugin: "design@synced" }, itemKeys: ["mcp:plugin:design:figma"] },
+      { id: `skill:plugin:${vendor}:design`, kind: "skill", label: "design", source: { kind: "plugin", vendor, plugin: "design@synced" }, itemKeys: ["skill:design:critique"] },
+      { id: `skill:plugin:${other}:sheets`, kind: "skill", label: "sheets", source: { kind: "plugin", vendor: other, plugin: "sheets@curated" }, itemKeys: ["skill:sheets:build"] },
       { id: "skill:global", kind: "skill", label: "Global", source: { kind: "global" }, itemKeys: ["skill:verify", "skill:unslop"] },
       { id: "skill:project:demo", kind: "skill", label: "demo", source: { kind: "project", projectLabel: "demo" }, itemKeys: ["skill:frontend-rules"] },
       { id: `connector:account:${vendor}`, kind: "connector", label: vendorLabel(vendor), source: { kind: "account", vendor }, itemKeys: [gmail] },
@@ -328,15 +338,22 @@ export function makeCapabilityInventory(over: Partial<CapabilityInventory> = {})
   };
 }
 
-/** 跟真接口一样带上各家的隔离粒度（vendorSpec 里声明的）。 */
-export function makeCapabilitiesView(scope: CapabilityScope, policy: CapabilityPolicy = defaultCapabilityPolicy(scope.kind), inventory: CapabilityInventory = makeCapabilityInventory()): CapabilitiesView {
-  return {
-    scope,
-    inventory,
-    policy,
-    isolation: Object.fromEntries(AGENT_VENDORS.map((v) => [v, vendorSpec(v).capabilities.isolation])),
-    pluginIsolation: Object.fromEntries(AGENT_VENDORS.flatMap((v) => (vendorSpec(v).capabilities.pluginIsolation === undefined ? [] : [[v, vendorSpec(v).capabilities.pluginIsolation]]))),
-  };
+/** Project defaults 和总助看的是全局清单：没有项目自己的技能。 */
+function globalInventory(inventory: CapabilityInventory): CapabilityInventory {
+  const projectKeys = new Set(inventory.groups.filter((g) => g.source.kind === "project").flatMap((g) => g.itemKeys));
+  return { ...inventory, items: inventory.items.filter((i) => !projectKeys.has(i.key)), groups: inventory.groups.filter((g) => g.source.kind !== "project") };
+}
+
+/** 跟真接口一样：Project defaults 和总助只有自己的选择；项目带上继承的默认和自己的特例。 */
+export function makeCapabilitiesView(
+  scope: CapabilityScope,
+  options: { policy?: CapabilityPolicy; defaults?: CapabilityPolicy; layer?: CapabilityLayer; inventory?: CapabilityInventory } = {},
+): CapabilitiesView {
+  const inventory = options.inventory ?? makeCapabilityInventory();
+  if (scope.kind !== "pm") return { scope, inventory, policy: options.policy ?? defaultCapabilityPolicy(scope.kind), inheritance: null };
+  const defaults = options.defaults ?? defaultCapabilityPolicy("default");
+  const layer = options.layer ?? EMPTY_CAPABILITY_LAYER;
+  return { scope, inventory, policy: layerCapabilityPolicy(defaults, layer), inheritance: { defaults, layer } };
 }
 
 // ---- 假 fetch ----
@@ -443,23 +460,35 @@ export class FakeApi {
     status: 200,
     body: { pm: makePm({ id: pmId, archivedAt: null }) },
   });
-  /** 能力开关按范围（router / pm:<编号>）记在这里，PATCH 之后再 GET 拿到的是改过的。 */
-  capabilityPolicies = new Map<string, CapabilityPolicy>();
+  /** 能力选择：Project defaults、总助各一份，项目各存自己的特例；PATCH、DELETE 之后再 GET 拿到的是改过的。 */
+  capabilityDefaults: CapabilityPolicy = defaultCapabilityPolicy("default");
+  capabilityRouter: CapabilityPolicy = defaultCapabilityPolicy("router");
+  capabilityLayers = new Map<number, CapabilityLayer>();
   capabilityInventory: CapabilityInventory = makeCapabilityInventory();
-  private policyOf(scope: CapabilityScope): CapabilityPolicy {
-    return this.capabilityPolicies.get(scope.kind === "router" ? "router" : `pm:${scope.pmId}`) ?? defaultCapabilityPolicy(scope.kind);
+  private capabilityView(scope: CapabilityScope): CapabilitiesView {
+    const inventory = scope.kind === "pm" ? this.capabilityInventory : globalInventory(this.capabilityInventory);
+    if (scope.kind === "pm") return makeCapabilitiesView(scope, { defaults: this.capabilityDefaults, layer: this.capabilityLayers.get(scope.pmId) ?? EMPTY_CAPABILITY_LAYER, inventory });
+    return makeCapabilitiesView(scope, { policy: scope.kind === "router" ? this.capabilityRouter : this.capabilityDefaults, inventory });
   }
-  /** GET /api/router/capabilities、/api/pms/:id/capabilities（refresh 为 ?refresh=1）。 */
-  getCapabilities: (scope: CapabilityScope, refresh: boolean) => Reply | Promise<Reply> = (scope) => ({
-    status: 200,
-    body: makeCapabilitiesView(scope, this.policyOf(scope), this.capabilityInventory),
-  });
-  /** PATCH 同上两个路径。默认：照共享的 applyCapabilitiesPatch 改好记下。 */
+  /** GET /api/defaults/capabilities、/api/router/capabilities、/api/pms/:id/capabilities（refresh 为 ?refresh=1）。 */
+  getCapabilities: (scope: CapabilityScope, refresh: boolean) => Reply | Promise<Reply> = (scope) => ({ status: 200, body: this.capabilityView(scope) });
+  /** PATCH 同上三个路径。默认：照共享的规则改好记下。 */
   patchCapabilities: (scope: CapabilityScope, body: CapabilitiesPatch) => Reply | Promise<Reply> = (scope, body) => {
-    const next = applyCapabilitiesPatch(this.policyOf(scope), body);
-    this.capabilityPolicies.set(scope.kind === "router" ? "router" : `pm:${scope.pmId}`, next);
-    return { status: 200, body: makeCapabilitiesView(scope, next, this.capabilityInventory) };
+    if (scope.kind === "pm") this.capabilityLayers.set(scope.pmId, applyCapabilityLayerPatch(this.capabilityDefaults, this.capabilityLayers.get(scope.pmId) ?? EMPTY_CAPABILITY_LAYER, body));
+    else if (scope.kind === "router") this.capabilityRouter = applyCapabilitiesPatch(this.capabilityRouter, body);
+    else this.capabilityDefaults = applyCapabilitiesPatch(this.capabilityDefaults, body);
+    return { status: 200, body: this.capabilityView(scope) };
   };
+  /** DELETE /api/pms/:id/capabilities：清掉项目的特例。 */
+  resetCapabilities: (pmId: number) => Reply | Promise<Reply> = (pmId) => {
+    this.capabilityLayers.delete(pmId);
+    return { status: 200, body: this.capabilityView({ kind: "pm", pmId }) };
+  };
+  /** GET /api/capabilities/customized。 */
+  customizedCapabilities: () => Reply | Promise<Reply> = () => ({
+    status: 200,
+    body: { pmIds: [...this.capabilityLayers].filter(([, layer]) => !capabilityLayerEmpty(layer)).map(([pmId]) => pmId).sort((a, b) => a - b) },
+  });
   /** PUT /api/projects/:id/setup-command。默认：照收到的命令改好返回。 */
   putSetupCommand: (projectId: number, body: PutProjectSetupCommandRequest) => Reply | Promise<Reply> = (projectId, body) => ({
     status: 200,
@@ -1056,11 +1085,13 @@ export class FakeApi {
     }
     if (method === "POST" && url.pathname === "/api/pick-folder") return jsonResponse(await this.pickFolder(body));
     if (method === "POST" && url.pathname === "/api/pms") return jsonResponse(await this.createPm(body));
-    const capabilities = /^\/api\/(?:router|pms\/(\d+))\/capabilities$/.exec(url.pathname);
+    if (method === "GET" && url.pathname === API_PATHS.customizedCapabilities) return jsonResponse(await this.customizedCapabilities());
+    const capabilities = /^\/api\/(defaults|router|pms\/(\d+))\/capabilities$/.exec(url.pathname);
     if (capabilities) {
-      const scope: CapabilityScope = capabilities[1] === undefined ? { kind: "router" } : { kind: "pm", pmId: Number(capabilities[1]) };
+      const scope: CapabilityScope = capabilities[2] !== undefined ? { kind: "pm", pmId: Number(capabilities[2]) } : { kind: capabilities[1] === "router" ? "router" : "default" };
       if (method === "GET") return jsonResponse(await this.getCapabilities(scope, url.searchParams.get("refresh") === "1"));
       if (method === "PATCH") return jsonResponse(await this.patchCapabilities(scope, body));
+      if (method === "DELETE" && scope.kind === "pm") return jsonResponse(await this.resetCapabilities(scope.pmId));
     }
     const setupCommand = /^\/api\/projects\/(\d+)\/setup-command$/.exec(url.pathname);
     if (setupCommand && method === "PUT") return jsonResponse(await this.putSetupCommand(Number(setupCommand[1]), body));

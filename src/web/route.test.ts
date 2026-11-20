@@ -17,6 +17,17 @@ describe("带设备的网址", () => {
     expect(routeHash({ view: "profile", pmId: 3, device: TOKYO })).toBe(`#/d/${TOKYO}/pm/3`);
   });
 
+  it("项目资料页的能力子页 #/pm/<编号>/capabilities 来回一致；对话和 Piece 不认这个后缀", () => {
+    const routes: Route[] = [
+      { view: "profile", pmId: 3, page: "capabilities" },
+      { view: "profile", pmId: 3, page: "capabilities", device: TOKYO },
+    ];
+    for (const route of routes) expect(parseRoute(routeHash(route))).toEqual(route);
+    expect(routeHash({ view: "profile", pmId: 3, page: "capabilities" })).toBe("#/pm/3/capabilities");
+    expect(parseRoute("#/pm/3")).toEqual({ view: "profile", pmId: 3 });
+    for (const bad of ["#/c/3/capabilities", "#/w/3/capabilities", "#/pm/3/capabilities/x", "#/pm/3/memory"]) expect(parseRoute(bad)).toBeNull();
+  });
+
   it("老网址不带设备，还是原来的样子", () => {
     expect(parseRoute("#/c/7")).toEqual({ view: "conversation", id: 7 });
     expect(parseRoute("#/c/7")).not.toHaveProperty("device");

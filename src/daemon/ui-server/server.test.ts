@@ -236,6 +236,7 @@ const ledgerCalls = () =>
   ledger.unarchived.length +
   ledger.capabilityReads.length +
   ledger.capabilityPatches.length +
+  ledger.capabilityResets.length +
   ledger.lookCalls.length;
 
 describe("没登录", () => {
@@ -251,6 +252,10 @@ describe("没登录", () => {
     ["PUT", "/api/pms/1/persona", { text: "x" }],
     ["GET", "/api/pms/1/capabilities"],
     ["PATCH", "/api/pms/1/capabilities", { set: { "skill:aws-auth": false } }],
+    ["DELETE", "/api/pms/1/capabilities"],
+    ["GET", "/api/defaults/capabilities"],
+    ["PATCH", "/api/defaults/capabilities", { set: { "skill:aws-auth": false } }],
+    ["GET", "/api/capabilities/customized"],
     ["POST", "/api/persona-changes/1/revert"],
     ["POST", "/api/pms/1/schedules", { name: "晨报", prompt: "x", daily: "09:00" }],
     ["PUT", "/api/schedules/1", { enabled: false }],
@@ -701,6 +706,8 @@ const NEW_ENDPOINTS: Array<[string, Method, string, unknown?]> = [
   ["PUT persona", "PUT", "/api/pms/1/persona", { text: "新正文" }],
   ["PUT look", "PUT", "/api/pms/1/look", { fruit: "kiwi", color: null }],
   ["PATCH capabilities", "PATCH", "/api/pms/1/capabilities", { set: { "skill:aws-auth": false } }],
+  ["DELETE capabilities", "DELETE", "/api/pms/1/capabilities"],
+  ["PATCH default capabilities", "PATCH", "/api/defaults/capabilities", { set: { "skill:aws-auth": false } }],
   ["POST revert", "POST", "/api/persona-changes/1/revert"],
   ["POST schedule", "POST", "/api/pms/1/schedules", { name: "晨报", prompt: "x", daily: "09:00" }],
   ["PUT schedule", "PUT", "/api/schedules/1", { enabled: false }],
@@ -814,7 +821,7 @@ describe("POST /api/pms 建项目经理", () => {
     const bodies = [
       { ...NEW_PM, vendor: "claude", effort: "low" },
       { ...NEW_PM, effort: null },
-      { ...NEW_PM, capabilities: { from: "all" } },
+      { ...NEW_PM, capabilities: { from: "default" } },
       { ...NEW_PM, capabilities: { from: "pm", pmId: 3 } },
     ];
     for (const body of bodies) expect((await call("POST", "/api/pms", { body })).statusCode).toBe(201);
@@ -870,7 +877,8 @@ describe("POST /api/pms 建项目经理", () => {
     ["capabilities.from 非法", { ...NEW_PM, capabilities: { from: "recent" } }],
     ["capabilities from=pm 缺 pmId", { ...NEW_PM, capabilities: { from: "pm" } }],
     ["capabilities from=pm 的 pmId 非正整数", { ...NEW_PM, capabilities: { from: "pm", pmId: 0 } }],
-    ["capabilities from=all 带多余字段", { ...NEW_PM, capabilities: { from: "all", pmId: 1 } }],
+    ["capabilities from=all 是旧写法", { ...NEW_PM, capabilities: { from: "all" } }],
+    ["capabilities from=default 带多余字段", { ...NEW_PM, capabilities: { from: "default", pmId: 1 } }],
     ["多余字段", { ...NEW_PM, avatarFile: "x.png" }],
     ["body 是数组", [NEW_PM]],
     ["body 是 null", null],
@@ -1103,25 +1111,19 @@ describe("POST /api/pms/:id/archive 与 /api/pms/:id/unarchive 归档与恢复�
   });
 });
 
-describe("GET、PATCH /api/pms/:id/capabilities 项目经理能力库存与选择", () => {
-  it("GET 返回库存、当前 PM 选择与全厂商 isolation；?refresh=1 触发 invalidate", async () => {
-    const fakeInv: CapabilityInventory = {
-      scannedAt: 42_000,
-      items: [
-        {
-          key: "skill:aws-auth",
-          kind: "skill",
-          name: "aws-auth",
-          description: "AWS auth",
-          groupId: "skill:global",
-          vendors: ["claude", "codex"],
-        },
-      ],
-      groups: [],
-      truncated: false,
-    };
-    const seenScopes: Array<string | null> = [];
-    let invalidated = 0;
+describe("能力接口：Project defaults、总助、单个项目", () => {
+  const seenScopes: Array<string | null> = [];
+  let invalidated = 0;
+  const fakeInv: CapabilityInventory = {
+    scannedAt: 42_000,
+    items: [{ key: "skill:aws-auth", kind: "skill", name: "aws-auth", description: "AWS auth", groupId: "skill:global", vendors: ["claude", "codex"] }],
+    groups: [],
+    truncated: false,
+  };
+
+  beforeEach(async () => {
+    seenScopes.length = 0;
+    invalidated = 0;
     ledger.pmMainFolders.set(3, "/code/proj-3");
     await app.close();
     app = createUiServer({
@@ -1143,108 +1145,83 @@ describe("GET、PATCH /api/pms/:id/capabilities 项目经理能力库存与选�
       },
     });
     await app.ready();
+  });
 
+  const ALL_ON = { base: { skill: "all", mcp: "all", connector: "all" }, overrides: {} };
+
+  it("GET 项目：带库存、生效选择和继承关系（Project defaults 加项目特例），看项目主文件夹；?refresh=1 先 invalidate", async () => {
     const res = await call("GET", "/api/pms/3/capabilities");
     expect(res.statusCode).toBe(200);
-    const view = res.json() as CapabilitiesView;
-    expect(view.scope).toEqual({ kind: "pm", pmId: 3 });
-    expect(view.inventory).toEqual(fakeInv);
-    expect(view.policy).toEqual({
-      base: { skill: "all", mcp: "all", connector: "all" },
-      overrides: {},
+    expect(res.json()).toEqual({
+      scope: { kind: "pm", pmId: 3 },
+      inventory: fakeInv,
+      policy: ALL_ON,
+      inheritance: { defaults: ALL_ON, layer: { base: {}, overrides: {} } },
     });
-    for (const v of AGENT_VENDORS) {
-      expect(view.isolation[v]).toEqual(vendorSpec(v).capabilities.isolation);
-    }
-    expect(view.pluginIsolation).toEqual({ claude: { skill: "tool_deny" } });
     expect(seenScopes).toEqual(["/code/proj-3"]);
     expect(invalidated).toBe(0);
-
-    const refreshed = await call("GET", "/api/pms/3/capabilities?refresh=1");
-    expect(refreshed.statusCode).toBe(200);
+    expect((await call("GET", "/api/pms/3/capabilities?refresh=1")).statusCode).toBe(200);
     expect(invalidated).toBe(1);
   });
 
-  it("PATCH 更新 base 与 set 并返回新 CapabilitiesView；非法参数回 400，不存在回 404", async () => {
-    const patchRes = await call("PATCH", "/api/pms/3/capabilities", {
-      body: {
-        base: { mcp: "none" },
-        set: { "skill:aws-auth": false, "mcp:codegraph": true },
-      },
-    });
-    expect(patchRes.statusCode).toBe(200);
-    expect(ledger.capabilityPatches).toEqual([
-      {
-        pmId: 3,
-        patch: {
-          base: { mcp: "none" },
-          set: { "skill:aws-auth": false, "mcp:codegraph": true },
-        },
-      },
-    ]);
-    expect((patchRes.json() as CapabilitiesView).policy).toEqual({
-      base: { skill: "all", mcp: "none", connector: "all" },
-      overrides: { "skill:aws-auth": false, "mcp:codegraph": true },
-    });
+  it("PATCH Project defaults 后项目跟着变；项目 PATCH 只钉住和默认不同的项，DELETE 一键恢复继承", async () => {
+    const defaults = await call("PATCH", "/api/defaults/capabilities", { body: { set: { "mcp:codegraph": false } } });
+    expect(defaults.statusCode).toBe(200);
+    expect((defaults.json() as CapabilitiesView).scope).toEqual({ kind: "default" });
+    expect((defaults.json() as CapabilitiesView).inheritance).toBeNull();
+    expect((await call("GET", "/api/defaults/capabilities")).json()).toMatchObject({ policy: { overrides: { "mcp:codegraph": false } } });
 
-    const tooManySet = Object.fromEntries(
-      Array.from({ length: PM_CAPABILITY_PATCH_MAX_KEYS + 1 }, (_, i) => [`skill:s-${i}`, false]),
-    );
-    for (const bad of [
-      {},
-      { extra: 1 },
-      { base: { skill: "maybe" } },
-      { base: { unknownKind: "all" } },
-      { set: { "bad-key-no-colon": false } },
-      { set: { "connector:claude": false } },
-      { set: { "skill:aws-auth": "off" } },
-      { set: tooManySet },
-    ]) {
-      const r = await call("PATCH", "/api/pms/3/capabilities", { body: bad });
-      expect(r.statusCode).toBe(400);
-    }
-    expect((await call("GET", "/api/pms/abc/capabilities")).statusCode).toBe(400);
-    expect((await call("PATCH", "/api/pms/0/capabilities", { body: { set: { "skill:a": false } } })).statusCode).toBe(400);
+    const patched = (await call("PATCH", "/api/pms/3/capabilities", { body: { set: { "skill:aws-auth": false, "mcp:codegraph": false } } })).json() as CapabilitiesView;
+    expect(patched.policy.overrides).toEqual({ "mcp:codegraph": false, "skill:aws-auth": false });
+    expect(patched.inheritance?.layer.overrides).toEqual({ "skill:aws-auth": false });
+    expect((await call("GET", "/api/capabilities/customized")).json()).toEqual({ pmIds: [3] });
 
-    ledger.failWith = new LedgerRequestError("not_found", "没有编号 99 的项目经理");
-    expect((await call("GET", "/api/pms/99/capabilities")).statusCode).toBe(404);
-    expect((await call("PATCH", "/api/pms/99/capabilities", { body: { set: { "skill:a": false } } })).statusCode).toBe(404);
+    const reset = await call("DELETE", "/api/pms/3/capabilities");
+    expect(reset.statusCode).toBe(200);
+    expect((reset.json() as CapabilitiesView).policy.overrides).toEqual({ "mcp:codegraph": false });
+    expect(ledger.capabilityResets).toEqual([3]);
+    expect((await call("GET", "/api/capabilities/customized")).json()).toEqual({ pmIds: [] });
+    expect(ledger.capabilityPatches.map((p) => p.scope)).toEqual([{ kind: "default" }, { kind: "pm", pmId: 3 }]);
+    expect(seenScopes).toEqual([null, null, "/code/proj-3", "/code/proj-3"]);
   });
 
-  it("GET、PATCH /api/router/capabilities：总助默认三类全关，看全局清单，改完返回新选择", async () => {
-    const seenScopes: Array<string | null> = [];
-    let invalidated = 0;
-    await app.close();
-    app = createUiServer({
-      ledger: ledger.asLedger(),
-      token: TOKEN,
-      staticDir,
-      uploadsDir,
-      sentFilesDir,
-      port: PORT,
-      db,
-      capabilityInventory: {
-        get: async ({ projectDir }) => {
-          seenScopes.push(projectDir);
-          return { scannedAt: 1, items: [], groups: [], truncated: false };
-        },
-        invalidate: () => {
-          invalidated++;
-        },
-      },
-    });
-    await app.ready();
+  it("GET、PATCH /api/router/capabilities：总助默认三类全关，看全局清单", async () => {
     const view = (await call("GET", "/api/router/capabilities?refresh=1")).json() as CapabilitiesView;
     expect(view.scope).toEqual({ kind: "router" });
     expect(view.policy).toEqual({ base: { skill: "none", mcp: "none", connector: "none" }, overrides: {} });
     expect(invalidated).toBe(1);
     const patched = await call("PATCH", "/api/router/capabilities", { body: { set: { "mcp:codegraph": true } } });
-    expect(patched.statusCode).toBe(200);
     expect((patched.json() as CapabilitiesView).policy.overrides).toEqual({ "mcp:codegraph": true });
     expect(seenScopes).toEqual([null, null]);
-    expect((await call("PATCH", "/api/router/capabilities", { body: {} })).statusCode).toBe(400);
   });
 
+  it("请求体不对回 400；编号不对回 400；不存在的项目经理回 404", async () => {
+    const tooManySet = Object.fromEntries(Array.from({ length: PM_CAPABILITY_PATCH_MAX_KEYS + 1 }, (_, i) => [`skill:s-${i}`, false]));
+    for (const path of ["/api/pms/3/capabilities", "/api/defaults/capabilities", "/api/router/capabilities"]) {
+      for (const bad of [
+        {},
+        { set: {} },
+        { extra: 1 },
+        { base: { skill: "none" } },
+        { set: { "bad-key-no-colon": false } },
+        { set: { "connector:claude": false } },
+        { set: { "skill:aws-auth": "off" } },
+        { set: tooManySet },
+      ]) {
+        expect((await call("PATCH", path, { body: bad })).statusCode).toBe(400);
+      }
+    }
+    expect(ledger.capabilityPatches).toEqual([]);
+    expect((await call("GET", "/api/pms/abc/capabilities")).statusCode).toBe(400);
+    expect((await call("DELETE", "/api/pms/0/capabilities")).statusCode).toBe(400);
+    ledger.failWith = new LedgerRequestError("not_found", "没有编号 99 的项目经理");
+    expect((await call("GET", "/api/pms/99/capabilities")).statusCode).toBe(404);
+    expect((await call("PATCH", "/api/pms/99/capabilities", { body: { set: { "skill:a": false } } })).statusCode).toBe(404);
+    expect((await call("DELETE", "/api/pms/99/capabilities")).statusCode).toBe(404);
+  });
+});
+
+describe("项目准备命令", () => {
   it("PUT /api/projects/:id/setup-command：设多行命令、传 null 清空；格式不对回 400", async () => {
     const multi = "pnpm install\npnpm build";
     const res = await call("PUT", "/api/projects/8/setup-command", { body: { command: multi } });
