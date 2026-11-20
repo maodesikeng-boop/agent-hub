@@ -1,61 +1,56 @@
-# 基准图风格说明
+# Baseline style brief
 
-基准图文件：`docs/ui-polish/baseline/baseline.png`（界面 `chat.normal@desktop`，桌面视口 `1440×900`，2 倍像素比，默认“大”字号档）。
+Baseline screenshot: `docs/ui-polish/baseline/baseline.png` (`chat.normal@desktop`, `1440x900` desktop viewport at 2x device pixel ratio, default `Large` interface scale).
 
-本说明按 `S1` 到 `S6` 六条整理基准图的风格基因，供评委核对其他界面有没有跑出这套气质。
+This brief defines rules `S1` through `S6` for visual evaluation in `pnpm ui:polish`.
 
-## 基准图管什么、不管什么
+## What the baseline governs
 
-- **只管风格基因不跑偏**：极淡中性或微暖的大面积底色；强调色小面积出现，选中和门禁用 10% 浅果冻底；三档圆角；零渐变、零毛玻璃，只有聊天输入框一处轻阴影；1px 细线分隔，不叠框套框；外壳用简短英文；不用 `·`、`|`、`/` 拼接；过程细节默认收起。
-- **不是 9 分天花板**：基准图这一屏现在只有 6 到 7 分，以后和别的界面一样要改到 9 分。和基准图长得一样不等于好看。
-- **不锁具体尺寸**：栏宽、内边距、行高、留白占比都不要求和基准图一样。在上面这套气质里，把比例、留白、层次和细节做得比基准图更匀称、更通透，是对的，也是评委要鼓励的。
+- **Visual DNA only.** Keep pale neutral or subtly fruit-tinted backgrounds, small focal areas of solid accent color, 10% translucent jelly fills for selected rows and active gate cards, three main radius tiers, flat surfaces without gradients or frosted glass, a single soft shadow on the chat composer, 1px hairline dividers without nested bordered boxes, concise English shell copy without separator characters, and folded process details by default.
+- **Not a 9-point ceiling.** The baseline screen itself scores around 6 to 7 points and needs the same polish pass as every other screen. Matching its flaws is not the goal. Rubric guard tests in `test/ui-polish/rubric.test.ts` assert the literal tokens 风格基因 and 6, 7 分.
+- **No locked pixel dimensions.** Column widths, padding, row heights, and whitespace ratios do not need to match the baseline image pixel-for-pixel; cleaner proportions and breathing room within the tokens of `docs/ui-standard.md` are improvements.
 
-## S1 配色
+## S1 Color
 
-- **大面积底色保持极淡中性或微暖色调**。左栏底色比对话区略深半度（中性冷灰 `#f6f6f7` 掺 3% 当前项目经理水果色），中栏对话区与右栏同为近白底（`#ffffff` 掺 2.5% 水果色）。不带项目经理作用域的页面（Router 工作台、全局设置弹窗、新建弹窗）退回纯白 `#ffffff` 与冷灰侧栏 `#f6f6f7`。
-- **卡片与输入框使用纯白底**。对话流里的提问卡、底部聊天输入框、右栏次要选项按钮，以及设置页和资料页的分组框都是纯白 `#ffffff` 底。Worker 汇报气泡用中性浅灰 `#f2f2f4` 底；左栏顶部搜索框用浅灰凹陷底 `#e9e9ec`。
-- **实心强调色面积极小，一屏只用在焦点处**。基准图上只有右栏拍板卡的推荐主选项按钮（深橙 `#c2410c` 底配纯白字）、果皮轨已走通实线与圆点、门禁步骤标题文字使用高饱和度会话强调色。没有项目经理作用域时，主色退回碳黑 `#18181b`。
-- **选中行与门禁卡使用 10% 浓度的浅果冻底**。左栏选中的“小林”行、右栏挂出的拍板卡都填充极淡的同色系透明果冻底，文字仍保持深色，不用实心深色底反白字。
-- **状态色只表达状态**。左栏未读与待回应圆点用绿色 `#16a34a`（8px 圆点，不挂文字胶囊）。文字分两档：正文与标题深碳黑 `#18181b`，次要信息、时间戳、系统行、占位符中性灰 `#5f5f69`（R01 起从 `#71717a` 加深一档：压在左栏底和选中果冻底上也要 ≥ 4.5:1）。
-- **头像分三类且画风统一**。左栏与中栏顶栏的项目经理头像是完整水果横切面；中栏 Worker 发言与右栏折叠按钮是剥下的一瓣果肉；左栏置顶 Router 行与右栏门禁卡点是 45° 线性水果刀。
+- **Pale neutral or fruit-tinted canvas.** The left sidebar sits half a step darker (`#f6f6f7` mixed with 3% of the active PM fruit color) than the center chat and right rail (`#ffffff` mixed with 2.5% fruit color). Unscoped views such as Router, global settings, and creation dialogs use pure `#ffffff` and `#f6f6f7`.
+- **White cards and inputs.** Ask cards, the chat composer, secondary option buttons, and grouped settings boxes use `#ffffff`. Worker speech bubbles use `#f2f2f4`, and the sidebar search box uses `#e9e9ec`.
+- **Sparse solid accent.** Solid `--primary` appears only on focal controls: the single primary button on screen, the recommended gate option, completed Task Graph pipes and beads, and active gate titles. Without a PM scope, `--primary` falls back to `#18181b`.
+- **10% jelly highlight.** Selected PM rows and active gate cards use a 10% translucent fruit tint (`bg-jelly`) with dark foreground text rather than inverted white text on a solid block.
+- **Semantic status colors.** Unread and waiting indicators in the sidebar use an 8px `#16a34a` green dot with no text pill. Text uses two neutral tiers: `#18181b` for primary copy and `#5f5f69` for secondary metadata (>= 4.5:1 contrast over sidebar and jelly surfaces).
+- **Consistent pixel art avatars.** Project Managers use fruit slime sprites, Pieces use curled note sprites in the PM color, and Router uses the sprout bell sprite.
 
-## S2 字号层级
+## S2 Type scale
 
-（以下像素值为标准档根字号 16px 下的基准档位；截图默认“大”档按 1.09375 倍等比放大。）
+Values below reflect the `Default` 16px root scale (`Large` scales all `rem` tokens by `1.09375x`):
 
-- **全屏只用四档字号**（资料页头部名字 `22px` 是唯一例外）：
-  1. `17px`（字重 `600`）：中栏顶栏对话名“小林”、弹窗标题。
-  2. `15px`：左栏项目经理名与 Router 标题（`600`）、对话正文与气泡文字（`400`）、提问卡问题标题（`500`）与选项文字（`400`）、右栏任务标题（`600`）与拍板卡标题（`600`）。
-  3. `13.5px`：左栏第二行消息预览（`400` 灰）、Worker 名字（`500` 灰）、右栏阶段行文字（`400`）、拍板卡说明与按钮文字（`400`/`500`）、卡片底部 `Add note`。
-  4. `12px`：左栏行右侧时间（`16:07`）与 `Archived` 组头、对话流底部时间（`16:28`）与系统事件行、选项右侧 `Recommended`、右栏顶部 `Task Graph` 与阶段编号 `#1`、尾部 `2 next`。
-- **字重只用三档**：普通正文 `400`、中等强调 `500`、栏头与卡片主标题 `600`。选中态只加浅底色，不额外加粗字重。
-- **数字等宽对齐**。左栏右端的时间列、未读计数、阶段编号 `#1` 均使用等宽数字（`tabular-nums`），纵向位数对齐。
+1. `17px` (`600`): Conversation header name, sidebar PM name, and dialog titles (`text-title`). The profile page display name at `22px` (`text-display`) is the sole exception.
+2. `15px`: Body copy, row titles, ask card questions (`500`), option text (`400`), and form inputs (`text-body`).
+3. `13.5px`: Sidebar previews, Worker names (`500`), buttons (`500`), secondary descriptions, and `Show more` (`text-minor`).
+4. `12px`: Timestamps, section headers (`Needs You`, `Task Graph`, `Pieces`, `Completed`, `Archived`), `Recommended`, and step numbers (`text-xs`).
 
-## S3 间距节奏
+- **Three weights only**: `400`, `500`, and `600`. Selected rows change background only, never font weight.
+- **Tabular numerals**: Timestamps, counts, percentages, and step IDs use `tabular-nums`.
 
-- **间距落在 `docs/ui-standard.md` 的间距档位上**，同类容器的内边距、同类行的行高在同一屏里一致。
-- **左右栏紧凑成列，中栏宽裕居中**。导航栏行高统一、头像与文字间距统一；消息流与底部输入框共用居中的对话列，左右留白对称，不贴栏边。同一轮内消息与时间紧凑相连，不同发言人之间拉开明显段距。
-- **卡片内部留白逐级分明**。标题、正文、按钮、底部次要操作从上到下留白有层次，同一张卡里的选项行高一致。
-- 具体像素以 `docs/ui-standard.md` 为准，不以基准图为准；比基准图更舒展匀称是改进。同类区域的行高或内边距比基准图压缩一半以上、文字挤成一团，记 `P1`。
+## S3 Spacing rhythm
 
-## S4 形状
+- Use the spacing scale in `docs/ui-standard.md` consistently across sibling containers and rows.
+- Keep navigation rails compact and center the chat column with symmetric horizontal gutters. Group messages within one turn tightly and separate distinct speakers clearly.
+- Compressing padding or row height to less than half of comparable regions so text crowds together counts as `P1`.
 
-- **圆角只有三档**：
-  1. 全圆胶囊（`9999px`）：圆形水果头像、底部单行聊天输入框外框、圆形发送按钮、角落图标按钮悬停态、8px 状态小圆点。
-  2. 大圆角（`16px`，`rounded-2xl`）：左栏搜索框、左栏选中行、中栏提问卡、右栏拍板卡、设置分组框与弹窗；Worker 消息气泡圆角 `22px` 与之协调。
-  3. 中圆角（`12px`，`rounded-xl`）：右栏拍板卡内的选项按钮、中栏提问卡内的字母徽标 `A` / `B` 与选项行、代码块与普通输入框。
-  不混用直角或 `4px`、`6px` 小圆角卡片。
-- **零渐变、零毛玻璃、单处轻阴影**。全屏只有底部聊天输入框带一层极淡的漫射光晕阴影；左栏、顶栏、消息气泡、提问卡、右栏拍板卡、按钮一律平涂无阴影、无背景渐变、无毛玻璃。
-- **1px 细线分隔，不叠框套框**。左栏、中栏、右栏之间只用 1px 浅线（`#ececef` 掺 8% 水果色）切分；左栏置顶 Router 行下方一条 1px 细线；顶栏下方不画横线；卡片内部不再套带边框的子卡片。角落工具按钮（左栏 `+`、左下设置齿轮、消息下复制图标、右栏右上折叠与放大图标）平时无底色、无描边。
+## S4 Shape and borders
 
-## S5 疏密
+- **Radius tiers**: `rounded-full` for pills, switches, and status dots; `rounded-2xl` (`16px`) for sidebar rows, cards, popovers, and dialogs (`22px` on chat bubbles); `rounded-xl` (`12px`) for inputs, selects, code blocks, and option rows; `4px` on `slot` buttons and `.tool-badge` counters; stepped pixel corners on Task Graph dialog nodes.
+- **Flat surfaces**: No gradients, no backdrop blur, and no drop shadows except `.composer-frame`.
+- **1px dividers**: Separate panes and rail groups with 1px `border-line` (`#ececef` mixed with 8% fruit color). Do not nest bordered cards inside bordered cards, and draw no bottom border under conversation headers.
 
-- **信息分区疏密有致**。左栏与右栏承担导航和进度总览，行高紧凑但每行最多两层文字，单行超长一律用省略号截断，不折成三四行挤占纵向空间。中栏承担阅读，左右留足空白，行长适中，段落不粘连。
-- **不要求留白占比和基准图一样**。更通透、呼吸感更好是改进；挤成一团（同类区域压缩一半以上）记 `P1`，空得说不出理由记 `P2`。
-- **过程默认收起**。已完成的步骤和工具调用不铺满屏幕，中栏系统事件压成单行 12px 淡灰字，右栏后续未解锁的阶段折成单行 `2 next`，左栏已归档会话折成单行 `Archived > 1`。
+## S5 Information density
 
-## S6 语气
+- Navigation rows hold at most two text lines and truncate overflow with `truncate` and `title`.
+- Fold completed tool steps into `Worked for Xs`, collapse long upstream or downstream Task Graph chains into `N done` and `N next`, and keep `Archived` and `Completed` collapsed by default.
+- Cramped regions compressed by more than half count as `P1`; unexplained empty voids count as `P2`.
 
-- **界面外壳词一律用简短英文，句首大写**。如 `Search`、`Router`、`Archived`、`Task Graph`、`Recommended`、`Add note`、`2 next`、`Message 小林…`。项目经理名字、任务标题与聊天正文保留用户语言。
-- **不用连接符拼接多项信息**。同一行的名字与时间、标题与编号、标签与圆点全部靠左右两端对齐或固定间距分开，不出现 `·`、`|`、`/` 拼接串。
-- **无多余解释文字**。搜索框、卡片标题、输入区上下都不放“点击选择方案”“按回车发送”之类的灰色说明小字；控件含义直接由位置、字重和短动词表达。
+## S6 Copy and tone
+
+- Shell labels, buttons, placeholders, and status words use concise sentence-case English (`Search`, `Router`, `Archived`, `Task Graph`, `Recommended`, `Add note`). User messages, PM names, and Piece titles keep the user's language.
+- Separate metadata items on one row with spacing (`gap-2` or `gap-3`), never middle dots, pipes, or slashes.
+- Omit explanatory helper captions above or below controls when position and verb labels already state the action.

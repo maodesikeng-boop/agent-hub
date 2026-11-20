@@ -1,138 +1,93 @@
-# 在 Linux（Ubuntu）上用 Bellwood
+# Running Bellwood on Linux
 
-适用 Ubuntu 22.04 / 24.04，普通用户（不是 root）跑。每一步后面附官方出处，命令以出处为准（版本号会变）。
+Guide for deploying the Bellwood daemon on Ubuntu 22.04 or 24.04+ as a non-root user.
 
-## 1. 先弄清楚几件事
+## Key runtime rules
 
-- 守护进程只听 `127.0.0.1`（`src/daemon/ui-server/server.ts`），不能直接从别的电脑打开，也**不要**改成听 `0.0.0.0` 或在防火墙/安全组里开端口。从别的电脑用第 5 节的 SSH 隧道。
-- 网页的“选择…”（选文件夹）和“在 Finder / 资源管理器中显示、用默认程序打开”仅在桌面环境提供（macOS 用 `osascript` / `open`，Windows 原生桌面版经桌面外壳 `tauri-plugin-dialog` 与 `explorer.exe` 提供），Linux 服务器没有桌面。服务端把能力放在 `/api/state` 的 `server` 里，网页按它隐藏这些控件；主文件夹手填绝对路径，文件用“下载”。
-- Windows 桌面应用现已改为脱离 WSL2 的纯原生版（详见 `docs/windows-native-design.md`）；如果你的项目专门依赖 Linux 工具链并希望跑在自己的 WSL2 发行版内，可直接在你自己的 WSL2 Ubuntu 终端按本文部署 Linux 版守护进程，再从 Windows 浏览器访问 `http://127.0.0.1:4317`。
-- Worker 隔离（数据目录里普通 Worker 只能写自己的工作目录，只读 Worker 全盘禁写且禁读敏感凭据）在 Linux 上与 macOS 一样由 OS 沙箱强制执行：Linux 使用 `bubblewrap`（`bwrap`）包住进程（首次部署需跑一次 `sudo scripts/linux-sandbox-setup.sh` 配置 `bubblewrap`、`socat` 与 AppArmor）；若 OS 沙箱探测失败，守护进程直接拒绝派发和启动 Worker，不再退回规则兜底（见第 6 节）。
+- **Loopback-only HTTP listener**: `src/daemon/ui-server/server.ts` binds strictly to `127.0.0.1` (`4317` by default) and validates `Host` and `Origin` headers against DNS rebinding. Never expose this port on `0.0.0.0` or a public firewall; reach a Linux server through [Account mesh](account-mesh-design.md), [Feishu](feishu-design.md), or `ssh -L`.
+- **Headless capabilities**: `/api/state` reports server capabilities so the web UI hides desktop-only OS pickers (`Choose...` and `Show in Finder`); enter absolute folder paths directly and download files from the browser or Feishu.
+- **Mandatory `bubblewrap` Worker sandbox**: Linux enforces Worker write and `dataDir` read boundaries with `bubblewrap` (`bwrap`). Run `sudo scripts/linux-sandbox-setup.sh` once during setup; if `osSandboxAvailable()` fails, the daemon refuses to start Workers rather than running unsandboxed ([Linux sandbox design](linux-sandbox-design.md)).
 
-## 2. 装依赖
+## 1. Install Node.js, pnpm, and sandbox prerequisites
 
-**Node.js ≥ 24.12**（`package.json` 的 `engines`）。Ubuntu 自带的 apt 源版本太旧，从官方下载页装预编译包：<https://nodejs.org/en/download>（选 Linux、v24，下载 `node-v24.x.y-linux-x64.tar.xz` 或 `linux-arm64`，解压到 `/usr/local` 或 `~/.local`，保证 `node` 在 PATH 里）。
-
-**pnpm**（`packageManager` 写的是 pnpm 10）：Node 24 自带 Corepack，`corepack enable pnpm`；或 `npm install -g pnpm@latest-10`。出处：<https://pnpm.io/10.x/installation>。
-
-**git**、**ps**：`sudo apt install git procps`（Ubuntu Server 默认就有；最小镜像/容器可能没有。守护进程用 `ps` 认残留进程、`git` 管 worktree）。
-
-取代码、装依赖并完成 Worker 沙箱一次性配置：
+Bellwood requires **Node.js >= 24.12** (`node:sqlite` and native TypeScript execution), **pnpm 10**, `git`, and `procps` (`ps`):
 
 ```sh
-git clone https://github.com/maodesikeng-boop/agent-hub.git ~/agent-hub && cd ~/agent-hub
+sudo apt-get update && sudo apt-get install -y git procps
+# Install Node.js 24 LTS from https://nodejs.org/en/download into /usr/local or ~/.local, then enable pnpm:
+corepack enable pnpm
+
+git clone https://github.com/maodesikeng-boop/agent-hub.git ~/agent-hub
+cd ~/agent-hub
 pnpm install --frozen-lockfile
-pnpm build                          # 生成 dist/web（网页），之后 systemd 直接起守护进程，不用每次重新构建
-sudo scripts/linux-sandbox-setup.sh # 一次性安装 bubblewrap + socat 并配置 AppArmor（见第 6 节）
+pnpm build
+sudo scripts/linux-sandbox-setup.sh
 ```
 
-## 3. 装各厂商 CLI 并登录
+`sudo scripts/linux-sandbox-setup.sh` installs `bubblewrap` and `socat`, loads `/etc/apparmor.d/bwrap` so unprivileged user namespaces work under Ubuntu 24.04's AppArmor policy, and prints `bwrap-ok`.
 
-> 也可以不进服务器终端：在网页或桌面应用里打开 **`Settings → Providers`**（多设备联机时先在页面顶部选这台服务器），点 **Install** 一键安装、再直接在界面里登录（方案见 [providers-install-login-design.md](providers-install-login-design.md)）。下面是手动安装与登录的备选做法。
+## 2. Install and sign in to agent CLIs
 
-厂商清单以 `src/vendors/registry.ts` 的名单为准，现在是 claude、agy、codex；用哪家装哪家。`scripts/provision-linux.sh` 装的命令、最后提示的登录命令都读各家 `src/vendors/<厂商>/paths.ts` 的 `installCommand`、`headlessLoginCommand`（`node scripts/print-vendors.ts` 可以直接看）。**以守护进程所在的这个用户登录**（凭据存在这个用户的家目录里）。
+You can install and authenticate any supported CLI from **Settings** under **Providers** in the web UI (including headless device-code and loopback callback paste flows), or run `scripts/provision-linux.sh` or manual commands as the daemon's OS user:
 
-| 厂商 | 安装（Linux） | 登录 | 装到哪（守护进程会找） |
-| --- | --- | --- | --- |
-| claude（Claude Code） | `curl -fsSL https://claude.ai/install.sh \| bash`，或 `npm install -g @anthropic-ai/claude-code` | 运行 `claude`；远程没浏览器时，浏览器里登录后把页面上的登录码粘回终端，或用 `claude auth login` | `~/.local/bin/claude`（原生安装）；npm 全局 |
-| agy（Antigravity CLI） | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` | 运行 `agy`；SSH 里会打印授权链接，本地浏览器登录后把授权码粘回；也可用 Gemini API key。Linux 登录令牌存在系统钥匙环（Secret Service / D-Bus），无桌面时见 agy 的 troubleshooting | `~/.local/bin/agy` |
-| codex（Codex CLI） | `curl -fsSL https://chatgpt.com/codex/install.sh \| sh`，或 `npm install -g @openai/codex` | `codex login --device-auth`（无浏览器的机器用设备码） | `~/.local/bin/codex`（`CODEX_INSTALL_DIR` 可改）；npm 全局 |
+| Vendor | Install on Linux | Headless sign-in |
+| --- | --- | --- |
+| Claude Code (`claude`) | `curl -fsSL https://claude.ai/install.sh \| bash` | `claude auth login` |
+| Codex (`codex`) | `curl -fsSL https://chatgpt.com/codex/install.sh \| sh` | `codex login --device-auth` |
+| Antigravity (`agy`) | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` | Run `agy` (paste auth code) or set `GEMINI_API_KEY` |
+| Pi (`pi`) | `curl -fsSL https://pi.dev/install.sh \| sh` | Run `pi`, then `/login` |
+| DeepSeek Harness (`dsh`) | `npm install -g @deepseek-ai/dsh@0.2.2-rc.1` | Write `DEEPSEEK_API_KEY=<key>` to `~/.dsh/.env` |
+| Cursor (`cursor-agent`) | `curl https://cursor.com/install -fsS \| bash` | `cursor-agent login` |
 
-出处：
-- claude 安装与 `~/.local/bin/claude`：<https://code.claude.com/docs/en/setup>（“Install with npm”、安装脚本一节）；登录与 SSH 里的登录码：<https://code.claude.com/docs/en/troubleshoot-install>（“OAuth login fails in WSL2, SSH, or containers”）、<https://code.claude.com/docs/en/authentication>（Linux 凭据存 `~/.claude/.credentials.json`）。
-- agy 安装、默认位置 `~/.local/bin/agy`、SSH 登录、钥匙环：<https://www.agy.dev/docs/cli/install>、<https://antigravity.google/docs/cli/troubleshooting>。
-- codex 安装与 `CODEX_INSTALL_DIR` 默认 `~/.local/bin`：<https://developers.openai.com/codex/cli>、<https://developers.openai.com/codex/environment-variables>；无头登录：<https://developers.openai.com/codex/auth>（“Login on headless devices”）。
+When resolving CLI binaries on Linux (`src/shared/paths.ts` `linuxInstallDirs`), the daemon checks `AGENT_HUB_<VENDOR>`, then `PATH`, then `~/.local/bin`, `~/.npm-global/bin`, `/usr/local/bin`, and `/home/linuxbrew/.linuxbrew/bin`.
 
-### 守护进程怎么找 CLI
+## 3. Run as a `systemd --user` service
 
-先看 `PATH`（命中就用命令名）；`PATH` 里没有再按顺序试这些位置（`src/shared/paths.ts` 的 `linuxInstallDirs`，每家厂商都有，`VENDOR_FALLBACK_PATHS` 保证加厂商不会漏）：
-
-1. `~/.local/bin`：三家的安装脚本都装在这里；
-2. `~/.npm-global/bin`：npm 官方“全局安装不用 sudo”的前缀做法（<https://docs.npmjs.com/resolving-eacces-permissions-errors-when-installing-packages-globally>）；
-3. `/usr/local/bin`：npm 全局安装在 Linux 上的默认前缀；
-4. `/home/linuxbrew/.linuxbrew/bin`：Homebrew 在 Linux 上的默认前缀（<https://docs.brew.sh/Homebrew-on-Linux>）。
-
-codex 另外还认 `~/.codex/plugins/.plugin-appserver/codex-cli/bin/codex`（原有位置）。这样 systemd 用户服务的 `PATH` 里没有 `~/.local/bin` 也能找到。装在别处的用环境变量指定：`AGENT_HUB_CLAUDE`、`AGENT_HUB_AGY`、`AGENT_HUB_CODEX`（写绝对路径，`~/` 会展开）。
-
-## 4. 以 systemd 用户服务常驻
-
-`~/.config/systemd/user/agent-hub.service`（用户单元放这里：<https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html>，`%h` 是家目录）：
+Create `~/.config/systemd/user/agent-hub.service`:
 
 ```ini
 [Unit]
-Description=agent-hub
+Description=Bellwood daemon (agent-hub)
 
 [Service]
 WorkingDirectory=%h/agent-hub
-# systemd 用户服务的 PATH 很短，没有 ~/.local/bin；Worker 里的 node、pnpm、git 都靠它。按你装的位置改。
 Environment=PATH=%h/.local/bin:%h/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/usr/bin/env node src/daemon/main.ts
 Restart=on-failure
 RestartSec=5
-# 关机最多 30 秒（SHUTDOWN_TOTAL_MS），多留几秒
 TimeoutStopSec=40
 
 [Install]
 WantedBy=default.target
 ```
 
+Enable the service and keep it running after SSH logout:
+
 ```sh
 systemctl --user daemon-reload
 systemctl --user enable --now agent-hub
-loginctl enable-linger "$USER"   # 没登录也开机自启、退出 SSH 后不被停
+loginctl enable-linger "$USER"
 journalctl --user -u agent-hub -f
 ```
 
-热重启（项目经理 `hub self-reload [--build]`、网页 `POST /api/self-reload`）：守护进程看到 systemd 设的 `INVOCATION_ID` 就知道退出后有人拉起；
-等全库空闲后正常关机（最多等 10 分钟，`src/shared/limits.ts` 的 `SELF_RELOAD_DRAIN_MAX_MS`；之后不再等 Worker 轮次和系统消息，它们重启后自动重发，只等项目经理、总助正在回用户的那一轮回完），以退出码 75（`apps/desktop/contract.json` 的 `reloadExitCode`）退出，`Restart=on-failure` 过 `RestartSec` 拉起新进程。
-`--build` 先把网页构建到 `dist/` 下的暂存目录，构建失败就取消，不动正在用的 `dist/web`。不是 systemd、也不是 Bellwood 应用拉起的（终端里 `pnpm start`）不接受热重启。
+Keep `AGENT_HUB_HOME` (`~/.agent-hub` by default) short enough that `<AGENT_HUB_HOME>/run/hub.sock` stays under the `103`-byte Unix domain socket path limit. When running under `systemd` (`INVOCATION_ID` set), `hub self-reload [--build]` drains active turns (up to `SELF_RELOAD_DRAIN_MAX_MS`) and exits with code `75` (`apps/desktop/contract.json`) so `Restart=on-failure` launches the updated daemon cleanly.
 
-- `Environment=`、`Restart=`、`TimeoutStopSec=`：<https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html>、<https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html>。
-- `loginctl enable-linger`（让用户管理器开机就起、退出登录后不结束）：<https://www.freedesktop.org/software/systemd/man/latest/loginctl.html>。
-- 想改端口、数据目录：在 `[Service]` 里加 `Environment=AGENT_HUB_PORT=4317`、`Environment=AGENT_HUB_HOME=%h/.agent-hub`（数据目录里的 `run/hub.sock` 路径有长度上限，别设太深）。
-- 更新代码：`git pull && pnpm install --frozen-lockfile && pnpm build && systemctl --user restart agent-hub`。
+## 4. Connect from your laptop or phone
 
-登录链接在日志里（`journalctl --user -u agent-hub`，形如 `http://127.0.0.1:4317/auth?token=…`）；令牌也在 `~/.agent-hub/state/ui-token`，重启不变。
-
-## 5. 从别的电脑安全访问
-
-在服务器和个人电脑上登录同一个 GitHub 账号即可自动互通（同网直连、跨网走端到端加密中继，无需开公网端口或装 VPN，见 `docs/account-mesh-design.md`）：
-
-```sh
-node src/mesh/main.ts login
-```
-
-临时单独看这台服务器的网页时，也可以用 `ssh -L` 把本机端口转到服务器的 `127.0.0.1`（<https://man.openbsd.org/ssh.1>）：
-
-```sh
-ssh -N -L 4317:127.0.0.1:4317 <用户>@<服务器>
-```
-
-然后在本机浏览器打开日志里那条登录链接（`http://127.0.0.1:4317/auth?token=…`）。**本机端口必须和服务器上的 `AGENT_HUB_PORT` 一样**：界面服务会校验 `Host` 和 `Origin` 的端口（防 DNS 重绑定，`server.ts`），端口对不上回 403。
-
-## 6. Worker 沙箱：Linux 上由 `bubblewrap`（`bwrap`）强制隔离
-
-Linux 与 macOS 走同一套外层 OS 沙箱后端表（`src/daemon/driver/write-scope.ts` 的 `OS_SANDBOX_BACKENDS`），**不再退回提示词或命令行字面规则兜底**：
-
-- **普通 Worker（`bwrapArgs`）**：整个 Worker 进程包进 `bwrap`（`--unshare-user --disable-userns --unshare-pid --bind / / --proc /proc --dev-bind /dev /dev --perms 0700 --tmpfs /run/user/<uid>`），先把数据目录（`~/.agent-hub`）以 `--ro-bind` 只读挂载保护 `state/` 与其他 Worker 目录，再把当前 Worker 自己的可写目录（worktree）以 `--bind` 可写挂回；同时隔离 `/proc`（隐藏沙箱外进程）、用空 `tmpfs` 遮住 `/run/user/<uid>`（防借宿主机 `systemd --user` / D-Bus 写穿）、加 `--disable-userns` 禁止嵌套新建 userns，并自动关闭各厂商 CLI 自带沙箱避免嵌套报错。与 macOS 一样，**数据目录之外不做写入限制**，Worker 仍以当前系统用户权限读写项目目录与外部路径。
-- **只读 Worker**：`claude` 与 `codex` 使用各自原生只读沙箱（`claude` 依赖 `bubblewrap` + `socat`，`codex` 使用自带 Linux 沙箱）；`agy` 包进外层只读 `bwrap`（`readonlyBwrapArgs`，全盘 `--ro-bind / /`，仅放行会话私有临时目录、运行时与缓存目录，已存在的敏感目录挂 `--tmpfs`、敏感文件及启动时 `scanSecretGlobs` 在 `cwd`/`addDirs` 扫出的 `.env` 等密钥文件挂 `--ro-bind /dev/null`）。
-- **Ubuntu 24.04+ 一次性初始化（`scripts/linux-sandbox-setup.sh`）**：Ubuntu 24.04 默认开启 `kernel.apparmor_restrict_unprivileged_userns=1`，未配 AppArmor profile 时非特权 `bwrap` 建 userns 会报 `Permission denied`。首次部署跑一次幂等脚本：
+- **Account mesh (recommended)**: Run `node src/mesh/main.ts login` on the server, sign in to the same GitHub account on your Mac or Windows desktop, and confirm the six-digit verification code.
+- **Feishu**: Run `node src/feishu/main.ts connect` and scan the QR code in Feishu on your phone.
+- **Direct SSH port forward (standalone web access)**:
   ```sh
-  sudo scripts/linux-sandbox-setup.sh
+  ssh -N -L 4317:127.0.0.1:4317 <user>@<server>
   ```
-  脚本会自动安装 `bubblewrap` 与 `socat`，写入并加载 `/etc/apparmor.d/bwrap` 放行 `/usr/bin/bwrap` 的 `userns`，最后切回普通用户跑一次探测命令验证（输出 `bwrap-ok`）。
-- **探测失败一律阻断（无规则兜底）**：守护进程通过 `probeLinuxBwrap`（`osSandboxAvailable`）执行与真实启动一致的 `bwrap` 探测命令；若沙箱不可用，普通 Worker 与只读 Worker **一律报错拒绝派发和启动**，并提示执行 `sudo scripts/linux-sandbox-setup.sh`。探测结果**只缓存 `true`、不缓存 `false`**，管理员跑完配置脚本后无需重启 `agent-hub` 守护进程，下次派 Worker 即刻生效。项目经理（`scope === null`）不受沙箱限制。
+  Use the **same local port** (`4317`) as `AGENT_HUB_PORT` on the server so `Host` and `Origin` port validation succeeds, then open the login link from `journalctl --user -u agent-hub` (token stored in `~/.agent-hub/state/ui-token`).
 
-完整设计与已知边界（如只读通配启动时扫描、勿在同用户下开不设防的外部 `tmux` socket 等）见 `docs/write-scope.md` 与 `docs/linux-sandbox-design.md`。
+## 5. Platform differences summary
 
-## 7. 跟 macOS 不一样的地方（汇总）
-
-| 项 | macOS | Linux |
-| --- | --- | --- |
-| 选择文件夹（“选择…”） | 弹系统对话框（osascript） | 隐藏，手填绝对路径 |
-| 在 Finder 中显示 / 用默认程序打开 | `open` | 隐藏，用“下载” |
-| Worker 沙箱 | `sandbox-exec` 强制（系统自带） | `bubblewrap`（`bwrap`）强制（首次需跑 `sudo scripts/linux-sandbox-setup.sh` 配置 `bubblewrap`、`socat` 与 AppArmor；不可用时拒绝起 Worker） |
-| CLI 查找 | `PATH`；codex 另看 ChatGPT.app 里带的 | `PATH`，再 `~/.local/bin`、`~/.npm-global/bin`、`/usr/local/bin`、Linuxbrew |
-| agent 接口 socket 路径上限 | 103 字节 | 107 字节（用同一个更保守的 103，不放宽） |
-| 发给用户的文件，不许分享的路径 | 另含 `Library/Keychains` 等 | 另含 `~/.local/share/keyrings`、浏览器配置、`/proc` |
-| 防闲置睡眠 | 有会话在干活时起 `/usr/bin/caffeinate -i -w <守护进程 pid>`，全闲下来 2 分钟后结束（合盖用电池照样会睡，macOS 强制） | 无（服务器常开；以后支持 Linux 笔记本再加 `systemd-inhibit`） |
+| Capability | macOS | Windows | Linux |
+| --- | --- | --- | --- |
+| Desktop shell | Native Swift (`Bellwood.app`) | Native Rust + Tauri 2 (`fusa-desktop.exe`) | Headless daemon + browser, mesh, or Feishu |
+| Worker OS sandbox | `sandbox-exec` (`seatbelt`) | `fusa-run.exe` Job Object + restricted token + NTFS ACLs + Win11 24H2+ MXC | `bubblewrap` (`bwrap`) + `/etc/apparmor.d/bwrap` |
+| Agent IPC | `run/hub.sock` (`<= 103` bytes) | Named pipe (`\\.\pipe\...`) | `run/hub.sock` (`<= 103` bytes) |
+| Folder picker & reveal | `NSOpenPanel` / `osascript` / `open` | `tauri-plugin-dialog` / `explorer.exe` | Hidden in UI; enter absolute path and download files |
+| Sleep inhibition | `/usr/bin/caffeinate -i -w <pid>` | `SetThreadExecutionState` | None (always-on server) |
