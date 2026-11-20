@@ -38,6 +38,7 @@ export type {
   AcpLaunchContext,
   AcpPermissionDecisionContext,
   AcpPermissionsConfig,
+  AcpPromptOutcomeCheck,
   AcpReadonlySandboxConfig,
   AcpSessionSetupConfig,
   AcpSessionSetupContext,

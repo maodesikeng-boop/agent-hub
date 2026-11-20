@@ -24,6 +24,7 @@ export async function runAcpPromptTurn(
   startedAt: number,
 ): Promise<void> {
   try {
+    const checkOutcome = host.config.watchPromptOutcome?.({ sessionId: acpSessionId }) ?? null;
     const res = await proc.acpConn.agent.request(methods.agent.session.prompt, {
       sessionId: acpSessionId,
       prompt: promptBlocks,
@@ -31,6 +32,8 @@ export async function runAcpPromptTurn(
     // Let streamed session/update notifications from the same chunk land before the turn ends.
     await Promise.resolve();
     await Promise.resolve();
+    if (proc.streamEnded || st.proc !== proc) return;
+    const vendorError = checkOutcome && res.stopReason === "end_turn" ? await checkOutcome(res).catch(() => null) : null;
     if (proc.streamEnded || st.proc !== proc) return;
 
     const at = Date.now();
@@ -40,13 +43,13 @@ export async function runAcpPromptTurn(
 
     const interrupted =
       res.stopReason === "cancelled" || st.turnInterrupted || st.stopRequested;
-    const ok = !interrupted && res.stopReason !== "refusal";
+    const ok = !interrupted && res.stopReason !== "refusal" && vendorError === null;
     const error =
       !ok && !interrupted
-        ? {
+        ? (vendorError ?? {
             subtype: res.stopReason,
             message: `ACP turn stopped with reason: ${res.stopReason}`,
-          }
+          })
         : undefined;
 
     finishAcpTurn(host, st, proc, batch, {

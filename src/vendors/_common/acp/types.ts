@@ -10,6 +10,7 @@ import type {
   JsonRpcId,
   McpServer,
   PermissionOptionKind,
+  PromptResponse,
   RequestPermissionOutcome,
   RequestPermissionRequest,
   SessionConfigOption,
@@ -172,6 +173,8 @@ export interface AcpErrorConfig {
   isSessionNotFoundError?: (error: unknown) => boolean;
 }
 
+export type AcpPromptOutcomeCheck = (response: PromptResponse) => Promise<{ subtype: string; message: string } | null>;
+
 export interface AcpStaleProcessConfig {
   matchesCommand?: (psArgs: string, row: AgentSessionRow, executablePath: string) => boolean;
 }
@@ -199,6 +202,8 @@ export interface AcpDriverConfig {
   timeouts?: AcpTimeoutsConfig;
   errors?: AcpErrorConfig;
   staleProcess?: AcpStaleProcessConfig;
+  // Called before each prompt for agents that answer a failed turn with end_turn; the check reports the real failure.
+  watchPromptOutcome?: (context: { sessionId: string }) => AcpPromptOutcomeCheck | null;
   // turn: per-turn deltas (default); cumulative: running totals for the current process.
   usageMode?: "turn" | "cumulative";
   extractToolUse?: (
