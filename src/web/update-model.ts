@@ -2,7 +2,7 @@ import { useMutation, useQuery, type Query, type QueryClient } from "@tanstack/r
 import { useSyncExternalStore } from "react";
 import { UPDATE_CHECK_RETRY_MS, UPDATE_CHECK_TTL_MS, type InstallerTarget, type UpdateAvailable, type UpdateStatus } from "../shared/index.ts";
 import { fetchUpdate, postUpdateCheck } from "./client.ts";
-import { useHubQueryClient } from "./query-client.ts";
+import { guardedQueryFn, queryGenerationOf, useHubQueryClient } from "./query-client.ts";
 
 export const UPDATE_QUERY_KEY = ["update"] as const;
 export const UPDATE_DISMISSED_KEY = "agent-hub.update.dismissed";
@@ -15,30 +15,10 @@ function updateRefreshMs(query: Query<UpdateStatus, Error, UpdateStatus, typeof 
   return status === "error" || data?.status === "unavailable" ? UPDATE_CHECK_RETRY_MS : UPDATE_CHECK_TTL_MS;
 }
 
-interface CheckGeneration {
-  gen: number;
-  latestCheck: number;
-}
-
-const generations = new WeakMap<QueryClient, CheckGeneration>();
-
-// Ordering uses a local counter rather than the daemon's checkedAt, which goes backward when its clock or process resets.
-function generationOf(qc: QueryClient): CheckGeneration {
-  let state = generations.get(qc);
-  if (state === undefined) {
-    state = { gen: 0, latestCheck: 0 };
-    generations.set(qc, state);
-  }
-  return state;
-}
+const UPDATE_GENERATION_ID = "update";
 
 function updateQueryFn(qc: QueryClient) {
-  return async () => {
-    const state = generationOf(qc);
-    const genAtStart = state.gen;
-    const fetched = await fetchUpdate();
-    return genAtStart === state.gen ? fetched : (qc.getQueryData<UpdateStatus>(UPDATE_QUERY_KEY) ?? fetched);
-  };
+  return guardedQueryFn(qc, UPDATE_GENERATION_ID, UPDATE_QUERY_KEY, fetchUpdate);
 }
 
 export function useUpdateStatus() {
@@ -60,14 +40,14 @@ export function useCheckForUpdates() {
     {
       mutationFn: postUpdateCheck,
       onMutate: () => {
-        const state = generationOf(qc);
+        const state = queryGenerationOf(qc, UPDATE_GENERATION_ID);
         state.gen += 1;
-        state.latestCheck = state.gen;
-        return state.latestCheck;
+        state.latest = state.gen;
+        return state.latest;
       },
       onSuccess: (status, _vars, checkId) => {
-        const state = generationOf(qc);
-        if (checkId !== state.latestCheck) return;
+        const state = queryGenerationOf(qc, UPDATE_GENERATION_ID);
+        if (checkId !== state.latest) return;
         state.gen += 1;
         qc.setQueryData<UpdateStatus>(UPDATE_QUERY_KEY, status);
       },

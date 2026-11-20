@@ -137,7 +137,7 @@ function ProfilePane({ model, content: c, mobile, back, profile }: PaneProps & {
   const entry = c.profileEntry;
   const here = routeDeviceOf(current.key);
   const local = current.key === LOCAL_DEVICE;
-  if (local && route?.view === "profile" && route.page === "capabilities") {
+  if (local && route?.view === "profile" && route.page === "capabilities" && profile.archivedAt == null) {
     return (
       <ProjectCapabilitiesPage
         key={c.keyOf(profile.id)}

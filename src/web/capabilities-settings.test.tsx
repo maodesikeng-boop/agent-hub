@@ -3,6 +3,7 @@ import { userEvent } from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { AGENT_VENDORS, DEFAULT_AGENT_VENDOR, vendorLabel, type StateSnapshot } from "../shared/index.ts";
 import { App } from "./App.tsx";
+import { queryClient } from "./query-client.ts";
 import { FakeApi, FakeWebSocket, installFakeWebSocket, makeConvSnapshot, makeFolder, makePm, makeProject, makeSnapshot } from "./test-utils.ts";
 
 const lead = vendorLabel(DEFAULT_AGENT_VENDOR);
@@ -177,6 +178,83 @@ describe("设置 → Capabilities：Project defaults、总助、单个项目三�
     expect(within(shared).getByRole("switch", { name: "linear" })).toHaveAttribute("aria-checked", "false");
   });
 
+  it("保存还没回来时有个旧 GET 读了旧状态：保存落库后旧 GET 才返回，也不盖回开关", async () => {
+    const { api, user } = await boot();
+    const panel = await openCapabilities(user);
+    const shared = region(panel, "Shared");
+    const patched = api.patchCapabilities;
+    let releasePatch = () => {};
+    api.patchCapabilities = async (scope, body) => {
+      await new Promise<void>((resolve) => (releasePatch = resolve));
+      return patched(scope, body);
+    };
+    await user.click(within(shared).getByRole("switch", { name: "linear" }));
+    await waitFor(() => expect(patches(api, /^\/api\/defaults\/capabilities$/)).toHaveLength(1));
+    const original = api.getCapabilities;
+    let releaseGet = () => {};
+    api.getCapabilities = (scope, refresh) => {
+      const reply = original(scope, refresh);
+      return new Promise((resolve) => (releaseGet = () => resolve(reply)));
+    };
+    void queryClient.refetchQueries({ queryKey: ["capabilities", "default"] });
+    await waitFor(() => expect(api.callsTo("GET", /^\/api\/defaults\/capabilities$/)).toHaveLength(2));
+    await act(async () => releasePatch());
+    await waitFor(() => expect(shared).toHaveTextContent("4 of 5"));
+    await act(async () => releaseGet());
+    expect(within(shared).getByRole("switch", { name: "linear" })).toHaveAttribute("aria-checked", "false");
+    expect(shared).toHaveTextContent("4 of 5");
+  });
+
+  it("普通 GET 读了旧清单还没回来时点 Refresh：重扫出的新条目不被晚到的 GET 抹掉", async () => {
+    const { api, user } = await boot();
+    const panel = await openCapabilities(user);
+    const original = api.getCapabilities;
+    let releaseGet = () => {};
+    api.getCapabilities = (scope, refresh) => {
+      if (refresh) {
+        const [first, ...rest] = api.capabilityInventory.groups;
+        const added = { key: "mcp:freshly-added", kind: "mcp" as const, name: "freshly-added", description: null, groupId: "mcp:global", vendors: AGENT_VENDORS };
+        api.capabilityInventory = {
+          ...api.capabilityInventory,
+          items: [...api.capabilityInventory.items, added],
+          groups: [{ ...first!, itemKeys: [...first!.itemKeys, added.key] }, ...rest],
+        };
+        return original(scope, refresh);
+      }
+      const reply = original(scope, refresh);
+      return new Promise((resolve) => (releaseGet = () => resolve(reply)));
+    };
+    void queryClient.refetchQueries({ queryKey: ["capabilities", "default"] });
+    await waitFor(() => expect(api.callsTo("GET", /^\/api\/defaults\/capabilities$/)).toHaveLength(2));
+    await user.click(within(panel).getByRole("button", { name: "Refresh" }));
+    expect(await within(panel).findByRole("switch", { name: "freshly-added" })).toBeInTheDocument();
+    await act(async () => releaseGet());
+    expect(within(panel).getByRole("switch", { name: "freshly-added" })).toBeInTheDocument();
+  });
+
+  it("重扫还没回来时切走再切回，在新挂载的面板里拨开关：旧面板的重扫晚到也不盖回", async () => {
+    const { api, user } = await boot();
+    const panel = await openCapabilities(user);
+    const original = api.getCapabilities;
+    let release = () => {};
+    api.getCapabilities = (scope, refresh) => {
+      const reply = original(scope, refresh);
+      return refresh ? new Promise((resolve) => (release = () => resolve(reply))) : reply;
+    };
+    await user.click(within(panel).getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(api.callsTo("GET", /^\/api\/defaults\/capabilities$/).some((c) => c.query.get("refresh") === "1")).toBe(true));
+    await user.click(within(panel).getByRole("radio", { name: "Router" }));
+    await waitFor(() => expect(within(panel).queryByRole("switch", { name: "linear" })).toHaveAttribute("aria-checked", "false"));
+    await user.click(within(panel).getByRole("radio", { name: "Project defaults" }));
+    const shared = await within(panel).findByRole("region", { name: "Shared" });
+    await user.click(within(shared).getByRole("switch", { name: "linear" }));
+    await waitFor(() => expect(patches(api, /^\/api\/defaults\/capabilities$/)).toHaveLength(1));
+    await waitFor(() => expect(shared).toHaveTextContent("4 of 5"));
+    await act(async () => release());
+    await waitFor(() => expect(api.callsTo("GET", /^\/api\/defaults\/capabilities$/).filter((c) => c.query.get("refresh") !== "1").length).toBeGreaterThanOrEqual(2));
+    expect(within(shared).getByRole("switch", { name: "linear" })).toHaveAttribute("aria-checked", "false");
+  });
+
   it("Refresh 带 ?refresh=1 重扫清单", async () => {
     const { api, user } = await boot();
     const panel = await openCapabilities(user);
@@ -213,6 +291,13 @@ describe("资料页的能力入口：直接进当前项目的能力页", () => {
     const dialog = await screen.findByRole("dialog", { name: "Settings" });
     expect(within(dialog).getByRole("tab", { name: "Capabilities" })).toHaveAttribute("aria-selected", "true");
     expect(within(dialog).getByRole("radio", { name: "Project defaults" })).toBeChecked();
+  });
+
+  it("手输已归档项目的能力页地址：回落到只读资料页，不渲染可编辑的能力页", async () => {
+    await boot("#/pm/3/capabilities");
+    const page = await screen.findByRole("region", { name: "旧项目's profile" });
+    await within(page).findByRole("textbox", { name: "Persona" });
+    expect(screen.queryByRole("region", { name: "旧项目's capabilities" })).not.toBeInTheDocument();
   });
 
   it("归档的项目经理没有能力入口", async () => {

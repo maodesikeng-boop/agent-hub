@@ -1,5 +1,5 @@
 import { useMutation, useQuery, type Query, type QueryClient } from "@tanstack/react-query";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import {
   AGENT_VENDORS,
   EMPTY_CAPABILITY_LAYER,
@@ -26,7 +26,7 @@ import {
 import { resolvePmLook, type SlimeLook } from "../shared/slimes.ts";
 import { localClient } from "./client.ts";
 import { errorText, type ErrorInfo } from "./format.ts";
-import { useHubQueryClient } from "./query-client.ts";
+import { guardedQueryFn, queryGenerationOf, useHubQueryClient } from "./query-client.ts";
 
 export type CapabilityScopeKey = "default" | "router" | `pm:${PmId}`;
 
@@ -313,7 +313,8 @@ function invalidateOtherViews(qc: QueryClient, except: CapabilityScopeKey, onlyP
 
 export function useCapabilitiesView(scope: CapabilityScope) {
   const qc = useHubQueryClient();
-  return useQuery({ queryKey: capabilitiesQueryKey(scope), queryFn: () => localClient.fetchCapabilities(scope) }, qc);
+  const queryKey = capabilitiesQueryKey(scope);
+  return useQuery({ queryKey, queryFn: guardedQueryFn(qc, capabilityScopeKey(scope), queryKey, () => localClient.fetchCapabilities(scope)) }, qc);
 }
 
 export function useCustomizedCapabilityPms(): readonly PmId[] | undefined {
@@ -335,7 +336,7 @@ export function useCapabilityEditor(scope: CapabilityScope) {
   const scopeKey = capabilityScopeKey(scope);
   const [error, setError] = useState<ErrorInfo | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const generation = useRef(0);
+  const state = queryGenerationOf(qc, scopeKey);
   const { mutate } = useMutation(
     {
       mutationKey: queryKey,
@@ -343,12 +344,13 @@ export function useCapabilityEditor(scope: CapabilityScope) {
       scope: { id: queryKey.join(":") },
       mutationFn: (edit: CapabilityEdit) => sendEdit(scope, edit),
       onMutate: async (edit: CapabilityEdit) => {
-        generation.current++;
+        state.gen++;
         setError(null);
         await qc.cancelQueries({ queryKey });
         qc.setQueryData<CapabilitiesView>(queryKey, (view) => view && (edit.kind === "patch" ? patchedView(view, edit.patch) : resetView(view)));
       },
       onSuccess: (view: CapabilitiesView) => {
+        state.gen++;
         if (qc.isMutating({ mutationKey: queryKey }) <= 1) qc.setQueryData(queryKey, view);
         if (scope.kind === "default") invalidateOtherViews(qc, scopeKey, true);
         if (scope.kind === "pm") void qc.invalidateQueries({ queryKey: CUSTOMIZED_CAPABILITIES_QUERY_KEY });
@@ -363,14 +365,19 @@ export function useCapabilityEditor(scope: CapabilityScope) {
   const apply = useCallback((patches: readonly CapabilitiesPatch[]) => patches.forEach((patch) => mutate({ kind: "patch", patch })), [mutate]);
   const reset = useCallback(() => mutate({ kind: "reset" }), [mutate]);
   const refresh = async () => {
-    const startedAt = generation.current;
+    state.gen++;
+    const refreshId = state.gen;
+    state.latest = refreshId;
     setRefreshing(true);
     setError(null);
     try {
       const view = await localClient.fetchCapabilities(scope, { refresh: true });
-      // A toggle made while the rescan ran is newer than this response, so refetch instead of writing it.
-      if (generation.current === startedAt && qc.isMutating({ mutationKey: queryKey }) === 0) qc.setQueryData(queryKey, view);
-      else void qc.invalidateQueries({ queryKey });
+      // A newer rescan owns the write; a toggle made meanwhile is newer than this response, so refetch instead of writing it.
+      if (state.latest !== refreshId) return;
+      if (state.gen === refreshId && qc.isMutating({ mutationKey: queryKey }) === 0) {
+        state.gen++;
+        qc.setQueryData(queryKey, view);
+      } else void qc.invalidateQueries({ queryKey });
       invalidateOtherViews(qc, scopeKey, false);
     } catch (err) {
       setError(errorText(err));
