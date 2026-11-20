@@ -90,6 +90,7 @@ import {
   type TaskNodeKey,
   type UpdateRouterSettingsRequest,
   type UpdateRouterSettingsResponse,
+  type UpdateStatus,
   type UserBlockerId,
   type VendorSyncApplyRequest,
   type VendorSyncApplyResponse,
@@ -376,6 +377,9 @@ export function postLogoutAll(): Promise<void> {
 export function postLoginLink(): Promise<LoginLinkResponse> {
   return postJson<LoginLinkResponse>(API_PATHS.loginLinks);
 }
+
+export const fetchUpdate = () => request<UpdateStatus>(API_PATHS.update);
+export const postUpdateCheck = () => postJson<UpdateStatus>(API_PATHS.updateCheck);
 
 export type FileActionTarget = { kind: "sent"; messageId: MessageId; index: number } | { kind: "upload"; id: string };
 

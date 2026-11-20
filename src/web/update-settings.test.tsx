@@ -1,0 +1,164 @@
+import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { userEvent } from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { UpdateStatus } from "../shared/index.ts";
+import { App } from "./App.tsx";
+import { SidebarTools } from "./components/SidebarTools.tsx";
+import { UpdateSettings } from "./components/UpdateSettings.tsx";
+import { FakeApi, FakeWebSocket, installFakeWebSocket, makeConvSnapshot, makePm, makeSnapshot } from "./test-utils.ts";
+import { UPDATE_DISMISSED_KEY } from "./update-model.ts";
+
+const RELEASES = "https://github.com/maodesikeng-boop/agent-hub/releases";
+const DOWNLOAD = `${RELEASES}/download/v0.3.0`;
+
+function bundledUpdate(overrides: Partial<Extract<UpdateStatus, { status: "update_available" }>> = {}): UpdateStatus {
+  return {
+    status: "update_available",
+    currentVersion: "0.2.0",
+    installKind: "bundled",
+    platformTarget: "macos-arm64",
+    releaseUrl: `${RELEASES}/tag/v0.3.0`,
+    checkedAt: 1_000,
+    latestVersion: "0.3.0",
+    tagName: "v0.3.0",
+    publishedAt: "2026-11-20T08:00:00Z",
+    installer: { fileName: "Bellwood-macos-arm64.dmg", downloadUrl: `${DOWNLOAD}/Bellwood-macos-arm64.dmg`, sha256Url: `${DOWNLOAD}/Bellwood-macos-arm64.dmg.sha256` },
+    ...overrides,
+  };
+}
+
+const upToDate: UpdateStatus = { status: "up_to_date", currentVersion: "0.2.0", installKind: "bundled", platformTarget: "macos-arm64", releaseUrl: `${RELEASES}/tag/v0.2.0`, checkedAt: 1_000 };
+
+function serve(status: UpdateStatus | null, checked?: UpdateStatus): FakeApi {
+  const api = new FakeApi(makeSnapshot({ pms: [makePm({ id: 1, name: "小林" })], conversations: [makeConvSnapshot([], { conversation: { id: 1, pmId: 1, title: "小林" } })] }));
+  if (status !== null) api.update = () => ({ status: 200, body: status });
+  if (checked !== undefined) api.updateCheck = () => ({ status: 200, body: checked });
+  api.install();
+  return api;
+}
+
+const group = () => screen.getByRole("region", { name: "Updates" });
+
+function renderTools(onOpenUpdates = vi.fn(), narrow = false) {
+  render(<SidebarTools narrow={narrow} quota={undefined} quotaFetchable={false} onNewPm={() => {}} onOpenSettings={() => {}} onOpenUpdates={onOpenUpdates} />);
+  return onOpenUpdates;
+}
+
+beforeEach(() => localStorage.removeItem(UPDATE_DISMISSED_KEY));
+
+describe("Updates settings group", () => {
+  it("offers the installer, its checksum, and release notes for a bundled install; skipping keeps the offer but hides the reminder", async () => {
+    serve(bundledUpdate());
+    render(<UpdateSettings />);
+    expect(await within(group()).findByText("v0.3.0 available")).toBeInTheDocument();
+    expect(within(group()).getByText("Bellwood v0.2.0")).toBeInTheDocument();
+    const download = within(group()).getByRole("link", { name: "Download for macOS" });
+    expect(download).toHaveAttribute("href", `${DOWNLOAD}/Bellwood-macos-arm64.dmg`);
+    expect(download).toHaveAttribute("target", "_blank");
+    expect(within(group()).getByRole("link", { name: "SHA-256" })).toHaveAttribute("href", `${DOWNLOAD}/Bellwood-macos-arm64.dmg.sha256`);
+    expect(within(group()).getByRole("link", { name: "Release notes" })).toHaveAttribute("href", `${RELEASES}/tag/v0.3.0`);
+    expect(within(group()).queryByText("Source")).toBeNull();
+    await userEvent.click(within(group()).getByRole("button", { name: "Skip this version" }));
+    expect(localStorage.getItem(UPDATE_DISMISSED_KEY)).toBe("0.3.0");
+    expect(within(group()).queryByRole("button", { name: "Skip this version" })).toBeNull();
+    expect(within(group()).getByRole("link", { name: "Download for macOS" })).toBeInTheDocument();
+  });
+
+  it("labels the Windows installer", async () => {
+    serve(bundledUpdate({ platformTarget: "windows-x64", installer: { fileName: "Bellwood-windows-x64-setup.exe", downloadUrl: `${DOWNLOAD}/x.exe`, sha256Url: `${DOWNLOAD}/x.exe.sha256` } }));
+    render(<UpdateSettings />);
+    expect(await within(group()).findByRole("link", { name: "Download for Windows" })).toHaveAttribute("href", `${DOWNLOAD}/x.exe`);
+  });
+
+  it("keeps the offer without a download button when the release lacks the installer", async () => {
+    serve(bundledUpdate({ installer: null }));
+    render(<UpdateSettings />);
+    expect(await within(group()).findByText("v0.3.0 available")).toBeInTheDocument();
+    expect(within(group()).queryByRole("link", { name: /Download|SHA-256/ })).toBeNull();
+    expect(within(group()).getByRole("button", { name: "Skip this version" })).toBeInTheDocument();
+  });
+
+  it("marks a source checkout and shows the status without a download offer", async () => {
+    serve(bundledUpdate({ installKind: "source" }));
+    render(<UpdateSettings />);
+    expect(await within(group()).findByText("Source")).toHaveClass("tool-badge");
+    expect(within(group()).getByText("v0.3.0 available")).toBeInTheDocument();
+    expect(within(group()).queryByRole("link", { name: /Download/ })).toBeNull();
+    expect(within(group()).queryByRole("button", { name: "Skip this version" })).toBeNull();
+  });
+
+  it("Check for updates posts a fresh check and shows its result", async () => {
+    const api = serve(upToDate, bundledUpdate());
+    render(<UpdateSettings />);
+    expect(await within(group()).findByText("Up to date")).toBeInTheDocument();
+    await userEvent.click(within(group()).getByRole("button", { name: "Check for updates" }));
+    expect(await within(group()).findByRole("link", { name: "Download for macOS" })).toBeInTheDocument();
+    expect(api.callsTo("POST", /^\/api\/update\/check$/)).toHaveLength(1);
+  });
+
+  it("reads Couldn't check for updates when the daemon could not reach GitHub", async () => {
+    serve({ ...upToDate, status: "unavailable", releaseUrl: RELEASES });
+    render(<UpdateSettings />);
+    expect(await within(group()).findByText("Couldn't check for updates")).toBeInTheDocument();
+    expect(within(group()).getByRole("link", { name: "Release notes" })).toHaveAttribute("href", RELEASES);
+  });
+
+  it("falls back to the product name when the daemon does not answer", async () => {
+    serve(null);
+    render(<UpdateSettings />);
+    expect(await within(group()).findByText("Couldn't check for updates")).toBeInTheDocument();
+    expect(within(group()).getByText("Bellwood")).toBeInTheDocument();
+    expect(within(group()).queryByRole("link", { name: "Release notes" })).toBeNull();
+  });
+});
+
+describe("sidebar update badge", () => {
+  it("appears beside Settings for a bundled install with a newer release and opens the Updates section", async () => {
+    serve(bundledUpdate());
+    const onOpenUpdates = renderTools();
+    const badge = await screen.findByRole("button", { name: "Update to v0.3.0" });
+    expect(badge).toHaveClass("tool-slot", "ml-auto");
+    expect(badge).toHaveTextContent("Update");
+    expect(badge.nextElementSibling).toBe(screen.getByRole("button", { name: "Settings" }));
+    expect(screen.getByRole("button", { name: "Settings" })).not.toHaveClass("ml-auto");
+    await userEvent.click(badge);
+    expect(onOpenUpdates).toHaveBeenCalledTimes(1);
+  });
+
+  it("is an icon-only slot on the narrow rail", async () => {
+    serve(bundledUpdate());
+    renderTools(vi.fn(), true);
+    const badge = await screen.findByRole("button", { name: "Update to v0.3.0" });
+    expect(badge.textContent).toBe("");
+    expect(badge).not.toHaveClass("ml-auto");
+  });
+
+  it.each([
+    ["a source checkout", bundledUpdate({ installKind: "source" }), null],
+    ["a skipped version", bundledUpdate(), "0.3.0"],
+    ["an up-to-date install", upToDate, null],
+  ])("stays hidden for %s", async (_name, status, skipped) => {
+    if (skipped !== null) localStorage.setItem(UPDATE_DISMISSED_KEY, skipped);
+    const api = serve(status);
+    renderTools();
+    await waitFor(() => expect(api.callsTo("GET", /^\/api\/update$/)).toHaveLength(1));
+    await act(() => Promise.resolve());
+    expect(screen.queryByRole("button", { name: /^Update to/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "Settings" })).toHaveClass("ml-auto");
+  });
+});
+
+describe("badge to Settings", () => {
+  it("opens the desktop Settings dialog on General with the download offer", async () => {
+    window.history.replaceState(null, "", "/#/c/1");
+    serve(bundledUpdate());
+    installFakeWebSocket();
+    render(<App />);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    act(() => FakeWebSocket.last.open());
+    await userEvent.click(await screen.findByRole("button", { name: "Update to v0.3.0" }));
+    const dialog = await screen.findByRole("dialog", { name: "Settings" });
+    expect(within(dialog).getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "true");
+    expect(within(within(dialog).getByRole("region", { name: "Updates" })).getByRole("link", { name: "Download for macOS" })).toBeInTheDocument();
+  });
+});

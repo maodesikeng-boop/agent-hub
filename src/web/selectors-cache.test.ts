@@ -20,6 +20,7 @@ import {
   type SessionState,
   type TaskGraph,
   type TaskNode,
+  type UpdateStatus,
 } from "../shared/index.ts";
 import { runningWorkerCount, totalRunningWorkers, waitingConversations } from "../shared/reminders.ts";
 import { capabilityScopeOptions, capabilitySections, capabilityTotals, enforcementRows, filterCapabilitySections } from "./capabilities-model.ts";
@@ -39,6 +40,7 @@ import {
   workersOf,
 } from "./selectors.ts";
 import { applyChange, initialState, reducer, type ConversationView, type HubState } from "./state.ts";
+import { downloadOfferOf, updateReminderOf } from "./update-model.ts";
 import { changeOf, makeCapabilitiesView, makeConversation, makeMessage, makePm, makeProject, makeSession, makeSystemMessage, makeToolMessage, makeUserMessage, makeWorkerLine, messageChange, sessionChange } from "./test-utils.ts";
 
 const WORKERS = 300;
@@ -822,5 +824,28 @@ describe("能力页缓存：清单 2000 项", () => {
     const view = makeCapabilitiesView({ kind: "pm", pmId: 1 });
     expect(enforcementRows(view)).toBe(enforcementRows(view));
     expect(enforcementRows(makeCapabilitiesView({ kind: "pm", pmId: 1 }))).not.toBe(enforcementRows(view));
+  });
+});
+
+describe("update reminder", () => {
+  it("returns the cached status object itself, so the sidebar slot keeps its reference until React Query hands over new data", () => {
+    const status: UpdateStatus = {
+      status: "update_available",
+      currentVersion: "0.2.0",
+      installKind: "bundled",
+      platformTarget: "macos-arm64",
+      releaseUrl: "https://github.com/maodesikeng-boop/agent-hub/releases/tag/v0.3.0",
+      checkedAt: 1_000,
+      latestVersion: "0.3.0",
+      tagName: "v0.3.0",
+      publishedAt: null,
+      installer: null,
+    };
+    expect(downloadOfferOf(status)).toBe(status);
+    expect(updateReminderOf(status, null)).toBe(status);
+    expect(updateReminderOf(status, "0.2.9")).toBe(status);
+    expect(updateReminderOf(status, "0.3.0")).toBeNull();
+    expect(updateReminderOf({ ...status, installKind: "source" }, null)).toBeNull();
+    expect(updateReminderOf(undefined, null)).toBeNull();
   });
 });

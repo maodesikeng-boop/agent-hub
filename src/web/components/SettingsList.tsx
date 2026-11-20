@@ -72,6 +72,7 @@ export function CollapsibleGroup({
 
 export function SettingsRow({
   label,
+  badge,
   detail,
   icon,
   error,
@@ -80,6 +81,7 @@ export function SettingsRow({
   children,
 }: {
   label: string;
+  badge?: ReactNode;
   detail?: ReactNode;
   icon?: ReactNode;
   error?: ErrorLike | null;
@@ -88,15 +90,18 @@ export function SettingsRow({
   children: (id: string) => ReactNode;
 }) {
   const id = useId();
+  const labelText = (
+    <label htmlFor={id} title={label} className="line-clamp-2 text-body">
+      {label}
+    </label>
+  );
   return (
     <div data-slot="settings-row" className={cn("px-4", detail || stacked ? "py-3" : "py-2")}>
       <div className={cn("flex min-h-9 justify-between gap-x-4 gap-y-2", stacked ? "flex-col items-stretch" : cn("items-center", !wide && "flex-wrap"))}>
         <div className={cn("flex items-center gap-3", wide ? "min-w-0 shrink-0" : "min-w-32 flex-1")}>
           {icon && <span className="flex shrink-0 text-muted-foreground [&_svg]:size-pixel">{icon}</span>}
           <div className="min-w-0 flex-1 break-words">
-            <label htmlFor={id} title={label} className="line-clamp-2 text-body">
-              {label}
-            </label>
+            {badge === undefined ? labelText : <div className="flex min-w-0 items-center gap-2">{labelText}{badge}</div>}
             {detail && <div className="text-minor leading-snug text-muted-foreground">{detail}</div>}
           </div>
         </div>

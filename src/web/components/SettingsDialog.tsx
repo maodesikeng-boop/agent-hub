@@ -12,6 +12,7 @@ import { CapabilitiesSettings } from "./CapabilitiesSettings.tsx";
 import { ComputersSection } from "./DeviceSettings.tsx";
 import { ProvidersSettings } from "./ProvidersSettings.tsx";
 import { SettingsGroup, SettingsRow } from "./SettingsList.tsx";
+import { UpdateSettings } from "./UpdateSettings.tsx";
 
 export type { DeviceSettings };
 
@@ -76,6 +77,7 @@ export function SettingsDialog({
 
   const content: Record<SettingsDialogSection, ReactNode> = {
     general: (
+      <>
         <SettingsGroup label="General">
           <UiScaleRow />
           <SettingsRow label="Notifications" detail={NOTIFY_BLOCKED[notify.permission]}>
@@ -90,6 +92,8 @@ export function SettingsDialog({
             )}
           </SettingsRow>
         </SettingsGroup>
+        <UpdateSettings />
+      </>
     ),
     providers: (
       <ProvidersSettings

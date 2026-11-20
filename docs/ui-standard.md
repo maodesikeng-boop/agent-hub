@@ -106,6 +106,7 @@ Controls use two heights: **`36px` default** (`h-9`) and **`32px` small** (`h-8`
 - **Non-prose touch inputs**: URLs, domains, and pairing codes set `autoCapitalize="none" autoCorrect="off" spellCheck={false}` (plus `inputMode="url"` on URLs), and stretch full width (`h-11 w-full`) in mobile settings pages and drawers.
 - **Tool slots (`Button variant="slot"`) and `.tool-badge`**:
   - Persistent shell actions (Settings, New PM, Usage, Back, Right-rail toggle) use `size="icon"` (`30px`, `size-7.5`, `18px` icon); the Router model picker uses `h-7.5 px-3`; inline header slots (Task Graph `Zoom`) use `size="icon-sm"` (`24px`, `12px` icon).
+  - The sidebar `Update` slot (`h-7.5 px-3`, `Download` icon + `Update`, icon-only on the `72px` rail, accessible name `Update to vX.Y.Z`) sits directly before Settings, which keeps its corner position, and appears only for a bundled install with a newer release that was not skipped (section 24).
   - Styled from `--slot-*` tokens derived from the Router sprout bell: `#ffefb5` fill, `1px` `#d9a336` border, `4px` radius, `2px` `#e8bf55` bottom inset shadow, `#4a2e00` foreground (`10.9:1`), `#ffe48f` hover, and `1px` press depression. `.tool-badge` shares the static warm-yellow badge for Router counts and `Read-only` Piece badges.
 
 ## 7. Focus states and chat composer
@@ -150,7 +151,7 @@ Use `SettingsGroup`, `SettingsRow`, `CollapsibleGroup`, `ChoiceRows`, and `ModeR
 ## 10. Dialogs and bottom drawers
 
 - **`DialogContent` (`src/web/ui/dialog.tsx`)**: `rounded-2xl border border-border bg-background p-6` over `bg-black/30`. Width tiers: `520px` default (`NewPmDialog`, with `w-72` right-aligned field column), `max-w-110` for confirmations, and `780px` (`max-w-195`, fixed height `h-[min(35rem,calc(100%-3rem))]`, `p-0`) for desktop `SettingsDialog`.
-- **Desktop `SettingsDialog`**: Left vertical Radix `Tabs` (`w-48 bg-sidebar border-r border-border`, collapsing into a horizontal top tab bar below `720px`) for `General`, `Providers` (including `Vendor sync` and its `Sync preview` dialog), `Capabilities` (section 23), `Computers`, and `Security & Access`; right pane scrolls independently with `min-w-0` and `grid-cols-1` so long paths or URLs never clip right-hand buttons.
+- **Desktop `SettingsDialog`**: Left vertical Radix `Tabs` (`w-48 bg-sidebar border-r border-border`, collapsing into a horizontal top tab bar below `720px`) for `General` (`Interface scale`, `Notifications`, and the `Updates` group from section 24), `Providers` (including `Vendor sync` and its `Sync preview` dialog), `Capabilities` (section 23), `Computers`, and `Security & Access`; right pane scrolls independently with `min-w-0` and `grid-cols-1` so long paths or URLs never clip right-hand buttons.
 - **Fixed header and footer**: Only `DialogBody` scrolls, fading over its bottom `16px` (`.dialog-body-fade`).
 - **Zoom and preview dialogs (`ZOOM_DIALOG` and `FilePreview`)**: Size to content up to `min(96vw, 1400px)` by `90vh` for diagrams, Task Graphs, tables, Markdown, code, and audio; expand to `90vw` by `90vh` for PDFs, HTML pages, videos, and full-size images.
 - **Bottom `Drawer` (`src/web/ui/drawer.tsx`, wrapping `vaul`)**: Used on mobile for Pieces, destructive confirmations, and short form wizards (`rounded-t-2xl border-t border-line bg-surface-chat`, `max-h-[85dvh]`, `36x4` drag handle, bottom inset `max(var(--safe-bottom), var(--kb-inset))`).
@@ -233,7 +234,7 @@ Use `SettingsGroup`, `SettingsRow`, `CollapsibleGroup`, `ChoiceRows`, and `ModeR
 ## 20. Mobile shell
 
 - Activated solely by `MOBILE_SHELL_QUERY` (`(pointer: coarse)` and short viewport edge `< 600px`).
-- Full-screen navigation stack (`#/` list kept warm with React 19 `<Activity mode="hidden">`, pushing `#/c/<id>` chat, then `#/w/<id>` Piece or `#/pm/<id>` profile) with deterministic `mobileBack` history handling, bottom Pieces `Drawer`, and full-screen two-level drill-down settings (`#/settings` to `#/settings/<section>`: `scale`, `notifications`, `providers`, `vendor-sync`, `capabilities`, `computers`, `sign-in`, `browsers`) sharing `src/web/settings-model.ts` with zero extra network requests on `#/settings`.
+- Full-screen navigation stack (`#/` list kept warm with React 19 `<Activity mode="hidden">`, pushing `#/c/<id>` chat, then `#/w/<id>` Piece or `#/pm/<id>` profile) with deterministic `mobileBack` history handling, bottom Pieces `Drawer`, and full-screen two-level drill-down settings (`#/settings` to `#/settings/<section>`: `scale`, `notifications`, `updates`, `providers`, `vendor-sync`, `capabilities`, `computers`, `sign-in`, `browsers`) sharing `src/web/settings-model.ts` with zero extra network requests on `#/settings`.
 
 ## 21. Router workbench: decision tray and timeline
 
@@ -266,3 +267,14 @@ The profile page links and edits project-level settings next to `Folders`:
 
 - **`Capabilities` row**: Shown for unarchived PMs on this computer; one `SettingsNavRow` (`MCP servers, skills, and connectors`, `N of M` summary) that opens `Capabilities` with that PM selected and returns to the profile when closed.
 - **`Worktree setup`**: A borderless auto-sizing `Textarea` (`font-mono text-minor` once non-empty, `No setup command` placeholder). The group header shows a ghost `Clear` when a command is saved and `Cancel` plus a small primary `Save` while edited; `Clear` only empties the draft, and saving blank text clears the command. Drafts survive incoming `project.updated` changes, over-limit or NUL input renders one `RowError` reason and disables `Save`, and archived PMs see the field read-only.
+
+## 24. Updates
+
+`UpdateSettings` (`src/web/components/UpdateSettings.tsx`) renders the `Updates` group under `General` on desktop and the mobile `#/settings/updates` page, reading `GET /api/update` through `src/web/update-model.ts` (one fetch per page load, then hourly through React Query):
+
+- **Heading**: `Updates` on desktop; mobile shows only the page title.
+- **Version row**: `Bellwood vX.Y.Z`, a `Source` `.tool-badge` for source checkouts, and a ghost `Check for updates` row action (`-mr-3`, `Loader2` while checking) that posts `POST /api/update/check`. The detail line holds the status (`Up to date`, `vX.Y.Z available`, or `Couldn't check for updates`) and a `Release notes` link with a `12px` `ExternalLink` icon.
+- **Download row**: Only for bundled installs with a newer release. `vX.Y.Z available` with a small primary `Download for macOS` or `Download for Windows` link (`Download` icon); its detail line moves `Release notes` here and adds `SHA-256` and `Skip this version`. Source checkouts get the status line only, never a download button.
+- **Inline actions**: `Release notes`, `SHA-256`, and `Skip this version` use the `Undo` text-action style (`font-medium text-muted-foreground`, `hover:text-foreground hover:underline`, `touch-target`) with `gap-x-3` between them. Downloads and release links open in the system browser (`target="_blank"`).
+- **Skip this version**: Stored per version in `localStorage` (`agent-hub.update.dismissed`); it hides the sidebar `Update` slot (section 6) and the mobile attention dot until a newer release appears, while the download row stays available.
+- **Mobile entry**: An `Updates` `SettingsNavRow` in the `General` group with the cached `vX.Y.Z` summary and the amber attention dot while the sidebar reminder would show; it reads only the query cache, so `#/settings` still makes no requests.

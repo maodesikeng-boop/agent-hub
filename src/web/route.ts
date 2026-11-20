@@ -10,6 +10,7 @@ export type ScopedRoute = (
 export const SETTINGS_SECTIONS = [
   "scale",
   "notifications",
+  "updates",
   "providers",
   "vendor-sync",
   "capabilities",

@@ -10,6 +10,7 @@ import {
   type BrowserSessionInfo,
   type DeviceInfo,
   type ProvidersStatusResponse,
+  type UpdateStatus,
   type VendorSyncPreviewResponse,
 } from "../../../shared/index.ts";
 import { App } from "../../App.tsx";
@@ -18,7 +19,9 @@ import type { NotifySettings } from "../../notify.ts";
 import { useRoute } from "../../route.ts";
 import { SESSIONS_POLL_MS, type DeviceSettings } from "../../settings-model.ts";
 import { initialState } from "../../state.ts";
+import { queryClient } from "../../query-client.ts";
 import { FakeApi, installFakeWebSocket, makeConvSnapshot, makePm, makeSnapshot } from "../../test-utils.ts";
+import { UPDATE_DISMISSED_KEY, UPDATE_QUERY_KEY } from "../../update-model.ts";
 import { mobileBack, settingsParent } from "../back.ts";
 import { MobileSettings } from "./MobileSettings.tsx";
 
@@ -593,5 +596,55 @@ describe("子页", () => {
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     await waitFor(() => expect(screen.getByRole("button", { name: /^Providers/ })).toHaveTextContent("1 ready"));
     expect(screen.queryByTestId("providers-attention")).toBeNull();
+  });
+});
+
+describe("Updates page", () => {
+  const update: UpdateStatus = {
+    status: "update_available",
+    currentVersion: "0.2.0",
+    installKind: "bundled",
+    platformTarget: "macos-arm64",
+    releaseUrl: "https://github.com/maodesikeng-boop/agent-hub/releases/tag/v0.3.0",
+    checkedAt: 1_000,
+    latestVersion: "0.3.0",
+    tagName: "v0.3.0",
+    publishedAt: null,
+    installer: {
+      fileName: "Bellwood-macos-arm64.dmg",
+      downloadUrl: "https://github.com/maodesikeng-boop/agent-hub/releases/download/v0.3.0/Bellwood-macos-arm64.dmg",
+      sha256Url: "https://github.com/maodesikeng-boop/agent-hub/releases/download/v0.3.0/Bellwood-macos-arm64.dmg.sha256",
+    },
+  };
+  afterEach(() => localStorage.removeItem(UPDATE_DISMISSED_KEY));
+
+  it("the home row reads the cached status without a request and flags an unskipped update", () => {
+    const api = new FakeApi(makeSnapshot({}));
+    api.install();
+    queryClient.setQueryData(UPDATE_QUERY_KEY, update);
+    renderSettings("#/settings");
+    const row = within(screen.getByRole("region", { name: "General" })).getByRole("button", { name: /^Updates/ });
+    expect(row).toHaveTextContent("v0.2.0");
+    expect(screen.getByTestId("update-attention")).toBeInTheDocument();
+    expect(api.calls).toEqual([]);
+  });
+
+  it("the subpage loads the status and offers the installer under the page title only", async () => {
+    const api = new FakeApi(makeSnapshot({}));
+    api.update = () => ({ status: 200, body: update });
+    api.install();
+    renderSettings("#/settings");
+    fireEvent.click(screen.getByRole("button", { name: /^Updates/ }));
+    expect(location.hash).toBe("#/settings/updates");
+    expect(await screen.findByRole("heading", { level: 1, name: "Updates" })).toBeInTheDocument();
+    const region = screen.getByRole("region", { name: "Updates" });
+    expect(await within(region).findByRole("link", { name: "Download for macOS" })).toHaveAttribute("href", "https://github.com/maodesikeng-boop/agent-hub/releases/download/v0.3.0/Bellwood-macos-arm64.dmg");
+    expect(within(region).queryByRole("heading", { name: "Updates" })).toBeNull();
+    fireEvent.click(within(region).getByRole("button", { name: "Skip this version" }));
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await waitFor(() => expect(location.hash).toBe("#/settings"));
+    expect(await screen.findByRole("button", { name: /^Updates/ })).toHaveTextContent("v0.2.0");
+    expect(screen.queryByTestId("update-attention")).toBeNull();
+    expect(api.callsTo("GET", /^\/api\/update$/)).toHaveLength(1);
   });
 });

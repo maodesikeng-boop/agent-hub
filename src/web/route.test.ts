@@ -68,6 +68,7 @@ describe("设置网址（docs/mobile-settings-design.md 第 2.2 节）", () => {
     expect(SETTINGS_SECTIONS).toEqual([
       "scale",
       "notifications",
+      "updates",
       "providers",
       "vendor-sync",
       "capabilities",
