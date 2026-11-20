@@ -1,9 +1,3 @@
-// 用官方 @larksuiteoapi/node-sdk（>= 1.61.1，有 registerApp）实现 transport.ts 的接口，整个仓库只有这个文件引这个包。
-// 这个包加载后守护进程多占约 40 MB：service.ts 只在配了飞书（有凭证或开始扫码）时才动态加载本文件。
-// 消息正文用 SDK 导出的 normalize 转成 markdown；开放接口统一走 Client.request（SDK 自己换取、续期 tenant_access_token），
-// 上传、下载走 SDK 的 im.v1.image / file / messageResource；长连接是 WSClient + EventDispatcher（卡片回调 card.action.trigger 同一条连接）。
-// 官方 HTTP 实例（defaultHttpInstance）不设超时，这里包一层按请求补上（withTimeouts）。
-// WSClient 默认不查心跳、握手不限时，半开的连接会一直假活：这里开官方的心跳看门狗（wsConfig.pingTimeout）和握手超时。
 import { createReadStream } from "node:fs";
 import type { Readable } from "node:stream";
 import * as lark from "@larksuiteoapi/node-sdk";
@@ -32,19 +26,15 @@ export interface FeishuSdkOptions {
   appId: string;
   appSecret: string;
   log: (line: string) => void;
-  /** 开放接口和长连接的地址；不给时按 brand 用官方域名（测试指向本地假服务）。 */
   domain?: string;
 }
 
-/** 限流（FEISHU_RATE_LIMIT_CODES 或 HTTP 429）退避后重试，最多 RATE_LIMIT_RETRIES 次。 */
 const RATE_LIMIT_RETRIES = 4;
 const RATE_LIMIT_BACKOFF_MS = 500;
-/** 凭证失效、应用停用：不重试，状态改 auth_failed。 */
 const AUTH_CODES = new Set([99991661, 99991663, 99991664, 99991665, 99991668, 10003, 10014, 10015]);
 
 type Route = { method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"; url: string; params?: Record<string, unknown>; data?: Record<string, unknown> };
 
-/** 每个用到的开放接口怎么拼请求（路径、查询参数、请求体）。 */
 function routeOf<M extends FeishuMethod>(method: M, args: FeishuMethodArgs[M]): Route {
   const a = args as Record<string, unknown> & FeishuMethodArgs[FeishuMethod];
   const enc = (v: unknown) => encodeURIComponent(String(v));
@@ -103,7 +93,6 @@ function routeOf<M extends FeishuMethod>(method: M, args: FeishuMethodArgs[M]): 
   throw new Error(`unknown feishu method ${String(method)}`);
 }
 
-/** 飞书回包统一成 { code, msg, data }：多数接口 data 包一层，bot/v3/info 这类直接放顶层。 */
 function toResult(body: unknown): FeishuApiResult {
   if (typeof body !== "object" || body === null) return { code: -1, msg: "飞书回包不是 JSON" };
   const { code, msg, data, ...rest } = body as { code?: unknown; msg?: unknown; data?: unknown };
@@ -114,7 +103,6 @@ function toResult(body: unknown): FeishuApiResult {
   };
 }
 
-/** axios 的错误里飞书照样回 { code, msg }；网络错误没有回包。 */
 function resultOfError(error: unknown): { result: FeishuApiResult | null; status: number | null } {
   const response = (error as { response?: { status?: number; data?: unknown } } | null)?.response;
   if (response === undefined) return { result: null, status: null };
@@ -123,10 +111,9 @@ function resultOfError(error: unknown): { result: FeishuApiResult | null; status
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** 上传图片、文件和下载消息里的资源：按 FEISHU_TRANSFER_TIMEOUT_MS 算超时，别的请求按 FEISHU_HTTP_TIMEOUT_MS。 */
 const TRANSFER_URL = /\/open-apis\/im\/v1\/(images|files)(\/|$)|\/open-apis\/im\/v1\/messages\/[^/]+\/resources\//;
 
-/** 官方的 HTTP 实例默认不设超时（慢网时一次上传能挂几分钟）：在它外面给每个请求补上超时，调用方自己给了的照用。 */
+// The SDK default HTTP instance has no timeout, so a slow upload could hang for minutes.
 function withTimeouts(http: lark.HttpInstance): lark.HttpInstance {
   const timed = <D>(url: string | undefined, opts: lark.HttpRequestOptions<D> = {}): lark.HttpRequestOptions<D> => ({
     ...opts,
@@ -148,10 +135,6 @@ function checkAuth(result: FeishuApiResult): void {
   if (AUTH_CODES.has(result.code)) throw new FeishuAuthError(result.code, result.msg ?? "");
 }
 
-/**
- * 前置：appId、appSecret 是同一个应用的。
- * 后置：返回的传输层还没连长连接（start 时才连）；call 用 tenant_access_token，SDK 自己换取和续期。
- */
 export function createFeishuSdkTransport(options: FeishuSdkOptions): FeishuTransport {
   const domain = options.domain ?? (options.brand === "lark" ? lark.Domain.Lark : lark.Domain.Feishu);
   const logger = {
@@ -161,7 +144,6 @@ export function createFeishuSdkTransport(options: FeishuSdkOptions): FeishuTrans
     debug: () => {},
     trace: () => {},
   };
-  // 官方实例的响应拦截器已把回包拆成 data（SDK 不传 httpInstance 时用的就是它），只是类型上还标成 AxiosInstance
   const httpInstance = withTimeouts(lark.defaultHttpInstance as unknown as lark.HttpInstance);
   const client = new lark.Client({ appId: options.appId, appSecret: options.appSecret, domain, logger, loggerLevel: lark.LoggerLevel.warn, httpInstance });
   let ws: lark.WSClient | null = null;
@@ -177,7 +159,6 @@ export function createFeishuSdkTransport(options: FeishuSdkOptions): FeishuTrans
         const failed = resultOfError(error);
         if (failed.result === null) {
           const message = error instanceof Error ? error.message : String(error);
-          // 换不到 tenant_access_token 时 SDK 抛的错里带着飞书的 code
           const code = Number(/code[^\d]*(\d{5,})/.exec(message)?.[1] ?? NaN);
           if (AUTH_CODES.has(code)) throw new FeishuAuthError(code, message);
           throw error;
@@ -230,7 +211,6 @@ export function createFeishuSdkTransport(options: FeishuSdkOptions): FeishuTrans
       const items: FeishuRawMessageEvent[] = [];
       for (const raw of (data.items as RawListedItem[] | undefined) ?? []) {
         if (raw.deleted === true || Boolean(raw.upper_message_id) || !raw.message_id) continue;
-        // im/v1/messages 的 mentions[].id 是裸字符串且机器人可能标为 app_id，转换成 normalize 预期的 { open_id } 结构
         const adapted = {
           sender: {
             sender_id: { open_id: raw.sender?.id_type === "open_id" ? (raw.sender.id ?? "") : "" },
@@ -242,6 +222,7 @@ export function createFeishuSdkTransport(options: FeishuSdkOptions): FeishuTrans
             chat_type: input.chatType,
             message_type: raw.msg_type ?? "text",
             content: raw.body?.content ?? "",
+            // im/v1/messages returns mention ids as bare strings, and bots may be tagged by app_id; normalize expects { open_id }.
             mentions: (raw.mentions ?? []).map((m) => ({
               key: m.key ?? "",
               id: {
@@ -360,6 +341,7 @@ export function createFeishuSdkTransport(options: FeishuSdkOptions): FeishuTrans
         loggerLevel: lark.LoggerLevel.warn,
         autoReconnect: true,
         handshakeTimeoutMs: FEISHU_WS_HANDSHAKE_TIMEOUT_MS,
+        // WSClient skips heartbeat checks and handshake limits by default, so a half-open connection would look alive forever.
         wsConfig: { pingTimeout: FEISHU_WS_PING_TIMEOUT_S },
         onReady: () => handlers.onConnected(),
         onReconnected: () => handlers.onConnected(),
@@ -376,7 +358,6 @@ export function createFeishuSdkTransport(options: FeishuSdkOptions): FeishuTrans
 }
 
 export interface FeishuRegistrationHandlers {
-  /** 飞书给出确认页链接（十分钟内有效，只能一个人扫）。 */
   onUrl(info: { url: string; expiresAt: number }): void;
 }
 
@@ -384,15 +365,9 @@ export interface FeishuRegistrationResult {
   brand: FeishuBrandName;
   appId: string;
   appSecret: string;
-  /** 扫码确认的那个人；飞书没给时是 null（这时走绑定码认主人）。 */
   scannerOpenId: string | null;
 }
 
-/**
- * registerApp：Device Authorization Grant（RFC 8628）扫码一键建应用。
- * 前置：addons 只放平台默认模板之外的增量（scopes.ts 的 FEISHU_APP_ADDONS）。
- * 后置：用户扫码确认后返回凭证；拒绝、过期、被 signal 取消时抛 FeishuRegistrationError。createOnly 为 true，确认页不给选已有应用。
- */
 export async function registerFeishuApp(input: {
   preset: FeishuAppPreset;
   addons: FeishuAppAddons;
